@@ -20,7 +20,10 @@
         <button class="tb-btn" data-cmd="undo" id="tbUndo" title="실행 취소 (Ctrl+Z)" data-icon="undo"></button>
         <button class="tb-btn" data-cmd="redo" id="tbRedo" title="다시 실행 (Ctrl+Y)" data-icon="redo"></button>
       </div>
-      <div class="tb-title" id="docTitle" title="클릭하여 이름 바꾸기">통합 문서1 - Tabula</div>
+      <div class="tb-center">
+        <div class="tb-title" id="docTitle" title="클릭하여 이름 바꾸기">통합 문서1 - Tabula</div>
+        <span class="save-state" id="saveState"></span>
+      </div>
       <label class="tb-search">
         <span data-icon="search"></span>
         <input id="searchBox" type="search" placeholder="검색 (Alt+Q)" autocomplete="off">
@@ -43,19 +46,10 @@
       <textarea id="formulaInput" rows="1" spellcheck="false" aria-label="수식 입력줄"></textarea>
     </div>
 
-    <main class="grid-scroll" id="gridScroll">
-      <div class="grid-inner" id="gridInner">
-        <table class="grid" id="grid">
-          <colgroup></colgroup>
-          <thead></thead>
-          <tbody></tbody>
-        </table>
-        <div class="ref-highlights" id="refHighlights"></div>
-        <div class="sel-border" id="selBorder"></div>
-        <div class="fill-handle" id="fillHandle"></div>
-        <div class="fill-preview" id="fillPreview"></div>
-        <div class="copy-marquee" id="copyMarquee"></div>
-        <textarea class="cell-editor idle" id="cellEditor" spellcheck="false" autocomplete="off"></textarea>
+    <main class="grid-wrap" id="gridWrap">
+      <div class="grid-scroll" id="gridScroll"><div class="grid-sizer" id="gridSizer"></div></div>
+      <div class="grid-view" id="gridView">
+        <textarea class="cell-editor idle" id="cellEditor" spellcheck="false" autocomplete="off" aria-label="셀 편집"></textarea>
         <ul class="autocomplete" id="autocomplete"></ul>
       </div>
     </main>
@@ -85,7 +79,8 @@
   <div id="dialogLayer"></div>
   <div id="toast" role="status"></div>
   <div id="commentTip" class="comment-tip"></div>
-  <input type="file" id="fileInput" accept=".csv,.tsv,.txt,.json,.tabula" hidden>
+  <div id="printArea"></div>
+  <input type="file" id="fileInput" accept=".xlsx,.xlsm,.csv,.tsv,.txt,.json,.tabula" hidden>
   <script type="module" src="src/app.js"></script>
 </body>
 </html>

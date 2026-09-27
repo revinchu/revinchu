@@ -42,6 +42,9 @@ function budget() {
   ];
   return sheet('가계부', rows, { 0: 110, 1: 90, 2: 90, 3: 90, 4: 100, 5: 90, 6: 70 }, {
     merges: [{ r1: 0, c1: 0, r2: 0, c2: 6 }],
+    rowHeights: { 0: 30 },
+    freeze: { rows: 3, cols: 0 },
+    charts: [{ id: 'sample-chart', type: 'column', title: '항목별 1분기 지출', range: { r1: 2, c1: 0, r2: 8, c2: 3 }, x: 700, y: 80, w: 470, h: 290 }],
     cond: [{ r1: 3, c1: 4, r2: 8, c2: 4, type: 'bar', color: '#8fd19e' }],
   });
 }
@@ -64,7 +67,8 @@ function grades() {
     ['과목 평균', ...['B', 'C', 'D', 'E'].map((c) => ({ raw: `=ROUND(AVERAGE(${c}2:${c}7),1)`, style: { bold: true } }))],
     ['합격자 수', { raw: '=COUNTIF(F2:F7,"합격")' }],
   ];
-  return sheet('성적표', rows, { 0: 90 }, {
+  return sheet('성적표', rows, { 0: 90, 1: 70, 2: 70, 3: 70, 4: 70, 5: 70, 6: 70 }, {
+    filter: { r1: 0, c1: 0, r2: 6, c2: 6, criteria: {}, hidden: {} },
     cond: [
       { r1: 1, c1: 5, r2: 6, c2: 5, type: 'eq', v1: '불합격', style: { fill: '#ffc7ce', color: '#9c0006' } },
       { r1: 1, c1: 1, r2: 6, c2: 3, type: 'scale', colors: ['#f8696b', '#ffeb84', '#63be7b'] },
@@ -73,5 +77,5 @@ function grades() {
 }
 
 export const SAMPLES = [
-  { name: '가계부', desc: '수식 · 서식 · 데이터 막대', build: () => ({ sheets: [budget(), grades()] }) },
+  { name: '가계부', desc: '수식 · 차트 · 필터 · 틀 고정', build: () => ({ sheets: [budget(), grades()] }) },
 ];

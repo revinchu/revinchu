@@ -112,7 +112,18 @@ export const TABS = [
         large('insertCols', 'colInsert', '시트 열 삽입'),
         large('addSheet', 'sheetInsert', '시트 삽입'),
       ]),
-      group('표', [large('tableStyle', 'table', '표', { menu: 'tableStyles' })]),
+      group('표', [
+        large('insertPivot', 'pivot', '피벗 테이블'),
+        large('tableStyle', 'table', '표', { menu: 'tableStyles' }),
+      ]),
+      group('차트', [
+        large('chartColumn', 'chartColumn', '세로 막대형', { title: '세로 막대형 차트 삽입 (Alt+F1)' }),
+        large('chartBar', 'chartBar', '가로 막대형'),
+        large('chartLine', 'chartLine', '꺾은선형'),
+        large('chartPie', 'chartPie', '원형', { menu: 'pieCharts', split: true }),
+        large('chartArea', 'chartArea', '영역형'),
+        large('chartScatter', 'chartScatter', '분산형'),
+      ]),
       group('함수', [large('insertFunction', 'function', '함수')]),
       group('날짜 및 시간', [
         large('insertDate', 'calendar', '오늘 날짜'),
@@ -124,6 +135,9 @@ export const TABS = [
   {
     id: 'layout', label: '페이지 레이아웃', groups: [
       group('인쇄', [large('print', 'print', '인쇄')]),
+      group('시트', [
+        large('hideRowsCols', 'hide', '숨기기 및 숨기기 취소', { menu: 'hideMenu' }),
+      ]),
       group('시트 옵션', [
         col(
           check('toggleGrid', '눈금선 보기', 'showGrid'),
@@ -151,15 +165,21 @@ export const TABS = [
   {
     id: 'data', label: '데이터', groups: [
       group('데이터 가져오기 및 변환', [
-        large('importCsv', 'csvIn', '텍스트/CSV에서'),
+        large('importCsv', 'csvIn', '파일에서 가져오기', { title: 'CSV·TSV·Excel(.xlsx) 파일 가져오기' }),
         large('exportCsv', 'csvOut', 'CSV로 내보내기'),
       ]),
+      group('쿼리 및 연결', [large('refreshAll', 'refresh', '모두 새로 고침', { title: '피벗 테이블 새로 고침' })]),
       group('정렬 및 필터', [
         col(
           medium('sortAsc', 'sortAsc', '오름차순'),
           medium('sortDesc', 'sortDesc', '내림차순'),
         ),
         large('sortDialog', 'sort', '정렬'),
+        large('toggleFilter', 'filter', '필터', { toggle: 'filterOn', title: '필터 (Ctrl+Shift+L)' }),
+        col(
+          medium('clearFilter', 'filterClear', '지우기'),
+          medium('reapplyFilter', 'refresh', '다시 적용'),
+        ),
       ]),
       group('데이터 도구', [large('dedupe', 'dedupe', '중복된 항목 제거')]),
     ],
@@ -191,6 +211,7 @@ export const TABS = [
         large('zoomOut', 'zoomOut', '축소'),
         large('zoom100', 'zoom100', '100%'),
       ]),
+      group('창', [large('freezeMenu', 'freeze', '틀 고정', { menu: 'freeze', toggle: 'frozen' })]),
     ],
   },
   {

@@ -14,7 +14,7 @@ const unkey = (k) => k.split(',').map(Number);
 function cleanStyle(style) {
   if (!style) return undefined;
   const out = {};
-  for (const [k, v] of Object.entries(style)) if (v !== undefined && v !== null && v !== false) out[k] = v;
+  for (const [k, v] of Object.entries(style)) if (v !== undefined && v !== null) out[k] = v;
   return Object.keys(out).length ? out : undefined;
 }
 
@@ -51,8 +51,31 @@ export function cellData(cell) {
 }
 
 function newSheet(name) {
-  return { name, cells: new Map(), colWidths: {}, rowHeights: {}, merges: [], cond: [] };
+  return {
+    name, cells: new Map(), colWidths: {}, rowHeights: {}, merges: [], cond: [],
+    colStyles: {}, rowStyles: {}, allStyle: null, hiddenRows: {}, hiddenCols: {}, rowManual: {},
+    freeze: { rows: 0, cols: 0 }, filter: null, charts: [], pivot: null,
+  };
 }
+
+/** 시트의 부가 속성 (셀 외) — 저장/복원/복제용 */
+const SHEET_PROPS = ['colWidths', 'rowHeights', 'merges', 'cond', 'colStyles', 'rowStyles', 'allStyle',
+  'hiddenRows', 'hiddenCols', 'rowManual', 'freeze', 'filter', 'charts', 'pivot'];
+
+/** 숫자 키 객체의 키를 삽입/삭제에 맞춰 이동 */
+function shiftKeys(obj, index, count) {
+  const out = {};
+  for (const [k, v] of Object.entries(obj ?? {})) {
+    const p = Number(k);
+    if (count < 0 && p >= index && p < index - count) continue;
+    out[p >= index ? p + count : p] = v;
+  }
+  return out;
+}
+
+const DEEP = new Error('수식 체인이 너무 깊습니다');
+const MAX_DEPTH = 300;
+const EMPTY_STYLE = Object.freeze({});
 
 /** 행/열 삽입·삭제에 맞춰 범위 {r1,c1,r2,c2} 조정. 완전히 삭제되면 null */
 export function adjustRange(rg, axis, index, count) {
@@ -76,10 +99,13 @@ export class Workbook {
     this.cache = new Map();
     this.evaluating = new Set();
     this.usedCache = new Map();
+    this.extentCache = new Map();
     this.undoStack = [];
     this.redoStack = [];
     this.tx = null;
     this.listeners = new Set();
+    this.depth = 0;
+    this.warming = false;
     if (data) this.load(data);
     else this.sheets = [newSheet('Sheet1')];
   }
@@ -105,15 +131,77 @@ export class Workbook {
     if (this.cache.has(k)) return this.cache.get(k);
     if (cell.ast === null) return ERR.NAME;
     if (this.evaluating.has(k)) return ERR.CIRC;
+    if (this.depth > 0 || this.warming) return this.evalCell(k, cell, si);
+    // 최상위 호출: 긴 참조 사슬(예: 누계 1만 행)은 위에서부터 차례로 미리 계산한 뒤 다시 시도
+    try {
+      return this.evalCell(k, cell, si);
+    } catch (e) {
+      if (e !== DEEP) throw e;
+      this.warmup();
+      try {
+        return this.evalCell(k, cell, si);
+      } catch (e2) {
+        if (e2 !== DEEP) throw e2;
+        return ERR.CIRC;
+      }
+    }
+  }
+
+  evalCell(k, cell, si) {
+    if (this.depth >= MAX_DEPTH) throw DEEP;
     this.evaluating.add(k);
+    this.depth++;
     let v;
     try {
       v = evaluateFormula(cell.ast, this.ctxFor(si));
+    } catch (e) {
+      if (e instanceof RangeError) throw DEEP;
+      throw e;
     } finally {
+      this.depth--;
       this.evaluating.delete(k);
     }
     this.cache.set(k, v);
     return v;
+  }
+
+  /** 모든 수식을 행 순서대로 계산해 캐시를 채움 */
+  warmup() {
+    this.warming = true;
+    try {
+      const list = [];
+      this.sheets.forEach((sheet, si) => {
+        for (const [k, cell] of sheet.cells) if (cell.formula) { const [r, c] = unkey(k); list.push([si, r, c]); }
+      });
+      list.sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2]);
+      let pending = list;
+      for (let pass = 0; pass < 50 && pending.length; pass++) {
+        const next = [];
+        for (const [si, r, c] of pending) {
+          try { this.getValue(si, r, c); } catch (e) { if (e !== DEEP) throw e; next.push([si, r, c]); }
+        }
+        if (next.length === pending.length) break;
+        pending = next;
+      }
+    } finally {
+      this.warming = false;
+      this.depth = 0;
+    }
+  }
+
+  /** 열/행/시트 전체 서식을 합친 실제 셀 서식 */
+  styleAt(si, r, c) {
+    const s = this.sheets[si];
+    const own = s.cells.get(key(r, c))?.style;
+    const col = s.colStyles[c];
+    const row = s.rowStyles[r];
+    if (!s.allStyle && !col && !row) return own ?? EMPTY_STYLE;
+    return { ...s.allStyle, ...col, ...row, ...own };
+  }
+
+  hasLineStyle(si, r, c) {
+    const s = this.sheets[si];
+    return !!(s.allStyle || s.colStyles[c] || s.rowStyles[r]);
   }
 
   resolveSheet(name, si) {
@@ -158,6 +246,8 @@ export class Workbook {
 
   /** 서식만 있는 셀까지 포함한 최대 범위 */
   extent(si) {
+    const cached = this.extentCache.get(si);
+    if (cached) return cached;
     let rows = 0;
     let cols = 0;
     for (const k of this.sheets[si].cells.keys()) {
@@ -165,7 +255,9 @@ export class Workbook {
       rows = Math.max(rows, r + 1);
       cols = Math.max(cols, c + 1);
     }
-    return { rows, cols };
+    const res = { rows, cols };
+    this.extentCache.set(si, res);
+    return res;
   }
 
   colWidth(si, c) { return this.sheets[si].colWidths[c] ?? DEFAULT_COL_WIDTH; }
@@ -174,6 +266,7 @@ export class Workbook {
   invalidate() {
     this.cache.clear();
     this.usedCache.clear();
+    this.extentCache.clear();
   }
 
   // ─────────── 트랜잭션 / 실행 취소 ───────────
@@ -236,7 +329,10 @@ export class Workbook {
     if (e.t === 'cell') this.putCell(e.si, e.r, e.c, makeCell(e[side]));
     else if (e.t === 'all') this.restore(e[side]);
     else if (e.t === 'colWidth') this.sheets[e.si].colWidths = { ...e[side] };
-    else if (e.t === 'rowHeight') this.sheets[e.si].rowHeights = { ...e[side] };
+    else if (e.t === 'rowHeight') {
+      this.sheets[e.si].rowHeights = { ...e[side] };
+      if (e.beforeManual) this.sheets[e.si].rowManual = { ...(side === 'before' ? e.beforeManual : e.afterManual) };
+    }
   }
 
   putCell(si, r, c, cell) {
@@ -308,11 +404,42 @@ export class Workbook {
     this.record({ t: 'colWidth', si, before, after: { ...sheet.colWidths } });
   }
 
-  setRowHeight(si, r, h) {
+  /** manual=false 는 자동 맞춤 높이 (DEFAULT 이면 항목 삭제) */
+  setRowHeight(si, r, h, manual = true) {
     const sheet = this.sheets[si];
     const before = { ...sheet.rowHeights };
-    sheet.rowHeights[r] = Math.max(0, Math.round(h));
-    this.record({ t: 'rowHeight', si, before, after: { ...sheet.rowHeights } });
+    const beforeManual = { ...sheet.rowManual };
+    const v = Math.max(0, Math.round(h));
+    if (!manual && v === DEFAULT_ROW_HEIGHT) delete sheet.rowHeights[r];
+    else sheet.rowHeights[r] = v;
+    if (manual) sheet.rowManual[r] = true;
+    else delete sheet.rowManual[r];
+    this.record({ t: 'rowHeight', si, before, after: { ...sheet.rowHeights }, beforeManual, afterManual: { ...sheet.rowManual } });
+  }
+
+  /** 행/열/시트 전체 서식 (kind: 'col' | 'row' | 'all') */
+  setLineStyle(si, kind, index, patch) {
+    this.snapshotAll();
+    const s = this.sheets[si];
+    const merged = cleanStyle({ ...(kind === 'all' ? s.allStyle : kind === 'col' ? s.colStyles[index] : s.rowStyles[index]), ...patch });
+    if (kind === 'all') s.allStyle = merged ?? null;
+    else {
+      const map = kind === 'col' ? s.colStyles : s.rowStyles;
+      if (merged) map[index] = merged;
+      else delete map[index];
+    }
+  }
+
+  setHidden(si, axis, indices, hidden) {
+    this.snapshotAll();
+    const map = axis === 'row' ? this.sheets[si].hiddenRows : this.sheets[si].hiddenCols;
+    for (const i of indices) { if (hidden) map[i] = true; else delete map[i]; }
+  }
+
+  setSheetProp(si, prop, value) {
+    this.snapshotAll();
+    this.sheets[si][prop] = value;
+    this.invalidate();
   }
 
   // ─────────── 구조 변경 ───────────
@@ -342,6 +469,33 @@ export class Workbook {
     target.merges = target.merges.map((m) => adjustRange(m, axis, index, count))
       .filter((m) => m && (m.r2 > m.r1 || m.c2 > m.c1));
     target.cond = target.cond.map((rule) => adjustRange(rule, axis, index, count)).filter(Boolean);
+    if (isRow) {
+      target.rowStyles = shiftKeys(target.rowStyles, index, count);
+      target.hiddenRows = shiftKeys(target.hiddenRows, index, count);
+      target.rowManual = shiftKeys(target.rowManual, index, count);
+    } else {
+      target.colStyles = shiftKeys(target.colStyles, index, count);
+      target.hiddenCols = shiftKeys(target.hiddenCols, index, count);
+    }
+    if (target.filter) {
+      const f = adjustRange(target.filter, axis, index, count);
+      if (!f) target.filter = null;
+      else {
+        if (isRow) f.hidden = shiftKeys(f.hidden, index, count);
+        else f.criteria = shiftKeys(f.criteria, index, count);
+        target.filter = f;
+      }
+    }
+    target.charts = target.charts.map((ch) => {
+      const rg = adjustRange(ch.range, axis, index, count);
+      return rg ? { ...ch, range: rg } : ch;
+    });
+    for (const sh of this.sheets) {
+      if (sh.pivot && sh.pivot.source.toLowerCase() === target.name.toLowerCase()) {
+        const rg = adjustRange(sh.pivot.range, axis, index, count);
+        if (rg) sh.pivot = { ...sh.pivot, range: rg };
+      }
+    }
 
     for (const sheet of this.sheets) {
       for (const [k, cell] of sheet.cells) {
@@ -386,6 +540,9 @@ export class Workbook {
     this.snapshotAll();
     const old = this.sheets[si].name;
     this.sheets[si].name = newName;
+    for (const sh of this.sheets) {
+      if (sh.pivot && sh.pivot.source.toLowerCase() === old.toLowerCase()) sh.pivot = { ...sh.pivot, source: newName };
+    }
     for (const sheet of this.sheets) {
       for (const [k, cell] of sheet.cells) {
         if (!cell.formula) continue;
@@ -480,10 +637,9 @@ export class Workbook {
       sheets: this.sheets.map((s) => {
         const cells = {};
         for (const [k, cell] of s.cells) cells[k] = cellData(cell);
-        return {
-          name: s.name, cells, colWidths: { ...s.colWidths }, rowHeights: { ...s.rowHeights },
-          merges: s.merges.map((m) => ({ ...m })), cond: s.cond.map((c) => structuredClone(c)),
-        };
+        const out = { name: s.name, cells };
+        for (const p of SHEET_PROPS) out[p] = structuredClone(s[p]);
+        return out;
       }),
     };
   }
@@ -495,10 +651,8 @@ export class Workbook {
         const cell = makeCell(d);
         if (cell) sheet.cells.set(k, cell);
       }
-      sheet.colWidths = { ...(s.colWidths || {}) };
-      sheet.rowHeights = { ...(s.rowHeights || {}) };
-      sheet.merges = (s.merges || []).map((m) => ({ ...m }));
-      sheet.cond = (s.cond || []).map((c) => structuredClone(c));
+      for (const p of SHEET_PROPS) if (s[p] !== undefined && s[p] !== null) sheet[p] = structuredClone(s[p]);
+      sheet.freeze = { rows: 0, cols: 0, ...(s.freeze || {}) };
       return sheet;
     });
     if (!this.sheets.length) this.sheets = [newSheet('Sheet1')];

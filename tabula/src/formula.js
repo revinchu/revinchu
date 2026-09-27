@@ -442,8 +442,7 @@ export function evaluateFormula(ast, ctx) {
     return v;
   } catch (e) {
     if (e instanceof FormulaError) return e;
-    if (e instanceof RangeError) return ERR.CIRC; // 너무 깊은 재귀
-    throw e;
+    throw e; // RangeError(너무 깊은 재귀)는 통합 문서에서 처리
   }
 }
 

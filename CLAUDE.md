@@ -97,7 +97,9 @@ Uses **substring matching** - searching for "하늘마음" will match titles lik
 A standalone, dependency-free browser spreadsheet that mimics Microsoft Excel's UI (Korean). Unrelated to the rank checker.
 
 - Run: `cd tabula && npm start` → http://localhost:5178 ; test: `npm test` (Node built-in test runner)
-- Pure ES modules, no build step, no npm dependencies. Keep it that way.
-- `src/formula.js` (engine) and `src/workbook.js` (model) must stay DOM-free so they remain unit-testable in Node.
+- Pure ES modules, no build step, no npm dependencies. Keep it that way (zip/inflate/XML for .xlsx are hand-written in `src/zip.js`, `src/xml.js`).
+- DOM-free modules (unit-tested in Node): `formula.js`, `workbook.js`, `format.js`, `axis.js`, `xlsx.js`, `zip.js`, `xml.js`, `chart.js`, `pivot.js`, `series.js`, `csv.js`.
+- The grid is virtualized (`src/view.js`): only visible rows/cols are rendered; positions come from `Axis` (default size + sparse custom sizes/hidden). Never loop over all 1,048,576 rows — clamp to `wb.usedRange()` / `wb.extent()`.
 - All UI text is Korean. New functions need an entry in `src/funcinfo.js` (a test enforces this).
-- Undoable changes go through `wb.transact(fn, meta())`; structural changes call `wb.snapshotAll()` first.
+- Undoable changes go through `wb.transact(fn, meta())`; sheet-level props (freeze, filter, charts, merges, hidden rows…) use `wb.setSheetProp()` / methods that call `wb.snapshotAll()`. New sheet props must be added to `SHEET_PROPS` in `workbook.js` and adjusted in `shiftAxis`.
+- `server.js` stores documents in `tabula/data/` (gitignored) via `/api/files`; the app falls back to localStorage when the API is absent.
