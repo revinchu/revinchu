@@ -14,7 +14,8 @@ revinchu/
 ├── requirements.txt             # Python dependencies
 ├── keywords.txt                 # Sample keyword list (one per line)
 ├── naver_ad_rank_checker.py     # Main rank checking program
-└── debug_html_structure.py      # HTML structure analysis utility
+├── debug_html_structure.py      # HTML structure analysis utility
+└── tabula/                      # Excel-style web spreadsheet (separate app, see below)
 ```
 
 ## Tech Stack
@@ -90,3 +91,13 @@ Uses **substring matching** - searching for "하늘마음" will match titles lik
 - **Proxy**: Do not set `http_proxy`/`https_proxy` unless explicitly required; the script accesses Naver directly
 - **Encoding**: Naver pages use UTF-8; CSV export uses UTF-8 with BOM for Korean Excel compatibility
 - **No tests yet**: This is a scraping tool whose correctness depends on live page structure
+
+## Tabula (Excel-style spreadsheet, `tabula/`)
+
+A standalone, dependency-free browser spreadsheet that mimics Microsoft Excel's UI (Korean). Unrelated to the rank checker.
+
+- Run: `cd tabula && npm start` → http://localhost:5178 ; test: `npm test` (Node built-in test runner)
+- Pure ES modules, no build step, no npm dependencies. Keep it that way.
+- `src/formula.js` (engine) and `src/workbook.js` (model) must stay DOM-free so they remain unit-testable in Node.
+- All UI text is Korean. New functions need an entry in `src/funcinfo.js` (a test enforces this).
+- Undoable changes go through `wb.transact(fn, meta())`; structural changes call `wb.snapshotAll()` first.

@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>통합 문서1 - Tabula</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='4' width='28' height='24' rx='3' fill='%23217346'/%3E%3Cpath d='M9 11l6 10M15 11l-6 10' stroke='white' stroke-width='2.4' stroke-linecap='round'/%3E%3Cpath d='M18 12h8M18 16h8M18 20h8' stroke='white' stroke-width='1.6'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <header class="titlebar">
+      <div class="tb-left">
+        <div class="autosave">
+          <span>자동 저장</span>
+          <button id="autosaveToggle" class="toggle" role="switch" aria-checked="true" title="자동 저장 (브라우저에 보관)"><i></i></button>
+          <span id="autosaveLabel" class="toggle-label">켬</span>
+        </div>
+        <button class="tb-btn" data-cmd="save" title="저장 (Ctrl+S)" data-icon="save"></button>
+        <button class="tb-btn" data-cmd="undo" id="tbUndo" title="실행 취소 (Ctrl+Z)" data-icon="undo"></button>
+        <button class="tb-btn" data-cmd="redo" id="tbRedo" title="다시 실행 (Ctrl+Y)" data-icon="redo"></button>
+      </div>
+      <div class="tb-title" id="docTitle" title="클릭하여 이름 바꾸기">통합 문서1 - Tabula</div>
+      <label class="tb-search">
+        <span data-icon="search"></span>
+        <input id="searchBox" type="search" placeholder="검색 (Alt+Q)" autocomplete="off">
+      </label>
+      <div class="avatar" title="Tabula">TB</div>
+    </header>
+
+    <nav class="ribbon-tabs" id="ribbonTabs"></nav>
+    <section class="ribbon" id="ribbon"></section>
+
+    <div class="formula-row" id="formulaRow">
+      <div class="namebox">
+        <input id="nameBox" spellcheck="false" autocomplete="off" aria-label="이름 상자">
+        <span class="namebox-caret" data-icon="chevronDown"></span>
+      </div>
+      <div class="fx-divider">⋮</div>
+      <button class="fx-btn" id="fxCancel" title="취소" data-icon="cross" disabled></button>
+      <button class="fx-btn" id="fxEnter" title="입력" data-icon="check" disabled></button>
+      <button class="fx-btn fx" id="fxInsert" title="함수 삽입" data-icon="fx"></button>
+      <textarea id="formulaInput" rows="1" spellcheck="false" aria-label="수식 입력줄"></textarea>
+    </div>
+
+    <main class="grid-scroll" id="gridScroll">
+      <div class="grid-inner" id="gridInner">
+        <table class="grid" id="grid">
+          <colgroup></colgroup>
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+        <div class="ref-highlights" id="refHighlights"></div>
+        <div class="sel-border" id="selBorder"></div>
+        <div class="fill-handle" id="fillHandle"></div>
+        <div class="fill-preview" id="fillPreview"></div>
+        <div class="copy-marquee" id="copyMarquee"></div>
+        <textarea class="cell-editor idle" id="cellEditor" spellcheck="false" autocomplete="off"></textarea>
+        <ul class="autocomplete" id="autocomplete"></ul>
+      </div>
+    </main>
+
+    <footer class="footer">
+      <div class="sheetbar">
+        <button class="sheet-nav" data-cmd="prevSheet" title="이전 시트" data-icon="prev"></button>
+        <button class="sheet-nav" data-cmd="nextSheet" title="다음 시트" data-icon="next"></button>
+        <div class="sheet-tabs" id="sheetTabs"></div>
+        <button class="sheet-add" data-cmd="addSheet" title="새 시트" data-icon="plus"></button>
+      </div>
+      <div class="statusbar">
+        <span id="statusMode">준비</span>
+        <span class="status-spacer"></span>
+        <span id="statusStats"></span>
+        <div class="zoom">
+          <button data-cmd="zoomOut" title="축소">−</button>
+          <input id="zoomSlider" type="range" min="25" max="400" step="5" value="100" aria-label="확대/축소">
+          <button data-cmd="zoomIn" title="확대">+</button>
+          <button id="zoomLabel" data-cmd="zoom100" title="100%로 확대/축소">100%</button>
+        </div>
+      </div>
+    </footer>
+  </div>
+
+  <div id="menuLayer"></div>
+  <div id="dialogLayer"></div>
+  <div id="toast" role="status"></div>
+  <div id="commentTip" class="comment-tip"></div>
+  <input type="file" id="fileInput" accept=".csv,.tsv,.txt,.json,.tabula" hidden>
+  <script type="module" src="src/app.js"></script>
+</body>
+</html>
