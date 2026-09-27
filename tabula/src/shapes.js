@@ -1,7 +1,7 @@
 // 그림 개체(차트·그림·도형) 공통 도우미와 도형 SVG (DOM 없음)
 
-export const OBJECT_PROPS = ['charts', 'images', 'shapes'];
-export const OBJECT_LABEL = { charts: '차트', images: '그림', shapes: '도형' };
+export const OBJECT_PROPS = ['charts', 'images', 'shapes', 'slicers'];
+export const OBJECT_LABEL = { charts: '차트', images: '그림', shapes: '도형', slicers: '슬라이서' };
 
 export const SHAPE_KINDS = [
   { id: 'rect', label: '사각형' },

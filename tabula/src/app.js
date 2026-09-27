@@ -1,11 +1,13 @@
 // Tabula 메인: 상태 · 선택 · 편집 · 키보드/마우스 · 명령 (그리기는 view.js)
 import { Workbook, cellData, DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT } from './workbook.js';
 import {
-  cellName, colToName, parseRangeName, parse, shiftFormula, listRefs, normalizeFormula,
+  cellName, colToName, parseRangeName, parse, shiftFormula, listRefs, normalizeFormula, tokenize,
   FUNCTION_NAMES, isError, quoteSheetName, MAX_ROWS, MAX_COLS,
 } from './formula.js';
-import { formatValue, displayedDecimals, parseInput } from './format.js';
-import { buildRibbon, FONTS, FONT_SIZES } from './ribbon.js';
+import {
+  formatValue, displayedDecimals, parseInput, formatCode, styleForCode, codeOfStyle, adjustCodeDecimals, formatGeneral,
+} from './format.js';
+import { buildRibbon, FONTS, FONT_SIZES, TABS } from './ribbon.js';
 import {
   el, hydrateIcons, toast, openMenu, closeMenus, isMenuOpen, openDialog, alertDialog,
   formDialog, setMenuCloseHandler, setDialogCloseHandler, isDialogOpen,
@@ -19,11 +21,20 @@ import { readXlsx, writeXlsx, xlsxOverflow } from './xlsx.js';
 import { CHART_TYPES, chartData, renderChartSvg } from './chart.js';
 import { buildPivot, AGGREGATES } from './pivot.js';
 import { server } from './storage.js';
+import { ICONS } from './icons.js';
+import {
+  TABLE_STYLES, DEFAULT_TABLE_STYLE, TOTAL_FUNCS, tableAt, tableCellStyle, tableFilterRange, dataTop, dataBottom, uniqueNames,
+  nextTableName, columnNames, expansionFor, validTableName, findTable, resolveStructRef,
+} from './tables.js';
+import { splitDelimited, splitFixed, suggestBreaks, parseDateOrder, convertPart, DATE_ORDERS } from './textsplit.js';
 import {
   VALIDATION_TYPES, VALIDATION_OPS, validationAt, checkValidation, listItems, describeRule, subtractRange, invalidCells,
 } from './validation.js';
 import { OBJECT_PROPS, OBJECT_LABEL, SHAPE_KINDS, newShape, findObject, shapeSvg } from './shapes.js';
 import { extractVbaModules, fromBase64 } from './vba.js';
+import {
+  CATEGORIES as FMT_CATEGORIES, CURRENCY_SYMBOLS, NEGATIVE_STYLES, DATE_TYPES, TIME_TYPES, FRACTION_TYPES, SPECIAL_TYPES, CUSTOM_LIST, buildCode, describeCode,
+} from './fmtpresets.js';
 
 const $ = (id) => document.getElementById(id);
 const dom = {
@@ -86,7 +97,7 @@ const range = (a, b) => Array.from({ length: Math.max(0, b - a + 1) }, (_, i) =>
 const styleAt = (r, c) => wb.styleAt(si, r, c);
 const valueAt = (r, c) => wb.getValue(si, r, c);
 const isEmptyAt = (r, c) => !wb.getCell(si, r, c)?.raw;
-const filterHidden = (r) => !!sheet().filter?.hidden?.[r];
+const filterHidden = (r) => !!sheet().filter?.hidden?.[r] || (sheet().tables ?? []).some((t) => t.filter?.hidden?.[r]);
 
 function expandMerges(rg) {
   const out = { ...rg };
@@ -373,7 +384,7 @@ function beginTyping() {
 
 function setMode() {
   if (!editing) {
-    const f = sheet().filter;
+    const f = allFilters().map(([, x]) => x).find((x) => Object.keys(x.hidden ?? {}).length) ?? null;
     const hidden = f ? Object.keys(f.hidden ?? {}).length : 0;
     dom.status.textContent = painter ? '서식 복사' : clip ? '대상을 선택한 후 Enter 키를 누르거나 붙여넣기를 선택하세요.'
       : hidden ? `필터 모드: ${f.r2 - f.r1 - hidden}/${f.r2 - f.r1}개 레코드 표시` : '준비';
@@ -433,6 +444,8 @@ function commitEdit(dir = null, { fillSel = false } = {}) {
         autoFitRows(sel.r1, Math.min(sel.r2, sel.r1 + 500));
       } else {
         wb.setInput(si, r, c, text);
+        maybeCalculatedColumn(r, c, text);
+        afterDataEntry({ r1: r, c1: c, r2: r, c2: c });
         if (text.includes('\n')) wb.setStyle(si, r, c, { wrap: true });
         else if (!text.startsWith('=') || typeof valueAt(r, c) === 'number') autoWiden({ r1: r, c1: c, r2: r, c2: c });
         autoFitRows(r, r);
@@ -652,11 +665,11 @@ function autoFitRows(r1, r2) {
 }
 
 /** 엑셀처럼: 너비를 바꾼 적 없는 열에 숫자가 들어가지 않으면 열을 넓힘 */
-function autoWiden(rg) {
+function autoWiden(rg, { grow = false } = {}) {
   const s = sheet();
   const u = usedClip(rg);
   for (let c = u.c1; c <= Math.min(u.c2, u.c1 + 200); c++) {
-    if (s.colWidths[c] !== undefined) continue;
+    if (s.colWidths[c] !== undefined && !grow) continue;
     let need = 0;
     for (let r = u.r1; r <= Math.min(u.r2, u.r1 + 2000); r++) {
       const v = valueAt(r, c);
@@ -664,7 +677,7 @@ function autoWiden(rg) {
       if (typeof v !== 'number' || st.wrap || wb.mergeAt(si, r, c)) continue;
       need = Math.max(need, measureText(formatValue(v, st).text, st) + 10);
     }
-    if (need > DEFAULT_COL_WIDTH + 1 && need < 400) wb.setColWidth(si, c, Math.ceil(need));
+    if (need > (s.colWidths[c] ?? DEFAULT_COL_WIDTH) + 1 && need < 400) wb.setColWidth(si, c, Math.ceil(need));
   }
 }
 
@@ -744,6 +757,7 @@ function afterCaretMove() {
 }
 
 function onGridKey(e) {
+  if (handleKeytipKey(e)) return;
   if (e.isComposing || e.keyCode === 229) return;
   const ctrl = e.ctrlKey || e.metaKey;
   const k = e.key;
@@ -758,9 +772,22 @@ function onGridKey(e) {
     if (ctrl && (k === 'c' || k === 'C' || k === 'x' || k === 'X')) { handled(); copyObject(chartSel, k.toLowerCase() === 'x'); return; }
     if (ctrl && (k === 'd' || k === 'D')) { handled(); copyObject(chartSel, false); pasteObject(); return; }
     if (k === 'Enter' || k === 'F2') { handled(); editObject(chartSel); return; }
+    if (e.altKey && (e.code === 'KeyC' || e.code === 'KeyS') && sheet().slicers?.some((x) => x.id === chartSel)) {
+      handled();
+      if (e.code === 'KeyC') slicerClear(chartSel); else run('slicerMulti');
+      gv.renderObjectsAll();
+      return;
+    }
     if (!ctrl && !e.altKey && k.length === 1 && sheet().shapes?.some((x) => x.id === chartSel)) { handled(); shapeDialog(chartSel, k); return; }
   }
   if (e.altKey && k === 'ArrowDown' && !ctrl) {
+    const tt = tableHere();
+    if (tt?.totals && active.r === tt.r2) { handled(); openTotalsMenu(); return; }
+    const hdr = tt?.filter && tt.header && active.r === tt.r1;
+    if (hdr || (sheet().filter && active.r === sheet().filter.r1)) {
+      const btn = document.querySelector(`.fbtn[data-c="${active.c}"][data-t="${hdr ? tt.id : ''}"]`);
+      if (btn) { handled(); openFilterMenu(active.c, btn, hdr ? tt.id : ''); return; }
+    }
     const rule = validationAt(sheet(), active.r, active.c);
     if (rule?.type === 'list') { handled(); openDvList(); return; }
   }
@@ -779,7 +806,7 @@ function onGridKey(e) {
       z: 'undo', y: 'redo', b: 'bold', i: 'italic', u: 'underline', 5: 'strike', d: 'fillDown', r: 'fillRight',
       s: 'save', f: 'find', h: 'replace', g: 'goto', p: 'print', o: 'open', 2: 'bold', 3: 'italic', 4: 'underline',
       ';': 'insertDate', '`': 'toggleFormulas', 1: 'formatCells', '-': 'deleteMenuKey', F1: 'toggleRibbon',
-      9: 'hideRows', 0: 'hideCols',
+      9: 'hideRows', 0: 'hideCols', t: 'createTable', l: 'createTable',
     };
     if (lower === 'a') { handled(); selectAll(); return; }
     if (lower === ' ' || e.code === 'Space') { handled(); selectCols(sel.c1, sel.c2, active); return; }
@@ -872,13 +899,13 @@ function onViewMouseDown(e) {
   if (t.classList.contains('fbtn')) {
     e.preventDefault();
     if (editing && !commitEdit()) return;
-    openFilterMenu(Number(t.dataset.c), t);
+    openFilterMenu(Number(t.dataset.c), t, t.dataset.t || '');
     return;
   }
   if (t.classList.contains('dv-btn')) {
     e.preventDefault();
     if (editing && !commitEdit()) return;
-    openDvList();
+    if (t.dataset.tt) openTotalsMenu(); else openDvList();
     return;
   }
   if (drawKind) {
@@ -894,6 +921,20 @@ function onViewMouseDown(e) {
     chartSel = temp.id;
     drag = { type: 'draw', id: temp.id, x0: hit.sheetX, y0: hit.sheetY, start: { x: e.clientX, y: e.clientY } };
     gv.renderObjectsAll();
+    return;
+  }
+  const slBtn = t.closest('.sl-item, .sl-clear, .sl-multi');
+  if (slBtn && e.button === 0) {
+    e.preventDefault();
+    if (editing && !commitEdit()) return;
+    focusGrid();
+    const id = t.closest('.obj').dataset.id;
+    chartSel = id;
+    if (slBtn.classList.contains('sl-item')) slicerPick(id, slBtn.dataset.k, e.ctrlKey || e.metaKey);
+    else if (slBtn.classList.contains('sl-clear')) slicerClear(id);
+    else { const sl = sheet().slicers.find((x) => x.id === id); updateObject(id, { multi: !sl.multi }); }
+    gv.renderObjectsAll();
+    updateSelectionUI();
     return;
   }
   const objEl = t.closest('.obj');
@@ -1067,7 +1108,7 @@ function onDragMove(x, y) {
         ch.y = Math.max(0, Math.round(o.y + dy));
       } else {
         const k = drag.corner;
-        const [minW, minH] = drag.prop === 'charts' ? [120, 90] : ch.kind === 'line' ? [0, 0] : [8, 8];
+        const [minW, minH] = drag.prop === 'charts' ? [120, 90] : drag.prop === 'slicers' ? [80, 56] : ch.kind === 'line' ? [0, 0] : [8, 8];
         let { x: nx, y: ny, w: nw, h: nh } = o;
         if (k.includes('e')) nw = o.w + dx;
         if (k.includes('s')) nh = o.h + dy;
@@ -1195,7 +1236,7 @@ function autofitCols(cols) {
         const cell = wb.getCell(si, r, c);
         const st = styleAt(r, c);
         const text = view.showFormulas && cell?.formula ? cell.raw : formatValue(v, st).text;
-        for (const line of text.split('\n')) w = Math.max(w, measureText(line, st) + (sheet().filter?.r1 === r ? 28 : 10));
+        for (const line of text.split('\n')) w = Math.max(w, measureText(line, st) + (allFilters().some(([, f]) => f.r1 === r && c >= f.c1 && c <= f.c2) ? 28 : 10));
       }
       wb.setColWidth(si, c, w ? Math.min(600, Math.ceil(w)) : DEFAULT_COL_WIDTH);
     }
@@ -1230,6 +1271,7 @@ function doFill(src, t) {
         }
       }
     }
+    if (forward) afterDataEntry(vertical ? { r1: src.r2 + 1, c1: src.c1, r2: t.r2, c2: src.c2 } : { r1: src.r1, c1: src.c2 + 1, r2: src.r2, c2: t.c2 });
   }, meta());
   selectRange({ r1: Math.min(src.r1, t.r1), c1: Math.min(src.c1, t.c1), r2: Math.max(src.r2, t.r2), c2: Math.max(src.c2, t.c2) }, 'cells', active);
 }
@@ -1351,6 +1393,7 @@ function pasteInternal(mode = 'all') {
         wb.setCellData(si, tr, tc, data);
       }
     }
+    afterDataEntry({ r1: tgt.r1, c1: tgt.c1, r2: tgt.r1 + th - 1, c2: tgt.c1 + tw - 1 });
   }, meta());
   if (cut) clip = null;
   selectRange({ r1: tgt.r1, c1: tgt.c1, r2: tgt.r1 + th - 1, c2: tgt.c1 + tw - 1 }, 'cells', { r: tgt.r1, c: tgt.c1 });
@@ -1365,6 +1408,7 @@ function pasteText(text) {
       for (const [r, c] of cellsIn(sel)) wb.setInput(si, r, c, rows[0][0]);
     } else {
       rows.forEach((row, i) => row.forEach((v, j) => wb.setInput(si, active.r + i, active.c + j, v)));
+      afterDataEntry({ r1: active.r, c1: active.c, r2: active.r + rows.length - 1, c2: active.c + Math.max(...rows.map((x) => x.length)) - 1 });
     }
   }, meta());
   if (rows.length > 1 || rows[0].length > 1) {
@@ -1402,7 +1446,11 @@ function explicitOff(patch, r, c) {
 
 function applyStyle(patchOrFn, { widen = false } = {}) {
   const rg = sel;
-  const patchFor = (cur) => (typeof patchOrFn === 'function' ? patchOrFn(cur) : patchOrFn);
+  const patchFor = (cur) => {
+    const p = typeof patchOrFn === 'function' ? patchOrFn(cur) : patchOrFn;
+    // 기본 표시 형식을 고르면 사용자 지정 코드는 지움
+    return p && 'numFmt' in p && p.numFmt !== 'custom' ? { ...p, code: undefined } : p;
+  };
   wb.transact(() => {
     if (LINE_KINDS.has(selKind)) {
       const s = sheet();
@@ -1428,7 +1476,7 @@ function applyStyle(patchOrFn, { widen = false } = {}) {
         if (p) wb.setStyle(si, r, c, explicitOff(p, r, c));
       }
     }
-    if (widen) autoWiden(rg);
+    if (widen) autoWiden(rg, { grow: widen === 'grow' });
     const sample = patchFor({}) ?? {};
     if (('wrap' in sample || 'size' in sample || 'font' in sample) && selKind !== 'cols' && selKind !== 'all') {
       const u = usedClip(rg);
@@ -1484,6 +1532,10 @@ function changeDecimals(delta) {
     }
   }
   if (typeof v !== 'number') v = 0;
+  if (st.numFmt === 'custom' && st.code) {
+    applyStyle((s) => (s.numFmt === 'custom' && s.code ? { code: adjustCodeDecimals(s.code, delta) } : null), { widen: true });
+    return;
+  }
   const next = clamp(displayedDecimals(v, st.numFmt, st.decimals) + delta, 0, 15);
   applyStyle((s) => ({ decimals: next, numFmt: s.numFmt === 'text' ? undefined : s.numFmt ?? st.numFmt }), { widen: true });
 }
@@ -1632,10 +1684,16 @@ function hasHeader(rg) {
   return textFirst && (nonTextBelow || styleAt(rg.r1, rg.c1).bold === true);
 }
 
-function sortData(ascending, keyCol = active.c, header = null, rgIn = null) {
-  const f = sheet().filter;
+function sortData(ascending, keyCol = active.c, header = null, rgIn = null, fkeyIn = null) {
+  const tbl = rgIn ? null : tableHere();
+  let fkey = fkeyIn ?? (tbl ? (tbl.filter && tbl.header ? tbl.id : null) : sheet().filter ? '' : null);
+  const f = fkey === null ? null : getFilter(fkey);
   let rg = rgIn;
-  if (!rg && f && active.r >= f.r1 && active.r <= f.r2 && active.c >= f.c1 && active.c <= f.c2 && selIsActiveOnly()) {
+  if (!rg && tbl && selIsActiveOnly()) {
+    // 표 안: 표의 데이터 행만 정렬 (요약 행 제외)
+    rg = { r1: tbl.header ? tbl.r1 : dataTop(tbl), c1: tbl.c1, r2: dataBottom(tbl), c2: tbl.c2 };
+    header = tbl.header;
+  } else if (!rg && f && fkey === '' && active.r >= f.r1 && active.r <= f.r2 && active.c >= f.c1 && active.c <= f.c2 && selIsActiveOnly()) {
     rg = recomputeFilter(f);
     header = true;
   }
@@ -1649,7 +1707,7 @@ function sortData(ascending, keyCol = active.c, header = null, rgIn = null) {
   }
   wb.transact(() => {
     wb.sortRange(si, rg.r1 + (h ? 1 : 0), rg.c1, rg.r2, rg.c2, key, ascending);
-    if (f && rg.r1 === f.r1 && rg.c1 === f.c1) wb.setSheetProp(si, 'filter', recomputeFilter({ ...f, sort: { col: key, asc: ascending } }));
+    if (f && rg.r1 === f.r1 && rg.c1 === f.c1) putFilter(fkey, recomputeFilter({ ...f, sort: { col: key, asc: ascending } }, fkey));
   }, meta());
   if (!rgIn) selectRange({ r1: rg.r1, c1: rg.c1, r2: rg.r2, c2: rg.c2 }, 'cells', { r: active.r, c: active.c });
 }
@@ -1740,9 +1798,8 @@ function insertFunctionText(name) {
 
 // ───────────────────────── 필터 ─────────────────────────
 /** 필터 조건으로 숨길 행 다시 계산 (데이터 아래로 늘어난 행 포함) */
-function recomputeFilter(f) {
-  const region = currentRegion(f.r1, f.c1);
-  const r2 = Math.max(f.r2, region.r2);
+function recomputeFilter(f, key = '') {
+  const r2 = key ? f.r2 : Math.max(f.r2, currentRegion(f.r1, f.c1).r2);
   const crit = Object.entries(f.criteria ?? {}).filter(([, v]) => Array.isArray(v)).map(([c, vals]) => [Number(c), new Set(vals)]);
   const hidden = {};
   if (crit.length) {
@@ -1756,6 +1813,7 @@ function recomputeFilter(f) {
 }
 
 function toggleFilter() {
+  if (tableHere()) { toggleTableOption('filter'); return; }
   if (sheet().filter) {
     wb.transact(() => wb.setSheetProp(si, 'filter', null), meta());
     toast('필터를 해제했습니다.');
@@ -1777,24 +1835,25 @@ function widenForFilterButtons(rg) {
   }
 }
 
-function applyFilterCriteria(c, values) {
-  const f = sheet().filter;
+function applyFilterCriteria(c, values, key = '', { quiet = false } = {}) {
+  const f = getFilter(key);
   if (!f) return;
   const criteria = { ...f.criteria };
   if (values === null) delete criteria[c]; else criteria[c] = values;
-  const nf = recomputeFilter({ ...f, criteria });
-  wb.transact(() => wb.setSheetProp(si, 'filter', nf), meta());
+  const nf = recomputeFilter({ ...f, criteria }, key);
+  wb.transact(() => putFilter(key, nf), meta());
   gv.layout();
   const total = nf.r2 - nf.r1;
+  if (quiet) return;
   toast(`${total}개 중 ${total - Object.keys(nf.hidden).length}개의 레코드가 있습니다.`);
   selectCell(nf.r1, c);
   setMode();
 }
 
-function openFilterMenu(c, anchorEl) {
-  const f = sheet().filter;
+function openFilterMenu(c, anchorEl, key = '') {
+  const f = getFilter(key);
   if (!f) return;
-  const full = recomputeFilter(f);
+  const full = recomputeFilter(f, key);
   // 다른 열 조건을 통과한 행의 값만 목록에 표시
   const others = Object.entries(f.criteria ?? {}).filter(([k, v]) => Number(k) !== c && Array.isArray(v)).map(([k, v]) => [Number(k), new Set(v)]);
   const values = new Map();
@@ -1845,7 +1904,7 @@ function openFilterMenu(c, anchorEl) {
   const ok = () => {
     closeMenus();
     const chosen = [...checks.entries()].filter(([, cb]) => cb.checked).map(([t]) => t);
-    applyFilterCriteria(c, chosen.length === items.length ? null : chosen);
+    applyFilterCriteria(c, chosen.length === items.length ? null : chosen, key);
     focusGrid();
   };
   const header = displayText(f.r1, c) || `${colToName(c)}열`;
@@ -1858,10 +1917,10 @@ function openFilterMenu(c, anchorEl) {
     el('button', { class: 'btn primary', onclick: ok }, '확인'),
     el('button', { class: 'btn', onclick: () => { closeMenus(); focusGrid(); } }, '취소')));
   const menu = openMenu(anchorEl, [
-    { label: '텍스트 오름차순 정렬', icon: 'sortAsc', action: () => sortData(true, c, true, full) },
-    { label: '텍스트 내림차순 정렬', icon: 'sortDesc', action: () => sortData(false, c, true, full) },
+    { label: '텍스트 오름차순 정렬', icon: 'sortAsc', action: () => sortData(true, c, true, full, key) },
+    { label: '텍스트 내림차순 정렬', icon: 'sortDesc', action: () => sortData(false, c, true, full, key) },
     { sep: true },
-    { label: `"${header}"에서 필터 해제`, icon: 'filterClear', disabled: !current, action: () => applyFilterCriteria(c, null) },
+    { label: `"${header}"에서 필터 해제`, icon: 'filterClear', disabled: !current, action: () => applyFilterCriteria(c, null, key) },
     { node },
   ]);
   menu.style.minWidth = '280px';
@@ -1940,6 +1999,924 @@ function chartDialog(id) {
 
 function chartMenu(id, pos) { objectMenu(id, pos); }
 
+// ───────────────────────── 표 (Ctrl+T) ─────────────────────────
+const tableHere = (r = active.r, c = active.c) => tableAt(sheet(), r, c);
+const newTableId = () => `tb${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+
+/** transact 안에서 호출 */
+function setTables(fn) {
+  wb.setSheetProp(si, 'tables', fn((sheet().tables ?? []).map((t) => ({ ...t }))));
+}
+
+function updateTable(id, patch) {
+  wb.transact(() => setTables((list) => list.map((t) => (t.id === id ? { ...t, ...patch } : t))), meta());
+}
+
+function tableRangeText(t) {
+  return `=$${colToName(t.c1)}$${t.r1 + 1}:$${colToName(t.c2)}$${t.r2 + 1}`;
+}
+
+function createTableDialog(styleName = null) {
+  if (editing && !commitEdit()) return;
+  const existing = tableHere();
+  if (existing) {
+    if (styleName) updateTable(existing.id, { style: styleName });
+    else toast(`이미 '${existing.name}' 표 안에 있습니다.`);
+    return;
+  }
+  let rg = selIsActiveOnly() ? dataRange() : usedClip(sel);
+  if (isSingle(rg) && isEmptyAt(rg.r1, rg.c1)) rg = { ...rg };
+  const rangeIn = el('input', { type: 'text', value: tableRangeText(rg), style: { width: '100%' } });
+  const headIn = el('input', { type: 'checkbox', checked: rg.r2 > rg.r1 ? hasHeader(rg) || typeof valueAt(rg.r1, rg.c1) === 'string' : false });
+  openDialog({
+    title: '표 만들기', width: 380,
+    body: el('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
+      el('div', {}, '표에 사용할 데이터를 지정하십시오.'),
+      rangeIn,
+      el('label', { class: 'fc-check' }, headIn, '머리글 포함')),
+    buttons: [
+      {
+        label: '확인', primary: true,
+        action: () => {
+          const t = rangeIn.value.replace(/[=$]/g, '').trim();
+          const p = parseRangeName(t.includes('!') ? t.slice(t.lastIndexOf('!') + 1) : t);
+          if (!p) { alertDialog('표 만들기', '참조가 올바르지 않습니다.'); return false; }
+          return createTable(p, headIn.checked, styleName ?? DEFAULT_TABLE_STYLE) ? undefined : false;
+        },
+      },
+      { label: '취소' },
+    ],
+  });
+}
+
+function createTable(rg, header, styleName) {
+  const s = sheet();
+  if ((s.tables ?? []).some((t) => t.r1 <= rg.r2 && t.r2 >= rg.r1 && t.c1 <= rg.c2 && t.c2 >= rg.c1)) {
+    alertDialog('표 만들기', '표는 다른 표와 겹칠 수 없습니다.');
+    return false;
+  }
+  if (wb.mergesIn(si, rg.r1, rg.c1, rg.r2, rg.c2).length) {
+    alertDialog('표 만들기', '병합된 셀이 있으면 표를 만들 수 없습니다. 병합을 해제하고 다시 시도하세요.');
+    return false;
+  }
+  if (rg.c2 - rg.c1 > 500) { alertDialog('표 만들기', '표는 500열까지 만들 수 있습니다.'); return false; }
+  const id = newTableId();
+  const name = nextTableName(wb);
+  wb.transact(() => {
+    let { r1, r2 } = rg;
+    if (!header) {
+      // 머리글 행을 새로 넣고 데이터는 한 행 아래로
+      wb.insertRows(si, r1, 1);
+      r2++;
+      for (let c = rg.c1; c <= rg.c2; c++) wb.setInput(si, r1, c, `열${c - rg.c1 + 1}`);
+    } else {
+      const texts = [];
+      for (let c = rg.c1; c <= rg.c2; c++) texts.push(displayText(r1, c));
+      uniqueNames(texts).forEach((n, i) => {
+        const c = rg.c1 + i;
+        if (typeof valueAt(r1, c) !== 'string' || texts[i] !== n) wb.setInput(si, r1, c, `'${n}`);
+      });
+    }
+    if (r2 === r1) r2++; // 머리글만 있으면 빈 데이터 행 하나
+    const f = sheet().filter;
+    if (f && f.r1 <= r2 && f.r2 >= r1 && f.c1 <= rg.c2 && f.c2 >= rg.c1) wb.setSheetProp(si, 'filter', null);
+    const t = {
+      id, name, r1, c1: rg.c1, r2, c2: rg.c2, header: true, totals: false, style: styleName,
+      banded: true, bandedCols: false, firstCol: false, lastCol: false, filter: { criteria: {}, hidden: {} }, totalsFns: {},
+    };
+    setTables((list) => [...list, t]);
+    widenForFilterButtons({ r1, c1: rg.c1, r2, c2: rg.c2 });
+  }, meta());
+  const t = sheet().tables.find((x) => x.id === id);
+  selectRange({ r1: t.r1, c1: t.c1, r2: t.r2, c2: t.c2 }, 'cells', { r: t.r1 + 1 <= t.r2 ? t.r1 + 1 : t.r1, c: t.c1 });
+  ribbon.selectTab('tableDesign');
+  toast(`'${name}' 표를 만들었습니다. 아래나 오른쪽에 이어서 입력하면 표가 자동으로 늘어납니다.`);
+  return true;
+}
+
+/** 값을 넣은 범위(rg) 때문에 표가 늘어나야 하면 늘림 (transact 안에서) */
+function afterDataEntry(rg) {
+  const s = sheet();
+  if (!s.tables?.length) return;
+  // 실제로 값이 들어간 셀이 있을 때만
+  let any = false;
+  for (const [r, c] of cellsIn({ ...rg, r2: Math.min(rg.r2, rg.r1 + 5000), c2: Math.min(rg.c2, rg.c1 + 500) })) if (!isEmptyAt(r, c)) { any = true; break; }
+  if (!any) return;
+  for (const e of expansionFor(s, rg)) {
+    const t = sheet().tables.find((x) => x.id === e.id);
+    const nt = { ...t, ...e };
+    if (e.c2 !== undefined && t.header) {
+      const names = columnNames(wb, si, t).map((n) => n.toLowerCase());
+      for (let c = t.c2 + 1; c <= e.c2; c++) {
+        if (!isEmptyAt(t.r1, c)) continue;
+        let n = c - t.c1 + 1;
+        while (names.includes(`열${n}`)) n++;
+        names.push(`열${n}`);
+        wb.setInput(si, t.r1, c, `열${n}`);
+      }
+      if (t.totals) nt.r2 = t.r2;
+    }
+    setTables((list) => list.map((x) => (x.id === t.id ? nt : x)));
+    if (e.r2 !== undefined) fillNewTableRows(nt, t.r2 + 1, e.r2);
+  }
+}
+
+/** 새로 들어온 행: 계산 열 수식과 위 행의 표시 형식을 이어받음 */
+function fillNewTableRows(t, from, to) {
+  const top = dataTop(t);
+  const prev = from - 1;
+  if (prev < top) return;
+  for (let c = t.c1; c <= t.c2; c++) {
+    const above = wb.getCell(si, prev, c);
+    const calc = calculatedFormula(t, c, prev);
+    for (let r = from; r <= to; r++) {
+      const cur = wb.getCell(si, r, c);
+      if (calc && !cur?.raw) wb.setInput(si, r, c, shiftFormula(calc.raw, r - calc.r, 0));
+      if (above?.style && !cur?.style) wb.setStyle(si, r, c, { ...above.style });
+    }
+  }
+}
+
+/** 열 전체가 같은 수식(상대 위치 기준)이면 그 수식 { raw, r } */
+function calculatedFormula(t, c, last) {
+  const top = dataTop(t);
+  const first = wb.getCell(si, top, c);
+  if (!first?.formula) return null;
+  for (let r = top + 1; r <= Math.min(last, top + 2000); r++) {
+    const cell = wb.getCell(si, r, c);
+    if (!cell?.formula || cell.raw !== shiftFormula(first.raw, r - top, 0)) return null;
+  }
+  return { raw: first.raw, r: top };
+}
+
+/** 표 열의 빈 셀에 수식을 넣으면 그 열 전체에 채움 (엑셀의 계산 열) */
+function maybeCalculatedColumn(r, c, text) {
+  const t = tableHere(r, c);
+  if (!t || !text.startsWith('=') || r < dataTop(t) || r > dataBottom(t)) return;
+  for (let rr = dataTop(t); rr <= dataBottom(t); rr++) if (rr !== r && !isEmptyAt(rr, c)) return;
+  for (let rr = dataTop(t); rr <= dataBottom(t); rr++) if (rr !== r) wb.setInput(si, rr, c, shiftFormula(text, rr - r, 0));
+}
+
+// ── 필터 대상 (시트 필터 또는 표) ──
+/** key: '' = 시트 필터, 표 id = 표 필터 */
+function getFilter(key) {
+  if (key) {
+    const t = (sheet().tables ?? []).find((x) => x.id === key);
+    return t?.filter && t.header ? tableFilterRange(t) : null;
+  }
+  return sheet().filter;
+}
+
+function putFilter(key, nf) {
+  if (key) setTables((list) => list.map((t) => (t.id === key ? { ...t, filter: nf ? { criteria: nf.criteria ?? {}, hidden: nf.hidden ?? {}, sort: nf.sort } : null } : t)));
+  else wb.setSheetProp(si, 'filter', nf);
+}
+
+/** 현재 셀이 속한 필터 대상 */
+function filterKeyHere() {
+  const t = tableHere();
+  if (t?.filter && t.header) return t.id;
+  const f = sheet().filter;
+  if (f && active.r >= f.r1 && active.r <= f.r2 && active.c >= f.c1 && active.c <= f.c2) return '';
+  if (f) return '';
+  return null;
+}
+
+function allFilters() {
+  const s = sheet();
+  return [...(s.filter ? [['', s.filter]] : []), ...(s.tables ?? []).filter((t) => t.filter && t.header).map((t) => [t.id, tableFilterRange(t)])];
+}
+
+// ── 요약 행 ──
+function totalsFormula(t, c, fnId) {
+  const f = TOTAL_FUNCS.find((x) => x.id === fnId);
+  if (!f?.code) return '';
+  const name = columnNames(wb, si, t)[c - t.c1];
+  return `=SUBTOTAL(${f.code},${t.name}[${name.replace(/(['[\]#@])/g, "'$1")}])`;
+}
+
+function setTotals(t, on) {
+  if (on === !!t.totals) return;
+  wb.transact(() => {
+    if (on) {
+      let row = t.r2 + 1;
+      let busy = false;
+      for (let c = t.c1; c <= t.c2; c++) if (!isEmptyAt(row, c)) busy = true;
+      if (busy || (sheet().tables ?? []).some((o) => o !== t && o.r1 <= row && o.r2 >= row && o.c1 <= t.c2 && o.c2 >= t.c1)) wb.insertRows(si, row, 1);
+      const cur = sheet().tables.find((x) => x.id === t.id);
+      row = cur.r2 + 1;
+      const nt = { ...cur, r2: row, totals: true, totalsFns: {} };
+      setTables((list) => list.map((x) => (x.id === t.id ? nt : x)));
+      // 마지막 숫자 열은 합계, 첫 열은 '요약'
+      let lastNum = null;
+      for (let c = nt.c2; c >= nt.c1 && lastNum === null; c--) {
+        for (let r = dataTop(nt); r <= Math.min(dataBottom(nt), dataTop(nt) + 50); r++) if (typeof valueAt(r, c) === 'number') { lastNum = c; break; }
+      }
+      const fns = {};
+      if (lastNum !== null) { fns[lastNum] = 'sum'; wb.setInput(si, row, lastNum, totalsFormula(nt, lastNum, 'sum')); }
+      if (lastNum !== nt.c1) wb.setInput(si, row, nt.c1, '요약');
+      setTables((list) => list.map((x) => (x.id === t.id ? { ...x, totalsFns: fns } : x)));
+    } else {
+      for (let c = t.c1; c <= t.c2; c++) wb.setCellData(si, t.r2, c, null);
+      setTables((list) => list.map((x) => (x.id === t.id ? { ...x, r2: t.r2 - 1, totals: false, totalsFns: {} } : x)));
+    }
+  }, meta());
+}
+
+function openTotalsMenu() {
+  const t = tableHere();
+  if (!t?.totals || active.r !== t.r2) return;
+  const c = active.c;
+  const b = gv.clientRect({ r1: active.r, c1: c, r2: active.r, c2: c });
+  const cur = t.totalsFns?.[c] ?? 'none';
+  openMenu({ x: b.left, y: b.bottom }, TOTAL_FUNCS.map((f) => ({
+    label: f.label, checked: f.id === cur,
+    action: () => {
+      wb.transact(() => {
+        wb.setInput(si, t.r2, c, totalsFormula(t, c, f.id));
+        setTables((list) => list.map((x) => (x.id === t.id ? { ...x, totalsFns: { ...x.totalsFns, [c]: f.id } } : x)));
+      }, meta());
+      focusGrid();
+    },
+  })), { minWidth: Math.max(120, b.width + 17) });
+}
+
+// ── 테이블 디자인 명령 ──
+function renameTable(name) {
+  const t = tableHere();
+  if (!t) return;
+  const n = String(name ?? '').trim();
+  if (n === t.name) return;
+  if (!validTableName(n)) { alertDialog('표 이름', '표 이름은 글자나 밑줄(_)로 시작해야 하고 공백을 쓸 수 없으며, 셀 주소(A1 등)처럼 보이면 안 됩니다.'); updateRibbon(); return; }
+  if (findTable(wb, n)) { alertDialog('표 이름', '이미 사용 중인 이름입니다.'); updateRibbon(); return; }
+  const re = new RegExp(`(^|[^\\w.\\u00c0-\\uffff])${t.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\[`, 'gi');
+  wb.transact(() => {
+    // 수식 안의 표 이름도 바꿈
+    wb.sheets.forEach((s, i) => {
+      for (const [k, cell] of s.cells) {
+        if (!cell.formula || !re.test(cell.raw)) continue;
+        re.lastIndex = 0;
+        const [r, c] = k.split(',').map(Number);
+        wb.setCellData(i, r, c, { ...cellData(cell), raw: cell.raw.replace(re, (m0, pre) => `${pre}${n}[`) });
+      }
+    });
+    setTables((list) => list.map((x) => (x.id === t.id ? { ...x, name: n } : x)));
+    wb.sheets.forEach((s2, i) => {
+      if (!(s2.slicers ?? []).some((x) => x.source?.table === t.name)) return;
+      wb.setSheetProp(i, 'slicers', s2.slicers.map((x) => (x.source?.table === t.name ? { ...x, source: { ...x.source, table: n } } : { ...x })));
+    });
+  }, meta());
+}
+
+function resizeTableDialog() {
+  const t = tableHere();
+  if (!t) return;
+  formDialog('표 크기 조정', [{ name: 'ref', label: '새 데이터 범위', value: tableRangeText(t) }], ({ ref }) => {
+    const p = parseRangeName(ref.replace(/[=$]/g, '').trim());
+    if (!p) { toast('참조가 올바르지 않습니다.'); return false; }
+    if (p.r1 !== t.r1 || p.c1 > t.c2 || p.c2 < t.c1) { alertDialog('표 크기 조정', '머리글은 같은 행에 있어야 하고, 새 범위는 원래 표와 겹쳐야 합니다.'); return false; }
+    if ((sheet().tables ?? []).some((o) => o.id !== t.id && o.r1 <= p.r2 && o.r2 >= p.r1 && o.c1 <= p.c2 && o.c2 >= p.c1)) { alertDialog('표 크기 조정', '표는 다른 표와 겹칠 수 없습니다.'); return false; }
+    wb.transact(() => {
+      const nt = { ...t, ...p, r2: Math.max(p.r2, p.r1 + 1) };
+      if (t.header) {
+        const names = uniqueNames([...Array(nt.c2 - nt.c1 + 1)].map((_, i) => displayText(nt.r1, nt.c1 + i)));
+        names.forEach((n, i) => { if (displayText(nt.r1, nt.c1 + i) !== n) wb.setInput(si, nt.r1, nt.c1 + i, `'${n}`); });
+      }
+      setTables((list) => list.map((x) => (x.id === t.id ? nt : x)));
+    }, meta());
+    return true;
+  });
+}
+
+/** 표 → 일반 범위: 표 서식은 셀 서식으로, 구조적 참조는 셀 주소로 */
+function convertTableToRange() {
+  const t = tableHere();
+  if (!t) return;
+  openDialog({
+    title: 'Tabula', body: '표를 정상 범위로 변환하시겠습니까?',
+    buttons: [{
+      label: '예', primary: true,
+      action: () => {
+        wb.transact(() => {
+          for (let r = t.r1; r <= t.r2; r++) {
+            for (let c = t.c1; c <= t.c2; c++) {
+              const ts = tableCellStyle(t, r, c);
+              if (!ts) continue;
+              const own = wb.getCell(si, r, c)?.style ?? {};
+              const patch = {};
+              for (const [k, v] of Object.entries(ts)) if (own[k] === undefined) patch[k] = v;
+              if (Object.keys(patch).length) wb.setStyle(si, r, c, patch);
+            }
+          }
+          derefTableFormulas(t);
+          setTables((list) => list.filter((x) => x.id !== t.id));
+          wb.sheets.forEach((s2, i) => {
+            if ((s2.slicers ?? []).some((x) => x.source?.table === t.name)) wb.setSheetProp(i, 'slicers', s2.slicers.filter((x) => x.source?.table !== t.name).map((x) => ({ ...x })));
+          });
+        }, meta());
+        toast('표를 일반 범위로 바꿨습니다.');
+      },
+    }, { label: '아니요' }],
+  });
+}
+
+/** 이 표를 가리키는 구조적 참조를 셀 주소로 바꿈 */
+function derefTableFormulas(t) {
+  const host = sheet().name;
+  wb.sheets.forEach((s, i) => {
+    for (const [k, cell] of s.cells) {
+      if (!cell.formula || !cell.raw.includes('[')) continue;
+      const [r, c] = k.split(',').map(Number);
+      let toks;
+      try { toks = tokenize(cell.raw.slice(1)); } catch { continue; }
+      const body = cell.raw.slice(1);
+      let out = '';
+      let pos = 0;
+      let changed = false;
+      for (const tk of toks) {
+        if (tk.t !== 'sref') continue;
+        const inT = !tk.table && i === si && tableAt(s, r, c)?.id === t.id;
+        if (!inT && (tk.table ?? '').toLowerCase() !== t.name.toLowerCase()) continue;
+        const rg = resolveStructRef(wb, tk.table, tk.spec, { si: i, r, c });
+        if (!rg) continue;
+        const prefix = i === si ? '' : `${quoteSheetName(host)}!`;
+        const ref = rg.r1 === rg.r2 && rg.c1 === rg.c2 ? cellName(rg.r1, rg.c1) : `${cellName(rg.r1, rg.c1)}:${cellName(rg.r2, rg.c2)}`;
+        const abs = /@|this row|현재 행/i.test(tk.spec) ? ref : ref.replace(/([A-Z]+)(\d+)/g, '$$$1$$$2');
+        out += body.slice(pos, tk.s) + prefix + abs;
+        pos = tk.e;
+        changed = true;
+      }
+      if (changed) wb.setCellData(i, r, c, { ...cellData(cell), raw: `=${out}${body.slice(pos)}` });
+    }
+  });
+}
+
+function toggleTableOption(key) {
+  const t = tableHere();
+  if (!t) return;
+  if (key === 'totals') { setTotals(t, !t.totals); return; }
+  if (key === 'filter') {
+    if (!t.header) { toast('필터 단추를 쓰려면 머리글 행이 있어야 합니다.'); return; }
+    updateTable(t.id, { filter: t.filter ? null : { criteria: {}, hidden: {} } });
+    gv.layout();
+    return;
+  }
+  if (key === 'header') {
+    wb.transact(() => {
+      if (t.header) {
+        // 머리글 행을 표에서 빼고 이름은 기억
+        const names = columnNames(wb, si, t);
+        for (let c = t.c1; c <= t.c2; c++) wb.setCellData(si, t.r1, c, null);
+        setTables((list) => list.map((x) => (x.id === t.id ? { ...x, r1: t.r1 + 1, header: false, columns: names, filter: null } : x)));
+      } else {
+        let r1 = t.r1 - 1;
+        let busy = r1 < 0;
+        if (!busy) for (let c = t.c1; c <= t.c2; c++) if (!isEmptyAt(r1, c)) busy = true;
+        if (busy || (sheet().tables ?? []).some((o) => o !== t && o.r1 <= r1 && o.r2 >= r1 && o.c1 <= t.c2 && o.c2 >= t.c1)) {
+          wb.insertRows(si, t.r1, 1);
+          r1 = t.r1;
+        }
+        const cur = sheet().tables.find((x) => x.id === t.id);
+        const names = uniqueNames(cur.columns ?? []);
+        names.forEach((n, i) => wb.setInput(si, r1, cur.c1 + i, `'${n}`));
+        setTables((list) => list.map((x) => (x.id === t.id ? { ...x, r1, header: true, columns: undefined, filter: { criteria: {}, hidden: {} } } : x)));
+      }
+    }, meta());
+    gv.layout();
+    return;
+  }
+  updateTable(t.id, { [key]: !t[key] });
+}
+
+function tableStyleGallery(anchorEl, forCreate = false) {
+  const chip = (st) => el('button', {
+    class: 'style-chip tstyle', title: st.label, onmousedown: (e) => e.preventDefault(),
+    style: { background: `linear-gradient(${st.swatch[0]} 0 28%, ${st.swatch[1]} 28% 52%, ${st.swatch[2] === '#ffffff' ? '#ffffff' : st.swatch[2]} 52% 76%, ${st.swatch[1]} 76%)` },
+    onclick: () => {
+      closeMenus();
+      const t = tableHere();
+      if (t && !forCreate) updateTable(t.id, { style: st.name });
+      else createTableDialog(st.name);
+      focusGrid();
+    },
+  });
+  const groups = ['밝게', '보통', '어둡게'].flatMap((g) => [{ title: g }, { node: el('div', { class: 'style-grid tstyles' }, TABLE_STYLES.filter((s) => s.group === g).map(chip)) }]);
+  const t = tableHere();
+  openMenu(anchorEl, [
+    ...groups,
+    ...(t ? [{ sep: true }, { label: '지우기', action: () => updateTable(t.id, { style: 'None' }) }] : []),
+  ]);
+}
+
+// ───────────────────────── 슬라이서 ─────────────────────────
+const SLICER_COLORS = [['blue', '파랑'], ['orange', '주황'], ['gray', '회색'], ['gold', '금색'], ['sky', '하늘색'], ['green', '녹색']];
+
+const sortItems = (entries) => entries.sort((a, b) => {
+  if (a.key === '') return 1;
+  if (b.key === '') return -1;
+  const x = a.v;
+  const y = b.v;
+  if (typeof x === 'number' && typeof y === 'number') return x - y;
+  if (typeof x === 'number') return -1;
+  if (typeof y === 'number') return 1;
+  return String(a.key).localeCompare(String(b.key), 'ko');
+});
+
+/** 슬라이서가 가리키는 대상과 항목 → { caption, items: [{ key, text, selected, hasData }], filtered, broken?, apply(values) } */
+function slicerModel(sl) {
+  const src = sl.source ?? {};
+  if (src.kind === 'table') {
+    const f = findTable(wb, src.table);
+    if (!f) return { items: [], broken: '연결된 표를 찾을 수 없습니다.' };
+    const { t } = f;
+    const s = f.si;
+    const ci = columnNames(wb, s, t).findIndex((n) => n.toLowerCase() === String(src.column).toLowerCase());
+    if (ci < 0) return { items: [], broken: `'${src.column}' 열을 찾을 수 없습니다.` };
+    const c = t.c1 + ci;
+    const crit = t.filter?.criteria ?? {};
+    const sel = Array.isArray(crit[c]) ? new Set(crit[c]) : null;
+    const others = Object.entries(crit).filter(([k, v]) => Number(k) !== c && Array.isArray(v)).map(([k, v]) => [Number(k), new Set(v)]);
+    const vals = new Map();
+    for (let r = dataTop(t); r <= dataBottom(t); r++) {
+      const key = displayText(r, c, s);
+      const pass = others.every(([k, set]) => set.has(displayText(r, k, s)));
+      const e = vals.get(key) ?? { key, v: wb.getValue(s, r, c), hasData: false };
+      e.hasData ||= pass;
+      vals.set(key, e);
+    }
+    const items = sortItems([...vals.values()]).map((e) => ({ key: e.key, text: e.key === '' ? '(비어 있음)' : e.key, selected: !sel || sel.has(e.key), hasData: e.hasData }));
+    return {
+      items, filtered: !!sel,
+      apply: (values) => {
+        const prev = si;
+        if (f.si !== si) si = f.si;
+        applyFilterCriteria(c, values, t.id, { quiet: true });
+        si = prev;
+      },
+    };
+  }
+  if (src.kind === 'pivot') {
+    const pi = src.self ? si : wb.sheetIndexByName(src.sheet);
+    const def = pi >= 0 ? wb.sheets[pi].pivot : null;
+    if (!def) return { items: [], broken: '연결된 피벗 테이블을 찾을 수 없습니다.' };
+    const rows = pivotSource(def);
+    if (!rows) return { items: [], broken: '피벗 테이블 원본을 찾을 수 없습니다.' };
+    const header = rows[0].map((h, i) => (h === null || h === '' ? `열${i + 1}` : String(h)));
+    const fi = header.findIndex((h) => h.toLowerCase() === String(src.field).toLowerCase());
+    if (fi < 0) return { items: [], broken: `'${src.field}' 필드를 찾을 수 없습니다.` };
+    const filters = def.filters ?? {};
+    const own = Object.keys(filters).find((k) => k.toLowerCase() === header[fi].toLowerCase());
+    const sel = own ? new Set(filters[own]) : null;
+    const others = Object.entries(filters).filter(([k]) => k !== own).map(([k, v]) => [header.findIndex((h) => h.toLowerCase() === k.toLowerCase()), new Set(v)]).filter(([i]) => i >= 0);
+    const vals = new Map();
+    for (const row of rows.slice(1)) {
+      if (row.every((v) => v === null || v === '')) continue;
+      const key = pivotItemText(row[fi]);
+      const pass = others.every(([i, set]) => set.has(pivotItemText(row[i])));
+      const e = vals.get(key) ?? { key, v: row[fi], hasData: false };
+      e.hasData ||= pass;
+      vals.set(key, e);
+    }
+    const items = sortItems([...vals.values()]).map((e) => ({ key: e.key, text: e.key, selected: !sel || sel.has(e.key), hasData: e.hasData }));
+    return {
+      items, filtered: !!sel,
+      apply: (values) => {
+        const nf = { ...filters };
+        if (own) delete nf[own];
+        if (values) nf[header[fi]] = values;
+        const def2 = { ...def, filters: nf };
+        wb.transact(() => { writePivot(pi, def2); wb.setSheetProp(pi, 'pivot', def2); }, meta());
+      },
+    };
+  }
+  return { items: [], broken: '연결 대상이 없습니다.' };
+}
+
+function slicerPick(id, key, additive) {
+  const sl = (sheet().slicers ?? []).find((x) => x.id === id);
+  if (!sl) return;
+  const m = slicerModel(sl);
+  if (m.broken) return;
+  const all = m.items.map((i) => i.key);
+  let cur;
+  if (additive || sl.multi) {
+    cur = new Set(m.items.filter((i) => i.selected).map((i) => i.key));
+    if (cur.has(key)) cur.delete(key); else cur.add(key);
+    if (!cur.size) cur = new Set(all);
+  } else {
+    cur = new Set([key]);
+    if (m.filtered && m.items.filter((i) => i.selected).length === 1 && m.items.find((i) => i.key === key)?.selected) cur = new Set(all);
+  }
+  m.apply(cur.size === all.length ? null : all.filter((k) => cur.has(k)));
+  gv.layout();
+  setMode();
+}
+
+function slicerClear(id) {
+  const sl = (sheet().slicers ?? []).find((x) => x.id === id);
+  if (!sl) return;
+  const m = slicerModel(sl);
+  if (m.broken || !m.filtered) return;
+  m.apply(null);
+  gv.layout();
+  setMode();
+}
+
+/** 표 또는 피벗 테이블에 슬라이서 넣기 */
+function insertSlicerDialog() {
+  if (editing && !commitEdit()) return;
+  const t = tableHere();
+  const pivot = sheet().pivot;
+  let fields;
+  let makeSource;
+  let anchor;
+  if (t) {
+    fields = columnNames(wb, si, t);
+    makeSource = (name) => ({ kind: 'table', table: t.name, column: name });
+    anchor = gv.sheetRect({ r1: t.r1, c1: t.c1, r2: t.r2, c2: t.c2 });
+  } else if (pivot) {
+    const rows = pivotSource(pivot);
+    if (!rows) { alertDialog('슬라이서 삽입', '피벗 테이블 원본을 찾을 수 없습니다.'); return; }
+    fields = rows[0].map((h, i) => (h === null || h === '' ? `열${i + 1}` : String(h)));
+    makeSource = (name) => ({ kind: 'pivot', self: true, field: name });
+    const u = wb.usedRange(si);
+    anchor = gv.sheetRect({ r1: 0, c1: 0, r2: Math.max(0, u.rows - 1), c2: Math.max(0, u.cols - 1) });
+  } else {
+    alertDialog('슬라이서 삽입', '슬라이서는 표나 피벗 테이블에 넣을 수 있습니다. 데이터 안에서 Ctrl+T 로 표를 만들거나 피벗 테이블 시트에서 다시 시도하세요.');
+    return;
+  }
+  const checks = fields.map((n) => [n, el('input', { type: 'checkbox' })]);
+  openDialog({
+    title: '슬라이서 삽입', width: 320,
+    body: el('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
+      el('div', { class: 'muted' }, t ? `'${t.name}' 표에서 필터할 열을 고르세요.` : '피벗 테이블에서 필터할 필드를 고르세요.'),
+      el('div', { class: 'fc-list', style: { maxHeight: '260px', padding: '4px 8px', gap: '4px' } }, checks.map(([n, cb]) => el('label', { class: 'fc-check' }, cb, n)))),
+    buttons: [
+      {
+        label: '확인', primary: true,
+        action: () => {
+          const chosen = checks.filter(([, cb]) => cb.checked).map(([n]) => n);
+          if (!chosen.length) return undefined;
+          const list = chosen.map((name, i) => {
+            const n = Math.min(12, slicerModel({ source: makeSource(name) }).items.length || 1);
+            return {
+              id: newObjId('sl'), caption: name, source: makeSource(name), columns: 1, color: 'blue', multi: false,
+              x: Math.round(anchor.x + anchor.w + 24 + i * 192), y: Math.round(anchor.y), w: 180, h: Math.min(300, 40 + n * 28),
+            };
+          });
+          wb.transact(() => {
+            let z = nextZ();
+            wb.setSheetProp(si, 'slicers', [...(sheet().slicers ?? []).map((x) => ({ ...x })), ...list.map((x) => ({ ...x, z: z++ }))]);
+            if (t && !t.filter) setTables((l) => l.map((x) => (x.id === t.id ? { ...x, filter: { criteria: {}, hidden: {} } } : x)));
+          }, meta());
+          chartSel = list[list.length - 1].id;
+          gv.ensureVisible(gv.rows.indexAt(list[0].y + 40), gv.cols.indexAt(list[0].x + 170));
+          gv.renderObjectsAll();
+          updateSelectionUI();
+          return undefined;
+        },
+      },
+      { label: '취소' },
+    ],
+  });
+}
+
+function slicerSettings(id) {
+  const sl = (sheet().slicers ?? []).find((x) => x.id === id);
+  if (!sl) return;
+  formDialog('슬라이서 설정', [
+    { name: 'caption', label: '캡션', value: sl.caption ?? '' },
+    { name: 'columns', label: '열 수', type: 'number', value: sl.columns ?? 1 },
+    { name: 'color', label: '스타일', type: 'select', value: sl.color ?? 'blue', options: SLICER_COLORS.map(([v, l]) => ({ value: v, label: l })) },
+  ], (v) => {
+    updateObject(id, { caption: v.caption, columns: clamp(Number(v.columns) || 1, 1, 20), color: v.color });
+  }, { note: sl.source?.kind === 'table' ? `원본: ${sl.source.table}[${sl.source.column}]` : `원본: 피벗 테이블의 '${sl.source?.field}' 필드` });
+}
+
+// ───────────────────────── 텍스트 나누기 (Alt+A+E) ─────────────────────────
+function textToColumns() {
+  if (editing && !commitEdit()) return;
+  let rg = selKind === 'cells' ? sel : usedClip(sel);
+  if (rg.c1 !== rg.c2) { alertDialog('텍스트 나누기', '한 번에 한 열만 변환할 수 있습니다. 한 열의 셀 범위를 선택하세요.'); return; }
+  if (isSingle(rg)) {
+    // 셀 하나만 선택했으면 아래로 이어진 데이터까지
+    let r2 = rg.r1;
+    const last = wb.usedRange(si).rows - 1;
+    while (r2 + 1 <= last && !isEmptyAt(r2 + 1, rg.c1)) r2++;
+    rg = { ...rg, r2 };
+  }
+  rg = { ...rg, r2: Math.max(rg.r1, Math.min(rg.r2, wb.usedRange(si).rows - 1)) };
+  const lines = [];
+  for (let r = rg.r1; r <= rg.r2; r++) {
+    const cell = wb.getCell(si, r, rg.c1);
+    lines.push(cell?.raw && !cell.formula ? cell.raw.replace(/^'/, '') : displayText(r, rg.c1));
+  }
+  if (!lines.some((l) => l)) { alertDialog('텍스트 나누기', '나눌 텍스트가 있는 셀을 선택하세요.'); return; }
+
+  // 상태
+  const firstLines = lines.filter((l) => l).slice(0, 50);
+  const guess = { tab: firstLines.some((l) => l.includes('\t')), comma: firstLines.some((l) => l.includes(',')), semicolon: false, space: false, other: '' };
+  if (!guess.tab && !guess.comma) guess.space = firstLines.some((l) => l.trim().includes(' '));
+  const o = { mode: 'delimited', ...guess, consecutive: guess.space, qualifier: '"', breaks: suggestBreaks(firstLines) };
+  let colFmts = [];
+  let selCol = 0;
+  let step = 1;
+  const dest = { text: `$${colToName(rg.c1)}$${rg.r1 + 1}` };
+
+  const split = (line) => (o.mode === 'delimited' ? splitDelimited(line, o) : splitFixed(line, o.breaks));
+  const previewRows = () => lines.slice(0, 12).map(split);
+  const colCount = () => Math.max(1, ...lines.slice(0, 2000).map((l) => split(l).length));
+
+  const body = el('div', { class: 'ttc' });
+  const stepTitle = el('div', { class: 'ttc-step' });
+  const content = el('div', { class: 'ttc-content' });
+  body.append(stepTitle, content);
+
+  const previewTable = (rows, { headers = null, onPick = null } = {}) => {
+    const n = Math.max(1, ...rows.map((r) => r.length));
+    const t = el('table', { class: 'ttc-table' });
+    if (headers) {
+      t.append(el('tr', {}, [...Array(n)].map((_, i) => {
+        const th = el('th', { class: `${i === selCol ? 'on' : ''}${colFmts[i]?.fmt === 'skip' ? ' skip' : ''}` }, headers(i));
+        if (onPick) th.addEventListener('click', () => onPick(i));
+        return th;
+      })));
+    }
+    for (const r of rows) {
+      t.append(el('tr', {}, [...Array(n)].map((_, i) => {
+        const td = el('td', { class: `${headers && i === selCol ? 'on' : ''}${colFmts[i]?.fmt === 'skip' ? ' skip' : ''}` }, r[i] ?? '');
+        if (onPick) td.addEventListener('click', () => onPick(i));
+        return td;
+      })));
+    }
+    return el('div', { class: 'ttc-preview' }, t);
+  };
+
+  const radio = (name, value, cur, label, onChange) => {
+    const i = el('input', { type: 'radio', name, value, checked: cur === value });
+    i.addEventListener('change', () => { if (i.checked) onChange(value); });
+    return el('label', { class: 'fc-check' }, i, label);
+  };
+  const check = (key, label) => {
+    const i = el('input', { type: 'checkbox', checked: !!o[key] });
+    i.addEventListener('change', () => { o[key] = i.checked; render(); });
+    return el('label', { class: 'fc-check' }, i, label);
+  };
+
+  const fixedRuler = () => {
+    // 글자를 클릭해 나눌 위치 추가, 선을 다시 클릭하면 제거
+    const sample = lines.slice(0, 10);
+    const width = Math.max(10, ...sample.map((l) => l.length)) + 2;
+    const box = el('div', { class: 'ttc-ruler' });
+    const scale = el('div', { class: 'ttc-line scale' });
+    for (let i = 0; i < width; i++) scale.append(el('span', { class: `ch${o.breaks.includes(i) ? ' brk' : ''}`, 'data-i': i }, i % 10 === 0 ? String(i / 10 % 10) : i % 5 === 0 ? '·' : ''));
+    box.append(scale);
+    for (const l of sample) {
+      const line = el('div', { class: 'ttc-line' });
+      for (let i = 0; i < width; i++) line.append(el('span', { class: `ch${o.breaks.includes(i) ? ' brk' : ''}`, 'data-i': i }, l[i] ?? ''));
+      box.append(line);
+    }
+    box.addEventListener('click', (e) => {
+      const ch = e.target.closest('.ch');
+      if (!ch) return;
+      const i = Number(ch.dataset.i);
+      if (i <= 0) return;
+      o.breaks = o.breaks.includes(i) ? o.breaks.filter((b) => b !== i) : [...o.breaks, i].sort((a, b) => a - b);
+      render();
+    });
+    return el('div', { class: 'ttc-rulerwrap' }, box);
+  };
+
+  const render = () => {
+    content.replaceChildren();
+    if (step === 1) {
+      stepTitle.textContent = '1/3단계 — 원본 데이터 형식';
+      content.append(
+        el('div', { class: 'muted' }, '데이터를 나눌 방법을 선택하세요.'),
+        radio('ttcmode', 'delimited', o.mode, '구분 기호로 분리됨 — 각 필드가 쉼표나 탭, 공백 같은 문자로 나뉘어 있음', (v) => { o.mode = v; render(); }),
+        radio('ttcmode', 'fixed', o.mode, '너비가 일정함 — 각 필드가 같은 너비로 정렬되어 있음', (v) => { o.mode = v; render(); }),
+        el('div', { class: 'fc-title' }, `선택한 데이터 미리 보기 (${cellName(rg.r1, rg.c1)}:${cellName(rg.r2, rg.c2)})`),
+        el('pre', { class: 'ttc-raw' }, lines.slice(0, 10).map((l, i) => `${rg.r1 + i + 1}  ${l}`).join('\n')),
+      );
+    } else if (step === 2) {
+      if (o.mode === 'delimited') {
+        stepTitle.textContent = '2/3단계 — 구분 기호';
+        const other = el('input', { type: 'text', value: o.other, maxlength: 1, style: { width: '32px' } });
+        other.addEventListener('input', () => { o.other = other.value; render(); setTimeout(() => { const x = content.querySelector('input[maxlength="1"]'); x?.focus(); x?.setSelectionRange(1, 1); }); });
+        const qual = el('select', {}, [['"', '"'], ["'", "'"], ['', '{없음}']].map(([v, l]) => el('option', { value: v, selected: o.qualifier === v }, l)));
+        qual.addEventListener('change', () => { o.qualifier = qual.value; render(); });
+        content.append(
+          el('div', { class: 'ttc-opts' },
+            el('div', { class: 'fc-col' }, el('div', { class: 'fc-title' }, '구분 기호'),
+              check('tab', '탭'), check('semicolon', '세미콜론(;)'), check('comma', '쉼표(,)'), check('space', '공백(띄어쓰기)'),
+              el('label', { class: 'fc-check' }, el('span', {}, '기타:'), other)),
+            el('div', { class: 'fc-col' }, el('div', { class: 'fc-title' }, '옵션'), check('consecutive', '연속된 구분 기호를 하나로 처리'),
+              el('label', { class: 'fc-field' }, el('span', {}, '텍스트 한정자'), qual))),
+          el('div', { class: 'fc-title' }, '데이터 미리 보기'),
+          previewTable(previewRows()),
+        );
+      } else {
+        stepTitle.textContent = '2/3단계 — 열 구분선';
+        content.append(
+          el('div', { class: 'muted' }, '나눌 위치를 클릭해 구분선을 넣고, 구분선을 다시 클릭하면 지웁니다.'),
+          fixedRuler(),
+          el('div', { class: 'fc-title' }, '데이터 미리 보기'),
+          previewTable(previewRows()),
+        );
+      }
+    } else {
+      stepTitle.textContent = '3/3단계 — 열 데이터 서식';
+      const n = colCount();
+      colFmts = [...Array(n)].map((_, i) => colFmts[i] ?? { fmt: 'general', order: 'YMD' });
+      selCol = Math.min(selCol, n - 1);
+      const cf = colFmts[selCol];
+      const order = el('select', { disabled: cf.fmt !== 'date' }, DATE_ORDERS.map((d) => el('option', { value: d, selected: cf.order === d }, d)));
+      order.addEventListener('change', () => { cf.order = order.value; render(); });
+      const setFmt = (v) => { cf.fmt = v; render(); };
+      const destIn = el('input', { type: 'text', value: dest.text, style: { width: '120px' } });
+      destIn.addEventListener('input', () => { dest.text = destIn.value; });
+      const label = (i) => ({ general: '일반', text: '텍스트', date: `날짜(${colFmts[i].order})`, skip: '건너뜀' }[colFmts[i].fmt]);
+      const shown = previewRows().map((r) => r.map((v, i) => {
+        const f = colFmts[i];
+        if (!f || f.fmt !== 'date') return v;
+        const d = parseDateOrder(v, f.order);
+        return d ?? v;
+      }));
+      content.append(
+        el('div', { class: 'ttc-opts' },
+          el('div', { class: 'fc-col' }, el('div', { class: 'fc-title' }, `열 데이터 서식 — ${selCol + 1}번째 열`),
+            radio('ttcfmt', 'general', cf.fmt, '일반 (숫자는 숫자로, 날짜는 날짜로)', setFmt),
+            radio('ttcfmt', 'text', cf.fmt, '텍스트 (앞의 0 유지)', setFmt),
+            el('div', { class: 'fc-row' }, radio('ttcfmt', 'date', cf.fmt, '날짜:', setFmt), order),
+            radio('ttcfmt', 'skip', cf.fmt, '열 가져오지 않음(건너뜀)', setFmt)),
+          el('div', { class: 'fc-col' }, el('div', { class: 'fc-title' }, '대상'), destIn,
+            el('div', { class: 'muted fc-note' }, '날짜 순서 예: YMD = 20240315 · 2024.3.15, MDY = 03/15/2024, DMY = 15-03-2024. 날짜로 바뀐 값은 날짜 서식으로 표시됩니다.'))),
+        el('div', { class: 'fc-title' }, '데이터 미리 보기 (열 머리글을 눌러 선택)'),
+        previewTable(shown, { headers: label, onPick: (i) => { selCol = i; render(); } }),
+      );
+    }
+    btnBack.disabled = step === 1;
+    btnNext.disabled = step === 3;
+  };
+
+  const finish = () => {
+    const d = parseRangeName(dest.text.replace(/\$/g, '').trim());
+    if (!d) { alertDialog('텍스트 나누기', '대상 셀 참조가 올바르지 않습니다.'); return false; }
+    const n = colCount();
+    colFmts = [...Array(n)].map((_, i) => colFmts[i] ?? { fmt: 'general', order: 'YMD' });
+    const outCols = colFmts.map((f, i) => (f.fmt === 'skip' ? -1 : i)).filter((i) => i >= 0);
+    const r0 = d.r1;
+    const c0 = d.c1;
+    const rows = lines.map(split);
+    // 원본 자리 밖에 이미 데이터가 있으면 확인
+    let occupied = false;
+    for (let i = 0; i < rows.length && !occupied; i++) {
+      for (let k = 0; k < outCols.length; k++) {
+        const r = r0 + i;
+        const c = c0 + k;
+        if (c === rg.c1 && r >= rg.r1 && r <= rg.r2) continue;
+        if (!isEmptyAt(r, c)) { occupied = true; break; }
+      }
+    }
+    const apply = () => {
+      wb.transact(() => {
+        rows.forEach((parts, i) => {
+          const r = r0 + i;
+          if (c0 !== rg.c1 || r0 !== rg.r1) { /* 원본은 그대로 */ } else if (rg.r1 + i <= rg.r2) wb.setInput(si, r, rg.c1, '');
+          outCols.forEach((ci, k) => {
+            const f = colFmts[ci];
+            const v = convertPart(parts[ci] ?? '', f.fmt, f.order);
+            if (v === null) return;
+            if (f.fmt === 'text') {
+              // 텍스트 서식 셀에는 입력한 그대로 들어감 (앞의 0 유지)
+              wb.setStyle(si, r, c0 + k, { numFmt: 'text', code: undefined });
+              wb.setInput(si, r, c0 + k, v.replace(/^'/, ''));
+              return;
+            }
+            wb.setInput(si, r, c0 + k, v);
+            if (f.fmt === 'date' && typeof wb.getValue(si, r, c0 + k) === 'number') {
+              const cur = wb.getCell(si, r, c0 + k)?.style;
+              if (!cur?.numFmt || cur.numFmt === 'general') wb.setStyle(si, r, c0 + k, { numFmt: v.includes(':') ? 'datetime' : 'date' });
+            }
+          });
+        });
+        autoWiden({ r1: r0, c1: c0, r2: r0 + Math.min(rows.length, 500) - 1, c2: c0 + outCols.length - 1 });
+      }, meta());
+      selectRange({ r1: r0, c1: c0, r2: r0 + rows.length - 1, c2: c0 + Math.max(0, outCols.length - 1) }, 'cells', { r: r0, c: c0 });
+      toast(`${rows.length}행을 ${outCols.length}개 열로 나눴습니다.`);
+    };
+    if (occupied) {
+      openDialog({
+        title: 'Tabula', body: '여기에 이미 데이터가 있습니다. 바꾸시겠습니까?',
+        buttons: [{ label: '확인', primary: true, action: apply }, { label: '취소' }],
+      });
+    } else apply();
+    return undefined;
+  };
+
+  const btnBack = el('button', { class: 'btn', type: 'button' }, '< 뒤로');
+  const btnNext = el('button', { class: 'btn', type: 'button' }, '다음 >');
+  btnBack.addEventListener('click', () => { if (step > 1) { step--; render(); } });
+  btnNext.addEventListener('click', () => {
+    if (step === 2 && o.mode === 'fixed' && !o.breaks.length) { toast('구분선을 하나 이상 넣으세요.'); return; }
+    if (step < 3) { step++; render(); }
+  });
+  const nav = el('div', { class: 'ttc-nav' }, btnBack, btnNext);
+  body.append(nav);
+  render();
+  openDialog({
+    title: '텍스트 마법사', width: 640, body,
+    buttons: [{ label: '마침', primary: true, action: finish }, { label: '취소' }],
+  });
+}
+
+// ───────────────────────── 바로 가기 키 순서 (Alt+A+E 등) ─────────────────────────
+const KEYTIPS = {
+  ae: ['textToColumns', '텍스트 나누기'], at: ['toggleFilter', '필터'], am: ['dedupe', '중복된 항목 제거'],
+  avv: ['dataValidation', '데이터 유효성 검사'], ass: ['sortDialog', '정렬'], asa: ['sortAsc', '오름차순 정렬'], asd: ['sortDesc', '내림차순 정렬'],
+  aa: ['refreshAll', '모두 새로 고침'], ac: ['clearFilter', '필터 지우기'], ay: ['reapplyFilter', '다시 적용'],
+  nt: ['createTable', '표'], nv: ['insertPivot', '피벗 테이블'], nsf: ['insertSlicer', '슬라이서'], np: ['insertPicture', '그림'],
+  nsh: ['shapesMenu', '도형'], nx: ['insertTextbox', '텍스트 상자'], nc: ['chartColumn', '세로 막대형 차트'],
+  hoe: ['formatCells', '셀 서식'], hoi: ['autofitSel', '열 너비 자동 맞춤'], hoa: ['autofitRowsSel', '행 높이 자동 맞춤'],
+  hmc: ['mergeCenter', '병합하고 가운데 맞춤'], hw: ['wrap', '텍스트 줄 바꿈'], hfp: ['painter', '서식 복사'], hb: ['borderLast', '테두리'],
+  hk: ['fmtComma', '쉼표 스타일'], hp: ['fmtPercent', '백분율'], h0: ['incDecimal', '자릿수 늘림'], h9: ['decDecimal', '자릿수 줄임'],
+  hl: ['condMenuKey', '조건부 서식'], ht: ['tableStyleKey', '표 서식'],
+  wff: ['freezePanes', '틀 고정'], wfr: ['freezeTop', '첫 행 고정'], wfc: ['freezeFirstCol', '첫 열 고정'], wg: ['toggleGrid', '눈금선'],
+  mf: ['insertFunction', '함수 삽입'], mua: ['autosum', '자동 합계'], f: ['backstage', '파일'],
+};
+const KEYTIP_TABS = { h: 'home', n: 'insert', p: 'layout', m: 'formulas', a: 'data', r: 'review', w: 'view', j: 'tableDesign' };
+let keytip = null; // { seq, held }
+
+const TAB_LABELS = Object.fromEntries(TABS.map((t) => [t.id, t.label]));
+
+/** 리본 메뉴를 현재 셀 아래에 열기 (바로 가기 키용) */
+function menuAtCell(name) {
+  const b = gv.clientRect({ r1: active.r, c1: active.c, r2: active.r, c2: active.c });
+  const anchor = el('div', { style: { position: 'fixed', left: `${b.left}px`, top: `${b.top}px`, width: `${b.width}px`, height: `${b.height}px` } });
+  document.body.append(anchor);
+  openNamedMenu(name, anchor);
+  anchor.remove();
+}
+
+function keytipHint(seq) {
+  const next = Object.entries(KEYTIPS).filter(([k]) => k.startsWith(seq) && k !== seq)
+    .map(([k, [, label]]) => `${k.slice(seq.length).toUpperCase().split('').join('+')} ${label}`);
+  const tabs = seq === '' ? Object.entries(KEYTIP_TABS).map(([k, id]) => `${k.toUpperCase()} ${TAB_LABELS[id] ?? id}`) : [];
+  return `Alt${seq ? `+${seq.toUpperCase().split('').join('+')}` : ''}: ${[...tabs, ...next].slice(0, 12).join(' · ')}`;
+}
+
+function endKeytip() {
+  if (!keytip) return;
+  keytip = null;
+  document.body.classList.remove('keytips');
+  setMode();
+}
+
+/** 반환 true 면 키를 처리함 */
+function handleKeytipKey(e) {
+  // 슬라이서를 선택한 상태의 Alt+C(필터 지우기) · Alt+S(다중 선택)
+  if (!keytip && e.altKey && (e.code === 'KeyC' || e.code === 'KeyS') && chartSel && sheet().slicers?.some((x) => x.id === chartSel)) return false;
+  if (e.key === 'Alt') {
+    if (!keytip) { keytip = { seq: '', held: true, clean: true }; }
+    e.preventDefault();
+    return true;
+  }
+  if (!keytip && !(e.altKey && /^Key[A-Z]$|^Digit\d$/.test(e.code) && !e.ctrlKey && !e.metaKey)) return false;
+  if (!keytip) keytip = { seq: '', held: true, clean: false };
+  if (e.key === 'Escape') { e.preventDefault(); endKeytip(); return true; }
+  const m = /^Key([A-Z])$|^Digit(\d)$/.exec(e.code);
+  if (!m) { endKeytip(); return false; }
+  e.preventDefault();
+  keytip.clean = false;
+  const seq = keytip.seq + (m[1] ?? m[2]).toLowerCase();
+  if (seq.length === 1 && KEYTIP_TABS[seq]) ribbon.selectTab(KEYTIP_TABS[seq]);
+  if (KEYTIPS[seq]) {
+    endKeytip();
+    run(KEYTIPS[seq][0]);
+    return true;
+  }
+  if (Object.keys(KEYTIPS).some((k) => k.startsWith(seq))) {
+    keytip.seq = seq;
+    document.body.classList.add('keytips');
+    dom.status.textContent = keytipHint(seq);
+    return true;
+  }
+  endKeytip();
+  return true;
+}
+
+function handleKeytipUp(e) {
+  if (e.key !== 'Alt' || !keytip) return;
+  e.preventDefault();
+  keytip.held = false;
+  if (keytip.clean) {
+    // Alt 만 눌렀다 뗌 → 바로 가기 키 모드
+    keytip.clean = false;
+    document.body.classList.add('keytips');
+    dom.status.textContent = keytipHint('');
+  } else if (!keytip.seq) endKeytip();
+}
+
 // ───────────────────────── 그림 개체 (차트 · 그림 · 도형) ─────────────────────────
 const newObjId = (p) => `${p}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
@@ -1988,7 +2965,7 @@ function pasteObject() {
   if (!objClip) return;
   objClip.n++;
   const d = objClip.n * 12;
-  const o = { ...structuredClone(objClip.obj), id: newObjId(objClip.prop === 'charts' ? 'ch' : objClip.prop === 'images' ? 'im' : 'sh'), z: undefined };
+  const o = { ...structuredClone(objClip.obj), id: newObjId({ charts: 'ch', images: 'im', slicers: 'sl' }[objClip.prop] ?? 'sh'), z: undefined };
   o.x += d;
   o.y += d;
   addObject(objClip.prop, o);
@@ -1999,6 +2976,7 @@ function editObject(id) {
   if (!f) return;
   if (f.prop === 'charts') chartDialog(id);
   else if (f.prop === 'shapes') shapeDialog(id);
+  else if (f.prop === 'slicers') slicerSettings(id);
   else imageDialog(id);
 }
 
@@ -2031,6 +3009,12 @@ function objectMenu(id, pos) {
         label: k.label, checked: f.obj.kind === k.id, action: () => updateObject(id, { kind: k.id }),
       })));
     }
+  } else if (f.prop === 'slicers') {
+    items.push(
+      { label: '슬라이서 설정...', icon: 'slicer', action: () => slicerSettings(id) },
+      { label: `"${f.obj.caption}"에서 필터 지우기`, icon: 'filterClear', action: () => slicerClear(id) },
+      { label: '다중 선택', checked: !!f.obj.multi, action: () => updateObject(id, { multi: !f.obj.multi }) },
+    );
   } else {
     items.push(
       { label: '크기 및 속성...', icon: 'picture', action: () => imageDialog(id) },
@@ -2372,46 +3356,91 @@ function pivotSourceRows(src, rg) {
   return rows;
 }
 
+/** 피벗 원본: 표 이름이면 지금의 표 범위(누적된 데이터 포함), 아니면 고정 범위 */
+function pivotSource(def) {
+  if (def.table) {
+    const f = findTable(wb, def.table);
+    if (!f) return null;
+    const t = f.t;
+    const top = t.header ? t.r1 : dataTop(t);
+    const rows = pivotSourceRows(wb.sheets[f.si].name, { r1: top, c1: t.c1, r2: dataBottom(t), c2: t.c2 });
+    if (!t.header) rows.unshift(columnNames(wb, f.si, t));
+    return rows;
+  }
+  return pivotSourceRows(def.source, def.range);
+}
+
+/** 슬라이서·필터에서 쓰는 항목 글자 */
+const pivotItemText = (v) => (v === null || v === undefined || v === '' ? '(비어 있음)' : typeof v === 'number' ? formatGeneral(v) : typeof v === 'object' ? v.code : String(v));
+
 function writePivot(targetSi, def) {
-  const rows = pivotSourceRows(def.source, def.range);
+  let rows = pivotSource(def);
   if (!rows) return false;
-  const out = buildPivot(rows, def);
+  const header = rows[0].map((h, i) => (h === null || h === '' ? `열${i + 1}` : String(h)));
+  const d = { ...def };
+  // 표 열 순서가 바뀌어도 이름으로 필드를 찾음
+  const idx = (name, fallback) => {
+    if (!name) return fallback;
+    const i = header.findIndex((h) => h.toLowerCase() === String(name).toLowerCase());
+    return i >= 0 ? i : fallback;
+  };
+  if (def.fieldNames) {
+    d.rowField = idx(def.fieldNames.row, def.rowField);
+    d.colField = def.colField === null ? null : idx(def.fieldNames.col, def.colField);
+    d.valueField = def.valueField === null ? null : idx(def.fieldNames.val, def.valueField);
+  }
+  const filters = Object.entries(def.filters ?? {}).map(([name, allowed]) => [idx(name, -1), new Set(allowed)]).filter(([i]) => i >= 0);
+  if (filters.length) rows = [rows[0], ...rows.slice(1).filter((r) => filters.every(([i, set]) => set.has(pivotItemText(r[i]))))];
+  const out = buildPivot(rows, d);
   const t = wb.sheets[targetSi];
   for (const k of [...t.cells.keys()]) { const [r, c] = k.split(',').map(Number); wb.setCellData(targetSi, r, c, null); }
-  out.forEach((row, r) => row.forEach((d, c) => { if (d) wb.setCellData(targetSi, r, c, d); }));
+  const top = def.top ?? 0;
+  out.forEach((row, r) => row.forEach((cd, c) => { if (cd) wb.setCellData(targetSi, top + r, c, cd); }));
+  if (top > 0) wb.setCellData(targetSi, 0, 0, { raw: '필터 적용됨', style: { italic: true, color: '#7f7f7f' } });
   const colsN = out[0]?.length ?? 0;
   for (let c = 0; c < colsN; c++) {
     let w = 0;
     out.forEach((row, r) => {
-      if (row[c]?.raw) w = Math.max(w, measureText(displayText(r, c, targetSi), wb.styleAt(targetSi, r, c)) + 12);
+      if (row[c]?.raw) w = Math.max(w, measureText(displayText(top + r, c, targetSi), wb.styleAt(targetSi, top + r, c)) + 12);
     });
-    if (w > DEFAULT_COL_WIDTH) wb.setColWidth(targetSi, c, Math.min(300, Math.ceil(w)));
+    if (w > (wb.sheets[targetSi].colWidths[c] ?? DEFAULT_COL_WIDTH)) wb.setColWidth(targetSi, c, Math.min(300, Math.ceil(w)));
   }
   return true;
 }
 
-function pivotDialog() {
-  const rg = dataRange();
+function pivotDialog(tableName = null) {
+  const inTable = tableName ? findTable(wb, tableName)?.t : tableHere();
+  const rg = inTable ? { r1: inTable.r1, c1: inTable.c1, r2: dataBottom(inTable), c2: inTable.c2 } : dataRange();
   if (rg.r2 <= rg.r1) { alertDialog('피벗 테이블', '머리글 행과 데이터가 있는 범위를 선택하세요.'); return; }
   const srcName = sheet().name;
   const headers = [];
   for (let c = rg.c1; c <= rg.c2; c++) headers.push({ value: String(c - rg.c1), label: displayText(rg.r1, c) || `${colToName(c)}열` });
   const firstNum = headers.findIndex((h, i) => typeof valueAt(rg.r1 + 1, rg.c1 + i) === 'number');
   formDialog('피벗 테이블 만들기', [
-    { name: 'range', label: '표/범위', value: `${quoteSheetName(srcName)}!${cellName(rg.r1, rg.c1)}:${cellName(rg.r2, rg.c2)}` },
+    { name: 'range', label: '표/범위', value: inTable ? inTable.name : `${quoteSheetName(srcName)}!${cellName(rg.r1, rg.c1)}:${cellName(rg.r2, rg.c2)}` },
     { name: 'row', label: '행', type: 'select', value: '0', options: headers },
     { name: 'col', label: '열', type: 'select', value: '', options: [{ value: '', label: '(없음)' }, ...headers] },
     { name: 'val', label: '값', type: 'select', value: firstNum >= 0 ? String(firstNum) : '', options: [{ value: '', label: '(행 개수)' }, ...headers] },
     { name: 'agg', label: '계산', type: 'select', value: firstNum >= 0 ? 'sum' : 'count', options: AGGREGATES.map((a) => ({ value: a.id, label: a.label })) },
   ], (v) => {
-    const bang = v.range.lastIndexOf('!');
-    const src = bang > 0 ? v.range.slice(0, bang).replace(/^'(.*)'$/, '$1').replace(/''/g, "'") : srcName;
-    const prg = parseRangeName(bang > 0 ? v.range.slice(bang + 1) : v.range);
-    if (!prg || wb.sheetIndexByName(src) < 0) { toast('범위가 올바르지 않습니다.'); return false; }
-    const def = {
-      source: src, range: prg, rowField: Number(v.row),
-      colField: v.col === '' ? null : Number(v.col), valueField: v.val === '' ? null : Number(v.val), agg: v.val === '' ? 'count' : v.agg,
+    const text = v.range.trim().replace(/^=/, '');
+    const tf = findTable(wb, text);
+    let def;
+    const names = (i) => (i === '' ? null : headers[Number(i)]?.label ?? null);
+    const fieldNames = { row: names(v.row), col: names(v.col), val: names(v.val) };
+    const fields = {
+      rowField: Number(v.row), colField: v.col === '' ? null : Number(v.col), valueField: v.val === '' ? null : Number(v.val),
+      agg: v.val === '' ? 'count' : v.agg, fieldNames,
     };
+    if (tf) {
+      def = { table: tf.t.name, source: wb.sheets[tf.si].name, range: { r1: tf.t.r1, c1: tf.t.c1, r2: dataBottom(tf.t), c2: tf.t.c2 }, ...fields };
+    } else {
+      const bang = text.lastIndexOf('!');
+      const src = bang > 0 ? text.slice(0, bang).replace(/^'(.*)'$/, '$1').replace(/''/g, "'") : srcName;
+      const prg = parseRangeName((bang > 0 ? text.slice(bang + 1) : text).replace(/\$/g, ''));
+      if (!prg || wb.sheetIndexByName(src) < 0) { toast('범위가 올바르지 않습니다. 셀 범위나 표 이름을 입력하세요.'); return false; }
+      def = { source: src, range: prg, ...fields };
+    }
     let n = 1;
     while (wb.sheetIndexByName(`피벗${n}`) >= 0) n++;
     const at = wb.transact(() => {
@@ -2421,9 +3450,11 @@ function pivotDialog() {
       return idx;
     }, meta());
     switchSheet(at, false);
-    toast('피벗 테이블을 만들었습니다. 원본이 바뀌면 [데이터 → 모두 새로 고침]을 누르세요.');
+    toast(def.table
+      ? `'${def.table}' 표로 피벗 테이블을 만들었습니다. 표에 데이터가 늘어나면 [데이터 → 모두 새로 고침]으로 자동 반영됩니다.`
+      : '피벗 테이블을 만들었습니다. 원본이 바뀌면 [데이터 → 모두 새로 고침]을 누르세요.');
     return true;
-  }, { note: '원본 데이터의 첫 행은 머리글이어야 합니다. 결과는 새 워크시트에 만들어집니다.' });
+  }, { note: '표 이름(예: 표1)을 원본으로 쓰면 표에 추가된 데이터까지 새로 고칠 때 자동으로 포함됩니다. 결과는 새 워크시트에 만들어집니다.' });
 }
 
 function refreshPivots() {
@@ -2640,6 +3671,7 @@ function exportCsv() {
 }
 
 function exportXlsx(name = docName) {
+  if (wb.sheets.some((s) => s.slicers?.length)) toast('슬라이서는 엑셀 파일에 저장되지 않습니다. 슬라이서까지 보관하려면 .tabula 로 저장하세요.');
   const over = xlsxOverflow(wb);
   if (over) toast(`엑셀 파일은 1,048,576행까지만 저장할 수 있어 그 아래 셀 ${over.toLocaleString()}개는 빠집니다. 전체는 .tabula 로 저장하세요.`);
   try {
@@ -3035,25 +4067,234 @@ function insertFunctionDialog() {
   });
 }
 
-function formatCellsDialog() {
+const FRIENDLY_CODE = {
+  date: () => 'yyyy-mm-dd', longdate: () => 'yyyy"년" m"월" d"일" aaaa', time: () => '[$-412]AM/PM h:mm:ss',
+  datetime: () => 'yyyy-mm-dd h:mm', currency: (s) => `"₩"#,##0${s.decimals ? `.${'0'.repeat(s.decimals)}` : ''}`,
+  accounting: (s) => buildCode('accounting', { decimals: s.decimals ?? 0, symbol: '₩' }),
+  comma: (s) => `#,##0${s.decimals ? `.${'0'.repeat(s.decimals)}` : ''}`,
+};
+
+/** 셀 서식 (Ctrl+1): 표시 형식 · 맞춤 · 글꼴 · 테두리 · 채우기 */
+function formatCellsDialog(startTab = 0) {
+  if (editing && !commitEdit()) return;
   const st = styleAt(active.r, active.c);
-  formDialog('셀 서식', [
-    { name: 'font', label: '글꼴', type: 'select', value: st.font || DEFAULT_FONT, options: FONTS.map((f) => ({ value: f, label: f })) },
-    { name: 'size', label: '크기', type: 'number', value: st.size || DEFAULT_SIZE },
-    { name: 'bold', label: '굵게', type: 'checkbox', value: st.bold },
-    { name: 'italic', label: '기울임꼴', type: 'checkbox', value: st.italic },
-    { name: 'underline', label: '밑줄', type: 'checkbox', value: st.underline },
-    { name: 'strike', label: '취소선', type: 'checkbox', value: st.strike },
-    { name: 'color', label: '글꼴 색', type: 'color', value: st.color || '#000000' },
-    { name: 'fill', label: '채우기 색', type: 'color', value: st.fill || '#ffffff' },
-  ], (v) => {
-    applyStyle({
-      font: v.font === DEFAULT_FONT ? undefined : v.font,
-      size: Number(v.size) === DEFAULT_SIZE || !Number(v.size) ? undefined : Number(v.size),
-      bold: v.bold || undefined, italic: v.italic || undefined, underline: v.underline || undefined, strike: v.strike || undefined,
-      color: v.color === '#000000' ? undefined : v.color,
-      fill: v.fill === '#ffffff' ? undefined : v.fill,
+  let sample = valueAt(active.r, active.c);
+  if (sample === null || sample === '') {
+    for (const [r, c] of cellsIn(usedClip(sel))) { const v = valueAt(r, c); if (v !== null && v !== '') { sample = v; break; } }
+  }
+  const col = (...k) => el('div', { class: 'fc-col' }, ...k);
+  const row = (...k) => el('div', { class: 'fc-row' }, ...k);
+  const lab = (text, input) => el('label', { class: 'fc-field' }, el('span', {}, text), input);
+  const chk = (text, checked) => { const i = el('input', { type: 'checkbox', checked: !!checked }); return [i, el('label', { class: 'fc-check' }, i, text)]; };
+
+  // ── 표시 형식 ──
+  const startCode = FRIENDLY_CODE[st.numFmt]?.(st) ?? codeOfStyle(st);
+  const init = describeCode(startCode);
+  const opts = { decimals: init.decimals ?? 2, thousands: init.thousands ?? true, negative: init.negative ?? 'minus', symbol: init.symbol ?? '₩', type: init.type };
+  let cat = init.cat;
+  const catList = el('div', { class: 'fc-cats', role: 'listbox' });
+  const optBox = el('div', { class: 'fc-opts' });
+  const sampleBox = el('div', { class: 'fc-sample' });
+  const noteBox = el('div', { class: 'muted fc-note' });
+  const codeIn = el('input', { type: 'text', class: 'fc-code', spellcheck: false });
+  let customCode = init.cat === 'custom' ? init.type : startCode;
+  const currentCode = () => (cat === 'custom' ? (codeIn.value.trim() || 'General') : buildCode(cat, opts));
+  const showSample = () => {
+    const code = currentCode();
+    let text = '';
+    let color = null;
+    try {
+      if (sample !== null && sample !== '' && typeof sample !== 'object') ({ text, color } = cat === 'general' ? formatValue(sample, {}) : formatCode(sample, code === 'G/표준' ? 'General' : code));
+      else if (typeof sample === 'object' && sample) text = sample.code;
+      sampleBox.classList.remove('bad');
+    } catch {
+      text = '서식 코드를 해석할 수 없습니다.';
+      sampleBox.classList.add('bad');
+    }
+    sampleBox.replaceChildren(el('span', { class: 'muted' }, '보기'), el('b', { style: { color: color ?? '' } }, text || ' '));
+  };
+  const decimalsIn = () => {
+    const i = el('input', { type: 'number', min: 0, max: 30, value: opts.decimals, style: { width: '64px' } });
+    i.addEventListener('input', () => { opts.decimals = Number(i.value) || 0; showSample(); });
+    return lab('소수 자릿수', i);
+  };
+  const typeList = (items, labelOf = (x) => x.label ?? x, codeOf = (x) => x.code ?? x) => {
+    const box = el('div', { class: 'fc-list' });
+    if (!items.some((x) => codeOf(x) === opts.type)) opts.type = codeOf(items[0]);
+    for (const it of items) {
+      const code = codeOf(it);
+      const b = el('button', { type: 'button', class: `fc-item${code === opts.type ? ' on' : ''}` }, labelOf(it));
+      b.addEventListener('click', () => {
+        opts.type = code;
+        box.querySelectorAll('.on').forEach((x) => x.classList.remove('on'));
+        b.classList.add('on');
+        showSample();
+      });
+      box.append(b);
+    }
+    return box;
+  };
+  const sampleOf = (code) => {
+    const n = cat === 'date' || cat === 'time' ? (typeof sample === 'number' ? sample : 45366.5625) : typeof sample === 'number' ? sample : 1234.5;
+    try { return formatCode(n, code).text; } catch { return code; }
+  };
+  const negList = () => {
+    const box = el('div', { class: 'fc-list short' });
+    for (const n of NEGATIVE_STYLES) {
+      const b = el('button', { type: 'button', class: `fc-item${n.id === opts.negative ? ' on' : ''}`, style: { color: n.red ? '#c00000' : '' } }, n.label);
+      b.addEventListener('click', () => { opts.negative = n.id; box.querySelectorAll('.on').forEach((x) => x.classList.remove('on')); b.classList.add('on'); showSample(); });
+      box.append(b);
+    }
+    return lab('음수', box);
+  };
+  const symbolSel = () => {
+    const s = el('select', {}, CURRENCY_SYMBOLS.map((x) => el('option', { value: x.id, selected: x.id === opts.symbol }, x.label)));
+    s.addEventListener('change', () => { opts.symbol = s.value; showSample(); });
+    return lab('기호', s);
+  };
+  const renderOpts = () => {
+    optBox.replaceChildren();
+    const c = FMT_CATEGORIES.find((x) => x.id === cat);
+    noteBox.textContent = c.note ?? '';
+    if (cat === 'number') {
+      const [t, tl] = chk('1000 단위 구분 기호(,) 사용', opts.thousands);
+      t.addEventListener('change', () => { opts.thousands = t.checked; showSample(); });
+      optBox.append(decimalsIn(), tl, negList());
+    } else if (cat === 'currency') optBox.append(decimalsIn(), symbolSel(), negList());
+    else if (cat === 'accounting') optBox.append(decimalsIn(), symbolSel());
+    else if (cat === 'percent' || cat === 'scientific') optBox.append(decimalsIn());
+    else if (cat === 'date') optBox.append(lab('형식', typeList(DATE_TYPES, (x) => sampleOf(x))));
+    else if (cat === 'time') optBox.append(lab('형식', typeList(TIME_TYPES, (x) => sampleOf(x))));
+    else if (cat === 'fraction') optBox.append(lab('형식', typeList(FRACTION_TYPES)));
+    else if (cat === 'special') optBox.append(lab('형식', typeList(SPECIAL_TYPES)));
+    else if (cat === 'custom') {
+      codeIn.value = customCode;
+      const used = new Set();
+      for (const s of wb.sheets) for (const cell of s.cells.values()) if (cell.style?.numFmt === 'custom' && cell.style.code) used.add(cell.style.code);
+      const list = el('div', { class: 'fc-list tall' });
+      for (const code of [...CUSTOM_LIST, ...[...used].filter((x) => !CUSTOM_LIST.includes(x))]) {
+        const b = el('button', { type: 'button', class: `fc-item mono${code === codeIn.value ? ' on' : ''}` }, code);
+        b.addEventListener('click', () => { codeIn.value = code; customCode = code; list.querySelectorAll('.on').forEach((x) => x.classList.remove('on')); b.classList.add('on'); showSample(); });
+        list.append(b);
+      }
+      codeIn.oninput = () => { customCode = codeIn.value; showSample(); };
+      optBox.append(lab('형식', codeIn), list, el('div', { class: 'muted fc-help' },
+        '0 # ? 숫자 자리 · , 천 단위 · % 백분율 · "글자" · @ 텍스트 · [빨강] 색 · [>=100] 조건 · 양수;음수;0;텍스트 · yyyy mm dd aaaa h:mm:ss AM/PM [h]'));
+      setTimeout(() => codeIn.focus());
+    }
+    showSample();
+  };
+  for (const c of FMT_CATEGORIES) {
+    const b = el('button', { type: 'button', class: `fc-cat${c.id === cat ? ' on' : ''}` }, c.label);
+    b.addEventListener('click', () => {
+      if (cat !== 'custom' && c.id === 'custom') customCode = currentCode() === 'General' ? 'G/표준' : currentCode();
+      cat = c.id;
+      catList.querySelectorAll('.on').forEach((x) => x.classList.remove('on'));
+      b.classList.add('on');
+      renderOpts();
     });
+    catList.append(b);
+  }
+  renderOpts();
+  const numberPage = el('div', { class: 'fc-number' }, catList, col(sampleBox, optBox, noteBox));
+
+  // ── 맞춤 ──
+  const hSel = el('select', {}, [['', '일반'], ['left', '왼쪽'], ['center', '가운데'], ['right', '오른쪽']].map(([v, l]) => el('option', { value: v, selected: (st.align ?? '') === v }, l)));
+  const vSel = el('select', {}, [['top', '위쪽'], ['middle', '가운데'], ['', '아래쪽']].map(([v, l]) => el('option', { value: v, selected: (st.valign ?? '') === v }, l)));
+  const indentIn = el('input', { type: 'number', min: 0, max: 15, value: st.indent ?? 0, style: { width: '64px' } });
+  const [wrapIn, wrapL] = chk('텍스트 줄 바꿈', st.wrap);
+  const merged = !!wb.mergeAt(si, active.r, active.c);
+  const [mergeIn, mergeL] = chk('셀 병합', merged);
+  const alignPage = col(el('div', { class: 'fc-title' }, '텍스트 맞춤'), row(lab('가로', hSel), lab('세로', vSel), lab('들여쓰기', indentIn)),
+    el('div', { class: 'fc-title' }, '텍스트 조정'), wrapL, mergeL);
+
+  // ── 글꼴 ──
+  const fontSel = el('select', {}, FONTS.map((f) => el('option', { value: f, selected: (st.font || DEFAULT_FONT) === f }, f)));
+  const sizeIn = el('input', { type: 'number', min: 1, max: 409, value: st.size || DEFAULT_SIZE, style: { width: '64px' } });
+  const [bIn, bL] = chk('굵게', st.bold);
+  const [iIn, iL] = chk('기울임꼴', st.italic);
+  const [uIn, uL] = chk('밑줄', st.underline);
+  const [sIn, sL] = chk('취소선', st.strike);
+  const colorIn = el('input', { type: 'color', value: st.color || '#000000' });
+  const fontPreview = el('div', { class: 'fc-fontprev' }, '가나다 AaBbCc 123');
+  const updFont = () => Object.assign(fontPreview.style, {
+    fontFamily: fontStack(fontSel.value), fontSize: `${Math.min(Number(sizeIn.value) || 11, 36)}pt`, fontWeight: bIn.checked ? 700 : 400,
+    fontStyle: iIn.checked ? 'italic' : 'normal', textDecoration: `${uIn.checked ? 'underline ' : ''}${sIn.checked ? 'line-through' : ''}`, color: colorIn.value,
+  });
+  [fontSel, sizeIn, bIn, iIn, uIn, sIn, colorIn].forEach((x) => x.addEventListener('input', updFont));
+  updFont();
+  const fontPage = col(row(lab('글꼴', fontSel), lab('크기', sizeIn)), row(bL, iL, uL, sL), lab('색', colorIn), el('div', { class: 'fc-title' }, '미리 보기'), fontPreview);
+
+  // ── 테두리 ──
+  let border = null;
+  const borderBtns = el('div', { class: 'fc-row' });
+  for (const [k, label, ic] of [['none', '없음', 'borderNone'], ['outside', '윤곽선', 'borderOutside'], ['all', '모든 테두리', 'borderAll'], ['bottom', '아래쪽', 'borderBottom'], ['topBottom', '위쪽/아래쪽', 'borderTop']]) {
+    const b = el('button', { type: 'button', class: 'fc-bbtn', title: label, html: `${ICONS[ic] ?? ''}<span>${label}</span>` });
+    b.addEventListener('click', () => { border = k; borderBtns.querySelectorAll('.on').forEach((x) => x.classList.remove('on')); b.classList.add('on'); });
+    borderBtns.append(b);
+  }
+  const borderPage = col(el('div', { class: 'fc-title' }, '미리 설정'), borderBtns, el('div', { class: 'muted' }, '선택한 범위에 적용됩니다.'));
+
+  // ── 채우기 ──
+  const [noFill, noFillL] = chk('채우기 없음', !st.fill);
+  const fillIn = el('input', { type: 'color', value: st.fill || '#ffff00' });
+  const swatches = el('div', { class: 'fc-swatches' });
+  for (const c of ['#ffffff', '#f2f2f2', '#d9d9d9', '#fff2cc', '#fce4d6', '#e2efda', '#ddebf7', '#ededed', '#ffff00', '#ffc000', '#92d050', '#00b0f0', '#ff0000', '#7030a0', '#4472c4', '#70ad47']) {
+    const b = el('button', { type: 'button', class: 'fc-sw', title: c, style: { background: c } });
+    b.addEventListener('click', () => { fillIn.value = c; noFill.checked = false; });
+    swatches.append(b);
+  }
+  fillIn.addEventListener('input', () => { noFill.checked = false; });
+  const fillPage = col(noFillL, el('div', { class: 'fc-title' }, '배경색'), swatches, lab('다른 색', fillIn));
+
+  const pages = [['표시 형식', numberPage], ['맞춤', alignPage], ['글꼴', fontPage], ['테두리', borderPage], ['채우기', fillPage]];
+  const tabBar = el('div', { class: 'dlg-tabs' });
+  const pageBox = el('div', { class: 'fc-page' });
+  const show = (i) => { [...tabBar.children].forEach((b, j) => b.classList.toggle('on', i === j)); pageBox.replaceChildren(pages[i][1]); };
+  pages.forEach(([name], i) => tabBar.append(el('button', { type: 'button', class: 'dlg-tab', onclick: () => show(i) }, name)));
+  show(startTab);
+
+  openDialog({
+    title: '셀 서식', width: 620, body: el('div', {}, tabBar, pageBox),
+    buttons: [
+      {
+        label: '확인', primary: true,
+        action: () => {
+          const code = currentCode();
+          let fmt;
+          try {
+            formatCode(1234.5, code);
+            fmt = cat === 'general' ? { numFmt: undefined, decimals: undefined, code: undefined } : styleForCode(code);
+          } catch {
+            show(0);
+            alertDialog('셀 서식', '입력한 서식 코드를 사용할 수 없습니다. 코드를 확인하세요.');
+            return false;
+          }
+          const size = Number(sizeIn.value);
+          const patch = {
+            ...fmt,
+            align: hSel.value || undefined, valign: vSel.value || undefined, indent: Number(indentIn.value) || undefined, wrap: wrapIn.checked || undefined,
+            font: fontSel.value === DEFAULT_FONT ? undefined : fontSel.value,
+            size: !size || size === DEFAULT_SIZE ? undefined : Math.min(409, size),
+            bold: bIn.checked || undefined, italic: iIn.checked || undefined, underline: uIn.checked || undefined, strike: sIn.checked || undefined,
+            color: colorIn.value === '#000000' ? undefined : colorIn.value,
+            fill: noFill.checked ? undefined : fillIn.value,
+          };
+          wb.transact(() => {
+            applyStyle(patch, { widen: fmt.numFmt !== undefined ? 'grow' : false });
+            if (border) applyBorder(border);
+            if (mergeIn.checked !== merged && selKind === 'cells' && !isSingle(sel)) {
+              if (mergeIn.checked) wb.merge(si, sel.r1, sel.c1, sel.r2, sel.c2); else wb.unmerge(si, sel.r1, sel.c1, sel.r2, sel.c2);
+            } else if (!mergeIn.checked && merged) {
+              const m = wb.mergeAt(si, active.r, active.c);
+              if (m) wb.unmerge(si, m.r1, m.c1, m.r2, m.c2);
+            }
+          }, meta());
+          return undefined;
+        },
+      },
+      { label: '취소' },
+    ],
   });
 }
 
@@ -3205,7 +4446,12 @@ const SHORTCUTS = [
   ['Ctrl+;  /  Ctrl+Shift+;', '오늘 날짜 / 현재 시간 입력'],
   ['Ctrl+Shift+1/3/4/5', '숫자 / 날짜 / 통화 / 백분율 서식'],
   ['Ctrl+Shift+~', '일반 서식'],
-  ['Ctrl+1', '셀 서식'],
+  ['Ctrl+1', '셀 서식 (표시 형식 · 사용자 지정 서식 · 맞춤 · 글꼴 · 테두리 · 채우기)'],
+  ['Ctrl+T / Ctrl+L', '표 만들기 (브라우저가 Ctrl+T 를 가로채면 Ctrl+L)'],
+  ['Alt+A+E', '텍스트 나누기'],
+  ['Alt → 글자', '리본 바로 가기 키 (예: Alt+N+T 표, Alt+N+V 피벗, Alt+H+O+E 셀 서식)'],
+  ['Alt+↓', '목록·필터·요약 함수 펼치기'],
+  ['Alt+C / Alt+S', '슬라이서: 필터 지우기 / 다중 선택'],
   ['Ctrl+F / Ctrl+H / Ctrl+G', '찾기 / 바꾸기 / 이동'],
   ['Ctrl+`', '수식 표시'],
   ['Ctrl+Shift+= / Ctrl+-', '행·열 삽입 / 삭제'],
@@ -3306,39 +4552,10 @@ function cellStylesMenu(anchorEl) {
   openMenu(anchorEl, [{ title: '셀 스타일' }, { node: el('div', { class: 'style-grid' }, CELL_STYLES.map(chip)) }]);
 }
 
-const TABLE_THEMES = [
-  { name: '파랑, 표 스타일 보통 2', head: '#4472c4', band: '#d9e1f2' },
-  { name: '주황, 표 스타일 보통 3', head: '#ed7d31', band: '#fce4d6' },
-  { name: '회색, 표 스타일 보통 4', head: '#a5a5a5', band: '#ededed' },
-  { name: '녹색, 표 스타일 보통 7', head: '#70ad47', band: '#e2efda' },
-  { name: '진한 파랑, 표 스타일 진하게 2', head: '#203864', band: '#b4c6e7' },
-];
-
-function applyTableStyle(theme) {
-  const rg = dataRange();
-  wb.transact(() => {
-    for (const [r, c] of cellsIn(rg)) {
-      if (r === rg.r1) wb.setStyle(si, r, c, { fill: theme.head, color: '#ffffff', bold: true, bb: true });
-      else wb.setStyle(si, r, c, { fill: (r - rg.r1) % 2 === 1 ? theme.band : undefined, color: undefined, bold: undefined, ...(r === rg.r2 && { bb: true }) });
-    }
-    if (!sheet().filter) {
-      wb.setSheetProp(si, 'filter', { ...rg, criteria: {}, hidden: {} });
-      widenForFilterButtons(rg);
-    }
-  }, meta());
-  selectRange(rg, 'cells', active);
-}
-
-function tableStylesMenu(anchorEl) {
-  const chip = (t) => el('button', {
-    class: 'style-chip', title: t.name, onmousedown: (e) => e.preventDefault(),
-    style: { background: `linear-gradient(${t.head} 0 30%, ${t.band} 30% 55%, #fff 55% 78%, ${t.band} 78%)`, height: '40px', width: '60px' },
-    onclick: () => { closeMenus(); applyTableStyle(t); focusGrid(); },
-  });
-  openMenu(anchorEl, [{ title: '밝게 / 보통' }, { node: el('div', { class: 'style-grid', style: { gridTemplateColumns: 'repeat(5, 60px)' } }, TABLE_THEMES.map(chip)) }]);
-}
+function tableStylesMenu(anchorEl) { tableStyleGallery(anchorEl, !tableHere()); }
 
 const MENUS = {
+  tableStylesDesign: (a) => { tableStyleGallery(a, false); },
   shapes: () => [
     { title: '도형' },
     ...SHAPE_KINDS.map((k) => ({
@@ -3459,9 +4676,9 @@ const MENUS = {
     { label: '텍스트 내림차순 정렬', icon: 'sortDesc', action: () => sortData(false) },
     { label: '사용자 지정 정렬...', icon: 'sort', action: () => sortDialog() },
     { sep: true },
-    { label: '필터', icon: 'filter', key: 'Ctrl+Shift+L', checked: !!sheet().filter, action: () => toggleFilter() },
-    { label: '지우기', icon: 'filterClear', disabled: !sheet().filter, action: () => run('clearFilter') },
-    { label: '다시 적용', icon: 'refresh', disabled: !sheet().filter, action: () => run('reapplyFilter') },
+    { label: '필터', icon: 'filter', key: 'Ctrl+Shift+L', checked: filterKeyHere() !== null && !!getFilter(filterKeyHere()), action: () => toggleFilter() },
+    { label: '지우기', icon: 'filterClear', disabled: filterKeyHere() === null, action: () => run('clearFilter') },
+    { label: '다시 적용', icon: 'refresh', disabled: filterKeyHere() === null, action: () => run('reapplyFilter') },
     { sep: true },
     { label: '중복된 항목 제거', icon: 'dedupe', action: () => removeDuplicates() },
   ],
@@ -3548,7 +4765,7 @@ function showContextMenu(pos, kind) {
       { label: '열 삭제', icon: 'delete', action: () => run('deleteCols') },
       { label: '내용 지우기', action: () => run('clearContents') },
       { sep: true },
-      { label: '필터', icon: 'filter', checked: !!sheet().filter, action: () => toggleFilter() },
+      { label: '필터', icon: 'filter', checked: filterKeyHere() !== null && !!getFilter(filterKeyHere()), action: () => toggleFilter() },
       { label: '오름차순 정렬', icon: 'sortAsc', action: () => sortData(true) },
       { label: '내림차순 정렬', icon: 'sortDesc', action: () => sortData(false) },
       { sep: true },
@@ -3609,7 +4826,7 @@ const COMMANDS = {
   indentDec: () => applyStyle((s) => ({ indent: Math.max(0, (s.indent || 0) - 1) || undefined })),
   mergeCenter: () => toggleMerge('center'),
 
-  numFmt: (f) => applyStyle({ numFmt: f === 'general' ? undefined : f, decimals: undefined }, { widen: true }),
+  numFmt: (f) => (f === 'custom' || f === 'more' ? formatCellsDialog(0) : applyStyle({ numFmt: f === 'general' ? undefined : f, decimals: undefined }, { widen: true })),
   fmtGeneral: () => applyStyle({ numFmt: undefined, decimals: undefined }),
   fmtNumber: () => applyStyle({ numFmt: 'number', decimals: 2 }, { widen: true }),
   fmtDate: () => applyStyle({ numFmt: 'date', decimals: undefined }, { widen: true }),
@@ -3687,8 +4904,9 @@ const COMMANDS = {
   fillDown: () => fillCopy('down'),
   fillRight: () => fillCopy('right'),
   clearContents: () => wb.transact(() => {
-    if (Object.keys(sheet().filter?.hidden ?? {}).length) {
+    if (allFilters().some(([, f]) => Object.keys(f.hidden ?? {}).length)) {
       for (const [r, c] of cellsIn(usedClip(sel))) {
+        if (filterHidden(r)) continue;
         const cell = wb.getCell(si, r, c);
         if (cell?.raw) wb.setCellData(si, r, c, { raw: '', style: cell.style, comment: cell.comment });
       }
@@ -3707,15 +4925,19 @@ const COMMANDS = {
 
   toggleFilter,
   clearFilter: () => {
-    const f = sheet().filter;
+    const key = filterKeyHere();
+    const f = key === null ? null : getFilter(key);
     if (!f) return;
-    wb.transact(() => wb.setSheetProp(si, 'filter', { ...f, criteria: {}, hidden: {}, sort: undefined }), meta());
+    wb.transact(() => putFilter(key, { ...f, criteria: {}, hidden: {}, sort: undefined }), meta());
+    gv.layout();
     setMode();
   },
   reapplyFilter: () => {
-    const f = sheet().filter;
+    const key = filterKeyHere();
+    const f = key === null ? null : getFilter(key);
     if (!f) return;
-    wb.transact(() => wb.setSheetProp(si, 'filter', recomputeFilter(f)), meta());
+    wb.transact(() => putFilter(key, recomputeFilter(f, key)), meta());
+    gv.layout();
     setMode();
   },
   hideRows: () => hideSel('row', true),
@@ -3730,6 +4952,32 @@ const COMMANDS = {
   chartArea: () => insertChart('area'),
   chartScatter: () => insertChart('scatter'),
   insertPicture,
+  textToColumns,
+  createTable: () => createTableDialog(),
+  insertSlicer: insertSlicerDialog,
+  slicerCaption: (v) => { if (chartSel) updateObject(chartSel, { caption: String(v ?? '') }); },
+  slicerCols: (v) => { if (chartSel) updateObject(chartSel, { columns: clamp(Number(v) || 1, 1, 20) }); },
+  slicerClear: () => { if (chartSel) slicerClear(chartSel); },
+  slicerMulti: () => { const sl = (sheet().slicers ?? []).find((x) => x.id === chartSel); if (sl) updateObject(sl.id, { multi: !sl.multi }); },
+  slicerSettings: () => { if (chartSel) slicerSettings(chartSel); },
+  tblName: (v) => renameTable(v),
+  resizeTable: resizeTableDialog,
+  convertToRange: convertTableToRange,
+  pivotFromTable: () => { const t = tableHere(); if (t) pivotDialog(t.name); },
+  tblHeader: () => toggleTableOption('header'),
+  tblTotals: () => toggleTableOption('totals'),
+  tblBanded: () => toggleTableOption('banded'),
+  tblBandedCols: () => toggleTableOption('bandedCols'),
+  tblFirstCol: () => toggleTableOption('firstCol'),
+  tblLastCol: () => toggleTableOption('lastCol'),
+  tblFilter: () => toggleTableOption('filter'),
+  autofitSel: () => autofitCols(range(sel.c1, Math.min(sel.c2, sel.c1 + 200))),
+  autofitRowsSel: () => wb.transact(() => autoFitRows(sel.r1, Math.min(sel.r2, sel.r1 + 2000)), meta()),
+  condMenuKey: () => menuAtCell('condFormat'),
+  tableStyleKey: () => menuAtCell('tableStyles'),
+  freezePanes: () => { const f = sheet().freeze ?? {}; if (f.rows || f.cols) setFreeze(0, 0); else setFreeze(active.r, active.c); },
+  freezeTop: () => setFreeze(1, 0),
+  freezeFirstCol: () => setFreeze(0, 1),
   shapesMenu: () => startDraw('rect'),
   insertTextbox: () => startDraw('textbox'),
   dataValidation: validationDialog,
@@ -3825,11 +5073,23 @@ function ribbonState() {
   const f = sheet().freeze ?? {};
   return {
     bold: st.bold, italic: st.italic, underline: st.underline, strike: st.strike, wrap: st.wrap,
-    font: st.font || DEFAULT_FONT, size: String(st.size || DEFAULT_SIZE), numFmt: fmt,
+    font: st.font || DEFAULT_FONT, size: String(st.size || DEFAULT_SIZE), numFmt: st.numFmt === 'custom' ? 'custom' : fmt,
     alignLeft: st.align === 'left', alignCenter: st.align === 'center', alignRight: st.align === 'right',
     valignTop: st.valign === 'top', valignMiddle: st.valign === 'middle', valignBottom: !st.valign,
-    merged: !!wb.mergeAt(si, active.r, active.c), painter: !!painter, filterOn: !!sheet().filter,
+    merged: !!wb.mergeAt(si, active.r, active.c), painter: !!painter, filterOn: (() => { const k = filterKeyHere(); return k !== null && !!getFilter(k); })(),
     frozen: !!(f.rows || f.cols), lastFill, lastFont, ...view,
+    ...tableRibbonState(),
+  };
+}
+
+function tableRibbonState() {
+  const t = chartSel ? null : tableHere();
+  const sl = chartSel ? (sheet().slicers ?? []).find((x) => x.id === chartSel) : null;
+  const context = [...(t ? ['table'] : []), ...(sl ? ['slicer'] : [])];
+  if (!t) return { context, slicerCaption: sl?.caption ?? '', slicerCols: String(sl?.columns ?? 1), slicerMultiOn: !!sl?.multi };
+  return {
+    context, tblName: t.name, tblHeader: t.header, tblTotals: t.totals, tblBanded: t.banded !== false, tblBandedCols: !!t.bandedCols,
+    tblFirstCol: !!t.firstCol, tblLastCol: !!t.lastCol, tblFilter: !!t.filter, slicerCaption: sl?.caption ?? '', slicerCols: String(sl?.columns ?? 1), slicerMultiOn: !!sl?.multi,
   };
 }
 
@@ -3882,14 +5142,18 @@ function onBookChange() {
 function bindEvents() {
   const ed = dom.editor;
   ed.addEventListener('keydown', onEditorKeyDown);
+  ed.addEventListener('keyup', handleKeytipUp);
+  document.addEventListener('mousedown', endKeytip, true);
+  window.addEventListener('blur', endKeytip);
   // 그림 개체를 선택한 채로 입력하면 셀 대신 도형 글자로 (차트·그림은 무시)
   const objectTyped = () => {
     const v = ed.value;
     ed.value = '';
     if (v && sheet().shapes?.some((x) => x.id === chartSel)) shapeDialog(chartSel, v);
   };
-  ed.addEventListener('compositionstart', () => { if (!editing && !chartSel) beginTyping(); });
+  ed.addEventListener('compositionstart', () => { if (!editing && !chartSel && !keytip) beginTyping(); });
   ed.addEventListener('compositionend', () => {
+    if (!editing && keytip) { ed.value = ''; return; }
     if (!editing && chartSel) { objectTyped(); return; }
     const k = pendingKey;
     if (!k) return;
@@ -3900,6 +5164,7 @@ function bindEvents() {
     }, 30);
   });
   ed.addEventListener('input', (e) => {
+    if (!editing && keytip) { if (!e.isComposing) ed.value = ''; return; }
     if (!editing && chartSel) { if (!e.isComposing) objectTyped(); return; }
     if (!editing) beginTyping();
     editing.point = null;
@@ -4081,6 +5346,7 @@ async function init() {
       showGrid: view.showGrid, showFormulas: view.showFormulas, showHeaders: view.showHeaders,
     }),
     onViewScroll: () => positionEditor(),
+    slicerModel,
     onZoomWheel: (d) => setZoom(view.zoom + d),
     isDragging: () => !!drag,
   });

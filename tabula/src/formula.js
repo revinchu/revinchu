@@ -75,7 +75,7 @@ export function quoteSheetName(name) {
 // ───────────────────────── 토크나이저 ─────────────────────────
 const SHEET = String.raw`(?:'((?:[^']|'')+)'|([A-Za-z_À-￿][\w.À-￿]*))!`;
 const CELL = String.raw`(\$?)([A-Za-z]{1,3})(\$?)(\d+)`;
-const RANGE_RE = new RegExp(`(?:${SHEET})?${CELL}(?::${CELL})?(?![\\w(!])`, 'y');
+const RANGE_RE = new RegExp(`(?:${SHEET})?${CELL}(?::${CELL})?(?![\\w(![])`, 'y');
 const COLS_RE = new RegExp(`(?:${SHEET})?(\\$?)([A-Za-z]{1,3}):(\\$?)([A-Za-z]{1,3})(?![\\w(!])`, 'y');
 const NUMBER_RE = /(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/y;
 const IDENT_RE = /[A-Za-z_À-￿][\w.À-￿]*/y;
@@ -85,6 +85,18 @@ const OPS = ['<=', '>=', '<>', '+', '-', '*', '/', '^', '&', '=', '<', '>', '%']
 function sticky(re, src, pos) {
   re.lastIndex = pos;
   return re.exec(src);
+}
+
+/** 여는 대괄호 위치 → 짝이 맞는 닫는 대괄호 위치 (' 는 이스케이프) */
+function bracketEnd(src, open) {
+  let depth = 0;
+  for (let j = open; j < src.length; j++) {
+    const ch = src[j];
+    if (ch === "'") { j++; continue; }
+    if (ch === '[') depth++;
+    else if (ch === ']' && --depth === 0) return j;
+  }
+  throw new SyntaxError('닫는 대괄호가 없습니다');
 }
 
 export function tokenize(src) {
@@ -137,6 +149,13 @@ export function tokenize(src) {
         continue;
       }
       m = sticky(IDENT_RE, src, i);
+      if (m && src[i + m[0].length] === '[') {
+        // 구조적 참조: 표1[금액], 표1[[#머리글],[금액]]
+        const end = bracketEnd(src, i + m[0].length);
+        toks.push({ t: 'sref', table: m[0], spec: src.slice(i + m[0].length + 1, end), s: start, e: end + 1 });
+        i = end + 1;
+        continue;
+      }
       if (m) {
         i += m[0].length;
         const up = m[0].toUpperCase();
@@ -148,6 +167,13 @@ export function tokenize(src) {
         continue;
       }
       throw new SyntaxError(`잘못된 문자: ${ch}`);
+    }
+    if (ch === '[') {
+      // 표 안의 구조적 참조: [@금액], [금액]
+      const end = bracketEnd(src, i);
+      toks.push({ t: 'sref', table: null, spec: src.slice(i + 1, end), s: start, e: end + 1 });
+      i = end + 1;
+      continue;
     }
     if (ch === '(' || ch === ')' || ch === ',' || ch === ':') {
       i++;
@@ -244,6 +270,7 @@ export function parse(src) {
       case 'bool': return { type: 'bool', v: k.v };
       case 'err': return { type: 'err', v: k.v };
       case 'ref': return { type: 'ref', ref: k.ref };
+      case 'sref': return { type: 'sref', table: k.table, spec: k.spec };
       case 'ident': return { type: 'name', v: k.v };
       case '(': {
         const e = expr(0);
@@ -385,6 +412,11 @@ export function evaluate(node, ctx) {
       }
       const r2 = f.cols ? Math.max(0, ctx.usedRows(f.sheet) - 1) : f.r2;
       return new Range(ctx.range(f.sheet, f.r1, f.c1, r2, f.c2));
+    }
+    case 'sref': {
+      const ref = ctx.structRef?.(node.table, node.spec);
+      if (!ref) throw ERR.REF;
+      return evaluate({ type: 'ref', ref }, ctx);
     }
     case 'neg': return -toNum(evaluate(node.a, ctx));
     case 'pos': return scalar(evaluate(node.a, ctx));
@@ -627,8 +659,44 @@ function matchesAll(pairs, r, c) {
   });
 }
 
+function variance(n, sample) {
+  if (n.length < (sample ? 2 : 1)) throw ERR.DIV0;
+  const m = n.reduce((s, x) => s + x, 0) / n.length;
+  return n.reduce((s, x) => s + (x - m) ** 2, 0) / (n.length - (sample ? 1 : 0));
+}
+
+/** SUBTOTAL: 1~11 (숨긴 행 포함) / 101~111 (숨긴 행 제외). 필터로 숨긴 행은 항상 제외 */
+const SUBTOTAL_FN = { 1: 'AVERAGE', 2: 'COUNT', 3: 'COUNTA', 4: 'MAX', 5: 'MIN', 6: 'PRODUCT', 7: 'STDEV', 8: 'STDEVP', 9: 'SUM', 10: 'VAR', 11: 'VARP' };
+
 export const FUNCS = {
   // 수학
+  SUBTOTAL: lazy((args, ctx) => {
+    const code = toInt(evaluate(args[0], ctx));
+    const name = SUBTOTAL_FN[code > 100 ? code - 100 : code];
+    if (!name || !args.length) throw ERR.VALUE;
+    const skipManual = code > 100;
+    const vals = args.slice(1).map((a) => {
+      let ref = a.type === 'ref' ? a.ref : null;
+      if (a.type === 'sref') ref = ctx.structRef?.(a.table, a.spec);
+      if (!ref || !ref.range || !ctx.rowHidden) return evaluate(a.type === 'sref' && ref ? { type: 'ref', ref } : a, ctx);
+      const r2 = ref.cols ? Math.max(0, ctx.usedRows(ref.sheet) - 1) : ref.r2;
+      const rows = [];
+      for (let r = ref.r1; r <= r2; r++) {
+        if (ctx.rowHidden(ref.sheet, r, skipManual)) continue;
+        rows.push(ctx.range(ref.sheet, r, ref.c1, r, ref.c2)[0]);
+      }
+      return new Range(rows.length ? rows : [[null]]);
+    });
+    return FUNCS[name](vals);
+  }),
+  STDEV: (a) => Math.sqrt(variance(collectNums(a), true)),
+  'STDEV.S': (a) => Math.sqrt(variance(collectNums(a), true)),
+  STDEVP: (a) => Math.sqrt(variance(collectNums(a), false)),
+  'STDEV.P': (a) => Math.sqrt(variance(collectNums(a), false)),
+  VAR: (a) => variance(collectNums(a), true),
+  'VAR.S': (a) => variance(collectNums(a), true),
+  VARP: (a) => variance(collectNums(a), false),
+  'VAR.P': (a) => variance(collectNums(a), false),
   SUM: (a) => collectNums(a).reduce((s, x) => s + x, 0),
   PRODUCT: (a) => collectNums(a).reduce((s, x) => s * x, 1),
   AVERAGE: (a) => {

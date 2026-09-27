@@ -5,11 +5,12 @@ import {
   parse, tokenize, shiftFormula, colToName, nameToCol, cellName, parseRangeName, FUNCS, isError,
   quoteSheetName, MAX_ROWS, MAX_COLS, EXCEL_MAX_ROWS,
 } from './formula.js';
-import { parseInput, formatGeneral } from './format.js';
+import { parseInput, formatGeneral, fmtCode, styleForCode } from './format.js';
 import { DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT } from './workbook.js';
 import { chartLayout, PALETTE } from './chart.js';
 import { Axis } from './axis.js';
 import { toBase64, fromBase64 } from './vba.js';
+import { normalizeStyleName, DEFAULT_TABLE_STYLE, dataBottom, canonicalRef, tableAt, columnNames } from './tables.js';
 
 const NS_MAIN = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
 const NS_R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -18,7 +19,7 @@ const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships
 const EMU = 9525; // 1px
 
 const DEFAULT_FONT = '맑은 고딕';
-const XLFN = new Set(['IFS', 'XLOOKUP', 'CONCAT', 'TEXTJOIN', 'IFNA']);
+const XLFN = new Set(['IFS', 'XLOOKUP', 'CONCAT', 'TEXTJOIN', 'IFNA', 'STDEV.S', 'STDEV.P', 'VAR.S', 'VAR.P']);
 
 // ───────────────────────── 공통 ─────────────────────────
 const px2width = (px) => Math.max(0, Math.round(((px - 5) / 7) * 256) / 256);
@@ -110,47 +111,6 @@ const BUILTIN_FMT = {
 for (const id of [27, 28, 29, 30, 31, 34, 35, 36, 50, 51, 52, 53, 54, 57, 58]) BUILTIN_FMT[id] = { numFmt: 'date' };
 for (const id of [32, 33, 55, 56]) BUILTIN_FMT[id] = { numFmt: 'time' };
 
-export function fmtFromCode(code) {
-  const first = code.split(';')[0];
-  const plain = first.replace(/"[^"]*"/g, '').replace(/\\./g, '').replace(/\[[^\]]*\]/g, (m) => (/\$[₩$€¥£]/.test(m) ? '₩' : ''));
-  const decimals = (plain.match(/\.(0+)/)?.[1].length) || undefined;
-  if (plain.trim() === '@') return { numFmt: 'text' };
-  if (/general/i.test(plain) && !/[0#]/.test(plain)) return {};
-  if (/E[+-]/i.test(plain)) return { numFmt: 'scientific', decimals: decimals ?? 0 };
-  const hasDate = /[yd]/i.test(plain) || /(^|[^a-z])m{1,4}([^a-z]|$)/i.test(plain) && !/h/i.test(plain);
-  const hasTime = /[hs]/i.test(plain);
-  if (hasDate || hasTime) {
-    if (hasDate && hasTime) return { numFmt: 'datetime' };
-    if (hasTime) return { numFmt: 'time' };
-    return { numFmt: /dddd|aaaa/i.test(plain) || /년/.test(code) ? 'longdate' : 'date' };
-  }
-  if (plain.includes('%')) return { numFmt: 'percent', decimals };
-  if (/[₩$€¥£]/.test(plain) || /[₩$€¥£]/.test(code.split(';')[0].replace(/"/g, ''))) return { numFmt: 'currency', decimals };
-  if (/\?\/\?/.test(plain)) return { numFmt: 'fraction' };
-  if (plain.includes('#,##0') || plain.includes('#,###')) return decimals ? { numFmt: 'number', decimals } : { numFmt: 'comma' };
-  if (/0/.test(plain)) return { decimals: decimals ?? 0 };
-  return {};
-}
-
-function fmtCode(style) {
-  const d = style.decimals;
-  const dec = (n) => (n ? `.${'0'.repeat(n)}` : '');
-  switch (style.numFmt) {
-    case 'number': return `#,##0${dec(d ?? 2)}`;
-    case 'comma': return `#,##0${dec(d ?? 0)}`;
-    case 'currency': case 'accounting': return `"₩"#,##0${dec(d ?? 0)};\\-"₩"#,##0${dec(d ?? 0)}`;
-    case 'percent': return `0${dec(d ?? 0)}%`;
-    case 'scientific': return `0${dec(d ?? 2)}E+00`;
-    case 'fraction': return '# ?/?';
-    case 'date': return 'yyyy\\-mm\\-dd';
-    case 'longdate': return 'yyyy"년" m"월" d"일" dddd';
-    case 'time': return '[$-412]AM/PM h:mm:ss';
-    case 'datetime': return 'yyyy\\-mm\\-dd h:mm';
-    case 'text': return '@';
-    default: return d !== undefined ? `0${dec(d)}` : null;
-  }
-}
-
 // ───────────────────────── 읽기 ─────────────────────────
 function relsOf(files, path) {
   const dir = path.slice(0, path.lastIndexOf('/') + 1);
@@ -239,7 +199,7 @@ function readStyles(files, wbRels, theme) {
   const numFmtOf = (id) => {
     const n = Number(id);
     if (BUILTIN_FMT[n]) return BUILTIN_FMT[n];
-    if (numFmts[id]) return fmtFromCode(numFmts[id]);
+    if (numFmts[id]) return styleForCode(numFmts[id]);
     return {};
   };
   const xfs = kids(child(root, 'cellXfs'), 'xf').map((xf) => {
@@ -466,6 +426,15 @@ function readSheet(files, path, ctx) {
   }
   const drawing = child(root, 'drawing');
   if (drawing && rels[rid(drawing)]) Object.assign(sheet, readDrawing(files, rels[rid(drawing)].target, sheet, ctx));
+  // 표 (ListObject)
+  sheet.tables = [];
+  for (const tp of kids(child(root, 'tableParts'), 'tablePart')) {
+    const target = rels[rid(tp)]?.target;
+    const tx = target && textOf(files[target]);
+    if (!tx) continue;
+    const t = readTable(parseXml(tx), sheet);
+    if (t) sheet.tables.push(t);
+  }
   sheet.validations = readValidations(root);
   sheet.codeName = child(root, 'sheetPr')?.attrs.codeName;
   return sheet;
@@ -508,6 +477,49 @@ function readValidations(root) {
     }
   }
   return out;
+}
+
+/** tables/tableN.xml → 표 모델 */
+function readTable(root, sheet) {
+  const rg = refToRange(root.attrs.ref ?? '');
+  if (!rg) return null;
+  const header = root.attrs.headerRowCount !== '0';
+  const totals = Number(root.attrs.totalsRowCount ?? 0) > 0;
+  const info = child(root, 'tableStyleInfo');
+  const cols = kids(child(root, 'tableColumns'), 'tableColumn');
+  const totalsFns = {};
+  cols.forEach((tc, i) => {
+    const f = tc.attrs.totalsRowFunction;
+    if (f && f !== 'none' && f !== 'custom') totalsFns[rg.c1 + i] = f;
+  });
+  const af = child(root, 'autoFilter');
+  let filter = null;
+  if (af && header) {
+    const criteria = {};
+    for (const fc of kids(af, 'filterColumn')) {
+      const filters = child(fc, 'filters');
+      if (!filters) continue;
+      const vals = kids(filters, 'filter').map((f) => f.attrs.val);
+      if (filters.attrs.blank === '1') vals.push('');
+      criteria[rg.c1 + Number(fc.attrs.colId)] = vals;
+    }
+    const hidden = {};
+    if (Object.keys(criteria).length) {
+      for (const k of Object.keys(sheet.hiddenRows)) {
+        const r = Number(k);
+        if (r > rg.r1 && r <= rg.r2 - (totals ? 1 : 0)) { hidden[r] = true; delete sheet.hiddenRows[r]; }
+      }
+    }
+    filter = { criteria, hidden };
+  }
+  const name = (root.attrs.displayName || root.attrs.name || 'Table').replace(/\s/g, '_');
+  return {
+    id: `tb${Math.random().toString(36).slice(2, 9)}`, name, ...rg, r2: Math.max(rg.r2, rg.r1 + (header ? 1 : 0)),
+    header, totals, style: normalizeStyleName(info?.attrs.name ?? DEFAULT_TABLE_STYLE),
+    banded: info ? info.attrs.showRowStripes !== '0' : true, bandedCols: info?.attrs.showColumnStripes === '1',
+    firstCol: info?.attrs.showFirstColumn === '1', lastCol: info?.attrs.showLastColumn === '1',
+    filter, totalsFns, ...(header ? {} : { columns: cols.map((c) => c.attrs.name ?? '') }),
+  };
 }
 
 function numberRaw(v, style) {
@@ -843,7 +855,7 @@ class StylePool {
 }
 
 /** 새 함수는 엑셀 파일에서 _xlfn. 접두사가 필요 */
-function exportFormula(raw) {
+function exportFormula(raw, hereTable = null) {
   const body = raw.slice(1);
   let toks;
   try { toks = tokenize(body); } catch { return body; }
@@ -852,6 +864,10 @@ function exportFormula(raw) {
   for (const t of toks) {
     if (t.t === 'func' && XLFN.has(t.v)) {
       out += `${body.slice(pos, t.s)}_xlfn.${body.slice(t.s, t.e)}`;
+      pos = t.e;
+    } else if (t.t === 'sref') {
+      // 파일에는 표 이름과 영어 키워드를 붙인 표준 형식으로 ([@열] → 표1[[#This Row],[열]])
+      out += body.slice(pos, t.s) + canonicalRef(t.table, t.spec, hereTable);
       pos = t.e;
     }
   }
@@ -1051,6 +1067,7 @@ export function writeXlsx(wb, { activeSheet = 0 } = {}) {
   let chartNo = 0;
   let drawingNo = 0;
   let commentNo = 0;
+  let tableNo = 0;
   let mediaNo = 0;
   const mediaExts = new Set();
   const definedNames = [];
@@ -1073,14 +1090,14 @@ export function writeXlsx(wb, { activeSheet = 0 } = {}) {
       maxC = Math.max(maxC, c);
     }
     const rowKeys = new Set([...rows.keys()]);
-    for (const k of [...Object.keys(sheet.rowHeights), ...Object.keys(sheet.hiddenRows), ...Object.keys(sheet.rowStyles), ...Object.keys(sheet.filter?.hidden ?? {})]) rowKeys.add(Number(k));
+    for (const k of [...Object.keys(sheet.rowHeights), ...Object.keys(sheet.hiddenRows), ...Object.keys(sheet.rowStyles), ...Object.keys(sheet.filter?.hidden ?? {}), ...(sheet.tables ?? []).flatMap((t) => Object.keys(t.filter?.hidden ?? {}))]) rowKeys.add(Number(k));
     const sortedRows = [...rowKeys].filter((r) => r < EXCEL_MAX_ROWS).sort((a, b) => a - b);
 
     const rowXml = sortedRows.map((r) => {
       const cells = (rows.get(r) ?? []).sort((a, b) => a[0] - b[0]);
       const attrs = [`r="${r + 1}"`];
       if (sheet.rowHeights[r] !== undefined) attrs.push(`ht="${px2pt(sheet.rowHeights[r])}"`, 'customHeight="1"');
-      if (sheet.hiddenRows[r] || sheet.filter?.hidden?.[r]) attrs.push('hidden="1"');
+      if (sheet.hiddenRows[r] || sheet.filter?.hidden?.[r] || (sheet.tables ?? []).some((t) => t.filter?.hidden?.[r])) attrs.push('hidden="1"');
       if (sheet.rowStyles[r]) attrs.push(`s="${pool.xf({ ...sheet.allStyle, ...sheet.rowStyles[r] })}"`, 'customFormat="1"');
       const cx = cells.map(([c, cell]) => {
         const ref = cellName(r, c);
@@ -1090,7 +1107,7 @@ export function writeXlsx(wb, { activeSheet = 0 } = {}) {
         if (!cell.raw) return s ? `<c r="${ref}"${sAttr}/>` : '';
         const v = wb.getValue(si, r, c);
         if (cell.formula) {
-          const f = `<f>${esc(exportFormula(cell.raw))}</f>`;
+          const f = `<f>${esc(exportFormula(cell.raw, cell.raw.includes('[') ? tableAt(sheet, r, c)?.name : null))}</f>`;
           if (typeof v === 'number') return `<c r="${ref}"${sAttr}>${f}<v>${v}</v></c>`;
           if (typeof v === 'boolean') return `<c r="${ref}"${sAttr} t="b">${f}<v>${v ? 1 : 0}</v></c>`;
           if (isError(v)) return `<c r="${ref}"${sAttr} t="e">${f}<v>${esc(v.code === '#CIRC!' ? '#REF!' : v.code)}</v></c>`;
@@ -1207,6 +1224,35 @@ export function writeXlsx(wb, { activeSheet = 0 } = {}) {
       contentOverrides.push(`<Override PartName="/xl/comments${commentNo}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/>`);
     }
 
+    // 표
+    const tableIds = [];
+    for (const t of (sheet.tables ?? []).map(fit).filter(Boolean)) {
+      tableNo++;
+      const names = columnNames(wb, si, t);
+      const cols = names.map((n, i) => {
+        const c = t.c1 + i;
+        const fn = t.totals ? t.totalsFns?.[c] : null;
+        let extra = '';
+        if (fn && fn !== 'none') extra = ` totalsRowFunction="${fn}"`;
+        else if (t.totals && wb.getCell(si, t.r2, c)?.raw && !wb.getCell(si, t.r2, c).formula) extra = ` totalsRowLabel="${esc(wb.getCell(si, t.r2, c).raw.replace(/^'/, ''))}"`;
+        return `<tableColumn id="${i + 1}" name="${esc(n)}"${extra}/>`;
+      }).join('');
+      let af = '';
+      if (t.filter && t.header) {
+        const fr = { r1: t.r1, c1: t.c1, r2: dataBottom(t), c2: t.c2 };
+        const fcs = Object.entries(t.filter.criteria ?? {}).filter(([, vals]) => Array.isArray(vals)).map(([c, vals]) => {
+          const blank = vals.includes('');
+          return `<filterColumn colId="${Number(c) - t.c1}"><filters${blank ? ' blank="1"' : ''}>${vals.filter((v) => v !== '').map((v) => `<filter val="${esc(v)}"/>`).join('')}</filters></filterColumn>`;
+        }).join('');
+        af = `<autoFilter ref="${rangeRef(fr)}">${fcs}</autoFilter>`;
+      }
+      const style = t.style && t.style !== 'None' ? t.style : null;
+      files[`xl/tables/table${tableNo}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<table xmlns="${NS_MAIN}" id="${tableNo}" name="${esc(t.name)}" displayName="${esc(t.name)}" ref="${rangeRef(t)}"${t.header ? '' : ' headerRowCount="0"'}${t.totals ? ' totalsRowCount="1"' : ' totalsRowShown="0"'}>${af}<tableColumns count="${names.length}">${cols}</tableColumns><tableStyleInfo${style ? ` name="${style}"` : ''} showFirstColumn="${t.firstCol ? 1 : 0}" showLastColumn="${t.lastCol ? 1 : 0}" showRowStripes="${t.banded !== false ? 1 : 0}" showColumnStripes="${t.bandedCols ? 1 : 0}"/></table>`;
+      contentOverrides.push(`<Override PartName="/xl/tables/table${tableNo}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"/>`);
+      tableIds.push(addRel('table', `../tables/table${tableNo}.xml`));
+    }
+    const tableParts = tableIds.length ? `<tableParts count="${tableIds.length}">${tableIds.map((id) => `<tablePart r:id="${id}"/>`).join('')}</tableParts>` : '';
+
     files[`xl/worksheets/sheet${si + 1}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="${NS_MAIN}" xmlns:r="${NS_R}">`
       + (vba ? `<sheetPr codeName="${esc(vba.sheetCodes?.[sheet.name] ?? `Sheet${si + 1}`)}"/>` : '')
       + `<dimension ref="${dim}"/>`
@@ -1216,7 +1262,7 @@ export function writeXlsx(wb, { activeSheet = 0 } = {}) {
       + `<sheetData>${rowXml}</sheetData>`
       + autoFilter + merges + cf + dataValidations
       + '<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>'
-      + drawing + legacy
+      + drawing + legacy + tableParts
       + '</worksheet>';
     if (sheetRels.length) {
       files[`xl/worksheets/_rels/sheet${si + 1}.xml.rels`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="${NS_PKG}">${sheetRels.join('')}</Relationships>`;

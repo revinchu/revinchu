@@ -1,4 +1,5 @@
 // 통합 문서 모델: 시트 · 셀 · 재계산 · 실행 취소 · 행/열 구조 변경
+import { resolveStructRef } from './tables.js';
 import {
   parse, evaluateFormula, ERR, compareValues, isError, autoFormatFor,
   adjustFormulaForStructure, renameSheetInFormula, shiftFormula,
@@ -55,13 +56,13 @@ function newSheet(name) {
     name, cells: new Map(), colWidths: {}, rowHeights: {}, merges: [], cond: [],
     colStyles: {}, rowStyles: {}, allStyle: null, hiddenRows: {}, hiddenCols: {}, rowManual: {},
     freeze: { rows: 0, cols: 0 }, filter: null, charts: [], pivot: null,
-    validations: [], images: [], shapes: [],
+    validations: [], images: [], shapes: [], tables: [], slicers: [],
   };
 }
 
 /** 시트의 부가 속성 (셀 외) — 저장/복원/복제용 */
 const SHEET_PROPS = ['colWidths', 'rowHeights', 'merges', 'cond', 'colStyles', 'rowStyles', 'allStyle',
-  'hiddenRows', 'hiddenCols', 'rowManual', 'freeze', 'filter', 'charts', 'pivot', 'validations', 'images', 'shapes'];
+  'hiddenRows', 'hiddenCols', 'rowManual', 'freeze', 'filter', 'charts', 'pivot', 'validations', 'images', 'shapes', 'tables', 'slicers'];
 
 /** 숫자 키 객체의 키를 삽입/삭제에 맞춰 이동 */
 function shiftKeys(obj, index, count) {
@@ -154,7 +155,8 @@ export class Workbook {
     this.depth++;
     let v;
     try {
-      v = evaluateFormula(cell.ast, this.ctxFor(si));
+      const comma = k.indexOf(',');
+      v = evaluateFormula(cell.ast, this.ctxFor(si, Number(k.slice(k.indexOf(':') + 1, comma)), Number(k.slice(comma + 1))));
     } catch (e) {
       if (e instanceof RangeError) throw DEEP;
       throw e;
@@ -212,8 +214,22 @@ export class Workbook {
     return i;
   }
 
-  ctxFor(si) {
+  ctxFor(si, r = null, c = null) {
+    const here = r === null ? null : { si, r, c };
     return {
+      structRef: (table, spec) => {
+        const rg = resolveStructRef(this, table, spec, here);
+        if (!rg) return null;
+        const range = rg.r1 !== rg.r2 || rg.c1 !== rg.c2;
+        return { sheet: this.sheets[rg.si].name, r1: rg.r1, c1: rg.c1, r2: rg.r2, c2: rg.c2, range };
+      },
+      rowHidden: (sheet, row, manualToo) => {
+        const s = this.sheets[this.resolveSheet(sheet, si)];
+        if (!s) return false;
+        if (manualToo && s.hiddenRows?.[row]) return true;
+        if (s.filter?.hidden?.[row]) return true;
+        return (s.tables ?? []).some((t) => t.filter?.hidden?.[row]);
+      },
       cell: (sheet, r, c) => this.getValue(this.resolveSheet(sheet, si), r, c),
       range: (sheet, r1, c1, r2, c2) => {
         const s = this.resolveSheet(sheet, si);
@@ -471,6 +487,26 @@ export class Workbook {
       .filter((m) => m && (m.r2 > m.r1 || m.c2 > m.c1));
     target.cond = target.cond.map((rule) => adjustRange(rule, axis, index, count)).filter(Boolean);
     target.validations = target.validations.map((v) => adjustRange(v, axis, index, count)).filter(Boolean);
+    target.tables = (target.tables ?? []).map((t) => {
+      const rg = adjustRange(t, axis, index, count);
+      if (!rg) return null;
+      const nt = { ...t, ...rg };
+      if (isRow) {
+        if (t.filter) nt.filter = { ...t.filter, hidden: shiftKeys(t.filter.hidden, index, count) };
+      } else {
+        if (t.filter) nt.filter = { ...t.filter, criteria: shiftKeys(t.filter.criteria, index, count) };
+        nt.totalsFns = shiftKeys(t.totalsFns, index, count);
+        // 삭제된 열 이름은 빼고, 새 열에는 이름을 채움 (머리글이 없는 표용)
+        if (t.columns) {
+          const cols = [...t.columns];
+          const off = index - t.c1;
+          if (count > 0 && off >= 0 && off <= cols.length) cols.splice(off, 0, ...Array(count).fill(''));
+          else if (count < 0) cols.splice(Math.max(0, off), Math.min(-count, cols.length - Math.max(0, off)));
+          nt.columns = cols;
+        }
+      }
+      return nt;
+    }).filter(Boolean);
     if (isRow) {
       target.rowStyles = shiftKeys(target.rowStyles, index, count);
       target.hiddenRows = shiftKeys(target.hiddenRows, index, count);

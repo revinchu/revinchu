@@ -114,13 +114,14 @@ export const TABS = [
       ]),
       group('표', [
         large('insertPivot', 'pivot', '피벗 테이블'),
-        large('tableStyle', 'table', '표', { menu: 'tableStyles' }),
+        large('createTable', 'table', '표', { title: '표 만들기 (Ctrl+T, Ctrl+L)' }),
       ]),
       group('일러스트레이션', [
         large('insertPicture', 'picture', '그림', { title: '이 기기의 그림 삽입 (붙여넣기·끌어 놓기도 가능)' }),
         large('shapesMenu', 'shapes', '도형', { menu: 'shapes' }),
         large('insertTextbox', 'textbox', '텍스트 상자'),
       ]),
+      group('필터', [large('insertSlicer', 'slicer', '슬라이서', { title: '표나 피벗 테이블에 슬라이서 삽입' })]),
       group('차트', [
         large('chartColumn', 'chartColumn', '세로 막대형', { title: '세로 막대형 차트 삽입 (Alt+F1)' }),
         large('chartBar', 'chartBar', '가로 막대형'),
@@ -187,6 +188,7 @@ export const TABS = [
         ),
       ]),
       group('데이터 도구', [
+        large('textToColumns', 'textColumns', '텍스트 나누기', { title: '텍스트 나누기 (Alt+A+E)' }),
         large('dedupe', 'dedupe', '중복된 항목 제거'),
         large('dataValidation', 'validation', '데이터 유효성 검사', { menu: 'validation', split: true }),
       ]),
@@ -224,6 +226,47 @@ export const TABS = [
     ],
   },
   {
+    id: 'tableDesign', label: '테이블 디자인', context: 'table', groups: [
+      group('속성', [
+        col(
+          { type: 'text', cmd: 'tblName', stateKey: 'tblName', label: '표 이름:', title: '표 이름', width: 96 },
+          medium('resizeTable', 'tableResize', '표 크기 조정'),
+        ),
+      ]),
+      group('도구', [
+        col(
+          medium('pivotFromTable', 'pivot', '피벗 테이블로 요약'),
+          medium('dedupe', 'dedupe', '중복된 항목 제거'),
+          medium('convertToRange', 'tableConvert', '범위로 변환'),
+        ),
+        large('insertSlicer', 'slicer', '슬라이서 삽입'),
+      ]),
+      group('표 스타일 옵션', [
+        col(check('tblHeader', '머리글 행', 'tblHeader'), check('tblTotals', '요약 행', 'tblTotals'), check('tblBanded', '줄무늬 행', 'tblBanded')),
+        col(check('tblFirstCol', '첫째 열', 'tblFirstCol'), check('tblLastCol', '마지막 열', 'tblLastCol'), check('tblBandedCols', '줄무늬 열', 'tblBandedCols')),
+        col(check('tblFilter', '필터 단추', 'tblFilter')),
+      ]),
+      group('표 스타일', [large('tableStyleGallery', 'table', '빠른 스타일', { menu: 'tableStylesDesign' })]),
+    ],
+  },
+  {
+    id: 'slicerTab', label: '슬라이서', context: 'slicer', groups: [
+      group('슬라이서', [
+        col(
+          { type: 'text', cmd: 'slicerCaption', stateKey: 'slicerCaption', label: '캡션:', title: '슬라이서 캡션', width: 110 },
+          medium('slicerSettings', 'slicer', '슬라이서 설정'),
+        ),
+      ]),
+      group('필터', [
+        large('slicerClear', 'filterClear', '필터 지우기', { title: '필터 지우기 (Alt+C)' }),
+        large('slicerMulti', 'filter', '다중 선택', { title: '다중 선택 (Alt+S)', toggle: 'slicerMultiOn' }),
+      ]),
+      group('단추', [
+        { type: 'select', cmd: 'slicerCols', stateKey: 'slicerCols', cls: 'w60', title: '열 수', options: [1, 2, 3, 4, 5, 6].map((n) => ({ value: String(n), label: `열 ${n}` })) },
+      ]),
+    ],
+  },
+  {
     id: 'help', label: '도움말', groups: [
       group('도움말', [
         large('shortcuts', 'keyboard', '바로 가기 키'),
@@ -245,11 +288,25 @@ export function buildRibbon(app) {
 
   const keepFocus = (e) => e.preventDefault();
 
+  let context = new Set(); // 상황별 탭 (예: 'table' → 테이블 디자인)
+
+  function selectTab(id) {
+    const t = TABS.find((x) => x.id === id);
+    if (!t || t.file || (t.context && !context.has(t.context))) return;
+    ribbonEl.classList.remove('collapsed');
+    if (current === id) return;
+    current = id;
+    renderTabs();
+    renderRibbon();
+    app.refreshRibbon();
+  }
+
   function renderTabs() {
     tabsEl.replaceChildren();
     for (const t of TABS) {
+      if (t.context && !context.has(t.context)) continue;
       tabsEl.append(el('button', {
-        class: `ribbon-tab${t.file ? ' file' : ''}${t.id === current ? ' active' : ''}`,
+        class: `ribbon-tab${t.file ? ' file' : ''}${t.context ? ' contextual' : ''}${t.id === current ? ' active' : ''}`,
         onmousedown: keepFocus,
         onclick: () => {
           if (t.file) { app.run('backstage'); return; }
@@ -278,6 +335,7 @@ export function buildRibbon(app) {
       case 'col': return el('div', { class: 'rcol' }, it.items.map(makeItem));
       case 'sep': return el('span', { class: 'rsep' });
       case 'select': return makeSelect(it);
+      case 'text': return makeText(it);
       case 'check': return makeCheck(it);
       case 'color': return makeColor(it);
       default: return makeButton(it);
@@ -329,6 +387,18 @@ export function buildRibbon(app) {
     return sel;
   }
 
+  function makeText(it) {
+    const input = el('input', { class: 'rtext', title: it.title, style: { width: `${it.width ?? 110}px` } });
+    const commit = () => { app.run(it.cmd, input.value); };
+    input.addEventListener('change', commit);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); input.blur(); app.focusGrid(); }
+      if (e.key === 'Escape') { input.blur(); app.focusGrid(); }
+    });
+    bindings.push((s) => { if (document.activeElement !== input) input.value = s[it.stateKey] ?? ''; });
+    return el('label', { class: 'rbtn medium rtext-wrap' }, it.label ? el('span', {}, it.label) : null, input);
+  }
+
   function makeCheck(it) {
     const input = el('input', { type: 'checkbox' });
     input.addEventListener('change', () => { app.run(it.cmd, input.checked); app.focusGrid(); });
@@ -371,7 +441,18 @@ export function buildRibbon(app) {
   renderRibbon();
 
   return {
-    update(state) { for (const fn of bindings) fn(state); },
+    update(state) {
+      const next = new Set(state.context ?? []);
+      if ([...next].join() !== [...context].join()) {
+        const leaving = TABS.find((t) => t.id === current)?.context;
+        context = next;
+        if (leaving && !context.has(leaving)) { current = 'home'; renderRibbon(); }
+        renderTabs();
+      }
+      for (const fn of bindings) fn(state);
+    },
+    selectTab,
+    get current() { return current; },
     toggleCollapse() { ribbonEl.classList.toggle('collapsed'); },
   };
 }

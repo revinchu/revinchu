@@ -7,6 +7,7 @@ import { DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT } from './workbook.js';
 import { chartData, renderChartSvg } from './chart.js';
 import { shapeSvg } from './shapes.js';
 import { validationAt } from './validation.js';
+import { tableAt, tableCellStyle, tableFilterRange, styleByName } from './tables.js';
 
 export const DEFAULT_FONT = '맑은 고딕';
 export const DEFAULT_SIZE = 11;
@@ -177,7 +178,7 @@ export class GridView {
     const { wb, si } = this.host.state();
     const s = wb.sheets[si];
     this.cols = new Axis(DEFAULT_COL_WIDTH, s.colWidths, [s.hiddenCols], MAX_COLS);
-    this.rows = new Axis(DEFAULT_ROW_HEIGHT, s.rowHeights, [s.hiddenRows, s.filter?.hidden], MAX_ROWS);
+    this.rows = new Axis(DEFAULT_ROW_HEIGHT, s.rowHeights, [s.hiddenRows, s.filter?.hidden, ...(s.tables ?? []).map((t) => t.filter?.hidden)], MAX_ROWS);
     this.fr = Math.min(s.freeze?.rows || 0, MAX_ROWS - 1);
     this.fc = Math.min(s.freeze?.cols || 0, MAX_COLS - 1);
     this.frozenW = this.cols.pos(this.fc);
@@ -318,6 +319,13 @@ export class GridView {
   }
 
   onWheel(e) {
+    // 슬라이서 항목 목록은 그 안에서 스크롤
+    const list = e.target.closest?.('.sl-items');
+    if (list && !e.ctrlKey && list.scrollHeight > list.clientHeight) {
+      const atTop = list.scrollTop <= 0 && e.deltaY < 0;
+      const atEnd = list.scrollTop + list.clientHeight >= list.scrollHeight - 1 && e.deltaY > 0;
+      if (!atTop && !atEnd) return;
+    }
     if (e.ctrlKey) {
       e.preventDefault();
       this.host.onZoomWheel?.(e.deltaY < 0 ? 10 : -10);
@@ -502,6 +510,8 @@ export class GridView {
     const inMerge = (r, c) => merges.some((m) => r >= m.r1 && r <= m.r2 && c >= m.c1 && c <= m.c2);
     const html = [];
     const hasLine = !!(sheet.allStyle || Object.keys(sheet.colStyles).length || Object.keys(sheet.rowStyles).length);
+    const tables = (sheet.tables ?? []).filter((t) => t.r1 <= r2 && t.r2 >= r1 && t.c1 <= c2 && t.c2 >= c1 && styleByName(t.style));
+    const inTable = (r, c) => tables.some((t) => r >= t.r1 && r <= t.r2 && c >= t.c1 && c <= t.c2);
     for (const r of visRows) {
       // 창 왼쪽 밖에서 넘쳐 들어오는 텍스트
       if (c1 > 0) {
@@ -514,20 +524,24 @@ export class GridView {
       }
       for (const c of visCols) {
         if (inMerge(r, c)) continue;
-        if (!hasLine && !sheet.cells.has(`${r},${c}`)) continue;
+        if (!hasLine && !sheet.cells.has(`${r},${c}`) && !inTable(r, c)) continue;
         html.push(this.cellHtml(r, c, p, sheet, merges));
       }
     }
     for (const m of merges) html.push(this.cellHtml(m.r1, m.c1, p, sheet, merges, m));
 
-    // 필터 단추
-    const f = sheet.filter;
-    if (f && f.r1 >= r1 && f.r1 <= r2) {
+    // 필터 단추 (시트 필터 + 표마다)
+    const targets = [
+      ...(sheet.filter ? [['', sheet.filter]] : []),
+      ...(sheet.tables ?? []).filter((t) => t.filter && t.header).map((t) => [t.id, tableFilterRange(t)]),
+    ];
+    for (const [tid, f] of targets) {
+      if (!(f.r1 >= r1 && f.r1 <= r2)) continue;
       for (let c = Math.max(f.c1, c1); c <= Math.min(f.c2, c2); c++) {
         if (!cols.size(c) || !rows.size(f.r1)) continue;
         const active = Array.isArray(f.criteria?.[c]);
         const sort = f.sort?.col === c ? (f.sort.asc ? ' asc' : ' desc') : '';
-        html.push(`<div class="fbtn${active ? ' on' : ''}${sort}" data-c="${c}" title="${active ? '필터 적용됨' : '필터'}" style="left:${cols.pos(c + 1) - 18 - p.ox}px;top:${rows.pos(f.r1 + 1) - 18 - p.oy}px"></div>`);
+        html.push(`<div class="fbtn${active ? ' on' : ''}${sort}" data-c="${c}" data-t="${esc(tid)}" title="${active ? '필터 적용됨' : '필터'}" style="left:${cols.pos(c + 1) - 18 - p.ox}px;top:${rows.pos(f.r1 + 1) - 18 - p.oy}px"></div>`);
       }
     }
     p.cells.innerHTML = html.join('');
@@ -539,6 +553,16 @@ export class GridView {
     const { wb, si } = st;
     const cell = wb.getCell(si, r, c);
     let style = wb.styleAt(si, r, c);
+    const tbl = tableAt(sheet, r, c);
+    if (tbl) {
+      // 표 서식은 셀에 직접 지정한 서식 아래에 깔림
+      const ts = tableCellStyle(tbl, r, c);
+      if (ts) {
+        const own = {};
+        for (const [k, val] of Object.entries(style)) if (val !== undefined) own[k] = val;
+        style = { ...ts, ...own };
+      }
+    }
     const v = wb.getValue(si, r, c);
     const x = this.cols.pos(c);
     const y = this.rows.pos(r);
@@ -564,13 +588,14 @@ export class GridView {
     }
     let text;
     let align;
-    if (st.showFormulas && cell?.formula) { text = cell.raw; align = 'left'; } else ({ text, align } = formatValue(v, style));
+    let fmtColor = null;
+    if (st.showFormulas && cell?.formula) { text = cell.raw; align = 'left'; } else ({ text, align, color: fmtColor } = formatValue(v, style));
     const eff = style.align || align;
     const css = [`left:${x - 1 - p.ox}px`, `top:${y - 1 - p.oy}px`, `width:${w + 1}px`, `height:${h + 1}px`];
     if (style.bold) css.push('font-weight:700');
     if (style.italic) css.push('font-style:italic');
     if (style.underline || style.strike) css.push(`text-decoration:${style.underline ? 'underline ' : ''}${style.strike ? 'line-through' : ''}`);
-    if (style.color) css.push(`color:${style.color}`);
+    if (fmtColor || style.color) css.push(`color:${fmtColor || style.color}`);
     if (style.font) css.push(`font-family:${fontStack(style.font)}`);
     if (style.size) css.push(`font-size:${style.size}pt`);
     if (eff !== 'left') css.push(`justify-content:${eff === 'center' ? 'center' : 'flex-end'};text-align:${eff}`);
@@ -605,7 +630,8 @@ export class GridView {
     const sheet = wb.sheets[si];
     const images = sheet.images ?? [];
     const shapes = sheet.shapes ?? [];
-    if (!sheet.charts.length && !images.length && !shapes.length) { p.objects.innerHTML = ''; return; }
+    const slicers = sheet.slicers ?? [];
+    if (!sheet.charts.length && !images.length && !shapes.length && !slicers.length) { p.objects.innerHTML = ''; return; }
     const winX1 = p.scrollX ? this.frozenW : 0;
     const winY1 = p.scrollY ? this.frozenH : 0;
     const winX2 = p.scrollX ? Infinity : this.frozenW;
@@ -621,9 +647,11 @@ export class GridView {
     // 엑셀처럼 그림 → 도형 → 차트 순서가 아니라 저장된 순서(z)대로 겹침
     const all = [
       ...sheet.charts.map((o) => ['charts', o]), ...images.map((o) => ['images', o]), ...shapes.map((o) => ['shapes', o]),
+      ...slicers.map((o) => ['slicers', o]),
     ].sort((a, b) => (a[1].z ?? 0) - (b[1].z ?? 0));
     for (const [prop, o] of all) {
       if (prop === 'charts') box(o, 'chart', this.chartSvg(o));
+      else if (prop === 'slicers') box(o, `slicer sl-${o.color ?? 'blue'}`, this.slicerHtml(o));
       else if (prop === 'images') box(o, 'pic', `<img src="${esc(o.src)}" alt="${esc(o.name ?? '')}" draggable="false">`);
       else {
         const text = o.text && o.kind !== 'line'
@@ -633,6 +661,18 @@ export class GridView {
       }
     }
     p.objects.innerHTML = html.join('');
+  }
+
+  /** 슬라이서: 머리글(캡션·다중 선택·필터 지우기) + 항목 단추 */
+  slicerHtml(sl) {
+    const m = this.host.slicerModel?.(sl) ?? { items: [], filtered: false };
+    const items = m.broken
+      ? `<div class="sl-broken">${esc(m.broken)}</div>`
+      : m.items.map((it) => `<button type="button" class="sl-item${it.selected ? ' on' : ''}${it.hasData ? '' : ' nodata'}" data-k="${esc(it.key)}" title="${esc(it.text)}">${esc(it.text)}</button>`).join('');
+    return `<div class="sl-head"><span class="sl-cap">${esc(sl.caption ?? '')}</span>`
+      + `<button type="button" class="sl-multi${sl.multi ? ' on' : ''}" title="다중 선택 (Alt+S)">☰</button>`
+      + `<button type="button" class="sl-clear${m.filtered ? '' : ' off'}" title="필터 지우기 (Alt+C)">✕</button></div>`
+      + `<div class="sl-items" style="grid-template-columns:repeat(${Math.max(1, sl.columns ?? 1)}, minmax(0, 1fr))">${items}</div>`;
   }
 
   chartSvg(ch) {
@@ -700,7 +740,13 @@ export class GridView {
     // 데이터 유효성 검사: 목록 단추 · 잘못된 데이터 동그라미
     if (!st.editing && !st.chartSel) {
       const rule = validationAt(wb.sheets[si], active.r, active.c);
-      if (rule?.type === 'list' && rule.showDropdown !== false) {
+      const tt = tableAt(wb.sheets[si], active.r, active.c);
+      if (tt?.totals && active.r === tt.r2) {
+        const a = this.sheetRect(am);
+        const x = a.x + a.w + 1;
+        const y = a.y + a.h - 18;
+        if (x >= bx1 && x <= bx2 && y + 18 >= by1 && y <= by2) html.push(`<div class="dv-btn" data-tt="1" title="요약 함수 선택" style="left:${x - p.ox}px;top:${y - p.oy}px"></div>`);
+      } else if (rule?.type === 'list' && rule.showDropdown !== false) {
         const a = this.sheetRect(am);
         const x = a.x + a.w + 1;
         const y = a.y + a.h - 18;
