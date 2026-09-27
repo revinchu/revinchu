@@ -8,3 +8,4 @@ debug_*.html
 venv/
 .env
 tabula/data/
+tabula/dist/

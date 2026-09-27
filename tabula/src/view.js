@@ -1,10 +1,12 @@
-// 가상 스크롤 그리드: 화면에 보이는 행/열만 그림 (1,048,576행 × 16,384열 지원)
+// 가상 스크롤 그리드: 화면에 보이는 행/열만 그림 (10,000,000행 × 16,384열 지원)
 // 틀 고정은 4개 창(TL/TR/BL/BR)으로, 각 창은 시트 좌표계 콘텐츠를 transform 으로 이동시켜 표시.
 import { Axis } from './axis.js';
 import { colToName, MAX_ROWS, MAX_COLS, isError, compareValues } from './formula.js';
 import { formatValue, formatGeneral, parseInput } from './format.js';
 import { DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT } from './workbook.js';
 import { chartData, renderChartSvg } from './chart.js';
+import { shapeSvg } from './shapes.js';
+import { validationAt } from './validation.js';
 
 export const DEFAULT_FONT = '맑은 고딕';
 export const DEFAULT_SIZE = 11;
@@ -596,21 +598,39 @@ export class GridView {
     return `<div class="c${cls.length ? ` ${cls.join(' ')}` : ''}" data-r="${r}" data-c="${c}" style="${css.join(';')}"${comment}><span>${esc(text)}</span></div>`;
   }
 
-  /** 차트 */
+  /** 그림 개체: 차트 · 그림 · 도형 */
   renderObjects(p) {
     const st = this.host.state();
     const { wb, si } = st;
     const sheet = wb.sheets[si];
-    if (!sheet.charts.length) { p.objects.innerHTML = ''; return; }
+    const images = sheet.images ?? [];
+    const shapes = sheet.shapes ?? [];
+    if (!sheet.charts.length && !images.length && !shapes.length) { p.objects.innerHTML = ''; return; }
     const winX1 = p.scrollX ? this.frozenW : 0;
     const winY1 = p.scrollY ? this.frozenH : 0;
     const winX2 = p.scrollX ? Infinity : this.frozenW;
     const winY2 = p.scrollY ? Infinity : this.frozenH;
     const html = [];
-    for (const ch of sheet.charts) {
-      if (ch.x + ch.w < winX1 || ch.x > winX2 || ch.y + ch.h < winY1 || ch.y > winY2) continue;
-      const selected = st.chartSel === ch.id;
-      html.push(`<div class="chart${selected ? ' sel' : ''}" data-id="${esc(ch.id)}" style="left:${ch.x - p.ox}px;top:${ch.y - p.oy}px;width:${ch.w}px;height:${ch.h}px">${this.chartSvg(ch)}${selected ? '<i class="ch-h nw"></i><i class="ch-h ne"></i><i class="ch-h sw"></i><i class="ch-h se"></i>' : ''}</div>`);
+    const handles = '<i class="ch-h nw"></i><i class="ch-h ne"></i><i class="ch-h sw"></i><i class="ch-h se"></i>';
+    const box = (o, cls, inner) => {
+      const h = Math.max(o.h, cls.includes('line') ? 1 : 0);
+      if (o.x + o.w < winX1 || o.x > winX2 || o.y + h < winY1 || o.y > winY2) return;
+      const selected = st.chartSel === o.id;
+      html.push(`<div class="obj ${cls}${selected ? ' sel' : ''}" data-id="${esc(o.id)}" style="left:${o.x - p.ox}px;top:${o.y - p.oy}px;width:${o.w}px;height:${h}px">${inner}${selected ? handles : ''}</div>`);
+    };
+    // 엑셀처럼 그림 → 도형 → 차트 순서가 아니라 저장된 순서(z)대로 겹침
+    const all = [
+      ...sheet.charts.map((o) => ['charts', o]), ...images.map((o) => ['images', o]), ...shapes.map((o) => ['shapes', o]),
+    ].sort((a, b) => (a[1].z ?? 0) - (b[1].z ?? 0));
+    for (const [prop, o] of all) {
+      if (prop === 'charts') box(o, 'chart', this.chartSvg(o));
+      else if (prop === 'images') box(o, 'pic', `<img src="${esc(o.src)}" alt="${esc(o.name ?? '')}" draggable="false">`);
+      else {
+        const text = o.text && o.kind !== 'line'
+          ? `<div class="sh-text" style="justify-content:${o.kind === 'textbox' ? 'flex-start' : 'center'};text-align:${o.align ?? 'center'};color:${esc(o.color ?? '#000')};font-size:${o.size ?? 11}pt;${o.bold ? 'font-weight:700;' : ''}">${esc(o.text)}</div>`
+          : '';
+        box(o, `shape ${o.kind === 'line' ? 'line' : ''}`, shapeSvg(o) + text);
+      }
     }
     p.objects.innerHTML = html.join('');
   }
@@ -676,6 +696,20 @@ export class GridView {
       const hx = selRect.x + selRect.w - 4;
       const hy = selRect.y + selRect.h - 4;
       if (hx >= bx1 && hx <= bx2 && hy >= by1 && hy <= by2) html.push(`<div class="fill-handle" style="left:${hx - p.ox}px;top:${hy - p.oy}px"></div>`);
+    }
+    // 데이터 유효성 검사: 목록 단추 · 잘못된 데이터 동그라미
+    if (!st.editing && !st.chartSel) {
+      const rule = validationAt(wb.sheets[si], active.r, active.c);
+      if (rule?.type === 'list' && rule.showDropdown !== false) {
+        const a = this.sheetRect(am);
+        const x = a.x + a.w + 1;
+        const y = a.y + a.h - 18;
+        if (x >= bx1 && x <= bx2 && y + 18 >= by1 && y <= by2) html.push(`<div class="dv-btn" title="목록에서 선택" style="left:${x - p.ox}px;top:${y - p.oy}px"></div>`);
+      }
+    }
+    for (const cc of st.circles ?? []) {
+      const r = this.sheetRect({ r1: cc.r, c1: cc.c, r2: cc.r, c2: cc.c });
+      html.push(box('dv-circle', { x: r.x - 4, y: r.y - 3, w: r.w + 8, h: r.h + 6 }));
     }
     if (st.clip && st.clip.si === si) {
       const r = this.sheetRect(st.clip);

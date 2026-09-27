@@ -3,12 +3,13 @@ import { unzip, zip, textOf } from './zip.js';
 import { parseXml, child, kids, descendants, allText, esc } from './xml.js';
 import {
   parse, tokenize, shiftFormula, colToName, nameToCol, cellName, parseRangeName, FUNCS, isError,
-  quoteSheetName, MAX_ROWS, MAX_COLS,
+  quoteSheetName, MAX_ROWS, MAX_COLS, EXCEL_MAX_ROWS,
 } from './formula.js';
 import { parseInput, formatGeneral } from './format.js';
 import { DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT } from './workbook.js';
 import { chartLayout, PALETTE } from './chart.js';
 import { Axis } from './axis.js';
+import { toBase64, fromBase64 } from './vba.js';
 
 const NS_MAIN = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
 const NS_R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -302,7 +303,7 @@ function readSheet(files, path, ctx) {
   const root = parseXml(textOf(files[path]));
   const sheet = {
     cells: {}, colWidths: {}, rowHeights: {}, merges: [], cond: [], colStyles: {}, rowStyles: {},
-    hiddenRows: {}, hiddenCols: {}, rowManual: {}, freeze: { rows: 0, cols: 0 }, filter: null, charts: [],
+    hiddenRows: {}, hiddenCols: {}, rowManual: {}, freeze: { rows: 0, cols: 0 }, filter: null, charts: [], images: [], shapes: [], validations: [],
   };
   const { xfs, dxfs, strings } = ctx;
   const styleOf = (s) => {
@@ -464,10 +465,49 @@ function readSheet(files, path, ctx) {
     }
   }
   const drawing = child(root, 'drawing');
-  if (drawing && rels[rid(drawing)]) {
-    sheet.charts = readDrawing(files, rels[rid(drawing)].target, sheet, ctx);
-  }
+  if (drawing && rels[rid(drawing)]) Object.assign(sheet, readDrawing(files, rels[rid(drawing)].target, sheet, ctx));
+  sheet.validations = readValidations(root);
+  sheet.codeName = child(root, 'sheetPr')?.attrs.codeName;
   return sheet;
+}
+
+const DV_TYPES = new Set(['whole', 'decimal', 'list', 'date', 'time', 'textLength', 'custom']);
+
+/** <dataValidations> (+ 다른 시트를 참조하는 x14 확장) → 규칙 목록 */
+function readValidations(root) {
+  const out = [];
+  const add = (dv, sqref, f1, f2) => {
+    const a = dv.attrs;
+    const type = DV_TYPES.has(a.type) ? a.type : 'any';
+    const base = {
+      type, op: a.operator ?? 'between',
+      allowBlank: a.allowBlank === '1' || a.allowBlank === 'true',
+      showDropdown: !(a.showDropDown === '1' || a.showDropDown === 'true'), // 엑셀 속성은 '숨기기' 의미
+      showError: a.showErrorMessage === '1' || a.showErrorMessage === 'true',
+      showPrompt: a.showInputMessage === '1' || a.showInputMessage === 'true',
+      errorStyle: a.errorStyle === 'warning' ? 'warning' : a.errorStyle === 'information' ? 'info' : 'stop',
+    };
+    if (f1 !== undefined && f1 !== '') base.f1 = f1;
+    if (f2 !== undefined && f2 !== '') base.f2 = f2;
+    for (const k of ['errorTitle', 'error', 'promptTitle', 'prompt']) if (a[k]) base[k] = a[k];
+    if (type === 'any' && !base.prompt) return;
+    for (const part of String(sqref ?? '').trim().split(/\s+/)) {
+      if (!part) continue;
+      const rg = /^[A-Z]+:[A-Z]+$/i.test(part) ? parseRangeName(`${part.split(':')[0]}1:${part.split(':')[1]}${MAX_ROWS}`) : refToRange(part);
+      if (rg) out.push({ ...rg, r2: Math.min(rg.r2, MAX_ROWS - 1), ...base });
+    }
+  };
+  for (const dv of kids(child(root, 'dataValidations'), 'dataValidation')) {
+    add(dv, dv.attrs.sqref, child(dv, 'formula1')?.text, child(dv, 'formula2')?.text);
+  }
+  const ext = descendants(child(root, 'extLst'), 'dataValidations');
+  for (const group of ext) {
+    for (const dv of kids(group, 'dataValidation')) {
+      const f = (n) => { const el = child(dv, n); return el ? (child(el, 'f')?.text ?? el.text) : undefined; };
+      add(dv, child(dv, 'sqref')?.text ?? dv.attrs.sqref, f('formula1'), f('formula2'));
+    }
+  }
+  return out;
 }
 
 function numberRaw(v, style) {
@@ -484,9 +524,42 @@ function numberRaw(v, style) {
   return String(v);
 }
 
+const SCHEME_INDEX = { lt1: 0, bg1: 0, dk1: 1, tx1: 1, lt2: 2, bg2: 2, dk2: 3, tx2: 3, accent1: 4, accent2: 5, accent3: 6, accent4: 7, accent5: 8, accent6: 9 };
+const PRST_KIND = {
+  rect: 'rect', roundRect: 'roundRect', ellipse: 'ellipse', triangle: 'triangle', rtTriangle: 'triangle',
+  rightArrow: 'arrow', leftArrow: 'arrow', line: 'line', straightConnector1: 'line', bentConnector3: 'line',
+  flowChartProcess: 'rect', flowChartAlternateProcess: 'roundRect', flowChartConnector: 'ellipse', wedgeRectCallout: 'rect',
+};
+const MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', bmp: 'image/bmp', svg: 'image/svg+xml', webp: 'image/webp' };
+
+/** DrawingML 색 (srgbClr / schemeClr / sysClr) */
+function dmlColor(el, theme) {
+  if (!el) return null;
+  const c = el.children.find((x) => ['srgbClr', 'schemeClr', 'sysClr', 'prstClr'].includes(x.name));
+  if (!c) return null;
+  let hex = null;
+  if (c.name === 'srgbClr') hex = c.attrs.val;
+  else if (c.name === 'sysClr') hex = c.attrs.lastClr ?? (c.attrs.val === 'window' ? 'FFFFFF' : '000000');
+  else if (c.name === 'schemeClr') hex = theme[SCHEME_INDEX[c.attrs.val] ?? 4];
+  else if (c.name === 'prstClr') hex = { black: '000000', white: 'FFFFFF', red: 'FF0000', blue: '0000FF', green: '00FF00', yellow: 'FFFF00' }[c.attrs.val] ?? '000000';
+  if (!hex) return null;
+  const lum = child(c, 'lumMod');
+  const off = child(c, 'lumOff');
+  const shade = child(c, 'shade');
+  const tint = child(c, 'tint');
+  let t = 0;
+  if (lum && off) t = Number(off.attrs.val) / 100000;
+  else if (lum) t = Number(lum.attrs.val) / 100000 - 1;
+  else if (shade) t = Number(shade.attrs.val) / 100000 - 1;
+  else if (tint) t = 1 - Number(tint.attrs.val) / 100000;
+  return `#${applyTint(hex.toUpperCase(), t).toLowerCase()}`;
+}
+
 function readDrawing(files, path, sheet, ctx) {
+  const out = { charts: [], images: [], shapes: [] };
+  let z = 0; // 겹치는 순서
   const xml = textOf(files[path]);
-  if (!xml) return [];
+  if (!xml) return out;
   const root = parseXml(xml);
   const rels = relsOf(files, path);
   const colAxis = new Axis(DEFAULT_COL_WIDTH, sheet.colWidths, [], MAX_COLS);
@@ -495,35 +568,121 @@ function readDrawing(files, path, sheet, ctx) {
     const n = (name) => Number(child(el, name)?.text ?? 0);
     return { x: colAxis.pos(n('col')) + n('colOff') / EMU, y: rowAxis.pos(n('row')) + n('rowOff') / EMU };
   };
-  const charts = [];
+  const uid = (p) => `${p}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const round = (b) => ({ x: Math.round(b.x), y: Math.round(b.y), w: Math.max(1, Math.round(b.w)), h: Math.max(1, Math.round(b.h)) });
+
+  // 도형 한 개 → 모델 (box: 시트 좌표 px)
+  const readShape = (el, box) => {
+    const spPr = child(el, 'spPr');
+    const prst = descendants(spPr, 'prstGeom')[0]?.attrs.prst ?? 'rect';
+    const isText = descendants(child(el, 'nvSpPr'), 'cNvSpPr')[0]?.attrs.txBox === '1';
+    const style = child(el, 'style');
+    let fill = null;
+    if (child(spPr, 'solidFill')) fill = dmlColor(child(spPr, 'solidFill'), ctx.theme);
+    else if (!child(spPr, 'noFill') && style && !isText && el.name === 'sp') fill = dmlColor(child(style, 'fillRef'), ctx.theme);
+    const ln = child(spPr, 'ln');
+    let stroke = null;
+    if (ln && child(ln, 'solidFill')) stroke = dmlColor(child(ln, 'solidFill'), ctx.theme);
+    else if (!(ln && child(ln, 'noFill')) && style) stroke = dmlColor(child(style, 'lnRef'), ctx.theme);
+    if (isText && !ln) stroke = null;
+    const paras = descendants(child(el, 'txBody'), 'p');
+    const text = paras.map((p) => descendants(p, 't').map((t) => t.text).join('')).join('\n');
+    const rPr = descendants(child(el, 'txBody'), 'rPr')[0] ?? descendants(child(el, 'txBody'), 'defRPr')[0];
+    const algn = descendants(child(el, 'txBody'), 'pPr')[0]?.attrs.algn;
+    const shape = {
+      id: uid('sh'), kind: isText ? 'textbox' : PRST_KIND[prst] ?? 'rect', ...round(box), z: ++z,
+      fill, stroke, text,
+    };
+    const xf = descendants(spPr, 'xfrm')[0];
+    if ((prst === 'leftArrow') !== (xf?.attrs.flipH === '1')) shape.flip = true;
+    if (xf?.attrs.flipV === '1') shape.flipV = true;
+    const lw = Number(ln?.attrs.w);
+    if (lw && stroke) shape.strokeWidth = Math.round((lw / EMU) * 4) / 4;
+    if (rPr?.attrs.sz) shape.size = Number(rPr.attrs.sz) / 100;
+    if (rPr?.attrs.b === '1') shape.bold = true;
+    const tc = rPr && dmlColor(child(rPr, 'solidFill'), ctx.theme);
+    if (tc) shape.color = tc;
+    else if (!isText && fill) shape.color = '#ffffff';
+    if (algn) shape.align = algn === 'ctr' ? 'center' : algn === 'r' ? 'right' : 'left';
+    else if (!isText) shape.align = 'center';
+    out.shapes.push(shape);
+  };
+
+  const readPic = (el, box) => {
+    const blip = descendants(el, 'blip')[0];
+    const rel = blip && rels[rid(blip) ?? blip.attrs['r:embed']] ;
+    const embed = blip && Object.keys(blip.attrs).find((k) => k.endsWith(':embed') || k === 'embed');
+    const target = rels[blip?.attrs[embed]]?.target ?? rel?.target;
+    const bytes = target && files[target];
+    if (!bytes) return;
+    const ext = target.split('.').pop().toLowerCase();
+    const mime = MIME[ext];
+    if (!mime) { ctx.warnings.add(`지원하지 않는 그림 형식(${ext})은 가져오지 않았습니다.`); return; }
+    const name = descendants(child(el, 'nvPicPr'), 'cNvPr')[0]?.attrs.name ?? '그림';
+    out.images.push({ id: uid('im'), name, ...round(box), z: ++z, src: `data:${mime};base64,${toBase64(bytes)}` });
+  };
+
+  // 그룹 도형 안의 좌표 변환
+  const walk = (el, box, map) => {
+    const place = (node) => {
+      const xfrm = descendants(child(node, 'spPr') ?? child(node, 'grpSpPr'), 'xfrm')[0];
+      if (!map || !xfrm) return box;
+      const off = child(xfrm, 'off');
+      const ext = child(xfrm, 'ext');
+      return map(Number(off?.attrs.x ?? 0), Number(off?.attrs.y ?? 0), Number(ext?.attrs.cx ?? 0), Number(ext?.attrs.cy ?? 0));
+    };
+    switch (el.name) {
+      case 'sp': case 'cxnSp': readShape(el, place(el)); break;
+      case 'pic': readPic(el, place(el)); break;
+      case 'graphicFrame': {
+        const chartRef = descendants(el, 'chart')[0];
+        const target = chartRef && rels[rid(chartRef)]?.target;
+        const chart = target && readChart(files, target);
+        if (chart) {
+          const b = round(place(el));
+          out.charts.push({ id: uid('c'), ...chart, ...b, w: Math.max(120, b.w), h: Math.max(90, b.h), z: ++z });
+        }
+        break;
+      }
+      case 'grpSp': {
+        const gb = place(el);
+        const xfrm = descendants(child(el, 'grpSpPr'), 'xfrm')[0];
+        const chOff = child(xfrm, 'chOff');
+        const chExt = child(xfrm, 'chExt');
+        const cx = Number(chExt?.attrs.cx) || 1;
+        const cy = Number(chExt?.attrs.cy) || 1;
+        const ox = Number(chOff?.attrs.x ?? 0);
+        const oy = Number(chOff?.attrs.y ?? 0);
+        const inner = (x, y, w, h) => ({
+          x: gb.x + ((x - ox) / cx) * gb.w, y: gb.y + ((y - oy) / cy) * gb.h, w: (w / cx) * gb.w, h: (h / cy) * gb.h,
+        });
+        for (const k of el.children) if (['sp', 'cxnSp', 'pic', 'grpSp', 'graphicFrame'].includes(k.name)) walk(k, gb, inner);
+        break;
+      }
+      default:
+    }
+  };
+
   for (const anchor of root.children) {
-    const chartRef = descendants(anchor, 'chart')[0];
-    if (!chartRef || !rels[rid(chartRef)]) continue;
-    let x;
-    let y;
-    let w;
-    let h;
+    let box;
     if (anchor.name === 'twoCellAnchor') {
       const a = point(child(anchor, 'from'));
       const b = point(child(anchor, 'to'));
-      ({ x, y } = a);
-      w = b.x - a.x;
-      h = b.y - a.y;
+      box = { x: a.x, y: a.y, w: b.x - a.x, h: b.y - a.y };
     } else {
       const from = child(anchor, 'from');
       const pos = child(anchor, 'pos');
       const ext = child(anchor, 'ext');
-      ({ x, y } = from ? point(from) : { x: Number(pos?.attrs.x ?? 0) / EMU, y: Number(pos?.attrs.y ?? 0) / EMU });
-      w = Number(ext?.attrs.cx ?? 480 * EMU) / EMU;
-      h = Number(ext?.attrs.cy ?? 288 * EMU) / EMU;
+      const p0 = from ? point(from) : { x: Number(pos?.attrs.x ?? 0) / EMU, y: Number(pos?.attrs.y ?? 0) / EMU };
+      box = { ...p0, w: Number(ext?.attrs.cx ?? 480 * EMU) / EMU, h: Number(ext?.attrs.cy ?? 288 * EMU) / EMU };
     }
-    const chart = readChart(files, rels[rid(chartRef)].target, ctx);
-    if (chart) charts.push({ id: `c${charts.length + 1}${Date.now().toString(36)}`, ...chart, x: Math.round(x), y: Math.round(y), w: Math.round(Math.max(120, w)), h: Math.round(Math.max(90, h)) });
+    const content = anchor.children.find((k) => ['sp', 'cxnSp', 'pic', 'grpSp', 'graphicFrame'].includes(k.name));
+    if (content) walk(content, box, null);
   }
-  return charts;
+  return out;
 }
 
-function readChart(files, path, ctx) {
+function readChart(files, path) {
   const xml = textOf(files[path]);
   if (!xml) return null;
   const root = parseXml(xml);
@@ -554,7 +713,6 @@ function readChart(files, path, ctx) {
   const title = titleEl ? descendants(titleEl, 't').map((t) => t.text).join('') : '';
   const out = { type, title, range };
   if (sheetName) out.sheet = sheetName;
-  void ctx;
   return out;
 }
 
@@ -570,9 +728,10 @@ export function readXlsx(bytes) {
   const { xfs, dxfs } = readStyles(files, wbRels, theme);
   const ssRel = Object.values(wbRels).find((r) => r.type === 'sharedStrings');
   const strings = ssRel && files[ssRel.target] ? kids(parseXml(textOf(files[ssRel.target])), 'si').map(allText) : [];
-  const ctx = { xfs, dxfs, strings, theme };
+  const ctx = { xfs, dxfs, strings, theme, warnings: new Set() };
   const sheets = [];
   const warnings = [];
+  const sheetCodes = {};
   let unsupported = 0;
   for (const sh of kids(child(wbRoot, 'sheets'), 'sheet')) {
     const rel = wbRels[rid(sh)];
@@ -581,14 +740,27 @@ export function readXlsx(bytes) {
       continue;
     }
     const sheet = readSheet(files, rel.target, ctx);
+    if (sheet.codeName) sheetCodes[sh.attrs.name.slice(0, 31)] = sheet.codeName;
+    delete sheet.codeName;
     unsupported += sheet.unsupported;
     delete sheet.unsupported;
     sheets.push({ name: sh.attrs.name.slice(0, 31), ...sheet });
   }
   if (unsupported) warnings.push(`지원하지 않는 수식 ${unsupported}개는 계산된 값으로 가져왔습니다.`);
+  warnings.push(...ctx.warnings);
   if (!sheets.length) throw new Error('가져올 시트가 없습니다');
+  const data = { sheets };
+  // 매크로(.xlsm): vbaProject.bin 을 그대로 보존 (실행하지 않음)
+  const vbaRel = Object.values(wbRels).find((r) => r.type === 'vbaProject');
+  if (vbaRel && files[vbaRel.target]) {
+    data.vba = {
+      bin: toBase64(files[vbaRel.target]),
+      codeName: child(wbRoot, 'workbookPr')?.attrs.codeName ?? null,
+      sheetCodes,
+    };
+  }
   const active = Number(descendants(child(wbRoot, 'bookViews'), 'workbookView')[0]?.attrs.activeTab ?? 0);
-  return { data: { sheets }, active: Math.min(active, sheets.length - 1), warnings };
+  return { data, active: Math.min(active, sheets.length - 1), warnings };
 }
 
 function relsTarget(files, path, type) {
@@ -811,9 +983,61 @@ function chartXml(wb, si, chart) {
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="${NS_R}"><c:roundedCorners val="0"/><c:chart>${title}<c:plotArea><c:layout/>${group}${pie ? '' : catAx + valAx}</c:plotArea>${legend}<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart></c:chartSpace>`;
 }
 
-/**
- * Workbook → xlsx 바이트
- */
+const KIND_PRST = { rect: 'rect', roundRect: 'roundRect', ellipse: 'ellipse', triangle: 'triangle', arrow: 'rightArrow', textbox: 'rect', line: 'straightConnector1' };
+const hex6 = (c) => (c ?? '#000000').replace('#', '').toUpperCase().padStart(6, '0').slice(0, 6);
+
+/** 도형 → <xdr:sp> / <xdr:cxnSp> */
+function shapeXml(sh, id, xfrm) {
+  const name = esc(sh.name || `${sh.kind === 'textbox' ? 'TextBox' : '도형'} ${id - 1}`);
+  const fill = sh.fill ? `<a:solidFill><a:srgbClr val="${hex6(sh.fill)}"/></a:solidFill>` : '<a:noFill/>';
+  const ln = sh.stroke ? `<a:ln w="${Math.round((sh.strokeWidth ?? 1) * EMU)}"><a:solidFill><a:srgbClr val="${hex6(sh.stroke)}"/></a:solidFill>${sh.kind === 'line' && sh.arrow ? '<a:tailEnd type="triangle"/>' : ''}</a:ln>` : '<a:ln><a:noFill/></a:ln>';
+  if (sh.kind === 'line') {
+    return `<xdr:cxnSp macro=""><xdr:nvCxnSpPr><xdr:cNvPr id="${id}" name="${name}"/><xdr:cNvCxnSpPr/></xdr:nvCxnSpPr><xdr:spPr>${xfrm(sh)}<a:prstGeom prst="line"><a:avLst/></a:prstGeom>${ln}</xdr:spPr></xdr:cxnSp>`;
+  }
+  const algn = sh.align === 'center' ? 'ctr' : sh.align === 'right' ? 'r' : 'l';
+  const rPr = `<a:rPr lang="ko-KR" sz="${Math.round((sh.size ?? 11) * 100)}"${sh.bold ? ' b="1"' : ''}><a:solidFill><a:srgbClr val="${hex6(sh.color ?? '#000000')}"/></a:solidFill></a:rPr>`;
+  const paras = String(sh.text ?? '').split('\n').map((line) => `<a:p><a:pPr algn="${algn}"/>${line ? `<a:r>${rPr}<a:t>${esc(line)}</a:t></a:r>` : `<a:endParaRPr lang="ko-KR" sz="${Math.round((sh.size ?? 11) * 100)}"/>`}</a:p>`).join('');
+  const anchor = sh.kind === 'textbox' ? 't' : 'ctr';
+  return `<xdr:sp macro="" textlink=""><xdr:nvSpPr><xdr:cNvPr id="${id}" name="${name}"/><xdr:cNvSpPr${sh.kind === 'textbox' ? ' txBox="1"' : ''}/></xdr:nvSpPr><xdr:spPr>${xfrm(sh)}<a:prstGeom prst="${KIND_PRST[sh.kind] ?? 'rect'}"><a:avLst/></a:prstGeom>${fill}${ln}</xdr:spPr><xdr:txBody><a:bodyPr vertOverflow="clip" horzOverflow="clip" wrap="square" rtlCol="0" anchor="${anchor}"/><a:lstStyle/>${paras}</xdr:txBody></xdr:sp>`;
+}
+
+/** 목록 원본: 범위 참조가 아니면 "a,b" 로 감싸기 */
+function dvFormula(rule, f) {
+  if (f === undefined || f === null || f === '') return '';
+  let t = String(f).trim().replace(/^=/, '');
+  if (rule.type === 'list' && !t.startsWith('"')) {
+    const bang = t.lastIndexOf('!');
+    const ref = (bang > 0 ? t.slice(bang + 1) : t).replace(/\$/g, '');
+    if (!parseRangeName(ref)) t = `"${t.replace(/"/g, '')}"`;
+  }
+  return t;
+}
+
+function validationXml(v) {
+  const attrs = [`type="${v.type === 'any' ? 'none' : v.type}"`];
+  if (v.errorStyle === 'warning' || v.errorStyle === 'info') attrs.push(`errorStyle="${v.errorStyle === 'info' ? 'information' : 'warning'}"`);
+  if (!['list', 'custom', 'any'].includes(v.type) && v.op && v.op !== 'between') attrs.push(`operator="${v.op}"`);
+  if (v.allowBlank !== false) attrs.push('allowBlank="1"');
+  if (v.type === 'list' && v.showDropdown === false) attrs.push('showDropDown="1"');
+  if (v.showPrompt !== false) attrs.push('showInputMessage="1"');
+  if (v.showError !== false) attrs.push('showErrorMessage="1"');
+  for (const k of ['errorTitle', 'error', 'promptTitle', 'prompt']) if (v[k]) attrs.push(`${k}="${esc(v[k])}"`);
+  attrs.push(`sqref="${rangeRef(v)}"`);
+  const f1 = dvFormula(v, v.f1);
+  const f2 = ['between', 'notBetween'].includes(v.op ?? 'between') && !['list', 'custom'].includes(v.type) ? dvFormula(v, v.f2) : '';
+  return `<dataValidation ${attrs.join(' ')}>${f1 ? `<formula1>${esc(f1)}</formula1>` : ''}${f2 ? `<formula2>${esc(f2)}</formula2>` : ''}</dataValidation>`;
+}
+
+/** .xlsx 로 저장할 때 엑셀 한도(1,048,576행)를 넘어 빠지는 셀 수 */
+export function xlsxOverflow(wb) {
+  let n = 0;
+  for (const sheet of wb.sheets) {
+    for (const [k, cell] of sheet.cells) if (cell.raw && Number(k.slice(0, k.indexOf(','))) >= EXCEL_MAX_ROWS) n++;
+  }
+  return n;
+}
+
+/** Workbook → xlsx 바이트 (매크로가 있으면 .xlsm 형식) */
 export function writeXlsx(wb, { activeSheet = 0 } = {}) {
   const files = {};
   const pool = new StylePool();
@@ -827,7 +1051,10 @@ export function writeXlsx(wb, { activeSheet = 0 } = {}) {
   let chartNo = 0;
   let drawingNo = 0;
   let commentNo = 0;
+  let mediaNo = 0;
+  const mediaExts = new Set();
   const definedNames = [];
+  const vba = wb.vba?.bin ? wb.vba : null;
 
   wb.sheets.forEach((sheet, si) => {
     const sheetRels = [];
@@ -839,6 +1066,7 @@ export function writeXlsx(wb, { activeSheet = 0 } = {}) {
     let maxC = 0;
     for (const [k, cell] of sheet.cells) {
       const [r, c] = k.split(',').map(Number);
+      if (r >= EXCEL_MAX_ROWS) continue; // 엑셀 파일에는 1,048,576행까지만 저장 가능
       if (!rows.has(r)) rows.set(r, []);
       rows.get(r).push([c, cell]);
       maxR = Math.max(maxR, r);
@@ -846,7 +1074,7 @@ export function writeXlsx(wb, { activeSheet = 0 } = {}) {
     }
     const rowKeys = new Set([...rows.keys()]);
     for (const k of [...Object.keys(sheet.rowHeights), ...Object.keys(sheet.hiddenRows), ...Object.keys(sheet.rowStyles), ...Object.keys(sheet.filter?.hidden ?? {})]) rowKeys.add(Number(k));
-    const sortedRows = [...rowKeys].sort((a, b) => a - b);
+    const sortedRows = [...rowKeys].filter((r) => r < EXCEL_MAX_ROWS).sort((a, b) => a - b);
 
     const rowXml = sortedRows.map((r) => {
       const cells = (rows.get(r) ?? []).sort((a, b) => a[0] - b[0]);
@@ -896,8 +1124,8 @@ export function writeXlsx(wb, { activeSheet = 0 } = {}) {
 
     // 필터
     let autoFilter = '';
-    if (sheet.filter) {
-      const f = sheet.filter;
+    if (sheet.filter && sheet.filter.r1 < EXCEL_MAX_ROWS) {
+      const f = { ...sheet.filter, r2: Math.min(sheet.filter.r2, EXCEL_MAX_ROWS - 1) };
       const cols = Object.entries(f.criteria ?? {}).filter(([, vals]) => Array.isArray(vals)).map(([c, vals]) => {
         const blank = vals.includes('');
         return `<filterColumn colId="${Number(c) - f.c1}"><filters${blank ? ' blank="1"' : ''}>${vals.filter((v) => v !== '').map((v) => `<filter val="${esc(v)}"/>`).join('')}</filters></filterColumn>`;
@@ -905,33 +1133,67 @@ export function writeXlsx(wb, { activeSheet = 0 } = {}) {
       autoFilter = `<autoFilter ref="${rangeRef(f)}">${cols}</autoFilter>`;
       definedNames.push(`<definedName name="_xlnm._FilterDatabase" localSheetId="${si}" hidden="1">${esc(`${quoteSheetName(sheet.name)}!${rangeRef(f, true)}`)}</definedName>`);
     }
-    const merges = sheet.merges.length ? `<mergeCells count="${sheet.merges.length}">${sheet.merges.map((m) => `<mergeCell ref="${rangeRef(m)}"/>`).join('')}</mergeCells>` : '';
-    const cf = sheet.cond.map((rule, i) => cfXml(rule, pool, i + 1)).join('');
+    const fit = (rg) => (rg.r1 >= EXCEL_MAX_ROWS ? null : { ...rg, r2: Math.min(rg.r2, EXCEL_MAX_ROWS - 1) });
+    const mergeList = sheet.merges.map(fit).filter(Boolean);
+    const merges = mergeList.length ? `<mergeCells count="${mergeList.length}">${mergeList.map((m) => `<mergeCell ref="${rangeRef(m)}"/>`).join('')}</mergeCells>` : '';
+    const cf = sheet.cond.map(fit).filter(Boolean).map((rule, i) => cfXml(rule, pool, i + 1)).join('');
 
-    // 차트
+    // 그림 개체 (차트 · 그림 · 도형)
     let drawing = '';
-    if (sheet.charts.length) {
+    const images = sheet.images ?? [];
+    const shapes = sheet.shapes ?? [];
+    if (sheet.charts.length || images.length || shapes.length) {
       drawingNo++;
       const drawingRels = [];
+      const drel = (type, target) => { const id = `rId${drawingRels.length + 1}`; drawingRels.push(`<Relationship Id="${id}" Type="${REL}/${type}" Target="${target}"/>`); return id; };
       const colAxis = new Axis(DEFAULT_COL_WIDTH, sheet.colWidths, [], MAX_COLS);
       const rowAxis = new Axis(DEFAULT_ROW_HEIGHT, sheet.rowHeights, [], MAX_ROWS);
       const anchorAt = (x, y) => {
-        const c = colAxis.indexAt(x);
-        const r = rowAxis.indexAt(y);
-        return `<xdr:col>${c}</xdr:col><xdr:colOff>${Math.round((x - colAxis.pos(c)) * EMU)}</xdr:colOff><xdr:row>${r}</xdr:row><xdr:rowOff>${Math.round((y - rowAxis.pos(r)) * EMU)}</xdr:rowOff>`;
+        const c = colAxis.indexAt(Math.max(0, x));
+        const r = rowAxis.indexAt(Math.max(0, y));
+        return `<xdr:col>${c}</xdr:col><xdr:colOff>${Math.max(0, Math.round((x - colAxis.pos(c)) * EMU))}</xdr:colOff><xdr:row>${r}</xdr:row><xdr:rowOff>${Math.max(0, Math.round((y - rowAxis.pos(r)) * EMU))}</xdr:rowOff>`;
       };
-      const anchors = sheet.charts.map((ch, i) => {
-        chartNo++;
-        files[`xl/charts/chart${chartNo}.xml`] = chartXml(wb, si, ch);
-        contentOverrides.push(`<Override PartName="/xl/charts/chart${chartNo}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>`);
-        drawingRels.push(`<Relationship Id="rId${i + 1}" Type="${REL}/chart" Target="../charts/chart${chartNo}.xml"/>`);
-        return `<xdr:twoCellAnchor editAs="oneCell"><xdr:from>${anchorAt(ch.x, ch.y)}</xdr:from><xdr:to>${anchorAt(ch.x + ch.w, ch.y + ch.h)}</xdr:to><xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="${i + 2}" name="차트 ${i + 1}"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="rId${i + 1}"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor>`;
-      }).join('');
-      files[`xl/drawings/drawing${drawingNo}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="${NS_R}">${anchors}</xdr:wsDr>`;
-      files[`xl/drawings/_rels/drawing${drawingNo}.xml.rels`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="${NS_PKG}">${drawingRels.join('')}</Relationships>`;
+      const anchor = (o, body, editAs = 'oneCell') => `<xdr:twoCellAnchor editAs="${editAs}"><xdr:from>${anchorAt(o.x, o.y)}</xdr:from><xdr:to>${anchorAt(o.x + o.w, o.y + o.h)}</xdr:to>${body}<xdr:clientData/></xdr:twoCellAnchor>`;
+      const xfrm = (o) => `<a:xfrm${o.flip ? ' flipH="1"' : ''}${o.flipV ? ' flipV="1"' : ''}><a:off x="${Math.round(o.x * EMU)}" y="${Math.round(o.y * EMU)}"/><a:ext cx="${Math.round(o.w * EMU)}" cy="${Math.round(o.h * EMU)}"/></a:xfrm>`;
+      let objId = 1;
+      const parts = [];
+      const ordered = [
+        ...sheet.charts.map((o) => ['chart', o]), ...images.map((o) => ['image', o]), ...shapes.map((o) => ['shape', o]),
+      ].sort((a, b) => (a[1].z ?? 0) - (b[1].z ?? 0));
+      for (const [kind, o] of ordered) {
+        if (kind === 'chart') {
+          const ch = o;
+          chartNo++;
+          objId++;
+          files[`xl/charts/chart${chartNo}.xml`] = chartXml(wb, si, ch);
+          contentOverrides.push(`<Override PartName="/xl/charts/chart${chartNo}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>`);
+          const id = drel('chart', `../charts/chart${chartNo}.xml`);
+          parts.push(anchor(ch, `<xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="${objId}" name="차트 ${objId - 1}"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="${id}"/></a:graphicData></a:graphic></xdr:graphicFrame>`));
+        } else if (kind === 'image') {
+          const im = o;
+          const m = /^data:([^;,]+);base64,(.*)$/s.exec(im.src ?? '');
+          if (!m) continue;
+          const ext = Object.keys(MIME).find((k) => MIME[k] === m[1]) ?? 'png';
+          mediaNo++;
+          mediaExts.add(ext);
+          files[`xl/media/image${mediaNo}.${ext}`] = fromBase64(m[2]);
+          const id = drel('image', `../media/image${mediaNo}.${ext}`);
+          objId++;
+          parts.push(anchor(im, `<xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${objId}" name="${esc(im.name || `그림 ${objId - 1}`)}"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="${id}"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>${xfrm(im)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic>`));
+        } else {
+          objId++;
+          parts.push(anchor(o, shapeXml(o, objId, xfrm), 'twoCell'));
+        }
+      }
+      files[`xl/drawings/drawing${drawingNo}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="${NS_R}">${parts.join('')}</xdr:wsDr>`;
+      if (drawingRels.length) files[`xl/drawings/_rels/drawing${drawingNo}.xml.rels`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="${NS_PKG}">${drawingRels.join('')}</Relationships>`;
       contentOverrides.push(`<Override PartName="/xl/drawings/drawing${drawingNo}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>`);
       drawing = `<drawing r:id="${addRel('drawing', `../drawings/drawing${drawingNo}.xml`)}"/>`;
     }
+
+    // 데이터 유효성 검사
+    const dvList = (sheet.validations ?? []).map(fit).filter(Boolean);
+    const dataValidations = dvList.length ? `<dataValidations count="${dvList.length}">${dvList.map(validationXml).join('')}</dataValidations>` : '';
 
     // 메모
     let legacy = '';
@@ -946,12 +1208,13 @@ export function writeXlsx(wb, { activeSheet = 0 } = {}) {
     }
 
     files[`xl/worksheets/sheet${si + 1}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="${NS_MAIN}" xmlns:r="${NS_R}">`
+      + (vba ? `<sheetPr codeName="${esc(vba.sheetCodes?.[sheet.name] ?? `Sheet${si + 1}`)}"/>` : '')
       + `<dimension ref="${dim}"/>`
       + `<sheetViews><sheetView workbookViewId="0"${si === activeSheet ? ' tabSelected="1"' : ''}>${pane}</sheetView></sheetViews>`
       + `<sheetFormatPr defaultRowHeight="${px2pt(DEFAULT_ROW_HEIGHT)}"/>`
       + (colsXml ? `<cols>${colsXml}</cols>` : '')
       + `<sheetData>${rowXml}</sheetData>`
-      + autoFilter + merges + cf
+      + autoFilter + merges + cf + dataValidations
       + '<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>'
       + drawing + legacy
       + '</worksheet>';
@@ -960,15 +1223,16 @@ export function writeXlsx(wb, { activeSheet = 0 } = {}) {
     }
   });
 
-  files['xl/workbook.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<workbook xmlns="${NS_MAIN}" xmlns:r="${NS_R}"><bookViews><workbookView activeTab="${activeSheet}"/></bookViews><sheets>${wb.sheets.map((s, i) => `<sheet name="${esc(s.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets>${definedNames.length ? `<definedNames>${definedNames.join('')}</definedNames>` : ''}<calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>`;
-  files['xl/_rels/workbook.xml.rels'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="${NS_PKG}">${wb.sheets.map((s, i) => `<Relationship Id="rId${i + 1}" Type="${REL}/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')}<Relationship Id="rId${wb.sheets.length + 1}" Type="${REL}/styles" Target="styles.xml"/><Relationship Id="rId${wb.sheets.length + 2}" Type="${REL}/sharedStrings" Target="sharedStrings.xml"/></Relationships>`;
+  files['xl/workbook.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<workbook xmlns="${NS_MAIN}" xmlns:r="${NS_R}">${vba ? `<workbookPr codeName="${esc(vba.codeName || 'ThisWorkbook')}"/>` : ''}<bookViews><workbookView activeTab="${activeSheet}"/></bookViews><sheets>${wb.sheets.map((s, i) => `<sheet name="${esc(s.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets>${definedNames.length ? `<definedNames>${definedNames.join('')}</definedNames>` : ''}<calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>`;
+  files['xl/_rels/workbook.xml.rels'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="${NS_PKG}">${wb.sheets.map((s, i) => `<Relationship Id="rId${i + 1}" Type="${REL}/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')}<Relationship Id="rId${wb.sheets.length + 1}" Type="${REL}/styles" Target="styles.xml"/><Relationship Id="rId${wb.sheets.length + 2}" Type="${REL}/sharedStrings" Target="sharedStrings.xml"/>${vba ? `<Relationship Id="rId${wb.sheets.length + 3}" Type="http://schemas.microsoft.com/office/2006/relationships/vbaProject" Target="vbaProject.bin"/>` : ''}</Relationships>`;
+  if (vba) files['xl/vbaProject.bin'] = fromBase64(vba.bin);
   files['xl/sharedStrings.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<sst xmlns="${NS_MAIN}" count="${strings.length}" uniqueCount="${strings.length}">${strings.map((s) => `<si><t xml:space="preserve">${esc(s)}</t></si>`).join('')}</sst>`;
   files['xl/styles.xml'] = pool.xml();
   files['_rels/.rels'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="${NS_PKG}"><Relationship Id="rId1" Type="${REL}/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="${REL}/extended-properties" Target="docProps/app.xml"/></Relationships>`;
   const now = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
   files['docProps/core.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:creator>Tabula</dc:creator><dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified></cp:coreProperties>`;
   files['docProps/app.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>Tabula</Application></Properties>`;
-  files['[Content_Types].xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${wb.sheets.map((s, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>${contentOverrides.join('')}</Types>`;
+  files['[Content_Types].xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/>${[...mediaExts].map((e) => `<Default Extension="${e}" ContentType="${MIME[e]}"/>`).join('')}${vba ? '<Default Extension="bin" ContentType="application/vnd.ms-office.vbaProject"/>' : ''}<Override PartName="/xl/workbook.xml" ContentType="${vba ? 'application/vnd.ms-excel.sheet.macroEnabled.main+xml' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml'}"/>${wb.sheets.map((s, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>${contentOverrides.join('')}</Types>`;
 
   // [Content_Types].xml 을 맨 앞에 두는 것이 관례
   const ordered = { '[Content_Types].xml': files['[Content_Types].xml'] };

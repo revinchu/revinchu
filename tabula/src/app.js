@@ -15,10 +15,15 @@ import { makeSeries } from './series.js';
 import { parseDelimited, toDelimited, guessDelimiter } from './csv.js';
 import { SAMPLES } from './samples.js';
 import { GridView, DEFAULT_FONT, DEFAULT_SIZE, measureText, fontStack } from './view.js';
-import { readXlsx, writeXlsx } from './xlsx.js';
+import { readXlsx, writeXlsx, xlsxOverflow } from './xlsx.js';
 import { CHART_TYPES, chartData, renderChartSvg } from './chart.js';
 import { buildPivot, AGGREGATES } from './pivot.js';
 import { server } from './storage.js';
+import {
+  VALIDATION_TYPES, VALIDATION_OPS, validationAt, checkValidation, listItems, describeRule, subtractRange, invalidCells,
+} from './validation.js';
+import { OBJECT_PROPS, OBJECT_LABEL, SHAPE_KINDS, newShape, findObject, shapeSvg } from './shapes.js';
+import { extractVbaModules, fromBase64 } from './vba.js';
 
 const $ = (id) => document.getElementById(id);
 const dom = {
@@ -57,7 +62,11 @@ let pendingKey = null;
 let ac = null;
 let editRefs = [];
 let fillPreview = null;
-let chartSel = null;
+let chartSel = null; // 선택한 그림 개체(차트·그림·도형) id
+let objClip = null; // 복사한 그림 개체
+let drawKind = null; // 그릴 도형 종류 (삽입 → 도형)
+let circles = null; // 잘못된 데이터 표시
+let dvPromptEl = null;
 let lastFill = '#ffff00';
 let lastFont = '#ff0000';
 let lastBorder = 'bottom';
@@ -179,7 +188,8 @@ const selIsActiveOnly = () => {
 };
 
 function updateSelectionUI() {
-  if (document.activeElement !== dom.nameBox) dom.nameBox.value = chartSel ? '차트' : cellName(active.r, active.c);
+  const selObj = chartSel ? findObject(sheet(), chartSel) : null;
+  if (document.activeElement !== dom.nameBox) dom.nameBox.value = selObj ? (selObj.obj.name || OBJECT_LABEL[selObj.prop]) : cellName(active.r, active.c);
   if (!editing) dom.formula.value = chartSel ? '' : wb.getCell(si, active.r, active.c)?.raw ?? '';
   dom.fxCancel.disabled = !editing;
   dom.fxEnter.disabled = !editing;
@@ -187,6 +197,7 @@ function updateSelectionUI() {
   positionEditor();
   updateStats();
   updateRibbon();
+  updateDvPrompt();
 }
 
 function updateStats() {
@@ -408,6 +419,11 @@ function commitEdit(dir = null, { fillSel = false } = {}) {
     }
   }
   const { r, c, original } = editing;
+  const rule = validationAt(sheet(), r, c);
+  if (rule && rule.showError !== false && text !== original && !editing.dvOk && !checkValidation(wb, si, rule, r, c, text)) {
+    validationError(rule, dir, fillSel);
+    return false;
+  }
   endEditUI();
   const multi = fillSel && !selIsActiveOnly();
   if (text !== original || multi) {
@@ -423,6 +439,7 @@ function commitEdit(dir = null, { fillSel = false } = {}) {
       }
     }, meta());
   }
+  if (circles) circles = invalidCells(wb, si);
   if (dir && !multi) moveEnterTab(dir);
   else updateSelectionUI();
   focusGrid();
@@ -732,9 +749,20 @@ function onGridKey(e) {
   const k = e.key;
   const handled = () => e.preventDefault();
 
+  if (drawKind && k === 'Escape') { handled(); endDraw(); return; }
   if (chartSel) {
-    if (k === 'Delete' || k === 'Backspace') { handled(); deleteChart(chartSel); return; }
+    if (k === 'Delete' || k === 'Backspace') { handled(); deleteObject(chartSel); return; }
     if (k === 'Escape') { handled(); deselectChart(); updateSelectionUI(); return; }
+    const step = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[k];
+    if (step) { handled(); nudgeObject(chartSel, step[0] * (ctrl ? 10 : 1), step[1] * (ctrl ? 10 : 1)); return; }
+    if (ctrl && (k === 'c' || k === 'C' || k === 'x' || k === 'X')) { handled(); copyObject(chartSel, k.toLowerCase() === 'x'); return; }
+    if (ctrl && (k === 'd' || k === 'D')) { handled(); copyObject(chartSel, false); pasteObject(); return; }
+    if (k === 'Enter' || k === 'F2') { handled(); editObject(chartSel); return; }
+    if (!ctrl && !e.altKey && k.length === 1 && sheet().shapes?.some((x) => x.id === chartSel)) { handled(); shapeDialog(chartSel, k); return; }
+  }
+  if (e.altKey && k === 'ArrowDown' && !ctrl) {
+    const rule = validationAt(sheet(), active.r, active.c);
+    if (rule?.type === 'list') { handled(); openDvList(); return; }
   }
   if (e.altKey && !ctrl && (k === '=' || e.code === 'Equal')) { handled(); run('autosum'); return; }
   if (e.altKey && k === 'F1') { handled(); run('chartColumn'); return; }
@@ -820,10 +848,11 @@ function onGridKey(e) {
 // ───────────────────────── 마우스 ─────────────────────────
 let autoScrollTimer = null;
 let lastMouse = { x: 0, y: 0 };
+let lastShift = false;
 function startAutoScroll() {
   stopAutoScroll();
   autoScrollTimer = setInterval(() => {
-    if (!drag || drag.type === 'colResize' || drag.type === 'rowResize' || drag.type === 'chart') return stopAutoScroll();
+    if (!drag || drag.type === 'colResize' || drag.type === 'rowResize' || drag.type === 'obj' || drag.type === 'draw') return stopAutoScroll();
     const hit = gv.hitTest(lastMouse.x, lastMouse.y, true);
     let { dx, dy } = hit;
     if (drag.type === 'colSel') dy = 0;
@@ -846,17 +875,40 @@ function onViewMouseDown(e) {
     openFilterMenu(Number(t.dataset.c), t);
     return;
   }
-  const chartEl = t.closest('.chart');
-  if (chartEl) {
+  if (t.classList.contains('dv-btn')) {
+    e.preventDefault();
+    if (editing && !commitEdit()) return;
+    openDvList();
+    return;
+  }
+  if (drawKind) {
+    e.preventDefault();
+    const hit = gv.hitTest(e.clientX, e.clientY);
+    const kind = drawKind;
+    endDraw();
+    if (hit.zone !== 'cell' || e.button !== 0) return;
+    if (editing && !commitEdit()) return;
+    focusGrid();
+    const temp = newShape(kind, { x: Math.round(hit.sheetX), y: Math.round(hit.sheetY), w: 0, h: 0 });
+    sheet().shapes.push(temp);
+    chartSel = temp.id;
+    drag = { type: 'draw', id: temp.id, x0: hit.sheetX, y0: hit.sheetY, start: { x: e.clientX, y: e.clientY } };
+    gv.renderObjectsAll();
+    return;
+  }
+  const objEl = t.closest('.obj');
+  if (objEl) {
     e.preventDefault();
     if (editing && !commitEdit()) return;
     focusGrid();
-    const id = chartEl.dataset.id;
+    const id = objEl.dataset.id;
     if (chartSel !== id) { chartSel = id; gv.renderObjectsAll(); updateSelectionUI(); }
     if (e.button !== 0) return;
-    const ch = sheet().charts.find((x) => x.id === id);
+    const found = findObject(sheet(), id);
+    if (!found) return;
+    const o = found.obj;
     const corner = t.classList.contains('ch-h') ? [...t.classList].find((c) => ['nw', 'ne', 'sw', 'se'].includes(c)) : null;
-    drag = { type: 'chart', id, corner, start: { x: e.clientX, y: e.clientY }, orig: { x: ch.x, y: ch.y, w: ch.w, h: ch.h } };
+    drag = { type: 'obj', prop: found.prop, id, corner, shift: e.shiftKey, start: { x: e.clientX, y: e.clientY }, orig: { x: o.x, y: o.y, w: o.w, h: o.h } };
     return;
   }
   if (t.classList.contains('fill-handle')) {
@@ -927,7 +979,7 @@ function onViewMouseMove(e) {
   const t = e.target;
   const cls = dom.view.classList;
   cls.remove('col-resize', 'row-resize', 'col-select', 'row-select', 'default-cursor');
-  if (t.closest?.('.chart') || t.classList?.contains('fbtn')) return;
+  if (t.closest?.('.obj') || t.classList?.contains('fbtn') || t.classList?.contains('dv-btn')) return;
   const hit = gv.hitTest(e.clientX, e.clientY);
   if (hit.zone === 'colHeader') cls.add(hit.edgeCol !== null ? 'col-resize' : 'col-select');
   else if (hit.zone === 'rowHeader') cls.add(hit.edgeRow !== null ? 'row-resize' : 'row-select');
@@ -1004,8 +1056,8 @@ function onDragMove(x, y) {
       gv.layout();
       break;
     }
-    case 'chart': {
-      const ch = sheet().charts.find((xx) => xx.id === drag.id);
+    case 'obj': {
+      const ch = (sheet()[drag.prop] ?? []).find((xx) => xx.id === drag.id);
       if (!ch) break;
       const dx = (x - drag.start.x) / gv.z;
       const dy = (y - drag.start.y) / gv.z;
@@ -1015,14 +1067,38 @@ function onDragMove(x, y) {
         ch.y = Math.max(0, Math.round(o.y + dy));
       } else {
         const k = drag.corner;
+        const [minW, minH] = drag.prop === 'charts' ? [120, 90] : ch.kind === 'line' ? [0, 0] : [8, 8];
         let { x: nx, y: ny, w: nw, h: nh } = o;
         if (k.includes('e')) nw = o.w + dx;
         if (k.includes('s')) nh = o.h + dy;
         if (k.includes('w')) { nw = o.w - dx; nx = o.x + dx; }
         if (k.includes('n')) { nh = o.h - dy; ny = o.y + dy; }
-        if (nw >= 120) { ch.w = Math.round(nw); ch.x = Math.max(0, Math.round(nx)); }
-        if (nh >= 90) { ch.h = Math.round(nh); ch.y = Math.max(0, Math.round(ny)); }
+        // 그림은 모서리를 끌면 가로세로 비율 유지 (Shift 누르면 자유롭게)
+        if (drag.prop === 'images' ? !drag.shift : drag.shift && o.w && o.h) {
+          const ratio = o.h / o.w;
+          nw = Math.max(nw, minW);
+          nh = nw * ratio;
+          if (k.includes('w')) nx = o.x + o.w - nw;
+          if (k.includes('n')) ny = o.y + o.h - nh;
+        }
+        if (nw >= minW) { ch.w = Math.round(nw); ch.x = Math.max(0, Math.round(nx)); }
+        if (nh >= minH) { ch.h = Math.round(nh); ch.y = Math.max(0, Math.round(ny)); }
       }
+      drag.moved = true;
+      gv.renderObjectsAll();
+      break;
+    }
+    case 'draw': {
+      const sh = sheet().shapes.find((xx) => xx.id === drag.id);
+      if (!sh) break;
+      let dx = (x - drag.start.x) / gv.z;
+      let dy = (y - drag.start.y) / gv.z;
+      if (lastShift && sh.kind !== 'line') { const m = Math.max(Math.abs(dx), Math.abs(dy)); dx = Math.sign(dx || 1) * m; dy = Math.sign(dy || 1) * m; }
+      sh.x = Math.max(0, Math.round(Math.min(drag.x0, drag.x0 + dx)));
+      sh.y = Math.max(0, Math.round(Math.min(drag.y0, drag.y0 + dy)));
+      sh.w = Math.round(Math.abs(dx));
+      sh.h = Math.round(Math.abs(dy));
+      if (sh.kind === 'line') sh.flip = (dx < 0) !== (dy < 0);
       drag.moved = true;
       gv.renderObjectsAll();
       break;
@@ -1056,13 +1132,26 @@ function onDragEnd() {
       wb.transact(() => rows.forEach((r) => wb.setRowHeight(si, r, d.newH)), meta());
       break;
     }
-    case 'chart': {
+    case 'obj': {
       if (!d.moved) break;
-      const charts = sheet().charts;
-      const ch = charts.find((x) => x.id === d.id);
+      const list = sheet()[d.prop];
+      const ch = list.find((x) => x.id === d.id);
+      if (!ch) break;
       const final = { ...ch };
       Object.assign(ch, d.orig);
-      wb.transact(() => wb.setSheetProp(si, 'charts', charts.map((x) => (x.id === d.id ? final : { ...x }))), meta());
+      wb.transact(() => wb.setSheetProp(si, d.prop, list.map((x) => (x.id === d.id ? final : { ...x }))), meta());
+      break;
+    }
+    case 'draw': {
+      const list = sheet().shapes;
+      const i = list.findIndex((x) => x.id === d.id);
+      if (i < 0) break;
+      const [temp] = list.splice(i, 1);
+      if (temp.kind === 'line' ? temp.w + temp.h < 4 : temp.w < 4 || temp.h < 4) {
+        Object.assign(temp, temp.kind === 'line' ? { w: 150, h: 0, flip: false } : temp.kind === 'textbox' ? { w: 160, h: 48 } : { w: 150, h: 90 });
+      }
+      addObject('shapes', temp);
+      if (temp.kind === 'textbox') shapeDialog(temp.id);
       break;
     }
     case 'select':
@@ -1078,9 +1167,9 @@ function onDragEnd() {
 
 function onViewDblClick(e) {
   const t = e.target;
-  const chartEl = t.closest('.chart');
-  if (chartEl) { chartDialog(chartEl.dataset.id); return; }
-  if (t.classList.contains('fbtn') || t === dom.editor) return;
+  const objEl = t.closest('.obj');
+  if (objEl) { editObject(objEl.dataset.id); return; }
+  if (t.classList.contains('fbtn') || t.classList.contains('dv-btn') || t === dom.editor) return;
   const hit = gv.hitTest(e.clientX, e.clientY);
   if (hit.zone === 'colHeader' && hit.edgeCol !== null) {
     const cols = selKind === 'cols' && inSel(0, hit.edgeCol) ? range(sel.c1, Math.min(sel.c2, sel.c1 + 200)) : [hit.edgeCol];
@@ -1793,7 +1882,7 @@ function insertChart(type) {
   if (vis.x + box.w + 24 + 480 > gv.viewW + 200) { x = box.x; y = box.y + box.h + 16; }
   const id = `ch${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
   const pieTitle = type === 'pie' || type === 'doughnut' ? displayText(rg.r1, rg.c1 + 1) : '';
-  const chart = { id, type, title: pieTitle || '차트 제목', range: { r1: rg.r1, c1: rg.c1, r2: rg.r2, c2: rg.c2 }, x, y, w: 480, h: 288 };
+  const chart = { id, type, title: pieTitle || '차트 제목', range: { r1: rg.r1, c1: rg.c1, r2: rg.r2, c2: rg.c2 }, x, y, w: 480, h: 288, z: nextZ() };
   wb.transact(() => wb.setSheetProp(si, 'charts', [...sheet().charts.map((c) => ({ ...c })), chart]), meta());
   chartSel = id;
   gv.ensureVisible(gv.rows.indexAt(y + 100), gv.cols.indexAt(x + 200));
@@ -1805,11 +1894,7 @@ function updateChart(id, patch) {
   wb.transact(() => wb.setSheetProp(si, 'charts', sheet().charts.map((c) => (c.id === id ? { ...c, ...patch } : { ...c }))), meta());
 }
 
-function deleteChart(id) {
-  wb.transact(() => wb.setSheetProp(si, 'charts', sheet().charts.filter((c) => c.id !== id).map((c) => ({ ...c }))), meta());
-  chartSel = null;
-  updateSelectionUI();
-}
+function deleteChart(id) { deleteObject(id); }
 
 function chartDialog(id) {
   const ch = sheet().charts.find((c) => c.id === id);
@@ -1853,14 +1938,425 @@ function chartDialog(id) {
   });
 }
 
-function chartMenu(id, pos) {
-  openMenu(pos, [
-    { label: '차트 편집...', icon: 'chartColumn', action: () => chartDialog(id) },
-    { title: '차트 종류 변경' },
-    ...CHART_TYPES.map((t) => ({ label: t.label, checked: sheet().charts.find((c) => c.id === id)?.type === t.id, action: () => updateChart(id, { type: t.id }) })),
+function chartMenu(id, pos) { objectMenu(id, pos); }
+
+// ───────────────────────── 그림 개체 (차트 · 그림 · 도형) ─────────────────────────
+const newObjId = (p) => `${p}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+
+function allObjects() { return OBJECT_PROPS.flatMap((p) => sheet()[p] ?? []); }
+function nextZ() { return allObjects().reduce((z, o) => Math.max(z, o.z ?? 0), 0) + 1; }
+function minZ() { return allObjects().reduce((z, o) => Math.min(z, o.z ?? 0), 0); }
+
+function setObjects(prop, fn) {
+  wb.transact(() => wb.setSheetProp(si, prop, fn((sheet()[prop] ?? []).map((o) => ({ ...o })))), meta());
+}
+
+function updateObject(id, patch) {
+  const f = findObject(sheet(), id);
+  if (f) setObjects(f.prop, (list) => list.map((o) => (o.id === id ? { ...o, ...patch } : o)));
+}
+
+function addObject(prop, obj) {
+  obj.z ??= nextZ();
+  setObjects(prop, (list) => [...list, obj]);
+  chartSel = obj.id;
+  gv.renderObjectsAll();
+  updateSelectionUI();
+}
+
+function deleteObject(id) {
+  const f = findObject(sheet(), id);
+  if (f) setObjects(f.prop, (list) => list.filter((o) => o.id !== id));
+  chartSel = null;
+  updateSelectionUI();
+}
+
+function nudgeObject(id, dx, dy) {
+  const f = findObject(sheet(), id);
+  if (f) updateObject(id, { x: Math.max(0, f.obj.x + dx), y: Math.max(0, f.obj.y + dy) });
+}
+
+function copyObject(id, cut) {
+  const f = findObject(sheet(), id);
+  if (!f) return;
+  objClip = { prop: f.prop, obj: structuredClone(f.obj), n: 0, text: '' };
+  navigator.clipboard?.writeText('').catch(() => {});
+  if (cut) { objClip.n = -1; deleteObject(id); }
+}
+
+function pasteObject() {
+  if (!objClip) return;
+  objClip.n++;
+  const d = objClip.n * 12;
+  const o = { ...structuredClone(objClip.obj), id: newObjId(objClip.prop === 'charts' ? 'ch' : objClip.prop === 'images' ? 'im' : 'sh'), z: undefined };
+  o.x += d;
+  o.y += d;
+  addObject(objClip.prop, o);
+}
+
+function editObject(id) {
+  const f = findObject(sheet(), id);
+  if (!f) return;
+  if (f.prop === 'charts') chartDialog(id);
+  else if (f.prop === 'shapes') shapeDialog(id);
+  else imageDialog(id);
+}
+
+/** 새 개체를 둘 위치: 현재 셀 왼쪽 위 */
+function objectOrigin() {
+  const r = gv.sheetRect({ r1: active.r, c1: active.c, r2: active.r, c2: active.c });
+  return { x: Math.round(r.x), y: Math.round(r.y) };
+}
+
+function objectMenu(id, pos) {
+  const f = findObject(sheet(), id);
+  if (!f) return;
+  if (chartSel !== id) { chartSel = id; gv.renderObjectsAll(); updateSelectionUI(); }
+  const items = [
+    { label: '잘라내기', icon: 'cut', key: 'Ctrl+X', action: () => copyObject(id, true) },
+    { label: '복사', icon: 'copy', key: 'Ctrl+C', action: () => copyObject(id, false) },
+    { label: '붙여넣기', icon: 'paste', key: 'Ctrl+V', disabled: !objClip, action: pasteObject },
     { sep: true },
-    { label: '삭제', icon: 'delete', key: 'Delete', action: () => deleteChart(id) },
-  ]);
+  ];
+  if (f.prop === 'charts') {
+    items.push(
+      { label: '차트 편집...', icon: 'chartColumn', action: () => chartDialog(id) },
+      { title: '차트 종류 변경' },
+      ...CHART_TYPES.map((t) => ({ label: t.label, checked: f.obj.type === t.id, action: () => updateChart(id, { type: t.id }) })),
+    );
+  } else if (f.prop === 'shapes') {
+    items.push({ label: f.obj.kind === 'line' ? '선 서식...' : '텍스트 편집 및 도형 서식...', icon: 'shapes', action: () => shapeDialog(id) });
+    if (f.obj.kind !== 'line') {
+      items.push({ title: '도형 모양 변경' }, ...SHAPE_KINDS.filter((k) => k.id !== 'line').map((k) => ({
+        label: k.label, checked: f.obj.kind === k.id, action: () => updateObject(id, { kind: k.id }),
+      })));
+    }
+  } else {
+    items.push(
+      { label: '크기 및 속성...', icon: 'picture', action: () => imageDialog(id) },
+      { label: '원래 크기로', action: () => resetImageSize(id) },
+    );
+  }
+  items.push(
+    { sep: true },
+    { label: '맨 앞으로 가져오기', action: () => updateObject(id, { z: nextZ() }) },
+    { label: '맨 뒤로 보내기', action: () => updateObject(id, { z: minZ() - 1 }) },
+    { sep: true },
+    { label: '삭제', icon: 'delete', key: 'Delete', action: () => deleteObject(id) },
+  );
+  openMenu(pos, items);
+}
+
+// 그림
+function insertPicture() {
+  const input = el('input', { type: 'file', accept: 'image/*' });
+  input.addEventListener('change', () => { if (input.files[0]) addImageFile(input.files[0]); });
+  input.click();
+}
+
+function addImageFile(file, at = null) {
+  if (file.size > 10 * 1024 * 1024) { alertDialog('그림 삽입', '10MB 이하의 그림만 넣을 수 있습니다.'); return; }
+  const reader = new FileReader();
+  reader.onload = () => {
+    const src = reader.result;
+    const img = new Image();
+    img.onload = () => {
+      const w0 = img.naturalWidth || 200;
+      const h0 = img.naturalHeight || 150;
+      const k = Math.min(1, 480 / w0, 360 / h0);
+      const p = at ?? objectOrigin();
+      addObject('images', {
+        id: newObjId('im'), name: file.name.replace(/\.[^.]+$/, '') || '그림', x: p.x, y: p.y,
+        w: Math.max(8, Math.round(w0 * k)), h: Math.max(8, Math.round(h0 * k)), src,
+      });
+      focusGrid();
+    };
+    img.onerror = () => alertDialog('그림 삽입', '이 그림 형식은 표시할 수 없습니다. PNG·JPEG·GIF·SVG·WebP 파일을 사용하세요.');
+    img.src = src;
+  };
+  reader.readAsDataURL(file);
+}
+
+function resetImageSize(id) {
+  const im = sheet().images.find((x) => x.id === id);
+  if (!im) return;
+  const img = new Image();
+  img.onload = () => updateObject(id, { w: img.naturalWidth || im.w, h: img.naturalHeight || im.h });
+  img.src = im.src;
+}
+
+function imageDialog(id) {
+  const im = sheet().images.find((x) => x.id === id);
+  if (!im) return;
+  formDialog('그림 서식', [
+    { name: 'name', label: '이름', value: im.name ?? '' },
+    { name: 'w', label: '너비(px)', type: 'number', value: im.w },
+    { name: 'h', label: '높이(px)', type: 'number', value: im.h },
+    { name: 'lock', label: '가로 세로 비율 고정', type: 'checkbox', value: true },
+  ], ({ name, w, h, lock }) => {
+    let nw = clamp(Math.round(Number(w) || im.w), 4, 20000);
+    let nh = clamp(Math.round(Number(h) || im.h), 4, 20000);
+    if (lock) {
+      if (nw !== im.w) nh = Math.max(4, Math.round((nw * im.h) / im.w));
+      else if (nh !== im.h) nw = Math.max(4, Math.round((nh * im.w) / im.h));
+    }
+    updateObject(id, { name: name.trim() || im.name, w: nw, h: nh });
+  });
+}
+
+// 도형
+function startDraw(kind) {
+  if (editing && !commitEdit()) return;
+  drawKind = kind;
+  deselectChart();
+  dom.view.classList.add('drawing-mode');
+  const label = SHAPE_KINDS.find((k) => k.id === kind)?.label ?? '도형';
+  toast(`시트를 끌어서 ${label}을(를) 그리세요. 클릭하면 기본 크기로 들어갑니다. (Esc: 취소)`);
+}
+
+function endDraw() {
+  drawKind = null;
+  dom.view.classList.remove('drawing-mode');
+}
+
+function shapeDialog(id, typed = null) {
+  const sh = sheet().shapes.find((x) => x.id === id);
+  if (!sh) return;
+  const isLine = sh.kind === 'line';
+  const row = (label, ...inputs) => el('label', {}, el('span', {}, label), el('span', { style: { display: 'flex', gap: '8px', alignItems: 'center' } }, ...inputs));
+  const text = el('textarea', { rows: 4, style: { width: '100%', minHeight: '80px' } }, typed ?? sh.text ?? '');
+  const size = el('input', { type: 'number', min: 6, max: 96, value: sh.size ?? 11, style: { width: '70px' } });
+  const bold = el('input', { type: 'checkbox', checked: !!sh.bold });
+  const align = el('select', {}, [['left', '왼쪽'], ['center', '가운데'], ['right', '오른쪽']].map(([v, l]) => el('option', { value: v, selected: (sh.align ?? 'center') === v }, l)));
+  const color = el('input', { type: 'color', value: sh.color ?? '#000000' });
+  const fillOn = el('input', { type: 'checkbox', checked: !!sh.fill });
+  const fill = el('input', { type: 'color', value: sh.fill ?? '#4472c4' });
+  const lineOn = el('input', { type: 'checkbox', checked: !!sh.stroke });
+  const stroke = el('input', { type: 'color', value: sh.stroke ?? '#2f528f' });
+  const width = el('input', { type: 'number', min: 0.25, max: 20, step: 0.25, value: sh.strokeWidth ?? 1, style: { width: '70px' } });
+  const body = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
+    isLine ? null : row('텍스트', text),
+    isLine ? null : row('글꼴', el('span', {}, '크기'), size, el('label', { style: { display: 'inline-flex', gap: '4px', flexDirection: 'row' } }, bold, '굵게'), color),
+    isLine ? null : row('맞춤', align),
+    isLine ? null : row('채우기', el('label', { style: { display: 'inline-flex', gap: '4px', flexDirection: 'row' } }, fillOn, '사용'), fill),
+    row(isLine ? '선 색' : '윤곽선', isLine ? null : el('label', { style: { display: 'inline-flex', gap: '4px', flexDirection: 'row' } }, lineOn, '사용'), stroke),
+    row('선 굵기(pt)', width));
+  openDialog({
+    title: isLine ? '선 서식' : '도형 서식', body, width: 420,
+    onOpen: () => { if (!isLine) { text.focus(); text.setSelectionRange(text.value.length, text.value.length); } },
+    buttons: [
+      {
+        label: '확인', primary: true,
+        action: () => updateObject(id, isLine
+          ? { stroke: stroke.value, strokeWidth: Number(width.value) || 1 }
+          : {
+            text: text.value, size: clamp(Number(size.value) || 11, 6, 96), bold: bold.checked || undefined, align: align.value, color: color.value,
+            fill: fillOn.checked ? fill.value : null, stroke: lineOn.checked ? stroke.value : null, strokeWidth: Number(width.value) || 1,
+          }),
+      },
+      { label: '취소' },
+    ],
+  });
+}
+
+// ───────────────────────── 데이터 유효성 검사 ─────────────────────────
+function validationError(rule, dir, fillSel) {
+  const style = rule.errorStyle ?? 'stop';
+  const retry = () => { if (editing) setTimeout(() => { dom.editor.focus(); dom.editor.select(); }, 0); };
+  const cancel = () => cancelEdit();
+  const accept = () => { if (editing) { editing.dvOk = true; setTimeout(() => commitEdit(dir, { fillSel }), 0); } };
+  const body = el('div', { class: 'dv-error' },
+    el('span', { class: `dv-icon ${style}` }, style === 'stop' ? '✕' : style === 'warning' ? '!' : 'i'),
+    el('div', {}, rule.error || describeRule(rule), style === 'warning' ? el('div', { style: { marginTop: '8px' } }, '계속하시겠습니까?') : null));
+  const buttons = style === 'stop'
+    ? [{ label: '다시 시도', primary: true, action: retry }, { label: '취소', action: cancel }]
+    : style === 'warning'
+      ? [{ label: '예', primary: true, action: accept }, { label: '아니요', action: retry }, { label: '취소', action: cancel }]
+      : [{ label: '확인', primary: true, action: accept }, { label: '취소', action: cancel }];
+  openDialog({ title: rule.errorTitle || 'Tabula', body, buttons, width: 400 });
+}
+
+function openDvList() {
+  const rule = validationAt(sheet(), active.r, active.c);
+  if (!rule || rule.type !== 'list') return;
+  const items = listItems(wb, si, rule);
+  const m = wb.mergeAt(si, active.r, active.c) ?? { r1: active.r, c1: active.c, r2: active.r, c2: active.c };
+  const b = gv.clientRect(m);
+  const cur = displayText(active.r, active.c);
+  const pick = (it) => {
+    wb.transact(() => { wb.setInput(si, active.r, active.c, it); autoWiden({ r1: active.r, c1: active.c, r2: active.r, c2: active.c }); }, meta());
+    if (circles) circles = invalidCells(wb, si);
+    focusGrid();
+  };
+  const menu = openMenu({ x: b.left, y: b.bottom },
+    items.length ? items.slice(0, 1000).map((it) => ({ label: it, checked: it === cur, action: () => pick(it) })) : [{ label: '(목록이 비어 있습니다)', disabled: true }],
+    { minWidth: Math.max(90, b.width + 17) });
+  menu.classList.add('dv-list');
+}
+
+function updateDvPrompt() {
+  const rule = chartSel || editing ? null : validationAt(sheet(), active.r, active.c);
+  const b = rule ? gv.clientRect({ r1: active.r, c1: active.c, r2: active.r, c2: active.c }) : null;
+  const v = dom.view.getBoundingClientRect();
+  const visible = b && b.bottom > v.top && b.top < v.bottom && b.right > v.left && b.left < v.right;
+  if (!rule || rule.showPrompt === false || !(rule.prompt || rule.promptTitle) || !visible) {
+    dvPromptEl?.remove();
+    dvPromptEl = null;
+    return;
+  }
+  if (!dvPromptEl) { dvPromptEl = el('div', { class: 'dv-prompt' }); document.body.append(dvPromptEl); }
+  dvPromptEl.replaceChildren(...(rule.promptTitle ? [el('b', {}, rule.promptTitle)] : []), rule.prompt ?? '');
+  dvPromptEl.style.left = `${Math.min(b.left + Math.min(b.width, 48), innerWidth - 250)}px`;
+  dvPromptEl.style.top = `${b.bottom + 6}px`;
+}
+
+function validationDialog() {
+  if (editing && !commitEdit()) return;
+  const cur = validationAt(sheet(), active.r, active.c) ?? {};
+  const mixed = (sheet().validations ?? []).some((v) => v !== cur && v.r1 <= sel.r2 && v.r2 >= sel.r1 && v.c1 <= sel.c2 && v.c2 >= sel.c1);
+  const label = (text, input) => el('label', {}, el('span', {}, text), input);
+  const inline = (input, text) => el('label', { style: { display: 'flex', flexDirection: 'row', alignItems: 'center', gap: '6px' } }, input, text);
+  const type = el('select', {}, VALIDATION_TYPES.map((t) => el('option', { value: t.id, selected: (cur.type ?? 'any') === t.id }, t.label)));
+  const op = el('select', {}, VALIDATION_OPS.map((o) => el('option', { value: o.id, selected: (cur.op ?? 'between') === o.id }, o.label)));
+  const strip = (f) => {
+    const t = String(f ?? '');
+    return t.startsWith('"') && t.endsWith('"') ? t.slice(1, -1) : t && /^[A-Z$]|!/i.test(t) && parseRangeName(t.replace(/\$/g, '').split('!').pop()) ? `=${t}` : t;
+  };
+  const f1 = el('input', { type: 'text', value: strip(cur.f1) });
+  const f2 = el('input', { type: 'text', value: strip(cur.f2) });
+  const blank = el('input', { type: 'checkbox', checked: cur.allowBlank !== false });
+  const dropdown = el('input', { type: 'checkbox', checked: cur.showDropdown !== false });
+  const f1Label = el('span', {});
+  const f2Label = el('span', {}, '최대값');
+  const opRow = label('제한 방법', op);
+  const f1Row = el('label', {}, f1Label, f1);
+  const f2Row = el('label', {}, f2Label, f2);
+  const ddRow = inline(dropdown, '드롭다운 표시');
+  const refresh = () => {
+    const t = type.value;
+    const ranged = ['whole', 'decimal', 'date', 'time', 'textLength'].includes(t);
+    const two = ranged && (op.value === 'between' || op.value === 'notBetween');
+    opRow.style.display = ranged ? '' : 'none';
+    f1Row.style.display = t === 'any' ? 'none' : '';
+    f2Row.style.display = two ? '' : 'none';
+    ddRow.style.display = t === 'list' ? '' : 'none';
+    f1Label.textContent = t === 'list' ? '원본' : t === 'custom' ? '수식' : two ? '최소값' : { equal: '값', notEqual: '값', greaterThan: '최소값', greaterThanOrEqual: '최소값', lessThan: '최대값', lessThanOrEqual: '최대값' }[op.value] ?? '값';
+    f1.placeholder = t === 'list' ? '예: 사과,배,포도 또는 =$A$1:$A$5' : t === 'custom' ? '예: =A1>0' : t === 'date' ? '예: 2024-01-01' : t === 'time' ? '예: 9:00' : '';
+    f2.placeholder = f1.placeholder;
+  };
+  type.addEventListener('change', refresh);
+  op.addEventListener('change', refresh);
+  refresh();
+  const showPrompt = el('input', { type: 'checkbox', checked: cur.showPrompt !== false });
+  const promptTitle = el('input', { type: 'text', value: cur.promptTitle ?? '' });
+  const prompt = el('textarea', { rows: 4 }, cur.prompt ?? '');
+  const showError = el('input', { type: 'checkbox', checked: cur.showError !== false });
+  const errorStyle = el('select', {}, [['stop', '중지'], ['warning', '경고'], ['info', '정보']].map(([v, l]) => el('option', { value: v, selected: (cur.errorStyle ?? 'stop') === v }, l)));
+  const errorTitle = el('input', { type: 'text', value: cur.errorTitle ?? '' });
+  const error = el('textarea', { rows: 4 }, cur.error ?? '');
+  const col = (...kids) => el('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } }, ...kids);
+  const pages = [
+    ['설정', col(el('div', { class: 'muted' }, '유효성 조건'), label('제한 대상', type), inline(blank, '공백 무시'), opRow, f1Row, f2Row, ddRow)],
+    ['설명 메시지', col(inline(showPrompt, '셀을 선택하면 설명 메시지 표시'), label('제목', promptTitle), label('설명 메시지', prompt))],
+    ['오류 메시지', col(inline(showError, '유효하지 않은 데이터를 입력하면 오류 메시지 표시'), label('스타일', errorStyle), label('제목', errorTitle), label('오류 메시지', error))],
+  ];
+  const tabBar = el('div', { class: 'dlg-tabs' });
+  const pageBox = el('div', { style: { minHeight: '260px', paddingTop: '10px' } });
+  const show = (i) => {
+    [...tabBar.children].forEach((b, j) => b.classList.toggle('on', i === j));
+    pageBox.replaceChildren(pages[i][1]);
+  };
+  pages.forEach(([name], i) => tabBar.append(el('button', { type: 'button', class: 'dlg-tab', onclick: () => show(i) }, name)));
+  show(0);
+  const target = { r1: sel.r1, c1: sel.c1, r2: sel.r2, c2: sel.c2 };
+  const apply = (rule) => {
+    const rest = (sheet().validations ?? []).flatMap((v) => subtractRange(v, target));
+    wb.transact(() => wb.setSheetProp(si, 'validations', rule ? [...rest, { ...target, ...rule }] : rest), meta());
+    if (circles) circles = invalidCells(wb, si);
+    gv.renderOverlays();
+    updateSelectionUI();
+  };
+  const toFormula = (v, t) => {
+    const x = v.trim();
+    if (!x) return undefined;
+    if (t === 'list') return x.startsWith('=') ? x.slice(1) : x;
+    if (x.startsWith('=')) return x.slice(1);
+    if (t === 'date' || t === 'time') { const p = parseInput(x).value; return typeof p === 'number' ? String(p) : x; }
+    return x;
+  };
+  openDialog({
+    title: '데이터 유효성', width: 460,
+    body: el('div', {}, mixed ? el('div', { class: 'muted', style: { marginBottom: '6px' } }, '선택 영역에 다른 유효성 검사 설정이 섞여 있습니다. 확인을 누르면 모두 이 설정으로 바뀝니다.') : null, tabBar, pageBox),
+    buttons: [
+      { label: '모두 지우기', action: () => apply(null) },
+      {
+        label: '확인', primary: true,
+        action: () => {
+          const t = type.value;
+          const rule = {
+            type: t, op: op.value, allowBlank: blank.checked, showDropdown: dropdown.checked,
+            showPrompt: showPrompt.checked, showError: showError.checked, errorStyle: errorStyle.value,
+          };
+          if (!['whole', 'decimal', 'date', 'time', 'textLength'].includes(t)) delete rule.op;
+          if (t !== 'any') {
+            rule.f1 = toFormula(f1.value, t);
+            if (!rule.f1) { show(0); alertDialog('데이터 유효성', t === 'list' ? '원본을 입력하세요.' : '값을 입력하세요.'); return false; }
+            if (rule.op === 'between' || rule.op === 'notBetween') {
+              rule.f2 = toFormula(f2.value, t);
+              if (!rule.f2) { show(0); alertDialog('데이터 유효성', '최대값을 입력하세요.'); return false; }
+            }
+          }
+          for (const [k, input] of [['promptTitle', promptTitle], ['prompt', prompt], ['errorTitle', errorTitle], ['error', error]]) if (input.value.trim()) rule[k] = input.value;
+          apply(t === 'any' && !rule.prompt && !rule.promptTitle ? null : rule);
+          return undefined;
+        },
+      },
+      { label: '취소' },
+    ],
+  });
+}
+
+// ───────────────────────── 매크로 ─────────────────────────
+let vbaCache = null;
+function macroDialog() {
+  if (!wb.vba?.bin) {
+    alertDialog('매크로', '이 통합 문서에는 매크로가 없습니다. 매크로가 포함된 엑셀 파일(.xlsm)을 열면 여기에서 VBA 코드를 볼 수 있습니다.');
+    return;
+  }
+  if (vbaCache?.bin !== wb.vba.bin) {
+    let modules;
+    try { modules = extractVbaModules(fromBase64(wb.vba.bin)); } catch (err) { modules = null; toast(`매크로 코드를 읽지 못했습니다: ${err.message}`); }
+    vbaCache = { bin: wb.vba.bin, modules: modules ?? [] };
+  }
+  const modules = vbaCache.modules;
+  const withCode = modules.filter((m) => m.code.trim());
+  const list = withCode.length ? withCode : modules;
+  const procs = (code) => [...code.matchAll(/^\s*(?:Public |Private )?(?:Sub|Function)\s+([\w가-힣]+)/gim)].map((m) => m[1]);
+  const pre = el('pre', { class: 'macro-code' });
+  const selEl = el('select', { style: { width: '100%' } }, list.map((m, i) => el('option', { value: i }, `${m.name} (${m.type})${procs(m.code).length ? ` — ${procs(m.code).join(', ')}` : ''}`)));
+  const showMod = () => { pre.textContent = list[Number(selEl.value)]?.code || '(코드 없음)'; };
+  selEl.addEventListener('change', showMod);
+  showMod();
+  openDialog({
+    title: '매크로 (VBA)', width: 640,
+    body: el('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
+      el('div', { class: 'muted' }, 'Tabula 는 보안을 위해 매크로를 실행하지 않습니다. 코드는 읽기 전용으로 표시되며, 파일을 .xlsm 으로 저장하면 매크로가 그대로 보존되어 엑셀에서 실행할 수 있습니다.'),
+      list.length ? selEl : el('div', {}, '표시할 모듈이 없습니다.'),
+      pre),
+    buttons: [
+      { label: '코드 복사', action: () => { navigator.clipboard?.writeText(pre.textContent).then(() => toast('코드를 복사했습니다.')).catch(() => {}); return false; } },
+      {
+        label: '매크로 제거',
+        action: () => {
+          openDialog({
+            title: '매크로 제거', body: '이 통합 문서의 매크로를 모두 제거합니다. 이후에는 .xlsx 로 저장됩니다. 계속하시겠습니까?',
+            buttons: [{ label: '제거', primary: true, action: () => { wb.vba = null; onBookChange(); toast('매크로를 제거했습니다.'); } }, { label: '취소' }],
+          });
+        },
+      },
+      { label: '닫기', primary: true },
+    ],
+  });
 }
 
 // ───────────────────────── 피벗 테이블 ─────────────────────────
@@ -2038,6 +2534,7 @@ function switchSheet(i, restore = true) {
   if (wb.sheets[si]) sheetSel.set(wb.sheets[si], { active, sel, selKind, scroll: [gv.sx, gv.sy] });
   si = i;
   chartSel = null;
+  circles = null;
   gv.resetExtent();
   gv.layout();
   const saved = restore ? sheetSel.get(sheet()) : null;
@@ -2143,10 +2640,17 @@ function exportCsv() {
 }
 
 function exportXlsx(name = docName) {
+  const over = xlsxOverflow(wb);
+  if (over) toast(`엑셀 파일은 1,048,576행까지만 저장할 수 있어 그 아래 셀 ${over.toLocaleString()}개는 빠집니다. 전체는 .tabula 로 저장하세요.`);
   try {
     const bytes = writeXlsx(wb, { activeSheet: si });
-    download(`${safeFileName(name)}.xlsx`, new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
-    toast('Excel 통합 문서(.xlsx)로 저장했습니다.');
+    if (wb.vba) {
+      download(`${safeFileName(name)}.xlsm`, new Blob([bytes], { type: 'application/vnd.ms-excel.sheet.macroEnabled.12' }));
+      toast('Excel 매크로 사용 통합 문서(.xlsm)로 저장했습니다.');
+    } else {
+      download(`${safeFileName(name)}.xlsx`, new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+      toast('Excel 통합 문서(.xlsx)로 저장했습니다.');
+    }
   } catch (err) {
     alertDialog('Tabula', `저장하지 못했습니다: ${err.message}`);
   }
@@ -2157,7 +2661,7 @@ function saveAs() {
     { name: 'name', label: '파일 이름', value: docName },
     {
       name: 'type', label: '파일 형식', type: 'select', value: 'xlsx', options: [
-        { value: 'xlsx', label: 'Excel 통합 문서 (*.xlsx)' },
+        { value: 'xlsx', label: wb.vba ? 'Excel 매크로 사용 통합 문서 (*.xlsm)' : 'Excel 통합 문서 (*.xlsx)' },
         { value: 'tabula', label: 'Tabula 통합 문서 (*.tabula)' },
         { value: 'csv', label: 'CSV UTF-8 (쉼표로 분리) — 현재 시트' },
         ...(server.available ? [{ value: 'server', label: '서버에 저장 (다른 기기에서 열기)' }] : []),
@@ -2183,7 +2687,11 @@ function pickFile(mode) {
 
 async function onFilePicked() {
   const file = dom.fileInput.files[0];
-  if (!file) return;
+  if (file) await openFileObject(file, fileMode);
+}
+
+async function openFileObject(file, mode) {
+  fileMode = mode;
   const base = file.name.replace(/\.[^.]+$/, '');
   try {
     if (/\.(xlsx|xlsm)$/i.test(file.name)) {
@@ -2203,6 +2711,7 @@ async function onFilePicked() {
         }, meta());
         toast(`시트 ${data.sheets.length}개를 가져왔습니다.`);
       }
+      if (fileMode === 'open' && data.vba) warnings.push('매크로가 포함된 통합 문서입니다. Tabula 는 매크로를 실행하지 않지만 [보기 → 매크로]에서 코드를 볼 수 있고, .xlsm 으로 저장하면 매크로가 그대로 유지됩니다.');
       if (warnings.length) alertDialog('가져오기', warnings.join('\n'));
       else if (fileMode === 'open') toast(`'${file.name}'을(를) 열었습니다.`);
       return;
@@ -2240,6 +2749,8 @@ function loadWorkbook(data, name, activeSheet = 0) {
   clip = null;
   painter = null;
   chartSel = null;
+  circles = null;
+  objClip = null;
   sheetSel.clear();
   gv.resetExtent();
   renderAll();
@@ -2288,13 +2799,20 @@ function renameDoc(name) {
 
 const snapshot = () => ({ app: 'tabula', docName, si, workbook: wb.serialize() });
 
+let storageWarned = false;
 function saveToStorage() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ docName, si, autosave, workbook: wb.serialize() }));
     if (!server.available) dirty = false;
     updateTitle();
+    storageWarned = false;
     return true;
   } catch {
+    // 큰 그림 등으로 브라우저 저장 공간(보통 5MB)을 넘은 경우
+    if (!server.available && !storageWarned) {
+      storageWarned = true;
+      toast('브라우저 저장 공간이 부족해 자동 저장하지 못했습니다. [파일 → 다른 이름으로 저장]으로 파일을 내려받으세요.');
+    }
     return false;
   }
 }
@@ -2325,9 +2843,9 @@ function scheduleServerSave(delay = 1500) {
 
 /** 저장: 브라우저 + (서버가 있으면) 서버 */
 async function saveNow(explicit) {
-  saveToStorage();
+  const stored = saveToStorage();
   if (!server.available) {
-    if (explicit) toast('이 브라우저에 저장했습니다. (서버 없이 실행 중)');
+    if (explicit && stored) toast('이 브라우저에 저장했습니다. (서버 없이 실행 중)');
     return;
   }
   serverState.saving = true;
@@ -2478,6 +2996,8 @@ function printSheet() {
     parts.push(`<table class="${view.printGrid ? 'grid-lines' : ''}"><colgroup>${colgroup}</colgroup>${body.join('')}</table>`);
   }
   for (const ch of s.charts) parts.push(`<div class="chart-print">${gv.chartSvg(ch)}</div>`);
+  for (const im of s.images ?? []) parts.push(`<div class="chart-print"><img src="${escapeHtml(im.src)}" style="width:${im.w}px;height:${im.h}px" alt=""></div>`);
+  for (const sh of s.shapes ?? []) parts.push(`<div class="chart-print" style="position:relative;width:${sh.w}px;height:${Math.max(1, sh.h)}px">${shapeSvg(sh)}${sh.text ? `<div style="position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;padding:4px 8px;white-space:pre-wrap;text-align:${sh.align ?? 'center'};color:${escapeHtml(sh.color ?? '#000')};font-size:${sh.size ?? 11}pt">${escapeHtml(sh.text)}</div>` : ''}</div>`);
   dom.printArea.innerHTML = parts.join('');
   window.print();
 }
@@ -2669,7 +3189,7 @@ const SHORTCUTS = [
   ['Ctrl+Enter', '선택한 모든 셀에 같은 내용 입력'],
   ['F4', '수식 편집 중 절대/상대 참조 전환'],
   ['Esc', '편집 취소 / 복사 영역 해제'],
-  ['Ctrl+방향키', '데이터 영역의 끝으로 이동 (빈 열에서는 1,048,576행까지)'],
+  ['Ctrl+방향키', '데이터 영역의 끝으로 이동 (빈 열에서는 10,000,000행까지)'],
   ['Shift+방향키', '선택 영역 확장'],
   ['Ctrl+Space / Shift+Space', '열 전체 / 행 전체 선택'],
   ['Ctrl+A', '모두 선택'],
@@ -2819,6 +3339,18 @@ function tableStylesMenu(anchorEl) {
 }
 
 const MENUS = {
+  shapes: () => [
+    { title: '도형' },
+    ...SHAPE_KINDS.map((k) => ({
+      label: k.label, action: () => startDraw(k.id),
+      icon: shapeSvg({ kind: k.id, w: 18, h: k.id === 'line' ? 14 : 13, fill: k.id === 'textbox' ? '#ffffff' : '#dbe5f5', stroke: '#4472c4', flipV: k.id === 'line' }),
+    })),
+  ],
+  validation: () => [
+    { label: '데이터 유효성 검사...', icon: 'validation', action: validationDialog },
+    { label: '잘못된 데이터 표시', action: () => run('circleInvalid') },
+    { label: '유효성 표시 지우기', action: () => run('clearCircles') },
+  ],
   paste: () => [
     { label: '붙여넣기', icon: 'paste', key: 'Ctrl+V', action: () => pasteFromButton('all') },
     { label: '값 붙여넣기', action: () => pasteFromButton('values'), disabled: !clip },
@@ -3141,7 +3673,8 @@ const COMMANDS = {
     const i = wb.transact(() => {
       const at = wb.addSheet(`${src.name} (2)`.slice(0, 31), si + 1);
       const data = wb.serialize();
-      data.sheets[at] = { ...src, name: wb.sheets[at].name, charts: (src.charts ?? []).map((c) => ({ ...c, id: `${c.id}d` })) };
+      const dup = (list) => (list ?? []).map((c) => ({ ...c, id: `${c.id}d${at}` }));
+      data.sheets[at] = { ...src, name: wb.sheets[at].name, charts: dup(src.charts), images: dup(src.images), shapes: dup(src.shapes) };
       wb.restore(data);
       return at;
     }, meta());
@@ -3196,6 +3729,13 @@ const COMMANDS = {
   chartPie: () => insertChart('pie'),
   chartArea: () => insertChart('area'),
   chartScatter: () => insertChart('scatter'),
+  insertPicture,
+  shapesMenu: () => startDraw('rect'),
+  insertTextbox: () => startDraw('textbox'),
+  dataValidation: validationDialog,
+  circleInvalid: () => { circles = invalidCells(wb, si); gv.renderOverlays(); if (!circles.length) toast('잘못된 데이터가 없습니다.'); },
+  clearCircles: () => { circles = null; gv.renderOverlays(); },
+  macros: macroDialog,
 
   insertFunction: insertFunctionDialog,
   insertDate: () => {
@@ -3236,7 +3776,7 @@ const COMMANDS = {
     title: 'Tabula 정보', width: 420,
     body: el('div', { style: { lineHeight: '1.7' } },
       el('b', {}, 'Tabula'), ' — 브라우저에서 동작하는 엑셀 스타일 스프레드시트', el('br'),
-      el('span', { class: 'muted' }, `시트 크기 1,048,576행 × 16,384열 · 함수 ${FUNCTION_NAMES.length}개 · .xlsx 열기/저장`), el('br'),
+      el('span', { class: 'muted' }, `시트 크기 10,000,000행 × 16,384열 · 함수 ${FUNCTION_NAMES.length}개 · .xlsx 열기/저장`), el('br'),
       el('span', { class: 'muted' }, server.available ? '서버 저장소에 연결됨 — 다른 기기에서도 열 수 있습니다.' : '서버 없이 실행 중 — 이 브라우저에 저장됩니다.')),
     buttons: [{ label: '확인', primary: true }],
   }),
@@ -3317,7 +3857,7 @@ function updateTitle() {
 
 function renderAll() {
   if (si >= wb.sheets.length) si = wb.sheets.length - 1;
-  if (chartSel && !sheet().charts.some((c) => c.id === chartSel)) chartSel = null;
+  if (chartSel && !findObject(sheet(), chartSel) && drag?.type !== 'draw') chartSel = null;
   gv.layout();
   renderSheetTabs();
   updateTitle();
@@ -3342,8 +3882,15 @@ function onBookChange() {
 function bindEvents() {
   const ed = dom.editor;
   ed.addEventListener('keydown', onEditorKeyDown);
-  ed.addEventListener('compositionstart', () => { if (!editing) beginTyping(); });
+  // 그림 개체를 선택한 채로 입력하면 셀 대신 도형 글자로 (차트·그림은 무시)
+  const objectTyped = () => {
+    const v = ed.value;
+    ed.value = '';
+    if (v && sheet().shapes?.some((x) => x.id === chartSel)) shapeDialog(chartSel, v);
+  };
+  ed.addEventListener('compositionstart', () => { if (!editing && !chartSel) beginTyping(); });
   ed.addEventListener('compositionend', () => {
+    if (!editing && chartSel) { objectTyped(); return; }
     const k = pendingKey;
     if (!k) return;
     setTimeout(() => {
@@ -3352,7 +3899,8 @@ function bindEvents() {
       onEditingKey({ ...k, preventDefault() {}, isComposing: false, keyCode: 0 });
     }, 30);
   });
-  ed.addEventListener('input', () => {
+  ed.addEventListener('input', (e) => {
+    if (!editing && chartSel) { if (!e.isComposing) objectTyped(); return; }
     if (!editing) beginTyping();
     editing.point = null;
     dom.formula.value = ed.value;
@@ -3387,14 +3935,15 @@ function bindEvents() {
   dom.view.addEventListener('mouseleave', () => { dom.tip.style.display = 'none'; });
   dom.view.addEventListener('contextmenu', (e) => {
     e.preventDefault();
-    const chartEl = e.target.closest('.chart');
-    if (chartEl) { chartMenu(chartEl.dataset.id, { x: e.clientX, y: e.clientY }); return; }
+    const objEl = e.target.closest('.obj');
+    if (objEl) { objectMenu(objEl.dataset.id, { x: e.clientX, y: e.clientY }); return; }
     const hit = gv.hitTest(e.clientX, e.clientY);
     const kind = hit.zone === 'colHeader' ? 'col' : hit.zone === 'rowHeader' ? 'row' : 'cell';
     showContextMenu({ x: e.clientX, y: e.clientY }, kind);
   });
   document.addEventListener('mousemove', (e) => {
     lastMouse = { x: e.clientX, y: e.clientY };
+    lastShift = e.shiftKey;
     if (drag) onDragMove(e.clientX, e.clientY);
   });
   document.addEventListener('mouseup', onDragEnd);
@@ -3402,6 +3951,7 @@ function bindEvents() {
   // 클립보드
   document.addEventListener('copy', (e) => {
     if (editing || document.activeElement !== dom.editor || chartSel) return;
+    objClip = null;
     e.preventDefault();
     const { text, html } = copySelection(false);
     e.clipboardData.setData('text/plain', text);
@@ -3409,6 +3959,7 @@ function bindEvents() {
   });
   document.addEventListener('cut', (e) => {
     if (editing || document.activeElement !== dom.editor || chartSel) return;
+    objClip = null;
     e.preventDefault();
     const { text, html } = copySelection(true);
     e.clipboardData.setData('text/plain', text);
@@ -3417,7 +3968,24 @@ function bindEvents() {
   document.addEventListener('paste', (e) => {
     if (editing || document.activeElement !== dom.editor) return;
     e.preventDefault();
-    handlePaste(e.clipboardData.getData('text/plain'));
+    const text = e.clipboardData.getData('text/plain');
+    const image = [...(e.clipboardData.files ?? [])].find((f) => f.type.startsWith('image/'));
+    if (image && !text) { addImageFile(image); return; }
+    if (objClip && (!text || text === objClip.text)) { pasteObject(); return; }
+    handlePaste(text);
+  });
+  // 그림 파일을 끌어다 놓기
+  dom.view.addEventListener('dragover', (e) => { if ([...(e.dataTransfer?.items ?? [])].some((i) => i.kind === 'file')) e.preventDefault(); });
+  dom.view.addEventListener('drop', (e) => {
+    const file = [...(e.dataTransfer?.files ?? [])][0];
+    if (!file) return;
+    e.preventDefault();
+    if (file.type.startsWith('image/')) {
+      const hit = gv.hitTest(e.clientX, e.clientY);
+      addImageFile(file, { x: Math.round(hit.sheetX), y: Math.round(hit.sheetY) });
+    } else if (/\.(xlsx|xlsm|csv|tsv|txt|tabula|json)$/i.test(file.name)) {
+      openFileObject(file, 'open');
+    }
   });
 
   // 이름 상자
@@ -3509,7 +4077,7 @@ async function init() {
   hydrateIcons();
   gv = new GridView({
     state: () => ({
-      wb, si, sel, selKind, active, editing: !!editing, clip, fillPreview, refs: editRefs, chartSel,
+      wb, si, sel, selKind, active, editing: !!editing, clip, fillPreview, refs: editRefs, chartSel, circles,
       showGrid: view.showGrid, showFormulas: view.showFormulas, showHeaders: view.showHeaders,
     }),
     onViewScroll: () => positionEditor(),

@@ -55,12 +55,13 @@ function newSheet(name) {
     name, cells: new Map(), colWidths: {}, rowHeights: {}, merges: [], cond: [],
     colStyles: {}, rowStyles: {}, allStyle: null, hiddenRows: {}, hiddenCols: {}, rowManual: {},
     freeze: { rows: 0, cols: 0 }, filter: null, charts: [], pivot: null,
+    validations: [], images: [], shapes: [],
   };
 }
 
 /** 시트의 부가 속성 (셀 외) — 저장/복원/복제용 */
 const SHEET_PROPS = ['colWidths', 'rowHeights', 'merges', 'cond', 'colStyles', 'rowStyles', 'allStyle',
-  'hiddenRows', 'hiddenCols', 'rowManual', 'freeze', 'filter', 'charts', 'pivot'];
+  'hiddenRows', 'hiddenCols', 'rowManual', 'freeze', 'filter', 'charts', 'pivot', 'validations', 'images', 'shapes'];
 
 /** 숫자 키 객체의 키를 삽입/삭제에 맞춰 이동 */
 function shiftKeys(obj, index, count) {
@@ -469,6 +470,7 @@ export class Workbook {
     target.merges = target.merges.map((m) => adjustRange(m, axis, index, count))
       .filter((m) => m && (m.r2 > m.r1 || m.c2 > m.c1));
     target.cond = target.cond.map((rule) => adjustRange(rule, axis, index, count)).filter(Boolean);
+    target.validations = target.validations.map((v) => adjustRange(v, axis, index, count)).filter(Boolean);
     if (isRow) {
       target.rowStyles = shiftKeys(target.rowStyles, index, count);
       target.hiddenRows = shiftKeys(target.hiddenRows, index, count);
@@ -634,6 +636,7 @@ export class Workbook {
   serialize() {
     return {
       version: 1,
+      ...(this.vba ? { vba: this.vba } : {}),
       sheets: this.sheets.map((s) => {
         const cells = {};
         for (const [k, cell] of s.cells) cells[k] = cellData(cell);
@@ -645,6 +648,7 @@ export class Workbook {
   }
 
   restore(data) {
+    this.vba = data.vba ?? null; // .xlsm 의 매크로(vbaProject.bin, base64) — 실행하지 않고 보존만 함
     this.sheets = data.sheets.map((s) => {
       const sheet = newSheet(s.name);
       for (const [k, d] of Object.entries(s.cells || {})) {

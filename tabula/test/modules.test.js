@@ -52,3 +52,16 @@ test('모든 함수에 설명이 있음', () => {
   const missing = FUNCTION_NAMES.filter((n) => !FUNC_INFO[n]);
   assert.deepEqual(missing, []);
 });
+
+test('한 파일 배포본 빌드', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const { mkdtempSync, readFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const out = mkdtempSync(join(tmpdir(), 'tabula-'));
+  execFileSync(process.execPath, [new URL('../build.mjs', import.meta.url).pathname, out]);
+  const html = readFileSync(join(out, 'index.html'), 'utf8');
+  assert.ok(html.includes('__mods["src/app.js"]'));
+  assert.ok(!/^\s*(import|export)\s/m.test(html.slice(html.indexOf('const __mods'))));
+  assert.ok(!html.includes('href="styles.css"'));
+});

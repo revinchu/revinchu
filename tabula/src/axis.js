@@ -1,10 +1,10 @@
 // 행/열 위치 계산 (가상 스크롤용). 기본 크기 + 일부 사용자 지정 크기/숨김만 저장하므로
-// 1,048,576행 × 16,384열 전체를 다뤄도 계산량은 사용자 지정 항목 수에만 비례.
+// 1,000만 행 × 16,384열 전체를 다뤄도 계산량은 사용자 지정 항목 수에만 비례.
 export class Axis {
   /**
    * def: 기본 크기, sizes: {index: px}, hidden: {index: true} (여러 개 전달 가능), max: 전체 개수
    */
-  constructor(def, sizes = {}, hiddenSets = [], max = 1048576) {
+  constructor(def, sizes = {}, hiddenSets = [], max = 10_000_000) {
     this.def = def;
     this.max = max;
     this.sizes = sizes;

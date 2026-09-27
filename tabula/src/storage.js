@@ -14,6 +14,8 @@ export const server = {
   },
 
   async init() {
+    // 한 파일 배포본(build.mjs)이나 파일로 직접 연 경우에는 서버가 없음
+    if (globalThis.TABULA_STATIC || globalThis.location?.protocol === 'file:') return false;
     try {
       const res = await fetch('api/health', { cache: 'no-store' });
       const data = res.ok ? await res.json() : null;

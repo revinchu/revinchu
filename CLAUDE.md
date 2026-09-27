@@ -15,6 +15,7 @@ revinchu/
 ├── keywords.txt                 # Sample keyword list (one per line)
 ├── naver_ad_rank_checker.py     # Main rank checking program
 ├── debug_html_structure.py      # HTML structure analysis utility
+├── .github/workflows/tabula-pages.yml  # GitHub Pages deploy for Tabula
 └── tabula/                      # Excel-style web spreadsheet (separate app, see below)
 ```
 
@@ -97,8 +98,12 @@ Uses **substring matching** - searching for "하늘마음" will match titles lik
 A standalone, dependency-free browser spreadsheet that mimics Microsoft Excel's UI (Korean). Unrelated to the rank checker.
 
 - Run: `cd tabula && npm start` → http://localhost:5178 ; test: `npm test` (Node built-in test runner)
+- Web build: `npm run build` → `tabula/dist/index.html` (single file; `build.mjs` inlines CSS and wraps each ES module, so only `import {…} from './x.js'` and `export const|let|function|class` forms are allowed — no default/`*`/dynamic imports, no import cycles). `.github/workflows/tabula-pages.yml` deploys it to GitHub Pages.
 - Pure ES modules, no build step, no npm dependencies. Keep it that way (zip/inflate/XML for .xlsx are hand-written in `src/zip.js`, `src/xml.js`).
-- DOM-free modules (unit-tested in Node): `formula.js`, `workbook.js`, `format.js`, `axis.js`, `xlsx.js`, `zip.js`, `xml.js`, `chart.js`, `pivot.js`, `series.js`, `csv.js`.
+- DOM-free modules (unit-tested in Node): `formula.js`, `workbook.js`, `format.js`, `axis.js`, `xlsx.js`, `zip.js`, `xml.js`, `chart.js`, `pivot.js`, `series.js`, `csv.js`, `validation.js`, `shapes.js`, `vba.js`.
+- Sheet size is `MAX_ROWS` = 10,000,000 (more than Excel's `EXCEL_MAX_ROWS` = 1,048,576); xlsx export drops rows beyond Excel's limit and `xlsxOverflow()` reports how many.
+- Drawing objects live in sheet props `charts`, `images` (data-URL `src`), `shapes`; each has `id`, `x/y/w/h` (sheet px) and optional `z` (stacking). `app.js` tracks the selected object id in `chartSel` for all three kinds.
+- Macros: `wb.vba = { bin (base64 vbaProject.bin), codeName, sheetCodes }` is preserved and written back as .xlsm; VBA is displayed, never executed.
 - The grid is virtualized (`src/view.js`): only visible rows/cols are rendered; positions come from `Axis` (default size + sparse custom sizes/hidden). Never loop over all 1,048,576 rows — clamp to `wb.usedRange()` / `wb.extent()`.
 - All UI text is Korean. New functions need an entry in `src/funcinfo.js` (a test enforces this).
 - Undoable changes go through `wb.transact(fn, meta())`; sheet-level props (freeze, filter, charts, merges, hidden rows…) use `wb.setSheetProp()` / methods that call `wb.snapshotAll()`. New sheet props must be added to `SHEET_PROPS` in `workbook.js` and adjusted in `shiftAxis`.

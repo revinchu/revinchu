@@ -116,6 +116,11 @@ export const TABS = [
         large('insertPivot', 'pivot', '피벗 테이블'),
         large('tableStyle', 'table', '표', { menu: 'tableStyles' }),
       ]),
+      group('일러스트레이션', [
+        large('insertPicture', 'picture', '그림', { title: '이 기기의 그림 삽입 (붙여넣기·끌어 놓기도 가능)' }),
+        large('shapesMenu', 'shapes', '도형', { menu: 'shapes' }),
+        large('insertTextbox', 'textbox', '텍스트 상자'),
+      ]),
       group('차트', [
         large('chartColumn', 'chartColumn', '세로 막대형', { title: '세로 막대형 차트 삽입 (Alt+F1)' }),
         large('chartBar', 'chartBar', '가로 막대형'),
@@ -181,7 +186,10 @@ export const TABS = [
           medium('reapplyFilter', 'refresh', '다시 적용'),
         ),
       ]),
-      group('데이터 도구', [large('dedupe', 'dedupe', '중복된 항목 제거')]),
+      group('데이터 도구', [
+        large('dedupe', 'dedupe', '중복된 항목 제거'),
+        large('dataValidation', 'validation', '데이터 유효성 검사', { menu: 'validation', split: true }),
+      ]),
     ],
   },
   {
@@ -212,6 +220,7 @@ export const TABS = [
         large('zoom100', 'zoom100', '100%'),
       ]),
       group('창', [large('freezeMenu', 'freeze', '틀 고정', { menu: 'freeze', toggle: 'frozen' })]),
+      group('매크로', [large('macros', 'macro', '매크로', { title: '매크로(VBA) 코드 보기' })]),
     ],
   },
   {
