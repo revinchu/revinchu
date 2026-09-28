@@ -1229,7 +1229,7 @@ export function readXlsx(bytes) {
     delete sheet.codeName;
     unsupported += sheet.unsupported;
     delete sheet.unsupported;
-    sheets.push({ name: sh.attrs.name.slice(0, 31), ...sheet, _sheetId: Number(sh.attrs.sheetId) });
+    sheets.push({ name: sh.attrs.name.slice(0, 31), ...sheet, _sheetId: Number(sh.attrs.sheetId), ...(sh.attrs.state === 'hidden' || sh.attrs.state === 'veryHidden' ? { state: sh.attrs.state } : {}) });
   }
   linkPivotsAndSlicers(files, wbRels, sheets, ctx);
   if (unsupported) warnings.push(`지원하지 않는 함수가 쓰인 수식 ${unsupported}개는 수식을 유지하고 파일에 저장된 계산 결과를 표시합니다.`);
@@ -1247,7 +1247,9 @@ export function readXlsx(bytes) {
     };
   }
   const active = Number(descendants(child(wbRoot, 'bookViews'), 'workbookView')[0]?.attrs.activeTab ?? 0);
-  return { data, active: Math.min(active, sheets.length - 1), warnings };
+  let act = Math.min(active, sheets.length - 1);
+  if (sheets[act]?.state) act = Math.max(0, sheets.findIndex((x) => !x.state));
+  return { data, active: act, warnings };
 }
 
 function relsTarget(files, path, type) {
@@ -2332,7 +2334,7 @@ export function writeXlsx(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {})
     files[`xl/worksheets/sheet${si + 1}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="${NS_MAIN}" xmlns:r="${NS_R}">`
       + (vba ? `<sheetPr codeName="${esc(vba.sheetCodes?.[sheet.name] ?? `Sheet${si + 1}`)}"/>` : '')
       + `<dimension ref="${dim}"/>`
-      + `<sheetViews><sheetView workbookViewId="0"${si === activeSheet ? ' tabSelected="1"' : ''}>${pane}</sheetView></sheetViews>`
+      + `<sheetViews><sheetView workbookViewId="0"${si === (wb.sheets[activeSheet]?.state && wb.sheets[activeSheet].state !== 'visible' ? Math.max(0, wb.sheets.findIndex((x) => !x.state || x.state === 'visible')) : activeSheet) ? ' tabSelected="1"' : ''}>${pane}</sheetView></sheetViews>`
       + `<sheetFormatPr defaultRowHeight="${px2pt(DEFAULT_ROW_HEIGHT)}"/>`
       + (colsXml ? `<cols>${colsXml}</cols>` : '')
       + `<sheetData>${rowXml}</sheetData>`
@@ -2372,7 +2374,11 @@ export function writeXlsx(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {})
   const wbExts = [];
   if (slicerCachesPivot.length) wbExts.push(`<ext uri="{BBE1A952-AA13-448e-AADC-164F8A28A991}" xmlns:x14="${NS_X14}"><x14:slicerCaches>${slicerCachesPivot.map((t) => `<x14:slicerCache r:id="${wbRel(`${REL_MS}/slicerCache`, t)}"/>`).join('')}</x14:slicerCaches></ext>`);
   if (slicerCachesTable.length) wbExts.push(`<ext uri="{46BE6895-7355-4a93-B00E-2C351335B9C9}" xmlns:x15="${NS_X15}"><x15:slicerCaches xmlns:x14="${NS_X14}">${slicerCachesTable.map((t) => `<x14:slicerCache r:id="${wbRel(`${REL_MS}/slicerCache`, t)}"/>`).join('')}</x15:slicerCaches></ext>`);
-  files['xl/workbook.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<workbook xmlns="${NS_MAIN}" xmlns:r="${NS_R}">${vba ? `<workbookPr codeName="${esc(vba.codeName || 'ThisWorkbook')}"/>` : ''}<bookViews><workbookView activeTab="${activeSheet}"/></bookViews><sheets>${wb.sheets.map((sh, i) => `<sheet name="${esc(sh.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets>${definedNames.length ? `<definedNames>${definedNames.join('')}</definedNames>` : ''}<calcPr calcId="191029" fullCalcOnLoad="1"/>${pivotCachesXml}${wbExts.length ? `<extLst>${wbExts.join('')}</extLst>` : ''}</workbook>`;
+  // 숨긴 시트는 활성 시트가 될 수 없음
+  const isShown = (i) => wb.sheets[i] && wb.sheets[i].state !== 'hidden' && wb.sheets[i].state !== 'veryHidden';
+  const firstVisible = Math.max(0, wb.sheets.findIndex((_, i) => isShown(i)));
+  const activeTab = isShown(activeSheet) ? activeSheet : firstVisible;
+  files['xl/workbook.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<workbook xmlns="${NS_MAIN}" xmlns:r="${NS_R}">${vba ? `<workbookPr codeName="${esc(vba.codeName || 'ThisWorkbook')}"/>` : ''}<bookViews><workbookView${firstVisible ? ` firstSheet="${firstVisible}"` : ''} activeTab="${activeTab}"/></bookViews><sheets>${wb.sheets.map((sh, i) => `<sheet name="${esc(sh.name)}" sheetId="${i + 1}"${sh.state === 'hidden' || sh.state === 'veryHidden' ? ` state="${sh.state}"` : ''} r:id="rId${i + 1}"/>`).join('')}</sheets>${definedNames.length ? `<definedNames>${definedNames.join('')}</definedNames>` : ''}<calcPr calcId="191029" fullCalcOnLoad="1"/>${pivotCachesXml}${wbExts.length ? `<extLst>${wbExts.join('')}</extLst>` : ''}</workbook>`;
   files['xl/_rels/workbook.xml.rels'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="${NS_PKG}">${wbRels.join('')}</Relationships>`;
   if (vba) files['xl/vbaProject.bin'] = fromBase64(vba.bin);
   files['xl/sharedStrings.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<sst xmlns="${NS_MAIN}" count="${strings.length}" uniqueCount="${strings.length}">${strings.map((s) => `<si><t xml:space="preserve">${esc(s)}</t></si>`).join('')}</sst>`;

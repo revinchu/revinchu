@@ -208,7 +208,7 @@ const selIsActiveOnly = () => {
 
 function updateSelectionUI() {
   const selObj = chartSel ? findObject(sheet(), chartSel) : null;
-  if (document.activeElement !== dom.nameBox) dom.nameBox.value = selObj ? (selObj.obj.name || OBJECT_LABEL[selObj.prop]) : cellName(active.r, active.c);
+  if (document.activeElement !== dom.nameBox) dom.nameBox.value = selObj ? (selObj.obj.name || OBJECT_LABEL[selObj.prop]) : nameBoxLabel();
   if (!editing) {
     let raw = chartSel ? '' : wb.getCell(si, active.r, active.c)?.raw ?? '';
     // 분산된 셀: 원본 수식을 흐리게 표시 (엑셀과 같음)
@@ -4708,9 +4708,47 @@ function switchSheet(i, restore = true) {
   setMode();
 }
 
+// ── 시트 숨기기 / 숨기기 취소 ──
+const isHiddenSheet = (i) => { const st = wb.sheets[i]?.state; return st === 'hidden' || st === 'veryHidden'; };
+const visibleSheetCount = () => wb.sheets.filter((_, i) => !isHiddenSheet(i)).length;
+
+function hideSheet(i = si) {
+  if (visibleSheetCount() <= 1) { alertDialog('Tabula', '통합 문서에는 보이는 시트가 하나 이상 있어야 합니다.'); return; }
+  wb.transact(() => wb.setSheetProp(i, 'state', 'hidden'), meta());
+  if (i === si) {
+    let j = i + 1;
+    while (j < wb.sheets.length && isHiddenSheet(j)) j++;
+    if (j >= wb.sheets.length) { j = i - 1; while (j >= 0 && isHiddenSheet(j)) j--; }
+    switchSheet(j, true);
+  }
+  renderSheetTabs();
+}
+
+function unhideSheetDialog() {
+  const hidden = wb.sheets.map((s, i) => [s, i]).filter(([, i]) => isHiddenSheet(i));
+  if (!hidden.length) { toast('숨겨진 시트가 없습니다.'); return; }
+  const list = el('select', { size: Math.min(10, Math.max(4, hidden.length)), multiple: true, style: { width: '100%' } },
+    hidden.map(([s, i], k) => el('option', { value: String(i), selected: k === 0 }, s.name)));
+  openDialog({
+    title: '숨기기 취소', width: 340,
+    body: el('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } }, el('div', {}, '숨기기 취소할 시트:'), list),
+    buttons: [{
+      label: '확인', primary: true, action: () => {
+        const chosen = [...list.selectedOptions].map((o) => Number(o.value));
+        if (!chosen.length) return false;
+        wb.transact(() => chosen.forEach((i) => wb.setSheetProp(i, 'state', undefined)), meta());
+        switchSheet(chosen[0]);
+        renderSheetTabs();
+        return undefined;
+      },
+    }, { label: '취소' }],
+  });
+}
+
 function renderSheetTabs() {
   dom.sheetTabs.replaceChildren(...wb.sheets.map((s, i) => el('button', {
     class: `sheet-tab${i === si ? ' active' : ''}`,
+    style: isHiddenSheet(i) ? { display: 'none' } : undefined,
     title: s.pivot ? `피벗 테이블 (원본: ${s.pivot.source})` : undefined,
     onmousedown: (e) => { if (e.button === 0) { e.preventDefault(); switchSheet(i); focusGrid(); } },
     ondblclick: () => renameSheetInline(i),
@@ -4725,6 +4763,9 @@ function renderSheetTabs() {
         { sep: true },
         { label: '왼쪽으로 이동', disabled: i === 0, action: () => moveSheet(i, -1) },
         { label: '오른쪽으로 이동', disabled: i === wb.sheets.length - 1, action: () => moveSheet(i, 1) },
+        { sep: true },
+        { label: '숨기기', action: () => hideSheet(i) },
+        { label: '숨기기 취소...', disabled: !wb.sheets.some((_, j) => isHiddenSheet(j)), action: () => unhideSheetDialog() },
       ]);
     },
   }, s.name)));
@@ -4907,6 +4948,7 @@ function loadWorkbook(data, name, activeSheet = 0) {
   wb.redoStack = [];
   docName = name || '통합 문서1';
   si = clamp(activeSheet, 0, wb.sheets.length - 1);
+  if (isHiddenSheet(si)) si = Math.max(0, wb.sheets.findIndex((_, i) => !isHiddenSheet(i)));
   clip = null;
   painter = null;
   chartSel = null;
@@ -5689,10 +5731,35 @@ function refreshNameList() {
 }
 
 /** 이름 상자 Enter: 주소 → 이동, 정의된 이름 → 그 범위 선택, 새 이름 → 선택 영역에 이름 정의 */
+/** 선택 영역이 표 전체(또는 데이터 영역)와 같으면 그 표 */
+function selectedTable() {
+  if (selKind !== 'cells') return null;
+  return (sheet().tables ?? []).find((t) => sel.c1 === t.c1 && sel.c2 === t.c2 && sel.r2 === t.r2 && (sel.r1 === t.r1 || sel.r1 === dataTop(t))) ?? null;
+}
+
+/** 이름 상자에 보일 글자: 표 전체를 고르면 표 이름, 이름 정의와 같은 범위면 그 이름 (엑셀과 같음) */
+function nameBoxLabel() {
+  const t = selectedTable();
+  if (t) return t.name;
+  if (!isSingle(sel) && selKind === 'cells') {
+    const here = selRefText().replace(/\$/g, '').toLowerCase();
+    const n = wb.names.find((x) => !x.hidden && (!x.sheet || x.sheet.toLowerCase() === sheet().name.toLowerCase()) && String(x.ref).replace(/[=$]/g, '').toLowerCase() === here);
+    if (n) return n.name;
+  }
+  return cellName(active.r, active.c);
+}
+
 function nameBoxEnter(text) {
   const t = text.trim();
   if (!t) return false;
   const existing = wb.findName(t, si);
+  // 표 전체를 고른 상태에서 새 이름을 입력하면 표 이름 바꾸기 (엑셀과 같음)
+  const selT = selectedTable();
+  if (selT && !existing && t.toLowerCase() !== selT.name.toLowerCase() && !findTable(wb, t) && validTableName(t)) {
+    renameTable(t);
+    toast(`표 이름을 '${t}'(으)로 바꿨습니다.`);
+    return true;
+  }
   const isTable = !existing && wb.sheets.some((s) => (s.tables ?? []).some((x) => x.name.toLowerCase() === t.toLowerCase()));
   if (existing || isTable) {
     const v = wb.nameValue(t, si, null, null);
@@ -6500,6 +6567,8 @@ function MENUS_HIDE() {
     { label: '열 숨기기', key: 'Ctrl+0', action: () => hideSel('col', true) },
     { label: '행 숨기기 취소', action: () => hideSel('row', false) },
     { label: '열 숨기기 취소', action: () => hideSel('col', false) },
+    { label: '시트 숨기기', action: () => hideSheet() },
+    { label: '시트 숨기기 취소...', disabled: !wb.sheets.some((_, j) => isHiddenSheet(j)), action: () => unhideSheetDialog() },
   ];
 }
 
@@ -6694,8 +6763,10 @@ const COMMANDS = {
     }, meta());
     switchSheet(i, false);
   },
-  prevSheet: () => switchSheet(si - 1),
-  nextSheet: () => switchSheet(si + 1),
+  prevSheet: () => { let j = si - 1; while (j >= 0 && isHiddenSheet(j)) j--; switchSheet(j); },
+  nextSheet: () => { let j = si + 1; while (j < wb.sheets.length && isHiddenSheet(j)) j++; switchSheet(j); },
+  hideSheet: () => hideSheet(),
+  unhideSheet: () => unhideSheetDialog(),
 
   autosum: () => autoSum('SUM'),
   fillDown: () => fillCopy('down'),
@@ -7097,9 +7168,9 @@ function bindEvents() {
   dom.nameBox.addEventListener('focus', () => { refreshNameList(); dom.nameBox.select(); });
   dom.nameBox.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); if (nameBoxEnter(dom.nameBox.value)) focusGrid(); }
-    if (e.key === 'Escape') { dom.nameBox.value = cellName(active.r, active.c); focusGrid(); }
+    if (e.key === 'Escape') { dom.nameBox.value = nameBoxLabel(); focusGrid(); }
   });
-  dom.nameBox.addEventListener('blur', () => { dom.nameBox.value = cellName(active.r, active.c); });
+  dom.nameBox.addEventListener('blur', () => { dom.nameBox.value = nameBoxLabel(); });
 
   dom.search.addEventListener('keydown', (e) => {
     e.stopPropagation();
