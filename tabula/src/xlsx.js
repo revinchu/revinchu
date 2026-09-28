@@ -1223,6 +1223,7 @@ function pivotDefFrom(root, cache, tables, sheetName) {
   };
   if (!so.rowHeaders || !so.colHeaders || so.bandRows || so.bandCols) def.styleOpts = so;
   if (root.attrs.rowHeaderCaption) def.rowCaption = root.attrs.rowHeaderCaption;
+  if (root.attrs.showError === '1' || root.attrs.showError === 'true') def.errorCaption = root.attrs.errorCaption ?? '';
   if (root.attrs.colHeaderCaption) def.colCaption = root.attrs.colHeaderCaption;
   const calc = cache.fields.filter((f) => f.formula !== undefined).map((f) => ({ name: f.name, formula: f.formula }));
   if (calc.length) def.calcFields = calc;
@@ -2148,7 +2149,8 @@ function pivotParts(wb, si, def, cache, name, pool) {
   const tableAttrs = [
     `name="${esc(name)}"`, `cacheId="${cacheId}"`, 'applyNumberFormats="0"', 'applyBorderFormats="0"', 'applyFontFormats="0"', 'applyPatternFormats="0"',
     'applyAlignmentFormats="0"', 'applyWidthHeightFormats="1"', 'dataCaption="값"', 'updatedVersion="6"', 'minRefreshableVersion="3"', 'useAutoFormatting="1"',
-    ...(d.rowCaption ? [`rowHeaderCaption="${esc(d.rowCaption)}"`] : []), ...(d.colCaption ? [`colHeaderCaption="${esc(d.colCaption)}"`] : []),
+    ...(d.rowCaption ? [`rowHeaderCaption="${esc(d.rowCaption)}"`] : []),
+    ...(d.errorCaption !== null && d.errorCaption !== undefined ? ['showError="1"', ...(d.errorCaption ? [`errorCaption="${esc(d.errorCaption)}"`] : [])] : []), ...(d.colCaption ? [`colHeaderCaption="${esc(d.colCaption)}"`] : []),
     ...(d.grandRows ? [] : ['rowGrandTotals="0"']), ...(d.grandCols ? [] : ['colGrandTotals="0"']),
     'itemPrintTitles="1"', 'createdVersion="6"', 'indent="0"', ...(tabular || outline ? ['compact="0"', 'compactData="0"'] : []),
     `outline="${tabular ? 0 : 1}"`, `outlineData="${tabular ? 0 : 1}"`, ...(tabular ? ['gridDropZones="1"'] : []), 'multipleFieldFilters="0"',

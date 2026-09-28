@@ -339,6 +339,7 @@ export function normalizeDef(def, header) {
     fieldFilters: byKey(def.fieldFilters),
     style: def.style ?? DEFAULT_PIVOT_STYLE,
     styleDef: def.styleDef ?? null,
+    errorCaption: def.errorCaption ?? null,
     rowCaption: def.rowCaption ?? null,
     colCaption: def.colCaption ?? null,
     styleOpts: { rowHeaders: true, colHeaders: true, bandRows: false, bandCols: false, ...(def.styleOpts ?? {}) },
@@ -775,7 +776,8 @@ export function computePivot(rows, d) {
   const val = (n, vi, role) => {
     const style = { ...styleFor(role), ...numStyle(vi) };
     if (n === null || n === undefined) return { raw: '', style, role };
-    if (isErr(n)) return { raw: n.code, style, role };
+    // 오류 값 표시 옵션: 오류 대신 지정한 글자(빈 칸 포함)
+    if (isErr(n)) return d.errorCaption !== null && d.errorCaption !== undefined ? { raw: d.errorCaption === '' ? '' : `'${d.errorCaption}`, style, role } : { raw: n.code, style, role };
     if (typeof n === 'boolean') return { raw: n ? 'TRUE' : 'FALSE', style, role };
     if (typeof n === 'string') return { raw: `'${n}`, style, role };
     return { raw: String(Number(n.toPrecision(15))), style, role };

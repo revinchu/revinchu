@@ -3165,8 +3165,13 @@ function pivotOptionsDialog(entry = pivotHere()) {
     { name: 'rowCaption', label: '행 레이블 캡션', value: def.rowCaption ?? '행 레이블' },
     { name: 'colCaption', label: '열 레이블 캡션', value: def.colCaption ?? '열 레이블' },
     { name: 'autofit', label: '업데이트 시 열 너비 자동 맞춤', type: 'checkbox', value: def.autofit !== false },
+    { name: 'showError', label: '오류 값 대신 표시 (예: #DIV/0! → 빈 칸)', type: 'checkbox', value: def.errorCaption !== null && def.errorCaption !== undefined },
+    { name: 'errorCaption', label: '오류 값 표시 글자', value: def.errorCaption ?? '' },
   ], (v) => {
-    const next = { ...def, rowCaption: v.rowCaption === '행 레이블' ? undefined : v.rowCaption, colCaption: v.colCaption === '열 레이블' ? undefined : v.colCaption, autofit: v.autofit ? undefined : false };
+    const next = {
+      ...def, rowCaption: v.rowCaption === '행 레이블' ? undefined : v.rowCaption, colCaption: v.colCaption === '열 레이블' ? undefined : v.colCaption, autofit: v.autofit ? undefined : false,
+      errorCaption: v.showError ? v.errorCaption : undefined,
+    };
     setPivotDef(entry, next);
     if (v.name.trim() && v.name.trim() !== pivotNameOf(entry)) renamePivot(v.name, entry);
   });

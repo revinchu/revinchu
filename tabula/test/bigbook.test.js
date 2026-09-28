@@ -120,3 +120,25 @@ test('빠른 시트 읽기: 공유 문자열 · 인라인 문자열 · 빈 행 �
     assert.equal(again.noGrid, true);
   }
 });
+
+test('피벗 오류 값 표시 옵션 (showError) 과 사용자 지정 피벗 스타일', async () => {
+  const { computePivot, resolvePivot } = await import('../src/pivot.js');
+  const rows = [['캠페인', '비용', '전환'], ['가', 100, 0], ['나', 50, 5]];
+  const def = { rows: ['캠페인'], values: [{ field: 'CPA', agg: 'sum' }], calcFields: [{ name: 'CPA', formula: '비용/전환' }], layout: 'tabular' };
+  const cellOf = (d, label) => {
+    const { def: nd, rows: r } = resolvePivot(rows, d);
+    const { grid } = computePivot(r, nd);
+    const row = grid.find((g) => g[0]?.raw === label);
+    return row[1];
+  };
+  assert.equal(cellOf(def, '가').raw, '#DIV/0!');
+  assert.equal(cellOf({ ...def, errorCaption: '' }, '가').raw, '');
+  assert.equal(cellOf({ ...def, errorCaption: '-' }, '가').raw, "'-");
+  assert.equal(cellOf({ ...def, errorCaption: '' }, '나').raw, '10');
+  // 사용자 지정 스타일: 머리글 흰 글씨
+  const custom = { header: { color: '#ffffff', fill: '#2f5597', bold: true } };
+  const { def: nd, rows: r } = resolvePivot(rows, { ...def, style: '내 스타일', styleDef: custom });
+  const head = computePivot(r, nd).grid.flat().find((c) => c?.role?.startsWith('valueHead') || c?.role === 'rowHead');
+  assert.equal(head.style.color, '#ffffff');
+  assert.equal(head.style.fill, '#2f5597');
+});
