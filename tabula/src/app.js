@@ -204,7 +204,14 @@ const selIsActiveOnly = () => {
 function updateSelectionUI() {
   const selObj = chartSel ? findObject(sheet(), chartSel) : null;
   if (document.activeElement !== dom.nameBox) dom.nameBox.value = selObj ? (selObj.obj.name || OBJECT_LABEL[selObj.prop]) : cellName(active.r, active.c);
-  if (!editing) dom.formula.value = chartSel ? '' : wb.getCell(si, active.r, active.c)?.raw ?? '';
+  if (!editing) {
+    let raw = chartSel ? '' : wb.getCell(si, active.r, active.c)?.raw ?? '';
+    // 분산된 셀: 원본 수식을 흐리게 표시 (엑셀과 같음)
+    const anchor = !raw && !chartSel ? wb.spillAnchorOf(si, active.r, active.c) : null;
+    if (anchor) raw = wb.getRaw(si, anchor.r, anchor.c);
+    dom.formula.value = raw;
+    dom.formula.classList.toggle('ghost', !!anchor);
+  }
   dom.fxCancel.disabled = !editing;
   dom.fxEnter.disabled = !editing;
   gv.renderSelection();
@@ -5060,8 +5067,12 @@ function openNamedMenu(name, anchorEl) {
   if (editing && !commitEdit()) return;
   if (name.startsWith('fn:')) {
     const cat = name.slice(3);
-    const names = FUNCTION_NAMES.filter((n) => (cat === 'more' ? ['통계', '정보'].includes(FUNC_INFO[n]?.cat) : FUNC_INFO[n]?.cat === cat));
-    openMenu(anchorEl, names.map((n) => ({ label: n, action: () => insertFunctionText(n) })));
+    if (cat === 'more') {
+      openMenu(anchorEl, ['통계', '공학', '정보', '데이터베이스', '호환성'].map((c) => ({ label: c, action: () => openNamedMenu(`fn:${c}`, anchorEl) })));
+      return;
+    }
+    const names = FUNCTION_NAMES.filter((n) => FUNC_INFO[n]?.cat === cat);
+    openMenu(anchorEl, names.map((n) => ({ label: n, action: () => insertFunctionText(n) })), { scroll: true });
     return;
   }
   const items = MENUS[name]?.(anchorEl);

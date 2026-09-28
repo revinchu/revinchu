@@ -1,8 +1,8 @@
 // 통합 문서 모델: 시트 · 셀 · 재계산 · 실행 취소 · 행/열 구조 변경
-import { resolveStructRef } from './tables.js';
+import { resolveStructRef, findTable } from './tables.js';
 import {
-  parse, evaluateFormula, ERR, compareValues, isError, autoFormatFor,
-  adjustFormulaForStructure, renameSheetInFormula, shiftFormula,
+  parse, evaluateArray, evalAny, ERR, compareValues, isError, autoFormatFor, mayReturnArray, Range, RefValue,
+  adjustFormulaForStructure, renameSheetInFormula, shiftFormula, quoteSheetName, MAX_ROWS, MAX_COLS,
 } from './formula.js';
 import { parseInput } from './format.js';
 
@@ -26,10 +26,12 @@ export function makeCell(data) {
   const style = cleanStyle(data.style);
   if (style) cell.style = style;
   if (data.comment) cell.comment = data.comment;
+  if (data.cached !== undefined) cell.cached = data.cached;
   if (cell.raw.startsWith('=') && cell.raw.length > 1 && style?.numFmt !== 'text') {
     cell.formula = true;
     try {
       cell.ast = parse(cell.raw.slice(1));
+      cell.maybeArray = mayReturnArray(cell.ast);
     } catch (e) {
       cell.ast = null;
       cell.parseError = e.message;
@@ -48,7 +50,14 @@ export function cellData(cell) {
   const d = { raw: cell.raw };
   if (cell.style) d.style = { ...cell.style };
   if (cell.comment) d.comment = cell.comment;
+  if (cell.cached !== undefined && cell.formula) d.cached = cell.cached;
   return d;
+}
+
+/** 지원하지 않는 함수 수식의 파일 속 계산 결과 (저장 가능한 형태) */
+function cachedValue(c) {
+  if (c && typeof c === 'object' && c.error) return ERR[Object.keys(ERR).find((k) => ERR[k].code === c.error)] ?? ERR.NAME;
+  return c;
 }
 
 function newSheet(name) {
@@ -108,6 +117,11 @@ export class Workbook {
     this.listeners = new Set();
     this.depth = 0;
     this.warming = false;
+    this.names = [];
+    this.spills = new Map();
+    this.spillOwner = new Map();
+    this.spillState = null;
+    this.nameStack = new Set();
     if (data) this.load(data);
     else this.sheets = [newSheet('Sheet1')];
   }
@@ -127,7 +141,7 @@ export class Workbook {
 
   getValue(si, r, c) {
     const cell = this.getCell(si, r, c);
-    if (!cell) return null;
+    if (!cell || (!cell.formula && cell.raw === '')) return this.spillValueAt(si, r, c);
     if (!cell.formula) return cell.v ?? null;
     const k = `${si}:${r},${c}`;
     if (this.cache.has(k)) return this.cache.get(k);
@@ -154,9 +168,11 @@ export class Workbook {
     this.evaluating.add(k);
     this.depth++;
     let v;
+    const comma = k.indexOf(',');
+    const r = Number(k.slice(k.indexOf(':') + 1, comma));
+    const c = Number(k.slice(comma + 1));
     try {
-      const comma = k.indexOf(',');
-      v = evaluateFormula(cell.ast, this.ctxFor(si, Number(k.slice(k.indexOf(':') + 1, comma)), Number(k.slice(comma + 1))));
+      v = evaluateArray(cell.ast, this.ctxFor(si, r, c));
     } catch (e) {
       if (e instanceof RangeError) throw DEEP;
       throw e;
@@ -164,8 +180,145 @@ export class Workbook {
       this.depth--;
       this.evaluating.delete(k);
     }
+    // 지원하지 않는 함수는 파일에 저장된 계산 결과를 그대로 표시
+    if (v === ERR.NAME && cell.cached !== undefined) v = cachedValue(cell.cached);
+    if (v instanceof Range) v = this.placeSpill(k, si, r, c, v);
     this.cache.set(k, v);
     return v;
+  }
+
+  // ─────────── 동적 배열 (분산) ───────────
+  /** 배열 결과를 주변 빈 셀로 분산. 막혀 있으면 #SPILL! */
+  placeSpill(k, si, r, c, arr) {
+    const h = arr.height;
+    const w = arr.width;
+    if (r + h > MAX_ROWS || c + w > MAX_COLS) return ERR.SPILL;
+    const sheet = this.sheets[si];
+    for (let i = 0; i < h; i++) {
+      for (let j = 0; j < w; j++) {
+        if (!i && !j) continue;
+        if (sheet.cells.get(key(r + i, c + j))?.raw) return ERR.SPILL;
+        const owner = this.spillOwner.get(`${si}:${r + i},${c + j}`);
+        if (owner && owner !== k) return ERR.SPILL;
+      }
+    }
+    if (sheet.merges.some((m) => m.r1 <= r + h - 1 && m.r2 >= r && m.c1 <= c + w - 1 && m.c2 >= c)) return ERR.SPILL;
+    this.spills.set(k, { si, r, c, h, w, rows: arr.rows });
+    for (let i = 0; i < h; i++) {
+      for (let j = 0; j < w; j++) if (i || j) this.spillOwner.set(`${si}:${r + i},${c + j}`, k);
+    }
+    const v = arr.rows[0][0];
+    return v === null || v === undefined ? 0 : v;
+  }
+
+  /** 분산될 수 있는 수식을 모두 계산해 분산 영역을 확정 */
+  ensureSpills() {
+    if (this.spillState === 'done') return;
+    if (this.spillState === 'running') { this.runSpillQueue(); return; }
+    this.spillState = 'running';
+    const list = [];
+    this.sheets.forEach((sheet, si) => {
+      for (const [kk, cell] of sheet.cells) if (cell.formula && cell.maybeArray) { const [r, c] = unkey(kk); list.push([si, r, c]); }
+    });
+    list.sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2]);
+    this.spillQueue = list;
+    this.spillPos = 0;
+    try {
+      this.runSpillQueue();
+    } finally {
+      this.spillState = this.spillPos >= this.spillQueue.length ? 'done' : null;
+    }
+  }
+
+  runSpillQueue() {
+    while (this.spillPos < this.spillQueue.length) {
+      const [si, r, c] = this.spillQueue[this.spillPos++];
+      this.getValue(si, r, c);
+    }
+  }
+
+  spillValueAt(si, r, c) {
+    this.ensureSpills();
+    const owner = this.spillOwner.get(`${si}:${r},${c}`);
+    if (!owner) return null;
+    const sp = this.spills.get(owner);
+    const v = sp.rows[r - sp.r]?.[c - sp.c];
+    return v === null || v === undefined ? 0 : v;
+  }
+
+  /** 분산된 셀이면 원본(앵커) 셀 {r, c} */
+  spillAnchorOf(si, r, c) {
+    this.ensureSpills();
+    const owner = this.spillOwner.get(`${si}:${r},${c}`);
+    if (!owner) return null;
+    const sp = this.spills.get(owner);
+    return { r: sp.r, c: sp.c };
+  }
+
+  /** 앵커 셀의 분산 영역 {r1,c1,r2,c2} (없으면 null) */
+  spillRange(si, r, c) {
+    const cell = this.getCell(si, r, c);
+    if (!cell?.formula) return null;
+    this.getValue(si, r, c);
+    const sp = this.spills.get(`${si}:${r},${c}`);
+    return sp ? { r1: sp.r, c1: sp.c, r2: sp.r + sp.h - 1, c2: sp.c + sp.w - 1 } : null;
+  }
+
+  /** 시트의 분산 영역 목록 (저장용) */
+  spillsOf(si) {
+    this.ensureSpills();
+    return [...this.spills.values()].filter((sp) => sp.si === si);
+  }
+
+  // ─────────── 이름 정의 ───────────
+  /** 이름 찾기: sheet 가 있으면 그 시트 범위 이름, 없으면 현재 시트 범위 → 통합 문서 범위 */
+  findName(name, hostSi = null, sheet = null) {
+    const n = name.toLowerCase();
+    const list = this.names.filter((x) => x.name.toLowerCase() === n);
+    if (sheet) return list.find((x) => x.sheet && x.sheet.toLowerCase() === sheet.toLowerCase()) ?? null;
+    const hostName = hostSi === null ? null : this.sheets[hostSi]?.name.toLowerCase();
+    return list.find((x) => x.sheet && x.sheet.toLowerCase() === hostName) ?? list.find((x) => !x.sheet) ?? null;
+  }
+
+  /** 이름 값 (RefValue · 값 · LAMBDA). 없으면 undefined */
+  nameValue(name, hostSi, sheet, here) {
+    const entry = this.findName(name, hostSi, sheet);
+    if (!entry) {
+      // 표 이름만 쓰면 데이터 영역
+      if (!sheet && findTable(this, name)) {
+        const rg = resolveStructRef(this, name, '', null);
+        if (rg) return new RefValue(this.sheets[rg.si].name, rg.r1, rg.c1, rg.r2, rg.c2);
+      }
+      return undefined;
+    }
+    if (this.nameStack.has(entry)) return ERR.CIRC;
+    const text = String(entry.ref ?? '').replace(/^=/, '');
+    if (entry._text !== text) {
+      entry._text = text;
+      try { entry._ast = parse(text); } catch { entry._ast = null; }
+    }
+    if (!entry._ast) return ERR.NAME;
+    const scopeSi = entry.sheet ? this.sheetIndexByName(entry.sheet) : hostSi ?? 0;
+    const ctx = this.ctxFor(scopeSi < 0 ? hostSi ?? 0 : scopeSi, here?.r ?? null, here?.c ?? null);
+    this.nameStack.add(entry);
+    try {
+      const v = evalAny(entry._ast, ctx);
+      // 시트가 없는 참조는 이름의 시트(또는 수식 시트) 기준으로 고정
+      if (v instanceof RefValue && !v.sheet) return new RefValue(this.sheets[scopeSi < 0 ? hostSi ?? 0 : scopeSi].name, v.r1, v.c1, v.r2, v.c2);
+      return v;
+    } catch (e) {
+      if (isError(e)) return e;
+      throw e;
+    } finally {
+      this.nameStack.delete(entry);
+    }
+  }
+
+  /** 이름 목록 교체 (실행 취소 가능) */
+  setNames(list) {
+    this.snapshotAll();
+    this.names = list.map((x) => ({ name: x.name, ref: x.ref, sheet: x.sheet ?? null, ...(x.comment ? { comment: x.comment } : {}), ...(x.hidden ? { hidden: true } : {}) }));
+    this.invalidate();
   }
 
   /** 모든 수식을 행 순서대로 계산해 캐시를 채움 */
@@ -215,18 +368,44 @@ export class Workbook {
   }
 
   ctxFor(si, r = null, c = null) {
-    const here = r === null ? null : { si, r, c };
+    const here = r === null ? null : { si, r, c, sheet: this.sheets[si]?.name };
     return {
+      here,
+      name: (n, sheet) => this.nameValue(n, si, sheet, here),
+      spillRef: (sheet, rr, cc) => {
+        const s = this.resolveSheet(sheet, si);
+        const v = this.getValue(s, rr, cc);
+        if (v === ERR.SPILL) throw ERR.REF;
+        const sp = this.spills.get(`${s}:${rr},${cc}`);
+        const name = this.sheets[s].name;
+        if (sp) return new RefValue(name, sp.r, sp.c, sp.r + sp.h - 1, sp.c + sp.w - 1);
+        if (!this.getCell(s, rr, cc)?.formula) return null;
+        return new RefValue(name, rr, cc);
+      },
+      formulaText: (sheet, rr, cc) => {
+        const cell = this.getCell(this.resolveSheet(sheet, si), rr, cc);
+        return cell?.formula ? cell.raw : null;
+      },
+      sheetIndex: (name) => (name == null ? si : this.sheetIndexByName(name)),
+      sheetCount: () => this.sheets.length,
+      quoteSheet: (name) => quoteSheetName(name),
+      colWidthChars: (sheet, cc) => Math.round(this.colWidth(this.resolveSheet(sheet, si), cc) / 7.5),
+      cellFormat: (sheet, rr, cc) => {
+        const st = this.styleAt(this.resolveSheet(sheet, si), rr, cc);
+        return { number: 'F2', currency: 'C0', accounting: 'C0', percent: 'P0', date: 'D1', longdate: 'D1', time: 'D9', datetime: 'D4', scientific: 'S2', text: '@' }[st.numFmt] ?? 'G';
+      },
+      usedCols: (sheet) => this.usedRange(this.resolveSheet(sheet, si)).cols,
       structRef: (table, spec) => {
         const rg = resolveStructRef(this, table, spec, here);
         if (!rg) return null;
         const range = rg.r1 !== rg.r2 || rg.c1 !== rg.c2;
         return { sheet: this.sheets[rg.si].name, r1: rg.r1, c1: rg.c1, r2: rg.r2, c2: rg.c2, range };
       },
-      rowHidden: (sheet, row, manualToo) => {
+      rowHidden: (sheet, row, manualToo, filteredToo = true) => {
         const s = this.sheets[this.resolveSheet(sheet, si)];
         if (!s) return false;
         if (manualToo && s.hiddenRows?.[row]) return true;
+        if (!filteredToo) return false;
         if (s.filter?.hidden?.[row]) return true;
         return (s.tables ?? []).some((t) => t.filter?.hidden?.[row]);
       },
@@ -241,7 +420,12 @@ export class Workbook {
         }
         return rows;
       },
-      usedRows: (sheet) => this.usedRange(this.resolveSheet(sheet, si)).rows,
+      usedRows: (sheet) => {
+        const s = this.resolveSheet(sheet, si);
+        let n = this.usedRange(s).rows;
+        for (const sp of this.spills.values()) if (sp.si === s) n = Math.max(n, sp.r + sp.h);
+        return n;
+      },
     };
   }
 
@@ -282,6 +466,9 @@ export class Workbook {
 
   invalidate() {
     this.cache.clear();
+    this.spills.clear();
+    this.spillOwner.clear();
+    this.spillState = null;
     this.usedCache.clear();
     this.extentCache.clear();
   }
@@ -544,6 +731,10 @@ export class Workbook {
         if (raw !== cell.raw) sheet.cells.set(k, makeCell({ ...cellData(cell), raw }));
       }
     }
+    this.names = this.names.map((n) => {
+      const ref = adjustFormulaForStructure(n.ref, { targetSheet: target.name, hostSheet: n.sheet ?? '', axis, index, count });
+      return ref === n.ref ? n : { ...n, ref };
+    });
     this.invalidate();
   }
 
@@ -565,6 +756,8 @@ export class Workbook {
   deleteSheet(si) {
     if (this.sheets.length <= 1) return false;
     this.snapshotAll();
+    const gone = this.sheets[si].name.toLowerCase();
+    this.names = this.names.filter((n) => (n.sheet ?? '').toLowerCase() !== gone);
     this.sheets.splice(si, 1);
     this.invalidate();
     return true;
@@ -588,6 +781,11 @@ export class Workbook {
         if (raw !== cell.raw) sheet.cells.set(k, makeCell({ ...cellData(cell), raw }));
       }
     }
+    this.names = this.names.map((n) => ({
+      ...n,
+      ref: renameSheetInFormula(n.ref, old, newName),
+      sheet: n.sheet && n.sheet.toLowerCase() === old.toLowerCase() ? newName : n.sheet,
+    }));
     this.invalidate();
     return true;
   }
@@ -673,6 +871,7 @@ export class Workbook {
     return {
       version: 1,
       ...(this.vba ? { vba: this.vba } : {}),
+      ...(this.names.length ? { names: this.names.map(({ _ast, _text, ...n }) => ({ ...n })) } : {}),
       sheets: this.sheets.map((s) => {
         const cells = {};
         for (const [k, cell] of s.cells) cells[k] = cellData(cell);
@@ -685,6 +884,7 @@ export class Workbook {
 
   restore(data) {
     this.vba = data.vba ?? null; // .xlsm 의 매크로(vbaProject.bin, base64) — 실행하지 않고 보존만 함
+    this.names = (data.names ?? []).map((n) => ({ ...n }));
     this.sheets = data.sheets.map((s) => {
       const sheet = newSheet(s.name);
       for (const [k, d] of Object.entries(s.cells || {})) {

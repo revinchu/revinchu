@@ -1,23 +1,29 @@
-// Tabula 수식 엔진: 토크나이저 · 파서 · 평가기 · 참조 재작성
-import { formatGeneral, formatWithPattern } from './format.js';
+// Tabula 수식 엔진: 토크나이저 · 파서 · 평가기(배열·분산·이름·LET/LAMBDA) · 참조 재작성
+import {
+  FormulaError as FormulaErrorCore, ERR as ERR_CORE, ERR_BY_CODE, isError as isErrorCore, Range as RangeCore, RefValue as RefValueCore,
+  Lambda, scalar, toNum, toStr, checkNum, compareValues as compareCore, makeCriteria as makeCriteriaCore,
+  parseNumberText as parseNumberCore, dateToSerial as dateToSerialCore, serialToDate as serialToDateCore,
+  lazy, attempt, broadcast2, mapValue,
+} from './fxcore.js';
+import { MATH } from './fx-math.js';
+import { STAT } from './fx-stat.js';
+import { TEXT } from './fx-text.js';
+import { DATE } from './fx-date.js';
+import { LOOKUP } from './fx-lookup.js';
+import { LOGIC } from './fx-logic.js';
+import { FIN } from './fx-fin.js';
 
-// ───────────────────────── 오류 값 ─────────────────────────
-export class FormulaError {
-  constructor(code) { this.code = code; }
-  toString() { return this.code; }
-}
-export const ERR = {
-  DIV0: new FormulaError('#DIV/0!'),
-  VALUE: new FormulaError('#VALUE!'),
-  REF: new FormulaError('#REF!'),
-  NAME: new FormulaError('#NAME?'),
-  NUM: new FormulaError('#NUM!'),
-  NA: new FormulaError('#N/A'),
-  NULL: new FormulaError('#NULL!'),
-  CIRC: new FormulaError('#CIRC!'),
-};
-const ERR_BY_CODE = Object.fromEntries(Object.values(ERR).map((e) => [e.code, e]));
-export const isError = (v) => v instanceof FormulaError;
+// 공통 값/오류 (다른 모듈 호환용 재수출)
+export const FormulaError = FormulaErrorCore;
+export const ERR = ERR_CORE;
+export const isError = isErrorCore;
+export const Range = RangeCore;
+export const RefValue = RefValueCore;
+export const compareValues = compareCore;
+export const makeCriteria = makeCriteriaCore;
+export const parseNumberText = parseNumberCore;
+export const dateToSerial = dateToSerialCore;
+export const serialToDate = serialToDateCore;
 
 // ───────────────────────── 주소 유틸 ─────────────────────────
 // 엑셀(1,048,576행)보다 많은 1,000만 행 지원. .xlsx 로 저장할 때만 엑셀 한도가 적용됨
@@ -67,7 +73,7 @@ export function parseRangeName(s) {
 }
 
 export function quoteSheetName(name) {
-  return /^[A-Za-z_À-￿][\w.À-￿]*$/.test(name) && !parseCellName(name)
+  return /^[A-Za-z_À-￿][\w.À-￿]*$/.test(name) && !parseCellName(name) && !/^R\d*C\d*$/i.test(name)
     ? name
     : `'${name.replace(/'/g, "''")}'`;
 }
@@ -77,10 +83,12 @@ const SHEET = String.raw`(?:'((?:[^']|'')+)'|([A-Za-z_À-￿][\w.À-￿]*))!`;
 const CELL = String.raw`(\$?)([A-Za-z]{1,3})(\$?)(\d+)`;
 const RANGE_RE = new RegExp(`(?:${SHEET})?${CELL}(?::${CELL})?(?![\\w(![])`, 'y');
 const COLS_RE = new RegExp(`(?:${SHEET})?(\\$?)([A-Za-z]{1,3}):(\\$?)([A-Za-z]{1,3})(?![\\w(!])`, 'y');
+const ROWS_RE = new RegExp(`(?:${SHEET})?(\\$?)(\\d+):(\\$?)(\\d+)(?![\\w(!.])`, 'y');
+const SHEET_NAME_RE = new RegExp(`${SHEET}([A-Za-z_\\\\À-￿][\\w.À-￿]*)`, 'y');
 const NUMBER_RE = /(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/y;
-const IDENT_RE = /[A-Za-z_À-￿][\w.À-￿]*/y;
-const ERROR_RE = /#(?:DIV\/0!|VALUE!|REF!|NAME\?|NUM!|N\/A|NULL!|CIRC!)/y;
-const OPS = ['<=', '>=', '<>', '+', '-', '*', '/', '^', '&', '=', '<', '>', '%'];
+const IDENT_RE = /[A-Za-z_\\À-￿][\w.?À-￿]*/y;
+const ERROR_RE = /#(?:DIV\/0!|VALUE!|REF!|NAME\?|NUM!|N\/A|NULL!|CIRC!|SPILL!|CALC!|BUSY!|GETTING_DATA)/y;
+const OPS = ['<=', '>=', '<>', '+', '-', '*', '/', '^', '&', '=', '<', '>', '%', '@'];
 
 function sticky(re, src, pos) {
   re.lastIndex = pos;
@@ -99,9 +107,16 @@ function bracketEnd(src, open) {
   throw new SyntaxError('닫는 대괄호가 없습니다');
 }
 
+/** 함수 이름의 파일 접두사 제거 (_xlfn. / _xlws.) */
+export const stripFnPrefix = (name) => name.replace(/^(?:_XLFN\.|_XLWS\.)+/i, '').replace(/^_XLFN\._XLWS\./i, '');
+
 export function tokenize(src) {
   const toks = [];
   let i = 0;
+  const prevIsValue = () => {
+    const p = toks[toks.length - 1];
+    return p && (p.t === 'ref' || p.t === 'ident' || p.t === ')' || p.t === 'sref');
+  };
   while (i < src.length) {
     const ch = src[i];
     if (/\s/.test(ch)) { i++; continue; }
@@ -123,10 +138,26 @@ export function tokenize(src) {
     }
     if (ch === '#') {
       const m = sticky(ERROR_RE, src, i);
-      if (!m) throw new SyntaxError('알 수 없는 오류 값');
-      i += m[0].length;
-      toks.push({ t: 'err', v: m[0], s: start, e: i });
-      continue;
+      if (m) {
+        i += m[0].length;
+        toks.push({ t: 'err', v: m[0] === '#GETTING_DATA' ? '#BUSY!' : m[0], s: start, e: i });
+        continue;
+      }
+      if (prevIsValue()) {
+        // 분산 범위 참조 A1#
+        i++;
+        toks.push({ t: '#', s: start, e: i });
+        continue;
+      }
+      throw new SyntaxError('알 수 없는 오류 값');
+    }
+    if (/\d/.test(ch)) {
+      const rm = sticky(ROWS_RE, src, i);
+      if (rm && validRows(rm)) {
+        i += rm[0].length;
+        toks.push({ t: 'ref', ref: refFromRowsMatch(rm), s: start, e: i });
+        continue;
+      }
     }
     if (/[\d.]/.test(ch)) {
       const m = sticky(NUMBER_RE, src, i);
@@ -135,7 +166,7 @@ export function tokenize(src) {
       toks.push({ t: 'num', v: parseFloat(m[0]), s: start, e: i });
       continue;
     }
-    if (/[A-Za-z_$'À-￿]/.test(ch)) {
+    if (/[A-Za-z_$'\\À-￿]/.test(ch)) {
       let m = sticky(RANGE_RE, src, i);
       if (m && validRangeMatch(m)) {
         i += m[0].length;
@@ -146,6 +177,19 @@ export function tokenize(src) {
       if (m) {
         i += m[0].length;
         toks.push({ t: 'ref', ref: refFromColsMatch(m), s: start, e: i });
+        continue;
+      }
+      m = sticky(ROWS_RE, src, i);
+      if (m && validRows(m)) {
+        i += m[0].length;
+        toks.push({ t: 'ref', ref: refFromRowsMatch(m), s: start, e: i });
+        continue;
+      }
+      m = sticky(SHEET_NAME_RE, src, i);
+      if (m) {
+        // 시트 범위 이름: Sheet1!이름
+        i += m[0].length;
+        toks.push({ t: 'ident', v: m[3], sheet: sheetFromMatch(m[1], m[2]), s: start, e: i });
         continue;
       }
       m = sticky(IDENT_RE, src, i);
@@ -161,9 +205,9 @@ export function tokenize(src) {
         const up = m[0].toUpperCase();
         let j = i;
         while (j < src.length && /\s/.test(src[j])) j++;
-        if (src[j] === '(') toks.push({ t: 'func', v: up, s: start, e: i });
+        if (src[j] === '(') toks.push({ t: 'func', v: stripFnPrefix(up), s: start, e: i });
         else if (up === 'TRUE' || up === 'FALSE') toks.push({ t: 'bool', v: up === 'TRUE', s: start, e: i });
-        else toks.push({ t: 'ident', v: m[0], s: start, e: i });
+        else toks.push({ t: 'ident', v: m[0].replace(/^_xlpm\./i, '').replace(/^_xleta\./i, ''), s: start, e: i });
         continue;
       }
       throw new SyntaxError(`잘못된 문자: ${ch}`);
@@ -175,7 +219,7 @@ export function tokenize(src) {
       i = end + 1;
       continue;
     }
-    if (ch === '(' || ch === ')' || ch === ',' || ch === ':') {
+    if ('(),:{};'.includes(ch)) {
       i++;
       toks.push({ t: ch, s: start, e: i });
       continue;
@@ -204,6 +248,12 @@ function validRangeMatch(m) {
   return ok(m[4], m[6]) && (m[8] == null || ok(m[8], m[10]));
 }
 
+function validRows(m) {
+  const a = +m[4];
+  const b = +m[6];
+  return a >= 1 && b >= 1 && a <= MAX_ROWS && b <= MAX_ROWS;
+}
+
 function refFromRangeMatch(m) {
   const sheet = sheetFromMatch(m[1], m[2]);
   const r1 = +m[6] - 1;
@@ -226,27 +276,39 @@ function refFromColsMatch(m) {
   };
 }
 
+function refFromRowsMatch(m) {
+  return {
+    sheet: sheetFromMatch(m[1], m[2]),
+    c1: 0, c2: MAX_COLS - 1, ac1: true, ac2: true,
+    r1: +m[4] - 1, r2: +m[6] - 1, ar1: !!m[3], ar2: !!m[5],
+    range: true, cols: false, rows: true,
+  };
+}
+
 // ───────────────────────── 파서 ─────────────────────────
 const BIN_PREC = { '=': 1, '<>': 1, '<': 1, '>': 1, '<=': 1, '>=': 1, '&': 2, '+': 3, '-': 3, '*': 4, '/': 4, '^': 5 };
 
-/** 수식 본문(맨 앞 '=' 제외)을 AST로 변환 */
+/** 수식 본문(맨 앞 '=' 제외)을 AST로 변환. 노드에는 원문 위치 s/e 가 있음 */
 export function parse(src) {
   const toks = tokenize(src);
   let i = 0;
   const peek = () => toks[i];
   const next = () => toks[i++];
   const fail = (msg) => { throw new SyntaxError(msg); };
+  const endOf = () => toks[i - 1]?.e ?? src.length;
 
   function expr(minPrec) {
     let left = unary();
     for (;;) {
       const k = peek();
       if (!k || k.t !== 'op') break;
-      if (k.v === '%') { next(); left = { type: 'pct', a: left }; continue; }
+      if (k.v === '%') { next(); left = { type: 'pct', a: left, s: left.s, e: k.e }; continue; }
       const p = BIN_PREC[k.v];
       if (p === undefined || p < minPrec) break;
       next();
-      left = { type: 'bin', op: k.v, a: left, b: expr(p + 1) };
+      // ^ 는 왼쪽 결합 (엑셀과 같음)
+      const b = expr(p + 1);
+      left = { type: 'bin', op: k.v, a: left, b, s: left.s, e: b.e };
     }
     return left;
   }
@@ -256,41 +318,116 @@ export function parse(src) {
     if (k && k.t === 'op' && (k.v === '-' || k.v === '+')) {
       next();
       const a = unary();
-      return k.v === '-' ? { type: 'neg', a } : { type: 'pos', a };
+      return { type: k.v === '-' ? 'neg' : 'pos', a, s: k.s, e: a.e };
     }
-    return primary();
+    if (k && k.t === 'op' && k.v === '@') {
+      next();
+      const a = unary();
+      return { type: 'at', a, s: k.s, e: a.e };
+    }
+    return postfix();
+  }
+
+  function postfix() {
+    let node = primary();
+    for (;;) {
+      const k = peek();
+      if (!k) break;
+      if (k.t === '#') { next(); node = { type: 'spill', a: node, s: node.s, e: k.e }; continue; }
+      if (k.t === ':') {
+        next();
+        const b = primaryWithSpill();
+        node = { type: 'range', a: node, b, s: node.s, e: b.e };
+        continue;
+      }
+      if (k.t === '(' && (node.type === 'func' || node.type === 'call' || node.type === 'paren')) {
+        next();
+        const args = argList();
+        node = { type: 'call', fn: node, args, s: node.s, e: endOf() };
+        continue;
+      }
+      break;
+    }
+    return node;
+  }
+
+  function primaryWithSpill() {
+    let node = primary();
+    if (peek()?.t === '#') { const k = next(); node = { type: 'spill', a: node, s: node.s, e: k.e }; }
+    return node;
+  }
+
+  function argList() {
+    const args = [];
+    if (peek()?.t === ')') { next(); return args; }
+    for (;;) {
+      const t = peek();
+      if (t && (t.t === ',' || t.t === ')')) args.push({ type: 'empty', s: t.s, e: t.s });
+      else args.push(expr(0));
+      const sep = next();
+      if (!sep) fail('닫는 괄호가 없습니다');
+      if (sep.t === ')') break;
+      if (sep.t !== ',') fail('인수 구분 기호가 잘못되었습니다');
+    }
+    return args;
+  }
+
+  function arrayConst(open) {
+    const rows = [[]];
+    for (;;) {
+      let k = next();
+      if (!k) fail('닫는 중괄호가 없습니다');
+      let sign = 1;
+      while (k.t === 'op' && (k.v === '-' || k.v === '+')) {
+        if (k.v === '-') sign = -sign;
+        k = next();
+      }
+      let v;
+      if (k.t === 'num') v = sign * k.v;
+      else if (k.t === 'str') v = k.v;
+      else if (k.t === 'bool') v = k.v;
+      else if (k.t === 'err') v = ERR_BY_CODE[k.v] ?? ERR.VALUE;
+      else fail('배열 상수에는 값만 넣을 수 있습니다');
+      rows[rows.length - 1].push(v);
+      const sep = next();
+      if (!sep) fail('닫는 중괄호가 없습니다');
+      if (sep.t === '}') break;
+      if (sep.t === ';') rows.push([]);
+      else if (sep.t !== ',') fail('배열 상수 구분 기호가 잘못되었습니다');
+    }
+    const w = rows[0].length;
+    if (rows.some((r) => r.length !== w)) fail('배열 상수의 행 길이가 다릅니다');
+    return { type: 'array', rows, s: open.s, e: endOf() };
   }
 
   function primary() {
     const k = next();
     if (!k) fail('수식이 완전하지 않습니다');
     switch (k.t) {
-      case 'num': return { type: 'num', v: k.v };
-      case 'str': return { type: 'str', v: k.v };
-      case 'bool': return { type: 'bool', v: k.v };
-      case 'err': return { type: 'err', v: k.v };
-      case 'ref': return { type: 'ref', ref: k.ref };
-      case 'sref': return { type: 'sref', table: k.table, spec: k.spec };
-      case 'ident': return { type: 'name', v: k.v };
+      case 'num': return { type: 'num', v: k.v, s: k.s, e: k.e };
+      case 'str': return { type: 'str', v: k.v, s: k.s, e: k.e };
+      case 'bool': return { type: 'bool', v: k.v, s: k.s, e: k.e };
+      case 'err': return { type: 'err', v: k.v, s: k.s, e: k.e };
+      case 'ref': return { type: 'ref', ref: k.ref, s: k.s, e: k.e };
+      case 'sref': return { type: 'sref', table: k.table, spec: k.spec, s: k.s, e: k.e };
+      case 'ident': return { type: 'name', v: k.v, sheet: k.sheet ?? null, s: k.s, e: k.e };
+      case '{': return arrayConst(k);
       case '(': {
         const e = expr(0);
+        if (peek()?.t === ',') {
+          // 참조 합집합 (A1:B2,C3)
+          const items = [e];
+          while (peek()?.t === ',') { next(); items.push(expr(0)); }
+          if (next()?.t !== ')') fail('닫는 괄호가 없습니다');
+          return { type: 'union', items, s: k.s, e: endOf() };
+        }
         if (next()?.t !== ')') fail('닫는 괄호가 없습니다');
-        return e;
+        return { type: 'paren', a: e, s: k.s, e: endOf() };
       }
       case 'func': {
         if (next()?.t !== '(') fail('여는 괄호가 없습니다');
-        const args = [];
-        if (peek()?.t === ')') { next(); return { type: 'func', name: k.v, args }; }
-        for (;;) {
-          const t = peek();
-          if (t && (t.t === ',' || t.t === ')')) args.push({ type: 'empty' });
-          else args.push(expr(0));
-          const sep = next();
-          if (!sep) fail('닫는 괄호가 없습니다');
-          if (sep.t === ')') break;
-          if (sep.t !== ',') fail('인수 구분 기호가 잘못되었습니다');
-        }
-        return { type: 'func', name: k.v, args };
+        const args = argList();
+        return { type: 'func', name: k.v, args, s: k.s, e: endOf() };
       }
       default:
         return fail('수식에 문제가 있습니다');
@@ -302,96 +439,64 @@ export function parse(src) {
   return ast;
 }
 
-// ───────────────────────── 값 변환 ─────────────────────────
-export class Range {
-  constructor(rows) { this.rows = rows; }
-  get height() { return this.rows.length; }
-  get width() { return this.rows[0]?.length ?? 0; }
-  *values() { for (const row of this.rows) yield* row; }
-}
-
-function scalar(v) {
-  if (v instanceof Range) {
-    if (v.height === 1 && v.width === 1) v = v.rows[0][0];
-    else throw ERR.VALUE;
-  }
-  if (isError(v)) throw v;
-  return v;
-}
-
-export function parseNumberText(s) {
-  const t = s.trim();
-  if (t === '') return null;
-  if (/^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(t)) return Number(t);
-  if (/^[+-]?\d{1,3}(,\d{3})+(\.\d+)?$/.test(t)) return Number(t.replace(/,/g, ''));
-  const pct = /^([+-]?(\d+\.?\d*|\.\d+))%$/.exec(t);
-  if (pct) return Number(pct[1]) / 100;
-  return null;
-}
-
-function toNum(v) {
-  v = scalar(v);
-  if (typeof v === 'number') return v;
-  if (v === null || v === undefined) return 0;
-  if (typeof v === 'boolean') return v ? 1 : 0;
-  const n = parseNumberText(String(v));
-  if (n === null) throw ERR.VALUE;
-  return n;
-}
-
-function toStr(v) {
-  v = scalar(v);
-  if (v === null || v === undefined) return '';
-  if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';
-  if (typeof v === 'number') return formatGeneral(v);
-  return String(v);
-}
-
-function toBool(v) {
-  v = scalar(v);
-  if (typeof v === 'boolean') return v;
-  if (typeof v === 'number') return v !== 0;
-  if (v === null || v === undefined) return false;
-  const u = String(v).toUpperCase();
-  if (u === 'TRUE') return true;
-  if (u === 'FALSE') return false;
-  throw ERR.VALUE;
-}
-
-function toInt(v) { return Math.trunc(toNum(v)); }
-
-function checkNum(n) {
-  if (!Number.isFinite(n)) throw ERR.NUM;
-  return n;
-}
-
-const typeRank = (v) => (typeof v === 'number' ? 0 : typeof v === 'string' ? 1 : 2);
-
-/** 엑셀 비교 규칙: 숫자 < 문자 < 논리값, 문자는 대소문자 무시 */
-export function compareValues(a, b) {
-  if (a === null || a === undefined) a = typeof b === 'string' ? '' : typeof b === 'boolean' ? false : 0;
-  if (b === null || b === undefined) b = typeof a === 'string' ? '' : typeof a === 'boolean' ? false : 0;
-  const ra = typeRank(a);
-  const rb = typeRank(b);
-  if (ra !== rb) return ra - rb;
-  if (typeof a === 'string') {
-    const x = a.toLowerCase();
-    const y = b.toLowerCase();
-    return x < y ? -1 : x > y ? 1 : 0;
-  }
-  if (typeof a === 'boolean') return (a ? 1 : 0) - (b ? 1 : 0);
-  return a < b ? -1 : a > b ? 1 : 0;
-}
-
 // ───────────────────────── 평가기 ─────────────────────────
 /**
  * ctx: {
  *   cell(sheet, r, c) → 값 (null = 빈 셀), 오류 값일 수 있음
  *   range(sheet, r1, c1, r2, c2) → 2차원 값 배열
- *   usedRows(sheet) → 사용된 행 수 (열 전체 참조 A:A 용)
+ *   usedRows(sheet) / usedCols(sheet) → 사용된 행/열 수 (전체 열/행 참조용)
+ *   선택: here {si, sheet, r, c}, structRef, rowHidden, name(이름, 시트), spillRef, formulaText, sheetIndex, sheetCount …
  * }
  */
+const OMITTED = Object.freeze({ omitted: true });
+let lambdaDepth = 0;
+
+/** 참조 → 값 (여러 셀이면 Range, 한 셀이면 스칼라. 한 셀 오류는 던짐) */
+function deref(v, ctx) {
+  if (v instanceof RefValue) {
+    if (v.single) {
+      const x = ctx.cell(v.sheet, v.r1, v.c1);
+      if (isError(x)) throw x;
+      return x;
+    }
+    let { r2, c2 } = v;
+    // 전체 열/행 참조는 사용 중인 영역까지만
+    if (r2 - v.r1 >= 65535 && ctx.usedRows) r2 = Math.max(v.r1, Math.min(r2, ctx.usedRows(v.sheet) - 1));
+    if (c2 - v.c1 >= 1023 && ctx.usedCols) c2 = Math.max(v.c1, Math.min(c2, ctx.usedCols(v.sheet) - 1));
+    return new Range(ctx.range(v.sheet, v.r1, v.c1, r2, c2), v);
+  }
+  if (Array.isArray(v)) {
+    if (v.length === 1) return deref(v[0], ctx);
+    throw ERR.VALUE;
+  }
+  if (v === OMITTED) return null;
+  if (isError(v)) throw v;
+  return v;
+}
+
+function makeEv(ctx) {
+  return {
+    deref: (v) => (isError(v) ? v : attempt(() => deref(v, ctx))),
+    evaluate,
+    evalRef: evalAny,
+    value: (node, c) => attempt(() => evaluate(node, c)),
+    call: callLambda,
+    refFromText: (text, a1, c) => refFromText(text, a1, c ?? ctx),
+  };
+}
+const evOf = (ctx) => {
+  if (!Object.prototype.hasOwnProperty.call(ctx, '__ev') && !ctx.__ev) {
+    Object.defineProperty(ctx, '__ev', { value: makeEv(ctx), enumerable: false });
+  }
+  return ctx.__ev;
+};
+
 export function evaluate(node, ctx) {
+  return deref(evalAny(node, ctx), ctx);
+}
+
+/** 참조를 값으로 바꾸지 않고 평가 (RefValue · 값 · 참조 합집합 배열) */
+export function evalAny(node, ctx) {
   switch (node.type) {
     case 'num':
     case 'str':
@@ -401,36 +506,167 @@ export function evaluate(node, ctx) {
       throw ERR_BY_CODE[node.v] ?? ERR.VALUE;
     case 'empty':
       return null;
-    case 'name':
-      throw ERR.NAME;
+    case 'array':
+      return new Range(node.rows);
+    case 'paren':
+      return evalAny(node.a, ctx);
     case 'ref': {
       const f = node.ref;
-      if (!f.range) {
-        const v = ctx.cell(f.sheet, f.r1, f.c1);
-        if (isError(v)) throw v;
-        return v;
-      }
-      const r2 = f.cols ? Math.max(0, ctx.usedRows(f.sheet) - 1) : f.r2;
-      return new Range(ctx.range(f.sheet, f.r1, f.c1, r2, f.c2));
+      return new RefValue(f.sheet, f.r1, f.c1, f.r2, f.c2);
     }
     case 'sref': {
       const ref = ctx.structRef?.(node.table, node.spec);
       if (!ref) throw ERR.REF;
-      return evaluate({ type: 'ref', ref }, ctx);
+      return new RefValue(ref.sheet, ref.r1, ref.c1, ref.r2, ref.c2);
     }
-    case 'neg': return -toNum(evaluate(node.a, ctx));
-    case 'pos': return scalar(evaluate(node.a, ctx));
-    case 'pct': return toNum(evaluate(node.a, ctx)) / 100;
-    case 'bin': return binary(node.op, evaluate(node.a, ctx), evaluate(node.b, ctx));
-    case 'func': {
-      const fn = FUNCS[node.name];
-      if (!fn) throw ERR.NAME;
-      if (fn.lazy) return fn(node.args, ctx);
-      return fn(node.args.map((a) => evaluate(a, ctx)));
+    case 'spill': {
+      const a = evalAny(node.a, ctx);
+      if (!(a instanceof RefValue) || !ctx.spillRef) throw ERR.REF;
+      const res = ctx.spillRef(a.sheet, a.r1, a.c1);
+      if (!res) throw ERR.REF;
+      return res;
+    }
+    case 'name': {
+      const key = node.v.toLowerCase();
+      if (!node.sheet && ctx.local?.has(key)) {
+        const v = ctx.local.get(key);
+        if (isError(v)) throw v;
+        return v;
+      }
+      const v = ctx.name?.(node.v, node.sheet);
+      if (v === undefined) {
+        // 함수 이름만 쓰면 LAMBDA 처럼 동작 (GROUPBY(..., SUM))
+        const fn = !node.sheet && FUNCS[stripFnPrefix(node.v.toUpperCase().replace(/^_XLETA\./, ''))];
+        if (fn && !fn.lazy) {
+          const lam = new Lambda(['x'], null, ctx);
+          lam.builtin = fn;
+          return lam;
+        }
+        throw ERR.NAME;
+      }
+      if (isError(v)) throw v;
+      return v;
+    }
+    case 'range': {
+      const a = evalAny(node.a, ctx);
+      const b = evalAny(node.b, ctx);
+      if (!(a instanceof RefValue) || !(b instanceof RefValue)) throw ERR.VALUE;
+      if ((a.sheet ?? '').toLowerCase() !== (b.sheet ?? '').toLowerCase() && a.sheet && b.sheet) throw ERR.VALUE;
+      return new RefValue(a.sheet ?? b.sheet, Math.min(a.r1, b.r1), Math.min(a.c1, b.c1), Math.max(a.r2, b.r2), Math.max(a.c2, b.c2));
+    }
+    case 'union':
+      return node.items.flatMap((it) => {
+        const v = evalAny(it, ctx);
+        if (Array.isArray(v)) return v;
+        if (!(v instanceof RefValue)) throw ERR.VALUE;
+        return [v];
+      });
+    case 'at':
+      return intersect(evalAny(node.a, ctx), ctx);
+    case 'neg':
+      return mapValue(deref(evalAny(node.a, ctx), ctx), (x) => -toNum(x));
+    case 'pos':
+      return deref(evalAny(node.a, ctx), ctx);
+    case 'pct':
+      return mapValue(deref(evalAny(node.a, ctx), ctx), (x) => toNum(x) / 100);
+    case 'bin': {
+      const a = deref(evalAny(node.a, ctx), ctx);
+      const b = deref(evalAny(node.b, ctx), ctx);
+      const op = node.op;
+      if (!(a instanceof Range) && !(b instanceof Range)) return binary(op, a, b);
+      return broadcast2(a, b, (x, y) => binary(op, x, y));
+    }
+    case 'func':
+      return callFunc(node, ctx);
+    case 'call': {
+      const fn = evalAny(node.fn, ctx);
+      if (!(fn instanceof Lambda)) throw ERR.VALUE;
+      return callLambda(fn, node.args.map((a) => (a.type === 'empty' ? OMITTED : attempt(() => evalAny(a, ctx)))));
     }
     default:
       throw ERR.VALUE;
   }
+}
+
+/** 암시적 교차 '@' */
+function intersect(v, ctx) {
+  if (Array.isArray(v)) {
+    if (v.length !== 1) throw ERR.VALUE;
+    v = v[0];
+  }
+  if (v instanceof RefValue) {
+    if (v.single) return v;
+    const here = ctx.here;
+    if (!here) throw ERR.VALUE;
+    const sameSheet = !v.sheet || !here.sheet || v.sheet.toLowerCase() === here.sheet.toLowerCase();
+    let r;
+    let c;
+    if (v.r1 === v.r2) r = v.r1;
+    else if (sameSheet && here.r >= v.r1 && here.r <= v.r2) r = here.r;
+    else throw ERR.VALUE;
+    if (v.c1 === v.c2) c = v.c1;
+    else if (sameSheet && here.c >= v.c1 && here.c <= v.c2) c = here.c;
+    else throw ERR.VALUE;
+    return new RefValue(v.sheet, r, c);
+  }
+  if (v instanceof Range) {
+    const x = v.rows[0]?.[0];
+    if (isError(x)) throw x;
+    return x ?? null;
+  }
+  return v;
+}
+
+function callLambda(fn, args) {
+  if (fn.builtin) {
+    const vals = args.map((a) => attempt(() => deref(a, fn.ctx)));
+    return fn.builtin(vals, fn.ctx, evOf(fn.ctx));
+  }
+  if (args.length > fn.params.length) throw ERR.VALUE;
+  if (lambdaDepth > 1000) throw ERR.NUM;
+  const child = Object.create(fn.ctx);
+  child.local = new Map(fn.ctx.local ?? []);
+  fn.params.forEach((p, i) => child.local.set(p, i < args.length ? args[i] : OMITTED));
+  lambdaDepth++;
+  try {
+    return evalAny(fn.body, child);
+  } finally {
+    lambdaDepth--;
+  }
+}
+
+function lookupLambda(name, ctx) {
+  const key = name.toLowerCase();
+  let v;
+  if (ctx.local?.has(key)) v = ctx.local.get(key);
+  else v = ctx.name?.(name, null);
+  return v instanceof Lambda ? v : null;
+}
+
+function callFunc(node, ctx) {
+  const fn = FUNCS[node.name];
+  const ev = evOf(ctx);
+  if (!fn) {
+    const lam = lookupLambda(node.name, ctx);
+    if (!lam) throw ERR.NAME;
+    return callLambda(lam, node.args.map((a) => (a.type === 'empty' ? OMITTED : attempt(() => evalAny(a, ctx)))));
+  }
+  if (fn.lazy) return fn(node.args, ctx, ev);
+  if (fn.ref) {
+    const args = node.args.map((a) => (a.type === 'empty' ? null : attempt(() => evalAny(a, ctx))));
+    return fn(args, ctx, ev);
+  }
+  const args = [];
+  for (const a of node.args) {
+    if (a.type === 'union') {
+      // 합집합은 여러 인수로 (SUM((A1:A3,C1:C3)))
+      for (const it of attempt(() => evalAny(a, ctx))) args.push(attempt(() => deref(it, ctx)));
+      continue;
+    }
+    if (a.type === 'empty') { args.push(null); continue; }
+    args.push(attempt(() => deref(evalAny(a, ctx), ctx)));
+  }
+  return fn(args, ctx, ev);
 }
 
 function binary(op, a, b) {
@@ -448,6 +684,7 @@ function binary(op, a, b) {
       const x = toNum(a);
       const y = toNum(b);
       if (x === 0 && y === 0) throw ERR.NUM;
+      if (x === 0 && y < 0) throw ERR.DIV0;
       return checkNum(x ** y);
     }
     case '&': return toStr(a) + toStr(b);
@@ -466,562 +703,147 @@ function binary(op, a, b) {
   throw ERR.VALUE;
 }
 
-/** 셀 수식 평가 결과(스칼라 또는 오류 값) */
-export function evaluateFormula(ast, ctx) {
+/** 수식 결과 정리: 여러 셀이면 Range, 아니면 스칼라/오류 값 */
+function finish(v, ctx) {
+  if (v instanceof RefValue || Array.isArray(v)) v = deref(v, ctx);
+  if (v === OMITTED) return 0;
+  if (v instanceof Lambda) return ERR.CALC;
+  if (v instanceof Range) {
+    if (!v.height || !v.width) return ERR.CALC;
+    if (v.height === 1 && v.width === 1) v = v.rows[0][0];
+    else return v;
+  }
+  if (v === null || v === undefined) return 0;
+  if (typeof v === 'number' && !Number.isFinite(v)) return ERR.NUM;
+  return v;
+}
+
+/** 셀 수식 평가 결과 (배열이면 Range 그대로 — 분산은 통합 문서가 처리) */
+export function evaluateArray(ast, ctx) {
   try {
-    let v = evaluate(ast, ctx);
-    if (v instanceof Range) v = v.height === 1 && v.width === 1 ? v.rows[0][0] : ERR.VALUE;
-    if (v === null || v === undefined) return 0;
-    if (typeof v === 'number' && !Number.isFinite(v)) return ERR.NUM;
-    return v;
+    return finish(evalAny(ast, ctx), ctx);
   } catch (e) {
     if (e instanceof FormulaError) return e;
     throw e; // RangeError(너무 깊은 재귀)는 통합 문서에서 처리
   }
 }
 
-function tryEval(node, ctx) {
-  try {
-    return scalarOrError(evaluate(node, ctx));
-  } catch (e) {
-    if (e instanceof FormulaError) return e;
-    throw e;
+/** 스칼라 결과 (배열이면 왼쪽 위 값). 조건부 서식 · 유효성 검사용 */
+export function evaluateFormula(ast, ctx) {
+  const v = evaluateArray(ast, ctx);
+  if (v instanceof Range) {
+    const x = v.rows[0][0];
+    return x === null || x === undefined ? 0 : x;
   }
-}
-
-function scalarOrError(v) {
-  if (v instanceof Range) return v.height === 1 && v.width === 1 ? v.rows[0][0] : ERR.VALUE;
   return v;
 }
 
-// ───────────────────────── 함수 ─────────────────────────
-/** SUM 계열 규칙: 범위 안에서는 숫자만, 직접 인수는 숫자로 변환 */
-function collectNums(args) {
-  const out = [];
-  for (const a of args) {
-    if (a instanceof Range) {
-      for (const v of a.values()) {
-        if (isError(v)) throw v;
-        if (typeof v === 'number') out.push(v);
+/** 참조 텍스트 → RefValue (INDIRECT). A1 또는 R1C1, 시트 이름, 정의된 이름 · 표 참조 */
+function refFromText(text, a1, ctx) {
+  const t = String(text).trim();
+  if (!t) return null;
+  if (a1) {
+    try {
+      const ast = parse(t);
+      if (['ref', 'sref', 'name', 'range', 'spill'].includes(ast.type)) {
+        const v = evalAny(ast, ctx);
+        return v instanceof RefValue ? v : null;
       }
-    } else if (a !== null) {
-      out.push(toNum(a));
-    }
-  }
-  return out;
-}
-
-function flat(args) {
-  const out = [];
-  for (const a of args) {
-    if (a instanceof Range) out.push(...a.values());
-    else out.push(a);
-  }
-  return out;
-}
-
-function asRange(v) {
-  if (v instanceof Range) return v;
-  return new Range([[v]]);
-}
-
-function roundTo(n, digits, mode) {
-  const f = 10 ** digits;
-  const x = n * f;
-  let r;
-  const eps = 1e-9;
-  if (mode === 'up') r = Math.sign(x) * Math.ceil(Math.abs(x) - eps);
-  else if (mode === 'down') r = Math.sign(x) * Math.floor(Math.abs(x) + eps);
-  else r = Math.sign(x) * Math.round(Math.abs(x) + eps);
-  return r / f;
-}
-
-function wildcardRegex(pattern) {
-  let re = '';
-  for (let i = 0; i < pattern.length; i++) {
-    const ch = pattern[i];
-    if (ch === '~' && i + 1 < pattern.length) re += escapeRe(pattern[++i]);
-    else if (ch === '*') re += '.*';
-    else if (ch === '?') re += '.';
-    else re += escapeRe(ch);
-  }
-  return new RegExp(`^${re}$`, 'is');
-}
-
-function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
-
-/** COUNTIF/SUMIF 조건 → 판별 함수 */
-export function makeCriteria(crit) {
-  crit = scalar(crit);
-  if (typeof crit === 'number') return (v) => typeof v === 'number' && v === crit;
-  if (typeof crit === 'boolean') return (v) => v === crit;
-  if (crit === null) return (v) => typeof v === 'number' && v === 0;
-  const m = /^(<=|>=|<>|<|>|=)?([\s\S]*)$/.exec(String(crit));
-  const op = m[1] || '=';
-  const operand = m[2];
-  const num = parseNumberText(operand);
-  if (num !== null) {
-    const cmp = (v) => {
-      if (typeof v === 'number') return v;
-      if (typeof v === 'string') return parseNumberText(v);
+    } catch (e) {
+      if (e instanceof FormulaError) return null;
       return null;
-    };
-    switch (op) {
-      case '=': return (v) => cmp(v) === num;
-      case '<>': return (v) => cmp(v) !== num;
-      case '<': return (v) => typeof v === 'number' && v < num;
-      case '>': return (v) => typeof v === 'number' && v > num;
-      case '<=': return (v) => typeof v === 'number' && v <= num;
-      case '>=': return (v) => typeof v === 'number' && v >= num;
     }
+    return null;
   }
-  const upper = operand.toUpperCase();
-  if (upper === 'TRUE' || upper === 'FALSE') {
-    const b = upper === 'TRUE';
-    return op === '<>' ? (v) => v !== b : (v) => v === b;
-  }
-  if (op === '=' || op === '<>') {
-    let test;
-    if (operand === '') test = (v) => v === null || v === '';
-    else {
-      const re = wildcardRegex(operand);
-      test = (v) => typeof v === 'string' && re.test(v);
-    }
-    return op === '=' ? test : (v) => !test(v);
-  }
-  const s = operand.toLowerCase();
-  return (v) => {
-    if (typeof v !== 'string') return false;
-    const x = v.toLowerCase();
-    switch (op) {
-      case '<': return x < s;
-      case '>': return x > s;
-      case '<=': return x <= s;
-      case '>=': return x >= s;
-    }
-    return false;
+  const m = /^(?:(?:'((?:[^']|'')+)'|([^!]+))!)?R(\[?-?\d*\]?)C(\[?-?\d*\]?)(?::R(\[?-?\d*\]?)C(\[?-?\d*\]?))?$/i.exec(t);
+  if (!m) return null;
+  const here = ctx.here ?? { r: 0, c: 0 };
+  const part = (s, base) => {
+    if (s === '' || s === undefined) return base;
+    if (s.startsWith('[')) return base + Number(s.slice(1, -1));
+    return Number(s) - 1;
   };
+  const sheet = m[1] != null ? m[1].replace(/''/g, "'") : m[2] ?? null;
+  const r1 = part(m[3], here.r);
+  const c1 = part(m[4], here.c);
+  const r2 = m[5] !== undefined ? part(m[5], here.r) : r1;
+  const c2 = m[6] !== undefined ? part(m[6], here.c) : c1;
+  if ([r1, c1, r2, c2].some((x) => !Number.isFinite(x) || x < 0)) return null;
+  return new RefValue(sheet, r1, c1, r2, c2);
 }
 
-// 날짜: 엑셀 일련번호 (1899-12-30 기준)
-const EPOCH = Date.UTC(1899, 11, 30);
-const DAY_MS = 86400000;
-export const dateToSerial = (y, m, d) => (Date.UTC(y, m - 1, d) - EPOCH) / DAY_MS;
-export function serialToDate(serial) {
-  const d = new Date(EPOCH + Math.round(serial * DAY_MS));
-  return {
-    y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate(),
-    hh: d.getUTCHours(), mm: d.getUTCMinutes(), ss: d.getUTCSeconds(), dow: d.getUTCDay(),
-  };
-}
-function todaySerial() {
-  const n = new Date();
-  return dateToSerial(n.getFullYear(), n.getMonth() + 1, n.getDate());
-}
-
-function lazy(fn) { fn.lazy = true; return fn; }
-
-function lookupExact(values, key) {
-  const k = scalar(key);
-  if (typeof k === 'string' && /[*?~]/.test(k)) {
-    const re = wildcardRegex(k);
-    return values.findIndex((v) => typeof v === 'string' && re.test(v));
-  }
-  return values.findIndex((v) => v !== null && typeRank(v) === typeRank(k) && compareValues(v, k) === 0);
-}
-
-function lookupApprox(values, key, descending = false) {
-  const k = scalar(key);
-  let found = -1;
-  for (let i = 0; i < values.length; i++) {
-    const v = values[i];
-    if (v === null || typeRank(v) !== typeRank(k)) continue;
-    const c = compareValues(v, k);
-    if (descending ? c >= 0 : c <= 0) found = i;
-    else break;
-  }
-  return found;
-}
-
-function ifsPairs(args) {
-  if (args.length % 2 !== 0) throw ERR.VALUE;
-  const pairs = [];
-  for (let i = 0; i < args.length; i += 2) {
-    pairs.push({ range: asRange(args[i]), test: makeCriteria(args[i + 1]) });
-  }
-  return pairs;
-}
-
-function matchesAll(pairs, r, c) {
-  return pairs.every(({ range, test }) => {
-    const row = range.rows[r];
-    return row !== undefined && c < row.length && test(row[c]);
-  });
-}
-
-function variance(n, sample) {
-  if (n.length < (sample ? 2 : 1)) throw ERR.DIV0;
-  const m = n.reduce((s, x) => s + x, 0) / n.length;
-  return n.reduce((s, x) => s + (x - m) ** 2, 0) / (n.length - (sample ? 1 : 0));
-}
-
-/** SUBTOTAL: 1~11 (숨긴 행 포함) / 101~111 (숨긴 행 제외). 필터로 숨긴 행은 항상 제외 */
-const SUBTOTAL_FN = { 1: 'AVERAGE', 2: 'COUNT', 3: 'COUNTA', 4: 'MAX', 5: 'MIN', 6: 'PRODUCT', 7: 'STDEV', 8: 'STDEVP', 9: 'SUM', 10: 'VAR', 11: 'VARP' };
-
-export const FUNCS = {
-  // 수학
-  SUBTOTAL: lazy((args, ctx) => {
-    const code = toInt(evaluate(args[0], ctx));
-    const name = SUBTOTAL_FN[code > 100 ? code - 100 : code];
-    if (!name || !args.length) throw ERR.VALUE;
-    const skipManual = code > 100;
-    const vals = args.slice(1).map((a) => {
-      let ref = a.type === 'ref' ? a.ref : null;
-      if (a.type === 'sref') ref = ctx.structRef?.(a.table, a.spec);
-      if (!ref || !ref.range || !ctx.rowHidden) return evaluate(a.type === 'sref' && ref ? { type: 'ref', ref } : a, ctx);
-      const r2 = ref.cols ? Math.max(0, ctx.usedRows(ref.sheet) - 1) : ref.r2;
-      const rows = [];
-      for (let r = ref.r1; r <= r2; r++) {
-        if (ctx.rowHidden(ref.sheet, r, skipManual)) continue;
-        rows.push(ctx.range(ref.sheet, r, ref.c1, r, ref.c2)[0]);
-      }
-      return new Range(rows.length ? rows : [[null]]);
-    });
-    return FUNCS[name](vals);
-  }),
-  STDEV: (a) => Math.sqrt(variance(collectNums(a), true)),
-  'STDEV.S': (a) => Math.sqrt(variance(collectNums(a), true)),
-  STDEVP: (a) => Math.sqrt(variance(collectNums(a), false)),
-  'STDEV.P': (a) => Math.sqrt(variance(collectNums(a), false)),
-  VAR: (a) => variance(collectNums(a), true),
-  'VAR.S': (a) => variance(collectNums(a), true),
-  VARP: (a) => variance(collectNums(a), false),
-  'VAR.P': (a) => variance(collectNums(a), false),
-  SUM: (a) => collectNums(a).reduce((s, x) => s + x, 0),
-  PRODUCT: (a) => collectNums(a).reduce((s, x) => s * x, 1),
-  AVERAGE: (a) => {
-    const n = collectNums(a);
-    if (!n.length) throw ERR.DIV0;
-    return n.reduce((s, x) => s + x, 0) / n.length;
-  },
-  MIN: (a) => { const n = collectNums(a); return n.length ? Math.min(...n) : 0; },
-  MAX: (a) => { const n = collectNums(a); return n.length ? Math.max(...n) : 0; },
-  MEDIAN: (a) => {
-    const n = collectNums(a).sort((x, y) => x - y);
-    if (!n.length) throw ERR.NUM;
-    const m = n.length >> 1;
-    return n.length % 2 ? n[m] : (n[m - 1] + n[m]) / 2;
-  },
-  COUNT: (a) => {
-    let k = 0;
-    for (const x of a) {
-      if (x instanceof Range) { for (const v of x.values()) if (typeof v === 'number') k++; }
-      else if (typeof x === 'number' || typeof x === 'boolean' || (typeof x === 'string' && parseNumberText(x) !== null)) k++;
-    }
-    return k;
-  },
-  COUNTA: (a) => flat(a).filter((v) => v !== null).length,
-  COUNTBLANK: (a) => flat(a).filter((v) => v === null || v === '').length,
-  ROUND: ([n, d]) => roundTo(toNum(n), toInt(d ?? 0)),
-  ROUNDUP: ([n, d]) => roundTo(toNum(n), toInt(d ?? 0), 'up'),
-  ROUNDDOWN: ([n, d]) => roundTo(toNum(n), toInt(d ?? 0), 'down'),
-  TRUNC: ([n, d]) => roundTo(toNum(n), toInt(d ?? 0), 'down'),
-  INT: ([n]) => Math.floor(toNum(n)),
-  ABS: ([n]) => Math.abs(toNum(n)),
-  SIGN: ([n]) => Math.sign(toNum(n)),
-  MOD: ([n, d]) => {
-    const x = toNum(n);
-    const y = toNum(d);
-    if (y === 0) throw ERR.DIV0;
-    return x - y * Math.floor(x / y);
-  },
-  POWER: ([a, b]) => binary('^', a, b),
-  SQRT: ([n]) => { const x = toNum(n); if (x < 0) throw ERR.NUM; return Math.sqrt(x); },
-  EXP: ([n]) => checkNum(Math.exp(toNum(n))),
-  LN: ([n]) => { const x = toNum(n); if (x <= 0) throw ERR.NUM; return Math.log(x); },
-  LOG10: ([n]) => { const x = toNum(n); if (x <= 0) throw ERR.NUM; return Math.log10(x); },
-  LOG: ([n, b]) => {
-    const x = toNum(n);
-    const base = b == null ? 10 : toNum(b);
-    if (x <= 0 || base <= 0 || base === 1) throw ERR.NUM;
-    return Math.log(x) / Math.log(base);
-  },
-  PI: () => Math.PI,
-  RAND: () => Math.random(),
-  RANDBETWEEN: ([lo, hi]) => {
-    const a = Math.ceil(toNum(lo));
-    const b = Math.floor(toNum(hi));
-    if (a > b) throw ERR.NUM;
-    return a + Math.floor(Math.random() * (b - a + 1));
-  },
-  SUMPRODUCT: (a) => {
-    const ranges = a.map(asRange);
-    const h = ranges[0].height;
-    const w = ranges[0].width;
-    if (ranges.some((r) => r.height !== h || r.width !== w)) throw ERR.VALUE;
-    let s = 0;
-    for (let r = 0; r < h; r++) {
-      for (let c = 0; c < w; c++) {
-        let p = 1;
-        for (const rg of ranges) {
-          const v = rg.rows[r][c];
-          if (isError(v)) throw v;
-          p *= typeof v === 'number' ? v : 0;
-        }
-        s += p;
-      }
-    }
-    return s;
-  },
-
-  // 논리
-  IF: lazy((args, ctx) => {
-    const cond = toBool(evaluate(args[0], ctx));
-    const branch = cond ? args[1] : args[2];
-    if (!branch) return cond;
-    return scalarOrError(evaluate(branch, ctx)) ?? 0;
-  }),
-  IFERROR: lazy((args, ctx) => {
-    const v = tryEval(args[0], ctx);
-    if (isError(v)) return args[1] ? scalar(evaluate(args[1], ctx)) ?? 0 : 0;
-    return v;
-  }),
-  IFNA: lazy((args, ctx) => {
-    const v = tryEval(args[0], ctx);
-    if (v === ERR.NA) return args[1] ? scalar(evaluate(args[1], ctx)) ?? 0 : 0;
-    if (isError(v)) throw v;
-    return v;
-  }),
-  IFS: lazy((args, ctx) => {
+// ───────────────────────── LET · LAMBDA ─────────────────────────
+const CORE = {
+  LET: lazy((args, ctx) => {
+    if (args.length < 3 || args.length % 2 === 0) throw ERR.VALUE;
+    const child = Object.create(ctx);
+    child.local = new Map(ctx.local ?? []);
     for (let i = 0; i + 1 < args.length; i += 2) {
-      if (toBool(evaluate(args[i], ctx))) return scalar(evaluate(args[i + 1], ctx)) ?? 0;
+      const n = args[i];
+      if (n.type !== 'name') throw ERR.NAME;
+      child.local.set(n.v.toLowerCase(), attempt(() => evalAny(args[i + 1], child)));
     }
-    throw ERR.NA;
+    return evalAny(args[args.length - 1], child);
   }),
-  AND: (a) => {
-    const vals = flat(a).filter((v) => v !== null && typeof v !== 'string');
-    if (!vals.length) throw ERR.VALUE;
-    return vals.every((v) => toBool(v));
-  },
-  OR: (a) => {
-    const vals = flat(a).filter((v) => v !== null && typeof v !== 'string');
-    if (!vals.length) throw ERR.VALUE;
-    return vals.some((v) => toBool(v));
-  },
-  NOT: ([v]) => !toBool(v),
-  TRUE: () => true,
-  FALSE: () => false,
-  CHOOSE: ([i, ...opts]) => {
-    const k = toInt(i);
-    if (k < 1 || k > opts.length) throw ERR.VALUE;
-    return scalar(opts[k - 1]);
-  },
-
-  // 정보
-  ISBLANK: lazy((args, ctx) => tryEval(args[0], ctx) === null),
-  ISNUMBER: lazy((args, ctx) => typeof tryEval(args[0], ctx) === 'number'),
-  ISTEXT: lazy((args, ctx) => typeof tryEval(args[0], ctx) === 'string'),
-  ISLOGICAL: lazy((args, ctx) => typeof tryEval(args[0], ctx) === 'boolean'),
-  ISERROR: lazy((args, ctx) => isError(tryEval(args[0], ctx))),
-  ISERR: lazy((args, ctx) => { const v = tryEval(args[0], ctx); return isError(v) && v !== ERR.NA; }),
-  ISNA: lazy((args, ctx) => tryEval(args[0], ctx) === ERR.NA),
-  NA: () => { throw ERR.NA; },
-
-  // 텍스트
-  CONCATENATE: (a) => a.map(toStr).join(''),
-  CONCAT: (a) => flat(a).map((v) => { if (isError(v)) throw v; return toStr(v); }).join(''),
-  TEXTJOIN: ([delim, ignoreEmpty, ...rest]) => {
-    const d = toStr(delim);
-    const skip = toBool(ignoreEmpty);
-    return flat(rest)
-      .map((v) => { if (isError(v)) throw v; return toStr(v); })
-      .filter((s) => !(skip && s === ''))
-      .join(d);
-  },
-  LEN: ([s]) => [...toStr(s)].length,
-  LEFT: ([s, n]) => [...toStr(s)].slice(0, n == null ? 1 : Math.max(0, toInt(n))).join(''),
-  RIGHT: ([s, n]) => {
-    const chars = [...toStr(s)];
-    const k = n == null ? 1 : Math.max(0, toInt(n));
-    return k === 0 ? '' : chars.slice(-k).join('');
-  },
-  MID: ([s, start, n]) => {
-    const st = toInt(start);
-    const k = toInt(n);
-    if (st < 1 || k < 0) throw ERR.VALUE;
-    return [...toStr(s)].slice(st - 1, st - 1 + k).join('');
-  },
-  UPPER: ([s]) => toStr(s).toUpperCase(),
-  LOWER: ([s]) => toStr(s).toLowerCase(),
-  PROPER: ([s]) => toStr(s).toLowerCase().replace(/(^|[^A-Za-z])([a-z])/g, (_, p, ch) => p + ch.toUpperCase()),
-  TRIM: ([s]) => toStr(s).trim().replace(/ {2,}/g, ' '),
-  REPT: ([s, n]) => { const k = toInt(n); if (k < 0) throw ERR.VALUE; return toStr(s).repeat(k); },
-  SUBSTITUTE: ([s, oldT, newT, inst]) => {
-    const text = toStr(s);
-    const o = toStr(oldT);
-    const nw = toStr(newT);
-    if (o === '') return text;
-    if (inst == null) return text.split(o).join(nw);
-    const k = toInt(inst);
-    let idx = -1;
-    for (let i = 0; i < k; i++) {
-      idx = text.indexOf(o, idx + 1);
-      if (idx < 0) return text;
-    }
-    return text.slice(0, idx) + nw + text.slice(idx + o.length);
-  },
-  FIND: ([f, s, start]) => {
-    const st = start == null ? 1 : toInt(start);
-    const idx = toStr(s).indexOf(toStr(f), st - 1);
-    if (st < 1 || idx < 0) throw ERR.VALUE;
-    return idx + 1;
-  },
-  SEARCH: ([f, s, start]) => {
-    const st = start == null ? 1 : toInt(start);
-    const text = toStr(s);
-    const re = wildcardRegex(toStr(f));
-    for (let i = st - 1; i < text.length; i++) {
-      for (let j = text.length; j > i; j--) if (re.test(text.slice(i, j))) return i + 1;
-    }
-    throw ERR.VALUE;
-  },
-  EXACT: ([a, b]) => toStr(a) === toStr(b),
-  VALUE: ([s]) => toNum(s),
-  TEXT: ([v, fmt]) => {
-    const x = scalar(v);
-    if (typeof x === 'string' && parseNumberText(x) === null) return x;
-    return formatWithPattern(toNum(x), toStr(fmt));
-  },
-
-  // 찾기/참조
-  VLOOKUP: ([key, table, col, approx]) => {
-    const t = asRange(table);
-    const ci = toInt(col);
-    if (ci < 1) throw ERR.VALUE;
-    if (ci > t.width) throw ERR.REF;
-    const first = t.rows.map((row) => row[0]);
-    const exact = approx != null && !toBool(approx);
-    const i = exact ? lookupExact(first, key) : lookupApprox(first, key);
-    if (i < 0) throw ERR.NA;
-    return t.rows[i][ci - 1] ?? 0;
-  },
-  HLOOKUP: ([key, table, row, approx]) => {
-    const t = asRange(table);
-    const ri = toInt(row);
-    if (ri < 1) throw ERR.VALUE;
-    if (ri > t.height) throw ERR.REF;
-    const exact = approx != null && !toBool(approx);
-    const i = exact ? lookupExact(t.rows[0], key) : lookupApprox(t.rows[0], key);
-    if (i < 0) throw ERR.NA;
-    return t.rows[ri - 1][i] ?? 0;
-  },
-  XLOOKUP: ([key, look, ret, notFound]) => {
-    const l = [...asRange(look).values()];
-    const rr = [...asRange(ret).values()];
-    const i = lookupExact(l, key);
-    if (i < 0) {
-      if (notFound !== undefined && notFound !== null) return scalar(notFound);
-      throw ERR.NA;
-    }
-    return rr[i] ?? 0;
-  },
-  INDEX: ([table, row, col]) => {
-    const t = asRange(table);
-    let r = toInt(row ?? 1);
-    let c = col == null ? 1 : toInt(col);
-    if (t.height === 1 && col == null) { c = r; r = 1; }
-    if (r < 1 || c < 1 || r > t.height || c > t.width) throw ERR.REF;
-    return t.rows[r - 1][c - 1] ?? 0;
-  },
-  MATCH: ([key, look, type]) => {
-    const vals = [...asRange(look).values()];
-    const mt = type == null ? 1 : toInt(type);
-    const i = mt === 0 ? lookupExact(vals, key) : lookupApprox(vals, key, mt < 0);
-    if (i < 0) throw ERR.NA;
-    return i + 1;
-  },
-  ROWS: ([r]) => asRange(r).height,
-  COLUMNS: ([r]) => asRange(r).width,
-
-  // 조건부 집계
-  SUMIF: ([range, crit, sumRange]) => {
-    const r = asRange(range);
-    const s = sumRange == null ? r : asRange(sumRange);
-    const test = makeCriteria(crit);
-    let total = 0;
-    r.rows.forEach((row, i) => row.forEach((v, j) => {
-      if (!test(v)) return;
-      const x = s.rows[i]?.[j];
-      if (isError(x)) throw x;
-      if (typeof x === 'number') total += x;
-    }));
-    return total;
-  },
-  COUNTIF: ([range, crit]) => {
-    const test = makeCriteria(crit);
-    let k = 0;
-    for (const v of asRange(range).values()) if (test(v)) k++;
-    return k;
-  },
-  AVERAGEIF: ([range, crit, avgRange]) => {
-    const r = asRange(range);
-    const s = avgRange == null ? r : asRange(avgRange);
-    const test = makeCriteria(crit);
-    let total = 0;
-    let k = 0;
-    r.rows.forEach((row, i) => row.forEach((v, j) => {
-      const x = s.rows[i]?.[j];
-      if (test(v) && typeof x === 'number') { total += x; k++; }
-    }));
-    if (!k) throw ERR.DIV0;
-    return total / k;
-  },
-  SUMIFS: ([sumRange, ...rest]) => {
-    const s = asRange(sumRange);
-    const pairs = ifsPairs(rest);
-    let total = 0;
-    s.rows.forEach((row, i) => row.forEach((x, j) => {
-      if (typeof x === 'number' && matchesAll(pairs, i, j)) total += x;
-    }));
-    return total;
-  },
-  COUNTIFS: (args) => {
-    const pairs = ifsPairs(args);
-    const base = pairs[0].range;
-    let k = 0;
-    base.rows.forEach((row, i) => row.forEach((_, j) => { if (matchesAll(pairs, i, j)) k++; }));
-    return k;
-  },
-
-  // 날짜
-  TODAY: () => todaySerial(),
-  NOW: () => {
-    const n = new Date();
-    return todaySerial() + (n.getHours() * 3600 + n.getMinutes() * 60 + n.getSeconds()) / 86400;
-  },
-  DATE: ([y, m, d]) => dateToSerial(toInt(y), toInt(m), toInt(d)),
-  YEAR: ([s]) => serialToDate(toNum(s)).y,
-  MONTH: ([s]) => serialToDate(toNum(s)).m,
-  DAY: ([s]) => serialToDate(toNum(s)).d,
-  HOUR: ([s]) => serialToDate(toNum(s)).hh,
-  MINUTE: ([s]) => serialToDate(toNum(s)).mm,
-  SECOND: ([s]) => serialToDate(toNum(s)).ss,
-  WEEKDAY: ([s, type]) => {
-    const dow = serialToDate(toNum(s)).dow;
-    const t = type == null ? 1 : toInt(type);
-    if (t === 2) return ((dow + 6) % 7) + 1;
-    if (t === 3) return (dow + 6) % 7;
-    return dow + 1;
-  },
+  LAMBDA: lazy((args, ctx) => {
+    if (!args.length) throw ERR.VALUE;
+    const params = args.slice(0, -1).map((p) => {
+      if (p.type !== 'name') throw ERR.VALUE;
+      return p.v.toLowerCase();
+    });
+    if (new Set(params).size !== params.length) throw ERR.VALUE;
+    return new Lambda(params, args[args.length - 1], ctx);
+  }),
+  ISOMITTED: lazy((args, ctx) => {
+    const n = args[0];
+    if (!n || n.type !== 'name') throw ERR.VALUE;
+    return ctx.local?.get(n.v.toLowerCase()) === OMITTED;
+  }),
 };
 
+export const FUNCS = { ...MATH, ...STAT, ...TEXT, ...DATE, ...LOOKUP, ...LOGIC, ...FIN, ...CORE };
+FUNCS.POWER = FUNCS.POWER ?? ((args) => binary('^', args[0], args[1]));
+
 export const FUNCTION_NAMES = Object.keys(FUNCS).sort();
+
+/** 결과가 배열일 수 있는 함수 (분산 후보 판단용) */
+const ARRAY_FUNCS = new Set([
+  'SEQUENCE', 'RANDARRAY', 'FILTER', 'SORT', 'SORTBY', 'UNIQUE', 'TRANSPOSE', 'TAKE', 'DROP', 'EXPAND', 'CHOOSECOLS', 'CHOOSEROWS',
+  'VSTACK', 'HSTACK', 'TOCOL', 'TOROW', 'WRAPCOLS', 'WRAPROWS', 'MMULT', 'MINVERSE', 'MUNIT', 'FREQUENCY', 'TREND', 'GROWTH',
+  'LINEST', 'LOGEST', 'MODE.MULT', 'TEXTSPLIT', 'REGEXEXTRACT', 'MAP', 'SCAN', 'BYROW', 'BYCOL', 'MAKEARRAY', 'REDUCE', 'LET',
+  'LAMBDA', 'OFFSET', 'INDIRECT', 'INDEX', 'XLOOKUP', 'CHOOSE', 'GROUPBY', 'PIVOTBY',
+]);
+/** 인수 중 어느 하나라도 배열이면 결과도 배열일 수 있는 함수 */
+const PASS_FUNCS = new Set(['IF', 'IFS', 'SWITCH', 'IFERROR', 'IFNA', 'ROW', 'COLUMN', 'CONCATENATE']);
+
+/** 수식 결과가 여러 셀(분산)일 수 있는지 정적으로 판단 */
+export function mayReturnArray(node) {
+  if (!node) return false;
+  switch (node.type) {
+    case 'ref': return node.ref.range && (node.ref.r1 !== node.ref.r2 || node.ref.c1 !== node.ref.c2);
+    case 'sref': return !/^\s*@|#this row|#이 행/i.test(node.spec);
+    case 'spill': case 'array': case 'name': case 'range': case 'call': return true;
+    case 'paren': case 'neg': case 'pos': case 'pct': return mayReturnArray(node.a);
+    case 'bin': return mayReturnArray(node.a) || mayReturnArray(node.b);
+    case 'func': {
+      if (ARRAY_FUNCS.has(node.name)) return true;
+      const fn = FUNCS[node.name];
+      if (!fn) return true;
+      if (PASS_FUNCS.has(node.name)) return node.args.some(mayReturnArray);
+      if (fn.liftPos === 'all') return node.args.some(mayReturnArray);
+      if (Array.isArray(fn.liftPos)) return fn.liftPos.some((i) => mayReturnArray(node.args[i]));
+      return false;
+    }
+    default: return false;
+  }
+}
 
 /** 결과에 날짜 서식을 자동 적용해야 하는 함수 */
 export function autoFormatFor(ast) {
   if (ast?.type !== 'func') return null;
   if (ast.name === 'NOW') return 'datetime';
-  if (ast.name === 'TODAY' || ast.name === 'DATE') return 'date';
+  if (['TODAY', 'DATE', 'EDATE', 'EOMONTH', 'WORKDAY', 'WORKDAY.INTL', 'DATEVALUE'].includes(ast.name)) return 'date';
+  if (['TIME', 'TIMEVALUE'].includes(ast.name)) return 'time';
   return null;
 }
 
@@ -1030,6 +852,9 @@ function refText(ref, sheetPrefix) {
   const cell = (r, c, ar, ac) => `${ac ? '$' : ''}${colToName(c)}${ar ? '$' : ''}${r + 1}`;
   if (ref.cols) {
     return `${sheetPrefix}${ref.ac1 ? '$' : ''}${colToName(ref.c1)}:${ref.ac2 ? '$' : ''}${colToName(ref.c2)}`;
+  }
+  if (ref.rows) {
+    return `${sheetPrefix}${ref.ar1 ? '$' : ''}${ref.r1 + 1}:${ref.ar2 ? '$' : ''}${ref.r2 + 1}`;
   }
   const a = cell(ref.r1, ref.c1, ref.ar1, ref.ac1);
   if (!ref.range) return sheetPrefix + a;
@@ -1068,8 +893,10 @@ export function shiftFormula(formula, dr, dc) {
       if (!ref.ar1) ref.r1 += dr;
       if (!ref.ar2) ref.r2 += dr;
     }
-    if (!ref.ac1) ref.c1 += dc;
-    if (!ref.ac2) ref.c2 += dc;
+    if (!ref.rows) {
+      if (!ref.ac1) ref.c1 += dc;
+      if (!ref.ac2) ref.c2 += dc;
+    }
     if (ref.r1 < 0 || ref.r2 < 0 || ref.c1 < 0 || ref.c2 < 0) return null;
     if (ref.r1 >= MAX_ROWS || ref.r2 >= MAX_ROWS || ref.c1 >= MAX_COLS || ref.c2 >= MAX_COLS) return null;
     return ref;
@@ -1083,8 +910,9 @@ export function shiftFormula(formula, dr, dc) {
 export function adjustFormulaForStructure(formula, { targetSheet, hostSheet, axis, index, count }) {
   const same = (a, b) => a.toLowerCase() === b.toLowerCase();
   return rewriteRefs(formula, (ref) => {
-    if (!same(ref.sheet ?? hostSheet, targetSheet)) return undefined;
+    if (!same(ref.sheet ?? hostSheet ?? '', targetSheet)) return undefined;
     if (axis === 'row' && ref.cols) return undefined;
+    if (axis === 'col' && ref.rows) return undefined;
     const k1 = axis === 'row' ? 'r1' : 'c1';
     const k2 = axis === 'row' ? 'r2' : 'c2';
     let a = ref[k1];
@@ -1112,11 +940,21 @@ export function adjustFormulaForStructure(formula, { targetSheet, hostSheet, axi
 
 /** 시트 이름 변경 시 참조 갱신 */
 export function renameSheetInFormula(formula, oldName, newName) {
-  return rewriteRefs(formula, (ref) => {
-    if (ref.sheet == null || ref.sheet.toLowerCase() !== oldName.toLowerCase()) return undefined;
-    ref.sheetPrefix = quoteSheetName(newName) + '!';
-    return ref;
-  });
+  if (!formula.startsWith('=')) return formula;
+  const src = formula.slice(1);
+  let toks;
+  try { toks = tokenize(src); } catch { return formula; }
+  let out = '';
+  let pos = 0;
+  for (const t of toks) {
+    const sheet = t.t === 'ref' ? t.ref.sheet : t.t === 'ident' ? t.sheet : null;
+    if (!sheet || sheet.toLowerCase() !== oldName.toLowerCase()) continue;
+    const text = src.slice(t.s, t.e);
+    const bang = text.lastIndexOf('!');
+    out += src.slice(pos, t.s) + quoteSheetName(newName) + text.slice(bang);
+    pos = t.e;
+  }
+  return '=' + out + src.slice(pos);
 }
 
 /** 입력한 수식 정리: 닫는 괄호/따옴표 자동 추가, 함수·참조 대문자 변환 ("=sum(a1" → "=SUM(A1)") */
@@ -1142,6 +980,8 @@ export function normalizeFormula(text) {
     if (t.t === 'ref') {
       const bang = s.lastIndexOf('!');
       s = s.slice(0, bang + 1) + s.slice(bang + 1).toUpperCase();
+    } else if (t.t === 'func' && !FUNCS[t.v]) {
+      continue; // 사용자 LAMBDA 이름은 그대로
     } else {
       s = s.toUpperCase();
     }
@@ -1159,4 +999,11 @@ export function listRefs(formula) {
   } catch {
     return [];
   }
+}
+
+/** 수식에 쓰인 함수 이름 중 지원하지 않는 것 */
+export function unknownFunctions(body, isName = () => false) {
+  let toks;
+  try { toks = tokenize(body); } catch { return []; }
+  return [...new Set(toks.filter((t) => t.t === 'func' && !FUNCS[t.v] && !isName(t.v)).map((t) => t.v))];
 }

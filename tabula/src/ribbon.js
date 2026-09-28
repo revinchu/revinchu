@@ -157,6 +157,7 @@ export const TABS = [
       group('함수 라이브러리', [
         large('insertFunction', 'function', '함수 삽입'),
         large('autosum', 'autosum', '자동 합계', { menu: 'autosum', split: true }),
+        large('fnCat', 'fnBook', '재무', { menu: 'fn:재무' }),
         large('fnCat', 'fnBook', '논리', { menu: 'fn:논리' }),
         large('fnCat', 'fnBook', '텍스트', { menu: 'fn:텍스트' }),
         large('fnCat', 'fnBook', '날짜 및 시간', { menu: 'fn:날짜/시간' }),

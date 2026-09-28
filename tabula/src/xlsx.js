@@ -3,8 +3,9 @@ import { unzip, zip, textOf } from './zip.js';
 import { parseXml, child, kids, descendants, allText, esc } from './xml.js';
 import {
   parse, tokenize, shiftFormula, colToName, nameToCol, cellName, parseRangeName, FUNCS, isError,
-  quoteSheetName, MAX_ROWS, MAX_COLS, EXCEL_MAX_ROWS,
+  quoteSheetName, MAX_ROWS, MAX_COLS, EXCEL_MAX_ROWS, mayReturnArray, unknownFunctions,
 } from './formula.js';
+import { toFileFormula, fromFileFormula } from './xlfn.js';
 import { parseInput, formatGeneral, fmtCode, styleForCode } from './format.js';
 import { DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT } from './workbook.js';
 import { chartLayout, PALETTE } from './chart.js';
@@ -20,7 +21,6 @@ const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships
 const EMU = 9525; // 1px
 
 const DEFAULT_FONT = '맑은 고딕';
-const XLFN = new Set(['IFS', 'XLOOKUP', 'CONCAT', 'TEXTJOIN', 'IFNA', 'STDEV.S', 'STDEV.P', 'VAR.S', 'VAR.P']);
 
 // ───────────────────────── 공통 ─────────────────────────
 const px2width = (px) => Math.max(0, Math.round(((px - 5) / 7) * 256) / 256);
@@ -244,24 +244,9 @@ function readStyles(files, wbRels, theme) {
   return { xfs, dxfs, defaultFont };
 }
 
-/** 수식 텍스트 정리: _xlfn. 접두사 제거 */
-function cleanFormula(f) {
-  return f.replace(/_xlfn\.|_xlws\.|_xlpm\./gi, '');
-}
-
-function formulaSupported(text) {
-  try {
-    const ast = parse(text);
-    const walk = (n) => {
-      if (!n) return true;
-      if (n.type === 'func' && !FUNCS[n.name]) return false;
-      if (n.type === 'name') return false;
-      return [n.a, n.b, ...(n.args ?? [])].every((x) => x === undefined || walk(x));
-    };
-    return walk(ast);
-  } catch {
-    return false;
-  }
+/** 파일 수식 → 앱 수식 본문 (_xlfn. 등 접두사 제거, SINGLE → @, ANCHORARRAY → #) */
+function cleanFormula(f, opt = {}) {
+  return fromFileFormula(f, opt);
 }
 
 function readSheet(files, path, ctx) {
@@ -289,6 +274,7 @@ function readSheet(files, path, ctx) {
   }
 
   const shared = {};
+  const arrays = []; // 배열 수식 영역: 앵커 밖의 셀 값은 가져오지 않음 (다시 분산됨)
   let unsupported = 0;
   const data = child(root, 'sheetData');
   let rowIdx = -1;
@@ -333,10 +319,23 @@ function readSheet(files, path, ctx) {
           if (m) formula = m.r === r && m.c === cc ? m.text : shiftFormula(`=${m.text}`, r - m.r, cc - m.c).slice(1);
         } else if (fEl.text) formula = fEl.text;
       }
+      let cached;
       if (formula !== null) {
-        const f = cleanFormula(formula);
-        if (formulaSupported(f)) raw = `=${f}`;
-        else { unsupported++; formula = null; }
+        const isArray = fEl.attrs.t === 'array';
+        if (isArray && fEl.attrs.ref) {
+          const rg = refToRange(fEl.attrs.ref);
+          if (rg && (rg.r2 > rg.r1 || rg.c2 > rg.c1)) arrays.push({ ...rg, r, c: cc });
+        }
+        // 동적 배열(cm) 또는 배열 수식이 아니면 옛 형식 → 암시적 교차 '@'
+        const f = cleanFormula(formula, { legacy: !isArray && !c.attrs.cm, isName: ctx.isName, nameMulti: ctx.nameMulti });
+        raw = `=${f}`;
+        if (unknownFunctions(f, ctx.isName).length) {
+          // 지원하지 않는 함수: 수식은 그대로 두고 파일의 계산 결과를 표시
+          unsupported++;
+          cached = value;
+        }
+      } else if (arrays.length && arrays.some((a) => r >= a.r1 && r <= a.r2 && cc >= a.c1 && cc <= a.c2 && (r !== a.r || cc !== a.c))) {
+        value = null;
       }
       if (!raw) {
         if (value === null) raw = '';
@@ -348,6 +347,7 @@ function readSheet(files, path, ctx) {
       if (!raw && !style) continue;
       const d = { raw };
       if (style) d.style = style;
+      if (cached !== undefined && cached !== null) d.cached = cached;
       sheet.cells[`${r},${cc}`] = d;
     }
   }
@@ -915,7 +915,25 @@ export function readXlsx(bytes) {
   const { xfs, dxfs } = readStyles(files, wbRels, theme);
   const ssRel = Object.values(wbRels).find((r) => r.type === 'sharedStrings');
   const strings = ssRel && files[ssRel.target] ? kids(parseXml(textOf(files[ssRel.target])), 'si').map(allText) : [];
-  const ctx = { xfs, dxfs, strings, theme, warnings: new Set() };
+  // 이름 정의 (시트 범위 이름은 localSheetId → 시트 이름)
+  const allSheetNames = kids(child(wbRoot, 'sheets'), 'sheet').map((sh) => sh.attrs.name.slice(0, 31));
+  const names = [];
+  for (const dn of kids(child(wbRoot, 'definedNames'), 'definedName')) {
+    const name = dn.attrs.name;
+    const text = (dn.text ?? '').trim();
+    if (!name || /^_xlnm\.|^_xlfn\./i.test(name) || !text) continue;
+    if (text === '#N/A' && /^(Slicer_|슬라이서_)/i.test(name)) continue;
+    const sheet = dn.attrs.localSheetId !== undefined ? allSheetNames[Number(dn.attrs.localSheetId)] ?? null : null;
+    names.push({ name, ref: `=${fromFileFormula(text)}`, sheet, ...(dn.attrs.comment ? { comment: dn.attrs.comment } : {}), ...(dn.attrs.hidden === '1' || dn.attrs.hidden === 'true' ? { hidden: true } : {}) });
+  }
+  const nameSet = new Set(names.map((n) => n.name.toUpperCase()));
+  const isName = (n) => nameSet.has(String(n).toUpperCase());
+  const nameMulti = (n) => {
+    const e = names.find((x) => x.name.toUpperCase() === String(n).toUpperCase());
+    if (!e) return false;
+    try { return mayReturnArray(parse(e.ref.slice(1))); } catch { return false; }
+  };
+  const ctx = { xfs, dxfs, strings, theme, warnings: new Set(), isName, nameMulti };
   const sheets = [];
   const warnings = [];
   const sheetCodes = {};
@@ -934,10 +952,11 @@ export function readXlsx(bytes) {
     sheets.push({ name: sh.attrs.name.slice(0, 31), ...sheet, _sheetId: Number(sh.attrs.sheetId) });
   }
   linkPivotsAndSlicers(files, wbRels, sheets, ctx);
-  if (unsupported) warnings.push(`지원하지 않는 수식 ${unsupported}개는 계산된 값으로 가져왔습니다.`);
+  if (unsupported) warnings.push(`지원하지 않는 함수가 쓰인 수식 ${unsupported}개는 수식을 유지하고 파일에 저장된 계산 결과를 표시합니다.`);
   warnings.push(...ctx.warnings);
   if (!sheets.length) throw new Error('가져올 시트가 없습니다');
   const data = { sheets };
+  if (names.length) data.names = names;
   // 매크로(.xlsm): vbaProject.bin 을 그대로 보존 (실행하지 않음)
   const vbaRel = Object.values(wbRels).find((r) => r.type === 'vbaProject');
   if (vbaRel && files[vbaRel.target]) {
@@ -1033,24 +1052,10 @@ class StylePool {
   }
 }
 
-/** 새 함수는 엑셀 파일에서 _xlfn. 접두사가 필요 */
-function exportFormula(raw, hereTable = null) {
-  const body = raw.slice(1);
-  let toks;
-  try { toks = tokenize(body); } catch { return body; }
-  let out = '';
-  let pos = 0;
-  for (const t of toks) {
-    if (t.t === 'func' && XLFN.has(t.v)) {
-      out += `${body.slice(pos, t.s)}_xlfn.${body.slice(t.s, t.e)}`;
-      pos = t.e;
-    } else if (t.t === 'sref') {
-      // 파일에는 표 이름과 영어 키워드를 붙인 표준 형식으로 ([@열] → 표1[[#This Row],[열]])
-      out += body.slice(pos, t.s) + canonicalRef(t.table, t.spec, hereTable);
-      pos = t.e;
-    }
-  }
-  return out + body.slice(pos);
+/** 앱 수식 → 파일 수식 (_xlfn. 접두사, 표 참조 표준 형식, '@'·'#' 변환) */
+let fileNameCheck = null;
+function exportFormula(raw, hereTable = null, dynamic = false) {
+  return toFileFormula(raw, { hereTable, dynamic, isName: fileNameCheck });
 }
 
 const CELL_IS = { gt: 'greaterThan', lt: 'lessThan', ge: 'greaterThanOrEqual', le: 'lessThanOrEqual', eq: 'equal', ne: 'notEqual', between: 'between', notBetween: 'notBetween' };
@@ -1437,6 +1442,9 @@ export function writeXlsx(wb, { activeSheet = 0 } = {}) {
   const mediaExts = new Set();
   const definedNames = [];
   const vba = wb.vba?.bin ? wb.vba : null;
+  const nameSet = new Set((wb.names ?? []).map((n) => n.name.toUpperCase()));
+  fileNameCheck = (n) => nameSet.has(String(n).toUpperCase());
+  let dynamicCells = 0;
   // 표 번호(표 슬라이서가 참조)와 피벗(슬라이서 필드) 미리 계산
   const tableIds = new Map();
   let tableSeq = 0;
@@ -1480,6 +1488,22 @@ export function writeXlsx(wb, { activeSheet = 0 } = {}) {
       maxR = Math.max(maxR, r);
       maxC = Math.max(maxC, c);
     }
+    // 동적 배열이 분산된 셀: 값만 저장 (엑셀도 같은 방식)
+    for (const sp of wb.spillsOf(si)) {
+      for (let i = 0; i < sp.h; i++) {
+        const r = sp.r + i;
+        if (r >= EXCEL_MAX_ROWS) break;
+        for (let j = 0; j < sp.w; j++) {
+          if (!i && !j) continue;
+          const c = sp.c + j;
+          if (sheet.cells.has(`${r},${c}`)) continue;
+          if (!rows.has(r)) rows.set(r, []);
+          rows.get(r).push([c, { raw: '', spilled: true }]);
+          maxR = Math.max(maxR, r);
+          maxC = Math.max(maxC, c);
+        }
+      }
+    }
     const rowKeys = new Set([...rows.keys()]);
     for (const k of [...Object.keys(sheet.rowHeights), ...Object.keys(sheet.hiddenRows), ...Object.keys(sheet.rowStyles), ...Object.keys(sheet.filter?.hidden ?? {}), ...(sheet.tables ?? []).flatMap((t) => Object.keys(t.filter?.hidden ?? {}))]) rowKeys.add(Number(k));
     const sortedRows = [...rowKeys].filter((r) => r < EXCEL_MAX_ROWS).sort((a, b) => a - b);
@@ -1495,15 +1519,22 @@ export function writeXlsx(wb, { activeSheet = 0 } = {}) {
         const st = wb.styleAt(si, r, c);
         const s = pool.xf(st);
         const sAttr = s ? ` s="${s}"` : '';
-        if (!cell.raw) return s ? `<c r="${ref}"${sAttr}/>` : '';
         const v = wb.getValue(si, r, c);
+        if (!cell.raw && (v === null || !cell.spilled && !wb.spillAnchorOf(si, r, c))) return s ? `<c r="${ref}"${sAttr}/>` : '';
         if (cell.formula) {
-          const f = `<f>${esc(exportFormula(cell.raw, cell.raw.includes('[') ? tableAt(sheet, r, c)?.name : null))}</f>`;
-          if (typeof v === 'number') return `<c r="${ref}"${sAttr}>${f}<v>${v}</v></c>`;
-          if (typeof v === 'boolean') return `<c r="${ref}"${sAttr} t="b">${f}<v>${v ? 1 : 0}</v></c>`;
-          if (isError(v)) return `<c r="${ref}"${sAttr} t="e">${f}<v>${esc(v.code === '#CIRC!' ? '#REF!' : v.code)}</v></c>`;
-          return `<c r="${ref}"${sAttr} t="str">${f}<v>${esc(v ?? '')}</v></c>`;
+          // 배열을 돌려줄 수 있는 수식은 동적 배열 수식으로 (cm="1" + t="array")
+          const dyn = !!cell.maybeArray;
+          const sp = dyn ? wb.spillRange(si, r, c) : null;
+          if (dyn) dynamicCells++;
+          const fAttr = dyn ? ` t="array" ref="${sp ? rangeRef({ ...sp, r2: Math.min(sp.r2, EXCEL_MAX_ROWS - 1) }) : ref}" aca="false"` : '';
+          const cm = dyn ? ' cm="1"' : '';
+          const f = `<f${fAttr}>${esc(exportFormula(cell.raw, cell.raw.includes('[') ? tableAt(sheet, r, c)?.name : null, dyn))}</f>`;
+          if (typeof v === 'number') return `<c r="${ref}"${sAttr}${cm}>${f}<v>${v}</v></c>`;
+          if (typeof v === 'boolean') return `<c r="${ref}"${sAttr} t="b"${cm}>${f}<v>${v ? 1 : 0}</v></c>`;
+          if (isError(v)) return `<c r="${ref}"${sAttr} t="e"${cm}>${f}<v>${esc(['#CIRC!', '#SPILL!', '#CALC!', '#BUSY!'].includes(v.code) && !dyn ? '#REF!' : v.code === '#CIRC!' ? '#REF!' : v.code)}</v></c>`;
+          return `<c r="${ref}"${sAttr} t="str"${cm}>${f}<v>${esc(v ?? '')}</v></c>`;
         }
+        if (isError(v)) return `<c r="${ref}"${sAttr} t="e"><v>${esc(v.code)}</v></c>`;
         if (typeof v === 'number') return `<c r="${ref}"${sAttr}><v>${v}</v></c>`;
         if (typeof v === 'boolean') return `<c r="${ref}"${sAttr} t="b"><v>${v ? 1 : 0}</v></c>`;
         if (v === null) return s ? `<c r="${ref}"${sAttr}/>` : '';
@@ -1736,6 +1767,21 @@ export function writeXlsx(wb, { activeSheet = 0 } = {}) {
     `<Relationship Id="rId${wb.sheets.length + 2}" Type="${REL}/sharedStrings" Target="sharedStrings.xml"/>`,
   ];
   if (vba) wbRels.push(`<Relationship Id="rId${wbRels.length + 1}" Type="http://schemas.microsoft.com/office/2006/relationships/vbaProject" Target="vbaProject.bin"/>`);
+  if (dynamicCells) {
+    // 동적 배열 수식 표시 (cm="1" 이 가리키는 셀 메타데이터)
+    wbRels.push(`<Relationship Id="rId${wbRels.length + 1}" Type="${REL}/sheetMetadata" Target="metadata.xml"/>`);
+    files['xl/metadata.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<metadata xmlns="${NS_MAIN}" xmlns:xda="http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray"><metadataTypes count="1"><metadataType name="XLDAPR" minSupportedVersion="120000" copy="1" pasteAll="1" pasteValues="1" merge="1" splitFirst="1" rowColShift="1" clearFormats="1" clearComments="1" assign="1" coerce="1" cellMeta="1"/></metadataTypes><futureMetadata name="XLDAPR" count="1"><bk><extLst><ext uri="{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}"><xda:dynamicArrayProperties fDynamic="1" fCollapsed="0"/></ext></extLst></bk></futureMetadata><cellMetadata count="1"><bk><rc t="1" v="0"/></bk></cellMetadata></metadata>`;
+    contentOverrides.push('<Override PartName="/xl/metadata.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml"/>');
+  }
+  // 사용자 이름 정의
+  for (const n of wb.names ?? []) {
+    const local = n.sheet ? wb.sheetIndexByName(n.sheet) : -1;
+    const attrs = [`name="${esc(n.name)}"`];
+    if (local >= 0) attrs.push(`localSheetId="${local}"`);
+    if (n.hidden) attrs.push('hidden="1"');
+    if (n.comment) attrs.push(`comment="${esc(n.comment)}"`);
+    definedNames.push(`<definedName ${attrs.join(' ')}>${esc(exportFormula(String(n.ref).startsWith('=') ? n.ref : `=${n.ref}`))}</definedName>`);
+  }
   const wbRel = (type, target) => { const id = `rId${wbRels.length + 1}`; wbRels.push(`<Relationship Id="${id}" Type="${type}" Target="${target}"/>`); return id; };
   const pivotCachesXml = pivotCaches.length ? `<pivotCaches>${pivotCaches.map((p) => `<pivotCache cacheId="${p.cacheId}" r:id="${wbRel(`${REL}/pivotCacheDefinition`, p.target)}"/>`).join('')}</pivotCaches>` : '';
   const wbExts = [];

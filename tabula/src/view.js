@@ -448,6 +448,8 @@ export class GridView {
     const inTable = (r, c) => tables.some((t) => r >= t.r1 && r <= t.r2 && c >= t.c1 && c <= t.c2);
     const emptyRules = (this.cond ?? []).map((pr) => pr.rule).filter((rl) => EMPTY_MATCH_TYPES.has(rl.type) && rl.r1 <= r2 && rl.r2 >= r1 && rl.c1 <= c2 && rl.c2 >= c1);
     const emptyCond = (r, c) => emptyRules.some((rl) => r >= rl.r1 && r <= rl.r2 && c >= rl.c1 && c <= rl.c2);
+    const spills = wb.spillsOf(si).filter((sp) => sp.r <= r2 && sp.r + sp.h - 1 >= r1 && sp.c <= c2 && sp.c + sp.w - 1 >= c1);
+    const inSpill = (r, c) => spills.some((sp) => r >= sp.r && r < sp.r + sp.h && c >= sp.c && c < sp.c + sp.w);
     for (const r of visRows) {
       // 창 왼쪽 밖에서 넘쳐 들어오는 텍스트
       if (c1 > 0) {
@@ -460,7 +462,7 @@ export class GridView {
       }
       for (const c of visCols) {
         if (inMerge(r, c)) continue;
-        if (!hasLine && !sheet.cells.has(`${r},${c}`) && !inTable(r, c) && !emptyCond(r, c)) continue;
+        if (!hasLine && !sheet.cells.has(`${r},${c}`) && !inTable(r, c) && !emptyCond(r, c) && !inSpill(r, c)) continue;
         html.push(this.cellHtml(r, c, p, sheet, merges));
       }
     }
@@ -680,6 +682,16 @@ export class GridView {
         const x = a.x + a.w + 1;
         const y = a.y + a.h - 18;
         if (x >= bx1 && x <= bx2 && y + 18 >= by1 && y <= by2) html.push(`<div class="dv-btn" title="목록에서 선택" style="left:${x - p.ox}px;top:${y - p.oy}px"></div>`);
+      }
+    }
+    // 동적 배열 분산 범위 (파란 점선)
+    if (!st.editing && !st.chartSel) {
+      const own = wb.getCell(si, active.r, active.c);
+      const anc = own?.formula ? { r: active.r, c: active.c } : !own?.raw ? wb.spillAnchorOf(si, active.r, active.c) : null;
+      const sp = anc ? wb.spillRange(si, anc.r, anc.c) : null;
+      if (sp) {
+        const r = this.sheetRect(sp);
+        html.push(box('spill-border', { x: r.x - 1, y: r.y - 1, w: r.w + 1, h: r.h + 1 }));
       }
     }
     for (const cc of st.circles ?? []) {

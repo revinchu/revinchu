@@ -63,10 +63,11 @@ export function closeMenus() {
  * items: [{label, icon, key, action, disabled, checked}] | {sep:true} | {title} | {node}
  * anchor: HTMLElement(아래쪽에 표시) 또는 {x, y}
  */
-export function openMenu(anchor, items, { minWidth } = {}) {
+export function openMenu(anchor, items, { minWidth, scroll } = {}) {
   closeMenus();
   const menu = el('div', { class: 'menu', role: 'menu' });
   if (minWidth) menu.style.minWidth = `${minWidth}px`;
+  if (scroll) { menu.style.maxHeight = '60vh'; menu.style.overflowY = 'auto'; }
   for (const it of items) {
     if (!it) continue;
     if (it.sep) { menu.append(el('div', { class: 'menu-sep' })); continue; }

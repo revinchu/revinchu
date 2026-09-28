@@ -325,6 +325,8 @@ input.rselect { padding: 0 4px; }
   to { background-position: 8px 0, -8px 100%, 0 -8px, 100% 8px; }
 }
 .overlay .ref-box { border: 2px solid; }
+.overlay .spill-border { border: 1px dashed #2f75b5; }
+#formulaInput.ghost { color: #8a8a8a; }
 
 .col-head, .row-head, .corner, .head-clip { position: absolute; overflow: hidden; }
 .col-head, .row-head { z-index: 3; pointer-events: none; }
