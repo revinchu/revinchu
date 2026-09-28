@@ -264,3 +264,25 @@ test('슬라이서 · 피벗 테이블 xlsx 왕복 (엑셀 형식)', async () =>
   assert.deepEqual(s2.pivot.filters, { 제품: ['감', '사과'] });
   assert.deepEqual([s2.pivot.rows, s2.pivot.cols, s2.pivot.values], [['지역'], [], [{ field: '수량', agg: 'sum' }]]);
 });
+
+test('셀 그림 · IMAGE 함수 · xlsx 왕복', () => {
+  const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  const wb = new Workbook();
+  wb.transact(() => {
+    wb.setCellData(0, 0, 0, { raw: '', image: { src: png, alt: '로고' } });
+    wb.setStyle(0, 0, 0, { bold: true });
+    wb.setInput(0, 1, 0, '=IMAGE("https://example.com/a.png","대체",1)');
+    wb.setInput(0, 2, 0, '=ISERROR(A1)');
+  });
+  assert.equal(wb.getCell(0, 0, 0).image.alt, '로고'); // 서식을 바꿔도 그림 유지
+  assert.equal(wb.getValue(0, 0, 0).type, 'image');
+  assert.equal(wb.getValue(0, 1, 0).src, 'https://example.com/a.png');
+  assert.equal(wb.getValue(0, 1, 0).alt, '대체');
+  const bytes = writeXlsx(wb);
+  const { data } = readXlsx(bytes);
+  const cells = data.sheets[0].cells;
+  assert.equal(cells['0,0'].image.src, png);
+  assert.equal(cells['0,0'].image.alt, '로고');
+  assert.equal(cells['0,0'].style.bold, true);
+  assert.equal(cells['1,0'].raw, '=IMAGE("https://example.com/a.png","대체",1)');
+});

@@ -117,7 +117,7 @@ export const TABS = [
         large('createTable', 'table', '표', { title: '표 만들기 (Ctrl+T, Ctrl+L)' }),
       ]),
       group('일러스트레이션', [
-        large('insertPicture', 'picture', '그림', { title: '이 기기의 그림 삽입 (붙여넣기·끌어 놓기도 가능)' }),
+        large('insertPicture', 'picture', '그림', { menu: 'picture', title: '이 기기의 그림 삽입 — 셀에 배치 또는 셀 위에 배치 (붙여넣기·끌어 놓기도 가능)' }),
         large('shapesMenu', 'shapes', '도형', { menu: 'shapes' }),
         large('insertTextbox', 'textbox', '텍스트 상자'),
       ]),

@@ -535,7 +535,8 @@ export class GridView {
     let text;
     let align;
     let fmtColor = null;
-    if (st.showFormulas && cell?.formula) { text = cell.raw; align = 'left'; } else ({ text, align, color: fmtColor } = formatValue(v, style));
+    let image = null;
+    if (st.showFormulas && cell?.formula) { text = cell.raw; align = 'left'; } else ({ text, align, color: fmtColor, image } = formatValue(v, style));
     const eff = style.align || align;
     const css = [`left:${x - 1 - p.ox}px`, `top:${y - 1 - p.oy}px`, `width:${w + 1}px`, `height:${h + 1}px`];
     if (style.bold) css.push('font-weight:700');
@@ -582,6 +583,15 @@ export class GridView {
     const comment = cell?.comment ? ` data-cm="${esc(cell.comment)}"` : '';
     const iconHtml = icon ? `<i class="cf-icon">${ICON_SVG[icon] ?? ''}</i>` : '';
     if (icon) cls.push('has-icon');
+    if (image) {
+      // 셀 안 그림: 0 셀에 맞춤(비율 유지), 1 셀 채우기, 2 원래 크기, 3 높이 · 너비 지정
+      const fit = image.sizing === 1 ? 'fill' : image.sizing === 2 ? 'none' : 'contain';
+      const size = image.sizing === 3 ? `width:${image.w ? `${image.w}px` : 'auto'};height:${image.h ? `${image.h}px` : 'auto'};` : 'width:100%;height:100%;';
+      const img = `<img class="cimg" src="${esc(image.src)}" alt="${esc(image.alt ?? '')}" title="${esc(image.alt ?? '')}" draggable="false" loading="lazy" style="${size}object-fit:${fit}">`;
+      const i = cls.indexOf('ovf');
+      if (i >= 0) cls.splice(i, 1);
+      return `<div class="c cimg-cell${cls.length ? ` ${cls.join(' ')}` : ''}" data-r="${r}" data-c="${c}" style="${css.join(';')}"${comment}>${img}</div>`;
+    }
     return `<div class="c${cls.length ? ` ${cls.join(' ')}` : ''}" data-r="${r}" data-c="${c}" style="${css.join(';')}"${comment}>${iconHtml}<span>${hideValue ? '' : esc(text)}</span></div>`;
   }
 

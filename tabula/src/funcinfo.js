@@ -357,6 +357,7 @@ export const FUNC_INFO = {
   'WRAPROWS': F('찾기/참조', 'WRAPROWS(vector, wrap_count, [pad_with])', '벡터를 지정한 개수마다 행으로 나눕니다.'),
   'FORMULATEXT': F('찾기/참조', 'FORMULATEXT(reference)', '셀의 수식을 텍스트로 반환합니다.'),
   'GETPIVOTDATA': F('찾기/참조', 'GETPIVOTDATA(data_field, pivot_table, [field1, item1], ...)', '피벗 테이블에서 값을 가져옵니다.'),
+  'IMAGE': F('찾기/참조', 'IMAGE(source, [alt_text], [sizing], [height], [width])', '웹 주소의 그림을 셀 안에 표시합니다. sizing: 0 셀에 맞춤, 1 셀 채우기, 2 원래 크기, 3 높이·너비 지정.'),
   'HYPERLINK': F('찾기/참조', 'HYPERLINK(link_location, [friendly_name])', '하이퍼링크를 만듭니다.'),
   'INDIRECT': F('찾기/참조', 'INDIRECT(ref_text, [a1])', '텍스트로 지정한 참조를 반환합니다.'),
   'LOOKUP': F('찾기/참조', 'LOOKUP(lookup_value, lookup_vector, [result_vector])', '벡터나 배열에서 값을 찾습니다.'),

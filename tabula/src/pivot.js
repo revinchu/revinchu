@@ -39,7 +39,19 @@ export const LAYOUTS = [
 
 export const EMPTY = '(비어 있음)';
 export const TOTAL = '총합계';
-export const keyOf = (v) => (v === null || v === undefined || v === '' ? EMPTY : typeof v === 'object' ? String(v.code) : v);
+// 셀 안 그림은 주소로 구별 (피벗 항목 · 슬라이서에서 그림을 그대로 보여 줌)
+export const IMG_KEY = '\u0000img:';
+const imageByKey = new Map();
+export const keyOf = (v) => {
+  if (v === null || v === undefined || v === '') return EMPTY;
+  if (typeof v === 'object') {
+    if (v.type === 'image') { const k = `${IMG_KEY}${v.src}`; if (!imageByKey.has(k)) imageByKey.set(k, v); return k; }
+    return String(v.code);
+  }
+  return v;
+};
+/** 그림 항목 키 → 그림 (없으면 null) */
+export const imageOfKey = (k) => (typeof k === 'string' && k.startsWith(IMG_KEY) ? imageByKey.get(k) ?? { type: 'image', src: k.slice(IMG_KEY.length), alt: '' } : null);
 
 const collator = new Intl.Collator('ko');
 export function sortKeys(keys) {
@@ -54,7 +66,13 @@ export function sortKeys(keys) {
 }
 
 /** 슬라이서·필터에서 쓰는 항목 글자 */
-export const itemText = (v) => (v === null || v === undefined || v === '' ? EMPTY : typeof v === 'number' ? formatGeneral(v) : typeof v === 'object' ? v.code : String(v));
+export const itemText = (v) => {
+  if (v === null || v === undefined || v === '') return EMPTY;
+  if (typeof v === 'number') return formatGeneral(v);
+  if (typeof v === 'object') return v.type === 'image' ? v.alt || `그림 ${String(v.src).slice(-12)}` : v.code;
+  const img = imageOfKey(v);
+  return img ? img.alt || `그림 ${String(img.src).slice(-12)}` : String(v);
+};
 
 /** 머리글 이름 (빈 칸은 열N) */
 export const headerNames = (rows) => (rows[0] ?? []).map((h, i) => (h === null || h === '' ? `열${i + 1}` : String(h)));
@@ -787,6 +805,8 @@ export function computePivot(rows, d) {
     const cells = Array.from({ length: labelCols }, () => text('', role));
     const col = layout === 'compact' ? 0 : node.depth;
     cells[col] = text(labelText, role);
+    const img = imageOfKey(node.key);
+    if (img) { cells[col].raw = ''; cells[col].image = { src: img.src, alt: img.alt ?? '' }; }
     if (layout === 'compact' && node.depth > 0) cells[col].style.indent = node.depth;
     return cells;
   };
@@ -798,7 +818,13 @@ export function computePivot(rows, d) {
         const cells = Array.from({ length: labelCols }, (_, dd) => text('', `rowItem:${dd}`));
         const chain = [];
         for (let n = node; n && n.depth >= 0; n = n.parent) chain.unshift(n);
-        chain.forEach((n, dd) => { if (!lastPath.shown.has(n.path)) { cells[dd] = text(itemText(n.key), `rowItem:${dd}`); lastPath.shown.add(n.path); } });
+        chain.forEach((n, dd) => {
+          if (lastPath.shown.has(n.path)) return;
+          cells[dd] = text(itemText(n.key), `rowItem:${dd}`);
+          const img = imageOfKey(n.key);
+          if (img) { cells[dd].raw = ''; cells[dd].image = { src: img.src, alt: img.alt ?? '' }; }
+          lastPath.shown.add(n.path);
+        });
         grid.push([...cells, ...valueCells(node.path, 'item')]);
         rowItems.push({ kind: 'item', node, chain });
         return;

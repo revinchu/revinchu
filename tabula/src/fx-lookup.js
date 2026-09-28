@@ -2,7 +2,7 @@
 // refs 표시 함수는 참조 인수를 RefValue 그대로 받고(ev.deref 로 값), RefValue 를 돌려줄 수 있음
 import {
   ERR, Range, RefValue, isError, scalar, toNum, toStr, toInt, toBool, optInt, optBool, asRange, lift, attempt,
-  compareValues, typeRank, wildcardRegex, refFn,
+  compareValues, typeRank, wildcardRegex, refFn, CellImage,
 } from './fxcore.js';
 
 const MAX_ROW = 10_000_000;
@@ -405,6 +405,17 @@ export const LOOKUP = {
     const f = ctx.formulaText?.(ref.sheet, ref.r1, ref.c1);
     if (!f) throw ERR.NA;
     return f;
+  }),
+  // IMAGE(원본, [대체 텍스트], [크기 조정], [높이], [너비]): 웹 주소(https)의 그림을 셀 안에 표시
+  IMAGE: lift(([source, alt, sizing, height, width]) => {
+    const src = toStr(source).trim();
+    if (!/^(https?:|data:image\/)/i.test(src)) throw ERR.VALUE;
+    const mode = sizing === undefined || sizing === null ? 0 : Math.trunc(toNum(sizing));
+    if (mode < 0 || mode > 3) throw ERR.VALUE;
+    const h = height === undefined || height === null ? null : toNum(height);
+    const w = width === undefined || width === null ? null : toNum(width);
+    if (mode === 3 && !h && !w) throw ERR.VALUE;
+    return new CellImage({ src, alt: alt === undefined || alt === null ? '' : toStr(alt), sizing: mode, h, w });
   }),
   HYPERLINK: lift(([link, friendly]) => (friendly === undefined || friendly === null ? toStr(link) : scalar(friendly) ?? 0)),
   GETPIVOTDATA: refFn((args, ctx, ev) => {

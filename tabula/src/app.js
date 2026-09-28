@@ -3599,6 +3599,7 @@ function objectMenu(id, pos) {
     items.push(
       { label: '크기 및 속성...', icon: 'picture', action: () => imageDialog(id) },
       { label: '원래 크기로', action: () => resetImageSize(id) },
+      { label: '셀에 배치', icon: 'picture', action: () => imageToCell(id) },
     );
   }
   items.push(
@@ -3616,6 +3617,94 @@ function insertPicture() {
   const input = el('input', { type: 'file', accept: 'image/*' });
   input.addEventListener('change', () => { if (input.files[0]) addImageFile(input.files[0]); });
   input.click();
+}
+
+/** 그림 파일을 셀에 배치 (Excel '셀에 배치'): 셀 값이 그림이 됨 */
+function insertPictureInCell() {
+  const input = el('input', { type: 'file', accept: 'image/*' });
+  input.addEventListener('change', () => { if (input.files[0]) placeImageFileInCell(input.files[0]); });
+  input.click();
+}
+
+/** 큰 그림은 셀용으로 줄여서 data URL 로 (저장 크기 절약) */
+function shrinkImage(src, max, done) {
+  const img = new Image();
+  img.onload = () => {
+    const w0 = img.naturalWidth || 1;
+    const h0 = img.naturalHeight || 1;
+    const k = Math.min(1, max / w0, max / h0);
+    if (k >= 1 || /^data:image\/(svg|gif)/.test(src)) { done(src); return; }
+    const cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.round(w0 * k));
+    cv.height = Math.max(1, Math.round(h0 * k));
+    cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+    done(cv.toDataURL(/^data:image\/jpe?g/.test(src) ? 'image/jpeg' : 'image/png', 0.9));
+  };
+  img.onerror = () => alertDialog('그림 삽입', '이 그림 형식은 표시할 수 없습니다. PNG·JPEG·GIF·SVG·WebP 파일을 사용하세요.');
+  img.src = src;
+}
+
+function placeImageFileInCell(file) {
+  if (file.size > 10 * 1024 * 1024) { alertDialog('그림 삽입', '10MB 이하의 그림만 넣을 수 있습니다.'); return; }
+  const reader = new FileReader();
+  reader.onload = () => shrinkImage(reader.result, 800, (src) => {
+    putCellImage(active.r, active.c, { src, alt: file.name.replace(/\.[^.]+$/, '') });
+  });
+  reader.readAsDataURL(file);
+}
+
+function putCellImage(r, c, image) {
+  wb.transact(() => {
+    const cur = wb.getCell(si, r, c);
+    wb.setCellData(si, r, c, { raw: '', style: cur?.style, comment: cur?.comment, link: cur?.link, image });
+  }, meta());
+  focusGrid();
+}
+
+/** 셀 위에 떠 있는 그림 → 왼쪽 위 모서리가 있는 셀에 배치 */
+function imageToCell(id) {
+  const im = sheet().images.find((x) => x.id === id);
+  if (!im) return;
+  const r = gv.rows.indexAt(im.y + 1);
+  const c = gv.cols.indexAt(im.x + 1);
+  shrinkImage(im.src, 800, (src) => wb.transact(() => {
+    const cur = wb.getCell(si, r, c);
+    wb.setCellData(si, r, c, { raw: '', style: cur?.style, comment: cur?.comment, link: cur?.link, image: { src, alt: im.name ?? '' } });
+    wb.setSheetProp(si, 'images', sheet().images.filter((x) => x.id !== id));
+    chartSel = null;
+    selectCell(r, c);
+  }, meta()));
+}
+
+/** 셀에 배치한 그림 → 셀 위에 떠 있는 그림 */
+function cellImageToFloating(r, c) {
+  const cell = wb.getCell(si, r, c);
+  if (!cell?.image) return;
+  const img = new Image();
+  img.onload = () => {
+    const w0 = img.naturalWidth || 200;
+    const h0 = img.naturalHeight || 150;
+    const k = Math.min(1, 480 / w0, 360 / h0);
+    const rc = gv.sheetRect({ r1: r, c1: c, r2: r, c2: c });
+    wb.transact(() => {
+      wb.setCellData(si, r, c, { raw: '', style: cell.style, comment: cell.comment, link: cell.link });
+      const obj = { id: newObjId('im'), name: cell.image.alt || '그림', x: Math.round(rc.x), y: Math.round(rc.y),
+        w: Math.max(8, Math.round(w0 * k)), h: Math.max(8, Math.round(h0 * k)), src: cell.image.src, z: nextZ() };
+      wb.setSheetProp(si, 'images', [...(sheet().images ?? []), obj]);
+      chartSel = obj.id;
+    }, meta());
+    gv.renderObjectsAll();
+    updateSelectionUI();
+  };
+  img.src = cell.image.src;
+}
+
+function cellImageAltDialog(r, c) {
+  const cell = wb.getCell(si, r, c);
+  if (!cell?.image) return;
+  formDialog('대체 텍스트', [{ name: 'alt', label: '설명 (그림을 볼 수 없을 때 표시)', value: cell.image.alt ?? '' }], ({ alt }) => {
+    wb.transact(() => wb.setCellData(si, r, c, { raw: '', style: cell.style, comment: cell.comment, link: cell.link, image: { ...cell.image, alt: alt.trim() } }), meta());
+  });
 }
 
 function addImageFile(file, at = null) {
@@ -3987,9 +4076,9 @@ function writePivot(targetSi, def, { autofit = true } = {}) {
       const cd = row[c];
       const rr = top + r;
       const cc = left + c;
-      if (!cd || (!cd.raw && !cd.style)) { if (t.cells.has(`${rr},${cc}`)) wb.setCellData(targetSi, rr, cc, null); continue; }
+      if (!cd || (!cd.raw && !cd.style && !cd.image)) { if (t.cells.has(`${rr},${cc}`)) wb.setCellData(targetSi, rr, cc, null); continue; }
       const extra = cellFmt[cd.role];
-      wb.setCellData(targetSi, rr, cc, { raw: cd.raw, style: extra ? { ...cd.style, ...extra } : cd.style });
+      wb.setCellData(targetSi, rr, cc, { raw: cd.raw, style: extra ? { ...cd.style, ...extra } : cd.style, ...(cd.image ? { image: cd.image } : {}) });
       // 필터 단추: 행 레이블 머리글, 열 레이블 머리글, 보고서 필터 값
       if (cd.role === 'rowHead:0' && d.rows.length) btns.push({ r: rr, c: cc, kind: 'rows' });
       else if (/^rowHead:\d+$/.test(cd.role) && d.layout !== 'compact' && d.rows[+cd.role.split(':')[1]]) btns.push({ r: rr, c: cc, kind: 'rows', field: d.rows[+cd.role.split(':')[1]] });
@@ -6425,6 +6514,10 @@ function cellStylesMenu(anchorEl) {
 function tableStylesMenu(anchorEl) { tableStyleGallery(anchorEl, !tableHere()); }
 
 const MENUS = {
+  picture: () => [
+    { label: '셀에 배치...', icon: 'picture', action: () => insertPictureInCell() },
+    { label: '셀 위에 배치...', icon: 'picture', action: () => insertPicture() },
+  ],
   pivotLayout: () => [
     { label: '압축 형식으로 표시', action: () => run('pivotCompact') },
     { label: '개요 형식으로 표시', action: () => run('pivotOutline') },
@@ -6673,6 +6766,15 @@ function showContextMenu(pos, kind) {
   } else {
     const cm = wb.getCell(si, active.r, active.c)?.comment;
     const lk = wb.getCell(si, active.r, active.c)?.link;
+    const ci = wb.getCell(si, active.r, active.c)?.image;
+    if (ci) {
+      const { r, c } = active;
+      items.push(
+        { label: '셀 위에 그림 배치', icon: 'picture', action: () => cellImageToFloating(r, c) },
+        { label: '대체 텍스트...', action: () => cellImageAltDialog(r, c) },
+        { sep: true },
+      );
+    }
     items.push(
       { label: lk ? '하이퍼링크 편집...' : '링크', key: 'Ctrl+K', action: hyperlinkDialog },
       ...(lk ? [{ label: '하이퍼링크 열기', action: () => openLink(lk) }, { label: '하이퍼링크 제거', action: removeHyperlink }] : []),
@@ -6906,6 +7008,7 @@ const COMMANDS = {
   chartArea: () => insertChart('area'),
   chartScatter: () => insertChart('scatter'),
   insertPicture,
+  insertPictureInCell,
   textToColumns,
   condManager: cfManager,
   condNewRule: () => cfRuleEditor(null, (nr) => wb.transact(() => wb.addCondRule(si, { ...usedClip(sel), ...nr }), meta())),

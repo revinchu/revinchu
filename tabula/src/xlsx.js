@@ -11,6 +11,7 @@ import { DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT } from './workbook.js';
 import { chartLayout, PALETTE, chartModelData } from './chart.js';
 import { Axis } from './axis.js';
 import { toBase64, fromBase64 } from './vba.js';
+import { CellImage } from './fxcore.js';
 import { normalizeStyleName, DEFAULT_TABLE_STYLE, dataTop, dataBottom, canonicalRef, tableAt, columnNames, findTable } from './tables.js';
 import { pivotSourceData, resolvePivot, itemText, keyOf, sortKeys, EMPTY, headerNames, normalizeDef, computePivot, valueName } from './pivot.js';
 import { slicerStyleName } from './slicerstyle.js';
@@ -351,8 +352,12 @@ function readSheet(files, path, ctx) {
         else if (typeof value === 'string') raw = style?.numFmt === 'text' ? value : textRaw(value);
         else raw = numberRaw(value, style);
       }
-      if (!raw && !style) continue;
+      // 셀에 배치한 그림 (richData 값 메타데이터 vm)
+      const cellImg = !formula && c.attrs.vm ? ctx.richImages?.[Number(c.attrs.vm)] : null;
+      if (cellImg) raw = '';
+      if (!raw && !style && !cellImg) continue;
       const d = { raw };
+      if (cellImg) d.image = { ...cellImg };
       if (style) d.style = style;
       if (cached !== undefined && cached !== null) d.cached = cached;
       sheet.cells[`${r},${cc}`] = d;
@@ -1213,7 +1218,7 @@ export function readXlsx(bytes) {
     if (!e) return false;
     try { return mayReturnArray(parse(e.ref.slice(1))); } catch { return false; }
   };
-  const ctx = { xfs, dxfs, strings, theme, warnings: new Set(), isName, nameMulti };
+  const ctx = { xfs, dxfs, strings, theme, warnings: new Set(), isName, nameMulti, richImages: readRichImages(files, wbRels) };
   const sheets = [];
   const warnings = [];
   const sheetCodes = {};
@@ -1250,6 +1255,49 @@ export function readXlsx(bytes) {
   let act = Math.min(active, sheets.length - 1);
   if (sheets[act]?.state) act = Math.max(0, sheets.findIndex((x) => !x.state));
   return { data, active: act, warnings };
+}
+
+/** 셀 그림: metadata.xml valueMetadata(vm, 1부터) → 리치 값 → richValueRel → 그림 파일. [vm] = {src, alt} */
+function readRichImages(files, wbRels) {
+  const byType = (t) => Object.values(wbRels).find((r) => r.type === t && files[r.target]);
+  const metaRel = byType('sheetMetadata');
+  const rvRel = byType('rdRichValue');
+  const stRel = byType('rdRichValueStructure');
+  const relRel = byType('richValueRel');
+  if (!metaRel || !rvRel || !stRel || !relRel) return null;
+  try {
+    const meta = parseXml(textOf(files[metaRel.target]));
+    const types = kids(child(meta, 'metadataTypes'), 'metadataType').map((m) => m.attrs.name);
+    const rich = kids(meta, 'futureMetadata').find((f) => f.attrs.name === 'XLRICHVALUE');
+    const rvbs = kids(rich, 'bk').map((bk) => Number(descendants(bk, 'rvb')[0]?.attrs.i));
+    const structs = kids(parseXml(textOf(files[stRel.target])), 's').map((st) => ({ t: st.attrs.t, keys: kids(st, 'k').map((k) => k.attrs.n) }));
+    const rvs = kids(parseXml(textOf(files[rvRel.target])), 'rv').map((rv) => ({ s: Number(rv.attrs.s), vals: kids(rv, 'v').map((v) => v.text ?? '') }));
+    const relIds = kids(parseXml(textOf(files[relRel.target])), 'rel').map((r) => rid(r) ?? Object.entries(r.attrs).find(([k]) => k.endsWith(':id'))?.[1]);
+    const rels = relsOf(files, relRel.target);
+    const out = [null];
+    for (const bk of kids(child(meta, 'valueMetadata'), 'bk')) {
+      const rc = child(bk, 'rc');
+      let img = null;
+      if (rc && types[Number(rc.attrs.t) - 1] === 'XLRICHVALUE') {
+        const rv = rvs[rvbs[Number(rc.attrs.v)]];
+        const st = rv && structs[rv.s];
+        const ki = st ? st.keys.indexOf('_rvRel:LocalImageIdentifier') : -1;
+        if (ki >= 0) {
+          const target = rels[relIds[Number(rv.vals[ki])]]?.target;
+          const bytes = target && files[target];
+          const mime = bytes && MIME[target.split('.').pop().toLowerCase()];
+          if (mime) {
+            const ti = st.keys.indexOf('Text');
+            img = { src: `data:${mime};base64,${toBase64(bytes)}`, alt: ti >= 0 ? rv.vals[ti] : '' };
+          }
+        }
+      }
+      out.push(img);
+    }
+    return out;
+  } catch {
+    return null;
+  }
 }
 
 function relsTarget(files, path, type) {
@@ -1968,6 +2016,27 @@ export function writeXlsx(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {})
   let tableNo = 0;
   let mediaNo = 0;
   const mediaExts = new Set();
+  // 셀에 배치한 그림 → 리치 값 (같은 그림·설명은 하나로)
+  const richList = [];
+  const richMedia = new Map(); // src → rel 순번
+  const richKey = new Map(); // src + alt → vm (1부터)
+  const richImage = (image) => {
+    const k = `${image.alt ?? ''}\u0000${image.src}`;
+    if (richKey.has(k)) return richKey.get(k);
+    const m = /^data:image\/([a-z+]+);base64,(.*)$/i.exec(image.src);
+    if (!m) return 0;
+    const ext = { jpeg: 'jpeg', jpg: 'jpeg', png: 'png', gif: 'gif', 'svg+xml': 'svg', webp: 'webp', bmp: 'bmp' }[m[1].toLowerCase()];
+    if (!ext || !MIME[ext]) return 0;
+    if (!richMedia.has(image.src)) {
+      mediaNo++;
+      mediaExts.add(ext);
+      files[`xl/media/image${mediaNo}.${ext}`] = fromBase64(m[2]);
+      richMedia.set(image.src, { i: richMedia.size, path: `../media/image${mediaNo}.${ext}` });
+    }
+    richList.push({ rel: richMedia.get(image.src).i, alt: image.alt ?? '' });
+    richKey.set(k, richList.length);
+    return richList.length;
+  };
   const definedNames = [];
   const vba = wb.vba?.bin ? wb.vba : null;
   const nameSet = new Set((wb.names ?? []).map((n) => n.name.toUpperCase()));
@@ -2070,6 +2139,10 @@ export function writeXlsx(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {})
         const s = pool.xf(st);
         const sAttr = s ? ` s="${s}"` : '';
         const v = wb.getValue(si, r, c);
+        if (!cell.raw && cell.image?.src) {
+          const vm = richImage(cell.image);
+          return vm ? `<c r="${ref}"${sAttr} t="e" vm="${vm}"><v>#VALUE!</v></c>` : (s ? `<c r="${ref}"${sAttr}/>` : '');
+        }
         if (!cell.raw && (v === null || !cell.spilled && !wb.spillAnchorOf(si, r, c))) return s ? `<c r="${ref}"${sAttr}/>` : '';
         if (cell.formula) {
           // 배열을 돌려줄 수 있는 수식은 동적 배열 수식으로 (cm="1" + t="array")
@@ -2082,9 +2155,11 @@ export function writeXlsx(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {})
           if (typeof v === 'number') return `<c r="${ref}"${sAttr}${cm}>${f}<v>${v}</v></c>`;
           if (typeof v === 'boolean') return `<c r="${ref}"${sAttr} t="b"${cm}>${f}<v>${v ? 1 : 0}</v></c>`;
           if (isError(v)) return `<c r="${ref}"${sAttr} t="e"${cm}>${f}<v>${esc(['#CIRC!', '#SPILL!', '#CALC!', '#BUSY!'].includes(v.code) && !dyn ? '#REF!' : v.code === '#CIRC!' ? '#REF!' : v.code)}</v></c>`;
+          if (v instanceof CellImage) return `<c r="${ref}"${sAttr} t="e"${cm}>${f}<v>#VALUE!</v></c>`; // IMAGE: 엑셀이 다시 계산
           return `<c r="${ref}"${sAttr} t="str"${cm}>${f}<v>${esc(v ?? '')}</v></c>`;
         }
         if (isError(v)) return `<c r="${ref}"${sAttr} t="e"><v>${esc(v.code)}</v></c>`;
+        if (v instanceof CellImage) return s ? `<c r="${ref}"${sAttr}/>` : '';
         if (typeof v === 'number') return `<c r="${ref}"${sAttr}><v>${v}</v></c>`;
         if (typeof v === 'boolean') return `<c r="${ref}"${sAttr} t="b"><v>${v ? 1 : 0}</v></c>`;
         if (v === null) return s ? `<c r="${ref}"${sAttr}/>` : '';
@@ -2354,11 +2429,44 @@ export function writeXlsx(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {})
     `<Relationship Id="rId${wb.sheets.length + 2}" Type="${REL}/sharedStrings" Target="sharedStrings.xml"/>`,
   ];
   if (vba) wbRels.push(`<Relationship Id="rId${wbRels.length + 1}" Type="http://schemas.microsoft.com/office/2006/relationships/vbaProject" Target="vbaProject.bin"/>`);
-  if (dynamicCells) {
-    // 동적 배열 수식 표시 (cm="1" 이 가리키는 셀 메타데이터)
+  if (dynamicCells || richList.length) {
+    // 셀 메타데이터: 동적 배열 수식(cm="1" → XLDAPR), 셀 그림(vm="N" → XLRICHVALUE)
     wbRels.push(`<Relationship Id="rId${wbRels.length + 1}" Type="${REL}/sheetMetadata" Target="metadata.xml"/>`);
-    files['xl/metadata.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<metadata xmlns="${NS_MAIN}" xmlns:xda="http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray"><metadataTypes count="1"><metadataType name="XLDAPR" minSupportedVersion="120000" copy="1" pasteAll="1" pasteValues="1" merge="1" splitFirst="1" rowColShift="1" clearFormats="1" clearComments="1" assign="1" coerce="1" cellMeta="1"/></metadataTypes><futureMetadata name="XLDAPR" count="1"><bk><extLst><ext uri="{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}"><xda:dynamicArrayProperties fDynamic="1" fCollapsed="0"/></ext></extLst></bk></futureMetadata><cellMetadata count="1"><bk><rc t="1" v="0"/></bk></cellMetadata></metadata>`;
+    const types = [];
+    let future = '';
+    if (dynamicCells) {
+      types.push('<metadataType name="XLDAPR" minSupportedVersion="120000" copy="1" pasteAll="1" pasteValues="1" merge="1" splitFirst="1" rowColShift="1" clearFormats="1" clearComments="1" assign="1" coerce="1" cellMeta="1"/>');
+      future += '<futureMetadata name="XLDAPR" count="1"><bk><extLst><ext uri="{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}"><xda:dynamicArrayProperties fDynamic="1" fCollapsed="0"/></ext></extLst></bk></futureMetadata>';
+    }
+    if (richList.length) {
+      types.push('<metadataType name="XLRICHVALUE" minSupportedVersion="120000" copy="1" pasteAll="1" pasteValues="1" merge="1" splitFirst="1" rowColShift="1" clearFormats="1" clearComments="1" assign="1" coerce="1"/>');
+      future += `<futureMetadata name="XLRICHVALUE" count="${richList.length}">${richList.map((_, i) => `<bk><extLst><ext uri="{3e2802c4-a4d2-4d8b-9148-e3be6c30e623}"><xlrd:rvb i="${i}"/></ext></extLst></bk>`).join('')}</futureMetadata>`;
+    }
+    const cellMeta = dynamicCells ? '<cellMetadata count="1"><bk><rc t="1" v="0"/></bk></cellMetadata>' : '';
+    const valueMeta = richList.length ? `<valueMetadata count="${richList.length}">${richList.map((_, i) => `<bk><rc t="${types.length}" v="${i}"/></bk>`).join('')}</valueMetadata>` : '';
+    files['xl/metadata.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<metadata xmlns="${NS_MAIN}" xmlns:xda="http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray" xmlns:xlrd="http://schemas.microsoft.com/office/spreadsheetml/2017/richdata"><metadataTypes count="${types.length}">${types.join('')}</metadataTypes>${future}${cellMeta}${valueMeta}</metadata>`;
     contentOverrides.push('<Override PartName="/xl/metadata.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml"/>');
+  }
+  if (richList.length) {
+    const RD = 'http://schemas.microsoft.com/office/spreadsheetml/2017/richdata';
+    const withAlt = richList.some((x) => x.alt);
+    files['xl/richData/rdrichvaluestructure.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<rvStructures xmlns="${RD}" count="${withAlt ? 2 : 1}"><s t="_localImage"><k n="_rvRel:LocalImageIdentifier" t="i"/><k n="CalcOrigin" t="i"/></s>${withAlt ? '<s t="_localImage"><k n="_rvRel:LocalImageIdentifier" t="i"/><k n="CalcOrigin" t="i"/><k n="Text" t="s"/></s>' : ''}</rvStructures>`;
+    files['xl/richData/rdrichvalue.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<rvData xmlns="${RD}" count="${richList.length}">${richList.map((x) => (x.alt ? `<rv s="1"><v>${x.rel}</v><v>5</v><v>${esc(x.alt)}</v></rv>` : `<rv s="0"><v>${x.rel}</v><v>5</v></rv>`)).join('')}</rvData>`;
+    const media = [...richMedia.values()];
+    files['xl/richData/richValueRel.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<richValueRels xmlns="http://schemas.microsoft.com/office/spreadsheetml/2022/richvaluerel" xmlns:r="${NS_R}">${media.map((m) => `<rel r:id="rId${m.i + 1}"/>`).join('')}</richValueRels>`;
+    files['xl/richData/_rels/richValueRel.xml.rels'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="${NS_PKG}">${media.map((m) => `<Relationship Id="rId${m.i + 1}" Type="${REL}/image" Target="${m.path}"/>`).join('')}</Relationships>`;
+    files['xl/richData/rdRichValueTypes.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<rvTypesInfo xmlns="http://schemas.microsoft.com/office/spreadsheetml/2017/richdata2" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:Ignorable="x" xmlns:x="${NS_MAIN}"><global><keyFlags><key name="_Self"><flag name="ExcludeFromFile" value="1"/><flag name="ExcludeFromCalcComparison" value="1"/></key><key name="_DisplayString"><flag name="ExcludeFromCalcComparison" value="1"/></key><key name="_Flags"><flag name="ExcludeFromCalcComparison" value="1"/></key><key name="_Format"><flag name="ExcludeFromCalcComparison" value="1"/></key><key name="_SubLabel"><flag name="ExcludeFromCalcComparison" value="1"/></key><key name="_Attribution"><flag name="ExcludeFromCalcComparison" value="1"/></key><key name="_Icon"><flag name="ExcludeFromCalcComparison" value="1"/></key><key name="_Display"><flag name="ExcludeFromCalcComparison" value="1"/></key><key name="_CanonicalPropertyNames"><flag name="ExcludeFromCalcComparison" value="1"/></key><key name="_ClassificationId"><flag name="ExcludeFromCalcComparison" value="1"/></key></keyFlags></global></rvTypesInfo>`;
+    const add = (type, target) => wbRels.push(`<Relationship Id="rId${wbRels.length + 1}" Type="${type}" Target="${target}"/>`);
+    add('http://schemas.microsoft.com/office/2022/10/relationships/richValueRel', 'richData/richValueRel.xml');
+    add('http://schemas.microsoft.com/office/2017/06/relationships/rdRichValue', 'richData/rdrichvalue.xml');
+    add('http://schemas.microsoft.com/office/2017/06/relationships/rdRichValueStructure', 'richData/rdrichvaluestructure.xml');
+    add('http://schemas.microsoft.com/office/2017/06/relationships/rdRichValueTypes', 'richData/rdRichValueTypes.xml');
+    contentOverrides.push(
+      '<Override PartName="/xl/richData/richValueRel.xml" ContentType="application/vnd.ms-excel.richvaluerel+xml"/>',
+      '<Override PartName="/xl/richData/rdrichvalue.xml" ContentType="application/vnd.ms-excel.rdrichvalue+xml"/>',
+      '<Override PartName="/xl/richData/rdrichvaluestructure.xml" ContentType="application/vnd.ms-excel.rdrichvaluestructure+xml"/>',
+      '<Override PartName="/xl/richData/rdRichValueTypes.xml" ContentType="application/vnd.ms-excel.rdrichvaluetypes+xml"/>',
+    );
   }
   // 사용자 이름 정의
   for (const n of wb.names ?? []) {

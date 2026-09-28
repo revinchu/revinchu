@@ -187,6 +187,7 @@ export function displayedDecimals(n, fmt, decimals) {
 export function formatValue(v, style) {
   style ??= {};
   if (v === null || v === undefined || v === '') return { text: '', align: 'left' };
+  if (typeof v === 'object' && v.type === 'image') return { text: v.alt || '', align: 'center', image: v };
   if (typeof v === 'object' && 'code' in v) return { text: v.code, align: 'center' };
   if (typeof v === 'boolean') return { text: v ? 'TRUE' : 'FALSE', align: 'center' };
   if (style.numFmt === 'custom' && style.code) {

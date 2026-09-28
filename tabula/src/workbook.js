@@ -6,6 +6,7 @@ import {
   adjustFormulaForStructure, renameSheetInFormula, shiftFormula, quoteSheetName, MAX_ROWS, MAX_COLS,
 } from './formula.js';
 import { parseInput } from './format.js';
+import { CellImage } from './fxcore.js';
 
 export const DEFAULT_COL_WIDTH = 64;
 export const DEFAULT_ROW_HEIGHT = 20;
@@ -37,6 +38,7 @@ export function makeCell(data) {
   if (data.comment) cell.comment = data.comment;
   if (data.link) cell.link = data.link; // 하이퍼링크: 주소(URL) 또는 '#시트!A1'
   if (data.cached !== undefined) cell.cached = data.cached;
+  if (data.image?.src) cell.image = { ...data.image }; // 셀에 배치한 그림
   if (cell.raw.startsWith('=') && cell.raw.length > 1 && style?.numFmt !== 'text') {
     cell.formula = true;
     try {
@@ -46,12 +48,14 @@ export function makeCell(data) {
       cell.ast = null;
       cell.parseError = e.message;
     }
+  } else if (cell.image && cell.raw === '') {
+    cell.v = new CellImage(cell.image);
   } else if (style?.numFmt === 'text') {
     cell.v = cell.raw === '' ? null : cell.raw;
   } else {
     cell.v = PLAIN_NUMBER.test(cell.raw) ? Number(cell.raw) : parseInput(cell.raw).value;
   }
-  if (!cell.raw && !cell.style && !cell.comment && !cell.link) return null;
+  if (!cell.raw && !cell.style && !cell.comment && !cell.link && !cell.image) return null;
   return cell;
 }
 
@@ -61,6 +65,7 @@ export function cellData(cell) {
   if (cell.style) d.style = { ...cell.style };
   if (cell.comment) d.comment = cell.comment;
   if (cell.link) d.link = cell.link;
+  if (cell.image) d.image = { ...cell.image };
   if (cell.cached !== undefined && cell.formula) d.cached = cell.cached;
   return d;
 }
@@ -155,7 +160,7 @@ export class Workbook {
 
   getValue(si, r, c) {
     const cell = this.getCell(si, r, c);
-    if (!cell || (!cell.formula && cell.raw === '')) return this.spillValueAt(si, r, c);
+    if (!cell || (!cell.formula && cell.raw === '' && !cell.image)) return this.spillValueAt(si, r, c);
     if (!cell.formula) return cell.v ?? null;
     const k = `${si}:${r},${c}`;
     if (this.cache.has(k)) return this.cache.get(k);
@@ -462,7 +467,7 @@ export class Workbook {
     let rows = 0;
     let cols = 0;
     for (const [k, cell] of this.sheets[si].cells) {
-      if (!cell.raw) continue;
+      if (!cell.raw && !cell.image) continue;
       const [r, c] = unkey(k);
       rows = Math.max(rows, r + 1);
       cols = Math.max(cols, c + 1);
@@ -623,12 +628,12 @@ export class Workbook {
   setStyle(si, r, c, patch) {
     const cur = this.getCell(si, r, c);
     const style = { ...(cur?.style || {}), ...patch };
-    this.setCellData(si, r, c, { raw: cur?.raw ?? '', style, comment: cur?.comment, link: cur?.link });
+    this.setCellData(si, r, c, { raw: cur?.raw ?? '', style, comment: cur?.comment, link: cur?.link, image: cur?.image });
   }
 
   setComment(si, r, c, comment) {
     const cur = this.getCell(si, r, c);
-    this.setCellData(si, r, c, { raw: cur?.raw ?? '', style: cur?.style, comment: comment || undefined, link: cur?.link });
+    this.setCellData(si, r, c, { raw: cur?.raw ?? '', style: cur?.style, comment: comment || undefined, link: cur?.link, image: cur?.image });
   }
 
   clearRange(si, r1, c1, r2, c2, what = 'contents') {
@@ -636,8 +641,8 @@ export class Workbook {
       const [r, c] = unkey(k);
       if (r < r1 || r > r2 || c < c1 || c > c2) continue;
       if (what === 'all') this.setCellData(si, r, c, null);
-      else if (what === 'formats') this.setCellData(si, r, c, { raw: cell.raw, comment: cell.comment });
-      else if (what === 'comments') this.setCellData(si, r, c, { raw: cell.raw, style: cell.style });
+      else if (what === 'formats') this.setCellData(si, r, c, { raw: cell.raw, comment: cell.comment, link: cell.link, image: cell.image });
+      else if (what === 'comments') this.setCellData(si, r, c, { raw: cell.raw, style: cell.style, link: cell.link, image: cell.image });
       else this.setCellData(si, r, c, { raw: '', style: cell.style, comment: cell.comment });
     }
   }

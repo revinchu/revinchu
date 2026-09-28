@@ -26,6 +26,20 @@ export const ERROR_TYPE = { '#NULL!': 1, '#DIV/0!': 2, '#VALUE!': 3, '#REF!': 4,
 
 // ───────────────────────── 값 종류 ─────────────────────────
 /** 2차원 배열 값. 셀 범위에서 왔으면 ref 에 { sheet, r1, c1, r2, c2 } */
+/** 셀 안 그림 (셀에 배치한 그림 · IMAGE 함수 결과) — sizing 0: 맞춤, 1: 채우기, 2: 원래 크기, 3: 사용자 지정(h, w) */
+export class CellImage {
+  constructor({ src, alt = '', sizing = 0, h = null, w = null }) {
+    this.type = 'image';
+    this.src = src;
+    this.alt = alt ?? '';
+    this.sizing = sizing ?? 0;
+    this.h = h;
+    this.w = w;
+  }
+
+  toString() { return this.alt || ''; }
+}
+
 export class Range {
   constructor(rows, ref = null) { this.rows = rows; this.ref = ref; }
   get height() { return this.rows.length; }
