@@ -13,7 +13,7 @@ import { formatGeneral, formatValue } from './format.js';
 import { findTable, dataTop, dataBottom, columnNames, ACCENTS, tint, shade } from './tables.js';
 import {
   EMPTY as EMPTY0, IMG_KEY as IMG_KEY0, keyOf as keyOf0, imageOfKey as imageOfKey0, sortKeys as sortKeys0, itemText as itemText0,
-  kk, cubeFromRows, filterRows, groupAggregate, groupAcc,
+  kk, cubeFromRows, filterRows, groupAggregate, groupAcc, Cube, Column, blockColumn, groupedColumn, groupRank, aggregateQuery, planRollup,
 } from './cube.js';
 
 export const AGGREGATES = [
@@ -51,7 +51,7 @@ export const itemText = itemText0;
 export const TOTAL = '총합계';
 
 /** 머리글 이름 (빈 칸은 열N) */
-export const headerNames = (rows) => (rows[0] ?? []).map((h, i) => (h === null || h === '' ? `열${i + 1}` : String(h)));
+export const headerNames = (rows) => (rows && !Array.isArray(rows) && rows.cube ? rows.cube.header : (rows[0] ?? []).map((h, i) => (h === null || h === '' ? `열${i + 1}` : String(h))));
 
 export const aggLabel = (agg) => AGGREGATES.find((a) => a.id === agg)?.label ?? '합계';
 export const valueName = (v) => v.name || `${aggLabel(v.agg)} : ${v.field}`;
@@ -339,6 +339,7 @@ export function normalizeDef(def, header) {
     order: byKey(def.order),
     fieldFilters: byKey(def.fieldFilters),
     style: def.style ?? DEFAULT_PIVOT_STYLE,
+    groups: byKey(def.groups),
     styleDef: def.styleDef ?? null,
     errorCaption: def.errorCaption ?? null,
     rowCaption: def.rowCaption ?? null,
@@ -353,18 +354,95 @@ export function normalizeDef(def, header) {
  * 표 이름이면 지금의 표 범위(누적된 데이터 포함), 아니면 고정 범위
  */
 export function pivotSourceData(wb, def) {
+  let si;
+  let ref;
+  let table = null;
+  let names = null;
   if (def.table) {
     const f = findTable(wb, def.table);
     if (!f) return null;
     const t = f.t;
-    const ref = { r1: t.header ? t.r1 : dataTop(t), c1: t.c1, r2: dataBottom(t), c2: t.c2 };
-    const rows = cachedRead(wb, f.si, ref);
-    if (!t.header) return { rows: [columnNames(wb, f.si, t), ...rows], si: f.si, ref, table: t.name };
-    return { rows, si: f.si, ref, table: t.name };
+    si = f.si;
+    ref = { r1: t.header ? t.r1 : dataTop(t), c1: t.c1, r2: dataBottom(t), c2: t.c2 };
+    table = t.name;
+    if (!t.header) names = columnNames(wb, f.si, t);
+  } else {
+    si = wb.sheetIndexByName(def.source);
+    if (si < 0 || !def.range) return null;
+    ref = def.range;
   }
-  const si = wb.sheetIndexByName(def.source);
-  if (si < 0 || !def.range) return null;
-  return { rows: cachedRead(wb, si, def.range), si, ref: def.range, table: null };
+  // 데이터가 열 블록에 있으면 값을 복사하지 않고 블록의 형식화 배열을 그대로 씀 (천만 행도 즉시)
+  const bc = blockCube(wb, si, ref, names);
+  if (bc) return sourceOf(bc, si, ref, table, null);
+  let rows = cachedRead(wb, si, ref);
+  if (names) {
+    let m = headedMemo.get(rows);
+    if (!m || m[0] !== names.join('\u0001')) { m = [names.join('\u0001'), [names, ...rows]]; headedMemo.set(rows, m); }
+    rows = m[1];
+  }
+  return sourceOf(cubeFromRows(rows), si, ref, table, rows);
+}
+const headedMemo = new WeakMap();
+
+/** 피벗 원본: { cube, rows(필요할 때 만듦, 머리글 포함), si, ref, table } */
+function sourceOf(cube, si, ref, table, rows) {
+  let made = rows;
+  const src = { cube, si, ref, table };
+  Object.defineProperty(src, 'rows', {
+    enumerable: false,
+    get() {
+      if (made) return made;
+      made = new Array(cube.n + 1);
+      made[0] = cube.header;
+      for (let i = 0; i < cube.n; i++) made[i + 1] = cube.row(i);
+      return made;
+    },
+  });
+  return src;
+}
+
+/**
+ * 원본의 데이터 행이 열 블록 하나에 모두 들어 있으면 블록 기반 큐브 (없으면 null)
+ * 블록에 없는 열이나 수식 셀(일반 셀)이 섞인 열은 그 열만 셀 값을 읽음
+ */
+const blockCubes = new WeakMap();
+function blockCube(wb, si, ref, names) {
+  const sheet = wb.sheets?.[si];
+  if (!sheet?.blocks?.length) return null;
+  const d1 = names ? ref.r1 : ref.r1 + 1;
+  const d2 = ref.r2;
+  if (d2 < d1) return null;
+  const b = sheet.blocks.find((x) => x.r0 <= d1 && x.r0 + x.n - 1 >= d2 && x.c0 <= ref.c2 && x.c0 + x.cols.length - 1 >= ref.c1);
+  if (!b) return null;
+  const sv = wb.sheetVersion?.(si) ?? wb.version;
+  const key = `${ref.r1},${ref.c1},${ref.r2},${ref.c2}:${names ? names.join('\u0001') : ''}`;
+  let memo = blockCubes.get(b);
+  if (!memo) { memo = new Map(); blockCubes.set(b, memo); }
+  const hit = memo.get(key);
+  if (hit && hit.sv === sv && hit.ver === (b.ver ?? 0)) return hit.cube;
+  const n = d2 - d1 + 1;
+  const a = d1 - b.r0;
+  const width = ref.c2 - ref.c1 + 1;
+  const header = names ?? Array.from({ length: width }, (_, j) => {
+    const v = wb.getValue(si, ref.r1, ref.c1 + j);
+    return v === null || v === '' || v === undefined ? `열${j + 1}` : String(v);
+  });
+  // 블록 안에 일반 셀(수식 등)이 있는 열
+  const mixed = new Set();
+  for (const k of sheet.cells.keys()) {
+    const comma = k.indexOf(',');
+    const r = +k.slice(0, comma);
+    if (r < d1 || r > d2) continue;
+    mixed.add(+k.slice(comma + 1));
+  }
+  const cube = new Cube(n, header, (j) => {
+    const c = ref.c1 + j;
+    const bc = c >= b.c0 && c < b.c0 + b.cols.length && !mixed.has(c) ? b.cols[c - b.c0] : null;
+    if (!bc) return new Column(n, (i) => wb.getValue(si, d1 + i, c));
+    return blockColumn(bc, a, n);
+  }, (i) => header.map((_, j) => cube.col(j).get(i)));
+  memo.set(key, { cube, sv, ver: b.ver ?? 0 });
+  return cube;
 }
 
 // 같은 원본을 여러 피벗 · 슬라이서가 읽으므로 통합 문서가 바뀌기 전까지(wb.version 이 같으면) 재사용
@@ -393,6 +471,7 @@ function cachedRead(wb, si, ref) {
 }
 
 // ───────────── 레이블 · 값 · 상위 N 필터 ─────────────
+const collator = new Intl.Collator('ko');
 const wildRe = (p) => new RegExp(`^${String(p).replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/~\*/g, '\u0001').replace(/~\?/g, '\u0002').replace(/\*/g, '.*').replace(/\?/g, '.').replace(/\u0001/g, '\\*').replace(/\u0002/g, '\\?')}$`, 'i');
 function compareOp(op, a, v1, v2, text) {
   const cmp = (x, y) => (text ? collator.compare(String(x).toLowerCase(), String(y).toLowerCase()) : x - y);
@@ -504,26 +583,68 @@ function applyFieldFilters(groups, d, measures) {
 }
 
 /**
+ * 같은 원본을 쓰는 피벗들(defs)과 슬라이서 필드(extraFields)를 보고 요약 캐시를 한 번에 준비.
+ * 큰 파일을 열 때 · 피벗을 여러 개 새로 그리기 전에 부르면 피벗마다 원본을 다시 훑지 않음
+ */
+export function warmPivots(wb, defs, extraFields = []) {
+  const bySrc = new Map();
+  for (const def of defs) {
+    const src = pivotSourceData(wb, def);
+    if (!src) continue;
+    const e = bySrc.get(src.cube) ?? { cube: src.cube, defs: [] };
+    e.defs.push(def);
+    bySrc.set(src.cube, e);
+  }
+  for (const { cube, defs: list } of bySrc.values()) {
+    const lower = cube.header.map((h) => h.toLowerCase());
+    const idx = (n) => lower.indexOf(String(n).toLowerCase());
+    const dims = new Map();
+    const measures = new Map();
+    const addDim = (j, spec) => { if (j < 0) return; const c = spec ? groupedColumn(cube, j, spec) : j; dims.set(typeof c === 'number' ? `b${c}` : c.rollupKey, c); };
+    for (const def of list) {
+      const d = normalizeDef(def, cube.header);
+      for (const f of [...d.rows, ...d.cols]) addDim(idx(f), d.groups?.[f]);
+      for (const f of [...d.pages, ...Object.keys(d.filters)]) addDim(idx(f));
+      const m = makeMeasures(d.header, d.values, d.calcFields);
+      m.cols.forEach((c, i) => {
+        const col = c >= 0 && c < cube.header.length ? c : -1;
+        const cur = measures.get(col) ?? { col, need: {} };
+        for (const k of ['sq', 'mm', 'prod']) if (m.needs[i][k]) cur.need[k] = true;
+        measures.set(col, cur);
+      });
+    }
+    for (const f of extraFields) addDim(idx(f));
+    measures.set(-1, measures.get(-1) ?? { col: -1, need: {} });
+    planRollup(cube, [...dims.values()], [...measures.values()]);
+  }
+}
+
+/**
  * 큐브 · 선택 행 → 가장 잘게 나눈 그룹 [{ r: [행 필드 키], c: [열 필드 키], list: [슬롯별 누적], n: 행 수 }]
  * 원본을 한 번만 훑어 형식화 배열에 누적하므로 행이 많아도 빠름. 같은 선택 · 같은 필드면 재사용
  */
 const groupMemo = new WeakMap();
-function cubeGroups(cube, sel, d, measures) {
+function cubeGroups(cube, filters, d, measures) {
   const lower = d.header.map((h) => String(h).toLowerCase());
   const idx = (n) => lower.indexOf(String(n).toLowerCase());
   const rowIdx = d.rows.map(idx);
   const colIdx = d.cols.map(idx);
   const valid = (j) => j >= 0 && j < cube.header.length;
-  const dims = [...rowIdx, ...colIdx].filter(valid);
+  // 그룹화한 필드(날짜 → 월 등)는 파생 열
+  const specOf = (j) => d.groups?.[cube.header[j]] ?? null;
+  const dimOf = (j) => (specOf(j) ? groupedColumn(cube, j, specOf(j)) : j);
+  const dims = [...rowIdx, ...colIdx].filter(valid).map(dimOf);
   const slots = measures.cols.map((c) => (valid(c) ? c : -1));
-  const key = JSON.stringify([dims, slots, measures.needs]);
-  const holder = sel ?? cube;
-  let memo = groupMemo.get(holder);
-  if (!memo) { memo = new Map(); groupMemo.set(holder, memo); }
-  let groups = memo.get(key);
+  const key = JSON.stringify([[...rowIdx, ...colIdx].filter(valid).map((j) => [j, specOf(j)]), slots, measures.needs]);
+  const fkey = JSON.stringify(filters.map(([j, set]) => [j, [...set].sort()]));
+  let memo = groupMemo.get(cube);
+  if (!memo) { memo = new Map(); groupMemo.set(cube, memo); }
+  const mkey = `${fkey}\u0002${key}`;
+  let groups = memo.get(mkey);
   if (groups) return groups;
-  const agg = groupAggregate(cube, sel, dims, [...slots.map((c, i) => ({ col: c, need: measures.needs[i] })), { col: -1 }]);
-  const keysOf = dims.map((j) => cube.col(j).dim().keys);
+  // 큰 원본은 요약 캐시(롤업)에서, 작으면 원본을 바로 (aggregateQuery 가 고름)
+  const agg = aggregateQuery(cube, filters, dims, [...slots.map((c, i) => ({ col: c, need: measures.needs[i] })), { col: -1 }]);
+  const keysOf = dims.map((j) => (typeof j === 'number' ? cube.col(j) : j).dim().keys);
   const S = slots.length;
   groups = new Array(agg.G);
   for (let g = 0; g < agg.G; g++) {
@@ -534,8 +655,8 @@ function cubeGroups(cube, sel, d, measures) {
     for (let m = 0; m < S; m++) list[m] = groupAcc(agg, m, g);
     groups[g] = { r, c, list, n: agg.stats[S].count[g] };
   }
-  if (memo.size > 40) memo.clear();
-  memo.set(key, groups);
+  if (memo.size > 80) memo.clear();
+  memo.set(mkey, groups);
   return groups;
 }
 
@@ -549,34 +670,44 @@ export function pivotDefKey(def) {
   const { area, top, left, cellFmt, captureFmt, buttons, styleDef, autofit, name, ...rest } = def;
   return JSON.stringify(rest);
 }
-export function resolvePivot(rows, def) {
-  let memo = resolveMemo.get(rows);
-  if (!memo) { memo = new Map(); resolveMemo.set(rows, memo); }
+export function resolvePivot(input, def) {
+  // input: 행 배열(머리글 포함) 또는 pivotSourceData 결과({ cube })
+  const cube = Array.isArray(input) ? cubeFromRows(input) : input.cube;
+  let memo = resolveMemo.get(cube);
+  if (!memo) { memo = new Map(); resolveMemo.set(cube, memo); }
   const key = pivotDefKey(def);
   const hit = memo.get(key);
-  if (hit) return { ...hit, def: normalizeDef(def, hit.header) };
-  const cube = cubeFromRows(rows);
+  // 캐시된 결과를 펼치면(…) 게터가 불려 천만 행을 만들 수 있으므로 필드를 하나씩 복사
+  if (hit) return withRows({ def: normalizeDef(def, hit.header), header: hit.header, cube: hit.cube, filters: hit.filters, groups: hit.groups, measures: hit.measures });
   const d = normalizeDef(def, cube.header);
   const header = d.header;
   const lower = cube.header.map((h) => h.toLowerCase());
   // 보고서 필터 · 항목 선택 · 슬라이서: 코드 단위로 한 번에 (같은 필터를 쓰는 피벗끼리 결과 공유)
   const filters = Object.entries(d.filters).map(([name, allowed]) => [lower.indexOf(name.toLowerCase()), new Set(allowed)]).filter(([i]) => i >= 0);
-  const sel = filterRows(cube, filters);
   const measures = makeMeasures(header, d.values, d.calcFields);
-  const groups = applyFieldFilters(cubeGroups(cube, sel, d, measures), d, measures);
-  const res = {
-    def: d, header, cube, sel, groups, measures,
-    /** 걸러진 원본 행 (머리글 포함) — 필요할 때만 만듦 */
-    get rows() {
-      const n = sel ? sel.length : cube.n;
-      const out = new Array(n + 1);
-      out[0] = rows[0];
-      for (let i = 0; i < n; i++) out[i + 1] = cube.row(sel ? sel[i] : i);
-      return out;
-    },
-  };
+  const groups = applyFieldFilters(cubeGroups(cube, filters, d, measures), d, measures);
+  const res = withRows({ def: d, header, cube, filters, groups, measures });
   if (memo.size > 60) memo.clear();
   memo.set(key, res);
+  return res;
+}
+
+/** 걸러진 원본 행(머리글 포함)을 필요할 때만 만드는 rows 속성 (열거되지 않음 → 펼쳐도 안 만들어짐) */
+function withRows(res) {
+  let made = null;
+  Object.defineProperty(res, 'rows', {
+    enumerable: false,
+    get() {
+      if (made) return made;
+      const { cube } = res;
+      const sel = filterRows(cube, res.filters ?? []);
+      const n = sel ? sel.length : cube.n;
+      made = new Array(n + 1);
+      made[0] = cube.header;
+      for (let i = 0; i < n; i++) made[i + 1] = cube.row(sel ? sel[i] : i);
+      return made;
+    },
+  });
   return res;
 }
 
@@ -664,6 +795,17 @@ function orderTree(root, fields, d, measureAt) {
       const score = new Map(kids.map((c) => [c, measureAt(c, vi)]));
       const num = (v) => (typeof v === 'number' ? v : -Infinity);
       kids = [...kids].sort((a, b) => (s.dir === 'desc' ? num(score.get(b)) - num(score.get(a)) : num(score.get(a)) - num(score.get(b))));
+    } else if (d.groups?.[field]) {
+      // 그룹화한 필드: 월 · 분기 · 구간은 숫자 순서
+      const spec = d.groups[field];
+      const rank = (k) => groupRank(k, spec);
+      kids = [...kids].sort((a, b) => {
+        const x = rank(a.key);
+        const y = rank(b.key);
+        if (x !== null && y !== null) return x - y;
+        return collator.compare(String(a.key), String(b.key));
+      });
+      if (s?.dir === 'desc') kids.reverse();
     } else {
       const keys = sortKeys(kids.map((c) => c.key));
       const byKey = new Map(kids.map((c) => [kk(c.key), c]));
@@ -723,7 +865,7 @@ export function computePivot(input, d) {
   // 가장 잘게 나눈 그룹 (원본 행은 열 기반 엔진이 한 번만 훑음)
   const groups = resolved
     ? resolved.groups
-    : cubeGroups(cubeFromRows(input), null, { ...d, header }, measures);
+    : cubeGroups(cubeFromRows(input), [], { ...d, header }, measures);
   const newNode = (key, path, depth) => ({ key, path, depth, children: [], map: new Map() });
   const rowTree = newNode(null, '', -1);
   const colTree = newNode(null, '', -1);
@@ -950,8 +1092,9 @@ export function computePivot(input, d) {
 const chartMemo = new WeakMap();
 /** fieldStyle(필드 이름) → 원본 열 서식 (날짜 항목을 날짜로 표시하는 데 씀) */
 export function pivotChartData(rows, def, fieldStyle = null) {
-  let memo = chartMemo.get(rows);
-  if (!memo) { memo = new Map(); chartMemo.set(rows, memo); }
+  const holder = Array.isArray(rows) ? cubeFromRows(rows) : rows.cube;
+  let memo = chartMemo.get(holder);
+  if (!memo) { memo = new Map(); chartMemo.set(holder, memo); }
   const fmts = fieldStyle ? (def.rows ?? []).map((f) => fieldStyle(f)?.numFmt ?? null) : [];
   const key = pivotDefKey(def) + JSON.stringify(def.styleDef ?? null) + JSON.stringify(fmts);
   if (!memo.has(key)) {

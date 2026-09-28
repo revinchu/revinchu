@@ -12,6 +12,7 @@ import { chartLayout, PALETTE, chartModelData } from './chart.js';
 import { Axis } from './axis.js';
 import { toBase64, fromBase64 } from './vba.js';
 import { CellImage } from './fxcore.js';
+import { BLOCK_MIN_ROWS, ColBuilder, inBlock, blockValue } from './block.js';
 import { normalizeStyleName, DEFAULT_TABLE_STYLE, dataTop, dataBottom, canonicalRef, tableAt, columnNames, findTable } from './tables.js';
 import { pivotSourceData, resolvePivot, itemText, keyOf, sortKeys, EMPTY, headerNames, normalizeDef, computePivot, valueName } from './pivot.js';
 import { slicerStyleName } from './slicerstyle.js';
@@ -417,6 +418,13 @@ function* readSheet(files, path, ctx) {
   const arrays = []; // 배열 수식 영역: 앵커 밖의 셀 값은 가져오지 않음 (다시 분산됨)
   let unsupported = 0;
   let rowIdx = -1;
+  // 행이 아주 많은 시트: 값 셀은 열 블록(형식화 배열)으로 — 셀 객체 수백만 개를 만들지 않음
+  const dimRef = refToRange(child(root, 'dimension')?.attrs.ref ?? '');
+  const blockMode = !!dimRef && dimRef.r2 - dimRef.r1 + 1 > BLOCK_MIN_ROWS;
+  let blockStart = -1;
+  let blockLast = -1;
+  const builders = [];
+  const colFmt = [];
   const formulaMemo = ctx.formulaMemo ??= { legacy: new Map(), modern: new Map() }; // 같은 수식 문자열(표의 계산 열 등)은 한 번만 변환
   const textMemo = ctx.textMemo ??= new Map();
   let rowCount = 0;
@@ -504,6 +512,17 @@ function* readSheet(files, path, ctx) {
           }
         } else raw = numberRaw(value, style);
       }
+      if (blockMode && blockStart < 0) blockStart = r + 1; // 첫 행(머리글) 다음부터 블록
+      if (blockMode && r >= blockStart && formula === null && !c.attrs.vm) {
+        if (colFmt[cc] === undefined) colFmt[cc] = style ?? null;
+        if ((style ?? null) === colFmt[cc]) {
+          if (value !== null && value !== '') {
+            (builders[cc] ??= new ColBuilder(dimRef.r2 - blockStart + 1)).set(r - blockStart, value);
+            if (r > blockLast) blockLast = r;
+          }
+          continue;
+        }
+      }
       // 셀에 배치한 그림 (richData 값 메타데이터 vm)
       const cellImg = !formula && c.attrs.vm ? ctx.richImages?.[Number(c.attrs.vm)] : null;
       if (cellImg) raw = '';
@@ -516,6 +535,24 @@ function* readSheet(files, path, ctx) {
     }
   }
   sheet.unsupported = unsupported;
+  if (blockMode && blockLast >= blockStart) {
+    const n = blockLast - blockStart + 1;
+    const width = Math.max(builders.length, colFmt.length);
+    sheet.blocks = [{
+      r0: blockStart, c0: 0, n, ver: 0,
+      cols: Array.from({ length: width }, (_, j) => (builders[j] ? builders[j].finish(n, colFmt[j] ?? null) : { num: null, str: null, dict: [], fmt: colFmt[j] ?? null })),
+    }];
+  }
+  // 블록 칸에 메모 · 링크를 붙일 때 값을 잃지 않게
+  const cellAt = (k) => {
+    const hit = sheet.cells.get(k);
+    if (hit || !sheet.blocks?.length) return hit;
+    const [rr, cc2] = k.split(',').map(Number);
+    const b = sheet.blocks[0];
+    if (!inBlock(b, rr, cc2)) return undefined;
+    const v = blockValue(b, rr, cc2);
+    return v === null ? undefined : { raw: typeof v === 'number' ? numberRaw(v, b.cols[cc2].fmt) : typeof v === 'string' ? textRaw(v) : typeof v === 'boolean' ? (v ? 'TRUE' : 'FALSE') : v.error, ...(b.cols[cc2].fmt ? { style: b.cols[cc2].fmt } : {}) };
+  };
 
   for (const m of kids(child(root, 'mergeCells'), 'mergeCell')) {
     const rg = refToRange(m.attrs.ref);
@@ -697,7 +734,7 @@ function* readSheet(files, path, ctx) {
         const k = `${Number(m[2]) - 1},${nameToCol(m[1])}`;
         const text = allText(child(cm, 'text')).trim();
         if (!text) continue;
-        sheet.cells.set(k, { raw: '', ...sheet.cells.get(k), comment: text });
+        sheet.cells.set(k, { raw: '', ...cellAt(k), comment: text });
       }
     }
   }
@@ -709,7 +746,7 @@ function* readSheet(files, path, ctx) {
     const url = rel ? (rel.rawTarget ?? rel.target) : h.attrs.location ? `#${h.attrs.location}` : null;
     if (!url) continue;
     for (let r = rg.r1; r <= Math.min(rg.r2, rg.r1 + 999); r++) {
-      for (let c = rg.c1; c <= rg.c2; c++) sheet.cells.set(`${r},${c}`, { raw: '', ...sheet.cells.get(`${r},${c}`), link: url });
+      for (let c = rg.c1; c <= rg.c2; c++) sheet.cells.set(`${r},${c}`, { raw: '', ...cellAt(`${r},${c}`), link: url });
     }
   }
   const drawing = child(root, 'drawing');
@@ -2386,11 +2423,31 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {}) 
     }
     const rowKeys = new Set([...rows.keys()]);
     for (const k of [...Object.keys(sheet.rowHeights), ...Object.keys(sheet.hiddenRows), ...Object.keys(sheet.rowStyles), ...Object.keys(sheet.filter?.hidden ?? {}), ...(sheet.tables ?? []).flatMap((t) => Object.keys(t.filter?.hidden ?? {}))]) rowKeys.add(Number(k));
+    // 열 블록의 행 (셀 객체 없이 형식화 배열에서 바로 씀)
+    const blocks = sheet.blocks ?? [];
+    for (const b of blocks) {
+      for (let r = b.r0; r < Math.min(b.r0 + b.n, EXCEL_MAX_ROWS); r++) rowKeys.add(r);
+      maxR = Math.max(maxR, Math.min(b.r0 + b.n, EXCEL_MAX_ROWS) - 1);
+      maxC = Math.max(maxC, b.c0 + b.cols.length - 1);
+    }
     const sortedRows = [...rowKeys].filter((r) => r < EXCEL_MAX_ROWS).sort((a, b) => a - b);
 
     const rowXml = [];
     for (const r of sortedRows) {
-      const cells = (rows.get(r) ?? []).sort((a, b) => a[0] - b[0]);
+      let cells = rows.get(r) ?? [];
+      for (const b of blocks) {
+        if (r < b.r0 || r >= b.r0 + b.n) continue;
+        const i = r - b.r0;
+        const taken = cells.length ? new Set(cells.map((x) => x[0])) : null;
+        for (let j = 0; j < b.cols.length; j++) {
+          const col = b.cols[j];
+          const has = (col.str && col.str[i] >= 0) || (col.num && col.num[i] === col.num[i]);
+          if (!has && !col.fmt) continue;
+          if (taken?.has(b.c0 + j)) continue;
+          cells.push([b.c0 + j, has ? { raw: '1', style: col.fmt ?? undefined } : { raw: '', style: col.fmt }]);
+        }
+      }
+      cells = cells.sort((a, b) => a[0] - b[0]);
       const attrs = [`r="${r + 1}"`];
       if (sheet.rowHeights[r] !== undefined) attrs.push(`ht="${px2pt(sheet.rowHeights[r])}"`, 'customHeight="1"');
       if (sheet.hiddenRows[r] || sheet.filter?.hidden?.[r] || (sheet.tables ?? []).some((t) => t.filter?.hidden?.[r])) attrs.push('hidden="1"');

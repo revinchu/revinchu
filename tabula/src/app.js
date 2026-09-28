@@ -15,18 +15,18 @@ import {
 } from './ui.js';
 import { FUNC_INFO, CATEGORIES } from './funcinfo.js';
 import { makeSeries } from './series.js';
-import { parseDelimited, toDelimited, guessDelimiter } from './csv.js';
+import { parseDelimited, toDelimited, guessDelimiter, CsvBlockReader } from './csv.js';
 import { SAMPLES } from './samples.js';
 import { GridView, DEFAULT_FONT, DEFAULT_SIZE, measureText, fontStack } from './view.js';
 import { readXlsxAsync, writeXlsxAsync, xlsxOverflow } from './xlsx.js';
 import { CHART_TYPES, PALETTE, renderChartSvg, chartModelData } from './chart.js';
 import {
-  computePivot, AGGREGATES, SHOW_AS, LAYOUTS, pivotSourceData, resolvePivot, itemText, headerNames, normalizeDef, valueName,
+  computePivot, warmPivots, AGGREGATES, SHOW_AS, LAYOUTS, pivotSourceData, resolvePivot, itemText, headerNames, normalizeDef, valueName,
   pivotFieldNames, parseCalc, PIVOT_STYLES, pivotStyleParts, LABEL_OPS, VALUE_OPS, describeFieldFilter, keyOf, sortKeys,
 } from './pivot.js';
 import { SLICER_STYLES, slicerStyleName, slicerColors, CUSTOM_KEYS } from './slicerstyle.js';
 import { server, idbSet, idbGet, idbDel } from './storage.js';
-import { cubeFromRows, itemStats, EMPTY as PIVOT_EMPTY } from './cube.js';
+import { itemStats, EMPTY as PIVOT_EMPTY } from './cube.js';
 import { fontList, fontAlias, loadLocalFonts, canListLocalFonts } from './fonts.js';
 import { ICONS } from './icons.js';
 import {
@@ -2816,12 +2816,12 @@ function slicerModel(sl) {
     const sel = own ? new Set(filters[own]) : null;
     // 항목 목록은 원본과 다른 필터가 같으면 다시 계산하지 않음 (슬라이서를 그릴 때마다 원본 전체를 도는 것 방지)
     const memoKey = `${fi}\u0001${JSON.stringify(Object.entries(filters).filter(([k]) => k !== own))}`;
-    let memo = slicerMemo.get(rows);
-    if (!memo) { memo = new Map(); slicerMemo.set(rows, memo); }
+    let memo = slicerMemo.get(rows.cube);
+    if (!memo) { memo = new Map(); slicerMemo.set(rows.cube, memo); }
     let items = memo.get(memoKey);
     if (!items) {
       // 열 기반 엔진: 항목 코드별로 다른 필터를 통과한 행이 있는지 한 번에 (수백만 행도 한 번 훑기)
-      const cube = cubeFromRows(rows);
+      const cube = rows.cube;
       const lower = cube.header.map((h) => h.toLowerCase());
       const others = Object.entries(filters).filter(([k]) => k !== own).map(([k, v]) => [lower.indexOf(k.toLowerCase()), new Set(v)]).filter(([i]) => i >= 0);
       const st = itemStats(cube, fi, others);
@@ -2837,7 +2837,7 @@ function slicerModel(sl) {
       memo.set(memoKey, items);
     }
     // 숫자 항목은 원본 열의 표시 형식으로 (날짜 46204 → 2026-07-01)
-    const sd = pivotSourceData(wb, def);
+    const sd = rows;
     const colStyle = sd?.ref ? wb.styleAt(sd.si, Math.min(sd.ref.r1 + 1, sd.ref.r2), sd.ref.c1 + fi) : null;
     const shown = (e) => (typeof e.v === 'number' && colStyle?.numFmt && colStyle.numFmt !== 'general' ? formatValue(e.v, colStyle).text : e.key);
     return {
@@ -4041,8 +4041,9 @@ function pivotSourceRows(src, rg) {
   return rows;
 }
 
+/** 피벗 원본 { cube, rows(필요할 때), si, ref, table } */
 function pivotSource(def) {
-  return pivotSourceData(wb, def)?.rows ?? null;
+  return pivotSourceData(wb, def);
 }
 
 const pivotItemText = itemText;
@@ -4052,6 +4053,7 @@ const pivotItemText = itemText;
  * def.captureFmt(파일에서 가져온 피벗): 처음 한 번 지금 셀의 서식을 역할별로 기억해 두고(def.cellFmt) 다시 그릴 때도 유지
  */
 function writePivot(targetSi, def, { autofit = true } = {}) {
+  delete def.needsRender; // 예제 등에서 처음 한 번 그리라는 표시
   const src = pivotSource(def);
   if (!src) return false;
   const res = resolvePivot(src, def);
@@ -4076,10 +4078,11 @@ function writePivot(targetSi, def, { autofit = true } = {}) {
   if (def.autofit === false) autofit = false;
   const cellFmt = def.cellFmt ?? {};
   const a = def.area;
-  const inOld = (r, c) => (a ? r >= a.r1 && r <= a.r2 && c >= a.c1 && c <= a.c2 : true);
+  // 처음 그리는 피벗(이전 영역 없음)은 아무것도 지우지 않음 — 같은 시트의 다른 피벗 · 내용을 보존
+  const inOld = (r, c) => (a ? r >= a.r1 && r <= a.r2 && c >= a.c1 && c <= a.c2 : false);
   const nr2 = top + grid.length - 1;
   const nc2 = left + Math.max(0, colsN - 1);
-  for (const k of [...t.cells.keys()]) {
+  if (a) for (const k of [...t.cells.keys()]) {
     const i = k.indexOf(',');
     const r = +k.slice(0, i);
     const c = +k.slice(i + 1);
@@ -4177,9 +4180,16 @@ function setPivotDef(entry, def, s = entry.si ?? si) {
 }
 
 /** 파일에서 연 피벗: 서식을 기억하고 피벗 스타일로 다시 그림 (실행 취소 기록 없이) */
+/** 모든 피벗 · 슬라이서가 쓰는 필드로 요약 캐시 준비 (천만 행도 이후 클릭은 즉시) */
+function warmAll() {
+  const fields = wb.sheets.flatMap((s) => (s.slicers ?? []).filter((x) => x.source?.kind === 'pivot').map((x) => x.source.field));
+  try { warmPivots(wb, allPivots().map((e) => e.def), fields); } catch (err) { console.warn('요약 캐시 준비 실패', err); }
+}
+
 function renderImportedPivots() {
+  warmAll();
   for (const e of allPivots()) {
-    if (!e.def.captureFmt) continue;
+    if (!e.def.captureFmt && !e.def.needsRender) continue;
     try { writePivot(e.si, e.def); } catch (err) { console.warn('피벗 다시 그리기 실패', err); }
   }
 }
@@ -4320,7 +4330,10 @@ function renderPivotPane(entry) {
   const isNum = (f) => {
     if (calcSet.has(f.toLowerCase())) return true;
     const i = header.indexOf(f);
-    for (let r = 1; r < Math.min(src.length, 200); r++) if (typeof src[r][i] === 'number') return true;
+    const col = src.cube.col(i);
+    if (!col) return false;
+    // 처음 200행에 숫자가 있으면 값 필드로
+    for (let r = 0; r < Math.min(col.n, 200); r++) if (typeof col.get(r) === 'number') return true;
     return false;
   };
   const apply = (patch) => {
@@ -4470,13 +4483,8 @@ function pivotFieldItems(def, field) {
   const header = headerNames(src);
   const i = header.findIndex((h) => h.toLowerCase() === String(field).toLowerCase());
   if (i < 0) return [];
-  const seen = new Map();
-  for (let r = 1; r < src.length; r++) {
-    const k = keyOf(src[r][i]);
-    const kk = `${typeof k}:${k}`;
-    if (!seen.has(kk)) seen.set(kk, k);
-  }
-  return sortKeys([...seen.values()]).map((k) => itemText(k));
+  // 열 기반 엔진의 항목 사전 (행을 다시 훑지 않음)
+  return sortKeys([...src.cube.col(i).dim().keys]).map((k) => itemText(k));
 }
 
 function openPivotFilterMenu(entry, kind, field, anchorEl) {
@@ -5082,6 +5090,11 @@ async function openFileObject(file, mode) {
       else if (fileMode === 'open') toast(`'${file.name}'을(를) 열었습니다.`);
       return;
     }
+    // 큰 CSV: 조각씩 읽어 바로 열 블록으로 (수백만 행도 화면이 멈추지 않음)
+    if (/\.(csv|tsv|txt)$/i.test(file.name) && file.size > 8 * 1024 * 1024 && fileMode === 'open') {
+      await openBigCsv(file, base);
+      return;
+    }
     const text = await file.text();
     if (/\.(json|tabula)$/i.test(file.name)) {
       const data = JSON.parse(text);
@@ -5099,6 +5112,35 @@ async function openFileObject(file, mode) {
     toast(`${rows.length}개 행을 가져왔습니다.`);
   } catch (err) {
     alertDialog('Tabula', `파일을 열 수 없습니다: ${err.message}`);
+  }
+}
+
+async function openBigCsv(file, base) {
+  const prog = progressOverlay(`'${file.name}' 여는 중`);
+  try {
+    const head = await file.slice(0, 65536).text();
+    const reader = new CsvBlockReader(guessDelimiter(head), Math.min(1 << 24, Math.max(1024, Math.round(file.size / 50))));
+    const rd = file.stream().pipeThrough(new TextDecoderStream()).getReader();
+    let read = 0;
+    let last = performance.now();
+    for (;;) {
+      const { value, done } = await rd.read();
+      if (done) break;
+      reader.push(value);
+      read += value.length;
+      if (performance.now() - last > 80) {
+        prog.set(0.85 * Math.min(1, read / file.size), `${reader.n.toLocaleString()}행 읽는 중`);
+        await yieldUI();
+        last = performance.now();
+      }
+    }
+    const { header, block } = reader.finish();
+    const cells = new Map();
+    header.forEach((h, j) => { if (h !== '') cells.set(`0,${j}`, { raw: h, style: { bold: true } }); });
+    await loadWorkbookAsync({ sheets: [{ name: base.slice(0, 31) || 'Sheet1', cells, blocks: [block], freeze: { rows: 1, cols: 0 } }] }, base, 0, prog);
+    toast(`'${file.name}' — ${block.n.toLocaleString()}행을 열었습니다.`);
+  } finally {
+    prog.close();
   }
 }
 
@@ -5125,7 +5167,11 @@ async function loadWorkbookAsync(data, name, activeSheet, prog) {
   if (isHiddenSheet(si)) si = Math.max(0, wb.sheets.findIndex((_, i) => !isHiddenSheet(i)));
   sheetSel.clear();
   chartSel = null;
-  const list = allPivots().filter((e) => e.def.captureFmt);
+  const list = allPivots().filter((e) => e.def.captureFmt || e.def.needsRender);
+  // 큰 원본: 모든 피벗 · 슬라이서 필드로 요약 캐시를 한 번에 준비
+  prog?.set(0.85, '요약 캐시 준비 중');
+  await yieldUI();
+  warmAll();
   for (let i = 0; i < list.length; i++) {
     prog?.set(0.85 + 0.15 * (i / Math.max(1, list.length)), `피벗 테이블 계산 중 (${i + 1}/${list.length})`);
     await new Promise((res) => setTimeout(res, 0));
@@ -5180,7 +5226,18 @@ async function newWorkbook(sample) {
     if (sample) {
       let name = sample.name;
       for (let n = 2; names.includes(name); n++) name = `${sample.name} ${n}`;
-      loadWorkbook(sample.build(), name);
+      if (sample.big) {
+        // 빅데이터 예제: 데이터 만들기 · 피벗 계산을 진행 표시와 함께
+        const prog = progressOverlay(`'${sample.name}' 만드는 중`);
+        try {
+          prog.set(0.05, '데이터 만드는 중');
+          await yieldUI();
+          const data = sample.build();
+          await loadWorkbookAsync(data, name, 0, prog);
+        } finally {
+          prog.close();
+        }
+      } else loadWorkbook(sample.build(), name);
     } else {
       let n = 1;
       while (names.includes(`통합 문서${n}`) || `통합 문서${n}` === docName) n++;
@@ -5210,7 +5267,10 @@ let storageWarned = false;
 /** 셀이 많은 통합 문서 (자동 저장을 IndexedDB 로, 더 드물게) */
 function cellCount() {
   let n = 0;
-  for (const s of wb.sheets) n += s.cells.size;
+  for (const s of wb.sheets) {
+    n += s.cells.size;
+    for (const b of s.blocks ?? []) n += b.n * b.cols.length;
+  }
   return n;
 }
 /** 서버 자동 저장 대상인지 (셀이 아주 많으면 브라우저에만 자동 저장) */
@@ -5274,7 +5334,8 @@ async function saveBigToIdb() {
             t = performance.now();
           }
         }
-        await idbSet(`${STORAGE_KEY}#${s._sid}`, { meta: book.sheetMeta(i), chunks, gz: GZ });
+        // 열 블록은 형식화 배열 그대로 (IndexedDB 가 바로 복사)
+        await idbSet(`${STORAGE_KEY}#${s._sid}`, { meta: book.sheetMeta(i), chunks, gz: GZ, blocks: s.blocks ?? [] });
       }
       list.push({ id: s._sid, ev });
     }
@@ -5322,7 +5383,7 @@ async function loadBigFromIdb(onProgress) {
       onProgress?.((i + 0.5) / idx.sheets.length);
       await yieldUI();
     }
-    sheets.push({ ...rec.meta, cells, _sid: x.id, _ev: x.ev });
+    sheets.push({ ...rec.meta, cells, blocks: rec.blocks ?? [], _sid: x.id, _ev: x.ev });
   }
   return { docName: idx.docName, si: idx.si, autosave: idx.autosave, workbook: { names: idx.names, vba: idx.vba, sheets } };
 }
@@ -6523,7 +6584,7 @@ const SHORTCUTS = [
   ['Ctrl+Enter', '선택한 모든 셀에 같은 내용 입력'],
   ['F4', '수식 편집 중: 절대/상대 참조 전환 · 그 밖에는 마지막 작업 반복'],
   ['Esc', '편집 취소 / 복사 영역 해제'],
-  ['Ctrl+방향키', '데이터 영역의 끝으로 이동 (빈 열에서는 10,000,000행까지)'],
+  ['Ctrl+방향키', '데이터 영역의 끝으로 이동 (빈 열에서는 20,000,000행까지)'],
   ['Shift+방향키 / F8', '선택 영역 확장 / 확장 모드 켜기·끄기'],
   ['Ctrl+Space / Shift+Space', '열 전체 / 행 전체 선택'],
   ['Ctrl+A / Ctrl+Shift+*', '모두 선택 / 현재 영역 선택'],
@@ -7235,7 +7296,7 @@ const COMMANDS = {
     title: 'Tabula 정보', width: 420,
     body: el('div', { style: { lineHeight: '1.7' } },
       el('b', {}, 'Tabula'), ' — 브라우저에서 동작하는 엑셀 스타일 스프레드시트', el('br'),
-      el('span', { class: 'muted' }, `시트 크기 10,000,000행 × 16,384열 · 함수 ${FUNCTION_NAMES.length}개 · .xlsx 열기/저장`), el('br'),
+      el('span', { class: 'muted' }, `시트 크기 20,000,000행 × 16,384열 · 함수 ${FUNCTION_NAMES.length}개 · .xlsx 열기/저장`), el('br'),
       el('span', { class: 'muted' }, server.available ? '서버 저장소에 연결됨 — 다른 기기에서도 열 수 있습니다.' : '서버 없이 실행 중 — 이 브라우저에 저장됩니다.')),
     buttons: [{ label: '확인', primary: true }],
   }),

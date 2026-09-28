@@ -1,4 +1,4 @@
-// 가상 스크롤 그리드: 화면에 보이는 행/열만 그림 (10,000,000행 × 16,384열 지원)
+// 가상 스크롤 그리드: 화면에 보이는 행/열만 그림 (20,000,000행 × 16,384열 지원)
 // 틀 고정은 4개 창(TL/TR/BL/BR)으로, 각 창은 시트 좌표계 콘텐츠를 transform 으로 이동시켜 표시.
 import { Axis } from './axis.js';
 import { colToName, MAX_ROWS, MAX_COLS } from './formula.js';
@@ -468,7 +468,7 @@ export class GridView {
       }
       for (const c of visCols) {
         if (inMerge(r, c)) continue;
-        if (!hasLine && !sheet.cells.has(`${r},${c}`) && !inTable(r, c) && !emptyCond(r, c) && !inSpill(r, c)) continue;
+        if (!hasLine && !sheet.cells.has(`${r},${c}`) && !(sheet.blocks?.length && wb.blockAt(si, r, c)) && !inTable(r, c) && !emptyCond(r, c) && !inSpill(r, c)) continue;
         html.push(this.cellHtml(r, c, p, sheet, merges));
       }
     }

@@ -6,6 +6,7 @@ import {
   adjustFormulaForStructure, renameSheetInFormula, shiftFormula, quoteSheetName, MAX_ROWS, MAX_COLS,
 } from './formula.js';
 import { parseInput } from './format.js';
+import { inBlock, blockValue, blockSet, blockClone, blockShift, rawOf } from './block.js';
 import { CellImage } from './fxcore.js';
 
 export const DEFAULT_COL_WIDTH = 64;
@@ -73,6 +74,19 @@ function astDeps(ast) {
   return d;
 }
 
+/** 글자 값이 입력 해석으로 다른 값이 되지 않도록 raw 생성 */
+function textRawOf(s) {
+  if (s.startsWith('=') || s.startsWith("'")) return `'${s}`;
+  const p = parseInput(s);
+  return typeof p.value === 'string' && p.value === s ? s : `'${s}`;
+}
+/** 블록 값 → 셀 값 (오류는 오류 값) */
+function blockCellValue(v) {
+  if (v && typeof v === 'object') return ERR[Object.keys(ERR).find((k) => ERR[k].code === v.error)] ?? ERR.NA;
+  return v;
+}
+const sameStyle = (a, b) => a === b || (!a && !b) || (!!a && !!b && JSON.stringify(a) === JSON.stringify(b));
+
 /** 저장 형태 {raw, style, comment} → 계산용 셀 객체 */
 export function makeCell(data) {
   if (!data) return null;
@@ -122,7 +136,7 @@ function newSheet(name) {
     name, cells: new Map(), colWidths: {}, rowHeights: {}, merges: [], cond: [],
     colStyles: {}, rowStyles: {}, allStyle: null, hiddenRows: {}, hiddenCols: {}, rowManual: {},
     freeze: { rows: 0, cols: 0 }, filter: null, charts: [], pivot: null,
-    validations: [], images: [], shapes: [], tables: [], slicers: [], pivotsExtra: [],
+    validations: [], images: [], shapes: [], tables: [], slicers: [], pivotsExtra: [], blocks: [],
   };
 }
 
@@ -137,6 +151,7 @@ function sheetFromData(s) {
   for (const p of SHEET_PROPS) if (s[p] !== undefined && s[p] !== null) sheet[p] = structuredClone(s[p]);
   sheet.freeze = { rows: 0, cols: 0, ...(s.freeze || {}) };
   if (s._sid) sheet._sid = s._sid;
+  sheet.blocks = (s.blocks ?? []).map(blockClone);
   return sheet;
 }
 
@@ -212,7 +227,33 @@ export class Workbook {
     return this.sheets.findIndex((s) => s.name.toLowerCase() === n);
   }
 
-  getCell(si, r, c) { return this.sheets[si]?.cells.get(key(r, c)); }
+  getCell(si, r, c) {
+    const sheet = this.sheets[si];
+    if (!sheet) return undefined;
+    const cell = sheet.cells.get(key(r, c));
+    if (cell || !sheet.blocks.length) return cell;
+    return this.blockCell(sheet, r, c);
+  }
+
+  /** (r, c) 가 들어 있는 열 블록 */
+  blockAt(si, r, c) {
+    const bl = this.sheets[si]?.blocks;
+    if (!bl?.length) return null;
+    for (const b of bl) if (inBlock(b, r, c)) return b;
+    return null;
+  }
+
+  /** 블록 칸 → 가벼운 셀 객체 (그때그때 만듦) */
+  blockCell(sheet, r, c) {
+    for (const b of sheet.blocks) {
+      if (!inBlock(b, r, c)) continue;
+      const v = blockValue(b, r, c);
+      const fmt = b.cols[c - b.c0].fmt ?? undefined;
+      if (v === null) return fmt ? { raw: '', v: null, style: fmt } : undefined;
+      return { raw: rawOf(v, fmt, textRawOf), v: blockCellValue(v), style: fmt, block: true };
+    }
+    return undefined;
+  }
 
   getRaw(si, r, c) { return this.getCell(si, r, c)?.raw ?? ''; }
 
@@ -220,6 +261,14 @@ export class Workbook {
     const kk = key(r, c);
     const sheet = this.sheets[si];
     const cell = sheet?.cells.get(kk);
+    if (!cell && sheet?.blocks.length) {
+      for (const b of sheet.blocks) {
+        if (!inBlock(b, r, c)) continue;
+        const v = blockValue(b, r, c);
+        if (v !== null) return blockCellValue(v);
+        break;
+      }
+    }
     if (!cell || (!cell.formula && cell.raw === '' && !cell.image)) return this.spillValueAt(si, r, c);
     if (!cell.formula) return cell.v ?? null;
     const cache = this.caches[si] ??= new Map();
@@ -439,7 +488,8 @@ export class Workbook {
   /** 열/행/시트 전체 서식을 합친 실제 셀 서식 */
   styleAt(si, r, c) {
     const s = this.sheets[si];
-    const own = s.cells.get(key(r, c))?.style;
+    let own = s.cells.get(key(r, c))?.style;
+    if (!own && s.blocks.length) { const b = this.blockAt(si, r, c); if (b) own = b.cols[c - b.c0].fmt ?? undefined; }
     const col = s.colStyles[c];
     const row = s.rowStyles[r];
     if (!s.allStyle && !col && !row) return own ?? EMPTY_STYLE;
@@ -488,7 +538,7 @@ export class Workbook {
           ?? (defs.length && !defs[0].area ? defs[0] : null);
         if (!def) throw ERR.REF;
         const src = pivotSourceData(this, def);
-        const v = src ? pivotLookup(src.rows, def, field, items) : null;
+        const v = src ? pivotLookup(src, def, field, items) : null;
         if (v === null || v === undefined) throw ERR.REF;
         return v;
       },
@@ -538,6 +588,7 @@ export class Workbook {
     if (this.usedCache.has(si)) return this.usedCache.get(si);
     let rows = 0;
     let cols = 0;
+    for (const b of this.sheets[si].blocks) { rows = Math.max(rows, b.r0 + b.n); cols = Math.max(cols, b.c0 + b.cols.length); }
     for (const [k, cell] of this.sheets[si].cells) {
       if (!cell.raw && !cell.image) continue;
       const [r, c] = unkey(k);
@@ -555,6 +606,7 @@ export class Workbook {
     if (cached) return cached;
     let rows = 0;
     let cols = 0;
+    for (const b of this.sheets[si].blocks) { rows = Math.max(rows, b.r0 + b.n); cols = Math.max(cols, b.c0 + b.cols.length); }
     for (const k of this.sheets[si].cells.keys()) {
       const [r, c] = unkey(k);
       rows = Math.max(rows, r + 1);
@@ -747,6 +799,7 @@ export class Workbook {
     for (const [k, cell] of this.sheets[si].cells) cells[k] = cellData(cell);
     out.cells = cells;
     out._sid = this.sheets[si]._sid;
+    if (this.sheets[si].blocks.length) out.blocks = this.sheets[si].blocks.map(blockClone);
     return out;
   }
 
@@ -839,6 +892,19 @@ export class Workbook {
     const cells = this.sheets[si].cells;
     const k = key(r, c);
     if (cells.get(k)?.maybeArray || cell?.maybeArray) this.arrayList = null;
+    const b = this.blockAt(si, r, c);
+    if (b) {
+      // 열 블록 칸: 값만 있고 열 서식과 같으면 블록에, 수식 · 메모 · 다른 서식이면 일반 셀로 (블록 칸은 비움)
+      const fmt = b.cols[c - b.c0].fmt ?? undefined;
+      const plain = cell && !cell.formula && !cell.comment && !cell.link && !cell.image && cell.cached === undefined && sameStyle(cell.style, fmt);
+      if (!cell || plain) {
+        const v = cell ? cell.v : null;
+        blockSet(b, r, c, isError(v) ? { error: v.code } : v ?? null);
+        cells.delete(k);
+        return;
+      }
+      blockSet(b, r, c, null);
+    }
     if (cell) cells.set(k, cell);
     else cells.delete(k);
     // 새 수식이 다른 시트를 참조하면 의존 관계에 추가
@@ -985,6 +1051,7 @@ export class Workbook {
       moved.set(key(r, c), cell);
     }
     target.cells = moved;
+    target.blocks = target.blocks.map((b) => blockShift(b, axis, index, count)).filter(Boolean);
     const sizes = isRow ? target.rowHeights : target.colWidths;
     const nextSizes = {};
     for (const [k, v] of Object.entries(sizes)) {
@@ -1228,6 +1295,7 @@ export class Workbook {
         const cells = {};
         for (const [k, cell] of s.cells) cells[k] = cellData(cell);
         const out = { name: s.name, cells };
+        if (s.blocks.length) out.blocks = s.blocks.map(blockClone);
         for (const p of SHEET_PROPS) out[p] = structuredClone(s[p]);
         if (s.fileValues) out.fileValues = true; // 셀의 파일 계산 결과가 아직 유효함
         return out;
@@ -1266,7 +1334,8 @@ export class Workbook {
     const sheets = [];
     for (const s of data.sheets) {
       const sheet = newSheet(s.name);
-      if (s.cells instanceof Map) {
+      const owned = s.cells instanceof Map;
+      if (owned) {
         // 파일에서 읽은 셀 Map: 새 Map 을 만들지 않고 그 자리에서 셀 객체로 바꿈 (큰 파일에서 훨씬 빠름)
         const cells = s.cells;
         let n = 0;
@@ -1287,6 +1356,8 @@ export class Workbook {
       }
       for (const p of SHEET_PROPS) if (s[p] !== undefined && s[p] !== null) sheet[p] = structuredClone(s[p]);
       sheet.freeze = { rows: 0, cols: 0, ...(s.freeze || {}) };
+      // 열 블록: 파일에서 막 읽은 것은 그대로 가져오고, 저장본(실행 취소 기록 등)은 복사
+      sheet.blocks = owned || !s.blocks ? (s.blocks ?? []) : s.blocks.map(blockClone);
       if (s._sid) { sheet._sid = s._sid; sheet._ev = s._ev; } // 자동 저장 기록 (바뀐 시트만 다시 저장)
       sheets.push(sheet);
     }

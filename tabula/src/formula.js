@@ -27,7 +27,7 @@ export const serialToDate = serialToDateCore;
 
 // ───────────────────────── 주소 유틸 ─────────────────────────
 // 엑셀(1,048,576행)보다 많은 1,000만 행 지원. .xlsx 로 저장할 때만 엑셀 한도가 적용됨
-export const MAX_ROWS = 10_000_000;
+export const MAX_ROWS = 20_000_000;
 export const EXCEL_MAX_ROWS = 1_048_576;
 export const MAX_COLS = 16384;
 
