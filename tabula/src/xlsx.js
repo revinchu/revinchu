@@ -1,6 +1,6 @@
 // .xlsx 읽기/쓰기 (Office Open XML). DOM 없이 동작하므로 Node 에서도 테스트 가능.
-import { unzip, zip, textOf } from './zip.js';
-import { parseXml, child, kids, descendants, allText, esc } from './xml.js';
+import { unzip, unzipAsync, zip, textOf } from './zip.js';
+import { parseXml, child, kids, descendants, allText, esc, decodeEntities } from './xml.js';
 import {
   parse, tokenize, shiftFormula, colToName, nameToCol, cellName, parseRangeName, FUNCS, isError,
   quoteSheetName, MAX_ROWS, MAX_COLS, EXCEL_MAX_ROWS, mayReturnArray, unknownFunctions,
@@ -248,7 +248,128 @@ function readStyles(files, wbRels, theme) {
     if (nf?.attrs.formatCode) Object.assign(st, styleForCode(nf.attrs.formatCode));
     return st;
   });
-  return { xfs, dxfs, defaultFont };
+  // 사용자 지정 피벗 스타일 (<tableStyles>) → 역할별 서식 { header, sub, grand, body, page, band }
+  const tableStyles = {};
+  for (const ts of kids(child(root, 'tableStyles'), 'tableStyle')) {
+    if (ts.attrs.pivot === '0') continue;
+    const el = {};
+    for (const e of kids(ts, 'tableStyleElement')) el[e.attrs.type] = dxfs[Number(e.attrs.dxfId)] ?? {};
+    const pick = (...types) => Object.assign({}, ...types.map((t) => el[t] ?? {}));
+    const body = pick('wholeTable');
+    const clean = (o) => { const x = { ...o }; delete x.numFmt; delete x.decimals; delete x.code; return x; };
+    tableStyles[ts.attrs.name] = {
+      header: clean({ ...pick('headerRow', 'firstHeaderCell') }),
+      sub: clean(pick('firstSubtotalRow', 'firstRowSubheading')),
+      grand: clean(pick('totalRow')),
+      body: clean({ ...(body.fill ? { fill: body.fill } : {}), ...(body.color ? { color: body.color } : {}) }),
+      page: clean(pick('pageFieldLabels')),
+      band: clean(pick('firstRowStripe')),
+    };
+  }
+  return { xfs, dxfs, defaultFont, tableStyles };
+}
+
+/** sheetData 부분을 떼어 냄 (접두사 없는 일반 형식일 때만) */
+function splitSheetData(xml) {
+  const a = xml.indexOf('<sheetData');
+  if (a < 0 || /<[A-Za-z_][\w.-]*:worksheet[\s>]/.test(xml.slice(0, 2000))) return null;
+  const tagEnd = xml.indexOf('>', a);
+  if (xml[tagEnd - 1] === '/') return null;
+  const b = xml.indexOf('</sheetData>', tagEnd);
+  if (b < 0) return null;
+  return { start: tagEnd + 1, end: b, rest: `${xml.slice(0, a)}<sheetData/>${xml.slice(b + 12)}` };
+}
+
+/** 태그 속성 문자열 → 객체 (xml[from..to) 범위) */
+function scanAttrs(xml, from, to) {
+  const attrs = {};
+  let i = from;
+  while (i < to) {
+    const eq = xml.indexOf('=', i);
+    if (eq < 0 || eq >= to) break;
+    const name = xml.slice(i, eq).trim();
+    let q = eq + 1;
+    while (xml[q] === ' ') q++;
+    const quote = xml[q];
+    const close = xml.indexOf(quote, q + 1);
+    if (close < 0) break;
+    const v = xml.slice(q + 1, close);
+    attrs[name] = v.includes('&') ? decodeEntities(v) : v;
+    i = close + 1;
+  }
+  return attrs;
+}
+
+/** 셀 내용 문자열에서 <tag …>본문</tag> 찾기 */
+function innerText(body, tag) {
+  const open = body.indexOf(`<${tag}`);
+  if (open < 0) return undefined;
+  const next = body.charCodeAt(open + tag.length + 1);
+  if (next !== 62 && next !== 32 && next !== 47) return undefined; // '>' ' ' '/'
+  const gt = body.indexOf('>', open);
+  if (body[gt - 1] === '/') return { attrs: scanAttrs(body, open + tag.length + 1, gt - 1), text: '' };
+  const close = body.indexOf(`</${tag}>`, gt);
+  const t = body.slice(gt + 1, close);
+  return { attrs: scanAttrs(body, open + tag.length + 1, gt), text: t.includes('&') ? decodeEntities(t) : t };
+}
+
+/** sheetData 의 행/셀을 DOM 없이 읽음 → { attrs, cells: [{ attrs, v, f, fa, is }] } */
+function* scanRows(xml, start, end) {
+  let p = start;
+  while (p < end) {
+    const ro = xml.indexOf('<row', p);
+    if (ro < 0 || ro >= end) return;
+    const rgt = xml.indexOf('>', ro);
+    const selfClose = xml[rgt - 1] === '/';
+    const attrs = scanAttrs(xml, ro + 4, selfClose ? rgt - 1 : rgt);
+    const cells = [];
+    if (selfClose) { p = rgt + 1; yield { attrs, cells }; continue; }
+    const rEnd = xml.indexOf('</row>', rgt);
+    if (rEnd < 0) return;
+    const rowXml = xml.slice(rgt + 1, rEnd);
+    let q = 0;
+    const n = rowXml.length;
+    while (q < n) {
+      const co = rowXml.indexOf('<c', q);
+      if (co < 0) break;
+      const ch = rowXml.charCodeAt(co + 2);
+      if (ch !== 32 && ch !== 62 && ch !== 47) { q = co + 2; continue; }
+      const cgt = rowXml.indexOf('>', co);
+      const cSelf = rowXml[cgt - 1] === '/';
+      const cell = { attrs: scanAttrs(rowXml, co + 2, cSelf ? cgt - 1 : cgt), v: null, f: null, fa: null, is: null };
+      if (cSelf) { cells.push(cell); q = cgt + 1; continue; }
+      let cEnd = rowXml.indexOf('</c>', cgt);
+      if (cEnd < 0) cEnd = n;
+      const body = rowXml.slice(cgt + 1, cEnd);
+      if (body) {
+        const v = innerText(body, 'v');
+        if (v) cell.v = v.text;
+        const f = innerText(body, 'f');
+        if (f) { cell.f = f.text; cell.fa = f.attrs; }
+        const is = body.indexOf('<is>');
+        if (is >= 0) cell.is = body.slice(is + 4, body.lastIndexOf('</is>'));
+      }
+      cells.push(cell);
+      q = cEnd + 4;
+    }
+    p = rEnd + 6;
+    yield { attrs, cells };
+  }
+}
+
+/** 일반 XML 파서로 읽은 sheetData → scanRows 와 같은 모양 */
+function* domRows(data) {
+  for (const row of kids(data, 'row')) {
+    yield {
+      attrs: row.attrs,
+      cells: kids(row, 'c').map((c) => {
+        const v = child(c, 'v');
+        const f = child(c, 'f');
+        const is = child(c, 'is');
+        return { attrs: c.attrs, v: v ? v.text : null, f: f ? f.text : null, fa: f ? f.attrs : null, is: is ? `<t>${esc(allText(is))}</t>` : null };
+      }),
+    };
+  }
 }
 
 /** 파일 수식 → 앱 수식 본문 (_xlfn. 등 접두사 제거, SINGLE → @, ANCHORARRAY → #) */
@@ -256,17 +377,28 @@ function cleanFormula(f, opt = {}) {
   return fromFileFormula(f, opt);
 }
 
-function readSheet(files, path, ctx) {
-  const root = parseXml(textOf(files[path]));
+function* readSheet(files, path, ctx) {
+  // 셀 데이터(sheetData)는 빠른 전용 스캐너로, 나머지는 일반 XML 파서로 읽음
+  const xmlText = textOf(files[path]);
+  const sd = splitSheetData(xmlText);
+  const root = parseXml(sd ? sd.rest : xmlText);
+  const sheetRows = sd ? scanRows(xmlText, sd.start, sd.end) : domRows(child(root, 'sheetData'));
   const sheet = {
-    cells: {}, colWidths: {}, rowHeights: {}, merges: [], cond: [], colStyles: {}, rowStyles: {},
+    cells: new Map(), colWidths: {}, rowHeights: {}, merges: [], cond: [], colStyles: {}, rowStyles: {},
     hiddenRows: {}, hiddenCols: {}, rowManual: {}, freeze: { rows: 0, cols: 0 }, filter: null, charts: [], images: [], shapes: [], validations: [], slicers: [],
   };
   const { xfs, dxfs, strings } = ctx;
   // 서식 객체는 xf 번호마다 하나를 공유 (셀마다 복사하지 않음)
+  const styleMemo = ctx.styleMemo ??= new Map();
   const styleOf = (s) => {
-    const st = xfs[Number(s || 0)];
-    return st && Object.keys(st).length ? st : undefined;
+    const k = s || '0';
+    let st = styleMemo.get(k);
+    if (st === undefined) {
+      const x = xfs[Number(k)];
+      st = x && Object.keys(x).length ? x : null;
+      styleMemo.set(k, st);
+    }
+    return st ?? undefined;
   };
 
   for (const col of kids(child(root, 'cols'), 'col')) {
@@ -284,9 +416,12 @@ function readSheet(files, path, ctx) {
   const shared = {};
   const arrays = []; // 배열 수식 영역: 앵커 밖의 셀 값은 가져오지 않음 (다시 분산됨)
   let unsupported = 0;
-  const data = child(root, 'sheetData');
   let rowIdx = -1;
-  for (const row of kids(data, 'row')) {
+  const formulaMemo = ctx.formulaMemo ??= { legacy: new Map(), modern: new Map() }; // 같은 수식 문자열(표의 계산 열 등)은 한 번만 변환
+  const textMemo = ctx.textMemo ??= new Map();
+  let rowCount = 0;
+  for (const row of sheetRows) {
+    if (++rowCount % 1000 === 0) yield rowCount;
     rowIdx = row.attrs.r ? Number(row.attrs.r) - 1 : rowIdx + 1;
     const r = rowIdx;
     if (row.attrs.ht && (row.attrs.customHeight === '1' || row.attrs.customHeight === 'true')) {
@@ -299,49 +434,61 @@ function readSheet(files, path, ctx) {
     if (row.attrs.hidden === '1' || row.attrs.hidden === 'true') sheet.hiddenRows[r] = true;
     if (row.attrs.customFormat === '1' && row.attrs.s) { const st = styleOf(row.attrs.s); if (st) sheet.rowStyles[r] = st; }
     let colIdx = -1;
-    for (const c of kids(row, 'c')) {
+    const rowKey = `${r},`;
+    for (const c of row.cells) {
       let cc;
       if (c.attrs.r) {
-        const m = /^([A-Z]+)(\d+)$/i.exec(c.attrs.r);
-        cc = nameToCol(m[1]);
+        const ref = c.attrs.r;
+        let n = 0;
+        for (let i = 0; i < ref.length; i++) {
+          const ch = ref.charCodeAt(i) & ~32;
+          if (ch < 65 || ch > 90) break;
+          n = n * 26 + ch - 64;
+        }
+        cc = n - 1;
       } else cc = colIdx + 1;
       colIdx = cc;
       const t = c.attrs.t ?? 'n';
-      const vEl = child(c, 'v');
-      const fEl = child(c, 'f');
+      const vText = c.v;
       const style = styleOf(c.attrs.s);
       let raw = '';
       let value = null;
-      if (t === 's') value = strings[Number(vEl?.text)] ?? '';
-      else if (t === 'inlineStr') value = allText(child(c, 'is'));
-      else if (t === 'str') value = vEl?.text ?? '';
-      else if (t === 'b') value = vEl?.text === '1';
-      else if (t === 'e') value = { error: vEl?.text ?? '#N/A' };
-      else if (vEl && vEl.text !== '') value = Number(vEl.text);
+      if (t === 's') value = strings[Number(vText)] ?? '';
+      else if (t === 'inlineStr') value = c.is !== null ? allText(parseXml(`<is>${c.is}</is>`)) : '';
+      else if (t === 'str') value = vText ?? '';
+      else if (t === 'b') value = vText === '1';
+      else if (t === 'e') value = { error: vText ?? '#N/A' };
+      else if (vText !== null && vText !== '') value = Number(vText);
 
       let formula = null;
-      if (fEl) {
-        if (fEl.attrs.t === 'shared' && fEl.attrs.si !== undefined) {
-          if (fEl.text) shared[fEl.attrs.si] = { text: fEl.text, r, c: cc };
-          const m = shared[fEl.attrs.si];
+      const fa = c.fa;
+      if (fa) {
+        if (fa.t === 'shared' && fa.si !== undefined) {
+          if (c.f) shared[fa.si] = { text: c.f, r, c: cc };
+          const m = shared[fa.si];
           if (m) formula = m.r === r && m.c === cc ? m.text : shiftFormula(`=${m.text}`, r - m.r, cc - m.c).slice(1);
-        } else if (fEl.text) formula = fEl.text;
+        } else if (c.f) formula = c.f;
       }
       let cached;
       if (formula !== null) {
-        const isArray = fEl.attrs.t === 'array';
-        if (isArray && fEl.attrs.ref) {
-          const rg = refToRange(fEl.attrs.ref);
+        const isArray = fa.t === 'array';
+        if (isArray && fa.ref) {
+          const rg = refToRange(fa.ref);
           if (rg && (rg.r2 > rg.r1 || rg.c2 > rg.c1)) arrays.push({ ...rg, r, c: cc });
         }
         // 동적 배열(cm) 또는 배열 수식이 아니면 옛 형식 → 암시적 교차 '@'
-        const f = cleanFormula(formula, { legacy: !isArray && !c.attrs.cm, isName: ctx.isName, nameMulti: ctx.nameMulti });
-        raw = `=${f}`;
-        if (unknownFunctions(f, ctx.isName).length) {
-          // 지원하지 않는 함수: 수식은 그대로 두고 파일의 계산 결과를 표시
-          unsupported++;
-          cached = value;
+        const legacy = !isArray && !c.attrs.cm;
+        const memo = legacy ? formulaMemo.legacy : formulaMemo.modern;
+        let conv = memo.get(formula);
+        if (!conv) {
+          const f = cleanFormula(formula, { legacy, isName: ctx.isName, nameMulti: ctx.nameMulti });
+          conv = { raw: `=${f}`, unknown: unknownFunctions(f, ctx.isName).length > 0 };
+          memo.set(formula, conv);
         }
+        raw = conv.raw;
+        // 파일에 저장된 계산 결과: 열 때는 이 값을 그대로 씀 (지원하지 않는 함수는 계속 이 값을 표시)
+        cached = value;
+        if (conv.unknown) unsupported++;
       } else if (arrays.length && arrays.some((a) => r >= a.r1 && r <= a.r2 && cc >= a.c1 && cc <= a.c2 && (r !== a.r || cc !== a.c))) {
         value = null;
       }
@@ -349,8 +496,13 @@ function readSheet(files, path, ctx) {
         if (value === null) raw = '';
         else if (typeof value === 'boolean') raw = value ? 'TRUE' : 'FALSE';
         else if (typeof value === 'object') raw = value.error;
-        else if (typeof value === 'string') raw = style?.numFmt === 'text' ? value : textRaw(value);
-        else raw = numberRaw(value, style);
+        else if (typeof value === 'string') {
+          if (style?.numFmt === 'text') raw = value;
+          else {
+            raw = textMemo.get(value);
+            if (raw === undefined) { raw = textRaw(value); if (textMemo.size < 200000) textMemo.set(value, raw); }
+          }
+        } else raw = numberRaw(value, style);
       }
       // 셀에 배치한 그림 (richData 값 메타데이터 vm)
       const cellImg = !formula && c.attrs.vm ? ctx.richImages?.[Number(c.attrs.vm)] : null;
@@ -360,7 +512,7 @@ function readSheet(files, path, ctx) {
       if (cellImg) d.image = { ...cellImg };
       if (style) d.style = style;
       if (cached !== undefined && cached !== null) d.cached = cached;
-      sheet.cells[`${r},${cc}`] = d;
+      sheet.cells.set(rowKey + cc, d);
     }
   }
   sheet.unsupported = unsupported;
@@ -370,6 +522,9 @@ function readSheet(files, path, ctx) {
     if (rg && (rg.r2 > rg.r1 || rg.c2 > rg.c1)) sheet.merges.push(rg);
   }
 
+  const sv0 = descendants(child(root, 'sheetViews'), 'sheetView')[0];
+  if (sv0 && (sv0.attrs.showGridLines === '0' || sv0.attrs.showGridLines === 'false')) sheet.noGrid = true;
+  sheet.fileValues = true; // 셀의 파일 계산 결과를 그대로 씀 (바뀌기 전까지)
   const pane = descendants(child(root, 'sheetViews'), 'pane')[0];
   if (pane && (pane.attrs.state === 'frozen' || pane.attrs.state === 'frozenSplit')) {
     sheet.freeze = { rows: Number(pane.attrs.ySplit || 0), cols: Number(pane.attrs.xSplit || 0) };
@@ -542,7 +697,7 @@ function readSheet(files, path, ctx) {
         const k = `${Number(m[2]) - 1},${nameToCol(m[1])}`;
         const text = allText(child(cm, 'text')).trim();
         if (!text) continue;
-        sheet.cells[k] = { raw: '', ...sheet.cells[k], comment: text };
+        sheet.cells.set(k, { raw: '', ...sheet.cells.get(k), comment: text });
       }
     }
   }
@@ -554,7 +709,7 @@ function readSheet(files, path, ctx) {
     const url = rel ? (rel.rawTarget ?? rel.target) : h.attrs.location ? `#${h.attrs.location}` : null;
     if (!url) continue;
     for (let r = rg.r1; r <= Math.min(rg.r2, rg.r1 + 999); r++) {
-      for (let c = rg.c1; c <= rg.c2; c++) sheet.cells[`${r},${c}`] = { raw: '', ...sheet.cells[`${r},${c}`], link: url };
+      for (let c = rg.c1; c <= rg.c2; c++) sheet.cells.set(`${r},${c}`, { raw: '', ...sheet.cells.get(`${r},${c}`), link: url });
     }
   }
   const drawing = child(root, 'drawing');
@@ -1148,6 +1303,7 @@ function linkPivotsAndSlicers(files, wbRels, sheets, ctx) {
       if (!cacheFiles.has(p.cachePath)) cacheFiles.set(p.cachePath, readPivotCache(files, p.cachePath));
       const cache = cacheFiles.get(p.cachePath);
       const def = cache && pivotDefFrom(p.root, cache, tables, s.name);
+      if (def && ctx.tableStyles?.[def.style]) def.styleDef = ctx.tableStyles[def.style]; // 파일에 정의된 사용자 지정 스타일
       if (!def) ctx.warnings.add('외부 데이터 원본을 쓰는 피벗 테이블은 값으로만 가져왔습니다.');
       else if (!s.pivot) { s.pivot = def; s._pivotName = p.root.attrs.name; } else (s.pivotsExtra ??= []).push(def);
     }
@@ -1189,15 +1345,44 @@ function linkPivotsAndSlicers(files, wbRels, sheets, ctx) {
 }
 
 /** xlsx 바이트 → 통합 문서 데이터 ({ sheets: [...] }, 경고 목록) */
+/** .xlsx 바이트 → { data, active, warnings } (한 번에) */
 export function readXlsx(bytes) {
-  const files = unzip(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
+  const it = readXlsxSteps(unzip(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)));
+  for (;;) {
+    const s = it.next();
+    if (s.done) return s.value;
+  }
+}
+
+/** 큰 파일용: 중간중간 브라우저에 제어를 돌려주며 읽음. onProgress(0~1, 설명) */
+export async function readXlsxAsync(bytes, onProgress) {
+  onProgress?.({ p: 0, msg: '압축 푸는 중' });
+  // 시트 · 공유 문자열처럼 큰 부분은 브라우저 내장 압축 해제로 (계산 체인 · 피벗 캐시 레코드는 읽지 않으므로 풀지 않음)
+  const files = await unzipAsync(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes),
+    (name, size) => size > 1 << 20 && !/calcChain|pivotCacheRecords/i.test(name));
+  const it = readXlsxSteps(files);
+  let last = performance.now();
+  for (;;) {
+    const s = it.next();
+    if (s.done) return s.value;
+    const now = performance.now();
+    if (now - last > 40) {
+      onProgress?.(s.value);
+      await new Promise((res) => setTimeout(res, 0));
+      last = performance.now();
+    }
+  }
+}
+
+function* readXlsxSteps(files) {
+  yield { p: 0.05, msg: '압축 푸는 중' };
   const wbPath = Object.keys(files).find((f) => /^xl\/workbook\.xml$/i.test(f))
     ?? relsTarget(files, '', 'officeDocument');
   if (!wbPath || !files[wbPath]) throw new Error('엑셀 통합 문서(.xlsx)가 아닙니다');
   const wbRoot = parseXml(textOf(files[wbPath]));
   const wbRels = relsOf(files, wbPath);
   const theme = readTheme(files, wbRels);
-  const { xfs, dxfs } = readStyles(files, wbRels, theme);
+  const { xfs, dxfs, tableStyles } = readStyles(files, wbRels, theme);
   const ssRel = Object.values(wbRels).find((r) => r.type === 'sharedStrings');
   const strings = ssRel && files[ssRel.target] ? kids(parseXml(textOf(files[ssRel.target])), 'si').map(allText) : [];
   // 이름 정의 (시트 범위 이름은 localSheetId → 시트 이름)
@@ -1218,7 +1403,7 @@ export function readXlsx(bytes) {
     if (!e) return false;
     try { return mayReturnArray(parse(e.ref.slice(1))); } catch { return false; }
   };
-  const ctx = { xfs, dxfs, strings, theme, warnings: new Set(), isName, nameMulti, richImages: readRichImages(files, wbRels) };
+  const ctx = { xfs, dxfs, tableStyles, strings, theme, warnings: new Set(), isName, nameMulti, richImages: readRichImages(files, wbRels) };
   const sheets = [];
   const warnings = [];
   const sheetCodes = {};
@@ -1229,13 +1414,16 @@ export function readXlsx(bytes) {
       if (rel) warnings.push(`'${sh.attrs.name}' 시트(차트 시트 등)는 가져오지 않았습니다.`);
       continue;
     }
-    const sheet = readSheet(files, rel.target, ctx);
+    const si = sheets.length;
+    const total = kids(child(wbRoot, 'sheets'), 'sheet').length;
+    const sheet = yield* progressOf(readSheet(files, rel.target, ctx), (rows) => ({ p: 0.05 + 0.85 * (si / total), msg: `'${sh.attrs.name}' 시트 읽는 중 (${rows.toLocaleString()}행)` }));
     if (sheet.codeName) sheetCodes[sh.attrs.name.slice(0, 31)] = sheet.codeName;
     delete sheet.codeName;
     unsupported += sheet.unsupported;
     delete sheet.unsupported;
     sheets.push({ name: sh.attrs.name.slice(0, 31), ...sheet, _sheetId: Number(sh.attrs.sheetId), ...(sh.attrs.state === 'hidden' || sh.attrs.state === 'veryHidden' ? { state: sh.attrs.state } : {}) });
   }
+  yield { p: 0.92, msg: "피벗 테이블 · 슬라이서 연결 중" };
   linkPivotsAndSlicers(files, wbRels, sheets, ctx);
   if (unsupported) warnings.push(`지원하지 않는 함수가 쓰인 수식 ${unsupported}개는 수식을 유지하고 파일에 저장된 계산 결과를 표시합니다.`);
   warnings.push(...ctx.warnings);
@@ -1300,6 +1488,15 @@ function readRichImages(files, wbRels) {
   }
 }
 
+/** 하위 생성기의 중간 값을 진행 정보로 바꿔 전달 */
+function* progressOf(gen, map) {
+  for (;;) {
+    const s = gen.next();
+    if (s.done) return s.value;
+    yield map(s.value);
+  }
+}
+
 function relsTarget(files, path, type) {
   const rels = relsOf(files, path);
   return Object.values(rels).find((r) => r.type === type)?.target;
@@ -1314,6 +1511,7 @@ class StylePool {
     this.numFmts = [];
     this.xfs = ['<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'];
     this.dxfs = [];
+    this.tableStyles = new Map();
     this.maps = { font: new Map([[this.fonts[0], 0]]), fill: new Map(this.fills.map((f, i) => [f, i])), border: new Map([[this.borders[0], 0]]), fmt: new Map(), xf: new Map([['{}', 0]]) };
   }
 
@@ -1371,6 +1569,16 @@ class StylePool {
     return this.dxfs.length - 1;
   }
 
+  /** 사용자 지정 피벗 스타일을 <tableStyles> 에 추가 */
+  pivotStyle(name, parts) {
+    if (this.tableStyles.has(name)) return;
+    const els = [['wholeTable', parts.body], ['headerRow', parts.header], ['totalRow', parts.grand], ['firstRowStripe', parts.band],
+      ['firstSubtotalRow', parts.sub], ['pageFieldLabels', parts.page]]
+      .filter(([, st]) => st && Object.keys(st).length)
+      .map(([type, st]) => `<tableStyleElement type="${type}" dxfId="${this.dxf(st)}"/>`);
+    this.tableStyles.set(name, `<tableStyle name="${esc(name)}" table="0" count="${els.length}">${els.join('')}</tableStyle>`);
+  }
+
   xml() {
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<styleSheet xmlns="${NS_MAIN}">`
       + (this.numFmts.length ? `<numFmts count="${this.numFmts.length}">${this.numFmts.join('')}</numFmts>` : '')
@@ -1381,6 +1589,7 @@ class StylePool {
       + `<cellXfs count="${this.xfs.length}">${this.xfs.join('')}</cellXfs>`
       + '<cellStyles count="1"><cellStyle name="표준" xfId="0" builtinId="0"/></cellStyles>'
       + `<dxfs count="${this.dxfs.length}">${this.dxfs.join('')}</dxfs>`
+      + (this.tableStyles.size ? `<tableStyles count="${this.tableStyles.size}" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16">${[...this.tableStyles.values()].join('')}</tableStyles>` : '')
       + '</styleSheet>';
   }
 }
@@ -1924,6 +2133,7 @@ function pivotParts(wb, si, def, cache, name, pool) {
   }
   const so = d.styleOpts ?? {};
   const styleName = d.style === 'None' ? '' : d.style ?? 'PivotStyleLight16';
+  if (styleName && def.styleDef && !/^PivotStyle(Light|Medium|Dark)\d+$/i.test(styleName)) pool.pivotStyle(styleName, def.styleDef);
   const tableAttrs = [
     `name="${esc(name)}"`, `cacheId="${cacheId}"`, 'applyNumberFormats="0"', 'applyBorderFormats="0"', 'applyFontFormats="0"', 'applyPatternFormats="0"',
     'applyAlignmentFormats="0"', 'applyWidthHeightFormats="1"', 'dataCaption="값"', 'updatedVersion="6"', 'minRefreshableVersion="3"', 'useAutoFormatting="1"',
@@ -2409,7 +2619,7 @@ export function writeXlsx(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {})
     files[`xl/worksheets/sheet${si + 1}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="${NS_MAIN}" xmlns:r="${NS_R}">`
       + (vba ? `<sheetPr codeName="${esc(vba.sheetCodes?.[sheet.name] ?? `Sheet${si + 1}`)}"/>` : '')
       + `<dimension ref="${dim}"/>`
-      + `<sheetViews><sheetView workbookViewId="0"${si === (wb.sheets[activeSheet]?.state && wb.sheets[activeSheet].state !== 'visible' ? Math.max(0, wb.sheets.findIndex((x) => !x.state || x.state === 'visible')) : activeSheet) ? ' tabSelected="1"' : ''}>${pane}</sheetView></sheetViews>`
+      + `<sheetViews><sheetView${sheet.noGrid ? ' showGridLines="0"' : ''} workbookViewId="0"${si === (wb.sheets[activeSheet]?.state && wb.sheets[activeSheet].state !== 'visible' ? Math.max(0, wb.sheets.findIndex((x) => !x.state || x.state === 'visible')) : activeSheet) ? ' tabSelected="1"' : ''}>${pane}</sheetView></sheetViews>`
       + `<sheetFormatPr defaultRowHeight="${px2pt(DEFAULT_ROW_HEIGHT)}"/>`
       + (colsXml ? `<cols>${colsXml}</cols>` : '')
       + `<sheetData>${rowXml}</sheetData>`

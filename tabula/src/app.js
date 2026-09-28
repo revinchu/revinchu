@@ -18,14 +18,14 @@ import { makeSeries } from './series.js';
 import { parseDelimited, toDelimited, guessDelimiter } from './csv.js';
 import { SAMPLES } from './samples.js';
 import { GridView, DEFAULT_FONT, DEFAULT_SIZE, measureText, fontStack } from './view.js';
-import { readXlsx, writeXlsx, xlsxOverflow } from './xlsx.js';
+import { readXlsxAsync, writeXlsx, xlsxOverflow } from './xlsx.js';
 import { CHART_TYPES, PALETTE, renderChartSvg, chartModelData } from './chart.js';
 import {
   computePivot, AGGREGATES, SHOW_AS, LAYOUTS, pivotSourceData, resolvePivot, itemText, headerNames, normalizeDef, valueName,
-  pivotFieldNames, parseCalc, PIVOT_STYLES, LABEL_OPS, VALUE_OPS, describeFieldFilter, keyOf, sortKeys,
+  pivotFieldNames, parseCalc, PIVOT_STYLES, pivotStyleParts, LABEL_OPS, VALUE_OPS, describeFieldFilter, keyOf, sortKeys,
 } from './pivot.js';
 import { SLICER_STYLES, slicerStyleName, slicerColors, CUSTOM_KEYS } from './slicerstyle.js';
-import { server, idbSet, idbGet } from './storage.js';
+import { server, idbSet, idbGet, idbDel } from './storage.js';
 import { fontList, fontAlias, loadLocalFonts, canListLocalFonts } from './fonts.js';
 import { ICONS } from './icons.js';
 import {
@@ -3088,9 +3088,15 @@ function pivotStyleGallery(anchorEl, entry = pivotHere()) {
   const chip = (st) => el('button', {
     class: `style-chip tstyle${st.name === cur ? ' on' : ''}`, title: st.label, onmousedown: (e) => e.preventDefault(),
     style: { width: '42px', background: `linear-gradient(${st.swatch[0]} 0 30%, #fff 30% 40%, ${st.swatch[1]} 40% 70%, ${st.swatch[2]} 70%)` },
-    onclick: () => { closeMenus(); setPivotDef(entry, { ...pivotDefV2(entry.def), style: st.name }); focusGrid(); },
+    onclick: () => { closeMenus(); setPivotDef(entry, { ...pivotDefV2(entry.def), style: st.name, styleDef: st.def ?? undefined }); focusGrid(); },
   });
   const groups = ['밝게', '보통', '어둡게'].flatMap((g) => [{ title: g }, { node: el('div', { class: 'style-grid pstyles' }, PIVOT_STYLES.filter((s) => s.group === g).map(chip)) }]);
+  // 파일에서 가져온 사용자 지정 스타일
+  const cd = entry.def.styleDef;
+  if (cd) {
+    const p = pivotStyleParts(entry.def.style, cd);
+    groups.unshift({ title: '사용자 지정' }, { node: el('div', { class: 'style-grid pstyles' }, [chip({ name: entry.def.style, label: entry.def.style, def: cd, swatch: [p.header.fill ?? '#ffffff', p.sub.fill ?? p.body.fill ?? '#ffffff', p.grand.fill ?? '#ffffff'] })]) });
+  }
   openMenu(anchorEl ?? { x: 240, y: 160 }, [...groups, { sep: true }, { label: '지우기 (스타일 없음)', action: () => setPivotDef(entry, { ...pivotDefV2(entry.def), style: 'None' }) }], { scroll: true });
 }
 
@@ -4942,7 +4948,7 @@ function moveSheet(i, d) {
   const j = i + d;
   if (j < 0 || j >= wb.sheets.length) return;
   wb.transact(() => {
-    wb.snapshotAll();
+    wb.snapshotList();
     const [s] = wb.sheets.splice(i, 1);
     wb.sheets.splice(j, 0, s);
   }, meta());
@@ -5033,18 +5039,25 @@ async function openFileObject(file, mode) {
   const base = file.name.replace(/\.[^.]+$/, '');
   try {
     if (/\.(xlsx|xlsm)$/i.test(file.name)) {
-      const { data, warnings, active: act } = readXlsx(new Uint8Array(await file.arrayBuffer()));
+      // 큰 파일도 화면이 멈추지 않도록 나눠서 읽고, 진행 상황을 보여 줌
+      const prog = progressOverlay(`'${file.name}' 여는 중`);
+      let res;
+      try {
+        res = await readXlsxAsync(new Uint8Array(await file.arrayBuffer()), (st) => prog.set(st.p * 0.6, st.msg));
+        if (fileMode === 'open') await loadWorkbookAsync(res.data, base, res.active, prog);
+      } finally {
+        prog.close();
+      }
+      const { data, warnings } = res;
       if (fileMode === 'open') {
-        loadWorkbook(data, base, act);
+        // 이미 불러옴
       } else {
         wb.transact(() => {
           for (const s of data.sheets) {
             let name = s.name;
             for (let n = 2; wb.sheetIndexByName(name) >= 0; n++) name = `${s.name} (${n})`.slice(0, 31);
             const at = wb.addSheet(name);
-            const all = wb.serialize();
-            all.sheets[at] = { ...s, name };
-            wb.restore(all);
+            wb.replaceSheet(at, { ...s, name });
           }
         }, meta());
         toast(`시트 ${data.sheets.length}개를 가져왔습니다.`);
@@ -5083,6 +5096,43 @@ function loadWorkbook(data, name, activeSheet = 0) {
   if (editing) endEditUI();
   wb.load(data);
   renderImportedPivots();
+  afterLoad(name, activeSheet);
+}
+
+/** 큰 파일: 셀 준비와 피벗 다시 그리기를 나눠서 (진행 표시 prog: {set(p, 메시지)}) */
+async function loadWorkbookAsync(data, name, activeSheet, prog) {
+  if (editing) endEditUI();
+  const next = new Workbook();
+  await next.loadAsync(data, (p) => prog?.set(0.6 + 0.25 * p, '셀 준비 중'));
+  next.listeners = wb.listeners; // 화면 갱신 연결 유지
+  wb = next;
+  si = clamp(activeSheet, 0, wb.sheets.length - 1);
+  if (isHiddenSheet(si)) si = Math.max(0, wb.sheets.findIndex((_, i) => !isHiddenSheet(i)));
+  sheetSel.clear();
+  chartSel = null;
+  const list = allPivots().filter((e) => e.def.captureFmt);
+  for (let i = 0; i < list.length; i++) {
+    prog?.set(0.85 + 0.15 * (i / Math.max(1, list.length)), `피벗 테이블 계산 중 (${i + 1}/${list.length})`);
+    await new Promise((res) => setTimeout(res, 0));
+    const e = list[i];
+    try { writePivot(e.si, e.def); } catch (err) { console.warn('피벗 다시 그리기 실패', err); }
+  }
+  afterLoad(name, activeSheet);
+}
+
+/** 진행 표시 창 */
+function progressOverlay(title) {
+  const bar = el('div', { class: 'lp-bar' });
+  const msg = el('div', { class: 'lp-msg' }, '');
+  const box = el('div', { class: 'load-progress', role: 'progressbar' }, el('div', { class: 'lp-box' }, el('div', { class: 'lp-title' }, title), msg, el('div', { class: 'lp-track' }, bar)));
+  document.body.append(box);
+  return {
+    set(p, m) { bar.style.width = `${Math.round(Math.max(0, Math.min(1, p)) * 100)}%`; if (m) msg.textContent = m; },
+    close() { box.remove(); },
+  };
+}
+
+function afterLoad(name, activeSheet) {
   wb.undoStack = [];
   wb.redoStack = [];
   docName = name || '통합 문서1';
@@ -5143,19 +5193,22 @@ const snapshot = () => ({ app: 'tabula', docName, si, workbook: wb.serialize() }
 
 let storageWarned = false;
 /** 셀이 많은 통합 문서 (자동 저장을 IndexedDB 로, 더 드물게) */
-function bigBook() {
+function cellCount() {
   let n = 0;
   for (const s of wb.sheets) n += s.cells.size;
-  return n > 50000;
+  return n;
+}
+function bigBook() {
+  return cellCount() > 50000;
 }
 let idbSaving = null;
 function saveToStorage() {
   try {
     if (bigBook()) {
-      // 큰 문서: JSON 문자열로 만들지 않고 IndexedDB 에 비동기로 저장 (화면이 멈추지 않게)
-      const payload = { docName, si, autosave, workbook: wb.serialize() };
+      // 큰 문서: IndexedDB 에 시트별로, 바뀐 시트만, 조금씩 나눠 저장 (화면이 멈추지 않게)
       localStorage.setItem(STORAGE_KEY, JSON.stringify({ docName, si, autosave, idb: true }));
-      idbSaving = idbSet(STORAGE_KEY, payload).then(() => { if (!server.available) { dirty = false; updateTitle(); } }).catch(() => {
+      idbSaving = saveBigToIdb().then(() => { if (!server.available) { dirty = false; updateTitle(); } }).catch((err) => {
+        if (err === SAVE_ABORT) return;
         if (!storageWarned) { storageWarned = true; toast('브라우저 저장 공간이 부족해 자동 저장하지 못했습니다. [파일 → 다른 이름으로 저장]으로 파일을 내려받으세요.'); }
       });
       return true;
@@ -5173,6 +5226,86 @@ function saveToStorage() {
     }
     return false;
   }
+}
+
+const SAVE_ABORT = new Error('저장 중단');
+const yieldUI = () => new Promise((res) => setTimeout(res, 0));
+let bigSaveRun = null;
+let bigSaveAgain = false;
+/** 큰 문서 저장: 목록 { v: 2, sheets: [{id, ev}] } + 시트마다 { meta, chunks: [JSON 문자열] } */
+async function saveBigToIdb() {
+  if (bigSaveRun) { bigSaveAgain = true; return bigSaveRun; }
+  const book = wb;
+  bigSaveRun = (async () => {
+    const prev = await idbGet(STORAGE_KEY).catch(() => null);
+    const saved = new Map((prev?.v === 2 ? prev.sheets : []).map((x) => [x.id, x.ev]));
+    const list = [];
+    for (let i = 0; i < book.sheets.length; i++) {
+      const s = book.sheets[i];
+      s._sid ??= `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+      const ev = s._ev ?? 0;
+      if (saved.get(s._sid) !== ev) {
+        const chunks = [];
+        let t = performance.now();
+        for (const ch of book.cellChunks(i)) {
+          chunks.push(await packChunk(JSON.stringify(ch)));
+          if (performance.now() - t > 30) {
+            await yieldUI();
+            if (wb !== book || book.sheets[i] !== s) throw SAVE_ABORT; // 그사이 다른 문서를 열었음
+            t = performance.now();
+          }
+        }
+        await idbSet(`${STORAGE_KEY}#${s._sid}`, { meta: book.sheetMeta(i), chunks, gz: GZ });
+      }
+      list.push({ id: s._sid, ev });
+    }
+    if (wb !== book) throw SAVE_ABORT;
+    await idbSet(STORAGE_KEY, {
+      v: 2, docName, si, autosave, vba: book.vba ?? null,
+      names: book.names.map(({ _ast, _text, ...n }) => ({ ...n })), sheets: list,
+    });
+    for (const id of saved.keys()) if (!list.some((x) => x.id === id)) idbDel(`${STORAGE_KEY}#${id}`).catch(() => {});
+    // 저장하는 동안 바뀐 시트는 다음 저장에서 다시 (ev 가 달라짐)
+    if (book.sheets.some((s, i) => (s._ev ?? 0) !== list[i]?.ev)) bigSaveAgain = true;
+  })();
+  try {
+    await bigSaveRun;
+  } finally {
+    bigSaveRun = null;
+    if (bigSaveAgain) { bigSaveAgain = false; scheduleAutosave(); }
+  }
+}
+
+// 조각은 gzip 으로 압축한 Blob 으로 저장 (문자열 그대로 넣으면 IndexedDB 가 복사하는 동안 화면이 멈춤)
+const GZ = typeof CompressionStream === 'function';
+async function packChunk(text) {
+  const blob = new Blob([text], { type: 'application/json' });
+  return GZ ? new Response(blob.stream().pipeThrough(new CompressionStream('gzip'))).blob() : blob;
+}
+async function unpackChunk(x, gz) {
+  if (typeof x === 'string') return x;
+  return gz ? new Response(x.stream().pipeThrough(new DecompressionStream('gzip'))).text() : x.text();
+}
+
+/** IndexedDB 의 큰 문서 → 불러오기용 데이터 (예전 형식도 읽음) */
+async function loadBigFromIdb(onProgress) {
+  const idx = await idbGet(STORAGE_KEY);
+  if (!idx) return null;
+  if (idx.v !== 2) return idx.workbook ? idx : null;
+  const sheets = [];
+  for (let i = 0; i < idx.sheets.length; i++) {
+    const x = idx.sheets[i];
+    const rec = await idbGet(`${STORAGE_KEY}#${x.id}`);
+    if (!rec) return null;
+    const cells = new Map();
+    for (const ch of rec.chunks) {
+      for (const [k, d] of JSON.parse(await unpackChunk(ch, rec.gz))) cells.set(k, d);
+      onProgress?.((i + 0.5) / idx.sheets.length);
+      await yieldUI();
+    }
+    sheets.push({ ...rec.meta, cells, _sid: x.id, _ev: x.ev });
+  }
+  return { docName: idx.docName, si: idx.si, autosave: idx.autosave, workbook: { names: idx.names, vba: idx.vba, sheets } };
 }
 
 function loadFromStorage() {
@@ -5198,6 +5331,8 @@ function scheduleAutosave() {
 
 function scheduleServerSave(delay = 1500) {
   if (!server.available || !autosave) return;
+  // 셀이 아주 많은 문서는 서버 자동 저장을 하지 않음 (전체를 보내야 해서 느림) — [저장]을 누르면 저장
+  if (cellCount() > 300000) { updateTitle(); return; }
   clearTimeout(serverTimer);
   const big = bigBook();
   serverTimer = setTimeout(() => (big ? whenIdle(() => saveNow(false)) : saveNow(false)), big ? Math.max(delay, 8000) : delay);
@@ -6907,13 +7042,11 @@ const COMMANDS = {
     } else del();
   },
   duplicateSheet: () => {
-    const src = wb.serialize().sheets[si];
+    const { _sid, ...src } = wb.serializeSheet(si);
     const i = wb.transact(() => {
       const at = wb.addSheet(`${src.name} (2)`.slice(0, 31), si + 1);
-      const data = wb.serialize();
       const dup = (list) => (list ?? []).map((c) => ({ ...c, id: `${c.id}d${at}` }));
-      data.sheets[at] = { ...src, name: wb.sheets[at].name, charts: dup(src.charts), images: dup(src.images), shapes: dup(src.shapes) };
-      wb.restore(data);
+      wb.replaceSheet(at, { ...src, name: wb.sheets[at].name, charts: dup(src.charts), images: dup(src.images), shapes: dup(src.shapes) });
       return at;
     }, meta());
     switchSheet(i, false);
@@ -7063,7 +7196,7 @@ const COMMANDS = {
   importCsv: () => pickFile('import'),
   exportCsv,
 
-  toggleGrid: (v) => { view.showGrid = v ?? !view.showGrid; applyView(); },
+  toggleGrid: (v) => { const on = v ?? !!sheet().noGrid; wb.transact(() => wb.setSheetProp(si, 'noGrid', on ? undefined : true), meta()); applyView(); },
   togglePrintGrid: (v) => { view.printGrid = v ?? !view.printGrid; updateRibbon(); },
   toggleFormulaBar: (v) => { view.showFormulaBar = v ?? !view.showFormulaBar; applyView(); },
   toggleHeaders: (v) => { view.showHeaders = v ?? !view.showHeaders; applyView(); },
@@ -7137,7 +7270,7 @@ function ribbonState() {
     alignLeft: st.align === 'left', alignCenter: st.align === 'center', alignRight: st.align === 'right',
     valignTop: st.valign === 'top', valignMiddle: st.valign === 'middle', valignBottom: !st.valign,
     merged: !!wb.mergeAt(si, active.r, active.c), painter: !!painter, filterOn: (() => { const k = filterKeyHere(); return k !== null && !!getFilter(k); })(),
-    frozen: !!(f.rows || f.cols), lastFill, lastFont, ...view,
+    frozen: !!(f.rows || f.cols), lastFill, lastFont, ...view, showGrid: !sheet().noGrid,
     ...tableRibbonState(),
   };
 }
@@ -7400,10 +7533,19 @@ function bindEvents() {
 async function init() {
   let stored = loadFromStorage();
   if (stored?.idb) {
-    // 큰 문서는 IndexedDB 에 저장되어 있음
-    try { const full = await idbGet(STORAGE_KEY); stored = full?.workbook ? full : null; } catch { stored = null; }
+    // 큰 문서는 IndexedDB 에 시트별로 저장되어 있음 — 나눠서 불러옴
+    const prog = progressOverlay('저장된 통합 문서를 여는 중');
+    try {
+      stored = await loadBigFromIdb((p) => prog.set(p * 0.6, '불러오는 중'));
+      wb = new Workbook();
+      if (stored?.workbook) await wb.loadAsync(stored.workbook, (p) => prog.set(0.6 + 0.4 * p, '셀 준비 중'));
+    } catch {
+      stored = null;
+    } finally {
+      prog.close();
+    }
   }
-  wb = new Workbook(stored?.workbook);
+  if (!wb || !stored) wb = new Workbook(stored?.workbook);
   if (stored) {
     docName = stored.docName || docName;
     si = clamp(stored.si || 0, 0, wb.sheets.length - 1);
@@ -7414,7 +7556,7 @@ async function init() {
   gv = new GridView({
     state: () => ({
       wb, si, sel, selKind, active, editing: !!editing, clip, fillPreview, refs: editRefs, chartSel, circles,
-      showGrid: view.showGrid, showFormulas: view.showFormulas, showHeaders: view.showHeaders,
+      showGrid: view.showGrid && !sheet().noGrid, showFormulas: view.showFormulas, showHeaders: view.showHeaders,
     }),
     onViewScroll: () => positionEditor(),
     slicerModel,

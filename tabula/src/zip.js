@@ -157,8 +157,47 @@ export function crc32(data) {
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
-/** ZIP 바이트 → { 경로: Uint8Array } */
+/** ZIP 바이트 → { 경로: Uint8Array } (압축은 처음 읽을 때 풂) */
 export function unzip(bytes) {
+  const files = {};
+  for (const e of zipEntries(bytes)) {
+    if (e.method === 0) files[e.name] = e.raw;
+    else lazyInflate(files, e);
+  }
+  return files;
+}
+
+function lazyInflate(files, e) {
+  Object.defineProperty(files, e.name, {
+    enumerable: true, configurable: true,
+    get() {
+      const v = inflate(e.raw, e.size);
+      Object.defineProperty(files, e.name, { value: v, enumerable: true, configurable: true, writable: true });
+      return v;
+    },
+    set(v) { Object.defineProperty(files, e.name, { value: v, enumerable: true, configurable: true, writable: true }); },
+  });
+}
+
+/** 큰 항목은 브라우저 내장 압축 해제(DecompressionStream)로 미리 풂 — 나머지는 unzip 과 같음 */
+export async function unzipAsync(bytes, pre = (name, size) => size > 1 << 20) {
+  const files = {};
+  const native = typeof DecompressionStream === 'function';
+  for (const e of zipEntries(bytes)) {
+    if (e.method === 0) { files[e.name] = e.raw; continue; }
+    if (native && pre(e.name, e.size)) {
+      try {
+        const stream = new Blob([e.raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+        files[e.name] = new Uint8Array(await new Response(stream).arrayBuffer());
+        continue;
+      } catch { /* 아래 방식으로 */ }
+    }
+    lazyInflate(files, e);
+  }
+  return files;
+}
+
+function zipEntries(bytes) {
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let eocd = -1;
   for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 65557); i--) {
@@ -167,7 +206,7 @@ export function unzip(bytes) {
   if (eocd < 0) throw new Error('ZIP 파일이 아닙니다');
   const count = dv.getUint16(eocd + 10, true);
   let p = dv.getUint32(eocd + 16, true);
-  const files = {};
+  const out = [];
   for (let n = 0; n < count; n++) {
     if (dv.getUint32(p, true) !== 0x02014b50) throw new Error('ZIP 디렉터리가 손상되었습니다');
     const method = dv.getUint16(p + 10, true);
@@ -182,11 +221,10 @@ export function unzip(bytes) {
     if (name.endsWith('/')) continue;
     const start = local + 30 + dv.getUint16(local + 26, true) + dv.getUint16(local + 28, true);
     const raw = bytes.subarray(start, start + compSize);
-    if (method === 0) files[name] = raw;
-    else if (method === 8) files[name] = inflate(raw, size);
-    else throw new Error(`지원하지 않는 압축 방식(${method}): ${name}`);
+    if (method !== 0 && method !== 8) throw new Error(`지원하지 않는 압축 방식(${method}): ${name}`);
+    out.push({ name, method, raw, size });
   }
-  return files;
+  return out;
 }
 
 /** { 경로: Uint8Array|string } → ZIP 바이트 (무압축) */

@@ -280,7 +280,7 @@ test('셀 그림 · IMAGE 함수 · xlsx 왕복', () => {
   assert.equal(wb.getValue(0, 1, 0).alt, '대체');
   const bytes = writeXlsx(wb);
   const { data } = readXlsx(bytes);
-  const cells = data.sheets[0].cells;
+  const cells = Object.fromEntries(data.sheets[0].cells);
   assert.equal(cells['0,0'].image.src, png);
   assert.equal(cells['0,0'].image.alt, '로고');
   assert.equal(cells['0,0'].style.bold, true);

@@ -722,3 +722,11 @@ legend { padding: 0 4px; color: #444; }
 /* 셀 안 그림 */
 .c.cimg-cell { padding: 1px; align-items: center; justify-content: center; }
 .c.cimg-cell .cimg { display: block; max-width: 100%; max-height: 100%; min-width: 0; min-height: 0; pointer-events: none; }
+
+/* 큰 파일 여는 중 진행 표시 */
+.load-progress { position: fixed; inset: 0; z-index: 3000; background: rgba(255, 255, 255, 0.55); display: flex; align-items: center; justify-content: center; cursor: progress; }
+.load-progress .lp-box { width: min(420px, calc(100vw - 32px)); background: #fff; border: 1px solid #c8c8c8; border-radius: 6px; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18); padding: 18px 20px; font-size: 13px; color: #222; }
+.load-progress .lp-title { font-weight: 600; margin-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.load-progress .lp-msg { color: #555; min-height: 18px; margin-bottom: 10px; }
+.load-progress .lp-track { height: 6px; background: #e6e6e6; border-radius: 3px; overflow: hidden; }
+.load-progress .lp-bar { height: 100%; width: 0; background: #217346; transition: width 0.15s; }

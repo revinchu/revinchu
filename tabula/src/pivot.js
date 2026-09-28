@@ -338,6 +338,7 @@ export function normalizeDef(def, header) {
     order: byKey(def.order),
     fieldFilters: byKey(def.fieldFilters),
     style: def.style ?? DEFAULT_PIVOT_STYLE,
+    styleDef: def.styleDef ?? null,
     rowCaption: def.rowCaption ?? null,
     colCaption: def.colCaption ?? null,
     styleOpts: { rowHeaders: true, colHeaders: true, bandRows: false, bandCols: false, ...(def.styleOpts ?? {}) },
@@ -367,30 +368,25 @@ export function pivotSourceData(wb, def) {
 // 같은 원본을 여러 피벗 · 슬라이서가 읽으므로 통합 문서가 바뀌기 전까지(wb.version 이 같으면) 재사용
 const readCache = new WeakMap();
 function cachedRead(wb, si, ref) {
-  let hasFormula = false;
   const read = () => {
     const rows = [];
-    const sheet = wb.sheets[si];
     for (let r = ref.r1; r <= ref.r2; r++) {
       const row = new Array(ref.c2 - ref.c1 + 1);
-      for (let c = ref.c1; c <= ref.c2; c++) {
-        if (!hasFormula && sheet.cells.get(`${r},${c}`)?.formula) hasFormula = true;
-        row[c - ref.c1] = wb.getValue(si, r, c);
-      }
+      for (let c = ref.c1; c <= ref.c2; c++) row[c - ref.c1] = wb.getValue(si, r, c);
       rows.push(row);
     }
     return rows;
   };
   if (wb.version === undefined) return read();
-  // 원본에 수식이 없으면 그 시트가 바뀔 때만, 수식이 있으면 통합 문서가 바뀔 때마다 다시 읽음
+  // 시트 버전은 그 시트나 그 시트가 참조하는 시트가 바뀔 때만 올라감 (수식이 있어도 안전)
   const key = `${si}:${ref.r1},${ref.c1},${ref.r2},${ref.c2}`;
   let map = readCache.get(wb);
   if (!map) { map = new Map(); readCache.set(wb, map); }
   const e = map.get(key);
   const sv = wb.sheetVersion?.(si) ?? wb.version;
-  if (e && (e.hasFormula ? e.ver === wb.version : e.sv === sv)) return e.rows;
+  if (e && e.sv === sv) return e.rows;
   const rows = read();
-  map.set(key, { rows, hasFormula, ver: wb.version, sv });
+  map.set(key, { rows, sv });
   return rows;
 }
 
@@ -506,20 +502,59 @@ function applyFieldFilters(data, header, d) {
 }
 
 /** 필터(보고서 필터 · 항목 선택 · 슬라이서 · 레이블/값/상위 N)를 적용한 행 → { def: 정리된 정의, rows, header } */
+// 같은 원본(행 배열)과 같은 정의면 결과를 재사용 (슬라이서 · 피벗 차트가 같은 피벗을 여러 번 계산하지 않게)
+const resolveMemo = new WeakMap();
+const nonEmptyMemo = new WeakMap();
+const filterMemo = new WeakMap();
+/** 결과에 영향을 주는 정의 부분만으로 만든 키 (위치 · 서식 제외) */
+export function pivotDefKey(def) {
+  const { area, top, left, cellFmt, captureFmt, buttons, styleDef, autofit, name, ...rest } = def;
+  return JSON.stringify(rest);
+}
 export function resolvePivot(rows, def) {
+  let memo = resolveMemo.get(rows);
+  if (!memo) { memo = new Map(); resolveMemo.set(rows, memo); }
+  const key = pivotDefKey(def);
+  const hit = memo.get(key);
+  if (hit) return { ...hit, def: normalizeDef(def, hit.header) };
   const d = normalizeDef(def, headerNames(rows));
   const header = d.header;
   const filters = Object.entries(d.filters).map(([name, allowed]) => [header.findIndex((h) => h.toLowerCase() === name.toLowerCase()), new Set(allowed)]).filter(([i]) => i >= 0);
-  const data = rows.slice(1).filter((r) => !r.every((v) => v === null || v === ''));
-  let out = filters.length ? data.filter((r) => filters.every(([i, set]) => set.has(itemText(r[i])))) : data;
+  let data = nonEmptyMemo.get(rows);
+  if (!data) { data = rows.slice(1).filter((r) => !r.every((v) => v === null || v === '')); nonEmptyMemo.set(rows, data); }
+  // 필터 검사는 값마다 한 번만 (같은 값이 수만 행에 반복됨)
+  const tests = filters.map(([i, set]) => {
+    const seen = new Map();
+    return (r) => {
+      const v = r[i];
+      let b = seen.get(v);
+      if (b === undefined) { b = set.has(itemText(v)); seen.set(v, b); }
+      return b;
+    };
+  });
+  // 같은 원본 · 같은 필터를 쓰는 피벗(슬라이서로 묶인 피벗들)은 걸러 낸 행을 함께 씀
+  const fkey = JSON.stringify(filters.map(([i, set]) => [i, [...set].sort()]));
+  let fmemo = filterMemo.get(rows);
+  if (!fmemo) { fmemo = new Map(); filterMemo.set(rows, fmemo); }
+  let out = fmemo.get(fkey);
+  if (!out) {
+    out = tests.length ? data.filter((r) => tests.every((t) => t(r))) : data;
+    if (fmemo.size > 30) fmemo.clear();
+    fmemo.set(fkey, out);
+  }
   out = applyFieldFilters(out, header, d);
-  return { def: d, rows: [rows[0], ...out], header };
+  const res = { def: d, rows: [rows[0], ...out], header };
+  if (memo.size > 60) memo.clear();
+  memo.set(key, res);
+  return res;
 }
 
 // ───────────── 피벗 스타일 (엑셀 기본 제공 이름: 밝게 1~28, 보통 1~28, 어둡게 1~28) ─────────────
 export const DEFAULT_PIVOT_STYLE = 'PivotStyleLight16';
 /** 스타일 이름 → 역할별 서식 { header, sub, grand, body, page } */
-export function pivotStyleParts(name) {
+export function pivotStyleParts(name, custom = null) {
+  // 파일에서 가져온 사용자 지정 스타일
+  if (custom) return { header: {}, sub: {}, grand: {}, body: {}, page: {}, band: {}, ...custom };
   const p = styleParts(name);
   const m = /^PivotStyle(?:Light|Medium|Dark)(\d+)$/i.exec(name ?? '');
   const a = ACCENTS[m ? (Number(m[1]) - 1) % 7 : 1];
@@ -649,7 +684,7 @@ export function computePivot(rows, d) {
   const colIdx = d.cols.map(idx);
   const values = d.values;
   const V = values.length;
-  const parts = pivotStyleParts(d.style);
+  const parts = pivotStyleParts(d.style, d.styleDef);
   const opts = d.styleOpts ?? { rowHeaders: true, colHeaders: true };
   const HEAD_ROLES = /^(corner|rowHead|colHead|valueCaption|colItem|valueHead|colSubHead|grandHead)/;
   const styleFor = (role) => {
@@ -883,7 +918,18 @@ export function computePivot(rows, d) {
  * 피벗 차트 데이터: 행 항목(잎) = 항목 축, 열 항목 × 값 필드 = 계열 (부분합 · 총합계 제외, 엑셀과 같음)
  * → { categories: [글자], series: [{ name, values }] }
  */
+const chartMemo = new WeakMap();
 export function pivotChartData(rows, def) {
+  let memo = chartMemo.get(rows);
+  if (!memo) { memo = new Map(); chartMemo.set(rows, memo); }
+  const key = pivotDefKey(def) + JSON.stringify(def.styleDef ?? null);
+  if (!memo.has(key)) {
+    if (memo.size > 60) memo.clear();
+    memo.set(key, pivotChartDataRaw(rows, def));
+  }
+  return memo.get(key);
+}
+function pivotChartDataRaw(rows, def) {
   const { def: d, rows: r } = resolvePivot(rows, def);
   const { grid, meta } = computePivot(r, d);
   if (meta.empty) return { categories: [], series: [] };

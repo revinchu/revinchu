@@ -126,7 +126,7 @@ export function checkValidation(wb, si, rule, r, c, text) {
       const sheet = wb.sheets[si];
       const prev = sheet.cells.get(key);
       sheet.cells.set(key, { raw: String(text), v: value, style: prev?.style });
-      wb.invalidate();
+      wb.invalidate(si);
       let ok = true;
       try {
         const res = operand(wb, si, rule, String(rule.f1 ?? '').startsWith('=') ? rule.f1 : `=${rule.f1}`, r, c);
@@ -134,7 +134,7 @@ export function checkValidation(wb, si, rule, r, c, text) {
         if (isError(res)) ok = false;
       } finally {
         if (prev) sheet.cells.set(key, prev); else sheet.cells.delete(key);
-        wb.invalidate();
+        wb.invalidate(si);
       }
       return ok;
     }
