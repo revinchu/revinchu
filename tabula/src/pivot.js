@@ -14,7 +14,7 @@ import { findTable, dataTop, dataBottom, columnNames, ACCENTS, tint, shade } fro
 import { logicalCol } from './block.js';
 import {
   EMPTY as EMPTY0, IMG_KEY as IMG_KEY0, keyOf as keyOf0, imageOfKey as imageOfKey0, sortKeys as sortKeys0, itemText as itemText0,
-  kk, cubeFromRows, filterRows, groupAggregate, groupAcc, Cube, Column, blockColumn, groupedColumn, groupRank, aggregateQuery, planRollup,
+  kk, cubeFromRows, filterRows, groupAggregate, groupAcc, Cube, Column, blockColumn, groupedColumn, groupRank, aggregateQuery, planRollup, GROUP_BY as GROUP_BY0,
 } from './cube.js';
 
 export const AGGREGATES = [
@@ -35,7 +35,22 @@ export const SHOW_AS = [
   { id: 'percentOfTotal', label: '총합계 비율' },
   { id: 'percentOfCol', label: '열 합계 비율' },
   { id: 'percentOfRow', label: '행 합계 비율' },
+  { id: 'percent', label: '기준값 [%]', base: 'item' },
+  { id: 'percentOfParentRow', label: '상위 행 합계 비율' },
+  { id: 'percentOfParentCol', label: '상위 열 합계 비율' },
+  { id: 'percentOfParent', label: '상위 합계 비율', base: 'field' },
+  { id: 'difference', label: '차이', base: 'item' },
+  { id: 'percentDiff', label: '[%] 차이', base: 'item' },
+  { id: 'runTotal', label: '누계', base: 'field' },
+  { id: 'percentOfRunningTotal', label: '누계 비율', base: 'field' },
+  { id: 'rankAscending', label: '오름차순 순위 지정', base: 'field' },
+  { id: 'rankDescending', label: '내림차순 순위 지정', base: 'field' },
+  { id: 'index', label: '인덱스' },
 ];
+/** 값 표시 형식이 비율(%)인지 (차이 · 누계 · 순위는 원래 숫자 서식) */
+export const showAsPercent = (as) => !!as && as !== 'normal' && !['difference', 'runTotal', 'rankAscending', 'rankDescending', 'index'].includes(as);
+/** 기준 항목: 항목 글자 또는 이전 · 다음 (basePos: 'prev' | 'next') */
+export const BASE_POS = [{ id: 'prev', label: '(이전)' }, { id: 'next', label: '(다음)' }];
 export const LAYOUTS = [
   { id: 'compact', label: '압축 형식으로 표시' },
   { id: 'outline', label: '개요 형식으로 표시' },
@@ -49,6 +64,7 @@ export const keyOf = keyOf0;
 export const imageOfKey = imageOfKey0;
 export const sortKeys = sortKeys0;
 export const itemText = itemText0;
+export const GROUP_BY = GROUP_BY0;
 export const TOTAL = '총합계';
 
 /** 머리글 이름 (빈 칸은 열N) */
@@ -343,6 +359,12 @@ export function normalizeDef(def, header) {
     groups: byKey(def.groups),
     styleDef: def.styleDef ?? null,
     errorCaption: def.errorCaption ?? null,
+    missingCaption: def.missingCaption ?? null,
+    collapsed: byKey(def.collapsed),
+    showExpand: def.showExpand !== false,
+    repeatLabels: !!def.repeatLabels,
+    blankRows: !!def.blankRows,
+    subtotalTop: def.subtotalTop !== false,
     rowCaption: def.rowCaption ?? null,
     colCaption: def.colCaption ?? null,
     styleOpts: { rowHeaders: true, colHeaders: true, bandRows: false, bandCols: false, ...(def.styleOpts ?? {}) },
@@ -906,14 +928,96 @@ export function computePivot(input, d) {
   const raw = (rpath, cpath, vi) => measures.value(accs.get(`${rpath}\u0002${cpath}`), vi);
   orderTree(rowTree, d.rows, d, (node, vi) => raw(node.path, '', vi));
   orderTree(colTree, d.cols, d, (node, vi) => raw('', node.path, vi));
+  // 축소한 항목 (필드별 항목 글자, 엑셀처럼 필드의 같은 항목은 모두 함께)
+  const collSets = { r: d.rows.map((f) => new Set(d.collapsed?.[f] ?? [])), c: d.cols.map((f) => new Set(d.collapsed?.[f] ?? [])) };
+  const isColl = (axis, node) => node.depth >= 0 && node.depth < (axis === 'r' ? d.rows.length : d.cols.length) - 1 && collSets[axis][node.depth].has(itemText(node.key));
+  const toggleOf = (axis, node) => (d.showExpand && node.depth >= 0 && node.depth < (axis === 'r' ? d.rows.length : d.cols.length) - 1
+    ? { field: (axis === 'r' ? d.rows : d.cols)[node.depth], item: itemText(node.key), collapsed: isColl(axis, node) } : null);
   const cellValue = (rpath, cpath, vi) => {
     if (vi < 0) return null;
     const v = raw(rpath, cpath, vi);
-    if (v === null || typeof v !== 'number') return v;
     const as = values[vi].showAs ?? 'normal';
     if (as === 'normal') return v;
-    const base = as === 'percentOfTotal' ? raw('', '', vi) : as === 'percentOfRow' ? raw(rpath, '', vi) : raw('', cpath, vi);
-    return typeof base === 'number' && base ? v / base : null;
+    if (v !== null && typeof v !== 'number') return v;
+    return showValue(as, values[vi], vi, rpath, cpath, v);
+  };
+  // 값 표시 형식 (엑셀과 같음): 기준 필드의 형제 항목 · 상위 항목 · 합계와 비교
+  const num0 = (x) => (typeof x === 'number' ? x : 0);
+  const ratio = (a, b) => (typeof b === 'number' && b ? num0(a) / b : a === null ? null : CALC_ERR('#DIV/0!'));
+  let pathIdx = null;
+  const nodeOf = (axis, path) => {
+    if (!pathIdx) {
+      pathIdx = { r: new Map([['', rowTree]]), c: new Map([['', colTree]]) };
+      const add = (m, n) => n.children.forEach((ch) => { ch.parent = n.depth >= 0 ? n : null; m.set(ch.path, ch); add(m, ch); });
+      add(pathIdx.r, rowTree);
+      add(pathIdx.c, colTree);
+    }
+    return pathIdx[axis].get(path);
+  };
+  const sibMemo = new Map();
+  const showValue = (as, vdef, vi, rpath, cpath, v) => {
+    if (as === 'percentOfTotal') return ratio(v, raw('', '', vi));
+    if (as === 'percentOfRow') return ratio(v, raw(rpath, '', vi));
+    if (as === 'percentOfCol') return ratio(v, raw('', cpath, vi));
+    if (as === 'index') {
+      const g = raw('', '', vi); const rt = raw(rpath, '', vi); const ct = raw('', cpath, vi);
+      return v === null ? null : typeof rt === 'number' && typeof ct === 'number' && rt && ct ? (v * num0(g)) / (rt * ct) : CALC_ERR('#DIV/0!');
+    }
+    if (as === 'percentOfParentRow' || as === 'percentOfParentCol') {
+      const axis = as === 'percentOfParentRow' ? 'r' : 'c';
+      const node = nodeOf(axis, axis === 'r' ? rpath : cpath);
+      const pp = node && node.depth >= 0 ? node.parent?.path ?? '' : axis === 'r' ? rpath : cpath;
+      return ratio(v, axis === 'r' ? raw(pp, cpath, vi) : raw(rpath, pp, vi));
+    }
+    // 기준 필드: 행 또는 열 필드 (없으면 첫 행 필드)
+    const bf = vdef.baseField ?? d.rows[0] ?? d.cols[0];
+    const lower = String(bf ?? '').toLowerCase();
+    let axis = 'r';
+    let L = d.rows.findIndex((f) => f.toLowerCase() === lower);
+    if (L < 0) { axis = 'c'; L = d.cols.findIndex((f) => f.toLowerCase() === lower); }
+    if (L < 0) return CALC_ERR('#N/A');
+    const mine = axis === 'r' ? rpath : cpath;
+    const at = (p) => (axis === 'r' ? raw(p, cpath, vi) : raw(rpath, p, vi));
+    const node = nodeOf(axis, mine);
+    if (!node) return null;
+    if (node.depth < L) return as === 'percentOfParent' ? ratio(v, v) : null;
+    let a = node;
+    while (a.depth > L) a = a.parent;
+    const rest = mine.slice(a.path.length);
+    if (as === 'percentOfParent') return ratio(v, at(a.path));
+    const sibs = (a.parent ?? (axis === 'r' ? rowTree : colTree)).children;
+    const pos = sibs.indexOf(a);
+    if (as === 'percent' || as === 'difference' || as === 'percentDiff') {
+      let b;
+      if (vdef.basePos === 'prev' || vdef.basePos === 'next') b = sibs[pos + (vdef.basePos === 'prev' ? -1 : 1)] ?? a;
+      else {
+        const want = String(vdef.baseItem ?? '');
+        b = sibs.find((s) => itemText(s.key) === want);
+        if (!b) return CALC_ERR('#N/A');
+      }
+      const base = at(b.path + rest);
+      if (as === 'percent') return base === null ? CALC_ERR('#N/A') : ratio(v, base);
+      if (b === a) return null;
+      if (as === 'difference') return num0(v) - num0(base);
+      return base === null ? CALC_ERR('#N/A') : typeof base === 'number' && base ? (num0(v) - base) / base : CALC_ERR('#DIV/0!');
+    }
+    // 누계 · 순위: 같은 상위 항목 아래 형제들의 값 (한 번 계산해 둠)
+    const mk = `${as}\u0003${axis}\u0003${(a.parent ?? { path: '' }).path}\u0003${rest}\u0003${axis === 'r' ? cpath : rpath}\u0003${vi}`;
+    let arr = sibMemo.get(mk);
+    if (!arr) {
+      const vals = sibs.map((s) => at(s.path + rest));
+      if (as === 'runTotal' || as === 'percentOfRunningTotal') {
+        let acc = 0;
+        arr = vals.map((x) => (acc += num0(x)));
+        if (as === 'percentOfRunningTotal') arr = arr.map((x) => (acc ? x / acc : CALC_ERR('#DIV/0!')));
+      } else {
+        const distinct = [...new Set(vals.filter((x) => typeof x === 'number'))].sort((p, q) => (as === 'rankAscending' ? p - q : q - p));
+        const rank = new Map(distinct.map((x, i) => [x, i + 1]));
+        arr = vals.map((x) => (typeof x === 'number' ? rank.get(x) : null));
+      }
+      sibMemo.set(mk, arr);
+    }
+    return v === null && as !== 'runTotal' && as !== 'percentOfRunningTotal' ? null : arr[pos];
   };
 
   // 열 머리글 잎 목록: { cp, vi, kind: 'item' | 'sub' | 'grand', labels: [수준별 글자] }
@@ -924,8 +1028,9 @@ export function computePivot(input, d) {
   const setParents = (n) => n.children.forEach((c) => { c.parent = n.depth >= 0 ? n : null; setParents(c); });
   setParents(colTree);
   const walkCols = (node, labels) => {
-    if (node.depth === Lc - 1 || !node.children.length) {
-      for (const vi of VI) colLeaves.push({ cp: node.path, vi, kind: 'item', labels: [...labels, ...(multiV ? [valueName(values[vi])] : [])], node });
+    if (node.depth === Lc - 1 || !node.children.length || isColl('c', node)) {
+      const pad = Array(Math.max(0, Lc - 1 - node.depth)).fill('');
+      for (const vi of VI) colLeaves.push({ cp: node.path, vi, kind: 'item', labels: [...labels, ...pad, ...(multiV ? [valueName(values[vi])] : [])], node });
       return;
     }
     node.children.forEach((ch) => walkCols(ch, [...labels, itemText(ch.key)]));
@@ -943,13 +1048,16 @@ export function computePivot(input, d) {
     if (vi < 0) return {};
     const v = values[vi];
     if (v.numFmt) return typeof v.numFmt === 'object' ? v.numFmt : { numFmt: v.numFmt };
-    if ((v.showAs ?? 'normal') !== 'normal') return { numFmt: 'percent', decimals: 2 };
+    if (showAsPercent(v.showAs)) return { numFmt: 'percent', decimals: 2 };
+    if (v.showAs === 'rankAscending' || v.showAs === 'rankDescending') return { numFmt: 'general' };
+    if (v.showAs === 'index') return { numFmt: 'number', decimals: 2 };
     if (calcNames.has(v.field.toLowerCase())) return { numFmt: 'number', decimals: 2 };
     return v.agg === 'average' || v.agg?.startsWith('std') || v.agg?.startsWith('var') ? { numFmt: 'number', decimals: 2 } : { numFmt: 'comma' };
   };
   const val = (n, vi, role) => {
     const style = { ...styleFor(role), ...numStyle(vi) };
-    if (n === null || n === undefined) return { raw: '', style, role };
+    // 빈 셀 표시 옵션
+    if (n === null || n === undefined) return { raw: d.missingCaption ? `'${d.missingCaption}` : '', style, role };
     // 오류 값 표시 옵션: 오류 대신 지정한 글자(빈 칸 포함)
     if (isErr(n)) return d.errorCaption !== null && d.errorCaption !== undefined ? { raw: d.errorCaption === '' ? '' : `'${d.errorCaption}`, style, role } : { raw: n.code, style, role };
     if (typeof n === 'boolean') return { raw: n ? 'TRUE' : 'FALSE', style, role };
@@ -992,7 +1100,15 @@ export function computePivot(input, d) {
         const show = lab !== undefined && (lvl === colLevels - 1 || groupKey !== prev);
         prev = groupKey;
         const role = leaf.kind === 'grand' ? `grandHead:${Math.max(0, leaf.vi)}` : leaf.kind === 'sub' ? 'colSubHead' : multiV && lvl === colLevels - 1 ? `valueHead:${leaf.vi}` : `colItem:${lvl}`;
-        row.push(text(show ? lab : '', role));
+        const cell = text(show ? lab : '', role);
+        // 펼치기 · 축소 단추: 하위 수준이 있는 열 항목
+        if (show && lab && leaf.kind === 'item' && lvl < Lc) {
+          let n = leaf.node;
+          while (n && n.depth > lvl) n = n.parent;
+          const tg = n && n.depth === lvl ? toggleOf('c', n) : null;
+          if (tg) cell.toggle = { axis: 'c', ...tg };
+        }
+        row.push(cell);
       });
       grid.push(row);
     }
@@ -1012,32 +1128,44 @@ export function computePivot(input, d) {
     return `data:${vi}`;
   };
   const valueCells = (rpath, rowKind) => colLeaves.map((leaf) => val(cellValue(rpath, leaf.cp, leaf.vi), leaf.vi, dataRole(leaf, rowKind)));
-  const labelsRow = (node, labelText, role) => {
+  const labelsRow = (node, labelText, role, withToggle = false) => {
     const cells = Array.from({ length: labelCols }, () => text('', role));
     const col = layout === 'compact' ? 0 : node.depth;
     cells[col] = text(labelText, role);
     const img = imageOfKey(node.key);
     if (img) { cells[col].raw = ''; cells[col].image = { src: img.src, alt: img.alt ?? '' }; }
     if (layout === 'compact' && node.depth > 0) cells[col].style.indent = node.depth;
+    if (withToggle) { const tg = toggleOf('r', node); if (tg) cells[col].toggle = { axis: 'r', ...tg }; }
+    // 개요 형식 + 항목 레이블 반복: 상위 항목 글자를 빈 칸에 채움
+    if (layout === 'outline' && d.repeatLabels) for (let n = node.parent; n && n.depth >= 0; n = n.parent) cells[n.depth] = text(itemText(n.key), `rowItem:${n.depth}`);
     return cells;
   };
+  const blankAfter = (node) => {
+    // 항목 다음에 빈 줄 삽입 (가장 안쪽 필드 제외, 엑셀과 같음)
+    if (!d.blankRows || node.depth >= Lr - 1) return;
+    grid.push(Array.from({ length: labelCols + colLeaves.length }, () => text('', 'blank')));
+    rowItems.push({ kind: 'blank', node });
+  };
   const walkRows = (node, lastPath) => {
-    const isLeaf = node.depth === Lr - 1;
+    const coll = isColl('r', node);
+    const isLeaf = node.depth === Lr - 1 || coll;
     if (layout === 'tabular') {
       if (isLeaf) {
-        // 조상 글자는 그룹의 첫 행에만
+        // 조상 글자는 그룹의 첫 행에만 (항목 레이블 반복이면 모든 행)
         const cells = Array.from({ length: labelCols }, (_, dd) => text('', `rowItem:${dd}`));
         const chain = [];
         for (let n = node; n && n.depth >= 0; n = n.parent) chain.unshift(n);
         chain.forEach((n, dd) => {
-          if (lastPath.shown.has(n.path)) return;
+          if (lastPath.shown.has(n.path) && !d.repeatLabels) return;
           cells[dd] = text(itemText(n.key), `rowItem:${dd}`);
           const img = imageOfKey(n.key);
           if (img) { cells[dd].raw = ''; cells[dd].image = { src: img.src, alt: img.alt ?? '' }; }
+          if (!lastPath.shown.has(n.path)) { const tg = toggleOf('r', n); if (tg) cells[dd].toggle = { axis: 'r', ...tg }; }
           lastPath.shown.add(n.path);
         });
-        grid.push([...cells, ...valueCells(node.path, 'item')]);
-        rowItems.push({ kind: 'item', node, chain });
+        grid.push([...cells, ...valueCells(node.path, coll ? 'sub' : 'item')]);
+        rowItems.push({ kind: 'item', node, chain, coll });
+        blankAfter(node);
         return;
       }
       node.children.forEach((ch) => walkRows(ch, lastPath));
@@ -1045,13 +1173,23 @@ export function computePivot(input, d) {
         grid.push([...labelsRow(node, `${itemText(node.key)} 요약`, `rowSub:${node.depth}`), ...valueCells(node.path, 'sub')]);
         rowItems.push({ kind: 'sub', node });
       }
+      blankAfter(node);
       return;
     }
     const group = !isLeaf;
-    const cells = labelsRow(node, itemText(node.key), group ? `rowGroup:${node.depth}` : `rowItem:${node.depth}`);
-    grid.push([...cells, ...(group && !d.subtotals ? colLeaves.map((leaf) => text('', `groupData:${Math.max(0, leaf.vi)}`)) : valueCells(node.path, group ? 'group' : 'item'))]);
-    rowItems.push({ kind: 'item', node });
-    node.children.forEach((ch) => walkRows(ch, lastPath));
+    // 부분합: 그룹 맨 위(기본) 또는 맨 아래 '… 요약' 행, 축소한 항목은 자기 행에 합계
+    const valuesHere = coll || !group || (d.subtotals && d.subtotalTop);
+    const cells = labelsRow(node, itemText(node.key), group ? `rowGroup:${node.depth}` : coll ? `rowGroup:${node.depth}` : `rowItem:${node.depth}`, true);
+    grid.push([...cells, ...(valuesHere ? valueCells(node.path, coll ? 'group' : group ? 'group' : 'item') : colLeaves.map((leaf) => text('', `groupData:${Math.max(0, leaf.vi)}`)))]);
+    rowItems.push({ kind: 'item', node, coll });
+    if (group) {
+      node.children.forEach((ch) => walkRows(ch, lastPath));
+      if (d.subtotals && !d.subtotalTop) {
+        grid.push([...labelsRow(node, `${itemText(node.key)} 요약`, `rowSub:${node.depth}`), ...valueCells(node.path, 'sub')]);
+        rowItems.push({ kind: 'sub', node });
+      }
+    }
+    blankAfter(node);
   };
   setParents(rowTree);
   if (Lr) rowTree.children.forEach((ch) => walkRows(ch, { shown: new Set() }));
@@ -1118,7 +1256,7 @@ function pivotChartDataRaw(rows, def, fieldStyle) {
   const rowIdx = [];
   if (!d.rows.length) { cats.push(TOTAL); rowIdx.push(body); }
   meta.rowItems.forEach((it, i) => {
-    if (it.kind !== 'item' || it.node.children.length) return;
+    if (it.kind !== 'item' || (it.node.children.length && !it.coll)) return;
     const chain = [];
     for (let n = it.node; n && n.depth >= 0; n = n.parent) {
       const st = typeof n.key === 'number' ? fieldStyle?.(d.rows[n.depth]) : null;
@@ -1174,4 +1312,67 @@ export function pivotLookup(rows, def, dataField, pairs) {
   if (!any) return null;
   const v = res.measures.value(list, vi);
   return typeof v === 'number' ? v : null;
+}
+
+/**
+ * 세부 정보 표시 (값 셀 두 번 클릭): 피벗 결과의 (gr, gc) 칸을 이루는 원본 행
+ * → { header, cube, idx: Uint32Array (큐브 행 번호), conds: [[필드, 항목 글자]] } | null (값 칸이 아님)
+ */
+export function pivotDetail(input, def, gr, gc) {
+  const res = resolvePivot(input, def);
+  const d = res.def;
+  const { meta } = computePivot(res, d);
+  if (meta.empty) return null;
+  const bi = gr - meta.pageRows - meta.headerRows;
+  const ci = gc - meta.labelCols;
+  if (bi < 0 || ci < 0 || ci >= meta.colLeaves.length || meta.colLeaves[ci].vi < 0) return null;
+  const leaf = meta.colLeaves[ci];
+  let rnode = null;
+  if (d.rows.length) {
+    const it = meta.rowItems[bi];
+    if (!it || it.kind === 'blank') return null;
+    rnode = it.kind === 'grand' ? null : it.node;
+  } else if (bi !== 0) return null;
+  const cube = res.cube;
+  const lower = cube.header.map((h) => String(h).toLowerCase());
+  const dimFor = (name) => {
+    const j = lower.indexOf(String(name).toLowerCase());
+    const spec = d.groups?.[cube.header[j]];
+    return spec ? groupedColumn(cube, j, spec) : cube.col(j);
+  };
+  // 조건: 행 · 열 항목 경로 (그룹화한 필드는 그룹 키로)
+  const conds = [];
+  const tests = [];
+  const addCond = (field, key) => {
+    conds.push([field, itemText(key)]);
+    const { codes, keys } = dimFor(field).dim();
+    const want = kk(key);
+    const ok = new Uint8Array(keys.length);
+    keys.forEach((k, c) => { ok[c] = kk(k) === want ? 1 : 0; });
+    tests.push({ codes, ok });
+  };
+  for (let n = rnode; n && n.depth >= 0; n = n.parent) addCond(d.rows[n.depth], n.key);
+  for (let n = leaf.kind === 'grand' ? null : leaf.node; n && n.depth >= 0; n = n.parent) addCond(d.cols[n.depth], n.key);
+  // 값 · 레이블 · 상위 10 필터로 숨긴 항목은 제외 (보이는 그룹만)
+  let visible = null;
+  const allDims = [...d.rows, ...d.cols].map(dimFor);
+  if (Object.keys(d.fieldFilters ?? {}).length && allDims.length) {
+    visible = new Set(res.groups.map((g) => [...g.r, ...g.c].map(kk).join('\u0001')));
+    allDims.forEach((col) => col.dim());
+  }
+  const sel = filterRows(cube, res.filters ?? []);
+  const n = sel ? sel.length : cube.n;
+  const out = new Uint32Array(n);
+  let m = 0;
+  const T = tests.length;
+  outer: for (let x = 0; x < n; x++) {
+    const i = sel ? sel[x] : x;
+    for (let t = 0; t < T; t++) if (!tests[t].ok[tests[t].codes[i]]) continue outer;
+    if (visible) {
+      const key = allDims.map((col) => { const dm = col._dim ?? col.dim(); return kk(dm.keys[dm.codes[i]]); }).join('\u0001');
+      if (!visible.has(key)) continue;
+    }
+    out[m++] = i;
+  }
+  return { header: cube.header, cube, idx: out.slice(0, m), conds };
 }

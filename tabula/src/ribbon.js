@@ -264,11 +264,27 @@ export const TABS = [
           medium('pivotOptions', 'pivot', '옵션'),
         ),
       ]),
+      group('활성 필드', [
+        col(
+          medium('pivotExpandField', 'plus', '전체 필드 확장', { title: '활성 필드의 모든 항목 확장' }),
+          medium('pivotCollapseField', 'collapse', '전체 필드 축소', { title: '활성 필드의 모든 항목 축소' }),
+        ),
+      ]),
+      group('그룹', [
+        col(
+          medium('pivotGroupField', 'pivot', '필드 그룹', { title: '날짜를 연 · 분기 · 월로, 숫자를 구간으로 묶기' }),
+          medium('pivotUngroup', 'clear', '그룹 해제'),
+          medium('pivotDetail', 'table', '세부 정보 표시', { title: '선택한 값 셀의 원본 행을 새 시트에 (값 셀 두 번 클릭)' }),
+        ),
+      ]),
       group('필터', [large('insertSlicer', 'slicer', '슬라이서 삽입'), large('slicerConnections', 'slicer', '필터 연결', { title: '이 피벗 테이블에 연결할 슬라이서' })]),
       group('데이터', [large('pivotRefresh', 'refresh', '새로 고침', { title: '새로 고침 (Alt+F5)' }), large('pivotChangeSource', 'table', '데이터 원본 변경')]),
       group('동작', [large('pivotClear', 'clear', '지우기', { title: '필드를 모두 지우기' })]),
       group('계산', [large('calcField', 'fx', '필드, 항목 및 집합', { title: '계산 필드 삽입 (CPC · CTR · ROAS 등)' })]),
-      group('표시', [large('pivotFieldList', 'pivot', '필드 목록', { title: '피벗 테이블 필드 창 표시/숨기기' })]),
+      group('표시', [
+        large('pivotFieldList', 'pivot', '필드 목록', { title: '피벗 테이블 필드 창 표시/숨기기' }),
+        large('pivotShowExpand', 'plus', '+/- 단추', { title: '항목 확장 · 축소 단추 표시', toggle: 'pvShowExpand' }),
+      ]),
     ],
   },
   {
@@ -277,6 +293,7 @@ export const TABS = [
         large('pivotSubtotalsMenu', 'table', '부분합', { menu: 'pivotSubtotals' }),
         large('pivotGrandMenu', 'table', '총합계', { menu: 'pivotGrand' }),
         large('pivotLayoutMenu', 'table', '보고서 레이아웃', { menu: 'pivotLayout' }),
+        large('pivotBlankMenu', 'rowInsert', '빈 행', { menu: 'pivotBlank' }),
       ]),
       group('피벗 테이블 스타일 옵션', [
         col(check('pvRowHeaders', '행 머리글', 'pvRowHeaders'), check('pvColHeaders', '열 머리글', 'pvColHeaders')),

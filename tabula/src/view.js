@@ -454,6 +454,14 @@ export class GridView {
     const merges = sheet.merges.filter((m) => m.r1 <= r2 && m.r2 >= r1 && m.c1 <= c2 && m.c2 >= c1);
     const inMerge = (r, c) => merges.some((m) => r >= m.r1 && r <= m.r2 && c >= m.c1 && c <= m.c2);
     const html = [];
+    // 피벗 +/− 단추가 있는 셀: 글자를 단추 오른쪽으로
+    this._tog = null;
+    for (const pd of [sheet.pivot, ...(sheet.pivotsExtra ?? [])]) {
+      for (const b of pd?.buttons ?? []) {
+        if (b.kind !== 'toggle' || b.r < r1 || b.r > r2) continue;
+        (this._tog ??= new Set()).add(`${b.r},${b.c}`);
+      }
+    }
     const hasLine = !!(sheet.allStyle || Object.keys(sheet.colStyles).length || Object.keys(sheet.rowStyles).length);
     const tables = (sheet.tables ?? []).filter((t) => t.r1 <= r2 && t.r2 >= r1 && t.c1 <= c2 && t.c2 >= c1 && styleByName(t.style));
     const inTable = (r, c) => tables.some((t) => r >= t.r1 && r <= t.r2 && c >= t.c1 && c <= t.c2);
@@ -498,6 +506,12 @@ export class GridView {
       if (!pd.buttons) return;
       const filtered = (field) => !!(field && (pd.filters?.[field] || pd.fieldFilters?.[field]));
       for (const b of pd.buttons) {
+        if (b.kind === 'toggle') {
+          if (b.r < r1 || b.r > r2 || b.c < c1 || b.c > c2 || !cols.size(b.c) || !rows.size(b.r)) continue;
+          const ind = (wb.styleAt(si, b.r, b.c).indent ?? 0) * 9;
+          html.push(`<div class="pxbtn${b.collapsed ? ' coll' : ''}" data-p="${pi}" data-f="${esc(b.field)}" data-i="${esc(b.item)}" title="${b.collapsed ? '확장' : '축소'}" style="left:${cols.pos(b.c) + 3 + ind - p.ox}px;top:${rows.pos(b.r) + Math.max(0, (rows.size(b.r) - 11) / 2) - p.oy}px"></div>`);
+          continue;
+        }
         if (b.r < r1 || b.r > r2 || b.c < c1 || b.c > c2 || !cols.size(b.c) || !rows.size(b.r)) continue;
         const fields = b.field ? [b.field] : b.kind === 'rows' ? pd.rows ?? [] : b.kind === 'cols' ? pd.cols ?? [] : [];
         const on = fields.some(filtered) || (b.kind !== 'page' && fields.some((f) => pd.sort?.[f]));
@@ -553,7 +567,8 @@ export class GridView {
     if (eff !== 'left') css.push(`justify-content:${eff === 'center' ? 'center' : 'flex-end'};text-align:${eff}`);
     if (style.valign === 'top') css.push('align-items:flex-start');
     else if (style.valign === 'middle') css.push('align-items:center');
-    if (style.indent) css.push(`padding-${eff === 'right' ? 'right' : 'left'}:${3 + style.indent * 9}px`);
+    if (this._tog?.has(`${r},${c}`)) css.push(`padding-left:${3 + (style.indent ?? 0) * 9 + 14}px`);
+    else if (style.indent) css.push(`padding-${eff === 'right' ? 'right' : 'left'}:${3 + style.indent * 9}px`);
     const bg = style.fill || (merge ? '#fff' : null);
     if (bar) {
       // 그라데이션(엑셀 기본) 또는 단색, 음수 막대는 오른쪽에서 왼쪽으로

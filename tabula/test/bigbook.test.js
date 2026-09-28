@@ -1,7 +1,7 @@
 // 큰 통합 문서용 동작: 파일 계산 결과 재사용, 시트별 다시 계산, 가벼운 실행 취소, 빠른 시트 읽기
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { zip } from '../src/zip.js';
+import { zip, unzip, textOf } from '../src/zip.js';
 import { readXlsx, readXlsxAsync, writeXlsx } from '../src/xlsx.js';
 import { Workbook } from '../src/workbook.js';
 import { ColBuilder, blockValue } from '../src/block.js';
@@ -258,3 +258,69 @@ function computePivotGrid(input, def) {
   const res = resolvePivot(input, def);
   return computePivot(res, res.def).grid.map((r) => r.map((c) => c?.raw ?? ''));
 }
+
+test('피벗 값 표시 형식: 누계 · 차이 · 기준값 · 순위 · 상위 합계 비율 + xlsx 왕복', async () => {
+  const { buildPivot } = await import('../src/pivot.js');
+  const rows = [['지역', '월', '매출'], ['A', 1, 10], ['A', 2, 30], ['A', 3, 20], ['B', 1, 5], ['B', 2, 5], ['B', 3, 40]];
+  const col = (as, extra = {}) => buildPivot(rows, { rows: ['지역', '월'], cols: [], values: [{ field: '매출', agg: 'sum', showAs: as, ...extra }], layout: 'tabular' })
+    .slice(1).map((r) => r[2].raw);
+  assert.deepEqual(col('runTotal', { baseField: '월' }).slice(0, 3), ['10', '40', '60']);
+  assert.deepEqual(col('difference', { baseField: '월', basePos: 'prev' }).slice(0, 3), ['', '20', '-10']);
+  assert.deepEqual(col('percent', { baseField: '월', baseItem: '1' }).slice(4, 7), ['1', '1', '8']);
+  assert.deepEqual(col('rankDescending', { baseField: '월' }).slice(4, 7), ['2', '2', '1']);
+  assert.equal(col('percentDiff', { baseField: '지역', baseItem: 'A' })[7], String(Number((-10 / 60).toPrecision(15))));
+  assert.deepEqual(col('percentOfParentRow').slice(-1), ['1']);
+  // xlsx: 기본 이름은 showDataAs, 확장 이름은 x14 pivotShowAs, 이전 항목은 특수 번호
+  const wb = new Workbook();
+  wb.transact(() => rows.forEach((row, r) => row.forEach((v, c) => wb.setInput(0, r, c, String(v)))));
+  const at = wb.transact(() => wb.addSheet('피벗'));
+  const def = {
+    source: 'Sheet1', range: { r1: 0, c1: 0, r2: 6, c2: 2 }, rows: ['지역', '월'], cols: [], layout: 'tabular', top: 0, left: 0,
+    values: [{ field: '매출', agg: 'sum', showAs: 'difference', baseField: '월', basePos: 'prev', name: '차이' },
+      { field: '매출', agg: 'sum', showAs: 'rankDescending', baseField: '월', name: '순위' },
+      { field: '매출', agg: 'sum', showAs: 'percent', baseField: '지역', baseItem: 'B', name: '기준' }],
+  };
+  wb.transact(() => wb.setSheetProp(at, 'pivot', { ...def, area: { r1: 0, c1: 0, r2: 12, c2: 4 } }));
+  const files = unzip(writeXlsx(wb));
+  const pt = textOf(files['xl/pivotTables/pivotTable1.xml']);
+  assert.match(pt, /showDataAs="difference" baseField="1" baseItem="1048828"/);
+  assert.match(pt, /pivotShowAs="rankDescending"/);
+  const back = readXlsx(zip(files)).data.sheets[1].pivot;
+  assert.deepEqual(back.values.map((v) => [v.showAs, v.baseField, v.baseItem ?? v.basePos]),
+    [['difference', '월', 'prev'], ['rankDescending', '월', undefined], ['percent', '지역', 'B']]);
+});
+
+test('피벗 펼치기 · 축소, 부분합 아래, 빈 줄, 레이블 반복, 빈 셀 표시, 세부 정보 + xlsx 왕복', async () => {
+  const { buildPivot, pivotDetail } = await import('../src/pivot.js');
+  const rows = [['지역', '구', '분기', '매출'], ['서울', '강남', 'Q1', 100], ['서울', '강북', 'Q1', 50], ['부산', '해운대', 'Q2', 30], ['서울', '강남', 'Q2', 20]];
+  const base = { rows: ['지역', '구'], cols: [], values: [{ field: '매출', agg: 'sum' }] };
+  const col0 = (def) => buildPivot(rows, def).map((r) => r.map((c) => c.raw).join('|'));
+  // 축소: 서울의 하위 항목이 사라지고 서울 행에 합계
+  assert.deepEqual(col0({ ...base, collapsed: { 지역: ['서울'] } }), ['행 레이블|합계 : 매출', '부산|30', '해운대|30', '서울|170', '총합계|200']);
+  const g = buildPivot(rows, { ...base, collapsed: { 지역: ['서울'] } });
+  assert.deepEqual(g[3][0].toggle, { axis: 'r', field: '지역', item: '서울', collapsed: true });
+  // 부분합을 아래에 + 빈 줄 + 빈 셀 표시
+  assert.deepEqual(col0({ ...base, layout: 'outline', subtotalTop: false, blankRows: true }),
+    ['지역|구|합계 : 매출', '부산||', '|해운대|30', '부산 요약||30', '||', '서울||', '|강남|120', '|강북|50', '서울 요약||170', '||', '총합계||200']);
+  assert.equal(col0({ rows: ['지역'], cols: ['분기'], values: [{ field: '매출', agg: 'sum' }], missingCaption: '-' })[2], "부산|'-|30|30");
+  // 레이블 반복 (테이블 형식)
+  assert.deepEqual(col0({ ...base, layout: 'tabular', repeatLabels: true, subtotals: false }), ['지역|구|합계 : 매출', '부산|해운대|30', '서울|강남|120', '서울|강북|50', '총합계||200']);
+  // 세부 정보: 서울 / 강남 → 원본 2행
+  const det = pivotDetail(rows, base, 4, 1);
+  assert.deepEqual([...det.idx].map((i) => det.cube.row(i)), [['서울', '강남', 'Q1', 100], ['서울', '강남', 'Q2', 20]]);
+  assert.equal(pivotDetail(rows, base, 0, 1), null);
+  // xlsx: sd="0", subtotalTop="0", insertBlankRow, fillDownLabels, missingCaption
+  const wb = new Workbook();
+  wb.transact(() => rows.forEach((row, r) => row.forEach((v, c) => wb.setInput(0, r, c, String(v)))));
+  const at = wb.transact(() => wb.addSheet('피벗'));
+  const def = { source: 'Sheet1', range: { r1: 0, c1: 0, r2: 4, c2: 3 }, ...base, layout: 'outline', top: 0, left: 0,
+    collapsed: { 지역: ['부산'] }, subtotalTop: false, blankRows: true, repeatLabels: true, missingCaption: '-' };
+  wb.transact(() => wb.setSheetProp(at, 'pivot', { ...def, area: { r1: 0, c1: 0, r2: 10, c2: 2 } }));
+  const files = unzip(writeXlsx(wb));
+  const pt = textOf(files['xl/pivotTables/pivotTable1.xml']);
+  assert.match(pt, /sd="0"/);
+  assert.match(pt, /missingCaption="-"/);
+  assert.match(pt, /<i t="blank">/);
+  const back = readXlsx(zip(files)).data.sheets[1].pivot;
+  assert.deepEqual([back.collapsed, back.subtotalTop, back.blankRows, back.repeatLabels, back.missingCaption], [{ 지역: ['부산'] }, false, true, true, '-']);
+});

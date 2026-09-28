@@ -249,6 +249,13 @@ input.rselect { padding: 0 4px; }
   cursor: default; z-index: 1;
 }
 .fbtn:hover { border-color: var(--green); }
+.pxbtn {
+  position: absolute; width: 11px; height: 11px; box-sizing: border-box; border: 1px solid #8c8c8c; background: #fff
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='9'%3E%3Cpath d='M2 4.5h5' stroke='%23333'/%3E%3C/svg%3E") center no-repeat;
+  cursor: default; z-index: 1;
+}
+.pxbtn.coll { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='9'%3E%3Cpath d='M2 4.5h5M4.5 2v5' stroke='%23333'/%3E%3C/svg%3E"); }
+.pxbtn:hover { border-color: var(--green); }
 .fbtn.on {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12'%3E%3Cpath d='M1 1.5h7L5.5 5v4L3.5 8V5z' fill='%23217346'/%3E%3Cpath d='M8.5 6.5l1.5 1.5 1.5-1.5' fill='none' stroke='%23555'/%3E%3C/svg%3E");
 }
