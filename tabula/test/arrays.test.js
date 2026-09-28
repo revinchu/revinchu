@@ -189,3 +189,22 @@ test('복잡한 피벗 테이블 xlsx 왕복: 행 2개 · 열 · 값 2개 · 보
   wb.transact(() => wb.setInput(at, 30, 0, '=GETPIVOTDATA("매출",A3,"지역","서울","분기","Q1")'));
   assert.equal(wb.getValue(at, 30, 0), 150);
 });
+
+test('빠른 채우기 · 하이퍼링크 xlsx 왕복', async () => {
+  const { flashFill } = await import('../src/flashfill.js');
+  assert.deepEqual(flashFill([{ sources: ['홍길동 <gd.hong@abc.com>'], target: 'gd.hong' }], [['김철수 <cs.kim@xyz.com>']]), ['cs.kim']);
+  assert.deepEqual(flashFill([{ sources: ['john', 'smith'], target: 'Smith, John' }], [['mary', 'jones']]), ['Jones, Mary']);
+  assert.deepEqual(flashFill([{ sources: ['010-1234-5678'], target: '01012345678' }], [['010-9876-5432']]), ['01098765432']);
+  const wb = book({ A1: '회사', A2: '목차' });
+  wb.transact(() => {
+    wb.setCellData(0, 0, 0, { raw: '회사', link: 'https://example.com/a?b=1&c=2' });
+    wb.setCellData(0, 1, 0, { raw: '목차', link: '#Sheet1!C5' });
+  });
+  const bytes = writeXlsx(wb);
+  const files = unzip(bytes);
+  assert.match(textOf(files['xl/worksheets/sheet1.xml']), /<hyperlinks><hyperlink ref="A1" r:id="rId\d+"\/><hyperlink ref="A2" location="Sheet1!C5"/);
+  assert.match(textOf(files['xl/worksheets/_rels/sheet1.xml.rels']), /TargetMode="External"/);
+  const back = new Workbook(readXlsx(bytes).data);
+  assert.equal(back.getCell(0, 0, 0).link, 'https://example.com/a?b=1&c=2');
+  assert.equal(back.getCell(0, 1, 0).link, '#Sheet1!C5');
+});

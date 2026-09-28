@@ -8,6 +8,7 @@ import {
   formatValue, displayedDecimals, parseInput, formatCode, styleForCode, codeOfStyle, adjustCodeDecimals, formatGeneral,
 } from './format.js';
 import { buildRibbon, FONTS, FONT_SIZES, TABS } from './ribbon.js';
+import { flashFill } from './flashfill.js';
 import {
   el, hydrateIcons, toast, openMenu, closeMenus, isMenuOpen, openDialog, alertDialog,
   formDialog, setMenuCloseHandler, setDialogCloseHandler, isDialogOpen,
@@ -811,6 +812,55 @@ function onGridKey(e) {
   }
   if (e.altKey && !ctrl && (k === '=' || e.code === 'Equal')) { handled(); run('autosum'); return; }
   if (e.altKey && k === 'F1') { handled(); run('chartColumn'); return; }
+  // ── 엑셀 바로 가기 키 ──
+  const code = e.code;
+  if (ctrl && e.altKey && code === 'KeyV') { handled(); run('pasteSpecial'); return; }
+  if (ctrl && e.altKey && code === 'KeyL') { handled(); run('reapplyFilter'); return; }
+  if (ctrl && e.altKey && k === 'F5') { handled(); run('refreshAll'); return; }
+  if (e.altKey && !ctrl && k === 'F5') { handled(); run('pivotRefresh'); return; }
+  if ((ctrl && e.altKey && k === 'F9') || (e.shiftKey && !ctrl && k === 'F9')) { handled(); run('recalc'); return; }
+  if (e.altKey && !ctrl && (k === 'F8' || k === 'F11')) { handled(); run('macros'); return; }
+  if (e.altKey && !ctrl && (k === 'PageDown' || k === 'PageUp')) { handled(); gv.scrollBy((k === 'PageDown' ? 1 : -1) * gv.viewW * 0.9, 0); return; }
+  if (!ctrl && !e.altKey) {
+    if (k === 'F4') { handled(); repeatLast(); return; }
+    if (k === 'F5') { handled(); run(e.shiftKey ? 'find' : 'goto'); return; }
+    if (k === 'F3' && e.shiftKey) { handled(); run('insertFunction'); return; }
+    if (k === 'F11' && !e.shiftKey) { handled(); run('chartColumn'); return; }
+    if (k === 'F10' && e.shiftKey) {
+      handled();
+      const rect = gv.clientRect({ r1: active.r, c1: active.c, r2: active.r, c2: active.c });
+      showContextMenu({ x: rect.left + 10, y: rect.bottom }, 'cell');
+      return;
+    }
+    if (k === 'Backspace' && e.shiftKey) { handled(); selectCell(active.r, active.c); return; }
+    if (k === 'F8' && !e.shiftKey) { handled(); extendMode = !extendMode; dom.status.textContent = extendMode ? '선택 영역 확장' : '준비'; return; }
+    if (extendMode && k === 'Escape') { extendMode = false; setMode(); }
+  }
+  if (ctrl && !e.altKey) {
+    if (k === 'Backspace') { handled(); gv.ensureVisible(active.r, active.c); return; }
+    if (k === '.') { handled(); nextCorner(); return; }
+    if (code === 'BracketLeft') { handled(); run('selectPrecedents'); return; }
+    if (code === 'BracketRight') { handled(); run('selectDependents'); return; }
+    if (code === 'Quote') { handled(); copyFromAbove(e.shiftKey); return; }
+    if (k === 'F2') { handled(); run('print'); return; }
+    if (!e.shiftKey && (k === 'e' || k === 'E')) { handled(); run('flashFill'); return; }
+    if (!e.shiftKey && (k === 'k' || k === 'K')) { handled(); run('hyperlink'); return; }
+    if (!e.shiftKey && (k === 'n' || k === 'N')) { handled(); run('newWorkbook'); return; }
+    if (!e.shiftKey && (k === 'y' || k === 'Y')) { handled(); if (wb.canRedo()) run('redo'); else repeatLast(); return; }
+    if (e.shiftKey) {
+      const more = {
+        Digit2: 'fmtTime', Digit6: 'fmtScientific', Minus: 'borderNone', Digit9: 'unhideRows', Digit0: 'unhideCols', Digit8: 'selectRegion',
+        KeyO: 'selectComments', KeyT: 'tblTotals', KeyF: 'fontDialog', KeyP: 'fontDialog', KeyU: 'toggleFormulaBarSize', KeyE: 'flashFill',
+      };
+      if (more[code]) {
+        handled();
+        if (more[code] === 'tblTotals') { if (tableHere()) run('tblTotals'); return; }
+        if (more[code] === 'toggleFormulaBarSize') { dom.formulaRow.classList.toggle('tall'); return; }
+        run(more[code]);
+        return;
+      }
+    }
+  }
   if (k === 'F3' && !e.altKey) {
     handled();
     run(ctrl && e.shiftKey ? 'createNamesFromSel' : ctrl ? 'nameManager' : 'pasteName');
@@ -855,10 +905,10 @@ function onGridKey(e) {
   }
 
   switch (k) {
-    case 'ArrowUp': handled(); move(-1, 0, { extend: e.shiftKey }); return;
-    case 'ArrowDown': handled(); move(1, 0, { extend: e.shiftKey }); return;
-    case 'ArrowLeft': handled(); move(0, -1, { extend: e.shiftKey }); return;
-    case 'ArrowRight': handled(); move(0, 1, { extend: e.shiftKey }); return;
+    case 'ArrowUp': handled(); move(-1, 0, { extend: e.shiftKey || extendMode }); return;
+    case 'ArrowDown': handled(); move(1, 0, { extend: e.shiftKey || extendMode }); return;
+    case 'ArrowLeft': handled(); move(0, -1, { extend: e.shiftKey || extendMode }); return;
+    case 'ArrowRight': handled(); move(0, 1, { extend: e.shiftKey || extendMode }); return;
     case 'Enter':
       handled();
       if (clip && !e.shiftKey) { pasteInternal('all'); clip = null; updateSelectionUI(); setMode(); return; }
@@ -893,6 +943,150 @@ function onGridKey(e) {
       return;
     default:
   }
+}
+
+
+// ───────────────────────── 엑셀 바로 가기 키 도우미 ─────────────────────────
+let lastRepeat = null; // F4 / Ctrl+Y: 마지막 작업 반복
+let extendMode = false; // F8: 선택 영역 확장 모드
+const REPEATABLE = new Set(['insertRows', 'insertCols', 'deleteRows', 'deleteCols', 'mergeCenter', 'wrap', 'clearContents', 'clearFormats', 'clearAll',
+  'hideRows', 'hideCols', 'indentInc', 'indentDec', 'incDecimal', 'decDecimal', 'growFont', 'shrinkFont', 'autofitSel', 'autofitRowsSel', 'addSheet', 'fillDown', 'fillRight']);
+
+function repeatLast() {
+  if (!lastRepeat) { toast('반복할 작업이 없습니다.'); return; }
+  lastRepeat();
+}
+
+/** Ctrl+' : 위 셀의 수식을 그대로(참조 이동 없이) 복사해 편집 / Ctrl+Shift+" : 위 셀의 값 */
+function copyFromAbove(valueOnly) {
+  if (active.r === 0) return;
+  const raw = wb.getRaw(si, active.r - 1, active.c);
+  const v = wb.getValue(si, active.r - 1, active.c);
+  if (valueOnly) {
+    const text = v === null ? '' : isError(v) ? v.code : typeof v === 'number' ? formatGeneral(v) : typeof v === 'boolean' ? (v ? 'TRUE' : 'FALSE') : String(v);
+    startEdit('enter', text);
+  } else startEdit('enter', raw);
+}
+
+/** Ctrl+E 빠른 채우기 */
+function flashFillCmd() {
+  if (editing && !commitEdit()) return;
+  const c = active.c;
+  const region = currentRegion(active.r, Math.max(0, c - 1));
+  const r1 = region.r1;
+  const r2 = region.r2;
+  const srcCols = [];
+  for (let x = region.c1; x <= region.c2; x++) if (x !== c) srcCols.push(x);
+  if (!srcCols.length) { toast('빠른 채우기: 옆 열에 원본 데이터가 필요합니다.'); return; }
+  const text = (r, x) => { const v = wb.getValue(si, r, x); return v === null ? '' : typeof v === 'number' ? formatGeneral(v) : String(v); };
+  const examples = [];
+  const todo = [];
+  // 머리글 행은 원본과 대상이 모두 글자일 때 건너뜀
+  for (let r = r1; r <= r2; r++) {
+    const sources = srcCols.map((x) => text(r, x));
+    if (sources.every((x) => x === '')) continue;
+    const t = wb.getRaw(si, r, c);
+    if (t) examples.push({ r, sources, target: text(r, c) });
+    else todo.push({ r, sources });
+  }
+  let ex = examples.filter((e) => e.r >= active.r - 50);
+  if (ex.length > 1 && ex[0].r === r1 && todo.length) ex = ex.slice(1).length ? ex.slice(1) : ex; // 머리글 제외
+  if (!ex.length || !todo.length) { toast('빠른 채우기: 채울 예시(첫 행에 원하는 결과)를 먼저 입력하세요.'); return; }
+  let out = flashFill(ex, todo.map((t) => t.sources));
+  if (!out && ex.length > 1) out = flashFill(ex.slice(-1), todo.map((t) => t.sources));
+  if (!out || out.every((x) => x === null)) { toast('빠른 채우기로 채울 값을 찾을 수 없습니다.'); return; }
+  let n = 0;
+  wb.transact(() => todo.forEach((t, i) => { if (out[i] !== null && out[i] !== '') { wb.setInput(si, t.r, c, out[i]); n++; } }), meta());
+  toast(`빠른 채우기: ${n}개 셀을 채웠습니다.`);
+}
+
+/** Ctrl+[ 참조되는 셀 / Ctrl+] 참조하는 셀 선택 */
+function selectPrecedents() {
+  const raw = wb.getRaw(si, active.r, active.c);
+  const refs = listRefs(raw).filter((x) => !x.sheet || wb.sheetIndexByName(x.sheet) >= 0);
+  if (!refs.length) { toast('참조되는 셀이 없습니다.'); return; }
+  const target = refs[0].sheet ? wb.sheetIndexByName(refs[0].sheet) : si;
+  const same = refs.filter((x) => (x.sheet ? wb.sheetIndexByName(x.sheet) : si) === target);
+  const u = wb.usedRange(target);
+  const rg = {
+    r1: Math.min(...same.map((x) => x.r1)), c1: Math.min(...same.map((x) => x.c1)),
+    r2: Math.min(Math.max(...same.map((x) => x.r2)), Math.max(0, u.rows - 1)), c2: Math.min(Math.max(...same.map((x) => x.c2)), Math.max(0, u.cols - 1)),
+  };
+  if (target !== si) switchSheet(target);
+  gv.ensureVisible(rg.r1, rg.c1);
+  selectRange(rg, 'cells', { r: rg.r1, c: rg.c1 });
+}
+
+function selectDependents() {
+  const hits = [];
+  const me = sheet().name.toLowerCase();
+  for (const [k, cell] of sheet().cells) {
+    if (!cell.formula) continue;
+    const [r, c] = k.split(',').map(Number);
+    if (listRefs(cell.raw).some((x) => (!x.sheet || x.sheet.toLowerCase() === me) && active.r >= x.r1 && active.r <= x.r2 && active.c >= x.c1 && active.c <= x.c2)) hits.push([r, c]);
+  }
+  if (!hits.length) { toast('참조하는 셀이 없습니다.'); return; }
+  const rg = { r1: Math.min(...hits.map((h) => h[0])), c1: Math.min(...hits.map((h) => h[1])), r2: Math.max(...hits.map((h) => h[0])), c2: Math.max(...hits.map((h) => h[1])) };
+  gv.ensureVisible(hits[0][0], hits[0][1]);
+  selectRange(rg, 'cells', { r: hits[0][0], c: hits[0][1] });
+  if (hits.length > 1) toast(`참조하는 셀 ${hits.length}개`);
+}
+
+/** Ctrl+. 선택 영역의 다음 모서리로 */
+function nextCorner() {
+  const corners = [[sel.r1, sel.c1], [sel.r1, sel.c2], [sel.r2, sel.c2], [sel.r2, sel.c1]];
+  const i = corners.findIndex(([r, c]) => r === active.r && c === active.c);
+  const [r, c] = corners[(i + 1) % 4];
+  const keep = { ...sel };
+  selectRange(keep, selKind, { r, c });
+  gv.ensureVisible(r, c);
+}
+
+/** Ctrl+Shift+O 메모가 있는 셀 */
+function selectComments() {
+  const hits = [...sheet().cells].filter(([, cell]) => cell.comment).map(([k]) => k.split(',').map(Number));
+  if (!hits.length) { toast('메모가 있는 셀이 없습니다.'); return; }
+  const rg = { r1: Math.min(...hits.map((h) => h[0])), c1: Math.min(...hits.map((h) => h[1])), r2: Math.max(...hits.map((h) => h[0])), c2: Math.max(...hits.map((h) => h[1])) };
+  selectRange(rg, 'cells', { r: hits[0][0], c: hits[0][1] });
+  toast(`메모가 있는 셀 ${hits.length}개`);
+}
+
+/** Ctrl+K 하이퍼링크 */
+function hyperlinkDialog() {
+  if (editing && !commitEdit()) return;
+  const cell = wb.getCell(si, active.r, active.c);
+  formDialog('하이퍼링크 삽입', [
+    { name: 'text', label: '표시할 텍스트', value: displayText(active.r, active.c) || '' },
+    { name: 'url', label: '주소 (웹 주소 또는 #시트!A1)', value: cell?.link ?? '' },
+  ], (v) => {
+    let url = v.url.trim();
+    if (!url) { toast('주소를 입력하세요.'); return false; }
+    if (!url.startsWith('#') && !/^[a-z][\w+.-]*:/i.test(url)) url = /^[^\s/]+![$A-Za-z]+\$?\d+/.test(url) ? `#${url}` : `https://${url}`;
+    const text = v.text.trim() || url.replace(/^#/, '');
+    const cur = wb.getCell(si, active.r, active.c);
+    wb.transact(() => {
+      const raw = cur?.formula ? cur.raw : text;
+      wb.setCellData(si, active.r, active.c, { raw, style: { ...cur?.style, color: cur?.style?.color ?? '#0563c1', underline: true }, comment: cur?.comment, link: url });
+    }, meta());
+    return true;
+  }, { okLabel: '확인' });
+}
+
+function removeHyperlink() {
+  const cells = cellsIn(sel).filter(([r, c]) => wb.getCell(si, r, c)?.link);
+  if (!cells.length) return;
+  wb.transact(() => cells.forEach(([r, c]) => {
+    const cur = wb.getCell(si, r, c);
+    const st = { ...cur.style };
+    if (st.color === '#0563c1') delete st.color;
+    delete st.underline;
+    wb.setCellData(si, r, c, { raw: cur.raw, style: st, comment: cur.comment });
+  }), meta());
+}
+
+function openLink(url) {
+  if (url.startsWith('#')) { gotoRef(url.slice(1)); return; }
+  try { window.open(url, '_blank', 'noopener'); } catch { toast(url); }
 }
 
 // ───────────────────────── 마우스 ─────────────────────────
@@ -1033,7 +1227,8 @@ function onViewMouseDown(e) {
   }
   if (e.shiftKey) extendTo(r, c, { scroll: false });
   else selectCell(r, c, { scroll: false });
-  drag = { type: 'select' };
+  const link = !e.shiftKey && !e.ctrlKey ? wb.getCell(si, r, c)?.link : null;
+  drag = { type: 'select', ...(link ? { link: { r, c, url: link } } : {}) };
   startAutoScroll();
 }
 
@@ -1176,6 +1371,7 @@ function onDragEnd() {
   const d = drag;
   drag = null;
   stopAutoScroll();
+  if (d.type === 'select' && d.link && selIsActiveOnly() && active.r === d.link.r && active.c === d.link.c) openLink(d.link.url);
   switch (d.type) {
     case 'fill':
       fillPreview = null;
@@ -1380,9 +1576,22 @@ function valueToRaw(v) {
   return typeof p.value === 'string' && !v.startsWith('=') ? v : `'${v}`;
 }
 
-function pasteInternal(mode = 'all') {
+/**
+ * 복사한 셀 붙여넣기. mode: 'all' | 'values' | 'formulas' | 'formats' | 'transpose'
+ * opts (선택하여 붙여넣기): { what, op: 'add'|'sub'|'mul'|'div', skipBlanks, transpose }
+ */
+function pasteInternal(mode = 'all', opts = {}) {
   if (!clip) return;
-  const transpose = mode === 'transpose';
+  const transpose = mode === 'transpose' || !!opts.transpose;
+  const what = opts.what ?? (mode === 'transpose' ? 'all' : mode);
+  const op = opts.op ?? null;
+  if (what === 'colWidths') {
+    // 열 너비만
+    const w = clip.c2 - clip.c1 + 1;
+    wb.transact(() => { for (let j = 0; j < w; j++) wb.setColWidth(si, active.c + j, wb.colWidth(clip.si, clip.c1 + j)); }, meta());
+    gv.layout();
+    return;
+  }
   const h = clip.data.length;
   const w = clip.c2 - clip.c1 + 1;
   const ph = transpose ? w : h;
@@ -1408,15 +1617,51 @@ function pasteInternal(mode = 'all') {
         const cur = cellData(wb.getCell(si, tr, tc));
         const srcR = src.rows[ci];
         const shifted = d?.raw.startsWith('=') && !cut ? shiftFormula(d.raw, tr - srcR, tc - (src.c1 + cj)) : d?.raw ?? '';
+        if (opts.skipBlanks && !d?.raw) continue;
+        const numFmtOf = (st) => (st ? Object.fromEntries(Object.entries(st).filter(([k2]) => ['numFmt', 'decimals', 'code'].includes(k2))) : {});
         let data;
-        if (mode === 'values') data = { raw: valueToRaw(src.values[ci][cj]), style: cur?.style, comment: cur?.comment };
-        else if (mode === 'formats') data = { raw: cur?.raw ?? '', style: d?.style, comment: cur?.comment };
-        else if (mode === 'formulas') data = { raw: shifted, style: cur?.style, comment: cur?.comment };
-        else data = d ? { ...d, raw: shifted } : null;
+        if (what === 'values') data = { raw: valueToRaw(src.values[ci][cj]), style: cur?.style, comment: cur?.comment };
+        else if (what === 'valuesNum') data = { raw: valueToRaw(src.values[ci][cj]), style: { ...cur?.style, ...numFmtOf(d?.style) }, comment: cur?.comment };
+        else if (what === 'formats') data = { raw: cur?.raw ?? '', style: d?.style, comment: cur?.comment };
+        else if (what === 'formulas') data = { raw: shifted, style: cur?.style, comment: cur?.comment };
+        else if (what === 'formulasNum') data = { raw: shifted, style: { ...cur?.style, ...numFmtOf(d?.style) }, comment: cur?.comment };
+        else if (what === 'comments') data = { raw: cur?.raw ?? '', style: cur?.style, comment: d?.comment };
+        else if (what === 'noBorders') {
+          const st = { ...d?.style };
+          for (const k2 of ['bt', 'bb', 'bl', 'br']) delete st[k2];
+          data = d ? { ...d, raw: shifted, style: st } : null;
+        } else if (what === 'validation') {
+          data = cur;
+        } else data = d ? { ...d, raw: shifted } : null;
+        if (op && data && ['all', 'values', 'valuesNum', 'formulas', 'formulasNum', 'noBorders'].includes(what)) {
+          // 연산: 대상 값 (연산) 복사한 값
+          const sv = src.values[ci][cj];
+          const sym = { add: '+', sub: '-', mul: '*', div: '/' }[op];
+          const tv = wb.getValue(si, tr, tc);
+          if (typeof sv === 'number' || sv === null) {
+            const x = typeof sv === 'number' ? sv : 0;
+            if (cur?.raw?.startsWith('=')) data = { ...cur, raw: `=(${cur.raw.slice(1)})${sym}${x}` };
+            else if (typeof tv === 'number' || tv === null) {
+              const a = typeof tv === 'number' ? tv : 0;
+              const res = op === 'add' ? a + x : op === 'sub' ? a - x : op === 'mul' ? a * x : x === 0 ? null : a / x;
+              data = { raw: res === null ? '#DIV/0!' : String(Number(res.toPrecision(15))), style: cur?.style ?? data.style, comment: cur?.comment };
+            }
+          }
+        }
         wb.setCellData(si, tr, tc, data);
       }
     }
-    afterDataEntry({ r1: tgt.r1, c1: tgt.c1, r2: tgt.r1 + th - 1, c2: tgt.c1 + tw - 1 });
+    if (what === 'validation') {
+      // 유효성 검사 규칙을 대상 위치로 옮겨 복사
+      const srcRules = (wb.sheets[src.si].validations ?? []).filter((v) => v.r1 <= src.r2 && v.r2 >= src.r1 && v.c1 <= src.c2 && v.c2 >= src.c1);
+      const add = srcRules.map((v) => {
+        const r1 = Math.max(v.r1, src.r1) - src.r1 + tgt.r1;
+        const c1 = Math.max(v.c1, src.c1) - src.c1 + tgt.c1;
+        return { ...structuredClone(v), r1, c1, r2: r1 + (Math.min(v.r2, src.r2) - Math.max(v.r1, src.r1)), c2: c1 + (Math.min(v.c2, src.c2) - Math.max(v.c1, src.c1)) };
+      });
+      if (add.length) wb.setSheetProp(si, 'validations', [...(sheet().validations ?? []), ...add]);
+    }
+    if (what !== 'formats' && what !== 'comments' && what !== 'validation') afterDataEntry({ r1: tgt.r1, c1: tgt.c1, r2: tgt.r1 + th - 1, c2: tgt.c1 + tw - 1 });
   }, meta());
   if (cut) clip = null;
   selectRange({ r1: tgt.r1, c1: tgt.c1, r2: tgt.r1 + th - 1, c2: tgt.c1 + tw - 1 }, 'cells', { r: tgt.r1, c: tgt.c1 });
@@ -1445,6 +1690,46 @@ function handlePaste(text) {
   if (text) pasteText(text);
 }
 
+/** 선택하여 붙여넣기 (Ctrl+Alt+V) */
+function pasteSpecialDialog() {
+  if (editing && !commitEdit()) return;
+  if (!clip) { toast('먼저 셀을 복사하세요. (선택하여 붙여넣기는 이 문서 안에서 복사한 셀에만 쓸 수 있습니다)'); return; }
+  const WHAT = [
+    ['all', '모두'], ['formulas', '수식'], ['values', '값'], ['formats', '서식'], ['comments', '메모'], ['validation', '유효성 검사'],
+    ['noBorders', '테두리만 제외'], ['colWidths', '열 너비'], ['formulasNum', '수식 및 숫자 서식'], ['valuesNum', '값 및 숫자 서식'],
+  ];
+  const OPS = [['', '없음'], ['add', '더하기'], ['sub', '빼기'], ['mul', '곱하기'], ['div', '나누기']];
+  const radio = (name, list, def) => el('div', { class: 'ps-grid' }, list.map(([v, label], i) => el('label', { class: 'fc-check' },
+    el('input', { type: 'radio', name, value: v, checked: v === def }), `${label}(${'ASFTCNHWRU'[i] ?? ''})`)));
+  const whatBox = radio('psWhat', WHAT, 'all');
+  const opBox = radio('psOp', OPS, '');
+  const skip = el('input', { type: 'checkbox' });
+  const trans = el('input', { type: 'checkbox' });
+  const body = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
+    el('fieldset', {}, el('legend', {}, '붙여넣기'), whatBox),
+    el('fieldset', {}, el('legend', {}, '연산'), opBox),
+    el('div', { style: { display: 'flex', gap: '16px' } }, el('label', { class: 'fc-check' }, skip, '내용 있는 셀만 붙여넣기(B)'), el('label', { class: 'fc-check' }, trans, '행/열 바꿈(E)')));
+  body.addEventListener('keydown', (e) => {
+    // 엑셀과 같은 글자 키로 항목 고르기 (V = 값, T = 서식 …)
+    const map = { a: 'all', f: 'formulas', v: 'values', t: 'formats', c: 'comments', n: 'validation', x: 'noBorders', w: 'colWidths', r: 'formulasNum', u: 'valuesNum' };
+    const k = e.key.toLowerCase();
+    if (e.altKey || e.ctrlKey) return;
+    if (map[k]) { whatBox.querySelector(`input[value="${map[k]}"]`).checked = true; e.preventDefault(); }
+    if (k === 'b') { skip.checked = !skip.checked; e.preventDefault(); }
+    if (k === 'e') { trans.checked = !trans.checked; e.preventDefault(); }
+  });
+  openDialog({
+    title: '선택하여 붙여넣기', width: 420, body,
+    buttons: [{
+      label: '확인', primary: true, action: () => {
+        const what = whatBox.querySelector('input:checked').value;
+        const op = opBox.querySelector('input:checked').value || null;
+        pasteInternal('all', { what, op, skipBlanks: skip.checked, transpose: trans.checked });
+      },
+    }, { label: '취소' }],
+  });
+}
+
 async function pasteFromButton(mode = 'all') {
   if (mode !== 'all') { if (clip) pasteInternal(mode); else toast('복사한 셀이 없습니다.'); return; }
   let text = null;
@@ -1468,6 +1753,7 @@ function explicitOff(patch, r, c) {
 }
 
 function applyStyle(patchOrFn, { widen = false } = {}) {
+  lastRepeat = () => applyStyle(patchOrFn, { widen });
   const rg = sel;
   const patchFor = (cur) => {
     const p = typeof patchOrFn === 'function' ? patchOrFn(cur) : patchOrFn;
@@ -2866,7 +3152,12 @@ const KEYTIPS = {
   hlr: ['condManager', '조건부 서식 규칙 관리'], hln: ['condNewRule', '새 서식 규칙'], hlm: ['condMenuKey', '조건부 서식 메뉴'], ht: ['tableStyleKey', '표 서식'],
   wff: ['freezePanes', '틀 고정'], wfr: ['freezeTop', '첫 행 고정'], wfc: ['freezeFirstCol', '첫 열 고정'], wg: ['toggleGrid', '눈금선'],
   mf: ['insertFunction', '함수 삽입'], mua: ['autosum', '자동 합계'], mn: ['nameManager', '이름 관리자'], mmd: ['defineName', '이름 정의'],
-  ms: ['pasteName', '수식에서 사용'], mc: ['createNamesFromSel', '선택 영역에서 만들기'], f: ['backstage', '파일'],
+  ms: ['pasteName', '수식에서 사용'], mc: ['createNamesFromSel', '선택 영역에서 만들기'],
+  hvv: ['pasteValuesKey', '값 붙여넣기'], hvs: ['pasteSpecial', '선택하여 붙여넣기'], es: ['pasteSpecial', '선택하여 붙여넣기'],
+  hac: ['alignCenter', '가운데 맞춤'], hal: ['alignLeft', '왼쪽 맞춤'], har: ['alignRight', '오른쪽 맞춤'],
+  hir: ['insertRows', '시트 행 삽입'], hic: ['insertCols', '시트 열 삽입'], hdr: ['deleteRows', '시트 행 삭제'], hdc: ['deleteCols', '시트 열 삭제'],
+  hfn: ['fontDialog', '글꼴'], hef: ['clearFormats', '서식 지우기'], hea: ['clearAll', '모두 지우기'], ni: ['hyperlink', '링크'],
+  ase: ['flashFill', '빠른 채우기'], mv: ['pivotRefresh', '피벗 새로 고침'], f: ['backstage', '파일'],
 };
 const KEYTIP_TABS = { h: 'home', n: 'insert', p: 'layout', m: 'formulas', a: 'data', r: 'review', w: 'view', j: 'tableDesign' };
 let keytip = null; // { seq, held }
@@ -2900,6 +3191,11 @@ function endKeytip() {
 function handleKeytipKey(e) {
   // 슬라이서를 선택한 상태의 Alt+C(필터 지우기) · Alt+S(다중 선택)
   if (!keytip && e.altKey && (e.code === 'KeyC' || e.code === 'KeyS') && chartSel && sheet().slicers?.some((x) => x.id === chartSel)) return false;
+  if (e.ctrlKey || e.metaKey) {
+    // Ctrl+Alt+키 조합은 리본 키 팁이 아님 (Ctrl+Alt+V 등)
+    if (keytip) endKeytip();
+    return false;
+  }
   if (e.key === 'Alt') {
     if (!keytip) { keytip = { seq: '', held: true, clean: true }; }
     e.preventDefault();
@@ -3481,7 +3777,9 @@ function pivotDialog(tableName = null) {
         const tf = findTable(wb, text);
         let def;
         // 처음에는 첫 텍스트 열을 행, 첫 숫자 열을 값으로 (필드 창에서 바꿀 수 있음)
-        const firstNum = headers.findIndex((h, i) => typeof valueAt(rg.r1 + 1, rg.c1 + i) === 'number');
+        // 값: 마지막 숫자 열 (보통 금액·합계), 행: 첫 텍스트 열
+        const numCols = headers.map((h, i) => i).filter((i) => typeof valueAt(rg.r1 + 1, rg.c1 + i) === 'number');
+        const firstNum = numCols.length ? numCols[numCols.length - 1] : -1;
         const firstText = headers.findIndex((h, i) => typeof valueAt(rg.r1 + 1, rg.c1 + i) === 'string');
         const fields = {
           rows: [headers[firstText >= 0 ? firstText : 0]], cols: [],
@@ -5257,39 +5555,59 @@ const SHORTCUTS = [
   ['F2', '셀 편집 (편집 중에는 입력/편집 모드 전환)'],
   ['Alt+Enter', '셀 안에서 줄 바꿈'],
   ['Ctrl+Enter', '선택한 모든 셀에 같은 내용 입력'],
-  ['F4', '수식 편집 중 절대/상대 참조 전환'],
+  ['F4', '수식 편집 중: 절대/상대 참조 전환 · 그 밖에는 마지막 작업 반복'],
   ['Esc', '편집 취소 / 복사 영역 해제'],
   ['Ctrl+방향키', '데이터 영역의 끝으로 이동 (빈 열에서는 10,000,000행까지)'],
-  ['Shift+방향키', '선택 영역 확장'],
+  ['Shift+방향키 / F8', '선택 영역 확장 / 확장 모드 켜기·끄기'],
   ['Ctrl+Space / Shift+Space', '열 전체 / 행 전체 선택'],
-  ['Ctrl+A', '모두 선택'],
+  ['Ctrl+A / Ctrl+Shift+*', '모두 선택 / 현재 영역 선택'],
   ['Ctrl+Home / Ctrl+End', '처음 셀 / 마지막 셀로 이동'],
+  ['Ctrl+. / Shift+Backspace / Ctrl+Backspace', '선택 영역의 다음 모서리 / 활성 셀만 선택 / 활성 셀로 화면 이동'],
+  ['Alt+PageDown / Alt+PageUp', '한 화면 오른쪽 / 왼쪽으로'],
   ['Ctrl+C / Ctrl+X / Ctrl+V', '복사 / 잘라내기 / 붙여넣기'],
-  ['Ctrl+Z / Ctrl+Y', '실행 취소 / 다시 실행'],
+  ['Ctrl+Alt+V', '선택하여 붙여넣기 (값·서식·연산·행/열 바꿈 …)'],
+  ['Ctrl+Z / Ctrl+Y', '실행 취소 / 다시 실행 (다시 실행할 것이 없으면 마지막 작업 반복)'],
   ['Ctrl+B / Ctrl+I / Ctrl+U / Ctrl+5', '굵게 / 기울임꼴 / 밑줄 / 취소선'],
   ['Ctrl+D / Ctrl+R', '아래로 / 오른쪽으로 채우기'],
+  ['Ctrl+E', '빠른 채우기 (예시를 보고 나머지 행 자동 채우기)'],
+  ["Ctrl+' / Ctrl+Shift+\"", '위 셀의 수식 / 값 복사'],
   ['Alt+=', '자동 합계'],
-  ['Alt+F1', '차트 삽입'],
-  ['Ctrl+Shift+L', '필터 켜기/끄기'],
+  ['Alt+F1 / F11', '차트 삽입'],
+  ['Ctrl+Shift+L / Ctrl+Alt+L', '필터 켜기/끄기 / 필터 다시 적용'],
   ['Ctrl+9 / Ctrl+0', '행 숨기기 / 열 숨기기'],
+  ['Ctrl+Shift+9 / Ctrl+Shift+0', '행 숨기기 취소 / 열 숨기기 취소'],
   ['Ctrl+;  /  Ctrl+Shift+;', '오늘 날짜 / 현재 시간 입력'],
-  ['Ctrl+Shift+1/3/4/5', '숫자 / 날짜 / 통화 / 백분율 서식'],
+  ['Ctrl+Shift+1/2/3/4/5/6', '숫자 / 시간 / 날짜 / 통화 / 백분율 / 지수 서식'],
   ['Ctrl+Shift+~', '일반 서식'],
+  ['Ctrl+Shift+& / Ctrl+Shift+_', '바깥쪽 테두리 / 테두리 없음'],
   ['Ctrl+1', '셀 서식 (표시 형식 · 사용자 지정 서식 · 맞춤 · 글꼴 · 테두리 · 채우기)'],
+  ['Ctrl+Shift+F / Ctrl+Shift+P', '글꼴 서식'],
+  ['Ctrl+K', '하이퍼링크 삽입'],
   ['Ctrl+T / Ctrl+L', '표 만들기 (브라우저가 Ctrl+T 를 가로채면 Ctrl+L)'],
+  ['Ctrl+Shift+T', '표 요약 행 켜기/끄기'],
   ['Alt+A+E', '텍스트 나누기'],
-  ['Alt → 글자', '리본 바로 가기 키 (예: Alt+N+T 표, Alt+N+V 피벗, Alt+H+O+E 셀 서식)'],
+  ['Alt → 글자', '리본 바로 가기 키 (예: Alt+N+T 표, Alt+N+V 피벗, Alt+H+O+E 셀 서식, Alt+H+V+V 값 붙여넣기, Alt+E+S 선택하여 붙여넣기)'],
   ['Alt+↓', '목록·필터·요약 함수 펼치기'],
   ['Alt+C / Alt+S', '슬라이서: 필터 지우기 / 다중 선택'],
-  ['Ctrl+F / Ctrl+H / Ctrl+G', '찾기 / 바꾸기 / 이동'],
+  ['Alt+F5 / Ctrl+Alt+F5', '피벗 테이블 새로 고침 / 모두 새로 고침'],
+  ['Ctrl+F / Ctrl+H / Ctrl+G · F5', '찾기 / 바꾸기 / 이동'],
+  ['Shift+F5', '찾기'],
+  ['Ctrl+F3 / F3 / Ctrl+Shift+F3', '이름 관리자 / 이름 붙여넣기 / 선택 영역에서 이름 만들기'],
+  ['Shift+F3', '함수 삽입'],
+  ['Ctrl+[ / Ctrl+]', '참조되는 셀 / 참조하는 셀 선택'],
+  ['Ctrl+Shift+O', '메모가 있는 셀 선택'],
   ['Ctrl+`', '수식 표시'],
+  ['Ctrl+Shift+U', '수식 입력줄 펼치기/접기'],
   ['Ctrl+Shift+= / Ctrl+-', '행·열 삽입 / 삭제'],
   ['Ctrl+PageUp / PageDown', '이전 / 다음 시트'],
   ['Ctrl+마우스 휠', '확대/축소'],
   ['Shift+F11', '새 시트'],
   ['Shift+F2', '메모 편집'],
-  ['Ctrl+S', '저장'],
-  ['F9', '다시 계산'],
+  ['Shift+F10', '바로 가기 메뉴'],
+  ['Ctrl+N / Ctrl+O / Ctrl+S / F12', '새 통합 문서 / 열기 / 저장 / 다른 이름으로 저장'],
+  ['Ctrl+P / Ctrl+F2', '인쇄 / 인쇄 미리 보기'],
+  ['Alt+F8 / Alt+F11', '매크로 (VBA 코드 보기)'],
+  ['F9 / Shift+F9 / Ctrl+Alt+F9', '다시 계산'],
 ];
 
 // ───────────────────────── 메뉴 정의 ─────────────────────────
@@ -5426,6 +5744,8 @@ const MENUS = {
     { label: '수식 붙여넣기', icon: 'fx', action: () => pasteFromButton('formulas'), disabled: !clip },
     { label: '서식 붙여넣기', icon: 'painter', action: () => pasteFromButton('formats'), disabled: !clip },
     { label: '행/열 바꿈', action: () => pasteFromButton('transpose'), disabled: !clip },
+    { sep: true },
+    { label: '선택하여 붙여넣기...', key: 'Ctrl+Alt+V', action: pasteSpecialDialog, disabled: !clip },
   ],
   borders: () => [
     { title: '테두리' },
@@ -5624,7 +5944,12 @@ function showContextMenu(pos, kind) {
     );
   } else {
     const cm = wb.getCell(si, active.r, active.c)?.comment;
+    const lk = wb.getCell(si, active.r, active.c)?.link;
     items.push(
+      { label: lk ? '하이퍼링크 편집...' : '링크', key: 'Ctrl+K', action: hyperlinkDialog },
+      ...(lk ? [{ label: '하이퍼링크 열기', action: () => openLink(lk) }, { label: '하이퍼링크 제거', action: removeHyperlink }] : []),
+      { label: '선택하여 붙여넣기...', key: 'Ctrl+Alt+V', action: pasteSpecialDialog, disabled: !clip },
+      { sep: true },
       { label: '행 삽입', icon: 'rowInsert', action: () => run('insertRows') },
       { label: '열 삽입', icon: 'colInsert', action: () => run('insertCols') },
       { label: '행 삭제', icon: 'delete', action: () => run('deleteRows') },
@@ -5788,6 +6113,15 @@ const COMMANDS = {
   find: () => openFindDialog('find'),
   replace: () => openFindDialog('replace'),
   goto: gotoDialog,
+  pasteValuesKey: () => pasteFromButton('values'),
+  repeatLast, flashFill: flashFillCmd, pasteSpecial: pasteSpecialDialog, hyperlink: hyperlinkDialog, removeHyperlink,
+  selectPrecedents, selectDependents, selectComments,
+  unhideRows: () => hideSel('row', false), unhideCols: () => hideSel('col', false),
+  fmtTime: () => applyStyle({ numFmt: 'time', decimals: undefined }, { widen: true }),
+  fmtScientific: () => applyStyle({ numFmt: 'scientific', decimals: undefined }, { widen: true }),
+  borderNone: () => applyBorder('none'),
+  selectRegion: () => { const rg = currentRegion(active.r, active.c); selectRange(rg, 'cells', { r: active.r, c: active.c }); },
+  newWorkbook: () => newWorkbook(),
   nameManager, defineName, useInFormula: pasteNameDialog, pasteName: pasteNameDialog, createNamesFromSel,
 
   toggleFilter,
@@ -5921,6 +6255,7 @@ function run(cmd, arg) {
   const fn = COMMANDS[cmd];
   if (!fn) { toast('지원하지 않는 기능입니다.'); return; }
   fn(arg);
+  if (REPEATABLE.has(cmd)) lastRepeat = () => COMMANDS[cmd](arg);
   focusGrid();
 }
 

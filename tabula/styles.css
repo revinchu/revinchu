@@ -690,3 +690,7 @@ body.keytips .statusbar { background: #fff4ce; }
 .pp-menu { border: 0; background: none; cursor: pointer; padding: 0 4px; }
 .pp-opts { display: flex; flex-direction: column; gap: 4px; }
 .pp-opt { display: flex; gap: 6px; align-items: center; }
+.ps-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 12px; }
+fieldset { border: 1px solid #d0d0d0; padding: 6px 10px; }
+legend { padding: 0 4px; color: #444; }
+.formula-row.tall #formulaInput { height: 64px; white-space: pre-wrap; overflow: auto; }

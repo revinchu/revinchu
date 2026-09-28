@@ -27,6 +27,7 @@ export function makeCell(data) {
   const style = cleanStyle(data.style);
   if (style) cell.style = style;
   if (data.comment) cell.comment = data.comment;
+  if (data.link) cell.link = data.link; // 하이퍼링크: 주소(URL) 또는 '#시트!A1'
   if (data.cached !== undefined) cell.cached = data.cached;
   if (cell.raw.startsWith('=') && cell.raw.length > 1 && style?.numFmt !== 'text') {
     cell.formula = true;
@@ -42,7 +43,7 @@ export function makeCell(data) {
   } else {
     cell.v = parseInput(cell.raw).value;
   }
-  if (!cell.raw && !cell.style && !cell.comment) return null;
+  if (!cell.raw && !cell.style && !cell.comment && !cell.link) return null;
   return cell;
 }
 
@@ -51,6 +52,7 @@ export function cellData(cell) {
   const d = { raw: cell.raw };
   if (cell.style) d.style = { ...cell.style };
   if (cell.comment) d.comment = cell.comment;
+  if (cell.link) d.link = cell.link;
   if (cell.cached !== undefined && cell.formula) d.cached = cell.cached;
   return d;
 }
@@ -590,18 +592,18 @@ export class Workbook {
         if (p.decimals) style.decimals = p.decimals;
       }
     }
-    this.setCellData(si, r, c, { raw, style, comment: cur?.comment });
+    this.setCellData(si, r, c, { raw, style, comment: cur?.comment, link: cur?.link });
   }
 
   setStyle(si, r, c, patch) {
     const cur = this.getCell(si, r, c);
     const style = { ...(cur?.style || {}), ...patch };
-    this.setCellData(si, r, c, { raw: cur?.raw ?? '', style, comment: cur?.comment });
+    this.setCellData(si, r, c, { raw: cur?.raw ?? '', style, comment: cur?.comment, link: cur?.link });
   }
 
   setComment(si, r, c, comment) {
     const cur = this.getCell(si, r, c);
-    this.setCellData(si, r, c, { raw: cur?.raw ?? '', style: cur?.style, comment: comment || undefined });
+    this.setCellData(si, r, c, { raw: cur?.raw ?? '', style: cur?.style, comment: comment || undefined, link: cur?.link });
   }
 
   clearRange(si, r1, c1, r2, c2, what = 'contents') {

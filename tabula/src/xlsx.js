@@ -121,7 +121,10 @@ function relsOf(files, path) {
   if (!xml) return out;
   for (const r of kids(parseXml(xml), 'Relationship')) {
     let target = r.attrs.Target;
-    if (r.attrs.TargetMode === 'External') continue;
+    if (r.attrs.TargetMode === 'External') {
+      out[r.attrs.Id] = { target, rawTarget: target, type: r.attrs.Type.split('/').pop(), external: true };
+      continue;
+    }
     if (target.startsWith('/')) target = target.slice(1);
     else {
       const parts = (dir + target).split('/');
@@ -534,6 +537,17 @@ function readSheet(files, path, ctx) {
         if (!text) continue;
         sheet.cells[k] = { raw: '', ...sheet.cells[k], comment: text };
       }
+    }
+  }
+  // 하이퍼링크 (외부 주소는 관계 파일, 문서 안 위치는 location)
+  for (const h of kids(child(root, 'hyperlinks'), 'hyperlink')) {
+    const rg = refToRange(h.attrs.ref ?? '');
+    if (!rg) continue;
+    const rel = rid(h) ? rels[rid(h)] : null;
+    const url = rel ? (rel.rawTarget ?? rel.target) : h.attrs.location ? `#${h.attrs.location}` : null;
+    if (!url) continue;
+    for (let r = rg.r1; r <= Math.min(rg.r2, rg.r1 + 999); r++) {
+      for (let c = rg.c1; c <= rg.c2; c++) sheet.cells[`${r},${c}`] = { raw: '', ...sheet.cells[`${r},${c}`], link: url };
     }
   }
   const drawing = child(root, 'drawing');
@@ -1902,6 +1916,19 @@ export function writeXlsx(wb, { activeSheet = 0 } = {}) {
     // 데이터 유효성 검사
     const dvList = (sheet.validations ?? []).map(fit).filter(Boolean);
     const dataValidations = dvList.length ? `<dataValidations count="${dvList.length}">${dvList.map(validationXml).join('')}</dataValidations>` : '';
+    const linkXml = [];
+    for (const [k, cell] of sheet.cells) {
+      if (!cell.link) continue;
+      const [r, c] = k.split(',').map(Number);
+      if (r >= EXCEL_MAX_ROWS) continue;
+      if (cell.link.startsWith('#')) linkXml.push(`<hyperlink ref="${cellName(r, c)}" location="${esc(cell.link.slice(1))}" display="${esc(String(wb.getValue(si, r, c) ?? ''))}"/>`);
+      else {
+        const id = `rId${sheetRels.length + 1}`;
+        sheetRels.push(`<Relationship Id="${id}" Type="${REL}/hyperlink" Target="${esc(cell.link)}" TargetMode="External"/>`);
+        linkXml.push(`<hyperlink ref="${cellName(r, c)}" r:id="${id}"/>`);
+      }
+    }
+    const hyperlinks = linkXml.length ? `<hyperlinks>${linkXml.join('')}</hyperlinks>` : '';
 
     // 메모
     let legacy = '';
@@ -1995,7 +2022,7 @@ export function writeXlsx(wb, { activeSheet = 0 } = {}) {
       + `<sheetFormatPr defaultRowHeight="${px2pt(DEFAULT_ROW_HEIGHT)}"/>`
       + (colsXml ? `<cols>${colsXml}</cols>` : '')
       + `<sheetData>${rowXml}</sheetData>`
-      + autoFilter + merges + cf + dataValidations
+      + autoFilter + merges + cf + dataValidations + hyperlinks
       + '<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>'
       + drawing + legacy + tableParts + extLst
       + '</worksheet>';
