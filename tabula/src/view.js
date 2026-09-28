@@ -11,6 +11,7 @@ import { prepareCond, condFormatAt, ICON_SVG, EMPTY_MATCH_TYPES, ruleRanges, inR
 import { tableAt, tableCellStyle, tableFilterRange, styleByName } from './tables.js';
 import { slicerCssVars } from './slicerstyle.js';
 import { fontAlias } from './fonts.js';
+import { maxLevel, groupsOf } from './outline.js';
 
 export const DEFAULT_FONT = '맑은 고딕';
 export const DEFAULT_SIZE = 11;
@@ -170,7 +171,8 @@ export class GridView {
       if (x > maxX) { out.dx = 1; x = maxX; }
       if (y > maxY) { out.dy = 1; y = maxY; }
     }
-    const zone = y < this.hh && x < this.hw ? 'corner' : y < this.hh ? 'colHeader' : x < this.hw ? 'rowHeader' : 'cell';
+    let zone = y < this.hh && x < this.hw ? 'corner' : y < this.hh ? 'colHeader' : x < this.hw ? 'rowHeader' : 'cell';
+    if ((zone === 'rowHeader' && x < (this.olw ?? 0)) || (zone === 'colHeader' && y < (this.olh ?? 0))) zone = 'outline';
     const sheetX = x - this.hw < this.frozenW ? Math.max(0, x - this.hw) : x - this.hw + this.sx;
     const sheetY = y - this.hh < this.frozenH ? Math.max(0, y - this.hh) : y - this.hh + this.sy;
     const c = this.cols.indexAt(sheetX);
@@ -352,11 +354,17 @@ export class GridView {
   }
 
   computeHeaderSize() {
-    const { showHeaders } = this.host.state();
-    if (!showHeaders) { this.hw = 0; this.hh = 0; return; }
-    this.hh = HEAD_H;
+    const { showHeaders, wb, si } = this.host.state();
+    if (!showHeaders) { this.hw = 0; this.hh = 0; this.olw = 0; this.olh = 0; return; }
+    // 개요(그룹) 기호 자리: 수준마다 14px (수준 단추 1 … 최대+1)
+    const ol = wb?.sheets[si]?.outline;
+    const rl = maxLevel(ol?.rows);
+    const cl = maxLevel(ol?.cols);
+    this.olw = rl ? (rl + 1) * 14 + 4 : 0;
+    this.olh = cl ? (cl + 1) * 14 + 4 : 0;
+    this.hh = HEAD_H + this.olh;
     const bottom = this.rows.indexAt(this.sy + this.frozenH + this.viewH);
-    this.hw = Math.max(34, String(bottom + 1).length * 8 + 12);
+    this.hw = Math.max(34, String(bottom + 1).length * 8 + 12) + this.olw;
   }
 
   paneRects() {
@@ -389,8 +397,9 @@ export class GridView {
   /** 스크롤 후 창 이동 · 필요하면 다시 그림 */
   update(force = false) {
     const prevHw = this.hw;
+    const prevHh = this.hh;
     this.computeHeaderSize();
-    if (this.hw !== prevHw) force = true;
+    if (this.hw !== prevHw || this.hh !== prevHh) force = true;
     const rects = this.paneRects();
     for (const p of this.panes) {
       const rect = rects[p.id];
@@ -780,6 +789,37 @@ export class GridView {
     p.overlay.innerHTML = html.join('');
   }
 
+  /** 개요 기호: 그룹 괄호 선 + 요약 행(열)의 +/− 단추 (보이는 범위만) */
+  outlineMarks(ax, ol, i1, i2, offset, band) {
+    const isRow = ax === 'r';
+    const levels = isRow ? ol.rows : ol.cols;
+    const coll = (isRow ? ol.rowsColl : ol.colsColl) ?? {};
+    const after = isRow ? ol.below !== false : ol.right !== false;
+    const axis = isRow ? this.rows : this.cols;
+    const out = [`<div class="olband ${ax}" style="${isRow ? `left:0;top:0;width:${band}px;bottom:0` : `left:0;top:0;height:${band}px;right:0`}"></div>`];
+    for (const g of groupsOf(levels)) {
+      const s = after ? g.b + 1 : g.a - 1;
+      const lo = Math.min(g.a, s);
+      const hi = Math.max(g.b, s);
+      if (hi < i1 || lo > i2) continue;
+      const off = (g.level - 1) * 14 + 3;
+      const closed = !!coll[s];
+      // 괄호 선 (펼친 그룹만)
+      if (!closed && axis.size(g.a) + axis.size(g.b) > 0) {
+        const p1 = axis.pos(g.a) - offset;
+        const p2 = axis.pos(g.b + 1) - offset;
+        out.push(isRow
+          ? `<i class="oll" style="left:${off + 6}px;top:${p1 + 2}px;height:${Math.max(0, p2 - p1 - 4)}px;width:1px"></i><i class="oll" style="left:${off + 6}px;top:${after ? p2 - 3 : p1 + 2}px;width:5px;height:1px"></i>`
+          : `<i class="oll" style="top:${off + 6}px;left:${p1 + 2}px;width:${Math.max(0, p2 - p1 - 4)}px;height:1px"></i><i class="oll" style="top:${off + 6}px;left:${after ? p2 - 3 : p1 + 2}px;height:5px;width:1px"></i>`);
+      }
+      if (s >= 0 && axis.size(s) > 0) {
+        const p = axis.pos(s) - offset + (axis.size(s) - 13) / 2;
+        out.push(`<div class="olb${closed ? ' closed' : ''}" data-ax="${ax}" data-a="${g.a}" data-b="${g.b}" data-l="${g.level}" title="${closed ? '세부 정보 표시' : '세부 정보 숨기기'}" style="${isRow ? `left:${off}px;top:${p}px` : `top:${off}px;left:${p}px`}">${closed ? '+' : '−'}</div>`);
+      }
+    }
+    return out.join('');
+  }
+
   // ───────────── 머리글 ─────────────
   renderHeaders(rects) {
     const st = this.host.state();
@@ -790,8 +830,17 @@ export class GridView {
     this.corner.style.display = show ? 'block' : 'none';
     if (!show) return;
     const { hw, hh } = this;
+    const olw = this.olw ?? 0;
+    const olh = this.olh ?? 0;
+    const ol = st.wb.sheets[st.si]?.outline;
     this.corner.style.width = `${hw}px`;
     this.corner.style.height = `${hh}px`;
+    // 수준 단추: 행은 모서리 아래쪽 가로로, 열은 오른쪽 세로로
+    const lv = [];
+    if (olw) for (let L = 1; L <= maxLevel(ol.rows) + 1; L++) lv.push(`<div class="olv" data-ax="r" data-l="${L}" title="수준 ${L} 표시" style="left:${(L - 1) * 14 + 2}px;top:${hh - 17}px">${L}</div>`);
+    if (olh) for (let L = 1; L <= maxLevel(ol.cols) + 1; L++) lv.push(`<div class="olv" data-ax="c" data-l="${L}" title="수준 ${L} 표시" style="left:${hw - 17}px;top:${(L - 1) * 14 + 2}px">${L}</div>`);
+    const lvHtml = lv.join('');
+    if (this.corner._lv !== lvHtml) { this.corner.innerHTML = lvHtml; this.corner._lv = lvHtml; }
     Object.assign(this.colHead.style, { left: '0px', top: '0px', width: `${this.viewW}px`, height: `${hh}px` });
     Object.assign(this.rowHead.style, { left: '0px', top: '0px', width: `${hw}px`, height: `${this.viewH}px` });
     const colFull = selKind === 'cols' || selKind === 'all';
@@ -805,8 +854,9 @@ export class GridView {
       for (let c = c1; c <= c2; c++) {
         const w = this.cols.size(c);
         if (!w) continue;
-        out.push(`<div class="hc${colCls(c)}" style="left:${this.cols.pos(c) - offset}px;width:${w}px">${colToName(c)}</div>`);
+        out.push(`<div class="hc${colCls(c)}" style="left:${this.cols.pos(c) - offset}px;width:${w}px${olh ? `;top:${olh}px` : ''}">${colToName(c)}</div>`);
       }
+      if (olh) out.push(this.outlineMarks('c', ol, c1, c2, offset, olh));
       clipEl.innerHTML = out.join('');
     };
     const rowPart = (clipEl, rect, r1, r2, offset) => {
@@ -815,8 +865,9 @@ export class GridView {
       for (let r = r1; r <= r2; r++) {
         const h = this.rows.size(r);
         if (!h) continue;
-        out.push(`<div class="hr${rowCls(r)}" style="top:${this.rows.pos(r) - offset}px;height:${h}px;line-height:${h - 1}px">${r + 1}</div>`);
+        out.push(`<div class="hr${rowCls(r)}" style="top:${this.rows.pos(r) - offset}px;height:${h}px;line-height:${h - 1}px${olw ? `;left:${olw}px;width:${hw - olw}px` : ''}">${r + 1}</div>`);
       }
+      if (olw) out.push(this.outlineMarks('r', ol, r1, r2, offset, olw));
       clipEl.innerHTML = out.join('');
     };
     const tl = rects.tl;

@@ -412,6 +412,9 @@ function* readSheet(files, path, ctx) {
       if (w !== null && w !== DEFAULT_COL_WIDTH && (col.attrs.customWidth === '1' || Math.abs(w - DEFAULT_COL_WIDTH) > 1)) sheet.colWidths[c] = w;
       if (col.attrs.hidden === '1' || col.attrs.hidden === 'true') sheet.hiddenCols[c] = true;
       if (st && max - min < 1000) sheet.colStyles[c] = st;
+      const ol = Number(col.attrs.outlineLevel ?? 0);
+      if (ol > 0) ((sheet.outline ??= { rows: {}, cols: {}, rowsColl: {}, colsColl: {}, below: true, right: true }).cols[c] = Math.min(7, ol));
+      if (col.attrs.collapsed === '1' || col.attrs.collapsed === 'true') ((sheet.outline ??= { rows: {}, cols: {}, rowsColl: {}, colsColl: {}, below: true, right: true }).colsColl[c] = true);
     }
   }
 
@@ -441,6 +444,9 @@ function* readSheet(files, path, ctx) {
       if (Math.abs(h - DEFAULT_ROW_HEIGHT) > 2) sheet.rowHeights[r] = h;
     }
     if (row.attrs.hidden === '1' || row.attrs.hidden === 'true') sheet.hiddenRows[r] = true;
+    // 개요 (행 그룹)
+    if (row.attrs.outlineLevel && row.attrs.outlineLevel !== '0') ((sheet.outline ??= { rows: {}, cols: {}, rowsColl: {}, colsColl: {}, below: true, right: true }).rows[r] = Math.min(7, Number(row.attrs.outlineLevel)));
+    if (row.attrs.collapsed === '1' || row.attrs.collapsed === 'true') ((sheet.outline ??= { rows: {}, cols: {}, rowsColl: {}, colsColl: {}, below: true, right: true }).rowsColl[r] = true);
     if (row.attrs.customFormat === '1' && row.attrs.s) { const st = styleOf(row.attrs.s); if (st) sheet.rowStyles[r] = st; }
     let colIdx = -1;
     const rowKey = `${r},`;
@@ -781,6 +787,11 @@ function* readSheet(files, path, ctx) {
   }
   sheet.validations = readValidations(root);
   sheet.codeName = child(root, 'sheetPr')?.attrs.codeName;
+  const olp = child(child(root, 'sheetPr'), 'outlinePr');
+  if (sheet.outline && olp) {
+    if (olp.attrs.summaryBelow === '0' || olp.attrs.summaryBelow === 'false') sheet.outline.below = false;
+    if (olp.attrs.summaryRight === '0' || olp.attrs.summaryRight === 'false') sheet.outline.right = false;
+  }
   return sheet;
 }
 
@@ -2482,7 +2493,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {}) 
       }
     }
     const rowKeys = new Set([...rows.keys()]);
-    for (const k of [...Object.keys(sheet.rowHeights), ...Object.keys(sheet.hiddenRows), ...Object.keys(sheet.rowStyles), ...hidKeys(sheet.filter?.hidden, EXCEL_MAX_ROWS), ...(sheet.tables ?? []).flatMap((t) => hidKeys(t.filter?.hidden, EXCEL_MAX_ROWS))]) rowKeys.add(Number(k));
+    for (const k of [...Object.keys(sheet.rowHeights), ...Object.keys(sheet.hiddenRows), ...Object.keys(sheet.rowStyles), ...Object.keys(sheet.outline?.rows ?? {}), ...Object.keys(sheet.outline?.rowsColl ?? {}), ...hidKeys(sheet.filter?.hidden, EXCEL_MAX_ROWS), ...(sheet.tables ?? []).flatMap((t) => hidKeys(t.filter?.hidden, EXCEL_MAX_ROWS))]) rowKeys.add(Number(k));
     // 열 블록의 행 (셀 객체 없이 형식화 배열에서 바로 씀)
     const blocks = sheet.blocks ?? [];
     for (const b of blocks) {
@@ -2512,6 +2523,8 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {}) 
       if (sheet.rowHeights[r] !== undefined) attrs.push(`ht="${px2pt(sheet.rowHeights[r])}"`, 'customHeight="1"');
       if (sheet.hiddenRows[r] || hid(sheet.filter?.hidden, r) || (sheet.tables ?? []).some((t) => hid(t.filter?.hidden, r))) attrs.push('hidden="1"');
       if (sheet.rowStyles[r]) attrs.push(`s="${pool.xf({ ...sheet.allStyle, ...sheet.rowStyles[r] })}"`, 'customFormat="1"');
+      if (sheet.outline?.rows?.[r]) attrs.push(`outlineLevel="${sheet.outline.rows[r]}"`);
+      if (sheet.outline?.rowsColl?.[r]) attrs.push('collapsed="1"');
       const cx = cells.map(([c, cell]) => {
         const ref = refOf(r, c);
         const st = plainStyle ? (cell.style ?? {}) : wb.styleAt(si, r, c);
@@ -2559,12 +2572,20 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {}) 
     const { rowXml, maxR, maxC } = sheetRows[si];
 
     // 열
-    const colKeys = new Set([...Object.keys(sheet.colWidths), ...Object.keys(sheet.hiddenCols), ...Object.keys(sheet.colStyles)].map(Number));
+    const olc = sheet.outline?.cols ?? {};
+    const olcc = sheet.outline?.colsColl ?? {};
+    const colKeys = new Set([...Object.keys(sheet.colWidths), ...Object.keys(sheet.hiddenCols), ...Object.keys(sheet.colStyles), ...Object.keys(olc), ...Object.keys(olcc)].map(Number));
     const colsXml = [...colKeys].sort((a, b) => a - b).map((c) => {
       const w = sheet.colWidths[c] ?? DEFAULT_COL_WIDTH;
       const st = sheet.colStyles[c] ? ` style="${pool.xf({ ...sheet.allStyle, ...sheet.colStyles[c] })}"` : '';
-      return `<col min="${c + 1}" max="${c + 1}" width="${px2width(w)}"${sheet.colWidths[c] !== undefined ? ' customWidth="1"' : ''}${sheet.hiddenCols[c] ? ' hidden="1"' : ''}${st}/>`;
+      const ol = (olc[c] ? ` outlineLevel="${olc[c]}"` : '') + (olcc[c] ? ' collapsed="1"' : '');
+      return `<col min="${c + 1}" max="${c + 1}" width="${px2width(w)}"${sheet.colWidths[c] !== undefined ? ' customWidth="1"' : ''}${sheet.hiddenCols[c] ? ' hidden="1"' : ''}${st}${ol}/>`;
     }).join('');
+    const olMax = (o) => Object.values(o ?? {}).reduce((m, v) => Math.max(m, v), 0);
+    const olRowMax = olMax(sheet.outline?.rows);
+    const olColMax = olMax(olc);
+    const olPr = sheet.outline && (sheet.outline.below === false || sheet.outline.right === false)
+      ? `<outlinePr${sheet.outline.below === false ? ' summaryBelow="0"' : ''}${sheet.outline.right === false ? ' summaryRight="0"' : ''}/>` : '';
 
     // 틀 고정
     const fr = sheet.freeze?.rows || 0;
@@ -2797,10 +2818,10 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {}) 
     const extLst = exts.length ? `<extLst>${exts.join('')}</extLst>` : '';
 
     files[`xl/worksheets/sheet${si + 1}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="${NS_MAIN}" xmlns:r="${NS_R}">`
-      + (vba ? `<sheetPr codeName="${esc(vba.sheetCodes?.[sheet.name] ?? `Sheet${si + 1}`)}"/>` : '')
+      + (vba || olPr ? `<sheetPr${vba ? ` codeName="${esc(vba.sheetCodes?.[sheet.name] ?? `Sheet${si + 1}`)}"` : ''}>${olPr}</sheetPr>` : '')
       + `<dimension ref="${dim}"/>`
       + `<sheetViews><sheetView${sheet.noGrid ? ' showGridLines="0"' : ''} workbookViewId="0"${si === (wb.sheets[activeSheet]?.state && wb.sheets[activeSheet].state !== 'visible' ? Math.max(0, wb.sheets.findIndex((x) => !x.state || x.state === 'visible')) : activeSheet) ? ' tabSelected="1"' : ''}>${pane}</sheetView></sheetViews>`
-      + `<sheetFormatPr defaultRowHeight="${px2pt(DEFAULT_ROW_HEIGHT)}"/>`
+      + `<sheetFormatPr defaultRowHeight="${px2pt(DEFAULT_ROW_HEIGHT)}"${olRowMax ? ` outlineLevelRow="${olRowMax}"` : ''}${olColMax ? ` outlineLevelCol="${olColMax}"` : ''}/>`
       + (colsXml ? `<cols>${colsXml}</cols>` : '')
       + `<sheetData>${rowXml}</sheetData>`
       + autoFilter + merges + cf + dataValidations + hyperlinks

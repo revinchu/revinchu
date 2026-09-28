@@ -199,6 +199,12 @@ export const TABS = [
         large('dedupe', 'dedupe', '중복된 항목 제거'),
         large('dataValidation', 'validation', '데이터 유효성 검사', { menu: 'validation', split: true }),
       ]),
+      group('개요', [
+        large('outlineGroup', 'rowInsert', '그룹', { title: '그룹 (Shift+Alt+→)', menu: 'outlineGroupMenu', split: true }),
+        large('outlineUngroup', 'delete', '그룹 해제', { title: '그룹 해제 (Shift+Alt+←)', menu: 'outlineUngroupMenu', split: true }),
+        large('subtotal', 'autosum', '부분합', { title: '그룹마다 요약 행 삽입 (SUBTOTAL)' }),
+        col(medium('outlineShow', 'plus', '세부 정보 표시'), medium('outlineHide', 'collapse', '세부 정보 숨기기')),
+      ]),
     ],
   },
   {

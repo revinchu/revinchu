@@ -326,9 +326,9 @@ function sheetFromData(s) {
 
 /** 시트의 부가 속성 (셀 외) — 저장/복원/복제용 */
 const SHEET_PROPS = ['colWidths', 'rowHeights', 'merges', 'cond', 'colStyles', 'rowStyles', 'allStyle',
-  'hiddenRows', 'hiddenCols', 'rowManual', 'freeze', 'filter', 'charts', 'pivot', 'validations', 'images', 'shapes', 'tables', 'slicers', 'pivotsExtra', 'state', 'noGrid'];
+  'hiddenRows', 'hiddenCols', 'rowManual', 'freeze', 'filter', 'charts', 'pivot', 'validations', 'images', 'shapes', 'tables', 'slicers', 'pivotsExtra', 'state', 'noGrid', 'outline'];
 // 바뀌어도 수식 결과가 달라지지 않는 시트 속성
-const CALC_NEUTRAL = new Set(['state', 'noGrid', 'charts', 'images', 'shapes', 'slicers', 'freeze', 'cond', 'validations', 'colStyles', 'rowStyles', 'allStyle', 'merges']);
+const CALC_NEUTRAL = new Set(['outline', 'state', 'noGrid', 'charts', 'images', 'shapes', 'slicers', 'freeze', 'cond', 'validations', 'colStyles', 'rowStyles', 'allStyle', 'merges']);
 
 /** 숫자 키 객체의 키를 삽입/삭제에 맞춰 이동 */
 function shiftKeys(obj, index, count) {
@@ -1530,6 +1530,20 @@ export class Workbook {
       }
       return nt;
     }).filter(Boolean);
+    if (target.outline) {
+      // 개요 수준 · 접힘: 가운데에 넣은 행 · 열은 위아래(좌우) 중 낮은 수준을 따름
+      const o = { ...target.outline };
+      const lk = isRow ? 'rows' : 'cols';
+      const ck = isRow ? 'rowsColl' : 'colsColl';
+      const before = o[lk] ?? {};
+      o[lk] = shiftKeys(before, index, count);
+      o[ck] = shiftKeys(o[ck], index, count);
+      if (count > 0) {
+        const lv = Math.min(before[index - 1] ?? 0, before[index] ?? 0);
+        if (lv) for (let i = index; i < index + count; i++) o[lk][i] = lv;
+      }
+      target.outline = o;
+    }
     if (isRow) {
       target.rowStyles = shiftKeys(target.rowStyles, index, count);
       target.hiddenRows = shiftKeys(target.hiddenRows, index, count);

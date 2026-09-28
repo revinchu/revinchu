@@ -28,6 +28,7 @@ import { SLICER_STYLES, slicerStyleName, slicerColors, CUSTOM_KEYS } from './sli
 import { server, idbSet, idbGet, idbDel } from './storage.js';
 import { itemStats, blockColumn, EMPTY as PIVOT_EMPTY } from './cube.js';
 import { logicalCol, ColBuilder } from './block.js';
+import { normOutline, outlineEmpty, changeLevels, groupsOf, groupAt, toggleGroup, showLevel, summaryOf, planSubtotals, SUBTOTAL_FNS, maxLevel } from './outline.js';
 import { hid, hidCount } from './axis.js';
 import { fontList, fontAlias, loadLocalFonts, canListLocalFonts } from './fonts.js';
 import { ICONS } from './icons.js';
@@ -911,6 +912,8 @@ function onGridKey(e) {
     if (rule?.type === 'list') { handled(); openDvList(); return; }
   }
   if (e.altKey && !ctrl && (k === '=' || e.code === 'Equal')) { handled(); run('autosum'); return; }
+  // 그룹 / 그룹 해제 (Shift+Alt+→ / ←)
+  if (e.altKey && e.shiftKey && !ctrl && (k === 'ArrowRight' || k === 'ArrowLeft')) { handled(); run(k === 'ArrowRight' ? 'outlineGroup' : 'outlineUngroup'); return; }
   if (e.altKey && k === 'F1') { handled(); run('chartColumn'); return; }
   // ── 엑셀 바로 가기 키 ──
   const code = e.code;
@@ -1213,6 +1216,16 @@ function onViewMouseDown(e) {
   if (e.target === dom.editor || dom.ac.contains(e.target)) return;
   closeMenus();
   const t = e.target;
+  if (t.classList.contains('olb') || t.classList.contains('olv')) {
+    // 개요: 그룹 +/− 단추, 수준 단추
+    e.preventDefault();
+    e.stopPropagation();
+    if (editing && !commitEdit()) return;
+    const d = t.dataset;
+    if (t.classList.contains('olv')) outlineShowLevel(d.ax, Number(d.l));
+    else outlineToggle(d.ax, Number(d.a), Number(d.b), Number(d.l));
+    return;
+  }
   if (t.classList.contains('pxbtn')) {
     // 피벗 항목 펼치기 · 축소 (+/− 단추)
     e.preventDefault();
@@ -2143,6 +2156,168 @@ function hideSel(axis, hide) {
     const n = axis === 'row' ? stepFrom({ r: b, c: active.c }, 1, 0) : stepFrom({ r: active.r, c: b }, 0, 1);
     selectCell(n.r, n.c);
   }
+}
+
+// ───────────────────────── 개요 (그룹 · 부분합) ─────────────────────────
+const outlineOf = () => normOutline(sheet().outline);
+
+/** 개요 · 숨김 변경을 한 번에 (실행 취소 한 단위) */
+function putOutline(o, hidden = null, ax = 'r') {
+  wb.transact(() => {
+    wb.setSheetProp(si, 'outline', outlineEmpty(o) ? null : o);
+    if (hidden) wb.setSheetProp(si, ax === 'r' ? 'hiddenRows' : 'hiddenCols', hidden);
+  }, meta());
+  gv.layout();
+  renderAll();
+}
+
+/** 그룹(delta=1) · 그룹 해제(delta=-1): 행 전체를 골랐으면 행, 열 전체면 열, 아니면 물어봄 */
+function outlineGroup(delta) {
+  const go = (ax) => {
+    const o = outlineOf();
+    const k = ax === 'r' ? 'rows' : 'cols';
+    const ext = wb.extent(si);
+    const [a, b] = ax === 'r' ? [sel.r1, Math.min(sel.r2, Math.max(sel.r1, ext.rows + 1000))] : [sel.c1, Math.min(sel.c2, Math.max(sel.c1, ext.cols + 100))];
+    if (delta < 0 && !Object.keys(o[k]).some((i) => +i >= a && +i <= b)) { toast('그룹 해제할 수 없습니다.'); return; }
+    if (delta > 0 && maxLevel(o[k]) >= 7 && Object.entries(o[k]).some(([i, v]) => +i >= a && +i <= b && v >= 7)) { toast('개요는 7수준까지 만들 수 있습니다.'); return; }
+    o[k] = changeLevels(o[k], a, b, delta);
+    // 그룹 해제로 수준이 0 이 된 행 · 열은 다시 보이게
+    let hidden = null;
+    if (delta < 0) {
+      const hk = ax === 'r' ? 'hiddenRows' : 'hiddenCols';
+      hidden = { ...sheet()[hk] };
+      for (let i = a; i <= b; i++) if (!o[k][i]) delete hidden[i];
+    }
+    putOutline(o, hidden, ax);
+  };
+  if (selKind === 'rows') go('r');
+  else if (selKind === 'cols') go('c');
+  else formDialog(delta > 0 ? '그룹' : '그룹 해제', [{ name: 'ax', label: '대상', type: 'select', value: 'r', options: [{ value: 'r', label: '행' }, { value: 'c', label: '열' }] }], (v) => go(v.ax));
+}
+
+function outlineToggle(ax, a, b, level, force = null) {
+  const o = outlineOf();
+  const isRow = ax === 'r';
+  const after = isRow ? o.below : o.right;
+  const ck = isRow ? 'rowsColl' : 'colsColl';
+  const hk = isRow ? 'hiddenRows' : 'hiddenCols';
+  const g = { a, b, level };
+  const collapse = force ?? !o[ck][summaryOf(g, after)];
+  const res = toggleGroup(o[isRow ? 'rows' : 'cols'], sheet()[hk], o[ck], g, after, collapse);
+  putOutline({ ...o, [ck]: res.coll }, res.hidden, ax);
+}
+
+function outlineShowLevel(ax, n) {
+  const o = outlineOf();
+  const isRow = ax === 'r';
+  const res = showLevel(o[isRow ? 'rows' : 'cols'], sheet()[isRow ? 'hiddenRows' : 'hiddenCols'], n, isRow ? o.below : o.right);
+  putOutline({ ...o, [isRow ? 'rowsColl' : 'colsColl']: res.coll }, res.hidden, ax);
+}
+
+/** 세부 정보 표시 · 숨기기: 활성 셀이 들어 있는 가장 안쪽 그룹 (행 우선) */
+function outlineDetail(show) {
+  const o = outlineOf();
+  const gr = groupAt(o.rows, active.r, o.below);
+  const gc = gr ? null : groupAt(o.cols, active.c, o.right);
+  if (!gr && !gc) { toast('선택한 셀이 그룹 안에 있지 않습니다.'); return; }
+  if (gr) outlineToggle('r', gr.a, gr.b, gr.level, !show);
+  else outlineToggle('c', gc.a, gc.b, gc.level, !show);
+}
+
+function outlineClear() {
+  const o = outlineOf();
+  if (outlineEmpty(o)) { toast('지울 개요가 없습니다.'); return; }
+  const hr = { ...sheet().hiddenRows };
+  const hc = { ...sheet().hiddenCols };
+  for (const i of Object.keys(o.rows)) delete hr[i];
+  for (const i of Object.keys(o.cols)) delete hc[i];
+  wb.transact(() => { wb.setSheetProp(si, 'outline', null); wb.setSheetProp(si, 'hiddenRows', hr); wb.setSheetProp(si, 'hiddenCols', hc); }, meta());
+  gv.layout();
+  renderAll();
+}
+
+/** 부분합 행을 모두 제거 (SUBTOTAL 수식이 있는 행 삭제 + 개요 지우기). 범위는 머리글 포함 */
+function removeSubtotalRows(rg) {
+  let r2 = rg.r2;
+  for (let r = rg.r2; r > rg.r1; r--) {
+    let isSub = false;
+    for (let c = rg.c1; c <= rg.c2 && !isSub; c++) if (/^=SUBTOTAL\(/i.test(wb.getRaw(si, r, c))) isSub = true;
+    if (isSub) { wb.deleteRows(si, r, 1); r2--; }
+  }
+  const o = outlineOf();
+  o.rows = changeLevels(o.rows, rg.r1, r2 + 1, -7);
+  o.rowsColl = {};
+  wb.setSheetProp(si, 'outline', outlineEmpty(o) ? null : o);
+  const hr = { ...sheet().hiddenRows };
+  for (let r = rg.r1; r <= r2 + 1; r++) delete hr[r];
+  wb.setSheetProp(si, 'hiddenRows', hr);
+  return { ...rg, r2 };
+}
+
+/** 데이터 → 부분합: 그룹 열 값이 바뀔 때마다 요약 행(SUBTOTAL) + 총합계, 3수준 개요 */
+function subtotalDialog() {
+  if (editing && !commitEdit()) return;
+  const rg0 = dataRange();
+  if (rg0.r2 <= rg0.r1) { alertDialog('부분합', '머리글 행과 데이터가 있는 범위를 선택하세요.'); return; }
+  const heads = [];
+  for (let c = rg0.c1; c <= rg0.c2; c++) heads.push({ c, name: displayText(rg0.r1, c) || `${colToName(c)}열` });
+  const numeric = (c) => { for (let r = rg0.r1 + 1; r <= Math.min(rg0.r2, rg0.r1 + 50); r++) if (typeof valueAt(r, c) === 'number') return true; return false; };
+  const lastNum = [...heads].reverse().find((h) => numeric(h.c));
+  const hasSubs = (() => { for (let r = rg0.r1; r <= Math.min(rg0.r2, rg0.r1 + 5000); r++) for (let c = rg0.c1; c <= rg0.c2; c++) if (/^=SUBTOTAL\(/i.test(wb.getRaw(si, r, c))) return true; return false; })();
+  const fields = [
+    { name: 'key', label: '그룹화할 항목', type: 'select', value: String(heads[0].c), options: heads.map((h) => ({ value: String(h.c), label: h.name })) },
+    { name: 'fn', label: '사용할 함수', type: 'select', value: '9', options: SUBTOTAL_FNS.map((f) => ({ value: String(f.id), label: f.label })) },
+    ...heads.map((h) => ({ name: `col${h.c}`, label: `부분합 계산 항목: ${h.name}`, type: 'checkbox', value: h === lastNum || (numeric(h.c) && h.c !== heads[0].c && heads.length <= 4) })),
+    { name: 'replace', label: '새로운 값으로 대치', type: 'checkbox', value: true },
+    { name: 'below', label: '데이터 아래에 요약 표시', type: 'checkbox', value: true },
+    ...(hasSubs ? [{ name: 'removeAll', label: '모두 제거 (부분합 행과 개요만 지우기)', type: 'checkbox', value: false }] : []),
+  ];
+  formDialog('부분합', fields, (v) => {
+    const t0 = performance.now();
+    let groupsN = 0;
+    wb.transact(() => {
+      let rg = rg0;
+      if (v.replace || v.removeAll) rg = removeSubtotalRows(rg);
+      if (v.removeAll) return;
+      const keyCol = Number(v.key);
+      const fn = Number(v.fn);
+      const cols = heads.filter((h) => v[`col${h.c}`]).map((h) => h.c);
+      if (!cols.length) return;
+      const { groups } = planSubtotals(rg.r1, rg.r2, (r) => displayText(r, keyCol));
+      groupsN = groups.length;
+      if (groups.length > 20000) { toast('그룹이 너무 많습니다 (2만 개 이하).'); return; }
+      const below = !!v.below;
+      // 아래에서 위로 행 삽입 (위쪽 행 번호는 그대로)
+      for (let i = groups.length - 1; i >= 0; i--) wb.insertRows(si, below ? groups[i].b + 1 : groups[i].a, 1);
+      const fnName = SUBTOTAL_FNS.find((f) => f.id === fn)?.label ?? '';
+      const bold = { bold: true };
+      let levels = { ...(outlineOf().rows) };
+      let lastRow = rg.r1;
+      groups.forEach((g, i) => {
+        const shift = below ? i : i + 1;
+        const a = g.a + shift;
+        const b = g.b + shift;
+        const s = below ? b + 1 : g.a + i;
+        lastRow = Math.max(lastRow, b, s);
+        wb.setCellData(si, s, keyCol, { raw: `'${g.key} 요약`, style: bold });
+        for (const c of cols) if (c !== keyCol) wb.setCellData(si, s, c, { raw: `=SUBTOTAL(${fn},${colToName(c)}${a + 1}:${colToName(c)}${b + 1})`, style: { ...wb.styleAt(si, a, c), ...bold } });
+        for (let r = a; r <= b; r++) levels[r] = 2;
+        levels[s] = 1;
+      });
+      // 총합계
+      const gRow = lastRow + 1;
+      wb.insertRows(si, gRow, 1);
+      wb.setCellData(si, gRow, keyCol, { raw: '총합계', style: bold });
+      for (const c of cols) if (c !== keyCol) wb.setCellData(si, gRow, c, { raw: `=SUBTOTAL(${fn},${colToName(c)}${rg.r1 + 2}:${colToName(c)}${lastRow + 1})`, style: { ...wb.styleAt(si, rg.r1 + 1, c), ...bold } });
+      const o = outlineOf();
+      o.rows = levels;
+      o.below = below;
+      wb.setSheetProp(si, 'outline', o);
+      toast(`부분합: 그룹 ${groups.length.toLocaleString()}개 (${fnName}) — ${Math.round(performance.now() - t0)}ms. 왼쪽 1 2 3 단추로 수준을 바꿀 수 있습니다.`);
+    }, meta());
+    gv.layout();
+    renderAll();
+  }, { note: `범위 ${colToName(rg0.c1)}${rg0.r1 + 1}:${colToName(rg0.c2)}${rg0.r2 + 1} (첫 행은 머리글). 그룹화할 항목 순서로 미리 정렬해 두세요.` });
 }
 
 // ───────────────────────── 틀 고정 ─────────────────────────
@@ -7119,6 +7294,14 @@ const MENUS = {
     { label: '그룹 하단에 모든 부분합 표시', action: () => pivotLayoutCmd({ subtotals: true, subtotalTop: false }) },
     { label: '그룹 상단에 모든 부분합 표시', action: () => pivotLayoutCmd({ subtotals: true, subtotalTop: true }) },
   ],
+  outlineGroupMenu: () => [
+    { label: '그룹...', action: () => run('outlineGroup') },
+    { label: '자동 개요', action: () => toast('수식이 있는 요약 행을 기준으로 한 자동 개요는 [부분합]을 사용하세요.') },
+  ],
+  outlineUngroupMenu: () => [
+    { label: '그룹 해제...', action: () => run('outlineUngroup') },
+    { label: '개요 지우기', action: () => run('outlineClear') },
+  ],
   pivotBlank: () => [
     { label: '각 항목 다음에 빈 줄 삽입', action: () => pivotLayoutCmd({ blankRows: true }) },
     { label: '각 항목 다음에 빈 줄 제거', action: () => pivotLayoutCmd({ blankRows: false }) },
@@ -7574,6 +7757,12 @@ const COMMANDS = {
   pivotFieldList: () => { pivotPaneOpen = !pivotPaneOpen; refreshPivotPane(true); },
   pivotName: (v) => renamePivot(v),
   pivotOptions: () => pivotOptionsDialog(),
+  outlineGroup: () => outlineGroup(1),
+  outlineUngroup: () => outlineGroup(-1),
+  outlineClear: () => outlineClear(),
+  outlineShow: () => outlineDetail(true),
+  outlineHide: () => outlineDetail(false),
+  subtotal: () => subtotalDialog(),
   pivotExpandField: () => pivotExpandField(true),
   pivotCollapseField: () => pivotExpandField(false),
   pivotGroupField: () => pivotGroupDialog(),
