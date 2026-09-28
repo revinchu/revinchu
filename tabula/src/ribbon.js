@@ -32,7 +32,7 @@ export const TABS = [
       group('글꼴', [
         col(
           row(
-            { type: 'select', cmd: 'fontFamily', cls: 'font-family', options: FONTS.map((f) => ({ value: f, label: f })), stateKey: 'font', title: '글꼴' },
+            { type: 'font', cmd: 'fontFamily', cls: 'font-family', stateKey: 'font', title: '글꼴 (이 PC에 설치된 글꼴 이름을 입력하거나 목록에서 선택)', menu: 'fontList' },
             { type: 'select', cmd: 'fontSize', cls: 'font-size', options: FONT_SIZES.map((s) => ({ value: String(s), label: String(s) })), stateKey: 'size', editable: true, title: '글꼴 크기' },
             btn('growFont', kr('', '가', '<sup>▲</sup>'), '글꼴 크기 크게'),
             btn('shrinkFont', kr('', '가', '<sub>▼</sub>'), '글꼴 크기 작게'),
@@ -376,6 +376,7 @@ export function buildRibbon(app) {
       case 'col': return el('div', { class: 'rcol' }, it.items.map(makeItem));
       case 'sep': return el('span', { class: 'rsep' });
       case 'select': return makeSelect(it);
+      case 'font': return makeFont(it);
       case 'text': return makeText(it);
       case 'check': return makeCheck(it);
       case 'color': return makeColor(it);
@@ -426,6 +427,27 @@ export function buildRibbon(app) {
     sel.addEventListener('change', () => { app.run(it.cmd, sel.value); app.focusGrid(); });
     bindings.push((s) => { sel.value = s[it.stateKey] ?? it.options[0].value; });
     return sel;
+  }
+
+  /** 글꼴 상자: 이름을 직접 입력하거나 ▾ 로 글꼴 목록 (각 글꼴 모양으로 표시) */
+  function makeFont(it) {
+    const input = el('input', { class: `rselect ${it.cls}`, title: it.title, spellcheck: false });
+    const commit = () => { const v = input.value.trim(); if (v) app.run(it.cmd, v); };
+    input.addEventListener('change', commit);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); commit(); app.focusGrid(); }
+      if (e.key === 'Escape') app.focusGrid();
+      if (e.key === 'ArrowDown' && e.altKey) { e.preventDefault(); app.openMenu(it.menu, wrap); }
+    });
+    const caret = el('button', { class: 'rbtn font-caret', title: '글꼴 목록', onmousedown: keepFocus, html: ICONS.chevronDown });
+    caret.addEventListener('click', () => app.openMenu(it.menu, wrap));
+    const wrap = el('span', { class: 'font-box' }, input, caret);
+    bindings.push((s) => {
+      if (document.activeElement === input) return;
+      input.value = s[it.stateKey] ?? '';
+      input.style.fontFamily = `'${String(input.value).replace(/'/g, '')}', 'Malgun Gothic', sans-serif`;
+    });
+    return wrap;
   }
 
   function makeText(it) {

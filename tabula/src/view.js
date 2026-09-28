@@ -10,10 +10,15 @@ import { validationAt } from './validation.js';
 import { prepareCond, condFormatAt, ICON_SVG, EMPTY_MATCH_TYPES, ruleRanges, inRule } from './condfmt.js';
 import { tableAt, tableCellStyle, tableFilterRange, styleByName } from './tables.js';
 import { slicerCssVars } from './slicerstyle.js';
+import { fontAlias } from './fonts.js';
 
 export const DEFAULT_FONT = '맑은 고딕';
 export const DEFAULT_SIZE = 11;
-export const fontStack = (f) => `'${f}', 'Malgun Gothic', '맑은 고딕', 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif`;
+export const fontStack = (f) => {
+  const name = String(f).replace(/'/g, '');
+  const alias = fontAlias(name);
+  return `'${name}'${alias ? `, '${alias}'` : ''}, 'Malgun Gothic', '맑은 고딕', 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif`;
+};
 const HEAD_H = 20;
 const MAX_PX = 15_000_000; // 스크롤 영역 최대 픽셀 (브라우저 한계 회피)
 const OVER_R = 12;

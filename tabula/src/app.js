@@ -26,6 +26,7 @@ import {
 } from './pivot.js';
 import { SLICER_STYLES, slicerStyleName, slicerColors, CUSTOM_KEYS } from './slicerstyle.js';
 import { server, idbSet, idbGet } from './storage.js';
+import { fontList, fontAlias, loadLocalFonts, canListLocalFonts } from './fonts.js';
 import { ICONS } from './icons.js';
 import {
   CELL_OPS, TEXT_OPS, DATE_PERIODS, ICON_SETS, ICON_SVG, VISUAL_TYPES, iconSetById, describeCond,
@@ -4577,6 +4578,55 @@ function calcFieldDialog(entry = pivotHere()) {
   });
 }
 
+/** 글꼴 목록 메뉴: 통합 문서에서 쓴 글꼴 + 이 PC의 글꼴 (각 글꼴 모양으로 표시), 검색, 전체 목록 불러오기 */
+function fontMenu(anchorEl) {
+  const used = new Set();
+  for (const s of wb.sheets) for (const cell of s.cells.values()) if (cell.style?.font) used.add(cell.style.font);
+  const cur = styleAt(active.r, active.c).font || DEFAULT_FONT;
+  const search = el('input', { type: 'search', placeholder: '글꼴 검색', class: 'font-search' });
+  const list = el('div', { class: 'font-list' });
+  const pick = (f) => { closeMenus(); run('fontFamily', f); };
+  const item = (f) => el('button', {
+    type: 'button', class: `font-item${f === cur ? ' on' : ''}`, title: f, onmousedown: (e) => e.preventDefault(),
+    style: { fontFamily: fontStack(f) }, onclick: () => pick(f),
+  }, f);
+  const render = () => {
+    const q = search.value.trim().toLowerCase();
+    const match = (f) => !q || f.toLowerCase().includes(q) || (fontAlias(f) ?? '').toLowerCase().includes(q);
+    const all = fontList();
+    const theme = [DEFAULT_FONT].filter(match);
+    const usedList = [...used].filter((f) => f !== DEFAULT_FONT && match(f));
+    list.replaceChildren(
+      ...(theme.length ? [el('div', { class: 'menu-title' }, '테마 글꼴'), ...theme.map(item)] : []),
+      ...(usedList.length ? [el('div', { class: 'menu-title' }, '이 통합 문서에서 쓴 글꼴'), ...usedList.map(item)] : []),
+      el('div', { class: 'menu-title' }, `모든 글꼴 (${all.length})`),
+      ...all.filter(match).slice(0, 400).map(item),
+      ...(q && !all.some((f) => f.toLowerCase() === q) ? [el('button', { type: 'button', class: 'font-item', onclick: () => pick(search.value.trim()) }, `'${search.value.trim()}' 글꼴 사용`)] : []),
+    );
+  };
+  search.addEventListener('input', render);
+  search.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter' && search.value.trim()) pick(search.value.trim());
+    if (e.key === 'Escape') { closeMenus(); focusGrid(); }
+  });
+  const loadBtn = canListLocalFonts()
+    ? el('button', {
+      type: 'button', class: 'btn font-load',
+      onclick: async () => {
+        try {
+          const l = await loadLocalFonts();
+          if (l) { toast(`이 PC의 글꼴 ${l.length}개를 불러왔습니다.`); loadBtn.remove(); render(); }
+        } catch { toast('글꼴 목록을 볼 권한이 없습니다. 글꼴 이름을 직접 입력할 수도 있습니다.'); }
+      },
+    }, '이 PC의 모든 글꼴 불러오기')
+    : null;
+  render();
+  const node = el('div', { class: 'font-menu' }, search, loadBtn, list);
+  openMenu(anchorEl, [{ node }]);
+  setTimeout(() => search.focus());
+}
+
 function pivotStyleOpt(key) {
   const e = pivotHere();
   if (!e) return;
@@ -5400,7 +5450,9 @@ function formatCellsDialog(startTab = 0) {
     el('div', { class: 'fc-title' }, '텍스트 조정'), wrapL, mergeL);
 
   // ── 글꼴 ──
-  const fontSel = el('select', {}, FONTS.map((f) => el('option', { value: f, selected: (st.font || DEFAULT_FONT) === f }, f)));
+  // 글꼴: 이 PC의 글꼴 목록에서 고르거나 이름을 직접 입력
+  const fontSel = el('input', { type: 'text', value: st.font || DEFAULT_FONT, list: 'fcFontList', spellcheck: false });
+  const fontDl = el('datalist', { id: 'fcFontList' }, [...new Set([DEFAULT_FONT, ...fontList()])].map((f) => el('option', { value: f })));
   const sizeIn = el('input', { type: 'number', min: 1, max: 409, value: st.size || DEFAULT_SIZE, style: { width: '64px' } });
   const [bIn, bL] = chk('굵게', st.bold);
   const [iIn, iL] = chk('기울임꼴', st.italic);
@@ -5414,7 +5466,7 @@ function formatCellsDialog(startTab = 0) {
   });
   [fontSel, sizeIn, bIn, iIn, uIn, sIn, colorIn].forEach((x) => x.addEventListener('input', updFont));
   updFont();
-  const fontPage = col(row(lab('글꼴', fontSel), lab('크기', sizeIn)), row(bL, iL, uL, sL), lab('색', colorIn), el('div', { class: 'fc-title' }, '미리 보기'), fontPreview);
+  const fontPage = col(row(lab('글꼴', fontSel), fontDl, lab('크기', sizeIn)), row(bL, iL, uL, sL), lab('색', colorIn), el('div', { class: 'fc-title' }, '미리 보기'), fontPreview);
 
   // ── 테두리 ──
   let border = null;
@@ -6388,6 +6440,7 @@ const MENUS = {
     { label: '행의 총합계만 설정', action: () => run('pivotGrandRows') },
     { label: '열의 총합계만 설정', action: () => run('pivotGrandCols') },
   ],
+  fontList: (a) => { fontMenu(a); },
   pivotStylesDesign: (a) => { pivotStyleGallery(a); },
   slicerStyles: (a) => { slicerStyleGallery(a); },
   useInFormula: () => {
