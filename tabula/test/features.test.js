@@ -170,3 +170,97 @@ test('표 xlsx 왕복', () => {
   assert.equal(back.getRaw(0, 1, 3), '=표1[[#This Row],[금액]]*2');
   assert.equal(back.getValue(0, 1, 3), 200);
 });
+
+test('조건부 서식: 규칙 종류 · 우선순위 · 중지', async () => {
+  const { prepareCond, condFormatAt, describeCond, periodRange } = await import('../src/condfmt.js');
+  const wb = new Workbook();
+  wb.transact(() => [5, 50, 95, 120, 30].forEach((v, i) => wb.setInput(0, i, 0, String(v))));
+  wb.transact(() => { wb.setInput(0, 0, 1, '사과나무'); wb.setInput(0, 1, 1, '배'); wb.setInput(0, 2, 1, '=1/0'); });
+  const s = wb.sheets[0];
+  const fmt = (r, c) => condFormatAt(prepareCond(wb, 0), wb, 0, r, c, wb.getValue(0, r, c));
+  s.cond = [
+    { r1: 0, c1: 0, r2: 4, c2: 0, type: 'formula', formula: '=A1>100', style: { fill: '#ff0000' } },
+    { r1: 0, c1: 0, r2: 4, c2: 0, type: 'gt', v1: '90', style: { fill: '#00ff00', bold: true } },
+  ];
+  assert.deepEqual(fmt(3, 0).style, { fill: '#ff0000', bold: true }); // 앞 규칙이 이기고, 겹치지 않는 서식은 합쳐짐
+  assert.deepEqual(fmt(2, 0).style, { fill: '#00ff00', bold: true });
+  s.cond[0].stopIfTrue = true;
+  assert.deepEqual(fmt(3, 0).style, { fill: '#ff0000' });
+  s.cond = [
+    { r1: 0, c1: 0, r2: 4, c2: 0, type: 'bottom', v1: '2', style: { color: '#111111' } },
+    { r1: 0, c1: 0, r2: 4, c2: 0, type: 'ge', v1: '=A$2', style: { italic: true } },
+    { r1: 0, c1: 1, r2: 4, c2: 1, type: 'begins', v1: '사과', style: { bold: true } },
+    { r1: 0, c1: 1, r2: 4, c2: 1, type: 'errors', style: { strike: true } },
+    { r1: 0, c1: 1, r2: 4, c2: 1, type: 'blank', style: { fill: '#eeeeee' } },
+  ];
+  assert.deepEqual(fmt(0, 0).style, { color: '#111111' });
+  assert.deepEqual(fmt(1, 0).style, { italic: true });
+  assert.deepEqual(fmt(4, 0).style, { color: '#111111' });
+  assert.deepEqual(fmt(0, 1).style, { bold: true });
+  assert.deepEqual(fmt(2, 1).style, { strike: true });
+  assert.deepEqual(fmt(4, 1).style, { fill: '#eeeeee' });
+  s.cond = [{ r1: 0, c1: 0, r2: 4, c2: 0, type: 'icons', icons: '3Arrows' }, { r1: 0, c1: 0, r2: 4, c2: 0, type: 'bar', color: '#638ec6' }];
+  assert.equal(fmt(3, 0).icon, 'arrowUpGreen');
+  assert.equal(fmt(0, 0).icon, 'arrowDownRed');
+  assert.ok(Math.abs(fmt(3, 0).bar.pct - 100) < 1e-9);
+  assert.equal(describeCond({ type: 'between', v1: '1', v2: '9' }), '셀 값 다음 값 사이 1 및 9');
+  const [a, b] = periodRange('thisMonth', new Date(2024, 2, 15));
+  assert.deepEqual([a, b], [45352, 45383]);
+});
+
+test('조건부 서식 xlsx 왕복 (새 규칙 종류)', () => {
+  const wb = new Workbook();
+  wb.transact(() => wb.setInput(0, 0, 0, '1'));
+  wb.sheets[0].cond = [
+    { r1: 0, c1: 0, r2: 9, c2: 0, type: 'formula', formula: '=$A1>5', style: { fill: '#ffc7ce', underline: true }, stopIfTrue: true },
+    { r1: 0, c1: 0, r2: 9, c2: 0, type: 'notBetween', v1: '1', v2: '=$B$1', style: { color: '#9c0006', bt: true, bb: true, bl: true, br: true } },
+    { r1: 0, c1: 1, r2: 9, c2: 1, type: 'ends', v1: '다', style: { bold: true } },
+    { r1: 0, c1: 1, r2: 9, c2: 1, type: 'date', period: 'lastWeek', style: { fill: '#c6efce' } },
+    { r1: 0, c1: 2, r2: 9, c2: 2, type: 'top', v1: '10', percent: true, style: { fill: '#ffeb9c' } },
+    { r1: 0, c1: 2, r2: 9, c2: 2, type: 'icons', icons: '3TrafficLights1', reverse: true, iconOnly: true },
+    { r1: 0, c1: 3, r2: 9, c2: 3, type: 'noErrors', style: { italic: true } },
+  ];
+  const back = readXlsx(writeXlsx(wb)).data.sheets[0].cond;
+  assert.deepEqual(back.map((r) => r.type), ['formula', 'notBetween', 'ends', 'date', 'top', 'icons', 'noErrors']);
+  assert.equal(back[0].formula, '=$A1>5');
+  assert.equal(back[0].stopIfTrue, true);
+  assert.deepEqual(back[0].style, { fill: '#ffc7ce', underline: true });
+  assert.deepEqual([back[1].v1, back[1].v2], ['1', '=$B$1']);
+  assert.equal(back[1].style.bt, true);
+  assert.equal(back[3].period, 'lastWeek');
+  assert.equal(back[4].percent, true);
+  assert.deepEqual([back[5].icons, back[5].reverse, back[5].iconOnly], ['3TrafficLights1', true, true]);
+});
+
+test('슬라이서 · 피벗 테이블 xlsx 왕복 (엑셀 형식)', async () => {
+  const { buildPivot, pivotSourceData, resolvePivot } = await import('../src/pivot.js');
+  const { unzip } = await import('../src/zip.js');
+  const wb = new Workbook();
+  const data = [['지역', '제품', '수량'], ['서울', '사과', 10], ['부산', '배', 5], ['서울', '감', 8], ['대구', '사과', 3]];
+  wb.transact(() => data.forEach((row, i) => row.forEach((v, j) => wb.setInput(0, i, j, String(v)))));
+  wb.sheets[0].tables = [{ id: 't1', name: '표1', r1: 0, c1: 0, r2: 4, c2: 2, header: true, totals: false, style: 'TableStyleMedium2', filter: { criteria: { 1: ['사과'] }, hidden: { 2: true, 3: true } } }];
+  wb.sheets[0].slicers = [{ id: 's1', caption: '제품', source: { kind: 'table', table: '표1', column: '제품' }, columns: 2, color: 'green', x: 250, y: 10, w: 180, h: 120 }];
+  const at = wb.addSheet('피벗1');
+  const def = { table: '표1', source: 'Sheet1', range: { r1: 0, c1: 0, r2: 4, c2: 2 }, rowField: 0, colField: null, valueField: 2, agg: 'sum', fieldNames: { row: '지역', col: null, val: '수량' }, filters: { 제품: ['사과', '감'] } };
+  const { def: d, rows } = resolvePivot(pivotSourceData(wb, def).rows, def);
+  wb.transact(() => buildPivot(rows, d).forEach((row, r) => row.forEach((cd, c) => { if (cd) wb.setCellData(at, r, c, cd); })));
+  wb.sheets[at].pivot = def;
+  wb.sheets[at].slicers = [{ id: 's2', caption: '제품', source: { kind: 'pivot', self: true, field: '제품' }, x: 200, y: 0, w: 180, h: 120 }];
+  const bytes = writeXlsx(wb);
+  const files = unzip(bytes);
+  const text = (p) => new TextDecoder().decode(files[p]);
+  assert.match(text('xl/workbook.xml'), /x15:slicerCaches/);
+  assert.match(text('xl/workbook.xml'), /<pivotCaches><pivotCache cacheId="1"/);
+  assert.match(text('xl/pivotTables/pivotTable1.xml'), /<item h="1" x="1"\/>/); // 배(숨김)
+  assert.match(text('xl/drawings/drawing1.xml'), /Requires="sle15"/);
+  const back = readXlsx(bytes);
+  assert.deepEqual(back.warnings, []);
+  const [s1, s2] = back.data.sheets;
+  assert.deepEqual(s1.slicers.map((x) => [x.caption, x.source, x.columns, x.color]), [['제품', { kind: 'table', table: '표1', column: '제품' }, 2, 'green']]);
+  assert.deepEqual([s1.slicers[0].x, s1.slicers[0].y, s1.slicers[0].w, s1.slicers[0].h], [250, 10, 180, 120]);
+  assert.deepEqual(s1.tables[0].filter.criteria, { 1: ['사과'] });
+  assert.deepEqual(s2.slicers[0].source, { kind: 'pivot', self: true, field: '제품' });
+  assert.equal(s2.pivot.table, '표1');
+  assert.deepEqual(s2.pivot.filters, { 제품: ['감', '사과'] });
+  assert.deepEqual([s2.pivot.rowField, s2.pivot.valueField, s2.pivot.agg], [0, 2, 'sum']);
+});

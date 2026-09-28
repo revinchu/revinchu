@@ -1,5 +1,6 @@
 // 피벗 테이블 계산 (DOM 없음)
 import { formatGeneral } from './format.js';
+import { findTable, dataTop, dataBottom, columnNames } from './tables.js';
 
 export const AGGREGATES = [
   { id: 'sum', label: '합계' },
@@ -9,10 +10,10 @@ export const AGGREGATES = [
   { id: 'min', label: '최소' },
 ];
 
-const EMPTY = '(비어 있음)';
-const keyOf = (v) => (v === null || v === undefined || v === '' ? EMPTY : typeof v === 'object' ? String(v.code) : v);
+export const EMPTY = '(비어 있음)';
+export const keyOf = (v) => (v === null || v === undefined || v === '' ? EMPTY : typeof v === 'object' ? String(v.code) : v);
 
-function sortKeys(keys) {
+export function sortKeys(keys) {
   return keys.sort((a, b) => {
     if (a === EMPTY) return 1;
     if (b === EMPTY) return -1;
@@ -108,4 +109,57 @@ export function buildPivot(rows, def) {
     out.push([text('총합계', TOTAL), val(result(grand, agg), TOTAL)]);
   }
   return out;
+}
+
+/** 슬라이서·필터에서 쓰는 항목 글자 */
+export const itemText = (v) => (v === null || v === undefined || v === '' ? EMPTY : typeof v === 'number' ? formatGeneral(v) : typeof v === 'object' ? v.code : String(v));
+
+/**
+ * 피벗 원본 → { rows (머리글 포함 값), sheet, ref: {r1,c1,r2,c2} | null, table: 표 이름 | null }
+ * 표 이름이면 지금의 표 범위(누적된 데이터 포함), 아니면 고정 범위
+ */
+export function pivotSourceData(wb, def) {
+  const read = (si, rg) => {
+    const rows = [];
+    for (let r = rg.r1; r <= rg.r2; r++) {
+      const row = [];
+      for (let c = rg.c1; c <= rg.c2; c++) row.push(wb.getValue(si, r, c));
+      rows.push(row);
+    }
+    return rows;
+  };
+  if (def.table) {
+    const f = findTable(wb, def.table);
+    if (!f) return null;
+    const t = f.t;
+    const ref = { r1: t.header ? t.r1 : dataTop(t), c1: t.c1, r2: dataBottom(t), c2: t.c2 };
+    const rows = read(f.si, ref);
+    if (!t.header) rows.unshift(columnNames(wb, f.si, t));
+    return { rows, si: f.si, ref, table: t.name };
+  }
+  const si = wb.sheetIndexByName(def.source);
+  if (si < 0 || !def.range) return null;
+  return { rows: read(si, def.range), si, ref: def.range, table: null };
+}
+
+/** 머리글 이름 (빈 칸은 열N) */
+export const headerNames = (rows) => (rows[0] ?? []).map((h, i) => (h === null || h === '' ? `열${i + 1}` : String(h)));
+
+/** def 의 필드 번호를 머리글 이름으로 다시 맞추고, 필터를 적용한 행 → { def, rows } */
+export function resolvePivot(rows, def) {
+  const header = headerNames(rows);
+  const d = { ...def };
+  const idx = (name, fallback) => {
+    if (!name) return fallback;
+    const i = header.findIndex((h) => h.toLowerCase() === String(name).toLowerCase());
+    return i >= 0 ? i : fallback;
+  };
+  if (def.fieldNames) {
+    d.rowField = idx(def.fieldNames.row, def.rowField);
+    d.colField = def.colField === null || def.colField === undefined ? null : idx(def.fieldNames.col, def.colField);
+    d.valueField = def.valueField === null || def.valueField === undefined ? null : idx(def.fieldNames.val, def.valueField);
+  }
+  const filters = Object.entries(def.filters ?? {}).map(([name, allowed]) => [idx(name, -1), new Set(allowed)]).filter(([i]) => i >= 0);
+  const out = filters.length ? [rows[0], ...rows.slice(1).filter((r) => filters.every(([i, set]) => set.has(itemText(r[i]))))] : rows;
+  return { def: d, rows: out, header };
 }

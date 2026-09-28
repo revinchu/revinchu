@@ -19,9 +19,12 @@ import { SAMPLES } from './samples.js';
 import { GridView, DEFAULT_FONT, DEFAULT_SIZE, measureText, fontStack } from './view.js';
 import { readXlsx, writeXlsx, xlsxOverflow } from './xlsx.js';
 import { CHART_TYPES, chartData, renderChartSvg } from './chart.js';
-import { buildPivot, AGGREGATES } from './pivot.js';
+import { buildPivot, AGGREGATES, pivotSourceData, resolvePivot, itemText } from './pivot.js';
 import { server } from './storage.js';
 import { ICONS } from './icons.js';
+import {
+  CELL_OPS, TEXT_OPS, DATE_PERIODS, ICON_SETS, ICON_SVG, VISUAL_TYPES, iconSetById, describeCond,
+} from './condfmt.js';
 import {
   TABLE_STYLES, DEFAULT_TABLE_STYLE, TOTAL_FUNCS, tableAt, tableCellStyle, tableFilterRange, dataTop, dataBottom, uniqueNames,
   nextTableName, columnNames, expansionFor, validTableName, findTable, resolveStructRef,
@@ -2840,7 +2843,7 @@ const KEYTIPS = {
   hoe: ['formatCells', '셀 서식'], hoi: ['autofitSel', '열 너비 자동 맞춤'], hoa: ['autofitRowsSel', '행 높이 자동 맞춤'],
   hmc: ['mergeCenter', '병합하고 가운데 맞춤'], hw: ['wrap', '텍스트 줄 바꿈'], hfp: ['painter', '서식 복사'], hb: ['borderLast', '테두리'],
   hk: ['fmtComma', '쉼표 스타일'], hp: ['fmtPercent', '백분율'], h0: ['incDecimal', '자릿수 늘림'], h9: ['decDecimal', '자릿수 줄임'],
-  hl: ['condMenuKey', '조건부 서식'], ht: ['tableStyleKey', '표 서식'],
+  hlr: ['condManager', '조건부 서식 규칙 관리'], hln: ['condNewRule', '새 서식 규칙'], hlm: ['condMenuKey', '조건부 서식 메뉴'], ht: ['tableStyleKey', '표 서식'],
   wff: ['freezePanes', '틀 고정'], wfr: ['freezeTop', '첫 행 고정'], wfc: ['freezeFirstCol', '첫 열 고정'], wg: ['toggleGrid', '눈금선'],
   mf: ['insertFunction', '함수 삽입'], mua: ['autosum', '자동 합계'], f: ['backstage', '파일'],
 };
@@ -3356,54 +3359,39 @@ function pivotSourceRows(src, rg) {
   return rows;
 }
 
-/** 피벗 원본: 표 이름이면 지금의 표 범위(누적된 데이터 포함), 아니면 고정 범위 */
 function pivotSource(def) {
-  if (def.table) {
-    const f = findTable(wb, def.table);
-    if (!f) return null;
-    const t = f.t;
-    const top = t.header ? t.r1 : dataTop(t);
-    const rows = pivotSourceRows(wb.sheets[f.si].name, { r1: top, c1: t.c1, r2: dataBottom(t), c2: t.c2 });
-    if (!t.header) rows.unshift(columnNames(wb, f.si, t));
-    return rows;
-  }
-  return pivotSourceRows(def.source, def.range);
+  return pivotSourceData(wb, def)?.rows ?? null;
 }
 
-/** 슬라이서·필터에서 쓰는 항목 글자 */
-const pivotItemText = (v) => (v === null || v === undefined || v === '' ? '(비어 있음)' : typeof v === 'number' ? formatGeneral(v) : typeof v === 'object' ? v.code : String(v));
+const pivotItemText = itemText;
 
 function writePivot(targetSi, def) {
-  let rows = pivotSource(def);
-  if (!rows) return false;
-  const header = rows[0].map((h, i) => (h === null || h === '' ? `열${i + 1}` : String(h)));
-  const d = { ...def };
-  // 표 열 순서가 바뀌어도 이름으로 필드를 찾음
-  const idx = (name, fallback) => {
-    if (!name) return fallback;
-    const i = header.findIndex((h) => h.toLowerCase() === String(name).toLowerCase());
-    return i >= 0 ? i : fallback;
-  };
-  if (def.fieldNames) {
-    d.rowField = idx(def.fieldNames.row, def.rowField);
-    d.colField = def.colField === null ? null : idx(def.fieldNames.col, def.colField);
-    d.valueField = def.valueField === null ? null : idx(def.fieldNames.val, def.valueField);
-  }
-  const filters = Object.entries(def.filters ?? {}).map(([name, allowed]) => [idx(name, -1), new Set(allowed)]).filter(([i]) => i >= 0);
-  if (filters.length) rows = [rows[0], ...rows.slice(1).filter((r) => filters.every(([i, set]) => set.has(pivotItemText(r[i]))))];
+  const src = pivotSource(def);
+  if (!src) return false;
+  const { def: d, rows } = resolvePivot(src, def);
   const out = buildPivot(rows, d);
   const t = wb.sheets[targetSi];
-  for (const k of [...t.cells.keys()]) { const [r, c] = k.split(',').map(Number); wb.setCellData(targetSi, r, c, null); }
   const top = def.top ?? 0;
-  out.forEach((row, r) => row.forEach((cd, c) => { if (cd) wb.setCellData(targetSi, top + r, c, cd); }));
-  if (top > 0) wb.setCellData(targetSi, 0, 0, { raw: '필터 적용됨', style: { italic: true, color: '#7f7f7f' } });
+  const left = def.left ?? 0;
   const colsN = out[0]?.length ?? 0;
+  if (def.area) {
+    // 엑셀에서 가져온 피벗: 그 영역만 지우고 다시 씀 (시트의 다른 내용은 유지)
+    const a = def.area;
+    for (const k of [...t.cells.keys()]) {
+      const [r, c] = k.split(',').map(Number);
+      if (r >= a.r1 && r <= a.r2 && c >= a.c1 && c <= a.c2) wb.setCellData(targetSi, r, c, null);
+    }
+    def.area = { r1: top, c1: left, r2: top + out.length - 1, c2: left + colsN - 1 };
+  } else {
+    for (const k of [...t.cells.keys()]) { const [r, c] = k.split(',').map(Number); wb.setCellData(targetSi, r, c, null); }
+  }
+  out.forEach((row, r) => row.forEach((cd, c) => { if (cd) wb.setCellData(targetSi, top + r, left + c, cd); }));
   for (let c = 0; c < colsN; c++) {
     let w = 0;
     out.forEach((row, r) => {
-      if (row[c]?.raw) w = Math.max(w, measureText(displayText(top + r, c, targetSi), wb.styleAt(targetSi, top + r, c)) + 12);
+      if (row[c]?.raw) w = Math.max(w, measureText(displayText(top + r, left + c, targetSi), wb.styleAt(targetSi, top + r, left + c)) + 12);
     });
-    if (w > (wb.sheets[targetSi].colWidths[c] ?? DEFAULT_COL_WIDTH)) wb.setColWidth(targetSi, c, Math.min(300, Math.ceil(w)));
+    if (w > (wb.sheets[targetSi].colWidths[left + c] ?? DEFAULT_COL_WIDTH)) wb.setColWidth(targetSi, left + c, Math.min(300, Math.ceil(w)));
   }
   return true;
 }
@@ -3671,7 +3659,6 @@ function exportCsv() {
 }
 
 function exportXlsx(name = docName) {
-  if (wb.sheets.some((s) => s.slicers?.length)) toast('슬라이서는 엑셀 파일에 저장되지 않습니다. 슬라이서까지 보관하려면 .tabula 로 저장하세요.');
   const over = xlsxOverflow(wb);
   if (over) toast(`엑셀 파일은 1,048,576행까지만 저장할 수 있어 그 아래 셀 ${over.toLocaleString()}개는 빠집니다. 전체는 .tabula 로 저장하세요.`);
   try {
@@ -4396,6 +4383,350 @@ function condRuleDialog(type) {
   }, { note });
 }
 
+// ───────────────────────── 조건부 서식 규칙 관리자 ─────────────────────────
+const CF_PRESETS = [
+  { label: '진한 빨강 텍스트가 있는 연한 빨강 채우기', style: { fill: '#ffc7ce', color: '#9c0006' } },
+  { label: '진한 노랑 텍스트가 있는 노랑 채우기', style: { fill: '#ffeb9c', color: '#9c5700' } },
+  { label: '진한 녹색 텍스트가 있는 녹색 채우기', style: { fill: '#c6efce', color: '#006100' } },
+  { label: '연한 빨강 채우기', style: { fill: '#ffc7ce' } },
+  { label: '빨강 텍스트', style: { color: '#9c0006' } },
+  { label: '굵은 빨강 텍스트', style: { bold: true, color: '#c00000' } },
+  { label: '빨강 테두리', style: { bt: true, bb: true, bl: true, br: true, color: '#c00000' } },
+];
+
+const CF_KINDS = [
+  { id: 'visual', label: '셀 값을 기준으로 모든 셀의 서식 지정' },
+  { id: 'contains', label: '다음을 포함하는 셀만 서식 지정' },
+  { id: 'topbottom', label: '상위 또는 하위 값만 서식 지정' },
+  { id: 'avg', label: '평균보다 크거나 작은 값만 서식 지정' },
+  { id: 'dupuniq', label: '고유 또는 중복 값만 서식 지정' },
+  { id: 'formula', label: '수식을 사용하여 서식을 지정할 셀 결정' },
+];
+
+function cfKindOf(rule) {
+  const t = rule.type;
+  if (VISUAL_TYPES.has(t)) return 'visual';
+  if (t === 'top' || t === 'bottom') return 'topbottom';
+  if (t === 'aboveAvg' || t === 'belowAvg') return 'avg';
+  if (t === 'dup' || t === 'unique') return 'dupuniq';
+  if (t === 'formula') return 'formula';
+  return 'contains';
+}
+
+/** 규칙 미리 보기 (목록과 편집 창) */
+function cfPreview(rule) {
+  if (rule.type === 'bar') return el('span', { class: 'cf-prev', style: { background: `linear-gradient(90deg, ${rule.color ?? '#638ec6'} 70%, transparent 70%)` } });
+  if (rule.type === 'scale') return el('span', { class: 'cf-prev', style: { background: `linear-gradient(90deg, ${(rule.colors ?? ['#f8696b', '#63be7b']).join(',')})` } });
+  if (rule.type === 'icons') return el('span', { class: 'cf-prev icons', html: iconSetById(rule.icons).icons.map((i) => ICON_SVG[i]).join('') });
+  const st = rule.style ?? {};
+  return el('span', {
+    class: 'cf-prev text',
+    style: {
+      background: st.fill ?? '#fff', color: st.color ?? '#000', fontWeight: st.bold ? 700 : 400, fontStyle: st.italic ? 'italic' : 'normal',
+      textDecoration: `${st.underline ? 'underline ' : ''}${st.strike ? 'line-through' : ''}`, border: st.bt || st.bb ? '1px solid #000' : '1px solid #ddd',
+    },
+  }, 'AaBbCcYyZz');
+}
+
+/** 새 서식 규칙 / 서식 규칙 편집 */
+function cfRuleEditor(initial, onSave, { title = '새 서식 규칙' } = {}) {
+  const rule = structuredClone(initial ?? { type: 'gt', v1: '', style: { ...CF_PRESETS[0].style } });
+  let kind = cfKindOf(rule);
+  const body = el('div', { class: 'cf-editor' });
+  const kindList = el('div', { class: 'fc-list cf-kinds' });
+  const detail = el('div', { class: 'cf-detail' });
+  const fmtBox = el('div', { class: 'cf-fmt' });
+  const sel = (options, value, onChange) => {
+    const s = el('select', {}, options.map(([v, l]) => el('option', { value: v, selected: v === value }, l)));
+    s.addEventListener('change', () => onChange(s.value));
+    return s;
+  };
+  const input = (value, onChange, attrs = {}) => {
+    const i = el('input', { type: 'text', value: value ?? '', ...attrs });
+    i.addEventListener('input', () => onChange(i.value));
+    return i;
+  };
+  const colorIn = (value, onChange) => {
+    const i = el('input', { type: 'color', value });
+    i.addEventListener('input', () => onChange(i.value));
+    return i;
+  };
+  const chk = (text, checked, onChange) => {
+    const i = el('input', { type: 'checkbox', checked: !!checked });
+    i.addEventListener('change', () => onChange(i.checked));
+    return el('label', { class: 'fc-check' }, i, text);
+  };
+  const row = (...k) => el('div', { class: 'fc-row' }, ...k);
+
+  const setKind = (k) => {
+    kind = k;
+    const keep = rule.style ?? { ...CF_PRESETS[0].style };
+    const defaults = {
+      visual: { type: 'scale', colors: ['#f8696b', '#ffeb84', '#63be7b'] }, contains: { type: 'gt', v1: '' },
+      topbottom: { type: 'top', v1: '10' }, avg: { type: 'aboveAvg' }, dupuniq: { type: 'dup' }, formula: { type: 'formula', formula: '=' },
+    };
+    for (const key of ['type', 'v1', 'v2', 'color', 'colors', 'icons', 'reverse', 'iconOnly', 'percent', 'period', 'formula']) delete rule[key];
+    Object.assign(rule, defaults[k], { style: keep });
+    render();
+  };
+
+  const renderFmt = () => {
+    fmtBox.replaceChildren();
+    if (kind === 'visual') return;
+    const st = rule.style ?? (rule.style = {});
+    const prev = el('div', { class: 'cf-fmtprev' }, cfPreview(rule));
+    const upd = () => prev.replaceChildren(cfPreview(rule));
+    const preset = sel([['', '미리 설정된 서식...'], ...CF_PRESETS.map((p, i) => [String(i), p.label])], '', (v) => {
+      if (v === '') return;
+      rule.style = { ...CF_PRESETS[Number(v)].style };
+      renderFmt();
+    });
+    const colorOn = !!st.color;
+    const fillOn = !!st.fill;
+    fmtBox.append(
+      el('div', { class: 'fc-title' }, '서식'),
+      row(prev, preset),
+      row(
+        chk('글꼴 색', colorOn, (on) => { st.color = on ? (st.color ?? '#9c0006') : undefined; renderFmt(); }),
+        colorOn ? colorIn(st.color, (v) => { st.color = v; upd(); }) : null,
+        chk('채우기', fillOn, (on) => { st.fill = on ? (st.fill ?? '#ffc7ce') : undefined; renderFmt(); }),
+        fillOn ? colorIn(st.fill, (v) => { st.fill = v; upd(); }) : null,
+      ),
+      row(
+        chk('굵게', st.bold, (on) => { st.bold = on || undefined; upd(); }),
+        chk('기울임꼴', st.italic, (on) => { st.italic = on || undefined; upd(); }),
+        chk('밑줄', st.underline, (on) => { st.underline = on || undefined; upd(); }),
+        chk('취소선', st.strike, (on) => { st.strike = on || undefined; upd(); }),
+        chk('테두리', st.bt && st.bb, (on) => { for (const b of ['bt', 'bb', 'bl', 'br']) st[b] = on || undefined; upd(); }),
+      ),
+    );
+  };
+
+  const render = () => {
+    kindList.querySelectorAll('.fc-item').forEach((b) => b.classList.toggle('on', b.dataset.k === kind));
+    detail.replaceChildren(el('div', { class: 'fc-title' }, '규칙 설명 편집'));
+    if (kind === 'visual') {
+      const style = sel([['scale2', '2가지 색조'], ['scale3', '3가지 색조'], ['bar', '데이터 막대'], ['icons', '아이콘 집합']],
+        rule.type === 'scale' ? (rule.colors?.length === 3 ? 'scale3' : 'scale2') : rule.type, (v) => {
+          for (const key of ['color', 'colors', 'icons', 'reverse', 'iconOnly']) delete rule[key];
+          if (v === 'scale2') Object.assign(rule, { type: 'scale', colors: ['#fcfcff', '#63be7b'] });
+          else if (v === 'scale3') Object.assign(rule, { type: 'scale', colors: ['#f8696b', '#ffeb84', '#63be7b'] });
+          else if (v === 'bar') Object.assign(rule, { type: 'bar', color: '#638ec6' });
+          else Object.assign(rule, { type: 'icons', icons: '3Arrows' });
+          render();
+        });
+      detail.append(row(el('span', {}, '서식 스타일:'), style));
+      if (rule.type === 'scale') {
+        const names = rule.colors.length === 3 ? ['최소값', '중간값', '최대값'] : ['최소값', '최대값'];
+        detail.append(row(...rule.colors.map((c, i) => el('label', { class: 'fc-field' }, el('span', {}, names[i]), colorIn(c, (v) => { rule.colors[i] = v; prevBox.replaceChildren(cfPreview(rule)); })))));
+      } else if (rule.type === 'bar') {
+        detail.append(row(el('span', {}, '막대 색:'), colorIn(rule.color ?? '#638ec6', (v) => { rule.color = v; prevBox.replaceChildren(cfPreview(rule)); }), chk('막대만 표시', rule.iconOnly, (on) => { rule.iconOnly = on || undefined; })));
+      } else {
+        detail.append(
+          row(el('span', {}, '아이콘 스타일:'), sel(ICON_SETS.map((s) => [s.id, s.label]), rule.icons, (v) => { rule.icons = v; render(); })),
+          row(chk('아이콘 순서 거꾸로', rule.reverse, (on) => { rule.reverse = on || undefined; render(); }), chk('아이콘만 표시', rule.iconOnly, (on) => { rule.iconOnly = on || undefined; })),
+          el('div', { class: 'muted' }, `값 범위를 ${iconSetById(rule.icons).icons.length}등분해 낮은 값부터 아이콘을 붙입니다.`),
+        );
+      }
+      const prevBox = el('div', { class: 'cf-fmtprev' }, cfPreview(rule));
+      detail.append(el('div', { class: 'fc-title' }, '미리 보기'), prevBox);
+    } else if (kind === 'contains') {
+      const group = CELL_OPS.some((o) => o.id === rule.type) ? 'cell' : TEXT_OPS.some((o) => o.id === rule.type) ? 'text'
+        : rule.type === 'date' ? 'date' : rule.type;
+      const first = sel([['cell', '셀 값'], ['text', '특정 텍스트'], ['date', '발생 날짜'], ['blank', '빈 셀'], ['noBlank', '내용 있는 셀'], ['errors', '오류'], ['noErrors', '오류 없음']], group, (v) => {
+        delete rule.v1; delete rule.v2; delete rule.period;
+        rule.type = { cell: 'gt', text: 'text', date: 'date' }[v] ?? v;
+        if (v === 'date') rule.period = 'today';
+        render();
+      });
+      const parts = [first];
+      if (group === 'cell') {
+        const op = CELL_OPS.find((o) => o.id === rule.type);
+        parts.push(sel(CELL_OPS.map((o) => [o.id, o.label]), rule.type, (v) => { rule.type = v; render(); }));
+        parts.push(input(rule.v1, (v) => { rule.v1 = v; }, { placeholder: '값 또는 =수식', style: { width: '110px' } }));
+        if (op?.two) parts.push(el('span', {}, '및'), input(rule.v2, (v) => { rule.v2 = v; }, { placeholder: '값 또는 =수식', style: { width: '110px' } }));
+      } else if (group === 'text') {
+        parts.push(sel(TEXT_OPS.map((o) => [o.id, o.label]), rule.type, (v) => { rule.type = v; }));
+        parts.push(input(rule.v1, (v) => { rule.v1 = v; }, { style: { width: '140px' } }));
+      } else if (group === 'date') {
+        parts.push(sel(DATE_PERIODS.map((p) => [p.id, p.label]), rule.period ?? 'today', (v) => { rule.period = v; }));
+      }
+      detail.append(el('div', { class: 'muted' }, '다음 조건에 맞는 셀만 서식 지정:'), row(...parts));
+    } else if (kind === 'topbottom') {
+      detail.append(el('div', { class: 'muted' }, '다음 순위에 해당하는 값의 서식 지정:'), row(
+        sel([['top', '상위'], ['bottom', '하위']], rule.type, (v) => { rule.type = v; }),
+        input(rule.v1 ?? '10', (v) => { rule.v1 = v; }, { type: 'number', min: 1, style: { width: '70px' } }),
+        chk('선택한 범위의 %', rule.percent, (on) => { rule.percent = on || undefined; }),
+      ));
+    } else if (kind === 'avg') {
+      detail.append(el('div', { class: 'muted' }, '선택한 범위의 평균 값을 기준으로 다음 값의 서식 지정:'), row(sel([['aboveAvg', '초과'], ['belowAvg', '미만']], rule.type, (v) => { rule.type = v; })));
+    } else if (kind === 'dupuniq') {
+      detail.append(el('div', { class: 'muted' }, '다음 값의 서식 지정:'), row(sel([['dup', '중복'], ['unique', '고유']], rule.type, (v) => { rule.type = v; })));
+    } else {
+      detail.append(el('div', { class: 'muted' }, '다음 수식이 참인 값의 서식 지정 (범위의 왼쪽 위 셀 기준으로 입력):'),
+        input(rule.formula ?? '=', (v) => { rule.formula = v; }, { class: 'fc-code', placeholder: '=$B2>100' }));
+    }
+    renderFmt();
+  };
+
+  for (const k of CF_KINDS) {
+    const b = el('button', { type: 'button', class: 'fc-item', 'data-k': k.id }, `► ${k.label}`);
+    b.addEventListener('click', () => { if (k.id !== kind) setKind(k.id); });
+    kindList.append(b);
+  }
+  body.append(el('div', { class: 'fc-title' }, '규칙 유형 선택'), kindList, detail, fmtBox);
+  render();
+  openDialog({
+    title, width: 560, body,
+    buttons: [
+      {
+        label: '확인', primary: true,
+        action: () => {
+          if (rule.type === 'formula') {
+            const f = String(rule.formula ?? '').trim();
+            try { if (!f.startsWith('=') || f.length < 2) throw new Error(); parse(f.slice(1)); } catch {
+              alertDialog('조건부 서식', '수식이 올바르지 않습니다. = 로 시작하는 수식을 입력하세요.');
+              return false;
+            }
+            rule.formula = normalizeFormula(f);
+          }
+          const op = CELL_OPS.find((o) => o.id === rule.type);
+          if (op && (String(rule.v1 ?? '').trim() === '' || (op.two && String(rule.v2 ?? '').trim() === ''))) {
+            alertDialog('조건부 서식', '비교할 값을 입력하세요.');
+            return false;
+          }
+          if (VISUAL_TYPES.has(rule.type)) { delete rule.style; delete rule.stopIfTrue; }
+          onSave(rule);
+          return undefined;
+        },
+      },
+      { label: '취소' },
+    ],
+  });
+}
+
+const rangeText = (r) => `=$${colToName(r.c1)}$${r.r1 + 1}${r.r1 === r.r2 && r.c1 === r.c2 ? '' : `:$${colToName(r.c2)}$${r.r2 + 1}`}`;
+
+function cfManager() {
+  if (editing && !commitEdit()) return;
+  const lists = new Map(); // 시트 → 편집 중인 규칙 목록 (확인/적용 때 반영)
+  const listOf = (i) => { if (!lists.has(i)) lists.set(i, wb.sheets[i].cond.map((x) => structuredClone(x))); return lists.get(i); };
+  const selRange = usedClip(sel);
+  let scope = 'selection';
+  let scopeSheet = si;
+  let current = null;
+  const showSel = el('select', {}, [
+    el('option', { value: 'selection' }, '현재 선택 영역'),
+    el('option', { value: `sheet:${si}` }, '현재 워크시트'),
+    ...wb.sheets.map((s, i) => (i === si ? null : el('option', { value: `sheet:${i}` }, `시트: ${s.name}`))).filter(Boolean),
+  ]);
+  const tbody = el('tbody');
+  const visible = () => {
+    const list = listOf(scopeSheet);
+    return list.filter((rl) => scope !== 'selection' || (rl.r1 <= selRange.r2 && rl.r2 >= selRange.r1 && rl.c1 <= selRange.c2 && rl.c2 >= selRange.c1));
+  };
+  const render = () => {
+    tbody.replaceChildren();
+    const vis = visible();
+    if (!vis.includes(current)) current = vis[0] ?? null;
+    if (!vis.length) tbody.append(el('tr', {}, el('td', { colspan: 4, class: 'muted', style: { padding: '12px' } }, '표시할 규칙이 없습니다. [새 규칙]을 눌러 만드세요.')));
+    for (const rl of vis) {
+      const rangeIn = el('input', { type: 'text', value: rangeText(rl), class: 'cf-range' });
+      rangeIn.addEventListener('change', () => {
+        const p = parseRangeName(rangeIn.value.replace(/[=$]/g, '').trim());
+        if (!p) { rangeIn.classList.add('bad'); return; }
+        rangeIn.classList.remove('bad');
+        Object.assign(rl, { r1: p.r1, c1: p.c1, r2: p.r2, c2: p.c2 });
+      });
+      const stop = el('input', { type: 'checkbox', checked: !!rl.stopIfTrue, disabled: VISUAL_TYPES.has(rl.type) });
+      stop.addEventListener('change', () => { rl.stopIfTrue = stop.checked || undefined; });
+      const tr = el('tr', { class: rl === current ? 'on' : '' },
+        el('td', {}, describeCond(rl)), el('td', {}, cfPreview(rl)), el('td', {}, rangeIn), el('td', { style: { textAlign: 'center' } }, stop));
+      tr.addEventListener('mousedown', () => { if (current !== rl) { current = rl; tbody.querySelectorAll('tr.on').forEach((x) => x.classList.remove('on')); tr.classList.add('on'); } });
+      tr.addEventListener('dblclick', (e) => { if (e.target.tagName !== 'INPUT') edit(); });
+      tbody.append(tr);
+    }
+    btnEdit.disabled = btnDel.disabled = btnDup.disabled = !current;
+    const vis2 = visible();
+    btnUp.disabled = !current || vis2.indexOf(current) <= 0;
+    btnDown.disabled = !current || vis2.indexOf(current) >= vis2.length - 1;
+  };
+  const edit = () => {
+    if (!current) return;
+    const target = current;
+    cfRuleEditor(target, (nr) => {
+      for (const k of Object.keys(target)) if (!['r1', 'c1', 'r2', 'c2', 'stopIfTrue'].includes(k)) delete target[k];
+      Object.assign(target, nr, { r1: target.r1, c1: target.c1, r2: target.r2, c2: target.c2 });
+      render();
+    }, { title: '서식 규칙 편집' });
+  };
+  const move = (dir) => {
+    const list = listOf(scopeSheet);
+    const vis = visible();
+    const j = vis.indexOf(current) + dir;
+    if (j < 0 || j >= vis.length) return;
+    const a = list.indexOf(current);
+    const b = list.indexOf(vis[j]);
+    [list[a], list[b]] = [list[b], list[a]];
+    render();
+  };
+  const btn = (label, onclick, title) => el('button', { type: 'button', class: 'btn', title, onclick }, label);
+  const btnNew = btn('새 규칙...', () => {
+    cfRuleEditor(null, (nr) => {
+      const rg = scopeSheet === si ? selRange : { r1: 0, c1: 0, r2: 0, c2: 0 };
+      const r = { ...rg, ...nr };
+      listOf(scopeSheet).unshift(r);
+      current = r;
+      if (scope === 'selection' && scopeSheet !== si) scope = 'sheet';
+      render();
+    });
+  });
+  const btnEdit = btn('규칙 편집...', edit);
+  const btnDel = btn('규칙 삭제', () => {
+    const list = listOf(scopeSheet);
+    list.splice(list.indexOf(current), 1);
+    current = null;
+    render();
+  });
+  const btnDup = btn('규칙 복제', () => {
+    const list = listOf(scopeSheet);
+    const copy = structuredClone(current);
+    list.splice(list.indexOf(current), 0, copy);
+    current = copy;
+    render();
+  });
+  const btnUp = btn('▲', () => move(-1), '위로 이동 (우선순위 높임)');
+  const btnDown = btn('▼', () => move(1), '아래로 이동 (우선순위 낮춤)');
+  showSel.addEventListener('change', () => {
+    if (showSel.value === 'selection') { scope = 'selection'; scopeSheet = si; } else { scope = 'sheet'; scopeSheet = Number(showSel.value.split(':')[1]); }
+    current = null;
+    render();
+  });
+  const apply = () => {
+    const changed = [...lists.entries()].filter(([i, list]) => JSON.stringify(list) !== JSON.stringify(wb.sheets[i].cond));
+    if (!changed.length) return;
+    wb.transact(() => { for (const [i, list] of changed) wb.setSheetProp(i, 'cond', list.map((x) => structuredClone(x))); }, meta());
+    lists.clear();
+    render();
+  };
+  const table = el('table', { class: 'cf-table' },
+    el('thead', {}, el('tr', {}, el('th', {}, '규칙(표시된 순서대로 적용)'), el('th', {}, '서식'), el('th', {}, '적용 대상'), el('th', {}, 'True일 경우 중지'))),
+    tbody);
+  render();
+  openDialog({
+    title: '조건부 서식 규칙 관리자', width: 760,
+    body: el('div', { class: 'cf-manager' },
+      el('div', { class: 'fc-row' }, el('span', {}, '서식 규칙 표시:'), showSel),
+      el('div', { class: 'fc-row' }, btnNew, btnEdit, btnDel, btnDup, el('span', { style: { flex: '1' } }), btnUp, btnDown),
+      el('div', { class: 'cf-tablewrap' }, table)),
+    buttons: [
+      { label: '확인', primary: true, action: () => { apply(); } },
+      { label: '적용', action: () => { apply(); return false; } },
+      { label: '취소' },
+    ],
+  });
+}
+
 function statsDialog() {
   let cells = 0;
   let formulas = 0;
@@ -4604,9 +4935,12 @@ const MENUS = {
       { label: '다음 값의 사이에 있음...', action: () => condRuleDialog('between') },
       { label: '같음...', action: () => condRuleDialog('eq') },
       { label: '텍스트 포함...', action: () => condRuleDialog('text') },
+      { label: '발생 날짜...', action: () => cfRuleEditor({ type: 'date', period: 'today', style: { fill: '#ffc7ce', color: '#9c0006' } }, (nr) => wb.transact(() => wb.addCondRule(si, { ...usedClip(sel), ...nr }), meta()), { title: '발생 날짜' }) },
       { label: '중복 값...', action: () => condRuleDialog('dup') },
       { title: '상위/하위 규칙' },
       { label: '상위 10개 항목...', action: () => condRuleDialog('top') },
+      { label: '상위 10%...', action: () => cfRuleEditor({ type: 'top', v1: '10', percent: true, style: { fill: '#ffc7ce', color: '#9c0006' } }, (nr) => wb.transact(() => wb.addCondRule(si, { ...usedClip(sel), ...nr }), meta()), { title: '상위 10%' }) },
+      { label: '하위 10개 항목...', action: () => cfRuleEditor({ type: 'bottom', v1: '10', style: { fill: '#ffc7ce', color: '#9c0006' } }, (nr) => wb.transact(() => wb.addCondRule(si, { ...usedClip(sel), ...nr }), meta()), { title: '하위 10개 항목' }) },
       { label: '평균 초과', action: () => add({ type: 'aboveAvg', style: { fill: '#ffc7ce', color: '#9c0006' } }) },
       { label: '평균 미만', action: () => add({ type: 'belowAvg', style: { fill: '#ffc7ce', color: '#9c0006' } }) },
       { title: '데이터 막대' },
@@ -4619,7 +4953,14 @@ const MENUS = {
         label: n, icon: `<span style="display:block;width:16px;height:10px;background:linear-gradient(90deg,${colors.join(',')})"></span>`,
         action: () => add({ type: 'scale', colors }),
       })),
+      { title: '아이콘 집합' },
+      ...ICON_SETS.slice(0, 5).map((set) => ({
+        label: set.label, icon: `<span style="display:inline-flex">${set.icons.map((i) => ICON_SVG[i]).join('')}</span>`,
+        action: () => add({ type: 'icons', icons: set.id }),
+      })),
       { sep: true },
+      { label: '새 규칙...', icon: 'condFormat', action: () => cfRuleEditor(null, (nr) => wb.transact(() => wb.addCondRule(si, { ...usedClip(sel), ...nr }), meta())) },
+      { label: '규칙 관리...', action: cfManager },
       { label: '규칙 지우기 - 선택한 셀', action: () => wb.transact(() => wb.clearCondRules(si, sel), meta()) },
       { label: '규칙 지우기 - 시트 전체', action: () => wb.transact(() => wb.clearCondRules(si), meta()) },
     ];
@@ -4953,6 +5294,8 @@ const COMMANDS = {
   chartScatter: () => insertChart('scatter'),
   insertPicture,
   textToColumns,
+  condManager: cfManager,
+  condNewRule: () => cfRuleEditor(null, (nr) => wb.transact(() => wb.addCondRule(si, { ...usedClip(sel), ...nr }), meta())),
   createTable: () => createTableDialog(),
   insertSlicer: insertSlicerDialog,
   slicerCaption: (v) => { if (chartSel) updateObject(chartSel, { caption: String(v ?? '') }); },

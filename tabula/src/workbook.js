@@ -655,7 +655,7 @@ export class Workbook {
 
   addCondRule(si, rule) {
     this.snapshotAll();
-    this.sheets[si].cond.push(rule);
+    this.sheets[si].cond.unshift(rule); // 새 규칙이 가장 높은 우선순위
     this.invalidate();
   }
 

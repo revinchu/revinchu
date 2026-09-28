@@ -1,12 +1,13 @@
 // 가상 스크롤 그리드: 화면에 보이는 행/열만 그림 (10,000,000행 × 16,384열 지원)
 // 틀 고정은 4개 창(TL/TR/BL/BR)으로, 각 창은 시트 좌표계 콘텐츠를 transform 으로 이동시켜 표시.
 import { Axis } from './axis.js';
-import { colToName, MAX_ROWS, MAX_COLS, isError, compareValues } from './formula.js';
-import { formatValue, formatGeneral, parseInput } from './format.js';
+import { colToName, MAX_ROWS, MAX_COLS } from './formula.js';
+import { formatValue, formatGeneral } from './format.js';
 import { DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT } from './workbook.js';
 import { chartData, renderChartSvg } from './chart.js';
 import { shapeSvg } from './shapes.js';
 import { validationAt } from './validation.js';
+import { prepareCond, condFormatAt, ICON_SVG, EMPTY_MATCH_TYPES } from './condfmt.js';
 import { tableAt, tableCellStyle, tableFilterRange, styleByName } from './tables.js';
 
 export const DEFAULT_FONT = '맑은 고딕';
@@ -56,73 +57,6 @@ function fitNumber(v, maxW, style) {
 }
 
 const esc = (s) => String(s).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
-
-// ───────────── 조건부 서식 ─────────────
-function scaleColor(colors, t) {
-  const hex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
-  const seg = colors.length - 1;
-  const pos = Math.max(0, Math.min(1, t)) * seg;
-  const i = Math.min(seg - 1, Math.floor(pos));
-  const f = pos - i;
-  const a = hex(colors[i]);
-  const b = hex(colors[i + 1]);
-  return `rgb(${a.map((x, k) => Math.round(x + (b[k] - x) * f)).join(',')})`;
-}
-
-const condValue = (s) => parseInput(String(s ?? '')).value;
-const dupKey = (v) => (typeof v === 'string' ? `s:${v.toLowerCase()}` : `${typeof v}:${v}`);
-
-export function prepareCond(wb, si) {
-  const sheet = wb.sheets[si];
-  const used = wb.usedRange(si);
-  return sheet.cond.map((rule) => {
-    const nums = [];
-    const counts = new Map();
-    const r2 = Math.min(rule.r2, used.rows - 1);
-    const c2 = Math.min(rule.c2, used.cols - 1);
-    for (let r = rule.r1; r <= r2; r++) {
-      for (let c = rule.c1; c <= c2; c++) {
-        const v = wb.getValue(si, r, c);
-        if (typeof v === 'number') nums.push(v);
-        if (v !== null && v !== '' && !isError(v)) counts.set(dupKey(v), (counts.get(dupKey(v)) ?? 0) + 1);
-      }
-    }
-    const sorted = [...nums].sort((a, b) => b - a);
-    let min = Infinity;
-    let max = -Infinity;
-    let sum = 0;
-    for (const n of nums) { if (n < min) min = n; if (n > max) max = n; sum += n; }
-    return {
-      rule, counts,
-      min: nums.length ? min : 0,
-      max: nums.length ? max : 0,
-      avg: nums.length ? sum / nums.length : 0,
-      topCut: sorted[Math.min(sorted.length, Number(rule.v1) || 10) - 1],
-    };
-  });
-}
-
-function condMatch(prep, v) {
-  const { rule } = prep;
-  if (v === null || v === '' || isError(v)) return false;
-  switch (rule.type) {
-    case 'gt': { const a = condValue(rule.v1); return typeof v === 'number' && typeof a === 'number' && v > a; }
-    case 'lt': { const a = condValue(rule.v1); return typeof v === 'number' && typeof a === 'number' && v < a; }
-    case 'between': {
-      const a = condValue(rule.v1);
-      const b = condValue(rule.v2);
-      return typeof v === 'number' && v >= Math.min(a, b) && v <= Math.max(a, b);
-    }
-    case 'eq': { const a = condValue(rule.v1); return typeof v === typeof a && compareValues(v, a) === 0; }
-    case 'text': return String(typeof v === 'number' ? formatGeneral(v) : v).toLowerCase().includes(String(rule.v1 ?? '').toLowerCase());
-    case 'dup': return (prep.counts.get(dupKey(v)) ?? 0) > 1;
-    case 'unique': return (prep.counts.get(dupKey(v)) ?? 0) === 1;
-    case 'top': return typeof v === 'number' && prep.topCut !== undefined && v >= prep.topCut;
-    case 'aboveAvg': return typeof v === 'number' && v > prep.avg;
-    case 'belowAvg': return typeof v === 'number' && v < prep.avg;
-    default: return false;
-  }
-}
 
 /**
  * host.state() → { wb, si, sel, selKind, active, editing, clip, fillPreview, refs, chartSel,
@@ -512,6 +446,8 @@ export class GridView {
     const hasLine = !!(sheet.allStyle || Object.keys(sheet.colStyles).length || Object.keys(sheet.rowStyles).length);
     const tables = (sheet.tables ?? []).filter((t) => t.r1 <= r2 && t.r2 >= r1 && t.c1 <= c2 && t.c2 >= c1 && styleByName(t.style));
     const inTable = (r, c) => tables.some((t) => r >= t.r1 && r <= t.r2 && c >= t.c1 && c <= t.c2);
+    const emptyRules = (this.cond ?? []).map((pr) => pr.rule).filter((rl) => EMPTY_MATCH_TYPES.has(rl.type) && rl.r1 <= r2 && rl.r2 >= r1 && rl.c1 <= c2 && rl.c2 >= c1);
+    const emptyCond = (r, c) => emptyRules.some((rl) => r >= rl.r1 && r <= rl.r2 && c >= rl.c1 && c <= rl.c2);
     for (const r of visRows) {
       // 창 왼쪽 밖에서 넘쳐 들어오는 텍스트
       if (c1 > 0) {
@@ -524,7 +460,7 @@ export class GridView {
       }
       for (const c of visCols) {
         if (inMerge(r, c)) continue;
-        if (!hasLine && !sheet.cells.has(`${r},${c}`) && !inTable(r, c)) continue;
+        if (!hasLine && !sheet.cells.has(`${r},${c}`) && !inTable(r, c) && !emptyCond(r, c)) continue;
         html.push(this.cellHtml(r, c, p, sheet, merges));
       }
     }
@@ -570,21 +506,12 @@ export class GridView {
     const h = merge ? this.rows.pos(merge.r2 + 1) - y : this.rows.size(r);
     if (!w || !h) return '';
     let bar = null;
+    let icon = null;
+    let hideValue = false;
     if (this.cond) {
-      for (const prep of this.cond) {
-        const rule = prep.rule;
-        if (r < rule.r1 || r > rule.r2 || c < rule.c1 || c > rule.c2) continue;
-        if (rule.type === 'bar') {
-          if (typeof v === 'number') {
-            const lo = Math.min(0, prep.min);
-            bar = { pct: prep.max === lo ? 100 : Math.max(0, ((v - lo) / (prep.max - lo)) * 100), color: rule.color };
-          }
-        } else if (rule.type === 'scale') {
-          if (typeof v === 'number') style = { ...style, fill: scaleColor(rule.colors, prep.max === prep.min ? 0.5 : (v - prep.min) / (prep.max - prep.min)) };
-        } else if (condMatch(prep, v)) {
-          style = { ...style, ...rule.style };
-        }
-      }
+      const cf = condFormatAt(this.cond, wb, si, r, c, v);
+      if (cf.style) style = { ...style, ...cf.style };
+      ({ bar, icon, hideValue } = cf);
     }
     let text;
     let align;
@@ -620,7 +547,9 @@ export class GridView {
       text = fitNumber(v, w - 6, style);
     }
     const comment = cell?.comment ? ` data-cm="${esc(cell.comment)}"` : '';
-    return `<div class="c${cls.length ? ` ${cls.join(' ')}` : ''}" data-r="${r}" data-c="${c}" style="${css.join(';')}"${comment}><span>${esc(text)}</span></div>`;
+    const iconHtml = icon ? `<i class="cf-icon">${ICON_SVG[icon] ?? ''}</i>` : '';
+    if (icon) cls.push('has-icon');
+    return `<div class="c${cls.length ? ` ${cls.join(' ')}` : ''}" data-r="${r}" data-c="${c}" style="${css.join(';')}"${comment}>${iconHtml}<span>${hideValue ? '' : esc(text)}</span></div>`;
   }
 
   /** 그림 개체: 차트 · 그림 · 도형 */
