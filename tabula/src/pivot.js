@@ -11,6 +11,7 @@
 // 옛 정의 { rowField, colField, valueField, agg, fieldNames } 도 그대로 읽음
 import { formatGeneral, formatValue } from './format.js';
 import { findTable, dataTop, dataBottom, columnNames, ACCENTS, tint, shade } from './tables.js';
+import { logicalCol } from './block.js';
 import {
   EMPTY as EMPTY0, IMG_KEY as IMG_KEY0, keyOf as keyOf0, imageOfKey as imageOfKey0, sortKeys as sortKeys0, itemText as itemText0,
   kk, cubeFromRows, filterRows, groupAggregate, groupAcc, Cube, Column, blockColumn, groupedColumn, groupRank, aggregateQuery, planRollup,
@@ -406,6 +407,7 @@ function sourceOf(cube, si, ref, table, rows) {
  * 블록에 없는 열이나 수식 셀(일반 셀)이 섞인 열은 그 열만 셀 값을 읽음
  */
 const blockCubes = new WeakMap();
+const headKey = (wb, si, ref, names) => (names ? names.join('\u0001') : Array.from({ length: ref.c2 - ref.c1 + 1 }, (_, j) => String(wb.getValue(si, ref.r1, ref.c1 + j) ?? '')).join('\u0001'));
 function blockCube(wb, si, ref, names) {
   const sheet = wb.sheets?.[si];
   if (!sheet?.blocks?.length) return null;
@@ -418,10 +420,12 @@ function blockCube(wb, si, ref, names) {
   const key = `${ref.r1},${ref.c1},${ref.r2},${ref.c2}:${names ? names.join('\u0001') : ''}`;
   let memo = blockCubes.get(b);
   if (!memo) { memo = new Map(); blockCubes.set(b, memo); }
-  const hit = memo.get(key);
-  if (hit && hit.sv === sv && hit.ver === (b.ver ?? 0)) return hit.cube;
   const n = d2 - d1 + 1;
   const a = d1 - b.r0;
+  // 블록 전체를 쓰면 행 순서와 무관(집계는 순서가 상관없음) → 정렬해도 큐브를 다시 만들지 않음
+  const whole = a === 0 && n === b.n;
+  const hit = memo.get(key);
+  if (hit && hit.dver === (b.dver ?? 0) && (whole || hit.ver === (b.ver ?? 0)) && (!hit.mixed || hit.sv === sv) && hit.head === headKey(wb, si, ref, names)) return hit.cube;
   const width = ref.c2 - ref.c1 + 1;
   const header = names ?? Array.from({ length: width }, (_, j) => {
     const v = wb.getValue(si, ref.r1, ref.c1 + j);
@@ -439,9 +443,10 @@ function blockCube(wb, si, ref, names) {
     const c = ref.c1 + j;
     const bc = c >= b.c0 && c < b.c0 + b.cols.length && !mixed.has(c) ? b.cols[c - b.c0] : null;
     if (!bc) return new Column(n, (i) => wb.getValue(si, d1 + i, c));
+    if (b.perm && !whole) { const lc = logicalCol(b, c - b.c0, a, n); return blockColumn(lc, lc.a, n); }
     return blockColumn(bc, a, n);
   }, (i) => header.map((_, j) => cube.col(j).get(i)));
-  memo.set(key, { cube, sv, ver: b.ver ?? 0 });
+  memo.set(key, { cube, sv, ver: b.ver ?? 0, dver: b.dver ?? 0, mixed: mixed.size > 0, head: headKey(wb, si, ref, names) });
   return cube;
 }
 

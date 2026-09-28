@@ -6,7 +6,8 @@ import {
   adjustFormulaForStructure, renameSheetInFormula, shiftFormula, quoteSheetName, MAX_ROWS, MAX_COLS,
 } from './formula.js';
 import { parseInput } from './format.js';
-import { inBlock, blockValue, blockSet, blockClone, blockShift, rawOf } from './block.js';
+import { inBlock, blockValue, blockSet, blockClone, blockShift, rawOf, sortOrder, blockPermute, logicalCol, reorderRows, setRowOrder, materialize } from './block.js';
+import { hid, shiftHidden } from './axis.js';
 import { CellImage } from './fxcore.js';
 
 export const DEFAULT_COL_WIDTH = 64;
@@ -560,8 +561,8 @@ export class Workbook {
         if (!s) return false;
         if (manualToo && s.hiddenRows?.[row]) return true;
         if (!filteredToo) return false;
-        if (s.filter?.hidden?.[row]) return true;
-        return (s.tables ?? []).some((t) => t.filter?.hidden?.[row]);
+        if (hid(s.filter?.hidden, row)) return true;
+        return (s.tables ?? []).some((t) => hid(t.filter?.hidden, row));
       },
       cell: (sheet, r, c) => this.getValue(this.resolveSheet(sheet, si), r, c),
       range: (sheet, r1, c1, r2, c2) => {
@@ -719,7 +720,7 @@ export class Workbook {
     }
     const done = new Set();
     for (const e of entries) {
-      if (e.t === 'cell' || (e.t === 'prop' && !CALC_NEUTRAL.has(e.prop))) {
+      if (e.t === 'cell' || e.t === 'perm' || e.t === 'order' || (e.t === 'prop' && !CALC_NEUTRAL.has(e.prop))) {
         if (e.t === 'prop' && e.prop === 'tables') { this.deps = null; this.affectMemo.clear(); }
         if (!done.has(e.si)) { done.add(e.si); this.invalidate(e.si); }
       } else if (e.t === 'prop' && e.prop === 'merges') {
@@ -878,6 +879,8 @@ export class Workbook {
     else if (e.t === 'sheet') this.putSheet(e.si, e[side]);
     else if (e.t === 'names') this.names = e[side].map((n) => ({ ...n }));
     else if (e.t === 'rename') { if (this.sheets[e.si]) this.sheets[e.si].name = e[side]; }
+    else if (e.t === 'perm') { const b = this.sheets[e.si]?.blocks[e.bi]; if (b) { materialize(b); blockPermute(b, e.a, e.n, e.j1, e.j2, e.order, side === 'before'); } }
+    else if (e.t === 'order') { const b = this.sheets[e.si]?.blocks[e.bi]; if (b) setRowOrder(b, e.a, e[side]); }
     else if (e.t === 'all') this.restore(e[side]);
     else if (e.t === 'prop') { if (this.sheets[e.si]) this.sheets[e.si][e.prop] = structuredClone(e[side]); }
     else if (e.t === 'colWidth') this.sheets[e.si].colWidths = { ...e[side] };
@@ -1075,7 +1078,7 @@ export class Workbook {
       if (!rg) return null;
       const nt = { ...t, ...rg };
       if (isRow) {
-        if (t.filter) nt.filter = { ...t.filter, hidden: shiftKeys(t.filter.hidden, index, count) };
+        if (t.filter) nt.filter = { ...t.filter, hidden: shiftHidden(t.filter.hidden, index, count) ?? shiftKeys(t.filter.hidden, index, count) };
       } else {
         if (t.filter) nt.filter = { ...t.filter, criteria: shiftKeys(t.filter.criteria, index, count) };
         nt.totalsFns = shiftKeys(t.totalsFns, index, count);
@@ -1102,7 +1105,7 @@ export class Workbook {
       const f = adjustRange(target.filter, axis, index, count);
       if (!f) target.filter = null;
       else {
-        if (isRow) f.hidden = shiftKeys(f.hidden, index, count);
+        if (isRow) f.hidden = shiftHidden(f.hidden, index, count) ?? shiftKeys(f.hidden, index, count);
         else f.criteria = shiftKeys(f.criteria, index, count);
         target.filter = f;
       }
@@ -1211,6 +1214,7 @@ export class Workbook {
 
   /** 범위를 keyCol 기준으로 정렬 (행 단위 이동, 수식 상대 참조 보정) */
   sortRange(si, r1, c1, r2, c2, keyCol, ascending = true) {
+    if (this.sortBlock(si, r1, c1, r2, c2, keyCol, ascending)) return;
     const rows = [];
     for (let r = r1; r <= r2; r++) {
       const cells = [];
@@ -1233,6 +1237,38 @@ export class Workbook {
         this.setCellData(si, r, c1 + j, data);
       });
     });
+  }
+
+  /**
+   * 정렬 범위가 열 블록 안이고 일반 셀이 섞여 있지 않으면 블록을 바로 재배치 (천만 행도 1~2초).
+   * 실행 취소 기록은 순서(순열)만 저장
+   */
+  sortBlock(si, r1, c1, r2, c2, keyCol, ascending) {
+    const sheet = this.sheets[si];
+    const bi = sheet.blocks.findIndex((b) => inBlock(b, r1, c1) && inBlock(b, r2, c2));
+    if (bi < 0 || r2 - r1 < 1000) return false;
+    for (const k of sheet.cells.keys()) {
+      const i = k.indexOf(',');
+      const r = +k.slice(0, i);
+      const c = +k.slice(i + 1);
+      if (r >= r1 && r <= r2 && c >= c1 && c <= c2) return false;
+    }
+    const b = sheet.blocks[bi];
+    const a = r1 - b.r0;
+    const n = r2 - r1 + 1;
+    const key = logicalCol(b, keyCol - b.c0, a, n);
+    const order = sortOrder(key, key.a, n, ascending, compareValues);
+    if (c1 === b.c0 && c2 === b.c0 + b.cols.length - 1) {
+      // 블록 전체 너비: 데이터를 옮기지 않고 행 순서만 바꿈 (실행 취소도 즉시)
+      const before = reorderRows(b, a, n, order);
+      this.record({ t: 'order', si, bi, a, before, after: b.perm.slice(a, a + n) });
+    } else {
+      materialize(b);
+      blockPermute(b, a, n, c1 - b.c0, c2 - b.c0, order);
+      this.record({ t: 'perm', si, bi, a, n, j1: c1 - b.c0, j2: c2 - b.c0, order });
+    }
+    this.invalidate(si);
+    return true;
   }
 
   // ─────────── 셀 병합 / 조건부 서식 ───────────

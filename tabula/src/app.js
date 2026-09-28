@@ -26,7 +26,9 @@ import {
 } from './pivot.js';
 import { SLICER_STYLES, slicerStyleName, slicerColors, CUSTOM_KEYS } from './slicerstyle.js';
 import { server, idbSet, idbGet, idbDel } from './storage.js';
-import { itemStats, EMPTY as PIVOT_EMPTY } from './cube.js';
+import { itemStats, blockColumn, EMPTY as PIVOT_EMPTY } from './cube.js';
+import { logicalCol } from './block.js';
+import { hid, hidCount } from './axis.js';
 import { fontList, fontAlias, loadLocalFonts, canListLocalFonts } from './fonts.js';
 import { ICONS } from './icons.js';
 import {
@@ -107,7 +109,7 @@ const range = (a, b) => Array.from({ length: Math.max(0, b - a + 1) }, (_, i) =>
 const styleAt = (r, c) => wb.styleAt(si, r, c);
 const valueAt = (r, c) => wb.getValue(si, r, c);
 const isEmptyAt = (r, c) => !wb.getCell(si, r, c)?.raw;
-const filterHidden = (r) => !!sheet().filter?.hidden?.[r] || (sheet().tables ?? []).some((t) => t.filter?.hidden?.[r]);
+const filterHidden = (r) => hid(sheet().filter?.hidden, r) || (sheet().tables ?? []).some((t) => hid(t.filter?.hidden, r));
 
 function expandMerges(rg) {
   const out = { ...rg };
@@ -230,6 +232,7 @@ function updateSelectionUI() {
 }
 
 function updateStats() {
+  statsToken++; // 진행 중인 큰 통계 계산 중단
   dom.stats.replaceChildren();
   if (selIsActiveOnly()) return;
   const rg = usedClip(sel);
@@ -237,7 +240,42 @@ function updateStats() {
   let numCount = 0;
   let sum = 0;
   let fmtStyle = null;
-  for (const [r, c] of cellsIn(rg)) {
+  const area = (rg.r2 - rg.r1 + 1) * (rg.c2 - rg.c1 + 1);
+  if (area > 2000000) { bigStats(rg); return; }
+  if (area > 200000) {
+    // 아주 큰 선택: 열 블록은 형식화 배열을 바로, 나머지는 일반 셀만 (칸마다 값을 묻지 않음)
+    const sh = sheet();
+    const add = (v) => {
+      if (v === null || v === '' || v === undefined) return;
+      count++;
+      if (typeof v === 'number') { numCount++; sum += v; }
+    };
+    for (const [k, cell] of sh.cells) {
+      const i = k.indexOf(',');
+      const r = +k.slice(0, i);
+      const c = +k.slice(i + 1);
+      if (r < rg.r1 || r > rg.r2 || c < rg.c1 || c > rg.c2 || (!cell.raw && !cell.formula)) continue;
+      const v = valueAt(r, c);
+      add(v);
+      if (typeof v === 'number') fmtStyle ??= styleAt(r, c);
+    }
+    for (const bk of sh.blocks ?? []) {
+      const a1 = Math.max(rg.r1, bk.r0) - bk.r0;
+      const a2 = Math.min(rg.r2, bk.r0 + bk.n - 1) - bk.r0;
+      for (let c = Math.max(rg.c1, bk.c0); c <= Math.min(rg.c2, bk.c0 + bk.cols.length - 1); c++) {
+        const { num, str, fmt } = bk.cols[c - bk.c0];
+        const pm = bk.perm && !(a1 === 0 && a2 === bk.n - 1) ? bk.perm : null; // 일부 행만이면 정렬 순서대로
+        let s0 = 0;
+        for (let q = a1; q <= a2; q++) {
+          const i = pm ? pm[q] : q;
+          if (str && str[i] >= 0) { count++; continue; }
+          if (num) { const v = num[i]; if (v === v) { count++; numCount++; s0 += v; } }
+        }
+        sum += s0;
+        if (s0 && fmt) fmtStyle ??= fmt;
+      }
+    }
+  } else for (const [r, c] of cellsIn(rg)) {
     const v = valueAt(r, c);
     if (v === null || v === '') continue;
     count++;
@@ -254,6 +292,62 @@ function updateStats() {
   items.push(`개수: ${count}`);
   if (numCount) items.push(`합계: ${fmt(sum)}`);
   for (const t of items) dom.stats.append(el('span', {}, t));
+}
+
+/**
+ * 아주 큰 선택(수백만 칸)의 상태 표시줄 통계: 열 블록을 조각씩 훑으며 화면을 멈추지 않게 (다른 선택을 하면 중단)
+ */
+let statsToken = 0;
+async function bigStats(rg) {
+  const token = ++statsToken;
+  dom.stats.append(el('span', { class: 'muted' }, '계산 중…'));
+  const sh = sheet();
+  let count = 0;
+  let numCount = 0;
+  let sum = 0;
+  let fmtStyle = null;
+  for (const [k, cell] of sh.cells) {
+    const i = k.indexOf(',');
+    const r = +k.slice(0, i);
+    const c = +k.slice(i + 1);
+    if (r < rg.r1 || r > rg.r2 || c < rg.c1 || c > rg.c2 || (!cell.raw && !cell.formula)) continue;
+    const v = valueAt(r, c);
+    if (v === null || v === '') continue;
+    count++;
+    if (typeof v === 'number') { numCount++; sum += v; fmtStyle ??= styleAt(r, c); }
+  }
+  let last = performance.now();
+  for (const bk of sh.blocks ?? []) {
+    const a1 = Math.max(rg.r1, bk.r0) - bk.r0;
+    const a2 = Math.min(rg.r2, bk.r0 + bk.n - 1) - bk.r0;
+    for (let c = Math.max(rg.c1, bk.c0); c <= Math.min(rg.c2, bk.c0 + bk.cols.length - 1); c++) {
+      const { num, str, fmt } = bk.cols[c - bk.c0];
+      const pm = bk.perm && !(a1 === 0 && a2 === bk.n - 1) ? bk.perm : null;
+      for (let q0 = a1; q0 <= a2; q0 += 1 << 20) {
+        const q1 = Math.min(a2, q0 + (1 << 20) - 1);
+        let s0 = 0;
+        for (let q = q0; q <= q1; q++) {
+          const i = pm ? pm[q] : q;
+          if (str && str[i] >= 0) { count++; continue; }
+          if (num) { const v = num[i]; if (v === v) { count++; numCount++; s0 += v; } }
+        }
+        sum += s0;
+        if (s0 && fmt) fmtStyle ??= fmt;
+        if (performance.now() - last > 30) {
+          await yieldUI();
+          if (token !== statsToken || sheet() !== sh) return; // 선택이 바뀜
+          last = performance.now();
+        }
+      }
+    }
+  }
+  if (token !== statsToken) return;
+  dom.stats.replaceChildren();
+  if (!count) return;
+  const fmt = (n) => formatValue(n, fmtStyle?.numFmt && fmtStyle.numFmt !== 'general' ? fmtStyle : {}).text;
+  if (numCount) dom.stats.append(el('span', {}, `평균: ${fmt(sum / numCount)}`));
+  dom.stats.append(el('span', {}, `개수: ${count.toLocaleString()}`));
+  if (numCount) dom.stats.append(el('span', {}, `합계: ${fmt(sum)}`));
 }
 
 // ───────────────────────── 이동 ─────────────────────────
@@ -402,8 +496,8 @@ function beginTyping() {
 
 function setMode() {
   if (!editing) {
-    const f = allFilters().map(([, x]) => x).find((x) => Object.keys(x.hidden ?? {}).length) ?? null;
-    const hidden = f ? Object.keys(f.hidden ?? {}).length : 0;
+    const f = allFilters().map(([, x]) => x).find((x) => hidCount(x.hidden)) ?? null;
+    const hidden = f ? hidCount(f.hidden) : 0;
     dom.status.textContent = painter ? '서식 복사' : clip ? '대상을 선택한 후 Enter 키를 누르거나 붙여넣기를 선택하세요.'
       : hidden ? `필터 모드: ${f.r2 - f.r1 - hidden}/${f.r2 - f.r1}개 레코드 표시` : '준비';
   } else if (canPoint()) dom.status.textContent = '참조';
@@ -2120,9 +2214,62 @@ function insertFunctionText(name) {
 
 // ───────────────────────── 필터 ─────────────────────────
 /** 필터 조건으로 숨길 행 다시 계산 (데이터 아래로 늘어난 행 포함) */
+/**
+ * 필터 열 c 의 행 r1~r2 가 열 블록에 있으면 { codes, texts, over } — 표시 글자를 값마다 한 번만 만들어 코드로 비교.
+ * over: 블록 위에 일반 셀(수식 · 다른 서식)이 있는 행 (그 행만 따로 확인)
+ */
+const blockFilterMemo = new WeakMap();
+function blockFilterCol(r1, r2, c) {
+  const b = wb.blockAt(si, r1, c);
+  if (!b || r2 >= b.r0 + b.n) return null;
+  const key = `${r1},${r2},${c},${b.ver ?? 0},${wb.sheetVersion(si)}`;
+  let memo = blockFilterMemo.get(b);
+  if (!memo) { memo = new Map(); blockFilterMemo.set(b, memo); }
+  const hit = memo.get(key);
+  if (hit) return hit;
+  const bc = b.cols[c - b.c0];
+  const lc = logicalCol(b, c - b.c0, r1 - b.r0, r2 - r1 + 1); // 정렬 순서가 있으면 보이는 순서로
+  const d = blockColumn(lc, lc.a, r2 - r1 + 1).dim();
+  const fmt = bc.fmt ?? {};
+  const texts = d.keys.map((k) => (k === PIVOT_EMPTY ? '' : formatValue(k, fmt).text));
+  const over = [];
+  for (const k of sheet().cells.keys()) {
+    const i = k.indexOf(',');
+    const r = +k.slice(0, i);
+    if (r >= r1 && r <= r2 && +k.slice(i + 1) === c) over.push(r);
+  }
+  const res = { codes: d.codes, texts, over };
+  if (memo.size > 20) memo.clear();
+  memo.set(key, res);
+  return res;
+}
+
 function recomputeFilter(f, key = '') {
   const r2 = key ? f.r2 : Math.max(f.r2, currentRegion(f.r1, f.c1).r2);
   const crit = Object.entries(f.criteria ?? {}).filter(([, v]) => Array.isArray(v)).map(([c, vals]) => [Number(c), new Set(vals)]);
+  const n = r2 - f.r1;
+  if (crit.length && n > 50000) {
+    // 행이 아주 많으면: 숨긴 행을 비트맵으로, 열 블록은 값(코드)마다 한 번만 판정
+    const start = f.r1 + 1;
+    const bits = new Uint8Array(n);
+    const overRows = new Set();
+    for (const [c, allowed] of crit) {
+      const bf = blockFilterCol(start, r2, c);
+      if (bf) {
+        const ok = Uint8Array.from(bf.texts, (t) => (allowed.has(t) ? 1 : 0));
+        const codes = bf.codes;
+        for (let i = 0; i < n; i++) if (!ok[codes[i]]) bits[i] = 1;
+        for (const r of bf.over) overRows.add(r);
+      } else {
+        for (let i = 0; i < n; i++) if (!bits[i] && !allowed.has(displayText(start + i, c))) bits[i] = 1;
+      }
+    }
+    // 블록 위의 일반 셀이 있는 행은 모든 조건을 표시 글자로 다시 확인
+    for (const r of overRows) bits[r - start] = crit.every(([c, allowed]) => allowed.has(displayText(r, c))) ? 0 : 1;
+    let count = 0;
+    for (let i = 0; i < n; i++) count += bits[i];
+    return { ...f, r2, hidden: count ? { __bits: bits, start, count } : {} };
+  }
   const hidden = {};
   if (crit.length) {
     for (let r = f.r1 + 1; r <= r2; r++) {
@@ -2167,7 +2314,7 @@ function applyFilterCriteria(c, values, key = '', { quiet = false } = {}) {
   gv.layout();
   const total = nf.r2 - nf.r1;
   if (quiet) return;
-  toast(`${total}개 중 ${total - Object.keys(nf.hidden).length}개의 레코드가 있습니다.`);
+  toast(`${total.toLocaleString()}개 중 ${(total - hidCount(nf.hidden)).toLocaleString()}개의 레코드가 있습니다.`);
   selectCell(nf.r1, c);
   setMode();
 }
@@ -2179,10 +2326,27 @@ function openFilterMenu(c, anchorEl, key = '') {
   // 다른 열 조건을 통과한 행의 값만 목록에 표시
   const others = Object.entries(f.criteria ?? {}).filter(([k, v]) => Number(k) !== c && Array.isArray(v)).map(([k, v]) => [Number(k), new Set(v)]);
   const values = new Map();
-  for (let r = f.r1 + 1; r <= full.r2; r++) {
-    if (others.some(([k, allowed]) => !allowed.has(displayText(r, k)))) continue;
-    const t = displayText(r, c);
-    if (!values.has(t)) values.set(t, valueAt(r, c));
+  const bfc = full.r2 - f.r1 > 50000 ? blockFilterCol(f.r1 + 1, full.r2, c) : null;
+  const bfo = bfc ? others.map(([k, allowed]) => [blockFilterCol(f.r1 + 1, full.r2, k), allowed]) : [];
+  if (bfc && !bfc.over.length && bfo.every(([x]) => x && !x.over.length)) {
+    // 행이 아주 많은 열 블록: 코드 단위로 (다른 열 조건을 통과한 행의 값만)
+    const n = full.r2 - f.r1;
+    const oks = bfo.map(([x, allowed]) => [x.codes, Uint8Array.from(x.texts, (t) => (allowed.has(t) ? 1 : 0))]);
+    const seen = new Uint8Array(bfc.texts.length);
+    let left = seen.length;
+    for (let i = 0; i < n && left; i++) {
+      let pass = true;
+      for (const [codes, ok] of oks) if (!ok[codes[i]]) { pass = false; break; }
+      if (!pass) continue;
+      const code = bfc.codes[i];
+      if (!seen[code]) { seen[code] = 1; left--; values.set(bfc.texts[code], valueAt(f.r1 + 1 + i, c)); }
+    }
+  } else {
+    for (let r = f.r1 + 1; r <= full.r2; r++) {
+      if (others.some(([k, allowed]) => !allowed.has(displayText(r, k)))) continue;
+      const t = displayText(r, c);
+      if (!values.has(t)) values.set(t, valueAt(r, c));
+    }
   }
   const items = [...values.entries()].sort((a, b) => {
     if (a[0] === '') return 1;
@@ -7140,7 +7304,7 @@ const COMMANDS = {
   fillDown: () => fillCopy('down'),
   fillRight: () => fillCopy('right'),
   clearContents: () => wb.transact(() => {
-    if (allFilters().some(([, f]) => Object.keys(f.hidden ?? {}).length)) {
+    if (allFilters().some(([, f]) => hidCount(f.hidden))) {
       for (const [r, c] of cellsIn(usedClip(sel))) {
         if (filterHidden(r)) continue;
         const cell = wb.getCell(si, r, c);

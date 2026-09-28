@@ -4,6 +4,10 @@ import assert from 'node:assert/strict';
 import { zip } from '../src/zip.js';
 import { readXlsx, readXlsxAsync, writeXlsx } from '../src/xlsx.js';
 import { Workbook } from '../src/workbook.js';
+import { ColBuilder, blockValue } from '../src/block.js';
+import { CsvBlockReader } from '../src/csv.js';
+import { Axis, hid, hidCount } from '../src/axis.js';
+import { pivotSourceData, resolvePivot, computePivot } from '../src/pivot.js';
 
 const book = () => new Workbook({
   sheets: [
@@ -122,7 +126,6 @@ test('빠른 시트 읽기: 공유 문자열 · 인라인 문자열 · 빈 행 �
 });
 
 test('피벗 오류 값 표시 옵션 (showError) 과 사용자 지정 피벗 스타일', async () => {
-  const { computePivot, resolvePivot } = await import('../src/pivot.js');
   const rows = [['캠페인', '비용', '전환'], ['가', 100, 0], ['나', 50, 5]];
   const def = { rows: ['캠페인'], values: [{ field: 'CPA', agg: 'sum' }], calcFields: [{ name: 'CPA', formula: '비용/전환' }], layout: 'tabular' };
   const cellOf = (d, label) => {
@@ -142,3 +145,116 @@ test('피벗 오류 값 표시 옵션 (showError) 과 사용자 지정 피벗 �
   assert.equal(head.style.color, '#ffffff');
   assert.equal(head.style.fill, '#2f5597');
 });
+
+// ───────────── 열 블록 · 빅데이터 ─────────────
+
+function blockBook(n, fill) {
+  const cols = [new ColBuilder(n), new ColBuilder(n), new ColBuilder(n)];
+  for (let i = 0; i < n; i++) fill(i, (j, v) => cols[j].set(i, v));
+  return new Workbook({
+    sheets: [{
+      name: 'D',
+      cells: new Map([['0,0', { raw: '지역' }], ['0,1', { raw: '금액' }], ['0,2', { raw: '날짜' }]]),
+      blocks: [{ r0: 1, c0: 0, n, ver: 0, cols: [cols[0].finish(n), cols[1].finish(n), cols[2].finish(n, { numFmt: 'date' })] }],
+    }],
+  });
+}
+
+test('열 블록: 값 · 입력 글자 · 편집 · 수식 덮어쓰기 · 실행 취소 · 행 삽입', () => {
+  const wb = blockBook(5, (i, set) => { set(0, ['서울', '부산'][i % 2]); set(1, i * 10); set(2, 46204 + i); });
+  assert.equal(wb.getValue(0, 1, 0), '서울');
+  assert.equal(wb.getValue(0, 3, 1), 20);
+  assert.equal(wb.getRaw(0, 2, 2), '2026-07-02');
+  assert.equal(wb.styleAt(0, 2, 2).numFmt, 'date');
+  assert.deepEqual(wb.usedRange(0), { rows: 6, cols: 3 });
+  wb.transact(() => wb.setInput(0, 2, 1, '777'));
+  assert.equal(wb.getValue(0, 2, 1), 777);
+  assert.equal(wb.sheets[0].cells.has('2,1'), false); // 블록 안에 저장
+  wb.transact(() => wb.setInput(0, 3, 1, '=B2+1'));
+  assert.equal(wb.getValue(0, 3, 1), 1); // B2 = 0
+  assert.equal(wb.sheets[0].cells.has('3,1'), true); // 수식은 일반 셀
+  wb.undo();
+  assert.equal(wb.getValue(0, 3, 1), 20);
+  wb.undo();
+  assert.equal(wb.getValue(0, 2, 1), 10);
+  wb.transact(() => wb.insertRows(0, 2, 2));
+  assert.equal(wb.getValue(0, 1, 1), 0);
+  assert.equal(wb.getValue(0, 2, 1), null);
+  assert.equal(wb.getValue(0, 4, 1), 10);
+  assert.equal(wb.usedRange(0).rows, 8);
+  wb.undo();
+  assert.equal(wb.getValue(0, 2, 1), 10);
+});
+
+test('열 블록 정렬 (기수 · 계수 정렬, 빈 칸 끝, 실행 취소)', () => {
+  const vals = [5, -2, null, 3.5, 0, -2, 100, null, 7];
+  const n = 1200;
+  const wb = blockBook(n, (i, set) => { const v = vals[i % vals.length]; if (v !== null) set(1, v + i / 1e6); set(0, `k${(i * 7) % 13}`); });
+  const before = Array.from({ length: n }, (_, i) => wb.getValue(0, i + 1, 1));
+  wb.transact(() => wb.sortRange(0, 1, 0, n, 2, 1, true));
+  const after = Array.from({ length: n }, (_, i) => wb.getValue(0, i + 1, 1));
+  const nums = before.filter((v) => v !== null).sort((a, b) => a - b);
+  assert.deepEqual(after.slice(0, nums.length), nums);
+  assert.ok(after.slice(nums.length).every((v) => v === null));
+  wb.transact(() => wb.sortRange(0, 1, 0, n, 2, 0, false));
+  const txt = Array.from({ length: n }, (_, i) => wb.getValue(0, i + 1, 0));
+  assert.deepEqual(txt, [...txt].sort((a, b) => (a < b ? 1 : a > b ? -1 : 0)));
+  wb.undo();
+  wb.undo();
+  assert.deepEqual(Array.from({ length: n }, (_, i) => wb.getValue(0, i + 1, 1)), before);
+});
+
+test('큰 CSV 스트리밍 → 블록 (조각 경계 · 따옴표 · 날짜)', () => {
+  const text = '이름,금액,날짜\r\n"홍, 길동",1200,2026-07-01\r\n"줄\n바꿈",-3.5,x\r\n일반,,2026-12-31\r\n"따옴표""",007,\r\n';
+  for (const size of [1, 3, 7, 1000]) {
+    const rd = new CsvBlockReader(',', 4);
+    for (let i = 0; i < text.length; i += size) rd.push(text.slice(i, i + size));
+    const { header, block } = rd.finish();
+    assert.deepEqual(header, ['이름', '금액', '날짜']);
+    assert.equal(block.n, 4);
+    const v = (r, c) => blockValue(block, r + 1, c);
+    assert.equal(v(0, 0), '홍, 길동');
+    assert.equal(v(1, 0), '줄\n바꿈');
+    assert.equal(v(3, 0), '따옴표"');
+    assert.equal(v(0, 1), 1200);
+    assert.equal(v(1, 1), -3.5);
+    assert.equal(v(2, 1), null);
+    assert.equal(v(3, 1), '007'); // 앞의 0 은 글자로
+    assert.equal(v(0, 2), 46204);
+    assert.equal(block.cols[2].fmt.numFmt, 'date');
+    assert.equal(v(1, 2), 'x');
+  }
+});
+
+test('숨긴 행 비트맵과 위치 계산', () => {
+  const bits = new Uint8Array(1000);
+  for (let i = 0; i < 1000; i += 3) bits[i] = 1;
+  const h = { __bits: bits, start: 10, count: 334 };
+  const ax = new Axis(20, { 5: 40 }, [h, { 2000: true }], 1e6);
+  const naive = (i) => { let p = 0; for (let k = 0; k < i; k++) p += ax.size(k); return p; };
+  for (const i of [0, 6, 10, 11, 13, 500, 1009, 1010, 1500, 2001, 5000]) assert.equal(ax.pos(i), naive(i));
+  assert.equal(hid(h, 10), true);
+  assert.equal(hid(h, 11), false);
+  assert.equal(hidCount(h), 334);
+  assert.equal(ax.indexAt(ax.pos(1501)), 1501);
+});
+
+test('피벗: 열 블록 원본 · 요약 캐시(롤업) 결과가 행 배열 원본과 같음', () => {
+  const n = 250000;
+  const regions = ['서울', '부산', '대구', '광주'];
+  const wb = blockBook(n, (i, set) => { set(0, regions[(i * 31) % 4]); if (i % 11) set(1, (i * 7919) % 1000); set(2, 46023 + (i % 365)); });
+  const rows = [['지역', '금액', '날짜']];
+  for (let i = 0; i < n; i++) rows.push([wb.getValue(0, i + 1, 0), wb.getValue(0, i + 1, 1), wb.getValue(0, i + 1, 2)]);
+  const def = { source: 'D', range: { r1: 0, c1: 0, r2: n, c2: 2 }, rows: ['날짜'], cols: ['지역'], values: [{ field: '금액', agg: 'sum' }, { field: '금액', agg: 'count' }, { field: '금액', agg: 'max' }], groups: { 날짜: { by: 'quarters' } }, filters: { 지역: ['서울', '대구'] } };
+  const src = pivotSourceData(wb, def);
+  assert.equal(src.cube.n, n);
+  const a = computePivotGrid(src, def);
+  const b = computePivotGrid(rows, def);
+  assert.deepEqual(a, b);
+  assert.equal(a[0].length > 3, true);
+});
+
+function computePivotGrid(input, def) {
+  const res = resolvePivot(input, def);
+  return computePivot(res, res.def).grid.map((r) => r.map((c) => c?.raw ?? ''));
+}

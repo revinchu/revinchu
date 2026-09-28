@@ -9,7 +9,7 @@ import { toFileFormula, fromFileFormula } from './xlfn.js';
 import { parseInput, formatGeneral, fmtCode, styleForCode } from './format.js';
 import { DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT } from './workbook.js';
 import { chartLayout, PALETTE, chartModelData } from './chart.js';
-import { Axis } from './axis.js';
+import { Axis, hid, hidKeys } from './axis.js';
 import { toBase64, fromBase64 } from './vba.js';
 import { CellImage } from './fxcore.js';
 import { BLOCK_MIN_ROWS, ColBuilder, inBlock, blockValue } from './block.js';
@@ -2422,7 +2422,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {}) 
       }
     }
     const rowKeys = new Set([...rows.keys()]);
-    for (const k of [...Object.keys(sheet.rowHeights), ...Object.keys(sheet.hiddenRows), ...Object.keys(sheet.rowStyles), ...Object.keys(sheet.filter?.hidden ?? {}), ...(sheet.tables ?? []).flatMap((t) => Object.keys(t.filter?.hidden ?? {}))]) rowKeys.add(Number(k));
+    for (const k of [...Object.keys(sheet.rowHeights), ...Object.keys(sheet.hiddenRows), ...Object.keys(sheet.rowStyles), ...hidKeys(sheet.filter?.hidden, EXCEL_MAX_ROWS), ...(sheet.tables ?? []).flatMap((t) => hidKeys(t.filter?.hidden, EXCEL_MAX_ROWS))]) rowKeys.add(Number(k));
     // 열 블록의 행 (셀 객체 없이 형식화 배열에서 바로 씀)
     const blocks = sheet.blocks ?? [];
     for (const b of blocks) {
@@ -2437,7 +2437,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {}) 
       let cells = rows.get(r) ?? [];
       for (const b of blocks) {
         if (r < b.r0 || r >= b.r0 + b.n) continue;
-        const i = r - b.r0;
+        const i = b.perm ? b.perm[r - b.r0] : r - b.r0;
         const taken = cells.length ? new Set(cells.map((x) => x[0])) : null;
         for (let j = 0; j < b.cols.length; j++) {
           const col = b.cols[j];
@@ -2450,7 +2450,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {}) 
       cells = cells.sort((a, b) => a[0] - b[0]);
       const attrs = [`r="${r + 1}"`];
       if (sheet.rowHeights[r] !== undefined) attrs.push(`ht="${px2pt(sheet.rowHeights[r])}"`, 'customHeight="1"');
-      if (sheet.hiddenRows[r] || sheet.filter?.hidden?.[r] || (sheet.tables ?? []).some((t) => t.filter?.hidden?.[r])) attrs.push('hidden="1"');
+      if (sheet.hiddenRows[r] || hid(sheet.filter?.hidden, r) || (sheet.tables ?? []).some((t) => hid(t.filter?.hidden, r))) attrs.push('hidden="1"');
       if (sheet.rowStyles[r]) attrs.push(`s="${pool.xf({ ...sheet.allStyle, ...sheet.rowStyles[r] })}"`, 'customFormat="1"');
       const cx = cells.map(([c, cell]) => {
         const ref = refOf(r, c);
