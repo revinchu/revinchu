@@ -26,6 +26,7 @@ import {
 } from './pivot.js';
 import { SLICER_STYLES, slicerStyleName, slicerColors, CUSTOM_KEYS } from './slicerstyle.js';
 import { server, idbSet, idbGet, idbDel } from './storage.js';
+import { cubeFromRows, itemStats, EMPTY as PIVOT_EMPTY } from './cube.js';
 import { fontList, fontAlias, loadLocalFonts, canListLocalFonts } from './fonts.js';
 import { ICONS } from './icons.js';
 import {
@@ -2756,6 +2757,7 @@ function tableStyleGallery(anchorEl, forCreate = false) {
 // ───────────────────────── 슬라이서 ─────────────────────────
 const SLICER_COLORS = [['blue', '파랑'], ['orange', '주황'], ['gray', '회색'], ['gold', '금색'], ['sky', '하늘색'], ['green', '녹색']];
 
+const koCollator = new Intl.Collator('ko');
 const sortItems = (entries) => entries.sort((a, b) => {
   if (a.key === '') return 1;
   if (b.key === '') return -1;
@@ -2818,20 +2820,19 @@ function slicerModel(sl) {
     if (!memo) { memo = new Map(); slicerMemo.set(rows, memo); }
     let items = memo.get(memoKey);
     if (!items) {
-      const others = Object.entries(filters).filter(([k]) => k !== own).map(([k, v]) => [header.findIndex((h) => h.toLowerCase() === k.toLowerCase()), new Set(v)]).filter(([i]) => i >= 0);
-      const vals = new Map();
-      for (let r = 1; r < rows.length; r++) {
-        const row = rows[r];
-        const key = pivotItemText(row[fi]);
-        let e = vals.get(key);
-        if (!e) {
-          if (row.every((v) => v === null || v === '')) continue;
-          e = { key, v: row[fi], hasData: false };
-          vals.set(key, e);
-        }
-        if (!e.hasData && others.every(([i, set]) => set.has(pivotItemText(row[i])))) e.hasData = true;
-      }
-      items = sortItems([...vals.values()]);
+      // 열 기반 엔진: 항목 코드별로 다른 필터를 통과한 행이 있는지 한 번에 (수백만 행도 한 번 훑기)
+      const cube = cubeFromRows(rows);
+      const lower = cube.header.map((h) => h.toLowerCase());
+      const others = Object.entries(filters).filter(([k]) => k !== own).map(([k, v]) => [lower.indexOf(k.toLowerCase()), new Set(v)]).filter(([i]) => i >= 0);
+      const st = itemStats(cube, fi, others);
+      items = st.keys.map((k, c) => ({ key: st.texts[c], v: k, hasData: !!st.has[c] }))
+        .sort((x, y) => {
+          if ((x.v === PIVOT_EMPTY) !== (y.v === PIVOT_EMPTY)) return x.v === PIVOT_EMPTY ? 1 : -1;
+          if (typeof x.v === 'number' && typeof y.v === 'number') return x.v - y.v;
+          if (typeof x.v === 'number') return -1;
+          if (typeof y.v === 'number') return 1;
+          return koCollator.compare(x.key, y.key);
+        });
       if (memo.size > 200) memo.clear();
       memo.set(memoKey, items);
     }
@@ -4053,8 +4054,9 @@ const pivotItemText = itemText;
 function writePivot(targetSi, def, { autofit = true } = {}) {
   const src = pivotSource(def);
   if (!src) return false;
-  const { def: d, rows } = resolvePivot(src, def);
-  const { grid, meta: pm } = computePivot(rows, d);
+  const res = resolvePivot(src, def);
+  const d = res.def;
+  const { grid, meta: pm } = computePivot(res, d);
   const t = wb.sheets[targetSi];
   const top = def.top ?? 0;
   const left = def.left ?? 0;

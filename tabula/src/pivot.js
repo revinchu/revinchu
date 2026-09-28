@@ -11,6 +11,10 @@
 // 옛 정의 { rowField, colField, valueField, agg, fieldNames } 도 그대로 읽음
 import { formatGeneral, formatValue } from './format.js';
 import { findTable, dataTop, dataBottom, columnNames, ACCENTS, tint, shade } from './tables.js';
+import {
+  EMPTY as EMPTY0, IMG_KEY as IMG_KEY0, keyOf as keyOf0, imageOfKey as imageOfKey0, sortKeys as sortKeys0, itemText as itemText0,
+  kk, cubeFromRows, filterRows, groupAggregate, groupAcc,
+} from './cube.js';
 
 export const AGGREGATES = [
   { id: 'sum', label: '합계' },
@@ -37,42 +41,14 @@ export const LAYOUTS = [
   { id: 'tabular', label: '테이블 형식으로 표시' },
 ];
 
-export const EMPTY = '(비어 있음)';
+// 항목 키 · 글자 · 정렬은 열 기반 엔진(cube.js)과 함께 씀
+export const EMPTY = EMPTY0;
+export const IMG_KEY = IMG_KEY0;
+export const keyOf = keyOf0;
+export const imageOfKey = imageOfKey0;
+export const sortKeys = sortKeys0;
+export const itemText = itemText0;
 export const TOTAL = '총합계';
-// 셀 안 그림은 주소로 구별 (피벗 항목 · 슬라이서에서 그림을 그대로 보여 줌)
-export const IMG_KEY = '\u0000img:';
-const imageByKey = new Map();
-export const keyOf = (v) => {
-  if (v === null || v === undefined || v === '') return EMPTY;
-  if (typeof v === 'object') {
-    if (v.type === 'image') { const k = `${IMG_KEY}${v.src}`; if (!imageByKey.has(k)) imageByKey.set(k, v); return k; }
-    return String(v.code);
-  }
-  return v;
-};
-/** 그림 항목 키 → 그림 (없으면 null) */
-export const imageOfKey = (k) => (typeof k === 'string' && k.startsWith(IMG_KEY) ? imageByKey.get(k) ?? { type: 'image', src: k.slice(IMG_KEY.length), alt: '' } : null);
-
-const collator = new Intl.Collator('ko');
-export function sortKeys(keys) {
-  return keys.sort((a, b) => {
-    if (a === EMPTY) return 1;
-    if (b === EMPTY) return -1;
-    if (typeof a === 'number' && typeof b === 'number') return a - b;
-    if (typeof a === 'number') return -1;
-    if (typeof b === 'number') return 1;
-    return collator.compare(String(a), String(b));
-  });
-}
-
-/** 슬라이서·필터에서 쓰는 항목 글자 */
-export const itemText = (v) => {
-  if (v === null || v === undefined || v === '') return EMPTY;
-  if (typeof v === 'number') return formatGeneral(v);
-  if (typeof v === 'object') return v.type === 'image' ? v.alt || `그림 ${String(v.src).slice(-12)}` : v.code;
-  const img = imageOfKey(v);
-  return img ? img.alt || `그림 ${String(img.src).slice(-12)}` : String(v);
-};
 
 /** 머리글 이름 (빈 칸은 열N) */
 export const headerNames = (rows) => (rows[0] ?? []).map((h, i) => (h === null || h === '' ? `열${i + 1}` : String(h)));
@@ -281,8 +257,18 @@ function makeMeasures(header, values, calcFields) {
     });
   };
   const n = cols.length;
+  // 슬롯마다 필요한 누적값 (제곱합 · 최소/최대 · 곱은 쓰는 집계가 있을 때만)
+  const needs = cols.map(() => ({ sq: false, mm: false, prod: false }));
+  specs.forEach((sp) => {
+    if (sp.calc || sp.slot === undefined) return;
+    const nd = needs[sp.slot];
+    if (/^(var|std)/.test(sp.agg ?? '')) nd.sq = true;
+    if (sp.agg === 'min' || sp.agg === 'max') nd.mm = true;
+    if (sp.agg === 'product') nd.prod = true;
+  });
   return {
     cols,
+    needs,
     value(list, vi) {
       if (!list) return null;
       const sp = specs[vi];
@@ -295,6 +281,21 @@ function makeMeasures(header, values, calcFields) {
     },
     newList() { return cols.map(newAcc); },
   };
+}
+
+/** 누적 목록 합치기 (그룹 → 상위 합계) */
+function mergeList(into, from) {
+  for (let k = 0; k < into.length; k++) {
+    const a = into[k];
+    const b = from[k];
+    a.count += b.count;
+    a.nums += b.nums;
+    a.sum += b.sum;
+    a.sq += b.sq;
+    if (b.min < a.min) a.min = b.min;
+    if (b.max > a.max) a.max = b.max;
+    a.prod *= b.prod;
+  }
 }
 
 // ───────────── 정의 정리 ─────────────
@@ -439,55 +440,55 @@ function valueIndex(values, by) {
   return i >= 0 ? i : 0;
 }
 
-/** 행·열 필드 필터를 원본 행에 적용 (바깥 필드부터, 부모 그룹 안에서 평가) */
-function applyFieldFilters(data, header, d) {
+/** 행·열 필드 필터(레이블 · 값 · 상위 N)를 그룹에 적용 (바깥 필드부터, 부모 그룹 안에서 평가) */
+function applyFieldFilters(groups, d, measures) {
   const entries = Object.entries(d.fieldFilters ?? {});
-  if (!entries.length) return data;
-  const idx = (n) => header.findIndex((h) => h.toLowerCase() === String(n).toLowerCase());
-  const measures = d.values.length ? makeMeasures(header, d.values, d.calcFields) : null;
-  const measureOf = (rows, vi) => {
-    if (!measures) return rows.length;
-    const list = measures.newList();
-    for (const r of rows) measures.accumulate(list, r);
-    const v = measures.value(list, vi);
+  if (!entries.length) return groups;
+  const measureOf = (it, vi) => {
+    if (!d.values.length) return it.n;
+    const v = measures.value(it.list, vi);
     return typeof v === 'number' ? v : null;
   };
-  let out = data;
-  for (const axis of [d.rows, d.cols]) {
+  let out = groups;
+  for (const [ax, axis] of [['r', d.rows], ['c', d.cols]]) {
     axis.forEach((field, level) => {
       const flt = d.fieldFilters[field];
-      const f = idx(field);
-      if (!flt || f < 0) return;
-      const parents = axis.slice(0, level).map(idx);
-      const pkOf = (r) => parents.map((p) => kk(keyOf(r[p]))).join('\u0001');
-      const groups = new Map();
-      for (const r of out) {
-        const pk = pkOf(r);
-        let g = groups.get(pk);
-        if (!g) { g = new Map(); groups.set(pk, g); }
-        const k = kk(keyOf(r[f]));
-        let it = g.get(k);
-        if (!it) { it = { key: keyOf(r[f]), rows: [] }; g.set(k, it); }
-        it.rows.push(r);
+      if (!flt) return;
+      const pkOf = (keys) => {
+        let p = '';
+        for (let i = 0; i < level; i++) p += `\u0001${kk(keys[i])}`;
+        return p;
+      };
+      const parents = new Map();
+      for (const g of out) {
+        const keys = g[ax];
+        const pk = pkOf(keys);
+        let m = parents.get(pk);
+        if (!m) { m = new Map(); parents.set(pk, m); }
+        const k = kk(keys[level]);
+        let it = m.get(k);
+        if (!it) { it = { key: keys[level], list: measures.newList(), n: 0 }; m.set(k, it); }
+        mergeList(it.list, g.list);
+        it.n += g.n;
       }
       const keep = new Set();
-      for (const [pk, g] of groups) {
-        const items = [...g.values()];
+      for (const [pk, m] of parents) {
+        const items = [...m.values()];
         let kept;
         if (flt.type === 'label') {
           const numeric = items.every((it) => typeof it.key === 'number') && Number.isFinite(Number(flt.v1));
           kept = items.filter((it) => compareOp(flt.op, numeric ? it.key : itemText(it.key), numeric ? Number(flt.v1) : flt.v1, numeric ? Number(flt.v2) : flt.v2, !numeric));
         } else if (flt.type === 'value') {
           const vi = valueIndex(d.values, flt.by);
-          kept = items.filter((it) => { const v = measureOf(it.rows, vi); return v !== null && compareOp(flt.op, v, Number(flt.v1), Number(flt.v2), false); });
+          kept = items.filter((it) => { const v = measureOf(it, vi); return v !== null && compareOp(flt.op, v, Number(flt.v1), Number(flt.v2), false); });
         } else if (flt.type === 'top') {
           const vi = valueIndex(d.values, flt.by);
-          const scored = items.map((it) => ({ it, v: measureOf(it.rows, vi) ?? -Infinity }));
-          scored.sort((a, b) => (flt.top === false ? a.v - b.v : b.v - a.v));
+          const scored = items.map((it) => ({ it, v: measureOf(it, vi) ?? -Infinity }));
+          scored.sort((x, y) => (flt.top === false ? x.v - y.v : y.v - x.v));
           const n = Number(flt.n) || 10;
           if ((flt.mode ?? 'count') === 'count') kept = scored.slice(0, Math.max(0, Math.floor(n))).map((x) => x.it);
           else {
-            const total = scored.reduce((s, x) => s + (Number.isFinite(x.v) ? x.v : 0), 0);
+            const total = scored.reduce((acc, x) => acc + (Number.isFinite(x.v) ? x.v : 0), 0);
             const limit = flt.mode === 'percent' ? (total * n) / 100 : n;
             kept = [];
             let acc = 0;
@@ -496,10 +497,46 @@ function applyFieldFilters(data, header, d) {
         } else kept = items;
         for (const it of kept) keep.add(`${pk}\u0003${kk(it.key)}`);
       }
-      out = out.filter((r) => keep.has(`${pkOf(r)}\u0003${kk(keyOf(r[f]))}`));
+      out = out.filter((g) => keep.has(`${pkOf(g[ax])}\u0003${kk(g[ax][level])}`));
     });
   }
   return out;
+}
+
+/**
+ * 큐브 · 선택 행 → 가장 잘게 나눈 그룹 [{ r: [행 필드 키], c: [열 필드 키], list: [슬롯별 누적], n: 행 수 }]
+ * 원본을 한 번만 훑어 형식화 배열에 누적하므로 행이 많아도 빠름. 같은 선택 · 같은 필드면 재사용
+ */
+const groupMemo = new WeakMap();
+function cubeGroups(cube, sel, d, measures) {
+  const lower = d.header.map((h) => String(h).toLowerCase());
+  const idx = (n) => lower.indexOf(String(n).toLowerCase());
+  const rowIdx = d.rows.map(idx);
+  const colIdx = d.cols.map(idx);
+  const valid = (j) => j >= 0 && j < cube.header.length;
+  const dims = [...rowIdx, ...colIdx].filter(valid);
+  const slots = measures.cols.map((c) => (valid(c) ? c : -1));
+  const key = JSON.stringify([dims, slots, measures.needs]);
+  const holder = sel ?? cube;
+  let memo = groupMemo.get(holder);
+  if (!memo) { memo = new Map(); groupMemo.set(holder, memo); }
+  let groups = memo.get(key);
+  if (groups) return groups;
+  const agg = groupAggregate(cube, sel, dims, [...slots.map((c, i) => ({ col: c, need: measures.needs[i] })), { col: -1 }]);
+  const keysOf = dims.map((j) => cube.col(j).dim().keys);
+  const S = slots.length;
+  groups = new Array(agg.G);
+  for (let g = 0; g < agg.G; g++) {
+    let p = 0;
+    const r = rowIdx.map((j) => (valid(j) ? keysOf[p][agg.codes[g * agg.D + p++]] : EMPTY));
+    const c = colIdx.map((j) => (valid(j) ? keysOf[p][agg.codes[g * agg.D + p++]] : EMPTY));
+    const list = new Array(S);
+    for (let m = 0; m < S; m++) list[m] = groupAcc(agg, m, g);
+    groups[g] = { r, c, list, n: agg.stats[S].count[g] };
+  }
+  if (memo.size > 40) memo.clear();
+  memo.set(key, groups);
+  return groups;
 }
 
 /** 필터(보고서 필터 · 항목 선택 · 슬라이서 · 레이블/값/상위 N)를 적용한 행 → { def: 정리된 정의, rows, header } */
@@ -518,33 +555,26 @@ export function resolvePivot(rows, def) {
   const key = pivotDefKey(def);
   const hit = memo.get(key);
   if (hit) return { ...hit, def: normalizeDef(def, hit.header) };
-  const d = normalizeDef(def, headerNames(rows));
+  const cube = cubeFromRows(rows);
+  const d = normalizeDef(def, cube.header);
   const header = d.header;
-  const filters = Object.entries(d.filters).map(([name, allowed]) => [header.findIndex((h) => h.toLowerCase() === name.toLowerCase()), new Set(allowed)]).filter(([i]) => i >= 0);
-  let data = nonEmptyMemo.get(rows);
-  if (!data) { data = rows.slice(1).filter((r) => !r.every((v) => v === null || v === '')); nonEmptyMemo.set(rows, data); }
-  // 필터 검사는 값마다 한 번만 (같은 값이 수만 행에 반복됨)
-  const tests = filters.map(([i, set]) => {
-    const seen = new Map();
-    return (r) => {
-      const v = r[i];
-      let b = seen.get(v);
-      if (b === undefined) { b = set.has(itemText(v)); seen.set(v, b); }
-      return b;
-    };
-  });
-  // 같은 원본 · 같은 필터를 쓰는 피벗(슬라이서로 묶인 피벗들)은 걸러 낸 행을 함께 씀
-  const fkey = JSON.stringify(filters.map(([i, set]) => [i, [...set].sort()]));
-  let fmemo = filterMemo.get(rows);
-  if (!fmemo) { fmemo = new Map(); filterMemo.set(rows, fmemo); }
-  let out = fmemo.get(fkey);
-  if (!out) {
-    out = tests.length ? data.filter((r) => tests.every((t) => t(r))) : data;
-    if (fmemo.size > 30) fmemo.clear();
-    fmemo.set(fkey, out);
-  }
-  out = applyFieldFilters(out, header, d);
-  const res = { def: d, rows: [rows[0], ...out], header };
+  const lower = cube.header.map((h) => h.toLowerCase());
+  // 보고서 필터 · 항목 선택 · 슬라이서: 코드 단위로 한 번에 (같은 필터를 쓰는 피벗끼리 결과 공유)
+  const filters = Object.entries(d.filters).map(([name, allowed]) => [lower.indexOf(name.toLowerCase()), new Set(allowed)]).filter(([i]) => i >= 0);
+  const sel = filterRows(cube, filters);
+  const measures = makeMeasures(header, d.values, d.calcFields);
+  const groups = applyFieldFilters(cubeGroups(cube, sel, d, measures), d, measures);
+  const res = {
+    def: d, header, cube, sel, groups, measures,
+    /** 걸러진 원본 행 (머리글 포함) — 필요할 때만 만듦 */
+    get rows() {
+      const n = sel ? sel.length : cube.n;
+      const out = new Array(n + 1);
+      out[0] = rows[0];
+      for (let i = 0; i < n; i++) out[i + 1] = cube.row(sel ? sel[i] : i);
+      return out;
+    },
+  };
   if (memo.size > 60) memo.clear();
   memo.set(key, res);
   return res;
@@ -620,25 +650,6 @@ export function roleStyle(parts, role) {
 }
 
 // ───────────── 계산 ─────────────
-const kk = (k) => `${typeof k}:${k}`;
-
-/** 필드 값 트리 */
-function buildTree(data, idxs) {
-  const root = { key: null, path: '', depth: -1, children: [], map: new Map() };
-  for (const r of data) {
-    let node = root;
-    let path = '';
-    for (let d = 0; d < idxs.length; d++) {
-      const k = keyOf(r[idxs[d]]);
-      const kkey = kk(k);
-      path += `\u0001${kkey}`;
-      let ch = node.map.get(kkey);
-      if (!ch) { ch = { key: k, path, depth: d, children: [], map: new Map() }; node.map.set(kkey, ch); node.children.push(ch); }
-      node = ch;
-    }
-  }
-  return root;
-}
 
 /** 항목 순서: 정렬 설정(글자/값) → 수동 순서 → 기본(오름차순) */
 function orderTree(root, fields, d, measureAt) {
@@ -677,10 +688,11 @@ function orderTree(root, fields, d, measureAt) {
  * 피벗 계산 → { grid: [[{raw, style, role}]], meta }
  * rows: 머리글 포함 (필터 적용 후), d: normalizeDef 결과
  */
-export function computePivot(rows, d) {
-  const header = d.header ?? headerNames(rows);
+export function computePivot(input, d) {
+  // input: resolvePivot 결과(그룹 포함) 또는 이미 걸러진 행 배열(머리글 포함)
+  const resolved = input && !Array.isArray(input) && input.groups ? input : null;
+  const header = d.header ?? resolved?.header ?? headerNames(input);
   const idx = (n) => header.findIndex((h) => h.toLowerCase() === String(n).toLowerCase());
-  const data = rows.slice(1).filter((r) => !r.every((v) => v === null || v === ''));
   const rowIdx = d.rows.map(idx);
   const colIdx = d.cols.map(idx);
   const values = d.values;
@@ -708,24 +720,39 @@ export function computePivot(rows, d) {
   }
 
   const measures = makeMeasures(header, values, d.calcFields);
-  const rowTree = buildTree(data, rowIdx);
-  const colTree = buildTree(data, colIdx);
-
-  // 누적: 행 경로 접두사 × 열 경로 접두사
+  // 가장 잘게 나눈 그룹 (원본 행은 열 기반 엔진이 한 번만 훑음)
+  const groups = resolved
+    ? resolved.groups
+    : cubeGroups(cubeFromRows(input), null, { ...d, header }, measures);
+  const newNode = (key, path, depth) => ({ key, path, depth, children: [], map: new Map() });
+  const rowTree = newNode(null, '', -1);
+  const colTree = newNode(null, '', -1);
+  // 누적: 행 경로 접두사 × 열 경로 접두사 (그룹 수만큼만)
   const accs = new Map();
-  const rp = new Array(rowIdx.length + 1);
-  const cp = new Array(colIdx.length + 1);
-  for (const r of data) {
-    rp[0] = '';
-    for (let i = 0; i < rowIdx.length; i++) rp[i + 1] = `${rp[i]}\u0001${kk(keyOf(r[rowIdx[i]]))}`;
-    cp[0] = '';
-    for (let i = 0; i < colIdx.length; i++) cp[i + 1] = `${cp[i]}\u0001${kk(keyOf(r[colIdx[i]]))}`;
-    for (const a of rp) {
-      for (const b of cp) {
-        const key = `${a}\u0002${b}`;
+  const Lr0 = rowIdx.length;
+  const Lc0 = colIdx.length;
+  const rp = new Array(Lr0 + 1);
+  const cp = new Array(Lc0 + 1);
+  const walkPath = (tree, keys, out) => {
+    let node = tree;
+    out[0] = '';
+    for (let i = 0; i < keys.length; i++) {
+      const kkey = kk(keys[i]);
+      out[i + 1] = `${out[i]}\u0001${kkey}`;
+      let ch = node.map.get(kkey);
+      if (!ch) { ch = newNode(keys[i], out[i + 1], i); node.map.set(kkey, ch); node.children.push(ch); }
+      node = ch;
+    }
+  };
+  for (const g of groups) {
+    walkPath(rowTree, g.r, rp);
+    walkPath(colTree, g.c, cp);
+    for (let a = 0; a <= Lr0; a++) {
+      for (let b = 0; b <= Lc0; b++) {
+        const key = `${rp[a]}\u0002${cp[b]}`;
         let list = accs.get(key);
         if (!list) { list = measures.newList(); accs.set(key, list); }
-        measures.accumulate(list, r);
+        mergeList(list, g.list);
       }
     }
   }
@@ -934,8 +961,9 @@ export function pivotChartData(rows, def, fieldStyle = null) {
   return memo.get(key);
 }
 function pivotChartDataRaw(rows, def, fieldStyle) {
-  const { def: d, rows: r } = resolvePivot(rows, def);
-  const { grid, meta } = computePivot(r, d);
+  const res = resolvePivot(rows, def);
+  const d = res.def;
+  const { grid, meta } = computePivot(res, d);
   if (meta.empty) return { categories: [], series: [] };
   const body = meta.pageRows + meta.headerRows;
   const cats = [];
@@ -969,26 +997,33 @@ function pivotChartDataRaw(rows, def, fieldStyle) {
 
 /** 옛 API: 셀 데이터 2차원 배열 */
 export function buildPivot(rows, def) {
-  const { def: d, rows: r } = resolvePivot(rows, def);
-  return computePivot(r, d).grid;
+  const res = resolvePivot(rows, def);
+  return computePivot(res, res.def).grid;
 }
 
 /** GETPIVOTDATA: 값 필드 이름과 (필드, 항목) 쌍으로 값 찾기 */
 export function pivotLookup(rows, def, dataField, pairs) {
-  const { def: d, rows: filtered, header } = resolvePivot(rows, def);
+  const res = resolvePivot(rows, def);
+  const { def: d, header } = res;
   const lower = String(dataField).trim().toLowerCase();
   const vi = d.values.findIndex((v) => valueName(v).trim().toLowerCase() === lower || v.field.toLowerCase() === lower);
   if (vi < 0) return null;
-  const want = pairs.map(([f, item]) => [header.findIndex((h) => h.toLowerCase() === String(f).toLowerCase()), itemText(item)]);
-  if (want.some(([i]) => i < 0)) return null;
   // 행·열 필드가 아닌 필드로 묻는 것은 엑셀에서 #REF!
-  const fields = new Set([...d.rows, ...d.cols].map((n) => header.indexOf(n)));
-  if (want.some(([i]) => !fields.has(i))) return null;
-  const data = filtered.slice(1).filter((r) => want.every(([i, t]) => itemText(r[i]) === t));
-  if (!data.length) return null;
-  const m = makeMeasures(header, d.values, d.calcFields);
-  const list = m.newList();
-  for (const r of data) m.accumulate(list, r);
-  const v = m.value(list, vi);
+  const pos = pairs.map(([f, item]) => {
+    const name = header.find((h) => h.toLowerCase() === String(f).toLowerCase());
+    const ri = d.rows.indexOf(name);
+    const ci = d.cols.indexOf(name);
+    return ri >= 0 ? ['r', ri, itemText(item)] : ci >= 0 ? ['c', ci, itemText(item)] : null;
+  });
+  if (pos.some((p) => !p)) return null;
+  const list = res.measures.newList();
+  let any = false;
+  for (const g of res.groups) {
+    if (!pos.every(([ax, i, t]) => itemText(g[ax][i]) === t)) continue;
+    mergeList(list, g.list);
+    any = true;
+  }
+  if (!any) return null;
+  const v = res.measures.value(list, vi);
   return typeof v === 'number' ? v : null;
 }

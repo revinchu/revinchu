@@ -2017,8 +2017,7 @@ function pivotParts(wb, si, def, cache, name, pool) {
     return set ? !set.has(itemText(k)) : false;
   };
   // 보이는 항목 기준으로 결과 배치 계산 (앱 화면과 같은 배치)
-  const { rows: visible } = resolvePivot(src.rows, def);
-  const { meta } = computePivot(visible, d);
+  const { meta } = computePivot(resolvePivot(src.rows, def), d);
   const values = meta.values;
   const V = values.length;
   const multiV = V > 1;
