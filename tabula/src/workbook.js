@@ -908,6 +908,29 @@ export class Workbook {
     if (added) { if (l[lo] !== r) { if (lo === l.length) l.push(r); else l.splice(lo, 0, r); } } else if (l[lo] === r) l.splice(lo, 1);
   }
 
+  // ─────────── 추적 (참조되는 셀 · 참조하는 셀) ───────────
+  /** 수식 셀 (si, r, c) 가 참조하는 범위 [{ si, r1, c1, r2, c2 }] (동적 참조가 있으면 dyn: true) */
+  precedentsOf(si, r, c) {
+    const cell = this.getCell(si, r, c);
+    const out = [];
+    if (!cell?.formula || !cell.ast) return out;
+    const g = this.graph ?? new DepGraph(this, true);
+    g.refBoxes(si, r, c, cell, (ts, r1, c1, r2, c2) => {
+      if (ts === null) out.dyn = true;
+      else out.push({ si: ts, r1, c1, r2, c2 });
+    });
+    return out;
+  }
+
+  /** 칸 (si, r, c) 를 바로 참조하는 수식 셀 [{ si, r, c }] */
+  dependentsOf(si, r, c) {
+    if (this.pending.length) this.flushPending();
+    if (!this.graph) this.graph = new DepGraph(this);
+    const out = this.graph.dependentsOf(si, r, c);
+    // 동적 수식(INDIRECT 등)은 알 수 없으므로 제외 (엑셀도 추적하지 않음)
+    return out;
+  }
+
   // ─────────── 셀 단위 재계산 ───────────
   /**
    * 의존 그래프를 미리 백그라운드로 만듦 (큰 파일을 연 뒤 첫 편집도 바로 반응하도록).

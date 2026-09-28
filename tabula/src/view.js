@@ -770,6 +770,39 @@ export class GridView {
         html.push(box('spill-border', { x: r.x - 1, y: r.y - 1, w: r.w + 1, h: r.h + 1 }));
       }
     }
+    // 이동 옵션으로 고른 칸 (보이는 창 안만)
+    if (st.special) {
+      let n = 0;
+      for (const [sr, sc] of st.special) {
+        if (sr < win.r1 || sr > win.r2 || sc < win.c1 || sc > win.c2) continue;
+        const r = this.sheetRect({ r1: sr, c1: sc, r2: sr, c2: sc });
+        html.push(box('special-hl', { x: r.x, y: r.y, w: r.w, h: r.h }));
+        if (++n > 5000) break;
+      }
+    }
+    // 추적 화살표: 참조 범위(파란 테두리 + 점) → 수식 셀, 다른 시트는 점선 + 시트 아이콘
+    if (st.arrows?.length) {
+      const svg = [];
+      const center = (rg) => { const r = this.sheetRect(rg); return [r.x + Math.min(r.w, this.cols.size(rg.c1)) / 2, r.y + Math.min(r.h, this.rows.size(rg.r1)) / 2]; };
+      for (const a of st.arrows) {
+        if (a.to.si !== si && a.from.si !== si) continue;
+        const color = a.err ? '#d13438' : '#2f5bd3';
+        const [x2, y2] = a.to.si === si ? center({ r1: a.to.r, c1: a.to.c, r2: a.to.r, c2: a.to.c }) : [null, null];
+        if (a.from.si === si) {
+          const multi = a.from.r1 !== a.from.r2 || a.from.c1 !== a.from.c2;
+          if (multi) { const r = this.sheetRect(a.from); svg.push(`<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" fill="none" stroke="${color}" stroke-width="1.5"/>`); }
+          const [x1, y1] = center(a.from);
+          svg.push(`<circle cx="${x1}" cy="${y1}" r="3" fill="${color}"/>`);
+          if (x2 !== null) svg.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="1.5" marker-end="url(#arrowHead${a.err ? 'E' : ''})"/>`);
+        } else if (x2 !== null) {
+          // 다른 시트의 참조: 왼쪽 위에서 점선 + 표 아이콘
+          const x1 = x2 - 60;
+          const y1 = y2 - 40;
+          svg.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#333" stroke-dasharray="4 3" stroke-width="1.2" marker-end="url(#arrowHead)"/><rect x="${x1 - 9}" y="${y1 - 8}" width="16" height="13" fill="#fff" stroke="#333"/><path d="M${x1 - 9} ${y1 - 3}h16M${x1 - 9} ${y1 + 1}h16M${x1 - 3} ${y1 - 8}v13" stroke="#333"/>`);
+        }
+      }
+      html.push(`<svg class="trace-svg" style="left:${-p.ox}px;top:${-p.oy}px"><defs><marker id="arrowHead" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#2f5bd3"/></marker><marker id="arrowHeadE" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#d13438"/></marker></defs>${svg.join('')}</svg>`);
+    }
     for (const cc of st.circles ?? []) {
       const r = this.sheetRect({ r1: cc.r, c1: cc.c, r2: cc.r, c2: cc.c });
       html.push(box('dv-circle', { x: r.x - 4, y: r.y - 3, w: r.w + 8, h: r.h + 6 }));

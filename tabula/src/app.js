@@ -28,6 +28,7 @@ import { SLICER_STYLES, slicerStyleName, slicerColors, CUSTOM_KEYS } from './sli
 import { server, idbSet, idbGet, idbDel } from './storage.js';
 import { itemStats, blockColumn, EMPTY as PIVOT_EMPTY } from './cube.js';
 import { logicalCol, ColBuilder } from './block.js';
+import { evalSteps, goalSeek, dataTable, specialCells, GOTO_KINDS, valueText } from './audit.js';
 import { normOutline, outlineEmpty, changeLevels, groupsOf, groupAt, toggleGroup, showLevel, summaryOf, planSubtotals, SUBTOTAL_FNS, maxLevel } from './outline.js';
 import { hid, hidCount } from './axis.js';
 import { fontList, fontAlias, loadLocalFonts, canListLocalFonts } from './fonts.js';
@@ -90,6 +91,9 @@ let chartSel = null; // 선택한 그림 개체(차트·그림·도형) id
 let objClip = null; // 복사한 그림 개체
 let drawKind = null; // 그릴 도형 종류 (삽입 → 도형)
 let circles = null; // 잘못된 데이터 표시
+let special = null; // 이동 옵션으로 고른 칸들 { si, cells: [[r, c]] } (Ctrl+Enter 로 한꺼번에 입력, Delete 로 지우기)
+let trace = null; // 추적 화살표 { si, arrows: [{ from: {si, r1, c1, r2, c2}, to: {si, r, c}, err }], frontP, frontD }
+let keepSpecial = false;
 let dvPromptEl = null;
 let lastFill = '#ffff00';
 let lastFont = '#ff0000';
@@ -152,6 +156,7 @@ function usedClip(rg) {
 function setSel(rg, kind = 'cells') {
   sel = expandMerges(rg);
   selKind = kind;
+  if (!keepSpecial) special = null;
 }
 
 function growTo(r, c) {
@@ -549,10 +554,13 @@ function commitEdit(dir = null, { fillSel = false } = {}) {
     return false;
   }
   endEditUI();
-  const multi = fillSel && !selIsActiveOnly();
+  const multi = fillSel && (!selIsActiveOnly() || special?.si === si);
   if (text !== original || multi) {
     wb.transact(() => {
-      if (multi) {
+      if (multi && special?.si === si) {
+        // 이동 옵션으로 고른 칸마다 (수식은 칸 위치만큼 옮김)
+        for (const [rr, cc] of special.cells) wb.setInput(si, rr, cc, text.startsWith('=') ? shiftFormula(text, rr - r, cc - c) : text);
+      } else if (multi) {
         for (const [rr, cc] of cellsIn(sel)) wb.setInput(si, rr, cc, text.startsWith('=') ? shiftFormula(text, rr - r, cc - c) : text);
         autoFitRows(sel.r1, Math.min(sel.r2, sel.r1 + 500));
       } else {
@@ -1021,7 +1029,11 @@ function onGridKey(e) {
     case 'Home': handled(); if (e.shiftKey) extendTo(focusCell.r, 0); else selectCell(active.r, 0); return;
     case 'PageDown': handled(); move(gv.pageRows(), 0, { extend: e.shiftKey }); return;
     case 'PageUp': handled(); move(-gv.pageRows(), 0, { extend: e.shiftKey }); return;
-    case 'Delete': handled(); run('clearContents'); return;
+    case 'Delete':
+      handled();
+      if (special?.si === si) { const cells = special.cells; wb.transact(() => { for (const [rr, cc] of cells) { const cur = wb.getCell(si, rr, cc); if (cur?.raw) wb.setCellData(si, rr, cc, { raw: '', style: cur.style, comment: cur.comment }); } }, meta()); return; }
+      run('clearContents');
+      return;
     case 'Backspace': handled(); startEdit('enter', ''); return;
     case 'F2':
       handled();
@@ -1121,13 +1133,8 @@ function selectPrecedents() {
 }
 
 function selectDependents() {
-  const hits = [];
-  const me = sheet().name.toLowerCase();
-  for (const [k, cell] of sheet().cells) {
-    if (!cell.formula) continue;
-    const [r, c] = k.split(',').map(Number);
-    if (listRefs(cell.raw).some((x) => (!x.sheet || x.sheet.toLowerCase() === me) && active.r >= x.r1 && active.r <= x.r2 && active.c >= x.c1 && active.c <= x.c2)) hits.push([r, c]);
-  }
+  // 의존 그래프로 바로 찾음 (수식 백만 개도 즉시)
+  const hits = wb.dependentsOf(si, active.r, active.c).filter((d) => d.si === si).map((d) => [d.r, d.c]);
   if (!hits.length) { toast('참조하는 셀이 없습니다.'); return; }
   const rg = { r1: Math.min(...hits.map((h) => h[0])), c1: Math.min(...hits.map((h) => h[1])), r2: Math.max(...hits.map((h) => h[0])), c2: Math.max(...hits.map((h) => h[1])) };
   gv.ensureVisible(hits[0][0], hits[0][1]);
@@ -2156,6 +2163,212 @@ function hideSel(axis, hide) {
     const n = axis === 'row' ? stepFrom({ r: b, c: active.c }, 1, 0) : stepFrom({ r: active.r, c: b }, 0, 1);
     selectCell(n.r, n.c);
   }
+}
+
+// ───────────────────────── 수식 분석 · 가상 분석 ─────────────────────────
+const cellKey = (x) => `${x.si}:${x.r},${x.c}`;
+/** 참조되는 셀 추적: 누를 때마다 한 단계 더 (엑셀과 같음) */
+function tracePrecedents() {
+  if (!trace || trace.si !== si) trace = { si, arrows: [], frontP: null, frontD: null, seen: new Set() };
+  const front = trace.frontP ?? [{ si, r: active.r, c: active.c }];
+  const next = [];
+  let added = 0;
+  for (const cell of front) {
+    const k = `p${cellKey(cell)}`;
+    if (trace.seen.has(k)) continue;
+    trace.seen.add(k);
+    for (const b of wb.precedentsOf(cell.si, cell.r, cell.c)) {
+      const err = [b].some(() => { for (let r = b.r1; r <= Math.min(b.r2, b.r1 + 50); r++) for (let c = b.c1; c <= Math.min(b.c2, b.c1 + 20); c++) if (isError(wb.getValue(b.si, r, c))) return true; return false; });
+      trace.arrows.push({ from: b, to: cell, err });
+      added++;
+      // 다음 단계: 참조한 칸 중 수식 (범위는 앞쪽 일부만)
+      for (let r = b.r1; r <= Math.min(b.r2, b.r1 + 200) && next.length < 300; r++) {
+        for (let c = b.c1; c <= Math.min(b.c2, b.c1 + 20); c++) if (wb.getCell(b.si, r, c)?.formula) next.push({ si: b.si, r, c });
+      }
+    }
+  }
+  trace.frontP = next;
+  if (!added) toast(front.length === 1 && front[0].r === active.r ? '이 셀은 다른 셀을 참조하지 않습니다.' : '더 추적할 참조가 없습니다.');
+  gv.renderAll();
+}
+function traceDependents() {
+  if (!trace || trace.si !== si) trace = { si, arrows: [], frontP: null, frontD: null, seen: new Set() };
+  const front = trace.frontD ?? [{ si, r: active.r, c: active.c }];
+  const next = [];
+  let added = 0;
+  for (const cell of front) {
+    const k = `d${cellKey(cell)}`;
+    if (trace.seen.has(k)) continue;
+    trace.seen.add(k);
+    for (const d of wb.dependentsOf(cell.si, cell.r, cell.c).slice(0, 500)) {
+      trace.arrows.push({ from: { si: cell.si, r1: cell.r, c1: cell.c, r2: cell.r, c2: cell.c }, to: d, err: isError(wb.getValue(d.si, d.r, d.c)) });
+      added++;
+      next.push(d);
+    }
+  }
+  trace.frontD = next;
+  if (!added) toast('이 셀을 참조하는 수식이 없습니다.');
+  gv.renderAll();
+}
+function removeArrows() { trace = null; gv.renderAll(); }
+
+/** 수식 계산: 안쪽 부분식부터 한 단계씩 값으로 바꿔 보여 줌 */
+function evaluateFormulaDialog() {
+  const cell = wb.getCell(si, active.r, active.c);
+  if (!cell?.formula || !cell.ast) { alertDialog('수식 계산', '선택한 셀에 수식이 없습니다.'); return; }
+  const ctx = wb.ctxFor(si, active.r, active.c);
+  ctx.dr = cell.dr ?? 0;
+  ctx.dc = cell.dc ?? 0;
+  const src = cell.raw.slice(1);
+  const steps = evalSteps(src, cell.ast, ctx);
+  let i = 0;
+  const view = el('div', { class: 'eval-box' });
+  const show = () => {
+    const st = steps[i];
+    view.replaceChildren();
+    if (st.final) { view.append(el('div', {}, `${cellName(active.r, active.c)} = `), el('b', {}, st.text)); return; }
+    const [a, b] = st.mark ?? [0, 0];
+    view.append(el('span', {}, st.text.slice(0, a)), el('u', { class: 'eval-next' }, st.text.slice(a, b)), el('span', {}, st.text.slice(b)));
+  };
+  show();
+  const body = el('div', {}, el('div', { class: 'muted' }, `참조: ${sheet().name}!${cellName(active.r, active.c)}  ·  밑줄 친 식을 계산하려면 [계산]을 누르세요.`), view);
+  openDialog({
+    title: '수식 계산', body, width: 560,
+    buttons: [
+      { label: '계산', primary: true, action: () => { if (i < steps.length - 1) i++; else i = 0; show(); return false; } },
+      { label: '처음부터', action: () => { i = 0; show(); return false; } },
+      { label: '닫기' },
+    ],
+  });
+}
+
+/** 오류 검사: 시트에서 오류 값이 있는 다음 칸으로 */
+function errorCheck() {
+  const list = [];
+  const ext = wb.extent(si);
+  sheet().cells.forEachRC((cell, r, c) => { if (cell.formula && isError(wb.getValue(si, r, c))) list.push([r, c]); });
+  if (!list.length || ext.rows === 0) { alertDialog('오류 검사', '시트 전체에서 오류를 검사했습니다. 오류가 없습니다.'); return; }
+  list.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const at = list.find(([r, c]) => r > active.r || (r === active.r && c > active.c)) ?? list[0];
+  selectCell(at[0], at[1]);
+  const v = wb.getValue(si, at[0], at[1]);
+  const why = { '#DIV/0!': '0으로 나누었습니다.', '#N/A': '찾는 값을 사용할 수 없습니다.', '#NAME?': '알 수 없는 이름이나 함수가 있습니다.', '#REF!': '잘못된 셀 참조입니다.', '#VALUE!': '값의 형식이 잘못되었습니다.', '#NUM!': '숫자가 잘못되었습니다.', '#SPILL!': '결과를 펼칠 칸이 비어 있지 않습니다.', '#CALC!': '계산할 수 없습니다.', '#NULL!': '교집합이 없습니다.' }[v.code] ?? '';
+  toast(`${cellName(at[0], at[1])}: ${v.code} — ${why} (오류 ${list.length}개 중 ${list.indexOf(at) + 1}번째, 다시 누르면 다음 오류)`);
+}
+
+// 조사식 창: 지켜볼 셀의 값 · 수식을 계속 보여 줌
+let watches = [];
+let watchPane = null;
+function watchWindow(show = true) {
+  if (!show) { watchPane?.remove(); watchPane = null; return; }
+  if (!watchPane) {
+    watchPane = el('div', { class: 'watch-pane' });
+    document.body.append(watchPane);
+    let raf = 0;
+    wb.onChange(() => { if (watchPane && !raf) raf = requestAnimationFrame(() => { raf = 0; renderWatches(); }); });
+  }
+  renderWatches();
+}
+function renderWatches() {
+  if (!watchPane) return;
+  const rows = watches.filter((w) => wb.sheets[w.si]).map((w, i) => {
+    const cell = wb.getCell(w.si, w.r, w.c);
+    const v = wb.getValue(w.si, w.r, w.c);
+    return el('tr', {}, el('td', {}, wb.sheets[w.si].name), el('td', {}, cellName(w.r, w.c)),
+      el('td', { class: 'num' }, formatValue(v, wb.styleAt(w.si, w.r, w.c)).text), el('td', { class: 'f' }, cell?.formula ? cell.raw : ''),
+      el('td', {}, el('button', { class: 'lnk', title: '조사식 삭제', onclick: () => { watches.splice(i, 1); renderWatches(); } }, '✕')));
+  });
+  watchPane.replaceChildren(
+    el('div', { class: 'watch-head' }, '조사식 창',
+      el('button', { class: 'lnk', onclick: () => { for (const [r, c] of [...cellsIn(usedClip(sel))].slice(0, 50)) if (!watches.some((w) => w.si === si && w.r === r && w.c === c)) watches.push({ si, r, c }); renderWatches(); } }, '+ 조사식 추가'),
+      el('button', { class: 'lnk', title: '닫기', onclick: () => watchWindow(false) }, '✕')),
+    el('table', {}, el('tr', {}, ...['시트', '셀', '값', '수식', ''].map((h) => el('th', {}, h))), ...rows),
+    rows.length ? null : el('div', { class: 'muted' }, '셀을 선택하고 [+ 조사식 추가]를 누르세요.'),
+  );
+}
+
+/** 목표값 찾기 */
+function goalSeekDialog() {
+  formDialog('목표값 찾기', [
+    { name: 'set', label: '수식 셀', value: cellName(active.r, active.c) },
+    { name: 'to', label: '찾는 값', value: '' },
+    { name: 'by', label: '값을 바꿀 셀', value: '' },
+  ], (v) => {
+    const a = parseRangeName(v.set);
+    const b = parseRangeName(v.by);
+    const target = Number(v.to);
+    if (!a || !b || !Number.isFinite(target)) { alertDialog('목표값 찾기', '셀 주소와 숫자를 올바르게 입력하세요.'); return false; }
+    if (!wb.getCell(si, a.r1, a.c1)?.formula) { alertDialog('목표값 찾기', '수식 셀에는 수식이 있어야 합니다.'); return false; }
+    if (wb.getCell(si, b.r1, b.c1)?.formula) { alertDialog('목표값 찾기', '값을 바꿀 셀에는 수식이 아닌 값이 있어야 합니다.'); return false; }
+    const orig = cellData(wb.getCell(si, b.r1, b.c1));
+    const x0 = Number(valueAt(b.r1, b.c1)) || 0;
+    // 계산 중에는 실행 취소 기록 없이 값만 바꿔 보고, 끝나면 원래대로 돌린 뒤 결과를 한 번에 기록
+    const put = (x) => wb.setCellData(si, b.r1, b.c1, { ...(orig ?? {}), raw: String(x) });
+    const res = goalSeek((x) => { put(x); return wb.getValue(si, a.r1, a.c1); }, x0, target);
+    wb.setCellData(si, b.r1, b.c1, orig);
+    const x = Number(res.x.toPrecision(15));
+    const msg = `${cellName(a.r1, a.c1)} 셀로 목표값 찾기: ${res.ok ? '해를 찾았습니다.' : '해를 찾지 못했습니다 (가장 가까운 값).'}\n목표값: ${formatGeneral(target)}\n현재값: ${formatGeneral(Number(res.value.toPrecision(12)))}\n${cellName(b.r1, b.c1)} = ${formatGeneral(x)}`;
+    openDialog({
+      title: '목표값 찾기 상태', body: el('pre', { class: 'plain' }), width: 380,
+      onOpen: (d) => { d.querySelector('pre').textContent = msg; },
+      buttons: [
+        { label: '확인', primary: true, action: () => { wb.transact(() => wb.setCellData(si, b.r1, b.c1, { ...(orig ?? {}), raw: String(x) }), meta()); } },
+        { label: '취소' },
+      ],
+    });
+    return undefined;
+  });
+}
+
+/** 데이터 표 (가상 분석): 선택 범위의 첫 행 · 첫 열에 입력 값, 모서리 · 첫 행/열에 수식 */
+function dataTableDialog() {
+  const rg = usedClip(sel);
+  if (rg.r2 <= rg.r1 && rg.c2 <= rg.c1) { alertDialog('데이터 표', '입력 값과 수식을 포함한 표 범위를 선택하세요.'); return; }
+  formDialog('데이터 표', [
+    { name: 'row', label: '행 입력 셀 (첫 행의 값을 넣을 셀)', value: '' },
+    { name: 'col', label: '열 입력 셀 (첫 열의 값을 넣을 셀)', value: '' },
+  ], (v) => {
+    const ri = v.row.trim() ? parseRangeName(v.row.trim()) : null;
+    const ci = v.col.trim() ? parseRangeName(v.col.trim()) : null;
+    if (!ri && !ci) { alertDialog('데이터 표', '입력 셀을 하나 이상 지정하세요.'); return false; }
+    const origs = [ri, ci].filter(Boolean).map((x) => [x, cellData(wb.getCell(si, x.r1, x.c1))]);
+    const setIn = (x, val) => wb.setCellData(si, x.r1, x.c1, { ...(cellData(wb.getCell(si, x.r1, x.c1)) ?? {}), raw: val === null || val === undefined ? '' : isError(val) ? val.code : String(val) });
+    const out = dataTable(rg, ri, ci, setIn, (r, c) => wb.getValue(si, r, c));
+    for (const [x, d] of origs) wb.setCellData(si, x.r1, x.c1, d);
+    wb.transact(() => { for (const [r, c, val] of out) wb.setCellData(si, r, c, { ...(cellData(wb.getCell(si, r, c)) ?? {}), raw: val === null ? '' : isError(val) ? val.code : typeof val === 'string' ? `'${val}` : typeof val === 'boolean' ? (val ? 'TRUE' : 'FALSE') : String(val) }); }, meta());
+    toast(`데이터 표: ${out.length}개 칸을 계산했습니다 (값으로 입력됨, 입력 값을 바꾸면 다시 실행하세요).`);
+    return undefined;
+  }, { note: '행 입력 셀만 지정하면 첫 열에 수식, 열 입력 셀만 지정하면 첫 행에 수식, 둘 다 지정하면 왼쪽 위 모서리에 수식을 두세요.' });
+}
+
+/** 이동 옵션 (Ctrl+G → 옵션) */
+function gotoSpecialDialog() {
+  formDialog('이동 옵션', [
+    { name: 'kind', label: '종류', type: 'select', value: 'blanks', options: GOTO_KINDS.map((k) => ({ value: k.id, label: k.label })) },
+    { name: 'numbers', label: '숫자 (상수 · 수식)', type: 'checkbox', value: true },
+    { name: 'text', label: '텍스트', type: 'checkbox', value: true },
+    { name: 'logical', label: '논리값', type: 'checkbox', value: true },
+    { name: 'errors', label: '오류', type: 'checkbox', value: true },
+  ], (v) => {
+    const u = wb.usedRange(si);
+    if (v.kind === 'lastCell') { const e = wb.extent(si); selectCell(Math.max(0, e.rows - 1), Math.max(0, e.cols - 1)); return; }
+    const rg = selIsActiveOnly() ? { r1: 0, c1: 0, r2: Math.max(0, u.rows - 1), c2: Math.max(0, u.cols - 1) } : usedClip(sel);
+    const cond = sheet().cond;
+    const cells = specialCells(v.kind, rg, {
+      cellAt: (r, c) => wb.getCell(si, r, c), valueAt: (r, c) => wb.getValue(si, r, c), hidden: (r) => gv.rows.size(r) === 0,
+      inCond: (r, c) => cond.some((rule) => [rule, ...(rule.more ?? [])].some((g) => r >= g.r1 && r <= g.r2 && c >= g.c1 && c <= g.c2)),
+      inValidation: (r, c) => !!validationAt(sheet(), r, c),
+      types: { numbers: v.numbers, text: v.text, logical: v.logical, errors: v.errors }, limit: 500000,
+    });
+    if (!cells.length) { alertDialog('이동 옵션', '해당하는 셀이 없습니다.'); return; }
+    const box = { r1: Math.min(...cells.slice(0, 100000).map((x) => x[0])), c1: Math.min(...cells.slice(0, 100000).map((x) => x[1])), r2: Math.max(...cells.slice(-100000).map((x) => x[0])), c2: Math.max(...cells.slice(0, 100000).map((x) => x[1])) };
+    keepSpecial = true;
+    try { selectRange(box, 'cells', { r: cells[0][0], c: cells[0][1] }); } finally { keepSpecial = false; }
+    special = { si, cells };
+    gv.ensureVisible(cells[0][0], cells[0][1]);
+    gv.renderAll();
+    toast(`${cells.length.toLocaleString()}개 칸을 골랐습니다. 입력 후 Ctrl+Enter 로 모두 채우거나 Delete 로 지울 수 있습니다.`);
+  });
 }
 
 // ───────────────────────── 개요 (그룹 · 부분합) ─────────────────────────
@@ -6425,7 +6638,7 @@ function sortDialog() {
 }
 
 function gotoDialog() {
-  formDialog('이동', [{ name: 'ref', label: '참조', value: '' }], ({ ref }) => gotoRef(ref));
+  formDialog('이동', [{ name: 'ref', label: '참조 (비워 두고 확인하면 이동 옵션)', value: '' }], ({ ref }) => (ref.trim() ? gotoRef(ref) : setTimeout(gotoSpecialDialog, 0)));
 }
 
 
@@ -7315,6 +7528,10 @@ const MENUS = {
   fontList: (a) => { fontMenu(a); },
   pivotStylesDesign: (a) => { pivotStyleGallery(a); },
   slicerStyles: (a) => { slicerStyleGallery(a); },
+  whatIf: () => [
+    { label: '목표값 찾기...', action: () => run('goalSeek') },
+    { label: '데이터 표...', action: () => run('dataTable') },
+  ],
   useInFormula: () => {
     const names = wb.names.filter((n) => !n.hidden && (!n.sheet || n.sheet.toLowerCase() === sheet().name.toLowerCase()));
     return [
@@ -7757,6 +7974,15 @@ const COMMANDS = {
   pivotFieldList: () => { pivotPaneOpen = !pivotPaneOpen; refreshPivotPane(true); },
   pivotName: (v) => renamePivot(v),
   pivotOptions: () => pivotOptionsDialog(),
+  tracePrecedents: () => tracePrecedents(),
+  traceDependents: () => traceDependents(),
+  removeArrows: () => removeArrows(),
+  evaluateFormula: () => evaluateFormulaDialog(),
+  errorCheck: () => errorCheck(),
+  watchWindow: () => watchWindow(!watchPane),
+  goalSeek: () => goalSeekDialog(),
+  dataTable: () => dataTableDialog(),
+  gotoSpecial: () => gotoSpecialDialog(),
   outlineGroup: () => outlineGroup(1),
   outlineUngroup: () => outlineGroup(-1),
   outlineClear: () => outlineClear(),
@@ -8213,6 +8439,7 @@ async function init() {
   gv = new GridView({
     state: () => ({
       wb, si, sel, selKind, active, editing: !!editing, clip, fillPreview, refs: editRefs, chartSel, circles,
+      special: special?.si === si ? special.cells : null, arrows: trace?.arrows ?? null,
       showGrid: view.showGrid && !sheet().noGrid, showFormulas: view.showFormulas, showHeaders: view.showHeaders,
     }),
     onViewScroll: () => positionEditor(),

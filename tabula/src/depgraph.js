@@ -159,15 +159,26 @@ export class DepGraph {
 
   /** 수식 셀 등록 */
   add(si, r, c, cell) {
+    this.refBoxes(si, r, c, cell, (ts, R1, C1, R2, C2, tag) => {
+      if (ts === null) this.dyn.add(cellNum(si, r, c));
+      else this.addRef(tag, ts, R1, C1, R2, C2, si, r, c, cell);
+    });
+  }
+
+  /**
+   * 수식 셀이 참조하는 범위마다 cb(대상 시트, r1, c1, r2, c2, 참조 노드). 동적이면 cb(null)
+   * (참조되는 셀 추적 · 그래프 만들기가 같이 씀)
+   */
+  refBoxes(si, r, c, cell, cb) {
     const info = astRefs(cell.ast);
     const wb = this.wb;
-    if (info.dyn) this.dyn.add(cellNum(si, r, c));
+    if (info.dyn) cb(null);
     const dr = cell.dr ?? 0;
     const dc = cell.dc ?? 0;
     for (const f of info.refs) {
       let s = si;
       if (f.sheet) {
-        if (f.sheet.includes(':')) { this.dyn.add(cellNum(si, r, c)); continue; }
+        if (f.sheet.includes(':')) { cb(null); continue; }
         s = wb.sheetIndexByName(f.sheet);
         if (s < 0) continue; // 없는 시트 → #REF!
       }
@@ -175,21 +186,25 @@ export class DepGraph {
       const c1 = f.ac1 || f.rows ? f.c1 : f.c1 + dc;
       const r2 = f.ar2 || f.cols ? f.r2 : f.r2 + dr;
       const c2 = f.ac2 || f.rows ? f.c2 : f.c2 + dc;
-      this.addRef(f, s, Math.min(r1, r2), Math.min(c1, c2), Math.max(r1, r2), Math.max(c1, c2), si, r, c, cell);
+      cb(s, Math.min(r1, r2), Math.min(c1, c2), Math.max(r1, r2), Math.max(c1, c2), f);
     }
     if (info.srefs.length) {
       const here = { si, r, c, sheet: wb.sheets[si]?.name };
       for (const n of info.srefs) {
         let rg = null;
         try { rg = resolveStructRef(wb, n.table, n.spec, here); } catch { rg = null; }
-        if (rg) this.addRef(n, rg.si, rg.r1, rg.c1, rg.r2, rg.c2, si, r, c, cell);
+        if (rg) cb(rg.si, rg.r1, rg.c1, rg.r2, rg.c2, n);
       }
     }
-    for (const n of info.names) this.addName(si, r, c, n, cell);
+    for (const n of info.names) {
+      const d = this.nameInfo(si, r, c, n);
+      if (d.dyn) cb(null);
+      else if (d.box) cb(d.box.si, d.box.r1, d.box.c1, d.box.r2, d.box.c2, n);
+    }
   }
 
   /** 이름: 범위 이름은 그 범위, 상수는 없음, 그 밖(수식 · LAMBDA · 상대 참조 이름)은 동적 */
-  addName(si, r, c, n, cell) {
+  nameInfo(si, r, c, n) {
     const wb = this.wb;
     const mk = `${si}\u0001${n.sheet ?? ''}\u0001${n.v.toLowerCase()}`;
     let d = this.nameMemo.get(mk);
@@ -212,8 +227,7 @@ export class DepGraph {
       }
       this.nameMemo.set(mk, d);
     }
-    if (d.dyn) { this.dyn.add(cellNum(si, r, c)); return; }
-    if (d.box) this.addRef(n, d.box.si, d.box.r1, d.box.c1, d.box.r2, d.box.c2, si, r, c, cell);
+    return d;
   }
 
   /** 칸 (si, r, c) 의 수식이 바뀜: 새 수식의 참조만 추가 (옛 묶음은 찾을 때 확인해서 무시) */

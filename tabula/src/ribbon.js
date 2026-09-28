@@ -171,7 +171,19 @@ export const TABS = [
         medium('useInFormula', 'fx', '수식에서 사용', { menu: 'useInFormula' }),
         medium('createNamesFromSel', 'table', '선택 영역에서 만들기', { title: '선택 영역에서 이름 만들기 (Ctrl+Shift+F3)' }),
       ]),
-      group('수식 분석', [large('toggleFormulas', 'showFormulas', '수식 표시', { toggle: 'showFormulas' })]),
+      group('수식 분석', [
+        col(
+          medium('tracePrecedents', 'prev', '참조되는 셀 추적'),
+          medium('traceDependents', 'next', '참조하는 셀 추적'),
+          medium('removeArrows', 'clear', '연결선 제거'),
+        ),
+        col(
+          medium('toggleFormulas', 'showFormulas', '수식 표시', { toggle: 'showFormulas' }),
+          medium('errorCheck', 'validation', '오류 검사'),
+          medium('evaluateFormula', 'fx', '수식 계산'),
+        ),
+        large('watchWindow', 'search', '조사식 창'),
+      ]),
       group('계산', [large('recalc', 'calc', '지금 계산')]),
     ],
   },
@@ -199,6 +211,7 @@ export const TABS = [
         large('dedupe', 'dedupe', '중복된 항목 제거'),
         large('dataValidation', 'validation', '데이터 유효성 검사', { menu: 'validation', split: true }),
       ]),
+      group('예측', [large('whatIfMenu', 'chartLine', '가상 분석', { menu: 'whatIf' })]),
       group('개요', [
         large('outlineGroup', 'rowInsert', '그룹', { title: '그룹 (Shift+Alt+→)', menu: 'outlineGroupMenu', split: true }),
         large('outlineUngroup', 'delete', '그룹 해제', { title: '그룹 해제 (Shift+Alt+←)', menu: 'outlineUngroupMenu', split: true }),

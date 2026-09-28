@@ -359,6 +359,21 @@ input.rselect { padding: 0 4px; }
   content: ''; position: absolute; right: 3px; bottom: 3px; border: 5px solid transparent;
   border-right-color: #b5b5b5; border-bottom-color: #b5b5b5;
 }
+/* 이동 옵션 · 추적 화살표 · 수식 계산 · 조사식 창 */
+.special-hl { position: absolute; background: rgba(33, 115, 70, .16); box-shadow: inset 0 0 0 1px rgba(33, 115, 70, .45); pointer-events: none; }
+.trace-svg { position: absolute; width: 1px; height: 1px; overflow: visible; pointer-events: none; z-index: 2; }
+.eval-box { margin-top: 10px; padding: 10px; min-height: 60px; border: 1px solid #c8c8c8; background: #fff; font: 13px/1.6 Consolas, 'D2Coding', monospace; word-break: break-all; }
+.eval-next { background: #fff2a8; text-decoration: underline; }
+pre.plain { margin: 0; font: inherit; white-space: pre-wrap; }
+.watch-pane { position: fixed; right: 16px; bottom: 40px; z-index: 40; width: 460px; max-height: 260px; overflow: auto; background: #fff; border: 1px solid #b8b8b8; box-shadow: 0 4px 16px rgba(0,0,0,.18); font-size: 12px; }
+.watch-head { display: flex; gap: 10px; align-items: center; padding: 6px 8px; background: #f3f3f3; border-bottom: 1px solid #ddd; font-weight: 600; }
+.watch-head .lnk:first-of-type { margin-left: auto; }
+.watch-pane table { width: 100%; border-collapse: collapse; }
+.watch-pane th, .watch-pane td { padding: 3px 6px; border-bottom: 1px solid #eee; text-align: left; white-space: nowrap; }
+.watch-pane td.num { text-align: right; }
+.watch-pane td.f { color: #555; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+.watch-pane .muted { padding: 8px; }
+.lnk { border: 0; background: none; color: var(--green-dark); cursor: pointer; font: inherit; padding: 0 2px; }
 /* 개요(그룹) 기호 */
 .olband { position: absolute; background: var(--header-bg); }
 .olband.r { border-right: 1px solid #e1e1e1; }
