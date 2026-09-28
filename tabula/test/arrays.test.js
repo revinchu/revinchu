@@ -155,3 +155,37 @@ test('표 xlsx: 계산된 열 · 요약 행 사용자 수식', () => {
   assert.match(xml, /<calculatedColumnFormula>표1\[\[#This Row\],\[수량\]\]\*10<\/calculatedColumnFormula>/);
   assert.match(xml, /totalsRowFunction="custom">.*<totalsRowFormula>SUBTOTAL\(109,표1\[금액\]\)\*2<\/totalsRowFormula>/);
 });
+
+test('복잡한 피벗 테이블 xlsx 왕복: 행 2개 · 열 · 값 2개 · 보고서 필터 · 테이블 형식 · GETPIVOTDATA', async () => {
+  const { computePivot, resolvePivot, pivotSourceData } = await import('../src/pivot.js');
+  const rows = [['지역', '구', '분기', '매출', '수량', '연도'], ['서울', '강남', 'Q1', '100', '1', '2024'], ['서울', '강북', 'Q1', '50', '2', '2024'],
+    ['부산', '해운대', 'Q2', '30', '3', '2024'], ['서울', '강남', 'Q2', '20', '4', '2023'], ['부산', '해운대', 'Q1', '10', '5', '2024']];
+  const cells = {};
+  rows.forEach((row, r) => row.forEach((v, c) => { cells[`${r},${c}`] = v; }));
+  const wb = book({});
+  wb.transact(() => Object.entries(cells).forEach(([k, v]) => { const [r, c] = k.split(',').map(Number); wb.setInput(0, r, c, v); }));
+  const at = wb.transact(() => wb.addSheet('피벗'));
+  const def = {
+    source: 'Sheet1', range: { r1: 0, c1: 0, r2: 5, c2: 5 }, rows: ['지역', '구'], cols: ['분기'],
+    values: [{ field: '매출', agg: 'sum' }, { field: '수량', agg: 'average', showAs: 'percentOfTotal' }], pages: ['연도'],
+    filters: { 연도: ['2024'] }, layout: 'tabular', subtotals: true, top: 0, left: 0,
+  };
+  const { def: d, rows: vis } = resolvePivot(pivotSourceData(wb, def).rows, def);
+  const { grid } = computePivot(vis, d);
+  wb.transact(() => { grid.forEach((row, r) => row.forEach((cd, c) => { if (cd?.raw) wb.setCellData(at, r, c, cd); })); wb.setSheetProp(at, 'pivot', { ...def, area: { r1: 0, c1: 0, r2: grid.length - 1, c2: 8 } }); });
+  assert.equal(grid[0][1].raw, '2024');
+  const files = unzip(writeXlsx(wb));
+  const pt = textOf(files['xl/pivotTables/pivotTable1.xml']);
+  assert.match(pt, /<rowFields count="2"><field x="0"\/><field x="1"\/><\/rowFields>/);
+  assert.match(pt, /<colFields count="2"><field x="2"\/><field x="-2"\/><\/colFields>/);
+  assert.match(pt, /<pageFields count="1"><pageField fld="5" item="\d" hier="-1"\/><\/pageFields>/);
+  assert.match(pt, /showDataAs="percentOfTotal"/);
+  assert.match(pt, /outline="0"/);
+  const back = readXlsx(zip(files)).data.sheets[1].pivot;
+  assert.deepEqual([back.rows, back.cols, back.pages, back.layout], [['지역', '구'], ['분기'], ['연도'], 'tabular']);
+  assert.deepEqual(back.values, [{ field: '매출', agg: 'sum' }, { field: '수량', agg: 'average', showAs: 'percentOfTotal' }]);
+  assert.deepEqual(back.filters, { 연도: ['2024'] });
+  // GETPIVOTDATA
+  wb.transact(() => wb.setInput(at, 30, 0, '=GETPIVOTDATA("매출",A3,"지역","서울","분기","Q1")'));
+  assert.equal(wb.getValue(at, 30, 0), 150);
+});

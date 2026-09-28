@@ -19,7 +19,7 @@ import { SAMPLES } from './samples.js';
 import { GridView, DEFAULT_FONT, DEFAULT_SIZE, measureText, fontStack } from './view.js';
 import { readXlsx, writeXlsx, xlsxOverflow } from './xlsx.js';
 import { CHART_TYPES, chartData, renderChartSvg } from './chart.js';
-import { buildPivot, AGGREGATES, pivotSourceData, resolvePivot, itemText } from './pivot.js';
+import { computePivot, AGGREGATES, SHOW_AS, LAYOUTS, pivotSourceData, resolvePivot, itemText, headerNames, normalizeDef, valueName } from './pivot.js';
 import { server } from './storage.js';
 import { ICONS } from './icons.js';
 import {
@@ -214,6 +214,7 @@ function updateSelectionUI() {
   }
   dom.fxCancel.disabled = !editing;
   dom.fxEnter.disabled = !editing;
+  refreshPivotPane();
   gv.renderSelection();
   positionEditor();
   updateStats();
@@ -3385,35 +3386,75 @@ function pivotSource(def) {
 
 const pivotItemText = itemText;
 
+/** 피벗을 시트에 씀. def.area(이전 결과 영역)만 지우고 다시 씀 */
 function writePivot(targetSi, def) {
   const src = pivotSource(def);
   if (!src) return false;
   const { def: d, rows } = resolvePivot(src, def);
-  const out = buildPivot(rows, d);
+  const { grid } = computePivot(rows, d);
   const t = wb.sheets[targetSi];
   const top = def.top ?? 0;
   const left = def.left ?? 0;
-  const colsN = out[0]?.length ?? 0;
+  const colsN = Math.max(0, ...grid.map((row) => row.length));
   if (def.area) {
-    // 엑셀에서 가져온 피벗: 그 영역만 지우고 다시 씀 (시트의 다른 내용은 유지)
     const a = def.area;
     for (const k of [...t.cells.keys()]) {
       const [r, c] = k.split(',').map(Number);
       if (r >= a.r1 && r <= a.r2 && c >= a.c1 && c <= a.c2) wb.setCellData(targetSi, r, c, null);
     }
-    def.area = { r1: top, c1: left, r2: top + out.length - 1, c2: left + colsN - 1 };
   } else {
     for (const k of [...t.cells.keys()]) { const [r, c] = k.split(',').map(Number); wb.setCellData(targetSi, r, c, null); }
   }
-  out.forEach((row, r) => row.forEach((cd, c) => { if (cd) wb.setCellData(targetSi, top + r, left + c, cd); }));
+  def.area = { r1: top, c1: left, r2: top + grid.length - 1, c2: left + Math.max(0, colsN - 1) };
+  grid.forEach((row, r) => row.forEach((cd, c) => { if (cd && (cd.raw || cd.style)) wb.setCellData(targetSi, top + r, left + c, cd); }));
   for (let c = 0; c < colsN; c++) {
     let w = 0;
-    out.forEach((row, r) => {
-      if (row[c]?.raw) w = Math.max(w, measureText(displayText(top + r, left + c, targetSi), wb.styleAt(targetSi, top + r, left + c)) + 12);
+    grid.forEach((row, r) => {
+      if (row[c]?.raw) w = Math.max(w, measureText(displayText(top + r, left + c, targetSi), wb.styleAt(targetSi, top + r, left + c)) + 12 + (row[c].style?.indent ?? 0) * 12);
     });
     if (w > (wb.sheets[targetSi].colWidths[left + c] ?? DEFAULT_COL_WIDTH)) wb.setColWidth(targetSi, left + c, Math.min(300, Math.ceil(w)));
   }
   return true;
+}
+
+/** 시트의 모든 피벗 정의 [{ def, prop, index }] */
+function pivotDefs(s = si) {
+  const sh = wb.sheets[s];
+  const list = [];
+  if (sh.pivot) list.push({ def: sh.pivot, prop: 'pivot', index: -1 });
+  (sh.pivotsExtra ?? []).forEach((d, i) => { if (d) list.push({ def: d, prop: 'pivotsExtra', index: i }); });
+  return list;
+}
+
+/** 활성 셀이 들어 있는 피벗 (없으면 null) */
+function pivotHere() {
+  const list = pivotDefs();
+  return list.find(({ def: d }) => d.area && active.r >= d.area.r1 && active.r <= d.area.r2 && active.c >= d.area.c1 && active.c <= d.area.c2)
+    ?? (list.length === 1 && !list[0].def.area ? list[0] : null);
+}
+
+/** 피벗 정의 바꾸기 (다시 계산 + 실행 취소 가능) */
+function setPivotDef(entry, def, s = si) {
+  wb.transact(() => {
+    writePivot(s, def);
+    if (entry.prop === 'pivot') wb.setSheetProp(s, 'pivot', def);
+    else {
+      const list = [...(wb.sheets[s].pivotsExtra ?? [])];
+      list[entry.index] = def;
+      wb.setSheetProp(s, 'pivotsExtra', list);
+    }
+  }, meta());
+  entry.def = def;
+}
+
+/** 피벗 정의를 새 형식({rows, cols, values …})으로 */
+function pivotDefV2(def) {
+  if (def.rows) return def;
+  const src = pivotSource(def);
+  if (!src) return def;
+  const n = normalizeDef(def, headerNames(src));
+  const { rowField, colField, valueField, agg, fieldNames, ...rest } = def;
+  return { ...rest, rows: n.rows, cols: n.cols, values: n.values };
 }
 
 function pivotDialog(tableName = null) {
@@ -3422,55 +3463,254 @@ function pivotDialog(tableName = null) {
   if (rg.r2 <= rg.r1) { alertDialog('피벗 테이블', '머리글 행과 데이터가 있는 범위를 선택하세요.'); return; }
   const srcName = sheet().name;
   const headers = [];
-  for (let c = rg.c1; c <= rg.c2; c++) headers.push({ value: String(c - rg.c1), label: displayText(rg.r1, c) || `${colToName(c)}열` });
-  const firstNum = headers.findIndex((h, i) => typeof valueAt(rg.r1 + 1, rg.c1 + i) === 'number');
-  formDialog('피벗 테이블 만들기', [
-    { name: 'range', label: '표/범위', value: inTable ? inTable.name : `${quoteSheetName(srcName)}!${cellName(rg.r1, rg.c1)}:${cellName(rg.r2, rg.c2)}` },
-    { name: 'row', label: '행', type: 'select', value: '0', options: headers },
-    { name: 'col', label: '열', type: 'select', value: '', options: [{ value: '', label: '(없음)' }, ...headers] },
-    { name: 'val', label: '값', type: 'select', value: firstNum >= 0 ? String(firstNum) : '', options: [{ value: '', label: '(행 개수)' }, ...headers] },
-    { name: 'agg', label: '계산', type: 'select', value: firstNum >= 0 ? 'sum' : 'count', options: AGGREGATES.map((a) => ({ value: a.id, label: a.label })) },
-  ], (v) => {
-    const text = v.range.trim().replace(/^=/, '');
-    const tf = findTable(wb, text);
-    let def;
-    const names = (i) => (i === '' ? null : headers[Number(i)]?.label ?? null);
-    const fieldNames = { row: names(v.row), col: names(v.col), val: names(v.val) };
-    const fields = {
-      rowField: Number(v.row), colField: v.col === '' ? null : Number(v.col), valueField: v.val === '' ? null : Number(v.val),
-      agg: v.val === '' ? 'count' : v.agg, fieldNames,
-    };
-    if (tf) {
-      def = { table: tf.t.name, source: wb.sheets[tf.si].name, range: { r1: tf.t.r1, c1: tf.t.c1, r2: dataBottom(tf.t), c2: tf.t.c2 }, ...fields };
-    } else {
-      const bang = text.lastIndexOf('!');
-      const src = bang > 0 ? text.slice(0, bang).replace(/^'(.*)'$/, '$1').replace(/''/g, "'") : srcName;
-      const prg = parseRangeName((bang > 0 ? text.slice(bang + 1) : text).replace(/\$/g, ''));
-      if (!prg || wb.sheetIndexByName(src) < 0) { toast('범위가 올바르지 않습니다. 셀 범위나 표 이름을 입력하세요.'); return false; }
-      def = { source: src, range: prg, ...fields };
-    }
-    let n = 1;
-    while (wb.sheetIndexByName(`피벗${n}`) >= 0) n++;
-    const at = wb.transact(() => {
-      const idx = wb.addSheet(`피벗${n}`, si + 1);
-      writePivot(idx, def);
-      wb.setSheetProp(idx, 'pivot', def);
-      return idx;
-    }, meta());
-    switchSheet(at, false);
-    toast(def.table
-      ? `'${def.table}' 표로 피벗 테이블을 만들었습니다. 표에 데이터가 늘어나면 [데이터 → 모두 새로 고침]으로 자동 반영됩니다.`
-      : '피벗 테이블을 만들었습니다. 원본이 바뀌면 [데이터 → 모두 새로 고침]을 누르세요.');
-    return true;
-  }, { note: '표 이름(예: 표1)을 원본으로 쓰면 표에 추가된 데이터까지 새로 고칠 때 자동으로 포함됩니다. 결과는 새 워크시트에 만들어집니다.' });
+  for (let c = rg.c1; c <= rg.c2; c++) headers.push(displayText(rg.r1, c) || `열${c - rg.c1 + 1}`);
+  const where = el('select', {}, el('option', { value: 'new' }, '새 워크시트'), el('option', { value: 'here' }, '기존 워크시트'));
+  const loc = el('input', { type: 'text', value: '', placeholder: '예: H3', disabled: true });
+  where.addEventListener('change', () => { loc.disabled = where.value !== 'here'; if (!loc.disabled && !loc.value) loc.value = cellName(rg.r1, rg.c2 + 2); });
+  const rangeIn = el('input', { type: 'text', value: inTable ? inTable.name : `${quoteSheetName(srcName)}!${cellName(rg.r1, rg.c1)}:${cellName(rg.r2, rg.c2)}` });
+  const body = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
+    el('div', { class: 'muted' }, '표 이름(예: 표1)을 원본으로 쓰면 표에 추가된 데이터까지 새로 고칠 때 자동으로 포함됩니다.'),
+    el('label', {}, el('span', {}, '표/범위'), rangeIn),
+    el('label', {}, el('span', {}, '넣을 위치'), where),
+    el('label', {}, el('span', {}, '위치'), loc));
+  openDialog({
+    title: '피벗 테이블 만들기', width: 420, body,
+    buttons: [{
+      label: '확인', primary: true, action: () => {
+        const text = rangeIn.value.trim().replace(/^=/, '');
+        const tf = findTable(wb, text);
+        let def;
+        // 처음에는 첫 텍스트 열을 행, 첫 숫자 열을 값으로 (필드 창에서 바꿀 수 있음)
+        const firstNum = headers.findIndex((h, i) => typeof valueAt(rg.r1 + 1, rg.c1 + i) === 'number');
+        const firstText = headers.findIndex((h, i) => typeof valueAt(rg.r1 + 1, rg.c1 + i) === 'string');
+        const fields = {
+          rows: [headers[firstText >= 0 ? firstText : 0]], cols: [],
+          values: [{ field: headers[firstNum >= 0 ? firstNum : 0], agg: firstNum >= 0 ? 'sum' : 'count' }],
+        };
+        if (tf) def = { table: tf.t.name, source: wb.sheets[tf.si].name, range: { r1: tf.t.r1, c1: tf.t.c1, r2: dataBottom(tf.t), c2: tf.t.c2 }, ...fields };
+        else {
+          const bang = text.lastIndexOf('!');
+          const src = bang > 0 ? text.slice(0, bang).replace(/^'(.*)'$/, '$1').replace(/''/g, "'") : srcName;
+          const prg = parseRangeName((bang > 0 ? text.slice(bang + 1) : text).replace(/\$/g, ''));
+          if (!prg || wb.sheetIndexByName(src) < 0) { toast('범위가 올바르지 않습니다. 셀 범위나 표 이름을 입력하세요.'); return false; }
+          def = { source: src, range: prg, ...fields };
+        }
+        let target;
+        if (where.value === 'here') {
+          const p = parseRangeName(loc.value.replace(/\$/g, ''));
+          if (!p) { toast('위치가 올바르지 않습니다.'); return false; }
+          def.top = p.r1;
+          def.left = p.c1;
+          def.area = { r1: p.r1, c1: p.c1, r2: p.r1, c2: p.c1 };
+          target = si;
+          wb.transact(() => {
+            writePivot(target, def);
+            if (!sheet().pivot) wb.setSheetProp(target, 'pivot', def);
+            else wb.setSheetProp(target, 'pivotsExtra', [...(sheet().pivotsExtra ?? []), def]);
+          }, meta());
+          selectCell(p.r1, p.c1);
+        } else {
+          let n = 1;
+          while (wb.sheetIndexByName(`피벗${n}`) >= 0) n++;
+          def.top = 2;
+          def.left = 0;
+          target = wb.transact(() => {
+            const idx = wb.addSheet(`피벗${n}`, si + 1);
+            def.area = null;
+            writePivot(idx, def);
+            wb.setSheetProp(idx, 'pivot', def);
+            return idx;
+          }, meta());
+          switchSheet(target, false);
+          selectCell(def.top, 0);
+        }
+        pivotPaneOpen = true;
+        refreshPivotPane(true);
+        return true;
+      },
+    }, { label: '취소' }],
+  });
 }
 
 function refreshPivots() {
   let n = 0;
   wb.transact(() => {
-    wb.sheets.forEach((s, i) => { if (s.pivot && writePivot(i, s.pivot)) n++; });
+    wb.sheets.forEach((s, i) => {
+      for (const { def } of pivotDefs(i)) if (writePivot(i, def)) n++;
+      if (s.pivot) wb.setSheetProp(i, 'pivot', { ...s.pivot });
+    });
   }, meta());
+  refreshPivotPane(true);
   toast(n ? `피벗 테이블 ${n}개를 새로 고쳤습니다.` : '새로 고칠 피벗 테이블이 없습니다.');
+}
+
+// ── 피벗 테이블 필드 창 ──
+let pivotPaneOpen = true;
+let pivotPaneKey = '';
+let pivotDrag = null;
+
+function pivotPaneEl() {
+  let pane = document.getElementById('pivotPane');
+  if (!pane) {
+    pane = el('aside', { id: 'pivotPane', class: 'pivot-pane' });
+    document.getElementById('gridWrap').append(pane);
+  }
+  return pane;
+}
+
+function showPivotPane(on) {
+  const wrap = document.getElementById('gridWrap');
+  const was = wrap.classList.contains('with-pane');
+  wrap.classList.toggle('with-pane', on);
+  pivotPaneEl().style.display = on ? '' : 'none';
+  if (was !== on) gv.layout();
+}
+
+function refreshPivotPane(force = false) {
+  const here = chartSel || editing ? null : pivotHere();
+  if (!here || !pivotPaneOpen) { showPivotPane(false); pivotPaneKey = ''; return; }
+  const key = `${si}:${here.prop}:${here.index}:${JSON.stringify(here.def)}`;
+  showPivotPane(true);
+  if (!force && key === pivotPaneKey) return;
+  pivotPaneKey = key;
+  renderPivotPane(here);
+}
+
+function renderPivotPane(entry) {
+  const pane = pivotPaneEl();
+  const src = pivotSource(entry.def);
+  if (!src) { pane.replaceChildren(el('div', { class: 'pp-head' }, '피벗 테이블 필드'), el('div', { class: 'muted', style: { padding: '10px' } }, '원본 데이터를 찾을 수 없습니다.')); return; }
+  const header = headerNames(src);
+  const def = pivotDefV2(entry.def);
+  const areas = { pages: def.pages ?? [], cols: def.cols ?? [], rows: def.rows ?? [], values: def.values ?? [] };
+  const used = new Set([...areas.pages, ...areas.cols, ...areas.rows, ...areas.values.map((v) => v.field)].map((x) => x.toLowerCase()));
+  const isNum = (f) => {
+    const i = header.indexOf(f);
+    return src.slice(1).some((r) => typeof r[i] === 'number');
+  };
+  const apply = (patch) => {
+    const next = { ...def, ...patch };
+    if (next.pages && !next.pages.length) delete next.pages;
+    setPivotDef(entry, next);
+    refreshPivotPane(true);
+  };
+  const removeField = (name) => ({
+    pages: areas.pages.filter((x) => x !== name), cols: areas.cols.filter((x) => x !== name),
+    rows: areas.rows.filter((x) => x !== name), values: areas.values.filter((v) => v.field !== name),
+  });
+  const moveTo = (name, area, at = null, fromValue = null) => {
+    const base = fromValue !== null ? { ...areas, values: areas.values.filter((_, i) => i !== fromValue) } : area === 'values' ? areas : removeField(name);
+    if (area === 'values') {
+      const list = [...base.values];
+      const v = fromValue !== null ? areas.values[fromValue] : { field: name, agg: isNum(name) ? 'sum' : 'count' };
+      list.splice(at ?? list.length, 0, v);
+      apply({ ...base, values: list });
+      return;
+    }
+    const list = base[area].filter((x) => x !== name);
+    list.splice(at ?? list.length, 0, name);
+    apply({ ...base, [area]: list });
+  };
+  // 필드 목록
+  const search = el('input', { type: 'search', placeholder: '검색', class: 'pp-search' });
+  const fieldList = el('div', { class: 'pp-fields' });
+  const renderFields = () => {
+    const q = search.value.trim().toLowerCase();
+    fieldList.replaceChildren(...header.filter((h) => !q || h.toLowerCase().includes(q)).map((h) => {
+      const cb = el('input', { type: 'checkbox', checked: used.has(h.toLowerCase()) });
+      cb.addEventListener('change', () => {
+        if (cb.checked) moveTo(h, isNum(h) ? 'values' : 'rows');
+        else apply(removeField(h));
+      });
+      const item = el('label', { class: 'pp-field', draggable: 'true' }, cb, el('span', {}, h));
+      item.addEventListener('dragstart', (e) => { pivotDrag = { name: h }; e.dataTransfer.setData('text/plain', h); });
+      return item;
+    }));
+  };
+  search.addEventListener('input', renderFields);
+  renderFields();
+  // 영역 4개
+  const AREA_LABEL = { pages: '필터', cols: '열', rows: '행', values: 'Σ 값' };
+  const areaBox = (area) => {
+    const box = el('div', { class: 'pp-area' });
+    const items = area === 'values' ? areas.values.map((v, i) => ({ name: v.field, label: valueName(v), i })) : areas[area].map((n, i) => ({ name: n, label: n, i }));
+    items.forEach((it) => {
+      const menuBtn = el('button', { type: 'button', class: 'pp-menu', title: '필드 설정' }, '▾');
+      const row = el('div', { class: 'pp-item', draggable: 'true' }, el('span', { class: 'pp-label' }, it.label), menuBtn);
+      row.addEventListener('dragstart', (e) => { pivotDrag = { name: it.name, from: area, index: it.i }; e.dataTransfer.setData('text/plain', it.name); });
+      menuBtn.addEventListener('click', () => {
+        const list = area === 'values' ? areas.values : areas[area];
+        const moves = [
+          { label: '위로 이동', disabled: it.i === 0, action: () => { const l = [...list]; [l[it.i - 1], l[it.i]] = [l[it.i], l[it.i - 1]]; apply({ [area]: l }); } },
+          { label: '아래로 이동', disabled: it.i === list.length - 1, action: () => { const l = [...list]; [l[it.i + 1], l[it.i]] = [l[it.i], l[it.i + 1]]; apply({ [area]: l }); } },
+          { sep: true },
+          ...Object.entries(AREA_LABEL).filter(([a]) => a !== area).map(([a, lab]) => ({ label: `${lab}(으)로 이동`, action: () => moveTo(it.name, a, null, area === 'values' ? it.i : null) })),
+          { sep: true },
+          { label: '필드 제거', action: () => apply(area === 'values' ? { values: areas.values.filter((_, i) => i !== it.i) } : { [area]: list.filter((_, i) => i !== it.i) }) },
+          ...(area === 'values' ? [{ sep: true }, { label: '값 필드 설정...', action: () => valueFieldDialog(it.i) }] : []),
+        ];
+        openMenu(menuBtn, moves);
+      });
+      box.append(row);
+    });
+    box.addEventListener('dragover', (e) => { e.preventDefault(); box.classList.add('over'); });
+    box.addEventListener('dragleave', () => box.classList.remove('over'));
+    box.addEventListener('drop', (e) => {
+      e.preventDefault();
+      box.classList.remove('over');
+      const dr = pivotDrag;
+      pivotDrag = null;
+      if (!dr) return;
+      const rows = [...box.querySelectorAll('.pp-item')];
+      let at = rows.findIndex((r) => e.clientY < r.getBoundingClientRect().top + r.offsetHeight / 2);
+      if (at < 0) at = rows.length;
+      if (dr.from === area && area === 'values') {
+        const l = [...areas.values];
+        const [v] = l.splice(dr.index, 1);
+        l.splice(at > dr.index ? at - 1 : at, 0, v);
+        apply({ values: l });
+      } else moveTo(dr.name, area, at, dr.from === 'values' ? dr.index : null);
+    });
+    return el('div', { class: 'pp-areawrap' }, el('div', { class: 'pp-areahead' }, AREA_LABEL[area]), box);
+  };
+  const valueFieldDialog = (i) => {
+    const v = areas.values[i];
+    formDialog('값 필드 설정', [
+      { name: 'name', label: '사용자 지정 이름', value: valueName(v) },
+      { name: 'agg', label: '값 요약 기준', type: 'select', value: v.agg, options: AGGREGATES.map((a) => ({ value: a.id, label: a.label })) },
+      { name: 'showAs', label: '값 표시 형식', type: 'select', value: v.showAs ?? 'normal', options: SHOW_AS.map((a) => ({ value: a.id, label: a.label })) },
+    ], (x) => {
+      const nv = { field: v.field, agg: x.agg };
+      if (x.showAs !== 'normal') nv.showAs = x.showAs;
+      const auto = valueName({ field: v.field, agg: x.agg });
+      if (x.name.trim() && x.name.trim() !== auto && x.name.trim() !== valueName(v)) nv.name = x.name.trim();
+      else if (v.name && x.name.trim() === v.name) nv.name = v.name;
+      const l = [...areas.values];
+      l[i] = nv;
+      apply({ values: l });
+    });
+  };
+  const layoutSel = el('select', {}, LAYOUTS.map((l) => el('option', { value: l.id, selected: (def.layout ?? 'compact') === l.id }, l.label)));
+  layoutSel.addEventListener('change', () => apply({ layout: layoutSel.value }));
+  const chk = (label, key) => {
+    const cb = el('input', { type: 'checkbox', checked: def[key] !== false });
+    cb.addEventListener('change', () => apply({ [key]: cb.checked }));
+    return el('label', { class: 'pp-opt' }, cb, label);
+  };
+  pane.replaceChildren(
+    el('div', { class: 'pp-head' }, el('span', {}, '피벗 테이블 필드'), el('button', { type: 'button', title: '닫기', onclick: () => { pivotPaneOpen = false; refreshPivotPane(); } }, '✕')),
+    el('div', { class: 'muted pp-hint' }, '보고서에 추가할 필드 선택 (영역으로 끌어 놓기):'),
+    search, fieldList,
+    el('div', { class: 'pp-grid' }, areaBox('pages'), areaBox('cols'), areaBox('rows'), areaBox('values')),
+    el('div', { class: 'pp-opts' }, el('label', { class: 'pp-opt' }, '레이아웃 ', layoutSel), chk('부분합', 'subtotals'), chk('행 총합계', 'grandRows'), chk('열 총합계', 'grandCols')),
+  );
+}
+
+function pivotLayoutCmd(patch) {
+  const here = pivotHere();
+  if (!here) { toast('피벗 테이블 안의 셀을 선택하세요.'); return; }
+  setPivotDef(here, { ...pivotDefV2(here.def), ...patch });
+  refreshPivotPane(true);
 }
 
 // ───────────────────────── 찾기 / 바꾸기 ─────────────────────────
@@ -5144,6 +5384,21 @@ function cellStylesMenu(anchorEl) {
 function tableStylesMenu(anchorEl) { tableStyleGallery(anchorEl, !tableHere()); }
 
 const MENUS = {
+  pivotLayout: () => [
+    { label: '압축 형식으로 표시', action: () => run('pivotCompact') },
+    { label: '개요 형식으로 표시', action: () => run('pivotOutline') },
+    { label: '테이블 형식으로 표시', action: () => run('pivotTabular') },
+  ],
+  pivotSubtotals: () => [
+    { label: '부분합 표시 안 함', action: () => run('pivotSubOff') },
+    { label: '그룹 상단에 모든 부분합 표시', action: () => run('pivotSubOn') },
+  ],
+  pivotGrand: () => [
+    { label: '행 및 열의 총합계 해제', action: () => run('pivotGrandOff') },
+    { label: '행 및 열의 총합계 설정', action: () => run('pivotGrandOn') },
+    { label: '행의 총합계만 설정', action: () => run('pivotGrandRows') },
+    { label: '열의 총합계만 설정', action: () => run('pivotGrandCols') },
+  ],
   useInFormula: () => {
     const names = wb.names.filter((n) => !n.hidden && (!n.sheet || n.sheet.toLowerCase() === sheet().name.toLowerCase()));
     return [
@@ -5556,6 +5811,17 @@ const COMMANDS = {
   hideCols: () => hideSel('col', true),
 
   insertPivot: pivotDialog,
+  pivotFieldList: () => { pivotPaneOpen = !pivotPaneOpen; refreshPivotPane(true); },
+  pivotRefresh: () => refreshPivots(),
+  pivotCompact: () => pivotLayoutCmd({ layout: 'compact' }),
+  pivotOutline: () => pivotLayoutCmd({ layout: 'outline' }),
+  pivotTabular: () => pivotLayoutCmd({ layout: 'tabular' }),
+  pivotSubOff: () => pivotLayoutCmd({ subtotals: false }),
+  pivotSubOn: () => pivotLayoutCmd({ subtotals: true }),
+  pivotGrandOff: () => pivotLayoutCmd({ grandRows: false, grandCols: false }),
+  pivotGrandOn: () => pivotLayoutCmd({ grandRows: true, grandCols: true }),
+  pivotGrandRows: () => pivotLayoutCmd({ grandRows: true, grandCols: false }),
+  pivotGrandCols: () => pivotLayoutCmd({ grandRows: false, grandCols: true }),
   refreshAll: refreshPivots,
   chartColumn: () => insertChart('column'),
   chartBar: () => insertChart('bar'),
@@ -5699,7 +5965,8 @@ function ribbonState() {
 function tableRibbonState() {
   const t = chartSel ? null : tableHere();
   const sl = chartSel ? (sheet().slicers ?? []).find((x) => x.id === chartSel) : null;
-  const context = [...(t ? ['table'] : []), ...(sl ? ['slicer'] : [])];
+  const pv = chartSel ? null : pivotHere();
+  const context = [...(t ? ['table'] : []), ...(sl ? ['slicer'] : []), ...(pv ? ['pivot'] : [])];
   if (!t) return { context, slicerCaption: sl?.caption ?? '', slicerCols: String(sl?.columns ?? 1), slicerMultiOn: !!sl?.multi };
   return {
     context, tblName: t.name, tblHeader: t.header, tblTotals: t.totals, tblBanded: t.banded !== false, tblBandedCols: !!t.bandedCols,

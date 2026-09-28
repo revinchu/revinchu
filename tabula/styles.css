@@ -666,3 +666,27 @@ body.keytips .statusbar { background: #fff4ce; }
 .cf-editor .fc-row { align-items: center; }
 .cf-manager select { width: auto; min-width: 220px; }
 .cf-manager .btn { min-width: 0; }
+
+/* ───────── 피벗 테이블 필드 창 ───────── */
+.grid-wrap.with-pane .grid-scroll { right: 290px; }
+.pivot-pane {
+  position: absolute; top: 0; right: 0; bottom: 0; width: 290px; box-sizing: border-box; background: #fafafa;
+  border-left: 1px solid #d0d0d0; display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; overflow: auto; z-index: 5;
+  font: 12px var(--ui-font);
+}
+.pp-head { display: flex; justify-content: space-between; align-items: center; font-size: 14px; font-weight: 600; color: #333; }
+.pp-head button { border: 0; background: none; cursor: pointer; font-size: 13px; }
+.pp-hint { font-size: 11.5px; }
+.pp-search { width: 100%; box-sizing: border-box; padding: 3px 6px; border: 1px solid #c8c8c8; }
+.pp-fields { border: 1px solid #d0d0d0; background: #fff; max-height: 180px; min-height: 90px; overflow: auto; padding: 2px 0; }
+.pp-field { display: flex; gap: 6px; align-items: center; padding: 2px 6px; cursor: grab; }
+.pp-field:hover { background: #e8f2ec; }
+.pp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.pp-areahead { font-weight: 600; color: #444; margin-bottom: 2px; }
+.pp-area { border: 1px solid #d0d0d0; background: #fff; min-height: 70px; max-height: 140px; overflow: auto; padding: 2px; }
+.pp-area.over { outline: 2px dashed var(--green); }
+.pp-item { display: flex; align-items: center; background: #f0f4f1; border: 1px solid #cfd8d2; margin: 2px; padding: 1px 2px 1px 6px; cursor: grab; }
+.pp-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pp-menu { border: 0; background: none; cursor: pointer; padding: 0 4px; }
+.pp-opts { display: flex; flex-direction: column; gap: 4px; }
+.pp-opt { display: flex; gap: 6px; align-items: center; }

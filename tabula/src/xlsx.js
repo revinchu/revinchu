@@ -12,7 +12,7 @@ import { chartLayout, PALETTE } from './chart.js';
 import { Axis } from './axis.js';
 import { toBase64, fromBase64 } from './vba.js';
 import { normalizeStyleName, DEFAULT_TABLE_STYLE, dataTop, dataBottom, canonicalRef, tableAt, columnNames, findTable } from './tables.js';
-import { pivotSourceData, resolvePivot, itemText, keyOf, sortKeys, EMPTY, AGGREGATES, headerNames } from './pivot.js';
+import { pivotSourceData, resolvePivot, itemText, keyOf, sortKeys, EMPTY, headerNames, normalizeDef, computePivot, valueName } from './pivot.js';
 
 const NS_MAIN = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
 const NS_R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -876,40 +876,66 @@ function readPivotCache(files, path) {
   return { source: { ref: ws?.attrs.ref ?? null, sheet: ws?.attrs.sheet ?? null, name: ws?.attrs.name ?? null }, fields };
 }
 
-const AGG_FROM_XLSX = { sum: 'sum', count: 'count', countNums: 'count', average: 'average', max: 'max', min: 'min' };
+const AGG_FROM_XLSX = { sum: 'sum', count: 'count', countNums: 'countNums', average: 'average', max: 'max', min: 'min', product: 'product', stdDev: 'stdDev', stdDevp: 'stdDevp', var: 'var', varp: 'varp' };
+const SHOW_FROM_XLSX = { percentOfTotal: 'percentOfTotal', percentOfRow: 'percentOfRow', percentOfCol: 'percentOfCol' };
 
 /**
- * pivotTableDefinition + 캐시 → Tabula 피벗 정의 (행 1개·열 0~1개·값 1개일 때만)
+ * pivotTableDefinition + 캐시 → Tabula 피벗 정의 (행·열·값·보고서 필터 여러 개, 레이아웃, 부분합, 총합계, 값 표시 형식)
  * tables: 가져온 모든 표 (원본이 표 이름인지 확인)
  */
 function pivotDefFrom(root, cache, tables, sheetName) {
-  const rowF = kids(child(root, 'rowFields'), 'field').map((f) => Number(f.attrs.x)).filter((x) => x >= 0);
-  const colF = kids(child(root, 'colFields'), 'field').map((f) => Number(f.attrs.x)).filter((x) => x >= 0);
-  const dataF = kids(child(root, 'dataFields'), 'dataField');
-  if (rowF.length !== 1 || colF.length > 1 || dataF.length !== 1) return null;
-  const agg = AGG_FROM_XLSX[dataF[0].attrs.subtotal ?? 'sum'];
-  if (!agg) return null;
   const names = cache.fields.map((f, i) => f.name || `열${i + 1}`);
-  const loc = refToRange(child(root, 'location')?.attrs.ref ?? '');
+  const fieldsOf = (tag) => kids(child(root, tag), 'field').map((f) => Number(f.attrs.x)).filter((x) => x >= 0 && x < names.length);
+  const rowF = fieldsOf('rowFields');
+  const colF = fieldsOf('colFields');
+  const pageEls = kids(child(root, 'pageFields'), 'pageField').filter((p) => Number(p.attrs.fld) < names.length);
+  const dataF = kids(child(root, 'dataFields'), 'dataField');
+  const values = dataF.map((df) => {
+    const v = { field: names[Number(df.attrs.fld)] ?? names[0], agg: AGG_FROM_XLSX[df.attrs.subtotal ?? 'sum'] ?? 'sum' };
+    if (df.attrs.name && df.attrs.name !== valueName(v)) v.name = df.attrs.name;
+    if (SHOW_FROM_XLSX[df.attrs.showDataAs]) v.showAs = SHOW_FROM_XLSX[df.attrs.showDataAs];
+    return v;
+  });
+  const pfs = kids(child(root, 'pivotFields'), 'pivotField');
+  const first = pfs[rowF[0] ?? colF[0]];
+  const tblCompact = root.attrs.compact !== '0';
+  const tblOutline = root.attrs.outline !== '0';
+  const fCompact = first ? first.attrs.compact !== '0' && tblCompact : tblCompact;
+  const fOutline = first ? first.attrs.outline !== '0' && tblOutline : tblOutline;
   const def = {
-    rowField: rowF[0], colField: colF.length ? colF[0] : null, valueField: Number(dataF[0].attrs.fld), agg,
-    fieldNames: { row: names[rowF[0]], col: colF.length ? names[colF[0]] : null, val: names[Number(dataF[0].attrs.fld)] },
+    rows: rowF.map((f) => names[f]), cols: colF.map((f) => names[f]), values, pages: pageEls.map((p) => names[Number(p.attrs.fld)]),
+    layout: !fOutline ? 'tabular' : !fCompact ? 'outline' : 'compact',
   };
+  if ([...rowF, ...colF].some((f) => pfs[f]?.attrs.defaultSubtotal === '0')) def.subtotals = false;
+  if (root.attrs.rowGrandTotals === '0') def.grandRows = false;
+  if (root.attrs.colGrandTotals === '0') def.grandCols = false;
+  if (!def.pages.length) delete def.pages;
   const src = cache.source;
   const tbl = src.name ? tables.find((t) => t.name.toLowerCase() === src.name.toLowerCase()) : null;
   if (tbl) Object.assign(def, { table: tbl.name, source: tbl.sheetName, range: { r1: tbl.r1, c1: tbl.c1, r2: tbl.r2, c2: tbl.c2 } });
   else if (src.ref && refToRange(src.ref)) Object.assign(def, { source: src.sheet ?? sheetName, range: refToRange(src.ref) });
   else return null;
-  // 숨긴 항목 → 필터 (슬라이서 선택 상태)
+  // 숨긴 항목 · 보고서 필터에서 고른 항목 → 필터 (슬라이서 선택 상태)
   const filters = {};
-  kids(child(root, 'pivotFields'), 'pivotField').forEach((pf, f) => {
+  pfs.forEach((pf, f) => {
     const its = kids(child(pf, 'items'), 'item').filter((it) => it.attrs.x !== undefined);
     if (!its.some((it) => it.attrs.h === '1')) return;
-    const allowed = its.filter((it) => it.attrs.h !== '1').map((it) => itemText(cache.fields[f]?.items[Number(it.attrs.x)] ?? null));
-    filters[names[f]] = allowed;
+    filters[names[f]] = its.filter((it) => it.attrs.h !== '1').map((it) => itemText(cache.fields[f]?.items[Number(it.attrs.x)] ?? null));
   });
+  for (const p of pageEls) {
+    if (p.attrs.item === undefined) continue;
+    const f = Number(p.attrs.fld);
+    const its = kids(child(pfs[f], 'items'), 'item').filter((it) => it.attrs.x !== undefined);
+    const it = its[Number(p.attrs.item)];
+    if (it) filters[names[f]] = [itemText(cache.fields[f]?.items[Number(it.attrs.x)] ?? null)];
+  }
   if (Object.keys(filters).length) def.filters = filters;
-  if (loc) Object.assign(def, { top: loc.r1, left: loc.c1, area: loc });
+  const loc = refToRange(child(root, 'location')?.attrs.ref ?? '');
+  if (loc) {
+    const pageRows = def.pages?.length ? def.pages.length + 1 : 0;
+    const top = Math.max(0, loc.r1 - pageRows);
+    Object.assign(def, { top, left: loc.c1, area: { ...loc, r1: top } });
+  }
   return def;
 }
 
@@ -943,7 +969,8 @@ function linkPivotsAndSlicers(files, wbRels, sheets, ctx) {
       if (!cacheFiles.has(p.cachePath)) cacheFiles.set(p.cachePath, readPivotCache(files, p.cachePath));
       const cache = cacheFiles.get(p.cachePath);
       const def = cache && pivotDefFrom(p.root, cache, tables, s.name);
-      if (def && !s.pivot) { s.pivot = def; s._pivotName = p.root.attrs.name; } else if (!def) ctx.warnings.add('일부 피벗 테이블은 형식이 복잡해 값으로만 가져왔습니다.');
+      if (!def) ctx.warnings.add('외부 데이터 원본을 쓰는 피벗 테이블은 값으로만 가져왔습니다.');
+      else if (!s.pivot) { s.pivot = def; s._pivotName = p.root.attrs.name; } else (s.pivotsExtra ??= []).push(def);
     }
   });
   sheets.forEach((s) => {
@@ -1386,7 +1413,7 @@ const NS_MC = 'http://schemas.openxmlformats.org/markup-compatibility/2006';
 const REL_MS = 'http://schemas.microsoft.com/office/2007/relationships';
 const SLICER_STYLE = { blue: 'SlicerStyleLight1', orange: 'SlicerStyleLight2', gray: 'SlicerStyleLight3', gold: 'SlicerStyleLight4', sky: 'SlicerStyleLight5', green: 'SlicerStyleLight6' };
 const STYLE_SLICER = Object.fromEntries(Object.entries(SLICER_STYLE).map(([k, v]) => [v.toLowerCase(), k]));
-const PIVOT_SUBTOTAL = { count: 'count', average: 'average', max: 'max', min: 'min' };
+const PIVOT_SUBTOTAL = { count: 'count', average: 'average', max: 'max', min: 'min', product: 'product', countNums: 'countNums', stdDev: 'stdDev', stdDevp: 'stdDevp', var: 'var', varp: 'varp' };
 
 /** 필드의 고유 값 (피벗 결과와 같은 순서) → { keys, index: Map(key → 순번) } */
 function fieldItems(data, f) {
@@ -1423,12 +1450,16 @@ function sharedItemsXml(values, keys) {
 function pivotParts(wb, si, def, cacheId, name, extraFields) {
   const src = pivotSourceData(wb, def);
   if (!src || src.rows.length < 2) return null;
-  const { def: d, header } = resolvePivot(src.rows, def);
-  if (d.rowField === undefined || d.rowField === null || d.rowField < 0 || d.rowField >= header.length) return null;
+  const header = headerNames(src.rows);
+  const d = normalizeDef(def, header);
+  if (!d.rows.length && !d.cols.length && !d.values.length) return null;
+  const fx = (n) => header.indexOf(n);
+  const rowF = d.rows.map(fx);
+  const colF = d.cols.map(fx);
+  const pageF = d.pages.map(fx);
   const data = src.rows.slice(1).filter((r) => !r.every((v) => v === null || v === ''));
-  const filters = Object.entries(def.filters ?? {}).map(([n, allowed]) => [header.findIndex((h) => h.toLowerCase() === n.toLowerCase()), new Set(allowed)]).filter(([i]) => i >= 0);
-  const filterIdx = new Set(filters.map(([i]) => i));
-  const listed = new Set([d.rowField, ...(d.colField !== null && d.colField !== undefined ? [d.colField] : []), ...filterIdx]);
+  const filters = Object.entries(d.filters).map(([n, allowed]) => [header.findIndex((h) => h.toLowerCase() === n.toLowerCase()), new Set(allowed)]).filter(([i]) => i >= 0);
+  const listed = new Set([...rowF, ...colF, ...pageF, ...filters.map(([i]) => i)]);
   header.forEach((h, i) => { if (extraFields?.has(h.toLowerCase())) listed.add(i); });
   const items = new Map();
   for (const f of listed) items.set(f, fieldItems(data, f));
@@ -1440,48 +1471,122 @@ function pivotParts(wb, si, def, cacheId, name, extraFields) {
     + `<cacheSource type="worksheet">${sourceXml}</cacheSource><cacheFields count="${header.length}">${cacheFields}</cacheFields>`
     + `<extLst><ext uri="{725AE2AE-9491-48be-B2B4-4EB974FC3084}" xmlns:x14="${NS_X14}"><x14:pivotCacheDefinition pivotCacheId="${cacheId}"/></ext></extLst></pivotCacheDefinition>`;
 
-  // 필터(슬라이서)를 통과한 행 → 보이는 항목
-  const visibleRows = data.filter((r) => filters.every(([i, set]) => set.has(itemText(r[i]))));
   const hiddenKey = (f, k) => {
     const set = filters.find(([i]) => i === f)?.[1];
-    return set ? !set.has(k === EMPTY ? EMPTY : itemText(k)) : false;
+    return set ? !set.has(itemText(k)) : false;
   };
-  const visibleKeys = (f) => {
-    const { keys, index } = items.get(f);
-    const present = new Set(visibleRows.map((r) => `${typeof keyOf(r[f])}:${keyOf(r[f])}`));
-    return keys.filter((k) => present.has(`${typeof k}:${k}`)).map((k) => index.get(`${typeof k}:${k}`));
-  };
-  const valField = d.valueField === null || d.valueField === undefined ? d.rowField : d.valueField;
+  // 보이는 항목 기준으로 결과 배치 계산 (앱 화면과 같은 배치)
+  const { rows: visible } = resolvePivot(src.rows, def);
+  const { meta } = computePivot(visible, d);
+  const values = meta.values;
+  const V = values.length;
+  const multiV = V > 1;
+  const xOf = (f, key) => items.get(f)?.index.get(`${typeof key}:${key}`) ?? 0;
+  const xTag = (v) => (v ? `<x v="${v}"/>` : '<x/>');
+
+  // 행 항목
+  const rowXml = [];
+  if (!rowF.length) rowXml.push('<i/>');
+  else {
+    let prev = [];
+    for (const it of meta.rowItems) {
+      if (it.kind === 'grand') { rowXml.push('<i t="grand"><x/></i>'); continue; }
+      if (it.kind === 'sub') {
+        const n = it.node;
+        rowXml.push(`<i t="default"${n.depth ? ` r="${n.depth}"` : ''}>${xTag(xOf(rowF[n.depth], n.key))}</i>`);
+        continue;
+      }
+      const chain = it.chain ?? [it.node];
+      const xs = (it.chain ? chain : [it.node]).map((n) => xOf(rowF[n.depth], n.key));
+      const start = it.chain ? 0 : it.node.depth;
+      if (it.chain) {
+        let r = 0;
+        while (r < xs.length && r < prev.length && prev[r] === xs[r]) r++;
+        if (r >= xs.length) r = xs.length - 1;
+        rowXml.push(`<i${r ? ` r="${r}"` : ''}>${xs.slice(r).map(xTag).join('')}</i>`);
+        prev = xs;
+      } else rowXml.push(`<i${start ? ` r="${start}"` : ''}>${xTag(xs[0])}</i>`);
+    }
+  }
+  // 열 항목
+  const colXml = [];
+  const colFieldsAll = [...colF, ...(multiV ? [-2] : [])];
+  if (!colFieldsAll.length) colXml.push('<i/>');
+  else {
+    let prev = [];
+    for (const leaf of meta.colLeaves) {
+      const ia = leaf.vi ? ` i="${leaf.vi}"` : '';
+      if (leaf.kind === 'grand') { colXml.push(`<i t="grand"${ia}><x/></i>`); continue; }
+      const chain = [];
+      for (let n = leaf.node; n && n.depth >= 0; n = n.parent) chain.unshift(n);
+      if (leaf.kind === 'sub') {
+        const n = leaf.node;
+        colXml.push(`<i t="default"${n.depth ? ` r="${n.depth}"` : ''}${ia}>${xTag(xOf(colF[n.depth], n.key))}</i>`);
+        prev = [];
+        continue;
+      }
+      const xs = [...chain.map((n) => xOf(colF[n.depth], n.key)), ...(multiV ? [leaf.vi] : [])];
+      let r = 0;
+      while (r < xs.length - 1 && r < prev.length && prev[r] === xs[r]) r++;
+      colXml.push(`<i${r ? ` r="${r}"` : ''}${ia}>${xs.slice(r).map(xTag).join('')}</i>`);
+      prev = xs;
+    }
+  }
+
+  const tabular = d.layout === 'tabular';
+  const outline = d.layout === 'outline';
+  const valueFieldIdx = new Set(values.map((v) => fx(v.field)).filter((i) => i >= 0));
   const pivotFields = header.map((h, f) => {
     const attrs = [];
-    if (f === d.rowField) attrs.push('axis="axisRow"');
-    else if (f === d.colField) attrs.push('axis="axisCol"');
-    if (f === valField) attrs.push('dataField="1"');
+    if (rowF.includes(f)) attrs.push('axis="axisRow"');
+    else if (colF.includes(f)) attrs.push('axis="axisCol"');
+    else if (pageF.includes(f)) attrs.push('axis="axisPage"');
+    if (valueFieldIdx.has(f)) attrs.push('dataField="1"');
+    if (tabular || outline) attrs.push('compact="0"');
+    if (tabular) attrs.push('outline="0"');
     attrs.push('showAll="0"');
+    const onAxis = rowF.includes(f) || colF.includes(f);
+    if (onAxis && !d.subtotals) attrs.push('defaultSubtotal="0"');
     const it = items.get(f);
     if (!it) return `<pivotField ${attrs.join(' ')}/>`;
     const list = it.keys.map((k, i) => `<item${hiddenKey(f, k) ? ' h="1"' : ''} x="${i}"/>`).join('');
-    return `<pivotField ${attrs.join(' ')}><items count="${it.keys.length + 1}">${list}<item t="default"/></items></pivotField>`;
+    const def0 = onAxis && !d.subtotals ? '' : '<item t="default"/>';
+    return `<pivotField ${attrs.join(' ')}><items count="${it.keys.length + (def0 ? 1 : 0)}">${list}${def0}</items></pivotField>`;
   }).join('');
-  const axisItems = (f) => {
-    const vis = visibleKeys(f);
-    return `${vis.map((x) => (x ? `<i><x v="${x}"/></i>` : '<i><x/></i>')).join('')}<i t="grand"><x/></i>`;
-  };
-  const hasCol = d.colField !== null && d.colField !== undefined;
-  const rowsN = visibleKeys(d.rowField).length;
-  const colsN = hasCol ? visibleKeys(d.colField).length : 0;
-  const top = def.top ?? 0;
+
+  const top = (def.top ?? 0) + meta.pageRows;
   const left = def.left ?? 0;
-  const loc = { r1: top, c1: left, r2: top + (hasCol ? 2 : 1) + rowsN, c2: left + (hasCol ? colsN + 1 : 1) };
-  const agg = d.valueField === null || d.valueField === undefined ? 'count' : d.agg ?? 'sum';
-  const aggLabel = AGGREGATES.find((a) => a.id === agg)?.label ?? '합계';
-  const sub = PIVOT_SUBTOTAL[agg] ? ` subtotal="${PIVOT_SUBTOTAL[agg]}"` : '';
-  const tableXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<pivotTableDefinition xmlns="${NS_MAIN}" name="${esc(name)}" cacheId="${cacheId}" applyNumberFormats="0" applyBorderFormats="0" applyFontFormats="0" applyPatternFormats="0" applyAlignmentFormats="0" applyWidthHeightFormats="1" dataCaption="값" updatedVersion="6" minRefreshableVersion="3" useAutoFormatting="1" itemPrintTitles="1" createdVersion="6" indent="0" outline="1" outlineData="1" multipleFieldFilters="0">`
-    + `<location ref="${rangeRef(loc)}" firstHeaderRow="1" firstDataRow="${hasCol ? 2 : 1}" firstDataCol="1"/>`
+  const loc = { r1: top, c1: left, r2: top + meta.bodyRows - 1, c2: left + meta.width - 1 };
+  const firstHeaderRow = colF.length ? 1 : multiV ? 0 : 1;
+  const pageXml = pageF.length ? `<pageFields count="${pageF.length}">${pageF.map((f) => {
+    const allowed = filters.find(([i]) => i === f)?.[1];
+    const one = allowed && allowed.size === 1 ? items.get(f)?.keys.findIndex((k) => itemText(k) === [...allowed][0]) : -1;
+    return `<pageField fld="${f}"${one >= 0 ? ` item="${one}"` : ''} hier="-1"/>`;
+  }).join('')}</pageFields>` : '';
+  const SHOW = { percentOfTotal: 'percentOfTotal', percentOfRow: 'percentOfRow', percentOfCol: 'percentOfCol' };
+  const dataXml = values.map((v) => {
+    const f = Math.max(0, fx(v.field));
+    const sub = PIVOT_SUBTOTAL[v.agg] ? ` subtotal="${PIVOT_SUBTOTAL[v.agg]}"` : '';
+    const show = SHOW[v.showAs] ? ` showDataAs="${SHOW[v.showAs]}"` : '';
+    const numFmt = SHOW[v.showAs] ? 10 : ['average', 'stdDev', 'stdDevp', 'var', 'varp'].includes(v.agg) ? 4 : 3;
+    return `<dataField name="${esc(valueName(v))}" fld="${f}"${sub}${show} baseField="0" baseItem="0" numFmtId="${numFmt}"/>`;
+  }).join('');
+  const tableAttrs = [
+    `name="${esc(name)}"`, `cacheId="${cacheId}"`, 'applyNumberFormats="0"', 'applyBorderFormats="0"', 'applyFontFormats="0"', 'applyPatternFormats="0"',
+    'applyAlignmentFormats="0"', 'applyWidthHeightFormats="1"', 'dataCaption="값"', 'updatedVersion="6"', 'minRefreshableVersion="3"', 'useAutoFormatting="1"',
+    ...(d.grandRows ? [] : ['rowGrandTotals="0"']), ...(d.grandCols ? [] : ['colGrandTotals="0"']),
+    'itemPrintTitles="1"', 'createdVersion="6"', 'indent="0"', ...(tabular || outline ? ['compact="0"', 'compactData="0"'] : []),
+    `outline="${tabular ? 0 : 1}"`, `outlineData="${tabular ? 0 : 1}"`, ...(tabular ? ['gridDropZones="1"'] : []), 'multipleFieldFilters="0"',
+  ];
+  const tableXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<pivotTableDefinition xmlns="${NS_MAIN}" ${tableAttrs.join(' ')}>`
+    + `<location ref="${rangeRef(loc)}" firstHeaderRow="${firstHeaderRow}" firstDataRow="${meta.headerRows}" firstDataCol="${meta.labelCols}"${pageF.length ? ` rowPageCount="${pageF.length}" colPageCount="1"` : ''}/>`
     + `<pivotFields count="${header.length}">${pivotFields}</pivotFields>`
-    + `<rowFields count="1"><field x="${d.rowField}"/></rowFields><rowItems count="${rowsN + 1}">${axisItems(d.rowField)}</rowItems>`
-    + (hasCol ? `<colFields count="1"><field x="${d.colField}"/></colFields><colItems count="${colsN + 1}">${axisItems(d.colField)}</colItems>` : '<colItems count="1"><i/></colItems>')
-    + `<dataFields count="1"><dataField name="${esc(`${aggLabel} : ${header[valField]}`)}" fld="${valField}"${sub} baseField="0" baseItem="0" numFmtId="${agg === 'average' ? 4 : 3}"/></dataFields>`
+    + (rowF.length ? `<rowFields count="${rowF.length}">${rowF.map((f) => `<field x="${f}"/>`).join('')}</rowFields>` : '')
+    + `<rowItems count="${rowXml.length}">${rowXml.join('')}</rowItems>`
+    + (colFieldsAll.length ? `<colFields count="${colFieldsAll.length}">${colFieldsAll.map((f) => `<field x="${f}"/>`).join('')}</colFields>` : '')
+    + `<colItems count="${colXml.length}">${colXml.join('')}</colItems>`
+    + pageXml
+    + `<dataFields count="${values.length}">${dataXml}</dataFields>`
     + '<pivotTableStyleInfo name="PivotStyleLight16" showRowHeaders="1" showColHeaders="1" showRowStripes="0" showColStripes="0" showLastColumn="1"/></pivotTableDefinition>';
 
   // 슬라이서 캐시용: 필드 이름 → 항목 선택 상태
@@ -1568,13 +1673,21 @@ export function writeXlsx(wb, { activeSheet = 0 } = {}) {
     if (!pivotSlicerFields.has(pi)) pivotSlicerFields.set(pi, new Set());
     pivotSlicerFields.get(pi).add(String(sl.source.field).toLowerCase());
   }));
-  const pivotInfo = new Map(); // 시트 번호 → { name, cacheId, parts }
+  const pivotInfo = new Map(); // 시트 번호 → { name, cacheId, parts } (시트의 첫 피벗, 슬라이서 연결용)
+  const pivotList = new Map(); // 시트 번호 → 모든 피벗
   let pivotNo = 0;
   wb.sheets.forEach((s, i) => {
-    if (!s.pivot) return;
-    const name = `피벗 테이블${pivotNo + 1}`;
-    const parts = pivotParts(wb, i, s.pivot, pivotNo + 1, name, pivotSlicerFields.get(i));
-    if (parts) { pivotNo++; pivotInfo.set(i, { name, cacheId: pivotNo, parts }); }
+    for (const [j, def] of [s.pivot, ...(s.pivotsExtra ?? [])].entries()) {
+      if (!def) continue;
+      const name = `피벗 테이블${pivotNo + 1}`;
+      const parts = pivotParts(wb, i, def, pivotNo + 1, name, j === 0 ? pivotSlicerFields.get(i) : null);
+      if (!parts) continue;
+      pivotNo++;
+      const info = { name, cacheId: pivotNo, parts };
+      if (j === 0) pivotInfo.set(i, info);
+      if (!pivotList.has(i)) pivotList.set(i, []);
+      pivotList.get(i).push(info);
+    }
   });
   const pivotCaches = [];
   const slicerCachesPivot = [];
@@ -1847,8 +1960,7 @@ export function writeXlsx(wb, { activeSheet = 0 } = {}) {
     const tableParts = tableRids.length ? `<tableParts count="${tableRids.length}">${tableRids.map((id) => `<tablePart r:id="${id}"/>`).join('')}</tableParts>` : '';
 
     // 피벗 테이블
-    const pinfo = pivotInfo.get(si);
-    if (pinfo) {
+    for (const pinfo of pivotList.get(si) ?? []) {
       const n = pinfo.cacheId;
       files[`xl/pivotCache/pivotCacheDefinition${n}.xml`] = pinfo.parts.cacheXml;
       files[`xl/pivotTables/pivotTable${n}.xml`] = pinfo.parts.tableXml;

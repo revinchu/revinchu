@@ -257,6 +257,22 @@ export const TABS = [
     ],
   },
   {
+    id: 'pivotAnalyze', label: '피벗 테이블 분석', context: 'pivot', groups: [
+      group('표시', [large('pivotFieldList', 'pivot', '필드 목록', { title: '피벗 테이블 필드 창 표시/숨기기' })]),
+      group('데이터', [large('pivotRefresh', 'refresh', '새로 고침', { title: '새로 고침 (Alt+F5)' })]),
+      group('필터', [large('insertSlicer', 'slicer', '슬라이서 삽입')]),
+    ],
+  },
+  {
+    id: 'pivotDesign', label: '디자인', context: 'pivot', groups: [
+      group('레이아웃', [
+        large('pivotSubtotalsMenu', 'table', '부분합', { menu: 'pivotSubtotals' }),
+        large('pivotGrandMenu', 'table', '총합계', { menu: 'pivotGrand' }),
+        large('pivotLayoutMenu', 'table', '보고서 레이아웃', { menu: 'pivotLayout' }),
+      ]),
+    ],
+  },
+  {
     id: 'slicerTab', label: '슬라이서', context: 'slicer', groups: [
       group('슬라이서', [
         col(

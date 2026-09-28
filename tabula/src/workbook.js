@@ -1,5 +1,6 @@
 // 통합 문서 모델: 시트 · 셀 · 재계산 · 실행 취소 · 행/열 구조 변경
 import { resolveStructRef, findTable } from './tables.js';
+import { pivotSourceData, pivotLookup } from './pivot.js';
 import {
   parse, evaluateArray, evalAny, ERR, compareValues, isError, autoFormatFor, mayReturnArray, Range, RefValue,
   adjustFormulaForStructure, renameSheetInFormula, shiftFormula, quoteSheetName, MAX_ROWS, MAX_COLS,
@@ -65,13 +66,13 @@ function newSheet(name) {
     name, cells: new Map(), colWidths: {}, rowHeights: {}, merges: [], cond: [],
     colStyles: {}, rowStyles: {}, allStyle: null, hiddenRows: {}, hiddenCols: {}, rowManual: {},
     freeze: { rows: 0, cols: 0 }, filter: null, charts: [], pivot: null,
-    validations: [], images: [], shapes: [], tables: [], slicers: [],
+    validations: [], images: [], shapes: [], tables: [], slicers: [], pivotsExtra: [],
   };
 }
 
 /** 시트의 부가 속성 (셀 외) — 저장/복원/복제용 */
 const SHEET_PROPS = ['colWidths', 'rowHeights', 'merges', 'cond', 'colStyles', 'rowStyles', 'allStyle',
-  'hiddenRows', 'hiddenCols', 'rowManual', 'freeze', 'filter', 'charts', 'pivot', 'validations', 'images', 'shapes', 'tables', 'slicers'];
+  'hiddenRows', 'hiddenCols', 'rowManual', 'freeze', 'filter', 'charts', 'pivot', 'validations', 'images', 'shapes', 'tables', 'slicers', 'pivotsExtra'];
 
 /** 숫자 키 객체의 키를 삽입/삭제에 맞춰 이동 */
 function shiftKeys(obj, index, count) {
@@ -388,6 +389,19 @@ export class Workbook {
       },
       sheetIndex: (name) => (name == null ? si : this.sheetIndexByName(name)),
       sheetCount: () => this.sheets.length,
+      pivotData: (ref, field, items) => {
+        // GETPIVOTDATA: 참조가 들어 있는 피벗 테이블에서 값 찾기
+        const s = this.resolveSheet(ref.sheet, si);
+        const sh = this.sheets[s];
+        const defs = [sh.pivot, ...(sh.pivotsExtra ?? [])].filter(Boolean);
+        const def = defs.find((d) => d.area && ref.r1 >= d.area.r1 && ref.r1 <= d.area.r2 && ref.c1 >= d.area.c1 && ref.c1 <= d.area.c2)
+          ?? (defs.length && !defs[0].area ? defs[0] : null);
+        if (!def) throw ERR.REF;
+        const src = pivotSourceData(this, def);
+        const v = src ? pivotLookup(src.rows, def, field, items) : null;
+        if (v === null || v === undefined) throw ERR.REF;
+        return v;
+      },
       quoteSheet: (name) => quoteSheetName(name),
       colWidthChars: (sheet, cc) => Math.round(this.colWidth(this.resolveSheet(sheet, si), cc) / 7.5),
       cellFormat: (sheet, rr, cc) => {
@@ -722,10 +736,13 @@ export class Workbook {
       return rg ? { ...ch, range: rg } : ch;
     });
     for (const sh of this.sheets) {
-      if (sh.pivot && sh.pivot.source.toLowerCase() === target.name.toLowerCase()) {
-        const rg = adjustRange(sh.pivot.range, axis, index, count);
-        if (rg) sh.pivot = { ...sh.pivot, range: rg };
-      }
+      const fix = (def) => {
+        if (!def || !def.range || String(def.source ?? '').toLowerCase() !== target.name.toLowerCase()) return def;
+        const rg = adjustRange(def.range, axis, index, count);
+        return rg ? { ...def, range: rg } : def;
+      };
+      sh.pivot = fix(sh.pivot);
+      sh.pivotsExtra = (sh.pivotsExtra ?? []).map(fix);
     }
 
     for (const sheet of this.sheets) {
@@ -778,7 +795,9 @@ export class Workbook {
     const old = this.sheets[si].name;
     this.sheets[si].name = newName;
     for (const sh of this.sheets) {
-      if (sh.pivot && sh.pivot.source.toLowerCase() === old.toLowerCase()) sh.pivot = { ...sh.pivot, source: newName };
+      const ren = (d) => (d && String(d.source ?? '').toLowerCase() === old.toLowerCase() ? { ...d, source: newName } : d);
+      sh.pivot = ren(sh.pivot);
+      sh.pivotsExtra = (sh.pivotsExtra ?? []).map(ren);
     }
     for (const sheet of this.sheets) {
       for (const [k, cell] of sheet.cells) {

@@ -262,5 +262,5 @@ test('슬라이서 · 피벗 테이블 xlsx 왕복 (엑셀 형식)', async () =>
   assert.deepEqual(s2.slicers[0].source, { kind: 'pivot', self: true, field: '제품' });
   assert.equal(s2.pivot.table, '표1');
   assert.deepEqual(s2.pivot.filters, { 제품: ['감', '사과'] });
-  assert.deepEqual([s2.pivot.rowField, s2.pivot.valueField, s2.pivot.agg], [0, 2, 'sum']);
+  assert.deepEqual([s2.pivot.rows, s2.pivot.cols, s2.pivot.values], [['지역'], [], [{ field: '수량', agg: 'sum' }]]);
 });
