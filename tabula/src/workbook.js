@@ -672,7 +672,13 @@ export class Workbook {
     if (isRow) target.rowHeights = nextSizes; else target.colWidths = nextSizes;
     target.merges = target.merges.map((m) => adjustRange(m, axis, index, count))
       .filter((m) => m && (m.r2 > m.r1 || m.c2 > m.c1));
-    target.cond = target.cond.map((rule) => adjustRange(rule, axis, index, count)).filter(Boolean);
+    target.cond = target.cond.map((rule) => {
+      // 추가 범위(more)도 함께 조정, 첫 범위가 사라지면 다음 범위가 대표
+      const ranges = [rule, ...(rule.more ?? [])].map((g) => adjustRange({ r1: g.r1, c1: g.c1, r2: g.r2, c2: g.c2 }, axis, index, count)).filter(Boolean);
+      if (!ranges.length) return null;
+      const { more, ...rest } = rule;
+      return { ...rest, ...ranges[0], ...(ranges.length > 1 ? { more: ranges.slice(1) } : {}) };
+    }).filter(Boolean);
     target.validations = target.validations.map((v) => adjustRange(v, axis, index, count)).filter(Boolean);
     target.tables = (target.tables ?? []).map((t) => {
       const rg = adjustRange(t, axis, index, count);

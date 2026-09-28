@@ -4860,7 +4860,8 @@ function cfRuleEditor(initial, onSave, { title = '새 서식 규칙' } = {}) {
   });
 }
 
-const rangeText = (r) => `=$${colToName(r.c1)}$${r.r1 + 1}${r.r1 === r.r2 && r.c1 === r.c2 ? '' : `:$${colToName(r.c2)}$${r.r2 + 1}`}`;
+const rangeText1 = (r) => `$${colToName(r.c1)}$${r.r1 + 1}${r.r1 === r.r2 && r.c1 === r.c2 ? '' : `:$${colToName(r.c2)}$${r.r2 + 1}`}`;
+const rangeText = (r) => `=${[r, ...(r.more ?? [])].map(rangeText1).join(',')}`;
 
 function cfManager() {
   if (editing && !commitEdit()) return;
@@ -4888,10 +4889,12 @@ function cfManager() {
     for (const rl of vis) {
       const rangeIn = el('input', { type: 'text', value: rangeText(rl), class: 'cf-range' });
       rangeIn.addEventListener('change', () => {
-        const p = parseRangeName(rangeIn.value.replace(/[=$]/g, '').trim());
-        if (!p) { rangeIn.classList.add('bad'); return; }
+        // 여러 범위는 쉼표로 구분 (=$A$1:$A$9,$C$1:$C$9)
+        const ps = rangeIn.value.replace(/[=$]/g, '').split(/[,\s]+/).filter(Boolean).map((x) => parseRangeName(x));
+        if (!ps.length || ps.some((x) => !x)) { rangeIn.classList.add('bad'); return; }
         rangeIn.classList.remove('bad');
-        Object.assign(rl, { r1: p.r1, c1: p.c1, r2: p.r2, c2: p.c2 });
+        Object.assign(rl, { r1: ps[0].r1, c1: ps[0].c1, r2: ps[0].r2, c2: ps[0].c2 });
+        if (ps.length > 1) rl.more = ps.slice(1); else delete rl.more;
       });
       const stop = el('input', { type: 'checkbox', checked: !!rl.stopIfTrue, disabled: VISUAL_TYPES.has(rl.type) });
       stop.addEventListener('change', () => { rl.stopIfTrue = stop.checked || undefined; });

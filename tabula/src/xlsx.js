@@ -11,7 +11,7 @@ import { DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT } from './workbook.js';
 import { chartLayout, PALETTE } from './chart.js';
 import { Axis } from './axis.js';
 import { toBase64, fromBase64 } from './vba.js';
-import { normalizeStyleName, DEFAULT_TABLE_STYLE, dataBottom, canonicalRef, tableAt, columnNames, findTable } from './tables.js';
+import { normalizeStyleName, DEFAULT_TABLE_STYLE, dataTop, dataBottom, canonicalRef, tableAt, columnNames, findTable } from './tables.js';
 import { pivotSourceData, resolvePivot, itemText, keyOf, sortKeys, EMPTY, AGGREGATES, headerNames } from './pivot.js';
 
 const NS_MAIN = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
@@ -239,6 +239,8 @@ function readStyles(files, wbRels, theme) {
     if (fill) { const c = fillOf(fill, true); if (c) st.fill = c; }
     const bd = child(d, 'border');
     if (bd) Object.assign(st, borderOf(bd));
+    const nf = child(d, 'numFmt');
+    if (nf?.attrs.formatCode) Object.assign(st, styleForCode(nf.attrs.formatCode));
     return st;
   });
   return { xfs, dxfs, defaultFont };
@@ -393,10 +395,43 @@ function readSheet(files, path, ctx) {
     if (/^-?[\d.]+(E[+-]?\d+)?$/i.test(x)) return x;
     return x ? `=${cleanFormula(x)}` : '';
   };
+  // 엑셀 2010 확장 규칙 (x14): 데이터 막대 세부 설정 · 새 아이콘 집합 · 확장 전용 규칙
+  const x14Rules = new Map();
+  const x14Only = [];
+  const extLst = child(root, 'extLst');
+  for (const x14cf of descendants(extLst, 'conditionalFormatting')) {
+    const sqref = child(x14cf, 'sqref')?.text ?? x14cf.attrs.sqref ?? '';
+    for (const xr of kids(x14cf, 'cfRule')) {
+      if (xr.attrs.id) x14Rules.set(xr.attrs.id.toUpperCase(), xr);
+      x14Only.push({ sqref, rule: xr });
+    }
+  }
+  const readCfvo = (el) => kids(el, 'cfvo').map((v) => {
+    const t = v.attrs.type;
+    const val = v.attrs.val ?? child(v, 'f')?.text;
+    const o = { type: t === 'num' ? 'num' : t };
+    if (val !== undefined) o.v = t === 'formula' || (val && !/^-?[\d.]+(E[+-]?\d+)?$/i.test(val)) ? `=${cleanFormula(val)}` : val;
+    if (v.attrs.gte === '0') o.gte = false;
+    if (o.v && o.type === 'num' && String(o.v).startsWith('=')) o.type = 'formula';
+    return o;
+  });
+  const ICONS_KNOWN = ['3Arrows', '3ArrowsGray', '3TrafficLights1', '3TrafficLights2', '3Symbols', '3Symbols2', '3Signs', '3Flags', '3Stars', '3Triangles',
+    '4Arrows', '4ArrowsGray', '4RedToBlack', '4Rating', '4TrafficLights', '5Arrows', '5ArrowsGray', '5Rating', '5Quarters', '5Boxes'];
+  const iconRule = (is) => {
+    const name = is?.attrs.iconSet ?? '3TrafficLights1';
+    const out = { type: 'icons', icons: ICONS_KNOWN.includes(name) ? name : name[0] === '5' ? '5Arrows' : name[0] === '4' ? '4Arrows' : '3TrafficLights1' };
+    if (is?.attrs.reverse === '1') out.reverse = true;
+    if (is?.attrs.showValue === '0') out.iconOnly = true;
+    const cfvo = readCfvo(is);
+    if (cfvo.length && !(cfvo.every((c, i) => c.type === 'percent' && Math.abs(Number(c.v) - Math.round((i * 100) / cfvo.length)) <= 1 && c.gte !== false))) out.cfvo = cfvo;
+    return out;
+  };
   for (const cf of kids(root, 'conditionalFormatting')) {
-    for (const sq of (cf.attrs.sqref ?? '').split(/\s+/)) {
-      const rg = refToRange(sq);
-      if (!rg) continue;
+    const ranges = (cf.attrs.sqref ?? '').split(/\s+/).map(refToRange).filter(Boolean);
+    if (!ranges.length) continue;
+    const rg = ranges[0];
+    const more = ranges.length > 1 ? { more: ranges.slice(1) } : {};
+    {
       for (const rule of kids(cf, 'cfRule')) {
         const a = rule.attrs;
         const style = dxfs[Number(a.dxfId)] ?? (a.dxfId === undefined ? {} : { fill: '#ffc7ce', color: '#9c0006' });
@@ -417,34 +452,71 @@ function readSheet(files, path, ctx) {
           case 'duplicateValues': out = { type: 'dup', style }; break;
           case 'uniqueValues': out = { type: 'unique', style }; break;
           case 'top10': out = { type: a.bottom === '1' ? 'bottom' : 'top', v1: a.rank ?? '10', ...(a.percent === '1' ? { percent: true } : {}), style }; break;
-          case 'aboveAverage': out = { type: a.aboveAverage === '0' ? 'belowAvg' : 'aboveAvg', style }; break;
+          case 'aboveAverage': {
+            out = { type: a.aboveAverage === '0' ? 'belowAvg' : 'aboveAvg', style };
+            if (a.equalAverage === '1') out.equal = true;
+            if (a.stdDev) out.stdDev = Number(a.stdDev);
+            break;
+          }
           case 'dataBar': {
-            const color = colorOf(descendants(rule, 'color')[0], ctx.theme) ?? '#638ec6';
-            out = { type: 'bar', color: color.toLowerCase(), ...(child(rule, 'dataBar')?.attrs.showValue === '0' ? { iconOnly: true } : {}) };
+            const db = child(rule, 'dataBar');
+            const color = colorOf(child(db, 'color') ?? descendants(rule, 'color')[0], ctx.theme) ?? '#638ec6';
+            out = { type: 'bar', color: color.toLowerCase(), ...(db?.attrs.showValue === '0' ? { iconOnly: true } : {}) };
+            const cfvo = readCfvo(db);
+            // 2010 확장: 단색 · 음수 막대 색 · 자동 최소/최대
+            const extId = descendants(rule, 'id')[0]?.text?.toUpperCase();
+            const xr = extId ? x14Rules.get(extId) : null;
+            const xdb = xr ? child(xr, 'dataBar') : null;
+            if (xdb) {
+              if (xdb.attrs.gradient === '0') out.gradient = false;
+              const neg = colorOf(child(xdb, 'negativeFillColor'), ctx.theme);
+              if (neg) out.negColor = neg.toLowerCase();
+              const xc = readCfvo(xdb);
+              if (xc.length === 2) cfvo.splice(0, 2, ...xc);
+            }
+            if (cfvo.length === 2 && !(cfvo[0].type === 'min' && cfvo[1].type === 'max') && !(cfvo[0].type === 'autoMin' && cfvo[1].type === 'autoMax')) out.cfvo = cfvo;
             break;
           }
           case 'colorScale': {
-            const colors = descendants(child(rule, 'colorScale'), 'color').map((c) => colorOf(c, ctx.theme)).filter(Boolean);
-            if (colors.length >= 2) out = { type: 'scale', colors };
+            const cs = child(rule, 'colorScale');
+            const colors = kids(cs, 'color').map((c) => colorOf(c, ctx.theme)).filter(Boolean);
+            if (colors.length >= 2) {
+              out = { type: 'scale', colors };
+              const cfvo = readCfvo(cs);
+              const std = colors.length === 3 ? ['min', 'percentile', 'max'] : ['min', 'max'];
+              if (cfvo.length === colors.length && !(cfvo.every((c, i) => c.type === std[i]) && (colors.length === 2 || Number(cfvo[1].v) === 50))) out.cfvo = cfvo;
+            }
             break;
           }
           case 'iconSet': {
-            const is = child(rule, 'iconSet');
-            const known = ['3Arrows', '3ArrowsGray', '3TrafficLights1', '3Symbols', '3Flags', '4Arrows', '5Arrows', '5Rating'];
-            const name = is?.attrs.iconSet ?? '3TrafficLights1';
-            out = { type: 'icons', icons: known.includes(name) ? name : `${name[0]}` === '5' ? '5Arrows' : name[0] === '4' ? '4Arrows' : '3TrafficLights1' };
-            if (is?.attrs.reverse === '1') out.reverse = true;
-            if (is?.attrs.showValue === '0') out.iconOnly = true;
+            const extId = descendants(rule, 'id')[0]?.text?.toUpperCase();
+            const xr = extId ? x14Rules.get(extId) : null;
+            out = iconRule(child(xr, 'iconSet') ?? child(rule, 'iconSet'));
             break;
           }
           default:
         }
         if (out) {
           if (a.stopIfTrue === '1') out.stopIfTrue = true;
-          condList.push({ p: Number(a.priority ?? 1e9), i: condList.length, rule: { ...rg, ...out } });
+          condList.push({ p: Number(a.priority ?? 1e9), i: condList.length, rule: { ...rg, ...more, ...out } });
         }
       }
     }
+  }
+  // 확장(x14)에만 있는 규칙: 별·삼각형·상자 아이콘 집합 등
+  const linked = new Set(descendants(root, 'cfRule').filter((r) => r.attrs.type === 'dataBar' || r.attrs.type === 'iconSet').flatMap((r) => descendants(r, 'id').map((x) => x.text?.toUpperCase())));
+  for (const { sqref, rule } of x14Only) {
+    if (linked.has(String(rule.attrs.id ?? '').toUpperCase())) continue;
+    const ranges = sqref.split(/\s+/).map(refToRange).filter(Boolean);
+    if (!ranges.length) continue;
+    let out = null;
+    if (rule.attrs.type === 'iconSet') out = iconRule(child(rule, 'iconSet'));
+    else if (rule.attrs.type === 'dataBar') {
+      const xdb = child(rule, 'dataBar');
+      const color = colorOf(child(xdb, 'fillColor'), ctx.theme) ?? '#638ec6';
+      out = { type: 'bar', color: color.toLowerCase(), ...(xdb?.attrs.gradient === '0' ? { gradient: false } : {}) };
+    }
+    if (out) condList.push({ p: Number(rule.attrs.priority ?? 1e9), i: condList.length, rule: { ...ranges[0], ...(ranges.length > 1 ? { more: ranges.slice(1) } : {}), ...out } });
   }
   condList.sort((x, y) => x.p - y.p || x.i - y.i);
   sheet.cond = condList.map((x) => x.rule);
@@ -1034,7 +1106,10 @@ class StylePool {
     const fill = style.fill ? `<fill><patternFill><bgColor rgb="${argb(style.fill)}"/></patternFill></fill>` : '';
     const side = (n, on) => (on ? `<${n} style="thin"><color auto="1"/></${n}>` : '');
     const border = style.bt || style.bb || style.bl || style.br ? `<border>${side('left', style.bl)}${side('right', style.br)}${side('top', style.bt)}${side('bottom', style.bb)}</border>` : '';
-    this.dxfs.push(`<dxf>${font}${fill}${border}</dxf>`);
+    // 표시 형식도 조건부 서식으로 바꿀 수 있음 (dxf 안의 numFmt)
+    const code = style.numFmt ? fmtCode(style) : null;
+    const nf = code !== null ? `<numFmt numFmtId="${this.fmtId(style)}" formatCode="${esc(code)}"/>` : '';
+    this.dxfs.push(`<dxf>${font}${nf}${fill}${border}</dxf>`);
     return this.dxfs.length - 1;
   }
 
@@ -1070,8 +1145,30 @@ const TIME_FORMULA = {
   nextMonth: (c) => `AND(MONTH(${c})=MONTH(EDATE(TODAY(),0+1)),YEAR(${c})=YEAR(EDATE(TODAY(),0+1)))`,
 };
 
-function cfXml(rule, pool, priority) {
-  const ref = rangeRef(rule);
+const X14_ICONS = new Set(['3Stars', '3Triangles', '5Boxes']);
+const cfvoXml = (list, x14 = false) => list.map((c) => {
+  const t = c.type === 'num' ? 'num' : c.type;
+  const v = c.v === undefined || c.v === null || c.v === '' ? null : String(c.v).startsWith('=') ? exportFormula(String(c.v)) : String(c.v);
+  const type = String(c.v ?? '').startsWith('=') ? 'formula' : t;
+  const gte = c.gte === false ? ' gte="0"' : '';
+  if (x14) return `<x14:cfvo type="${type}"${gte}>${v !== null ? `<xm:f>${esc(v)}</xm:f>` : ''}</x14:cfvo>`;
+  return `<cfvo type="${type === 'autoMin' ? 'min' : type === 'autoMax' ? 'max' : type}"${v !== null && !/^(auto)?(min|max)$/i.test(type) ? ` val="${esc(v)}"` : ''}${gte}/>`;
+}).join('');
+
+/** 데이터 막대 · 새 아이콘 집합의 엑셀 2010 확장(x14) 규칙 */
+function cfX14(rule, id) {
+  const sqref = [rule, ...(rule.more ?? [])].map((g) => rangeRef(g)).join(' ');
+  if (rule.type === 'bar') {
+    const cf = rule.cfvo ?? [{ type: 'autoMin' }, { type: 'autoMax' }];
+    return `<x14:conditionalFormatting xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"><x14:cfRule type="dataBar" id="${id}"><x14:dataBar minLength="0" maxLength="100"${rule.gradient === false ? ' gradient="0"' : ''}${rule.iconOnly ? ' showValue="0"' : ''}>${cfvoXml(cf, true)}<x14:fillColor rgb="${argb(rule.color ?? '#638ec6')}"/><x14:negativeFillColor rgb="${argb(rule.negColor ?? '#ff0000')}"/><x14:axisColor rgb="FF000000"/></x14:dataBar></x14:cfRule><xm:sqref>${sqref}</xm:sqref></x14:conditionalFormatting>`;
+  }
+  const n = Number(String(rule.icons)[0]) || 3;
+  const cf = rule.cfvo ?? [...Array(n)].map((_, i) => ({ type: 'percent', v: Math.round((i * 100) / n) }));
+  return `<x14:conditionalFormatting xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"><x14:cfRule type="iconSet" priority="1" id="${id}"><x14:iconSet iconSet="${rule.icons}"${rule.reverse ? ' reverse="1"' : ''}${rule.iconOnly ? ' showValue="0"' : ''}>${cfvoXml(cf, true)}</x14:iconSet></x14:cfRule><xm:sqref>${sqref}</xm:sqref></x14:conditionalFormatting>`;
+}
+
+function cfXml(rule, pool, priority, x14 = null) {
+  const ref = [rule, ...(rule.more ?? [])].map((g) => rangeRef(g)).join(' ');
   const top = cellName(rule.r1, rule.c1);
   const lit = (v) => {
     const t = String(v ?? '');
@@ -1112,21 +1209,36 @@ function cfXml(rule, pool, priority) {
     case 'top': case 'bottom':
       body = `${head('top10', `${rule.percent ? ' percent="1"' : ''}${rule.type === 'bottom' ? ' bottom="1"' : ''} rank="${Number(rule.v1) || 10}"`)}/>`;
       break;
-    case 'aboveAvg': body = `${head('aboveAverage')}/>`; break;
-    case 'belowAvg': body = `${head('aboveAverage', ' aboveAverage="0"')}/>`; break;
-    case 'bar':
-      body = `<cfRule type="dataBar" priority="${priority}"><dataBar${rule.iconOnly ? ' showValue="0"' : ''}><cfvo type="min"/><cfvo type="max"/><color rgb="${argb(rule.color ?? '#638ec6')}"/></dataBar></cfRule>`;
+    case 'aboveAvg': case 'belowAvg': {
+      const ex = `${rule.type === 'belowAvg' ? ' aboveAverage="0"' : ''}${rule.equal ? ' equalAverage="1"' : ''}${rule.stdDev ? ` stdDev="${Number(rule.stdDev)}"` : ''}`;
+      body = `${head('aboveAverage', ex)}/>`;
       break;
+    }
+    case 'bar': {
+      const cf = rule.cfvo ?? [{ type: 'min' }, { type: 'max' }];
+      const id = `{${(0x10000000 + priority).toString(16).toUpperCase()}-0000-4000-8000-${String(priority).padStart(12, '0')}}`;
+      x14?.push(cfX14(rule, id));
+      body = `<cfRule type="dataBar" priority="${priority}"><dataBar${rule.iconOnly ? ' showValue="0"' : ''}>${cfvoXml(cf)}<color rgb="${argb(rule.color ?? '#638ec6')}"/></dataBar>${x14 ? `<extLst><ext uri="{B025F937-C7B1-47D3-B67F-A62EFF666E3E}" xmlns:x14="${NS_X14}"><x14:id>${id}</x14:id></ext></extLst>` : ''}</cfRule>`;
+      break;
+    }
     case 'scale': {
       const cs = rule.colors;
-      const cfvo = cs.length === 3 ? '<cfvo type="min"/><cfvo type="percentile" val="50"/><cfvo type="max"/>' : '<cfvo type="min"/><cfvo type="max"/>';
-      body = `<cfRule type="colorScale" priority="${priority}"><colorScale>${cfvo}${cs.map((c) => `<color rgb="${argb(c)}"/>`).join('')}</colorScale></cfRule>`;
+      const cf = rule.cfvo?.length === cs.length ? cfvoXml(rule.cfvo)
+        : cs.length === 3 ? '<cfvo type="min"/><cfvo type="percentile" val="50"/><cfvo type="max"/>' : '<cfvo type="min"/><cfvo type="max"/>';
+      body = `<cfRule type="colorScale" priority="${priority}"><colorScale>${cf}${cs.map((c) => `<color rgb="${argb(c)}"/>`).join('')}</colorScale></cfRule>`;
       break;
     }
     case 'icons': {
-      const n = Number(String(rule.icons ?? '3Arrows')[0]) || 3;
-      const cfvo = [...Array(n)].map((_, i) => `<cfvo type="percent" val="${Math.round((i * 100) / n)}"/>`).join('');
-      body = `<cfRule type="iconSet" priority="${priority}"><iconSet iconSet="${esc(rule.icons ?? '3Arrows')}"${rule.reverse ? ' reverse="1"' : ''}${rule.iconOnly ? ' showValue="0"' : ''}>${cfvo}</iconSet></cfRule>`;
+      const name = rule.icons ?? '3Arrows';
+      if (X14_ICONS.has(name)) {
+        // 별·삼각형·상자는 엑셀 2010 확장에만 저장됨
+        if (!x14) return '';
+        x14.push(cfX14(rule, `{${(0x20000000 + priority).toString(16).toUpperCase()}-0000-4000-8000-${String(priority).padStart(12, '0')}}`));
+        return '';
+      }
+      const n = Number(String(name)[0]) || 3;
+      const cf = rule.cfvo?.length === n ? cfvoXml(rule.cfvo) : [...Array(n)].map((_, i) => `<cfvo type="percent" val="${Math.round((i * 100) / n)}"/>`).join('');
+      body = `<cfRule type="iconSet" priority="${priority}"><iconSet iconSet="${esc(name)}"${rule.reverse ? ' reverse="1"' : ''}${rule.iconOnly ? ' showValue="0"' : ''}>${cf}</iconSet></cfRule>`;
       break;
     }
     default: return '';
@@ -1575,7 +1687,11 @@ export function writeXlsx(wb, { activeSheet = 0 } = {}) {
     const fit = (rg) => (rg.r1 >= EXCEL_MAX_ROWS ? null : { ...rg, r2: Math.min(rg.r2, EXCEL_MAX_ROWS - 1) });
     const mergeList = sheet.merges.map(fit).filter(Boolean);
     const merges = mergeList.length ? `<mergeCells count="${mergeList.length}">${mergeList.map((m) => `<mergeCell ref="${rangeRef(m)}"/>`).join('')}</mergeCells>` : '';
-    const cf = sheet.cond.map(fit).filter(Boolean).map((rule, i) => cfXml(rule, pool, i + 1)).join('');
+    const cfX14 = [];
+    const cf = sheet.cond.map((rule) => {
+      const g = fit(rule);
+      return g && { ...g, ...(rule.more ? { more: rule.more.map(fit).filter(Boolean) } : {}) };
+    }).filter(Boolean).map((rule, i) => cfXml(rule, pool, i + 1, cfX14)).join('');
 
     // 그림 개체 (차트 · 그림 · 도형)
     let drawing = '';
@@ -1695,9 +1811,24 @@ export function writeXlsx(wb, { activeSheet = 0 } = {}) {
         const c = t.c1 + i;
         const fn = t.totals ? t.totalsFns?.[c] : null;
         let extra = '';
+        let inner = '';
+        const tot = t.totals ? wb.getCell(si, t.r2, c) : null;
         if (fn && fn !== 'none') extra = ` totalsRowFunction="${fn}"`;
-        else if (t.totals && wb.getCell(si, t.r2, c)?.raw && !wb.getCell(si, t.r2, c).formula) extra = ` totalsRowLabel="${esc(wb.getCell(si, t.r2, c).raw.replace(/^'/, ''))}"`;
-        return `<tableColumn id="${i + 1}" name="${esc(n)}"${extra}/>`;
+        else if (tot?.formula) {
+          // 요약 행의 사용자 수식
+          extra = ' totalsRowFunction="custom"';
+          inner += `<totalsRowFormula>${esc(exportFormula(tot.raw, t.name))}</totalsRowFormula>`;
+        } else if (tot?.raw) extra = ` totalsRowLabel="${esc(tot.raw.replace(/^'/, ''))}"`;
+        // 계산된 열: 데이터 행이 모두 같은 수식이면 새 행에도 자동으로 채워지도록
+        const top = dataTop(t);
+        const bottom = dataBottom(t);
+        const first = wb.getCell(si, top, c);
+        if (first?.formula && bottom >= top && first.raw.includes('[')) {
+          let same = true;
+          for (let r = top + 1; r <= bottom && same; r++) same = wb.getCell(si, r, c)?.raw === first.raw;
+          if (same) inner = `<calculatedColumnFormula>${esc(exportFormula(first.raw, t.name))}</calculatedColumnFormula>${inner}`;
+        }
+        return inner ? `<tableColumn id="${i + 1}" name="${esc(n)}"${extra}>${inner}</tableColumn>` : `<tableColumn id="${i + 1}" name="${esc(n)}"${extra}/>`;
       }).join('');
       let af = '';
       if (t.filter && t.header) {
@@ -1742,6 +1873,7 @@ export function writeXlsx(wb, { activeSheet = 0 } = {}) {
         ? `<ext uri="{A8765BA9-456A-4dab-B4F3-ACF838C121DE}" xmlns:x14="${NS_X14}"><x14:slicerList><x14:slicer r:id="${id}"/></x14:slicerList></ext>`
         : `<ext uri="{3A4CF648-6AED-40f4-86FF-DC5316D8AED3}" xmlns:x15="${NS_X15}"><x14:slicerList xmlns:x14="${NS_X14}"><x14:slicer r:id="${id}"/></x14:slicerList></ext>`);
     }
+    if (cfX14.length) exts.unshift(`<ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}" xmlns:x14="${NS_X14}"><x14:conditionalFormattings>${cfX14.join('')}</x14:conditionalFormattings></ext>`);
     const extLst = exts.length ? `<extLst>${exts.join('')}</extLst>` : '';
 
     files[`xl/worksheets/sheet${si + 1}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="${NS_MAIN}" xmlns:r="${NS_R}">`

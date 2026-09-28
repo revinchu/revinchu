@@ -114,3 +114,44 @@ test('xlsx 왕복: 동적 배열 · 이름 · 지원하지 않는 함수의 저�
   assert.equal(wb2.getValue(0, 0, 5), 77);
   assert.ok(res.warnings.some((w) => w.includes('저장된 계산 결과')));
 });
+
+test('조건부 서식 xlsx: 여러 범위 · 임계값 · 2010 확장 아이콘 · 표준 편차 · 표시 형식', async () => {
+  const { prepareCond, condFormatAt } = await import('../src/condfmt.js');
+  const wb = book({ A1: '1', A2: '5', A3: '10', C1: '100', C2: '-20' });
+  wb.transact(() => wb.setSheetProp(0, 'cond', [
+    { r1: 0, c1: 0, r2: 2, c2: 0, more: [{ r1: 0, c1: 2, r2: 1, c2: 2 }], type: 'top', v1: '1', style: { bold: true } },
+    { r1: 0, c1: 0, r2: 2, c2: 0, type: 'icons', icons: '3Stars', cfvo: [{ type: 'percent', v: 0 }, { type: 'num', v: 4 }, { type: 'num', v: 9 }] },
+    { r1: 0, c1: 2, r2: 1, c2: 2, type: 'bar', color: '#5b9bd5', negColor: '#ff0000', gradient: false, cfvo: [{ type: 'num', v: -50 }, { type: 'num', v: 100 }] },
+    { r1: 0, c1: 0, r2: 2, c2: 0, type: 'aboveAvg', stdDev: 1, equal: true, style: { numFmt: 'custom', code: '0.00"점"' } },
+  ]));
+  const preps = prepareCond(wb, 0);
+  assert.equal(condFormatAt(preps, wb, 0, 0, 2, 100).style?.bold, true); // 두 범위를 합쳐 상위 1개
+  assert.equal(condFormatAt(preps, wb, 0, 2, 0, 10).style?.bold, undefined);
+  assert.equal(condFormatAt(preps, wb, 0, 1, 0, 5).icon, 'star1');
+  assert.equal(condFormatAt(preps, wb, 0, 2, 0, 10).icon, 'star2');
+  assert.equal(condFormatAt(preps, wb, 0, 1, 2, -20).bar.neg, true);
+
+  const files = unzip(writeXlsx(wb));
+  const xml = textOf(files['xl/worksheets/sheet1.xml']);
+  assert.match(xml, /sqref="A1:A3 C1:C2"/);
+  assert.match(xml, /x14:iconSet iconSet="3Stars"/);
+  assert.match(xml, /stdDev="1"/);
+  assert.match(textOf(files['xl/styles.xml']), /<dxf><numFmt numFmtId="\d+" formatCode="0\.00&quot;점&quot;"\/>/);
+  const back = new Workbook(readXlsx(writeXlsx(wb)).data);
+  const cond = back.sheets[0].cond;
+  assert.deepEqual(cond[0].more, [{ r1: 0, c1: 2, r2: 1, c2: 2 }]);
+  assert.equal(cond[1].icons, '3Stars');
+  assert.deepEqual(cond[1].cfvo.map((c) => [c.type, String(c.v)]), [['percent', '0'], ['num', '4'], ['num', '9']]);
+  assert.equal(cond[2].negColor, '#ff0000');
+  assert.equal(cond[2].gradient, false);
+  assert.equal(cond[3].stdDev, 1);
+  assert.equal(cond[3].style.code, '0.00"점"');
+});
+
+test('표 xlsx: 계산된 열 · 요약 행 사용자 수식', () => {
+  const wb = book({ A1: '품목', B1: '수량', C1: '금액', A2: '가', B2: '2', A3: '나', B3: '3', C2: '=[@수량]*10', C3: '=[@수량]*10', C4: '=SUBTOTAL(109,[금액])*2' });
+  wb.transact(() => wb.setSheetProp(0, 'tables', [{ id: 't1', name: '표1', r1: 0, c1: 0, r2: 3, c2: 2, header: true, totals: true, style: 'TableStyleMedium2', totalsFns: {} }]));
+  const xml = textOf(unzip(writeXlsx(wb))['xl/tables/table1.xml']);
+  assert.match(xml, /<calculatedColumnFormula>표1\[\[#This Row\],\[수량\]\]\*10<\/calculatedColumnFormula>/);
+  assert.match(xml, /totalsRowFunction="custom">.*<totalsRowFormula>SUBTOTAL\(109,표1\[금액\]\)\*2<\/totalsRowFormula>/);
+});

@@ -7,7 +7,7 @@ import { DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT } from './workbook.js';
 import { chartData, renderChartSvg } from './chart.js';
 import { shapeSvg } from './shapes.js';
 import { validationAt } from './validation.js';
-import { prepareCond, condFormatAt, ICON_SVG, EMPTY_MATCH_TYPES } from './condfmt.js';
+import { prepareCond, condFormatAt, ICON_SVG, EMPTY_MATCH_TYPES, ruleRanges, inRule } from './condfmt.js';
 import { tableAt, tableCellStyle, tableFilterRange, styleByName } from './tables.js';
 
 export const DEFAULT_FONT = '맑은 고딕';
@@ -446,8 +446,8 @@ export class GridView {
     const hasLine = !!(sheet.allStyle || Object.keys(sheet.colStyles).length || Object.keys(sheet.rowStyles).length);
     const tables = (sheet.tables ?? []).filter((t) => t.r1 <= r2 && t.r2 >= r1 && t.c1 <= c2 && t.c2 >= c1 && styleByName(t.style));
     const inTable = (r, c) => tables.some((t) => r >= t.r1 && r <= t.r2 && c >= t.c1 && c <= t.c2);
-    const emptyRules = (this.cond ?? []).map((pr) => pr.rule).filter((rl) => EMPTY_MATCH_TYPES.has(rl.type) && rl.r1 <= r2 && rl.r2 >= r1 && rl.c1 <= c2 && rl.c2 >= c1);
-    const emptyCond = (r, c) => emptyRules.some((rl) => r >= rl.r1 && r <= rl.r2 && c >= rl.c1 && c <= rl.c2);
+    const emptyRules = (this.cond ?? []).map((pr) => pr.rule).filter((rl) => EMPTY_MATCH_TYPES.has(rl.type) && ruleRanges(rl).some((g) => g.r1 <= r2 && g.r2 >= r1 && g.c1 <= c2 && g.c2 >= c1));
+    const emptyCond = (r, c) => emptyRules.some((rl) => inRule(rl, r, c));
     const spills = wb.spillsOf(si).filter((sp) => sp.r <= r2 && sp.r + sp.h - 1 >= r1 && sp.c <= c2 && sp.c + sp.w - 1 >= c1);
     const inSpill = (r, c) => spills.some((sp) => r >= sp.r && r < sp.r + sp.h && c >= sp.c && c < sp.c + sp.w);
     for (const r of visRows) {
@@ -532,7 +532,13 @@ export class GridView {
     else if (style.valign === 'middle') css.push('align-items:center');
     if (style.indent) css.push(`padding-${eff === 'right' ? 'right' : 'left'}:${3 + style.indent * 9}px`);
     const bg = style.fill || (merge ? '#fff' : null);
-    if (bar) css.push(`background:linear-gradient(90deg, ${bar.color} ${bar.pct}%, transparent ${bar.pct}%) no-repeat 0 50% / 100% 72%${bg ? `, ${bg}` : ''};background-clip:padding-box`);
+    if (bar) {
+      // 그라데이션(엑셀 기본) 또는 단색, 음수 막대는 오른쪽에서 왼쪽으로
+      const img = bar.gradient
+        ? `linear-gradient(90deg, ${bar.color}, ${bar.color}33)`
+        : `linear-gradient(${bar.color}, ${bar.color})`;
+      css.push(`background:${img} no-repeat ${bar.neg ? '100%' : '0'} 50% / ${bar.pct}% 72%${bg ? `, ${bg}` : ''};background-clip:padding-box`);
+    }
     else if (bg) css.push(`background-color:${bg}`);
     if (style.bt) css.push('border-top-color:#000');
     if (style.bb) css.push('border-bottom-color:#000');
