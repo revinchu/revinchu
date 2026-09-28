@@ -9,7 +9,7 @@
 //                                  | { type: 'label', op, v1, v2 } | { type: 'value', op, by, v1, v2 } }
 //              style: 'PivotStyleLight16' 등, rowCaption, colCaption, cellFmt: { 역할: 서식 } (파일에서 가져온 셀 서식) }
 // 옛 정의 { rowField, colField, valueField, agg, fieldNames } 도 그대로 읽음
-import { formatGeneral } from './format.js';
+import { formatGeneral, formatValue } from './format.js';
 import { findTable, dataTop, dataBottom, columnNames, ACCENTS, tint, shade } from './tables.js';
 
 export const AGGREGATES = [
@@ -919,17 +919,19 @@ export function computePivot(rows, d) {
  * → { categories: [글자], series: [{ name, values }] }
  */
 const chartMemo = new WeakMap();
-export function pivotChartData(rows, def) {
+/** fieldStyle(필드 이름) → 원본 열 서식 (날짜 항목을 날짜로 표시하는 데 씀) */
+export function pivotChartData(rows, def, fieldStyle = null) {
   let memo = chartMemo.get(rows);
   if (!memo) { memo = new Map(); chartMemo.set(rows, memo); }
-  const key = pivotDefKey(def) + JSON.stringify(def.styleDef ?? null);
+  const fmts = fieldStyle ? (def.rows ?? []).map((f) => fieldStyle(f)?.numFmt ?? null) : [];
+  const key = pivotDefKey(def) + JSON.stringify(def.styleDef ?? null) + JSON.stringify(fmts);
   if (!memo.has(key)) {
     if (memo.size > 60) memo.clear();
-    memo.set(key, pivotChartDataRaw(rows, def));
+    memo.set(key, pivotChartDataRaw(rows, def, fieldStyle));
   }
   return memo.get(key);
 }
-function pivotChartDataRaw(rows, def) {
+function pivotChartDataRaw(rows, def, fieldStyle) {
   const { def: d, rows: r } = resolvePivot(rows, def);
   const { grid, meta } = computePivot(r, d);
   if (meta.empty) return { categories: [], series: [] };
@@ -940,7 +942,10 @@ function pivotChartDataRaw(rows, def) {
   meta.rowItems.forEach((it, i) => {
     if (it.kind !== 'item' || it.node.children.length) return;
     const chain = [];
-    for (let n = it.node; n && n.depth >= 0; n = n.parent) chain.unshift(itemText(n.key));
+    for (let n = it.node; n && n.depth >= 0; n = n.parent) {
+      const st = typeof n.key === 'number' ? fieldStyle?.(d.rows[n.depth]) : null;
+      chain.unshift(st?.numFmt && st.numFmt !== 'general' ? formatValue(n.key, st).text : itemText(n.key));
+    }
     cats.push(chain.join(' / '));
     rowIdx.push(body + i);
   });

@@ -18,7 +18,7 @@ import { makeSeries } from './series.js';
 import { parseDelimited, toDelimited, guessDelimiter } from './csv.js';
 import { SAMPLES } from './samples.js';
 import { GridView, DEFAULT_FONT, DEFAULT_SIZE, measureText, fontStack } from './view.js';
-import { readXlsxAsync, writeXlsx, xlsxOverflow } from './xlsx.js';
+import { readXlsxAsync, writeXlsxAsync, xlsxOverflow } from './xlsx.js';
 import { CHART_TYPES, PALETTE, renderChartSvg, chartModelData } from './chart.js';
 import {
   computePivot, AGGREGATES, SHOW_AS, LAYOUTS, pivotSourceData, resolvePivot, itemText, headerNames, normalizeDef, valueName,
@@ -2835,8 +2835,12 @@ function slicerModel(sl) {
       if (memo.size > 200) memo.clear();
       memo.set(memoKey, items);
     }
+    // 숫자 항목은 원본 열의 표시 형식으로 (날짜 46204 → 2026-07-01)
+    const sd = pivotSourceData(wb, def);
+    const colStyle = sd?.ref ? wb.styleAt(sd.si, Math.min(sd.ref.r1 + 1, sd.ref.r2), sd.ref.c1 + fi) : null;
+    const shown = (e) => (typeof e.v === 'number' && colStyle?.numFmt && colStyle.numFmt !== 'general' ? formatValue(e.v, colStyle).text : e.key);
     return {
-      items: items.map((e) => ({ key: e.key, text: e.key, selected: !sel || sel.has(e.key), hasData: e.hasData })),
+      items: items.map((e) => ({ key: e.key, text: shown(e), selected: !sel || sel.has(e.key), hasData: e.hasData })),
       filtered: !!sel,
       targets,
       apply: (values) => {
@@ -4983,11 +4987,14 @@ function exportCsv() {
   toast('CSV 파일로 내보냈습니다.');
 }
 
-function exportXlsx(name = docName) {
+async function exportXlsx(name = docName) {
   const over = xlsxOverflow(wb);
   if (over) toast(`엑셀 파일은 1,048,576행까지만 저장할 수 있어 그 아래 셀 ${over.toLocaleString()}개는 빠집니다. 전체는 .tabula 로 저장하세요.`);
+  // 큰 문서는 나눠서 만들고 진행 표시 (압축도 함께 해서 파일이 작아짐)
+  const prog = progressOverlay(`'${safeFileName(name)}' 저장 중`);
   try {
-    const bytes = writeXlsx(wb, { activeSheet: si, fileName: `${safeFileName(name)}.${wb.vba ? 'xlsm' : 'xlsx'}` });
+    const bytes = await writeXlsxAsync(wb, { activeSheet: si, fileName: `${safeFileName(name)}.${wb.vba ? 'xlsm' : 'xlsx'}` }, (st) => prog.set(st.p, st.msg));
+    prog.close();
     if (wb.vba) {
       download(`${safeFileName(name)}.xlsm`, new Blob([bytes], { type: 'application/vnd.ms-excel.sheet.macroEnabled.12' }));
       toast('Excel 매크로 사용 통합 문서(.xlsm)로 저장했습니다.');
@@ -4996,6 +5003,7 @@ function exportXlsx(name = docName) {
       toast('Excel 통합 문서(.xlsx)로 저장했습니다.');
     }
   } catch (err) {
+    prog.close();
     alertDialog('Tabula', `저장하지 못했습니다: ${err.message}`);
   }
 }
@@ -5198,6 +5206,10 @@ function cellCount() {
   for (const s of wb.sheets) n += s.cells.size;
   return n;
 }
+/** 서버 자동 저장 대상인지 (셀이 아주 많으면 브라우저에만 자동 저장) */
+function serverAutosave() {
+  return server.available && cellCount() <= 300000;
+}
 function bigBook() {
   return cellCount() > 50000;
 }
@@ -5207,7 +5219,7 @@ function saveToStorage() {
     if (bigBook()) {
       // 큰 문서: IndexedDB 에 시트별로, 바뀐 시트만, 조금씩 나눠 저장 (화면이 멈추지 않게)
       localStorage.setItem(STORAGE_KEY, JSON.stringify({ docName, si, autosave, idb: true }));
-      idbSaving = saveBigToIdb().then(() => { if (!server.available) { dirty = false; updateTitle(); } }).catch((err) => {
+      idbSaving = saveBigToIdb().then(() => { if (!serverAutosave()) { dirty = false; updateTitle(); } }).catch((err) => {
         if (err === SAVE_ABORT) return;
         if (!storageWarned) { storageWarned = true; toast('브라우저 저장 공간이 부족해 자동 저장하지 못했습니다. [파일 → 다른 이름으로 저장]으로 파일을 내려받으세요.'); }
       });
@@ -5332,7 +5344,7 @@ function scheduleAutosave() {
 function scheduleServerSave(delay = 1500) {
   if (!server.available || !autosave) return;
   // 셀이 아주 많은 문서는 서버 자동 저장을 하지 않음 (전체를 보내야 해서 느림) — [저장]을 누르면 저장
-  if (cellCount() > 300000) { updateTitle(); return; }
+  if (!serverAutosave()) { updateTitle(); return; }
   clearTimeout(serverTimer);
   const big = bigBook();
   serverTimer = setTimeout(() => (big ? whenIdle(() => saveNow(false)) : saveNow(false)), big ? Math.max(delay, 8000) : delay);
@@ -7307,6 +7319,7 @@ function updateTitle() {
   dom.autosaveLabel.textContent = autosave ? '켬' : '끔';
   let state;
   if (!server.available) state = dirty && !autosave ? '저장 안 됨' : '이 브라우저에 저장됨';
+  else if (!serverAutosave()) state = dirty ? (autosave ? '브라우저에 저장 중' : '저장 안 됨') : '이 브라우저에 저장됨 (서버는 [저장])';
   else if (serverState.saving) state = '저장 중...';
   else if (serverState.error) state = '서버에 저장하지 못함';
   else if (dirty) state = autosave ? '저장 대기 중' : '저장 안 됨';

@@ -123,7 +123,14 @@ export function chartModelData(wb, hostSi, ch) {
       const def = defs.find((d) => d.name && d.name === p.name) ?? (p.name ? null : defs[0]);
       if (!def) return null;
       const src = pivotSourceData(wb, def);
-      return src ? pivotChartData(src.rows, def) : null;
+      if (!src) return null;
+      // 날짜 등 숫자 항목은 원본 열의 표시 형식으로
+      const header = (src.rows[0] ?? []).map((h) => String(h ?? '').toLowerCase());
+      const fieldStyle = (f) => {
+        const i = header.indexOf(String(f).toLowerCase());
+        return i >= 0 && src.ref && src.si !== undefined ? wb.styleAt(src.si, Math.min(src.ref.r1 + 1, src.ref.r2), src.ref.c1 + i) : null;
+      };
+      return pivotChartData(src.rows, def, fieldStyle);
     },
   });
 }

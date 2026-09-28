@@ -1,5 +1,5 @@
 // .xlsx 읽기/쓰기 (Office Open XML). DOM 없이 동작하므로 Node 에서도 테스트 가능.
-import { unzip, unzipAsync, zip, textOf } from './zip.js';
+import { unzip, unzipAsync, zip, zipAsync, textOf } from './zip.js';
 import { parseXml, child, kids, descendants, allText, esc, decodeEntities } from './xml.js';
 import {
   parse, tokenize, shiftFormula, colToName, nameToCol, cellName, parseRangeName, FUNCS, isError,
@@ -1512,6 +1512,7 @@ class StylePool {
     this.xfs = ['<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'];
     this.dxfs = [];
     this.tableStyles = new Map();
+    this.byObj = new WeakMap();
     this.maps = { font: new Map([[this.fonts[0], 0]]), fill: new Map(this.fills.map((f, i) => [f, i])), border: new Map([[this.borders[0], 0]]), fmt: new Map(), xf: new Map([['{}', 0]]) };
   }
 
@@ -1533,7 +1534,17 @@ class StylePool {
   }
 
   xf(style) {
-    if (!style || !Object.keys(style).length) return 0;
+    if (!style) return 0;
+    // 셀 서식 객체는 여러 셀이 공유하므로 객체마다 한 번만 계산
+    const hit = this.byObj.get(style);
+    if (hit !== undefined) return hit;
+    const id = this.xfOf(style);
+    this.byObj.set(style, id);
+    return id;
+  }
+
+  xfOf(style) {
+    if (!Object.keys(style).length) return 0;
     const k = JSON.stringify(Object.keys(style).sort().map((key) => [key, style[key]]));
     if (this.maps.xf.has(k)) return this.maps.xf.get(k);
     const font = `<font>${style.bold ? '<b/>' : ''}${style.italic ? '<i/>' : ''}${style.strike ? '<strike/>' : ''}${style.underline ? '<u/>' : ''}<sz val="${style.size || 11}"/>${style.color ? `<color rgb="${argb(style.color)}"/>` : '<color theme="1"/>'}<name val="${esc(style.font || DEFAULT_FONT)}"/><family val="3"/><charset val="129"/></font>`;
@@ -2210,7 +2221,31 @@ export function xlsxOverflow(wb) {
 }
 
 /** Workbook → xlsx 바이트 (매크로가 있으면 .xlsm 형식) */
-export function writeXlsx(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {}) {
+/** 통합 문서 → .xlsx 바이트 (한 번에) */
+export function writeXlsx(wb, opts) {
+  const it = writeXlsxSteps(wb, opts);
+  for (;;) {
+    const s = it.next();
+    if (s.done) return zip(s.value);
+  }
+}
+
+/** 큰 문서용: 중간중간 브라우저에 제어를 돌려주고, 내장 압축으로 파일 크기도 줄임. onProgress({p, msg}) */
+export async function writeXlsxAsync(wb, opts, onProgress) {
+  const it = writeXlsxSteps(wb, opts);
+  let last = performance.now();
+  for (;;) {
+    const s = it.next();
+    if (s.done) return zipAsync(s.value, (p) => onProgress?.({ p: 0.85 + 0.15 * p, msg: '압축 중' }));
+    if (performance.now() - last > 40) {
+      onProgress?.(s.value);
+      await new Promise((res) => setTimeout(res, 0));
+      last = performance.now();
+    }
+  }
+}
+
+function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {}) {
   const files = {};
   const pool = new StylePool();
   const strings = [];
@@ -2276,7 +2311,10 @@ export function writeXlsx(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {})
     if (!caches.has(k)) caches.set(k, { defs: [] });
     caches.get(k).defs.push(e.def);
   }
-  for (const [k, g] of caches) g.cache = buildPivotCache(wb, g.defs, ++cacheSeq, slicerFields.get(k));
+  for (const [k, g] of caches) {
+    g.cache = buildPivotCache(wb, g.defs, ++cacheSeq, slicerFields.get(k));
+    yield { p: 0.01, msg: '피벗 캐시 만드는 중' };
+  }
   const pivotList = new Map(); // 시트 번호 → [{ name, cacheId, tableNo, parts, cache, j }]
   let pivotNo = 0;
   for (const e of allDefs) {
@@ -2301,10 +2339,22 @@ export function writeXlsx(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {})
   let slicerPartNo = 0;
   let slicerCacheNo = 0;
 
-  wb.sheets.forEach((sheet, si) => {
-    const sheetRels = [];
-    const addRel = (type, target) => { const id = `rId${sheetRels.length + 1}`; sheetRels.push(`<Relationship Id="${id}" Type="${REL}/${type}" Target="${target}"/>`); return id; };
-
+  // 셀 XML (가장 큰 부분): 시트마다 미리 만들며 중간중간 멈춤 — 큰 문서를 저장해도 화면이 멈추지 않게
+  const expMemo = new Map(); // 같은 수식(표의 계산 열 등)은 한 번만 변환
+  const exportF = (raw, t, dyn) => {
+    const k = `${t ?? ''}\u0001${dyn ? 1 : 0}\u0001${raw}`;
+    let v = expMemo.get(k);
+    if (v === undefined) { v = esc(exportFormula(raw, t, dyn)); if (expMemo.size < 200000) expMemo.set(k, v); }
+    return v;
+  };
+  const colLetter = [];
+  const refOf = (r, c) => (colLetter[c] ??= cellName(0, c).replace(/\d+$/, '')) + (r + 1);
+  const sheetRows = [];
+  let rowsDone = 0;
+  const rowsTotal = wb.sheets.reduce((n, sh) => n + sh.cells.size, 0) || 1;
+  for (let si = 0; si < wb.sheets.length; si++) {
+    const sheet = wb.sheets[si];
+    const plainStyle = !sheet.allStyle && !Object.keys(sheet.colStyles ?? {}).length && !Object.keys(sheet.rowStyles ?? {}).length;
     // 셀을 행별로 정리
     const rows = new Map();
     let maxR = 0;
@@ -2337,15 +2387,16 @@ export function writeXlsx(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {})
     for (const k of [...Object.keys(sheet.rowHeights), ...Object.keys(sheet.hiddenRows), ...Object.keys(sheet.rowStyles), ...Object.keys(sheet.filter?.hidden ?? {}), ...(sheet.tables ?? []).flatMap((t) => Object.keys(t.filter?.hidden ?? {}))]) rowKeys.add(Number(k));
     const sortedRows = [...rowKeys].filter((r) => r < EXCEL_MAX_ROWS).sort((a, b) => a - b);
 
-    const rowXml = sortedRows.map((r) => {
+    const rowXml = [];
+    for (const r of sortedRows) {
       const cells = (rows.get(r) ?? []).sort((a, b) => a[0] - b[0]);
       const attrs = [`r="${r + 1}"`];
       if (sheet.rowHeights[r] !== undefined) attrs.push(`ht="${px2pt(sheet.rowHeights[r])}"`, 'customHeight="1"');
       if (sheet.hiddenRows[r] || sheet.filter?.hidden?.[r] || (sheet.tables ?? []).some((t) => t.filter?.hidden?.[r])) attrs.push('hidden="1"');
       if (sheet.rowStyles[r]) attrs.push(`s="${pool.xf({ ...sheet.allStyle, ...sheet.rowStyles[r] })}"`, 'customFormat="1"');
       const cx = cells.map(([c, cell]) => {
-        const ref = cellName(r, c);
-        const st = wb.styleAt(si, r, c);
+        const ref = refOf(r, c);
+        const st = plainStyle ? (cell.style ?? {}) : wb.styleAt(si, r, c);
         const s = pool.xf(st);
         const sAttr = s ? ` s="${s}"` : '';
         const v = wb.getValue(si, r, c);
@@ -2361,7 +2412,7 @@ export function writeXlsx(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {})
           if (dyn) dynamicCells++;
           const fAttr = dyn ? ` t="array" ref="${sp ? rangeRef({ ...sp, r2: Math.min(sp.r2, EXCEL_MAX_ROWS - 1) }) : ref}" aca="false"` : '';
           const cm = dyn ? ' cm="1"' : '';
-          const f = `<f${fAttr}>${esc(exportFormula(cell.raw, cell.raw.includes('[') ? tableAt(sheet, r, c)?.name : null, dyn))}</f>`;
+          const f = `<f${fAttr}>${exportF(cell.raw, cell.raw.includes('[') ? tableAt(sheet, r, c)?.name : null, dyn)}</f>`;
           if (typeof v === 'number') return `<c r="${ref}"${sAttr}${cm}>${f}<v>${v}</v></c>`;
           if (typeof v === 'boolean') return `<c r="${ref}"${sAttr} t="b"${cm}>${f}<v>${v ? 1 : 0}</v></c>`;
           if (isError(v)) return `<c r="${ref}"${sAttr} t="e"${cm}>${f}<v>${esc(['#CIRC!', '#SPILL!', '#CALC!', '#BUSY!'].includes(v.code) && !dyn ? '#REF!' : v.code === '#CIRC!' ? '#REF!' : v.code)}</v></c>`;
@@ -2375,8 +2426,19 @@ export function writeXlsx(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {})
         if (v === null) return s ? `<c r="${ref}"${sAttr}/>` : '';
         return `<c r="${ref}"${sAttr} t="s"><v>${sst(String(v))}</v></c>`;
       }).join('');
-      return `<row ${attrs.join(' ')}>${cx}</row>`;
-    }).join('');
+      rowXml.push(`<row ${attrs.join(' ')}>${cx}</row>`);
+      rowsDone += cells.length;
+      if (rowXml.length % 1000 === 0) yield { p: 0.85 * (rowsDone / rowsTotal), msg: `'${sheet.name}' 시트 저장 중` };
+    }
+    sheetRows.push({ rowXml: rowXml.join(''), maxR, maxC });
+  }
+
+  for (let si = 0; si < wb.sheets.length; si++) {
+    const sheet = wb.sheets[si];
+    const sheetRels = [];
+    const addRel = (type, target) => { const id = `rId${sheetRels.length + 1}`; sheetRels.push(`<Relationship Id="${id}" Type="${REL}/${type}" Target="${target}"/>`); return id; };
+
+    const { rowXml, maxR, maxC } = sheetRows[si];
 
     // 열
     const colKeys = new Set([...Object.keys(sheet.colWidths), ...Object.keys(sheet.hiddenCols), ...Object.keys(sheet.colStyles)].map(Number));
@@ -2630,7 +2692,8 @@ export function writeXlsx(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {})
     if (sheetRels.length) {
       files[`xl/worksheets/_rels/sheet${si + 1}.xml.rels`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="${NS_PKG}">${sheetRels.join('')}</Relationships>`;
     }
-  });
+    yield { p: 0.85, msg: '파일 구성 중' };
+  }
 
   // 통합 문서: 피벗 캐시, 슬라이서 캐시 (확장)
   const wbRels = [
@@ -2710,5 +2773,5 @@ export function writeXlsx(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {})
   // [Content_Types].xml 을 맨 앞에 두는 것이 관례
   const ordered = { '[Content_Types].xml': files['[Content_Types].xml'] };
   for (const [k, v] of Object.entries(files)) if (k !== '[Content_Types].xml') ordered[k] = v;
-  return zip(ordered);
+  return ordered;
 }
