@@ -1,4 +1,5 @@
 // 새로 만들기 → 샘플 통합 문서
+import { CellMap } from './cellmap.js';
 const HEAD = { fill: '#217346', color: '#ffffff', bold: true, align: 'center', bb: true };
 const TOTAL = { bold: true, bt: true, bb: true, fill: '#e2efda' };
 
@@ -145,7 +146,7 @@ function bigData(n) {
       },
       {
         // 셀은 Map 으로 넘겨 불러올 때 블록을 복사하지 않게 (통합 문서가 그대로 소유)
-        name: '데이터', cells: new Map(Object.entries(cells)), blocks: [block], freeze: { rows: 1, cols: 0 },
+        name: '데이터', cells: new CellMap(cells), blocks: [block], freeze: { rows: 1, cols: 0 },
         colWidths: { 0: 88, 1: 96, 2: 88 },
         tables: [{ id: 'tb1', name: '광고성과', r1: 0, c1: 0, r2: n, c2: 9, header: true, totals: false, style: 'TableStyleMedium2', banded: true, filter: null }],
       },

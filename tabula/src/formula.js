@@ -512,6 +512,14 @@ export function evalAny(node, ctx) {
       return evalAny(node.a, ctx);
     case 'ref': {
       const f = node.ref;
+      // 공유 수식: 같은 모양의 수식이 AST 하나를 쓰고, 셀 위치만큼 상대 참조를 옮김 (ctx.dr · ctx.dc)
+      const dr = ctx.dr;
+      const dc = ctx.dc;
+      if (dr || dc) {
+        // 열 전체(A:A)는 행을, 행 전체(1:1)는 열을 옮기지 않음
+        return new RefValue(f.sheet, f.ar1 || f.cols ? f.r1 : f.r1 + dr, f.ac1 || f.rows ? f.c1 : f.c1 + dc,
+          f.ar2 || f.cols ? f.r2 : f.r2 + dr, f.ac2 || f.rows ? f.c2 : f.c2 + dc);
+      }
       return new RefValue(f.sheet, f.r1, f.c1, f.r2, f.c2);
     }
     case 'sref': {
@@ -746,7 +754,10 @@ function refFromText(text, a1, ctx) {
     try {
       const ast = parse(t);
       if (['ref', 'sref', 'name', 'range', 'spill'].includes(ast.type)) {
-        const v = evalAny(ast, ctx);
+        // 글자로 만든 참조는 공유 수식의 위치 이동과 무관
+        let c2 = ctx;
+        if (ctx.dr || ctx.dc) { c2 = Object.create(ctx); c2.dr = 0; c2.dc = 0; }
+        const v = evalAny(ast, c2);
         return v instanceof RefValue ? v : null;
       }
     } catch (e) {

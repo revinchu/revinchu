@@ -312,25 +312,35 @@ export function lift(fn, positions = null) {
     let h = 1;
     let w = 1;
     for (const i of idx) { h = Math.max(h, args[i].height); w = Math.max(w, args[i].width); }
-    const rows = [];
+    // 원소마다 인수 배열 · 함수를 새로 만들지 않음 (백만 행 배열도 가볍게)
+    const rows = new Array(h);
+    const a = args.slice();
+    const liftCall = () => {
+      try {
+        return fn(a.slice(), ...rest);
+      } catch (e) {
+        if (e instanceof FormulaError) return e;
+        throw e;
+      }
+    };
     for (let r = 0; r < h; r++) {
-      const row = [];
+      const row = new Array(w);
       for (let c = 0; c < w; c++) {
-        const a = args.slice();
         let bad = false;
-        for (const i of idx) {
+        for (let k = 0; k < idx.length; k++) {
+          const i = idx[k];
           const x = args[i];
           const rr = x.height === 1 ? 0 : r;
           const cc = x.width === 1 ? 0 : c;
           if (rr >= x.height || cc >= x.width) { bad = true; break; }
           a[i] = x.rows[rr][cc];
         }
-        if (bad) { row.push(ERR.NA); continue; }
-        let v = attempt(() => fn(a, ...rest));
+        if (bad) { row[c] = ERR.NA; continue; }
+        let v = liftCall();
         if (v instanceof Range) v = v.height === 1 && v.width === 1 ? v.rows[0][0] : ERR.VALUE;
-        row.push(v === undefined ? null : v);
+        row[c] = v === undefined ? null : v;
       }
-      rows.push(row);
+      rows[r] = row;
     }
     return new Range(rows);
   };
@@ -339,7 +349,24 @@ export function lift(fn, positions = null) {
   return wrapped;
 }
 
-/** 두 값의 원소별 연산 (배열 크기 확장 규칙 포함) */
+function call2(f, x, y) {
+  try {
+    return f(x, y);
+  } catch (e) {
+    if (e instanceof FormulaError) return e;
+    throw e;
+  }
+}
+function call1(f, x) {
+  try {
+    return f(x);
+  } catch (e) {
+    if (e instanceof FormulaError) return e;
+    throw e;
+  }
+}
+
+/** 두 값의 원소별 연산 (배열 크기 확장 규칙 포함). 백만 행 배열도 원소마다 함수를 만들지 않음 */
 export function broadcast2(a, b, f) {
   const A = a instanceof Range ? a : null;
   const B = b instanceof Range ? b : null;
@@ -350,22 +377,20 @@ export function broadcast2(a, b, f) {
   const wb = B ? B.width : 1;
   const h = Math.max(ha, hb);
   const w = Math.max(wa, wb);
-  const pick = (X, x, hx, wx, r, c) => {
-    if (!X) return x;
-    const rr = hx === 1 ? 0 : r;
-    const cc = wx === 1 ? 0 : c;
-    if (rr >= hx || cc >= wx) return ERR.NA;
-    return X.rows[rr][cc];
-  };
-  const rows = [];
+  const ar = A ? A.rows : null;
+  const br = B ? B.rows : null;
+  const NA = ERR.NA;
+  const rows = new Array(h);
   for (let r = 0; r < h; r++) {
-    const row = [];
+    const ra = ar ? (ha === 1 ? ar[0] : r < ha ? ar[r] : null) : null;
+    const rb = br ? (hb === 1 ? br[0] : r < hb ? br[r] : null) : null;
+    const row = new Array(w);
     for (let c = 0; c < w; c++) {
-      const x = pick(A, a, ha, wa, r, c);
-      const y = pick(B, b, hb, wb, r, c);
-      row.push(isError(x) ? x : isError(y) ? y : attempt(() => f(x, y)));
+      const x = !ar ? a : ra === null ? NA : wa === 1 ? ra[0] : c < wa ? ra[c] : NA;
+      const y = !br ? b : rb === null ? NA : wb === 1 ? rb[0] : c < wb ? rb[c] : NA;
+      row[c] = x instanceof FormulaError ? x : y instanceof FormulaError ? y : call2(f, x, y);
     }
-    rows.push(row);
+    rows[r] = row;
   }
   return new Range(rows);
 }
@@ -373,7 +398,15 @@ export function broadcast2(a, b, f) {
 /** 배열이면 원소별로, 아니면 그대로 */
 export function mapValue(v, f) {
   if (!(v instanceof Range)) return f(v);
-  return new Range(v.rows.map((row) => row.map((x) => (isError(x) ? x : attempt(() => f(x))))));
+  const src = v.rows;
+  const rows = new Array(src.length);
+  for (let r = 0; r < src.length; r++) {
+    const s = src[r];
+    const row = new Array(s.length);
+    for (let c = 0; c < s.length; c++) { const x = s[c]; row[c] = x instanceof FormulaError ? x : call1(f, x); }
+    rows[r] = row;
+  }
+  return new Range(rows);
 }
 
 /** 결과 배열 → 1x1 이면 스칼라 */

@@ -134,14 +134,35 @@ export function columnNames(wb, si, t, text = null) {
   return uniqueNames(raw);
 }
 
+/** 표 열 이름(소문자) → 열 순서. 시트가 바뀌기 전까지 표마다 한 번만 계산 (구조적 참조 수십만 개도 빠르게) */
+const colIdxMemo = new WeakMap();
+function columnIndex(wb, si, t) {
+  const ver = `${wb.sheetVersion?.(si) ?? ''}:${t.c1}:${t.c2}:${t.r1}:${t.header}`;
+  const hit = colIdxMemo.get(t);
+  if (hit && hit.ver === ver) return hit.idx;
+  const idx = new Map(columnNames(wb, si, t).map((n, i) => [n.toLowerCase(), i]));
+  colIdxMemo.set(t, { ver, idx });
+  return idx;
+}
+
 // ───────────── 구조적 참조 ─────────────
 const AREA = {
   '#all': 'all', '#모두': 'all', '#data': 'data', '#데이터': 'data', '#headers': 'headers', '#머리글': 'headers',
   '#totals': 'totals', '#요약': 'totals', '#this row': 'thisrow', '#현재 행': 'thisrow', '@': 'thisrow',
 };
 
-/** 대괄호 안 글자 → { areas: [...], c1: 열 이름|null, c2: 열 이름|null } */
+/** 대괄호 안 글자 → { areas: [...], c1: 열 이름|null, c2: 열 이름|null } (결과는 공유하므로 바꾸지 말 것) */
+const specMemo = new Map();
 export function parseSpec(spec) {
+  let p = specMemo.get(spec);
+  if (!p) {
+    p = parseSpec0(spec);
+    if (specMemo.size > 5000) specMemo.clear();
+    specMemo.set(spec, p);
+  }
+  return p;
+}
+function parseSpec0(spec) {
   const s = spec.trim();
   const unesc = (x) => x.replace(/'(.)/g, '$1').trim();
   if (s === '') return { areas: ['data'], c1: null, c2: null };
@@ -195,9 +216,9 @@ export function resolveStructRef(wb, tableName, spec, here) {
   let c1 = t.c1;
   let c2 = t.c2;
   if (p.c1) {
-    const names = columnNames(wb, si, t).map((n) => n.toLowerCase());
-    const a = names.indexOf(p.c1.toLowerCase());
-    const b = p.c2 ? names.indexOf(p.c2.toLowerCase()) : a;
+    const idx = columnIndex(wb, si, t);
+    const a = idx.get(p.c1.toLowerCase()) ?? -1;
+    const b = p.c2 ? idx.get(p.c2.toLowerCase()) ?? -1 : a;
     if (a < 0 || b < 0) return null;
     c1 = t.c1 + Math.min(a, b);
     c2 = t.c1 + Math.max(a, b);

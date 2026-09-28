@@ -9,17 +9,22 @@ import { parseInput } from './format.js';
 import { inBlock, blockValue, blockSet, blockClone, blockShift, rawOf, sortOrder, blockPermute, logicalCol, reorderRows, setRowOrder, materialize } from './block.js';
 import { hid, shiftHidden } from './axis.js';
 import { CellImage } from './fxcore.js';
+import { DepGraph, cellNum } from './depgraph.js';
+import { CellMap } from './cellmap.js';
 
 export const DEFAULT_COL_WIDTH = 64;
 export const DEFAULT_ROW_HEIGHT = 20;
 
 const key = (r, c) => `${r},${c}`;
-const unkey = (k) => k.split(',').map(Number);
+const unkey = (k) => { const i = k.indexOf(','); return [+k.slice(0, i), +k.slice(i + 1)]; };
 
 // 같은 서식 객체를 여러 셀이 공유할 때(파일 가져오기 등) 한 번만 정리. 셀 서식은 바꿀 때 항상 새 객체로 교체하므로 공유해도 안전
 const cleanMemo = new WeakMap();
 function cleanStyle(style) {
   if (!style) return undefined;
+  let any = false;
+  for (const k in style) { any = true; break; } // eslint-disable-line no-unused-vars
+  if (!any) return undefined;
   const hit = cleanMemo.get(style);
   if (hit !== undefined) return hit || undefined;
   const out = {};
@@ -44,6 +49,155 @@ function parseMemo(text) {
     }
     if (astMemo.size > 100000) astMemo.clear();
     astMemo.set(text, e);
+  }
+  return e;
+}
+
+// 공유 수식 (엑셀과 같은 방식): 아래로 채운 수식(=H2/G2, =H3/G3 …)은 셀 위치 기준 상대 좌표가 같으므로
+// AST 를 하나만 만들고, 셀마다 옮긴 거리(dr · dc)만 기억한다. 백만 행 수식도 해석은 한 번.
+// 글자 하나가 이름의 일부인지 (영문 · 숫자 · _ · . · $ · 한글 등 비ASCII)
+const wordish = (ch) => (ch >= 48 && ch <= 57) || (ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) || ch === 95 || ch === 46 || ch === 36 || ch > 127;
+const letter = (ch) => (ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122);
+const digit = (ch) => ch >= 48 && ch <= 57;
+/**
+ * 수식 글자에서 A1 참조를 찾아 [글자, {cabs, ci, rabs, ri}, 글자, …] 로 나눔.
+ * 글자열 · 작은따옴표 시트 이름 · 표 참조 [...] 안은 그대로 둠. 열 전체 · 행 전체 참조가 있거나 참조가 없으면 null
+ */
+function scanRefs(text) {
+  const n = text.length;
+  const segs = [];
+  let last = 0;
+  let refs = 0;
+  let i = 0;
+  while (i < n) {
+    const ch = text.charCodeAt(i);
+    if (ch === 34 || ch === 39) {
+      i++;
+      while (i < n) {
+        if (text.charCodeAt(i) === ch) { if (text.charCodeAt(i + 1) === ch) { i += 2; continue; } i++; break; }
+        i++;
+      }
+      continue;
+    }
+    if (ch === 91) {
+      let depth = 1;
+      i++;
+      while (i < n && depth) { const x = text.charCodeAt(i); if (x === 91) depth++; else if (x === 93) depth--; i++; }
+      continue;
+    }
+    const prev = i ? text.charCodeAt(i - 1) : 0;
+    if (wordish(prev)) { i++; continue; }
+    if (ch === 36 || letter(ch)) {
+      let j = i;
+      const cabs = ch === 36;
+      if (cabs) j++;
+      const ls = j;
+      while (j < n && letter(text.charCodeAt(j))) j++;
+      const nl = j - ls;
+      if (nl >= 1 && nl <= 3) {
+        const rabs = text.charCodeAt(j) === 36;
+        if (rabs) j++;
+        const ds = j;
+        while (j < n && digit(text.charCodeAt(j))) j++;
+        const nd = j - ds;
+        const nx = j < n ? text.charCodeAt(j) : 0;
+        if (nd >= 1 && nd <= 8 && !wordish(nx) && nx !== 40 && nx !== 33) {
+          let ci = 0;
+          for (let q = ls; q < ls + nl; q++) ci = ci * 26 + (text.charCodeAt(q) & 31);
+          ci -= 1;
+          const ri = +text.slice(ds, j) - 1;
+          if (ci > 16383 || ri < 0) return null;
+          segs.push(text.slice(last, i), { cabs, ci, rabs, ri });
+          last = j;
+          refs++;
+          i = j;
+          continue;
+        }
+        if (nd === 0 && !rabs && nx === 58) return null; // A:A (열 전체)
+      }
+      while (i < n && wordish(text.charCodeAt(i))) i++;
+      continue;
+    }
+    if (digit(ch)) {
+      let j = i;
+      while (j < n && digit(text.charCodeAt(j))) j++;
+      if (text.charCodeAt(j) === 58) { const k = text.charCodeAt(j + 1); if (digit(k) || k === 36) return null; } // 1:1 (행 전체)
+      i = j;
+      while (i < n && wordish(text.charCodeAt(i))) i++;
+      continue;
+    }
+    i++;
+  }
+  if (!refs) return null;
+  segs.push(text.slice(last));
+  return segs;
+}
+
+/** 수식 글자 → 위치에 무관한 키 (A1 참조를 (r, c) 기준 상대 좌표로) */
+function shareKey(text, r, c) {
+  const segs = scanRefs(text);
+  if (!segs) return null;
+  let out = '';
+  for (const x of segs) {
+    if (typeof x === 'string') out += x;
+    else out += `\u0001${x.cabs ? `C${x.ci}` : `c${x.ci - c}`}${x.rabs ? `R${x.ri}` : `r${x.ri - r}`}`;
+  }
+  return out;
+}
+
+const COL_NAMES = [];
+const colName = (c) => {
+  let s = COL_NAMES[c];
+  if (s) return s;
+  s = '';
+  for (let n = c + 1; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + ((n - 1) % 26)) + s;
+  if (c < 20000) COL_NAMES[c] = s;
+  return s;
+};
+/**
+ * 채우기 · 복사용: 수식을 한 번만 나눠 두고 (dr, dc) 만큼 옮긴 글자를 빠르게 만드는 함수 (shiftFormula 와 같은 결과).
+ * 나눌 수 없는 수식은 shiftFormula 를 그대로 씀
+ */
+export function formulaShifter(raw) {
+  const plain = (dr, dc) => shiftFormula(raw, dr, dc);
+  if (!raw.startsWith('=')) return () => raw;
+  const segs = scanRefs(raw.slice(1));
+  if (!segs) return plain;
+  const gen = (dr, dc) => {
+    let out = '=';
+    for (const x of segs) {
+      if (typeof x === 'string') { out += x; continue; }
+      const c = x.cabs ? x.ci : x.ci + dc;
+      const r = x.rabs ? x.ri : x.ri + dr;
+      if (c < 0 || r < 0 || c > 16383 || r >= MAX_ROWS) return null;
+      out += `${x.cabs ? '$' : ''}${colName(c)}${x.rabs ? '$' : ''}${r + 1}`;
+    }
+    return out;
+  };
+  // 몇 가지 이동으로 shiftFormula 와 같은지 확인 (다르면 느린 길)
+  for (const [dr, dc] of [[1, 0], [0, 1], [5, 2]]) {
+    const a = gen(dr, dc);
+    if (a !== null && a !== shiftFormula(raw, dr, dc)) return plain;
+  }
+  return (dr, dc) => gen(dr, dc) ?? shiftFormula(raw, dr, dc);
+}
+const sharedMemo = new Map();
+/** (r, c) 칸의 수식 → { ast, maybeArray, error, r0, c0 } (r0 · c0: AST 를 만든 기준 위치) */
+let lastAt = null; // 입력 한 번에 두 번 부르는 경우(자동 서식 + 셀 만들기) 재사용
+function parseAt(text, r, c) {
+  if (lastAt && lastAt.text === text && lastAt.r === r && lastAt.c === c) return lastAt.res;
+  const res = parseAt0(text, r, c);
+  lastAt = { text, r, c, res };
+  return res;
+}
+function parseAt0(text, r, c) {
+  const k = r === undefined ? null : shareKey(text, r, c);
+  if (k === null) { const p = parseMemo(text); return p.r0 === undefined ? { ...p, r0: r ?? 0, c0: c ?? 0, fixed: true } : p; }
+  let e = sharedMemo.get(k);
+  if (!e) {
+    e = { ...parseMemo(text), r0: r, c0: c };
+    if (sharedMemo.size > 200000) sharedMemo.clear();
+    sharedMemo.set(k, e);
   }
   return e;
 }
@@ -89,7 +243,13 @@ function blockCellValue(v) {
 const sameStyle = (a, b) => a === b || (!a && !b) || (!!a && !!b && JSON.stringify(a) === JSON.stringify(b));
 
 /** 저장 형태 {raw, style, comment} → 계산용 셀 객체 */
-export function makeCell(data) {
+export function makeCell(data, k = null) {
+  if (k === null) return makeCellRC(data);
+  const i = k.indexOf(',');
+  return makeCellRC(data, +k.slice(0, i), +k.slice(i + 1));
+}
+/** 저장 형태 → 셀 객체 (r · c 를 알면 같은 모양의 수식끼리 AST 공유) */
+export function makeCellRC(data, r, c) {
   if (!data) return null;
   const cell = { raw: data.raw ?? '' };
   const style = cleanStyle(data.style);
@@ -100,7 +260,14 @@ export function makeCell(data) {
   if (data.image?.src) cell.image = { ...data.image }; // 셀에 배치한 그림
   if (cell.raw.startsWith('=') && cell.raw.length > 1 && style?.numFmt !== 'text') {
     cell.formula = true;
-    const p = parseMemo(cell.raw.slice(1));
+    let p;
+    if (r !== undefined) {
+      p = parseAt(cell.raw.slice(1), r, c);
+      if (!p.fixed && p.ast) {
+        if (r !== p.r0) cell.dr = r - p.r0;
+        if (c !== p.c0) cell.dc = c - p.c0;
+      }
+    } else p = parseMemo(cell.raw.slice(1));
     cell.ast = p.ast;
     if (p.ast) cell.maybeArray = p.maybeArray;
     else cell.parseError = p.error;
@@ -122,7 +289,8 @@ export function cellData(cell) {
   if (cell.comment) d.comment = cell.comment;
   if (cell.link) d.link = cell.link;
   if (cell.image) d.image = { ...cell.image };
-  if (cell.cached !== undefined && cell.formula) d.cached = cell.cached;
+  // 입력이 바뀌어 다시 계산한 수식은 파일의 옛 계산 결과를 버림
+  if (cell.cached !== undefined && cell.formula && !cell.dirty) d.cached = cell.cached;
   return d;
 }
 
@@ -134,7 +302,7 @@ function cachedValue(c) {
 
 function newSheet(name) {
   return {
-    name, cells: new Map(), colWidths: {}, rowHeights: {}, merges: [], cond: [],
+    name, cells: new CellMap(), colWidths: {}, rowHeights: {}, merges: [], cond: [],
     colStyles: {}, rowStyles: {}, allStyle: null, hiddenRows: {}, hiddenCols: {}, rowManual: {},
     freeze: { rows: 0, cols: 0 }, filter: null, charts: [], pivot: null,
     validations: [], images: [], shapes: [], tables: [], slicers: [], pivotsExtra: [], blocks: [],
@@ -144,9 +312,9 @@ function newSheet(name) {
 /** 저장 형태의 시트 하나 → 시트 객체 (셀은 객체 또는 Map) */
 function sheetFromData(s) {
   const sheet = newSheet(s.name);
-  const entries = s.cells instanceof Map ? s.cells : Object.entries(s.cells || {});
+  const entries = s.cells instanceof Map || s.cells instanceof CellMap ? s.cells : Object.entries(s.cells || {});
   for (const [k, d] of entries) {
-    const cell = makeCell(d);
+    const cell = makeCell(d, k);
     if (cell) sheet.cells.set(k, cell);
   }
   for (const p of SHEET_PROPS) if (s[p] !== undefined && s[p] !== null) sheet[p] = structuredClone(s[p]);
@@ -215,6 +383,10 @@ export class Workbook {
     this.spillState = null;
     this.nameStack = new Set();
     this.version = 0;
+    this.graph = null; // 셀 단위 의존 그래프 (처음 필요할 때 만듦)
+    this.pending = []; // 트랜잭션 중 바뀐 칸 [시트, 행, 열, …] (읽기 전이나 끝날 때 한 번에 반영)
+    this.ctxs = []; // 시트별 계산 문맥 (셀마다 새로 만들지 않음)
+    this.colIdx = []; // 시트별 열 → 셀(Map) 행 목록 (큰 범위 빠르게 읽기)
     if (data) this.load(data);
     else this.sheets = [newSheet('Sheet1')];
   }
@@ -231,7 +403,7 @@ export class Workbook {
   getCell(si, r, c) {
     const sheet = this.sheets[si];
     if (!sheet) return undefined;
-    const cell = sheet.cells.get(key(r, c));
+    const cell = sheet.cells.getRC(r, c);
     if (cell || !sheet.blocks.length) return cell;
     return this.blockCell(sheet, r, c);
   }
@@ -259,9 +431,9 @@ export class Workbook {
   getRaw(si, r, c) { return this.getCell(si, r, c)?.raw ?? ''; }
 
   getValue(si, r, c) {
-    const kk = key(r, c);
+    if (this.pending.length) this.flushPending();
     const sheet = this.sheets[si];
-    const cell = sheet?.cells.get(kk);
+    const cell = sheet?.cells.getRC(r, c);
     if (!cell && sheet?.blocks.length) {
       for (const b of sheet.blocks) {
         if (!inBlock(b, r, c)) continue;
@@ -272,23 +444,23 @@ export class Workbook {
     }
     if (!cell || (!cell.formula && cell.raw === '' && !cell.image)) return this.spillValueAt(si, r, c);
     if (!cell.formula) return cell.v ?? null;
-    const cache = this.caches[si] ??= new Map();
-    const hit = cache.get(kk);
-    if (hit !== undefined || cache.has(kk)) return hit;
+    const cache = this.caches[si] ??= new CellMap();
+    const hit = cache.getRC(r, c);
+    if (hit !== undefined || cache.hasRC(r, c)) return hit;
     // 파일에서 연 뒤 아직 바뀐 것이 없으면 엑셀이 저장해 둔 계산 결과를 그대로 사용
-    if (sheet.fileValues && cell.cached !== undefined && !cell.maybeArray) return cachedValue(cell.cached);
-    const k = `${si}:${kk}`;
+    if (sheet.fileValues && cell.cached !== undefined && !cell.maybeArray && !cell.dirty) return cachedValue(cell.cached);
+    const k = cellNum(si, r, c);
     if (cell.ast === null) return ERR.NAME;
     if (this.evaluating.has(k)) return ERR.CIRC;
-    if (this.depth > 0 || this.warming) return this.evalCell(k, cell, si);
+    if (this.depth > 0 || this.warming) return this.evalCell(k, cell, si, r, c);
     // 최상위 호출: 긴 참조 사슬(예: 누계 1만 행)은 위에서부터 차례로 미리 계산한 뒤 다시 시도
     try {
-      return this.evalCell(k, cell, si);
+      return this.evalCell(k, cell, si, r, c);
     } catch (e) {
       if (e !== DEEP) throw e;
       this.warmup();
       try {
-        return this.evalCell(k, cell, si);
+        return this.evalCell(k, cell, si, r, c);
       } catch (e2) {
         if (e2 !== DEEP) throw e2;
         return ERR.CIRC;
@@ -296,27 +468,35 @@ export class Workbook {
     }
   }
 
-  evalCell(k, cell, si) {
+  evalCell(k, cell, si, r, c) {
     if (this.depth >= MAX_DEPTH) throw DEEP;
     this.evaluating.add(k);
     this.depth++;
     let v;
-    const comma = k.indexOf(',');
-    const r = Number(k.slice(k.indexOf(':') + 1, comma));
-    const c = Number(k.slice(comma + 1));
+    // 시트 문맥 하나를 재사용: 위치(here)와 공유 수식 이동 거리(dr · dc)만 바꾸고 끝나면 되돌림
+    const ctx = this.ctxs[si] ?? this.cellCtx(si);
+    const ph = ctx.here;
+    const pdr = ctx.dr;
+    const pdc = ctx.dc;
+    ctx.here = { si, r, c, sheet: this.sheets[si]?.name };
+    ctx.dr = cell.dr ?? 0;
+    ctx.dc = cell.dc ?? 0;
     try {
-      v = evaluateArray(cell.ast, this.ctxFor(si, r, c));
+      v = evaluateArray(cell.ast, ctx);
     } catch (e) {
       if (e instanceof RangeError) throw DEEP;
       throw e;
     } finally {
+      ctx.here = ph;
+      ctx.dr = pdr;
+      ctx.dc = pdc;
       this.depth--;
       this.evaluating.delete(k);
     }
     // 지원하지 않는 함수는 파일에 저장된 계산 결과를 그대로 표시
     if (v === ERR.NAME && cell.cached !== undefined) v = cachedValue(cell.cached);
-    if (v instanceof Range) v = this.placeSpill(k, si, r, c, v);
-    (this.caches[si] ??= new Map()).set(key(r, c), v);
+    if (v instanceof Range) v = this.placeSpill(`${si}:${r},${c}`, si, r, c, v);
+    (this.caches[si] ??= new CellMap()).setRC(r, c, v);
     return v;
   }
 
@@ -330,7 +510,7 @@ export class Workbook {
     for (let i = 0; i < h; i++) {
       for (let j = 0; j < w; j++) {
         if (!i && !j) continue;
-        if (sheet.cells.get(key(r + i, c + j))?.raw) return ERR.SPILL;
+        if (sheet.cells.getRC(r + i, c + j)?.raw) return ERR.SPILL;
         const owner = this.spillOwner.get(`${si}:${r + i},${c + j}`);
         if (owner && owner !== k) return ERR.SPILL;
       }
@@ -352,7 +532,7 @@ export class Workbook {
     if (!this.arrayList) {
       const list = [];
       this.sheets.forEach((sheet, si) => {
-        for (const [kk, cell] of sheet.cells) if (cell.formula && cell.maybeArray) { const [r, c] = unkey(kk); list.push([si, r, c]); }
+        sheet.cells.forEachRC((cell, r, c) => { if (cell.formula && cell.maybeArray) list.push([si, r, c]); });
       });
       list.sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2]);
       this.arrayList = list;
@@ -468,7 +648,7 @@ export class Workbook {
     try {
       const list = [];
       this.sheets.forEach((sheet, si) => {
-        for (const [k, cell] of sheet.cells) if (cell.formula) { const [r, c] = unkey(k); list.push([si, r, c]); }
+        sheet.cells.forEachRC((cell, r, c) => { if (cell.formula) list.push([si, r, c]); });
       });
       list.sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2]);
       let pending = list;
@@ -489,7 +669,7 @@ export class Workbook {
   /** 열/행/시트 전체 서식을 합친 실제 셀 서식 */
   styleAt(si, r, c) {
     const s = this.sheets[si];
-    let own = s.cells.get(key(r, c))?.style;
+    let own = s.cells.getRC(r, c)?.style;
     if (!own && s.blocks.length) { const b = this.blockAt(si, r, c); if (b) own = b.cols[c - b.c0].fmt ?? undefined; }
     const col = s.colStyles[c];
     const row = s.rowStyles[r];
@@ -509,11 +689,15 @@ export class Workbook {
     return i;
   }
 
+  /** 셀 계산용 시트 문맥 (재사용) */
+  cellCtx(si) {
+    return (this.ctxs[si] ??= this.ctxFor(si));
+  }
+
   ctxFor(si, r = null, c = null) {
-    const here = r === null ? null : { si, r, c, sheet: this.sheets[si]?.name };
-    return {
-      here,
-      name: (n, sheet) => this.nameValue(n, si, sheet, here),
+    const ctx = { here: r === null ? null : { si, r, c, sheet: this.sheets[si]?.name }, dr: 0, dc: 0 };
+    return Object.assign(ctx, {
+      name: (n, sheet) => this.nameValue(n, si, sheet, ctx.here),
       spillRef: (sheet, rr, cc) => {
         const s = this.resolveSheet(sheet, si);
         const v = this.getValue(s, rr, cc);
@@ -551,7 +735,7 @@ export class Workbook {
       },
       usedCols: (sheet) => this.usedRange(this.resolveSheet(sheet, si)).cols,
       structRef: (table, spec) => {
-        const rg = resolveStructRef(this, table, spec, here);
+        const rg = resolveStructRef(this, table, spec, ctx.here);
         if (!rg) return null;
         const range = rg.r1 !== rg.r2 || rg.c1 !== rg.c2;
         return { sheet: this.sheets[rg.si].name, r1: rg.r1, c1: rg.c1, r2: rg.r2, c2: rg.c2, range };
@@ -567,6 +751,7 @@ export class Workbook {
       cell: (sheet, r, c) => this.getValue(this.resolveSheet(sheet, si), r, c),
       range: (sheet, r1, c1, r2, c2) => {
         const s = this.resolveSheet(sheet, si);
+        if ((r2 - r1 + 1) * (c2 - c1 + 1) > 4096 && this.sheets[s]) return this.rangeFast(s, r1, c1, r2, c2);
         const rows = [];
         for (let r = r1; r <= r2; r++) {
           const row = [];
@@ -581,7 +766,238 @@ export class Workbook {
         for (const sp of this.spills.values()) if (sp.si === s) n = Math.max(n, sp.r + sp.h);
         return n;
       },
-    };
+    });
+  }
+
+  /**
+   * 큰 범위 값 읽기 (SUM(K2:K1000001) · SUMIFS · XLOOKUP 등): 칸마다 찾지 않고
+   * 열 블록은 타입 배열에서 바로, 셀(Map)은 열별 행 목록으로 있는 칸만 읽음
+   */
+  rangeFast(s, r1, c1, r2, c2) {
+    // 같은 큰 범위를 여러 수식이 읽으면(SUMIFS 요약표 등) 시트가 바뀌기 전까지 한 번 읽은 값을 같이 씀
+    if (this.pending.length) this.flushPending();
+    const mk = `${s}:${r1}:${c1}:${r2}:${c2}`;
+    const ver = this.rangeVersion(s, c1, c2);
+    const memo = (this.rangeMemo ??= new Map());
+    const hit = memo.get(mk);
+    if (hit && hit.ver === ver) return hit.rows;
+    const rows = this.rangeRead(s, r1, c1, r2, c2);
+    if (this.rangeVersion(s, c1, c2) === ver) {
+      if (memo.size >= 12) memo.delete(memo.keys().next().value);
+      memo.set(mk, { ver, rows });
+    }
+    return rows;
+  }
+
+  /** 범위 캐시 버전: 시트 구조 · 시트 단위 재계산 버전 + 열마다 바뀐 횟수 (다른 열을 고쳐도 유지) */
+  rangeVersion(s, c1, c2) {
+    let v = `${this.sheetVerAll ?? 0}:${this.baseVer?.[s] ?? 0}`;
+    if (c2 - c1 > 64) return `${v}:${this.sheetVer?.[s] ?? 0}`;
+    const cv = this.colVer?.[s];
+    if (cv) for (let c = c1; c <= c2; c++) v += `:${cv.get(c) ?? 0}`;
+    return v;
+  }
+
+  /** 열 버전 올림 (칸이 바뀌거나 다시 계산될 수식이 있는 열) */
+  bumpCol(s, c) {
+    const all = (this.colVer ??= []);
+    const m = (all[s] ??= new Map());
+    m.set(c, (m.get(c) ?? 0) + 1);
+  }
+
+  rangeRead(s, r1, c1, r2, c2) {
+    const sh = this.sheets[s];
+    const h = r2 - r1 + 1;
+    const w = c2 - c1 + 1;
+    const rows = new Array(h);
+    if (w === 1) for (let i = 0; i < h; i++) rows[i] = [null];
+    else for (let i = 0; i < h; i++) { const row = new Array(w); for (let j = 0; j < w; j++) row[j] = null; rows[i] = row; }
+    for (const b of sh.blocks) {
+      const br1 = Math.max(r1, b.r0);
+      const br2 = Math.min(r2, b.r0 + b.n - 1);
+      const bc1 = Math.max(c1, b.c0);
+      const bc2 = Math.min(c2, b.c0 + b.cols.length - 1);
+      if (br1 > br2 || bc1 > bc2) continue;
+      const perm = b.perm;
+      for (let c = bc1; c <= bc2; c++) {
+        const { num, str, dict } = b.cols[c - b.c0];
+        const j = c - c1;
+        for (let r = br1; r <= br2; r++) {
+          const i = perm ? perm[r - b.r0] : r - b.r0;
+          let v = null;
+          if (str) { const x = str[i]; if (x >= 0) v = dict[x]; }
+          if (v === null && num) { const x = num[i]; if (x === x) v = x; }
+          if (v !== null) rows[r - r1][j] = typeof v === 'object' ? blockCellValue(v) : v;
+        }
+      }
+    }
+    // 셀(Map): 열마다 정렬된 행 목록에서 범위 안의 칸만
+    if (this.pending.length) this.flushPending();
+    for (let c = c1; c <= c2; c++) {
+      const list = this.colRows(s, c);
+      if (!list) continue;
+      const colMap = sh.cells.col(c);
+      const cacheCol = this.caches[s]?.col(c);
+      let lo = 0;
+      let hi = list.length;
+      while (lo < hi) { const m = (lo + hi) >> 1; if (list[m] < r1) lo = m + 1; else hi = m; }
+      for (let i = lo; i < list.length && list[i] <= r2; i++) {
+        const r = list[i];
+        const cell = colMap.get(r);
+        let v;
+        // 값 셀 · 계산해 둔 수식은 바로, 나머지는 getValue
+        if (cell && !cell.formula && (cell.raw !== '' || cell.image)) v = cell.v ?? null;
+        else if (cell?.formula && cacheCol !== undefined && (v = cacheCol.get(r)) !== undefined) { /* 캐시 */ } else v = this.getValue(s, r, c);
+        rows[r - r1][c - c1] = v;
+      }
+    }
+    // 분산 영역 (빈 칸에 표시되는 동적 배열 값)
+    this.ensureSpills();
+    for (const sp of this.spills.values()) {
+      if (sp.si !== s || sp.r > r2 || sp.r + sp.h - 1 < r1 || sp.c > c2 || sp.c + sp.w - 1 < c1) continue;
+      for (let r = Math.max(r1, sp.r); r <= Math.min(r2, sp.r + sp.h - 1); r++) {
+        for (let c = Math.max(c1, sp.c); c <= Math.min(c2, sp.c + sp.w - 1); c++) {
+          if ((r === sp.r && c === sp.c) || rows[r - r1][c - c1] !== null || sh.cells.getRC(r, c)?.raw) continue;
+          const v = sp.rows[r - sp.r]?.[c - sp.c];
+          rows[r - r1][c - c1] = v === null || v === undefined ? 0 : v;
+        }
+      }
+    }
+    return rows;
+  }
+
+  /** 시트 s 의 열 c 에 셀이 있는 행 번호 (정렬됨, 열마다 처음 필요할 때 만들고 putCell 이 고쳐 나감) */
+  colRows(s, c) {
+    const sh = this.sheets[s];
+    let cur = this.colIdx[s];
+    if (!cur || cur.cells !== sh.cells) { cur = { cells: sh.cells, map: new Map() }; this.colIdx[s] = cur; }
+    let l = cur.map.get(c);
+    if (l === undefined) {
+      const m = sh.cells.col(c);
+      l = m ? [...m.keys()].sort((a, b) => a - b) : null;
+      cur.map.set(c, l);
+    }
+    return l;
+  }
+
+  /** 사용 범위 캐시를 다시 훑지 않고 고침: 커지면 넓히고, 끝 칸이 비면 다음에 다시 계산 */
+  boundsUpdate(si, r, c, old, cell) {
+    const used = this.usedCache.get(si);
+    if (used) {
+      const had = !!(old && (old.raw || old.image));
+      const has = !!(cell && (cell.raw || cell.image));
+      if (has && (r >= used.rows || c >= used.cols)) this.usedCache.set(si, { rows: Math.max(used.rows, r + 1), cols: Math.max(used.cols, c + 1) });
+      else if (had && !has && (r + 1 >= used.rows || c + 1 >= used.cols)) this.usedCache.delete(si);
+    }
+    const ext = this.extentCache.get(si);
+    if (ext) {
+      if (cell && (r >= ext.rows || c >= ext.cols)) this.extentCache.set(si, { rows: Math.max(ext.rows, r + 1), cols: Math.max(ext.cols, c + 1) });
+      else if (old && !cell && (r + 1 >= ext.rows || c + 1 >= ext.cols)) this.extentCache.delete(si);
+    }
+  }
+
+  colIndexUpdate(si, r, c, added) {
+    const cur = this.colIdx[si];
+    if (!cur || cur.cells !== this.sheets[si].cells) return;
+    let l = cur.map.get(c);
+    if (l === undefined) return; // 아직 만들지 않은 열
+    if (!l) { if (!added) return; l = []; cur.map.set(c, l); }
+    let lo = 0;
+    let hi = l.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (l[m] < r) lo = m + 1; else hi = m; }
+    if (added) { if (l[lo] !== r) { if (lo === l.length) l.push(r); else l.splice(lo, 0, r); } } else if (l[lo] === r) l.splice(lo, 1);
+  }
+
+  // ─────────── 셀 단위 재계산 ───────────
+  /**
+   * 의존 그래프를 미리 백그라운드로 만듦 (큰 파일을 연 뒤 첫 편집도 바로 반응하도록).
+   * 만드는 동안 수식이 바뀌면 버리고 다음 편집 때 다시 만듦
+   */
+  async prepareGraph(budgetMs = 30) {
+    if (this.graph) return true;
+    const epoch = (this.graphEpoch = (this.graphEpoch ?? 0) + 1);
+    const g = new DepGraph(this, true);
+    const it = g.steps();
+    let last = performance.now();
+    for (;;) {
+      if (it.next().done) break;
+      if (performance.now() - last > budgetMs) {
+        await new Promise((res) => setTimeout(res, 0));
+        if (this.graphEpoch !== epoch || this.graph) return false;
+        last = performance.now();
+      }
+    }
+    if (this.graphEpoch !== epoch || this.graph) return false;
+    this.graph = g;
+    return true;
+  }
+
+  /** 칸 (si, r, c) 의 값이 바뀜: 트랜잭션 중이면 모아 두고, 아니면 바로 반영 */
+  changed(si, r, c) {
+    this.pending.push(si, r, c);
+    if (!this.tx) this.flushPending();
+  }
+
+  flushPending() {
+    const pts = this.pending;
+    this.pending = [];
+    if (pts.length) this.dirtyPoints(pts);
+  }
+
+  /**
+   * 바뀐 칸(평평한 [시트, 행, 열, …])을 참조하는 수식만 다시 계산하게 표시.
+   * 의존 그래프로 찾지 못하는 경우(분산 영역 등)는 시트 단위로 다시 계산.
+   */
+  dirtyPoints(pts) {
+    this.version++;
+    this.sheetVer ??= [];
+    const sheetsHit = new Set();
+    for (let i = 0; i < pts.length; i += 3) sheetsHit.add(pts[i]);
+    if (pts.length > 300000) {
+      // 한꺼번에 아주 많이 바뀜(채우기 · 붙여넣기 수십만 칸): 칸마다 찾기보다 시트 단위가 빠름
+      for (const s of sheetsHit) this.invalidate(s);
+      return;
+    }
+    // 분산 영역이 걸리면 시트 단위 (분산 크기가 바뀌면 주변 칸 값도 바뀜)
+    let fallback = false;
+    for (const sp of this.spills.values()) if (sheetsHit.has(sp.si)) { fallback = true; break; }
+    let dirty = null;
+    if (!fallback) {
+      try {
+        if (!this.graph || this.graph.stale) this.graph = new DepGraph(this);
+        dirty = this.graph.propagate(pts);
+      } catch (e) {
+        console.warn('의존 그래프 오류, 시트 단위로 다시 계산', e);
+        this.graph = null;
+        dirty = null;
+      }
+    }
+    if (!dirty) {
+      for (const s of sheetsHit) this.invalidate(s);
+      return;
+    }
+    for (let i = 0; i < pts.length; i += 3) { this.caches[pts[i]]?.deleteRC(pts[i + 1], pts[i + 2]); this.bumpCol(pts[i], pts[i + 2]); }
+    for (const s of sheetsHit) this.sheetVer[s] = (this.sheetVer[s] ?? 0) + 1;
+    const bumped = new Set(sheetsHit);
+    let arrays = false;
+    for (let i = 0; i < dirty.length; i += 3) {
+      const s = dirty[i];
+      this.caches[s]?.deleteRC(dirty[i + 1], dirty[i + 2]);
+      this.bumpCol(s, dirty[i + 2]);
+      const cell = this.sheets[s]?.cells.getRC(dirty[i + 1], dirty[i + 2]);
+      if (cell) {
+        cell.dirty = true;
+        if (cell.maybeArray) arrays = true;
+      }
+      if (!bumped.has(s)) { bumped.add(s); this.sheetVer[s] = (this.sheetVer[s] ?? 0) + 1; }
+    }
+    if (arrays) {
+      // 분산할 수 있는 수식이 다시 계산되면 분산 영역을 다시 정함
+      for (const s of bumped) for (const [k, sp] of this.spills) if (sp.si === s) this.spills.delete(k);
+      this.spillOwner.clear();
+      for (const [k, sp] of this.spills) for (let i = 0; i < sp.h; i++) for (let j = 0; j < sp.w; j++) if (i || j) this.spillOwner.set(`${sp.si}:${sp.r + i},${sp.c + j}`, k);
+      this.spillState = null;
+    }
   }
 
   /** 값이 있는 영역 크기 {rows, cols} */
@@ -590,11 +1006,12 @@ export class Workbook {
     let rows = 0;
     let cols = 0;
     for (const b of this.sheets[si].blocks) { rows = Math.max(rows, b.r0 + b.n); cols = Math.max(cols, b.c0 + b.cols.length); }
-    for (const [k, cell] of this.sheets[si].cells) {
-      if (!cell.raw && !cell.image) continue;
-      const [r, c] = unkey(k);
-      rows = Math.max(rows, r + 1);
-      cols = Math.max(cols, c + 1);
+    for (const [c, m] of this.sheets[si].cells.cols) {
+      for (const [r, cell] of m) {
+        if (!cell.raw && !cell.image) continue;
+        if (r >= rows) rows = r + 1;
+        if (c >= cols) cols = c + 1;
+      }
     }
     const res = { rows, cols };
     this.usedCache.set(si, res);
@@ -608,10 +1025,9 @@ export class Workbook {
     let rows = 0;
     let cols = 0;
     for (const b of this.sheets[si].blocks) { rows = Math.max(rows, b.r0 + b.n); cols = Math.max(cols, b.c0 + b.cols.length); }
-    for (const k of this.sheets[si].cells.keys()) {
-      const [r, c] = unkey(k);
-      rows = Math.max(rows, r + 1);
-      cols = Math.max(cols, c + 1);
+    for (const [c, m] of this.sheets[si].cells.cols) {
+      if (c >= cols) cols = c + 1;
+      for (const r of m.keys()) if (r >= rows) rows = r + 1;
     }
     const res = { rows, cols };
     this.extentCache.set(si, res);
@@ -628,6 +1044,11 @@ export class Workbook {
     if (si === undefined || !this.sheets[si]) {
       this.sheetVerAll = (this.sheetVerAll ?? 0) + 1;
       this.caches = [];
+      this.graph = null;
+      this.graphEpoch = (this.graphEpoch ?? 0) + 1;
+      this.pending = [];
+      this.ctxs = [];
+      this.colIdx = [];
       this.deps = null;
       this.affectMemo.clear();
       this.arrayList = null;
@@ -643,8 +1064,10 @@ export class Workbook {
     this.usedCache.delete(si);
     this.extentCache.delete(si);
     const aff = this.affected(si);
+    this.baseVer ??= [];
     for (const s of aff) {
       this.sheetVer[s] = (this.sheetVer[s] ?? 0) + 1;
+      this.baseVer[s] = (this.baseVer[s] ?? 0) + 1;
       this.caches[s]?.clear();
       if (this.sheets[s]) this.sheets[s].fileValues = false;
     }
@@ -710,7 +1133,7 @@ export class Workbook {
   }
 
   /** 실행 취소 기록 목록이 바꾼 시트만 다시 계산 */
-  invalidateEntries(entries) {
+  invalidateEntries(entries, cellsDone = false) {
     if (entries.some((e) => e.t === 'all')) { this.invalidate(); return; }
     if (entries.some((e) => e.t === 'list' || e.t === 'sheet' || e.t === 'names' || e.t === 'rename')) {
       // 구조가 바뀐 시트와 그 시트를 참조하는 시트는 다시 계산
@@ -719,15 +1142,20 @@ export class Workbook {
       this.invalidateStructure();
     }
     const done = new Set();
+    const pts = [];
     for (const e of entries) {
-      if (e.t === 'cell' || e.t === 'perm' || e.t === 'order' || (e.t === 'prop' && !CALC_NEUTRAL.has(e.prop))) {
-        if (e.t === 'prop' && e.prop === 'tables') { this.deps = null; this.affectMemo.clear(); }
+      if (e.t === 'cell') {
+        // 셀 변경: 그 칸을 참조하는 수식만 (트랜잭션 안에서 바뀐 칸은 이미 모아 둠)
+        if (!cellsDone && !done.has(e.si)) pts.push(e.si, e.r, e.c);
+      } else if (e.t === 'perm' || e.t === 'order' || (e.t === 'prop' && !CALC_NEUTRAL.has(e.prop))) {
+        if (e.t === 'prop' && e.prop === 'tables') { this.deps = null; this.affectMemo.clear(); this.graph = null; this.graphEpoch = (this.graphEpoch ?? 0) + 1; }
         if (!done.has(e.si)) { done.add(e.si); this.invalidate(e.si); }
       } else if (e.t === 'prop' && e.prop === 'merges') {
         this.spillState = null;
         this.usedCache.delete(e.si);
       }
     }
+    if (pts.length) this.dirtyPoints(pts);
     this.version++;
   }
 
@@ -754,7 +1182,8 @@ export class Workbook {
         if (this.undoStack.length > 200) this.undoStack.shift();
         this.redoStack = [];
       }
-      this.invalidateEntries(tx.entries);
+      this.invalidateEntries(tx.entries, true);
+      this.flushPending();
       this.emit();
     }
     return result;
@@ -833,6 +1262,11 @@ export class Workbook {
     this.version++;
     this.sheetVerAll = (this.sheetVerAll ?? 0) + 1;
     this.caches = [];
+    this.graph = null;
+    this.graphEpoch = (this.graphEpoch ?? 0) + 1;
+    this.pending = [];
+    this.ctxs = [];
+    this.colIdx = [];
     this.deps = null;
     this.affectMemo.clear();
     this.arrayList = null;
@@ -874,7 +1308,7 @@ export class Workbook {
   }
 
   applyEntry(e, side) {
-    if (e.t === 'cell') this.putCell(e.si, e.r, e.c, makeCell(e[side]));
+    if (e.t === 'cell') this.putCell(e.si, e.r, e.c, makeCellRC(e[side], e.r, e.c));
     else if (e.t === 'list') { this.sheets = [...e[side].sheets]; this.names = e[side].names.map((n) => ({ ...n })); }
     else if (e.t === 'sheet') this.putSheet(e.si, e[side]);
     else if (e.t === 'names') this.names = e[side].map((n) => ({ ...n }));
@@ -893,8 +1327,12 @@ export class Workbook {
   putCell(si, r, c, cell) {
     this.touch(si);
     const cells = this.sheets[si].cells;
-    const k = key(r, c);
-    if (cells.get(k)?.maybeArray || cell?.maybeArray) this.arrayList = null;
+    const old = cells.getRC(r, c);
+    if (old?.maybeArray || cell?.maybeArray) this.arrayList = null;
+    if (old?.formula || cell?.formula) {
+      if (this.graph) this.graph.set(si, r, c, cell?.formula ? cell : null);
+      else this.graphEpoch = (this.graphEpoch ?? 0) + 1; // 백그라운드로 만들던 그래프는 버림
+    }
     const b = this.blockAt(si, r, c);
     if (b) {
       // 열 블록 칸: 값만 있고 열 서식과 같으면 블록에, 수식 · 메모 · 다른 서식이면 일반 셀로 (블록 칸은 비움)
@@ -903,13 +1341,14 @@ export class Workbook {
       if (!cell || plain) {
         const v = cell ? cell.v : null;
         blockSet(b, r, c, isError(v) ? { error: v.code } : v ?? null);
-        cells.delete(k);
+        if (old) { cells.deleteRC(r, c); this.colIndexUpdate(si, r, c, false); }
+        if (this.graph && old?.formula) this.graph.set(si, r, c, null);
         return;
       }
       blockSet(b, r, c, null);
     }
-    if (cell) cells.set(k, cell);
-    else cells.delete(k);
+    if (cell) { cells.setRC(r, c, cell); if (!old) this.colIndexUpdate(si, r, c, true); } else if (old) { cells.deleteRC(r, c); this.colIndexUpdate(si, r, c, false); }
+    this.boundsUpdate(si, r, c, old, cell);
     // 새 수식이 다른 시트를 참조하면 의존 관계에 추가
     if (cell?.formula && cell.ast && this.deps?.[si] && this.addDeps(this.deps[si], si, cell.ast)) this.affectMemo.clear();
   }
@@ -917,13 +1356,14 @@ export class Workbook {
   // ─────────── 셀 변경 ───────────
   /** 셀 전체 교체 (data = {raw, style, comment} 또는 null) */
   setCellData(si, r, c, data) {
-    const before = cellData(this.getCell(si, r, c));
-    const cell = makeCell(data);
-    const after = cellData(cell);
-    if (JSON.stringify(before) === JSON.stringify(after)) return;
+    const cur = this.getCell(si, r, c);
+    const before = cur ? cellData(cur) : null;
+    const cell = makeCellRC(data, r, c);
+    const after = cell ? cellData(cell) : null;
+    if (before === null ? after === null : after !== null && before.raw === after.raw && JSON.stringify(before) === JSON.stringify(after)) return;
     this.record({ t: 'cell', si, r, c, before, after });
     this.putCell(si, r, c, cell);
-    this.invalidate(si);
+    this.changed(si, r, c);
   }
 
   /** 시트 내용 버전 (그 시트의 셀이 바뀌거나 통합 문서 전체가 바뀌면 달라짐) */
@@ -938,8 +1378,7 @@ export class Workbook {
     const general = !style.numFmt || style.numFmt === 'general';
     if (raw.startsWith('=') && raw.length > 1) {
       if (general) {
-        let ast = null;
-        try { ast = parse(raw.slice(1)); } catch { /* 오류 수식 */ }
+        const ast = parseAt(raw.slice(1), r, c).ast; // 공유 수식 캐시 (백만 행 채우기도 해석 한 번)
         const f = autoFormatFor(ast);
         if (f) style.numFmt = f;
       }
@@ -1044,15 +1483,13 @@ export class Workbook {
     this.snapshotNames();
     const target = this.sheets[si];
     const isRow = axis === 'row';
-    const moved = new Map();
-    for (const [k, cell] of target.cells) {
-      let [r, c] = unkey(k);
+    const moved = new CellMap();
+    target.cells.forEachRC((cell, r, c) => {
       const p = isRow ? r : c;
-      if (count < 0 && p >= index && p < index - count) continue;
+      if (count < 0 && p >= index && p < index - count) return;
       const np = p >= index ? p + count : p;
-      if (isRow) r = np; else c = np;
-      moved.set(key(r, c), cell);
-    }
+      if (isRow) moved.setRC(np, c, cell); else moved.setRC(r, np, cell);
+    });
     target.cells = moved;
     target.blocks = target.blocks.map((b) => blockShift(b, axis, index, count)).filter(Boolean);
     const sizes = isRow ? target.rowHeights : target.colWidths;
@@ -1137,7 +1574,7 @@ export class Workbook {
           targetSheet: target.name, hostSheet: sheet.name, axis, index, count,
         });
         if (raw === cell.raw) continue;
-        const next = makeCell({ ...cellData(cell), raw });
+        const next = makeCell({ ...cellData(cell), raw }, k);
         if (i === si) sheet.cells.set(k, next);
         else this.swapCell(i, k, next);
       }
@@ -1200,7 +1637,7 @@ export class Workbook {
       for (const [k, cell] of [...sheet.cells]) {
         if (!cell.formula) continue;
         const raw = renameSheetInFormula(cell.raw, old, newName);
-        if (raw !== cell.raw) this.swapCell(i, k, makeCell({ ...cellData(cell), raw }));
+        if (raw !== cell.raw) this.swapCell(i, k, makeCell({ ...cellData(cell), raw }, k));
       }
     });
     this.names = this.names.map((n) => ({
@@ -1247,11 +1684,9 @@ export class Workbook {
     const sheet = this.sheets[si];
     const bi = sheet.blocks.findIndex((b) => inBlock(b, r1, c1) && inBlock(b, r2, c2));
     if (bi < 0 || r2 - r1 < 1000) return false;
-    for (const k of sheet.cells.keys()) {
-      const i = k.indexOf(',');
-      const r = +k.slice(0, i);
-      const c = +k.slice(i + 1);
-      if (r >= r1 && r <= r2 && c >= c1 && c <= c2) return false;
+    for (let c = c1; c <= c2; c++) {
+      const m = sheet.cells.col(c);
+      if (m) for (const r of m.keys()) if (r >= r1 && r <= r2) return false;
     }
     const b = sheet.blocks[bi];
     const a = r1 - b.r0;
@@ -1365,28 +1800,42 @@ export class Workbook {
 
   /** 복원 단계: 셀이 많으면 중간중간 진행률(0~1)을 내보냄. 끝날 때까지 통합 문서는 바뀌지 않음 */
   *restoreSteps(data) {
-    const total = data.sheets.reduce((n, s) => n + (s.cells instanceof Map ? s.cells.size : 0), 0) || 1;
+    const total = data.sheets.reduce((n, s) => n + (s.cells instanceof Map || s.cells instanceof CellMap ? s.cells.size : 0), 0) || 1;
     let done = 0;
     const sheets = [];
     for (const s of data.sheets) {
       const sheet = newSheet(s.name);
-      const owned = s.cells instanceof Map;
+      const owned = s.cells instanceof Map || s.cells instanceof CellMap;
       if (owned) {
         // 파일에서 읽은 셀 Map: 새 Map 을 만들지 않고 그 자리에서 셀 객체로 바꿈 (큰 파일에서 훨씬 빠름)
-        const cells = s.cells;
+        const src = s.cells;
+        const cells = src instanceof CellMap ? src : new CellMap();
         let n = 0;
-        for (const [k, d] of cells) {
-          const cell = makeCell(d);
-          if (cell) cells.set(k, cell);
-          else cells.delete(k);
-          if (++n % 50000 === 0) yield (done + n) / total;
+        if (src instanceof CellMap) {
+          for (const [c, m] of src.cols) {
+            for (const [r, d] of m) {
+              const cell = makeCellRC(d, r, c);
+              if (cell) m.set(r, cell);
+              else cells.deleteRC(r, c);
+              if (++n % 50000 === 0) yield (done + n) / total;
+            }
+          }
+        } else {
+          for (const [k, d] of src) {
+            const i = k.indexOf(',');
+            const r = +k.slice(0, i);
+            const c = +k.slice(i + 1);
+            const cell = makeCellRC(d, r, c);
+            if (cell) cells.setRC(r, c, cell);
+            if (++n % 50000 === 0) yield (done + n) / total;
+          }
         }
         done += n;
         sheet.cells = cells;
         s.cells = null; // 이제 통합 문서가 소유
       } else {
         for (const [k, d] of Object.entries(s.cells || {})) {
-          const cell = makeCell(d);
+          const cell = makeCell(d, k);
           if (cell) sheet.cells.set(k, cell);
         }
       }

@@ -1,5 +1,6 @@
 // .xlsx 읽기/쓰기 (Office Open XML). DOM 없이 동작하므로 Node 에서도 테스트 가능.
 import { unzip, unzipAsync, zip, zipAsync, textOf } from './zip.js';
+import { CellMap } from './cellmap.js';
 import { parseXml, child, kids, descendants, allText, esc, decodeEntities } from './xml.js';
 import {
   parse, tokenize, shiftFormula, colToName, nameToCol, cellName, parseRangeName, FUNCS, isError,
@@ -385,7 +386,7 @@ function* readSheet(files, path, ctx) {
   const root = parseXml(sd ? sd.rest : xmlText);
   const sheetRows = sd ? scanRows(xmlText, sd.start, sd.end) : domRows(child(root, 'sheetData'));
   const sheet = {
-    cells: new Map(), colWidths: {}, rowHeights: {}, merges: [], cond: [], colStyles: {}, rowStyles: {},
+    cells: new CellMap(), colWidths: {}, rowHeights: {}, merges: [], cond: [], colStyles: {}, rowStyles: {},
     hiddenRows: {}, hiddenCols: {}, rowManual: {}, freeze: { rows: 0, cols: 0 }, filter: null, charts: [], images: [], shapes: [], validations: [], slicers: [],
   };
   const { xfs, dxfs, strings } = ctx;
@@ -531,7 +532,7 @@ function* readSheet(files, path, ctx) {
       if (cellImg) d.image = { ...cellImg };
       if (style) d.style = style;
       if (cached !== undefined && cached !== null) d.cached = cached;
-      sheet.cells.set(rowKey + cc, d);
+      sheet.cells.setRC(r, cc, d);
     }
   }
   sheet.unsupported = unsupported;

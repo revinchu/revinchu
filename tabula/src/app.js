@@ -1,5 +1,5 @@
 // Tabula 메인: 상태 · 선택 · 편집 · 키보드/마우스 · 명령 (그리기는 view.js)
-import { Workbook, cellData, DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT } from './workbook.js';
+import { Workbook, formulaShifter, cellData, DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT } from './workbook.js';
 import {
   cellName, colToName, parseRangeName, parse, shiftFormula, listRefs, normalizeFormula, tokenize,
   FUNCTION_NAMES, isError, quoteSheetName, MAX_ROWS, MAX_COLS,
@@ -1682,14 +1682,22 @@ function doFill(src, t) {
 
 function fillCopy(dir) {
   const rg = usedClip(sel);
-  const shift = (d, dr, dc) => d && { ...d, raw: d.raw.startsWith('=') ? shiftFormula(d.raw, dr, dc) : d.raw };
+  // 수식은 한 번만 나눠 두고 옮긴 글자만 만듦 (백만 행 채우기도 빠르게)
+  const shifters = new Map();
+  const shift = (d, dr, dc) => {
+    if (!d || !d.raw.startsWith('=')) return d;
+    let f = shifters.get(d.raw);
+    if (!f) { f = formulaShifter(d.raw); shifters.set(d.raw, f); }
+    return { ...d, raw: f(dr, dc) };
+  };
+  const anyHidden = !!(sheet().filter?.hidden || (sheet().tables ?? []).some((t) => t.filter?.hidden));
   wb.transact(() => {
     if (dir === 'down') {
       const srcR = rg.r1 === rg.r2 ? rg.r1 - 1 : rg.r1;
       if (srcR < 0) return;
       for (let c = rg.c1; c <= rg.c2; c++) {
         const d = cellData(wb.getCell(si, srcR, c));
-        for (let r = srcR + 1; r <= rg.r2; r++) if (!filterHidden(r)) wb.setCellData(si, r, c, shift(d, r - srcR, 0));
+        for (let r = srcR + 1; r <= rg.r2; r++) if (!anyHidden || !filterHidden(r)) wb.setCellData(si, r, c, shift(d, r - srcR, 0));
       }
     } else if (dir === 'right') {
       const srcC = rg.c1 === rg.c2 ? rg.c1 - 1 : rg.c1;
@@ -5573,6 +5581,8 @@ function afterLoad(name, activeSheet) {
   gv.setScroll(0, 0);
   const f = sheet().freeze;
   selectCell(f?.rows || 0, f?.cols || 0);
+  // 수식 의존 그래프를 쉬는 동안 미리 만듦 (첫 편집도 바로 다시 계산)
+  setTimeout(() => { wb.prepareGraph().catch((e) => console.warn('의존 그래프 준비 실패', e)); }, 1200);
   dirty = true;
   if (bigBook()) scheduleAutosave();
   else { saveToStorage(); scheduleServerSave(0); }
