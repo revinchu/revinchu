@@ -75,6 +75,8 @@ function newSheet(name) {
 /** 시트의 부가 속성 (셀 외) — 저장/복원/복제용 */
 const SHEET_PROPS = ['colWidths', 'rowHeights', 'merges', 'cond', 'colStyles', 'rowStyles', 'allStyle',
   'hiddenRows', 'hiddenCols', 'rowManual', 'freeze', 'filter', 'charts', 'pivot', 'validations', 'images', 'shapes', 'tables', 'slicers', 'pivotsExtra'];
+// 바뀌어도 수식 결과가 달라지지 않는 시트 속성
+const CALC_NEUTRAL = new Set(['charts', 'images', 'shapes', 'slicers', 'freeze', 'cond', 'validations', 'colStyles', 'rowStyles', 'allStyle', 'merges']);
 
 /** 숫자 키 객체의 키를 삽입/삭제에 맞춰 이동 */
 function shiftKeys(obj, index, count) {
@@ -125,6 +127,7 @@ export class Workbook {
     this.spillOwner = new Map();
     this.spillState = null;
     this.nameStack = new Set();
+    this.version = 0;
     if (data) this.load(data);
     else this.sheets = [newSheet('Sheet1')];
   }
@@ -481,6 +484,7 @@ export class Workbook {
   rowHeight(si, r) { return this.sheets[si].rowHeights[r] ?? DEFAULT_ROW_HEIGHT; }
 
   invalidate() {
+    this.version++;
     this.cache.clear();
     this.spills.clear();
     this.spillOwner.clear();
@@ -500,7 +504,10 @@ export class Workbook {
     } finally {
       const tx = this.tx;
       this.tx = null;
-      for (const e of tx.entries) if (e.t === 'all') e.after = this.serialize();
+      for (const e of tx.entries) {
+        if (e.t === 'all') e.after = this.serialize();
+        else if (e.t === 'prop') e.after = structuredClone(this.sheets[e.si]?.[e.prop]);
+      }
       if (tx.entries.length) {
         this.undoStack.push(tx);
         if (this.undoStack.length > 200) this.undoStack.shift();
@@ -548,6 +555,7 @@ export class Workbook {
   applyEntry(e, side) {
     if (e.t === 'cell') this.putCell(e.si, e.r, e.c, makeCell(e[side]));
     else if (e.t === 'all') this.restore(e[side]);
+    else if (e.t === 'prop') { if (this.sheets[e.si]) this.sheets[e.si][e.prop] = structuredClone(e[side]); }
     else if (e.t === 'colWidth') this.sheets[e.si].colWidths = { ...e[side] };
     else if (e.t === 'rowHeight') {
       this.sheets[e.si].rowHeights = { ...e[side] };
@@ -639,7 +647,7 @@ export class Workbook {
 
   /** 행/열/시트 전체 서식 (kind: 'col' | 'row' | 'all') */
   setLineStyle(si, kind, index, patch) {
-    this.snapshotAll();
+    this.propSnap(si, kind === 'all' ? 'allStyle' : kind === 'col' ? 'colStyles' : 'rowStyles');
     const s = this.sheets[si];
     const merged = cleanStyle({ ...(kind === 'all' ? s.allStyle : kind === 'col' ? s.colStyles[index] : s.rowStyles[index]), ...patch });
     if (kind === 'all') s.allStyle = merged ?? null;
@@ -651,15 +659,29 @@ export class Workbook {
   }
 
   setHidden(si, axis, indices, hidden) {
-    this.snapshotAll();
+    this.propSnap(si, axis === 'row' ? 'hiddenRows' : 'hiddenCols');
+    this.invalidate();
     const map = axis === 'row' ? this.sheets[si].hiddenRows : this.sheets[si].hiddenCols;
     for (const i of indices) { if (hidden) map[i] = true; else delete map[i]; }
   }
 
   setSheetProp(si, prop, value) {
-    this.snapshotAll();
+    this.propSnap(si, prop);
     this.sheets[si][prop] = value;
-    this.invalidate();
+    // 그림 개체 · 틀 고정 · 조건부 서식 등은 계산 결과에 영향이 없으므로 수식 캐시를 유지
+    if (!CALC_NEUTRAL.has(prop)) this.invalidate();
+    else this.version++;
+  }
+
+  /** 시트 속성 하나만 실행 취소용으로 기록 (통합 문서 전체 복사보다 훨씬 가벼움) */
+  propSnap(si, prop) {
+    const tx = this.tx;
+    if (!tx) return;
+    const k = `${si}:${prop}`;
+    tx.props ??= new Set();
+    if (tx.props.has(k)) return;
+    tx.props.add(k);
+    tx.entries.push({ t: 'prop', si, prop, before: structuredClone(this.sheets[si][prop]) });
   }
 
   // ─────────── 구조 변경 ───────────
@@ -856,7 +878,7 @@ export class Workbook {
   /** 병합: 왼쪽 위 셀 값만 남기고 나머지 값 삭제 */
   merge(si, r1, c1, r2, c2) {
     if (r1 === r2 && c1 === c2) return;
-    this.snapshotAll();
+    this.propSnap(si, 'merges');
     const sheet = this.sheets[si];
     sheet.merges = sheet.merges.filter((m) => !(m.r1 <= r2 && m.r2 >= r1 && m.c1 <= c2 && m.c2 >= c1));
     for (let r = r1; r <= r2; r++) {
@@ -874,18 +896,18 @@ export class Workbook {
     const sheet = this.sheets[si];
     const keep = sheet.merges.filter((m) => !(m.r1 <= r2 && m.r2 >= r1 && m.c1 <= c2 && m.c2 >= c1));
     if (keep.length === sheet.merges.length) return;
-    this.snapshotAll();
+    this.propSnap(si, 'merges');
     sheet.merges = keep;
   }
 
   addCondRule(si, rule) {
-    this.snapshotAll();
+    this.propSnap(si, 'cond');
     this.sheets[si].cond.unshift(rule); // 새 규칙이 가장 높은 우선순위
     this.invalidate();
   }
 
   clearCondRules(si, range) {
-    this.snapshotAll();
+    this.propSnap(si, 'cond');
     const sheet = this.sheets[si];
     sheet.cond = range
       ? sheet.cond.filter((c) => !(c.r1 <= range.r2 && c.r2 >= range.r1 && c.c1 <= range.c2 && c.c2 >= range.c1))

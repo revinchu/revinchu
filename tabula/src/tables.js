@@ -4,7 +4,7 @@
 // r1 은 머리글 행(header 가 true 일 때), r2 는 요약 행(totals 가 true 일 때)까지 포함.
 
 // ───────────── 스타일 ─────────────
-const ACCENTS = [
+export const ACCENTS = [
   { label: '검정', hex: '#000000', mid: '#808080' },
   { label: '파랑', hex: '#4472c4' },
   { label: '주황', hex: '#ed7d31' },
@@ -19,8 +19,8 @@ function mix(hex, other, t) {
   const b = [1, 3, 5].map((i) => parseInt(other.slice(i, i + 2), 16));
   return `#${a.map((x, i) => Math.round(x + (b[i] - x) * t).toString(16).padStart(2, '0')).join('')}`;
 }
-const tint = (hex, t) => mix(hex, '#ffffff', t);
-const shade = (hex, t) => mix(hex, '#000000', t);
+export const tint = (hex, t) => mix(hex, '#ffffff', t);
+export const shade = (hex, t) => mix(hex, '#000000', t);
 
 /** 표 스타일 21개: 밝게 1~7, 보통 1~7, 어둡게 1~7 (엑셀 이름을 그대로 씀) */
 export const TABLE_STYLES = [

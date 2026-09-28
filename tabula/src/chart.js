@@ -1,5 +1,12 @@
 // 차트: 범위 값 → 데이터 해석, SVG 그리기 (DOM 없이 문자열 생성)
-import { formatGeneral } from './format.js';
+// 차트 모델: { type, title, range, sheet, x, y, w, h, z,
+//   series?: [{ name: { ref | text }, cat: ref, val: ref, x: ref }]   파일에서 가져온 계열 참조 (ref = { sheet, r1, c1, r2, c2 })
+//   pivot?: { sheet, name }                                           피벗 차트 (피벗 결과를 따라감)
+//   seriesFmt?: [{ type, axis, color, labels, marker, smooth, numFmt }] 계열별 서식 (순서대로)
+//   labels, legend: 'b'|'t'|'r'|'l'|'none', grouping: 'clustered'|'stacked'|'percentStacked',
+//   axes?: { y: { title, numFmt, min, max }, y2: {…}, x: { title } } }
+import { formatGeneral, formatValue, formatCode } from './format.js';
+import { pivotSourceData, pivotChartData } from './pivot.js';
 
 export const CHART_TYPES = [
   { id: 'column', label: '세로 막대형' },
@@ -9,6 +16,7 @@ export const CHART_TYPES = [
   { id: 'pie', label: '원형' },
   { id: 'doughnut', label: '도넛형' },
   { id: 'scatter', label: '분산형' },
+  { id: 'combo', label: '콤보 (막대 + 꺾은선 보조 축)' },
 ];
 
 export const PALETTE = ['#4472C4', '#ED7D31', '#A5A5A5', '#FFC000', '#5B9BD5', '#70AD47', '#264478', '#9E480E', '#636363', '#997300'];
@@ -61,6 +69,65 @@ export function chartData(rows, type = 'column') {
   return { categories, series: numeric.length ? numeric : series };
 }
 
+/** 참조 값 → 1차원 (한 열이면 행 순서, 한 행이면 열 순서, 여러 열이면 행마다 글자를 이어 붙임) */
+function flatRef(rows, asText) {
+  if (!rows?.length) return [];
+  if (rows.length === 1) return rows[0];
+  if (rows[0].length === 1) return rows.map((r) => r[0]);
+  return asText ? rows.map((r) => r.filter((v) => v !== null && v !== '').map(label).join(' / ')) : rows.map((r) => r[r.length - 1]);
+}
+
+/**
+ * 차트 모델 → 그릴 데이터 { categories, series: [{ name, values, x, type, axis, color, labels, marker, numFmt }] }
+ * api: { values(ref) → 2차원 값, pivot({ sheet, name }) → { categories, series } | null, range(ch) → 2차원 값 }
+ */
+export function resolveChart(ch, api) {
+  let base;
+  if (ch.pivot) base = api.pivot(ch.pivot) ?? { categories: [], series: [] };
+  else if (ch.series?.length) {
+    const catRef = ch.series.find((s) => s.cat)?.cat;
+    const series = ch.series.map((s, i) => {
+      const vals = s.val ? flatRef(api.values(s.val), false) : s.cache ?? [];
+      const name = s.name?.ref ? label(flatRef(api.values(s.name.ref), true)[0]) : s.name?.text ?? `계열${i + 1}`;
+      const xs = s.x ? flatRef(api.values(s.x), false) : null;
+      return { name, values: vals.map((v) => (isNum(v) ? v : null)), x: xs ? xs.map((v) => (isNum(v) ? v : null)) : null };
+    });
+    const n = Math.max(0, ...series.map((s) => s.values.length));
+    const categories = catRef ? flatRef(api.values(catRef), true).map(label) : Array.from({ length: n }, (_, i) => String(i + 1));
+    base = { categories, series };
+  } else base = chartData(api.range(ch), ch.type === 'combo' ? 'column' : ch.type);
+  const fmt = ch.seriesFmt ?? [];
+  const comboDefault = (i) => (ch.type === 'combo' ? (i === base.series.length - 1 && base.series.length > 1 ? { type: 'line', axis: 1 } : { type: 'column' }) : {});
+  base.series = base.series.map((s, i) => ({ ...s, ...comboDefault(i), ...(fmt[i] ?? {}) }));
+  return base;
+}
+
+/** 차트 모델 → 그릴 데이터 (범위 · 계열 참조 · 피벗 차트). hostSi: 차트가 있는 시트 */
+export function chartModelData(wb, hostSi, ch) {
+  const sheetOf = (name) => { const i = name ? wb.sheetIndexByName(name) : hostSi; return i >= 0 ? i : hostSi; };
+  const read = (s, rg) => {
+    const rows = [];
+    for (let r = rg.r1; r <= Math.min(rg.r2, rg.r1 + 2000); r++) {
+      const row = [];
+      for (let c = rg.c1; c <= Math.min(rg.c2, rg.c1 + 100); c++) row.push(wb.getValue(s, r, c));
+      rows.push(row);
+    }
+    return rows;
+  };
+  return resolveChart(ch, {
+    range: (c) => (c.range ? read(sheetOf(c.sheet), c.range) : []),
+    values: (ref) => read(sheetOf(ref.sheet ?? ch.sheet), ref),
+    pivot: (p) => {
+      const sh = wb.sheets[sheetOf(p.sheet)];
+      const defs = [sh?.pivot, ...(sh?.pivotsExtra ?? [])].filter(Boolean);
+      const def = defs.find((d) => d.name && d.name === p.name) ?? (p.name ? null : defs[0]);
+      if (!def) return null;
+      const src = pivotSourceData(wb, def);
+      return src ? pivotChartData(src.rows, def) : null;
+    },
+  });
+}
+
 /** 보기 좋은 눈금 */
 export function niceScale(min, max, ticks = 5) {
   if (min === max) {
@@ -80,19 +147,37 @@ export function niceScale(min, max, ticks = 5) {
 
 const escSvg = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-function axisLabel(n) {
+function axisLabel(n, code) {
+  if (code && code !== 'General') { try { return formatCode(n, code).text; } catch { /* 기본 */ } }
   const a = Math.abs(n);
-  if (a >= 1e6 && a < 1e15) return `${formatGeneral(Number((n / 1e6).toPrecision(4)))}M`;
+  if (a >= 1e6 && a < 1e15 && !code) return `${formatGeneral(Number((n / 1e6).toPrecision(4)))}M`;
   if (Number.isInteger(n)) return n.toLocaleString('en-US');
   return formatGeneral(Number(n.toPrecision(6)));
+}
+
+/** 데이터 레이블 글자 (계열 서식: 서식 코드 문자열 또는 셀 서식) */
+function valueLabel(v, fmt) {
+  try {
+    if (typeof fmt === 'string' && fmt && fmt !== 'General') return formatCode(v, fmt).text;
+    if (fmt && typeof fmt === 'object' && (fmt.numFmt || fmt.code)) return formatValue(v, fmt).text;
+  } catch { /* 기본 */ }
+  if (Number.isInteger(v)) return v.toLocaleString('en-US');
+  return formatGeneral(Number(v.toPrecision(6)));
 }
 
 function truncate(s, maxChars) {
   return [...s].length > maxChars ? `${[...s].slice(0, Math.max(1, maxChars - 1)).join('')}…` : s;
 }
 
+const MARKERS = {
+  circle: (x, y, r, c) => `<circle cx="${x}" cy="${y}" r="${r}" fill="${c}"/>`,
+  square: (x, y, r, c) => `<rect x="${x - r}" y="${y - r}" width="${2 * r}" height="${2 * r}" fill="${c}"/>`,
+  diamond: (x, y, r, c) => `<path d="M${x},${y - r - 1}L${x + r + 1},${y}L${x},${y + r + 1}L${x - r - 1},${y}Z" fill="${c}"/>`,
+  triangle: (x, y, r, c) => `<path d="M${x},${y - r - 1}L${x + r + 1},${y + r}L${x - r - 1},${y + r}Z" fill="${c}"/>`,
+};
+
 /**
- * chart: { type, title, w, h }, data: chartData 결과 → SVG 문자열
+ * chart: 차트 모델 (+ w, h), data: resolveChart 결과 → SVG 문자열
  */
 export function renderChartSvg(chart, data) {
   const W = Math.max(120, chart.w);
@@ -105,12 +190,21 @@ export function renderChartSvg(chart, data) {
     parts.push(`<text x="${W / 2}" y="28" text-anchor="middle" font-size="16" fill="#595959">${escSvg(truncate(chart.title, Math.floor(W / 11)))}</text>`);
     top = 42;
   }
-  const { categories, series } = data;
-  const pieLike = chart.type === 'pie' || chart.type === 'doughnut';
-  const legendItems = pieLike ? categories : series.map((s) => s.name);
-  const showLegend = legendItems.length > 1 || pieLike;
-  const legendH = showLegend ? 26 : 0;
-  const plot = { x: 10, y: top, w: W - 20, h: H - top - 10 - legendH };
+  const { categories } = data;
+  const baseType = chart.type === 'combo' ? 'column' : chart.type;
+  const series = data.series.map((s, i) => ({ ...s, type: s.type ?? baseType, axis: s.axis ?? 0, color: s.color ?? PALETTE[i % PALETTE.length] }));
+  const pieLike = baseType === 'pie' || baseType === 'doughnut';
+  const legendPos = chart.legend ?? 'b';
+  const legendItems = pieLike ? categories.map((c, i) => ({ name: c, color: series[0]?.colors?.[i] ?? PALETTE[i % PALETTE.length], line: false }))
+    : series.map((s) => ({ name: s.name, color: s.color, line: s.type === 'line' }));
+  const showLegend = legendPos !== 'none' && (legendItems.length > 1 || pieLike);
+  const sideLegend = showLegend && (legendPos === 'r' || legendPos === 'l');
+  const legendW = sideLegend ? Math.min(160, Math.max(60, ...legendItems.map((it) => [...String(it.name)].length * 7 + 22))) : 0;
+  const legendH = showLegend && !sideLegend ? 26 : 0;
+  const plot = {
+    x: 10 + (legendPos === 'l' ? legendW : 0), y: top + (legendPos === 't' ? legendH : 0),
+    w: W - 20 - legendW, h: H - top - 10 - legendH,
+  };
 
   if (!series.length || series.every((s) => s.values.every((v) => v === null))) {
     parts.push(`<text x="${W / 2}" y="${H / 2}" text-anchor="middle" font-size="12" fill="#999">표시할 숫자 데이터가 없습니다</text></svg>`);
@@ -118,32 +212,45 @@ export function renderChartSvg(chart, data) {
   }
 
   if (showLegend) {
-    const items = legendItems.slice(0, 12);
-    const itemW = Math.min(140, Math.max(60, (W - 20) / items.length));
-    const total = itemW * items.length;
-    let lx = Math.max(10, (W - total) / 2);
-    const ly = H - 14;
-    items.forEach((name, i) => {
-      const color = PALETTE[i % PALETTE.length];
-      parts.push(`<rect x="${lx}" y="${ly - 8}" width="9" height="9" fill="${color}"/>`,
-        `<text x="${lx + 13}" y="${ly}" font-size="11" fill="#595959">${escSvg(truncate(name, Math.floor((itemW - 16) / 7)))}</text>`);
-      lx += itemW;
-    });
+    const items = legendItems.slice(0, 16);
+    const key = (it, lx, ly) => (it.line
+      ? `<line x1="${lx - 2}" y1="${ly - 4}" x2="${lx + 11}" y2="${ly - 4}" stroke="${it.color}" stroke-width="2.25"/><circle cx="${lx + 4.5}" cy="${ly - 4}" r="2.5" fill="${it.color}"/>`
+      : `<rect x="${lx}" y="${ly - 8}" width="9" height="9" fill="${it.color}"/>`);
+    if (sideLegend) {
+      const lx0 = legendPos === 'r' ? W - legendW - 4 : 8;
+      let ly = Math.max(top + 12, H / 2 - (items.length * 18) / 2);
+      items.forEach((it) => {
+        parts.push(key(it, lx0, ly), `<text x="${lx0 + 15}" y="${ly}" font-size="11" fill="#595959">${escSvg(truncate(String(it.name), Math.floor((legendW - 20) / 7)))}</text>`);
+        ly += 18;
+      });
+    } else {
+      const itemW = Math.min(160, Math.max(60, (W - 20) / items.length));
+      const total = itemW * items.length;
+      let lx = Math.max(10, (W - total) / 2);
+      const ly = legendPos === 't' ? top + 12 : H - 14;
+      items.forEach((it) => {
+        parts.push(key(it, lx, ly), `<text x="${lx + 15}" y="${ly}" font-size="11" fill="#595959">${escSvg(truncate(String(it.name), Math.floor((itemW - 18) / 7)))}</text>`);
+        lx += itemW;
+      });
+    }
   }
 
+  const wantLabels = (s) => s.labels ?? chart.labels ?? false;
+
   if (pieLike) {
-    const vals = series[0].values.map((v) => (v && v > 0 ? v : 0));
+    const s0 = series[0];
+    const vals = s0.values.map((v) => (v && v > 0 ? v : 0));
     const sum = vals.reduce((a, b) => a + b, 0);
     const cx = plot.x + plot.w / 2;
     const cy = plot.y + plot.h / 2;
     const r = Math.max(10, Math.min(plot.w, plot.h) / 2 - 6);
-    const inner = chart.type === 'doughnut' ? r * 0.5 : 0;
+    const inner = baseType === 'doughnut' ? r * 0.5 : 0;
     let a = -Math.PI / 2;
     vals.forEach((v, i) => {
       if (!v) return;
       const frac = v / sum;
       const a2 = a + frac * Math.PI * 2;
-      const color = PALETTE[i % PALETTE.length];
+      const color = s0.colors?.[i] ?? PALETTE[i % PALETTE.length];
       if (frac >= 0.9999) {
         parts.push(`<circle cx="${cx}" cy="${cy}" r="${r}" fill="${color}" stroke="#fff"/>`);
         if (inner) parts.push(`<circle cx="${cx}" cy="${cy}" r="${inner}" fill="#fff"/>`);
@@ -158,7 +265,8 @@ export function renderChartSvg(chart, data) {
       if (frac >= 0.04) {
         const mid = (a + a2) / 2;
         const lr = inner ? (r + inner) / 2 : r * 0.65;
-        parts.push(`<text x="${(cx + Math.cos(mid) * lr).toFixed(1)}" y="${(cy + Math.sin(mid) * lr + 4).toFixed(1)}" text-anchor="middle" font-size="11" fill="#fff" font-weight="700">${Math.round(frac * 100)}%</text>`);
+        const txt = wantLabels(s0) ? valueLabel(v, s0.numFmt) : `${Math.round(frac * 100)}%`;
+        parts.push(`<text x="${(cx + Math.cos(mid) * lr).toFixed(1)}" y="${(cy + Math.sin(mid) * lr + 4).toFixed(1)}" text-anchor="middle" font-size="11" fill="#fff" font-weight="700">${escSvg(txt)}</text>`);
       }
       a = a2;
     });
@@ -166,59 +274,107 @@ export function renderChartSvg(chart, data) {
     return parts.join('');
   }
 
-  // 값 범위
-  const all = series.flatMap((s) => s.values).filter(isNum);
-  let min = Math.min(0, ...all);
-  let max = Math.max(0, ...all);
-  if (chart.type === 'scatter' || chart.type === 'line') { min = Math.min(...all); max = Math.max(...all); if (min > 0 && min < max * 0.5) min = 0; }
-  const scale = niceScale(min, max);
-  const ticks = [];
-  for (let t = scale.min; t <= scale.max + scale.step / 2; t += scale.step) ticks.push(Number(t.toPrecision(12)));
-  const horizontal = chart.type === 'bar';
-  const labelW = Math.min(90, Math.max(...ticks.map((t) => axisLabel(t).length)) * 7 + 8);
+  const horizontal = baseType === 'bar';
+  const stacked = chart.grouping === 'stacked' || chart.grouping === 'percentStacked';
+  const pct = chart.grouping === 'percentStacked';
+  const n = categories.length;
+  const barTypes = new Set(['column', 'bar']);
+
+  // 축별 값 범위 (누적이면 합계 기준)
+  const scaleFor = (axis) => {
+    const ss = series.filter((s) => s.axis === axis && s.type !== 'scatter');
+    if (!ss.length) return null;
+    let vals = ss.flatMap((s) => s.values).filter(isNum);
+    const bars = ss.filter((s) => barTypes.has(s.type) || s.type === 'area');
+    if (stacked && bars.length > 1) {
+      vals = [];
+      for (let i = 0; i < n; i++) {
+        let pos = 0;
+        let neg = 0;
+        for (const s of bars) { const v = s.values[i]; if (isNum(v)) { if (v >= 0) pos += v; else neg += v; } }
+        vals.push(pos, neg);
+      }
+      if (pct) vals = [0, 1];
+      vals.push(...ss.filter((s) => !bars.includes(s)).flatMap((s) => s.values).filter(isNum));
+    }
+    if (!vals.length) vals = [0, 1];
+    const cfg = chart.axes?.[axis ? 'y2' : 'y'] ?? {};
+    let min = Math.min(0, ...vals);
+    let max = Math.max(0, ...vals);
+    if (ss.every((s) => s.type === 'line') && !stacked) {
+      min = Math.min(...vals);
+      max = Math.max(...vals);
+      if (min > 0 && min < max * 0.5) min = 0;
+    }
+    const sc = niceScale(isNum(cfg.min) ? cfg.min : min, isNum(cfg.max) ? cfg.max : max);
+    if (isNum(cfg.min)) sc.min = cfg.min;
+    if (isNum(cfg.max)) sc.max = cfg.max;
+    const ticks = [];
+    for (let t = sc.min; t <= sc.max + sc.step / 2; t += sc.step) ticks.push(Number(t.toPrecision(12)));
+    const srcCode = ss.map((s) => s.numFmt).find((f) => typeof f === 'string' && f !== 'General') ?? null;
+    return { ...sc, ticks, code: pct ? '0%' : cfg.numFmt ?? srcCode };
+  };
+  const scale = scaleFor(0) ?? scaleFor(1);
+  const scale2 = series.some((s) => s.axis === 1) && series.some((s) => s.axis === 0) ? scaleFor(1) : null;
+  const primaryAxis = scaleFor(0) ? 0 : 1;
+  const labelW = Math.min(90, Math.max(...scale.ticks.map((t) => axisLabel(t, scale.code).length)) * 7 + 8);
+  const label2W = scale2 ? Math.min(90, Math.max(...scale2.ticks.map((t) => axisLabel(t, scale2.code).length)) * 7 + 8) : 0;
 
   // 가로축 값 범위 (분산형)
   let xScale = null;
-  if (chart.type === 'scatter') {
+  if (baseType === 'scatter') {
     const xs = series.flatMap((s) => (s.x ?? s.values.map((_, i) => i + 1))).filter(isNum);
     xScale = niceScale(Math.min(...xs), Math.max(...xs));
   }
 
-  const catLabelW = horizontal ? Math.min(100, Math.max(...categories.map((c) => [...c].length)) * 7 + 8) : 0;
+  const catLabelW = horizontal ? Math.min(120, Math.max(...categories.map((c) => [...c].length)) * 7 + 8) : 0;
   const area = horizontal
     ? { x: plot.x + catLabelW, y: plot.y, w: plot.w - catLabelW - 10, h: plot.h - 18 }
-    : { x: plot.x + labelW, y: plot.y + 4, w: plot.w - labelW - 6, h: plot.h - 22 };
+    : { x: plot.x + labelW, y: plot.y + 4, w: plot.w - labelW - 6 - label2W, h: plot.h - 22 };
   if (area.w < 20 || area.h < 20) { parts.push('</svg>'); return parts.join(''); }
-  const vpos = (v) => (horizontal
-    ? area.x + ((v - scale.min) / (scale.max - scale.min)) * area.w
-    : area.y + area.h - ((v - scale.min) / (scale.max - scale.min)) * area.h);
+  const posFor = (sc) => (v) => (horizontal
+    ? area.x + ((v - sc.min) / (sc.max - sc.min)) * area.w
+    : area.y + area.h - ((v - sc.min) / (sc.max - sc.min)) * area.h);
+  const vpos = posFor(scale);
+  const vpos2 = scale2 ? posFor(scale2) : vpos;
+  const posOf = (s) => (s.axis === 1 && scale2 ? vpos2 : s.axis === primaryAxis || !scale2 ? vpos : vpos2);
 
   // 눈금선 + 값 축 레이블
-  for (const t of ticks) {
+  for (const t of scale.ticks) {
     const p = vpos(t).toFixed(1);
     if (horizontal) {
       parts.push(`<line x1="${p}" y1="${area.y}" x2="${p}" y2="${area.y + area.h}" stroke="#d9d9d9"/>`,
-        `<text x="${p}" y="${area.y + area.h + 14}" text-anchor="middle" font-size="10" fill="#595959">${escSvg(axisLabel(t))}</text>`);
+        `<text x="${p}" y="${area.y + area.h + 14}" text-anchor="middle" font-size="10" fill="#595959">${escSvg(axisLabel(t, scale.code))}</text>`);
     } else {
       parts.push(`<line x1="${area.x}" y1="${p}" x2="${area.x + area.w}" y2="${p}" stroke="#d9d9d9"/>`,
-        `<text x="${area.x - 5}" y="${Number(p) + 3.5}" text-anchor="end" font-size="10" fill="#595959">${escSvg(axisLabel(t))}</text>`);
+        `<text x="${area.x - 5}" y="${Number(p) + 3.5}" text-anchor="end" font-size="10" fill="#595959">${escSvg(axisLabel(t, scale.code))}</text>`);
     }
   }
+  if (scale2 && !horizontal) {
+    for (const t of scale2.ticks) {
+      const p = vpos2(t);
+      parts.push(`<text x="${area.x + area.w + 5}" y="${(p + 3.5).toFixed(1)}" text-anchor="start" font-size="10" fill="#595959">${escSvg(axisLabel(t, scale2.code))}</text>`);
+    }
+  }
+  const axisTitle = (txt, x, y, rot) => (txt ? `<text x="${x}" y="${y}" text-anchor="middle" font-size="11" fill="#595959"${rot ? ` transform="rotate(${rot} ${x} ${y})"` : ''}>${escSvg(txt)}</text>` : '');
 
-  const n = categories.length;
   const base = vpos(Math.max(scale.min, Math.min(0, scale.max)));
+  const labelsOut = [];
+  const pushLabel = (x, y, v, s, anchor = 'middle') => {
+    labelsOut.push(`<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="${anchor}" font-size="10" fill="#404040" paint-order="stroke" stroke="#fff" stroke-width="2.5">${escSvg(valueLabel(v, s.numFmt))}</text>`);
+  };
 
-  if (chart.type === 'scatter') {
+  if (baseType === 'scatter') {
     const xpos = (x) => area.x + ((x - xScale.min) / (xScale.max - xScale.min)) * area.w;
     for (let t = xScale.min; t <= xScale.max + xScale.step / 2; t += xScale.step) {
       parts.push(`<text x="${xpos(t).toFixed(1)}" y="${area.y + area.h + 14}" text-anchor="middle" font-size="10" fill="#595959">${escSvg(axisLabel(Number(t.toPrecision(12))))}</text>`);
     }
-    series.forEach((s, si) => {
-      const color = PALETTE[si % PALETTE.length];
+    series.forEach((s) => {
       s.values.forEach((v, i) => {
         const x = s.x ? s.x[i] : i + 1;
         if (!isNum(v) || !isNum(x)) return;
-        parts.push(`<circle cx="${xpos(x).toFixed(1)}" cy="${vpos(v).toFixed(1)}" r="3.5" fill="${color}"/>`);
+        parts.push(`<circle cx="${xpos(x).toFixed(1)}" cy="${vpos(v).toFixed(1)}" r="3.5" fill="${s.color}"/>`);
+        if (wantLabels(s)) pushLabel(xpos(x), vpos(v) - 7, v, s);
       });
     });
   } else {
@@ -229,41 +385,66 @@ export function renderChartSvg(chart, data) {
     categories.forEach((c, i) => {
       if (i % every) return;
       const mid = (horizontal ? area.y : area.x) + band * (i + 0.5);
-      if (horizontal) parts.push(`<text x="${area.x - 5}" y="${(mid + 3.5).toFixed(1)}" text-anchor="end" font-size="10" fill="#595959">${escSvg(truncate(c, 14))}</text>`);
+      if (horizontal) parts.push(`<text x="${area.x - 5}" y="${(mid + 3.5).toFixed(1)}" text-anchor="end" font-size="10" fill="#595959">${escSvg(truncate(c, 16))}</text>`);
       else parts.push(`<text x="${mid.toFixed(1)}" y="${area.y + area.h + 14}" text-anchor="middle" font-size="10" fill="#595959">${escSvg(truncate(c, maxChars * every))}</text>`);
     });
-    if (chart.type === 'column' || chart.type === 'bar') {
-      const k = series.length;
-      const groupW = band * 0.7;
+    // 막대 (묶은 · 누적)
+    const bars = series.filter((s) => barTypes.has(s.type));
+    if (bars.length) {
+      const k = stacked ? 1 : bars.length;
+      const groupW = band * 0.65;
       const barW = groupW / k;
-      series.forEach((s, si) => {
-        const color = PALETTE[si % PALETTE.length];
-        s.values.forEach((v, i) => {
-          if (!isNum(v)) return;
-          const start = (horizontal ? area.y : area.x) + band * i + (band - groupW) / 2 + barW * si;
-          const p = vpos(v);
-          const a = Math.min(p, base);
-          const len = Math.abs(p - base);
-          if (horizontal) parts.push(`<rect x="${a.toFixed(1)}" y="${start.toFixed(1)}" width="${len.toFixed(1)}" height="${Math.max(1, barW - 1).toFixed(1)}" fill="${color}"/>`);
-          else parts.push(`<rect x="${start.toFixed(1)}" y="${a.toFixed(1)}" width="${Math.max(1, barW - 1).toFixed(1)}" height="${len.toFixed(1)}" fill="${color}"/>`);
+      const posAcc = new Array(n).fill(0);
+      const negAcc = new Array(n).fill(0);
+      const totals = pct ? categories.map((_, i) => bars.reduce((a, s) => a + Math.abs(isNum(s.values[i]) ? s.values[i] : 0), 0) || 1) : null;
+      bars.forEach((s, bi) => {
+        const vp = posOf(s);
+        const b0 = vp(Math.max(scale.min, Math.min(0, scale.max)));
+        s.values.forEach((raw, i) => {
+          if (!isNum(raw)) return;
+          const v = pct ? raw / totals[i] : raw;
+          const start = (horizontal ? area.y : area.x) + band * i + (band - groupW) / 2 + barW * (stacked ? 0 : bi);
+          let from = b0;
+          let to = vp(v);
+          if (stacked) {
+            const acc = v >= 0 ? posAcc : negAcc;
+            from = vp(acc[i]);
+            to = vp(acc[i] + v);
+            acc[i] += v;
+          }
+          const a = Math.min(from, to);
+          const len = Math.abs(to - from);
+          if (horizontal) parts.push(`<rect x="${a.toFixed(1)}" y="${start.toFixed(1)}" width="${len.toFixed(1)}" height="${Math.max(1, barW - 1).toFixed(1)}" fill="${s.color}"/>`);
+          else parts.push(`<rect x="${start.toFixed(1)}" y="${a.toFixed(1)}" width="${Math.max(1, barW - 1).toFixed(1)}" height="${len.toFixed(1)}" fill="${s.color}"/>`);
+          if (wantLabels(s)) {
+            if (horizontal) pushLabel((stacked ? (from + to) / 2 : Math.max(from, to) + 4), start + barW / 2 + 3.5, raw, s, stacked ? 'middle' : 'start');
+            else pushLabel(start + barW / 2, stacked ? (from + to) / 2 + 3.5 : Math.min(from, to) - 4, raw, s);
+          }
         });
       });
-    } else {
-      series.forEach((s, si) => {
-        const color = PALETTE[si % PALETTE.length];
-        const pts = s.values.map((v, i) => (isNum(v) ? [area.x + band * (i + 0.5), vpos(v)] : null));
+    }
+    // 영역 · 꺾은선 (막대 위에)
+    for (const type of ['area', 'line']) {
+      series.filter((s) => s.type === type).forEach((s) => {
+        const vp = posOf(s);
+        const pts = s.values.map((v, i) => (isNum(v) ? [area.x + band * (i + 0.5), vp(v), v] : null));
         const segs = [];
         let cur = [];
         for (const p of pts) { if (p) cur.push(p); else if (cur.length) { segs.push(cur); cur = []; } }
         if (cur.length) segs.push(cur);
+        const b0 = vp(Math.max(scale.min, Math.min(0, scale.max)));
         for (const seg of segs) {
           const d = seg.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join('');
-          if (chart.type === 'area') {
-            parts.push(`<path d="${d}L${seg.at(-1)[0].toFixed(1)},${base.toFixed(1)}L${seg[0][0].toFixed(1)},${base.toFixed(1)}Z" fill="${color}" fill-opacity="0.75"/>`);
+          if (type === 'area') {
+            parts.push(`<path d="${d}L${seg.at(-1)[0].toFixed(1)},${b0.toFixed(1)}L${seg[0][0].toFixed(1)},${b0.toFixed(1)}Z" fill="${s.color}" fill-opacity="0.75"/>`);
           } else {
-            parts.push(`<path d="${d}" fill="none" stroke="${color}" stroke-width="2.25" stroke-linejoin="round"/>`);
-            for (const p of seg) parts.push(`<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="3" fill="${color}"/>`);
+            parts.push(`<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.lineWidth ?? 2.25}" stroke-linejoin="round"/>`);
+            if (s.marker !== false && s.marker !== 'none') {
+              const mk = MARKERS[s.marker] ?? MARKERS.circle;
+              for (const p of seg) parts.push(mk(p[0].toFixed(1), p[1].toFixed(1), 3, s.markerColor ?? s.color));
+            }
           }
+          if (wantLabels(s)) for (const p of seg) pushLabel(p[0], p[1] - 7, p[2], s);
         }
       });
     }
@@ -271,6 +452,10 @@ export function renderChartSvg(chart, data) {
   // 기준선
   if (horizontal) parts.push(`<line x1="${base}" y1="${area.y}" x2="${base}" y2="${area.y + area.h}" stroke="#bfbfbf"/>`);
   else parts.push(`<line x1="${area.x}" y1="${base}" x2="${area.x + area.w}" y2="${base}" stroke="#bfbfbf"/>`);
+  parts.push(...labelsOut);
+  parts.push(axisTitle(chart.axes?.y?.title, plot.x + 6, area.y + area.h / 2, -90));
+  if (scale2) parts.push(axisTitle(chart.axes?.y2?.title, area.x + area.w + label2W - 2, area.y + area.h / 2, 90));
+  parts.push(axisTitle(chart.axes?.x?.title, area.x + area.w / 2, H - (legendH ? legendH + 2 : 2)));
   parts.push('</svg>');
   return parts.join('');
 }

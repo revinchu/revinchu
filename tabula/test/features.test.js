@@ -256,10 +256,10 @@ test('슬라이서 · 피벗 테이블 xlsx 왕복 (엑셀 형식)', async () =>
   const back = readXlsx(bytes);
   assert.deepEqual(back.warnings, []);
   const [s1, s2] = back.data.sheets;
-  assert.deepEqual(s1.slicers.map((x) => [x.caption, x.source, x.columns, x.color]), [['제품', { kind: 'table', table: '표1', column: '제품' }, 2, 'green']]);
+  assert.deepEqual(s1.slicers.map((x) => [x.caption, x.source, x.columns, x.style]), [['제품', { kind: 'table', table: '표1', column: '제품' }, 2, 'SlicerStyleLight6']]);
   assert.deepEqual([s1.slicers[0].x, s1.slicers[0].y, s1.slicers[0].w, s1.slicers[0].h], [250, 10, 180, 120]);
   assert.deepEqual(s1.tables[0].filter.criteria, { 1: ['사과'] });
-  assert.deepEqual(s2.slicers[0].source, { kind: 'pivot', self: true, field: '제품' });
+  assert.deepEqual(s2.slicers[0].source, { kind: 'pivot', field: '제품', pivots: [{ sheet: '피벗1', name: '피벗 테이블1' }] });
   assert.equal(s2.pivot.table, '표1');
   assert.deepEqual(s2.pivot.filters, { 제품: ['감', '사과'] });
   assert.deepEqual([s2.pivot.rows, s2.pivot.cols, s2.pivot.values], [['지역'], [], [{ field: '수량', agg: 'sum' }]]);

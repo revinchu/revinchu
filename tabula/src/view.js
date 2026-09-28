@@ -4,11 +4,12 @@ import { Axis } from './axis.js';
 import { colToName, MAX_ROWS, MAX_COLS } from './formula.js';
 import { formatValue, formatGeneral } from './format.js';
 import { DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT } from './workbook.js';
-import { chartData, renderChartSvg } from './chart.js';
+import { renderChartSvg, chartModelData } from './chart.js';
 import { shapeSvg } from './shapes.js';
 import { validationAt } from './validation.js';
 import { prepareCond, condFormatAt, ICON_SVG, EMPTY_MATCH_TYPES, ruleRanges, inRule } from './condfmt.js';
 import { tableAt, tableCellStyle, tableFilterRange, styleByName } from './tables.js';
+import { slicerCssVars } from './slicerstyle.js';
 
 export const DEFAULT_FONT = '맑은 고딕';
 export const DEFAULT_SIZE = 11;
@@ -482,6 +483,17 @@ export class GridView {
         html.push(`<div class="fbtn${active ? ' on' : ''}${sort}" data-c="${c}" data-t="${esc(tid)}" title="${active ? '필터 적용됨' : '필터'}" style="left:${cols.pos(c + 1) - 18 - p.ox}px;top:${rows.pos(f.r1 + 1) - 18 - p.oy}px"></div>`);
       }
     }
+    // 피벗 테이블 필터 단추 (행 레이블 · 열 레이블 · 보고서 필터)
+    [sheet.pivot, ...(sheet.pivotsExtra ?? [])].filter(Boolean).forEach((pd, pi) => {
+      if (!pd.buttons) return;
+      const filtered = (field) => !!(field && (pd.filters?.[field] || pd.fieldFilters?.[field]));
+      for (const b of pd.buttons) {
+        if (b.r < r1 || b.r > r2 || b.c < c1 || b.c > c2 || !cols.size(b.c) || !rows.size(b.r)) continue;
+        const fields = b.field ? [b.field] : b.kind === 'rows' ? pd.rows ?? [] : b.kind === 'cols' ? pd.cols ?? [] : [];
+        const on = fields.some(filtered) || (b.kind !== 'page' && fields.some((f) => pd.sort?.[f]));
+        html.push(`<div class="fbtn pbtn${on ? ' on' : ''}" data-p="${pi}" data-k="${b.kind}" data-f="${esc(b.field ?? '')}" title="${on ? '필터 적용됨' : '필터'}" style="left:${cols.pos(b.c + 1) - 18 - p.ox}px;top:${rows.pos(b.r + 1) - 18 - p.oy}px"></div>`);
+      }
+    });
     p.cells.innerHTML = html.join('');
     this.renderObjects(p);
   }
@@ -551,8 +563,16 @@ export class GridView {
       if (!next?.raw && !merges.some((m) => r >= m.r1 && r <= m.r2 && c + 1 >= m.c1 && c + 1 <= m.c2)) cls.push('ovf');
     }
     if (cell?.comment) cls.push('cm');
-    if (typeof v === 'number' && text && !style.wrap && !st.showFormulas && measureText(text, style) > w - 6) {
-      text = fitNumber(v, w - 6, style);
+    // 아이콘 집합: 아이콘은 왼쪽 끝에 고정하고 글자는 남은 너비 안에 (엑셀과 같음)
+    const ICON_W = 18;
+    if (icon) {
+      css.push(`padding-left:${(style.indent && eff !== 'right' ? 3 + style.indent * 9 : 3) + ICON_W}px`);
+      const i = cls.indexOf('ovf');
+      if (i >= 0) cls.splice(i, 1);
+    }
+    const room = w - 6 - (icon ? ICON_W : 0);
+    if (typeof v === 'number' && text && !style.wrap && !st.showFormulas && measureText(text, style) > room) {
+      text = fitNumber(v, room, style);
     }
     const comment = cell?.comment ? ` data-cm="${esc(cell.comment)}"` : '';
     const iconHtml = icon ? `<i class="cf-icon">${ICON_SVG[icon] ?? ''}</i>` : '';
@@ -575,11 +595,11 @@ export class GridView {
     const winY2 = p.scrollY ? Infinity : this.frozenH;
     const html = [];
     const handles = '<i class="ch-h nw"></i><i class="ch-h ne"></i><i class="ch-h sw"></i><i class="ch-h se"></i>';
-    const box = (o, cls, inner) => {
+    const box = (o, cls, inner, extraCss = '') => {
       const h = Math.max(o.h, cls.includes('line') ? 1 : 0);
       if (o.x + o.w < winX1 || o.x > winX2 || o.y + h < winY1 || o.y > winY2) return;
       const selected = st.chartSel === o.id;
-      html.push(`<div class="obj ${cls}${selected ? ' sel' : ''}" data-id="${esc(o.id)}" style="left:${o.x - p.ox}px;top:${o.y - p.oy}px;width:${o.w}px;height:${h}px">${inner}${selected ? handles : ''}</div>`);
+      html.push(`<div class="obj ${cls}${selected ? ' sel' : ''}" data-id="${esc(o.id)}" style="left:${o.x - p.ox}px;top:${o.y - p.oy}px;width:${o.w}px;height:${h}px;${extraCss}">${inner}${selected ? handles : ''}</div>`);
     };
     // 엑셀처럼 그림 → 도형 → 차트 순서가 아니라 저장된 순서(z)대로 겹침
     const all = [
@@ -588,7 +608,7 @@ export class GridView {
     ].sort((a, b) => (a[1].z ?? 0) - (b[1].z ?? 0));
     for (const [prop, o] of all) {
       if (prop === 'charts') box(o, 'chart', this.chartSvg(o));
-      else if (prop === 'slicers') box(o, `slicer sl-${o.color ?? 'blue'}`, this.slicerHtml(o));
+      else if (prop === 'slicers') box(o, 'slicer', this.slicerHtml(o), slicerCssVars(o));
       else if (prop === 'images') box(o, 'pic', `<img src="${esc(o.src)}" alt="${esc(o.name ?? '')}" draggable="false">`);
       else {
         const text = o.text && o.kind !== 'line'
@@ -606,24 +626,15 @@ export class GridView {
     const items = m.broken
       ? `<div class="sl-broken">${esc(m.broken)}</div>`
       : m.items.map((it) => `<button type="button" class="sl-item${it.selected ? ' on' : ''}${it.hasData ? '' : ' nodata'}" data-k="${esc(it.key)}" title="${esc(it.text)}">${esc(it.text)}</button>`).join('');
-    return `<div class="sl-head"><span class="sl-cap">${esc(sl.caption ?? '')}</span>`
+    const head = sl.showHeader === false ? '' : `<div class="sl-head"><span class="sl-cap">${esc(sl.caption ?? '')}</span>`
       + `<button type="button" class="sl-multi${sl.multi ? ' on' : ''}" title="다중 선택 (Alt+S)">☰</button>`
-      + `<button type="button" class="sl-clear${m.filtered ? '' : ' off'}" title="필터 지우기 (Alt+C)">✕</button></div>`
-      + `<div class="sl-items" style="grid-template-columns:repeat(${Math.max(1, sl.columns ?? 1)}, minmax(0, 1fr))">${items}</div>`;
+      + `<button type="button" class="sl-clear${m.filtered ? '' : ' off'}" title="필터 지우기 (Alt+C)">✕</button></div>`;
+    return `${head}<div class="sl-items" style="grid-template-columns:repeat(${Math.max(1, sl.columns ?? 1)}, minmax(0, 1fr))">${items}</div>`;
   }
 
   chartSvg(ch) {
     const { wb, si } = this.host.state();
-    const src = ch.sheet ? wb.sheetIndexByName(ch.sheet) : si;
-    const s = src >= 0 ? src : si;
-    const rows = [];
-    const rg = ch.range;
-    for (let r = rg.r1; r <= Math.min(rg.r2, rg.r1 + 500); r++) {
-      const row = [];
-      for (let c = rg.c1; c <= Math.min(rg.c2, rg.c1 + 50); c++) row.push(wb.getValue(s, r, c));
-      rows.push(row);
-    }
-    return renderChartSvg(ch, chartData(rows, ch.type));
+    return renderChartSvg(ch, chartModelData(wb, si, ch));
   }
 
   /** 선택 영역이 바뀌었을 때 (셀은 그대로) */

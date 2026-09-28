@@ -258,9 +258,17 @@ export const TABS = [
   },
   {
     id: 'pivotAnalyze', label: '피벗 테이블 분석', context: 'pivot', groups: [
+      group('피벗 테이블', [
+        col(
+          { type: 'text', cmd: 'pivotName', stateKey: 'pivotName', label: '이름:', title: '피벗 테이블 이름', width: 110 },
+          medium('pivotOptions', 'pivot', '옵션'),
+        ),
+      ]),
+      group('필터', [large('insertSlicer', 'slicer', '슬라이서 삽입'), large('slicerConnections', 'slicer', '필터 연결', { title: '이 피벗 테이블에 연결할 슬라이서' })]),
+      group('데이터', [large('pivotRefresh', 'refresh', '새로 고침', { title: '새로 고침 (Alt+F5)' }), large('pivotChangeSource', 'table', '데이터 원본 변경')]),
+      group('동작', [large('pivotClear', 'clear', '지우기', { title: '필드를 모두 지우기' })]),
+      group('계산', [large('calcField', 'fx', '필드, 항목 및 집합', { title: '계산 필드 삽입 (CPC · CTR · ROAS 등)' })]),
       group('표시', [large('pivotFieldList', 'pivot', '필드 목록', { title: '피벗 테이블 필드 창 표시/숨기기' })]),
-      group('데이터', [large('pivotRefresh', 'refresh', '새로 고침', { title: '새로 고침 (Alt+F5)' })]),
-      group('필터', [large('insertSlicer', 'slicer', '슬라이서 삽입')]),
     ],
   },
   {
@@ -270,6 +278,11 @@ export const TABS = [
         large('pivotGrandMenu', 'table', '총합계', { menu: 'pivotGrand' }),
         large('pivotLayoutMenu', 'table', '보고서 레이아웃', { menu: 'pivotLayout' }),
       ]),
+      group('피벗 테이블 스타일 옵션', [
+        col(check('pvRowHeaders', '행 머리글', 'pvRowHeaders'), check('pvColHeaders', '열 머리글', 'pvColHeaders')),
+        col(check('pvBandRows', '줄무늬 행', 'pvBandRows'), check('pvBandCols', '줄무늬 열', 'pvBandCols')),
+      ]),
+      group('피벗 테이블 스타일', [large('pivotStyleGalleryBtn', 'table', '빠른 스타일', { menu: 'pivotStylesDesign' })]),
     ],
   },
   {
@@ -284,9 +297,14 @@ export const TABS = [
         large('slicerClear', 'filterClear', '필터 지우기', { title: '필터 지우기 (Alt+C)' }),
         large('slicerMulti', 'filter', '다중 선택', { title: '다중 선택 (Alt+S)', toggle: 'slicerMultiOn' }),
       ]),
+      group('슬라이서 스타일', [large('slicerStyleGalleryBtn', 'slicer', '빠른 스타일', { menu: 'slicerStyles' })]),
       group('단추', [
-        { type: 'select', cmd: 'slicerCols', stateKey: 'slicerCols', cls: 'w60', title: '열 수', options: [1, 2, 3, 4, 5, 6].map((n) => ({ value: String(n), label: `열 ${n}` })) },
+        col(
+          { type: 'select', cmd: 'slicerCols', stateKey: 'slicerCols', cls: 'w60', title: '열 수', options: [1, 2, 3, 4, 5, 6, 8, 10, 12].map((n) => ({ value: String(n), label: `열 ${n}` })) },
+          { type: 'select', cmd: 'slicerBtnH', stateKey: 'slicerBtnH', cls: 'w60', title: '단추 높이', options: [20, 24, 28, 32, 40].map((n) => ({ value: String(n), label: `높이 ${n}` })) },
+        ),
       ]),
+      group('표시', [col(check('slicerHeader', '머리글 표시', 'slicerHeaderOn')), large('slicerConnections', 'slicer', '보고서 연결')]),
     ],
   },
   {
