@@ -141,6 +141,7 @@ export function openDialog({ title, body, buttons = [], onOpen, width }) {
     e.stopPropagation();
     if (e.key === 'Escape') close();
     if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA' && e.target.tagName !== 'BUTTON') {
+      e.preventDefault(); // 대화상자가 닫힌 뒤 Enter 가 셀 편집기에 들어가지 않도록
       const primary = buttons.find((b) => b.primary);
       if (primary && primary.action?.() !== false) close();
     }

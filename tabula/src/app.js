@@ -599,14 +599,16 @@ function updateAutocomplete() {
   const m = /(^|[^A-Za-z0-9_."$!:])([A-Za-z][A-Za-z0-9.]*)$/.exec(before.slice(1));
   if (!m || /^[A-Za-z]{1,3}\d+$/.test(m[2])) return hideAutocomplete();
   const prefix = m[2].toUpperCase();
-  const items = FUNCTION_NAMES.filter((n) => n.startsWith(prefix)).slice(0, 12);
+  const nameItems = [...wb.names.filter((n) => !n.hidden).map((n) => n.name), ...wb.sheets.flatMap((sh) => (sh.tables ?? []).map((t) => t.name))]
+    .filter((n) => n.toUpperCase().startsWith(prefix));
+  const items = [...nameItems, ...FUNCTION_NAMES.filter((n) => n.startsWith(prefix))].slice(0, 12);
   if (!items.length || text[pos] === '(') return hideAutocomplete();
   ac = { items, index: 0, start: pos - m[2].length, end: pos };
   dom.ac.replaceChildren(...items.map((name, i) => el('li', {
     class: i === 0 ? 'active' : '',
     onmousedown: (e) => { e.preventDefault(); e.stopPropagation(); acceptAutocomplete(name); },
     title: FUNC_INFO[name]?.desc ?? '',
-  }, el('span', {}, name), el('small', {}, FUNC_INFO[name]?.cat ?? ''))));
+  }, el('span', {}, name), el('small', {}, FUNC_INFO[name]?.cat ?? (nameItems.includes(name) ? '이름' : '')))));
   dom.ac.style.display = 'block';
   placeAutocomplete();
   return undefined;
@@ -633,10 +635,11 @@ function acceptAutocomplete(name = ac.items[ac.index]) {
   const inp = edInput();
   const text = inp.value;
   const { start, end } = ac;
-  const value = `${text.slice(0, start)}${name}(${text.slice(end)}`;
+  const isFn = !!FUNC_INFO[name] && !wb.findName(name, si);
+  const value = `${text.slice(0, start)}${name}${isFn ? '(' : ''}${text.slice(end)}`;
   hideAutocomplete();
-  setEditText(value, start + name.length + 1);
-  toast(FUNC_INFO[name]?.sig ?? name);
+  setEditText(value, start + name.length + (isFn ? 1 : 0));
+  if (isFn) toast(FUNC_INFO[name]?.sig ?? name);
 }
 
 // ───────────────────────── 행 높이 자동 맞춤 · 열 자동 넓힘 ─────────────────────────
@@ -747,6 +750,10 @@ function onEditingKey(e) {
       e.preventDefault();
       toggleAbsolute();
       return;
+    case 'F3':
+      e.preventDefault();
+      pasteNameDialog();
+      return;
     case 'ArrowUp': case 'ArrowDown': case 'ArrowLeft': case 'ArrowRight': {
       if (fromBar || editing.mode === 'edit') { editing.point = null; setTimeout(afterCaretMove); return; }
       const [dr, dc] = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] }[e.key];
@@ -803,6 +810,11 @@ function onGridKey(e) {
   }
   if (e.altKey && !ctrl && (k === '=' || e.code === 'Equal')) { handled(); run('autosum'); return; }
   if (e.altKey && k === 'F1') { handled(); run('chartColumn'); return; }
+  if (k === 'F3' && !e.altKey) {
+    handled();
+    run(ctrl && e.shiftKey ? 'createNamesFromSel' : ctrl ? 'nameManager' : 'pasteName');
+    return;
+  }
   if (ctrl) {
     if (e.shiftKey) {
       const byCode = {
@@ -2852,7 +2864,8 @@ const KEYTIPS = {
   hk: ['fmtComma', '쉼표 스타일'], hp: ['fmtPercent', '백분율'], h0: ['incDecimal', '자릿수 늘림'], h9: ['decDecimal', '자릿수 줄임'],
   hlr: ['condManager', '조건부 서식 규칙 관리'], hln: ['condNewRule', '새 서식 규칙'], hlm: ['condMenuKey', '조건부 서식 메뉴'], ht: ['tableStyleKey', '표 서식'],
   wff: ['freezePanes', '틀 고정'], wfr: ['freezeTop', '첫 행 고정'], wfc: ['freezeFirstCol', '첫 열 고정'], wg: ['toggleGrid', '눈금선'],
-  mf: ['insertFunction', '함수 삽입'], mua: ['autosum', '자동 합계'], f: ['backstage', '파일'],
+  mf: ['insertFunction', '함수 삽입'], mua: ['autosum', '자동 합계'], mn: ['nameManager', '이름 관리자'], mmd: ['defineName', '이름 정의'],
+  ms: ['pasteName', '수식에서 사용'], mc: ['createNamesFromSel', '선택 영역에서 만들기'], f: ['backstage', '파일'],
 };
 const KEYTIP_TABS = { h: 'home', n: 'insert', p: 'layout', m: 'formulas', a: 'data', r: 'review', w: 'view', j: 'tableDesign' };
 let keytip = null; // { seq, held }
@@ -4327,6 +4340,241 @@ function gotoDialog() {
   formDialog('이동', [{ name: 'ref', label: '참조', value: '' }], ({ ref }) => gotoRef(ref));
 }
 
+
+// ───────────────────────── 이름 정의 ─────────────────────────
+const absRef = (rg) => {
+  const a = `$${colToName(rg.c1)}$${rg.r1 + 1}`;
+  return rg.r1 === rg.r2 && rg.c1 === rg.c2 ? a : `${a}:$${colToName(rg.c2)}$${rg.r2 + 1}`;
+};
+const selRefText = (rg = sel, s = si) => `=${quoteSheetName(wb.sheets[s].name)}!${absRef(rg)}`;
+
+/** 엑셀 이름 규칙: 문자/밑줄/\ 로 시작, 셀 주소·R1C1 모양 불가 */
+function nameError(name, except = null) {
+  const n = name.trim();
+  if (!n) return '이름을 입력하세요.';
+  if (n.length > 255) return '이름이 너무 깁니다.';
+  if (!/^[A-Za-z_\\À-￿][\w.?\\À-￿]*$/.test(n) || /^[A-Za-z]{1,3}\d+$/.test(n) || /^(R|C|RC|R\d+C\d+|TRUE|FALSE)$/i.test(n)) {
+    return '입력한 이름이 올바르지 않습니다. 이름은 문자나 밑줄로 시작해야 하며 공백이나 셀 주소 모양은 쓸 수 없습니다.';
+  }
+  return null;
+}
+
+function nameValueText(n) {
+  let v;
+  try { v = wb.nameValue(n.name, n.sheet ? wb.sheetIndexByName(n.sheet) : si, n.sheet, null); } catch { v = null; }
+  if (v === undefined || v === null) return '';
+  if (isError(v)) return v.code;
+  if (v.constructor?.name === 'RefValue') {
+    const s = wb.sheetIndexByName(v.sheet ?? sheet().name);
+    const vals = [];
+    for (let r = v.r1; r <= Math.min(v.r2, v.r1 + 3); r++) {
+      for (let c = v.c1; c <= Math.min(v.c2, v.c1 + 3); c++) {
+        const x = s >= 0 ? wb.getValue(s, r, c) : null;
+        vals.push(x === null ? '' : isError(x) ? x.code : typeof x === 'number' ? formatGeneral(x) : String(x));
+      }
+    }
+    const one = v.r1 === v.r2 && v.c1 === v.c2;
+    return one ? vals[0] : `{${vals.map((x) => `"${x}"`).join(';')}${(v.r2 - v.r1 + 1) * (v.c2 - v.c1 + 1) > vals.length ? ';…' : ''}}`;
+  }
+  if (v.params) return 'LAMBDA';
+  if (v.rows) return `{${v.rows.slice(0, 3).map((r) => r.slice(0, 4).join(',')).join(';')}}`;
+  return typeof v === 'number' ? formatGeneral(v) : String(v);
+}
+
+/** 이름 편집기 (새 이름 · 편집) */
+function nameEditor(entry, list, onSave) {
+  const scopes = [{ value: '', label: '통합 문서' }, ...wb.sheets.map((sh) => ({ value: sh.name, label: sh.name }))];
+  formDialog(entry ? '이름 편집' : '새 이름', [
+    { name: 'name', label: '이름', value: entry?.name ?? '' },
+    { name: 'sheet', label: '범위', type: 'select', value: entry?.sheet ?? '', options: scopes },
+    { name: 'comment', label: '설명', type: 'textarea', value: entry?.comment ?? '' },
+    { name: 'ref', label: '참조 대상', value: entry?.ref ?? selRefText() },
+  ], (v) => {
+    const err = nameError(v.name);
+    if (err) { toast(err); return false; }
+    const dup = list.find((x) => x !== entry && x.name.toLowerCase() === v.name.trim().toLowerCase() && (x.sheet ?? '') === v.sheet);
+    if (dup) { toast('같은 범위에 이미 있는 이름입니다.'); return false; }
+    let ref = v.ref.trim();
+    if (!ref.startsWith('=')) ref = `=${ref}`;
+    try { parse(ref.slice(1)); } catch { toast('참조 대상 수식에 문제가 있습니다.'); return false; }
+    onSave({ name: v.name.trim(), sheet: v.sheet || null, comment: v.comment || undefined, ref: normalizeFormula(ref), hidden: entry?.hidden });
+    return true;
+  });
+}
+
+function defineName() {
+  if (editing && !commitEdit()) return;
+  nameEditor(null, wb.names, (n) => wb.transact(() => wb.setNames([...wb.names, n]), meta()));
+}
+
+function nameManager() {
+  if (editing && !commitEdit()) return;
+  let list = wb.names.map((x) => ({ ...x }));
+  let current = null;
+  const tbody = el('tbody');
+  const refIn = el('input', { type: 'text', style: { flex: '1' } });
+  const filterIn = el('input', { type: 'text', placeholder: '이름 검색', style: { width: '160px' } });
+  const commit = () => {
+    const out = list.filter((x) => !x.hidden || true).map(({ _ast, _text, ...x }) => x);
+    if (JSON.stringify(out) === JSON.stringify(wb.names.map(({ _ast, _text, ...x }) => x))) return;
+    wb.transact(() => wb.setNames(out), meta());
+  };
+  const render = () => {
+    tbody.replaceChildren();
+    const q = filterIn.value.trim().toLowerCase();
+    const vis = list.filter((x) => !x.hidden && (!q || x.name.toLowerCase().includes(q)));
+    if (!vis.includes(current)) current = vis[0] ?? null;
+    if (!vis.length) tbody.append(el('tr', {}, el('td', { colspan: 5, class: 'muted', style: { padding: '12px' } }, '정의된 이름이 없습니다. [새로 만들기]를 누르세요.')));
+    for (const n of vis) {
+      const tr = el('tr', { class: n === current ? 'on' : '' },
+        el('td', {}, n.name), el('td', {}, nameValueText(n)), el('td', {}, n.ref), el('td', {}, n.sheet ?? '통합 문서'), el('td', {}, n.comment ?? ''));
+      tr.addEventListener('mousedown', () => { current = n; render(); });
+      tr.addEventListener('dblclick', () => edit());
+      tbody.append(tr);
+    }
+    refIn.value = current?.ref ?? '';
+    refIn.disabled = !current;
+    btnEdit.disabled = btnDel.disabled = !current;
+  };
+  const edit = () => {
+    if (!current) return;
+    const target = current;
+    nameEditor(target, list, (n) => { Object.assign(target, n); render(); });
+  };
+  const btn = (label, onclick) => el('button', { type: 'button', class: 'btn', onclick }, label);
+  const btnNew = btn('새로 만들기...', () => nameEditor(null, list, (n) => { list.push(n); current = n; render(); }));
+  const btnEdit = btn('편집...', edit);
+  const btnDel = btn('삭제', () => { list = list.filter((x) => x !== current); current = null; render(); });
+  refIn.addEventListener('change', () => {
+    if (!current) return;
+    let t = refIn.value.trim();
+    if (!t.startsWith('=')) t = `=${t}`;
+    try { parse(t.slice(1)); current.ref = normalizeFormula(t); refIn.classList.remove('bad'); } catch { refIn.classList.add('bad'); }
+    render();
+  });
+  filterIn.addEventListener('input', render);
+  const table = el('table', { class: 'cf-table' },
+    el('thead', {}, el('tr', {}, el('th', {}, '이름'), el('th', {}, '값'), el('th', {}, '참조 대상'), el('th', {}, '범위'), el('th', {}, '설명'))), tbody);
+  const body = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
+    el('div', { style: { display: 'flex', gap: '6px', alignItems: 'center' } }, btnNew, btnEdit, btnDel, el('span', { style: { flex: '1' } }), filterIn),
+    el('div', { class: 'cf-tablewrap' }, table),
+    el('label', { style: { display: 'flex', gap: '6px', alignItems: 'center' } }, el('span', {}, '참조 대상:'), refIn));
+  render();
+  openDialog({ title: '이름 관리자', body, width: 760, buttons: [{ label: '닫기', primary: true, action: commit }] });
+}
+
+/** 수식에 이름 붙여넣기 (F3) */
+function pasteNameDialog() {
+  const names = wb.names.filter((n) => !n.hidden && (!n.sheet || n.sheet.toLowerCase() === sheet().name.toLowerCase()));
+  if (!names.length) { toast('정의된 이름이 없습니다.'); return; }
+  const listEl = el('select', { size: 10, style: { width: '100%' } }, names.map((n, i) => el('option', { value: n.name, selected: i === 0 }, n.name)));
+  const insert = () => {
+    const name = listEl.value;
+    if (!name) return;
+    if (editing) {
+      const inp = edInput();
+      const pos = inp.selectionStart;
+      setEditText(`${inp.value.slice(0, pos)}${name}${inp.value.slice(inp.selectionEnd)}`, pos + name.length);
+    } else setTimeout(() => startEdit('enter', `=${name}`)); // Enter 키 입력이 편집기로 들어가지 않도록
+  };
+  const pasteList = () => {
+    // 목록 붙여넣기: 이름과 참조 대상을 현재 셀부터 두 열로
+    wb.transact(() => names.forEach((n, i) => {
+      wb.setInput(si, active.r + i, active.c, n.name);
+      wb.setInput(si, active.r + i, active.c + 1, `'${n.ref}`);
+    }), meta());
+  };
+  listEl.addEventListener('dblclick', () => { insert(); document.querySelector('.dialog-backdrop:last-child .dialog-head button')?.click(); });
+  openDialog({
+    title: '이름 붙여넣기', width: 320, body: el('div', {}, el('div', { class: 'muted', style: { marginBottom: '6px' } }, '이름 붙여넣기(N)'), listEl),
+    buttons: [{ label: '확인', primary: true, action: insert }, ...(editing ? [] : [{ label: '목록 붙여넣기', action: pasteList }]), { label: '취소' }],
+  });
+}
+
+/** 선택 영역에서 이름 만들기 (Ctrl+Shift+F3) */
+function createNamesFromSel() {
+  if (editing && !commitEdit()) return;
+  const rg = usedClip(sel);
+  const top = el('input', { type: 'checkbox', checked: rg.r2 > rg.r1 && typeof wb.getValue(si, rg.r1, rg.c1 + (rg.c2 > rg.c1 ? 1 : 0)) === 'string' });
+  const left = el('input', { type: 'checkbox', checked: rg.c2 > rg.c1 && !top.checked });
+  const bottom = el('input', { type: 'checkbox' });
+  const right = el('input', { type: 'checkbox' });
+  const row = (box, label) => el('label', { style: { display: 'flex', gap: '6px' } }, box, label);
+  openDialog({
+    title: '선택 영역에서 이름 만들기', width: 320,
+    body: el('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } }, el('div', {}, '다음 위치의 값을 이름으로 사용:'),
+      row(top, '첫 행(T)'), row(left, '왼쪽 열(L)'), row(bottom, '마지막 행(B)'), row(right, '오른쪽 열(R)')),
+    buttons: [{
+      label: '확인', primary: true, action: () => {
+        const made = [];
+        const clean = (v) => String(v ?? '').trim().replace(/[^\w.\\À-￿]+/g, '_').replace(/^(\d)/, '_$1');
+        const add = (label, area) => {
+          const nm = clean(label);
+          if (!nm || nameError(nm)) return;
+          made.push({ name: nm, sheet: null, ref: selRefText(area) });
+        };
+        const r1 = rg.r1 + (top.checked ? 1 : 0);
+        const r2 = rg.r2 - (bottom.checked ? 1 : 0);
+        const c1 = rg.c1 + (left.checked ? 1 : 0);
+        const c2 = rg.c2 - (right.checked ? 1 : 0);
+        if (r1 > r2 || c1 > c2) return;
+        for (let c = c1; c <= c2; c++) {
+          if (top.checked) add(wb.getValue(si, rg.r1, c), { r1, c1: c, r2, c2: c });
+          if (bottom.checked) add(wb.getValue(si, rg.r2, c), { r1, c1: c, r2, c2: c });
+        }
+        for (let r = r1; r <= r2; r++) {
+          if (left.checked) add(wb.getValue(si, r, rg.c1), { r1: r, c1, r2: r, c2 });
+          if (right.checked) add(wb.getValue(si, r, rg.c2), { r1: r, c1, r2: r, c2 });
+        }
+        if (!made.length) { toast('만들 이름이 없습니다.'); return; }
+        const keep = wb.names.filter((x) => !made.some((m) => m.name.toLowerCase() === x.name.toLowerCase() && !x.sheet));
+        wb.transact(() => wb.setNames([...keep, ...made]), meta());
+        toast(`이름 ${made.length}개를 만들었습니다.`);
+      },
+    }, { label: '취소' }],
+  });
+}
+
+/** 이름 상자 드롭다운 목록 갱신 */
+function refreshNameList() {
+  let dl = document.getElementById('nameList');
+  if (!dl) { dl = el('datalist', { id: 'nameList' }); document.body.append(dl); dom.nameBox.setAttribute('list', 'nameList'); }
+  const items = [...wb.names.filter((n) => !n.hidden).map((n) => n.name), ...wb.sheets.flatMap((s) => (s.tables ?? []).map((t) => t.name))];
+  const key = items.join('\u0001');
+  if (dl.dataset.key === key) return;
+  dl.dataset.key = key;
+  dl.replaceChildren(...items.map((n) => el('option', { value: n })));
+}
+
+/** 이름 상자 Enter: 주소 → 이동, 정의된 이름 → 그 범위 선택, 새 이름 → 선택 영역에 이름 정의 */
+function nameBoxEnter(text) {
+  const t = text.trim();
+  if (!t) return false;
+  const existing = wb.findName(t, si);
+  const isTable = !existing && wb.sheets.some((s) => (s.tables ?? []).some((x) => x.name.toLowerCase() === t.toLowerCase()));
+  if (existing || isTable) {
+    const v = wb.nameValue(t, si, null, null);
+    if (v && v.constructor?.name === 'RefValue') {
+      const s = v.sheet ? wb.sheetIndexByName(v.sheet) : si;
+      if (s >= 0) {
+        switchSheet(s);
+        const rg = { r1: v.r1, c1: v.c1, r2: v.r2, c2: v.c2 };
+        if (isSingle(rg)) selectCell(rg.r1, rg.c1); else { growTo(rg.r2, rg.c2); gv.ensureVisible(rg.r1, rg.c1); selectRange(rg); }
+        return true;
+      }
+    }
+    toast('이 이름은 셀 범위를 가리키지 않습니다.');
+    return false;
+  }
+  const looksRef = /!|^\$?[A-Za-z]{1,3}\$?\d+(:\$?[A-Za-z]{1,3}\$?\d+)?$|^\$?[A-Za-z]{1,3}:\$?[A-Za-z]{1,3}$|^\$?\d+:\$?\d+$/.test(t);
+  if (!looksRef && !nameError(t)) {
+    wb.transact(() => wb.setNames([...wb.names, { name: t, sheet: null, ref: selRefText() }]), meta());
+    toast(`이름 '${t}'을(를) 정의했습니다.`);
+    return true;
+  }
+  return gotoRef(t);
+}
+
 function gotoRef(text) {
   let t = text.trim();
   let target = si;
@@ -4893,6 +5141,14 @@ function cellStylesMenu(anchorEl) {
 function tableStylesMenu(anchorEl) { tableStyleGallery(anchorEl, !tableHere()); }
 
 const MENUS = {
+  useInFormula: () => {
+    const names = wb.names.filter((n) => !n.hidden && (!n.sheet || n.sheet.toLowerCase() === sheet().name.toLowerCase()));
+    return [
+      ...names.map((n) => ({ label: n.name, action: () => { if (editing) { const inp = edInput(); const pos = inp.selectionStart; setEditText(`${inp.value.slice(0, pos)}${n.name}${inp.value.slice(inp.selectionEnd)}`, pos + n.name.length); } else startEdit('enter', `=${n.name}`); } })),
+      ...(names.length ? [{ sep: true }] : []),
+      { label: '이름 붙여넣기...', action: pasteNameDialog },
+    ];
+  },
   tableStylesDesign: (a) => { tableStyleGallery(a, false); },
   shapes: () => [
     { title: '도형' },
@@ -5274,6 +5530,7 @@ const COMMANDS = {
   find: () => openFindDialog('find'),
   replace: () => openFindDialog('replace'),
   goto: gotoDialog,
+  nameManager, defineName, useInFormula: pasteNameDialog, pasteName: pasteNameDialog, createNamesFromSel,
 
   toggleFilter,
   clearFilter: () => {
@@ -5608,9 +5865,9 @@ function bindEvents() {
   });
 
   // 이름 상자
-  dom.nameBox.addEventListener('focus', () => dom.nameBox.select());
+  dom.nameBox.addEventListener('focus', () => { refreshNameList(); dom.nameBox.select(); });
   dom.nameBox.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); if (gotoRef(dom.nameBox.value)) focusGrid(); }
+    if (e.key === 'Enter') { e.preventDefault(); if (nameBoxEnter(dom.nameBox.value)) focusGrid(); }
     if (e.key === 'Escape') { dom.nameBox.value = cellName(active.r, active.c); focusGrid(); }
   });
   dom.nameBox.addEventListener('blur', () => { dom.nameBox.value = cellName(active.r, active.c); });

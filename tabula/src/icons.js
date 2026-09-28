@@ -84,6 +84,8 @@ export const ICONS = {
   keyboard: svg(`<rect x="2" y="5" width="16" height="10" rx="1.2"/><path d="M5 8h1M8 8h1M11 8h1M14 8h1M5 11h1M14 11h1M8 12h4"/>`, 28),
   about: svg(`<circle cx="10" cy="10" r="7"/><path d="M10 9v5M10 6.3v.2"/>`, 28),
   calc: svg(`<rect x="4.5" y="2.5" width="11" height="15" rx="1"/><rect x="6.5" y="4.5" width="7" height="3" fill="${BLUE}" stroke="${BLUE}"/><path d="M7 10.5h.5M10 10.5h.5M13 10.5h.5M7 13h.5M10 13h.5M13 13h.5M7 15.3h.5M10 15.3h.5M13 15.3h.5" stroke-width="1.6"/>`, 28),
+  names: svg(`<rect x="2.5" y="4.5" width="15" height="11" rx="1"/><path d="M2.5 8h15"/><text x="4.5" y="14" font-size="5.5" fill="${ACCENT}" stroke="none" font-family="sans-serif">abc</text>`, 28),
+  nameDefine: svg(`<path d="M3 13.5l8-8 3 3-8 8H3z"/><path d="M10 6.5l3 3" stroke="${BLUE}"/><text x="11" y="17.5" font-size="5.5" fill="${ACCENT}" stroke="none" font-family="sans-serif">ab</text>`, 28),
   fnBook: svg(`<path d="M4 3.5h9.5a2 2 0 0 1 2 2v11H6a2 2 0 0 1-2-2z"/><path d="M4 14.5a2 2 0 0 1 2-2h9.5"/><text x="6.3" y="10.3" font-size="6.5" font-style="italic" fill="${ACCENT}" stroke="none" font-family="serif">fx</text>`, 28),
   collapse: svg(`<path d="m6 12 4-4 4 4"/>`, 12),
   chartColumn: svg(`<path d="M3 17h14" stroke="#7f7f7f"/><rect x="4" y="9" width="3" height="8" fill="${BLUE}" stroke="none"/><rect x="8.5" y="4" width="3" height="13" fill="#ED7D31" stroke="none"/><rect x="13" y="11" width="3" height="6" fill="${BLUE}" stroke="none"/>`, 28),

@@ -165,6 +165,12 @@ export const TABS = [
         large('fnCat', 'fnBook', '수학/삼각', { menu: 'fn:수학/삼각' }),
         large('fnCat', 'fnBook', '함수 더 보기', { menu: 'fn:more' }),
       ]),
+      group('정의된 이름', [
+        large('nameManager', 'names', '이름 관리자', { title: '이름 관리자 (Ctrl+F3)' }),
+        medium('defineName', 'nameDefine', '이름 정의'),
+        medium('useInFormula', 'fx', '수식에서 사용', { menu: 'useInFormula' }),
+        medium('createNamesFromSel', 'table', '선택 영역에서 만들기', { title: '선택 영역에서 이름 만들기 (Ctrl+Shift+F3)' }),
+      ]),
       group('수식 분석', [large('toggleFormulas', 'showFormulas', '수식 표시', { toggle: 'showFormulas' })]),
       group('계산', [large('recalc', 'calc', '지금 계산')]),
     ],
