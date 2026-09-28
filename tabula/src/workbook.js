@@ -326,9 +326,9 @@ function sheetFromData(s) {
 
 /** 시트의 부가 속성 (셀 외) — 저장/복원/복제용 */
 const SHEET_PROPS = ['colWidths', 'rowHeights', 'merges', 'cond', 'colStyles', 'rowStyles', 'allStyle',
-  'hiddenRows', 'hiddenCols', 'rowManual', 'freeze', 'filter', 'charts', 'pivot', 'validations', 'images', 'shapes', 'tables', 'slicers', 'pivotsExtra', 'state', 'noGrid', 'outline'];
+  'hiddenRows', 'hiddenCols', 'rowManual', 'freeze', 'filter', 'charts', 'pivot', 'validations', 'images', 'shapes', 'tables', 'slicers', 'pivotsExtra', 'state', 'noGrid', 'outline', 'protect', 'sparklines', 'page'];
 // 바뀌어도 수식 결과가 달라지지 않는 시트 속성
-const CALC_NEUTRAL = new Set(['outline', 'state', 'noGrid', 'charts', 'images', 'shapes', 'slicers', 'freeze', 'cond', 'validations', 'colStyles', 'rowStyles', 'allStyle', 'merges']);
+const CALC_NEUTRAL = new Set(['outline', 'protect', 'sparklines', 'page', 'state', 'noGrid', 'charts', 'images', 'shapes', 'slicers', 'freeze', 'cond', 'validations', 'colStyles', 'rowStyles', 'allStyle', 'merges']);
 
 /** 숫자 키 객체의 키를 삽입/삭제에 맞춰 이동 */
 function shiftKeys(obj, index, count) {
@@ -1553,6 +1553,35 @@ export class Workbook {
       }
       return nt;
     }).filter(Boolean);
+    // 스파크라인: 이 시트의 위치 이동 + 모든 시트의 데이터 범위 조정
+    this.sheets.forEach((sh, i) => {
+      if (!sh.sparklines?.length) return;
+      if (sh !== target) this.propSnap(i, 'sparklines');
+      sh.sparklines = sh.sparklines.map((g) => ({
+        ...g,
+        items: g.items.map((it) => {
+          let { r, c } = it;
+          if (sh === target) {
+            const p = isRow ? r : c;
+            if (count < 0 && p >= index && p < index - count) return null;
+            if (p >= index) { if (isRow) r += count; else c += count; }
+          }
+          const f = adjustFormulaForStructure(`=${it.ref}`, { targetSheet: target.name, hostSheet: sh.name, axis, index, count }).slice(1);
+          return f.includes('#REF!') ? null : { ...it, r, c, ref: f };
+        }).filter(Boolean),
+      })).filter((g) => g.items.length);
+    });
+    if (target.page && (target.page.area || target.page.titleRows || target.page.titleCols)) {
+      // 인쇄 영역 · 인쇄 제목도 함께 이동
+      const pg = { ...target.page };
+      if (pg.area) pg.area = adjustRange(pg.area, axis, index, count);
+      const k = isRow ? 'titleRows' : 'titleCols';
+      if (pg[k]) {
+        const rg = adjustRange(isRow ? { r1: pg[k][0], r2: pg[k][1], c1: 0, c2: 0 } : { c1: pg[k][0], c2: pg[k][1], r1: 0, r2: 0 }, axis, index, count);
+        pg[k] = rg ? (isRow ? [rg.r1, rg.r2] : [rg.c1, rg.c2]) : null;
+      }
+      target.page = pg;
+    }
     if (target.outline) {
       // 개요 수준 · 접힘: 가운데에 넣은 행 · 열은 위아래(좌우) 중 낮은 수준을 따름
       const o = { ...target.outline };
@@ -1599,6 +1628,10 @@ export class Workbook {
       if (i !== si && (p !== sh.pivot || x.some((d, j) => d !== sh.pivotsExtra[j]))) { this.propSnap(i, 'pivot'); this.propSnap(i, 'pivotsExtra'); }
       sh.pivot = p;
       sh.pivotsExtra = x;
+      if (sh.sparklines?.some((g) => g.items.some((it) => it.ref.includes('!')))) {
+        this.propSnap(i, 'sparklines');
+        sh.sparklines = sh.sparklines.map((g) => ({ ...g, items: g.items.map((it) => ({ ...it, ref: renameSheetInFormula(`=${it.ref}`, old, newName).slice(1) })) }));
+      }
     });
 
     const deps = this.sheetDeps();

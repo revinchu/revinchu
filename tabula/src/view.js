@@ -12,6 +12,9 @@ import { tableAt, tableCellStyle, tableFilterRange, styleByName } from './tables
 import { slicerCssVars } from './slicerstyle.js';
 import { fontAlias } from './fonts.js';
 import { maxLevel, groupsOf } from './outline.js';
+import { sparkValues, sparkSvg } from './sparkline.js';
+
+const sparkCache = new WeakMap(); // 스파크라인 항목 → { key, svg }
 
 export const DEFAULT_FONT = '맑은 고딕';
 export const DEFAULT_SIZE = 11;
@@ -495,6 +498,19 @@ export class GridView {
       }
     }
     for (const m of merges) html.push(this.cellHtml(m.r1, m.c1, p, sheet, merges, m));
+
+    // 스파크라인 (셀 안의 작은 차트)
+    for (const g of sheet.sparklines ?? []) {
+      for (const it of g.items) {
+        if (it.r < r1 || it.r > r2 || it.c < c1 || it.c > c2 || !rows.size(it.r) || !cols.size(it.c)) continue;
+        const w = cols.size(it.c);
+        const h = rows.size(it.r);
+        const key = `${wb.version}:${w}:${h}:${g.type}:${g.color}:${g.negColor}:${g.markers}:${g.high}:${g.low}:${g.first}:${g.last}:${g.negative}:${it.ref}`;
+        let hit = sparkCache.get(it);
+        if (!hit || hit.key !== key) { hit = { key, svg: sparkSvg(sparkValues(wb, si, it.ref), g, w, h) }; sparkCache.set(it, hit); }
+        html.push(`<svg class="spark" style="left:${cols.pos(it.c) - p.ox}px;top:${rows.pos(it.r) - p.oy}px;width:${w}px;height:${h}px">${hit.svg}</svg>`);
+      }
+    }
 
     // 필터 단추 (시트 필터 + 표마다)
     const targets = [

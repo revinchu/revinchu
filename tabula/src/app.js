@@ -28,6 +28,9 @@ import { SLICER_STYLES, slicerStyleName, slicerColors, CUSTOM_KEYS } from './sli
 import { server, idbSet, idbGet, idbDel } from './storage.js';
 import { itemStats, blockColumn, EMPTY as PIVOT_EMPTY } from './cube.js';
 import { logicalCol, ColBuilder } from './block.js';
+import { PROTECT_OPTIONS, defaultAllow, excelHash, isProtected, isLockedStyle, allowed } from './protect.js';
+import { PAPERS, MARGINS, normPage, paperOf, printScale, headerParts } from './page.js';
+import { SPARK_TYPES, sparkDefaults, sparkItems, sparkRef } from './sparkline.js';
 import { evalSteps, goalSeek, dataTable, specialCells, GOTO_KINDS, valueText } from './audit.js';
 import { normOutline, outlineEmpty, changeLevels, groupsOf, groupAt, toggleGroup, showLevel, summaryOf, planSubtotals, SUBTOTAL_FNS, maxLevel } from './outline.js';
 import { hid, hidCount } from './axis.js';
@@ -224,6 +227,8 @@ function updateSelectionUI() {
     // 분산된 셀: 원본 수식을 흐리게 표시 (엑셀과 같음)
     const anchor = !raw && !chartSel ? wb.spillAnchorOf(si, active.r, active.c) : null;
     if (anchor) raw = wb.getRaw(si, anchor.r, anchor.c);
+    // 보호된 시트의 '수식 숨기기' 셀은 수식을 보여 주지 않음
+    if (raw && isProtected(sheet()) && wb.styleAt(si, active.r, active.c).hideFormula) raw = '';
     dom.formula.value = raw;
     dom.formula.classList.toggle('ghost', !!anchor);
   }
@@ -470,6 +475,7 @@ function deselectChart() {
 
 function startEdit(mode, text = null, { fromBar = false, caret = null } = {}) {
   if (editing) return;
+  if (protectBlocked('cells', { r1: active.r, c1: active.c, r2: active.r, c2: active.c })) return;
   deselectChart();
   const { r, c } = active;
   const raw = wb.getRaw(si, r, c);
@@ -1031,7 +1037,7 @@ function onGridKey(e) {
     case 'PageUp': handled(); move(-gv.pageRows(), 0, { extend: e.shiftKey }); return;
     case 'Delete':
       handled();
-      if (special?.si === si) { const cells = special.cells; wb.transact(() => { for (const [rr, cc] of cells) { const cur = wb.getCell(si, rr, cc); if (cur?.raw) wb.setCellData(si, rr, cc, { raw: '', style: cur.style, comment: cur.comment }); } }, meta()); return; }
+      if (special?.si === si && !protectBlocked('cells')) { const cells = special.cells; wb.transact(() => { for (const [rr, cc] of cells) { const cur = wb.getCell(si, rr, cc); if (cur?.raw) wb.setCellData(si, rr, cc, { raw: '', style: cur.style, comment: cur.comment }); } }, meta()); return; }
       run('clearContents');
       return;
     case 'Backspace': handled(); startEdit('enter', ''); return;
@@ -1511,7 +1517,7 @@ function onDragEnd() {
     case 'fill':
       fillPreview = null;
       gv.renderOverlays();
-      if (d.target) doFill(d.src, d.target);
+      if (d.target && !protectBlocked('cells', d.target)) doFill(d.src, d.target);
       break;
     case 'colResize': {
       if (d.newW === undefined) break;
@@ -1898,6 +1904,7 @@ function pasteText(text) {
 }
 
 function handlePaste(text) {
+  if (protectBlocked('cells')) return;
   const n = (s) => (s ?? '').replace(/\r\n?/g, '\n').replace(/\n$/, '');
   if (clip && (!text || n(text) === n(clip.text))) { pasteInternal('all'); return; }
   if (text) pasteText(text);
@@ -2163,6 +2170,167 @@ function hideSel(axis, hide) {
     const n = axis === 'row' ? stepFrom({ r: b, c: active.c }, 1, 0) : stepFrom({ r: active.r, c: b }, 0, 1);
     selectCell(n.r, n.c);
   }
+}
+
+// ───────────────────────── 스파크라인 ─────────────────────────
+const sparkGroupAt = (r, c) => (sheet().sparklines ?? []).find((g) => g.items.some((it) => it.r === r && it.c === c)) ?? null;
+
+/** 삽입 → 스파크라인: 데이터 범위 + 위치 범위 (위치가 한 열이면 행마다) */
+function insertSparkline(type) {
+  const data = usedClip(sel);
+  const guessLoc = data.c2 > data.c1 ? { r1: data.r1, c1: data.c2 + 1, r2: data.r2, c2: data.c2 + 1 } : { r1: data.r2 + 1, c1: data.c1, r2: data.r2 + 1, c2: data.c2 };
+  const a1 = (rg) => `${cellName(rg.r1, rg.c1)}${rg.r1 === rg.r2 && rg.c1 === rg.c2 ? '' : `:${cellName(rg.r2, rg.c2)}`}`;
+  formDialog(`스파크라인 만들기 (${SPARK_TYPES.find((t) => t.id === type).label})`, [
+    { name: 'data', label: '데이터 범위', value: a1(data) },
+    { name: 'loc', label: '위치 범위', value: a1(guessLoc) },
+  ], (v) => {
+    const d = parseRangeName(v.data.replace(/^.*!/, ''));
+    const l = parseRangeName(v.loc.replace(/^.*!/, ''));
+    const prefix = v.data.includes('!') ? `${v.data.slice(0, v.data.lastIndexOf('!') + 1)}` : '';
+    const items = d && l ? sparkItems(d, l, prefix) : null;
+    if (!items) { alertDialog('스파크라인', '위치 범위는 데이터 범위의 행 수(한 열)나 열 수(한 행)와 같아야 합니다.'); return false; }
+    // 같은 칸의 기존 스파크라인은 바꿈
+    const taken = new Set(items.map((it) => `${it.r},${it.c}`));
+    const rest = (sheet().sparklines ?? []).map((g) => ({ ...g, items: g.items.filter((it) => !taken.has(`${it.r},${it.c}`)) })).filter((g) => g.items.length);
+    const g = { id: `sp${Date.now().toString(36)}`, ...sparkDefaults(type), items };
+    wb.transact(() => wb.setSheetProp(si, 'sparklines', [...rest, g]), meta());
+    selectCell(items[0].r, items[0].c);
+    gv.renderAll();
+    return undefined;
+  });
+}
+
+/** 활성 셀의 스파크라인 그룹 고치기 */
+function updateSparkGroup(patch) {
+  const g = sparkGroupAt(active.r, active.c);
+  if (!g) { toast('스파크라인이 있는 셀을 선택하세요.'); return; }
+  const list = (sheet().sparklines ?? []).map((x) => (x.id === g.id ? { ...x, ...(typeof patch === 'function' ? patch(x) : patch) } : x)).filter((x) => x.items.length);
+  wb.transact(() => wb.setSheetProp(si, 'sparklines', list), meta());
+  gv.renderAll();
+  updateSelectionUI();
+}
+
+function sparkEditDialog() {
+  const g = sparkGroupAt(active.r, active.c);
+  if (!g) { toast('스파크라인이 있는 셀을 선택하세요.'); return; }
+  formDialog('스파크라인 편집', [
+    { name: 'color', label: '스파크라인 색', type: 'color', value: g.color },
+    { name: 'negColor', label: '음수 점 색', type: 'color', value: g.negColor },
+    { name: 'markerColor', label: '표식 · 높은/낮은/첫/마지막 점 색', type: 'color', value: g.markerColor },
+    { name: 'weight', label: '두께 (꺾은선형, pt)', type: 'number', value: g.weight ?? 1.25 },
+    { name: 'refs', label: '데이터 범위 (셀마다, 줄 바꿈으로 구분)', type: 'textarea', value: g.items.map((it) => `${cellName(it.r, it.c)} ← ${it.ref}`).join('\n') },
+  ], (v) => {
+    const refs = v.refs.split('\n').map((line) => line.split('←').map((x) => x.trim())).filter((x) => x.length === 2);
+    const items = g.items.map((it) => { const hit = refs.find(([cell]) => cell.toUpperCase() === cellName(it.r, it.c)); return hit && sparkRef(hit[1]) ? { ...it, ref: hit[1] } : it; });
+    const mc = v.markerColor;
+    updateSparkGroup({ color: v.color, negColor: v.negColor, markerColor: mc, highColor: mc, lowColor: mc, firstColor: mc, lastColor: mc, weight: Number(v.weight) || 1.25, items });
+  });
+}
+
+// ───────────────────────── 시트 보호 ─────────────────────────
+// 보호된 시트에서 명령마다 필요한 권한 (없는 명령은 선택한 셀이 모두 잠기지 않았을 때만)
+const PROTECT_FREE = new Set(['undo', 'redo', 'save', 'open', 'backstage', 'print', 'copy', 'find', 'goto', 'prevSheet', 'nextSheet', 'selectRegion',
+  'newWorkbook', 'pivotFieldList', 'tracePrecedents', 'traceDependents', 'removeArrows', 'evaluateFormula', 'errorCheck', 'watchWindow', 'gotoSpecial',
+  'outlineShow', 'outlineHide', 'freezePanes', 'freezeTop', 'freezeFirstCol', 'circleInvalid', 'clearCircles', 'macros', 'prevComment', 'nextComment',
+  'workbookStats', 'toggleGrid', 'togglePrintGrid', 'toggleFormulaBar', 'toggleHeaders', 'toggleFormulas', 'toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100',
+  'recalc', 'shortcuts', 'about', 'protectSheet', 'unprotectSheet', 'insertMenuKey', 'deleteMenuKey', 'addSheet', 'deleteSheet', 'duplicateSheet',
+  'hideSheet', 'unhideSheet', 'importCsv', 'exportCsv', 'selectPrecedents', 'selectDependents', 'selectComments', 'pageSetup', 'printArea', 'clearPrintArea',
+  'orientPortrait', 'orientLandscape', 'insertFunction']);
+const PROTECT_BLOCK = new Set(['mergeCenter', 'createTable', 'condManager', 'condNewRule', 'condMenuKey', 'tableStyleKey', 'dataValidation', 'insertPivot', 'outlineGroup',
+  'outlineUngroup', 'outlineClear', 'subtotal', 'resizeTable', 'convertToRange', 'tblName', 'tblHeader', 'tblTotals', 'tblBanded', 'tblBandedCols', 'tblFirstCol',
+  'tblLastCol', 'tblFilter', 'textToColumns', 'dedupe', 'sparkLine', 'sparkColumn', 'sparkWinLoss', 'sparkClear', 'sparkEdit']);
+const PROTECT_MAP = {
+  insertRows: 'insertRows', insertCols: 'insertColumns', deleteRows: 'deleteRows', deleteCols: 'deleteColumns', sortAsc: 'sort', sortDesc: 'sort', sortDialog: 'sort',
+  clearFilter: 'autoFilter', reapplyFilter: 'autoFilter', toggleFilter: 'autoFilter', hideRows: 'formatRows', unhideRows: 'formatRows', autofitRowsSel: 'formatRows',
+  hideCols: 'formatColumns', autofitSel: 'formatColumns', refreshAll: 'pivotTables', calcField: 'pivotTables', slicerConnections: 'pivotTables',
+  chartColumn: 'objects', chartBar: 'objects', chartLine: 'objects', chartPie: 'objects', chartArea: 'objects', chartScatter: 'objects', shapesMenu: 'objects',
+  insertTextbox: 'objects', insertPicture: 'objects', insertSlicer: 'objects',
+};
+const FORMAT_CMDS = /^(painter|painterSticky|bold|italic|underline|strike|fontFamily|fontSize|growFont|shrinkFont|border|fillColor|fontColor|fontDialog|formatCells|align|valign|wrap|indent|numFmt|fmt|incDecimal|decDecimal|clearFormats|cellStyle)/;
+function protectAction(cmd) {
+  if (PROTECT_FREE.has(cmd)) return 'free';
+  if (PROTECT_BLOCK.has(cmd)) return 'block';
+  if (PROTECT_MAP[cmd]) return PROTECT_MAP[cmd];
+  if (/^(pivot|pv|slicer)/.test(cmd)) return 'pivotTables';
+  if (FORMAT_CMDS.test(cmd)) return 'formatCells';
+  return 'cells';
+}
+/** 범위 안에 잠긴 셀이 있는지 (너무 크면 앞쪽만 보고, 시트 기본 서식으로 판단) */
+function anyLocked(rg) {
+  const r = usedClip(rg);
+  const n = (r.r2 - r.r1 + 1) * (r.c2 - r.c1 + 1);
+  if (n > 200000) return isLockedStyle(sheet().allStyle ?? {});
+  for (let rr = r.r1; rr <= r.r2; rr++) for (let cc = r.c1; cc <= r.c2; cc++) if (isLockedStyle(wb.styleAt(si, rr, cc))) return true;
+  return false;
+}
+/** 보호 때문에 막히면 알리고 true */
+function protectBlocked(action = 'cells', rg = sel) {
+  const sh = sheet();
+  if (!isProtected(sh) || action === 'free') return false;
+  const blocked = action === 'cells' ? anyLocked(special?.si === si ? { r1: sel.r1, c1: sel.c1, r2: sel.r2, c2: sel.c2 } : rg) : action === 'block' || !allowed(sh, action);
+  if (blocked) alertDialog('Tabula', '변경하려는 셀이나 차트가 보호된 시트에 있습니다. 변경하려면 [검토] 탭에서 [시트 보호 해제]를 누르세요. 암호를 입력해야 할 수도 있습니다.');
+  return blocked;
+}
+
+/** 엑셀 최신 방식(SHA-512 + salt + 반복) 암호 확인 */
+async function verifyModernHash(m, pw) {
+  const enc = new Uint8Array(pw.length * 2);
+  for (let i = 0; i < pw.length; i++) { enc[i * 2] = pw.charCodeAt(i) & 255; enc[i * 2 + 1] = pw.charCodeAt(i) >> 8; }
+  const salt = Uint8Array.from(atob(m.saltValue), (ch) => ch.charCodeAt(0));
+  let h = new Uint8Array(await crypto.subtle.digest(m.algorithmName === 'SHA-256' ? 'SHA-256' : 'SHA-512', new Uint8Array([...salt, ...enc])));
+  const n = Number(m.spinCount) || 0;
+  const buf = new Uint8Array(h.length + 4);
+  for (let i = 0; i < n; i++) {
+    buf.set(h);
+    buf[h.length] = i & 255; buf[h.length + 1] = (i >> 8) & 255; buf[h.length + 2] = (i >> 16) & 255; buf[h.length + 3] = (i >>> 24) & 255;
+    h = new Uint8Array(await crypto.subtle.digest(m.algorithmName === 'SHA-256' ? 'SHA-256' : 'SHA-512', buf.slice(0, h.length + 4)));
+  }
+  return btoa(String.fromCharCode(...h)) === m.hashValue;
+}
+
+function protectSheetDialog() {
+  const sh = sheet();
+  if (isProtected(sh)) { unprotectSheet(); return; }
+  const allow = { ...defaultAllow(), ...(sh.protect?.allow ?? {}) };
+  formDialog('시트 보호', [
+    { name: 'pw', label: '시트 보호 해제 암호 (선택)', type: 'password', value: '' },
+    { name: 'pw2', label: '암호 확인', type: 'password', value: '' },
+    ...PROTECT_OPTIONS.map((o) => ({ name: o.id, label: `허용: ${o.label}`, type: 'checkbox', value: allow[o.id] })),
+  ], (v) => {
+    if (v.pw !== v.pw2) { alertDialog('시트 보호', '확인 암호가 일치하지 않습니다.'); return false; }
+    const next = { on: true, hash: excelHash(v.pw), allow: Object.fromEntries(PROTECT_OPTIONS.map((o) => [o.id, !!v[o.id]])) };
+    wb.transact(() => wb.setSheetProp(si, 'protect', next), meta());
+    ribbon.update?.(ribbonState());
+    toast(`'${sh.name}' 시트를 보호했습니다. 잠기지 않은 셀만 편집할 수 있습니다 (셀 서식 → 보호에서 잠금 해제).`);
+    return undefined;
+  }, { note: '보호하면 잠긴 셀(기본)은 바꿀 수 없습니다. 입력을 허용할 셀은 먼저 [셀 서식 → 보호]에서 [잠금]을 해제하세요.' });
+}
+
+function unprotectSheet() {
+  const sh = sheet();
+  const p = sh.protect;
+  const done = () => { wb.transact(() => wb.setSheetProp(si, 'protect', null), meta()); ribbon.update?.(ribbonState()); updateSelectionUI(); toast('시트 보호를 해제했습니다.'); };
+  if (!p?.hash && !p?.modern?.hashValue) { done(); return; }
+  formDialog('시트 보호 해제', [{ name: 'pw', label: '암호', type: 'password', value: '' }], (v) => {
+    if (p.hash) {
+      if (excelHash(v.pw) !== String(p.hash).toUpperCase().padStart(4, '0')) { alertDialog('시트 보호 해제', '암호가 잘못되었습니다. Caps Lock 키가 켜져 있는지 확인하고 대/소문자를 정확히 입력하세요.'); return false; }
+      done();
+      return undefined;
+    }
+    verifyModernHash(p.modern, v.pw).then((ok) => { if (ok) done(); else alertDialog('시트 보호 해제', '암호가 잘못되었습니다.'); }).catch(() => alertDialog('시트 보호 해제', '이 암호 방식은 확인할 수 없습니다.'));
+    return undefined;
+  });
+}
+
+/** 셀 잠금 · 수식 숨기기 (셀 서식 → 보호) */
+function cellProtectionDialog() {
+  const st = wb.styleAt(si, active.r, active.c);
+  formDialog('셀 보호', [
+    { name: 'locked', label: '잠금', type: 'checkbox', value: st.locked !== false },
+    { name: 'hide', label: '숨김 (수식 숨기기)', type: 'checkbox', value: !!st.hideFormula },
+  ], (v) => {
+    applyStyle({ locked: v.locked ? undefined : false, hideFormula: v.hide || undefined });
+  }, { note: '셀 잠금이나 수식 숨기기는 시트를 보호해야 적용됩니다 ([검토] → [시트 보호]).' });
 }
 
 // ───────────────────────── 수식 분석 · 가상 분석 ─────────────────────────
@@ -6310,18 +6478,28 @@ function openBackstage(panel = 'new') {
 /** 인쇄: 사용한 범위를 표로 만들어 인쇄 */
 function printSheet() {
   const s = sheet();
+  const pg = normPage(s.page);
   const u = wb.usedRange(si);
-  const rows = Math.min(u.rows, 5000);
-  const cols = Math.min(u.cols, 100);
-  const parts = [`<h2>${escapeHtml(docName)} — ${escapeHtml(s.name)}</h2>`];
-  if (rows && cols) {
-    const colgroup = range(0, cols - 1).map((c) => `<col style="width:${gv.cols.size(c)}px">`).join('');
-    const body = [];
-    for (let r = 0; r < rows; r++) {
-      if (gv.rows.isHidden(r)) continue;
+  // 인쇄 영역이 있으면 그 범위만
+  const area = pg.area ?? { r1: 0, c1: 0, r2: Math.min(u.rows, 20000) - 1, c2: Math.min(u.cols, 200) - 1 };
+  const r1 = area.r1;
+  const c1 = area.c1;
+  const r2 = Math.min(area.r2, r1 + 20000);
+  const c2 = Math.min(area.c2, c1 + 200);
+  const hf = (code) => headerParts(code, { file: docName, sheet: s.name });
+  const hdr = pg.header ? hf(pg.header) : { left: '', center: `${docName} — ${s.name}`, right: '' };
+  const parts = [`<div class="print-hf">${['left', 'center', 'right'].map((k) => `<span>${escapeHtml(hdr[k])}</span>`).join('')}</div>`];
+  const colsList = range(c1, c2).filter((c) => !gv.cols.isHidden(c));
+  const gridOn = pg.gridlines || view.printGrid;
+  let tableW = 0;
+  let tableH = 0;
+  if (r2 >= r1 && c2 >= c1) {
+    const colgroup = (pg.headings ? '<col style="width:34px">' : '') + colsList.map((c) => `<col style="width:${gv.cols.size(c)}px">`).join('');
+    tableW = colsList.reduce((w, c) => w + gv.cols.size(c), pg.headings ? 34 : 0);
+    const rowHtml = (r) => {
       const tds = [];
-      for (let c = 0; c < cols; c++) {
-        if (gv.cols.isHidden(c)) { tds.push('<td></td>'); continue; }
+      if (pg.headings) tds.push(`<td class="ph">${r + 1}</td>`);
+      for (const c of colsList) {
         const st = styleAt(r, c);
         const { text, align } = formatValue(valueAt(r, c), st);
         const css = [`text-align:${st.align || align}`, st.bold && 'font-weight:700', st.italic && 'font-style:italic', st.color && `color:${st.color}`,
@@ -6329,16 +6507,72 @@ function printSheet() {
           st.bb && 'border-bottom:1px solid #000', st.bt && 'border-top:1px solid #000', st.bl && 'border-left:1px solid #000', st.br && 'border-right:1px solid #000'].filter(Boolean).join(';');
         tds.push(`<td style="${css}">${escapeHtml(text)}</td>`);
       }
-      body.push(`<tr style="height:${gv.rows.size(r)}px">${tds.join('')}</tr>`);
-    }
-    parts.push(`<table class="${view.printGrid ? 'grid-lines' : ''}"><colgroup>${colgroup}</colgroup>${body.join('')}</table>`);
+      tableH += gv.rows.size(r);
+      return `<tr style="height:${gv.rows.size(r)}px">${tds.join('')}</tr>`;
+    };
+    // 인쇄 제목(반복할 행)은 thead 로 — 브라우저가 쪽마다 반복
+    const head = [];
+    if (pg.headings) head.push(`<tr><td class="ph"></td>${colsList.map((c) => `<td class="ph">${colToName(c)}</td>`).join('')}</tr>`);
+    const titleSet = new Set();
+    if (pg.titleRows) for (let r = pg.titleRows[0]; r <= pg.titleRows[1]; r++) { titleSet.add(r); if (!gv.rows.isHidden(r)) head.push(rowHtml(r)); }
+    const body = [];
+    for (let r = r1; r <= r2; r++) if (!gv.rows.isHidden(r) && !titleSet.has(r)) body.push(rowHtml(r));
+    const scale = printScale(pg, tableW, tableH);
+    parts.push(`<table class="${gridOn ? 'grid-lines' : ''}" style="zoom:${scale};${pg.hCenter ? 'margin:0 auto;' : ''}"><colgroup>${colgroup}</colgroup>${head.length ? `<thead>${head.join('')}</thead>` : ''}<tbody>${body.join('')}</tbody></table>`);
   }
-  for (const ch of s.charts) parts.push(`<div class="chart-print">${gv.chartSvg(ch)}</div>`);
-  for (const im of s.images ?? []) parts.push(`<div class="chart-print"><img src="${escapeHtml(im.src)}" style="width:${im.w}px;height:${im.h}px" alt=""></div>`);
-  for (const sh of s.shapes ?? []) parts.push(`<div class="chart-print" style="position:relative;width:${sh.w}px;height:${Math.max(1, sh.h)}px">${shapeSvg(sh)}${sh.text ? `<div style="position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;padding:4px 8px;white-space:pre-wrap;text-align:${sh.align ?? 'center'};color:${escapeHtml(sh.color ?? '#000')};font-size:${sh.size ?? 11}pt">${escapeHtml(sh.text)}</div>` : ''}</div>`);
+  if (!pg.area) {
+    for (const ch of s.charts) parts.push(`<div class="chart-print">${gv.chartSvg(ch)}</div>`);
+    for (const im of s.images ?? []) parts.push(`<div class="chart-print"><img src="${escapeHtml(im.src)}" style="width:${im.w}px;height:${im.h}px" alt=""></div>`);
+    for (const sh of s.shapes ?? []) parts.push(`<div class="chart-print" style="position:relative;width:${sh.w}px;height:${Math.max(1, sh.h)}px">${shapeSvg(sh)}${sh.text ? `<div style="position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;padding:4px 8px;white-space:pre-wrap;text-align:${sh.align ?? 'center'};color:${escapeHtml(sh.color ?? '#000')};font-size:${sh.size ?? 11}pt">${escapeHtml(sh.text)}</div>` : ''}</div>`);
+  }
+  if (pg.footer) { const ft = hf(pg.footer); parts.push(`<div class="print-hf foot">${['left', 'center', 'right'].map((k) => `<span>${escapeHtml(ft[k])}</span>`).join('')}</div>`); }
+  // 용지 · 방향 · 여백
+  const m = pg.margins;
+  let st = document.getElementById('pageStyle');
+  if (!st) { st = document.createElement('style'); st.id = 'pageStyle'; document.head.append(st); }
+  st.textContent = `@page { size: ${paperOf(pg.paper).css} ${pg.orientation}; margin: ${m.top}in ${m.right}in ${m.bottom}in ${m.left}in; }`;
   dom.printArea.innerHTML = parts.join('');
   window.print();
 }
+
+/** 페이지 설정 대화 상자 (용지 · 방향 · 여백 · 배율 · 인쇄 영역 · 인쇄 제목 · 머리글/바닥글) */
+function pageSetupDialog() {
+  const pg = normPage(sheet().page);
+  const a1 = (rg) => (rg ? `${cellName(rg.r1, rg.c1)}:${cellName(rg.r2, rg.c2)}` : '');
+  formDialog('페이지 설정', [
+    { name: 'orientation', label: '용지 방향', type: 'select', value: pg.orientation, options: [{ value: 'portrait', label: '세로' }, { value: 'landscape', label: '가로' }] },
+    { name: 'paper', label: '용지 크기', type: 'select', value: String(pg.paper), options: PAPERS.map((p) => ({ value: String(p.id), label: p.label })) },
+    { name: 'scale', label: '확대/축소 배율 (%)', type: 'number', value: pg.scale },
+    { name: 'fitW', label: '자동 맞춤: 용지 너비 (쪽, 0 = 사용 안 함)', type: 'number', value: pg.fitW },
+    { name: 'fitH', label: '자동 맞춤: 용지 높이 (쪽, 0 = 제한 없음)', type: 'number', value: pg.fitH },
+    { name: 'margins', label: '여백 (인치: 위, 아래, 왼쪽, 오른쪽)', value: [pg.margins.top, pg.margins.bottom, pg.margins.left, pg.margins.right].join(', ') },
+    { name: 'hCenter', label: '페이지 가운데 맞춤: 가로', type: 'checkbox', value: pg.hCenter },
+    { name: 'header', label: '머리글 (&L 왼쪽 &C 가운데 &R 오른쪽, &P 쪽 &N 전체 &D 날짜 &A 시트 &F 파일)', value: pg.header },
+    { name: 'footer', label: '바닥글', value: pg.footer },
+    { name: 'area', label: '인쇄 영역 (예: A1:H40, 비우면 전체)', value: a1(pg.area) },
+    { name: 'titleRows', label: '반복할 행 (예: 1:2)', value: pg.titleRows ? `${pg.titleRows[0] + 1}:${pg.titleRows[1] + 1}` : '' },
+    { name: 'gridlines', label: '눈금선 인쇄', type: 'checkbox', value: pg.gridlines },
+    { name: 'headings', label: '행/열 머리글 인쇄', type: 'checkbox', value: pg.headings },
+  ], (v) => {
+    const mm = v.margins.split(/[,\s]+/).map(Number).filter((x) => Number.isFinite(x));
+    const tr = /^\$?(\d+):\$?(\d+)$/.exec(v.titleRows.trim());
+    const area = v.area.trim() ? parseRangeName(v.area.trim().replace(/\$/g, '')) : null;
+    if (v.area.trim() && !area) { alertDialog('페이지 설정', '인쇄 영역 참조가 올바르지 않습니다.'); return false; }
+    const next = {
+      ...pg, orientation: v.orientation, paper: Number(v.paper), scale: Math.max(10, Math.min(400, Number(v.scale) || 100)),
+      fitW: Math.max(0, Number(v.fitW) || 0), fitH: Math.max(0, Number(v.fitH) || 0), hCenter: v.hCenter, header: v.header, footer: v.footer,
+      margins: mm.length === 4 ? { ...pg.margins, top: mm[0], bottom: mm[1], left: mm[2], right: mm[3] } : pg.margins,
+      area, titleRows: tr ? [Number(tr[1]) - 1, Number(tr[2]) - 1] : null, gridlines: v.gridlines, headings: v.headings,
+    };
+    setPage(next);
+    return undefined;
+  });
+}
+function setPage(next) {
+  wb.transact(() => wb.setSheetProp(si, 'page', next), meta());
+  gv.renderAll();
+}
+const patchPage = (patch) => setPage({ ...normPage(sheet().page), ...patch });
 
 // ───────────────────────── 대화상자 ─────────────────────────
 function insertFunctionDialog() {
@@ -7528,6 +7762,26 @@ const MENUS = {
   fontList: (a) => { fontMenu(a); },
   pivotStylesDesign: (a) => { pivotStyleGallery(a); },
   slicerStyles: (a) => { slicerStyleGallery(a); },
+  marginsMenu: () => [
+    ...MARGINS.map((m) => ({ label: `${m.label} (위 ${m.m.top}" 아래 ${m.m.bottom}" 왼쪽 ${m.m.left}" 오른쪽 ${m.m.right}")`, action: () => patchPage({ margins: { ...m.m } }) })),
+    { sep: true },
+    { label: '사용자 지정 여백...', action: () => pageSetupDialog() },
+  ],
+  orientMenu: () => [
+    { label: '세로', action: () => run('orientPortrait') },
+    { label: '가로', action: () => run('orientLandscape') },
+  ],
+  paperMenu: () => PAPERS.map((p) => ({ label: p.label, action: () => patchPage({ paper: p.id }) })),
+  printAreaMenu: () => [
+    { label: '인쇄 영역 설정', action: () => run('printArea') },
+    { label: '인쇄 영역 해제', action: () => run('clearPrintArea') },
+  ],
+  fitMenu: () => [
+    { label: '현재 크기 (100%)', action: () => patchPage({ scale: 100, fitW: 0, fitH: 0 }) },
+    { label: '한 페이지에 시트 맞추기', action: () => patchPage({ fitW: 1, fitH: 1 }) },
+    { label: '한 페이지에 모든 열 맞추기', action: () => patchPage({ fitW: 1, fitH: 0 }) },
+    { label: '한 페이지에 모든 행 맞추기', action: () => patchPage({ fitW: 0, fitH: 1 }) },
+  ],
   whatIf: () => [
     { label: '목표값 찾기...', action: () => run('goalSeek') },
     { label: '데이터 표...', action: () => run('dataTable') },
@@ -7974,6 +8228,29 @@ const COMMANDS = {
   pivotFieldList: () => { pivotPaneOpen = !pivotPaneOpen; refreshPivotPane(true); },
   pivotName: (v) => renamePivot(v),
   pivotOptions: () => pivotOptionsDialog(),
+  pageSetup: () => pageSetupDialog(),
+  orientPortrait: () => patchPage({ orientation: 'portrait' }),
+  orientLandscape: () => patchPage({ orientation: 'landscape' }),
+  printArea: () => { patchPage({ area: usedClip(sel) }); toast(`인쇄 영역: ${cellName(sel.r1, sel.c1)}:${cellName(usedClip(sel).r2, usedClip(sel).c2)}`); },
+  clearPrintArea: () => patchPage({ area: null }),
+  printTitles: () => pageSetupDialog(),
+  sparkLine: () => insertSparkline('line'),
+  sparkColumn: () => insertSparkline('column'),
+  sparkWinLoss: () => insertSparkline('winloss'),
+  sparkTypeLine: () => updateSparkGroup({ type: 'line' }),
+  sparkTypeColumn: () => updateSparkGroup({ type: 'column' }),
+  sparkTypeWinLoss: () => updateSparkGroup({ type: 'winloss' }),
+  sparkHigh: () => updateSparkGroup((g) => ({ high: !g.high })),
+  sparkLow: () => updateSparkGroup((g) => ({ low: !g.low })),
+  sparkNegative: () => updateSparkGroup((g) => ({ negative: !g.negative })),
+  sparkFirst: () => updateSparkGroup((g) => ({ first: !g.first })),
+  sparkLast: () => updateSparkGroup((g) => ({ last: !g.last })),
+  sparkMarkers: () => updateSparkGroup((g) => ({ markers: !g.markers })),
+  sparkClear: () => updateSparkGroup(() => ({ items: [] })),
+  sparkEdit: () => sparkEditDialog(),
+  protectSheet: () => protectSheetDialog(),
+  unprotectSheet: () => unprotectSheet(),
+  cellProtection: () => cellProtectionDialog(),
   tracePrecedents: () => tracePrecedents(),
   traceDependents: () => traceDependents(),
   removeArrows: () => removeArrows(),
@@ -8114,6 +8391,7 @@ function run(cmd, arg) {
   }
   const fn = COMMANDS[cmd];
   if (!fn) { toast('지원하지 않는 기능입니다.'); return; }
+  if (protectBlocked(protectAction(cmd))) return;
   fn(arg);
   if (REPEATABLE.has(cmd)) lastRepeat = () => COMMANDS[cmd](arg);
   focusGrid();
@@ -8161,12 +8439,15 @@ function tableRibbonState() {
   const t = chartSel ? null : tableHere();
   const sl = chartSel ? (sheet().slicers ?? []).find((x) => x.id === chartSel) : null;
   const pv = chartSel ? null : pivotHere();
-  const context = [...(t ? ['table'] : []), ...(sl ? ['slicer'] : []), ...(pv ? ['pivot'] : [])];
+  const sg = chartSel ? null : sparkGroupAt(active.r, active.c);
+  const context = [...(t ? ['table'] : []), ...(sl ? ['slicer'] : []), ...(pv ? ['pivot'] : []), ...(sg ? ['spark'] : [])];
   const so = { rowHeaders: true, colHeaders: true, bandRows: false, bandCols: false, ...(pv?.def.styleOpts ?? {}) };
   const base = {
     context, slicerCaption: sl?.caption ?? '', slicerCols: String(sl?.columns ?? 1), slicerMultiOn: !!sl?.multi,
     slicerBtnH: String(sl?.buttonHeight ?? 24), slicerHeaderOn: sl ? sl.showHeader !== false : false,
-    pivotName: pv ? pivotNameOf(pv) : '', pvShowExpand: pv ? pv.def.showExpand !== false : false, pvRowHeaders: so.rowHeaders, pvColHeaders: so.colHeaders, pvBandRows: so.bandRows, pvBandCols: so.bandCols,
+    sparkIsLine: sg?.type === 'line', sparkIsColumn: sg?.type === 'column', sparkIsWinLoss: sg?.type === 'winloss',
+    sparkHigh: !!sg?.high, sparkLow: !!sg?.low, sparkNegative: !!sg?.negative, sparkFirst: !!sg?.first, sparkLast: !!sg?.last, sparkMarkers: !!sg?.markers,
+    sheetProtected: isProtected(sheet()), pivotName: pv ? pivotNameOf(pv) : '', pvShowExpand: pv ? pv.def.showExpand !== false : false, pvRowHeaders: so.rowHeaders, pvColHeaders: so.colHeaders, pvBandRows: so.bandRows, pvBandCols: so.bandCols,
   };
   if (!t) return base;
   return {

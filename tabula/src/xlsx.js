@@ -1,6 +1,8 @@
 // .xlsx 읽기/쓰기 (Office Open XML). DOM 없이 동작하므로 Node 에서도 테스트 가능.
 import { unzip, unzipAsync, zip, zipAsync, textOf } from './zip.js';
 import { CellMap } from './cellmap.js';
+import { protectFromAttrs, protectXml } from './protect.js';
+import { pageXml, pageFromXml, normPage } from './page.js';
 import { parseXml, child, kids, descendants, allText, esc, decodeEntities } from './xml.js';
 import {
   parse, tokenize, shiftFormula, colToName, nameToCol, cellName, parseRangeName, FUNCS, isError,
@@ -228,6 +230,12 @@ function readStyles(files, wbRels, theme) {
       if (v === 'top' || v === 'center') st.valign = v === 'center' ? 'middle' : 'top';
       if (al.attrs.wrapText === '1' || al.attrs.wrapText === 'true') st.wrap = true;
       if (Number(al.attrs.indent)) st.indent = Number(al.attrs.indent);
+    }
+    // 셀 보호: 잠금 해제 · 수식 숨기기
+    const pr = child(xf, 'protection');
+    if (pr) {
+      if (pr.attrs.locked === '0' || pr.attrs.locked === 'false') st.locked = false;
+      if (pr.attrs.hidden === '1' || pr.attrs.hidden === 'true') st.hideFormula = true;
     }
     return st;
   });
@@ -787,6 +795,33 @@ function* readSheet(files, path, ctx) {
   }
   sheet.validations = readValidations(root);
   sheet.codeName = child(root, 'sheetPr')?.attrs.codeName;
+  // 스파크라인
+  const sgs = descendants(root, 'sparklineGroup');
+  if (sgs.length) {
+    const col = (g, tag, dflt) => colorOf(child(g, tag), ctx.theme) ?? dflt;
+    sheet.sparklines = sgs.map((g, gi) => {
+      const a = g.attrs;
+      const flag = (k) => a[k] === '1' || a[k] === 'true';
+      const items = descendants(g, 'sparkline').map((spk) => {
+        const f = (child(spk, 'f')?.text ?? '').trim();
+        const at = refToRange((child(spk, 'sqref')?.text ?? '').trim());
+        if (!f || !at) return null;
+        const own = f.replace(/^'?(.*?)'?!/, (m, n) => (n.replace(/''/g, "'") === sheet.name ? '' : m));
+        return { r: at.r1, c: at.c1, ref: own };
+      }).filter(Boolean);
+      return {
+        id: `sp${gi}`, type: a.type === 'column' ? 'column' : a.type === 'stacked' ? 'winloss' : 'line',
+        color: col(g, 'colorSeries', '#376092'), negColor: col(g, 'colorNegative', '#d00000'), markerColor: col(g, 'colorMarkers', '#d00000'),
+        highColor: col(g, 'colorHigh', '#d00000'), lowColor: col(g, 'colorLow', '#d00000'), firstColor: col(g, 'colorFirst', '#d00000'), lastColor: col(g, 'colorLast', '#d00000'),
+        markers: flag('markers'), high: flag('high'), low: flag('low'), first: flag('first'), last: flag('last'), negative: flag('negative'),
+        weight: Number(a.lineWeight ?? 0.75), items,
+      };
+    }).filter((g) => g.items.length);
+  }
+  const pg = pageFromXml({ printOptions: child(root, 'printOptions'), pageMargins: child(root, 'pageMargins'), pageSetup: child(root, 'pageSetup'), headerFooter: child(root, 'headerFooter'), fitToPage: ['1', 'true'].includes(child(child(root, 'sheetPr'), 'pageSetUpPr')?.attrs.fitToPage) });
+  if (pg) sheet.page = pg;
+  const sp = child(root, 'sheetProtection');
+  if (sp) { const p = protectFromAttrs(sp.attrs); if (p) sheet.protect = p; }
   const olp = child(child(root, 'sheetPr'), 'outlinePr');
   if (sheet.outline && olp) {
     if (olp.attrs.summaryBelow === '0' || olp.attrs.summaryBelow === 'false') sheet.outline.below = false;
@@ -1475,9 +1510,11 @@ function* readXlsxSteps(files) {
   // 이름 정의 (시트 범위 이름은 localSheetId → 시트 이름)
   const allSheetNames = kids(child(wbRoot, 'sheets'), 'sheet').map((sh) => sh.attrs.name.slice(0, 31));
   const names = [];
+  const printNames = []; // 인쇄 영역 · 인쇄 제목 (시트를 읽은 뒤 page 에 넣음)
   for (const dn of kids(child(wbRoot, 'definedNames'), 'definedName')) {
     const name = dn.attrs.name;
     const text = (dn.text ?? '').trim();
+    if (/^_xlnm\.(Print_Area|Print_Titles)$/i.test(name) && dn.attrs.localSheetId !== undefined) printNames.push({ kind: /Area/i.test(name) ? 'area' : 'titles', sheet: allSheetNames[Number(dn.attrs.localSheetId)], text });
     if (!name || /^_xlnm\.|^_xlfn\./i.test(name) || !text) continue;
     if (text === '#N/A' && /^(Slicer_|슬라이서_)/i.test(name)) continue;
     const sheet = dn.attrs.localSheetId !== undefined ? allSheetNames[Number(dn.attrs.localSheetId)] ?? null : null;
@@ -1509,6 +1546,19 @@ function* readXlsxSteps(files) {
     unsupported += sheet.unsupported;
     delete sheet.unsupported;
     sheets.push({ name: sh.attrs.name.slice(0, 31), ...sheet, _sheetId: Number(sh.attrs.sheetId), ...(sh.attrs.state === 'hidden' || sh.attrs.state === 'veryHidden' ? { state: sh.attrs.state } : {}) });
+  }
+  for (const pn of printNames) {
+    const sh = sheets.find((x) => x.name === pn.sheet);
+    if (!sh) continue;
+    const page = normPage(sh.page);
+    for (const part of pn.text.split(',')) {
+      const ref = part.slice(part.lastIndexOf('!') + 1).replace(/\$/g, '');
+      const rows = /^(\d+):(\d+)$/.exec(ref);
+      const cols = /^([A-Z]+):([A-Z]+)$/i.exec(ref);
+      if (pn.kind === 'area') { const rg = parseRangeName(ref); if (rg) page.area = rg; } else if (rows) page.titleRows = [Number(rows[1]) - 1, Number(rows[2]) - 1];
+      else if (cols) page.titleCols = [nameToCol(cols[1].toUpperCase()), nameToCol(cols[2].toUpperCase())];
+    }
+    sh.page = page;
   }
   yield { p: 0.92, msg: "피벗 테이블 · 슬라이서 연결 중" };
   linkPivotsAndSlicers(files, wbRels, sheets, ctx);
@@ -1647,7 +1697,9 @@ class StylePool {
     if (style.valign) align.push(`vertical="${style.valign === 'middle' ? 'center' : 'top'}"`);
     if (style.wrap) align.push('wrapText="1"');
     if (style.indent) align.push(`indent="${style.indent}"`);
-    const xml = `<xf numFmtId="${numFmtId}" fontId="${fontId}" fillId="${fillId}" borderId="${borderId}" xfId="0"${numFmtId ? ' applyNumberFormat="1"' : ''}${fontId ? ' applyFont="1"' : ''}${fillId ? ' applyFill="1"' : ''}${borderId ? ' applyBorder="1"' : ''}${align.length ? ` applyAlignment="1"><alignment ${align.join(' ')}/></xf>` : '/>'}`;
+    const prot = style.locked === false || style.hideFormula ? `<protection${style.locked === false ? ' locked="0"' : ''}${style.hideFormula ? ' hidden="1"' : ''}/>` : '';
+    const inner = (align.length ? `<alignment ${align.join(' ')}/>` : '') + prot;
+    const xml = `<xf numFmtId="${numFmtId}" fontId="${fontId}" fillId="${fillId}" borderId="${borderId}" xfId="0"${numFmtId ? ' applyNumberFormat="1"' : ''}${fontId ? ' applyFont="1"' : ''}${fillId ? ' applyFill="1"' : ''}${borderId ? ' applyBorder="1"' : ''}${align.length ? ' applyAlignment="1"' : ''}${prot ? ' applyProtection="1"' : ''}${inner ? `>${inner}</xf>` : '/>'}`;
     const id = this.xfs.length;
     this.xfs.push(xml);
     this.maps.xf.set(k, id);
@@ -2584,8 +2636,18 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {}) 
     const olMax = (o) => Object.values(o ?? {}).reduce((m, v) => Math.max(m, v), 0);
     const olRowMax = olMax(sheet.outline?.rows);
     const olColMax = olMax(olc);
-    const olPr = sheet.outline && (sheet.outline.below === false || sheet.outline.right === false)
-      ? `<outlinePr${sheet.outline.below === false ? ' summaryBelow="0"' : ''}${sheet.outline.right === false ? ' summaryRight="0"' : ''}/>` : '';
+    const pgx = pageXml(sheet.page, esc);
+    const olPr = (sheet.outline && (sheet.outline.below === false || sheet.outline.right === false)
+      ? `<outlinePr${sheet.outline.below === false ? ' summaryBelow="0"' : ''}${sheet.outline.right === false ? ' summaryRight="0"' : ''}/>` : '')
+      + (pgx.fitToPage ? '<pageSetUpPr fitToPage="1"/>' : '');
+    // 인쇄 영역 · 인쇄 제목 (이름 정의)
+    if (sheet.page?.area) definedNames.push(`<definedName name="_xlnm.Print_Area" localSheetId="${si}">${esc(`${quoteSheetName(sheet.name)}!${rangeRef(sheet.page.area, true)}`)}</definedName>`);
+    if (sheet.page?.titleRows || sheet.page?.titleCols) {
+      const parts = [];
+      if (sheet.page.titleCols) parts.push(`${quoteSheetName(sheet.name)}!$${colToName(sheet.page.titleCols[0])}:$${colToName(sheet.page.titleCols[1])}`);
+      if (sheet.page.titleRows) parts.push(`${quoteSheetName(sheet.name)}!$${sheet.page.titleRows[0] + 1}:$${sheet.page.titleRows[1] + 1}`);
+      definedNames.push(`<definedName name="_xlnm.Print_Titles" localSheetId="${si}">${esc(parts.join(','))}</definedName>`);
+    }
 
     // 틀 고정
     const fr = sheet.freeze?.rows || 0;
@@ -2814,6 +2876,18 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {}) 
         ? `<ext uri="{A8765BA9-456A-4dab-B4F3-ACF838C121DE}" xmlns:x14="${NS_X14}"><x14:slicerList><x14:slicer r:id="${id}"/></x14:slicerList></ext>`
         : `<ext uri="{3A4CF648-6AED-40f4-86FF-DC5316D8AED3}" xmlns:x15="${NS_X15}"><x14:slicerList xmlns:x14="${NS_X14}"><x14:slicer r:id="${id}"/></x14:slicerList></ext>`);
     }
+    // 스파크라인 (x14:sparklineGroups)
+    if (sheet.sparklines?.length) {
+      const c = (tag, col) => `<x14:${tag} rgb="${argb(col ?? '#d00000')}"/>`;
+      const groups = sheet.sparklines.filter((g) => g.items?.length).map((g) => {
+        const attrs = [g.type !== 'line' ? `type="${g.type === 'winloss' ? 'stacked' : 'column'}"` : '', 'displayEmptyCellsAs="gap"',
+          g.weight && g.weight !== 0.75 ? `lineWeight="${g.weight}"` : '',
+          ...['markers', 'high', 'low', 'first', 'last', 'negative'].filter((k) => g[k]).map((k) => `${k}="1"`)].filter(Boolean).join(' ');
+        const items = g.items.map((it) => `<x14:sparkline><xm:f>${esc(it.ref.includes('!') ? it.ref : `${quoteSheetName(sheet.name)}!${it.ref}`)}</xm:f><xm:sqref>${refOf(it.r, it.c)}</xm:sqref></x14:sparkline>`).join('');
+        return `<x14:sparklineGroup ${attrs}>${c('colorSeries', g.color)}${c('colorNegative', g.negColor)}${c('colorAxis', '#000000')}${c('colorMarkers', g.markerColor)}${c('colorFirst', g.firstColor)}${c('colorLast', g.lastColor)}${c('colorHigh', g.highColor)}${c('colorLow', g.lowColor)}<x14:sparklines>${items}</x14:sparklines></x14:sparklineGroup>`;
+      });
+      if (groups.length) exts.push(`<ext uri="{05C60535-1F16-4fd2-B633-F4F36F0B64E0}" xmlns:x14="${NS_X14}"><x14:sparklineGroups xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main">${groups.join('')}</x14:sparklineGroups></ext>`);
+    }
     if (cfX14.length) exts.unshift(`<ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}" xmlns:x14="${NS_X14}"><x14:conditionalFormattings>${cfX14.join('')}</x14:conditionalFormattings></ext>`);
     const extLst = exts.length ? `<extLst>${exts.join('')}</extLst>` : '';
 
@@ -2824,8 +2898,9 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {}) 
       + `<sheetFormatPr defaultRowHeight="${px2pt(DEFAULT_ROW_HEIGHT)}"${olRowMax ? ` outlineLevelRow="${olRowMax}"` : ''}${olColMax ? ` outlineLevelCol="${olColMax}"` : ''}/>`
       + (colsXml ? `<cols>${colsXml}</cols>` : '')
       + `<sheetData>${rowXml}</sheetData>`
+      + protectXml(sheet.protect)
       + autoFilter + merges + cf + dataValidations + hyperlinks
-      + '<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>'
+      + pgx.printOptions + pgx.margins + pgx.setup + pgx.headerFooter
       + drawing + legacy + tableParts + extLst
       + '</worksheet>';
     if (sheetRels.length) {

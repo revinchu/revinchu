@@ -359,6 +359,8 @@ input.rselect { padding: 0 4px; }
   content: ''; position: absolute; right: 3px; bottom: 3px; border: 5px solid transparent;
   border-right-color: #b5b5b5; border-bottom-color: #b5b5b5;
 }
+/* 스파크라인 */
+.spark { position: absolute; pointer-events: none; overflow: hidden; z-index: 1; }
 /* 이동 옵션 · 추적 화살표 · 수식 계산 · 조사식 창 */
 .special-hl { position: absolute; background: rgba(33, 115, 70, .16); box-shadow: inset 0 0 0 1px rgba(33, 115, 70, .45); pointer-events: none; }
 .trace-svg { position: absolute; width: 1px; height: 1px; overflow: visible; pointer-events: none; z-index: 2; }
@@ -560,6 +562,10 @@ pre.plain { margin: 0; font: inherit; white-space: pre-wrap; }
   #printArea table { border-collapse: collapse; table-layout: fixed; font-family: 'Malgun Gothic', sans-serif; font-size: 10pt; page-break-after: always; }
   #printArea td { padding: 1px 3px; white-space: nowrap; overflow: hidden; vertical-align: bottom; }
   #printArea table.grid-lines td { border: 1px solid #d9d9d9; }
+  #printArea td.ph { background: #f2f2f2; color: #555; text-align: center; border: 1px solid #d9d9d9; }
+  #printArea .print-hf { display: flex; justify-content: space-between; font: 9pt var(--ui-font); color: #444; margin: 0 0 6px; }
+  #printArea .print-hf span { flex: 1; } #printArea .print-hf span:nth-child(2) { text-align: center; } #printArea .print-hf span:nth-child(3) { text-align: right; }
+  #printArea .print-hf.foot { margin: 6px 0 0; }
   #printArea .chart-print { page-break-inside: avoid; margin: 8px 0; }
 }
 

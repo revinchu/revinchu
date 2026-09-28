@@ -130,6 +130,11 @@ export const TABS = [
         large('chartArea', 'chartArea', '영역형'),
         large('chartScatter', 'chartScatter', '분산형'),
       ]),
+      group('스파크라인', [
+        medium('sparkLine', 'chartLine', '꺾은선형', { title: '꺾은선형 스파크라인 (셀 안 차트)' }),
+        medium('sparkColumn', 'chartColumn', '열', { title: '열 스파크라인' }),
+        medium('sparkWinLoss', 'chartBar', '승패', { title: '승패 스파크라인' }),
+      ]),
       group('함수', [large('insertFunction', 'function', '함수')]),
       group('날짜 및 시간', [
         large('insertDate', 'calendar', '오늘 날짜'),
@@ -140,6 +145,15 @@ export const TABS = [
   },
   {
     id: 'layout', label: '페이지 레이아웃', groups: [
+      group('페이지 설정', [
+        large('marginsBtn', 'borderOutside', '여백', { menu: 'marginsMenu' }),
+        large('orientBtn', 'print', '용지 방향', { menu: 'orientMenu' }),
+        large('paperBtn', 'table', '크기', { menu: 'paperMenu' }),
+        large('printAreaBtn', 'freeze', '인쇄 영역', { menu: 'printAreaMenu' }),
+        large('printTitles', 'rowInsert', '인쇄 제목', { title: '반복할 행 · 머리글/바닥글 · 페이지 설정' }),
+        large('pageSetup', 'format', '페이지 설정'),
+      ]),
+      group('크기 조정', [large('fitBtn', 'zoomIn', '배율 조정', { menu: 'fitMenu' })]),
       group('인쇄', [large('print', 'print', '인쇄')]),
       group('시트', [
         large('hideRowsCols', 'hide', '숨기기 및 숨기기 취소', { menu: 'hideMenu' }),
@@ -231,6 +245,10 @@ export const TABS = [
           medium('nextComment', 'next', '다음 메모'),
         ),
       ]),
+      group('보호', [
+        large('protectSheet', 'validation', '시트 보호', { title: '시트 보호 / 시트 보호 해제', toggle: 'sheetProtected' }),
+        large('cellProtection', 'format', '셀 잠금', { title: '셀 잠금 · 수식 숨기기 (시트를 보호하면 적용)' }),
+      ]),
     ],
   },
   {
@@ -319,6 +337,21 @@ export const TABS = [
         col(check('pvBandRows', '줄무늬 행', 'pvBandRows'), check('pvBandCols', '줄무늬 열', 'pvBandCols')),
       ]),
       group('피벗 테이블 스타일', [large('pivotStyleGalleryBtn', 'table', '빠른 스타일', { menu: 'pivotStylesDesign' })]),
+    ],
+  },
+  {
+    id: 'sparkTab', label: '스파크라인', context: 'spark', groups: [
+      group('스파크라인', [large('sparkEdit', 'chartLine', '데이터 편집', { title: '스파크라인 그룹의 데이터 · 위치 범위 · 색' })]),
+      group('종류', [
+        large('sparkTypeLine', 'chartLine', '꺾은선형', { toggle: 'sparkIsLine' }),
+        large('sparkTypeColumn', 'chartColumn', '열', { toggle: 'sparkIsColumn' }),
+        large('sparkTypeWinLoss', 'chartBar', '승패', { toggle: 'sparkIsWinLoss' }),
+      ]),
+      group('표시', [
+        col(check('sparkHigh', '높은 점', 'sparkHigh'), check('sparkLow', '낮은 점', 'sparkLow'), check('sparkNegative', '음수 점', 'sparkNegative')),
+        col(check('sparkFirst', '첫 점', 'sparkFirst'), check('sparkLast', '마지막 점', 'sparkLast'), check('sparkMarkers', '표식', 'sparkMarkers')),
+      ]),
+      group('그룹', [large('sparkClear', 'clear', '지우기', { title: '선택한 스파크라인 그룹 지우기' })]),
     ],
   },
   {
