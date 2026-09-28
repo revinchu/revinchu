@@ -25,7 +25,7 @@ import {
   pivotFieldNames, parseCalc, PIVOT_STYLES, LABEL_OPS, VALUE_OPS, describeFieldFilter, keyOf, sortKeys,
 } from './pivot.js';
 import { SLICER_STYLES, slicerStyleName, slicerColors, CUSTOM_KEYS } from './slicerstyle.js';
-import { server } from './storage.js';
+import { server, idbSet, idbGet } from './storage.js';
 import { ICONS } from './icons.js';
 import {
   CELL_OPS, TEXT_OPS, DATE_PERIODS, ICON_SETS, ICON_SVG, VISUAL_TYPES, iconSetById, describeCond,
@@ -2812,8 +2812,10 @@ function slicerModel(sl) {
     const own = Object.keys(filters).find((k) => k.toLowerCase() === header[fi].toLowerCase());
     const sel = own ? new Set(filters[own]) : null;
     // 항목 목록은 원본과 다른 필터가 같으면 다시 계산하지 않음 (슬라이서를 그릴 때마다 원본 전체를 도는 것 방지)
-    const memoKey = `${wb.version}\u0001${JSON.stringify(def.table ?? [def.source, def.range])}\u0001${fi}\u0001${JSON.stringify(Object.entries(filters).filter(([k]) => k !== own))}`;
-    let items = slicerMemo.get(memoKey);
+    const memoKey = `${fi}\u0001${JSON.stringify(Object.entries(filters).filter(([k]) => k !== own))}`;
+    let memo = slicerMemo.get(rows);
+    if (!memo) { memo = new Map(); slicerMemo.set(rows, memo); }
+    let items = memo.get(memoKey);
     if (!items) {
       const others = Object.entries(filters).filter(([k]) => k !== own).map(([k, v]) => [header.findIndex((h) => h.toLowerCase() === k.toLowerCase()), new Set(v)]).filter(([i]) => i >= 0);
       const vals = new Map();
@@ -2829,8 +2831,8 @@ function slicerModel(sl) {
         if (!e.hasData && others.every(([i, set]) => set.has(pivotItemText(row[i])))) e.hasData = true;
       }
       items = sortItems([...vals.values()]);
-      if (slicerMemo.size > 200) slicerMemo.clear();
-      slicerMemo.set(memoKey, items);
+      if (memo.size > 200) memo.clear();
+      memo.set(memoKey, items);
     }
     return {
       items: items.map((e) => ({ key: e.key, text: e.key, selected: !sel || sel.has(e.key), hasData: e.hasData })),
@@ -2854,7 +2856,8 @@ function slicerModel(sl) {
   return { items: [], broken: '연결 대상이 없습니다.' };
 }
 
-const slicerMemo = new Map();
+// 원본 행 배열(피벗 원본 캐시) → 슬라이서 항목 목록. 원본이 바뀌면 배열이 새로 만들어져 자동으로 버려짐
+const slicerMemo = new WeakMap();
 
 /** 피벗 슬라이서가 연결된 피벗 목록 (source.pivots = [{ sheet, name }], 옛 형식 self/sheet 도 읽음) */
 function slicerPivotTargets(src, hostSi = si) {
@@ -4306,15 +4309,32 @@ function renderPivotPane(entry) {
       { name: 'name', label: '사용자 지정 이름', value: valueName(v) },
       { name: 'agg', label: '값 요약 기준', type: 'select', value: v.agg, options: AGGREGATES.map((a) => ({ value: a.id, label: a.label })) },
       { name: 'showAs', label: '값 표시 형식', type: 'select', value: v.showAs ?? 'normal', options: SHOW_AS.map((a) => ({ value: a.id, label: a.label })) },
+      {
+        name: 'fmt', label: '표시 형식 (서식 코드)', type: 'select', value: v.numFmt?.code ?? '',
+        options: [['', '기본'], ['#,##0', '#,##0 (천 단위)'], ['#,##0.00', '#,##0.00'], ['0.00%', '0.00%'], ['0.0%', '0.0%'], ['"₩"#,##0', '₩ 통화'], ['#,##0"원"', '#,##0원'], ['0.00', '0.00']]
+          .concat(v.numFmt?.code && !['#,##0', '#,##0.00', '0.00%', '0.0%', '"₩"#,##0', '#,##0"원"', '0.00'].includes(v.numFmt.code) ? [[v.numFmt.code, v.numFmt.code]] : [])
+          .map(([value, label]) => ({ value, label })),
+      },
     ], (x) => {
       const nv = { field: v.field, agg: x.agg };
       if (x.showAs !== 'normal') nv.showAs = x.showAs;
       const auto = valueName({ field: v.field, agg: x.agg });
       if (x.name.trim() && x.name.trim() !== auto && x.name.trim() !== valueName(v)) nv.name = x.name.trim();
       else if (v.name && x.name.trim() === v.name) nv.name = v.name;
+      if (x.fmt) nv.numFmt = { ...styleForCode(x.fmt), code: x.fmt };
       const l = [...areas.values];
       l[i] = nv;
-      apply({ values: l });
+      // 새로 고른 서식이 파일에서 가져온 셀 서식보다 우선
+      const fmtChanged = (x.fmt || '') !== (v.numFmt?.code ?? '');
+      let cellFmt = def.cellFmt;
+      if (fmtChanged && cellFmt) {
+        cellFmt = Object.fromEntries(Object.entries(cellFmt).map(([role, st]) => {
+          if (!new RegExp(`^(data|subData|groupData|grandData|grandColData|colSubData):${i}$`).test(role)) return [role, st];
+          const { numFmt, code, decimals, ...rest } = st;
+          return [role, rest];
+        }));
+      }
+      apply({ values: l, ...(cellFmt ? { cellFmt } : {}) });
     });
   };
   const layoutSel = el('select', {}, LAYOUTS.map((l) => el('option', { value: l.id, selected: (def.layout ?? 'compact') === l.id }, l.label)));
@@ -4899,8 +4919,8 @@ function loadWorkbook(data, name, activeSheet = 0) {
   const f = sheet().freeze;
   selectCell(f?.rows || 0, f?.cols || 0);
   dirty = true;
-  saveToStorage();
-  scheduleServerSave(0);
+  if (bigBook()) scheduleAutosave();
+  else { saveToStorage(); scheduleServerSave(0); }
 }
 
 async function serverNames() {
@@ -4941,8 +4961,24 @@ function renameDoc(name) {
 const snapshot = () => ({ app: 'tabula', docName, si, workbook: wb.serialize() });
 
 let storageWarned = false;
+/** 셀이 많은 통합 문서 (자동 저장을 IndexedDB 로, 더 드물게) */
+function bigBook() {
+  let n = 0;
+  for (const s of wb.sheets) n += s.cells.size;
+  return n > 50000;
+}
+let idbSaving = null;
 function saveToStorage() {
   try {
+    if (bigBook()) {
+      // 큰 문서: JSON 문자열로 만들지 않고 IndexedDB 에 비동기로 저장 (화면이 멈추지 않게)
+      const payload = { docName, si, autosave, workbook: wb.serialize() };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ docName, si, autosave, idb: true }));
+      idbSaving = idbSet(STORAGE_KEY, payload).then(() => { if (!server.available) { dirty = false; updateTitle(); } }).catch(() => {
+        if (!storageWarned) { storageWarned = true; toast('브라우저 저장 공간이 부족해 자동 저장하지 못했습니다. [파일 → 다른 이름으로 저장]으로 파일을 내려받으세요.'); }
+      });
+      return true;
+    }
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ docName, si, autosave, workbook: wb.serialize() }));
     if (!server.available) dirty = false;
     updateTitle();
@@ -4961,7 +4997,7 @@ function saveToStorage() {
 function loadFromStorage() {
   try {
     const data = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? 'null');
-    return data?.workbook ? data : null;
+    return data?.workbook || data?.idb ? data : null;
   } catch {
     return null;
   }
@@ -4969,17 +5005,21 @@ function loadFromStorage() {
 
 let saveTimer = null;
 let serverTimer = null;
+/** 사용자가 쉬는 틈에 실행 (큰 문서 저장이 입력 · 슬라이서 클릭을 막지 않게) */
+const whenIdle = (fn) => (globalThis.requestIdleCallback ? requestIdleCallback(fn, { timeout: 5000 }) : setTimeout(fn, 0));
 function scheduleAutosave() {
   if (!autosave) { updateTitle(); return; }
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(saveToStorage, 400);
+  const big = bigBook();
+  saveTimer = setTimeout(() => (big ? whenIdle(saveToStorage) : saveToStorage()), big ? 4000 : 400);
   scheduleServerSave();
 }
 
 function scheduleServerSave(delay = 1500) {
   if (!server.available || !autosave) return;
   clearTimeout(serverTimer);
-  serverTimer = setTimeout(() => saveNow(false), delay);
+  const big = bigBook();
+  serverTimer = setTimeout(() => (big ? whenIdle(() => saveNow(false)) : saveNow(false)), big ? Math.max(delay, 8000) : delay);
 }
 
 /** 저장: 브라우저 + (서버가 있으면) 서버 */
@@ -7122,7 +7162,7 @@ function bindEvents() {
   setMenuCloseHandler(focusGrid);
   setDialogCloseHandler(focusGrid);
   window.addEventListener('beforeunload', (e) => {
-    saveToStorage();
+    if (!bigBook() || dirty) saveToStorage();
     if (!autosave && dirty) { e.preventDefault(); e.returnValue = ''; }
   });
   window.addEventListener('blur', () => { if (drag) onDragEnd(); });
@@ -7131,7 +7171,11 @@ function bindEvents() {
 
 // ───────────────────────── 시작 ─────────────────────────
 async function init() {
-  const stored = loadFromStorage();
+  let stored = loadFromStorage();
+  if (stored?.idb) {
+    // 큰 문서는 IndexedDB 에 저장되어 있음
+    try { const full = await idbGet(STORAGE_KEY); stored = full?.workbook ? full : null; } catch { stored = null; }
+  }
   wb = new Workbook(stored?.workbook);
   if (stored) {
     docName = stored.docName || docName;

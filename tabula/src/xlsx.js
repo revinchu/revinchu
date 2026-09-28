@@ -262,9 +262,10 @@ function readSheet(files, path, ctx) {
     hiddenRows: {}, hiddenCols: {}, rowManual: {}, freeze: { rows: 0, cols: 0 }, filter: null, charts: [], images: [], shapes: [], validations: [], slicers: [],
   };
   const { xfs, dxfs, strings } = ctx;
+  // 서식 객체는 xf 번호마다 하나를 공유 (셀마다 복사하지 않음)
   const styleOf = (s) => {
     const st = xfs[Number(s || 0)];
-    return st && Object.keys(st).length ? { ...st } : undefined;
+    return st && Object.keys(st).length ? st : undefined;
   };
 
   for (const col of kids(child(root, 'cols'), 'col')) {

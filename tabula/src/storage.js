@@ -1,6 +1,36 @@
 // 서버 저장소 (server.js 의 /api) 클라이언트. 정적 호스팅이면 available = false.
 const TOKEN_KEY = 'tabula.serverToken';
 
+// 큰 통합 문서는 localStorage(약 5MB, JSON 문자열 변환 필요) 대신 IndexedDB 에 객체 그대로 저장
+let dbPromise = null;
+function openDb() {
+  if (!globalThis.indexedDB) return Promise.reject(new Error('IndexedDB 없음'));
+  dbPromise ??= new Promise((resolve, reject) => {
+    const req = indexedDB.open('tabula', 1);
+    req.onupgradeneeded = () => req.result.createObjectStore('docs');
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  return dbPromise;
+}
+export async function idbSet(key, value) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('docs', 'readwrite');
+    tx.objectStore('docs').put(value, key);
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => reject(tx.error);
+  });
+}
+export async function idbGet(key) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const req = db.transaction('docs', 'readonly').objectStore('docs').get(key);
+    req.onsuccess = () => resolve(req.result ?? null);
+    req.onerror = () => reject(req.error);
+  });
+}
+
 function token() {
   try { return localStorage.getItem(TOKEN_KEY) ?? ''; } catch { return ''; }
 }

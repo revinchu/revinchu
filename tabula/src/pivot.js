@@ -349,22 +349,31 @@ export function pivotSourceData(wb, def) {
 // 같은 원본을 여러 피벗 · 슬라이서가 읽으므로 통합 문서가 바뀌기 전까지(wb.version 이 같으면) 재사용
 const readCache = new WeakMap();
 function cachedRead(wb, si, ref) {
+  let hasFormula = false;
   const read = () => {
     const rows = [];
+    const sheet = wb.sheets[si];
     for (let r = ref.r1; r <= ref.r2; r++) {
       const row = new Array(ref.c2 - ref.c1 + 1);
-      for (let c = ref.c1; c <= ref.c2; c++) row[c - ref.c1] = wb.getValue(si, r, c);
+      for (let c = ref.c1; c <= ref.c2; c++) {
+        if (!hasFormula && sheet.cells.get(`${r},${c}`)?.formula) hasFormula = true;
+        row[c - ref.c1] = wb.getValue(si, r, c);
+      }
       rows.push(row);
     }
     return rows;
   };
-  const ver = wb.version;
-  if (ver === undefined) return read();
+  if (wb.version === undefined) return read();
+  // 원본에 수식이 없으면 그 시트가 바뀔 때만, 수식이 있으면 통합 문서가 바뀔 때마다 다시 읽음
   const key = `${si}:${ref.r1},${ref.c1},${ref.r2},${ref.c2}`;
-  let entry = readCache.get(wb);
-  if (!entry || entry.ver !== ver) { entry = { ver, map: new Map() }; readCache.set(wb, entry); }
-  if (!entry.map.has(key)) entry.map.set(key, read());
-  return entry.map.get(key);
+  let map = readCache.get(wb);
+  if (!map) { map = new Map(); readCache.set(wb, map); }
+  const e = map.get(key);
+  const sv = wb.sheetVersion?.(si) ?? wb.version;
+  if (e && (e.hasFormula ? e.ver === wb.version : e.sv === sv)) return e.rows;
+  const rows = read();
+  map.set(key, { rows, hasFormula, ver: wb.version, sv });
+  return rows;
 }
 
 // ───────────── 레이블 · 값 · 상위 N 필터 ─────────────
@@ -707,7 +716,7 @@ export function computePivot(rows, d) {
     const v = values[vi];
     if (v.numFmt) return typeof v.numFmt === 'object' ? v.numFmt : { numFmt: v.numFmt };
     if ((v.showAs ?? 'normal') !== 'normal') return { numFmt: 'percent', decimals: 2 };
-    if (calcNames.has(v.field.toLowerCase())) return {};
+    if (calcNames.has(v.field.toLowerCase())) return { numFmt: 'number', decimals: 2 };
     return v.agg === 'average' || v.agg?.startsWith('std') || v.agg?.startsWith('var') ? { numFmt: 'number', decimals: 2 } : { numFmt: 'comma' };
   };
   const val = (n, vi, role) => {

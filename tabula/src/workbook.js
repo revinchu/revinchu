@@ -13,12 +13,20 @@ export const DEFAULT_ROW_HEIGHT = 20;
 const key = (r, c) => `${r},${c}`;
 const unkey = (k) => k.split(',').map(Number);
 
+// 같은 서식 객체를 여러 셀이 공유할 때(파일 가져오기 등) 한 번만 정리. 셀 서식은 바꿀 때 항상 새 객체로 교체하므로 공유해도 안전
+const cleanMemo = new WeakMap();
 function cleanStyle(style) {
   if (!style) return undefined;
+  const hit = cleanMemo.get(style);
+  if (hit !== undefined) return hit || undefined;
   const out = {};
   for (const [k, v] of Object.entries(style)) if (v !== undefined && v !== null) out[k] = v;
-  return Object.keys(out).length ? out : undefined;
+  const res = Object.keys(out).length ? out : undefined;
+  cleanMemo.set(style, res ?? false);
+  if (res) cleanMemo.set(res, res);
+  return res;
 }
+const PLAIN_NUMBER = /^-?(?:0|[1-9]\d{0,14})(?:\.\d+)?$/;
 
 /** 저장 형태 {raw, style, comment} → 계산용 셀 객체 */
 export function makeCell(data) {
@@ -41,7 +49,7 @@ export function makeCell(data) {
   } else if (style?.numFmt === 'text') {
     cell.v = cell.raw === '' ? null : cell.raw;
   } else {
-    cell.v = parseInput(cell.raw).value;
+    cell.v = PLAIN_NUMBER.test(cell.raw) ? Number(cell.raw) : parseInput(cell.raw).value;
   }
   if (!cell.raw && !cell.style && !cell.comment && !cell.link) return null;
   return cell;
@@ -483,8 +491,12 @@ export class Workbook {
   colWidth(si, c) { return this.sheets[si].colWidths[c] ?? DEFAULT_COL_WIDTH; }
   rowHeight(si, r) { return this.sheets[si].rowHeights[r] ?? DEFAULT_ROW_HEIGHT; }
 
-  invalidate() {
+  /** si 를 주면 그 시트의 버전만, 아니면 모든 시트의 버전을 올림 (피벗 원본 캐시가 씀) */
+  invalidate(si) {
     this.version++;
+    this.sheetVer ??= [];
+    if (si === undefined) this.sheetVerAll = (this.sheetVerAll ?? 0) + 1;
+    else this.sheetVer[si] = (this.sheetVer[si] ?? 0) + 1;
     this.cache.clear();
     this.spills.clear();
     this.spillOwner.clear();
@@ -578,7 +590,12 @@ export class Workbook {
     if (JSON.stringify(before) === JSON.stringify(after)) return;
     this.record({ t: 'cell', si, r, c, before, after });
     this.putCell(si, r, c, cell);
-    this.invalidate();
+    this.invalidate(si);
+  }
+
+  /** 시트 내용 버전 (그 시트의 셀이 바뀌거나 통합 문서 전체가 바뀌면 달라짐) */
+  sheetVersion(si) {
+    return `${this.sheetVerAll ?? 0}:${this.sheetVer?.[si] ?? 0}`;
   }
 
   /** 사용자 입력 → 셀 (서식 유지, 입력에 따른 자동 서식 적용) */
@@ -669,7 +686,7 @@ export class Workbook {
     this.propSnap(si, prop);
     this.sheets[si][prop] = value;
     // 그림 개체 · 틀 고정 · 조건부 서식 등은 계산 결과에 영향이 없으므로 수식 캐시를 유지
-    if (!CALC_NEUTRAL.has(prop)) this.invalidate();
+    if (!CALC_NEUTRAL.has(prop)) this.invalidate(si);
     else this.version++;
   }
 
