@@ -110,7 +110,9 @@ export class GridView {
     this.scroll.addEventListener('scroll', () => this.onScroll());
     this.viewEl.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
     this.bindTouch();
-    new ResizeObserver(() => this.layout()).observe(this.wrap);
+    const ro = new ResizeObserver(() => { this._cw = null; this._ch = null; this.layout(); });
+    ro.observe(this.wrap);
+    ro.observe(this.scroll); // 스크롤 막대가 생기거나 없어질 때
   }
 
   // ───────────── 좌표 ─────────────
@@ -125,8 +127,9 @@ export class GridView {
     this.frozenH = this.rows.pos(this.fr);
   }
 
-  get viewW() { return this.scroll.clientWidth / this.z; }
-  get viewH() { return this.scroll.clientHeight / this.z; }
+  // 보이는 영역 크기: DOM 을 바꾼 뒤 읽으면 강제 레이아웃이 일어나므로 크기가 바뀔 때만 다시 잼
+  get viewW() { return (this._cw ??= this.scroll.clientWidth) / this.z; }
+  get viewH() { return (this._ch ??= this.scroll.clientHeight) / this.z; }
 
   sheetRect(rg) {
     const c2 = Math.min(rg.c2, MAX_COLS - 1);
@@ -300,6 +303,8 @@ export class GridView {
   setZoom(pct) {
     const keep = { r: this.rows.indexAt(this.sy + this.frozenH), c: this.cols.indexAt(this.sx + this.frozenW) };
     this.z = pct / 100;
+    this._cw = null;
+    this._ch = null;
     this.viewEl.style.zoom = this.z;
     this.layout(false);
     this.setScroll(this.cols.pos(keep.c) - this.frozenW, this.rows.pos(keep.r) - this.frozenH);
@@ -603,7 +608,7 @@ export class GridView {
     const images = sheet.images ?? [];
     const shapes = sheet.shapes ?? [];
     const slicers = sheet.slicers ?? [];
-    if (!sheet.charts.length && !images.length && !shapes.length && !slicers.length) { p.objects.innerHTML = ''; return; }
+    if (!sheet.charts.length && !images.length && !shapes.length && !slicers.length) { p.objects.innerHTML = ''; p.objHtml = null; return; }
     const winX1 = p.scrollX ? this.frozenW : 0;
     const winY1 = p.scrollY ? this.frozenH : 0;
     const winX2 = p.scrollX ? Infinity : this.frozenW;
@@ -632,7 +637,22 @@ export class GridView {
         box(o, `shape ${o.kind === 'line' ? 'line' : ''}`, shapeSvg(o) + text);
       }
     }
-    p.objects.innerHTML = html.join('');
+    // 바뀐 개체만 다시 만듦 (슬라이서 · 차트가 많아도 클릭마다 전부 다시 그리지 않게)
+    p.objHtml ??= new Map();
+    const next = new Map();
+    const nodes = html.map((h) => {
+      let node = p.objHtml.get(h);
+      if (!node) {
+        const t = document.createElement('template');
+        t.innerHTML = h;
+        node = t.content.firstChild;
+      }
+      next.set(h, node);
+      return node;
+    });
+    p.objHtml = next;
+    const cur = p.objects.childNodes;
+    if (cur.length !== nodes.length || nodes.some((n, i) => cur[i] !== n)) p.objects.replaceChildren(...nodes);
   }
 
   /** 슬라이서: 머리글(캡션·다중 선택·필터 지우기) + 항목 단추 */
