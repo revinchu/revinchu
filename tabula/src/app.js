@@ -18,7 +18,7 @@ import { makeSeries, CUSTOM_LISTS } from './series.js';
 import { parseDelimited, toDelimited, guessDelimiter, CsvBlockReader } from './csv.js';
 import { SAMPLES } from './samples.js';
 import { TEMPLATES, TEMPLATE_CATS } from './templates.js';
-import { GridView, BASE_FONT, setBaseFont, measureText, fontStack } from './view.js';
+import { GridView, BASE_FONT, setBaseFont, measureText, fontStack, PATTERNS, patternCss } from './view.js';
 import { setThemeColors } from './stylepresets.js';
 import { readXlsxAsync, writeXlsxAsync, xlsxOverflow } from './xlsx.js';
 import { readOds, writeOds } from './ods.js';
@@ -2412,7 +2412,20 @@ function anyLocked(rg) {
   return false;
 }
 /** 보호 때문에 막히면 알리고 true */
+/** 피벗 테이블 영역과 겹치면 그 피벗 (엑셀처럼 피벗 결과는 직접 고칠 수 없음 — 옵션으로 허용) */
+function pivotAreaHit(rg) {
+  for (const { def } of pivotDefs(si)) {
+    const a = def.area;
+    if (a && rg.r1 <= a.r2 && rg.r2 >= a.r1 && rg.c1 <= a.c2 && rg.c2 >= a.c1) return def;
+  }
+  return null;
+}
+
 function protectBlocked(action = 'cells', rg = sel) {
+  if (action === 'cells' && !opts.pivotEdit && pivotAreaHit(rg)) {
+    alertDialog('WIXEL', '피벗 테이블의 일부는 변경할 수 없습니다. 피벗 테이블은 원본 데이터를 계산한 결과이므로 값을 바꾸려면 원본 데이터를 고친 뒤 새로 고치세요.\n(파일 → 옵션 → 피벗 테이블 값 영역의 셀 편집 허용을 켜면 가상 분석용으로 편집할 수 있습니다.)');
+    return true;
+  }
   const sh = sheet();
   if (!isProtected(sh) || action === 'free') return false;
   const blocked = action === 'cells' ? anyLocked(special?.si === si ? { r1: sel.r1, c1: sel.c1, r2: sel.r2, c2: sel.c2 } : rg) : action === 'block' || !allowed(sh, action);
@@ -3034,10 +3047,83 @@ function blockFilterCol(r1, r2, c) {
   return res;
 }
 
+// 텍스트 · 숫자 조건 (엑셀의 사용자 지정 자동 필터 + 정규식)
+const FILTER_OPS = [
+  ['eq', '='], ['ne', '<>'], ['gt', '>'], ['ge', '>='], ['lt', '<'], ['le', '<='],
+  ['begins', '시작 문자'], ['notBegins', '시작 문자 아님'], ['ends', '끝 문자'], ['notEnds', '끝 문자 아님'],
+  ['contains', '포함'], ['notContains', '포함하지 않음'], ['regex', '정규식과 일치'], ['notRegex', '정규식과 일치하지 않음'],
+];
+const wildRe = (p) => new RegExp(`^${String(p).replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/~\*/g, '\u0001').replace(/~\?/g, '\u0002').replace(/\*/g, '.*').replace(/\?/g, '.').replace(/\u0001/g, '\\*').replace(/\u0002/g, '\\?')}$`, 'i');
+function opTest(op, v, text, arg) {
+  if (!op || arg === undefined || arg === null || arg === '') return true;
+  const a = String(arg);
+  const t = String(text ?? '').toLowerCase();
+  const an = Number(a.replace(/,/g, ''));
+  const num = typeof v === 'number' && a.trim() !== '' && Number.isFinite(an);
+  switch (op) {
+    case 'eq': return num ? v === an : wildRe(a).test(String(text ?? ''));
+    case 'ne': return num ? v !== an : !wildRe(a).test(String(text ?? ''));
+    case 'gt': return num ? v > an : t > a.toLowerCase();
+    case 'ge': return num ? v >= an : t >= a.toLowerCase();
+    case 'lt': return num ? v < an : t < a.toLowerCase();
+    case 'le': return num ? v <= an : t <= a.toLowerCase();
+    case 'begins': return t.startsWith(a.toLowerCase());
+    case 'notBegins': return !t.startsWith(a.toLowerCase());
+    case 'ends': return t.endsWith(a.toLowerCase());
+    case 'notEnds': return !t.endsWith(a.toLowerCase());
+    case 'contains': return wildRe(`*${a}*`).test(String(text ?? ''));
+    case 'notContains': return !wildRe(`*${a}*`).test(String(text ?? ''));
+    case 'regex': case 'notRegex': {
+      let re;
+      try { re = new RegExp(a, 'iu'); } catch { return true; }
+      return re.test(String(text ?? '')) === (op === 'regex');
+    }
+    default: return true;
+  }
+}
+/** 조건 객체(색 · 정규식 · 사용자 지정 · 상위 N · 평균) → 행 판정 함수 */
+function critPredicate(c, cr, r1, r2) {
+  if (cr.type === 'fill') return (r) => (styleAt(r, c)?.fill ?? '') === (cr.value ?? '');
+  if (cr.type === 'font') return (r) => (styleAt(r, c)?.color ?? '') === (cr.value ?? '');
+  if (cr.type === 'custom') {
+    return (r) => {
+      const v = valueAt(r, c);
+      const t = displayText(r, c);
+      const a = opTest(cr.op1, v, t, cr.v1);
+      if (!cr.op2 || cr.v2 === undefined || cr.v2 === '') return a;
+      const b = opTest(cr.op2, v, t, cr.v2);
+      return cr.join === 'or' ? a || b : a && b;
+    };
+  }
+  if (cr.type === 'top' || cr.type === 'avg') {
+    const nums = [];
+    for (let r = r1; r <= r2; r++) { const v = valueAt(r, c); if (typeof v === 'number') nums.push(v); }
+    if (!nums.length) return () => true;
+    if (cr.type === 'avg') {
+      const avg = nums.reduce((x, y) => x + y, 0) / nums.length;
+      return (r) => { const v = valueAt(r, c); return typeof v === 'number' && (cr.above ? v > avg : v < avg); };
+    }
+    nums.sort((x, y) => (cr.bottom ? x - y : y - x));
+    const k = Math.max(1, Math.min(nums.length, cr.percent ? Math.ceil((nums.length * cr.n) / 100) : cr.n));
+    const th = nums[k - 1];
+    return (r) => { const v = valueAt(r, c); return typeof v === 'number' && (cr.bottom ? v <= th : v >= th); };
+  }
+  return () => true;
+}
+
 function recomputeFilter(f, key = '') {
   const r2 = key ? f.r2 : Math.max(f.r2, currentRegion(f.r1, f.c1).r2);
   const crit = Object.entries(f.criteria ?? {}).filter(([, v]) => Array.isArray(v)).map(([c, vals]) => [Number(c), new Set(vals)]);
+  const preds = Object.entries(f.criteria ?? {}).filter(([, v]) => v && !Array.isArray(v) && typeof v === 'object').map(([c, cr]) => critPredicate(Number(c), cr, f.r1 + 1, r2));
   const n = r2 - f.r1;
+  if (preds.length) {
+    // 색 · 조건 필터가 있으면 행마다 판정
+    const hidden = {};
+    for (let r = f.r1 + 1; r <= r2; r++) {
+      if (crit.some(([c, allowed]) => !allowed.has(displayText(r, c))) || preds.some((p) => !p(r))) hidden[r] = true;
+    }
+    return { ...f, r2, hidden };
+  }
   if (crit.length && n > 50000) {
     // 행이 아주 많으면: 숨긴 행을 비트맵으로, 열 블록은 값(코드)마다 한 번만 판정
     const start = f.r1 + 1;
@@ -3149,6 +3235,16 @@ function openFilterMenu(c, anchorEl, key = '') {
     return String(a[0]).localeCompare(String(b[0]), 'ko');
   }).map(([t]) => t);
   const current = Array.isArray(f.criteria?.[c]) ? new Set(f.criteria[c]) : null;
+  const hasCrit = !!f.criteria?.[c];
+  // 색 기준 필터: 이 열에 쓰인 채우기 색 · 글꼴 색
+  const fills = new Map();
+  const fonts = new Map();
+  for (let r = f.r1 + 1; r <= Math.min(full.r2, f.r1 + 20000); r++) {
+    const st = styleAt(r, c);
+    fills.set(st?.fill ?? '', (fills.get(st?.fill ?? '') ?? 0) + 1);
+    if (st?.color) fonts.set(st.color, (fonts.get(st.color) ?? 0) + 1);
+  }
+  const numeric = items.length && items.filter((t) => t !== '').every((t) => typeof values.get(t) === 'number');
   const checks = new Map();
   const list = el('div', { class: 'filter-list' });
   const all = el('input', { type: 'checkbox' });
@@ -3205,11 +3301,54 @@ function openFilterMenu(c, anchorEl, key = '') {
     { label: '텍스트 오름차순 정렬', icon: 'sortAsc', action: () => sortData(true, c, true, full, key) },
     { label: '텍스트 내림차순 정렬', icon: 'sortDesc', action: () => sortData(false, c, true, full, key) },
     { sep: true },
-    { label: `"${header}"에서 필터 해제`, icon: 'filterClear', disabled: !current, action: () => applyFilterCriteria(c, null, key) },
+    { label: `"${header}"에서 필터 해제`, icon: 'filterClear', disabled: !hasCrit, action: () => applyFilterCriteria(c, null, key) },
+    {
+      label: '색 기준 필터', icon: 'fill', disabled: fills.size <= 1 && !fonts.size, submenu: [
+        { label: '셀 색 기준 필터', header: true, disabled: true },
+        ...[...fills.keys()].map((col) => ({ label: col ? `■ ${col}` : '채우기 없음', swatch: col || null, action: () => applyFilterCriteria(c, { type: 'fill', value: col }, key) })),
+        ...(fonts.size ? [{ sep: true }, { label: '글꼴 색 기준 필터', header: true, disabled: true }, ...[...fonts.keys()].map((col) => ({ label: `A ${col}`, swatch: col, action: () => applyFilterCriteria(c, { type: 'font', value: col }, key) }))] : []),
+      ],
+    },
+    { label: numeric ? '숫자 필터...' : '텍스트 필터...', icon: 'filter', action: () => customFilterDialog(c, key, numeric) },
+    { label: '정규식 필터...', icon: 'find', action: () => customFilterDialog(c, key, numeric, 'regex') },
+    ...(numeric ? [
+      { label: '상위 10...', action: () => topFilterDialog(c, key) },
+      { label: '평균 초과', action: () => applyFilterCriteria(c, { type: 'avg', above: true }, key) },
+      { label: '평균 미만', action: () => applyFilterCriteria(c, { type: 'avg', above: false }, key) },
+    ] : []),
+    { sep: true },
     { node },
   ]);
   menu.style.minWidth = '280px';
   setTimeout(() => search.focus());
+}
+
+/** 사용자 지정 자동 필터 (엑셀과 같은 두 조건 + 그리고/또는, 정규식 포함) */
+function customFilterDialog(c, key, numeric, op = null) {
+  const f = getFilter(key);
+  const cur = f?.criteria?.[c]?.type === 'custom' ? f.criteria[c] : {};
+  const opts2 = [{ value: '', label: '' }, ...FILTER_OPS.map(([v, l]) => ({ value: v, label: l }))];
+  formDialog(`사용자 지정 자동 필터 — ${displayText(f.r1, c) || `${colToName(c)}열`}`, [
+    { name: 'op1', label: '조건 1', type: 'select', value: op ?? cur.op1 ?? (numeric ? 'gt' : 'contains'), options: opts2 },
+    { name: 'v1', label: '값 1', value: cur.v1 ?? '' },
+    { name: 'join', label: '', type: 'select', value: cur.join ?? 'and', options: [{ value: 'and', label: '그리고' }, { value: 'or', label: '또는' }] },
+    { name: 'op2', label: '조건 2', type: 'select', value: cur.op2 ?? '', options: opts2 },
+    { name: 'v2', label: '값 2', value: cur.v2 ?? '' },
+  ], (x) => {
+    for (const [o, v] of [[x.op1, x.v1], [x.op2, x.v2]]) {
+      if ((o === 'regex' || o === 'notRegex') && v) { try { new RegExp(v, 'u'); } catch (e) { alertDialog('정규식 필터', `정규식이 올바르지 않습니다: ${e.message}`); return false; } }
+    }
+    applyFilterCriteria(c, { type: 'custom', op1: x.op1, v1: x.v1, join: x.join, op2: x.op2, v2: x.v2 }, key);
+    return true;
+  }, { note: '? 는 한 글자, * 는 여러 글자를 나타냅니다. 정규식 예) ^브랜드|MO$ , \\d{4}-\\d{2}' });
+}
+
+function topFilterDialog(c, key) {
+  formDialog('상위 10 자동 필터', [
+    { name: 'which', label: '표시', type: 'select', value: 'top', options: [{ value: 'top', label: '상위' }, { value: 'bottom', label: '하위' }] },
+    { name: 'n', label: '개수', type: 'number', value: 10 },
+    { name: 'unit', label: '', type: 'select', value: 'items', options: [{ value: 'items', label: '항목' }, { value: 'percent', label: '%' }] },
+  ], (x) => { applyFilterCriteria(c, { type: 'top', n: Math.max(1, Number(x.n) || 10), bottom: x.which === 'bottom', percent: x.unit === 'percent' }, key); return true; });
 }
 
 // ───────────────────────── 차트 ─────────────────────────
@@ -4429,7 +4568,7 @@ const PIVOT_DEFAULTS = {
   autoRefresh: true, layout: 'tabular', repeatLabels: false, blankRows: false, subtotals: 'bottom', grand: 'both', mergeLabels: false,
   errorShow: true, errorText: '', emptyShow: true, emptyText: '', autofit: false, preserveFormat: true, style: 'PivotStyleLight16',
 };
-const OPTION_DEFAULTS = { calcMode: 'auto', getPivotData: false, autoDateGroup: false, focusCell: false, focusColor: '#fff4b8', pivot: PIVOT_DEFAULTS };
+const OPTION_DEFAULTS = { calcMode: 'auto', getPivotData: false, pivotEdit: false, autoDateGroup: false, focusCell: false, focusColor: '#fff4b8', pivot: PIVOT_DEFAULTS };
 const opts = (() => {
   try {
     const o = JSON.parse(localStorage.getItem(OPTIONS_KEY) ?? 'null') ?? {};
@@ -4479,7 +4618,8 @@ function optionsDialog(startTab = 0) {
       radio('calc', 'auto', o.calcMode, '자동', (v) => { o.calcMode = v; }),
       radio('calc', 'manual', o.calcMode, '수동 (F9를 누를 때 계산 — 큰 통합 문서에서 입력이 빠름)', (v) => { o.calcMode = v; }),
       title('수식 작업'),
-      check(o.getPivotData, '피벗 테이블 참조에 GetPivotData 함수 사용', (v) => { o.getPivotData = v; }))],
+      check(o.getPivotData, '피벗 테이블 참조에 GetPivotData 함수 사용', (v) => { o.getPivotData = v; }),
+      check(o.pivotEdit, '피벗 테이블 값 영역의 셀 편집 허용 (가상 분석 — 원본 데이터와 달라질 수 있음)', (v) => { o.pivotEdit = v; }))],
     ['데이터', el('div', { class: 'opt-page' },
       title('데이터 옵션'),
       check(o.autoDateGroup, '피벗 테이블에서 날짜/시간 열의 자동 그룹화 사용', (v) => { o.autoDateGroup = v; }),
@@ -6007,14 +6147,28 @@ function writePivot(targetSi, def, { autofit = true } = {}) {
   // 파일의 서식 기억 (엑셀이 셀에 저장한 서식: 표시 형식 · 맞춤 · 사용자가 바꾼 색 등)
   if (def.captureFmt) {
     const fmt = { ...(def.cellFmt ?? {}) };
+    // 역할마다 가장 많이 쓰인 서식 (첫 칸만 보면 강조한 한 행의 굵게 등이 본문 전체로 번짐)
+    const votes = new Map();
     grid.forEach((row, r) => row.forEach((cd, c) => {
-      if (!cd?.role || cd.role === 'empty' || fmt[cd.role]) return;
-      const fc = t.cells.get(`${top + r},${left + c}`);
+      if (!cd?.role || cd.role === 'empty' || def.cellFmt?.[cd.role]) return;
+      const fc = t.cells.getRC(top + r, left + c);
       const own = fc?.style;
-      if (own && Object.keys(own).length) fmt[cd.role] = { ...(cd.style?.numFmt ? { numFmt: 'general' } : {}), ...own };
+      let f = null;
+      if (own && Object.keys(own).length) f = { ...(cd.style?.numFmt ? { numFmt: 'general' } : {}), ...own };
       // 파일 셀이 "일반" 형식이면 피벗 기본 표시 형식을 쓰지 않음 (엑셀 화면과 같게)
-      else if (fc && fc.raw !== '' && cd.style?.numFmt) fmt[cd.role] = { numFmt: 'general' };
+      else if (fc && fc.raw !== '' && cd.style?.numFmt) f = { numFmt: 'general' };
+      else if (!fc) return;
+      const key = JSON.stringify(f);
+      let m = votes.get(cd.role);
+      if (!m) votes.set(cd.role, (m = new Map()));
+      const e = m.get(key);
+      if (e) e.n++; else m.set(key, { n: 1, f });
     }));
+    for (const [role, m] of votes) {
+      let best = null;
+      for (const e of m.values()) if (!best || e.n > best.n) best = e;
+      if (best?.f) fmt[role] = best.f;
+    }
     def.cellFmt = fmt;
     delete def.captureFmt;
     autofit = false;
@@ -7147,13 +7301,13 @@ function pivotLayoutCmd(patch) {
 
 // ───────────────────────── 찾기 / 바꾸기 ─────────────────────────
 const findState = {
-  text: '', replace: '', matchCase: false, whole: false, lookIn: 'formulas', byCols: false, scope: 'sheet',
+  text: '', replace: '', matchCase: false, whole: false, regex: false, lookIn: 'formulas', byCols: false, scope: 'sheet',
   format: null, replaceFormat: null, options: false,
 };
 let findCache = null;
 
 const findOpts = (lookIn = findState.lookIn) => ({
-  text: findState.text, matchCase: findState.matchCase, whole: findState.whole, lookIn, byCols: findState.byCols, format: findState.format,
+  text: findState.text, matchCase: findState.matchCase, whole: findState.whole, regex: findState.regex, lookIn, byCols: findState.byCols, format: findState.format,
   sheets: findState.scope === 'book' ? wb.sheets.map((_, i) => i).filter((i) => !isHiddenSheet(i)) : [si],
 });
 
@@ -7275,6 +7429,7 @@ function openFindDialog(tab = 'find') {
   const replInput = el('input', { type: 'text', value: findState.replace });
   const caseBox = el('input', { type: 'checkbox', checked: findState.matchCase });
   const wholeBox = el('input', { type: 'checkbox', checked: findState.whole });
+  const regexBox = el('input', { type: 'checkbox', checked: findState.regex });
   const scopeSel = el('select', {}, el('option', { value: 'sheet' }, '시트'), el('option', { value: 'book' }, '통합 문서'));
   const orderSel = el('select', {}, el('option', { value: 'rows' }, '행'), el('option', { value: 'cols' }, '열'));
   const lookSel = el('select', {});
@@ -7289,7 +7444,7 @@ function openFindDialog(tab = 'find') {
   const tabs = el('div', { class: 'find-tabs' });
   let mode = tab;
   const sync = () => Object.assign(findState, {
-    text: findInput.value, replace: replInput.value, matchCase: caseBox.checked, whole: wholeBox.checked,
+    text: findInput.value, replace: replInput.value, matchCase: caseBox.checked, whole: wholeBox.checked, regex: regexBox.checked,
     scope: scopeSel.value, byCols: orderSel.value === 'cols', lookIn: mode === 'replace' ? 'formulas' : lookSel.value,
   });
   const drawFmt = () => {
@@ -7311,7 +7466,8 @@ function openFindDialog(tab = 'find') {
     optsBox.replaceChildren(
       el('label', {}, el('span', {}, '범위:'), scopeSel), el('label', {}, caseBox, '대/소문자 구분'), el('span', {}),
       el('label', {}, el('span', {}, '검색:'), orderSel), el('label', {}, wholeBox, '전체 셀 내용 일치'), el('span', {}),
-      el('label', {}, el('span', {}, '찾는 위치:'), lookSel), el('span', { class: 'muted', style: { fontSize: '11px' } }, '와일드카드: * (여러 글자) ? (한 글자) ~ (글자 그대로)'), el('span', {}),
+      el('label', {}, el('span', {}, '찾는 위치:'), lookSel), el('label', {}, regexBox, '정규식 사용 (바꿀 내용에 $1 등 그룹 참조 가능)'), el('span', {}),
+      el('span', {}), el('span', { class: 'muted', style: { fontSize: '11px' } }, '와일드카드: * (여러 글자) ? (한 글자) ~ (글자 그대로)'), el('span', {}),
     );
     optBtn.textContent = findState.options ? '옵션 <<' : '옵션 >>';
     drawFmt();
@@ -8535,13 +8691,36 @@ function formatCellsDialog(startTab = 0) {
   const [wrapIn, wrapL] = chk('텍스트 줄 바꿈', st.wrap);
   const merged = !!wb.mergeAt(si, active.r, active.c);
   const [mergeIn, mergeL] = chk('셀 병합', merged);
+  const [shrinkIn, shrinkL] = chk('셀에 맞춤 (글자 크기 자동 축소)', st.shrink);
+  wrapIn.addEventListener('change', () => { if (wrapIn.checked) shrinkIn.checked = false; });
+  shrinkIn.addEventListener('change', () => { if (shrinkIn.checked) wrapIn.checked = false; });
+  // 방향: 각도(-90~90) 또는 세로 쓰기
+  const [vertIn, vertL] = chk('세로 쓰기', st.rotate === 255);
+  const rotIn = el('input', { type: 'number', min: -90, max: 90, value: st.rotate && st.rotate !== 255 ? st.rotate : 0, style: { width: '64px' } });
   const alignPage = col(el('div', { class: 'fc-title' }, '텍스트 맞춤'), row(lab('가로', hSel), lab('세로', vSel), lab('들여쓰기', indentIn)),
-    el('div', { class: 'fc-title' }, '텍스트 조정'), wrapL, mergeL);
+    el('div', { class: 'fc-title' }, '텍스트 조정'), wrapL, shrinkL, mergeL,
+    el('div', { class: 'fc-title' }, '방향'), row(lab('각도(도)', rotIn), vertL));
 
   // ── 글꼴 ──
   // 글꼴: 이 PC의 글꼴 목록에서 고르거나 이름을 직접 입력
-  const fontSel = el('input', { type: 'text', value: st.font || BASE_FONT.name, list: 'fcFontList', spellcheck: false });
-  const fontDl = el('datalist', { id: 'fcFontList' }, [...new Set([BASE_FONT.name, ...fontList()])].map((f) => el('option', { value: f })));
+  // 엑셀처럼 입력 칸 + 전체 글꼴 목록 (입력하면 목록에서 찾아 줌)
+  const fontSel = el('input', { type: 'text', value: st.font || BASE_FONT.name, spellcheck: false });
+  const allFonts = [...new Set([BASE_FONT.name, '맑은 고딕', '나눔고딕', '돋움', '굴림', '바탕', '궁서', 'Calibri', 'Arial', 'Times New Roman', 'Segoe UI', 'Verdana', 'Tahoma', 'Consolas', ...fontList()])];
+  const fontBox = el('select', { size: 7, class: 'fc-fontlist' }, allFonts.map((f) => el('option', { value: f, selected: f === fontSel.value, style: { fontFamily: fontStack(f) } }, f)));
+  fontBox.addEventListener('change', () => { fontSel.value = fontBox.value; updFont(); });
+  fontSel.addEventListener('input', () => {
+    const q = fontSel.value.toLowerCase();
+    const hit = allFonts.find((f) => f.toLowerCase().startsWith(q)) ?? allFonts.find((f) => f.toLowerCase().includes(q));
+    if (hit) fontBox.value = hit;
+  });
+  const fontDl = canListLocalFonts() ? el('button', {
+    type: 'button', class: 'btn', onclick: async () => {
+      const list = await loadLocalFonts().catch(() => null);
+      if (!list) return;
+      for (const f of list) if (!allFonts.includes(f)) { allFonts.push(f); fontBox.append(el('option', { value: f, style: { fontFamily: fontStack(f) } }, f)); }
+      toast(`이 PC의 글꼴 ${list.length}개를 불러왔습니다.`);
+    },
+  }, '이 PC의 글꼴 모두 보기') : null;
   const sizeIn = el('input', { type: 'number', min: 1, max: 409, value: st.size || BASE_FONT.size, style: { width: '64px' } });
   const [bIn, bL] = chk('굵게', st.bold);
   const [iIn, iL] = chk('기울임꼴', st.italic);
@@ -8555,7 +8734,7 @@ function formatCellsDialog(startTab = 0) {
   });
   [fontSel, sizeIn, bIn, iIn, uIn, sIn, colorIn].forEach((x) => x.addEventListener('input', updFont));
   updFont();
-  const fontPage = col(row(lab('글꼴', fontSel), fontDl, lab('크기', sizeIn)), row(bL, iL, uL, sL), lab('색', colorIn), el('div', { class: 'fc-title' }, '미리 보기'), fontPreview);
+  const fontPage = col(row(el('div', { class: 'fc-fontcol' }, lab('글꼴', fontSel), fontBox, fontDl), lab('크기', sizeIn)), row(bL, iL, uL, sL), lab('색', colorIn), el('div', { class: 'fc-title' }, '미리 보기'), fontPreview);
 
   // ── 테두리 (엑셀과 같은 구성: 선 스타일 · 색 · 미리 설정 · 가장자리별 단추 · 미리 보기) ──
   let border = null;
@@ -8626,7 +8805,16 @@ function formatCellsDialog(startTab = 0) {
     swatches.append(b);
   }
   fillIn.addEventListener('input', () => { noFill.checked = false; });
-  const fillPage = col(noFillL, el('div', { class: 'fc-title' }, '배경색'), swatches, lab('다른 색', fillIn));
+  // 무늬 스타일 · 무늬 색 (엑셀 채우기 탭)
+  const patSel = el('select', {}, [el('option', { value: '' }, '(무늬 없음)'), ...PATTERNS.map(([v, l]) => el('option', { value: v, selected: st.pattern === v }, l))]);
+  const patColor = el('input', { type: 'color', value: st.patternColor || '#000000' });
+  const fillPrev = el('div', { class: 'fc-fillprev' });
+  const updFill = () => { fillPrev.style.background = patSel.value ? patternCss(patSel.value, patColor.value, noFill.checked ? '#ffffff' : fillIn.value) : noFill.checked ? '#ffffff' : fillIn.value; };
+  [patSel, patColor, fillIn, noFill].forEach((x) => x.addEventListener('input', updFill));
+  swatches.addEventListener('click', () => setTimeout(updFill, 0));
+  updFill();
+  const fillPage = col(noFillL, el('div', { class: 'fc-title' }, '배경색'), swatches, lab('다른 색', fillIn),
+    row(lab('무늬 스타일', patSel), lab('무늬 색', patColor)), el('div', { class: 'fc-title' }, '보기'), fillPrev);
 
   const pages = [['표시 형식', numberPage], ['맞춤', alignPage], ['글꼴', fontPage], ['테두리', borderPage], ['채우기', fillPage]];
   const tabBar = el('div', { class: 'dlg-tabs' });
@@ -8660,6 +8848,9 @@ function formatCellsDialog(startTab = 0) {
             bold: bIn.checked || undefined, italic: iIn.checked || undefined, underline: uIn.checked || undefined, strike: sIn.checked || undefined,
             color: colorIn.value === '#000000' ? undefined : colorIn.value,
             fill: noFill.checked ? undefined : fillIn.value,
+            pattern: patSel.value || undefined, patternColor: patSel.value && patColor.value !== '#000000' ? patColor.value : undefined,
+            shrink: shrinkIn.checked || undefined,
+            rotate: vertIn.checked ? 255 : Number(rotIn.value) ? Math.max(-90, Math.min(90, Number(rotIn.value))) : undefined,
           };
           wb.transact(() => {
             applyStyle(patch, { widen: fmt.numFmt !== undefined ? 'grow' : false });
@@ -9295,10 +9486,13 @@ function cfManager() {
     ...wb.sheets.map((s, i) => (i === si ? null : el('option', { value: `sheet:${i}` }, `시트: ${s.name}`))).filter(Boolean),
   ]);
   const tbody = el('tbody');
+  const hits = (rl) => [rl, ...(rl.more ?? [])].some((g) => g.r1 <= selRange.r2 && g.r2 >= selRange.r1 && g.c1 <= selRange.c2 && g.c2 >= selRange.c1);
   const visible = () => {
     const list = listOf(scopeSheet);
-    return list.filter((rl) => scope !== 'selection' || (rl.r1 <= selRange.r2 && rl.r2 >= selRange.r1 && rl.c1 <= selRange.c2 && rl.c2 >= selRange.c1));
+    return list.filter((rl) => scope !== 'selection' || hits(rl));
   };
+  // 선택 영역에 규칙이 없고 시트에는 있으면 엑셀 파일의 규칙이 바로 보이도록 '현재 워크시트'로 시작
+  if (!listOf(si).some(hits) && listOf(si).length) { scope = 'sheet'; showSel.value = `sheet:${si}`; }
   const render = () => {
     tbody.replaceChildren();
     const vis = visible();

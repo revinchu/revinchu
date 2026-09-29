@@ -7,12 +7,18 @@ export function el(tag, attrs = {}, ...children) {
     if (v === undefined || v === null || v === false) continue;
     if (k === 'class') node.className = v;
     else if (k === 'html') node.innerHTML = v;
-    else if (k === 'style' && typeof v === 'object') Object.assign(node.style, v);
+    else if (k === 'style' && typeof v === 'object') {
+      // CSS 사용자 속성(--이름)은 대입이 안 되므로 setProperty
+      for (const [sk, sv] of Object.entries(v)) {
+        if (sv === undefined || sv === null) continue;
+        if (sk.startsWith('--')) node.style.setProperty(sk, sv); else node.style[sk] = sv;
+      }
+    }
     else if (k.startsWith('on')) node.addEventListener(k.slice(2), v);
     else if (k === 'dataset') Object.assign(node.dataset, v);
     else node.setAttribute(k, v === true ? '' : v);
   }
-  for (const c of children.flat()) {
+  for (const c of children.flat(Infinity)) {
     if (c === null || c === undefined || c === false) continue;
     node.append(c instanceof Node ? c : document.createTextNode(String(c)));
   }
@@ -65,22 +71,40 @@ export function closeMenus() {
  */
 export function openMenu(anchor, items, { minWidth, scroll } = {}) {
   closeMenus();
+  return buildMenu(anchor, items, { minWidth, scroll });
+}
+
+/** 메뉴 하나 (submenu: 오른쪽에 하위 메뉴, swatch: 색 견본, header: 제목 줄) */
+function buildMenu(anchor, items, { minWidth, scroll, level = 0 } = {}) {
   const menu = el('div', { class: 'menu', role: 'menu' });
+  menu.dataset.level = String(level);
   if (minWidth) menu.style.minWidth = `${minWidth}px`;
-  if (scroll) { menu.style.maxHeight = '60vh'; menu.style.overflowY = 'auto'; }
+  if (scroll || level) { menu.style.maxHeight = '60vh'; menu.style.overflowY = 'auto'; }
+  const closeDeeper = () => {
+    for (const m of openMenus.filter((x) => Number(x.dataset.level) > level)) m.remove();
+    openMenus = openMenus.filter((x) => Number(x.dataset.level) <= level);
+  };
   for (const it of items) {
     if (!it) continue;
     if (it.sep) { menu.append(el('div', { class: 'menu-sep' })); continue; }
-    if (it.title) { menu.append(el('div', { class: 'menu-title' }, it.title)); continue; }
+    if (it.title || it.header) { menu.append(el('div', { class: 'menu-title' }, it.title ?? it.label)); continue; }
     if (it.node) { menu.append(it.node); continue; }
+    const openSub = () => {
+      closeDeeper();
+      const r = btn.getBoundingClientRect();
+      buildMenu({ x: r.right - 2, y: r.top - 4 }, it.submenu, { level: level + 1 });
+    };
     const btn = el('button', {
-      class: 'menu-item', role: 'menuitem', disabled: it.disabled,
+      class: `menu-item${it.submenu ? ' has-sub' : ''}`, role: 'menuitem', disabled: it.disabled,
       onmousedown: (e) => e.preventDefault(),
-      onclick: () => { closeMenus(); it.action?.(); },
+      onmouseenter: () => { if (it.submenu) openSub(); else closeDeeper(); },
+      onclick: () => { if (it.submenu) { openSub(); return; } closeMenus(); it.action?.(); },
     },
     el('span', { class: 'mi-icon', html: it.checked ? ICONS.check : (it.icon ? ICONS[it.icon] ?? it.icon : '') }),
-    el('span', {}, it.label),
-    it.key ? el('span', { class: 'mi-key' }, it.key) : null);
+    it.swatch !== undefined ? el('i', { class: 'mi-swatch', style: { background: it.swatch ?? 'transparent' } }) : null,
+    el('span', {}, it.swatch !== undefined ? it.label.replace(/^(■|A) /, '') : it.label),
+    it.key ? el('span', { class: 'mi-key' }, it.key) : null,
+    it.submenu ? el('span', { class: 'mi-key' }, '▸') : null);
     menu.append(btn);
   }
   document.getElementById('menuLayer').append(menu);

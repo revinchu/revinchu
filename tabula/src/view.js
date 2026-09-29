@@ -110,6 +110,49 @@ export function shapeTextHtml(o) {
  *                  showGrid, showFormulas, showHeaders }
  * host.onViewScroll() : 스크롤 후 호출 (편집기 위치 갱신 등)
  */
+/** 엑셀 무늬 채우기 18종 → CSS 배경 (무늬 색 fg, 배경색 bg) */
+export const PATTERNS = [
+  ['gray125', '12.5% 회색'], ['gray0625', '6.25% 회색'], ['lightGray', '25% 회색'], ['mediumGray', '50% 회색'], ['darkGray', '75% 회색'],
+  ['lightHorizontal', '가는 가로 줄무늬'], ['lightVertical', '가는 세로 줄무늬'], ['lightDown', '가는 역대각선 줄무늬'], ['lightUp', '가는 대각선 줄무늬'], ['lightGrid', '가는 격자'], ['lightTrellis', '가는 대각선 격자'],
+  ['darkHorizontal', '가로 줄무늬'], ['darkVertical', '세로 줄무늬'], ['darkDown', '역대각선 줄무늬'], ['darkUp', '대각선 줄무늬'], ['darkGrid', '격자'], ['darkTrellis', '대각선 격자'],
+];
+export function patternCss(p, fg, bg) {
+  const b = bg || 'transparent';
+  const dots = (size, r) => `radial-gradient(${fg} ${r}px, transparent ${r + 0.4}px) 0 0 / ${size}px ${size}px, ${b}`;
+  const lines = (angle, w, gap) => `repeating-linear-gradient(${angle}deg, ${fg} 0 ${w}px, ${b} ${w}px ${gap}px)`;
+  switch (p) {
+    case 'gray0625': return dots(8, 0.6);
+    case 'gray125': return dots(4, 0.6);
+    case 'lightGray': return dots(3, 0.7);
+    case 'mediumGray': return `repeating-conic-gradient(${fg} 0 25%, ${b} 0 50%) 0 0 / 2px 2px`;
+    case 'darkGray': return `repeating-conic-gradient(${fg} 0 25%, ${fg}bb 0 50%) 0 0 / 2px 2px, ${b}`;
+    case 'lightHorizontal': return lines(0, 1, 4);
+    case 'darkHorizontal': return lines(0, 2, 4);
+    case 'lightVertical': return lines(90, 1, 4);
+    case 'darkVertical': return lines(90, 2, 4);
+    case 'lightDown': return lines(45, 1, 4);
+    case 'darkDown': return lines(45, 2, 4);
+    case 'lightUp': return lines(-45, 1, 4);
+    case 'darkUp': return lines(-45, 2, 4);
+    case 'lightGrid': return `${lines(0, 1, 4)}, ${lines(90, 1, 4)}`;
+    case 'darkGrid': return `${lines(0, 2, 4)}, ${lines(90, 2, 4)}`;
+    case 'lightTrellis': return `${lines(45, 1, 4)}, ${lines(-45, 1, 4)}`;
+    case 'darkTrellis': return `${lines(45, 2, 4)}, ${lines(-45, 2, 4)}`;
+    default: return b;
+  }
+}
+
+/** 슬라이서 단추 글자가 잘리면 단추 크기에 맞게 글자를 줄임 (최소 60%) */
+function fitSlicerText(root) {
+  for (const b of root.querySelectorAll('.sl-item:not([data-fit])')) {
+    b.dataset.fit = '1';
+    if (b.scrollWidth <= b.clientWidth + 1) continue;
+    const base = parseFloat(getComputedStyle(b).fontSize) || 14;
+    let size = base;
+    while (size > base * 0.6 && b.scrollWidth > b.clientWidth + 1) { size -= 0.5; b.style.fontSize = `${size}px`; }
+  }
+}
+
 export class GridView {
   constructor(host) {
     this.host = host;
@@ -639,11 +682,22 @@ export class GridView {
         : `linear-gradient(${bar.color}, ${bar.color})`;
       css.push(`background:${img} no-repeat ${bar.neg ? '100%' : '0'} 50% / ${bar.pct}% 72%${bg ? `, ${bg}` : ''};background-clip:padding-box`);
     }
+    else if (style.pattern) css.push(`background:${patternCss(style.pattern, style.patternColor ?? '#000000', bg)}`);
     else if (bg) css.push(`background-color:${bg}`);
     // 테두리: 색 · 선 종류(가는 선 · 중간 · 굵게 · 점선 · 이중선)까지 엑셀처럼
-    if (style.bt) css.push(borderCss('top', style.bts, style.btc));
+    // 이웃 칸과 겹치는 선은 한 번만 (엑셀처럼): 위 칸의 아래쪽 · 왼쪽 칸의 오른쪽 선이 같거나 더 굵으면 이 칸의 위 · 왼쪽 선은 생략
+    const weight = (k) => (BORDER_CSS[k ?? 'thin'] ?? BORDER_CSS.thin)[0];
+    const shared = (side) => {
+      const nr = side === 'top' ? r - 1 : r;
+      const nc = side === 'top' ? c : c - 1;
+      if (nr < 0 || nc < 0 || (merge && (side === 'top' ? merge.r1 : merge.c1) !== (side === 'top' ? r : c))) return false;
+      const ns = wb.styleAt(si, nr, nc);
+      const k = side === 'top' ? 'bb' : 'br';
+      return !!ns?.[k] && weight(ns[`${k}s`]) >= weight(style[side === 'top' ? 'bts' : 'bls']);
+    };
+    if (style.bt && !shared('top')) css.push(borderCss('top', style.bts, style.btc));
     if (style.bb) css.push(borderCss('bottom', style.bbs, style.bbc));
-    if (style.bl) css.push(borderCss('left', style.bls, style.blc));
+    if (style.bl && !shared('left')) css.push(borderCss('left', style.bls, style.blc));
     if (style.br) css.push(borderCss('right', style.brs, style.brc));
     const cls = [];
     if (style.wrap) cls.push('wrap');
@@ -761,7 +815,10 @@ export class GridView {
     });
     p.objHtml = next;
     const cur = p.objects.childNodes;
-    if (cur.length !== nodes.length || nodes.some((n, i) => cur[i] !== n)) p.objects.replaceChildren(...nodes);
+    if (cur.length !== nodes.length || nodes.some((n, i) => cur[i] !== n)) {
+      p.objects.replaceChildren(...nodes);
+      fitSlicerText(p.objects);
+    }
   }
 
   /** 슬라이서: 머리글(캡션·다중 선택·필터 지우기) + 항목 단추 */

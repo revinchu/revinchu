@@ -5,7 +5,11 @@ import { inBlock } from './block.js';
 const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** 엑셀 찾기 문자열 → 정규식 (* = 아무 글자 여러 개, ? = 한 글자, ~* ~? ~~ = 글자 그대로) */
-export function findRegex(text, { matchCase = false, whole = false, global = false } = {}) {
+export function findRegex(text, { matchCase = false, whole = false, global = false, regex = false } = {}) {
+  // 정규식 사용: 입력한 패턴을 그대로 (잘못된 패턴이면 글자 그대로 찾기)
+  if (regex) {
+    try { return new RegExp(whole ? `^(?:${text})$` : text, `${matchCase ? '' : 'i'}${global ? 'g' : ''}u`); } catch { /* 아래로 */ }
+  }
   let src = '';
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
@@ -20,6 +24,8 @@ export function findRegex(text, { matchCase = false, whole = false, global = fal
 export function replaceText(raw, opts, replacement) {
   const re = findRegex(opts.text, { ...opts, global: true });
   if (opts.whole) return re.test(raw) ? replacement : raw;
+  // 정규식이면 $1 같은 그룹 참조를 그대로 씀
+  if (opts.regex) return raw.replace(re, replacement);
   return raw.replace(re, (m) => (m === '' ? m : replacement));
 }
 

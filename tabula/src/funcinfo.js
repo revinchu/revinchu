@@ -332,6 +332,7 @@ export const FUNC_INFO = {
   'ARRAYTOTEXT': F('텍스트', 'ARRAYTOTEXT(array, [format])', '배열을 텍스트로 바꿉니다.'),
   'VALUETOTEXT': F('텍스트', 'VALUETOTEXT(value, [format])', '값을 텍스트로 바꿉니다.'),
   'REGEXTEST': F('텍스트', 'REGEXTEST(text, pattern, [case_sensitivity])', '텍스트가 정규식과 일치하는지 확인합니다.'),
+  'REGEXMATCH': F('텍스트', 'REGEXMATCH(text, regular_expression)', '텍스트가 정규식과 일치하면 TRUE (구글 스프레드시트와 같음).'),
   'REGEXEXTRACT': F('텍스트', 'REGEXEXTRACT(text, pattern, [return_mode], [case_sensitivity])', '정규식과 일치하는 텍스트를 추출합니다.'),
   'REGEXREPLACE': F('텍스트', 'REGEXREPLACE(text, pattern, replacement, [occurrence], [case_sensitivity])', '정규식과 일치하는 텍스트를 바꿉니다.'),
   'T': F('텍스트', 'T(value)', '값이 텍스트이면 그대로, 아니면 빈 텍스트를 반환합니다.'),

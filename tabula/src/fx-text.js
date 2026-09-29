@@ -348,6 +348,8 @@ const SCALAR = {
     return text.slice(hit.i + hit.len);
   },
   REGEXTEST: ([s, pattern, ci]) => makeRegex(toStr(pattern), optInt(ci, 0) === 1).test(toStr(s)),
+  // 구글 스프레드시트: REGEXMATCH(텍스트, 정규식) — 대소문자 구분
+  REGEXMATCH: ([s, pattern]) => makeRegex(toStr(pattern), false).test(toStr(s)),
   REGEXREPLACE: ([s, pattern, repl, occ, ci]) => {
     const text = toStr(s);
     const re = makeRegex(toStr(pattern), optInt(ci, 0) === 1);

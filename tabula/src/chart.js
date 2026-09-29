@@ -351,7 +351,9 @@ export function renderChartSvg(chart, data) {
     const cx = plot.x + plot.w / 2;
     const cy = plot.y + plot.h / 2;
     const ex = chart.explode ? Math.min(0.3, chart.explode / 100) : 0;
-    const r = Math.max(10, (Math.min(plot.w, plot.h) / 2 - 6) / (1 + ex));
+    // 항목 이름 레이블(엑셀의 원형 바깥 레이블)이 있으면 원을 줄여 둘레에 글자 자리를 둠
+    const outside = s0.catName || s0.labelPos === 'out';
+    const r = Math.max(10, (Math.min(plot.w, plot.h) / 2 - 6) / (1 + ex) * (outside ? 0.72 : 1));
     const inner = baseType === 'doughnut' ? r * ((chart.hole ?? 50) / 100) : 0;
     let a = -Math.PI / 2 + ((chart.firstAngle ?? 0) * Math.PI) / 180;
     vals.forEach((v, i) => {
@@ -376,7 +378,20 @@ export function renderChartSvg(chart, data) {
       }
       if (ex) parts.push('</g>');
       // 레이블: false = 없음(파일에 없던 원형), pct = 백분율, labels = 값, 정하지 않음 = 백분율
-      if (frac >= 0.04 && s0.labels !== false) {
+      if (outside && (s0.labels !== false || s0.catName)) {
+        // 바깥 레이블: 항목 이름 + (백분율 · 값) 두 줄, 조각 색 글자
+        const mid = (a + a2) / 2;
+        const lr = r * 1.2 + 6;
+        const lx = cx + ox + Math.cos(mid) * lr;
+        const ly = cy + oy + Math.sin(mid) * lr;
+        const anchor = Math.cos(mid) > 0.25 ? 'start' : Math.cos(mid) < -0.25 ? 'end' : 'middle';
+        const second = s0.labels === false ? '' : !s0.pct && wantLabels(s0) ? valueLabel(v, s0.numFmt) : `${Math.round(frac * 100)}%`;
+        const fsz = s0.labelSize ? s0.labelSize * (4 / 3) : 11;
+        const tc = s0.labelColor ?? color;
+        const name = s0.catName ? String(categories[i] ?? '') : '';
+        const lines = [name, second].filter(Boolean);
+        lines.forEach((t, k) => parts.push(`<text x="${lx.toFixed(1)}" y="${(ly + 4 + (k - (lines.length - 1) / 2) * (fsz + 2)).toFixed(1)}" text-anchor="${anchor}" font-size="${fsz}" fill="${tc}" font-weight="${k === lines.length - 1 && second ? 700 : 400}">${escSvg(t)}</text>`));
+      } else if (frac >= 0.04 && s0.labels !== false) {
         const mid = (a + a2) / 2;
         const lr = inner ? (r + inner) / 2 : r * 0.65;
         const txt = !s0.pct && wantLabels(s0) ? valueLabel(v, s0.numFmt) : `${Math.round(frac * 100)}%`;

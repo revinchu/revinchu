@@ -181,6 +181,14 @@ function readStyles(files, wbRels, theme) {
       return stop ? colorOf(child(stop, 'color'), theme) : null;
     }
     if (!dxf && (pf.attrs.patternType === 'none' || !pf.attrs.patternType)) return null;
+    // 무늬 채우기 (solid 가 아님): 배경색 = bgColor, 무늬 색 = fgColor
+    const pt = pf.attrs.patternType;
+    if (!dxf && pt && pt !== 'solid') {
+      const out = { pattern: pt, patternColor: colorOf(child(pf, 'fgColor'), theme) ?? '#000000' };
+      const bg = colorOf(child(pf, 'bgColor'), theme);
+      if (bg && child(pf, 'bgColor')?.attrs.indexed !== '64') out.fill = bg;
+      return out;
+    }
     return colorOf(child(pf, dxf ? 'bgColor' : 'fgColor') ?? child(pf, 'fgColor'), theme);
   };
   const fills = kids(child(root, 'fills'), 'fill').map((f) => fillOf(f));
@@ -232,7 +240,8 @@ function readStyles(files, wbRels, theme) {
     if (st.font && st.font === defaultFont) delete st.font;
     if (st.size === defaultSize) delete st.size; // 통합 문서 기본 크기는 적지 않음 (기본 글꼴로 표시)
     const fill = fills[Number(a.fillId || 0)];
-    if (fill) st.fill = fill;
+    if (fill && typeof fill === 'object') Object.assign(st, fill);
+    else if (fill) st.fill = fill;
     Object.assign(st, borders[Number(a.borderId || 0)] ?? {});
     Object.assign(st, numFmtOf(a.numFmtId || 0));
     const parent = styleXfs[Number(a.xfId ?? 0)];
@@ -259,7 +268,7 @@ function readStyles(files, wbRels, theme) {
     }
     return st;
   });
-  const dxfs = kids(child(root, 'dxfs'), 'dxf').map((d) => {
+  const dxfOf = (d) => {
     const st = {};
     const f = child(d, 'font');
     if (f) {
@@ -277,7 +286,8 @@ function readStyles(files, wbRels, theme) {
     const nf = child(d, 'numFmt');
     if (nf?.attrs.formatCode) Object.assign(st, styleForCode(nf.attrs.formatCode));
     return st;
-  });
+  };
+  const dxfs = kids(child(root, 'dxfs'), 'dxf').map(dxfOf);
   // 사용자 지정 피벗 스타일 (<tableStyles>) → 역할별 서식 { header, sub, grand, body, page, band }
   const tableStyles = {};
   for (const ts of kids(child(root, 'tableStyles'), 'tableStyle')) {
@@ -312,7 +322,7 @@ function readStyles(files, wbRels, theme) {
     };
     slicerStyles[ss.attrs.name] = Object.fromEntries(Object.entries(c).filter(([, v]) => v));
   }
-  return { xfs, dxfs, defaultFont, tableStyles, wbFont, slicerStyles };
+  return { xfs, dxfs, dxfOf, defaultFont, tableStyles, wbFont, slicerStyles };
 }
 
 /** sheetData 부분을 떼어 냄 (접두사 없는 일반 형식일 때만) */
@@ -696,6 +706,32 @@ function* readSheet(files, path, ctx) {
     if (cfvo.length && !(cfvo.every((c, i) => c.type === 'percent' && Math.abs(Number(c.v) - Math.round((i * 100) / cfvo.length)) <= 1 && c.gte !== false))) out.cfvo = cfvo;
     return out;
   };
+  // 서식(dxf)을 쓰는 규칙 — 기본 규칙과 확장(x14) 규칙이 함께 씀 (x14 는 텍스트를 수식에서 찾음)
+  const simpleRule = (a, formulas, style) => {
+    // 확장 규칙에서 텍스트가 셀 참조면(예: $A$1) 엑셀이 함께 적어 둔 판정 수식으로 계산
+    if (a.text === undefined && formulas[0] && formulas[1] !== undefined && !/^".*"$/.test(formulas[1]) && ['containsText', 'notContainsText', 'beginsWith', 'endsWith'].includes(a.type)) {
+      return { type: 'formula', formula: `=${cleanFormula(formulas[0])}`, style };
+    }
+    const txt = a.text ?? (formulas[1] !== undefined ? fval(formulas[1]) : '');
+    switch (a.type) {
+          case 'cellIs': return OPS[a.operator] ?  { type: OPS[a.operator], v1: fval(formulas[0]), ...(formulas[1] !== undefined ? { v2: fval(formulas[1]) } : {}), style } : null;
+          case 'containsText': return { type: 'text', v1: txt, style };
+          case 'notContainsText': return { type: 'notText', v1: txt, style };
+          case 'beginsWith': return { type: 'begins', v1: txt, style };
+          case 'endsWith': return { type: 'ends', v1: txt, style };
+          case 'containsBlanks': return { type: 'blank', style };
+          case 'notContainsBlanks': return { type: 'noBlank', style };
+          case 'containsErrors': return { type: 'errors', style };
+          case 'notContainsErrors': return { type: 'noErrors', style };
+          case 'timePeriod': return { type: 'date', period: a.timePeriod ?? 'today', style };
+          case 'expression': return formulas[0] ? { type: 'formula', formula: `=${cleanFormula(formulas[0])}`, style } : null;
+          case 'duplicateValues': return { type: 'dup', style };
+          case 'uniqueValues': return { type: 'unique', style };
+          case 'top10': return { type: a.bottom === '1' ? 'bottom' : 'top', v1: a.rank ?? '10', ...(a.percent === '1' ? { percent: true } : {}), style };
+          case 'aboveAverage': return { type: a.aboveAverage === '0' ? 'belowAvg' : 'aboveAvg', style, ...(a.equalAverage === '1' ? { equal: true } : {}), ...(a.stdDev ? { stdDev: Number(a.stdDev) } : {}) };
+          default: return null;
+    }
+  };
   for (const cf of kids(root, 'conditionalFormatting')) {
     const ranges = (cf.attrs.sqref ?? '').split(/\s+/).map(refToRange).filter(Boolean);
     if (!ranges.length) continue;
@@ -706,28 +742,8 @@ function* readSheet(files, path, ctx) {
         const a = rule.attrs;
         const style = dxfs[Number(a.dxfId)] ?? (a.dxfId === undefined ? {} : { fill: '#ffc7ce', color: '#9c0006' });
         const formulas = kids(rule, 'formula').map((f) => f.text);
-        let out = null;
-        switch (a.type) {
-          case 'cellIs': if (OPS[a.operator]) out = { type: OPS[a.operator], v1: fval(formulas[0]), ...(formulas[1] !== undefined ? { v2: fval(formulas[1]) } : {}), style }; break;
-          case 'containsText': out = { type: 'text', v1: a.text ?? '', style }; break;
-          case 'notContainsText': out = { type: 'notText', v1: a.text ?? '', style }; break;
-          case 'beginsWith': out = { type: 'begins', v1: a.text ?? '', style }; break;
-          case 'endsWith': out = { type: 'ends', v1: a.text ?? '', style }; break;
-          case 'containsBlanks': out = { type: 'blank', style }; break;
-          case 'notContainsBlanks': out = { type: 'noBlank', style }; break;
-          case 'containsErrors': out = { type: 'errors', style }; break;
-          case 'notContainsErrors': out = { type: 'noErrors', style }; break;
-          case 'timePeriod': out = { type: 'date', period: a.timePeriod ?? 'today', style }; break;
-          case 'expression': if (formulas[0]) out = { type: 'formula', formula: `=${cleanFormula(formulas[0])}`, style }; break;
-          case 'duplicateValues': out = { type: 'dup', style }; break;
-          case 'uniqueValues': out = { type: 'unique', style }; break;
-          case 'top10': out = { type: a.bottom === '1' ? 'bottom' : 'top', v1: a.rank ?? '10', ...(a.percent === '1' ? { percent: true } : {}), style }; break;
-          case 'aboveAverage': {
-            out = { type: a.aboveAverage === '0' ? 'belowAvg' : 'aboveAvg', style };
-            if (a.equalAverage === '1') out.equal = true;
-            if (a.stdDev) out.stdDev = Number(a.stdDev);
-            break;
-          }
+        let out = simpleRule(a, formulas, style);
+        switch (out ? '' : a.type) {
           case 'dataBar': {
             const db = child(rule, 'dataBar');
             const color = colorOf(child(db, 'color') ?? descendants(rule, 'color')[0], ctx.theme) ?? '#638ec6';
@@ -781,6 +797,12 @@ function* readSheet(files, path, ctx) {
     if (!ranges.length) continue;
     let out = null;
     if (rule.attrs.type === 'iconSet') out = iconRule(child(rule, 'iconSet'));
+    else if (rule.attrs.type !== 'dataBar') {
+      const dx = child(rule, 'dxf');
+      const style = (dx && ctx.dxfOf ? ctx.dxfOf(dx) : null) ?? {};
+      out = simpleRule(rule.attrs, kids(rule, 'f').map((f) => f.text), style);
+      if (out && rule.attrs.stopIfTrue === '1') out.stopIfTrue = true;
+    }
     else if (rule.attrs.type === 'dataBar') {
       const xdb = child(rule, 'dataBar');
       const color = colorOf(child(xdb, 'fillColor'), ctx.theme) ?? '#638ec6';
@@ -1284,6 +1306,8 @@ function readChart(files, path, theme = {}) {
     return out;
   };
   const series = [];
+  const serNames = []; // 계열 이름(파일에 저장된 값) — 자동 제목용
+  const serOrder = [];
   const fmts = [];
   let sheetName = null;
   const rows = [];
@@ -1292,9 +1316,11 @@ function readChart(files, path, theme = {}) {
     const secondary = isSecondary(g) && groups.length > 1;
     const gLabels = dl(g);
     for (const ser of kids(g, 'ser')) {
+      serOrder.push(Number(child(ser, 'order')?.attrs.val ?? serOrder.length));
       const order = Number(child(ser, 'order')?.attrs.val ?? series.length);
       const txF = descendants(child(ser, 'tx'), 'f')[0]?.text;
       const txV = descendants(child(ser, 'tx'), 'v')[0]?.text;
+      serNames.push(txV ?? null);
       const catEl = child(ser, 'cat') ?? child(ser, 'xVal');
       const valEl = child(ser, 'val') ?? child(ser, 'yVal');
       const catF = descendants(catEl, 'f')[0]?.text;
@@ -1342,7 +1368,11 @@ function readChart(files, path, theme = {}) {
         const on = (k) => child(d, k)?.attrs.val === '1';
         if (d && child(d, 'delete')?.attrs.val !== '1' && on('showPercent') && !on('showVal')) f.pct = true;
         else if (d && child(d, 'delete')?.attrs.val !== '1' && on('showVal')) f.labels = true;
-        else f.labels = false;
+        else if (!(d && child(d, 'delete')?.attrs.val !== '1' && on('showCatName'))) f.labels = false;
+        // 항목 이름 (엑셀: 이름 + 값/백분율 두 줄, 조각 바깥)
+        if (d && child(d, 'delete')?.attrs.val !== '1' && on('showCatName')) f.catName = true;
+        const pos = child(d, 'dLblPos')?.attrs.val;
+        if (pos === 'outEnd' || pos === 'bestFit') f.labelPos = 'out';
       } else if (lab) f.labels = true;
       if (marker) f.marker = marker === 'none' ? 'none' : marker;
       const code = fmtCode(child(ser, 'dLbls')) ?? descendants(valEl, 'formatCode')[0]?.text;
@@ -1364,7 +1394,12 @@ function readChart(files, path, theme = {}) {
   } : null;
   const chartEl = descendants(root, 'chart')[0] ?? root;
   const titleEl = child(chartEl, 'title');
-  const title = titleEl ? descendants(titleEl, 't').map((t) => t.text).join('') : '';
+  let title = titleEl ? descendants(titleEl, 't').map((t) => t.text).join('') : '';
+  // 셀에 연결된 제목(strRef)은 저장된 값, 제목 요소만 있고 글자가 없으면 엑셀처럼 계열이 하나일 때 계열 이름(자동 제목)
+  if (titleEl && !title) title = descendants(child(titleEl, 'tx'), 'v')[0]?.text ?? '';
+  if (titleEl && !title && serNames.length === 1) title = serNames[0] ?? '';
+  if (titleEl && !title && (groups.some((g) => g.name === 'pieChart' || g.name === 'doughnutChart' || g.name === 'pie3DChart'))) title = serNames[0] ?? '';
+  if (!titleEl && child(chartEl, 'autoTitleDeleted')?.attrs.val === '0' && serNames.length === 1) title = serNames[0] ?? '';
   const types = new Set(fmts.map((f, i) => f.type ?? typeOf(groups[0])));
   const out = { type: types.size > 1 ? 'combo' : typeOf(groups[0]), title, series };
   // 글꼴 크기(pt): 제목 · 축 · 범례 (파일에 있을 때만)
@@ -1732,7 +1767,7 @@ function* readXlsxSteps(files) {
   const wbRoot = parseXml(textOf(files[wbPath]));
   const wbRels = relsOf(files, wbPath);
   const theme = readTheme(files, wbRels);
-  const { xfs, dxfs, tableStyles, wbFont, slicerStyles } = readStyles(files, wbRels, theme);
+  const { xfs, dxfs, dxfOf, tableStyles, wbFont, slicerStyles } = readStyles(files, wbRels, theme);
   const mdw = digitWidth(wbFont);
   const ssRel = Object.values(wbRels).find((r) => r.type === 'sharedStrings');
   const strings = files.__xlsb ? files.__xlsb.strings : ssRel && files[ssRel.target] ? kids(parseXml(textOf(files[ssRel.target])), 'si').map(allText) : [];
@@ -1756,7 +1791,7 @@ function* readXlsxSteps(files) {
     if (!e) return false;
     try { return mayReturnArray(parse(e.ref.slice(1))); } catch { return false; }
   };
-  const ctx = { mdw, wbFont, xfs, dxfs, tableStyles, slicerStyles, strings, theme, warnings: new Set(), isName, nameMulti, richImages: readRichImages(files, wbRels) };
+  const ctx = { mdw, wbFont, xfs, dxfs, dxfOf, tableStyles, slicerStyles, strings, theme, warnings: new Set(), isName, nameMulti, richImages: readRichImages(files, wbRels) };
   const sheets = [];
   const warnings = [];
   const sheetCodes = {};
@@ -1932,7 +1967,9 @@ class StylePool {
     if (this.maps.xf.has(k)) return this.maps.xf.get(k);
     const font = `<font>${style.bold ? '<b/>' : ''}${style.italic ? '<i/>' : ''}${style.strike ? '<strike/>' : ''}${style.underline ? '<u/>' : ''}<sz val="${style.size || this.baseFont.size}"/>${style.color ? `<color rgb="${argb(style.color)}"/>` : '<color theme="1"/>'}<name val="${esc(style.font || this.baseFont.name)}"/><family val="3"/><charset val="129"/></font>`;
     const fontId = this.intern('font', this.fonts, font);
-    const fillId = style.fill ? this.intern('fill', this.fills, `<fill><patternFill patternType="solid"><fgColor rgb="${argb(style.fill)}"/><bgColor indexed="64"/></patternFill></fill>`) : 0;
+    const fillId = style.pattern
+      ? this.intern('fill', this.fills, `<fill><patternFill patternType="${esc(style.pattern)}"><fgColor rgb="${argb(style.patternColor ?? '#000000')}"/>${style.fill ? `<bgColor rgb="${argb(style.fill)}"/>` : '<bgColor indexed="64"/>'}</patternFill></fill>`)
+      : style.fill ? this.intern('fill', this.fills, `<fill><patternFill patternType="solid"><fgColor rgb="${argb(style.fill)}"/><bgColor indexed="64"/></patternFill></fill>`) : 0;
     const side = (n, k) => (style[k] ? `<${n} style="${style[`${k}s`] ?? 'thin'}">${style[`${k}c`] ? `<color rgb="${argb(style[`${k}c`])}"/>` : '<color indexed="64"/>'}</${n}>` : `<${n}/>`);
     const diag = style.dd || style.du ? side('diagonal', style.dd ? 'dd' : 'du') : '<diagonal/>';
     const borderId = style.bt || style.bb || style.bl || style.br || style.dd || style.du
