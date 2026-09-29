@@ -4922,7 +4922,7 @@ function tableStyleGallery(anchorEl, forCreate = false) {
 // ───────────────────────── 슬라이서 ─────────────────────────
 const SLICER_COLORS = [['blue', '파랑'], ['orange', '주황'], ['gray', '회색'], ['gold', '금색'], ['sky', '하늘색'], ['green', '녹색']];
 
-const koCollator = new Intl.Collator('ko');
+const koCollator = new Intl.Collator('en', { sensitivity: 'accent' }); // 엑셀 정렬 순서: 숫자 < 영문 < 한글, 대소문자 무시 (수식 비교 순서와 다름)
 const sortItems = (entries) => entries.sort((a, b) => {
   if (a.key === '') return 1;
   if (b.key === '') return -1;
@@ -7367,6 +7367,8 @@ function writePivot(targetSi, def, { autofit = true } = {}) {
   refreshPivotCond(targetSi, def);
   const btns = [];
   grid.forEach((row, r) => {
+    // 보고서 필터와 표 사이의 빈 줄은 피벗 영역이 아님 (엑셀: 사용자가 제목 등을 적어 둠) — 건드리지 않음
+    if (!row.length) return;
     for (let c = 0; c < colsN; c++) {
       const cd = row[c];
       const rr = top + r;
@@ -7585,6 +7587,9 @@ function pivotDialog(tableName = null) {
 
 function refreshPivots() {
   let n = 0;
+  // 새로 고침: 파일에 저장돼 있던 캐시(저장본) 대신 지금 원본에서 다시 계산 (엑셀과 같음)
+  wb.pivotSnapshots = null;
+  wb.pivotMemo = null;
   wb.transact(() => {
     wb.sheets.forEach((s, i) => {
       for (const { def } of pivotDefs(i)) if (writePivot(i, def)) n++;

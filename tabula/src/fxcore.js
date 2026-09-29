@@ -169,6 +169,14 @@ export function compareText(a, b) {
   return x.length - y.length < 0 ? -1 : 1;
 }
 
+// 엑셀의 정렬(데이터 정렬 · 피벗 · 필터 목록)은 수식 비교와 달리 영문이 한글보다 앞
+const SORT_COLLATOR = new Intl.Collator('en', { sensitivity: 'accent' });
+/** 정렬용 비교: 숫자 < 문자 < 논리값, 문자는 엑셀 정렬 순서 */
+export function compareSortValues(a, b) {
+  if (typeof a === 'string' && typeof b === 'string') return SORT_COLLATOR.compare(a, b);
+  return compareValues(a, b);
+}
+
 /** 엑셀 비교 규칙: 숫자 < 문자 < 논리값, 문자는 대소문자 무시 */
 export function compareValues(a, b) {
   if (a === null || a === undefined) a = typeof b === 'string' ? '' : typeof b === 'boolean' ? false : 0;

@@ -34,8 +34,23 @@ export const itemText = (v) => {
   return img ? img.alt || `그림 ${String(img.src).slice(-12)}` : String(v);
 };
 
-const collator = new Intl.Collator('ko');
-/** 항목 정렬: 숫자 → 글자(한국어 순) → 빈 칸 */
+const collator = new Intl.Collator('en', { sensitivity: 'accent' }); // 엑셀 정렬 순서: 숫자 < 영문 < 한글, 대소문자 무시 (수식 비교 순서와 다름)
+// 엑셀 기본 사용자 지정 목록 (한국어 엑셀): 피벗 · 슬라이서는 정렬할 때 이 목록 순서를 먼저 씀
+// ('정렬할 때 사용자 지정 목록 사용' 기본 켜짐) — 목록에 있는 항목이 앞, 나머지는 보통 순서
+const CUSTOM_LISTS = [
+  'Sun,Mon,Tue,Wed,Thu,Fri,Sat', 'Sunday,Monday,Tuesday,Wednesday,Thursday,Friday,Saturday',
+  'Jan,Feb,Mar,Apr,May,Jun,Jul,Aug,Sep,Oct,Nov,Dec',
+  'January,February,March,April,May,June,July,August,September,October,November,December',
+  '일,월,화,수,목,금,토', '일요일,월요일,화요일,수요일,목요일,금요일,토요일',
+  '1월,2월,3월,4월,5월,6월,7월,8월,9월,10월,11월,12월', '1사분기,2사분기,3사분기,4사분기',
+  '갑,을,병,정,무,기,경,신,임,계', '자,축,인,묘,진,사,오,미,신,유,술,해',
+  '甲,乙,丙,丁,戊,己,庚,辛,壬,癸', '子,丑,寅,卯,辰,巳,午,未,申,酉,戌,亥',
+].map((l) => l.split(','));
+const CUSTOM_RANK = new Map();
+CUSTOM_LISTS.forEach((list, li) => list.forEach((t, i) => { const k = t.toLowerCase(); if (!CUSTOM_RANK.has(k)) CUSTOM_RANK.set(k, li * 100 + i); }));
+export const customRank = (s) => CUSTOM_RANK.get(String(s).toLowerCase());
+
+/** 항목 정렬: 숫자 → 사용자 지정 목록 항목(목록 순) → 글자(엑셀 정렬 순) → 빈 칸 */
 export function sortKeys(keys) {
   return keys.sort((a, b) => {
     if (a === EMPTY) return 1;
@@ -43,6 +58,9 @@ export function sortKeys(keys) {
     if (typeof a === 'number' && typeof b === 'number') return a - b;
     if (typeof a === 'number') return -1;
     if (typeof b === 'number') return 1;
+    const x = customRank(a);
+    const y = customRank(b);
+    if (x !== undefined || y !== undefined) return x === undefined ? 1 : y === undefined ? -1 : x - y;
     return collator.compare(String(a), String(b));
   });
 }

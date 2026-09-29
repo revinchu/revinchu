@@ -8,7 +8,7 @@ import {
 import { parseInput } from './format.js';
 import { inBlock, blockValue, blockSet, blockClone, blockShift, rawOf, sortOrder, blockPermute, logicalCol, reorderRows, setRowOrder, materialize } from './block.js';
 import { hid, shiftHidden } from './axis.js';
-import { CellImage } from './fxcore.js';
+import { CellImage, compareSortValues } from './fxcore.js';
 import { DepGraph, cellNum } from './depgraph.js';
 import { CellMap } from './cellmap.js';
 import { pushAll } from './fxcore.js';
@@ -1878,7 +1878,7 @@ export class Workbook {
       const ea = isError(a.v);
       const eb = isError(b.v);
       if (ea || eb) return ea - eb;
-      const c = compareValues(a.v, b.v);
+      const c = compareSortValues(a.v, b.v);
       return ascending ? c : -c;
     });
     rows.forEach((row, i) => {
@@ -1906,7 +1906,7 @@ export class Workbook {
     const a = r1 - b.r0;
     const n = r2 - r1 + 1;
     const key = logicalCol(b, keyCol - b.c0, a, n);
-    const order = sortOrder(key, key.a, n, ascending, compareValues);
+    const order = sortOrder(key, key.a, n, ascending, compareSortValues);
     if (c1 === b.c0 && c2 === b.c0 + b.cols.length - 1) {
       // 블록 전체 너비: 데이터를 옮기지 않고 행 순서만 바꿈 (실행 취소도 즉시)
       const before = reorderRows(b, a, n, order);
@@ -2082,13 +2082,20 @@ export class Workbook {
   }
 
   load(data) {
+    this.setSnapshots(data);
     this.restore(data);
     this.undoStack = [];
     this.redoStack = [];
   }
 
   /** 큰 문서: 화면이 멈추지 않도록 나눠서 불러옴. onProgress(0~1) */
+  /** 파일의 피벗 캐시 저장본 (엑셀이 마지막으로 새로 고친 원본) — 원본을 고치기 전까지 피벗을 이것으로 계산 */
+  setSnapshots(data) {
+    this.pivotSnapshots = data?.pivotSnapshots ? new Map(Object.entries(data.pivotSnapshots).map(([k, rows]) => [k, { rows, ver: undefined }])) : null;
+  }
+
   async loadAsync(data, onProgress) {
+    this.setSnapshots(data);
     const it = this.restoreSteps(data);
     let last = performance.now();
     for (;;) {

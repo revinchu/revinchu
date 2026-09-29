@@ -495,7 +495,7 @@ export function normalizeDef(def, header) {
     pages: (def.pages ?? []).filter(ok).map(byName),
     values: (values ?? []).filter((v) => ok(v.field)).map((v) => ({ ...v, field: byName(v.field), agg: v.agg ?? 'sum' })),
     layout: def.layout ?? 'compact',
-    subtotals: def.subtotals !== false,
+    subtotals: Array.isArray(def.subtotals) ? def.subtotals : def.subtotals !== false,
     grandRows: def.grandRows !== false,
     grandCols: def.grandCols !== false,
     filters: def.filters ?? {},
@@ -509,11 +509,14 @@ export function normalizeDef(def, header) {
     groups: byKey(def.groups),
     styleDef: def.styleDef ?? null,
     errorCaption: def.errorCaption ?? null,
+    fieldCaptions: def.fieldCaptions ?? null,
+    grandCaption: def.grandCaption ?? null,
+    itemCaptions: def.itemCaptions ?? null,
     missingCaption: def.missingCaption ?? null,
     collapsed: byKey(def.collapsed),
     showExpand: def.showExpand !== false,
     repeatLabels: !!def.repeatLabels,
-    blankRows: !!def.blankRows,
+    blankRows: Array.isArray(def.blankRows) ? def.blankRows : !!def.blankRows,
     subtotalTop: def.subtotalTop !== false,
     rowCaption: def.rowCaption ?? null,
     colCaption: def.colCaption ?? null,
@@ -547,6 +550,15 @@ export function pivotSourceData(wb, def) {
     // 열 전체(A1:T1048576) 원본: 사용 범위 + 빈 행 하나까지만 읽음 (엑셀의 '(비어 있음)' 항목은 그대로)
     const used = wb.usedRange?.(si);
     if (used && ref.r2 > used.rows) ref = { ...ref, r2: Math.max(ref.r1 + 1, used.rows) };
+  }
+  // 파일에 저장된 피벗 캐시(엑셀이 마지막으로 새로 고친 원본): 원본 시트가 그대로인 동안은 엑셀과 같은 결과가 되게 이것으로 계산
+  const snap = def.snapshotId && wb.pivotSnapshots?.get(def.snapshotId);
+  if (snap) {
+    // 원본 시트의 편집 횟수 (다시 계산으로는 바뀌지 않음) — 사용자가 원본을 고치면 저장본을 버림
+    const ver = wb.sheets[si]?._ev ?? 0;
+    snap.ver ??= ver;
+    if (snap.ver === ver) return sourceOf(cubeFromRows(snap.rows), si, ref, table, snap.rows);
+    wb.pivotSnapshots.delete(def.snapshotId); // 원본을 고침 → 이제부터 원본에서 계산 (자동 새로 고침)
   }
   // 데이터가 열 블록에 있으면 값을 복사하지 않고 블록의 형식화 배열을 그대로 씀 (천만 행도 즉시)
   const bc = blockCube(wb, si, ref, names);
@@ -652,7 +664,7 @@ function cachedRead(wb, si, ref) {
 }
 
 // ───────────── 레이블 · 값 · 상위 N 필터 ─────────────
-const collator = new Intl.Collator('ko');
+const collator = new Intl.Collator('en', { sensitivity: 'accent' }); // 엑셀 정렬 순서: 숫자 < 영문 < 한글, 대소문자 무시 (수식 비교 순서와 다름)
 const wildRe = (p) => new RegExp(`^${String(p).replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/~\*/g, '\u0001').replace(/~\?/g, '\u0002').replace(/\*/g, '.*').replace(/\?/g, '.').replace(/\u0001/g, '\\*').replace(/\u0002/g, '\\?')}$`, 'i');
 function compareOp(op, a, v1, v2, text) {
   const cmp = (x, y) => (text ? collator.compare(String(x).toLowerCase(), String(y).toLowerCase()) : x - y);
@@ -1260,6 +1272,15 @@ export function computePivot(input, d) {
     return v === null && as !== 'runTotal' && as !== 'percentOfRunningTotal' ? null : arr[pos];
   };
 
+  // 사용자가 바꾼 이름 (엑셀: 필드 이름 · 항목 이름을 셀에서 고쳐 쓴 것 — pivotField@name, item@n)
+  const fcap = (f) => d.fieldCaptions?.[f] ?? f;
+  const icap = (axis, node) => {
+    const t = itemText(node.key);
+    return d.itemCaptions?.[(axis === 'r' ? d.rows : d.cols)[node.depth]]?.[t] ?? t;
+  };
+  const subCap = (axis, node) => `${icap(axis, node)} 요약`;
+  // 부분합은 필드마다 켜고 끔 (엑셀 pivotField@defaultSubtotal): true = 모두, 배열 = 그 필드만
+  const subOn = (axis, node) => d.subtotals === true || (Array.isArray(d.subtotals) && d.subtotals.includes((axis === 'r' ? d.rows : d.cols)[node.depth]));
   // 열 머리글 잎 목록: { cp, vi, kind: 'item' | 'sub' | 'grand', labels: [수준별 글자] }
   const Lc = colIdx.length;
   const multiV = V > 1;
@@ -1273,15 +1294,15 @@ export function computePivot(input, d) {
       for (const vi of VI) colLeaves.push({ cp: node.path, vi, kind: 'item', labels: [...labels, ...pad, ...(multiV ? [valueName(values[vi])] : [])], node });
       return;
     }
-    node.children.forEach((ch) => walkCols(ch, [...labels, itemText(ch.key)]));
-    if (d.subtotals && node.depth >= 0 && node.depth < Lc - 1) {
-      for (const vi of VI) colLeaves.push({ cp: node.path, vi, kind: 'sub', labels: [...labels.slice(0, -1), `${itemText(node.key)} 요약`], node });
+    node.children.forEach((ch) => walkCols(ch, [...labels, icap('c', ch)]));
+    if (node.depth >= 0 && node.depth < Lc - 1 && subOn('c', node)) {
+      for (const vi of VI) colLeaves.push({ cp: node.path, vi, kind: 'sub', labels: [...labels.slice(0, -1), subCap('c', node)], node });
     }
   };
-  if (Lc) colTree.children.forEach((ch) => walkCols(ch, [itemText(ch.key)]));
+  if (Lc) colTree.children.forEach((ch) => walkCols(ch, [icap('c', ch)]));
   else if (V) for (const vi of VI) colLeaves.push({ cp: '', vi, kind: 'item', labels: multiV ? [valueName(values[vi])] : [], node: colTree });
   if (Lc && d.grandCols && V) {
-    for (const vi of VI) colLeaves.push({ cp: '', vi, kind: 'grand', labels: [multiV ? `전체 ${valueName(values[vi])}` : TOTAL], node: colTree });
+    for (const vi of VI) colLeaves.push({ cp: '', vi, kind: 'grand', labels: [multiV ? `전체 ${valueName(values[vi])}` : d.grandCaption ?? TOTAL], node: colTree });
   }
   // Σ 값 위치 (엑셀의 열 영역에서 '값'을 위아래로 옮긴 것): vp 번째 수준에 값 이름, 그보다 안쪽 항목은 값마다 반복
   // 예) [월, 값] → 4월 지표들 · 5월 지표들 / [값, 월] → 지표마다 4월 · 5월이 나란히
@@ -1342,7 +1363,7 @@ export function computePivot(input, d) {
   const pageRows = [];
   for (const p of d.pages) {
     const allowed = d.filters[p] ?? d.filters[Object.keys(d.filters).find((k) => k.toLowerCase() === p.toLowerCase())];
-    pageRows.push([text(p, 'pageLabel'), text(!allowed ? '(모두)' : allowed.length === 1 ? allowed[0] : '(다중 항목)', 'pageValue')]);
+    pageRows.push([text(fcap(p), 'pageLabel'), text(!allowed ? '(모두)' : allowed.length === 1 ? d.itemCaptions?.[p]?.[allowed[0]] ?? allowed[0] : '(다중 항목)', 'pageValue')]);
   }
   if (pageRows.length) { pushAll(grid, pageRows); grid.push([]); }
 
@@ -1352,7 +1373,7 @@ export function computePivot(input, d) {
   const valueCaption = V === 1 ? valueName(values[0]) : '';
   const rowHeaderCells = () => {
     if (layout === 'compact') return [text(Lr ? d.rowCaption ?? '행 레이블' : '', 'rowHead:0')];
-    return Array.from({ length: labelCols }, (_, i) => text(d.rows[i] ?? '', `rowHead:${i}`));
+    return Array.from({ length: labelCols }, (_, i) => text(d.rows[i] === undefined ? '' : fcap(d.rows[i]), `rowHead:${i}`));
   };
   if (hasColHead) {
     // 열 필드가 있으면 맨 위에 '값 이름 | 열 레이블' 행 (값 필드만 여러 개면 생략)
@@ -1406,12 +1427,12 @@ export function computePivot(input, d) {
     if (layout === 'compact' && node.depth > 0) cells[col].style.indent = node.depth;
     if (withToggle) { const tg = toggleOf('r', node); if (tg) cells[col].toggle = { axis: 'r', ...tg }; }
     // 개요 형식 + 항목 레이블 반복: 상위 항목 글자를 빈 칸에 채움
-    if (layout === 'outline' && d.repeatLabels) for (let n = node.parent; n && n.depth >= 0; n = n.parent) cells[n.depth] = text(itemText(n.key), `rowItem:${n.depth}`);
+    if (layout === 'outline' && d.repeatLabels) for (let n = node.parent; n && n.depth >= 0; n = n.parent) cells[n.depth] = text(icap('r', n), `rowItem:${n.depth}`);
     return cells;
   };
   const blankAfter = (node) => {
     // 항목 다음에 빈 줄 삽입 (가장 안쪽 필드 제외, 엑셀과 같음)
-    if (!d.blankRows || node.depth >= Lr - 1) return;
+    if (!d.blankRows || node.depth >= Lr - 1 || (Array.isArray(d.blankRows) && !d.blankRows.includes(d.rows[node.depth]))) return;
     grid.push(Array.from({ length: labelCols + colLeaves.length }, () => text('', 'blank')));
     rowItems.push({ kind: 'blank', node });
   };
@@ -1426,7 +1447,7 @@ export function computePivot(input, d) {
         for (let n = node; n && n.depth >= 0; n = n.parent) chain.unshift(n);
         chain.forEach((n, dd) => {
           if (lastPath.shown.has(n.path) && !d.repeatLabels) return;
-          cells[dd] = text(itemText(n.key), `rowItem:${dd}`);
+          cells[dd] = text(icap('r', n), `rowItem:${dd}`);
           const img = imageOfKey(n.key);
           if (img) { cells[dd].raw = ''; cells[dd].image = { src: img.src, alt: img.alt ?? '' }; }
           if (!lastPath.shown.has(n.path)) { const tg = toggleOf('r', n); if (tg) cells[dd].toggle = { axis: 'r', ...tg }; }
@@ -1438,8 +1459,8 @@ export function computePivot(input, d) {
         return;
       }
       node.children.forEach((ch) => walkRows(ch, lastPath));
-      if (d.subtotals) {
-        grid.push([...labelsRow(node, `${itemText(node.key)} 요약`, `rowSub:${node.depth}`), ...valueCells(node.path, 'sub')]);
+      if (subOn('r', node)) {
+        grid.push([...labelsRow(node, subCap('r', node), `rowSub:${node.depth}`), ...valueCells(node.path, 'sub')]);
         rowItems.push({ kind: 'sub', node });
       }
       blankAfter(node);
@@ -1447,14 +1468,14 @@ export function computePivot(input, d) {
     }
     const group = !isLeaf;
     // 부분합: 그룹 맨 위(기본) 또는 맨 아래 '… 요약' 행, 축소한 항목은 자기 행에 합계
-    const valuesHere = coll || !group || (d.subtotals && d.subtotalTop);
-    const cells = labelsRow(node, itemText(node.key), group ? `rowGroup:${node.depth}` : coll ? `rowGroup:${node.depth}` : `rowItem:${node.depth}`, true);
+    const valuesHere = coll || !group || (subOn('r', node) && d.subtotalTop);
+    const cells = labelsRow(node, icap('r', node), group ? `rowGroup:${node.depth}` : coll ? `rowGroup:${node.depth}` : `rowItem:${node.depth}`, true);
     grid.push([...cells, ...(valuesHere ? valueCells(node.path, coll ? 'group' : group ? 'group' : 'item') : colLeaves.map((leaf) => text('', `groupData:${Math.max(0, leaf.vi)}`)))]);
     rowItems.push({ kind: 'item', node, coll });
     if (group) {
       node.children.forEach((ch) => walkRows(ch, lastPath));
-      if (d.subtotals && !d.subtotalTop) {
-        grid.push([...labelsRow(node, `${itemText(node.key)} 요약`, `rowSub:${node.depth}`), ...valueCells(node.path, 'sub')]);
+      if (subOn('r', node) && !d.subtotalTop) {
+        grid.push([...labelsRow(node, subCap('r', node), `rowSub:${node.depth}`), ...valueCells(node.path, 'sub')]);
         rowItems.push({ kind: 'sub', node });
       }
     }
@@ -1462,10 +1483,10 @@ export function computePivot(input, d) {
   };
   setParents(rowTree);
   if (Lr) rowTree.children.forEach((ch) => walkRows(ch, { shown: new Set() }));
-  else if (V) grid.push([text(TOTAL, 'grandLabel'), ...valueCells('', 'grand')]);
+  else if (V) grid.push([text(d.grandCaption ?? TOTAL, 'grandLabel'), ...valueCells('', 'grand')]);
   if (Lr && d.grandRows && V) {
     const cells = Array.from({ length: labelCols }, () => text('', 'grandLabel'));
-    cells[0] = text(TOTAL, 'grandLabel');
+    cells[0] = text(d.grandCaption ?? TOTAL, 'grandLabel');
     grid.push([...cells, ...valueCells('', 'grand')]);
     rowItems.push({ kind: 'grand' });
   }
@@ -1536,7 +1557,8 @@ function pivotChartDataRaw(rows, def, fieldStyle) {
     const chain = [];
     for (let n = it.node; n && n.depth >= 0; n = n.parent) {
       const st = typeof n.key === 'number' ? fieldStyle?.(d.rows[n.depth]) : null;
-      chain.unshift(st?.numFmt && st.numFmt !== 'general' ? formatValue(n.key, st).text : itemText(n.key));
+      const cap = d.itemCaptions?.[d.rows[n.depth]]?.[itemText(n.key)];
+      chain.unshift(cap ?? (st?.numFmt && st.numFmt !== 'general' ? formatValue(n.key, st).text : itemText(n.key)));
     }
     cats.push(chain.join(' / '));
     rowIdx.push(body + i);

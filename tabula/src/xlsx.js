@@ -4,7 +4,7 @@ import { unzip, unzipAsync, zip, zipAsync, textOf } from './zip.js';
 import { CellMap } from './cellmap.js';
 import { protectFromAttrs, protectXml } from './protect.js';
 import { pageXml, pageFromXml, normPage } from './page.js';
-import { parseXml, child, kids, descendants, allText, esc, decodeEntities } from './xml.js';
+import { parseXml, child, kids, descendants, allText, esc, decodeEntities, unx } from './xml.js';
 import {
   parse, tokenize, colToName, nameToCol, cellName, parseRangeName, FUNCS, isError,
   quoteSheetName, MAX_ROWS, MAX_COLS, EXCEL_MAX_ROWS, mayReturnArray, unknownFunctions,
@@ -369,7 +369,7 @@ function innerText(body, tag) {
   if (body[gt - 1] === '/') return { attrs: scanAttrs(body, open + tag.length + 1, gt - 1), text: '' };
   const close = body.indexOf(`</${tag}>`, gt);
   const t = body.slice(gt + 1, close);
-  return { attrs: scanAttrs(body, open + tag.length + 1, gt), text: t.includes('&') || t.includes('\r') ? decodeEntities(t) : t };
+  return { attrs: scanAttrs(body, open + tag.length + 1, gt), text: unx(t.includes('&') || t.includes('\r') ? decodeEntities(t) : t) };
 }
 
 /** sheetData 의 행/셀을 DOM 없이 읽음 → { attrs, cells: [{ attrs, v, f, fa, is }] } */
@@ -1558,7 +1558,7 @@ function readPivotCache(files, path) {
       if (it.name === 'd') return isoSerial(it.attrs.v);
       if (it.name === 'b') return it.attrs.v === '1' || it.attrs.v === 'true';
       if (it.name === 'm') return null;
-      return it.attrs.v ?? '';
+      return unx(it.attrs.v ?? '');
     });
     // tb:formula = WIXEL 가 쓴 원래 수식 (DIVIDE · ROWS 등 엑셀에 없는 함수)
     const tbKey = Object.keys(cf.attrs).find((k) => k.endsWith(':formula'));
@@ -1581,9 +1581,47 @@ function readPivotCache(files, path) {
         };
       }
     }
-    return { name: cf.attrs.name ?? '', items: gitems && (group || !items.length) ? gitems : items, ...(group ? { group } : {}), ...(formula !== undefined ? { formula } : {}) };
+    return { name: unx(cf.attrs.name ?? ''), items: gitems && (group || !items.length) ? gitems : items, shared: items, db: formula === undefined && cf.attrs.databaseField !== '0', ...(group ? { group } : {}), ...(formula !== undefined ? { formula } : {}) };
   });
-  return { source: { ref: ws?.attrs.ref ?? null, sheet: ws?.attrs.sheet ?? null, name: ws?.attrs.name ?? null }, fields };
+  const recRel = Object.values(relsOf(files, path)).find((r) => r.type === 'pivotCacheRecords');
+  const snapshot = root.attrs.refreshOnLoad === '1' || !recRel ? null : { path: recRel.target };
+  return { source: { ref: ws?.attrs.ref ?? null, sheet: ws?.attrs.sheet ?? null, name: ws?.attrs.name ?? null }, fields, snapshot };
+}
+
+/**
+ * 피벗 캐시 레코드 (엑셀이 마지막으로 새로 고칠 때 저장한 원본) → [머리글, ...행]
+ * 엑셀은 열 때 이 저장본으로 피벗을 보여 줌 (원본을 고친 뒤 새로 고치지 않았으면 원본과 다를 수 있음)
+ */
+const SNAPSHOT_MAX_BYTES = 40 << 20;
+function readCacheRecords(files, cache) {
+  const bytes = files[cache.snapshot.path];
+  if (!bytes || bytes.length > SNAPSHOT_MAX_BYTES) return null;
+  const xml = textOf(bytes);
+  const fields = cache.fields.filter((f) => f.db);
+  const rows = [fields.map((f) => f.name)];
+  const recRe = /<r>([\s\S]*?)<\/r>|<r\/>/g;
+  const cellRe = /<(x|n|s|d|b|m|e)(?:\s+v="([^"]*)")?[^>]*\/>/g;
+  let m;
+  while ((m = recRe.exec(xml))) {
+    const row = new Array(fields.length).fill(null);
+    if (m[1]) {
+      let j = 0;
+      let c;
+      cellRe.lastIndex = 0;
+      while ((c = cellRe.exec(m[1])) && j < fields.length) {
+        const [, t, v] = c;
+        row[j] = t === 'x' ? fields[j].shared[Number(v)] ?? null
+          : t === 'n' ? Number(v)
+            : t === 'd' ? isoSerial(v)
+              : t === 'b' ? v === '1' || v === 'true'
+                : t === 'm' ? null
+                  : unx(decodeEntities(v ?? ''));
+        j++;
+      }
+    }
+    rows.push(row);
+  }
+  return rows.length > 1 ? rows : null;
 }
 
 const AGG_FROM_XLSX = { sum: 'sum', count: 'count', countNums: 'countNums', average: 'average', max: 'max', min: 'min', product: 'product', stdDev: 'stdDev', stdDevp: 'stdDevp', var: 'var', varp: 'varp' };
@@ -1612,7 +1650,7 @@ function pivotDefFrom(root, cache, tables, sheetName) {
   const dataF = kids(child(root, 'dataFields'), 'dataField');
   const values = dataF.map((df) => {
     const v = { field: names[Number(df.attrs.fld)] ?? names[0], agg: AGG_FROM_XLSX[df.attrs.subtotal ?? 'sum'] ?? 'sum' };
-    if (df.attrs.name && df.attrs.name !== valueName(v)) v.name = df.attrs.name;
+    if (df.attrs.name && unx(df.attrs.name) !== valueName(v)) v.name = unx(df.attrs.name);
     const x14 = descendants(df, 'dataField')[0];
     const as = SHOW_FROM_XLSX[x14?.attrs.pivotShowAs] ?? SHOW_FROM_XLSX[df.attrs.showDataAs];
     if (as) {
@@ -1644,7 +1682,14 @@ function pivotDefFrom(root, cache, tables, sheetName) {
     ...(vIdx >= 0 && vIdx < colF.length ? { valuesPos: vIdx } : {}),
     layout: !fOutline ? 'tabular' : !fCompact ? 'outline' : 'compact',
   };
-  if ([...rowF, ...colF].some((f) => pfs[f]?.attrs.defaultSubtotal === '0')) def.subtotals = false;
+  // 부분합: 필드마다 (바깥 필드만 켜 둔 보고서가 많음). 안쪽 끝 필드는 부분합이 없으므로 셈에서 뺌
+  {
+    const inner = [...rowF.slice(0, -1), ...colF.filter((x) => x >= 0).slice(0, -1)];
+    const on = inner.filter((f) => pfs[f]?.attrs.defaultSubtotal !== '0');
+    if (!inner.length) { if ([...rowF, ...colF].some((f) => pfs[f]?.attrs.defaultSubtotal === '0')) def.subtotals = false; }
+    else if (!on.length) def.subtotals = false;
+    else if (on.length < inner.length) def.subtotals = on.map((f) => names[f]);
+  }
   if (root.attrs.rowGrandTotals === '0') def.grandRows = false;
   if (root.attrs.colGrandTotals === '0') def.grandCols = false;
   if (!def.pages.length) delete def.pages;
@@ -1668,6 +1713,15 @@ function pivotDefFrom(root, cache, tables, sheetName) {
     if (it) filters[names[f]] = [itemText(cache.fields[f]?.items[Number(it.attrs.x)] ?? null)];
   }
   if (Object.keys(filters).length) def.filters = filters;
+  // 셀에서 바꿔 쓴 필드 이름 (pivotField@name) · 항목 이름 (item@n)
+  pfs.forEach((pf, f) => {
+    if (pf.attrs.name && unx(pf.attrs.name) !== names[f]) (def.fieldCaptions ??= {})[names[f]] = unx(pf.attrs.name);
+    for (const it of kids(child(pf, 'items'), 'item')) {
+      if (it.attrs.n === undefined || it.attrs.x === undefined) continue;
+      const t = itemText(cache.fields[f]?.items[Number(it.attrs.x)] ?? null);
+      if (unx(it.attrs.n) !== t) ((def.itemCaptions ??= {})[names[f]] ??= {})[t] = unx(it.attrs.n);
+    }
+  });
   // 행 · 열 · 필터 영역에 없는 필드의 숨긴 항목은 엑셀이 적용하지 않음 (필드를 빼면 필터도 풀림).
   // 단, 그 필드의 슬라이서가 이 피벗을 거르면 적용됨 → 슬라이서를 연결한 뒤에 정함 (linkPivotsAndSlicers)
   const onAxis = new Set([...def.rows, ...def.cols, ...(def.pages ?? [])]);
@@ -1683,6 +1737,7 @@ function pivotDefFrom(root, cache, tables, sheetName) {
   };
   if (!so.rowHeaders || !so.colHeaders || so.bandRows || so.bandCols) def.styleOpts = so;
   if (root.attrs.rowHeaderCaption) def.rowCaption = root.attrs.rowHeaderCaption;
+  if (root.attrs.grandTotalCaption) def.grandCaption = root.attrs.grandTotalCaption;
   if (root.attrs.showError === '1' || root.attrs.showError === 'true') def.errorCaption = root.attrs.errorCaption ?? '';
   if (root.attrs.colHeaderCaption) def.colCaption = root.attrs.colHeaderCaption;
   if (root.attrs.missingCaption && root.attrs.showMissing !== '0') def.missingCaption = root.attrs.missingCaption;
@@ -1698,10 +1753,16 @@ function pivotDefFrom(root, cache, tables, sheetName) {
     const its = kids(child(pf, 'items'), 'item').filter((it) => it.attrs.sd === '0' && it.attrs.x !== undefined);
     if (its.length) collapsed[names[f]] = its.map((it) => itemText(cache.fields[f]?.items[Number(it.attrs.x)] ?? null));
     if (pf.attrs.subtotalTop === '0' && def.layout !== 'tabular') def.subtotalTop = false;
-    if (rowF.includes(f) && pf.attrs.insertBlankRow === '1') def.blankRows = true;
+    // 빈 줄 삽입은 필드마다 (엑셀: 바깥 필드에만 켜 두는 경우가 많음)
+    if (rowF.includes(f) && pf.attrs.insertBlankRow === '1') (def._blankFields ??= []).push(names[f]);
     if (rowF.includes(f) && descendants(pf, 'pivotField').some((x) => x.attrs.fillDownLabels === '1')) def.repeatLabels = true;
   });
   if (Object.keys(collapsed).length) def.collapsed = collapsed;
+  if (def._blankFields) {
+    const inner = rowF.slice(0, -1).map((f) => names[f]);
+    def.blankRows = inner.every((n) => def._blankFields.includes(n)) ? true : def._blankFields;
+    delete def._blankFields;
+  }
   // 날짜 · 숫자 그룹 (파생 필드 '월2' 등은 base 필드에서 만듦)
   const groups = {};
   for (const f of [...rowF, ...colF, ...pageEls.map((p) => Number(p.attrs.fld))]) {
@@ -1873,6 +1934,14 @@ function linkPivotsAndSlicers(files, wbRels, sheets, ctx) {
       if (!cacheFiles.has(p.cachePath)) cacheFiles.set(p.cachePath, readPivotCache(files, p.cachePath));
       const cache = cacheFiles.get(p.cachePath);
       const def = cache && pivotDefFrom(p.root, cache, tables, s.name);
+      // 엑셀의 저장본(캐시 레코드)으로 처음 화면을 그림 — 원본을 고치거나 새로 고치면 원본에서 다시 계산
+      if (def && cache.snapshot && !cache.snapshot.failed) {
+        if (!(ctx.pivotSnapshots ??= {})[p.cachePath]) {
+          const rows = readCacheRecords(files, cache);
+          if (rows) ctx.pivotSnapshots[p.cachePath] = rows; else cache.snapshot.failed = true;
+        }
+        if (ctx.pivotSnapshots[p.cachePath]) def.snapshotId = p.cachePath;
+      }
       if (def && ctx.tableStyles?.[def.style] && !PRESET_STYLES[def.style]) def.styleDef = ctx.tableStyles[def.style]; // 파일에 정의된 사용자 지정 스타일 (WIXEL 모던 스타일은 이름으로 앎)
       if (def) linkPivotCond(s, def, p.root, cache);
       if (!def) ctx.warnings.add('외부 데이터 원본을 쓰는 피벗 테이블은 값으로만 가져왔습니다.');
@@ -2022,6 +2091,7 @@ function* readXlsxSteps(files) {
   pushAll(warnings, ctx.warnings);
   if (!sheets.length) throw new Error('가져올 시트가 없습니다');
   const data = { sheets };
+  if (ctx.pivotSnapshots) data.pivotSnapshots = ctx.pivotSnapshots;
   // 자동 높이로 맞출 행 (화면에서 글자 크기를 재어 정함 — 앱이 열 때 한 번 계산)
   if (sheets.some((sh) => sh.fitRows)) data.fitRows = sheets.map((sh) => { const f = sh.fitRows ? [...sh.fitRows] : null; delete sh.fitRows; return f; });
   if (names.length) data.names = names;
@@ -2876,6 +2946,7 @@ function pivotParts(wb, si, def, cache, name, pool) {
   const pivotFields = header.map((h, f) => {
     if (isCalc(f)) return `<pivotField${valueFieldIdx.has(f) ? ' dataField="1"' : ''} dragToRow="0" dragToCol="0" dragToPage="0" showAll="0" defaultSubtotal="0"/>`;
     const attrs = [];
+    if (d.fieldCaptions?.[h]) attrs.push(`name="${esc(d.fieldCaptions[h])}"`);
     if (rowF.includes(f)) attrs.push('axis="axisRow"');
     else if (colF.includes(f)) attrs.push('axis="axisCol"');
     else if (pageF.includes(f)) attrs.push('axis="axisPage"');
@@ -2886,9 +2957,10 @@ function pivotParts(wb, si, def, cache, name, pool) {
     const onAxis = rowF.includes(f) || colF.includes(f);
     const srt = onAxis ? d.sort[h] : null;
     if (srt) attrs.push(`sortType="${srt.dir === 'desc' ? 'descending' : 'ascending'}"`);
-    if (onAxis && !d.subtotals) attrs.push('defaultSubtotal="0"');
+    const subOn = d.subtotals === true || (Array.isArray(d.subtotals) && d.subtotals.includes(h));
+    if (onAxis && !subOn) attrs.push('defaultSubtotal="0"');
     if (onAxis && !d.subtotalTop) attrs.push('subtotalTop="0"');
-    if (rowF.includes(f) && d.blankRows && f !== rowF[rowF.length - 1]) attrs.push('insertBlankRow="1"');
+    if (rowF.includes(f) && (d.blankRows === true || (Array.isArray(d.blankRows) && d.blankRows.includes(h))) && f !== rowF[rowF.length - 1]) attrs.push('insertBlankRow="1"');
     const coll = onAxis ? new Set(d.collapsed?.[h] ?? []) : null;
     // 항목 레이블 반복 (x14 확장)
     const fill = rowF.includes(f) && d.repeatLabels ? `<extLst><ext uri="{2946ED86-A175-432a-8AC1-64E0C546D7DE}" xmlns:x14="${NS_X14}"><x14:pivotField fillDownLabels="1"/></ext></extLst>` : '';
@@ -2897,8 +2969,9 @@ function pivotParts(wb, si, def, cache, name, pool) {
       : '';
     const it = items.get(f);
     if (!it) return scope || fill ? `<pivotField ${attrs.join(' ')}>${scope}${fill}</pivotField>` : `<pivotField ${attrs.join(' ')}/>`;
-    const list = it.keys.map((k) => `<item${hiddenKey(f, k) ? ' h="1"' : ''}${coll?.has(itemText(k)) ? ' sd="0"' : ''} x="${it.cacheIndex.get(`${typeof k}:${k}`)}"/>`).join('');
-    const def0 = onAxis && !d.subtotals ? '' : '<item t="default"/>';
+    const caps = d.itemCaptions?.[h];
+    const list = it.keys.map((k) => `<item${caps?.[itemText(k)] !== undefined ? ` n="${esc(caps[itemText(k)])}"` : ''}${hiddenKey(f, k) ? ' h="1"' : ''}${coll?.has(itemText(k)) ? ' sd="0"' : ''} x="${it.cacheIndex.get(`${typeof k}:${k}`)}"/>`).join('');
+    const def0 = onAxis && !subOn ? '' : '<item t="default"/>';
     return `<pivotField ${attrs.join(' ')}><items count="${it.keys.length + (def0 ? 1 : 0)}">${list}${def0}</items>${scope}${fill}</pivotField>`;
   }).join('');
 
@@ -2963,6 +3036,7 @@ function pivotParts(wb, si, def, cache, name, pool) {
     'applyAlignmentFormats="0"', 'applyWidthHeightFormats="1"', 'dataCaption="값"', 'updatedVersion="6"', 'minRefreshableVersion="3"', `useAutoFormatting="${def.autofit === false ? 0 : 1}"`,
     ...(def.mergeLabels ? ['mergeItem="1"'] : []), ...(def.preserveFormat === false ? ['preserveFormatting="0"'] : []), ...(def.multiFilters ? [] : []), ...(def.enableDrill === false ? ['enableDrill="0"'] : []),
     ...(d.rowCaption ? [`rowHeaderCaption="${esc(d.rowCaption)}"`] : []),
+    ...(d.grandCaption ? [`grandTotalCaption="${esc(d.grandCaption)}"`] : []),
     ...(d.errorCaption !== null && d.errorCaption !== undefined ? ['showError="1"', ...(d.errorCaption ? [`errorCaption="${esc(d.errorCaption)}"`] : [])] : []), ...(d.colCaption ? [`colHeaderCaption="${esc(d.colCaption)}"`] : []),
     ...(d.grandRows ? [] : ['rowGrandTotals="0"']), ...(d.grandCols ? [] : ['colGrandTotals="0"']),
     ...(d.missingCaption ? [`missingCaption="${esc(d.missingCaption)}"`] : []), ...(d.showExpand ? [] : ['showDrill="0"']),

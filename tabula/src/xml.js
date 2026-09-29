@@ -1,6 +1,11 @@
 // 아주 작은 XML 파서/작성 도우미 (xlsx 용, DOM 없이 동작)
 
 const ENTITIES = { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'" };
+/** 엑셀 문자열의 _xHHHH_ 이스케이프 (줄 바꿈 _x000D_ · _x000A_ 등, 글자 그대로의 '_x' 는 _x005F_x) */
+export function unx(s) {
+  return typeof s === 'string' && s.includes('_x') ? s.replace(/_x([0-9A-Fa-f]{4})_/g, (m, h) => String.fromCharCode(parseInt(h, 16))) : s;
+}
+
 export function decodeEntities(s) {
   // XML 줄 끝 정규화: 글자 그대로 있는 CR LF · CR 은 LF (엑셀과 같음). &#13; 으로 적은 CR 은 아래에서 그대로 남음
   if (s.includes('\r')) s = s.replace(/\r\n?/g, '\n');
@@ -35,7 +40,7 @@ export function parseXml(str) {
   while ((m = re.exec(str))) {
     const top = stack[stack.length - 1];
     if (m[1] !== undefined) { top.text += m[1]; continue; }
-    if (m[6] !== undefined) { top.text += decodeEntities(m[6]); continue; }
+    if (m[6] !== undefined) { top.text += unx(decodeEntities(m[6])); continue; }
     if (m[3] === undefined) continue; // 주석/선언
     if (m[2] === '/') {
       if (stack.length > 1) stack.pop();
