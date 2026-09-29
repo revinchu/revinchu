@@ -49,7 +49,7 @@ import { splitDelimited, splitFixed, suggestBreaks, parseDateOrder, convertPart,
 import {
   VALIDATION_TYPES, VALIDATION_OPS, validationAt, checkValidation, listItems, describeRule, subtractRange, invalidCells,
 } from './validation.js';
-import { OBJECT_PROPS, OBJECT_LABEL, SHAPE_KINDS, newShape, findObject, shapeSvg } from './shapes.js';
+import { OBJECT_PROPS, OBJECT_LABEL, SHAPE_KINDS, SHAPE_GROUPS, LINE_SHAPES, newShape, findObject, shapeSvg } from './shapes.js';
 import { extractVbaModules, fromBase64 } from './vba.js';
 import { findMatches, nextMatch, replaceText } from './find.js';
 import {
@@ -1508,7 +1508,7 @@ function onDragMove(x, y) {
         ch.y = Math.max(0, Math.round(o.y + dy));
       } else {
         const k = drag.corner;
-        const [minW, minH] = drag.prop === 'charts' ? [120, 90] : drag.prop === 'slicers' ? [80, 56] : ch.kind === 'line' ? [0, 0] : [8, 8];
+        const [minW, minH] = drag.prop === 'charts' ? [120, 90] : drag.prop === 'slicers' ? [80, 56] : LINE_SHAPES.has(ch.kind) ? [0, 0] : [8, 8];
         let { x: nx, y: ny, w: nw, h: nh } = o;
         if (k.includes('e')) nw = o.w + dx;
         if (k.includes('s')) nh = o.h + dy;
@@ -1534,12 +1534,12 @@ function onDragMove(x, y) {
       if (!sh) break;
       let dx = (x - drag.start.x) / gv.z;
       let dy = (y - drag.start.y) / gv.z;
-      if (lastShift && sh.kind !== 'line') { const m = Math.max(Math.abs(dx), Math.abs(dy)); dx = Math.sign(dx || 1) * m; dy = Math.sign(dy || 1) * m; }
+      if (lastShift && !LINE_SHAPES.has(sh.kind)) { const m = Math.max(Math.abs(dx), Math.abs(dy)); dx = Math.sign(dx || 1) * m; dy = Math.sign(dy || 1) * m; }
       sh.x = Math.max(0, Math.round(Math.min(drag.x0, drag.x0 + dx)));
       sh.y = Math.max(0, Math.round(Math.min(drag.y0, drag.y0 + dy)));
       sh.w = Math.round(Math.abs(dx));
       sh.h = Math.round(Math.abs(dy));
-      if (sh.kind === 'line') sh.flip = (dx < 0) !== (dy < 0);
+      if (LINE_SHAPES.has(sh.kind)) { sh.flip = dx < 0; sh.flipV = dy < 0; }
       drag.moved = true;
       gv.renderObjectsAll();
       break;
@@ -1589,8 +1589,8 @@ function onDragEnd() {
       const i = list.findIndex((x) => x.id === d.id);
       if (i < 0) break;
       const [temp] = list.splice(i, 1);
-      if (temp.kind === 'line' ? temp.w + temp.h < 4 : temp.w < 4 || temp.h < 4) {
-        Object.assign(temp, temp.kind === 'line' ? { w: 150, h: 0, flip: false } : temp.kind === 'textbox' ? { w: 160, h: 48 } : { w: 150, h: 90 });
+      if (LINE_SHAPES.has(temp.kind) ? temp.w + temp.h < 4 : temp.w < 4 || temp.h < 4) {
+        Object.assign(temp, LINE_SHAPES.has(temp.kind) ? { w: 150, h: 0, flip: false } : temp.kind === 'textbox' ? { w: 160, h: 48 } : { w: 150, h: 90 });
       }
       addObject('shapes', temp);
       if (temp.kind === 'textbox') shapeDialog(temp.id);
@@ -4454,12 +4454,12 @@ function objectMenu(id, pos) {
       ...CHART_TYPES.map((t) => ({ label: t.label, checked: f.obj.type === t.id, action: () => updateChart(id, { type: t.id }) })),
     );
   } else if (f.prop === 'shapes') {
-    items.push({ label: f.obj.kind === 'line' ? '선 서식...' : '텍스트 편집 및 도형 서식...', icon: 'shapes', action: () => shapeDialog(id) });
-    if (f.obj.kind !== 'line') {
-      items.push({ title: '도형 모양 변경' }, ...SHAPE_KINDS.filter((k) => k.id !== 'line').map((k) => ({
-        label: k.label, checked: f.obj.kind === k.id, action: () => updateObject(id, { kind: k.id }),
-      })));
+    items.push({ label: LINE_SHAPES.has(f.obj.kind) ? '선 서식...' : '텍스트 편집 및 도형 서식...', icon: 'shapes', action: () => shapeDialog(id) });
+    if (!LINE_SHAPES.has(f.obj.kind)) {
+      items.push({ label: '도형 모양 변경...', action: () => setTimeout(() => openMenu({ x: 260, y: 140 }, [{ node: shapeGallery((k) => updateObject(id, { kind: k }), true) }], { scroll: true }), 0) });
     }
+    items.push({ sep: true }, { label: '맨 앞으로 가져오기', action: () => arrangeObject(id, 'front') }, { label: '앞으로 가져오기', action: () => arrangeObject(id, 'forward') },
+      { label: '뒤로 보내기', action: () => arrangeObject(id, 'backward') }, { label: '맨 뒤로 보내기', action: () => arrangeObject(id, 'back') });
   } else if (f.prop === 'slicers') {
     items.push(
       { label: '슬라이서 설정...', icon: 'slicer', action: () => slicerSettings(id) },
@@ -4601,6 +4601,122 @@ function addImageFile(file, at = null) {
   reader.readAsDataURL(file);
 }
 
+/** 그림 주소(data URL 또는 웹 주소) → 시트에 그림 개체 추가 */
+function addImageSrc(src, name, at = null) {
+  const img = new Image();
+  img.onload = () => {
+    const w0 = img.naturalWidth || 200;
+    const h0 = img.naturalHeight || 150;
+    const k = Math.min(1, 480 / w0, 360 / h0);
+    const p = at ?? objectOrigin();
+    addObject('images', { id: newObjId('im'), name: name || '그림', x: p.x, y: p.y, w: Math.max(8, Math.round(w0 * k)), h: Math.max(8, Math.round(h0 * k)), src });
+    focusGrid();
+  };
+  img.onerror = () => alertDialog('그림 삽입', '그림을 불러올 수 없습니다. 주소가 그림 파일을 가리키는지, 인터넷에 연결되어 있는지 확인하세요.');
+  img.src = src;
+}
+
+/** 웹 그림 → data URL (파일에 함께 저장되게). 사이트가 허용하지 않으면(CORS) null */
+async function fetchImageData(url) {
+  try {
+    const res = await fetch(url, { mode: 'cors' });
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    if (!/^image\//.test(blob.type) || blob.size > 10 * 1024 * 1024) return null;
+    return await new Promise((ok) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = () => ok(null); r.readAsDataURL(blob); });
+  } catch {
+    return null;
+  }
+}
+
+// 온라인 그림 검색: 크리에이티브 커먼즈 (Openverse → 안 되면 Wikimedia Commons)
+async function searchOnlineImages(q, page = 1) {
+  try {
+    const res = await fetch(`https://api.openverse.org/v1/images/?q=${encodeURIComponent(q)}&page_size=30&page=${page}`);
+    if (res.ok) {
+      const j = await res.json();
+      return (j.results ?? []).map((x) => ({ thumb: x.thumbnail ?? x.url, full: x.thumbnail ?? x.url, title: x.title ?? q, credit: [x.creator, x.license ? `CC ${String(x.license).toUpperCase()}` : ''].filter(Boolean).join(' · '), page: x.foreign_landing_url }));
+    }
+  } catch { /* 다음 방법 */ }
+  const url = `https://commons.wikimedia.org/w/api.php?action=query&format=json&origin=*&generator=search&gsrnamespace=6&gsrlimit=30&gsroffset=${(page - 1) * 30}&gsrsearch=${encodeURIComponent(q)}&prop=imageinfo&iiprop=url|extmetadata&iiurlwidth=480`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const j = await res.json();
+  return Object.values(j.query?.pages ?? {}).filter((p) => p.imageinfo?.[0]?.thumburl).map((p) => {
+    const ii = p.imageinfo[0];
+    const md = ii.extmetadata ?? {};
+    const strip = (h) => String(h ?? '').replace(/<[^>]*>/g, '').trim();
+    return { thumb: ii.thumburl, full: ii.thumburl, title: p.title.replace(/^File:/, '').replace(/\.[^.]+$/, ''), credit: [strip(md.Artist?.value), strip(md.LicenseShortName?.value)].filter(Boolean).join(' · '), page: ii.descriptionurl };
+  });
+}
+
+/** 온라인 그림 (엑셀의 [삽입] → [그림] → [온라인 그림]): 검색 또는 웹 주소 */
+function onlinePictureDialog(inCell) {
+  const q = el('input', { type: 'text', placeholder: '검색어 (예: 커피, 그래프, 사무실)', style: { flex: '1' } });
+  const urlIn = el('input', { type: 'url', placeholder: 'https://… 그림 주소', style: { flex: '1' } });
+  const grid = el('div', { class: 'online-grid' });
+  const status = el('div', { class: 'muted', style: { fontSize: '12px', minHeight: '16px' } }, '크리에이티브 커먼즈 그림을 검색합니다. 사용 조건(라이선스)을 확인하고 쓰세요.');
+  const chosen = new Map();
+  let page = 1;
+  let lastQ = '';
+  const run = async (more = false) => {
+    const text = q.value.trim();
+    if (!text) return;
+    if (!more) { page = 1; lastQ = text; grid.replaceChildren(); chosen.clear(); } else page++;
+    status.textContent = '검색 중…';
+    try {
+      const list = await searchOnlineImages(lastQ, page);
+      if (!list.length && !more) { status.textContent = '결과가 없습니다. 다른 검색어를 써 보세요.'; return; }
+      for (const it of list) {
+        const card = el('button', { class: 'online-item', title: `${it.title}${it.credit ? `\n${it.credit}` : ''}` },
+          el('img', { src: it.thumb, alt: it.title, loading: 'lazy', referrerpolicy: 'no-referrer' }),
+          el('span', {}, it.credit || it.title));
+        card.addEventListener('click', () => {
+          if (chosen.has(it.thumb)) { chosen.delete(it.thumb); card.classList.remove('on'); } else { chosen.set(it.thumb, it); card.classList.add('on'); }
+          status.textContent = chosen.size ? `${chosen.size}개 선택됨` : '';
+        });
+        grid.append(card);
+      }
+      status.textContent = `${grid.children.length}개 그림 — 클릭해서 고르고 [삽입]을 누르세요.`;
+    } catch (e) {
+      status.textContent = `검색할 수 없습니다 (${e.message}). 인터넷 연결 또는 이 페이지의 외부 접속 허용 여부를 확인하세요. 웹 주소로 넣을 수도 있습니다.`;
+    }
+  };
+  q.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); run(); } });
+  const more = el('button', { class: 'btn', onclick: () => run(true) }, '더 보기');
+  const insertOne = async (src, name, k) => {
+    const data = (await fetchImageData(src)) ?? src;
+    if (inCell) {
+      shrinkImage(data, 800, (s2) => putCellImage(active.r + k, active.c, { src: s2, alt: name }));
+    } else {
+      const p = objectOrigin();
+      addImageSrc(data, name, { x: p.x + k * 24, y: p.y + k * 24 });
+    }
+  };
+  openDialog({
+    title: '온라인 그림', width: 640,
+    body: el('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
+      el('div', { style: { display: 'flex', gap: '6px' } }, q, el('button', { class: 'btn primary', onclick: () => run() }, '검색')),
+      grid, el('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } }, status, more),
+      el('div', { class: 'menu-title', style: { padding: '6px 0 0' } }, '웹 주소로 삽입'),
+      el('div', { style: { display: 'flex', gap: '6px' } }, urlIn)),
+    buttons: [
+      {
+        label: '삽입', primary: true, action: () => {
+          const list = [...chosen.values()];
+          const u = urlIn.value.trim();
+          if (u) list.push({ full: u, title: u.split('/').pop().replace(/\.[^.]+$/, '') || '그림' });
+          if (!list.length) { toast('그림을 고르거나 웹 주소를 입력하세요.'); return false; }
+          list.forEach((it, k) => insertOne(it.full, it.title, k));
+          return undefined;
+        },
+      },
+      { label: '취소' },
+    ],
+  });
+  setTimeout(() => q.focus(), 0);
+}
+
 function resetImageSize(id) {
   const im = sheet().images.find((x) => x.id === id);
   if (!im) return;
@@ -4628,6 +4744,38 @@ function imageDialog(id) {
   });
 }
 
+/** 도형 갤러리 (엑셀처럼 분류별 견본 격자) — noLines: 도형 모양 변경용 */
+function shapeGallery(pick, noLines = false) {
+  const icon = (id) => {
+    const sh = newShape(id, { x: 0, y: 0, w: 20, h: 16 });
+    return shapeSvg({ ...sh, fill: sh.fill ? (id === 'textbox' ? '#ffffff' : '#dbe5f5') : null, stroke: '#44546a', strokeWidth: 1, flipV: LINE_SHAPES.has(sh.kind) ? true : undefined });
+  };
+  return el('div', { class: 'shape-gallery' }, SHAPE_GROUPS.filter(([g]) => !(noLines && g === '선')).map(([g, list]) => [
+    el('div', { class: 'menu-title' }, g),
+    el('div', { class: 'shape-grid' }, list.filter(([id]) => !(noLines && id === 'textbox')).map(([id, label]) => el('button', {
+      class: 'shape-btn', title: label, html: icon(id), onmousedown: (e) => e.preventDefault(),
+      onclick: () => { closeMenus(); pick(id); },
+    }))),
+  ]));
+}
+
+/** 개체 겹치는 순서: 맨 앞 · 앞으로 · 뒤로 · 맨 뒤 (차트 · 그림 · 도형 · 슬라이서 공통) */
+function arrangeObject(id, how) {
+  const s = sheet();
+  const all = OBJECT_PROPS.flatMap((p) => (s[p] ?? []).map((o) => ({ p, o })));
+  all.sort((a, b) => (a.o.z ?? 0) - (b.o.z ?? 0));
+  const i = all.findIndex((x) => x.o.id === id);
+  if (i < 0) return;
+  const [it] = all.splice(i, 1);
+  const at = how === 'front' ? all.length : how === 'back' ? 0 : how === 'forward' ? Math.min(all.length, i + 1) : Math.max(0, i - 1);
+  all.splice(at, 0, it);
+  const zOf = new Map(all.map((x, k) => [x.o.id, k + 1]));
+  wb.transact(() => {
+    for (const p of OBJECT_PROPS) if ((s[p] ?? []).length) wb.setSheetProp(si, p, s[p].map((o) => ({ ...o, z: zOf.get(o.id) ?? o.z })));
+  }, meta());
+  gv.renderObjectsAll();
+}
+
 // 도형
 function startDraw(kind) {
   if (editing && !commitEdit()) return;
@@ -4646,7 +4794,7 @@ function endDraw() {
 function shapeDialog(id, typed = null) {
   const sh = sheet().shapes.find((x) => x.id === id);
   if (!sh) return;
-  const isLine = sh.kind === 'line';
+  const isLine = LINE_SHAPES.has(sh.kind);
   const row = (label, ...inputs) => el('label', {}, el('span', {}, label), el('span', { style: { display: 'flex', gap: '8px', alignItems: 'center' } }, ...inputs));
   const text = el('textarea', { rows: 4, style: { width: '100%', minHeight: '80px' } }, typed ?? sh.text ?? '');
   const size = el('input', { type: 'number', min: 6, max: 96, value: sh.size ?? 11, style: { width: '70px' } });
@@ -4658,13 +4806,18 @@ function shapeDialog(id, typed = null) {
   const lineOn = el('input', { type: 'checkbox', checked: !!sh.stroke });
   const stroke = el('input', { type: 'color', value: sh.stroke ?? '#2f528f' });
   const width = el('input', { type: 'number', min: 0.25, max: 20, step: 0.25, value: sh.strokeWidth ?? 1, style: { width: '70px' } });
+  const dash = el('select', {}, [['', '실선'], ['dash', '파선'], ['dot', '점선']].map(([v, l]) => el('option', { value: v, selected: (sh.dash ?? '') === v }, l)));
+  const arrow = el('select', {}, [['', '없음'], ['end', '끝 화살표'], ['both', '양쪽 화살표']].map(([v, l]) => el('option', { value: v, selected: (sh.arrow ?? '') === v }, l)));
+  const rot = el('input', { type: 'number', min: -360, max: 360, value: sh.rot ?? 0, style: { width: '70px' } });
+  const valign = el('select', {}, [['top', '위쪽'], ['middle', '가운데'], ['bottom', '아래쪽']].map(([v, l]) => el('option', { value: v, selected: (sh.valign ?? (sh.kind === 'textbox' ? 'top' : 'middle')) === v }, l)));
   const body = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
     isLine ? null : row('텍스트', text),
     isLine ? null : row('글꼴', el('span', {}, '크기'), size, el('label', { style: { display: 'inline-flex', gap: '4px', flexDirection: 'row' } }, bold, '굵게'), color),
-    isLine ? null : row('맞춤', align),
+    isLine ? null : row('맞춤', align, el('span', {}, '세로'), valign),
     isLine ? null : row('채우기', el('label', { style: { display: 'inline-flex', gap: '4px', flexDirection: 'row' } }, fillOn, '사용'), fill),
     row(isLine ? '선 색' : '윤곽선', isLine ? null : el('label', { style: { display: 'inline-flex', gap: '4px', flexDirection: 'row' } }, lineOn, '사용'), stroke),
-    row('선 굵기(pt)', width));
+    row('선 굵기(pt)', width, dash),
+    isLine ? row('화살표', arrow) : row('회전(°)', rot));
   openDialog({
     title: isLine ? '선 서식' : '도형 서식', body, width: 420,
     onOpen: () => { if (!isLine) { text.focus(); text.setSelectionRange(text.value.length, text.value.length); } },
@@ -4672,12 +4825,13 @@ function shapeDialog(id, typed = null) {
       {
         label: '확인', primary: true,
         action: () => updateObject(id, isLine
-          ? { stroke: stroke.value, strokeWidth: Number(width.value) || 1 }
+          ? { stroke: stroke.value, strokeWidth: Number(width.value) || 1, dash: dash.value || undefined, arrow: arrow.value || undefined }
           : {
             text: text.value, size: clamp(Number(size.value) || 11, 6, 96), bold: bold.checked || undefined, align: align.value, color: color.value,
             // 파일에서 가져온 조각별 서식은 글자 · 글꼴 설정을 바꾸지 않았을 때만 유지
             ...(sh.paras && (text.value !== sh.text || align.value !== (sh.align ?? 'left') || bold.checked !== !!sh.bold) ? { paras: undefined } : {}),
             fill: fillOn.checked ? fill.value : null, stroke: lineOn.checked ? stroke.value : null, strokeWidth: Number(width.value) || 1,
+            dash: dash.value || undefined, rot: (Number(rot.value) % 360) || undefined, valign: valign.value,
           }),
       },
       { label: '취소' },
@@ -8311,8 +8465,12 @@ const MENUS = {
     ];
   },
   picture: () => [
+    { title: '이 디바이스' },
     { label: '셀에 배치...', icon: 'picture', action: () => insertPictureInCell() },
     { label: '셀 위에 배치...', icon: 'picture', action: () => insertPicture() },
+    { title: '온라인' },
+    { label: '온라인 그림...', icon: 'search', action: () => onlinePictureDialog(false) },
+    { label: '온라인 그림을 셀에 배치...', icon: 'search', action: () => onlinePictureDialog(true) },
   ],
   pivotLayout: () => [
     { label: '압축 형식으로 표시', action: () => run('pivotCompact') },
@@ -8381,13 +8539,7 @@ const MENUS = {
     ];
   },
   tableStylesDesign: (a) => { tableStyleGallery(a, false); },
-  shapes: () => [
-    { title: '도형' },
-    ...SHAPE_KINDS.map((k) => ({
-      label: k.label, action: () => startDraw(k.id),
-      icon: shapeSvg({ kind: k.id, w: 18, h: k.id === 'line' ? 14 : 13, fill: k.id === 'textbox' ? '#ffffff' : '#dbe5f5', stroke: '#4472c4', flipV: k.id === 'line' }),
-    })),
-  ],
+  shapes: () => [{ node: shapeGallery((k) => startDraw(k)) }],
   validation: () => [
     { label: '데이터 유효성 검사...', icon: 'validation', action: validationDialog },
     { label: '잘못된 데이터 표시', action: () => run('circleInvalid') },

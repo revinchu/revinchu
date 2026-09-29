@@ -5,7 +5,7 @@ import { colToName, MAX_ROWS, MAX_COLS } from './formula.js';
 import { formatValue, formatGeneral } from './format.js';
 import { DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT } from './workbook.js';
 import { renderChartSvg, chartModelData } from './chart.js';
-import { shapeSvg } from './shapes.js';
+import { shapeSvg, LINE_KINDS } from './shapes.js';
 import { validationAt } from './validation.js';
 import { prepareCond, condFormatAt, ICON_SVG, EMPTY_MATCH_TYPES, ruleRanges, inRule } from './condfmt.js';
 import { tableAt, tableCellStyle, tableFilterRange, styleByName } from './tables.js';
@@ -724,10 +724,9 @@ export class GridView {
       else if (prop === 'slicers') box(o, 'slicer', this.slicerHtml(o), slicerCssVars(o));
       else if (prop === 'images') box(o, 'pic', `<img src="${esc(o.src)}" alt="${esc(o.name ?? '')}" draggable="false">`);
       else {
-        const text = o.text && o.kind !== 'line'
-          ? shapeTextHtml(o)
-          : '';
-        box(o, `shape ${o.kind === 'line' ? 'line' : ''}`, shapeSvg(o) + text);
+        const isLine = LINE_KINDS.has(o.kind);
+        const text = (o.text || o.paras) && !isLine ? shapeTextHtml(o) : '';
+        box(o, `shape ${isLine ? 'line' : ''}`, shapeSvg(o) + text, o.rot ? `transform:rotate(${o.rot}deg)` : '');
       }
     }
     // 바뀐 개체만 다시 만듦 (슬라이서 · 차트가 많아도 클릭마다 전부 다시 그리지 않게)

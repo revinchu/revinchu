@@ -61,3 +61,27 @@ test('시트 탭 색: xlsx 왕복', async () => {
   assert.deepEqual(meta.theme, ['FFFFFF', '000000']);
   assert.deepEqual(meta.baseStyle, { valign: 'middle' });
 });
+
+test('도형: 엑셀 기본 도형 이름 그대로 그리기 · xlsx 왕복 (회전 · 화살표 · 대시)', async () => {
+  const { SHAPE_KINDS, newShape, shapeSvg, GEOM } = await import('../src/shapes.js');
+  const { readXlsx, writeXlsx } = await import('../src/xlsx.js');
+  assert.ok(SHAPE_KINDS.length >= 120);
+  for (const k of SHAPE_KINDS) assert.doesNotMatch(shapeSvg(newShape(k.id, { x: 0, y: 0, w: 80, h: 50 })), /NaN|undefined/, k.id);
+  const wb = new Workbook();
+  const shapes = [
+    { ...newShape('star5', { x: 10, y: 10, w: 80, h: 80 }), rot: 30 },
+    { ...newShape('flowChartDecision', { x: 100, y: 10, w: 80, h: 60 }), text: '판단' },
+    { ...newShape('lineArrow', { x: 10, y: 120, w: 100, h: 40 }), dash: 'dash' },
+    newShape('lineDblArrow', { x: 10, y: 170, w: 100, h: 0 }),
+  ];
+  wb.transact(() => { wb.setInput(0, 0, 0, 'x'); wb.setSheetProp(0, 'shapes', shapes); });
+  const back = new Workbook(readXlsx(writeXlsx(wb)).data).sheets[0].shapes;
+  assert.equal(back[0].kind, 'star5');
+  assert.equal(back[0].rot, 30);
+  assert.equal(back[1].kind, 'flowChartDecision');
+  assert.equal(back[2].kind, 'line');
+  assert.equal(back[2].arrow, 'end');
+  assert.equal(back[2].dash, 'dash');
+  assert.equal(back[3].arrow, 'both');
+  assert.ok(GEOM.heart);
+});

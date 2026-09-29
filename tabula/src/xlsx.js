@@ -15,6 +15,7 @@ import { chartLayout, PALETTE, chartModelData } from './chart.js';
 import { Axis, hid, hidKeys } from './axis.js';
 import { toBase64, fromBase64 } from './vba.js';
 import { CellImage } from './fxcore.js';
+import { GEOM, LINE_KINDS } from './shapes.js';
 import { BLOCK_MIN_ROWS, ColBuilder, inBlock, blockValue } from './block.js';
 import { normalizeStyleName, DEFAULT_TABLE_STYLE, dataTop, dataBottom, canonicalRef, tableAt, columnNames, findTable } from './tables.js';
 import { pivotSourceData, resolvePivot, itemText, keyOf, sortKeys, EMPTY, headerNames, normalizeDef, computePivot, valueName, showAsPercent, excelCalcFormula } from './pivot.js';
@@ -966,10 +967,15 @@ function numberRaw(v, style) {
 }
 
 const SCHEME_INDEX = { lt1: 0, bg1: 0, dk1: 1, tx1: 1, lt2: 2, bg2: 2, dk2: 3, tx2: 3, accent1: 4, accent2: 5, accent3: 6, accent4: 7, accent5: 8, accent6: 9 };
-const PRST_KIND = {
-  rect: 'rect', roundRect: 'roundRect', ellipse: 'ellipse', triangle: 'triangle', rtTriangle: 'triangle',
-  rightArrow: 'arrow', leftArrow: 'arrow', line: 'line', straightConnector1: 'line', bentConnector3: 'line',
-  flowChartProcess: 'rect', flowChartAlternateProcess: 'roundRect', flowChartConnector: 'ellipse', wedgeRectCallout: 'rect',
+// 엑셀 도형 이름 → 도형 종류 (모양을 아는 도형은 이름 그대로)
+const prstKind = (prst) => {
+  if (GEOM[prst]) return prst;
+  if (prst === 'line' || prst === 'straightConnector1') return 'line';
+  if (/^bentConnector/.test(prst)) return 'bentConnector3';
+  if (/^curvedConnector/.test(prst)) return 'curvedConnector3';
+  if (/^flowChart/.test(prst)) return 'flowChartProcess';
+  if (/Callout/.test(prst)) return 'wedgeRectCallout';
+  return 'rect';
 };
 const MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', bmp: 'image/bmp', svg: 'image/svg+xml', webp: 'image/webp' };
 
@@ -1064,12 +1070,19 @@ function readDrawing(files, path, sheet, ctx) {
     const rPr = descendants(child(el, 'txBody'), 'rPr')[0] ?? descendants(child(el, 'txBody'), 'defRPr')[0];
     const algn = descendants(child(el, 'txBody'), 'pPr')[0]?.attrs.algn;
     const shape = {
-      id: uid('sh'), kind: isText ? 'textbox' : PRST_KIND[prst] ?? 'rect', ...round(box), z: ++z,
+      id: uid('sh'), kind: isText ? 'textbox' : prstKind(prst), ...round(box), z: ++z,
       fill, stroke, text,
     };
     const xf = descendants(spPr, 'xfrm')[0];
-    if ((prst === 'leftArrow') !== (xf?.attrs.flipH === '1')) shape.flip = true;
+    if (xf?.attrs.flipH === '1') shape.flip = true;
     if (xf?.attrs.flipV === '1') shape.flipV = true;
+    if (Number(xf?.attrs.rot)) shape.rot = Math.round(Number(xf.attrs.rot) / 60000);
+    // 선 끝 화살표 · 대시
+    const endOn = (n) => { const t = child(ln, n)?.attrs.type; return t && t !== 'none'; };
+    if (LINE_KINDS.has(shape.kind) && (endOn('tailEnd') || endOn('headEnd'))) shape.arrow = endOn('tailEnd') && endOn('headEnd') ? 'both' : 'end';
+    if (LINE_KINDS.has(shape.kind) && !endOn('tailEnd') && endOn('headEnd')) { shape.flip = !shape.flip; shape.flipV = !shape.flipV; }
+    const dashV = child(ln, 'prstDash')?.attrs.val;
+    if (dashV && dashV !== 'solid') shape.dash = /dot/i.test(dashV) && !/dash/i.test(dashV) ? 'dot' : 'dash';
     const lw = Number(ln?.attrs.w);
     if (lw && stroke) shape.strokeWidth = Math.round((lw / EMU) * 4) / 4;
     if (rPr?.attrs.sz) shape.size = Number(rPr.attrs.sz) / 100;
@@ -2199,16 +2212,20 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="${NS_R}"><c:roundedCorners val="0"/>${pivotSrc}<c:chart>${title}${pivotFmts}<c:plotArea><c:layout/>${groupXml}${axesXml}</c:plotArea>${legend}<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart></c:chartSpace>`;
 }
 
-const KIND_PRST = { rect: 'rect', roundRect: 'roundRect', ellipse: 'ellipse', triangle: 'triangle', arrow: 'rightArrow', textbox: 'rect', line: 'straightConnector1' };
+const KIND_PRST = { arrow: 'rightArrow', textbox: 'rect', line: 'straightConnector1' };
+const prstOf = (kind) => KIND_PRST[kind] ?? (GEOM[kind] || LINE_KINDS.has(kind) ? kind : 'rect');
 const hex6 = (c) => (c ?? '#000000').replace('#', '').toUpperCase().padStart(6, '0').slice(0, 6);
 
 /** 도형 → <xdr:sp> / <xdr:cxnSp> */
 function shapeXml(sh, id, xfrm) {
   const name = esc(sh.name || `${sh.kind === 'textbox' ? 'TextBox' : '도형'} ${id - 1}`);
   const fill = sh.fill ? `<a:solidFill><a:srgbClr val="${hex6(sh.fill)}"/></a:solidFill>` : '<a:noFill/>';
-  const ln = sh.stroke ? `<a:ln w="${Math.round((sh.strokeWidth ?? 1) * EMU)}"><a:solidFill><a:srgbClr val="${hex6(sh.stroke)}"/></a:solidFill>${sh.kind === 'line' && sh.arrow ? '<a:tailEnd type="triangle"/>' : ''}</a:ln>` : '<a:ln><a:noFill/></a:ln>';
-  if (sh.kind === 'line') {
-    return `<xdr:cxnSp macro=""><xdr:nvCxnSpPr><xdr:cNvPr id="${id}" name="${name}"/><xdr:cNvCxnSpPr/></xdr:nvCxnSpPr><xdr:spPr>${xfrm(sh)}<a:prstGeom prst="line"><a:avLst/></a:prstGeom>${ln}</xdr:spPr></xdr:cxnSp>`;
+  const isLine = LINE_KINDS.has(sh.kind);
+  const dashXml = sh.dash ? `<a:prstDash val="${sh.dash === 'dot' ? 'sysDot' : 'dash'}"/>` : '';
+  const ends = isLine && sh.arrow ? `${sh.arrow === 'both' ? '<a:headEnd type="triangle"/>' : ''}<a:tailEnd type="triangle"/>` : '';
+  const ln = sh.stroke ? `<a:ln w="${Math.round((sh.strokeWidth ?? 1) * EMU)}"><a:solidFill><a:srgbClr val="${hex6(sh.stroke)}"/></a:solidFill>${dashXml}${ends}</a:ln>` : '<a:ln><a:noFill/></a:ln>';
+  if (isLine) {
+    return `<xdr:cxnSp macro=""><xdr:nvCxnSpPr><xdr:cNvPr id="${id}" name="${name}"/><xdr:cNvCxnSpPr/></xdr:nvCxnSpPr><xdr:spPr>${xfrm(sh)}<a:prstGeom prst="${sh.kind === 'line' ? 'straightConnector1' : sh.kind}"><a:avLst/></a:prstGeom>${ln}</xdr:spPr></xdr:cxnSp>`;
   }
   const algnOf = (a) => (a === 'center' ? 'ctr' : a === 'right' ? 'r' : a === 'justify' ? 'just' : 'l');
   const algn = algnOf(sh.align);
@@ -2223,7 +2240,7 @@ function shapeXml(sh, id, xfrm) {
     ? sh.paras.map((p) => `<a:p><a:pPr algn="${algnOf(p.align ?? sh.align)}"/>${p.runs.length ? p.runs.map(runXml).join('') : `<a:endParaRPr lang="ko-KR" sz="${Math.round((p.sz ?? sh.size ?? 11) * 100)}"/>`}</a:p>`).join('')
     : String(sh.text ?? '').split('\n').map((line) => `<a:p><a:pPr algn="${algn}"/>${line ? `<a:r>${rPr}<a:t>${esc(line)}</a:t></a:r>` : `<a:endParaRPr lang="ko-KR" sz="${Math.round((sh.size ?? 11) * 100)}"/>`}</a:p>`).join('');
   const anchor = sh.valign ? { top: 't', middle: 'ctr', bottom: 'b' }[sh.valign] : sh.kind === 'textbox' ? 't' : 'ctr';
-  return `<xdr:sp macro="" textlink=""><xdr:nvSpPr><xdr:cNvPr id="${id}" name="${name}"/><xdr:cNvSpPr${sh.kind === 'textbox' ? ' txBox="1"' : ''}/></xdr:nvSpPr><xdr:spPr>${xfrm(sh)}<a:prstGeom prst="${KIND_PRST[sh.kind] ?? 'rect'}"><a:avLst/></a:prstGeom>${fill}${ln}</xdr:spPr><xdr:txBody><a:bodyPr vertOverflow="clip" horzOverflow="clip" wrap="square" rtlCol="0" anchor="${anchor}"/><a:lstStyle/>${paras}</xdr:txBody></xdr:sp>`;
+  return `<xdr:sp macro="" textlink=""><xdr:nvSpPr><xdr:cNvPr id="${id}" name="${name}"/><xdr:cNvSpPr${sh.kind === 'textbox' ? ' txBox="1"' : ''}/></xdr:nvSpPr><xdr:spPr>${xfrm(sh)}<a:prstGeom prst="${prstOf(sh.kind)}"><a:avLst/></a:prstGeom>${fill}${ln}</xdr:spPr><xdr:txBody><a:bodyPr vertOverflow="clip" horzOverflow="clip" wrap="square" rtlCol="0" anchor="${anchor}"/><a:lstStyle/>${paras}</xdr:txBody></xdr:sp>`;
 }
 
 /** 목록 원본: 범위 참조가 아니면 "a,b" 로 감싸기 */
@@ -2948,7 +2965,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {}) 
         return `<xdr:col>${c}</xdr:col><xdr:colOff>${Math.max(0, Math.round((x - colAxis.pos(c)) * EMU))}</xdr:colOff><xdr:row>${r}</xdr:row><xdr:rowOff>${Math.max(0, Math.round((y - rowAxis.pos(r)) * EMU))}</xdr:rowOff>`;
       };
       const anchor = (o, body, editAs = 'oneCell') => `<xdr:twoCellAnchor editAs="${editAs}"><xdr:from>${anchorAt(o.x, o.y)}</xdr:from><xdr:to>${anchorAt(o.x + o.w, o.y + o.h)}</xdr:to>${body}<xdr:clientData/></xdr:twoCellAnchor>`;
-      const xfrm = (o) => `<a:xfrm${o.flip ? ' flipH="1"' : ''}${o.flipV ? ' flipV="1"' : ''}><a:off x="${Math.round(o.x * EMU)}" y="${Math.round(o.y * EMU)}"/><a:ext cx="${Math.round(o.w * EMU)}" cy="${Math.round(o.h * EMU)}"/></a:xfrm>`;
+      const xfrm = (o) => `<a:xfrm${o.rot ? ` rot="${Math.round(o.rot * 60000)}"` : ''}${o.flip ? ' flipH="1"' : ''}${o.flipV ? ' flipV="1"' : ''}><a:off x="${Math.round(o.x * EMU)}" y="${Math.round(o.y * EMU)}"/><a:ext cx="${Math.round(o.w * EMU)}" cy="${Math.round(o.h * EMU)}"/></a:xfrm>`;
       let objId = 1;
       const parts = [];
       const ordered = [
