@@ -21,6 +21,7 @@ import { TEMPLATES, TEMPLATE_CATS } from './templates.js';
 import { GridView, BASE_FONT, setBaseFont, measureText, fontStack } from './view.js';
 import { setThemeColors } from './stylepresets.js';
 import { readXlsxAsync, writeXlsxAsync, xlsxOverflow } from './xlsx.js';
+import { readOds, writeOds } from './ods.js';
 import { CHART_TYPES, CHART_GALLERY, CHART_PALETTES, PALETTE, paletteOf, renderChartSvg, chartModelData } from './chart.js';
 import {
   computePivot, warmPivots, AGGREGATES, SHOW_AS, BASE_POS, LAYOUTS, pivotSourceData, resolvePivot, itemText, headerNames, normalizeDef, valueName,
@@ -2310,7 +2311,8 @@ function hideSel(axis, hide) {
     idx = Object.keys(map).map(Number).filter((i) => i >= a - pad && i <= b + pad);
     if (!idx.length) { toast('숨겨진 항목이 없습니다. 숨겨진 부분 양쪽을 선택한 후 다시 시도하세요.'); return; }
   }
-  wb.transact(() => wb.setHidden(si, axis, idx, hide), meta());
+  // 엑셀처럼 개체도 셀을 따라 이동 · 크기 변경 (숨긴 행 안의 개체는 높이 0)
+  wb.transact(() => anchorObjects(() => wb.setHidden(si, axis, idx, hide), null, true), meta());
   gv.layout();
   if (hide) {
     const n = axis === 'row' ? stepFrom({ r: b, c: active.c }, 1, 0) : stepFrom({ r: active.r, c: b }, 0, 1);
@@ -4956,7 +4958,7 @@ const placementOf = (prop, o) => o.placement ?? (prop === 'slicers' ? 'oneCell' 
  * 행/열 크기 변경 · 삽입 · 삭제 뒤에도 개체가 셀을 따라가게 (엑셀의 개체 위치 속성). transact 안에서 부름.
  * shift: 삽입/삭제일 때 { axis: 'row'|'col', index, count(음수 = 삭제) }
  */
-function anchorObjects(fn, shift = null) {
+function anchorObjects(fn, shift = null, moveOnly = false) {
   const s = sheet();
   const props = OBJECT_PROPS.filter((p) => (s[p] ?? []).length);
   if (!props.length) return fn();
@@ -4995,8 +4997,8 @@ function anchorObjects(fn, shift = null) {
       if (!a) return o;
       const x = Math.round(move(gv.cols, a.c1, 'col'));
       const y = Math.round(move(gv.rows, a.r1, 'row'));
-      const w = a.place === 'twoCell' ? Math.max(1, Math.round(move(gv.cols, a.c2, 'col')) - x) : o.w;
-      const h = a.place === 'twoCell' ? Math.max(LINE_SHAPES.has(o.kind) ? 0 : 1, Math.round(move(gv.rows, a.r2, 'row')) - y) : o.h;
+      const w = a.place === 'twoCell' && !moveOnly ? Math.max(1, Math.round(move(gv.cols, a.c2, 'col')) - x) : o.w;
+      const h = a.place === 'twoCell' && !moveOnly ? Math.max(LINE_SHAPES.has(o.kind) ? 0 : 1, Math.round(move(gv.rows, a.r2, 'row')) - y) : o.h;
       if (x === o.x && y === o.y && w === o.w && h === o.h) return o;
       changed = true;
       return { ...o, x, y, w, h };
@@ -6327,6 +6329,12 @@ function renderPivotPane(entry) {
   };
   const apply = (patch) => {
     const next = { ...def, ...patch };
+    // 열 필드가 바뀌면 'Σ 값'의 자리를 그 앞에 있던 필드 기준으로 유지
+    if (patch.cols && patch.valuesPos === undefined && def.valuesPos != null) {
+      const before = new Set(areas.cols.slice(0, def.valuesPos));
+      next.valuesPos = patch.cols.filter((c) => before.has(c)).length;
+    }
+    if (next.valuesPos != null && next.valuesPos >= (next.cols ?? []).length) delete next.valuesPos;
     if (next.pages && !next.pages.length) delete next.pages;
     setPivotDef(entry, next);
     refreshPivotPane(true);
@@ -6335,7 +6343,7 @@ function renderPivotPane(entry) {
     pages: areas.pages.filter((x) => x !== name), cols: areas.cols.filter((x) => x !== name),
     rows: areas.rows.filter((x) => x !== name), values: areas.values.filter((v) => v.field !== name),
   });
-  const moveTo = (name, area, at = null, fromValue = null) => {
+  const moveTo = (name, area, at = null, fromValue = null, extra = {}) => {
     if (area !== 'values' && calcSet.has(name.toLowerCase())) { toast('계산 필드는 값 영역에만 넣을 수 있습니다.'); refreshPivotPane(true); return; }
     const base = fromValue !== null ? { ...areas, values: areas.values.filter((_, i) => i !== fromValue) } : area === 'values' ? areas : removeField(name);
     if (area === 'values') {
@@ -6350,7 +6358,7 @@ function renderPivotPane(entry) {
     // 날짜/시간 열 자동 그룹화 (옵션): 행 · 열에 날짜 필드를 넣으면 연-월로 묶음
     let groups = def.groups;
     if (opts.autoDateGroup && (area === 'rows' || area === 'cols') && !def.groups?.[name] && isDateField(name)) groups = { ...(def.groups ?? {}), [name]: { by: 'yearMonth' } };
-    apply({ ...base, [area]: list, ...(groups !== def.groups ? { groups } : {}) });
+    apply({ ...base, [area]: list, ...(groups !== def.groups ? { groups } : {}), ...extra });
   };
   const isDateField = (f) => {
     const i = header.indexOf(f);
@@ -6405,6 +6413,21 @@ function renderPivotPane(entry) {
   const areaBox = (area) => {
     const box = el('div', { class: 'pp-area' });
     const items = area === 'values' ? areas.values.map((v, i) => ({ name: v.field, label: valueName(v), i })) : areas[area].map((n, i) => ({ name: n, label: n, i }));
+    // 값이 둘 이상이면 열 영역에 'Σ 값' — 엑셀처럼 위아래로 옮겨 지표별(4월·5월 나란히) / 월별 배치를 고름
+    const sigmaAt = area === 'cols' && areas.values.length > 1 ? Math.min(areas.cols.length, def.valuesPos ?? areas.cols.length) : -1;
+    if (sigmaAt >= 0) {
+      const row = el('div', { class: 'pp-item sigma', draggable: 'true', title: '값 필드들의 위치 — 위로 올리면 지표마다 열 항목이 나란히 붙습니다' }, el('span', { class: 'pp-label' }, 'Σ 값'));
+      const menuBtn = el('button', { type: 'button', class: 'pp-menu', title: '이동' }, '▾');
+      row.append(menuBtn);
+      row.addEventListener('dragstart', (e) => { pivotDrag = { sigma: true, from: 'cols', index: sigmaAt }; e.dataTransfer.setData('text/plain', 'Σ'); });
+      menuBtn.addEventListener('click', () => openMenu(menuBtn, [
+        { label: '위로 이동', disabled: sigmaAt === 0, action: () => apply({ valuesPos: sigmaAt - 1 }) },
+        { label: '아래로 이동', disabled: sigmaAt >= areas.cols.length, action: () => apply({ valuesPos: sigmaAt + 1 }) },
+        { label: '처음으로 이동', disabled: sigmaAt === 0, action: () => apply({ valuesPos: 0 }) },
+        { label: '끝으로 이동', disabled: sigmaAt >= areas.cols.length, action: () => apply({ valuesPos: areas.cols.length }) },
+      ]));
+      box.append(row);
+    }
     items.forEach((it) => {
       const menuBtn = el('button', { type: 'button', class: 'pp-menu', title: '필드 설정' }, '▾');
       const isCalc = calcSet.has(String(it.name).toLowerCase());
@@ -6426,7 +6449,7 @@ function renderPivotPane(entry) {
         ];
         openMenu(menuBtn, moves);
       });
-      box.append(row);
+      if (sigmaAt >= 0 && it.i >= sigmaAt) box.append(row); else box.insertBefore(row, box.querySelector('.pp-item.sigma'));
     });
     box.addEventListener('dragover', (e) => { e.preventDefault(); box.classList.add('over'); });
     box.addEventListener('dragleave', () => box.classList.remove('over'));
@@ -6439,6 +6462,25 @@ function renderPivotPane(entry) {
       const rows = [...box.querySelectorAll('.pp-item')];
       let at = rows.findIndex((r) => e.clientY < r.getBoundingClientRect().top + r.offsetHeight / 2);
       if (at < 0) at = rows.length;
+      // 'Σ 값'이 있는 열 영역: 화면 위치 → 필드 위치 · 값 위치
+      const sig = rows.findIndex((r) => r.classList.contains('sigma'));
+      if (dr.sigma) {
+        if (area !== 'cols') { toast('Σ 값은 열 영역 안에서만 옮길 수 있습니다.'); return; }
+        apply({ valuesPos: rows.slice(0, at).filter((r) => !r.classList.contains('sigma')).length });
+        return;
+      }
+      if (area === 'cols' && sig >= 0) {
+        const fieldsBefore = rows.slice(0, at).filter((r) => !r.classList.contains('sigma')).length;
+        const others = areas.cols.filter((x) => x !== dr.name);
+        const oldIdx = areas.cols.indexOf(dr.name);
+        const fieldAt = oldIdx >= 0 && oldIdx < fieldsBefore ? fieldsBefore - 1 : fieldsBefore;
+        const next = [...others];
+        next.splice(fieldAt, 0, dr.name);
+        const beforeSig = new Set(areas.cols.slice(0, sig).filter((x) => x !== dr.name));
+        if (at <= sig) beforeSig.add(dr.name);
+        moveTo(dr.name, 'cols', fieldAt, dr.from === 'values' ? dr.index : null, { valuesPos: next.filter((x) => beforeSig.has(x)).length });
+        return;
+      }
       if (dr.from === area && area === 'values') {
         const l = [...areas.values];
         const [v] = l.splice(dr.index, 1);
@@ -7534,26 +7576,42 @@ function sheetToRows(index) {
   return rows;
 }
 
-function exportCsv() {
-  download(`${safeFileName(docName)}-${safeFileName(sheet().name)}.csv`, `﻿${toDelimited(sheetToRows(si))}`, 'text/csv;charset=utf-8');
-  toast('CSV 파일로 내보냈습니다.');
+function exportCsv(kind = 'csv', name = docName) {
+  const tab = kind !== 'csv';
+  download(`${safeFileName(name)}-${safeFileName(sheet().name)}.${kind}`, `﻿${toDelimited(sheetToRows(si), tab ? '\t' : ',')}`, `${tab ? 'text/tab-separated-values' : 'text/csv'};charset=utf-8`);
+  toast(`${kind.toUpperCase()} 파일로 내보냈습니다 (현재 시트, UTF-8).`);
 }
 
-async function exportXlsx(name = docName) {
+/** OpenDocument 스프레드시트(.ods)로 저장 — 값 · 수식 · 서식 · 병합 · 열 너비 */
+function exportOds(name = docName) {
+  const info = wb.sheets.map((s, i) => ({ si: i, name: s.name, merges: s.merges ?? [], hidden: s.state === 'hidden' || s.state === 'veryHidden' }));
+  const bytes = writeOds(info, {
+    raw: (s, r, c) => wb.getRaw(s, r, c), value: (s, r, c) => wb.getValue(s, r, c), style: (s, r, c) => wb.styleAt(s, r, c),
+    used: (s) => wb.usedRange(s), colWidth: (s, c) => wb.colWidth(s, c), rowHeight: (s, r) => wb.sheets[s].rowHeights?.[r] ?? null,
+    display: (s, r, c) => displayText(r, c, s),
+  });
+  download(`${safeFileName(name)}.ods`, new Blob([bytes], { type: 'application/vnd.oasis.opendocument.spreadsheet' }));
+  toast('OpenDocument 스프레드시트(.ods)로 저장했습니다.');
+}
+
+const XLSX_KINDS = {
+  xlsx: { mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', label: 'Excel 통합 문서' },
+  xlsm: { mime: 'application/vnd.ms-excel.sheet.macroEnabled.12', label: 'Excel 매크로 사용 통합 문서' },
+  xltx: { mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.template', label: 'Excel 서식 파일' },
+  xltm: { mime: 'application/vnd.ms-excel.template.macroEnabled.12', label: 'Excel 매크로 사용 서식 파일' },
+};
+
+async function exportXlsx(name = docName, kind = null) {
   const over = xlsxOverflow(wb);
-  if (over) toast(`엑셀 파일은 1,048,576행까지만 저장할 수 있어 그 아래 셀 ${over.toLocaleString()}개는 빠집니다. 전체는 .tabula 로 저장하세요.`);
+  if (over) toast(`엑셀 파일은 1,048,576행까지만 저장할 수 있어 그 아래 셀 ${over.toLocaleString()}개는 빠집니다. 전체는 .wixel 로 저장하세요.`);
+  const k = kind ?? (wb.vba ? 'xlsm' : 'xlsx');
   // 큰 문서는 나눠서 만들고 진행 표시 (압축도 함께 해서 파일이 작아짐)
   const prog = progressOverlay(`'${safeFileName(name)}' 저장 중`);
   try {
-    const bytes = await writeXlsxAsync(wb, { activeSheet: si, fileName: `${safeFileName(name)}.${wb.vba ? 'xlsm' : 'xlsx'}` }, (st) => prog.set(st.p, st.msg));
+    const bytes = await writeXlsxAsync(wb, { activeSheet: si, fileName: `${safeFileName(name)}.${k}`, kind: k }, (st) => prog.set(st.p, st.msg));
     prog.close();
-    if (wb.vba) {
-      download(`${safeFileName(name)}.xlsm`, new Blob([bytes], { type: 'application/vnd.ms-excel.sheet.macroEnabled.12' }));
-      toast('Excel 매크로 사용 통합 문서(.xlsm)로 저장했습니다.');
-    } else {
-      download(`${safeFileName(name)}.xlsx`, new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
-      toast('Excel 통합 문서(.xlsx)로 저장했습니다.');
-    }
+    download(`${safeFileName(name)}.${k}`, new Blob([bytes], { type: XLSX_KINDS[k].mime }));
+    toast(`${XLSX_KINDS[k].label}(.${k})로 저장했습니다.`);
   } catch (err) {
     prog.close();
     alertDialog('WIXEL', `저장하지 못했습니다: ${err.message}`);
@@ -7565,19 +7623,26 @@ function saveAs() {
     { name: 'name', label: '파일 이름', value: docName },
     {
       name: 'type', label: '파일 형식', type: 'select', value: 'xlsx', options: [
-        { value: 'xlsx', label: wb.vba ? 'Excel 매크로 사용 통합 문서 (*.xlsm)' : 'Excel 통합 문서 (*.xlsx)' },
-        { value: 'tabula', label: 'WIXEL 통합 문서 (*.tabula)' },
-        { value: 'csv', label: 'CSV UTF-8 (쉼표로 분리) — 현재 시트' },
+        { value: wb.vba ? 'xlsm' : 'xlsx', label: wb.vba ? 'Excel 매크로 사용 통합 문서 (*.xlsm)' : 'Excel 통합 문서 (*.xlsx)' },
+        ...(wb.vba ? [{ value: 'xlsx', label: 'Excel 통합 문서 (*.xlsx) — 매크로 제외' }] : [{ value: 'xlsm', label: 'Excel 매크로 사용 통합 문서 (*.xlsm)' }]),
+        { value: 'xltx', label: 'Excel 서식 파일 (*.xltx)' },
+        { value: 'xltm', label: 'Excel 매크로 사용 서식 파일 (*.xltm)' },
+        { value: 'ods', label: 'OpenDocument 스프레드시트 (*.ods)' },
+        { value: 'wixel', label: 'WIXEL 통합 문서 (*.wixel) — 행 제한 없음' },
+        { value: 'csv', label: 'CSV UTF-8 (쉼표로 분리) (*.csv) — 현재 시트' },
+        { value: 'tsv', label: '텍스트 (탭으로 분리) (*.tsv) — 현재 시트' },
+        { value: 'txt', label: '유니코드 텍스트 (*.txt) — 현재 시트' },
         ...(server.available ? [{ value: 'server', label: '서버에 저장 (다른 기기에서 열기)' }] : []),
       ],
     },
   ], ({ name, type }) => {
     const newName = name.trim() || docName;
     if (newName !== docName) renameDoc(newName);
-    if (type === 'xlsx') exportXlsx(newName);
-    else if (type === 'csv') exportCsv();
+    if (XLSX_KINDS[type]) exportXlsx(newName, type === 'xlsx' && wb.vba ? 'xlsx' : type);
+    else if (type === 'csv' || type === 'tsv' || type === 'txt') exportCsv(type, newName);
+    else if (type === 'ods') exportOds(newName);
     else if (type === 'server') saveNow(true);
-    else download(`${safeFileName(newName)}.tabula`, JSON.stringify(snapshot()), 'application/json');
+    else download(`${safeFileName(newName)}.wixel`, JSON.stringify(snapshot()), 'application/json');
     saveToStorage();
   }, { okLabel: '저장' });
 }
@@ -7598,7 +7663,7 @@ async function openFileObject(file, mode) {
   fileMode = mode;
   const base = file.name.replace(/\.[^.]+$/, '');
   try {
-    if (/\.(xlsx|xlsm)$/i.test(file.name)) {
+    if (/\.(xlsx|xlsm|xlsb|xltx|xltm)$/i.test(file.name)) {
       // 큰 파일도 화면이 멈추지 않도록 나눠서 읽고, 진행 상황을 보여 줌
       const prog = progressOverlay(`'${file.name}' 여는 중`);
       let res;
@@ -7627,13 +7692,21 @@ async function openFileObject(file, mode) {
       else if (fileMode === 'open') toast(`'${file.name}'을(를) 열었습니다.`);
       return;
     }
+    // OpenDocument 스프레드시트 (.ods 압축 · .fods 단일 XML)
+    if (/\.(ods|fods)$/i.test(file.name)) {
+      const res = readOds(/\.fods$/i.test(file.name) ? await file.text() : new Uint8Array(await file.arrayBuffer()));
+      if (fileMode === 'open') loadWorkbook(res.data, base, 0);
+      else wb.transact(() => { for (const s of res.data.sheets) { let nm = s.name; for (let n = 2; wb.sheetIndexByName(nm) >= 0; n++) nm = `${s.name} (${n})`.slice(0, 31); const at = wb.addSheet(nm); wb.replaceSheet(at, { ...s, name: nm }); } }, meta());
+      toast(`'${file.name}'을(를) 열었습니다.`);
+      return;
+    }
     // 큰 CSV: 조각씩 읽어 바로 열 블록으로 (수백만 행도 화면이 멈추지 않음)
     if (/\.(csv|tsv|txt)$/i.test(file.name) && file.size > 8 * 1024 * 1024 && fileMode === 'open') {
       await openBigCsv(file, base);
       return;
     }
-    const text = await file.text();
-    if (/\.(json|tabula)$/i.test(file.name)) {
+    const text = await readTextSmart(file);
+    if (/\.(json|tabula|wixel)$/i.test(file.name)) {
       const data = JSON.parse(text);
       loadWorkbook(data.workbook ?? data, data.docName ?? base, data.si ?? 0);
       toast(`'${file.name}'을(를) 열었습니다.`);
@@ -7650,6 +7723,15 @@ async function openFileObject(file, mode) {
   } catch (err) {
     alertDialog('WIXEL', `파일을 열 수 없습니다: ${err.message}`);
   }
+}
+
+/** 글자 파일: UTF-8(BOM 포함)이 기본, UTF-8 이 아니면 한글 엑셀 CSV 의 EUC-KR(CP949), UTF-16 BOM 도 인식 */
+async function readTextSmart(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) return new TextDecoder('utf-16le').decode(bytes.subarray(2));
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) return new TextDecoder('utf-16be').decode(bytes.subarray(2));
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch { /* UTF-8 아님 */ }
+  try { return new TextDecoder('euc-kr').decode(bytes); } catch { return new TextDecoder().decode(bytes); }
 }
 
 async function openBigCsv(file, base) {
@@ -7824,7 +7906,7 @@ function renameDoc(name) {
   }
 }
 
-const snapshot = () => ({ app: 'tabula', docName, si, workbook: wb.serialize() });
+const snapshot = () => ({ app: 'wixel', docName, si, workbook: wb.serialize() });
 
 let storageWarned = false;
 /** 셀이 많은 통합 문서 (자동 저장을 IndexedDB 로, 더 드물게) */
@@ -8120,7 +8202,7 @@ function openBackstage(panel = 'new') {
   );
   const showOpen = async () => {
     const actions = el('div', { class: 'backstage-actions' },
-      el('button', { class: 'btn primary', onclick: () => { close(); pickFile('open'); } }, '이 기기에서 찾아보기 (.xlsx, .csv, .tabula)'));
+      el('button', { class: 'btn primary', onclick: () => { close(); pickFile('open'); } }, '이 기기에서 찾아보기 (.xlsx · .xlsb · .xlsm · .ods · .csv · .wixel 등)'));
     main.replaceChildren(el('h2', {}, '열기'), actions);
     if (!server.available) {
       main.append(el('div', { class: 'backstage-note' },
@@ -9963,7 +10045,7 @@ const COMMANDS = {
 
   numFmt: (f) => (f === 'custom' || f === 'more' ? formatCellsDialog(0) : applyStyle({ numFmt: f === 'general' ? undefined : f, decimals: undefined }, { widen: true })),
   fmtGeneral: () => applyStyle({ numFmt: undefined, decimals: undefined }),
-  fmtNumber: () => applyStyle({ numFmt: 'number', decimals: 2 }, { widen: true }),
+  fmtNumber: () => applyStyle({ numFmt: 'comma', decimals: 0 }, { widen: true }), // 한글 엑셀처럼 #,##0
   fmtDate: () => applyStyle({ numFmt: 'date', decimals: undefined }, { widen: true }),
   fmtCurrency: () => applyStyle({ numFmt: 'accounting', decimals: undefined }, { widen: true }),
   fmtPercent: () => applyStyle({ numFmt: 'percent', decimals: undefined }, { widen: true }),
@@ -10538,7 +10620,7 @@ function bindEvents() {
     if (file.type.startsWith('image/')) {
       const hit = gv.hitTest(e.clientX, e.clientY);
       addImageFile(file, { x: Math.round(hit.sheetX), y: Math.round(hit.sheetY) });
-    } else if (/\.(xlsx|xlsm|csv|tsv|txt|tabula|json)$/i.test(file.name)) {
+    } else if (/\.(xlsx|xlsm|xlsb|xltx|xltm|ods|fods|csv|tsv|tab|prn|txt|tabula|wixel|json)$/i.test(file.name)) {
       openFileObject(file, 'open');
     }
   });

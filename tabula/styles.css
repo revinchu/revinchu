@@ -807,6 +807,8 @@ legend { padding: 0 4px; color: #444; }
 .pp-field.calc .pp-menu { visibility: hidden; }
 .pp-field.calc:hover .pp-menu { visibility: visible; }
 .pp-item.calc .pp-label { color: #1f3f7a; }
+.pp-item.sigma { background: #e8eefa; border-color: #b9c7e6; font-weight: 600; }
+.pp-item.sigma .pp-label { color: #1f3f7a; }
 .cf-dialog { display: grid; grid-template-columns: 250px 1fr; gap: 14px; min-height: 420px; }
 .cf-left { display: flex; flex-direction: column; gap: 8px; border-right: 1px solid #e3e6ea; padding-right: 12px; min-width: 0; }
 .cf-head { display: flex; align-items: baseline; gap: 6px; }

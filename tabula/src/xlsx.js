@@ -1,4 +1,5 @@
 // .xlsx 읽기/쓰기 (Office Open XML). DOM 없이 동작하므로 Node 에서도 테스트 가능.
+import { isXlsb, convertXlsb } from './xlsb.js';
 import { unzip, unzipAsync, zip, zipAsync, textOf } from './zip.js';
 import { CellMap } from './cellmap.js';
 import { protectFromAttrs, protectXml } from './protect.js';
@@ -425,9 +426,10 @@ function cleanFormula(f, opt = {}) {
 function* readSheet(files, path, ctx) {
   // 셀 데이터(sheetData)는 빠른 전용 스캐너로, 나머지는 일반 XML 파서로 읽음
   const xmlText = textOf(files[path]);
-  const sd = splitSheetData(xmlText);
+  const binRows = files.__xlsb?.rows.get(path); // xlsb: 셀은 바이너리에서 바로
+  const sd = binRows ? null : splitSheetData(xmlText);
   const root = parseXml(sd ? sd.rest : xmlText);
-  const sheetRows = sd ? scanRows(xmlText, sd.start, sd.end) : domRows(child(root, 'sheetData'));
+  const sheetRows = binRows ? binRows() : sd ? scanRows(xmlText, sd.start, sd.end) : domRows(child(root, 'sheetData'));
   const sheet = {
     cells: new CellMap(), colWidths: {}, rowHeights: {}, merges: [], cond: [], colStyles: {}, rowStyles: {},
     hiddenRows: {}, hiddenCols: {}, rowManual: {}, freeze: { rows: 0, cols: 0 }, filter: null, charts: [], images: [], shapes: [], validations: [], slicers: [],
@@ -503,7 +505,8 @@ function* readSheet(files, path, ctx) {
     const rowKey = `${r},`;
     for (const c of row.cells) {
       let cc;
-      if (c.attrs.r) {
+      if (c.cc !== undefined) cc = c.cc;
+      else if (c.attrs.r) {
         const ref = c.attrs.r;
         let n = 0;
         for (let i = 0; i < ref.length; i++) {
@@ -1497,8 +1500,12 @@ function pivotDefFrom(root, cache, tables, sheetName) {
   const tblOutline = root.attrs.outline !== '0';
   const fCompact = first ? first.attrs.compact !== '0' && tblCompact : tblCompact;
   const fOutline = first ? first.attrs.outline !== '0' && tblOutline : tblOutline;
+  // 열 영역에서 '값'(x=-2)의 위치 → valuesPos (맨 안쪽이면 생략)
+  const colAll = kids(child(root, 'colFields'), 'field').map((f) => Number(f.attrs.x)).filter((x) => x === -2 || (x >= 0 && x < names.length));
+  const vIdx = colAll.indexOf(-2);
   const def = {
     rows: rowF.map((f) => names[f]), cols: colF.map((f) => names[f]), values, pages: pageEls.map((p) => names[Number(p.attrs.fld)]),
+    ...(vIdx >= 0 && vIdx < colF.length ? { valuesPos: vIdx } : {}),
     layout: !fOutline ? 'tabular' : !fCompact ? 'outline' : 'compact',
   };
   if ([...rowF, ...colF].some((f) => pfs[f]?.attrs.defaultSubtotal === '0')) def.subtotals = false;
@@ -1717,6 +1724,8 @@ export async function readXlsxAsync(bytes, onProgress) {
 
 function* readXlsxSteps(files) {
   yield { p: 0.05, msg: '압축 푸는 중' };
+  // xlsb: 바이너리 부분을 같은 경로의 xlsx XML 로 바꾼 뒤 그대로 읽음 (큰 시트의 셀은 행 생성기로 바로)
+  if (isXlsb(files)) yield* convertXlsb(files);
   const wbPath = Object.keys(files).find((f) => /^xl\/workbook\.xml$/i.test(f))
     ?? relsTarget(files, '', 'officeDocument');
   if (!wbPath || !files[wbPath]) throw new Error('엑셀 통합 문서(.xlsx)가 아닙니다');
@@ -1726,7 +1735,7 @@ function* readXlsxSteps(files) {
   const { xfs, dxfs, tableStyles, wbFont, slicerStyles } = readStyles(files, wbRels, theme);
   const mdw = digitWidth(wbFont);
   const ssRel = Object.values(wbRels).find((r) => r.type === 'sharedStrings');
-  const strings = ssRel && files[ssRel.target] ? kids(parseXml(textOf(files[ssRel.target])), 'si').map(allText) : [];
+  const strings = files.__xlsb ? files.__xlsb.strings : ssRel && files[ssRel.target] ? kids(parseXml(textOf(files[ssRel.target])), 'si').map(allText) : [];
   // 이름 정의 (시트 범위 이름은 localSheetId → 시트 이름)
   const allSheetNames = kids(child(wbRoot, 'sheets'), 'sheet').map((sh) => sh.attrs.name.slice(0, 31));
   const names = [];
@@ -1783,6 +1792,7 @@ function* readXlsxSteps(files) {
   yield { p: 0.92, msg: "피벗 테이블 · 슬라이서 연결 중" };
   linkPivotsAndSlicers(files, wbRels, sheets, ctx);
   if (unsupported) warnings.push(`지원하지 않는 함수가 쓰인 수식 ${unsupported}개는 수식을 유지하고 파일에 저장된 계산 결과를 표시합니다.`);
+  if (files.__xlsb?.unsupported) warnings.push(`바이너리 통합 문서(.xlsb)에서 해석하지 못한 수식 ${files.__xlsb.unsupported}개는 저장된 계산 결과(값)로 가져왔습니다.`);
   warnings.push(...ctx.warnings);
   if (!sheets.length) throw new Error('가져올 시트가 없습니다');
   const data = { sheets };
@@ -2508,7 +2518,8 @@ function pivotParts(wb, si, def, cache, name, pool) {
   }
   // 열 항목
   const colXml = [];
-  const colFieldsAll = [...colF, ...(multiV ? [-2] : [])];
+  const vpos = multiV ? Math.max(0, Math.min(colF.length, d.valuesPos ?? colF.length)) : colF.length;
+  const colFieldsAll = multiV ? [...colF.slice(0, vpos), -2, ...colF.slice(vpos)] : [...colF];
   if (!colFieldsAll.length) colXml.push('<i/>');
   else {
     let prev = [];
@@ -2523,7 +2534,8 @@ function pivotParts(wb, si, def, cache, name, pool) {
         prev = [];
         continue;
       }
-      const xs = [...chain.map((n) => xOf(colF[n.depth], n.key)), ...(multiV ? [leaf.vi] : [])];
+      const cx = chain.map((n) => xOf(colF[n.depth], n.key));
+      const xs = multiV ? [...cx.slice(0, vpos), leaf.vi, ...cx.slice(vpos)] : cx;
       let r = 0;
       while (r < xs.length - 1 && r < prev.length && prev[r] === xs[r]) r++;
       colXml.push(`<i${r ? ` r="${r}"` : ''}${ia}>${xs.slice(r).map(xTag).join('')}</i>`);
@@ -2722,7 +2734,15 @@ export async function writeXlsxAsync(wb, opts, onProgress) {
   }
 }
 
-function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {}) {
+// 통합 문서 본문 형식: 일반 · 매크로 사용 · 서식 파일
+const MAIN_TYPES = {
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml',
+  xlsm: 'application/vnd.ms-excel.sheet.macroEnabled.main+xml',
+  xltx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.template.main+xml',
+  xltm: 'application/vnd.ms-excel.template.macroEnabled.main+xml',
+};
+
+function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = null } = {}) {
   const files = {};
   const pool = new StylePool(wb.defaultFont ?? WRITE_FONT, wb.baseStyle);
   const wmdw = digitWidth(pool.baseFont); // 파일의 열 너비 = 픽셀 ÷ 기본 글꼴 숫자 너비
@@ -2761,7 +2781,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {}) 
     return richList.length;
   };
   const definedNames = [];
-  const vba = wb.vba?.bin ? wb.vba : null;
+  const vba = wb.vba?.bin && kind !== 'xlsx' && kind !== 'xltx' ? wb.vba : null; // 매크로 없는 형식으로 저장하면 VBA 제외
   const nameSet = new Set((wb.names ?? []).map((n) => n.name.toUpperCase()));
   fileNameCheck = (n) => nameSet.has(String(n).toUpperCase());
   let dynamicCells = 0;
@@ -3302,7 +3322,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {}) 
   const now = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
   files['docProps/core.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:creator>WIXEL</dc:creator><dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified></cp:coreProperties>`;
   files['docProps/app.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>WIXEL</Application></Properties>`;
-  files['[Content_Types].xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/>${[...mediaExts].map((e) => `<Default Extension="${e}" ContentType="${MIME[e]}"/>`).join('')}${vba ? '<Default Extension="bin" ContentType="application/vnd.ms-office.vbaProject"/>' : ''}<Override PartName="/xl/workbook.xml" ContentType="${vba ? 'application/vnd.ms-excel.sheet.macroEnabled.main+xml' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml'}"/>${wb.sheets.map((s, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>${contentOverrides.join('')}</Types>`;
+  files['[Content_Types].xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/>${[...mediaExts].map((e) => `<Default Extension="${e}" ContentType="${MIME[e]}"/>`).join('')}${vba ? '<Default Extension="bin" ContentType="application/vnd.ms-office.vbaProject"/>' : ''}<Override PartName="/xl/workbook.xml" ContentType="${MAIN_TYPES[kind ?? (vba ? 'xlsm' : 'xlsx')] ?? MAIN_TYPES.xlsx}"/>${wb.sheets.map((s, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>${contentOverrides.join('')}</Types>`;
 
   // [Content_Types].xml 을 맨 앞에 두는 것이 관례
   const ordered = { '[Content_Types].xml': files['[Content_Types].xml'] };

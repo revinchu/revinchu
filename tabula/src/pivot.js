@@ -504,6 +504,7 @@ export function normalizeDef(def, header) {
     subtotalTop: def.subtotalTop !== false,
     rowCaption: def.rowCaption ?? null,
     colCaption: def.colCaption ?? null,
+    ...(Number.isInteger(def.valuesPos) ? { valuesPos: def.valuesPos } : {}),
     styleOpts: { rowHeaders: true, colHeaders: true, bandRows: false, bandCols: false, ...(def.styleOpts ?? {}) },
     header: allHeader,
   };
@@ -1189,6 +1190,33 @@ export function computePivot(input, d) {
   if (Lc && d.grandCols && V) {
     for (const vi of VI) colLeaves.push({ cp: '', vi, kind: 'grand', labels: [multiV ? `전체 ${valueName(values[vi])}` : TOTAL], node: colTree });
   }
+  // Σ 값 위치 (엑셀의 열 영역에서 '값'을 위아래로 옮긴 것): vp 번째 수준에 값 이름, 그보다 안쪽 항목은 값마다 반복
+  // 예) [월, 값] → 4월 지표들 · 5월 지표들 / [값, 월] → 지표마다 4월 · 5월이 나란히
+  const vp = multiV && Lc ? Math.max(0, Math.min(Lc, d.valuesPos ?? Lc)) : Lc;
+  if (vp < Lc) {
+    const groupOf = (leaf) => {
+      if (leaf.kind === 'grand') return '\u0002grand';
+      let n = leaf.node;
+      if (leaf.kind === 'sub' && n.depth < vp) return `${n.path}\u0001sub`;
+      while (n && n.depth > vp - 1) n = n.parent;
+      return n && n.depth >= 0 ? n.path : '';
+    };
+    const order = new Map();
+    const keyed = colLeaves.map((leaf, i) => {
+      const g = groupOf(leaf);
+      if (!order.has(g)) order.set(g, order.size);
+      return { leaf, i, g: order.get(g) };
+    });
+    keyed.sort((a, b) => a.g - b.g || a.leaf.vi - b.leaf.vi || a.i - b.i);
+    colLeaves.length = 0;
+    for (const { leaf } of keyed) {
+      if (leaf.kind === 'item') {
+        const vn = leaf.labels.pop();
+        leaf.labels.splice(vp, 0, vn);
+      } else if (leaf.kind === 'sub' && leaf.labels.length > vp) leaf.labels.splice(vp, 0, valueName(values[leaf.vi]));
+      colLeaves.push(leaf);
+    }
+  }
 
   const numStyle = (vi) => {
     if (vi < 0) return {};
@@ -1245,13 +1273,15 @@ export function computePivot(input, d) {
         const groupKey = leaf.labels.slice(0, lvl + 1).join('\u0001');
         const show = lab !== undefined && (lvl === colLevels - 1 || groupKey !== prev);
         prev = groupKey;
-        const role = leaf.kind === 'grand' ? `grandHead:${Math.max(0, leaf.vi)}` : leaf.kind === 'sub' ? 'colSubHead' : multiV && lvl === colLevels - 1 ? `valueHead:${leaf.vi}` : `colItem:${lvl}`;
+        const vLvl = multiV ? vp : -1; // 값 이름이 있는 머리글 수준
+        const cl = vLvl >= 0 && lvl > vLvl ? lvl - 1 : lvl; // 열 필드 수준
+        const role = leaf.kind === 'grand' ? `grandHead:${Math.max(0, leaf.vi)}` : leaf.kind === 'sub' ? 'colSubHead' : lvl === vLvl ? `valueHead:${leaf.vi}` : `colItem:${cl}`;
         const cell = text(show ? lab : '', role);
         // 펼치기 · 축소 단추: 하위 수준이 있는 열 항목
-        if (show && lab && leaf.kind === 'item' && lvl < Lc) {
+        if (show && lab && leaf.kind === 'item' && lvl !== vLvl && cl < Lc) {
           let n = leaf.node;
-          while (n && n.depth > lvl) n = n.parent;
-          const tg = n && n.depth === lvl ? toggleOf('c', n) : null;
+          while (n && n.depth > cl) n = n.parent;
+          const tg = n && n.depth === cl ? toggleOf('c', n) : null;
           if (tg) cell.toggle = { axis: 'c', ...tg };
         }
         row.push(cell);

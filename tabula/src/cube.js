@@ -521,6 +521,7 @@ function ensureRollup(cube, need, measures) {
     && measures.every((m) => {
       const s = ru.slotIndex.get(slotKey(m));
       if (s === undefined) return false;
+      if (!ru.agg) return true; // 조합이 너무 많아 롤업을 쓰지 않기로 한 경우 (측정값과 무관)
       const st = ru.agg.stats[s];
       return (!m.need?.sq || st.sq) && (!m.need?.mm || st.min) && (!m.need?.prod || st.prod);
     });
