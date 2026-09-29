@@ -197,30 +197,42 @@ export const PATTERNS = [
   ['lightHorizontal', '가는 가로 줄무늬'], ['lightVertical', '가는 세로 줄무늬'], ['lightDown', '가는 역대각선 줄무늬'], ['lightUp', '가는 대각선 줄무늬'], ['lightGrid', '가는 격자'], ['lightTrellis', '가는 대각선 격자'],
   ['darkHorizontal', '가로 줄무늬'], ['darkVertical', '세로 줄무늬'], ['darkDown', '역대각선 줄무늬'], ['darkUp', '대각선 줄무늬'], ['darkGrid', '격자'], ['darkTrellis', '대각선 격자'],
 ];
+// 엑셀 무늬 채우기의 픽셀 모양 (8×8, '1' = 무늬 색). 부드러운 그라데이션은 번져서 실제보다 진해 보임
+const PATTERN_BITS = {
+  gray0625: ['10000000', '00000000', '00001000', '00000000', '10000000', '00000000', '00001000', '00000000'],
+  gray125: ['10001000', '00000000', '00100010', '00000000', '10001000', '00000000', '00100010', '00000000'],
+  lightGray: ['10001000', '00100010', '10001000', '00100010', '10001000', '00100010', '10001000', '00100010'],
+  mediumGray: ['10101010', '01010101', '10101010', '01010101', '10101010', '01010101', '10101010', '01010101'],
+  darkGray: ['11101110', '10111011', '11101110', '10111011', '11101110', '10111011', '11101110', '10111011'],
+  lightHorizontal: ['11111111', '00000000', '00000000', '00000000', '11111111', '00000000', '00000000', '00000000'],
+  darkHorizontal: ['11111111', '11111111', '00000000', '00000000', '11111111', '11111111', '00000000', '00000000'],
+  lightVertical: ['10001000', '10001000', '10001000', '10001000', '10001000', '10001000', '10001000', '10001000'],
+  darkVertical: ['11001100', '11001100', '11001100', '11001100', '11001100', '11001100', '11001100', '11001100'],
+  lightDown: ['10001000', '01000100', '00100010', '00010001', '10001000', '01000100', '00100010', '00010001'],
+  darkDown: ['11001100', '01100110', '00110011', '10011001', '11001100', '01100110', '00110011', '10011001'],
+  lightUp: ['00010001', '00100010', '01000100', '10001000', '00010001', '00100010', '01000100', '10001000'],
+  darkUp: ['00110011', '01100110', '11001100', '10011001', '00110011', '01100110', '11001100', '10011001'],
+  lightGrid: ['11111111', '10001000', '10001000', '10001000', '11111111', '10001000', '10001000', '10001000'],
+  darkGrid: ['11111111', '11111111', '11001100', '11001100', '11111111', '11111111', '11001100', '11001100'],
+  lightTrellis: ['10011001', '01100110', '01100110', '10011001', '10011001', '01100110', '01100110', '10011001'],
+  darkTrellis: ['11111111', '01100110', '11111111', '10011001', '11111111', '01100110', '11111111', '10011001'],
+};
+const patternMemo = new Map();
 export function patternCss(p, fg, bg) {
   const b = bg || 'transparent';
-  const dots = (size, r) => `radial-gradient(${fg} ${r}px, transparent ${r + 0.4}px) 0 0 / ${size}px ${size}px, ${b}`;
-  const lines = (angle, w, gap) => `repeating-linear-gradient(${angle}deg, ${fg} 0 ${w}px, ${b} ${w}px ${gap}px)`;
-  switch (p) {
-    case 'gray0625': return dots(8, 0.6);
-    case 'gray125': return dots(4, 0.6);
-    case 'lightGray': return dots(3, 0.7);
-    case 'mediumGray': return `repeating-conic-gradient(${fg} 0 25%, ${b} 0 50%) 0 0 / 2px 2px`;
-    case 'darkGray': return `repeating-conic-gradient(${fg} 0 25%, ${fg}bb 0 50%) 0 0 / 2px 2px, ${b}`;
-    case 'lightHorizontal': return lines(0, 1, 4);
-    case 'darkHorizontal': return lines(0, 2, 4);
-    case 'lightVertical': return lines(90, 1, 4);
-    case 'darkVertical': return lines(90, 2, 4);
-    case 'lightDown': return lines(45, 1, 4);
-    case 'darkDown': return lines(45, 2, 4);
-    case 'lightUp': return lines(-45, 1, 4);
-    case 'darkUp': return lines(-45, 2, 4);
-    case 'lightGrid': return `${lines(0, 1, 4)}, ${lines(90, 1, 4)}`;
-    case 'darkGrid': return `${lines(0, 2, 4)}, ${lines(90, 2, 4)}`;
-    case 'lightTrellis': return `${lines(45, 1, 4)}, ${lines(-45, 1, 4)}`;
-    case 'darkTrellis': return `${lines(45, 2, 4)}, ${lines(-45, 2, 4)}`;
-    default: return b;
+  const bits = PATTERN_BITS[p];
+  if (!bits) return b;
+  const key = `${p}|${fg}|${b}`;
+  let css = patternMemo.get(key);
+  if (!css) {
+    let d = '';
+    bits.forEach((row, y) => { for (let x = 0; x < 8; x++) if (row[x] === '1') d += `M${x} ${y}h1v1h-1z`; });
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8' shape-rendering='crispEdges'>${bg ? `<rect width='8' height='8' fill='${bg}'/>` : ''}<path d='${d}' fill='${fg}'/></svg>`;
+    // 따옴표 없는 url(): 셀 style="" 속성 안에 들어가므로 ' ( ) 도 인코딩
+    css = `url(data:image/svg+xml,${encodeURIComponent(svg).replace(/['()]/g, (ch) => `%${ch.charCodeAt(0).toString(16)}`)}) 0 0 / 8px 8px`;
+    patternMemo.set(key, css);
   }
+  return css;
 }
 
 /** 슬라이서 단추 글자가 잘리면 단추 크기에 맞게 글자를 줄임 (최소 60%) */
@@ -765,6 +777,9 @@ export class GridView {
     }
     else if (style.pattern) css.push(`background:${patternCss(style.pattern, style.patternColor ?? '#000000', bg)}`);
     else if (bg) css.push(`background-color:${bg}`);
+    // 채우기는 칸 둘레의 눈금선까지 덮음 (엑셀: 채운 칸끼리는 사이 선이 없음) — 대신 덮이는 이웃 칸의 테두리는 이 칸이 다시 그림
+    const covers = !bar && !!(bg || style.pattern);
+    if (covers) css.push('background-clip:border-box');
     // 테두리: 색 · 선 종류(가는 선 · 중간 · 굵게 · 점선 · 이중선)까지 엑셀처럼
     // 이웃 칸과 겹치는 선은 한 번만 (엑셀처럼): 위 칸의 아래쪽 · 왼쪽 칸의 오른쪽 선이 같거나 더 굵으면 이 칸의 위 · 왼쪽 선은 생략
     const weight = (k) => (BORDER_CSS[k ?? 'thin'] ?? BORDER_CSS.thin)[0];
@@ -776,9 +791,20 @@ export class GridView {
       const k = side === 'top' ? 'bb' : 'br';
       return !!ns?.[k] && weight(ns[`${k}s`]) >= weight(style[side === 'top' ? 'bts' : 'bls']);
     };
+    // 위 · 왼쪽 이웃의 아래 · 오른쪽 테두리 (채운 칸이 덮어 버리므로 대신 그림)
+    const nbBorder = (side) => {
+      const nr = side === 'top' ? r - 1 : r;
+      const nc = side === 'top' ? c : c - 1;
+      if (nr < 0 || nc < 0 || (merge && (side === 'top' ? merge.r1 : merge.c1) !== (side === 'top' ? r : c))) return null;
+      const ns = wb.styleAt(si, nr, nc);
+      const k = side === 'top' ? 'bb' : 'br';
+      return ns?.[k] ? borderCss(side, ns[`${k}s`], ns[`${k}c`]) : null;
+    };
     if (style.bt && !shared('top')) css.push(borderCss('top', style.bts, style.btc));
+    else if (covers) { const b = nbBorder('top'); if (b) css.push(b); }
     if (style.bb) css.push(borderCss('bottom', style.bbs, style.bbc));
     if (style.bl && !shared('left')) css.push(borderCss('left', style.bls, style.blc));
+    else if (covers) { const b = nbBorder('left'); if (b) css.push(b); }
     if (style.br) css.push(borderCss('right', style.brs, style.brc));
     const cls = [];
     // 숫자는 자동 줄 바꿈이어도 한 줄 (엑셀: 들어가지 않으면 ###)

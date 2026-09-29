@@ -23,6 +23,7 @@ import { setThemeColors } from './stylepresets.js';
 import { readXlsxAsync, writeXlsxAsync, xlsxOverflow } from './xlsx.js';
 import { readOds, writeOds } from './ods.js';
 import { readXls } from './xls.js';
+import { CellMap } from './cellmap.js';
 import { CHART_TYPES, CHART_GALLERY, CHART_PALETTES, PALETTE, paletteOf, renderChartSvg, chartModelData } from './chart.js';
 import {
   computePivot, warmPivots, AGGREGATES, SHOW_AS, BASE_POS, LAYOUTS, pivotSourceData, resolvePivot, itemText, headerNames, normalizeDef, valueName,
@@ -7011,6 +7012,7 @@ const pivotItemText = itemText;
  * def.captureFmt(파일에서 가져온 피벗): 처음 한 번 지금 셀의 서식을 역할별로 기억해 두고(def.cellFmt) 다시 그릴 때도 유지
  */
 /** 피벗 기본 서식 위에 파일에서 가져온 서식을 덮음 — 표시 형식은 통째로 바꿈 (소수 자릿수 · 사용자 코드가 섞이지 않게) */
+const NO_STYLE = {};
 function mergeFmt(base, extra) {
   const out = { ...base };
   if ('numFmt' in extra) { delete out.decimals; delete out.code; }
@@ -7285,16 +7287,26 @@ function writePivot(targetSi, def, { autofit = true } = {}) {
     const fmt = { ...(def.cellFmt ?? {}) };
     // 역할마다 가장 많이 쓰인 서식 (첫 칸만 보면 강조한 한 행의 굵게 등이 본문 전체로 번짐)
     const votes = new Map();
+    const voteMemo = new WeakMap();
     grid.forEach((row, r) => row.forEach((cd, c) => {
       if (!cd?.role || cd.role === 'empty' || def.cellFmt?.[cd.role]) return;
       const fc = t.cells.getRC(top + r, left + c);
       const own = fc?.style;
       let f = null;
-      if (own && Object.keys(own).length) f = { ...(cd.style?.numFmt ? { numFmt: 'general' } : {}), ...own };
+      let key;
+      if (own && Object.keys(own).length) {
+        // 파일 서식 객체는 xf 마다 공유되므로 (서식, 기본 형식 여부) 쌍마다 한 번만 만듦
+        const gen = !!cd.style?.numFmt;
+        let pair = voteMemo.get(own);
+        if (!pair) voteMemo.set(own, (pair = []));
+        let hit = pair[gen ? 1 : 0];
+        if (!hit) { const ff = { ...(gen ? { numFmt: 'general' } : {}), ...own }; hit = pair[gen ? 1 : 0] = { f: ff, key: JSON.stringify(ff) }; }
+        f = hit.f;
+        key = hit.key;
       // 파일 셀이 "일반" 형식이면 피벗 기본 표시 형식을 쓰지 않음 (엑셀 화면과 같게)
-      else if (fc && fc.raw !== '' && cd.style?.numFmt) f = { numFmt: 'general' };
+      } else if (fc && fc.raw !== '' && cd.style?.numFmt) f = { numFmt: 'general' };
       else if (!fc) return;
-      const key = JSON.stringify(f);
+      key ??= JSON.stringify(f);
       let m = votes.get(cd.role);
       if (!m) votes.set(cd.role, (m = new Map()));
       const e = m.get(key);
@@ -7318,11 +7330,10 @@ function writePivot(targetSi, def, { autofit = true } = {}) {
     let changedFmt = false;
     grid.forEach((row, r) => row.forEach((cd, c) => {
       if (!cd?.role || cd.role === 'empty') return;
-      const k = `${top + r},${left + c}`;
-      const was = written.get(k);
+      const was = written.getRC(top + r, left + c);
       const now = t.cells.getRC(top + r, left + c)?.style;
-      if (was === undefined || !now) return;
-      const prev = JSON.parse(was || '{}');
+      if (was === undefined || !now || now === was) return;
+      const prev = was;
       const diff = {};
       for (const key of Object.keys(now)) if (JSON.stringify(now[key]) !== JSON.stringify(prev[key])) diff[key] = now[key];
       if (Object.keys(diff).length) { fmt[cd.role] = { ...(fmt[cd.role] ?? {}), ...diff }; changedFmt = true; }
@@ -7334,15 +7345,21 @@ function writePivot(targetSi, def, { autofit = true } = {}) {
   // 레이블 셀 병합: 이전 영역의 병합은 먼저 풂
   if (a) for (const m of wb.mergesIn(targetSi, a.r1, a.c1, a.r2, a.c2)) if (m.r1 >= a.r1 && m.c1 >= a.c1 && m.r2 <= a.r2 && m.c2 <= a.c2) wb.unmerge(targetSi, m.r1, m.c1, m.r2, m.c2);
   // 처음 그리는 피벗(이전 영역 없음)은 아무것도 지우지 않음 — 같은 시트의 다른 피벗 · 내용을 보존
-  const inOld = (r, c) => (a ? r >= a.r1 && r <= a.r2 && c >= a.c1 && c <= a.c2 : false);
   const nr2 = top + grid.length - 1;
   const nc2 = left + Math.max(0, colsN - 1);
-  if (a) for (const k of [...t.cells.keys()]) {
-    const i = k.indexOf(',');
-    const r = +k.slice(0, i);
-    const c = +k.slice(i + 1);
+  if (a) {
+    // 이전 영역의 열만 훑음 (시트 전체 칸을 문자열 키로 훑지 않게)
+    const gone = [];
+    for (let c = a.c1; c <= a.c2; c++) {
+      const col = t.cells.col(c);
+      if (col) for (const r of col.keys()) if (r >= a.r1 && r <= a.r2) gone.push(r, c);
+    }
     // 새 결과 영역 안의 셀은 아래에서 덮어쓰므로 지우지 않음 (실행 취소 기록이 두 번 생기지 않게)
-    if (inOld(r, c) && !(r >= top && r <= nr2 && c >= left && c <= nc2)) wb.setCellData(targetSi, r, c, null);
+    for (let i = 0; i < gone.length; i += 2) {
+      const r = gone[i];
+      const c = gone[i + 1];
+      if (!(r >= top && r <= nr2 && c >= left && c <= nc2)) wb.setCellData(targetSi, r, c, null);
+    }
   }
   if (!def.area || def.area.c1 !== left || def.area.c2 !== nc2) wb.dropGraph();
   def.area = { r1: top, c1: left, r2: nr2, c2: nc2 };
@@ -7354,7 +7371,7 @@ function writePivot(targetSi, def, { autofit = true } = {}) {
       const cd = row[c];
       const rr = top + r;
       const cc = left + c;
-      if (!cd || (!cd.raw && !cd.style && !cd.image)) { if (t.cells.has(`${rr},${cc}`)) wb.setCellData(targetSi, rr, cc, null); continue; }
+      if (!cd || (!cd.raw && !cd.style && !cd.image)) { if (t.cells.hasRC(rr, cc)) wb.setCellData(targetSi, rr, cc, null); continue; }
       const extra = cellFmt[cd.role];
       wb.setCellData(targetSi, rr, cc, { raw: cd.raw, style: extra ? mergeFmt(cd.style, extra) : cd.style, ...(cd.image ? { image: cd.image } : {}) });
       // 필터 단추: 행 레이블 머리글, 열 레이블 머리글, 보고서 필터 값
@@ -7388,8 +7405,9 @@ function writePivot(targetSi, def, { autofit = true } = {}) {
     }
   }
   // 이번에 그린 서식 기억 (다음 업데이트에서 사용자가 바꾼 칸을 찾음)
-  const wm = new Map();
-  grid.forEach((row, r) => row.forEach((cd, c) => { if (cd?.role) wm.set(`${top + r},${left + c}`, JSON.stringify(t.cells.getRC(top + r, left + c)?.style ?? {})); }));
+  const wm = new CellMap();
+  // 셀 서식은 바꿀 때 새 객체로 교체되므로 객체 자체를 기억 (같은 객체면 바뀌지 않은 것)
+  grid.forEach((row, r) => row.forEach((cd, c) => { if (cd?.role) wm.setRC(top + r, left + c, t.cells.getRC(top + r, left + c)?.style ?? NO_STYLE); }));
   pivotWritten.set(wkey, wm);
   if (autofit && !pm.empty) {
     for (let c = 0; c < colsN; c++) {
@@ -9147,6 +9165,7 @@ async function loadWorkbookAsync(data, name, activeSheet, prog) {
   warmAll();
   // 모든 피벗의 바뀐 칸을 모았다가 끝에서 한 번에 의존 수식을 찾음 (피벗마다 수십만 수식을 훑지 않게)
   wb.holdDirty = true;
+  wb.noUndo = true;
   openingPivots = true;
   // 피벗마다 화면 전체를 다시 그리지 않게 (afterLoad 에서 한 번 그림)
   const listeners = wb.listeners;
@@ -9163,6 +9182,7 @@ async function loadWorkbookAsync(data, name, activeSheet, prog) {
     openingPivots = false;
     wb.listeners = listeners;
     wb.holdDirty = false;
+    wb.noUndo = false;
     wb.flushPending();
   }
   afterLoad(name, activeSheet);

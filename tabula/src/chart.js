@@ -128,6 +128,35 @@ function flatRef(rows, asText) {
 }
 
 /**
+ * 여러 열(또는 행)로 된 항목 범위 → 엑셀의 다단계 항목 축
+ * 안쪽 이름(마지막 열)이 항목, 바깥 열은 값이 있는 칸에서 새 묶음이 시작됨 (병합된 칸은 첫 칸에만 값)
+ * 반환: { categories, levels: [[{ text, start, end }]] (안쪽 → 바깥) } | null
+ */
+function multiLevel(rows, n) {
+  if (!rows || rows.length < 2 || rows[0].length < 2) return null;
+  // 계열 값 개수와 맞는 쪽이 항목 방향
+  let grid = rows;
+  if (rows.length !== n && rows[0].length === n) grid = rows[0].map((_, c) => rows.map((r) => r[c]));
+  const depth = grid[0].length;
+  const txt = (v) => (v === null || v === undefined ? '' : String(v));
+  const categories = grid.map((r) => txt(r[depth - 1]));
+  const levels = [];
+  for (let d = depth - 2; d >= 0; d--) {
+    const spans = [];
+    grid.forEach((r, i) => {
+      const t = txt(r[d]);
+      // 더 바깥 단계에서 새 묶음이 시작되면 이 단계도 새로 시작
+      const outerBreak = r.slice(0, d).some((v) => txt(v) !== '');
+      if (i === 0 || t !== '' || outerBreak) spans.push({ text: t, start: i, end: i });
+      else spans[spans.length - 1].end = i;
+    });
+    levels.push(spans);
+  }
+  if (!levels.some((l) => l.some((sp) => sp.text !== ''))) return null;
+  return { categories, levels };
+}
+
+/**
  * 차트 모델 → 그릴 데이터 { categories, series: [{ name, values, x, type, axis, color, labels, marker, numFmt }] }
  * api: { values(ref) → 2차원 값, pivot({ sheet, name }) → { categories, series } | null, range(ch) → 2차원 값 }
  */
@@ -146,18 +175,22 @@ export function resolveChart(ch, api) {
     const catRef = ch.series.find((s) => s.cat)?.cat;
     const series = ch.series.map((s, i) => {
       const vals = s.val ? flatRef(api.values(s.val), false) : s.cache ?? [];
-      const name = s.name?.ref ? label(flatRef(api.values(s.name.ref), true)[0]) : s.name?.text ?? `계열${i + 1}`;
+      // 이름이 여러 칸이면 빈 칸(병합 안쪽)을 빼고 공백으로 이어 붙임 (엑셀과 같음)
+      const name = s.name?.ref ? flatRef(api.values(s.name.ref), true).map(label).filter((t) => t !== '').join(' ') : s.name?.text ?? `계열${i + 1}`;
       const xs = s.x ? flatRef(api.values(s.x), false) : null;
       const size = s.size ? flatRef(api.values(s.size), false).map((v) => (isNum(v) ? v : null)) : null;
       return { name, values: vals.map((v) => (isNum(v) ? v : null)), x: xs ? xs.map((v) => (isNum(v) ? v : null)) : null, ...(size ? { size } : {}) };
     });
     const n = Math.max(0, ...series.map((s) => s.values.length));
-    const categories = catRef ? (api.texts ? flatRef(api.texts(catRef), true) : flatRef(api.values(catRef), true).map(label)) : Array.from({ length: n }, (_, i) => String(i + 1));
-    base = { categories, series };
+    const catRows = catRef ? (api.texts ? api.texts(catRef) : api.values(catRef)?.map((r) => r.map(label))) : null;
+    const multi = multiLevel(catRows, n);
+    const categories = multi ? multi.categories : catRef ? (api.texts ? flatRef(catRows, true) : flatRef(api.values(catRef), true).map(label)) : Array.from({ length: n }, (_, i) => String(i + 1));
+    base = { categories, series, ...(multi ? { catLevels: multi.levels } : {}) };
   } else base = chartData(api.range(ch), ch.type === 'combo' ? 'column' : ch.type, !!ch.byRows);
   const fmt = ch.seriesFmt ?? [];
   const comboDefault = (i) => (ch.type === 'combo' ? (i === base.series.length - 1 && base.series.length > 1 ? { type: 'line', axis: 1 } : { type: 'column' }) : {});
-  base.series = base.series.map((s, i) => ({ ...s, ...comboDefault(i), ...(fmt[i] ?? {}) }));
+  // 계열 형식에 종류가 정해져 있으면 축도 그 형식대로 (axis 가 없으면 기본 축) — 파일의 콤보 차트에서 마지막 계열을 보조 축으로 보내지 않게
+  base.series = base.series.map((s, i) => ({ ...s, ...(fmt[i]?.type ? { axis: 0 } : comboDefault(i)), ...(fmt[i] ?? {}) }));
   return base;
 }
 
@@ -310,6 +343,9 @@ export function renderChartSvg(chart, data) {
   const finish = () => { if (defs.length) parts[1] = `<defs>${defs.join('')}</defs>`; parts.push('</svg>'); return parts.join(''); };
   const { categories } = data;
   const baseType = chart.type === 'combo' ? 'column' : chart.type;
+  // 다단계 항목 축 (세로 막대 · 꺾은선 · 콤보): 안쪽 이름 아래에 바깥 묶음 이름 줄
+  const catLevels = baseType !== 'bar' && baseType !== 'scatter' && !chart.axes?.x?.hide ? data.catLevels ?? [] : [];
+  const LEVEL_H = Math.round(FS.axis * 1.6);
   const series = data.series.map((s, i) => ({ ...s, type: s.type ?? baseType, axis: s.axis ?? 0, color: s.color ?? pal[i % pal.length] }));
   const pieLike = baseType === 'pie' || baseType === 'doughnut';
   const special = SPECIAL[baseType];
@@ -488,7 +524,7 @@ export function renderChartSvg(chart, data) {
     : (() => {
       // 데이터 표가 있으면 왼쪽에 계열 이름이 들어갈 자리
       const lw = hasTable ? Math.max(labelW, Math.min(140, maxOf(series.map((s) => [...String(s.name)].length)) * CW * 1.25 + 24)) : labelW;
-      return { x: plot.x + lw, y: plot.y + 4, w: plot.w - lw - 6 - label2W, h: plot.h - Math.round(FS.axis * 1.9) };
+      return { x: plot.x + lw, y: plot.y + 4, w: plot.w - lw - 6 - label2W, h: plot.h - Math.round(FS.axis * 1.9) - (hasTable ? 0 : catLevels.length * LEVEL_H) };
     })();
   if (area.w < 20 || area.h < 20) return finish();
   // 값 축 거꾸로 (엑셀 축 서식 '값을 거꾸로')
@@ -564,6 +600,22 @@ export function renderChartSvg(chart, data) {
       if (horizontal) parts.push(`<text x="${area.x - 5}" y="${(mid + 3.5).toFixed(1)}" text-anchor="end" font-size="${FS.axis}" fill="${TXT}">${escSvg(truncate(c, 16))}</text>`);
       else parts.push(`<text x="${mid.toFixed(1)}" y="${area.y + area.h + Math.round(FS.axis * 1.35)}" text-anchor="middle" font-size="${FS.axis}" fill="${TXT}">${escSvg(truncate(c, maxChars * every))}</text>`);
     });
+    if (catLevels.length && !horizontal && !hasTable) {
+      // 묶음 경계선은 항목 축에서 해당 단계 줄 아래까지
+      const y0 = area.y + area.h;
+      catLevels.forEach((spans, k) => {
+        const yText = y0 + Math.round(FS.axis * 1.35) + (k + 1) * LEVEL_H;
+        const yEnd = y0 + (k + 1) * LEVEL_H + Math.round(FS.axis * 0.6);
+        for (const sp of spans) {
+          const x1 = area.x + band * sp.start;
+          const w = band * (sp.end - sp.start + 1);
+          parts.push(`<line x1="${x1.toFixed(1)}" y1="${y0}" x2="${x1.toFixed(1)}" y2="${yEnd}" stroke="${GRID}"/>`);
+          if (sp.text) parts.push(`<text x="${(x1 + w / 2).toFixed(1)}" y="${yText}" text-anchor="middle" font-size="${FS.axis}" fill="${TXT}">${escSvg(truncate(sp.text, Math.max(2, Math.floor(w / (CW * 1.4)))))}</text>`);
+        }
+        const xr = area.x + area.w;
+        parts.push(`<line x1="${xr.toFixed(1)}" y1="${y0}" x2="${xr.toFixed(1)}" y2="${yEnd}" stroke="${GRID}"/>`);
+      });
+    }
     // 막대 (묶은 · 누적)
     const bars = series.filter((s) => barTypes.has(s.type));
     if (bars.length) {

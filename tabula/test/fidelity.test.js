@@ -125,3 +125,39 @@ test('WIXEL 모던 스타일: 표 · 피벗 · 슬라이서가 xlsx 사용자 �
   assert.equal(back.sheets[0].tables[0].style, 'WixelTableModern2');
   assert.equal(back.sheets[0].slicers[0].style, 'WixelSlicerSolid3');
 });
+
+test('콤보 차트: 다단계 항목 축 · 여러 칸 계열 이름 · 파일의 축 배정 · 조건 범위 COUNTIF', async () => {
+  const { resolveChart, chartModelData } = await import('../src/chart.js');
+  const wb = new Workbook();
+  const put = (r, c, v) => wb.setInput(0, r, c, v);
+  put(0, 2, '매출'); put(1, 2, '진척');           // 이름 두 칸: 위는 병합 바깥쪽 빈 칸처럼 값 하나만
+  put(1, 3, '수익');
+  put(2, 0, '1본부'); put(2, 1, '1월'); put(3, 1, '2월'); put(4, 0, '2본부'); put(4, 1, '1월');
+  [[2, 10, 100], [3, 20, 200], [4, 30, 300]].forEach(([r, a, b]) => { put(r, 2, String(a)); put(r, 3, String(b)); });
+  const ref = (r1, c1, r2, c2) => ({ sheet: 'Sheet1', r1, c1, r2, c2 });
+  const ch = {
+    type: 'combo', w: 400, h: 300,
+    series: [
+      { name: { ref: ref(0, 2, 1, 2) }, cat: ref(2, 0, 4, 1), val: ref(2, 2, 4, 2) },
+      { name: { ref: ref(0, 3, 1, 3) }, cat: ref(2, 0, 4, 1), val: ref(2, 3, 4, 3) },
+    ],
+    seriesFmt: [{ type: 'column', axis: 1 }, { type: 'line' }],
+  };
+  wb.sheets[0].charts = [ch];
+  const d = chartModelData(wb, 0, ch);
+  assert.deepEqual(d.categories, ['1월', '2월', '1월']);
+  assert.deepEqual(d.catLevels, [[{ text: '1본부', start: 0, end: 1 }, { text: '2본부', start: 2, end: 2 }]]);
+  assert.deepEqual(d.series.map((s) => s.name), ['매출 진척', '수익']);
+  assert.deepEqual(d.series.map((s) => s.axis), [1, 0]); // 마지막 계열도 파일대로 기본 축
+  const svg = renderChartSvg(ch, d);
+  assert.match(svg, />1본부</);
+  assert.match(svg, />2본부</);
+  assert.equal(typeof resolveChart, 'function');
+
+  // 조건 자리에 범위 → 조건마다 개수 (고유 개수 공식)
+  put(6, 0, 'a'); put(6, 1, 'b'); put(6, 2, 'a');
+  put(7, 0, '=SUMPRODUCT((A7:D7<>"")/(1-(A7:D7<>"")+COUNTIF(A7:D7,A7:D7)))');
+  assert.equal(wb.getValue(0, 7, 0), 2);
+  put(8, 0, '=SUMPRODUCT(COUNTIFS(A7:C7,{"a","b"}))');
+  assert.equal(wb.getValue(0, 8, 0), 3);
+});

@@ -26,8 +26,11 @@ function cleanStyle(style) {
   const hit = cleanMemo.get(style);
   if (hit !== undefined) return hit || undefined;
   let any = false;
-  for (const k in style) { any = true; break; } // eslint-disable-line no-unused-vars
+  let holes = false;
+  for (const k in style) { any = true; const v = style[k]; if (v === undefined || v === null) { holes = true; break; } }
   if (!any) return undefined;
+  // 빈 값이 없으면 그대로 씀 (피벗을 그릴 때 백만 칸의 서식을 복사하지 않게)
+  if (!holes) return style;
   const out = {};
   for (const [k, v] of Object.entries(style)) if (v !== undefined && v !== null) out[k] = v;
   const res = Object.keys(out).length ? out : undefined;
@@ -241,7 +244,6 @@ function blockCellValue(v) {
   if (v && typeof v === 'object') return ERR[Object.keys(ERR).find((k) => ERR[k].code === v.error)] ?? ERR.NA;
   return v;
 }
-const sameStyle = (a, b) => a === b || (!a && !b) || (!!a && !!b && JSON.stringify(a) === JSON.stringify(b));
 
 /** 저장 형태 {raw, style, comment} → 계산용 셀 객체 */
 export function makeCell(data, k = null) {
@@ -289,6 +291,32 @@ export function makeCellRC(data, r, c) {
 const sameValue = (a, b) => a === b
   || (typeof a === 'number' && typeof b === 'number' && a.toPrecision(15) === b.toPrecision(15))
   || (a !== null && b !== null && typeof a === 'object' && typeof b === 'object' && a.constructor === b.constructor && String(a) === String(b));
+
+// 서식 비교: 같은 객체거나 키 · 값이 같으면 같음 (키 순서는 상관없음)
+function sameStyle(a, b) {
+  if (a === b) return true;
+  if (!a || !b) return !a && !b;
+  let n = 0;
+  for (const k in a) {
+    n++;
+    const x = a[k];
+    const y = b[k];
+    if (x !== y && !(x && y && typeof x === 'object' && typeof y === 'object' && JSON.stringify(x) === JSON.stringify(y))) return false;
+  }
+  for (const k in b) n--; // eslint-disable-line no-unused-vars
+  return n === 0;
+}
+const savedCached = (c) => (c.cached !== undefined && c.formula && !c.dirty ? c.cached : undefined);
+/** 두 셀의 저장 형태(cellData)가 같은지 — cellData 를 만들어 JSON 으로 비교하는 것과 같지만 훨씬 빠름 */
+function sameCell(a, b) {
+  if (!a || !b) return !a && !b;
+  if (a.raw !== b.raw || (a.comment || null) !== (b.comment || null) || (a.link || null) !== (b.link || null) || !!a.fx !== !!b.fx) return false;
+  if (!sameStyle(a.style, b.style)) return false;
+  if ((a.image || b.image) && JSON.stringify(a.image ?? null) !== JSON.stringify(b.image ?? null)) return false;
+  const ca = savedCached(a);
+  const cb = savedCached(b);
+  return ca === cb || JSON.stringify(ca) === JSON.stringify(cb);
+}
 
 export function cellData(cell) {
   if (!cell) return null;
@@ -1456,11 +1484,10 @@ export class Workbook {
   /** 셀 전체 교체 (data = {raw, style, comment} 또는 null) */
   setCellData(si, r, c, data) {
     const cur = this.getCell(si, r, c);
-    const before = cur ? cellData(cur) : null;
     const cell = makeCellRC(data, r, c);
-    const after = cell ? cellData(cell) : null;
-    if (before === null ? after === null : after !== null && before.raw === after.raw && JSON.stringify(before) === JSON.stringify(after)) return;
-    this.record({ t: 'cell', si, r, c, before, after });
+    if (sameCell(cur, cell)) return;
+    // noUndo: 파일을 여는 중(피벗 다시 그리기) — 실행 취소 기록은 끝나면 비우므로 셀 내용 복사를 만들지 않음
+    this.record(this.noUndo ? { t: 'cell', si, r, c } : { t: 'cell', si, r, c, before: cur ? cellData(cur) : null, after: cell ? cellData(cell) : null });
     this.putCell(si, r, c, cell);
     // 서식만 바뀐 값 칸 (피벗 다시 그리기 등): 값이 같으니 참조하는 수식을 다시 계산하지 않음 (엑셀도 서식 변경은 재계산 안 함)
     if (cur && cell && !cur.formula && !cell.formula && !cur.image && !cell.image && sameValue(cur.v, cell.v)) {

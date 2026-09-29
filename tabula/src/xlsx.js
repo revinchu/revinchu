@@ -2441,7 +2441,13 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
     const labels = dLbls(pie && sr.labels === false ? false : sr.labels ?? chart.labels, code, pieP, pie ? null : sr.labelPos);
     const cats = data.categories;
     const catTag = scatter ? 'xVal' : 'cat';
-    const cat = sr.cat
+    // 다단계 항목 (여러 열의 항목 범위): 안쪽 → 바깥 순서의 lvl
+    const lvls = !scatter && sr.cat && data.catLevels?.length
+      ? [cats.map((v, k) => ({ k, v })), ...data.catLevels.map((spans) => spans.filter((sp) => sp.text !== '').map((sp) => ({ k: sp.start, v: sp.text })))]
+      : null;
+    const cat = lvls
+      ? `<c:cat><c:multiLvlStrRef><c:f>${esc(sr.cat)}</c:f><c:multiLvlStrCache><c:ptCount val="${cats.length}"/>${lvls.map((pts) => `<c:lvl>${pts.map((x) => `<c:pt idx="${x.k}"><c:v>${esc(x.v)}</c:v></c:pt>`).join('')}</c:lvl>`).join('')}</c:multiLvlStrCache></c:multiLvlStrRef></c:cat>`
+      : sr.cat
       ? `<c:${catTag}><c:strRef><c:f>${esc(sr.cat)}</c:f>${strCache(cats)}</c:strRef></c:${catTag}>`
       : cats.length ? `<c:${catTag}><c:strLit><c:ptCount val="${cats.length}"/>${cats.map((v, k) => `<c:pt idx="${k}"><c:v>${esc(v)}</c:v></c:pt>`).join('')}</c:strLit></c:${catTag}>` : '';
     const valTag = scatter ? 'yVal' : 'val';

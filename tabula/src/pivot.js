@@ -384,7 +384,15 @@ function makeMeasures(header, values, calcFields) {
   const cols = [];
   const slot = new Map();
   const need = (col) => { if (!slot.has(col)) { slot.set(col, cols.length); cols.push(col); } return slot.get(col); };
-  const baseIdx = (name) => header.findIndex((h) => lower(h) === lower(name) && !calcByName.has(lower(h)));
+  // 이름 → 원본 열 번호 (계산 필드를 칸마다 계산하므로 한 번만 찾음)
+  const idxMemo = new Map();
+  const baseIdx = (name) => {
+    let i = idxMemo.get(name);
+    if (i === undefined) { i = header.findIndex((h) => lower(h) === lower(name) && !calcByName.has(lower(h))); idxMemo.set(name, i); }
+    return i;
+  };
+  const calcMemo = new Map();
+  const calcOf = (name) => { let c = calcMemo.get(name); if (c === undefined) { c = calcByName.get(lower(name)) ?? null; calcMemo.set(name, c); } return c; };
   const specs = values.map((v) => {
     const c = calcByName.get(lower(v.field));
     if (c) {
@@ -404,7 +412,7 @@ function makeMeasures(header, values, calcFields) {
     if (depth > 20) return CALC_ERR('#REF!');
     return evalCalc(c.ast, (name) => {
       if (name === ROWS_FIELD) return slot.has(-1) ? list[slot.get(-1)]?.sum ?? 0 : 0;
-      const cc = calcByName.get(lower(name));
+      const cc = calcOf(name);
       if (cc) return calcValue(cc, list, depth + 1);
       const i = baseIdx(name);
       if (i < 0) return CALC_ERR('#NAME?');

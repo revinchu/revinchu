@@ -442,3 +442,9 @@ function pairSum(x, y, f) {
 }
 
 for (const [k, fn] of Object.entries(SCALAR)) MATH[k] = lift(fn);
+// 조건 자리에 범위를 주면 조건마다 결과를 돌려줌 (엑셀: =SUMPRODUCT(1/COUNTIF(A1:A9,A1:A9)) 고유 개수)
+const odd = Array.from({ length: 127 }, (_, i) => i * 2 + 1);
+const evenFrom2 = Array.from({ length: 126 }, (_, i) => i * 2 + 2);
+for (const k of ['SUMIF', 'COUNTIF', 'AVERAGEIF']) MATH[k] = lift(MATH[k], [1]);
+MATH.COUNTIFS = lift(MATH.COUNTIFS, odd);
+for (const k of ['SUMIFS', 'AVERAGEIFS', 'MAXIFS', 'MINIFS']) MATH[k] = lift(MATH[k], evenFrom2);

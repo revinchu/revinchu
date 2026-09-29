@@ -296,7 +296,8 @@ export function condFormatAt(preps, wb, si, r, c, v) {
         const lo = prep.points ? prep.points[0] : Math.min(0, prep.min);
         const hi = prep.points ? prep.points[1] : prep.max;
         const neg = v < 0 && rule.negColor && lo < 0;
-        const pct = neg ? Math.min(100, (v / lo) * 100) : hi === lo ? 100 : Math.max(0, Math.min(100, ((v - lo) / (hi - lo)) * 100));
+        // 값이 모두 0 이면 막대 없음 (엑셀: 축 0 에서 길이 0)
+        const pct = neg ? Math.min(100, (v / lo) * 100) : hi === lo ? (v === 0 ? 0 : 100) : Math.max(0, Math.min(100, ((v - lo) / (hi - lo)) * 100));
         bar = { pct, color: neg ? rule.negColor : rule.color ?? '#638ec6', gradient: rule.gradient !== false, neg };
         if (rule.iconOnly) hideValue = true;
       }
