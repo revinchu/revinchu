@@ -1226,7 +1226,11 @@ export class Workbook {
         else if (e.t === 'sheet') e.after = this.serializeSheet(e.si);
         else if (e.t === 'names') e.after = this.copyNames();
       }
-      if (tx.entries.length) {
+      const top = this.undoStack[this.undoStack.length - 1];
+      if (tx.entries.length && tx.meta?.joinPrev && top) {
+        // 자동으로 따라 바뀐 것(피벗 자동 새로 고침 등)은 직전 실행 취소 단계에 합침
+        top.entries.push(...tx.entries);
+      } else if (tx.entries.length) {
         this.undoStack.push(tx);
         if (this.undoStack.length > 200) this.undoStack.shift();
         this.redoStack = [];

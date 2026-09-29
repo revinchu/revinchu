@@ -936,3 +936,13 @@ legend { padding: 0 4px; color: #444; }
 .opt-page { display: flex; flex-direction: column; gap: 6px; }
 .opt-title { font-weight: 700; border-bottom: 1px solid #e5e5e5; padding: 8px 0 3px; margin-bottom: 2px; }
 .opt-page label > span:first-child { width: auto !important; min-width: 120px; }
+.tpl-search { width: 420px; height: 32px; padding: 0 12px; border: 1px solid #cbd5e1; border-radius: 16px; font: inherit; }
+.tpl-cat { font-weight: 600; font-size: 15px; margin: 22px 0 10px; color: #334155; }
+.bcard.tpl { width: 190px; }
+.bcard.tpl.featured { border-color: var(--tc, #4f46e5); box-shadow: 0 0 0 2px #e0e7ff; }
+.tpl-thumb { position: relative; background: #fff !important; border-top: 6px solid var(--tc) !important; overflow: hidden; }
+.tpl-thumb i { position: absolute; left: 10px; right: 10px; height: 8px; background: color-mix(in srgb, var(--tc) 18%, #fff); border-radius: 2px; }
+.tpl-thumb i:nth-child(1) { top: 12px; right: 60px; background: color-mix(in srgb, var(--tc) 55%, #fff); }
+.tpl-thumb i:nth-child(2) { top: 30px; }
+.tpl-thumb i:nth-child(3) { top: 46px; right: 30px; }
+.tpl-thumb span { position: absolute; right: 8px; bottom: 6px; width: 30px; height: 30px; border-radius: 50%; background: var(--tc); color: #fff; font-weight: 700; display: grid; place-items: center; font-size: 14px; }

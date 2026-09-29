@@ -244,7 +244,8 @@ export function expansionFor(sheet, rg) {
   for (const t of sheet.tables ?? []) {
     const others = (sheet.tables ?? []).filter((x) => x !== t);
     const hits = (b) => others.some((o) => o.r1 <= b.r2 && o.r2 >= b.r1 && o.c1 <= b.c2 && o.c2 >= b.c1);
-    if (!t.totals && rg.r1 === t.r2 + 1 && rg.c1 <= t.c2 && rg.c2 >= t.c1) {
+    // 표 바로 아래에서 시작하거나, 표 안에서 시작해 표 아래까지 이어지는 붙여넣기 (원본 데이터를 한 번에 붙여넣을 때)
+    if (!t.totals && rg.r1 <= t.r2 + 1 && rg.r1 >= t.r1 + (t.header ? 1 : 0) && rg.r2 > t.r2 && rg.c1 <= t.c2 && rg.c2 >= t.c1) {
       const nb = { ...t, r2: rg.r2 };
       if (!hits(nb)) out.push({ id: t.id, r2: rg.r2 });
     } else if (rg.c1 === t.c2 + 1 && rg.r1 <= t.r2 && rg.r2 >= t.r1) {
