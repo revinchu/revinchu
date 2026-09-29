@@ -14,7 +14,7 @@ import {
   formDialog, setMenuCloseHandler, setDialogCloseHandler, isDialogOpen,
 } from './ui.js';
 import { FUNC_INFO, CATEGORIES } from './funcinfo.js';
-import { makeSeries } from './series.js';
+import { makeSeries, CUSTOM_LISTS } from './series.js';
 import { parseDelimited, toDelimited, guessDelimiter, CsvBlockReader } from './csv.js';
 import { SAMPLES } from './samples.js';
 import { GridView, BASE_FONT, setBaseFont, measureText, fontStack } from './view.js';
@@ -1093,6 +1093,7 @@ function onGridKey(e) {
     case 'Escape':
       handled();
       if (clip || painter) { clip = null; painter = null; dom.view.classList.remove('painting'); updateSelectionUI(); setMode(); }
+      if (borderDraw) setBorderDraw(borderDraw);
       return;
     case 'ContextMenu': {
       handled();
@@ -1554,6 +1555,8 @@ function onDragEnd() {
   drag = null;
   stopAutoScroll();
   if (d.type === 'select' && d.link && selIsActiveOnly() && active.r === d.link.r && active.c === d.link.c) openLink(d.link.url);
+  // 테두리 그리기 모드: 끌어서 고른 범위에 펜으로 바깥쪽(그리기) · 모든(눈금) 테두리, 또는 지우기
+  if (d.type === 'select' && borderDraw) applyBorder(borderDraw === 'grid' ? 'all' : borderDraw === 'erase' ? 'none' : 'outside');
   switch (d.type) {
     case 'fill':
       fillPreview = null;
@@ -1564,14 +1567,14 @@ function onDragEnd() {
       if (d.newW === undefined) break;
       if (d.orig === undefined) delete sheet().colWidths[d.c]; else sheet().colWidths[d.c] = d.orig;
       const cols = selKind === 'cols' && d.c >= sel.c1 && d.c <= sel.c2 ? range(sel.c1, Math.min(sel.c2, sel.c1 + 500)) : [d.c];
-      wb.transact(() => cols.forEach((c) => wb.setColWidth(si, c, d.newW)), meta());
+      wb.transact(() => anchorObjects(() => cols.forEach((c) => wb.setColWidth(si, c, d.newW))), meta());
       break;
     }
     case 'rowResize': {
       if (d.newH === undefined) break;
       if (d.orig === undefined) delete sheet().rowHeights[d.r]; else sheet().rowHeights[d.r] = d.orig;
       const rows = selKind === 'rows' && d.r >= sel.r1 && d.r <= sel.r2 ? range(sel.r1, Math.min(sel.r2, sel.r1 + 2000)) : [d.r];
-      wb.transact(() => rows.forEach((r) => wb.setRowHeight(si, r, d.newH)), meta());
+      wb.transact(() => anchorObjects(() => rows.forEach((r) => wb.setRowHeight(si, r, d.newH))), meta());
       break;
     }
     case 'obj': {
@@ -1619,7 +1622,7 @@ function onViewDblClick(e) {
     return;
   }
   if (hit.zone === 'rowHeader' && hit.edgeRow !== null) {
-    wb.transact(() => { wb.setRowHeight(si, hit.edgeRow, defRowH(), false); autoFitRows(hit.edgeRow, hit.edgeRow); }, meta());
+    wb.transact(() => anchorObjects(() => { wb.setRowHeight(si, hit.edgeRow, defRowH(), false); autoFitRows(hit.edgeRow, hit.edgeRow); }), meta());
     return;
   }
   if (hit.zone !== 'cell' || editing) return;
@@ -2060,13 +2063,63 @@ const toggleStyle = (key) => {
   applyStyle({ [key]: next || undefined });
 };
 
-function applyBorder(kind) {
-  lastBorder = kind;
+// 테두리 펜: 선 스타일 · 선 색 (엑셀의 [테두리] → [선 색] · [선 스타일])
+const borderPen = { style: 'thin', color: null };
+let borderDraw = null; // 'outline' | 'grid' | 'erase' — 끌어서 테두리 그리기
+const BORDER_STYLES = [['thin', '가는 실선'], ['hair', '아주 가는 선'], ['dotted', '점선'], ['dashDotDot', '이점쇄선'], ['dashDot', '일점쇄선'], ['dashed', '파선'],
+  ['medium', '보통 실선'], ['mediumDashDotDot', '보통 이점쇄선'], ['slantDashDot', '기울어진 일점쇄선'], ['mediumDashDot', '보통 일점쇄선'], ['mediumDashed', '보통 파선'], ['thick', '굵은 실선'], ['double', '이중 실선']];
+
+function lineStyleMenu(anchor) {
+  openMenu(anchor, BORDER_STYLES.map(([v, l]) => {
+    const [w, css] = { thin: [1, 'solid'], hair: [1, 'dotted'], dotted: [1, 'dotted'], dashed: [1, 'dashed'], dashDot: [1, 'dashed'], dashDotDot: [1, 'dashed'], medium: [2, 'solid'], mediumDashed: [2, 'dashed'], mediumDashDot: [2, 'dashed'], mediumDashDotDot: [2, 'dashed'], slantDashDot: [2, 'dashed'], thick: [3, 'solid'], double: [3, 'double'] }[v];
+    return { label: l, checked: borderPen.style === v, icon: `<span style="display:block;width:22px;border-top:${w}px ${css} #333;margin-top:6px"></span>`, action: () => { borderPen.style = v; if (!borderDraw) setBorderDraw('outline'); } };
+  }));
+}
+
+function setBorderDraw(mode) {
+  borderDraw = borderDraw === mode ? null : mode;
+  dom.view.classList.toggle('border-draw', !!borderDraw);
+  if (borderDraw) toast(`${{ outline: '테두리 그리기', grid: '테두리 눈금 그리기', erase: '테두리 지우기' }[borderDraw]}: 셀을 끌어서 적용하세요. (Esc: 끝내기)`);
+}
+
+/** [셀 서식] → [테두리]: 가장자리마다 켜기/끄기 (바뀐 것만), pen = { style('none' = 지우기), color } */
+function applyEdges(edges, edges0, pen) {
   const rg = selKind === 'cells' ? sel : usedClip(sel);
+  const erase = pen.style === 'none';
+  const put = (on) => (on && !erase ? { v: true, s: pen.style === 'thin' ? undefined : pen.style, c: pen.color === '#000000' ? undefined : pen.color } : { v: undefined, s: undefined, c: undefined });
+  const side = (p, k, spec) => { p[k] = spec.v; p[`${k}s`] = spec.s; p[`${k}c`] = spec.c; };
+  const changed = (k) => edges[k] !== edges0[k] || (edges[k] && !erase);
+  for (const [r, c] of cellsIn(rg)) {
+    const p = {};
+    if (r === rg.r1 && changed('top')) side(p, 'bt', put(edges.top));
+    if (r === rg.r2 && changed('bottom')) side(p, 'bb', put(edges.bottom));
+    if (c === rg.c1 && changed('left')) side(p, 'bl', put(edges.left));
+    if (c === rg.c2 && changed('right')) side(p, 'br', put(edges.right));
+    if (changed('insideH')) { if (r > rg.r1) side(p, 'bt', put(edges.insideH)); if (r < rg.r2) side(p, 'bb', put(edges.insideH)); }
+    if (changed('insideV')) { if (c > rg.c1) side(p, 'bl', put(edges.insideV)); if (c < rg.c2) side(p, 'br', put(edges.insideV)); }
+    if (changed('diagDown')) side(p, 'dd', put(edges.diagDown));
+    if (changed('diagUp')) side(p, 'du', put(edges.diagUp));
+    if (Object.keys(p).length) wb.setStyle(si, r, c, p);
+  }
+}
+
+function applyBorder(kind, penOverride = null) {
+  lastBorder = kind;
+  const pen = penOverride ?? borderPen;
+  const rg = selKind === 'cells' ? sel : usedClip(sel);
+  const thick = { thickOutside: 'medium', thickBottom: 'medium', topThickBottom: 'medium', doubleBottom: 'double', topDoubleBottom: 'double' }[kind];
   wb.transact(() => {
     for (const [r, c] of cellsIn(rg)) {
       let p = null;
       switch (kind) {
+        case 'thickOutside': p = { ...(r === rg.r1 && { bt: true }), ...(r === rg.r2 && { bb: true }), ...(c === rg.c1 && { bl: true }), ...(c === rg.c2 && { br: true }) }; break;
+        case 'inside': p = { ...(r > rg.r1 && { bt: true }), ...(r < rg.r2 && { bb: true }), ...(c > rg.c1 && { bl: true }), ...(c < rg.c2 && { br: true }) }; break;
+        case 'insideH': p = { ...(r > rg.r1 && { bt: true }), ...(r < rg.r2 && { bb: true }) }; break;
+        case 'insideV': p = { ...(c > rg.c1 && { bl: true }), ...(c < rg.c2 && { br: true }) }; break;
+        case 'thickBottom': case 'doubleBottom': if (r === rg.r2) p = { bb: true }; break;
+        case 'topThickBottom': case 'topDoubleBottom': p = { ...(r === rg.r1 && { bt: true }), ...(r === rg.r2 && { bb: true }) }; break;
+        case 'diagDown': p = { dd: true, ddc: pen.color ?? undefined, dds: pen.style === 'thin' ? undefined : pen.style }; break;
+        case 'diagUp': p = { du: true, duc: pen.color ?? undefined, dus: pen.style === 'thin' ? undefined : pen.style }; break;
         case 'none': p = { bt: undefined, bb: undefined, bl: undefined, br: undefined }; break;
         case 'all': p = { bt: true, bb: true, bl: true, br: true }; break;
         case 'outside': p = {
@@ -2080,8 +2133,15 @@ function applyBorder(kind) {
         case 'topBottom': p = { ...(r === rg.r1 && { bt: true }), ...(r === rg.r2 && { bb: true }) }; break;
         default:
       }
-      // 리본 테두리는 가는 검정 선 (파일에서 가져온 색 · 선 종류는 지움)
-      if (p) for (const k of ['bt', 'bb', 'bl', 'br']) if (k in p) { p[`${k}c`] = undefined; p[`${k}s`] = undefined; }
+      // 펜의 선 색 · 선 스타일 (굵은/이중 테두리 메뉴는 그 선 종류; 위쪽 선은 펜 그대로)
+      if (p) {
+        for (const k of ['bt', 'bb', 'bl', 'br']) {
+          if (!(k in p) || !p[k]) continue;
+          const st = thick && !(k === 'bt' && kind.startsWith('top')) ? thick : pen.style;
+          p[`${k}c`] = pen.color ?? undefined;
+          p[`${k}s`] = st === 'thin' ? undefined : st;
+        }
+      }
       if (p && Object.keys(p).length) wb.setStyle(si, r, c, p);
     }
     if (kind === 'none') {
@@ -3618,8 +3678,31 @@ const sortItems = (entries) => entries.sort((a, b) => {
   return String(a.key).localeCompare(String(b.key), 'ko');
 });
 
-/** 슬라이서가 가리키는 대상과 항목 → { caption, items: [{ key, text, selected, hasData }], filtered, broken?, apply(values) } */
+/**
+ * 슬라이서 항목 + 슬라이서 설정 (엑셀 [슬라이서 설정]): 정렬(오름차순/내림차순), 사용자 지정 목록 순서,
+ * 데이터 없는 항목 숨기기 / 시각적으로 표시 / 마지막에 표시
+ */
 function slicerModel(sl) {
+  const m = slicerModelRaw(sl);
+  if (!m.items?.length) return m;
+  let items = m.items;
+  // 사용자 지정 목록(요일 · 월 · 분기 …): 모든 항목이 한 목록에 들어 있으면 그 순서
+  if (sl.customList !== false) {
+    const list = CUSTOM_LISTS.find((L) => items.every((it) => it.key === '' || L.includes(it.text)));
+    if (list) items = [...items].sort((a, b) => (a.key === '' ? 1 : b.key === '' ? -1 : list.indexOf(a.text) - list.indexOf(b.text)));
+  }
+  if (sl.sort === 'desc') {
+    const blank = items.filter((it) => it.key === '');
+    items = [...items.filter((it) => it.key !== '').reverse(), ...blank];
+  }
+  if (sl.hideNoData) items = items.filter((it) => it.hasData || it.selected && m.filtered);
+  else if (sl.noDataLast !== false) items = [...items.filter((it) => it.hasData), ...items.filter((it) => !it.hasData)];
+  if (sl.markNoData === false) items = items.map((it) => ({ ...it, hasData: true }));
+  return { ...m, items };
+}
+
+/** 슬라이서가 가리키는 대상과 항목 → { caption, items: [{ key, text, selected, hasData }], filtered, broken?, apply(values) } */
+function slicerModelRaw(sl) {
   const src = sl.source ?? {};
   if (src.kind === 'table') {
     const f = findTable(wb, src.table);
@@ -3818,20 +3901,49 @@ function insertSlicerDialog() {
 function slicerSettings(id) {
   const sl = (sheet().slicers ?? []).find((x) => x.id === id);
   if (!sl) return;
-  const src = sl.source?.kind === 'table' ? `원본: ${sl.source.table}[${sl.source.column}]`
-    : `원본: 피벗 테이블 ${slicerPivotTargets(sl.source ?? {}).map((e) => `'${pivotNameOf(e)}'`).join(', ')}의 '${sl.source?.field}' 필드`;
-  formDialog('슬라이서 설정', [
-    { name: 'caption', label: '캡션', value: sl.caption ?? '' },
-    { name: 'header', label: '머리글 표시', type: 'checkbox', value: sl.showHeader !== false },
-    { name: 'columns', label: '열 수', type: 'number', value: sl.columns ?? 1 },
-    { name: 'bh', label: '단추 높이(px)', type: 'number', value: sl.buttonHeight ?? 24 },
-    { name: 'style', label: '스타일', type: 'select', value: slicerStyleName(sl), options: SLICER_STYLES.map((s) => ({ value: s.name, label: s.label })) },
-  ], (v) => {
-    updateObject(id, {
-      caption: v.caption, showHeader: v.header ? undefined : false, columns: clamp(Number(v.columns) || 1, 1, 20),
-      buttonHeight: clamp(Number(v.bh) || 24, 14, 80), style: v.style, color: undefined,
-    });
-  }, { note: src });
+  const src = sl.source?.kind === 'table' ? `원본 이름: ${sl.source.table}[${sl.source.column}]`
+    : `원본 이름: ${sl.source?.field} (피벗 테이블 ${slicerPivotTargets(sl.source ?? {}).map((e) => `'${pivotNameOf(e)}'`).join(', ')})`;
+  const inp = (v, attrs = {}) => el('input', { type: 'text', value: v ?? '', ...attrs });
+  const chk = (on, label) => { const c = el('input', { type: 'checkbox', checked: !!on }); return [c, el('label', { class: 'fc-check' }, c, label)]; };
+  const radio = (name, v, on, label) => { const r = el('input', { type: 'radio', name, value: v, checked: !!on }); return [r, el('label', { class: 'fc-check' }, r, label)]; };
+  const name = inp(sl.name ?? sl.caption);
+  const cap = inp(sl.caption);
+  const [hdr, hdrL] = chk(sl.showHeader !== false, '머리글 표시');
+  const [asc, ascL] = radio('slsort', 'asc', sl.sort !== 'desc', '오름차순 (A-Z, ㄱ-ㅎ)');
+  const [desc, descL] = radio('slsort', 'desc', sl.sort === 'desc', '내림차순 (Z-A, ㅎ-ㄱ)');
+  const [cl, clL] = chk(sl.customList !== false, '정렬할 때 사용자 지정 목록 사용');
+  const [hide, hideL] = chk(!!sl.hideNoData, '데이터가 없는 항목 숨기기');
+  const [mark, markL] = chk(sl.markNoData !== false, '데이터가 없는 항목을 시각적으로 표시');
+  const [last, lastL] = chk(sl.noDataLast !== false, '데이터가 없는 항목을 마지막에 표시');
+  const [del, delL] = chk(!!sl.showDeleted, '데이터 원본에서 삭제된 항목 표시');
+  const sync = () => { mark.disabled = hide.checked; last.disabled = hide.checked; };
+  hide.addEventListener('change', sync);
+  sync();
+  openDialog({
+    title: '슬라이서 설정', width: 520,
+    body: el('div', { class: 'sl-settings' },
+      el('div', { class: 'muted' }, src),
+      el('label', {}, el('span', {}, '이름'), name),
+      el('div', { class: 'menu-title', style: { padding: '6px 0 2px' } }, '머리글'),
+      hdrL, el('label', {}, el('span', {}, '캡션'), cap),
+      el('div', { class: 'sl-set-cols' },
+        el('div', {}, el('div', { class: 'menu-title', style: { padding: '6px 0 2px' } }, '항목 정렬 및 필터링'), ascL, descL, clL),
+        el('div', {}, el('div', { class: 'menu-title', style: { padding: '6px 0 2px' } }, '데이터가 없는 항목'), hideL, markL, lastL, delL))),
+    buttons: [
+      {
+        label: '확인', primary: true, action: () => {
+          updateObject(id, {
+            name: name.value.trim() || undefined, caption: cap.value, showHeader: hdr.checked ? undefined : false,
+            sort: desc.checked ? 'desc' : undefined, customList: cl.checked ? undefined : false,
+            hideNoData: hide.checked || undefined, markNoData: mark.checked ? undefined : false, noDataLast: last.checked ? undefined : false,
+            showDeleted: del.checked || undefined,
+          });
+          gv.renderObjectsAll();
+        },
+      },
+      { label: '취소' },
+    ],
+  });
 }
 
 /** 슬라이서 스타일 갤러리 (+ 사용자 지정 색) */
@@ -4377,6 +4489,63 @@ function minZ() { return allObjects().reduce((z, o) => Math.min(z, o.z ?? 0), 0)
 
 function setObjects(prop, fn) {
   wb.transact(() => wb.setSheetProp(si, prop, fn((sheet()[prop] ?? []).map((o) => ({ ...o })))), meta());
+}
+
+/** 개체 위치 속성: twoCell = 셀에 맞춰 위치와 크기 변경(기본), oneCell = 위치만 변경, absolute = 변경 안 함 */
+const placementOf = (prop, o) => o.placement ?? (prop === 'slicers' ? 'oneCell' : 'twoCell');
+
+/**
+ * 행/열 크기 변경 · 삽입 · 삭제 뒤에도 개체가 셀을 따라가게 (엑셀의 개체 위치 속성). transact 안에서 부름.
+ * shift: 삽입/삭제일 때 { axis: 'row'|'col', index, count(음수 = 삭제) }
+ */
+function anchorObjects(fn, shift = null) {
+  const s = sheet();
+  const props = OBJECT_PROPS.filter((p) => (s[p] ?? []).length);
+  if (!props.length) return fn();
+  gv.refreshAxes();
+  const cols0 = gv.cols;
+  const rows0 = gv.rows;
+  const at = (ax, p) => { const i = ax.indexAt(Math.max(0, p)); return [i, Math.max(0, p - ax.pos(i))]; };
+  const anchors = new Map();
+  for (const p of props) {
+    for (const o of s[p]) {
+      const place = placementOf(p, o);
+      if (place === 'absolute') continue;
+      anchors.set(o.id, { place, c1: at(cols0, o.x), r1: at(rows0, o.y), c2: at(cols0, o.x + o.w), r2: at(rows0, o.y + o.h) });
+    }
+  }
+  const res = fn();
+  gv.refreshAxes();
+  const move = (ax, [i, off], kind) => {
+    let j = i;
+    let o = off;
+    if (shift && shift.axis === kind) {
+      if (shift.count > 0 && i >= shift.index) j = i + shift.count;
+      else if (shift.count < 0) {
+        const end = shift.index - shift.count;
+        if (i >= end) j = i + shift.count;
+        else if (i >= shift.index) { j = shift.index; o = 0; }
+      }
+    }
+    return ax.pos(j) + Math.min(o, ax.size(j) || o);
+  };
+  for (const p of props) {
+    const list = s[p];
+    let changed = false;
+    const next = list.map((o) => {
+      const a = anchors.get(o.id);
+      if (!a) return o;
+      const x = Math.round(move(gv.cols, a.c1, 'col'));
+      const y = Math.round(move(gv.rows, a.r1, 'row'));
+      const w = a.place === 'twoCell' ? Math.max(1, Math.round(move(gv.cols, a.c2, 'col')) - x) : o.w;
+      const h = a.place === 'twoCell' ? Math.max(LINE_SHAPES.has(o.kind) ? 0 : 1, Math.round(move(gv.rows, a.r2, 'row')) - y) : o.h;
+      if (x === o.x && y === o.y && w === o.w && h === o.h) return o;
+      changed = true;
+      return { ...o, x, y, w, h };
+    });
+    if (changed) wb.setSheetProp(si, p, next);
+  }
+  return res;
 }
 
 function updateObject(id, patch) {
@@ -7481,15 +7650,64 @@ function formatCellsDialog(startTab = 0) {
   updFont();
   const fontPage = col(row(lab('글꼴', fontSel), fontDl, lab('크기', sizeIn)), row(bL, iL, uL, sL), lab('색', colorIn), el('div', { class: 'fc-title' }, '미리 보기'), fontPreview);
 
-  // ── 테두리 ──
+  // ── 테두리 (엑셀과 같은 구성: 선 스타일 · 색 · 미리 설정 · 가장자리별 단추 · 미리 보기) ──
   let border = null;
-  const borderBtns = el('div', { class: 'fc-row' });
-  for (const [k, label, ic] of [['none', '없음', 'borderNone'], ['outside', '윤곽선', 'borderOutside'], ['all', '모든 테두리', 'borderAll'], ['bottom', '아래쪽', 'borderBottom'], ['topBottom', '위쪽/아래쪽', 'borderTop']]) {
-    const b = el('button', { type: 'button', class: 'fc-bbtn', title: label, html: `${ICONS[ic] ?? ''}<span>${label}</span>` });
-    b.addEventListener('click', () => { border = k; borderBtns.querySelectorAll('.on').forEach((x) => x.classList.remove('on')); b.classList.add('on'); });
-    borderBtns.append(b);
+  const pen = { style: st.bbs ?? st.bts ?? 'thin', color: st.bbc ?? st.btc ?? '#000000' };
+  const multiR = sel.r2 > sel.r1;
+  const multiC = sel.c2 > sel.c1;
+  const edges = { top: !!st.bt, bottom: !!st.bb, left: !!st.bl, right: !!st.br, insideH: false, insideV: false, diagUp: !!st.du, diagDown: !!st.dd };
+  const edges0 = { ...edges };
+  const styleList = el('div', { class: 'fc-linestyles' });
+  const LS = [['none', '없음'], ...BORDER_STYLES];
+  const lsCss = { thin: '1px solid', hair: '1px dotted', dotted: '1px dotted', dashed: '1px dashed', dashDot: '1px dashed', dashDotDot: '1px dashed', medium: '2px solid', mediumDashed: '2px dashed', mediumDashDot: '2px dashed', mediumDashDotDot: '2px dashed', slantDashDot: '2px dashed', thick: '3px solid', double: '3px double' };
+  for (const [v, label] of LS) {
+    const b = el('button', { type: 'button', class: `fc-ls${pen.style === v ? ' on' : ''}`, title: label }, v === 'none' ? '없음' : el('i', { style: { borderTop: `${lsCss[v]} #333` } }));
+    b.addEventListener('click', () => { pen.style = v; styleList.querySelectorAll('.on').forEach((x) => x.classList.remove('on')); b.classList.add('on'); });
+    styleList.append(b);
   }
-  const borderPage = col(el('div', { class: 'fc-title' }, '미리 설정'), borderBtns, el('div', { class: 'muted' }, '선택한 범위에 적용됩니다.'));
+  const penColor = el('input', { type: 'color', value: pen.color });
+  penColor.addEventListener('input', () => { pen.color = penColor.value; drawPrev(); });
+  const prev = el('div', { class: 'fc-bprev' });
+  const drawPrev = () => {
+    const line = (on) => (on ? `${lsCss[pen.style] ?? '1px solid'} ${pen.color}` : '1px dashed #e0e0e0');
+    prev.replaceChildren(el('div', {
+      class: 'fc-bbox', style: { borderTop: line(edges.top), borderBottom: line(edges.bottom), borderLeft: line(edges.left), borderRight: line(edges.right) },
+    },
+    multiR ? el('i', { class: 'fc-mid-h', style: { borderTop: line(edges.insideH) } }) : null,
+    multiC ? el('i', { class: 'fc-mid-v', style: { borderLeft: line(edges.insideV) } }) : null,
+    edges.diagDown ? el('i', { class: 'fc-diag down', style: { background: `linear-gradient(to top right, transparent calc(50% - 1px), ${pen.color} 50%, transparent calc(50% + 1px))` } }) : null,
+    edges.diagUp ? el('i', { class: 'fc-diag up', style: { background: `linear-gradient(to bottom right, transparent calc(50% - 1px), ${pen.color} 50%, transparent calc(50% + 1px))` } }) : null,
+    el('span', {}, '텍스트')));
+  };
+  const edgeBtn = (k, label, ic) => {
+    const b = el('button', { type: 'button', class: `fc-bbtn small${edges[k] ? ' on' : ''}`, title: label, html: `${ICONS[ic] ?? ''}` });
+    b.addEventListener('click', () => { edges[k] = !edges[k]; b.classList.toggle('on', edges[k]); border = 'edges'; drawPrev(); });
+    return b;
+  };
+  const presetBtn = (k, label, ic) => {
+    const b = el('button', { type: 'button', class: 'fc-bbtn', title: label, html: `${ICONS[ic] ?? ''}<span>${label}</span>` });
+    b.addEventListener('click', () => {
+      if (k === 'none') Object.keys(edges).forEach((e) => { edges[e] = false; });
+      if (k === 'outside') Object.assign(edges, { top: true, bottom: true, left: true, right: true });
+      if (k === 'inside') Object.assign(edges, { insideH: multiR, insideV: multiC });
+      border = 'edges';
+      edgeRow.querySelectorAll('button').forEach((x) => x.classList.toggle('on', !!edges[x.dataset.k]));
+      drawPrev();
+    });
+    return b;
+  };
+  const edgeRow = el('div', { class: 'fc-edges' });
+  for (const [k, label, ic] of [['top', '위쪽', 'borderTop'], ['insideH', '안쪽 가로', 'borderBottom'], ['bottom', '아래쪽', 'borderBottom'], ['diagUp', '대각선 ↗', 'borderAll'], ['left', '왼쪽', 'borderLeft'], ['insideV', '안쪽 세로', 'borderLeft'], ['right', '오른쪽', 'borderRight'], ['diagDown', '대각선 ↘', 'borderAll']]) {
+    const b = edgeBtn(k, label, ic);
+    b.dataset.k = k;
+    edgeRow.append(b);
+  }
+  drawPrev();
+  const borderPage = el('div', { class: 'fc-border-page' },
+    el('div', {}, el('div', { class: 'fc-title' }, '선 스타일'), styleList, el('div', { class: 'fc-title' }, '색'), penColor),
+    el('div', {}, el('div', { class: 'fc-title' }, '미리 설정'), el('div', { class: 'fc-row' }, presetBtn('none', '없음', 'borderNone'), presetBtn('outside', '윤곽선', 'borderOutside'), presetBtn('inside', '안쪽', 'borderAll')),
+      el('div', { class: 'fc-title' }, '테두리'), el('div', { class: 'fc-bwrap' }, edgeRow, prev),
+      el('div', { class: 'muted' }, '선 스타일과 색을 고른 다음 미리 설정이나 가장자리 단추를 누르세요.')));
 
   // ── 채우기 ──
   const [noFill, noFillL] = chk('채우기 없음', !st.fill);
@@ -7538,7 +7756,7 @@ function formatCellsDialog(startTab = 0) {
           };
           wb.transact(() => {
             applyStyle(patch, { widen: fmt.numFmt !== undefined ? 'grow' : false });
-            if (border) applyBorder(border);
+            if (border === 'edges') applyEdges(edges, edges0, pen);
             if (mergeIn.checked !== merged && selKind === 'cells' && !isSingle(sel)) {
               if (mergeIn.checked) wb.merge(si, sel.r1, sel.c1, sel.r2, sel.c2); else wb.unmerge(si, sel.r1, sel.c1, sel.r2, sel.c2);
             } else if (!mergeIn.checked && merged) {
@@ -7560,10 +7778,10 @@ function sizeDialog(kind) {
   formDialog(isCol ? '열 너비' : '행 높이', [{ name: 'v', label: isCol ? '열 너비(px)' : '행 높이(px)', type: 'number', value: cur }], ({ v }) => {
     const n = Number(v);
     if (!(n >= 0 && n <= 1000)) { toast('0에서 1000 사이의 값을 입력하세요.'); return false; }
-    wb.transact(() => {
+    wb.transact(() => anchorObjects(() => {
       if (isCol) for (let c = sel.c1; c <= Math.min(sel.c2, sel.c1 + 1000); c++) wb.setColWidth(si, c, n);
       else for (let r = sel.r1; r <= Math.min(sel.r2, sel.r1 + 5000); r++) wb.setRowHeight(si, r, n);
-    }, meta());
+    }), meta());
     return true;
   });
 }
@@ -8554,7 +8772,7 @@ const MENUS = {
     { sep: true },
     { label: '선택하여 붙여넣기...', key: 'Ctrl+Alt+V', action: pasteSpecialDialog, disabled: !clip },
   ],
-  borders: () => [
+  borders: (a) => [
     { title: '테두리' },
     { label: '아래쪽 테두리', icon: 'borderBottom', action: () => applyBorder('bottom') },
     { label: '위쪽 테두리', icon: 'borderTop', action: () => applyBorder('top') },
@@ -8564,7 +8782,27 @@ const MENUS = {
     { label: '테두리 없음', icon: 'borderNone', action: () => applyBorder('none') },
     { label: '모든 테두리', icon: 'borderAll', action: () => applyBorder('all') },
     { label: '바깥쪽 테두리', icon: 'borderOutside', action: () => applyBorder('outside') },
+    { label: '굵은 바깥쪽 테두리', icon: 'borderOutside', action: () => applyBorder('thickOutside') },
+    { label: '안쪽 테두리', icon: 'borderAll', action: () => applyBorder('inside') },
+    { label: '안쪽 가로 테두리', icon: 'borderBottom', action: () => applyBorder('insideH') },
+    { label: '안쪽 세로 테두리', icon: 'borderLeft', action: () => applyBorder('insideV') },
+    { sep: true },
+    { label: '아래쪽 이중 테두리', icon: 'borderBottom', action: () => applyBorder('doubleBottom') },
+    { label: '굵은 아래쪽 테두리', icon: 'borderBottom', action: () => applyBorder('thickBottom') },
     { label: '위쪽/아래쪽 테두리', icon: 'borderBottom', action: () => applyBorder('topBottom') },
+    { label: '위쪽/굵은 아래쪽 테두리', icon: 'borderBottom', action: () => applyBorder('topThickBottom') },
+    { label: '위쪽/아래쪽 이중 테두리', icon: 'borderBottom', action: () => applyBorder('topDoubleBottom') },
+    { label: '대각선 테두리 (↘)', action: () => applyBorder('diagDown') },
+    { label: '대각선 테두리 (↗)', action: () => applyBorder('diagUp') },
+    { title: '테두리 그리기' },
+    { label: '테두리 그리기', icon: 'border', checked: borderDraw === 'outline', action: () => setBorderDraw('outline') },
+    { label: '테두리 눈금 그리기', icon: 'borderAll', checked: borderDraw === 'grid', action: () => setBorderDraw('grid') },
+    { label: '테두리 지우기', icon: 'clear', checked: borderDraw === 'erase', action: () => setBorderDraw('erase') },
+    { node: el('div', { class: 'pen-row' }, el('span', {}, '선 색'), el('span', { class: 'pen-swatch', style: { background: borderPen.color ?? '#000000' } })), },
+    { label: '선 색...', icon: 'fontColor', action: () => setTimeout(() => paletteMenu(a ?? { x: 200, y: 160 }, '자동', (c) => { borderPen.color = c || null; }), 0) },
+    { label: '선 스타일...', action: () => setTimeout(() => lineStyleMenu(a ?? { x: 200, y: 160 }), 0) },
+    { sep: true },
+    { label: '다른 테두리...', action: () => formatCellsDialog(3) },
   ],
   fillColor: (a) => colorMenu(a, 'fill'),
   fontColor: (a) => colorMenu(a, 'font'),
@@ -8845,22 +9083,22 @@ const COMMANDS = {
 
   insertRows: structural(() => {
     const n = selKind === 'cols' || selKind === 'all' ? 1 : Math.min(sel.r2 - sel.r1 + 1, 100000);
-    wb.transact(() => wb.insertRows(si, sel.r1, n), meta());
+    wb.transact(() => anchorObjects(() => wb.insertRows(si, sel.r1, n), { axis: 'row', index: sel.r1, count: n }), meta());
   }),
   insertCols: structural(() => {
     const n = selKind === 'rows' || selKind === 'all' ? 1 : Math.min(sel.c2 - sel.c1 + 1, 5000);
-    wb.transact(() => wb.insertCols(si, sel.c1, n), meta());
+    wb.transact(() => anchorObjects(() => wb.insertCols(si, sel.c1, n), { axis: 'col', index: sel.c1, count: n }), meta());
   }),
   deleteRows: structural(() => {
     const r1 = sel.r1;
     const n = selKind === 'cols' ? 1 : sel.r2 - sel.r1 + 1;
-    wb.transact(() => wb.deleteRows(si, r1, n), meta());
+    wb.transact(() => anchorObjects(() => wb.deleteRows(si, r1, n), { axis: 'row', index: r1, count: -n }), meta());
     selectCell(r1, active.c);
   }),
   deleteCols: structural(() => {
     const c1 = sel.c1;
     const n = selKind === 'rows' ? 1 : sel.c2 - sel.c1 + 1;
-    wb.transact(() => wb.deleteCols(si, c1, n), meta());
+    wb.transact(() => anchorObjects(() => wb.deleteCols(si, c1, n), { axis: 'col', index: c1, count: -n }), meta());
     selectCell(active.r, c1);
   }),
   insertMenuKey: () => {

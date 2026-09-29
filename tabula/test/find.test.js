@@ -85,3 +85,46 @@ test('도형: 엑셀 기본 도형 이름 그대로 그리기 · xlsx 왕복 (�
   assert.equal(back[3].arrow, 'both');
   assert.ok(GEOM.heart);
 });
+
+test('차트: 새 종류(방사형 · 폭포 · 거품형 · 주식형 · 누적 꺾은선) 그리기와 xlsx 왕복', async () => {
+  const { renderChartSvg, chartData, CHART_GALLERY, histogramBins } = await import('../src/chart.js');
+  const { readXlsx, writeXlsx } = await import('../src/xlsx.js');
+  const rows = [['월', '매출', '비용'], ['1월', 10, 4], ['2월', 20, 8], ['3월', 15, 6], ['합계', 0, 0]];
+  for (const [, list] of CHART_GALLERY) for (const [label, patch] of list) {
+    const svg = renderChartSvg({ w: 400, h: 260, title: label, ...patch }, chartData(rows, patch.type === 'combo' ? 'column' : patch.type));
+    assert.doesNotMatch(svg, /NaN|undefined/, label);
+  }
+  const bins = histogramBins([1, 2, 2, 3, 3, 3, 4, 10]);
+  assert.equal(bins.reduce((a, b) => a + b.count, 0), 8);
+  const wb = new Workbook();
+  wb.transact(() => {
+    rows.forEach((r, i) => r.forEach((v, c) => wb.setInput(0, i, c, String(v))));
+    wb.setSheetProp(0, 'charts', [
+      { id: 'a', type: 'radar', radarStyle: 'filled', title: 'R', range: { r1: 0, c1: 0, r2: 3, c2: 2 }, x: 0, y: 0, w: 300, h: 200 },
+      { id: 'b', type: 'waterfall', palette: 'modern', title: 'W', range: { r1: 0, c1: 0, r2: 4, c2: 1 }, x: 0, y: 220, w: 300, h: 200 },
+      { id: 'c', type: 'line', grouping: 'stacked', gridY: false, title: 'L', range: { r1: 0, c1: 0, r2: 3, c2: 2 }, x: 320, y: 0, w: 300, h: 200 },
+    ]);
+  });
+  const ch = new Workbook(readXlsx(writeXlsx(wb)).data).sheets[0].charts;
+  assert.equal(ch[0].type, 'radar');
+  assert.equal(ch[0].radarStyle, 'filled');
+  assert.equal(ch[1].type, 'waterfall');
+  assert.equal(ch[1].palette, 'modern');
+  assert.equal(ch[2].grouping, 'stacked');
+  assert.equal(ch[2].gridY, false);
+});
+
+test('테두리: 대각선 · 선 스타일 · 색 xlsx 왕복', async () => {
+  const { readXlsx, writeXlsx } = await import('../src/xlsx.js');
+  const wb = new Workbook();
+  wb.transact(() => {
+    wb.setInput(0, 0, 0, 'x');
+    wb.setStyle(0, 0, 0, { bb: true, bbs: 'double', bbc: '#c00000', dd: true, dds: 'dashed', ddc: '#0070c0' });
+  });
+  const st = new Workbook(readXlsx(writeXlsx(wb)).data).styleAt(0, 0, 0);
+  assert.equal(st.bbs, 'double');
+  assert.equal(st.bbc, '#c00000');
+  assert.equal(st.dd, true);
+  assert.equal(st.dds, 'dashed');
+  assert.equal(st.ddc, '#0070c0');
+});

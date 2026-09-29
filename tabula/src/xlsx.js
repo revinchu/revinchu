@@ -11,7 +11,7 @@ import {
 import { toFileFormula, fromFileFormula } from './xlfn.js';
 import { parseInput, formatGeneral, fmtCode, styleForCode } from './format.js';
 import { DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT } from './workbook.js';
-import { chartLayout, PALETTE, chartModelData } from './chart.js';
+import { chartLayout, PALETTE, chartModelData, paletteOf } from './chart.js';
 import { Axis, hid, hidKeys } from './axis.js';
 import { toBase64, fromBase64 } from './vba.js';
 import { CellImage } from './fxcore.js';
@@ -198,6 +198,20 @@ function readStyles(files, wbRels, theme) {
     side('bb', 'bottom');
     side('bl', 'left', 'start');
     side('br', 'right', 'end');
+    // 대각선: diagonalDown(↘) · diagonalUp(↗) 가 같은 선을 씀
+    if (b?.attrs.diagonalDown === '1' || b?.attrs.diagonalUp === '1') {
+      const tmp = {};
+      const e = child(b, 'diagonal');
+      if (e && e.attrs.style && e.attrs.style !== 'none') {
+        const c = colorOf(child(e, 'color'), theme);
+        for (const k of [b.attrs.diagonalDown === '1' ? 'dd' : null, b.attrs.diagonalUp === '1' ? 'du' : null].filter(Boolean)) {
+          tmp[k] = true;
+          if (e.attrs.style !== 'thin') tmp[`${k}s`] = e.attrs.style;
+          if (c && c !== '#000000') tmp[`${k}c`] = c;
+        }
+      }
+      Object.assign(st, tmp);
+    }
     return st;
   };
   const borders = kids(child(root, 'borders'), 'border').map(borderOf);
@@ -1179,9 +1193,13 @@ function readDrawing(files, path, sheet, ctx) {
     }
     const alt = child(anchor, 'AlternateContent');
     const sl = alt && descendants(child(alt, 'Choice'), 'slicer')[0];
-    if (sl?.attrs.name) { out._slicerBoxes[sl.attrs.name] = { ...round(box), z: ++z }; continue; }
+    // 개체 위치 속성: twoCell(셀에 맞춰 위치와 크기 변경) · oneCell(위치만) · absolute(변경 안 함)
+    const editAs = anchor.name === 'absoluteAnchor' ? 'absolute' : anchor.name === 'oneCellAnchor' ? 'oneCell' : anchor.attrs.editAs ?? 'twoCell';
+    if (sl?.attrs.name) { out._slicerBoxes[sl.attrs.name] = { ...round(box), z: ++z, ...(editAs !== 'oneCell' ? { placement: editAs } : {}) }; continue; }
     const content = anchor.children.find((k) => ['sp', 'cxnSp', 'pic', 'grpSp', 'graphicFrame'].includes(k.name));
+    const before = [out.charts.length, out.images.length, out.shapes.length];
     if (content) walk(content, box, null);
+    if (editAs !== 'twoCell') [out.charts, out.images, out.shapes].forEach((list, k) => { for (let i = before[k]; i < list.length; i++) list[i].placement = editAs; });
   }
   return out;
 }
@@ -1213,7 +1231,7 @@ function readChart(files, path, theme = {}) {
   const root = parseXml(xml);
   const plot = descendants(root, 'plotArea')[0];
   if (!plot) return null;
-  const kinds = { barChart: 'column', bar3DChart: 'column', lineChart: 'line', line3DChart: 'line', pieChart: 'pie', pie3DChart: 'pie', doughnutChart: 'doughnut', areaChart: 'area', area3DChart: 'area', scatterChart: 'scatter', radarChart: 'line' };
+  const kinds = { barChart: 'column', bar3DChart: 'column', lineChart: 'line', line3DChart: 'line', pieChart: 'pie', pie3DChart: 'pie', doughnutChart: 'doughnut', areaChart: 'area', area3DChart: 'area', scatterChart: 'scatter', radarChart: 'radar', bubbleChart: 'bubble', stockChart: 'stock' };
   const groups = plot.children.filter((c) => kinds[c.name]);
   if (!groups.length) return null;
   // 축: 오른쪽(axPos r) 또는 crosses=max 인 값 축 → 보조 축
@@ -1267,7 +1285,9 @@ function readChart(files, path, theme = {}) {
         ...(catF && seriesRef(catF) ? { cat: seriesRef(catF) } : {}),
         ...(valF && seriesRef(valF) ? { val: seriesRef(valF) } : { cache }),
       };
-      if (gType === 'scatter' && catF && seriesRef(catF)) { s.x = s.cat; delete s.cat; }
+      if ((gType === 'scatter' || gType === 'bubble') && catF && seriesRef(catF)) { s.x = s.cat; delete s.cat; }
+      const szF = descendants(child(ser, 'bubbleSize'), 'f')[0]?.text;
+      if (szF && seriesRef(szF)) s.size = seriesRef(szF);
       for (const r of [s.name.ref, s.cat, s.val, s.x]) if (r?.sheet) sheetName ??= r.sheet;
       // 서식: 막대는 채우기 색, 꺾은선은 선 색
       const spPr = child(ser, 'spPr');
@@ -1339,9 +1359,21 @@ function readChart(files, path, theme = {}) {
   if (range) out.range = range;
   if (sheetName) out.sheet = sheetName;
   if (fmts.some((f) => Object.keys(f).length)) out.seriesFmt = fmts;
-  const bar = groups.find((g) => g.name === 'barChart');
+  const bar = groups.find((g) => g.name === 'barChart') ?? groups.find((g) => g.name === 'lineChart' || g.name === 'areaChart');
   const grouping = child(bar, 'grouping')?.attrs.val;
   if (grouping === 'stacked' || grouping === 'percentStacked') out.grouping = grouping;
+  const g0 = groups[0];
+  const rs = child(g0, 'radarStyle')?.attrs.val;
+  if (rs === 'filled' || rs === 'marker') out.radarStyle = rs;
+  if (g0.name === 'stockChart' && child(g0, 'upDownBars')) out.ohlc = true;
+  const hole = Number(child(g0, 'holeSize')?.attrs.val);
+  if (hole && hole !== 50) out.hole = hole;
+  const gapW = Number(child(bar, 'gapWidth')?.attrs.val);
+  if (bar?.name === 'barChart' && gapW && gapW !== 150 && gapW !== 182) out.gap = gapW;
+  if (!descendants(plot, 'majorGridlines').length) out.gridY = false;
+  // Tabula 전용 설정 (원래 차트 종류 · 팔레트 · 서식)
+  const tbEl = descendants(root, 'props').find((x) => x.attrs.json);
+  if (tbEl) { try { Object.assign(out, JSON.parse(tbEl.attrs.json)); } catch { /* 무시 */ } }
   const legend = child(chartEl, 'legend');
   out.legend = legend ? (child(legend, 'legendPos')?.attrs.val ?? 'r') : 'none';
   if (out.legend === 'tr') out.legend = 'r';
@@ -1556,7 +1588,16 @@ function readSlicerCache(files, path) {
   const root = parseXml(xml);
   const tsc = descendants(root, 'tableSlicerCache')[0];
   const pts = descendants(child(root, 'pivotTables'), 'pivotTable').map((pt) => ({ tabId: Number(pt.attrs.tabId), name: pt.attrs.name }));
+  // 슬라이서 설정: 정렬 · 사용자 지정 목록 · 데이터 없는 항목
+  const a = { ...(descendants(root, 'tabular')[0]?.attrs ?? {}), ...(tsc?.attrs ?? {}) };
+  const opts = {};
+  if (a.sortOrder === 'descending') opts.sort = 'desc';
+  if (a.customListSort === '0' || a.customListSort === 'false') opts.customList = false;
+  if (a.crossFilter === 'none') opts.markNoData = false;
+  if (a.crossFilter === 'showItemsWithNoData') opts.noDataLast = false;
+  if (descendants(root, 'slicerCacheHideItemsWithNoData').length) opts.hideNoData = true;
   return {
+    opts,
     name: root.attrs.name, sourceName: root.attrs.sourceName,
     table: tsc ? { tableId: Number(tsc.attrs.tableId), column: Number(tsc.attrs.column) } : null,
     pivot: pts[0] ?? null,
@@ -1611,6 +1652,7 @@ function linkPivotsAndSlicers(files, wbRels, sheets, ctx) {
         style: /^SlicerStyle(Light|Other|Dark)\d$/i.test(sl.style ?? '') || isModernSlicer(sl.style) ? sl.style : 'SlicerStyleLight1', multi: false, ...box,
         ...(!isModernSlicer(sl.style) && ctx.slicerStyles?.[sl.style] && Object.keys(ctx.slicerStyles[sl.style]).length ? { custom: ctx.slicerStyles[sl.style] } : {}),
         ...(sl.showCaption ? {} : { showHeader: false }),
+        ...(c.opts ?? {}),
         ...(Math.abs(sl.rowHeight - 241300) > 20000 ? { buttonHeight: Math.max(14, Math.round(sl.rowHeight / EMU)) } : {}),
       });
       i++;
@@ -1861,8 +1903,9 @@ class StylePool {
     const fontId = this.intern('font', this.fonts, font);
     const fillId = style.fill ? this.intern('fill', this.fills, `<fill><patternFill patternType="solid"><fgColor rgb="${argb(style.fill)}"/><bgColor indexed="64"/></patternFill></fill>`) : 0;
     const side = (n, k) => (style[k] ? `<${n} style="${style[`${k}s`] ?? 'thin'}">${style[`${k}c`] ? `<color rgb="${argb(style[`${k}c`])}"/>` : '<color indexed="64"/>'}</${n}>` : `<${n}/>`);
-    const borderId = style.bt || style.bb || style.bl || style.br
-      ? this.intern('border', this.borders, `<border>${side('left', 'bl')}${side('right', 'br')}${side('top', 'bt')}${side('bottom', 'bb')}<diagonal/></border>`)
+    const diag = style.dd || style.du ? side('diagonal', style.dd ? 'dd' : 'du') : '<diagonal/>';
+    const borderId = style.bt || style.bb || style.bl || style.br || style.dd || style.du
+      ? this.intern('border', this.borders, `<border${style.dd ? ' diagonalDown="1"' : ''}${style.du ? ' diagonalUp="1"' : ''}>${side('left', 'bl')}${side('right', 'br')}${side('top', 'bt')}${side('bottom', 'bb')}${diag}</border>`)
       : 0;
     const numFmtId = this.fmtId(style);
     const align = [];
@@ -2079,7 +2122,9 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
   const strCache = (vals) => `<c:strCache><c:ptCount val="${vals.length}"/>${vals.map((v, i) => `<c:pt idx="${i}"><c:v>${esc(label(v))}</c:v></c:pt>`).join('')}</c:strCache>`;
   const numCache = (vals, code = 'General') => `<c:numCache><c:formatCode>${esc(code)}</c:formatCode><c:ptCount val="${vals.length}"/>${vals.map((v, i) => (typeof v === 'number' ? `<c:pt idx="${i}"><c:v>${v}</c:v></c:pt>` : '')).join('')}</c:numCache>`;
   const data = chartModelData(wb, si, chart);
-  const baseType = chart.type === 'combo' ? 'column' : chart.type;
+  // 엑셀 2016 차트(폭포 · 깔때기 · 히스토그램 · 파레토 · 트리맵 · 상자 수염)는 호환 차트로 저장하고 원래 종류는 확장 정보로 보관
+  const FALLBACK = { waterfall: 'column', histogram: 'column', pareto: 'column', treemap: 'column', boxWhisker: 'column', funnel: 'bar' };
+  const baseType = chart.type === 'combo' ? 'column' : FALLBACK[chart.type] ?? chart.type;
   // 계열마다 { tx, cat, val } 참조 (+ 값 캐시)
   const refs = [];
   if (chart.pivot) {
@@ -2123,27 +2168,32 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
     const withNums = all.filter((x) => x.nums);
     refs.push(...(withNums.length ? withNums : all));
   }
+  const pal = paletteOf(chart);
   const series = data.series.map((sr, i) => ({
-    ...sr, ...refs[i], type: sr.type ?? baseType, axis: sr.axis ?? 0, color: sr.color ?? PALETTE[i % PALETTE.length],
+    ...sr, ...refs[i], type: FALLBACK[sr.type] ?? sr.type ?? baseType, axis: sr.axis ?? 0, color: sr.color ?? pal[i % pal.length],
   }));
   const dLbls = (on, code, pct = false) => (on || pct
     ? `<c:dLbls>${code && typeof code === 'string' && !pct ? `<c:numFmt formatCode="${esc(code)}" sourceLinked="0"/>` : ''}<c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr><c:showLegendKey val="0"/><c:showVal val="${pct ? 0 : 1}"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="${pct ? 1 : 0}"/><c:showBubbleSize val="0"/></c:dLbls>`
     : '');
   const serXml = (sr, i) => {
     const type = sr.type;
-    const scatter = type === 'scatter';
+    const scatter = type === 'scatter' || type === 'bubble';
     const pie = type === 'pie' || type === 'doughnut';
     const hex = String(sr.color).replace('#', '').toUpperCase().slice(0, 6);
     const fill = `<a:solidFill><a:srgbClr val="${hex}"/></a:solidFill>`;
     const tx = sr.tx ? `<c:tx><c:strRef><c:f>${esc(sr.tx)}</c:f>${strCache([sr.name])}</c:strRef></c:tx>` : `<c:tx><c:v>${esc(sr.name)}</c:v></c:tx>`;
     let spPr;
-    if (scatter) spPr = '<c:spPr><a:ln w="19050"><a:noFill/></a:ln></c:spPr>';
+    if (type === 'bubble') spPr = `<c:spPr>${fill}</c:spPr>`;
+    else if (type === 'stock') spPr = '<c:spPr><a:ln w="19050"><a:noFill/></a:ln></c:spPr>';
+    else if (scatter) spPr = /line|smooth/i.test(chart.scatterStyle ?? '') ? `<c:spPr><a:ln w="19050">${fill}</a:ln></c:spPr>` : '<c:spPr><a:ln w="19050"><a:noFill/></a:ln></c:spPr>';
+    else if (type === 'radar') spPr = `<c:spPr>${chart.radarStyle === 'filled' ? fill : ''}<a:ln w="28575">${fill}</a:ln></c:spPr>`;
     else if (type === 'line') spPr = `<c:spPr><a:ln w="28575" cap="rnd">${fill}<a:round/></a:ln></c:spPr>`;
     else if (pie) spPr = '<c:spPr><a:ln w="19050"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:ln></c:spPr>';
     else spPr = `<c:spPr>${fill}</c:spPr>`;
     const markerSym = sr.marker === 'none' || sr.marker === false ? 'none' : typeof sr.marker === 'string' ? sr.marker : 'circle';
-    const marker = type === 'line' || scatter ? (markerSym === 'none' ? '<c:marker><c:symbol val="none"/></c:marker>' : `<c:marker><c:symbol val="${markerSym}"/><c:size val="5"/><c:spPr>${fill}<a:ln w="9525">${fill}</a:ln></c:spPr></c:marker>`) : '';
-    const dPt = pie ? sr.values.map((_, k) => `<c:dPt><c:idx val="${k}"/><c:bubble3D val="0"/><c:spPr><a:solidFill><a:srgbClr val="${(sr.colors?.[k] ?? PALETTE[k % PALETTE.length]).slice(1)}"/></a:solidFill><a:ln w="19050"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:ln></c:spPr></c:dPt>`).join('') : '';
+    const markerSym2 = sr.marker === undefined && (chart.marker === 'none' || (scatter && /^(line|smooth)$/.test(chart.scatterStyle ?? '')) || (type === 'radar' && chart.radarStyle !== 'marker') || type === 'stock') ? 'none' : markerSym;
+    const marker = (type === 'line' || type === 'radar' || type === 'stock' || (scatter && type !== 'bubble')) ? (markerSym2 === 'none' ? '<c:marker><c:symbol val="none"/></c:marker>' : `<c:marker><c:symbol val="${markerSym2}"/><c:size val="5"/><c:spPr>${fill}<a:ln w="9525">${fill}</a:ln></c:spPr></c:marker>`) : '';
+    const dPt = pie ? sr.values.map((_, k) => `<c:dPt><c:idx val="${k}"/><c:bubble3D val="0"/>${chart.explode ? `<c:explosion val="${Math.round(chart.explode)}"/>` : ''}<c:spPr><a:solidFill><a:srgbClr val="${(sr.colors?.[k] ?? pal[k % pal.length]).slice(1)}"/></a:solidFill><a:ln w="19050"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:ln></c:spPr></c:dPt>`).join('') : '';
     const invert = type === 'column' || type === 'bar' ? '<c:invertIfNegative val="0"/>' : '';
     const code = typeof sr.numFmt === 'string' ? sr.numFmt : null;
     // 원형: 레이블을 따로 정하지 않았으면 백분율 (Tabula 화면과 같게)
@@ -2158,7 +2208,9 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
     const val = sr.val
       ? `<c:${valTag}><c:numRef><c:f>${esc(sr.val)}</c:f>${numCache(sr.values, code ?? 'General')}</c:numRef></c:${valTag}>`
       : `<c:${valTag}><c:numLit><c:formatCode>General</c:formatCode><c:ptCount val="${sr.values.length}"/>${sr.values.map((v, k) => (typeof v === 'number' ? `<c:pt idx="${k}"><c:v>${v}</c:v></c:pt>` : '')).join('')}</c:numLit></c:${valTag}>`;
-    return `<c:ser><c:idx val="${i}"/><c:order val="${i}"/>${tx}${spPr}${invert}${marker}${dPt}${labels}${cat}${val}${type === 'line' || scatter ? '<c:smooth val="0"/>' : ''}</c:ser>`;
+    const bsz = type === 'bubble' ? `<c:bubbleSize><c:numLit><c:formatCode>General</c:formatCode><c:ptCount val="${sr.values.length}"/>${(sr.size ?? []).map((v, k) => (typeof v === 'number' ? `<c:pt idx="${k}"><c:v>${v}</c:v></c:pt>` : '')).join('')}</c:numLit></c:bubbleSize><c:bubble3D val="0"/>` : '';
+    const smooth = type === 'line' || (scatter && type !== 'bubble') ? `<c:smooth val="${sr.smooth || /smooth/i.test(chart.scatterStyle ?? '') ? 1 : 0}"/>` : '';
+    return `<c:ser><c:idx val="${i}"/><c:order val="${i}"/>${tx}${spPr}${invert}${marker}${dPt}${labels}${cat}${val}${bsz}${smooth}</c:ser>`;
   };
   const pieLike = baseType === 'pie' || baseType === 'doughnut';
   const grouping = chart.grouping ?? 'clustered';
@@ -2179,13 +2231,16 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
     switch (g.kind) {
       case 'bar': case 'column': {
         const stackedG = grouping === 'stacked' || grouping === 'percentStacked';
-        return `<c:barChart><c:barDir val="${g.kind === 'bar' ? 'bar' : 'col'}"/><c:grouping val="${grouping}"/><c:varyColors val="0"/>${body}<c:gapWidth val="${g.kind === 'bar' ? 182 : 150}"/>${stackedG ? '<c:overlap val="100"/>' : ''}${a}</c:barChart>`;
+        return `<c:barChart><c:barDir val="${g.kind === 'bar' ? 'bar' : 'col'}"/><c:grouping val="${grouping}"/><c:varyColors val="0"/>${body}<c:gapWidth val="${typeof chart.gap === 'number' ? Math.round(chart.gap) : g.kind === 'bar' ? 182 : 150}"/>${stackedG ? '<c:overlap val="100"/>' : ''}${a}</c:barChart>`;
       }
-      case 'line': return `<c:lineChart><c:grouping val="standard"/><c:varyColors val="0"/>${body}<c:marker val="1"/>${a}</c:lineChart>`;
-      case 'area': return `<c:areaChart><c:grouping val="standard"/><c:varyColors val="0"/>${body}${a}</c:areaChart>`;
-      case 'pie': return `<c:pieChart><c:varyColors val="1"/>${body}<c:firstSliceAng val="0"/></c:pieChart>`;
-      case 'doughnut': return `<c:doughnutChart><c:varyColors val="1"/>${body}<c:firstSliceAng val="0"/><c:holeSize val="50"/></c:doughnutChart>`;
+      case 'line': return `<c:lineChart><c:grouping val="${grouping === 'clustered' ? 'standard' : grouping}"/><c:varyColors val="0"/>${body}<c:marker val="1"/>${a}</c:lineChart>`;
+      case 'area': return `<c:areaChart><c:grouping val="${grouping === 'clustered' ? 'standard' : grouping}"/><c:varyColors val="0"/>${body}${a}</c:areaChart>`;
+      case 'pie': return `<c:pieChart><c:varyColors val="1"/>${body}<c:firstSliceAng val="${Math.round(chart.firstAngle ?? 0)}"/></c:pieChart>`;
+      case 'doughnut': return `<c:doughnutChart><c:varyColors val="1"/>${body}<c:firstSliceAng val="${Math.round(chart.firstAngle ?? 0)}"/><c:holeSize val="${Math.round(chart.hole ?? 50)}"/></c:doughnutChart>`;
       case 'scatter': return `<c:scatterChart><c:scatterStyle val="lineMarker"/><c:varyColors val="0"/>${body}${a}</c:scatterChart>`;
+      case 'bubble': return `<c:bubbleChart><c:varyColors val="0"/>${body}<c:bubbleScale val="${Math.round(chart.bubbleScale ?? 100)}"/><c:showNegBubbles val="0"/>${a}</c:bubbleChart>`;
+      case 'radar': return `<c:radarChart><c:radarStyle val="${chart.radarStyle === 'filled' ? 'filled' : 'marker'}"/><c:varyColors val="0"/>${body}${a}</c:radarChart>`;
+      case 'stock': return `<c:stockChart>${body}<c:hiLowLines/>${chart.ohlc ? '<c:upDownBars><c:gapWidth val="150"/><c:upBars/><c:downBars/></c:upDownBars>' : ''}${a}</c:stockChart>`;
       default: return '';
     }
   }).join('');
@@ -2193,10 +2248,10 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
   const axTitle = (t) => (t ? `<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="ko-KR" sz="1000" b="0"/><a:t>${esc(t)}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title>` : '');
   const scaling = (cfg) => `<c:scaling><c:orientation val="minMax"/>${typeof cfg?.max === 'number' ? `<c:max val="${cfg.max}"/>` : ''}${typeof cfg?.min === 'number' ? `<c:min val="${cfg.min}"/>` : ''}</c:scaling>`;
   const numFmt = (cfg) => (cfg?.numFmt ? `<c:numFmt formatCode="${esc(cfg.numFmt)}" sourceLinked="0"/>` : '<c:numFmt formatCode="General" sourceLinked="1"/>');
-  const catAxis = (id, cross, pos, del) => (baseType === 'scatter'
+  const catAxis = (id, cross, pos, del) => (baseType === 'scatter' || baseType === 'bubble'
     ? `<c:valAx><c:axId val="${id}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="${del ? 1 : 0}"/><c:axPos val="${pos}"/><c:numFmt formatCode="General" sourceLinked="1"/><c:tickLblPos val="nextTo"/><c:crossAx val="${cross}"/><c:crosses val="autoZero"/><c:crossBetween val="midCat"/></c:valAx>`
-    : `<c:catAx><c:axId val="${id}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="${del ? 1 : 0}"/><c:axPos val="${pos}"/>${del ? '' : axTitle(chart.axes?.x?.title)}<c:numFmt formatCode="General" sourceLinked="1"/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crossAx val="${cross}"/><c:crosses val="autoZero"/><c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/><c:noMultiLvlLbl val="0"/></c:catAx>`);
-  const valAxis = (id, cross, pos, cfg, grid, crosses = 'autoZero') => `<c:valAx><c:axId val="${id}"/>${scaling(cfg)}<c:delete val="0"/><c:axPos val="${pos}"/>${grid ? '<c:majorGridlines/>' : ''}${axTitle(cfg?.title)}${numFmt(cfg)}<c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crossAx val="${cross}"/><c:crosses val="${crosses}"/><c:crossBetween val="${baseType === 'area' || baseType === 'scatter' ? 'midCat' : 'between'}"/></c:valAx>`;
+    : `<c:catAx><c:axId val="${id}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="${del || chart.axes?.x?.hide ? 1 : 0}"/><c:axPos val="${pos}"/>${chart.gridX ? '<c:majorGridlines/>' : ''}${del ? '' : axTitle(chart.axes?.x?.title)}<c:numFmt formatCode="General" sourceLinked="1"/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crossAx val="${cross}"/><c:crosses val="autoZero"/><c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/><c:noMultiLvlLbl val="0"/></c:catAx>`);
+  const valAxis = (id, cross, pos, cfg, grid, crosses = 'autoZero') => `<c:valAx><c:axId val="${id}"/>${scaling(cfg)}<c:delete val="${cfg?.hide ? 1 : 0}"/><c:axPos val="${pos}"/>${grid && chart.gridY !== false ? '<c:majorGridlines/>' : ''}${axTitle(cfg?.title)}${numFmt(cfg)}<c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crossAx val="${cross}"/><c:crosses val="${crosses}"/><c:crossBetween val="${baseType === 'area' || baseType === 'scatter' || baseType === 'bubble' ? 'midCat' : 'between'}"/>${typeof cfg?.major === 'number' ? `<c:majorUnit val="${cfg.major}"/>` : ''}</c:valAx>`;
   let axesXml = '';
   if (!pieLike) {
     axesXml = catAxis(111111111, 222222222, horizontal ? 'l' : 'b', false) + valAxis(222222222, 111111111, horizontal ? 'b' : 'l', chart.axes?.y, true);
@@ -2209,7 +2264,15 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
   const legend = lp !== 'none' ? `<c:legend><c:legendPos val="${lp}"/><c:overlay val="0"/></c:legend>` : '';
   const pivotSrc = chart.pivot ? `<c:pivotSource><c:name>${esc(`[${fileName}]${quoteSheetName(chart.pivot.sheet ?? wb.sheets[si].name)}!${chart.pivot.name}`)}</c:name><c:fmtId val="0"/></c:pivotSource>` : '';
   const pivotFmts = chart.pivot ? `<c:pivotFmts>${series.map((_, i) => `<c:pivotFmt><c:idx val="${i}"/></c:pivotFmt>`).join('')}</c:pivotFmts>` : '';
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="${NS_R}"><c:roundedCorners val="0"/>${pivotSrc}<c:chart>${title}${pivotFmts}<c:plotArea><c:layout/>${groupXml}${axesXml}</c:plotArea>${legend}<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart></c:chartSpace>`;
+  // 차트 영역 · 그림 영역 채우기와 테두리
+  const hexOf = (c) => String(c).replace('#', '').toUpperCase().slice(0, 6);
+  const areaSpPr = chart.fill || chart.border ? `<c:spPr>${chart.fill ? `<a:solidFill><a:srgbClr val="${hexOf(chart.fill)}"/></a:solidFill>` : ''}${chart.border ? `<a:ln w="9525"><a:solidFill><a:srgbClr val="${hexOf(chart.border)}"/></a:solidFill></a:ln>` : ''}</c:spPr>` : '';
+  const plotSpPr = chart.plotFill ? `<c:spPr><a:solidFill><a:srgbClr val="${hexOf(chart.plotFill)}"/></a:solidFill></c:spPr>` : '';
+  // Tabula 전용 설정 (엑셀은 무시): 원래 차트 종류 · 팔레트 · 서식
+  const TB_KEYS = ['type', 'palette', 'scatterStyle', 'radarStyle', 'ohlc', 'explode', 'hole', 'gap', 'marker', 'gridX', 'gridY', 'fill', 'plotFill', 'border', 'titleColor', 'titleBold', 'textColor', 'gridColor', 'rounded', 'totals', 'binCount', 'binWidth', 'upColor', 'downColor', 'totalColor', 'bubbleScale', 'firstAngle', 'showMean', 'connectors'];
+  const tb = Object.fromEntries(TB_KEYS.filter((k) => chart[k] !== undefined && chart[k] !== null).map((k) => [k, chart[k]]));
+  const extLst = Object.keys(tb).length > 1 || FALLBACK[chart.type] ? `<c:extLst><c:ext uri="{5E2A6C7B-8F4D-4B1A-9C3E-7D6F1A2B3C4D}" xmlns:tb="urn:tabula:chart"><tb:props json="${esc(JSON.stringify(tb))}"/></c:ext></c:extLst>` : '';
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="${NS_R}"><c:roundedCorners val="${chart.rounded ? 1 : 0}"/>${pivotSrc}<c:chart>${title}${pivotFmts}<c:plotArea><c:layout/>${groupXml}${axesXml}${plotSpPr}</c:plotArea>${legend}<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart>${areaSpPr}${extLst}</c:chartSpace>`;
 }
 
 const KIND_PRST = { arrow: 'rightArrow', textbox: 'rect', line: 'straightConnector1' };
@@ -2600,7 +2663,7 @@ function slicerAnchorXml(sl, name, id, anchorAt, kind) {
     : `<mc:Choice xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main" Requires="a14">`;
   const frame = `<xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="${id}" name="${esc(name)}"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/drawing/2010/slicer"><sle:slicer xmlns:sle="http://schemas.microsoft.com/office/drawing/2010/slicer" name="${esc(name)}"/></a:graphicData></a:graphic></xdr:graphicFrame>`;
   const fallback = `<mc:Fallback><xdr:sp macro="" textlink=""><xdr:nvSpPr><xdr:cNvPr id="0" name=""/><xdr:cNvSpPr><a:spLocks noTextEdit="1"/></xdr:cNvSpPr></xdr:nvSpPr><xdr:spPr><a:xfrm><a:off x="${EMUv(sl.x)}" y="${EMUv(sl.y)}"/><a:ext cx="${EMUv(sl.w)}" cy="${EMUv(sl.h)}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:prstClr val="white"/></a:solidFill><a:ln w="1"><a:solidFill><a:prstClr val="green"/></a:solidFill></a:ln></xdr:spPr><xdr:txBody><a:bodyPr vertOverflow="clip" horzOverflow="clip"/><a:lstStyle/><a:p><a:r><a:rPr lang="ko-KR" sz="1100"/><a:t>이 도형은 ${kind === 'table' ? '표' : '피벗 테이블'} 슬라이서를 나타냅니다. 슬라이서는 Excel 2010 이상에서 지원됩니다.</a:t></a:r></a:p></xdr:txBody></xdr:sp></mc:Fallback>`;
-  return `<xdr:twoCellAnchor editAs="oneCell"><xdr:from>${anchorAt(sl.x, sl.y)}</xdr:from><xdr:to>${anchorAt(sl.x + sl.w, sl.y + sl.h)}</xdr:to><mc:AlternateContent xmlns:mc="${NS_MC}">${choice}${frame}</mc:Choice>${fallback}</mc:AlternateContent><xdr:clientData/></xdr:twoCellAnchor>`;
+  return `<xdr:twoCellAnchor editAs="${sl.placement ?? 'oneCell'}"><xdr:from>${anchorAt(sl.x, sl.y)}</xdr:from><xdr:to>${anchorAt(sl.x + sl.w, sl.y + sl.h)}</xdr:to><mc:AlternateContent xmlns:mc="${NS_MC}">${choice}${frame}</mc:Choice>${fallback}</mc:AlternateContent><xdr:clientData/></xdr:twoCellAnchor>`;
 }
 
 /** .xlsx 로 저장할 때 엑셀 한도(1,048,576행)를 넘어 빠지는 셀 수 */
@@ -2920,6 +2983,9 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {}) 
     for (const sl of sheet.slicers ?? []) {
       let cacheXml = null;
       let kind = null;
+      // 슬라이서 설정 → 캐시 속성
+      const setAttrs = `${sl.sort === 'desc' ? ' sortOrder="descending"' : ''}${sl.customList === false ? ' customListSort="0"' : ''}${sl.markNoData === false ? ' crossFilter="none"' : sl.noDataLast === false ? ' crossFilter="showItemsWithNoData"' : ''}`;
+      const hideExt = sl.hideNoData ? `<x:ext uri="{470722E0-AACD-4C17-9CDC-17EF765DBC7E}" xmlns:x15="${NS_X15}"><x15:slicerCacheHideItemsWithNoData/></x:ext>` : '';
       if (sl.source?.kind === 'table') {
         const f = findTable(wb, sl.source.table);
         const tid = f && tableIds.get(f.t.name.toLowerCase());
@@ -2929,7 +2995,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {}) 
         if (col < 0) continue;
         kind = 'table';
         sl._cache = cacheNameFor(sl.source.column, usedCacheNames);
-        cacheXml = `<slicerCacheDefinition xmlns="${NS_X14}" xmlns:mc="${NS_MC}" mc:Ignorable="x" xmlns:x="${NS_MAIN}" name="${esc(sl._cache)}" sourceName="${esc(columnNames(wb, f.si, f.t)[col])}"><extLst><x:ext uri="{2F2917AC-EB37-4324-AD4E-5DD8C200BD13}" xmlns:x15="${NS_X15}"><x15:tableSlicerCache tableId="${tid}" column="${col + 1}"/></x:ext></extLst></slicerCacheDefinition>`;
+        cacheXml = `<slicerCacheDefinition xmlns="${NS_X14}" xmlns:mc="${NS_MC}" mc:Ignorable="x" xmlns:x="${NS_MAIN}" name="${esc(sl._cache)}" sourceName="${esc(columnNames(wb, f.si, f.t)[col])}"><extLst><x:ext uri="{2F2917AC-EB37-4324-AD4E-5DD8C200BD13}" xmlns:x15="${NS_X15}"><x15:tableSlicerCache tableId="${tid}" column="${col + 1}"${setAttrs}/></x:ext>${hideExt}</extLst></slicerCacheDefinition>`;
       } else {
         // 연결된 피벗 중 첫 피벗과 같은 캐시를 쓰는 것만 (엑셀 규칙)
         const refs = slicerPivotRefs(wb, si, sl).map((ref) => ({ ref, info: findPivotInfo(ref) })).filter((x) => x.info);
@@ -2939,7 +3005,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {}) 
         const linked = refs.filter((x) => x.info.cacheId === first.cacheId);
         kind = 'pivot';
         sl._cache = cacheNameFor(it.field, usedCacheNames);
-        cacheXml = `<slicerCacheDefinition xmlns="${NS_X14}" xmlns:mc="${NS_MC}" mc:Ignorable="x" xmlns:x="${NS_MAIN}" name="${esc(sl._cache)}" sourceName="${esc(it.field)}"><pivotTables>${linked.map((x) => `<pivotTable tabId="${x.ref.si + 1}" name="${esc(x.info.name)}"/>`).join('')}</pivotTables><data><tabular pivotCacheId="${first.cacheId}"><items count="${it.count}">${it.xml}</items></tabular></data></slicerCacheDefinition>`;
+        cacheXml = `<slicerCacheDefinition xmlns="${NS_X14}" xmlns:mc="${NS_MC}" mc:Ignorable="x" xmlns:x="${NS_MAIN}" name="${esc(sl._cache)}" sourceName="${esc(it.field)}"><pivotTables>${linked.map((x) => `<pivotTable tabId="${x.ref.si + 1}" name="${esc(x.info.name)}"/>`).join('')}</pivotTables><data><tabular pivotCacheId="${first.cacheId}"${setAttrs}${sl.showDeleted ? '' : ' showMissing="0"'}><items count="${it.count}">${it.xml}</items></tabular></data>${hideExt ? `<extLst>${hideExt}</extLst>` : ''}</slicerCacheDefinition>`;
       }
       slicerCacheNo++;
       files[`xl/slicerCaches/slicerCache${slicerCacheNo}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n${cacheXml}`;
@@ -2964,7 +3030,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {}) 
         const r = rowAxis.indexAt(Math.max(0, y));
         return `<xdr:col>${c}</xdr:col><xdr:colOff>${Math.max(0, Math.round((x - colAxis.pos(c)) * EMU))}</xdr:colOff><xdr:row>${r}</xdr:row><xdr:rowOff>${Math.max(0, Math.round((y - rowAxis.pos(r)) * EMU))}</xdr:rowOff>`;
       };
-      const anchor = (o, body, editAs = 'oneCell') => `<xdr:twoCellAnchor editAs="${editAs}"><xdr:from>${anchorAt(o.x, o.y)}</xdr:from><xdr:to>${anchorAt(o.x + o.w, o.y + o.h)}</xdr:to>${body}<xdr:clientData/></xdr:twoCellAnchor>`;
+      const anchor = (o, body) => `<xdr:twoCellAnchor editAs="${o.placement ?? 'twoCell'}"><xdr:from>${anchorAt(o.x, o.y)}</xdr:from><xdr:to>${anchorAt(o.x + o.w, o.y + o.h)}</xdr:to>${body}<xdr:clientData/></xdr:twoCellAnchor>`;
       const xfrm = (o) => `<a:xfrm${o.rot ? ` rot="${Math.round(o.rot * 60000)}"` : ''}${o.flip ? ' flipH="1"' : ''}${o.flipV ? ' flipV="1"' : ''}><a:off x="${Math.round(o.x * EMU)}" y="${Math.round(o.y * EMU)}"/><a:ext cx="${Math.round(o.w * EMU)}" cy="${Math.round(o.h * EMU)}"/></a:xfrm>`;
       let objId = 1;
       const parts = [];
@@ -2997,7 +3063,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {}) 
           parts.push(slicerAnchorXml(o.sl, o.name, objId, anchorAt, kind === 'slicerTable' ? 'table' : 'pivot'));
         } else {
           objId++;
-          parts.push(anchor(o, shapeXml(o, objId, xfrm), 'twoCell'));
+          parts.push(anchor(o, shapeXml(o, objId, xfrm)));
         }
       }
       files[`xl/drawings/drawing${drawingNo}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="${NS_R}">${parts.join('')}</xdr:wsDr>`;

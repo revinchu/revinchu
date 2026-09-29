@@ -54,7 +54,8 @@ export function slicerColors(sl) {
 export function slicerCssVars(sl) {
   const c = slicerColors(sl);
   return `--sl-frame:${c.frame};--sl-border:${c.border};--sl-head:${c.head};--sl-sel:${c.selFill};--sl-seltext:${c.selText};--sl-selborder:${c.selBorder};`
-    + `--sl-item:${c.item};--sl-itemtext:${c.itemText};--sl-itemborder:${c.itemBorder};--sl-nodata:${c.noData};--sl-h:${sl.buttonHeight ?? 24}px`;
+    + `--sl-item:${c.item};--sl-itemtext:${c.itemText};--sl-itemborder:${c.itemBorder};--sl-nodata:${c.noData};--sl-h:${sl.buttonHeight ?? 24}px`
+    + `${sl.fontSize ? `;--sl-fs:${sl.fontSize}pt` : ''}${sl.headSize ? `;--sl-hfs:${sl.headSize}pt` : ''}${sl.bold ? ';--sl-fw:700' : ''}${sl.font ? `;--sl-ff:"${String(sl.font).replace(/"/g, '')}"` : ''}`;
 }
 
 export const CUSTOM_KEYS = [

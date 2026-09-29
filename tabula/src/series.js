@@ -1,7 +1,7 @@
 // 채우기 핸들 / 연속 데이터 생성
 import { shiftFormula } from './formula.js';
 
-const LISTS = [
+export const CUSTOM_LISTS = [
   ['일', '월', '화', '수', '목', '금', '토'],
   ['일요일', '월요일', '화요일', '수요일', '목요일', '금요일', '토요일'],
   ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
@@ -56,7 +56,7 @@ export function makeSeries(seq, forward, axis) {
 
   // 목록 (요일, 월 등)
   if (plain) {
-    for (const list of LISTS) {
+    for (const list of CUSTOM_LISTS) {
       const idx = seq.map((s) => list.indexOf(s.data.raw));
       if (idx.every((i) => i >= 0)) {
         const step = n > 1 ? idx[n - 1] - idx[n - 2] : 1;

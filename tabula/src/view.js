@@ -679,6 +679,13 @@ export class GridView {
       if (i >= 0) cls.splice(i, 1);
     }
     const comment = cell?.comment ? ` data-cm="${esc(cell.comment)}"` : '';
+    // 대각선 테두리 (↘ dd, ↗ du)
+    const dline = (on, sty, col, x1, y1, x2, y2) => {
+      if (!on) return '';
+      const [bw, kind] = { medium: [2, ''], thick: [3, ''], double: [3, ''], dashed: [1, '4,3'], dotted: [1, '1,2'], hair: [1, '1,1'], dashDot: [1, '6,2,1,2'], dashDotDot: [1, '6,2,1,2,1,2'], mediumDashed: [2, '6,3'], mediumDashDot: [2, '8,3,2,3'], mediumDashDotDot: [2, '8,3,2,3,2,3'], slantDashDot: [2, '8,2,2,2'] }[sty] ?? [1, ''];
+      return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${esc(col ?? '#000')}" stroke-width="${bw}"${kind ? ` stroke-dasharray="${kind}"` : ''}/>`;
+    };
+    const diagHtml = style.dd || style.du ? `<svg class="cdiag" width="${w}" height="${h}">${dline(style.dd, style.dds, style.ddc, 0, 0, w, h)}${dline(style.du, style.dus, style.duc, 0, h, w, 0)}</svg>` : '';
     const iconHtml = icon ? `<i class="cf-icon">${ICON_SVG[icon] ?? ''}</i>` : '';
     if (icon) cls.push('has-icon');
     if (image) {
@@ -690,7 +697,7 @@ export class GridView {
       if (i >= 0) cls.splice(i, 1);
       return `<div class="c cimg-cell${cls.length ? ` ${cls.join(' ')}` : ''}" data-r="${r}" data-c="${c}" style="${css.join(';')}"${comment}>${img}</div>`;
     }
-    return `<div class="c${cls.length ? ` ${cls.join(' ')}` : ''}" data-r="${r}" data-c="${c}" style="${css.join(';')}"${comment}>${iconHtml}${rotBox ?? `<span${spanCss}>${hideValue ? '' : esc(text)}</span>`}</div>`;
+    return `<div class="c${cls.length ? ` ${cls.join(' ')}` : ''}" data-r="${r}" data-c="${c}" style="${css.join(';')}"${comment}>${diagHtml}${iconHtml}${rotBox ?? `<span${spanCss}>${hideValue ? '' : esc(text)}</span>`}</div>`;
   }
 
   /** 그림 개체: 차트 · 그림 · 도형 */
