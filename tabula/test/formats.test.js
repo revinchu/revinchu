@@ -92,3 +92,88 @@ test('큰 데이터: 고유 숫자 15만 개인 피벗 원본 저장 · MAX(열 
   assert.equal(wb.getValue(0, 0, 8), 149999);
   assert.match(textOf(unzip(writeXlsx(wb))['xl/pivotCache/pivotCacheDefinition1.xml']), /maxValue="150000.5"/);
 });
+
+test('.xls (엑셀 97-2003) 읽기: 시트 · 값 · 서식 · 수식(공유 · 시트 참조 · 이름 · 추가 기능 함수 · 배열 상수)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { readXls } = await import('../src/xls.js');
+  const { Workbook } = await import('../src/workbook.js');
+  const res = readXls(new Uint8Array(readFileSync(new URL('./fixtures/formulas97.xls', import.meta.url))));
+  assert.deepEqual(res.warnings, []);
+  const wb = new Workbook(res.data);
+  assert.deepEqual(wb.sheets.map((s) => s.name), ['Sheet1', '데이터 2']);
+  assert.deepEqual(wb.names.map((n) => [n.name, n.ref]), [['단가', '=Sheet1!$B$1:$B$10']]);
+  const f = (r, c) => wb.getCell(0, r, c).raw;
+  assert.equal(f(4, 2), '=A5*B5+$A$1'); // 공유 수식의 상대 참조
+  assert.equal(f(3, 5), "=SUMIF('데이터 2'!A1:A30,\"항목1\",'데이터 2'!B1:B30)");
+  assert.equal(f(11, 5), '=SUM({1,2;3,4})');
+  assert.equal(f(16, 5), '=EDATE(DATE(2024,1,31),1)');
+  assert.equal(f(12, 5), '=IFERROR(1/0,"오류")');
+  assert.equal(f(25, 5), '=A1:A3 A2:B2');
+  const cached = [];
+  wb.sheets.forEach((s, si) => s.cells.forEachRC((c, r, cc) => { if (c.formula) cached.push([si, r, cc, wb.getValue(si, r, cc)]); }));
+  wb.invalidate();
+  for (const [si, r, c, v] of cached) {
+    const x = wb.getValue(si, r, c);
+    assert.ok(JSON.stringify(x) === JSON.stringify(v) || Math.abs(x - v) < 1e-9, `${r},${c} ${JSON.stringify(x)} ≠ ${JSON.stringify(v)}`);
+  }
+});
+
+/** 작은 EMF 만들기: 머리말 + 붓 · 사각형 + 글꼴 · 글자 + 끝 */
+function tinyEmf() {
+  const recs = [];
+  const rec = (type, body) => { const len = 8 + body.length; recs.push([...i32(type), ...i32(len), ...body]); };
+  const header = [...i32(0), ...i32(0), ...i32(99), ...i32(49), ...i32(0), ...i32(0), ...i32(2646), ...i32(1323),
+    0x20, 0x45, 0x4d, 0x46, ...i32(0x10000), ...i32(0), ...i32(0), ...u16(0), ...u16(0), ...i32(0), ...i32(0), ...i32(0),
+    ...i32(1920), ...i32(1080), ...i32(508), ...i32(285)];
+  rec(1, header);
+  rec(39, [...i32(1), ...i32(0), 0x44, 0x72, 0xc4, 0, ...i32(0)]); // 붓 #4472c4
+  rec(37, i32(1));
+  rec(37, i32(0x80000008)); // NULL_PEN
+  rec(43, [...i32(10), ...i32(10), ...i32(60), ...i32(40)]);
+  const face = [...'맑은 고딕'].flatMap((ch) => u16(ch.charCodeAt(0)));
+  rec(82, [...i32(2), ...i32(-12), ...i32(0), ...i32(0), ...i32(0), ...i32(700), 0, 0, 0, 129, 0, 0, 0, 0, ...face, ...new Array(64 - face.length).fill(0)]);
+  rec(37, i32(2));
+  rec(24, [0xff, 0, 0, 0]); // 글자색 빨강
+  const str = [...'매출'].flatMap((ch) => u16(ch.charCodeAt(0)));
+  // EMREXTTEXTOUTW: bounds 16 + mode/scale 12 + EMRTEXT 40 (+8 머리) = 76 바이트 뒤에 문자열
+  rec(84, [...i32(0), ...i32(0), ...i32(0), ...i32(0), ...i32(1), ...i32(0), ...i32(0),
+    ...i32(5), ...i32(45), ...i32(2), ...i32(76), ...i32(0), ...i32(0), ...i32(0), ...i32(-1), ...i32(-1), ...i32(0), ...str]);
+  rec(14, [...i32(0), ...i32(0), ...i32(20)]);
+  const all = recs.flat();
+  all.splice(48, 4, ...i32(all.length)); // nBytes
+  all.splice(52, 4, ...i32(recs.length));
+  return new Uint8Array(all);
+}
+
+test('EMF 그림을 SVG 로 그리고 xlsx 로 다시 저장할 때 원본 EMF 를 유지', async () => {
+  const { emfToSvg } = await import('../src/emf.js');
+  const { zip } = await import('../src/zip.js');
+  const emf = tinyEmf();
+  const svg = emfToSvg(emf);
+  assert.match(svg, /viewBox="0 0 100 50"/);
+  assert.match(svg, /<path d="M10 10H60V40H10Z" fill="#4472c4" stroke="none"/);
+  assert.match(svg, /<text x="5" y="45"[^>]*font-size="12" font-weight="bold" fill="#ff0000"[^>]*>매출<\/text>/);
+  assert.equal(emfToSvg(new Uint8Array(100)), null);
+
+  // xlsx 안의 EMF → 화면용 SVG + 원본(im.emf), 저장하면 다시 .emf
+  const wb = new Workbook();
+  wb.setInput(0, 0, 0, '1');
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==';
+  wb.sheets[0].images.push({ id: 'im1', name: '차트', x: 10, y: 10, w: 100, h: 50, src: `data:image/png;base64,${png}` });
+  const files = unzip(writeXlsx(wb));
+  const media = Object.keys(files).find((k) => k.startsWith('xl/media/'));
+  delete files[media];
+  files['xl/media/image1.emf'] = emf;
+  for (const k of Object.keys(files)) {
+    if (/drawing\d+\.xml\.rels$/.test(k)) files[k] = new TextEncoder().encode(textOf(files[k]).replace(/image1\.png/, 'image1.emf'));
+    if (k === '[Content_Types].xml') files[k] = new TextEncoder().encode(textOf(files[k]).replace('Extension="png" ContentType="image/png"', 'Extension="emf" ContentType="image/x-emf"'));
+  }
+  const { data, warnings } = readXlsx(zip(files));
+  assert.deepEqual(warnings, []);
+  const im = new Workbook(data).sheets[0].images[0];
+  assert.match(im.src, /^data:image\/svg\+xml;base64,/);
+  assert.match(im.emf, /^data:image\/x-emf;base64,/);
+  const out = unzip(writeXlsx(new Workbook(data)));
+  assert.deepEqual([...out['xl/media/image1.emf']], [...emf]);
+  assert.match(textOf(out['[Content_Types].xml']), /Extension="emf" ContentType="image\/x-emf"/);
+});

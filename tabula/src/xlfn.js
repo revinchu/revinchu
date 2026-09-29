@@ -42,6 +42,24 @@ const quoteStr = (s) => `"${String(s).replace(/"/g, '""')}"`;
 const errCode = (e) => (e && typeof e === 'object' && e.code ? e.code : String(e));
 const constText = (v) => (typeof v === 'number' ? fmtNum(v) : typeof v === 'string' ? quoteStr(v) : typeof v === 'boolean' ? (v ? 'TRUE' : 'FALSE') : errCode(v));
 
+/**
+ * 값 하나를 받는 인수 (범위를 주면 옛 형식 수식에서 암시적 교차: SUMIF 의 조건 B145:B147 → 수식 행의 B145).
+ * 범위를 받는 인수는 제외 (SUMIF 의 range · sum_range 등)
+ */
+const SCALAR_ARGS = {
+  SUMIF: [1], COUNTIF: [1], AVERAGEIF: [1],
+  VLOOKUP: [0, 2, 3], HLOOKUP: [0, 2, 3], MATCH: [0, 2], XLOOKUP: [0, 4, 5], XMATCH: [0, 2, 3], LOOKUP: [0],
+  INDEX: [1, 2, 3], OFFSET: [1, 2, 3, 4], LARGE: [1], SMALL: [1], PERCENTILE: [1], QUARTILE: [1], RANK: [0, 2],
+};
+function scalarArg(name, i) {
+  const pos = SCALAR_ARGS[name];
+  if (pos) return pos.includes(i);
+  // 조건 쌍: SUMIFS · AVERAGEIFS · MAXIFS · MINIFS (범위, 조건 …) 의 조건 자리, COUNTIFS 는 홀수 자리
+  if (name === 'COUNTIFS') return i % 2 === 1;
+  if (name === 'SUMIFS' || name === 'AVERAGEIFS' || name === 'MAXIFS' || name === 'MINIFS') return i >= 2 && i % 2 === 0;
+  return false;
+}
+
 /** LET · LAMBDA 가 만드는 지역 이름 */
 function boundNames(node) {
   if (node.type !== 'func') return [];
@@ -101,7 +119,7 @@ function print(node, src, opt, scope = new Set(), scalar = false) {
       const inner = new Set(scope);
       for (const n of boundNames(node)) inner.add(n);
       const fn = FUNCS[name];
-      const lifted = (i) => fn && (fn.liftPos === 'all' || (Array.isArray(fn.liftPos) && fn.liftPos.includes(i)));
+      const lifted = (i) => (fn && (fn.liftPos === 'all' || (Array.isArray(fn.liftPos) && fn.liftPos.includes(i)))) || scalarArg(name, i);
       const pass = ['IF', 'IFS', 'SWITCH', 'IFERROR', 'IFNA', 'CHOOSE', 'NOT'].includes(name);
       const args = node.args.map((a, i) => {
         // 함수 이름만 쓴 인수 (GROUPBY(..., SUM)) → _xleta.

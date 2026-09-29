@@ -113,6 +113,24 @@ export function measureText(text, st) {
   return w;
 }
 
+/** 글꼴이 이 컴퓨터에 없는지 (없으면 대체 글꼴로 그려져 너비가 파일을 만든 엑셀과 다름) */
+const missingFont = new Map();
+export function fontMissing(name) {
+  if (!name || typeof document === 'undefined') return false;
+  let v = missingFont.get(name);
+  if (v === undefined) {
+    const probe = '0123456789,.원 %Wm';
+    v = ['monospace', 'serif'].every((fb) => {
+      measureCtx.font = `40px ${fb}`;
+      const a = measureCtx.measureText(probe).width;
+      measureCtx.font = `40px "${name}", ${fb}`;
+      return measureCtx.measureText(probe).width === a;
+    });
+    missingFont.set(name, v);
+  }
+  return v;
+}
+
 /** 열이 좁을 때: 일반 서식은 소수 자릿수를 줄이거나 지수로, 그 밖에는 ### (엑셀과 동일) */
 function fitNumber(v, maxW, style) {
   const general = (!style.numFmt || style.numFmt === 'general') && style.decimals === undefined;
@@ -763,7 +781,9 @@ export class GridView {
     if (style.bl && !shared('left')) css.push(borderCss('left', style.bls, style.blc));
     if (style.br) css.push(borderCss('right', style.brs, style.brc));
     const cls = [];
-    if (style.wrap) cls.push('wrap');
+    // 숫자는 자동 줄 바꿈이어도 한 줄 (엑셀: 들어가지 않으면 ###)
+    const wrap = style.wrap && typeof v !== 'number';
+    if (wrap) cls.push('wrap');
     else if (text && eff === 'left' && typeof v !== 'number' && !merge) {
       const next = wb.getCell(si, r, c + 1);
       if (!next?.raw && !merges.some((m) => r >= m.r1 && r <= m.r2 && c + 1 >= m.c1 && c + 1 <= m.c2)) cls.push('ovf');
@@ -777,8 +797,13 @@ export class GridView {
       if (i >= 0) cls.splice(i, 1);
     }
     const room = w - 6 - (icon ? ICON_W : 0);
-    if (typeof v === 'number' && text && !style.wrap && !st.showFormulas && measureText(text, style) > room) {
-      text = fitNumber(v, room, style);
+    if (typeof v === 'number' && text && !st.showFormulas) {
+      const tw = measureText(text, style);
+      if (tw > room) {
+        // 파일의 글꼴(돋움 등)이 없어 대체 글꼴이 더 넓어서 넘치는 경우: ### 대신 조금 작게 (엑셀 화면에서는 들어맞음)
+        if (tw <= room * 1.3 && fontMissing(style.font || BASE_FONT.name)) css.push(`font-size:${(((style.size ?? BASE_FONT.size) * room) / tw).toFixed(2)}pt`);
+        else text = fitNumber(v, room, style);
+      }
     }
     // 셀에 맞춤(축소): 글자가 칸보다 넓으면 글꼴을 줄여서 한 줄에 맞춤
     let spanCss = '';
@@ -855,7 +880,17 @@ export class GridView {
       else if (prop === 'images') {
         // 그림 스타일: 테두리 · 둥근 모서리 · 그림자 · 회전 · 투명도
         const ic = [o.border ? `border:${o.borderW ?? 2}px solid ${esc(o.border)}` : '', o.radius ? `border-radius:${o.radius}px` : '', o.shadow ? 'box-shadow:3px 3px 8px rgba(0,0,0,.4)' : '', o.opacity !== undefined ? `opacity:${o.opacity}` : ''].filter(Boolean).join(';');
-        box(o, 'pic', `<img src="${esc(o.src)}" alt="${esc(o.name ?? '')}" draggable="false"${ic ? ` style="${ic};box-sizing:border-box"` : ''}>`, o.rot ? `transform:rotate(${o.rot}deg)` : '');
+        // 자르기(crop: 위 · 아래 · 왼쪽 · 오른쪽 비율): 원본을 키워 보이는 부분만 틀에 맞춤
+        const cr = o.crop;
+        const img = cr
+          ? (() => {
+            const w = 1 - (cr.l ?? 0) - (cr.r ?? 0);
+            const h = 1 - (cr.t ?? 0) - (cr.b ?? 0);
+            const pct = (v) => `${(v * 100).toFixed(3)}%`;
+            return `<div style="position:absolute;inset:0;overflow:hidden;${ic}"><img src="${esc(o.src)}" alt="${esc(o.name ?? '')}" draggable="false" style="position:absolute;max-width:none;left:${pct(-(cr.l ?? 0) / w)};top:${pct(-(cr.t ?? 0) / h)};width:${pct(1 / w)};height:${pct(1 / h)}"></div>`;
+          })()
+          : `<img src="${esc(o.src)}" alt="${esc(o.name ?? '')}" draggable="false"${ic ? ` style="${ic};box-sizing:border-box"` : ''}>`;
+        box(o, 'pic', img, o.rot ? `transform:rotate(${o.rot}deg)` : '');
       }
       else {
         const isLine = LINE_KINDS.has(o.kind);

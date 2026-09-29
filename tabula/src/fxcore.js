@@ -215,7 +215,8 @@ export function wildcardRegex(pattern) {
   let re = '';
   for (let i = 0; i < pattern.length; i++) {
     const ch = pattern[i];
-    if (ch === '~' && i + 1 < pattern.length) re += escapeRe(pattern[++i]);
+    // 엑셀: ~ 는 뒤의 * ? ~ 만 글자로 만듦 ('00:00~01:00' 의 ~ 는 그냥 글자)
+    if (ch === '~' && i + 1 < pattern.length && '*?~'.includes(pattern[i + 1])) re += escapeRe(pattern[++i]);
     else if (ch === '*') re += '.*';
     else if (ch === '?') re += '.';
     else re += escapeRe(ch);

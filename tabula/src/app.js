@@ -22,6 +22,7 @@ import { GridView, BASE_FONT, setBaseFont, measureText, fontStack, PATTERNS, pat
 import { setThemeColors } from './stylepresets.js';
 import { readXlsxAsync, writeXlsxAsync, xlsxOverflow } from './xlsx.js';
 import { readOds, writeOds } from './ods.js';
+import { readXls } from './xls.js';
 import { CHART_TYPES, CHART_GALLERY, CHART_PALETTES, PALETTE, paletteOf, renderChartSvg, chartModelData } from './chart.js';
 import {
   computePivot, warmPivots, AGGREGATES, SHOW_AS, BASE_POS, LAYOUTS, pivotSourceData, resolvePivot, itemText, headerNames, normalizeDef, valueName,
@@ -9011,12 +9012,15 @@ async function openFileObject(file, mode) {
   fileMode = mode;
   const base = file.name.replace(/\.[^.]+$/, '');
   try {
-    if (/\.(xlsx|xlsm|xlsb|xltx|xltm)$/i.test(file.name)) {
+    if (/\.(xlsx|xlsm|xlsb|xltx|xltm|xls|xlt)$/i.test(file.name)) {
       // 큰 파일도 화면이 멈추지 않도록 나눠서 읽고, 진행 상황을 보여 줌
       const prog = progressOverlay(`'${file.name}' 여는 중`);
       let res;
       try {
-        res = await readXlsxAsync(new Uint8Array(await file.arrayBuffer()), (st) => prog.set(st.p * 0.6, st.msg));
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        // 엑셀 97-2003(.xls): OLE 복합 문서 (확장자와 달리 내용이 xlsx 인 파일도 있어 서명으로 판단)
+        const ole = bytes[0] === 0xd0 && bytes[1] === 0xcf && bytes[2] === 0x11 && bytes[3] === 0xe0;
+        res = ole ? readXls(bytes) : await readXlsxAsync(bytes, (st) => prog.set(st.p * 0.6, st.msg));
         if (fileMode === 'open') await loadWorkbookAsync(res.data, base, res.active, prog);
       } finally {
         prog.close();
@@ -9886,7 +9890,7 @@ function openBackstage(panel = 'new') {
   );
   const showOpen = async () => {
     const actions = el('div', { class: 'backstage-actions' },
-      el('button', { class: 'btn primary', onclick: () => { close(); pickFile('open'); } }, '이 기기에서 찾아보기 (.xlsx · .xlsb · .xlsm · .ods · .csv · .wixel 등)'));
+      el('button', { class: 'btn primary', onclick: () => { close(); pickFile('open'); } }, '이 기기에서 찾아보기 (.xlsx · .xls · .xlsb · .xlsm · .ods · .csv · .wixel 등)'));
     main.replaceChildren(el('h2', {}, '열기'), actions, el('h3', { class: 'tpl-cat' }, '최근 항목 (이 브라우저)'), await recentTable(close));
     if (server.available) main.append(el('h3', { class: 'tpl-cat' }, '서버 (다른 기기와 공유)'));
     if (!server.available) {
@@ -12406,7 +12410,7 @@ function bindEvents() {
     if (file.type.startsWith('image/')) {
       const hit = gv.hitTest(e.clientX, e.clientY);
       addImageFile(file, { x: Math.round(hit.sheetX), y: Math.round(hit.sheetY) });
-    } else if (/\.(xlsx|xlsm|xlsb|xltx|xltm|ods|fods|csv|tsv|tab|prn|txt|tabula|wixel|json)$/i.test(file.name)) {
+    } else if (/\.(xlsx|xlsm|xlsb|xls|xlt|xltx|xltm|ods|fods|csv|tsv|tab|prn|txt|tabula|wixel|json)$/i.test(file.name)) {
       openFileObject(file, 'open');
     }
   });

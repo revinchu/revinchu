@@ -16,6 +16,7 @@ import { chartLayout, PALETTE, chartModelData, paletteOf } from './chart.js';
 import { Axis, hid, hidKeys } from './axis.js';
 import { toBase64, fromBase64 } from './vba.js';
 import { CellImage } from './fxcore.js';
+import { emfDataUrl } from './emf.js';
 import { GEOM, LINE_KINDS } from './shapes.js';
 import { BLOCK_MIN_ROWS, ColBuilder, inBlock, blockValue } from './block.js';
 import { normalizeStyleName, DEFAULT_TABLE_STYLE, dataTop, dataBottom, canonicalRef, tableAt, columnNames, findTable } from './tables.js';
@@ -36,14 +37,14 @@ const DEFAULT_FONT = '맑은 고딕';
 // 엑셀 열 너비: 파일의 너비(w) × 기본 글꼴의 숫자 너비(MDW, 픽셀). 기본 글꼴이 맑은 고딕 11pt 면 MDW 8, Calibri 11pt 면 7
 const DIGIT_EM = { calibri: 0.507, 'calibri light': 0.49, '맑은 고딕': 0.55, 'malgun gothic': 0.55, arial: 0.556, '굴림': 0.5, gulim: 0.5, '굴림체': 0.5, '돋움': 0.5, dotum: 0.5, '돋움체': 0.5, '바탕': 0.5, batang: 0.5, '나눔고딕': 0.6, nanumgothic: 0.6, 'nanum gothic': 0.6, 'times new roman': 0.5, cambria: 0.556, 'segoe ui': 0.55, verdana: 0.636, tahoma: 0.546, 'meiryo ui': 0.55, 'ms gothic': 0.5, simsun: 0.5 };
 export const digitWidth = (font) => Math.max(4, Math.round(((font?.size || 11) * 96) / 72 * (DIGIT_EM[String(font?.name ?? '맑은 고딕').toLowerCase()] ?? 0.53)));
-const width2pxM = (w, mdw) => Math.max(0, Math.trunc(((256 * w + Math.trunc(128 / mdw)) / 256) * mdw));
+export const width2pxM = (w, mdw) => Math.max(0, Math.trunc(((256 * w + Math.trunc(128 / mdw)) / 256) * mdw));
 const px2widthM = (px, mdw) => Math.max(0, Math.round((px / mdw) * 256) / 256);
 /** 기본 열 너비(글자 수, baseColWidth) → 픽셀: 8 픽셀 단위로 올림 (엑셀과 같음) */
-const baseColPx = (base, mdw) => Math.ceil((base * mdw + 5) / 8) * 8;
+export const baseColPx = (base, mdw) => Math.ceil((base * mdw + 5) / 8) * 8;
 const WRITE_FONT = { name: '맑은 고딕', size: 11 };
 const px2width = (px, mdw = digitWidth(WRITE_FONT)) => px2widthM(px, mdw);
 const width2px = (w, mdw = 7) => width2pxM(w, mdw);
-const pt2px = (pt) => Math.round((pt * 4) / 3);
+export const pt2px = (pt) => Math.round((pt * 4) / 3);
 const px2pt = (px) => Math.round(px * 0.75 * 100) / 100;
 
 function refToRange(ref) {
@@ -57,7 +58,7 @@ function rangeRef(rg, abs = false) {
 }
 
 /** 문자열 값이 입력 해석으로 다른 값이 되지 않도록 raw 생성 */
-function textRaw(s) {
+export function textRaw(s) {
   if (s === '') return "'"; // 빈 글자("") 셀: 빈 칸과 달리 COUNTA · 피벗 개수에 셈 (엑셀과 같음)
   if (s.startsWith('=') || s.startsWith("'")) return `'${s}`;
   const p = parseInput(s);
@@ -65,7 +66,7 @@ function textRaw(s) {
 }
 
 // ───────────────────────── 색상 ─────────────────────────
-const INDEXED = ('000000,FFFFFF,FF0000,00FF00,0000FF,FFFF00,FF00FF,00FFFF,000000,FFFFFF,FF0000,00FF00,0000FF,FFFF00,FF00FF,00FFFF,'
+export const INDEXED = ('000000,FFFFFF,FF0000,00FF00,0000FF,FFFF00,FF00FF,00FFFF,000000,FFFFFF,FF0000,00FF00,0000FF,FFFF00,FF00FF,00FFFF,'
   + '800000,008000,000080,808000,800080,008080,C0C0C0,808080,9999FF,993366,FFFFCC,CCFFFF,660066,FF8080,0066CC,CCCCFF,'
   + '000080,FF00FF,FFFF00,00FFFF,800080,800000,008080,0000FF,00CCFF,CCFFFF,CCFFCC,FFFF99,99CCFF,FF99CC,CC99FF,FFCC99,'
   + '3366FF,33CCCC,99CC00,FFCC00,FF9900,FF6600,666699,969696,003366,339966,003300,333300,993300,993366,333399,333333,000000,FFFFFF').split(',');
@@ -85,7 +86,7 @@ function colorOf(el, theme) {
 const argb = (color) => `FF${String(color).replace('#', '').toUpperCase().padStart(6, '0').slice(0, 6)}`;
 
 // ───────────────────────── 표시 형식 ─────────────────────────
-const BUILTIN_FMT = {
+export const BUILTIN_FMT = {
   0: {}, 1: { decimals: 0 }, 2: { decimals: 2 }, 3: { numFmt: 'comma' }, 4: { numFmt: 'number', decimals: 2 },
   9: { numFmt: 'percent' }, 10: { numFmt: 'percent', decimals: 2 }, 11: { numFmt: 'scientific' },
   12: { numFmt: 'fraction' }, 13: { numFmt: 'fraction' }, 14: { numFmt: 'date' }, 15: { numFmt: 'date' },
@@ -98,7 +99,7 @@ const BUILTIN_FMT = {
 for (const id of [27, 28, 29, 30, 31, 34, 35, 36, 50, 51, 52, 53, 54, 57, 58]) BUILTIN_FMT[id] = { numFmt: 'date' };
 for (const id of [32, 33, 55, 56]) BUILTIN_FMT[id] = { numFmt: 'time' };
 // 기본 제공 번호 중 음수 괄호 · 빨강 · 통화 · 회계 형식은 실제 서식 코드로 (한국어 엑셀 기준)
-const BUILTIN_CODE = {
+export const BUILTIN_CODE = {
   5: '"₩"#,##0;"₩"\\-#,##0', 6: '"₩"#,##0;[Red]"₩"\\-#,##0', 7: '"₩"#,##0.00;"₩"\\-#,##0.00', 8: '"₩"#,##0.00;[Red]"₩"\\-#,##0.00',
   37: '#,##0_);(#,##0)', 38: '#,##0_);[Red](#,##0)', 39: '#,##0.00_);(#,##0.00)', 40: '#,##0.00_);[Red](#,##0.00)',
   41: '_-* #,##0_-;\\-* #,##0_-;_-* "-"_-;_-@_-', 42: '_-"₩"* #,##0_-;\\-"₩"* #,##0_-;_-"₩"* "-"_-;_-@_-',
@@ -1025,7 +1026,7 @@ function readTable(root, sheet) {
   };
 }
 
-function numberRaw(v, style) {
+export function numberRaw(v, style) {
   const fmt = style?.numFmt;
   if ((fmt === 'date' || fmt === 'longdate') && Number.isInteger(v) && v > 0) {
     const d = new Date(Date.UTC(1899, 11, 30) + v * 86400000);
@@ -1050,7 +1051,7 @@ const prstKind = (prst) => {
   if (/Callout/.test(prst)) return 'wedgeRectCallout';
   return 'rect';
 };
-const MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', bmp: 'image/bmp', svg: 'image/svg+xml', webp: 'image/webp' };
+const MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', bmp: 'image/bmp', svg: 'image/svg+xml', webp: 'image/webp', emf: 'image/x-emf' };
 
 /** DrawingML 색 (srgbClr / schemeClr / sysClr) */
 function dmlColor(el, theme) {
@@ -1095,7 +1096,12 @@ function readDrawing(files, path, sheet, ctx) {
   const { colAxis, rowAxis } = objectAxes(sheet);
   const point = (el) => {
     const n = (name) => Number(child(el, name)?.text ?? 0);
-    return { x: colAxis.pos(n('col')) + n('colOff') / EMU, y: rowAxis.pos(n('row')) + n('rowOff') / EMU };
+    // 엑셀: 칸 안의 오프셋은 그 칸의 너비 · 높이를 넘지 않음 (좁은 열에 큰 colOff 가 있어도 다음 열로 넘어가지 않음)
+    const c = n('col');
+    const r = n('row');
+    const cw = colAxis.pos(c + 1) - colAxis.pos(c);
+    const rh = rowAxis.pos(r + 1) - rowAxis.pos(r);
+    return { x: colAxis.pos(c) + Math.min(n('colOff') / EMU, cw), y: rowAxis.pos(r) + Math.min(n('rowOff') / EMU, rh) };
   };
   const uid = (p) => `${p}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
   const round = (b) => ({ x: Math.round(b.x), y: Math.round(b.y), w: Math.max(1, Math.round(b.w)), h: Math.max(1, Math.round(b.h)) });
@@ -1201,11 +1207,17 @@ function readDrawing(files, path, sheet, ctx) {
     if (!bytes) return;
     const ext = target.split('.').pop().toLowerCase();
     const mime = MIME[ext];
-    if (!mime) { ctx.warnings.add(`지원하지 않는 그림 형식(${ext})은 가져오지 않았습니다.`); return; }
+    // EMF: 브라우저가 못 그리므로 SVG 로 바꿔 보여 주고, 저장할 때는 원본 EMF 를 씀
+    const emf = ext === 'emf' && `data:image/x-emf;base64,${toBase64(bytes)}`;
+    const src = picSrc.get(target) ?? (emf ? emfDataUrl(bytes) : mime && `data:${mime};base64,${toBase64(bytes)}`);
+    if (!src) { ctx.warnings.add(`지원하지 않는 그림 형식(${ext})은 가져오지 않았습니다.`); return; }
     const name = descendants(child(el, 'nvPicPr'), 'cNvPr')[0]?.attrs.name ?? '그림';
-    const src = picSrc.get(target) ?? `data:${mime};base64,${toBase64(bytes)}`;
     picSrc.set(target, src); // 같은 그림을 여러 번 쓰면 한 번만 변환
     const im = { id: uid('im'), name, ...round(box), z: ++z, src };
+    if (emf) im.emf = emf;
+    // 그림 자르기 (a:srcRect, 1/1000 %)
+    const sr = descendants(child(el, 'blipFill'), 'srcRect')[0];
+    if (sr && ['l', 't', 'r', 'b'].some((k) => Number(sr.attrs[k]))) im.crop = Object.fromEntries(['l', 't', 'r', 'b'].filter((k) => Number(sr.attrs[k])).map((k) => [k, Number(sr.attrs[k]) / 100000]));
     // 그림 윤곽선 (a:ln 단색 채우기)
     const ln = child(child(el, 'spPr'), 'ln');
     const lc = ln && !child(ln, 'noFill') && dmlColor(child(ln, 'solidFill'), ctx.theme);
@@ -3409,7 +3421,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
           parts.push(anchor(ch, `<xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="${objId}" name="차트 ${objId - 1}"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="${id}"/></a:graphicData></a:graphic></xdr:graphicFrame>`));
         } else if (kind === 'image') {
           const im = o;
-          const m = /^data:([^;,]+);base64,(.*)$/s.exec(im.src ?? '');
+          const m = /^data:([^;,]+);base64,(.*)$/s.exec(im.emf ?? im.src ?? '');
           if (!m) continue;
           const ext = Object.keys(MIME).find((k) => MIME[k] === m[1]) ?? 'png';
           mediaNo++;
@@ -3417,7 +3429,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
           files[`xl/media/image${mediaNo}.${ext}`] = fromBase64(m[2]);
           const id = drel('image', `../media/image${mediaNo}.${ext}`);
           objId++;
-          parts.push(anchor(im, `<xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${objId}" name="${esc(im.name || `그림 ${objId - 1}`)}"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="${id}"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>${xfrm(im)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${/^#[0-9a-f]{6}$/i.test(im.border ?? "") ? `<a:ln w="${Math.round((im.borderW ?? 2) * EMU)}"><a:solidFill><a:srgbClr val="${im.border.replace('#', '').toUpperCase()}"/></a:solidFill></a:ln>` : ''}</xdr:spPr></xdr:pic>`));
+          parts.push(anchor(im, `<xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${objId}" name="${esc(im.name || `그림 ${objId - 1}`)}"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="${id}"/>${im.crop ? `<a:srcRect${['l', 't', 'r', 'b'].map((k) => (im.crop[k] ? ` ${k}="${Math.round(im.crop[k] * 100000)}"` : '')).join('')}/>` : ''}<a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>${xfrm(im)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${/^#[0-9a-f]{6}$/i.test(im.border ?? "") ? `<a:ln w="${Math.round((im.borderW ?? 2) * EMU)}"><a:solidFill><a:srgbClr val="${im.border.replace('#', '').toUpperCase()}"/></a:solidFill></a:ln>` : ''}</xdr:spPr></xdr:pic>`));
         } else if (kind === 'slicerTable' || kind === 'slicerPivot') {
           objId++;
           parts.push(slicerAnchorXml(o.sl, o.name, objId, anchorAt, kind === 'slicerTable' ? 'table' : 'pivot'));
