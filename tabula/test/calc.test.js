@@ -126,3 +126,16 @@ test('동적 수식(INDIRECT · OFFSET)은 무엇이 바뀌어도 다시 계산'
   assert.equal(wb.getValue(0, 3, 0), 24);
   assert.equal(wb.getValue(0, 3, 1), 24);
 });
+
+test('GETPIVOTDATA: 피벗이 있는 시트가 바뀔 때만 다시 계산 (다른 칸 편집은 무관)', async () => {
+  const { DepGraph } = await import('../src/depgraph.js');
+  const wb = new Workbook();
+  wb.transact(() => wb.addSheet('피벗'));
+  fill(wb, 0, [[1, '=IFERROR(GETPIVOTDATA("매출",피벗!$A$1,"지역",A1),0)'], [2, '=IFERROR(GETPIVOTDATA("매출",피벗!$A$1,"지역",A2),0)']]);
+  const g = new DepGraph(wb);
+  assert.equal(g.dyn.size, 0);
+  const pts = (arr) => { const out = g.propagate(arr) ?? []; const s = new Set(); for (let i = 0; i < out.length; i += 3) s.add(`${out[i]}:${out[i + 1]},${out[i + 2]}`); return s; };
+  assert.deepEqual(pts([0, 5, 5]), new Set()); // 관계없는 칸
+  assert.deepEqual(pts([1, 40, 7]), new Set(['0:0,1', '0:1,1'])); // 피벗 시트의 아무 칸
+  assert.equal(g.propagate([1, 40, 7], 1), null); // 한도를 넘으면 시트 단위로
+});

@@ -6,12 +6,12 @@ import { protectFromAttrs, protectXml } from './protect.js';
 import { pageXml, pageFromXml, normPage } from './page.js';
 import { parseXml, child, kids, descendants, allText, esc, decodeEntities } from './xml.js';
 import {
-  parse, tokenize, shiftFormula, colToName, nameToCol, cellName, parseRangeName, FUNCS, isError,
+  parse, tokenize, colToName, nameToCol, cellName, parseRangeName, FUNCS, isError,
   quoteSheetName, MAX_ROWS, MAX_COLS, EXCEL_MAX_ROWS, mayReturnArray, unknownFunctions,
 } from './formula.js';
 import { toFileFormula, fromFileFormula } from './xlfn.js';
 import { parseInput, formatGeneral, fmtCode, styleForCode } from './format.js';
-import { DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT } from './workbook.js';
+import { DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT, formulaShifter } from './workbook.js';
 import { chartLayout, PALETTE, chartModelData, paletteOf } from './chart.js';
 import { Axis, hid, hidKeys } from './axis.js';
 import { toBase64, fromBase64 } from './vba.js';
@@ -22,7 +22,7 @@ import { normalizeStyleName, DEFAULT_TABLE_STYLE, dataTop, dataBottom, canonical
 import { pivotSourceData, resolvePivot, itemText, keyOf, sortKeys, EMPTY, headerNames, normalizeDef, computePivot, valueName, showAsPercent, excelCalcFormula } from './pivot.js';
 import { slicerStyleName, slicerColors, isModernSlicer } from './slicerstyle.js';
 import { applyTint, DEFAULT_THEME, PRESET_STYLES, presetStyle, isModernStyle, ELEMENT_TYPES, elementDxfStyle } from './stylepresets.js';
-import { maxOf, minOf, pushAll } from './fxcore.js';
+import { maxOf, minOf, pushAll, EPOCH, DAY_MS } from './fxcore.js';
 
 const NS_MAIN = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
 const NS_R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -429,6 +429,11 @@ function* domRows(data) {
   }
 }
 
+/** 수식 모양: 셀 참조의 행 번호를 # 로 (함수 이름 LOG10( 등은 그대로). 길이 제한 */
+function formulaShape(f) {
+  return f.length > 2000 ? null : f.replace(/(\$?\b[A-Za-z]{1,3}\$?)\d+(?![\d(.])/g, '$1#');
+}
+
 /** 파일 수식 → 앱 수식 본문 (_xlfn. 등 접두사 제거, SINGLE → @, ANCHORARRAY → #) */
 function cleanFormula(f, opt = {}) {
   return fromFileFormula(f, opt);
@@ -492,7 +497,7 @@ function* readSheet(files, path, ctx) {
   let blockLast = -1;
   const builders = [];
   const colFmt = [];
-  const formulaMemo = ctx.formulaMemo ??= { legacy: new Map(), modern: new Map() }; // 같은 수식 문자열(표의 계산 열 등)은 한 번만 변환
+  const formulaMemo = ctx.formulaMemo ??= { legacy: new Map(), modern: new Map(), shape: new Map() }; // 같은 수식 문자열(표의 계산 열 등)은 한 번만 변환
   const textMemo = ctx.textMemo ??= new Map();
   let rowCount = 0;
   for (const row of sheetRows) {
@@ -546,7 +551,8 @@ function* readSheet(files, path, ctx) {
         if (fa.t === 'shared' && fa.si !== undefined) {
           if (c.f) shared[fa.si] = { text: c.f, r, c: cc };
           const m = shared[fa.si];
-          if (m) formula = m.r === r && m.c === cc ? m.text : shiftFormula(`=${m.text}`, r - m.r, cc - m.c).slice(1);
+          // 공유 수식: 기준 수식을 한 번만 나눠 두고 칸마다 행 · 열만 옮김
+          if (m) formula = m.r === r && m.c === cc ? m.text : (m.shift ??= formulaShifter(`=${m.text}`))(r - m.r, cc - m.c).slice(1);
         } else if (c.f) formula = c.f;
       }
       let cached;
@@ -561,9 +567,16 @@ function* readSheet(files, path, ctx) {
         const memo = legacy ? formulaMemo.legacy : formulaMemo.modern;
         let conv = memo.get(formula);
         if (!conv) {
-          const f = cleanFormula(formula, { legacy, isName: ctx.isName, nameMulti: ctx.nameMulti });
-          conv = { raw: `=${f}`, unknown: unknownFunctions(f, ctx.isName).length > 0 };
-          memo.set(formula, conv);
+          // 채우기로 만든 수식은 행 번호만 다름: 같은 모양(행 번호를 뺀 글자)이 바꿀 것 없이 그대로였으면 해석하지 않음
+          const shape = legacy ? formulaShape(formula) : null;
+          const known = shape !== null ? formulaMemo.shape.get(shape) : undefined;
+          if (known !== undefined) conv = { raw: `=${formula}`, unknown: known };
+          else {
+            const f = cleanFormula(formula, { legacy, isName: ctx.isName, nameMulti: ctx.nameMulti });
+            conv = { raw: `=${f}`, unknown: unknownFunctions(f, ctx.isName).length > 0 };
+            if (shape !== null && f === formula) formulaMemo.shape.set(shape, conv.unknown);
+          }
+          if (memo.size < 200000) memo.set(formula, conv);
         }
         raw = conv.raw;
         // 파일에 저장된 계산 결과: 열 때는 이 값을 그대로 씀 (지원하지 않는 함수는 계속 이 값을 표시)
@@ -1510,6 +1523,13 @@ function readChart(files, path, theme = {}) {
 }
 
 // ───────────────────────── 피벗 테이블 · 슬라이서 (읽기) ─────────────────────────
+/** ISO 날짜 · 시각 (시간대 없음) → 엑셀 날짜 일련번호 */
+export function isoSerial(v) {
+  const m = /^(\d{4})-(\d\d)-(\d\d)(?:T(\d\d):(\d\d)(?::(\d\d(?:\.\d+)?))?)?/.exec(v ?? '');
+  if (!m) return v ?? '';
+  const ms = Date.UTC(+m[1], +m[2] - 1, +m[3], +(m[4] ?? 0), +(m[5] ?? 0)) + Math.round(+(m[6] ?? 0) * 1000);
+  return (ms - EPOCH) / DAY_MS;
+}
 /** pivotCacheDefinition → { source: { ref, sheet, name }, fields: [{ name, items: [값] }] } */
 function readPivotCache(files, path) {
   const xml = textOf(files[path]);
@@ -1519,6 +1539,8 @@ function readPivotCache(files, path) {
   const fields = kids(child(root, 'cacheFields'), 'cacheField').map((cf) => {
     const items = (child(cf, 'sharedItems')?.children ?? []).map((it) => {
       if (it.name === 'n') return Number(it.attrs.v);
+      // 날짜 항목 (<d v="2026-05-01T00:00:00"/>): 원본 셀처럼 날짜 일련번호로 (필터 · 슬라이서 선택이 원본과 맞게)
+      if (it.name === 'd') return isoSerial(it.attrs.v);
       if (it.name === 'b') return it.attrs.v === '1' || it.attrs.v === 'true';
       if (it.name === 'm') return null;
       return it.attrs.v ?? '';
@@ -1526,7 +1548,25 @@ function readPivotCache(files, path) {
     // tb:formula = WIXEL 가 쓴 원래 수식 (DIVIDE · ROWS 등 엑셀에 없는 함수)
     const tbKey = Object.keys(cf.attrs).find((k) => k.endsWith(':formula'));
     const formula = tbKey ? cf.attrs[tbKey] : cf.attrs.formula;
-    return { name: cf.attrs.name ?? '', items, ...(formula !== undefined ? { formula } : {}) };
+    // 그룹화 (날짜 → 연 · 분기 · 월 · 일, 숫자 구간): 피벗 필드의 항목 번호는 groupItems 를 가리킴
+    const fg = child(cf, 'fieldGroup');
+    let group = null;
+    let gitems = null;
+    if (fg) {
+      const rp = child(fg, 'rangePr');
+      const gi = child(fg, 'groupItems');
+      if (gi) gitems = (gi.children ?? []).map((it) => (it.name === 'n' ? Number(it.attrs.v) : it.name === 'm' ? null : it.attrs.v ?? ''));
+      if (rp) {
+        group = {
+          base: fg.attrs.base !== undefined ? Number(fg.attrs.base) : null,
+          derived: cf.attrs.databaseField === '0',
+          by: rp.attrs.groupBy ?? 'range',
+          ...(rp.attrs.startDate ? { start: isoSerial(rp.attrs.startDate), end: isoSerial(rp.attrs.endDate) } : {}),
+          ...(rp.attrs.startNum !== undefined ? { startNum: Number(rp.attrs.startNum), endNum: Number(rp.attrs.endNum), size: Number(rp.attrs.groupInterval ?? 1) } : {}),
+        };
+      }
+    }
+    return { name: cf.attrs.name ?? '', items: gitems && (group || !items.length) ? gitems : items, ...(group ? { group } : {}), ...(formula !== undefined ? { formula } : {}) };
   });
   return { source: { ref: ws?.attrs.ref ?? null, sheet: ws?.attrs.sheet ?? null, name: ws?.attrs.name ?? null }, fields };
 }
@@ -1642,8 +1682,21 @@ function pivotDefFrom(root, cache, tables, sheetName) {
     if (rowF.includes(f) && descendants(pf, 'pivotField').some((x) => x.attrs.fillDownLabels === '1')) def.repeatLabels = true;
   });
   if (Object.keys(collapsed).length) def.collapsed = collapsed;
+  // 날짜 · 숫자 그룹 (파생 필드 '월2' 등은 base 필드에서 만듦)
+  const groups = {};
+  for (const f of [...rowF, ...colF, ...pageEls.map((p) => Number(p.attrs.fld))]) {
+    const g = cache.fields[f]?.group;
+    if (!g) continue;
+    const by = { years: 'years', quarters: 'quarters', months: 'months', days: 'mdays' }[g.by] ?? (g.by === 'range' && g.size ? 'number' : null);
+    if (!by) continue;
+    const spec = by === 'number' ? { by, start: g.startNum, size: g.size } : { by, ...(g.start !== undefined ? { start: g.start, end: g.end } : {}) };
+    if (g.derived && g.base !== null && cache.fields[g.base]) spec.base = cache.fields[g.base].name;
+    groups[names[f]] = spec;
+  }
+  if (Object.keys(groups).length) def.groups = groups;
   const calc = cache.fields.filter((f) => f.formula !== undefined).map((f) => ({ name: f.name, formula: f.formula }));
   if (calc.length) def.calcFields = calc;
+  const ff0 = new Set(kids(child(root, 'filters'), 'filter').map((flt) => Number(flt.attrs.fld)));
   // 정렬 · 항목 순서
   const sort = {};
   const order = {};
@@ -1660,6 +1713,28 @@ function pivotDefFrom(root, cache, tables, sheetName) {
   });
   if (Object.keys(sort).length) def.sort = sort;
   if (Object.keys(order).length) def.order = order;
+  // 값 기준 정렬 · 상위 N 에서 값이 같은 항목의 순서: 엑셀이 저장한 표시 순서(rowItems · colItems)를 그대로 따름
+  const tie = {};
+  for (const [tag, fl] of [['rowItems', rowF], ['colItems', colAll]]) {
+    const fieldsAt = fl.filter((x) => x >= 0 || x === -2);
+    const last = [];
+    for (const it of kids(child(root, tag), 'i')) {
+      if (it.attrs.t) continue;
+      const base = Number(it.attrs.r ?? 0);
+      kids(it, 'x').forEach((x, j) => {
+        const lv = base + j;
+        last[lv] = Number(x.attrs.v ?? 0);
+        const f = fieldsAt[lv];
+        if (f === undefined || f < 0 || !(sort[names[f]] || ff0.has(f))) return;
+        const pit = kids(child(pfs[f], 'items'), 'item')[last[lv]];
+        if (!pit || pit.attrs.x === undefined) return;
+        const text = itemText(cache.fields[f]?.items[Number(pit.attrs.x)] ?? null);
+        const list = (tie[names[f]] ??= []);
+        if (!list.includes(text)) list.push(text);
+      });
+    }
+  }
+  if (Object.keys(tie).length) def.tieOrder = tie;
   // 레이블 · 값 · 상위 10 필터
   const ff = {};
   for (const flt of kids(child(root, 'filters'), 'filter')) {
@@ -2507,6 +2582,41 @@ function fieldItems(data, f, order = null) {
   return { keys, index };
 }
 
+// ─── 피벗 그룹 (엑셀 fieldGroup) ───
+const XL_GROUP_BY = { years: 'years', quarters: 'quarters', months: 'months', mdays: 'days', number: 'range' };
+const XL_DATE_GROUP = new Set(['years', 'quarters', 'months', 'mdays']);
+const serialIso = (v) => { const d = new Date(Date.UTC(1899, 11, 30) + Math.floor(v) * 86400000); return d.toISOString().slice(0, 10); };
+/** 그룹 설정 → { keys: 엑셀 groupItems 순서의 항목 키(앱의 그룹 키와 같은 글자), rangePr } */
+function excelGroupItems(spec, min, max) {
+  if (spec.by === 'number') {
+    const size = Number(spec.size) || 10;
+    const start = Number.isFinite(Number(spec.start)) ? Number(spec.start) : Math.floor(min);
+    const keys = [`<${start}`];
+    for (let lo = start; lo <= max && keys.length < 10000; lo += size) keys.push(`${lo}-${lo + size - 1}`);
+    keys.push(`>${Math.max(max, start)}`);
+    return { keys, rangePr: `<rangePr startNum="${start}" endNum="${Math.max(max, start)}" groupInterval="${size}"/>` };
+  }
+  const start = spec.start ?? Math.floor(min);
+  const end = spec.end ?? Math.floor(max);
+  const keys = [`<${serialIso(start)}`];
+  if (spec.by === 'years') {
+    const y1 = Number(serialIso(start).slice(0, 4));
+    const y2 = Number(serialIso(end).slice(0, 4));
+    for (let y = y1; y <= y2; y++) keys.push(y);
+  } else if (spec.by === 'quarters') for (let q = 1; q <= 4; q++) keys.push(`${q}분기`);
+  else if (spec.by === 'months') for (let m = 1; m <= 12; m++) keys.push(`${m}월`);
+  else for (let m = 1; m <= 12; m++) for (let d = 1; d <= [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1]; d++) keys.push(`${m}월${d}일`);
+  keys.push(`>${serialIso(end)}`);
+  return { keys, rangePr: `<rangePr groupBy="${XL_GROUP_BY[spec.by]}" startDate="${serialIso(start)}T00:00:00" endDate="${serialIso(end)}T00:00:00"/>` };
+}
+/** 날짜 필드의 sharedItems (항목은 쓰지 않음: 그룹 항목이 대신함) */
+function dateSharedItemsXml(values) {
+  const nums = values.filter((v) => typeof v === 'number');
+  const blank = values.some((v) => v === null || v === '');
+  if (!nums.length || nums.length + (blank ? values.filter((v) => v === null || v === '').length : 0) !== values.length) return sharedItemsXml(values, null);
+  return `<sharedItems containsSemiMixedTypes="0" containsNonDate="0" containsDate="1" containsString="0"${blank ? ' containsBlank="1"' : ''} minDate="${serialIso(minOf(nums))}T00:00:00" maxDate="${serialIso(maxOf(nums) + 1)}T00:00:00"/>`;
+}
+
 function sharedItemsXml(values, keys) {
   const nums = values.filter((v) => typeof v === 'number');
   const hasStr = values.some((v) => v !== null && v !== '' && typeof v !== 'number');
@@ -2544,32 +2654,59 @@ function buildPivotCache(wb, defs, cacheId, extraFields) {
   for (const d of defs) for (const c of d.calcFields ?? []) {
     if (!baseHeader.some((h) => h.toLowerCase() === c.name.toLowerCase()) && !calcs.some((x) => x.name.toLowerCase() === c.name.toLowerCase())) calcs.push(c);
   }
-  const header = [...baseHeader, ...calcs.map((c) => c.name)];
+  // 그룹화 (엑셀 형식으로 쓸 수 있는 것만): 제자리 그룹(필드 자체) · 파생 그룹 필드('월2' = '일'을 월로)
+  const bx = (n) => baseHeader.findIndex((h) => h.toLowerCase() === String(n).toLowerCase());
+  const grouped = new Map(); // 필드 이름(소문자) → { name, spec, base: 원본 필드 번호, derived }
+  for (const d of defs) for (const [n, g] of Object.entries(d.groups ?? {})) {
+    if (!g || !XL_GROUP_BY[g.by] || grouped.has(n.toLowerCase())) continue;
+    const derived = !!g.base && bx(n) < 0;
+    const base = derived ? bx(g.base) : bx(n);
+    if (base >= 0) grouped.set(n.toLowerCase(), { name: n, spec: g, base, derived });
+  }
+  const derivedList = [...grouped.values()].filter((g) => g.derived);
+  const header = [...baseHeader, ...calcs.map((c) => c.name), ...derivedList.map((g) => g.name)];
+  const nCalc = calcs.length;
   const fx = (n) => header.findIndex((h) => h.toLowerCase() === String(n).toLowerCase());
   const data = src.rows.slice(1).filter((r) => !r.every((v) => v === null || v === ''));
   const listed = new Set();
   for (const def of defs) {
-    const d = normalizeDef(def, baseHeader);
+    const d = normalizeDef(def, header);
     [...d.rows, ...d.cols, ...d.pages, ...Object.keys(d.filters)].forEach((n) => listed.add(fx(n)));
   }
   header.forEach((h, i) => { if (extraFields?.has(h.toLowerCase())) listed.add(i); });
   const items = new Map();
-  for (const f of listed) if (f >= 0 && f < nBase) items.set(f, fieldItems(data, f));
+  for (const f of listed) if (f >= 0 && f < nBase && !grouped.has(header[f].toLowerCase())) items.set(f, fieldItems(data, f));
+  // 그룹 필드의 항목 = 엑셀 groupItems 전체 (피벗 필드의 x 가 이 목록을 가리킴)
+  const groupXml = new Map();
+  for (const g of grouped.values()) {
+    const f = fx(g.name);
+    const vals = data.map((r) => r[g.base]).filter((v) => typeof v === 'number');
+    const gi = excelGroupItems(g.spec, vals.length ? minOf(vals) : 0, vals.length ? maxOf(vals) : 0);
+    items.set(f, { keys: gi.keys, index: new Map(gi.keys.map((k, i) => [`${typeof k}:${k}`, i])) });
+    const par = !g.derived ? derivedList.find((x) => x.base === g.base) : null;
+    groupXml.set(f, `<fieldGroup${par ? ` par="${fx(par.name)}"` : ''} base="${g.base}">${gi.rangePr}<groupItems count="${gi.keys.length}">${gi.keys.map((k) => `<s v="${esc(itemText(k))}"/>`).join('')}</groupItems></fieldGroup>`);
+  }
   // 엑셀에 없는 함수(DIVIDE · ROWS)는 엑셀 수식으로 바꿔 쓰고, 원래 수식은 엑셀이 무시하는 tb:formula 에 (다시 열면 그대로)
   const calcAttr = (c) => {
     const xl = excelCalcFormula(c.formula);
     return `formula="${esc(xl)}"${xl !== c.formula ? ` tb:formula="${esc(c.formula)}"` : ''}`;
   };
-  const cacheFields = header.map((h, f) => (f >= nBase
-    ? `<cacheField name="${esc(h)}" numFmtId="0" ${calcAttr(calcs[f - nBase])} databaseField="0"/>`
-    : `<cacheField name="${esc(h)}" numFmtId="0">${sharedItemsXml(data.map((r) => r[f]), items.get(f)?.keys ?? null)}</cacheField>`)).join('');
+  const cacheFields = header.map((h, f) => {
+    if (f >= nBase + nCalc) return `<cacheField name="${esc(h)}" numFmtId="0" databaseField="0">${groupXml.get(f) ?? ''}</cacheField>`;
+    if (f >= nBase) return `<cacheField name="${esc(h)}" numFmtId="0" ${calcAttr(calcs[f - nBase])} databaseField="0"/>`;
+    const g = groupXml.get(f);
+    const vals = data.map((r) => r[f]);
+    // 날짜로 묶는 필드는 날짜 필드로 표시 (엑셀이 그룹을 다시 만들 수 있게)
+    const shared = g && XL_DATE_GROUP.has(grouped.get(h.toLowerCase())?.spec.by) ? dateSharedItemsXml(vals) : sharedItemsXml(vals, g ? null : items.get(f)?.keys ?? null);
+    return `<cacheField name="${esc(h)}" numFmtId="${g && XL_DATE_GROUP.has(grouped.get(h.toLowerCase())?.spec.by) ? 14 : 0}">${shared}${g ?? ''}</cacheField>`;
+  }).join('');
   const sourceXml = src.table
     ? `<worksheetSource name="${esc(src.table)}"/>`
     : `<worksheetSource ref="${rangeRef(src.ref)}" sheet="${esc(wb.sheets[src.si].name)}"/>`;
   const cacheXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<pivotCacheDefinition xmlns="${NS_MAIN}" xmlns:r="${NS_R}" xmlns:mc="${NS_MC}" xmlns:tb="${NS_TB}" mc:Ignorable="tb" saveData="0" refreshOnLoad="1" createdVersion="6" refreshedVersion="6" minRefreshableVersion="3" recordCount="${data.length}">`
     + `<cacheSource type="worksheet">${sourceXml}</cacheSource><cacheFields count="${header.length}">${cacheFields}</cacheFields>`
     + `<extLst><ext uri="{725AE2AE-9491-48be-B2B4-4EB974FC3084}" xmlns:x14="${NS_X14}"><x14:pivotCacheDefinition pivotCacheId="${cacheId}"/></ext></extLst></pivotCacheDefinition>`;
-  return { cacheXml, header, nBase, items, data, src, cacheId };
+  return { cacheXml, header, nBase, nCalc, items, data, src, cacheId };
 }
 
 /** 피벗 정의 + 공유 캐시 → 피벗 테이블 XML */
@@ -2592,8 +2729,10 @@ function pivotCondXml(wb, si, def, header, values) {
 
 function pivotParts(wb, si, def, cache, name, pool) {
   const { src, header, nBase, data } = cache;
+  const nCalcEnd = nBase + (cache.nCalc ?? 0);
+  const isCalc = (f) => f >= nBase && f < nCalcEnd;
   const cacheId = cache.cacheId;
-  const d = { ...normalizeDef(def, headerNames(src.rows)), header };
+  const d = { ...normalizeDef(def, header), header };
   if (!d.rows.length && !d.cols.length && !d.values.length) return null;
   const fx = (n) => header.findIndex((h) => h.toLowerCase() === String(n).toLowerCase());
   const rowF = d.rows.map(fx);
@@ -2685,7 +2824,7 @@ function pivotParts(wb, si, def, cache, name, pool) {
   const outline = d.layout === 'outline';
   const valueFieldIdx = new Set(values.map((v) => fx(v.field)).filter((i) => i >= 0));
   const pivotFields = header.map((h, f) => {
-    if (f >= nBase) return `<pivotField${valueFieldIdx.has(f) ? ' dataField="1"' : ''} dragToRow="0" dragToCol="0" dragToPage="0" showAll="0" defaultSubtotal="0"/>`;
+    if (isCalc(f)) return `<pivotField${valueFieldIdx.has(f) ? ' dataField="1"' : ''} dragToRow="0" dragToCol="0" dragToPage="0" showAll="0" defaultSubtotal="0"/>`;
     const attrs = [];
     if (rowF.includes(f)) attrs.push('axis="axisRow"');
     else if (colF.includes(f)) attrs.push('axis="axisCol"');
@@ -2724,7 +2863,7 @@ function pivotParts(wb, si, def, cache, name, pool) {
   }).join('')}</pageFields>` : '';
   const dataXml = values.map((v, vi) => {
     const f = Math.max(0, fx(v.field));
-    const sub = PIVOT_SUBTOTAL[v.agg] && f < nBase ? ` subtotal="${PIVOT_SUBTOTAL[v.agg]}"` : '';
+    const sub = PIVOT_SUBTOTAL[v.agg] && !isCalc(f) ? ` subtotal="${PIVOT_SUBTOTAL[v.agg]}"` : '';
     const as = SHOW_FROM_XLSX[v.showAs] ? v.showAs : null;
     const show = as && SHOW_BASE_ONLY.has(as) ? ` showDataAs="${as}"` : '';
     // 기준 필드 · 항목 (이전 · 다음은 특수 번호)
@@ -2739,7 +2878,7 @@ function pivotParts(wb, si, def, cache, name, pool) {
     // 표시 형식: 파일에서 가져온 셀 서식 > 값 필드 서식 > 기본
     const fmtStyle = def.cellFmt?.[`data:${vi}`] ?? (v.numFmt ? (typeof v.numFmt === 'object' ? v.numFmt : { numFmt: v.numFmt }) : null);
     let numFmt = fmtStyle && pool ? pool.fmtId(fmtStyle) : 0;
-    if (!numFmt) numFmt = showAsPercent(as) ? 10 : as === 'rankAscending' || as === 'rankDescending' ? 1 : f >= nBase ? 0 : ['average', 'stdDev', 'stdDevp', 'var', 'varp'].includes(v.agg) ? 4 : 3;
+    if (!numFmt) numFmt = showAsPercent(as) ? 10 : as === 'rankAscending' || as === 'rankDescending' ? 1 : isCalc(f) ? 0 : ['average', 'stdDev', 'stdDevp', 'var', 'varp'].includes(v.agg) ? 4 : 3;
     const head = `<dataField name="${esc(valueName(v))}" fld="${f}"${sub}${show} baseField="${Math.max(0, bf)}" baseItem="${bi}" numFmtId="${numFmt}"`;
     return ext ? `${head}>${ext}</dataField>` : `${head}/>`;
   }).join('');
@@ -2748,7 +2887,7 @@ function pivotParts(wb, si, def, cache, name, pool) {
   let filterId = 1;
   for (const [field, flt] of Object.entries(d.fieldFilters ?? {})) {
     const f = fx(field);
-    if (f < 0 || f >= nBase || !flt) continue;
+    if (f < 0 || isCalc(f) || !flt) continue;
     const cap = (s) => s[0].toUpperCase() + s.slice(1);
     const two = flt.op === 'between' || flt.op === 'notBetween';
     if (flt.type === 'top') {
@@ -2978,10 +3117,18 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
 
   // 셀 XML (가장 큰 부분): 시트마다 미리 만들며 중간중간 멈춤 — 큰 문서를 저장해도 화면이 멈추지 않게
   const expMemo = new Map(); // 같은 수식(표의 계산 열 등)은 한 번만 변환
+  const shapeSame = new Map(); // 수식 모양 → 파일 형식이 앱 형식과 같은지 (채우기로 만든 수식 백만 개도 해석은 한 번)
   const exportF = (raw, t, dyn) => {
     const k = `${t ?? ''}\u0001${dyn ? 1 : 0}\u0001${raw}`;
     let v = expMemo.get(k);
-    if (v === undefined) { v = esc(exportFormula(raw, t, dyn)); if (expMemo.size < 200000) expMemo.set(k, v); }
+    if (v !== undefined) return v;
+    const body = raw.startsWith('=') ? raw.slice(1) : raw;
+    const shape = !t && !dyn ? formulaShape(body) : null;
+    if (shape !== null && shapeSame.get(shape) === true) return esc(body);
+    const out = exportFormula(raw, t, dyn);
+    if (shape !== null && !shapeSame.has(shape)) shapeSame.set(shape, out === body);
+    v = esc(out);
+    if (expMemo.size < 200000) expMemo.set(k, v);
     return v;
   };
   const colLetter = [];

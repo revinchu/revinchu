@@ -421,6 +421,7 @@ export const GROUP_BY = [
 ];
 const serialDate = (v) => new Date(Date.UTC(1899, 11, 30) + Math.round(v) * 86400000);
 const p2 = (n) => String(n).padStart(2, '0');
+const isoDay = (v) => { const d = serialDate(v); return `${d.getUTCFullYear()}-${p2(d.getUTCMonth() + 1)}-${p2(d.getUTCDate())}`; };
 /** 원래 값 → 그룹 키 (숫자가 아니면 그대로) */
 export function groupKey(v, spec) {
   if (typeof v !== 'number') return v;
@@ -430,10 +431,14 @@ export function groupKey(v, spec) {
     const lo = start + Math.floor((v - start) / size) * size;
     return `${lo}-${lo + size - 1}`;
   }
+  // 엑셀: 시작 날짜보다 앞 · 끝 날짜보다 뒤는 '<2025-11-01' · '>2026-05-01' 항목으로
+  if (spec.start !== undefined && v < Math.floor(spec.start)) return `<${isoDay(spec.start)}`;
+  if (spec.end !== undefined && Math.floor(v) > Math.floor(spec.end)) return `>${isoDay(spec.end)}`;
   const d = serialDate(v);
   const y = d.getUTCFullYear();
   const m = d.getUTCMonth() + 1;
   switch (spec.by) {
+    case 'mdays': return `${m}월${d.getUTCDate()}일`; // 엑셀의 '일' 그룹 (연도 구분 없음)
     case 'years': return y;
     case 'quarters': return `${Math.floor((m - 1) / 3) + 1}분기`;
     case 'months': return `${m}월`;
@@ -445,6 +450,9 @@ export function groupKey(v, spec) {
 export function groupRank(k, spec) {
   if (typeof k === 'number') return k;
   if (k === EMPTY) return Infinity;
+  if (typeof k === 'string' && k[0] === '<') return -Infinity;
+  if (typeof k === 'string' && k[0] === '>') return Infinity;
+  if (spec.by === 'mdays') { const m = /^(\d+)월(\d+)일$/.exec(k); return m ? +m[1] * 100 + +m[2] : Infinity; }
   if (spec.by === 'months' || spec.by === 'quarters' || spec.by === 'number') { const n = parseFloat(k); return Number.isFinite(n) ? n : Infinity; }
   return null; // 글자 순서
 }

@@ -15,7 +15,7 @@ import { logicalCol } from './block.js';
 import { presetStyle, presetSwatch, paintPivotPreset, MODERN_STYLES } from './stylepresets.js';
 import {
   EMPTY as EMPTY0, IMG_KEY as IMG_KEY0, keyOf as keyOf0, imageOfKey as imageOfKey0, sortKeys as sortKeys0, itemText as itemText0,
-  kk, cubeFromRows, filterRows, groupAggregate, groupAcc, Cube, Column, blockColumn, groupedColumn, groupRank, aggregateQuery, planRollup, GROUP_BY as GROUP_BY0,
+  kk, cubeFromRows, filterRows, groupAggregate, groupAcc, Cube, Column, blockColumn, groupedColumn, groupRank, groupKey, aggregateQuery, planRollup, GROUP_BY as GROUP_BY0,
 } from './cube.js';
 import { maxOf, minOf, pushAll } from './fxcore.js';
 
@@ -492,6 +492,7 @@ export function normalizeDef(def, header) {
     calcFields: def.calcFields ?? [],
     sort: byKey(def.sort),
     order: byKey(def.order),
+    tieOrder: byKey(def.tieOrder),
     fieldFilters: byKey(def.fieldFilters),
     style: def.style ?? DEFAULT_PIVOT_STYLE,
     groups: byKey(def.groups),
@@ -732,9 +733,17 @@ function applyFieldFilters(groups, d, measures) {
         } else if (flt.type === 'top') {
           const vi = valueIndex(d.values, flt.by);
           const scored = items.map((it) => ({ it, v: measureOf(it, vi) ?? -Infinity }));
-          scored.sort((x, y) => (flt.top === false ? x.v - y.v : y.v - x.v));
+          const tie = tieRank(d, field);
+          // 오류 · 빈 값(-Infinity)끼리 빼면 NaN 이 되므로 같음(0)으로
+          const diff = (a, b) => (a === b ? 0 : a - b);
+          scored.sort((x, y) => (flt.top === false ? diff(x.v, y.v) : diff(y.v, x.v)) || tie(x.it.key) - tie(y.it.key));
           const n = Number(flt.n) || 10;
-          if ((flt.mode ?? 'count') === 'count') kept = scored.slice(0, Math.max(0, Math.floor(n))).map((x) => x.it);
+          if ((flt.mode ?? 'count') === 'count') {
+            // 엑셀: N 번째와 값이 같은 항목도 모두 포함 (상위 10 인데 11개 이상 보일 수 있음)
+            let m = Math.max(0, Math.floor(n));
+            if (m > 0) while (m < scored.length && Number.isFinite(scored[m].v) && scored[m].v === scored[m - 1].v) m++;
+            kept = scored.slice(0, m).map((x) => x.it);
+          }
           else {
             const total = scored.reduce((acc, x) => acc + (Number.isFinite(x.v) ? x.v : 0), 0);
             const limit = flt.mode === 'percent' ? (total * n) / 100 : n;
@@ -839,9 +848,31 @@ export function pivotDefKey(def) {
   const { area, top, left, cellFmt, captureFmt, buttons, styleDef, autofit, name, ...rest } = def;
   return JSON.stringify(rest);
 }
+/**
+ * 파생 그룹 필드 (엑셀의 '월2' = '일' 필드를 월로 묶은 새 필드): 원본 열을 새 이름으로 한 번 더 보여 주는 큐브.
+ * 그룹화는 보통 필드처럼 def.groups[새 이름] 으로 적용됨
+ */
+const derivedMemo = new WeakMap();
+export function withDerivedFields(cube, groups) {
+  const lower = cube.header.map((h) => h.toLowerCase());
+  const add = Object.entries(groups ?? {}).filter(([n, g]) => g?.base && !lower.includes(n.toLowerCase()) && lower.includes(String(g.base).toLowerCase()));
+  if (!add.length) return cube;
+  const key = JSON.stringify(add.map(([n, g]) => [n, g.base]));
+  let m = derivedMemo.get(cube);
+  if (!m) { m = new Map(); derivedMemo.set(cube, m); }
+  let c = m.get(key);
+  if (!c) {
+    const H = cube.header.length;
+    const bases = add.map(([, g]) => lower.indexOf(String(g.base).toLowerCase()));
+    c = new Cube(cube.n, [...cube.header, ...add.map(([n]) => n)], (j) => cube.col(j < H ? j : bases[j - H]), (i) => { const r = cube.row(i); return [...r, ...bases.map((b) => r[b])]; });
+    m.set(key, c);
+  }
+  return c;
+}
+
 export function resolvePivot(input, def) {
   // input: 행 배열(머리글 포함) 또는 pivotSourceData 결과({ cube })
-  const cube = Array.isArray(input) ? cubeFromRows(input) : input.cube;
+  const cube = withDerivedFields(Array.isArray(input) ? cubeFromRows(input) : input.cube, def.groups);
   let memo = resolveMemo.get(cube);
   if (!memo) { memo = new Map(); resolveMemo.set(cube, memo); }
   const key = pivotDefKey(def);
@@ -852,7 +883,16 @@ export function resolvePivot(input, def) {
   const header = d.header;
   const lower = cube.header.map((h) => h.toLowerCase());
   // 보고서 필터 · 항목 선택 · 슬라이서: 코드 단위로 한 번에 (같은 필터를 쓰는 피벗끼리 결과 공유)
-  const filters = Object.entries(d.filters).map(([name, allowed]) => [lower.indexOf(name.toLowerCase()), new Set(allowed)]).filter(([i]) => i >= 0);
+  const filters = Object.entries(d.filters).map(([name, allowed]) => {
+    const j = lower.indexOf(name.toLowerCase());
+    const spec = j >= 0 ? d.groups?.[cube.header[j]] : null;
+    if (!spec) return [j, new Set(allowed)];
+    // 그룹화한 필드('1월' · '12월9일' 등)의 필터 → 그 그룹에 드는 원래 값들
+    const want = new Set(allowed);
+    const raw = new Set();
+    for (const k of cube.col(j).dim().keys) if (want.has(itemText(k === EMPTY ? EMPTY : groupKey(k, spec)))) raw.add(itemText(k));
+    return [j, raw];
+  }).filter(([i]) => i >= 0);
   const measures = makeMeasures(header, d.values, d.calcFields);
   const groups = applyFieldFilters(cubeGroups(cube, filters, d, measures), d, measures);
   const res = withRows({ def: d, header, cube, filters, groups, measures });
@@ -954,6 +994,16 @@ export function roleStyle(parts, role) {
 
 // ───────────── 계산 ─────────────
 
+const QUOTE_TEXT = /^(?:['=]|[+-]?\.?\d|(?:TRUE|FALSE)$)/i;
+
+/** 값이 같은 항목의 순서 (파일에 저장된 표시 순서, 없으면 모두 같음) */
+function tieRank(d, field) {
+  const list = d.tieOrder?.[field];
+  if (!list?.length) return () => 0;
+  const pos = new Map(list.map((t, i) => [t, i]));
+  return (key) => pos.get(itemText(key)) ?? list.length;
+}
+
 /** 항목 순서: 정렬 설정(글자/값) → 수동 순서 → 기본(오름차순) */
 function orderTree(root, fields, d, measureAt) {
   const rec = (n) => {
@@ -966,7 +1016,8 @@ function orderTree(root, fields, d, measureAt) {
       const vi = valueIndex(d.values, s.by);
       const score = new Map(kids.map((c) => [c, measureAt(c, vi)]));
       const num = (v) => (typeof v === 'number' ? v : -Infinity);
-      kids = [...kids].sort((a, b) => (s.dir === 'desc' ? num(score.get(b)) - num(score.get(a)) : num(score.get(a)) - num(score.get(b))));
+      const tie = tieRank(d, field);
+      kids = [...kids].sort((a, b) => (s.dir === 'desc' ? num(score.get(b)) - num(score.get(a)) : num(score.get(a)) - num(score.get(b))) || tie(a.key) - tie(b.key));
     } else if (d.groups?.[field]) {
       // 그룹화한 필드: 월 · 분기 · 구간은 숫자 순서
       const spec = d.groups[field];
@@ -1026,7 +1077,8 @@ export function computePivot(input, d) {
   const valIdx = values.map((v) => idx(v.field));
   const calcNames = new Set((d.calcFields ?? []).map((c) => c.name.toLowerCase()));
 
-  const text = (s, role) => ({ raw: typeof s === 'number' ? formatGeneral(s) : String(s ?? '').startsWith('=') ? `'${s}` : String(s ?? ''), style: { ...styleFor(role) }, role });
+  // 글자 항목은 그대로 글자로: '=' · 작은따옴표로 시작하거나 숫자 · 논리값처럼 보이면 앞에 ' (엑셀처럼 '소득세율 · 001 이 바뀌지 않게)
+  const text = (s, role) => ({ raw: typeof s === 'number' ? formatGeneral(s) : QUOTE_TEXT.test(String(s ?? '')) ? `'${s}` : String(s ?? ''), style: { ...styleFor(role) }, role });
   if (!d.rows.length && !d.cols.length && !V) {
     const grid = Array.from({ length: 18 }, (_, r) => Array.from({ length: 3 }, (_, c) => ({
       raw: r === 0 && c === 0 ? '피벗 테이블 보고서를 작성하려면 [피벗 테이블 필드] 목록에서 필드를 선택하세요.' : '',
@@ -1474,29 +1526,41 @@ export function buildPivot(rows, def) {
 }
 
 /** GETPIVOTDATA: 값 필드 이름과 (필드, 항목) 쌍으로 값 찾기 */
-export function pivotLookup(rows, def, dataField, pairs) {
-  const res = resolvePivot(rows, def);
-  const { def: d, header } = res;
-  const lower = String(dataField).trim().toLowerCase();
-  const vi = d.values.findIndex((v) => valueName(v).trim().toLowerCase() === lower || v.field.toLowerCase() === lower);
-  if (vi < 0) return null;
-  // 행·열 필드가 아닌 필드로 묻는 것은 엑셀에서 #REF!
-  const pos = pairs.map(([f, item]) => {
-    const name = header.find((h) => h.toLowerCase() === String(f).toLowerCase());
-    const ri = d.rows.indexOf(name);
-    const ci = d.cols.indexOf(name);
-    return ri >= 0 ? ['r', ri, itemText(item)] : ci >= 0 ? ['c', ci, itemText(item)] : null;
-  });
-  if (pos.some((p) => !p)) return null;
-  const list = res.measures.newList();
-  let any = false;
-  for (const g of res.groups) {
-    if (!pos.every(([ax, i, t]) => itemText(g[ax][i]) === t)) continue;
-    mergeList(list, g.list);
-    any = true;
+const lookupIdx = new WeakMap(); // res.groups → Map(필드 조합 → Map(항목 글자들 → 누적))
+export function pivotLookup(rows, def, dataField, pairs, resolved = null) {
+  const res = resolved ?? resolvePivot(rows, def);
+  // 같은 값 필드 · 필드 조합으로 묻는 GETPIVOTDATA 가 수만 개여도 이름 풀이와 그룹 훑기는 한 번만 (항목 글자 → 누적 색인)
+  let bySig = lookupIdx.get(res.groups);
+  if (!bySig) { bySig = new Map(); lookupIdx.set(res.groups, bySig); }
+  const sig = `${dataField}\u0002${pairs.map((p) => p[0]).join('\u0001')}`;
+  let e = bySig.get(sig);
+  if (!e) {
+    const { def: d, header } = res;
+    const lower = String(dataField).trim().toLowerCase();
+    const vi = d.values.findIndex((v) => valueName(v).trim().toLowerCase() === lower || v.field.toLowerCase() === lower);
+    // 행·열 필드가 아닌 필드로 묻는 것은 엑셀에서 #REF!
+    const pos = pairs.map(([f]) => {
+      const name = header.find((h) => h.toLowerCase() === String(f).toLowerCase());
+      const ri = d.rows.indexOf(name);
+      const ci = d.cols.indexOf(name);
+      return ri >= 0 ? ['r', ri] : ci >= 0 ? ['c', ci] : null;
+    });
+    e = { vi, pos, idx: null };
+    if (vi >= 0 && !pos.some((p) => !p)) {
+      e.idx = new Map();
+      for (const g of res.groups) {
+        const k = pos.map(([ax, i]) => itemText(g[ax][i])).join('\u0001');
+        let l = e.idx.get(k);
+        if (!l) { l = res.measures.newList(); e.idx.set(k, l); }
+        mergeList(l, g.list);
+      }
+    }
+    bySig.set(sig, e);
   }
-  if (!any) return null;
-  const v = res.measures.value(list, vi);
+  if (!e.idx) return null;
+  const list = e.idx.get(pairs.length === 1 ? itemText(pairs[0][1]) : pairs.map((p) => itemText(p[1])).join('\u0001'));
+  if (!list) return null;
+  const v = res.measures.value(list, e.vi);
   return typeof v === 'number' ? v : null;
 }
 

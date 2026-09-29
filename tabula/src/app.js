@@ -7340,6 +7340,7 @@ function writePivot(targetSi, def, { autofit = true } = {}) {
     // 새 결과 영역 안의 셀은 아래에서 덮어쓰므로 지우지 않음 (실행 취소 기록이 두 번 생기지 않게)
     if (inOld(r, c) && !(r >= top && r <= nr2 && c >= left && c <= nc2)) wb.setCellData(targetSi, r, c, null);
   }
+  if (!def.area || def.area.c1 !== left || def.area.c2 !== nc2) wb.dropGraph();
   def.area = { r1: top, c1: left, r2: nr2, c2: nc2 };
   pivotLayouts.set(`${targetSi}:${def.name ?? ''}`, pivotLayoutFrom(grid, pm, d, top, left));
   refreshPivotCond(targetSi, def);
@@ -7467,10 +7468,12 @@ function warmAll() {
 
 function renderImportedPivots() {
   warmAll();
-  for (const e of allPivots()) {
-    if (!e.def.captureFmt && !e.def.needsRender) continue;
-    try { wb.transact(() => writePivot(e.si, e.def)); } catch (err) { console.warn('피벗 다시 그리기 실패', err); }
-  }
+  wb.holdDirtyWhile(() => {
+    for (const e of allPivots()) {
+      if (!e.def.captureFmt && !e.def.needsRender) continue;
+      try { wb.transact(() => writePivot(e.si, e.def)); } catch (err) { console.warn('피벗 다시 그리기 실패', err); }
+    }
+  });
 }
 
 /** 피벗 정의를 새 형식({rows, cols, values …})으로 */
@@ -9127,12 +9130,23 @@ async function loadWorkbookAsync(data, name, activeSheet, prog) {
   prog?.set(0.85, '요약 캐시 준비 중');
   await yieldUI();
   warmAll();
-  for (let i = 0; i < list.length; i++) {
-    prog?.set(0.85 + 0.15 * (i / Math.max(1, list.length)), `피벗 테이블 계산 중 (${i + 1}/${list.length})`);
-    await new Promise((res) => setTimeout(res, 0));
-    const e = list[i];
-    // 한 피벗의 셀 수만 개를 한 번에 반영 (칸마다 의존 수식을 찾지 않게) — 실행 취소 기록은 afterLoad 에서 비움
-    try { wb.transact(() => writePivot(e.si, e.def)); } catch (err) { console.warn('피벗 다시 그리기 실패', err); }
+  // 모든 피벗의 바뀐 칸을 모았다가 끝에서 한 번에 의존 수식을 찾음 (피벗마다 수십만 수식을 훑지 않게)
+  wb.holdDirty = true;
+  // 피벗마다 화면 전체를 다시 그리지 않게 (afterLoad 에서 한 번 그림)
+  const listeners = wb.listeners;
+  wb.listeners = [];
+  try {
+    for (let i = 0; i < list.length; i++) {
+      prog?.set(0.85 + 0.15 * (i / Math.max(1, list.length)), `피벗 테이블 계산 중 (${i + 1}/${list.length})`);
+      await new Promise((res) => setTimeout(res, 0));
+      const e = list[i];
+      // 한 피벗의 셀 수만 개를 한 번에 반영 — 실행 취소 기록은 afterLoad 에서 비움
+      try { wb.transact(() => writePivot(e.si, e.def)); } catch (err) { console.warn('피벗 다시 그리기 실패', err); }
+    }
+  } finally {
+    wb.listeners = listeners;
+    wb.holdDirty = false;
+    wb.flushPending();
   }
   afterLoad(name, activeSheet);
 }

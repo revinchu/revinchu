@@ -1,6 +1,6 @@
 // 통합 문서 모델: 시트 · 셀 · 재계산 · 실행 취소 · 행/열 구조 변경
 import { resolveStructRef, findTable } from './tables.js';
-import { pivotSourceData, pivotLookup } from './pivot.js';
+import { pivotSourceData, pivotLookup, resolvePivot } from './pivot.js';
 import {
   parse, evaluateArray, evalAny, ERR, compareValues, isError, autoFormatFor, mayReturnArray, Range, RefValue,
   adjustFormulaForStructure, renameSheetInFormula, shiftFormula, quoteSheetName, MAX_ROWS, MAX_COLS,
@@ -283,6 +283,11 @@ export function makeCellRC(data, r, c) {
   return cell;
 }
 
+// 값이 사실상 같음: 숫자는 유효 숫자 15자리까지 (피벗 합계의 마지막 자리 반올림 차이로 재계산하지 않게)
+const sameValue = (a, b) => a === b
+  || (typeof a === 'number' && typeof b === 'number' && a.toPrecision(15) === b.toPrecision(15))
+  || (a !== null && b !== null && typeof a === 'object' && typeof b === 'object' && a.constructor === b.constructor && String(a) === String(b));
+
 export function cellData(cell) {
   if (!cell) return null;
   const d = { raw: cell.raw };
@@ -342,6 +347,8 @@ function shiftKeys(obj, index, count) {
   return out;
 }
 
+/** 한 번의 변경으로 다시 계산할 수식이 이보다 많으면 칸마다 표시하지 않고 시트 단위로 다시 계산 (보이는 칸만 그때 계산) */
+const DIRTY_LIMIT = 250000;
 const DEEP = new Error('수식 체인이 너무 깊습니다');
 const MAX_DEPTH = 300;
 const EMPTY_STYLE = Object.freeze({});
@@ -718,16 +725,28 @@ export class Workbook {
       sheetCount: () => this.sheets.length,
       pivotData: (ref, field, items) => {
         // GETPIVOTDATA: 참조가 들어 있는 피벗 테이블에서 값 찾기
-        const s = this.resolveSheet(ref.sheet, si);
-        const sh = this.sheets[s];
-        const defs = [sh.pivot, ...(sh.pivotsExtra ?? [])].filter(Boolean);
-        const def = defs.find((d) => d.area && ref.r1 >= d.area.r1 && ref.r1 <= d.area.r2 && ref.c1 >= d.area.c1 && ref.c1 <= d.area.c2)
-          ?? (defs.length && !defs[0].area ? defs[0] : null);
+        // 같은 계산 상태(version)에서는 참조 → 피벗 · 피벗 결과를 한 번만 구함 (GETPIVOTDATA 수만 개가 매번 찾지 않게)
+        const memo = (this.pivotMemo ??= { v: -1, m: new Map(), at: new Map() });
+        if (memo.v !== this.version) { memo.v = this.version; memo.m.clear(); memo.at.clear(); }
+        const atKey = `${ref.sheet ?? si}\u0001${ref.r1}\u0001${ref.c1}`;
+        let def = memo.at.get(atKey);
+        if (def === undefined) {
+          const sh = this.sheets[this.resolveSheet(ref.sheet, si)];
+          const defs = [sh.pivot, ...(sh.pivotsExtra ?? [])].filter(Boolean);
+          def = defs.find((d) => d.area && ref.r1 >= d.area.r1 && ref.r1 <= d.area.r2 && ref.c1 >= d.area.c1 && ref.c1 <= d.area.c2)
+            ?? (defs.length && !defs[0].area ? defs[0] : null);
+          memo.at.set(atKey, def);
+        }
         if (!def) throw ERR.REF;
-        const src = pivotSourceData(this, def);
-        const v = src ? pivotLookup(src, def, field, items) : null;
-        if (v === null || v === undefined) throw ERR.REF;
-        return v;
+        let hit = memo.m.get(def);
+        if (!hit) {
+          const src = pivotSourceData(this, def);
+          hit = { src, res: src ? resolvePivot(src, def) : null };
+          memo.m.set(def, hit);
+        }
+        const v = hit.src ? pivotLookup(hit.src, def, field, items, hit.res) : null;
+        // 없는 항목은 #REF! 값으로 돌려줌 (IFERROR 로 감싼 수만 개가 예외를 던지면 느림)
+        return v === null || v === undefined ? ERR.REF : v;
       },
       quoteSheet: (name) => quoteSheetName(name),
       colWidthChars: (sheet, cc) => Math.round(this.colWidth(this.resolveSheet(sheet, si), cc) / 7.5),
@@ -964,9 +983,18 @@ export class Workbook {
   }
 
   flushPending() {
+    // 파일을 여는 중 피벗 여러 개를 다시 그림: 바뀐 칸을 모았다가 한 번에 의존 수식을 찾음 (releaseDirty)
+    if (this.holdDirty) return;
     const pts = this.pending;
     this.pending = [];
     if (pts.length) this.dirtyPoints(pts);
+  }
+
+  /** 바뀐 칸 모으기 시작 · 끝 (끝에서 한 번에 반영) */
+  holdDirtyWhile(fn) {
+    const prev = this.holdDirty;
+    this.holdDirty = true;
+    try { return fn(); } finally { this.holdDirty = prev; if (!prev) this.flushPending(); }
   }
 
   /**
@@ -1003,7 +1031,7 @@ export class Workbook {
     if (!fallback) {
       try {
         if (!this.graph || this.graph.stale) this.graph = new DepGraph(this);
-        dirty = this.graph.propagate(pts);
+        dirty = this.graph.propagate(pts, DIRTY_LIMIT);
       } catch (e) {
         console.warn('의존 그래프 오류, 시트 단위로 다시 계산', e);
         this.graph = null;
@@ -1313,6 +1341,12 @@ export class Workbook {
   }
 
   /** 시트 구성 · 이름이 바뀜: 계산 캐시는 비우되 파일 계산 결과(fileValues)는 유지 */
+  /** 의존 그래프만 버림 (다음 변경 때 다시 만듦) — 피벗 영역의 열 범위가 바뀌면 GETPIVOTDATA 의존이 달라짐 */
+  dropGraph() {
+    this.graph = null;
+    this.graphEpoch = (this.graphEpoch ?? 0) + 1;
+  }
+
   invalidateStructure() {
     this.version++;
     this.sheetVerAll = (this.sheetVerAll ?? 0) + 1;
@@ -1418,6 +1452,13 @@ export class Workbook {
     if (before === null ? after === null : after !== null && before.raw === after.raw && JSON.stringify(before) === JSON.stringify(after)) return;
     this.record({ t: 'cell', si, r, c, before, after });
     this.putCell(si, r, c, cell);
+    // 서식만 바뀐 값 칸 (피벗 다시 그리기 등): 값이 같으니 참조하는 수식을 다시 계산하지 않음 (엑셀도 서식 변경은 재계산 안 함)
+    if (cur && cell && !cur.formula && !cell.formula && !cur.image && !cell.image && sameValue(cur.v, cell.v)) {
+      this.version++;
+      (this.sheetVer ??= [])[si] = (this.sheetVer[si] ?? 0) + 1;
+      if (cur.v !== cell.v) this.bumpCol(si, c);
+      return;
+    }
     this.changed(si, r, c);
   }
 

@@ -16,7 +16,7 @@ const C_SPAN = 16384; // 2^14 열
 /** 시트 · 행 · 열 → 칸 번호 (2^53 안) */
 export const cellNum = (s, r, c) => (s * R_SPAN + r) * C_SPAN + c;
 
-const DYN_FUNCS = new Set(['INDIRECT', 'OFFSET', 'RAND', 'RANDBETWEEN', 'RANDARRAY', 'NOW', 'TODAY', 'CELL', 'INFO', 'GETPIVOTDATA', 'EVALUATE']);
+const DYN_FUNCS = new Set(['INDIRECT', 'OFFSET', 'RAND', 'RANDBETWEEN', 'RANDARRAY', 'NOW', 'TODAY', 'CELL', 'INFO', 'EVALUATE']);
 const WIDE = 32; // 이보다 넓은 범위는 시트 목록에 (열마다 넣지 않음)
 const LINEAR = 24; // 묶음이 이보다 적으면 정렬 없이 훑음
 
@@ -25,7 +25,7 @@ const refsMemo = new WeakMap();
 export function astRefs(ast) {
   let out = refsMemo.get(ast);
   if (out) return out;
-  out = { refs: [], srefs: [], names: [], dyn: false };
+  out = { refs: [], srefs: [], names: [], pivots: [], dyn: false };
   const walk = (n) => {
     if (!n || typeof n !== 'object') return;
     if (Array.isArray(n)) { for (const x of n) walk(x); return; }
@@ -34,7 +34,15 @@ export function astRefs(ast) {
       case 'sref': out.srefs.push(n); return;
       case 'name': out.names.push(n); return;
       case 'spill': out.dyn = true; break;
-      case 'func': if (DYN_FUNCS.has(n.name)) out.dyn = true; break;
+      case 'func':
+        if (DYN_FUNCS.has(n.name)) out.dyn = true;
+        // GETPIVOTDATA: 피벗 테이블이 있는 시트 전체에 의존 (피벗 결과는 그 시트에만 쓰임). 참조가 아니면 동적
+        else if (n.name === 'GETPIVOTDATA') {
+          const a = n.args?.[1];
+          if (a?.type === 'ref') out.pivots.push({ node: n, ref: a.ref });
+          else out.dyn = true;
+        }
+        break;
       default: break;
     }
     for (const k in n) {
@@ -188,6 +196,19 @@ export class DepGraph {
       const c2 = f.ac2 || f.rows ? f.c2 : f.c2 + dc;
       cb(s, Math.min(r1, r2), Math.min(c1, c2), Math.max(r1, r2), Math.max(c1, c2), f);
     }
+    for (const p of info.pivots) {
+      const f = p.ref;
+      const s = f.sheet ? (f.sheet.includes(':') ? -2 : wb.sheetIndexByName(f.sheet)) : si;
+      if (s === -2) { cb(null); continue; }
+      if (s < 0) continue;
+      // 참조가 든 피벗 테이블의 열 범위 전체 (피벗 결과는 그 영역에만 쓰임). 피벗이 없으면 시트 전체
+      const r0 = f.ar1 ? f.r1 : f.r1 + dr;
+      const c0 = f.ac1 ? f.c1 : f.c1 + dc;
+      const sh = wb.sheets[s];
+      const a = [sh.pivot, ...(sh.pivotsExtra ?? [])].find((d) => d?.area && r0 >= d.area.r1 && r0 <= d.area.r2 && c0 >= d.area.c1 && c0 <= d.area.c2)?.area;
+      if (a) cb(s, 0, a.c1, R_SPAN - 1, a.c2, p.node);
+      else cb(s, 0, 0, R_SPAN - 1, C_SPAN - 1, p.node);
+    }
     if (info.srefs.length) {
       const here = { si, r, c, sheet: wb.sheets[si]?.name };
       for (const n of info.srefs) {
@@ -277,13 +298,16 @@ export class DepGraph {
   /**
    * 바뀐 칸 목록(points: [s, r, c, …] 평평한 배열)에서 시작해 다시 계산할 수식 칸 목록 [s, r, c, …]
    */
-  propagate(points) {
+  propagate(points, limit = Infinity) {
     const seen = new Set();
     const out = [];
     const queue = points.slice();
+    const over = {};
     const mark = (run, fr) => {
       const n = cellNum(run.s, fr, run.fc);
       if (seen.has(n) || !this.verify(run, fr)) return;
+      // 다시 계산할 수식이 너무 많음: 칸마다 표시하기보다 시트 단위가 빠름 (호출한 쪽이 시트 단위로 처리)
+      if (seen.size >= limit) throw over;
       seen.add(n);
       out.push(run.s, fr, run.fc);
       queue.push(run.s, fr, run.fc);
@@ -301,7 +325,12 @@ export class DepGraph {
       queue.push(s, r, c);
     }
     const cover = new Map();
-    for (let q = 0; q < queue.length; q += 3) this.each(queue[q], queue[q + 1], queue[q + 2], mark, cover);
+    try {
+      for (let q = 0; q < queue.length; q += 3) this.each(queue[q], queue[q + 1], queue[q + 2], mark, cover);
+    } catch (e) {
+      if (e === over) return null;
+      throw e;
+    }
     return out;
   }
 

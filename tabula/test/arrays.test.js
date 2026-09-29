@@ -173,7 +173,7 @@ test('복잡한 피벗 테이블 xlsx 왕복: 행 2개 · 열 · 값 2개 · 보
   const { def: d, rows: vis } = resolvePivot(pivotSourceData(wb, def).rows, def);
   const { grid } = computePivot(vis, d);
   wb.transact(() => { grid.forEach((row, r) => row.forEach((cd, c) => { if (cd?.raw) wb.setCellData(at, r, c, cd); })); wb.setSheetProp(at, 'pivot', { ...def, area: { r1: 0, c1: 0, r2: grid.length - 1, c2: 8 } }); });
-  assert.equal(grid[0][1].raw, '2024');
+  assert.equal(grid[0][1].raw.replace(/^'/, ''), '2024');
   const files = unzip(writeXlsx(wb));
   const pt = textOf(files['xl/pivotTables/pivotTable1.xml']);
   assert.match(pt, /<rowFields count="2"><field x="0"\/><field x="1"\/><\/rowFields>/);
@@ -207,4 +207,37 @@ test('빠른 채우기 · 하이퍼링크 xlsx 왕복', async () => {
   const back = new Workbook(readXlsx(bytes).data);
   assert.equal(back.getCell(0, 0, 0).link, 'https://example.com/a?b=1&c=2');
   assert.equal(back.getCell(0, 1, 0).link, '#Sheet1!C5');
+});
+
+test('피벗 날짜 그룹: 파생 필드(월2 = 일의 월) · 일 그룹 · 날짜 필터 항목 xlsx 왕복', async () => {
+  const { computePivot, resolvePivot, pivotSourceData } = await import('../src/pivot.js');
+  const wb = book({});
+  // 2025-11-20, 2025-12-01, 2025-12-02, 2026-01-15 (날짜 일련번호)
+  const data = [[45981, 5], [45992, 7], [45993, 1], [46037, 2]];
+  wb.transact(() => { wb.setInput(0, 0, 0, '일'); wb.setInput(0, 0, 1, '노출'); data.forEach(([d, v], i) => { wb.setInput(0, i + 1, 0, String(d)); wb.setInput(0, i + 1, 1, String(v)); }); });
+  const def = {
+    source: 'Sheet1', range: { r1: 0, c1: 0, r2: 4, c2: 1 }, rows: ['월2', '일'], cols: [], values: [{ field: '노출', agg: 'sum' }], pages: [], filters: {},
+    groups: { 월2: { by: 'months', base: '일' }, 일: { by: 'mdays' } }, collapsed: { 월2: ['12월'] }, top: 0, left: 3,
+  };
+  const res = resolvePivot(pivotSourceData(wb, def), def);
+  const { grid } = computePivot(res, res.def);
+  const labels = grid.map((r) => r[0]?.raw?.replace(/^'/, '')).filter(Boolean);
+  // 엑셀처럼 월 번호 순서 (연도 구분 없음)
+  assert.deepEqual(labels.slice(0, 5), ['행 레이블', '1월', '1월15일', '11월', '11월20일']);
+  assert.ok(labels.includes('12월') && !labels.includes('12월1일')); // 12월은 축소
+  // 그룹 항목으로 거르기 (12월만)
+  const fdef = { ...def, rows: ['월2'], filters: { 월2: ['12월'] } };
+  const fres = resolvePivot(pivotSourceData(wb, fdef), fdef);
+  assert.deepEqual(computePivot(fres, fres.def).grid.map((r) => r.map((c) => c?.raw?.replace(/^'/, ''))).slice(1), [['12월', '8'], ['총합계', '8']]);
+  wb.transact(() => wb.setSheetProp(0, 'pivot', { ...def, area: { r1: 0, c1: 3, r2: grid.length - 1, c2: 4 } }));
+  const files = unzip(writeXlsx(wb));
+  const cache = textOf(files['xl/pivotCache/pivotCacheDefinition1.xml']);
+  assert.match(cache, /<cacheField name="월2" numFmtId="0" databaseField="0"><fieldGroup base="0"><rangePr groupBy="months"/);
+  assert.match(cache, /<cacheField name="일" numFmtId="14"><sharedItems [^>]*containsDate="1"[^>]*\/><fieldGroup par="2" base="0"><rangePr groupBy="days"/);
+  const back = readXlsx(zip(files)).data.sheets[0].pivot;
+  assert.deepEqual(back.rows, ['월2', '일']);
+  assert.equal(back.groups.월2.by, 'months');
+  assert.equal(back.groups.월2.base, '일');
+  assert.equal(back.groups.일.by, 'mdays');
+  assert.deepEqual(back.collapsed, { 월2: ['12월'] });
 });
