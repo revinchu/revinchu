@@ -1,4 +1,4 @@
-// Tabula 서버: 정적 파일 + 통합 문서 저장 API
+// WIXEL 서버: 정적 파일 + 통합 문서 저장 API
 //   node server.js                → http://localhost:5178 (같은 네트워크의 다른 기기에서도 접속 가능)
 //   PORT=8080 HOST=127.0.0.1      → 포트/주소 변경 (HOST=127.0.0.1 이면 이 컴퓨터에서만 접속)
 //   TABULA_DATA=/경로             → 저장 폴더 (기본: ./data)
@@ -115,7 +115,7 @@ createServer(async (req, res) => {
     else send(res, 500, { error: '서버 오류' });
   }
 }).listen(PORT, HOST, () => {
-  console.log(`Tabula: http://localhost:${PORT}`);
+  console.log(`WIXEL: http://localhost:${PORT}`);
   if (HOST === '0.0.0.0') {
     for (const addrs of Object.values(networkInterfaces())) {
       for (const a of addrs ?? []) if (a.family === 'IPv4' && !a.internal) console.log(`  다른 기기에서: http://${a.address}:${PORT}`);

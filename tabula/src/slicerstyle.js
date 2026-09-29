@@ -6,8 +6,8 @@ import { MODERN_PALETTES } from './stylepresets.js';
 const LEGACY = { blue: 'SlicerStyleLight1', orange: 'SlicerStyleLight2', gray: 'SlicerStyleLight3', gold: 'SlicerStyleLight4', sky: 'SlicerStyleLight5', green: 'SlicerStyleLight6' };
 
 function build(name) {
-  // Tabula 모던: 채움(선택 항목이 진한 색) · 소프트(옅은 색) · 테두리(선만)
-  const t = /^TabulaSlicer(Solid|Soft|Line)(\d)$/.exec(name ?? '');
+  // WIXEL 모던: 채움(선택 항목이 진한 색) · 소프트(옅은 색) · 테두리(선만)
+  const t = /^(?:Wixel|WIXEL)Slicer(Solid|Soft|Line)(\d)$/.exec(name ?? '');
   if (t) {
     const [, dk, ac, soft, line] = MODERN_PALETTES[Math.min(MODERN_PALETTES.length, Math.max(1, Number(t[2]))) - 1];
     const common = { frame: '#ffffff', border: line, head: dk, noData: '#b8bec8' };
@@ -32,14 +32,14 @@ function build(name) {
 }
 
 export const SLICER_STYLES = [
-  ...[['Solid', '모던 채움'], ['Soft', '모던 소프트'], ['Line', '모던 선']].flatMap(([k, g]) => MODERN_PALETTES.map((p, i) => ({ name: `TabulaSlicer${k}${i + 1}`, group: `Tabula ${g}`, label: `${g} · ${p[0]}` }))),
+  ...[['Solid', '모던 채움'], ['Soft', '모던 소프트'], ['Line', '모던 선']].flatMap(([k, g]) => MODERN_PALETTES.map((p, i) => ({ name: `WixelSlicer${k}${i + 1}`, group: `WIXEL ${g}`, label: `${g} · ${p[0]}` }))),
   ...[1, 2, 3, 4, 5, 6].map((n) => ({ name: `SlicerStyleLight${n}`, group: '밝게', label: `슬라이서 스타일 밝게 ${n}` })),
   ...[1, 2].map((n) => ({ name: `SlicerStyleOther${n}`, group: '기타', label: `슬라이서 스타일 기타 ${n}` })),
   ...[1, 2, 3, 4, 5, 6].map((n) => ({ name: `SlicerStyleDark${n}`, group: '어둡게', label: `슬라이서 스타일 어둡게 ${n}` })),
 ].map((s) => ({ ...s, colors: build(s.name) }));
 
 export const SLICER_STYLE_GROUPS = [...new Set(SLICER_STYLES.map((s) => s.group))];
-export const isModernSlicer = (name) => /^TabulaSlicer/.test(name ?? '');
+export const isModernSlicer = (name) => /^(Wixel|WIXEL)Slicer/.test(name ?? '');
 export const slicerStyleColors = build;
 
 /** 슬라이서의 스타일 이름 (옛 color 속성 포함) */

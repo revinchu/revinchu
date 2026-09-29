@@ -1,7 +1,7 @@
-# Tabula 를 GitHub Pages 로 배포 (웹에서 바로 접속)
+# WIXEL(위셀) 을 GitHub Pages 로 배포 (웹에서 바로 접속)
 # 처음 한 번: 저장소 Settings → Pages → Build and deployment → Source 를 "GitHub Actions" 로 지정.
 # 배포 주소: https://<계정>.github.io/<저장소>/
-name: Tabula Pages
+name: WIXEL Pages
 
 on:
   push:

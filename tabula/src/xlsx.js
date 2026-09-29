@@ -1224,7 +1224,7 @@ function seriesRef(text) {
   return { name: m[2], ...(m[1] ? { sheet: m[1].replace(/''/g, "'") } : {}) };
 }
 
-/** 차트 XML → Tabula 차트 모델 (콤보 · 보조 축 · 데이터 레이블 · 계열 색 · 피벗 차트) */
+/** 차트 XML → WIXEL 차트 모델 (콤보 · 보조 축 · 데이터 레이블 · 계열 색 · 피벗 차트) */
 function readChart(files, path, theme = {}) {
   const xml = textOf(files[path]);
   if (!xml) return null;
@@ -1371,7 +1371,7 @@ function readChart(files, path, theme = {}) {
   const gapW = Number(child(bar, 'gapWidth')?.attrs.val);
   if (bar?.name === 'barChart' && gapW && gapW !== 150 && gapW !== 182) out.gap = gapW;
   if (!descendants(plot, 'majorGridlines').length) out.gridY = false;
-  // Tabula 전용 설정 (원래 차트 종류 · 팔레트 · 서식)
+  // WIXEL 전용 설정 (원래 차트 종류 · 팔레트 · 서식)
   const tbEl = descendants(root, 'props').find((x) => x.attrs.json);
   if (tbEl) { try { Object.assign(out, JSON.parse(tbEl.attrs.json)); } catch { /* 무시 */ } }
   const legend = child(chartEl, 'legend');
@@ -1422,7 +1422,7 @@ function readPivotCache(files, path) {
       if (it.name === 'm') return null;
       return it.attrs.v ?? '';
     });
-    // tb:formula = Tabula 가 쓴 원래 수식 (DIVIDE · ROWS 등 엑셀에 없는 함수)
+    // tb:formula = WIXEL 가 쓴 원래 수식 (DIVIDE · ROWS 등 엑셀에 없는 함수)
     const tbKey = Object.keys(cf.attrs).find((k) => k.endsWith(':formula'));
     const formula = tbKey ? cf.attrs[tbKey] : cf.attrs.formula;
     return { name: cf.attrs.name ?? '', items, ...(formula !== undefined ? { formula } : {}) };
@@ -1444,7 +1444,7 @@ const BASE_PREV = 1048828;
 const BASE_NEXT = 1048829;
 
 /**
- * pivotTableDefinition + 캐시 → Tabula 피벗 정의 (행·열·값·보고서 필터 여러 개, 레이아웃, 부분합, 총합계, 값 표시 형식)
+ * pivotTableDefinition + 캐시 → WIXEL 피벗 정의 (행·열·값·보고서 필터 여러 개, 레이아웃, 부분합, 총합계, 값 표시 형식)
  * tables: 가져온 모든 표 (원본이 표 이름인지 확인)
  */
 function pivotDefFrom(root, cache, tables, sheetName) {
@@ -1621,7 +1621,7 @@ function linkPivotsAndSlicers(files, wbRels, sheets, ctx) {
       if (!cacheFiles.has(p.cachePath)) cacheFiles.set(p.cachePath, readPivotCache(files, p.cachePath));
       const cache = cacheFiles.get(p.cachePath);
       const def = cache && pivotDefFrom(p.root, cache, tables, s.name);
-      if (def && ctx.tableStyles?.[def.style] && !PRESET_STYLES[def.style]) def.styleDef = ctx.tableStyles[def.style]; // 파일에 정의된 사용자 지정 스타일 (Tabula 모던 스타일은 이름으로 앎)
+      if (def && ctx.tableStyles?.[def.style] && !PRESET_STYLES[def.style]) def.styleDef = ctx.tableStyles[def.style]; // 파일에 정의된 사용자 지정 스타일 (WIXEL 모던 스타일은 이름으로 앎)
       if (!def) ctx.warnings.add('외부 데이터 원본을 쓰는 피벗 테이블은 값으로만 가져왔습니다.');
       else if (!s.pivot) { s.pivot = def; s._pivotName = p.root.attrs.name; } else (s.pivotsExtra ??= []).push(def);
     }
@@ -1937,7 +1937,7 @@ class StylePool {
     return this.dxfs.length - 1;
   }
 
-  /** Tabula 모던 스타일 → 사용자 지정 표/피벗 스타일 (<tableStyles>) — 엑셀에서도 같은 모양 */
+  /** WIXEL 모던 스타일 → 사용자 지정 표/피벗 스타일 (<tableStyles>) — 엑셀에서도 같은 모양 */
   presetTableStyle(name, pivot) {
     if (this.tableStyles.has(name)) return;
     const p = presetStyle(name);
@@ -1951,7 +1951,7 @@ class StylePool {
     const base = slicerStyleName(sl);
     if (!sl.custom && !isModernSlicer(base)) return base;
     const c = slicerColors(sl);
-    const name = sl.custom ? `Tabula 사용자 지정 ${[...JSON.stringify(c)].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) >>> 0, 7).toString(36)}` : base;
+    const name = sl.custom ? `WIXEL 사용자 지정 ${[...JSON.stringify(c)].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) >>> 0, 7).toString(36)}` : base;
     if (this.slicerStyles.has(name)) return name;
     const bd = (color) => ({ bt: true, bb: true, bl: true, br: true, btc: color, bbc: color, blc: color, brc: color });
     const whole = this.dxf({ fill: c.frame, ...bd(c.border) });
@@ -2196,7 +2196,7 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
     const dPt = pie ? sr.values.map((_, k) => `<c:dPt><c:idx val="${k}"/><c:bubble3D val="0"/>${chart.explode ? `<c:explosion val="${Math.round(chart.explode)}"/>` : ''}<c:spPr><a:solidFill><a:srgbClr val="${(sr.colors?.[k] ?? pal[k % pal.length]).slice(1)}"/></a:solidFill><a:ln w="19050"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:ln></c:spPr></c:dPt>`).join('') : '';
     const invert = type === 'column' || type === 'bar' ? '<c:invertIfNegative val="0"/>' : '';
     const code = typeof sr.numFmt === 'string' ? sr.numFmt : null;
-    // 원형: 레이블을 따로 정하지 않았으면 백분율 (Tabula 화면과 같게)
+    // 원형: 레이블을 따로 정하지 않았으면 백분율 (WIXEL 화면과 같게)
     const pieP = pie && sr.labels !== false && (sr.pct || (sr.labels ?? chart.labels) === undefined);
     const labels = dLbls(pie && sr.labels === false ? false : sr.labels ?? chart.labels, code, pieP);
     const cats = data.categories;
@@ -2268,7 +2268,7 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
   const hexOf = (c) => String(c).replace('#', '').toUpperCase().slice(0, 6);
   const areaSpPr = chart.fill || chart.border ? `<c:spPr>${chart.fill ? `<a:solidFill><a:srgbClr val="${hexOf(chart.fill)}"/></a:solidFill>` : ''}${chart.border ? `<a:ln w="9525"><a:solidFill><a:srgbClr val="${hexOf(chart.border)}"/></a:solidFill></a:ln>` : ''}</c:spPr>` : '';
   const plotSpPr = chart.plotFill ? `<c:spPr><a:solidFill><a:srgbClr val="${hexOf(chart.plotFill)}"/></a:solidFill></c:spPr>` : '';
-  // Tabula 전용 설정 (엑셀은 무시): 원래 차트 종류 · 팔레트 · 서식
+  // WIXEL 전용 설정 (엑셀은 무시): 원래 차트 종류 · 팔레트 · 서식
   const TB_KEYS = ['type', 'palette', 'scatterStyle', 'radarStyle', 'ohlc', 'explode', 'hole', 'gap', 'marker', 'gridX', 'gridY', 'fill', 'plotFill', 'border', 'titleColor', 'titleBold', 'textColor', 'gridColor', 'rounded', 'totals', 'binCount', 'binWidth', 'upColor', 'downColor', 'totalColor', 'bubbleScale', 'firstAngle', 'showMean', 'connectors'];
   const tb = Object.fromEntries(TB_KEYS.filter((k) => chart[k] !== undefined && chart[k] !== null).map((k) => [k, chart[k]]));
   const extLst = Object.keys(tb).length > 1 || FALLBACK[chart.type] ? `<c:extLst><c:ext uri="{5E2A6C7B-8F4D-4B1A-9C3E-7D6F1A2B3C4D}" xmlns:tb="urn:tabula:chart"><tb:props json="${esc(JSON.stringify(tb))}"/></c:ext></c:extLst>` : '';
@@ -2337,7 +2337,7 @@ function validationXml(v) {
 const NS_X14 = 'http://schemas.microsoft.com/office/spreadsheetml/2009/9/main';
 const NS_X15 = 'http://schemas.microsoft.com/office/spreadsheetml/2010/11/main';
 const NS_MC = 'http://schemas.openxmlformats.org/markup-compatibility/2006';
-const NS_TB = 'https://tabula.local/spreadsheet/2026'; // Tabula 전용 속성 (엑셀은 mc:Ignorable 로 무시)
+const NS_TB = 'https://tabula.local/spreadsheet/2026'; // WIXEL 전용 속성 (엑셀은 mc:Ignorable 로 무시)
 const REL_MS = 'http://schemas.microsoft.com/office/2007/relationships';
 const PIVOT_SUBTOTAL = { count: 'count', average: 'average', max: 'max', min: 'min', product: 'product', countNums: 'countNums', stdDev: 'stdDev', stdDevp: 'stdDevp', var: 'var', varp: 'varp' };
 
@@ -3094,7 +3094,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {}) 
     const comments = [...sheet.cells].filter(([, c]) => c.comment).map(([k, c]) => [k.split(',').map(Number), c.comment]);
     if (comments.length) {
       commentNo++;
-      files[`xl/comments${commentNo}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<comments xmlns="${NS_MAIN}"><authors><author>Tabula</author></authors><commentList>${comments.map(([[r, c], text]) => `<comment ref="${cellName(r, c)}" authorId="0"><text><r><t xml:space="preserve">${esc(text)}</t></r></text></comment>`).join('')}</commentList></comments>`;
+      files[`xl/comments${commentNo}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<comments xmlns="${NS_MAIN}"><authors><author>WIXEL</author></authors><commentList>${comments.map(([[r, c], text]) => `<comment ref="${cellName(r, c)}" authorId="0"><text><r><t xml:space="preserve">${esc(text)}</t></r></text></comment>`).join('')}</commentList></comments>`;
       files[`xl/drawings/vmlDrawing${commentNo}.vml`] = `<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><o:shapelayout v:ext="edit"><o:idmap v:ext="edit" data="${commentNo}"/></o:shapelayout><v:shapetype id="_x0000_t202" coordsize="21600,21600" o:spt="202" path="m,l,21600r21600,l21600,xe"><v:stroke joinstyle="miter"/><v:path gradientshapeok="t" o:connecttype="rect"/></v:shapetype>${comments.map(([[r, c]], i) => `<v:shape id="_x0000_s${commentNo * 1024 + i + 1}" type="#_x0000_t202" style="position:absolute;margin-left:80pt;margin-top:2pt;width:108pt;height:59pt;z-index:${i + 1};visibility:hidden" fillcolor="#ffffe1" o:insetmode="auto"><v:fill color2="#ffffe1"/><v:shadow on="t" color="black" obscured="t"/><v:path o:connecttype="none"/><v:textbox style="mso-direction-alt:auto"><div style="text-align:left"></div></v:textbox><x:ClientData ObjectType="Note"><x:MoveWithCells/><x:SizeWithCells/><x:Anchor>${c + 1}, 15, ${Math.max(0, r - 1)}, 10, ${c + 3}, 15, ${r + 3}, 4</x:Anchor><x:AutoFill>False</x:AutoFill><x:Row>${r}</x:Row><x:Column>${c}</x:Column></x:ClientData></v:shape>`).join('')}</xml>`;
       addRel('comments', `../comments${commentNo}.xml`);
       legacy = `<legacyDrawing r:id="${addRel('vmlDrawing', `../drawings/vmlDrawing${commentNo}.vml`)}"/>`;
@@ -3279,8 +3279,8 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {}) 
   files['xl/styles.xml'] = pool.xml();
   files['_rels/.rels'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="${NS_PKG}"><Relationship Id="rId1" Type="${REL}/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="${REL}/extended-properties" Target="docProps/app.xml"/></Relationships>`;
   const now = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
-  files['docProps/core.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:creator>Tabula</dc:creator><dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified></cp:coreProperties>`;
-  files['docProps/app.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>Tabula</Application></Properties>`;
+  files['docProps/core.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:creator>WIXEL</dc:creator><dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified></cp:coreProperties>`;
+  files['docProps/app.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>WIXEL</Application></Properties>`;
   files['[Content_Types].xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/>${[...mediaExts].map((e) => `<Default Extension="${e}" ContentType="${MIME[e]}"/>`).join('')}${vba ? '<Default Extension="bin" ContentType="application/vnd.ms-office.vbaProject"/>' : ''}<Override PartName="/xl/workbook.xml" ContentType="${vba ? 'application/vnd.ms-excel.sheet.macroEnabled.main+xml' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml'}"/>${wb.sheets.map((s, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>${contentOverrides.join('')}</Types>`;
 
   // [Content_Types].xml 을 맨 앞에 두는 것이 관례

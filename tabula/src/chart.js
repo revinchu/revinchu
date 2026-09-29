@@ -47,7 +47,7 @@ export const CHART_GALLERY = [
 ];
 
 export const PALETTE = ['#4472C4', '#ED7D31', '#A5A5A5', '#FFC000', '#5B9BD5', '#70AD47', '#264478', '#9E480E', '#636363', '#997300'];
-/** 색 변경 (엑셀 [차트 디자인] → [색 변경]) + Tabula 모던 팔레트 */
+/** 색 변경 (엑셀 [차트 디자인] → [색 변경]) + WIXEL 모던 팔레트 */
 export const CHART_PALETTES = {
   office: { label: '다양한 색 1 (Office)', colors: PALETTE },
   colorful2: { label: '다양한 색 2', colors: ['#5B9BD5', '#A5A5A5', '#4472C4', '#264478', '#636363', '#255E91'] },
@@ -55,10 +55,10 @@ export const CHART_PALETTES = {
   mono1: { label: '단색 파랑', colors: ['#264478', '#335AA1', '#4472C4', '#698ED0', '#8FAADC', '#B4C7E7'] },
   mono2: { label: '단색 주황', colors: ['#843C0C', '#C55A11', '#ED7D31', '#F4B183', '#F8CBAD', '#FBE5D6'] },
   mono6: { label: '단색 녹색', colors: ['#385723', '#548235', '#70AD47', '#A9D18E', '#C5E0B4', '#E2F0D9'] },
-  modern: { label: 'Tabula 모던', colors: ['#4F46E5', '#0EA5E9', '#10B981', '#F59E0B', '#F43F5E', '#8B5CF6', '#64748B', '#14B8A6'] },
-  pastel: { label: 'Tabula 파스텔', colors: ['#818CF8', '#7DD3FC', '#6EE7B7', '#FCD34D', '#FDA4AF', '#C4B5FD', '#CBD5E1', '#5EEAD4'] },
-  slate: { label: 'Tabula 슬레이트', colors: ['#1E293B', '#475569', '#64748B', '#94A3B8', '#CBD5E1', '#0EA5E9'] },
-  vivid: { label: 'Tabula 비비드', colors: ['#2563EB', '#DC2626', '#16A34A', '#D97706', '#9333EA', '#0891B2', '#DB2777', '#65A30D'] },
+  modern: { label: 'WIXEL 모던', colors: ['#4F46E5', '#0EA5E9', '#10B981', '#F59E0B', '#F43F5E', '#8B5CF6', '#64748B', '#14B8A6'] },
+  pastel: { label: 'WIXEL 파스텔', colors: ['#818CF8', '#7DD3FC', '#6EE7B7', '#FCD34D', '#FDA4AF', '#C4B5FD', '#CBD5E1', '#5EEAD4'] },
+  slate: { label: 'WIXEL 슬레이트', colors: ['#1E293B', '#475569', '#64748B', '#94A3B8', '#CBD5E1', '#0EA5E9'] },
+  vivid: { label: 'WIXEL 비비드', colors: ['#2563EB', '#DC2626', '#16A34A', '#D97706', '#9333EA', '#0891B2', '#DB2777', '#65A30D'] },
 };
 export const paletteOf = (ch) => CHART_PALETTES[ch?.palette]?.colors ?? PALETTE;
 

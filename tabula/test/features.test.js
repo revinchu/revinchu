@@ -146,7 +146,7 @@ test('표: 자동 확장 · 이름 · 스타일', () => {
   assert.equal(validTableName('A1'), false);
   assert.equal(validTableName('판매 목록'), false);
   assert.equal(TABLE_STYLES.filter((s) => s.name.startsWith('TableStyle')).length, 60);
-  assert.equal(TABLE_STYLES.filter((s) => s.name.startsWith('Tabula')).length, 24); // Tabula 모던 · 미니멀 · 강조
+  assert.equal(TABLE_STYLES.filter((s) => s.name.startsWith('Wixel')).length, 24); // WIXEL 모던 · 미니멀 · 강조
   assert.equal(normalizeStyleName('TableStyleMedium9'), 'TableStyleMedium9');
   assert.equal(normalizeStyleName('TableStyleMedium99'), 'TableStyleMedium2');
   const t = s.tables[0];

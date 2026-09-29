@@ -60,8 +60,8 @@ test('엑셀 색 밝기(tint): 윈도 정수 HLS', () => {
 });
 
 test('기본 제공 표 · 피벗 스타일 144개 정의', () => {
-  assert.equal(Object.keys(PRESET_STYLES).filter((k) => !k.startsWith('Tabula')).length, 144);
-  assert.equal(Object.keys(PRESET_STYLES).filter((k) => k.startsWith('Tabula')).length, 40);
+  assert.equal(Object.keys(PRESET_STYLES).filter((k) => !k.startsWith('Wixel')).length, 144);
+  assert.equal(Object.keys(PRESET_STYLES).filter((k) => k.startsWith('Wixel')).length, 40);
   const t = { r1: 0, c1: 0, r2: 4, c2: 2, header: true, banded: true, firstCol: true };
   // TableStyleLight9: 머리글 강조1 + 흰 굵은 글자, 첫 열 굵게, 줄무늬 행 위쪽 선
   const h = tablePresetCell('TableStyleLight9', t, 0, 1);
@@ -104,7 +104,7 @@ test('차트: 그라데이션 채우기 · 그림자 · 파일의 글꼴 크기'
   assert.match(out, /font-size="12" fill="#404040"/);
 });
 
-test('Tabula 모던 스타일: 표 · 피벗 · 슬라이서가 xlsx 사용자 지정 스타일로 왕복', async () => {
+test('WIXEL 모던 스타일: 표 · 피벗 · 슬라이서가 xlsx 사용자 지정 스타일로 왕복', async () => {
   const { Workbook } = await import('../src/workbook.js');
   const { readXlsx, writeXlsx } = await import('../src/xlsx.js');
   const { unzip, textOf } = await import('../src/zip.js');
@@ -112,16 +112,16 @@ test('Tabula 모던 스타일: 표 · 피벗 · 슬라이서가 xlsx 사용자 �
   const wb = new Workbook();
   wb.transact(() => {
     [['지역', '매출'], ['서울', '10'], ['부산', '20']].forEach((row, r) => row.forEach((v, c) => wb.setInput(0, r, c, v)));
-    wb.setSheetProp(0, 'tables', [{ id: 't1', name: '표1', r1: 0, c1: 0, r2: 2, c2: 1, header: true, totals: false, style: 'TabulaTableModern2', banded: true, filter: null, columns: ['지역', '매출'] }]);
-    wb.setSheetProp(0, 'slicers', [{ id: 's1', caption: '지역', source: { kind: 'table', table: '표1', column: '지역' }, style: 'TabulaSlicerSolid3', x: 200, y: 10, w: 150, h: 150 }]);
+    wb.setSheetProp(0, 'tables', [{ id: 't1', name: '표1', r1: 0, c1: 0, r2: 2, c2: 1, header: true, totals: false, style: 'WixelTableModern2', banded: true, filter: null, columns: ['지역', '매출'] }]);
+    wb.setSheetProp(0, 'slicers', [{ id: 's1', caption: '지역', source: { kind: 'table', table: '표1', column: '지역' }, style: 'WixelSlicerSolid3', x: 200, y: 10, w: 150, h: 150 }]);
   });
-  const head = tablePresetCell('TabulaTableModern2', { r1: 0, c1: 0, r2: 2, c2: 1, header: true, banded: true }, 0, 0);
+  const head = tablePresetCell('WixelTableModern2', { r1: 0, c1: 0, r2: 2, c2: 1, header: true, banded: true }, 0, 0);
   assert.equal(head.fill, '#312e81');
   assert.equal(head.color, '#ffffff');
   const styles = textOf(unzip(writeXlsx(wb))['xl/styles.xml']);
-  assert.match(styles, /<tableStyle name="TabulaTableModern2" pivot="0"/);
-  assert.match(styles, /<x14:slicerStyle name="TabulaSlicerSolid3">/);
+  assert.match(styles, /<tableStyle name="WixelTableModern2" pivot="0"/);
+  assert.match(styles, /<x14:slicerStyle name="WixelSlicerSolid3">/);
   const back = new Workbook(readXlsx(writeXlsx(wb)).data);
-  assert.equal(back.sheets[0].tables[0].style, 'TabulaTableModern2');
-  assert.equal(back.sheets[0].slicers[0].style, 'TabulaSlicerSolid3');
+  assert.equal(back.sheets[0].tables[0].style, 'WixelTableModern2');
+  assert.equal(back.sheets[0].slicers[0].style, 'WixelSlicerSolid3');
 });

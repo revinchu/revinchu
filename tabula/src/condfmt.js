@@ -378,7 +378,7 @@ export function describeCond(rule) {
   }
 }
 
-// ───────────── 색조 · 데이터 막대 모음 (엑셀 기본 12종 + Tabula 모던) ─────────────
+// ───────────── 색조 · 데이터 막대 모음 (엑셀 기본 12종 + WIXEL 모던) ─────────────
 export const SCALE_PRESETS = {
   modern: [
     ['에메랄드 - 앰버 - 로즈', ['#34d399', '#fde68a', '#fb7185']],

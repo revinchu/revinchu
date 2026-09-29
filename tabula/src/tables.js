@@ -27,7 +27,7 @@ export const shade = (hex, t) => mix(hex, '#000000', t);
 /** 표 스타일 60개: 밝게 1~21, 보통 1~28, 어둡게 1~11 (엑셀 이름 · 정의를 그대로 씀 — stylepresets.js) */
 const TABLE_KINDS = [['Light', '밝게', 21], ['Medium', '보통', 28], ['Dark', '어둡게', 11]];
 export const TABLE_STYLES = [
-  // Tabula 모던 스타일 (엑셀 파일에는 사용자 지정 표 스타일로 저장)
+  // WIXEL 모던 스타일 (엑셀 파일에는 사용자 지정 표 스타일로 저장)
   ...MODERN_STYLES.filter((s) => !s.pivot).map((s) => ({ ...s, get swatch() { return presetSwatch(this.name); } })),
   ...TABLE_KINDS.flatMap(([k, group, n]) => Array.from({ length: n }, (_, i) => ({
     name: `TableStyle${k}${i + 1}`, group, label: `표 스타일 ${group} ${i + 1}`,

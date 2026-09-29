@@ -235,7 +235,7 @@ function decodeDxf(s, colors) {
 const presetMemo = new Map();
 /** 기본 제공 스타일 이름 → { 요소: 서식 } (없으면 null) */
 export function presetStyle(name) {
-  const src = PRESET_STYLES[name];
+  const src = PRESET_STYLES[name] ?? PRESET_STYLES[String(name).replace(/^Tabula(?=Table|Pivot)/, 'Wixel')];
   if (!src) return null;
   const key = `${name}|${THEME.key}`;
   let hit = presetMemo.get(key);
@@ -414,7 +414,7 @@ export function paintPivotPreset(name, grid, g, opts = {}) {
   return true;
 }
 
-// ───────────── Tabula 모던 스타일 (엑셀 기본 제공보다 차분하고 세련된 색) ─────────────
+// ───────────── WIXEL 모던 스타일 (엑셀 기본 제공보다 차분하고 세련된 색) ─────────────
 // 팔레트: [이름, 진한 색(머리글), 강조색, 옅은 색(줄무늬), 선 색, 아주 옅은 색]
 export const MODERN_PALETTES = [
   ['슬레이트', '#1e293b', '#475569', '#f1f5f9', '#e2e8f0', '#f8fafc'],
@@ -460,7 +460,7 @@ function registerModern() {
   const out = [];
   for (const [kind, make] of Object.entries(MODERN_KINDS)) {
     MODERN_PALETTES.forEach((pal, i) => {
-      const name = `Tabula${kind}${i + 1}`;
+      const name = `Wixel${kind}${i + 1}`;
       const parts = [];
       for (const [k, v] of Object.entries(make(pal))) {
         if (!v) continue;
@@ -468,13 +468,13 @@ function registerModern() {
         parts.push(`${k}:${PRESET_DXF.length - 1}`);
       }
       PRESET_STYLES[name] = parts.join(' ');
-      out.push({ name, group: `Tabula ${KIND_LABEL[kind]}`, label: `${KIND_LABEL[kind]} · ${pal[0]}`, pivot: kind.startsWith('Pivot') });
+      out.push({ name, group: `WIXEL ${KIND_LABEL[kind]}`, label: `${KIND_LABEL[kind]} · ${pal[0]}`, pivot: kind.startsWith('Pivot') });
     });
   }
   return out;
 }
 export const MODERN_STYLES = registerModern();
-export const isModernStyle = (name) => /^Tabula(Table|Pivot)/.test(name ?? '');
+export const isModernStyle = (name) => /^(Wixel|WIXEL)(Table|Pivot)/.test(name ?? '');
 
 // 엑셀 <tableStyleElement type> ↔ 요소 키
 export const ELEMENT_TYPES = {

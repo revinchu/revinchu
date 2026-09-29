@@ -1,4 +1,4 @@
-// Tabula 메인: 상태 · 선택 · 편집 · 키보드/마우스 · 명령 (그리기는 view.js)
+// WIXEL 메인: 상태 · 선택 · 편집 · 키보드/마우스 · 명령 (그리기는 view.js)
 import { Workbook, formulaShifter, cellData, DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT } from './workbook.js';
 import {
   cellName, colToName, parseRangeName, parse, shiftFormula, listRefs, normalizeFormula, tokenize,
@@ -557,7 +557,7 @@ function commitEdit(dir = null, { fillSel = false } = {}) {
     try {
       parse(text.slice(1));
     } catch {
-      alertDialog('Tabula', '입력한 수식에 문제가 있습니다. 수식을 확인하세요.').then(() => { if (editing) focusGrid(); });
+      alertDialog('WIXEL', '입력한 수식에 문제가 있습니다. 수식을 확인하세요.').then(() => { if (editing) focusGrid(); });
       return false;
     }
   }
@@ -2245,7 +2245,7 @@ function toggleMerge(kind = 'center') {
   for (const [r, c] of cellsIn(usedClip(rg))) if (!isEmptyAt(r, c)) filled++;
   if (filled > 1 && kind !== 'across') {
     openDialog({
-      title: 'Tabula',
+      title: 'WIXEL',
       body: '셀을 병합하면 왼쪽 위의 값만 유지되고 다른 값은 삭제됩니다.',
       buttons: [{ label: '확인', primary: true, action: doMerge }, { label: '취소' }],
     });
@@ -2371,7 +2371,7 @@ function protectBlocked(action = 'cells', rg = sel) {
   const sh = sheet();
   if (!isProtected(sh) || action === 'free') return false;
   const blocked = action === 'cells' ? anyLocked(special?.si === si ? { r1: sel.r1, c1: sel.c1, r2: sel.r2, c2: sel.c2 } : rg) : action === 'block' || !allowed(sh, action);
-  if (blocked) alertDialog('Tabula', '변경하려는 셀이나 차트가 보호된 시트에 있습니다. 변경하려면 [검토] 탭에서 [시트 보호 해제]를 누르세요. 암호를 입력해야 할 수도 있습니다.');
+  if (blocked) alertDialog('WIXEL', '변경하려는 셀이나 차트가 보호된 시트에 있습니다. 변경하려면 [검토] 탭에서 [시트 보호 해제]를 누르세요. 암호를 입력해야 할 수도 있습니다.');
   return blocked;
 }
 
@@ -2863,7 +2863,7 @@ function sortData(ascending, keyCol = active.c, header = null, rgIn = null, fkey
   const h = header ?? hasHeader(rg);
   const key = clamp(keyCol, rg.c1, rg.c2);
   if (wb.mergesIn(si, rg.r1, rg.c1, rg.r2, rg.c2).length) {
-    alertDialog('Tabula', '병합된 셀이 있으면 정렬할 수 없습니다.');
+    alertDialog('WIXEL', '병합된 셀이 있으면 정렬할 수 없습니다.');
     return;
   }
   wb.transact(() => {
@@ -3034,7 +3034,7 @@ function toggleFilter() {
     return;
   }
   const rg = dataRange();
-  if (rg.r1 === rg.r2 && isEmptyAt(rg.r1, rg.c1)) { alertDialog('Tabula', '필터를 적용할 데이터 범위를 선택하세요.'); return; }
+  if (rg.r1 === rg.r2 && isEmptyAt(rg.r1, rg.c1)) { alertDialog('WIXEL', '필터를 적용할 데이터 범위를 선택하세요.'); return; }
   wb.transact(() => {
     wb.setSheetProp(si, 'filter', { ...rg, criteria: {}, hidden: {} });
     widenForFilterButtons(rg);
@@ -3548,7 +3548,7 @@ function convertTableToRange() {
   const t = tableHere();
   if (!t) return;
   openDialog({
-    title: 'Tabula', body: '표를 정상 범위로 변환하시겠습니까?',
+    title: 'WIXEL', body: '표를 정상 범위로 변환하시겠습니까?',
     buttons: [{
       label: '예', primary: true,
       action: () => {
@@ -4359,7 +4359,7 @@ function textToColumns() {
     };
     if (occupied) {
       openDialog({
-        title: 'Tabula', body: '여기에 이미 데이터가 있습니다. 바꾸시겠습니까?',
+        title: 'WIXEL', body: '여기에 이미 데이터가 있습니다. 바꾸시겠습니까?',
         buttons: [{ label: '확인', primary: true, action: apply }, { label: '취소' }],
       });
     } else apply();
@@ -5022,7 +5022,7 @@ function validationError(rule, dir, fillSel) {
     : style === 'warning'
       ? [{ label: '예', primary: true, action: accept }, { label: '아니요', action: retry }, { label: '취소', action: cancel }]
       : [{ label: '확인', primary: true, action: accept }, { label: '취소', action: cancel }];
-  openDialog({ title: rule.errorTitle || 'Tabula', body, buttons, width: 400 });
+  openDialog({ title: rule.errorTitle || 'WIXEL', body, buttons, width: 400 });
 }
 
 function openDvList() {
@@ -5189,7 +5189,7 @@ function macroDialog() {
   openDialog({
     title: '매크로 (VBA)', width: 640,
     body: el('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
-      el('div', { class: 'muted' }, 'Tabula 는 보안을 위해 매크로를 실행하지 않습니다. 코드는 읽기 전용으로 표시되며, 파일을 .xlsm 으로 저장하면 매크로가 그대로 보존되어 엑셀에서 실행할 수 있습니다.'),
+      el('div', { class: 'muted' }, 'WIXEL 는 보안을 위해 매크로를 실행하지 않습니다. 코드는 읽기 전용으로 표시되며, 파일을 .xlsm 으로 저장하면 매크로가 그대로 보존되어 엑셀에서 실행할 수 있습니다.'),
       list.length ? selEl : el('div', {}, '표시할 모듈이 없습니다.'),
       pre),
     buttons: [
@@ -6331,7 +6331,7 @@ function findNext(text = findState.text, { quiet = false, back = false } = {}) {
   const order = findOpts().sheets;
   const m = nextMatch(list, { si, r: active.r, c: active.c }, { byCols: findState.byCols, back, order });
   if (!m) {
-    if (!quiet) alertDialog('Tabula', '찾는 항목이 없습니다. 검색 조건을 확인하세요. 범위를 통합 문서로 넓히거나 찾는 위치를 바꿔 볼 수 있습니다.');
+    if (!quiet) alertDialog('WIXEL', '찾는 항목이 없습니다. 검색 조건을 확인하세요. 범위를 통합 문서로 넓히거나 찾는 위치를 바꿔 볼 수 있습니다.');
     return false;
   }
   goToMatch(m);
@@ -6589,7 +6589,7 @@ const isHiddenSheet = (i) => { const st = wb.sheets[i]?.state; return st === 'hi
 const visibleSheetCount = () => wb.sheets.filter((_, i) => !isHiddenSheet(i)).length;
 
 function hideSheet(i = si) {
-  if (visibleSheetCount() <= 1) { alertDialog('Tabula', '통합 문서에는 보이는 시트가 하나 이상 있어야 합니다.'); return; }
+  if (visibleSheetCount() <= 1) { alertDialog('WIXEL', '통합 문서에는 보이는 시트가 하나 이상 있어야 합니다.'); return; }
   wb.transact(() => wb.setSheetProp(i, 'state', 'hidden'), meta());
   if (i === si) {
     let j = i + 1;
@@ -6749,7 +6749,7 @@ async function exportXlsx(name = docName) {
     }
   } catch (err) {
     prog.close();
-    alertDialog('Tabula', `저장하지 못했습니다: ${err.message}`);
+    alertDialog('WIXEL', `저장하지 못했습니다: ${err.message}`);
   }
 }
 
@@ -6759,7 +6759,7 @@ function saveAs() {
     {
       name: 'type', label: '파일 형식', type: 'select', value: 'xlsx', options: [
         { value: 'xlsx', label: wb.vba ? 'Excel 매크로 사용 통합 문서 (*.xlsm)' : 'Excel 통합 문서 (*.xlsx)' },
-        { value: 'tabula', label: 'Tabula 통합 문서 (*.tabula)' },
+        { value: 'tabula', label: 'WIXEL 통합 문서 (*.tabula)' },
         { value: 'csv', label: 'CSV UTF-8 (쉼표로 분리) — 현재 시트' },
         ...(server.available ? [{ value: 'server', label: '서버에 저장 (다른 기기에서 열기)' }] : []),
       ],
@@ -6815,7 +6815,7 @@ async function openFileObject(file, mode) {
         }, meta());
         toast(`시트 ${data.sheets.length}개를 가져왔습니다.`);
       }
-      if (fileMode === 'open' && data.vba) warnings.push('매크로가 포함된 통합 문서입니다. Tabula 는 매크로를 실행하지 않지만 [보기 → 매크로]에서 코드를 볼 수 있고, .xlsm 으로 저장하면 매크로가 그대로 유지됩니다.');
+      if (fileMode === 'open' && data.vba) warnings.push('매크로가 포함된 통합 문서입니다. WIXEL 는 매크로를 실행하지 않지만 [보기 → 매크로]에서 코드를 볼 수 있고, .xlsm 으로 저장하면 매크로가 그대로 유지됩니다.');
       if (warnings.length) alertDialog('가져오기', warnings.join('\n'));
       else if (fileMode === 'open') toast(`'${file.name}'을(를) 열었습니다.`);
       return;
@@ -6841,7 +6841,7 @@ async function openFileObject(file, mode) {
     }
     toast(`${rows.length}개 행을 가져왔습니다.`);
   } catch (err) {
-    alertDialog('Tabula', `파일을 열 수 없습니다: ${err.message}`);
+    alertDialog('WIXEL', `파일을 열 수 없습니다: ${err.message}`);
   }
 }
 
@@ -7001,7 +7001,7 @@ async function newWorkbook(sample) {
   };
   if (!autosave && dirty) {
     openDialog({
-      title: 'Tabula', body: '저장하지 않은 변경 내용이 있습니다. 새 통합 문서를 만드시겠습니까?',
+      title: 'WIXEL', body: '저장하지 않은 변경 내용이 있습니다. 새 통합 문서를 만드시겠습니까?',
       buttons: [{ label: '새로 만들기', primary: true, action: go }, { label: '취소' }],
     });
   } else go();
@@ -7273,7 +7273,7 @@ async function openFromServer(name) {
     toast(`'${name}'을(를) 열었습니다.`);
   } catch (err) {
     if (err.status === 401) askServerToken(() => openFromServer(name));
-    else alertDialog('Tabula', `열 수 없습니다: ${err.message}`);
+    else alertDialog('WIXEL', `열 수 없습니다: ${err.message}`);
   }
 }
 
@@ -8832,7 +8832,7 @@ const MENUS = {
       { title: '데이터 막대' },
       { node: cfGallery([...BAR_PRESETS.modern.map(([n, color]) => ({ n: `${n} (모던)`, bg: `linear-gradient(90deg, ${color} 0 62%, transparent 62%)`, rule: { type: 'bar', color } })),
         ...BAR_PRESETS.excel.map(([n, color]) => ({ n: `${n} 그라데이션 채우기`, bg: `linear-gradient(90deg, ${color}, #fff 62%, transparent 62%)`, rule: { type: 'bar', color } }))], add) },
-      { title: '색조 — Tabula 모던' },
+      { title: '색조 — WIXEL 모던' },
       { node: cfGallery(SCALE_PRESETS.modern.map(([n, colors]) => ({ n, bg: `linear-gradient(180deg,${colors.join(',')})`, rule: { type: 'scale', colors } })), add) },
       { title: '색조 — 엑셀 기본' },
       { node: cfGallery(SCALE_PRESETS.excel.map(([n, colors]) => ({ n, bg: `linear-gradient(180deg,${colors.join(',')})`, rule: { type: 'scale', colors } })), add) },
@@ -9125,7 +9125,7 @@ const COMMANDS = {
     };
     if (sheet().cells.size > 0) {
       openDialog({
-        title: 'Tabula', body: `'${sheet().name}' 시트를 영구적으로 삭제합니다. 계속하시겠습니까?`,
+        title: 'WIXEL', body: `'${sheet().name}' 시트를 영구적으로 삭제합니다. 계속하시겠습니까?`,
         buttons: [{ label: '삭제', primary: true, action: del }, { label: '취소' }],
       });
     } else del();
@@ -9346,9 +9346,9 @@ const COMMANDS = {
     buttons: [{ label: '닫기', primary: true }],
   }),
   about: () => openDialog({
-    title: 'Tabula 정보', width: 420,
+    title: 'WIXEL 정보', width: 420,
     body: el('div', { style: { lineHeight: '1.7' } },
-      el('b', {}, 'Tabula'), ' — 브라우저에서 동작하는 엑셀 스타일 스프레드시트', el('br'),
+      el('b', {}, 'WIXEL'), ' — 브라우저에서 동작하는 엑셀 스타일 스프레드시트', el('br'),
       el('span', { class: 'muted' }, `시트 크기 20,000,000행 × 16,384열 · 함수 ${FUNCTION_NAMES.length}개 · .xlsx 열기/저장`), el('br'),
       el('span', { class: 'muted' }, server.available ? '서버 저장소에 연결됨 — 다른 기기에서도 열 수 있습니다.' : '서버 없이 실행 중 — 이 브라우저에 저장됩니다.')),
     buttons: [{ label: '확인', primary: true }],
@@ -9462,7 +9462,7 @@ function updateRibbon() {
 }
 
 function updateTitle() {
-  const t = `${docName}${!autosave && dirty ? '*' : ''} - Tabula`;
+  const t = `${docName}${!autosave && dirty ? '*' : ''} - WIXEL`;
   if (!dom.title.querySelector('input')) dom.title.textContent = t;
   document.title = t;
   dom.autosave.setAttribute('aria-checked', String(autosave));

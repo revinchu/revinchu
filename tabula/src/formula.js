@@ -1,4 +1,4 @@
-// Tabula 수식 엔진: 토크나이저 · 파서 · 평가기(배열·분산·이름·LET/LAMBDA) · 참조 재작성
+// WIXEL 수식 엔진: 토크나이저 · 파서 · 평가기(배열·분산·이름·LET/LAMBDA) · 참조 재작성
 import {
   FormulaError as FormulaErrorCore, ERR as ERR_CORE, ERR_BY_CODE, isError as isErrorCore, Range as RangeCore, RefValue as RefValueCore,
   Lambda, scalar, toNum, toStr, checkNum, compareValues as compareCore, makeCriteria as makeCriteriaCore,
