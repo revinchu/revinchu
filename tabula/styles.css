@@ -927,3 +927,12 @@ legend { padding: 0 4px; color: #444; }
 .sym-btn { width: 30px; height: 30px; border: 1px solid #e3e3e3; background: #fff; cursor: pointer; font-size: 15px; padding: 0; }
 .sym-btn:hover { background: #e8f2ec; border-color: var(--green); }
 .sym-prev { font-size: 36px; text-align: center; min-height: 44px; }
+.calc-state { color: #b45309; font-weight: 700; }
+.focus-band { position: absolute; background: var(--focus-cell, #fff4b8); opacity: .45; pointer-events: none; mix-blend-mode: multiply; }
+.opt-wrap { display: grid; grid-template-columns: 130px 1fr; gap: 12px; min-height: 320px; }
+.opt-tabs { display: flex; flex-direction: column; gap: 2px; border-right: 1px solid #e5e5e5; padding-right: 6px; }
+.opt-tab { text-align: left; border: 0; background: none; padding: 7px 10px; cursor: pointer; font: inherit; border-radius: 3px; }
+.opt-tab.on { background: #cfe6d8; font-weight: 700; }
+.opt-page { display: flex; flex-direction: column; gap: 6px; }
+.opt-title { font-weight: 700; border-bottom: 1px solid #e5e5e5; padding: 8px 0 3px; margin-bottom: 2px; }
+.opt-page label > span:first-child { width: auto !important; min-width: 120px; }

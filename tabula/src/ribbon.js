@@ -202,7 +202,8 @@ export const TABS = [
         ),
         large('watchWindow', 'search', '조사식 창'),
       ]),
-      group('계산', [large('recalc', 'calc', '지금 계산')]),
+      group('계산', [large('calcOptionsBtn', 'calc', '계산 옵션', { menu: 'calcOptions' }), col(medium('recalc', 'calc', '지금 계산 (F9)'), medium('calcNowSheet', 'calc', '시트 계산 (Shift+F9)'))]),
+      group('옵션', [large('options', 'format', 'WIXEL 옵션')]),
     ],
   },
   {

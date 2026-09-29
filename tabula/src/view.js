@@ -825,6 +825,11 @@ export class GridView {
     const html = [];
     const selRect = this.sheetRect(sel);
     const am = wb.mergeAt(si, active.r, active.c) ?? { r1: active.r, c1: active.c, r2: active.r, c2: active.c };
+    // 포커스 셀 (엑셀 365): 활성 셀의 행 · 열을 띠로 강조
+    if (st.focusCell && !st.editing) {
+      const ar = this.sheetRect(am);
+      html.push(box('focus-band', { x: bx1, y: ar.y, w: bx2 - bx1, h: ar.h }), box('focus-band', { x: ar.x, y: by1, w: ar.w, h: by2 - by1 }));
+    }
     const single = sel.r1 === am.r1 && sel.c1 === am.c1 && sel.r2 === am.r2 && sel.c2 === am.c2;
     if (!single) {
       const a = this.sheetRect(am);

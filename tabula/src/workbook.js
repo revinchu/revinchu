@@ -973,6 +973,19 @@ export class Workbook {
    */
   dirtyPoints(pts) {
     this.version++;
+    if (this.manualCalc) {
+      // 수동 계산: 바뀐 칸 자신만 다시 계산하고, 참조하는 수식은 F9(지금 계산)까지 이전 값을 유지 (엑셀과 같음)
+      (this.manualPts ??= []).push(...pts);
+      this.sheetVer ??= [];
+      for (let i = 0; i < pts.length; i += 3) {
+        this.caches[pts[i]]?.deleteRC(pts[i + 1], pts[i + 2]);
+        this.bumpCol(pts[i], pts[i + 2]);
+        this.sheetVer[pts[i]] = (this.sheetVer[pts[i]] ?? 0) + 1;
+        const cell = this.sheets[pts[i]]?.cells.getRC(pts[i + 1], pts[i + 2]);
+        if (cell) cell.dirty = true;
+      }
+      return;
+    }
     this.sheetVer ??= [];
     const sheetsHit = new Set();
     for (let i = 0; i < pts.length; i += 3) sheetsHit.add(pts[i]);
@@ -1023,6 +1036,18 @@ export class Workbook {
     }
   }
 
+  /** 수동 계산에서 계산하지 않은 변경이 있는지 (상태 표시줄의 [계산]) */
+  get needsCalc() { return !!(this.manualCalc && this.manualPts?.length); }
+
+  /** 지금 계산 (F9): 수동 계산 중 쌓인 변경을 의존 수식까지 반영 */
+  calculateNow() {
+    const pts = this.manualPts ?? [];
+    this.manualPts = [];
+    const m = this.manualCalc;
+    this.manualCalc = false;
+    try { if (pts.length) this.dirtyPoints(pts); } finally { this.manualCalc = m; }
+  }
+
   /** 값이 있는 영역 크기 {rows, cols} */
   usedRange(si) {
     if (this.usedCache.has(si)) return this.usedCache.get(si);
@@ -1063,6 +1088,7 @@ export class Workbook {
   /** si 를 주면 그 시트의 버전만, 아니면 모든 시트의 버전을 올림 (피벗 원본 캐시가 씀) */
   invalidate(si) {
     this.version++;
+    if (si === undefined) this.manualPts = [];
     this.sheetVer ??= [];
     if (si === undefined || !this.sheets[si]) {
       this.sheetVerAll = (this.sheetVerAll ?? 0) + 1;

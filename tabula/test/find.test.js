@@ -128,3 +128,17 @@ test('테두리: 대각선 · 선 스타일 · 색 xlsx 왕복', async () => {
   assert.equal(st.dds, 'dashed');
   assert.equal(st.ddc, '#0070c0');
 });
+
+test('수동 계산: 참조하는 수식은 F9(지금 계산)까지 이전 값, 편집한 칸은 바로', () => {
+  const wb = new Workbook();
+  wb.transact(() => { wb.setInput(0, 0, 0, '1'); wb.setInput(0, 0, 1, '=A1*10'); });
+  assert.equal(wb.getValue(0, 0, 1), 10);
+  wb.manualCalc = true;
+  wb.transact(() => wb.setInput(0, 0, 0, '2'));
+  assert.equal(wb.getValue(0, 0, 0), 2);
+  assert.equal(wb.getValue(0, 0, 1), 10);
+  assert.equal(wb.needsCalc, true);
+  wb.calculateNow();
+  assert.equal(wb.getValue(0, 0, 1), 20);
+  assert.equal(wb.needsCalc, false);
+});

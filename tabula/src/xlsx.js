@@ -1522,6 +1522,10 @@ function pivotDefFrom(root, cache, tables, sheetName) {
   if (root.attrs.colHeaderCaption) def.colCaption = root.attrs.colHeaderCaption;
   if (root.attrs.missingCaption && root.attrs.showMissing !== '0') def.missingCaption = root.attrs.missingCaption;
   if (root.attrs.showDrill === '0') def.showExpand = false;
+  if (root.attrs.mergeItem === '1') def.mergeLabels = true;
+  if (root.attrs.useAutoFormatting === '0') def.autofit = false;
+  if (root.attrs.preserveFormatting === '0') def.preserveFormat = false;
+  if (root.attrs.enableDrill === '0') def.enableDrill = false;
   // 축소한 항목 · 부분합 위치 · 빈 줄 · 레이블 반복
   const collapsed = {};
   pfs.forEach((pf, f) => {
@@ -2600,7 +2604,8 @@ function pivotParts(wb, si, def, cache, name, pool) {
   else if (styleName && def.styleDef && !/^PivotStyle(Light|Medium|Dark)\d+$/i.test(styleName)) pool.pivotStyle(styleName, def.styleDef);
   const tableAttrs = [
     `name="${esc(name)}"`, `cacheId="${cacheId}"`, 'applyNumberFormats="0"', 'applyBorderFormats="0"', 'applyFontFormats="0"', 'applyPatternFormats="0"',
-    'applyAlignmentFormats="0"', 'applyWidthHeightFormats="1"', 'dataCaption="값"', 'updatedVersion="6"', 'minRefreshableVersion="3"', 'useAutoFormatting="1"',
+    'applyAlignmentFormats="0"', 'applyWidthHeightFormats="1"', 'dataCaption="값"', 'updatedVersion="6"', 'minRefreshableVersion="3"', `useAutoFormatting="${def.autofit === false ? 0 : 1}"`,
+    ...(def.mergeLabels ? ['mergeItem="1"'] : []), ...(def.preserveFormat === false ? ['preserveFormatting="0"'] : []), ...(def.multiFilters ? [] : []), ...(def.enableDrill === false ? ['enableDrill="0"'] : []),
     ...(d.rowCaption ? [`rowHeaderCaption="${esc(d.rowCaption)}"`] : []),
     ...(d.errorCaption !== null && d.errorCaption !== undefined ? ['showError="1"', ...(d.errorCaption ? [`errorCaption="${esc(d.errorCaption)}"`] : [])] : []), ...(d.colCaption ? [`colHeaderCaption="${esc(d.colCaption)}"`] : []),
     ...(d.grandRows ? [] : ['rowGrandTotals="0"']), ...(d.grandCols ? [] : ['colGrandTotals="0"']),

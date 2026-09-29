@@ -1524,5 +1524,5 @@ export function pivotDetail(input, def, gr, gc) {
     }
     out[m++] = i;
   }
-  return { header: cube.header, cube, idx: out.slice(0, m), conds };
+  return { header: cube.header, cube, idx: out.slice(0, m), conds, valueField: valueName(d.values[leaf.vi]) };
 }
