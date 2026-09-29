@@ -171,6 +171,7 @@ export function extractVbaModules(bytes) {
 
 // base64 (브라우저/Node 공용)
 export function toBase64(bytes) {
+  if (typeof bytes.toBase64 === 'function') return bytes.toBase64(); // 최신 브라우저 · Node 내장 (몇 배 빠름)
   let s = '';
   for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   return btoa(s);

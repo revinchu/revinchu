@@ -194,8 +194,11 @@ function parseAt(text, r, c) {
   lastAt = { text, r, c, res };
   return res;
 }
+// A1 참조가 없는 수식 글자 (표 수식 =[@a]*[@b] 처럼 행마다 글자가 같음): 다시 훑지 않음
+const noRefText = new Set();
 function parseAt0(text, r, c) {
-  const k = r === undefined ? null : shareKey(text, r, c);
+  const k = r === undefined || noRefText.has(text) ? null : shareKey(text, r, c);
+  if (k === null && r !== undefined) { if (noRefText.size > 100000) noRefText.clear(); noRefText.add(text); }
   if (k === null) { const p = parseMemo(text); return p.r0 === undefined ? { ...p, r0: r ?? 0, c0: c ?? 0, fixed: true } : p; }
   let e = sharedMemo.get(k);
   if (!e) {
@@ -995,8 +998,15 @@ export class Workbook {
    * 의존 그래프를 미리 백그라운드로 만듦 (큰 파일을 연 뒤 첫 편집도 바로 반응하도록).
    * 만드는 동안 수식이 바뀌면 버리고 다음 편집 때 다시 만듦
    */
-  async prepareGraph(budgetMs = 30) {
-    if (this.graph) return true;
+  prepareGraph(budgetMs = 30) {
+    if (this.graph) return Promise.resolve(true);
+    // 이미 만드는 중이면 같은 작업을 기다림 (두 번째 호출이 첫 작업을 버리지 않게)
+    if (this.graphRun) return this.graphRun;
+    this.graphRun = this.buildGraphSteps(budgetMs).finally(() => { this.graphRun = null; });
+    return this.graphRun;
+  }
+
+  async buildGraphSteps(budgetMs) {
     const epoch = (this.graphEpoch = (this.graphEpoch ?? 0) + 1);
     const g = new DepGraph(this, true);
     const it = g.steps();

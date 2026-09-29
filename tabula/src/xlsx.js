@@ -1797,9 +1797,15 @@ function pivotDefFrom(root, cache, tables, sheetName) {
   if (Object.keys(order).length) def.order = order;
   // 값 기준 정렬 · 상위 N 에서 값이 같은 항목의 순서: 엑셀이 저장한 표시 순서(rowItems · colItems)를 그대로 따름
   const tie = {};
+  const tieSeen = {};
+  // 안쪽 필드는 상위 항목마다 순서가 다를 수 있음 (같은 검색어가 광고그룹마다 다른 자리) → 상위 항목 글자 경로별 목록도
+  const tieByParent = {};
+  const itemsMemo = new Map();
+  const fieldItems = (f) => { let a = itemsMemo.get(f); if (!a) { a = kids(child(pfs[f], 'items'), 'item'); itemsMemo.set(f, a); } return a; };
   for (const [tag, fl] of [['rowItems', rowF], ['colItems', colAll]]) {
     const fieldsAt = fl.filter((x) => x >= 0 || x === -2);
     const last = [];
+    const lastText = [];
     for (const it of kids(child(root, tag), 'i')) {
       if (it.attrs.t) continue;
       const base = Number(it.attrs.r ?? 0);
@@ -1807,15 +1813,20 @@ function pivotDefFrom(root, cache, tables, sheetName) {
         const lv = base + j;
         last[lv] = Number(x.attrs.v ?? 0);
         const f = fieldsAt[lv];
-        if (f === undefined || f < 0 || !(sort[names[f]] || ff0.has(f))) return;
-        const pit = kids(child(pfs[f], 'items'), 'item')[last[lv]];
-        if (!pit || pit.attrs.x === undefined) return;
-        const text = itemText(cache.fields[f]?.items[Number(pit.attrs.x)] ?? null);
-        const list = (tie[names[f]] ??= []);
-        if (!list.includes(text)) list.push(text);
+        const pit = f !== undefined && f >= 0 ? fieldItems(f)[last[lv]] : null;
+        const text = pit && pit.attrs.x !== undefined ? itemText(cache.fields[f]?.items[Number(pit.attrs.x)] ?? null) : null;
+        lastText[lv] = text;
+        if (text === null || !(sort[names[f]] || ff0.has(f))) return;
+        const seen = (tieSeen[names[f]] ??= new Set());
+        if (!seen.has(text)) { seen.add(text); (tie[names[f]] ??= []).push(text); }
+        if (lv > 0) {
+          const pk = lastText.slice(0, lv).filter((t) => t !== null).join('\u0001');
+          ((tieByParent[names[f]] ??= {})[pk] ??= []).push(text);
+        }
       });
     }
   }
+  if (Object.keys(tieByParent).length) def.tieByParent = tieByParent;
   if (Object.keys(tie).length) {
     def.tieOrder = tie;
     // 저장할 때의 필터 상태: 같은 선택이면 상위 N 항목을 엑셀이 저장한 그대로 (오류 값 항목 선택 등 엑셀 고유 동작)

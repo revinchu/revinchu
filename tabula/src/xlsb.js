@@ -774,9 +774,10 @@ function pivotTableXml(u8) {
       }
       case R.PTFIELD: {
         const f1 = rd.u32(); const fmt = rd.i32(); const f2 = rd.u32(); const asItems = rd.i32(); const asRank = rd.i32();
+        const caption = f1 & 0x20000000 && rd.left >= 4 ? rd.str() : null; // 셀에서 바꾼 필드 이름 (pivotField@name)
         const axis = [null, 'axisRow', 'axisCol', null, 'axisPage'][f1 & 7];
         const a = {
-          axis: axis ?? undefined, dataField: f1 & 8 ? 1 : undefined, numFmtId: fmt || undefined, compact: f1 & 0x10000000 ? undefined : 0,
+          name: caption ?? undefined, axis: axis ?? undefined, dataField: f1 & 8 ? 1 : undefined, numFmtId: fmt || undefined, compact: f1 & 0x10000000 ? undefined : 0,
           outline: f2 & 0x40 ? undefined : 0, showAll: f2 & 0x20 ? undefined : 0, insertBlankRow: f2 & 0x80 ? 1 : undefined, subtotalTop: f2 & 0x100 ? undefined : 0,
           defaultSubtotal: f1 & 0x100 ? undefined : 0, sortType: f2 & 0x1000 ? (f2 & 0x2000 ? 'ascending' : 'descending') : undefined,
           autoShow: f2 & 0x4000 ? 1 : undefined, topAutoShow: f2 & 0x8000 ? undefined : 0, itemPageCount: undefined, multipleItemSelectionAllowed: f2 & 0x80000 ? 1 : undefined,

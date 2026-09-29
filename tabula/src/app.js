@@ -9188,7 +9188,16 @@ async function loadWorkbookAsync(data, name, activeSheet, prog) {
     wb.listeners = listeners;
     wb.holdDirty = false;
     wb.noUndo = false;
-    wb.flushPending();
+    if (!wb.graph && wb.pending.length) {
+      // 피벗이 파일과 다르게 그린 칸의 의존 수식: 수식이 아주 많으면 의존 그래프를 만드는 데 몇 초가 걸리므로
+      // 열기를 막지 않고 백그라운드에서 그래프를 만든 뒤 반영 (그동안은 엑셀이 저장한 값을 보여 줌)
+      const pts = wb.pending;
+      wb.pending = [];
+      const book = wb;
+      setTimeout(() => {
+        book.prepareGraph().catch(() => false).then(() => { book.dirtyPoints(pts); if (wb === book) renderAll(); });
+      }, 0);
+    } else wb.flushPending();
   }
   afterLoad(name, activeSheet);
 }
@@ -9629,7 +9638,13 @@ function serverAutosave() {
   return server.available && cellCount() <= 300000;
 }
 function bigBook() {
-  return cellCount() > 50000;
+  return cellCount() > 50000 || imageBytes() > 2e6;
+}
+/** 그림 데이터 URL 길이 합 (그림이 많은 문서는 localStorage 한도를 넘으므로 IndexedDB 에 나눠 저장) */
+function imageBytes() {
+  let n = 0;
+  for (const s of wb.sheets) for (const im of s.images ?? []) n += (im.src?.length ?? 0) + (im.emf?.length ?? 0);
+  return n;
 }
 let idbSaving = null;
 function saveToStorage() {

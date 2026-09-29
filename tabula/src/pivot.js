@@ -366,7 +366,7 @@ function result(acc, agg) {
     case 'varp': return varOf(false);
     case 'stdDev': { const x = varOf(true); return x === null ? null : Math.sqrt(x); }
     case 'stdDevp': { const x = varOf(false); return x === null ? null : Math.sqrt(x); }
-    default: return acc.sum;
+    default: return n || acc.count ? acc.sum : null; // 값이 모두 빈 칸이면 빈칸 (엑셀)
   }
 }
 
@@ -511,6 +511,7 @@ export function normalizeDef(def, header) {
     sort: byKey(def.sort),
     order: byKey(def.order),
     tieOrder: byKey(def.tieOrder),
+    tieByParent: byKey(def.tieByParent),
     tieState: def.tieState ?? null,
     fieldFilters: byKey(def.fieldFilters),
     style: def.style ?? DEFAULT_PIVOT_STYLE,
@@ -650,6 +651,8 @@ function blockCube(wb, si, ref, names) {
 const readCache = new WeakMap();
 function cachedRead(wb, si, ref) {
   const read = () => {
+    // 열 단위 빠른 읽기 (칸마다 getValue 보다 몇 배 빠름: 수백만 칸 원본)
+    if (wb.rangeRead) return wb.rangeRead(si, ref.r1, ref.c1, ref.r2, ref.c2);
     const rows = [];
     for (let r = ref.r1; r <= ref.r2; r++) {
       const row = new Array(ref.c2 - ref.c1 + 1);
@@ -1056,8 +1059,21 @@ function snapshotItems(d, field) {
   return !!list?.length && d.tieState !== null && d.tieState === pivotFilterKey(d.filters);
 }
 
-/** 값이 같은 항목의 순서 (파일에 저장된 표시 순서, 없으면 모두 같음) */
-function tieRank(d, field) {
+/** 상위 항목 글자 경로 (tieByParent 키) */
+function parentTextPath(n) {
+  const out = [];
+  for (let p = n; p && p.depth >= 0; p = p.parent) out.push(itemText(p.key));
+  return out.reverse().join('\u0001');
+}
+
+/** 값이 같은 항목의 순서 (파일에 저장된 표시 순서, 없으면 모두 같음). parent 가 있으면 그 상위 항목 아래의 저장 순서 먼저 */
+function tieRank(d, field, parent = null) {
+  const local = parent && d.tieByParent?.[field]?.[parentTextPath(parent)];
+  if (local?.length) {
+    const pos = new Map(local.map((t, i) => [t, i]));
+    const rest = tieRank(d, field);
+    return (key) => { const i = pos.get(itemText(key)); return i !== undefined ? i : local.length + rest(key); };
+  }
   const list = d.tieOrder?.[field];
   if (!list?.length) return () => 0;
   const pos = new Map(list.map((t, i) => [t, i]));
@@ -1076,7 +1092,7 @@ function orderTree(root, fields, d, measureAt) {
       const vi = valueIndex(d.values, s.by);
       const score = new Map(kids.map((c) => [c, measureAt(c, vi)]));
       const num = (v) => (typeof v === 'number' ? v : -Infinity);
-      const tie = tieRank(d, field);
+      const tie = tieRank(d, field, n);
       kids = [...kids].sort((a, b) => (s.dir === 'desc' ? num(score.get(b)) - num(score.get(a)) : num(score.get(a)) - num(score.get(b))) || tie(a.key) - tie(b.key));
     } else if (d.groups?.[field]) {
       // 그룹화한 필드: 월 · 분기 · 구간은 숫자 순서
@@ -1169,7 +1185,7 @@ export function computePivot(input, d) {
       const kkey = kk(keys[i]);
       out[i + 1] = `${out[i]}\u0001${kkey}`;
       let ch = node.map.get(kkey);
-      if (!ch) { ch = newNode(keys[i], out[i + 1], i); node.map.set(kkey, ch); node.children.push(ch); }
+      if (!ch) { ch = newNode(keys[i], out[i + 1], i); ch.parent = node.depth >= 0 ? node : null; node.map.set(kkey, ch); node.children.push(ch); }
       node = ch;
     }
   };
@@ -1658,7 +1674,8 @@ export function pivotLookup(rows, def, dataField, pairs, resolved = null) {
     if (cap === null || cap === undefined) return ERR_BY_CODE[v.code] ?? ERR.VALUE;
     return cap === '' ? 0 : /^-?\d+(\.\d+)?$/.test(cap) ? Number(cap) : cap;
   }
-  return null;
+  // 있는 항목인데 값이 모두 빈 칸이라 빈칸으로 보이는 칸은 0
+  return list && v === null ? 0 : null;
 }
 
 /**

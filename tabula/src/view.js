@@ -807,9 +807,11 @@ export class GridView {
     // 숫자는 자동 줄 바꿈이어도 한 줄 (엑셀: 들어가지 않으면 ###)
     const wrap = style.wrap && typeof v !== 'number';
     if (wrap) cls.push('wrap');
-    else if (text && eff === 'left' && typeof v !== 'number' && !merge) {
-      const next = wb.getCell(si, r, c + 1);
-      if (!next?.raw && !merges.some((m) => r >= m.r1 && r <= m.r2 && c + 1 >= m.c1 && c + 1 <= m.c2)) cls.push('ovf');
+    else if (text && typeof v !== 'number' && !merge && (eff === 'left' || eff === 'center' || eff === 'right')) {
+      // 넘친 글자: 왼쪽 맞춤은 오른쪽 빈 칸으로, 오른쪽 맞춤은 왼쪽 빈 칸으로, 가운데는 양쪽이 모두 비었을 때 양쪽으로 (엑셀과 같음)
+      const emptyAt = (cc) => cc < 0 || (!wb.getCell(si, r, cc)?.raw && !merges.some((m) => r >= m.r1 && r <= m.r2 && cc >= m.c1 && cc <= m.c2));
+      const ok = eff === 'left' ? emptyAt(c + 1) : eff === 'right' ? c > 0 && emptyAt(c - 1) : c > 0 && emptyAt(c - 1) && emptyAt(c + 1);
+      if (ok) cls.push('ovf');
     }
     if (cell?.comment) cls.push('cm');
     // 아이콘 집합: 아이콘은 왼쪽 끝에 고정하고 글자는 남은 너비 안에 (엑셀과 같음)
