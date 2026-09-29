@@ -167,7 +167,8 @@ function readStyles(files, wbRels, theme) {
     const sz = Number(child(f, 'sz')?.attrs.val);
     if (sz) st.size = sz;
     const color = colorOf(child(f, 'color'), theme);
-    if (color && color !== '#000000') st.color = color;
+    // 검정은 기본값으로 보지만, RGB 로 직접 정한 검정은 셀 서식 (엑셀: 표 스타일의 흰 머리글 글자보다 우선)
+    if (color && (color !== '#000000' || child(f, 'color')?.attrs.rgb)) st.color = color;
     const name = child(f, 'name')?.attrs.val;
     if (name) st.font = name;
     return st;

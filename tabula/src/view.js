@@ -791,20 +791,17 @@ export class GridView {
       const k = side === 'top' ? 'bb' : 'br';
       return !!ns?.[k] && weight(ns[`${k}s`]) >= weight(style[side === 'top' ? 'bts' : 'bls']);
     };
-    // 위 · 왼쪽 이웃의 아래 · 오른쪽 테두리 (채운 칸이 덮어 버리므로 대신 그림)
-    const nbBorder = (side) => {
-      const nr = side === 'top' ? r - 1 : r;
-      const nc = side === 'top' ? c : c - 1;
-      if (nr < 0 || nc < 0 || (merge && (side === 'top' ? merge.r1 : merge.c1) !== (side === 'top' ? r : c))) return null;
-      const ns = wb.styleAt(si, nr, nc);
-      const k = side === 'top' ? 'bb' : 'br';
-      return ns?.[k] ? borderCss(side, ns[`${k}s`], ns[`${k}c`]) : null;
-    };
-    if (style.bt && !shared('top')) css.push(borderCss('top', style.bts, style.btc));
-    else if (covers) { const b = nbBorder('top'); if (b) css.push(b); }
+    const ownTop = style.bt && !shared('top');
+    const ownLeft = style.bl && !shared('left');
+    if (ownTop) css.push(borderCss('top', style.bts, style.btc));
     if (style.bb) css.push(borderCss('bottom', style.bbs, style.bbc));
-    if (style.bl && !shared('left')) css.push(borderCss('left', style.bls, style.blc));
-    else if (covers) { const b = nbBorder('left'); if (b) css.push(b); }
+    if (ownLeft) css.push(borderCss('left', style.bls, style.blc));
+    // 채운 칸은 자기 오른쪽 · 아래 눈금선까지 덮음. 위 · 왼쪽 선(이웃 칸의 선)은 덮지 않도록 한 칸 안쪽에서 시작
+    // (이웃의 테두리를 다시 그리면 확대 · 축소 때 두 선이 다른 픽셀에 찍혀 두꺼워짐)
+    if (covers) {
+      if (!ownTop) { css[1] = `top:${y - p.oy}px`; css[3] = `height:${h}px`; css.push('border-top-width:0'); }
+      if (!ownLeft) { css[0] = `left:${x - p.ox}px`; css[2] = `width:${w}px`; css.push('border-left-width:0'); }
+    }
     if (style.br) css.push(borderCss('right', style.brs, style.brc));
     const cls = [];
     // 숫자는 자동 줄 바꿈이어도 한 줄 (엑셀: 들어가지 않으면 ###)
