@@ -515,3 +515,20 @@ export function simplify(v) {
   if (v instanceof Range && v.height === 1 && v.width === 1) return v.rows[0][0];
   return v;
 }
+
+// 큰 배열의 최대 · 최소 (Math.max(...arr) 는 인수가 10만 개를 넘으면 호출 스택이 넘침)
+export function maxOf(arr, init = -Infinity) {
+  let m = init;
+  for (let i = 0; i < arr.length; i++) if (arr[i] > m) m = arr[i];
+  return m;
+}
+export function minOf(arr, init = Infinity) {
+  let m = init;
+  for (let i = 0; i < arr.length; i++) if (arr[i] < m) m = arr[i];
+  return m;
+}
+/** dst 뒤에 src 를 붙임 (push(...src) 대신 — 큰 배열도 안전) */
+export function pushAll(dst, src) {
+  for (let i = 0; i < src.length; i++) dst.push(src[i]);
+  return dst;
+}

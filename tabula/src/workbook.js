@@ -11,6 +11,7 @@ import { hid, shiftHidden } from './axis.js';
 import { CellImage } from './fxcore.js';
 import { DepGraph, cellNum } from './depgraph.js';
 import { CellMap } from './cellmap.js';
+import { pushAll } from './fxcore.js';
 
 export const DEFAULT_COL_WIDTH = 64;
 export const DEFAULT_ROW_HEIGHT = 20;
@@ -976,7 +977,7 @@ export class Workbook {
     this.version++;
     if (this.manualCalc) {
       // 수동 계산: 바뀐 칸 자신만 다시 계산하고, 참조하는 수식은 F9(지금 계산)까지 이전 값을 유지 (엑셀과 같음)
-      (this.manualPts ??= []).push(...pts);
+      pushAll((this.manualPts ??= []), pts);
       this.sheetVer ??= [];
       for (let i = 0; i < pts.length; i += 3) {
         this.caches[pts[i]]?.deleteRC(pts[i + 1], pts[i + 2]);
@@ -1230,7 +1231,7 @@ export class Workbook {
       const top = this.undoStack[this.undoStack.length - 1];
       if (tx.entries.length && tx.meta?.joinPrev && top) {
         // 자동으로 따라 바뀐 것(피벗 자동 새로 고침 등)은 직전 실행 취소 단계에 합침
-        top.entries.push(...tx.entries);
+        pushAll(top.entries, tx.entries);
       } else if (tx.entries.length) {
         this.undoStack.push(tx);
         if (this.undoStack.length > 200) this.undoStack.shift();

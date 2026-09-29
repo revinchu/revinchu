@@ -22,6 +22,7 @@ import { normalizeStyleName, DEFAULT_TABLE_STYLE, dataTop, dataBottom, canonical
 import { pivotSourceData, resolvePivot, itemText, keyOf, sortKeys, EMPTY, headerNames, normalizeDef, computePivot, valueName, showAsPercent, excelCalcFormula } from './pivot.js';
 import { slicerStyleName, slicerColors, isModernSlicer } from './slicerstyle.js';
 import { applyTint, DEFAULT_THEME, PRESET_STYLES, presetStyle, isModernStyle, ELEMENT_TYPES, elementDxfStyle } from './stylepresets.js';
+import { maxOf, minOf, pushAll } from './fxcore.js';
 
 const NS_MAIN = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
 const NS_R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -1405,8 +1406,8 @@ function readChart(files, path, theme = {}) {
   if (!series.length) return null;
   const refs = series.flatMap((s) => [s.name.ref, s.cat, s.val, s.x]).filter((r) => r && r.r1 !== undefined);
   const range = refs.length ? {
-    r1: Math.min(...refs.map((r) => r.r1)), c1: Math.min(...refs.map((r) => r.c1)),
-    r2: Math.max(...refs.map((r) => r.r2)), c2: Math.max(...refs.map((r) => r.c2)),
+    r1: minOf(refs.map((r) => r.r1)), c1: minOf(refs.map((r) => r.c1)),
+    r2: maxOf(refs.map((r) => r.r2)), c2: maxOf(refs.map((r) => r.c2)),
   } : null;
   const chartEl = descendants(root, 'chart')[0] ?? root;
   const titleEl = child(chartEl, 'title');
@@ -1844,7 +1845,7 @@ function* readXlsxSteps(files) {
   linkPivotsAndSlicers(files, wbRels, sheets, ctx);
   if (unsupported) warnings.push(`지원하지 않는 함수가 쓰인 수식 ${unsupported}개는 수식을 유지하고 파일에 저장된 계산 결과를 표시합니다.`);
   if (files.__xlsb?.unsupported) warnings.push(`바이너리 통합 문서(.xlsb)에서 해석하지 못한 수식 ${files.__xlsb.unsupported}개는 저장된 계산 결과(값)로 가져왔습니다.`);
-  warnings.push(...ctx.warnings);
+  pushAll(warnings, ctx.warnings);
   if (!sheets.length) throw new Error('가져올 시트가 없습니다');
   const data = { sheets };
   // 자동 높이로 맞출 행 (화면에서 글자 크기를 재어 정함 — 앱이 열 때 한 번 계산)
@@ -2250,7 +2251,7 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
       }
     }
     const withNums = all.filter((x) => x.nums);
-    refs.push(...(withNums.length ? withNums : all));
+    pushAll(refs, (withNums.length ? withNums : all));
   }
   const pal = paletteOf(chart);
   const series = data.series.map((sr, i) => ({
@@ -2449,7 +2450,7 @@ function sharedItemsXml(values, keys) {
   if (hasNum) {
     attrs.push('containsNumber="1"');
     if (nums.every((n) => Number.isInteger(n))) attrs.push('containsInteger="1"');
-    attrs.push(`minValue="${Math.min(...nums)}"`, `maxValue="${Math.max(...nums)}"`);
+    attrs.push(`minValue="${minOf(nums)}"`, `maxValue="${maxOf(nums)}"`);
   }
   if (hasBlank) attrs.push('containsBlank="1"');
   if (hasStr && hasNum) attrs.push('containsMixedTypes="1"');

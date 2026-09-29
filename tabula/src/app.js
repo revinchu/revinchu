@@ -62,6 +62,7 @@ import { timeAxis } from './ets.js';
 import {
   CATEGORIES as FMT_CATEGORIES, CURRENCY_SYMBOLS, NEGATIVE_STYLES, DATE_TYPES, TIME_TYPES, FRACTION_TYPES, SPECIAL_TYPES, CUSTOM_LIST, buildCode, describeCode,
 } from './fmtpresets.js';
+import { maxOf, minOf } from './fxcore.js';
 
 const $ = (id) => document.getElementById(id);
 const dom = {
@@ -636,7 +637,7 @@ function positionEditor() {
     whiteSpace: st.wrap ? 'pre-wrap' : 'pre',
   });
   const lines = ed.value.split('\n');
-  const textW = Math.max(...lines.map((l) => measureText(l, st))) + 12;
+  const textW = maxOf(lines.map((l) => measureText(l, st))) + 12;
   const maxW = Math.max(rect.w, gv.viewW - rect.x - 4);
   const w = st.wrap ? rect.w : clamp(textW, rect.w, maxW);
   ed.style.width = `${w}px`;
@@ -1205,8 +1206,8 @@ function selectPrecedents() {
   const same = refs.filter((x) => (x.sheet ? wb.sheetIndexByName(x.sheet) : si) === target);
   const u = wb.usedRange(target);
   const rg = {
-    r1: Math.min(...same.map((x) => x.r1)), c1: Math.min(...same.map((x) => x.c1)),
-    r2: Math.min(Math.max(...same.map((x) => x.r2)), Math.max(0, u.rows - 1)), c2: Math.min(Math.max(...same.map((x) => x.c2)), Math.max(0, u.cols - 1)),
+    r1: minOf(same.map((x) => x.r1)), c1: minOf(same.map((x) => x.c1)),
+    r2: Math.min(maxOf(same.map((x) => x.r2)), Math.max(0, u.rows - 1)), c2: Math.min(maxOf(same.map((x) => x.c2)), Math.max(0, u.cols - 1)),
   };
   if (target !== si) switchSheet(target);
   gv.ensureVisible(rg.r1, rg.c1);
@@ -1217,7 +1218,7 @@ function selectDependents() {
   // 의존 그래프로 바로 찾음 (수식 백만 개도 즉시)
   const hits = wb.dependentsOf(si, active.r, active.c).filter((d) => d.si === si).map((d) => [d.r, d.c]);
   if (!hits.length) { toast('참조하는 셀이 없습니다.'); return; }
-  const rg = { r1: Math.min(...hits.map((h) => h[0])), c1: Math.min(...hits.map((h) => h[1])), r2: Math.max(...hits.map((h) => h[0])), c2: Math.max(...hits.map((h) => h[1])) };
+  const rg = { r1: minOf(hits.map((h) => h[0])), c1: minOf(hits.map((h) => h[1])), r2: maxOf(hits.map((h) => h[0])), c2: maxOf(hits.map((h) => h[1])) };
   gv.ensureVisible(hits[0][0], hits[0][1]);
   selectRange(rg, 'cells', { r: hits[0][0], c: hits[0][1] });
   if (hits.length > 1) toast(`참조하는 셀 ${hits.length}개`);
@@ -1237,7 +1238,7 @@ function nextCorner() {
 function selectComments() {
   const hits = [...sheet().cells].filter(([, cell]) => cell.comment).map(([k]) => k.split(',').map(Number));
   if (!hits.length) { toast('메모가 있는 셀이 없습니다.'); return; }
-  const rg = { r1: Math.min(...hits.map((h) => h[0])), c1: Math.min(...hits.map((h) => h[1])), r2: Math.max(...hits.map((h) => h[0])), c2: Math.max(...hits.map((h) => h[1])) };
+  const rg = { r1: minOf(hits.map((h) => h[0])), c1: minOf(hits.map((h) => h[1])), r2: maxOf(hits.map((h) => h[0])), c2: maxOf(hits.map((h) => h[1])) };
   selectRange(rg, 'cells', { r: hits[0][0], c: hits[0][1] });
   toast(`메모가 있는 셀 ${hits.length}개`);
 }
@@ -1989,11 +1990,11 @@ function pasteText(text) {
       for (const [r, c] of cellsIn(sel)) wb.setInput(si, r, c, rows[0][0]);
     } else {
       rows.forEach((row, i) => row.forEach((v, j) => wb.setInput(si, active.r + i, active.c + j, v)));
-      afterDataEntry({ r1: active.r, c1: active.c, r2: active.r + rows.length - 1, c2: active.c + Math.max(...rows.map((x) => x.length)) - 1 });
+      afterDataEntry({ r1: active.r, c1: active.c, r2: active.r + rows.length - 1, c2: active.c + maxOf(rows.map((x) => x.length)) - 1 });
     }
   }, meta());
   if (rows.length > 1 || rows[0].length > 1) {
-    selectRange({ r1: active.r, c1: active.c, r2: active.r + rows.length - 1, c2: active.c + Math.max(...rows.map((r) => r.length)) - 1 });
+    selectRange({ r1: active.r, c1: active.c, r2: active.r + rows.length - 1, c2: active.c + maxOf(rows.map((r) => r.length)) - 1 });
   }
 }
 
@@ -3366,7 +3367,7 @@ function gotoSpecialDialog() {
       types: { numbers: v.numbers, text: v.text, logical: v.logical, errors: v.errors }, limit: 500000,
     });
     if (!cells.length) { alertDialog('이동 옵션', '해당하는 셀이 없습니다.'); return; }
-    const box = { r1: Math.min(...cells.slice(0, 100000).map((x) => x[0])), c1: Math.min(...cells.slice(0, 100000).map((x) => x[1])), r2: Math.max(...cells.slice(-100000).map((x) => x[0])), c2: Math.max(...cells.slice(0, 100000).map((x) => x[1])) };
+    const box = { r1: minOf(cells.slice(0, 100000).map((x) => x[0])), c1: minOf(cells.slice(0, 100000).map((x) => x[1])), r2: maxOf(cells.slice(-100000).map((x) => x[0])), c2: maxOf(cells.slice(0, 100000).map((x) => x[1])) };
     keepSpecial = true;
     try { selectRange(box, 'cells', { r: cells[0][0], c: cells[0][1] }); } finally { keepSpecial = false; }
     special = { si, cells };
@@ -6324,10 +6325,10 @@ function alignObjects(how) {
     return;
   }
   if (list.length < 2 && !how.startsWith('dist')) { toast('맞춤: 개체를 두 개 이상 고르세요 (Ctrl 또는 Shift+클릭).'); return; }
-  const L = Math.min(...list.map((f) => f.obj.x));
-  const T = Math.min(...list.map((f) => f.obj.y));
-  const R = Math.max(...list.map((f) => f.obj.x + f.obj.w));
-  const B = Math.max(...list.map((f) => f.obj.y + f.obj.h));
+  const L = minOf(list.map((f) => f.obj.x));
+  const T = minOf(list.map((f) => f.obj.y));
+  const R = maxOf(list.map((f) => f.obj.x + f.obj.w));
+  const B = maxOf(list.map((f) => f.obj.y + f.obj.h));
   if (how === 'distH' || how === 'distV') {
     if (list.length < 3) { toast('배분: 개체를 세 개 이상 고르세요.'); return; }
     const h = how === 'distH';
@@ -7929,8 +7930,8 @@ function pivotGroupDialog() {
   const col = src.cube.col(j);
   const keys = col.dim().keys.filter((k) => typeof k === 'number');
   if (!keys.length) { alertDialog('그룹화', '선택 항목을 그룹화할 수 없습니다. 날짜나 숫자 필드만 그룹화할 수 있습니다.'); return; }
-  const lo = Math.min(...keys.slice(0, 200000));
-  const hi = Math.max(...keys.slice(0, 200000));
+  const lo = minOf(keys.slice(0, 200000));
+  const hi = maxOf(keys.slice(0, 200000));
   const st = src.ref && src.si !== undefined ? wb.styleAt(src.si, Math.min(src.ref.r1 + 1, src.ref.r2), src.ref.c1 + j) : null;
   const isDate = /date|time/.test(st?.numFmt ?? '') || /[yd]/i.test(st?.code ?? '');
   const cur = def.groups?.[field] ?? null;
@@ -11628,7 +11629,7 @@ async function init() {
   selectCell(f?.rows || 0, f?.cols || 0);
   focusGrid();
   window.tabula = {
-    wb: () => wb, run, selectCell, selectRange, gv: () => gv, sample: (i) => newWorkbook(SAMPLES[i]), switchSheet: (i) => { switchSheet(i); },
+    wb: () => wb, run, selectCell, selectRange, newWorkbook, templates: TEMPLATES, exportXlsx, gv: () => gv, sample: (i) => newWorkbook(SAMPLES[i]), switchSheet: (i) => { switchSheet(i); },
     get active() { return active; }, get sel() { return sel; }, get si() { return si; }, get chartSel() { return chartSel; },
   };
   // 서버 저장소 (npm start 로 실행한 경우) — 다른 기기와 문서 공유

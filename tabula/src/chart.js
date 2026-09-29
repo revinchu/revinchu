@@ -7,6 +7,7 @@
 //   axes?: { y: { title, numFmt, min, max }, y2: {…}, x: { title } } }
 import { formatGeneral, formatValue, formatCode } from './format.js';
 import { pivotSourceData, pivotChartData } from './pivot.js';
+import { maxOf, minOf, pushAll } from './fxcore.js';
 
 export const CHART_TYPES = [
   { id: 'column', label: '세로 막대형' },
@@ -433,15 +434,15 @@ export function renderChartSvg(chart, data) {
         vals.push(pos, neg);
       }
       if (pct) vals = [0, 1];
-      vals.push(...ss.filter((s) => !bars.includes(s)).flatMap((s) => s.values).filter(isNum));
+      pushAll(vals, ss.filter((s) => !bars.includes(s)).flatMap((s) => s.values).filter(isNum));
     }
     if (!vals.length) vals = [0, 1];
     const cfg = chart.axes?.[axis ? 'y2' : 'y'] ?? {};
     let min = Math.min(0, ...vals);
     let max = Math.max(0, ...vals);
     if (ss.every((s) => s.type === 'line') && !stacked) {
-      min = Math.min(...vals);
-      max = Math.max(...vals);
+      min = minOf(vals);
+      max = maxOf(vals);
       if (min > 0 && min < max * 0.5) min = 0;
     }
     const sc = niceScale(isNum(cfg.min) ? cfg.min : min, isNum(cfg.max) ? cfg.max : max);
@@ -458,17 +459,17 @@ export function renderChartSvg(chart, data) {
   const primaryAxis = scaleFor(0) ? 0 : 1;
   const hideY = !!chart.axes?.y?.hide;
   const hideX = !!chart.axes?.x?.hide;
-  const labelW = hideY ? 6 : Math.min(100, Math.max(...scale.ticks.map((t) => axisLabel(t, scale.code).length)) * CW + 8);
-  const label2W = scale2 ? Math.min(100, Math.max(...scale2.ticks.map((t) => axisLabel(t, scale2.code).length)) * CW + 8) : 0;
+  const labelW = hideY ? 6 : Math.min(100, maxOf(scale.ticks.map((t) => axisLabel(t, scale.code).length)) * CW + 8);
+  const label2W = scale2 ? Math.min(100, maxOf(scale2.ticks.map((t) => axisLabel(t, scale2.code).length)) * CW + 8) : 0;
 
   // 가로축 값 범위 (분산형)
   let xScale = null;
   if (baseType === 'scatter') {
     const xs = series.flatMap((s) => (s.x ?? s.values.map((_, i) => i + 1))).filter(isNum);
-    xScale = niceScale(Math.min(...xs), Math.max(...xs));
+    xScale = niceScale(minOf(xs), maxOf(xs));
   }
 
-  const catLabelW = horizontal ? Math.min(140, Math.max(...categories.map((c) => [...c].length)) * CW * 1.4 + 8) : 0;
+  const catLabelW = horizontal ? Math.min(140, maxOf(categories.map((c) => [...c].length)) * CW * 1.4 + 8) : 0;
   const area = horizontal
     ? { x: plot.x + catLabelW, y: plot.y, w: plot.w - catLabelW - 10, h: plot.h - 18 }
     : { x: plot.x + labelW, y: plot.y + 4, w: plot.w - labelW - 6 - label2W, h: plot.h - Math.round(FS.axis * 1.9) };
@@ -624,7 +625,7 @@ export function renderChartSvg(chart, data) {
   // 기준선
   if (horizontal) parts.push(`<line x1="${base}" y1="${area.y}" x2="${base}" y2="${area.y + area.h}" stroke="#bfbfbf"/>`);
   else parts.push(`<line x1="${area.x}" y1="${base}" x2="${area.x + area.w}" y2="${base}" stroke="#bfbfbf"/>`);
-  parts.push(...labelsOut);
+  pushAll(parts, labelsOut);
   parts.push(axisTitle(chart.axes?.y?.title, plot.x + 6, area.y + area.h / 2, -90));
   if (scale2) parts.push(axisTitle(chart.axes?.y2?.title, area.x + area.w + label2W - 2, area.y + area.h / 2, 90));
   parts.push(axisTitle(chart.axes?.x?.title, area.x + area.w / 2, H - (legendH ? legendH + 2 : 2)));
@@ -653,8 +654,8 @@ const T = (x, y, txt, size, fill, anchor = 'middle', extra = '') => `<text x="${
 function cartesian(ctx, vals, { horizontal = false, code = null, cats = null, zero = true, right = 0 } = {}) {
   const { chart, plot, parts, FS, TXT, GRID } = ctx;
   const cfg = chart.axes?.y ?? {};
-  let lo = Math.min(...vals.filter(isNum));
-  let hi = Math.max(...vals.filter(isNum));
+  let lo = minOf(vals.filter(isNum));
+  let hi = maxOf(vals.filter(isNum));
   if (zero) { lo = Math.min(0, lo); hi = Math.max(0, hi); }
   if (!Number.isFinite(lo)) { lo = 0; hi = 1; }
   const sc = niceScale(isNum(cfg.min) ? cfg.min : lo, isNum(cfg.max) ? cfg.max : hi);
@@ -665,7 +666,7 @@ function cartesian(ctx, vals, { horizontal = false, code = null, cats = null, ze
   for (let t = sc.min; t <= sc.max + sc.step / 2; t += sc.step) ticks.push(Number(t.toPrecision(12)));
   const fmt = cfg.numFmt ?? code;
   const CW = FS.axis * 0.58;
-  const labelW = horizontal ? Math.min(140, Math.max(...(cats ?? ['']).map((c) => [...String(c)].length)) * CW * 1.4 + 8) : Math.min(100, Math.max(...ticks.map((t) => axisLabel(t, fmt).length)) * CW + 8);
+  const labelW = horizontal ? Math.min(140, maxOf((cats ?? ['']).map((c) => [...String(c)].length)) * CW * 1.4 + 8) : Math.min(100, maxOf(ticks.map((t) => axisLabel(t, fmt).length)) * CW + 8);
   const area = horizontal
     ? { x: plot.x + labelW, y: plot.y, w: plot.w - labelW - 10, h: plot.h - 18 }
     : { x: plot.x + labelW, y: plot.y + 4, w: plot.w - labelW - 6 - right, h: plot.h - Math.round(FS.axis * 1.9) };
@@ -774,7 +775,7 @@ export const SPECIAL = {
       const vals = s.values.map((v) => (isNum(v) && v > 0 ? v : 0));
       const max = Math.max(...vals, 1);
       const CW = FS.axis * 0.58;
-      const lw = Math.min(160, Math.max(...categories.map((c) => [...String(c)].length)) * CW * 1.4 + 10);
+      const lw = Math.min(160, maxOf(categories.map((c) => [...String(c)].length)) * CW * 1.4 + 10);
       const area = { x: plot.x + lw, y: plot.y + 2, w: plot.w - lw - 4, h: plot.h - 4 };
       const band = area.h / Math.max(1, vals.length);
       vals.forEach((v, i) => {
@@ -943,12 +944,12 @@ export const SPECIAL = {
       const ys = series.flatMap((s) => s.values).filter(isNum);
       const sizes = series.flatMap((s) => s.size ?? []).filter(isNum);
       if (!xs.length || !ys.length) return;
-      const xsc = niceScale(Math.min(...xs), Math.max(...xs));
-      const ysc = niceScale(Math.min(0, ...ys), Math.max(...ys));
+      const xsc = niceScale(minOf(xs), maxOf(xs));
+      const ysc = niceScale(Math.min(0, ...ys), maxOf(ys));
       const CW = FS.axis * 0.58;
       const ticksOf = (sc) => { const t = []; for (let v = sc.min; v <= sc.max + sc.step / 2; v += sc.step) t.push(Number(v.toPrecision(12))); return t; };
       const yt = ticksOf(ysc);
-      const lw = Math.max(...yt.map((t) => axisLabel(t).length)) * CW + 8;
+      const lw = maxOf(yt.map((t) => axisLabel(t).length)) * CW + 8;
       const area = { x: plot.x + lw, y: plot.y + 4, w: plot.w - lw - 10, h: plot.h - FS.axis * 1.9 };
       const X = (v) => area.x + ((v - xsc.min) / (xsc.max - xsc.min)) * area.w;
       const Y = (v) => area.y + area.h - ((v - ysc.min) / (ysc.max - ysc.min)) * area.h;
@@ -979,7 +980,7 @@ function squarify(items, box) {
   while (rest.length) {
     const short = Math.min(b.w, b.h);
     let row = [rest[0]];
-    const worst = (r) => { const s = r.reduce((a, x) => a + x.a, 0); const mx = Math.max(...r.map((x) => x.a)); const mn = Math.min(...r.map((x) => x.a)); return Math.max((short * short * mx) / (s * s), (s * s) / (short * short * mn)); };
+    const worst = (r) => { const s = r.reduce((a, x) => a + x.a, 0); const mx = maxOf(r.map((x) => x.a)); const mn = minOf(r.map((x) => x.a)); return Math.max((short * short * mx) / (s * s), (s * s) / (short * short * mn)); };
     let k = 1;
     while (k < rest.length && worst([...row, rest[k]]) <= worst(row)) { row.push(rest[k]); k++; }
     const sum = row.reduce((a, x) => a + x.a, 0);

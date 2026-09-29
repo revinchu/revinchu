@@ -2,6 +2,7 @@
 // 각 도구는 입력 값(2차원 배열)과 옵션을 받아 출력 표 { rows, heads, pct } 를 돌려줌.
 // 셀: 숫자 · 문자열 · null · { f: '=수식' } · { err: '#N/A' }. heads = 제목 줄(굵게 · 아래 테두리), pct = 백분율 칸 'r,c'
 import { tCdf, fCdf, invert, normCdf, normInv } from './fx-stat.js';
+import { maxOf, minOf } from './fxcore.js';
 
 // ───────────── 도우미 ─────────────
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
@@ -20,7 +21,7 @@ const fin = (v) => (Number.isFinite(v) ? v : NA);
 /** 입력 범위 → 변수 목록. byRows: 행 단위, labels: 첫 행/열이 이름표 */
 export function splitGroups(rows, { byRows = false, labels = false } = {}) {
   const h = rows.length;
-  const w = h ? Math.max(...rows.map((r) => r.length)) : 0;
+  const w = h ? maxOf(rows.map((r) => r.length)) : 0;
   const at = (r, c) => rows[r]?.[c] ?? null;
   const out = [];
   const count = byRows ? h : w;
@@ -110,7 +111,7 @@ export function descriptive(groups, { summary = true, conf = 0.95, kth = 0, kthS
     if (summary) {
       lines.push(['평균', mean(a)], ['표준 오차', fin(sd / Math.sqrt(n))], ['중앙값', median(a)], ['최빈값', modeOf(a)],
         ['표준 편차', fin(sd)], ['분산', fin(varS(a))], ['첨도', fin(kurt(a))], ['왜도', fin(skew(a))],
-        ['범위', Math.max(...a) - Math.min(...a)], ['최소값', Math.min(...a)], ['최대값', Math.max(...a)], ['합', sum(a)], ['관측수', n]);
+        ['범위', maxOf(a) - minOf(a)], ['최소값', minOf(a)], ['최대값', maxOf(a)], ['합', sum(a)], ['관측수', n]);
     }
     const sorted = [...a].sort((x, y) => x - y);
     if (kth > 0) lines.push([`최대값(${kth})`, kth <= n ? sorted[n - kth] : NA]);
@@ -232,8 +233,8 @@ export function histogram(vals, bins = null, { pareto = false, cumulative = fals
   need(vals.length, '입력 범위에 숫자가 없습니다.');
   let b = bins?.filter(isNum);
   if (!b?.length) {
-    const lo = Math.min(...vals);
-    const hi = Math.max(...vals);
+    const lo = minOf(vals);
+    const hi = maxOf(vals);
     const k = Math.max(1, Math.round(Math.sqrt(vals.length)));
     const w = (hi - lo) / k || 1;
     b = Array.from({ length: k + 1 }, (_, i) => Number((lo + w * i).toPrecision(12)));
@@ -280,7 +281,7 @@ export function rankPercentile(groups) {
     });
   });
   rows.push(groups.flatMap((g) => ['요소', g.label, '순위', '백분율']));
-  const h = Math.max(...blocks.map((b) => b.length));
+  const h = maxOf(blocks.map((b) => b.length));
   for (let i = 0; i < h; i++) {
     rows.push(blocks.flatMap((b) => b[i] ?? [null, null, null, null]));
     blocks.forEach((b, j) => { if (b[i]) pct.add(`${i + 1},${j * 4 + 3}`); });

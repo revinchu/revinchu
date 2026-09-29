@@ -17,6 +17,7 @@ import {
   EMPTY as EMPTY0, IMG_KEY as IMG_KEY0, keyOf as keyOf0, imageOfKey as imageOfKey0, sortKeys as sortKeys0, itemText as itemText0,
   kk, cubeFromRows, filterRows, groupAggregate, groupAcc, Cube, Column, blockColumn, groupedColumn, groupRank, aggregateQuery, planRollup, GROUP_BY as GROUP_BY0,
 } from './cube.js';
+import { maxOf, minOf, pushAll } from './fxcore.js';
 
 export const AGGREGATES = [
   { id: 'sum', label: '합계' },
@@ -272,7 +273,7 @@ function evalCalc(ast, get) {
           if (e) return e;
           if (n.fn === 'SUM') return vs.reduce((a, b) => a + b, 0);
           if (n.fn === 'AVERAGE') return vs.length ? vs.reduce((a, b) => a + b, 0) / vs.length : 0;
-          return n.fn === 'MIN' ? Math.min(...vs) : Math.max(...vs);
+          return n.fn === 'MIN' ? minOf(vs) : maxOf(vs);
         }
         case 'DIVIDE': {
           // 안전한 나누기 (엑셀에 없음): 0 으로 나누면 세 번째 인수(없으면 빈 값)
@@ -1251,7 +1252,7 @@ export function computePivot(input, d) {
     const allowed = d.filters[p] ?? d.filters[Object.keys(d.filters).find((k) => k.toLowerCase() === p.toLowerCase())];
     pageRows.push([text(p, 'pageLabel'), text(!allowed ? '(모두)' : allowed.length === 1 ? allowed[0] : '(다중 항목)', 'pageValue')]);
   }
-  if (pageRows.length) { grid.push(...pageRows); grid.push([]); }
+  if (pageRows.length) { pushAll(grid, pageRows); grid.push([]); }
 
   // 열 머리글
   const colLevels = Lc + (multiV ? 1 : 0);

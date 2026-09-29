@@ -3,6 +3,7 @@ import {
   ERR, Range, isError, scalar, toNum, toInt, toBool, optNum, optInt, checkNum, collectNums, flat, asRange, matrix,
   makeCriteria, lift, fastCount,
 } from './fxcore.js';
+import { maxOf, minOf } from './fxcore.js';
 
 export function roundTo(n, digits, mode) {
   if (digits > 15) digits = 15;
@@ -423,8 +424,8 @@ export const MATH = {
     if (!v.length) throw ERR.DIV0;
     return v.reduce((s, x) => s + x, 0) / v.length;
   },
-  MAXIFS: ([target, ...rest]) => { const v = ifsValues(target, ifsPairs(rest)); return v.length ? Math.max(...v) : 0; },
-  MINIFS: ([target, ...rest]) => { const v = ifsValues(target, ifsPairs(rest)); return v.length ? Math.min(...v) : 0; },
+  MAXIFS: ([target, ...rest]) => { const v = ifsValues(target, ifsPairs(rest)); return v.length ? maxOf(v) : 0; },
+  MINIFS: ([target, ...rest]) => { const v = ifsValues(target, ifsPairs(rest)); return v.length ? minOf(v) : 0; },
 };
 
 function pairSum(x, y, f) {

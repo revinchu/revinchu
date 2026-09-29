@@ -5,6 +5,7 @@ import {
 } from './fxcore.js';
 import { mmult, inverse } from './fx-math.js';
 import { fitEts, etsForecast, etsConfint } from './ets.js';
+import { maxOf, minOf } from './fxcore.js';
 
 // ───────────── 특수 함수 ─────────────
 const LANCZOS = [0.99999999999980993, 676.5203681218851, -1259.1392167224028, 771.32342877765313, -176.61502916214059,
@@ -479,10 +480,10 @@ export const STAT = {
   },
   COUNTA: (a) => flat(a).filter((v) => v !== null && v !== undefined).length,
   COUNTBLANK: (a) => flat(a).filter((v) => v === null || v === '').length,
-  MAX: (a) => { const n = collectNums(a); return n.length ? Math.max(...n) : 0; },
-  MIN: (a) => { const n = collectNums(a); return n.length ? Math.min(...n) : 0; },
-  MAXA: (a) => { const n = collectNumsA(a); return n.length ? Math.max(...n) : 0; },
-  MINA: (a) => { const n = collectNumsA(a); return n.length ? Math.min(...n) : 0; },
+  MAX: (a) => { const n = collectNums(a); return n.length ? maxOf(n) : 0; },
+  MIN: (a) => { const n = collectNums(a); return n.length ? minOf(n) : 0; },
+  MAXA: (a) => { const n = collectNumsA(a); return n.length ? maxOf(n) : 0; },
+  MINA: (a) => { const n = collectNumsA(a); return n.length ? minOf(n) : 0; },
   MEDIAN: (a) => {
     const n = collectNums(a).sort((x, y) => x - y);
     if (!n.length) throw ERR.NUM;

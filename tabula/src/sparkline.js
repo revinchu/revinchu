@@ -2,6 +2,7 @@
 // 시트 속성 sparklines = [{ id, type: 'line'|'column'|'winloss', color, negColor, markerColor, highColor, lowColor, firstColor, lastColor,
 //   markers, high, low, first, last, negative, weight, items: [{ r, c, ref: 'Sheet1!A2:F2' }] }]  (그룹 하나에 여러 셀)
 import { parse, isError } from './formula.js';
+import { maxOf, minOf } from './fxcore.js';
 
 export const SPARK_TYPES = [
   { id: 'line', label: '꺾은선형' },
@@ -50,8 +51,8 @@ export function sparkSvg(values, g, w, h) {
   const nums = values.filter((v) => v !== null);
   if (!nums.length) return '';
   const n = values.length;
-  let min = Math.min(...nums);
-  let max = Math.max(...nums);
+  let min = minOf(nums);
+  let max = maxOf(nums);
   const out = [];
   const idxOf = (want) => values.findIndex((v) => v === want);
   const firstI = values.findIndex((v) => v !== null);

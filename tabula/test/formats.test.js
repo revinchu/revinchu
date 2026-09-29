@@ -83,3 +83,12 @@ test("피벗 'Σ 값' 위치: 맨 안쪽(월별) / 맨 바깥(지표별로 4월�
   const back = new Workbook(readXlsx(writeXlsx(wb)).data);
   assert.equal(back.sheets[0].pivot.valuesPos, 0);
 });
+
+test('큰 데이터: 고유 숫자 15만 개인 피벗 원본 저장 · MAX(열 전체) 가 호출 스택을 넘기지 않음', () => {
+  const wb = new Workbook();
+  wb.transact(() => { wb.setInput(0, 0, 0, '매체'); wb.setInput(0, 0, 1, '비용'); for (let i = 1; i <= 150000; i++) { wb.setInput(0, i, 0, i % 3 ? 'A' : 'B'); wb.setInput(0, i, 1, String(i + 0.5)); } });
+  wb.transact(() => wb.setSheetProp(0, 'pivot', { name: '피벗1', source: 'Sheet1', range: { r1: 0, c1: 0, r2: 150000, c2: 1 }, rows: ['매체'], cols: [], pages: [], filters: {}, values: [{ field: '비용', agg: 'max' }], top: 0, left: 4, area: { r1: 0, c1: 4, r2: 3, c2: 5 } }));
+  wb.transact(() => wb.setInput(0, 0, 8, '=MAX(B:B)-MIN(B:B)'));
+  assert.equal(wb.getValue(0, 0, 8), 149999);
+  assert.match(textOf(unzip(writeXlsx(wb))['xl/pivotCache/pivotCacheDefinition1.xml']), /maxValue="150000.5"/);
+});
