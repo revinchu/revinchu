@@ -243,6 +243,9 @@ function zipEntries(bytes) {
   if (eocd < 0) {
     // 앞은 ZIP 인데 끝의 목록이 없음: 내려받기 · 올리기가 덜 끝나 잘린 파일
     if (bytes.length > 4 && dv.getUint32(0, true) === 0x04034b50) throw new Error('파일 끝부분이 잘려 있어 열 수 없습니다 (내려받기나 올리기가 덜 끝난 파일). 원본 파일을 다시 받아 열어 주세요.');
+    // 문서 보안(DRM) 프로그램이 암호화한 파일: 머리에 제품 표시가 있음 (Fasoo DRMONE, SoftCamp, MarkAny …)
+    const head = String.fromCharCode(...bytes.subarray(0, Math.min(1024, bytes.length))).toUpperCase();
+    if (/DRMONE|FASOO|SCDSA|SOFTCAMP|MARKANY|DOCUMENT SECURITY|ENCRYPTED AND PROTECTED/.test(head)) throw new Error('문서 보안(DRM)으로 암호화된 파일이라 열 수 없습니다. 회사 보안 프로그램에서 암호화를 해제(반출)한 파일을 열어 주세요.');
     throw new Error('ZIP 파일이 아닙니다');
   }
   const count = dv.getUint16(eocd + 10, true);

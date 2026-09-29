@@ -35,10 +35,13 @@ const gcd2 = (a, b) => { while (b) [a, b] = [b, a % b]; return a; };
 function sumIfs(sumRange, pairs) {
   const s = asRange(sumRange);
   let total = 0;
+  // 조건에 맞는 칸의 오류는 결과가 됨 (엑셀: 맞지 않는 칸의 오류는 무시)
+  let err = null;
   s.rows.forEach((row, i) => row.forEach((x, j) => {
-    if (typeof x === 'number' && matchesAll(pairs, i, j)) total += x;
+    if (err || (typeof x !== 'number' && !isError(x)) || !matchesAll(pairs, i, j)) return;
+    if (isError(x)) err = x; else total += x;
   }));
-  return total;
+  return err ?? total;
 }
 
 export function ifsPairs(args) {

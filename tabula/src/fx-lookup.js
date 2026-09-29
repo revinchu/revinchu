@@ -461,7 +461,9 @@ export const LOOKUP = {
   }),
   HYPERLINK: lift(([link, friendly]) => (friendly === undefined || friendly === null ? toStr(link) : scalar(friendly) ?? 0)),
   GETPIVOTDATA: refFn((args, ctx, ev) => {
-    const [field, pt, ...pairs] = args;
+    let [field, pt, ...pairs] = args;
+    // 엑셀 2000 이전 형식 GETPIVOTDATA(피벗 범위, "값 필드") — 첫 인수가 참조이고 둘째가 글자
+    if (field instanceof RefValue && !(pt instanceof RefValue)) [field, pt] = [pt, field];
     if (!(pt instanceof RefValue)) throw ERR.REF;
     if (!ctx.pivotData) throw ERR.REF;
     const items = [];

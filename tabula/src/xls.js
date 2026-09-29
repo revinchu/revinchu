@@ -392,8 +392,14 @@ const FLS = [null, 'solid', 'mediumGray', 'darkGray', 'lightGray', 'darkHorizont
 export function readXls(bytes) {
   const buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   const stream = cfbStream(buf, ['Workbook', 'Book']);
-  if (!stream) throw new Error('.xls 파일에서 통합 문서 데이터를 찾지 못했습니다.');
+  if (!stream) {
+    // 암호를 건 .xlsx 는 같은 OLE 컨테이너 안에 EncryptionInfo · EncryptedPackage 로 들어 있음
+    if (cfbStream(buf, ['EncryptionInfo', 'EncryptedPackage'])) throw new Error('암호로 보호된 파일입니다. 엑셀에서 암호를 해제(파일 → 정보 → 통합 문서 보호 → 암호 설정에서 암호 지우기)한 뒤 열어 주세요.');
+    throw new Error('.xls 파일에서 통합 문서 데이터를 찾지 못했습니다.');
+  }
   const recs = records(stream);
+  // FILEPASS: 열기 암호가 걸린 .xls
+  if (recs.some((r, i) => i < 40 && r.type === 0x002f)) throw new Error('암호로 보호된 파일입니다. 엑셀에서 암호를 해제한 뒤 열어 주세요.');
   const warnings = [];
   if (recs[0]?.type !== 0x0809 || u16(recs[0].data, 0) !== 0x0600) warnings.push('엑셀 5.0/95 이전 형식은 일부만 읽을 수 있습니다.');
   const palette = INDEXED.slice();

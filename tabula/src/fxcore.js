@@ -144,6 +144,31 @@ export function checkNum(n) {
 
 export const typeRank = (v) => (typeof v === 'number' ? 0 : typeof v === 'string' ? 1 : 2);
 
+// 한국어 엑셀의 글자 순서: 기호 < 숫자 < 한글 < 영문 < 그 밖의 문자 (대소문자 무시)
+// (근사 일치 MATCH · LOOKUP 의 이진 탐색, 비교 연산자, 정렬이 모두 이 순서를 씀)
+const charClass = (c) => (c >= 0x30 && c <= 0x39 ? 1
+  : (c >= 0xac00 && c <= 0xd7a3) || (c >= 0x1100 && c <= 0x11ff) || (c >= 0x3130 && c <= 0x318f) ? 2
+    : (c >= 0x61 && c <= 0x7a) || (c >= 0xc0 && c <= 0x24f) ? 3
+      : c < 0x80 || (c >= 0x2000 && c <= 0x2bff) || (c >= 0x3000 && c <= 0x303f) || (c >= 0xff00 && c <= 0xff0f) ? 0 : 4);
+/** 글자 비교 (대소문자 무시, 한국어 엑셀 순서) */
+export function compareText(a, b) {
+  const x = a.toLowerCase();
+  const y = b.toLowerCase();
+  if (x === y) return 0;
+  const n = Math.min(x.length, y.length);
+  for (let i = 0; i < n; i++) {
+    const p = x.charCodeAt(i);
+    const q = y.charCodeAt(i);
+    if (p === q) continue;
+    // 둘 다 ASCII 가 아닌 같은 종류면 코드 순서, 아니면 종류 순서
+    const cp = charClass(p);
+    const cq = charClass(q);
+    if (cp !== cq) return cp - cq;
+    return p < q ? -1 : 1;
+  }
+  return x.length - y.length < 0 ? -1 : 1;
+}
+
 /** 엑셀 비교 규칙: 숫자 < 문자 < 논리값, 문자는 대소문자 무시 */
 export function compareValues(a, b) {
   if (a === null || a === undefined) a = typeof b === 'string' ? '' : typeof b === 'boolean' ? false : 0;
@@ -151,11 +176,7 @@ export function compareValues(a, b) {
   const ra = typeRank(a);
   const rb = typeRank(b);
   if (ra !== rb) return ra - rb;
-  if (typeof a === 'string') {
-    const x = a.toLowerCase();
-    const y = b.toLowerCase();
-    return x < y ? -1 : x > y ? 1 : 0;
-  }
+  if (typeof a === 'string') return compareText(a, b);
   if (typeof a === 'boolean') return (a ? 1 : 0) - (b ? 1 : 0);
   return a < b ? -1 : a > b ? 1 : 0;
 }

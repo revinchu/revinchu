@@ -231,7 +231,9 @@ export function parseCalc(src) {
       if (peek()?.t === 'op' && peek().v === '(') {
         p++;
         const args = [];
-        if (!eat(')')) { do args.push(expr()); while (eat(',')); if (!eat(')')) throw new Error('수식 오류'); }
+        // 빈 인수 (IFERROR(x,) 처럼 쉼표 뒤가 비었음) 는 엑셀처럼 0
+        const arg = () => (peek()?.t === 'op' && (peek().v === ',' || peek().v === ')') ? { num: 0 } : expr());
+        if (!eat(')')) { do args.push(arg()); while (eat(',')); if (!eat(')')) throw new Error('수식 오류'); }
         return { fn: t.v.toUpperCase(), args };
       }
       return { field: t.v };
@@ -1600,7 +1602,9 @@ export function pivotLookup(rows, def, dataField, pairs, resolved = null) {
     bySig.set(sig, e);
   }
   if (!e.idx) return null;
-  const list = e.idx.get(pairs.length === 1 ? itemText(pairs[0][1]) : pairs.map((p) => itemText(p[1])).join('\u0001'));
+  let list = e.idx.get(pairs.length === 1 ? itemText(pairs[0][1]) : pairs.map((p) => itemText(p[1])).join('\u0001'));
+  // 원본 행이 하나도 없는 피벗의 총합계: 엑셀은 빈 집계(합계 0, 계산 필드는 그 결과)를 돌려줌
+  if (!list && !pairs.length && !res.groups.length) list = res.measures.newList();
   if (!list) return null;
   const v = res.measures.value(list, e.vi);
   return typeof v === 'number' ? v : null;

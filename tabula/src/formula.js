@@ -87,6 +87,7 @@ const ROWS_RE = new RegExp(`(?:${SHEET})?(\\$?)(\\d+):(\\$?)(\\d+)(?![\\w(!.])`,
 const SHEET_NAME_RE = new RegExp(`${SHEET}([A-Za-z_\\\\À-￿][\\w.À-￿]*)`, 'y');
 const NUMBER_RE = /(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/y;
 const IDENT_RE = /[A-Za-z_\\À-￿][\w.?À-￿]*/y;
+const SHEET_REF_ERR_RE = /(?:'(?:[^']|'')+'|[^\s!'"(),;:+\-*/^&=<>{}#]+)!#REF!/y;
 const ERROR_RE = /#(?:DIV\/0!|VALUE!|REF!|NAME\?|NUM!|N\/A|NULL!|CIRC!|SPILL!|CALC!|BUSY!|GETTING_DATA)/y;
 const OPS = ['<=', '>=', '<>', '+', '-', '*', '/', '^', '&', '=', '<', '>', '%', '@'];
 
@@ -167,6 +168,13 @@ export function tokenize(src) {
       continue;
     }
     if (/[A-Za-z_$'\\À-￿]/.test(ch)) {
+      // 지워진 범위를 가리키는 시트 참조 (시트!#REF!): 엑셀은 #REF! 로 계산
+      const dead = sticky(SHEET_REF_ERR_RE, src, i);
+      if (dead) {
+        i += dead[0].length;
+        toks.push({ t: 'err', v: '#REF!', s: start, e: i });
+        continue;
+      }
       let m = sticky(RANGE_RE, src, i);
       if (m && validRangeMatch(m)) {
         i += m[0].length;

@@ -369,7 +369,7 @@ function innerText(body, tag) {
   if (body[gt - 1] === '/') return { attrs: scanAttrs(body, open + tag.length + 1, gt - 1), text: '' };
   const close = body.indexOf(`</${tag}>`, gt);
   const t = body.slice(gt + 1, close);
-  return { attrs: scanAttrs(body, open + tag.length + 1, gt), text: t.includes('&') ? decodeEntities(t) : t };
+  return { attrs: scanAttrs(body, open + tag.length + 1, gt), text: t.includes('&') || t.includes('\r') ? decodeEntities(t) : t };
 }
 
 /** sheetData 의 행/셀을 DOM 없이 읽음 → { attrs, cells: [{ attrs, v, f, fa, is }] } */
@@ -1668,6 +1668,11 @@ function pivotDefFrom(root, cache, tables, sheetName) {
     if (it) filters[names[f]] = [itemText(cache.fields[f]?.items[Number(it.attrs.x)] ?? null)];
   }
   if (Object.keys(filters).length) def.filters = filters;
+  // 행 · 열 · 필터 영역에 없는 필드의 숨긴 항목은 엑셀이 적용하지 않음 (필드를 빼면 필터도 풀림).
+  // 단, 그 필드의 슬라이서가 이 피벗을 거르면 적용됨 → 슬라이서를 연결한 뒤에 정함 (linkPivotsAndSlicers)
+  const onAxis = new Set([...def.rows, ...def.cols, ...(def.pages ?? [])]);
+  const offAxis = Object.keys(filters).filter((f) => !onAxis.has(f));
+  if (offAxis.length) Object.defineProperty(def, '_offAxis', { value: offAxis, enumerable: false, configurable: true });
   // 이름 · 스타일 · 캡션 · 계산 필드
   if (root.attrs.name) def.name = root.attrs.name;
   const si0 = child(root, 'pivotTableStyleInfo');
@@ -1782,6 +1787,25 @@ function pivotDefFrom(root, cache, tables, sheetName) {
     Object.assign(def, { top, left: loc.c1, area: { ...loc, r1: top } });
   }
   return def;
+}
+
+/** 레이아웃 밖 필드의 숨긴 항목 필터를 지움 — 그 필드의 슬라이서가 거르는 피벗은 남김 */
+function dropOffAxisFilters(sheets) {
+  const sliced = new Set();
+  for (const sh of sheets) {
+    for (const sl of sh.slicers ?? []) {
+      if (sl.source?.kind !== 'pivot') continue;
+      for (const p of sl.source.pivots ?? []) sliced.add(`${p.sheet}\u0001${p.name}\u0001${sl.source.field}`);
+    }
+  }
+  for (const sh of sheets) {
+    for (const def of [sh.pivot, ...(sh.pivotsExtra ?? [])]) {
+      if (!def?._offAxis) continue;
+      for (const f of def._offAxis) if (!sliced.has(`${sh.name}\u0001${def.name}\u0001${f}`)) delete def.filters[f];
+      if (def.filters && !Object.keys(def.filters).length) delete def.filters;
+      delete def._offAxis;
+    }
+  }
 }
 
 /** slicerCacheDefinition → { name, sourceName, table: { tableId, column } | null, pivot: { tabId, name } | null } */
@@ -1992,6 +2016,7 @@ function* readXlsxSteps(files) {
   }
   yield { p: 0.92, msg: "피벗 테이블 · 슬라이서 연결 중" };
   linkPivotsAndSlicers(files, wbRels, sheets, ctx);
+  dropOffAxisFilters(sheets);
   if (unsupported) warnings.push(`지원하지 않는 함수가 쓰인 수식 ${unsupported}개는 수식을 유지하고 파일에 저장된 계산 결과를 표시합니다.`);
   if (files.__xlsb?.unsupported) warnings.push(`바이너리 통합 문서(.xlsb)에서 해석하지 못한 수식 ${files.__xlsb.unsupported}개는 저장된 계산 결과(값)로 가져왔습니다.`);
   pushAll(warnings, ctx.warnings);

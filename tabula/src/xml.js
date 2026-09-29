@@ -2,6 +2,8 @@
 
 const ENTITIES = { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'" };
 export function decodeEntities(s) {
+  // XML 줄 끝 정규화: 글자 그대로 있는 CR LF · CR 은 LF (엑셀과 같음). &#13; 으로 적은 CR 은 아래에서 그대로 남음
+  if (s.includes('\r')) s = s.replace(/\r\n?/g, '\n');
   if (!s.includes('&')) return s;
   return s.replace(/&(#x[0-9a-f]+|#\d+|\w+);/gi, (m, e) => {
     if (e[0] === '#') {
