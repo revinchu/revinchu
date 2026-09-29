@@ -9,7 +9,7 @@
 //                                  | { type: 'label', op, v1, v2 } | { type: 'value', op, by, v1, v2 } }
 //              style: 'PivotStyleLight16' 등, rowCaption, colCaption, cellFmt: { 역할: 서식 } (파일에서 가져온 셀 서식) }
 // 옛 정의 { rowField, colField, valueField, agg, fieldNames } 도 그대로 읽음
-import { formatGeneral, formatValue } from './format.js';
+import { formatGeneral, formatValue, parseInput } from './format.js';
 import { findTable, dataTop, dataBottom, columnNames, ACCENTS, tint, shade } from './tables.js';
 import { logicalCol } from './block.js';
 import { presetStyle, presetSwatch, paintPivotPreset, MODERN_STYLES } from './stylepresets.js';
@@ -493,6 +493,7 @@ export function normalizeDef(def, header) {
     sort: byKey(def.sort),
     order: byKey(def.order),
     tieOrder: byKey(def.tieOrder),
+    tieState: def.tieState ?? null,
     fieldFilters: byKey(def.fieldFilters),
     style: def.style ?? DEFAULT_PIVOT_STYLE,
     groups: byKey(def.groups),
@@ -690,6 +691,10 @@ function valueIndex(values, by) {
 }
 
 /** 행·열 필드 필터(레이블 · 값 · 상위 N)를 그룹에 적용 (바깥 필드부터, 부모 그룹 안에서 평가) */
+/** 필터 상태를 비교할 글자 (필드 · 항목 순서와 무관) */
+export function pivotFilterKey(filters) {
+  return JSON.stringify(Object.entries(filters ?? {}).map(([k, v]) => [k.toLowerCase(), [...v].map(String).sort()]).sort((a, b) => (a[0] < b[0] ? -1 : 1)));
+}
 function applyFieldFilters(groups, d, measures) {
   const entries = Object.entries(d.fieldFilters ?? {});
   if (!entries.length) return groups;
@@ -730,6 +735,9 @@ function applyFieldFilters(groups, d, measures) {
         } else if (flt.type === 'value') {
           const vi = valueIndex(d.values, flt.by);
           kept = items.filter((it) => { const v = measureOf(it, vi); return v !== null && compareOp(flt.op, v, Number(flt.v1), Number(flt.v2), false); });
+        } else if (flt.type === 'top' && snapshotItems(d, field)) {
+          const snap = new Set(d.tieOrder[field]);
+          kept = items.filter((it) => snap.has(itemText(it.key)));
         } else if (flt.type === 'top') {
           const vi = valueIndex(d.values, flt.by);
           const scored = items.map((it) => ({ it, v: measureOf(it, vi) ?? -Infinity }));
@@ -741,7 +749,8 @@ function applyFieldFilters(groups, d, measures) {
           if ((flt.mode ?? 'count') === 'count') {
             // 엑셀: N 번째와 값이 같은 항목도 모두 포함 (상위 10 인데 11개 이상 보일 수 있음)
             let m = Math.max(0, Math.floor(n));
-            if (m > 0) while (m < scored.length && Number.isFinite(scored[m].v) && scored[m].v === scored[m - 1].v) m++;
+            // 오류 · 빈 값 항목끼리도 같은 값으로 봄 (숫자 항목이 N 개보다 적으면 오류 항목이 모두 보임 — 엑셀과 같음)
+            if (m > 0) while (m < scored.length && scored[m].v === scored[m - 1].v) m++;
             kept = scored.slice(0, m).map((x) => x.it);
           }
           else {
@@ -995,6 +1004,27 @@ export function roleStyle(parts, role) {
 // ───────────── 계산 ─────────────
 
 const QUOTE_TEXT = /^(?:['=]|[+-]?\.?\d|(?:TRUE|FALSE)$)/i;
+const labelMemo = new Map();
+/** 항목 레이블 → 셀 입력 글자: 숫자 글자('2025')는 숫자 그대로, 읽으면 바뀌는 글자('001' · "'소득세율")는 글자로 */
+function labelRaw(t) {
+  if (!QUOTE_TEXT.test(t)) return t;
+  let r = labelMemo.get(t);
+  if (r === undefined) {
+    const v = t[0] === "'" || t[0] === '=' ? null : parseInput(t).value;
+    r = typeof v === 'number' && formatGeneral(v) === t ? t : `'${t}`;
+    if (labelMemo.size < 50000) labelMemo.set(t, r);
+  }
+  return r;
+}
+
+/**
+ * 엑셀이 저장한 상위 N 항목을 그대로 쓸지: 파일을 연 뒤 아직 다시 그리지 않았고(tieState 가 남아 있음) 필터도 저장할 때와 같을 때.
+ * (값이 오류인 항목을 엑셀이 어떤 것은 넣고 어떤 것은 빼는 등 규칙으로 재현할 수 없는 결과도 연 화면은 엑셀과 같게)
+ */
+function snapshotItems(d, field) {
+  const list = d.tieOrder?.[field];
+  return !!list?.length && d.tieState !== null && d.tieState === pivotFilterKey(d.filters);
+}
 
 /** 값이 같은 항목의 순서 (파일에 저장된 표시 순서, 없으면 모두 같음) */
 function tieRank(d, field) {
@@ -1077,8 +1107,8 @@ export function computePivot(input, d) {
   const valIdx = values.map((v) => idx(v.field));
   const calcNames = new Set((d.calcFields ?? []).map((c) => c.name.toLowerCase()));
 
-  // 글자 항목은 그대로 글자로: '=' · 작은따옴표로 시작하거나 숫자 · 논리값처럼 보이면 앞에 ' (엑셀처럼 '소득세율 · 001 이 바뀌지 않게)
-  const text = (s, role) => ({ raw: typeof s === 'number' ? formatGeneral(s) : QUOTE_TEXT.test(String(s ?? '')) ? `'${s}` : String(s ?? ''), style: { ...styleFor(role) }, role });
+  // 글자 항목은 그대로: '=' · 작은따옴표로 시작하거나, 입력으로 읽으면 글자가 달라지는 것(001 · 날짜처럼 보이는 글자)은 앞에 '
+  const text = (s, role) => ({ raw: typeof s === 'number' ? formatGeneral(s) : labelRaw(String(s ?? '')), style: { ...styleFor(role) }, role });
   if (!d.rows.length && !d.cols.length && !V) {
     const grid = Array.from({ length: 18 }, (_, r) => Array.from({ length: 3 }, (_, c) => ({
       raw: r === 0 && c === 0 ? '피벗 테이블 보고서를 작성하려면 [피벗 테이블 필드] 목록에서 필드를 선택하세요.' : '',
@@ -1548,7 +1578,11 @@ export function pivotLookup(rows, def, dataField, pairs, resolved = null) {
     e = { vi, pos, idx: null };
     if (vi >= 0 && !pos.some((p) => !p)) {
       e.idx = new Map();
+      // 엑셀: 축소한 항목 아래(보이지 않는) 항목은 GETPIVOTDATA 가 #REF!
+      const deep = { r: Math.max(-1, ...pos.filter((p) => p[0] === 'r').map((p) => p[1])), c: Math.max(-1, ...pos.filter((p) => p[0] === 'c').map((p) => p[1])) };
+      const coll = [['r', d.rows], ['c', d.cols]].flatMap(([ax, fields]) => fields.map((f, i) => [ax, i, d.collapsed?.[f]?.length ? new Set(d.collapsed[f]) : null]).filter(([, i, set]) => set && i < deep[ax]));
       for (const g of res.groups) {
+        if (coll.some(([ax, i, set]) => set.has(itemText(g[ax][i])))) continue;
         const k = pos.map(([ax, i]) => itemText(g[ax][i])).join('\u0001');
         let l = e.idx.get(k);
         if (!l) { l = res.measures.newList(); e.idx.set(k, l); }

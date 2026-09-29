@@ -139,3 +139,25 @@ test('GETPIVOTDATA: 피벗이 있는 시트가 바뀔 때만 다시 계산 (다�
   assert.deepEqual(pts([1, 40, 7]), new Set(['0:0,1', '0:1,1'])); // 피벗 시트의 아무 칸
   assert.equal(g.propagate([1, 40, 7], 1), null); // 한도를 넘으면 시트 단위로
 });
+
+test('엑셀 호환: 빈 글자 셀 · 텍스트 서식 칸의 수식 xlsx 왕복 · 오류 값', async () => {
+  const { readXlsx, writeXlsx } = await import('../src/xlsx.js');
+  const wb = new Workbook();
+  wb.transact(() => {
+    wb.setCellData(0, 0, 0, { raw: "'" }); // 빈 글자 ""
+    wb.setCellData(0, 1, 0, { raw: '=B1*2', style: { numFmt: 'text' }, fx: true });
+    wb.setInput(0, 0, 1, '21');
+    wb.setInput(0, 2, 0, '=COUNTA(A1)');
+    wb.setInput(0, 3, 0, '=IFERROR(1/0,"x")');
+    wb.setInput(0, 4, 0, '=ISERROR(B1/0)');
+  });
+  assert.deepEqual([wb.getValue(0, 1, 0), wb.getValue(0, 2, 0), wb.getValue(0, 3, 0), wb.getValue(0, 4, 0)], [42, 1, 'x', true]);
+  const back = new Workbook(readXlsx(writeXlsx(wb)).data);
+  assert.equal(back.getValue(0, 0, 0), '');
+  assert.equal(back.getCell(0, 1, 0).formula, true);
+  back.invalidate();
+  assert.deepEqual([back.getValue(0, 1, 0), back.getValue(0, 2, 0)], [42, 1]);
+  // 텍스트 서식 칸에 새로 입력한 수식은 글자
+  back.transact(() => back.setInput(0, 1, 0, '=B1*3'));
+  assert.equal(back.getValue(0, 1, 0), '=B1*3');
+});

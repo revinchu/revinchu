@@ -7020,6 +7020,7 @@ const pivotWritten = new Map(); // 피벗마다 마지막으로 그린 칸 서�
 // ── 피벗 테이블 조건부 서식 범위 (엑셀: 선택한 셀 / "값" 을 표시하는 모든 셀 / "행 필드"에 대해 "값"을 표시하는 모든 셀) ──
 // 규칙에 pivot: { name, scope: 'selection' | 'data' | 'field', value, rowField, colField } 를 두고, 피벗을 다시 그릴 때마다 범위를 새로 구함
 const pivotLayouts = new Map();
+let openingPivots = false; // 파일을 열면서 피벗을 그리는 중 (엑셀이 저장한 상위 N 결과를 그대로 씀)
 function pivotLayoutFrom(grid, pm, d, top, left) {
   const base = pm.pageRows + pm.headerRows;
   return {
@@ -7246,6 +7247,8 @@ function pivotScopeUi(rule) {
 }
 
 function writePivot(targetSi, def, { autofit = true } = {}) {
+  // 연 뒤 처음 다시 그릴 때부터는 저장된 상위 N 결과 대신 직접 계산
+  if (!openingPivots && def.tieState !== undefined) delete def.tieState;
   delete def.needsRender; // 예제 등에서 처음 한 번 그리라는 표시
   const src = pivotSource(def);
   if (!src) return false;
@@ -7468,12 +7471,17 @@ function warmAll() {
 
 function renderImportedPivots() {
   warmAll();
-  wb.holdDirtyWhile(() => {
-    for (const e of allPivots()) {
-      if (!e.def.captureFmt && !e.def.needsRender) continue;
-      try { wb.transact(() => writePivot(e.si, e.def)); } catch (err) { console.warn('피벗 다시 그리기 실패', err); }
-    }
-  });
+  openingPivots = true;
+  try {
+    wb.holdDirtyWhile(() => {
+      for (const e of allPivots()) {
+        if (!e.def.captureFmt && !e.def.needsRender) continue;
+        try { wb.transact(() => writePivot(e.si, e.def)); } catch (err) { console.warn('피벗 다시 그리기 실패', err); }
+      }
+    });
+  } finally {
+    openingPivots = false;
+  }
 }
 
 /** 피벗 정의를 새 형식({rows, cols, values …})으로 */
@@ -8944,6 +8952,7 @@ async function exportXlsx(name = docName, kind = null) {
   const k = kind ?? (wb.vba ? 'xlsm' : 'xlsx');
   // 큰 문서는 나눠서 만들고 진행 표시 (압축도 함께 해서 파일이 작아짐)
   const prog = progressOverlay(`'${safeFileName(name)}' 저장 중`);
+  exportBusy++;
   try {
     const bytes = await writeXlsxAsync(wb, { activeSheet: si, fileName: `${safeFileName(name)}.${k}`, kind: k }, (st) => prog.set(st.p, st.msg));
     prog.close();
@@ -8952,6 +8961,8 @@ async function exportXlsx(name = docName, kind = null) {
   } catch (err) {
     prog.close();
     alertDialog('WIXEL', `저장하지 못했습니다: ${err.message}`);
+  } finally {
+    exportBusy--;
   }
 }
 
@@ -9132,6 +9143,7 @@ async function loadWorkbookAsync(data, name, activeSheet, prog) {
   warmAll();
   // 모든 피벗의 바뀐 칸을 모았다가 끝에서 한 번에 의존 수식을 찾음 (피벗마다 수십만 수식을 훑지 않게)
   wb.holdDirty = true;
+  openingPivots = true;
   // 피벗마다 화면 전체를 다시 그리지 않게 (afterLoad 에서 한 번 그림)
   const listeners = wb.listeners;
   wb.listeners = [];
@@ -9144,6 +9156,7 @@ async function loadWorkbookAsync(data, name, activeSheet, prog) {
       try { wb.transact(() => writePivot(e.si, e.def)); } catch (err) { console.warn('피벗 다시 그리기 실패', err); }
     }
   } finally {
+    openingPivots = false;
     wb.listeners = listeners;
     wb.holdDirty = false;
     wb.flushPending();
@@ -9619,6 +9632,8 @@ function saveToStorage() {
 
 const SAVE_ABORT = new Error('저장 중단');
 const yieldUI = () => new Promise((res) => setTimeout(res, 0));
+let exportBusy = 0; // 파일로 저장(내보내기) 중이면 브라우저 자동 저장은 잠시 멈춤 (둘이 화면을 나눠 쓰지 않게)
+const exportIdle = async () => { while (exportBusy) await new Promise((res) => setTimeout(res, 250)); };
 let bigSaveRun = null;
 let bigSaveAgain = false;
 /** 큰 문서 저장: 목록 { v: 2, sheets: [{id, ev}] } + 시트마다 { meta, chunks: [JSON 문자열] } */
@@ -9640,6 +9655,7 @@ async function saveBigToIdb() {
           chunks.push(await packChunk(JSON.stringify(ch)));
           if (performance.now() - t > 30) {
             await yieldUI();
+            await exportIdle();
             if (wb !== book || book.sheets[i] !== s) throw SAVE_ABORT; // 그사이 다른 문서를 열었음
             t = performance.now();
           }

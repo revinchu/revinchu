@@ -474,12 +474,19 @@ function deref(v, ctx) {
   return v;
 }
 
+/** deref 와 같지만 오류 값을 던지지 않고 돌려줌 (예외는 브라우저에서 비쌈: 인수 · IFERROR 평가에 씀) */
+function derefSoft(v, ctx) {
+  if (isError(v)) return v;
+  if (v instanceof RefValue && v.single) return ctx.cell(v.sheet, v.r1, v.c1);
+  return deref(v, ctx);
+}
+
 function makeEv(ctx) {
   return {
-    deref: (v) => (isError(v) ? v : attempt(() => deref(v, ctx))),
+    deref: (v) => (isError(v) ? v : attempt(() => derefSoft(v, ctx))),
     evaluate,
     evalRef: evalAny,
-    value: (node, c) => attempt(() => evaluate(node, c)),
+    value: (node, c) => attempt(() => derefSoft(evalAny(node, c), c)),
     call: callLambda,
     refFromText: (text, a1, c) => refFromText(text, a1, c ?? ctx),
   };
@@ -668,16 +675,19 @@ function callFunc(node, ctx) {
   for (const a of node.args) {
     if (a.type === 'union') {
       // 합집합은 여러 인수로 (SUM((A1:A3,C1:C3)))
-      for (const it of attempt(() => evalAny(a, ctx))) args.push(attempt(() => deref(it, ctx)));
+      for (const it of attempt(() => evalAny(a, ctx))) args.push(attempt(() => derefSoft(it, ctx)));
       continue;
     }
     if (a.type === 'empty') { args.push(null); continue; }
-    args.push(attempt(() => deref(evalAny(a, ctx), ctx)));
+    args.push(attempt(() => derefSoft(evalAny(a, ctx), ctx)));
   }
   return fn(args, ctx, ev);
 }
 
+// 오류는 던지지 않고 값으로 돌려줌 (IFERROR 로 감싼 x/0 이 수십만 개일 때 예외는 브라우저에서 매우 느림). 앞 피연산자의 오류가 먼저 (엑셀과 같음)
 function binary(op, a, b) {
+  if (isError(a)) return a;
+  if (isError(b)) return b;
   switch (op) {
     case '+': return checkNum(toNum(a) + toNum(b));
     case '-': return checkNum(toNum(a) - toNum(b));
@@ -685,7 +695,7 @@ function binary(op, a, b) {
     case '/': {
       const x = toNum(a);
       const y = toNum(b);
-      if (y === 0) throw ERR.DIV0;
+      if (y === 0) return ERR.DIV0;
       return checkNum(x / y);
     }
     case '^': {
@@ -713,7 +723,7 @@ function binary(op, a, b) {
 
 /** 수식 결과 정리: 여러 셀이면 Range, 아니면 스칼라/오류 값 */
 function finish(v, ctx) {
-  if (v instanceof RefValue || Array.isArray(v)) v = deref(v, ctx);
+  if (v instanceof RefValue || Array.isArray(v)) v = derefSoft(v, ctx);
   if (v === OMITTED) return 0;
   if (v instanceof Lambda) return ERR.CALC;
   if (v instanceof Range) {

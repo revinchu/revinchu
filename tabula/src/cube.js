@@ -116,7 +116,8 @@ export class Column {
     if (this._ne) return this._ne;
     const { n, get } = this;
     const out = new Uint8Array(n);
-    for (let i = 0; i < n; i++) { const v = get(i); out[i] = v !== null && v !== undefined && v !== '' ? 1 : 0; }
+    // 빈 글자("")는 빈 칸이 아님: 엑셀 피벗의 개수도 셈 (빈 칸은 null)
+    for (let i = 0; i < n; i++) { const v = get(i); out[i] = v !== null && v !== undefined ? 1 : 0; }
     this._ne = out;
     return out;
   }

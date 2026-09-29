@@ -225,6 +225,11 @@ test('피벗 날짜 그룹: 파생 필드(월2 = 일의 월) · 일 그룹 · �
   // 엑셀처럼 월 번호 순서 (연도 구분 없음)
   assert.deepEqual(labels.slice(0, 5), ['행 레이블', '1월', '1월15일', '11월', '11월20일']);
   assert.ok(labels.includes('12월') && !labels.includes('12월1일')); // 12월은 축소
+  // GETPIVOTDATA: 축소한 12월 아래 일 항목은 #REF!, 펼친 1월 아래는 값 (엑셀과 같음)
+  const { pivotLookup } = await import('../src/pivot.js');
+  assert.equal(pivotLookup(null, def, '노출', [['월2', '12월'], ['일', '12월1일']], res), null);
+  assert.equal(pivotLookup(null, def, '노출', [['월2', '1월'], ['일', '1월15일']], res), 2);
+  assert.equal(pivotLookup(null, def, '노출', [['월2', '12월']], res), 8);
   // 그룹 항목으로 거르기 (12월만)
   const fdef = { ...def, rows: ['월2'], filters: { 월2: ['12월'] } };
   const fres = resolvePivot(pivotSourceData(wb, fdef), fdef);

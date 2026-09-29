@@ -19,7 +19,7 @@ import { CellImage } from './fxcore.js';
 import { GEOM, LINE_KINDS } from './shapes.js';
 import { BLOCK_MIN_ROWS, ColBuilder, inBlock, blockValue } from './block.js';
 import { normalizeStyleName, DEFAULT_TABLE_STYLE, dataTop, dataBottom, canonicalRef, tableAt, columnNames, findTable } from './tables.js';
-import { pivotSourceData, resolvePivot, itemText, keyOf, sortKeys, EMPTY, headerNames, normalizeDef, computePivot, valueName, showAsPercent, excelCalcFormula } from './pivot.js';
+import { pivotSourceData, resolvePivot, itemText, keyOf, sortKeys, EMPTY, headerNames, normalizeDef, computePivot, valueName, showAsPercent, excelCalcFormula, pivotFilterKey } from './pivot.js';
 import { slicerStyleName, slicerColors, isModernSlicer } from './slicerstyle.js';
 import { applyTint, DEFAULT_THEME, PRESET_STYLES, presetStyle, isModernStyle, ELEMENT_TYPES, elementDxfStyle } from './stylepresets.js';
 import { maxOf, minOf, pushAll, EPOCH, DAY_MS } from './fxcore.js';
@@ -58,7 +58,7 @@ function rangeRef(rg, abs = false) {
 
 /** 문자열 값이 입력 해석으로 다른 값이 되지 않도록 raw 생성 */
 function textRaw(s) {
-  if (s === '') return '';
+  if (s === '') return "'"; // 빈 글자("") 셀: 빈 칸과 달리 COUNTA · 피벗 개수에 셈 (엑셀과 같음)
   if (s.startsWith('=') || s.startsWith("'")) return `'${s}`;
   const p = parseInput(s);
   return typeof p.value === 'string' && p.value === s ? s : `'${s}`;
@@ -605,8 +605,9 @@ function* readSheet(files, path, ctx) {
           if (value !== null && value !== '') {
             (builders[cc] ??= new ColBuilder(dimRef.r2 - blockStart + 1)).set(r - blockStart, value);
             if (r > blockLast) blockLast = r;
+            continue;
           }
-          continue;
+          if (value !== '') continue; // 빈 글자 셀은 블록 대신 보통 셀로 (빈 칸과 구별)
         }
       }
       // 셀에 배치한 그림 (richData 값 메타데이터 vm)
@@ -617,6 +618,7 @@ function* readSheet(files, path, ctx) {
       if (cellImg) d.image = { ...cellImg };
       if (style) d.style = style;
       if (cached !== undefined && cached !== null) d.cached = cached;
+      if (formula !== null && style?.numFmt === 'text') d.fx = true; // 텍스트 서식 칸에 저장된 수식
       sheet.cells.setRC(r, cc, d);
     }
   }
@@ -1734,7 +1736,11 @@ function pivotDefFrom(root, cache, tables, sheetName) {
       });
     }
   }
-  if (Object.keys(tie).length) def.tieOrder = tie;
+  if (Object.keys(tie).length) {
+    def.tieOrder = tie;
+    // 저장할 때의 필터 상태: 같은 선택이면 상위 N 항목을 엑셀이 저장한 그대로 (오류 값 항목 선택 등 엑셀 고유 동작)
+    def.tieState = pivotFilterKey(def.filters ?? {});
+  }
   // 레이블 · 값 · 상위 10 필터
   const ff = {};
   for (const flt of kids(child(root, 'filters'), 'filter')) {
@@ -3118,7 +3124,17 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
   // 셀 XML (가장 큰 부분): 시트마다 미리 만들며 중간중간 멈춤 — 큰 문서를 저장해도 화면이 멈추지 않게
   const expMemo = new Map(); // 같은 수식(표의 계산 열 등)은 한 번만 변환
   const shapeSame = new Map(); // 수식 모양 → 파일 형식이 앱 형식과 같은지 (채우기로 만든 수식 백만 개도 해석은 한 번)
-  const exportF = (raw, t, dyn) => {
+  const astSame = new WeakMap(); // 같은 AST(같은 모양으로 채운 수식) → 파일 형식이 앱 형식과 같은지
+  const exportF = (raw, t, dyn, ast = null) => {
+    if (ast && !t && !dyn) {
+      const same = astSame.get(ast);
+      if (same === true) return esc(raw.slice(1));
+      if (same === undefined) {
+        const out = exportFormula(raw, t, dyn);
+        astSame.set(ast, out === raw.slice(1));
+        return esc(out);
+      }
+    }
     const k = `${t ?? ''}\u0001${dyn ? 1 : 0}\u0001${raw}`;
     let v = expMemo.get(k);
     if (v !== undefined) return v;
@@ -3139,18 +3155,36 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
   for (let si = 0; si < wb.sheets.length; si++) {
     const sheet = wb.sheets[si];
     const plainStyle = !sheet.allStyle && !Object.keys(sheet.colStyles ?? {}).length && !Object.keys(sheet.rowStyles ?? {}).length;
+    // 열 · 행 · 셀 서식을 합친 서식 번호: 같은 조합(서식 객체 셋)은 한 번만 합치고 찾음 (셀마다 새 객체를 만들지 않게)
+    const xfMemo = new Map();
+    const noKey = {};
+    const xfAt = (r, c, cell) => {
+      const own = cell.style;
+      if (!own && sheet.blocks.length) return pool.xf(wb.styleAt(si, r, c));
+      const col = sheet.colStyles[c] ?? noKey;
+      const row = sheet.rowStyles[r] ?? noKey;
+      let m1 = xfMemo.get(col);
+      if (!m1) { m1 = new Map(); xfMemo.set(col, m1); }
+      let m2 = m1.get(row);
+      if (!m2) { m2 = new Map(); m1.set(row, m2); }
+      const k = own ?? noKey;
+      let id = m2.get(k);
+      if (id === undefined) { id = pool.xf(wb.styleAt(si, r, c)); m2.set(k, id); }
+      return id;
+    };
     // 셀을 행별로 정리
     const rows = new Map();
     let maxR = 0;
     let maxC = 0;
-    for (const [k, cell] of sheet.cells) {
-      const [r, c] = k.split(',').map(Number);
-      if (r >= EXCEL_MAX_ROWS) continue; // 엑셀 파일에는 1,048,576행까지만 저장 가능
-      if (!rows.has(r)) rows.set(r, []);
-      rows.get(r).push([c, cell]);
-      maxR = Math.max(maxR, r);
-      maxC = Math.max(maxC, c);
-    }
+    const eachCell = (fn) => (sheet.cells.forEachRC ? sheet.cells.forEachRC(fn) : sheet.cells.forEach((cell, k) => { const i = k.indexOf(','); fn(cell, +k.slice(0, i), +k.slice(i + 1)); }));
+    eachCell((cell, r, c) => {
+      if (r >= EXCEL_MAX_ROWS) return; // 엑셀 파일에는 1,048,576행까지만 저장 가능
+      let list = rows.get(r);
+      if (!list) { list = []; rows.set(r, list); }
+      list.push([c, cell]);
+      if (r > maxR) maxR = r;
+      if (c > maxC) maxC = c;
+    });
     // 동적 배열이 분산된 셀: 값만 저장 (엑셀도 같은 방식)
     for (const sp of wb.spillsOf(si)) {
       for (let i = 0; i < sp.h; i++) {
@@ -3202,8 +3236,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
       if (sheet.outline?.rowsColl?.[r]) attrs.push('collapsed="1"');
       const cx = cells.map(([c, cell]) => {
         const ref = refOf(r, c);
-        const st = plainStyle ? (cell.style ?? {}) : wb.styleAt(si, r, c);
-        const s = pool.xf(st);
+        const s = plainStyle ? pool.xf(cell.style ?? {}) : xfAt(r, c, cell);
         const sAttr = s ? ` s="${s}"` : '';
         const v = wb.getValue(si, r, c);
         if (!cell.raw && cell.image?.src) {
@@ -3218,7 +3251,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
           if (dyn) dynamicCells++;
           const fAttr = dyn ? ` t="array" ref="${sp ? rangeRef({ ...sp, r2: Math.min(sp.r2, EXCEL_MAX_ROWS - 1) }) : ref}" aca="false"` : '';
           const cm = dyn ? ' cm="1"' : '';
-          const f = `<f${fAttr}>${exportF(cell.raw, cell.raw.includes('[') ? tableAt(sheet, r, c)?.name : null, dyn)}</f>`;
+          const f = `<f${fAttr}>${exportF(cell.raw, cell.raw.includes('[') ? tableAt(sheet, r, c)?.name : null, dyn, cell.ast)}</f>`;
           if (typeof v === 'number') return `<c r="${ref}"${sAttr}${cm}>${f}<v>${v}</v></c>`;
           if (typeof v === 'boolean') return `<c r="${ref}"${sAttr} t="b"${cm}>${f}<v>${v ? 1 : 0}</v></c>`;
           if (isError(v)) return `<c r="${ref}"${sAttr} t="e"${cm}>${f}<v>${esc(['#CIRC!', '#SPILL!', '#CALC!', '#BUSY!'].includes(v.code) && !dyn ? '#REF!' : v.code === '#CIRC!' ? '#REF!' : v.code)}</v></c>`;

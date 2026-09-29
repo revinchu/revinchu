@@ -23,11 +23,11 @@ const unkey = (k) => { const i = k.indexOf(','); return [+k.slice(0, i), +k.slic
 const cleanMemo = new WeakMap();
 function cleanStyle(style) {
   if (!style) return undefined;
+  const hit = cleanMemo.get(style);
+  if (hit !== undefined) return hit || undefined;
   let any = false;
   for (const k in style) { any = true; break; } // eslint-disable-line no-unused-vars
   if (!any) return undefined;
-  const hit = cleanMemo.get(style);
-  if (hit !== undefined) return hit || undefined;
   const out = {};
   for (const [k, v] of Object.entries(style)) if (v !== undefined && v !== null) out[k] = v;
   const res = Object.keys(out).length ? out : undefined;
@@ -259,7 +259,9 @@ export function makeCellRC(data, r, c) {
   if (data.link) cell.link = data.link; // 하이퍼링크: 주소(URL) 또는 '#시트!A1'
   if (data.cached !== undefined) cell.cached = data.cached;
   if (data.image?.src) cell.image = { ...data.image }; // 셀에 배치한 그림
-  if (cell.raw.startsWith('=') && cell.raw.length > 1 && style?.numFmt !== 'text') {
+  // 텍스트 서식 칸의 수식: 새로 입력하면 글자지만, 파일에 수식으로 저장된 것(fx)은 엑셀처럼 수식
+  if (data.fx) cell.fx = true;
+  if (cell.raw.startsWith('=') && cell.raw.length > 1 && (style?.numFmt !== 'text' || data.fx)) {
     cell.formula = true;
     let p;
     if (r !== undefined) {
@@ -295,6 +297,7 @@ export function cellData(cell) {
   if (cell.comment) d.comment = cell.comment;
   if (cell.link) d.link = cell.link;
   if (cell.image) d.image = { ...cell.image };
+  if (cell.fx) d.fx = true;
   // 입력이 바뀌어 다시 계산한 수식은 파일의 옛 계산 결과를 버림
   if (cell.cached !== undefined && cell.formula && !cell.dirty) d.cached = cell.cached;
   return d;
@@ -404,8 +407,15 @@ export class Workbook {
   emit() { for (const fn of this.listeners) fn(); }
 
   sheetIndexByName(name) {
+    // 이름 → 번호 기억 (수식 백만 개의 시트 참조도 빠르게). 시트를 옮기거나 이름을 바꿨으면 확인에서 걸러짐
+    const memo = (this.sheetNameMemo ??= new Map());
+    const hit = memo.get(name);
+    if (hit && this.sheets[hit.i] === hit.sheet && hit.sheet.name === hit.at) return hit.i;
     const n = name.toLowerCase();
-    return this.sheets.findIndex((s) => s.name.toLowerCase() === n);
+    const i = this.sheets.findIndex((s) => s.name.toLowerCase() === n);
+    if (i >= 0) memo.set(name, { i, sheet: this.sheets[i], at: this.sheets[i].name });
+    else memo.delete(name);
+    return i;
   }
 
   getCell(si, r, c) {
