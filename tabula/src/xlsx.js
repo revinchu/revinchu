@@ -32,7 +32,7 @@ const DEFAULT_FONT = '맑은 고딕';
 
 // ───────────────────────── 공통 ─────────────────────────
 // 엑셀 열 너비: 파일의 너비(w) × 기본 글꼴의 숫자 너비(MDW, 픽셀). 기본 글꼴이 맑은 고딕 11pt 면 MDW 8, Calibri 11pt 면 7
-const DIGIT_EM = { calibri: 0.507, 'calibri light': 0.49, '맑은 고딕': 0.55, 'malgun gothic': 0.55, arial: 0.556, '굴림': 0.5, gulim: 0.5, '굴림체': 0.5, '돋움': 0.5, dotum: 0.5, '돋움체': 0.5, '바탕': 0.5, batang: 0.5, '나눔고딕': 0.55, nanumgothic: 0.55, 'times new roman': 0.5, cambria: 0.556, 'segoe ui': 0.55, verdana: 0.636, tahoma: 0.546, 'meiryo ui': 0.55, 'ms gothic': 0.5, simsun: 0.5 };
+const DIGIT_EM = { calibri: 0.507, 'calibri light': 0.49, '맑은 고딕': 0.55, 'malgun gothic': 0.55, arial: 0.556, '굴림': 0.5, gulim: 0.5, '굴림체': 0.5, '돋움': 0.5, dotum: 0.5, '돋움체': 0.5, '바탕': 0.5, batang: 0.5, '나눔고딕': 0.6, nanumgothic: 0.6, 'nanum gothic': 0.6, 'times new roman': 0.5, cambria: 0.556, 'segoe ui': 0.55, verdana: 0.636, tahoma: 0.546, 'meiryo ui': 0.55, 'ms gothic': 0.5, simsun: 0.5 };
 export const digitWidth = (font) => Math.max(4, Math.round(((font?.size || 11) * 96) / 72 * (DIGIT_EM[String(font?.name ?? '맑은 고딕').toLowerCase()] ?? 0.53)));
 const width2pxM = (w, mdw) => Math.max(0, Math.trunc(((256 * w + Math.trunc(128 / mdw)) / 256) * mdw));
 const px2widthM = (px, mdw) => Math.max(0, Math.round((px / mdw) * 256) / 256);
@@ -1016,6 +1016,15 @@ function dmlColor(el, theme) {
   return `#${applyTint(hex.toUpperCase(), t).toLowerCase()}`;
 }
 
+/** 개체 좌표용 행 · 열 축 (시트 기본 크기 + 숨긴 행 · 열, 필터로 숨긴 행 포함 — 화면과 같음) */
+function objectAxes(sheet) {
+  const hiddenRows = [sheet.hiddenRows, sheet.filter?.hidden, ...(sheet.tables ?? []).map((t) => t.filter?.hidden)];
+  return {
+    colAxis: new Axis(sheet.defColW ?? DEFAULT_COL_WIDTH, sheet.colWidths, [sheet.hiddenCols], MAX_COLS),
+    rowAxis: new Axis(sheet.defRowH ?? DEFAULT_ROW_HEIGHT, sheet.rowHeights, hiddenRows, MAX_ROWS),
+  };
+}
+
 function readDrawing(files, path, sheet, ctx) {
   const out = { charts: [], images: [], shapes: [], _slicerBoxes: {} };
   let z = 0; // 겹치는 순서
@@ -1023,8 +1032,8 @@ function readDrawing(files, path, sheet, ctx) {
   if (!xml) return out;
   const root = parseXml(xml);
   const rels = relsOf(files, path);
-  const colAxis = new Axis(DEFAULT_COL_WIDTH, sheet.colWidths, [], MAX_COLS);
-  const rowAxis = new Axis(DEFAULT_ROW_HEIGHT, sheet.rowHeights, [], MAX_ROWS);
+  // 개체 위치는 화면 좌표(숨긴 행 · 열은 높이 0) — 엑셀처럼 숨긴 행 아래의 개체도 위로 올라옴
+  const { colAxis, rowAxis } = objectAxes(sheet);
   const point = (el) => {
     const n = (name) => Number(child(el, name)?.text ?? 0);
     return { x: colAxis.pos(n('col')) + n('colOff') / EMU, y: rowAxis.pos(n('row')) + n('rowOff') / EMU };
@@ -1082,7 +1091,8 @@ function readDrawing(files, path, sheet, ctx) {
       return para;
     });
     const rPr = descendants(child(el, 'txBody'), 'rPr')[0] ?? descendants(child(el, 'txBody'), 'defRPr')[0];
-    const algn = descendants(child(el, 'txBody'), 'pPr')[0]?.attrs.algn;
+    // 문단에 algn 이 없으면 목록 스타일, 그것도 없으면 DrawingML 기본값(왼쪽)
+    const algn = descendants(child(el, 'txBody'), 'pPr')[0]?.attrs.algn ?? lvl?.attrs.algn;
     const shape = {
       id: uid('sh'), kind: isText ? 'textbox' : prstKind(prst), ...round(box), z: ++z,
       fill, stroke, text,
@@ -1104,8 +1114,7 @@ function readDrawing(files, path, sheet, ctx) {
     const tc = rPr && dmlColor(child(rPr, 'solidFill'), ctx.theme);
     if (tc) shape.color = tc;
     else if (!isText && fill) shape.color = '#ffffff';
-    if (algn) shape.align = algn === 'ctr' ? 'center' : algn === 'r' ? 'right' : 'left';
-    else shape.align = isText ? 'left' : 'center';
+    shape.align = algn === 'ctr' ? 'center' : algn === 'r' ? 'right' : algn === 'just' || algn === 'dist' ? 'justify' : 'left';
     // 서식이 섞여 있으면 문단 · 조각 그대로 보관 (한 가지 서식이면 단순 글자로 충분)
     const flat = rich.flatMap((p) => p.runs);
     const same = (k) => flat.every((r) => r[k] === flat[0]?.[k]);
@@ -1123,6 +1132,7 @@ function readDrawing(files, path, sheet, ctx) {
     out.shapes.push(shape);
   };
 
+  const picSrc = new Map();
   const readPic = (el, box) => {
     const blip = descendants(el, 'blip')[0];
     const rel = blip && rels[rid(blip) ?? blip.attrs['r:embed']] ;
@@ -1134,7 +1144,14 @@ function readDrawing(files, path, sheet, ctx) {
     const mime = MIME[ext];
     if (!mime) { ctx.warnings.add(`지원하지 않는 그림 형식(${ext})은 가져오지 않았습니다.`); return; }
     const name = descendants(child(el, 'nvPicPr'), 'cNvPr')[0]?.attrs.name ?? '그림';
-    out.images.push({ id: uid('im'), name, ...round(box), z: ++z, src: `data:${mime};base64,${toBase64(bytes)}` });
+    const src = picSrc.get(target) ?? `data:${mime};base64,${toBase64(bytes)}`;
+    picSrc.set(target, src); // 같은 그림을 여러 번 쓰면 한 번만 변환
+    const im = { id: uid('im'), name, ...round(box), z: ++z, src };
+    // 그림 윤곽선 (a:ln 단색 채우기)
+    const ln = child(child(el, 'spPr'), 'ln');
+    const lc = ln && !child(ln, 'noFill') && dmlColor(child(ln, 'solidFill'), ctx.theme);
+    if (lc) { im.border = lc; im.borderW = Math.max(1, Math.round(Number(ln.attrs.w ?? 9525) / EMU)); }
+    out.images.push(im);
   };
 
   // 그룹 도형 안의 좌표 변환
@@ -3028,8 +3045,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {}) 
       drawingNo++;
       const drawingRels = [];
       const drel = (type, target) => { const id = `rId${drawingRels.length + 1}`; drawingRels.push(`<Relationship Id="${id}" Type="${REL}/${type}" Target="${target}"/>`); return id; };
-      const colAxis = new Axis(DEFAULT_COL_WIDTH, sheet.colWidths, [], MAX_COLS);
-      const rowAxis = new Axis(DEFAULT_ROW_HEIGHT, sheet.rowHeights, [], MAX_ROWS);
+      const { colAxis, rowAxis } = objectAxes(sheet);
       const anchorAt = (x, y) => {
         const c = colAxis.indexAt(Math.max(0, x));
         const r = rowAxis.indexAt(Math.max(0, y));
@@ -3062,7 +3078,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {}) 
           files[`xl/media/image${mediaNo}.${ext}`] = fromBase64(m[2]);
           const id = drel('image', `../media/image${mediaNo}.${ext}`);
           objId++;
-          parts.push(anchor(im, `<xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${objId}" name="${esc(im.name || `그림 ${objId - 1}`)}"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="${id}"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>${xfrm(im)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic>`));
+          parts.push(anchor(im, `<xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${objId}" name="${esc(im.name || `그림 ${objId - 1}`)}"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="${id}"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>${xfrm(im)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${/^#[0-9a-f]{6}$/i.test(im.border ?? "") ? `<a:ln w="${Math.round((im.borderW ?? 2) * EMU)}"><a:solidFill><a:srgbClr val="${im.border.replace('#', '').toUpperCase()}"/></a:solidFill></a:ln>` : ''}</xdr:spPr></xdr:pic>`));
         } else if (kind === 'slicerTable' || kind === 'slicerPivot') {
           objId++;
           parts.push(slicerAnchorXml(o.sl, o.name, objId, anchorAt, kind === 'slicerTable' ? 'table' : 'pivot'));
@@ -3199,7 +3215,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {}) 
       + (vba || olPr || sheet.tabColor ? `<sheetPr${vba ? ` codeName="${esc(vba.sheetCodes?.[sheet.name] ?? `Sheet${si + 1}`)}"` : ''}>${sheet.tabColor ? `<tabColor rgb="${argb(sheet.tabColor)}"/>` : ''}${olPr}</sheetPr>` : '')
       + `<dimension ref="${dim}"/>`
       + `<sheetViews><sheetView${sheet.noGrid ? ' showGridLines="0"' : ''}${sheet.zoom && sheet.zoom !== 100 ? ` zoomScale="${sheet.zoom}" zoomScaleNormal="${sheet.zoom}"` : ''}${sheet.view && (sheet.view.top || sheet.view.left) ? ` topLeftCell="${cellName(sheet.view.top, sheet.view.left)}"` : ''} workbookViewId="0"${si === (wb.sheets[activeSheet]?.state && wb.sheets[activeSheet].state !== 'visible' ? Math.max(0, wb.sheets.findIndex((x) => !x.state || x.state === 'visible')) : activeSheet) ? ' tabSelected="1"' : ''}>${pane}</sheetView></sheetViews>`
-      + `<sheetFormatPr${sheet.defColW ? ` defaultColWidth="${px2widthM(sheet.defColW, wmdw)}"` : ''} defaultRowHeight="${px2pt(sheet.defRowH ?? DEFAULT_ROW_HEIGHT)}"${sheet.defRowH ? ' customHeight="1"' : ''}${olRowMax ? ` outlineLevelRow="${olRowMax}"` : ''}${olColMax ? ` outlineLevelCol="${olColMax}"` : ''}/>`
+      + `<sheetFormatPr defaultColWidth="${px2widthM(sheet.defColW ?? DEFAULT_COL_WIDTH, wmdw)}" defaultRowHeight="${px2pt(sheet.defRowH ?? DEFAULT_ROW_HEIGHT)}"${sheet.defRowH ? ' customHeight="1"' : ''}${olRowMax ? ` outlineLevelRow="${olRowMax}"` : ''}${olColMax ? ` outlineLevelCol="${olColMax}"` : ''}/>`
       + (colsXml ? `<cols>${colsXml}</cols>` : '')
       + `<sheetData>${rowXml}</sheetData>`
       + protectXml(sheet.protect)

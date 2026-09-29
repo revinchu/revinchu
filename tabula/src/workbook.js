@@ -555,6 +555,7 @@ export class Workbook {
 
   spillValueAt(si, r, c) {
     this.ensureSpills();
+    if (!this.spillOwner.size) return null;
     const owner = this.spillOwner.get(`${si}:${r},${c}`);
     if (!owner) return null;
     const sp = this.spills.get(owner);

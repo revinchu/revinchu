@@ -530,6 +530,9 @@ export function pivotSourceData(wb, def) {
     si = wb.sheetIndexByName(def.source);
     if (si < 0 || !def.range) return null;
     ref = def.range;
+    // 열 전체(A1:T1048576) 원본: 사용 범위 + 빈 행 하나까지만 읽음 (엑셀의 '(비어 있음)' 항목은 그대로)
+    const used = wb.usedRange?.(si);
+    if (used && ref.r2 > used.rows) ref = { ...ref, r2: Math.max(ref.r1 + 1, used.rows) };
   }
   // 데이터가 열 블록에 있으면 값을 복사하지 않고 블록의 형식화 배열을 그대로 씀 (천만 행도 즉시)
   const bc = blockCube(wb, si, ref, names);
