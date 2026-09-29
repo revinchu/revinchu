@@ -143,7 +143,7 @@ export function resolveChart(ch, api) {
       return { name, values: vals.map((v) => (isNum(v) ? v : null)), x: xs ? xs.map((v) => (isNum(v) ? v : null)) : null, ...(size ? { size } : {}) };
     });
     const n = Math.max(0, ...series.map((s) => s.values.length));
-    const categories = catRef ? flatRef(api.values(catRef), true).map(label) : Array.from({ length: n }, (_, i) => String(i + 1));
+    const categories = catRef ? (api.texts ? flatRef(api.texts(catRef), true) : flatRef(api.values(catRef), true).map(label)) : Array.from({ length: n }, (_, i) => String(i + 1));
     base = { categories, series };
   } else base = chartData(api.range(ch), ch.type === 'combo' ? 'column' : ch.type, !!ch.byRows);
   const fmt = ch.seriesFmt ?? [];
@@ -155,7 +155,7 @@ export function resolveChart(ch, api) {
 /** 차트 모델 → 그릴 데이터 (범위 · 계열 참조 · 피벗 차트). hostSi: 차트가 있는 시트 */
 export function chartModelData(wb, hostSi, ch) {
   const sheetOf = (name) => { const i = name ? wb.sheetIndexByName(name) : hostSi; return i >= 0 ? i : hostSi; };
-  const read = (s, rg) => {
+  const read = (s, rg, text = false) => {
     // 행이 아주 많으면 전체 범위에서 고르게 2,000개를 뽑음 (앞부분만 그리지 않게)
     const total = rg.r2 - rg.r1 + 1;
     const step = total > 2000 ? (total - 1) / 1999 : 1;
@@ -163,7 +163,13 @@ export function chartModelData(wb, hostSi, ch) {
     for (let k = 0; k < Math.min(total, 2000); k++) {
       const r = rg.r1 + Math.round(k * step);
       const row = [];
-      for (let c = rg.c1; c <= Math.min(rg.c2, rg.c1 + 100); c++) row.push(wb.getValue(s, r, c));
+      for (let c = rg.c1; c <= Math.min(rg.c2, rg.c1 + 100); c++) {
+        const v = wb.getValue(s, r, c);
+        if (!text) { row.push(v); continue; }
+        // 항목 축 이름: 날짜 등 셀 표시 형식을 따름
+        const st = typeof v === 'number' ? wb.styleAt(s, r, c) : null;
+        row.push(st && (st.numFmt && st.numFmt !== 'general') ? formatValue(v, st).text : label(v));
+      }
       rows.push(row);
     }
     return rows;
@@ -180,6 +186,10 @@ export function chartModelData(wb, hostSi, ch) {
     values: (ref) => {
       if (ref.name) { const rg = nameRange(ref); return rg ? read(sheetOf(rg.sheet), rg) : []; }
       return read(sheetOf(ref.sheet ?? ch.sheet), ref);
+    },
+    texts: (ref) => {
+      if (ref.name) { const rg = nameRange(ref); return rg ? read(sheetOf(rg.sheet), rg, true) : []; }
+      return read(sheetOf(ref.sheet ?? ch.sheet), ref, true);
     },
     pivot: (p) => {
       const sh = wb.sheets[sheetOf(p.sheet)];
@@ -518,7 +528,9 @@ export function renderChartSvg(chart, data) {
     // 항목 축 레이블
     const band = (horizontal ? area.h : area.w) / Math.max(1, n);
     const maxChars = Math.max(2, Math.floor(band / (CW * 1.4)));
-    const every = Math.max(1, Math.ceil(n / Math.max(1, Math.floor((horizontal ? area.h : area.w) / 28))));
+    // 이름 길이에 맞춰 건너뛰기 (가로 축은 가장 긴 이름이 잘리지 않을 만큼)
+    const longest = horizontal ? 0 : Math.min(14, Math.max(0, ...categories.slice(0, 400).map((c) => [...String(c)].length)));
+    const every = Math.max(1, Math.ceil(n / Math.max(1, Math.floor((horizontal ? area.h : area.w) / (horizontal ? 28 : Math.max(28, longest * CW * 1.15 + 8))))));
     if (chart.gridX) {
       for (let i = 1; i < n; i++) {
         const q = ((horizontal ? area.y : area.x) + band * i).toFixed(1);
@@ -666,7 +678,9 @@ function cartesian(ctx, vals, { horizontal = false, code = null, cats = null, ze
   const n = cats?.length ?? 0;
   const band = (horizontal ? area.h : area.w) / Math.max(1, n);
   if (cats) {
-    const every = Math.max(1, Math.ceil(n / Math.max(1, Math.floor((horizontal ? area.h : area.w) / 28))));
+    // 이름 길이에 맞춰 건너뛰기 (가로 축은 가장 긴 이름이 잘리지 않을 만큼)
+    const longest = horizontal ? 0 : Math.min(14, Math.max(0, ...cats.slice(0, 400).map((c) => [...String(c)].length)));
+    const every = Math.max(1, Math.ceil(n / Math.max(1, Math.floor((horizontal ? area.h : area.w) / (horizontal ? 28 : Math.max(28, longest * CW * 1.15 + 8))))));
     cats.forEach((c, i) => {
       if (i % every) return;
       const mid = (horizontal ? area.y : area.x) + band * (i + 0.5);

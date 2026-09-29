@@ -230,12 +230,16 @@ export const TABS = [
         large('dedupe', 'dedupe', '중복된 항목 제거'),
         large('dataValidation', 'validation', '데이터 유효성 검사', { menu: 'validation', split: true }),
       ]),
-      group('예측', [large('whatIfMenu', 'chartLine', '가상 분석', { menu: 'whatIf' })]),
+      group('예측', [large('whatIfMenu', 'chartLine', '가상 분석', { menu: 'whatIf' }), large('forecastSheet', 'chartLine', '예측 시트', { title: '시간 표시줄의 값으로 미래 값을 예측하는 새 워크시트 (FORECAST.ETS)' })]),
       group('개요', [
         large('outlineGroup', 'rowInsert', '그룹', { title: '그룹 (Shift+Alt+→)', menu: 'outlineGroupMenu', split: true }),
         large('outlineUngroup', 'delete', '그룹 해제', { title: '그룹 해제 (Shift+Alt+←)', menu: 'outlineUngroupMenu', split: true }),
         large('subtotal', 'autosum', '부분합', { title: '그룹마다 요약 행 삽입 (SUBTOTAL)' }),
         col(medium('outlineShow', 'plus', '세부 정보 표시'), medium('outlineHide', 'collapse', '세부 정보 숨기기')),
+      ]),
+      group('분석', [
+        large('dataAnalysis', 'stats', '데이터 분석', { title: '통계 데이터 분석 도구 (상관 · 회귀 · 기술 통계 · t-검정 · 히스토그램 …)' }),
+        large('solver', 'calc', '해 찾기', { title: '제한 조건을 만족하면서 목표 셀을 최대 · 최소 · 지정값으로 만드는 변수 값 찾기' }),
       ]),
     ],
   },

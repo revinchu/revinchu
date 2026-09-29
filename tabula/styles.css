@@ -963,3 +963,15 @@ legend { padding: 0 4px; color: #444; }
 .fc-fontlist { width: 100%; font-size: 13px; }
 .fc-fillprev { height: 48px; border: 1px solid #c8c8c8; border-radius: 2px; }
 .mi-swatch { width: 14px; height: 14px; border: 1px solid #999; margin-right: 6px; flex: none; display: inline-block; vertical-align: middle; }
+
+/* 데이터 분석 · 예측 시트 · 시나리오 · 해 찾기 대화상자 */
+.an-dlg { display: flex; flex-direction: column; gap: 7px; }
+.an-row { display: grid; grid-template-columns: 150px 1fr auto; align-items: center; gap: 6px; }
+.an-row > span:first-child { color: var(--text-muted, #555); }
+.an-check { display: flex; align-items: center; gap: 6px; }
+.an-check input[type="text"], .an-check .ref-input { flex: 1; }
+.an-head { font-weight: 600; margin-top: 6px; border-bottom: 1px solid var(--border, #ddd); padding-bottom: 2px; }
+.an-list { width: 100%; min-height: 180px; flex: 1; }
+.ref-input { font-family: Consolas, 'D2Coding', monospace; }
+.ref-input:focus { outline: 2px dashed #217346; outline-offset: -2px; }
+.an-dlg textarea { width: 100%; font-family: Consolas, 'D2Coding', monospace; }

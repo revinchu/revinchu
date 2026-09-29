@@ -16,11 +16,23 @@ function keyOf(key) {
   return k === null || k === undefined ? 0 : k;
 }
 
-/** 정확히 일치 (문자열은 대소문자 무시, wildcard 면 * ? ~ 지원) */
-export function exactIndex(vals, key, { wildcard = true, reverse = false } = {}) {
+/** 정규식 (엑셀 REGEXTEST 와 같이 부분 일치, 기본은 대소문자 구분) */
+export function lookupRegex(pattern, ci = false) {
+  try {
+    return new RegExp(toStr(pattern), ci ? 'iu' : 'u');
+  } catch {
+    throw ERR.VALUE;
+  }
+}
+const regexText = (v) => (typeof v === 'boolean' ? (v ? 'TRUE' : 'FALSE') : String(v));
+
+/** 정확히 일치 (문자열은 대소문자 무시, wildcard 면 * ? ~ 지원, regex 면 정규식) */
+export function exactIndex(vals, key, { wildcard = true, reverse = false, regex = null } = {}) {
   const k = keyOf(key);
   let test;
-  if (typeof k === 'string' && wildcard && /[*?~]/.test(k)) {
+  if (regex) {
+    test = (v) => !blank(v) && !isError(v) && regex.test(regexText(v));
+  } else if (typeof k === 'string' && wildcard && /[*?~]/.test(k)) {
     const re = wildcardRegex(k);
     test = (v) => typeof v === 'string' && re.test(v);
   } else if (typeof k === 'string') {
@@ -61,9 +73,11 @@ export function binaryIndex(vals, key, desc = false) {
   return found;
 }
 
-/** XLOOKUP/XMATCH 공통: matchMode 0 정확, -1 작거나 같은, 1 크거나 같은, 2 와일드카드. searchMode 1, -1, 2, -2 */
+/** XLOOKUP/XMATCH 공통: matchMode 0 정확, -1 작거나 같은, 1 크거나 같은, 2 와일드카드, 3 정규식. searchMode 1, -1, 2, -2 */
 function xIndex(vals, key, matchMode, searchMode) {
   const k = keyOf(key);
+  // 정규식은 정렬 여부와 관계없이 차례로 찾음 (-2/2 는 방향만)
+  if (matchMode === 3) return exactIndex(vals, k, { regex: lookupRegex(k), reverse: searchMode < 0 });
   if (searchMode === 2 || searchMode === -2) {
     const desc = searchMode === -2;
     // 정렬된 배열: 이진 검색
@@ -170,6 +184,31 @@ export const LOOKUP = {
     if (i < 0) throw ERR.NA;
     return t.rows[ri - 1][i] ?? 0;
   }, [0, 2, 3]),
+  // 위셀 확장: 정규식으로 첫 열에서 찾기 (VLOOKUP 과 같은 모양, 일치하는 첫 행)
+  REGEXVLOOKUP: lift(([pattern, table, col, ci]) => {
+    const t = asRange(table);
+    const ci1 = toInt(col);
+    if (ci1 < 1) throw ERR.VALUE;
+    if (ci1 > t.width) throw ERR.REF;
+    const i = exactIndex(t.rows.map((row) => row[0]), pattern, { regex: lookupRegex(pattern, optInt(ci, 0) === 1) });
+    if (i < 0) throw ERR.NA;
+    return t.rows[i][ci1 - 1] ?? 0;
+  }, [0, 2, 3]),
+  REGEXHLOOKUP: lift(([pattern, table, row, ci]) => {
+    const t = asRange(table);
+    const ri = toInt(row);
+    if (ri < 1) throw ERR.VALUE;
+    if (ri > t.height) throw ERR.REF;
+    const i = exactIndex(t.rows[0], pattern, { regex: lookupRegex(pattern, optInt(ci, 0) === 1) });
+    if (i < 0) throw ERR.NA;
+    return t.rows[ri - 1][i] ?? 0;
+  }, [0, 2, 3]),
+  // 위셀 확장: MATCH 의 정규식판 (1부터 시작하는 위치)
+  REGEXMATCHPOS: lift(([pattern, look, ci]) => {
+    const i = exactIndex(vectorOf(look), pattern, { regex: lookupRegex(pattern, optInt(ci, 0) === 1) });
+    if (i < 0) throw ERR.NA;
+    return i + 1;
+  }, [0, 2]),
   LOOKUP: lift(([key, look, result]) => {
     const l = asRange(look);
     let keys;
@@ -197,7 +236,10 @@ export const LOOKUP = {
   }, [0, 2]),
   XMATCH: lift(([key, look, mm, sm]) => {
     const vals = vectorOf(look);
-    const i = xIndex(vals, key, optInt(mm, 0), optInt(sm, 1));
+    const matchMode = optInt(mm, 0);
+    const searchMode = optInt(sm, 1);
+    if (![0, -1, 1, 2, 3].includes(matchMode) || ![1, -1, 2, -2].includes(searchMode)) throw ERR.VALUE;
+    const i = xIndex(vals, key, matchMode, searchMode);
     if (i < 0) throw ERR.NA;
     return i + 1;
   }, [0, 2, 3]),
@@ -212,7 +254,7 @@ export const LOOKUP = {
     const vals = byRow ? l.rows.map((x) => x[0]) : l.rows[0];
     const matchMode = optInt(val(mm, ev), 0);
     const searchMode = optInt(val(sm, ev), 1);
-    if (![0, -1, 1, 2].includes(matchMode) || ![1, -1, 2, -2].includes(searchMode)) throw ERR.VALUE;
+    if (![0, -1, 1, 2, 3].includes(matchMode) || ![1, -1, 2, -2].includes(searchMode)) throw ERR.VALUE;
     const one = (k) => {
       const i = xIndex(vals, k, matchMode, searchMode);
       if (i < 0) {

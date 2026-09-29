@@ -898,6 +898,15 @@ function* readSheet(files, path, ctx) {
   }
   const pg = pageFromXml({ printOptions: child(root, 'printOptions'), pageMargins: child(root, 'pageMargins'), pageSetup: child(root, 'pageSetup'), headerFooter: child(root, 'headerFooter'), fitToPage: ['1', 'true'].includes(child(child(root, 'sheetPr'), 'pageSetUpPr')?.attrs.fitToPage) });
   if (pg) sheet.page = pg;
+  const scn = child(root, 'scenarios');
+  if (scn) {
+    // 시나리오 관리자: <scenario name> + <inputCells r val>
+    const list = kids(scn, 'scenario').map((x) => {
+      const cells = kids(x, 'inputCells').map((ic) => { const p = parseRangeName(ic.attrs.r ?? ''); return p ? { r: p.r1, c: p.c1, v: ic.attrs.val ?? '' } : null; }).filter(Boolean);
+      return cells.length ? { name: x.attrs.name ?? '', comment: x.attrs.comment ?? '', user: x.attrs.user ?? '', locked: x.attrs.locked !== '0', hidden: x.attrs.hidden === '1', cells: cells.map(({ r, c }) => ({ r, c })), values: cells.map((c) => c.v) } : null;
+    }).filter(Boolean);
+    if (list.length) sheet.scenarios = list;
+  }
   const sp = child(root, 'sheetProtection');
   if (sp) { const p = protectFromAttrs(sp.attrs); if (p) sheet.protect = p; }
   const olp = child(child(root, 'sheetPr'), 'outlinePr');
@@ -906,6 +915,13 @@ function* readSheet(files, path, ctx) {
     if (olp.attrs.summaryRight === '0' || olp.attrs.summaryRight === 'false') sheet.outline.right = false;
   }
   return sheet;
+}
+
+/** 시나리오 관리자 → <scenarios> */
+function scenariosXml(list) {
+  if (!list?.length) return '';
+  const cells = [...new Set(list.flatMap((sc) => sc.cells.map((p) => cellName(p.r, p.c))))];
+  return `<scenarios current="0" show="0" sqref="${cells.join(' ')}">${list.map((sc) => `<scenario name="${esc(sc.name)}"${sc.locked === false ? ' locked="0"' : ' locked="1"'}${sc.hidden ? ' hidden="1"' : ''} count="${sc.cells.length}"${sc.user ? ` user="${esc(sc.user)}"` : ''}${sc.comment ? ` comment="${esc(sc.comment)}"` : ''}>${sc.cells.map((p, i) => `<inputCells r="${cellName(p.r, p.c)}" val="${esc(String(sc.values[i] ?? ''))}"/>`).join('')}</scenario>`).join('')}</scenarios>`;
 }
 
 const DV_TYPES = new Set(['whole', 'decimal', 'list', 'date', 'time', 'textLength', 'custom']);
@@ -3276,6 +3292,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
       + (colsXml ? `<cols>${colsXml}</cols>` : '')
       + `<sheetData>${rowXml}</sheetData>`
       + protectXml(sheet.protect)
+      + scenariosXml(sheet.scenarios)
       + autoFilter + merges + cf + dataValidations + hyperlinks
       + pgx.printOptions + pgx.margins + pgx.setup + pgx.headerFooter
       + drawing + legacy + tableParts + extLst

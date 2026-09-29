@@ -251,6 +251,17 @@ const SCALAR = {
     if (!m) throw ERR.VALUE;
     return st + chars(tail.slice(0, m.index)).length;
   },
+  // 위셀 확장: SEARCH 의 정규식판 — 처음 일치하는 위치 (없으면 #VALUE!)
+  REGEXSEARCH: ([pattern, s, start, ci]) => {
+    const st = optInt(start, 1);
+    const text = chars(toStr(s));
+    if (st < 1 || st > text.length + 1) throw ERR.VALUE;
+    const re = makeRegex(toStr(pattern), optInt(ci, 0) === 1);
+    const tail = text.slice(st - 1).join('');
+    const m = re.exec(tail);
+    if (!m) throw ERR.VALUE;
+    return st + chars(tail.slice(0, m.index)).length;
+  },
   EXACT: ([a, b]) => toStr(a) === toStr(b),
   VALUE: ([s]) => {
     const v = scalar(s);

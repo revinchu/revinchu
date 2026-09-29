@@ -55,6 +55,11 @@ import { OBJECT_PROPS, OBJECT_LABEL, SHAPE_KINDS, SHAPE_GROUPS, LINE_SHAPES, new
 import { extractVbaModules, fromBase64 } from './vba.js';
 import { findMatches, nextMatch, replaceText } from './find.js';
 import {
+  ANALYSIS_TOOLS, AnalysisError, splitGroups, descriptive, matrixTool, regression, histogram, rankPercentile, tTest, zTest, fTest, anova1, anova2,
+  movingAverage, expSmoothing, randomNumbers, sampling, solveMin,
+} from './analysis.js';
+import { timeAxis } from './ets.js';
+import {
   CATEGORIES as FMT_CATEGORIES, CURRENCY_SYMBOLS, NEGATIVE_STYLES, DATE_TYPES, TIME_TYPES, FRACTION_TYPES, SPECIAL_TYPES, CUSTOM_LIST, buildCode, describeCode,
 } from './fmtpresets.js';
 
@@ -246,6 +251,7 @@ function updateSelectionUI() {
   dom.fxEnter.disabled = !editing;
   refreshPivotPane();
   gv.renderSelection();
+  if (refPick) pickRef();
   positionEditor();
   updateStats();
   updateRibbon();
@@ -2377,7 +2383,7 @@ function sparkEditDialog() {
 
 // ───────────────────────── 시트 보호 ─────────────────────────
 // 보호된 시트에서 명령마다 필요한 권한 (없는 명령은 선택한 셀이 모두 잠기지 않았을 때만)
-const PROTECT_FREE = new Set(['undo', 'redo', 'save', 'open', 'backstage', 'print', 'copy', 'find', 'goto', 'prevSheet', 'nextSheet', 'selectRegion',
+const PROTECT_FREE = new Set(['dataAnalysis', 'forecastSheet', 'scenarioManager', 'solver', 'undo', 'redo', 'save', 'open', 'backstage', 'print', 'copy', 'find', 'goto', 'prevSheet', 'nextSheet', 'selectRegion',
   'newWorkbook', 'pivotFieldList', 'tracePrecedents', 'traceDependents', 'removeArrows', 'evaluateFormula', 'errorCheck', 'watchWindow', 'gotoSpecial',
   'outlineShow', 'outlineHide', 'freezePanes', 'freezeTop', 'freezeFirstCol', 'circleInvalid', 'clearCircles', 'macros', 'prevComment', 'nextComment',
   'workbookStats', 'toggleGrid', 'togglePrintGrid', 'toggleFormulaBar', 'toggleHeaders', 'toggleFormulas', 'toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100',
@@ -2668,6 +2674,676 @@ function dataTableDialog() {
     toast(`데이터 표: ${out.length}개 칸을 계산했습니다 (값으로 입력됨, 입력 값을 바꾸면 다시 실행하세요).`);
     return undefined;
   }, { note: '행 입력 셀만 지정하면 첫 열에 수식, 열 입력 셀만 지정하면 첫 행에 수식, 둘 다 지정하면 왼쪽 위 모서리에 수식을 두세요.' });
+}
+
+// ───────────────────────── 데이터 분석 · 예측 시트 · 시나리오 관리자 ─────────────────────────
+// 범위 입력 칸: 모덜리스 대화상자에서 칸을 누른 뒤 시트에서 끌어 선택하면 주소가 들어감 (엑셀 RefEdit)
+let refPick = null;
+const selKey = () => `${si}:${sel.r1},${sel.c1},${sel.r2},${sel.c2}`;
+function refText(rg, s = si, withSheet = false) {
+  const a = (r, c) => `$${colToName(c)}$${r + 1}`;
+  const t = rg.r1 === rg.r2 && rg.c1 === rg.c2 ? a(rg.r1, rg.c1) : `${a(rg.r1, rg.c1)}:${a(rg.r2, rg.c2)}`;
+  return withSheet ? `${quoteSheetName(wb.sheets[s].name)}!${t}` : t;
+}
+function pickRef() {
+  if (!refPick?.input.isConnected) { refPick = null; return; }
+  const k = selKey();
+  if (k === refPick.key) return;
+  refPick.key = k;
+  refPick.input.value = refText(usedClip(sel), si, si !== refPick.home);
+}
+/** 'Sheet 2'!$A$1:$B$9 · A1:B9 → { si, rg } (열 전체 · 행 전체는 사용 범위로 자름) */
+function parseRefInput(text) {
+  let body = String(text ?? '').trim();
+  if (!body) return null;
+  let s = si;
+  const m = /^(?:'((?:[^']|'')+)'|([^'!]+))!(.+)$/.exec(body);
+  if (m) {
+    s = wb.sheetIndexByName((m[1] ?? m[2]).replace(/''/g, "'"));
+    if (s < 0) return null;
+    body = m[3];
+  }
+  const rg = parseRangeName(body.replace(/\$/g, ''));
+  if (!rg) return null;
+  const u = wb.usedRange(s);
+  return { si: s, rg: { r1: rg.r1, c1: rg.c1, r2: Math.min(rg.r2, Math.max(rg.r1, u.rows - 1)), c2: Math.min(rg.c2, Math.max(rg.c1, u.cols - 1)) } };
+}
+function refInput(value = '', home = si) {
+  const inp = el('input', { type: 'text', class: 'ref-input', value, spellcheck: 'false' });
+  inp.addEventListener('focus', () => { refPick = { input: inp, key: selKey(), home }; });
+  return inp;
+}
+const readBlock = (p) => {
+  const out = [];
+  for (let r = p.rg.r1; r <= p.rg.r2; r++) {
+    const row = [];
+    for (let c = p.rg.c1; c <= p.rg.c2; c++) { const v = wb.getValue(p.si, r, c); row.push(v === '' || v === undefined ? null : v); }
+    out.push(row);
+  }
+  return out;
+};
+function confirmBox(title, msg) {
+  return new Promise((resolve) => {
+    openDialog({ title, body: el('div', { style: { whiteSpace: 'pre-wrap' } }, msg), width: 380, onClose: () => resolve(false), buttons: [{ label: '확인', primary: true, action: () => { resolve(true); } }, { label: '취소' }] });
+  });
+}
+const nextSheetName = (base) => { let n = 1; let name = base; while (wb.sheetIndexByName(name) >= 0) name = `${base} (${++n})`; return name.slice(0, 31); };
+
+/** 분석 결과 표를 시트에 쓰기 → { si, r, c, h, w } */
+function writeAnalysis(res, dest) {
+  const rows = res.rows;
+  const h = rows.length;
+  const w = Math.max(1, ...rows.map((r) => r.length));
+  return wb.transact(() => {
+    let at = dest.si;
+    if (dest.newSheet) at = wb.addSheet(nextSheetName(dest.newSheet), si + 1);
+    const r0 = dest.newSheet ? 0 : dest.r;
+    const c0 = dest.newSheet ? 0 : dest.c;
+    const heads = new Set(res.heads ?? []);
+    rows.forEach((row, i) => {
+      for (let j = 0; j < w; j++) {
+        const v = row[j];
+        const style = {};
+        if (heads.has(i)) { style.italic = true; style.bb = true; if (i === 0 || rows[i - 1]?.length === 0 || rows[i - 1]?.every((x) => x === null || x === undefined)) style.bt = true; }
+        if (res.firstColBold && j === 0 && i > 0) style.italic = true;
+        if (res.pct?.has(`${i},${j}`)) { style.numFmt = 'percent'; style.decimals = 2; }
+        if (v === null || v === undefined) {
+          if (Object.keys(style).length && row.length) wb.setCellData(at, r0 + i, c0 + j, { raw: '', style });
+          else if (!dest.newSheet && wb.getCell(at, r0 + i, c0 + j)) wb.setCellData(at, r0 + i, c0 + j, null);
+          continue;
+        }
+        const raw = typeof v === 'number' ? String(v) : typeof v === 'string' ? `'${v}` : v.f ?? v.err ?? '';
+        wb.setCellData(at, r0 + i, c0 + j, { raw, ...(Object.keys(style).length ? { style } : {}) });
+      }
+    });
+    if (dest.newSheet) for (let j = 0; j < w; j++) wb.setColWidth(at, j, j === 0 ? 150 : 100);
+    return { si: at, r: r0, c: c0, h, w };
+  }, meta());
+}
+
+/** 분석 도구 대화상자 공통: fields 는 입력 칸 설명, run(v, get) 은 결과 또는 { write(dest) } */
+let anSeq = 0;
+function toolDialog(title, fields, run, { output = true, note } = {}) {
+  const home = si;
+  const inputs = {};
+  const gid = `an${++anSeq}`; // 라디오 묶음 이름 (대화상자마다 따로)
+  const cur = usedClip(sel);
+  const selRef = isSingle(cur) ? '' : refText(cur);
+  const line = (label, input, extra) => el('label', { class: 'an-row' }, el('span', {}, label), input, extra ?? null);
+  const body = el('div', { class: 'an-dlg' }, note ? el('div', { class: 'muted' }, note) : null, fields.map((f) => {
+    if (f.k === 'ref') { inputs[f.name] = refInput(f.value ?? (f.fill ? selRef : ''), home); return line(f.label, inputs[f.name]); }
+    if (f.k === 'num') { inputs[f.name] = el('input', { type: 'number', value: f.value ?? '', step: f.step ?? 'any' }); return line(f.label, inputs[f.name]); }
+    if (f.k === 'text') { inputs[f.name] = el('input', { type: 'text', value: f.value ?? '' }); return line(f.label, inputs[f.name]); }
+    if (f.k === 'check') { inputs[f.name] = el('input', { type: 'checkbox', checked: !!f.value }); return el('label', { class: 'an-check' }, inputs[f.name], f.label); }
+    if (f.k === 'checknum') {
+      inputs[f.name] = el('input', { type: 'checkbox', checked: !!f.value });
+      inputs[`${f.name}N`] = el('input', { type: 'number', value: f.num, step: 'any', style: { width: '70px' } });
+      return el('label', { class: 'an-check' }, inputs[f.name], f.label, inputs[`${f.name}N`], f.unit ?? '');
+    }
+    if (f.k === 'select') { inputs[f.name] = el('select', {}, f.options.map(([v, l]) => el('option', { value: v, selected: v === f.value }, l))); return line(f.label, inputs[f.name]); }
+    if (f.k === 'group') {
+      inputs.byRows = el('input', { type: 'radio', name: `${gid}-grp` });
+      const cols = el('input', { type: 'radio', name: `${gid}-grp`, checked: true });
+      return el('div', { class: 'an-row' }, el('span', {}, '데이터 방향:'), el('label', { class: 'an-check' }, cols, '열'), el('label', { class: 'an-check' }, inputs.byRows, '행'));
+    }
+    if (f.k === 'head') return el('div', { class: 'an-head' }, f.label);
+    return null;
+  }), output ? [
+    el('div', { class: 'an-head' }, '출력 옵션'),
+    el('label', { class: 'an-check' }, inputs.outRange = el('input', { type: 'radio', name: `${gid}-out` }), '출력 범위:', inputs.outRef = refInput('', home)),
+    el('label', { class: 'an-check' }, inputs.outSheet = el('input', { type: 'radio', name: `${gid}-out`, checked: true }), '새로운 워크시트:', inputs.sheetName = el('input', { type: 'text', value: '', placeholder: title.split(':')[0] })),
+  ] : null);
+  if (output) inputs.outRef.addEventListener('focus', () => { inputs.outRange.checked = true; });
+  const read = () => Object.fromEntries(Object.entries(inputs).map(([k, i]) => [k, i.type === 'checkbox' || i.type === 'radio' ? i.checked : i.type === 'number' ? (i.value === '' ? null : Number(i.value)) : i.value]));
+  const get = (name, label) => {
+    const p = parseRefInput(inputs[name].value);
+    if (!p) throw new AnalysisError(`${label}가 올바른 범위가 아닙니다.`);
+    return p;
+  };
+  const submit = async () => {
+    const v = read();
+    let dest = null;
+    try {
+      if (output) {
+        if (v.outRange) {
+          const p = parseRefInput(v.outRef);
+          if (!p) throw new AnalysisError('출력 범위를 지정하세요.');
+          dest = { si: p.si, r: p.rg.r1, c: p.rg.c1 };
+        } else dest = { newSheet: v.sheetName.trim() || title.split(':')[0].replace(/[\\/?*[\]]/g, '') };
+      }
+      const res = run(v, get, dest);
+      if (!res) return;
+      if (dest && !dest.newSheet) {
+        const h = res.rows.length;
+        const w = Math.max(1, ...res.rows.map((r) => r.length));
+        let busy = false;
+        for (let r = dest.r; r < dest.r + h && !busy; r++) for (let c = dest.c; c < dest.c + w; c++) if (wb.getCell(dest.si, r, c)?.raw) { busy = true; break; }
+        if (busy && !(await confirmBox(title, '출력 범위에 이미 데이터가 있습니다. 덮어쓰시겠습니까?'))) return;
+      }
+      dlg.close();
+      const out = dest ? writeAnalysis(res, dest) : null;
+      if (out) {
+        if (out.si !== si) switchSheet(out.si, false);
+        selectRange({ r1: out.r, c1: out.c, r2: out.r + out.h - 1, c2: out.c + out.w - 1 }, 'cells', { r: out.r, c: out.c });
+        res.after?.(out);
+      }
+    } catch (e) {
+      if (e instanceof AnalysisError) alertDialog(title, e.message);
+      else throw e;
+    }
+  };
+  const dlg = openDialog({
+    title, body, width: 470, modeless: true, onClose: () => { refPick = null; },
+    buttons: [{ label: '확인', primary: true, action: () => { submit(); return false; } }, { label: '취소' }],
+  });
+  return dlg;
+}
+
+/** 입력 범위 → 변수 목록 (이름표 · 방향 옵션) */
+function anGroups(v, get, name = 'input', label = '입력 범위') {
+  const p = get(name, label);
+  const g = splitGroups(readBlock(p), { byRows: !!v.byRows, labels: !!v.labels });
+  if (!g.some((x) => x.vals.length)) throw new AnalysisError(`${label}에 숫자가 없습니다.`);
+  return { p, g };
+}
+/** 한 줄(열 또는 행) 입력 → 값 목록과 이름표 */
+function vectorOf2(v, get, name, label) {
+  const p = get(name, label);
+  const rows = readBlock(p);
+  const byRow = p.rg.r1 === p.rg.r2 && p.rg.c1 !== p.rg.c2;
+  if (!byRow && p.rg.c1 !== p.rg.c2) throw new AnalysisError(`${label}는 한 열 또는 한 행이어야 합니다.`);
+  let vals = byRow ? rows[0] : rows.map((r) => r[0]);
+  let lab = null;
+  if (v.labels) { lab = vals[0] === null ? null : String(vals[0]); vals = vals.slice(1); }
+  return { p, vals, label: lab, byRow };
+}
+
+/** 이동 평균 · 지수 평활: 입력 셀 주소 / 출력 셀 주소 → 수식 + 차트 */
+function smoothingOutput(v, get, dest, kind) {
+  const { p, vals, byRow } = vectorOf2(v, get, 'input', '입력 범위');
+  if (vals.length < 3) throw new AnalysisError('입력 범위에 값이 세 개 이상 있어야 합니다.');
+  const skip = v.labels ? 1 : 0;
+  const outSheet = dest.newSheet ? null : dest.si;
+  const inCell = (i) => (byRow ? { r: p.rg.r1, c: p.rg.c1 + skip + i } : { r: p.rg.r1 + skip + i, c: p.rg.c1 });
+  const sameSheet = outSheet === p.si;
+  const inRef = (i) => { const q = inCell(i); return `${sameSheet ? '' : `${quoteSheetName(wb.sheets[p.si].name)}!`}${cellName(q.r, q.c)}`; };
+  const r0 = dest.newSheet ? 0 : dest.r;
+  const c0 = dest.newSheet ? 0 : dest.c;
+  const outRef = (i) => cellName(r0 + i, c0);
+  const res = kind === 'movavg'
+    ? movingAverage(vals.length, inRef, outRef, { interval: Math.round(v.interval ?? 3), stdErr: v.stdErr })
+    : expSmoothing(vals.length, inRef, outRef, { damping: v.damping ?? 0.3, stdErr: v.stdErr });
+  if (v.chart) {
+    res.after = (out) => {
+      const n = vals.length;
+      const inS = wb.sheets[p.si].name;
+      const cat = null;
+      const actual = byRow ? { sheet: inS, r1: p.rg.r1, c1: p.rg.c1 + skip, r2: p.rg.r1, c2: p.rg.c1 + skip + n - 1 } : { sheet: inS, r1: p.rg.r1 + skip, c1: p.rg.c1, r2: p.rg.r1 + skip + n - 1, c2: p.rg.c1 };
+      const fc = { sheet: wb.sheets[out.si].name, r1: out.r, c1: out.c, r2: out.r + n - 1, c2: out.c };
+      addAnalysisChart(out, kind === 'movavg' ? '이동 평균' : '지수 평활', [
+        { name: { text: '실제값' }, cat, val: actual },
+        { name: { text: '예측값' }, cat, val: fc },
+      ], 'line');
+    };
+  }
+  return res;
+}
+
+function addAnalysisChart(out, title, series, type = 'line', place = null, extra = null) {
+  const box = gv.sheetRect({ r1: out.r, c1: out.c, r2: out.r + out.h - 1, c2: out.c + out.w - 1 });
+  const id = `ch${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+  const chart = { id, type, title, series, x: place?.x ?? box.x + box.w + 24, y: place?.y ?? box.y, w: 480, h: 288, z: nextZ(), legend: 'b', ...(extra ?? {}) };
+  wb.transact(() => wb.setSheetProp(out.si, 'charts', [...(wb.sheets[out.si].charts ?? []).map((c) => ({ ...c })), chart]), meta());
+  gv.renderObjectsAll();
+}
+
+const ALPHA_FIELD = { k: 'num', name: 'alpha', label: '유의 수준(α):', value: 0.05 };
+const TOOL_UI = {
+  anova1: () => toolDialog('분산 분석: 일원 배치법', [{ k: 'ref', name: 'input', label: '입력 범위:', fill: true }, { k: 'group' }, { k: 'check', name: 'labels', label: '첫째 행 이름표 사용' }, ALPHA_FIELD],
+    (v, get) => anova1(anGroups(v, get).g, { alpha: v.alpha ?? 0.05 })),
+  anova2: () => toolDialog('분산 분석: 반복 없는 이원 배치법', [{ k: 'ref', name: 'input', label: '입력 범위:', fill: true }, { k: 'check', name: 'labels', label: '이름표' }, ALPHA_FIELD],
+    (v, get) => {
+      const rows = readBlock(get('input', '입력 범위'));
+      let body = rows;
+      let rowLabels; let colLabels;
+      if (v.labels) { colLabels = rows[0].slice(1).map(String); rowLabels = rows.slice(1).map((r) => String(r[0] ?? '')); body = rows.slice(1).map((r) => r.slice(1)); }
+      return anova2(body, { alpha: v.alpha ?? 0.05, rowLabels, colLabels });
+    }),
+  correl: () => toolDialog('상관 분석', [{ k: 'ref', name: 'input', label: '입력 범위:', fill: true }, { k: 'group' }, { k: 'check', name: 'labels', label: '첫째 행 이름표 사용' }],
+    (v, get) => matrixTool(anGroups(v, get).g, 'correl')),
+  covar: () => toolDialog('공분산 분석', [{ k: 'ref', name: 'input', label: '입력 범위:', fill: true }, { k: 'group' }, { k: 'check', name: 'labels', label: '첫째 행 이름표 사용' }],
+    (v, get) => matrixTool(anGroups(v, get).g, 'covar')),
+  descr: () => toolDialog('기술 통계법', [
+    { k: 'ref', name: 'input', label: '입력 범위:', fill: true }, { k: 'group' }, { k: 'check', name: 'labels', label: '첫째 행 이름표 사용' },
+    { k: 'head', label: '출력' }, { k: 'check', name: 'summary', label: '요약 통계량', value: true },
+    { k: 'checknum', name: 'conf', label: '평균에 대한 신뢰 수준', num: 95, unit: '%' },
+    { k: 'checknum', name: 'kth', label: 'K번째 큰 값', num: 1 }, { k: 'checknum', name: 'kthS', label: 'K번째 작은 값', num: 1 },
+  ], (v, get) => {
+    if (!v.summary && !v.conf && !v.kth && !v.kthS) throw new AnalysisError('출력할 통계를 하나 이상 고르세요.');
+    return descriptive(anGroups(v, get).g, { summary: v.summary, conf: v.conf ? (v.confN ?? 95) / 100 : 0, kth: v.kth ? v.kthN : 0, kthSmall: v.kthS ? v.kthSN : 0 });
+  }),
+  expsmooth: () => toolDialog('지수 평활법', [
+    { k: 'ref', name: 'input', label: '입력 범위:', fill: true }, { k: 'num', name: 'damping', label: '감쇠 인수:', value: 0.3 }, { k: 'check', name: 'labels', label: '이름표' },
+    { k: 'check', name: 'chart', label: '차트 출력', value: true }, { k: 'check', name: 'stdErr', label: '표준 오차' },
+  ], (v, get, dest) => smoothingOutput(v, get, dest, 'expsmooth')),
+  ftest: () => toolDialog('F-검정: 분산에 대한 두 집단', [{ k: 'ref', name: 'in1', label: '변수 1 입력 범위:' }, { k: 'ref', name: 'in2', label: '변수 2 입력 범위:' }, { k: 'check', name: 'labels', label: '이름표' }, ALPHA_FIELD],
+    (v, get) => { const a = vectorOf2(v, get, 'in1', '변수 1 입력 범위'); const b = vectorOf2(v, get, 'in2', '변수 2 입력 범위'); return fTest(a.vals, b.vals, { alpha: v.alpha ?? 0.05, labels: [a.label ?? '변수 1', b.label ?? '변수 2'] }); }),
+  hist: () => toolDialog('히스토그램', [
+    { k: 'ref', name: 'input', label: '입력 범위:', fill: true }, { k: 'ref', name: 'bins', label: '계급 구간:' }, { k: 'check', name: 'labels', label: '이름표' },
+    { k: 'check', name: 'pareto', label: '파레토(정렬된 히스토그램)' }, { k: 'check', name: 'cumulative', label: '누적 백분율' }, { k: 'check', name: 'chart', label: '차트 출력', value: true },
+  ], (v, get) => {
+    const { g } = anGroups({ ...v, byRows: false }, get);
+    const vals = g.flatMap((x) => x.vals);
+    let bins = null;
+    if (v.bins.trim()) { const p = get('bins', '계급 구간'); bins = readBlock(p).flat().filter((x) => typeof x === 'number'); if (!bins.length) throw new AnalysisError('계급 구간에 숫자가 없습니다.'); }
+    const res = histogram(vals, bins, { pareto: v.pareto, cumulative: v.cumulative });
+    if (v.chart) {
+      res.after = (out) => {
+        const S = wb.sheets[out.si].name;
+        const n = res.rows.length - 1;
+        const cat = { sheet: S, r1: out.r + 1, c1: out.c, r2: out.r + n, c2: out.c };
+        const series = [{ name: { text: '빈도수' }, cat, val: { sheet: S, r1: out.r + 1, c1: out.c + 1, r2: out.r + n, c2: out.c + 1 } }];
+        if (v.cumulative) series.push({ name: { text: '누적 %' }, cat, val: { sheet: S, r1: out.r + 1, c1: out.c + 2, r2: out.r + n, c2: out.c + 2 } });
+        addAnalysisChart(out, '히스토그램', series, v.cumulative ? 'combo' : 'column', null, v.cumulative ? { seriesFmt: [{ type: 'column', axis: 0 }, { type: 'line', axis: 1, numFmt: '0%' }] } : null);
+      };
+    }
+    return res;
+  }),
+  movavg: () => toolDialog('이동 평균법', [
+    { k: 'ref', name: 'input', label: '입력 범위:', fill: true }, { k: 'check', name: 'labels', label: '첫째 행 이름표 사용' }, { k: 'num', name: 'interval', label: '구간:', value: 3, step: 1 },
+    { k: 'check', name: 'chart', label: '차트 출력', value: true }, { k: 'check', name: 'stdErr', label: '표준 오차' },
+  ], (v, get, dest) => smoothingOutput(v, get, dest, 'movavg')),
+  random: () => toolDialog('난수 생성', [
+    { k: 'num', name: 'vars', label: '변수의 개수:', value: 1, step: 1 }, { k: 'num', name: 'count', label: '난수의 개수:', value: 10, step: 1 },
+    { k: 'select', name: 'dist', label: '분포:', value: 'uniform', options: [['uniform', '균일 (시작 ~ 끝)'], ['normal', '정규 (평균, 표준 편차)'], ['bernoulli', '베르누이 (p)'], ['binomial', '이항 (p, 시행 횟수)'], ['poisson', '포아송 (λ)']] },
+    { k: 'num', name: 'p1', label: '매개 변수 1:', value: 0 }, { k: 'num', name: 'p2', label: '매개 변수 2:', value: 1 }, { k: 'num', name: 'seed', label: '난수 시드 (선택):', value: '', step: 1 },
+  ], (v) => randomNumbers({ vars: Math.round(v.vars ?? 1), count: Math.round(v.count ?? 10), dist: v.dist, p1: v.p1 ?? 0, p2: v.p2 ?? 1, seed: v.seed ?? 0 }),
+  { note: '균일: 매개 변수 1~2 사이 · 정규: 평균, 표준 편차 · 베르누이: 성공 확률 · 이항: 성공 확률, 시행 횟수 · 포아송: 평균(λ)' }),
+  rank: () => toolDialog('순위와 백분율', [{ k: 'ref', name: 'input', label: '입력 범위:', fill: true }, { k: 'group' }, { k: 'check', name: 'labels', label: '첫째 행 이름표 사용' }],
+    (v, get) => rankPercentile(anGroups(v, get).g)),
+  regress: () => toolDialog('회귀 분석', [
+    { k: 'ref', name: 'inY', label: 'Y축 입력 범위:' }, { k: 'ref', name: 'inX', label: 'X축 입력 범위:' },
+    { k: 'check', name: 'labels', label: '이름표' }, { k: 'check', name: 'zero', label: '상수에 0을 사용' }, { k: 'checknum', name: 'conf', label: '신뢰 수준', num: 95, unit: '%' },
+    { k: 'head', label: '잔차' }, { k: 'check', name: 'residuals', label: '잔차' }, { k: 'check', name: 'stdRes', label: '표준 잔차' }, { k: 'check', name: 'fitChart', label: '선 적합도 차트' },
+  ], (v, get) => {
+    const y = vectorOf2(v, get, 'inY', 'Y축 입력 범위');
+    const px = get('inX', 'X축 입력 범위');
+    const xg = splitGroups(readBlock(px), { labels: !!v.labels });
+    if (xg.length > 16) throw new AnalysisError('X축 입력 범위는 16열 이하여야 합니다.');
+    const res = regression(y.vals, xg.map((g) => g.raw), {
+      constant: !v.zero, conf: v.conf ? (v.confN ?? 95) / 100 : 0.95, residuals: v.residuals || v.fitChart, stdResiduals: v.stdRes,
+      xLabels: v.labels ? xg.map((g) => g.label) : null, yLabel: y.label,
+    });
+    if (v.fitChart) {
+      res.after = (out) => {
+        const S = wb.sheets[out.si].name;
+        const start = res.rows.findIndex((r) => r[0] === '관측수' && typeof r[1] === 'string');
+        const n = y.vals.length;
+        const xs = { sheet: wb.sheets[px.si].name, r1: px.rg.r1 + (v.labels ? 1 : 0), c1: px.rg.c1, r2: px.rg.r1 + (v.labels ? 1 : 0) + n - 1, c2: px.rg.c1 };
+        const ys = { sheet: wb.sheets[y.p.si].name, ...(y.byRow ? { r1: y.p.rg.r1, c1: y.p.rg.c1 + (v.labels ? 1 : 0), r2: y.p.rg.r1, c2: y.p.rg.c1 + (v.labels ? 1 : 0) + n - 1 } : { r1: y.p.rg.r1 + (v.labels ? 1 : 0), c1: y.p.rg.c1, r2: y.p.rg.r1 + (v.labels ? 1 : 0) + n - 1, c2: y.p.rg.c1 }) };
+        const fit = { sheet: S, r1: out.r + start + 1, c1: out.c + 1, r2: out.r + start + n, c2: out.c + 1 };
+        addAnalysisChart(out, `${xg[0].label} 선 적합도 차트`, [{ name: { text: y.label ?? 'Y' }, x: xs, val: ys }, { name: { text: '예측치 Y' }, x: xs, val: fit }], 'scatter', { x: gv.sheetRect({ r1: 0, c1: out.c + 10, r2: 0, c2: out.c + 10 }).x, y: 0 });
+      };
+    }
+    return res;
+  }),
+  sampling: () => toolDialog('표본 추출', [
+    { k: 'ref', name: 'input', label: '입력 범위:', fill: true }, { k: 'check', name: 'labels', label: '이름표' },
+    { k: 'select', name: 'method', label: '표본 추출 방법:', value: 'random', options: [['periodic', '주기 (N 번째마다)'], ['random', '무작위 (N 개)']] }, { k: 'num', name: 'n', label: 'N:', value: 10, step: 1 },
+  ], (v, get) => { const { g } = anGroups({ ...v, byRows: false }, get); return sampling(g.flatMap((x) => x.vals), { method: v.method, n: Math.round(v.n ?? 1) }); }),
+  ttestPaired: () => ttestUi('t-검정: 쌍체 비교', 'paired'),
+  ttestEq: () => ttestUi('t-검정: 등분산 가정 두 집단', 'equal'),
+  ttestUneq: () => ttestUi('t-검정: 이분산 가정 두 집단', 'unequal'),
+  ztest: () => toolDialog('z-검정: 평균에 대한 두 집단', [
+    { k: 'ref', name: 'in1', label: '변수 1 입력 범위:' }, { k: 'ref', name: 'in2', label: '변수 2 입력 범위:' }, { k: 'num', name: 'hyp', label: '가설 평균차:', value: 0 },
+    { k: 'num', name: 'var1', label: '변수 1의 분산(알려진 값):', value: '' }, { k: 'num', name: 'var2', label: '변수 2의 분산(알려진 값):', value: '' }, { k: 'check', name: 'labels', label: '이름표' }, ALPHA_FIELD,
+  ], (v, get) => { const a = vectorOf2(v, get, 'in1', '변수 1 입력 범위'); const b = vectorOf2(v, get, 'in2', '변수 2 입력 범위'); return zTest(a.vals, b.vals, { var1: v.var1, var2: v.var2, hyp: v.hyp ?? 0, alpha: v.alpha ?? 0.05, labels: [a.label ?? '변수 1', b.label ?? '변수 2'] }); }),
+};
+function ttestUi(title, kind) {
+  return toolDialog(title, [
+    { k: 'ref', name: 'in1', label: '변수 1 입력 범위:' }, { k: 'ref', name: 'in2', label: '변수 2 입력 범위:' }, { k: 'num', name: 'hyp', label: '가설 평균차:', value: 0 },
+    { k: 'check', name: 'labels', label: '이름표' }, ALPHA_FIELD,
+  ], (v, get) => { const a = vectorOf2(v, get, 'in1', '변수 1 입력 범위'); const b = vectorOf2(v, get, 'in2', '변수 2 입력 범위'); return tTest(a.vals, b.vals, { kind, hyp: v.hyp ?? 0, alpha: v.alpha ?? 0.05, labels: [a.label ?? '변수 1', b.label ?? '변수 2'] }); });
+}
+
+/** [데이터] → [데이터 분석]: 도구 고르기 */
+function dataAnalysisDialog() {
+  const list = el('select', { size: 12, class: 'an-list' }, ANALYSIS_TOOLS.map((t, i) => el('option', { value: t.id, selected: i === 0 }, t.label)));
+  const go = () => { const id = list.value; if (!id) return false; setTimeout(() => TOOL_UI[id]()); return true; };
+  list.addEventListener('dblclick', () => { if (go()) dlg.close(); });
+  const dlg = openDialog({
+    title: '통계 데이터 분석', width: 380,
+    body: el('div', {}, el('div', { class: 'muted', style: { marginBottom: '6px' } }, '분석 도구'), list,
+      el('div', { class: 'muted', style: { marginTop: '8px' } }, '예측 시트 · 시나리오 관리자는 [데이터] 탭의 [예측] 그룹에 있습니다.')),
+    buttons: [{ label: '확인', primary: true, action: go }, { label: '취소' }],
+  });
+  list.focus();
+}
+
+/** [예측 시트]: 시간 표시줄 + 값 → 새 시트에 FORECAST.ETS 수식 표와 차트 */
+function forecastSheetDialog() {
+  let rg = usedClip(sel);
+  if (isSingle(rg)) rg = dataRange();
+  if (rg.c2 - rg.c1 < 1) { alertDialog('예측 시트', '시간 표시줄과 값이 들어 있는 두 열을 선택하세요.'); return; }
+  const tc = rg.c1; const vc = rg.c1 + 1;
+  const header = typeof valueAt(rg.r1, tc) !== 'number';
+  const r1 = rg.r1 + (header ? 1 : 0);
+  const times = []; const vals = [];
+  for (let r = r1; r <= rg.r2; r++) { const t = valueAt(r, tc); if (t === null || t === '' || t === undefined) continue; times.push(t); vals.push(valueAt(r, vc)); }
+  if (times.length < 3 || times.some((t) => typeof t !== 'number')) { alertDialog('예측 시트', '시간 표시줄(첫 열)은 날짜나 숫자여야 하고, 값이 세 개 이상 있어야 합니다.'); return; }
+  const r2 = r1 + times.length - 1;
+  const sorted = [...new Set(times)].sort((a, b) => a - b);
+  const axis = sorted.length > 1 ? timeAxis(sorted) : null;
+  if (!axis) { alertDialog('예측 시트', '시간 표시줄의 간격이 일정하지 않습니다 (날짜 · 숫자가 같은 간격이거나 매월 같은 날이어야 합니다).'); return; }
+  const kLast = Math.round(axis.pos(sorted[sorted.length - 1]));
+  const tStyle = wb.styleAt(si, r1, tc);
+  const fmtT = (x) => formatValue(x, tStyle).text;
+  const last = sorted[sorted.length - 1];
+  const parseT = (s) => { const t = String(s).trim(); if (/^-?\d+(\.\d+)?$/.test(t)) return Number(t); const p = parseInput(t); return typeof p.value === 'number' ? p.value : NaN; };
+  const tName = header ? displayText(rg.r1, tc) || '타임라인' : '타임라인';
+  const vName = header ? displayText(rg.r1, vc) || '값' : '값';
+  formDialog('예측 워크시트 만들기', [
+    { name: 'end', label: '예측 종료', value: fmtT(axis.at(kLast + Math.max(3, Math.round(times.length / 3)))) },
+    { name: 'type', label: '차트 종류', type: 'select', value: 'line', options: [{ value: 'line', label: '꺾은선형' }, { value: 'column', label: '세로 막대형' }] },
+    { name: 'start', label: '예측 시작', value: fmtT(last) },
+    { name: 'conf', label: '신뢰 구간 (%)', type: 'number', value: 95 },
+    { name: 'seasonMode', label: '계절성', type: 'select', value: 'auto', options: [{ value: 'auto', label: '자동 검색' }, { value: 'manual', label: '수동 설정' }, { value: 'none', label: '없음' }] },
+    { name: 'season', label: '계절 주기 (수동)', type: 'number', value: 12 },
+    { name: 'fill', label: '누락된 요소 채우기', type: 'select', value: '1', options: [{ value: '1', label: '보간' }, { value: '0', label: '0' }] },
+    { name: 'agg', label: '중복 집계', type: 'select', value: '1', options: [['1', '평균'], ['2', '개수'], ['4', '최대값'], ['5', '중앙값'], ['6', '최소값'], ['7', '합계']].map(([value, label]) => ({ value, label })) },
+    { name: 'stats', label: '예측 통계 포함', type: 'checkbox', value: false },
+  ], (x) => {
+    const end = parseT(x.end);
+    const start = parseT(x.start);
+    const conf = Number(x.conf) / 100;
+    if (!(end > last)) { alertDialog('예측 시트', `예측 종료는 마지막 시점(${fmtT(last)})보다 뒤여야 합니다.`); return false; }
+    if (!(start >= sorted[0] && start <= last)) { alertDialog('예측 시트', '예측 시작은 시간 표시줄 범위 안이어야 합니다.'); return false; }
+    if (!(conf > 0 && conf < 1)) { alertDialog('예측 시트', '신뢰 구간은 0보다 크고 100보다 작아야 합니다.'); return false; }
+    const seas = x.seasonMode === 'auto' ? 1 : x.seasonMode === 'none' ? 0 : Math.max(2, Math.round(Number(x.season) || 2));
+    const src = quoteSheetName(sheet().name);
+    const home = si;
+    const n = times.length;
+    const future = [];
+    for (let k = kLast + 1; future.length < 10000; k++) { const t = Number(axis.at(k).toPrecision(15)); if (t > end + 1e-9) break; future.push(t); }
+    const name = nextSheetName(`${sheet().name} 예측`);
+    const H = 1 + n + future.length;
+    const idx = wb.transact(() => {
+      const at = wb.addSheet(name, si + 1);
+      const put = (r, c, raw, style) => wb.setCellData(at, r, c, { raw, ...(style ? { style } : {}) });
+      const TL = `$A$2:$A$${n + 1}`;
+      const VL = `$B$2:$B$${n + 1}`;
+      ['타임라인', vName, `예측(${vName})`, `낮은 신뢰 한계(${vName})`, `높은 신뢰 한계(${vName})`].forEach((h, c) => put(0, c, `'${h}`));
+      if (tName !== '타임라인') put(0, 0, `'${tName}`);
+      for (let i = 0; i < n; i++) {
+        // 원본 값은 참조로 연결 (원본이 바뀌면 예측도 바뀜)
+        put(1 + i, 0, `=${src}!${cellName(r1 + i, tc)}`, tStyle);
+        put(1 + i, 1, `=${src}!${cellName(r1 + i, vc)}`, wb.styleAt(home, r1 + i, vc));
+      }
+      // 예측 시작 시점 행: 예측 = 실제 값 (선이 이어지도록)
+      const si0 = times.findIndex((t) => t >= start);
+      const startRow = 1 + (si0 < 0 ? n - 1 : si0);
+      for (let r = startRow; r <= n; r++) {
+        const own = r === n; // 마지막 실제 값
+        if (own) { put(r, 2, `=B${r + 1}`); put(r, 3, `=B${r + 1}`); put(r, 4, `=B${r + 1}`); continue; }
+        put(r, 2, `=FORECAST.ETS(A${r + 1},${VL},${TL},${seas},${x.fill},${x.agg})`);
+      }
+      future.forEach((t, i) => {
+        const r = 1 + n + i;
+        put(r, 0, String(t), tStyle);
+        put(r, 2, `=FORECAST.ETS(A${r + 1},${VL},${TL},${seas},${x.fill},${x.agg})`);
+        put(r, 3, `=C${r + 1}-FORECAST.ETS.CONFINT(A${r + 1},${VL},${TL},${conf},${seas},${x.fill},${x.agg})`);
+        put(r, 4, `=C${r + 1}+FORECAST.ETS.CONFINT(A${r + 1},${VL},${TL},${conf},${seas},${x.fill},${x.agg})`);
+      });
+      for (let c = 0; c < 5; c++) wb.setColWidth(at, c, c === 0 ? 110 : 150);
+      const t = {
+        id: newTableId(), name: nextTableName(wb), r1: 0, c1: 0, r2: H - 1, c2: 4, header: true, totals: false, style: DEFAULT_TABLE_STYLE,
+        banded: true, bandedCols: false, firstCol: false, lastCol: false, filter: { criteria: {}, hidden: {} }, totalsFns: {},
+      };
+      wb.setSheetProp(at, 'tables', [t]);
+      if (x.stats) {
+        const lab = [['알파', 1], ['베타', 2], ['감마', 3], ['MASE', 4], ['SMAPE', 5], ['MAE', 6], ['RMSE', 7]];
+        put(0, 7, "'통계"); put(0, 8, "'값");
+        lab.forEach(([l, k], i) => { put(1 + i, 7, `'${l}`); put(1 + i, 8, `=FORECAST.ETS.STAT(${VL},${TL},${k},${seas},${x.fill},${x.agg})`, { numFmt: 'number', decimals: 3 }); });
+        put(8, 7, "'계절성"); put(8, 8, `=FORECAST.ETS.SEASONALITY(${VL},${TL},${x.fill},${x.agg})`);
+        wb.setColWidth(at, 7, 90);
+        wb.setColWidth(at, 5, 20); wb.setColWidth(at, 6, 20);
+      }
+      const S = name;
+      const cat = { sheet: S, r1: 1, c1: 0, r2: H - 1, c2: 0 };
+      const ser = (c, nm) => ({ name: { text: nm }, cat, val: { sheet: S, r1: 1, c1: c, r2: H - 1, c2: c } });
+      const x0 = 110 + 4 * 150 + 24 + (x.stats ? 3 * 90 : 0);
+      wb.setSheetProp(at, 'charts', [{
+        id: `ch${Date.now().toString(36)}`, type: x.type, title: `${vName} 예측`, series: [ser(1, vName), ser(2, `예측(${vName})`), ser(3, '낮은 신뢰 한계'), ser(4, '높은 신뢰 한계')],
+        seriesFmt: [{}, {}, { color: '#ED7D31' }, { color: '#ED7D31' }], x: x0, y: 10, w: 600, h: 340, z: 1, legend: 'b',
+      }]);
+      return at;
+    }, meta());
+    switchSheet(idx, false);
+    toast(`예측 시트 '${name}'를 만들었습니다 (FORECAST.ETS · 신뢰 구간 ${Math.round(conf * 100)}%).`);
+    return undefined;
+  }, { note: `시간 표시줄: ${cellName(r1, tc)}:${cellName(r2, tc)}, 값: ${cellName(r1, vc)}:${cellName(r2, vc)} · 간격 ${axis.months ? `${axis.months}개월` : formatGeneral(axis.step)} · AAA 지수 평활(엑셀 FORECAST.ETS 와 같은 방식)` });
+}
+
+// ───── 시나리오 관리자 (가상 분석) ─────
+const scenarioList = () => sheet().scenarios ?? [];
+function setScenarios(list) { wb.transact(() => wb.setSheetProp(si, 'scenarios', list), meta()); }
+const cellsText = (cells) => cells.map((p) => cellName(p.r, p.c)).join(',');
+function parseCells(text) {
+  const out = [];
+  for (const part of String(text).split(/[,;]\s*/)) {
+    if (!part.trim()) continue;
+    const p = parseRangeName(part.trim().replace(/\$/g, ''));
+    if (!p) return null;
+    for (let r = p.r1; r <= p.r2; r++) for (let c = p.c1; c <= p.c2; c++) out.push({ r, c });
+  }
+  return out.length && out.length <= 32 ? out : null;
+}
+function scenarioManager() {
+  const body = el('div', { class: 'an-dlg' });
+  let pick = 0;
+  const draw = () => {
+    const list = scenarioList();
+    pick = Math.min(pick, Math.max(0, list.length - 1));
+    const lb = el('select', { size: 8, class: 'an-list' }, list.map((sc, i) => el('option', { value: String(i), selected: i === pick }, sc.name)));
+    lb.addEventListener('change', () => { pick = Number(lb.value); draw(); });
+    lb.addEventListener('dblclick', () => showScenario(pick));
+    const cur = list[pick];
+    body.replaceChildren(
+      el('div', { class: 'muted' }, '시나리오:'),
+      el('div', { style: { display: 'flex', gap: '8px' } }, list.length ? lb : el('div', { class: 'an-list muted', style: { padding: '12px', flex: 1 } }, '정의된 시나리오가 없습니다. [추가]를 눌러 시나리오를 만드세요.'),
+        el('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
+          el('button', { class: 'btn', onclick: () => editScenario(null, draw) }, '추가...'),
+          el('button', { class: 'btn', disabled: !cur, onclick: () => { setScenarios(list.filter((_, i) => i !== pick)); draw(); } }, '삭제'),
+          el('button', { class: 'btn', disabled: !cur, onclick: () => editScenario(pick, draw) }, '편집...'),
+          el('button', { class: 'btn', disabled: !list.length, onclick: () => scenarioSummary() }, '요약...'))),
+      el('div', { class: 'an-row' }, el('span', {}, '변경 셀:'), el('span', {}, cur ? cellsText(cur.cells) : '')),
+      el('div', { class: 'an-row' }, el('span', {}, '설명:'), el('span', {}, cur?.comment ?? '')),
+    );
+  };
+  draw();
+  const showScenario = (i) => {
+    const sc = scenarioList()[i];
+    if (!sc) return;
+    wb.transact(() => sc.cells.forEach((p, k) => wb.setInput(si, p.r, p.c, String(sc.values[k] ?? ''))), meta());
+    toast(`시나리오 '${sc.name}'의 값을 표시했습니다 (Ctrl+Z 로 되돌리기).`);
+  };
+  openDialog({
+    title: '시나리오 관리자', body, width: 460, modeless: true,
+    buttons: [{ label: '표시', primary: true, action: () => { showScenario(pick); return false; } }, { label: '닫기' }],
+  });
+}
+function editScenario(idx, done) {
+  const list = scenarioList();
+  const cur = idx === null ? null : list[idx];
+  const selCells = [];
+  const rg = usedClip(sel);
+  for (let r = rg.r1; r <= rg.r2 && selCells.length < 32; r++) for (let c = rg.c1; c <= rg.c2 && selCells.length < 32; c++) selCells.push({ r, c });
+  formDialog(cur ? '시나리오 편집' : '시나리오 추가', [
+    { name: 'name', label: '시나리오 이름', value: cur?.name ?? '' },
+    { name: 'cells', label: '변경 셀 (예: B1,B3:B5, 최대 32개)', value: cellsText(cur?.cells ?? selCells) },
+    { name: 'comment', label: '설명', type: 'textarea', value: cur?.comment ?? `만든 날짜: ${new Date().toLocaleDateString('ko-KR')}` },
+    { name: 'locked', label: '변경 금지', type: 'checkbox', value: cur ? cur.locked !== false : true },
+  ], (v) => {
+    const name = v.name.trim();
+    if (!name) { alertDialog('시나리오', '시나리오 이름을 입력하세요.'); return false; }
+    if (list.some((s, i) => i !== idx && s.name === name)) { alertDialog('시나리오', '같은 이름의 시나리오가 있습니다.'); return false; }
+    const cells = parseCells(v.cells);
+    if (!cells) { alertDialog('시나리오', '변경 셀을 올바르게 입력하세요 (최대 32개).'); return false; }
+    if (cells.some((p) => wb.getCell(si, p.r, p.c)?.formula)) { alertDialog('시나리오', '변경 셀에는 수식이 아닌 값이 있어야 합니다.'); return false; }
+    // 시나리오 값: 현재 값(또는 이전 값) 을 기본으로, 셀마다 입력
+    const prevOf = (p) => { const k = cur?.cells.findIndex((q) => q.r === p.r && q.c === p.c) ?? -1; return k >= 0 ? cur.values[k] : wb.getRaw(si, p.r, p.c) ?? ''; };
+    setTimeout(() => formDialog('시나리오 값', cells.map((p, k) => ({ name: `v${k}`, label: `${cellName(p.r, p.c)}`, value: String(prevOf(p)) })), (vals) => {
+      const sc = { name, comment: v.comment, locked: v.locked, cells, values: cells.map((_, k) => vals[`v${k}`]) };
+      setScenarios(idx === null ? [...list, sc] : list.map((s, i) => (i === idx ? sc : s)));
+      done?.();
+      return true;
+    }, { note: '각 변경 셀에 들어갈 값을 입력하세요.' }));
+    return true;
+  });
+}
+/** 시나리오 요약: 결과 셀들을 시나리오마다 계산해 새 시트에 표로 */
+function scenarioSummary() {
+  const list = scenarioList();
+  if (!list.length) { alertDialog('시나리오 요약', '시나리오가 없습니다.'); return; }
+  const cand = usedClip(sel);
+  formDialog('시나리오 요약', [
+    { name: 'kind', label: '보고서 종류', type: 'select', value: 'summary', options: [{ value: 'summary', label: '시나리오 요약' }] },
+    { name: 'result', label: '결과 셀 (예: C10,C12)', value: isSingle(cand) ? cellName(active.r, active.c) : `${cellName(cand.r1, cand.c1)}:${cellName(cand.r2, cand.c2)}` },
+  ], (v) => {
+    const results = parseCells(v.result);
+    if (!results) { alertDialog('시나리오 요약', '결과 셀을 올바르게 입력하세요.'); return false; }
+    const home = si;
+    const changing = [];
+    for (const sc of list) for (const p of sc.cells) if (!changing.some((q) => q.r === p.r && q.c === p.c)) changing.push(p);
+    // 각 시나리오를 잠시 적용해 결과 계산 → 원래 값 복원 (실행 취소 기록 없음)
+    const orig = changing.map((p) => cellData(wb.getCell(home, p.r, p.c)));
+    const apply = (sc) => changing.forEach((p, k) => {
+      const j = sc ? sc.cells.findIndex((q) => q.r === p.r && q.c === p.c) : -1;
+      const d = orig[k];
+      wb.setCellData(home, p.r, p.c, j >= 0 ? { ...(d ?? {}), raw: String(sc.values[j] ?? '') } : d);
+    });
+    const cols = [{ name: '현재 값:', sc: null }, ...list.map((sc) => ({ name: sc.name, sc }))];
+    const table = cols.map((col) => {
+      apply(col.sc);
+      return { ch: changing.map((p) => wb.getValue(home, p.r, p.c)), rs: results.map((p) => wb.getValue(home, p.r, p.c)) };
+    });
+    apply(null);
+    const S = sheet().name;
+    const name = nextSheetName('시나리오 요약');
+    const idx = wb.transact(() => {
+      const at = wb.addSheet(name, si + 1);
+      const head = { bold: true, fill: '#44546a', color: '#ffffff' };
+      const sub = { fill: '#d9d9d9' };
+      const put = (r, c, val, style) => wb.setCellData(at, r, c, { raw: val === null || val === undefined ? '' : typeof val === 'number' ? String(val) : isError(val) ? val.code : `'${val}`, ...(style ? { style } : {}) });
+      put(1, 1, '시나리오 요약', head);
+      cols.forEach((col, j) => put(1, 3 + j, col.name, head));
+      put(1, 2, '', head);
+      put(2, 1, '변경 셀:', sub); for (let j = 2; j < 3 + cols.length; j++) put(2, j, '', sub);
+      changing.forEach((p, i) => { put(3 + i, 2, `$${colToName(p.c)}$${p.r + 1}`); table.forEach((col, j) => put(3 + i, 3 + j, col.ch[i], { ...wb.styleAt(home, p.r, p.c), ...(j ? { fill: '#f2f2f2' } : {}) })); });
+      const rr = 3 + changing.length;
+      put(rr, 1, '결과 셀:', sub); for (let j = 2; j < 3 + cols.length; j++) put(rr, j, '', sub);
+      results.forEach((p, i) => { put(rr + 1 + i, 2, `$${colToName(p.c)}$${p.r + 1}`); table.forEach((col, j) => put(rr + 1 + i, 3 + j, col.rs[i], { ...wb.styleAt(home, p.r, p.c), ...(j ? { fill: '#f2f2f2' } : {}) })); });
+      const nr = rr + 2 + results.length;
+      put(nr, 1, `참고: 현재 값 열은 요약 보고서를 만들 때의 변경 셀 값입니다 ('${S}' 시트). 각 시나리오의 변경 셀은 회색으로 표시했습니다.`);
+      wb.setColWidth(at, 0, 20); wb.setColWidth(at, 1, 110); wb.setColWidth(at, 2, 80);
+      for (let j = 0; j < cols.length; j++) wb.setColWidth(at, 3 + j, 110);
+      return at;
+    }, meta());
+    switchSheet(idx, false);
+    return true;
+  });
+}
+
+/** 해 찾기 (Solver 부가 기능): 목표 셀을 최대 · 최소 · 지정 값으로, 변수 셀을 제약 조건 안에서 바꿈 */
+function solverDialog() {
+  const home = si;
+  const body = el('div', { class: 'an-dlg' });
+  const target = refInput(cellName(active.r, active.c), home);
+  const mode = el('select', {}, el('option', { value: 'max' }, '최대값'), el('option', { value: 'min' }, '최소'), el('option', { value: 'value' }, '지정값'));
+  const goal = el('input', { type: 'number', value: 0, step: 'any', style: { width: '90px' } });
+  const vars = refInput('', home);
+  const cons = el('textarea', { rows: 4, placeholder: '한 줄에 하나씩: B2<=100, B3>=0, B2+B3=50, B4 int' });
+  const nonneg = el('input', { type: 'checkbox', checked: true });
+  body.append(
+    el('label', { class: 'an-row' }, el('span', {}, '목표 설정:'), target),
+    el('div', { class: 'an-row' }, el('span', {}, '대상:'), mode, goal),
+    el('label', { class: 'an-row' }, el('span', {}, '변수 셀 변경:'), vars),
+    el('label', { class: 'an-row', style: { alignItems: 'flex-start' } }, el('span', {}, '제한 조건:'), cons),
+    el('label', { class: 'an-check' }, nonneg, '제한되지 않는 변수를 음이 아닌 수로 설정'),
+    el('div', { class: 'muted' }, '해법: 비선형 GRG 대신 제약 벌점 + 넬더-미드 · 좌표 탐색 (정수 제약은 반올림 후 재탐색). 수식 셀의 값으로 계산합니다.'),
+  );
+  const run = () => {
+    const t = parseRefInput(target.value);
+    const vv = parseRefInput(vars.value);
+    if (!t || !vv || t.si !== home || vv.si !== home) { alertDialog('해 찾기', '목표 셀과 변수 셀을 이 시트에서 지정하세요.'); return false; }
+    if (!wb.getCell(home, t.rg.r1, t.rg.c1)?.formula) { alertDialog('해 찾기', '목표 셀에는 수식이 있어야 합니다.'); return false; }
+    const vcells = [];
+    for (let r = vv.rg.r1; r <= vv.rg.r2; r++) for (let c = vv.rg.c1; c <= vv.rg.c2; c++) vcells.push({ r, c });
+    if (vcells.length > 50) { alertDialog('해 찾기', '변수 셀은 50개까지 지정할 수 있습니다.'); return false; }
+    if (vcells.some((p) => wb.getCell(home, p.r, p.c)?.formula)) { alertDialog('해 찾기', '변수 셀에는 수식이 아닌 값이 있어야 합니다.'); return false; }
+    // 제약: "식 연산자 식" → 수식으로 평가 (좌변 - 우변)
+    const rules = [];
+    const ints = new Set();
+    for (const line of cons.value.split(/\n/)) {
+      const s = line.trim();
+      if (!s) continue;
+      const mi = /^(.+?)\s+(int|정수|bin|이진)$/i.exec(s);
+      if (mi) {
+        const p = parseRangeName(mi[1].replace(/\$/g, ''));
+        if (!p) { alertDialog('해 찾기', `제한 조건을 이해할 수 없습니다: ${s}`); return false; }
+        for (let r = p.r1; r <= p.r2; r++) for (let c = p.c1; c <= p.c2; c++) {
+          const k = vcells.findIndex((q) => q.r === r && q.c === c);
+          if (k >= 0) { ints.add(k); if (/bin|이진/i.test(mi[2])) rules.push({ lhs: `=${cellName(r, c)}`, op: '<=', rhs: '=1' }, { lhs: `=${cellName(r, c)}`, op: '>=', rhs: '=0' }); }
+        }
+        continue;
+      }
+      const m = /^(.+?)(<=|>=|=)(.+)$/.exec(s);
+      if (!m) { alertDialog('해 찾기', `제한 조건을 이해할 수 없습니다: ${s}`); return false; }
+      rules.push({ lhs: `=${m[1].trim()}`, op: m[2], rhs: `=${m[3].trim()}` });
+    }
+    const scratch = { r: wb.usedRange(home).rows + 5, c: 0 };
+    const orig = vcells.map((p) => cellData(wb.getCell(home, p.r, p.c)));
+    const put = (x) => vcells.forEach((p, k) => wb.setCellData(home, p.r, p.c, { ...(orig[k] ?? {}), raw: String(x[k]) }));
+    // 제약식은 빈 칸에 잠시 수식으로 넣어 평가
+    const evalExpr = (f) => { wb.setCellData(home, scratch.r, scratch.c, { raw: f }); const v = wb.getValue(home, scratch.r, scratch.c); return typeof v === 'number' ? v : NaN; };
+    const objective = (x) => {
+      put(x);
+      const v = wb.getValue(home, t.rg.r1, t.rg.c1);
+      let f = typeof v === 'number' ? v : NaN;
+      if (!Number.isFinite(f)) return 1e30;
+      f = mode.value === 'max' ? -f : mode.value === 'min' ? f : Math.abs(f - Number(goal.value));
+      let pen = 0;
+      for (const rl of rules) {
+        const d = evalExpr(`=(${rl.lhs.slice(1)})-(${rl.rhs.slice(1)})`);
+        if (!Number.isFinite(d)) { pen += 1e6; continue; }
+        const viol = rl.op === '<=' ? Math.max(0, d) : rl.op === '>=' ? Math.max(0, -d) : Math.abs(d);
+        pen += viol;
+      }
+      if (nonneg.checked) for (const v2 of x) if (v2 < 0) pen += -v2;
+      return { f, pen };
+    };
+    const x0 = vcells.map((p) => Number(wb.getValue(home, p.r, p.c)) || 0);
+    let res;
+    try {
+      res = solveMin(objective, x0, { ints: [...ints] });
+    } finally {
+      vcells.forEach((p, k) => wb.setCellData(home, p.r, p.c, orig[k]));
+      wb.setCellData(home, scratch.r, scratch.c, null);
+    }
+    const feasible = res.pen < 1e-6;
+    const x = res.x.map((v) => Number(v.toPrecision(12)));
+    openDialog({
+      title: '해 찾기 결과', width: 420,
+      body: el('div', {}, el('p', {}, feasible ? '해 찾기가 해를 찾았습니다. 모든 제한 조건이 만족되었습니다.' : '해 찾기가 모든 제한 조건을 만족하는 해를 찾지 못했습니다 (가장 가까운 해).'),
+        el('pre', { class: 'plain' }, vcells.map((p, k) => `${cellName(p.r, p.c)} = ${formatGeneral(x[k])}`).join('\n'))),
+      buttons: [
+        { label: '해 찾기 해 보관', primary: true, action: () => { wb.transact(() => vcells.forEach((p, k) => wb.setCellData(home, p.r, p.c, { ...(orig[k] ?? {}), raw: String(x[k]) })), meta()); } },
+        { label: '원래 값 복원' },
+      ],
+    });
+    return undefined;
+  };
+  openDialog({ title: '해 찾기 매개 변수', body, width: 520, modeless: true, onClose: () => { refPick = null; }, buttons: [{ label: '해 찾기', primary: true, action: run }, { label: '닫기' }] });
 }
 
 /** 이동 옵션 (Ctrl+G → 옵션) */
@@ -9895,6 +10571,7 @@ const MENUS = {
     { label: '한 페이지에 모든 행 맞추기', action: () => patchPage({ fitW: 0, fitH: 1 }) },
   ],
   whatIf: () => [
+    { label: '시나리오 관리자...', action: () => run('scenarioManager') },
     { label: '목표값 찾기...', action: () => run('goalSeek') },
     { label: '데이터 표...', action: () => run('dataTable') },
   ],
@@ -10398,6 +11075,10 @@ const COMMANDS = {
   errorCheck: () => errorCheck(),
   watchWindow: () => watchWindow(!watchPane),
   goalSeek: () => goalSeekDialog(),
+  scenarioManager: () => scenarioManager(),
+  forecastSheet: () => forecastSheetDialog(),
+  dataAnalysis: () => dataAnalysisDialog(),
+  solver: () => solverDialog(),
   dataTable: () => dataTableDialog(),
   gotoSpecial: () => gotoSpecialDialog(),
   outlineGroup: () => outlineGroup(1),

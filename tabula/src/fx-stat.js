@@ -4,6 +4,7 @@ import {
   parseNumberText,
 } from './fxcore.js';
 import { mmult, inverse } from './fx-math.js';
+import { fitEts, etsForecast, etsConfint } from './ets.js';
 
 // ───────────── 특수 함수 ─────────────
 const LANCZOS = [0.99999999999980993, 676.5203681218851, -1259.1392167224028, 771.32342877765313, -176.61502916214059,
@@ -128,7 +129,7 @@ export function normInv(p) {
 }
 
 /** 누적 분포 함수의 역함수 (단조 증가 cdf, 범위 [lo, hi]) */
-function invert(cdf, p, lo, hi) {
+export function invert(cdf, p, lo, hi) {
   if (!(p > 0 && p < 1)) throw ERR.NUM;
   let a = lo;
   let b = hi;
@@ -141,13 +142,33 @@ function invert(cdf, p, lo, hi) {
   return (a + b) / 2;
 }
 
-const tCdf = (t, df) => {
+export const tCdf = (t, df) => {
   const x = df / (df + t * t);
   const tail = 0.5 * betaI(x, df / 2, 0.5);
   return t >= 0 ? 1 - tail : tail;
 };
 const chiCdf = (x, k) => gammaP(k / 2, x / 2);
-const fCdf = (x, d1, d2) => (x <= 0 ? 0 : betaI((d1 * x) / (d1 * x + d2), d1 / 2, d2 / 2));
+export const fCdf = (x, d1, d2) => (x <= 0 ? 0 : betaI((d1 * x) / (d1 * x + d2), d1 / 2, d2 / 2));
+
+// ───────────── 지수 평활 예측 (FORECAST.ETS) ─────────────
+function etsModel(values, timeline, seas, comp, agg) {
+  const cells = (v) => asRange(v).rows.flat().map((x) => (isError(x) ? (() => { throw x; })() : x === '' ? null : x));
+  const vals = cells(values);
+  const tl = cells(timeline);
+  if (vals.length !== tl.length) throw ERR.NA;
+  const seasonality = optInt(seas, 1);
+  const completion = optInt(comp, 1);
+  const aggregation = optInt(agg, 1);
+  if (seasonality < 0 || ![0, 1].includes(completion) || aggregation < 1 || aggregation > 7) throw ERR.NUM;
+  const m = fitEts(vals.map((x) => (typeof x === 'number' ? x : null)), tl.map((x) => (typeof x === 'number' ? x : NaN)), { seasonality, completion, aggregation });
+  if (m.error) throw ERR[m.error];
+  return m;
+}
+const etsTarget = (m, x) => {
+  const t = toNum(x);
+  if (m.axis.pos(t) < 0) throw ERR.NUM;
+  return t;
+};
 
 // ───────────── 통계 도우미 ─────────────
 const mean = (n) => n.reduce((s, x) => s + x, 0) / n.length;
@@ -557,6 +578,23 @@ export const STAT = {
   },
   FORECAST: lift(([x, y, xk]) => { const [xs, ys] = pairs(xk, y); const { slope, intercept } = linreg(ys, xs); return intercept + slope * toNum(x); }, [0]),
   'FORECAST.LINEAR': lift(([x, y, xk]) => { const [xs, ys] = pairs(xk, y); const { slope, intercept } = linreg(ys, xs); return intercept + slope * toNum(x); }, [0]),
+  'FORECAST.ETS': lift(([x, values, timeline, seas, comp, agg]) => {
+    const m = etsModel(values, timeline, seas, comp, agg);
+    return etsForecast(m, etsTarget(m, x));
+  }, [0]),
+  'FORECAST.ETS.CONFINT': lift(([x, values, timeline, cl, seas, comp, agg]) => {
+    const conf = optNum(cl, 0.95);
+    if (!(conf > 0 && conf < 1)) throw ERR.NUM;
+    const m = etsModel(values, timeline, seas, comp, agg);
+    return etsConfint(m, etsTarget(m, x), normInv((1 + conf) / 2));
+  }, [0]),
+  'FORECAST.ETS.SEASONALITY': ([values, timeline, comp, agg]) => etsModel(values, timeline, 1, comp, agg).m,
+  'FORECAST.ETS.STAT': lift(([values, timeline, type, seas, comp, agg]) => {
+    const k = toInt(type);
+    const key = [null, 'alpha', 'beta', 'gamma', 'mase', 'smape', 'mae', 'rmse', 'step'][k];
+    if (!key) throw ERR.NUM;
+    return etsModel(values, timeline, seas, comp, agg).stats[key];
+  }, [2]),
   TREND: ([y, x, nx]) => {
     const ys = collectNums([y]);
     const xs = x === undefined || x === null ? ys.map((_, i) => i + 1) : collectNums([x]);
@@ -576,8 +614,8 @@ export const STAT = {
     const vals = target.map((v) => Math.exp(intercept + slope * v));
     return shape.height === 1 ? new Range([vals]) : new Range(vals.map((v) => [v]));
   },
-  LINEST: ([y, x, konst]) => {
-    // 단순/다중 선형 회귀의 계수 (통계 정보 없이)
+  LINEST: ([y, x, konst, stats]) => {
+    // 단순/다중 선형 회귀의 계수 (stats 가 TRUE 면 엑셀과 같은 5행 통계)
     const Y = asRange(y);
     const ys = collectNums([Y]);
     const useConst = konst === undefined || konst === null ? true : toBool(konst);
@@ -592,7 +630,29 @@ export const STAT = {
     const At = A[0].map((_, j) => A.map((r) => r[j]));
     const beta = mmult(inverse(mmult(At, A)), mmult(At, ys.map((v) => [v]))).map((r) => r[0]);
     const coef = beta.slice(0, k).reverse();
-    return new Range([[...coef, useConst ? beta[k] : 0]]);
+    const first = [...coef, useConst ? beta[k] : 0];
+    if (stats === undefined || stats === null || !toBool(stats)) return new Range([first]);
+    const n = ys.length;
+    const p = k + (useConst ? 1 : 0);
+    const df = n - p;
+    const fit = A.map((r) => r.reduce((acc, v, j) => acc + v * beta[j], 0));
+    const ssresid = ys.reduce((acc, v, i) => acc + (v - fit[i]) ** 2, 0);
+    const my = mean(ys);
+    const sstot = useConst ? ys.reduce((acc, v) => acc + (v - my) ** 2, 0) : ys.reduce((acc, v) => acc + v * v, 0);
+    const ssreg = sstot - ssresid;
+    const mse = df > 0 ? ssresid / df : NaN;
+    const inv = inverse(mmult(At, A));
+    const se = beta.map((_, j) => Math.sqrt(Math.max(0, mse * inv[j][j])));
+    const NA = ERR.NA;
+    const num = (v) => (Number.isFinite(v) ? v : ERR.NUM);
+    const pad = (row) => [...row, ...Array(k + 1 - row.length).fill(NA)];
+    return new Range([
+      first,
+      [...se.slice(0, k).reverse().map(num), useConst ? num(se[k]) : NA],
+      pad([num(sstot ? ssreg / sstot : 1), num(Math.sqrt(mse))]),
+      pad([num((ssreg / k) / mse), df]),
+      pad([ssreg, ssresid]),
+    ]);
   },
   FREQUENCY: ([data, bins]) => {
     const d = collectNums([data]);

@@ -326,9 +326,9 @@ function sheetFromData(s) {
 
 /** 시트의 부가 속성 (셀 외) — 저장/복원/복제용 */
 const SHEET_PROPS = ['colWidths', 'rowHeights', 'merges', 'cond', 'colStyles', 'rowStyles', 'allStyle',
-  'hiddenRows', 'hiddenCols', 'rowManual', 'freeze', 'filter', 'charts', 'pivot', 'validations', 'images', 'shapes', 'tables', 'slicers', 'pivotsExtra', 'state', 'noGrid', 'outline', 'protect', 'sparklines', 'page', 'defRowH', 'defColW', 'zoom', 'view', 'tabColor'];
+  'hiddenRows', 'hiddenCols', 'rowManual', 'freeze', 'filter', 'charts', 'pivot', 'validations', 'images', 'shapes', 'tables', 'slicers', 'pivotsExtra', 'state', 'noGrid', 'outline', 'protect', 'sparklines', 'page', 'defRowH', 'defColW', 'zoom', 'view', 'tabColor', 'scenarios'];
 // 바뀌어도 수식 결과가 달라지지 않는 시트 속성
-const CALC_NEUTRAL = new Set(['tabColor', 'defRowH', 'defColW', 'zoom', 'view', 'outline', 'protect', 'sparklines', 'page', 'state', 'noGrid', 'charts', 'images', 'shapes', 'slicers', 'freeze', 'cond', 'validations', 'colStyles', 'rowStyles', 'allStyle', 'merges']);
+const CALC_NEUTRAL = new Set(['scenarios', 'tabColor', 'defRowH', 'defColW', 'zoom', 'view', 'outline', 'protect', 'sparklines', 'page', 'state', 'noGrid', 'charts', 'images', 'shapes', 'slicers', 'freeze', 'cond', 'validations', 'colStyles', 'rowStyles', 'allStyle', 'merges']);
 
 /** 숫자 키 객체의 키를 삽입/삭제에 맞춰 이동 */
 function shiftKeys(obj, index, count) {
@@ -1602,6 +1602,14 @@ export class Workbook {
         }).filter(Boolean),
       })).filter((g) => g.items.length);
     });
+    if (target.scenarios?.length) {
+      // 시나리오 변경 셀: 삭제된 셀은 빼고 나머지는 이동 (시나리오 요약 결과 셀도 같이)
+      const mv = (p) => { const rg = adjustRange({ r1: p.r, c1: p.c, r2: p.r, c2: p.c }, axis, index, count); return rg ? { r: rg.r1, c: rg.c1 } : null; };
+      target.scenarios = target.scenarios.map((sc) => {
+        const keep = sc.cells.map((p, i) => [mv(p), sc.values[i]]).filter(([p]) => p);
+        return keep.length ? { ...sc, cells: keep.map(([p]) => p), values: keep.map(([, v]) => v) } : null;
+      }).filter(Boolean);
+    }
     if (target.page && (target.page.area || target.page.titleRows || target.page.titleCols)) {
       // 인쇄 영역 · 인쇄 제목도 함께 이동
       const pg = { ...target.page };
