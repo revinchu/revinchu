@@ -751,7 +751,7 @@ function renderRefHighlights() {
 
 // ── 함수 자동 완성 ──
 function updateAutocomplete() {
-  if (!editing) return hideAutocomplete();
+  if (!editing || opts.formulaAutocomplete === false) return hideAutocomplete();
   const inp = edInput();
   const text = inp.value;
   const pos = inp.selectionStart;
@@ -922,7 +922,7 @@ function onEditingKey(e) {
         setEditText(`${inp.value.slice(0, pos)}\n${inp.value.slice(inp.selectionEnd)}`, pos + 1);
         return;
       }
-      commitEdit(ctrl ? null : e.shiftKey ? 'up' : 'down', { fillSel: ctrl });
+      commitEdit(ctrl || opts.enterDir === 'none' ? null : e.shiftKey ? ENTER_OPP[opts.enterDir] ?? 'up' : opts.enterDir ?? 'down', { fillSel: ctrl });
       return;
     case 'Tab':
       e.preventDefault();
@@ -1107,7 +1107,7 @@ function onGridKey(e) {
     case 'Enter':
       handled();
       if (clip && !e.shiftKey) { pasteInternal('all'); clip = null; updateSelectionUI(); setMode(); return; }
-      moveEnterTab(e.shiftKey ? 'up' : 'down');
+      if (opts.enterDir !== 'none') moveEnterTab(e.shiftKey ? ENTER_OPP[opts.enterDir] ?? 'up' : opts.enterDir ?? 'down');
       return;
     case 'Tab': handled(); moveEnterTab(e.shiftKey ? 'left' : 'right'); return;
     case 'Home': handled(); if (e.shiftKey) extendTo(focusCell.r, 0); else selectCell(active.r, 0); return;
@@ -5449,7 +5449,12 @@ const PIVOT_DEFAULTS = {
   autoRefresh: true, layout: 'tabular', repeatLabels: false, blankRows: false, subtotals: 'bottom', grand: 'both', mergeLabels: false,
   errorShow: true, errorText: '', emptyShow: true, emptyText: '', autofit: false, preserveFormat: true, style: 'PivotStyleLight16',
 };
-const OPTION_DEFAULTS = { calcMode: 'auto', getPivotData: false, pivotEdit: false, autoDateGroup: false, focusCell: false, focusColor: '#fff4b8', pivot: PIVOT_DEFAULTS };
+const OPTION_DEFAULTS = {
+  calcMode: 'auto', getPivotData: false, pivotEdit: false, autoDateGroup: false, focusCell: false, focusColor: '#fff4b8', pivot: PIVOT_DEFAULTS,
+  // 고급 · 저장 (엑셀 옵션의 '고급' + 위셀 보관함)
+  enterDir: 'down', formulaAutocomplete: true, browserMenu: false, libMax: 30, verMinutes: 10,
+};
+const ENTER_OPP = { down: 'up', up: 'down', right: 'left', left: 'right' };
 const opts = (() => {
   try {
     const o = JSON.parse(localStorage.getItem(OPTIONS_KEY) ?? 'null') ?? {};
@@ -5506,6 +5511,22 @@ function optionsDialog(startTab = 0) {
       check(o.autoDateGroup, '피벗 테이블에서 날짜/시간 열의 자동 그룹화 사용', (v) => { o.autoDateGroup = v; }),
       el('button', { class: 'btn', onclick: () => pivotDefaultsDialog(o) }, '기본 레이아웃 편집...'),
       el('div', { class: 'muted' }, '새 피벗 테이블의 보고서 레이아웃 · 부분합 · 총합계 · 옵션 기본값을 정합니다.'))],
+    ['고급', el('div', { class: 'opt-page' },
+      title('편집 옵션'),
+      el('label', {}, el('span', {}, 'Enter 키를 누른 후 다음 셀로 이동 — 방향 '), (() => {
+        const sel = el('select', {}, [['down', '아래쪽'], ['right', '오른쪽'], ['up', '위쪽'], ['left', '왼쪽'], ['none', '이동 안 함']].map(([v, l]) => el('option', { value: v, selected: o.enterDir === v }, l)));
+        sel.addEventListener('change', () => { o.enterDir = sel.value; });
+        return sel;
+      })()),
+      check(o.formulaAutocomplete !== false, '수식 자동 완성 (함수 · 이름 목록)', (v) => { o.formulaAutocomplete = v; }),
+      title('표시'),
+      check(o.browserMenu, '셀에서 브라우저 기본 오른쪽 클릭 메뉴도 허용 (기본: 끔 — 구글 스프레드시트처럼 위셀 메뉴만)', (v) => { o.browserMenu = v; }))],
+    ['저장', el('div', { class: 'opt-page' },
+      title('이 브라우저의 보관함'),
+      el('label', {}, el('span', {}, '최근 문서 보관 개수 '), (() => { const i = el('input', { type: 'number', min: 5, max: 200, value: o.libMax }); i.addEventListener('change', () => { o.libMax = Number(i.value) || 30; }); return i; })()),
+      el('label', {}, el('span', {}, '편집 중 버전 기록 간격(분) '), (() => { const i = el('input', { type: 'number', min: 1, max: 240, value: o.verMinutes }); i.addEventListener('change', () => { o.verMinutes = Number(i.value) || 10; }); return i; })()),
+      el('div', { class: 'muted' }, `문서마다 버전은 최근 ${VER_MAX}개까지 (이름 붙인 버전은 오래 보관). 셀이 30만 개를 넘는 문서는 큰 문서 자동 저장만 합니다.`),
+      el('button', { class: 'btn', onclick: () => { openBackstage('open'); } }, '보관함 열기...'))],
     ['접근성', el('div', { class: 'opt-page' },
       title('포커스 셀'),
       check(o.focusCell, '포커스 셀 사용 (활성 셀의 행과 열을 강조)', (v) => { o.focusCell = v; }),
@@ -9156,10 +9177,10 @@ function libraryFlush({ version = null, force = false } = {}) {
   try { json = JSON.stringify(snapshot()); } catch { return Promise.resolve(null); }
   libDirty = false;
   const now = Date.now();
-  const ver = version ?? (now - lastVersionAt > VERSION_EVERY ? { label: '' } : null);
+  const ver = version ?? (now - lastVersionAt > (Number(opts.verMinutes) || 10) * 60000 ? { label: '' } : null);
   if (ver) lastVersionAt = now;
   const info = { sheets: wb.sheets.length, cells: cellCount(), sheetNames: wb.sheets.slice(0, 6).map((x) => x.name) };
-  return libSave(docId, docName, json, { version: ver, info }).catch((err) => { console.warn('보관함 저장 실패', err); return null; });
+  return libSave(docId, docName, json, { version: ver, info, max: clamp(Number(opts.libMax) || LIB_MAX, 5, 200) }).catch((err) => { console.warn('보관함 저장 실패', err); return null; });
 }
 async function openFromLibrary(id, { ts = null, copy = false } = {}) {
   await libraryFlush();
@@ -12206,7 +12227,7 @@ function bindEvents() {
   document.addEventListener('contextmenu', (e) => {
     const t = e.target;
     const typing = t instanceof Element && t.matches('input:not([type=checkbox]):not([type=radio]), textarea, [contenteditable=""], [contenteditable=true]') && t !== dom.editor;
-    if (!typing) e.preventDefault();
+    if (!typing && !opts.browserMenu) e.preventDefault();
   });
   document.addEventListener('mousemove', (e) => {
     if (tlDrag) {

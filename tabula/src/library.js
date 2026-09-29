@@ -46,7 +46,7 @@ async function dropDoc(e) {
  * 문서 저장 (json: 스냅샷 JSON 문자열). version: 버전 기록에도 남김 ({ label })
  * 반환: 갱신된 목록 항목
  */
-export function libSave(id, name, json, { version = null, info = {} } = {}) {
+export function libSave(id, name, json, { version = null, info = {}, max = LIB_MAX } = {}) {
   return serial(async () => {
     const packed = await packText(json);
     await idbSet(docKey(id), packed);
@@ -67,7 +67,7 @@ export function libSave(id, name, json, { version = null, info = {} } = {}) {
     }
     // 오래된 문서부터 정리 (고정한 문서 · 지금 문서 제외)
     const sorted = [...list].sort((a, b) => a.updated - b.updated);
-    while (list.length > LIB_MAX) {
+    while (list.length > max) {
       const victim = sorted.find((x) => !x.pinned && x.id !== id && list.includes(x));
       if (!victim) break;
       list.splice(list.indexOf(victim), 1);
