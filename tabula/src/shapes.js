@@ -59,16 +59,43 @@ export function shapeSvg(sh) {
     // 선 굵기만큼 안쪽으로
     const i = sw / 2;
     const parts = geom(Math.max(0, w - sw), Math.max(0, h - sw));
-    const stroke = sh.stroke ? `stroke="${attr(sh.stroke)}" stroke-width="${sw}" stroke-linejoin="round"${dash}` : 'stroke="none"';
+    const stroke = sh.stroke ? `stroke="${attr(sh.stroke)}" stroke-width="${sw}" stroke-linejoin="round"${dash}${sh.strokeOpacity !== undefined ? ` stroke-opacity="${sh.strokeOpacity}"` : ''}` : 'stroke="none"';
+    // 채우기: 단색 · 그라데이션 · 투명도, 효과: 그림자 · 네온 · 부드러운 가장자리
+    const uid = `s${(sh.id ?? '').replace(/[^\w]/g, '')}${Math.round(w)}`;
+    const defs = [];
+    let gradRef = null;
+    if (sh.grad && sh.fill) {
+      const a = ((sh.grad.ang ?? 90) * Math.PI) / 180;
+      const gx = Math.cos(a) / 2;
+      const gy = Math.sin(a) / 2;
+      const stops = sh.grad.stops ?? [[0, shadeHex(sh.fill, 0.35)], [1, shadeHex(sh.fill, -0.15)]];
+      defs.push(`<linearGradient id="g${uid}" x1="${0.5 - gx}" y1="${0.5 - gy}" x2="${0.5 + gx}" y2="${0.5 + gy}">${stops.map(([o, c]) => `<stop offset="${o}" stop-color="${attr(c)}"/>`).join('')}</linearGradient>`);
+      gradRef = `url(#g${uid})`;
+    }
+    const fx = [];
+    if (sh.shadow) {
+      const sd = typeof sh.shadow === 'object' ? sh.shadow : {};
+      fx.push(`<feDropShadow dx="${sd.dx ?? 2.5}" dy="${sd.dy ?? 2.5}" stdDeviation="${sd.blur ?? 2.5}" flood-color="${attr(sd.color ?? '#000')}" flood-opacity="${sd.opacity ?? 0.4}"/>`);
+    }
+    if (sh.glow) fx.push(`<feMorphology operator="dilate" radius="${(sh.glow.size ?? 5) / 2}" in="SourceAlpha" result="gd"/><feGaussianBlur in="gd" stdDeviation="${(sh.glow.size ?? 5) / 2}" result="gb"/><feFlood flood-color="${attr(sh.glow.color ?? '#4472c4')}" flood-opacity="0.6"/><feComposite in2="gb" operator="in" result="gc"/><feMerge><feMergeNode in="gc"/><feMergeNode in="SourceGraphic"/></feMerge>`);
+    if (sh.soft) fx.push(`<feGaussianBlur stdDeviation="${sh.soft / 2}"/>`);
+    let filt = '';
+    if (fx.length) {
+      // 효과마다 따로 필터 (겹치면 원본 그래픽 기준이 달라지므로 그림자 → 네온 → 부드러운 가장자리 순서로 중첩)
+      const ids = fx.map((f, k) => { defs.push(`<filter id="f${uid}${k}" x="-40%" y="-40%" width="180%" height="180%">${f}</filter>`); return `f${uid}${k}`; });
+      filt = ids.reduce((acc, id) => `<g filter="url(#${id})">${acc}</g>`, '§');
+    }
     const fillOf = (p) => {
       if (p.line || !sh.fill) return 'none';
       if (p.shade === 'dark') return attr(shadeHex(sh.fill, -0.2));
       if (p.shade === 'light') return attr(shadeHex(sh.fill, 0.2));
-      return attr(sh.fill);
+      return gradRef ?? attr(sh.fill);
     };
-    const paths = parts.map((p) => `<path d="${p.d}" fill="${fillOf(p)}"${p.evenodd ? ' fill-rule="evenodd"' : ''} ${p.line && !sh.stroke ? `stroke="${attr(sh.fill ?? '#000')}" stroke-width="1.5"` : stroke}/>`).join('');
+    const op = sh.fillOpacity !== undefined ? ` fill-opacity="${sh.fillOpacity}"` : '';
+    const paths = parts.map((p) => `<path d="${p.d}" fill="${fillOf(p)}"${op}${p.evenodd ? ' fill-rule="evenodd"' : ''} ${p.line && !sh.stroke ? `stroke="${attr(sh.fill ?? '#000')}" stroke-width="1.5"` : stroke}/>`).join('');
     const flipT = sh.flip || sh.flipV ? ` translate(${sh.flip ? w - sw : 0},${sh.flipV ? h - sw : 0}) scale(${sh.flip ? -1 : 1},${sh.flipV ? -1 : 1})` : '';
-    body = `<g transform="translate(${i},${i})${flipT}">${paths}</g>`;
+    const g = `<g transform="translate(${i},${i})${flipT}">${paths}</g>`;
+    body = `${defs.length ? `<defs>${defs.join('')}</defs>` : ''}${filt ? filt.replace('§', g) : g}`;
   }
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" overflow="visible">${body}</svg>`;
 }

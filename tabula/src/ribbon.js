@@ -121,6 +121,8 @@ export const TABS = [
         large('shapesMenu', 'shapes', '도형', { menu: 'shapes' }),
         large('insertTextbox', 'textbox', '텍스트 상자'),
       ]),
+      group('기호', [large('insertEquation', 'equation', '수식', { menu: 'equations' }), large('insertSymbol', 'symbol', '기호')]),
+      group('링크', [large('hyperlink', 'link', '링크', { title: '하이퍼링크 삽입 (Ctrl+K)' })]),
       group('필터', [large('insertSlicer', 'slicer', '슬라이서', { title: '표나 피벗 테이블에 슬라이서 삽입' })]),
       group('차트', [
         large('chartColumn', 'chartColumn', '세로 막대형', { title: '세로 막대형 차트 삽입 (Alt+F1)' }),
@@ -128,7 +130,9 @@ export const TABS = [
         large('chartLine', 'chartLine', '꺾은선형'),
         large('chartPie', 'chartPie', '원형', { menu: 'pieCharts', split: true }),
         large('chartArea', 'chartArea', '영역형'),
-        large('chartScatter', 'chartScatter', '분산형'),
+        large('chartScatter', 'chartScatter', '분산형', { menu: 'scatterCharts', split: true }),
+        large('insertChartAll', 'chartColumn', '모든 차트', { title: '차트 삽입 — 모든 차트 (엑셀의 [추천 차트] · [모든 차트])' }),
+        large('insertPivotChart', 'pivot', '피벗 차트', { title: '피벗 차트 삽입 (피벗 테이블 + 차트)' }),
       ]),
       group('스파크라인', [
         medium('sparkLine', 'chartLine', '꺾은선형', { title: '꺾은선형 스파크라인 (셀 안 차트)' }),
@@ -264,6 +268,7 @@ export const TABS = [
         large('zoomIn', 'zoomIn', '확대'),
         large('zoomOut', 'zoomOut', '축소'),
         large('zoom100', 'zoom100', '100%'),
+        large('zoomSel', 'zoomSel', '선택 영역 확대/축소', { title: '선택한 범위가 창에 꽉 차도록 확대/축소' }),
       ]),
       group('창', [large('freezeMenu', 'freeze', '틀 고정', { menu: 'freeze', toggle: 'frozen' })]),
       group('매크로', [large('macros', 'macro', '매크로', { title: '매크로(VBA) 코드 보기' })]),
@@ -374,6 +379,59 @@ export const TABS = [
         ),
       ]),
       group('표시', [col(check('slicerHeader', '머리글 표시', 'slicerHeaderOn')), large('slicerConnections', 'slicer', '보고서 연결')]),
+      group('글꼴', [
+        col(
+          { type: 'select', cmd: 'slicerFontSize', stateKey: 'slicerFontSize', cls: 'w60', title: '항목 글꼴 크기', options: ['기본', 7, 8, 9, 10, 11, 12, 14, 16, 18].map((n) => ({ value: String(n), label: n === '기본' ? '글꼴 기본' : `글꼴 ${n}` })) },
+          { type: 'select', cmd: 'slicerHeadSize', stateKey: 'slicerHeadSize', cls: 'w60', title: '머리글 글꼴 크기', options: ['기본', 8, 9, 10, 11, 12, 14, 16].map((n) => ({ value: String(n), label: n === '기본' ? '머리글 기본' : `머리글 ${n}` })) },
+          check('slicerBold', '굵게', 'slicerBoldOn'),
+        ),
+      ]),
+      group('정렬', [
+        col(medium('objForwardBtn', 'bringForward', '앞으로 가져오기', { menu: 'objForward' }), medium('objBackwardBtn', 'sendBackward', '뒤로 보내기', { menu: 'objBackward' }), medium('selectionPane', 'selectionPane', '선택 창')),
+        col(medium('objAlignBtn', 'align', '맞춤', { menu: 'objAlign' }), medium('objPlacementBtn', 'placement', '위치 속성', { menu: 'objPlacement' })),
+      ]),
+      group('크기', [
+        col(
+          { type: 'text', cmd: 'objH', stateKey: 'objH', label: '높이:', title: '슬라이서 높이 (px)', width: 58 },
+          { type: 'text', cmd: 'objW', stateKey: 'objW', label: '너비:', title: '슬라이서 너비 (px)', width: 58 },
+        ),
+      ]),
+    ],
+  },
+  {
+    id: 'objFormat', label: '셰이프 형식', context: 'object', groups: [
+      group('도형 삽입', [
+        large('shapesMenu', 'shapes', '도형', { menu: 'shapes' }),
+        col(medium('shapeChangeBtn', 'shapes', '도형 모양 변경', { menu: 'shapeChange' }), medium('insertTextbox', 'textbox', '텍스트 상자')),
+      ]),
+      group('도형 스타일', [
+        large('shapeStylesBtn', 'effects', '빠른 스타일', { menu: 'shapeStyles' }),
+        col(medium('shapeFillBtn', 'fill', '도형 채우기', { menu: 'shapeFill' }), medium('shapeOutlineBtn', 'border', '도형 윤곽선', { menu: 'shapeOutline' }), medium('shapeEffectsBtn', 'effects', '도형 효과', { menu: 'shapeEffects' })),
+      ]),
+      group('WordArt 스타일', [
+        large('wordArtBtn', 'wordart', '빠른 스타일', { menu: 'wordArt' }),
+        col(medium('textFillBtn', 'fontColor', '텍스트 채우기', { menu: 'textFill' }), medium('textOutlineBtn', 'wordart', '텍스트 윤곽선', { menu: 'textOutline' }), medium('textEffectsBtn', 'effects', '텍스트 효과', { menu: 'textEffects' })),
+      ]),
+      group('정렬', [
+        col(medium('objForwardBtn', 'bringForward', '앞으로 가져오기', { menu: 'objForward' }), medium('objBackwardBtn', 'sendBackward', '뒤로 보내기', { menu: 'objBackward' }), medium('selectionPane', 'selectionPane', '선택 창')),
+        col(medium('objAlignBtn', 'align', '맞춤', { menu: 'objAlign' }), medium('objRotateBtn', 'rotate', '회전', { menu: 'objRotate' }), medium('objPlacementBtn', 'placement', '위치 속성', { menu: 'objPlacement' })),
+      ]),
+      group('크기', [
+        col(
+          { type: 'text', cmd: 'objH', stateKey: 'objH', label: '높이:', title: '도형 높이 (px)', width: 58 },
+          { type: 'text', cmd: 'objW', stateKey: 'objW', label: '너비:', title: '도형 너비 (px)', width: 58 },
+          { type: 'text', cmd: 'objRot', stateKey: 'objRot', label: '회전:', title: '회전 각도 (°)', width: 58 },
+        ),
+      ]),
+    ],
+  },
+  {
+    id: 'chartDesign', label: '차트 디자인', context: 'chart', groups: [
+      group('차트 레이아웃', [large('chartElementsBtn', 'chartColumn', '차트 요소 추가', { menu: 'chartElements' }), large('chartLayoutBtn', 'table', '빠른 레이아웃', { menu: 'chartLayouts' })]),
+      group('차트 스타일', [large('chartColorsBtn', 'fill', '색 변경', { menu: 'chartColors' }), large('chartStylesBtn', 'effects', '차트 스타일', { menu: 'chartStyles' })]),
+      group('데이터', [large('chartSwitch', 'refresh', '행/열 전환'), large('chartSelectData', 'table', '데이터 선택')]),
+      group('종류', [large('chartChangeType', 'chartColumn', '차트 종류 변경')]),
+      group('서식', [large('chartFormat', 'format', '차트 서식 창'), large('chartPivotFields', 'pivot', '필드 단추', { toggle: 'chartFieldButtons' })]),
     ],
   },
   {

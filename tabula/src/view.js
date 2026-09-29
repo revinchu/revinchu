@@ -87,7 +87,12 @@ export function borderCss(side, kind, color) {
 export function shapeTextHtml(o) {
   const vj = { top: 'flex-start', middle: 'center', bottom: 'flex-end' }[o.valign ?? (o.kind === 'textbox' ? 'top' : 'middle')];
   const pad = o.pad ? o.pad.map((v) => `${v}px`).join(' ') : '4.8px 9.6px';
-  const base = `justify-content:${vj};padding:${pad};text-align:${o.align ?? (o.kind === 'textbox' ? 'left' : 'center')};color:${esc(o.color ?? '#000')};font-size:${o.size ?? 11}pt;${o.bold ? 'font-weight:700;' : ''}${o.nowrap ? 'white-space:pre;' : ''}`;
+  // 텍스트 채우기 · 윤곽선 · 효과(그림자 · 네온) — 엑셀 WordArt 서식
+  const tfx = [];
+  if (o.textShadow) tfx.push('2px 2px 3px rgba(0,0,0,.45)');
+  if (o.textGlow) tfx.push(`0 0 4px ${esc(o.textGlow)}`, `0 0 8px ${esc(o.textGlow)}`);
+  const textFx = `${o.textOutline ? `-webkit-text-stroke:${o.textOutline.w ?? 0.75}px ${esc(o.textOutline.color ?? '#000')};` : ''}${tfx.length ? `text-shadow:${tfx.join(',')};` : ''}${o.font ? `font-family:${fontStack(o.font)};` : ''}${o.italic ? 'font-style:italic;' : ''}${o.underline ? 'text-decoration:underline;' : ''}`;
+  const base = `justify-content:${vj};padding:${pad};text-align:${o.align ?? (o.kind === 'textbox' ? 'left' : 'center')};color:${esc(o.color ?? '#000')};font-size:${o.size ?? 11}pt;${o.bold ? 'font-weight:700;' : ''}${o.nowrap ? 'white-space:pre;' : ''}${textFx}`;
   if (!o.paras) return `<div class="sh-text" style="${base}">${esc(o.text)}</div>`;
   const runCss = (r) => [r.b ? 'font-weight:700' : '', r.i ? 'font-style:italic' : '', r.u || r.s ? `text-decoration:${r.u ? 'underline ' : ''}${r.s ? 'line-through' : ''}` : '',
     r.sz ? `font-size:${r.sz}pt` : '', r.color ? `color:${esc(r.color)}` : '', r.font ? `font-family:${fontStack(r.font)}` : ''].filter(Boolean).join(';');
@@ -717,8 +722,9 @@ export class GridView {
     const handles = '<i class="ch-h nw"></i><i class="ch-h ne"></i><i class="ch-h sw"></i><i class="ch-h se"></i>';
     const box = (o, cls, inner, extraCss = '') => {
       const h = Math.max(o.h, cls.includes('line') ? 1 : 0);
+      if (o.hidden) return; // 선택 창에서 숨긴 개체
       if (o.x + o.w < winX1 || o.x > winX2 || o.y + h < winY1 || o.y > winY2) return;
-      const selected = st.chartSel === o.id;
+      const selected = st.chartSel === o.id || !!st.objMulti?.has(o.id);
       html.push(`<div class="obj ${cls}${selected ? ' sel' : ''}" data-id="${esc(o.id)}" style="left:${o.x - p.ox}px;top:${o.y - p.oy}px;width:${o.w}px;height:${h}px;${extraCss}">${inner}${selected ? handles : ''}</div>`);
     };
     // 엑셀처럼 그림 → 도형 → 차트 순서가 아니라 저장된 순서(z)대로 겹침
@@ -727,9 +733,13 @@ export class GridView {
       ...slicers.map((o) => ['slicers', o]),
     ].sort((a, b) => (a[1].z ?? 0) - (b[1].z ?? 0));
     for (const [prop, o] of all) {
-      if (prop === 'charts') box(o, 'chart', this.chartSvg(o));
+      if (prop === 'charts') box(o, 'chart', this.chartSvg(o) + this.pivotChartButtons(o));
       else if (prop === 'slicers') box(o, 'slicer', this.slicerHtml(o), slicerCssVars(o));
-      else if (prop === 'images') box(o, 'pic', `<img src="${esc(o.src)}" alt="${esc(o.name ?? '')}" draggable="false">`);
+      else if (prop === 'images') {
+        // 그림 스타일: 테두리 · 둥근 모서리 · 그림자 · 회전 · 투명도
+        const ic = [o.border ? `border:${o.borderW ?? 2}px solid ${esc(o.border)}` : '', o.radius ? `border-radius:${o.radius}px` : '', o.shadow ? 'box-shadow:3px 3px 8px rgba(0,0,0,.4)' : '', o.opacity !== undefined ? `opacity:${o.opacity}` : ''].filter(Boolean).join(';');
+        box(o, 'pic', `<img src="${esc(o.src)}" alt="${esc(o.name ?? '')}" draggable="false"${ic ? ` style="${ic};box-sizing:border-box"` : ''}>`, o.rot ? `transform:rotate(${o.rot}deg)` : '');
+      }
       else {
         const isLine = LINE_KINDS.has(o.kind);
         const text = (o.text || o.paras) && !isLine ? shapeTextHtml(o) : '';
@@ -764,6 +774,17 @@ export class GridView {
       + `<button type="button" class="sl-multi${sl.multi ? ' on' : ''}" title="다중 선택 (Alt+S)">☰</button>`
       + `<button type="button" class="sl-clear${m.filtered ? '' : ' off'}" title="필터 지우기 (Alt+C)">✕</button></div>`;
     return `${head}<div class="sl-items" style="grid-template-columns:repeat(${Math.max(1, sl.columns ?? 1)}, minmax(0, 1fr))">${items}</div>`;
+  }
+
+  /** 피벗 차트 필드 단추 (엑셀처럼 차트 위에서 바로 거르기) */
+  pivotChartButtons(ch) {
+    if (!ch.pivot || ch.fieldButtons === false) return '';
+    const fields = this.host.pivotChartFields?.(ch) ?? null;
+    if (!fields) return '';
+    const btn = (f, kind, cls) => `<button type="button" class="pc-field ${cls}" data-k="${kind}" data-f="${esc(f)}" title="${esc(f)} 거르기">${esc(f)} ▾</button>`;
+    return `<div class="pc-fields">${fields.pages.map((f) => btn(f, 'pages', 'page')).join('')}${fields.values.map((f) => `<span class="pc-field val">${esc(f)}</span>`).join('')}</div>`
+      + `<div class="pc-fields axis">${fields.rows.map((f) => btn(f, 'rows', 'row')).join('')}</div>`
+      + (fields.cols.length ? `<div class="pc-fields legend">${fields.cols.map((f) => btn(f, 'cols', 'col')).join('')}</div>` : '');
   }
 
   chartSvg(ch) {

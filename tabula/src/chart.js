@@ -69,7 +69,7 @@ const label = (v) => (v === null || v === undefined ? '' : typeof v === 'number'
  * 2차원 값 → { categories, series:[{name, values}] }
  * 엑셀처럼: 첫 행/첫 열이 숫자가 아니면 머리글로, 행 수 ≥ 열 수이면 열 단위 계열
  */
-export function chartLayout(rows, type = 'column') {
+export function chartLayout(rows, type = 'column', flip = false) {
   const R = rows.length;
   const C = rows[0]?.length ?? 0;
   const headRow = R > 1 && rows[0].slice(C > 1 ? 1 : 0).every((v) => !isNum(v)) && rows[0].some((v) => v !== null && v !== '');
@@ -77,13 +77,14 @@ export function chartLayout(rows, type = 'column') {
   const xy = type === 'scatter' || type === 'bubble';
   const catCol = C > 1 && (xy || rows.slice(firstDataRow).every((r) => !isNum(r[0])));
   const firstDataCol = catCol ? 1 : 0;
-  const byCols = xy || type === 'stock' || type === 'boxWhisker' || R - firstDataRow >= C - firstDataCol;
+  const auto = xy || type === 'stock' || type === 'boxWhisker' || R - firstDataRow >= C - firstDataCol;
+  const byCols = flip && !xy ? !auto : auto;
   return { R, C, headRow, catCol, firstDataRow, firstDataCol, byCols };
 }
 
-export function chartData(rows, type = 'column') {
+export function chartData(rows, type = 'column', flip = false) {
   if (!rows.length || !rows[0]?.length) return { categories: [], series: [] };
-  const { R, C, headRow, catCol, firstDataRow, firstDataCol, byCols } = chartLayout(rows, type);
+  const { R, C, headRow, catCol, firstDataRow, firstDataCol, byCols } = chartLayout(rows, type, flip);
   const series = [];
   let categories = [];
   if (byCols) {
@@ -144,7 +145,7 @@ export function resolveChart(ch, api) {
     const n = Math.max(0, ...series.map((s) => s.values.length));
     const categories = catRef ? flatRef(api.values(catRef), true).map(label) : Array.from({ length: n }, (_, i) => String(i + 1));
     base = { categories, series };
-  } else base = chartData(api.range(ch), ch.type === 'combo' ? 'column' : ch.type);
+  } else base = chartData(api.range(ch), ch.type === 'combo' ? 'column' : ch.type, !!ch.byRows);
   const fmt = ch.seriesFmt ?? [];
   const comboDefault = (i) => (ch.type === 'combo' ? (i === base.series.length - 1 && base.series.length > 1 ? { type: 'line', axis: 1 } : { type: 'column' }) : {});
   base.series = base.series.map((s, i) => ({ ...s, ...comboDefault(i), ...(fmt[i] ?? {}) }));
