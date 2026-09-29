@@ -2583,8 +2583,9 @@ function pivotCondXml(wb, si, def, header, values) {
     const vi = Math.max(0, values.findIndex((v) => valueName(v) === pv.value));
     const refs = [`<reference field="4294967294" count="1" selected="0"><x v="${vi}"/></reference>`];
     const rf = pv.scope === 'field' && pv.rowField ? header.findIndex((h) => String(h).toLowerCase() === String(pv.rowField).toLowerCase()) : -1;
-    if (rf >= 0) refs.push(`<reference field="${rf}" count="1" selected="0"><x v="0"/></reference>`);
-    out.push(`<conditionalFormat${pv.scope === 'data' ? ' scope="data"' : ' scope="field" type="row"'} priority="${i + 1}"><pivotAreas count="1"><pivotArea outline="0" collapsedLevelsAreSubtotals="1" fieldPosition="0"><references count="${refs.length}">${refs.join('')}</references></pivotArea></pivotAreas></conditionalFormat>`);
+    // 엑셀과 같은 형식: 행 필드 참조는 항목 없이(count="0") — 그 필드의 모든 항목
+    if (rf >= 0) refs.push(`<reference field="${rf}" count="0" selected="0"/>`);
+    out.push(`<conditionalFormat scope="${pv.scope === 'data' ? 'data' : 'field'}" priority="${i + 1}"><pivotAreas count="1"><pivotArea outline="0" collapsedLevelsAreSubtotals="1" fieldPosition="0"><references count="${refs.length}">${refs.join('')}</references></pivotArea></pivotAreas></conditionalFormat>`);
   });
   return out.length ? `<conditionalFormats count="${out.length}">${out.join('')}</conditionalFormats>` : '';
 }
