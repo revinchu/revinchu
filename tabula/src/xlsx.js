@@ -813,6 +813,8 @@ function* readSheet(files, path, ctx) {
   }
   condList.sort((x, y) => x.p - y.p || x.i - y.i);
   sheet.cond = condList.map((x) => x.rule);
+  // 피벗 테이블 조건부 서식(<conditionalFormats priority>)과 짝지을 때 쓰는 파일의 priority (저장하지 않음)
+  sheet._condPrio = condList.map((x) => x.p);
 
   // 메모 · 그림(차트)
   const rels = relsOf(files, path);
@@ -1686,6 +1688,31 @@ function readSlicerCache(files, path) {
 }
 
 /** 피벗 테이블 정의와 슬라이서를 시트에 연결하고 임시 속성은 지움 */
+/**
+ * 엑셀 피벗 조건부 서식 (<conditionalFormats><conditionalFormat scope="data|field|selection" priority>) →
+ * 시트 규칙에 pivot: { name, scope, value, rowField } — 피벗을 다시 그리면 범위가 따라감
+ */
+function linkPivotCond(sheet, def, root, cache) {
+  const cfs = kids(child(root, 'conditionalFormats'), 'conditionalFormat');
+  if (!cfs.length || !sheet._condPrio) return;
+  const names = cache.fields.map((f, i) => f.name || `열${i + 1}`);
+  for (const cf of cfs) {
+    const k = sheet._condPrio.indexOf(Number(cf.attrs.priority));
+    const rule = k >= 0 ? sheet.cond[k] : null;
+    if (!rule) continue;
+    const scope = cf.attrs.scope === 'data' ? 'data' : cf.attrs.scope === 'field' ? 'field' : 'selection';
+    let vi = 0;
+    let rowField = null;
+    for (const ref of descendants(cf, 'reference')) {
+      const f = Number(ref.attrs.field);
+      if (f === 4294967294 || f === -2) vi = Number(child(ref, 'x')?.attrs.v ?? 0);
+      else if (names[f] && (def.rows ?? []).includes(names[f])) rowField = names[f];
+    }
+    const v = def.values?.[vi];
+    rule.pivot = { name: def.name ?? '', scope, ...(v ? { value: valueName(v) } : {}), ...(rowField ? { rowField } : {}) };
+  }
+}
+
 function linkPivotsAndSlicers(files, wbRels, sheets, ctx) {
   const tables = sheets.flatMap((s) => s.tables.map((t) => ({ ...t, sheetName: s.name })));
   const caches = new Map();
@@ -1702,6 +1729,7 @@ function linkPivotsAndSlicers(files, wbRels, sheets, ctx) {
       const cache = cacheFiles.get(p.cachePath);
       const def = cache && pivotDefFrom(p.root, cache, tables, s.name);
       if (def && ctx.tableStyles?.[def.style] && !PRESET_STYLES[def.style]) def.styleDef = ctx.tableStyles[def.style]; // 파일에 정의된 사용자 지정 스타일 (WIXEL 모던 스타일은 이름으로 앎)
+      if (def) linkPivotCond(s, def, p.root, cache);
       if (!def) ctx.warnings.add('외부 데이터 원본을 쓰는 피벗 테이블은 값으로만 가져왔습니다.');
       else if (!s.pivot) { s.pivot = def; s._pivotName = p.root.attrs.name; } else (s.pivotsExtra ??= []).push(def);
     }
@@ -1739,7 +1767,7 @@ function linkPivotsAndSlicers(files, wbRels, sheets, ctx) {
     }
   });
   for (const s of sheets) {
-    delete s._slicers; delete s._pivots; delete s._slicerBoxes; delete s._sheetId; delete s._pivotName;
+    delete s._slicers; delete s._pivots; delete s._slicerBoxes; delete s._sheetId; delete s._pivotName; delete s._condPrio;
     for (const t of s.tables) { delete t._xmlId; delete t._colNames; }
   }
 }
@@ -2196,7 +2224,7 @@ function cfXml(rule, pool, priority, x14 = null) {
     }
     default: return '';
   }
-  return `<conditionalFormatting sqref="${ref}">${body}</conditionalFormatting>`;
+  return `<conditionalFormatting${rule.pivot && rule.pivot.scope !== 'selection' ? ' pivot="1"' : ''} sqref="${ref}">${body}</conditionalFormatting>`;
 }
 
 function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
@@ -2506,6 +2534,22 @@ function buildPivotCache(wb, defs, cacheId, extraFields) {
 }
 
 /** 피벗 정의 + 공유 캐시 → 피벗 테이블 XML */
+/** 피벗 조건부 서식 (엑셀 '규칙 적용 대상': 값 필드 전체 · 행 필드 수준) → <conditionalFormats>. priority 는 시트 규칙 순서와 같음 */
+function pivotCondXml(wb, si, def, header, values) {
+  const conds = (wb.sheets[si].cond ?? []).filter((r) => r.r1 < EXCEL_MAX_ROWS);
+  const out = [];
+  conds.forEach((rl, i) => {
+    const pv = rl.pivot;
+    if (!pv || pv.name !== (def.name ?? '') || pv.scope === 'selection') return;
+    const vi = Math.max(0, values.findIndex((v) => valueName(v) === pv.value));
+    const refs = [`<reference field="4294967294" count="1" selected="0"><x v="${vi}"/></reference>`];
+    const rf = pv.scope === 'field' && pv.rowField ? header.findIndex((h) => String(h).toLowerCase() === String(pv.rowField).toLowerCase()) : -1;
+    if (rf >= 0) refs.push(`<reference field="${rf}" count="1" selected="0"><x v="0"/></reference>`);
+    out.push(`<conditionalFormat${pv.scope === 'data' ? ' scope="data"' : ' scope="field" type="row"'} priority="${i + 1}"><pivotAreas count="1"><pivotArea outline="0" collapsedLevelsAreSubtotals="1" fieldPosition="0"><references count="${refs.length}">${refs.join('')}</references></pivotArea></pivotAreas></conditionalFormat>`);
+  });
+  return out.length ? `<conditionalFormats count="${out.length}">${out.join('')}</conditionalFormats>` : '';
+}
+
 function pivotParts(wb, si, def, cache, name, pool) {
   const { src, header, nBase, data } = cache;
   const cacheId = cache.cacheId;
@@ -2705,6 +2749,7 @@ function pivotParts(wb, si, def, cache, name, pool) {
     + `<colItems count="${colXml.length}">${colXml.join('')}</colItems>`
     + pageXml
     + `<dataFields count="${values.length}">${dataXml}</dataFields>`
+    + pivotCondXml(wb, si, def, header, values)
     + `<pivotTableStyleInfo${styleName ? ` name="${esc(styleName)}"` : ''} showRowHeaders="${so.rowHeaders === false ? 0 : 1}" showColHeaders="${so.colHeaders === false ? 0 : 1}" showRowStripes="${so.bandRows ? 1 : 0}" showColStripes="${so.bandCols ? 1 : 0}" showLastColumn="1"/>`
     + (filterXml.length ? `<filters count="${filterXml.length}">${filterXml.join('')}</filters>` : '')
     + '</pivotTableDefinition>';

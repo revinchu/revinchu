@@ -125,3 +125,14 @@ test('해 찾기: 선형 · 정수 · 비선형', () => {
   const rb = solveMin(([a, b]) => (1 - a) ** 2 + 100 * (b - a * a) ** 2, [-1, 1]);
   near(rb.x[0], 1, 1e-4);
 });
+
+test('피벗 조건부 서식: 값 필드 전체 규칙이 xlsx <conditionalFormats> 로 왕복', async () => {
+  const { unzip, textOf } = await import('../src/zip.js');
+  const wb = sheetWith([['주차', '1주', '1주', '2주'], ['비용', 10, 20, 30]]);
+  wb.transact(() => wb.setSheetProp(0, 'pivot', { name: '피벗1', source: 'Sheet1', range: { r1: 0, c1: 0, r2: 3, c2: 1 }, rows: ['주차'], cols: [], pages: [], filters: {}, values: [{ field: '비용', agg: 'sum' }], top: 0, left: 5, area: { r1: 0, c1: 5, r2: 3, c2: 6 } }));
+  wb.transact(() => wb.setSheetProp(0, 'cond', [{ r1: 1, c1: 6, r2: 3, c2: 6, type: 'bar', color: '#638ec6', pivot: { name: '피벗1', scope: 'data', value: '합계 : 비용' } }]));
+  const bytes = writeXlsx(wb);
+  assert.match(textOf(unzip(bytes)['xl/pivotTables/pivotTable1.xml']), /<conditionalFormat scope="data" priority="1">/);
+  const back = new Workbook(readXlsx(bytes).data);
+  assert.deepEqual(back.sheets[0].cond[0].pivot, { name: '피벗1', scope: 'data', value: '합계 : 비용' });
+});

@@ -6790,6 +6790,134 @@ function mergeFmt(base, extra) {
 }
 
 const pivotWritten = new Map(); // 피벗마다 마지막으로 그린 칸 서식 (업데이트 시 셀 서식 유지)
+// ── 피벗 테이블 조건부 서식 범위 (엑셀: 선택한 셀 / "값" 을 표시하는 모든 셀 / "행 필드"에 대해 "값"을 표시하는 모든 셀) ──
+// 규칙에 pivot: { name, scope: 'selection' | 'data' | 'field', value, rowField, colField } 를 두고, 피벗을 다시 그릴 때마다 범위를 새로 구함
+const pivotLayouts = new Map();
+function pivotLayoutFrom(grid, pm, d, top, left) {
+  const base = pm.pageRows + pm.headerRows;
+  return {
+    top, left, roles: grid.map((row) => row.map((cd) => cd?.role ?? '')),
+    rowDepth: grid.map((_, r) => pm.rowItems?.[r - base]?.node?.depth ?? -1),
+    values: (d.values ?? []).map((v) => valueName(v)), rows: [...(d.rows ?? [])], cols: [...(d.cols ?? [])],
+  };
+}
+function pivotLayoutOf(tsi, def) {
+  const k = `${tsi}:${def.name ?? ''}`;
+  if (pivotLayouts.has(k)) return pivotLayouts.get(k);
+  const src = pivotSource(def);
+  if (!src) return null;
+  const res = resolvePivot(src, def);
+  const { grid, meta } = computePivot(res, res.def);
+  const L = pivotLayoutFrom(grid, meta, res.def, def.top ?? 0, def.left ?? 0);
+  pivotLayouts.set(k, L);
+  return L;
+}
+const PIVOT_DATA_ROLE = /^(data|groupData|subData|colSubData|grandColData|grandData):(\d+)$/;
+function pivotScopeCells(L, pv) {
+  const vi = Math.max(0, L.values.indexOf(pv.value));
+  const want = pv.rowField ? L.rows.indexOf(pv.rowField) : L.rows.length - 1;
+  const inner = L.rows.length - 1;
+  const out = [];
+  L.roles.forEach((row, r) => row.forEach((role, c) => {
+    const m = PIVOT_DATA_ROLE.exec(role);
+    if (!m || +m[2] !== vi) return;
+    if (pv.scope === 'field') {
+      // 행 필드 수준의 칸만 (부분합 · 총합계 · 열 부분합 제외)
+      if (!/^(data|groupData|subData)$/.test(m[1])) return;
+      if (want < 0 || want >= inner) { if (m[1] !== 'data') return; } else if (m[1] === 'data' || L.rowDepth[r] !== want) return;
+    }
+    out.push([L.top + r, L.left + c]);
+  }));
+  return out;
+}
+/** 칸 목록 → 직사각형 범위들 (열마다 연속 구간 → 옆 열과 같은 구간이면 합침) */
+function cellsToRanges(cells) {
+  const byCol = new Map();
+  for (const [r, c] of cells) { if (!byCol.has(c)) byCol.set(c, []); byCol.get(c).push(r); }
+  const runs = [];
+  for (const [c, rs] of [...byCol].sort((a, b) => a[0] - b[0])) {
+    rs.sort((a, b) => a - b);
+    let s0 = rs[0];
+    let p = rs[0];
+    for (let i = 1; i <= rs.length; i++) {
+      if (i < rs.length && rs[i] === p + 1) { p = rs[i]; continue; }
+      runs.push({ r1: s0, r2: p, c1: c, c2: c });
+      if (i < rs.length) { s0 = rs[i]; p = rs[i]; }
+    }
+  }
+  const out = [];
+  for (const g of runs) {
+    const prev = out.find((o) => o.r1 === g.r1 && o.r2 === g.r2 && o.c2 === g.c1 - 1);
+    if (prev) prev.c2 = g.c2; else out.push({ ...g });
+  }
+  return out;
+}
+function applyPivotScope(rule, L) {
+  const rgs = cellsToRanges(pivotScopeCells(L, rule.pivot));
+  if (!rgs.length) return false;
+  delete rule.more;
+  Object.assign(rule, rgs[0], rgs.length > 1 ? { more: rgs.slice(1) } : {});
+  return true;
+}
+function refreshPivotCond(tsi, def) {
+  const list = wb.sheets[tsi].cond ?? [];
+  if (!list.some((rl) => rl.pivot?.name === def.name && rl.pivot.scope !== 'selection')) return;
+  const L = pivotLayouts.get(`${tsi}:${def.name ?? ''}`);
+  if (!L) return;
+  let changed = false;
+  const next = list.map((rl) => {
+    if (rl.pivot?.name !== def.name || rl.pivot.scope === 'selection') return rl;
+    const nr = structuredClone(rl);
+    if (!applyPivotScope(nr, L)) return rl;
+    if (JSON.stringify(nr) !== JSON.stringify(rl)) changed = true;
+    return nr;
+  });
+  if (changed) wb.setSheetProp(tsi, 'cond', next);
+}
+/** 규칙 편집기의 '규칙 적용 대상' (선택 영역이 피벗 안이거나 규칙이 피벗에 묶여 있을 때) */
+function pivotScopeUi(rule) {
+  const entry = rule.pivot ? allPivots().find((e) => e.si === si && pivotNameOf(e) === rule.pivot.name) : null;
+  const def = entry?.def ?? pivotAreaHit(usedClip(sel));
+  if (!def) return null;
+  const L = pivotLayoutOf(si, def);
+  if (!L || !L.values.length) return null;
+  // 지금 칸의 값 필드 · 행 필드
+  let value = rule.pivot?.value ?? L.values[0];
+  let rowField = rule.pivot?.rowField ?? L.rows[L.rows.length - 1] ?? null;
+  if (!rule.pivot) {
+    const role = L.roles[active.r - L.top]?.[active.c - L.left] ?? '';
+    const m = PIVOT_DATA_ROLE.exec(role);
+    if (m) value = L.values[+m[2]] ?? value;
+    const dep = L.rowDepth[active.r - L.top];
+    if (dep >= 0 && L.rows[dep]) rowField = L.rows[dep];
+  }
+  const colField = L.cols[L.cols.length - 1] ?? null;
+  const cur = rule.pivot?.scope ?? 'selection';
+  const name = `pvs${Date.now()}`;
+  const opt = (v, label) => { const r = el('input', { type: 'radio', name, value: v, checked: cur === v }); return [r, el('label', { class: 'fc-check' }, r, label)]; };
+  const vSel = el('select', {}, L.values.map((v) => el('option', { value: v, selected: v === value }, v)));
+  const [r1, l1] = opt('selection', '선택한 셀');
+  const [r2, l2] = opt('data', `"${value}" 값을 표시하는 모든 셀`);
+  const [r3, l3] = opt('field', rowField ? `"${rowField}"${colField ? ` 및 "${colField}"` : ''}에 대해 "${value}" 값을 표시하는 모든 셀` : `"${value}" 값을 표시하는 모든 셀 (행 필드 없음)`);
+  vSel.addEventListener('change', () => {
+    value = vSel.value;
+    l2.lastChild.textContent = `"${value}" 값을 표시하는 모든 셀`;
+    l3.lastChild.textContent = `"${rowField ?? ''}"${colField ? ` 및 "${colField}"` : ''}에 대해 "${value}" 값을 표시하는 모든 셀`;
+  });
+  const node = el('div', { class: 'cf-pivot-scope' },
+    el('div', { class: 'fc-title' }, '규칙 적용 대상'),
+    el('label', { class: 'fc-check' }, '값 필드: ', vSel), l1, l2, l3,
+    el('div', { class: 'muted' }, '값 필드 전체를 고르면 피벗 테이블의 행이 늘거나 줄어도 규칙 범위가 따라갑니다.'));
+  return {
+    node,
+    apply: (out) => {
+      const scope = r2.checked ? 'data' : r3.checked ? 'field' : 'selection';
+      out.pivot = { name: def.name ?? '', scope, value, ...(rowField ? { rowField } : {}), ...(colField ? { colField } : {}) };
+      if (scope !== 'selection') applyPivotScope(out, L);
+    },
+  };
+}
+
 function writePivot(targetSi, def, { autofit = true } = {}) {
   delete def.needsRender; // 예제 등에서 처음 한 번 그리라는 표시
   const src = pivotSource(def);
@@ -6886,6 +7014,8 @@ function writePivot(targetSi, def, { autofit = true } = {}) {
     if (inOld(r, c) && !(r >= top && r <= nr2 && c >= left && c <= nc2)) wb.setCellData(targetSi, r, c, null);
   }
   def.area = { r1: top, c1: left, r2: nr2, c2: nc2 };
+  pivotLayouts.set(`${targetSi}:${def.name ?? ''}`, pivotLayoutFrom(grid, pm, d, top, left));
+  refreshPivotCond(targetSi, def);
   const btns = [];
   grid.forEach((row, r) => {
     for (let c = 0; c < colsN; c++) {
@@ -10136,7 +10266,9 @@ function cfRuleEditor(initial, onSave, { title = '새 서식 규칙' } = {}) {
     b.addEventListener('click', () => { if (k.id !== kind) setKind(k.id); });
     kindList.append(b);
   }
-  body.append(el('div', { class: 'fc-title' }, '규칙 유형 선택'), kindList, detail, fmtBox);
+  // 피벗 테이블: 엑셀의 '규칙 적용 대상' 3가지 (선택한 셀 · 값 필드의 모든 셀 · 행 필드 수준의 모든 셀)
+  const pscope = pivotScopeUi(rule);
+  body.append(...(pscope ? [pscope.node] : []), el('div', { class: 'fc-title' }, '규칙 유형 선택'), kindList, detail, fmtBox);
   render();
   openDialog({
     title, width: 560, body,
@@ -10158,6 +10290,7 @@ function cfRuleEditor(initial, onSave, { title = '새 서식 규칙' } = {}) {
             return false;
           }
           if (VISUAL_TYPES.has(rule.type)) { delete rule.style; delete rule.stopIfTrue; }
+          if (pscope) pscope.apply(rule);
           onSave(rule);
           return undefined;
         },
@@ -10223,8 +10356,11 @@ function cfManager() {
     if (!current) return;
     const target = current;
     cfRuleEditor(target, (nr) => {
+      const keepRange = !(nr.pivot && nr.pivot.scope !== 'selection');
+      const was = { r1: target.r1, c1: target.c1, r2: target.r2, c2: target.c2, more: target.more };
       for (const k of Object.keys(target)) if (!['r1', 'c1', 'r2', 'c2', 'stopIfTrue'].includes(k)) delete target[k];
-      Object.assign(target, nr, { r1: target.r1, c1: target.c1, r2: target.r2, c2: target.c2 });
+      Object.assign(target, nr, keepRange ? was : {});
+      if (keepRange && !was.more) delete target.more;
       render();
     }, { title: '서식 규칙 편집' });
   };
