@@ -18,7 +18,7 @@ import { makeSeries, CUSTOM_LISTS } from './series.js';
 import { parseDelimited, toDelimited, guessDelimiter, CsvBlockReader } from './csv.js';
 import { SAMPLES } from './samples.js';
 import { TEMPLATES, TEMPLATE_CATS } from './templates.js';
-import { GridView, BASE_FONT, setBaseFont, measureText, fontStack, PATTERNS, patternCss } from './view.js';
+import { GridView, BASE_FONT, setBaseFont, measureText, fontStack, PATTERNS, patternCss, glyphShift } from './view.js';
 import { setThemeColors } from './stylepresets.js';
 import { readXlsxAsync, writeXlsxAsync, xlsxOverflow } from './xlsx.js';
 import { readOds, writeOds } from './ods.js';
@@ -7407,6 +7407,17 @@ function pivotFieldItems(def, field) {
   // 열 기반 엔진의 항목 사전 (행을 다시 훑지 않음)
   return sortKeys([...src.cube.col(i).dim().keys]).map((k) => itemText(k));
 }
+/** 피벗 항목 표시 글자: 숫자 항목은 원본 열의 표시 형식으로 (날짜 46279 → 2026-09-14) — 필터 키는 그대로 */
+function pivotItemLabeler(def, field) {
+  const src = pivotSource(def);
+  if (!src?.ref) return (t) => t;
+  const header = headerNames(src);
+  const i = header.findIndex((h) => h.toLowerCase() === String(field).toLowerCase());
+  if (i < 0) return (t) => t;
+  const st = wb.styleAt(src.si, Math.min(src.ref.r1 + 1, src.ref.r2), src.ref.c1 + i);
+  if (!st?.numFmt || st.numFmt === 'general') return (t) => t;
+  return (t) => (t !== '' && Number.isFinite(Number(t)) ? formatValue(Number(t), st).text : t);
+}
 
 function openPivotFilterMenu(entry, kind, field, anchorEl) {
   const def0 = pivotDefV2(entry.def);
@@ -7418,6 +7429,7 @@ function openPivotFilterMenu(entry, kind, field, anchorEl) {
   const render = () => {
     const def = pivotDefV2(entry.def);
     const items = pivotFieldItems(def, cur);
+    const label = pivotItemLabeler(def, cur);
     const sel = def.filters?.[cur] ? new Set(def.filters[cur]) : null;
     const checks = new Map();
     const list = el('div', { class: 'filter-list' });
@@ -7431,14 +7443,15 @@ function openPivotFilterMenu(entry, kind, field, anchorEl) {
     for (const t of items) {
       const cb = el('input', { type: 'checkbox', checked: !sel || sel.has(t), onchange: syncAll });
       checks.set(t, cb);
-      list.append(el('label', {}, cb, t));
+      cb.dataset.label = label(t);
+      list.append(el('label', {}, cb, cb.dataset.label));
     }
     all.addEventListener('change', () => { for (const cb of checks.values()) if (cb.parentElement.style.display !== 'none') cb.checked = all.checked; });
     syncAll();
     const search = el('input', { type: 'search', placeholder: '검색' });
     search.addEventListener('input', () => {
       const q = search.value.trim().toLowerCase();
-      for (const [t, cb] of checks) { const show = !q || t.toLowerCase().includes(q); cb.parentElement.style.display = show ? '' : 'none'; if (q) cb.checked = show; }
+      for (const [t, cb] of checks) { const show = !q || t.toLowerCase().includes(q) || cb.dataset.label.toLowerCase().includes(q); cb.parentElement.style.display = show ? '' : 'none'; if (q) cb.checked = show; }
       syncAll();
     });
     const ok = () => {
@@ -8305,8 +8318,8 @@ function unhideSheetDialog() {
 
 function renderSheetTabs() {
   dom.sheetTabs.replaceChildren(...wb.sheets.map((s, i) => el('button', {
-    class: `sheet-tab${i === si ? ' active' : ''}${s.tabColor ? ' colored' : ''}`,
-    style: isHiddenSheet(i) ? { display: 'none' } : s.tabColor ? { '--tab-c': s.tabColor, '--tab-t': contrastText(s.tabColor) } : undefined,
+    class: `sheet-tab${i === si ? ' active' : ''}${validColor(s.tabColor) ? ' colored' : ''}`,
+    style: isHiddenSheet(i) ? { display: 'none' } : validColor(s.tabColor) ? { '--tab-c': s.tabColor, '--tab-t': contrastText(s.tabColor) } : undefined,
     title: s.pivot ? `피벗 테이블 (원본: ${s.pivot.source})` : undefined,
     onmousedown: (e) => { if (e.button === 0) { e.preventDefault(); switchSheet(i); focusGrid(); } },
     ondblclick: () => renameSheetInline(i),
@@ -8333,8 +8346,12 @@ function renderSheetTabs() {
 }
 
 /** 글자색: 배경이 어두우면 흰색 */
+/** 탭 색 등으로 쓸 수 있는 색인지 (#rgb · #rrggbb) — 잘못된 값이면 색 없이 그림 */
+const validColor = (c) => typeof c === 'string' && /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(c.trim());
 function contrastText(hex) {
-  const n = parseInt(String(hex).slice(1, 7), 16);
+  const h = /^#?([0-9a-f]{6})$/i.exec(String(hex).trim())?.[1] ?? /^#?([0-9a-f])([0-9a-f])([0-9a-f])$/i.exec(String(hex).trim())?.slice(1).map((x) => x + x).join('');
+  if (!h) return 'var(--text)';
+  const n = parseInt(h, 16);
   const lum = (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
   return lum < 0.6 ? '#ffffff' : '#1f1f1f';
 }
@@ -8652,6 +8669,10 @@ function applyBookLook() {
   setThemeColors(wb.theme);
   document.documentElement.style.setProperty('--cell-fs', `${BASE_FONT.size}pt`);
   document.documentElement.style.setProperty('--cell-ff', fontStack(BASE_FONT.name));
+  // 설치된 글꼴에 맞춰 글자를 세로 가운데로 (글꼴이 늦게 로드되면 다시 잼)
+  const shift = () => document.documentElement.style.setProperty('--glyph-dy', `${glyphShift(fontStack(BASE_FONT.name))}em`);
+  shift();
+  document.fonts?.ready?.then(shift);
 }
 
 /** 예전 버전이 자동 저장한 문서: 피벗 결과 칸을 지금 버전으로 다시 그림 (서식 · 색 개선이 반영되게) — 실행 취소 기록 없음 */
@@ -10383,15 +10404,43 @@ function themeRows() {
   return rows;
 }
 
+let lastPatternColor = '#000000';
 function colorMenu(anchorEl, kind) {
+  // 채우기: 엑셀처럼 무늬(패턴) 채우기 · 무늬 색도 바로 고를 수 있게
+  const extra = kind !== 'fill' ? [] : (() => {
+    const cur = wb.styleAt(si, active.r, active.c);
+    const pc = cur.patternColor ?? lastPatternColor;
+    const grid = el('div', { class: 'pattern-grid' }, PATTERNS.map(([v, l]) => el('button', {
+      class: `pattern-swatch${cur.pattern === v ? ' on' : ''}`, title: l, onmousedown: (e) => e.preventDefault(),
+      style: { background: patternCss(v, pc, cur.fill ?? '#ffffff') },
+      onclick: () => { closeMenus(); applyStyle({ pattern: v, patternColor: pc }); focusGrid(); },
+    })));
+    return [
+      { sep: true },
+      {
+        label: '무늬 스타일', icon: 'fill', submenu: [
+          { label: '무늬 없음', action: () => applyStyle({ pattern: undefined, patternColor: undefined }) },
+          { node: grid },
+        ],
+      },
+      {
+        label: '무늬 색', submenu: [
+          ...['#000000', '#7f7f7f', '#c00000', '#ff0000', '#ffc000', '#ffff00', '#92d050', '#00b050', '#00b0f0', '#0070c0', '#002060', '#7030a0'].map((c) => ({
+            label: c, swatch: c, action: () => { lastPatternColor = c; applyStyle({ patternColor: c, ...(cur.pattern ? {} : { pattern: 'lightGray' }) }); },
+          })),
+        ],
+      },
+      { label: '셀 서식 채우기...', action: () => run('formatCells') },
+    ];
+  })();
   paletteMenu(anchorEl, kind === 'fill' ? '채우기 없음' : '자동', (color) => {
-    if (kind === 'fill') { if (color) lastFill = color; applyStyle({ fill: color || undefined }); }
+    if (kind === 'fill') { if (color) lastFill = color; applyStyle(color ? { fill: color } : { fill: undefined, pattern: undefined, patternColor: undefined }); }
     else { if (color) lastFont = color; applyStyle({ color: color || undefined }); }
-  });
+  }, extra);
 }
 
 /** 테마 색 · 표준 색 · 다른 색 팔레트 (onPick(색 | null)) */
-function paletteMenu(anchorEl, noneLabel, onPick) {
+function paletteMenu(anchorEl, noneLabel, onPick, extra = []) {
   const pick = (color) => {
     closeMenus();
     onPick(color);
@@ -10414,6 +10463,7 @@ function paletteMenu(anchorEl, noneLabel, onPick) {
     { sep: true },
     { node: el('div', {}, custom) },
     { label: '다른 색...', action: () => custom.click() },
+    ...extra,
   ]);
 }
 
@@ -10869,8 +10919,8 @@ const COMMANDS = {
   chartChangeType: () => { if (chartSel) insertChartAllDialog(chartSel); },
   chartFormat: () => chartFormatPane(),
   chartPivotFields: () => { const ch = chartHere(); if (ch?.pivot) { updateChart(ch.id, { fieldButtons: ch.fieldButtons === false ? undefined : false }); gv.renderObjectsAll(); } else toast('피벗 차트에서 쓸 수 있습니다.'); },
-  slicerFontSize: (v) => { if (chartSel) { updateObject(chartSel, { fontSize: Number(v) || undefined }); gv.renderObjectsAll(); } },
-  slicerHeadSize: (v) => { if (chartSel) { updateObject(chartSel, { headSize: Number(v) || undefined }); gv.renderObjectsAll(); } },
+  slicerFontSize: (v) => { if (chartSel) { updateObject(chartSel, { fontSize: Number(v) > 0 ? clamp(Number(v), 5, 72) : undefined }); gv.renderObjectsAll(); } },
+  slicerHeadSize: (v) => { if (chartSel) { updateObject(chartSel, { headSize: Number(v) > 0 ? clamp(Number(v), 5, 72) : undefined }); gv.renderObjectsAll(); } },
   slicerBold: () => { const sl = (sheet().slicers ?? []).find((x) => x.id === chartSel); if (sl) { updateObject(sl.id, { bold: !sl.bold || undefined }); gv.renderObjectsAll(); } },
   undo: () => { const m = wb.undo(); if (m) restoreMeta(m); else toast('실행 취소할 작업이 없습니다.'); },
   redo: () => { const m = wb.redo(); if (m) restoreMeta(m); },
@@ -11102,7 +11152,9 @@ const COMMANDS = {
   pvColHeaders: () => pivotStyleOpt('colHeaders'),
   pvBandRows: () => pivotStyleOpt('bandRows'),
   pvBandCols: () => pivotStyleOpt('bandCols'),
-  slicerBtnH: (v) => { if (chartSel) updateObject(chartSel, { buttonHeight: clamp(Number(v) || 24, 14, 80) }); },
+  slicerBtnH: (v) => { if (chartSel) updateObject(chartSel, { buttonHeight: clamp(Number(v) || 24, 10, 120) }); },
+  slicerBtnW: (v) => { if (chartSel) { updateObject(chartSel, { buttonWidth: Number(v) > 0 ? clamp(Number(v), 10, 600) : undefined }); gv.renderObjectsAll(); } },
+  slicerGap: (v) => { if (chartSel && v !== '') { updateObject(chartSel, { gap: clamp(Number(v) || 0, 0, 30) }); gv.renderObjectsAll(); } },
   slicerHeader: () => { const sl = (sheet().slicers ?? []).find((x) => x.id === chartSel); if (sl) updateObject(sl.id, { showHeader: sl.showHeader === false ? undefined : false }); },
   pivotRefresh: () => refreshPivots(),
   pivotCompact: () => pivotLayoutCmd({ layout: 'compact' }),
@@ -11298,7 +11350,7 @@ function tableRibbonState() {
   const base = {
     context, slicerCaption: sl?.caption ?? '', slicerCols: String(sl?.columns ?? 1), slicerMultiOn: !!sl?.multi,
     objH: obj ? String(Math.round(obj.obj.h)) : '', objW: obj ? String(Math.round(obj.obj.w)) : '', objRot: obj ? String(obj.obj.rot ?? 0) : '',
-    slicerFontSize: sl?.fontSize ? String(sl.fontSize) : '기본', slicerHeadSize: sl?.headSize ? String(sl.headSize) : '기본', slicerBoldOn: !!sl?.bold,
+    slicerFontSize: sl?.fontSize ? String(sl.fontSize) : '', slicerHeadSize: sl?.headSize ? String(sl.headSize) : '', slicerBtnW: String(sl?.buttonWidth ?? 0), slicerGap: String(sl?.gap ?? 3), slicerBoldOn: !!sl?.bold,
     chartFieldButtons: obj?.prop === 'charts' && !!obj.obj.pivot && obj.obj.fieldButtons !== false,
     slicerBtnH: String(sl?.buttonHeight ?? 24), slicerHeaderOn: sl ? sl.showHeader !== false : false,
     sparkIsLine: sg?.type === 'line', sparkIsColumn: sg?.type === 'column', sparkIsWinLoss: sg?.type === 'winloss',
@@ -11453,6 +11505,13 @@ function bindEvents() {
     const hit = gv.hitTest(e.clientX, e.clientY);
     const kind = hit.zone === 'colHeader' ? 'col' : hit.zone === 'rowHeader' ? 'row' : 'cell';
     showContextMenu({ x: e.clientX, y: e.clientY }, kind);
+  });
+  // 구글 스프레드시트처럼 브라우저 기본 메뉴는 띄우지 않음 (글 입력 칸 · 링크 제외).
+  // Windows 는 contextmenu 가 버튼을 뗄 때 오므로, 이미 열린 위셀 메뉴 위에서 받는 경우도 막음
+  document.addEventListener('contextmenu', (e) => {
+    const t = e.target;
+    const typing = t instanceof Element && t.matches('input:not([type=checkbox]):not([type=radio]), textarea, [contenteditable=""], [contenteditable=true]') && t !== dom.editor;
+    if (!typing) e.preventDefault();
   });
   document.addEventListener('mousemove', (e) => {
     lastMouse = { x: e.clientX, y: e.clientY };

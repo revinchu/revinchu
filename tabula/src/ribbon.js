@@ -379,15 +379,19 @@ export const TABS = [
       group('슬라이서 스타일', [large('slicerStyleGalleryBtn', 'slicer', '빠른 스타일', { menu: 'slicerStyles' })]),
       group('단추', [
         col(
-          { type: 'select', cmd: 'slicerCols', stateKey: 'slicerCols', cls: 'w60', title: '열 수', options: [1, 2, 3, 4, 5, 6, 8, 10, 12].map((n) => ({ value: String(n), label: `열 ${n}` })) },
-          { type: 'select', cmd: 'slicerBtnH', stateKey: 'slicerBtnH', cls: 'w60', title: '단추 높이', options: [20, 24, 28, 32, 40].map((n) => ({ value: String(n), label: `높이 ${n}` })) },
+          { type: 'spin', cmd: 'slicerCols', stateKey: 'slicerCols', label: '열:', title: '열 수', min: 1, max: 20, step: 1 },
+          { type: 'spin', cmd: 'slicerBtnH', stateKey: 'slicerBtnH', label: '높이:', title: '단추 높이 (px)', min: 10, max: 120, step: 1 },
+          { type: 'spin', cmd: 'slicerBtnW', stateKey: 'slicerBtnW', label: '너비:', title: '단추 너비 (px, 0 = 자동)', min: 0, max: 600, step: 1 },
+        ),
+        col(
+          { type: 'spin', cmd: 'slicerGap', stateKey: 'slicerGap', label: '간격:', title: '단추 사이 간격 (px)', min: 0, max: 30, step: 1 },
         ),
       ]),
       group('표시', [col(check('slicerHeader', '머리글 표시', 'slicerHeaderOn')), large('slicerConnections', 'slicer', '보고서 연결')]),
       group('글꼴', [
         col(
-          { type: 'select', cmd: 'slicerFontSize', stateKey: 'slicerFontSize', cls: 'w60', title: '항목 글꼴 크기', options: ['기본', 7, 8, 9, 10, 11, 12, 14, 16, 18].map((n) => ({ value: String(n), label: n === '기본' ? '글꼴 기본' : `글꼴 ${n}` })) },
-          { type: 'select', cmd: 'slicerHeadSize', stateKey: 'slicerHeadSize', cls: 'w60', title: '머리글 글꼴 크기', options: ['기본', 8, 9, 10, 11, 12, 14, 16].map((n) => ({ value: String(n), label: n === '기본' ? '머리글 기본' : `머리글 ${n}` })) },
+          { type: 'spin', cmd: 'slicerFontSize', stateKey: 'slicerFontSize', label: '항목:', title: '항목 글꼴 크기 (pt, 비우면 기본)', min: 5, max: 72, step: 0.5 },
+          { type: 'spin', cmd: 'slicerHeadSize', stateKey: 'slicerHeadSize', label: '머리글:', title: '머리글 글꼴 크기 (pt, 비우면 기본)', min: 5, max: 72, step: 0.5 },
           check('slicerBold', '굵게', 'slicerBoldOn'),
         ),
       ]),
@@ -397,8 +401,8 @@ export const TABS = [
       ]),
       group('크기', [
         col(
-          { type: 'text', cmd: 'objH', stateKey: 'objH', label: '높이:', title: '슬라이서 높이 (px)', width: 58 },
-          { type: 'text', cmd: 'objW', stateKey: 'objW', label: '너비:', title: '슬라이서 너비 (px)', width: 58 },
+          { type: 'spin', cmd: 'objH', stateKey: 'objH', label: '높이:', title: '슬라이서 높이 (px)', min: 20, max: 4000, step: 1 },
+          { type: 'spin', cmd: 'objW', stateKey: 'objW', label: '너비:', title: '슬라이서 너비 (px)', min: 30, max: 4000, step: 1 },
         ),
       ]),
     ],
@@ -510,6 +514,7 @@ export function buildRibbon(app) {
       case 'select': return makeSelect(it);
       case 'font': return makeFont(it);
       case 'text': return makeText(it);
+      case 'spin': return makeSpin(it);
       case 'check': return makeCheck(it);
       case 'color': return makeColor(it);
       default: return makeButton(it);
@@ -588,6 +593,28 @@ export function buildRibbon(app) {
     input.addEventListener('change', commit);
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); input.blur(); app.focusGrid(); }
+      if (e.key === 'Escape') { input.blur(); app.focusGrid(); }
+    });
+    bindings.push((s) => { if (document.activeElement !== input) input.value = s[it.stateKey] ?? ''; });
+    return el('label', { class: 'rbtn medium rtext-wrap' }, it.label ? el('span', {}, it.label) : null, input);
+  }
+
+  /** 숫자 칸 (▲▼ · 방향키 · 휠로 한 단계씩, 입력하면 바로 적용) */
+  function makeSpin(it) {
+    const input = el('input', { type: 'number', class: 'rtext rspin', title: it.title, min: it.min, max: it.max, step: it.step ?? 1, style: { width: `${it.width ?? 58}px` } });
+    let t = null;
+    const commit = () => { clearTimeout(t); t = null; app.run(it.cmd, input.value); };
+    input.addEventListener('input', () => { clearTimeout(t); t = setTimeout(commit, 250); });
+    input.addEventListener('change', commit);
+    input.addEventListener('wheel', (e) => {
+      if (document.activeElement !== input) return;
+      e.preventDefault();
+      const v = (Number(input.value) || 0) + (e.deltaY < 0 ? 1 : -1) * Number(it.step ?? 1);
+      input.value = String(Math.min(it.max ?? Infinity, Math.max(it.min ?? -Infinity, Math.round(v * 100) / 100)));
+      commit();
+    }, { passive: false });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); commit(); input.blur(); app.focusGrid(); }
       if (e.key === 'Escape') { input.blur(); app.focusGrid(); }
     });
     bindings.push((s) => { if (document.activeElement !== input) input.value = s[it.stateKey] ?? ''; });

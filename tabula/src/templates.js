@@ -814,8 +814,8 @@ function naverReport() {
   for (const sl of s.d.slicers) sl.source.pivots = [...pivots, ...graphPivots.map((p) => ({ sheet: D, name: p.name }))];
   s.w({ 0: 16, 1: 190, ...Object.fromEntries(Array.from({ length: 13 }, (_, i) => [2 + i, i === 4 ? 120 : 96])) });
   // 키워드 · 검색어 시트
-  const kwSheet = (name, field, table, tab) => {
-    const k = new S(name, { tab });
+  const kwSheet = (name, field, table, tab, color) => {
+    const k = new S(name, { tab: color });
     k.v(0, 1, `네이버 검색광고 ${name} 성과`, { bold: true, size: 16, color: '#1e3a8a' }).h({ 0: 32 });
     const pv = { ...base, table, source: table, name: `${name}피벗`, rows: [field], cols: [], values: kpiValues, top: 16, left: 1, sort: { [field]: { dir: 'desc', by: 0 } } };
     k.set('pivot', pv);
@@ -850,8 +850,8 @@ function naverReport() {
     '※ CPC · CTR · CPM · CVR · CPA · AOV · ROAS 는 피벗 계산 필드로 합계 기준(가중 평균)으로 정확하게 계산됩니다.',
   ].forEach((t, i) => guide.v(2 + i, 1, t, { color: i === 8 ? '#b45309' : INK }));
   guide.w({ 0: 16, 1: 900 });
-  const kwD = kwSheet('키워드', '키워드', 'nraw', 'k');
-  const stD = kwSheet('검색어', '검색어', 'nkraw', 's');
+  const kwD = kwSheet('키워드', '키워드', 'nraw', 'k', '#2563eb');
+  const stD = kwSheet('검색어', '검색어', 'nkraw', 's', '#0891b2');
   return { sheets: [s.done(), kwD, stD, rawSheet('nraw', NRAW_IN, out, '#64748b'), rawSheet('nkraw', NKRAW_IN, kout, '#64748b'), guide.done()] };
 }
 

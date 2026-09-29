@@ -33,6 +33,23 @@ const OVER_R = 12;
 const OVER_C = 4;
 
 const measureCtx = typeof document !== 'undefined' ? document.createElement('canvas').getContext('2d') : null;
+
+/**
+ * 글자 세로 보정 (em): 한글 글꼴(맑은 고딕 등)은 아래 여백(descent)이 커서 글자가 줄 상자 위쪽에 붙어 보임.
+ * 실제 설치된 글꼴로 한글 · 숫자의 잉크 영역을 재어, 줄 상자(1.2em) 가운데에 오도록 내릴 양을 구함
+ */
+export function glyphShift(family) {
+  if (!measureCtx) return 0;
+  measureCtx.font = `100px ${family}`;
+  const m = measureCtx.measureText('가나다0123ABC');
+  if (!m.fontBoundingBoxAscent) return 0;
+  const fa = m.fontBoundingBoxAscent; const fd = m.fontBoundingBoxDescent;
+  const L = 120;
+  const base = (L - (fa + fd)) / 2 + fa;
+  const glyphMid = base + (m.actualBoundingBoxDescent - m.actualBoundingBoxAscent) / 2;
+  const dy = (L / 2 - glyphMid) / 100;
+  return Math.max(-0.15, Math.min(0.15, Math.round(dy * 1000) / 1000));
+}
 const measureCache = new Map();
 export function fontCss(st = {}) {
   return `${st.italic ? 'italic ' : ''}${st.bold ? '700 ' : ''}${st.size || BASE_FONT.size}pt ${fontStack(st.font || BASE_FONT.name)}`;
@@ -828,9 +845,11 @@ export class GridView {
       ? `<div class="sl-broken">${esc(m.broken)}</div>`
       : m.items.map((it) => `<button type="button" class="sl-item${it.selected ? ' on' : ''}${it.hasData ? '' : ' nodata'}" data-k="${esc(it.key)}" title="${esc(it.text)}">${esc(it.text)}</button>`).join('');
     const head = sl.showHeader === false ? '' : `<div class="sl-head"><span class="sl-cap">${esc(sl.caption ?? '')}</span>`
-      + `<button type="button" class="sl-multi${sl.multi ? ' on' : ''}" title="다중 선택 (Alt+S)">☰</button>`
-      + `<button type="button" class="sl-clear${m.filtered ? '' : ' off'}" title="필터 지우기 (Alt+C)">✕</button></div>`;
-    return `${head}<div class="sl-items" style="grid-template-columns:repeat(${Math.max(1, sl.columns ?? 1)}, minmax(0, 1fr))">${items}</div>`;
+      + `<button type="button" class="sl-multi${sl.multi ? ' on' : ''}" title="다중 선택 (Alt+S)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1.5 3.5l1.3 1.3 2.2-2.4M1.5 8.5l1.3 1.3 2.2-2.4M1.5 13.2l1.3 1.3 2.2-2.4"/><path d="M7 4h7.5M7 9h7.5M7 14h7.5"/></svg></button>`
+      + `<button type="button" class="sl-clear${m.filtered ? '' : ' off'}" title="필터 지우기 (Alt+C)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1.5 2h11l-4.2 5v5l-2.6 1.5V7z"/><path d="M10.5 10l4 4M14.5 10l-4 4" stroke="#d13438"/></svg></button></div>`;
+    const gap = Number.isFinite(sl.gap) ? `;gap:${sl.gap}px` : '';
+    const btnW = sl.buttonWidth ? `${sl.buttonWidth}px` : 'minmax(0, 1fr)';
+    return `${head}<div class="sl-items" style="grid-template-columns:repeat(${Math.max(1, sl.columns ?? 1)}, ${btnW})${gap}">${items}</div>`;
   }
 
   /** 피벗 차트 필드 단추 (엑셀처럼 차트 위에서 바로 거르기) */
