@@ -96,6 +96,32 @@ test('숫자 → 글자: 엑셀처럼 유효 숫자 15자리', () => {
   assert.equal(wb.getValue(0, 0, 2), 17);
 });
 
+test('차트 계열이 정의된 이름(OFFSET 동적 범위)을 참조: 그릴 때 계산 + xlsx 왕복', async () => {
+  const { chartModelData } = await import('../src/chart.js');
+  const wb = new Workbook();
+  wb.transact(() => {
+    [['지역', '매출'], ['서울', '10'], ['부산', '20'], ['대구', '30']].forEach((row, r) => row.forEach((v, c) => wb.setInput(0, r, c, v)));
+    wb.setNames([
+      { name: 'cat', ref: '=OFFSET(Sheet1!$A$2,0,0,COUNTA(Sheet1!$A$2:$A$10),1)', sheet: null },
+      { name: 'val', ref: '=OFFSET(Sheet1!$B$2,0,0,COUNTA(Sheet1!$A$2:$A$10),1)', sheet: null },
+    ]);
+  });
+  const ch = { id: 'c1', type: 'column', title: 'T', x: 0, y: 0, w: 300, h: 200, series: [{ name: { text: '매출' }, cat: { name: 'cat' }, val: { name: 'val' } }] };
+  let d = chartModelData(wb, 0, ch);
+  assert.deepEqual(d.categories, ['서울', '부산', '대구']);
+  assert.deepEqual(d.series[0].values, [10, 20, 30]);
+  // 행을 더하면 차트도 늘어남 (동적 범위)
+  wb.transact(() => { wb.setInput(0, 4, 0, '광주'); wb.setInput(0, 4, 1, '40'); });
+  d = chartModelData(wb, 0, ch);
+  assert.deepEqual(d.categories, ['서울', '부산', '대구', '광주']);
+  wb.transact(() => wb.setSheetProp(0, 'charts', [ch]));
+  const xml = textOf(unzip(writeXlsx(wb))['xl/charts/chart1.xml']);
+  assert.match(xml, /<c:f>\[0\]!cat<\/c:f>/);
+  const back = new Workbook(readXlsx(writeXlsx(wb)).data);
+  assert.deepEqual(back.sheets[0].charts[0].series[0].cat, { name: 'cat' });
+  assert.deepEqual(chartModelData(back, 0, back.sheets[0].charts[0]).series[0].values, [10, 20, 30, 40]);
+});
+
 test('의존 전파: 고정 범위를 참조하는 수식 묶음은 바뀐 칸이 많아도 한 번만 훑음', () => {
   const wb = new Workbook();
   const N = 3000;

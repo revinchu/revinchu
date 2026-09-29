@@ -118,9 +118,19 @@ export function chartModelData(wb, hostSi, ch) {
     }
     return rows;
   };
+  // 정의된 이름 참조 (OFFSET 등으로 바뀌는 범위): 그릴 때마다 이름을 계산
+  const nameRange = (ref) => {
+    let v;
+    try { v = wb.nameValue(ref.name, hostSi, ref.sheet ?? null, null); } catch { v = null; }
+    if (!v || v.r1 === undefined) return null;
+    return { sheet: v.sheet ?? ref.sheet ?? null, r1: v.r1, c1: v.c1, r2: v.r2, c2: v.c2 };
+  };
   return resolveChart(ch, {
     range: (c) => (c.range ? read(sheetOf(c.sheet), c.range) : []),
-    values: (ref) => read(sheetOf(ref.sheet ?? ch.sheet), ref),
+    values: (ref) => {
+      if (ref.name) { const rg = nameRange(ref); return rg ? read(sheetOf(rg.sheet), rg) : []; }
+      return read(sheetOf(ref.sheet ?? ch.sheet), ref);
+    },
     pivot: (p) => {
       const sh = wb.sheets[sheetOf(p.sheet)];
       const defs = [sh?.pivot, ...(sh?.pivotsExtra ?? [])].filter(Boolean);

@@ -1163,6 +1163,17 @@ function chartRef(text) {
   return { ...(m[1] ? { sheet: m[1].replace(/''/g, "'") } : {}), ...rg };
 }
 
+/**
+ * 차트 계열 참조: 셀 범위, 또는 정의된 이름 ([0]!이름 · 시트!이름) — 이름은 그릴 때 계산 (OFFSET 등 동적 범위도 슬라이서를 따라감)
+ */
+function seriesRef(text) {
+  const r = chartRef(text);
+  if (r) return r;
+  const m = /^(?:\[\d+\]!|'?([^'!]*)'?!)?([\p{L}_\\][\p{L}\p{N}_.\\?]*)$/u.exec(String(text ?? '').trim());
+  if (!m || /^[A-Z]{1,3}\d+$/i.test(m[2])) return null;
+  return { name: m[2], ...(m[1] ? { sheet: m[1].replace(/''/g, "'") } : {}) };
+}
+
 /** 차트 XML → Tabula 차트 모델 (콤보 · 보조 축 · 데이터 레이블 · 계열 색 · 피벗 차트) */
 function readChart(files, path, theme = {}) {
   const xml = textOf(files[path]);
@@ -1220,11 +1231,11 @@ function readChart(files, path, theme = {}) {
       const valF = descendants(valEl, 'f')[0]?.text;
       const cache = descendants(valEl, 'pt').map((pt) => Number(descendants(pt, 'v')[0]?.text));
       const s = {
-        name: txF && chartRef(txF) ? { ref: chartRef(txF) } : { text: txV ?? `계열${series.length + 1}` },
-        ...(catF && chartRef(catF) ? { cat: chartRef(catF) } : {}),
-        ...(valF && chartRef(valF) ? { val: chartRef(valF) } : { cache }),
+        name: txF && seriesRef(txF) ? { ref: seriesRef(txF) } : { text: txV ?? `계열${series.length + 1}` },
+        ...(catF && seriesRef(catF) ? { cat: seriesRef(catF) } : {}),
+        ...(valF && seriesRef(valF) ? { val: seriesRef(valF) } : { cache }),
       };
-      if (gType === 'scatter' && catF && chartRef(catF)) { s.x = s.cat; delete s.cat; }
+      if (gType === 'scatter' && catF && seriesRef(catF)) { s.x = s.cat; delete s.cat; }
       for (const r of [s.name.ref, s.cat, s.val, s.x]) if (r?.sheet) sheetName ??= r.sheet;
       // 서식: 막대는 채우기 색, 꺾은선은 선 색
       const spPr = child(ser, 'spPr');
@@ -1274,7 +1285,7 @@ function readChart(files, path, theme = {}) {
   rows.sort((a, b) => a.order - b.order);
   for (const r of rows) { series.push(r.s); fmts.push(r.f); }
   if (!series.length) return null;
-  const refs = series.flatMap((s) => [s.name.ref, s.cat, s.val, s.x]).filter(Boolean);
+  const refs = series.flatMap((s) => [s.name.ref, s.cat, s.val, s.x]).filter((r) => r && r.r1 !== undefined);
   const range = refs.length ? {
     r1: Math.min(...refs.map((r) => r.r1)), c1: Math.min(...refs.map((r) => r.c1)),
     r2: Math.max(...refs.map((r) => r.r2)), c2: Math.max(...refs.map((r) => r.c2)),
@@ -2021,7 +2032,8 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
     });
   } else if (chart.series?.length) {
     for (const sr of chart.series) {
-      const ref = (r) => (r ? refText(r.sheet ? Math.max(0, wb.sheetIndexByName(r.sheet)) : s, r.r1, r.c1, r.r2, r.c2) : null);
+      // 정의된 이름 참조는 그대로 ([0]!이름 = 이 통합 문서의 이름, 시트 범위 이름은 시트!이름)
+      const ref = (r) => (!r ? null : r.name ? (r.sheet ? `${quoteSheetName(r.sheet)}!${r.name}` : `[0]!${r.name}`) : refText(r.sheet ? Math.max(0, wb.sheetIndexByName(r.sheet)) : s, r.r1, r.c1, r.r2, r.c2));
       refs.push({ tx: ref(sr.name?.ref), cat: ref(sr.cat ?? sr.x), val: ref(sr.val) });
     }
   } else if (chart.range) {

@@ -6551,8 +6551,39 @@ async function saveBigToIdb() {
             t = performance.now();
           }
         }
-        // 열 블록은 형식화 배열 그대로 (IndexedDB 가 바로 복사)
-        await idbSet(`${STORAGE_KEY}#${s._sid}`, { meta: book.sheetMeta(i), chunks, gz: GZ, blocks: s.blocks ?? [] });
+        // 열 블록: 형식화 배열을 16MB 조각으로 나눠 따로 저장 (천만 행 640MB 를 한 번에 복제하면 메모리가 두 배로 튀어 탭이 죽음)
+        const prevRec = await idbGet(`${STORAGE_KEY}#${s._sid}`).catch(() => null);
+        const gen = Date.now().toString(36);
+        const partKeys = [];
+        const blocks = [];
+        for (let bi = 0; bi < (s.blocks ?? []).length; bi++) {
+          const b = s.blocks[bi];
+          const splitArr = async (arr, tag) => {
+            if (!arr || arr.length * arr.BYTES_PER_ELEMENT <= PART_BYTES) return { inline: arr };
+            const per = Math.floor(PART_BYTES / arr.BYTES_PER_ELEMENT);
+            const keys = [];
+            for (let p = 0; p * per < arr.length; p++) {
+              const key = `${STORAGE_KEY}#${s._sid}#${gen}.${bi}.${tag}.${p}`;
+              await idbSet(key, arr.slice(p * per, Math.min(arr.length, (p + 1) * per)));
+              keys.push(key);
+              partKeys.push(key);
+              await yieldUI();
+              if (wb !== book || book.sheets[i] !== s) throw SAVE_ABORT;
+            }
+            return { parts: keys, len: arr.length, kind: arr.constructor.name };
+          };
+          const cols = [];
+          for (let ci = 0; ci < b.cols.length; ci++) {
+            const c = b.cols[ci];
+            const num = await splitArr(c.num, `${ci}n`);
+            const str = await splitArr(c.str, `${ci}s`);
+            cols.push({ ...c, num: num.inline ?? null, str: str.inline ?? null, ...(num.parts ? { numParts: num } : {}), ...(str.parts ? { strParts: str } : {}) });
+          }
+          const perm = await splitArr(b.perm ?? null, 'perm');
+          blocks.push({ ...b, cols, perm: perm.inline ?? undefined, ...(perm.parts ? { permParts: perm } : {}) });
+        }
+        await idbSet(`${STORAGE_KEY}#${s._sid}`, { meta: book.sheetMeta(i), chunks, gz: GZ, blocks, partKeys });
+        for (const k of prevRec?.partKeys ?? []) idbDel(k).catch(() => {});
       }
       list.push({ id: s._sid, ev });
     }
@@ -6573,6 +6604,7 @@ async function saveBigToIdb() {
   }
 }
 
+const PART_BYTES = 16 * 1024 * 1024; // 열 블록 저장 조각 크기
 // 조각은 gzip 으로 압축한 Blob 으로 저장 (문자열 그대로 넣으면 IndexedDB 가 복사하는 동안 화면이 멈춤)
 const GZ = typeof CompressionStream === 'function';
 async function packChunk(text) {
@@ -6600,7 +6632,32 @@ async function loadBigFromIdb(onProgress) {
       onProgress?.((i + 0.5) / idx.sheets.length);
       await yieldUI();
     }
-    sheets.push({ ...rec.meta, cells, blocks: rec.blocks ?? [], _sid: x.id, _ev: x.ev });
+    // 조각으로 나눠 저장한 열 블록을 다시 이어 붙임 (배열 하나를 한 번에 만들고 조각을 차례로 채움)
+    const joinArr = async (info) => {
+      const Ctor = { Float64Array, Int32Array, Uint32Array, Float32Array, Uint8Array, Int16Array, Uint16Array }[info.kind] ?? Float64Array;
+      const out = new Ctor(info.len);
+      let at = 0;
+      for (const key of info.parts) {
+        const part = await idbGet(key);
+        if (!part) throw new Error('저장된 열 블록 조각이 없습니다');
+        out.set(part, at);
+        at += part.length;
+        await yieldUI();
+      }
+      return out;
+    };
+    const blocks = [];
+    for (const b of rec.blocks ?? []) {
+      const cols = [];
+      for (const c of b.cols) {
+        const { numParts, strParts, ...rest } = c;
+        cols.push({ ...rest, num: numParts ? await joinArr(numParts) : c.num, str: strParts ? await joinArr(strParts) : c.str });
+      }
+      const { permParts, ...rb } = b;
+      blocks.push({ ...rb, cols, perm: permParts ? await joinArr(permParts) : b.perm ?? undefined });
+      onProgress?.((i + 0.9) / idx.sheets.length);
+    }
+    sheets.push({ ...rec.meta, cells, blocks, _sid: x.id, _ev: x.ev });
   }
   return { docName: idx.docName, si: idx.si, autosave: idx.autosave, workbook: { names: idx.names, vba: idx.vba, sheets } };
 }
