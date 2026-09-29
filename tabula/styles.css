@@ -779,12 +779,14 @@ legend { padding: 0 4px; color: #444; }
 /* 글꼴 상자 · 글꼴 목록 */
 .font-box { display: inline-flex; align-items: stretch; }
 .font-box .rselect.font-family { border-right: 0; border-radius: 2px 0 0 2px; }
-.font-box .font-caret { min-width: 16px; padding: 0 1px; border: 1px solid #c8c8c8; border-radius: 0 2px 2px 0; height: 24px; }
+.font-box .font-caret { min-width: 16px; padding: 0 1px; border: 1px solid #c8c8c8; border-radius: 0 2px 2px 0; height: 22px; box-sizing: border-box; background: #fff; display: inline-flex; align-items: center; justify-content: center; }
+.font-box .font-caret:hover, .font-box:hover .font-caret { border-color: #8a8a8a; }
+.font-box .rselect.font-family { box-sizing: border-box; height: 22px; }
 .font-menu { display: flex; flex-direction: column; width: 280px; }
 .font-menu .font-search { margin: 6px 8px; height: 26px; padding: 0 8px; }
 .font-menu .font-load { margin: 0 8px 6px; height: 26px; font-size: 12px; }
 .font-list { max-height: 380px; overflow-y: auto; display: flex; flex-direction: column; }
-.font-item { text-align: left; border: 0; background: none; padding: 5px 12px; font-size: 14px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.font-item { flex: none; min-height: 30px; line-height: 1.45; text-align: left; border: 0; background: none; padding: 4px 12px; font-size: 14px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .font-item:hover { background: #e8f0fb; }
 .font-item.on { background: #dbe5f5; }
 
@@ -1031,3 +1033,5 @@ body.view-mode .titlebar, body.view-mode .ribbon-tabs, body.view-mode .ribbon, b
 .cf-smarttag .ico, .cf-smarttag svg { width: 16px; height: 16px; }
 .cf-pscope-row { display: flex; align-items: center; gap: 4px; margin-top: 3px; }
 .cf-pscope { max-width: 260px; font-size: 11.5px; }
+/* 스크롤되는 세로 목록의 항목이 많을 때 줄 높이가 눌려 글자가 잘리지 않게 */
+.menu > *, .filter-list > *, .fc-list > *, .font-list > *, .ver-rows > *, .pm-list > *, .pp-fields > *, .recent-box *, .cf-gallery > * { flex-shrink: 0; }

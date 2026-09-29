@@ -62,6 +62,7 @@ export function closeMenus() {
   if (!openMenus.length) return;
   for (const m of openMenus) m.remove();
   openMenus = [];
+  menuAnchor = null;
   onMenuClose?.();
 }
 
@@ -69,8 +70,18 @@ export function closeMenus() {
  * items: [{label, icon, key, action, disabled, checked}] | {sep:true} | {title} | {node}
  * anchor: HTMLElement(아래쪽에 표시) 또는 {x, y}
  */
+// 같은 단추를 다시 누르면 메뉴를 닫음 (열 때 단추를 기억, mousedown 에서 닫힌 직후의 click 은 다시 열지 않음)
+let menuAnchor = null;
+let suppress = null;
+// 화면을 다시 그려 단추 요소가 바뀌어도 같은 단추로 알아보도록 (종류 · 데이터 · 제목)
+const anchorKey = (el) => `${el.tagName}|${String(el.className).replace(/\b(on|active|open|pressed)\b/g, '').trim()}|${JSON.stringify({ ...el.dataset })}|${el.getAttribute('title') ?? ''}`;
 export function openMenu(anchor, items, { minWidth, scroll } = {}) {
+  if (anchor instanceof Element && suppress && (suppress.el === anchor || suppress.key === anchorKey(anchor)) && Date.now() - suppress.t < 600) {
+    suppress = null;
+    return document.createElement('div'); // 호출한 쪽이 style 등을 만져도 안전하게
+  }
   closeMenus();
+  menuAnchor = anchor instanceof Element ? anchor : null;
   return buildMenu(anchor, items, { minWidth, scroll });
 }
 
@@ -132,7 +143,16 @@ function placeMenu(menu, anchor) {
 }
 
 document.addEventListener('mousedown', (e) => {
-  if (openMenus.length && !openMenus.some((m) => m.contains(e.target))) closeMenus();
+  if (openMenus.length && !openMenus.some((m) => m.contains(e.target))) {
+    // 메뉴를 연 단추를 다시 누름 → 닫기만 (바로 이어지는 click 으로 다시 열리지 않게)
+    const a = menuAnchor;
+    if (a) {
+      const key = anchorKey(a);
+      const hit = e.target.closest?.('button, [data-c], [data-k], .fbtn, .dv-btn, .rbtn, .pp-drop, .pp-menu');
+      if ((a.isConnected && a.contains(e.target)) || (hit && anchorKey(hit) === key)) suppress = { el: a, key, t: Date.now() };
+    }
+    closeMenus();
+  }
 }, true);
 
 // ───────────── 대화상자 ─────────────
