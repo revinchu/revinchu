@@ -7327,6 +7327,30 @@ function renderPivotPane(entry) {
     const st = wb.styleAt(src.si, Math.min(src.ref.r1 + 1, src.ref.r2), src.ref.c1 + i);
     return /date/.test(st?.numFmt ?? '') || (st?.numFmt === 'custom' && /[yd]/i.test(st.code ?? '') && !/[#0]/.test(st.code ?? ''));
   };
+  // 필터가 걸린 필드 (항목 선택 · 슬라이서 · 레이블/값/상위 10 필터) — 엑셀처럼 깔때기 표시, ▾ 로 바로 수정 · 해제
+  const filterKey = (f) => Object.keys(def.filters ?? {}).find((k) => k.toLowerCase() === String(f).toLowerCase());
+  const fieldFilterOf = (f) => Object.entries(def.fieldFilters ?? {}).find(([k]) => k.toLowerCase() === String(f).toLowerCase())?.[1];
+  const filterInfo = (f) => {
+    const k = filterKey(f);
+    const ff = fieldFilterOf(f);
+    if (!k && !ff) return null;
+    const parts = [];
+    if (k) {
+      const label = pivotItemLabeler(def, f);
+      const sel = def.filters[k];
+      parts.push(`선택한 항목 ${sel.length}개: ${sel.slice(0, 8).map((x) => label(x) || '(비어 있음)').join(', ')}${sel.length > 8 ? ' …' : ''}`);
+    }
+    if (ff) parts.push(describeFieldFilter(ff, def.values ?? []));
+    return parts.join('\n');
+  };
+  const areaOf = (f) => (areas.rows.some((x) => x.toLowerCase() === f.toLowerCase()) ? 'rows' : areas.cols.some((x) => x.toLowerCase() === f.toLowerCase()) ? 'cols' : 'page');
+  const funnel = () => el('span', { class: 'pp-funnel', html: '<svg viewBox="0 0 16 16" width="13" height="13"><path d="M1.5 2h13l-5 6v5.5l-3 1.5V8z" fill="#217346"/></svg>' });
+  const filterBtn = (f) => {
+    const b = el('button', { type: 'button', class: 'pp-drop', title: `'${f}' 필터 및 정렬` }, '▾');
+    b.addEventListener('mousedown', (e) => e.stopPropagation());
+    b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openPivotFilterMenu(entry, areaOf(f), f, b); });
+    return b;
+  };
   // 필드 목록
   const search = el('input', { type: 'search', placeholder: '검색', class: 'pp-search' });
   const fieldList = el('div', { class: 'pp-fields' });
@@ -7340,7 +7364,8 @@ function renderPivotPane(entry) {
       });
       const calc = calcSet.has(h.toLowerCase()) ? (def.calcFields ?? []).find((c) => c.name.toLowerCase() === h.toLowerCase()) : null;
       if (!calc) {
-        const item = el('label', { class: 'pp-field', draggable: 'true' }, cb, el('span', {}, h));
+        const fi = filterInfo(h);
+        const item = el('label', { class: `pp-field${fi ? ' filtered' : ''}`, draggable: 'true', title: fi ? `필터 적용됨\n${fi}` : '' }, cb, el('span', { class: 'pp-fname' }, h), fi ? funnel() : null, filterBtn(h));
         item.addEventListener('dragstart', (e) => { pivotDrag = { name: h }; e.dataTransfer.setData('text/plain', h); });
         return item;
       }
@@ -7393,7 +7418,9 @@ function renderPivotPane(entry) {
       const menuBtn = el('button', { type: 'button', class: 'pp-menu', title: '필드 설정' }, '▾');
       const isCalc = calcSet.has(String(it.name).toLowerCase());
       const row = el('div', { class: `pp-item${isCalc ? ' calc' : ''}`, draggable: 'true', title: isCalc ? `계산 필드: =${(def.calcFields ?? []).find((c) => c.name.toLowerCase() === String(it.name).toLowerCase())?.formula ?? ''}` : '' },
-        isCalc ? el('span', { class: 'fx-badge' }, 'ƒx') : '', el('span', { class: 'pp-label' }, it.label), menuBtn);
+        isCalc ? el('span', { class: 'fx-badge' }, 'ƒx') : '', el('span', { class: 'pp-label' }, it.label),
+        area !== 'values' && filterInfo(it.name) ? funnel() : null, menuBtn);
+      if (area !== 'values' && filterInfo(it.name)) { row.classList.add('filtered'); row.title = `필터 적용됨\n${filterInfo(it.name)}`; }
       row.addEventListener('dragstart', (e) => { pivotDrag = { name: it.name, from: area, index: it.i }; e.dataTransfer.setData('text/plain', it.name); });
       menuBtn.addEventListener('click', () => {
         const list = area === 'values' ? areas.values : areas[area];
