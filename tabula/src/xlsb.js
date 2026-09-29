@@ -68,9 +68,9 @@ const R = {
   CSXFS: 626, CXFS: 617, CAUTHOR: 632, COMMENT: 635, COMMENT_END: 636, CTEXT: 637,
   TABLE: 343, TABLE_END: 344, LISTCOL: 347, LISTCOL_END: 348, LISTCCFMLA: 351,
   PCDEF: 179, PCDSOURCE: 185, PCDSHEETSRC: 187, PCDFIELD: 183, PCDFIELD_END: 184, PCDFSITEMS: 189, PCDFSITEMS_END: 190, PCITEM_ARRAY: 191,
-  PCDFGROUP: 219, PCDFGROUP_END: 220, PCDFGROUPITEMS: 221, PCDFGROUPITEMS_END: 222, PCDPNAMES: 253, PCDPNAME: 255,
+  PCDFGROUP: 219, PCDFGROUP_END: 220, PCDFGROUPITEMS: 221, PCDFGROUPITEMS_END: 222, PCDPNAMES: 253, PCDPNAME: 255, PCDFGRANGE: 223,
   PTDEF: 280, PTFITEM: 282, PTFIELD: 285, PTFIELD_END: 286, PTLOCATION: 314, PTROWFIELDS: 309, PTCOLFIELDS: 311, PTPAGEFIELD: 289,
-  PTDATAFIELD: 293, PTFILTER: 601, PTFILTER_END: 602, PTREFERENCE: 251, PTREFITEM: 382, AUTOSORTSCOPE: 459,
+  PTDATAFIELD: 293, PTROWITEMS: 299, PTROWITEMS_END: 300, PTCOLITEMS: 301, PTCOLITEMS_END: 302, PTLINE: 297, PTLINE_X: 388, PTFILTER: 601, PTFILTER_END: 602, PTREFERENCE: 251, PTREFITEM: 382, AUTOSORTSCOPE: 459,
   SLC_DEF: 1077, SLC_PIVOTS: 1085, SLC_TABULAR: 1100, SLC_ITEMS: 1102, SLICER: 1083,
 };
 
@@ -633,6 +633,24 @@ function cacheArray(rd) {
   return out.join('');
 }
 
+const GROUP_BY = ['range', 'seconds', 'minutes', 'hours', 'days', 'months', 'quarters', 'years'];
+const serialIsoTime = (n) => new Date(Date.UTC(1899, 11, 30) + Math.round(n * 86400000)).toISOString().slice(0, 19);
+/** 캐시 필드 그룹 → <fieldGroup> (엑셀 xlsx 와 같은 모양) */
+function groupXml(g) {
+  if (!g || typeof g !== 'object') return '';
+  const r = g.range;
+  let rp = '';
+  if (r) {
+    const auto = { autoStart: r.fl & 1 ? undefined : 0, autoEnd: r.fl & 2 ? undefined : 0 };
+    rp = r.by === 0
+      ? `<rangePr${attrs({ ...auto, startNum: numText(r.start), endNum: numText(r.end), groupInterval: numText(r.step) })}/>`
+      : `<rangePr${attrs({ ...auto, groupBy: GROUP_BY[r.by] ?? 'months', startDate: serialIsoTime(r.start), endDate: serialIsoTime(r.end), groupInterval: r.step !== 1 ? numText(r.step) : undefined })}/>`;
+  }
+  const items = g.items.join('');
+  const n = (items.match(/<[a-z]/g) ?? []).length;
+  return `<fieldGroup${attrs({ par: g.par >= 0 ? g.par : undefined, base: g.base >= 0 ? g.base : undefined })}>${rp}${n ? `<groupItems count="${n}">${items}</groupItems>` : ''}</fieldGroup>`;
+}
+
 function pivotCacheXml(u8, env) {
   let source = '';
   const fields = [];
@@ -666,25 +684,33 @@ function pivotCacheXml(u8, env) {
       }
       case R.PCDFSITEMS: inShared = true; if (f) f.sflags = rd.u16(); break;
       case R.PCDFSITEMS_END: inShared = false; break;
-      case R.PCDFGROUP: inGroup = true; if (f) f.group = true; break;
+      case R.PCDFGROUP: inGroup = true; if (f) f.group = { par: rd.i32(), base: rd.i32(), range: null, items: [] }; break;
       case R.PCDFGROUP_END: inGroup = false; break;
-      case R.PCITEM_ARRAY: if (f && inShared && !inGroup) f.items.push(cacheArray(rd)); break;
-      case R.PCDPNAME: pnames.push(rd.u32()); break;
+      // 그룹 범위 (날짜: 초 · 분 · 시 · 일 · 월 · 분기 · 연, 숫자: 구간)
+      case R.PCDFGRANGE: if (f?.group) { const by = rd.u8v(); const fl = rd.u8v(); f.group.range = { by, fl, start: rd.f64(), end: rd.f64(), step: rd.f64() }; } break;
+      case R.PCITEM_ARRAY:
+        if (f && inShared && !inGroup) f.items.push(cacheArray(rd));
+        else if (f?.group && inGroup) f.group.items.push(cacheArray(rd));
+        break;
+      case R.PCDPNAMES: if (f) f.pnames = []; break;
+      // 계산 필드 수식의 이름 목록은 필드마다 따로 (PtgName 번호 = 그 필드 목록의 순서)
+      case R.PCDPNAME: (f?.pnames ?? pnames).push(rd.u32()); break;
       default:
         if (f && inShared && !inGroup && r.t >= 20 && r.t <= 32 && r.t !== 26) f.items.push(cacheItem(r.t, rd));
+        else if (f?.group && inGroup && r.t >= 20 && r.t <= 32 && r.t !== 26) f.group.items.push(cacheItem(r.t, rd));
     }
   }
-  const penv = { ...env, pnames: pnames.map((i) => fields[i]?.name) };
   const fieldsXml = fields.map((x) => {
     let formula;
     if (x.fp !== null) {
+      const penv = { ...env, memo: new Map(), pnames: (x.pnames ?? pnames).map((i) => fields[i]?.name) }; // 같은 바이트라도 이름 목록이 달라 기억해 두지 않음
       const { text } = decodeFormula(u8, x.fp, penv, { r: 0, c: 0 });
       if (text !== null) formula = text;
     }
     const items = x.items.join('');
     const sf = x.sflags ?? 0;
     const sa = { containsSemiMixedTypes: sf & 1 ? undefined : 0, containsNonDate: sf & 2 ? undefined : 0, containsDate: sf & 4 ? 1 : undefined, containsString: sf & 8 ? undefined : 0, containsBlank: sf & 0x10 ? 1 : undefined, containsNumber: sf & 0x40 ? 1 : undefined, containsInteger: sf & 0x80 ? 1 : undefined };
-    return `<cacheField${attrs({ name: x.name, numFmtId: x.fmt >= 0 ? x.fmt : 0, formula, databaseField: x.database ? undefined : 0 })}><sharedItems${attrs(sa)}${items ? ` count="${(items.match(/<[a-z]/g) ?? []).length}">${items}</sharedItems>` : '/>'}</cacheField>`;
+    return `<cacheField${attrs({ name: x.name, numFmtId: x.fmt >= 0 ? x.fmt : 0, formula, databaseField: x.database ? undefined : 0 })}><sharedItems${attrs(sa)}${items ? ` count="${(items.match(/<[a-z]/g) ?? []).length}">${items}</sharedItems>` : '/>'}${groupXml(x.group)}</cacheField>`;
   }).join('');
   return `<pivotCacheDefinition xmlns="${NS}" xmlns:r="${NS_R}" refreshOnLoad="1" recordCount="${recordCount}"><cacheSource type="worksheet">${source}</cacheSource><cacheFields count="${fields.length}">${fieldsXml}</cacheFields></pivotCacheDefinition>`;
 }
@@ -706,9 +732,18 @@ function pivotTableXml(u8) {
   let style = '';
   let flt = null;
   let depth = 0; // PTFIELD 안의 참조 (자동 정렬 기준)
+  // 표시된 행 · 열 항목 (rowItems · colItems): 값이 같은 항목의 순서를 엑셀과 똑같이 하는 데 씀
+  const lines = { rowItems: [], colItems: [] };
+  let lineList = null;
+  let line = null;
   for (const r of records(u8)) {
     const rd = new Rd(u8, r.p, r.e);
     switch (r.t) {
+      case R.PTROWITEMS: lineList = lines.rowItems; break;
+      case R.PTCOLITEMS: lineList = lines.colItems; break;
+      case R.PTROWITEMS_END: case R.PTCOLITEMS_END: lineList = null; break;
+      case R.PTLINE: if (lineList) { const rr = rd.u16(); const t = rd.u16(); rd.i32(); const i = rd.i32(); line = { r: rr, t, i, xs: [] }; lineList.push(line); } break;
+      case R.PTLINE_X: if (line) while (rd.left >= 4) line.xs.push(rd.i32()); break;
       case R.PTDEF: {
         const f1 = rd.u32(); const f2 = rd.u32(); const f3 = rd.u32(); const dataAxis = rd.u8v(); rd.u8v(); rd.skip(2); rd.i32(); rd.u16(); rd.skip(2); rd.i32();
         const cacheId = rd.i32(); const name = rd.str() ?? '';
@@ -795,7 +830,9 @@ function pivotTableXml(u8) {
     return `<pivotField${attrs(x.a)}>${x.items.length ? `<items count="${x.items.length}">${x.items.join('')}</items>` : ''}${sort}</pivotField>`;
   }).join('');
   const fl = (tag, list) => (list.length ? `<${tag} count="${list.length}">${list.map((v) => `<field x="${v}"/>`).join('')}</${tag}>` : '');
-  return `<pivotTableDefinition xmlns="${NS}"${attrs({ ...head, compact: anyCompact ? undefined : 0, compactData: anyCompact ? undefined : 0, outline: anyOutline ? 1 : undefined, outlineData: anyOutline ? 1 : undefined })}>${loc}<pivotFields count="${fields.length}">${fieldsXml}</pivotFields>${fl('rowFields', rows)}${fl('colFields', cols)}${pages.length ? `<pageFields count="${pages.length}">${pages.join('')}</pageFields>` : ''}${datas.length ? `<dataFields count="${datas.length}">${datas.join('')}</dataFields>` : ''}${style}${filters.length ? `<filters count="${filters.length}">${filters.map((x) => `<filter${attrs(x.a)}>${x.top}</filter>`).join('')}</filters>` : ''}</pivotTableDefinition>`;
+  const ITEM_T = ['data', 'default', 'sum', 'countA', 'avg', 'max', 'min', 'product', 'count', 'stdDev', 'stdDevP', 'var', 'varP', 'grand', 'blank'];
+  const lineXml = (tag, list) => (list.length ? `<${tag} count="${list.length}">${list.map((l) => `<i${attrs({ t: l.t ? ITEM_T[l.t] ?? 'data' : undefined, r: l.r || undefined, i: l.i || undefined })}>${l.xs.map((v) => `<x v="${v}"/>`).join('')}</i>`).join('')}</${tag}>` : '');
+  return `<pivotTableDefinition xmlns="${NS}"${attrs({ ...head, compact: anyCompact ? undefined : 0, compactData: anyCompact ? undefined : 0, outline: anyOutline ? 1 : undefined, outlineData: anyOutline ? 1 : undefined })}>${loc}<pivotFields count="${fields.length}">${fieldsXml}</pivotFields>${fl('rowFields', rows)}${lineXml('rowItems', lines.rowItems)}${fl('colFields', cols)}${lineXml('colItems', lines.colItems)}${pages.length ? `<pageFields count="${pages.length}">${pages.join('')}</pageFields>` : ''}${datas.length ? `<dataFields count="${datas.length}">${datas.join('')}</dataFields>` : ''}${style}${filters.length ? `<filters count="${filters.length}">${filters.map((x) => `<filter${attrs(x.a)}>${x.top}</filter>`).join('')}</filters>` : ''}</pivotTableDefinition>`;
 }
 
 // ─────────────── 슬라이서 ───────────────

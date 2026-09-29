@@ -88,7 +88,7 @@ const argb = (color) => `FF${String(color).replace('#', '').toUpperCase().padSta
 // ───────────────────────── 표시 형식 ─────────────────────────
 export const BUILTIN_FMT = {
   0: {}, 1: { decimals: 0 }, 2: { decimals: 2 }, 3: { numFmt: 'comma' }, 4: { numFmt: 'number', decimals: 2 },
-  9: { numFmt: 'percent' }, 10: { numFmt: 'percent', decimals: 2 }, 11: { numFmt: 'scientific' },
+  9: { numFmt: 'percent' }, 10: { numFmt: 'percent', decimals: 2 }, 11: { numFmt: 'scientific', decimals: 2 },
   12: { numFmt: 'fraction' }, 13: { numFmt: 'fraction' }, 14: { numFmt: 'date' }, 15: { numFmt: 'date' },
   16: { numFmt: 'date' }, 17: { numFmt: 'date' }, 18: { numFmt: 'time' }, 19: { numFmt: 'time' },
   20: { numFmt: 'time' }, 21: { numFmt: 'time' }, 22: { numFmt: 'datetime' }, 37: { numFmt: 'comma' },
@@ -98,6 +98,7 @@ export const BUILTIN_FMT = {
 };
 for (const id of [27, 28, 29, 30, 31, 34, 35, 36, 50, 51, 52, 53, 54, 57, 58]) BUILTIN_FMT[id] = { numFmt: 'date' };
 for (const id of [32, 33, 55, 56]) BUILTIN_FMT[id] = { numFmt: 'time' };
+const BUILTIN_CODE_ID = { '# ?/?': 12, '0.00E+00': 11, '@': 49 };
 // 기본 제공 번호 중 음수 괄호 · 빨강 · 통화 · 회계 형식은 실제 서식 코드로 (한국어 엑셀 기준)
 export const BUILTIN_CODE = {
   5: '"₩"#,##0;"₩"\\-#,##0', 6: '"₩"#,##0;[Red]"₩"\\-#,##0', 7: '"₩"#,##0.00;"₩"\\-#,##0.00', 8: '"₩"#,##0.00;[Red]"₩"\\-#,##0.00',
@@ -2204,6 +2205,9 @@ class StylePool {
   fmtId(style) {
     const code = fmtCode(style);
     if (code === null) return 0;
+    // 엑셀 기본 형식 번호가 있는 코드는 그 번호로 (다시 열 때 같은 형식)
+    const builtin = BUILTIN_CODE_ID[code];
+    if (builtin !== undefined) return builtin;
     if (!this.maps.fmt.has(code)) {
       const id = 164 + this.numFmts.length;
       this.maps.fmt.set(code, id);

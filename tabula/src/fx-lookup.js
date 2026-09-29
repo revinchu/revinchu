@@ -169,7 +169,7 @@ export const LOOKUP = {
     if (ci < 1) throw ERR.VALUE;
     if (ci > t.width) throw ERR.REF;
     const first = t.rows.map((row) => row[0]);
-    const exact = approx !== undefined && approx !== null && !toBool(approx);
+    const exact = approx !== undefined && (approx === null || !toBool(approx)); // 빈 인수(,)는 FALSE (엑셀)
     const i = exact ? exactIndex(first, key) : binaryIndex(first, key);
     if (i < 0) throw ERR.NA;
     return t.rows[i][ci - 1] ?? 0;
@@ -179,7 +179,7 @@ export const LOOKUP = {
     const ri = toInt(row);
     if (ri < 1) throw ERR.VALUE;
     if (ri > t.height) throw ERR.REF;
-    const exact = approx !== undefined && approx !== null && !toBool(approx);
+    const exact = approx !== undefined && (approx === null || !toBool(approx)); // 빈 인수(,)는 FALSE (엑셀)
     const i = exact ? exactIndex(t.rows[0], key) : binaryIndex(t.rows[0], key);
     if (i < 0) throw ERR.NA;
     return t.rows[ri - 1][i] ?? 0;
@@ -229,7 +229,7 @@ export const LOOKUP = {
   }, [0]),
   MATCH: lift(([key, look, type]) => {
     const vals = vectorOf(look);
-    const mt = optInt(type, 1);
+    const mt = type === null ? 0 : optInt(type, 1); // MATCH(x, r,) = 정확히 일치
     const i = mt === 0 ? exactIndex(vals, key) : binaryIndex(vals, key, mt < 0);
     if (i < 0) throw ERR.NA;
     return i + 1;

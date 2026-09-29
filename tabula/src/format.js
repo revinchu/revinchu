@@ -55,11 +55,32 @@ function fixed(n, decimals, thousands) {
 
 function pad(n, w = 2) { return String(n).padStart(w, '0'); }
 
-function dateParts(serial) {
-  const d = new Date(EPOCH + Math.round(serial * DAY_MS));
+/** 날짜 → 일련번호 (엑셀 1900 체계: 1900-03-01 앞은 하루 당김, 1900-01-01 = 1) */
+export function serialOf(y, m, d) {
+  const s = (Date.UTC(y, m - 1, d) - EPOCH) / DAY_MS;
+  return s >= 1 && s < 61 ? s - 1 : s;
+}
+
+/**
+ * 일련번호 → 날짜 부분. 엑셀 1900 날짜 체계: 0 = 1900-01-00, 1 = 1900-01-01, 60 = 1900-02-29(없는 날),
+ * 61 부터 실제 날짜. 요일도 엑셀처럼 1 = 일요일 기준 (step: 반올림 단위 ms)
+ */
+export function dateParts(serial, step = 1) {
+  const ms = Math.round(serial * DAY_MS / step) * step;
+  const day = Math.floor(ms / DAY_MS);
+  const dow = (((day + 6) % 7) + 7) % 7;
+  if (day >= 0 && day < 61) {
+    const t = new Date(ms - day * DAY_MS + EPOCH);
+    const time = { hh: t.getUTCHours(), mm: t.getUTCMinutes(), ss: t.getUTCSeconds(), dow };
+    if (day === 0) return { y: 1900, m: 1, d: 0, ...time };
+    if (day === 60) return { y: 1900, m: 2, d: 29, ...time };
+    const d = new Date(EPOCH + ms + DAY_MS);
+    return { y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate(), ...time };
+  }
+  const d = new Date(EPOCH + ms);
   return {
     y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate(),
-    hh: d.getUTCHours(), mm: d.getUTCMinutes(), ss: d.getUTCSeconds(), dow: d.getUTCDay(),
+    hh: d.getUTCHours(), mm: d.getUTCMinutes(), ss: d.getUTCSeconds(), dow,
   };
 }
 
@@ -227,12 +248,12 @@ export function parseInput(text) {
     const mo = +m[2];
     const d = +m[3];
     if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) {
-      return { value: (Date.UTC(y, mo - 1, d) - EPOCH) / DAY_MS, numFmt: 'date' };
+      return { value: serialOf(y, mo, d), numFmt: 'date' };
     }
   }
   m = /^(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(t);
   if (m && +m[2] >= 1 && +m[2] <= 12 && +m[3] >= 1 && +m[3] <= 31 && +m[4] < 24 && +m[5] < 60 && +(m[6] || 0) < 60) {
-    const day = (Date.UTC(+m[1], +m[2] - 1, +m[3]) - EPOCH) / DAY_MS;
+    const day = serialOf(+m[1], +m[2], +m[3]);
     return { value: day + (+m[4] * 3600 + +m[5] * 60 + +(m[6] || 0)) / 86400, numFmt: 'datetime' };
   }
   m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(t);

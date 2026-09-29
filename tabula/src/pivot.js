@@ -17,7 +17,7 @@ import {
   EMPTY as EMPTY0, IMG_KEY as IMG_KEY0, keyOf as keyOf0, imageOfKey as imageOfKey0, sortKeys as sortKeys0, itemText as itemText0,
   kk, cubeFromRows, filterRows, groupAggregate, groupAcc, Cube, Column, blockColumn, groupedColumn, groupRank, groupKey, aggregateQuery, planRollup, GROUP_BY as GROUP_BY0,
 } from './cube.js';
-import { maxOf, minOf, pushAll } from './fxcore.js';
+import { maxOf, minOf, pushAll, ERR, ERR_BY_CODE } from './fxcore.js';
 
 export const AGGREGATES = [
   { id: 'sum', label: '합계' },
@@ -376,6 +376,9 @@ function result(acc, agg) {
  */
 const usesRows = (ast) => !!ast && (ast.fn === 'ROWS' || ['a', 'b'].some((k) => usesRows(ast[k])) || (ast.args ?? []).some(usesRows));
 
+/** 오류 · 빈 셀 표시 글자 → 칸 입력 (엑셀: 숫자 모양이면 숫자 0 처럼 숫자로 씀) */
+const captionRaw = (t) => (!t ? '' : /^-?\d+(\.\d+)?$/.test(t) ? t : `'${t}`);
+
 function makeMeasures(header, values, calcFields) {
   const lower = (x) => String(x).toLowerCase();
   const calcByName = new Map((calcFields ?? []).map((c) => {
@@ -440,6 +443,11 @@ function makeMeasures(header, values, calcFields) {
       if (!sp) return null;
       if (sp.calc) return calcValue(sp.calc, list);
       return result(list[sp.slot], sp.agg);
+    },
+    /** 데이터가 없는 총합계: 엑셀은 계산 필드만 합계 0 으로 계산하고 나머지는 빈칸 */
+    emptyValue(vi) {
+      const sp = specs[vi];
+      return sp?.calc ? calcValue(sp.calc, cols.map(newAcc)) : null;
     },
     accumulate(list, r) {
       for (let k = 0; k < n; k++) add(list[k], cols[k] < 0 ? 1 : r[cols[k]]);
@@ -1177,7 +1185,10 @@ export function computePivot(input, d) {
       }
     }
   }
-  const raw = (rpath, cpath, vi) => measures.value(accs.get(`${rpath}\u0002${cpath}`), vi);
+  const raw = (rpath, cpath, vi) => {
+    const list = accs.get(`${rpath}\u0002${cpath}`);
+    return list || rpath || cpath ? measures.value(list, vi) : measures.emptyValue(vi);
+  };
   orderTree(rowTree, d.rows, d, (node, vi) => raw(node.path, '', vi));
   orderTree(colTree, d.cols, d, (node, vi) => raw('', node.path, vi));
   // 축소한 항목 (필드별 항목 글자, 엑셀처럼 필드의 같은 항목은 모두 함께)
@@ -1345,9 +1356,9 @@ export function computePivot(input, d) {
   const val = (n, vi, role) => {
     const style = { ...styleFor(role), ...numStyle(vi) };
     // 빈 셀 표시 옵션
-    if (n === null || n === undefined) return { raw: d.missingCaption ? `'${d.missingCaption}` : '', style, role };
+    if (n === null || n === undefined) return { raw: captionRaw(d.missingCaption), style, role };
     // 오류 값 표시 옵션: 오류 대신 지정한 글자(빈 칸 포함)
-    if (isErr(n)) return d.errorCaption !== null && d.errorCaption !== undefined ? { raw: d.errorCaption === '' ? '' : `'${d.errorCaption}`, style, role } : { raw: n.code, style, role };
+    if (isErr(n)) return d.errorCaption !== null && d.errorCaption !== undefined ? { raw: captionRaw(d.errorCaption), style, role } : { raw: n.code, style, role };
     if (typeof n === 'boolean') return { raw: n ? 'TRUE' : 'FALSE', style, role };
     if (typeof n === 'string') return { raw: `'${n}`, style, role };
     return { raw: String(Number(n.toPrecision(15))), style, role };
@@ -1363,7 +1374,13 @@ export function computePivot(input, d) {
   const pageRows = [];
   for (const p of d.pages) {
     const allowed = d.filters[p] ?? d.filters[Object.keys(d.filters).find((k) => k.toLowerCase() === p.toLowerCase())];
-    pageRows.push([text(fcap(p), 'pageLabel'), text(!allowed ? '(모두)' : allowed.length === 1 ? d.itemCaptions?.[p]?.[allowed[0]] ?? allowed[0] : '(다중 항목)', 'pageValue')]);
+    // 엑셀: 원본에 실제로 있는 항목 중 보이는 것이 하나일 때만 그 이름 (없는 항목은 세지 않음)
+    let shown = allowed;
+    if (allowed && resolved?.cube) {
+      const j = idx(p);
+      if (j >= 0 && j < resolved.cube.header.length) { const have = new Set(resolved.cube.col(j).texts()); shown = allowed.filter((t) => have.has(t)); }
+    }
+    pageRows.push([text(fcap(p), 'pageLabel'), text(!allowed ? '(모두)' : shown.length === 1 ? d.itemCaptions?.[p]?.[shown[0]] ?? shown[0] : '(다중 항목)', 'pageValue')]);
   }
   if (pageRows.length) { pushAll(grid, pageRows); grid.push([]); }
 
@@ -1377,7 +1394,12 @@ export function computePivot(input, d) {
   };
   if (hasColHead) {
     // 열 필드가 있으면 맨 위에 '값 이름 | 열 레이블' 행 (값 필드만 여러 개면 생략)
-    if (Lc) grid.push([text(valueCaption, 'valueCaption'), ...Array(labelCols - 1).fill(null).map(() => text('', 'corner')), text(d.colCaption ?? '열 레이블', 'colHead'), ...colLeaves.slice(1).map(() => text('', 'colHead'))]);
+    // 압축 형식은 '열 레이블' 하나, 개요 · 테이블 형식은 열 필드마다 필드 이름 (값 자리는 '값')
+    if (Lc) {
+      const caps = layout === 'compact' ? [d.colCaption ?? '열 레이블']
+        : Array.from({ length: colLevels }, (_, lvl) => { const vLvl = multiV ? vp : -1; return lvl === vLvl ? '값' : fcap(d.cols[vLvl >= 0 && lvl > vLvl ? lvl - 1 : lvl]); });
+      grid.push([text(valueCaption, 'valueCaption'), ...Array(labelCols - 1).fill(null).map(() => text('', 'corner')), ...colLeaves.map((_, k) => text(caps[k] ?? '', 'colHead'))]);
+    }
     for (let lvl = 0; lvl < colLevels; lvl++) {
       const row = lvl === colLevels - 1 ? rowHeaderCells() : Array.from({ length: labelCols }, () => text('', 'corner'));
       let prev = null;
@@ -1629,7 +1651,14 @@ export function pivotLookup(rows, def, dataField, pairs, resolved = null) {
   if (!list && !pairs.length && !res.groups.length) list = res.measures.newList();
   if (!list) return null;
   const v = res.measures.value(list, e.vi);
-  return typeof v === 'number' ? v : null;
+  if (typeof v === 'number') return v;
+  // 오류 값: '오류 값 표시' 글자가 있으면 칸에 보이는 값 (빈 글자는 0), 없으면 그 오류
+  if (isErr(v)) {
+    const cap = res.def.errorCaption;
+    if (cap === null || cap === undefined) return ERR_BY_CODE[v.code] ?? ERR.VALUE;
+    return cap === '' ? 0 : /^-?\d+(\.\d+)?$/.test(cap) ? Number(cap) : cap;
+  }
+  return null;
 }
 
 /**

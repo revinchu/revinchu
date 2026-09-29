@@ -33,7 +33,7 @@ import {
 import { SLICER_STYLES, SLICER_STYLE_GROUPS, slicerStyleName, slicerColors, CUSTOM_KEYS } from './slicerstyle.js';
 import { server, idbSet, idbGet, idbDel } from './storage.js';
 import { libList, libSave, libLoad, libLoadVersion, libUpdate, libNameVersion, libRemove, newDocId, packText, unpackText, LIB_MAX, VER_MAX } from './library.js';
-import { itemStats, blockColumn, EMPTY as PIVOT_EMPTY } from './cube.js';
+import { itemStats, blockColumn, EMPTY as PIVOT_EMPTY, EMPTY_TEXT as PIVOT_EMPTY_TEXT } from './cube.js';
 import { logicalCol, ColBuilder } from './block.js';
 import { PROTECT_OPTIONS, defaultAllow, excelHash, isProtected, isLockedStyle, allowed } from './protect.js';
 import { PAPERS, MARGINS, normPage, paperOf, printScale, headerParts } from './page.js';
@@ -3739,7 +3739,7 @@ function blockFilterCol(r1, r2, c) {
   const lc = logicalCol(b, c - b.c0, r1 - b.r0, r2 - r1 + 1); // 정렬 순서가 있으면 보이는 순서로
   const d = blockColumn(lc, lc.a, r2 - r1 + 1).dim();
   const fmt = bc.fmt ?? {};
-  const texts = d.keys.map((k) => (k === PIVOT_EMPTY ? '' : formatValue(k, fmt).text));
+  const texts = d.keys.map((k) => (k === PIVOT_EMPTY || k === PIVOT_EMPTY_TEXT ? '' : formatValue(k, fmt).text));
   const over = [];
   for (const k of sheet().cells.keys()) {
     const i = k.indexOf(',');

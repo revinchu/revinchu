@@ -15,7 +15,7 @@ function pickEach(cond, a, b) {
   return broadcast2(cond, broadcast2(a, b, (x, y) => [x, y]), (c, pair) => {
     if (isError(c)) return c;
     const [x, y] = Array.isArray(pair) ? pair : [pair, pair];
-    return toBool(c ?? false) ? x : y;
+    return (toBool(c ?? false) ? x : y) ?? 0; // 배열 IF 의 빈 셀은 0 (엑셀: MIN(IF(…, 빈 칸)) = 0)
   });
 }
 

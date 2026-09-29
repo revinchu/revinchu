@@ -1,7 +1,7 @@
 // 수학/삼각 · 조건부 집계 함수 (DOM 없음)
 import {
   ERR, Range, isError, scalar, toNum, toInt, toBool, optNum, optInt, checkNum, collectNums, flat, asRange, matrix,
-  makeCriteria, lift, fastCount,
+  makeCriteria, lift, fastCount, parseNumberText, r15,
 } from './fxcore.js';
 import { maxOf, minOf } from './fxcore.js';
 
@@ -59,6 +59,79 @@ export function matchesAll(pairs, r, c) {
     const row = range.rows[r];
     return row !== undefined && c < row.length && test(row[c]);
   });
+}
+
+// ─── *IFS 해시 색인: 같음 조건만 있으면 (범위 조합마다 한 번 묶어 두고) 조건 값으로 바로 찾음 ───
+// =MINIFS(표[date], 표[week], [@week], 표[year], [@year]) 를 10만 행에 채운 열이 O(n²) → O(n)
+const rowsIds = new WeakMap();
+let nextRowsId = 1;
+const rowsId = (rows) => { let i = rowsIds.get(rows); if (!i) { i = nextRowsId++; rowsIds.set(rows, i); } return i; };
+const ifsIdxMemo = new WeakMap();
+/** 조건 → 같음 비교 키 (크기 비교 · 와일드카드 · <> 는 null) */
+function critKey(crit) {
+  crit = scalar(crit);
+  if (typeof crit === 'number') return `n${r15(crit)}`;
+  if (typeof crit === 'boolean') return crit ? 'b1' : 'b0';
+  if (typeof crit !== 'string') return null;
+  const m = /^(=)?([\s\S]*)$/.exec(crit);
+  const operand = m[2];
+  if (!m[1] && /^[<>]/.test(operand)) return null;
+  if (/[*?~]/.test(operand)) return null;
+  if (operand === '') return 'e';
+  const num = parseNumberText(operand);
+  if (num !== null) return `n${r15(num)}`;
+  const up = operand.toUpperCase();
+  if (up === 'TRUE' || up === 'FALSE') return up === 'TRUE' ? 'b1' : 'b0';
+  return `s${operand.toLowerCase()}`;
+}
+/** 칸 값 → 같음 비교 키 (critKey 와 같은 규칙: 숫자 모양 글자는 숫자로) */
+function cellKey(v) {
+  if (typeof v === 'number') return `n${r15(v)}`;
+  if (v === null || v === undefined || v === '') return 'e';
+  if (typeof v === 'string') { const p = parseNumberText(v); return p !== null ? `n${r15(p)}` : `s${v.toLowerCase()}`; }
+  if (typeof v === 'boolean') return v ? 'b1' : 'b0';
+  return '\u0000';
+}
+/**
+ * target(값 범위, 없으면 개수만) 과 조건 범위들 → 조건 키 조합별 { sum, n (숫자 수), rows (맞는 칸 수), min, max, err }
+ * 조건이 모두 같음 비교가 아니거나 범위가 작으면 null
+ */
+function fastIfs(target, args) {
+  if (!args.length || args.length % 2) return null;
+  const keys = [];
+  for (let i = 1; i < args.length; i += 2) { const k = critKey(args[i]); if (k === null) return null; keys.push(k); }
+  const ranges = [];
+  for (let i = 0; i < args.length; i += 2) { const r = args[i]; if (!(r instanceof Range)) return null; ranges.push(r); }
+  const h = ranges[0].height;
+  const w = ranges[0].width;
+  if (h * w < 64) return null;
+  if (ranges.some((r) => r.height !== h || r.width !== w)) return null;
+  const t = target ? asRange(target) : null;
+  if (t && (t.height !== h || t.width !== w)) return null;
+  const anchor = (t ?? ranges[0]).rows;
+  let byAnchor = ifsIdxMemo.get(anchor);
+  if (!byAnchor) { byAnchor = new Map(); ifsIdxMemo.set(anchor, byAnchor); }
+  const sig = `${t ? 't' : 'c'}${ranges.map((r) => rowsId(r.rows)).join(',')}`;
+  let idx = byAnchor.get(sig);
+  if (!idx) {
+    idx = new Map();
+    const rr = ranges.map((r) => r.rows);
+    const tr = t?.rows;
+    for (let i = 0; i < h; i++) {
+      for (let j = 0; j < w; j++) {
+        let k = cellKey(rr[0][i]?.[j] ?? null);
+        for (let q = 1; q < rr.length; q++) k += `\u0001${cellKey(rr[q][i]?.[j] ?? null)}`;
+        let e = idx.get(k);
+        if (!e) { e = { sum: 0, n: 0, rows: 0, min: Infinity, max: -Infinity, err: null }; idx.set(k, e); }
+        e.rows++;
+        if (!tr) continue;
+        const x = tr[i]?.[j];
+        if (typeof x === 'number') { e.sum += x; e.n++; if (x < e.min) e.min = x; if (x > e.max) e.max = x; } else if (isError(x) && !e.err) e.err = x;
+      }
+    }
+    byAnchor.set(sig, idx);
+  }
+  return idx.get(keys.join('\u0001')) ?? { sum: 0, n: 0, rows: 0, min: Infinity, max: -Infinity, err: null };
 }
 
 function ifsValues(target, pairs) {
@@ -394,7 +467,7 @@ export const MATH = {
     }));
     return total;
   },
-  SUMIFS: ([sumRange, ...rest]) => sumIfs(sumRange, ifsPairs(rest)),
+  SUMIFS: ([sumRange, ...rest]) => { const f = fastIfs(sumRange, rest); return f ? f.err ?? f.sum : sumIfs(sumRange, ifsPairs(rest)); },
   COUNTIF: ([range, crit]) => {
     const fast = fastCount(asRange(range), crit);
     if (fast !== null) return fast;
@@ -404,6 +477,8 @@ export const MATH = {
     return k;
   },
   COUNTIFS: (args) => {
+    const f = fastIfs(null, args);
+    if (f) return f.rows;
     const pairs = ifsPairs(args);
     let k = 0;
     pairs[0].range.rows.forEach((row, i) => row.forEach((_, j) => { if (matchesAll(pairs, i, j)) k++; }));
@@ -423,12 +498,14 @@ export const MATH = {
     return total / k;
   },
   AVERAGEIFS: ([target, ...rest]) => {
+    const f = fastIfs(target, rest);
+    if (f) { if (!f.n) throw ERR.DIV0; return f.sum / f.n; }
     const v = ifsValues(target, ifsPairs(rest));
     if (!v.length) throw ERR.DIV0;
     return v.reduce((s, x) => s + x, 0) / v.length;
   },
-  MAXIFS: ([target, ...rest]) => { const v = ifsValues(target, ifsPairs(rest)); return v.length ? maxOf(v) : 0; },
-  MINIFS: ([target, ...rest]) => { const v = ifsValues(target, ifsPairs(rest)); return v.length ? minOf(v) : 0; },
+  MAXIFS: ([target, ...rest]) => { const f = fastIfs(target, rest); if (f) return f.n ? f.max : 0; const v = ifsValues(target, ifsPairs(rest)); return v.length ? maxOf(v) : 0; },
+  MINIFS: ([target, ...rest]) => { const f = fastIfs(target, rest); if (f) return f.n ? f.min : 0; const v = ifsValues(target, ifsPairs(rest)); return v.length ? minOf(v) : 0; },
 };
 
 function pairSum(x, y, f) {

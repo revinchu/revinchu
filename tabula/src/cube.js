@@ -9,13 +9,16 @@
 import { formatGeneral } from './format.js';
 
 export const EMPTY = '(비어 있음)';
+// 빈 글자("", 수식 결과 등) 항목: 엑셀 피벗은 빈 칸 항목과 따로 두고 이름을 빈칸으로 보여 줌
+export const EMPTY_TEXT = '\u0000""';
 // 셀 안 그림은 주소로 구별 (피벗 항목 · 슬라이서에서 그림을 그대로 보여 줌)
 export const IMG_KEY = '\u0000img:';
 const imageByKey = new Map();
 
 /** 셀 값 → 항목 키 (빈 칸은 EMPTY, 오류는 코드 글자, 그림은 IMG_KEY+주소) */
 export const keyOf = (v) => {
-  if (v === null || v === undefined || v === '') return EMPTY;
+  if (v === '') return EMPTY_TEXT;
+  if (v === null || v === undefined) return EMPTY;
   if (typeof v === 'object') {
     if (v.type === 'image') { const k = `${IMG_KEY}${v.src}`; if (!imageByKey.has(k)) imageByKey.set(k, v); return k; }
     return String(v.code);
@@ -27,6 +30,7 @@ export const imageOfKey = (k) => (typeof k === 'string' && k.startsWith(IMG_KEY)
 
 /** 슬라이서·필터에서 쓰는 항목 글자 */
 export const itemText = (v) => {
+  if (v === EMPTY_TEXT) return '';
   if (v === null || v === undefined || v === '') return EMPTY;
   if (typeof v === 'number') return formatGeneral(v);
   if (typeof v === 'object') return v.type === 'image' ? v.alt || `그림 ${String(v.src).slice(-12)}` : v.code;
@@ -58,6 +62,7 @@ export function sortKeys(keys) {
     if (typeof a === 'number' && typeof b === 'number') return a - b;
     if (typeof a === 'number') return -1;
     if (typeof b === 'number') return 1;
+    if (a === EMPTY_TEXT || b === EMPTY_TEXT) return a === b ? 0 : a === EMPTY_TEXT ? -1 : 1;
     const x = customRank(a);
     const y = customRank(b);
     if (x !== undefined || y !== undefined) return x === undefined ? 1 : y === undefined ? -1 : x - y;
@@ -98,12 +103,13 @@ export class Column {
       if (typeof v === 'number') {
         c = numMap.get(v);
         if (c === undefined) { c = keys.length; keys.push(v); numMap.set(v, c); }
-      } else if (v === null || v === undefined || v === '') {
+      } else if (v === null || v === undefined) {
         if (empty < 0) { empty = keys.length; keys.push(EMPTY); strMap.set(EMPTY, empty); }
         c = empty;
       } else if (typeof v === 'string') {
-        c = strMap.get(v);
-        if (c === undefined) { c = keys.length; keys.push(v); strMap.set(v, c); }
+        const k = v === '' ? EMPTY_TEXT : v;
+        c = strMap.get(k);
+        if (c === undefined) { c = keys.length; keys.push(k); strMap.set(k, c); }
       } else {
         const k = keyOf(v);
         const map = typeof k === 'string' ? strMap : other;

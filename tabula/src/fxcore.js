@@ -1,5 +1,5 @@
 // 수식 엔진 공통: 오류 값 · 배열(Range) · 참조 · 값 변환 · 조건 · 날짜 · 배열 브로드캐스트 (DOM 없음)
-import { formatGeneral, parseInput } from './format.js';
+import { formatGeneral, parseInput, dateParts, serialOf } from './format.js';
 
 // ───────────────────────── 오류 값 ─────────────────────────
 export class FormulaError {
@@ -392,14 +392,11 @@ export function makeCriteria(crit) {
 // ───────────────────────── 날짜 ─────────────────────────
 export const EPOCH = Date.UTC(1899, 11, 30);
 export const DAY_MS = 86400000;
-export const dateToSerial = (y, m, d) => (Date.UTC(y, m - 1, d) - EPOCH) / DAY_MS;
+// 엑셀 1900 날짜 체계: 1900-03-01 앞은 없는 날 1900-02-29 때문에 하루씩 당겨짐 (1900-01-01 = 1)
+export const dateToSerial = serialOf;
 export function serialToDate(serial) {
   if (serial < 0) throw ERR.NUM;
-  const d = new Date(EPOCH + Math.round(serial * DAY_MS / 1000) * 1000);
-  return {
-    y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate(),
-    hh: d.getUTCHours(), mm: d.getUTCMinutes(), ss: d.getUTCSeconds(), dow: d.getUTCDay(),
-  };
+  return dateParts(serial, 1000);
 }
 export function todaySerial() {
   const n = new Date();
