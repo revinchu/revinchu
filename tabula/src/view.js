@@ -879,8 +879,15 @@ export class GridView {
     p.objHtml = next;
     const cur = p.objects.childNodes;
     if (cur.length !== nodes.length || nodes.some((n, i) => cur[i] !== n)) {
+      // 다시 만든 슬라이서의 항목 목록 스크롤 위치 유지
+      const keep = new Map();
+      for (const l of p.objects.querySelectorAll('.sl-items')) if (l.scrollTop || l.scrollLeft) keep.set(l.closest('.obj')?.dataset.id, [l.scrollTop, l.scrollLeft]);
       p.objects.replaceChildren(...nodes);
       fitSlicerText(p.objects);
+      for (const [id, [t, l]] of keep) {
+        const list = [...p.objects.querySelectorAll('.obj')].find((o) => o.dataset.id === id)?.querySelector('.sl-items');
+        if (list) { list.scrollTop = t; list.scrollLeft = l; }
+      }
     }
   }
 

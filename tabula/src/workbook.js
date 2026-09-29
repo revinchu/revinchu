@@ -1653,9 +1653,35 @@ export class Workbook {
         target.filter = f;
       }
     }
-    target.charts = target.charts.map((ch) => {
-      const rg = adjustRange(ch.range, axis, index, count);
-      return rg ? { ...ch, range: rg } : ch;
+    // 차트 범위 · 계열 참조 (모든 시트의 차트 중 대상 시트를 가리키는 것)
+    const onTarget = (name, host) => String(name ?? host).toLowerCase() === target.name.toLowerCase();
+    const shiftRef = (ref, host) => {
+      if (!ref || ref.name || ref.r1 === undefined || !onTarget(ref.sheet, host)) return ref;
+      const rg = adjustRange(ref, axis, index, count);
+      return rg ? { ...ref, ...rg } : ref;
+    };
+    this.sheets.forEach((sh, i) => {
+      if (!sh.charts?.length) return;
+      let changed = false;
+      const next = sh.charts.map((ch) => {
+        const host = ch.sheet ?? sh.name;
+        const out = { ...ch };
+        if (ch.range && onTarget(ch.sheet, sh.name)) out.range = adjustRange(ch.range, axis, index, count) ?? ch.range;
+        if (ch.series) {
+          out.series = ch.series.map((sr) => {
+            const n = { ...sr };
+            for (const k of ['cat', 'val', 'x', 'size']) if (sr[k]) n[k] = shiftRef(sr[k], host);
+            if (sr.name?.ref) n.name = { ...sr.name, ref: shiftRef(sr.name.ref, host) };
+            return n;
+          });
+        }
+        if (JSON.stringify(out) === JSON.stringify(ch)) return ch;
+        changed = true;
+        return out;
+      });
+      if (!changed) return;
+      if (i !== si) this.propSnap(i, 'charts');
+      sh.charts = next;
     });
     this.sheets.forEach((sh, i) => {
       const fix = (def) => {

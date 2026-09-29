@@ -224,6 +224,8 @@ input.rselect { padding: 0 4px; }
 .pane { overflow: hidden; }
 .pane-content { position: absolute; left: 0; top: 0; will-change: transform; }
 .gl, .cells, .objects, .overlay { position: absolute; left: 0; top: 0; }
+/* 셀 층(필터 단추 · 스파크라인 포함)은 개체(슬라이서 · 차트) 아래에 */
+.cells { z-index: 0; }
 .gl i { position: absolute; display: block; background: var(--grid-line); }
 .gl i.gv { top: 0; width: 1px; }
 .gl i.gh { left: 0; height: 1px; }

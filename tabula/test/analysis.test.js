@@ -179,3 +179,15 @@ test('차트 서식: 데이터 표 · 추세선 · 선 종류 · 요소 색 · �
   assert.match(svg, /stroke-dasharray/);
   assert.match(svg, />1월</);
 });
+
+test('행 · 열 삽입: 범위 없는 차트 · 계열 참조 이동', () => {
+  const wb = sheetWith([[1, 2], [3, 4], [5, 6]]);
+  const ser = { cat: { r1: 0, c1: 0, r2: 2, c2: 0 }, val: { sheet: 'Sheet1', r1: 0, c1: 1, r2: 2, c2: 1 } };
+  wb.sheets[0].charts = [{ id: 'a', type: 'bar', series: [ser] }, { id: 'p', type: 'bar', pivot: { sheet: 'x', name: 'y' } }];
+  wb.transact(() => wb.insertRows(0, 1, 2));
+  const s = wb.sheets[0].charts[0].series[0];
+  assert.deepEqual([s.cat.r1, s.cat.r2, s.val.r1, s.val.r2], [0, 4, 0, 4]);
+  wb.transact(() => wb.insertCols(0, 0, 1));
+  assert.equal(wb.sheets[0].charts[0].series[0].val.c1, 2);
+  assert.equal(wb.sheets[0].charts[1].pivot.name, 'y');
+});
