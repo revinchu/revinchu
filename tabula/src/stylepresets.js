@@ -413,3 +413,91 @@ export function paintPivotPreset(name, grid, g, opts = {}) {
   }));
   return true;
 }
+
+// ───────────── Tabula 모던 스타일 (엑셀 기본 제공보다 차분하고 세련된 색) ─────────────
+// 팔레트: [이름, 진한 색(머리글), 강조색, 옅은 색(줄무늬), 선 색, 아주 옅은 색]
+export const MODERN_PALETTES = [
+  ['슬레이트', '#1e293b', '#475569', '#f1f5f9', '#e2e8f0', '#f8fafc'],
+  ['인디고', '#312e81', '#4f46e5', '#eef2ff', '#c7d2fe', '#f5f7ff'],
+  ['오션', '#0c4a6e', '#0284c7', '#e0f2fe', '#bae6fd', '#f0f9ff'],
+  ['에메랄드', '#064e3b', '#059669', '#d1fae5', '#a7f3d0', '#ecfdf5'],
+  ['로즈', '#881337', '#e11d48', '#ffe4e6', '#fecdd3', '#fff1f2'],
+  ['앰버', '#78350f', '#d97706', '#fef3c7', '#fde68a', '#fffbeb'],
+  ['바이올렛', '#4c1d95', '#7c3aed', '#ede9fe', '#ddd6fe', '#f5f3ff'],
+  ['그래파이트', '#18181b', '#52525b', '#f4f4f5', '#e4e4e7', '#fafafa'],
+];
+const INK = '#1f2937';
+
+// 종류별 요소 정의 (서식 문자열 규칙은 PRESET_DXF 와 같음)
+const MODERN_KINDS = {
+  TableModern: ([, dk, , soft, line]) => ({
+    wt: `c=${INK};H=thin/${line};B=thin/${line}`, hr: `b;c=#ffffff;f=${dk}`, tr: `b;c=${dk};f=${soft};T=medium/${dk}`,
+    rs1: `f=${soft}`, cs1: `f=${soft}`, fc: `b;c=${dk}`, lc: `b;c=${dk}`,
+  }),
+  TableMinimal: ([, dk, ac, , line, faint]) => ({
+    wt: `c=${INK};H=thin/${line}`, hr: `b;c=${dk};B=medium/${ac}`, tr: `b;c=${dk};T=thin/${dk}`,
+    rs1: `f=${faint}`, cs1: `f=${faint}`, fc: `b;c=${dk}`, lc: `b;c=${dk}`,
+  }),
+  TableAccent: ([, dk, ac, soft, line]) => ({
+    wt: `c=${INK};L=thin/${line};R=thin/${line};T=thin/${line};B=thin/${line};V=thin/${line};H=thin/${line}`,
+    hr: `b;c=#ffffff;f=${ac};V=thin/${ac}`, tr: `b;c=#ffffff;f=${dk};V=thin/${dk}`, rs1: `f=${soft}`, cs1: `f=${soft}`, fc: `b`, lc: `b`,
+  }),
+  PivotModern: ([, dk, ac, soft, line, faint]) => ({
+    wt: `c=${INK};H=thin/${line};B=thin/${line}`, hr: `b;c=#ffffff;f=${dk}`, tr: `b;c=${dk};f=${soft};T=medium/${dk}`,
+    lc: `b`, sr1: `b;f=${soft}`, sr2: 'b', rh1: `b;c=${dk}`, rh2: `b`, ch1: `b;c=#ffffff;f=${ac}`, rs1: `f=${faint}`, cs1: `f=${faint}`,
+    pl: `b;c=${dk}`, pv: `c=${dk};B=thin/${line}`, sc1: 'b',
+  }),
+  PivotLight: ([, dk, ac, soft, line, faint]) => ({
+    wt: `c=${INK};H=thin/${line}`, hr: `b;c=${dk};f=${soft};B=medium/${ac}`, tr: `b;c=${dk};T=double/${ac}`,
+    lc: `b;c=${dk}`, sr1: `b;c=${dk};B=thin/${line}`, sr2: 'b', rh1: `b;c=${ac}`, rh2: 'b', ch1: `b;c=${dk}`, rs1: `f=${faint}`, cs1: `f=${faint}`,
+    pl: `b;c=${dk}`, pv: `c=${dk};B=thin/${ac}`, sc1: 'b',
+  }),
+};
+const KIND_LABEL = { TableModern: '모던', TableMinimal: '미니멀', TableAccent: '강조', PivotModern: '모던', PivotLight: '라이트' };
+
+/** 모던 스타일을 기본 제공 목록에 등록 → [{ name, group, label, pivot }] */
+function registerModern() {
+  const out = [];
+  for (const [kind, make] of Object.entries(MODERN_KINDS)) {
+    MODERN_PALETTES.forEach((pal, i) => {
+      const name = `Tabula${kind}${i + 1}`;
+      const parts = [];
+      for (const [k, v] of Object.entries(make(pal))) {
+        if (!v) continue;
+        PRESET_DXF.push(v);
+        parts.push(`${k}:${PRESET_DXF.length - 1}`);
+      }
+      PRESET_STYLES[name] = parts.join(' ');
+      out.push({ name, group: `Tabula ${KIND_LABEL[kind]}`, label: `${KIND_LABEL[kind]} · ${pal[0]}`, pivot: kind.startsWith('Pivot') });
+    });
+  }
+  return out;
+}
+export const MODERN_STYLES = registerModern();
+export const isModernStyle = (name) => /^Tabula(Table|Pivot)/.test(name ?? '');
+
+// 엑셀 <tableStyleElement type> ↔ 요소 키
+export const ELEMENT_TYPES = {
+  wt: 'wholeTable', hr: 'headerRow', tr: 'totalRow', rs1: 'firstRowStripe', rs2: 'secondRowStripe', cs1: 'firstColumnStripe', cs2: 'secondColumnStripe',
+  fc: 'firstColumn', lc: 'lastColumn', fhc: 'firstHeaderCell', lhc: 'lastHeaderCell', ftc: 'firstTotalCell', ltc: 'lastTotalCell',
+  sr1: 'firstSubtotalRow', sr2: 'secondSubtotalRow', sr3: 'thirdSubtotalRow', sc1: 'firstSubtotalColumn', sc2: 'secondSubtotalColumn', sc3: 'thirdSubtotalColumn',
+  rh1: 'firstRowSubheading', rh2: 'secondRowSubheading', rh3: 'thirdRowSubheading', ch1: 'firstColumnSubheading', ch2: 'secondColumnSubheading', ch3: 'thirdColumnSubheading',
+  pl: 'pageFieldLabels', pv: 'pageFieldValues', blk: 'blankRow',
+};
+
+/** 스타일 요소 → 셀 서식 모양 { bold, color, fill, bl/br/bt/bb/bv/bh(+s, c) } (xlsx 의 dxf 로 씀) */
+export function elementDxfStyle(e) {
+  const st = {};
+  if (e.bold) st.bold = true;
+  if (e.italic) st.italic = true;
+  if (e.color) st.color = e.color;
+  if (e.fill) st.fill = e.fill;
+  const key = { L: 'bl', R: 'br', T: 'bt', B: 'bb', V: 'bv', H: 'bh' };
+  for (const [side, [line, col]] of Object.entries(e.sides ?? {})) {
+    const k = key[side];
+    st[k] = true;
+    if (line !== 'thin') st[`${k}s`] = line;
+    st[`${k}c`] = col;
+  }
+  return st;
+}

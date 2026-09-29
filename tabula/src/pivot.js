@@ -12,7 +12,7 @@
 import { formatGeneral, formatValue } from './format.js';
 import { findTable, dataTop, dataBottom, columnNames, ACCENTS, tint, shade } from './tables.js';
 import { logicalCol } from './block.js';
-import { presetStyle, presetSwatch, paintPivotPreset } from './stylepresets.js';
+import { presetStyle, presetSwatch, paintPivotPreset, MODERN_STYLES } from './stylepresets.js';
 import {
   EMPTY as EMPTY0, IMG_KEY as IMG_KEY0, keyOf as keyOf0, imageOfKey as imageOfKey0, sortKeys as sortKeys0, itemText as itemText0,
   kk, cubeFromRows, filterRows, groupAggregate, groupAcc, Cube, Column, blockColumn, groupedColumn, groupRank, aggregateQuery, planRollup, GROUP_BY as GROUP_BY0,
@@ -923,11 +923,15 @@ function styleParts(name) {
   ][g];
 }
 /** 스타일 갤러리용 목록 */
-export const PIVOT_STYLES = ['Light', 'Medium', 'Dark'].flatMap((k, gi) => Array.from({ length: 28 }, (_, i) => {
-  const name = `PivotStyle${k}${i + 1}`;
-  const grp = ['밝게', '보통', '어둡게'][gi];
-  return { name, group: grp, label: `피벗 스타일 ${grp} ${i + 1}`, get swatch() { return presetSwatch(name); } };
-}));
+export const PIVOT_STYLES = [
+  ...MODERN_STYLES.filter((s) => s.pivot).map((s) => ({ ...s, get swatch() { return presetSwatch(s.name); } })),
+  ...['Light', 'Medium', 'Dark'].flatMap((k, gi) => Array.from({ length: 28 }, (_, i) => {
+    const name = `PivotStyle${k}${i + 1}`;
+    const grp = ['밝게', '보통', '어둡게'][gi];
+    return { name, group: grp, label: `피벗 스타일 ${grp} ${i + 1}`, get swatch() { return presetSwatch(name); } };
+  })),
+];
+export const PIVOT_STYLE_GROUPS = [...new Set(PIVOT_STYLES.map((s) => s.group))];
 
 /** 셀 역할 → 스타일 부분 */
 export function roleStyle(parts, role) {

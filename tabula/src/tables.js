@@ -3,7 +3,7 @@
 //           filter: { criteria, hidden, sort } | null, totalsFns: { [열]: 'sum' | ... }, columns: [이름] }
 // r1 은 머리글 행(header 가 true 일 때), r2 는 요약 행(totals 가 true 일 때)까지 포함.
 
-import { PRESET_STYLES, presetSwatch, tablePresetCell } from './stylepresets.js';
+import { PRESET_STYLES, presetSwatch, tablePresetCell, MODERN_STYLES } from './stylepresets.js';
 
 // ───────────── 스타일 ─────────────
 export const ACCENTS = [
@@ -26,10 +26,15 @@ export const shade = (hex, t) => mix(hex, '#000000', t);
 
 /** 표 스타일 60개: 밝게 1~21, 보통 1~28, 어둡게 1~11 (엑셀 이름 · 정의를 그대로 씀 — stylepresets.js) */
 const TABLE_KINDS = [['Light', '밝게', 21], ['Medium', '보통', 28], ['Dark', '어둡게', 11]];
-export const TABLE_STYLES = TABLE_KINDS.flatMap(([k, group, n]) => Array.from({ length: n }, (_, i) => ({
-  name: `TableStyle${k}${i + 1}`, group, label: `표 스타일 ${group} ${i + 1}`,
-  get swatch() { return presetSwatch(this.name); },
-})));
+export const TABLE_STYLES = [
+  // Tabula 모던 스타일 (엑셀 파일에는 사용자 지정 표 스타일로 저장)
+  ...MODERN_STYLES.filter((s) => !s.pivot).map((s) => ({ ...s, get swatch() { return presetSwatch(this.name); } })),
+  ...TABLE_KINDS.flatMap(([k, group, n]) => Array.from({ length: n }, (_, i) => ({
+    name: `TableStyle${k}${i + 1}`, group, label: `표 스타일 ${group} ${i + 1}`,
+    get swatch() { return presetSwatch(this.name); },
+  }))),
+];
+export const TABLE_STYLE_GROUPS = [...new Set(TABLE_STYLES.map((s) => s.group))];
 export const DEFAULT_TABLE_STYLE = 'TableStyleMedium2';
 
 /** 엑셀 스타일 이름 → 지원하는 스타일 (알 수 없는 이름은 기본 스타일) */

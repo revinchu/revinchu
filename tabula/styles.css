@@ -847,3 +847,8 @@ legend { padding: 0 4px; color: #444; }
 @media (max-width: 900px) { .cf-dialog { grid-template-columns: 1fr; } .cf-left { border-right: 0; padding-right: 0; } }
 .cf-fwrap > .cf-formula, .cf-fwrap > .cf-status { width: 100%; box-sizing: border-box; }
 .cf-list .cf-item.new { background: #eef6ee; }
+.cf-gallery { display: grid; grid-template-columns: repeat(6, 30px); gap: 5px; padding: 4px 10px 8px; }
+.cf-swatch { width: 30px; height: 30px; border: 1px solid #c8c8c8; border-radius: 3px; cursor: pointer; padding: 0; background-color: #fff; }
+.cf-swatch:hover { outline: 2px solid var(--green); outline-offset: 1px; }
+.style-grid.pstyles, .style-grid.tstyles, .style-grid.slstyles { grid-template-columns: repeat(8, 42px); }
+.style-grid.tstyles { grid-template-columns: repeat(8, 46px); }

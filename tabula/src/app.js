@@ -23,10 +23,10 @@ import { readXlsxAsync, writeXlsxAsync, xlsxOverflow } from './xlsx.js';
 import { CHART_TYPES, PALETTE, renderChartSvg, chartModelData } from './chart.js';
 import {
   computePivot, warmPivots, AGGREGATES, SHOW_AS, BASE_POS, LAYOUTS, pivotSourceData, resolvePivot, itemText, headerNames, normalizeDef, valueName,
-  pivotFieldNames, parseCalc, PIVOT_STYLES, pivotStyleParts, LABEL_OPS, VALUE_OPS, describeFieldFilter, keyOf, sortKeys, pivotDetail, GROUP_BY,
+  pivotFieldNames, parseCalc, PIVOT_STYLES, PIVOT_STYLE_GROUPS, pivotStyleParts, LABEL_OPS, VALUE_OPS, describeFieldFilter, keyOf, sortKeys, pivotDetail, GROUP_BY,
   checkCalc, renameCalcRefs, CALC_FUNCS,
 } from './pivot.js';
-import { SLICER_STYLES, slicerStyleName, slicerColors, CUSTOM_KEYS } from './slicerstyle.js';
+import { SLICER_STYLES, SLICER_STYLE_GROUPS, slicerStyleName, slicerColors, CUSTOM_KEYS } from './slicerstyle.js';
 import { server, idbSet, idbGet, idbDel } from './storage.js';
 import { itemStats, blockColumn, EMPTY as PIVOT_EMPTY } from './cube.js';
 import { logicalCol, ColBuilder } from './block.js';
@@ -39,10 +39,10 @@ import { hid, hidCount } from './axis.js';
 import { fontList, fontAlias, loadLocalFonts, canListLocalFonts } from './fonts.js';
 import { ICONS } from './icons.js';
 import {
-  CELL_OPS, TEXT_OPS, DATE_PERIODS, ICON_SETS, ICON_SVG, VISUAL_TYPES, iconSetById, describeCond,
+  CELL_OPS, TEXT_OPS, DATE_PERIODS, ICON_SETS, ICON_SVG, VISUAL_TYPES, iconSetById, describeCond, SCALE_PRESETS, BAR_PRESETS, DEFAULT_SCALE2, DEFAULT_SCALE3,
 } from './condfmt.js';
 import {
-  TABLE_STYLES, DEFAULT_TABLE_STYLE, TOTAL_FUNCS, tableAt, tableCellStyle, tableFilterRange, dataTop, dataBottom, uniqueNames,
+  TABLE_STYLES, TABLE_STYLE_GROUPS, DEFAULT_TABLE_STYLE, TOTAL_FUNCS, tableAt, tableCellStyle, tableFilterRange, dataTop, dataBottom, uniqueNames,
   nextTableName, columnNames, expansionFor, validTableName, findTable, resolveStructRef,
 } from './tables.js';
 import { splitDelimited, splitFixed, suggestBreaks, parseDateOrder, convertPart, DATE_ORDERS } from './textsplit.js';
@@ -3595,12 +3595,12 @@ function tableStyleGallery(anchorEl, forCreate = false) {
       focusGrid();
     },
   });
-  const groups = ['밝게', '보통', '어둡게'].flatMap((g) => [{ title: g }, { node: el('div', { class: 'style-grid tstyles' }, TABLE_STYLES.filter((s) => s.group === g).map(chip)) }]);
+  const groups = TABLE_STYLE_GROUPS.flatMap((g) => [{ title: g }, { node: el('div', { class: 'style-grid tstyles' }, TABLE_STYLES.filter((s) => s.group === g).map(chip)) }]);
   const t = tableHere();
   openMenu(anchorEl, [
     ...groups,
     ...(t ? [{ sep: true }, { label: '지우기', action: () => updateTable(t.id, { style: 'None' }) }] : []),
-  ]);
+  ], { scroll: true });
 }
 
 // ───────────────────────── 슬라이서 ─────────────────────────
@@ -3843,8 +3843,8 @@ function slicerStyleGallery(anchorEl) {
     style: { background: s.colors.frame, borderColor: s.colors.border },
     onclick: () => { closeMenus(); updateObject(sl.id, { style: s.name, color: undefined, custom: undefined }); gv.renderObjectsAll(); },
   }, el('i', { style: { background: s.colors.selFill, borderColor: s.colors.selBorder } }), el('i', { style: { background: s.colors.item, borderColor: s.colors.itemBorder } }));
-  const groups = ['밝게', '기타', '어둡게'].flatMap((g) => [{ title: g }, { node: el('div', { class: 'style-grid slstyles' }, SLICER_STYLES.filter((s) => s.group === g).map(chip)) }]);
-  openMenu(anchorEl ?? { x: 200, y: 160 }, [...groups, { sep: true }, { label: '새 슬라이서 스타일 (색 · 선 사용자 지정)...', action: () => slicerCustomDialog(sl.id) }]);
+  const groups = SLICER_STYLE_GROUPS.flatMap((g) => [{ title: g }, { node: el('div', { class: 'style-grid slstyles' }, SLICER_STYLES.filter((s) => s.group === g).map(chip)) }]);
+  openMenu(anchorEl ?? { x: 200, y: 160 }, [...groups, { sep: true }, { label: '새 슬라이서 스타일 (색 · 선 사용자 지정)...', action: () => slicerCustomDialog(sl.id) }], { scroll: true });
 }
 
 function slicerCustomDialog(id) {
@@ -3944,7 +3944,7 @@ function pivotStyleGallery(anchorEl, entry = pivotHere()) {
     style: { width: '42px', background: `linear-gradient(${st.swatch[0]} 0 30%, #fff 30% 40%, ${st.swatch[1]} 40% 70%, ${st.swatch[2]} 70%)` },
     onclick: () => { closeMenus(); setPivotDef(entry, { ...pivotDefV2(entry.def), style: st.name, styleDef: st.def ?? undefined }); focusGrid(); },
   });
-  const groups = ['밝게', '보통', '어둡게'].flatMap((g) => [{ title: g }, { node: el('div', { class: 'style-grid pstyles' }, PIVOT_STYLES.filter((s) => s.group === g).map(chip)) }]);
+  const groups = PIVOT_STYLE_GROUPS.flatMap((g) => [{ title: g }, { node: el('div', { class: 'style-grid pstyles' }, PIVOT_STYLES.filter((s) => s.group === g).map(chip)) }]);
   // 파일에서 가져온 사용자 지정 스타일
   const cd = entry.def.styleDef;
   if (cd) {
@@ -7837,7 +7837,7 @@ function cfRuleEditor(initial, onSave, { title = '새 서식 규칙' } = {}) {
     kind = k;
     const keep = rule.style ?? { ...CF_PRESETS[0].style };
     const defaults = {
-      visual: { type: 'scale', colors: ['#f8696b', '#ffeb84', '#63be7b'] }, contains: { type: 'gt', v1: '' },
+      visual: { type: 'scale', colors: [...DEFAULT_SCALE3] }, contains: { type: 'gt', v1: '' },
       topbottom: { type: 'top', v1: '10' }, avg: { type: 'aboveAvg' }, dupuniq: { type: 'dup' }, formula: { type: 'formula', formula: '=' },
     };
     for (const key of ['type', 'v1', 'v2', 'color', 'colors', 'icons', 'reverse', 'iconOnly', 'percent', 'period', 'formula']) delete rule[key];
@@ -7884,8 +7884,8 @@ function cfRuleEditor(initial, onSave, { title = '새 서식 규칙' } = {}) {
       const style = sel([['scale2', '2가지 색조'], ['scale3', '3가지 색조'], ['bar', '데이터 막대'], ['icons', '아이콘 집합']],
         rule.type === 'scale' ? (rule.colors?.length === 3 ? 'scale3' : 'scale2') : rule.type, (v) => {
           for (const key of ['color', 'colors', 'icons', 'reverse', 'iconOnly']) delete rule[key];
-          if (v === 'scale2') Object.assign(rule, { type: 'scale', colors: ['#fcfcff', '#63be7b'] });
-          else if (v === 'scale3') Object.assign(rule, { type: 'scale', colors: ['#f8696b', '#ffeb84', '#63be7b'] });
+          if (v === 'scale2') Object.assign(rule, { type: 'scale', colors: [...DEFAULT_SCALE2] });
+          else if (v === 'scale3') Object.assign(rule, { type: 'scale', colors: [...DEFAULT_SCALE3] });
           else if (v === 'bar') Object.assign(rule, { type: 'bar', color: '#638ec6' });
           else Object.assign(rule, { type: 'icons', icons: '3Arrows' });
           render();
@@ -8248,6 +8248,14 @@ function paletteMenu(anchorEl, noneLabel, onPick) {
   ]);
 }
 
+/** 조건부 서식 견본 모음 (엑셀처럼 작은 견본 격자, 마우스를 올리면 이름) */
+function cfGallery(items, add) {
+  return el('div', { class: 'cf-gallery' }, items.map((it) => el('button', {
+    class: 'cf-swatch', title: it.n, style: { background: it.bg }, onmousedown: (e) => e.preventDefault(),
+    onclick: () => { closeMenus(); add(it.rule); focusGrid(); },
+  })));
+}
+
 const CELL_STYLES = [
   { name: '표준', style: null },
   { name: '좋음', style: { fill: '#c6efce', color: '#006100' } },
@@ -8432,15 +8440,12 @@ const MENUS = {
       { label: '평균 초과', action: () => add({ type: 'aboveAvg', style: { fill: '#ffc7ce', color: '#9c0006' } }) },
       { label: '평균 미만', action: () => add({ type: 'belowAvg', style: { fill: '#ffc7ce', color: '#9c0006' } }) },
       { title: '데이터 막대' },
-      ...[['파랑', '#8fb3e8'], ['녹색', '#8fd19e'], ['빨강', '#f19c9c'], ['주황', '#f7c07e']].map(([n, color]) => ({
-        label: `${n} 데이터 막대`, icon: `<span style="display:block;width:16px;height:10px;background:${color}"></span>`,
-        action: () => add({ type: 'bar', color }),
-      })),
-      { title: '색조' },
-      ...[['녹색 - 노랑 - 빨강', ['#63be7b', '#ffeb84', '#f8696b']], ['빨강 - 노랑 - 녹색', ['#f8696b', '#ffeb84', '#63be7b']], ['흰색 - 녹색', ['#fcfcff', '#63be7b']], ['흰색 - 빨강', ['#fcfcff', '#f8696b']]].map(([n, colors]) => ({
-        label: n, icon: `<span style="display:block;width:16px;height:10px;background:linear-gradient(90deg,${colors.join(',')})"></span>`,
-        action: () => add({ type: 'scale', colors }),
-      })),
+      { node: cfGallery([...BAR_PRESETS.modern.map(([n, color]) => ({ n: `${n} (모던)`, bg: `linear-gradient(90deg, ${color} 0 62%, transparent 62%)`, rule: { type: 'bar', color } })),
+        ...BAR_PRESETS.excel.map(([n, color]) => ({ n: `${n} 그라데이션 채우기`, bg: `linear-gradient(90deg, ${color}, #fff 62%, transparent 62%)`, rule: { type: 'bar', color } }))], add) },
+      { title: '색조 — Tabula 모던' },
+      { node: cfGallery(SCALE_PRESETS.modern.map(([n, colors]) => ({ n, bg: `linear-gradient(180deg,${colors.join(',')})`, rule: { type: 'scale', colors } })), add) },
+      { title: '색조 — 엑셀 기본' },
+      { node: cfGallery(SCALE_PRESETS.excel.map(([n, colors]) => ({ n, bg: `linear-gradient(180deg,${colors.join(',')})`, rule: { type: 'scale', colors } })), add) },
       { title: '아이콘 집합' },
       ...ICON_SETS.slice(0, 5).map((set) => ({
         label: set.label, icon: `<span style="display:inline-flex">${set.icons.map((i) => ICON_SVG[i]).join('')}</span>`,
