@@ -289,6 +289,7 @@ function countIndex(rows) {
 export function fastCount(range, crit) {
   const rows = range?.rows;
   if (!rows || rows.length * (rows[0]?.length ?? 0) < 64) return null;
+  if (isError(crit) || (crit instanceof Range && crit.height === 1 && crit.width === 1 && isError(crit.rows[0][0]))) return null;
   crit = scalar(crit);
   if (typeof crit === 'number') return countIndex(rows).num.get(r15(crit)) ?? 0;
   if (typeof crit === 'boolean') { const x = countIndex(rows); return crit ? x.t : x.f; }
@@ -334,6 +335,9 @@ export function fastCount(range, crit) {
 
 /** COUNTIF/SUMIF 조건 → 판별 함수 */
 export function makeCriteria(crit) {
+  // 오류 값 조건: 같은 오류가 든 칸만 (엑셀: =SUMIF(A:A, #N/A) 는 오류를 돌려주지 않음)
+  const e = crit instanceof Range && crit.height === 1 && crit.width === 1 ? crit.rows[0][0] : crit;
+  if (isError(e)) return (v) => isError(v) && v.code === e.code;
   crit = scalar(crit);
   if (typeof crit === 'number') {
     const c = r15(crit);

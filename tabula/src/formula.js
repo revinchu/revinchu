@@ -73,18 +73,20 @@ export function parseRangeName(s) {
 }
 
 export function quoteSheetName(name) {
-  return /^[A-Za-z_À-￿][\w.À-￿]*$/.test(name) && !parseCellName(name) && !/^R\d*C\d*$/i.test(name)
+  return /^(?:\[\d+\])?[A-Za-z_À-￿][\w.À-￿]*$/.test(name) && !parseCellName(name) && !/^R\d*C\d*$/i.test(name)
     ? name
     : `'${name.replace(/'/g, "''")}'`;
 }
 
 // ───────────────────────── 토크나이저 ─────────────────────────
-const SHEET = String.raw`(?:'((?:[^']|'')+)'|([A-Za-z_À-￿][\w.À-￿]*))!`;
+// 시트 이름: '따옴표 이름' 또는 일반 이름 (외부 통합 문서 참조는 [1]시트 처럼 앞에 [번호])
+const SHEET = String.raw`(?:'((?:[^']|'')+)'|((?:\[\d+\])?[A-Za-z_À-￿][\w.À-￿]*))!`;
 const CELL = String.raw`(\$?)([A-Za-z]{1,3})(\$?)(\d+)`;
 const RANGE_RE = new RegExp(`(?:${SHEET})?${CELL}(?::${CELL})?(?![\\w(![])`, 'y');
 const COLS_RE = new RegExp(`(?:${SHEET})?(\\$?)([A-Za-z]{1,3}):(\\$?)([A-Za-z]{1,3})(?![\\w(!])`, 'y');
 const ROWS_RE = new RegExp(`(?:${SHEET})?(\\$?)(\\d+):(\\$?)(\\d+)(?![\\w(!.])`, 'y');
 const SHEET_NAME_RE = new RegExp(`${SHEET}([A-Za-z_\\\\À-￿][\\w.À-￿]*)`, 'y');
+const EXT_BOOK_RE = /^\[\d+\][^\]]/; // 외부 통합 문서 참조 [1]시트!A1
 const NUMBER_RE = /(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/y;
 const IDENT_RE = /[A-Za-z_\\À-￿][\w.?À-￿]*/y;
 const SHEET_REF_ERR_RE = /(?:'(?:[^']|'')+'|[^\s!'"(),;:+\-*/^&=<>{}#]+)!#REF!/y;
@@ -167,7 +169,7 @@ export function tokenize(src) {
       toks.push({ t: 'num', v: parseFloat(m[0]), s: start, e: i });
       continue;
     }
-    if (/[A-Za-z_$'\\À-￿]/.test(ch)) {
+    if (/[A-Za-z_$'\\À-￿]/.test(ch) || (ch === '[' && EXT_BOOK_RE.test(src.slice(i, i + 8)))) {
       // 지워진 범위를 가리키는 시트 참조 (시트!#REF!): 엑셀은 #REF! 로 계산
       const dead = sticky(SHEET_REF_ERR_RE, src, i);
       if (dead) {
@@ -621,14 +623,14 @@ function intersect(v, ctx) {
     if (v.single) return v;
     const here = ctx.here;
     if (!here) throw ERR.VALUE;
-    const sameSheet = !v.sheet || !here.sheet || v.sheet.toLowerCase() === here.sheet.toLowerCase();
+    // 엑셀: 다른 시트의 범위도 수식 칸의 행 · 열 번호로 교차 (=@Sheet2!C2:D2 를 C 열에 쓰면 Sheet2!C2)
     let r;
     let c;
     if (v.r1 === v.r2) r = v.r1;
-    else if (sameSheet && here.r >= v.r1 && here.r <= v.r2) r = here.r;
+    else if (here.r >= v.r1 && here.r <= v.r2) r = here.r;
     else throw ERR.VALUE;
     if (v.c1 === v.c2) c = v.c1;
-    else if (sameSheet && here.c >= v.c1 && here.c <= v.c2) c = here.c;
+    else if (here.c >= v.c1 && here.c <= v.c2) c = here.c;
     else throw ERR.VALUE;
     return new RefValue(v.sheet, r, c);
   }

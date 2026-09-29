@@ -69,9 +69,12 @@ const rowsId = (rows) => { let i = rowsIds.get(rows); if (!i) { i = nextRowsId++
 const ifsIdxMemo = new WeakMap();
 /** 조건 → 같음 비교 키 (크기 비교 · 와일드카드 · <> 는 null) */
 function critKey(crit) {
+  if (crit instanceof Range && crit.height === 1 && crit.width === 1) crit = crit.rows[0][0];
+  if (isError(crit)) return `x${crit.code}`;
   crit = scalar(crit);
   if (typeof crit === 'number') return `n${r15(crit)}`;
   if (typeof crit === 'boolean') return crit ? 'b1' : 'b0';
+  if (isError(crit)) return `x${crit.code}`;
   if (typeof crit !== 'string') return null;
   const m = /^(=)?([\s\S]*)$/.exec(crit);
   const operand = m[2];
@@ -90,6 +93,7 @@ function cellKey(v) {
   if (v === null || v === undefined || v === '') return 'e';
   if (typeof v === 'string') { const p = parseNumberText(v); return p !== null ? `n${r15(p)}` : `s${v.toLowerCase()}`; }
   if (typeof v === 'boolean') return v ? 'b1' : 'b0';
+  if (isError(v)) return `x${v.code}`;
   return '\u0000';
 }
 /**
@@ -133,6 +137,11 @@ function fastIfs(target, args) {
   }
   return idx.get(keys.join('\u0001')) ?? { sum: 0, n: 0, rows: 0, min: Infinity, max: -Infinity, err: null };
 }
+
+/** 범위 자리에 온 오류 값 (=SUMIFS(#REF!, #REF!, …) 는 #REF!) */
+// 닫힌 외부 통합 문서의 범위([1]시트!A1:A9)는 엑셀도 *IF 함수에서 #VALUE! (값 캐시로 계산하지 않음)
+const closedBook = (x) => x instanceof Range && /^\[\d+\]/.test(x.ref?.sheet ?? '');
+const rangeError = (list) => list.find((x) => isError(x)) ?? (list.some(closedBook) ? ERR.VALUE : null);
 
 function ifsValues(target, pairs) {
   const s = asRange(target);
@@ -455,6 +464,7 @@ export const MATH = {
 
   // 조건부 집계
   SUMIF: ([range, crit, sumRange]) => {
+    { const re = rangeError([range, sumRange]); if (re) return re; }
     const r = asRange(range);
     const s = sumRange == null ? r : asRange(sumRange);
     const test = makeCriteria(crit);
@@ -467,8 +477,11 @@ export const MATH = {
     }));
     return total;
   },
-  SUMIFS: ([sumRange, ...rest]) => { const f = fastIfs(sumRange, rest); return f ? f.err ?? f.sum : sumIfs(sumRange, ifsPairs(rest)); },
+  SUMIFS: ([sumRange, ...rest]) => {
+    const re = rangeError([sumRange, ...rest.filter((_, i) => i % 2 === 0)]);
+    if (re) return re; const f = fastIfs(sumRange, rest); return f ? f.err ?? f.sum : sumIfs(sumRange, ifsPairs(rest)); },
   COUNTIF: ([range, crit]) => {
+    { const re = rangeError([range]); if (re) return re; }
     const fast = fastCount(asRange(range), crit);
     if (fast !== null) return fast;
     const test = makeCriteria(crit);
@@ -477,6 +490,8 @@ export const MATH = {
     return k;
   },
   COUNTIFS: (args) => {
+    const re = rangeError(args.filter((_, i) => i % 2 === 0));
+    if (re) return re;
     const f = fastIfs(null, args);
     if (f) return f.rows;
     const pairs = ifsPairs(args);
@@ -485,6 +500,7 @@ export const MATH = {
     return k;
   },
   AVERAGEIF: ([range, crit, avgRange]) => {
+    { const re = rangeError([range, avgRange]); if (re) return re; }
     const r = asRange(range);
     const s = avgRange == null ? r : asRange(avgRange);
     const test = makeCriteria(crit);
@@ -498,14 +514,16 @@ export const MATH = {
     return total / k;
   },
   AVERAGEIFS: ([target, ...rest]) => {
+    const re = rangeError([target, ...rest.filter((_, i) => i % 2 === 0)]);
+    if (re) return re;
     const f = fastIfs(target, rest);
     if (f) { if (!f.n) throw ERR.DIV0; return f.sum / f.n; }
     const v = ifsValues(target, ifsPairs(rest));
     if (!v.length) throw ERR.DIV0;
     return v.reduce((s, x) => s + x, 0) / v.length;
   },
-  MAXIFS: ([target, ...rest]) => { const f = fastIfs(target, rest); if (f) return f.n ? f.max : 0; const v = ifsValues(target, ifsPairs(rest)); return v.length ? maxOf(v) : 0; },
-  MINIFS: ([target, ...rest]) => { const f = fastIfs(target, rest); if (f) return f.n ? f.min : 0; const v = ifsValues(target, ifsPairs(rest)); return v.length ? minOf(v) : 0; },
+  MAXIFS: ([target, ...rest]) => { const re = rangeError([target, ...rest.filter((_, i) => i % 2 === 0)]); if (re) return re; const f = fastIfs(target, rest); if (f) return f.n ? f.max : 0; const v = ifsValues(target, ifsPairs(rest)); return v.length ? maxOf(v) : 0; },
+  MINIFS: ([target, ...rest]) => { const re = rangeError([target, ...rest.filter((_, i) => i % 2 === 0)]); if (re) return re; const f = fastIfs(target, rest); if (f) return f.n ? f.min : 0; const v = ifsValues(target, ifsPairs(rest)); return v.length ? minOf(v) : 0; },
 };
 
 function pairSum(x, y, f) {

@@ -97,8 +97,13 @@ export const BUILTIN_FMT = {
   48: { numFmt: 'scientific', decimals: 1 }, 49: { numFmt: 'text' },
 };
 for (const id of [27, 28, 29, 30, 31, 34, 35, 36, 50, 51, 52, 53, 54, 57, 58]) BUILTIN_FMT[id] = { numFmt: 'date' };
-for (const id of [32, 33, 55, 56]) BUILTIN_FMT[id] = { numFmt: 'time' };
-const BUILTIN_CODE_ID = { '# ?/?': 12, '0.00E+00': 11, '@': 49 };
+// 시간 기본 형식: 코드 그대로 (모두 'time'(오전/오후)으로 묶으면 24시간 h:mm:ss 가 '오후 3:45:00' 으로 보임)
+const TIME_CODES = {
+  18: '[$-412]AM/PM h:mm', 19: '[$-412]AM/PM h:mm:ss', 20: 'h:mm', 21: 'h:mm:ss', 45: 'mm:ss', 46: '[h]:mm:ss', 47: 'mm:ss.0',
+  32: 'h"시" mm"분"', 33: 'h"시" mm"분" ss"초"', 55: '[$-412]AM/PM h"시" mm"분"', 56: '[$-412]AM/PM h"시" mm"분" ss"초"',
+};
+for (const [id, code] of Object.entries(TIME_CODES)) BUILTIN_FMT[id] = styleForCode(code);
+const BUILTIN_CODE_ID = { '# ?/?': 12, '0.00E+00': 11, '@': 49, 'h:mm': 20, 'h:mm:ss': 21, 'mm:ss': 45, '[h]:mm:ss': 46 };
 // 기본 제공 번호 중 음수 괄호 · 빨강 · 통화 · 회계 형식은 실제 서식 코드로 (한국어 엑셀 기준)
 export const BUILTIN_CODE = {
   5: '"₩"#,##0;"₩"\\-#,##0', 6: '"₩"#,##0;[Red]"₩"\\-#,##0', 7: '"₩"#,##0.00;"₩"\\-#,##0.00', 8: '"₩"#,##0.00;[Red]"₩"\\-#,##0.00',
@@ -1742,6 +1747,7 @@ function pivotDefFrom(root, cache, tables, sheetName) {
   if (root.attrs.showError === '1' || root.attrs.showError === 'true') def.errorCaption = root.attrs.errorCaption ?? '';
   if (root.attrs.colHeaderCaption) def.colCaption = root.attrs.colHeaderCaption;
   if (root.attrs.missingCaption && root.attrs.showMissing !== '0') def.missingCaption = root.attrs.missingCaption;
+  if (root.attrs.showHeaders === '0') def.showHeaders = false;
   if (root.attrs.showDrill === '0') def.showExpand = false;
   if (root.attrs.mergeItem === '1') def.mergeLabels = true;
   if (root.attrs.useAutoFormatting === '0') def.autofit = false;
@@ -1788,7 +1794,15 @@ function pivotDefFrom(root, cache, tables, sheetName) {
     if (st === 'ascending' || st === 'descending') {
       const ref = descendants(child(pf, 'autoSortScope'), 'reference').find((r) => r.attrs.field === '4294967294' || r.attrs.field === '-2');
       const by = ref ? Number(child(ref, 'x')?.attrs.v ?? 0) : undefined;
-      sort[names[f]] = { dir: st === 'ascending' ? 'asc' : 'desc', ...(by !== undefined ? { by } : {}) };
+      // 다른 축의 특정 항목 값으로 정렬 (예: 열 '월' 의 12 열 값 기준) → at: [[필드, 항목 글자]]
+      const at = [];
+      for (const r of descendants(child(pf, 'autoSortScope'), 'reference')) {
+        const f2 = Number(r.attrs.field);
+        if (!(f2 >= 0) || f2 >= pfs.length || r.attrs.field === '4294967294') continue;
+        const pit = kids(child(pfs[f2], 'items'), 'item')[Number(child(r, 'x')?.attrs.v ?? -1)];
+        if (pit?.attrs.x !== undefined) at.push([names[f2], itemText(cache.fields[f2]?.items[Number(pit.attrs.x)] ?? null)]);
+      }
+      sort[names[f]] = { dir: st === 'ascending' ? 'asc' : 'desc', ...(by !== undefined ? { by } : {}), ...(at.length ? { at } : {}) };
     }
     const its = kids(child(pf, 'items'), 'item').filter((it) => it.attrs.x !== undefined && !it.attrs.t);
     if (its.length > 1) order[names[f]] = its.map((it) => itemText(cache.fields[f]?.items[Number(it.attrs.x)] ?? null));
@@ -2095,9 +2109,13 @@ function* readXlsxSteps(files) {
     }
     sh.page = page;
   }
+  // 외부 통합 문서 참조 ([1]시트!A1): 파일에 저장된 외부 값을 숨긴 읽기 전용 시트로 (엑셀도 연결을 새로 고치기 전에는 이 값을 보여 줌)
+  const extSheets = [];
+  const externals = readExternalLinks(files, wbRoot, wbRels, extSheets);
   yield { p: 0.92, msg: "피벗 테이블 · 슬라이서 연결 중" };
   linkPivotsAndSlicers(files, wbRels, sheets, ctx);
   dropOffAxisFilters(sheets);
+  pushAll(sheets, extSheets);
   if (unsupported) warnings.push(`지원하지 않는 함수가 쓰인 수식 ${unsupported}개는 수식을 유지하고 파일에 저장된 계산 결과를 표시합니다.`);
   if (files.__xlsb?.unsupported) warnings.push(`바이너리 통합 문서(.xlsb)에서 해석하지 못한 수식 ${files.__xlsb.unsupported}개는 저장된 계산 결과(값)로 가져왔습니다.`);
   pushAll(warnings, ctx.warnings);
@@ -2107,6 +2125,7 @@ function* readXlsxSteps(files) {
   // 자동 높이로 맞출 행 (화면에서 글자 크기를 재어 정함 — 앱이 열 때 한 번 계산)
   if (sheets.some((sh) => sh.fitRows)) data.fitRows = sheets.map((sh) => { const f = sh.fitRows ? [...sh.fitRows] : null; delete sh.fitRows; return f; });
   if (names.length) data.names = names;
+  if (externals.length) data.externals = externals;
   // 매크로(.xlsm): vbaProject.bin 을 그대로 보존 (실행하지 않음)
   const vbaRel = Object.values(wbRels).find((r) => r.type === 'vbaProject');
   if (vbaRel && files[vbaRel.target]) {
@@ -2124,6 +2143,47 @@ function* readXlsxSteps(files) {
   let act = Math.min(active, sheets.length - 1);
   if (sheets[act]?.state) act = Math.max(0, sheets.findIndex((x) => !x.state));
   return { data, active: act, warnings };
+}
+
+/**
+ * 외부 통합 문서 연결 (xl/externalLinks/externalLinkN.xml): 연결 순서(workbook.xml externalReferences)가 수식의 [N].
+ * 저장된 값(sheetDataSet)은 이름 '[N]시트' 인 veryHidden 시트(external: N)로 sheets 끝에 붙이고,
+ * 원본 XML · 관계는 되돌려 쓰도록 [{ index, xml, rels, target }] 로 돌려줌
+ */
+function readExternalLinks(files, wbRoot, wbRels, sheets) {
+  const out = [];
+  kids(child(wbRoot, 'externalReferences'), 'externalReference').forEach((er, k) => {
+    const rel = wbRels[rid(er)];
+    if (!rel || !files[rel.target]) return;
+    const index = k + 1;
+    const xml = textOf(files[rel.target]);
+    const relsPath = rel.target.replace(/([^/]+)$/, '_rels/$1.rels');
+    const rels = files[relsPath] ? textOf(files[relsPath]) : null;
+    const target = rels ? decodeEntities(/Target="([^"]*)"/.exec(rels)?.[1] ?? '') : '';
+    out.push({ index, xml, rels, target });
+    let root;
+    try { root = parseXml(xml); } catch { return; }
+    const book = child(root, 'externalBook');
+    if (!book) return;
+    const names = kids(child(book, 'sheetNames'), 'sheetName').map((x) => x.attrs.val ?? '');
+    for (const sd of kids(child(book, 'sheetDataSet'), 'sheetData')) {
+      const nm = names[Number(sd.attrs.sheetId)];
+      if (nm === undefined) continue;
+      const cells = new Map();
+      for (const row of kids(sd, 'row')) {
+        for (const c of kids(row, 'cell')) {
+          const m = /^([A-Z]+)(\d+)$/.exec(c.attrs.r ?? '');
+          if (!m) continue;
+          const v = child(c, 'v')?.text ?? '';
+          const t = c.attrs.t;
+          const raw = t === 's' || t === 'str' ? `'${v}` : t === 'b' ? (v === '1' ? 'TRUE' : 'FALSE') : v;
+          if (raw !== '') cells.set(`${Number(m[2]) - 1},${nameToCol(m[1])}`, { raw });
+        }
+      }
+      sheets.push({ name: `[${index}]${nm}`, cells, state: 'veryHidden', external: index });
+    }
+  });
+  return out;
 }
 
 /** 셀 그림: metadata.xml valueMetadata(vm, 1부터) → 리치 값 → richValueRel → 그림 파일. [vm] = {src, alt} */
@@ -3049,7 +3109,7 @@ function pivotParts(wb, si, def, cache, name, pool) {
   const tableAttrs = [
     `name="${esc(name)}"`, `cacheId="${cacheId}"`, 'applyNumberFormats="0"', 'applyBorderFormats="0"', 'applyFontFormats="0"', 'applyPatternFormats="0"',
     'applyAlignmentFormats="0"', 'applyWidthHeightFormats="1"', 'dataCaption="값"', 'updatedVersion="6"', 'minRefreshableVersion="3"', `useAutoFormatting="${def.autofit === false ? 0 : 1}"`,
-    ...(def.mergeLabels ? ['mergeItem="1"'] : []), ...(def.preserveFormat === false ? ['preserveFormatting="0"'] : []), ...(def.multiFilters ? [] : []), ...(def.enableDrill === false ? ['enableDrill="0"'] : []),
+    ...(def.mergeLabels ? ['mergeItem="1"'] : []), ...(def.showHeaders === false ? ['showHeaders="0"'] : []), ...(def.preserveFormat === false ? ['preserveFormatting="0"'] : []), ...(def.multiFilters ? [] : []), ...(def.enableDrill === false ? ['enableDrill="0"'] : []),
     ...(d.rowCaption ? [`rowHeaderCaption="${esc(d.rowCaption)}"`] : []),
     ...(d.grandCaption ? [`grandTotalCaption="${esc(d.grandCaption)}"`] : []),
     ...(d.errorCaption !== null && d.errorCaption !== undefined ? ['showError="1"', ...(d.errorCaption ? [`errorCaption="${esc(d.errorCaption)}"`] : [])] : []), ...(d.colCaption ? [`colHeaderCaption="${esc(d.colCaption)}"`] : []),
@@ -3284,8 +3344,10 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
   const refOf = (r, c) => (colLetter[c] ??= cellName(0, c).replace(/\d+$/, '')) + (r + 1);
   const sheetRows = [];
   let rowsDone = 0;
-  const rowsTotal = wb.sheets.reduce((n, sh) => n + sh.cells.size, 0) || 1;
-  for (let si = 0; si < wb.sheets.length; si++) {
+  // 외부 통합 문서 값 시트(맨 뒤)는 시트로 쓰지 않음 — externalLink 원본으로 되돌려 씀
+  const nOwn = wb.ownSheetCount ? wb.ownSheetCount() : wb.sheets.length;
+  const rowsTotal = wb.sheets.slice(0, nOwn).reduce((n, sh) => n + sh.cells.size, 0) || 1;
+  for (let si = 0; si < nOwn; si++) {
     const sheet = wb.sheets[si];
     const plainStyle = !sheet.allStyle && !Object.keys(sheet.colStyles ?? {}).length && !Object.keys(sheet.rowStyles ?? {}).length;
     // 열 · 행 · 셀 서식을 합친 서식 번호: 같은 조합(서식 객체 셋)은 한 번만 합치고 찾음 (셀마다 새 객체를 만들지 않게)
@@ -3405,7 +3467,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
     sheetRows.push({ rowXml: rowXml.join(''), maxR, maxC });
   }
 
-  for (let si = 0; si < wb.sheets.length; si++) {
+  for (let si = 0; si < nOwn; si++) {
     const sheet = wb.sheets[si];
     const sheetRels = [];
     const addRel = (type, target) => { const id = `rId${sheetRels.length + 1}`; sheetRels.push(`<Relationship Id="${id}" Type="${REL}/${type}" Target="${target}"/>`); return id; };
@@ -3705,9 +3767,9 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
 
   // 통합 문서: 피벗 캐시, 슬라이서 캐시 (확장)
   const wbRels = [
-    ...wb.sheets.map((sh, i) => `<Relationship Id="rId${i + 1}" Type="${REL}/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`),
-    `<Relationship Id="rId${wb.sheets.length + 1}" Type="${REL}/styles" Target="styles.xml"/>`,
-    `<Relationship Id="rId${wb.sheets.length + 2}" Type="${REL}/sharedStrings" Target="sharedStrings.xml"/>`,
+    ...wb.sheets.slice(0, nOwn).map((sh, i) => `<Relationship Id="rId${i + 1}" Type="${REL}/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`),
+    `<Relationship Id="rId${nOwn + 1}" Type="${REL}/styles" Target="styles.xml"/>`,
+    `<Relationship Id="rId${nOwn + 2}" Type="${REL}/sharedStrings" Target="sharedStrings.xml"/>`,
   ];
   if (vba) wbRels.push(`<Relationship Id="rId${wbRels.length + 1}" Type="http://schemas.microsoft.com/office/2006/relationships/vbaProject" Target="vbaProject.bin"/>`);
   if (dynamicCells || richList.length) {
@@ -3763,11 +3825,24 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
   const wbExts = [];
   if (slicerCachesPivot.length) wbExts.push(`<ext uri="{BBE1A952-AA13-448e-AADC-164F8A28A991}" xmlns:x14="${NS_X14}"><x14:slicerCaches>${slicerCachesPivot.map((t) => `<x14:slicerCache r:id="${wbRel(`${REL_MS}/slicerCache`, t)}"/>`).join('')}</x14:slicerCaches></ext>`);
   if (slicerCachesTable.length) wbExts.push(`<ext uri="{46BE6895-7355-4a93-B00E-2C351335B9C9}" xmlns:x15="${NS_X15}"><x15:slicerCaches xmlns:x14="${NS_X14}">${slicerCachesTable.map((t) => `<x14:slicerCache r:id="${wbRel(`${REL_MS}/slicerCache`, t)}"/>`).join('')}</x15:slicerCaches></ext>`);
+  // 외부 통합 문서 연결: 읽을 때 보관한 externalLink 원본을 그대로 (수식의 [N] 순서 유지)
+  let extRefsXml = '';
+  const exts = wb.externals ?? [];
+  if (exts.length) {
+    const ids = exts.map((e, i) => {
+      const n = i + 1;
+      files[`xl/externalLinks/externalLink${n}.xml`] = e.xml;
+      if (e.rels) files[`xl/externalLinks/_rels/externalLink${n}.xml.rels`] = e.rels;
+      contentOverrides.push(`<Override PartName="/xl/externalLinks/externalLink${n}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.externalLink+xml"/>`);
+      return wbRel(`${REL}/externalLink`, `externalLinks/externalLink${n}.xml`);
+    });
+    extRefsXml = `<externalReferences>${ids.map((id) => `<externalReference r:id="${id}"/>`).join('')}</externalReferences>`;
+  }
   // 숨긴 시트는 활성 시트가 될 수 없음
   const isShown = (i) => wb.sheets[i] && wb.sheets[i].state !== 'hidden' && wb.sheets[i].state !== 'veryHidden';
   const firstVisible = Math.max(0, wb.sheets.findIndex((_, i) => isShown(i)));
   const activeTab = isShown(activeSheet) ? activeSheet : firstVisible;
-  files['xl/workbook.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<workbook xmlns="${NS_MAIN}" xmlns:r="${NS_R}">${vba ? `<workbookPr codeName="${esc(vba.codeName || 'ThisWorkbook')}"/>` : ''}<bookViews><workbookView${firstVisible ? ` firstSheet="${firstVisible}"` : ''} activeTab="${activeTab}"/></bookViews><sheets>${wb.sheets.map((sh, i) => `<sheet name="${esc(sh.name)}" sheetId="${i + 1}"${sh.state === 'hidden' || sh.state === 'veryHidden' ? ` state="${sh.state}"` : ''} r:id="rId${i + 1}"/>`).join('')}</sheets>${definedNames.length ? `<definedNames>${definedNames.join('')}</definedNames>` : ''}<calcPr calcId="191029" fullCalcOnLoad="1"/>${pivotCachesXml}${wbExts.length ? `<extLst>${wbExts.join('')}</extLst>` : ''}</workbook>`;
+  files['xl/workbook.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<workbook xmlns="${NS_MAIN}" xmlns:r="${NS_R}">${vba ? `<workbookPr codeName="${esc(vba.codeName || 'ThisWorkbook')}"/>` : ''}<bookViews><workbookView${firstVisible ? ` firstSheet="${firstVisible}"` : ''} activeTab="${activeTab}"/></bookViews><sheets>${wb.sheets.slice(0, nOwn).map((sh, i) => `<sheet name="${esc(sh.name)}" sheetId="${i + 1}"${sh.state === 'hidden' || sh.state === 'veryHidden' ? ` state="${sh.state}"` : ''} r:id="rId${i + 1}"/>`).join('')}</sheets>${extRefsXml}${definedNames.length ? `<definedNames>${definedNames.join('')}</definedNames>` : ''}<calcPr calcId="191029" fullCalcOnLoad="1"/>${pivotCachesXml}${wbExts.length ? `<extLst>${wbExts.join('')}</extLst>` : ''}</workbook>`;
   files['xl/_rels/workbook.xml.rels'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="${NS_PKG}">${wbRels.join('')}</Relationships>`;
   if (vba) files['xl/vbaProject.bin'] = fromBase64(vba.bin);
   files['xl/sharedStrings.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<sst xmlns="${NS_MAIN}" count="${strings.length}" uniqueCount="${strings.length}">${strings.map((s) => `<si><t xml:space="preserve">${esc(s)}</t></si>`).join('')}</sst>`;
@@ -3776,7 +3851,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
   const now = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
   files['docProps/core.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:creator>WIXEL</dc:creator><dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified></cp:coreProperties>`;
   files['docProps/app.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>WIXEL</Application></Properties>`;
-  files['[Content_Types].xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/>${[...mediaExts].map((e) => `<Default Extension="${e}" ContentType="${MIME[e]}"/>`).join('')}${vba ? '<Default Extension="bin" ContentType="application/vnd.ms-office.vbaProject"/>' : ''}<Override PartName="/xl/workbook.xml" ContentType="${MAIN_TYPES[kind ?? (vba ? 'xlsm' : 'xlsx')] ?? MAIN_TYPES.xlsx}"/>${wb.sheets.map((s, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>${contentOverrides.join('')}</Types>`;
+  files['[Content_Types].xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/>${[...mediaExts].map((e) => `<Default Extension="${e}" ContentType="${MIME[e]}"/>`).join('')}${vba ? '<Default Extension="bin" ContentType="application/vnd.ms-office.vbaProject"/>' : ''}<Override PartName="/xl/workbook.xml" ContentType="${MAIN_TYPES[kind ?? (vba ? 'xlsm' : 'xlsx')] ?? MAIN_TYPES.xlsx}"/>${wb.sheets.slice(0, nOwn).map((s, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>${contentOverrides.join('')}</Types>`;
 
   // [Content_Types].xml 을 맨 앞에 두는 것이 관례
   const ordered = { '[Content_Types].xml': files['[Content_Types].xml'] };

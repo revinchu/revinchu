@@ -230,6 +230,7 @@ export function canonicalRef(tableName, spec, hereTableName) {
   const areas = p.areas.filter((a) => a !== 'data' || p.areas.length > 1 || !p.c1);
   if (!areas.length) return p.c2 ? `${name}[${cols}]` : `${name}[${esc(p.c1)}]`;
   if (!cols && areas.length === 1 && areas[0] === 'data') return `${name}[]`;
+  if (!cols && areas.length === 1) return `${name}[${areaName[areas[0]]}]`; // 엑셀 표기: 표1[#All]
   const parts = [...areas.map((a) => `[${areaName[a]}]`), ...(cols ? [cols] : [])];
   return `${name}[${parts.join(',')}]`;
 }

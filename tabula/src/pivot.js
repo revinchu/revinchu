@@ -518,6 +518,7 @@ export function normalizeDef(def, header) {
     groups: byKey(def.groups),
     styleDef: def.styleDef ?? null,
     errorCaption: def.errorCaption ?? null,
+    showHeaders: def.showHeaders !== false, // 필드 머리글 표시 (끄면 행 · 열 필드 이름 칸이 빈칸)
     fieldCaptions: def.fieldCaptions ?? null,
     grandCaption: def.grandCaption ?? null,
     itemCaptions: def.itemCaptions ?? null,
@@ -1090,8 +1091,9 @@ function orderTree(root, fields, d, measureAt) {
     let kids = n.children;
     if (s && s.by !== undefined && s.by !== null) {
       const vi = valueIndex(d.values, s.by);
-      const score = new Map(kids.map((c) => [c, measureAt(c, vi)]));
-      const num = (v) => (typeof v === 'number' ? v : -Infinity);
+      const score = new Map(kids.map((c) => [c, measureAt(c, vi, field)]));
+      // 빈 값은 0 과 같은 자리 (엑셀), 오류는 맨 끝
+      const num = (v) => (typeof v === 'number' ? v : v === null || v === undefined ? 0 : -Infinity);
       const tie = tieRank(d, field, n);
       kids = [...kids].sort((a, b) => (s.dir === 'desc' ? num(score.get(b)) - num(score.get(a)) : num(score.get(a)) - num(score.get(b))) || tie(a.key) - tie(b.key));
     } else if (d.groups?.[field]) {
@@ -1205,8 +1207,24 @@ export function computePivot(input, d) {
     const list = accs.get(`${rpath}\u0002${cpath}`);
     return list || rpath || cpath ? measures.value(list, vi) : measures.emptyValue(vi);
   };
-  orderTree(rowTree, d.rows, d, (node, vi) => raw(node.path, '', vi));
-  orderTree(colTree, d.cols, d, (node, vi) => raw('', node.path, vi));
+  // 값 기준 정렬의 기준 칸: 보통은 반대 축 합계, sort.at 이 있으면 반대 축의 그 항목 (엑셀 autoSortScope 의 항목 참조)
+  const pathAt = (tree, fields, at) => {
+    let node = tree;
+    for (const f of fields) {
+      const want = at.find(([x]) => x.toLowerCase() === f.toLowerCase());
+      if (!want) break;
+      const next = node.children.find((ch) => itemText(ch.key) === want[1]);
+      if (!next) return null;
+      node = next;
+    }
+    return node.path;
+  };
+  const otherPath = (field, tree, fields) => {
+    const at = d.sort?.[field]?.at;
+    return at?.length ? pathAt(tree, fields, at) : '';
+  };
+  orderTree(rowTree, d.rows, d, (node, vi, field) => { const cp = otherPath(field, colTree, d.cols); return cp === null ? null : raw(node.path, cp, vi); });
+  orderTree(colTree, d.cols, d, (node, vi, field) => { const rp = otherPath(field, rowTree, d.rows); return rp === null ? null : raw(rp, node.path, vi); });
   // 축소한 항목 (필드별 항목 글자, 엑셀처럼 필드의 같은 항목은 모두 함께)
   const collSets = { r: d.rows.map((f) => new Set(d.collapsed?.[f] ?? [])), c: d.cols.map((f) => new Set(d.collapsed?.[f] ?? [])) };
   const isColl = (axis, node) => node.depth >= 0 && node.depth < (axis === 'r' ? d.rows.length : d.cols.length) - 1 && collSets[axis][node.depth].has(itemText(node.key));
@@ -1305,7 +1323,15 @@ export function computePivot(input, d) {
     const t = itemText(node.key);
     return d.itemCaptions?.[(axis === 'r' ? d.rows : d.cols)[node.depth]]?.[t] ?? t;
   };
-  const subCap = (axis, node) => `${icap(axis, node)} 요약`;
+  // 요약 글자: 숫자(날짜) 항목은 원본 열의 표시 형식으로 (엑셀: '2023-12-06 요약')
+  const subCap = (axis, node) => {
+    const field = (axis === 'r' ? d.rows : d.cols)[node.depth];
+    if (typeof node.key === 'number' && !d.itemCaptions?.[field]?.[itemText(node.key)]) {
+      const st = resolved?.fieldStyle?.(field);
+      if (st?.numFmt && st.numFmt !== 'general') return `${formatValue(node.key, st).text} 요약`;
+    }
+    return `${icap(axis, node)} 요약`;
+  };
   // 부분합은 필드마다 켜고 끔 (엑셀 pivotField@defaultSubtotal): true = 모두, 배열 = 그 필드만
   const subOn = (axis, node) => d.subtotals === true || (Array.isArray(d.subtotals) && d.subtotals.includes((axis === 'r' ? d.rows : d.cols)[node.depth]));
   // 열 머리글 잎 목록: { cp, vi, kind: 'item' | 'sub' | 'grand', labels: [수준별 글자] }
@@ -1382,7 +1408,9 @@ export function computePivot(input, d) {
 
   const layout = d.layout;
   const Lr = rowIdx.length;
-  const labelCols = layout === 'compact' ? 1 : Math.max(1, Lr);
+  // 행 · 열 필드가 없고 값만 있으면 엑셀은 레이블 열 없이 값 이름과 합계만 (총합계 글자 없음)
+  const noLabel = Lr === 0 && colIdx.length === 0;
+  const labelCols = noLabel ? 0 : layout === 'compact' ? 1 : Math.max(1, Lr);
   const grid = [];
   const rowItems = [];
 
@@ -1392,11 +1420,16 @@ export function computePivot(input, d) {
     const allowed = d.filters[p] ?? d.filters[Object.keys(d.filters).find((k) => k.toLowerCase() === p.toLowerCase())];
     // 엑셀: 원본에 실제로 있는 항목 중 보이는 것이 하나일 때만 그 이름 (없는 항목은 세지 않음)
     let shown = allowed;
+    let all = !allowed;
     if (allowed && resolved?.cube) {
       const j = idx(p);
-      if (j >= 0 && j < resolved.cube.header.length) { const have = new Set(resolved.cube.col(j).texts()); shown = allowed.filter((t) => have.has(t)); }
+      if (j >= 0 && j < resolved.cube.header.length) {
+        const have = new Set(resolved.cube.col(j).texts());
+        shown = allowed.filter((t) => have.has(t));
+        all = have.size > 1 && shown.length === have.size; // 원본의 항목이 모두 선택됨 → 엑셀도 '(모두)'
+      }
     }
-    pageRows.push([text(fcap(p), 'pageLabel'), text(!allowed ? '(모두)' : shown.length === 1 ? d.itemCaptions?.[p]?.[shown[0]] ?? shown[0] : '(다중 항목)', 'pageValue')]);
+    pageRows.push([text(fcap(p), 'pageLabel'), text(all ? '(모두)' : shown.length === 1 ? d.itemCaptions?.[p]?.[shown[0]] ?? shown[0] : '(다중 항목)', 'pageValue')]);
   }
   if (pageRows.length) { pushAll(grid, pageRows); grid.push([]); }
 
@@ -1405,6 +1438,8 @@ export function computePivot(input, d) {
   const hasColHead = colLevels > 0;
   const valueCaption = V === 1 ? valueName(values[0]) : '';
   const rowHeaderCells = () => {
+    if (noLabel) return [];
+    if (d.showHeaders === false) return Array.from({ length: labelCols }, (_, i) => text('', `rowHead:${i}`));
     if (layout === 'compact') return [text(Lr ? d.rowCaption ?? '행 레이블' : '', 'rowHead:0')];
     return Array.from({ length: labelCols }, (_, i) => text(d.rows[i] === undefined ? '' : fcap(d.rows[i]), `rowHead:${i}`));
   };
@@ -1412,7 +1447,7 @@ export function computePivot(input, d) {
     // 열 필드가 있으면 맨 위에 '값 이름 | 열 레이블' 행 (값 필드만 여러 개면 생략)
     // 압축 형식은 '열 레이블' 하나, 개요 · 테이블 형식은 열 필드마다 필드 이름 (값 자리는 '값')
     if (Lc) {
-      const caps = layout === 'compact' ? [d.colCaption ?? '열 레이블']
+      const caps = d.showHeaders === false ? [] : layout === 'compact' ? [d.colCaption ?? '열 레이블']
         : Array.from({ length: colLevels }, (_, lvl) => { const vLvl = multiV ? vp : -1; return lvl === vLvl ? '값' : fcap(d.cols[vLvl >= 0 && lvl > vLvl ? lvl - 1 : lvl]); });
       grid.push([text(valueCaption, 'valueCaption'), ...Array(labelCols - 1).fill(null).map(() => text('', 'corner')), ...colLeaves.map((_, k) => text(caps[k] ?? '', 'colHead'))]);
     }
@@ -1521,7 +1556,7 @@ export function computePivot(input, d) {
   };
   setParents(rowTree);
   if (Lr) rowTree.children.forEach((ch) => walkRows(ch, { shown: new Set() }));
-  else if (V) grid.push([text(d.grandCaption ?? TOTAL, 'grandLabel'), ...valueCells('', 'grand')]);
+  else if (V) grid.push([...(noLabel ? [] : [text(d.grandCaption ?? TOTAL, 'grandLabel')]), ...valueCells('', 'grand')]);
   if (Lr && d.grandRows && V) {
     const cells = Array.from({ length: labelCols }, () => text('', 'grandLabel'));
     cells[0] = text(d.grandCaption ?? TOTAL, 'grandLabel');

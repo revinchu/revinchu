@@ -85,5 +85,71 @@ test('피벗 보고서 필터: 원본에 있는 항목만 세어 하나면 그 �
   // '카카오' 는 원본에 없는 항목 (엑셀의 m="1") → 보이는 항목은 네이버 하나
   assert.equal(pivotOf(wb, { ...base, filters: { 매체: ['네이버', '카카오'] } }).grid[0][1], '네이버');
   assert.equal(pivotOf(wb, { ...base, filters: { 매체: ['카카오'] } }).grid[0][1], '(다중 항목)');
-  assert.equal(pivotOf(wb, { ...base, filters: { 매체: ['네이버', '구글'] } }).grid[0][1], '(다중 항목)');
+  assert.equal(pivotOf(wb, { ...base, filters: { 매체: ['네이버', '구글'] } }).grid[0][1], '(모두)'); // 원본 항목을 모두 고름
+});
+
+test('다른 시트 범위의 암시적 교차 · 오류 조건 · 범위 자리의 오류 · 순환 참조의 파일 값', () => {
+  const wb = new Workbook();
+  wb.addSheet('S2');
+  wb.setInput(1, 1, 2, '7'); wb.setInput(1, 1, 3, '8');
+  wb.setInput(0, 4, 2, '=@S2!C2:D2');
+  wb.setInput(0, 4, 3, '=@S2!C2:D2');
+  assert.equal(wb.getValue(0, 4, 2), 7);
+  assert.equal(wb.getValue(0, 4, 3), 8);
+  wb.setInput(0, 0, 0, '1'); wb.setInput(0, 1, 0, '=NA()'); wb.setInput(0, 0, 1, '5'); wb.setInput(0, 1, 1, '7');
+  assert.equal(calc(wb, '=SUMIFS(B1:B2,A1:A2,NA())'), 7); // 오류 조건은 같은 오류 칸과 맞음
+  assert.equal(calc(wb, '=SUMIFS(B1:B2,A1:A2,1/0)'), 0);
+  assert.equal(calc(wb, '=COUNTIF(A1:A2,NA())'), 1);
+  assert.equal(calc(wb, '=SUMIFS(#REF!,#REF!,1)')?.code, '#REF!');
+});
+
+test('외부 통합 문서 참조: [1]시트!A1 은 저장된 외부 값, 닫힌 파일 범위의 SUMIF 는 #VALUE!, 저장하면 연결 보존', async () => {
+  const { readXlsx, writeXlsx } = await import('../src/xlsx.js');
+  const { zip, unzip, textOf } = await import('../src/zip.js');
+  const NS = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+  const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+  const bytes = zip({
+    '[Content_Types].xml': '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/></Types>',
+    '_rels/.rels': `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL}/officeDocument" Target="xl/workbook.xml"/></Relationships>`,
+    'xl/workbook.xml': `<?xml version="1.0"?><workbook ${NS}><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets><externalReferences><externalReference r:id="rId2"/></externalReferences></workbook>`,
+    'xl/_rels/workbook.xml.rels': `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL}/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="${REL}/externalLink" Target="externalLinks/externalLink1.xml"/></Relationships>`,
+    'xl/externalLinks/externalLink1.xml': `<?xml version="1.0"?><externalLink ${NS}><externalBook r:id="rId1"><sheetNames><sheetName val="원본"/><sheetName val="다른 시트"/></sheetNames><sheetDataSet><sheetData sheetId="0"><row r="5"><cell r="D5"><v>467</v></cell><cell r="E5" t="s"><v>글자</v></cell></row></sheetData><sheetData sheetId="1"><row r="1"><cell r="A1"><v>3</v></cell></row></sheetData></sheetDataSet></externalBook></externalLink>`,
+    'xl/externalLinks/_rels/externalLink1.xml.rels': `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL}/externalLinkPath" Target="file:///C:/raw.xlsx" TargetMode="External"/></Relationships>`,
+    'xl/worksheets/sheet1.xml': `<?xml version="1.0"?><worksheet ${NS}><sheetData><row r="1"><c r="A1"><f>[1]원본!D5</f><v>467</v></c><c r="B1" t="str"><f>[1]원본!E5</f><v>글자</v></c><c r="C1"><f>'[1]다른 시트'!A1*2</f><v>6</v></c><c r="D1" t="e"><f>SUMIF([1]원본!D1:D9,1,[1]원본!D1:D9)</f><v>#VALUE!</v></c></row></sheetData></worksheet>`,
+  });
+  const wb = new Workbook(readXlsx(bytes).data);
+  wb.invalidate();
+  assert.equal(wb.getValue(0, 0, 0), 467);
+  assert.equal(wb.getValue(0, 0, 1), '글자');
+  assert.equal(wb.getValue(0, 0, 2), 6);
+  assert.equal(wb.getValue(0, 0, 3)?.code, '#VALUE!');
+  assert.equal(wb.ownSheetCount(), 1);
+  assert.equal(wb.addSheet('새 시트'), 1); // 새 시트는 외부 값 시트 앞에
+  const files = unzip(writeXlsx(wb));
+  const wx = textOf(files['xl/workbook.xml']);
+  assert.equal((wx.match(/<sheet /g) || []).length, 2);
+  assert.match(wx, /<externalReferences><externalReference r:id="rId\d+"\/><\/externalReferences>/);
+  assert.ok(files['xl/externalLinks/externalLink1.xml']);
+  assert.match(textOf(files['xl/worksheets/sheet1.xml']), /<f>\[1\]원본!D5<\/f>/);
+});
+
+test('피벗: 필드 머리글 숨기기 · 값만 있는 피벗 · 열 항목 값 기준 정렬(빈 값 = 0)', () => {
+  const wb = new Workbook();
+  put(wb, [['매체', '월', '비용'], ['a', '11', '5'], ['b', '11', '9'], ['b', '12', '1'], ['c', '12', '4'], ['d', '11', '2']]);
+  const base = { source: 'Sheet1', range: { r1: 0, c1: 0, r2: 5, c2: 2 }, pages: [], filters: {}, layout: 'tabular', top: 0, left: 5 };
+  const only = pivotOf(wb, { ...base, rows: [], cols: [], values: [{ field: '비용', agg: 'sum' }, { field: '비용', agg: 'count', name: '건수' }] }).grid;
+  assert.deepEqual(only, [['합계 : 비용', '건수'], ['21', '5']]);
+  const hid = pivotOf(wb, { ...base, rows: ['매체'], cols: [], values: [{ field: '비용', agg: 'sum' }], showHeaders: false }).grid;
+  assert.equal(hid[0][0], '');
+  // 12월 열 값 기준 내림차순: c(4) > b(1) > a · d(빈 값 = 0, 저장 순서)
+  const s = pivotOf(wb, { ...base, rows: ['매체'], cols: ['월'], values: [{ field: '비용', agg: 'sum' }], sort: { 매체: { dir: 'desc', by: 0, at: [['월', '12']] } } }).grid;
+  assert.deepEqual(s.slice(2, 6).map((r) => r[0]), ['c', 'b', 'a', 'd']);
+});
+
+test('시간 기본 형식 (h:mm:ss 는 24시간) · 표 참조 표기 표1[#All]', async () => {
+  const { BUILTIN_FMT } = await import('../src/xlsx.js');
+  const { canonicalRef } = await import('../src/tables.js');
+  assert.equal(formatValue(0.65625, BUILTIN_FMT[21]).text, '15:45:00');
+  assert.equal(formatValue(0.65625, BUILTIN_FMT[18]).text, '오후 3:45');
+  assert.equal(canonicalRef('k', '#All'), 'k[#All]');
 });

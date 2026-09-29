@@ -366,9 +366,9 @@ function sheetFromData(s) {
 
 /** 시트의 부가 속성 (셀 외) — 저장/복원/복제용 */
 const SHEET_PROPS = ['colWidths', 'rowHeights', 'merges', 'cond', 'colStyles', 'rowStyles', 'allStyle',
-  'hiddenRows', 'hiddenCols', 'rowManual', 'freeze', 'filter', 'charts', 'pivot', 'validations', 'images', 'shapes', 'tables', 'slicers', 'pivotsExtra', 'state', 'noGrid', 'outline', 'protect', 'sparklines', 'page', 'defRowH', 'defColW', 'zoom', 'view', 'tabColor', 'scenarios'];
+  'hiddenRows', 'hiddenCols', 'rowManual', 'freeze', 'filter', 'charts', 'pivot', 'validations', 'images', 'shapes', 'tables', 'slicers', 'pivotsExtra', 'state', 'noGrid', 'outline', 'protect', 'sparklines', 'page', 'defRowH', 'defColW', 'zoom', 'view', 'tabColor', 'scenarios', 'external'];
 // 바뀌어도 수식 결과가 달라지지 않는 시트 속성
-const CALC_NEUTRAL = new Set(['scenarios', 'tabColor', 'defRowH', 'defColW', 'zoom', 'view', 'outline', 'protect', 'sparklines', 'page', 'state', 'noGrid', 'charts', 'images', 'shapes', 'slicers', 'freeze', 'cond', 'validations', 'colStyles', 'rowStyles', 'allStyle', 'merges']);
+const CALC_NEUTRAL = new Set(['external', 'scenarios', 'tabColor', 'defRowH', 'defColW', 'zoom', 'view', 'outline', 'protect', 'sparklines', 'page', 'state', 'noGrid', 'charts', 'images', 'shapes', 'slicers', 'freeze', 'cond', 'validations', 'colStyles', 'rowStyles', 'allStyle', 'merges']);
 
 /** 숫자 키 객체의 키를 삽입/삭제에 맞춰 이동 */
 function shiftKeys(obj, index, count) {
@@ -500,7 +500,12 @@ export class Workbook {
     if (sheet.fileValues && cell.cached !== undefined && !cell.maybeArray && !cell.dirty) return cachedValue(cell.cached);
     const k = cellNum(si, r, c);
     if (cell.ast === null) return ERR.NAME;
-    if (this.evaluating.has(k)) return ERR.CIRC;
+    // 순환 참조: 파일에 저장된 마지막 값이 있으면 그 값 (엑셀도 반복 계산을 끈 순환 참조는 마지막 값을 유지)
+    if (this.evaluating.has(k)) {
+      if (cell.cached === undefined) return ERR.CIRC;
+      (this.circHits ??= new Set()).add(k);
+      return cachedValue(cell.cached);
+    }
     if (this.depth > 0 || this.warming) return this.evalCell(k, cell, si, r, c);
     // 최상위 호출: 긴 참조 사슬(예: 누계 1만 행)은 위에서부터 차례로 미리 계산한 뒤 다시 시도
     try {
@@ -544,6 +549,8 @@ export class Workbook {
     }
     // 지원하지 않는 함수는 파일에 저장된 계산 결과를 그대로 표시
     if (v === ERR.NAME && cell.cached !== undefined) v = cachedValue(cell.cached);
+    // 순환이 이 칸에서 닫힘: 엑셀처럼 계산하지 않고 마지막 값 유지 (=G24/J24 를 J24 에)
+    if (this.circHits?.has(k)) { this.circHits.delete(k); v = cachedValue(cell.cached); }
     if (v instanceof Range) v = this.placeSpill(`${si}:${r},${c}`, si, r, c, v);
     (this.caches[si] ??= new CellMap()).setRC(r, c, v);
     return v;
@@ -1816,7 +1823,14 @@ export class Workbook {
   insertCols(si, index, count = 1) { this.shiftAxis(si, 'col', index, count); }
   deleteCols(si, index, count = 1) { this.shiftAxis(si, 'col', index, -count); }
 
-  addSheet(name, at = this.sheets.length) {
+  /** 외부 통합 문서 값 시트(맨 뒤에 모아 둠)의 시작 번호 = 보통 시트 수 */
+  ownSheetCount() {
+    const i = this.sheets.findIndex((x) => x.external);
+    return i < 0 ? this.sheets.length : i;
+  }
+
+  addSheet(name, at = this.ownSheetCount()) {
+    at = Math.min(at, this.ownSheetCount());
     this.snapshotList();
     let n = this.sheets.length + 1;
     let nm = name;
@@ -1985,6 +1999,7 @@ export class Workbook {
   bookMeta() {
     return {
       ...(this.vba ? { vba: this.vba } : {}),
+      ...(this.externals?.length ? { externals: this.externals } : {}),
       ...(this.defaultFont ? { defaultFont: { ...this.defaultFont } } : {}),
       ...(this.baseStyle ? { baseStyle: { ...this.baseStyle } } : {}),
       ...(this.theme ? { theme: [...this.theme] } : {}),
@@ -2085,6 +2100,7 @@ export class Workbook {
     this.theme = data.theme ?? null; // 파일의 테마 색 (없으면 Office 기본)
     this.baseStyle = data.baseStyle ?? null; // 기본 셀 서식 (xlsx 의 xf 0) — 서식이 없는 셀에 적용
     this.vba = data.vba ?? null; // .xlsm 의 매크로(vbaProject.bin, base64) — 실행하지 않고 보존만 함
+    this.externals = data.externals ?? null; // 외부 통합 문서 연결 (xlsx externalLink 원본 — 저장할 때 그대로 되돌려 씀)
     this.names = (data.names ?? []).map((n) => ({ ...n }));
     this.sheets = sheets.length ? sheets : [newSheet('Sheet1')];
     this.invalidate();

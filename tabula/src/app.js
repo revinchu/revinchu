@@ -7257,6 +7257,12 @@ function writePivot(targetSi, def, { autofit = true } = {}) {
   if (!src) return false;
   const res = resolvePivot(src, def);
   const d = res.def;
+  // 날짜 등 숫자 항목의 요약 글자('2023-12-06 요약')는 원본 열의 표시 형식으로
+  const header = src.cube.header.map((h) => String(h ?? '').toLowerCase());
+  res.fieldStyle = (f) => {
+    const i = header.indexOf(String(f).toLowerCase());
+    return i >= 0 && src.ref && src.si !== undefined ? wb.styleAt(src.si, Math.min(src.ref.r1 + 1, src.ref.r2), src.ref.c1 + i) : null;
+  };
   const { grid, meta: pm } = computePivot(res, d);
   const t = wb.sheets[targetSi];
   const top = def.top ?? 0;
@@ -8815,7 +8821,8 @@ function hideSheet(i = si) {
 }
 
 function unhideSheetDialog() {
-  const hidden = wb.sheets.map((s, i) => [s, i]).filter(([, i]) => isHiddenSheet(i));
+  // 엑셀처럼 veryHidden(VBA 로 숨긴 시트 · 외부 통합 문서 값 시트)은 목록에 없음
+  const hidden = wb.sheets.map((s, i) => [s, i]).filter(([s]) => s.state === 'hidden');
   if (!hidden.length) { toast('숨겨진 시트가 없습니다.'); return; }
   const list = el('select', { size: Math.min(10, Math.max(4, hidden.length)), multiple: true, style: { width: '100%' } },
     hidden.map(([s, i], k) => el('option', { value: String(i), selected: k === 0 }, s.name)));
@@ -8852,12 +8859,12 @@ function renderSheetTabs() {
         { label: '복사본 만들기', icon: 'copy', action: () => run('duplicateSheet') },
         { sep: true },
         { label: '왼쪽으로 이동', disabled: i === 0, action: () => moveSheet(i, -1) },
-        { label: '오른쪽으로 이동', disabled: i === wb.sheets.length - 1, action: () => moveSheet(i, 1) },
+        { label: '오른쪽으로 이동', disabled: i >= wb.ownSheetCount() - 1, action: () => moveSheet(i, 1) },
         { sep: true },
         { label: '탭 색', icon: 'fill', action: () => setTimeout(() => tabColorMenu({ x: e.clientX, y: e.clientY - 330 }, i), 0) },
         { sep: true },
         { label: '숨기기', action: () => hideSheet(i) },
-        { label: '숨기기 취소...', disabled: !wb.sheets.some((_, j) => isHiddenSheet(j)), action: () => unhideSheetDialog() },
+        { label: '숨기기 취소...', disabled: !wb.sheets.some((x) => x.state === 'hidden'), action: () => unhideSheetDialog() },
       ]);
     },
   }, s.name)));
@@ -8913,7 +8920,7 @@ function renameSheetInline(i) {
 
 function moveSheet(i, d) {
   const j = i + d;
-  if (j < 0 || j >= wb.sheets.length) return;
+  if (j < 0 || j >= wb.ownSheetCount()) return; // 외부 통합 문서 값 시트(맨 뒤)와는 자리를 바꾸지 않음
   wb.transact(() => {
     wb.snapshotList();
     const [s] = wb.sheets.splice(i, 1);
