@@ -1,7 +1,7 @@
 // 수학/삼각 · 조건부 집계 함수 (DOM 없음)
 import {
   ERR, Range, isError, scalar, toNum, toInt, toBool, optNum, optInt, checkNum, collectNums, flat, asRange, matrix,
-  makeCriteria, lift,
+  makeCriteria, lift, fastCount,
 } from './fxcore.js';
 
 export function roundTo(n, digits, mode) {
@@ -392,6 +392,8 @@ export const MATH = {
   },
   SUMIFS: ([sumRange, ...rest]) => sumIfs(sumRange, ifsPairs(rest)),
   COUNTIF: ([range, crit]) => {
+    const fast = fastCount(asRange(range), crit);
+    if (fast !== null) return fast;
     const test = makeCriteria(crit);
     let k = 0;
     for (const v of asRange(range).values()) if (test(v)) k++;

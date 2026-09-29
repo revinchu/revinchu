@@ -770,3 +770,55 @@ legend { padding: 0 4px; color: #444; }
 .load-progress .lp-msg { color: #555; min-height: 18px; margin-bottom: 10px; }
 .load-progress .lp-track { height: 6px; background: #e6e6e6; border-radius: 3px; overflow: hidden; }
 .load-progress .lp-bar { height: 100%; width: 0; background: #217346; transition: width 0.15s; }
+
+/* ── 계산 필드 ── */
+.fx-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 16px; padding: 0 3px; margin-right: 5px; border-radius: 3px; background: #e8f0fb; color: #1f5fbf; font: italic 700 11px/1 Georgia, 'Times New Roman', serif; flex: none; }
+.pp-field.calc { display: flex; align-items: center; gap: 2px; }
+.pp-field.calc .pp-fname { font-weight: 600; color: #1f3f7a; white-space: nowrap; }
+.pp-field.calc .pp-formula { flex: 1; min-width: 0; margin-left: 6px; color: #7a8599; font: 11px/1.2 Consolas, 'D2Coding', monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pp-field.calc .pp-menu { visibility: hidden; }
+.pp-field.calc:hover .pp-menu { visibility: visible; }
+.pp-item.calc .pp-label { color: #1f3f7a; }
+.cf-dialog { display: grid; grid-template-columns: 250px 1fr; gap: 14px; min-height: 420px; }
+.cf-left { display: flex; flex-direction: column; gap: 8px; border-right: 1px solid #e3e6ea; padding-right: 12px; min-width: 0; }
+.cf-head { display: flex; align-items: baseline; gap: 6px; }
+.cf-list { flex: 1; overflow: auto; border: 1px solid #d6dbe1; border-radius: 4px; max-height: 380px; background: #fff; }
+.cf-item { display: flex; align-items: center; gap: 4px; padding: 6px 8px; border-bottom: 1px solid #f0f2f4; cursor: pointer; outline: none; }
+.cf-item:hover { background: #f3f7fd; }
+.cf-item.on { background: #dfeafb; }
+.cf-item:focus-visible { box-shadow: inset 0 0 0 2px #2b6fd6; }
+.cf-item-main { flex: 1; min-width: 0; }
+.cf-item-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cf-item-f { font: 11px/1.3 Consolas, 'D2Coding', monospace; color: #6b7686; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cf-used { flex: none; min-width: 18px; padding: 1px 5px; border-radius: 9px; background: #217346; color: #fff; font-size: 11px; text-align: center; }
+.cf-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.btn.danger { color: #b3261e; }
+.cf-right { display: flex; flex-direction: column; gap: 9px; min-width: 0; }
+.cf-row { display: grid; grid-template-columns: 70px 1fr; align-items: center; gap: 8px; }
+.cf-row.top { align-items: start; }
+.cf-row > span:first-child { color: #444; padding-top: 3px; }
+.cf-name { font-size: 14px; font-weight: 600; }
+.cf-fwrap, .cf-pwrap { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.cf-formula { width: 100%; box-sizing: border-box; resize: vertical; font: 14px/1.45 Consolas, 'D2Coding', monospace; padding: 6px 8px; }
+.cf-status { font-size: 12px; padding: 3px 6px; border-radius: 3px; }
+.cf-status.ok { color: #1e6b3a; background: #e8f5ec; }
+.cf-status.bad { color: #a4221a; background: #fdecea; }
+.cf-fields, .cf-funcs { display: flex; flex-wrap: wrap; gap: 4px; max-height: 92px; overflow: auto; }
+.cf-field, .cf-func { border: 1px solid #d6dbe1; background: #fafbfc; border-radius: 12px; padding: 2px 9px; font-size: 12px; cursor: pointer; display: inline-flex; align-items: center; }
+.cf-field:hover, .cf-func:hover { background: #e8f0fb; border-color: #9ab8e6; }
+.cf-field.calc { background: #f1f6fe; }
+.cf-field .fx-badge { height: 13px; min-width: 14px; margin-right: 3px; font-size: 10px; }
+.cf-func { font-family: Consolas, 'D2Coding', monospace; border-radius: 3px; }
+.cf-fsearch { width: 200px; }
+.cf-opts { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+.cf-opts .btn.primary { margin-left: auto; min-width: 72px; }
+.cf-preview { border-collapse: collapse; font-size: 12px; min-width: 260px; }
+.cf-preview th { background: #f0f3f7; text-align: left; padding: 3px 8px; border-bottom: 1px solid #d6dbe1; }
+.cf-preview td { padding: 2px 8px; border-bottom: 1px solid #f0f2f4; }
+.cf-preview td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.cf-preview td.err { color: #a4221a; text-align: right; }
+.cf-preview tr.tot td { font-weight: 700; border-top: 1px solid #b8c2cf; }
+.cf-help { font-size: 12px; line-height: 1.5; }
+@media (max-width: 900px) { .cf-dialog { grid-template-columns: 1fr; } .cf-left { border-right: 0; padding-right: 0; } }
+.cf-fwrap > .cf-formula, .cf-fwrap > .cf-status { width: 100%; box-sizing: border-box; }
+.cf-list .cf-item.new { background: #eef6ee; }

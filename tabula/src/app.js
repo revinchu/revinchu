@@ -24,6 +24,7 @@ import { CHART_TYPES, PALETTE, renderChartSvg, chartModelData } from './chart.js
 import {
   computePivot, warmPivots, AGGREGATES, SHOW_AS, BASE_POS, LAYOUTS, pivotSourceData, resolvePivot, itemText, headerNames, normalizeDef, valueName,
   pivotFieldNames, parseCalc, PIVOT_STYLES, pivotStyleParts, LABEL_OPS, VALUE_OPS, describeFieldFilter, keyOf, sortKeys, pivotDetail, GROUP_BY,
+  checkCalc, renameCalcRefs, CALC_FUNCS,
 } from './pivot.js';
 import { SLICER_STYLES, slicerStyleName, slicerColors, CUSTOM_KEYS } from './slicerstyle.js';
 import { server, idbSet, idbGet, idbDel } from './storage.js';
@@ -5052,7 +5053,7 @@ function renderImportedPivots() {
   warmAll();
   for (const e of allPivots()) {
     if (!e.def.captureFmt && !e.def.needsRender) continue;
-    try { writePivot(e.si, e.def); } catch (err) { console.warn('피벗 다시 그리기 실패', err); }
+    try { wb.transact(() => writePivot(e.si, e.def)); } catch (err) { console.warn('피벗 다시 그리기 실패', err); }
   }
 }
 
@@ -5233,8 +5234,32 @@ function renderPivotPane(entry) {
         if (cb.checked) moveTo(h, isNum(h) ? 'values' : 'rows');
         else apply(removeField(h));
       });
-      const item = el('label', { class: 'pp-field', draggable: 'true' }, cb, el('span', {}, h));
+      const calc = calcSet.has(h.toLowerCase()) ? (def.calcFields ?? []).find((c) => c.name.toLowerCase() === h.toLowerCase()) : null;
+      if (!calc) {
+        const item = el('label', { class: 'pp-field', draggable: 'true' }, cb, el('span', {}, h));
+        item.addEventListener('dragstart', (e) => { pivotDrag = { name: h }; e.dataTransfer.setData('text/plain', h); });
+        return item;
+      }
+      // 계산 필드: ƒx 표시 · 수식 풍선 도움말 · 수정/삭제 메뉴 (오른쪽 클릭 또는 ▾)
+      const menu = el('button', { type: 'button', class: 'pp-menu', title: '계산 필드 메뉴' }, '▾');
+      const item = el('label', { class: 'pp-field calc', draggable: 'true', title: `계산 필드\n${h} = ${calc.formula}` },
+        cb, el('span', { class: 'fx-badge' }, 'ƒx'), el('span', { class: 'pp-fname' }, h), el('span', { class: 'pp-formula' }, `=${calc.formula}`), menu);
       item.addEventListener('dragstart', (e) => { pivotDrag = { name: h }; e.dataTransfer.setData('text/plain', h); });
+      const openCalcMenu = (anchor) => openMenu(anchor, [
+        { title: `ƒx ${h}` },
+        { label: '계산 필드 수정...', action: () => calcFieldDialog(entry, h) },
+        { label: used.has(h.toLowerCase()) ? '값 영역에서 제거' : '값 영역에 추가', action: () => (used.has(h.toLowerCase()) ? apply(removeField(h)) : moveTo(h, 'values')) },
+        { sep: true },
+        { label: '계산 필드 삭제', action: () => {
+          if (!confirm(`계산 필드 '${h}'을(를) 삭제할까요?\n같은 원본을 쓰는 모든 피벗에서 삭제됩니다 (엑셀과 같음).`)) return;
+          saveCalcFields(entry, (def.calcFields ?? []).filter((c) => c.name.toLowerCase() !== h.toLowerCase()), { remove: h });
+          toast(`계산 필드 '${h}'을(를) 삭제했습니다.`);
+        } },
+        { label: '새 계산 필드...', action: () => calcFieldDialog(entry, '\u0000new') },
+      ]);
+      menu.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openCalcMenu(menu); });
+      item.addEventListener('contextmenu', (e) => { e.preventDefault(); openCalcMenu({ x: e.clientX, y: e.clientY }); });
+      item.addEventListener('dblclick', (e) => { e.preventDefault(); calcFieldDialog(entry, h); });
       return item;
     }));
   };
@@ -5247,7 +5272,9 @@ function renderPivotPane(entry) {
     const items = area === 'values' ? areas.values.map((v, i) => ({ name: v.field, label: valueName(v), i })) : areas[area].map((n, i) => ({ name: n, label: n, i }));
     items.forEach((it) => {
       const menuBtn = el('button', { type: 'button', class: 'pp-menu', title: '필드 설정' }, '▾');
-      const row = el('div', { class: 'pp-item', draggable: 'true' }, el('span', { class: 'pp-label' }, it.label), menuBtn);
+      const isCalc = calcSet.has(String(it.name).toLowerCase());
+      const row = el('div', { class: `pp-item${isCalc ? ' calc' : ''}`, draggable: 'true', title: isCalc ? `계산 필드: =${(def.calcFields ?? []).find((c) => c.name.toLowerCase() === String(it.name).toLowerCase())?.formula ?? ''}` : '' },
+        isCalc ? el('span', { class: 'fx-badge' }, 'ƒx') : '', el('span', { class: 'pp-label' }, it.label), menuBtn);
       row.addEventListener('dragstart', (e) => { pivotDrag = { name: it.name, from: area, index: it.i }; e.dataTransfer.setData('text/plain', it.name); });
       menuBtn.addEventListener('click', () => {
         const list = area === 'values' ? areas.values : areas[area];
@@ -5260,6 +5287,7 @@ function renderPivotPane(entry) {
           ...(area !== 'values' ? [{ label: area === 'pages' ? '항목 선택...' : '필터 및 정렬...', action: () => openPivotFilterMenu(entry, area === 'pages' ? 'page' : area, it.name, menuBtn) }] : []),
           { label: '필드 제거', action: () => apply(area === 'values' ? { values: areas.values.filter((_, i) => i !== it.i) } : { [area]: list.filter((_, i) => i !== it.i) }) },
           ...(area === 'values' ? [{ sep: true }, { label: '값 필드 설정...', action: () => valueFieldDialog(it.i) }] : []),
+          ...(calcSet.has(String(it.name).toLowerCase()) ? [{ label: '계산 필드 수정...', action: () => calcFieldDialog(entry, it.name) }] : []),
         ];
         openMenu(menuBtn, moves);
       });
@@ -5491,90 +5519,298 @@ function pivotFilterDialog(entry, field, type) {
   }, { note: type === 'label' ? '? 는 한 글자, * 는 여러 글자를 나타냅니다.' : '' });
 }
 
-/** 계산 필드 삽입 · 수정 · 삭제 (피벗 테이블 분석 → 필드, 항목 및 집합 → 계산 필드) */
-function calcFieldDialog(entry = pivotHere()) {
+/** 원본이 같은 피벗들 (엑셀은 계산 필드를 피벗 캐시에 두므로 같은 원본의 피벗이 함께 씀) */
+function sameSourcePivots(entry) {
+  const key = (d) => (d.table ? `t:${String(d.table).toLowerCase()}` : `r:${String(d.source ?? '').toLowerCase()}:${JSON.stringify(d.range ?? null)}`);
+  const k = key(entry.def);
+  return allPivots().filter((e) => key(e.def) === k);
+}
+
+/** 계산 필드의 수식을 따옴표로 (공백 · 기호가 있는 필드 이름) */
+const calcQuote = (f) => (/^[\p{L}_][\p{L}\p{N}_.]*$/u.test(f) ? f : `'${f.replace(/'/g, "''")}'`);
+
+/**
+ * 계산 필드 목록 저장. shared: 같은 원본의 모든 피벗에 적용 (엑셀과 같음)
+ * rename: { from, to } — 값 필드 · 다른 계산 필드 수식의 참조도 바꿈, remove: 지운 이름 (값 영역에서도 뺌)
+ * addTo: 이 피벗의 값 영역에 넣을 계산 필드 이름, numFmt: { name, style } — 이 피벗의 그 값 필드 표시 형식
+ */
+function saveCalcFields(entry, calcs, { shared = true, rename = null, remove = null, addTo = null, numFmt = null } = {}) {
+  const targets = shared ? sameSourcePivots(entry) : [entry];
+  if (!targets.some((t) => t.si === entry.si && t.prop === entry.prop && t.index === entry.index)) targets.push(entry);
+  const low = (x) => String(x).toLowerCase();
+  wb.transact(() => {
+    for (const t of targets) {
+      const cur = pivotDefV2(t.def);
+      let values = [...(cur.values ?? [])];
+      if (rename) values = values.map((v) => (low(v.field) === low(rename.from) ? { ...v, field: rename.to, ...(v.name && low(v.name.trim()) === low(rename.from) ? { name: `${rename.to} ` } : {}) } : v));
+      if (remove) values = values.filter((v) => low(v.field) !== low(remove));
+      const mine = t.si === entry.si && t.prop === entry.prop && t.index === entry.index;
+      if (mine && addTo && !values.some((v) => low(v.field) === low(addTo))) values.push({ field: addTo, agg: 'sum', name: `${addTo} ` });
+      if (mine && numFmt) values = values.map((v) => (low(v.field) === low(numFmt.name) ? { ...v, numFmt: numFmt.style ?? undefined } : v));
+      let list = calcs;
+      if (!shared && !mine) list = cur.calcFields ?? [];
+      putPivotDef(t, { ...cur, calcFields: list.map((c) => ({ name: c.name, formula: c.formula })), values });
+    }
+  }, meta());
+  refreshPivotPane(true);
+  return targets.length;
+}
+
+/** 계산 필드 미리 보기: 첫 행 필드의 항목별 값 + 총합계 [[이름, 값]] */
+function calcPreview(def, calcs, name, maxItems = 7) {
+  const src = pivotSource(def);
+  if (!src) return [];
+  const d2 = {
+    ...def, rows: (def.rows ?? []).slice(0, 1), cols: [], pages: def.pages ?? [], values: [{ field: name, agg: 'sum' }], calcFields: calcs,
+    fieldFilters: {}, sort: {}, layout: 'compact', subtotals: false, grandRows: true, grandCols: false, style: 'None', cellFmt: undefined, collapsed: {},
+  };
+  const res = resolvePivot(src, d2);
+  const { grid } = computePivot(res, res.def);
+  const out = [];
+  for (const row of grid) {
+    const role = row[0]?.role ?? '';
+    if (!/^(rowItem|grandLabel)/.test(role)) continue;
+    const isTotal = role.startsWith('grandLabel');
+    if (!isTotal && out.length >= maxItems) continue;
+    const raw = row[row.length - 1]?.raw ?? '';
+    const v = raw === '' ? null : /^-?[\d.]+(e[+-]?\d+)?$/i.test(raw) ? Number(raw) : raw.replace(/^'/, '');
+    out.push([isTotal ? '총합계' : String(row[0].raw ?? '').replace(/^'/, ''), v, isTotal]);
+  }
+  return out;
+}
+
+/** 계산 필드를 참조하는 피벗 수 (같은 원본 중 값 영역에 넣은 것) */
+const calcUsage = (entry, name) => sameSourcePivots(entry).filter((e) => (pivotDefV2(e.def).values ?? []).some((v) => String(v.field).toLowerCase() === name.toLowerCase())).length;
+
+/** 수식 나열: 계산 필드 목록을 새 시트에 (엑셀의 [수식 나열]) */
+function listCalcFormulas(entry = pivotHere()) {
   if (!entry) { toast('피벗 테이블 안의 셀을 선택하세요.'); return; }
   const def = pivotDefV2(entry.def);
-  const src = pivotSource(def);
+  const calcs = def.calcFields ?? [];
+  let n = 1;
+  let name = '계산 필드 목록';
+  while (wb.sheetIndexByName(name) >= 0) name = `계산 필드 목록 (${++n})`;
+  const idx = wb.transact(() => {
+    const at = wb.addSheet(name, si + 1);
+    const put = (r, c, v, style) => wb.setCellData(at, r, c, { raw: v, ...(style ? { style } : {}) });
+    const head = { bold: true, fill: '#1f3864', color: '#ffffff' };
+    put(0, 0, `'${pivotNameOf(entry)} — 계산 필드`, { bold: true, size: 14 });
+    put(2, 0, '계산 필드', head); put(2, 1, '수식', head); put(2, 2, '사용하는 피벗 수', head); put(2, 3, '총합계', head);
+    calcs.forEach((c, i) => {
+      put(3 + i, 0, `'${c.name}`);
+      put(3 + i, 1, `'=${c.formula}`);
+      put(3 + i, 2, String(calcUsage(entry, c.name)));
+      const pv = calcPreview(def, calcs, c.name, 0).find((x) => x[2]);
+      if (pv && pv[1] !== null) put(3 + i, 3, typeof pv[1] === 'number' ? String(pv[1]) : `'${pv[1]}`, { numFmt: 'number', decimals: 4 });
+    });
+    if (!calcs.length) put(3, 0, "'(계산 필드가 없습니다)");
+    wb.setColWidth(at, 0, 160); wb.setColWidth(at, 1, 360); wb.setColWidth(at, 2, 120); wb.setColWidth(at, 3, 120);
+    return at;
+  }, meta());
+  switchSheet(idx, false);
+  toast(`계산 필드 ${calcs.length}개를 '${name}' 시트에 나열했습니다.`);
+}
+
+/**
+ * 계산 필드 관리자 (엑셀의 [계산 필드 삽입] + 목록 · 편집 · 복제 · 삭제 · 미리 보기 · 검사)
+ * startName: 처음 선택할 계산 필드 (없으면 새로 만들기)
+ */
+function calcFieldDialog(entry = pivotHere(), startName = null) {
+  if (!entry) { toast('피벗 테이블 안의 셀을 선택하세요.'); return; }
+  const src = pivotSource(pivotDefV2(entry.def));
   if (!src) return;
   const baseFields = headerNames(src);
-  const calcs = [...(def.calcFields ?? [])];
-  const nameIn = el('input', { type: 'text', value: `필드${calcs.length + 1}`, list: 'calcNames' });
-  const names = el('datalist', { id: 'calcNames' }, calcs.map((c) => el('option', { value: c.name })));
-  const formulaIn = el('input', { type: 'text', value: '= 0', class: 'fc-code', style: { width: '100%' } });
-  const fieldList = el('select', { size: 8, style: { width: '100%' } }, baseFields.map((f) => el('option', { value: f }, f)));
-  const quote = (f) => (/^[\p{L}_][\p{L}\p{N}_.]*$/u.test(f) ? f : `'${f.replace(/'/g, "''")}'`);
-  const insert = () => {
-    const f = fieldList.value;
-    if (!f) return;
-    const pos = formulaIn.selectionStart ?? formulaIn.value.length;
-    const t = quote(f);
-    formulaIn.value = formulaIn.value.slice(0, pos) + t + formulaIn.value.slice(formulaIn.selectionEnd ?? pos);
+  const low = (x) => String(x).toLowerCase();
+  let calcs = [...(pivotDefV2(entry.def).calcFields ?? [])].map((c) => ({ ...c }));
+  let sel = startName ? calcs.findIndex((c) => low(c.name) === low(startName)) : (calcs.length ? 0 : -1);
+  let dirty = false;
+  const nextName = () => { let k = calcs.length + 1; while (calcs.some((c) => low(c.name) === low(`필드${k}`))) k++; return `필드${k}`; };
+
+  // ── 왼쪽: 목록
+  const list = el('div', { class: 'cf-list', role: 'listbox' });
+  const countEl = el('span', { class: 'muted' });
+  // ── 오른쪽: 편집
+  const nameIn = el('input', { type: 'text', class: 'cf-name', spellcheck: 'false' });
+  const formulaIn = el('textarea', { class: 'cf-formula fc-code', rows: 3, spellcheck: 'false', placeholder: '예: 비용/클릭수' });
+  const status = el('div', { class: 'cf-status' });
+  const usage = el('div', { class: 'muted cf-usage' });
+  const fieldSearch = el('input', { type: 'search', placeholder: '필드 검색', class: 'cf-fsearch' });
+  const fieldBox = el('div', { class: 'cf-fields' });
+  const funcBox = el('div', { class: 'cf-funcs' });
+  const preview = el('table', { class: 'cf-preview' });
+  const curVal = () => (pivotDefV2(entry.def).values ?? []).find((v) => low(v.field) === low(nameIn.value.trim()));
+  const FMTS = [['', '기본 (쉼표 스타일)'], ['#,##0', '#,##0'], ['#,##0.00', '#,##0.00'], ['0.00%', '0.00%'], ['0.0%', '0.0%'], ['0%', '0%'], ['"₩"#,##0', '₩ 통화'], ['#,##0"원"', '#,##0원'], ['0.00', '0.00']];
+  const fmtSel = el('select', { class: 'cf-fmt' }, FMTS.map(([v, l]) => el('option', { value: v }, l)));
+  const shared = el('input', { type: 'checkbox', checked: true });
+  const addVals = el('input', { type: 'checkbox', checked: true });
+  const btnSave = el('button', { type: 'button', class: 'btn primary' }, '저장');
+
+  const insertText = (t, caretBack = 0) => {
+    const a = formulaIn.selectionStart ?? formulaIn.value.length;
+    const b = formulaIn.selectionEnd ?? a;
+    formulaIn.value = formulaIn.value.slice(0, a) + t + formulaIn.value.slice(b);
     formulaIn.focus();
-    formulaIn.setSelectionRange(pos + t.length, pos + t.length);
+    const p = a + t.length - caretBack;
+    formulaIn.setSelectionRange(p, p);
+    check();
   };
-  fieldList.addEventListener('dblclick', insert);
-  const sync = () => {
-    const c = calcs.find((x) => x.name.toLowerCase() === nameIn.value.trim().toLowerCase());
-    if (c) formulaIn.value = `=${c.formula}`;
-    btnAdd.textContent = c ? '수정' : '추가';
+  const renderFields = () => {
+    const q = low(fieldSearch.value.trim());
+    const others = calcs.filter((c, i) => i !== sel);
+    const items = [...baseFields.map((f) => ({ f, calc: false })), ...others.map((c) => ({ f: c.name, calc: true, formula: c.formula }))].filter((x) => !q || low(x.f).includes(q));
+    fieldBox.replaceChildren(...items.map((x) => el('button', {
+      type: 'button', class: `cf-field${x.calc ? ' calc' : ''}`, title: x.calc ? `계산 필드: =${x.formula}` : '두 번 클릭하거나 눌러서 수식에 넣기',
+      onclick: () => insertText(calcQuote(x.f)),
+    }, x.calc ? el('span', { class: 'fx-badge' }, 'ƒx') : '', x.f)));
   };
-  nameIn.addEventListener('input', sync);
-  const examples = el('div', { class: 'muted', style: { fontSize: '12px', lineHeight: '1.5' } },
-    '예: CPC = 비용/클릭수 · CTR = 클릭수/노출수 · CPM = 비용/노출수*1000 · CPA = 비용/전환수 · ROAS = 매출/비용 · AOV = 매출/전환수. ',
-    '계산 필드는 각 필드의 합계에 수식을 적용합니다 (엑셀과 같음). 0으로 나누면 #DIV/0! 이 표시되며 IFERROR(수식, 0) 으로 감쌀 수 있습니다.');
-  const validate = () => {
+  funcBox.replaceChildren(...CALC_FUNCS.map(([fn, help]) => el('button', {
+    type: 'button', class: 'cf-func', title: help, onclick: () => insertText(fn === 'PI' || fn === 'ROWS' ? `${fn}()` : `${fn}()`, fn === 'PI' || fn === 'ROWS' ? 0 : 1),
+  }, fn)));
+  const renderList = () => {
+    countEl.textContent = `${calcs.length}개`;
+    list.replaceChildren(...calcs.map((c, i) => {
+      const n = calcUsage(entry, c.name);
+      const item = el('div', { class: `cf-item${i === sel ? ' on' : ''}`, role: 'option', tabindex: 0, title: `=${c.formula}` },
+        el('span', { class: 'fx-badge' }, 'ƒx'),
+        el('div', { class: 'cf-item-main' }, el('div', { class: 'cf-item-name' }, c.name), el('div', { class: 'cf-item-f' }, `=${c.formula}`)),
+        n ? el('span', { class: 'cf-used', title: `같은 원본의 피벗 ${n}개가 값 영역에 사용` }, String(n)) : '');
+      item.addEventListener('click', () => select(i));
+      item.addEventListener('keydown', (e) => { if (e.key === 'ArrowDown' && i < calcs.length - 1) { select(i + 1); list.children[i + 1]?.focus(); } if (e.key === 'ArrowUp' && i > 0) { select(i - 1); list.children[i - 1]?.focus(); } });
+      return item;
+    }), ...(sel === -1 ? [el('div', { class: 'cf-item on new' }, el('span', { class: 'fx-badge' }, '+'), el('div', { class: 'cf-item-main' }, el('div', { class: 'cf-item-name' }, nameIn.value || '새 계산 필드'), el('div', { class: 'cf-item-f muted' }, '저장하면 목록에 추가')))] : []));
+  };
+  const select = (i) => {
+    if (dirty && !confirm('저장하지 않은 변경 내용이 있습니다. 버리고 이동할까요?')) return;
+    sel = i;
+    dirty = false;
+    const c = calcs[i];
+    nameIn.value = c ? c.name : nextName();
+    formulaIn.value = c ? `=${c.formula}` : '=';
+    const v = c ? curVal() : null;
+    fmtSel.value = v?.numFmt?.code && FMTS.some(([x]) => x === v.numFmt.code) ? v.numFmt.code : '';
+    addVals.parentElement.style.display = c ? 'none' : '';
+    renderList();
+    renderFields();
+    check();
+  };
+  let timer = 0;
+  const check = () => {
+    clearTimeout(timer);
+    timer = setTimeout(checkNow, 120);
+  };
+  const checkNow = () => {
     const nm = nameIn.value.trim();
     const f = formulaIn.value.trim().replace(/^=/, '').trim();
-    if (!nm) { toast('이름을 입력하세요.'); return null; }
-    if (baseFields.some((h) => h.toLowerCase() === nm.toLowerCase())) { alertDialog('계산 필드', '원본에 같은 이름의 필드가 있습니다. 다른 이름을 쓰세요.'); return null; }
-    try { parseCalc(f); } catch { alertDialog('계산 필드', '수식이 올바르지 않습니다. 필드 이름에 공백이 있으면 작은따옴표로 묶으세요. 예: \'전환 매출\'/비용'); return null; }
-    return { name: nm, formula: f };
+    const others = calcs.filter((_, i) => i !== sel);
+    let err = null;
+    if (!nm) err = '이름을 입력하세요.';
+    else if (baseFields.some((h) => low(h) === low(nm))) err = '원본에 같은 이름의 필드가 있습니다. 다른 이름을 쓰세요.';
+    else if (others.some((c) => low(c.name) === low(nm))) err = '같은 이름의 계산 필드가 있습니다.';
+    else if (!f) err = '수식을 입력하세요.';
+    const res = err ? null : checkCalc(f, baseFields, others, nm);
+    if (res && !res.ok) err = res.error;
+    status.className = `cf-status ${err ? 'bad' : 'ok'}`;
+    status.textContent = err ? `✕ ${err}` : `✓ 올바른 수식 — 참조: ${res.refs.join(', ') || '(없음)'}`;
+    btnSave.disabled = !!err;
+    const c = calcs[sel];
+    const n = c ? calcUsage(entry, c.name) : 0;
+    usage.textContent = c ? (n ? `같은 원본의 피벗 ${n}개가 이 계산 필드를 값 영역에 쓰고 있습니다.` : '아직 어느 피벗의 값 영역에도 없습니다.') : '';
+    // 미리 보기 (첫 행 필드의 항목별 값 · 총합계)
+    preview.replaceChildren();
+    if (err) return;
+    let rows = [];
+    try { rows = calcPreview(pivotDefV2(entry.def), [...others, { name: nm, formula: f }], nm); } catch { rows = []; }
+    const code = fmtSel.value;
+    const style = code ? styleForCode(code) : { numFmt: 'number', decimals: 2 };
+    const fmt = (v) => (v === null ? '' : typeof v === 'number' ? formatValue(v, style).text : String(v));
+    const field = (pivotDefV2(entry.def).rows ?? [])[0] ?? '';
+    preview.append(el('tr', {}, el('th', {}, field || '항목'), el('th', {}, nm)),
+      ...rows.map(([k, v, tot]) => el('tr', { class: tot ? 'tot' : '' }, el('td', {}, k), el('td', { class: typeof v === 'number' ? 'num' : 'err' }, fmt(v)))));
   };
-  const addOrUpdate = () => {
-    const c = validate();
-    if (!c) return false;
-    const i = calcs.findIndex((x) => x.name.toLowerCase() === c.name.toLowerCase());
-    let values = def.values ?? [];
-    if (i >= 0) calcs[i] = c;
-    else {
-      calcs.push(c);
-      values = [...values, { field: c.name, agg: 'sum', name: `${c.name} ` }];
-    }
-    setPivotDef(entry, { ...pivotDefV2(entry.def), calcFields: [...calcs], values });
-    refreshPivotPane(true);
+  const save = () => {
+    const nm = nameIn.value.trim();
+    const f = formulaIn.value.trim().replace(/^=/, '').trim();
+    if (btnSave.disabled) return false;
+    const old = calcs[sel];
+    const next = calcs.map((c) => ({ ...c }));
+    let rename = null;
+    if (old) {
+      if (low(old.name) !== low(nm) || old.name !== nm) {
+        rename = { from: old.name, to: nm };
+        next.forEach((c, i) => { if (i !== sel) c.formula = renameCalcRefs(c.formula, old.name, nm); });
+      }
+      next[sel] = { name: nm, formula: f };
+    } else next.push({ name: nm, formula: f });
+    const code = fmtSel.value;
+    const numFmt = { name: nm, style: code ? { ...styleForCode(code), code } : null };
+    const n = saveCalcFields(entry, next, { shared: shared.checked, rename, addTo: !old && addVals.checked ? nm : null, numFmt: old || addVals.checked ? numFmt : null });
+    calcs = next;
+    sel = calcs.findIndex((c) => c.name === nm);
+    dirty = false;
+    renderList();
+    renderFields();
+    check();
+    toast(old ? `계산 필드 '${nm}'을(를) 수정했습니다${shared.checked && n > 1 ? ` (피벗 ${n}개)` : ''}.` : `계산 필드 '${nm}'을(를) 추가했습니다.`);
     return true;
   };
-  const btnAdd = el('button', { type: 'button', class: 'btn', onclick: () => { if (addOrUpdate()) { names.replaceChildren(...calcs.map((c) => el('option', { value: c.name }))); sync(); } } }, '추가');
+  btnSave.addEventListener('click', save);
+  const btnNew = el('button', { type: 'button', class: 'btn', onclick: () => select(-1) }, '+ 새로 만들기');
+  const btnDup = el('button', {
+    type: 'button', class: 'btn', title: '선택한 계산 필드를 복사해 새로 만들기',
+    onclick: () => { const c = calcs[sel]; if (!c) return; select(-1); nameIn.value = `${c.name} 복사`; formulaIn.value = `=${c.formula}`; dirty = true; renderList(); check(); },
+  }, '복제');
   const btnDel = el('button', {
-    type: 'button', class: 'btn',
+    type: 'button', class: 'btn danger',
     onclick: () => {
-      const nm = nameIn.value.trim().toLowerCase();
-      const i = calcs.findIndex((x) => x.name.toLowerCase() === nm);
-      if (i < 0) return;
-      calcs.splice(i, 1);
-      const cur = pivotDefV2(entry.def);
-      const drop = (list) => (list ?? []).filter((x) => String(x.field ?? x).toLowerCase() !== nm);
-      setPivotDef(entry, { ...cur, calcFields: [...calcs], values: drop(cur.values) });
-      refreshPivotPane(true);
-      names.replaceChildren(...calcs.map((c) => el('option', { value: c.name })));
-      toast('계산 필드를 삭제했습니다.');
+      const c = calcs[sel];
+      if (!c) { select(calcs.length ? 0 : -1); return; }
+      const users = calcs.filter((x, i) => i !== sel && (() => { try { return checkCalc(x.formula, baseFields, calcs).refs.some((r) => low(r) === low(c.name)); } catch { return false; } })());
+      const msg = users.length ? `'${c.name}'을(를) 참조하는 계산 필드가 있습니다: ${users.map((u) => u.name).join(', ')}\n그래도 삭제할까요? (참조하는 필드는 #NAME? 이 됩니다)` : `계산 필드 '${c.name}'을(를) 삭제할까요?${shared.checked ? '\n같은 원본을 쓰는 모든 피벗에서 삭제됩니다 (엑셀과 같음).' : ''}`;
+      if (!confirm(msg)) return;
+      const next = calcs.filter((_, i) => i !== sel);
+      saveCalcFields(entry, next, { shared: shared.checked, remove: c.name });
+      calcs = next;
+      dirty = false;
+      sel = calcs.length ? Math.min(sel, calcs.length - 1) : -1;
+      select(sel);
+      toast(`계산 필드 '${c.name}'을(를) 삭제했습니다.`);
     },
   }, '삭제');
-  openDialog({
-    title: '계산 필드 삽입', width: 480,
-    body: el('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
-      el('label', {}, el('span', {}, '이름'), nameIn, names),
-      el('label', {}, el('span', {}, '수식'), formulaIn),
-      el('div', { style: { display: 'flex', gap: '6px' } }, btnAdd, btnDel),
-      el('div', { class: 'fc-title' }, '필드 (두 번 클릭하면 수식에 넣음)'), fieldList,
-      el('button', { type: 'button', class: 'btn', onclick: insert }, '필드 삽입'),
-      examples),
+  let dlg = null;
+  const btnList = el('button', { type: 'button', class: 'btn', title: '계산 필드와 수식을 새 시트에 나열 (엑셀의 수식 나열)', onclick: () => { dlg?.close(); listCalcFormulas(entry); } }, '수식 나열');
+  nameIn.addEventListener('input', () => { dirty = true; renderList(); check(); });
+  formulaIn.addEventListener('input', () => { dirty = true; check(); });
+  formulaIn.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); save(); } e.stopPropagation(); });
+  fmtSel.addEventListener('change', () => { dirty = true; check(); });
+  fieldSearch.addEventListener('input', renderFields);
+
+  const body = el('div', { class: 'cf-dialog' },
+    el('div', { class: 'cf-left' },
+      el('div', { class: 'cf-head' }, el('b', {}, '계산 필드 '), countEl),
+      list,
+      el('div', { class: 'cf-actions' }, btnNew, btnDup, btnDel),
+      el('div', { class: 'cf-actions' }, btnList)),
+    el('div', { class: 'cf-right' },
+      el('label', { class: 'cf-row' }, el('span', {}, '이름'), nameIn),
+      el('div', { class: 'cf-row top' }, el('span', {}, '수식'), el('div', { class: 'cf-fwrap' }, formulaIn, status)),
+      el('div', { class: 'cf-row top' }, el('span', {}, '필드'), el('div', { class: 'cf-fwrap' }, fieldSearch, fieldBox)),
+      el('div', { class: 'cf-row top' }, el('span', {}, '함수'), funcBox),
+      el('div', { class: 'cf-row' }, el('span', {}, '표시 형식'), fmtSel),
+      el('div', { class: 'cf-opts' },
+        el('label', {}, shared, ' 같은 원본을 쓰는 모든 피벗에 적용 (엑셀과 같음)'),
+        el('label', {}, addVals, ' 이 피벗의 값 영역에 추가'),
+        btnSave),
+      el('div', { class: 'cf-row top' }, el('span', {}, '미리 보기'), el('div', { class: 'cf-pwrap' }, preview, usage)),
+      el('div', { class: 'muted cf-help' }, '계산 필드는 각 필드의 합계에 수식을 적용합니다 (엑셀과 같음). DIVIDE(분자, 분모) 는 0으로 나눠도 오류가 없고, ROWS() 는 그룹의 원본 행 수입니다. Ctrl+Enter 로 저장.')));
+  dlg = openDialog({
+    title: '계산 필드', width: 860, body,
     buttons: [
-      { label: '확인', primary: true, action: () => { if (formulaIn.value.trim().replace(/^=/, '').trim() && formulaIn.value.trim() !== '= 0') return addOrUpdate() ? undefined : false; return undefined; } },
+      { label: '확인', primary: true, action: () => { if (dirty) return save() ? undefined : false; return undefined; } },
       { label: '닫기' },
     ],
   });
+  select(sel);
+  setTimeout(() => (sel === -1 ? nameIn : formulaIn).focus(), 30);
 }
 
 /** 글꼴 목록 메뉴: 통합 문서에서 쓴 글꼴 + 이 PC의 글꼴 (각 글꼴 모양으로 표시), 검색, 전체 목록 불러오기 */
@@ -6149,7 +6385,8 @@ async function loadWorkbookAsync(data, name, activeSheet, prog) {
     prog?.set(0.85 + 0.15 * (i / Math.max(1, list.length)), `피벗 테이블 계산 중 (${i + 1}/${list.length})`);
     await new Promise((res) => setTimeout(res, 0));
     const e = list[i];
-    try { writePivot(e.si, e.def); } catch (err) { console.warn('피벗 다시 그리기 실패', err); }
+    // 한 피벗의 셀 수만 개를 한 번에 반영 (칸마다 의존 수식을 찾지 않게) — 실행 취소 기록은 afterLoad 에서 비움
+    try { wb.transact(() => writePivot(e.si, e.def)); } catch (err) { console.warn('피벗 다시 그리기 실패', err); }
   }
   afterLoad(name, activeSheet);
 }
@@ -7776,6 +8013,16 @@ function cellStylesMenu(anchorEl) {
 function tableStylesMenu(anchorEl) { tableStyleGallery(anchorEl, !tableHere()); }
 
 const MENUS = {
+  calcFields: () => {
+    const e = pivotHere();
+    const calcs = e ? pivotDefV2(e.def).calcFields ?? [] : [];
+    return [
+      { label: '계산 필드...', icon: 'fx', action: () => calcFieldDialog(e, '\u0000new') },
+      ...(calcs.length ? [{ title: '계산 필드 수정' }, ...calcs.slice(0, 20).map((c) => ({ label: `ƒx ${c.name}  =${c.formula}`, action: () => calcFieldDialog(e, c.name) }))] : []),
+      { sep: true },
+      { label: '수식 나열', action: () => listCalcFormulas(e) },
+    ];
+  },
   picture: () => [
     { label: '셀에 배치...', icon: 'picture', action: () => insertPictureInCell() },
     { label: '셀 위에 배치...', icon: 'picture', action: () => insertPicture() },

@@ -783,7 +783,7 @@ export class Workbook {
     if (hit && hit.ver === ver) return hit.rows;
     const rows = this.rangeRead(s, r1, c1, r2, c2);
     if (this.rangeVersion(s, c1, c2) === ver) {
-      if (memo.size >= 12) memo.delete(memo.keys().next().value);
+      if (memo.size >= 48) memo.delete(memo.keys().next().value);
       memo.set(mk, { ver, rows });
     }
     return rows;

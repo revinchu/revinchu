@@ -17,7 +17,7 @@ import { toBase64, fromBase64 } from './vba.js';
 import { CellImage } from './fxcore.js';
 import { BLOCK_MIN_ROWS, ColBuilder, inBlock, blockValue } from './block.js';
 import { normalizeStyleName, DEFAULT_TABLE_STYLE, dataTop, dataBottom, canonicalRef, tableAt, columnNames, findTable } from './tables.js';
-import { pivotSourceData, resolvePivot, itemText, keyOf, sortKeys, EMPTY, headerNames, normalizeDef, computePivot, valueName, showAsPercent } from './pivot.js';
+import { pivotSourceData, resolvePivot, itemText, keyOf, sortKeys, EMPTY, headerNames, normalizeDef, computePivot, valueName, showAsPercent, excelCalcFormula } from './pivot.js';
 import { slicerStyleName } from './slicerstyle.js';
 import { applyTint, DEFAULT_THEME } from './stylepresets.js';
 
@@ -1347,7 +1347,10 @@ function readPivotCache(files, path) {
       if (it.name === 'm') return null;
       return it.attrs.v ?? '';
     });
-    return { name: cf.attrs.name ?? '', items, ...(cf.attrs.formula !== undefined ? { formula: cf.attrs.formula } : {}) };
+    // tb:formula = Tabula 가 쓴 원래 수식 (DIVIDE · ROWS 등 엑셀에 없는 함수)
+    const tbKey = Object.keys(cf.attrs).find((k) => k.endsWith(':formula'));
+    const formula = tbKey ? cf.attrs[tbKey] : cf.attrs.formula;
+    return { name: cf.attrs.name ?? '', items, ...(formula !== undefined ? { formula } : {}) };
   });
   return { source: { ref: ws?.attrs.ref ?? null, sheet: ws?.attrs.sheet ?? null, name: ws?.attrs.name ?? null }, fields };
 }
@@ -2188,6 +2191,7 @@ function validationXml(v) {
 const NS_X14 = 'http://schemas.microsoft.com/office/spreadsheetml/2009/9/main';
 const NS_X15 = 'http://schemas.microsoft.com/office/spreadsheetml/2010/11/main';
 const NS_MC = 'http://schemas.openxmlformats.org/markup-compatibility/2006';
+const NS_TB = 'https://tabula.local/spreadsheet/2026'; // Tabula 전용 속성 (엑셀은 mc:Ignorable 로 무시)
 const REL_MS = 'http://schemas.microsoft.com/office/2007/relationships';
 const PIVOT_SUBTOTAL = { count: 'count', average: 'average', max: 'max', min: 'min', product: 'product', countNums: 'countNums', stdDev: 'stdDev', stdDevp: 'stdDevp', var: 'var', varp: 'varp' };
 
@@ -2253,13 +2257,18 @@ function buildPivotCache(wb, defs, cacheId, extraFields) {
   header.forEach((h, i) => { if (extraFields?.has(h.toLowerCase())) listed.add(i); });
   const items = new Map();
   for (const f of listed) if (f >= 0 && f < nBase) items.set(f, fieldItems(data, f));
+  // 엑셀에 없는 함수(DIVIDE · ROWS)는 엑셀 수식으로 바꿔 쓰고, 원래 수식은 엑셀이 무시하는 tb:formula 에 (다시 열면 그대로)
+  const calcAttr = (c) => {
+    const xl = excelCalcFormula(c.formula);
+    return `formula="${esc(xl)}"${xl !== c.formula ? ` tb:formula="${esc(c.formula)}"` : ''}`;
+  };
   const cacheFields = header.map((h, f) => (f >= nBase
-    ? `<cacheField name="${esc(h)}" numFmtId="0" formula="${esc(calcs[f - nBase].formula)}" databaseField="0"/>`
+    ? `<cacheField name="${esc(h)}" numFmtId="0" ${calcAttr(calcs[f - nBase])} databaseField="0"/>`
     : `<cacheField name="${esc(h)}" numFmtId="0">${sharedItemsXml(data.map((r) => r[f]), items.get(f)?.keys ?? null)}</cacheField>`)).join('');
   const sourceXml = src.table
     ? `<worksheetSource name="${esc(src.table)}"/>`
     : `<worksheetSource ref="${rangeRef(src.ref)}" sheet="${esc(wb.sheets[src.si].name)}"/>`;
-  const cacheXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<pivotCacheDefinition xmlns="${NS_MAIN}" xmlns:r="${NS_R}" saveData="0" refreshOnLoad="1" createdVersion="6" refreshedVersion="6" minRefreshableVersion="3" recordCount="${data.length}">`
+  const cacheXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<pivotCacheDefinition xmlns="${NS_MAIN}" xmlns:r="${NS_R}" xmlns:mc="${NS_MC}" xmlns:tb="${NS_TB}" mc:Ignorable="tb" saveData="0" refreshOnLoad="1" createdVersion="6" refreshedVersion="6" minRefreshableVersion="3" recordCount="${data.length}">`
     + `<cacheSource type="worksheet">${sourceXml}</cacheSource><cacheFields count="${header.length}">${cacheFields}</cacheFields>`
     + `<extLst><ext uri="{725AE2AE-9491-48be-B2B4-4EB974FC3084}" xmlns:x14="${NS_X14}"><x14:pivotCacheDefinition pivotCacheId="${cacheId}"/></ext></extLst></pivotCacheDefinition>`;
   return { cacheXml, header, nBase, items, data, src, cacheId };

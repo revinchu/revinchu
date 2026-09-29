@@ -237,11 +237,26 @@ export class DepGraph {
   }
 
   /** 행 r 에 걸리는 묶음 run 의 수식 i 범위 → 수식마다 fn(시트, 행, 열) */
-  static hits(run, r, fn) {
+  static hits(run, r, fn, cover = null) {
     let iLo = 0;
     let iHi = run.n - 1;
     if (run.r2s) iLo = Math.max(iLo, r - run.r2); else if (run.r2 < r) return;
     if (run.r1s) iHi = Math.min(iHi, r - run.r1); else if (run.r1 > r) return;
+    if (iLo > iHi) return;
+    if (cover) {
+      // 한 번의 전파에서 이미 훑은 구간은 건너뜀: 고정 범위를 참조하는 수식 묶음(=COUNTIF($L$5:$L$4000,…) 을 채운 열)은
+      // 바뀐 칸이 수만 개여도 묶음 전체를 한 번만 훑음 (O(바뀐 칸 × 묶음 길이) → O(바뀐 칸 + 묶음 길이))
+      const cv = cover.get(run);
+      if (!cv) cover.set(run, [iLo, iHi]);
+      else if (iLo >= cv[0] && iHi <= cv[1]) return;
+      else if (iHi >= cv[0] - 1 && iLo <= cv[1] + 1) {
+        for (let i = iLo; i < cv[0]; i++) fn(run, run.fr0 + i);
+        for (let i = Math.max(iLo, cv[1] + 1); i <= iHi; i++) fn(run, run.fr0 + i);
+        cv[0] = Math.min(cv[0], iLo);
+        cv[1] = Math.max(cv[1], iHi);
+        return;
+      }
+    }
     for (let i = iLo; i <= iHi; i++) fn(run, run.fr0 + i);
   }
 
@@ -252,11 +267,11 @@ export class DepGraph {
   }
 
   /** 칸 (s, r, c) 를 참조하는 묶음마다 fn(run, 수식 행) */
-  each(s, r, c, fn) {
+  each(s, r, c, fn, cover = null) {
     const b = this.cols[s]?.get(c);
-    if (b) b.stab(r, (run) => DepGraph.hits(run, r, fn));
+    if (b) b.stab(r, (run) => DepGraph.hits(run, r, fn, cover));
     const w = this.wide[s];
-    if (w) for (const run of w) if (c >= run.c1 && c <= run.c2 && run.lo <= r && run.hi >= r) DepGraph.hits(run, r, fn);
+    if (w) for (const run of w) if (c >= run.c1 && c <= run.c2 && run.lo <= r && run.hi >= r) DepGraph.hits(run, r, fn, cover);
   }
 
   /**
@@ -285,7 +300,8 @@ export class DepGraph {
       out.push(s, r, c);
       queue.push(s, r, c);
     }
-    for (let q = 0; q < queue.length; q += 3) this.each(queue[q], queue[q + 1], queue[q + 2], mark);
+    const cover = new Map();
+    for (let q = 0; q < queue.length; q += 3) this.each(queue[q], queue[q + 1], queue[q + 2], mark, cover);
     return out;
   }
 

@@ -78,6 +78,110 @@ export const valueName = (v) => v.name || `${aggLabel(v.agg)} : ${v.field}`;
 const CALC_ERR = (code) => ({ code });
 const isErr = (v) => v !== null && typeof v === 'object';
 
+/** 계산 필드에서 ROWS() 가 읽는 가상 필드 (그룹의 원본 행 수) */
+const ROWS_FIELD = '\u0000rows';
+/** 계산 필드에서 쓸 수 있는 함수 (도움말 · 삽입 단추) */
+export const CALC_FUNCS = [
+  ['IF', 'IF(조건, 참일 때, 거짓일 때)'], ['IFERROR', 'IFERROR(수식, 오류일 때)'], ['DIVIDE', 'DIVIDE(분자, 분모, [0일 때]) — 0으로 나눠도 오류 없음'],
+  ['ROWS', 'ROWS() — 그룹의 원본 행 수 (엑셀에 없음)'], ['ROUND', 'ROUND(수, 자릿수)'], ['ROUNDUP', 'ROUNDUP(수, 자릿수)'], ['ROUNDDOWN', 'ROUNDDOWN(수, 자릿수)'],
+  ['ABS', 'ABS(수)'], ['SQRT', 'SQRT(수)'], ['INT', 'INT(수)'], ['TRUNC', 'TRUNC(수, [자릿수])'], ['MOD', 'MOD(수, 나누는 수)'], ['POWER', 'POWER(수, 지수)'],
+  ['EXP', 'EXP(수)'], ['LN', 'LN(수)'], ['LOG', 'LOG(수, [밑])'], ['LOG10', 'LOG10(수)'], ['SIGN', 'SIGN(수)'], ['PI', 'PI()'],
+  ['SUM', 'SUM(수1, 수2, …)'], ['MIN', 'MIN(수1, 수2, …)'], ['MAX', 'MAX(수1, 수2, …)'], ['AVERAGE', 'AVERAGE(수1, 수2, …)'],
+  ['AND', 'AND(조건1, …)'], ['OR', 'OR(조건1, …)'], ['NOT', 'NOT(조건)'],
+];
+const CALC_FUNC_SET = new Set(CALC_FUNCS.map(([n]) => n));
+
+/**
+ * 계산 필드 수식 검사 → { ok, error, unknown: [없는 필드], funcs: [없는 함수], refs: [참조 필드], cycle }
+ * fields: 원본 필드 이름, calcFields: 계산 필드 목록, selfName: 검사하는 계산 필드 이름 (순환 확인)
+ */
+export function checkCalc(formula, fields, calcFields = [], selfName = null) {
+  let ast;
+  try { ast = parseCalc(formula); } catch { return { ok: false, error: '수식 구문이 올바르지 않습니다 (괄호 · 연산자 · 따옴표를 확인하세요).', unknown: [], funcs: [], refs: [] }; }
+  const lower = (x) => String(x).toLowerCase();
+  const known = new Set(fields.map(lower));
+  const calcs = new Map(calcFields.filter((c) => lower(c.name) !== lower(selfName ?? '')).map((c) => [lower(c.name), c]));
+  const refs = [...calcRefs(ast)];
+  const unknown = refs.filter((r) => !known.has(lower(r)) && !calcs.has(lower(r)) && lower(r) !== lower(selfName ?? ''));
+  const funcs = [];
+  const walk = (n) => { if (!n) return; if (n.fn && !CALC_FUNC_SET.has(n.fn)) funcs.push(n.fn); ['a', 'b'].forEach((k) => walk(n[k])); (n.args ?? []).forEach(walk); };
+  walk(ast);
+  // 다른 계산 필드를 거쳐 자기 자신을 참조하면 순환
+  let cycle = false;
+  if (selfName) {
+    const seen = new Set();
+    const visit = (names) => names.forEach((nm) => {
+      const k = lower(nm);
+      if (k === lower(selfName)) { cycle = true; return; }
+      const c = calcs.get(k);
+      if (!c || seen.has(k)) return;
+      seen.add(k);
+      try { visit([...calcRefs(parseCalc(c.formula))]); } catch { /* 무시 */ }
+    });
+    visit(refs);
+  }
+  const error = unknown.length ? `없는 필드: ${unknown.join(', ')}` : funcs.length ? `지원하지 않는 함수: ${[...new Set(funcs)].join(', ')}` : cycle ? '순환 참조: 이 계산 필드를 다시 참조합니다.' : null;
+  return { ok: !error, error, unknown, funcs, refs, cycle };
+}
+
+/**
+ * 엑셀 파일에 쓸 계산 필드 수식: 엑셀에 없는 함수를 바꿈 (DIVIDE(a,b,c) → IF(b=0,c,a/b), ROWS() → 0)
+ * 바꿀 것이 없으면 원래 글자 그대로
+ */
+export function excelCalcFormula(formula) {
+  let ast;
+  try { ast = parseCalc(formula); } catch { return formula; }
+  let changed = false;
+  const q = (f) => (/^[\p{L}_][\p{L}\p{N}_.]*$/u.test(f) ? f : `'${f.replace(/'/g, "''")}'`);
+  const PREC = { '=': 1, '<>': 1, '<': 1, '>': 1, '<=': 1, '>=': 1, '&': 2, '+': 3, '-': 3, '*': 4, '/': 4, '^': 5 };
+  const txt = (n, parent = 0) => {
+    if ('num' in n) return String(n.num);
+    if ('str' in n) return `"${n.str.replace(/"/g, '""')}"`;
+    if (n.field !== undefined) return q(n.field);
+    if (n.fn) {
+      if (n.fn === 'DIVIDE') { changed = true; const [a, b, c] = n.args; return `IF(${txt(b)}=0,${c ? txt(c) : '0'},${txt(a, 4)}/${txt(b, 5)})`; }
+      if (n.fn === 'ROWS') { changed = true; return '0'; }
+      return `${n.fn}(${n.args.map((x) => txt(x)).join(',')})`;
+    }
+    if (n.op === 'neg') return `-${txt(n.a, 6)}`;
+    const p = PREC[n.op];
+    const s = `${txt(n.a, p)}${n.op}${txt(n.b, p + 1)}`;
+    return p < parent ? `(${s})` : s;
+  };
+  const out = txt(ast);
+  return changed ? out : formula;
+}
+
+/** 계산 필드 수식 안의 필드 이름 바꾸기 (이름을 바꾸면 이를 참조하는 다른 계산 필드도 따라 바뀜) */
+export function renameCalcRefs(formula, from, to) {
+  const quote = (f) => (/^[\p{L}_][\p{L}\p{N}_.]*$/u.test(f) ? f : `'${f.replace(/'/g, "''")}'`);
+  const src = String(formula).replace(/^\s*=/, '');
+  let out = '';
+  let i = 0;
+  const low = from.toLowerCase();
+  while (i < src.length) {
+    const ch = src[i];
+    if (ch === "'" || ch === '"') {
+      let j = i + 1;
+      let v = '';
+      while (j < src.length) { if (src[j] === ch) { if (src[j + 1] === ch) { v += ch; j += 2; continue; } break; } v += src[j++]; }
+      out += ch === "'" && v.toLowerCase() === low ? quote(to) : src.slice(i, j + 1);
+      i = j + 1;
+      continue;
+    }
+    const nm = /^[^\s\-+*/^&=<>(),;'"]+/.exec(src.slice(i));
+    if (nm && !/^(\d+\.?\d*|\.\d+)/.test(nm[0])) {
+      const isFn = src.slice(i + nm[0].length).trimStart().startsWith('(');
+      out += !isFn && nm[0].toLowerCase() === low ? quote(to) : nm[0];
+      i += nm[0].length;
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return out;
+}
+
 export function parseCalc(src) {
   const text = String(src ?? '').replace(/^\s*=/, '');
   const toks = [];
@@ -170,6 +274,33 @@ function evalCalc(ast, get) {
           if (n.fn === 'AVERAGE') return vs.length ? vs.reduce((a, b) => a + b, 0) / vs.length : 0;
           return n.fn === 'MIN' ? Math.min(...vs) : Math.max(...vs);
         }
+        case 'DIVIDE': {
+          // 안전한 나누기 (엑셀에 없음): 0 으로 나누면 세 번째 인수(없으면 빈 값)
+          const a = num(ev(A[0]));
+          const b = num(ev(A[1]));
+          if (isErr(a)) return a;
+          if (isErr(b)) return b;
+          return b === 0 ? (A[2] ? ev(A[2]) : null) : a / b;
+        }
+        case 'ROWS': return get(ROWS_FIELD);
+        case 'MOD': { const a = num(ev(A[0])); const b = num(ev(A[1])); if (isErr(a)) return a; if (isErr(b)) return b; return b === 0 ? CALC_ERR('#DIV/0!') : a - b * Math.floor(a / b); }
+        case 'POWER': { const a = num(ev(A[0])); const b = num(ev(A[1])); if (isErr(a)) return a; if (isErr(b)) return b; return a ** b; }
+        case 'EXP': { const v = num(ev(A[0])); return isErr(v) ? v : Math.exp(v); }
+        case 'LN': { const v = num(ev(A[0])); return isErr(v) ? v : v <= 0 ? CALC_ERR('#NUM!') : Math.log(v); }
+        case 'LOG10': { const v = num(ev(A[0])); return isErr(v) ? v : v <= 0 ? CALC_ERR('#NUM!') : Math.log10(v); }
+        case 'LOG': { const v = num(ev(A[0])); const b = A[1] ? num(ev(A[1])) : 10; if (isErr(v)) return v; if (isErr(b)) return b; return v <= 0 || b <= 0 || b === 1 ? CALC_ERR('#NUM!') : Math.log(v) / Math.log(b); }
+        case 'SIGN': { const v = num(ev(A[0])); return isErr(v) ? v : Math.sign(v); }
+        case 'TRUNC': { const v = num(ev(A[0])); const d = A[1] ? num(ev(A[1])) : 0; if (isErr(v)) return v; const f = 10 ** d; return Math.trunc(v * f) / f; }
+        case 'ROUNDUP': case 'ROUNDDOWN': {
+          const v = num(ev(A[0]));
+          const d = A[1] ? num(ev(A[1])) : 0;
+          if (isErr(v)) return v;
+          const f = 10 ** d;
+          const x = Math.abs(v) * f;
+          const r = n.fn === 'ROUNDUP' ? Math.ceil(x - 1e-9) : Math.floor(x + 1e-9);
+          return (Math.sign(v) * r) / f;
+        }
+        case 'PI': return Math.PI;
         case 'AND': return A.every((x) => num(ev(x)));
         case 'OR': return A.some((x) => num(ev(x)));
         case 'NOT': return !num(ev(A[0]));
@@ -240,6 +371,8 @@ function result(acc, agg) {
  * 값 필드 계산기: 필요한 원본 열만 누적하고 계산 필드는 합계에 수식을 적용
  * header: 원본 머리글 (+ 계산 필드 이름)
  */
+const usesRows = (ast) => !!ast && (ast.fn === 'ROWS' || ['a', 'b'].some((k) => usesRows(ast[k])) || (ast.args ?? []).some(usesRows));
+
 function makeMeasures(header, values, calcFields) {
   const lower = (x) => String(x).toLowerCase();
   const calcByName = new Map((calcFields ?? []).map((c) => {
@@ -259,6 +392,8 @@ function makeMeasures(header, values, calcFields) {
         if (cc) { if (!seen.has(lower(n))) walk(cc.ast, new Set([...seen, lower(n)])); } else { const i = baseIdx(n); if (i >= 0) need(i); }
       });
       if (c.ast) walk(c.ast, new Set([lower(c.name)]));
+      // ROWS() (그룹의 원본 행 수): 1 을 더하는 슬롯
+      for (const cc of calcByName.values()) if (cc.ast && usesRows(cc.ast)) need(-1);
       return { calc: c };
     }
     return { slot: need(baseIdx(v.field)), agg: v.agg };
@@ -267,6 +402,7 @@ function makeMeasures(header, values, calcFields) {
     if (!c.ast) return CALC_ERR('#NAME?');
     if (depth > 20) return CALC_ERR('#REF!');
     return evalCalc(c.ast, (name) => {
+      if (name === ROWS_FIELD) return slot.has(-1) ? list[slot.get(-1)]?.sum ?? 0 : 0;
       const cc = calcByName.get(lower(name));
       if (cc) return calcValue(cc, list, depth + 1);
       const i = baseIdx(name);

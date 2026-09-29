@@ -317,7 +317,7 @@ export const TABS = [
       group('필터', [large('insertSlicer', 'slicer', '슬라이서 삽입'), large('slicerConnections', 'slicer', '필터 연결', { title: '이 피벗 테이블에 연결할 슬라이서' })]),
       group('데이터', [large('pivotRefresh', 'refresh', '새로 고침', { title: '새로 고침 (Alt+F5)' }), large('pivotChangeSource', 'table', '데이터 원본 변경')]),
       group('동작', [large('pivotClear', 'clear', '지우기', { title: '필드를 모두 지우기' })]),
-      group('계산', [large('calcField', 'fx', '필드, 항목 및 집합', { title: '계산 필드 삽입 (CPC · CTR · ROAS 등)' })]),
+      group('계산', [large('calcField', 'fx', '필드, 항목 및 집합', { title: '계산 필드 (CPC · CTR · ROAS 등) · 수식 나열', menu: 'calcFields' })]),
       group('표시', [
         large('pivotFieldList', 'pivot', '필드 목록', { title: '피벗 테이블 필드 창 표시/숨기기' }),
         large('pivotShowExpand', 'plus', '+/- 단추', { title: '항목 확장 · 축소 단추 표시', toggle: 'pvShowExpand' }),

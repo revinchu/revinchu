@@ -97,8 +97,28 @@ export function toStr(v) {
   v = scalar(v);
   if (v === null || v === undefined) return '';
   if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';
-  if (typeof v === 'number') return formatGeneral(v);
+  if (typeof v === 'number') return numberText(v);
   return String(v);
+}
+
+/**
+ * 숫자 → 글자 (& · CONCAT · LEN 등): 엑셀처럼 유효 숫자 15자리 (화면의 "일반" 11자리가 아님).
+ * =1/3&"" → 0.333333333333333, 1E+20, 1.23456789012346E+17, 1E-10
+ */
+export function numberText(n) {
+  if (!Number.isFinite(n)) return formatGeneral(n);
+  if (n === 0) return '0';
+  const p = Number(n.toPrecision(15));
+  const a = Math.abs(p);
+  if (a >= 1e15 || a < 1e-9) {
+    const [m, e] = p.toExponential(14).split('e');
+    const mant = m.includes('.') ? m.replace(/0+$/, '').replace(/\.$/, '') : m;
+    const ex = Number(e);
+    return `${mant}E${ex < 0 ? '-' : '+'}${String(Math.abs(ex)).padStart(2, '0')}`;
+  }
+  if (a >= 1e-6) return String(p);
+  // 0.000001 보다 작으면 JS 는 지수로 쓰므로 소수로 풀어 씀
+  return p.toFixed(Math.min(20, 15 - Math.floor(Math.log10(a)) - 1)).replace(/0+$/, '').replace(/\.$/, '');
 }
 
 export function toBool(v) {
@@ -205,29 +225,110 @@ export function wildcardRegex(pattern) {
 
 export function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
+/** 엑셀은 조건 비교에서 숫자를 유효 숫자 15자리로 봄 (0.1+0.2 와 0.3 이 같음) */
+export const r15 = (x) => (Number.isInteger(x) || !Number.isFinite(x) ? x : Number(x.toPrecision(15)));
+
+/**
+ * 같은 범위를 조건만 바꿔 수만 번 세는 경우(=COUNTIF($L$5:$L$4000, A1) 을 채운 열): 범위 값마다 개수를 한 번 세어 두고
+ * 같음(=) · 다름(<>) 조건은 해시로 바로 답함. 범위 행 배열(범위 캐시가 공유)마다 한 번 만듦.
+ */
+const countIdxMemo = new WeakMap();
+function countIndex(rows) {
+  let idx = countIdxMemo.get(rows);
+  if (idx) return idx;
+  idx = { num: new Map(), str: new Map(), blank: 0, nul: 0, t: 0, f: 0, total: 0, numCount: 0, sorted: null };
+  for (const row of rows) {
+    for (const v of row) {
+      idx.total++;
+      if (typeof v === 'number') { const k = r15(v); idx.num.set(k, (idx.num.get(k) ?? 0) + 1); idx.numCount++; }
+      else if (typeof v === 'string') {
+        if (v === '') idx.blank++;
+        const k = v.toLowerCase();
+        idx.str.set(k, (idx.str.get(k) ?? 0) + 1);
+        const p = parseNumberText(v);
+        if (p !== null) { const q = r15(p); idx.num.set(q, (idx.num.get(q) ?? 0) + 1); }
+      } else if (v === null || v === undefined) { idx.blank++; idx.nul++; } else if (v === true) idx.t++;
+      else if (v === false) idx.f++;
+    }
+  }
+  countIdxMemo.set(rows, idx);
+  return idx;
+}
+
+/** 조건 개수를 해시로 셀 수 있으면 개수, 아니면 null (와일드카드 · 크기 비교 · 오류 값이 섞인 범위는 null) */
+export function fastCount(range, crit) {
+  const rows = range?.rows;
+  if (!rows || rows.length * (rows[0]?.length ?? 0) < 64) return null;
+  crit = scalar(crit);
+  if (typeof crit === 'number') return countIndex(rows).num.get(r15(crit)) ?? 0;
+  if (typeof crit === 'boolean') { const x = countIndex(rows); return crit ? x.t : x.f; }
+  if (typeof crit !== 'string') return null;
+  // 크기 비교(> < >= <=) + 숫자: 정렬해 둔 숫자 배열에서 이분 탐색 (순위 수식 =COUNTIF($B$2:$B$9999,">"&B2) 가 O(log n))
+  const cm = /^(<=|>=|<(?!>)|>)([\s\S]*)$/.exec(crit);
+  if (cm) {
+    let num = parseNumberText(cm[2]);
+    if (num === null) return null;
+    num = r15(num);
+    const x = countIndex(rows);
+    if (!x.sorted) {
+      const a = new Float64Array(x.numCount);
+      let k = 0;
+      for (const row of rows) for (const v of row) if (typeof v === 'number') a[k++] = r15(v);
+      a.sort();
+      x.sorted = a;
+    }
+    const a = x.sorted;
+    // lower(v): v 보다 작은 개수, upper(v): v 이하 개수
+    const bound = (v, le) => { let lo = 0; let hi = a.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (le ? a[mid] <= v : a[mid] < v) lo = mid + 1; else hi = mid; } return lo; };
+    switch (cm[1]) {
+      case '<': return bound(num, false);
+      case '<=': return bound(num, true);
+      case '>': return a.length - bound(num, true);
+      default: return a.length - bound(num, false);
+    }
+  }
+  const m = /^(<>|=)?([\s\S]*)$/.exec(crit);
+  if (!m || /[*?~]/.test(m[2])) return null;
+  const neg = m[1] === '<>';
+  const operand = m[2];
+  const x = countIndex(rows);
+  let eq;
+  const num = parseNumberText(operand);
+  const up = operand.toUpperCase();
+  if (num !== null) eq = x.num.get(r15(num)) ?? 0;
+  else if (up === 'TRUE' || up === 'FALSE') eq = up === 'TRUE' ? x.t : x.f;
+  else if (operand === '') eq = x.blank;
+  else eq = x.str.get(operand.toLowerCase()) ?? 0;
+  return neg ? x.total - eq : eq;
+}
+
 /** COUNTIF/SUMIF 조건 → 판별 함수 */
 export function makeCriteria(crit) {
   crit = scalar(crit);
-  if (typeof crit === 'number') return (v) => (typeof v === 'number' && v === crit) || (typeof v === 'string' && parseNumberText(v) === crit);
+  if (typeof crit === 'number') {
+    const c = r15(crit);
+    return (v) => (typeof v === 'number' && r15(v) === c) || (typeof v === 'string' && r15(parseNumberText(v) ?? NaN) === c);
+  }
   if (typeof crit === 'boolean') return (v) => v === crit;
   if (crit === null) return (v) => typeof v === 'number' && v === 0; // 빈 셀 조건은 0 과 같음 (엑셀 규칙)
   const m = /^(<=|>=|<>|<|>|=)?([\s\S]*)$/.exec(String(crit));
   const op = m[1] || '=';
   const operand = m[2];
-  const num = parseNumberText(operand);
+  let num = parseNumberText(operand);
   if (num !== null) {
+    num = r15(num);
     const cmp = (v) => {
-      if (typeof v === 'number') return v;
-      if (typeof v === 'string') return parseNumberText(v);
+      if (typeof v === 'number') return r15(v);
+      if (typeof v === 'string') { const p = parseNumberText(v); return p === null ? null : r15(p); }
       return null;
     };
     switch (op) {
       case '=': return (v) => cmp(v) === num;
       case '<>': return (v) => cmp(v) !== num;
-      case '<': return (v) => typeof v === 'number' && v < num;
-      case '>': return (v) => typeof v === 'number' && v > num;
-      case '<=': return (v) => typeof v === 'number' && v <= num;
-      case '>=': return (v) => typeof v === 'number' && v >= num;
+      case '<': return (v) => typeof v === 'number' && r15(v) < num;
+      case '>': return (v) => typeof v === 'number' && r15(v) > num;
+      case '<=': return (v) => typeof v === 'number' && r15(v) <= num;
+      case '>=': return (v) => typeof v === 'number' && r15(v) >= num;
     }
   }
   const upper = operand.toUpperCase();
