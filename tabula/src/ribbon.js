@@ -123,7 +123,7 @@ export const TABS = [
       ]),
       group('기호', [large('insertEquation', 'equation', '수식', { menu: 'equations' }), large('insertSymbol', 'symbol', '기호')]),
       group('링크', [large('hyperlink', 'link', '링크', { title: '하이퍼링크 삽입 (Ctrl+K)' })]),
-      group('필터', [large('insertSlicer', 'slicer', '슬라이서', { title: '표나 피벗 테이블에 슬라이서 삽입' })]),
+      group('필터', [large('insertSlicer', 'slicer', '슬라이서', { title: '표나 피벗 테이블에 슬라이서 삽입' }), large('insertTimeline', 'calendar', '시간 표시 막대', { title: '날짜 필드를 기간(연 · 분기 · 월 · 일)으로 거르는 시간 표시 막대 삽입' })]),
       group('차트', [
         large('chartColumn', 'chartColumn', '세로 막대형', { title: '세로 막대형 차트 삽입 (Alt+F1)' }),
         large('chartBar', 'chartBar', '가로 막대형'),

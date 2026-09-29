@@ -18,7 +18,7 @@ import { makeSeries, CUSTOM_LISTS } from './series.js';
 import { parseDelimited, toDelimited, guessDelimiter, CsvBlockReader } from './csv.js';
 import { SAMPLES } from './samples.js';
 import { TEMPLATES, TEMPLATE_CATS } from './templates.js';
-import { GridView, BASE_FONT, setBaseFont, measureText, fontStack, PATTERNS, patternCss, glyphShift } from './view.js';
+import { GridView, BASE_FONT, setBaseFont, measureText, fontStack, PATTERNS, patternCss, glyphShift, timelinePeriods } from './view.js';
 import { setThemeColors } from './stylepresets.js';
 import { readXlsxAsync, writeXlsxAsync, xlsxOverflow } from './xlsx.js';
 import { readOds, writeOds } from './ods.js';
@@ -1369,6 +1369,26 @@ function onViewMouseDown(e) {
     gv.renderObjectsAll();
     return;
   }
+  // 시간 표시 막대: 칸을 눌러 끌면 기간 선택, 수준(연도 · 분기 · 월 · 일) 바꾸기
+  const tlEl = t.closest('.tl-cell, .tl-level');
+  if (tlEl && e.button === 0) {
+    e.preventDefault();
+    if (editing && !commitEdit()) return;
+    focusGrid();
+    const objEl = t.closest('.obj');
+    const id = objEl.dataset.id;
+    chartSel = id;
+    const sl = sheet().slicers.find((x) => x.id === id);
+    if (tlEl.classList.contains('tl-level')) {
+      openMenu(tlEl, [['Y', '연도'], ['Q', '분기'], ['M', '월'], ['D', '일']].map(([k, l]) => ({ label: l, checked: (sl.level ?? 'M') === k, action: () => { updateObject(id, { level: k }); gv.renderObjectsAll(); } })));
+      return;
+    }
+    const a = Number(tlEl.dataset.i);
+    tlDrag = { id, a, b: a, root: objEl, shift: e.shiftKey };
+    if (e.shiftKey && sl._anchor !== undefined) tlDrag.a = sl._anchor;
+    markTimelineDrag();
+    return;
+  }
   const slBtn = t.closest('.sl-item, .sl-clear, .sl-multi');
   if (slBtn && e.button === 0) {
     e.preventDefault();
@@ -2402,7 +2422,7 @@ const PROTECT_MAP = {
   clearFilter: 'autoFilter', reapplyFilter: 'autoFilter', toggleFilter: 'autoFilter', hideRows: 'formatRows', unhideRows: 'formatRows', autofitRowsSel: 'formatRows',
   hideCols: 'formatColumns', autofitSel: 'formatColumns', refreshAll: 'pivotTables', calcField: 'pivotTables', slicerConnections: 'pivotTables',
   chartColumn: 'objects', chartBar: 'objects', chartLine: 'objects', chartPie: 'objects', chartArea: 'objects', chartScatter: 'objects', shapesMenu: 'objects',
-  insertTextbox: 'objects', insertPicture: 'objects', insertSlicer: 'objects',
+  insertTextbox: 'objects', insertPicture: 'objects', insertSlicer: 'objects', insertTimeline: 'objects',
 };
 const FORMAT_CMDS = /^(painter|painterSticky|bold|italic|underline|strike|fontFamily|fontSize|growFont|shrinkFont|border|fillColor|fontColor|fontDialog|formatCells|align|valign|wrap|indent|numFmt|fmt|incDecimal|decDecimal|clearFormats|cellStyle)/;
 function protectAction(cmd) {
@@ -4956,7 +4976,7 @@ function slicerModelRaw(sl) {
       e.hasData ||= pass;
       vals.set(key, e);
     }
-    const items = sortItems([...vals.values()]).map((e) => ({ key: e.key, text: e.key === '' ? '(비어 있음)' : e.key, selected: !sel || sel.has(e.key), hasData: e.hasData }));
+    const items = sortItems([...vals.values()]).map((e) => ({ key: e.key, v: e.v, text: e.key === '' ? '(비어 있음)' : e.key, selected: !sel || sel.has(e.key), hasData: e.hasData }));
     return {
       items, filtered: !!sel,
       apply: (values) => {
@@ -5006,7 +5026,7 @@ function slicerModelRaw(sl) {
     const colStyle = sd?.ref ? wb.styleAt(sd.si, Math.min(sd.ref.r1 + 1, sd.ref.r2), sd.ref.c1 + fi) : null;
     const shown = (e) => (typeof e.v === 'number' && colStyle?.numFmt && colStyle.numFmt !== 'general' ? formatValue(e.v, colStyle).text : e.key);
     return {
-      items: items.map((e) => ({ key: e.key, text: shown(e), selected: !sel || sel.has(e.key), hasData: e.hasData })),
+      items: items.map((e) => ({ key: e.key, v: e.v, text: shown(e), selected: !sel || sel.has(e.key), hasData: e.hasData })),
       filtered: !!sel,
       targets,
       apply: (values) => {
@@ -5036,6 +5056,77 @@ function slicerPivotTargets(src, hostSi = si) {
   const s = src.self || !src.sheet ? hostSi : wb.sheetIndexByName(src.sheet);
   const e = s >= 0 ? pivotDefs(s)[0] : null;
   return e ? [e] : [];
+}
+
+// ───── 시간 표시 막대 (엑셀 Timeline) ─────
+let tlDrag = null;
+function markTimelineDrag() {
+  const lo = Math.min(tlDrag.a, tlDrag.b);
+  const hi = Math.max(tlDrag.a, tlDrag.b);
+  for (const c of tlDrag.root.querySelectorAll('.tl-cell')) { const i = Number(c.dataset.i); c.classList.toggle('drag', i >= lo && i <= hi); }
+}
+/** 기간 칸 a~b 를 골라 연결된 피벗 · 표를 거름 (전부면 필터 해제, 이미 그 기간만이면 해제) */
+function timelineApply(id, a, b) {
+  const sl = (sheet().slicers ?? []).find((x) => x.id === id);
+  if (!sl) return;
+  const m = slicerModel(sl);
+  if (m.broken) return;
+  const periods = timelinePeriods(m.items, sl.level ?? 'M');
+  const lo = Math.min(a, b);
+  const hi = Math.max(a, b);
+  const keys = new Set(periods.slice(lo, hi + 1).flatMap((p) => p.items.map((it) => it.key)));
+  const all = m.items.map((it) => it.key);
+  const curSel = m.items.filter((it) => it.selected).map((it) => it.key);
+  const same = m.filtered && curSel.length === keys.size && curSel.every((k) => keys.has(k));
+  sl._anchor = lo;
+  if (!keys.size) { toast('그 기간에는 데이터가 없습니다.'); gv.renderObjectsAll(); return; }
+  m.apply(same || keys.size === all.length ? null : all.filter((k) => keys.has(k)));
+  gv.layout();
+  gv.renderObjectsAll();
+  setMode();
+}
+/** 삽입 → 시간 표시 막대: 날짜 필드만 고름 */
+function insertTimelineDialog() {
+  if (editing && !commitEdit()) return;
+  const t = tableHere();
+  const pe = t ? null : pivotHere() ?? pivotDefs()[0] ?? null;
+  let fields = [];
+  let makeSource;
+  let anchor;
+  const isDateStyle = (st) => /date/.test(st?.numFmt ?? '') || (st?.numFmt === 'custom' && /[yd]/i.test(st.code ?? '') && !/[#0]/.test(st.code ?? ''));
+  if (t) {
+    const names = columnNames(wb, si, t);
+    fields = names.filter((_, i) => isDateStyle(wb.styleAt(si, dataTop(t), t.c1 + i)) && typeof wb.getValue(si, dataTop(t), t.c1 + i) === 'number');
+    makeSource = (name) => ({ kind: 'table', table: t.name, column: name });
+    anchor = gv.sheetRect({ r1: t.r1, c1: t.c1, r2: t.r2, c2: t.c2 });
+  } else if (pe) {
+    const src = pivotSource(pe.def);
+    if (!src) { alertDialog('시간 표시 막대', '피벗 테이블 원본을 찾을 수 없습니다.'); return; }
+    const hdr = headerNames(src);
+    fields = hdr.filter((_, i) => src.ref && isDateStyle(wb.styleAt(src.si, Math.min(src.ref.r1 + 1, src.ref.r2), src.ref.c1 + i)));
+    if (!pe.def.name) setPivotDef(pe, { ...pe.def, name: pivotNameOf(pe) });
+    makeSource = (name) => ({ kind: 'pivot', field: name, pivots: [{ sheet: sheet().name, name: pivotNameOf(pe) }] });
+    anchor = gv.sheetRect(pe.def.area ?? { r1: 0, c1: 0, r2: 0, c2: 0 });
+  } else {
+    alertDialog('시간 표시 막대', '시간 표시 막대는 날짜 열이 있는 표나 피벗 테이블에 넣을 수 있습니다.');
+    return;
+  }
+  if (!fields.length) { alertDialog('시간 표시 막대', '날짜 형식의 필드가 없습니다. 원본 열에 날짜 표시 형식을 적용하세요.'); return; }
+  formDialog('시간 표시 막대 삽입', [
+    { name: 'f', label: '날짜 필드', type: 'select', value: fields[0], options: fields.map((f) => ({ value: f, label: f })) },
+    { name: 'lv', label: '시간 수준', type: 'select', value: 'M', options: [{ value: 'Y', label: '연도' }, { value: 'Q', label: '분기' }, { value: 'M', label: '월' }, { value: 'D', label: '일' }] },
+  ], ({ f, lv }) => {
+    const tl = { id: newObjId('sl'), caption: f, source: makeSource(f), timeline: true, level: lv, columns: 1, color: 'blue', multi: false, style: 'SlicerStyleLight1', x: Math.round(anchor.x), y: Math.round(anchor.y + anchor.h + 16), w: 520, h: 130, z: nextZ() };
+    wb.transact(() => {
+      wb.setSheetProp(si, 'slicers', [...(sheet().slicers ?? []).map((x) => ({ ...x })), tl]);
+      if (t && !t.filter) setTables((l) => l.map((x) => (x.id === t.id ? { ...x, filter: { criteria: {}, hidden: {} } } : x)));
+    }, meta());
+    chartSel = tl.id;
+    gv.ensureVisible(gv.rows.indexAt(tl.y + 40), gv.cols.indexAt(tl.x + 100));
+    gv.renderObjectsAll();
+    updateSelectionUI();
+    return true;
+  }, { note: '칸을 누르거나 끌어서 기간을 고르면 연결된 피벗 테이블 · 표가 그 기간으로 걸러집니다. Shift+클릭으로 기간을 늘릴 수 있습니다.' });
 }
 
 function slicerPick(id, key, additive) {
@@ -11780,6 +11871,7 @@ const COMMANDS = {
   condNewRule: () => cfRuleEditor(null, (nr) => wb.transact(() => wb.addCondRule(si, { ...usedClip(sel), ...nr }), meta())),
   createTable: () => createTableDialog(),
   insertSlicer: insertSlicerDialog,
+  insertTimeline: insertTimelineDialog,
   slicerCaption: (v) => { if (chartSel) updateObject(chartSel, { caption: String(v ?? '') }); },
   slicerCols: (v) => { if (chartSel) updateObject(chartSel, { columns: clamp(Number(v) || 1, 1, 20) }); },
   slicerClear: () => { if (chartSel) slicerClear(chartSel); },
@@ -12117,11 +12209,15 @@ function bindEvents() {
     if (!typing) e.preventDefault();
   });
   document.addEventListener('mousemove', (e) => {
+    if (tlDrag) {
+      const c = document.elementFromPoint(e.clientX, e.clientY)?.closest?.('.tl-cell');
+      if (c && tlDrag.root.contains(c)) { tlDrag.b = Number(c.dataset.i); markTimelineDrag(); }
+    }
     lastMouse = { x: e.clientX, y: e.clientY };
     lastShift = e.shiftKey;
     if (drag) onDragMove(e.clientX, e.clientY);
   });
-  document.addEventListener('mouseup', onDragEnd);
+  document.addEventListener('mouseup', (e) => { if (tlDrag) { const d = tlDrag; tlDrag = null; timelineApply(d.id, d.a, d.b); } onDragEnd(e); });
 
   // 클립보드
   document.addEventListener('copy', (e) => {

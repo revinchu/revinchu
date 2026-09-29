@@ -34,6 +34,52 @@ const OVER_C = 4;
 
 const measureCtx = typeof document !== 'undefined' ? document.createElement('canvas').getContext('2d') : null;
 
+// ───── 시간 표시 막대 기간 나누기 ─────
+const TL_EPOCH = Date.UTC(1899, 11, 30);
+const tlDate = (v) => new Date(TL_EPOCH + Math.floor(v) * 86400000);
+/** 날짜 항목 → 기간 칸 [{ key, short, long, group, items }] (항목이 없는 사이 기간도 칸으로) */
+export function timelinePeriods(items, level = 'M') {
+  const dated = items.filter((it) => typeof it.v === 'number' && it.v > 0);
+  if (!dated.length) return [];
+  const keyOf = (d) => {
+    const y = d.getUTCFullYear();
+    const mo = d.getUTCMonth();
+    if (level === 'Y') return y * 10000;
+    if (level === 'Q') return y * 10000 + Math.floor(mo / 3) * 100;
+    if (level === 'M') return y * 10000 + mo * 100;
+    return y * 10000 + mo * 100 + d.getUTCDate();
+  };
+  const buckets = new Map();
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const it of dated) {
+    const d = tlDate(it.v);
+    const k = keyOf(d);
+    if (!buckets.has(k)) buckets.set(k, []);
+    buckets.get(k).push(it);
+    lo = Math.min(lo, it.v);
+    hi = Math.max(hi, it.v);
+  }
+  const out = [];
+  const start = tlDate(lo);
+  const end = tlDate(hi);
+  let cur = new Date(Date.UTC(start.getUTCFullYear(), level === 'Y' ? 0 : level === 'Q' ? Math.floor(start.getUTCMonth() / 3) * 3 : start.getUTCMonth(), level === 'D' ? start.getUTCDate() : 1));
+  for (let guard = 0; cur <= end && guard < 4000; guard++) {
+    const y = cur.getUTCFullYear();
+    const mo = cur.getUTCMonth();
+    const k = keyOf(cur);
+    const short = level === 'Y' ? `${y}` : level === 'Q' ? `${Math.floor(mo / 3) + 1}분기` : level === 'M' ? `${mo + 1}월` : `${cur.getUTCDate()}`;
+    const long = level === 'Y' ? `${y}년` : level === 'Q' ? `${y}년 ${Math.floor(mo / 3) + 1}분기` : level === 'M' ? `${y}년 ${mo + 1}월` : `${y}년 ${mo + 1}월 ${cur.getUTCDate()}일`;
+    const group = level === 'Y' ? '' : level === 'D' ? `${y}년 ${mo + 1}월` : `${y}년`;
+    out.push({ key: k, short, long, group, items: buckets.get(k) ?? [] });
+    if (level === 'Y') cur = new Date(Date.UTC(y + 1, 0, 1));
+    else if (level === 'Q') cur = new Date(Date.UTC(y, mo + 3, 1));
+    else if (level === 'M') cur = new Date(Date.UTC(y, mo + 1, 1));
+    else cur = new Date(cur.getTime() + 86400000);
+  }
+  return out;
+}
+
 /**
  * 글자 세로 보정 (em): 한글 글꼴(맑은 고딕 등)은 아래 여백(descent)이 커서 글자가 줄 상자 위쪽에 붙어 보임.
  * 실제 설치된 글꼴로 한글 · 숫자의 잉크 영역을 재어, 줄 상자(1.2em) 가운데에 오도록 내릴 양을 구함
@@ -805,7 +851,7 @@ export class GridView {
     ].sort((a, b) => (a[1].z ?? 0) - (b[1].z ?? 0));
     for (const [prop, o] of all) {
       if (prop === 'charts') box(o, 'chart', this.chartSvg(o) + this.pivotChartButtons(o));
-      else if (prop === 'slicers') box(o, 'slicer', this.slicerHtml(o), slicerCssVars(o));
+      else if (prop === 'slicers') box(o, o.timeline ? 'slicer timeline' : 'slicer', this.slicerHtml(o), slicerCssVars(o));
       else if (prop === 'images') {
         // 그림 스타일: 테두리 · 둥근 모서리 · 그림자 · 회전 · 투명도
         const ic = [o.border ? `border:${o.borderW ?? 2}px solid ${esc(o.border)}` : '', o.radius ? `border-radius:${o.radius}px` : '', o.shadow ? 'box-shadow:3px 3px 8px rgba(0,0,0,.4)' : '', o.opacity !== undefined ? `opacity:${o.opacity}` : ''].filter(Boolean).join(';');
@@ -838,8 +884,30 @@ export class GridView {
     }
   }
 
+  /** 시간 표시 막대 (엑셀 Timeline): 날짜 필드를 연 · 분기 · 월 · 일 칸으로, 끌어서 기간 선택 */
+  timelineHtml(sl) {
+    const m = this.host.slicerModel?.(sl) ?? { items: [], filtered: false };
+    const level = sl.level ?? 'M';
+    const periods = timelinePeriods(m.items, level);
+    const on = (p) => m.filtered && p.items.some((it) => it.selected);
+    const sel = periods.filter(on);
+    const LV = { Y: '연도', Q: '분기', M: '월', D: '일' };
+    const rangeText = !m.filtered ? '모든 기간' : sel.length ? (sel.length === 1 ? sel[0].long : `${sel[0].long} - ${sel.at(-1).long}`) : '선택 없음';
+    // 위 줄: 상위 단위(연도 · 월) 이름, 아래 줄: 칸
+    let groups = '';
+    let last = null;
+    periods.forEach((p, i) => { if (p.group !== last) { groups += `<span class="tl-grp" style="grid-column:${i + 1}">${esc(p.group)}</span>`; last = p.group; } });
+    const cells = periods.map((p, i) => `<button type="button" class="tl-cell${on(p) ? ' on' : ''}${p.items.some((it) => it.hasData) ? '' : ' nodata'}" data-i="${i}" style="grid-column:${i + 1}" title="${esc(p.long)}">${esc(p.short)}</button>`).join('');
+    const w = Math.max(36, sl.cellW ?? 44);
+    return `<div class="sl-head tl-head"><span class="sl-cap">${esc(sl.caption ?? '')}</span>`
+      + `<button type="button" class="sl-clear${m.filtered ? '' : ' off'}" title="필터 지우기 (Alt+C)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1.5 2h11l-4.2 5v5l-2.6 1.5V7z"/><path d="M10.5 10l4 4M14.5 10l-4 4" stroke="#d13438"/></svg></button></div>`
+      + `<div class="tl-sub"><span class="tl-range">${esc(rangeText)}</span><button type="button" class="tl-level" title="시간 수준">${LV[level]} ▾</button></div>`
+      + `<div class="tl-bar" data-n="${periods.length}"><div class="tl-grid" style="grid-template-columns:repeat(${Math.max(1, periods.length)}, ${w}px)">${groups}${cells}</div></div>`;
+  }
+
   /** 슬라이서: 머리글(캡션·다중 선택·필터 지우기) + 항목 단추 */
   slicerHtml(sl) {
+    if (sl.timeline) return this.timelineHtml(sl);
     const m = this.host.slicerModel?.(sl) ?? { items: [], filtered: false };
     const items = m.broken
       ? `<div class="sl-broken">${esc(m.broken)}</div>`
