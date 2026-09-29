@@ -8,7 +8,7 @@ import { readFile, writeFile, readdir, stat, unlink, mkdir, rename } from 'node:
 import { extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { networkInterfaces } from 'node:os';
-import { timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual, randomBytes } from 'node:crypto';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const PORT = Number(process.env.PORT) || 5178;
@@ -56,8 +56,41 @@ async function readBody(req) {
   return Buffer.concat(chunks).toString('utf8');
 }
 
+const PUB = join(DATA, 'published');
+const pubFile = (id) => (/^[a-z0-9]{8,32}$/.test(id) ? join(PUB, `${id}.json`) : null);
+
 async function api(req, res, path) {
-  if (path === '/api/health') return send(res, 200, { ok: true, auth: !!TOKEN });
+  if (path === '/api/health') return send(res, 200, { ok: true, auth: !!TOKEN, publish: true });
+  // 웹에 게시한 문서: 링크를 아는 사람은 누구나 읽기 전용으로 봄 (암호 없이 GET)
+  const pm = /^\/api\/published\/([a-z0-9]+)$/.exec(path);
+  if (pm && req.method === 'GET') {
+    const f = pubFile(pm[1]);
+    try {
+      const [body, st] = await Promise.all([readFile(f), stat(f)]);
+      res.setHeader('X-Modified', String(st.mtimeMs));
+      return send(res, 200, body);
+    } catch { return send(res, 404, { error: '게시가 중지되었거나 없는 문서입니다' }); }
+  }
+  if (!authorized(req)) return send(res, 401, { error: '인증이 필요합니다' });
+  if (path === '/api/publish' && req.method === 'POST') {
+    await mkdir(PUB, { recursive: true });
+    const body = await readBody(req);
+    try { JSON.parse(body); } catch { return send(res, 400, { error: 'JSON 형식이 아닙니다' }); }
+    const id = randomBytes(9).toString('hex');
+    await writeFile(pubFile(id), body);
+    return send(res, 200, { ok: true, id });
+  }
+  if (pm && (req.method === 'PUT' || req.method === 'DELETE')) {
+    const f = pubFile(pm[1]);
+    if (!f) return send(res, 400, { error: '잘못된 게시 id' });
+    if (req.method === 'DELETE') { try { await unlink(f); } catch { /* 없음 */ } return send(res, 200, { ok: true }); }
+    const body = await readBody(req);
+    try { JSON.parse(body); } catch { return send(res, 400, { error: 'JSON 형식이 아닙니다' }); }
+    await mkdir(PUB, { recursive: true });
+    await writeFile(`${f}.tmp`, body);
+    await rename(`${f}.tmp`, f);
+    return send(res, 200, { ok: true });
+  }
   if (!authorized(req)) return send(res, 401, { error: '인증이 필요합니다' });
   await mkdir(DATA, { recursive: true });
   if (path === '/api/files' && req.method === 'GET') {

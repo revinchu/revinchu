@@ -499,6 +499,10 @@ export function buildRibbon(app) {
     }
     tabsEl.append(
       el('span', { class: 'spacer' }),
+      el('button', { class: 'ribbon-action', title: '버전 기록 (이 브라우저에 보관된 이전 버전 보기 · 복원)', onmousedown: keepFocus, onclick: () => app.run('versionHistory') },
+        el('span', { html: ICONS.history }), el('span', { class: 'lbl' }, '버전')),
+      el('button', { class: 'ribbon-action', title: '공유 · 웹에 게시 (읽기 전용 링크 · 대시보드 보기)', onmousedown: keepFocus, onclick: () => app.run('publish') },
+        el('span', { html: ICONS.share }), el('span', { class: 'lbl' }, '공유')),
       el('button', { class: 'ribbon-action', title: '메모 (Shift+F2)', onmousedown: keepFocus, onclick: () => app.run('editComment') },
         el('span', { html: ICONS.comment }), el('span', { class: 'lbl' }, '메모')),
       el('button', { class: 'ribbon-action primary', title: '저장 (Ctrl+S)', onmousedown: keepFocus, onclick: () => app.run('save') },

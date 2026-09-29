@@ -30,6 +30,7 @@ import {
 } from './pivot.js';
 import { SLICER_STYLES, SLICER_STYLE_GROUPS, slicerStyleName, slicerColors, CUSTOM_KEYS } from './slicerstyle.js';
 import { server, idbSet, idbGet, idbDel } from './storage.js';
+import { libList, libSave, libLoad, libLoadVersion, libUpdate, libNameVersion, libRemove, newDocId, packText, unpackText, LIB_MAX, VER_MAX } from './library.js';
 import { itemStats, blockColumn, EMPTY as PIVOT_EMPTY } from './cube.js';
 import { logicalCol, ColBuilder } from './block.js';
 import { PROTECT_OPTIONS, defaultAllow, excelHash, isProtected, isLockedStyle, allowed } from './protect.js';
@@ -491,7 +492,9 @@ function deselectChart() {
   gv.renderObjectsAll();
 }
 
+const VIEW_CMDS = new Set(['publish', 'versionHistory', 'exportXlsx', 'saveAs', 'print', 'zoomIn', 'zoomOut', 'zoom100']);
 function startEdit(mode, text = null, { fromBar = false, caret = null } = {}) {
+  if (viewOnly) { toast('읽기 전용 문서입니다. [편집용 사본 만들기]를 누르면 고칠 수 있습니다.'); return; }
   if (editing) return;
   if (protectBlocked('cells', { r1: active.r, c1: active.c, r2: active.r, c2: active.c })) return;
   deselectChart();
@@ -2384,7 +2387,7 @@ function sparkEditDialog() {
 
 // ───────────────────────── 시트 보호 ─────────────────────────
 // 보호된 시트에서 명령마다 필요한 권한 (없는 명령은 선택한 셀이 모두 잠기지 않았을 때만)
-const PROTECT_FREE = new Set(['dataAnalysis', 'forecastSheet', 'scenarioManager', 'solver', 'undo', 'redo', 'save', 'open', 'backstage', 'print', 'copy', 'find', 'goto', 'prevSheet', 'nextSheet', 'selectRegion',
+const PROTECT_FREE = new Set(['publish', 'versionHistory', 'recentFiles', 'dataAnalysis', 'forecastSheet', 'scenarioManager', 'solver', 'undo', 'redo', 'save', 'open', 'backstage', 'print', 'copy', 'find', 'goto', 'prevSheet', 'nextSheet', 'selectRegion',
   'newWorkbook', 'pivotFieldList', 'tracePrecedents', 'traceDependents', 'removeArrows', 'evaluateFormula', 'errorCheck', 'watchWindow', 'gotoSpecial',
   'outlineShow', 'outlineHide', 'freezePanes', 'freezeTop', 'freezeFirstCol', 'circleInvalid', 'clearCircles', 'macros', 'prevComment', 'nextComment',
   'workbookStats', 'toggleGrid', 'togglePrintGrid', 'toggleFormulaBar', 'toggleHeaders', 'toggleFormulas', 'toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100',
@@ -8777,6 +8780,7 @@ function writeRows(rows, r0, c0) {
 
 function loadWorkbook(data, name, activeSheet = 0) {
   if (editing) endEditUI();
+  libraryFlush();
   wb.load(data);
   renderImportedPivots();
   afterLoad(name, activeSheet);
@@ -8785,6 +8789,7 @@ function loadWorkbook(data, name, activeSheet = 0) {
 /** 큰 파일: 셀 준비와 피벗 다시 그리기를 나눠서 (진행 표시 prog: {set(p, 메시지)}) */
 async function loadWorkbookAsync(data, name, activeSheet, prog) {
   if (editing) endEditUI();
+  libraryFlush();
   const next = new Workbook();
   await next.loadAsync(data, (p) => prog?.set(0.6 + 0.25 * p, '셀 준비 중'));
   next.listeners = wb.listeners; // 화면 갱신 연결 유지
@@ -8846,6 +8851,12 @@ function redrawPivotsQuiet() {
 }
 
 function afterLoad(name, activeSheet) {
+  // 새로 연 문서는 보관함의 새 항목 (보관함에서 연 문서는 그 항목)
+  docId = pendingDocId ?? newDocId();
+  pendingDocId = null;
+  lastVersionAt = 0;
+  libDirty = true;
+  scheduleLibrarySave();
   wb.undoStack = [];
   wb.redoStack = [];
   docName = name || '통합 문서1';
@@ -8917,7 +8928,311 @@ function renameDoc(name) {
   }
 }
 
-const snapshot = () => ({ app: 'wixel', docName, si, workbook: wb.serialize() });
+const snapshot = () => ({ app: 'wixel', docName, docId, si, workbook: wb.serialize() });
+
+// ───── 이 브라우저의 문서 보관함 (최근 문서 30개 · 버전 기록) ─────
+let docId = null;
+let pendingDocId = null; // 보관함에서 연 문서의 id (불러온 뒤 docId 로)
+let libDirty = false;
+let libTimer = null;
+let lastVersionAt = 0;
+const LIB_CELL_LIMIT = 300000; // 이보다 큰 문서는 보관함 대신 큰 문서 자동 저장만
+const VERSION_EVERY = 10 * 60 * 1000; // 편집 중에는 10분마다 버전 하나
+function scheduleLibrarySave() {
+  clearTimeout(libTimer);
+  libTimer = setTimeout(() => whenIdle(() => libraryFlush()), 5000);
+}
+/** 지금 문서를 보관함에 (직렬화는 바로 — 다른 문서를 열기 직전에 불러도 안전), version: { label } 이면 버전 기록에도 */
+function libraryFlush({ version = null, force = false } = {}) {
+  clearTimeout(libTimer);
+  if (viewOnly) return Promise.resolve(null);
+  if (!force && !libDirty && !version) return Promise.resolve(null);
+  if (!version && cellCount() === 0 && !wb.sheets.some((x) => x.charts?.length || x.shapes?.length)) return Promise.resolve(null);
+  if (!wb?.sheets?.length || cellCount() > LIB_CELL_LIMIT) return Promise.resolve(null);
+  docId ??= newDocId();
+  let json;
+  try { json = JSON.stringify(snapshot()); } catch { return Promise.resolve(null); }
+  libDirty = false;
+  const now = Date.now();
+  const ver = version ?? (now - lastVersionAt > VERSION_EVERY ? { label: '' } : null);
+  if (ver) lastVersionAt = now;
+  const info = { sheets: wb.sheets.length, cells: cellCount(), sheetNames: wb.sheets.slice(0, 6).map((x) => x.name) };
+  return libSave(docId, docName, json, { version: ver, info }).catch((err) => { console.warn('보관함 저장 실패', err); return null; });
+}
+async function openFromLibrary(id, { ts = null, copy = false } = {}) {
+  await libraryFlush();
+  const prog = progressOverlay('보관함에서 여는 중');
+  try {
+    const data = ts ? await libLoadVersion(id, ts) : await libLoad(id);
+    if (!data?.workbook) { alertDialog('WIXEL', '보관함에서 문서를 찾을 수 없습니다.'); return; }
+    pendingDocId = copy ? newDocId() : id;
+    const name = copy ? `${data.docName ?? '통합 문서'} (${formatDate(ts ?? Date.now())} 버전)` : data.docName;
+    await loadWorkbookAsync(data.workbook, name, data.si ?? 0, prog);
+  } finally {
+    prog.close();
+  }
+}
+
+/** 보관함 목록 표 (파일 → 열기 · 최근 항목) */
+async function recentTable(close) {
+  const box = el('div', { class: 'recent-box' });
+  let list = [];
+  try { list = await libList(); } catch { /* IndexedDB 없음 */ }
+  const kb = (n) => (n > 1048576 ? `${(n / 1048576).toFixed(1)}MB` : `${Math.max(1, Math.round(n / 1024))}KB`);
+  const draw = () => {
+    box.replaceChildren(
+      el('div', { class: 'backstage-note' }, `이 브라우저에 최근 문서 ${LIB_MAX}개까지 자동으로 보관합니다 (문서마다 버전 기록 ${VER_MAX}개). 창을 닫거나 다른 문서를 열어도 사라지지 않습니다.`),
+      list.length ? el('table', { class: 'backstage-list' },
+        el('tr', {}, el('th', {}, ''), el('th', {}, '이름'), el('th', {}, '수정한 날짜'), el('th', {}, '크기'), el('th', {}, '버전'), el('th', {}, '')),
+        list.map((f) => {
+          const open = () => { close(); openFromLibrary(f.id); };
+          return el('tr', { class: 'file' },
+            el('td', { class: 'pin-cell' }, el('button', {
+              class: `lnk pin${f.pinned ? ' on' : ''}`, title: f.pinned ? '고정 해제' : '목록에 고정 (자동 정리하지 않음)',
+              onclick: async () => { await libUpdate(f.id, { pinned: !f.pinned }); f.pinned = !f.pinned; draw(); },
+            }, f.pinned ? '★' : '☆')),
+            el('td', { onclick: open }, el('b', {}, f.name ?? '(이름 없음)'), f.id === docId ? el('span', { class: 'muted' }, ' (현재 문서)') : null,
+              el('div', { class: 'muted small' }, `${f.sheets ?? 0}개 시트 · ${(f.sheetNames ?? []).join(', ')}`)),
+            el('td', { onclick: open }, formatDate(f.updated)),
+            el('td', {}, kb(f.size ?? 0)),
+            el('td', {}, el('button', { class: 'lnk', onclick: () => { close(); versionHistory(f.id); } }, `${f.versions?.length ?? 0}개`)),
+            el('td', {}, el('button', {
+              class: 'btn', onclick: () => openDialog({
+                title: '삭제', body: `'${f.name}'을(를) 이 브라우저의 보관함에서 삭제할까요? (버전 기록도 함께 삭제)`,
+                buttons: [{ label: '삭제', primary: true, action: async () => { await libRemove(f.id); list = list.filter((x) => x !== f); draw(); } }, { label: '취소' }],
+              }),
+            }, '삭제')));
+        })) : el('div', { class: 'muted' }, '보관된 문서가 없습니다.'),
+    );
+  };
+  draw();
+  return box;
+}
+
+/** 버전 기록 (구글 스프레드시트처럼 시각별 버전 · 이름 붙이기 · 복원 · 사본으로 열기) */
+async function versionHistory(id = docId) {
+  if (id === docId) await libraryFlush({ force: true });
+  const list = await libList().catch(() => []);
+  const entry = list.find((x) => x.id === id);
+  if (!entry) { alertDialog('버전 기록', cellCount() > LIB_CELL_LIMIT ? '셀이 아주 많은 문서는 버전 기록 대신 큰 문서 자동 저장만 합니다. [다른 이름으로 저장]으로 파일을 보관하세요.' : '아직 보관된 버전이 없습니다.'); return; }
+  const body = el('div', { class: 'ver-list' });
+  const draw = () => {
+    const vers = [...(entry.versions ?? [])].sort((a, b) => b.ts - a.ts);
+    body.replaceChildren(
+      el('div', { class: 'muted' }, `'${entry.name}' — 편집 중 10분마다, [저장](Ctrl+S)할 때마다 버전을 남깁니다. 최근 ${VER_MAX}개 (이름 붙인 버전은 오래 보관).`),
+      el('div', { class: 'ver-rows' },
+        el('div', { class: 'ver-row cur' }, el('b', {}, '현재 버전'), el('span', { class: 'muted' }, formatDate(entry.updated))),
+        vers.map((v) => el('div', { class: 'ver-row' },
+          el('div', {}, el('b', {}, formatDate(v.ts)), v.label ? el('span', { class: 'ver-label' }, v.label) : null),
+          el('div', { class: 'ver-acts' },
+            el('button', { class: 'lnk', onclick: () => formDialog('버전 이름', [{ name: 'n', label: '이름', value: v.label ?? '' }], async ({ n }) => { await libNameVersion(id, v.ts, n.trim()); v.label = n.trim(); v.named = !!n.trim(); draw(); }) }, '이름 지정'),
+            el('button', { class: 'lnk', onclick: () => { dlg.close(); openFromLibrary(id, { ts: v.ts, copy: true }); } }, '사본으로 열기'),
+            el('button', {
+              class: 'btn', onclick: async () => {
+                dlg.close();
+                // 복원 전 지금 상태도 버전으로 남김
+                if (id === docId) await libraryFlush({ version: { label: '복원 전' } });
+                const data = await libLoadVersion(id, v.ts);
+                if (!data?.workbook) { alertDialog('버전 기록', '버전을 찾을 수 없습니다.'); return; }
+                pendingDocId = id;
+                const prog = progressOverlay('버전 복원 중');
+                try { await loadWorkbookAsync(data.workbook, data.docName ?? entry.name, data.si ?? 0, prog); } finally { prog.close(); }
+                libraryFlush({ version: { label: `${formatDate(v.ts)} 버전으로 복원` } });
+                toast(`${formatDate(v.ts)} 버전으로 복원했습니다.`);
+              },
+            }, '이 버전 복원')))),
+      ),
+    );
+  };
+  draw();
+  const dlg = openDialog({
+    title: '버전 기록', body, width: 560,
+    buttons: [
+      ...(id === docId ? [{ label: '지금 버전에 이름 지정...', action: () => { formDialog('버전 이름', [{ name: 'n', label: '이름', value: '' }], async ({ n }) => { const e = await libraryFlush({ version: { label: n.trim() || '이름 없는 버전' } }); if (e) { const last = e.versions[e.versions.length - 1]; await libNameVersion(id, last.ts, n.trim() || '이름 없는 버전'); } toast('버전을 저장했습니다.'); }); return true; } }] : []),
+      { label: '닫기', primary: true },
+    ],
+  });
+}
+
+// ───── 공유 · 웹에 게시 (읽기 전용 대시보드 보기) ─────
+const b64url = (u8) => {
+  let s = '';
+  for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+};
+const fromB64url = (t) => {
+  const s = atob(t.replace(/-/g, '+').replace(/_/g, '/'));
+  const u8 = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) u8[i] = s.charCodeAt(i);
+  return u8;
+};
+const LINK_MAX = 1_500_000; // 주소에 담을 수 있는 크기 (브라우저 한계 2MB 아래)
+const pubKey = () => `wixel.pub.${docId}`;
+const pubInfo = () => { try { return JSON.parse(localStorage.getItem(pubKey()) ?? 'null'); } catch { return null; } };
+const setPubInfo = (v) => { try { if (v) localStorage.setItem(pubKey(), JSON.stringify(v)); else localStorage.removeItem(pubKey()); } catch { /* 무시 */ } };
+const appBase = () => location.href.replace(/[?#].*$/, '');
+
+/** 게시용 스냅샷: 선택한 시트만 · 보기 옵션 */
+function publishSnapshot(opt) {
+  const snap = snapshot();
+  const book = snap.workbook;
+  if (opt.sheet !== 'all') {
+    const i = Number(opt.sheet);
+    book.sheets = book.sheets.map((s, k) => (k === i ? s : { ...s, state: s.state ?? 'hidden' }));
+    snap.si = i;
+  }
+  return { ...snap, view: { headers: !!opt.headers, grid: !!opt.grid, title: opt.title ?? docName, published: Date.now() } };
+}
+
+async function publishDialog() {
+  const info = pubInfo();
+  const sheetSel = el('select', {}, el('option', { value: 'all' }, '전체 통합 문서'), wb.sheets.map((s, i) => (isHiddenSheet(i) ? null : el('option', { value: String(i), selected: i === si && false }, s.name))));
+  const headers = el('input', { type: 'checkbox' });
+  const grid = el('input', { type: 'checkbox', checked: true });
+  const auto = el('input', { type: 'checkbox', checked: info?.auto ?? true });
+  const out = el('div', { class: 'pub-out' });
+  const show = (url, note) => {
+    const inp = el('input', { type: 'text', readonly: true, value: url, onclick: (e) => e.target.select() });
+    out.replaceChildren(el('div', { class: 'pub-link' }, inp,
+      el('button', { class: 'btn primary', onclick: async () => { try { await navigator.clipboard.writeText(url); toast('링크를 복사했습니다.'); } catch { inp.select(); document.execCommand('copy'); toast('링크를 복사했습니다.'); } } }, '복사'),
+      el('button', { class: 'btn', onclick: () => window.open(url, '_blank') }, '미리 보기')),
+      note ? el('div', { class: 'muted' }, note) : null);
+    inp.select();
+  };
+  const opt = () => ({ sheet: sheetSel.value, headers: headers.checked, grid: grid.checked });
+  const linkOnly = async () => {
+    const { blob } = await packText(JSON.stringify(publishSnapshot(opt())));
+    const code = b64url(new Uint8Array(await blob.arrayBuffer()));
+    if (code.length > LINK_MAX) { out.replaceChildren(el('div', { class: 'warn' }, `문서가 커서(${Math.round(code.length / 1024)}KB) 링크에 담을 수 없습니다. 서버(npm start)로 게시하거나 시트 하나만 게시하세요.`)); return; }
+    show(`${appBase()}#view=${code}`, '링크 안에 문서 내용이 압축되어 들어 있어 서버 없이도 누구나 볼 수 있습니다 (읽기 전용 · 그 시점의 내용).');
+  };
+  const serverPub = async () => {
+    try {
+      const res = await server.publish(publishSnapshot(opt()), info?.id ?? null);
+      setPubInfo({ id: res.id, auto: auto.checked, opt: opt() });
+      show(`${appBase()}?view=${res.id}`, `서버에 게시했습니다. ${auto.checked ? '문서를 고치면 게시본도 자동으로 새로 고쳐지고, 보는 사람 화면도 30초마다 갱신됩니다.' : '[다시 게시]를 눌러야 게시본이 바뀝니다.'}`);
+    } catch (err) {
+      if (err.status === 401) askServerToken(serverPub);
+      else out.replaceChildren(el('div', { class: 'warn' }, `게시하지 못했습니다: ${err.message}`));
+    }
+  };
+  const body = el('div', { class: 'an-dlg' },
+    el('div', { class: 'muted' }, '구글 스프레드시트의 [웹에 게시]처럼 읽기 전용 대시보드 화면(리본 · 수식 입력줄 없이)으로 공유합니다. 보는 사람은 슬라이서 · 필터를 눌러 볼 수 있지만 원본은 바뀌지 않습니다.'),
+    el('label', { class: 'an-row' }, el('span', {}, '게시할 내용'), sheetSel),
+    el('label', { class: 'an-check' }, grid, '눈금선 표시'),
+    el('label', { class: 'an-check' }, headers, '행 · 열 머리글 표시'),
+    server.available ? el('label', { class: 'an-check' }, auto, '변경할 때마다 자동으로 다시 게시 (서버)') : null,
+    el('div', { class: 'backstage-actions' },
+      server.available ? el('button', { class: 'btn primary', onclick: serverPub }, info?.id ? '다시 게시 (같은 링크)' : '서버에 게시 (짧은 링크)') : null,
+      el('button', { class: `btn${server.available ? '' : ' primary'}`, onclick: linkOnly }, '링크 만들기 (서버 없이)'),
+      info?.id && server.available ? el('button', { class: 'btn', onclick: async () => { await server.unpublish(info.id).catch(() => {}); setPubInfo(null); out.replaceChildren(el('div', { class: 'muted' }, '게시를 중지했습니다. 이전 링크로는 더 이상 볼 수 없습니다.')); } }, '게시 중지') : null),
+    out,
+    server.available ? el('div', { class: 'muted' }, `공동 작업: 같은 서버에 접속한 사람에게 ${appBase()}?doc=${encodeURIComponent(docName)} 를 보내면 이 문서를 함께 편집할 수 있습니다 (다른 사람이 저장한 내용은 자동으로 불러옴).`) : null,
+  );
+  openDialog({ title: '공유 · 웹에 게시', body, width: 620, buttons: [{ label: '닫기', primary: true }] });
+  if (info?.id && server.available) show(`${appBase()}?view=${info.id}`, '이미 게시된 문서입니다.');
+}
+/** 자동 다시 게시 (서버 저장과 함께) */
+function autoRepublish() {
+  const info = pubInfo();
+  if (!info?.id || !info.auto || !server.available || viewOnly) return;
+  server.publish(publishSnapshot(info.opt ?? { sheet: 'all', grid: true }), info.id).catch(() => {});
+}
+
+// 읽기 전용 보기 (게시된 문서 · 링크)
+let viewOnly = false;
+function enterViewMode(data, { pubId = null } = {}) {
+  viewOnly = true;
+  autosave = false;
+  document.body.classList.add('view-mode');
+  const v = data.view ?? {};
+  view.showHeaders = !!v.headers;
+  if (v.grid === false) view.showGrid = false;
+  const bar = el('div', { class: 'view-bar' },
+    el('b', {}, v.title ?? data.docName ?? 'WIXEL'),
+    el('span', { class: 'muted' }, ` · 읽기 전용${v.published ? ` · 게시: ${formatDate(v.published)}` : ''}`),
+    el('span', { class: 'view-live', hidden: !pubId }, '● 자동 새로 고침'),
+    el('button', { class: 'btn', onclick: () => { exitViewMode(data); } }, '편집용 사본 만들기'));
+  document.getElementById('app').prepend(bar);
+  loadWorkbook(data.workbook, data.docName ?? 'WIXEL', data.si ?? 0);
+  applyView();
+  renderAll();
+  if (pubId) {
+    let seen = 0;
+    setInterval(async () => {
+      try {
+        const res = await server.published(pubId);
+        if (seen && res.modified > seen) {
+          const keep = si;
+          loadWorkbook(res.data.workbook, res.data.docName ?? docName, keep);
+          toast('게시된 문서가 업데이트되었습니다.');
+        }
+        seen = res.modified;
+      } catch { /* 게시 중지 등 */ }
+    }, 30000);
+  }
+}
+function exitViewMode(data) {
+  viewOnly = false;
+  autosave = true;
+  document.body.classList.remove('view-mode');
+  document.querySelector('.view-bar')?.remove();
+  view.showHeaders = true;
+  view.showGrid = true;
+  history.replaceState(null, '', appBase());
+  loadWorkbook(data.workbook, `${data.docName ?? '통합 문서'} 사본`, data.si ?? 0);
+  applyView();
+  toast('편집할 수 있는 사본을 만들었습니다 (이 브라우저의 보관함에 저장).');
+}
+/** 주소로 연 경우: #view=압축 · ?view=게시id · ?doc=서버 문서 */
+async function openFromUrl() {
+  const hash = location.hash;
+  const q = new URLSearchParams(location.search);
+  try {
+    if (hash.startsWith('#view=')) {
+      const text = await unpackText({ gz: true, blob: new Blob([fromB64url(hash.slice(6))]) });
+      enterViewMode(JSON.parse(text));
+      return true;
+    }
+    if (q.get('view') && server.available) {
+      const res = await server.published(q.get('view'));
+      enterViewMode(res.data, { pubId: q.get('view') });
+      return true;
+    }
+    if (q.get('doc') && server.available) {
+      await openFromServer(q.get('doc'));
+      return true;
+    }
+  } catch (err) {
+    alertDialog('WIXEL', `링크의 문서를 열 수 없습니다: ${err.message}`);
+  }
+  return false;
+}
+
+// 공동 작업(서버): 다른 사람이 저장한 새 내용이 있고 내 변경이 없으면 자동으로 불러옴
+let collabTimer = null;
+function startCollabWatch() {
+  clearInterval(collabTimer);
+  if (!server.available) return;
+  collabTimer = setInterval(async () => {
+    if (viewOnly || dirty || editing || !serverState.savedAt) return;
+    try {
+      const files = await server.list();
+      const f = files.find((x) => x.name === docName);
+      if (f && f.modified > serverState.savedAt + 1500) {
+        const keep = { si, r: active.r, c: active.c };
+        const data = await server.load(docName);
+        pendingDocId = docId;
+        loadWorkbook(data.workbook ?? data, data.docName ?? docName, keep.si);
+        dirty = false;
+        serverState.savedAt = f.modified;
+        selectCell(keep.r, keep.c);
+        updateTitle();
+        toast('다른 사용자가 저장한 내용을 불러왔습니다.');
+      }
+    } catch { /* 네트워크 오류 무시 */ }
+  }, 15000);
+}
 
 let storageWarned = false;
 /** 셀이 많은 통합 문서 (자동 저장을 IndexedDB 로, 더 드물게) */
@@ -8938,17 +9253,18 @@ function bigBook() {
 }
 let idbSaving = null;
 function saveToStorage() {
+  if (viewOnly) return false;
   try {
     if (bigBook()) {
       // 큰 문서: IndexedDB 에 시트별로, 바뀐 시트만, 조금씩 나눠 저장 (화면이 멈추지 않게)
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ docName, si, autosave, idb: true }));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ docName, docId, si, autosave, idb: true }));
       idbSaving = saveBigToIdb().then(() => { if (!serverAutosave()) { dirty = false; updateTitle(); } }).catch((err) => {
         if (err === SAVE_ABORT) return;
         if (!storageWarned) { storageWarned = true; toast('브라우저 저장 공간이 부족해 자동 저장하지 못했습니다. [파일 → 다른 이름으로 저장]으로 파일을 내려받으세요.'); }
       });
       return true;
     }
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ rev: APP_REV, docName, si, autosave, workbook: wb.serialize() }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ rev: APP_REV, docName, docId, si, autosave, workbook: wb.serialize() }));
     if (!server.available) dirty = false;
     updateTitle();
     storageWarned = false;
@@ -9123,7 +9439,7 @@ function scheduleAutosave() {
 }
 
 function scheduleServerSave(delay = 1500) {
-  if (!server.available || !autosave) return;
+  if (!server.available || !autosave || viewOnly) return;
   // 셀이 아주 많은 문서는 서버 자동 저장을 하지 않음 (전체를 보내야 해서 느림) — [저장]을 누르면 저장
   if (!serverAutosave()) { updateTitle(); return; }
   clearTimeout(serverTimer);
@@ -9133,7 +9449,9 @@ function scheduleServerSave(delay = 1500) {
 
 /** 저장: 브라우저 + (서버가 있으면) 서버 */
 async function saveNow(explicit) {
+  if (viewOnly) { if (explicit) toast('읽기 전용 보기입니다. [편집용 사본 만들기]를 누르세요.'); return; }
   const stored = saveToStorage();
+  if (explicit) libraryFlush({ version: { label: '저장' } });
   if (!server.available) {
     if (explicit && stored) toast('이 브라우저에 저장했습니다. (서버 없이 실행 중)');
     return;
@@ -9144,6 +9462,7 @@ async function saveNow(explicit) {
     await server.save(docName, snapshot());
     serverState.error = null;
     serverState.savedAt = Date.now();
+    autoRepublish();
     dirty = false;
     if (explicit) toast('서버에 저장했습니다. 다른 기기에서도 열 수 있습니다.');
   } catch (err) {
@@ -9214,7 +9533,8 @@ function openBackstage(panel = 'new') {
   const showOpen = async () => {
     const actions = el('div', { class: 'backstage-actions' },
       el('button', { class: 'btn primary', onclick: () => { close(); pickFile('open'); } }, '이 기기에서 찾아보기 (.xlsx · .xlsb · .xlsm · .ods · .csv · .wixel 등)'));
-    main.replaceChildren(el('h2', {}, '열기'), actions);
+    main.replaceChildren(el('h2', {}, '열기'), actions, el('h3', { class: 'tpl-cat' }, '최근 항목 (이 브라우저)'), await recentTable(close));
+    if (server.available) main.append(el('h3', { class: 'tpl-cat' }, '서버 (다른 기기와 공유)'));
     if (!server.available) {
       main.append(el('div', { class: 'backstage-note' },
         '서버 없이 실행 중이라 문서가 이 브라우저에만 저장됩니다. ',
@@ -9265,6 +9585,8 @@ function openBackstage(panel = 'new') {
     el('button', { onclick: () => { close(); saveAs(); } }, '다른 이름으로 저장'),
     el('button', { onclick: () => { close(); exportXlsx(); } }, 'Excel(.xlsx)로 내보내기'),
     el('button', { onclick: () => { close(); exportCsv(); } }, 'CSV로 내보내기'),
+    el('button', { onclick: () => { close(); versionHistory(); } }, '버전 기록'),
+    el('button', { onclick: () => { close(); publishDialog(); } }, '공유 · 웹에 게시'),
     el('button', { onclick: showShare }, '다른 기기에서 열기'),
     el('button', { onclick: () => { close(); setTimeout(printSheet, 50); } }, '인쇄'),
     el('button', { onclick: () => { close(); optionsDialog(); } }, '옵션'),
@@ -11290,6 +11612,9 @@ const COMMANDS = {
   watchWindow: () => watchWindow(!watchPane),
   goalSeek: () => goalSeekDialog(),
   scenarioManager: () => scenarioManager(),
+  publish: () => publishDialog(),
+  versionHistory: () => versionHistory(),
+  recentFiles: () => openBackstage('open'),
   forecastSheet: () => forecastSheetDialog(),
   dataAnalysis: () => dataAnalysisDialog(),
   solver: () => solverDialog(),
@@ -11426,6 +11751,7 @@ const NO_COMMIT = new Set(['toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100', 'shor
 
 function run(cmd, arg) {
   closeMenus();
+  if (viewOnly && protectAction(cmd) !== 'free' && !VIEW_CMDS.has(cmd)) { toast('읽기 전용으로 게시된 문서입니다. [편집용 사본 만들기]를 누르면 고칠 수 있습니다.'); return; }
   if (editing && !NO_COMMIT.has(cmd)) {
     if (cmd === 'undo') { cancelEdit(); return; }
     if (!commitEdit()) return;
@@ -11589,6 +11915,8 @@ function autoRefreshPivots() {
 
 function onBookChange() {
   dirty = true;
+  libDirty = true;
+  scheduleLibrarySave();
   scheduleAutoPivots();
   if (opts.calcMode === 'manual') updateStatusCalc();
   if (!renderQueued) {
@@ -11793,6 +12121,7 @@ function bindEvents() {
   setDialogCloseHandler(focusGrid);
   window.addEventListener('beforeunload', (e) => {
     if (!bigBook() || dirty) saveToStorage();
+    libraryFlush();
     if (!autosave && dirty) { e.preventDefault(); e.returnValue = ''; }
   });
   window.addEventListener('blur', () => { if (drag) onDragEnd(); });
@@ -11806,7 +12135,9 @@ async function init() {
     // 큰 문서는 IndexedDB 에 시트별로 저장되어 있음 — 나눠서 불러옴
     const prog = progressOverlay('저장된 통합 문서를 여는 중');
     try {
+      const metaId = stored.docId;
       stored = await loadBigFromIdb((p) => prog.set(p * 0.6, '불러오는 중'));
+      if (stored) stored.docId = metaId;
       wb = new Workbook();
       if (stored?.workbook) await wb.loadAsync(stored.workbook, (p) => prog.set(0.6 + 0.4 * p, '셀 준비 중'));
     } catch {
@@ -11820,6 +12151,7 @@ async function init() {
   wb.manualCalc = opts.calcMode === 'manual';
   if (stored) {
     docName = stored.docName || docName;
+    docId = stored.docId ?? null;
     si = clamp(stored.si || 0, 0, wb.sheets.length - 1);
     autosave = stored.autosave !== false;
   }
@@ -11863,6 +12195,8 @@ async function init() {
       } catch { /* 무시 */ }
     } else if (autosave) scheduleServerSave(500);
   }
+  if (location.hash.startsWith('#view=') || /[?&](view|doc)=/.test(location.search)) await openFromUrl();
+  startCollabWatch();
   updateTitle();
 }
 

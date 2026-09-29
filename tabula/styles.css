@@ -991,3 +991,22 @@ legend { padding: 0 4px; color: #444; }
 .pp-field.filtered .pp-fname { font-weight: 600; }
 .pp-item.filtered .pp-label { font-weight: 600; }
 .pp-item .pp-funnel { margin-left: auto; margin-right: 2px; }
+
+/* 보관함 · 버전 기록 · 게시 */
+.backstage-list .pin { font-size: 16px; color: #999; }
+.backstage-list .pin.on { color: #e3a008; }
+.backstage-list .small { font-size: 11px; }
+.ver-rows { display: flex; flex-direction: column; max-height: 52vh; overflow-y: auto; margin-top: 8px; border: 1px solid #e3e3e3; }
+.ver-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 10px; border-bottom: 1px solid #eee; }
+.ver-row.cur { background: #eef6f1; }
+.ver-label { margin-left: 8px; padding: 1px 6px; border-radius: 8px; background: #e8f0fe; color: #1a56db; font-size: 11px; }
+.ver-acts { display: flex; gap: 8px; align-items: center; }
+.pub-link { display: flex; gap: 6px; margin-top: 8px; }
+.pub-link input { flex: 1; height: 30px; padding: 0 8px; font-family: Consolas, monospace; font-size: 12px; }
+.pub-out .warn, .an-dlg .warn { color: #b42318; margin-top: 8px; }
+/* 읽기 전용 보기 (웹에 게시) */
+.view-bar { display: flex; align-items: center; gap: 10px; padding: 8px 14px; background: #1f4e3d; color: #fff; font-size: 13px; }
+.view-bar .muted { color: #cfe3d8; }
+.view-bar .btn { margin-left: auto; }
+.view-bar .view-live { color: #9ae6b4; font-size: 12px; }
+body.view-mode .titlebar, body.view-mode .ribbon-tabs, body.view-mode .ribbon, body.view-mode .formula-row { display: none !important; }

@@ -82,6 +82,13 @@ export const server = {
   },
 
   list() { return this.request('files'); },
+  publish(data, id = null) { return id ? this.request(`published/${id}`, { method: 'PUT', body: JSON.stringify(data) }).then(() => ({ id })) : this.request('publish', { method: 'POST', body: JSON.stringify(data) }); },
+  unpublish(id) { return this.request(`published/${id}`, { method: 'DELETE' }); },
+  async published(id) {
+    const res = await fetch(`api/published/${id}`, { cache: 'no-store' });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `오류 (${res.status})`);
+    return { data: await res.json(), modified: Number(res.headers.get('X-Modified')) || 0 };
+  },
   load(name) { return this.request(`files/${encodeURIComponent(name)}`); },
   save(name, data) { return this.request(`files/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify(data) }); },
   remove(name) { return this.request(`files/${encodeURIComponent(name)}`, { method: 'DELETE' }); },
