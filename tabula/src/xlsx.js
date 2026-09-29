@@ -1376,6 +1376,27 @@ function readChart(files, path, theme = {}) {
       if (lnW && (gType === 'line' || gType === 'scatter')) f.lineWidth = Math.round((lnW / 12700) * (4 / 3) * 100) / 100;
       const mSize = Number(child(child(ser, 'marker'), 'size')?.attrs.val ?? 0);
       if (mSize) f.markerSize = mSize;
+      const dsh = DASH_FROM[child(child(spPr, 'ln'), 'prstDash')?.attrs.val];
+      if (dsh && gType === 'line') f.dash = dsh;
+      if ((gType === 'bar' || gType === 'column') && child(spPr, 'ln') && child(child(spPr, 'ln'), 'solidFill')) f.outline = dmlColor(child(child(spPr, 'ln'), 'solidFill'), theme) ?? undefined;
+      const tl = child(ser, 'trendline');
+      if (tl) {
+        const tt = child(tl, 'trendlineType')?.attrs.val;
+        if (tt === 'linear' || tt === 'exp' || tt === 'movingAvg') {
+          f.trend = tt;
+          if (tt === 'movingAvg') f.trendPeriod = Number(child(tl, 'period')?.attrs.val ?? 2);
+          const fw = Number(child(tl, 'forward')?.attrs.val ?? 0);
+          if (fw) f.trendForward = fw;
+        }
+      }
+      const lposV = child(child(ser, 'dLbls'), 'dLblPos')?.attrs.val;
+      const LPOS = { ctr: 'center', inEnd: 'insideEnd', inBase: 'insideBase', outEnd: 'outEnd' };
+      if (LPOS[lposV] && gType !== 'pie' && gType !== 'doughnut') f.labelPos = LPOS[lposV];
+      if (gType !== 'pie' && gType !== 'doughnut') {
+        const pc = {};
+        for (const dp of kids(ser, 'dPt')) { const c = dmlColor(child(child(dp, 'spPr'), 'solidFill'), theme); if (c) pc[Number(child(dp, 'idx')?.attrs.val)] = c; }
+        if (Object.keys(pc).length) f.pointColors = pc;
+      }
       const lf = runFont(child(child(ser, 'dLbls') ?? child(g, 'dLbls'), 'txPr'));
       if (lf.size) f.labelSize = lf.size;
       if (lf.color) f.labelColor = lf.color;
@@ -1444,6 +1465,10 @@ function readChart(files, path, theme = {}) {
   if (hole && hole !== 50) out.hole = hole;
   const gapW = Number(child(bar, 'gapWidth')?.attrs.val);
   if (bar?.name === 'barChart' && gapW && gapW !== 150 && gapW !== 182) out.gap = gapW;
+  const ovl = Number(child(bar, 'overlap')?.attrs.val);
+  if (bar?.name === 'barChart' && Number.isFinite(ovl) && ovl !== 0 && ovl !== 100) out.overlap = ovl;
+  if (bar?.name === 'barChart' && child(bar, 'varyColors')?.attrs.val === '1') out.varyColors = true;
+  if (child(plot, 'dTable')) out.dataTable = true;
   if (!descendants(plot, 'majorGridlines').length) out.gridY = false;
   // WIXEL 전용 설정 (원래 차트 종류 · 팔레트 · 서식)
   const tbEl = descendants(root, 'props').find((x) => x.attrs.json);
@@ -1458,6 +1483,7 @@ function readChart(files, path, theme = {}) {
     const o = {};
     const code = fmtCode(ax);
     if (code && code !== 'General' && child(ax, 'numFmt')?.attrs.sourceLinked !== '1') o.numFmt = code;
+    if (child(child(ax, 'scaling'), 'orientation')?.attrs.val === 'maxMin' && ax.name === 'valAx') o.reverse = true;
     const t = child(ax, 'title');
     if (t) o.title = descendants(t, 't').map((x) => x.text).join('');
     const sc = child(ax, 'scaling');
@@ -2286,8 +2312,9 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
   const series = data.series.map((sr, i) => ({
     ...sr, ...refs[i], type: FALLBACK[sr.type] ?? sr.type ?? baseType, axis: sr.axis ?? 0, color: sr.color ?? pal[i % pal.length],
   }));
-  const dLbls = (on, code, pct = false) => (on || pct
-    ? `<c:dLbls>${code && typeof code === 'string' && !pct ? `<c:numFmt formatCode="${esc(code)}" sourceLinked="0"/>` : ''}<c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr><c:showLegendKey val="0"/><c:showVal val="${pct ? 0 : 1}"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="${pct ? 1 : 0}"/><c:showBubbleSize val="0"/></c:dLbls>`
+  const LBL_POS = { center: 'ctr', insideEnd: 'inEnd', insideBase: 'inBase', outEnd: 'outEnd', above: 't', below: 'b', left: 'l', right: 'r' };
+  const dLbls = (on, code, pct = false, pos = null) => (on || pct
+    ? `<c:dLbls>${code && typeof code === 'string' && !pct ? `<c:numFmt formatCode="${esc(code)}" sourceLinked="0"/>` : ''}<c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr>${pos && LBL_POS[pos] ? `<c:dLblPos val="${LBL_POS[pos]}"/>` : ''}<c:showLegendKey val="0"/><c:showVal val="${pct ? 0 : 1}"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="${pct ? 1 : 0}"/><c:showBubbleSize val="0"/></c:dLbls>`
     : '');
   const serXml = (sr, i) => {
     const type = sr.type;
@@ -2301,18 +2328,24 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
     else if (type === 'stock') spPr = '<c:spPr><a:ln w="19050"><a:noFill/></a:ln></c:spPr>';
     else if (scatter) spPr = /line|smooth/i.test(chart.scatterStyle ?? '') ? `<c:spPr><a:ln w="19050">${fill}</a:ln></c:spPr>` : '<c:spPr><a:ln w="19050"><a:noFill/></a:ln></c:spPr>';
     else if (type === 'radar') spPr = `<c:spPr>${chart.radarStyle === 'filled' ? fill : ''}<a:ln w="28575">${fill}</a:ln></c:spPr>`;
-    else if (type === 'line') spPr = `<c:spPr><a:ln w="28575" cap="rnd">${fill}<a:round/></a:ln></c:spPr>`;
+    else if (type === 'line') spPr = `<c:spPr><a:ln w="${sr.lineWidth ? Math.round((sr.lineWidth * 3 / 4) * 12700) : 28575}" cap="rnd">${fill}${DASH_XML[sr.dash] ?? ''}<a:round/></a:ln></c:spPr>`;
     else if (pie) spPr = '<c:spPr><a:ln w="19050"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:ln></c:spPr>';
-    else spPr = `<c:spPr>${fill}</c:spPr>`;
+    else spPr = `<c:spPr>${fill}${sr.outline ? `<a:ln w="9525"><a:solidFill><a:srgbClr val="${String(sr.outline).replace('#', '').toUpperCase().slice(0, 6)}"/></a:solidFill></a:ln>` : ''}</c:spPr>`;
     const markerSym = sr.marker === 'none' || sr.marker === false ? 'none' : typeof sr.marker === 'string' ? sr.marker : 'circle';
     const markerSym2 = sr.marker === undefined && (chart.marker === 'none' || (scatter && /^(line|smooth)$/.test(chart.scatterStyle ?? '')) || (type === 'radar' && chart.radarStyle !== 'marker') || type === 'stock') ? 'none' : markerSym;
     const marker = (type === 'line' || type === 'radar' || type === 'stock' || (scatter && type !== 'bubble')) ? (markerSym2 === 'none' ? '<c:marker><c:symbol val="none"/></c:marker>' : `<c:marker><c:symbol val="${markerSym2}"/><c:size val="5"/><c:spPr>${fill}<a:ln w="9525">${fill}</a:ln></c:spPr></c:marker>`) : '';
     const dPt = pie ? sr.values.map((_, k) => `<c:dPt><c:idx val="${k}"/><c:bubble3D val="0"/>${chart.explode ? `<c:explosion val="${Math.round(chart.explode)}"/>` : ''}<c:spPr><a:solidFill><a:srgbClr val="${(sr.colors?.[k] ?? pal[k % pal.length]).slice(1)}"/></a:solidFill><a:ln w="19050"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:ln></c:spPr></c:dPt>`).join('') : '';
     const invert = type === 'column' || type === 'bar' ? '<c:invertIfNegative val="0"/>' : '';
+    // 막대 · 꺾은선의 데이터 요소별 색 · '요소마다 다른 색'
+    const ptColor = (k) => sr.pointColors?.[k] ?? (chart.varyColors && (type === 'column' || type === 'bar') ? pal[k % pal.length] : null);
+    const dPtBar = !pie && (sr.pointColors || chart.varyColors) && (type === 'column' || type === 'bar') ? sr.values.map((_, k) => (ptColor(k) ? `<c:dPt><c:idx val="${k}"/><c:invertIfNegative val="0"/><c:bubble3D val="0"/><c:spPr><a:solidFill><a:srgbClr val="${String(ptColor(k)).replace('#', '').toUpperCase().slice(0, 6)}"/></a:solidFill></c:spPr></c:dPt>` : '')).join('') : '';
+    // 추세선
+    const TREND = { linear: 'linear', exp: 'exp', movingAvg: 'movingAvg' };
+    const trend = sr.trend && TREND[sr.trend] && !pie ? `<c:trendline><c:spPr><a:ln w="19050" cap="rnd"><a:solidFill><a:srgbClr val="${String(sr.trendColor ?? sr.color).replace('#', '').toUpperCase().slice(0, 6)}"/></a:solidFill><a:prstDash val="sysDash"/></a:ln></c:spPr><c:trendlineType val="${TREND[sr.trend]}"/>${sr.trend === 'movingAvg' ? `<c:period val="${Math.max(2, sr.trendPeriod ?? 3)}"/>` : sr.trendForward ? `<c:forward val="${sr.trendForward}"/>` : ''}<c:dispRSqr val="0"/><c:dispEq val="0"/></c:trendline>` : '';
     const code = typeof sr.numFmt === 'string' ? sr.numFmt : null;
     // 원형: 레이블을 따로 정하지 않았으면 백분율 (WIXEL 화면과 같게)
     const pieP = pie && sr.labels !== false && (sr.pct || (sr.labels ?? chart.labels) === undefined);
-    const labels = dLbls(pie && sr.labels === false ? false : sr.labels ?? chart.labels, code, pieP);
+    const labels = dLbls(pie && sr.labels === false ? false : sr.labels ?? chart.labels, code, pieP, pie ? null : sr.labelPos);
     const cats = data.categories;
     const catTag = scatter ? 'xVal' : 'cat';
     const cat = sr.cat
@@ -2324,7 +2357,7 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
       : `<c:${valTag}><c:numLit><c:formatCode>General</c:formatCode><c:ptCount val="${sr.values.length}"/>${sr.values.map((v, k) => (typeof v === 'number' ? `<c:pt idx="${k}"><c:v>${v}</c:v></c:pt>` : '')).join('')}</c:numLit></c:${valTag}>`;
     const bsz = type === 'bubble' ? `<c:bubbleSize><c:numLit><c:formatCode>General</c:formatCode><c:ptCount val="${sr.values.length}"/>${(sr.size ?? []).map((v, k) => (typeof v === 'number' ? `<c:pt idx="${k}"><c:v>${v}</c:v></c:pt>` : '')).join('')}</c:numLit></c:bubbleSize><c:bubble3D val="0"/>` : '';
     const smooth = type === 'line' || (scatter && type !== 'bubble') ? `<c:smooth val="${sr.smooth || /smooth/i.test(chart.scatterStyle ?? '') ? 1 : 0}"/>` : '';
-    return `<c:ser><c:idx val="${i}"/><c:order val="${i}"/>${tx}${spPr}${invert}${marker}${dPt}${labels}${cat}${val}${bsz}${smooth}</c:ser>`;
+    return `<c:ser><c:idx val="${i}"/><c:order val="${i}"/>${tx}${spPr}${invert}${marker}${dPt}${dPtBar}${labels}${trend}${cat}${val}${bsz}${smooth}</c:ser>`;
   };
   const pieLike = baseType === 'pie' || baseType === 'doughnut';
   const grouping = chart.grouping ?? 'clustered';
@@ -2345,7 +2378,7 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
     switch (g.kind) {
       case 'bar': case 'column': {
         const stackedG = grouping === 'stacked' || grouping === 'percentStacked';
-        return `<c:barChart><c:barDir val="${g.kind === 'bar' ? 'bar' : 'col'}"/><c:grouping val="${grouping}"/><c:varyColors val="0"/>${body}<c:gapWidth val="${typeof chart.gap === 'number' ? Math.round(chart.gap) : g.kind === 'bar' ? 182 : 150}"/>${stackedG ? '<c:overlap val="100"/>' : ''}${a}</c:barChart>`;
+        return `<c:barChart><c:barDir val="${g.kind === 'bar' ? 'bar' : 'col'}"/><c:grouping val="${grouping}"/><c:varyColors val="${chart.varyColors ? 1 : 0}"/>${body}<c:gapWidth val="${typeof chart.gap === 'number' ? Math.round(chart.gap) : g.kind === 'bar' ? 182 : 150}"/>${stackedG ? '<c:overlap val="100"/>' : typeof chart.overlap === 'number' ? `<c:overlap val="${Math.round(Math.max(-100, Math.min(100, chart.overlap)))}"/>` : ''}${a}</c:barChart>`;
       }
       case 'line': return `<c:lineChart><c:grouping val="${grouping === 'clustered' ? 'standard' : grouping}"/><c:varyColors val="0"/>${body}<c:marker val="1"/>${a}</c:lineChart>`;
       case 'area': return `<c:areaChart><c:grouping val="${grouping === 'clustered' ? 'standard' : grouping}"/><c:varyColors val="0"/>${body}${a}</c:areaChart>`;
@@ -2360,7 +2393,7 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
   }).join('');
   const horizontal = baseType === 'bar';
   const axTitle = (t) => (t ? `<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="ko-KR" sz="1000" b="0"/><a:t>${esc(t)}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title>` : '');
-  const scaling = (cfg) => `<c:scaling><c:orientation val="minMax"/>${typeof cfg?.max === 'number' ? `<c:max val="${cfg.max}"/>` : ''}${typeof cfg?.min === 'number' ? `<c:min val="${cfg.min}"/>` : ''}</c:scaling>`;
+  const scaling = (cfg) => `<c:scaling><c:orientation val="${cfg?.reverse ? 'maxMin' : 'minMax'}"/>${typeof cfg?.max === 'number' ? `<c:max val="${cfg.max}"/>` : ''}${typeof cfg?.min === 'number' ? `<c:min val="${cfg.min}"/>` : ''}</c:scaling>`;
   const numFmt = (cfg) => (cfg?.numFmt ? `<c:numFmt formatCode="${esc(cfg.numFmt)}" sourceLinked="0"/>` : '<c:numFmt formatCode="General" sourceLinked="1"/>');
   const catAxis = (id, cross, pos, del) => (baseType === 'scatter' || baseType === 'bubble'
     ? `<c:valAx><c:axId val="${id}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="${del ? 1 : 0}"/><c:axPos val="${pos}"/><c:numFmt formatCode="General" sourceLinked="1"/><c:tickLblPos val="nextTo"/><c:crossAx val="${cross}"/><c:crosses val="autoZero"/><c:crossBetween val="midCat"/></c:valAx>`
@@ -2389,9 +2422,11 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
   const tb = Object.fromEntries(TB_KEYS.filter((k) => chart[k] !== undefined && chart[k] !== null).map((k) => [k, chart[k]]));
   if (subsetPivot) tb.wxPivot = chart.pivot; // 위셀로 다시 열면 슬라이서와 연동되는 피벗 차트로 복원
   const extLst = Object.keys(tb).length > 1 || FALLBACK[chart.type] ? `<c:extLst><c:ext uri="{5E2A6C7B-8F4D-4B1A-9C3E-7D6F1A2B3C4D}" xmlns:tb="urn:tabula:chart"><tb:props json="${esc(JSON.stringify(tb))}"/></c:ext></c:extLst>` : '';
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="${NS_R}"><c:roundedCorners val="${chart.rounded ? 1 : 0}"/>${pivotSrc}<c:chart>${title}${pivotFmts}<c:plotArea><c:layout/>${groupXml}${axesXml}${plotSpPr}</c:plotArea>${legend}<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart>${areaSpPr}${extLst}</c:chartSpace>`;
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="${NS_R}"><c:roundedCorners val="${chart.rounded ? 1 : 0}"/>${pivotSrc}<c:chart>${title}${pivotFmts}<c:plotArea><c:layout/>${groupXml}${axesXml}${chart.dataTable && !pieLike ? '<c:dTable><c:showHorzBorder val="1"/><c:showVertBorder val="1"/><c:showOutline val="1"/><c:showKeys val="1"/></c:dTable>' : ''}${plotSpPr}</c:plotArea>${legend}<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart>${areaSpPr}${extLst}</c:chartSpace>`;
 }
 
+const DASH_XML = { dash: '<a:prstDash val="dash"/>', dot: '<a:prstDash val="sysDot"/>', dashDot: '<a:prstDash val="dashDot"/>', longDash: '<a:prstDash val="lgDash"/>', sysDash: '<a:prstDash val="sysDash"/>' };
+const DASH_FROM = { dash: 'dash', sysDot: 'dot', dot: 'dot', dashDot: 'dashDot', sysDashDot: 'dashDot', lgDash: 'longDash', sysDash: 'sysDash' };
 const KIND_PRST = { arrow: 'rightArrow', textbox: 'rect', line: 'straightConnector1' };
 const prstOf = (kind) => KIND_PRST[kind] ?? (GEOM[kind] || LINE_KINDS.has(kind) ? kind : 'rect');
 const hex6 = (c) => (c ?? '#000000').replace('#', '').toUpperCase().padStart(6, '0').slice(0, 6);

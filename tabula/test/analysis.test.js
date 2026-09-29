@@ -154,3 +154,28 @@ test('위셀 피벗 차트: 고른 지표만 · 엑셀에는 피벗 범위 참�
   const back = new Workbook(readXlsx(bytes).data);
   assert.deepEqual(back.sheets[0].charts[0].pivot, chart.pivot);
 });
+
+test('차트 서식: 데이터 표 · 추세선 · 선 종류 · 요소 색 · 겹치기 · 값 축 거꾸로 xlsx 왕복', async () => {
+  const { renderChartSvg } = await import('../src/chart.js');
+  const wb = sheetWith([['월', '1월', '2월', '3월', '4월'], ['비용', 10, 20, 30, 25], ['ROAS', 3, 4, 2, 5]]);
+  const chart = {
+    id: 'c', type: 'combo', title: 't', x: 0, y: 0, w: 500, h: 320, dataTable: true, overlap: 20, varyColors: false, axes: { y: { reverse: true } },
+    series: [{ name: { text: '비용' }, cat: { r1: 1, c1: 0, r2: 4, c2: 0 }, val: { r1: 1, c1: 1, r2: 4, c2: 1 } }, { name: { text: 'ROAS' }, cat: { r1: 1, c1: 0, r2: 4, c2: 0 }, val: { r1: 1, c1: 2, r2: 4, c2: 2 } }],
+    seriesFmt: [{ type: 'column', trend: 'linear', pointColors: { 2: '#ff0000' }, labels: true, labelPos: 'center' }, { type: 'line', axis: 1, dash: 'dash', trend: 'movingAvg', trendPeriod: 2 }],
+  };
+  wb.transact(() => wb.setSheetProp(0, 'charts', [chart]));
+  const back = new Workbook(readXlsx(writeXlsx(wb)).data).sheets[0].charts[0];
+  assert.equal(back.dataTable, true);
+  assert.equal(back.overlap, 20);
+  assert.equal(back.axes.y.reverse, true);
+  assert.equal(back.seriesFmt[0].trend, 'linear');
+  assert.equal(back.seriesFmt[0].pointColors[2], '#ff0000');
+  assert.equal(back.seriesFmt[0].labelPos, 'center');
+  assert.equal(back.seriesFmt[1].dash, 'dash');
+  assert.equal(back.seriesFmt[1].trend, 'movingAvg');
+  assert.equal(back.seriesFmt[1].trendPeriod, 2);
+  const svg = renderChartSvg({ ...chart, labels: true }, { categories: ['1월', '2월', '3월', '4월'], series: [{ name: '비용', values: [10, 20, 30, 25], type: 'column', trend: 'linear', pointColors: { 2: '#ff0000' } }, { name: 'ROAS', values: [3, 4, 2, 5], type: 'line', axis: 1, dash: 'dash' }] });
+  assert.match(svg, /fill="#ff0000"/);
+  assert.match(svg, /stroke-dasharray/);
+  assert.match(svg, />1월</);
+});

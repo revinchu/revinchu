@@ -326,6 +326,11 @@ export function renderChartSvg(chart, data) {
     x: 10 + (legendPos === 'l' ? legendW : 0), y: top + (legendPos === 't' ? legendH : 0),
     w: W - 20 - legendW, h: H - top - 10 - legendH,
   };
+  // 데이터 표 (엑셀 [차트 요소 → 데이터 표]): 그림 영역 아래에 항목 × 계열 값 표 (범례 표지 포함)
+  const DT_ROW = Math.round(FS.axis * 1.7);
+  const hasTable = !!chart.dataTable && !pieLike && !special && baseType !== 'scatter' && baseType !== 'bar' && series.length > 0;
+  const dtH = hasTable ? DT_ROW * (series.length + 1) : 0;
+  plot.h -= Math.max(0, dtH - Math.round(FS.axis * 1.9));
 
   if (!series.length || series.every((s) => s.values.every((v) => v === null))) {
     parts.push(`<text x="${W / 2}" y="${H / 2}" text-anchor="middle" font-size="12" fill="#999">표시할 숫자 데이터가 없습니다</text></svg>`);
@@ -480,11 +485,18 @@ export function renderChartSvg(chart, data) {
   const catLabelW = horizontal ? Math.min(140, maxOf(categories.map((c) => [...c].length)) * CW * 1.4 + 8) : 0;
   const area = horizontal
     ? { x: plot.x + catLabelW, y: plot.y, w: plot.w - catLabelW - 10, h: plot.h - 18 }
-    : { x: plot.x + labelW, y: plot.y + 4, w: plot.w - labelW - 6 - label2W, h: plot.h - Math.round(FS.axis * 1.9) };
+    : (() => {
+      // 데이터 표가 있으면 왼쪽에 계열 이름이 들어갈 자리
+      const lw = hasTable ? Math.max(labelW, Math.min(140, maxOf(series.map((s) => [...String(s.name)].length)) * CW * 1.25 + 24)) : labelW;
+      return { x: plot.x + lw, y: plot.y + 4, w: plot.w - lw - 6 - label2W, h: plot.h - Math.round(FS.axis * 1.9) };
+    })();
   if (area.w < 20 || area.h < 20) return finish();
-  const posFor = (sc) => (v) => (horizontal
-    ? area.x + ((v - sc.min) / (sc.max - sc.min)) * area.w
-    : area.y + area.h - ((v - sc.min) / (sc.max - sc.min)) * area.h);
+  // 값 축 거꾸로 (엑셀 축 서식 '값을 거꾸로')
+  const rev = !!chart.axes?.y?.reverse;
+  const posFor = (sc) => (v) => {
+    const f = (v - sc.min) / (sc.max - sc.min);
+    return horizontal ? area.x + (rev ? 1 - f : f) * area.w : area.y + area.h - (rev ? 1 - f : f) * area.h;
+  };
   const vpos = posFor(scale);
   const vpos2 = scale2 ? posFor(scale2) : vpos;
   const posOf = (s) => (s.axis === 1 && scale2 ? vpos2 : s.axis === primaryAxis || !scale2 ? vpos : vpos2);
@@ -547,7 +559,7 @@ export function renderChartSvg(chart, data) {
       }
     }
     categories.forEach((c, i) => {
-      if (i % every || hideX) return;
+      if (i % every || hideX || hasTable) return;
       const mid = (horizontal ? area.y : area.x) + band * (i + 0.5);
       if (horizontal) parts.push(`<text x="${area.x - 5}" y="${(mid + 3.5).toFixed(1)}" text-anchor="end" font-size="${FS.axis}" fill="${TXT}">${escSvg(truncate(c, 16))}</text>`);
       else parts.push(`<text x="${mid.toFixed(1)}" y="${area.y + area.h + Math.round(FS.axis * 1.35)}" text-anchor="middle" font-size="${FS.axis}" fill="${TXT}">${escSvg(truncate(c, maxChars * every))}</text>`);
@@ -557,7 +569,11 @@ export function renderChartSvg(chart, data) {
     if (bars.length) {
       const k = stacked ? 1 : bars.length;
       const groupW = isNum(chart.gap) ? band / (1 + Math.max(0, chart.gap) / 100) : band * 0.65;
-      const barW = groupW / k;
+      // 계열 겹치기 (-100 ~ 100%): 양수면 막대가 겹치고 음수면 간격이 생김
+      const ov = isNum(chart.overlap) && !stacked && k > 1 ? Math.max(-100, Math.min(100, chart.overlap)) / 100 : 0;
+      const barW = groupW / (k - (k - 1) * ov);
+      const stepW = barW * (1 - ov);
+      const vary = chart.varyColors && bars.length === 1;
       const posAcc = new Array(n).fill(0);
       const negAcc = new Array(n).fill(0);
       const totals = pct ? categories.map((_, i) => bars.reduce((a, s) => a + Math.abs(isNum(s.values[i]) ? s.values[i] : 0), 0) || 1) : null;
@@ -569,7 +585,8 @@ export function renderChartSvg(chart, data) {
         s.values.forEach((raw, i) => {
           if (!isNum(raw)) return;
           const v = pct ? raw / totals[i] : raw;
-          const start = (horizontal ? area.y : area.x) + band * i + (band - groupW) / 2 + barW * (stacked ? 0 : bi);
+          const start = (horizontal ? area.y : area.x) + band * i + (band - groupW) / 2 + stepW * (stacked ? 0 : bi);
+          const pf = s.pointColors?.[i] ?? (vary ? pal[i % pal.length] : bf);
           let from = b0;
           let to = vp(v);
           if (stacked) {
@@ -580,11 +597,23 @@ export function renderChartSvg(chart, data) {
           }
           const a = Math.min(from, to);
           const len = Math.abs(to - from);
-          if (horizontal) parts.push(`<rect x="${a.toFixed(1)}" y="${start.toFixed(1)}" width="${len.toFixed(1)}" height="${Math.max(1, barW - 1).toFixed(1)}" fill="${bf}"${sh}/>`);
-          else parts.push(`<rect x="${start.toFixed(1)}" y="${a.toFixed(1)}" width="${Math.max(1, barW - 1).toFixed(1)}" height="${len.toFixed(1)}" fill="${bf}"${sh}/>`);
+          const stroke = s.outline ? ` stroke="${s.outline}" stroke-width="1"` : '';
+          if (horizontal) parts.push(`<rect x="${a.toFixed(1)}" y="${start.toFixed(1)}" width="${len.toFixed(1)}" height="${Math.max(1, barW - 1).toFixed(1)}" fill="${pf}"${stroke}${sh}/>`);
+          else parts.push(`<rect x="${start.toFixed(1)}" y="${a.toFixed(1)}" width="${Math.max(1, barW - 1).toFixed(1)}" height="${len.toFixed(1)}" fill="${pf}"${stroke}${sh}/>`);
           if (wantLabels(s)) {
-            if (horizontal) pushLabel((stacked ? (from + to) / 2 : Math.max(from, to) + 4), start + barW / 2 + 3.5, raw, s, stacked ? 'middle' : 'start');
-            else pushLabel(start + barW / 2, stacked ? (from + to) / 2 + 3.5 : Math.min(from, to) - 4, raw, s);
+            // 레이블 위치: 바깥쪽 끝(기본) · 가운데 · 안쪽 끝 · 안쪽 축
+            const lp = stacked && !s.labelPos ? 'center' : s.labelPos ?? 'outEnd';
+            if (horizontal) {
+              const hi = Math.max(from, to);
+              const lo = Math.min(from, to);
+              const x = lp === 'center' ? (from + to) / 2 : lp === 'insideEnd' ? hi - 4 : lp === 'insideBase' ? lo + 4 : hi + 4;
+              pushLabel(x, start + barW / 2 + 3.5, raw, s, lp === 'center' ? 'middle' : lp === 'insideEnd' ? 'end' : 'start');
+            } else {
+              const topY = Math.min(from, to);
+              const botY = Math.max(from, to);
+              const y = lp === 'center' ? (from + to) / 2 + 3.5 : lp === 'insideEnd' ? topY + 12 : lp === 'insideBase' ? botY - 4 : topY - 4;
+              pushLabel(start + barW / 2, y, raw, s);
+            }
           }
         });
       });
@@ -617,7 +646,7 @@ export function renderChartSvg(chart, data) {
               : `L${seg.at(-1)[0].toFixed(1)},${b0.toFixed(1)}L${seg[0][0].toFixed(1)},${b0.toFixed(1)}`;
             parts.push(`<path d="${d}${back}Z" fill="${fillOf(s)}" fill-opacity="${stacked ? 0.9 : 0.75}"/>`);
           } else {
-            parts.push(`<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.lineWidth ?? 2.25}" stroke-linejoin="round" stroke-linecap="round"${shadowAttr(s)}/>`);
+            parts.push(`<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.lineWidth ?? 2.25}" stroke-linejoin="round" stroke-linecap="round"${dashAttr(s.dash, s.lineWidth ?? 2.25)}${shadowAttr(s)}/>`);
             const mkName = s.marker ?? chart.marker;
             if (mkName !== false && mkName !== 'none') {
               const mk = MARKERS[mkName] ?? MARKERS.circle;
@@ -630,6 +659,65 @@ export function renderChartSvg(chart, data) {
       });
     }
   }
+  // 추세선 (선형 · 이동 평균 · 지수) — 항목 순서를 x 로
+  if (baseType !== 'scatter') {
+    series.forEach((s) => {
+      if (!s.trend) return;
+      const vp = posOf(s);
+      const bandT = (horizontal ? area.h : area.w) / Math.max(1, n);
+      const at = (i) => (horizontal ? area.y : area.x) + bandT * (i + 0.5);
+      const pts = s.values.map((v, i) => (isNum(v) ? [i, v] : null)).filter(Boolean);
+      if (pts.length < 2) return;
+      let path = '';
+      const fmt = (x, y) => (horizontal ? `${vp(y).toFixed(1)},${at(x).toFixed(1)}` : `${at(x).toFixed(1)},${vp(y).toFixed(1)}`);
+      if (s.trend === 'movingAvg') {
+        const k = Math.max(2, Math.min(pts.length, s.trendPeriod ?? 3));
+        const out = [];
+        for (let j = k - 1; j < pts.length; j++) { let acc = 0; for (let q = j - k + 1; q <= j; q++) acc += pts[q][1]; out.push([pts[j][0], acc / k]); }
+        path = out.map((p, j) => `${j ? 'L' : 'M'}${fmt(p[0], p[1])}`).join('');
+      } else {
+        const expo = s.trend === 'exp' && pts.every((p) => p[1] > 0);
+        const ys = pts.map((p) => (expo ? Math.log(p[1]) : p[1]));
+        const mx = pts.reduce((a, p) => a + p[0], 0) / pts.length;
+        const my = ys.reduce((a, y) => a + y, 0) / ys.length;
+        let sxy = 0; let sxx = 0;
+        pts.forEach((p, j) => { sxy += (p[0] - mx) * (ys[j] - my); sxx += (p[0] - mx) ** 2; });
+        const b = sxx ? sxy / sxx : 0;
+        const a0 = my - b * mx;
+        const f = (x) => (expo ? Math.exp(a0 + b * x) : a0 + b * x);
+        const x0 = pts[0][0];
+        const x1 = pts.at(-1)[0] + (s.trendForward ?? 0);
+        const steps = expo ? 24 : 1;
+        for (let q = 0; q <= steps; q++) { const x = x0 + ((x1 - x0) * q) / steps; path += `${q ? 'L' : 'M'}${fmt(x, f(x))}`; }
+      }
+      parts.push(`<path d="${path}" fill="none" stroke="${s.trendColor ?? s.color}" stroke-width="1.5" stroke-dasharray="5 3"/>`);
+    });
+  }
+  // 데이터 표
+  if (hasTable) {
+    const y0 = area.y + area.h + 2;
+    const bandT = area.w / Math.max(1, n);
+    const x0 = plot.x;
+    const rows = [['', ...categories], ...series.map((s) => [s.name, ...s.values.map((v) => (isNum(v) ? valueLabel(v, s.numFmt) : ''))])];
+    const lineC = '#d9d9d9';
+    parts.push(`<rect x="${x0}" y="${y0}" width="${area.x + area.w - x0}" height="${DT_ROW * rows.length}" fill="none" stroke="${lineC}"/>`);
+    rows.forEach((row, r) => {
+      const y = y0 + DT_ROW * r;
+      if (r) parts.push(`<line x1="${x0}" y1="${y}" x2="${area.x + area.w}" y2="${y}" stroke="${lineC}"/>`);
+      // 첫 칸: 계열 이름 + 범례 표지
+      if (r) {
+        const s = series[r - 1];
+        parts.push(s.type === 'line' ? `<line x1="${x0 + 3}" y1="${y + DT_ROW / 2}" x2="${x0 + 13}" y2="${y + DT_ROW / 2}" stroke="${s.color}" stroke-width="2"/>` : `<rect x="${x0 + 4}" y="${y + DT_ROW / 2 - 4}" width="8" height="8" fill="${s.color}"/>`);
+        parts.push(T(x0 + 16, y + DT_ROW / 2 + FS.axis * 0.35, truncate(String(row[0]), Math.max(2, Math.floor((area.x - x0 - 18) / CW))), FS.axis, TXT, 'start'));
+      }
+      row.slice(1).forEach((cell, i) => {
+        const cx = area.x + bandT * (i + 0.5);
+        if (r === 0 || i === 0) parts.push(`<line x1="${(area.x + bandT * i).toFixed(1)}" y1="${y0}" x2="${(area.x + bandT * i).toFixed(1)}" y2="${y0 + DT_ROW * rows.length}" stroke="${lineC}"/>`);
+        parts.push(T(cx, y + DT_ROW / 2 + FS.axis * 0.35, truncate(String(cell), Math.max(2, Math.floor(bandT / (CW * 1.1)))), FS.axis, TXT));
+      });
+    });
+    for (let i = 1; i < n; i++) parts.push(`<line x1="${(area.x + bandT * i).toFixed(1)}" y1="${y0}" x2="${(area.x + bandT * i).toFixed(1)}" y2="${y0 + DT_ROW * rows.length}" stroke="${lineC}"/>`);
+  }
   // 기준선
   if (horizontal) parts.push(`<line x1="${base}" y1="${area.y}" x2="${base}" y2="${area.y + area.h}" stroke="#bfbfbf"/>`);
   else parts.push(`<line x1="${area.x}" y1="${base}" x2="${area.x + area.w}" y2="${base}" stroke="#bfbfbf"/>`);
@@ -638,6 +726,13 @@ export function renderChartSvg(chart, data) {
   if (scale2) parts.push(axisTitle(chart.axes?.y2?.title, area.x + area.w + label2W - 2, area.y + area.h / 2, 90));
   parts.push(axisTitle(chart.axes?.x?.title, area.x + area.w / 2, H - (legendH ? legendH + 2 : 2)));
   return finish();
+}
+
+/** 선 종류 → stroke-dasharray (실선 · 파선 · 점선 · 일점쇄선 · 긴 파선) */
+function dashAttr(dash, w = 2) {
+  const k = Math.max(1, w);
+  const pat = { dash: [4, 3], dot: [1, 2], dashDot: [4, 2, 1, 2], longDash: [8, 3], sysDash: [3, 1] }[dash];
+  return pat ? ` stroke-dasharray="${pat.map((x) => x * k).join(' ')}"` : '';
 }
 
 /** 부드러운 곡선 (Catmull-Rom → 베지어) */

@@ -4374,6 +4374,16 @@ function chartSwitchRowCol() {
 
 /** 차트 서식 창 (엑셀의 [차트 영역 서식] 작업 창): 영역 · 제목 · 축 · 계열 · 레이블 */
 let chartPaneDlg = null;
+/** 데이터 요소(항목 하나)의 색 (엑셀: 요소 하나를 골라 채우기) */
+function pointColorRow(s, f, setF) {
+  const cats = s.categories ?? null;
+  const idx = el('select', {}, (s.values ?? []).map((_, k) => el('option', { value: String(k) }, `${k + 1}. ${String(cats?.[k] ?? '').slice(0, 16)}`)));
+  const inp = el('input', { type: 'color', value: '#ed7d31' });
+  const apply = () => setF({ pointColors: { ...(f.pointColors ?? {}), [idx.value]: inp.value } });
+  inp.addEventListener('input', apply);
+  return el('label', { class: 'cfp-row' }, el('span', {}, '요소 색'), el('span', { class: 'cfp-color' }, idx, inp,
+    el('button', { class: 'btn small', onclick: () => { const pc = { ...(f.pointColors ?? {}) }; delete pc[idx.value]; setF({ pointColors: Object.keys(pc).length ? pc : undefined }); } }, '되돌리기')));
+}
 function chartFormatPane(id = chartSel) {
   const ch0 = sheet().charts.find((c) => c.id === id);
   if (!ch0) { toast('차트를 선택하세요.'); return; }
@@ -4399,6 +4409,8 @@ function chartFormatPane(id = chartSel) {
     const data = chartModelData(wb, si, ch);
     body.replaceChildren(
       sec('차트 영역',
+        row('너비(px)', num(Math.round(ch.w), (v) => v && up({ w: clamp(v, 120, 4000) }), { min: 120, max: 4000, step: 1 })),
+        row('높이(px)', num(Math.round(ch.h), (v) => v && up({ h: clamp(v, 90, 4000) }), { min: 90, max: 4000, step: 1 })),
         row('채우기', color(ch.fill, (v) => up({ fill: v }))),
         row('테두리', color(ch.border, (v) => up({ border: v }))),
         row('둥근 모서리', chk(ch.rounded, (v) => up({ rounded: v || undefined }))),
@@ -4415,6 +4427,7 @@ function chartFormatPane(id = chartSel) {
         row('최소값', num(axis('y').min, (v) => setAx('y', { min: v }))),
         row('최대값', num(axis('y').max, (v) => setAx('y', { max: v }))),
         row('주 단위', num(axis('y').major, (v) => setAx('y', { major: v }), { min: 0 })),
+        row('값을 거꾸로', chk(axis('y').reverse, (v) => setAx('y', { reverse: v || undefined }))),
         row('표시 형식', txt(axis('y').numFmt, (v) => setAx('y', { numFmt: v || undefined }))),
         row('제목', txt(axis('y').title, (v) => setAx('y', { title: v || undefined }))),
         row('주 눈금선', chk(ch.gridY !== false, (v) => up({ gridY: v ? undefined : false }))),
@@ -4432,9 +4445,12 @@ function chartFormatPane(id = chartSel) {
       sec('범례 · 레이블',
         row('범례 위치', sel2(ch.legend ?? 'b', [['b', '아래쪽'], ['t', '위쪽'], ['r', '오른쪽'], ['l', '왼쪽'], ['none', '없음']], (v) => up({ legend: v }))),
         row('범례 글꼴(pt)', num(ch.legendSize, (v) => up({ legendSize: v }), { min: 6, max: 24 })),
-        row('데이터 레이블', chk(ch.labels, (v) => up({ labels: v || undefined })))),
+        row('데이터 레이블', chk(ch.labels, (v) => up({ labels: v || undefined }))),
+        row('데이터 표', chk(ch.dataTable, (v) => up({ dataTable: v || undefined })))),
       sec('계열 옵션',
         row('간격 너비(%)', num(ch.gap, (v) => up({ gap: v }), { min: 0, max: 500 })),
+        row('계열 겹치기(%)', num(ch.overlap, (v) => up({ overlap: v }), { min: -100, max: 100 })),
+        row('요소마다 다른 색', chk(ch.varyColors, (v) => up({ varyColors: v || undefined }))),
         row('배치', sel2(ch.grouping ?? 'clustered', [['clustered', '묶은'], ['stacked', '누적'], ['percentStacked', '100% 기준 누적']], (v) => up({ grouping: v === 'clustered' ? undefined : v }))),
         ch.type === 'doughnut' ? row('도넛 구멍 크기(%)', num(ch.hole ?? 50, (v) => up({ hole: v }), { min: 10, max: 90 })) : null,
         ch.type === 'pie' || ch.type === 'doughnut' ? row('첫째 조각 각(°)', num(ch.firstAngle ?? 0, (v) => up({ firstAngle: v }), { min: 0, max: 360 })) : null,
@@ -4453,7 +4469,15 @@ function chartFormatPane(id = chartSel) {
             row('표식', sel2(f.marker ?? '', [['', '자동'], ['none', '없음'], ['circle', '원'], ['square', '사각형'], ['diamond', '마름모'], ['triangle', '삼각형']], (v) => setF({ marker: v || undefined }))),
             row('부드러운 선', chk(f.smooth, (v) => setF({ smooth: v || undefined }))),
             row('레이블', chk(f.labels, (v) => setF({ labels: v || undefined }))),
-            row('레이블 형식', txt(f.numFmt, (v) => setF({ numFmt: v || undefined }))));
+            row('레이블 형식', txt(f.numFmt, (v) => setF({ numFmt: v || undefined }))),
+            row('레이블 위치', sel2(f.labelPos ?? '', [['', '자동'], ['outEnd', '바깥쪽 끝에'], ['insideEnd', '안쪽 끝에'], ['center', '가운데'], ['insideBase', '축 쪽에']], (v) => setF({ labelPos: v || undefined }))),
+            row('선 종류', sel2(f.dash ?? '', [['', '실선'], ['dash', '파선'], ['dot', '점선'], ['dashDot', '일점 쇄선'], ['longDash', '긴 파선']], (v) => setF({ dash: v || undefined }))),
+            row('표식 크기', num(f.markerSize, (v) => setF({ markerSize: v }), { min: 2, max: 30 })),
+            row('테두리 색', color(f.outline, (v) => setF({ outline: v }))),
+            row('추세선', sel2(f.trend ?? '', [['', '없음'], ['linear', '선형'], ['exp', '지수'], ['movingAvg', '이동 평균']], (v) => setF({ trend: v || undefined }))),
+            f.trend === 'movingAvg' ? row('이동 평균 구간', num(f.trendPeriod ?? 3, (v) => setF({ trendPeriod: v }), { min: 2, max: 50 })) : null,
+            f.trend && f.trend !== 'movingAvg' ? row('앞으로 예측(구간)', num(f.trendForward, (v) => setF({ trendForward: v || undefined }), { min: 0, max: 100 })) : null,
+            pointColorRow({ ...s, categories: data.categories }, f, setF));
         })),
     );
   };
