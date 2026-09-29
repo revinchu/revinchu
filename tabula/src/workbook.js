@@ -326,9 +326,9 @@ function sheetFromData(s) {
 
 /** 시트의 부가 속성 (셀 외) — 저장/복원/복제용 */
 const SHEET_PROPS = ['colWidths', 'rowHeights', 'merges', 'cond', 'colStyles', 'rowStyles', 'allStyle',
-  'hiddenRows', 'hiddenCols', 'rowManual', 'freeze', 'filter', 'charts', 'pivot', 'validations', 'images', 'shapes', 'tables', 'slicers', 'pivotsExtra', 'state', 'noGrid', 'outline', 'protect', 'sparklines', 'page'];
+  'hiddenRows', 'hiddenCols', 'rowManual', 'freeze', 'filter', 'charts', 'pivot', 'validations', 'images', 'shapes', 'tables', 'slicers', 'pivotsExtra', 'state', 'noGrid', 'outline', 'protect', 'sparklines', 'page', 'defRowH', 'defColW', 'zoom', 'view'];
 // 바뀌어도 수식 결과가 달라지지 않는 시트 속성
-const CALC_NEUTRAL = new Set(['outline', 'protect', 'sparklines', 'page', 'state', 'noGrid', 'charts', 'images', 'shapes', 'slicers', 'freeze', 'cond', 'validations', 'colStyles', 'rowStyles', 'allStyle', 'merges']);
+const CALC_NEUTRAL = new Set(['defRowH', 'defColW', 'zoom', 'view', 'outline', 'protect', 'sparklines', 'page', 'state', 'noGrid', 'charts', 'images', 'shapes', 'slicers', 'freeze', 'cond', 'validations', 'colStyles', 'rowStyles', 'allStyle', 'merges']);
 
 /** 숫자 키 객체의 키를 삽입/삭제에 맞춰 이동 */
 function shiftKeys(obj, index, count) {
@@ -673,8 +673,8 @@ export class Workbook {
     if (!own && s.blocks.length) { const b = this.blockAt(si, r, c); if (b) own = b.cols[c - b.c0].fmt ?? undefined; }
     const col = s.colStyles[c];
     const row = s.rowStyles[r];
-    if (!s.allStyle && !col && !row) return own ?? EMPTY_STYLE;
-    return { ...s.allStyle, ...col, ...row, ...own };
+    if (!s.allStyle && !col && !row) return own ?? this.baseStyle ?? EMPTY_STYLE;
+    return { ...(own ? null : this.baseStyle), ...s.allStyle, ...col, ...row, ...own };
   }
 
   hasLineStyle(si, r, c) {
@@ -1057,8 +1057,8 @@ export class Workbook {
     return res;
   }
 
-  colWidth(si, c) { return this.sheets[si].colWidths[c] ?? DEFAULT_COL_WIDTH; }
-  rowHeight(si, r) { return this.sheets[si].rowHeights[r] ?? DEFAULT_ROW_HEIGHT; }
+  colWidth(si, c) { const s = this.sheets[si]; return s.colWidths[c] ?? s.defColW ?? DEFAULT_COL_WIDTH; }
+  rowHeight(si, r) { const s = this.sheets[si]; return s.rowHeights[r] ?? s.defRowH ?? DEFAULT_ROW_HEIGHT; }
 
   /** si 를 주면 그 시트의 버전만, 아니면 모든 시트의 버전을 올림 (피벗 원본 캐시가 씀) */
   invalidate(si) {
@@ -1417,7 +1417,7 @@ export class Workbook {
 
   setStyle(si, r, c, patch) {
     const cur = this.getCell(si, r, c);
-    const style = { ...(cur?.style || {}), ...patch };
+    const style = { ...(cur?.style || this.baseStyle || {}), ...patch };
     this.setCellData(si, r, c, { raw: cur?.raw ?? '', style, comment: cur?.comment, link: cur?.link, image: cur?.image, cached: cur?.cached });
   }
 
@@ -1450,7 +1450,7 @@ export class Workbook {
     const before = { ...sheet.rowHeights };
     const beforeManual = { ...sheet.rowManual };
     const v = Math.max(0, Math.round(h));
-    if (!manual && v === DEFAULT_ROW_HEIGHT) delete sheet.rowHeights[r];
+    if (!manual && v === (sheet.defRowH ?? DEFAULT_ROW_HEIGHT)) delete sheet.rowHeights[r];
     else sheet.rowHeights[r] = v;
     if (manual) sheet.rowManual[r] = true;
     else delete sheet.rowManual[r];
@@ -1831,6 +1831,9 @@ export class Workbook {
     return {
       version: 1,
       ...(this.vba ? { vba: this.vba } : {}),
+      ...(this.defaultFont ? { defaultFont: { ...this.defaultFont } } : {}),
+      ...(this.baseStyle ? { baseStyle: { ...this.baseStyle } } : {}),
+      ...(this.theme ? { theme: [...this.theme] } : {}),
       ...(this.names.length ? { names: this.names.map(({ _ast, _text, ...n }) => ({ ...n })) } : {}),
       sheets: this.sheets.map((s) => {
         const cells = {};
@@ -1916,6 +1919,10 @@ export class Workbook {
       if (s._sid) { sheet._sid = s._sid; sheet._ev = s._ev; } // 자동 저장 기록 (바뀐 시트만 다시 저장)
       sheets.push(sheet);
     }
+    this.defaultFont = data.defaultFont ?? null; // 통합 문서 기본 글꼴 { name, size } (없으면 맑은 고딕 11)
+    this.fitRows = data.fitRows ?? null; // 파일을 열 때 자동 높이로 맞출 행 (저장하지 않음)
+    this.theme = data.theme ?? null; // 파일의 테마 색 (없으면 Office 기본)
+    this.baseStyle = data.baseStyle ?? null; // 기본 셀 서식 (xlsx 의 xf 0) — 서식이 없는 셀에 적용
     this.vba = data.vba ?? null; // .xlsm 의 매크로(vbaProject.bin, base64) — 실행하지 않고 보존만 함
     this.names = (data.names ?? []).map((n) => ({ ...n }));
     this.sheets = sheets.length ? sheets : [newSheet('Sheet1')];

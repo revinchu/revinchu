@@ -19,6 +19,7 @@ import { BLOCK_MIN_ROWS, ColBuilder, inBlock, blockValue } from './block.js';
 import { normalizeStyleName, DEFAULT_TABLE_STYLE, dataTop, dataBottom, canonicalRef, tableAt, columnNames, findTable } from './tables.js';
 import { pivotSourceData, resolvePivot, itemText, keyOf, sortKeys, EMPTY, headerNames, normalizeDef, computePivot, valueName, showAsPercent } from './pivot.js';
 import { slicerStyleName } from './slicerstyle.js';
+import { applyTint, DEFAULT_THEME } from './stylepresets.js';
 
 const NS_MAIN = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
 const NS_R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -29,8 +30,16 @@ const EMU = 9525; // 1px
 const DEFAULT_FONT = '맑은 고딕';
 
 // ───────────────────────── 공통 ─────────────────────────
-const px2width = (px) => Math.max(0, Math.round(((px - 5) / 7) * 256) / 256);
-const width2px = (w) => Math.max(0, Math.round(w * 7 + 5));
+// 엑셀 열 너비: 파일의 너비(w) × 기본 글꼴의 숫자 너비(MDW, 픽셀). 기본 글꼴이 맑은 고딕 11pt 면 MDW 8, Calibri 11pt 면 7
+const DIGIT_EM = { calibri: 0.507, 'calibri light': 0.49, '맑은 고딕': 0.55, 'malgun gothic': 0.55, arial: 0.556, '굴림': 0.5, gulim: 0.5, '굴림체': 0.5, '돋움': 0.5, dotum: 0.5, '돋움체': 0.5, '바탕': 0.5, batang: 0.5, '나눔고딕': 0.55, nanumgothic: 0.55, 'times new roman': 0.5, cambria: 0.556, 'segoe ui': 0.55, verdana: 0.636, tahoma: 0.546, 'meiryo ui': 0.55, 'ms gothic': 0.5, simsun: 0.5 };
+export const digitWidth = (font) => Math.max(4, Math.round(((font?.size || 11) * 96) / 72 * (DIGIT_EM[String(font?.name ?? '맑은 고딕').toLowerCase()] ?? 0.53)));
+const width2pxM = (w, mdw) => Math.max(0, Math.trunc(((256 * w + Math.trunc(128 / mdw)) / 256) * mdw));
+const px2widthM = (px, mdw) => Math.max(0, Math.round((px / mdw) * 256) / 256);
+/** 기본 열 너비(글자 수, baseColWidth) → 픽셀: 8 픽셀 단위로 올림 (엑셀과 같음) */
+const baseColPx = (base, mdw) => Math.ceil((base * mdw + 5) / 8) * 8;
+const WRITE_FONT = { name: '맑은 고딕', size: 11 };
+const px2width = (px, mdw = digitWidth(WRITE_FONT)) => px2widthM(px, mdw);
+const width2px = (w, mdw = 7) => width2pxM(w, mdw);
 const pt2px = (pt) => Math.round((pt * 4) / 3);
 const px2pt = (px) => Math.round(px * 0.75 * 100) / 100;
 
@@ -57,38 +66,6 @@ const INDEXED = ('000000,FFFFFF,FF0000,00FF00,0000FF,FFFF00,FF00FF,00FFFF,000000
   + '800000,008000,000080,808000,800080,008080,C0C0C0,808080,9999FF,993366,FFFFCC,CCFFFF,660066,FF8080,0066CC,CCCCFF,'
   + '000080,FF00FF,FFFF00,00FFFF,800080,800000,008080,0000FF,00CCFF,CCFFFF,CCFFCC,FFFF99,99CCFF,FF99CC,CC99FF,FFCC99,'
   + '3366FF,33CCCC,99CC00,FFCC00,FF9900,FF6600,666699,969696,003366,339966,003300,333300,993300,993366,333399,333333,000000,FFFFFF').split(',');
-const DEFAULT_THEME = ['FFFFFF', '000000', 'E7E6E6', '44546A', '4472C4', 'ED7D31', 'A5A5A5', 'FFC000', '5B9BD5', '70AD47'];
-
-function applyTint(hex, tint) {
-  if (!tint) return hex;
-  let [r, g, b] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  let h = 0;
-  let s = 0;
-  let l = (max + min) / 2;
-  if (max !== min) {
-    const d = max - min;
-    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-    h = max === r ? (g - b) / d + (g < b ? 6 : 0) : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
-    h /= 6;
-  }
-  l = tint < 0 ? l * (1 + tint) : l * (1 - tint) + tint;
-  const hue = (p, q, t) => {
-    if (t < 0) t += 1;
-    if (t > 1) t -= 1;
-    if (t < 1 / 6) return p + (q - p) * 6 * t;
-    if (t < 1 / 2) return q;
-    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
-    return p;
-  };
-  if (s === 0) { r = l; g = l; b = l; } else {
-    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-    const p = 2 * l - q;
-    r = hue(p, q, h + 1 / 3); g = hue(p, q, h); b = hue(p, q, h - 1 / 3);
-  }
-  return [r, g, b].map((x) => Math.round(x * 255).toString(16).padStart(2, '0')).join('').toUpperCase();
-}
 
 function colorOf(el, theme) {
   if (!el) return null;
@@ -117,6 +94,13 @@ const BUILTIN_FMT = {
 };
 for (const id of [27, 28, 29, 30, 31, 34, 35, 36, 50, 51, 52, 53, 54, 57, 58]) BUILTIN_FMT[id] = { numFmt: 'date' };
 for (const id of [32, 33, 55, 56]) BUILTIN_FMT[id] = { numFmt: 'time' };
+// 기본 제공 번호 중 음수 괄호 · 빨강 · 통화 · 회계 형식은 실제 서식 코드로 (한국어 엑셀 기준)
+const BUILTIN_CODE = {
+  5: '"₩"#,##0;"₩"\\-#,##0', 6: '"₩"#,##0;[Red]"₩"\\-#,##0', 7: '"₩"#,##0.00;"₩"\\-#,##0.00', 8: '"₩"#,##0.00;[Red]"₩"\\-#,##0.00',
+  37: '#,##0_);(#,##0)', 38: '#,##0_);[Red](#,##0)', 39: '#,##0.00_);(#,##0.00)', 40: '#,##0.00_);[Red](#,##0.00)',
+  41: '_-* #,##0_-;\\-* #,##0_-;_-* "-"_-;_-@_-', 42: '_-"₩"* #,##0_-;\\-"₩"* #,##0_-;_-"₩"* "-"_-;_-@_-',
+  43: '_-* #,##0.00_-;\\-* #,##0.00_-;_-* "-"??_-;_-@_-', 44: '_-"₩"* #,##0.00_-;\\-"₩"* #,##0.00_-;_-"₩"* "-"??_-;_-@_-',
+};
 
 // ───────────────────────── 읽기 ─────────────────────────
 function relsOf(files, path) {
@@ -186,6 +170,8 @@ function readStyles(files, wbRels, theme) {
   };
   const fonts = kids(child(root, 'fonts'), 'font').map(fontOf);
   const defaultFont = fonts[0]?.font ?? null;
+  const wbFont = { name: fonts[0]?.font ?? '맑은 고딕', size: fonts[0]?.size ?? 11 };
+  const defaultSize = wbFont.size;
   const fillOf = (f, dxf = false) => {
     const pf = child(f, 'patternFill');
     if (!pf) {
@@ -196,40 +182,58 @@ function readStyles(files, wbRels, theme) {
     return colorOf(child(pf, dxf ? 'bgColor' : 'fgColor') ?? child(pf, 'fgColor'), theme);
   };
   const fills = kids(child(root, 'fills'), 'fill').map((f) => fillOf(f));
+  // 테두리: 선 종류(thin 이 아니면 bts…)와 색(검정이 아니면 btc…)까지 (엑셀과 같은 모양)
   const borderOf = (b) => {
     const st = {};
-    const side = (n) => { const e = child(b, n); return e && e.attrs.style && e.attrs.style !== 'none'; };
-    if (side('top')) st.bt = true;
-    if (side('bottom')) st.bb = true;
-    if (side('left') || side('start')) st.bl = true;
-    if (side('right') || side('end')) st.br = true;
+    const side = (key, ...names) => {
+      const e = names.map((n) => child(b, n)).find((x) => x && x.attrs.style && x.attrs.style !== 'none');
+      if (!e) return;
+      st[key] = true;
+      if (e.attrs.style !== 'thin') st[`${key}s`] = e.attrs.style;
+      const c = colorOf(child(e, 'color'), theme);
+      if (c && c !== '#000000') st[`${key}c`] = c;
+    };
+    side('bt', 'top');
+    side('bb', 'bottom');
+    side('bl', 'left', 'start');
+    side('br', 'right', 'end');
     return st;
   };
   const borders = kids(child(root, 'borders'), 'border').map(borderOf);
   const numFmtOf = (id) => {
     const n = Number(id);
-    if (BUILTIN_FMT[n]) return BUILTIN_FMT[n];
     if (numFmts[id]) return styleForCode(numFmts[id]);
+    if (BUILTIN_CODE[n]) return styleForCode(BUILTIN_CODE[n]);
+    if (BUILTIN_FMT[n]) return BUILTIN_FMT[n];
     return {};
   };
+  // 셀 스타일(cellStyleXfs): 셀 서식에 맞춤이 없으면 부모 스타일의 맞춤을 물려받음
+  // (한국어 엑셀의 '표준' 스타일은 세로 가운데 → 거의 모든 셀이 세로 가운데로 보임)
+  const styleXfs = kids(child(root, 'cellStyleXfs'), 'xf');
   const xfs = kids(child(root, 'cellXfs'), 'xf').map((xf) => {
     const a = xf.attrs;
     const st = { ...fonts[Number(a.fontId || 0)] };
     if (st.font && st.font === defaultFont) delete st.font;
-    if (st.size === 11) delete st.size;
+    if (st.size === defaultSize) delete st.size; // 통합 문서 기본 크기는 적지 않음 (기본 글꼴로 표시)
     const fill = fills[Number(a.fillId || 0)];
     if (fill) st.fill = fill;
     Object.assign(st, borders[Number(a.borderId || 0)] ?? {});
     Object.assign(st, numFmtOf(a.numFmtId || 0));
-    const al = child(xf, 'alignment');
+    const parent = styleXfs[Number(a.xfId ?? 0)];
+    const al = child(xf, 'alignment') ?? (a.applyAlignment === '1' ? null : child(parent, 'alignment'));
     if (al) {
       const h = al.attrs.horizontal;
       if (h === 'left' || h === 'center' || h === 'right') st.align = h;
       else if (h === 'centerContinuous' || h === 'distributed') st.align = 'center';
+      else if (h === 'justify') { st.align = 'left'; st.wrap = true; }
       const v = al.attrs.vertical;
-      if (v === 'top' || v === 'center') st.valign = v === 'center' ? 'middle' : 'top';
+      if (v === 'top') st.valign = 'top';
+      else if (v === 'center' || v === 'justify' || v === 'distributed') st.valign = 'middle';
       if (al.attrs.wrapText === '1' || al.attrs.wrapText === 'true') st.wrap = true;
       if (Number(al.attrs.indent)) st.indent = Number(al.attrs.indent);
+      const rot = Number(al.attrs.textRotation ?? 0);
+      if (rot) st.rotate = rot === 255 ? 255 : rot > 90 ? -(rot - 90) : rot; // 255 = 세로 쓰기
+      if (al.attrs.shrinkToFit === '1' || al.attrs.shrinkToFit === 'true') st.shrink = true;
     }
     // 셀 보호: 잠금 해제 · 수식 숨기기
     const pr = child(xf, 'protection');
@@ -276,7 +280,7 @@ function readStyles(files, wbRels, theme) {
       band: clean(pick('firstRowStripe')),
     };
   }
-  return { xfs, dxfs, defaultFont, tableStyles };
+  return { xfs, dxfs, defaultFont, tableStyles, wbFont };
 }
 
 /** sheetData 부분을 떼어 냄 (접두사 없는 일반 형식일 때만) */
@@ -398,6 +402,13 @@ function* readSheet(files, path, ctx) {
     hiddenRows: {}, hiddenCols: {}, rowManual: {}, freeze: { rows: 0, cols: 0 }, filter: null, charts: [], images: [], shapes: [], validations: [], slicers: [],
   };
   const { xfs, dxfs, strings } = ctx;
+  // 시트 기본 행 높이 · 열 너비 (엑셀은 시트마다 다름: 기본 글꼴 9pt 면 행 12pt = 16px)
+  const mdw = ctx.mdw ?? 7;
+  const sfp = child(root, 'sheetFormatPr');
+  const defRowH = sfp?.attrs.defaultRowHeight ? pt2px(Number(sfp.attrs.defaultRowHeight)) : DEFAULT_ROW_HEIGHT;
+  const defColW = sfp?.attrs.defaultColWidth ? width2pxM(Number(sfp.attrs.defaultColWidth), mdw) : baseColPx(Number(sfp?.attrs.baseColWidth ?? 8), mdw);
+  if (defRowH !== DEFAULT_ROW_HEIGHT) sheet.defRowH = defRowH;
+  if (defColW !== DEFAULT_COL_WIDTH) sheet.defColW = defColW;
   // 서식 객체는 xf 번호마다 하나를 공유 (셀마다 복사하지 않음)
   const styleMemo = ctx.styleMemo ??= new Map();
   const styleOf = (s) => {
@@ -414,10 +425,10 @@ function* readSheet(files, path, ctx) {
   for (const col of kids(child(root, 'cols'), 'col')) {
     const min = Number(col.attrs.min) - 1;
     const max = Math.min(Number(col.attrs.max) - 1, min + 16384);
-    const w = col.attrs.width !== undefined ? width2px(Number(col.attrs.width)) : null;
+    const w = col.attrs.width !== undefined ? width2pxM(Number(col.attrs.width), mdw) : null;
     const st = col.attrs.style ? styleOf(col.attrs.style) : undefined;
     for (let c = min; c <= max && c < MAX_COLS; c++) {
-      if (w !== null && w !== DEFAULT_COL_WIDTH && (col.attrs.customWidth === '1' || Math.abs(w - DEFAULT_COL_WIDTH) > 1)) sheet.colWidths[c] = w;
+      if (w !== null && w !== defColW && (col.attrs.customWidth === '1' || Math.abs(w - defColW) > 1)) sheet.colWidths[c] = w;
       if (col.attrs.hidden === '1' || col.attrs.hidden === 'true') sheet.hiddenCols[c] = true;
       if (st && max - min < 1000) sheet.colStyles[c] = st;
       const ol = Number(col.attrs.outlineLevel ?? 0);
@@ -446,11 +457,12 @@ function* readSheet(files, path, ctx) {
     const r = rowIdx;
     if (row.attrs.ht && (row.attrs.customHeight === '1' || row.attrs.customHeight === 'true')) {
       const h = pt2px(Number(row.attrs.ht));
-      if (h !== DEFAULT_ROW_HEIGHT) { sheet.rowHeights[r] = h; sheet.rowManual[r] = true; }
+      if (h !== defRowH) { sheet.rowHeights[r] = h; sheet.rowManual[r] = true; }
     } else if (row.attrs.ht) {
       const h = pt2px(Number(row.attrs.ht));
-      if (Math.abs(h - DEFAULT_ROW_HEIGHT) > 2) sheet.rowHeights[r] = h;
+      if (h !== defRowH) sheet.rowHeights[r] = h;
     }
+    const noHt = !row.attrs.ht; // 높이가 저장되지 않은 행: 엑셀은 내용(큰 글꼴 · 줄 바꿈 · 회전)에 맞춰 자동 높이
     if (row.attrs.hidden === '1' || row.attrs.hidden === 'true') sheet.hiddenRows[r] = true;
     // 개요 (행 그룹)
     if (row.attrs.outlineLevel && row.attrs.outlineLevel !== '0') ((sheet.outline ??= { rows: {}, cols: {}, rowsColl: {}, colsColl: {}, below: true, right: true }).rows[r] = Math.min(7, Number(row.attrs.outlineLevel)));
@@ -527,6 +539,7 @@ function* readSheet(files, path, ctx) {
           }
         } else raw = numberRaw(value, style);
       }
+      if (noHt && raw !== '' && style && ((style.size && style.size > ctx.wbFont.size) || style.wrap || style.rotate)) (sheet.fitRows ??= new Set()).add(r);
       if (blockMode && blockStart < 0) blockStart = r + 1; // 첫 행(머리글) 다음부터 블록
       if (blockMode && r >= blockStart && formula === null && !c.attrs.vm) {
         if (colFmt[cc] === undefined) colFmt[cc] = style ?? null;
@@ -576,6 +589,12 @@ function* readSheet(files, path, ctx) {
 
   const sv0 = descendants(child(root, 'sheetViews'), 'sheetView')[0];
   if (sv0 && (sv0.attrs.showGridLines === '0' || sv0.attrs.showGridLines === 'false')) sheet.noGrid = true;
+  // 확대/축소 · 처음 보이는 칸 · 활성 셀 (엑셀에서 저장한 화면 그대로 열기)
+  if (sv0?.attrs.zoomScale && Number(sv0.attrs.zoomScale) !== 100) sheet.zoom = Math.max(10, Math.min(400, Number(sv0.attrs.zoomScale)));
+  const tlc = sv0?.attrs.topLeftCell ? refToRange(sv0.attrs.topLeftCell) : null;
+  const selEl = descendants(sv0, 'selection').find((x) => !x.attrs.pane || x.attrs.pane === 'bottomRight') ?? descendants(sv0, 'selection')[0];
+  const act = selEl?.attrs.activeCell ? refToRange(selEl.attrs.activeCell) : null;
+  if ((tlc && (tlc.r1 || tlc.c1)) || (act && (act.r1 || act.c1))) sheet.view = { top: tlc?.r1 ?? 0, left: tlc?.c1 ?? 0, ...(act ? { r: act.r1, c: act.c1 } : {}) };
   sheet.fileValues = true; // 셀의 파일 계산 결과를 그대로 씀 (바뀌기 전까지)
   const pane = descendants(child(root, 'sheetViews'), 'pane')[0];
   if (pane && (pane.attrs.state === 'frozen' || pane.attrs.state === 'frozenSplit')) {
@@ -988,8 +1007,41 @@ function readDrawing(files, path, sheet, ctx) {
     if (ln && child(ln, 'solidFill')) stroke = dmlColor(child(ln, 'solidFill'), ctx.theme);
     else if (!(ln && child(ln, 'noFill')) && style) stroke = dmlColor(child(style, 'lnRef'), ctx.theme);
     if (isText && !ln) stroke = null;
-    const paras = descendants(child(el, 'txBody'), 'p');
+    const tx = child(el, 'txBody');
+    const paras = kids(tx, 'p');
     const text = paras.map((p) => descendants(p, 't').map((t) => t.text).join('')).join('\n');
+    // 글자 서식을 문단 · 글자 조각(run)마다 그대로 (엑셀과 같은 모양)
+    const lvl = child(child(tx, 'lstStyle'), 'lvl1pPr');
+    const baseR = child(lvl, 'defRPr');
+    const runOf = (r, t) => {
+      const pr = child(r, 'rPr');
+      const a = { ...(baseR?.attrs ?? {}), ...(pr?.attrs ?? {}) };
+      const out = { t };
+      if (a.b === '1') out.b = true;
+      if (a.i === '1') out.i = true;
+      if (a.u && a.u !== 'none') out.u = true;
+      if (a.strike && a.strike !== 'noStrike') out.s = true;
+      if (a.sz) out.sz = Number(a.sz) / 100;
+      const c = dmlColor(child(pr, 'solidFill') ?? child(baseR, 'solidFill'), ctx.theme);
+      if (c) out.color = c;
+      const face = child(pr, 'ea')?.attrs.typeface ?? child(pr, 'latin')?.attrs.typeface;
+      if (face && !face.startsWith('+')) out.font = face;
+      return out;
+    };
+    const rich = paras.map((p) => {
+      const pPr = child(p, 'pPr');
+      const al = pPr?.attrs.algn ?? lvl?.attrs.algn;
+      const runs = [];
+      for (const r of p.children) {
+        if (r.name === 'r' || r.name === 'fld') runs.push(runOf(r, child(r, 't')?.text ?? ''));
+        else if (r.name === 'br') runs.push({ t: '\n' });
+      }
+      const end = child(p, 'endParaRPr');
+      const para = { runs };
+      if (al) para.align = al === 'ctr' ? 'center' : al === 'r' ? 'right' : al === 'just' || al === 'dist' ? 'justify' : 'left';
+      if (!runs.length && end?.attrs.sz) para.sz = Number(end.attrs.sz) / 100;
+      return para;
+    });
     const rPr = descendants(child(el, 'txBody'), 'rPr')[0] ?? descendants(child(el, 'txBody'), 'defRPr')[0];
     const algn = descendants(child(el, 'txBody'), 'pPr')[0]?.attrs.algn;
     const shape = {
@@ -1007,7 +1059,21 @@ function readDrawing(files, path, sheet, ctx) {
     if (tc) shape.color = tc;
     else if (!isText && fill) shape.color = '#ffffff';
     if (algn) shape.align = algn === 'ctr' ? 'center' : algn === 'r' ? 'right' : 'left';
-    else if (!isText) shape.align = 'center';
+    else shape.align = isText ? 'left' : 'center';
+    // 서식이 섞여 있으면 문단 · 조각 그대로 보관 (한 가지 서식이면 단순 글자로 충분)
+    const flat = rich.flatMap((p) => p.runs);
+    const same = (k) => flat.every((r) => r[k] === flat[0]?.[k]);
+    if (rich.length && (!['b', 'i', 'u', 'sz', 'color', 'font'].every(same) || rich.some((p) => (p.align ?? shape.align) !== shape.align))) {
+      shape.paras = rich;
+      delete shape.bold;
+    }
+    const body = child(tx, 'bodyPr');
+    const anc = body?.attrs.anchor;
+    shape.valign = anc === 'ctr' ? 'middle' : anc === 'b' ? 'bottom' : anc === 't' ? 'top' : isText ? 'top' : 'middle';
+    const ins = (k, d) => (body?.attrs[k] !== undefined ? Number(body.attrs[k]) / EMU : d);
+    const pad = [ins('tIns', 4.8), ins('rIns', 9.6), ins('bIns', 4.8), ins('lIns', 9.6)].map((v) => Math.round(v * 10) / 10);
+    if (pad.join() !== '4.8,9.6,4.8,9.6') shape.pad = pad;
+    if (body?.attrs.wrap === 'none') shape.nowrap = true;
     out.shapes.push(shape);
   };
 
@@ -1125,6 +1191,17 @@ function readChart(files, path, theme = {}) {
     return child(d, 'showVal')?.attrs.val === '1' || child(d, 'showPercent')?.attrs.val === '1' ? true : undefined;
   };
   const fmtCode = (el) => child(el, 'numFmt')?.attrs.formatCode;
+  // 글자 서식 (txPr · rich 의 defRPr / rPr): 크기(pt) · 색 · 굵게
+  const runFont = (el) => {
+    const r = el && (descendants(el, 'defRPr')[0] ?? descendants(el, 'rPr')[0]);
+    if (!r) return {};
+    const out = {};
+    if (r.attrs.sz) out.size = Number(r.attrs.sz) / 100;
+    if (r.attrs.b === '1') out.bold = true;
+    const c = dmlColor(child(r, 'solidFill'), theme);
+    if (c) out.color = c;
+    return out;
+  };
   const series = [];
   const fmts = [];
   let sheetName = null;
@@ -1159,8 +1236,31 @@ function readChart(files, path, theme = {}) {
       if (secondary) f.axis = 1;
       const color = gType === 'line' || gType === 'scatter' ? line ?? fill : fill ?? line;
       if (color) f.color = color;
+      // 그라데이션 채우기 · 그림자 · 선 굵기 · 표식 크기 · 레이블 글꼴 (엑셀 차트 스타일 그대로)
+      const grad = child(spPr, 'gradFill');
+      if (grad && gType !== 'line' && gType !== 'scatter') {
+        const stops = kids(child(grad, 'gsLst'), 'gs').map((gs) => [Number(gs.attrs.pos ?? 0) / 100000, dmlColor(gs, theme)]).filter(([, c]) => c);
+        if (stops.length > 1) f.grad = { stops, ang: Number(child(grad, 'lin')?.attrs.ang ?? 5400000) / 60000 };
+        if (!f.color && stops.length) f.color = stops[Math.floor(stops.length / 2)][1];
+      }
+      if (descendants(child(spPr, 'effectLst'), 'outerShdw').length) f.shadow = true;
+      const lnW = Number(child(spPr, 'ln')?.attrs.w ?? 0);
+      if (lnW && (gType === 'line' || gType === 'scatter')) f.lineWidth = Math.round((lnW / 12700) * (4 / 3) * 100) / 100;
+      const mSize = Number(child(child(ser, 'marker'), 'size')?.attrs.val ?? 0);
+      if (mSize) f.markerSize = mSize;
+      const lf = runFont(child(child(ser, 'dLbls') ?? child(g, 'dLbls'), 'txPr'));
+      if (lf.size) f.labelSize = lf.size;
+      if (lf.color) f.labelColor = lf.color;
+      if (lf.bold) f.labelBold = true;
       const lab = dl(ser) ?? gLabels;
-      if (lab) f.labels = true;
+      if (gType === 'pie' || gType === 'doughnut') {
+        // 원형 레이블: 파일에 적힌 대로 (없으면 표시하지 않음 — 엑셀과 같음)
+        const d = child(ser, 'dLbls') ?? child(g, 'dLbls');
+        const on = (k) => child(d, k)?.attrs.val === '1';
+        if (d && child(d, 'delete')?.attrs.val !== '1' && on('showPercent') && !on('showVal')) f.pct = true;
+        else if (d && child(d, 'delete')?.attrs.val !== '1' && on('showVal')) f.labels = true;
+        else f.labels = false;
+      } else if (lab) f.labels = true;
       if (marker) f.marker = marker === 'none' ? 'none' : marker;
       const code = fmtCode(child(ser, 'dLbls')) ?? descendants(valEl, 'formatCode')[0]?.text;
       if (code && code !== 'General') f.numFmt = code;
@@ -1184,6 +1284,15 @@ function readChart(files, path, theme = {}) {
   const title = titleEl ? descendants(titleEl, 't').map((t) => t.text).join('') : '';
   const types = new Set(fmts.map((f, i) => f.type ?? typeOf(groups[0])));
   const out = { type: types.size > 1 ? 'combo' : typeOf(groups[0]), title, series };
+  // 글꼴 크기(pt): 제목 · 축 · 범례 (파일에 있을 때만)
+  const tf = runFont(child(titleEl, 'tx')) ;
+  const tf2 = tf.size ? tf : runFont(child(titleEl, 'txPr'));
+  if (tf2.size) out.titleSize = tf2.size;
+  const axEl = kids(plot, 'catAx')[0] ?? kids(plot, 'valAx')[0];
+  const af = runFont(child(axEl, 'txPr'));
+  if (af.size) out.axisSize = af.size;
+  const lg = runFont(child(child(chartEl, 'legend'), 'txPr'));
+  if (lg.size) out.legendSize = lg.size;
   if (range) out.range = range;
   if (sheetName) out.sheet = sheetName;
   if (fmts.some((f) => Object.keys(f).length)) out.seriesFmt = fmts;
@@ -1504,7 +1613,8 @@ function* readXlsxSteps(files) {
   const wbRoot = parseXml(textOf(files[wbPath]));
   const wbRels = relsOf(files, wbPath);
   const theme = readTheme(files, wbRels);
-  const { xfs, dxfs, tableStyles } = readStyles(files, wbRels, theme);
+  const { xfs, dxfs, tableStyles, wbFont } = readStyles(files, wbRels, theme);
+  const mdw = digitWidth(wbFont);
   const ssRel = Object.values(wbRels).find((r) => r.type === 'sharedStrings');
   const strings = ssRel && files[ssRel.target] ? kids(parseXml(textOf(files[ssRel.target])), 'si').map(allText) : [];
   // 이름 정의 (시트 범위 이름은 localSheetId → 시트 이름)
@@ -1527,7 +1637,7 @@ function* readXlsxSteps(files) {
     if (!e) return false;
     try { return mayReturnArray(parse(e.ref.slice(1))); } catch { return false; }
   };
-  const ctx = { xfs, dxfs, tableStyles, strings, theme, warnings: new Set(), isName, nameMulti, richImages: readRichImages(files, wbRels) };
+  const ctx = { mdw, wbFont, xfs, dxfs, tableStyles, strings, theme, warnings: new Set(), isName, nameMulti, richImages: readRichImages(files, wbRels) };
   const sheets = [];
   const warnings = [];
   const sheetCodes = {};
@@ -1566,6 +1676,8 @@ function* readXlsxSteps(files) {
   warnings.push(...ctx.warnings);
   if (!sheets.length) throw new Error('가져올 시트가 없습니다');
   const data = { sheets };
+  // 자동 높이로 맞출 행 (화면에서 글자 크기를 재어 정함 — 앱이 열 때 한 번 계산)
+  if (sheets.some((sh) => sh.fitRows)) data.fitRows = sheets.map((sh) => { const f = sh.fitRows ? [...sh.fitRows] : null; delete sh.fitRows; return f; });
   if (names.length) data.names = names;
   // 매크로(.xlsm): vbaProject.bin 을 그대로 보존 (실행하지 않음)
   const vbaRel = Object.values(wbRels).find((r) => r.type === 'vbaProject');
@@ -1576,6 +1688,10 @@ function* readXlsxSteps(files) {
       sheetCodes,
     };
   }
+  if (theme.join() !== DEFAULT_THEME.join()) data.theme = [...theme]; // 테마 색 (표 · 피벗 스타일 색 계산)
+  data.defaultFont = wbFont; // 통합 문서 기본 글꼴 (표준 스타일) — 셀 기본 크기 · 열 너비 변환에 씀
+  // 기본 셀 서식(xf 0): s 속성이 없는 셀에 적용됨 (한국어 엑셀은 보통 세로 가운데 맞춤)
+  if (xfs[0] && Object.keys(xfs[0]).length) data.baseStyle = { ...xfs[0] };
   const active = Number(descendants(child(wbRoot, 'bookViews'), 'workbookView')[0]?.attrs.activeTab ?? 0);
   let act = Math.min(active, sheets.length - 1);
   if (sheets[act]?.state) act = Math.max(0, sheets.findIndex((x) => !x.state));
@@ -1641,8 +1757,10 @@ function relsTarget(files, path, type) {
 
 // ───────────────────────── 쓰기 ─────────────────────────
 class StylePool {
-  constructor() {
-    this.fonts = [`<font><sz val="11"/><color theme="1"/><name val="${DEFAULT_FONT}"/><family val="3"/><charset val="129"/></font>`];
+  constructor(baseFont = WRITE_FONT, baseStyle = null) {
+    this.baseFont = { name: baseFont.name || DEFAULT_FONT, size: baseFont.size || 11 };
+    this.baseStyle = baseStyle && Object.keys(baseStyle).length ? baseStyle : null;
+    this.fonts = [`<font><sz val="${this.baseFont.size}"/><color theme="1"/><name val="${esc(this.baseFont.name)}"/><family val="3"/><charset val="129"/></font>`];
     this.fills = ['<fill><patternFill patternType="none"/></fill>', '<fill><patternFill patternType="gray125"/></fill>'];
     this.borders = ['<border><left/><right/><top/><bottom/><diagonal/></border>'];
     this.numFmts = [];
@@ -1651,6 +1769,13 @@ class StylePool {
     this.tableStyles = new Map();
     this.byObj = new WeakMap();
     this.maps = { font: new Map([[this.fonts[0], 0]]), fill: new Map(this.fills.map((f, i) => [f, i])), border: new Map([[this.borders[0], 0]]), fmt: new Map(), xf: new Map([['{}', 0]]) };
+    // 기본 셀 서식(xf 0)을 통합 문서의 기본 서식으로 씀 — 서식 없는 셀도 엑셀에서 같은 모양
+    if (this.baseStyle) {
+      this.xfs = [];
+      this.maps.xf.clear();
+      this.xfOf(this.baseStyle);
+      this.maps.xf.set('{}', 0);
+    }
   }
 
   intern(kind, list, xml) {
@@ -1684,12 +1809,12 @@ class StylePool {
     if (!Object.keys(style).length) return 0;
     const k = JSON.stringify(Object.keys(style).sort().map((key) => [key, style[key]]));
     if (this.maps.xf.has(k)) return this.maps.xf.get(k);
-    const font = `<font>${style.bold ? '<b/>' : ''}${style.italic ? '<i/>' : ''}${style.strike ? '<strike/>' : ''}${style.underline ? '<u/>' : ''}<sz val="${style.size || 11}"/>${style.color ? `<color rgb="${argb(style.color)}"/>` : '<color theme="1"/>'}<name val="${esc(style.font || DEFAULT_FONT)}"/><family val="3"/><charset val="129"/></font>`;
+    const font = `<font>${style.bold ? '<b/>' : ''}${style.italic ? '<i/>' : ''}${style.strike ? '<strike/>' : ''}${style.underline ? '<u/>' : ''}<sz val="${style.size || this.baseFont.size}"/>${style.color ? `<color rgb="${argb(style.color)}"/>` : '<color theme="1"/>'}<name val="${esc(style.font || this.baseFont.name)}"/><family val="3"/><charset val="129"/></font>`;
     const fontId = this.intern('font', this.fonts, font);
     const fillId = style.fill ? this.intern('fill', this.fills, `<fill><patternFill patternType="solid"><fgColor rgb="${argb(style.fill)}"/><bgColor indexed="64"/></patternFill></fill>`) : 0;
-    const side = (n, on) => (on ? `<${n} style="thin"><color indexed="64"/></${n}>` : `<${n}/>`);
+    const side = (n, k) => (style[k] ? `<${n} style="${style[`${k}s`] ?? 'thin'}">${style[`${k}c`] ? `<color rgb="${argb(style[`${k}c`])}"/>` : '<color indexed="64"/>'}</${n}>` : `<${n}/>`);
     const borderId = style.bt || style.bb || style.bl || style.br
-      ? this.intern('border', this.borders, `<border>${side('left', style.bl)}${side('right', style.br)}${side('top', style.bt)}${side('bottom', style.bb)}<diagonal/></border>`)
+      ? this.intern('border', this.borders, `<border>${side('left', 'bl')}${side('right', 'br')}${side('top', 'bt')}${side('bottom', 'bb')}<diagonal/></border>`)
       : 0;
     const numFmtId = this.fmtId(style);
     const align = [];
@@ -1697,6 +1822,8 @@ class StylePool {
     if (style.valign) align.push(`vertical="${style.valign === 'middle' ? 'center' : 'top'}"`);
     if (style.wrap) align.push('wrapText="1"');
     if (style.indent) align.push(`indent="${style.indent}"`);
+    if (style.rotate) align.push(`textRotation="${style.rotate === 255 ? 255 : style.rotate < 0 ? 90 - style.rotate : style.rotate}"`);
+    if (style.shrink) align.push('shrinkToFit="1"');
     const prot = style.locked === false || style.hideFormula ? `<protection${style.locked === false ? ' locked="0"' : ''}${style.hideFormula ? ' hidden="1"' : ''}/>` : '';
     const inner = (align.length ? `<alignment ${align.join(' ')}/>` : '') + prot;
     const xml = `<xf numFmtId="${numFmtId}" fontId="${fontId}" fillId="${fillId}" borderId="${borderId}" xfId="0"${numFmtId ? ' applyNumberFormat="1"' : ''}${fontId ? ' applyFont="1"' : ''}${fillId ? ' applyFill="1"' : ''}${borderId ? ' applyBorder="1"' : ''}${align.length ? ' applyAlignment="1"' : ''}${prot ? ' applyProtection="1"' : ''}${inner ? `>${inner}</xf>` : '/>'}`;
@@ -1710,8 +1837,8 @@ class StylePool {
     const font = style.color || style.bold || style.italic || style.underline || style.strike
       ? `<font>${style.bold ? '<b/>' : ''}${style.italic ? '<i/>' : ''}${style.strike ? '<strike/>' : ''}${style.underline ? '<u/>' : ''}${style.color ? `<color rgb="${argb(style.color)}"/>` : ''}</font>` : '';
     const fill = style.fill ? `<fill><patternFill><bgColor rgb="${argb(style.fill)}"/></patternFill></fill>` : '';
-    const side = (n, on) => (on ? `<${n} style="thin"><color auto="1"/></${n}>` : '');
-    const border = style.bt || style.bb || style.bl || style.br ? `<border>${side('left', style.bl)}${side('right', style.br)}${side('top', style.bt)}${side('bottom', style.bb)}</border>` : '';
+    const side = (n, k) => (style[k] ? `<${n} style="${style[`${k}s`] ?? 'thin'}">${style[`${k}c`] ? `<color rgb="${argb(style[`${k}c`])}"/>` : '<color auto="1"/>'}</${n}>` : '');
+    const border = style.bt || style.bb || style.bl || style.br ? `<border>${side('left', 'bl')}${side('right', 'br')}${side('top', 'bt')}${side('bottom', 'bb')}</border>` : '';
     // 표시 형식도 조건부 서식으로 바꿀 수 있음 (dxf 안의 numFmt)
     const code = style.numFmt ? fmtCode(style) : null;
     const nf = code !== null ? `<numFmt numFmtId="${this.fmtId(style)}" formatCode="${esc(code)}"/>` : '';
@@ -1917,8 +2044,8 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
   const series = data.series.map((sr, i) => ({
     ...sr, ...refs[i], type: sr.type ?? baseType, axis: sr.axis ?? 0, color: sr.color ?? PALETTE[i % PALETTE.length],
   }));
-  const dLbls = (on, code) => (on
-    ? `<c:dLbls>${code && typeof code === 'string' ? `<c:numFmt formatCode="${esc(code)}" sourceLinked="0"/>` : ''}<c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr><c:showLegendKey val="0"/><c:showVal val="1"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/></c:dLbls>`
+  const dLbls = (on, code, pct = false) => (on || pct
+    ? `<c:dLbls>${code && typeof code === 'string' && !pct ? `<c:numFmt formatCode="${esc(code)}" sourceLinked="0"/>` : ''}<c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr><c:showLegendKey val="0"/><c:showVal val="${pct ? 0 : 1}"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="${pct ? 1 : 0}"/><c:showBubbleSize val="0"/></c:dLbls>`
     : '');
   const serXml = (sr, i) => {
     const type = sr.type;
@@ -1937,7 +2064,9 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
     const dPt = pie ? sr.values.map((_, k) => `<c:dPt><c:idx val="${k}"/><c:bubble3D val="0"/><c:spPr><a:solidFill><a:srgbClr val="${(sr.colors?.[k] ?? PALETTE[k % PALETTE.length]).slice(1)}"/></a:solidFill><a:ln w="19050"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:ln></c:spPr></c:dPt>`).join('') : '';
     const invert = type === 'column' || type === 'bar' ? '<c:invertIfNegative val="0"/>' : '';
     const code = typeof sr.numFmt === 'string' ? sr.numFmt : null;
-    const labels = dLbls(sr.labels ?? chart.labels, code);
+    // 원형: 레이블을 따로 정하지 않았으면 백분율 (Tabula 화면과 같게)
+    const pieP = pie && sr.labels !== false && (sr.pct || (sr.labels ?? chart.labels) === undefined);
+    const labels = dLbls(pie && sr.labels === false ? false : sr.labels ?? chart.labels, code, pieP);
     const cats = data.categories;
     const catTag = scatter ? 'xVal' : 'cat';
     const cat = sr.cat
@@ -2012,10 +2141,19 @@ function shapeXml(sh, id, xfrm) {
   if (sh.kind === 'line') {
     return `<xdr:cxnSp macro=""><xdr:nvCxnSpPr><xdr:cNvPr id="${id}" name="${name}"/><xdr:cNvCxnSpPr/></xdr:nvCxnSpPr><xdr:spPr>${xfrm(sh)}<a:prstGeom prst="line"><a:avLst/></a:prstGeom>${ln}</xdr:spPr></xdr:cxnSp>`;
   }
-  const algn = sh.align === 'center' ? 'ctr' : sh.align === 'right' ? 'r' : 'l';
+  const algnOf = (a) => (a === 'center' ? 'ctr' : a === 'right' ? 'r' : a === 'justify' ? 'just' : 'l');
+  const algn = algnOf(sh.align);
   const rPr = `<a:rPr lang="ko-KR" sz="${Math.round((sh.size ?? 11) * 100)}"${sh.bold ? ' b="1"' : ''}><a:solidFill><a:srgbClr val="${hex6(sh.color ?? '#000000')}"/></a:solidFill></a:rPr>`;
-  const paras = String(sh.text ?? '').split('\n').map((line) => `<a:p><a:pPr algn="${algn}"/>${line ? `<a:r>${rPr}<a:t>${esc(line)}</a:t></a:r>` : `<a:endParaRPr lang="ko-KR" sz="${Math.round((sh.size ?? 11) * 100)}"/>`}</a:p>`).join('');
-  const anchor = sh.kind === 'textbox' ? 't' : 'ctr';
+  // 문단 · 조각별 서식이 있으면 그대로 저장
+  const runXml = (r) => {
+    if (r.t === '\n') return '<a:br/>';
+    const a = ['lang="ko-KR"', `sz="${Math.round((r.sz ?? sh.size ?? 11) * 100)}"`, r.b ?? sh.bold ? 'b="1"' : '', r.i ? 'i="1"' : '', r.u ? 'u="sng"' : '', r.s ? 'strike="sngStrike"' : ''].filter(Boolean).join(' ');
+    return `<a:r><a:rPr ${a}><a:solidFill><a:srgbClr val="${hex6(r.color ?? sh.color ?? '#000000')}"/></a:solidFill>${r.font ? `<a:latin typeface="${esc(r.font)}"/><a:ea typeface="${esc(r.font)}"/>` : ''}</a:rPr><a:t>${esc(r.t)}</a:t></a:r>`;
+  };
+  const paras = sh.paras
+    ? sh.paras.map((p) => `<a:p><a:pPr algn="${algnOf(p.align ?? sh.align)}"/>${p.runs.length ? p.runs.map(runXml).join('') : `<a:endParaRPr lang="ko-KR" sz="${Math.round((p.sz ?? sh.size ?? 11) * 100)}"/>`}</a:p>`).join('')
+    : String(sh.text ?? '').split('\n').map((line) => `<a:p><a:pPr algn="${algn}"/>${line ? `<a:r>${rPr}<a:t>${esc(line)}</a:t></a:r>` : `<a:endParaRPr lang="ko-KR" sz="${Math.round((sh.size ?? 11) * 100)}"/>`}</a:p>`).join('');
+  const anchor = sh.valign ? { top: 't', middle: 'ctr', bottom: 'b' }[sh.valign] : sh.kind === 'textbox' ? 't' : 'ctr';
   return `<xdr:sp macro="" textlink=""><xdr:nvSpPr><xdr:cNvPr id="${id}" name="${name}"/><xdr:cNvSpPr${sh.kind === 'textbox' ? ' txBox="1"' : ''}/></xdr:nvSpPr><xdr:spPr>${xfrm(sh)}<a:prstGeom prst="${KIND_PRST[sh.kind] ?? 'rect'}"><a:avLst/></a:prstGeom>${fill}${ln}</xdr:spPr><xdr:txBody><a:bodyPr vertOverflow="clip" horzOverflow="clip" wrap="square" rtlCol="0" anchor="${anchor}"/><a:lstStyle/>${paras}</xdr:txBody></xdr:sp>`;
 }
 
@@ -2408,7 +2546,8 @@ export async function writeXlsxAsync(wb, opts, onProgress) {
 
 function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {}) {
   const files = {};
-  const pool = new StylePool();
+  const pool = new StylePool(wb.defaultFont ?? WRITE_FONT, wb.baseStyle);
+  const wmdw = digitWidth(pool.baseFont); // 파일의 열 너비 = 픽셀 ÷ 기본 글꼴 숫자 너비
   const strings = [];
   const stringIndex = new Map();
   const sst = (s) => {
@@ -2628,10 +2767,10 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {}) 
     const olcc = sheet.outline?.colsColl ?? {};
     const colKeys = new Set([...Object.keys(sheet.colWidths), ...Object.keys(sheet.hiddenCols), ...Object.keys(sheet.colStyles), ...Object.keys(olc), ...Object.keys(olcc)].map(Number));
     const colsXml = [...colKeys].sort((a, b) => a - b).map((c) => {
-      const w = sheet.colWidths[c] ?? DEFAULT_COL_WIDTH;
+      const w = sheet.colWidths[c] ?? sheet.defColW ?? DEFAULT_COL_WIDTH;
       const st = sheet.colStyles[c] ? ` style="${pool.xf({ ...sheet.allStyle, ...sheet.colStyles[c] })}"` : '';
       const ol = (olc[c] ? ` outlineLevel="${olc[c]}"` : '') + (olcc[c] ? ' collapsed="1"' : '');
-      return `<col min="${c + 1}" max="${c + 1}" width="${px2width(w)}"${sheet.colWidths[c] !== undefined ? ' customWidth="1"' : ''}${sheet.hiddenCols[c] ? ' hidden="1"' : ''}${st}${ol}/>`;
+      return `<col min="${c + 1}" max="${c + 1}" width="${px2widthM(w, wmdw)}"${sheet.colWidths[c] !== undefined ? ' customWidth="1"' : ''}${sheet.hiddenCols[c] ? ' hidden="1"' : ''}${st}${ol}/>`;
     }).join('');
     const olMax = (o) => Object.values(o ?? {}).reduce((m, v) => Math.max(m, v), 0);
     const olRowMax = olMax(sheet.outline?.rows);
@@ -2894,8 +3033,8 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {}) 
     files[`xl/worksheets/sheet${si + 1}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="${NS_MAIN}" xmlns:r="${NS_R}">`
       + (vba || olPr ? `<sheetPr${vba ? ` codeName="${esc(vba.sheetCodes?.[sheet.name] ?? `Sheet${si + 1}`)}"` : ''}>${olPr}</sheetPr>` : '')
       + `<dimension ref="${dim}"/>`
-      + `<sheetViews><sheetView${sheet.noGrid ? ' showGridLines="0"' : ''} workbookViewId="0"${si === (wb.sheets[activeSheet]?.state && wb.sheets[activeSheet].state !== 'visible' ? Math.max(0, wb.sheets.findIndex((x) => !x.state || x.state === 'visible')) : activeSheet) ? ' tabSelected="1"' : ''}>${pane}</sheetView></sheetViews>`
-      + `<sheetFormatPr defaultRowHeight="${px2pt(DEFAULT_ROW_HEIGHT)}"${olRowMax ? ` outlineLevelRow="${olRowMax}"` : ''}${olColMax ? ` outlineLevelCol="${olColMax}"` : ''}/>`
+      + `<sheetViews><sheetView${sheet.noGrid ? ' showGridLines="0"' : ''}${sheet.zoom && sheet.zoom !== 100 ? ` zoomScale="${sheet.zoom}" zoomScaleNormal="${sheet.zoom}"` : ''}${sheet.view && (sheet.view.top || sheet.view.left) ? ` topLeftCell="${cellName(sheet.view.top, sheet.view.left)}"` : ''} workbookViewId="0"${si === (wb.sheets[activeSheet]?.state && wb.sheets[activeSheet].state !== 'visible' ? Math.max(0, wb.sheets.findIndex((x) => !x.state || x.state === 'visible')) : activeSheet) ? ' tabSelected="1"' : ''}>${pane}</sheetView></sheetViews>`
+      + `<sheetFormatPr${sheet.defColW ? ` defaultColWidth="${px2widthM(sheet.defColW, wmdw)}"` : ''} defaultRowHeight="${px2pt(sheet.defRowH ?? DEFAULT_ROW_HEIGHT)}"${sheet.defRowH ? ' customHeight="1"' : ''}${olRowMax ? ` outlineLevelRow="${olRowMax}"` : ''}${olColMax ? ` outlineLevelCol="${olColMax}"` : ''}/>`
       + (colsXml ? `<cols>${colsXml}</cols>` : '')
       + `<sheetData>${rowXml}</sheetData>`
       + protectXml(sheet.protect)

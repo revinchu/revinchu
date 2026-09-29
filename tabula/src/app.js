@@ -17,7 +17,8 @@ import { FUNC_INFO, CATEGORIES } from './funcinfo.js';
 import { makeSeries } from './series.js';
 import { parseDelimited, toDelimited, guessDelimiter, CsvBlockReader } from './csv.js';
 import { SAMPLES } from './samples.js';
-import { GridView, DEFAULT_FONT, DEFAULT_SIZE, measureText, fontStack } from './view.js';
+import { GridView, BASE_FONT, setBaseFont, measureText, fontStack } from './view.js';
+import { setThemeColors } from './stylepresets.js';
 import { readXlsxAsync, writeXlsxAsync, xlsxOverflow } from './xlsx.js';
 import { CHART_TYPES, PALETTE, renderChartSvg, chartModelData } from './chart.js';
 import {
@@ -117,6 +118,9 @@ const range = (a, b) => Array.from({ length: Math.max(0, b - a + 1) }, (_, i) =>
 const styleAt = (r, c) => wb.styleAt(si, r, c);
 const valueAt = (r, c) => wb.getValue(si, r, c);
 const isEmptyAt = (r, c) => !wb.getCell(si, r, c)?.raw;
+/** 시트 기본 행 높이 · 열 너비 (파일에서 가져온 시트는 다를 수 있음) */
+const defRowH = () => sheet().defRowH ?? DEFAULT_ROW_HEIGHT;
+const defColW = () => sheet().defColW ?? DEFAULT_COL_WIDTH;
 const filterHidden = (r) => hid(sheet().filter?.hidden, r) || (sheet().tables ?? []).some((t) => hid(t.filter?.hidden, r));
 
 function expandMerges(rg) {
@@ -608,8 +612,8 @@ function positionEditor() {
   if (!editing) return;
   const st = styleAt(target.r, target.c);
   Object.assign(ed.style, {
-    fontFamily: fontStack(st.font || DEFAULT_FONT),
-    fontSize: `${st.size || DEFAULT_SIZE}pt`,
+    fontFamily: fontStack(st.font || BASE_FONT.name),
+    fontSize: `${st.size || BASE_FONT.size}pt`,
     fontWeight: st.bold ? '700' : '400',
     fontStyle: st.italic ? 'italic' : 'normal',
     textDecoration: st.underline ? 'underline' : 'none',
@@ -779,19 +783,50 @@ function autoFitRows(r1, r2) {
   const cols = Math.min(wb.usedRange(si).cols, 500);
   for (let r = r1; r <= r2; r++) {
     if (s.rowManual[r]) continue;
-    let need = DEFAULT_ROW_HEIGHT;
-    for (let c = 0; c < cols; c++) {
-      const cell = wb.getCell(si, r, c);
-      if (!cell?.raw || wb.mergeAt(si, r, c)) continue;
-      const st = styleAt(r, c);
-      const text = formatValue(valueAt(r, c), st).text;
-      const lineH = ((st.size || DEFAULT_SIZE) * 4 / 3) * 1.2;
-      const lines = st.wrap ? wrappedLines(text, wb.colWidth(si, c) - 7, st) : text.split('\n').length;
-      need = Math.max(need, Math.ceil(lines * lineH + 3));
-    }
-    need = Math.min(409, need);
-    if ((s.rowHeights[r] ?? DEFAULT_ROW_HEIGHT) !== need) wb.setRowHeight(si, r, need, false);
+    const need = neededRowHeight(si, r, cols);
+    if ((s.rowHeights[r] ?? defRowH()) !== need) wb.setRowHeight(si, r, need, false);
   }
+}
+
+/** 행에 필요한 높이(px): 큰 글꼴 · 줄 바꿈 · 텍스트 회전(각도 · 세로 쓰기)까지 엑셀처럼 */
+function neededRowHeight(sIdx, r, cols) {
+  const base = wb.sheets[sIdx].defRowH ?? DEFAULT_ROW_HEIGHT;
+  let need = base;
+  for (let c = 0; c < cols; c++) {
+    const cell = wb.getCell(sIdx, r, c);
+    if (!cell?.raw || wb.mergeAt(sIdx, r, c)) continue;
+    const st = wb.styleAt(sIdx, r, c);
+    const text = formatValue(wb.getValue(sIdx, r, c), st).text;
+    const lineH = ((st.size || BASE_FONT.size) * 4 / 3) * 1.2;
+    let h;
+    if (st.rotate === 255) h = [...text].length * lineH;
+    else if (st.rotate) {
+      const a = (Math.abs(st.rotate) * Math.PI) / 180;
+      h = Math.abs(Math.sin(a)) * measureText(text, st) + Math.abs(Math.cos(a)) * lineH;
+    } else {
+      const lines = st.wrap ? wrappedLines(text, wb.colWidth(sIdx, c) - 7, st) : text.split('\n').length;
+      h = lines * lineH;
+    }
+    need = Math.max(need, Math.ceil(h + 3));
+  }
+  return Math.min(545, need);
+}
+
+/** 파일을 열 때: 높이가 저장되지 않은 행을 내용에 맞춤 (엑셀은 이런 행을 자동 높이로 그림) — 실행 취소 기록 없음 */
+function fitRowsOnOpen() {
+  const list = wb.fitRows;
+  wb.fitRows = null;
+  if (!list) return;
+  list.forEach((rows, sIdx) => {
+    const s = wb.sheets[sIdx];
+    if (!rows || !s) return;
+    const cols = Math.min(wb.usedRange(sIdx).cols, 500);
+    for (const r of rows.slice(0, 5000)) {
+      if (s.rowManual[r]) continue;
+      const need = neededRowHeight(sIdx, r, cols);
+      if (need !== (s.defRowH ?? DEFAULT_ROW_HEIGHT)) s.rowHeights[r] = need;
+    }
+  });
 }
 
 /** 엑셀처럼: 너비를 바꾼 적 없는 열에 숫자가 들어가지 않으면 열을 넓힘 */
@@ -807,7 +842,7 @@ function autoWiden(rg, { grow = false } = {}) {
       if (typeof v !== 'number' || st.wrap || wb.mergeAt(si, r, c)) continue;
       need = Math.max(need, measureText(formatValue(v, st).text, st) + 10);
     }
-    if (need > (s.colWidths[c] ?? DEFAULT_COL_WIDTH) + 1 && need < 400) wb.setColWidth(si, c, Math.ceil(need));
+    if (need > (s.colWidths[c] ?? defColW()) + 1 && need < 400) wb.setColWidth(si, c, Math.ceil(need));
   }
 }
 
@@ -1578,7 +1613,7 @@ function onViewDblClick(e) {
     return;
   }
   if (hit.zone === 'rowHeader' && hit.edgeRow !== null) {
-    wb.transact(() => { wb.setRowHeight(si, hit.edgeRow, DEFAULT_ROW_HEIGHT, false); autoFitRows(hit.edgeRow, hit.edgeRow); }, meta());
+    wb.transact(() => { wb.setRowHeight(si, hit.edgeRow, defRowH(), false); autoFitRows(hit.edgeRow, hit.edgeRow); }, meta());
     return;
   }
   if (hit.zone !== 'cell' || editing) return;
@@ -1668,7 +1703,7 @@ function autofitCols(cols) {
         const text = view.showFormulas && cell?.formula ? cell.raw : formatValue(v, st).text;
         for (const line of text.split('\n')) w = Math.max(w, measureText(line, st) + (allFilters().some(([, f]) => f.r1 === r && c >= f.c1 && c <= f.c2) ? 28 : 10));
       }
-      wb.setColWidth(si, c, w ? Math.min(600, Math.ceil(w)) : DEFAULT_COL_WIDTH);
+      wb.setColWidth(si, c, w ? Math.min(600, Math.ceil(w)) : defColW());
     }
   }, meta());
 }
@@ -2000,7 +2035,7 @@ function applyStyle(patchOrFn, { widen = false } = {}) {
       }
     } else {
       for (const [r, c] of cellsIn(rg)) {
-        const cur = wb.getCell(si, r, c)?.style ?? {};
+        const cur = wb.getCell(si, r, c)?.style ?? wb.baseStyle ?? {};
         const p = patchFor(cur);
         if (p) wb.setStyle(si, r, c, explicitOff(p, r, c));
       }
@@ -2039,6 +2074,8 @@ function applyBorder(kind) {
         case 'topBottom': p = { ...(r === rg.r1 && { bt: true }), ...(r === rg.r2 && { bb: true }) }; break;
         default:
       }
+      // 리본 테두리는 가는 검정 선 (파일에서 가져온 색 · 선 종류는 지움)
+      if (p) for (const k of ['bt', 'bb', 'bl', 'br']) if (k in p) { p[`${k}c`] = undefined; p[`${k}s`] = undefined; }
       if (p && Object.keys(p).length) wb.setStyle(si, r, c, p);
     }
     if (kind === 'none') {
@@ -2070,9 +2107,9 @@ function changeDecimals(delta) {
 }
 
 function changeFontSize(dir) {
-  const cur = styleAt(active.r, active.c).size || DEFAULT_SIZE;
+  const cur = styleAt(active.r, active.c).size || BASE_FONT.size;
   const next = dir > 0 ? FONT_SIZES.find((s) => s > cur) ?? cur + 4 : [...FONT_SIZES].reverse().find((s) => s < cur) ?? Math.max(1, cur - 1);
-  applyStyle({ size: next === DEFAULT_SIZE ? undefined : next });
+  applyStyle({ size: next === BASE_FONT.size ? undefined : next });
 }
 
 function capturePainter(sticky) {
@@ -4632,6 +4669,8 @@ function shapeDialog(id, typed = null) {
           ? { stroke: stroke.value, strokeWidth: Number(width.value) || 1 }
           : {
             text: text.value, size: clamp(Number(size.value) || 11, 6, 96), bold: bold.checked || undefined, align: align.value, color: color.value,
+            // 파일에서 가져온 조각별 서식은 글자 · 글꼴 설정을 바꾸지 않았을 때만 유지
+            ...(sh.paras && (text.value !== sh.text || align.value !== (sh.align ?? 'left') || bold.checked !== !!sh.bold) ? { paras: undefined } : {}),
             fill: fillOn.checked ? fill.value : null, stroke: lineOn.checked ? stroke.value : null, strokeWidth: Number(width.value) || 1,
           }),
       },
@@ -4864,6 +4903,13 @@ const pivotItemText = itemText;
  * 피벗을 시트에 씀. def.area(이전 결과 영역)만 지우고 다시 씀
  * def.captureFmt(파일에서 가져온 피벗): 처음 한 번 지금 셀의 서식을 역할별로 기억해 두고(def.cellFmt) 다시 그릴 때도 유지
  */
+/** 피벗 기본 서식 위에 파일에서 가져온 서식을 덮음 — 표시 형식은 통째로 바꿈 (소수 자릿수 · 사용자 코드가 섞이지 않게) */
+function mergeFmt(base, extra) {
+  const out = { ...base };
+  if ('numFmt' in extra) { delete out.decimals; delete out.code; }
+  return Object.assign(out, extra);
+}
+
 function writePivot(targetSi, def, { autofit = true } = {}) {
   delete def.needsRender; // 예제 등에서 처음 한 번 그리라는 표시
   const src = pivotSource(def);
@@ -4880,8 +4926,11 @@ function writePivot(targetSi, def, { autofit = true } = {}) {
     const fmt = { ...(def.cellFmt ?? {}) };
     grid.forEach((row, r) => row.forEach((cd, c) => {
       if (!cd?.role || cd.role === 'empty' || fmt[cd.role]) return;
-      const own = t.cells.get(`${top + r},${left + c}`)?.style;
-      if (own && Object.keys(own).length) fmt[cd.role] = { ...own };
+      const fc = t.cells.get(`${top + r},${left + c}`);
+      const own = fc?.style;
+      if (own && Object.keys(own).length) fmt[cd.role] = { ...(cd.style?.numFmt ? { numFmt: 'general' } : {}), ...own };
+      // 파일 셀이 "일반" 형식이면 피벗 기본 표시 형식을 쓰지 않음 (엑셀 화면과 같게)
+      else if (fc && fc.raw !== '' && cd.style?.numFmt) fmt[cd.role] = { numFmt: 'general' };
     }));
     def.cellFmt = fmt;
     delete def.captureFmt;
@@ -4910,7 +4959,7 @@ function writePivot(targetSi, def, { autofit = true } = {}) {
       const cc = left + c;
       if (!cd || (!cd.raw && !cd.style && !cd.image)) { if (t.cells.has(`${rr},${cc}`)) wb.setCellData(targetSi, rr, cc, null); continue; }
       const extra = cellFmt[cd.role];
-      wb.setCellData(targetSi, rr, cc, { raw: cd.raw, style: extra ? { ...cd.style, ...extra } : cd.style, ...(cd.image ? { image: cd.image } : {}) });
+      wb.setCellData(targetSi, rr, cc, { raw: cd.raw, style: extra ? mergeFmt(cd.style, extra) : cd.style, ...(cd.image ? { image: cd.image } : {}) });
       // 필터 단추: 행 레이블 머리글, 열 레이블 머리글, 보고서 필터 값
       if (cd.role === 'rowHead:0' && d.rows.length) btns.push({ r: rr, c: cc, kind: 'rows' });
       else if (/^rowHead:\d+$/.test(cd.role) && d.layout !== 'compact' && d.rows[+cd.role.split(':')[1]]) btns.push({ r: rr, c: cc, kind: 'rows', field: d.rows[+cd.role.split(':')[1]] });
@@ -4926,7 +4975,7 @@ function writePivot(targetSi, def, { autofit = true } = {}) {
       grid.forEach((row, r) => {
         if (row[c]?.raw) w = Math.max(w, measureText(displayText(top + r, left + c, targetSi), wb.styleAt(targetSi, top + r, left + c)) + 12 + (row[c].style?.indent ?? 0) * 12 + (btns.some((b) => b.r === top + r && b.c === left + c) ? 18 : 0));
       });
-      if (w > (wb.sheets[targetSi].colWidths[left + c] ?? DEFAULT_COL_WIDTH)) wb.setColWidth(targetSi, left + c, Math.min(300, Math.ceil(w)));
+      if (w > (wb.sheets[targetSi].colWidths[left + c] ?? wb.sheets[targetSi].defColW ?? DEFAULT_COL_WIDTH)) wb.setColWidth(targetSi, left + c, Math.min(300, Math.ceil(w)));
     }
   }
   return true;
@@ -5532,7 +5581,7 @@ function calcFieldDialog(entry = pivotHere()) {
 function fontMenu(anchorEl) {
   const used = new Set();
   for (const s of wb.sheets) for (const cell of s.cells.values()) if (cell.style?.font) used.add(cell.style.font);
-  const cur = styleAt(active.r, active.c).font || DEFAULT_FONT;
+  const cur = styleAt(active.r, active.c).font || BASE_FONT.name;
   const search = el('input', { type: 'search', placeholder: '글꼴 검색', class: 'font-search' });
   const list = el('div', { class: 'font-list' });
   const pick = (f) => { closeMenus(); run('fontFamily', f); };
@@ -5544,8 +5593,8 @@ function fontMenu(anchorEl) {
     const q = search.value.trim().toLowerCase();
     const match = (f) => !q || f.toLowerCase().includes(q) || (fontAlias(f) ?? '').toLowerCase().includes(q);
     const all = fontList();
-    const theme = [DEFAULT_FONT].filter(match);
-    const usedList = [...used].filter((f) => f !== DEFAULT_FONT && match(f));
+    const theme = [BASE_FONT.name].filter(match);
+    const usedList = [...used].filter((f) => f !== BASE_FONT.name && match(f));
     list.replaceChildren(
       ...(theme.length ? [el('div', { class: 'menu-title' }, '테마 글꼴'), ...theme.map(item)] : []),
       ...(usedList.length ? [el('div', { class: 'menu-title' }, '이 통합 문서에서 쓴 글꼴'), ...usedList.map(item)] : []),
@@ -5786,15 +5835,12 @@ function switchSheet(i, restore = true) {
   circles = null;
   gv.resetExtent();
   gv.layout();
+  applySheetZoom();
   const saved = restore ? sheetSel.get(sheet()) : null;
   if (saved) {
     selectRange(saved.sel, saved.selKind, saved.active);
     gv.setScroll(...saved.scroll);
-  } else {
-    gv.setScroll(0, 0);
-    const f = sheet().freeze;
-    selectCell(f?.rows || 0, f?.cols || 0);
-  }
+  } else showSheetStart();
   renderSheetTabs();
   setMode();
 }
@@ -6132,11 +6178,16 @@ function afterLoad(name, activeSheet) {
   circles = null;
   objClip = null;
   sheetSel.clear();
+  // 통합 문서 기본 글꼴 (엑셀의 표준 스타일: 셀 기본 크기 · 열 너비 기준)
+  setBaseFont(wb.defaultFont);
+  setThemeColors(wb.theme);
+  fitRowsOnOpen();
+  document.documentElement.style.setProperty('--cell-fs', `${BASE_FONT.size}pt`);
+  document.documentElement.style.setProperty('--cell-ff', fontStack(BASE_FONT.name));
   gv.resetExtent();
+  applySheetZoom();
   renderAll();
-  gv.setScroll(0, 0);
-  const f = sheet().freeze;
-  selectCell(f?.rows || 0, f?.cols || 0);
+  showSheetStart();
   // 수식 의존 그래프를 쉬는 동안 미리 만듦 (첫 편집도 바로 다시 계산)
   setTimeout(() => { wb.prepareGraph().catch((e) => console.warn('의존 그래프 준비 실패', e)); }, 1200);
   dirty = true;
@@ -6750,9 +6801,9 @@ function formatCellsDialog(startTab = 0) {
 
   // ── 글꼴 ──
   // 글꼴: 이 PC의 글꼴 목록에서 고르거나 이름을 직접 입력
-  const fontSel = el('input', { type: 'text', value: st.font || DEFAULT_FONT, list: 'fcFontList', spellcheck: false });
-  const fontDl = el('datalist', { id: 'fcFontList' }, [...new Set([DEFAULT_FONT, ...fontList()])].map((f) => el('option', { value: f })));
-  const sizeIn = el('input', { type: 'number', min: 1, max: 409, value: st.size || DEFAULT_SIZE, style: { width: '64px' } });
+  const fontSel = el('input', { type: 'text', value: st.font || BASE_FONT.name, list: 'fcFontList', spellcheck: false });
+  const fontDl = el('datalist', { id: 'fcFontList' }, [...new Set([BASE_FONT.name, ...fontList()])].map((f) => el('option', { value: f })));
+  const sizeIn = el('input', { type: 'number', min: 1, max: 409, value: st.size || BASE_FONT.size, style: { width: '64px' } });
   const [bIn, bL] = chk('굵게', st.bold);
   const [iIn, iL] = chk('기울임꼴', st.italic);
   const [uIn, uL] = chk('밑줄', st.underline);
@@ -6816,8 +6867,8 @@ function formatCellsDialog(startTab = 0) {
           const patch = {
             ...fmt,
             align: hSel.value || undefined, valign: vSel.value || undefined, indent: Number(indentIn.value) || undefined, wrap: wrapIn.checked || undefined,
-            font: fontSel.value === DEFAULT_FONT ? undefined : fontSel.value,
-            size: !size || size === DEFAULT_SIZE ? undefined : Math.min(409, size),
+            font: fontSel.value === BASE_FONT.name ? undefined : fontSel.value,
+            size: !size || size === BASE_FONT.size ? undefined : Math.min(409, size),
             bold: bIn.checked || undefined, italic: iIn.checked || undefined, underline: uIn.checked || undefined, strike: sIn.checked || undefined,
             color: colorIn.value === '#000000' ? undefined : colorIn.value,
             fill: noFill.checked ? undefined : fillIn.value,
@@ -7703,7 +7754,8 @@ const CELL_STYLES = [
   { name: '강조색3', style: { fill: '#a5a5a5', color: '#ffffff' } },
   { name: '강조색6', style: { fill: '#70ad47', color: '#ffffff' } },
 ];
-const RESET_STYLE = { fill: undefined, color: undefined, bold: undefined, italic: undefined, underline: undefined, strike: undefined, size: undefined, font: undefined, bt: undefined, bb: undefined, bl: undefined, br: undefined };
+const RESET_STYLE = { fill: undefined, color: undefined, bold: undefined, italic: undefined, underline: undefined, strike: undefined, size: undefined, font: undefined, bt: undefined, bb: undefined, bl: undefined, br: undefined,
+  btc: undefined, bbc: undefined, blc: undefined, brc: undefined, bts: undefined, bbs: undefined, bls: undefined, brs: undefined };
 
 function cellStylesMenu(anchorEl) {
   const chip = (s) => {
@@ -7894,7 +7946,7 @@ const MENUS = {
       label: '행 높이 자동 맞춤', action: () => {
         const u = usedClip(sel);
         const r2 = Math.min(u.r2, u.r1 + 5000);
-        wb.transact(() => { for (let r = u.r1; r <= r2; r++) wb.setRowHeight(si, r, DEFAULT_ROW_HEIGHT, false); autoFitRows(u.r1, r2); }, meta());
+        wb.transact(() => { for (let r = u.r1; r <= r2; r++) wb.setRowHeight(si, r, defRowH(), false); autoFitRows(u.r1, r2); }, meta());
       },
     },
     { label: '열 너비...', action: () => sizeDialog('col') },
@@ -8075,8 +8127,8 @@ const COMMANDS = {
   italic: () => toggleStyle('italic'),
   underline: () => toggleStyle('underline'),
   strike: () => toggleStyle('strike'),
-  fontFamily: (f) => applyStyle({ font: f === DEFAULT_FONT ? undefined : f }),
-  fontSize: (s) => { const n = Number(s); if (n > 0 && n <= 409) applyStyle({ size: n === DEFAULT_SIZE ? undefined : n }); },
+  fontFamily: (f) => applyStyle({ font: f === BASE_FONT.name ? undefined : f }),
+  fontSize: (s) => { const n = Number(s); if (n > 0 && n <= 409) applyStyle({ size: n === BASE_FONT.size ? undefined : n }); },
   growFont: () => changeFontSize(1),
   shrinkFont: () => changeFontSize(-1),
   borderLast: () => applyBorder(lastBorder),
@@ -8412,8 +8464,33 @@ function applyView() {
   updateSelectionUI();
 }
 
+/** 시트를 처음 볼 때: 엑셀에서 저장한 첫 화면(처음 보이는 칸 · 활성 셀), 없으면 맨 위 */
+function showSheetStart() {
+  const v = sheet().view;
+  const f = sheet().freeze;
+  if (v) {
+    gv.setScroll(Math.max(0, gv.cols.pos(v.left ?? 0) - gv.cols.pos(f?.cols || 0)), Math.max(0, gv.rows.pos(v.top ?? 0) - gv.rows.pos(f?.rows || 0)));
+    selectCell(v.r ?? v.top ?? 0, v.c ?? v.left ?? 0, { scroll: false });
+  } else {
+    gv.setScroll(0, 0);
+    selectCell(f?.rows || 0, f?.cols || 0);
+  }
+}
+
+/** 시트마다 저장된 확대/축소 (엑셀과 같이 시트별) */
+function applySheetZoom() {
+  const z = clamp(Math.round(sheet().zoom ?? 100), 25, 400);
+  if (z === view.zoom) return;
+  view.zoom = z;
+  dom.zoomSlider.value = z;
+  dom.zoomLabel.textContent = `${z}%`;
+  gv.setZoom(z);
+}
+
 function setZoom(z) {
   view.zoom = clamp(Math.round(z), 25, 400);
+  // 확대/축소는 시트 속성 (파일에 저장, 실행 취소 기록은 남기지 않음)
+  if (view.zoom === 100) delete sheet().zoom; else sheet().zoom = view.zoom;
   dom.zoomSlider.value = view.zoom;
   dom.zoomLabel.textContent = `${view.zoom}%`;
   gv.setZoom(view.zoom);
@@ -8426,7 +8503,7 @@ function ribbonState() {
   const f = sheet().freeze ?? {};
   return {
     bold: st.bold, italic: st.italic, underline: st.underline, strike: st.strike, wrap: st.wrap,
-    font: st.font || DEFAULT_FONT, size: String(st.size || DEFAULT_SIZE), numFmt: st.numFmt === 'custom' ? 'custom' : fmt,
+    font: st.font || BASE_FONT.name, size: String(st.size || BASE_FONT.size), numFmt: st.numFmt === 'custom' ? 'custom' : fmt,
     alignLeft: st.align === 'left', alignCenter: st.align === 'center', alignRight: st.align === 'right',
     valignTop: st.valign === 'top', valignMiddle: st.valign === 'middle', valignBottom: !st.valign,
     merged: !!wb.mergeAt(si, active.r, active.c), painter: !!painter, filterOn: (() => { const k = filterKeyHere(); return k !== null && !!getFilter(k); })(),
@@ -8736,7 +8813,7 @@ async function init() {
   selectCell(f?.rows || 0, f?.cols || 0);
   focusGrid();
   window.tabula = {
-    wb: () => wb, run, selectCell, selectRange, gv: () => gv, sample: (i) => newWorkbook(SAMPLES[i]),
+    wb: () => wb, run, selectCell, selectRange, gv: () => gv, sample: (i) => newWorkbook(SAMPLES[i]), switchSheet: (i) => { switchSheet(i); },
     get active() { return active; }, get sel() { return sel; }, get si() { return si; }, get chartSel() { return chartSel; },
   };
   // 서버 저장소 (npm start 로 실행한 경우) — 다른 기기와 문서 공유

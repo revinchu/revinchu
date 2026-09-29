@@ -3,6 +3,8 @@
 //           filter: { criteria, hidden, sort } | null, totalsFns: { [열]: 'sum' | ... }, columns: [이름] }
 // r1 은 머리글 행(header 가 true 일 때), r2 는 요약 행(totals 가 true 일 때)까지 포함.
 
+import { PRESET_STYLES, presetSwatch, tablePresetCell } from './stylepresets.js';
+
 // ───────────── 스타일 ─────────────
 export const ACCENTS = [
   { label: '검정', hex: '#000000', mid: '#808080' },
@@ -22,36 +24,22 @@ function mix(hex, other, t) {
 export const tint = (hex, t) => mix(hex, '#ffffff', t);
 export const shade = (hex, t) => mix(hex, '#000000', t);
 
-/** 표 스타일 21개: 밝게 1~7, 보통 1~7, 어둡게 1~7 (엑셀 이름을 그대로 씀) */
-export const TABLE_STYLES = [
-  ...ACCENTS.map((a, i) => ({
-    name: `TableStyleLight${i + 1}`, group: '밝게', label: `${a.label}, 표 스타일 밝게 ${i + 1}`,
-    header: { bold: true, bb: true, color: i ? shade(a.hex, 0.25) : '#000000' },
-    band: { fill: tint(a.mid ?? a.hex, i ? 0.8 : 0.75) }, row: {}, totals: { bold: true, bt: true },
-    swatch: [i ? '#ffffff' : '#ffffff', tint(a.mid ?? a.hex, 0.8), a.hex],
-  })),
-  ...ACCENTS.map((a, i) => ({
-    name: `TableStyleMedium${i + 1}`, group: '보통', label: `${a.label}, 표 스타일 보통 ${i + 1}`,
-    header: { bold: true, fill: a.hex, color: '#ffffff' },
-    band: { fill: tint(a.mid ?? a.hex, 0.8) }, row: {}, totals: { bold: true, bt: true },
-    swatch: [a.hex, tint(a.mid ?? a.hex, 0.8), '#ffffff'],
-  })),
-  ...ACCENTS.map((a, i) => ({
-    name: `TableStyleDark${i + 1}`, group: '어둡게', label: `${a.label}, 표 스타일 어둡게 ${i + 1}`,
-    header: { bold: true, fill: i ? shade(a.hex, 0.5) : '#000000', color: '#ffffff', bb: true },
-    band: { fill: i ? shade(a.hex, 0.25) : '#404040', color: '#ffffff' }, row: { fill: i ? a.hex : '#737373', color: '#ffffff' },
-    totals: { bold: true, fill: i ? shade(a.hex, 0.5) : '#000000', color: '#ffffff' },
-    swatch: [i ? shade(a.hex, 0.5) : '#000000', i ? shade(a.hex, 0.25) : '#404040', i ? a.hex : '#737373'],
-  })),
-];
+/** 표 스타일 60개: 밝게 1~21, 보통 1~28, 어둡게 1~11 (엑셀 이름 · 정의를 그대로 씀 — stylepresets.js) */
+const TABLE_KINDS = [['Light', '밝게', 21], ['Medium', '보통', 28], ['Dark', '어둡게', 11]];
+export const TABLE_STYLES = TABLE_KINDS.flatMap(([k, group, n]) => Array.from({ length: n }, (_, i) => ({
+  name: `TableStyle${k}${i + 1}`, group, label: `표 스타일 ${group} ${i + 1}`,
+  get swatch() { return presetSwatch(this.name); },
+})));
 export const DEFAULT_TABLE_STYLE = 'TableStyleMedium2';
 
-/** 엑셀 스타일 이름 → 지원하는 스타일 (번호가 크면 같은 색 계열로) */
+/** 엑셀 스타일 이름 → 지원하는 스타일 (알 수 없는 이름은 기본 스타일) */
 export function normalizeStyleName(name) {
+  if (name === 'None' || name === '') return 'None';
+  if (PRESET_STYLES[name]) return name;
   const m = /^TableStyle(Light|Medium|Dark)(\d+)$/i.exec(name ?? '');
-  if (!m) return name === 'None' || name === '' ? 'None' : DEFAULT_TABLE_STYLE;
+  if (!m) return DEFAULT_TABLE_STYLE;
   const kind = m[1][0].toUpperCase() + m[1].slice(1).toLowerCase();
-  return `TableStyle${kind}${((Number(m[2]) - 1) % 7) + 1}`;
+  return PRESET_STYLES[`TableStyle${kind}${Number(m[2])}`] ? `TableStyle${kind}${Number(m[2])}` : DEFAULT_TABLE_STYLE;
 }
 
 export const styleByName = (name) => TABLE_STYLES.find((s) => s.name === name) ?? null;
@@ -67,22 +55,10 @@ export function tableAt(sheet, r, c) {
   return null;
 }
 
-/** 셀에 입힐 표 서식 (셀에 직접 지정한 서식이 우선) */
+/** 셀에 입힐 표 서식 (셀에 직접 지정한 서식이 우선) — 엑셀 기본 제공 스타일 정의로 계산 */
 export function tableCellStyle(t, r, c) {
-  const st = styleByName(t.style);
-  if (!st) return null;
-  let out;
-  if (t.header && r === t.r1) out = { ...st.header };
-  else if (t.totals && r === t.r2) out = { ...st.totals };
-  else {
-    const i = r - dataTop(t);
-    const j = c - t.c1;
-    const band = (t.banded !== false && i % 2 === 0) || (t.bandedCols && j % 2 === 0);
-    out = { ...(band ? st.band : st.row) };
-    if (r === dataBottom(t) && !t.totals && st.name.includes('Light')) out.bb = true;
-  }
-  if ((t.firstCol && c === t.c1) || (t.lastCol && c === t.c2)) out.bold = true;
-  return out;
+  if (!styleByName(t.style)) return null;
+  return tablePresetCell(t.style, t, r, c);
 }
 
 // ───────────── 이름 ─────────────

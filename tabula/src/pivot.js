@@ -12,6 +12,7 @@
 import { formatGeneral, formatValue } from './format.js';
 import { findTable, dataTop, dataBottom, columnNames, ACCENTS, tint, shade } from './tables.js';
 import { logicalCol } from './block.js';
+import { presetStyle, presetSwatch, paintPivotPreset } from './stylepresets.js';
 import {
   EMPTY as EMPTY0, IMG_KEY as IMG_KEY0, keyOf as keyOf0, imageOfKey as imageOfKey0, sortKeys as sortKeys0, itemText as itemText0,
   kk, cubeFromRows, filterRows, groupAggregate, groupAcc, Cube, Column, blockColumn, groupedColumn, groupRank, aggregateQuery, planRollup, GROUP_BY as GROUP_BY0,
@@ -788,9 +789,8 @@ function styleParts(name) {
 /** 스타일 갤러리용 목록 */
 export const PIVOT_STYLES = ['Light', 'Medium', 'Dark'].flatMap((k, gi) => Array.from({ length: 28 }, (_, i) => {
   const name = `PivotStyle${k}${i + 1}`;
-  const p = pivotStyleParts(name);
   const grp = ['밝게', '보통', '어둡게'][gi];
-  return { name, group: grp, label: `피벗 스타일 ${grp} ${i + 1}`, swatch: [p.header.fill ?? '#ffffff', p.sub.fill ?? p.body.fill ?? '#ffffff', p.grand.fill ?? '#ffffff'] };
+  return { name, group: grp, label: `피벗 스타일 ${grp} ${i + 1}`, get swatch() { return presetSwatch(name); } };
 }));
 
 /** 셀 역할 → 스타일 부분 */
@@ -869,7 +869,10 @@ export function computePivot(input, d) {
   const parts = pivotStyleParts(d.style, d.styleDef);
   const opts = d.styleOpts ?? { rowHeaders: true, colHeaders: true };
   const HEAD_ROLES = /^(corner|rowHead|colHead|valueCaption|colItem|valueHead|colSubHead|grandHead)/;
+  // 엑셀 기본 제공 스타일은 정확한 정의로 표 모양대로 칠함 (paintPivotPreset) — 역할별 근사 서식은 쓰지 않음
+  const preset = !d.styleDef && presetStyle(d.style) ? d.style : null;
   const styleFor = (role) => {
+    if (preset) return {};
     if (opts.colHeaders === false && HEAD_ROLES.test(role)) return {};
     const s = roleStyle(parts, role);
     if (opts.rowHeaders === false && /^(rowGroup|rowItem)/.test(role)) { const { bold, ...rest } = s; return rest; }
@@ -1201,8 +1204,16 @@ export function computePivot(input, d) {
     rowItems.push({ kind: 'grand' });
   }
 
+  const width = labelCols + colLeaves.length;
+  if (preset) {
+    const leafCols = (kind) => colLeaves.map((l, i) => (l.kind === kind ? labelCols + i : -1)).filter((c) => c >= 0);
+    paintPivotPreset(preset, grid, {
+      pages: pageRows.length, top: pageRows.length ? pageRows.length + 1 : 0, headerRows: firstDataRowRel, labelCols, width,
+      grandCols: leafCols('grand'), subCols: leafCols('sub'), colLevels, colFields: Lc,
+    }, opts);
+  }
   // 줄무늬 행 · 열 (피벗 스타일 옵션)
-  if (opts.bandRows || opts.bandCols) {
+  if (!preset && (opts.bandRows || opts.bandCols)) {
     const start = (pageRows.length ? pageRows.length + 1 : 0) + firstDataRowRel;
     let k = 0;
     for (let r = start; r < grid.length; r++) {
@@ -1217,7 +1228,6 @@ export function computePivot(input, d) {
     }
   }
 
-  const width = labelCols + colLeaves.length;
   return {
     grid,
     meta: {

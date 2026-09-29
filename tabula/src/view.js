@@ -16,8 +16,12 @@ import { sparkValues, sparkSvg } from './sparkline.js';
 
 const sparkCache = new WeakMap(); // 스파크라인 항목 → { key, svg }
 
-export const DEFAULT_FONT = '맑은 고딕';
-export const DEFAULT_SIZE = 11;
+// 통합 문서 기본 글꼴 (파일의 표준 스타일, 예: 맑은 고딕 9pt). setBaseFont 로 바꾸고 BASE_FONT 를 읽음
+export const BASE_FONT = { name: '맑은 고딕', size: 11 };
+export function setBaseFont(f) {
+  BASE_FONT.name = f?.name || '맑은 고딕';
+  BASE_FONT.size = f?.size || 11;
+}
 export const fontStack = (f) => {
   const name = String(f).replace(/'/g, '');
   const alias = fontAlias(name);
@@ -31,7 +35,7 @@ const OVER_C = 4;
 const measureCtx = typeof document !== 'undefined' ? document.createElement('canvas').getContext('2d') : null;
 const measureCache = new Map();
 export function fontCss(st = {}) {
-  return `${st.italic ? 'italic ' : ''}${st.bold ? '700 ' : ''}${st.size || DEFAULT_SIZE}pt ${fontStack(st.font || DEFAULT_FONT)}`;
+  return `${st.italic ? 'italic ' : ''}${st.bold ? '700 ' : ''}${st.size || BASE_FONT.size}pt ${fontStack(st.font || BASE_FONT.name)}`;
 }
 export function measureText(text, st) {
   const font = fontCss(st);
@@ -67,6 +71,34 @@ function fitNumber(v, maxW, style) {
 }
 
 const esc = (s) => String(s).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+
+// 엑셀 테두리 선 종류 → CSS (굵기 · 모양)
+const BORDER_CSS = {
+  thin: [1, 'solid'], hair: [1, 'dotted'], dotted: [1, 'dotted'], dashed: [1, 'dashed'], dashDot: [1, 'dashed'], dashDotDot: [1, 'dashed'],
+  medium: [2, 'solid'], mediumDashed: [2, 'dashed'], mediumDashDot: [2, 'dashed'], mediumDashDotDot: [2, 'dashed'], slantDashDot: [2, 'dashed'],
+  thick: [3, 'solid'], double: [3, 'double'],
+};
+export function borderCss(side, kind, color) {
+  const [w, s] = BORDER_CSS[kind ?? 'thin'] ?? BORDER_CSS.thin;
+  return `border-${side}:${w}px ${s} ${color ?? '#000'}`;
+}
+
+/** 도형 글자: 문단 · 글자 조각(run)의 서식 · 맞춤 · 세로 위치 · 안쪽 여백 (엑셀과 같은 모양) */
+export function shapeTextHtml(o) {
+  const vj = { top: 'flex-start', middle: 'center', bottom: 'flex-end' }[o.valign ?? (o.kind === 'textbox' ? 'top' : 'middle')];
+  const pad = o.pad ? o.pad.map((v) => `${v}px`).join(' ') : '4.8px 9.6px';
+  const base = `justify-content:${vj};padding:${pad};text-align:${o.align ?? (o.kind === 'textbox' ? 'left' : 'center')};color:${esc(o.color ?? '#000')};font-size:${o.size ?? 11}pt;${o.bold ? 'font-weight:700;' : ''}${o.nowrap ? 'white-space:pre;' : ''}`;
+  if (!o.paras) return `<div class="sh-text" style="${base}">${esc(o.text)}</div>`;
+  const runCss = (r) => [r.b ? 'font-weight:700' : '', r.i ? 'font-style:italic' : '', r.u || r.s ? `text-decoration:${r.u ? 'underline ' : ''}${r.s ? 'line-through' : ''}` : '',
+    r.sz ? `font-size:${r.sz}pt` : '', r.color ? `color:${esc(r.color)}` : '', r.font ? `font-family:${fontStack(r.font)}` : ''].filter(Boolean).join(';');
+  const paras = o.paras.map((p) => {
+    const inner = p.runs.length
+      ? p.runs.map((r) => (r.t === '\n' ? '<br>' : `<span style="${runCss(r)}">${esc(r.t)}</span>`)).join('')
+      : `<span style="font-size:${p.sz ?? o.size ?? 11}pt">&#8203;</span>`;
+    return `<div${p.align ? ` style="text-align:${p.align}"` : ''}>${inner}</div>`;
+  }).join('');
+  return `<div class="sh-text rich" style="${base}">${paras}</div>`;
+}
 
 /**
  * host.state() → { wb, si, sel, selKind, active, editing, clip, fillPreview, refs, chartSel,
@@ -123,8 +155,8 @@ export class GridView {
   refreshAxes() {
     const { wb, si } = this.host.state();
     const s = wb.sheets[si];
-    this.cols = new Axis(DEFAULT_COL_WIDTH, s.colWidths, [s.hiddenCols], MAX_COLS);
-    this.rows = new Axis(DEFAULT_ROW_HEIGHT, s.rowHeights, [s.hiddenRows, s.filter?.hidden, ...(s.tables ?? []).map((t) => t.filter?.hidden)], MAX_ROWS);
+    this.cols = new Axis(s.defColW ?? DEFAULT_COL_WIDTH, s.colWidths, [s.hiddenCols], MAX_COLS);
+    this.rows = new Axis(s.defRowH ?? DEFAULT_ROW_HEIGHT, s.rowHeights, [s.hiddenRows, s.filter?.hidden, ...(s.tables ?? []).map((t) => t.filter?.hidden)], MAX_ROWS);
     this.fr = Math.min(s.freeze?.rows || 0, MAX_ROWS - 1);
     this.fc = Math.min(s.freeze?.cols || 0, MAX_COLS - 1);
     this.frozenW = this.cols.pos(this.fc);
@@ -603,10 +635,11 @@ export class GridView {
       css.push(`background:${img} no-repeat ${bar.neg ? '100%' : '0'} 50% / ${bar.pct}% 72%${bg ? `, ${bg}` : ''};background-clip:padding-box`);
     }
     else if (bg) css.push(`background-color:${bg}`);
-    if (style.bt) css.push('border-top-color:#000');
-    if (style.bb) css.push('border-bottom-color:#000');
-    if (style.bl) css.push('border-left-color:#000');
-    if (style.br) css.push('border-right-color:#000');
+    // 테두리: 색 · 선 종류(가는 선 · 중간 · 굵게 · 점선 · 이중선)까지 엑셀처럼
+    if (style.bt) css.push(borderCss('top', style.bts, style.btc));
+    if (style.bb) css.push(borderCss('bottom', style.bbs, style.bbc));
+    if (style.bl) css.push(borderCss('left', style.bls, style.blc));
+    if (style.br) css.push(borderCss('right', style.brs, style.brc));
     const cls = [];
     if (style.wrap) cls.push('wrap');
     else if (text && eff === 'left' && typeof v !== 'number' && !merge) {
@@ -625,6 +658,26 @@ export class GridView {
     if (typeof v === 'number' && text && !style.wrap && !st.showFormulas && measureText(text, style) > room) {
       text = fitNumber(v, room, style);
     }
+    // 셀에 맞춤(축소): 글자가 칸보다 넓으면 글꼴을 줄여서 한 줄에 맞춤
+    let spanCss = '';
+    if (style.shrink && text && !style.wrap && typeof v !== 'number') {
+      const tw = measureText(text, style);
+      if (tw > room) css.push(`font-size:${(((style.size ?? BASE_FONT.size) * room) / tw).toFixed(2)}pt`);
+    }
+    // 텍스트 방향: 각도(시계 반대 방향 +), 255 = 세로 쓰기
+    let rotBox = null;
+    if (style.rotate === 255) spanCss = ' style="writing-mode:vertical-rl;text-orientation:upright;letter-spacing:-1px"';
+    else if (style.rotate && text) {
+      // 회전한 글자가 차지하는 사각형을 맞춤 위치에 두고, 그 가운데에서 글자를 돌림 (엑셀과 같은 자리)
+      const tw = measureText(text, style);
+      const lh = ((style.size ?? BASE_FONT.size) * 4 / 3) * 1.2;
+      const a = (Math.abs(style.rotate) * Math.PI) / 180;
+      const bw = tw * Math.cos(a) + lh * Math.sin(a);
+      const bh = tw * Math.sin(a) + lh * Math.cos(a);
+      rotBox = `<span style="display:inline-block;position:relative;flex:none;width:${bw.toFixed(1)}px;height:${bh.toFixed(1)}px"><span style="position:absolute;left:50%;top:50%;width:${Math.ceil(tw)}px;white-space:nowrap;transform:translate(-50%,-50%) rotate(${-style.rotate}deg)">${hideValue ? '' : esc(text)}</span></span>`;
+      const i = cls.indexOf('ovf');
+      if (i >= 0) cls.splice(i, 1);
+    }
     const comment = cell?.comment ? ` data-cm="${esc(cell.comment)}"` : '';
     const iconHtml = icon ? `<i class="cf-icon">${ICON_SVG[icon] ?? ''}</i>` : '';
     if (icon) cls.push('has-icon');
@@ -637,7 +690,7 @@ export class GridView {
       if (i >= 0) cls.splice(i, 1);
       return `<div class="c cimg-cell${cls.length ? ` ${cls.join(' ')}` : ''}" data-r="${r}" data-c="${c}" style="${css.join(';')}"${comment}>${img}</div>`;
     }
-    return `<div class="c${cls.length ? ` ${cls.join(' ')}` : ''}" data-r="${r}" data-c="${c}" style="${css.join(';')}"${comment}>${iconHtml}<span>${hideValue ? '' : esc(text)}</span></div>`;
+    return `<div class="c${cls.length ? ` ${cls.join(' ')}` : ''}" data-r="${r}" data-c="${c}" style="${css.join(';')}"${comment}>${iconHtml}${rotBox ?? `<span${spanCss}>${hideValue ? '' : esc(text)}</span>`}</div>`;
   }
 
   /** 그림 개체: 차트 · 그림 · 도형 */
@@ -672,7 +725,7 @@ export class GridView {
       else if (prop === 'images') box(o, 'pic', `<img src="${esc(o.src)}" alt="${esc(o.name ?? '')}" draggable="false">`);
       else {
         const text = o.text && o.kind !== 'line'
-          ? `<div class="sh-text" style="justify-content:${o.kind === 'textbox' ? 'flex-start' : 'center'};text-align:${o.align ?? 'center'};color:${esc(o.color ?? '#000')};font-size:${o.size ?? 11}pt;${o.bold ? 'font-weight:700;' : ''}">${esc(o.text)}</div>`
+          ? shapeTextHtml(o)
           : '';
         box(o, `shape ${o.kind === 'line' ? 'line' : ''}`, shapeSvg(o) + text);
       }

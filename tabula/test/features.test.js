@@ -145,11 +145,14 @@ test('표: 자동 확장 · 이름 · 스타일', () => {
   assert.equal(validTableName('표1'), true);
   assert.equal(validTableName('A1'), false);
   assert.equal(validTableName('판매 목록'), false);
-  assert.equal(TABLE_STYLES.length, 21);
-  assert.equal(normalizeStyleName('TableStyleMedium9'), 'TableStyleMedium2');
+  assert.equal(TABLE_STYLES.length, 60);
+  assert.equal(normalizeStyleName('TableStyleMedium9'), 'TableStyleMedium9');
+  assert.equal(normalizeStyleName('TableStyleMedium99'), 'TableStyleMedium2');
   const t = s.tables[0];
-  assert.equal(tableCellStyle(t, 0, 0).fill, '#4472c4');
-  assert.ok(tableCellStyle(t, 1, 0).fill);
+  // 엑셀 TableStyleMedium2 정의: 머리글 강조1 채우기 + 흰 굵은 글자, 첫 줄무늬 강조1 80% 밝게, 가는 가로 선
+  assert.deepEqual([tableCellStyle(t, 0, 0).fill, tableCellStyle(t, 0, 0).color, tableCellStyle(t, 0, 0).bold], ['#4472c4', '#ffffff', true]);
+  assert.equal(tableCellStyle(t, 1, 0).fill, '#dae2f3'); // 엑셀 #d9e1f2 (정수 HLS 계산 ±1)
+  assert.equal(tableCellStyle(t, 1, 0).bbc, '#8ea9db');
   assert.equal(tableCellStyle(t, 2, 0).fill, undefined);
 });
 
