@@ -104,13 +104,14 @@ button { font: inherit; color: inherit; }
 
 /* ───────── 리본 ───────── */
 .ribbon {
-  display: flex; align-items: stretch; height: 96px; padding: 4px 6px 0;
+  /* 높이를 고정하지 않아 가로 스크롤 막대가 생겨도 그룹 이름(클립보드 · 스타일 …)을 가리지 않음 */
+  display: flex; align-items: stretch; min-height: 96px; height: auto; padding: 4px 6px 0;
   background: var(--ribbon-bg); border-bottom: 1px solid var(--border);
   overflow-x: auto; overflow-y: hidden; flex: none; scrollbar-width: thin;
 }
 .ribbon.collapsed { display: none; }
 .rgroup {
-  display: flex; flex-direction: column; padding: 0 6px; border-right: 1px solid #dcdcdc; flex: none; position: relative;
+  display: flex; flex-direction: column; padding: 0 6px; border-right: 1px solid #dcdcdc; flex: none; position: relative; min-height: 88px;
 }
 .rgroup-body { flex: 1; display: flex; align-items: flex-start; gap: 2px; }
 .rgroup-label {
@@ -461,7 +462,9 @@ pre.plain { margin: 0; font: inherit; white-space: pre-wrap; }
 }
 .menu-item:hover:not(:disabled) { background: #f0f0f0; }
 .menu-item:disabled { opacity: .45; cursor: default; }
-.menu-item .mi-icon { width: 20px; height: 18px; display: grid; place-items: center; flex: none; }
+.menu-item .mi-icon { min-width: 20px; height: 18px; display: grid; place-items: center; flex: none; }
+.menu-item .mi-icon > span { display: inline-flex !important; gap: 1px; align-items: center; }
+.menu-item .mi-icon > span svg { width: 16px !important; height: 16px !important; }
 .menu-item .mi-icon svg { width: 18px; height: 18px; }
 .menu-item .mi-icon .glyph { font-size: 12px; }
 .menu-item .mi-key { margin-left: auto; padding-left: 20px; color: var(--muted); font-size: 11px; }
@@ -946,3 +949,11 @@ legend { padding: 0 4px; color: #444; }
 .tpl-thumb i:nth-child(2) { top: 30px; }
 .tpl-thumb i:nth-child(3) { top: 46px; right: 30px; }
 .tpl-thumb span { position: absolute; right: 8px; bottom: 6px; width: 30px; height: 30px; border-radius: 50%; background: var(--tc); color: #fff; font-weight: 700; display: grid; place-items: center; font-size: 14px; }
+
+.cfi { display: inline-grid; place-items: center; min-width: 18px; height: 16px; padding: 0 2px; border-radius: 2px; font: 700 10px/1 sans-serif; color: #9c0006; background: #ffc7ce; border: 1px solid #f19ca7; }
+.cfi.g { color: #006100; background: #c6efce; border-color: #8fd19e; }
+.cfi.b { color: #1f4e79; background: #ddebf7; border-color: #9dc3e6; }
+.cf-cfvo-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.cf-cfvo { display: flex; flex-direction: column; gap: 4px; }
+.cf-cfvo select { width: 100%; }
+.filter-add { display: flex; gap: 6px; align-items: center; font-size: 12px; padding: 4px 2px; }

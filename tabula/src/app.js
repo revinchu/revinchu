@@ -3166,18 +3166,27 @@ function openFilterMenu(c, anchorEl, key = '') {
   });
   syncAll();
   const search = el('input', { type: 'search', placeholder: '검색' });
+  // 엑셀: 검색하면 [필터에 현재 선택 내용 추가] — 켜면 지금 필터에 검색 결과를 더함 (여러 번 검색해 누적 선택)
+  const addCb = el('input', { type: 'checkbox' });
+  const addRow = el('label', { class: 'filter-add', style: { display: 'none' } }, addCb, '필터에 현재 선택 내용 추가');
+  const allLabel = list.firstChild;
   search.addEventListener('input', () => {
     const q = search.value.trim().toLowerCase();
     for (const [t, cb] of checks) {
       const show = !q || t.toLowerCase().includes(q);
       cb.parentElement.style.display = show ? '' : 'none';
       if (q) cb.checked = show;
+      else cb.checked = !current || current.has(t);
     }
+    addRow.style.display = q ? '' : 'none';
+    allLabel.lastChild.textContent = q ? '(검색 결과 모두 선택)' : '(모두 선택)';
     syncAll();
   });
   const ok = () => {
     closeMenus();
-    const chosen = [...checks.entries()].filter(([, cb]) => cb.checked).map(([t]) => t);
+    const q = search.value.trim();
+    let chosen = [...checks.entries()].filter(([, cb]) => cb.checked && (!q || cb.parentElement.style.display !== 'none')).map(([t]) => t);
+    if (q && addCb.checked) chosen = [...new Set([...(current ? [...current] : items), ...chosen])];
     applyFilterCriteria(c, chosen.length === items.length ? null : chosen, key);
     focusGrid();
   };
@@ -3186,7 +3195,7 @@ function openFilterMenu(c, anchorEl, key = '') {
     class: 'filter-menu',
     onkeydown: (e) => { e.stopPropagation(); if (e.key === 'Enter') ok(); if (e.key === 'Escape') { closeMenus(); focusGrid(); } },
   },
-  search, list,
+  search, list, addRow,
   el('div', { class: 'filter-foot' },
     el('button', { class: 'btn primary', onclick: ok }, '확인'),
     el('button', { class: 'btn', onclick: () => { closeMenus(); focusGrid(); } }, '취소')));
@@ -9079,11 +9088,30 @@ function cfRuleEditor(initial, onSave, { title = '새 서식 규칙' } = {}) {
           render();
         });
       detail.append(row(el('span', {}, '서식 스타일:'), style));
+      // 최소 · 중간 · 최대 기준 (엑셀의 [종류] · [값]): 최소값/최대값 · 숫자 · 백분율 · 백분위수 · 수식
+      const CFVO_TYPES = [['min', '최소값'], ['num', '숫자'], ['percent', '백분율'], ['percentile', '백분위수'], ['formula', '수식'], ['max', '최대값']];
+      const cfvoEditor = (i, n, label) => {
+        const dflt = i === 0 ? { type: 'min' } : i === n - 1 ? { type: 'max' } : { type: 'percentile', v: 50 };
+        rule.cfvo ??= Array.from({ length: n }, (_, k) => (k === 0 ? { type: 'min' } : k === n - 1 ? { type: 'max' } : { type: 'percentile', v: 50 }));
+        const p = rule.cfvo[i] ?? (rule.cfvo[i] = dflt);
+        const valIn = el('input', { type: 'text', value: p.v ?? '', style: { width: '80px' }, disabled: p.type === 'min' || p.type === 'max' });
+        valIn.addEventListener('input', () => { p.v = valIn.value; prevBox.replaceChildren(cfPreview(rule)); });
+        const typeSel = sel(CFVO_TYPES, p.type, (v) => { p.type = v; valIn.disabled = v === 'min' || v === 'max'; if (!valIn.disabled && valIn.value === '') { valIn.value = v === 'percentile' || v === 'percent' ? '50' : '0'; p.v = valIn.value; } });
+        return el('div', { class: 'cf-cfvo' }, el('b', {}, label), typeSel, valIn);
+      };
       if (rule.type === 'scale') {
         const names = rule.colors.length === 3 ? ['최소값', '중간값', '최대값'] : ['최소값', '최대값'];
-        detail.append(row(...rule.colors.map((c, i) => el('label', { class: 'fc-field' }, el('span', {}, names[i]), colorIn(c, (v) => { rule.colors[i] = v; prevBox.replaceChildren(cfPreview(rule)); })))));
+        if (rule.cfvo && rule.cfvo.length !== rule.colors.length) delete rule.cfvo;
+        detail.append(el('div', { class: 'cf-cfvo-grid' }, ...rule.colors.map((c, i) => el('div', {}, cfvoEditor(i, rule.colors.length, names[i]),
+          el('label', { class: 'fc-field' }, el('span', {}, '색'), colorIn(c, (v) => { rule.colors[i] = v; prevBox.replaceChildren(cfPreview(rule)); }))))));
       } else if (rule.type === 'bar') {
-        detail.append(row(el('span', {}, '막대 색:'), colorIn(rule.color ?? '#638ec6', (v) => { rule.color = v; prevBox.replaceChildren(cfPreview(rule)); }), chk('막대만 표시', rule.iconOnly, (on) => { rule.iconOnly = on || undefined; })));
+        if (rule.cfvo && rule.cfvo.length !== 2) delete rule.cfvo;
+        detail.append(
+          el('div', { class: 'cf-cfvo-grid' }, cfvoEditor(0, 2, '최소값'), cfvoEditor(1, 2, '최대값')),
+          row(el('span', {}, '막대 색:'), colorIn(rule.color ?? '#638ec6', (v) => { rule.color = v; prevBox.replaceChildren(cfPreview(rule)); }),
+            sel([['grad', '그라데이션 채우기'], ['solid', '단색 채우기']], rule.gradient === false ? 'solid' : 'grad', (v) => { rule.gradient = v === 'solid' ? false : undefined; prevBox.replaceChildren(cfPreview(rule)); })),
+          row(el('span', {}, '음수 막대 색:'), colorIn(rule.negColor ?? '#ff0000', (v) => { rule.negColor = v; }), chk('막대만 표시', rule.iconOnly, (on) => { rule.iconOnly = on || undefined; })),
+        );
       } else {
         detail.append(
           row(el('span', {}, '아이콘 스타일:'), sel(ICON_SETS.map((s) => [s.id, s.label]), rule.icons, (v) => { rule.icons = v; render(); })),
@@ -9662,19 +9690,19 @@ const MENUS = {
     const add = (rule) => wb.transact(() => wb.addCondRule(si, { ...usedClip(sel), ...rule }), meta());
     return [
       { title: '셀 강조 규칙' },
-      { label: '보다 큼...', action: () => condRuleDialog('gt') },
-      { label: '보다 작음...', action: () => condRuleDialog('lt') },
-      { label: '다음 값의 사이에 있음...', action: () => condRuleDialog('between') },
-      { label: '같음...', action: () => condRuleDialog('eq') },
-      { label: '텍스트 포함...', action: () => condRuleDialog('text') },
-      { label: '발생 날짜...', action: () => cfRuleEditor({ type: 'date', period: 'today', style: { fill: '#ffc7ce', color: '#9c0006' } }, (nr) => wb.transact(() => wb.addCondRule(si, { ...usedClip(sel), ...nr }), meta()), { title: '발생 날짜' }) },
-      { label: '중복 값...', action: () => condRuleDialog('dup') },
+      { label: '보다 큼...', icon: '<span class="cfi">&gt;</span>', action: () => condRuleDialog('gt') },
+      { label: '보다 작음...', icon: '<span class="cfi">&lt;</span>', action: () => condRuleDialog('lt') },
+      { label: '다음 값의 사이에 있음...', icon: '<span class="cfi">↔</span>', action: () => condRuleDialog('between') },
+      { label: '같음...', icon: '<span class="cfi">=</span>', action: () => condRuleDialog('eq') },
+      { label: '텍스트 포함...', icon: '<span class="cfi">ab</span>', action: () => condRuleDialog('text') },
+      { label: '발생 날짜...', icon: '<span class="cfi">31</span>', action: () => cfRuleEditor({ type: 'date', period: 'today', style: { fill: '#ffc7ce', color: '#9c0006' } }, (nr) => wb.transact(() => wb.addCondRule(si, { ...usedClip(sel), ...nr }), meta()), { title: '발생 날짜' }) },
+      { label: '중복 값...', icon: '<span class="cfi">≡</span>', action: () => condRuleDialog('dup') },
       { title: '상위/하위 규칙' },
-      { label: '상위 10개 항목...', action: () => condRuleDialog('top') },
-      { label: '상위 10%...', action: () => cfRuleEditor({ type: 'top', v1: '10', percent: true, style: { fill: '#ffc7ce', color: '#9c0006' } }, (nr) => wb.transact(() => wb.addCondRule(si, { ...usedClip(sel), ...nr }), meta()), { title: '상위 10%' }) },
-      { label: '하위 10개 항목...', action: () => cfRuleEditor({ type: 'bottom', v1: '10', style: { fill: '#ffc7ce', color: '#9c0006' } }, (nr) => wb.transact(() => wb.addCondRule(si, { ...usedClip(sel), ...nr }), meta()), { title: '하위 10개 항목' }) },
-      { label: '평균 초과', action: () => add({ type: 'aboveAvg', style: { fill: '#ffc7ce', color: '#9c0006' } }) },
-      { label: '평균 미만', action: () => add({ type: 'belowAvg', style: { fill: '#ffc7ce', color: '#9c0006' } }) },
+      { label: '상위 10개 항목...', icon: '<span class="cfi g">10↑</span>', action: () => condRuleDialog('top') },
+      { label: '상위 10%...', icon: '<span class="cfi g">%↑</span>', action: () => cfRuleEditor({ type: 'top', v1: '10', percent: true, style: { fill: '#ffc7ce', color: '#9c0006' } }, (nr) => wb.transact(() => wb.addCondRule(si, { ...usedClip(sel), ...nr }), meta()), { title: '상위 10%' }) },
+      { label: '하위 10개 항목...', icon: '<span class="cfi">10↓</span>', action: () => cfRuleEditor({ type: 'bottom', v1: '10', style: { fill: '#ffc7ce', color: '#9c0006' } }, (nr) => wb.transact(() => wb.addCondRule(si, { ...usedClip(sel), ...nr }), meta()), { title: '하위 10개 항목' }) },
+      { label: '평균 초과', icon: '<span class="cfi b">x̄↑</span>', action: () => add({ type: 'aboveAvg', style: { fill: '#ffc7ce', color: '#9c0006' } }) },
+      { label: '평균 미만', icon: '<span class="cfi b">x̄↓</span>', action: () => add({ type: 'belowAvg', style: { fill: '#ffc7ce', color: '#9c0006' } }) },
       { title: '데이터 막대' },
       { node: cfGallery([...BAR_PRESETS.modern.map(([n, color]) => ({ n: `${n} (모던)`, bg: `linear-gradient(90deg, ${color} 0 62%, transparent 62%)`, rule: { type: 'bar', color } })),
         ...BAR_PRESETS.excel.map(([n, color]) => ({ n: `${n} 그라데이션 채우기`, bg: `linear-gradient(90deg, ${color}, #fff 62%, transparent 62%)`, rule: { type: 'bar', color } }))], add) },
