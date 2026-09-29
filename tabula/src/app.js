@@ -237,6 +237,7 @@ const selIsActiveOnly = () => {
 };
 
 function updateSelectionUI() {
+  if (cfSmartTag && cfSmartTag._at !== `${si}:${sel.r1},${sel.c1},${sel.r2},${sel.c2}`) hideCfSmartTag();
   const selObj = chartSel ? findObject(sheet(), chartSel) : null;
   if (document.activeElement !== dom.nameBox) dom.nameBox.value = selObj ? (selObj.obj.name || OBJECT_LABEL[selObj.prop]) : nameBoxLabel();
   if (!editing) {
@@ -7100,24 +7101,124 @@ function refreshPivotCond(tsi, def) {
   });
   if (changed) wb.setSheetProp(tsi, 'cond', next);
 }
-/** 규칙 편집기의 '규칙 적용 대상' (선택 영역이 피벗 안이거나 규칙이 피벗에 묶여 있을 때) */
-function pivotScopeUi(rule) {
-  const entry = rule.pivot ? allPivots().find((e) => e.si === si && pivotNameOf(e) === rule.pivot.name) : null;
-  const def = entry?.def ?? pivotAreaHit(usedClip(sel));
-  if (!def) return null;
-  const L = pivotLayoutOf(si, def);
-  if (!L || !L.values.length) return null;
-  // 지금 칸의 값 필드 · 행 필드
+/** 규칙이 걸린 피벗 (규칙에 적힌 피벗 → 규칙 범위 → 지금 선택 순) */
+function pivotOfRule(rule, tsi = si) {
+  if (rule.pivot) {
+    const e = allPivots().find((x) => x.si === tsi && (x.def.name ?? '') === rule.pivot.name);
+    if (e) return e.def;
+  }
+  if (rule.r1 !== undefined) {
+    for (const { def } of pivotDefs(tsi)) {
+      const a = def.area;
+      if (a && rule.r1 <= a.r2 && rule.r2 >= a.r1 && rule.c1 <= a.c2 && rule.c2 >= a.c1) return def;
+    }
+    return null;
+  }
+  return pivotAreaHit(usedClip(sel));
+}
+/** 규칙의 적용 대상 기본값: 값 필드 · 행 필드 (규칙에 있으면 그것, 없으면 규칙 범위 첫 칸 / 지금 칸 기준) */
+function pivotScopeDefaults(rule, L, at = null) {
   let value = rule.pivot?.value ?? L.values[0];
   let rowField = rule.pivot?.rowField ?? L.rows[L.rows.length - 1] ?? null;
   if (!rule.pivot) {
-    const role = L.roles[active.r - L.top]?.[active.c - L.left] ?? '';
-    const m = PIVOT_DATA_ROLE.exec(role);
+    const p = at ?? (rule.r1 !== undefined ? { r: rule.r1, c: rule.c1 } : { r: active.r, c: active.c });
+    const m = PIVOT_DATA_ROLE.exec(L.roles[p.r - L.top]?.[p.c - L.left] ?? '');
     if (m) value = L.values[+m[2]] ?? value;
-    const dep = L.rowDepth[active.r - L.top];
+    const dep = L.rowDepth[p.r - L.top];
     if (dep >= 0 && L.rows[dep]) rowField = L.rows[dep];
   }
-  const colField = L.cols[L.cols.length - 1] ?? null;
+  return { value, rowField, colField: L.cols[L.cols.length - 1] ?? null };
+}
+const pivotScopeLabels = (d) => ({
+  selection: '선택한 셀',
+  data: `"${d.value}" 값을 표시하는 모든 셀`,
+  field: d.rowField ? `"${d.rowField}"${d.colField ? ` 및 "${d.colField}"` : ''}에 대해 "${d.value}" 값을 표시하는 모든 셀` : `"${d.value}" 값을 표시하는 모든 셀 (행 필드 없음)`,
+});
+/** 규칙 객체에 적용 대상을 정하고 범위를 다시 구함 (scope: selection · data · field) */
+function setRulePivotScope(rule, scope, tsi = si) {
+  const def = pivotOfRule(rule, tsi);
+  if (!def) return false;
+  const L = pivotLayoutOf(tsi, def);
+  if (!L?.values.length) return false;
+  const d = pivotScopeDefaults(rule, L);
+  rule.pivot = { name: def.name ?? '', scope, value: d.value, ...(d.rowField ? { rowField: d.rowField } : {}), ...(d.colField ? { colField: d.colField } : {}) };
+  if (scope !== 'selection') applyPivotScope(rule, L);
+  return true;
+}
+
+// 엑셀의 '서식 옵션' 단추: 피벗 안에 규칙을 넣은 직후 선택 영역 오른쪽 아래에 떠서 적용 대상 3가지를 고름
+let cfSmartTag = null;
+function hideCfSmartTag() { cfSmartTag?.remove(); cfSmartTag = null; }
+function showCfSmartTag(rule) {
+  hideCfSmartTag();
+  const shownAt = `${si}:${sel.r1},${sel.c1},${sel.r2},${sel.c2}`;
+  const def = pivotOfRule(rule);
+  const L = def ? pivotLayoutOf(si, def) : null;
+  if (!L?.values.length) return;
+  const rect = dom.view.getBoundingClientRect();
+  const sr = gv.screenRect(usedClip(sel));
+  const labels = pivotScopeLabels(pivotScopeDefaults(rule, L));
+  const btn = el('button', { class: 'cf-smarttag', title: '서식 옵션 — 규칙 적용 대상 (피벗 테이블)' }, el('span', { html: ICONS.condFormat ?? '' }), '▾');
+  btn.style.left = `${Math.min(rect.right - 40, rect.left + sr.x + sr.w + 2)}px`;
+  btn.style.top = `${Math.min(rect.bottom - 30, rect.top + sr.y + sr.h + 2)}px`;
+  btn.addEventListener('mousedown', (e) => e.preventDefault());
+  btn.addEventListener('click', () => {
+    const cur = rule.pivot?.scope ?? 'selection';
+    openMenu(btn, [
+      { title: '서식 규칙 적용 대상' },
+      ...['selection', 'data', 'field'].map((k) => ({
+        label: labels[k], checked: cur === k,
+        action: () => {
+          const list = sheet().cond;
+          const i = list.indexOf(rule);
+          if (i < 0) { hideCfSmartTag(); return; }
+          const next = list.map((x) => structuredClone(x));
+          setRulePivotScope(next[i], k);
+          wb.transact(() => wb.setSheetProp(si, 'cond', next), meta());
+          rule = sheet().cond[i];
+          toast(`규칙 적용 대상: ${labels[k]}`);
+          gv.renderAll();
+        },
+      })),
+    ]);
+  });
+  document.body.append(btn);
+  btn._at = shownAt;
+  cfSmartTag = btn;
+}
+/** 규칙 관리자의 '적용 대상' 칸: 피벗 규칙이면 3가지 중 고르기 */
+function pivotScopeSelect(rl, tsi, onChange) {
+  const def = pivotOfRule(rl, tsi);
+  const L = def ? pivotLayoutOf(tsi, def) : null;
+  if (!L?.values.length) return null;
+  const labels = pivotScopeLabels(pivotScopeDefaults(rl, L));
+  const sel2 = el('select', { class: 'cf-pscope', title: '피벗 테이블 규칙 적용 대상' },
+    ['selection', 'data', 'field'].map((k) => el('option', { value: k, selected: (rl.pivot?.scope ?? 'selection') === k }, labels[k])));
+  sel2.addEventListener('mousedown', (e) => e.stopPropagation());
+  sel2.addEventListener('change', () => { setRulePivotScope(rl, sel2.value, tsi); onChange?.(); });
+  return el('div', { class: 'cf-pscope-row' }, el('span', { class: 'muted' }, '피벗: '), sel2);
+}
+
+/** 조건부 서식 규칙 추가 (피벗 안이면 피벗에 묶고 '서식 옵션' 단추) */
+function addCondRuleHere(rule) {
+  const r = { ...usedClip(sel), ...rule };
+  const inPivot = !r.pivot && pivotOfRule(r);
+  if (inPivot) setRulePivotScope(r, 'selection');
+  wb.transact(() => wb.addCondRule(si, r), meta());
+  if (inPivot || r.pivot) setTimeout(() => showCfSmartTag(sheet().cond[0]), 0);
+}
+
+/** 규칙 편집기의 '규칙 적용 대상' (선택 영역이 피벗 안이거나 규칙이 피벗에 묶여 있을 때) */
+function pivotScopeUi(rule) {
+  const def = pivotOfRule(rule);
+  if (!def) return null;
+  const L = pivotLayoutOf(si, def);
+  if (!L || !L.values.length) return null;
+  // 값 필드 · 행 필드 (규칙에 적힌 것 → 규칙 범위 첫 칸 → 지금 칸)
+  const dflt = pivotScopeDefaults(rule, L, rule.r1 === undefined ? { r: active.r, c: active.c } : null);
+  let value = dflt.value;
+  const rowField = dflt.rowField;
+  const colField = dflt.colField;
   const cur = rule.pivot?.scope ?? 'selection';
   const name = `pvs${Date.now()}`;
   const opt = (v, label) => { const r = el('input', { type: 'radio', name, value: v, checked: cur === v }); return [r, el('label', { class: 'fc-check' }, r, label)]; };
@@ -10624,7 +10725,7 @@ function condRuleDialog(type) {
   fields.push({ name: 'preset', label: '적용할 서식', type: 'select', value: '0', options: presets });
   formDialog(title, fields, (v) => {
     const rule = { r1: rg.r1, c1: rg.c1, r2: rg.r2, c2: rg.c2, type: type === 'dup' ? v.mode : type, v1: v.v1, v2: v.v2, style: presets[Number(v.preset)].style };
-    wb.transact(() => wb.addCondRule(si, rule), meta());
+    addCondRuleHere(rule);
   }, { note });
 }
 
@@ -10914,7 +11015,7 @@ function cfManager() {
       const stop = el('input', { type: 'checkbox', checked: !!rl.stopIfTrue, disabled: VISUAL_TYPES.has(rl.type) });
       stop.addEventListener('change', () => { rl.stopIfTrue = stop.checked || undefined; });
       const tr = el('tr', { class: rl === current ? 'on' : '' },
-        el('td', {}, describeCond(rl)), el('td', {}, cfPreview(rl)), el('td', {}, rangeIn), el('td', { style: { textAlign: 'center' } }, stop));
+        el('td', {}, describeCond(rl)), el('td', {}, cfPreview(rl)), el('td', {}, rangeIn, pivotScopeSelect(rl, scopeSheet, () => { rangeIn.value = rangeText(rl); })), el('td', { style: { textAlign: 'center' } }, stop));
       tr.addEventListener('mousedown', () => { if (current !== rl) { current = rl; tbody.querySelectorAll('tr.on').forEach((x) => x.classList.remove('on')); tr.classList.add('on'); } });
       tr.addEventListener('dblclick', (e) => { if (e.target.tagName !== 'INPUT') edit(); });
       tbody.append(tr);
@@ -11399,7 +11500,7 @@ const MENUS = {
     { label: '셀 분할', icon: 'merge', action: () => toggleMerge('unmerge') },
   ],
   condFormat: () => {
-    const add = (rule) => wb.transact(() => wb.addCondRule(si, { ...usedClip(sel), ...rule }), meta());
+    const add = (rule) => addCondRuleHere(rule);
     return [
       { title: '셀 강조 규칙' },
       { label: '보다 큼...', icon: '<span class="cfi">&gt;</span>', action: () => condRuleDialog('gt') },
@@ -11407,12 +11508,12 @@ const MENUS = {
       { label: '다음 값의 사이에 있음...', icon: '<span class="cfi">↔</span>', action: () => condRuleDialog('between') },
       { label: '같음...', icon: '<span class="cfi">=</span>', action: () => condRuleDialog('eq') },
       { label: '텍스트 포함...', icon: '<span class="cfi">ab</span>', action: () => condRuleDialog('text') },
-      { label: '발생 날짜...', icon: '<span class="cfi">31</span>', action: () => cfRuleEditor({ type: 'date', period: 'today', style: { fill: '#ffc7ce', color: '#9c0006' } }, (nr) => wb.transact(() => wb.addCondRule(si, { ...usedClip(sel), ...nr }), meta()), { title: '발생 날짜' }) },
+      { label: '발생 날짜...', icon: '<span class="cfi">31</span>', action: () => cfRuleEditor({ type: 'date', period: 'today', style: { fill: '#ffc7ce', color: '#9c0006' } }, (nr) => addCondRuleHere(nr), { title: '발생 날짜' }) },
       { label: '중복 값...', icon: '<span class="cfi">≡</span>', action: () => condRuleDialog('dup') },
       { title: '상위/하위 규칙' },
       { label: '상위 10개 항목...', icon: '<span class="cfi g">10↑</span>', action: () => condRuleDialog('top') },
-      { label: '상위 10%...', icon: '<span class="cfi g">%↑</span>', action: () => cfRuleEditor({ type: 'top', v1: '10', percent: true, style: { fill: '#ffc7ce', color: '#9c0006' } }, (nr) => wb.transact(() => wb.addCondRule(si, { ...usedClip(sel), ...nr }), meta()), { title: '상위 10%' }) },
-      { label: '하위 10개 항목...', icon: '<span class="cfi">10↓</span>', action: () => cfRuleEditor({ type: 'bottom', v1: '10', style: { fill: '#ffc7ce', color: '#9c0006' } }, (nr) => wb.transact(() => wb.addCondRule(si, { ...usedClip(sel), ...nr }), meta()), { title: '하위 10개 항목' }) },
+      { label: '상위 10%...', icon: '<span class="cfi g">%↑</span>', action: () => cfRuleEditor({ type: 'top', v1: '10', percent: true, style: { fill: '#ffc7ce', color: '#9c0006' } }, (nr) => addCondRuleHere(nr), { title: '상위 10%' }) },
+      { label: '하위 10개 항목...', icon: '<span class="cfi">10↓</span>', action: () => cfRuleEditor({ type: 'bottom', v1: '10', style: { fill: '#ffc7ce', color: '#9c0006' } }, (nr) => addCondRuleHere(nr), { title: '하위 10개 항목' }) },
       { label: '평균 초과', icon: '<span class="cfi b">x̄↑</span>', action: () => add({ type: 'aboveAvg', style: { fill: '#ffc7ce', color: '#9c0006' } }) },
       { label: '평균 미만', icon: '<span class="cfi b">x̄↓</span>', action: () => add({ type: 'belowAvg', style: { fill: '#ffc7ce', color: '#9c0006' } }) },
       { title: '데이터 막대' },
@@ -11428,7 +11529,7 @@ const MENUS = {
         action: () => add({ type: 'icons', icons: set.id }),
       })),
       { sep: true },
-      { label: '새 규칙...', icon: 'condFormat', action: () => cfRuleEditor(null, (nr) => wb.transact(() => wb.addCondRule(si, { ...usedClip(sel), ...nr }), meta())) },
+      { label: '새 규칙...', icon: 'condFormat', action: () => cfRuleEditor(null, (nr) => addCondRuleHere(nr)) },
       { label: '규칙 관리...', action: cfManager },
       { label: '규칙 지우기 - 선택한 셀', action: () => wb.transact(() => wb.clearCondRules(si, sel), meta()) },
       { label: '규칙 지우기 - 시트 전체', action: () => wb.transact(() => wb.clearCondRules(si), meta()) },
@@ -11889,7 +11990,7 @@ const COMMANDS = {
   insertPictureInCell,
   textToColumns,
   condManager: cfManager,
-  condNewRule: () => cfRuleEditor(null, (nr) => wb.transact(() => wb.addCondRule(si, { ...usedClip(sel), ...nr }), meta())),
+  condNewRule: () => cfRuleEditor(null, (nr) => addCondRuleHere(nr)),
   createTable: () => createTableDialog(),
   insertSlicer: insertSlicerDialog,
   insertTimeline: insertTimelineDialog,
