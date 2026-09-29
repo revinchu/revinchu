@@ -133,7 +133,15 @@ function flatRef(rows, asText) {
  */
 export function resolveChart(ch, api) {
   let base;
-  if (ch.pivot) base = api.pivot(ch.pivot) ?? { categories: [], series: [] };
+  if (ch.pivot) {
+    base = api.pivot(ch.pivot) ?? { categories: [], series: [] };
+    // 위셀: 피벗 차트에 보일 지표만 골라서 (엑셀처럼 모든 값 필드가 강제로 나오지 않게) — 고른 순서대로
+    const pick = ch.pivot.values;
+    if (pick?.length && base.series?.length) {
+      const order = new Map(pick.map((n, i) => [n, i]));
+      base = { ...base, series: base.series.filter((sr) => order.has(sr.measure)).sort((a, b) => order.get(a.measure) - order.get(b.measure)) };
+    }
+  }
   else if (ch.series?.length) {
     const catRef = ch.series.find((s) => s.cat)?.cat;
     const series = ch.series.map((s, i) => {

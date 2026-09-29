@@ -136,3 +136,21 @@ test('피벗 조건부 서식: 값 필드 전체 규칙이 xlsx <conditionalForm
   const back = new Workbook(readXlsx(bytes).data);
   assert.deepEqual(back.sheets[0].cond[0].pivot, { name: '피벗1', scope: 'data', value: '합계 : 비용' });
 });
+
+test('위셀 피벗 차트: 고른 지표만 · 엑셀에는 피벗 범위 참조 일반 차트 · 다시 열면 피벗 차트', async () => {
+  const { unzip, textOf } = await import('../src/zip.js');
+  const { chartModelData } = await import('../src/chart.js');
+  const wb = sheetWith([['주차', '1주', '1주', '2주'], ['비용', 10, 20, 30], ['클릭', 1, 2, 3], ['전환', 0, 1, 1]]);
+  const values = [{ field: '비용', agg: 'sum' }, { field: '클릭', agg: 'sum' }, { field: '전환', agg: 'sum' }];
+  wb.transact(() => wb.setSheetProp(0, 'pivot', { name: '피벗1', source: 'Sheet1', range: { r1: 0, c1: 0, r2: 3, c2: 3 }, rows: ['주차'], cols: [], pages: [], filters: {}, values, top: 0, left: 6, area: { r1: 0, c1: 6, r2: 3, c2: 9 } }));
+  const chart = { id: 'c1', type: 'column', title: 't', pivot: { sheet: 'Sheet1', name: '피벗1', values: ['합계 : 전환', '합계 : 비용'] }, x: 0, y: 0, w: 400, h: 300 };
+  wb.transact(() => wb.setSheetProp(0, 'charts', [chart]));
+  const data = chartModelData(wb, 0, chart);
+  assert.deepEqual(data.series.map((s) => s.name), ['합계 : 전환', '합계 : 비용']);
+  const bytes = writeXlsx(wb);
+  const xml = textOf(unzip(bytes)['xl/charts/chart1.xml']);
+  assert.doesNotMatch(xml, /<c:pivotSource>/);
+  assert.equal((xml.match(/<c:ser>/g) ?? []).length, 2);
+  const back = new Workbook(readXlsx(bytes).data);
+  assert.deepEqual(back.sheets[0].charts[0].pivot, chart.pivot);
+});

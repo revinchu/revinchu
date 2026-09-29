@@ -1010,3 +1010,6 @@ legend { padding: 0 4px; color: #444; }
 .view-bar .btn { margin-left: auto; }
 .view-bar .view-live { color: #9ae6b4; font-size: 12px; }
 body.view-mode .titlebar, body.view-mode .ribbon-tabs, body.view-mode .ribbon, body.view-mode .formula-row { display: none !important; }
+.pm-list { display: flex; flex-direction: column; border: 1px solid #e3e3e3; max-height: 40vh; overflow-y: auto; }
+.pm-row { display: flex; justify-content: space-between; align-items: center; padding: 3px 8px; border-bottom: 1px solid #f0f0f0; }
+.pm-move .lnk { padding: 0 4px; }

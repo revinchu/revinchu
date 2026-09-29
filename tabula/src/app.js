@@ -2431,8 +2431,10 @@ function pivotAreaHit(rg) {
   return null;
 }
 
-function protectBlocked(action = 'cells', rg = sel) {
-  if (action === 'cells' && !opts.pivotEdit && pivotAreaHit(rg)) {
+// 피벗 테이블 안에서 막는 명령: 셀 값을 바꾸는 것만 (차트 · 슬라이서 · 서식 삽입 등은 엑셀처럼 허용)
+const PIVOT_LOCKED = /^(clear(Contents|All)?|delete(Rows|Cols|Cells|MenuKey)?|paste(ValuesKey|Values|Special)?|cut|fill(Down|Right|Up|Left|Series)?|flashFill|dedupe|textToColumns|insert(Rows|Cols|Cells|MenuKey|Date|Time)|merge(Center|Across|Cells)?|unmerge|autosum|dataTable|goalSeek|subtotal)$/;
+function protectBlocked(action = 'cells', rg = sel, cmd = null) {
+  if (action === 'cells' && !opts.pivotEdit && (!cmd || PIVOT_LOCKED.test(cmd)) && pivotAreaHit(rg)) {
     alertDialog('WIXEL', '피벗 테이블의 일부는 변경할 수 없습니다. 피벗 테이블은 원본 데이터를 계산한 결과이므로 값을 바꾸려면 원본 데이터를 고친 뒤 새로 고치세요.\n(파일 → 옵션 → 피벗 테이블 값 영역의 셀 편집 허용을 켜면 가상 분석용으로 편집할 수 있습니다.)');
     return true;
   }
@@ -4181,27 +4183,111 @@ function insertChartAllDialog(changeId = null) {
   });
 }
 
-/** 피벗 차트: 피벗 테이블 안이면 그 피벗으로, 아니면 새 피벗 테이블 + 피벗 차트 */
+/**
+ * 위셀 피벗 차트 지표 고르기: 엑셀은 피벗 차트에 모든 값 필드가 강제로 나와서 지표별 차트를 만들려면 피벗 테이블을 따로 만들어야 하지만,
+ * 여기서는 같은 피벗 테이블에서 보고 싶은 지표만 골라 차트를 여러 개 만들 수 있음 (슬라이서 · 필터를 누르면 함께 바뀜)
+ * onDone({ values, type, secondary }) — values 는 값 필드 표시 이름(고른 순서)
+ */
+function pivotMetricDialog(entry, cur, onDone, { title = '피벗 차트 — 표시할 지표 선택' } = {}) {
+  const d = pivotDefV2(entry.def);
+  const names = (d.values ?? []).map((v) => v.name ?? valueName(v));
+  if (!names.length) { toast('피벗 테이블에 값 필드가 없습니다.'); return; }
+  let order = [...(cur?.values?.length ? cur.values.filter((n) => names.includes(n)) : names), ...names.filter((n) => !(cur?.values ?? names).includes(n))];
+  const checked = new Set(cur?.values?.length ? cur.values : names);
+  const listEl = el('div', { class: 'pm-list' });
+  const type = el('select', {}, [['column', '묶은 세로 막대형'], ['bar', '묶은 가로 막대형'], ['line', '꺾은선형'], ['area', '영역형'], ['combo', '콤보 (막대 + 꺾은선)'], ['pie', '원형 (첫 지표)'], ['doughnut', '도넛형 (첫 지표)']]
+    .map(([v, l]) => el('option', { value: v, selected: v === (cur?.type ?? 'column') }, l)));
+  const second = el('input', { type: 'checkbox', checked: cur?.secondary ?? true });
+  const draw = () => {
+    listEl.replaceChildren(...order.map((n, i) => {
+      const cb = el('input', { type: 'checkbox', checked: checked.has(n) });
+      cb.addEventListener('change', () => { if (cb.checked) checked.add(n); else checked.delete(n); });
+      const mv = (dir) => { const j = i + dir; if (j < 0 || j >= order.length) return; [order[i], order[j]] = [order[j], order[i]]; draw(); };
+      return el('div', { class: 'pm-row' }, el('label', { class: 'an-check' }, cb, n),
+        el('span', { class: 'pm-move' }, el('button', { type: 'button', class: 'lnk', disabled: i === 0, onclick: () => mv(-1) }, '▲'), el('button', { type: 'button', class: 'lnk', disabled: i === order.length - 1, onclick: () => mv(1) }, '▼')));
+    }));
+  };
+  draw();
+  openDialog({
+    title, width: 460,
+    body: el('div', { class: 'an-dlg' },
+      el('div', { class: 'muted' }, `'${pivotNameOf(entry)}'의 값 필드 중 차트에 보일 지표만 고르세요. 같은 피벗 테이블로 지표별 차트를 여러 개 만들 수 있고, 슬라이서 · 필터를 누르면 피벗 테이블과 함께 바뀝니다. (엑셀 파일로 저장하면 피벗 테이블 범위를 참조하는 일반 차트가 됩니다)`),
+      el('div', { class: 'an-head' }, '지표 (위아래로 순서 바꾸기)'), listEl,
+      el('label', { class: 'an-row' }, el('span', {}, '차트 종류'), type),
+      el('label', { class: 'an-check' }, second, '콤보: 마지막 지표를 꺾은선 · 보조 축으로 (단위가 다른 지표용, 예: 비용 + ROAS)')),
+    buttons: [
+      { label: '확인', primary: true, action: () => {
+        const values = order.filter((n) => checked.has(n));
+        if (!values.length) { toast('지표를 하나 이상 고르세요.'); return false; }
+        onDone({ values: values.length === names.length && values.every((n, i) => n === names[i]) ? null : values, type: type.value, secondary: second.checked, count: values.length });
+        return undefined;
+      } },
+      { label: '취소' },
+    ],
+  });
+}
+const pivotChartPatch = ({ values, type, secondary, count }, base) => {
+  const combo = type === 'combo';
+  return {
+    type: combo ? 'combo' : type,
+    pivot: { ...base, ...(values ? { values } : { values: undefined }) },
+    seriesFmt: combo ? Array.from({ length: count }, (_, i) => (i === count - 1 && count > 1 ? { type: 'line', ...(secondary ? { axis: 1 } : {}) } : { type: 'column' })) : undefined,
+  };
+};
+
+/** 피벗 차트: 피벗 테이블 안이면 그 피벗으로 (값 필드가 둘 이상이면 표시할 지표를 고름), 아니면 새 피벗 테이블 + 피벗 차트 */
 function insertPivotChart() {
   const here = pivotHere();
   if (here) {
     const def = here.def;
     if (!def.name) putPivotDef(here, { ...def, name: pivotNameOf(here) });
-    const a = def.area ?? { r1: def.top ?? 0, c1: def.left ?? 0, r2: (def.top ?? 0) + 10, c2: (def.left ?? 0) + 3 };
-    gv.refreshAxes();
-    const x = gv.cols.pos(a.c2 + 2);
-    const y = gv.rows.pos(a.r1);
-    const id = `ch${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
-    const chart = { id, type: 'column', title: pivotNameOf(here), pivot: { sheet: wb.sheets[here.si].name, name: pivotNameOf(here) }, fieldButtons: true, x, y, w: 480, h: 288, z: nextZ() };
-    wb.transact(() => wb.setSheetProp(si, 'charts', [...sheet().charts.map((c) => ({ ...c })), chart]), meta());
-    chartSel = id;
-    gv.renderObjectsAll();
-    updateSelectionUI();
-    toast('피벗 차트를 만들었습니다. 피벗 테이블 필드를 바꾸거나 슬라이서를 누르면 차트도 함께 바뀝니다.');
+    if ((pivotDefV2(def).values ?? []).length > 1) {
+      pivotMetricDialog(here, null, (pick) => makePivotChart(here, pick));
+      return;
+    }
+    makePivotChart(here, null);
     return;
   }
   toast('먼저 피벗 테이블을 만든 다음, 피벗 테이블 안의 셀을 고르고 [피벗 차트]를 누르세요.');
   pivotDialog();
+}
+function makePivotChart(here, pick) {
+  {
+    const def = here.def;
+    const a = def.area ?? { r1: def.top ?? 0, c1: def.left ?? 0, r2: (def.top ?? 0) + 10, c2: (def.left ?? 0) + 3 };
+    gv.refreshAxes();
+    let x = gv.cols.pos(a.c2 + 2);
+    let y = gv.rows.pos(a.r1);
+    // 피벗이 넓으면 오른쪽 대신 아래에 (화면 밖에 만들지 않게)
+    if (x - (gv.sx ?? 0) + 480 > gv.viewW) { x = gv.cols.pos(a.c1); y = gv.rows.pos(a.r2 + 2); }
+    const id = `ch${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+    const base = { sheet: wb.sheets[here.si].name, name: pivotNameOf(here) };
+    const patch = pick ? pivotChartPatch(pick, base) : { type: 'column', pivot: base };
+    if (!patch.seriesFmt) delete patch.seriesFmt;
+    if (!patch.pivot.values) delete patch.pivot.values;
+    const title = pick?.values?.length ? pick.values.join(' · ') : pivotNameOf(here);
+    // 같은 피벗으로 여러 차트를 만들면 겹치지 않게 아래로
+    const sameCount = sheet().charts.filter((c) => c.pivot?.name === base.name).length;
+    const onRight = y === gv.rows.pos(a.r1);
+    const chart = { id, title, fieldButtons: true, x: onRight ? x : x + sameCount * 500, y: onRight ? y + sameCount * 300 : y, w: 480, h: 288, z: nextZ(), ...patch };
+    wb.transact(() => wb.setSheetProp(si, 'charts', [...sheet().charts.map((c) => ({ ...c })), chart]), meta());
+    chartSel = id;
+    gv.ensureVisible(gv.rows.indexAt(chart.y + 100), gv.cols.indexAt(chart.x + 200));
+    gv.renderObjectsAll();
+    updateSelectionUI();
+    toast(pick?.values ? `지표 ${pick.values.length}개만 보이는 피벗 차트를 만들었습니다. 슬라이서를 누르면 피벗 테이블과 함께 바뀝니다.` : '피벗 차트를 만들었습니다. 피벗 테이블 필드를 바꾸거나 슬라이서를 누르면 차트도 함께 바뀝니다.');
+  }
+}
+/** 피벗 차트의 지표 다시 고르기 ([데이터 선택] · 오른쪽 클릭) */
+function pivotChartMetrics(chId = chartSel) {
+  const ch = sheet().charts.find((c) => c.id === chId);
+  const e = ch?.pivot ? findPivotEntry(ch.pivot.sheet ?? null, ch.pivot.name ?? null) : null;
+  if (!e) { toast('연결된 피벗 테이블을 찾을 수 없습니다.'); return; }
+  pivotMetricDialog(e, { values: ch.pivot.values, type: ch.type, secondary: ch.seriesFmt?.some((f) => f?.axis === 1) ?? true }, (pick) => {
+    const patch = pivotChartPatch(pick, { sheet: ch.pivot.sheet, name: ch.pivot.name });
+    updateChart(ch.id, { ...patch, ...(pick.type === 'combo' ? {} : { seriesFmt: undefined }) });
+    gv.renderObjectsAll();
+  }, { title: '피벗 차트 — 표시할 지표' });
 }
 
 function chartElementsMenu() {
@@ -5899,6 +5985,7 @@ function objectMenu(id, pos) {
   if (f.prop === 'charts') {
     items.push(
       { label: '차트 편집...', icon: 'chartColumn', action: () => chartDialog(id) },
+      ...(f.obj.pivot ? [{ label: '피벗 차트 지표 선택...', icon: 'pivot', action: () => pivotChartMetrics(id) }] : []),
       { title: '차트 종류 변경' },
       ...CHART_TYPES.map((t) => ({ label: t.label, checked: f.obj.type === t.id, action: () => updateChart(id, { type: t.id }) })),
     );
@@ -11400,7 +11487,8 @@ const COMMANDS = {
   insertChartAll: () => insertChartAllDialog(),
   insertPivotChart: () => insertPivotChart(),
   chartSwitch: () => chartSwitchRowCol(),
-  chartSelectData: () => { if (chartSel) chartDialog(chartSel); },
+  chartSelectData: () => { if (!chartSel) return; if (chartHere()?.pivot) pivotChartMetrics(chartSel); else chartDialog(chartSel); },
+  pivotChartMetrics: () => pivotChartMetrics(),
   chartChangeType: () => { if (chartSel) insertChartAllDialog(chartSel); },
   chartFormat: () => chartFormatPane(),
   chartPivotFields: () => { const ch = chartHere(); if (ch?.pivot) { updateChart(ch.id, { fieldButtons: ch.fieldButtons === false ? undefined : false }); gv.renderObjectsAll(); } else toast('피벗 차트에서 쓸 수 있습니다.'); },
@@ -11758,7 +11846,7 @@ function run(cmd, arg) {
   }
   const fn = COMMANDS[cmd];
   if (!fn) { toast('지원하지 않는 기능입니다.'); return; }
-  if (protectBlocked(protectAction(cmd))) return;
+  if (protectBlocked(protectAction(cmd), sel, cmd)) return;
   fn(arg);
   if (REPEATABLE.has(cmd)) lastRepeat = () => COMMANDS[cmd](arg);
   focusGrid();
@@ -12168,7 +12256,8 @@ async function init() {
       const e = findPivotEntry(ch.pivot.sheet ?? null, ch.pivot.name ?? null);
       if (!e) return null;
       const d = pivotDefV2(e.def);
-      return { rows: d.rows ?? [], cols: d.cols ?? [], pages: d.pages ?? [], values: (d.values ?? []).map((v) => v.name ?? valueName(v)) };
+      const vals = (d.values ?? []).map((v) => v.name ?? valueName(v));
+      return { rows: d.rows ?? [], cols: d.cols ?? [], pages: d.pages ?? [], values: ch.pivot.values?.length ? ch.pivot.values.filter((n) => vals.includes(n)) : vals };
     },
     slicerModel,
     onZoomWheel: (d) => setZoom(view.zoom + d),

@@ -1456,6 +1456,8 @@ function pivotChartDataRaw(rows, def, fieldStyle) {
     const col = meta.labelCols + j;
     series.push({
       name,
+      measure: valueName(meta.values[leaf.vi]),
+      vi: leaf.vi,
       values: rowIdx.map((ri) => { const raw = grid[ri]?.[col]?.raw; const n = raw === '' || raw === undefined ? NaN : Number(raw); return Number.isFinite(n) ? n : null; }),
       numFmt: grid[rowIdx[0]]?.[col]?.style ?? null,
       col,
