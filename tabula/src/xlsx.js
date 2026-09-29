@@ -814,6 +814,9 @@ function* readSheet(files, path, ctx) {
   }
   sheet.validations = readValidations(root);
   sheet.codeName = child(root, 'sheetPr')?.attrs.codeName;
+  // 시트 탭 색
+  const tabC = colorOf(child(child(root, 'sheetPr'), 'tabColor'), ctx.theme);
+  if (tabC) sheet.tabColor = tabC;
   // 스파크라인
   const sgs = descendants(root, 'sparklineGroup');
   if (sgs.length) {
@@ -3052,7 +3055,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx' } = {}) 
     const extLst = exts.length ? `<extLst>${exts.join('')}</extLst>` : '';
 
     files[`xl/worksheets/sheet${si + 1}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="${NS_MAIN}" xmlns:r="${NS_R}">`
-      + (vba || olPr ? `<sheetPr${vba ? ` codeName="${esc(vba.sheetCodes?.[sheet.name] ?? `Sheet${si + 1}`)}"` : ''}>${olPr}</sheetPr>` : '')
+      + (vba || olPr || sheet.tabColor ? `<sheetPr${vba ? ` codeName="${esc(vba.sheetCodes?.[sheet.name] ?? `Sheet${si + 1}`)}"` : ''}>${sheet.tabColor ? `<tabColor rgb="${argb(sheet.tabColor)}"/>` : ''}${olPr}</sheetPr>` : '')
       + `<dimension ref="${dim}"/>`
       + `<sheetViews><sheetView${sheet.noGrid ? ' showGridLines="0"' : ''}${sheet.zoom && sheet.zoom !== 100 ? ` zoomScale="${sheet.zoom}" zoomScaleNormal="${sheet.zoom}"` : ''}${sheet.view && (sheet.view.top || sheet.view.left) ? ` topLeftCell="${cellName(sheet.view.top, sheet.view.left)}"` : ''} workbookViewId="0"${si === (wb.sheets[activeSheet]?.state && wb.sheets[activeSheet].state !== 'visible' ? Math.max(0, wb.sheets.findIndex((x) => !x.state || x.state === 'visible')) : activeSheet) ? ' tabSelected="1"' : ''}>${pane}</sheetView></sheetViews>`
       + `<sheetFormatPr${sheet.defColW ? ` defaultColWidth="${px2widthM(sheet.defColW, wmdw)}"` : ''} defaultRowHeight="${px2pt(sheet.defRowH ?? DEFAULT_ROW_HEIGHT)}"${sheet.defRowH ? ' customHeight="1"' : ''}${olRowMax ? ` outlineLevelRow="${olRowMax}"` : ''}${olColMax ? ` outlineLevelCol="${olColMax}"` : ''}/>`

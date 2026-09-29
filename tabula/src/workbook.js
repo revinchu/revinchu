@@ -326,9 +326,9 @@ function sheetFromData(s) {
 
 /** 시트의 부가 속성 (셀 외) — 저장/복원/복제용 */
 const SHEET_PROPS = ['colWidths', 'rowHeights', 'merges', 'cond', 'colStyles', 'rowStyles', 'allStyle',
-  'hiddenRows', 'hiddenCols', 'rowManual', 'freeze', 'filter', 'charts', 'pivot', 'validations', 'images', 'shapes', 'tables', 'slicers', 'pivotsExtra', 'state', 'noGrid', 'outline', 'protect', 'sparklines', 'page', 'defRowH', 'defColW', 'zoom', 'view'];
+  'hiddenRows', 'hiddenCols', 'rowManual', 'freeze', 'filter', 'charts', 'pivot', 'validations', 'images', 'shapes', 'tables', 'slicers', 'pivotsExtra', 'state', 'noGrid', 'outline', 'protect', 'sparklines', 'page', 'defRowH', 'defColW', 'zoom', 'view', 'tabColor'];
 // 바뀌어도 수식 결과가 달라지지 않는 시트 속성
-const CALC_NEUTRAL = new Set(['defRowH', 'defColW', 'zoom', 'view', 'outline', 'protect', 'sparklines', 'page', 'state', 'noGrid', 'charts', 'images', 'shapes', 'slicers', 'freeze', 'cond', 'validations', 'colStyles', 'rowStyles', 'allStyle', 'merges']);
+const CALC_NEUTRAL = new Set(['tabColor', 'defRowH', 'defColW', 'zoom', 'view', 'outline', 'protect', 'sparklines', 'page', 'state', 'noGrid', 'charts', 'images', 'shapes', 'slicers', 'freeze', 'cond', 'validations', 'colStyles', 'rowStyles', 'allStyle', 'merges']);
 
 /** 숫자 키 객체의 키를 삽입/삭제에 맞춰 이동 */
 function shiftKeys(obj, index, count) {
@@ -1827,14 +1827,21 @@ export class Workbook {
   }
 
   // ─────────── 저장 / 불러오기 ───────────
-  serialize() {
+  /** 시트 밖의 통합 문서 속성 (저장용: 기본 글꼴 · 기본 서식 · 테마 · 매크로 · 이름) */
+  bookMeta() {
     return {
-      version: 1,
       ...(this.vba ? { vba: this.vba } : {}),
       ...(this.defaultFont ? { defaultFont: { ...this.defaultFont } } : {}),
       ...(this.baseStyle ? { baseStyle: { ...this.baseStyle } } : {}),
       ...(this.theme ? { theme: [...this.theme] } : {}),
       ...(this.names.length ? { names: this.names.map(({ _ast, _text, ...n }) => ({ ...n })) } : {}),
+    };
+  }
+
+  serialize() {
+    return {
+      version: 1,
+      ...this.bookMeta(),
       sheets: this.sheets.map((s) => {
         const cells = {};
         for (const [k, cell] of s.cells) cells[k] = cellData(cell);

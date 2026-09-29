@@ -51,6 +51,7 @@ import {
 } from './validation.js';
 import { OBJECT_PROPS, OBJECT_LABEL, SHAPE_KINDS, newShape, findObject, shapeSvg } from './shapes.js';
 import { extractVbaModules, fromBase64 } from './vba.js';
+import { findMatches, nextMatch, replaceText } from './find.js';
 import {
   CATEGORIES as FMT_CATEGORIES, CURRENCY_SYMBOLS, NEGATIVE_STYLES, DATE_TYPES, TIME_TYPES, FRACTION_TYPES, SPECIAL_TYPES, CUSTOM_LIST, buildCode, describeCode,
 } from './fmtpresets.js';
@@ -67,6 +68,8 @@ const dom = {
 };
 
 const STORAGE_KEY = 'tabula.workbook.v1';
+// 화면 그리기 규칙(피벗 서식 등)이 바뀔 때 올림: 예전 버전의 자동 저장본은 열 때 피벗을 다시 그림
+const APP_REV = 3;
 const REF_COLORS = ['#2f6fd6', '#d13438', '#8a3fd1', '#0f8a3c', '#c75a00', '#0093b8', '#c2187a'];
 const BIG_AREA = 200000;
 
@@ -975,6 +978,8 @@ function onGridKey(e) {
   if (e.altKey && !ctrl && (k === 'F8' || k === 'F11')) { handled(); run('macros'); return; }
   if (e.altKey && !ctrl && (k === 'PageDown' || k === 'PageUp')) { handled(); gv.scrollBy((k === 'PageDown' ? 1 : -1) * gv.viewW * 0.9, 0); return; }
   if (!ctrl && !e.altKey) {
+    // Shift+F4: 다음 찾기 (엑셀과 같음)
+    if (k === 'F4' && e.shiftKey) { handled(); if (findState.text || findState.format) findNext(); else run('find'); return; }
     if (k === 'F4') { handled(); repeatLast(); return; }
     if (k === 'F5') { handled(); run(e.shiftKey ? 'find' : 'goto'); return; }
     if (k === 'F3' && e.shiftKey) { handled(); run('insertFunction'); return; }
@@ -5969,77 +5974,252 @@ function pivotLayoutCmd(patch) {
 }
 
 // ───────────────────────── 찾기 / 바꾸기 ─────────────────────────
-const findState = { text: '', replace: '', matchCase: false, whole: false };
+const findState = {
+  text: '', replace: '', matchCase: false, whole: false, lookIn: 'formulas', byCols: false, scope: 'sheet',
+  format: null, replaceFormat: null, options: false,
+};
+let findCache = null;
 
-function findNext(text = findState.text, { quiet = false } = {}) {
-  if (!text) return false;
-  const u = wb.usedRange(si);
-  const total = u.rows * Math.max(1, u.cols);
-  if (!total) { if (!quiet) toast('찾을 수 없습니다.'); return false; }
-  const matches = (r, c) => {
-    const raw = wb.getRaw(si, r, c);
-    if (!raw) return false;
-    return [raw, displayText(r, c)].some((h) => {
-      const a = findState.matchCase ? h : h.toLowerCase();
-      const b = findState.matchCase ? text : text.toLowerCase();
-      return findState.whole ? a === b : a.includes(b);
-    });
-  };
-  const cols = Math.max(1, u.cols);
-  const start = Math.min(active.r * cols + active.c, total - 1);
-  for (let k = 1; k <= total; k++) {
-    const idx = (start + k) % total;
-    const r = Math.floor(idx / cols);
-    const c = idx % cols;
-    if (!gv.rows.isHidden(r) && matches(r, c)) { selectCell(r, c); return true; }
+const findOpts = (lookIn = findState.lookIn) => ({
+  text: findState.text, matchCase: findState.matchCase, whole: findState.whole, lookIn, byCols: findState.byCols, format: findState.format,
+  sheets: findState.scope === 'book' ? wb.sheets.map((_, i) => i).filter((i) => !isHiddenSheet(i)) : [si],
+});
+
+/** 조건에 맞는 모든 칸 (같은 조건 · 같은 내용이면 다시 계산하지 않음) */
+function findAllMatches(lookIn) {
+  const opts = findOpts(lookIn);
+  const key = `${JSON.stringify(opts)}|${wb.version}|${opts.sheets.map((i) => wb.sheets[i]._ev ?? 0).join(',')}`;
+  if (findCache?.key === key) return findCache.list;
+  const list = findMatches(wb, opts, { display: (s, r, c) => displayText(r, c, s) });
+  findCache = { key, list };
+  return list;
+}
+
+function goToMatch(m) {
+  if (m.si !== si) switchSheet(m.si);
+  selectCell(m.r, m.c);
+}
+
+/** 다음(또는 이전) 찾기 — 범위가 통합 문서면 다른 시트까지 */
+function findNext(text = findState.text, { quiet = false, back = false } = {}) {
+  findState.text = text;
+  if (!text && !findState.format) return false;
+  const list = findAllMatches();
+  const order = findOpts().sheets;
+  const m = nextMatch(list, { si, r: active.r, c: active.c }, { byCols: findState.byCols, back, order });
+  if (!m) {
+    if (!quiet) alertDialog('Tabula', '찾는 항목이 없습니다. 검색 조건을 확인하세요. 범위를 통합 문서로 넓히거나 찾는 위치를 바꿔 볼 수 있습니다.');
+    return false;
   }
-  if (!quiet) toast(`'${text}'을(를) 찾을 수 없습니다.`);
-  return false;
+  goToMatch(m);
+  return true;
 }
 
-function replaceIn(r, c) {
-  const raw = wb.getRaw(si, r, c);
-  const escRe = findState.text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const re = new RegExp(findState.whole ? `^${escRe}$` : escRe, findState.matchCase ? 'g' : 'gi');
-  const next = raw.replace(re, () => findState.replace);
-  if (next !== raw) { wb.setInput(si, r, c, next); return true; }
-  return false;
+/** 칸 하나 바꾸기 (수식 안의 글자 · 바꿀 서식) */
+function replaceIn(r, c, s = si) {
+  const cell = wb.getCell(s, r, c);
+  let raw = cell?.raw ?? '';
+  const quoted = raw.startsWith("'");
+  if (quoted) raw = raw.slice(1);
+  let done = false;
+  if (findState.text) {
+    const next = replaceText(raw, findState, findState.replace);
+    if (next !== raw) { wb.setInput(s, r, c, next); done = true; }
+  }
+  if (findState.replaceFormat) {
+    wb.setStyle(s, r, c, findState.replaceFormat);
+    done = true;
+  }
+  return done;
 }
 
+const FMT_LABEL = { bold: '굵게', italic: '기울임', underline: '밑줄', strike: '취소선', color: '글꼴 색', fill: '채우기', font: '글꼴', size: '크기', align: '가로 맞춤', numFmt: '표시 형식', wrap: '줄 바꿈' };
+function fmtPreview(fmt) {
+  if (!fmt) return el('div', { class: 'fmt-preview' }, '서식 설정 안 함');
+  return el('div', {
+    class: 'fmt-preview', title: Object.keys(fmt).map((k) => FMT_LABEL[k] ?? k).join(', '),
+    style: { background: fmt.fill ?? '#fff', color: fmt.color ?? '#000', fontWeight: fmt.bold ? '700' : '400', fontStyle: fmt.italic ? 'italic' : 'normal', textDecoration: fmt.underline ? 'underline' : 'none' },
+  }, '미리 보기*');
+}
+
+/** 찾을(바꿀) 서식 고르기 — 항목마다 "상관없음"이 기본 */
+function findFormatDialog(title, cur, done) {
+  const tri = (v) => (v === undefined ? '' : v ? '1' : '0');
+  const colorField = (name, label) => ({ name, label, type: 'select', value: cur?.[name] ? 'set' : '', options: [{ value: '', label: '상관없음' }, { value: 'set', label: '지정한 색' }] });
+  const nf = [['', '상관없음'], ['general', '일반'], ['number', '숫자'], ['comma', '쉼표 스타일'], ['currency', '통화'], ['accounting', '회계'], ['percent', '백분율'], ['date', '날짜'], ['time', '시간'], ['text', '텍스트']];
+  const pickers = {};
+  const dlg = formDialog(title, [
+    { name: 'bold', label: '굵게', type: 'select', value: tri(cur?.bold), options: [{ value: '', label: '상관없음' }, { value: '1', label: '굵게' }, { value: '0', label: '굵게 아님' }] },
+    { name: 'italic', label: '기울임꼴', type: 'select', value: tri(cur?.italic), options: [{ value: '', label: '상관없음' }, { value: '1', label: '기울임꼴' }, { value: '0', label: '기울임꼴 아님' }] },
+    { name: 'underline', label: '밑줄', type: 'select', value: tri(cur?.underline), options: [{ value: '', label: '상관없음' }, { value: '1', label: '밑줄' }, { value: '0', label: '밑줄 없음' }] },
+    colorField('color', '글꼴 색'),
+    colorField('fill', '채우기 색'),
+    { name: 'size', label: '글꼴 크기', type: 'number', value: cur?.size ?? '' },
+    { name: 'align', label: '가로 맞춤', type: 'select', value: cur?.align ?? '', options: [{ value: '', label: '상관없음' }, { value: 'left', label: '왼쪽' }, { value: 'center', label: '가운데' }, { value: 'right', label: '오른쪽' }] },
+    { name: 'numFmt', label: '표시 형식', type: 'select', value: cur?.numFmt ?? '', options: nf.map(([value, label]) => ({ value, label })) },
+  ], (v) => {
+    const f = {};
+    if (v.bold) f.bold = v.bold === '1';
+    if (v.italic) f.italic = v.italic === '1';
+    if (v.underline) f.underline = v.underline === '1';
+    if (v.color) f.color = pickers.color.value;
+    if (v.fill) f.fill = pickers.fill.value;
+    if (v.size) f.size = Number(v.size);
+    if (v.align) f.align = v.align;
+    if (v.numFmt) f.numFmt = v.numFmt;
+    done(Object.keys(f).length ? f : null);
+  }, {
+    onChange: (inputs) => {
+      for (const k of ['color', 'fill']) {
+        if (!pickers[k]) {
+          pickers[k] = el('input', { type: 'color', value: cur?.[k] ?? (k === 'fill' ? '#ffff00' : '#ff0000'), style: { width: '44px', height: '24px', padding: '0' } });
+          inputs[k].after(pickers[k]);
+        }
+        pickers[k].style.visibility = inputs[k].value ? 'visible' : 'hidden';
+      }
+    },
+  });
+  // 셀에서 서식 선택: 지금 칸의 서식을 그대로 (엑셀의 [셀에서 서식 선택])
+  const foot = dlg.root.querySelector('.dialog-foot');
+  foot.prepend(el('button', {
+    class: 'btn', style: { marginRight: 'auto' },
+    onclick: () => {
+      const st = wb.styleAt(si, active.r, active.c) ?? {};
+      const f = {};
+      for (const k of ['bold', 'italic', 'underline', 'color', 'fill', 'font', 'size', 'align', 'numFmt', 'code']) if (st[k] !== undefined && st[k] !== false) f[k] = st[k];
+      for (const k of ['bold', 'italic', 'underline']) f[k] = !!st[k];
+      dlg.close();
+      done(f);
+    },
+  }, '셀에서 서식 선택'));
+  foot.prepend(el('button', { class: 'btn', onclick: () => { dlg.close(); done(null); } }, '지우기'));
+}
+
+let findDlg = null;
 function openFindDialog(tab = 'find') {
-  const findInput = el('input', { type: 'text', value: findState.text || displayText(active.r, active.c) || '' });
+  if (findDlg) findDlg.close();
+  const sel0 = displayText(active.r, active.c);
+  const findInput = el('input', { type: 'text', value: findState.text || (sel0 && sel0.length < 60 ? sel0 : '') });
   const replInput = el('input', { type: 'text', value: findState.replace });
   const caseBox = el('input', { type: 'checkbox', checked: findState.matchCase });
   const wholeBox = el('input', { type: 'checkbox', checked: findState.whole });
-  const sync = () => Object.assign(findState, { text: findInput.value, replace: replInput.value, matchCase: caseBox.checked, whole: wholeBox.checked });
-  const body = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
-    el('label', {}, el('span', {}, '찾을 내용'), findInput),
-    tab === 'replace' ? el('label', {}, el('span', {}, '바꿀 내용'), replInput) : null,
-    el('label', {}, caseBox, '대/소문자 구분'),
-    el('label', {}, wholeBox, '전체 셀 내용 일치'));
-  const buttons = [];
-  if (tab === 'replace') {
-    buttons.push({
-      label: '모두 바꾸기', action: () => {
-        sync();
-        if (!findState.text) return false;
-        let n = 0;
-        const u = wb.usedRange(si);
-        wb.transact(() => { for (const [r, c] of cellsIn({ r1: 0, c1: 0, r2: u.rows - 1, c2: u.cols - 1 })) if (replaceIn(r, c)) n++; }, meta());
-        toast(`${n}개 항목을 바꾸었습니다.`);
-        return false;
-      },
-    }, {
-      label: '바꾸기', action: () => {
-        sync();
-        wb.transact(() => replaceIn(active.r, active.c), meta());
-        findNext(findState.text, { quiet: true });
-        return false;
-      },
+  const scopeSel = el('select', {}, el('option', { value: 'sheet' }, '시트'), el('option', { value: 'book' }, '통합 문서'));
+  const orderSel = el('select', {}, el('option', { value: 'rows' }, '행'), el('option', { value: 'cols' }, '열'));
+  const lookSel = el('select', {});
+  scopeSel.value = findState.scope;
+  orderSel.value = findState.byCols ? 'cols' : 'rows';
+  const status = el('div', { class: 'find-status' });
+  const results = el('div', { class: 'find-results', style: { display: 'none' } });
+  const fmtBox = el('span', {});
+  const rfmtBox = el('span', {});
+  const optsBox = el('div', { class: 'find-opts' });
+  const replaceRow = el('div', { class: 'find-row' }, el('span', {}, '바꿀 내용:'), replInput, rfmtBox);
+  const tabs = el('div', { class: 'find-tabs' });
+  let mode = tab;
+  const sync = () => Object.assign(findState, {
+    text: findInput.value, replace: replInput.value, matchCase: caseBox.checked, whole: wholeBox.checked,
+    scope: scopeSel.value, byCols: orderSel.value === 'cols', lookIn: mode === 'replace' ? 'formulas' : lookSel.value,
+  });
+  const drawFmt = () => {
+    const fmtBtn = (kind) => el('button', {
+      class: 'btn fmt-btn', title: '서식으로 찾기 / 바꾸기',
+      onclick: () => findFormatDialog(kind === 'find' ? '찾을 서식' : '바꿀 서식', kind === 'find' ? findState.format : findState.replaceFormat, (f) => {
+        if (kind === 'find') findState.format = f; else findState.replaceFormat = f;
+        drawFmt();
+      }),
+    }, '서식...');
+    const show = findState.options;
+    fmtBox.replaceChildren(...(show ? [fmtPreview(findState.format), fmtBtn('find')] : []));
+    rfmtBox.replaceChildren(...(show ? [fmtPreview(findState.replaceFormat), fmtBtn('replace')] : []));
+  };
+  const drawOpts = () => {
+    lookSel.replaceChildren(...(mode === 'replace' ? [['formulas', '수식']] : [['formulas', '수식'], ['values', '값'], ['comments', '메모']]).map(([v, l]) => el('option', { value: v }, l)));
+    lookSel.value = mode === 'replace' ? 'formulas' : findState.lookIn;
+    optsBox.style.display = findState.options ? '' : 'none';
+    optsBox.replaceChildren(
+      el('label', {}, el('span', {}, '범위:'), scopeSel), el('label', {}, caseBox, '대/소문자 구분'), el('span', {}),
+      el('label', {}, el('span', {}, '검색:'), orderSel), el('label', {}, wholeBox, '전체 셀 내용 일치'), el('span', {}),
+      el('label', {}, el('span', {}, '찾는 위치:'), lookSel), el('span', { class: 'muted', style: { fontSize: '11px' } }, '와일드카드: * (여러 글자) ? (한 글자) ~ (글자 그대로)'), el('span', {}),
+    );
+    optBtn.textContent = findState.options ? '옵션 <<' : '옵션 >>';
+    drawFmt();
+  };
+  const optBtn = el('button', { class: 'btn', onclick: () => { findState.options = !findState.options; drawOpts(); } }, '옵션 >>');
+  const drawTabs = () => {
+    tabs.replaceChildren(...[['find', '찾기'], ['replace', '바꾸기']].map(([k, l]) => el('button', { class: mode === k ? 'on' : '', onclick: () => { mode = k; draw(); } }, l)));
+  };
+  const listAll = () => {
+    sync();
+    const list = findAllMatches();
+    if (!list.length) { results.style.display = 'none'; status.textContent = '찾는 항목이 없습니다.'; return list; }
+    const shown = list.slice(0, 5000);
+    const rows = shown.map((m) => {
+      const tr = el('tr', { class: 'row', onclick: () => { results.querySelectorAll('tr.cur').forEach((x) => x.classList.remove('cur')); tr.classList.add('cur'); goToMatch(m); } },
+        el('td', {}, wb.sheets[m.si].name), el('td', {}, `$${colToName(m.c)}$${m.r + 1}`),
+        el('td', {}, displayText(m.r, m.c, m.si)), el('td', {}, (wb.getRaw(m.si, m.r, m.c) ?? '').startsWith('=') ? wb.getRaw(m.si, m.r, m.c) : ''),
+        el('td', {}, wb.getCell(m.si, m.r, m.c)?.comment ?? ''));
+      return tr;
     });
-  }
-  buttons.push({ label: '다음 찾기', primary: true, action: () => { sync(); findNext(); return false; } }, { label: '닫기' });
-  openDialog({ title: '찾기 및 바꾸기', body, buttons, width: 420 });
+    results.replaceChildren(el('table', {}, el('thead', {}, el('tr', {}, ['시트', '셀', '값', '수식', '메모'].map((h) => el('th', {}, h)))), el('tbody', {}, rows)));
+    results.style.display = '';
+    status.textContent = `${list.length.toLocaleString()}개 셀을 찾았습니다.${list.length > shown.length ? ` (처음 ${shown.length.toLocaleString()}개 표시)` : ''}`;
+    return list;
+  };
+  const body = el('div', { class: 'find-dlg', style: { display: 'flex', flexDirection: 'column', gap: '8px' } });
+  const btnRow = el('div', { style: { display: 'flex', gap: '6px', justifyContent: 'flex-end', flexWrap: 'wrap' } });
+  const draw = () => {
+    drawTabs();
+    drawOpts();
+    replaceRow.style.display = mode === 'replace' ? '' : 'none';
+    btnRow.replaceChildren(
+      ...(mode === 'replace' ? [
+        el('button', {
+          class: 'btn', onclick: () => {
+            sync();
+            if (!findState.text && !findState.format) return;
+            const list = findAllMatches('formulas');
+            let n = 0;
+            wb.transact(() => { for (const m of list) if (replaceIn(m.r, m.c, m.si)) n++; }, meta());
+            findCache = null;
+            results.style.display = 'none';
+            status.textContent = n ? `모두 바꾸었습니다. ${n.toLocaleString()}개 항목을 바꾸었습니다.` : '바꿀 항목이 없습니다.';
+            renderAll();
+          },
+        }, '모두 바꾸기'),
+        el('button', {
+          class: 'btn', onclick: () => {
+            sync();
+            const list = findAllMatches('formulas');
+            const here = list.some((m) => m.si === si && m.r === active.r && m.c === active.c);
+            if (here) { wb.transact(() => replaceIn(active.r, active.c), meta()); findCache = null; }
+            if (!findNext(findState.text, { quiet: true })) status.textContent = '더 이상 바꿀 항목이 없습니다.';
+            renderAll();
+          },
+        }, '바꾸기'),
+      ] : []),
+      el('button', { class: 'btn', onclick: () => listAll() }, '모두 찾기'),
+      el('button', { class: 'btn', title: 'Shift+Enter', onclick: () => { sync(); status.textContent = ''; findNext(findState.text, { back: true }); } }, '이전 찾기'),
+      el('button', { class: 'btn primary', title: 'Enter', onclick: () => { sync(); status.textContent = ''; findNext(); } }, '다음 찾기'),
+      el('button', { class: 'btn', onclick: () => findDlg?.close() }, '닫기'),
+    );
+  };
+  body.append(tabs,
+    el('div', { class: 'find-row' }, el('span', {}, '찾을 내용:'), findInput, fmtBox),
+    replaceRow, optsBox, el('div', { style: { display: 'flex', justifyContent: 'flex-end' } }, optBtn), btnRow, status, results);
+  body.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.tagName === 'INPUT') {
+      e.preventDefault();
+      e.stopPropagation();
+      sync();
+      status.textContent = '';
+      findNext(findState.text, { back: e.shiftKey });
+    }
+  });
+  body.addEventListener('change', () => { sync(); findCache = null; });
+  draw();
+  findDlg = openDialog({ title: '찾기 및 바꾸기', body, width: 560, modeless: true, onClose: () => { findDlg = null; } });
+  findInput.focus();
+  findInput.select();
 }
 
 // ───────────────────────── 메모 ─────────────────────────
@@ -6120,8 +6300,8 @@ function unhideSheetDialog() {
 
 function renderSheetTabs() {
   dom.sheetTabs.replaceChildren(...wb.sheets.map((s, i) => el('button', {
-    class: `sheet-tab${i === si ? ' active' : ''}`,
-    style: isHiddenSheet(i) ? { display: 'none' } : undefined,
+    class: `sheet-tab${i === si ? ' active' : ''}${s.tabColor ? ' colored' : ''}`,
+    style: isHiddenSheet(i) ? { display: 'none' } : s.tabColor ? { '--tab-c': s.tabColor, '--tab-t': contrastText(s.tabColor) } : undefined,
     title: s.pivot ? `피벗 테이블 (원본: ${s.pivot.source})` : undefined,
     onmousedown: (e) => { if (e.button === 0) { e.preventDefault(); switchSheet(i); focusGrid(); } },
     ondblclick: () => renameSheetInline(i),
@@ -6137,12 +6317,30 @@ function renderSheetTabs() {
         { label: '왼쪽으로 이동', disabled: i === 0, action: () => moveSheet(i, -1) },
         { label: '오른쪽으로 이동', disabled: i === wb.sheets.length - 1, action: () => moveSheet(i, 1) },
         { sep: true },
+        { label: '탭 색', icon: 'fill', action: () => setTimeout(() => tabColorMenu({ x: e.clientX, y: e.clientY - 330 }, i), 0) },
+        { sep: true },
         { label: '숨기기', action: () => hideSheet(i) },
         { label: '숨기기 취소...', disabled: !wb.sheets.some((_, j) => isHiddenSheet(j)), action: () => unhideSheetDialog() },
       ]);
     },
   }, s.name)));
   dom.sheetTabs.children[si]?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+
+/** 글자색: 배경이 어두우면 흰색 */
+function contrastText(hex) {
+  const n = parseInt(String(hex).slice(1, 7), 16);
+  const lum = (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
+  return lum < 0.6 ? '#ffffff' : '#1f1f1f';
+}
+
+/** 시트 탭 색 */
+function tabColorMenu(anchor, i) {
+  const targets = [i];
+  paletteMenu(anchor, '색 없음', (color) => {
+    wb.transact(() => { for (const t of targets) wb.setSheetProp(t, 'tabColor', color || null); }, meta());
+    renderSheetTabs();
+  });
 }
 
 function renameSheetInline(i) {
@@ -6403,6 +6601,27 @@ function progressOverlay(title) {
   };
 }
 
+/** 통합 문서 기본 글꼴 (엑셀의 표준 스타일: 셀 기본 크기 · 열 너비 기준) · 테마 색 */
+function applyBookLook() {
+  setBaseFont(wb.defaultFont);
+  setThemeColors(wb.theme);
+  document.documentElement.style.setProperty('--cell-fs', `${BASE_FONT.size}pt`);
+  document.documentElement.style.setProperty('--cell-ff', fontStack(BASE_FONT.name));
+}
+
+/** 예전 버전이 자동 저장한 문서: 피벗 결과 칸을 지금 버전으로 다시 그림 (서식 · 색 개선이 반영되게) — 실행 취소 기록 없음 */
+function redrawPivotsQuiet() {
+  try {
+    wb.transact(() => {
+      wb.sheets.forEach((s, i) => { for (const { def } of pivotDefs(i)) writePivot(i, def, { autofit: false }); });
+    }, meta());
+  } catch (e) {
+    console.warn('피벗 다시 그리기 실패', e);
+  }
+  wb.undoStack = [];
+  wb.redoStack = [];
+}
+
 function afterLoad(name, activeSheet) {
   wb.undoStack = [];
   wb.redoStack = [];
@@ -6415,12 +6634,8 @@ function afterLoad(name, activeSheet) {
   circles = null;
   objClip = null;
   sheetSel.clear();
-  // 통합 문서 기본 글꼴 (엑셀의 표준 스타일: 셀 기본 크기 · 열 너비 기준)
-  setBaseFont(wb.defaultFont);
-  setThemeColors(wb.theme);
+  applyBookLook();
   fitRowsOnOpen();
-  document.documentElement.style.setProperty('--cell-fs', `${BASE_FONT.size}pt`);
-  document.documentElement.style.setProperty('--cell-ff', fontStack(BASE_FONT.name));
   gv.resetExtent();
   applySheetZoom();
   renderAll();
@@ -6509,7 +6724,7 @@ function saveToStorage() {
       });
       return true;
     }
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ docName, si, autosave, workbook: wb.serialize() }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ rev: APP_REV, docName, si, autosave, workbook: wb.serialize() }));
     if (!server.available) dirty = false;
     updateTitle();
     storageWarned = false;
@@ -6589,7 +6804,7 @@ async function saveBigToIdb() {
     }
     if (wb !== book) throw SAVE_ABORT;
     await idbSet(STORAGE_KEY, {
-      v: 2, docName, si, autosave, vba: book.vba ?? null,
+      v: 2, rev: APP_REV, docName, si, autosave, book: book.bookMeta(), vba: book.vba ?? null,
       names: book.names.map(({ _ast, _text, ...n }) => ({ ...n })), sheets: list,
     });
     for (const id of saved.keys()) if (!list.some((x) => x.id === id)) idbDel(`${STORAGE_KEY}#${id}`).catch(() => {});
@@ -6659,7 +6874,7 @@ async function loadBigFromIdb(onProgress) {
     }
     sheets.push({ ...rec.meta, cells, blocks, _sid: x.id, _ev: x.ev });
   }
-  return { docName: idx.docName, si: idx.si, autosave: idx.autosave, workbook: { names: idx.names, vba: idx.vba, sheets } };
+  return { rev: idx.rev, docName: idx.docName, si: idx.si, autosave: idx.autosave, workbook: { ...idx.book, names: idx.names, vba: idx.vba, sheets } };
 }
 
 function loadFromStorage() {
@@ -8000,10 +8215,17 @@ function themeRows() {
 }
 
 function colorMenu(anchorEl, kind) {
-  const pick = (color) => {
-    closeMenus();
+  paletteMenu(anchorEl, kind === 'fill' ? '채우기 없음' : '자동', (color) => {
     if (kind === 'fill') { if (color) lastFill = color; applyStyle({ fill: color || undefined }); }
     else { if (color) lastFont = color; applyStyle({ color: color || undefined }); }
+  });
+}
+
+/** 테마 색 · 표준 색 · 다른 색 팔레트 (onPick(색 | null)) */
+function paletteMenu(anchorEl, noneLabel, onPick) {
+  const pick = (color) => {
+    closeMenus();
+    onPick(color);
     focusGrid();
   };
   const swatches = (colors, gap) => el('div', { class: `palette-row${gap ? ' gap' : ''}` }, colors.map((c) => el('button', {
@@ -8018,7 +8240,7 @@ function colorMenu(anchorEl, kind) {
     el('div', { class: 'menu-title', style: { padding: '4px 0' } }, '표준 색'),
     swatches(STANDARD));
   openMenu(anchorEl, [
-    kind === 'fill' ? { label: '채우기 없음', action: () => pick(null) } : { label: '자동', action: () => pick(null) },
+    { label: noneLabel, action: () => pick(null) },
     { node: palette },
     { sep: true },
     { node: el('div', {}, custom) },
@@ -8259,6 +8481,7 @@ const MENUS = {
     { title: '시트 구성' },
     { label: '시트 이름 바꾸기', action: () => renameSheetInline(si) },
     { label: '시트 복사본 만들기', icon: 'copy', action: () => run('duplicateSheet') },
+    { label: '탭 색', icon: 'fill', action: () => { const b = document.querySelector('.sheet-tab.active')?.getBoundingClientRect(); setTimeout(() => tabColorMenu({ x: b?.left ?? 200, y: (b?.top ?? 600) - 330 }, si), 0); } },
     { title: '보호' },
     { label: '셀 서식...', key: 'Ctrl+1', action: () => formatCellsDialog() },
   ],
@@ -9091,6 +9314,7 @@ async function init() {
     }
   }
   if (!wb || !stored) wb = new Workbook(stored?.workbook);
+  applyBookLook();
   if (stored) {
     docName = stored.docName || docName;
     si = clamp(stored.si || 0, 0, wb.sheets.length - 1);
@@ -9112,6 +9336,7 @@ async function init() {
   ribbon = buildRibbon({ run, openMenu: openNamedMenu, focusGrid, refreshRibbon: updateRibbon });
   bindEvents();
   applyView();
+  if (stored && stored.rev !== APP_REV) redrawPivotsQuiet();
   renderAll();
   const f = sheet().freeze;
   selectCell(f?.rows || 0, f?.cols || 0);

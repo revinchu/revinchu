@@ -114,16 +114,19 @@ document.addEventListener('mousedown', (e) => {
 // ───────────── 대화상자 ─────────────
 let dialogCloseHandler = null;
 export function setDialogCloseHandler(fn) { dialogCloseHandler = fn; }
-export const isDialogOpen = () => document.getElementById('dialogLayer').childElementCount > 0;
+// 창을 띄워 둔 채 시트를 쓸 수 있는 대화상자(찾기 및 바꾸기 등)는 열린 것으로 치지 않음
+export const isDialogOpen = () => [...document.getElementById('dialogLayer').children].some((x) => !x.classList.contains('modeless'));
 
 /**
  * buttons: [{label, primary, action}] — action이 false를 반환하면 닫지 않음
  * 반환: { close, root }
  */
-export function openDialog({ title, body, buttons = [], onOpen, width }) {
+export function openDialog({ title, body, buttons = [], onOpen, width, modeless = false, onClose }) {
   const layer = document.getElementById('dialogLayer');
   const close = () => {
+    if (!backdrop.isConnected) return;
     backdrop.remove();
+    onClose?.();
     dialogCloseHandler?.();
   };
   const content = typeof body === 'string' ? el('div', { html: body }) : body;
@@ -135,8 +138,9 @@ export function openDialog({ title, body, buttons = [], onOpen, width }) {
       onclick: () => { if (b.action?.() !== false) close(); },
     }, b.label))) : null);
   if (width) dialog.style.width = `${width}px`;
-  const backdrop = el('div', { class: 'dialog-backdrop' }, dialog);
-  backdrop.addEventListener('mousedown', (e) => { if (e.target === backdrop) close(); });
+  const backdrop = el('div', { class: `dialog-backdrop${modeless ? ' modeless' : ''}` }, dialog);
+  backdrop.addEventListener('mousedown', (e) => { if (e.target === backdrop && !modeless) close(); });
+  if (modeless) dragByHead(dialog);
   dialog.addEventListener('keydown', (e) => {
     e.stopPropagation();
     if (e.key === 'Escape') close();
@@ -152,6 +156,28 @@ export function openDialog({ title, body, buttons = [], onOpen, width }) {
   first?.select?.();
   onOpen?.(dialog);
   return { close, root: dialog };
+}
+
+/** 대화상자 머리글을 끌어 옮기기 */
+function dragByHead(dialog) {
+  const head = dialog.querySelector('.dialog-head');
+  head.style.cursor = 'move';
+  head.addEventListener('mousedown', (e) => {
+    if (e.target.tagName === 'BUTTON') return;
+    const r = dialog.getBoundingClientRect();
+    const dx = e.clientX - r.left;
+    const dy = e.clientY - r.top;
+    const move = (ev) => {
+      dialog.style.position = 'fixed';
+      dialog.style.margin = '0';
+      dialog.style.left = `${Math.max(0, Math.min(innerWidth - 60, ev.clientX - dx))}px`;
+      dialog.style.top = `${Math.max(0, Math.min(innerHeight - 30, ev.clientY - dy))}px`;
+    };
+    const up = () => { removeEventListener('mousemove', move); removeEventListener('mouseup', up); };
+    addEventListener('mousemove', move);
+    addEventListener('mouseup', up);
+    e.preventDefault();
+  });
 }
 
 export function alertDialog(title, message) {
