@@ -193,3 +193,5 @@ A standalone, dependency-free browser spreadsheet that mimics Microsoft Excel's 
 - Typed error literals (`#N/A`, `#VALUE!`, `#DIV/0!`… case-insensitive) are error values, not text: `parseInput` returns `errorLiteral`, `makeCell` stores `ERR_BY_CODE[code]` as `cell.v`, and text that looks like an error keeps a leading `'` (`textRaw`/`textRawOf`).
 - INDIRECT with `a1 = FALSE` still accepts defined names and structured references (`표[일자]`) when the text is not R1C1.
 - Pivot import: a pivotField's `compact`/`outline` default to on regardless of the table-level `compact="0"`/`outline="0"` (those only apply to newly added fields), so the layout comes from the first row field's own attributes.
+- Pivot sources keep fully blank rows inside the source range as records (`cubeFromRows`), like Excel's pivot cache, so row fields show the '(비어 있음)' item. Pivot charts of `valuesOnRows` pivots use value names as categories and column items as series.
+- xlsx export writes an empty cell with the default xf (`s="0"`) when its row or column has a style, so it does not inherit the row style on reopen.

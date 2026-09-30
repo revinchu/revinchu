@@ -196,10 +196,8 @@ export function cubeFromRows(rows) {
   const idx = [];
   for (let r = 1; r < rows.length; r++) {
     const row = rows[r];
-    if (!row) continue;
-    let any = false;
-    for (let j = 0; j < row.length; j++) { const v = row[j]; if (v !== null && v !== '' && v !== undefined) { any = true; break; } }
-    if (any) idx.push(r);
+    // 원본 범위 안의 빈 행도 레코드 (엑셀: 행 필드에 '(비어 있음)' 항목이 생김)
+    if (row) idx.push(r);
   }
   const base = Uint32Array.from(idx);
   const n = base.length;

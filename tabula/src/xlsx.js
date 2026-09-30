@@ -3528,7 +3528,8 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
           const vm = richImage(cell.image);
           return vm ? `<c r="${ref}"${sAttr} t="e" vm="${vm}"><v>#VALUE!</v></c>` : (s ? `<c r="${ref}"${sAttr}/>` : '');
         }
-        if (!cell.raw && (v === null || !cell.spilled && !wb.spillAnchorOf(si, r, c))) return s ? `<c r="${ref}"${sAttr}/>` : '';
+        // 빈 칸: 기본 서식(xf 0)이어도 행 · 열 서식이 있으면 적어 둠 (없으면 다시 열 때 행 서식을 물려받음)
+        if (!cell.raw && (v === null || !cell.spilled && !wb.spillAnchorOf(si, r, c))) return s || (cell.style && (sheet.rowStyles[r] || sheet.colStyles[c])) ? `<c r="${ref}" s="${s}"/>` : '';
         if (cell.formula) {
           // 배열을 돌려줄 수 있는 수식은 동적 배열 수식으로 (cm="1" + t="array")
           const dyn = !!cell.maybeArray;

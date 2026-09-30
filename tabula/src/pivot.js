@@ -1658,10 +1658,14 @@ function pivotChartDataRaw(rows, def, fieldStyle) {
   const body = meta.pageRows + meta.headerRows;
   const cats = [];
   const rowIdx = [];
-  if (!d.rows.length) { cats.push(TOTAL); rowIdx.push(body); }
+  // 값이 행 영역(dataOnRows): 행마다 값 필드 하나 → 항목 = (행 항목 /) 값 이름, 계열 = 열 항목
+  const onRows = d.valuesOnRows && d.values.length > 1;
+  if (!d.rows.length && !onRows) { cats.push(TOTAL); rowIdx.push(body); }
   meta.rowItems.forEach((it, i) => {
     if (it.kind !== 'item' || (it.node.children.length && !it.coll)) return;
+    if (onRows && it.vi === undefined) return;
     const chain = [];
+    if (onRows) chain.push(valueName(d.values[it.vi]));
     for (let n = it.node; n && n.depth >= 0; n = n.parent) {
       const st = typeof n.key === 'number' ? fieldStyle?.(d.rows[n.depth]) : null;
       const cap = d.itemCaptions?.[d.rows[n.depth]]?.[itemText(n.key)];
@@ -1672,12 +1676,12 @@ function pivotChartDataRaw(rows, def, fieldStyle) {
   });
   const series = [];
   meta.colLeaves.forEach((leaf, j) => {
-    if (leaf.kind !== 'item' || leaf.vi < 0) return;
-    const name = leaf.labels.length ? leaf.labels.join(' - ') : valueName(meta.values[leaf.vi]);
+    if (leaf.kind !== 'item' || (leaf.vi < 0 && !onRows)) return;
+    const name = leaf.labels.length ? leaf.labels.join(' - ') : leaf.vi < 0 ? TOTAL : valueName(meta.values[leaf.vi]);
     const col = meta.labelCols + j;
     series.push({
       name,
-      measure: valueName(meta.values[leaf.vi]),
+      measure: leaf.vi < 0 ? null : valueName(meta.values[leaf.vi]),
       vi: leaf.vi,
       values: rowIdx.map((ri) => { const raw = grid[ri]?.[col]?.raw; const n = raw === '' || raw === undefined ? NaN : Number(raw); return Number.isFinite(n) ? n : null; }),
       numFmt: grid[rowIdx[0]]?.[col]?.style ?? null,
