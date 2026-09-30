@@ -769,7 +769,8 @@ function applyFieldFilters(groups, d, measures) {
           kept = items.filter((it) => compareOp(flt.op, numeric ? it.key : itemText(it.key), numeric ? Number(flt.v1) : flt.v1, numeric ? Number(flt.v2) : flt.v2, !numeric));
         } else if (flt.type === 'value') {
           const vi = valueIndex(d.values, flt.by);
-          kept = items.filter((it) => { const v = measureOf(it, vi); return v !== null && compareOp(flt.op, v, Number(flt.v1), Number(flt.v2), false); });
+          // 빈 값은 0 으로 비교 (엑셀: '값 = 0' 필터에 빈 항목도 남음)
+          kept = items.filter((it) => compareOp(flt.op, measureOf(it, vi) ?? 0, Number(flt.v1), Number(flt.v2), false));
         } else if (flt.type === 'top' && snapshotItems(d, field)) {
           const snap = new Set(d.tieOrder[field]);
           kept = items.filter((it) => snap.has(itemText(it.key)));

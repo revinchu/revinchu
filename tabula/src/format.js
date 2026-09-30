@@ -708,7 +708,7 @@ export function fmtCode(style) {
     case 'scientific': return `0${dec(d ?? 2)}E+00`;
     case 'fraction': return '# ?/?';
     case 'date': return 'yyyy\\-mm\\-dd';
-    case 'longdate': return 'yyyy"년" m"월" d"일" dddd';
+    case 'longdate': return '[$-412]yyyy"년" m"월" d"일" dddd';
     case 'time': return '[$-412]AM/PM h:mm:ss';
     case 'datetime': return 'yyyy\\-mm\\-dd h:mm';
     case 'text': return '@';

@@ -1041,6 +1041,7 @@ function sheetHeadXml(u8, env) {
 function* rowsOf(u8, start, end, env, warn) {
   const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
   const shared = new Map(); // 'r,c' → { p (수식 위치), ref }
+  const arrayAnchors = new Set(); // 여러 칸 배열 수식의 기준 칸 'r,c'
   const senv = { ...env, shared: null, memo: null };
   const sharedFn = (row, col, base) => {
     const s = shared.get(`${row},${col}`);
@@ -1060,13 +1061,17 @@ function* rowsOf(u8, start, end, env, warn) {
       const rd = new Rd(u8, q, qe);
       const rg = rd.rfx();
       shared.set(`${c.exp.row},${c.exp.col}`, { p: rd.p, ref: rg });
+      if (c.done) return; // 기준 칸이 수식 전체를 가진 경우: 공유 수식만 등록
       const t2 = sharedFn(c.exp.row, c.exp.col, c.base);
       if (t2 !== null) { c.cell.f = t2; c.cell.fa = {}; } else warn();
+    } else if (c.done) {
+      // 공유 수식 기록 없이 끝난 보통 수식
     } else if (t === R.ARRAY) {
       const rd = new Rd(u8, q, qe);
       const rg = rd.rfx();
       rd.skip(1);
       const { text } = decodeFormula(u8, rd.p, fenv, c.base);
+      arrayAnchors.add(`${c.exp.row},${c.exp.col}`);
       if (text !== null) { c.cell.f = text; c.cell.fa = { t: 'array', ref: rangeRef(rg) }; } else warn();
     } else warn();
   };
@@ -1127,7 +1132,10 @@ function* rowsOf(u8, start, end, env, warn) {
         fp += 2;
         const base = { r: row.attrs.r - 1, c: cc };
         const res = decodeFormula(u8, fp, fenv, base);
-        if (res.text !== null) { cell.f = res.text; cell.fa = {}; } else if (res.exp && res.exp.row === base.r && res.exp.col === cc) pend = { cell, exp: res.exp, base };
+        // 수식 전체를 가진 칸 뒤에 공유 수식 기록(BrtShrFmla)이 올 수 있음 → 다음 기록에서 등록
+        if (res.text !== null) { cell.f = res.text; cell.fa = {}; pend = { cell, exp: { row: base.r, col: cc }, base, done: true }; } // 공유 수식의 기준 칸이 이 칸이 아니어도 (원래 왼쪽 위 칸을 지운 경우) 바로 뒤의 BrtShrFmla 가 그 기준으로 등록됨
+        else if (res.exp && arrayAnchors.has(`${res.exp.row},${res.exp.col}`)) { /* 여러 칸 배열 수식의 나머지 칸: 값만 */ }
+        else if (res.exp && !shared.has(`${res.exp.row},${res.exp.col}`)) pend = { cell, exp: res.exp, base };
         else warn();
         break;
       }
