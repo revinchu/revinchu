@@ -1241,3 +1241,15 @@ body.view-mode .titlebar, body.view-mode .ribbon-tabs, body.view-mode .ribbon, b
 .grad-var { width: 56px; height: 56px; border: 1px solid #bbb; padding: 0; cursor: pointer; }
 .grad-var.on { outline: 2px solid var(--green); outline-offset: 1px; }
 .grad-sample { width: 100px; height: 80px; border: 1px solid #bbb; }
+/* 제품 정보 · 새로운 기능 */
+.about-head { display: flex; gap: 14px; align-items: center; }
+.about-logo { width: 54px; height: 54px; border-radius: 10px; background: var(--green); color: #fff; font-weight: 800; font-size: 20px; display: grid; place-items: center; }
+.about-name { font-size: 18px; font-weight: 700; }
+.about-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 14px 0; }
+.about-stat { border: 1px solid #e5e5e5; border-radius: 6px; padding: 8px; text-align: center; display: flex; flex-direction: column; }
+.about-stat b { font-size: 16px; color: var(--green); }
+.about-lines { display: flex; flex-direction: column; gap: 4px; line-height: 1.5; }
+.whatsnew { max-height: 60vh; overflow: auto; }
+.wn-sec { display: grid; grid-template-columns: 80px 1fr; gap: 8px; padding: 6px 0; border-bottom: 1px solid #f0f0f0; }
+.wn-cat { font-weight: 700; color: var(--green); }
+.wn-sec ul { margin: 0; padding-left: 18px; line-height: 1.6; }

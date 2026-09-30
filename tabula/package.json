@@ -1,6 +1,6 @@
 {
   "name": "tabula",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "엑셀과 같은 브라우저 스프레드시트 (의존성 없음)",
   "type": "module",
   "private": true,

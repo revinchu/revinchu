@@ -499,7 +499,7 @@ function deselectChart() {
 
 const VIEW_CMDS = new Set(['publish', 'versionHistory', 'exportXlsx', 'saveAs', 'print', 'zoomIn', 'zoomOut', 'zoom100']);
 // 최종본으로 표시 (엑셀): 편집하면 노란 알림줄 [계속 편집] — 보기 · 저장 · 인쇄 · 복사는 됨
-const FINAL_OK = new Set(['save', 'copy', 'find', 'goto', 'selectAll', 'zoomSel', 'toggleFormulas', 'shortcuts', 'about', 'options', 'exportCsv', 'exportPdf', 'pageSetup']);
+const FINAL_OK = new Set(['save', 'copy', 'find', 'goto', 'selectAll', 'zoomSel', 'toggleFormulas', 'shortcuts', 'about', 'whatsNew', 'options', 'exportCsv', 'exportPdf', 'pageSetup']);
 function finalNotice() { showFinalBar(); toast('작성자가 이 통합 문서를 최종본으로 표시하여 편집을 막았습니다. 위의 [계속 편집]을 누르면 고칠 수 있습니다.'); }
 function showFinalBar() {
   document.querySelector('.final-bar')?.remove();
@@ -2514,7 +2514,7 @@ const PROTECT_FREE = new Set(['publish', 'versionHistory', 'recentFiles', 'dataA
   'newWorkbook', 'pivotFieldList', 'tracePrecedents', 'traceDependents', 'removeArrows', 'evaluateFormula', 'errorCheck', 'watchWindow', 'gotoSpecial',
   'outlineShow', 'outlineHide', 'freezePanes', 'freezeTop', 'freezeFirstCol', 'circleInvalid', 'clearCircles', 'macros', 'prevComment', 'nextComment',
   'workbookStats', 'toggleGrid', 'togglePrintGrid', 'toggleFormulaBar', 'toggleHeaders', 'toggleFormulas', 'toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100',
-  'recalc', 'shortcuts', 'about', 'protectSheet', 'unprotectSheet', 'protectWorkbook', 'fileInfo', 'insertMenuKey', 'deleteMenuKey', 'addSheet', 'deleteSheet', 'duplicateSheet',
+  'recalc', 'shortcuts', 'about', 'whatsNew', 'protectSheet', 'unprotectSheet', 'protectWorkbook', 'fileInfo', 'insertMenuKey', 'deleteMenuKey', 'addSheet', 'deleteSheet', 'duplicateSheet',
   'hideSheet', 'unhideSheet', 'importCsv', 'exportCsv', 'selectPrecedents', 'selectDependents', 'selectComments', 'pageSetup', 'printArea', 'clearPrintArea',
   'orientPortrait', 'orientLandscape', 'insertFunction']);
 const PROTECT_BLOCK = new Set(['mergeCenter', 'createTable', 'condManager', 'condNewRule', 'condMenuKey', 'tableStyleKey', 'dataValidation', 'insertPivot', 'outlineGroup',
@@ -14243,17 +14243,64 @@ const COMMANDS = {
     body: el('table', { class: 'kbd-table' }, SHORTCUTS.map(([k, d]) => el('tr', {}, el('td', {}, k), el('td', {}, d)))),
     buttons: [{ label: '닫기', primary: true }],
   }),
-  about: () => openDialog({
-    title: 'WIXEL 정보', width: 420,
-    body: el('div', { style: { lineHeight: '1.7' } },
-      el('b', {}, 'WIXEL'), ' — 브라우저에서 동작하는 엑셀 스타일 스프레드시트', el('br'),
-      el('span', { class: 'muted' }, `시트 크기 20,000,000행 × 16,384열 · 함수 ${FUNCTION_NAMES.length}개 · .xlsx 열기/저장`), el('br'),
-      el('span', { class: 'muted' }, server.available ? '서버 저장소에 연결됨 — 다른 기기에서도 열 수 있습니다.' : '서버 없이 실행 중 — 이 브라우저에 저장됩니다.')),
-    buttons: [{ label: '확인', primary: true }],
-  }),
+  about: () => aboutDialog(),
+  whatsNew: () => whatsNewDialog(),
 };
 
-const NO_COMMIT = new Set(['toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100', 'shortcuts', 'about']);
+const NO_COMMIT = new Set(['toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100', 'shortcuts', 'about', 'whatsNew']);
+
+// ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
+const APP_VERSION = '2.0.0';
+const WHATS_NEW = [
+  ['파일', ['저장 위치(폴더) 선택 · 덮어쓰기 확인 · 연 파일에 바로 [저장]', '파일 › 정보: 통합 문서 보호(구조 보호 · 최종본 · 읽기 전용 권장) · 문서 검사 · 속성 편집', '다른 기기에서 열기(서버 저장)도 폴더 지정']],
+  ['편집', ['셀 삽입/삭제 대화 상자 (셀을 오른쪽/아래로 밀기 · 왼쪽/위로 당기기 · 행/열 전체)', '셀 내용 자동 완성 · 자동 고침 · 소수점 자동 삽입 · URL 자동 하이퍼링크', '고급 필터 (조건 범위 · 다른 장소에 복사 · 고유 레코드만)']],
+  ['서식', ['채우기 효과 (셀 그라데이션: 가로 · 세로 · 대각선 · 가운데에서)', '무늬 스타일 그림 선택기 · 병합 셀 테두리 · 행 서식 번짐 수정', '스타일시트 v1.0: 표 42 · 피벗 42 · 슬라이서 48종 기본 탑재']],
+  ['삽입', ['아이콘 3,663개 (34개 범주, 그래픽 채우기로 색 바꾸기)', '도형 · 그림에 매크로 연결 (내장 동작 실행)']],
+  ['수식', ['연결선 제거 · 오류 검사 · 오류 추적 메뉴', '계산 옵션: 데이터 표만 수동']],
+  ['옵션', ['Excel 옵션 9개 범주: 일반 · 수식 · 데이터 · 언어 교정 · 저장 · 접근성 · 고급 · 리본 사용자 지정 · 빠른 실행 도구 모음', 'Office 테마 (색상형 · 흰색 · 어두운 회색 · 검정) · 화면 배율 · 눈금선 색 · 0 값 숨기기']],
+  ['서식 파일', ['네이버 연관검색어 키워드 검색 (xlsm, 버튼 동작 내장)']],
+];
+function aboutDialog() {
+  const stat = (n, label) => el('div', { class: 'about-stat' }, el('b', {}, n), el('span', {}, label));
+  openDialog({
+    title: 'WIXEL 정보', width: 520,
+    body: el('div', { class: 'about' },
+      el('div', { class: 'about-head' },
+        el('div', { class: 'about-logo' }, 'WX'),
+        el('div', {}, el('div', { class: 'about-name' }, 'WIXEL 위셀'), el('div', { class: 'muted' }, `버전 ${APP_VERSION} · 브라우저에서 동작하는 엑셀 호환 스프레드시트`))),
+      el('div', { class: 'about-stats' },
+        stat(FUNCTION_NAMES.length.toLocaleString(), '함수'), stat(COMMAND_COUNT().toLocaleString(), '명령'),
+        stat(TEMPLATES.length.toLocaleString(), '서식 파일'), stat('20,000,000', '최대 행')),
+      el('div', { class: 'about-lines' },
+        el('div', {}, '열기: .xlsx · .xlsm · .xlsb · .xls · .ods · .csv · .tsv · .txt · .wixel'),
+        el('div', {}, '저장: .xlsx · .xlsm · .xltx · .xltm · .ods · .csv · .tsv · .txt · .wixel · PDF'),
+        el('div', { class: 'muted' }, server.available ? '서버 저장소에 연결됨 — 다른 기기에서도 열 수 있습니다.' : '서버 없이 실행 중 — 이 브라우저(보관함)에 자동 저장됩니다.'),
+        el('div', { class: 'muted' }, 'VBA 매크로는 보존 · 표시만 하며 실행하지 않습니다 (내장 JS 동작은 실행).'))),
+    buttons: [{ label: '새로운 기능', action: () => { setTimeout(whatsNewDialog, 0); } }, { label: '확인', primary: true }],
+  });
+}
+const COMMAND_COUNT = () => Object.keys(COMMANDS).length;
+function whatsNewDialog() {
+  openDialog({
+    title: `WIXEL ${APP_VERSION} 새로운 기능`, width: 620,
+    body: el('div', { class: 'whatsnew' }, WHATS_NEW.map(([cat, items]) => el('div', { class: 'wn-sec' },
+      el('div', { class: 'wn-cat' }, cat), el('ul', {}, items.map((t) => el('li', {}, t)))))),
+    buttons: [{ label: '확인', primary: true }],
+  });
+}
+/** 전역 오류 보호: 명령 하나가 실패해도 앱은 계속 동작하고, 사용자에게는 한국어 안내만 */
+let lastErrToast = 0;
+function reportError(err, where = '') {
+  const msg = String(err?.message ?? err ?? '');
+  if (!msg || /ResizeObserver loop|AbortError|The user aborted/i.test(msg)) return;
+  console.error(where, err);
+  const now = Date.now();
+  if (now - lastErrToast < 4000) return;
+  lastErrToast = now;
+  toast(`${where ? `'${where}' 실행 중 ` : ''}문제가 생겼습니다: ${msg.slice(0, 120)} — 작업 내용은 자동 저장되어 있습니다.`);
+}
+window.addEventListener('error', (e) => reportError(e.error ?? e.message));
+window.addEventListener('unhandledrejection', (e) => reportError(e.reason));
 
 function run(cmd, arg) {
   closeMenus();
@@ -14267,7 +14314,12 @@ function run(cmd, arg) {
   if (protectBlocked(protectAction(cmd), sel, cmd)) return;
   if (STRUCT_CMDS.has(cmd) && structureLocked()) return;
   if (wb.props?.markedFinal && protectAction(cmd) !== 'free' && !VIEW_CMDS.has(cmd) && !FINAL_OK.has(cmd)) { finalNotice(); return; }
-  fn(arg);
+  try {
+    const out = fn(arg);
+    if (out && typeof out.catch === 'function') out.catch((err) => reportError(err, cmd));
+  } catch (err) {
+    reportError(err, cmd);
+  }
   if (REPEATABLE.has(cmd)) lastRepeat = () => COMMANDS[cmd](arg);
   focusGrid();
 }
@@ -14703,6 +14755,13 @@ async function init() {
     wb: () => wb, run, commands: () => Object.keys(COMMANDS), menus: () => Object.keys(MENUS), openNamedMenu, selectCell, selectRange, newWorkbook, templates: TEMPLATES, exportXlsx, gv: () => gv, sample: (i) => newWorkbook(SAMPLES[i]), switchSheet: (i) => { switchSheet(i); },
     get active() { return active; }, get sel() { return sel; }, get si() { return si; }, get chartSel() { return chartSel; },
   };
+  // 새 버전 안내 (한 번만)
+  try {
+    if (localStorage.getItem('wixel:version') !== APP_VERSION) {
+      localStorage.setItem('wixel:version', APP_VERSION);
+      setTimeout(() => toast(`WIXEL ${APP_VERSION} — 새로운 기능은 [도움말 › 새로운 기능]에서 볼 수 있습니다.`), 1200);
+    }
+  } catch { /* 저장소 없음 */ }
   // 서버 저장소 (npm start 로 실행한 경우) — 다른 기기와 문서 공유
   if (await server.init()) {
     if (!stored) {

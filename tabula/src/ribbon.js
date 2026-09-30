@@ -451,6 +451,7 @@ export const TABS = [
     id: 'help', label: '도움말', groups: [
       group('도움말', [
         large('shortcuts', 'keyboard', '바로 가기 키'),
+        large('whatsNew', 'effects', '새로운 기능'),
         large('about', 'about', '정보'),
       ]),
     ],
