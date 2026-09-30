@@ -473,3 +473,13 @@ test('셀 이동 (끌어서 옮기기): 옮긴 칸을 가리키는 수식 · 병
   assert.equal(wb.getValue(0, 0, 0), 1);
   assert.equal(wb.getCell(0, 0, 2).raw, '=SUM(A1:A2)');
 });
+
+test('확인란 칸: 스타일 checkbox + 논리값 · xlsx 왕복 (WIXEL 확장, 엑셀 xfComplement 읽기)', async () => {
+  const { readXlsx, writeXlsx } = await import('../src/xlsx.js');
+  const wb = new Workbook();
+  wb.transact(() => { wb.setCellData(0, 0, 0, { raw: 'TRUE', style: { checkbox: true, align: 'center' } }); wb.setCellData(0, 1, 0, { raw: 'FALSE', style: { checkbox: true } }); });
+  const back = new Workbook(readXlsx(writeXlsx(wb)).data);
+  assert.equal(back.styleAt(0, 0, 0).checkbox, true);
+  assert.equal(back.getValue(0, 0, 0), true);
+  assert.equal(back.getValue(0, 1, 0), false);
+});

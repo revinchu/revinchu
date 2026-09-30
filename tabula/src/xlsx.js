@@ -255,6 +255,8 @@ function readStyles(files, wbRels, theme) {
   const xfStyle = (xf, parent) => {
     const a = xf.attrs;
     const st = { ...fonts[Number(a.fontId || 0)] };
+    // 확인란: 엑셀 365 (xfpb:xfComplement → featurePropertyBag 의 CellControl) · WIXEL 확장
+    if (descendants(xf, 'xfComplement').length || descendants(xf, 'wx:checkbox').length || descendants(xf, 'checkbox').length) st.checkbox = true;
     if (st.font && st.font === defaultFont) delete st.font;
     if (st.size === defaultSize) delete st.size; // 통합 문서 기본 크기는 적지 않음 (기본 글꼴로 표시)
     const fill = fills[Number(a.fillId || 0)];
@@ -2539,7 +2541,9 @@ class StylePool {
     if (style.rotate) align.push(`textRotation="${style.rotate === 255 ? 255 : style.rotate < 0 ? 90 - style.rotate : style.rotate}"`);
     if (style.shrink) align.push('shrinkToFit="1"');
     const prot = style.locked === false || style.hideFormula ? `<protection${style.locked === false ? ' locked="0"' : ''}${style.hideFormula ? ' hidden="1"' : ''}/>` : '';
-    const inner = (align.length ? `<alignment ${align.join(' ')}/>` : '') + prot;
+    // 확인란: WIXEL 확장 (엑셀은 모르는 ext 를 무시하고 TRUE/FALSE 값으로 표시)
+    const ext = style.checkbox ? '<extLst><ext uri="{8F3A2C5B-6D1E-4B7A-9C0D-57495845434B}" xmlns:wx="https://wixel.app/x"><wx:checkbox/></ext></extLst>' : '';
+    const inner = (align.length ? `<alignment ${align.join(' ')}/>` : '') + prot + ext;
     if (this.styleXfMode) return `<xf numFmtId="${numFmtId}" fontId="${fontId}" fillId="${fillId}" borderId="${borderId}"${numFmtId ? ' applyNumberFormat="1"' : ''}${fontId ? ' applyFont="1"' : ''}${fillId ? ' applyFill="1"' : ''}${borderId ? ' applyBorder="1"' : ''}${align.length ? ' applyAlignment="1"' : ''}${prot ? ' applyProtection="1"' : ''}${inner ? `>${inner}</xf>` : '/>'}`;
     const xml = `<xf numFmtId="${numFmtId}" fontId="${fontId}" fillId="${fillId}" borderId="${borderId}" xfId="0"${numFmtId ? ' applyNumberFormat="1"' : ''}${fontId ? ' applyFont="1"' : ''}${fillId ? ' applyFill="1"' : ''}${borderId ? ' applyBorder="1"' : ''}${align.length ? ' applyAlignment="1"' : ''}${prot ? ' applyProtection="1"' : ''}${inner ? `>${inner}</xf>` : '/>'}`;
     const id = this.xfs.length;

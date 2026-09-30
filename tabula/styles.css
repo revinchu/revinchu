@@ -1255,3 +1255,18 @@ body.view-mode .titlebar, body.view-mode .ribbon-tabs, body.view-mode .ribbon, b
 .wn-sec ul { margin: 0; padding-left: 18px; line-height: 1.6; }
 .qf-ic { display: inline-flex; gap: 1px; font-size: 11px; line-height: 1; min-width: 20px; justify-content: center; }
 .grid-view.move-cursor { cursor: move; }
+/* 빠른 분석 (Ctrl+Q) */
+.qa-pop { position: fixed; z-index: 260; width: 460px; background: #fff; border: 1px solid #c8c8c8; box-shadow: 0 6px 20px rgba(0,0,0,.18); border-radius: 4px; font-size: 12px; }
+.qa-tabs { display: flex; border-bottom: 1px solid #e5e5e5; padding: 0 6px; }
+.qa-tab { border: 0; background: none; padding: 8px 10px; cursor: pointer; font: inherit; border-bottom: 3px solid transparent; }
+.qa-tab.on { border-bottom-color: var(--green); font-weight: 700; }
+.qa-body { display: flex; flex-wrap: wrap; gap: 4px; padding: 10px 8px 4px; min-height: 84px; }
+.qa-tile { width: 72px; height: 70px; word-break: keep-all; border: 1px solid transparent; background: none; border-radius: 3px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; cursor: pointer; font: inherit; font-size: 11px; line-height: 1.2; text-align: center; }
+.qa-tile:hover { background: #e9f3ee; border-color: #b8d9c6; }
+.qa-ic { display: flex; align-items: center; justify-content: center; height: 26px; font-size: 15px; }
+.qa-ic svg { width: 24px; height: 24px; }
+.qa-bar { display: block; width: 24px; height: 16px; background: linear-gradient(90deg, #638ec6 70%, transparent 70%); border: 1px solid #638ec6; }
+.qa-scale { display: block; width: 24px; height: 16px; background: linear-gradient(90deg, #f8696b, #ffeb84, #63be7b); }
+.qa-desc { padding: 6px 12px 10px; color: var(--muted); border-top: 1px solid #f0f0f0; }
+.c.cbx-cell { cursor: pointer; }
+.c.cbx-cell .cbx { flex: none; }

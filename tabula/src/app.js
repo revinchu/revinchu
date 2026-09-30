@@ -253,6 +253,118 @@ function smartSelectAll() {
   selectRange(next, 'cells', act.r >= next.r1 && act.r <= next.r2 && act.c >= next.c1 && act.c <= next.c2 ? act : { r: next.r1, c: next.c1 });
 }
 
+// ───────── 확인란 (삽입 › 확인란, 엑셀 365): 논리값 칸에 체크 상자 표시 ─────────
+function insertCheckboxes() {
+  if (editing && !commitEdit()) return;
+  const rg = selKind === 'cells' ? sel : usedClip(sel);
+  if ((rg.r2 - rg.r1 + 1) * (rg.c2 - rg.c1 + 1) > 100000) { toast('확인란은 10만 칸까지 한 번에 넣을 수 있습니다.'); return; }
+  wb.transact(() => {
+    for (let r = rg.r1; r <= rg.r2; r++) {
+      for (let c = rg.c1; c <= rg.c2; c++) {
+        const cur = wb.getCell(si, r, c);
+        const v = valueAt(r, c);
+        const keep = typeof v === 'boolean' || cur?.formula;
+        wb.setCellData(si, r, c, { ...(cellData(cur) ?? {}), raw: keep ? cur.raw : 'FALSE', style: { ...(cur?.style ?? {}), checkbox: true, align: 'center' } });
+      }
+    }
+  }, meta());
+  gv.renderAll();
+}
+/** 선택한 확인란 켜기/끄기: 하나라도 꺼져 있으면 모두 켬, 모두 켜져 있으면 모두 끔 (수식 칸은 건너뜀) */
+function toggleCheckboxes() {
+  if (protectBlocked('cells')) return;
+  const cells = [];
+  for (let r = sel.r1; r <= Math.min(sel.r2, sel.r1 + 100000); r++) for (let c = sel.c1; c <= sel.c2; c++) if (styleAt(r, c).checkbox && !wb.getCell(si, r, c)?.formula) cells.push([r, c]);
+  if (!cells.length) return;
+  const on = cells.some(([r, c]) => valueAt(r, c) !== true);
+  wb.transact(() => { for (const [r, c] of cells) { const cur = wb.getCell(si, r, c); wb.setCellData(si, r, c, { ...(cellData(cur) ?? {}), raw: on ? 'TRUE' : 'FALSE' }); } }, meta());
+  gv.renderAll();
+}
+
+// ───────── 빠른 분석 (Ctrl+Q, 엑셀): 서식 · 차트 · 합계 · 표 · 스파크라인 ─────────
+function quickAnalysis() {
+  if (editing && !commitEdit()) return;
+  document.querySelector('.qa-pop')?.remove();
+  const rg = selIsActiveOnly() ? currentRegion(active.r, active.c) : usedClip(sel);
+  if (isEmptyAt(rg.r1, rg.c1) && rg.r1 === rg.r2 && rg.c1 === rg.c2) { toast('데이터가 있는 범위를 선택하세요.'); return; }
+  if (selIsActiveOnly()) selectRange(rg, 'cells', { ...active });
+  const nums = [];
+  for (let r = rg.r1; r <= Math.min(rg.r2, rg.r1 + 5000); r++) for (let c = rg.c1; c <= rg.c2; c++) { const v = valueAt(r, c); if (typeof v === 'number') nums.push(v); }
+  const avg = nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : 0;
+  const hl = { fill: '#ffc7ce', color: '#9c0006' };
+  const numRg = () => { let r1 = rg.r1; while (r1 < rg.r2 && [...Array(rg.c2 - rg.c1 + 1)].every((_, k) => typeof valueAt(r1, rg.c1 + k) !== 'number')) r1++; return { ...rg, r1 }; };
+  const addRule = (rule) => { const g = numRg(); wb.transact(() => wb.addCondRule(si, { ...g, ...rule }), meta()); gv.renderAll(); };
+  const clearRules = () => {
+    const inside = (g) => g.r1 >= rg.r1 && g.r2 <= rg.r2 && g.c1 >= rg.c1 && g.c2 <= rg.c2;
+    wb.transact(() => wb.setSheetProp(si, 'cond', (sheet().cond ?? []).filter((x) => !ruleRanges(x).every(inside))), meta());
+    gv.renderAll();
+  };
+  const totals = (fn, dir) => {
+    const g = numRg();
+    const label = { SUM: '합계', AVERAGE: '평균', COUNT: '개수' }[fn] ?? fn;
+    wb.transact(() => {
+      if (dir === 'down') {
+        const r = rg.r2 + 1;
+        for (let c = rg.c1; c <= rg.c2; c++) {
+          const colNums = [...Array(g.r2 - g.r1 + 1)].some((_, k) => typeof valueAt(g.r1 + k, c) === 'number');
+          if (!colNums) { if (c === rg.c1) wb.setInput(si, r, c, label); continue; }
+          const a = `${colToName(c)}${g.r1 + 1}:${colToName(c)}${g.r2 + 1}`;
+          const f = fn === 'PCT' ? `=SUM(${a})/SUM($${colToName(rg.c1)}$${g.r1 + 1}:$${colToName(rg.c2)}$${g.r2 + 1})` : fn === 'RUN' ? `=SUM(${colToName(rg.c1)}${g.r1 + 1}:${colToName(c)}${g.r2 + 1})` : `=${fn}(${a})`;
+          wb.setInput(si, r, c, f);
+          wb.setStyle(si, r, c, { bold: true, ...(fn === 'PCT' ? { numFmt: 'percent', decimals: 1 } : {}) });
+        }
+      } else {
+        const c = rg.c2 + 1;
+        wb.setInput(si, g.r1 > rg.r1 ? rg.r1 : Math.max(0, rg.r1 - 1), c, label);
+        for (let r = g.r1; r <= g.r2; r++) {
+          const a = `${colToName(rg.c1)}${r + 1}:${colToName(rg.c2)}${r + 1}`;
+          const f = fn === 'PCT' ? `=SUM(${a})/SUM($${colToName(rg.c1)}$${g.r1 + 1}:$${colToName(rg.c2)}$${g.r2 + 1})` : fn === 'RUN' ? `=SUM(${colToName(rg.c1)}$${g.r1 + 1}:${colToName(rg.c2)}${r + 1})` : `=${fn}(${a})`;
+          wb.setInput(si, r, c, f);
+          wb.setStyle(si, r, c, { bold: true, ...(fn === 'PCT' ? { numFmt: 'percent', decimals: 1 } : {}) });
+        }
+      }
+    }, meta());
+    gv.renderAll();
+  };
+  const tile = (icon, label, action, tip = '') => el('button', { class: 'qa-tile', title: tip || label, onmousedown: (e) => e.preventDefault(), onclick: () => { pop.remove(); action(); } }, el('span', { class: 'qa-ic', html: ICONS[icon] ?? icon }), el('span', {}, label));
+  const tabs = [
+    ['서식', [
+      tile('<span class="qa-bar"></span>', '데이터 막대', () => addRule({ type: 'bar', color: '#638ec6' })),
+      tile('<span class="qa-scale"></span>', '색조', () => addRule({ type: 'scale', colors: [...DEFAULT_SCALE3] })),
+      tile('<b style="color:#16a34a">↑</b><b style="color:#f59e0b">→</b><b style="color:#dc2626">↓</b>', '아이콘 집합', () => addRule({ type: 'icons', icons: '3Arrows' })),
+      tile('<b>&gt;</b>', '보다 큼', () => addRule({ type: 'gt', v1: String(Number(avg.toPrecision(6))), style: hl }), `평균(${Number(avg.toPrecision(6)).toLocaleString()})보다 큰 값 강조`),
+      tile('<b>10%</b>', '상위 10%', () => addRule({ type: 'top', v1: '10', percent: true, style: hl })),
+      tile('clear', '서식 지우기', clearRules),
+    ]],
+    ['차트', [
+      tile('chartColumn', '묶은 세로 막대형', () => run('chartColumn')), tile('chartBar', '묶은 가로 막대형', () => run('chartBar')),
+      tile('chartLine', '꺾은선형', () => run('chartLine')), tile('chartPie', '원형', () => run('chartPie')), tile('chartScatter', '분산형', () => run('chartScatter')),
+    ]],
+    ['합계', [
+      tile('autosum', '합계', () => totals('SUM', 'down')), tile('<b>x̄</b>', '평균', () => totals('AVERAGE', 'down')), tile('<b>#</b>', '개수', () => totals('COUNT', 'down')),
+      tile('<b>%</b>', '합계 비율', () => totals('PCT', 'down')), tile('<b>Σ+</b>', '누계', () => totals('RUN', 'right')), tile('<b>Σ→</b>', '행 합계', () => totals('SUM', 'right')),
+    ]],
+    ['표', [tile('table', '표', () => run('createTable')), tile('pivot', '피벗 테이블', () => run('insertPivot'))]],
+    ['스파크라인', [tile('chartLine', '선', () => run('sparkLine')), tile('chartColumn', '열', () => run('sparkColumn')), tile('<b>±</b>', '승패', () => run('sparkWinLoss'))]],
+  ];
+  const tabBar = el('div', { class: 'qa-tabs' });
+  const body = el('div', { class: 'qa-body' });
+  const desc = el('div', { class: 'qa-desc' });
+  const DESC = ['조건부 서식을 사용하여 관심 있는 데이터를 강조합니다.', '추천 차트를 사용하여 데이터를 시각화합니다.', '합계를 자동으로 계산하는 수식을 넣습니다.', '표와 피벗 테이블로 데이터를 정렬 · 필터링 · 요약합니다.', '셀 안에 작은 차트를 넣습니다.'];
+  const show = (i) => { [...tabBar.children].forEach((b, j) => b.classList.toggle('on', i === j)); body.replaceChildren(...tabs[i][1]); desc.textContent = DESC[i]; };
+  tabs.forEach(([n], i) => tabBar.append(el('button', { class: 'qa-tab', onmousedown: (e) => e.preventDefault(), onclick: () => show(i) }, n)));
+  const pop = el('div', { class: 'qa-pop' }, tabBar, body, desc);
+  const vb = dom.view.getBoundingClientRect();
+  const rc = gv.screenRect(sel);
+  pop.style.left = `${Math.max(8, Math.min(innerWidth - 470, vb.left + rc.x + rc.w - 20))}px`;
+  pop.style.top = `${Math.min(innerHeight - 190, vb.top + rc.y + rc.h + 6)}px`;
+  document.body.append(pop);
+  show(0);
+  const off = (e) => { if (!pop.contains(e.target)) { pop.remove(); document.removeEventListener('mousedown', off, true); document.removeEventListener('keydown', esc, true); } };
+  const esc = (e) => { if (e.key === 'Escape') { pop.remove(); document.removeEventListener('mousedown', off, true); document.removeEventListener('keydown', esc, true); } };
+  setTimeout(() => { document.addEventListener('mousedown', off, true); document.addEventListener('keydown', esc, true); }, 0);
+}
+
 // ───────── 빠른 조건부 서식 (WIXEL): 증감 ▲▼ · 증감률 ▲▼% · 주말 행 색 ─────────
 const UPDOWN_CODE = '[빨강][>0]"▲"#,##0;[파랑]"▼"#,##0;';
 const UPDOWN_PCT_CODE = '[빨강]"▲"#,##0.00%;[파랑]"▼"#,##0.00%';
@@ -1205,7 +1317,7 @@ function onGridKey(e) {
       z: 'undo', y: 'redo', b: 'bold', i: 'italic', u: 'underline', 5: 'strike', d: 'fillDown', r: 'fillRight',
       s: 'save', f: 'find', h: 'replace', g: 'goto', p: 'print', o: 'open', 2: 'bold', 3: 'italic', 4: 'underline',
       ';': 'insertDate', '`': 'toggleFormulas', 1: 'formatCells', '-': 'deleteMenuKey', F1: 'toggleRibbon',
-      9: 'hideRows', 0: 'hideCols', t: 'createTable', l: 'createTable',
+      9: 'hideRows', 0: 'hideCols', t: 'createTable', l: 'createTable', q: 'quickAnalysis',
     };
     if (lower === 'a') { handled(); if (e.shiftKey) selectAll(); else smartSelectAll(); return; }
     if (lower === ' ' || e.code === 'Space') { handled(); selectCols(sel.c1, sel.c2, active); return; }
@@ -1241,6 +1353,10 @@ function onGridKey(e) {
       if (opts.enterDir !== 'none') moveEnterTab(e.shiftKey ? ENTER_OPP[opts.enterDir] ?? 'up' : opts.enterDir ?? 'down');
       return;
     case 'Tab': handled(); moveEnterTab(e.shiftKey ? 'left' : 'right'); return;
+    case ' ':
+      // 확인란 칸: Space 로 선택한 확인란을 모두 켜고 끔 (엑셀 365)
+      if (!ctrl && !e.shiftKey && !e.altKey && styleAt(active.r, active.c).checkbox) { handled(); toggleCheckboxes(); return; }
+      break;
     case 'Home': handled(); if (e.shiftKey) extendTo(focusCell.r, 0); else selectCell(active.r, 0); return;
     case 'PageDown': handled(); move(gv.pageRows(), 0, { extend: e.shiftKey }); return;
     case 'PageUp': handled(); move(-gv.pageRows(), 0, { extend: e.shiftKey }); return;
@@ -1646,6 +1762,12 @@ function onViewMouseDown(e) {
   const { r, c } = hit;
   if (e.button === 2) {
     if (!inSel(r, c)) selectCell(r, c, { scroll: false });
+    return;
+  }
+  // 확인란 칸을 누르면 켜고 끔
+  if (!e.shiftKey && !e.ctrlKey && styleAt(r, c).checkbox && !painter && !borderDraw) {
+    selectCell(r, c, { scroll: false });
+    toggleCheckboxes();
     return;
   }
   if (e.shiftKey) extendTo(r, c, { scroll: false });
@@ -14137,6 +14259,7 @@ function showContextMenu(pos, kind) {
       ...(lk ? [{ label: '하이퍼링크 열기', action: () => openLink(lk) }, { label: '하이퍼링크 제거', action: removeHyperlink }] : []),
       { label: '선택하여 붙여넣기...', key: 'Ctrl+Alt+V', action: pasteSpecialDialog, disabled: !clip },
       { sep: true },
+      { label: '빠른 분석', key: 'Ctrl+Q', icon: 'stats', action: () => quickAnalysis() },
       { label: '삽입(I)...', icon: 'rowInsert', action: () => shiftCellsDialog(true) },
       { label: '삭제(D)...', icon: 'delete', action: () => shiftCellsDialog(false) },
       { label: '내용 지우기(N)', action: () => run('clearContents') },
@@ -14323,6 +14446,8 @@ const COMMANDS = {
   fmtTime: () => applyStyle({ numFmt: 'time', decimals: undefined }, { widen: true }),
   fmtScientific: () => applyStyle({ numFmt: 'scientific', decimals: undefined }, { widen: true }),
   borderNone: () => applyBorder('none'),
+  quickAnalysis: () => quickAnalysis(),
+  insertCheckbox: () => insertCheckboxes(),
   cfUpDown: () => quickUpDown(false),
   cfUpDownPct: () => quickUpDown(true),
   cfWeekend: () => quickWeekend(),

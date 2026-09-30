@@ -130,6 +130,7 @@ export const TABS = [
         large('insertTextbox', 'textbox', '텍스트 상자'),
       ]),
       group('기호', [large('insertEquation', 'equation', '수식', { menu: 'equations' }), large('insertSymbol', 'symbol', '기호')]),
+      group('셀 컨트롤', [large('insertCheckbox', '<svg viewBox="0 0 24 24" width="24" height="24"><rect x="3" y="3" width="18" height="18" rx="3" fill="#fff" stroke="#217346" stroke-width="2"/><path d="M7 12l3.5 3.5L17 9" fill="none" stroke="#217346" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>', '확인란', { title: '확인란 삽입 — 선택한 칸에 체크 상자 (값 TRUE / FALSE, 클릭 · Space 로 켜고 끔)' })]),
       group('링크', [large('hyperlink', 'link', '링크', { title: '하이퍼링크 삽입 (Ctrl+K)' })]),
       group('필터', [large('insertSlicer', 'slicer', '슬라이서', { title: '표나 피벗 테이블에 슬라이서 삽입' }), large('insertTimeline', 'calendar', '시간 표시 막대', { title: '날짜 필드를 기간(연 · 분기 · 월 · 일)으로 거르는 시간 표시 막대 삽입' })]),
       group('차트', [

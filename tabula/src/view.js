@@ -789,6 +789,9 @@ export class GridView {
     let fmtColor = null;
     let image = null;
     if (st.showFormulas && cell?.formula) { text = cell.raw; align = 'left'; } else ({ text, align, color: fmtColor, image } = formatValue(v, style));
+    // 확인란 칸: 논리값(또는 빈 칸)을 체크 상자로
+    let checkbox = null;
+    if (style.checkbox && (typeof v === 'boolean' || v === null || v === undefined || v === '') && !(st.showFormulas && cell?.formula)) { checkbox = v === true; text = ''; }
     if (v === 0 && wb.sheets[si].noZeros && !(st.showFormulas && cell?.formula)) text = ''; // 0 값이 있는 셀에 0 표시 안 함 (엑셀 옵션 › 고급)
     // 선택 영역의 가운데로 (centerContinuous): 오른쪽의 빈 같은 맞춤 칸들까지 합친 너비의 가운데
     let across = 0;
@@ -919,6 +922,11 @@ export class GridView {
       const i = cls.indexOf('ovf');
       if (i < 0) cls.push('ovf');
       spanCss = ` style="position:absolute;left:0;top:0;bottom:0;width:${w + across}px;display:flex;align-items:inherit;justify-content:center;white-space:nowrap"`;
+    }
+    if (checkbox !== null) {
+      const col = style.color || '#217346';
+      const box = `<svg class="cbx" viewBox="0 0 16 16" width="15" height="15"><rect x="1" y="1" width="14" height="14" rx="2.5" fill="${checkbox ? col : '#fff'}" stroke="${checkbox ? col : '#8a8a8a'}" stroke-width="1.3"/>${checkbox ? '<path d="M4.2 8.3l2.5 2.5 5-5.3" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>' : ''}</svg>`;
+      return `<div class="c cbx-cell${cls.length ? ` ${cls.join(' ')}` : ''}" data-r="${r}" data-c="${c}" style="${css.join(';')}"${comment}>${diagHtml}${box}</div>`;
     }
     return `<div class="c${cls.length ? ` ${cls.join(' ')}` : ''}" data-r="${r}" data-c="${c}" style="${css.join(';')}"${comment}>${diagHtml}${iconHtml}${rotBox ?? `<span${spanCss}>${hideValue ? '' : esc(text)}</span>`}</div>`;
   }
