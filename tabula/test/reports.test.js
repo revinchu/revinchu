@@ -209,3 +209,18 @@ test('열 전체 참조(B:B) 수식도 모양이 같으면 AST 공유 · 파일�
   const first = s.cells.get('0,1').raw;
   assert.equal(s.cells.get('2,1').raw, first.replace(/A1/g, 'A3'));
 });
+
+test('한국어 서식: [$-412]ddd = 금 · [$-F800] 시스템 긴 날짜 · 1900년 3월 전 날짜 저장', async () => {
+  const { formatCode } = await import('../src/format.js');
+  const { numberRaw, isoSerial } = await import('../src/xlsx.js');
+  assert.equal(formatCode(44228, '[$-412]ddd').text, '월');
+  assert.equal(formatCode(44228, '[$-ko-KR]dddd').text, '월요일');
+  assert.equal(formatCode(44228, '[$-412]mmm').text, '2월');
+  assert.equal(formatCode(44228, 'ddd').text, 'Mon');
+  assert.equal(formatCode(44228, '[$-F800]dddd, mmmm dd, yyyy').text, '2021년 2월 1일 월요일');
+  const wb = new Workbook();
+  assert.equal(calc(wb, '=TEXT(44228,"[$-412]ddd")'), '월');
+  assert.equal(numberRaw(28, { numFmt: 'date' }), '1900-01-28');
+  assert.equal(isoSerial('1900-01-28'), 28);
+  assert.equal(isoSerial('2021-02-01T12:00:00'), 44228.5);
+});

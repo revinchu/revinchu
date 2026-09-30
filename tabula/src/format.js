@@ -337,7 +337,7 @@ function tokenizeSection(src) {
         const dash = inner.indexOf('-');
         const sym = inner.slice(1, dash < 0 ? undefined : dash);
         const loc = dash < 0 ? '' : inner.slice(dash + 1).toLowerCase();
-        if (/(^|0)412$/.test(loc) || loc.endsWith('412')) sec.korean = true;
+        if (loc.endsWith('412') || /^ko(-kr)?$/.test(loc)) sec.korean = true;
         if (sym) lit(sym);
       }
       continue; // [DBNum1] 등은 무시
@@ -399,7 +399,8 @@ const sectionCache = new Map();
 function parseFormat(code) {
   let f = sectionCache.get(code);
   if (!f) {
-    f = splitSections(code).map(tokenizeSection);
+    // [$-F800] · [$-F400]: 시스템 긴 날짜 · 시간 (한국어 Windows 표시: 2021년 2월 1일 월요일 · 오후 2:24:00)
+    f = splitSections(code).map((sc) => (/^\[\$-F800\]/i.test(sc) ? '[$-412]yyyy"년" m"월" d"일" dddd' : /^\[\$-F400\]/i.test(sc) ? '[$-412]AM/PM h:mm:ss' : sc)).map(tokenizeSection);
     if (sectionCache.size > 500) sectionCache.clear();
     sectionCache.set(code, f);
   }
@@ -449,6 +450,8 @@ function renderDate(sec, n) {
             if (t.minute) out += t.n === 1 ? p.mm : pad(p.mm);
             else if (t.n === 1) out += p.m;
             else if (t.n === 2) out += pad(p.m);
+            // [$-412] (한국어): mmm · mmmm = '1월', mmmmm = '1'
+            else if (sec.korean) out += t.n === 5 ? p.m : `${p.m}월`;
             else if (t.n === 3) out += MONTHS_EN[p.m - 1].slice(0, 3);
             else if (t.n === 5) out += MONTHS_EN[p.m - 1][0];
             else out += MONTHS_EN[p.m - 1];
@@ -456,6 +459,7 @@ function renderDate(sec, n) {
           case 'd':
             if (t.n === 1) out += p.d;
             else if (t.n === 2) out += pad(p.d);
+            else if (sec.korean) out += t.n === 3 ? WEEKDAYS[p.dow] : `${WEEKDAYS[p.dow]}요일`; // [$-412]ddd = '금'
             else if (t.n === 3) out += DAYS_EN[p.dow].slice(0, 3);
             else out += DAYS_EN[p.dow];
             break;

@@ -10,7 +10,7 @@ import {
   quoteSheetName, MAX_ROWS, MAX_COLS, EXCEL_MAX_ROWS, mayReturnArray, unknownFunctions,
 } from './formula.js';
 import { toFileFormula, fromFileFormula } from './xlfn.js';
-import { parseInput, formatGeneral, fmtCode, styleForCode } from './format.js';
+import { parseInput, formatGeneral, fmtCode, styleForCode, dateParts, serialOf } from './format.js';
 import { DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT, formulaShifter } from './workbook.js';
 import { chartLayout, PALETTE, chartModelData, paletteOf } from './chart.js';
 import { Axis, hid, hidKeys } from './axis.js';
@@ -23,7 +23,7 @@ import { normalizeStyleName, DEFAULT_TABLE_STYLE, dataTop, dataBottom, canonical
 import { pivotSourceData, resolvePivot, itemText, keyOf, sortKeys, EMPTY, headerNames, normalizeDef, computePivot, valueName, showAsPercent, excelCalcFormula, pivotFilterKey } from './pivot.js';
 import { slicerStyleName, slicerColors, isModernSlicer } from './slicerstyle.js';
 import { applyTint, DEFAULT_THEME, PRESET_STYLES, presetStyle, isModernStyle, ELEMENT_TYPES, elementDxfStyle } from './stylepresets.js';
-import { maxOf, minOf, pushAll, EPOCH, DAY_MS } from './fxcore.js';
+import { maxOf, minOf, pushAll, DAY_MS } from './fxcore.js';
 
 const NS_MAIN = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
 const NS_R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -1112,9 +1112,10 @@ function readTable(root, sheet) {
 
 export function numberRaw(v, style) {
   const fmt = style?.numFmt;
-  if ((fmt === 'date' || fmt === 'longdate') && Number.isInteger(v) && v > 0) {
-    const d = new Date(Date.UTC(1899, 11, 30) + v * 86400000);
-    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+  // 엑셀 1900 날짜 체계 (60 = 없는 날 1900-02-29 는 숫자 그대로)
+  if ((fmt === 'date' || fmt === 'longdate') && Number.isInteger(v) && v > 0 && v !== 60) {
+    const d = dateParts(v);
+    return `${d.y}-${String(d.m).padStart(2, '0')}-${String(d.d).padStart(2, '0')}`;
   }
   if (fmt === 'percent') {
     const s = `${Number((v * 100).toPrecision(15))}%`;
@@ -1625,8 +1626,8 @@ function readChart(files, path, theme = {}) {
 export function isoSerial(v) {
   const m = /^(\d{4})-(\d\d)-(\d\d)(?:T(\d\d):(\d\d)(?::(\d\d(?:\.\d+)?))?)?/.exec(v ?? '');
   if (!m) return v ?? '';
-  const ms = Date.UTC(+m[1], +m[2] - 1, +m[3], +(m[4] ?? 0), +(m[5] ?? 0)) + Math.round(+(m[6] ?? 0) * 1000);
-  return (ms - EPOCH) / DAY_MS;
+  const ms = Date.UTC(1970, 0, 1, +(m[4] ?? 0), +(m[5] ?? 0)) + Math.round(+(m[6] ?? 0) * 1000);
+  return serialOf(+m[1], +m[2], +m[3]) + ms / DAY_MS;
 }
 /** pivotCacheDefinition → { source: { ref, sheet, name }, fields: [{ name, items: [값] }] } */
 function readPivotCache(files, path) {
@@ -2858,7 +2859,7 @@ function fieldItems(data, f, order = null) {
 // ─── 피벗 그룹 (엑셀 fieldGroup) ───
 const XL_GROUP_BY = { years: 'years', quarters: 'quarters', months: 'months', mdays: 'days', number: 'range' };
 const XL_DATE_GROUP = new Set(['years', 'quarters', 'months', 'mdays']);
-const serialIso = (v) => { const d = new Date(Date.UTC(1899, 11, 30) + Math.floor(v) * 86400000); return d.toISOString().slice(0, 10); };
+const serialIso = (v) => { const d = dateParts(Math.floor(v)); return `${d.y}-${String(d.m).padStart(2, '0')}-${String(d.d).padStart(2, '0')}`; };
 /** 그룹 설정 → { keys: 엑셀 groupItems 순서의 항목 키(앱의 그룹 키와 같은 글자), rangePr } */
 function excelGroupItems(spec, min, max) {
   if (spec.by === 'number') {
