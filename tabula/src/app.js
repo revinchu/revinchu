@@ -107,6 +107,7 @@ let ac = null;
 let editRefs = [];
 let fillPreview = null;
 let chartSel = null; // 선택한 그림 개체(차트·그림·도형) id
+let chartPart = null; // 차트 안에서 고른 요소 { id, kind: 'series'|'point'|'legend'|'title', s, p } (엑셀: 한 번 누르면 계열, 한 번 더 누르면 요소)
 let objClip = null; // 복사한 그림 개체
 let drawKind = null; // 그릴 도형 종류 (삽입 → 도형)
 let circles = null; // 잘못된 데이터 표시
@@ -491,6 +492,7 @@ function focusGrid() {
 function deselectChart() {
   if (!chartSel) return;
   chartSel = null;
+  chartPart = null;
   objMulti.clear();
   gv.renderObjectsAll();
 }
@@ -1428,7 +1430,20 @@ function onViewMouseDown(e) {
       gv.renderObjectsAll(); updateSelectionUI(); selPaneDlg?.redraw?.();
       return;
     }
-    if (chartSel !== id) { chartSel = id; objMulti.clear(); gv.renderObjectsAll(); updateSelectionUI(); selPaneDlg?.redraw?.(); }
+    // 차트 요소 고르기: 계열 → (다시 누르면) 그 요소, 범례 · 제목, 빈 곳은 차트 영역
+    const partEl = objEl.classList.contains('chart') ? t.closest('[data-s], [data-el]') : null;
+    const prevPart = chartPart;
+    if (objEl.classList.contains('chart') && e.button !== 1) {
+      if (partEl?.dataset.s !== undefined) {
+        const sIdx = Number(partEl.dataset.s);
+        const pIdx = partEl.dataset.p !== undefined ? Number(partEl.dataset.p) : null;
+        const same = prevPart?.id === id && prevPart.s === sIdx && (prevPart.kind === 'series' || prevPart.kind === 'point');
+        chartPart = e.button === 2 && same ? prevPart : same && pIdx !== null ? { id, kind: 'point', s: sIdx, p: pIdx } : { id, kind: 'series', s: sIdx };
+      } else if (partEl?.dataset.el) chartPart = { id, kind: partEl.dataset.el };
+      else if (e.button === 0) chartPart = null;
+    } else chartPart = null;
+    const partChanged = JSON.stringify(prevPart) !== JSON.stringify(chartPart);
+    if (chartSel !== id) { chartSel = id; objMulti.clear(); gv.renderObjectsAll(); updateSelectionUI(); selPaneDlg?.redraw?.(); } else if (partChanged) gv.renderObjectsAll();
     if (e.button !== 0) return;
     const found = findObject(sheet(), id);
     if (!found) return;
@@ -6711,10 +6726,76 @@ function objectOrigin() {
   return { x: Math.round(r.x), y: Math.round(r.y) };
 }
 
+/** 차트 요소 서식 (엑셀: 데이터 계열 서식 · 데이터 요소 서식 · 범례 서식 · 차트 제목 서식) */
+function setSeriesFmt(ch, fi, patch) {
+  const fmt = [...(ch.seriesFmt ?? [])];
+  while (fmt.length <= fi) fmt.push({});
+  const next = { ...(fmt[fi] ?? {}), ...patch };
+  for (const k of Object.keys(next)) if (next[k] === undefined) delete next[k];
+  fmt[fi] = next;
+  updateChart(ch.id, { seriesFmt: fmt });
+  gv.renderObjectsAll();
+}
+function chartPartMenu(ch, part, pos) {
+  const up = (patch) => { updateChart(ch.id, patch); gv.renderObjectsAll(); };
+  const color = (label, onPick, none = '자동') => ({ label, icon: 'fill', action: () => setTimeout(() => paletteMenu(pos, none, onPick), 0) });
+  const PTS = [0.75, 1, 1.5, 2.25, 3, 4.5, 6];
+  const items = [];
+  if (part.kind === 'series' || part.kind === 'point') {
+    const data = chartModelData(wb, si, ch);
+    const sr = data.series.find((x) => x._fi === part.s) ?? data.series[part.s];
+    if (!sr) return;
+    const f = ch.seriesFmt?.[part.s] ?? {};
+    const type = sr.type ?? (ch.type === 'combo' ? 'column' : ch.type);
+    const isLine = type === 'line' || type === 'scatter' || type === 'radar';
+    const pie = ch.type === 'pie' || ch.type === 'doughnut';
+    const pointName = part.kind === 'point' ? String(data.categories?.[part.p] ?? part.p + 1) : null;
+    items.push({ title: part.kind === 'point' ? `데이터 요소 서식 — ${sr.name} · ${pointName}` : `데이터 계열 서식 — ${sr.name}` });
+    if (part.kind === 'point') {
+      items.push(color(isLine ? '표식 색...' : '채우기 색 (이 요소만)...', (c) => { const pc = { ...(f.pointColors ?? {}) }; if (c) pc[part.p] = c; else delete pc[part.p]; setSeriesFmt(ch, part.s, { pointColors: Object.keys(pc).length ? pc : undefined }); }));
+      items.push({ label: '이 요소 색 되돌리기', disabled: !f.pointColors?.[part.p], action: () => { const pc = { ...(f.pointColors ?? {}) }; delete pc[part.p]; setSeriesFmt(ch, part.s, { pointColors: Object.keys(pc).length ? pc : undefined }); } });
+    } else if (!pie) {
+      items.push(color(isLine ? '선 색...' : '채우기 색...', (c) => setSeriesFmt(ch, part.s, { color: c ?? undefined })));
+    } else {
+      items.push({ label: '조각을 한 번 더 누르면 그 조각만 색을 바꿀 수 있습니다', disabled: true });
+    }
+    if (isLine) {
+      items.push({ label: '선 두께', submenu: PTS.map((pt) => ({ label: `${pt}pt`, checked: Math.abs((f.lineWidth ?? 2.25) - pt * 4 / 3) < 0.01, action: () => setSeriesFmt(ch, part.s, { lineWidth: pt * 4 / 3 }) })) });
+      items.push({ label: '표식 크기', submenu: [['없음', false], ['3', 3], ['5', 5], ['7', 7], ['9', 9], ['12', 12]].map(([l, v]) => ({ label: l, checked: v === false ? f.marker === 'none' : f.markerSize === v, action: () => setSeriesFmt(ch, part.s, v === false ? { marker: 'none' } : { marker: f.marker === 'none' ? undefined : f.marker, markerSize: v }) })) });
+    } else if (!pie) {
+      items.push({ label: '간격 너비 · 계열 겹치기...', action: () => formDialog('데이터 계열 서식', [
+        { name: 'gap', label: '간격 너비(%) — 작을수록 막대가 굵어짐', type: 'number', value: ch.gap ?? 150 },
+        { name: 'overlap', label: '계열 겹치기(%) -100 ~ 100', type: 'number', value: ch.overlap ?? 0 },
+      ], (v) => { const g = Math.max(0, Math.min(500, Number(v.gap) || 0)); const o = Math.max(-100, Math.min(100, Number(v.overlap) || 0)); up({ gap: g === 150 ? undefined : g, overlap: o || undefined }); }) });
+      items.push(color('윤곽선 색...', (c) => setSeriesFmt(ch, part.s, { outline: c ?? undefined }), '윤곽선 없음'));
+    } else {
+      items.push({ label: '조각 분리(%)...', action: () => formDialog('데이터 계열 서식', [{ name: 'e', label: '원형 조각 분리(%)', type: 'number', value: ch.explode ?? 0 }], ({ e }) => up({ explode: Number(e) || undefined })) });
+    }
+    items.push({ label: (f.labels ?? ch.labels) ? '데이터 레이블 제거' : '데이터 레이블 추가', action: () => setSeriesFmt(ch, part.s, { labels: (f.labels ?? ch.labels) ? false : true }) });
+    items.push({ sep: true }, { label: '계열 서식 창...', icon: 'format', action: () => chartFormatPane(ch.id) });
+  } else if (part.kind === 'legend') {
+    items.push({ title: '범례 서식' },
+      color('글꼴 색...', (c) => up({ legendColor: c ?? undefined })),
+      { label: '글꼴 크기', submenu: [7, 8, 9, 10, 11, 12, 14, 16].map((n) => ({ label: `${n}pt`, checked: (ch.legendSize ?? 9) === n, action: () => up({ legendSize: n === 9 ? undefined : n }) })) },
+      { label: '굵게', checked: !!ch.legendBold, action: () => up({ legendBold: !ch.legendBold || undefined }) },
+      { label: '위치', submenu: [['r', '오른쪽'], ['t', '위쪽'], ['l', '왼쪽'], ['b', '아래쪽']].map(([v, l]) => ({ label: l, checked: (ch.legend ?? 'b') === v, action: () => up({ legend: v }) })) },
+      { sep: true }, { label: '범례 삭제', icon: 'delete', action: () => { chartPart = null; up({ legend: 'none' }); } });
+  } else if (part.kind === 'title') {
+    items.push({ title: '차트 제목 서식' },
+      { label: '제목 편집...', action: () => formDialog('차트 제목', [{ name: 't', label: '제목', value: ch.title ?? '' }], ({ t }) => up({ title: t })) },
+      color('글꼴 색...', (c) => up({ titleColor: c ?? undefined })),
+      { label: '글꼴 크기', submenu: [10, 12, 14, 16, 18, 20, 24].map((n) => ({ label: `${n}pt`, checked: (ch.titleSize ?? 14) === n, action: () => up({ titleSize: n === 14 ? undefined : n }) })) },
+      { label: '굵게', checked: !!ch.titleBold, action: () => up({ titleBold: !ch.titleBold || undefined }) },
+      { sep: true }, { label: '제목 삭제', icon: 'delete', action: () => { chartPart = null; up({ title: '' }); } });
+  }
+  items.push({ sep: true }, { label: '차트 전체 메뉴...', action: () => { chartPart = null; gv.renderObjectsAll(); objectMenu(ch.id, pos); } });
+  openMenu(pos, items);
+}
 function objectMenu(id, pos) {
   const f = findObject(sheet(), id);
   if (!f) return;
   if (chartSel !== id) { chartSel = id; gv.renderObjectsAll(); updateSelectionUI(); }
+  if (f.prop === 'charts' && chartPart?.id === id) { chartPartMenu(f.obj, chartPart, pos); return; }
   const items = [
     { label: '잘라내기', icon: 'cut', key: 'Ctrl+X', action: () => copyObject(id, true) },
     { label: '복사', icon: 'copy', key: 'Ctrl+C', action: () => copyObject(id, false) },
@@ -13642,7 +13723,7 @@ async function init() {
   hydrateIcons();
   gv = new GridView({
     state: () => ({
-      wb, si, sel, selKind, active, editing: !!editing, clip, fillPreview, refs: editRefs, chartSel, objMulti, circles, focusCell: opts.focusCell,
+      wb, si, sel, selKind, active, editing: !!editing, clip, fillPreview, refs: editRefs, chartSel, chartPart, objMulti, circles, focusCell: opts.focusCell,
       special: special?.si === si ? special.cells : null, arrows: trace?.arrows ?? null,
       showGrid: view.showGrid && !sheet().noGrid, showFormulas: view.showFormulas, showHeaders: view.showHeaders,
     }),

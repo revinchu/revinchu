@@ -1575,6 +1575,8 @@ function readChart(files, path, theme = {}) {
   if (af.size) out.axisSize = af.size;
   const lg = runFont(child(child(chartEl, 'legend'), 'txPr'));
   if (lg.size) out.legendSize = lg.size;
+  if (lg.color && lg.color !== '#000000' && lg.color !== '#595959') out.legendColor = lg.color;
+  if (lg.bold) out.legendBold = true;
   if (range) out.range = range;
   if (sheetName) out.sheet = sheetName;
   if (fmts.some((f) => Object.keys(f).length)) out.seriesFmt = fmts;
@@ -2832,7 +2834,9 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
     ? `<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="1400" b="0"/></a:pPr><a:r><a:rPr lang="ko-KR" sz="1400" b="0"/><a:t>${esc(chart.title)}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="${chart.titleOverlay ? 1 : 0}"/></c:title><c:autoTitleDeleted val="0"/>`
     : '<c:autoTitleDeleted val="1"/>';
   const lp = chart.legend ?? (series.length > 1 || pieLike ? 'b' : 'none');
-  const legend = lp !== 'none' ? `<c:legend><c:legendPos val="${lp}"/><c:overlay val="0"/></c:legend>` : '';
+  // 범례 글꼴 (색 · 크기 · 굵게)
+  const legTx = chart.legendColor || chart.legendSize || chart.legendBold ? `<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr${chart.legendSize ? ` sz="${Math.round(chart.legendSize * 100)}"` : ''}${chart.legendBold ? ' b="1"' : ''}>${chart.legendColor ? `<a:solidFill><a:srgbClr val="${String(chart.legendColor).replace('#', '').toUpperCase()}"/></a:solidFill>` : ''}</a:defRPr></a:pPr><a:endParaRPr lang="ko-KR"/></a:p></c:txPr>` : '';
+  const legend = lp !== 'none' ? `<c:legend><c:legendPos val="${lp}"/><c:overlay val="0"/>${legTx}</c:legend>` : '';
   // 위셀 지표 선택 피벗 차트: 엑셀에는 피벗 테이블 범위를 참조하는 일반 차트로 (엑셀 피벗 차트는 모든 값 필드를 강제로 보이므로)
   const subsetPivot = !!chart.pivot?.values?.length;
   const pivotSrc = chart.pivot && !subsetPivot ? `<c:pivotSource><c:name>${esc(`[${fileName}]${quoteSheetName(chart.pivot.sheet ?? wb.sheets[si].name)}!${chart.pivot.name}`)}</c:name><c:fmtId val="0"/></c:pivotSource>` : '';
@@ -2842,7 +2846,7 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
   const areaSpPr = chart.fill || chart.border ? `<c:spPr>${chart.fill ? `<a:solidFill><a:srgbClr val="${hexOf(chart.fill)}"/></a:solidFill>` : ''}${chart.border ? `<a:ln w="9525"><a:solidFill><a:srgbClr val="${hexOf(chart.border)}"/></a:solidFill></a:ln>` : ''}</c:spPr>` : '';
   const plotSpPr = chart.plotFill ? `<c:spPr><a:solidFill><a:srgbClr val="${hexOf(chart.plotFill)}"/></a:solidFill></c:spPr>` : '';
   // WIXEL 전용 설정 (엑셀은 무시): 원래 차트 종류 · 팔레트 · 서식
-  const TB_KEYS = ['hiddenSeries', 'hiddenCats', 'type', 'byRows', 'fieldButtons', 'palette', 'scatterStyle', 'radarStyle', 'ohlc', 'explode', 'hole', 'gap', 'marker', 'gridX', 'gridY', 'fill', 'plotFill', 'border', 'titleColor', 'titleBold', 'textColor', 'gridColor', 'rounded', 'totals', 'binCount', 'binWidth', 'upColor', 'downColor', 'totalColor', 'bubbleScale', 'firstAngle', 'showMean', 'connectors'];
+  const TB_KEYS = ['hiddenSeries', 'hiddenCats', 'legendBold', 'type', 'byRows', 'fieldButtons', 'palette', 'scatterStyle', 'radarStyle', 'ohlc', 'explode', 'hole', 'gap', 'marker', 'gridX', 'gridY', 'fill', 'plotFill', 'border', 'titleColor', 'titleBold', 'textColor', 'gridColor', 'rounded', 'totals', 'binCount', 'binWidth', 'upColor', 'downColor', 'totalColor', 'bubbleScale', 'firstAngle', 'showMean', 'connectors'];
   const tb = Object.fromEntries(TB_KEYS.filter((k) => chart[k] !== undefined && chart[k] !== null).map((k) => [k, chart[k]]));
   if (subsetPivot) tb.wxPivot = chart.pivot; // 위셀로 다시 열면 슬라이서와 연동되는 피벗 차트로 복원
   const extLst = Object.keys(tb).length > 1 || FALLBACK[chart.type] ? `<c:extLst><c:ext uri="{5E2A6C7B-8F4D-4B1A-9C3E-7D6F1A2B3C4D}" xmlns:tb="urn:tabula:chart"><tb:props json="${esc(JSON.stringify(tb))}"/></c:ext></c:extLst>` : '';

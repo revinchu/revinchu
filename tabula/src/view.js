@@ -906,7 +906,14 @@ export class GridView {
       ...slicers.map((o) => ['slicers', o]),
     ].sort((a, b) => (a[1].z ?? 0) - (b[1].z ?? 0));
     for (const [prop, o] of all) {
-      if (prop === 'charts') box(o, 'chart', this.chartSvg(o) + this.pivotChartButtons(o) + (st.chartSel === o.id && !st.objMulti?.size && !st.viewOnly ? CHART_SIDE : ''));
+      if (prop === 'charts') {
+        // 고른 차트 요소 강조 (엑셀: 계열 전체 또는 요소 하나에 선택 표시)
+        const part = st.chartSel === o.id && st.chartPart?.id === o.id ? st.chartPart : null;
+        const sel = !part ? '' : part.kind === 'series' ? `[data-s="${part.s}"]` : part.kind === 'point' ? `[data-s="${part.s}"][data-p="${part.p}"]` : `[data-el="${part.kind}"]`;
+        const scope = `.obj[data-id="${esc(o.id)}"] svg`;
+        const hl = sel ? `<style>${scope} ${sel}{filter:drop-shadow(0 0 1.5px #1f6fd1) drop-shadow(0 0 1px #1f6fd1)}${scope} rect${sel},${scope} circle${sel},${scope} path${sel}:not([fill="none"]){stroke:#1f6fd1;stroke-width:1.5px;stroke-dasharray:3 2}${part.kind === 'legend' || part.kind === 'title' ? `${scope} ${sel}{outline:1px dashed #1f6fd1}` : ''}</style>` : '';
+        box(o, 'chart', this.chartSvg(o) + hl + this.pivotChartButtons(o) + (st.chartSel === o.id && !st.objMulti?.size && !st.viewOnly ? CHART_SIDE : ''));
+      }
       else if (prop === 'slicers') box(o, o.timeline ? 'slicer timeline' : 'slicer', this.slicerHtml(o), slicerCssVars(o));
       else if (prop === 'images') {
         // 그림 스타일: 테두리 · 둥근 모서리 · 그림자 · 회전 · 투명도

@@ -1139,3 +1139,5 @@ body.view-mode .titlebar, body.view-mode .ribbon-tabs, body.view-mode .ribbon, b
 .pf-sub.on span:first-child::before { content: '✔ '; color: var(--green); }
 .t10-row input[type=text] { flex: 1; min-width: 60px; }
 .pf-act { display: flex; align-items: center; gap: 6px; } .pf-ico { width: 18px; display: inline-flex; } .pf-ico svg { width: 16px; height: 16px; }
+/* 차트 요소를 눌러 고를 수 있게 (계열 · 요소 · 범례 · 제목) */
+.chart svg [data-s], .chart svg [data-el] { pointer-events: auto; cursor: pointer; }

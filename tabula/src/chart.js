@@ -239,7 +239,7 @@ export function resolveChart(ch, api) {
   const fmt = ch.seriesFmt ?? [];
   const comboDefault = (i) => (ch.type === 'combo' ? (i === base.series.length - 1 && base.series.length > 1 ? { type: 'line', axis: 1 } : { type: 'column' }) : {});
   // 계열 형식에 종류가 정해져 있으면 축도 그 형식대로 (axis 가 없으면 기본 축) — 파일의 콤보 차트에서 마지막 계열을 보조 축으로 보내지 않게
-  base.series = base.series.map((s, i) => ({ ...s, ...(fmt[i]?.type ? { axis: 0 } : comboDefault(i)), ...(fmt[i] ?? {}) }));
+  base.series = base.series.map((s, i) => ({ ...s, ...(fmt[i]?.type ? { axis: 0 } : comboDefault(i)), ...(fmt[i] ?? {}), _fi: i }));
   return filterChart(base, ch);
 }
 
@@ -373,6 +373,17 @@ const MARKERS = {
 /**
  * chart: 차트 모델 (+ w, h), data: resolveChart 결과 → SVG 문자열
  */
+/** 색 밝기 (0 검정 ~ 1 흰색) */
+function lum(c) {
+  const h = String(c ?? '').replace('#', '');
+  if (!/^[0-9a-f]{6}$/i.test(h)) return 0.5;
+  const [r, g, b] = [0, 2, 4].map((k) => parseInt(h.slice(k, k + 2), 16) / 255);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+/** 글자 색이 배경과 거의 같으면 보이는 색으로 (흰 바탕 흰 글자 → 회색) */
+function readable(fg, bg) {
+  return Math.abs(lum(fg) - lum(bg)) < 0.25 ? (lum(bg) > 0.5 ? '#595959' : '#f2f2f2') : fg;
+}
 let svgSeq = 0;
 export function renderChartSvg(chart, data) {
   const W = Math.max(120, chart.w);
@@ -392,7 +403,7 @@ export function renderChartSvg(chart, data) {
     `<rect x="0.5" y="0.5" width="${W - 1}" height="${H - 1}" rx="${chart.rounded ? 8 : 0}" fill="${chart.fill ?? '#fff'}"${chart.border ? ` stroke="${chart.border}"` : ''}/>`];
   let top = 10;
   if (chart.title) {
-    parts.push(`<text x="${W / 2}" y="${Math.round(FS.title + 10)}" text-anchor="middle" font-size="${FS.title}"${chart.titleBold ? ' font-weight="700"' : ''} fill="${chart.titleColor ?? TXT}">${escSvg(truncate(chart.title, Math.floor(W / (FS.title * 0.62))))}</text>`);
+    parts.push(`<text data-el="title" x="${W / 2}" y="${Math.round(FS.title + 10)}" text-anchor="middle" font-size="${FS.title}"${chart.titleBold ? ' font-weight="700"' : ''} fill="${chart.titleColor ?? TXT}">${escSvg(truncate(chart.title, Math.floor(W / (FS.title * 0.62))))}</text>`);
     if (!chart.titleOverlay) top = Math.round(FS.title * 1.5 + 16); // 가운데에 맞춰 표시(overlay): 그림 영역을 줄이지 않음
   }
   // 계열 채우기: 단색 또는 그라데이션 (url), 그림자 필터
@@ -417,12 +428,15 @@ export function renderChartSvg(chart, data) {
   // 다단계 항목 축 (세로 막대 · 꺾은선 · 콤보): 안쪽 이름 아래에 바깥 묶음 이름 줄
   const catLevels = baseType !== 'bar' && baseType !== 'scatter' && !chart.axes?.x?.hide ? data.catLevels ?? [] : [];
   const LEVEL_H = Math.round(FS.axis * 1.6);
-  const series = data.series.map((s, i) => ({ ...s, type: s.type ?? baseType, axis: s.axis ?? 0, color: s.color ?? pal[i % pal.length] }));
+  const series = data.series.map((s, i) => ({ ...s, type: s.type ?? baseType, axis: s.axis ?? 0, color: s.color ?? pal[i % pal.length], _fi: s._fi ?? i }));
+  // 요소 고르기용 표시 (엑셀처럼 한 번 누르면 계열, 한 번 더 누르면 요소) — data-s = 계열 서식 번호, data-p = 항목 번호
+  const tag = (s, p) => ` data-s="${s._fi}"${p === undefined ? '' : ` data-p="${p}"`}`;
+  const tagMk = (html, s, p) => html.replace(/^<(\w+)/, `<$1${tag(s, p)}`);
   const pieLike = baseType === 'pie' || baseType === 'doughnut';
   const special = SPECIAL[baseType];
   const legendPos = chart.legend ?? (special?.legend === false ? 'none' : 'b');
   const legendItems = baseType === 'treemap' && data.catLevels?.length ? data.catLevels.at(-1).map((g, i) => ({ name: g.text, color: pal[i % pal.length], line: false }))
-    : pieLike || baseType === 'treemap' ? categories.map((c, i) => ({ name: c, color: series[0]?.colors?.[i] ?? pal[i % pal.length], line: false }))
+    : pieLike || baseType === 'treemap' ? categories.map((c, i) => ({ name: c, color: series[0]?.pointColors?.[i] ?? series[0]?.colors?.[i] ?? pal[i % pal.length], line: false }))
     : baseType === 'waterfall' ? [{ name: '증가', color: chart.upColor ?? pal[0] }, { name: '감소', color: chart.downColor ?? pal[1] }, { name: '합계', color: chart.totalColor ?? pal[2] }]
       : baseType === 'pareto' ? [{ name: series[0]?.name ?? '', color: series[0]?.color }, { name: '누적 %', color: pal[1], line: true }]
         : series.map((s) => ({ name: s.name, color: s.color, line: s.type === 'line' || s.type === 'radar' }));
@@ -447,14 +461,18 @@ export function renderChartSvg(chart, data) {
 
   if (showLegend) {
     const items = legendItems.slice(0, 16);
+    // 범례 글자: 범례 색(legendColor) → 차트 글자 색. 배경과 거의 같은 색이면(흰 바탕에 흰 글자) 보이도록 회색
+    const LTX = readable(chart.legendColor ?? TXT, chart.fill ?? '#ffffff');
+    const light = (c) => lum(c) > 0.92;
     const key = (it, lx, ly) => (it.line
       ? `<line x1="${lx - 2}" y1="${ly - 4}" x2="${lx + 11}" y2="${ly - 4}" stroke="${it.color}" stroke-width="2.25"/><circle cx="${lx + 4.5}" cy="${ly - 4}" r="2.5" fill="${it.color}"/>`
-      : `<rect x="${lx}" y="${ly - 8}" width="9" height="9" fill="${it.color}"/>`);
+      : `<rect x="${lx}" y="${ly - 8}" width="9" height="9" fill="${it.color}"${light(it.color) ? ' stroke="#bfbfbf" stroke-width="0.75"' : ''}/>`);
+    parts.push('<g data-el="legend">');
     if (sideLegend) {
       const lx0 = legendPos === 'r' ? W - legendW - 4 : 8;
       let ly = Math.max(top + 12, H / 2 - (items.length * Math.round(FS.legend * 1.6)) / 2);
       items.forEach((it) => {
-        parts.push(key(it, lx0, ly), `<text x="${lx0 + 15}" y="${ly}" font-size="${FS.legend}" fill="${TXT}">${escSvg(truncate(String(it.name), Math.floor((legendW - 20) / (LW * 1.4))))}</text>`);
+        parts.push(key(it, lx0, ly), `<text x="${lx0 + 15}" y="${ly}" font-size="${FS.legend}" fill="${LTX}"${chart.legendBold ? ' font-weight="700"' : ''}>${escSvg(truncate(String(it.name), Math.floor((legendW - 20) / (LW * 1.4))))}</text>`);
         ly += Math.round(FS.legend * 1.6);
       });
     } else {
@@ -463,10 +481,11 @@ export function renderChartSvg(chart, data) {
       let lx = Math.max(10, (W - total) / 2);
       const ly = legendPos === 't' ? top + 12 : H - 14;
       items.forEach((it) => {
-        parts.push(key(it, lx, ly), `<text x="${lx + 15}" y="${ly}" font-size="${FS.legend}" fill="${TXT}">${escSvg(truncate(String(it.name), Math.floor((itemW - 18) / (LW * 1.4))))}</text>`);
+        parts.push(key(it, lx, ly), `<text x="${lx + 15}" y="${ly}" font-size="${FS.legend}" fill="${LTX}"${chart.legendBold ? ' font-weight="700"' : ''}>${escSvg(truncate(String(it.name), Math.floor((itemW - 18) / (LW * 1.4))))}</text>`);
         lx += itemW;
       });
     }
+    parts.push('</g>');
   }
 
   const wantLabels = (s) => s.labels ?? chart.labels ?? false;
@@ -492,13 +511,13 @@ export function renderChartSvg(chart, data) {
       if (!v) return;
       const frac = v / sum;
       const a2 = a + frac * Math.PI * 2;
-      const color = s0.colors?.[i] ?? pal[i % pal.length];
+      const color = s0.pointColors?.[i] ?? s0.colors?.[i] ?? pal[i % pal.length];
       const mid0 = (a + a2) / 2;
       const ox = ex ? Math.cos(mid0) * r * ex : 0;
       const oy = ex ? Math.sin(mid0) * r * ex : 0;
       if (ex) parts.push(`<g transform="translate(${ox.toFixed(2)},${oy.toFixed(2)})">`);
       if (frac >= 0.9999) {
-        parts.push(`<circle cx="${cx}" cy="${cy}" r="${r}" fill="${color}" stroke="#fff"/>`);
+        parts.push(`<circle cx="${cx}" cy="${cy}" r="${r}" fill="${color}" stroke="#fff"${tag(s0, i)}/>`);
         if (inner) parts.push(`<circle cx="${cx}" cy="${cy}" r="${inner}" fill="#fff"/>`);
       } else {
         const large = a2 - a > Math.PI ? 1 : 0;
@@ -506,7 +525,7 @@ export function renderChartSvg(chart, data) {
         const d = inner
           ? `M${p(a, r)}A${r},${r} 0 ${large} 1 ${p(a2, r)}L${p(a2, inner)}A${inner},${inner} 0 ${large} 0 ${p(a, inner)}Z`
           : `M${cx},${cy}L${p(a, r)}A${r},${r} 0 ${large} 1 ${p(a2, r)}Z`;
-        parts.push(`<path d="${d}" fill="${color}" stroke="${chart.fill ?? '#fff'}" stroke-width="1.5"/>`);
+        parts.push(`<path d="${d}" fill="${color}" stroke="${chart.fill ?? '#fff'}" stroke-width="1.5"${tag(s0, i)}/>`);
       }
       if (ex) parts.push('</g>');
       // 레이블: false = 없음(파일에 없던 원형), pct = 백분율, labels = 값, 정하지 않음 = 백분율
@@ -722,8 +741,8 @@ export function renderChartSvg(chart, data) {
           const a = Math.min(from, to);
           const len = Math.abs(to - from);
           const stroke = s.outline ? ` stroke="${s.outline}" stroke-width="1"` : '';
-          if (horizontal) parts.push(`<rect x="${a.toFixed(1)}" y="${start.toFixed(1)}" width="${len.toFixed(1)}" height="${Math.max(1, barW - 1).toFixed(1)}" fill="${pf}"${stroke}${sh}/>`);
-          else parts.push(`<rect x="${start.toFixed(1)}" y="${a.toFixed(1)}" width="${Math.max(1, barW - 1).toFixed(1)}" height="${len.toFixed(1)}" fill="${pf}"${stroke}${sh}/>`);
+          if (horizontal) parts.push(`<rect x="${a.toFixed(1)}" y="${start.toFixed(1)}" width="${len.toFixed(1)}" height="${Math.max(1, barW - 1).toFixed(1)}" fill="${pf}"${stroke}${sh}${tag(s, i)}/>`);
+          else parts.push(`<rect x="${start.toFixed(1)}" y="${a.toFixed(1)}" width="${Math.max(1, barW - 1).toFixed(1)}" height="${len.toFixed(1)}" fill="${pf}"${stroke}${sh}${tag(s, i)}/>`);
           if (wantLabels(s)) {
             // 레이블 위치: 바깥쪽 끝(기본) · 가운데 · 안쪽 끝 · 안쪽 축
             const lp = stacked && !s.labelPos ? 'center' : s.labelPos ?? 'outEnd';
@@ -768,14 +787,14 @@ export function renderChartSvg(chart, data) {
             const back = lower
               ? seg.slice().reverse().map((p) => `L${p[0].toFixed(1)},${vp(lower[p[3]]).toFixed(1)}`).join('')
               : `L${seg.at(-1)[0].toFixed(1)},${b0.toFixed(1)}L${seg[0][0].toFixed(1)},${b0.toFixed(1)}`;
-            parts.push(`<path d="${d}${back}Z" fill="${fillOf(s)}" fill-opacity="${stacked ? 0.9 : 0.75}"/>`);
+            parts.push(`<path d="${d}${back}Z" fill="${fillOf(s)}" fill-opacity="${stacked ? 0.9 : 0.75}"${tag(s)}/>`);
           } else {
-            parts.push(`<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.lineWidth ?? 2.25}" stroke-linejoin="round" stroke-linecap="round"${dashAttr(s.dash, s.lineWidth ?? 2.25)}${shadowAttr(s)}/>`);
+            parts.push(`<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.lineWidth ?? 2.25}" stroke-linejoin="round" stroke-linecap="round"${dashAttr(s.dash, s.lineWidth ?? 2.25)}${shadowAttr(s)}${tag(s)}/>`);
             const mkName = s.marker ?? chart.marker;
             if (mkName !== false && mkName !== 'none') {
               const mk = MARKERS[mkName] ?? MARKERS.circle;
               const mr = s.markerSize ? (s.markerSize * 4) / 3 / 2 : 3;
-              for (const p of seg) parts.push(mk(p[0].toFixed(1), p[1].toFixed(1), mr, s.markerColor ?? s.color));
+              for (const p of seg) parts.push(tagMk(mk(p[0].toFixed(1), p[1].toFixed(1), mr, s.pointColors?.[p[3]] ?? s.markerColor ?? s.color), s, p[3]));
             }
           }
           if (wantLabels(s)) for (const p of seg) pushLabel(p[0], p[1] - 7, p[2], s);
