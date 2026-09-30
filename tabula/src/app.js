@@ -11333,15 +11333,39 @@ function formatCellsDialog(startTab = 0, find = null) {
     ...tRows.map((r, i2) => swRow(r, i2 === 0 || i2 === tRows.length - 1)), swRow(STANDARD));
   fillIn.addEventListener('input', () => { noFill.checked = false; });
   // 무늬 스타일 · 무늬 색 (엑셀 채우기 탭)
-  const patSel = el('select', {}, [el('option', { value: '' }, '(무늬 없음)'), ...PATTERNS.map(([v, l]) => el('option', { value: v, selected: st.pattern === v }, l))]);
+  // 엑셀처럼 무늬 모양을 그림으로 보고 고르는 드롭다운 (무늬 없음 · 회색 단계 / 굵은 줄무늬 / 가는 줄무늬)
+  const patSel = el('input', { type: 'hidden', value: st.pattern ?? '' });
   const patColor = el('input', { type: 'color', value: st.patternColor || '#000000' });
+  const PAT_GRID = [['', 'darkGray', 'mediumGray', 'lightGray', 'gray125', 'gray0625'],
+    ['darkHorizontal', 'darkVertical', 'darkDown', 'darkUp', 'darkGrid', 'darkTrellis'],
+    ['lightHorizontal', 'lightVertical', 'lightDown', 'lightUp', 'lightGrid', 'lightTrellis']];
+  const patLabel = (v) => (v ? PATTERNS.find((x) => x[0] === v)?.[1] ?? v : '무늬 없음');
+  const patTile = (v) => el('span', { class: 'pat-tile', style: { background: v ? patternCss(v, patColor.value, '#ffffff') : '#ffffff' } });
+  const patBtn = el('button', { type: 'button', class: 'btn pat-drop', title: '무늬 스타일' });
+  const drawPatBtn = () => { patBtn.replaceChildren(patTile(patSel.value), el('span', {}, patLabel(patSel.value)), el('span', { class: 'pat-caret' }, '▾')); };
+  drawPatBtn();
+  patBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    document.querySelector('.pat-pop')?.remove();
+    const r = patBtn.getBoundingClientRect();
+    const pop = el('div', { class: 'pat-pop', style: { left: `${r.left}px`, top: `${r.bottom + 2}px` } },
+      PAT_GRID.map((rowV) => el('div', { class: 'pat-row' }, rowV.map((v) => {
+        const b = el('button', { type: 'button', class: `pat-cell${patSel.value === v ? ' on' : ''}`, title: patLabel(v) }, patTile(v));
+        b.addEventListener('click', () => { patSel.value = v; drawPatBtn(); updFill(); pop.remove(); });
+        return b;
+      }))));
+    document.body.append(pop);
+    const off = (ev) => { if (!pop.contains(ev.target)) { pop.remove(); document.removeEventListener('mousedown', off, true); } };
+    setTimeout(() => document.addEventListener('mousedown', off, true), 0);
+  });
+  patColor.addEventListener('input', drawPatBtn);
   const fillPrev = el('div', { class: 'fc-fillprev' });
   const updFill = () => { fillPrev.style.background = patSel.value ? patternCss(patSel.value, patColor.value, noFill.checked ? '#ffffff' : fillIn.value) : noFill.checked ? '#ffffff' : fillIn.value; };
   [patSel, patColor, fillIn, noFill].forEach((x) => x.addEventListener('input', updFill));
   swatches.addEventListener('click', () => setTimeout(updFill, 0));
   updFill();
   const fillPage = col(noFillL, el('div', { class: 'fc-title' }, '배경색'), swatches, lab('다른 색', fillIn),
-    row(lab('무늬 스타일', patSel), lab('무늬 색', patColor)), el('div', { class: 'fc-title' }, '보기'), fillPrev);
+    row(lab('무늬 색', patColor), lab('무늬 스타일', patBtn)), patSel, el('div', { class: 'fc-title' }, '보기'), fillPrev);
 
   // ── 보호 ──
   const [lockIn, lockL] = chk('잠금', st.locked !== false);

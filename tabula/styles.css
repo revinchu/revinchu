@@ -1141,3 +1141,12 @@ body.view-mode .titlebar, body.view-mode .ribbon-tabs, body.view-mode .ribbon, b
 .pf-act { display: flex; align-items: center; gap: 6px; } .pf-ico { width: 18px; display: inline-flex; } .pf-ico svg { width: 16px; height: 16px; }
 /* 차트 요소를 눌러 고를 수 있게 (계열 · 요소 · 범례 · 제목) */
 .chart svg [data-s], .chart svg [data-el] { pointer-events: auto; cursor: pointer; }
+/* 셀 서식 채우기: 무늬 스타일 그림 드롭다운 (엑셀과 같은 3줄 격자) */
+.pat-drop { display: inline-flex; align-items: center; gap: 6px; min-width: 150px; justify-content: flex-start; }
+.pat-drop .pat-caret { margin-left: auto; color: #666; }
+.pat-tile { display: inline-block; width: 22px; height: 14px; border: 1px solid #bbb; image-rendering: pixelated; }
+.pat-pop { position: fixed; z-index: 10000; background: #fff; border: 1px solid #b5b5b5; box-shadow: 0 3px 10px rgba(0,0,0,.2); padding: 6px; }
+.pat-row { display: flex; gap: 3px; margin-bottom: 3px; }
+.pat-cell { border: 1px solid transparent; background: none; padding: 2px; cursor: pointer; }
+.pat-cell:hover, .pat-cell.on { border-color: #217346; background: #e8f2ec; }
+.pat-cell .pat-tile { width: 26px; height: 18px; }

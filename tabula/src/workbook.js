@@ -556,7 +556,8 @@ export class Workbook {
     // 파일에서 연 뒤 아직 바뀐 것이 없으면 엑셀이 저장해 둔 계산 결과를 그대로 사용
     if (sheet.fileValues && cell.cached !== undefined && !cell.maybeArray && !cell.dirty) return cachedValue(cell.cached);
     const k = cellNum(si, r, c);
-    if (cell.ast === null) return ERR.NAME;
+    // 읽을 수 없는 수식(외부 통합 문서의 표 참조 등): 파일에 저장된 값 유지
+    if (cell.ast === null) return cell.cached !== undefined ? cachedValue(cell.cached) : ERR.NAME;
     // 순환 참조: 파일에 저장된 마지막 값이 있으면 그 값 (엑셀도 반복 계산을 끈 순환 참조는 마지막 값을 유지)
     if (this.evaluating.has(k)) {
       if (cell.cached === undefined) return ERR.CIRC;

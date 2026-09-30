@@ -159,6 +159,26 @@ const BORDER_CSS = {
   medium: [2, 'solid'], mediumDashed: [2, 'dashed'], mediumDashDot: [2, 'dashed'], mediumDashDotDot: [2, 'dashed'], slantDashDot: [2, 'dashed'],
   thick: [3, 'solid'], double: [3, 'double'],
 };
+/**
+ * 병합 셀의 테두리: 엑셀은 병합 영역 가장자리 셀들의 선을 그림 (아래 선 = 맨 아래 행 셀, 오른쪽 선 = 맨 오른쪽 열 셀).
+ * 왼쪽 위 셀 서식만 보면 파일의 아래 · 오른쪽 선이나 병합 셀에 그린 테두리가 사라짐.
+ */
+export function mergeEdgeBorders(wb, si, m, style) {
+  const out = { ...style };
+  const pick = (k, cells) => {
+    for (const [rr, cc] of cells) {
+      const s = wb.styleAt(si, rr, cc);
+      if (s?.[k]) { out[k] = true; out[`${k}s`] = s[`${k}s`]; out[`${k}c`] = s[`${k}c`]; return; }
+    }
+  };
+  const span = (a, b) => { const o = []; for (let i = a; i <= Math.min(b, a + 200); i++) o.push(i); return o; };
+  if (m.r2 > m.r1) pick('bb', span(m.c1, m.c2).map((cc) => [m.r2, cc]));
+  if (m.c2 > m.c1) pick('br', span(m.r1, m.r2).map((rr) => [rr, m.c2]));
+  if (!out.bt) pick('bt', span(m.c1, m.c2).map((cc) => [m.r1, cc]));
+  if (!out.bl) pick('bl', span(m.r1, m.r2).map((rr) => [rr, m.c1]));
+  return out;
+}
+
 export function borderCss(side, kind, color) {
   const [w, s] = BORDER_CSS[kind ?? 'thin'] ?? BORDER_CSS.thin;
   return `border-${side}:${w}px ${s} ${color ?? '#000'}`;
@@ -741,6 +761,7 @@ export class GridView {
         style = { ...ts, ...own };
       }
     }
+    if (merge && (merge.r2 > merge.r1 || merge.c2 > merge.c1)) style = mergeEdgeBorders(wb, si, merge, style);
     const v = wb.getValue(si, r, c);
     const x = this.cols.pos(c);
     const y = this.rows.pos(r);

@@ -327,3 +327,24 @@ test('pivot date filters (dynamic periods and custom dates) match Excel', async 
   assert.ok(dateFilterMatch('dateBetween', serialOf(2026, 4, 3), serialOf(2026, 4, 1), serialOf(2026, 4, 5)));
   assert.ok(!dateFilterMatch('today', '글자', null, null, today));
 });
+
+test('xlsx: 셀 요소의 서식은 행 서식과 섞이지 않음(엑셀), 읽을 수 없는 수식은 저장된 값', async () => {
+  const { readXlsx } = await import('../src/xlsx.js');
+  const { zip } = await import('../src/zip.js');
+  const NS = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+  const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+  const bytes = zip({
+    '[Content_Types].xml': '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/></Types>',
+    '_rels/.rels': `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL}/officeDocument" Target="xl/workbook.xml"/></Relationships>`,
+    'xl/workbook.xml': `<?xml version="1.0"?><workbook ${NS}><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+    'xl/_rels/workbook.xml.rels': `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL}/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="${REL}/styles" Target="styles.xml"/></Relationships>`,
+    'xl/styles.xml': `<?xml version="1.0"?><styleSheet ${NS}><fonts count="2"><font><sz val="11"/><name val="맑은 고딕"/></font><font><b/><sz val="11"/><name val="맑은 고딕"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border/></borders><cellXfs count="3"><xf fontId="0" fillId="0" borderId="0"/><xf fontId="0" fillId="0" borderId="0" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf><xf fontId="1" fillId="0" borderId="0" applyFont="1"><alignment vertical="center"/></xf></cellXfs></styleSheet>`,
+    'xl/worksheets/sheet1.xml': `<?xml version="1.0"?><worksheet ${NS}><sheetData><row r="1" s="1" customFormat="1"><c r="A1" s="2" t="inlineStr"><is><t>제목</t></is></c><c r="B1"><f>[2]!표[[#This Row],[열]]</f><v>7</v></c></row></sheetData></worksheet>`,
+  });
+  const wb = new Workbook(readXlsx(bytes).data);
+  assert.equal(!!wb.styleAt(0, 0, 0).wrap, false); // 행의 줄 바꿈이 셀로 새지 않음
+  assert.equal(wb.styleAt(0, 0, 0).bold, true);
+  assert.equal(!!wb.styleAt(0, 0, 5).wrap, true); // 빈 칸은 행 서식
+  wb.invalidate();
+  assert.equal(wb.getValue(0, 0, 1), 7);
+});

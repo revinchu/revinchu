@@ -551,6 +551,35 @@ function* readSheet(files, path, ctx) {
     }
     return st ?? undefined;
   };
+  // 엑셀: <c> 요소가 있는 셀은 자기 xf 만 씀 (행 · 열 서식은 셀 요소가 없는 빈 칸에만).
+  // 앱은 행 · 열 서식 위에 셀 서식을 겹치므로, 행 · 열에만 있는 속성(줄 바꿈 · 굵게 · 채우기 · 테두리…)은 기본값으로 막음
+  const ownMemo = new Map();
+  const NONE = {};
+  const neutral = (k, v) => (k === 'locked' ? true : k === 'size' ? ctx.wbFont.size : k === 'font' ? ctx.wbFont.name : typeof v === 'boolean' ? false : typeof v === 'number' ? 0 : '');
+  const ownStyle = (st, r, cc) => {
+    const row = sheet.rowStyles[r];
+    const col = sheet.colStyles[cc];
+    if (!row && !col) return st;
+    const k1 = st ?? NONE;
+    let m = ownMemo.get(k1);
+    if (!m) { m = new Map(); ownMemo.set(k1, m); }
+    let m2 = m.get(row ?? NONE);
+    if (!m2) { m2 = new Map(); m.set(row ?? NONE, m2); }
+    let out = m2.get(col ?? NONE);
+    if (out === undefined) {
+      out = st;
+      for (const src of [row, col]) {
+        if (!src) continue;
+        for (const [key, v] of Object.entries(src)) {
+          if (v === undefined || (out && out[key] !== undefined)) continue;
+          if (out === st) out = { ...st };
+          out[key] = neutral(key, v);
+        }
+      }
+      m2.set(col ?? NONE, out ?? null);
+    }
+    return out ?? undefined;
+  };
 
   for (const col of kids(child(root, 'cols'), 'col')) {
     const min = Number(col.attrs.min) - 1;
@@ -617,7 +646,7 @@ function* readSheet(files, path, ctx) {
       colIdx = cc;
       const t = c.attrs.t ?? 'n';
       const vText = c.v;
-      const style = styleOf(c.attrs.s);
+      const style = ownStyle(styleOf(c.attrs.s), r, cc);
       let raw = '';
       let value = null;
       if (t === 's') value = strings[Number(vText)] ?? '';
