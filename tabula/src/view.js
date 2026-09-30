@@ -238,6 +238,14 @@ const PATTERN_BITS = {
   darkTrellis: ['11111111', '01100110', '11111111', '10011001', '11111111', '01100110', '11111111', '10011001'],
 };
 const patternMemo = new Map();
+/** 셀 그라데이션 채우기 (xlsx gradientFill): { deg, stops: [[pos, color]] } 선형 또는 { path: true, l, r, t, b, stops } 사각 경로 */
+export function gradientCss(g) {
+  const stops = (g?.stops ?? []).map(([p, c]) => `${c} ${Math.round(p * 1000) / 10}%`).join(', ');
+  if (!stops) return '';
+  if (g.path) return `radial-gradient(farthest-corner at ${Math.round(((g.l ?? 0) + (g.r ?? 0)) * 50)}% ${Math.round(((g.t ?? 0) + (g.b ?? 0)) * 50)}%, ${stops})`;
+  return `linear-gradient(${Math.round((g.deg ?? 0) + 90)}deg, ${stops})`;
+}
+
 export function patternCss(p, fg, bg) {
   const b = bg || 'transparent';
   const bits = PATTERN_BITS[p];
@@ -803,10 +811,11 @@ export class GridView {
         : `linear-gradient(${bar.color}, ${bar.color})`;
       css.push(`background:${img} no-repeat ${bar.neg ? '100%' : '0'} 50% / ${bar.pct}% 72%${bg ? `, ${bg}` : ''};background-clip:padding-box`);
     }
+    else if (style.gradient) css.push(`background:${gradientCss(style.gradient)}`);
     else if (style.pattern) css.push(`background:${patternCss(style.pattern, style.patternColor ?? '#000000', bg)}`);
     else if (bg) css.push(`background-color:${bg}`);
     // 채우기는 칸 둘레의 눈금선까지 덮음 (엑셀: 채운 칸끼리는 사이 선이 없음) — 대신 덮이는 이웃 칸의 테두리는 이 칸이 다시 그림
-    const covers = !bar && !!(bg || style.pattern);
+    const covers = !bar && !!(bg || style.pattern || style.gradient);
     if (covers) css.push('background-clip:border-box');
     // 테두리: 색 · 선 종류(가는 선 · 중간 · 굵게 · 점선 · 이중선)까지 엑셀처럼
     // 이웃 칸과 겹치는 선은 한 번만 (엑셀처럼): 위 칸의 아래쪽 · 왼쪽 칸의 오른쪽 선이 같거나 더 굵으면 이 칸의 위 · 왼쪽 선은 생략

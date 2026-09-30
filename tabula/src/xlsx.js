@@ -186,8 +186,16 @@ function readStyles(files, wbRels, theme) {
   const fillOf = (f, dxf = false) => {
     const pf = child(f, 'patternFill');
     if (!pf) {
-      const stop = descendants(f, 'stop')[0];
-      return stop ? colorOf(child(stop, 'color'), theme) : null;
+      const gf = child(f, 'gradientFill');
+      const stops = descendants(f, 'stop').map((s) => [Number(s.attrs.position) || 0, colorOf(child(s, 'color'), theme) ?? '#ffffff']);
+      if (!stops.length) return null;
+      if (dxf || !gf) return stops[0][1];
+      // 그라데이션 채우기 (엑셀 [채우기 효과]): 선형(degree) 또는 사각 경로(type="path")
+      const a = gf.attrs;
+      const gradient = a.type === 'path'
+        ? { path: true, l: Number(a.left) || 0, r: Number(a.right) || 0, t: Number(a.top) || 0, b: Number(a.bottom) || 0, stops }
+        : { deg: Number(a.degree) || 0, stops };
+      return { fill: stops[0][1], gradient };
     }
     if (!dxf && (pf.attrs.patternType === 'none' || !pf.attrs.patternType)) return null;
     // 무늬 채우기 (solid 가 아님): 배경색 = bgColor, 무늬 색 = fgColor
@@ -2508,7 +2516,11 @@ class StylePool {
     if (!this.styleXfMode && this.maps.xf.has(k)) return this.maps.xf.get(k);
     const font = `<font>${style.bold ? '<b/>' : ''}${style.italic ? '<i/>' : ''}${style.strike ? '<strike/>' : ''}${style.underline ? '<u/>' : ''}<sz val="${style.size || this.baseFont.size}"/>${style.color ? `<color rgb="${argb(style.color)}"/>` : '<color theme="1"/>'}<name val="${esc(style.font || this.baseFont.name)}"/><family val="3"/><charset val="129"/></font>`;
     const fontId = this.intern('font', this.fonts, font);
-    const fillId = style.pattern
+    const g = style.gradient;
+    const gStops = g?.stops?.length ? g.stops.map(([p, c]) => `<stop position="${Number(p) || 0}"><color rgb="${argb(c)}"/></stop>`).join('') : '';
+    const fillId = gStops
+      ? this.intern('fill', this.fills, `<fill><gradientFill${g.path ? ` type="path" left="${g.l ?? 0}" right="${g.r ?? 0}" top="${g.t ?? 0}" bottom="${g.b ?? 0}"` : g.deg ? ` degree="${g.deg}"` : ''}>${gStops}</gradientFill></fill>`)
+      : style.pattern
       ? this.intern('fill', this.fills, `<fill><patternFill patternType="${esc(style.pattern)}"><fgColor rgb="${argb(style.patternColor ?? '#000000')}"/>${style.fill ? `<bgColor rgb="${argb(style.fill)}"/>` : '<bgColor indexed="64"/>'}</patternFill></fill>`)
       : style.fill ? this.intern('fill', this.fills, `<fill><patternFill patternType="solid"><fgColor rgb="${argb(style.fill)}"/><bgColor indexed="64"/></patternFill></fill>`) : 0;
     const side = (n, k) => (style[k] ? `<${n} style="${style[`${k}s`] ?? 'thin'}">${style[`${k}c`] ? `<color rgb="${argb(style[`${k}c`])}"/>` : '<color indexed="64"/>'}</${n}>` : `<${n}/>`);

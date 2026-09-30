@@ -18,7 +18,7 @@ import { makeSeries, CUSTOM_LISTS } from './series.js';
 import { parseDelimited, toDelimited, guessDelimiter, CsvBlockReader } from './csv.js';
 import { SAMPLES } from './samples.js';
 import { TEMPLATES, TEMPLATE_CATS } from './templates.js';
-import { GridView, BASE_FONT, setBaseFont, measureText, fontStack, PATTERNS, patternCss, glyphShift, timelinePeriods } from './view.js';
+import { GridView, BASE_FONT, setBaseFont, measureText, fontStack, PATTERNS, patternCss, gradientCss, glyphShift, timelinePeriods } from './view.js';
 import { setThemeColors, THEME, applyTint } from './stylepresets.js';
 import { readXlsxAsync, writeXlsxAsync, xlsxOverflow, textRaw } from './xlsx.js';
 import { readOds, writeOds } from './ods.js';
@@ -6482,6 +6482,60 @@ function optionsDialog(startTab = 0) {
   });
 }
 
+/** 채우기 효과 (엑셀 셀 서식 › 채우기 › 채우기 효과): 두 가지 색 + 음영 스타일 + 변형 */
+const GRAD_STYLES = [['h', '가로'], ['v', '세로'], ['du', '대각선 위로'], ['dd', '대각선 아래로'], ['c', '가운데에서']];
+function gradientOf(kind, variant, c1, c2) {
+  const two = variant % 2 === 0 ? [c1, c2] : [c2, c1];
+  const stops = variant < 2 ? [[0, two[0]], [1, two[1]]] : [[0, two[0]], [0.5, two[1]], [1, two[0]]];
+  if (kind === 'c') return { path: true, l: 0.5, r: 0.5, t: 0.5, b: 0.5, stops: [[0, two[0]], [1, two[1]]] };
+  return { deg: { h: 90, v: 0, du: 45, dd: 135 }[kind] ?? 90, stops };
+}
+function gradientDialog(cur, base, done) {
+  const guess = (() => {
+    if (!cur) return { kind: 'h', variant: 0, c1: '#ffffff', c2: base && base !== '#ffffff' ? base : '#4472c4' };
+    const kind = cur.path ? 'c' : ({ 90: 'h', 0: 'v', 45: 'du', 135: 'dd' }[cur.deg] ?? 'h');
+    return { kind, variant: cur.stops.length > 2 ? 2 : 0, c1: cur.stops[0][1], c2: cur.stops[1]?.[1] ?? '#ffffff' };
+  })();
+  const s = { ...guess };
+  const c1 = el('input', { type: 'color', value: s.c1 });
+  const c2 = el('input', { type: 'color', value: s.c2 });
+  const variants = el('div', { class: 'grad-vars' });
+  const sample = el('div', { class: 'grad-sample' });
+  const styles = el('div', { class: 'grad-styles' }, GRAD_STYLES.map(([k, label]) => {
+    const r = el('input', { type: 'radio', name: 'gradkind', value: k, checked: s.kind === k });
+    r.addEventListener('change', () => { s.kind = k; s.variant = 0; draw(); });
+    return el('label', { class: 'fc-check' }, r, label);
+  }));
+  const draw = () => {
+    s.c1 = c1.value; s.c2 = c2.value;
+    const n = s.kind === 'c' ? 2 : 4;
+    if (s.variant >= n) s.variant = 0;
+    variants.replaceChildren(...[...Array(n)].map((_, i) => el('button', {
+      type: 'button', class: `grad-var${i === s.variant ? ' on' : ''}`, style: { background: gradientCss(gradientOf(s.kind, i, s.c1, s.c2)) },
+      onclick: () => { s.variant = i; draw(); },
+    })));
+    sample.style.background = gradientCss(gradientOf(s.kind, s.variant, s.c1, s.c2));
+  };
+  c1.addEventListener('input', draw);
+  c2.addEventListener('input', draw);
+  draw();
+  openDialog({
+    title: '채우기 효과', width: 520,
+    body: el('div', { class: 'grad-dlg' },
+      el('div', { class: 'fc-title' }, '색'),
+      el('div', { class: 'grad-colors' }, el('label', {}, el('span', {}, '색 1'), c1), el('label', {}, el('span', {}, '색 2'), c2)),
+      el('div', { class: 'grad-body' },
+        el('div', {}, el('div', { class: 'fc-title' }, '음영 스타일'), styles),
+        el('div', {}, el('div', { class: 'fc-title' }, '변형'), variants),
+        el('div', {}, el('div', { class: 'fc-title' }, '보기'), sample))),
+    buttons: [
+      { label: '확인', primary: true, action: () => done(gradientOf(s.kind, s.variant, s.c1, s.c2)) },
+      { label: '그라데이션 해제', action: () => done(null) },
+      { label: '취소' },
+    ],
+  });
+}
+
 /** 피벗 테이블 기본 레이아웃 편집 */
 function pivotDefaultsDialog(o) {
   const p = o.pivot;
@@ -12177,11 +12231,17 @@ function formatCellsDialog(startTab = 0, find = null) {
   });
   patColor.addEventListener('input', drawPatBtn);
   const fillPrev = el('div', { class: 'fc-fillprev' });
-  const updFill = () => { fillPrev.style.background = patSel.value ? patternCss(patSel.value, patColor.value, noFill.checked ? '#ffffff' : fillIn.value) : noFill.checked ? '#ffffff' : fillIn.value; };
+  // 채우기 효과 (그라데이션): 색을 고르면 해제 (엑셀과 같음)
+  let grad = st.gradient ? JSON.parse(JSON.stringify(st.gradient)) : null;
+  const effBtn = el('button', { type: 'button', class: 'btn', onclick: () => gradientDialog(grad, fillIn.value, (g) => { grad = g; if (g) noFill.checked = false; updFill(); }) }, '채우기 효과...');
+  const dropGrad = () => { grad = null; };
+  fillIn.addEventListener('input', dropGrad);
+  swatches.addEventListener('click', (e) => { if (e.target.closest('.swatch, .fc-nocolor')) dropGrad(); });
+  const updFill = () => { fillPrev.style.background = grad ? gradientCss(grad) : patSel.value ? patternCss(patSel.value, patColor.value, noFill.checked ? '#ffffff' : fillIn.value) : noFill.checked ? '#ffffff' : fillIn.value; };
   [patSel, patColor, fillIn, noFill].forEach((x) => x.addEventListener('input', updFill));
   swatches.addEventListener('click', () => setTimeout(updFill, 0));
   updFill();
-  const fillPage = col(noFillL, el('div', { class: 'fc-title' }, '배경색'), swatches, lab('다른 색', fillIn),
+  const fillPage = col(noFillL, el('div', { class: 'fc-title' }, '배경색'), swatches, row(lab('다른 색', fillIn), effBtn),
     row(lab('무늬 색', patColor), lab('무늬 스타일', patBtn)), patSel, el('div', { class: 'fc-title' }, '보기'), fillPrev);
 
   // ── 보호 ──
@@ -12198,8 +12258,9 @@ function formatCellsDialog(startTab = 0, find = null) {
       size: !size || size === BASE_FONT.size ? undefined : Math.min(409, size),
       bold: bIn.checked || undefined, italic: iIn.checked || undefined, underline: uIn.checked || undefined, strike: sIn.checked || undefined,
       color: colorIn.value === '#000000' ? undefined : colorIn.value,
-      fill: noFill.checked ? undefined : fillIn.value,
-      pattern: patSel.value || undefined, patternColor: patSel.value && patColor.value !== '#000000' ? patColor.value : undefined,
+      fill: grad ? grad.stops[0][1] : noFill.checked ? undefined : fillIn.value,
+      gradient: grad ?? undefined,
+      pattern: grad ? undefined : patSel.value || undefined, patternColor: patSel.value && patColor.value !== '#000000' ? patColor.value : undefined,
       shrink: shrinkIn.checked || undefined, locked: lockIn.checked ? undefined : false, hideFormula: hideFIn.checked || undefined,
       rotate: vertIn.checked ? 255 : Number(rotIn.value) ? Math.max(-90, Math.min(90, Number(rotIn.value))) : undefined,
     };
@@ -13158,7 +13219,7 @@ function colorMenu(anchorEl, kind) {
     ];
   })();
   paletteMenu(anchorEl, kind === 'fill' ? '채우기 없음' : '자동', (color) => {
-    if (kind === 'fill') { if (color) lastFill = color; applyStyle(color ? { fill: color } : { fill: undefined, pattern: undefined, patternColor: undefined }); }
+    if (kind === 'fill') { if (color) lastFill = color; applyStyle(color ? { fill: color, gradient: undefined } : { fill: undefined, gradient: undefined, pattern: undefined, patternColor: undefined }); }
     else { if (color) lastFont = color; applyStyle({ color: color || undefined }); }
   }, extra);
 }
@@ -13856,7 +13917,7 @@ const COMMANDS = {
   shrinkFont: () => changeFontSize(-1),
   borderLast: () => applyBorder(lastBorder),
   borderOutside: () => applyBorder('outside'),
-  fillColor: () => applyStyle({ fill: lastFill }),
+  fillColor: () => applyStyle({ fill: lastFill, gradient: undefined }),
   fontColor: () => applyStyle({ color: lastFont }),
   fontDialog: formatCellsDialog,
   formatCells: formatCellsDialog,

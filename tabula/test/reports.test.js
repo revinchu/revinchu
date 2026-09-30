@@ -427,3 +427,14 @@ test('0 값 숨기기 (showZeros="0") · 새 문서 기본 글꼴: xlsx 왕복',
   assert.equal(back.sheets[0].noZeros, true);
   assert.equal(back.defaultFont?.name, '굴림');
 });
+
+test('셀 그라데이션 채우기 (채우기 효과): xlsx 왕복', async () => {
+  const { readXlsx, writeXlsx } = await import('../src/xlsx.js');
+  const wb = new Workbook({ sheets: [{ name: 'S', cells: { A1: 1, B1: 2 } }] });
+  const lin = { deg: 90, stops: [[0, '#ffffff'], [1, '#4472c4']] };
+  const path = { path: true, l: 0.5, r: 0.5, t: 0.5, b: 0.5, stops: [[0, '#ffffff'], [1, '#ed7d31']] };
+  wb.transact(() => { wb.setStyle(0, 0, 0, { fill: '#ffffff', gradient: lin }); wb.setStyle(0, 0, 1, { fill: '#ffffff', gradient: path }); });
+  const back = new Workbook(readXlsx(writeXlsx(wb)).data);
+  assert.deepEqual(back.styleAt(0, 0, 0).gradient, lin);
+  assert.deepEqual(back.styleAt(0, 0, 1).gradient, path);
+});
