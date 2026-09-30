@@ -1290,6 +1290,7 @@ function openLink(url) {
 // ───────────────────────── 마우스 ─────────────────────────
 let autoScrollTimer = null;
 let lastMouse = { x: 0, y: 0 };
+let lastAlt = false; // 개체를 끌 때 Alt: 눈금에 맞춤 전환
 let lastShift = false;
 function startAutoScroll() {
   stopAutoScroll();
@@ -1593,6 +1594,34 @@ function onDragMove(x, y) {
       if (!drag.corner) {
         ch.x = Math.max(0, Math.round(o.x + dx));
         ch.y = Math.max(0, Math.round(o.y + dy));
+        // 눈금에 맞춤 (Alt 를 누르면 반대로) · 도형에 맞추기: 가까운 셀 경계 / 다른 개체 가장자리에 붙음
+        const toGrid = !!opts.snapGrid !== !!lastAlt;
+        if (toGrid || opts.snapShape) {
+          const snap = (v, size, edges) => {
+            let best = null;
+            // 왼쪽(위) 가장자리 또는 오른쪽(아래) 가장자리가 경계에 닿는 자리
+            for (const e of edges) for (const cand of [e, e - size]) if (Math.abs(v - cand) < 8 && (best === null || Math.abs(v - cand) < Math.abs(v - best))) best = cand;
+            return best ?? v;
+          };
+          const ex = [];
+          const ey = [];
+          if (toGrid) {
+            const c0 = gv.cols.indexAt(ch.x);
+            const r0 = gv.rows.indexAt(ch.y);
+            for (let k = -1; k <= 2; k++) { ex.push(gv.cols.pos(Math.max(0, c0 + k))); ey.push(gv.rows.pos(Math.max(0, r0 + k))); }
+            const c1 = gv.cols.indexAt(ch.x + ch.w);
+            const r1 = gv.rows.indexAt(ch.y + ch.h);
+            for (let k = 0; k <= 1; k++) { ex.push(gv.cols.pos(c1 + k)); ey.push(gv.rows.pos(r1 + k)); }
+          }
+          if (opts.snapShape) {
+            for (const p2 of OBJECT_PROPS) for (const other of sheet()[p2] ?? []) {
+              if (other.id === ch.id) continue;
+              ex.push(other.x, other.x + other.w); ey.push(other.y, other.y + other.h);
+            }
+          }
+          ch.x = Math.max(0, Math.round(snap(ch.x, ch.w, ex)));
+          ch.y = Math.max(0, Math.round(snap(ch.y, ch.h, ey)));
+        }
       } else {
         const k = drag.corner;
         const [minW, minH] = drag.prop === 'charts' ? [120, 90] : drag.prop === 'slicers' ? [80, 56] : LINE_SHAPES.has(ch.kind) ? [0, 0] : [8, 8];
@@ -9856,6 +9885,48 @@ function applyBookLook() {
 }
 
 /** 예전 버전이 자동 저장한 문서: 피벗 결과 칸을 지금 버전으로 다시 그림 (서식 · 색 개선이 반영되게) — 실행 취소 기록 없음 */
+// 페이지 레이아웃 → 테마 / 색 (엑셀 테마 색 구성: 배경1 · 텍스트1 · 배경2 · 텍스트2 · 강조1~6 · 하이퍼링크 · 열어 본 하이퍼링크)
+const BOOK_THEMES = [
+  ['Office', ['FFFFFF', '000000', 'E8E8E8', '0E2841', '156082', 'E97132', '196B24', '0F9ED5', 'A02B93', '4EA72E', '467886', '96607D']],
+  ['Office 2013 - 2022', ['FFFFFF', '000000', 'E7E6E6', '44546A', '4472C4', 'ED7D31', 'A5A5A5', 'FFC000', '5B9BD5', '70AD47', '0563C1', '954F72']],
+  ['Office 2007 - 2010', ['FFFFFF', '000000', 'EEECE1', '1F497D', '4F81BD', 'C0504D', '9BBB59', '8064A2', '4BACC6', 'F79646', '0000FF', '800080']],
+  ['회색조', ['FFFFFF', '000000', 'F8F8F8', '000000', 'DDDDDD', 'B2B2B2', '969696', '808080', '5F5F5F', '4D4D4D', '5F5F5F', '919191']],
+  ['패싯', ['FFFFFF', '000000', 'EBEBEB', '2C3C43', '90C226', '54A021', 'E6B91E', 'E76618', 'C42F1A', '918655', '99CA3C', 'B9D181']],
+  ['이온', ['FFFFFF', '000000', 'EBEBEB', '1E5155', 'B01513', 'EA6312', 'E6B729', '6AAC90', '5F9C9D', '9E5E9B', '58C1BA', '9DFFCB']],
+  ['슬라이스', ['FFFFFF', '000000', 'DEF5FA', '146194', '052F61', 'A50E82', '14967C', '6A9E1F', 'E87D37', 'C62324', '0D2E46', '356A95']],
+  ['추억', ['FFFFFF', '000000', 'E3DED1', '637052', 'E48312', 'BD582C', '865640', '9B8357', 'C2BC80', '94A088', '2998E3', '8C8C8C']],
+  ['파랑', ['FFFFFF', '000000', 'DBEFF9', '17406D', '0F6FC6', '009DD9', '0BD0D9', '10CF9B', '7CCA62', 'A5C249', 'F49100', '85DFD0']],
+  ['녹색', ['FFFFFF', '000000', 'DBF5F9', '455F51', '549E39', '8AB833', 'C0CF3A', '029676', '4AB5C4', '0989B1', '6B9F25', 'BA6906']],
+  ['주황', ['FFFFFF', '000000', 'FBEEC9', '4E3B30', 'E48312', 'BD582C', '865640', '9B8357', 'C2BC80', '94A088', '2998E3', '8C8C8C']],
+  ['빨강', ['FFFFFF', '000000', 'F8F8F8', '5A1F1F', 'A5300F', 'D55816', 'E19825', 'B19C7D', '7F5F52', 'B27D49', '6B9F25', 'B26B02']],
+  ['보라', ['FFFFFF', '000000', 'E6E6E6', '373545', '8E6DA8', 'A386B4', 'E6A5B1', 'C35B77', '7F4C8C', '5C8FC0', '9454C3', '3EBBF0']],
+];
+const themeChip = (name, colors) => el('button', {
+  class: `th-chip${(wb.theme ?? DEFAULT_THEME_COLORS).slice(4, 10).join() === colors.slice(4, 10).join() ? ' on' : ''}`, title: name, onmousedown: (e) => e.preventDefault(),
+  onclick: () => { closeMenus(); applyBookTheme(name, colors); },
+}, el('span', { class: 'th-face', style: { background: `#${colors[0]}`, color: `#${colors[3]}` } }, el('b', {}, '가가'), el('span', { class: 'th-bars' }, colors.slice(4, 10).map((c) => el('i', { style: { background: `#${c}` } })))), el('span', { class: 'th-name' }, name));
+const DEFAULT_THEME_COLORS = BOOK_THEMES[1][1];
+function applyBookTheme(name, colors) {
+  wb.theme = [...colors];
+  wb.themeName = name;
+  setThemeColors(wb.theme);
+  // 테마 색으로 그린 피벗 스타일 · 표 스타일 · 차트를 새 색으로
+  try { wb.transact(() => { wb.sheets.forEach((s2, i) => { for (const { def } of pivotDefs(i)) writePivot(i, def, { autofit: false }); }); }, meta()); } catch (e) { console.warn(e); }
+  dirty = true;
+  renderAll();
+  toast(`테마 '${name}'을(를) 적용했습니다. 표 · 피벗 · 차트의 테마 색과 색 상자가 바뀝니다.`);
+}
+function themeMenu(a) {
+  openMenu(a, [{ title: '테마' }, { node: el('div', { class: 'th-grid' }, BOOK_THEMES.map(([n, c]) => themeChip(n, c))) }], { scroll: true });
+}
+function themeColorsMenu(a) {
+  openMenu(a, BOOK_THEMES.map(([n, c]) => ({
+    label: n, checked: (wb.theme ?? DEFAULT_THEME_COLORS).slice(4, 10).join() === c.slice(4, 10).join(),
+    icon: `<span style="display:inline-flex;gap:1px">${[c[1], c[3], ...c.slice(4, 10)].map((x) => `<i style="display:block;width:8px;height:14px;background:#${x}"></i>`).join('')}</span>`,
+    action: () => applyBookTheme(n, c),
+  })), { scroll: true });
+}
+
 function redrawPivotsQuiet() {
   try {
     wb.transact(() => {
@@ -12165,10 +12236,15 @@ const MENUS = {
   objForward: () => [{ label: '앞으로 가져오기', icon: 'bringForward', action: () => chartSel && arrangeObject(chartSel, 'forward') }, { label: '맨 앞으로 가져오기', icon: 'bringForward', action: () => chartSel && arrangeObject(chartSel, 'front') }],
   objBackward: () => [{ label: '뒤로 보내기', icon: 'sendBackward', action: () => chartSel && arrangeObject(chartSel, 'backward') }, { label: '맨 뒤로 보내기', icon: 'sendBackward', action: () => chartSel && arrangeObject(chartSel, 'back') }],
   objAlign: () => [
-    { label: '왼쪽 맞춤', action: () => alignObjects('left') }, { label: '가운데 맞춤', action: () => alignObjects('center') }, { label: '오른쪽 맞춤', action: () => alignObjects('right') },
-    { sep: true }, { label: '위쪽 맞춤', action: () => alignObjects('top') }, { label: '중간 맞춤', action: () => alignObjects('middle') }, { label: '아래쪽 맞춤', action: () => alignObjects('bottom') },
-    { sep: true }, { label: '가로 간격을 동일하게', action: () => alignObjects('distH') }, { label: '세로 간격을 동일하게', action: () => alignObjects('distV') },
-    { sep: true }, { label: '눈금(셀)에 맞춤', action: () => alignObjects('grid') },
+    // 엑셀: 개체를 두 개 이상 골라야 맞춤, 세 개 이상이어야 간격 동일
+    ...[['왼쪽 맞춤', 'left'], ['가운데 맞춤', 'center'], ['오른쪽 맞춤', 'right'], null, ['위쪽 맞춤', 'top'], ['중간 맞춤', 'middle'], ['아래쪽 맞춤', 'bottom']]
+      .map((x) => (x ? { label: x[0], disabled: selectedObjects().length < 2, action: () => alignObjects(x[1]) } : { sep: true })),
+    { sep: true }, { label: '가로 간격을 동일하게', disabled: selectedObjects().length < 3, action: () => alignObjects('distH') }, { label: '세로 간격을 동일하게', disabled: selectedObjects().length < 3, action: () => alignObjects('distV') },
+    { sep: true },
+    { label: '눈금에 맞춤', icon: 'table', checked: !!opts.snapGrid, desc: '개체를 옮길 때 셀 경계에 붙입니다. (꺼져 있을 때는 Alt 를 누른 채 끌면 붙음)', action: () => { opts.snapGrid = !opts.snapGrid; saveOptions(); } },
+    { label: '도형에 맞추기', checked: !!opts.snapShape, desc: '개체를 옮길 때 다른 도형 · 차트 · 그림의 가장자리에 붙입니다.', action: () => { opts.snapShape = !opts.snapShape; saveOptions(); } },
+    { label: '눈금선 보기', icon: 'gridlines', checked: !sheet().noGrid, action: () => run('toggleGrid') },
+    { sep: true }, { label: '선택한 개체를 셀 경계에 맞춤', action: () => alignObjects('grid') },
   ],
   objRotate: () => [
     { label: '오른쪽으로 90도 회전', icon: 'rotate', action: () => rotateObjects('r90') }, { label: '왼쪽으로 90도 회전', action: () => rotateObjects('l90') },
@@ -12468,6 +12544,8 @@ const MENUS = {
       label: f.label, key: sampleOf(f.id), icon: `<b class="nf-ico">${ICON[f.id] ?? ''}</b>`, action: () => run('numFmt', f.id),
     })).concat([{ sep: true }, { label: '기타 표시 형식...', action: () => formatCellsDialog(0) }]);
   },
+  themes: (a) => { themeMenu(a); },
+  themeColors: (a) => { themeColorsMenu(a); },
   pieCharts: (a) => { chartTypeMenu('pie', a); },
   chartsColBar: (a) => { chartTypeMenu('colBar', a); },
   chartsHier: (a) => { chartTypeMenu('hier', a); },
@@ -13249,6 +13327,7 @@ function bindEvents() {
     }
     lastMouse = { x: e.clientX, y: e.clientY };
     lastShift = e.shiftKey;
+    lastAlt = e.altKey;
     if (drag) onDragMove(e.clientX, e.clientY);
   });
   document.addEventListener('mouseup', (e) => { if (tlDrag) { const d = tlDrag; tlDrag = null; timelineApply(d.id, d.a, d.b); } onDragEnd(e); });

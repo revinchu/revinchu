@@ -148,6 +148,7 @@ export const TABS = [
   },
   {
     id: 'layout', label: '페이지 레이아웃', groups: [
+      group('테마', [large('themesBtn', 'effects', '테마', { menu: 'themes' }), col(medium('themeColorsBtn', 'fill', '색', { menu: 'themeColors' }))]),
       group('페이지 설정', [
         large('marginsBtn', 'borderOutside', '여백', { menu: 'marginsMenu' }),
         large('orientBtn', 'print', '용지 방향', { menu: 'orientMenu' }),

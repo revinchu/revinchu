@@ -2235,6 +2235,7 @@ function* readXlsxSteps(files) {
     };
   }
   if (theme.join() !== DEFAULT_THEME.join()) data.theme = [...theme]; // 테마 색 (표 · 피벗 스타일 색 계산)
+  { const trel = Object.values(wbRels).find((r) => r.type === 'theme'); const tx = trel && textOf(files[trel.target]); if (tx && tx.length < 400000) data.themeXml = tx; }
   data.defaultFont = wbFont; // 통합 문서 기본 글꼴 (표준 스타일) — 셀 기본 크기 · 열 너비 변환에 씀
   // 기본 셀 서식(xf 0): s 속성이 없는 셀에 적용됨 (한국어 엑셀은 보통 세로 가운데 맞춤)
   if (xfs[0] && Object.keys(xfs[0]).length) data.baseStyle = { ...xfs[0] };
@@ -2344,6 +2345,36 @@ function relsTarget(files, path, type) {
 }
 
 // ───────────────────────── 쓰기 ─────────────────────────
+const THEME_SLOTS = ['lt1', 'dk1', 'lt2', 'dk2', 'accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'accent6', 'hlink', 'folHlink'];
+/**
+ * 테마(theme1.xml): 파일에서 읽은 테마가 있으면 그대로(색만 지금 테마로 바꿈), 없으면 새로 만듦
+ * — 엑셀은 표 · 피벗 · 차트 스타일 색을 테마에서 계산하므로 빠지면 다른 색이 됨
+ */
+function themeXml(wb) {
+  const colors = (wb.theme?.length ? wb.theme : DEFAULT_THEME).map((c) => String(c).replace('#', '').toUpperCase().slice(-6));
+  if (wb.themeXml && /<a:clrScheme/.test(wb.themeXml)) {
+    let x = wb.themeXml;
+    THEME_SLOTS.forEach((slot, i) => {
+      x = x.replace(new RegExp(`(<a:${slot}>)[\\s\\S]*?(</a:${slot}>)`), (m0, a1, a2) => {
+        const cur = /(?:val|lastClr)="([0-9A-Fa-f]{6})"/.exec(m0.includes('lastClr') ? m0.replace(/val="[^"]*"/, '') : m0)?.[1]?.toUpperCase();
+        return cur === colors[i] ? m0 : `${a1}<a:srgbClr val="${colors[i]}"/>${a2}`;
+      });
+    });
+    if (wb.themeName) x = x.replace(/(<a:clrScheme name=")[^"]*"/, `$1${esc(wb.themeName)}"`);
+    return x;
+  }
+  const clr = THEME_SLOTS.map((slot, i) => (i === 0 ? `<a:lt1><a:sysClr val="window" lastClr="${colors[0]}"/></a:lt1>` : i === 1 ? `<a:dk1><a:sysClr val="windowText" lastClr="${colors[1]}"/></a:dk1>` : `<a:${slot}><a:srgbClr val="${colors[i]}"/></a:${slot}>`));
+  const order = [clr[1], clr[0], clr[3], clr[2], ...clr.slice(4)].join('');
+  const font = (latin, ea) => `<a:latin typeface="${latin}" panose="020F0302020204030204"/><a:ea typeface=""/><a:cs typeface=""/><a:font script="Hang" typeface="${ea}"/>`;
+  const solid = '<a:solidFill><a:schemeClr val="phClr"/></a:solidFill>';
+  const ln = (w) => `<a:ln w="${w}" cap="flat" cmpd="sng" algn="ctr">${solid}<a:prstDash val="solid"/><a:miter lim="800000"/></a:ln>`;
+  const name = esc(wb.themeName ?? 'Office 테마');
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="${name}"><a:themeElements><a:clrScheme name="${name}">${order}</a:clrScheme>`
+    + `<a:fontScheme name="Office"><a:majorFont>${font('맑은 고딕', '맑은 고딕')}</a:majorFont><a:minorFont>${font('맑은 고딕', '맑은 고딕')}</a:minorFont></a:fontScheme>`
+    + `<a:fmtScheme name="Office"><a:fillStyleLst>${solid}${solid}${solid}</a:fillStyleLst><a:lnStyleLst>${ln(6350)}${ln(12700)}${ln(19050)}</a:lnStyleLst><a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle></a:effectStyleLst><a:bgFillStyleLst>${solid}${solid}${solid}</a:bgFillStyleLst></a:fmtScheme>`
+    + '</a:themeElements><a:objectDefaults/><a:extraClrSchemeLst/></a:theme>';
+}
+
 class StylePool {
   constructor(baseFont = WRITE_FONT, baseStyle = null) {
     this.baseFont = { name: baseFont.name || DEFAULT_FONT, size: baseFont.size || 11 };
@@ -3899,6 +3930,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
     ...wb.sheets.slice(0, nOwn).map((sh, i) => `<Relationship Id="rId${i + 1}" Type="${REL}/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`),
     `<Relationship Id="rId${nOwn + 1}" Type="${REL}/styles" Target="styles.xml"/>`,
     `<Relationship Id="rId${nOwn + 2}" Type="${REL}/sharedStrings" Target="sharedStrings.xml"/>`,
+    `<Relationship Id="rId${nOwn + 3}" Type="${REL}/theme" Target="theme/theme1.xml"/>`,
   ];
   if (vba) wbRels.push(`<Relationship Id="rId${wbRels.length + 1}" Type="http://schemas.microsoft.com/office/2006/relationships/vbaProject" Target="vbaProject.bin"/>`);
   if (dynamicCells || richList.length) {
@@ -3976,6 +4008,8 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
   if (vba) files['xl/vbaProject.bin'] = fromBase64(vba.bin);
   files['xl/sharedStrings.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<sst xmlns="${NS_MAIN}" count="${strings.length}" uniqueCount="${strings.length}">${strings.map((s) => `<si><t xml:space="preserve">${esc(s)}</t></si>`).join('')}</sst>`;
   files['xl/styles.xml'] = pool.xml();
+  files['xl/theme/theme1.xml'] = themeXml(wb);
+  contentOverrides.push('<Override PartName="/xl/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>');
   files['_rels/.rels'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="${NS_PKG}"><Relationship Id="rId1" Type="${REL}/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="${REL}/extended-properties" Target="docProps/app.xml"/></Relationships>`;
   const now = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
   files['docProps/core.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:creator>WIXEL</dc:creator><dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified></cp:coreProperties>`;

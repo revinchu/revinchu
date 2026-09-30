@@ -291,3 +291,20 @@ test('range chart with a merged-style outer label column uses multi-level catego
   assert.equal(d.series.length, 1);
   assert.deepEqual(d.catLevels[0].map((g) => g.text), ['2026.04', 'Total']);
 });
+
+test('workbook theme is written to theme1.xml and read back', async () => {
+  const { readXlsx, writeXlsx } = await import('../src/xlsx.js');
+  const wb = new Workbook();
+  wb.theme = ['FFFFFF', '000000', 'E8E8E8', '0E2841', '156082', 'E97132', '196B24', '0F9ED5', 'A02B93', '4EA72E', '467886', '96607D'];
+  wb.setCellData(0, 0, 0, { raw: '1' });
+  const a = readXlsx(writeXlsx(wb)).data;
+  assert.deepEqual(a.theme, wb.theme);
+  // 파일의 테마 XML 을 유지하면서 색만 바꿈
+  const wb2 = new Workbook();
+  wb2.load(a);
+  wb2.theme = [...wb.theme];
+  wb2.theme[4] = 'FF0000';
+  const b = readXlsx(writeXlsx(wb2)).data;
+  assert.equal(b.theme[4], 'FF0000');
+  assert.equal(b.theme[5], 'E97132');
+});
