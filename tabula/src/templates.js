@@ -856,8 +856,445 @@ function naverReport() {
 }
 
 // ───────────── 목록 ─────────────
-export const TEMPLATE_CATS = ['기본', '퍼포먼스 마케팅'];
+
+// ───────────── 업무 자동화 템플릿 (사무 · 인사 · 회계 · 생활 — 직접 만든 서식) ─────────────
+const OF = '#0f766e';
+const TIME = { numFmt: 'custom', code: 'h:mm' };
+const HOURS = { numFmt: 'custom', code: '[h]:mm' };
+
+function cashBook() {
+  const s = new S('가계부', { tab: '#047857' }).title('간편 가계부', '거래를 한 줄씩 입력하면 월별 · 분류별 요약과 차트가 자동으로 바뀝니다.', '#047857', 8);
+  s.row(3, 1, ['날짜', '구분', '분류', '내용', '결제 수단', '금액', '메모'], head('#047857'));
+  const R = rng(11);
+  const exp = [['식비', '마트 장보기'], ['식비', '점심'], ['교통', '교통카드 충전'], ['주거', '관리비'], ['통신', '휴대폰 요금'], ['쇼핑', '생활용품'], ['문화', '영화'], ['의료', '약국']];
+  const rows = [];
+  for (let d = 0; d < 36; d++) {
+    const day = addDays('2026-01-02', Math.floor(d * 1.6));
+    if (d % 12 === 0) rows.push([day, '수입', '급여', '월급', '계좌이체', 3200000]);
+    const e = exp[Math.floor(R() * exp.length)];
+    rows.push([day, '지출', e[0], e[1], R() < 0.6 ? '카드' : '현금', Math.round((5 + R() * 120)) * 1000]);
+  }
+  rows.slice(0, 60).forEach((row, i) => s.row(4 + i, 1, row, (j) => (j === 0 ? { ...DATE, ...cellLine } : j === 5 ? { ...WON, ...cellLine } : cellLine)));
+  const last = 4 + 200;
+  for (let r = 4 + rows.length; r < last; r++) s.area(r, 1, r, 7, cellLine);
+  s.dv({ r1: 4, c1: 2, r2: last, c2: 2, type: 'list', f1: list(['수입', '지출']) });
+  s.dv({ r1: 4, c1: 3, r2: last, c2: 3, type: 'list', f1: list(['급여', '부수입', '식비', '교통', '주거', '통신', '쇼핑', '문화', '의료', '교육', '경조사', '기타']) });
+  s.dv({ r1: 4, c1: 5, r2: last, c2: 5, type: 'list', f1: list(['카드', '현금', '계좌이체']) });
+  s.cf({ r1: 4, c1: 2, r2: last, c2: 2, type: 'formula', formula: '=C5="수입"', style: { color: '#047857', bold: true } });
+  // 요약
+  s.v(3, 9, '월 선택', { bold: true }).v(3, 10, '2026-01-01', { ...inputSt, numFmt: 'custom', code: 'yyyy"년" m"월"' });
+  const cats = ['식비', '교통', '주거', '통신', '쇼핑', '문화', '의료', '교육', '경조사', '기타'];
+  s.row(5, 9, ['분류', '이번 달 지출', '비중'], head('#065f46'));
+  cats.forEach((c, i) => s.row(6 + i, 9, [c, `=SUMIFS($G:$G,$D:$D,J${7 + i},$C:$C,"지출",$B:$B,">="&$K$4,$B:$B,"<="&EOMONTH($K$4,0))`, `=IFERROR(K${7 + i}/$K$17,0)`], (j) => (j === 1 ? { ...WON, ...cellLine } : j === 2 ? { ...PCT, ...cellLine } : cellLine)));
+  s.row(16, 9, ['지출 합계', '=SUM(K7:K16)', ''], { bold: true, ...cellLine }).st(16, 10, WON);
+  s.row(17, 9, ['수입 합계', '=SUMIFS($G:$G,$C:$C,"수입",$B:$B,">="&$K$4,$B:$B,"<="&EOMONTH($K$4,0))'], { bold: true, ...cellLine }).st(17, 10, WON);
+  s.row(18, 9, ['잔액', '=K18-K17'], { bold: true, size: 13, ...cellLine }).st(18, 10, { ...WON, color: '#047857' });
+  s.cf({ r1: 6, c1: 11, r2: 15, c2: 11, type: 'bar', color: '#10b981' });
+  s.chart({ type: 'doughnut', title: '분류별 지출', series: [{ name: { text: '지출' }, cat: { r1: 6, c1: 9, r2: 15, c2: 9 }, val: { r1: 6, c1: 10, r2: 15, c2: 10 } }], x: 1010, y: 90, w: 380, h: 300, legend: 'r', palette: 'modern' });
+  return { sheets: [s.w({ 0: 16, 1: 90, 2: 60, 3: 70, 4: 150, 5: 80, 6: 100, 7: 120, 8: 24, 9: 90, 10: 110, 11: 70 }).freeze(4).done()] };
+}
+
+function stockInOut() {
+  const items = new S('품목', { tab: '#1d4ed8' }).title('품목 마스터', '품목을 등록하면 입출고 · 현재고 시트에서 자동으로 씁니다.', '#1d4ed8', 6);
+  const list0 = [['P-001', 'A4 복사용지', '박스', 25000, 10], ['P-002', '볼펜 (검정)', '다스', 6000, 20], ['P-003', '토너 카트리지', '개', 89000, 3], ['P-004', '포스트잇', '팩', 4500, 15], ['P-005', '스테이플러 심', '갑', 1500, 30], ['P-006', '클리어 파일', '묶음', 7000, 10]];
+  items.row(3, 1, ['품목 코드', '품명', '단위', '단가', '안전 재고'], head('#1d4ed8'));
+  list0.forEach((r, i) => items.row(4 + i, 1, r, (j) => (j === 3 ? { ...WON, ...cellLine } : j === 4 ? { ...NUM, ...cellLine } : cellLine)));
+  items.w({ 0: 16, 1: 90, 2: 150, 3: 60, 4: 90, 5: 80 });
+  const io = new S('입출고', { tab: '#0891b2' }).title('입출고 기록', '품목 코드를 고르면 품명 · 단가가 자동으로 채워집니다.', '#0891b2', 8);
+  io.row(3, 1, ['날짜', '구분', '품목 코드', '품명', '수량', '단가', '금액', '담당'], head('#0891b2'));
+  const R = rng(3);
+  for (let i = 0; i < 120; i++) {
+    const r = 4 + i;
+    const has = i < 24;
+    const code = list0[Math.floor(R() * list0.length)][0];
+    io.row(r, 1, [has ? addDays('2026-03-02', i) : '', has ? (i % 3 === 0 ? '입고' : '출고') : '', has ? code : '',
+      `=IF(D${r + 1}="","",IFERROR(VLOOKUP(D${r + 1},품목!$B$5:$F$100,2,FALSE),"코드 없음"))`, has ? Math.ceil(R() * (i % 3 === 0 ? 20 : 5)) : '',
+      `=IF(D${r + 1}="","",IFERROR(VLOOKUP(D${r + 1},품목!$B$5:$F$100,4,FALSE),0))`, `=IF(F${r + 1}="","",F${r + 1}*G${r + 1})`, has ? ['김대리', '이주임', '박과장'][i % 3] : ''],
+    (j) => (j === 0 ? { ...DATE, ...inputSt } : j === 1 || j === 2 || j === 4 || j === 7 ? inputSt : j === 5 ? { ...WON, ...cellLine } : j === 6 ? { ...WON, ...cellLine } : cellLine));
+  }
+  io.dv({ r1: 4, c1: 2, r2: 123, c2: 2, type: 'list', f1: list(['입고', '출고']) });
+  io.dv({ r1: 4, c1: 3, r2: 123, c2: 3, type: 'list', f1: '=품목!$B$5:$B$30' });
+  io.cf({ r1: 4, c1: 2, r2: 123, c2: 2, type: 'formula', formula: '=C5="입고"', style: { color: '#1d4ed8', bold: true } });
+  io.w({ 0: 16, 1: 90, 2: 60, 3: 90, 4: 150, 5: 60, 6: 90, 7: 100, 8: 70 }).freeze(4);
+  const st = new S('현재고', { tab: '#dc2626' }).title('현재고 현황', '입고 − 출고 = 현재고. 안전 재고 이하이면 빨간색으로 표시합니다.', '#dc2626', 8);
+  st.row(3, 1, ['품목 코드', '품명', '입고 합계', '출고 합계', '현재고', '안전 재고', '재고 금액', '상태'], head('#dc2626'));
+  list0.forEach((_, i) => {
+    const r = 4 + i;
+    st.row(r, 1, [`=품목!B${5 + i}`, `=품목!C${5 + i}`, `=SUMIFS(입출고!$F:$F,입출고!$D:$D,B${r + 1},입출고!$C:$C,"입고")`, `=SUMIFS(입출고!$F:$F,입출고!$D:$D,B${r + 1},입출고!$C:$C,"출고")`,
+      `=D${r + 1}-E${r + 1}`, `=품목!F${5 + i}`, `=F${r + 1}*품목!E${5 + i}`, `=IF(F${r + 1}<=G${r + 1},"발주 필요","정상")`], (j) => (j === 6 ? { ...WON, ...cellLine } : j >= 2 && j <= 5 ? { ...NUM, ...cellLine } : cellLine));
+  });
+  st.cf({ r1: 4, c1: 1, r2: 9, c2: 8, type: 'formula', formula: '=$I5="발주 필요"', style: { fill: '#fee2e2', color: '#b91c1c', bold: true } });
+  st.cf({ r1: 4, c1: 5, r2: 9, c2: 5, type: 'bar', color: '#60a5fa' });
+  st.chart({ type: 'bar', title: '품목별 현재고 · 안전 재고', series: [{ name: { text: '현재고' }, cat: { r1: 4, c1: 2, r2: 9, c2: 2 }, val: { r1: 4, c1: 5, r2: 9, c2: 5 } }, { name: { text: '안전 재고' }, cat: { r1: 4, c1: 2, r2: 9, c2: 2 }, val: { r1: 4, c1: 6, r2: 9, c2: 6 } }], x: 60, y: 260, w: 620, h: 280, palette: 'modern' });
+  st.w({ 0: 16, 1: 90, 2: 150, 3: 80, 4: 80, 5: 80, 6: 80, 7: 100, 8: 90 });
+  return { sheets: [st.done(), io.done(), items.done()] };
+}
+
+function attendanceLog() {
+  const s = new S('근태', { tab: OF }).title('출퇴근 · 근태 기록부', '출근 · 퇴근 시각을 입력하면 근무 시간 · 지각 · 연장 근무가 계산됩니다. (점심 1시간 제외)', OF, 10);
+  s.row(2, 1, ['이름', '홍길동', '', '출근 기준', '09:00', '', '퇴근 기준', '18:00'], (j) => (j === 1 || j === 4 || j === 7 ? { ...inputSt, ...(j > 1 ? TIME : {}) } : { bold: true, color: MUTED }));
+  s.v(2, 5, '0.375', { ...inputSt, ...TIME }).v(2, 8, '0.75', { ...inputSt, ...TIME });
+  s.row(4, 1, ['날짜', '요일', '출근', '퇴근', '근무 시간', '지각(분)', '조퇴(분)', '연장 근무', '구분', '비고'], head(OF));
+  const R = rng(9);
+  for (let d = 0; d < 31; d++) {
+    const r = 5 + d;
+    const date = `=DATE(2026,4,${d + 1})`;
+    const dow = (d + 3) % 7; // 2026-04-01 = 수요일
+    const work = dow !== 0 && dow !== 6 && d < 30;
+    const inT = work ? (8.75 + R() * 0.5) / 24 : '';
+    const outT = work ? (18 + R() * 2) / 24 : '';
+    s.row(r, 1, [d < 30 ? date : '', `=IF(B${r + 1}="","",TEXT(B${r + 1},"aaa"))`, inT === '' ? '' : Number(inT.toFixed(5)), outT === '' ? '' : Number(outT.toFixed(5)),
+      `=IF(OR(D${r + 1}="",E${r + 1}=""),"",MAX(0,E${r + 1}-D${r + 1}-TIME(1,0,0)))`, `=IF(D${r + 1}="","",MAX(0,ROUND((D${r + 1}-$F$3)*1440,0)))`, `=IF(E${r + 1}="","",MAX(0,ROUND(($I$3-E${r + 1})*1440,0)))`,
+      `=IF(E${r + 1}="","",MAX(0,E${r + 1}-$I$3))`, `=IF(B${r + 1}="","",IF(WEEKDAY(B${r + 1},2)>5,"휴일",IF(D${r + 1}="","결근",IF(G${r + 1}>0,"지각","정상"))))`, ''],
+    (j) => (j === 0 ? { ...DATE, ...cellLine } : j === 2 || j === 3 ? { ...TIME, ...inputSt } : j === 4 || j === 7 ? { ...HOURS, ...cellLine } : cellLine));
+  }
+  s.cf({ r1: 5, c1: 1, r2: 35, c2: 10, type: 'formula', formula: '=$J6="휴일"', style: { fill: '#f1f5f9', color: '#94a3b8' } });
+  s.cf({ r1: 5, c1: 9, r2: 35, c2: 9, type: 'formula', formula: '=OR(J6="지각",J6="결근")', style: { color: '#dc2626', bold: true } });
+  s.row(37, 1, ['월 합계', '', '', '', '=SUM(F6:F36)', '=SUM(G6:G36)', '=SUM(H6:H36)', '=SUM(I6:I36)', '=COUNTIF(J6:J36,"지각")&"회 지각"', '=COUNTIF(J6:J36,"정상")+COUNTIF(J6:J36,"지각")&"일 출근"'], (j) => ({ bold: true, fill: '#ccfbf1', ...(j === 4 || j === 7 ? HOURS : {}) }));
+  return { sheets: [s.w({ 0: 16, 1: 90, 2: 40, 3: 70, 4: 70, 5: 80, 6: 70, 7: 70, 8: 80, 9: 90, 10: 120 }).freeze(5).done()] };
+}
+
+function annualLeave() {
+  const s = new S('연차', { tab: '#7c3aed' }).title('연차 관리 대장', '입사일과 기준일로 근로기준법에 따른 연차를 계산합니다 (1년 미만 매월 1일 · 1년 이상 15일 + 2년마다 1일, 최대 25일).', '#7c3aed', 9);
+  s.row(2, 1, ['기준일', '=TODAY()'], (j) => (j ? { ...inputSt, ...DATE } : { bold: true }));
+  s.row(4, 1, ['사번', '이름', '부서', '입사일', '근속 연수', '발생 연차', '사용', '잔여', '소진율'], head('#7c3aed'));
+  const people = [['E001', '김민수', '마케팅', '2019-03-02', 9], ['E002', '이서연', '영업', '2021-07-15', 4], ['E003', '박지훈', '개발', '2025-11-03', 2], ['E004', '최유진', '디자인', '2016-01-04', 12], ['E005', '정하늘', '인사', '2023-09-01', 14], ['E006', '한도윤', '개발', '2026-01-02', 1]];
+  people.forEach((p, i) => {
+    const r = 5 + i;
+    s.row(r, 1, [p[0], p[1], p[2], p[3], `=DATEDIF(E${r + 1},$C$3,"Y")`, `=IF(F${r + 1}<1,MIN(11,DATEDIF(E${r + 1},$C$3,"M")),MIN(25,15+INT((F${r + 1}-1)/2)))`, p[4], `=G${r + 1}-H${r + 1}`, `=IFERROR(H${r + 1}/G${r + 1},0)`],
+      (j) => (j === 3 ? { ...DATE, ...inputSt } : j === 6 ? inputSt : j === 8 ? { ...PCT, ...cellLine } : cellLine));
+  });
+  s.cf({ r1: 5, c1: 8, r2: 10, c2: 8, type: 'formula', formula: '=I6<0', style: { color: '#dc2626', bold: true } });
+  s.cf({ r1: 5, c1: 9, r2: 10, c2: 9, type: 'bar', color: '#a78bfa' });
+  s.v(12, 1, '※ 회계연도 기준 · 단체협약 등 회사 규정이 다르면 [발생 연차] 수식을 고쳐 쓰세요.', { color: MUTED });
+  return { sheets: [s.w({ 0: 16, 1: 60, 2: 80, 3: 80, 4: 100, 5: 80, 6: 80, 7: 60, 8: 60, 9: 80 }).done()] };
+}
+
+function payslip() {
+  const s = new S('급여명세서', { tab: '#1e3a8a' }).title('급여 명세서', '초록 칸의 요율은 해마다 바뀌므로 확인 후 고쳐 쓰세요. 소득세는 국세청 간이세액표 금액을 입력합니다.', '#1e3a8a', 6);
+  s.row(2, 1, ['성명', '홍길동', '', '지급 연월', '2026-04-01'], (j) => (j === 1 ? inputSt : j === 4 ? { ...inputSt, numFmt: 'custom', code: 'yyyy"년" m"월"' } : { bold: true, color: MUTED }));
+  s.row(3, 1, ['부서', '마케팅팀', '', '지급일', '2026-04-25'], (j) => (j === 1 ? inputSt : j === 4 ? { ...inputSt, ...DATE } : { bold: true, color: MUTED }));
+  s.row(5, 1, ['지급 항목', '금액', '', '공제 항목', '금액', '요율'], head('#1e3a8a'));
+  const pay = [['기본급', 3000000], ['직책 수당', 200000], ['연장 근로 수당', 150000], ['식대 (비과세)', 200000], ['자가운전 보조 (비과세)', 200000], ['상여금', 0]];
+  pay.forEach((p, i) => s.row(6 + i, 1, p, (j) => (j ? { ...WON, ...inputSt } : cellLine)));
+  const ded = [['국민연금', '=ROUND(MIN(C13,6370000)*G7,-1)', 0.0475], ['건강보험', '=ROUND(C13*G8,-1)', 0.03595], ['장기요양보험', '=ROUND(F8*G9,-1)', 0.1314], ['고용보험', '=ROUND(C13*G10,-1)', 0.009], ['소득세 (간이세액표)', 95000, ''], ['지방소득세', '=ROUND(F11*0.1,-1)', '']];
+  ded.forEach((d, i) => s.row(6 + i, 4, d, (j) => (j === 1 ? { ...WON, ...(typeof d[1] === 'number' ? inputSt : cellLine) } : j === 2 ? { numFmt: 'percent', decimals: 3, fill: '#dcfce7', ...box('#86efac') } : cellLine)));
+  s.row(12, 1, ['과세 대상 급여', '=C14-C10-C11'], { bold: true, ...cellLine }).st(12, 2, WON);
+  s.row(13, 1, ['지급 합계', '=SUM(C7:C12)'], { bold: true, fill: '#dbeafe', ...cellLine }).st(13, 2, WON);
+  s.row(13, 4, ['공제 합계', '=SUM(F7:F12)'], { bold: true, fill: '#fee2e2', ...cellLine }).st(13, 5, WON);
+  s.row(15, 4, ['실 수령액', '=C14-F14'], { bold: true, size: 14, fill: '#1e3a8a', color: '#ffffff' }).st(15, 5, WON);
+  s.v(16, 4, '=NUMBERSTRING(F16,1)&"원"', { color: MUTED });
+  s.v(18, 1, '※ 국민연금은 기준소득월액 상한을 적용했습니다. 요율(G열)은 예시값입니다.', { color: MUTED });
+  return { sheets: [s.w({ 0: 16, 1: 170, 2: 120, 3: 20, 4: 170, 5: 120, 6: 80 }).done()] };
+}
+
+function quotation() {
+  const price = new S('단가표', { tab: '#475569' }).title('단가표', '견적서의 품목 코드로 찾습니다.', '#475569', 5);
+  const items = [['S-01', '홈페이지 기획', '식', 1500000], ['S-02', '반응형 웹 디자인', '페이지', 350000], ['S-03', '퍼블리싱', '페이지', 200000], ['S-04', '검색광고 세팅', '건', 500000], ['S-05', '월 운영 대행', '개월', 1200000], ['S-06', '상세 페이지 제작', '건', 800000]];
+  price.row(3, 1, ['코드', '품목', '단위', '단가'], head('#475569'));
+  items.forEach((it, i) => price.row(4 + i, 1, it, (j) => (j === 3 ? { ...WON, ...cellLine } : cellLine)));
+  price.w({ 0: 16, 1: 70, 2: 180, 3: 70, 4: 110 });
+  const s = new S('견적서', { tab: '#111827' });
+  s.v(0, 1, '견   적   서', { bold: true, size: 22, align: 'center' }).m(0, 1, 0, 7).h({ 0: 44 });
+  s.row(2, 1, ['견적 번호', '=TEXT(TODAY(),"yymmdd")&"-01"', '', '', '공급자', '(주)위셀'], (j) => (j === 0 || j === 4 ? { bold: true, fill: '#f1f5f9', ...cellLine } : { ...cellLine, ...(j === 5 ? inputSt : {}) }));
+  s.row(3, 1, ['견적일', '=TODAY()', '', '', '담당자', '김위셀 (010-0000-0000)'], (j) => (j === 0 || j === 4 ? { bold: true, fill: '#f1f5f9', ...cellLine } : j === 1 ? { ...DATE, ...cellLine } : { ...cellLine, ...(j === 5 ? inputSt : {}) }));
+  s.row(4, 1, ['수신', '(주)고객사 귀하', '', '', '유효 기간', '=C4+30'], (j) => (j === 0 || j === 4 ? { bold: true, fill: '#f1f5f9', ...cellLine } : j === 5 ? { ...DATE, ...cellLine } : { ...cellLine, ...(j === 1 ? inputSt : {}) }));
+  s.m(2, 6, 2, 7).m(3, 6, 3, 7).m(4, 6, 4, 7).m(2, 2, 2, 4).m(3, 2, 3, 4).m(4, 2, 4, 4);
+  s.row(6, 1, ['합계 금액 (VAT 포함)', '="일금 "&NUMBERSTRING(G24,1)&"원정 (₩"&TEXT(G24,"#,##0")&")"'], { bold: true, size: 13, fill: '#fef3c7', ...cellLine }).m(6, 2, 6, 7);
+  s.row(8, 1, ['코드', '품목', '단위', '수량', '단가', '금액', '비고'], head('#111827'));
+  for (let i = 0; i < 12; i++) {
+    const r = 9 + i;
+    const it = items[i];
+    s.row(r, 1, [it && i < 4 ? it[0] : '', `=IF(B${r + 1}="","",IFERROR(VLOOKUP(B${r + 1},단가표!$B$5:$E$100,2,FALSE),"?"))`, `=IF(B${r + 1}="","",IFERROR(VLOOKUP(B${r + 1},단가표!$B$5:$E$100,3,FALSE),""))`, it && i < 4 ? [1, 5, 5, 1][i] : '',
+      `=IF(B${r + 1}="","",IFERROR(VLOOKUP(B${r + 1},단가표!$B$5:$E$100,4,FALSE),0))`, `=IF(B${r + 1}="","",E${r + 1}*F${r + 1})`, ''],
+    (j) => (j === 0 || j === 3 ? inputSt : j === 4 || j === 5 ? { ...WON, ...cellLine } : cellLine));
+  }
+  s.dv({ r1: 9, c1: 1, r2: 20, c2: 1, type: 'list', f1: '=단가표!$B$5:$B$50' });
+  s.row(21, 5, ['공급가액', '=SUM(G10:G21)'], { bold: true, ...cellLine }).st(21, 6, WON);
+  s.row(22, 5, ['부가세 (10%)', '=ROUND(G22*0.1,0)'], cellLine).st(22, 6, WON);
+  s.row(23, 5, ['합계', '=G22+G23'], { bold: true, fill: '#111827', color: '#ffffff' }).st(23, 6, WON);
+  s.v(25, 1, '※ 코드를 고르면 품목 · 단위 · 단가가 단가표에서 자동으로 채워집니다.', { color: MUTED });
+  s.set('page', { orientation: 'portrait', paper: 9, fitW: 1, fitH: 1 });
+  return { sheets: [s.w({ 0: 16, 1: 70, 2: 190, 3: 60, 4: 60, 5: 100, 6: 120, 7: 110 }).done(), price.done()] };
+}
+
+function customerCrm() {
+  const s = new S('고객 관리', { tab: '#be185d' }).title('고객 · 거래처 관리 (CRM)', '다음 연락일이 지나면 빨간색, 7일 안이면 주황색으로 표시합니다.', '#be185d', 10);
+  s.table({ name: '고객', r1: 3, c1: 1, r2: 13, c2: 10, style: 'WixelTableModern3' });
+  s.row(3, 1, ['회사', '담당자', '직함', '전화', '이메일', '등급', '최근 연락', '다음 연락', '누적 매출', '메모']);
+  const R = rng(21);
+  const co = ['한빛상사', '푸른물산', '다온테크', '미래유통', '새봄식품', '가온디자인', '누리전자', '바른약품', '하람건설', '온새미로'];
+  co.forEach((c, i) => {
+    const r = 4 + i;
+    s.row(r, 1, [c, ['김', '이', '박', '최', '정'][i % 5] + ['민준', '서연', '도윤', '하은', '지호'][(i * 3) % 5], ['대표', '팀장', '과장', '대리'][i % 4], `010-${1000 + i * 37}-${2000 + i * 91}`, `contact${i + 1}@example.com`, ['VIP', 'A', 'B', 'C'][i % 4],
+      addDays('2026-03-01', Math.floor(R() * 40)), `=H${r + 1}+IF(G${r + 1}="VIP",14,30)`, Math.round(R() * 900) * 100000, ''], (j) => (j === 6 || j === 7 ? DATE : j === 8 ? WON : {}));
+  });
+  s.dv({ r1: 4, c1: 6, r2: 13, c2: 6, type: 'list', f1: list(['VIP', 'A', 'B', 'C']) });
+  s.cf({ r1: 4, c1: 8, r2: 13, c2: 8, type: 'formula', formula: '=I5<TODAY()', style: { fill: '#fee2e2', color: '#b91c1c', bold: true } });
+  s.cf({ r1: 4, c1: 8, r2: 13, c2: 8, type: 'formula', formula: '=AND(I5>=TODAY(),I5-TODAY()<=7)', style: { fill: '#ffedd5', color: '#c2410c' } });
+  s.cf({ r1: 4, c1: 9, r2: 13, c2: 9, type: 'bar', color: '#f472b6' });
+  s.v(15, 1, '등급별 누적 매출', { bold: true });
+  ['VIP', 'A', 'B', 'C'].forEach((g, i) => s.row(16 + i, 1, [g, `=SUMIFS(J5:J14,G5:G14,B${17 + i})`, `=COUNTIF(G5:G14,B${17 + i})&"곳"`], (j) => (j === 1 ? { ...WON, ...cellLine } : cellLine)));
+  s.chart({ type: 'pie', title: '등급별 매출', series: [{ name: { text: '매출' }, cat: { r1: 16, c1: 1, r2: 19, c2: 1 }, val: { r1: 16, c1: 2, r2: 19, c2: 2 } }], x: 380, y: 320, w: 380, h: 240, legend: 'r', palette: 'modern' });
+  return { sheets: [s.w({ 0: 16, 1: 90, 2: 70, 3: 50, 4: 120, 5: 170, 6: 50, 7: 90, 8: 90, 9: 110, 10: 140 }).freeze(4).done()] };
+}
+
+function weeklyReport() {
+  const s = new S('주간 업무 보고', { tab: '#0369a1' }).title('주간 업무 보고서', '지난주 실적 · 이번 주 계획 · 이슈를 정리합니다. 진행률은 막대로 표시됩니다.', '#0369a1', 8);
+  s.row(2, 1, ['보고자', '김위셀', '', '부서', '마케팅팀', '', '보고 주차', '=TODAY()-WEEKDAY(TODAY(),3)'], (j) => (j === 1 || j === 4 ? inputSt : j === 7 ? { ...inputSt, numFmt: 'custom', code: 'yyyy-mm-dd "주"' } : { bold: true, color: MUTED }));
+  s.row(4, 1, ['구분', '업무', '담당', '시작', '마감', '진행률', '상태', '비고'], head('#0369a1'));
+  const rows = [['지난주 실적', '4월 프로모션 소재 제작', '이디자이너', -7, -2, 1], ['지난주 실적', '검색광고 키워드 정리', '김마케터', -6, -3, 1], ['지난주 실적', '월간 리포트 작성', '김마케터', -5, 0, 0.8], ['이번 주 계획', '신규 캠페인 세팅', '김마케터', 0, 3, 0.2], ['이번 주 계획', '랜딩 페이지 A/B 테스트', '박개발', 1, 5, 0], ['이번 주 계획', '인플루언서 섭외', '최매니저', 0, 6, 0.4]];
+  rows.forEach((x, i) => {
+    const r = 5 + i;
+    s.row(r, 1, [x[0], x[1], x[2], `=$I$3+${x[3]}`, `=$I$3+${x[4]}`, x[5], `=IF(G${r + 1}>=1,"완료",IF(F${r + 1}<TODAY(),"지연",IF(G${r + 1}>0,"진행 중","예정")))`, ''], (j) => (j === 3 || j === 4 ? { ...DATE, ...cellLine } : j === 5 ? { ...PCT, ...inputSt } : j === 1 || j === 2 ? inputSt : cellLine));
+  });
+  s.dv({ r1: 5, c1: 1, r2: 20, c2: 1, type: 'list', f1: list(['지난주 실적', '이번 주 계획', '다음 주 계획']) });
+  s.cf({ r1: 5, c1: 6, r2: 20, c2: 6, type: 'bar', color: '#38bdf8' });
+  s.cf({ r1: 5, c1: 7, r2: 20, c2: 7, type: 'formula', formula: '=H6="지연"', style: { color: '#dc2626', bold: true } });
+  s.cf({ r1: 5, c1: 7, r2: 20, c2: 7, type: 'formula', formula: '=H6="완료"', style: { color: '#16a34a', bold: true } });
+  s.v(13, 1, '이슈 · 요청 사항', { bold: true, size: 12 });
+  s.v(14, 1, '', { ...inputSt }).m(14, 1, 17, 8).st(14, 1, { valign: 'top', wrap: true, ...box('#cbd5e1') });
+  return { sheets: [s.w({ 0: 16, 1: 90, 2: 220, 3: 80, 4: 90, 5: 90, 6: 70, 7: 70, 8: 140 }).done()] };
+}
+
+function meetingMinutes() {
+  const s = new S('회의록', { tab: '#334155' });
+  s.v(0, 1, '회 의 록', { bold: true, size: 20, align: 'center' }).m(0, 1, 0, 6).h({ 0: 40 });
+  const L = (r, label, span = 5) => { s.v(r, 1, label, { bold: true, fill: '#f1f5f9', align: 'center', ...cellLine }).v(r, 2, '', { ...cellLine }).m(r, 2, r, 1 + span); };
+  L(2, '회의명'); L(3, '일시'); L(4, '장소'); L(5, '참석자'); L(6, '작성자');
+  s.v(3, 2, '=NOW()', { numFmt: 'custom', code: 'yyyy"년" m"월" d"일" (aaa) h:mm', align: 'left', ...cellLine });
+  s.v(8, 1, '안건', { bold: true, color: '#ffffff', fill: '#334155' }).m(8, 1, 8, 6);
+  for (let i = 0; i < 3; i++) { s.v(9 + i, 1, i + 1, { align: 'center', ...cellLine }).v(9 + i, 2, '', cellLine).m(9 + i, 2, 9 + i, 6); }
+  s.v(13, 1, '논의 내용', { bold: true, color: '#ffffff', fill: '#334155' }).m(13, 1, 13, 6);
+  s.v(14, 1, '', { valign: 'top', wrap: true, ...box('#cbd5e1') }).m(14, 1, 21, 6);
+  s.v(23, 1, '결정 사항 · 할 일', { bold: true, color: '#ffffff', fill: '#334155' }).m(23, 1, 23, 6);
+  s.row(24, 1, ['번호', '할 일', '', '담당', '기한', '완료'], head('#64748b')).m(24, 2, 24, 3);
+  for (let i = 0; i < 6; i++) {
+    const r = 25 + i;
+    s.row(r, 1, [i + 1, '', '', '', '', ''], (j) => (j === 4 ? { ...DATE, ...cellLine } : cellLine)).m(r, 2, r, 3);
+  }
+  s.dv({ r1: 25, c1: 6, r2: 30, c2: 6, type: 'list', f1: list(['○', '진행', '보류']) });
+  s.cf({ r1: 25, c1: 1, r2: 30, c2: 6, type: 'formula', formula: '=$G26="○"', style: { color: '#94a3b8', strike: true } });
+  s.set('page', { orientation: 'portrait', paper: 9, fitW: 1, fitH: 1 });
+  return { sheets: [s.w({ 0: 16, 1: 80, 2: 150, 3: 150, 4: 90, 5: 90, 6: 60 }).done()] };
+}
+
+function expenseClaim() {
+  const s = new S('경비 정산', { tab: '#b45309' }).title('경비 · 출장비 정산서', '영수증별로 입력하면 분류별 합계와 결재 금액이 계산됩니다.', '#b45309', 8);
+  s.row(2, 1, ['신청자', '김위셀', '', '부서', '영업팀', '', '정산 기간', '2026-04'], (j) => (j === 1 || j === 4 || j === 7 ? inputSt : { bold: true, color: MUTED }));
+  s.row(4, 1, ['날짜', '분류', '사용처', '내용', '결제', '금액', '증빙', '비고'], head('#b45309'));
+  const rows = [['2026-04-02', '교통', 'KTX', '서울→부산 출장', '법인카드', 59800, '영수증'], ['2026-04-02', '숙박', '해운대 호텔', '1박', '법인카드', 120000, '영수증'], ['2026-04-03', '식대', '국밥집', '고객 미팅 점심', '법인카드', 36000, '영수증'], ['2026-04-03', '교통', '택시', '호텔→고객사', '개인', 12400, '영수증'], ['2026-04-10', '소모품', '문구점', '회의용 자료 출력', '개인', 8500, '간이영수증']];
+  for (let i = 0; i < 20; i++) {
+    const r = 5 + i;
+    const x = rows[i];
+    s.row(r, 1, x ? [...x, ''] : ['', '', '', '', '', '', '', ''], (j) => (j === 0 ? { ...DATE, ...inputSt } : j === 5 ? { ...WON, ...inputSt } : inputSt));
+  }
+  s.dv({ r1: 5, c1: 2, r2: 24, c2: 2, type: 'list', f1: list(['교통', '숙박', '식대', '접대', '소모품', '통신', '기타']) });
+  s.dv({ r1: 5, c1: 5, r2: 24, c2: 5, type: 'list', f1: list(['법인카드', '개인', '현금']) });
+  s.dv({ r1: 5, c1: 7, r2: 24, c2: 7, type: 'list', f1: list(['영수증', '간이영수증', '세금계산서', '없음']) });
+  s.cf({ r1: 5, c1: 7, r2: 24, c2: 7, type: 'formula', formula: '=AND(G6<>"",H6="없음")', style: { fill: '#fee2e2', color: '#b91c1c' } });
+  const cats = ['교통', '숙박', '식대', '접대', '소모품', '통신', '기타'];
+  s.row(26, 1, ['분류', '합계'], head('#92400e'));
+  cats.forEach((c, i) => s.row(27 + i, 1, [c, `=SUMIF($C$6:$C$25,B${28 + i},$G$6:$G$25)`], (j) => (j ? { ...WON, ...cellLine } : cellLine)));
+  s.row(34, 1, ['총 사용액', '=SUM(C28:C34)'], { bold: true, ...cellLine }).st(34, 2, WON);
+  s.row(35, 1, ['개인 지출 (환급액)', '=SUMIF($F$6:$F$25,"개인",$G$6:$G$25)+SUMIF($F$6:$F$25,"현금",$G$6:$G$25)'], { bold: true, fill: '#fef3c7', ...cellLine }).st(35, 2, WON);
+  s.row(26, 5, ['신청', '팀장', '재무'], head('#92400e'));
+  s.row(27, 5, ['', '', ''], cellLine).h({ 27: 48 });
+  return { sheets: [s.w({ 0: 16, 1: 110, 2: 80, 3: 120, 4: 160, 5: 90, 6: 100, 7: 90, 8: 100 }).freeze(5).done()] };
+}
+
+function salesDashboard() {
+  const d = new S('매출 데이터', { tab: '#475569' });
+  d.row(0, 0, ['일자', '지점', '상품', '수량', '단가', '매출'], head('#475569'));
+  const R = rng(77);
+  const shops = ['강남점', '홍대점', '부산점', '대구점'];
+  const goods = [['아메리카노', 4500], ['카페라떼', 5000], ['케이크', 6500], ['샌드위치', 7000]];
+  let r = 1;
+  for (let day = 0; day < 180; day += 1) {
+    for (let k = 0; k < 2; k++) {
+      const g = goods[Math.floor(R() * goods.length)];
+      const q = Math.round(5 + R() * 40 * (1 + Math.sin(day / 20) * 0.3));
+      d.row(r, 0, [addDays('2026-01-01', day), shops[Math.floor(R() * shops.length)], g[0], q, g[1], `=D${r + 1}*E${r + 1}`], (j) => (j === 0 ? DATE : j >= 3 ? NUM : {}));
+      r++;
+    }
+  }
+  d.table({ name: '매출', r1: 0, c1: 0, r2: r - 1, c2: 5, style: 'WixelTableModern1' });
+  d.w({ 0: 90, 1: 70, 2: 90, 3: 60, 4: 70, 5: 90 }).freeze(1);
+  const s = new S('대시보드', { tab: '#2563eb' }).title('매출 대시보드', '매출 데이터 시트에 행을 추가하면 요약과 차트가 바로 바뀝니다 (표 참조).', '#2563eb', 12);
+  const kpi = [['총 매출', '=SUM(매출[매출])', WON], ['총 판매 수량', '=SUM(매출[수량])', NUM], ['평균 객단가', '=IFERROR(SUM(매출[매출])/COUNT(매출[매출]),0)', WON], ['최고 매출 지점', '=INDEX(B15:B18,MATCH(MAX(C15:C18),C15:C18,0))', {}]];
+  kpi.forEach(([label, f, st], i) => {
+    const c = 1 + i * 3;
+    s.v(3, c, label, { color: '#ffffff', fill: '#2563eb', bold: true, align: 'center' }).m(3, c, 3, c + 1);
+    s.v(4, c, f, { ...st, size: 18, bold: true, align: 'center', fill: '#eff6ff' }).m(4, c, 5, c + 1);
+  });
+  s.row(7, 1, ['월', '매출', '수량'], head('#1e40af'));
+  for (let m = 1; m <= 6; m++) s.row(7 + m, 1, [`2026-${String(m).padStart(2, '0')}-01`, `=SUMIFS(매출[매출],매출[일자],">="&B${8 + m},매출[일자],"<="&EOMONTH(B${8 + m},0))`, `=SUMIFS(매출[수량],매출[일자],">="&B${8 + m},매출[일자],"<="&EOMONTH(B${8 + m},0))`], (j) => (j === 0 ? { numFmt: 'custom', code: 'm"월"', ...cellLine } : { ...NUM, ...cellLine }));
+  s.row(14, 1, ['지점', '매출'], head('#1e40af'));
+  shops.forEach((x, i) => s.row(15 + i, 1, [x, `=SUMIFS(매출[매출],매출[지점],B${16 + i})`], (j) => (j ? { ...WON, ...cellLine } : cellLine)));
+  s.row(14, 4, ['상품', '매출', '비중'], head('#1e40af'));
+  goods.forEach((g, i) => s.row(15 + i, 4, [g[0], `=SUMIFS(매출[매출],매출[상품],E${16 + i})`, `=F${16 + i}/SUM($F$16:$F$19)`], (j) => (j === 1 ? { ...WON, ...cellLine } : j === 2 ? { ...PCT, ...cellLine } : cellLine)));
+  s.chart({ type: 'combo', title: '월별 매출 · 수량', series: [{ name: { text: '매출' }, cat: { r1: 8, c1: 1, r2: 13, c2: 1 }, val: { r1: 8, c1: 2, r2: 13, c2: 2 } }, { name: { text: '수량' }, cat: { r1: 8, c1: 1, r2: 13, c2: 1 }, val: { r1: 8, c1: 3, r2: 13, c2: 3 } }], seriesFmt: [{ type: 'column' }, { type: 'line', axis: 'secondary' }], x: 560, y: 140, w: 520, h: 270, palette: 'modern' });
+  s.chart({ type: 'doughnut', title: '상품별 비중', series: [{ name: { text: '매출' }, cat: { r1: 15, c1: 4, r2: 18, c2: 4 }, val: { r1: 15, c1: 5, r2: 18, c2: 5 } }], x: 560, y: 420, w: 520, h: 250, legend: 'r', palette: 'modern' });
+  return { sheets: [s.w({ 0: 16, 1: 80, 2: 100, 3: 80, 4: 90, 5: 100, 6: 60, 7: 80, 8: 80, 9: 60, 10: 80, 11: 80 }).done(), d.done()] };
+}
+
+function lottoPicker() {
+  const s = new S('로또', { tab: '#e11d48' }).title('로또 번호 추천기', 'F9 를 누르거나 셀을 고칠 때마다 1~45 중 서로 다른 6개 번호를 5게임 뽑습니다.', '#e11d48', 8);
+  s.row(3, 1, ['게임', '번호 1', '번호 2', '번호 3', '번호 4', '번호 5', '번호 6', '합계'], head('#e11d48'));
+  for (let g = 0; g < 5; g++) {
+    const r = 4 + g;
+    s.v(r, 1, `${String.fromCharCode(65 + g)} 게임`, { bold: true, align: 'center', ...cellLine });
+    s.v(r, 2, '=TOROW(SORT(TAKE(SORTBY(SEQUENCE(45),RANDARRAY(45)),6)))', { align: 'center', size: 14, bold: true, ...cellLine });
+    s.area(r, 3, r, 7, { align: 'center', size: 14, bold: true, ...cellLine });
+    s.v(r, 8, `=SUM(C${r + 1}:H${r + 1})`, { align: 'center', ...cellLine });
+  }
+  const band = [[1, 10, '#fbc400'], [11, 20, '#69c8f2'], [21, 30, '#ff7272'], [31, 40, '#aaaaaa'], [41, 45, '#b0d840']];
+  for (const [a, b, color] of band) s.cf({ r1: 4, c1: 2, r2: 8, c2: 7, type: 'formula', formula: `=AND(C5>=${a},C5<=${b})`, style: { fill: color, color: '#ffffff' } });
+  s.v(10, 1, '※ 재미로 쓰는 무작위 추천입니다. 당첨을 보장하지 않습니다.', { color: MUTED });
+  return { sheets: [s.w({ 0: 16, 1: 80, 2: 64, 3: 64, 4: 64, 5: 64, 6: 64, 7: 64, 8: 70 }).h({ 4: 34, 5: 34, 6: 34, 7: 34, 8: 34 }).done()] };
+}
+
+function savingsCalc() {
+  const s = new S('적금 · 예금', { tab: '#059669' }).title('적금 · 예금 이자 계산기', '초록 칸을 바꾸면 세전 · 세후 이자와 만기 금액이 계산됩니다.', '#059669', 7);
+  const inp = (r, label, v, st) => s.v(r, 1, label, { bold: true }).v(r, 2, v, { ...inputSt, ...st });
+  s.v(3, 1, '적금 (매월 납입)', { bold: true, size: 13, color: '#059669' });
+  inp(4, '월 납입액', 500000, WON); inp(5, '연 이율', 0.035, PCT2); inp(6, '기간 (개월)', 12, NUM); inp(7, '이자 과세', '일반과세 15.4%');
+  s.dv({ r1: 7, c1: 2, r2: 7, c2: 2, type: 'list', f1: list(['일반과세 15.4%', '세금우대 9.5%', '비과세 0%']) });
+  s.v(8, 1, '세율').v(8, 2, '=IF(C8="비과세 0%",0,IF(C8="세금우대 9.5%",0.095,0.154))', PCT);
+  s.row(10, 1, ['', '단리', '월 복리'], head('#059669'));
+  s.row(11, 1, ['원금 합계', '=C5*C7', '=C5*C7'], (j) => (j ? { ...WON, ...cellLine } : cellLine));
+  s.row(12, 1, ['세전 이자', '=C5*C7*(C7+1)/2*C6/12', '=C5*((1+C6/12)^C7-1)/(C6/12)*(1+C6/12)-C5*C7'], (j) => (j ? { ...WON, ...cellLine } : cellLine));
+  s.row(13, 1, ['이자 과세', '=ROUNDDOWN(C13*$C$9,-1)', '=ROUNDDOWN(D13*$C$9,-1)'], (j) => (j ? { ...WON, ...cellLine } : cellLine));
+  s.row(14, 1, ['만기 수령액', '=C12+C13-C14', '=D12+D13-D14'], (j) => ({ bold: true, fill: '#d1fae5', ...(j ? WON : {}), ...cellLine }));
+  s.v(16, 1, '예금 (한 번에 예치)', { bold: true, size: 13, color: '#059669' });
+  inp(17, '예치 금액', 10000000, WON); inp(18, '연 이율', 0.032, PCT2); inp(19, '기간 (개월)', 12, NUM);
+  s.row(21, 1, ['', '단리', '월 복리'], head('#059669'));
+  s.row(22, 1, ['세전 이자', '=C18*C19*C20/12', '=C18*((1+C19/12)^C20-1)'], (j) => (j ? { ...WON, ...cellLine } : cellLine));
+  s.row(23, 1, ['세후 이자', '=C23-ROUNDDOWN(C23*$C$9,-1)', '=D23-ROUNDDOWN(D23*$C$9,-1)'], (j) => (j ? { ...WON, ...cellLine } : cellLine));
+  s.row(24, 1, ['만기 수령액', '=C18+C24', '=C18+D24'], (j) => ({ bold: true, fill: '#d1fae5', ...(j ? WON : {}), ...cellLine }));
+  return { sheets: [s.w({ 0: 16, 1: 130, 2: 150, 3: 150 }).done()] };
+}
+
+function netSalaryCalc() {
+  const s = new S('실수령액', { tab: '#4338ca' }).title('연봉 실수령액 계산기 (추정)', '4대 보험 요율 · 소득세는 간이 추정입니다. 정확한 금액은 국세청 간이세액표를 확인하세요.', '#4338ca', 6);
+  const inp = (r, label, v, st) => s.v(r, 1, label, { bold: true }).v(r, 2, v, { ...inputSt, ...st });
+  inp(3, '연봉 (세전)', 48000000, WON); inp(4, '월 비과세 (식대 등)', 200000, WON); inp(5, '부양 가족 수 (본인 포함)', 1, NUM);
+  inp(6, '국민연금 요율', 0.0475, PCT2); inp(7, '건강보험 요율', 0.03595, { numFmt: 'percent', decimals: 3 }); inp(8, '장기요양 (건강보험의)', 0.1314, PCT2); inp(9, '고용보험 요율', 0.009, PCT2);
+  s.row(11, 1, ['항목', '월', '연'], head('#4338ca'));
+  const L = [
+    ['월 급여', '=C4/12', '=C4'],
+    ['과세 급여', '=C13-C5', '=D13-C5*12'],
+    ['국민연금', '=ROUND(MIN(C14,6370000)*C7,-1)', '=C15*12'],
+    ['건강보험', '=ROUND(C14*C8,-1)', '=C16*12'],
+    ['장기요양', '=ROUND(C16*C9,-1)', '=C17*12'],
+    ['고용보험', '=ROUND(C14*C10,-1)', '=C18*12'],
+    ['근로소득세 (추정)', '=ROUND(D19/12,-1)', '=MAX(0,LET(g,D14,ded,IF(g<=5000000,g*0.7,IF(g<=15000000,3500000+(g-5000000)*0.4,IF(g<=45000000,7500000+(g-15000000)*0.15,IF(g<=100000000,12000000+(g-45000000)*0.05,14750000+(g-100000000)*0.02)))),base,MAX(0,g-ded-1500000*C6-D15-D16-D17-D18),tax,IF(base<=14000000,base*0.06,IF(base<=50000000,840000+(base-14000000)*0.15,IF(base<=88000000,6240000+(base-50000000)*0.24,IF(base<=150000000,15360000+(base-88000000)*0.35,37060000+(base-150000000)*0.38)))),credit,MIN(IF(tax<=1300000,tax*0.55,715000+(tax-1300000)*0.3),IF(g<=33000000,740000,IF(g<=70000000,MAX(660000,740000-(g-33000000)*0.008),MAX(500000,660000-(g-70000000)*0.5)))),tax-credit))'],
+    ['지방소득세', '=ROUND(C19*0.1,-1)', '=C20*12'],
+    ['공제 합계', '=SUM(C15:C20)', '=SUM(D15:D20)'],
+    ['실수령액', '=C13-C21', '=D13-D21'],
+  ];
+  L.forEach((row, i) => s.row(12 + i, 1, row, (j) => ({ ...(j ? WON : {}), ...cellLine, ...(i === 9 ? { bold: true, fill: '#e0e7ff', size: 13 } : {}) })));
+  s.chart({ type: 'doughnut', title: '월 급여 구성', series: [{ name: { text: '금액' }, cat: { r1: 14, c1: 1, r2: 19, c2: 1 }, val: { r1: 14, c1: 2, r2: 19, c2: 2 } }], x: 480, y: 70, w: 380, h: 280, legend: 'r', palette: 'modern' });
+  s.v(23, 1, '※ 추정값입니다 (근로소득공제 · 기본공제 · 누진세율 · 근로소득세액공제 단순 적용).', { color: MUTED });
+  return { sheets: [s.w({ 0: 16, 1: 190, 2: 130, 3: 140 }).done()] };
+}
+
+function severancePay() {
+  const s = new S('퇴직금', { tab: '#9333ea' }).title('퇴직금 계산기', '1일 평균임금 × 30일 × (재직 일수 ÷ 365). 1년 이상 근무해야 받을 수 있습니다.', '#9333ea', 6);
+  const inp = (r, label, v, st) => s.v(r, 1, label, { bold: true }).v(r, 2, v, { ...inputSt, ...st });
+  inp(3, '입사일', '2020-03-02', DATE); inp(4, '퇴사일 (마지막 근무 다음날)', '2026-04-01', DATE);
+  inp(5, '최근 3개월 급여 총액', 10500000, WON); inp(6, '연간 상여금', 3000000, WON); inp(7, '연차 수당 (연간)', 600000, WON);
+  s.row(9, 1, ['재직 일수', '=C5-C4'], cellLine).st(9, 2, { numFmt: 'custom', code: '#,##0"일"' });
+  s.row(10, 1, ['최근 3개월 일수', '=C5-EDATE(C5,-3)'], cellLine).st(10, 2, { numFmt: 'custom', code: '0"일"' });
+  s.row(11, 1, ['1일 평균임금', '=(C6+C7*3/12+C8*3/12)/C11'], cellLine).st(11, 2, { ...WON });
+  s.row(12, 1, ['예상 퇴직금', '=IF(C10<365,0,ROUND(C12*30*C10/365,0))'], { bold: true, size: 14, fill: '#f3e8ff', ...cellLine }).st(12, 2, WON);
+  s.v(13, 1, '=IF(C10<365,"※ 재직 1년 미만이라 퇴직금 대상이 아닙니다.","근속 "&DATEDIF(C4,C5,"Y")&"년 "&DATEDIF(C4,C5,"YM")&"개월")', { color: '#7e22ce' });
+  s.v(15, 1, '※ 통상임금이 평균임금보다 크면 통상임금으로 계산합니다. 세금(퇴직소득세)은 포함하지 않았습니다.', { color: MUTED });
+  return { sheets: [s.w({ 0: 16, 1: 220, 2: 150 }).done()] };
+}
+
+function stockPortfolio() {
+  const s = new S('포트폴리오', { tab: '#16a34a' }).title('주식 포트폴리오 (실시간 시세)', 'GOOGLEFINANCE 함수로 현재가를 가져옵니다. 시세를 못 가져오면 [수동 현재가]를 씁니다. F9 = 새로 고침', '#16a34a', 11);
+  s.row(3, 1, ['티커', '종목명', '수량', '평균 매수가', '수동 현재가', '현재가', '매수 금액', '평가 금액', '평가 손익', '수익률', '비중'], head('#16a34a'));
+  const rows = [['KRX:005930', 30, 71000, 75000], ['KRX:000660', 5, 180000, 205000], ['KRX:035420', 10, 190000, 185000], ['NASDAQ:AAPL', 3, 210, 230], ['NASDAQ:MSFT', 2, 420, 440]];
+  rows.forEach((x, i) => {
+    const r = 4 + i;
+    s.row(r, 1, [x[0], `=IFERROR(GOOGLEFINANCE(B${r + 1},"name"),B${r + 1})`, x[1], x[2], x[3], `=IFERROR(GOOGLEFINANCE(B${r + 1},"price")*1,F${r + 1})`, `=D${r + 1}*E${r + 1}`, `=D${r + 1}*G${r + 1}`, `=I${r + 1}-H${r + 1}`, `=IFERROR(J${r + 1}/H${r + 1},0)`, `=IFERROR(I${r + 1}/SUM($I$5:$I$9),0)`],
+      (j) => (j === 0 || j === 2 || j === 3 || j === 4 ? inputSt : j === 9 || j === 10 ? { ...PCT, ...cellLine } : { ...NUM, ...cellLine }));
+  });
+  s.row(9, 1, ['합계', '', '', '', '', '', '=SUM(H5:H9)', '=SUM(I5:I9)', '=I10-H10', '=IFERROR(J10/H10,0)', ''], (j) => ({ bold: true, fill: '#dcfce7', ...(j === 9 ? PCT : NUM) }));
+  s.cf({ r1: 4, c1: 9, r2: 9, c2: 10, type: 'formula', formula: '=J5<0', style: { color: '#2563eb' } });
+  s.cf({ r1: 4, c1: 9, r2: 9, c2: 10, type: 'formula', formula: '=J5>0', style: { color: '#dc2626' } });
+  s.chart({ type: 'pie', title: '평가 금액 비중', series: [{ name: { text: '평가 금액' }, cat: { r1: 4, c1: 2, r2: 8, c2: 2 }, val: { r1: 4, c1: 8, r2: 8, c2: 8 } }], x: 60, y: 250, w: 420, h: 260, legend: 'r', palette: 'modern' });
+  s.v(11, 1, '※ 한국 주식 KRX:종목코드 · 미국 NASDAQ:티커 · 환율 CURRENCY:USDKRW. 해외 종목 금액은 달러 기준입니다.', { color: MUTED });
+  return { sheets: [s.w({ 0: 16, 1: 110, 2: 130, 3: 60, 4: 90, 5: 90, 6: 90, 7: 100, 8: 100, 9: 100, 10: 70, 11: 60 }).done()] };
+}
+
+function webImportDemo() {
+  const s = new S('웹 가져오기', { tab: '#0ea5e9' }).title('웹 데이터 가져오기 · QUERY 예제', '구글 스프레드시트의 IMPORT 함수 · QUERY · SPARKLINE 을 WIXEL 에서 그대로 씁니다. (서버 실행 시 대부분의 사이트, 아니면 CORS 를 허용하는 사이트만)', '#0ea5e9', 10);
+  s.row(3, 1, ['함수', '수식', '결과'], head('#0ea5e9'));
+  const ex = [
+    ['IMPORTFEED', '=IMPORTFEED("https://www.yna.co.kr/rss/news.xml","items title",FALSE,5)'],
+    ['IMPORTHTML', '=IMPORTHTML("https://en.wikipedia.org/wiki/List_of_countries_by_population_(United_Nations)","table",1)'],
+    ['IMPORTXML', '=IMPORTXML("https://news.ycombinator.com","//span[@class=\'titleline\']/a")'],
+    ['GOOGLETRANSLATE', '=GOOGLETRANSLATE("엑셀처럼 쓰는 웹 스프레드시트","ko","en")'],
+    ['GOOGLEFINANCE', '=GOOGLEFINANCE("CURRENCY:USDKRW")'],
+  ];
+  ex.forEach(([n, f], i) => { const r = 4 + i * 7; s.v(r, 1, n, { bold: true, ...cellLine }).v(r, 2, `'${f}`, { color: MUTED, ...cellLine, wrap: true }).v(r, 3, f); s.h({ [r]: 36 }); });
+  const q = 4 + ex.length * 7;
+  s.v(q, 1, 'QUERY', { bold: true, size: 13, color: '#0369a1' });
+  s.row(q + 1, 1, ['채널', '월', '비용', '전환'], head('#64748b'));
+  const data = [['검색', '1월', 1200000, 84], ['디스플레이', '1월', 800000, 21], ['영상', '1월', 600000, 18], ['검색', '2월', 1350000, 97], ['디스플레이', '2월', 700000, 25], ['영상', '2월', 900000, 30]];
+  data.forEach((d, i) => s.row(q + 2 + i, 1, d, (j) => (j >= 2 ? NUM : {})));
+  const a = `B${q + 2}:E${q + 2 + data.length}`;
+  s.v(q + 1, 6, `=QUERY(${a},"select B, sum(D), sum(E), sum(D)/sum(E) group by B order by sum(D) desc label sum(D)/sum(E) 'CPA'",1)`);
+  s.v(q + 9, 6, `=QUERY(${a},"select B, sum(D) group by B pivot C",1)`);
+  s.v(q + 9, 1, 'SPARKLINE', { bold: true, size: 13, color: '#0369a1' });
+  s.v(q + 10, 1, '비용 추이').v(q + 10, 2, `=SPARKLINE(D${q + 3}:D${q + 8})`).v(q + 11, 1, '막대').v(q + 11, 2, `=SPARKLINE(D${q + 3}:D${q + 8},{"charttype","column";"color","#0ea5e9"})`);
+  s.h({ [q + 10]: 30, [q + 11]: 30 });
+  return { sheets: [s.w({ 0: 16, 1: 120, 2: 360, 3: 160, 4: 110, 5: 90, 6: 120, 7: 120, 8: 120, 9: 120 }).set('noGrid', undefined).done()] };
+}
+
+function vehicleLog() {
+  const s = new S('차량 운행일지', { tab: '#57534e' }).title('업무용 차량 운행 기록부', '출발 · 도착 계기판 거리를 입력하면 주행 거리와 업무 사용 비율이 계산됩니다 (법인세법 업무용 승용차).', '#57534e', 9);
+  s.row(2, 1, ['차량 번호', '12가 3456', '', '차종', '쏘나타'], (j) => (j === 1 || j === 4 ? inputSt : { bold: true, color: MUTED }));
+  s.row(4, 1, ['날짜', '사용자', '목적', '출발지', '도착지', '출발 km', '도착 km', '주행 km', '업무용'], head('#57534e'));
+  let km = 25300;
+  const R = rng(5);
+  for (let i = 0; i < 25; i++) {
+    const r = 5 + i;
+    const has = i < 12;
+    const d = Math.round(10 + R() * 80);
+    s.row(r, 1, [has ? addDays('2026-04-01', i) : '', has ? ['김대리', '박과장'][i % 2] : '', has ? ['거래처 방문', '출장', '배송', '출퇴근'][i % 4] : '', has ? '본사' : '', has ? ['고객사', '물류센터', '세무서', '집'][i % 4] : '', has ? km : '', has ? km + d : '', `=IF(OR(F${r + 1}="",G${r + 1}=""),"",H${r + 1}-G${r + 1})`, has ? (i % 4 === 3 ? '출퇴근' : '업무') : ''],
+      (j) => (j === 0 ? { ...DATE, ...inputSt } : j === 7 ? { ...NUM, ...cellLine } : j === 5 || j === 6 ? { ...NUM, ...inputSt } : inputSt));
+    if (has) km += d;
+  }
+  s.dv({ r1: 5, c1: 9, r2: 29, c2: 9, type: 'list', f1: list(['업무', '출퇴근', '개인']) });
+  s.row(31, 1, ['총 주행', '=SUM(I6:I30)', '', '업무 (출퇴근 포함)', '=SUMIF(J6:J30,"업무",I6:I30)+SUMIF(J6:J30,"출퇴근",I6:I30)', '', '업무 사용 비율', '=IFERROR(F32/C32,0)'], (j) => ({ bold: true, ...(j === 7 ? PCT : j % 3 === 1 ? NUM : {}) }));
+  s.cf({ r1: 5, c1: 9, r2: 29, c2: 9, type: 'formula', formula: '=J6="개인"', style: { color: '#dc2626' } });
+  return { sheets: [s.w({ 0: 16, 1: 90, 2: 70, 3: 100, 4: 80, 5: 90, 6: 80, 7: 80, 8: 70, 9: 70 }).freeze(5).done()] };
+}
+
+export const TEMPLATE_CATS = ['기본', '업무 자동화', '퍼포먼스 마케팅'];
 export const TEMPLATES = [
+  { id: 'cashbook', cat: '업무 자동화', name: '간편 가계부', desc: '거래 입력 → 월별 · 분류별 지출 요약 · 도넛 차트', color: '#047857', featured: true, build: cashBook },
+  { id: 'stock-io', cat: '업무 자동화', name: '재고 입출고 관리', desc: '품목 마스터 · 입출고 기록 · 현재고 · 발주 알림', color: '#1d4ed8', featured: true, build: stockInOut },
+  { id: 'attend', cat: '업무 자동화', name: '출퇴근 · 근태 기록부', desc: '근무 시간 · 지각 · 조퇴 · 연장 근무 자동 계산', color: OF, build: attendanceLog },
+  { id: 'leave', cat: '업무 자동화', name: '연차 관리 대장', desc: '근로기준법 연차 발생 · 사용 · 잔여', color: '#7c3aed', build: annualLeave },
+  { id: 'payslip', cat: '업무 자동화', name: '급여 명세서', desc: '지급 · 4대 보험 · 세금 공제 · 실수령액 한글 금액', color: '#1e3a8a', build: payslip },
+  { id: 'quote', cat: '업무 자동화', name: '견적서 (단가표 연동)', desc: '코드 선택 → 품목 · 단가 자동, 합계 한글 표기', color: '#111827', featured: true, build: quotation },
+  { id: 'crm', cat: '업무 자동화', name: '고객 · 거래처 관리', desc: '등급 · 다음 연락일 알림 · 등급별 매출', color: '#be185d', build: customerCrm },
+  { id: 'weekly', cat: '업무 자동화', name: '주간 업무 보고서', desc: '실적 · 계획 · 진행률 막대 · 지연 표시', color: '#0369a1', build: weeklyReport },
+  { id: 'minutes', cat: '업무 자동화', name: '회의록', desc: '안건 · 논의 · 결정 사항 · 할 일 (인쇄용)', color: '#334155', build: meetingMinutes },
+  { id: 'expense', cat: '업무 자동화', name: '경비 · 출장비 정산서', desc: '분류별 합계 · 개인 지출 환급액 · 결재란', color: '#b45309', build: expenseClaim },
+  { id: 'sales-dash', cat: '업무 자동화', name: '매출 대시보드', desc: '표 기반 KPI · 월별 콤보 · 지점 · 상품 비중', color: '#2563eb', featured: true, build: salesDashboard },
+  { id: 'net-salary', cat: '업무 자동화', name: '연봉 실수령액 계산기', desc: '4대 보험 · 소득세 추정 · 월/연 실수령', color: '#4338ca', build: netSalaryCalc },
+  { id: 'severance', cat: '업무 자동화', name: '퇴직금 계산기', desc: '평균임금 · 재직 일수 · 예상 퇴직금', color: '#9333ea', build: severancePay },
+  { id: 'savings', cat: '업무 자동화', name: '적금 · 예금 이자 계산기', desc: '단리 · 월 복리 · 이자 과세 · 만기 금액', color: '#059669', build: savingsCalc },
+  { id: 'portfolio', cat: '업무 자동화', name: '주식 포트폴리오', desc: 'GOOGLEFINANCE 실시간 시세 · 평가 손익 · 비중', color: '#16a34a', build: stockPortfolio },
+  { id: 'web-import', cat: '업무 자동화', name: '웹 데이터 가져오기 예제', desc: 'IMPORTHTML · IMPORTXML · IMPORTFEED · QUERY · SPARKLINE', color: '#0ea5e9', build: webImportDemo },
+  { id: 'vehicle', cat: '업무 자동화', name: '차량 운행 기록부', desc: '주행 거리 · 업무 사용 비율 (업무용 승용차)', color: '#57534e', build: vehicleLog },
+  { id: 'lotto', cat: '업무 자동화', name: '로또 번호 추천기', desc: 'RANDARRAY · SORTBY 로 6개 번호 × 5게임', color: '#e11d48', build: lottoPicker },
   { id: 'naver-kw', cat: '퍼포먼스 마케팅', name: '네이버 연관검색어 키워드 검색', desc: '검색광고 API 로 연관 키워드 · 월 검색수 · 클릭 · 경쟁정도 가져오기, 정렬 · 필터 · 결과 저장 (버튼 동작)', color: '#03c75a', featured: true, file: 'assets/네이버 연관검색어 키워드 검색.xlsm' },
   { id: 'naver-sa', cat: '퍼포먼스 마케팅', name: '네이버 검색광고 주간 리포트', desc: '원본 붙여넣기 → 피벗 · 차트 · 슬라이서 자동 (대시보드 · 키워드 · 검색어)', color: '#03c75a', featured: true, build: naverReport },
   { id: 'perf-dash', cat: '퍼포먼스 마케팅', name: '퍼포먼스 대시보드', desc: 'KPI 카드 · 채널 피벗 · 일별 콤보 차트 · 슬라이서', color: MK, featured: true, build: perfDashboard },
