@@ -993,7 +993,7 @@ function* readSheet(files, path, ctx) {
         if (sl.attrs.cache) {
           sheet._slicers.push({
             name: sl.attrs.name, cache: sl.attrs.cache, caption: sl.attrs.caption, columns: Number(sl.attrs.columnCount ?? 1), style: sl.attrs.style,
-            showCaption: sl.attrs.showCaption !== '0', rowHeight: Number(sl.attrs.rowHeight ?? 241300),
+            showCaption: sl.attrs.showCaption !== '0', lockedPosition: sl.attrs.lockedPosition === '1', rowHeight: Number(sl.attrs.rowHeight ?? 241300),
           });
         }
       }
@@ -1340,6 +1340,18 @@ function readDrawing(files, path, sheet, ctx) {
     picSrc.set(target, src); // 같은 그림을 여러 번 쓰면 한 번만 변환
     const im = { id: uid('im'), name, ...round(box), z: ++z, src };
     if (emf) im.emf = emf;
+    // SVG 그림(아이콘): svgBlip 원본을 화면에 쓰고 PNG 는 저장용 대체 그림으로 둠
+    const svgBlip = descendants(blip, 'svgBlip')[0];
+    const svgKey = svgBlip && Object.keys(svgBlip.attrs).find((k) => k.endsWith(':embed') || k === 'embed');
+    const svgBytes = svgKey && files[rels[svgBlip.attrs[svgKey]]?.target];
+    if (svgBytes && !emf) {
+      im.png = src;
+      im.src = `data:image/svg+xml;base64,${toBase64(svgBytes)}`;
+      const text = new TextDecoder().decode(svgBytes);
+      const m = /<svg\b([^>]*)>([\s\S]*)<\/svg>\s*$/.exec(text);
+      const vb = m && /viewBox="([^"]+)"/.exec(m[1]);
+      if (m && vb && m[2].length < 200000) im.icon = { vb: vb[1], body: m[2], fill: /\bfill="(#[0-9a-fA-F]{6})"/.exec(m[1])?.[1] ?? '#000000' };
+    }
     // 그림 자르기 (a:srcRect, 1/1000 %)
     const sr = descendants(child(el, 'blipFill'), 'srcRect')[0];
     if (sr && ['l', 't', 'r', 'b'].some((k) => Number(sr.attrs[k]))) im.crop = Object.fromEntries(['l', 't', 'r', 'b'].filter((k) => Number(sr.attrs[k])).map((k) => [k, Number(sr.attrs[k]) / 100000]));
@@ -2136,6 +2148,7 @@ function linkPivotsAndSlicers(files, wbRels, sheets, ctx) {
         style: /^SlicerStyle(Light|Other|Dark)\d$/i.test(sl.style ?? '') || isModernSlicer(sl.style) ? sl.style : 'SlicerStyleLight1', multi: false, ...box,
         ...(!isModernSlicer(sl.style) && ctx.slicerStyles?.[sl.style] && Object.keys(ctx.slicerStyles[sl.style]).length ? { custom: ctx.slicerStyles[sl.style] } : {}),
         ...(sl.showCaption ? {} : { showHeader: false }),
+        ...(sl.lockedPosition ? { noMove: true } : {}),
         ...(c.opts ?? {}),
         ...(Math.abs(sl.rowHeight - 241300) > 20000 ? { buttonHeight: Math.max(14, Math.round(sl.rowHeight / EMU)) } : {}),
       });
@@ -3812,15 +3825,25 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
           parts.push(anchor(ch, `<xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="${objId}" name="차트 ${objId - 1}"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="${id}"/></a:graphicData></a:graphic></xdr:graphicFrame>`));
         } else if (kind === 'image') {
           const im = o;
-          const m = /^data:([^;,]+);base64,(.*)$/s.exec(im.emf ?? im.src ?? '');
+          // SVG 그림(아이콘): PNG 대체 그림 + svgBlip 으로 원본 SVG (엑셀과 같은 방식)
+          const svgSrc = im.png && /^data:image\/svg\+xml;base64,/.test(im.src ?? '') ? im.src : null;
+          const m = /^data:([^;,]+);base64,(.*)$/s.exec(im.emf ?? (svgSrc ? im.png : im.src) ?? '');
           if (!m) continue;
           const ext = Object.keys(MIME).find((k) => MIME[k] === m[1]) ?? 'png';
           mediaNo++;
           mediaExts.add(ext);
           files[`xl/media/image${mediaNo}.${ext}`] = fromBase64(m[2]);
           const id = drel('image', `../media/image${mediaNo}.${ext}`);
+          let svgExt = '';
+          if (svgSrc) {
+            mediaNo++;
+            mediaExts.add('svg');
+            files[`xl/media/image${mediaNo}.svg`] = fromBase64(svgSrc.slice(svgSrc.indexOf(',') + 1));
+            const sid = drel('image', `../media/image${mediaNo}.svg`);
+            svgExt = `<a:extLst><a:ext uri="{96DAC541-7B7A-43D3-8B79-37D633B846F1}"><asvg:svgBlip xmlns:asvg="http://schemas.microsoft.com/office/drawing/2016/SVG/main" r:embed="${sid}"/></a:ext></a:extLst>`;
+          }
           objId++;
-          parts.push(anchor(im, `<xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${objId}" name="${esc(im.name || `그림 ${objId - 1}`)}"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="${id}"/>${im.crop ? `<a:srcRect${['l', 't', 'r', 'b'].map((k) => (im.crop[k] ? ` ${k}="${Math.round(im.crop[k] * 100000)}"` : '')).join('')}/>` : ''}<a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>${xfrm(im)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${/^#[0-9a-f]{6}$/i.test(im.border ?? "") ? `<a:ln w="${Math.round((im.borderW ?? 2) * EMU)}"><a:solidFill><a:srgbClr val="${im.border.replace('#', '').toUpperCase()}"/></a:solidFill></a:ln>` : ''}</xdr:spPr></xdr:pic>`));
+          parts.push(anchor(im, `<xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${objId}" name="${esc(im.name || `그림 ${objId - 1}`)}"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill>${svgExt ? `<a:blip r:embed="${id}">${svgExt}</a:blip>` : `<a:blip r:embed="${id}"/>`}${im.crop ? `<a:srcRect${['l', 't', 'r', 'b'].map((k) => (im.crop[k] ? ` ${k}="${Math.round(im.crop[k] * 100000)}"` : '')).join('')}/>` : ''}<a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>${xfrm(im)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${/^#[0-9a-f]{6}$/i.test(im.border ?? "") ? `<a:ln w="${Math.round((im.borderW ?? 2) * EMU)}"><a:solidFill><a:srgbClr val="${im.border.replace('#', '').toUpperCase()}"/></a:solidFill></a:ln>` : ''}</xdr:spPr></xdr:pic>`));
         } else if (kind === 'slicerTable' || kind === 'slicerPivot') {
           objId++;
           parts.push(slicerAnchorXml(o.sl, o.name, objId, anchorAt, kind === 'slicerTable' ? 'table' : 'pivot'));
@@ -3930,7 +3953,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
       const list = sheetSlicers[kind];
       if (!list.length) continue;
       slicerPartNo++;
-      files[`xl/slicers/slicer${slicerPartNo}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<slicers xmlns="${NS_X14}" xmlns:mc="${NS_MC}" mc:Ignorable="x" xmlns:x="${NS_MAIN}">${list.map(({ sl, name, cache }) => `<slicer name="${esc(name)}" cache="${esc(cache)}" caption="${esc(sl.caption ?? name)}"${(sl.columns ?? 1) > 1 ? ` columnCount="${sl.columns}"` : ''}${((st) => (st !== 'SlicerStyleLight1' ? ` style="${esc(st)}"` : ''))(pool.slicerStyleFor(sl))}${sl.showHeader === false ? ' showCaption="0"' : ''} rowHeight="${Math.round((sl.buttonHeight ?? 25.3) * EMU)}"/>`).join('')}</slicers>`;
+      files[`xl/slicers/slicer${slicerPartNo}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<slicers xmlns="${NS_X14}" xmlns:mc="${NS_MC}" mc:Ignorable="x" xmlns:x="${NS_MAIN}">${list.map(({ sl, name, cache }) => `<slicer name="${esc(name)}" cache="${esc(cache)}" caption="${esc(sl.caption ?? name)}"${(sl.columns ?? 1) > 1 ? ` columnCount="${sl.columns}"` : ''}${((st) => (st !== 'SlicerStyleLight1' ? ` style="${esc(st)}"` : ''))(pool.slicerStyleFor(sl))}${sl.showHeader === false ? ' showCaption="0"' : ''}${sl.noMove ? ' lockedPosition="1"' : ''} rowHeight="${Math.round((sl.buttonHeight ?? 25.3) * EMU)}"/>`).join('')}</slicers>`;
       contentOverrides.push(`<Override PartName="/xl/slicers/slicer${slicerPartNo}.xml" ContentType="application/vnd.ms-excel.slicer+xml"/>`);
       const id = `rId${sheetRels.length + 1}`;
       sheetRels.push(`<Relationship Id="${id}" Type="${REL_MS}/slicer" Target="../slicers/slicer${slicerPartNo}.xml"/>`);

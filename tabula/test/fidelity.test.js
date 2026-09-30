@@ -60,7 +60,8 @@ test('엑셀 색 밝기(tint): 윈도 정수 HLS', () => {
 });
 
 test('기본 제공 표 · 피벗 스타일 144개 정의', () => {
-  assert.equal(Object.keys(PRESET_STYLES).filter((k) => !k.startsWith('Wixel')).length, 144);
+  assert.equal(Object.keys(PRESET_STYLES).filter((k) => /^(Table|Pivot)Style/.test(k)).length, 144);
+  assert.equal(Object.keys(PRESET_STYLES).filter((k) => /^(표|피벗)_\d{3}$/.test(k)).length, 84); // 스타일시트 v1.0
   assert.equal(Object.keys(PRESET_STYLES).filter((k) => k.startsWith('Wixel')).length, 40);
   const t = { r1: 0, c1: 0, r2: 4, c2: 2, header: true, banded: true, firstCol: true };
   // TableStyleLight9: 머리글 강조1 + 흰 굵은 글자, 첫 열 굵게, 줄무늬 행 위쪽 선

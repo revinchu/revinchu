@@ -1448,6 +1448,8 @@ function onViewMouseDown(e) {
     const found = findObject(sheet(), id);
     if (!found) return;
     const o = found.obj;
+    // 크기 조정 및 이동 사용 안 함 (엑셀 슬라이서 [위치 및 속성]): 선택만 되고 끌어도 움직이지 않음
+    if (o.noMove) return;
     const corner = t.classList.contains('ch-h') ? [...t.classList].find((c) => ['nw', 'ne', 'sw', 'se'].includes(c)) : null;
     drag = { type: 'obj', prop: found.prop, id, corner, shift: e.shiftKey, start: { x: e.clientX, y: e.clientY }, orig: { x: o.x, y: o.y, w: o.w, h: o.h } };
     return;
@@ -2478,7 +2480,7 @@ const PROTECT_MAP = {
   clearFilter: 'autoFilter', reapplyFilter: 'autoFilter', advancedFilter: 'autoFilter', toggleFilter: 'autoFilter', hideRows: 'formatRows', unhideRows: 'formatRows', autofitRowsSel: 'formatRows',
   hideCols: 'formatColumns', autofitSel: 'formatColumns', refreshAll: 'pivotTables', calcField: 'pivotTables', slicerConnections: 'pivotTables',
   chartColumn: 'objects', chartBar: 'objects', chartLine: 'objects', chartPie: 'objects', chartArea: 'objects', chartScatter: 'objects', shapesMenu: 'objects',
-  insertTextbox: 'objects', insertPicture: 'objects', insertSlicer: 'objects', insertTimeline: 'objects',
+  insertTextbox: 'objects', insertPicture: 'objects', insertIcons: 'objects', insertSlicer: 'objects', insertTimeline: 'objects',
 };
 const FORMAT_CMDS = /^(painter|painterSticky|bold|italic|underline|strike|fontFamily|fontSize|growFont|shrinkFont|border|fillColor|fontColor|fontDialog|formatCells|align|valign|wrap|indent|numFmt|fmt|incDecimal|decDecimal|clearFormats|cellStyle)/;
 function protectAction(cmd) {
@@ -5924,6 +5926,7 @@ function slicerSettings(id) {
   const [mark, markL] = chk(sl.markNoData !== false, '데이터가 없는 항목을 시각적으로 표시');
   const [last, lastL] = chk(sl.noDataLast !== false, '데이터가 없는 항목을 마지막에 표시');
   const [del, delL] = chk(!!sl.showDeleted, '데이터 원본에서 삭제된 항목 표시');
+  const [lockP, lockPL] = chk(!!sl.noMove, '크기 조정 및 이동 사용 안 함');
   const sync = () => { mark.disabled = hide.checked; last.disabled = hide.checked; };
   hide.addEventListener('change', sync);
   sync();
@@ -5936,7 +5939,8 @@ function slicerSettings(id) {
       hdrL, el('label', {}, el('span', {}, '캡션'), cap),
       el('div', { class: 'sl-set-cols' },
         el('div', {}, el('div', { class: 'menu-title', style: { padding: '6px 0 2px' } }, '항목 정렬 및 필터링'), ascL, descL, clL),
-        el('div', {}, el('div', { class: 'menu-title', style: { padding: '6px 0 2px' } }, '데이터가 없는 항목'), hideL, markL, lastL, delL))),
+        el('div', {}, el('div', { class: 'menu-title', style: { padding: '6px 0 2px' } }, '데이터가 없는 항목'), hideL, markL, lastL, delL)),
+      el('div', { class: 'menu-title', style: { padding: '6px 0 2px' } }, '위치 및 속성'), lockPL),
     buttons: [
       {
         label: '확인', primary: true, action: () => {
@@ -5944,7 +5948,7 @@ function slicerSettings(id) {
             name: name.value.trim() || undefined, caption: cap.value, showHeader: hdr.checked ? undefined : false,
             sort: desc.checked ? 'desc' : undefined, customList: cl.checked ? undefined : false,
             hideNoData: hide.checked || undefined, markNoData: mark.checked ? undefined : false, noDataLast: last.checked ? undefined : false,
-            showDeleted: del.checked || undefined,
+            showDeleted: del.checked || undefined, noMove: lockP.checked || undefined,
           });
           gv.renderObjectsAll();
         },
@@ -6778,7 +6782,7 @@ function deleteObject(id) {
 
 function nudgeObject(id, dx, dy) {
   const f = findObject(sheet(), id);
-  if (f) updateObject(id, { x: Math.max(0, f.obj.x + dx), y: Math.max(0, f.obj.y + dy) });
+  if (f && !f.obj.noMove) updateObject(id, { x: Math.max(0, f.obj.x + dx), y: Math.max(0, f.obj.y + dy) });
 }
 
 function copyObject(id, cut) {
@@ -6912,6 +6916,7 @@ function objectMenu(id, pos) {
       { label: '슬라이서 설정...', icon: 'slicer', action: () => slicerSettings(id) },
       { label: `"${f.obj.caption}"에서 필터 지우기`, icon: 'filterClear', action: () => slicerClear(id) },
       { label: '다중 선택', checked: !!f.obj.multi, action: () => updateObject(id, { multi: !f.obj.multi }) },
+      { label: '크기 조정 및 이동 사용 안 함', checked: !!f.obj.noMove, action: () => updateObject(id, { noMove: !f.obj.noMove || undefined }) },
       { sep: true },
       { label: '텍스트 오름차순 정렬', icon: 'sortAsc', checked: f.obj.sort !== 'desc', action: () => { updateObject(id, { sort: undefined }); gv.renderObjectsAll(); } },
       { label: '텍스트 내림차순 정렬', icon: 'sortDesc', checked: f.obj.sort === 'desc', action: () => { updateObject(id, { sort: 'desc' }); gv.renderObjectsAll(); } },
@@ -6925,6 +6930,15 @@ function objectMenu(id, pos) {
       { label: '원래 크기로', action: () => resetImageSize(id) },
       { label: '셀에 배치', icon: 'picture', action: () => imageToCell(id) },
     );
+    // 아이콘(SVG 그래픽): 엑셀 [그래픽 채우기] 색
+    if (f.obj.icon) {
+      items.push({
+        label: '그래픽 채우기', icon: 'fill', submenu: [
+          { node: el('div', { class: 'fc-pal' }, [...themeRows(), STANDARD].map((row) => el('div', { class: 'palette-row' }, row.map((c) => el('button', { type: 'button', class: 'swatch', title: c, style: { background: c }, onclick: () => { closeMenus(); recolorIcon(id, c); } }))))) },
+          { label: '다른 색...', action: () => { const inp = el('input', { type: 'color', value: f.obj.icon.fill ?? '#000000' }); inp.addEventListener('change', () => recolorIcon(id, inp.value)); inp.click(); } },
+        ],
+      });
+    }
   }
   items.push(
     { sep: true },
@@ -7052,6 +7066,107 @@ function addImageFile(file, at = null) {
     img.src = src;
   };
   reader.readAsDataURL(file);
+}
+
+// ───────────── 아이콘 삽입 (엑셀 삽입 › 아이콘: 범주 · 검색 · 여러 개 선택) ─────────────
+let iconLib = null;
+async function loadIconLib() {
+  if (iconLib) return iconLib;
+  const res = await fetch('assets/iconlib.json.gz');
+  if (!res.ok) throw new Error(`아이콘 모음을 불러오지 못했습니다 (${res.status}).`);
+  let buf = new Uint8Array(await res.arrayBuffer());
+  // 서버가 이미 풀어서 보냈으면 그대로, 아니면 gzip 풀기
+  if (buf[0] === 0x1f && buf[1] === 0x8b) buf = new Uint8Array(await new Response(new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
+  iconLib = JSON.parse(new TextDecoder().decode(buf)).map(([cat, items]) => [cat, items.map(([name, body, vb]) => ({ name, body, vb: vb ?? '0 0 96 96', cat }))]);
+  return iconLib;
+}
+// 색을 바꿀 때는 경로마다 붙은 채우기 색을 지우고 바깥 svg 의 fill 하나로 (엑셀 [그래픽 채우기] 와 같은 결과)
+const iconSvgText = (ic, fill = '#000000') => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${ic.vb}" fill="${fill}">${ic.body.replace(/\sfill="(?!none)[^"]*"/g, '').replace(/fill:\s*#[0-9a-fA-F]{3,8};?/g, '')}</svg>`;
+const svgDataUrl = (text) => `data:image/svg+xml;base64,${btoa(String.fromCharCode(...new TextEncoder().encode(text)))}`;
+/** SVG → PNG data URL (엑셀 파일의 대체 그림 · 아이콘은 svgBlip 으로 원본도 함께 저장) */
+function svgToPng(svgText, size = 192) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const cv = document.createElement('canvas');
+      cv.width = size; cv.height = size;
+      cv.getContext('2d').drawImage(img, 0, 0, size, size);
+      resolve(cv.toDataURL('image/png'));
+    };
+    img.onerror = () => resolve(null);
+    img.src = svgDataUrl(svgText);
+  });
+}
+async function insertIconsDialog() {
+  let lib;
+  try { lib = await loadIconLib(); } catch (e) { alertDialog('아이콘', `${e.message} 인터넷 연결 또는 배포 파일(assets/iconlib.json.gz)을 확인하세요.`); return; }
+  const all = lib.flatMap(([, items]) => items);
+  const picked = new Map();
+  let cat = '';
+  const search = el('input', { type: 'search', placeholder: '아이콘 검색 (예: 사람, 화살표, 돈)', class: 'ic-search' });
+  const cats = el('div', { class: 'ic-cats' });
+  const grid = el('div', { class: 'ic-grid' });
+  const count = el('span', { class: 'muted' });
+  let list = [];
+  let shown = 0;
+  const more = () => {
+    const frag = document.createDocumentFragment();
+    for (const ic of list.slice(shown, shown + 240)) {
+      const b = el('button', { type: 'button', class: `ic-cell${picked.has(ic) ? ' on' : ''}`, title: ic.name, html: `<svg viewBox="${ic.vb}">${ic.body}</svg>` });
+      b.addEventListener('click', () => { if (picked.has(ic)) picked.delete(ic); else picked.set(ic, true); b.classList.toggle('on', picked.has(ic)); upd(); });
+      frag.append(b);
+    }
+    shown += 240;
+    grid.append(frag);
+  };
+  const draw = () => {
+    const q = search.value.trim().toLowerCase();
+    list = (cat ? lib.find((x) => x[0] === cat)[1] : all).filter((ic) => !q || ic.name.toLowerCase().includes(q) || ic.cat.toLowerCase().includes(q));
+    // 여러 범주에 같은 아이콘이 있으면 한 번만
+    const seen = new Set();
+    list = list.filter((ic) => (seen.has(ic.body) ? false : (seen.add(ic.body), true)));
+    grid.replaceChildren();
+    shown = 0;
+    grid.scrollTop = 0;
+    more();
+    cats.querySelectorAll('button').forEach((b) => b.classList.toggle('on', (b.dataset.cat ?? '') === cat));
+    upd();
+  };
+  grid.addEventListener('scroll', () => { if (grid.scrollTop + grid.clientHeight > grid.scrollHeight - 200 && shown < list.length) more(); });
+  cats.append(el('button', { type: 'button', 'data-cat': '', onclick: () => { cat = ''; draw(); } }, '전체'),
+    ...lib.map(([c, items]) => el('button', { type: 'button', 'data-cat': c, onclick: () => { cat = c; draw(); } }, `${c} `, el('small', {}, String(items.length)))));
+  let t = 0;
+  search.addEventListener('input', () => { clearTimeout(t); t = setTimeout(draw, 150); });
+  let dlg;
+  const upd = () => { count.textContent = `${list.length.toLocaleString()}개${picked.size ? ` · ${picked.size}개 선택` : ''}`; dlg?.root?.querySelector('.btn.primary')?.toggleAttribute('disabled', !picked.size); };
+  const body = el('div', { class: 'ic-dlg' }, el('div', { class: 'ic-top' }, search, count), el('div', { class: 'ic-main' }, cats, grid));
+  const insert = async () => {
+    const p = objectOrigin();
+    const objs = [];
+    let k = 0;
+    for (const ic of picked.keys()) {
+      const text = iconSvgText(ic);
+      objs.push({ id: newObjId('im'), name: ic.name || '그래픽', x: p.x + k * 24, y: p.y + k * 24, w: 96, h: 96, src: svgDataUrl(text), png: await svgToPng(text), icon: { vb: ic.vb, body: ic.body, fill: '#000000' } });
+      k++;
+    }
+    wb.transact(() => wb.setSheetProp(si, 'images', [...(sheet().images ?? []), ...objs]), meta());
+    chartSel = objs[objs.length - 1]?.id ?? null;
+    gv.renderObjectsAll();
+    updateSelectionUI();
+    focusGrid();
+  };
+  dlg = openDialog({ title: '아이콘 삽입', body, width: 760, buttons: [{ label: '삽입', primary: true, action: () => { if (!picked.size) return false; insert(); return undefined; } }, { label: '취소' }] });
+  draw();
+  setTimeout(() => search.focus());
+}
+/** 아이콘(그래픽) 채우기 색 바꾸기 — 엑셀 [그래픽 채우기] */
+async function recolorIcon(id, fill) {
+  const f = findObject(sheet(), id);
+  if (!f?.obj.icon) return;
+  const text = iconSvgText(f.obj.icon, fill);
+  const png = await svgToPng(text);
+  updateObject(id, { src: svgDataUrl(text), png, icon: { ...f.obj.icon, fill } });
+  gv.renderObjectsAll();
 }
 
 /** 그림 주소(data URL 또는 웹 주소) → 시트에 그림 개체 추가 */
@@ -7496,7 +7611,7 @@ function setObjSize(key, v) {
   if (!Number.isFinite(n)) return;
   if (key === 'rot') { patchObjects({ rot: ((n % 360) + 360) % 360 || undefined }, ['shapes', 'images']); return; }
   if (n < 1 || n > 5000) return;
-  patchObjects((o) => (key === 'h' ? { h: Math.round(n) } : { w: Math.round(n) }));
+  patchObjects((o) => (o.noMove ? null : key === 'h' ? { h: Math.round(n) } : { w: Math.round(n) }));
 }
 function objPlacementMenu(a) {
   const f = selectedObjects()[0];
@@ -7507,6 +7622,7 @@ function objPlacementMenu(a) {
     { label: '위치만 변함', checked: cur === 'oneCell', action: () => patchObjects({ placement: 'oneCell' }) },
     { label: '변하지 않음 (위치 고정)', checked: cur === 'absolute', action: () => patchObjects({ placement: 'absolute' }) },
     { sep: true },
+    { label: '크기 조정 및 이동 사용 안 함', checked: !!f?.obj.noMove, action: () => patchObjects((o) => ({ noMove: !o.noMove || undefined })) },
     { label: '개체 인쇄', checked: f ? f.obj.noPrint !== true : true, action: () => patchObjects((o) => ({ noPrint: !o.noPrint || undefined })) },
     { label: '잠금 (시트 보호 시 편집 안 됨)', checked: f ? f.obj.locked !== false : true, action: () => patchObjects((o) => ({ locked: o.locked === false ? undefined : false })) },
   ]);
@@ -13252,6 +13368,7 @@ const COMMANDS = {
 
   toggleFilter,
   advancedFilter: advancedFilterDialog,
+  insertIcons: () => { insertIconsDialog(); },
   clearFilter: () => {
     const key = filterKeyHere();
     const f = key === null ? null : getFilter(key);

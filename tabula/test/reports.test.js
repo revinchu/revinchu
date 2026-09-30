@@ -358,3 +358,22 @@ test('고급 필터: 조건 줄 안은 AND, 줄끼리 OR, 글자 조건은 시�
   assert.deepEqual(advancedFilter(head, rows, ['지역'], [['서']], true), [0, 2]);
   assert.deepEqual(advancedFilter(head, rows, ['매출'], [[200]]), [1]);
 });
+
+test('아이콘(SVG 그림): PNG 대체 그림 + svgBlip 원본으로 저장하고 다시 읽음', async () => {
+  const { readXlsx, writeXlsx } = await import('../src/xlsx.js');
+  const { unzip, textOf } = await import('../src/zip.js');
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" fill="#ff0000"><path d="M0 0h96v96z"/></svg>';
+  const b64 = (s) => Buffer.from(s).toString('base64');
+  const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  const wb = new Workbook();
+  wb.setSheetProp(0, 'images', [{ id: 'im1', name: '아이콘', x: 10, y: 10, w: 96, h: 96, src: `data:image/svg+xml;base64,${b64(svg)}`, png, icon: { vb: '0 0 96 96', body: '<path d="M0 0h96v96z"/>', fill: '#ff0000' } }]);
+  const bytes = writeXlsx(wb);
+  const files = unzip(bytes);
+  assert.ok(Object.keys(files).some((f) => f.endsWith('.svg')));
+  assert.ok(Object.keys(files).some((f) => f.endsWith('.png')));
+  assert.match(textOf(files['xl/drawings/drawing1.xml']), /svgBlip/);
+  const back = new Workbook(readXlsx(bytes).data).sheets[0].images[0];
+  assert.match(back.src, /^data:image\/svg\+xml/);
+  assert.match(back.png, /^data:image\/png/);
+  assert.equal(back.icon.fill, '#ff0000');
+});

@@ -2,7 +2,7 @@
 //   node build.mjs            → dist/index.html (CSS·JS 를 모두 넣은 단일 HTML) + dist/.nojekyll
 // 정적 호스팅(GitHub Pages 등)에 올리거나 파일을 바로 열어도 동작합니다.
 // 서버 저장소(/api/files)가 없으면 앱이 자동으로 브라우저 저장(localStorage)을 사용합니다.
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync } from 'node:fs';
 import { dirname, join, resolve, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -58,4 +58,7 @@ html = html
 mkdirSync(outDir, { recursive: true });
 writeFileSync(join(outDir, 'index.html'), html);
 writeFileSync(join(outDir, '.nojekyll'), '');
+// 따로 불러오는 큰 자료 (아이콘 모음 등): dist/assets 로 복사
+mkdirSync(join(outDir, 'assets'), { recursive: true });
+for (const f of ['iconlib.json.gz']) if (existsSync(join(root, 'assets', f))) copyFileSync(join(root, 'assets', f), join(outDir, 'assets', f));
 console.log(`${join(outDir, 'index.html')} (${(html.length / 1024).toFixed(0)} KB)`);

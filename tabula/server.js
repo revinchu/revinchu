@@ -17,6 +17,7 @@ const DATA = resolve(process.env.TABULA_DATA || join(ROOT, 'data'));
 const TOKEN = process.env.TABULA_TOKEN || '';
 const MAX_BODY = 50 * 1024 * 1024;
 const TYPES = {
+  '.gz': 'application/gzip',
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',

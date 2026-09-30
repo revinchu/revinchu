@@ -119,6 +119,7 @@ export const TABS = [
       group('일러스트레이션', [
         large('insertPicture', 'picture', '그림', { menu: 'picture', title: '이 기기의 그림 삽입 — 셀에 배치 또는 셀 위에 배치 (붙여넣기·끌어 놓기도 가능)' }),
         large('shapesMenu', 'shapes', '도형', { menu: 'shapes' }),
+        large('insertIcons', 'iconsLib', '아이콘', { title: '아이콘 삽입 — 34개 범주 3,600여 개 (엑셀 아이콘과 같은 그림, 색 변경 가능)' }),
         large('insertTextbox', 'textbox', '텍스트 상자'),
       ]),
       group('기호', [large('insertEquation', 'equation', '수식', { menu: 'equations' }), large('insertSymbol', 'symbol', '기호')]),
