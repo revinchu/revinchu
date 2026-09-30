@@ -1745,6 +1745,7 @@ function pivotDefFrom(root, cache, tables, sheetName) {
   const def = {
     rows: rowF.map((f) => names[f]), cols: colF.map((f) => names[f]), values, pages: pageEls.map((p) => names[Number(p.attrs.fld)]),
     ...(vIdx >= 0 && vIdx < colF.length ? { valuesPos: vIdx } : {}),
+    ...(root.attrs.dataOnRows === '1' && values.length > 1 ? { valuesOnRows: true } : {}),
     layout: !fOutline ? 'tabular' : !fCompact ? 'outline' : 'compact',
   };
   // 부분합: 필드마다 (바깥 필드만 켜 둔 보고서가 많음). 안쪽 끝 필드는 부분합이 없으므로 셈에서 뺌
@@ -3014,16 +3015,21 @@ function pivotParts(wb, si, def, cache, name, pool) {
   const values = meta.values;
   const V = values.length;
   const multiV = V > 1;
+  const onRows = multiV && !!d.valuesOnRows; // Σ 값이 행 영역 (dataOnRows)
+  const colMulti = multiV && !onRows;
   const xOf = (f, key) => items.get(f)?.index.get(`${typeof key}:${key}`) ?? 0;
   const xTag = (v) => (v ? `<x v="${v}"/>` : '<x/>');
 
   // 행 항목
   const rowXml = [];
-  if (!rowF.length) rowXml.push('<i/>');
-  else {
+  const iv = (vi) => (vi > 0 ? ` i="${vi}"` : '');
+  if (!rowF.length) {
+    if (onRows) for (let vi = 0; vi < V; vi++) rowXml.push(`<i${iv(vi)}>${xTag(vi)}</i>`);
+    else rowXml.push('<i/>');
+  } else {
     let prev = [];
     for (const it of meta.rowItems) {
-      if (it.kind === 'grand') { rowXml.push('<i t="grand"><x/></i>'); continue; }
+      if (it.kind === 'grand') { rowXml.push(`<i t="grand"${iv(it.vi)}><x/></i>`); continue; }
       if (it.kind === 'blank') {
         const n = it.node;
         rowXml.push(`<i t="blank"${n.depth ? ` r="${n.depth}"` : ''}>${xTag(xOf(rowF[n.depth], n.key))}</i>`);
@@ -3032,7 +3038,12 @@ function pivotParts(wb, si, def, cache, name, pool) {
       }
       if (it.kind === 'sub') {
         const n = it.node;
-        rowXml.push(`<i t="default"${n.depth ? ` r="${n.depth}"` : ''}>${xTag(xOf(rowF[n.depth], n.key))}</i>`);
+        rowXml.push(`<i t="default"${n.depth ? ` r="${n.depth}"` : ''}${iv(it.vi)}>${xTag(xOf(rowF[n.depth], n.key))}</i>`);
+        continue;
+      }
+      // 값 행 (값이 행 영역): 첫 값은 항목 경로와 함께, 나머지는 값 번호만
+      if (onRows && it.vi !== undefined && (it.valueRow || it.vi > 0)) {
+        rowXml.push(`<i r="${it.valueRow ? it.node.depth + 1 : (it.chain ?? [it.node]).length}"${iv(it.vi)}>${xTag(it.vi)}</i>`);
         continue;
       }
       const chain = it.chain ?? [it.node];
@@ -3042,20 +3053,20 @@ function pivotParts(wb, si, def, cache, name, pool) {
         let r = 0;
         while (r < xs.length && r < prev.length && prev[r] === xs[r]) r++;
         if (r >= xs.length) r = xs.length - 1;
-        rowXml.push(`<i${r ? ` r="${r}"` : ''}>${xs.slice(r).map(xTag).join('')}</i>`);
+        rowXml.push(`<i${r ? ` r="${r}"` : ''}>${[...xs.slice(r), ...(onRows && it.vi === 0 ? [0] : [])].map(xTag).join('')}</i>`);
         prev = xs;
       } else rowXml.push(`<i${start ? ` r="${start}"` : ''}>${xTag(xs[0])}</i>`);
     }
   }
   // 열 항목
   const colXml = [];
-  const vpos = multiV ? Math.max(0, Math.min(colF.length, d.valuesPos ?? colF.length)) : colF.length;
-  const colFieldsAll = multiV ? [...colF.slice(0, vpos), -2, ...colF.slice(vpos)] : [...colF];
+  const vpos = colMulti ? Math.max(0, Math.min(colF.length, d.valuesPos ?? colF.length)) : colF.length;
+  const colFieldsAll = colMulti ? [...colF.slice(0, vpos), -2, ...colF.slice(vpos)] : [...colF];
   if (!colFieldsAll.length) colXml.push('<i/>');
   else {
     let prev = [];
     for (const leaf of meta.colLeaves) {
-      const ia = leaf.vi ? ` i="${leaf.vi}"` : '';
+      const ia = leaf.vi > 0 ? ` i="${leaf.vi}"` : '';
       if (leaf.kind === 'grand') { colXml.push(`<i t="grand"${ia}><x/></i>`); continue; }
       const chain = [];
       for (let n = leaf.node; n && n.depth >= 0; n = n.parent) chain.unshift(n);
@@ -3066,7 +3077,7 @@ function pivotParts(wb, si, def, cache, name, pool) {
         continue;
       }
       const cx = chain.map((n) => xOf(colF[n.depth], n.key));
-      const xs = multiV ? [...cx.slice(0, vpos), leaf.vi, ...cx.slice(vpos)] : cx;
+      const xs = colMulti ? [...cx.slice(0, vpos), leaf.vi, ...cx.slice(vpos)] : cx;
       let r = 0;
       while (r < xs.length - 1 && r < prev.length && prev[r] === xs[r]) r++;
       colXml.push(`<i${r ? ` r="${r}"` : ''}${ia}>${xs.slice(r).map(xTag).join('')}</i>`);
@@ -3167,7 +3178,7 @@ function pivotParts(wb, si, def, cache, name, pool) {
   else if (styleName && def.styleDef && !/^PivotStyle(Light|Medium|Dark)\d+$/i.test(styleName)) pool.pivotStyle(styleName, def.styleDef);
   const tableAttrs = [
     `name="${esc(name)}"`, `cacheId="${cacheId}"`, 'applyNumberFormats="0"', 'applyBorderFormats="0"', 'applyFontFormats="0"', 'applyPatternFormats="0"',
-    'applyAlignmentFormats="0"', 'applyWidthHeightFormats="1"', 'dataCaption="값"', 'updatedVersion="6"', 'minRefreshableVersion="3"', `useAutoFormatting="${def.autofit === false ? 0 : 1}"`,
+    'applyAlignmentFormats="0"', 'applyWidthHeightFormats="1"', 'dataCaption="값"', ...(onRows ? ['dataOnRows="1"'] : []), 'updatedVersion="6"', 'minRefreshableVersion="3"', `useAutoFormatting="${def.autofit === false ? 0 : 1}"`,
     ...(def.mergeLabels ? ['mergeItem="1"'] : []), ...(def.showHeaders === false ? ['showHeaders="0"'] : []), ...(def.preserveFormat === false ? ['preserveFormatting="0"'] : []), ...(def.multiFilters ? [] : []), ...(def.enableDrill === false ? ['enableDrill="0"'] : []),
     ...(d.rowCaption ? [`rowHeaderCaption="${esc(d.rowCaption)}"`] : []),
     ...(d.grandCaption ? [`grandTotalCaption="${esc(d.grandCaption)}"`] : []),
@@ -3180,7 +3191,7 @@ function pivotParts(wb, si, def, cache, name, pool) {
   const tableXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<pivotTableDefinition xmlns="${NS_MAIN}" ${tableAttrs.join(' ')}>`
     + `<location ref="${rangeRef(loc)}" firstHeaderRow="${firstHeaderRow}" firstDataRow="${meta.headerRows}" firstDataCol="${meta.labelCols}"${pageF.length ? ` rowPageCount="${pageF.length}" colPageCount="1"` : ''}/>`
     + `<pivotFields count="${header.length}">${pivotFields}</pivotFields>`
-    + (rowF.length ? `<rowFields count="${rowF.length}">${rowF.map((f) => `<field x="${f}"/>`).join('')}</rowFields>` : '')
+    + (rowF.length || onRows ? `<rowFields count="${rowF.length + (onRows ? 1 : 0)}">${[...rowF, ...(onRows ? [-2] : [])].map((f) => `<field x="${f}"/>`).join('')}</rowFields>` : '')
     + `<rowItems count="${rowXml.length}">${rowXml.join('')}</rowItems>`
     + (colFieldsAll.length ? `<colFields count="${colFieldsAll.length}">${colFieldsAll.map((f) => `<field x="${f}"/>`).join('')}</colFields>` : '')
     + `<colItems count="${colXml.length}">${colXml.join('')}</colItems>`

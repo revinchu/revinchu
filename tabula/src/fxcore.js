@@ -186,7 +186,11 @@ export function compareValues(a, b) {
   if (ra !== rb) return ra - rb;
   if (typeof a === 'string') return compareText(a, b);
   if (typeof a === 'boolean') return (a ? 1 : 0) - (b ? 1 : 0);
-  return a < b ? -1 : a > b ? 1 : 0;
+  if (a === b) return 0;
+  // 엑셀은 숫자를 유효 숫자 15자리로 비교 (3977975.925 = 3977975.9249999993)
+  const x = r15(a);
+  const y = r15(b);
+  return x < y ? -1 : x > y ? 1 : 0;
 }
 
 // ───────────────────────── 인수 모으기 ─────────────────────────

@@ -153,3 +153,34 @@ test('시간 기본 형식 (h:mm:ss 는 24시간) · 표 참조 표기 표1[#All
   assert.equal(formatValue(0.65625, BUILTIN_FMT[18]).text, '오후 3:45');
   assert.equal(canonicalRef('k', '#All'), 'k[#All]');
 });
+
+test('피벗: Σ 값을 행 영역에 (dataOnRows) · 같은 필드를 행/열에 둔 두 피벗', () => {
+  const wb = new Workbook();
+  put(wb, [['매체', '비용', '클릭'], ['a', '10', '1'], ['b', '20', '2'], ['a', '5', '3']]);
+  const base = { source: 'Sheet1', range: { r1: 0, c1: 0, r2: 3, c2: 2 }, pages: [], filters: {}, layout: 'tabular', top: 0, left: 5, grandRows: false, grandCols: false };
+  const values = [{ field: '비용', agg: 'sum', name: '광고비' }, { field: '클릭', agg: 'sum', name: '클릭수' }];
+  // 열 필드 = 매체, 값은 행으로: 값 이름이 행 머리글 ('값' 열)
+  const g = pivotOf(wb, { ...base, rows: [], cols: ['매체'], values, valuesOnRows: true }).grid;
+  assert.deepEqual(g, [['', '매체', ''], ['값', 'a', 'b'], ['광고비', '15', '20'], ['클릭수', '4', '2']]);
+  // 같은 원본에서 매체를 행에 둔 피벗 (묶음 결과를 공유해도 행 · 열이 바뀌면 안 됨)
+  const r = pivotOf(wb, { ...base, rows: ['매체'], cols: [], values }).grid;
+  assert.deepEqual(r.slice(1).map((x) => x[0]), ['a', 'b']);
+  // 행 필드 + 값 행: 항목마다 값 필드 수만큼 행, 총합계는 '전체 …'
+  const t = pivotOf(wb, { ...base, rows: ['매체'], cols: [], values, valuesOnRows: true, grandRows: true }).grid;
+  assert.deepEqual(t, [['매체', '값', ''], ['a', '광고비', '15'], ['', '클릭수', '4'], ['b', '광고비', '20'], ['', '클릭수', '2'], ['전체 광고비', '', '35'], ['전체 클릭수', '', '6']]);
+});
+
+test('순환 참조: 고리 전체가 파일에 저장된 값을 유지 · 숫자 비교는 유효 숫자 15자리', () => {
+  const wb = new Workbook();
+  wb.setInput(0, 0, 0, '=B1+1');
+  wb.setInput(0, 0, 1, '=A1*2');
+  wb.getCell(0, 0, 0).cached = 5;
+  wb.getCell(0, 0, 1).cached = 10;
+  wb.invalidate(0);
+  assert.equal(wb.getValue(0, 0, 1), 10);
+  assert.equal(wb.getValue(0, 0, 0), 5);
+  wb.setInput(0, 2, 0, '3977975.925');
+  wb.setInput(0, 2, 1, '=3977975.9249999993');
+  assert.equal(calc(wb, '=A3=B3'), true);
+  assert.equal(calc(wb, '=MAX(A3:B3)>B3'), false);
+});

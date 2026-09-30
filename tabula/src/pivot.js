@@ -531,6 +531,7 @@ export function normalizeDef(def, header) {
     rowCaption: def.rowCaption ?? null,
     colCaption: def.colCaption ?? null,
     ...(Number.isInteger(def.valuesPos) ? { valuesPos: def.valuesPos } : {}),
+    ...(def.valuesOnRows ? { valuesOnRows: true } : {}), // Σ 값을 행 영역에 (엑셀 dataOnRows)
     styleOpts: { rowHeaders: true, colHeaders: true, bandRows: false, bandCols: false, ...(def.styleOpts ?? {}) },
     header: allHeader,
   };
@@ -856,7 +857,7 @@ function cubeGroups(cube, filters, d, measures) {
   const dimOf = (j) => (specOf(j) ? groupedColumn(cube, j, specOf(j)) : j);
   const dims = [...rowIdx, ...colIdx].filter(valid).map(dimOf);
   const slots = measures.cols.map((c) => (valid(c) ? c : -1));
-  const key = JSON.stringify([[...rowIdx, ...colIdx].filter(valid).map((j) => [j, specOf(j)]), slots, measures.needs]);
+  const key = JSON.stringify([rowIdx.length, [...rowIdx, ...colIdx].filter(valid).map((j) => [j, specOf(j)]), slots, measures.needs]);
   const fkey = JSON.stringify(filters.map(([j, set]) => [j, [...set].sort()]));
   let memo = groupMemo.get(cube);
   if (!memo) { memo = new Map(); groupMemo.set(cube, memo); }
@@ -1337,14 +1338,17 @@ export function computePivot(input, d) {
   // 열 머리글 잎 목록: { cp, vi, kind: 'item' | 'sub' | 'grand', labels: [수준별 글자] }
   const Lc = colIdx.length;
   const multiV = V > 1;
-  const VI = V ? [...Array(V).keys()] : [-1];
+  // Σ 값이 행 영역에 있으면 (엑셀 dataOnRows) 값 이름은 행 머리글 · 열 잎은 값 구분 없음
+  const onRows = multiV && !!d.valuesOnRows;
+  const colMulti = multiV && !onRows;
+  const VI = V && !onRows ? [...Array(V).keys()] : [-1];
   const colLeaves = [];
   const setParents = (n) => n.children.forEach((c) => { c.parent = n.depth >= 0 ? n : null; setParents(c); });
   setParents(colTree);
   const walkCols = (node, labels) => {
     if (node.depth === Lc - 1 || !node.children.length || isColl('c', node)) {
       const pad = Array(Math.max(0, Lc - 1 - node.depth)).fill('');
-      for (const vi of VI) colLeaves.push({ cp: node.path, vi, kind: 'item', labels: [...labels, ...pad, ...(multiV ? [valueName(values[vi])] : [])], node });
+      for (const vi of VI) colLeaves.push({ cp: node.path, vi, kind: 'item', labels: [...labels, ...pad, ...(colMulti ? [valueName(values[vi])] : [])], node });
       return;
     }
     node.children.forEach((ch) => walkCols(ch, [...labels, icap('c', ch)]));
@@ -1353,13 +1357,13 @@ export function computePivot(input, d) {
     }
   };
   if (Lc) colTree.children.forEach((ch) => walkCols(ch, [icap('c', ch)]));
-  else if (V) for (const vi of VI) colLeaves.push({ cp: '', vi, kind: 'item', labels: multiV ? [valueName(values[vi])] : [], node: colTree });
+  else if (V) for (const vi of VI) colLeaves.push({ cp: '', vi, kind: 'item', labels: colMulti ? [valueName(values[vi])] : [], node: colTree });
   if (Lc && d.grandCols && V) {
-    for (const vi of VI) colLeaves.push({ cp: '', vi, kind: 'grand', labels: [multiV ? `전체 ${valueName(values[vi])}` : d.grandCaption ?? TOTAL], node: colTree });
+    for (const vi of VI) colLeaves.push({ cp: '', vi, kind: 'grand', labels: [colMulti ? `전체 ${valueName(values[vi])}` : d.grandCaption ?? TOTAL], node: colTree });
   }
   // Σ 값 위치 (엑셀의 열 영역에서 '값'을 위아래로 옮긴 것): vp 번째 수준에 값 이름, 그보다 안쪽 항목은 값마다 반복
   // 예) [월, 값] → 4월 지표들 · 5월 지표들 / [값, 월] → 지표마다 4월 · 5월이 나란히
-  const vp = multiV && Lc ? Math.max(0, Math.min(Lc, d.valuesPos ?? Lc)) : Lc;
+  const vp = colMulti && Lc ? Math.max(0, Math.min(Lc, d.valuesPos ?? Lc)) : Lc;
   if (vp < Lc) {
     const groupOf = (leaf) => {
       if (leaf.kind === 'grand') return '\u0002grand';
@@ -1409,8 +1413,8 @@ export function computePivot(input, d) {
   const layout = d.layout;
   const Lr = rowIdx.length;
   // 행 · 열 필드가 없고 값만 있으면 엑셀은 레이블 열 없이 값 이름과 합계만 (총합계 글자 없음)
-  const noLabel = Lr === 0 && colIdx.length === 0;
-  const labelCols = noLabel ? 0 : layout === 'compact' ? 1 : Math.max(1, Lr);
+  const noLabel = Lr === 0 && colIdx.length === 0 && !onRows;
+  const labelCols = noLabel ? 0 : layout === 'compact' ? 1 : Math.max(1, Lr + (onRows ? 1 : 0));
   const grid = [];
   const rowItems = [];
 
@@ -1434,21 +1438,21 @@ export function computePivot(input, d) {
   if (pageRows.length) { pushAll(grid, pageRows); grid.push([]); }
 
   // 열 머리글
-  const colLevels = Lc + (multiV ? 1 : 0);
+  const colLevels = Lc + (colMulti ? 1 : 0);
   const hasColHead = colLevels > 0;
   const valueCaption = V === 1 ? valueName(values[0]) : '';
   const rowHeaderCells = () => {
     if (noLabel) return [];
     if (d.showHeaders === false) return Array.from({ length: labelCols }, (_, i) => text('', `rowHead:${i}`));
-    if (layout === 'compact') return [text(Lr ? d.rowCaption ?? '행 레이블' : '', 'rowHead:0')];
-    return Array.from({ length: labelCols }, (_, i) => text(d.rows[i] === undefined ? '' : fcap(d.rows[i]), `rowHead:${i}`));
+    if (layout === 'compact') return [text(Lr || onRows ? d.rowCaption ?? '행 레이블' : '', 'rowHead:0')];
+    return Array.from({ length: labelCols }, (_, i) => text(d.rows[i] === undefined ? (onRows && i === Lr ? '값' : '') : fcap(d.rows[i]), `rowHead:${i}`));
   };
   if (hasColHead) {
     // 열 필드가 있으면 맨 위에 '값 이름 | 열 레이블' 행 (값 필드만 여러 개면 생략)
     // 압축 형식은 '열 레이블' 하나, 개요 · 테이블 형식은 열 필드마다 필드 이름 (값 자리는 '값')
     if (Lc) {
       const caps = d.showHeaders === false ? [] : layout === 'compact' ? [d.colCaption ?? '열 레이블']
-        : Array.from({ length: colLevels }, (_, lvl) => { const vLvl = multiV ? vp : -1; return lvl === vLvl ? '값' : fcap(d.cols[vLvl >= 0 && lvl > vLvl ? lvl - 1 : lvl]); });
+        : Array.from({ length: colLevels }, (_, lvl) => { const vLvl = colMulti ? vp : -1; return lvl === vLvl ? '값' : fcap(d.cols[vLvl >= 0 && lvl > vLvl ? lvl - 1 : lvl]); });
       grid.push([text(valueCaption, 'valueCaption'), ...Array(labelCols - 1).fill(null).map(() => text('', 'corner')), ...colLeaves.map((_, k) => text(caps[k] ?? '', 'colHead'))]);
     }
     for (let lvl = 0; lvl < colLevels; lvl++) {
@@ -1460,7 +1464,7 @@ export function computePivot(input, d) {
         const groupKey = leaf.labels.slice(0, lvl + 1).join('\u0001');
         const show = lab !== undefined && (lvl === colLevels - 1 || groupKey !== prev);
         prev = groupKey;
-        const vLvl = multiV ? vp : -1; // 값 이름이 있는 머리글 수준
+        const vLvl = colMulti ? vp : -1; // 값 이름이 있는 머리글 수준
         const cl = vLvl >= 0 && lvl > vLvl ? lvl - 1 : lvl; // 열 필드 수준
         const role = leaf.kind === 'grand' ? `grandHead:${Math.max(0, leaf.vi)}` : leaf.kind === 'sub' ? 'colSubHead' : lvl === vLvl ? `valueHead:${leaf.vi}` : `colItem:${cl}`;
         const cell = text(show ? lab : '', role);
@@ -1481,8 +1485,8 @@ export function computePivot(input, d) {
   const firstDataRowRel = grid.length - pageRows.length - (pageRows.length ? 1 : 0);
 
   // 본문
-  const dataRole = (leaf, rowKind) => {
-    const vi = Math.max(0, leaf.vi);
+  const dataRole = (leaf, rowKind, vi0 = leaf.vi) => {
+    const vi = Math.max(0, vi0);
     if (rowKind === 'grand') return `grandData:${vi}`;
     if (leaf.kind === 'grand') return `grandColData:${vi}`;
     if (rowKind === 'sub') return `subData:${vi}`;
@@ -1490,7 +1494,23 @@ export function computePivot(input, d) {
     if (leaf.kind === 'sub') return `colSubData:${vi}`;
     return `data:${vi}`;
   };
-  const valueCells = (rpath, rowKind) => colLeaves.map((leaf) => val(cellValue(rpath, leaf.cp, leaf.vi), leaf.vi, dataRole(leaf, rowKind)));
+  const valueCells = (rpath, rowKind, rvi = -1) => colLeaves.map((leaf) => {
+    const vi = leaf.vi < 0 && rvi >= 0 ? rvi : leaf.vi;
+    return val(cellValue(rpath, leaf.cp, vi), vi, dataRole(leaf, rowKind, vi));
+  });
+  // 값이 행 영역에 있을 때: 한 항목 → 값 필드마다 한 행 (값 이름은 '값' 열, 압축 형식은 들여 쓴 하위 행)
+  const sigCol = layout === 'compact' ? 0 : labelCols - 1;
+  const pushValueRows = (cells, rpath, kind, info, labelRole = `rowItem:${Lr}`, depth = 0) => {
+    for (let vi = 0; vi < V; vi++) {
+      const row = vi === 0 || d.repeatLabels ? cells.map((c) => ({ ...c, style: { ...c.style } })) : cells.map((c) => text('', c.role));
+      const at = kind === 'grand' ? 0 : sigCol;
+      row[at] = text(kind === 'grand' ? `전체 ${valueName(values[vi])}` : valueName(values[vi]), labelRole);
+      if (layout === 'compact' && depth > 0) row[at].style.indent = depth;
+      grid.push([...row, ...valueCells(rpath, kind, vi)]);
+      rowItems.push({ ...info, vi });
+    }
+  };
+  const blankData = () => colLeaves.map((leaf) => text('', `groupData:${Math.max(0, leaf.vi)}`));
   const labelsRow = (node, labelText, role, withToggle = false) => {
     const cells = Array.from({ length: labelCols }, () => text('', role));
     const col = layout === 'compact' ? 0 : node.depth;
@@ -1526,42 +1546,56 @@ export function computePivot(input, d) {
           if (!lastPath.shown.has(n.path)) { const tg = toggleOf('r', n); if (tg) cells[dd].toggle = { axis: 'r', ...tg }; }
           lastPath.shown.add(n.path);
         });
-        grid.push([...cells, ...valueCells(node.path, coll ? 'sub' : 'item')]);
-        rowItems.push({ kind: 'item', node, chain, coll });
+        if (onRows) pushValueRows(cells, node.path, coll ? 'sub' : 'item', { kind: 'item', node, chain, coll });
+        else {
+          grid.push([...cells, ...valueCells(node.path, coll ? 'sub' : 'item')]);
+          rowItems.push({ kind: 'item', node, chain, coll });
+        }
         blankAfter(node);
         return;
       }
       node.children.forEach((ch) => walkRows(ch, lastPath));
       if (subOn('r', node)) {
-        grid.push([...labelsRow(node, subCap('r', node), `rowSub:${node.depth}`), ...valueCells(node.path, 'sub')]);
-        rowItems.push({ kind: 'sub', node });
+        if (onRows) pushValueRows(labelsRow(node, subCap('r', node), `rowSub:${node.depth}`), node.path, 'sub', { kind: 'sub', node }, `rowSub:${node.depth}`);
+        else {
+          grid.push([...labelsRow(node, subCap('r', node), `rowSub:${node.depth}`), ...valueCells(node.path, 'sub')]);
+          rowItems.push({ kind: 'sub', node });
+        }
       }
       blankAfter(node);
       return;
     }
     const group = !isLeaf;
     // 부분합: 그룹 맨 위(기본) 또는 맨 아래 '… 요약' 행, 축소한 항목은 자기 행에 합계
-    const valuesHere = coll || !group || (subOn('r', node) && d.subtotalTop);
+    const valuesHere = coll || !group || (subOn('r', node) && d.subtotalTop && !onRows);
     const cells = labelsRow(node, icap('r', node), group ? `rowGroup:${node.depth}` : coll ? `rowGroup:${node.depth}` : `rowItem:${node.depth}`, true);
-    grid.push([...cells, ...(valuesHere ? valueCells(node.path, coll ? 'group' : group ? 'group' : 'item') : colLeaves.map((leaf) => text('', `groupData:${Math.max(0, leaf.vi)}`)))]);
+    grid.push([...cells, ...(valuesHere && !onRows ? valueCells(node.path, coll ? 'group' : group ? 'group' : 'item') : blankData())]);
     rowItems.push({ kind: 'item', node, coll });
+    if (onRows && valuesHere) pushValueRows(cells.map((c) => text('', c.role)), node.path, coll ? 'group' : 'item', { kind: 'item', node, coll, valueRow: true }, `rowItem:${Lr}`, node.depth + 1);
     if (group) {
       node.children.forEach((ch) => walkRows(ch, lastPath));
-      if (subOn('r', node) && !d.subtotalTop) {
-        grid.push([...labelsRow(node, subCap('r', node), `rowSub:${node.depth}`), ...valueCells(node.path, 'sub')]);
-        rowItems.push({ kind: 'sub', node });
+      if (subOn('r', node) && (!d.subtotalTop || onRows)) {
+        if (onRows) pushValueRows(labelsRow(node, subCap('r', node), `rowSub:${node.depth}`), node.path, 'sub', { kind: 'sub', node }, `rowSub:${node.depth}`, node.depth + 1);
+        else {
+          grid.push([...labelsRow(node, subCap('r', node), `rowSub:${node.depth}`), ...valueCells(node.path, 'sub')]);
+          rowItems.push({ kind: 'sub', node });
+        }
       }
     }
     blankAfter(node);
   };
   setParents(rowTree);
   if (Lr) rowTree.children.forEach((ch) => walkRows(ch, { shown: new Set() }));
+  else if (onRows) pushValueRows(Array.from({ length: labelCols }, () => text('', 'rowItem:0')), '', 'item', { kind: 'item', node: rowTree }, 'rowItem:0');
   else if (V) grid.push([...(noLabel ? [] : [text(d.grandCaption ?? TOTAL, 'grandLabel')]), ...valueCells('', 'grand')]);
   if (Lr && d.grandRows && V) {
     const cells = Array.from({ length: labelCols }, () => text('', 'grandLabel'));
-    cells[0] = text(d.grandCaption ?? TOTAL, 'grandLabel');
-    grid.push([...cells, ...valueCells('', 'grand')]);
-    rowItems.push({ kind: 'grand' });
+    if (onRows) pushValueRows(cells, '', 'grand', { kind: 'grand' }, 'grandLabel');
+    else {
+      cells[0] = text(d.grandCaption ?? TOTAL, 'grandLabel');
+      grid.push([...cells, ...valueCells('', 'grand')]);
+      rowItems.push({ kind: 'grand' });
+    }
   }
 
   const width = labelCols + colLeaves.length;

@@ -503,7 +503,10 @@ export class Workbook {
     // 순환 참조: 파일에 저장된 마지막 값이 있으면 그 값 (엑셀도 반복 계산을 끈 순환 참조는 마지막 값을 유지)
     if (this.evaluating.has(k)) {
       if (cell.cached === undefined) return ERR.CIRC;
-      (this.circHits ??= new Set()).add(k);
+      // 고리에 든 칸(계산 중인 칸 중 k 부터 위쪽 전부)은 모두 파일의 마지막 값을 유지 (엑셀은 순환 참조를 계산하지 않음)
+      const hits = (this.circHits ??= new Set());
+      let on = false;
+      for (const x of this.evaluating) { if (x === k) on = true; if (on) hits.add(x); }
       return cachedValue(cell.cached);
     }
     if (this.depth > 0 || this.warming) return this.evalCell(k, cell, si, r, c);
@@ -550,7 +553,7 @@ export class Workbook {
     // 지원하지 않는 함수는 파일에 저장된 계산 결과를 그대로 표시
     if (v === ERR.NAME && cell.cached !== undefined) v = cachedValue(cell.cached);
     // 순환이 이 칸에서 닫힘: 엑셀처럼 계산하지 않고 마지막 값 유지 (=G24/J24 를 J24 에)
-    if (this.circHits?.has(k)) { this.circHits.delete(k); v = cachedValue(cell.cached); }
+    if (this.circHits?.has(k)) { this.circHits.delete(k); if (cell.cached !== undefined) v = cachedValue(cell.cached); }
     if (v instanceof Range) v = this.placeSpill(`${si}:${r},${c}`, si, r, c, v);
     (this.caches[si] ??= new CellMap()).setRC(r, c, v);
     return v;

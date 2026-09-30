@@ -7665,6 +7665,7 @@ function renderPivotPane(entry) {
     }
     if (next.valuesPos != null && next.valuesPos >= (next.cols ?? []).length) delete next.valuesPos;
     if (next.pages && !next.pages.length) delete next.pages;
+    for (const k of Object.keys(next)) if (next[k] === undefined) delete next[k];
     setPivotDef(entry, next);
     refreshPivotPane(true);
   };
@@ -7768,17 +7769,24 @@ function renderPivotPane(entry) {
     const box = el('div', { class: 'pp-area' });
     const items = area === 'values' ? areas.values.map((v, i) => ({ name: v.field, label: valueName(v), i })) : areas[area].map((n, i) => ({ name: n, label: n, i }));
     // 값이 둘 이상이면 열 영역에 'Σ 값' — 엑셀처럼 위아래로 옮겨 지표별(4월·5월 나란히) / 월별 배치를 고름
-    const sigmaAt = area === 'cols' && areas.values.length > 1 ? Math.min(areas.cols.length, def.valuesPos ?? areas.cols.length) : -1;
+    // 행 영역에 두면(엑셀 '값'을 행 레이블로) 항목마다 지표가 한 행씩
+    const sigmaRows = areas.values.length > 1 && !!def.valuesOnRows;
+    const sigmaAt = area === 'cols' && areas.values.length > 1 && !sigmaRows ? Math.min(areas.cols.length, def.valuesPos ?? areas.cols.length)
+      : area === 'rows' && sigmaRows ? areas.rows.length : -1;
     if (sigmaAt >= 0) {
       const row = el('div', { class: 'pp-item sigma', draggable: 'true', title: '값 필드들의 위치 — 위로 올리면 지표마다 열 항목이 나란히 붙습니다' }, el('span', { class: 'pp-label' }, 'Σ 값'));
       const menuBtn = el('button', { type: 'button', class: 'pp-menu', title: '이동' }, '▾');
       row.append(menuBtn);
-      row.addEventListener('dragstart', (e) => { pivotDrag = { sigma: true, from: 'cols', index: sigmaAt }; e.dataTransfer.setData('text/plain', 'Σ'); });
-      menuBtn.addEventListener('click', () => openMenu(menuBtn, [
+      row.addEventListener('dragstart', (e) => { pivotDrag = { sigma: true, from: area, index: sigmaAt }; e.dataTransfer.setData('text/plain', 'Σ'); });
+      menuBtn.addEventListener('click', () => openMenu(menuBtn, sigmaRows ? [
+        { label: '열 레이블로 이동', action: () => apply({ valuesOnRows: undefined }) },
+      ] : [
         { label: '위로 이동', disabled: sigmaAt === 0, action: () => apply({ valuesPos: sigmaAt - 1 }) },
         { label: '아래로 이동', disabled: sigmaAt >= areas.cols.length, action: () => apply({ valuesPos: sigmaAt + 1 }) },
         { label: '처음으로 이동', disabled: sigmaAt === 0, action: () => apply({ valuesPos: 0 }) },
         { label: '끝으로 이동', disabled: sigmaAt >= areas.cols.length, action: () => apply({ valuesPos: areas.cols.length }) },
+        { sep: true },
+        { label: '행 레이블로 이동', action: () => apply({ valuesOnRows: true, valuesPos: undefined }) },
       ]));
       box.append(row);
     }
@@ -7821,8 +7829,9 @@ function renderPivotPane(entry) {
       // 'Σ 값'이 있는 열 영역: 화면 위치 → 필드 위치 · 값 위치
       const sig = rows.findIndex((r) => r.classList.contains('sigma'));
       if (dr.sigma) {
-        if (area !== 'cols') { toast('Σ 값은 열 영역 안에서만 옮길 수 있습니다.'); return; }
-        apply({ valuesPos: rows.slice(0, at).filter((r) => !r.classList.contains('sigma')).length });
+        if (area === 'rows') { apply({ valuesOnRows: true, valuesPos: undefined }); return; }
+        if (area !== 'cols') { toast('Σ 값은 행 · 열 영역에만 둘 수 있습니다.'); return; }
+        apply({ valuesOnRows: undefined, valuesPos: rows.slice(0, at).filter((r) => !r.classList.contains('sigma')).length });
         return;
       }
       if (area === 'cols' && sig >= 0) {
