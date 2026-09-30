@@ -495,8 +495,17 @@ function* domRows(data) {
 }
 
 /** 수식 모양: 셀 참조의 행 번호를 # 로 (함수 이름 LOG10( 등은 그대로). 길이 제한 */
+const SHAPE_RE = /(\$?\b[A-Za-z]{1,3}\$?)\d+(?![\d(.])/g;
 function formulaShape(f) {
-  return f.length > 2000 ? null : f.replace(/(\$?\b[A-Za-z]{1,3}\$?)\d+(?![\d(.])/g, '$1#');
+  return f.length > 2000 ? null : f.replace(SHAPE_RE, '$1#');
+}
+/** 모양의 # 자리에 수식 f 의 행 번호를 차례로 채움 (변환 결과 모양 → 이 칸의 변환 결과) */
+function fillShape(shape, f) {
+  const nums = [];
+  f.replace(SHAPE_RE, (m, p) => { nums.push(m.slice(p.length)); return m; });
+  let i = 0;
+  const out = shape.replace(/(\$?\b[A-Za-z]{1,3}\$?)#/g, (m, p) => `${p}${nums[i++]}`);
+  return i === nums.length ? out : null;
 }
 
 /** 파일 수식 → 앱 수식 본문 (_xlfn. 등 접두사 제거, SINGLE → @, ANCHORARRAY → #) */
@@ -637,11 +646,20 @@ function* readSheet(files, path, ctx) {
           // 채우기로 만든 수식은 행 번호만 다름: 같은 모양(행 번호를 뺀 글자)이 바꿀 것 없이 그대로였으면 해석하지 않음
           const shape = legacy ? formulaShape(formula) : null;
           const known = shape !== null ? formulaMemo.shape.get(shape) : undefined;
-          if (known !== undefined) conv = { raw: `=${formula}`, unknown: known };
+          // 변환이 행 번호와 무관하면(Sheet!#REF! → #REF! 등) 변환된 모양에 이 칸의 행 번호를 채움
+          const filled = known?.out !== undefined ? fillShape(known.out, formula) : null;
+          if (known !== undefined && known.out === undefined) conv = { raw: `=${formula}`, unknown: known.unknown };
+          else if (filled !== null) conv = { raw: `=${filled}`, unknown: known.unknown };
           else {
             const f = cleanFormula(formula, { legacy, isName: ctx.isName, nameMulti: ctx.nameMulti });
             conv = { raw: `=${f}`, unknown: unknownFunctions(f, ctx.isName).length > 0 };
-            if (shape !== null && f === formula) formulaMemo.shape.set(shape, conv.unknown);
+            if (shape !== null && !formulaMemo.shape.has(shape)) {
+              if (f === formula) formulaMemo.shape.set(shape, { unknown: conv.unknown });
+              else {
+                const out = formulaShape(f);
+                if (out !== null && fillShape(out, formula) === f) formulaMemo.shape.set(shape, { unknown: conv.unknown, out });
+              }
+            }
           }
           if (memo.size < 200000) memo.set(formula, conv);
         }

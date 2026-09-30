@@ -184,3 +184,28 @@ test('순환 참조: 고리 전체가 파일에 저장된 값을 유지 · 숫�
   assert.equal(calc(wb, '=A3=B3'), true);
   assert.equal(calc(wb, '=MAX(A3:B3)>B3'), false);
 });
+
+test('열 전체 참조(B:B) 수식도 모양이 같으면 AST 공유 · 파일의 시트!#REF! 수식 모양 재사용', async () => {
+  const { formulaShifter } = await import('../src/workbook.js');
+  assert.equal(formulaShifter('=SUMIFS(K:K,$E:$E,D6)+SUM(3:3)')(1, 1), '=SUMIFS(L:L,$E:$E,E7)+SUM(4:4)');
+  const wb = new Workbook();
+  put(wb, [['a', '1', 'x'], ['b', '2', 'y'], ['a', '3', 'x']]);
+  wb.transact(() => { for (let r = 0; r < 3; r++) wb.setInput(0, r, 4, `=SUMIFS(B:B,A:A,A${r + 1})`); });
+  assert.deepEqual([0, 1, 2].map((r) => wb.getValue(0, r, 4)), [4, 2, 4]);
+  assert.equal(wb.getCell(0, 0, 4).ast, wb.getCell(0, 2, 4).ast);
+  const { readXlsx } = await import('../src/xlsx.js');
+  const { zip } = await import('../src/zip.js');
+  const NS = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+  const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+  const rows = [1, 2, 3].map((r) => `<row r="${r}"><c r="A${r}"><v>${r}</v></c><c r="B${r}" t="e"><f>IF(A${r}=1,SUM(S!#REF!),A${r}*2)</f><v>#REF!</v></c></row>`).join('');
+  const bytes = zip({
+    '[Content_Types].xml': '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/></Types>',
+    '_rels/.rels': `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL}/officeDocument" Target="xl/workbook.xml"/></Relationships>`,
+    'xl/workbook.xml': `<?xml version="1.0"?><workbook ${NS}><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+    'xl/_rels/workbook.xml.rels': `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL}/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`,
+    'xl/worksheets/sheet1.xml': `<?xml version="1.0"?><worksheet ${NS}><sheetData>${rows}</sheetData></worksheet>`,
+  });
+  const s = readXlsx(bytes).data.sheets[0];
+  const first = s.cells.get('0,1').raw;
+  assert.equal(s.cells.get('2,1').raw, first.replace(/A1/g, 'A3'));
+});

@@ -65,7 +65,7 @@ const letter = (ch) => (ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122);
 const digit = (ch) => ch >= 48 && ch <= 57;
 /**
  * 수식 글자에서 A1 참조를 찾아 [글자, {cabs, ci, rabs, ri}, 글자, …] 로 나눔.
- * 글자열 · 작은따옴표 시트 이름 · 표 참조 [...] 안은 그대로 둠. 열 전체 · 행 전체 참조가 있거나 참조가 없으면 null
+ * 열 전체(B:B) · 행 전체(1:1)는 { cols | rows, … } 조각. 글자열 · 작은따옴표 시트 이름 · 표 참조 [...] 안은 그대로 둠. 참조가 없으면 null
  */
 function scanRefs(text) {
   const n = text.length;
@@ -117,7 +117,25 @@ function scanRefs(text) {
           i = j;
           continue;
         }
-        if (nd === 0 && !rabs && nx === 58) return null; // A:A (열 전체)
+        if (nd === 0 && !rabs && nx === 58) {
+          // A:A · $A:$C (열 전체): 열만 옮겨짐
+          let k = j + 1;
+          const cabs2 = text.charCodeAt(k) === 36;
+          if (cabs2) k++;
+          const ls2 = k;
+          while (k < n && letter(text.charCodeAt(k))) k++;
+          const nx2 = k < n ? text.charCodeAt(k) : 0;
+          if (k - ls2 < 1 || k - ls2 > 3 || wordish(nx2) || nx2 === 40 || nx2 === 33) return null;
+          const colOf = (a, b) => { let v = 0; for (let q = a; q < b; q++) v = v * 26 + (text.charCodeAt(q) & 31); return v - 1; };
+          const ci = colOf(ls, ls + nl);
+          const ci2 = colOf(ls2, k);
+          if (ci > 16383 || ci2 > 16383) return null;
+          segs.push(text.slice(last, i), { cols: true, cabs, ci, cabs2, ci2 });
+          last = k;
+          refs++;
+          i = k;
+          continue;
+        }
       }
       while (i < n && wordish(text.charCodeAt(i))) i++;
       continue;
@@ -125,7 +143,26 @@ function scanRefs(text) {
     if (digit(ch)) {
       let j = i;
       while (j < n && digit(text.charCodeAt(j))) j++;
-      if (text.charCodeAt(j) === 58) { const k = text.charCodeAt(j + 1); if (digit(k) || k === 36) return null; } // 1:1 (행 전체)
+      if (text.charCodeAt(j) === 58) {
+        // 1:1 · 2:$5 (행 전체): 행만 옮겨짐
+        let k = j + 1;
+        const rabs2 = text.charCodeAt(k) === 36;
+        if (rabs2) k++;
+        const ds2 = k;
+        while (k < n && digit(text.charCodeAt(k))) k++;
+        if (k > ds2) {
+          const nx2 = k < n ? text.charCodeAt(k) : 0;
+          const ri = +text.slice(i, j) - 1;
+          const ri2 = +text.slice(ds2, k) - 1;
+          if (wordish(nx2) || nx2 === 40 || nx2 === 33 || ri < 0 || ri2 < 0 || j - i > 8 || k - ds2 > 8) return null;
+          segs.push(text.slice(last, i), { rows: true, rabs: false, ri, rabs2, ri2 });
+          last = k;
+          refs++;
+          i = k;
+          continue;
+        }
+        if (rabs2) return null;
+      }
       i = j;
       while (i < n && wordish(text.charCodeAt(i))) i++;
       continue;
@@ -144,6 +181,8 @@ function shareKey(text, r, c) {
   let out = '';
   for (const x of segs) {
     if (typeof x === 'string') out += x;
+    else if (x.cols) out += `\u0002${x.cabs ? `C${x.ci}` : `c${x.ci - c}`}:${x.cabs2 ? `C${x.ci2}` : `c${x.ci2 - c}`}`;
+    else if (x.rows) out += `\u0003${x.rabs ? `R${x.ri}` : `r${x.ri - r}`}:${x.rabs2 ? `R${x.ri2}` : `r${x.ri2 - r}`}`;
     else out += `\u0001${x.cabs ? `C${x.ci}` : `c${x.ci - c}`}${x.rabs ? `R${x.ri}` : `r${x.ri - r}`}`;
   }
   return out;
@@ -171,6 +210,20 @@ export function formulaShifter(raw) {
     let out = '=';
     for (const x of segs) {
       if (typeof x === 'string') { out += x; continue; }
+      if (x.cols) {
+        const a = x.cabs ? x.ci : x.ci + dc;
+        const b = x.cabs2 ? x.ci2 : x.ci2 + dc;
+        if (a < 0 || b < 0 || a > 16383 || b > 16383) return null;
+        out += `${x.cabs ? '$' : ''}${colName(a)}:${x.cabs2 ? '$' : ''}${colName(b)}`;
+        continue;
+      }
+      if (x.rows) {
+        const a = x.rabs ? x.ri : x.ri + dr;
+        const b = x.rabs2 ? x.ri2 : x.ri2 + dr;
+        if (a < 0 || b < 0 || a >= MAX_ROWS || b >= MAX_ROWS) return null;
+        out += `${a + 1}:${x.rabs2 ? '$' : ''}${b + 1}`;
+        continue;
+      }
       const c = x.cabs ? x.ci : x.ci + dc;
       const r = x.rabs ? x.ri : x.ri + dr;
       if (c < 0 || r < 0 || c > 16383 || r >= MAX_ROWS) return null;
