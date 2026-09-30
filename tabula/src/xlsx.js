@@ -266,7 +266,8 @@ function readStyles(files, wbRels, theme) {
     if (al) {
       const h = al.attrs.horizontal;
       if (h === 'left' || h === 'center' || h === 'right') st.align = h;
-      else if (h === 'centerContinuous' || h === 'distributed') st.align = 'center';
+      else if (h === 'centerContinuous') st.align = 'centerContinuous';
+      else if (h === 'distributed') st.align = 'center';
       else if (h === 'justify') { st.align = 'left'; st.wrap = true; }
       const v = al.attrs.vertical;
       if (v === 'top') st.valign = 'top';

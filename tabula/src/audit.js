@@ -159,6 +159,8 @@ export const GOTO_KINDS = [
   { id: 'errors', label: '오류 (수식 · 상수)' },
   { id: 'lastCell', label: '마지막 셀' },
   { id: 'visible', label: '화면에 보이는 셀만' },
+  { id: 'rowDiff', label: '동일 행에서 값이 다른 셀' },
+  { id: 'colDiff', label: '동일 열에서 값이 다른 셀' },
   { id: 'condfmt', label: '조건부 서식' },
   { id: 'validation', label: '데이터 유효성' },
 ];
@@ -167,7 +169,9 @@ export const GOTO_KINDS = [
  * 범위 rg 에서 조건에 맞는 칸 [[r, c]] (최대 limit 개).
  * cellAt(r, c) → 셀 객체, valueAt(r, c) → 값, types: { numbers, text, logical, errors } (상수 · 수식일 때)
  */
-export function specialCells(kind, rg, { cellAt, valueAt, hidden, inCond, inValidation, types = null, limit = 1000000 }) {
+const sameVal = (a, b) => (a ?? '') === (b ?? '') || (typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase()) || (isError(a) && isError(b) && a.code === b.code);
+
+export function specialCells(kind, rg, { cellAt, valueAt, hidden, inCond, inValidation, types = null, limit = 1000000, active = null }) {
   const out = [];
   const t = types ?? { numbers: true, text: true, logical: true, errors: true };
   const typeOk = (v) => (typeof v === 'number' ? t.numbers : typeof v === 'string' ? t.text : typeof v === 'boolean' ? t.logical : isError(v) ? t.errors : false);
@@ -183,6 +187,9 @@ export function specialCells(kind, rg, { cellAt, valueAt, hidden, inCond, inVali
         case 'blanks': ok = !cell || (cell.raw === '' && !cell.image); break;
         case 'errors': ok = isError(valueAt(r, c)); break;
         case 'visible': ok = true; break;
+        // 행 내용 차이 (Ctrl+\\): 각 행에서 활성 셀과 같은 열의 값과 다른 칸 · 열 내용 차이 (Ctrl+Shift+|)
+        case 'rowDiff': ok = c !== (active?.c ?? rg.c1) && !sameVal(valueAt(r, c), valueAt(r, active?.c ?? rg.c1)); break;
+        case 'colDiff': ok = r !== (active?.r ?? rg.r1) && !sameVal(valueAt(r, c), valueAt(active?.r ?? rg.r1, c)); break;
         case 'condfmt': ok = !!inCond?.(r, c); break;
         case 'validation': ok = !!inValidation?.(r, c); break;
         default: break;

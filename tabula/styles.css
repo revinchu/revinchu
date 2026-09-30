@@ -1254,3 +1254,4 @@ body.view-mode .titlebar, body.view-mode .ribbon-tabs, body.view-mode .ribbon, b
 .wn-cat { font-weight: 700; color: var(--green); }
 .wn-sec ul { margin: 0; padding-left: 18px; line-height: 1.6; }
 .qf-ic { display: inline-flex; gap: 1px; font-size: 11px; line-height: 1; min-width: 20px; justify-content: center; }
+.grid-view.move-cursor { cursor: move; }

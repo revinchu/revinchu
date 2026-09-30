@@ -3,7 +3,7 @@ import { resolveStructRef, findTable } from './tables.js';
 import { pivotSourceData, pivotLookup, resolvePivot } from './pivot.js';
 import {
   parse, evaluateArray, evalAny, ERR, compareValues, isError, autoFormatFor, mayReturnArray, Range, RefValue,
-  adjustFormulaForStructure, renameSheetInFormula, shiftFormula, quoteSheetName, MAX_ROWS, MAX_COLS,
+  adjustFormulaForStructure, renameSheetInFormula, shiftFormula, quoteSheetName, MAX_ROWS, MAX_COLS, moveRefsInFormula,
 } from './formula.js';
 import { parseInput } from './format.js';
 import { inBlock, blockValue, blockSet, blockClone, blockShift, rawOf, sortOrder, blockPermute, logicalCol, reorderRows, setRowOrder, materialize } from './block.js';
@@ -1972,6 +1972,73 @@ export class Workbook {
     this.names = this.names.map((n) => {
       const ref = adjustFormulaForStructure(n.ref, { targetSheet: target.name, hostSheet: n.sheet ?? '', axis, index, count, band });
       return ref === n.ref ? n : { ...n, ref };
+    });
+    for (const x of this.affected(si)) this.sheets[x].fileValues = false;
+    this.invalidateStructure();
+    return null;
+  }
+
+  /**
+   * 셀 이동 (엑셀: 선택 영역 테두리를 끌어서 옮기기, 잘라내기 → 붙여넣기): src 를 (dr, dc) 만큼 옮기고 대상은 덮어씀.
+   * 옮긴 칸을 가리키는 모든 수식 · 이름 · 차트 범위도 따라감. 막히면 한국어 메시지를 돌려줌
+   */
+  moveRange(si, src, dr, dc) {
+    if (!dr && !dc) return null;
+    const sh = this.sheets[si];
+    const dst = { r1: src.r1 + dr, c1: src.c1 + dc, r2: src.r2 + dr, c2: src.c2 + dc };
+    if (dst.r1 < 0 || dst.c1 < 0 || dst.r2 >= MAX_ROWS || dst.c2 >= MAX_COLS) return '시트 밖으로는 옮길 수 없습니다.';
+    const over = (a, b) => a.r1 <= b.r2 && a.r2 >= b.r1 && a.c1 <= b.c2 && a.c2 >= b.c1;
+    const inside = (a, b) => a.r1 >= b.r1 && a.r2 <= b.r2 && a.c1 >= b.c1 && a.c2 <= b.c2;
+    if (sh.merges.some((m) => (over(m, src) && !inside(m, src)) || (over(m, dst) && !inside(m, dst)))) return '병합된 셀의 일부를 변경할 수 없습니다.';
+    if ((sh.tables ?? []).some((t) => over(t, src) || over(t, dst))) return '표 안의 셀은 끌어서 옮길 수 없습니다. 잘라내기 · 붙여넣기를 쓰세요.';
+    if (sh.blocks.some((b) => over({ r1: b.r0, c1: b.c0, r2: b.r0 + b.n - 1, c2: b.c0 + b.cols.length - 1 }, { r1: Math.min(src.r1, dst.r1), c1: Math.min(src.c1, dst.c1), r2: Math.max(src.r2, dst.r2), c2: Math.max(src.c2, dst.c2) }))) return '큰 데이터 영역에서는 끌어서 옮길 수 없습니다.';
+    this.snapshotSheet(si);
+    this.snapshotNames();
+    const name = sh.name;
+    const fix = (raw, host) => moveRefsInFormula(raw, { targetSheet: name, hostSheet: host, src, dr, dc });
+    const moved = [];
+    const next = new CellMap();
+    sh.cells.forEachRC((cell, r, c) => {
+      const inSrc = r >= src.r1 && r <= src.r2 && c >= src.c1 && c <= src.c2;
+      if (inSrc) { moved.push([r + dr, c + dc, cell]); return; }
+      if (r >= dst.r1 && r <= dst.r2 && c >= dst.c1 && c <= dst.c2) return; // 덮어씀
+      next.setRC(r, c, cell);
+    });
+    for (const [r, c, cell] of moved) next.setRC(r, c, cell);
+    sh.cells = next;
+    // 수식: 옮긴 칸을 가리키는 참조 이동 (옮긴 수식 자신의 참조는 그대로 — 엑셀과 같음)
+    this.sheets.forEach((sheet, i) => {
+      for (const [k, cell] of [...sheet.cells]) {
+        if (!cell.formula) continue;
+        const raw = fix(cell.raw, sheet.name);
+        const [rr, cc] = k.split(',').map(Number);
+        if (raw === cell.raw && !(i === si && rr >= dst.r1 && rr <= dst.r2 && cc >= dst.c1 && cc <= dst.c2)) continue;
+        const nc = makeCell({ ...cellData(cell), raw }, k);
+        if (i === si) sheet.cells.set(k, nc); else this.swapCell(i, k, nc);
+      }
+    });
+    const mv = (g) => ({ ...g, r1: g.r1 + dr, r2: g.r2 + dr, c1: g.c1 + dc, c2: g.c2 + dc });
+    sh.merges = sh.merges.filter((m) => !inside(m, dst) || inside(m, src)).map((m) => (inside(m, src) ? mv(m) : m));
+    sh.cond = sh.cond.map((rule) => {
+      const rs = [rule, ...(rule.more ?? [])].map((g) => ({ r1: g.r1, c1: g.c1, r2: g.r2, c2: g.c2 }));
+      if (!rs.every((g) => inside(g, src))) return rule;
+      const out = rs.map(mv);
+      const { more, ...rest } = rule;
+      return { ...rest, ...out[0], ...(out.length > 1 ? { more: out.slice(1) } : {}) };
+    });
+    sh.validations = sh.validations.filter((v) => !inside(v, dst) || inside(v, src)).map((v) => (inside(v, src) ? mv(v) : v));
+    this.names = this.names.map((n) => { const ref = fix(n.ref, n.sheet ?? ''); return ref === n.ref ? n : { ...n, ref }; });
+    this.sheets.forEach((s2, i) => {
+      if (!s2.charts?.length) return;
+      const onT = (sheetName, host) => String(sheetName ?? host).toLowerCase() === name.toLowerCase();
+      const nextCharts = s2.charts.map((ch) => {
+        const host = ch.sheet ?? s2.name;
+        const out = { ...ch };
+        if (ch.range && onT(ch.sheet, s2.name) && inside(ch.range, src)) out.range = mv(ch.range);
+        if (ch.series) out.series = ch.series.map((sr) => { const n = { ...sr }; for (const k of ['cat', 'val', 'x', 'size']) if (sr[k] && sr[k].r1 !== undefined && onT(sr[k].sheet, host) && inside(sr[k], src)) n[k] = mv(sr[k]); return n; });
+        return JSON.stringify(out) === JSON.stringify(ch) ? ch : out;
+      });
+      if (nextCharts.some((c, k) => c !== s2.charts[k])) { if (i !== si) this.propSnap(i, 'charts'); s2.charts = nextCharts; }
     });
     for (const x of this.affected(si)) this.sheets[x].fileValues = false;
     this.invalidateStructure();

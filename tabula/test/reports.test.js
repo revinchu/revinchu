@@ -454,3 +454,22 @@ test('조건부 서식 표시 형식 ▲▼ ([빨강] → [Red]) · 조건 구�
   const back = new Workbook(readXlsx(bytes).data);
   assert.equal(formatValue(-3, back.sheets[0].cond[0].style).text, '▼3');
 });
+
+test('셀 이동 (끌어서 옮기기): 옮긴 칸을 가리키는 수식 · 병합 · 조건부 서식이 따라감', () => {
+  const wb = new Workbook({ sheets: [{ name: 'S', cells: {} }, { name: 'T', cells: {} }] });
+  wb.transact(() => { wb.setCellData(0, 0, 0, { raw: '1' }); wb.setCellData(0, 1, 0, { raw: '2' }); wb.setCellData(0, 0, 2, { raw: '=SUM(A1:A2)' }); wb.setCellData(0, 0, 3, { raw: '=A1*10' }); wb.setCellData(1, 0, 0, { raw: '=S!A2+1' }); });
+  wb.transact(() => wb.addCondRule(0, { r1: 0, c1: 0, r2: 1, c2: 0, type: 'formula', formula: '=A1>1', style: { bold: true } }));
+  let res;
+  wb.transact(() => { res = wb.moveRange(0, { r1: 0, c1: 0, r2: 1, c2: 0 }, 5, 1); });
+  assert.equal(res, null);
+  assert.equal(wb.getValue(0, 5, 1), 1);
+  assert.equal(wb.getValue(0, 0, 0), null);
+  assert.equal(wb.getCell(0, 0, 2).raw, '=SUM(B6:B7)');
+  assert.equal(wb.getCell(0, 0, 3).raw, '=B6*10');
+  assert.equal(wb.getCell(1, 0, 0).raw, '=S!B7+1');
+  assert.equal(wb.getValue(1, 0, 0), 3);
+  assert.deepEqual([wb.sheets[0].cond[0].r1, wb.sheets[0].cond[0].c1], [5, 1]);
+  wb.undo();
+  assert.equal(wb.getValue(0, 0, 0), 1);
+  assert.equal(wb.getCell(0, 0, 2).raw, '=SUM(A1:A2)');
+});

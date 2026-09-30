@@ -1133,6 +1133,11 @@ function onGridKey(e) {
   // ── 엑셀 바로 가기 키 ──
   const code = e.code;
   if (ctrl && e.altKey && code === 'KeyV') { handled(); run('pasteSpecial'); return; }
+  // Ctrl+Shift+V: 값만 붙여넣기 (Microsoft 365)
+  if (ctrl && e.shiftKey && !e.altKey && code === 'KeyV') { handled(); pasteFromButton('values'); return; }
+  // Alt+; 화면에 보이는 셀만 선택 · Ctrl+\ 행 내용 차이 · Ctrl+Shift+| 열 내용 차이
+  if (e.altKey && !ctrl && code === 'Semicolon') { handled(); gotoSpecialRun({ kind: 'visible' }); return; }
+  if (ctrl && !e.altKey && code === 'Backslash') { handled(); gotoSpecialRun({ kind: e.shiftKey ? 'colDiff' : 'rowDiff' }); return; }
   if (ctrl && e.altKey && code === 'KeyL') { handled(); run('reapplyFilter'); return; }
   if (ctrl && e.altKey && k === 'F5') { handled(); run('refreshAll'); return; }
   if (e.altKey && !ctrl && k === 'F5') { handled(); run('pivotRefresh'); return; }
@@ -1580,12 +1585,20 @@ function onViewMouseDown(e) {
   if (t.classList.contains('fill-handle')) {
     e.preventDefault();
     if (editing && !commitEdit()) return;
+    // 채우기 핸들 두 번 클릭: 옆 열의 데이터 끝까지 아래로 채우기 (엑셀)
+    if (e.detail >= 2) { drag = null; fillToAdjacentEnd(); return; }
     drag = { type: 'fill', src: { ...sel }, target: null };
     startAutoScroll();
     return;
   }
   const hit = gv.hitTest(e.clientX, e.clientY);
   e.preventDefault();
+  // 선택 영역 테두리를 끌어서 옮기기 (Ctrl: 복사 · Shift: 끼워 넣기) — 엑셀
+  if (e.button === 0 && !editing && selBorderHit(e)) {
+    drag = { type: 'move', src: { ...sel }, grab: { r: Math.max(0, Math.min(hit.r ?? sel.r1, sel.r2) - sel.r1), c: Math.max(0, Math.min(hit.c ?? sel.c1, sel.c2) - sel.c1) }, target: null };
+    startAutoScroll();
+    return;
+  }
   if (hit.zone === 'colHeader' && hit.edgeCol !== null && e.button === 0) {
     drag = { type: 'colResize', c: hit.edgeCol, x: e.clientX, w: wb.colWidth(si, hit.edgeCol), orig: sheet().colWidths[hit.edgeCol] };
     return;
@@ -1650,6 +1663,7 @@ function onViewMouseMove(e) {
   cls.remove('col-resize', 'row-resize', 'col-select', 'row-select', 'default-cursor');
   if (t.closest?.('.obj') || t.classList?.contains('fbtn') || t.classList?.contains('dv-btn')) return;
   const hit = gv.hitTest(e.clientX, e.clientY);
+  cls.toggle('move-cursor', hit.zone === 'cell' && !editing && selBorderHit(e));
   if (hit.zone === 'colHeader') cls.add(hit.edgeCol !== null ? 'col-resize' : 'col-select');
   else if (hit.zone === 'rowHeader') cls.add(hit.edgeRow !== null ? 'row-resize' : 'row-select');
   else if (hit.zone === 'corner') cls.add('default-cursor');
@@ -1665,9 +1679,110 @@ function onViewMouseMove(e) {
   }
 }
 
+/** 마우스가 선택 영역 테두리 위인지 (채우기 핸들 · 행/열 전체 선택 제외) */
+function selBorderHit(e) {
+  if (selKind !== 'cells' || chartSel || painter || borderDraw) return false;
+  const vb = dom.view.getBoundingClientRect();
+  const rc = gv.screenRect(sel);
+  const x = e.clientX - vb.left;
+  const y = e.clientY - vb.top;
+  const T = 4;
+  if (x < rc.x - T || x > rc.x + rc.w + T || y < rc.y - T || y > rc.y + rc.h + T) return false;
+  if (x > rc.x + T && x < rc.x + rc.w - T && y > rc.y + T && y < rc.y + rc.h - T) return false;
+  if (x > rc.x + rc.w - 8 && y > rc.y + rc.h - 8) return false; // 채우기 핸들
+  return true;
+}
+let dragMods = { ctrl: false, shift: false };
+document.addEventListener('mousemove', (e) => { dragMods = { ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey }; }, true);
+document.addEventListener('mouseup', (e) => { dragMods = { ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey }; }, true);
+
+/** 채우기 핸들 두 번 클릭: 왼쪽(없으면 오른쪽) 열의 이어진 데이터 끝까지 채움 */
+function fillToAdjacentEnd() {
+  const src = { ...sel };
+  const endOf = (c) => {
+    if (c < 0 || isEmptyAt(src.r2 + 1, c) && isEmptyAt(src.r2, c)) return -1;
+    let r = src.r2;
+    const last = wb.usedRange(si).rows - 1;
+    while (r + 1 <= last && !isEmptyAt(r + 1, c)) r++;
+    return r;
+  };
+  let end = endOf(src.c1 - 1);
+  if (end <= src.r2) end = endOf(src.c2 + 1);
+  if (end <= src.r2) { toast('옆 열에 데이터가 없어 채울 끝을 알 수 없습니다.'); return; }
+  const target = { ...src, r2: end, dir: 'down' };
+  if (!protectBlocked('cells', target)) doFill(src, target);
+}
+
+/** 끌어서 옮기기 · 복사 · 끼워 넣기 실행 */
+function dropMove(src, target, { copy, insert }) {
+  const h = src.r2 - src.r1 + 1;
+  const w = src.c2 - src.c1 + 1;
+  const dr = target.r1 - src.r1;
+  const dc = target.c1 - src.c1;
+  if (!dr && !dc) return;
+  if (protectBlocked('cells', target) || (!copy && protectBlocked('cells', src))) return;
+  if (copy) {
+    selectRange(src, 'cells', { r: src.r1, c: src.c1 });
+    copySelection(false);
+    selectRange(target, 'cells', { r: target.r1, c: target.c1 });
+    pasteInternal('all');
+    clip = null;
+    setMode();
+    return;
+  }
+  const run2 = () => {
+    let msg = null;
+    let partial = false;
+    wb.transact(() => {
+      if (insert && (dc === 0 || dr === 0)) {
+        // 끼워 넣기: 같은 열(행) 안에서 순서 바꾸기 — 빈 칸을 만들고 옮긴 뒤 원래 자리를 당김
+        const vert = dc === 0;
+        const L = vert ? (dr < 0 ? target.r1 : target.r1 + h) : (dc < 0 ? target.c1 : target.c1 + w);
+        const hole = vert ? { r1: L, c1: src.c1, r2: L + h - 1, c2: src.c2 } : { r1: src.r1, c1: L, r2: src.r2, c2: L + w - 1 };
+        msg = wb.shiftCells(si, hole, vert ? 'down' : 'right');
+        if (msg) return;
+        partial = true;
+        const moved = vert ? (L <= src.r1 ? { ...src, r1: src.r1 + h, r2: src.r2 + h } : src) : (L <= src.c1 ? { ...src, c1: src.c1 + w, c2: src.c2 + w } : src);
+        msg = wb.moveRange(si, moved, vert ? L - moved.r1 : 0, vert ? 0 : L - moved.c1);
+        if (msg) return;
+        msg = wb.shiftCells(si, moved, vert ? 'up' : 'left');
+      } else {
+        msg = wb.moveRange(si, src, dr, dc);
+      }
+    }, meta());
+    if (msg) { if (partial) wb.undo(); alertDialog('WIXEL', msg); return; }
+    selectRange(target, 'cells', { r: target.r1, c: target.c1 });
+    gv.renderAll();
+  };
+  // 대상에 이미 데이터가 있으면 확인 (엑셀: 여기에 이미 데이터가 있습니다. 바꾸시겠습니까?)
+  let busy = false;
+  if (!insert) {
+    for (let r = target.r1; r <= target.r2 && !busy; r++) {
+      for (let c = target.c1; c <= target.c2; c++) {
+        if (r >= src.r1 && r <= src.r2 && c >= src.c1 && c <= src.c2) continue;
+        if (!isEmptyAt(r, c)) { busy = true; break; }
+      }
+    }
+  }
+  if (busy) {
+    openDialog({ title: 'WIXEL', body: '여기에 이미 데이터가 있습니다. 바꾸시겠습니까?', buttons: [{ label: '확인', primary: true, action: run2 }, { label: '취소' }] });
+  } else run2();
+}
+
 function onDragMove(x, y) {
   if (!drag) return;
   switch (drag.type) {
+    case 'move': {
+      const { r, c } = gv.hitTest(x, y, true);
+      const s = drag.src;
+      const tr = Math.max(0, r - drag.grab.r);
+      const tc = Math.max(0, c - drag.grab.c);
+      drag.target = { r1: tr, c1: tc, r2: tr + s.r2 - s.r1, c2: tc + s.c2 - s.c1 };
+      fillPreview = drag.target;
+      dom.nameBox.value = cellName(tr, tc);
+      gv.renderOverlays();
+      break;
+    }
     case 'select': {
       const { r, c } = gv.hitTest(x, y, true);
       if (r !== focusCell.r || c !== focusCell.c) {
@@ -1813,6 +1928,12 @@ function onDragEnd() {
   // 테두리 그리기 모드: 끌어서 고른 범위에 펜으로 바깥쪽(그리기) · 모든(눈금) 테두리, 또는 지우기
   if (d.type === 'select' && borderDraw) applyBorder(borderDraw === 'grid' ? 'all' : borderDraw === 'erase' ? 'none' : 'outside');
   switch (d.type) {
+    case 'move':
+      fillPreview = null;
+      gv.renderOverlays();
+      updateSelectionUI();
+      if (d.target) dropMove(d.src, d.target, { copy: dragMods.ctrl, insert: dragMods.shift });
+      break;
     case 'fill':
       fillPreview = null;
       gv.renderOverlays();
@@ -2059,8 +2180,10 @@ function copySelection(cut) {
   const values = [];
   const text = [];
   const rowsIncluded = [];
+  // 화면에 보이는 셀만 선택(Alt+;) 뒤에는 숨긴 행도 빼고 복사
+  const visOnly = special?.si === si && special.visible;
   for (let r = full.r1; r <= full.r2; r++) {
-    if (filterHidden(r)) continue;
+    if (filterHidden(r) || (visOnly && gv.rows.size(r) === 0)) continue;
     rowsIncluded.push(r);
     const drow = [];
     const vrow = [];
@@ -3769,19 +3892,19 @@ function gotoSpecialRun(v) {
   {
     const u = wb.usedRange(si);
     if (v.kind === 'lastCell') { const e = wb.extent(si); selectCell(Math.max(0, e.rows - 1), Math.max(0, e.cols - 1)); return; }
-    const rg = selIsActiveOnly() ? { r1: 0, c1: 0, r2: Math.max(0, u.rows - 1), c2: Math.max(0, u.cols - 1) } : usedClip(sel);
+    const rg = selIsActiveOnly() ? (v.kind === 'rowDiff' || v.kind === 'colDiff' || v.kind === 'visible' ? currentRegion(active.r, active.c) : { r1: 0, c1: 0, r2: Math.max(0, u.rows - 1), c2: Math.max(0, u.cols - 1) }) : usedClip(sel);
     const cond = sheet().cond;
     const cells = specialCells(v.kind, rg, {
       cellAt: (r, c) => wb.getCell(si, r, c), valueAt: (r, c) => wb.getValue(si, r, c), hidden: (r) => gv.rows.size(r) === 0,
       inCond: (r, c) => cond.some((rule) => [rule, ...(rule.more ?? [])].some((g) => r >= g.r1 && r <= g.r2 && c >= g.c1 && c <= g.c2)),
       inValidation: (r, c) => !!validationAt(sheet(), r, c),
-      types: { numbers: v.numbers, text: v.text, logical: v.logical, errors: v.errors }, limit: 500000,
+      types: { numbers: v.numbers, text: v.text, logical: v.logical, errors: v.errors }, limit: 500000, active: { ...active },
     });
     if (!cells.length) { alertDialog('이동 옵션', '해당하는 셀이 없습니다.'); return; }
     const box = { r1: minOf(cells.slice(0, 100000).map((x) => x[0])), c1: minOf(cells.slice(0, 100000).map((x) => x[1])), r2: maxOf(cells.slice(-100000).map((x) => x[0])), c2: maxOf(cells.slice(0, 100000).map((x) => x[1])) };
     keepSpecial = true;
     try { selectRange(box, 'cells', { r: cells[0][0], c: cells[0][1] }); } finally { keepSpecial = false; }
-    special = { si, cells };
+    special = { si, cells, visible: v.kind === 'visible' };
     gv.ensureVisible(cells[0][0], cells[0][1]);
     gv.renderAll();
     toast(`${cells.length.toLocaleString()}개 칸을 골랐습니다. 입력 후 Ctrl+Enter 로 모두 채우거나 Delete 로 지울 수 있습니다.`);
@@ -12242,7 +12365,7 @@ function formatCellsDialog(startTab = 0, find = null) {
   const numberPage = el('div', { class: 'fc-number' }, catList, col(sampleBox, optBox, noteBox));
 
   // ── 맞춤 ──
-  const hSel = el('select', {}, [['', '일반'], ['left', '왼쪽'], ['center', '가운데'], ['right', '오른쪽']].map(([v, l]) => el('option', { value: v, selected: (st.align ?? '') === v }, l)));
+  const hSel = el('select', {}, [['', '일반'], ['left', '왼쪽 (들여쓰기)'], ['center', '가운데'], ['right', '오른쪽 (들여쓰기)'], ['centerContinuous', '선택 영역의 가운데로']].map(([v, l]) => el('option', { value: v, selected: (st.align ?? '') === v }, l)));
   const vSel = el('select', {}, [['top', '위쪽'], ['middle', '가운데'], ['', '아래쪽']].map(([v, l]) => el('option', { value: v, selected: (st.valign ?? '') === v }, l)));
   const indentIn = el('input', { type: 'number', min: 0, max: 15, value: st.indent ?? 0, style: { width: '64px' } });
   const [wrapIn, wrapL] = chk('텍스트 줄 바꿈', st.wrap);

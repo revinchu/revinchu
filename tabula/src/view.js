@@ -790,7 +790,15 @@ export class GridView {
     let image = null;
     if (st.showFormulas && cell?.formula) { text = cell.raw; align = 'left'; } else ({ text, align, color: fmtColor, image } = formatValue(v, style));
     if (v === 0 && wb.sheets[si].noZeros && !(st.showFormulas && cell?.formula)) text = ''; // 0 값이 있는 셀에 0 표시 안 함 (엑셀 옵션 › 고급)
-    const eff = style.align || align;
+    // 선택 영역의 가운데로 (centerContinuous): 오른쪽의 빈 같은 맞춤 칸들까지 합친 너비의 가운데
+    let across = 0;
+    if (style.align === 'centerContinuous' && text && !merge) {
+      for (let cc = c + 1; cc < c + 64; cc++) {
+        if (wb.getCell(si, r, cc)?.raw || wb.styleAt(si, r, cc)?.align !== 'centerContinuous') break;
+        across += this.cols.size(cc);
+      }
+    }
+    const eff = style.align === 'centerContinuous' ? 'center' : style.align || align;
     const css = [`left:${x - 1 - p.ox}px`, `top:${y - 1 - p.oy}px`, `width:${w + 1}px`, `height:${h + 1}px`];
     if (style.bold) css.push('font-weight:700');
     if (style.italic) css.push('font-style:italic');
@@ -905,6 +913,12 @@ export class GridView {
       const i = cls.indexOf('ovf');
       if (i >= 0) cls.splice(i, 1);
       return `<div class="c cimg-cell${cls.length ? ` ${cls.join(' ')}` : ''}" data-r="${r}" data-c="${c}" style="${css.join(';')}"${comment}>${img}</div>`;
+    }
+    if (across && !rotBox && !wrap) {
+      // 칸 밖으로 이어진 영역 가운데에 글자 (다음 칸들은 비어 있음)
+      const i = cls.indexOf('ovf');
+      if (i < 0) cls.push('ovf');
+      spanCss = ` style="position:absolute;left:0;top:0;bottom:0;width:${w + across}px;display:flex;align-items:inherit;justify-content:center;white-space:nowrap"`;
     }
     return `<div class="c${cls.length ? ` ${cls.join(' ')}` : ''}" data-r="${r}" data-c="${c}" style="${css.join(';')}"${comment}>${diagHtml}${iconHtml}${rotBox ?? `<span${spanCss}>${hideValue ? '' : esc(text)}</span>`}</div>`;
   }
