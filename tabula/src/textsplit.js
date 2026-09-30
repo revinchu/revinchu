@@ -64,6 +64,8 @@ export function suggestBreaks(lines) {
 }
 
 export const DATE_ORDERS = ['YMD', 'MDY', 'DMY', 'YDM', 'MYD', 'DYM'];
+/** 엑셀 텍스트 마법사의 날짜 순서 이름 */
+export const DATE_ORDER_LABEL = { YMD: '년월일', MDY: '월일년', DMY: '일월년', YDM: '년일월', MYD: '월년일', DYM: '일년월' };
 
 const EPOCH = Date.UTC(1899, 11, 30);
 
@@ -124,9 +126,17 @@ export function dateSerial(ymd) {
  * 열 데이터 서식 적용 → 셀에 넣을 입력 문자열 (null 이면 건너뜀)
  * fmt: 'general' | 'text' | 'date' | 'skip', order: 날짜 순서
  */
-export function convertPart(text, fmt = 'general', order = 'YMD') {
+export function convertPart(text, fmt = 'general', order = 'YMD', num = null) {
   if (fmt === 'skip') return null;
-  const s = String(text ?? '');
+  let s = String(text ?? '');
+  // 텍스트 가져오기 고급 설정: 소수 · 1000 단위 구분 기호를 엑셀 기본(. ,)으로 바꿔 숫자로 인식
+  if (num && fmt === 'general' && (num.decimal !== '.' || num.thousand !== ',')) {
+    const t = s.trim();
+    const esc = (c) => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`^-?[\\d${esc(num.thousand)}]*(${esc(num.decimal)}\\d+)?-?%?$`);
+    if (num.decimal !== num.thousand && /\d/.test(t) && re.test(t)) s = t.split(num.thousand).join('').split(num.decimal).join('.');
+  }
+  if (num && num.trailingMinus === false && /^[\d,.]+-$/.test(s.trim())) return s;
   if (s === '') return '';
   if (fmt === 'text') return `'${s}`;
   if (fmt === 'date') {

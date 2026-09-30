@@ -272,3 +272,22 @@ test('named cell styles round-trip through xlsx', async () => {
   assert.equal(back.cellStyles[0].style.bold, true);
   assert.equal(back.cellStyles[1].builtinId, 5);
 });
+
+test('text wizard advanced number recognition and hierarchical treemap', async () => {
+  const { convertPart } = await import('../src/textsplit.js');
+  assert.equal(convertPart('1.234,5', 'general', 'YMD', { decimal: ',', thousand: '.', trailingMinus: true }), '1234.5');
+  assert.equal(convertPart('12-', 'general'), '-12');
+  const { resolveChart } = await import('../src/chart.js');
+  const rows = [['상위', '구분', '값'], ['2026.04', '4월 집행', 30], [null, '4월 예상', 20], ['Total', '전년', 50], [null, '4월', 10]];
+  const d = resolveChart({ type: 'treemap', range: {} }, { range: () => rows, values: () => [] });
+  assert.deepEqual(d.catLevels[0].map((g) => g.text), ['2026.04', 'Total']);
+  assert.deepEqual(d.series[0].values, [30, 20, 50, 10]);
+});
+
+test('range chart with a merged-style outer label column uses multi-level categories', async () => {
+  const { chartData } = await import('../src/chart.js');
+  const d = chartData([['상위', '구분', '값'], [2026.04, '4월 집행', 30], [null, '4월 예상', 20], ['Total', '전년', 50], [null, '4월', 10]]);
+  assert.deepEqual(d.categories, ['4월 집행', '4월 예상', '전년', '4월']);
+  assert.equal(d.series.length, 1);
+  assert.deepEqual(d.catLevels[0].map((g) => g.text), ['2026.04', 'Total']);
+});

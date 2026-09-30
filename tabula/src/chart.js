@@ -96,8 +96,15 @@ export function chartLayout(rows, type = 'column', flip = false) {
   const headRow = R > 1 && rows[0].slice(C > 1 ? 1 : 0).every((v) => !isNum(v)) && rows[0].some((v) => v !== null && v !== '');
   const firstDataRow = headRow ? 1 : 0;
   const xy = type === 'scatter' || type === 'bubble';
-  const catCol = C > 1 && (xy || rows.slice(firstDataRow).every((r) => !isNum(r[0])));
-  const firstDataCol = catCol ? 1 : 0;
+  const body = rows.slice(firstDataRow);
+  // 항목 열: 숫자가 없는 열, 또는 글자와 빈 칸만 있는 병합형 묶음 열(바깥 항목) — 앞쪽에 여러 개면 엑셀처럼 다단계 항목
+  const isLabel = (c) => body.every((r) => !isNum(r[c]));
+  // 병합형 바깥 묶음 열: 글자가 있고 빈 칸이 섞인 첫 열 (2026.04 처럼 숫자 모양 묶음 이름 포함) + 그 옆이 항목 열
+  const groupCol0 = C > 2 && isLabel(1) && body.some((r) => typeof r[0] === 'string' && r[0] !== '') && body.some((r) => r[0] === null || r[0] === '');
+  let lc = 0;
+  if (!xy) while (lc < C - 1 && (isLabel(lc) || (lc === 0 && groupCol0))) lc++;
+  const catCol = C > 1 && (xy || lc > 0);
+  const firstDataCol = catCol ? (xy ? 1 : lc) : 0;
   const auto = xy || type === 'stock' || type === 'boxWhisker' || R - firstDataRow >= C - firstDataCol;
   const byCols = flip && !xy ? !auto : auto;
   return { R, C, headRow, catCol, firstDataRow, firstDataCol, byCols };
@@ -108,8 +115,13 @@ export function chartData(rows, type = 'column', flip = false) {
   const { R, C, headRow, catCol, firstDataRow, firstDataCol, byCols } = chartLayout(rows, type, flip);
   const series = [];
   let categories = [];
+  let catLevels = null;
   if (byCols) {
-    categories = rows.slice(firstDataRow).map((r, i) => (catCol ? label(r[0]) : String(i + 1)));
+    categories = rows.slice(firstDataRow).map((r, i) => (catCol ? label(r[firstDataCol - 1]) : String(i + 1)));
+    if (catCol && firstDataCol > 1) {
+      const multi = multiLevel(rows.slice(firstDataRow).map((r) => r.slice(0, firstDataCol).map((v) => (v === null ? '' : label(v)))), rows.length - firstDataRow);
+      if (multi) catLevels = multi.levels;
+    }
     for (let c = firstDataCol; c < C; c++) {
       series.push({
         name: headRow ? label(rows[0][c]) : `계열${c - firstDataCol + 1}`,
@@ -136,7 +148,7 @@ export function chartData(rows, type = 'column', flip = false) {
   }
   // 숫자가 하나도 없는 계열(텍스트 열)은 제외
   const numeric = series.filter((sr) => sr.values.some((v) => v !== null));
-  return { categories, series: numeric.length ? numeric : series };
+  return { categories, series: numeric.length ? numeric : series, ...(catLevels ? { catLevels } : {}) };
 }
 
 /** 참조 값 → 1차원 (한 열이면 행 순서, 한 행이면 열 순서, 여러 열이면 행마다 글자를 이어 붙임) */
@@ -206,7 +218,24 @@ export function resolveChart(ch, api) {
     const multi = multiLevel(catRows, n);
     const categories = multi ? multi.categories : catRef ? (api.texts ? flatRef(catRows, true) : flatRef(api.values(catRef), true).map(label)) : Array.from({ length: n }, (_, i) => String(i + 1));
     base = { categories, series, ...(multi ? { catLevels: multi.levels } : {}) };
-  } else base = chartData(api.range(ch), ch.type === 'combo' ? 'column' : ch.type, !!ch.byRows);
+  } else {
+    const rows = api.range(ch);
+    base = chartData(rows, ch.type === 'combo' ? 'column' : ch.type, !!ch.byRows);
+    // 트리맵: 앞쪽 글자 열이 여러 개면 엑셀처럼 계층 (바깥 열 = 상위 묶음)
+    if (ch.type === 'treemap' && rows.length > 2) {
+      const L = chartLayout(rows, 'column', false);
+      const body = rows.slice(L.firstDataRow);
+      let tc = 0;
+      while (tc < (rows[0]?.length ?? 0) - 1 && body.every((r) => !isNum(r[tc]))) tc++;
+      if (tc >= 2) {
+        const multi = multiLevel(body.map((r) => r.slice(0, tc).map((v) => (v === null ? '' : label(v)))), body.length);
+        if (multi) {
+          const vc = tc;
+          base = { categories: multi.categories, catLevels: multi.levels, series: [{ name: L.headRow ? label(rows[0][vc]) : '계열1', values: body.map((r) => (isNum(r[vc]) ? r[vc] : null)), x: null }] };
+        }
+      }
+    }
+  }
   const fmt = ch.seriesFmt ?? [];
   const comboDefault = (i) => (ch.type === 'combo' ? (i === base.series.length - 1 && base.series.length > 1 ? { type: 'line', axis: 1 } : { type: 'column' }) : {});
   // 계열 형식에 종류가 정해져 있으면 축도 그 형식대로 (axis 가 없으면 기본 축) — 파일의 콤보 차트에서 마지막 계열을 보조 축으로 보내지 않게
@@ -392,7 +421,8 @@ export function renderChartSvg(chart, data) {
   const pieLike = baseType === 'pie' || baseType === 'doughnut';
   const special = SPECIAL[baseType];
   const legendPos = chart.legend ?? (special?.legend === false ? 'none' : 'b');
-  const legendItems = pieLike || baseType === 'treemap' ? categories.map((c, i) => ({ name: c, color: series[0]?.colors?.[i] ?? pal[i % pal.length], line: false }))
+  const legendItems = baseType === 'treemap' && data.catLevels?.length ? data.catLevels.at(-1).map((g, i) => ({ name: g.text, color: pal[i % pal.length], line: false }))
+    : pieLike || baseType === 'treemap' ? categories.map((c, i) => ({ name: c, color: series[0]?.colors?.[i] ?? pal[i % pal.length], line: false }))
     : baseType === 'waterfall' ? [{ name: '증가', color: chart.upColor ?? pal[0] }, { name: '감소', color: chart.downColor ?? pal[1] }, { name: '합계', color: chart.totalColor ?? pal[2] }]
       : baseType === 'pareto' ? [{ name: series[0]?.name ?? '', color: series[0]?.color }, { name: '누적 %', color: pal[1], line: true }]
         : series.map((s) => ({ name: s.name, color: s.color, line: s.type === 'line' || s.type === 'radar' }));
@@ -442,7 +472,7 @@ export function renderChartSvg(chart, data) {
   const wantLabels = (s) => s.labels ?? chart.labels ?? false;
   if (chart.plotFill) parts.push(`<rect x="${plot.x}" y="${plot.y}" width="${plot.w}" height="${plot.h}" fill="${chart.plotFill}"/>`);
   if (special) {
-    special.draw({ chart, series, categories, plot, parts, FS, TXT, GRID, pal, defs, uid, wantLabels, W, H });
+    special.draw({ chart, data, series, categories, plot, parts, FS, TXT, GRID, pal, defs, uid, wantLabels, W, H });
     return finish();
   }
 
@@ -1039,6 +1069,23 @@ export const SPECIAL = {
       const s = series[0];
       if (!s) return;
       const items = s.values.map((v, i) => ({ v: isNum(v) && v > 0 ? v : 0, i })).filter((x) => x.v > 0).sort((a, b) => b.v - a.v);
+      const outer = ctx.data?.catLevels?.at(-1);
+      if (outer?.length) {
+        // 계층 트리맵: 상위 묶음을 먼저 나누고 그 안에 항목 (묶음마다 한 색, 왼쪽 위에 묶음 이름)
+        const groups = outer.map((g, gi) => ({ g, gi, items: items.filter((x) => x.i >= g.start && x.i <= g.end) })).map((x) => ({ ...x, v: x.items.reduce((a2, b2) => a2 + b2.v, 0), i: x.gi })).filter((x) => x.v > 0).sort((a2, b2) => b2.v - a2.v);
+        for (const gr of squarify(groups, { x: plot.x, y: plot.y, w: plot.w, h: plot.h })) {
+          const grp = groups.find((x) => x.gi === gr.i);
+          const col = pal[gr.i % pal.length];
+          const head = gr.h > 40 && gr.w > 40 ? 16 : 0;
+          if (head) parts.push(`<text x="${(gr.x + 4).toFixed(1)}" y="${(gr.y + 12).toFixed(1)}" font-size="10" fill="#fff" font-weight="700">${escSvg(truncate(grp.g.text, Math.floor((gr.w - 8) / 6.5)))}</text>`);
+          parts.splice(parts.length - (head ? 1 : 0), 0, `<rect x="${gr.x.toFixed(1)}" y="${gr.y.toFixed(1)}" width="${Math.max(0, gr.w - 1.5).toFixed(1)}" height="${Math.max(0, gr.h - 1.5).toFixed(1)}" fill="${col}"/>`);
+          for (const r of squarify(grp.items, { x: gr.x, y: gr.y + head, w: gr.w - 1.5, h: gr.h - head - 1.5 })) {
+            parts.push(`<rect x="${r.x.toFixed(1)}" y="${r.y.toFixed(1)}" width="${Math.max(0, r.w - 1).toFixed(1)}" height="${Math.max(0, r.h - 1).toFixed(1)}" fill="${col}" stroke="#fff" stroke-width="1"/>`);
+            if (r.w > 30 && r.h > 14) parts.push(`<text x="${(r.x + 4).toFixed(1)}" y="${(r.y + 12).toFixed(1)}" font-size="9.5" fill="#fff">${escSvg(truncate(String(categories[r.i] ?? ''), Math.floor((r.w - 6) / 6)))}</text>`);
+          }
+        }
+        return;
+      }
       const rects = squarify(items, { x: plot.x, y: plot.y, w: plot.w, h: plot.h });
       for (const r of rects) {
         const col = s.colors?.[r.i] ?? pal[r.i % pal.length];

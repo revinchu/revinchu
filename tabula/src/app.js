@@ -50,7 +50,7 @@ import {
   TABLE_STYLES, TABLE_STYLE_GROUPS, DEFAULT_TABLE_STYLE, TOTAL_FUNCS, tableAt, tableCellStyle, tableFilterRange, dataTop, dataBottom, uniqueNames,
   nextTableName, columnNames, expansionFor, validTableName, findTable, resolveStructRef,
 } from './tables.js';
-import { splitDelimited, splitFixed, suggestBreaks, parseDateOrder, convertPart, DATE_ORDERS } from './textsplit.js';
+import { splitDelimited, splitFixed, suggestBreaks, parseDateOrder, convertPart, DATE_ORDERS, DATE_ORDER_LABEL } from './textsplit.js';
 import {
   VALIDATION_TYPES, VALIDATION_OPS, validationAt, checkValidation, listItems, describeRule, subtractRange, invalidCells,
 } from './validation.js';
@@ -4204,10 +4204,44 @@ function insertChartAllDialog(changeId = null) {
   };
   CHART_GALLERY.forEach(([g], i) => cats.append(el('button', { class: 'cg-cat', onclick: () => show(i) }, g)));
   const cur = base ? CHART_GALLERY.findIndex(([, list]) => list.some(([, p]) => p.type === base.type)) : 0;
-  show(Math.max(0, cur));
+  const allView = el('div', { class: 'cg-wrap' }, cats, el('div', { class: 'cg-main' }, subs, label, prev));
+  let body = allView;
+  if (!base) {
+    // 추천 차트 (엑셀): 데이터 모양(항목 수 · 계열 수 · 값 크기 차이 · 날짜 항목 · 긴 이름)으로 고른 차트 + 설명
+    const recs = recommendCharts(dataFor(draftOf({ type: 'column' })));
+    const rList = el('div', { class: 'cr-list' });
+    const rTitle = el('div', { class: 'cr-title' });
+    const rPrev = el('div', { class: 'cr-prev' });
+    const rDesc = el('div', { class: 'cr-desc' });
+    const pickRec = (k) => {
+      [...rList.children].forEach((b, j) => b.classList.toggle('on', j === k));
+      const [name, patch, desc] = recs[k];
+      pick = patch;
+      rTitle.textContent = name;
+      const d = draftOf(patch);
+      rPrev.innerHTML = renderChartSvg({ ...d, w: 400, h: 250 }, dataFor(d));
+      rDesc.textContent = desc;
+    };
+    recs.forEach(([name, patch], k) => {
+      const d = draftOf(patch);
+      rList.append(el('button', { class: 'cr-thumb', title: name, html: renderChartSvg({ ...d, w: 170, h: 110, axisSize: 5, legendSize: 5, titleSize: 7 }, dataFor(d)), onclick: () => pickRec(k) }));
+    });
+    const recView = el('div', { class: 'cr-wrap' }, rList, el('div', { class: 'cr-main' }, rTitle, rPrev, rDesc));
+    const tabs = el('div', { class: 'dlg-tabs' });
+    const box = el('div', {});
+    const showTab = (t) => {
+      [...tabs.children].forEach((b, j) => b.classList.toggle('on', j === t));
+      box.replaceChildren(t === 0 ? recView : allView);
+      if (t === 0) pickRec(Math.max(0, [...rList.children].findIndex((b) => b.classList.contains('on'))));
+      else show(Math.max(0, cur));
+    };
+    tabs.append(el('button', { class: 'dlg-tab', onclick: () => showTab(0) }, '추천 차트'), el('button', { class: 'dlg-tab', onclick: () => showTab(1) }, '모든 차트'));
+    body = el('div', {}, tabs, box);
+    showTab(recs.length ? 0 : 1);
+  } else show(Math.max(0, cur));
   openDialog({
     title: base ? '차트 종류 변경' : '차트 삽입', width: 760,
-    body: el('div', { class: 'cg-wrap' }, cats, el('div', { class: 'cg-main' }, subs, label, prev)),
+    body,
     buttons: [{
       label: '확인', primary: true, action: () => {
         if (!pick) return false;
@@ -4217,6 +4251,46 @@ function insertChartAllDialog(changeId = null) {
       },
     }, { label: '취소' }],
   });
+}
+
+/** 추천 차트 [이름, 차트 설정, 설명] — 엑셀의 [추천 차트] 처럼 데이터 모양을 보고 순서대로 */
+function recommendCharts(data) {
+  const series = data.series ?? [];
+  const cats = data.categories ?? [];
+  const n = cats.length;
+  const k = series.length;
+  const maxes = series.map((s) => maxOf(s.values.map((v) => Math.abs(v ?? 0))));
+  const spread = k > 1 && minOf(maxes) > 0 ? maxOf(maxes) / minOf(maxes) : 1;
+  const dateLike = n > 2 && cats.every((c) => /^\d{4}[-./]\d{1,2}|^\d{1,2}월|^w\d+|^\d+주|^(19|20)\d{2}/.test(String(c)));
+  const longNames = cats.some((c) => String(c).length > 12);
+  const allPos = series.every((s) => s.values.every((v) => v === null || v >= 0));
+  const D = {
+    line: ['꺾은선형', { type: 'line', marker: 'none' }, '꺾은선형 차트는 시간(년, 월, 일)에 따른 추세를 표시하거나 순서가 중요한 항목을 표시하는 데 사용됩니다. 데이터 요소가 여러 개이고 순서가 중요할 때 이 차트를 사용하세요.'],
+    column: ['묶은 세로 막대형', { type: 'column', grouping: 'clustered' }, '묶은 세로 막대형 차트는 몇 개 항목의 값을 비교하는 데 사용됩니다. 값 범위가 항목을 나타낼 때 이 차트를 사용하세요.'],
+    bar: ['묶은 가로 막대형', { type: 'bar', grouping: 'clustered' }, '가로 막대형 차트는 여러 값을 비교하는 데 사용됩니다. 항목 이름이 길거나 항목이 많을 때 이 차트를 사용하세요.'],
+    combo: ['묶은 세로 막대형 - 꺾은선형, 보조 축', { type: 'combo' }, '콤보 차트는 값 범위가 크게 다른 여러 종류의 데이터를 강조합니다. 한 계열을 보조 축의 꺾은선형으로 그립니다.'],
+    stacked: ['누적 세로 막대형', { type: 'column', grouping: 'stacked' }, '누적 세로 막대형 차트는 전체에 대한 각 부분을 비교하고 항목에 따른 합계의 변화를 표시하는 데 사용됩니다.'],
+    pie: ['원형', { type: 'pie' }, '원형 차트는 전체에 대한 비율을 표시하는 데 사용됩니다. 값이 모두 양수이고 원형 조각이 적을 때 이 차트를 사용하세요.'],
+    doughnut: ['도넛형', { type: 'doughnut' }, '도넛형 차트는 원형 차트처럼 전체에 대한 비율을 표시하며, 여러 계열을 고리로 겹쳐 볼 수 있습니다.'],
+    area: ['영역형', { type: 'area' }, '영역형 차트는 시간에 따른 변화의 크기를 강조하는 데 사용됩니다.'],
+    scatter: ['분산형', { type: 'scatter' }, '분산형 차트는 두 가지 값 집합의 관계를 비교하거나 값의 쌍을 표시하는 데 사용됩니다.'],
+    treemap: ['트리맵', { type: 'treemap' }, '트리맵 차트는 계층 구조 데이터의 비율을 비교하는 데 사용됩니다.'],
+  };
+  if (!k) return [D.column, D.line, D.bar];
+  const order = [];
+  if (dateLike || n > 12) order.push('line');
+  if (k > 1 && spread >= 10) order.push('combo');
+  if (longNames || n > 20) order.push('bar');
+  order.push('column');
+  if (k === 1 && allPos && n <= 8) order.push('pie');
+  if (k > 1 && allPos) order.push('stacked');
+  if (!order.includes('line')) order.push('line');
+  if (!order.includes('bar')) order.push('bar');
+  if (k === 1 && allPos && n <= 30) order.push('treemap');
+  if (data.catLevels) order.unshift('treemap');
+  if (k > 1 && allPos && n <= 8) order.push('doughnut');
+  order.push('area');
+  return [...new Set(order)].map((key) => D[key]);
 }
 
 /**
@@ -4653,7 +4727,7 @@ function rangeChartSeries(ch) {
   if (L.byCols) {
     for (let c = L.firstDataCol; c < L.C; c++) {
       if (!rows.slice(L.firstDataRow).some((r) => num(r[c]))) continue;
-      out.push({ name: L.headRow ? { ref: R(0, c, 0, c) } : { text: `계열${c - L.firstDataCol + 1}` }, val: R(L.firstDataRow, c, L.R - 1, c), ...(L.catCol ? { cat: R(L.firstDataRow, 0, L.R - 1, 0) } : {}) });
+      out.push({ name: L.headRow ? { ref: R(0, c, 0, c) } : { text: `계열${c - L.firstDataCol + 1}` }, val: R(L.firstDataRow, c, L.R - 1, c), ...(L.catCol ? { cat: R(L.firstDataRow, 0, L.R - 1, L.firstDataCol - 1) } : {}) });
     }
   } else {
     for (let r = L.firstDataRow; r < L.R; r++) {
@@ -6227,6 +6301,17 @@ function textToColumns() {
     return el('div', { class: 'ttc-rulerwrap' }, box);
   };
 
+  // 텍스트 가져오기 고급 설정: 숫자 데이터 인식 (소수 · 1000 단위 구분 기호, 음수일 경우 마이너스 표시)
+  const numOpt = { decimal: '.', thousand: ',', trailingMinus: true };
+  const advDialog = () => formDialog('텍스트 가져오기 고급 설정', [
+    { name: 'decimal', label: '소수 구분 기호', type: 'select', value: numOpt.decimal, options: ['.', ',', "'", ' '].map((c) => ({ value: c, label: c === ' ' ? '(공백)' : c })) },
+    { name: 'thousand', label: '1000 단위 구분 기호', type: 'select', value: numOpt.thousand, options: [',', '.', "'", ' '].map((c) => ({ value: c, label: c === ' ' ? '(공백)' : c })) },
+    { name: 'trailingMinus', label: '음수일 경우 마이너스 표시 (1234- → -1234)', type: 'checkbox', value: numOpt.trailingMinus },
+  ], (v) => {
+    if (v.decimal === v.thousand) { toast('소수 구분 기호와 1000 단위 구분 기호는 달라야 합니다.'); return false; }
+    Object.assign(numOpt, v);
+    return undefined;
+  });
   const render = () => {
     content.replaceChildren();
     if (step === 1) {
@@ -6270,12 +6355,12 @@ function textToColumns() {
       colFmts = [...Array(n)].map((_, i) => colFmts[i] ?? { fmt: 'general', order: 'YMD' });
       selCol = Math.min(selCol, n - 1);
       const cf = colFmts[selCol];
-      const order = el('select', { disabled: cf.fmt !== 'date' }, DATE_ORDERS.map((d) => el('option', { value: d, selected: cf.order === d }, d)));
+      const order = el('select', { disabled: cf.fmt !== 'date' }, DATE_ORDERS.map((d) => el('option', { value: d, selected: cf.order === d }, DATE_ORDER_LABEL[d])));
       order.addEventListener('change', () => { cf.order = order.value; render(); });
       const setFmt = (v) => { cf.fmt = v; render(); };
       const destIn = el('input', { type: 'text', value: dest.text, style: { width: '120px' } });
       destIn.addEventListener('input', () => { dest.text = destIn.value; });
-      const label = (i) => ({ general: '일반', text: '텍스트', date: `날짜(${colFmts[i].order})`, skip: '건너뜀' }[colFmts[i].fmt]);
+      const label = (i) => ({ general: '일반', text: '텍스트', date: `날짜(${DATE_ORDER_LABEL[colFmts[i].order]})`, skip: '건너뜀' }[colFmts[i].fmt]);
       const shown = previewRows().map((r) => r.map((v, i) => {
         const f = colFmts[i];
         if (!f || f.fmt !== 'date') return v;
@@ -6290,6 +6375,7 @@ function textToColumns() {
             el('div', { class: 'fc-row' }, radio('ttcfmt', 'date', cf.fmt, '날짜:', setFmt), order),
             radio('ttcfmt', 'skip', cf.fmt, '열 가져오지 않음(건너뜀)', setFmt)),
           el('div', { class: 'fc-col' }, el('div', { class: 'fc-title' }, '대상'), destIn,
+            el('button', { class: 'btn', onclick: () => advDialog() }, '고급(A)...'),
             el('div', { class: 'muted fc-note' }, '날짜 순서 예: YMD = 20240315 · 2024.3.15, MDY = 03/15/2024, DMY = 15-03-2024. 날짜로 바뀐 값은 날짜 서식으로 표시됩니다.'))),
         el('div', { class: 'fc-title' }, '데이터 미리 보기 (열 머리글을 눌러 선택)'),
         previewTable(shown, { headers: label, onPick: (i) => { selCol = i; render(); } }),
@@ -6325,7 +6411,7 @@ function textToColumns() {
           if (c0 !== rg.c1 || r0 !== rg.r1) { /* 원본은 그대로 */ } else if (rg.r1 + i <= rg.r2) wb.setInput(si, r, rg.c1, '');
           outCols.forEach((ci, k) => {
             const f = colFmts[ci];
-            const v = convertPart(parts[ci] ?? '', f.fmt, f.order);
+            const v = convertPart(parts[ci] ?? '', f.fmt, f.order, numOpt);
             if (v === null) return;
             if (f.fmt === 'text') {
               // 텍스트 서식 셀에는 입력한 그대로 들어감 (앞의 0 유지)

@@ -2679,7 +2679,7 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
     const all = [];
     if (L.byCols) {
       for (let c = dc0; c <= rg.c2; c++) {
-        all.push({ tx: L.headRow ? refText(s, rg.r1, c, rg.r1, c) : null, cat: L.catCol ? refText(s, dr0, rg.c1, rg.r2, rg.c1) : null, val: refText(s, dr0, c, rg.r2, c), nums: rows.slice(L.firstDataRow).some((r) => typeof r[c - rg.c1] === 'number') });
+        all.push({ tx: L.headRow ? refText(s, rg.r1, c, rg.r1, c) : null, cat: L.catCol ? refText(s, dr0, rg.c1, rg.r2, rg.c1 + Math.max(0, L.firstDataCol - 1)) : null, val: refText(s, dr0, c, rg.r2, c), nums: rows.slice(L.firstDataRow).some((r) => typeof r[c - rg.c1] === 'number') });
       }
     } else {
       for (let r = dr0; r <= rg.r2; r++) {
