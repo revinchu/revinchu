@@ -45,7 +45,7 @@ import { hid, hidCount } from './axis.js';
 import { fontList, fontAlias, loadLocalFonts, canListLocalFonts } from './fonts.js';
 import { ICONS } from './icons.js';
 import {
-  CELL_OPS, TEXT_OPS, DATE_PERIODS, ICON_SETS, ICON_SVG, VISUAL_TYPES, iconSetById, describeCond, SCALE_PRESETS, BAR_PRESETS, DEFAULT_SCALE2, DEFAULT_SCALE3,
+  CELL_OPS, TEXT_OPS, DATE_PERIODS, ICON_SETS, ICON_SVG, VISUAL_TYPES, iconSetById, describeCond, SCALE_PRESETS, BAR_PRESETS, DEFAULT_SCALE2, DEFAULT_SCALE3, ruleRanges,
 } from './condfmt.js';
 import {
   TABLE_STYLES, TABLE_STYLE_GROUPS, DEFAULT_TABLE_STYLE, TOTAL_FUNCS, tableAt, tableCellStyle, tableFilterRange, dataTop, dataBottom, uniqueNames,
@@ -2063,7 +2063,7 @@ function pasteInternal(mode = 'all', opts = {}) {
         let data;
         if (what === 'values') data = { raw: valueToRaw(src.values[ci][cj]), style: cur?.style, comment: cur?.comment };
         else if (what === 'valuesNum') data = { raw: valueToRaw(src.values[ci][cj]), style: { ...cur?.style, ...numFmtOf(d?.style) }, comment: cur?.comment };
-        else if (what === 'formats') data = { raw: cur?.raw ?? '', style: d?.style, comment: cur?.comment };
+        else if (what === 'formats') data = { ...(cur ?? { raw: '' }), style: d?.style };
         else if (what === 'formulas') data = { raw: shifted, style: cur?.style, comment: cur?.comment };
         else if (what === 'formulasNum') data = { raw: shifted, style: { ...cur?.style, ...numFmtOf(d?.style) }, comment: cur?.comment };
         else if (what === 'comments') data = { raw: cur?.raw ?? '', style: cur?.style, comment: d?.comment };
@@ -2092,6 +2092,7 @@ function pasteInternal(mode = 'all', opts = {}) {
         wb.setCellData(si, tr, tc, data);
       }
     }
+    if ((what === 'formats' || what === 'all' || what === 'noBorders') && !transpose && !cut && src.rows.at(-1) - src.rows[0] === src.rows.length - 1) copyFormatExtras(src.si, { r1: src.r1, c1: src.c1, r2: src.r1 + ph - 1, c2: src.c2 }, tgt, th, tw);
     if (what === 'validation') {
       // 유효성 검사 규칙을 대상 위치로 옮겨 복사
       const srcRules = (wb.sheets[src.si].validations ?? []).filter((v) => v.r1 <= src.r2 && v.r2 >= src.r1 && v.c1 <= src.c2 && v.c2 >= src.c1);
@@ -2356,46 +2357,131 @@ function changeFontSize(dir) {
   applyStyle({ size: next === BASE_FONT.size ? undefined : next });
 }
 
+/** 서식 복사 (엑셀): 셀 서식(표 서식 포함) · 병합 · 조건부 서식 · 열 너비/행 높이(행 · 열 전체 선택일 때) */
 function capturePainter(sticky) {
-  const full = usedClip(sel);
+  const full = selKind === 'cells' ? sel : usedClip(sel);
   const h = Math.min(full.r2 - full.r1 + 1, 500);
   const w = Math.min(full.c2 - full.c1 + 1, 200);
+  const sh = sheet();
   const styles = [];
   for (let i = 0; i < h; i++) {
     const row = [];
-    for (let j = 0; j < w; j++) row.push({ ...styleAt(full.r1 + i, full.c1 + j) });
+    for (let j = 0; j < w; j++) {
+      const r = full.r1 + i;
+      const c = full.c1 + j;
+      let st = { ...styleAt(r, c) };
+      // 표 안의 셀: 표 서식도 직접 서식으로 복사 (엑셀과 같음)
+      const tbl = tableAt(sh, r, c);
+      const ts = tbl ? tableCellStyle(tbl, r, c) : null;
+      if (ts) { const own = Object.fromEntries(Object.entries(st).filter(([, v]) => v !== undefined)); st = { ...ts, ...own }; }
+      row.push(st);
+    }
     styles.push(row);
   }
-  painter = { styles, sticky };
+  const area = { r1: full.r1, c1: full.c1, r2: full.r1 + h - 1, c2: full.c1 + w - 1 };
+  const widths = selKind === 'cols' ? Array.from({ length: Math.min(sel.c2 - sel.c1 + 1, 500) }, (_, j) => wb.colWidth(si, sel.c1 + j)) : null;
+  const heights = selKind === 'rows' ? Array.from({ length: Math.min(sel.r2 - sel.r1 + 1, 5000) }, (_, i) => sh.rowHeights[sel.r1 + i]) : null;
+  painter = { styles, sticky, si, area, widths, heights };
   dom.view.classList.add('painting');
   setMode();
   updateRibbon();
 }
 
+/**
+ * 병합 · 조건부 서식을 원본 영역(src, 시트 srcSi)에서 대상(tgt 왼쪽 위부터 th×tw, 원본 크기 단위로 반복)으로 복사
+ * (서식 복사 · 서식 붙여넣기 공통). 대상 영역의 기존 병합은 풀림
+ */
+function copyFormatExtras(srcSi, src, tgt, th, tw) {
+  const ph = src.r2 - src.r1 + 1;
+  const pw = src.c2 - src.c1 + 1;
+  const area = { r1: tgt.r1, c1: tgt.c1, r2: tgt.r1 + th - 1, c2: tgt.c1 + tw - 1 };
+  const tiles = [];
+  for (let i = 0; i < th; i += ph) for (let j = 0; j < tw; j += pw) tiles.push([tgt.r1 + i - src.r1, tgt.c1 + j - src.c1]);
+  // 병합
+  const srcMerges = wb.sheets[srcSi].merges.filter((m) => m.r1 >= src.r1 && m.r2 <= src.r2 && m.c1 >= src.c1 && m.c2 <= src.c2);
+  const cur = sheet().merges;
+  const hit = cur.some((m) => m.r1 <= area.r2 && m.r2 >= area.r1 && m.c1 <= area.c2 && m.c2 >= area.c1);
+  if (hit || srcMerges.length) {
+    const kept = cur.filter((m) => !(m.r1 <= area.r2 && m.r2 >= area.r1 && m.c1 <= area.c2 && m.c2 >= area.c1));
+    const add = [];
+    for (const [dr, dc] of tiles) {
+      for (const m of srcMerges) {
+        const n = { r1: m.r1 + dr, c1: m.c1 + dc, r2: m.r2 + dr, c2: m.c2 + dc };
+        if (n.r2 <= area.r2 && n.c2 <= area.c2) add.push(n);
+      }
+    }
+    // 병합되는 칸의 값은 왼쪽 위만 남음 (엑셀처럼 값을 지우지는 않고 가려짐 — 병합 해제하면 다시 보임)
+    wb.setSheetProp(si, 'merges', [...kept.map((m) => ({ ...m })), ...add]);
+  }
+  // 조건부 서식: 원본과 겹치는 규칙을 잘라 대상 위치로 (수식 · 조건 값의 상대 참조는 옮긴 만큼 이동)
+  const rules = (wb.sheets[srcSi].cond ?? []).filter((rule) => ruleRanges(rule).some((g) => g.r1 <= src.r2 && g.r2 >= src.r1 && g.c1 <= src.c2 && g.c2 >= src.c1));
+  if (!rules.length) return;
+  const shiftF = (f, dr, dc) => (typeof f === 'string' && f.startsWith('=') ? shiftFormula(f, dr, dc) : f);
+  const added = [];
+  for (const rule of rules) {
+    const clips = ruleRanges(rule).map((g) => ({ r1: Math.max(g.r1, src.r1), c1: Math.max(g.c1, src.c1), r2: Math.min(g.r2, src.r2), c2: Math.min(g.c2, src.c2) })).filter((g) => g.r1 <= g.r2 && g.c1 <= g.c2);
+    const ranges = [];
+    for (const [dr, dc] of tiles) {
+      for (const g of clips) {
+        const n = { r1: g.r1 + dr, c1: g.c1 + dc, r2: Math.min(g.r2 + dr, area.r2), c2: Math.min(g.c2 + dc, area.c2) };
+        if (n.r1 <= n.r2 && n.c1 <= n.c2) ranges.push(n);
+      }
+    }
+    if (!ranges.length) continue;
+    // 수식 기준점: 원래 규칙의 첫 범위 왼쪽 위 → 잘린 첫 범위의 왼쪽 위
+    const odr = clips[0].r1 - rule.r1;
+    const odc = clips[0].c1 - rule.c1;
+    const copy = { ...structuredClone(rule), ...ranges[0], more: ranges.length > 1 ? ranges.slice(1) : undefined };
+    delete copy.pivot;
+    for (const k of ['formula', 'v1', 'v2']) if (copy[k] !== undefined) copy[k] = shiftF(copy[k], odr, odc);
+    added.push(copy);
+  }
+  if (!added.length) return;
+  // 대상 영역만 덮던 기존 규칙은 대상 부분을 잃음 (엑셀: 서식 복사는 대상의 조건부 서식을 바꿈)
+  const inArea = (g) => g.r1 >= area.r1 && g.r2 <= area.r2 && g.c1 >= area.c1 && g.c2 <= area.c2;
+  const rest = (sheet().cond ?? []).filter((rule) => !ruleRanges(rule).every(inArea));
+  wb.setSheetProp(si, 'cond', [...added, ...rest]);
+}
+
 function applyPainter() {
-  const { styles } = painter;
+  const { styles, area } = painter;
   const h = styles.length;
   const w = styles[0].length;
   const tgt = sel;
-  const th = selIsActiveOnly() ? h : Math.min(tgt.r2 - tgt.r1 + 1, 5000);
-  const tw = selIsActiveOnly() ? w : Math.min(tgt.c2 - tgt.c1 + 1, 500);
+  // 행 · 열 전체 선택이면 원본 크기 그대로(사용 범위까지), 셀 하나면 원본 크기로 넓힘, 아니면 선택 영역에 반복
+  const single = selIsActiveOnly() || (() => { const m = wb.mergeAt(si, active.r, active.c); return m && m.r1 === tgt.r1 && m.c1 === tgt.c1 && m.r2 === tgt.r2 && m.c2 === tgt.c2; })();
+  const th = single ? h : Math.min(tgt.r2 - tgt.r1 + 1, selKind === 'cols' ? h : 5000);
+  const tw = single ? w : Math.min(tgt.c2 - tgt.c1 + 1, selKind === 'rows' ? w : 500);
   wb.transact(() => {
     for (let i = 0; i < th; i++) {
       for (let j = 0; j < tw; j++) {
-        const cur = wb.getCell(si, tgt.r1 + i, tgt.c1 + j);
-        wb.setCellData(si, tgt.r1 + i, tgt.c1 + j, { raw: cur?.raw ?? '', style: styles[i % h][j % w], comment: cur?.comment });
+        const cur = cellData(wb.getCell(si, tgt.r1 + i, tgt.c1 + j));
+        // 값 · 수식 · 메모 · 링크 · 셀 안 그림은 그대로, 서식만 바꿈
+        wb.setCellData(si, tgt.r1 + i, tgt.c1 + j, { ...(cur ?? { raw: '' }), style: { ...styles[i % h][j % w] } });
       }
     }
+    copyFormatExtras(painter.si, area, tgt, th, tw);
+    // 열 너비 · 행 높이 (열 · 행 전체를 복사해 열 · 행 전체에 칠할 때, 엑셀과 같음)
+    if (painter.widths && selKind === 'cols') {
+      const n = sel.c2 - sel.c1 + 1;
+      for (let j = 0; j < n && j < 500; j++) wb.setColWidth(si, sel.c1 + j, painter.widths[j % painter.widths.length]);
+    }
+    if (painter.heights && selKind === 'rows') {
+      const n = sel.r2 - sel.r1 + 1;
+      for (let i = 0; i < n && i < 5000; i++) { const hgt = painter.heights[i % painter.heights.length]; if (hgt !== undefined) wb.setRowHeight(si, sel.r1 + i, hgt); }
+    }
   }, meta());
-  if (th !== tgt.r2 - tgt.r1 + 1 || tw !== tgt.c2 - tgt.c1 + 1) {
+  if (selKind === 'cells' && (th !== tgt.r2 - tgt.r1 + 1 || tw !== tgt.c2 - tgt.c1 + 1)) {
     selectRange({ r1: tgt.r1, c1: tgt.c1, r2: tgt.r1 + th - 1, c2: tgt.c1 + tw - 1 }, 'cells', active);
   }
+  if (painter.widths || painter.heights) gv.layout();
   if (!painter.sticky) {
     painter = null;
     dom.view.classList.remove('painting');
   }
   setMode();
   updateRibbon();
+  gv.renderAll();
 }
 
 function toggleMerge(kind = 'center') {
