@@ -571,6 +571,7 @@ function* readSheet(files, path, ctx) {
   const blockMode = !!dimRef && dimRef.r2 - dimRef.r1 + 1 > BLOCK_MIN_ROWS;
   let blockStart = -1;
   let blockLast = -1;
+  let lateEmpty = null; // [행, 열, 서식] … 블록 열 서식과 같아 건너뛴 빈 칸
   const builders = [];
   const colFmt = [];
   const formulaMemo = ctx.formulaMemo ??= { legacy: new Map(), modern: new Map(), shape: new Map() }; // 같은 수식 문자열(표의 계산 열 등)은 한 번만 변환
@@ -692,7 +693,8 @@ function* readSheet(files, path, ctx) {
             if (r > blockLast) blockLast = r;
             continue;
           }
-          if (value !== '') continue; // 빈 글자 셀은 블록 대신 보통 셀로 (빈 칸과 구별)
+          // 빈 칸의 서식은 블록 열 서식으로 (블록 마지막 행보다 아래면 나중에 보통 셀로 되살림)
+          if (value !== '') { if (style) (lateEmpty ??= []).push(r, cc, style); continue; } // 빈 글자 셀은 블록 대신 보통 셀로 (빈 칸과 구별)
         }
       }
       // 셀에 배치한 그림 (richData 값 메타데이터 vm)
@@ -708,6 +710,10 @@ function* readSheet(files, path, ctx) {
     }
   }
   sheet.unsupported = unsupported;
+  if (lateEmpty) {
+    const last = blockMode && blockLast >= blockStart ? blockLast : -1;
+    for (let i = 0; i < lateEmpty.length; i += 3) if (lateEmpty[i] > last && !sheet.cells.getRC(lateEmpty[i], lateEmpty[i + 1])) sheet.cells.setRC(lateEmpty[i], lateEmpty[i + 1], { raw: '', style: lateEmpty[i + 2] });
+  }
   if (blockMode && blockLast >= blockStart) {
     const n = blockLast - blockStart + 1;
     const width = Math.max(builders.length, colFmt.length);

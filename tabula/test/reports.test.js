@@ -240,3 +240,15 @@ test('SUM(A1): 참조한 칸의 글자는 무시 (직접 인수 "" 만 #VALUE!) 
   assert.equal(w2.getValue(0, 10, 0), 1);
   assert.equal(calc(w2, '=SUM(B11:B12)'), 30);
 });
+
+test('INDIRECT(ADDRESS()) 는 한 칸 · 보고서 필터만 있는 피벗 · 표 밖 [#This Row] 는 #VALUE! · 오류 값 입력', async () => {
+  const { parse, mayReturnArray } = await import('../src/formula.js');
+  assert.equal(mayReturnArray(parse('SUMIFS(A:A,B:B,INDIRECT(ADDRESS(1,COLUMN(),1,1)))')), false);
+  assert.equal(mayReturnArray(parse('INDIRECT("A1:B2")')), true);
+  const wb = new Workbook();
+  put(wb, [['월', '비용'], ['7월', '1'], ['8월', '2']]);
+  const g = pivotOf(wb, { source: 'Sheet1', range: { r1: 0, c1: 0, r2: 2, c2: 1 }, rows: [], cols: [], values: [], pages: ['월'], filters: { 월: ['7월'] }, layout: 'compact', top: 0, left: 4 }).grid;
+  assert.deepEqual(g, [['월', '7월']]);
+  wb.setInput(0, 10, 0, '#n/a');
+  assert.equal(calc(wb, '=ISNA(A11)'), true);
+});

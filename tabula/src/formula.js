@@ -542,6 +542,7 @@ export function evalAny(node, ctx) {
     case 'sref': {
       const ref = ctx.structRef?.(node.table, node.spec);
       if (!ref) throw ERR.REF;
+      if (ref.error) throw ref.error;
       return new RefValue(ref.sheet, ref.r1, ref.c1, ref.r2, ref.c2);
     }
     case 'spill': {
@@ -891,6 +892,9 @@ export function mayReturnArray(node) {
         if (d === 2) return zero(a[1]) || a.length < 3 || zero(a[2]);
         return true;
       }
+      // INDIRECT(ADDRESS(…)) 는 늘 한 칸 · 인수 없는 ROW() · COLUMN() 도 한 칸
+      if (node.name === 'INDIRECT' && node.args[0]?.type === 'func' && node.args[0].name === 'ADDRESS') return node.args[0].args.some(mayReturnArray);
+      if ((node.name === 'ROW' || node.name === 'COLUMN') && !node.args.length) return false;
       if (ARRAY_FUNCS.has(node.name)) return true;
       const fn = FUNCS[node.name];
       if (!fn) return true;

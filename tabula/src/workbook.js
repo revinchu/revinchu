@@ -887,7 +887,8 @@ export class Workbook {
       usedCols: (sheet) => this.usedRange(this.resolveSheet(sheet, si)).cols,
       structRef: (table, spec) => {
         const rg = resolveStructRef(this, table, spec, ctx.here);
-        if (!rg) return null;
+        // 표의 데이터 행 밖에서 [#This Row]: 엑셀은 #VALUE! (암시적 교차 실패)
+        if (!rg) return /^\s*(@|\[?#this row|\[?#현재 행)/i.test(String(spec ?? '')) ? { error: ERR.VALUE } : null;
         const range = rg.r1 !== rg.r2 || rg.c1 !== rg.c2;
         return { sheet: this.sheets[rg.si].name, r1: rg.r1, c1: rg.c1, r2: rg.r2, c2: rg.c2, range };
       },
@@ -902,7 +903,8 @@ export class Workbook {
       cell: (sheet, r, c) => this.getValue(this.resolveSheet(sheet, si), r, c),
       range: (sheet, r1, c1, r2, c2) => {
         const s = this.resolveSheet(sheet, si);
-        if ((r2 - r1 + 1) * (c2 - c1 + 1) > 4096 && this.sheets[s]) return this.rangeFast(s, r1, c1, r2, c2);
+        // 256칸이 넘으면 캐시된 읽기 (같은 범위를 읽는 수식 수만 개가 SUMIFS 색인 · 배열을 같이 씀)
+        if ((r2 - r1 + 1) * (c2 - c1 + 1) > 256 && this.sheets[s]) return this.rangeFast(s, r1, c1, r2, c2);
         const rows = [];
         for (let r = r1; r <= r2; r++) {
           const row = [];

@@ -1158,6 +1158,15 @@ export function computePivot(input, d) {
 
   // 글자 항목은 그대로: '=' · 작은따옴표로 시작하거나, 입력으로 읽으면 글자가 달라지는 것(001 · 날짜처럼 보이는 글자)은 앞에 '
   const text = (s, role) => ({ raw: typeof s === 'number' ? formatGeneral(s) : labelRaw(String(s ?? '')), style: { ...styleFor(role) }, role });
+  // 보고서 필터만 있는 피벗 (월 선택 칸 등으로 씀): 엑셀은 필터 행만 보이고 본문 칸은 비어 있음
+  if (!d.rows.length && !d.cols.length && !V && d.pages?.length) {
+    const grid = d.pages.map((p) => {
+      const allowed = d.filters?.[p];
+      const shown = allowed?.length === 1 ? d.itemCaptions?.[p]?.[allowed[0]] ?? allowed[0] : allowed?.length ? '(다중 항목)' : '(모두)';
+      return [text(d.fieldCaptions?.[p] ?? p, 'pageLabel'), text(shown, 'pageValue')];
+    });
+    return { grid, meta: { header, rowIdx, colIdx, valIdx, values, labelCols: 1, pageRows: grid.length, headerRows: 0, colLeaves: [], rowItems: [], colItems: [], rowTree: null, colTree: null, width: 2, bodyRows: 0, empty: true } };
+  }
   if (!d.rows.length && !d.cols.length && !V) {
     const grid = Array.from({ length: 18 }, (_, r) => Array.from({ length: 3 }, (_, c) => ({
       raw: r === 0 && c === 0 ? '피벗 테이블 보고서를 작성하려면 [피벗 테이블 필드] 목록에서 필드를 선택하세요.' : '',
