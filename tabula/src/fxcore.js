@@ -199,6 +199,8 @@ export const CLOSED_BOOK = { hit: false };
 // ───────────────────────── 인수 모으기 ─────────────────────────
 /** SUM 계열 규칙: 범위 안에서는 숫자만, 직접 인수는 숫자로 변환 */
 export function collectNums(args, { errors = true } = {}) {
+  // 직접 적은 오류 인수(#REF! 등)가 범위 안의 오류보다 먼저 (엑셀: SUM(A1,#REF!) 에서 A1 이 #DIV/0! 이어도 #REF!)
+  if (errors) for (const a of args) if (isError(a)) throw a;
   const out = [];
   for (const a of args) {
     if (a instanceof Range) {

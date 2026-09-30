@@ -254,6 +254,14 @@ export function parseInput(text) {
       return { value: serialOf(y, mo, d), numFmt: 'date' };
     }
   }
+  // 월/일만 (1/1 · 3-5 · 1월 1일): 올해 날짜 (한국어 엑셀과 같음). 없는 날(2/30)은 글자
+  m = /^(\d{1,2})\s*[-/]\s*(\d{1,2})$/.exec(t) ?? /^(\d{1,2})\s*월\s*(\d{1,2})\s*일$/.exec(t);
+  if (m) {
+    const mo = +m[1];
+    const d = +m[2];
+    const y = new Date().getFullYear();
+    if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31 && new Date(Date.UTC(y, mo - 1, d)).getUTCDate() === d) return { value: serialOf(y, mo, d), numFmt: 'date' };
+  }
   m = /^(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(t);
   if (m && +m[2] >= 1 && +m[2] <= 12 && +m[3] >= 1 && +m[3] <= 31 && +m[4] < 24 && +m[5] < 60 && +(m[6] || 0) < 60) {
     const day = serialOf(+m[1], +m[2], +m[3]);

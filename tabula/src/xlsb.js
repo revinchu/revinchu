@@ -620,6 +620,53 @@ function cacheItem(t, rd) {
   }
 }
 
+/**
+ * 피벗 캐시 레코드 (pivotCacheRecords.bin) → xlsx 의 <pivotCacheRecords> XML. 행마다 BrtPCRRecordDt(34) 뒤에 필드별 항목 기록,
+ * 또는 BrtPCRRecord(33) 하나에 필드 값을 이어 붙인 형태 (공유 항목이 있는 필드 = u32 번호, 숫자 = f64, 글자 = XLWideString, 날짜 = 8바이트).
+ * 형식을 알 수 없으면 null (그러면 원본에서 다시 계산)
+ */
+function pivotRecordsXml(u8, fields, recordCount) {
+  const db = fields.filter((f) => f.database);
+  const kinds = db.map((f) => {
+    if (f.items.length) return 'x';
+    const sf = f.sflags ?? 0;
+    const num = sf & 0x40 || !(sf & 8);
+    if (sf & 4 && !(sf & 8)) return 'd';
+    if (sf & 8 && !(sf & 0x40) && !(sf & 4)) return 's';
+    return num ? 'n' : null;
+  });
+  const out = [];
+  let cur = null;
+  let count = 0;
+  let bad = false;
+  const flush = () => { if (cur) { out.push(`<r>${cur.join('')}</r>`); count++; } cur = null; };
+  for (const r of records(u8)) {
+    if (r.t === 34) { flush(); cur = []; continue; }
+    if (r.t === 33) {
+      flush();
+      const rd = new Rd(u8, r.p, r.e);
+      const row = [];
+      for (const k of kinds) {
+        if (k === 'x') row.push(`<x v="${rd.u32()}"/>`);
+        else if (k === 'n') row.push(`<n v="${numText(rd.f64())}"/>`);
+        else if (k === 's') row.push(`<s v="${esc(rd.str() ?? '')}"/>`);
+        else if (k === 'd') row.push(cacheItem(25, rd));
+        else { bad = true; break; }
+      }
+      if (bad || rd.p !== r.e) return null;
+      out.push(`<r>${row.join('')}</r>`);
+      count++;
+      continue;
+    }
+    if (!cur) continue;
+    if (r.t === 26) cur.push(`<x v="${new Rd(u8, r.p, r.e).u32()}"/>`);
+    else if (r.t >= 20 && r.t <= 32) cur.push(cacheItem(r.t, new Rd(u8, r.p, r.e)));
+  }
+  flush();
+  if (!count || (recordCount && count !== recordCount)) return null;
+  return `<pivotCacheRecords xmlns="${NS}" count="${count}">${out.join('')}</pivotCacheRecords>`;
+}
+
 function cacheArray(rd) {
   const type = rd.u16(); const n = rd.i32();
   const out = [];
@@ -651,7 +698,7 @@ function groupXml(g) {
   return `<fieldGroup${attrs({ par: g.par >= 0 ? g.par : undefined, base: g.base >= 0 ? g.base : undefined })}>${rp}${n ? `<groupItems count="${n}">${items}</groupItems>` : ''}</fieldGroup>`;
 }
 
-function pivotCacheXml(u8, env) {
+function pivotCacheXml(u8, env, out = null) {
   let source = '';
   const fields = [];
   let f = null;
@@ -712,7 +759,9 @@ function pivotCacheXml(u8, env) {
     const sa = { containsSemiMixedTypes: sf & 1 ? undefined : 0, containsNonDate: sf & 2 ? undefined : 0, containsDate: sf & 4 ? 1 : undefined, containsString: sf & 8 ? undefined : 0, containsBlank: sf & 0x10 ? 1 : undefined, containsNumber: sf & 0x40 ? 1 : undefined, containsInteger: sf & 0x80 ? 1 : undefined };
     return `<cacheField${attrs({ name: x.name, numFmtId: x.fmt >= 0 ? x.fmt : 0, formula, databaseField: x.database ? undefined : 0 })}><sharedItems${attrs(sa)}${items ? ` count="${(items.match(/<[a-z]/g) ?? []).length}">${items}</sharedItems>` : '/>'}${groupXml(x.group)}</cacheField>`;
   }).join('');
-  return `<pivotCacheDefinition xmlns="${NS}" xmlns:r="${NS_R}" refreshOnLoad="1" recordCount="${recordCount}"><cacheSource type="worksheet">${source}</cacheSource><cacheFields count="${fields.length}">${fieldsXml}</cacheFields></pivotCacheDefinition>`;
+  if (out) { out.fields = fields; out.recordCount = recordCount; }
+  // 캐시 레코드(엑셀이 저장한 원본)를 읽을 수 있으면 그것으로 (새로 고침 전의 엑셀 화면과 같게), 없으면 열 때 원본에서 계산
+  return `<pivotCacheDefinition xmlns="${NS}" xmlns:r="${NS_R}"${out?.records ? '' : ' refreshOnLoad="1"'} recordCount="${recordCount}"><cacheSource type="worksheet">${source}</cacheSource><cacheFields count="${fields.length}">${fieldsXml}</cacheFields></pivotCacheDefinition>`;
 }
 
 // ─────────────── 피벗 테이블 ───────────────
@@ -1204,12 +1253,20 @@ export function* convertXlsb(files) {
   for (const r of byType('styles')) put(files, r.target, stylesXml(files[r.target]));
   for (const r of byType('sharedStrings')) { info.strings = readStrings(files[r.target]); delete files[r.target]; }
   for (const k of Object.keys(files)) {
-    if (/^xl\/tables\/[^/]+\.bin$/i.test(k)) { const x = tableXml(files[k], env); if (x) put(files, k, x); } else if (/^xl\/pivotCache\/pivotCacheDefinition[^/]*\.bin$/i.test(k)) put(files, k, pivotCacheXml(files[k], env));
+    if (/^xl\/tables\/[^/]+\.bin$/i.test(k)) { const x = tableXml(files[k], env); if (x) put(files, k, x); } else if (/^xl\/pivotCache\/pivotCacheDefinition[^/]*\.bin$/i.test(k)) {
+      // 캐시 레코드도 xlsx 형식으로 (엑셀이 저장한 원본 = 새로 고치기 전 피벗 결과)
+      const info0 = {};
+      pivotCacheXml(files[k], env, info0);
+      const rec = relsOf(files, k).find((x) => x.type === 'pivotCacheRecords');
+      const recXml = rec && files[rec.target] && files[rec.target].length < (24 << 20) ? pivotRecordsXml(files[rec.target], info0.fields, info0.recordCount) : null;
+      if (recXml) { put(files, rec.target, recXml); files[rec.target].__xml = true; }
+      put(files, k, pivotCacheXml(files[k], env, { records: !!recXml }));
+    }
     else if (/^xl\/pivotTables\/[^/]+\.bin$/i.test(k)) put(files, k, pivotTableXml(files[k]));
     else if (/^xl\/slicerCaches\/[^/]+\.bin$/i.test(k)) put(files, k, slicerCacheXml(files[k]));
     else if (/^xl\/slicers\/[^/]+\.bin$/i.test(k)) put(files, k, slicersXml(files[k]));
     else if (/^xl\/comments[^/]*\.bin$/i.test(k)) put(files, k, commentsXml(files[k]));
-    else if (/^xl\/(calcChain|metadata)\.bin$|pivotCacheRecords/i.test(k)) delete files[k];
+    else if (/^xl\/(calcChain|metadata)\.bin$/i.test(k) || (/pivotCacheRecords/i.test(k) && !files[k].__xml)) delete files[k];
   }
   yield { p: 0.1, msg: '시트 준비 중' };
   for (const r of byType('worksheet')) {

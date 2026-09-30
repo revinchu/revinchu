@@ -1648,6 +1648,7 @@ function readPivotCache(files, path) {
       if (it.name === 'd') return isoSerial(it.attrs.v);
       if (it.name === 'b') return it.attrs.v === '1' || it.attrs.v === 'true';
       if (it.name === 'm') return null;
+      if (it.name === 'e') return { error: it.attrs.v ?? '#N/A' }; // 오류 항목: 피벗 합계가 오류가 됨
       return unx(it.attrs.v ?? '');
     });
     // tb:formula = WIXEL 가 쓴 원래 수식 (DIVIDE · ROWS 등 엑셀에 없는 함수)
@@ -1705,7 +1706,8 @@ function readCacheRecords(files, cache) {
             : t === 'd' ? isoSerial(v)
               : t === 'b' ? v === '1' || v === 'true'
                 : t === 'm' ? null
-                  : unx(decodeEntities(v ?? ''));
+                  : t === 'e' ? { error: v ?? '#N/A' }
+                    : unx(decodeEntities(v ?? ''));
         j++;
       }
     }
@@ -1953,7 +1955,10 @@ function pivotDefFrom(root, cache, tables, sheetName) {
   }
   if (Object.keys(ff).length) def.fieldFilters = ff;
   def.captureFmt = true;
-  const loc = refToRange(child(root, 'location')?.attrs.ref ?? '');
+  const locEl = child(root, 'location');
+  const loc = refToRange(locEl?.attrs.ref ?? '');
+  // 클래식 레이아웃(열 필드 없이 값 여러 개): 값 이름 위에 '값' 단추 행 (firstHeaderRow 1 · firstDataRow 2)
+  if (def.values.length > 1 && !def.valuesOnRows && !colF.length && Number(locEl?.attrs.firstHeaderRow) === 1 && Number(locEl?.attrs.firstDataRow) === 2) def.valuesHeadRow = true;
   if (loc) {
     const pageRows = def.pages?.length ? def.pages.length + 1 : 0;
     const top = Math.max(0, loc.r1 - pageRows);
@@ -3149,7 +3154,7 @@ function pivotParts(wb, si, def, cache, name, pool) {
   const top = (def.top ?? 0) + meta.pageRows;
   const left = def.left ?? 0;
   const loc = { r1: top, c1: left, r2: top + meta.bodyRows - 1, c2: left + meta.width - 1 };
-  const firstHeaderRow = colF.length ? 1 : multiV ? 0 : 1;
+  const firstHeaderRow = colF.length ? 1 : multiV ? (d.valuesHeadRow && !d.valuesOnRows ? 1 : 0) : 1;
   const pageXml = pageF.length ? `<pageFields count="${pageF.length}">${pageF.map((f) => {
     const allowed = filters.find(([i]) => i === f)?.[1];
     const one = allowed && allowed.size === 1 ? items.get(f)?.keys.findIndex((k) => itemText(k) === [...allowed][0]) : -1;

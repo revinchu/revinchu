@@ -135,6 +135,22 @@ export class Column {
     return out;
   }
 
+  /** 오류 값이 든 행 → 오류 ({code}), 없으면 null (피벗 합계가 오류가 됨 · 엑셀과 같음) */
+  errs() {
+    if (this._errs !== undefined) return this._errs;
+    const { n, get } = this;
+    let m = null;
+    for (let i = 0; i < n; i++) {
+      const v = get(i);
+      if (v && typeof v === 'object') {
+        const e = typeof v.code === 'string' && v.code[0] === '#' ? v : typeof v.error === 'string' ? { code: v.error } : null;
+        if (e) (m ??= new Map()).set(i, e);
+      }
+    }
+    this._errs = m;
+    return m;
+  }
+
   /** 비어 있지 않은 칸 (개수 집계용) */
   ne() {
     if (this._ne) return this._ne;
@@ -268,8 +284,9 @@ export function groupAggregate(cube, sel, dims, measures) {
   const mcols = measures.map((m) => (m.col >= 0 ? cube.col(m.col) : null));
   const numArr = mcols.map((c) => (c ? c.num() : null));
   const neArr = mcols.map((c) => (c && !c.numericOnly ? c.ne() : null));
+  const errArr = mcols.map((c) => (c && !c.numericOnly ? c.errs() : null));
   const mk = (on) => (on ? new Float64Array(cap) : null);
-  const st = measures.map((m) => ({ count: mk(true), nums: mk(true), sum: mk(true), sq: mk(m.need?.sq), min: mk(m.need?.mm), max: mk(m.need?.mm), prod: mk(m.need?.prod) }));
+  const st = measures.map((m, i) => ({ count: mk(true), nums: mk(true), sum: mk(true), sq: mk(m.need?.sq), min: mk(m.need?.mm), max: mk(m.need?.mm), prod: mk(m.need?.prod), err: errArr[i] ? [] : null }));
   const grow = () => {
     const ncap = cap * 2;
     const g2 = new Int32Array(ncap * Math.max(1, D));
@@ -316,6 +333,7 @@ export function groupAggregate(cube, sel, dims, measures) {
       const ne = neArr[m];
       const v = num[row];
       if (ne ? ne[row] : v === v) s.count[g]++;
+      if (v !== v && s.err && s.err[g] === undefined) { const e = errArr[m].get(row); if (e) s.err[g] = e; }
       if (v === v) {
         s.nums[g]++;
         s.sum[g] += v;
@@ -334,6 +352,7 @@ export function groupAcc(agg, m, g) {
   return {
     count: s.count[g], nums: s.nums[g], sum: s.sum[g], sq: s.sq ? s.sq[g] : 0,
     min: s.min ? s.min[g] : Infinity, max: s.max ? s.max[g] : -Infinity, prod: s.prod ? s.prod[g] : 1,
+    ...(s.err?.[g] ? { err: s.err[g] } : {}),
   };
 }
 

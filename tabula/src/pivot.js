@@ -345,10 +345,15 @@ function add(acc, v) {
     acc.prod *= v;
     if (v < acc.min) acc.min = v;
     if (v > acc.max) acc.max = v;
+  } else if (v && typeof v === 'object' && !acc.err) {
+    const e = typeof v.code === 'string' && v.code[0] === '#' ? v : typeof v.error === 'string' ? { code: v.error } : null;
+    if (e) acc.err = e;
   }
 }
 function result(acc, agg) {
   if (!acc) return null;
+  // 원본에 오류 값이 있으면 합계 · 평균 등은 그 오류 (개수만 셈) — 엑셀과 같음
+  if (acc.err && agg !== 'count' && agg !== 'countNums') return acc.err;
   const n = acc.nums;
   const varOf = (sample) => {
     const d = n - (sample ? 1 : 0);
@@ -421,7 +426,8 @@ function makeMeasures(header, values, calcFields) {
       if (cc) return calcValue(cc, list, depth + 1);
       const i = baseIdx(name);
       if (i < 0) return CALC_ERR('#NAME?');
-      return list[slot.get(i)]?.sum ?? 0;
+      const a = list[slot.get(i)];
+      return a?.err ?? a?.sum ?? 0;
     });
   };
   const n = cols.length;
@@ -468,6 +474,7 @@ function mergeList(into, from) {
     if (b.min < a.min) a.min = b.min;
     if (b.max > a.max) a.max = b.max;
     a.prod *= b.prod;
+    if (b.err && !a.err) a.err = b.err;
   }
 }
 
@@ -532,6 +539,7 @@ export function normalizeDef(def, header) {
     colCaption: def.colCaption ?? null,
     ...(Number.isInteger(def.valuesPos) ? { valuesPos: def.valuesPos } : {}),
     ...(def.valuesOnRows ? { valuesOnRows: true } : {}), // Σ 값을 행 영역에 (엑셀 dataOnRows)
+    ...(def.valuesHeadRow ? { valuesHeadRow: true } : {}), // 클래식 레이아웃의 '값' 행
     styleOpts: { rowHeaders: true, colHeaders: true, bandRows: false, bandCols: false, ...(def.styleOpts ?? {}) },
     header: allHeader,
   };
@@ -1113,6 +1121,14 @@ function orderTree(root, fields, d, measureAt) {
       const keys = sortKeys(kids.map((c) => c.key));
       const byKey = new Map(kids.map((c) => [kk(c.key), c]));
       kids = keys.map((k) => byKey.get(kk(k)));
+      // 글자 정렬 필드인데 항목이 모두 파일에 저장된 순서에 있으면 그 순서 (엑셀이 정렬해 둔 순서: 날짜와 글자가 섞인 경우 등)
+      const filePos = s && order?.length ? new Map(order.map((t, i) => [t, i])) : null;
+      if (filePos && kids.every((c) => filePos.has(itemText(c.key)))) {
+        kids = [...kids].sort((a, b) => filePos.get(itemText(a.key)) - filePos.get(itemText(b.key)));
+        n.children = kids;
+        kids.forEach(rec);
+        return;
+      }
       if (order?.length && !s) {
         const pos = new Map(order.map((t, i) => [t, i]));
         const known = kids.filter((c) => pos.has(itemText(c.key))).sort((a, b) => pos.get(itemText(a.key)) - pos.get(itemText(b.key)));
@@ -1465,6 +1481,8 @@ export function computePivot(input, d) {
         : Array.from({ length: colLevels }, (_, lvl) => { const vLvl = colMulti ? vp : -1; return lvl === vLvl ? '값' : fcap(d.cols[vLvl >= 0 && lvl > vLvl ? lvl - 1 : lvl]); });
       grid.push([text(valueCaption, 'valueCaption'), ...Array(labelCols - 1).fill(null).map(() => text('', 'corner')), ...colLeaves.map((_, k) => text(caps[k] ?? '', 'colHead'))]);
     }
+    // 클래식 레이아웃: 열 필드 없이 값 여러 개면 값 이름 위에 '값' 행 (첫 값 칸에만)
+    if (!Lc && colMulti && d.valuesHeadRow) grid.push([...Array.from({ length: labelCols }, () => text('', 'corner')), ...colLeaves.map((_, k) => text(k ? '' : '값', 'colHead'))]);
     for (let lvl = 0; lvl < colLevels; lvl++) {
       const row = lvl === colLevels - 1 ? rowHeaderCells() : Array.from({ length: labelCols }, () => text('', 'corner'));
       let prev = null;
