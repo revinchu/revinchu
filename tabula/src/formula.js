@@ -857,6 +857,22 @@ export function mayReturnArray(node) {
     case 'paren': case 'neg': case 'pos': case 'pct': return mayReturnArray(node.a);
     case 'bin': return mayReturnArray(node.a) || mayReturnArray(node.b);
     case 'func': {
+      // XLOOKUP · INDEX 는 결과가 한 칸인 흔한 모양을 구별 (전체 열 조회 수천 개를 분산 후보로 미리 계산하지 않게)
+      if (node.name === 'XLOOKUP' || node.name === 'INDEX') {
+        const a = node.args;
+        const oneD = (n) => (n?.type === 'ref' ? (!n.ref.range || n.ref.c1 === n.ref.c2 || n.ref.r1 === n.ref.r2 ? 1 : 2)
+          : n?.type === 'sref' && !/:|#all|#data|#headers|#totals|#머리글|#데이터|#전체/i.test(n.spec) && !/^\s*$/.test(n.spec) ? 1 : 0);
+        if (node.name === 'XLOOKUP') {
+          if (a.some((x, i) => i !== 1 && i !== 2 && mayReturnArray(x))) return true;
+          return oneD(a[2]) !== 1;
+        }
+        const zero = (n) => !n || n.type === 'empty' || (n.type === 'num' && n.v === 0);
+        if (mayReturnArray(a[1]) || mayReturnArray(a[2])) return true;
+        const d = oneD(a[0]);
+        if (d === 1) return zero(a[1]) && (a.length < 3 || zero(a[2]));
+        if (d === 2) return zero(a[1]) || a.length < 3 || zero(a[2]);
+        return true;
+      }
       if (ARRAY_FUNCS.has(node.name)) return true;
       const fn = FUNCS[node.name];
       if (!fn) return true;

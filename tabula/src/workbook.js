@@ -581,9 +581,23 @@ export class Workbook {
   }
 
   /** 분산될 수 있는 수식을 모두 계산해 분산 영역을 확정 */
-  ensureSpills() {
+  /**
+   * 분산 후보 수식을 모두 계산 (빈 칸에 보일 분산 값을 알기 위해).
+   * 계산 도중 다시 불리면(수식이 범위를 읽음) 그 범위(area)로 분산될 수 있는 남은 수식만 계산 —
+   * 남은 대기열 전체를 겹겹이 계산하면 후보가 수천 개일 때 끝나지 않음
+   */
+  ensureSpills(area = null) {
     if (this.spillState === 'done') return;
-    if (this.spillState === 'running') { this.runSpillQueue(); return; }
+    if (this.spillState === 'running') {
+      if (!area) { this.runSpillQueue(); return; }
+      const [s, , , r2, c2] = area;
+      const q = this.spillQueue;
+      for (let i = this.spillPos; i < q.length; i++) {
+        const [si, r, c] = q[i];
+        if (si === s && r <= r2 && c <= c2) this.getValue(si, r, c);
+      }
+      return;
+    }
     this.spillState = 'running';
     if (!this.arrayList) {
       const list = [];
@@ -610,7 +624,7 @@ export class Workbook {
   }
 
   spillValueAt(si, r, c) {
-    this.ensureSpills();
+    this.ensureSpills([si, r, c, r, c]);
     if (!this.spillOwner.size) return null;
     const owner = this.spillOwner.get(`${si}:${r},${c}`);
     if (!owner) return null;
@@ -621,7 +635,7 @@ export class Workbook {
 
   /** 분산된 셀이면 원본(앵커) 셀 {r, c} */
   spillAnchorOf(si, r, c) {
-    this.ensureSpills();
+    this.ensureSpills([si, r, c, r, c]);
     const owner = this.spillOwner.get(`${si}:${r},${c}`);
     if (!owner) return null;
     const sp = this.spills.get(owner);
@@ -639,7 +653,7 @@ export class Workbook {
 
   /** 시트의 분산 영역 목록 (저장용) */
   spillsOf(si) {
-    this.ensureSpills();
+    this.ensureSpills([si, 0, 0, Infinity, Infinity]);
     return [...this.spills.values()].filter((sp) => sp.si === si);
   }
 
@@ -921,7 +935,7 @@ export class Workbook {
       }
     }
     // 분산 영역 (빈 칸에 표시되는 동적 배열 값)
-    this.ensureSpills();
+    this.ensureSpills([s, r1, c1, r2, c2]);
     for (const sp of this.spills.values()) {
       if (sp.si !== s || sp.r > r2 || sp.r + sp.h - 1 < r1 || sp.c > c2 || sp.c + sp.w - 1 < c1) continue;
       for (let r = Math.max(r1, sp.r); r <= Math.min(r2, sp.r + sp.h - 1); r++) {

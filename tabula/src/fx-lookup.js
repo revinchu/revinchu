@@ -256,7 +256,13 @@ export const LOOKUP = {
     const searchMode = optInt(val(sm, ev), 1);
     if (![0, -1, 1, 2, 3].includes(matchMode) || ![1, -1, 2, -2].includes(searchMode)) throw ERR.VALUE;
     const one = (k) => {
-      const i = xIndex(vals, k, matchMode, searchMode);
+      let i = xIndex(vals, k, matchMode, searchMode);
+      // 빈 값 찾기: 엑셀은 조회 범위의 빈 칸과 일치 (전체 열이면 데이터 아래 첫 빈 칸) → 돌려줄 칸이 비면 0
+      if (i < 0 && (k === null || k === undefined || k === '') && matchMode === 0) {
+        i = vals.findIndex((x) => x === null || x === undefined || x === '');
+        const span = look instanceof RefValue ? (byRow ? look.r2 - look.r1 + 1 : look.c2 - look.c1 + 1) : vals.length;
+        if (i < 0 && span > vals.length && ret instanceof RefValue) i = vals.length;
+      }
       if (i < 0) {
         if (notFound !== undefined && notFound !== null) return val(notFound, ev);
         throw ERR.NA;

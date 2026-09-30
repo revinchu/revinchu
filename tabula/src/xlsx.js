@@ -334,6 +334,63 @@ function readStyles(files, wbRels, theme) {
   return { xfs, dxfs, dxfOf, defaultFont, tableStyles, wbFont, slicerStyles };
 }
 
+const CHUNK_MIN = 48 << 20;
+const CHUNK = 8 << 20;
+const asciiBytes = (t) => Uint8Array.from(t, (ch) => ch.charCodeAt(0));
+const B_SD = asciiBytes('<sheetData');
+const B_SD_END = asciiBytes('</sheetData>');
+const B_ROW_END = asciiBytes('</row>');
+/** 바이트 배열에서 패턴 찾기 */
+function bytesIndexOf(u8, pat, from) {
+  const first = pat[0];
+  for (let i = u8.indexOf(first, from); i >= 0 && i <= u8.length - pat.length; i = u8.indexOf(first, i + 1)) {
+    let k = 1;
+    while (k < pat.length && u8[i + k] === pat[k]) k++;
+    if (k === pat.length) return i;
+  }
+  return -1;
+}
+function bytesLastIndexOf(u8, pat) {
+  for (let i = u8.lastIndexOf(pat[0]); i >= 0; i = i > 0 ? u8.lastIndexOf(pat[0], i - 1) : -1) {
+    let k = 1;
+    while (k < pat.length && u8[i + k] === pat[k]) k++;
+    if (k === pat.length) return i;
+  }
+  return -1;
+}
+/**
+ * 큰 시트 XML(바이트): sheetData 앞뒤만 글자로 바꾼 rest 와, 행 경계에서 자른 조각마다 scanRows 하는 rows()
+ * 접두사 있는 형식 · 작은 파일은 null (일반 경로)
+ */
+function chunkedSheet(u8) {
+  if (!u8 || u8.length < CHUNK_MIN) return null;
+  const a = bytesIndexOf(u8, B_SD, 0);
+  if (a < 0) return null;
+  const head = textOf(u8.subarray(0, a));
+  if (/<[A-Za-z_][\w.-]*:worksheet[\s>]/.test(head.slice(0, 2000))) return null;
+  const tagEnd = u8.indexOf(62, a); // '>'
+  if (u8[tagEnd - 1] === 47) return null; // '<sheetData/>'
+  const b = bytesLastIndexOf(u8, B_SD_END);
+  if (b < 0 || b < tagEnd) return null;
+  const rest = `${head}<sheetData/>${textOf(u8.subarray(b + B_SD_END.length))}`;
+  return {
+    rest,
+    *rows() {
+      let p = tagEnd + 1;
+      while (p < b) {
+        let e = Math.min(b, p + CHUNK);
+        if (e < b) {
+          const re = bytesIndexOf(u8, B_ROW_END, e);
+          e = re < 0 || re > b ? b : re + B_ROW_END.length;
+        }
+        const text = textOf(u8.subarray(p, e));
+        yield* scanRows(text, 0, text.length);
+        p = e;
+      }
+    },
+  };
+}
+
 /** sheetData 부분을 떼어 냄 (접두사 없는 일반 형식일 때만) */
 function splitSheetData(xml) {
   const a = xml.indexOf('<sheetData');
@@ -449,11 +506,13 @@ function cleanFormula(f, opt = {}) {
 
 function* readSheet(files, path, ctx) {
   // 셀 데이터(sheetData)는 빠른 전용 스캐너로, 나머지는 일반 XML 파서로 읽음
-  const xmlText = textOf(files[path]);
   const binRows = files.__xlsb?.rows.get(path); // xlsb: 셀은 바이너리에서 바로
-  const sd = binRows ? null : splitSheetData(xmlText);
-  const root = parseXml(sd ? sd.rest : xmlText);
-  const sheetRows = binRows ? binRows() : sd ? scanRows(xmlText, sd.start, sd.end) : domRows(child(root, 'sheetData'));
+  // 아주 큰 시트(수백 MB XML)는 한 번에 글자로 바꾸지 않고 행 경계에서 잘라 조금씩 (시간 · 메모리)
+  const big = !binRows ? chunkedSheet(files[path]) : null;
+  const xmlText = big || binRows ? null : textOf(files[path]);
+  const sd = binRows || big ? null : splitSheetData(xmlText);
+  const root = parseXml(big ? big.rest : binRows ? textOf(files[path]) : sd ? sd.rest : xmlText);
+  const sheetRows = binRows ? binRows() : big ? big.rows() : sd ? scanRows(xmlText, sd.start, sd.end) : domRows(child(root, 'sheetData'));
   const sheet = {
     cells: new CellMap(), colWidths: {}, rowHeights: {}, merges: [], cond: [], colStyles: {}, rowStyles: {},
     hiddenRows: {}, hiddenCols: {}, rowManual: {}, freeze: { rows: 0, cols: 0 }, filter: null, charts: [], images: [], shapes: [], validations: [], slicers: [],
