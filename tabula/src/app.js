@@ -5,7 +5,7 @@ import {
   FUNCTION_NAMES, isError, quoteSheetName, MAX_ROWS, MAX_COLS,
 } from './formula.js';
 import {
-  formatValue, displayedDecimals, parseInput, formatCode, styleForCode, codeOfStyle, adjustCodeDecimals, formatGeneral,
+  formatValue, NUMBER_FORMATS, displayedDecimals, parseInput, formatCode, styleForCode, codeOfStyle, adjustCodeDecimals, formatGeneral,
 } from './format.js';
 import { buildRibbon, FONTS, FONT_SIZES, TABS } from './ribbon.js';
 import { flashFill } from './flashfill.js';
@@ -56,7 +56,7 @@ import {
 } from './validation.js';
 import { OBJECT_PROPS, OBJECT_LABEL, SHAPE_KINDS, SHAPE_GROUPS, LINE_SHAPES, newShape, findObject, shapeSvg } from './shapes.js';
 import { extractVbaModules, fromBase64 } from './vba.js';
-import { findMatches, nextMatch, replaceText } from './find.js';
+import { findMatches, nextMatch, replaceText, FIND_FORMAT_KEYS } from './find.js';
 import {
   ANALYSIS_TOOLS, AnalysisError, splitGroups, descriptive, matrixTool, regression, histogram, rankPercentile, tTest, zTest, fTest, anova1, anova2,
   movingAverage, expSmoothing, randomNumbers, sampling, solveMin,
@@ -9057,7 +9057,7 @@ const findState = {
 let findCache = null;
 
 const findOpts = (lookIn = findState.lookIn) => ({
-  text: findState.text, matchCase: findState.matchCase, whole: findState.whole, regex: findState.regex, lookIn, byCols: findState.byCols, format: findState.format,
+  text: findState.text, matchCase: findState.matchCase, whole: findState.whole, regex: findState.regex, matchByte: !!findState.matchByte, lookIn, byCols: findState.byCols, format: findState.format,
   sheets: findState.scope === 'book' ? wb.sheets.map((_, i) => i).filter((i) => !isHiddenSheet(i)) : [si],
 });
 
@@ -9120,55 +9120,7 @@ function fmtPreview(fmt) {
 
 /** 찾을(바꿀) 서식 고르기 — 항목마다 "상관없음"이 기본 */
 function findFormatDialog(title, cur, done) {
-  const tri = (v) => (v === undefined ? '' : v ? '1' : '0');
-  const colorField = (name, label) => ({ name, label, type: 'select', value: cur?.[name] ? 'set' : '', options: [{ value: '', label: '상관없음' }, { value: 'set', label: '지정한 색' }] });
-  const nf = [['', '상관없음'], ['general', '일반'], ['number', '숫자'], ['comma', '쉼표 스타일'], ['currency', '통화'], ['accounting', '회계'], ['percent', '백분율'], ['date', '날짜'], ['time', '시간'], ['text', '텍스트']];
-  const pickers = {};
-  const dlg = formDialog(title, [
-    { name: 'bold', label: '굵게', type: 'select', value: tri(cur?.bold), options: [{ value: '', label: '상관없음' }, { value: '1', label: '굵게' }, { value: '0', label: '굵게 아님' }] },
-    { name: 'italic', label: '기울임꼴', type: 'select', value: tri(cur?.italic), options: [{ value: '', label: '상관없음' }, { value: '1', label: '기울임꼴' }, { value: '0', label: '기울임꼴 아님' }] },
-    { name: 'underline', label: '밑줄', type: 'select', value: tri(cur?.underline), options: [{ value: '', label: '상관없음' }, { value: '1', label: '밑줄' }, { value: '0', label: '밑줄 없음' }] },
-    colorField('color', '글꼴 색'),
-    colorField('fill', '채우기 색'),
-    { name: 'size', label: '글꼴 크기', type: 'number', value: cur?.size ?? '' },
-    { name: 'align', label: '가로 맞춤', type: 'select', value: cur?.align ?? '', options: [{ value: '', label: '상관없음' }, { value: 'left', label: '왼쪽' }, { value: 'center', label: '가운데' }, { value: 'right', label: '오른쪽' }] },
-    { name: 'numFmt', label: '표시 형식', type: 'select', value: cur?.numFmt ?? '', options: nf.map(([value, label]) => ({ value, label })) },
-  ], (v) => {
-    const f = {};
-    if (v.bold) f.bold = v.bold === '1';
-    if (v.italic) f.italic = v.italic === '1';
-    if (v.underline) f.underline = v.underline === '1';
-    if (v.color) f.color = pickers.color.value;
-    if (v.fill) f.fill = pickers.fill.value;
-    if (v.size) f.size = Number(v.size);
-    if (v.align) f.align = v.align;
-    if (v.numFmt) f.numFmt = v.numFmt;
-    done(Object.keys(f).length ? f : null);
-  }, {
-    onChange: (inputs) => {
-      for (const k of ['color', 'fill']) {
-        if (!pickers[k]) {
-          pickers[k] = el('input', { type: 'color', value: cur?.[k] ?? (k === 'fill' ? '#ffff00' : '#ff0000'), style: { width: '44px', height: '24px', padding: '0' } });
-          inputs[k].after(pickers[k]);
-        }
-        pickers[k].style.visibility = inputs[k].value ? 'visible' : 'hidden';
-      }
-    },
-  });
-  // 셀에서 서식 선택: 지금 칸의 서식을 그대로 (엑셀의 [셀에서 서식 선택])
-  const foot = dlg.root.querySelector('.dialog-foot');
-  foot.prepend(el('button', {
-    class: 'btn', style: { marginRight: 'auto' },
-    onclick: () => {
-      const st = wb.styleAt(si, active.r, active.c) ?? {};
-      const f = {};
-      for (const k of ['bold', 'italic', 'underline', 'color', 'fill', 'font', 'size', 'align', 'numFmt', 'code']) if (st[k] !== undefined && st[k] !== false) f[k] = st[k];
-      for (const k of ['bold', 'italic', 'underline']) f[k] = !!st[k];
-      dlg.close();
-      done(f);
-    },
-  }, '셀에서 서식 선택'));
-  foot.prepend(el('button', { class: 'btn', onclick: () => { dlg.close(); done(null); } }, '지우기'));
+  formatCellsDialog(0, { title, cur, done });
 }
 
 let findDlg = null;
@@ -9180,6 +9132,7 @@ function openFindDialog(tab = 'find') {
   const caseBox = el('input', { type: 'checkbox', checked: findState.matchCase });
   const wholeBox = el('input', { type: 'checkbox', checked: findState.whole });
   const regexBox = el('input', { type: 'checkbox', checked: findState.regex });
+  const byteBox = el('input', { type: 'checkbox', checked: !!findState.matchByte });
   const scopeSel = el('select', {}, el('option', { value: 'sheet' }, '시트'), el('option', { value: 'book' }, '통합 문서'));
   const orderSel = el('select', {}, el('option', { value: 'rows' }, '행'), el('option', { value: 'cols' }, '열'));
   const lookSel = el('select', {});
@@ -9194,7 +9147,7 @@ function openFindDialog(tab = 'find') {
   const tabs = el('div', { class: 'find-tabs' });
   let mode = tab;
   const sync = () => Object.assign(findState, {
-    text: findInput.value, replace: replInput.value, matchCase: caseBox.checked, whole: wholeBox.checked, regex: regexBox.checked,
+    text: findInput.value, replace: replInput.value, matchCase: caseBox.checked, whole: wholeBox.checked, regex: regexBox.checked, matchByte: byteBox.checked,
     scope: scopeSel.value, byCols: orderSel.value === 'cols', lookIn: mode === 'replace' ? 'formulas' : lookSel.value,
   });
   const drawFmt = () => {
@@ -9216,7 +9169,8 @@ function openFindDialog(tab = 'find') {
     optsBox.replaceChildren(
       el('label', {}, el('span', {}, '범위:'), scopeSel), el('label', {}, caseBox, '대/소문자 구분'), el('span', {}),
       el('label', {}, el('span', {}, '검색:'), orderSel), el('label', {}, wholeBox, '전체 셀 내용 일치'), el('span', {}),
-      el('label', {}, el('span', {}, '찾는 위치:'), lookSel), el('label', {}, regexBox, '정규식 사용 (바꿀 내용에 $1 등 그룹 참조 가능)'), el('span', {}),
+      el('label', {}, el('span', {}, '찾는 위치:'), lookSel), el('label', {}, byteBox, '전자/반자 구분'), el('span', {}),
+      el('span', {}), el('label', {}, regexBox, '정규식 사용 (바꿀 내용에 $1 등 그룹 참조 가능)'), el('span', {}),
       el('span', {}), el('span', { class: 'muted', style: { fontSize: '11px' } }, '와일드카드: * (여러 글자) ? (한 글자) ~ (글자 그대로)'), el('span', {}),
     );
     optBtn.textContent = findState.options ? '옵션 <<' : '옵션 >>';
@@ -10725,9 +10679,13 @@ const FRIENDLY_CODE = {
 };
 
 /** 셀 서식 (Ctrl+1): 표시 형식 · 맞춤 · 글꼴 · 테두리 · 채우기 */
-function formatCellsDialog(startTab = 0) {
+/**
+ * 셀 서식 (Ctrl+1). find = { title, cur, done } 이면 엑셀 [서식 찾기]: 같은 탭으로 찾을/바꿀 서식을 고르고
+ * 바꾼 항목만 조건이 됨 (셀에 적용하지 않음)
+ */
+function formatCellsDialog(startTab = 0, find = null) {
   if (editing && !commitEdit()) return;
-  const st = styleAt(active.r, active.c);
+  const st = find ? { ...(find.cur ?? {}) } : styleAt(active.r, active.c);
   let sample = valueAt(active.r, active.c);
   if (sample === null || sample === '') {
     for (const [r, c] of cellsIn(usedClip(sel))) { const v = valueAt(r, c); if (v !== null && v !== '') { sample = v; break; } }
@@ -10962,12 +10920,17 @@ function formatCellsDialog(startTab = 0) {
   // ── 채우기 ──
   const [noFill, noFillL] = chk('채우기 없음', !st.fill);
   const fillIn = el('input', { type: 'color', value: st.fill || '#ffff00' });
-  const swatches = el('div', { class: 'fc-swatches' });
-  for (const c of ['#ffffff', '#f2f2f2', '#d9d9d9', '#fff2cc', '#fce4d6', '#e2efda', '#ddebf7', '#ededed', '#ffff00', '#ffc000', '#92d050', '#00b0f0', '#ff0000', '#7030a0', '#4472c4', '#70ad47']) {
-    const b = el('button', { type: 'button', class: 'fc-sw', title: c, style: { background: c } });
+  // 엑셀 채우기 탭: 색 없음 · 테마 색(밝기 단계) · 표준 색
+  const swatches = el('div', { class: 'fc-pal' });
+  const swRow = (colors, gap) => el('div', { class: `palette-row${gap ? ' gap' : ''}` }, colors.map((c) => {
+    const b = el('button', { type: 'button', class: 'swatch', title: c, style: { background: c } });
     b.addEventListener('click', () => { fillIn.value = c; noFill.checked = false; });
-    swatches.append(b);
-  }
+    return b;
+  }));
+  const tRows = themeRows();
+  swatches.append(
+    el('button', { type: 'button', class: 'btn fc-nocolor', onclick: () => { noFill.checked = true; } }, '색 없음'),
+    ...tRows.map((r, i2) => swRow(r, i2 === 0 || i2 === tRows.length - 1)), swRow(STANDARD));
   fillIn.addEventListener('input', () => { noFill.checked = false; });
   // 무늬 스타일 · 무늬 색 (엑셀 채우기 탭)
   const patSel = el('select', {}, [el('option', { value: '' }, '(무늬 없음)'), ...PATTERNS.map(([v, l]) => el('option', { value: v, selected: st.pattern === v }, l))]);
@@ -10980,13 +10943,76 @@ function formatCellsDialog(startTab = 0) {
   const fillPage = col(noFillL, el('div', { class: 'fc-title' }, '배경색'), swatches, lab('다른 색', fillIn),
     row(lab('무늬 스타일', patSel), lab('무늬 색', patColor)), el('div', { class: 'fc-title' }, '보기'), fillPrev);
 
-  const pages = [['표시 형식', numberPage], ['맞춤', alignPage], ['글꼴', fontPage], ['테두리', borderPage], ['채우기', fillPage]];
+  // ── 보호 ──
+  const [lockIn, lockL] = chk('잠금', st.locked !== false);
+  const [hideFIn, hideFL] = chk('숨김', !!st.hideFormula);
+  const protPage = col(lockL, hideFL, el('div', { class: 'muted fc-note' }, '셀 잠금 또는 수식 숨기기는 워크시트를 보호해야 적용됩니다. [검토] 탭의 [시트 보호]를 누르세요.'));
+  const pages = [['표시 형식', numberPage], ['맞춤', alignPage], ['글꼴', fontPage], ['테두리', borderPage], ['채우기', fillPage], ['보호', protPage]];
+  const buildPatch = (fmt) => {
+    const size = Number(sizeIn.value);
+    return {
+      ...fmt,
+      align: hSel.value || undefined, valign: vSel.value || undefined, indent: Number(indentIn.value) || undefined, wrap: wrapIn.checked || undefined,
+      font: fontSel.value === BASE_FONT.name ? undefined : fontSel.value,
+      size: !size || size === BASE_FONT.size ? undefined : Math.min(409, size),
+      bold: bIn.checked || undefined, italic: iIn.checked || undefined, underline: uIn.checked || undefined, strike: sIn.checked || undefined,
+      color: colorIn.value === '#000000' ? undefined : colorIn.value,
+      fill: noFill.checked ? undefined : fillIn.value,
+      pattern: patSel.value || undefined, patternColor: patSel.value && patColor.value !== '#000000' ? patColor.value : undefined,
+      shrink: shrinkIn.checked || undefined, locked: lockIn.checked ? undefined : false, hideFormula: hideFIn.checked || undefined,
+      rotate: vertIn.checked ? 255 : Number(rotIn.value) ? Math.max(-90, Math.min(90, Number(rotIn.value))) : undefined,
+    };
+  };
   const tabBar = el('div', { class: 'dlg-tabs' });
   const pageBox = el('div', { class: 'fc-page' });
   const show = (i) => { [...tabBar.children].forEach((b, j) => b.classList.toggle('on', i === j)); pageBox.replaceChildren(pages[i][1]); };
   pages.forEach(([name], i) => tabBar.append(el('button', { type: 'button', class: 'dlg-tab', onclick: () => show(i) }, name)));
   show(startTab);
 
+  if (find) {
+    // 서식 찾기: 처음 상태와 달라진 항목만 조건 (엑셀처럼 건드리지 않은 항목은 '상관없음')
+    const fmtOf = () => (cat === 'general' ? { numFmt: undefined, code: undefined } : styleForCode(currentCode()));
+    const base = buildPatch(fmtOf());
+    const edges00 = { ...edges };
+    const same = (a2, b2) => JSON.stringify(a2 ?? null) === JSON.stringify(b2 ?? null);
+    const dlg = openDialog({
+      title: find.title ?? '서식 찾기', width: 620, body: el('div', {}, tabBar, pageBox),
+      buttons: [
+        {
+          label: '확인', primary: true, action: () => {
+            let fmt;
+            try { fmt = fmtOf(); } catch { show(0); alertDialog(find.title ?? '서식 찾기', '입력한 서식 코드를 사용할 수 없습니다.'); return false; }
+            const now = buildPatch(fmt);
+            const crit = { ...(find.cur ?? {}) };
+            for (const k of new Set([...Object.keys(now), ...Object.keys(base)])) {
+              if (same(now[k], base[k])) continue;
+              if (now[k] === undefined) { if (['bold', 'italic', 'underline', 'strike', 'wrap'].includes(k)) crit[k] = false; else delete crit[k]; } else crit[k] = now[k];
+            }
+            for (const [k, key] of [['top', 'bt'], ['bottom', 'bb'], ['left', 'bl'], ['right', 'br']]) if (edges[k] !== edges00[k]) crit[key] = edges[k] || undefined;
+            for (const k of Object.keys(crit)) if (crit[k] === undefined) delete crit[k];
+            find.done(Object.keys(crit).length ? crit : null);
+            return undefined;
+          },
+        },
+        { label: '취소' },
+      ],
+    });
+    const foot = dlg.root.querySelector('.dialog-foot');
+    foot.prepend(el('button', {
+      class: 'btn', style: { marginRight: 'auto' },
+      onclick: () => {
+        // 셀에서 서식 선택: 지금 칸의 서식을 그대로 (엑셀의 [셀에서 서식 선택])
+        const cs = wb.styleAt(si, active.r, active.c) ?? {};
+        const f = {};
+        for (const k of FIND_FORMAT_KEYS) if (cs[k] !== undefined && cs[k] !== false && cs[k] !== null) f[k] = cs[k];
+        for (const k of ['bold', 'italic', 'underline']) f[k] = !!cs[k];
+        dlg.close();
+        find.done(f);
+      },
+    }, '셀에서 서식 선택(A)...'));
+    foot.prepend(el('button', { class: 'btn', onclick: () => { dlg.close(); find.done(null); } }, '지우기(R)'));
+    return;
+  }
   openDialog({
     title: '셀 서식', width: 620, body: el('div', {}, tabBar, pageBox),
     buttons: [
@@ -11003,19 +11029,7 @@ function formatCellsDialog(startTab = 0) {
             alertDialog('셀 서식', '입력한 서식 코드를 사용할 수 없습니다. 코드를 확인하세요.');
             return false;
           }
-          const size = Number(sizeIn.value);
-          const patch = {
-            ...fmt,
-            align: hSel.value || undefined, valign: vSel.value || undefined, indent: Number(indentIn.value) || undefined, wrap: wrapIn.checked || undefined,
-            font: fontSel.value === BASE_FONT.name ? undefined : fontSel.value,
-            size: !size || size === BASE_FONT.size ? undefined : Math.min(409, size),
-            bold: bIn.checked || undefined, italic: iIn.checked || undefined, underline: uIn.checked || undefined, strike: sIn.checked || undefined,
-            color: colorIn.value === '#000000' ? undefined : colorIn.value,
-            fill: noFill.checked ? undefined : fillIn.value,
-            pattern: patSel.value || undefined, patternColor: patSel.value && patColor.value !== '#000000' ? patColor.value : undefined,
-            shrink: shrinkIn.checked || undefined,
-            rotate: vertIn.checked ? 255 : Number(rotIn.value) ? Math.max(-90, Math.min(90, Number(rotIn.value))) : undefined,
-          };
+          const patch = buildPatch(fmt);
           wb.transact(() => {
             applyStyle(patch, { widen: fmt.numFmt !== undefined ? 'grow' : false });
             if (border === 'edges') applyEdges(edges, edges0, pen);
@@ -11929,10 +11943,13 @@ function paletteMenu(anchorEl, noneLabel, onPick, extra = []) {
     rows.map((r, i) => swatches(r, i === 0 || i === rows.length - 1)),
     el('div', { class: 'menu-title', style: { padding: '4px 0' } }, '표준 색'),
     swatches(STANDARD));
+  // 엑셀: 글꼴 색은 [자동]이 맨 위, 채우기 색은 [채우기 없음]이 표준 색 아래
+  const noneTop = !/^채우기 없음|^색 없음|^없음/.test(noneLabel);
   openMenu(anchorEl, [
-    { label: noneLabel, action: () => pick(null) },
+    ...(noneTop ? [{ label: noneLabel, action: () => pick(null) }] : []),
     { node: palette },
     { sep: true },
+    ...(noneTop ? [] : [{ label: noneLabel, icon: 'fill', action: () => pick(null) }]),
     { node: el('div', {}, custom) },
     { label: '다른 색...', action: () => custom.click() },
     ...extra,
@@ -12287,11 +12304,25 @@ const MENUS = {
     const f = sheet().freeze ?? {};
     return [
       f.rows || f.cols
-        ? { label: '틀 고정 취소', icon: 'freeze', action: () => setFreeze(0, 0) }
-        : { label: `틀 고정 (${cellName(active.r, active.c)}의 위쪽·왼쪽)`, icon: 'freeze', disabled: !active.r && !active.c, action: () => setFreeze(active.r, active.c) },
-      { label: '첫 행 고정', action: () => setFreeze(1, 0) },
-      { label: '첫 열 고정', action: () => setFreeze(0, 1) },
+        ? { label: '틀 고정 취소', icon: 'freeze', desc: '모든 행과 열의 잠금을 해제하여 전체 워크시트를 스크롤합니다.', action: () => setFreeze(0, 0) }
+        : { label: '틀 고정', icon: 'freeze', desc: `현재 선택 영역(${cellName(active.r, active.c)})을 기준으로 워크시트의 나머지 부분을 스크롤하는 동안 행과 열이 표시되도록 합니다.`, disabled: !active.r && !active.c, action: () => setFreeze(active.r, active.c) },
+      { label: '첫 행 고정', icon: 'freeze', desc: '워크시트의 나머지 부분을 스크롤할 때 첫 행이 표시되도록 합니다.', action: () => setFreeze(1, 0) },
+      { label: '첫 열 고정', icon: 'freeze', desc: '워크시트의 나머지 부분을 스크롤할 때 첫 열이 표시되도록 합니다.', action: () => setFreeze(0, 1) },
     ];
+  },
+  // 표시 형식 목록 (엑셀: 그림 · 이름 · 현재 칸 값의 보기)
+  numFormats: () => {
+    const v = valueAt(active.r, active.c);
+    const num = typeof v === 'number' ? v : null;
+    const ICON = { general: '123', number: '12', currency: '₩', accounting: '₩≡', date: '▦', longdate: '▦▦', time: '◷', percent: '%', fraction: '½', scientific: '10²', text: '가나' };
+    const sampleOf = (id) => {
+      if (id === 'general') return num === null ? '특정 서식 없음' : formatValue(num, {}).text;
+      if (num === null) return typeof v === 'string' && v ? v : '';
+      try { return formatValue(num, { numFmt: id }).text; } catch { return ''; }
+    };
+    return NUMBER_FORMATS.filter((f) => f.id !== 'custom' && f.id !== 'more').map((f) => ({
+      label: f.label, key: sampleOf(f.id), icon: `<b class="nf-ico">${ICON[f.id] ?? ''}</b>`, action: () => run('numFmt', f.id),
+    })).concat([{ sep: true }, { label: '기타 표시 형식...', action: () => formatCellsDialog(0) }]);
   },
   pieCharts: (a) => { chartTypeMenu('pie', a); },
   chartsColBar: (a) => { chartTypeMenu('colBar', a); },

@@ -4,6 +4,9 @@ import { inBlock } from './block.js';
 
 const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+/** 전자/반자 구분을 끄면 (엑셀 기본) 전각 영숫자 · 기호 · 공백을 반각으로 보고 비교 — 글자 수는 그대로 */
+export const foldWidth = (t) => t.replace(/[\uFF01-\uFF5E\u3000]/g, (ch) => (ch === '\u3000' ? ' ' : String.fromCharCode(ch.charCodeAt(0) - 0xFEE0)));
+
 /** 엑셀 찾기 문자열 → 정규식 (* = 아무 글자 여러 개, ? = 한 글자, ~* ~? ~~ = 글자 그대로) */
 export function findRegex(text, { matchCase = false, whole = false, global = false, regex = false } = {}) {
   // 정규식 사용: 입력한 패턴을 그대로 (잘못된 패턴이면 글자 그대로 찾기)
@@ -22,6 +25,20 @@ export function findRegex(text, { matchCase = false, whole = false, global = fal
 
 /** 찾은 글자를 바꿈 (전체 셀 내용 일치면 셀 내용 전체) */
 export function replaceText(raw, opts, replacement) {
+  if (!opts.matchByte && !opts.regex) {
+    // 전각/반각을 같게 보고 찾되, 바꾸지 않은 글자는 원래 모양 그대로
+    const re2 = findRegex(foldWidth(opts.text), { ...opts, global: true });
+    const folded = foldWidth(raw);
+    if (opts.whole) return re2.test(folded) ? replacement : raw;
+    let out = '';
+    let at = 0;
+    for (const m of folded.matchAll(re2)) {
+      if (m[0] === '') continue;
+      out += raw.slice(at, m.index) + replacement;
+      at = m.index + m[0].length;
+    }
+    return out + raw.slice(at);
+  }
   const re = findRegex(opts.text, { ...opts, global: true });
   if (opts.whole) return re.test(raw) ? replacement : raw;
   // 정규식이면 $1 같은 그룹 참조를 그대로 씀
@@ -73,7 +90,8 @@ export function findMatches(wb, opts, io = {}) {
   const limit = io.limit ?? 1e6;
   const text = opts.text ?? '';
   if (!text && !opts.format) return out;
-  const re = text ? findRegex(text, opts) : null;
+  const fold = !opts.matchByte && !opts.regex;
+  const re = text ? findRegex(fold ? foldWidth(text) : text, opts) : null;
   const styleOf = io.style ?? ((si, r, c) => wb.styleAt(si, r, c));
   for (const si of opts.sheets ?? [0]) {
     const sheet = wb.sheets[si];
@@ -89,7 +107,7 @@ export function findMatches(wb, opts, io = {}) {
           hay = cell ? cell.raw ?? '' : wb.getRaw(si, r, c);
           if (hay.startsWith("'")) hay = hay.slice(1);
         }
-        if (!hay || !re.test(hay)) return;
+        if (!hay || !re.test(fold ? foldWidth(hay) : hay)) return;
       } else if (!cell) return; // 서식만으로 찾을 때 서식 없는 블록 칸은 건너뜀 (블록 서식은 아래에서 비교)
       if (opts.format && !formatMatches(styleOf(si, r, c), opts.format)) return;
       found.push({ si, r, c });

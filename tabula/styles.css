@@ -1104,3 +1104,10 @@ body.view-mode .titlebar, body.view-mode .ribbon-tabs, body.view-mode .ribbon, b
 .vf-show { width: 100%; }
 .vf-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .vf-list:disabled { background: #f4f4f4; color: #999; }
+.fc-pal { display: flex; flex-direction: column; gap: 2px; } .fc-nocolor { width: 100%; margin-bottom: 6px; }
+.rcombo { width: 132px; height: 22px; border: 1px solid #c8c8c8; border-radius: 2px; background: #fff; justify-content: space-between; padding: 0 2px 0 5px; }
+.rcombo-txt { overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+.nf-ico { font: 700 11px var(--ui-font); color: #444; min-width: 22px; text-align: center; }
+.menu-item .mi-text { display: flex; flex-direction: column; gap: 2px; white-space: normal; max-width: 300px; }
+.menu-item .mi-text b { font-weight: 600; }
+.menu-item .mi-text small { color: var(--muted); font-size: 11px; line-height: 1.35; }

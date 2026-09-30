@@ -73,7 +73,7 @@ export const TABS = [
       ]),
       group('표시 형식', [
         col(
-          row({ type: 'select', cmd: 'numFmt', cls: 'numfmt', options: NUMBER_FORMATS.map((f) => ({ value: f.id, label: f.label })), stateKey: 'numFmt', title: '표시 형식' }),
+          row({ type: 'combo', cls: 'numfmt', options: NUMBER_FORMATS, stateKey: 'numFmt', menu: 'numFormats', title: '표시 형식' }),
           row(
             btn('fmtCurrency', 'currency', '회계 표시 형식'),
             btn('fmtPercent', 'percent', '백분율 스타일 (Ctrl+Shift+%)'),
@@ -522,6 +522,7 @@ export function buildRibbon(app) {
       case 'check': return makeCheck(it);
       case 'color': return makeColor(it);
       case 'gallery': return makeGallery(it);
+      case 'combo': return makeCombo(it);
       default: return makeButton(it);
     }
   }
@@ -624,6 +625,15 @@ export function buildRibbon(app) {
     });
     bindings.push((s) => { if (document.activeElement !== input) input.value = s[it.stateKey] ?? ''; });
     return el('label', { class: 'rbtn medium rtext-wrap' }, it.label ? el('span', {}, it.label) : null, input);
+  }
+
+  /** 목록 단추 (엑셀 표시 형식 상자): 현재 값 이름 + ▾, 누르면 그림 · 보기가 있는 메뉴 */
+  function makeCombo(it) {
+    const txt = el('span', { class: 'rcombo-txt' });
+    const b = el('button', { class: `rbtn rcombo ${it.cls ?? ''}`, title: it.title, onmousedown: keepFocus }, txt, el('span', { class: 'caret', html: ICONS.chevronDown }));
+    b.addEventListener('click', () => app.openMenu(it.menu, b));
+    bindings.push((s) => { const v = s[it.stateKey]; txt.textContent = it.options.find((o) => o.id === v)?.label ?? (v ? '사용자 지정' : '일반'); });
+    return b;
   }
 
   /** 리본 안 갤러리 (엑셀 차트 스타일처럼 견본이 바로 보이고 ▾ 로 전체 목록) */

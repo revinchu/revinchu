@@ -252,3 +252,11 @@ test('INDIRECT(ADDRESS()) 는 한 칸 · 보고서 필터만 있는 피벗 · �
   wb.setInput(0, 10, 0, '#n/a');
   assert.equal(calc(wb, '=ISNA(A11)'), true);
 });
+
+test('find ignores full/half width unless 전자/반자 구분', async () => {
+  const { findRegex, replaceText, foldWidth } = await import('../src/find.js');
+  assert.equal(foldWidth('ＡＢＣ１２３　'), 'ABC123 ');
+  assert.ok(findRegex(foldWidth('ＡＢ'), {}).test(foldWidth('xabx')));
+  assert.equal(replaceText('ＡＢ가AB', { text: 'ab' }, 'Z'), 'Z가Z');
+  assert.equal(replaceText('ＡＢ가AB', { text: 'ab', matchByte: true }, 'Z'), 'ＡＢ가Z');
+});

@@ -113,7 +113,7 @@ function buildMenu(anchor, items, { minWidth, scroll, level = 0 } = {}) {
     },
     el('span', { class: 'mi-icon', html: it.checked ? ICONS.check : (it.icon ? ICONS[it.icon] ?? it.icon : '') }),
     it.swatch !== undefined ? el('i', { class: 'mi-swatch', style: { background: it.swatch ?? 'transparent' } }) : null,
-    el('span', {}, it.swatch !== undefined ? it.label.replace(/^(■|A) /, '') : it.label),
+    it.desc ? el('span', { class: 'mi-text' }, el('b', {}, it.label), el('small', {}, it.desc)) : el('span', {}, it.swatch !== undefined ? it.label.replace(/^(■|A) /, '') : it.label),
     it.key ? el('span', { class: 'mi-key' }, it.key) : null,
     it.submenu ? el('span', { class: 'mi-key' }, '▸') : null);
     menu.append(btn);
