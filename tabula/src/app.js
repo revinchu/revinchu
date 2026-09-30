@@ -498,8 +498,20 @@ function deselectChart() {
 }
 
 const VIEW_CMDS = new Set(['publish', 'versionHistory', 'exportXlsx', 'saveAs', 'print', 'zoomIn', 'zoomOut', 'zoom100']);
+// 최종본으로 표시 (엑셀): 편집하면 노란 알림줄 [계속 편집] — 보기 · 저장 · 인쇄 · 복사는 됨
+const FINAL_OK = new Set(['save', 'copy', 'find', 'goto', 'selectAll', 'zoomSel', 'toggleFormulas', 'shortcuts', 'about', 'options', 'exportCsv', 'exportPdf', 'pageSetup']);
+function finalNotice() { showFinalBar(); toast('작성자가 이 통합 문서를 최종본으로 표시하여 편집을 막았습니다. 위의 [계속 편집]을 누르면 고칠 수 있습니다.'); }
+function showFinalBar() {
+  document.querySelector('.final-bar')?.remove();
+  if (!wb.props?.markedFinal) return;
+  const bar = el('div', { class: 'final-bar' }, el('b', {}, '최종본으로 표시됨'), el('span', {}, ' 작성자가 편집을 막기 위해 이 통합 문서를 최종본으로 표시했습니다.'),
+    el('button', { class: 'btn', onclick: () => { wb.props = { ...wb.props, markedFinal: undefined }; dirty = true; showFinalBar(); toast('이제 편집할 수 있습니다.'); } }, '계속 편집'));
+  const row = document.getElementById('formulaRow');
+  if (row) row.before(bar); else document.body.prepend(bar);
+}
 function startEdit(mode, text = null, { fromBar = false, caret = null } = {}) {
   if (viewOnly) { toast('읽기 전용 문서입니다. [편집용 사본 만들기]를 누르면 고칠 수 있습니다.'); return; }
+  if (wb.props?.markedFinal) { finalNotice(); return; }
   if (editing) return;
   if (protectBlocked('cells', { r1: active.r, c1: active.c, r2: active.r, c2: active.c })) return;
   deselectChart();
@@ -2471,7 +2483,7 @@ const PROTECT_FREE = new Set(['publish', 'versionHistory', 'recentFiles', 'dataA
   'newWorkbook', 'pivotFieldList', 'tracePrecedents', 'traceDependents', 'removeArrows', 'evaluateFormula', 'errorCheck', 'watchWindow', 'gotoSpecial',
   'outlineShow', 'outlineHide', 'freezePanes', 'freezeTop', 'freezeFirstCol', 'circleInvalid', 'clearCircles', 'macros', 'prevComment', 'nextComment',
   'workbookStats', 'toggleGrid', 'togglePrintGrid', 'toggleFormulaBar', 'toggleHeaders', 'toggleFormulas', 'toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100',
-  'recalc', 'shortcuts', 'about', 'protectSheet', 'unprotectSheet', 'insertMenuKey', 'deleteMenuKey', 'addSheet', 'deleteSheet', 'duplicateSheet',
+  'recalc', 'shortcuts', 'about', 'protectSheet', 'unprotectSheet', 'protectWorkbook', 'fileInfo', 'insertMenuKey', 'deleteMenuKey', 'addSheet', 'deleteSheet', 'duplicateSheet',
   'hideSheet', 'unhideSheet', 'importCsv', 'exportCsv', 'selectPrecedents', 'selectDependents', 'selectComments', 'pageSetup', 'printArea', 'clearPrintArea',
   'orientPortrait', 'orientLandscape', 'insertFunction']);
 const PROTECT_BLOCK = new Set(['mergeCenter', 'createTable', 'condManager', 'condNewRule', 'condMenuKey', 'tableStyleKey', 'dataValidation', 'insertPivot', 'outlineGroup',
@@ -2760,6 +2772,33 @@ function goalSeekDialog() {
     });
     return undefined;
   });
+}
+
+/** 엑셀 [셀 삽입] · [삭제] 대화상자: 셀을 밀기 · 행 전체 · 열 전체 */
+function shiftCellsDialog(insert) {
+  const opts2 = insert
+    ? [['right', '셀을 오른쪽으로 밀기(I)'], ['down', '셀을 아래로 밀기(D)'], ['row', '행 전체(R)'], ['col', '열 전체(C)']]
+    : [['left', '셀을 왼쪽으로 밀기(L)'], ['up', '셀을 위로 밀기(U)'], ['row', '행 전체(R)'], ['col', '열 전체(C)']];
+  // 엑셀: 선택이 가로로 길면 '아래/위로', 세로로 길면 '오른쪽/왼쪽으로' 가 기본
+  const wide = sel.c2 - sel.c1 > sel.r2 - sel.r1;
+  let pick = insert ? (wide ? 'down' : 'right') : (wide ? 'up' : 'left');
+  const body = el('div', { class: 'shift-dlg' }, el('div', { class: 'fc-title' }, insert ? '삽입' : '삭제'),
+    opts2.map(([v, l]) => {
+      const r = el('input', { type: 'radio', name: 'shift-dir', checked: v === pick });
+      r.addEventListener('change', () => { pick = v; });
+      return el('label', { class: 'chk' }, r, l);
+    }));
+  openDialog({ title: insert ? '삽입' : '삭제', body, width: 260, buttons: [{ label: '확인', primary: true, action: () => shiftCellsRun(insert, pick) }, { label: '취소' }] });
+}
+function shiftCellsRun(insert, dir) {
+  if (dir === 'row') { run(insert ? 'insertRows' : 'deleteRows'); return; }
+  if (dir === 'col') { run(insert ? 'insertCols' : 'deleteCols'); return; }
+  const rg = { r1: sel.r1, c1: sel.c1, r2: sel.r2, c2: sel.c2 };
+  let err = null;
+  wb.transact(() => { err = wb.shiftCells(si, rg, dir); }, meta());
+  if (err) { alertDialog('WIXEL', err); return; }
+  gv.layout();
+  updateSelectionUI();
 }
 
 /** 고급 필터 (엑셀 데이터 › 고급): 조건 범위(머리글 + 조건 줄, 줄 안은 AND · 줄끼리 OR)로 목록을 현재 위치에서 거르거나 다른 곳에 복사 */
@@ -10000,7 +10039,15 @@ function switchSheet(i, restore = true) {
 const isHiddenSheet = (i) => { const st = wb.sheets[i]?.state; return st === 'hidden' || st === 'veryHidden'; };
 const visibleSheetCount = () => wb.sheets.filter((_, i) => !isHiddenSheet(i)).length;
 
+/** 통합 문서 구조 보호 (엑셀 [통합 문서 보호]): 시트 추가 · 삭제 · 이름 · 이동 · 숨기기를 막음 */
+const STRUCT_CMDS = new Set(['addSheet', 'deleteSheet', 'duplicateSheet', 'hideSheet', 'unhideSheet', 'moveCopySheet', 'renameSheet']);
+function structureLocked() {
+  if (!wb.props?.lockStructure) return false;
+  alertDialog('WIXEL', '통합 문서 구조가 보호되어 있어 시트를 추가 · 삭제 · 이동 · 이름 변경 · 숨기기 할 수 없습니다. [검토 › 통합 문서 보호] 또는 [파일 › 정보 › 통합 문서 보호]에서 해제하세요.');
+  return true;
+}
 function hideSheet(i = si) {
+  if (structureLocked()) return;
   if (visibleSheetCount() <= 1) { alertDialog('WIXEL', '통합 문서에는 보이는 시트가 하나 이상 있어야 합니다.'); return; }
   wb.transact(() => wb.setSheetProp(i, 'state', 'hidden'), meta());
   if (i === si) {
@@ -10013,6 +10060,7 @@ function hideSheet(i = si) {
 }
 
 function unhideSheetDialog() {
+  if (structureLocked()) return;
   // 엑셀처럼 veryHidden(VBA 로 숨긴 시트 · 외부 통합 문서 값 시트)은 목록에 없음
   const hidden = wb.sheets.map((s, i) => [s, i]).filter(([s]) => s.state === 'hidden');
   if (!hidden.length) { toast('숨겨진 시트가 없습니다.'); return; }
@@ -10082,6 +10130,7 @@ function tabColorMenu(anchor, i) {
 }
 
 function renameSheetInline(i) {
+  if (structureLocked()) return;
   const tab = dom.sheetTabs.children[i];
   if (!tab) return;
   const input = el('input', { value: wb.sheets[i].name, maxlength: 31 });
@@ -10121,6 +10170,7 @@ function selectAllObjects() {
 }
 /** 이동/복사 (엑셀): 다음 시트의 앞에 · (끝으로 이동) + 복사본 만들기 */
 function moveCopySheetDialog(i = si) {
+  if (structureLocked()) return;
   const n = wb.ownSheetCount();
   const list = el('select', { size: 10, class: 'vf-list' },
     [...wb.sheets.slice(0, n).map((s, j) => el('option', { value: String(j), selected: j === i + 1 }, s.name)), el('option', { value: String(n), selected: i + 1 >= n }, '(끝으로 이동)')]);
@@ -10146,6 +10196,7 @@ function moveCopySheetDialog(i = si) {
   });
 }
 function moveSheetTo(i, j) {
+  if (structureLocked()) return;
   j = Math.max(0, Math.min(wb.ownSheetCount() - 1, j));
   if (i === j) return;
   wb.transact(() => {
@@ -10158,6 +10209,7 @@ function moveSheetTo(i, j) {
   switchSheet(j);
 }
 function moveSheet(i, d) {
+  if (structureLocked()) return;
   const j = i + d;
   if (j < 0 || j >= wb.ownSheetCount()) return; // 외부 통합 문서 값 시트(맨 뒤)와는 자리를 바꾸지 않음
   wb.transact(() => {
@@ -10598,6 +10650,11 @@ function redrawPivotsQuiet() {
 }
 
 function afterLoad(name, activeSheet) {
+  setTimeout(() => {
+    showFinalBar();
+    // 읽기 전용 권장 (엑셀: 열 때 묻기)
+    if (wb.props?.readOnlyRecommended && !viewOnly) toast('작성자가 읽기 전용으로 열도록 권장한 통합 문서입니다. 바꾸지 않을 때는 읽기만 하세요.');
+  }, 0);
   // 새로 연 문서는 보관함의 새 항목 (보관함에서 연 문서는 그 항목)
   docId = pendingDocId ?? newDocId();
   pendingDocId = null;
@@ -11396,10 +11453,91 @@ function openBackstage(panel = 'new') {
     el('div', { class: 'backstage-note' }, 'localhost 로 접속 중이면, 서버를 실행한 터미널에 표시된 "다른 기기에서" 주소를 사용하세요.'),
     el('div', { class: 'backstage-actions' }, el('button', { class: 'btn', onclick: () => { close(); exportXlsx(); } }, 'Excel 파일(.xlsx)로 내려받기')),
   );
+  // ── 정보 (엑셀 파일 › 정보): 보호 · 검사 · 관리 · 속성 ──
+  const showInfo = () => {
+    const pr = wb.props ?? {};
+    const setProp = (patch) => { wb.props = { ...(wb.props ?? {}), ...patch }; dirty = true; saveToStorage(); };
+    const where = fileHandle ? `내 컴퓨터 › ${fileHandle.name}` : server.available ? `서버 › ${docName}` : `이 브라우저 › ${docName}`;
+    const cellCount = wb.sheets.reduce((n, sh) => n + sh.cells.size + sh.blocks.reduce((m, b) => m + b.n * b.cols.length, 0), 0);
+    const approx = Math.max(1, Math.round(cellCount * 0.03)); // 대략 (KB)
+    const card = (icon, title, desc, btnLabel, onBtn, extra = null) => el('div', { class: 'info-card' },
+      el('button', { class: 'info-big', onclick: (e) => onBtn(e.currentTarget) }, el('span', { class: 'ic', html: ICONS[icon] ?? '' }), el('span', {}, btnLabel, ' ▾')),
+      el('div', {}, el('h3', {}, title), el('div', { class: 'muted' }, desc), extra));
+    const status = [];
+    if (pr.lockStructure) status.push('통합 문서 구조가 보호되어 있습니다.');
+    if (sheet().protect?.on) status.push(`'${sheet().name}' 시트가 보호되어 있습니다.`);
+    if (pr.readOnlyRecommended) status.push('읽기 전용으로 열도록 권장합니다.');
+    if (pr.markedFinal) status.push('최종본으로 표시되어 있습니다.');
+    const protectMenu = (a) => {
+      const r = a.getBoundingClientRect();
+      openMenu({ x: r.left, y: r.bottom + 2 }, [
+        { label: '항상 읽기 전용으로 열기', desc: '읽는 사람에게 편집에 동의하도록 요청하여 실수로 인한 변경을 방지합니다.', checked: !!pr.readOnlyRecommended, action: () => { setProp({ readOnlyRecommended: !pr.readOnlyRecommended || undefined }); showInfo(); } },
+        { label: '암호 설정', desc: '이 통합 문서를 열려면 암호가 필요합니다. (WIXEL 은 암호화 파일을 만들 수 없어 엑셀에서 설정하세요)', disabled: true },
+        { label: '현재 시트 보호', desc: '현재 시트에서 변경할 수 있는 내용을 제어합니다.', checked: !!sheet().protect?.on, action: () => { close(); run(sheet().protect?.on ? 'unprotectSheet' : 'protectSheet'); } },
+        { label: '통합 문서 구조 보호', desc: '통합 문서 구조의 원하지 않는 변경(예: 시트 추가)을 방지합니다.', checked: !!pr.lockStructure, action: () => { setProp({ lockStructure: !pr.lockStructure || undefined }); toast(pr.lockStructure ? '통합 문서 구조 보호를 해제했습니다.' : '통합 문서 구조를 보호했습니다.'); showInfo(); } },
+        { label: '최종본으로 표시', desc: '독자에게 문서가 최종본임을 알립니다.', checked: !!pr.markedFinal, action: () => { setProp({ markedFinal: !pr.markedFinal || undefined }); showFinalBar(); showInfo(); if (!pr.markedFinal) toast('이 통합 문서를 최종본으로 표시했습니다. 저장하면 파일에도 기록됩니다.'); } },
+      ]);
+    };
+    const inspect = () => {
+      // 문서 검사 (엑셀 [통합 문서 검사]): 공유 전에 확인할 내용
+      const rows = [];
+      const hid = wb.sheets.filter((x, i) => i < wb.ownSheetCount() && x.state && x.state !== 'visible');
+      if (hid.length) rows.push(['숨겨진 시트', hid.map((x) => x.name).join(', ')]);
+      let hr = 0; let hc = 0; let cm = 0; let lk = 0;
+      wb.sheets.forEach((x) => { hr += Object.keys(x.hiddenRows ?? {}).length; hc += Object.keys(x.hiddenCols ?? {}).length; x.cells.forEach((c) => { if (c.comment) cm++; if (c.link && !String(c.link).startsWith('#')) lk++; }); });
+      if (hr || hc) rows.push(['숨겨진 행 · 열', `행 ${hr.toLocaleString()}개 · 열 ${hc.toLocaleString()}개`]);
+      if (cm) rows.push(['메모', `${cm.toLocaleString()}개`]);
+      if (lk) rows.push(['외부 하이퍼링크', `${lk.toLocaleString()}개`]);
+      if (wb.externals?.length) rows.push(['외부 통합 문서 연결', `${wb.externals.length}개`]);
+      if (wb.vba) rows.push(['매크로 (VBA)', '포함됨']);
+      if (wb.names.some((n) => n.hidden)) rows.push(['숨겨진 이름', `${wb.names.filter((n) => n.hidden).length}개`]);
+      if (pr.creator || pr.lastModifiedBy) rows.push(['개인 정보 (문서 속성)', [pr.creator, pr.lastModifiedBy].filter(Boolean).join(', ')]);
+      // 접근성: 대체 텍스트 없는 그림 · 기본 시트 이름 · 병합 셀
+      let noAlt = 0; let merges = 0;
+      wb.sheets.forEach((x) => { noAlt += (x.images ?? []).filter((im) => !im.alt && !im.icon).length; merges += (x.merges ?? []).length; });
+      const acc = [];
+      if (noAlt) acc.push(['대체 텍스트 없는 그림', `${noAlt}개`]);
+      if (merges) acc.push(['병합된 셀', `${merges.toLocaleString()}개 (화면 읽기 프로그램이 읽기 어려울 수 있음)`]);
+      const def = wb.sheets.filter((x) => /^Sheet\d+$/i.test(x.name));
+      if (def.length) acc.push(['기본 시트 이름', def.map((x) => x.name).join(', ')]);
+      const tbl = (list, empty) => (list.length ? el('table', { class: 'backstage-list' }, list.map(([a, b]) => el('tr', {}, el('td', {}, el('b', {}, a)), el('td', {}, b)))) : el('div', { class: 'muted' }, empty));
+      openDialog({ title: '문서 검사', width: 520, body: el('div', {}, el('h4', {}, '문서 검사'), tbl(rows, '공유하기 전에 확인할 숨겨진 내용이나 개인 정보가 없습니다.'), el('h4', {}, '접근성 검사'), tbl(acc, '접근성 문제가 없습니다.')), buttons: [{ label: '닫기', primary: true }] });
+    };
+    const inp = (k, ph) => { const i = el('input', { type: 'text', value: pr[k] ?? '', placeholder: ph, class: 'info-prop' }); i.addEventListener('change', () => setProp({ [k]: i.value.trim() || undefined })); return i; };
+    const fmt = (iso) => (iso ? formatDate(Date.parse(iso)) : '-');
+    main.replaceChildren(
+      el('h2', {}, '정보'),
+      el('div', { class: 'info-title' }, docName), el('div', { class: 'muted' }, where),
+      el('div', { class: 'info-actions' },
+        el('button', { class: 'btn', onclick: () => { close(); publishDialog(); } }, '공유'),
+        el('button', { class: 'btn', onclick: () => { navigator.clipboard?.writeText(where).then(() => toast('경로를 복사했습니다.')).catch(() => {}); } }, '경로 복사'),
+        el('button', { class: 'btn', onclick: () => { close(); saveAs(); } }, '다른 위치에 저장')),
+      el('div', { class: 'info-grid' },
+        el('div', { class: 'info-cards' },
+          card('lock', '통합 문서 보호', status.length ? status.join(' ') : '이 통합 문서에서 다른 사용자들이 변경할 수 있는 내용을 제어합니다.', '통합 문서 보호', protectMenu),
+          card('search', '통합 문서 검사', '이 파일을 게시하기 전에 다음 내용이 포함되어 있다는 점에 주의하세요: 문서 속성, 숨겨진 행 · 시트, 메모, 외부 연결, 접근성 문제', '문제 확인', inspect),
+          card('refresh', '통합 문서 관리', dirty ? '저장되지 않은 변경 내용이 있습니다.' : '저장되지 않은 변경 내용이 없습니다.', '버전 기록', () => { close(); versionHistory(); }),
+          card('link', '브라우저 보기 옵션', '이 통합 문서를 웹에서 볼 때 사용자에게 표시할 항목을 선택합니다.', '웹에 게시', () => { close(); publishDialog(); })),
+        el('div', { class: 'info-props' },
+          el('h3', {}, '속성'),
+          el('div', { class: 'ip-row' }, el('span', {}, '크기'), el('span', {}, `약 ${approx.toLocaleString()}KB (셀 ${cellCount.toLocaleString()}개)`)),
+          el('div', { class: 'ip-row' }, el('span', {}, '제목'), inp('title', '제목 추가')),
+          el('div', { class: 'ip-row' }, el('span', {}, '태그'), inp('tags', '태그 추가')),
+          el('div', { class: 'ip-row' }, el('span', {}, '범주'), inp('category', '범주 추가')),
+          el('div', { class: 'ip-row' }, el('span', {}, '설명'), inp('comments', '설명 추가')),
+          el('h3', {}, '관련 날짜'),
+          el('div', { class: 'ip-row' }, el('span', {}, '마지막으로 수정한 날짜'), el('span', {}, serverState.savedAt ? formatDate(serverState.savedAt) : fmt(pr.modified))),
+          el('div', { class: 'ip-row' }, el('span', {}, '만든 날짜'), el('span', {}, fmt(pr.created))),
+          el('h3', {}, '관련 사용자'),
+          el('div', { class: 'ip-row' }, el('span', {}, '만든 이'), inp('creator', '만든 이 추가')),
+          el('div', { class: 'ip-row' }, el('span', {}, '마지막으로 수정한 사람'), el('span', {}, pr.lastModifiedBy || opts.userName || '-')))),
+    );
+  };
   const nav = el('div', { class: 'backstage-nav' },
     el('button', { class: 'back', title: '돌아가기', onclick: close }, '←'),
     el('button', { onclick: showNew }, '새로 만들기'),
     el('button', { onclick: showOpen }, '열기'),
+    el('button', { onclick: showInfo }, '정보'),
     el('button', { onclick: () => { close(); run('save'); } }, '저장'),
     el('button', { onclick: () => { close(); saveAs(); } }, '다른 이름으로 저장'),
     el('button', { onclick: () => { close(); exportXlsx(); } }, 'Excel(.xlsx)로 내보내기'),
@@ -11413,8 +11551,8 @@ function openBackstage(panel = 'new') {
   const stage = el('div', { class: 'backstage' }, nav, main);
   stage.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
   document.body.append(stage);
-  if (panel === 'open') showOpen(); else showNew();
-  nav.children[panel === 'open' ? 2 : 1].focus();
+  if (panel === 'open') showOpen(); else if (panel === 'info') showInfo(); else showNew();
+  nav.children[panel === 'open' ? 2 : panel === 'info' ? 3 : 1].focus();
 }
 
 /** 인쇄: 사용한 범위를 표로 만들어 인쇄 */
@@ -13208,11 +13346,13 @@ const MENUS = {
   tableStyles: (a) => tableStylesMenu(a),
   cellStyles: (a) => cellStylesMenu(a),
   insert: () => [
+    { label: '셀 삽입(I)...', icon: 'rowInsert', action: () => shiftCellsDialog(true) },
     { label: '시트 행 삽입', icon: 'rowInsert', action: () => run('insertRows') },
     { label: '시트 열 삽입', icon: 'colInsert', action: () => run('insertCols') },
     { label: '시트 삽입', icon: 'sheetInsert', action: () => run('addSheet') },
   ],
   delete: () => [
+    { label: '셀 삭제(D)...', icon: 'delete', action: () => shiftCellsDialog(false) },
     { label: '시트 행 삭제', icon: 'delete', action: () => run('deleteRows') },
     { label: '시트 열 삭제', icon: 'delete', action: () => run('deleteCols') },
     { label: '시트 삭제', icon: 'delete', action: () => run('deleteSheet'), disabled: wb.sheets.length < 2 },
@@ -13448,11 +13588,9 @@ function showContextMenu(pos, kind) {
       ...(lk ? [{ label: '하이퍼링크 열기', action: () => openLink(lk) }, { label: '하이퍼링크 제거', action: removeHyperlink }] : []),
       { label: '선택하여 붙여넣기...', key: 'Ctrl+Alt+V', action: pasteSpecialDialog, disabled: !clip },
       { sep: true },
-      { label: '행 삽입', icon: 'rowInsert', action: () => run('insertRows') },
-      { label: '열 삽입', icon: 'colInsert', action: () => run('insertCols') },
-      { label: '행 삭제', icon: 'delete', action: () => run('deleteRows') },
-      { label: '열 삭제', icon: 'delete', action: () => run('deleteCols') },
-      { label: '내용 지우기', action: () => run('clearContents') },
+      { label: '삽입(I)...', icon: 'rowInsert', action: () => shiftCellsDialog(true) },
+      { label: '삭제(D)...', icon: 'delete', action: () => shiftCellsDialog(false) },
+      { label: '내용 지우기(N)', action: () => run('clearContents') },
       { sep: true },
       { label: '필터', icon: 'filter', checked: filterKeyHere() !== null && !!getFilter(filterKeyHere()), action: () => toggleFilter() },
       { label: '오름차순 정렬', icon: 'sortAsc', action: () => sortData(true) },
@@ -13566,12 +13704,12 @@ const COMMANDS = {
   insertMenuKey: () => {
     if (selKind === 'rows') run('insertRows');
     else if (selKind === 'cols') run('insertCols');
-    else { const b = gv.clientRect({ r1: active.r, c1: active.c, r2: active.r, c2: active.c }); openMenu({ x: b.left, y: b.bottom }, MENUS.insert()); }
+    else shiftCellsDialog(true);
   },
   deleteMenuKey: () => {
     if (selKind === 'rows') run('deleteRows');
     else if (selKind === 'cols') run('deleteCols');
-    else { const b = gv.clientRect({ r1: active.r, c1: active.c, r2: active.r, c2: active.c }); openMenu({ x: b.left, y: b.bottom }, MENUS.delete()); }
+    else shiftCellsDialog(false);
   },
   addSheet: () => {
     const i = wb.transact(() => wb.addSheet(null, si + 1), meta());
@@ -13642,6 +13780,15 @@ const COMMANDS = {
 
   toggleFilter,
   advancedFilter: advancedFilterDialog,
+  protectWorkbook: () => {
+    const on = !wb.props?.lockStructure;
+    wb.props = { ...(wb.props ?? {}), lockStructure: on || undefined };
+    dirty = true;
+    saveToStorage();
+    toast(on ? '통합 문서 구조를 보호했습니다. 시트를 추가 · 삭제 · 이동 · 이름 변경 · 숨기기 할 수 없습니다.' : '통합 문서 보호를 해제했습니다.');
+    updateRibbon();
+  },
+  fileInfo: () => openBackstage('info'),
   insertIcons: () => { insertIconsDialog(); },
   clearFilter: () => {
     const key = filterKeyHere();
@@ -13856,6 +14003,8 @@ function run(cmd, arg) {
   const fn = COMMANDS[cmd];
   if (!fn) { toast('지원하지 않는 기능입니다.'); return; }
   if (protectBlocked(protectAction(cmd), sel, cmd)) return;
+  if (STRUCT_CMDS.has(cmd) && structureLocked()) return;
+  if (wb.props?.markedFinal && protectAction(cmd) !== 'free' && !VIEW_CMDS.has(cmd) && !FINAL_OK.has(cmd)) { finalNotice(); return; }
   fn(arg);
   if (REPEATABLE.has(cmd)) lastRepeat = () => COMMANDS[cmd](arg);
   focusGrid();
@@ -13942,7 +14091,7 @@ function tableRibbonState() {
     slicerBtnH: String(sl?.buttonHeight ?? 24), slicerHeaderOn: sl ? sl.showHeader !== false : false,
     sparkIsLine: sg?.type === 'line', sparkIsColumn: sg?.type === 'column', sparkIsWinLoss: sg?.type === 'winloss',
     sparkHigh: !!sg?.high, sparkLow: !!sg?.low, sparkNegative: !!sg?.negative, sparkFirst: !!sg?.first, sparkLast: !!sg?.last, sparkMarkers: !!sg?.markers,
-    sheetProtected: isProtected(sheet()), pivotName: pv ? pivotNameOf(pv) : '', pvShowExpand: pv ? pv.def.showExpand !== false : false, pvRowHeaders: so.rowHeaders, pvColHeaders: so.colHeaders, pvBandRows: so.bandRows, pvBandCols: so.bandCols,
+    sheetProtected: isProtected(sheet()), bookProtected: !!wb.props?.lockStructure, pivotName: pv ? pivotNameOf(pv) : '', pvShowExpand: pv ? pv.def.showExpand !== false : false, pvRowHeaders: so.rowHeaders, pvColHeaders: so.colHeaders, pvBandRows: so.bandRows, pvBandCols: so.bandCols,
   };
   if (!t) return base;
   return {
@@ -14287,7 +14436,7 @@ async function init() {
   selectCell(f?.rows || 0, f?.cols || 0);
   focusGrid();
   window.tabula = {
-    wb: () => wb, run, selectCell, selectRange, newWorkbook, templates: TEMPLATES, exportXlsx, gv: () => gv, sample: (i) => newWorkbook(SAMPLES[i]), switchSheet: (i) => { switchSheet(i); },
+    wb: () => wb, run, commands: () => Object.keys(COMMANDS), menus: () => Object.keys(MENUS), openNamedMenu, selectCell, selectRange, newWorkbook, templates: TEMPLATES, exportXlsx, gv: () => gv, sample: (i) => newWorkbook(SAMPLES[i]), switchSheet: (i) => { switchSheet(i); },
     get active() { return active; }, get sel() { return sel; }, get si() { return si; }, get chartSel() { return chartSel; },
   };
   // 서버 저장소 (npm start 로 실행한 경우) — 다른 기기와 문서 공유

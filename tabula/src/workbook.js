@@ -1874,10 +1874,6 @@ export class Workbook {
       if (i !== si && (p !== sh.pivot || x.some((d, j) => d !== sh.pivotsExtra[j]))) { this.propSnap(i, 'pivot'); this.propSnap(i, 'pivotsExtra'); }
       sh.pivot = p;
       sh.pivotsExtra = x;
-      if (sh.sparklines?.some((g) => g.items.some((it) => it.ref.includes('!')))) {
-        this.propSnap(i, 'sparklines');
-        sh.sparklines = sh.sparklines.map((g) => ({ ...g, items: g.items.map((it) => ({ ...it, ref: renameSheetInFormula(`=${it.ref}`, old, newName).slice(1) })) }));
-      }
     });
 
     const deps = this.sheetDeps();
@@ -1901,6 +1897,85 @@ export class Workbook {
     });
     for (const x of this.affected(si)) this.sheets[x].fileValues = false;
     this.invalidateStructure();
+  }
+
+  /**
+   * 셀 삽입 · 삭제 (엑셀 [셀을 아래로/오른쪽으로 밀기], [셀을 위로/왼쪽으로 밀기]): rg 칸만 밀고 나머지 열 · 행은 그대로.
+   * dir: 'down' | 'right' (삽입), 'up' | 'left' (삭제). 할 수 없으면 이유(문자열), 되면 null.
+   */
+  shiftCells(si, rg, dir) {
+    const target = this.sheets[si];
+    const axis = dir === 'down' || dir === 'up' ? 'row' : 'col';
+    const isRow = axis === 'row';
+    const index = isRow ? rg.r1 : rg.c1;
+    const size = isRow ? rg.r2 - rg.r1 + 1 : rg.c2 - rg.c1 + 1;
+    const count = dir === 'down' || dir === 'right' ? size : -size;
+    const band = isRow ? [rg.c1, rg.c2] : [rg.r1, rg.r2];
+    const [o1, o2] = isRow ? ['c1', 'c2'] : ['r1', 'r2'];
+    const [p1, p2] = isRow ? ['r1', 'r2'] : ['c1', 'c2'];
+    const inBand = (x) => x[o1] >= band[0] && x[o2] <= band[1];
+    const crosses = (x) => x[o2] >= band[0] && x[o1] <= band[1] && !inBand(x) && x[p2] >= index;
+    // 엑셀처럼 막는 경우: 병합 셀 · 표의 일부만 밀리는 경우, 큰 데이터 블록
+    if (target.merges.some(crosses)) return '병합된 셀의 일부를 변경할 수 없습니다.';
+    if ((target.tables ?? []).some(crosses)) return '이 작업은 워크시트에 있는 표의 셀을 이동하려고 하므로 사용할 수 없습니다.';
+    if (target.blocks.some((b) => (isRow ? b.c0 + b.cols.length - 1 >= band[0] && b.c0 <= band[1] && b.r0 + b.n - 1 >= index : b.r0 + b.n - 1 >= band[0] && b.r0 <= band[1] && b.c0 + b.cols.length - 1 >= index))) {
+      return '큰 데이터 영역에서는 셀 밀기를 할 수 없습니다. 행 전체 또는 열 전체를 삽입 · 삭제하세요.';
+    }
+    this.snapshotSheet(si);
+    this.snapshotNames();
+    const moved = new CellMap();
+    const end = index - count; // 삭제: [index, end)
+    target.cells.forEachRC((cell, r, c) => {
+      const p = isRow ? r : c;
+      const o = isRow ? c : r;
+      if (o < band[0] || o > band[1] || p < index) { moved.setRC(r, c, cell); return; }
+      if (count < 0 && p < end) return;
+      const np = p + count;
+      if (np < 0) return;
+      if (isRow) moved.setRC(np, c, cell); else moved.setRC(r, np, cell);
+    });
+    target.cells = moved;
+    const adj = (x) => (inBand(x) ? adjustRange(x, axis, index, count) : x);
+    target.merges = target.merges.map(adj).filter((m) => m && (m.r2 > m.r1 || m.c2 > m.c1));
+    target.cond = target.cond.map((rule) => {
+      const ranges = [rule, ...(rule.more ?? [])].map((g) => adj({ r1: g.r1, c1: g.c1, r2: g.r2, c2: g.c2 })).filter(Boolean);
+      if (!ranges.length) return null;
+      const { more, ...rest } = rule;
+      return { ...rest, ...ranges[0], ...(ranges.length > 1 ? { more: ranges.slice(1) } : {}) };
+    }).filter(Boolean);
+    target.validations = target.validations.map(adj).filter(Boolean);
+    target.tables = (target.tables ?? []).map((t) => (inBand(t) ? (adjustRange(t, axis, index, count) ? { ...t, ...adjustRange(t, axis, index, count) } : null) : t)).filter(Boolean);
+    const onTarget = (name, host) => String(name ?? host).toLowerCase() === target.name.toLowerCase();
+    this.sheets.forEach((sh, i) => {
+      if (!sh.charts?.length) return;
+      const next = sh.charts.map((ch) => {
+        const host = ch.sheet ?? sh.name;
+        const out = { ...ch };
+        if (ch.range && onTarget(ch.sheet, sh.name)) out.range = adj(ch.range) ?? ch.range;
+        if (ch.series) out.series = ch.series.map((sr) => { const n = { ...sr }; for (const k of ['cat', 'val', 'x', 'size']) if (sr[k] && !sr[k].name && sr[k].r1 !== undefined && onTarget(sr[k].sheet, host)) n[k] = { ...sr[k], ...(adj(sr[k]) ?? sr[k]) }; return n; });
+        return JSON.stringify(out) === JSON.stringify(ch) ? ch : out;
+      });
+      if (next.some((c, k) => c !== sh.charts[k])) { if (i !== si) this.propSnap(i, 'charts'); sh.charts = next; }
+    });
+    const deps = this.sheetDeps();
+    this.sheets.forEach((sheet, i) => {
+      if (i !== si && !deps[i]?.sheets.has(si) && !deps[i]?.all) return;
+      for (const [k, cell] of [...sheet.cells]) {
+        if (!cell.formula) continue;
+        const raw = adjustFormulaForStructure(cell.raw, { targetSheet: target.name, hostSheet: sheet.name, axis, index, count, band });
+        if (raw === cell.raw) continue;
+        const next = makeCell({ ...cellData(cell), raw }, k);
+        if (i === si) sheet.cells.set(k, next);
+        else this.swapCell(i, k, next);
+      }
+    });
+    this.names = this.names.map((n) => {
+      const ref = adjustFormulaForStructure(n.ref, { targetSheet: target.name, hostSheet: n.sheet ?? '', axis, index, count, band });
+      return ref === n.ref ? n : { ...n, ref };
+    });
+    for (const x of this.affected(si)) this.sheets[x].fileValues = false;
+    this.invalidateStructure();
+    return null;
   }
 
   insertRows(si, index, count = 1) { this.shiftAxis(si, 'row', index, count); }
@@ -2091,6 +2166,7 @@ export class Workbook {
       ...(this.theme ? { theme: [...this.theme] } : {}),
       ...(this.themeXml ? { themeXml: this.themeXml } : {}),
       ...(this.themeName ? { themeName: this.themeName } : {}),
+      ...(this.props && Object.keys(this.props).length ? { props: { ...this.props } } : {}),
       ...(this.names.length ? { names: this.names.map(({ _ast, _text, ...n }) => ({ ...n })) } : {}),
     };
   }
@@ -2188,6 +2264,8 @@ export class Workbook {
     this.theme = data.theme ?? null; // 파일의 테마 색 (없으면 Office 기본)
     this.themeXml = data.themeXml ?? null; // 파일의 테마 XML (글꼴 · 효과 등을 그대로 저장)
     this.themeName = data.themeName ?? null;
+    // 문서 속성 · 보호 (엑셀 파일 › 정보): { title, subject, tags, category, comments, creator, lastModifiedBy, created, modified, readOnlyRecommended, lockStructure, markedFinal }
+    this.props = data.props ? { ...data.props } : {};
     this.cellStyles = data.cellStyles ?? null; // 이름 있는 셀 스타일 [{ name, style, builtinId? }] (엑셀 [셀 스타일] 사용자 지정)
     this.baseStyle = data.baseStyle ?? null; // 기본 셀 서식 (xlsx 의 xf 0) — 서식이 없는 셀에 적용
     this.vba = data.vba ?? null; // .xlsm 의 매크로(vbaProject.bin, base64) — 실행하지 않고 보존만 함

@@ -95,6 +95,7 @@ export const ICONS = {
   tableResize: svg(`<rect x="3" y="3" width="10" height="10"/><path d="M3 6.3h10M6.3 3v10" opacity=".6"/><path d="M11 17h6v-6M17 17l-5-5" stroke="${BLUE}" stroke-width="1.3"/>`),
   tableConvert: svg(`<rect x="3" y="3" width="14" height="14"/><path d="M3 7.5h14M3 12h14M8 3v14M12.5 3v14" opacity=".55"/><path d="M5 10h10" stroke="${ACCENT}" stroke-width="1.5"/>`),
   slicer: svg(`<rect x="3" y="2.5" width="14" height="15" rx="1"/><path d="M3 6h14"/><rect x="5" y="8" width="10" height="2.5" rx=".5" fill="${BLUE}" stroke="none"/><rect x="5" y="12" width="10" height="2.5" rx=".5" stroke="${BLUE}"/><path d="M13.5 4.2h2" stroke="${ACCENT}"/>`, 28),
+  lock: svg(`<rect x="4.5" y="9" width="11" height="8" rx="1"/><path d="M7 9V6.5a3 3 0 0 1 6 0V9"/><circle cx="10" cy="13" r="1.1" fill="${ACCENT}" stroke="none"/>`, 28),
   iconsLib: svg(`<circle cx="7" cy="7" r="3.2" fill="${ACCENT}" stroke="none"/><path d="M11.5 4.5h5v5h-5z" stroke="${BLUE}"/><path d="M3.5 16.5l3.5-5.5 3.5 5.5z"/><path d="M13.5 11.5l1.3 2.6 2.7.4-2 1.9.5 2.7-2.5-1.3-2.5 1.3.5-2.7-2-1.9 2.7-.4z" stroke="${BLUE}"/>`, 28),
   picture: svg(`<rect x="2.5" y="4" width="15" height="12" rx="1"/><circle cx="7" cy="8" r="1.5" fill="${ACCENT}" stroke="none"/><path d="M3 15l4.5-4.5 3 3 2.5-2.5L17 15.5" stroke="${BLUE}"/>`, 28),
   shapes: svg(`<rect x="2.5" y="9" width="8" height="8" fill="${BLUE}" stroke="${BLUE}" opacity=".85"/><circle cx="13" cy="7" r="4.5" fill="var(--surface)" stroke="${ACCENT}" stroke-width="1.3"/>`, 28),

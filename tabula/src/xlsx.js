@@ -2289,6 +2289,26 @@ function* readXlsxSteps(files) {
   }
   if (theme.join() !== DEFAULT_THEME.join()) data.theme = [...theme]; // 테마 색 (표 · 피벗 스타일 색 계산)
   { const trel = Object.values(wbRels).find((r) => r.type === 'theme'); const tx = trel && textOf(files[trel.target]); if (tx && tx.length < 400000) data.themeXml = tx; }
+  {
+    // 문서 속성 (docProps/core.xml) · 보호 (통합 문서 구조 · 읽기 전용 권장 · 최종본)
+    const props = {};
+    const core = files['docProps/core.xml'] && parseXml(textOf(files['docProps/core.xml']));
+    if (core) {
+      const pick = (tag) => descendants(core, tag)[0];
+      for (const [k, tag] of [['title', 'title'], ['subject', 'subject'], ['creator', 'creator'], ['tags', 'keywords'], ['comments', 'description'], ['lastModifiedBy', 'lastModifiedBy'], ['category', 'category'], ['created', 'created'], ['modified', 'modified']]) {
+        const e = pick(tag);
+        const t = e ? String(e.text ?? '').trim() : '';
+        if (t) props[k] = t;
+      }
+    }
+    const wp = child(wbRoot, 'workbookProtection');
+    if (wp && (wp.attrs.lockStructure === '1' || wp.attrs.lockStructure === 'true')) props.lockStructure = true;
+    const fs = child(wbRoot, 'fileSharing');
+    if (fs && (fs.attrs.readOnlyRecommended === '1' || fs.attrs.readOnlyRecommended === 'true')) props.readOnlyRecommended = true;
+    const custom = files['docProps/custom.xml'] && textOf(files['docProps/custom.xml']);
+    if (custom && /name="_MarkAsFinal"[^>]*>\s*<vt:bool>(true|1)<\/vt:bool>/.test(custom)) props.markedFinal = true;
+    if (Object.keys(props).length) data.props = props;
+  }
   data.defaultFont = wbFont; // 통합 문서 기본 글꼴 (표준 스타일) — 셀 기본 크기 · 열 너비 변환에 씀
   // 기본 셀 서식(xf 0): s 속성이 없는 셀에 적용됨 (한국어 엑셀은 보통 세로 가운데 맞춤)
   if (xfs[0] && Object.keys(xfs[0]).length) data.baseStyle = { ...xfs[0] };
@@ -4077,7 +4097,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
   const isShown = (i) => wb.sheets[i] && wb.sheets[i].state !== 'hidden' && wb.sheets[i].state !== 'veryHidden';
   const firstVisible = Math.max(0, wb.sheets.findIndex((_, i) => isShown(i)));
   const activeTab = isShown(activeSheet) ? activeSheet : firstVisible;
-  files['xl/workbook.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<workbook xmlns="${NS_MAIN}" xmlns:r="${NS_R}">${vba ? `<workbookPr codeName="${esc(vba.codeName || 'ThisWorkbook')}"/>` : ''}<bookViews><workbookView${firstVisible ? ` firstSheet="${firstVisible}"` : ''} activeTab="${activeTab}"/></bookViews><sheets>${wb.sheets.slice(0, nOwn).map((sh, i) => `<sheet name="${esc(sh.name)}" sheetId="${i + 1}"${sh.state === 'hidden' || sh.state === 'veryHidden' ? ` state="${sh.state}"` : ''} r:id="rId${i + 1}"/>`).join('')}</sheets>${extRefsXml}${definedNames.length ? `<definedNames>${definedNames.join('')}</definedNames>` : ''}<calcPr calcId="191029" fullCalcOnLoad="1"/>${pivotCachesXml}${wbExts.length ? `<extLst>${wbExts.join('')}</extLst>` : ''}</workbook>`;
+  files['xl/workbook.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<workbook xmlns="${NS_MAIN}" xmlns:r="${NS_R}">${wb.props?.readOnlyRecommended ? '<fileSharing readOnlyRecommended="1"/>' : ''}${vba ? `<workbookPr codeName="${esc(vba.codeName || 'ThisWorkbook')}"/>` : ''}${wb.props?.lockStructure ? '<workbookProtection lockStructure="1"/>' : ''}<bookViews><workbookView${firstVisible ? ` firstSheet="${firstVisible}"` : ''} activeTab="${activeTab}"/></bookViews><sheets>${wb.sheets.slice(0, nOwn).map((sh, i) => `<sheet name="${esc(sh.name)}" sheetId="${i + 1}"${sh.state === 'hidden' || sh.state === 'veryHidden' ? ` state="${sh.state}"` : ''} r:id="rId${i + 1}"/>`).join('')}</sheets>${extRefsXml}${definedNames.length ? `<definedNames>${definedNames.join('')}</definedNames>` : ''}<calcPr calcId="191029" fullCalcOnLoad="1"/>${pivotCachesXml}${wbExts.length ? `<extLst>${wbExts.join('')}</extLst>` : ''}</workbook>`;
   files['xl/_rels/workbook.xml.rels'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="${NS_PKG}">${wbRels.join('')}</Relationships>`;
   if (vba) files['xl/vbaProject.bin'] = fromBase64(vba.bin);
   files['xl/sharedStrings.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<sst xmlns="${NS_MAIN}" count="${strings.length}" uniqueCount="${strings.length}">${strings.map((s) => `<si><t xml:space="preserve">${esc(s)}</t></si>`).join('')}</sst>`;
@@ -4086,7 +4106,14 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
   contentOverrides.push('<Override PartName="/xl/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>');
   files['_rels/.rels'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="${NS_PKG}"><Relationship Id="rId1" Type="${REL}/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="${REL}/extended-properties" Target="docProps/app.xml"/></Relationships>`;
   const now = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
-  files['docProps/core.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:creator>WIXEL</dc:creator><dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified></cp:coreProperties>`;
+  const pr = wb.props ?? {};
+  const tagX = (tag, v) => (v ? `<${tag}>${esc(String(v))}</${tag}>` : '');
+  files['docProps/core.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">${tagX('dc:title', pr.title)}${tagX('dc:subject', pr.subject)}${tagX('dc:creator', pr.creator || 'WIXEL')}${tagX('cp:keywords', pr.tags)}${tagX('dc:description', pr.comments)}${tagX('cp:lastModifiedBy', pr.lastModifiedBy)}${tagX('cp:category', pr.category)}<dcterms:created xsi:type="dcterms:W3CDTF">${/^\d{4}-\d\d-\d\dT/.test(pr.created ?? '') ? esc(pr.created) : now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified></cp:coreProperties>`;
+  if (pr.markedFinal) {
+    files['docProps/custom.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="2" name="_MarkAsFinal"><vt:bool>true</vt:bool></property></Properties>`;
+    files['_rels/.rels'] = files['_rels/.rels'].replace('</Relationships>', `<Relationship Id="rId4" Type="${REL}/custom-properties" Target="docProps/custom.xml"/></Relationships>`);
+    contentOverrides.push('<Override PartName="/docProps/custom.xml" ContentType="application/vnd.openxmlformats-officedocument.custom-properties+xml"/>');
+  }
   files['docProps/app.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>WIXEL</Application></Properties>`;
   files['[Content_Types].xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/>${[...mediaExts].map((e) => `<Default Extension="${e}" ContentType="${MIME[e]}"/>`).join('')}${vba ? '<Default Extension="bin" ContentType="application/vnd.ms-office.vbaProject"/>' : ''}<Override PartName="/xl/workbook.xml" ContentType="${MAIN_TYPES[kind ?? (vba ? 'xlsm' : 'xlsx')] ?? MAIN_TYPES.xlsx}"/>${wb.sheets.slice(0, nOwn).map((s, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>${contentOverrides.join('')}</Types>`;
 

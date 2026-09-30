@@ -258,6 +258,7 @@ export const TABS = [
       ]),
       group('보호', [
         large('protectSheet', 'validation', '시트 보호', { title: '시트 보호 / 시트 보호 해제', toggle: 'sheetProtected' }),
+        large('protectWorkbook', 'lock', '통합 문서 보호', { title: '통합 문서 구조 보호 (시트 추가 · 삭제 · 이동 · 이름 변경 막기)', toggle: 'bookProtected' }),
         large('cellProtection', 'format', '셀 잠금', { title: '셀 잠금 · 수식 숨기기 (시트를 보호하면 적용)' }),
       ]),
     ],

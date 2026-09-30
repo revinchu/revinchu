@@ -976,12 +976,19 @@ export function shiftFormula(formula, dr, dc) {
  * 행/열 삽입(count>0)·삭제(count<0) 시 참조 조정.
  * targetSheet: 구조가 바뀐 시트 이름, hostSheet: 수식이 있는 시트 이름
  */
-export function adjustFormulaForStructure(formula, { targetSheet, hostSheet, axis, index, count }) {
+export function adjustFormulaForStructure(formula, { targetSheet, hostSheet, axis, index, count, band = null }) {
   const same = (a, b) => a.toLowerCase() === b.toLowerCase();
   return rewriteRefs(formula, (ref) => {
     if (!same(ref.sheet ?? hostSheet ?? '', targetSheet)) return undefined;
     if (axis === 'row' && ref.cols) return undefined;
     if (axis === 'col' && ref.rows) return undefined;
+    // 셀 삽입 · 삭제(밀기): 다른 축으로 [band] 안에 완전히 들어 있는 참조만 옮김 (엑셀과 같음)
+    if (band) {
+      if (axis === 'row' ? ref.rows : ref.cols) return undefined;
+      const o1 = axis === 'row' ? ref.c1 : ref.r1;
+      const o2 = axis === 'row' ? ref.c2 : ref.r2;
+      if (o1 < band[0] || o2 > band[1]) return undefined;
+    }
     const k1 = axis === 'row' ? 'r1' : 'c1';
     const k2 = axis === 'row' ? 'r2' : 'c2';
     let a = ref[k1];

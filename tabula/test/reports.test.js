@@ -377,3 +377,44 @@ test('아이콘(SVG 그림): PNG 대체 그림 + svgBlip 원본으로 저장하�
   assert.match(back.png, /^data:image\/png/);
   assert.equal(back.icon.fill, '#ff0000');
 });
+
+test('셀 삽입 · 삭제 (밀기): 선택 열만 이동, 수식 참조도 띠 안에서만 조정', () => {
+  const wb = new Workbook();
+  wb.transact(() => {
+    for (let r = 0; r < 5; r++) { wb.setCellData(0, r, 0, { raw: String(r + 1) }); wb.setCellData(0, r, 1, { raw: String((r + 1) * 10) }); }
+    wb.setCellData(0, 0, 3, { raw: '=A3' });
+    wb.setCellData(0, 1, 3, { raw: '=B3' });
+    wb.setCellData(0, 2, 3, { raw: '=SUM(A1:A5)' });
+  });
+  // A2:A3 에 셀 삽입, 아래로 밀기 → A 열만 2칸 내려감, B 열은 그대로
+  assert.equal(wb.shiftCells(0, { r1: 1, c1: 0, r2: 2, c2: 0 }, 'down'), null);
+  assert.equal(wb.getValue(0, 0, 0), 1);
+  assert.equal(wb.getCell(0, 1, 0), undefined);
+  assert.equal(wb.getValue(0, 3, 0), 2);
+  assert.equal(wb.getValue(0, 6, 0), 5);
+  assert.equal(wb.getValue(0, 2, 1), 30);
+  assert.equal(wb.getCell(0, 0, 3).raw, '=A5'); // A3 → A5
+  assert.equal(wb.getCell(0, 1, 3).raw, '=B3'); // B 열은 그대로
+  assert.equal(wb.getCell(0, 2, 3).raw, '=SUM(A1:A7)');
+  // 다시 삭제, 위로 밀기
+  assert.equal(wb.shiftCells(0, { r1: 1, c1: 0, r2: 2, c2: 0 }, 'up'), null);
+  assert.equal(wb.getValue(0, 1, 0), 2);
+  assert.equal(wb.getCell(0, 0, 3).raw, '=A3');
+  // 병합 셀 일부는 막음
+  wb.transact(() => wb.setSheetProp(0, 'merges', [{ r1: 0, c1: 0, r2: 0, c2: 1 }]));
+  assert.match(wb.shiftCells(0, { r1: 0, c1: 0, r2: 0, c2: 0 }, 'down'), /병합/);
+});
+
+test('문서 속성 · 통합 문서 구조 보호 · 읽기 전용 권장 · 최종본: xlsx 왕복', async () => {
+  const { readXlsx, writeXlsx } = await import('../src/xlsx.js');
+  const wb = new Workbook();
+  wb.props = { title: '월간 보고서', tags: '광고;리포트', category: '마케팅', creator: '홍길동', lockStructure: true, readOnlyRecommended: true, markedFinal: true };
+  const back = new Workbook(readXlsx(writeXlsx(wb)).data);
+  assert.equal(back.props.title, '월간 보고서');
+  assert.equal(back.props.tags, '광고;리포트');
+  assert.equal(back.props.category, '마케팅');
+  assert.equal(back.props.creator, '홍길동');
+  assert.equal(back.props.lockStructure, true);
+  assert.equal(back.props.readOnlyRecommended, true);
+  assert.equal(back.props.markedFinal, true);
+});
