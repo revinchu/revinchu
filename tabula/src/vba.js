@@ -140,7 +140,10 @@ export function extractVbaModules(bytes) {
   let cur = null;
   while (pos + 6 <= dir.length) {
     const id = dv.getUint16(pos, true);
-    const size = dv.getUint32(pos + 2, true);
+    let size = dv.getUint32(pos + 2, true);
+    // 참조 레코드의 크기 필드는 경로에 한글 등 다중 바이트 글자가 있으면 글자 수로 적혀 틀릴 수 있음 → 안쪽 Libid 길이로 다시 계산
+    if ((id === 0x000d || id === 0x002f) && pos + 10 <= dir.length) size = 4 + dv.getUint32(pos + 6, true) + 6;
+    else if (id === 0x0030 && pos + 10 <= dir.length) size = 4 + dv.getUint32(pos + 6, true) + 26;
     const data = dir.subarray(pos + 6, pos + 6 + size);
     pos += 6 + size;
     if (id === 0x0009) { pos += 2; continue; } // PROJECTVERSION 은 크기 필드와 실제 길이가 다름

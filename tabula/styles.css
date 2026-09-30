@@ -1174,3 +1174,4 @@ body.view-mode .titlebar, body.view-mode .ribbon-tabs, body.view-mode .ribbon, b
 .ic-cell:hover { border-color: #b7d7c4; background: #f3faf6; }
 .ic-cell.on { border: 2px solid #217346; background: #e6f4ec; }
 .ic-cell.on::after { content: '✓'; position: absolute; right: 3px; top: 1px; font-size: 11px; color: #fff; background: #217346; border-radius: 50%; width: 14px; height: 14px; line-height: 14px; text-align: center; }
+.obj.macro:not(.sel) { cursor: pointer; }

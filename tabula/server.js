@@ -8,7 +8,7 @@ import { readFile, writeFile, readdir, stat, unlink, mkdir, rename } from 'node:
 import { extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { networkInterfaces } from 'node:os';
-import { timingSafeEqual, randomBytes } from 'node:crypto';
+import { timingSafeEqual, randomBytes, createHmac } from 'node:crypto';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const PORT = Number(process.env.PORT) || 5178;
@@ -71,6 +71,28 @@ async function api(req, res, path) {
       res.setHeader('X-Modified', String(st.mtimeMs));
       return send(res, 200, body);
     } catch { return send(res, 404, { error: '게시가 중지되었거나 없는 문서입니다' }); }
+  }
+  // 네이버 검색광고 API 중계 (연관검색어 템플릿): 브라우저는 CORS 때문에 직접 부를 수 없어 서버가 서명 · 요청
+  //   GET /api/naver/keywordstool?hintKeywords=…&month=&event=  헤더 X-Customer / X-API-KEY / X-Secret
+  if (path === '/api/naver/keywordstool' && req.method === 'GET') {
+    const q = new URL(req.url, 'http://x').searchParams;
+    const customer = req.headers['x-customer'];
+    const key = req.headers['x-api-key'];
+    const secret = req.headers['x-secret'];
+    if (!customer || !key || !secret || !q.get('hintKeywords')) return send(res, 400, { error: '계정 ID · 액세스 라이선스 · 비밀 키 · 키워드를 모두 입력하세요' });
+    const ts = String(Date.now());
+    const sig = createHmac('sha256', String(secret)).update(`${ts}.GET./keywordstool`).digest('base64');
+    const url = new URL('https://api.searchad.naver.com/keywordstool');
+    url.searchParams.set('hintKeywords', q.get('hintKeywords'));
+    url.searchParams.set('showDetail', '1');
+    for (const k of ['month', 'event']) if (q.get(k)) url.searchParams.set(k, q.get(k));
+    try {
+      const r = await fetch(url, { headers: { 'X-Timestamp': ts, 'X-API-KEY': String(key), 'X-Customer': String(customer), 'X-Signature': sig } });
+      const text = await r.text();
+      res.writeHead(r.status, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(text);
+    } catch (e) { return send(res, 502, { error: `네이버 API 에 연결하지 못했습니다: ${e.message}` }); }
+    return undefined;
   }
   if (!authorized(req)) return send(res, 401, { error: '인증이 필요합니다' });
   if (path === '/api/publish' && req.method === 'POST') {

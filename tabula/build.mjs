@@ -60,5 +60,5 @@ writeFileSync(join(outDir, 'index.html'), html);
 writeFileSync(join(outDir, '.nojekyll'), '');
 // 따로 불러오는 큰 자료 (아이콘 모음 등): dist/assets 로 복사
 mkdirSync(join(outDir, 'assets'), { recursive: true });
-for (const f of ['iconlib.json.gz']) if (existsSync(join(root, 'assets', f))) copyFileSync(join(root, 'assets', f), join(outDir, 'assets', f));
+for (const f of ['iconlib.json.gz', '네이버 연관검색어 키워드 검색.xlsm']) if (existsSync(join(root, 'assets', f))) copyFileSync(join(root, 'assets', f), join(outDir, 'assets', f));
 console.log(`${join(outDir, 'index.html')} (${(html.length / 1024).toFixed(0)} KB)`);

@@ -919,7 +919,7 @@ export class GridView {
       if (o.hidden) return; // 선택 창에서 숨긴 개체
       if (o.x + o.w < winX1 || o.x > winX2 || o.y + h < winY1 || o.y > winY2) return;
       const selected = st.chartSel === o.id || !!st.objMulti?.has(o.id);
-      html.push(`<div class="obj ${cls}${selected ? ' sel' : ''}" data-id="${esc(o.id)}" style="left:${o.x - p.ox}px;top:${o.y - p.oy}px;width:${o.w}px;height:${h}px;${extraCss}">${inner}${selected ? handles : ''}</div>`);
+      html.push(`<div class="obj ${cls}${selected ? ' sel' : ''}${o.macro ? ' macro' : ''}" data-id="${esc(o.id)}" style="left:${o.x - p.ox}px;top:${o.y - p.oy}px;width:${o.w}px;height:${h}px;${extraCss}">${inner}${selected ? handles : ''}</div>`);
     };
     // 엑셀처럼 그림 → 도형 → 차트 순서가 아니라 저장된 순서(z)대로 겹침
     const all = [

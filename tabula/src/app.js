@@ -1424,6 +1424,8 @@ function onViewMouseDown(e) {
     if (editing && !commitEdit()) return;
     focusGrid();
     const id = objEl.dataset.id;
+    const mf = e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey ? findObject(sheet(), id) : null;
+    if (mf?.obj.macro && chartSel !== id) { runObjectMacro(mf.obj.macro); return; }
     // Ctrl · Shift + 클릭: 여러 개체 선택 (맞춤 · 배분 · 한꺼번에 서식)
     if ((e.ctrlKey || e.metaKey || e.shiftKey) && e.button === 0 && chartSel && chartSel !== id) {
       if (objMulti.has(id)) objMulti.delete(id); else objMulti.add(id);
@@ -7068,6 +7070,143 @@ function addImageFile(file, at = null) {
   reader.readAsDataURL(file);
 }
 
+// ───────────── 도형에 연결된 매크로 (VBA 는 실행하지 않음 — 같은 이름의 내장 동작이 있으면 그것을 실행) ─────────────
+// 네이버 검색광고 연관검색어 스크랩 (오빠두엑셀 v2.0 과 같은 칸 배치): C6 키워드 · C7 정렬 기준 · C8 방향 · C9 시즌월 · C10 시즌테마 ·
+// C11 이전 결과 포함 · C17~C19 API 키, 결과 F6:O (F 검색 키워드, G 연관 키워드, H~O 지표), 4행 G~O 는 필터 조건 (>=100, *원피스*, =높음)
+const NK = { r0: 5, c0: 5, n: 10 };
+const NK_FIELDS = ['relKeyword', 'monthlyPcQcCnt', 'monthlyMobileQcCnt', 'monthlyAvePcClkCnt', 'monthlyAveMobileClkCnt', 'monthlyAvePcCtr', 'monthlyAveMobileCtr', 'plAvgDepth', 'compIdx'];
+function nkLastRow(s) {
+  let last = NK.r0 - 1;
+  wb.sheets[s].cells.col(NK.c0)?.forEach((cell, r) => { if (r >= NK.r0 && cell?.raw !== '' && cell?.raw != null && r > last) last = r; });
+  return last;
+}
+function nkRead(s) {
+  const out = [];
+  for (let r = NK.r0; r <= nkLastRow(s); r++) {
+    const row = [];
+    for (let c = 0; c < NK.n; c++) { const v = wb.getValue(s, r, NK.c0 + c); row.push(v === '' ? null : v); }
+    if (row[0] !== null) out.push(row);
+  }
+  return out;
+}
+function nkWrite(s, rows, clearTo) {
+  wb.transact(() => {
+    const end = Math.max(clearTo, NK.r0 + rows.length - 1);
+    for (let r = NK.r0; r <= end; r++) {
+      for (let c = 0; c < NK.n; c++) {
+        const cur = wb.getCell(s, r, NK.c0 + c);
+        const v = rows[r - NK.r0]?.[c];
+        const raw = v === null || v === undefined ? '' : typeof v === 'number' ? String(v) : textRaw(String(v));
+        if ((cur?.raw ?? '') === raw) continue;
+        wb.setCellData(s, r, NK.c0 + c, { ...(cellData(cur) ?? {}), raw });
+      }
+    }
+  }, meta());
+}
+/** 필터 조건 (VBA quickFILTER 와 같음): >=, <=, >, <, = , * 와일드카드, 그 밖은 같음 */
+function nkMatch(v, opt) {
+  const o = String(opt).trim();
+  const num = (x) => Number(String(x).replace(/[ ,]/g, ''));
+  const m = /^(>=|<=|>|<|=)\s*(.*)$/.exec(o);
+  if (m) {
+    const rhs = m[2].replace(/ /g, '');
+    if (m[1] === '=') return String(v ?? '') === rhs;
+    const a = typeof v === 'number' ? v : num(v);
+    const b = num(rhs);
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
+    return m[1] === '>=' ? a >= b : m[1] === '<=' ? a <= b : m[1] === '>' ? a > b : a < b;
+  }
+  if (o.includes('*') || o.includes('?')) return new RegExp(`^${o.replace(/ /g, '').replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')}$`, 'i').test(String(v ?? ''));
+  return String(v ?? '').toLowerCase() === o.replace(/ /g, '').toLowerCase();
+}
+function nkSortFilter(s, rows) {
+  const idx = Number(wb.getValue(s, 6, 2));
+  const dir = Number(wb.getValue(s, 7, 2));
+  if (Number.isFinite(idx) && Number.isFinite(dir) && dir) {
+    const k = idx <= 0 || idx >= 10 ? 0 : idx - 1;
+    rows.sort((a, b) => {
+      const x = a[k]; const y = b[k];
+      const c = typeof x === 'number' && typeof y === 'number' ? x - y : String(x ?? '').localeCompare(String(y ?? ''), 'ko');
+      return dir < 0 ? -c : c;
+    });
+  }
+  const conds = [];
+  for (let c = 1; c < NK.n; c++) { const o = wb.getValue(s, NK.r0 - 2, NK.c0 + c); if (o !== null && o !== '' && o !== undefined) conds.push([c, o]); }
+  return conds.length ? rows.filter((row) => conds.every(([c, o]) => nkMatch(row[c], o))) : rows;
+}
+async function nkFetch(params, creds) {
+  const q = new URLSearchParams(params);
+  if (!globalThis.TABULA_STATIC || server.available) {
+    const res = await fetch(`/api/naver/keywordstool?${q}`, { headers: { 'X-Customer': creds.customer, 'X-API-KEY': creds.key, 'X-Secret': creds.secret } });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || body.title || `네이버 API 오류 (${res.status}) — 계정 ID · 액세스 라이선스 · 비밀 키를 확인하세요.`);
+    return body;
+  }
+  // 서버 없이 (웹 배포판): 브라우저에서 바로 서명해 요청 — 네이버가 브라우저 요청(CORS)을 막으면 실패
+  const ts = String(Date.now());
+  const keyData = await crypto.subtle.importKey('raw', new TextEncoder().encode(creds.secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.sign('HMAC', keyData, new TextEncoder().encode(`${ts}.GET./keywordstool`)))));
+  try {
+    const res = await fetch(`https://api.searchad.naver.com/keywordstool?${q}&showDetail=1`, { headers: { 'X-Timestamp': ts, 'X-API-KEY': creds.key, 'X-Customer': creds.customer, 'X-Signature': sig } });
+    if (!res.ok) throw new Error(`네이버 API 오류 (${res.status})`);
+    return await res.json();
+  } catch (e) {
+    throw new Error(`웹 배포판에서는 브라우저 보안(CORS) 때문에 네이버 API 를 직접 부를 수 없습니다. WIXEL 서버(npm start)로 실행하면 서버가 대신 요청합니다. (${e.message})`);
+  }
+}
+const JS_MACROS = {
+  async GetNaverAdKeyword(opt = {}) {
+    const s = si;
+    const kw = opt.filterOnly ? '' : String(wb.getValue(s, 5, 2) ?? '').replace(/\s+/g, '');
+    const keep = wb.getValue(s, 10, 2) === true || String(wb.getValue(s, 10, 2)).toUpperCase() === 'TRUE';
+    let rows = keep || opt.filterOnly ? nkRead(s) : [];
+    const oldLast = nkLastRow(s);
+    if (!kw && !rows.length) { alertDialog('연관검색어', '검색할 키워드(C6)를 입력하세요.'); return; }
+    if (kw) {
+      const creds = { customer: String(wb.getValue(s, 16, 2) ?? '').trim(), key: String(wb.getValue(s, 17, 2) ?? '').trim(), secret: String(wb.getValue(s, 18, 2) ?? '').trim() };
+      if (!/^\d+$/.test(creds.customer) || !creds.key || !creds.secret) { alertDialog('연관검색어', '네이버 검색광고 API 키를 입력하세요: 계정 ID(C17, 숫자) · 엑세스라이선스(C18) · 비밀키(C19).\n검색광고 관리 › 도구 › API 사용 관리에서 발급할 수 있습니다.'); return; }
+      if (rows.some((r) => r[0] === kw) && !(await confirmBox('연관검색어', '동일한 검색기록이 있습니다. 중복 검색기록을 추가하시겠습니까?'))) return;
+      const month = Number(wb.getValue(s, 8, 2));
+      const event = wb.getValue(s, 9, 2);
+      const params = { hintKeywords: kw, ...(month >= 1 && month <= 12 ? { month: String(month) } : {}), ...(event !== null && event !== '' && Number.isFinite(Number(event)) ? { event: String(event) } : {}) };
+      toast(`'${kw}' 연관검색어를 가져오는 중…`);
+      let json;
+      try { json = await nkFetch(params, creds); } catch (e) { alertDialog('연관검색어', `인터넷 접속 또는 API 연결에 실패하였습니다.\n${e.message}`); return; }
+      const list = json.keywordList ?? [];
+      const clean = (v) => { const t = String(v ?? '').replace(/^<\s*/, ''); const n = Number(t); return t !== '' && Number.isFinite(n) ? n : t; };
+      rows = [...rows, ...list.map((it) => [kw, ...NK_FIELDS.map((f) => clean(it[f]))])];
+    }
+    const out = nkSortFilter(s, rows);
+    if (!out.length && rows.length) { alertDialog('연관검색어', '필터 결과가 없으므로 필터링을 취소합니다.'); nkWrite(s, rows, oldLast); return; }
+    nkWrite(s, out, oldLast);
+    toast(`전체 ${out.length.toLocaleString()}개를 표시했습니다.`);
+  },
+  ApplyFilterOnly() { return JS_MACROS.GetNaverAdKeyword({ filterOnly: true }); },
+  ClearContents() { nkWrite(si, [], nkLastRow(si)); },
+  async ExportToFile() {
+    const s = si;
+    const last = nkLastRow(s);
+    if (last < NK.r0) { alertDialog('연관검색어', '출력할 검색 결과가 없습니다. 다시 확인하세요.'); return; }
+    const cells = {};
+    for (let r = NK.r0 - 1; r <= last; r++) for (let c = 0; c < NK.n; c++) {
+      const v = wb.getValue(s, r, NK.c0 + c);
+      if (v !== null && v !== '' && v !== undefined) cells[`${r - NK.r0 + 1},${c}`] = { raw: typeof v === 'number' ? String(v) : textRaw(String(v)), ...(r === NK.r0 - 1 ? { style: { bold: true, fill: '#e2efda' } } : {}) };
+    }
+    const out = new Workbook({ sheets: [{ name: '검색결과', cells, colWidths: { 0: 120, 1: 160 } }] });
+    const d = new Date();
+    const p2 = (n) => String(n).padStart(2, '0');
+    const fileName = `검색광고결과${String(d.getFullYear()).slice(2)}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}.xlsx`;
+    const done = await saveWithPicker(fileName, async () => new Blob([await writeXlsxAsync(out, { fileName })], { type: XLSX_KINDS.xlsx.mime }));
+    if (done) toast(`검색결과를 '${done.name}' 에 저장했습니다.`);
+  },
+};
+/** 도형 · 그림 클릭 → 연결된 매크로 */
+function runObjectMacro(name) {
+  const fn = JS_MACROS[name];
+  if (fn) { Promise.resolve(fn()).catch((e) => alertDialog('매크로', e.message)); return; }
+  toast(`'${name}' 매크로는 VBA 라서 WIXEL 에서 실행되지 않습니다. (개발 도구 › Visual Basic 에서 코드를 볼 수 있습니다)`);
+}
+
 // ───────────── 아이콘 삽입 (엑셀 삽입 › 아이콘: 범주 · 검색 · 여러 개 선택) ─────────────
 let iconLib = null;
 async function loadIconLib() {
@@ -10037,6 +10176,50 @@ function download(name, content, type) {
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
 
+// ───────────── 저장 위치 (엑셀처럼 폴더 · 파일 이름을 고름) ─────────────
+// 크롬 · 엣지: 파일 시스템 접근 API 의 저장 창 (마지막 폴더를 기억). 지원하지 않는 브라우저는 다운로드 (브라우저 설정의 '저장 위치 묻기' 사용)
+const SAVE_TYPES = {
+  xlsx: ['Excel 통합 문서', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'], xlsm: ['Excel 매크로 사용 통합 문서', 'application/vnd.ms-excel.sheet.macroEnabled.12'],
+  xltx: ['Excel 서식 파일', 'application/vnd.openxmlformats-officedocument.spreadsheetml.template'], xltm: ['Excel 매크로 사용 서식 파일', 'application/vnd.ms-excel.template.macroEnabled.12'],
+  ods: ['OpenDocument 스프레드시트', 'application/vnd.oasis.opendocument.spreadsheet'], wixel: ['WIXEL 통합 문서', 'application/json'],
+  csv: ['CSV UTF-8', 'text/csv'], tsv: ['텍스트 (탭으로 분리)', 'text/tab-separated-values'], txt: ['유니코드 텍스트', 'text/plain'],
+  pdf: ['PDF', 'application/pdf'], html: ['웹 페이지', 'text/html'], png: ['PNG 그림', 'image/png'],
+};
+const canPickSave = () => typeof window.showSaveFilePicker === 'function' && window.isSecureContext && window.self === window.top;
+let fileHandle = null; // 지금 문서가 연결된 내 컴퓨터 파일 (열기 · 다른 이름으로 저장으로 정함) — [저장] 은 여기에 덮어씀
+/** 저장 위치 고르기 → handle (취소하면 undefined, 고를 수 없는 브라우저는 null = 다운로드) */
+async function pickSaveTarget(fileName) {
+  if (!canPickSave() || opts.saveAsk === false) return null;
+  const ext = fileName.split('.').pop().toLowerCase();
+  const t = SAVE_TYPES[ext];
+  try {
+    return await window.showSaveFilePicker({
+      suggestedName: fileName, id: 'wixel-save', startIn: fileHandle ?? 'documents',
+      types: t ? [{ description: `${t[0]} (*.${ext})`, accept: { [t[1]]: [`.${ext}`] } }] : undefined,
+    });
+  } catch (err) {
+    if (err?.name === 'AbortError') return undefined;
+    return null; // 보안 제한 등: 다운로드로
+  }
+}
+/** 고른 위치(또는 다운로드)에 쓰기 */
+async function writeSaveTarget(handle, fileName, blob) {
+  if (!handle) { download(fileName, blob); return fileName; }
+  const w = await handle.createWritable();
+  await w.write(blob);
+  await w.close();
+  return handle.name;
+}
+/** 저장 위치를 고른 뒤 만들어 저장: make() 는 Blob 을 돌려줌. 저장한 파일 이름 (취소면 null) */
+async function saveWithPicker(fileName, make) {
+  const handle = await pickSaveTarget(fileName);
+  if (handle === undefined) return null;
+  const blob = await make();
+  if (!blob) return null;
+  const name = await writeSaveTarget(handle, fileName, blob);
+  return { name, handle };
+}
+
 const safeFileName = (name) => name.replace(/[\\/:*?"<>|]/g, '_').trim() || '통합 문서';
 
 function sheetToRows(index) {
@@ -10050,10 +10233,11 @@ function sheetToRows(index) {
   return rows;
 }
 
-function exportCsv(kind = 'csv', name = docName) {
+async function exportCsv(kind = 'csv', name = docName) {
   const tab = kind !== 'csv';
-  download(`${safeFileName(name)}-${safeFileName(sheet().name)}.${kind}`, `﻿${toDelimited(sheetToRows(si), tab ? '\t' : ',')}`, `${tab ? 'text/tab-separated-values' : 'text/csv'};charset=utf-8`);
-  toast(`${kind.toUpperCase()} 파일로 내보냈습니다 (현재 시트, UTF-8).`);
+  const fileName = `${safeFileName(name)}-${safeFileName(sheet().name)}.${kind}`;
+  const done = await saveWithPicker(fileName, () => new Blob([`﻿${toDelimited(sheetToRows(si), tab ? '\t' : ',')}`], { type: `${tab ? 'text/tab-separated-values' : 'text/csv'};charset=utf-8` }));
+  if (done) toast(`'${done.name}' 로 내보냈습니다 (현재 시트, UTF-8).`);
 }
 
 /** OpenDocument 스프레드시트(.ods)로 저장 — 값 · 수식 · 서식 · 병합 · 열 너비 */
@@ -10064,8 +10248,11 @@ function exportOds(name = docName) {
     used: (s) => wb.usedRange(s), colWidth: (s, c) => wb.colWidth(s, c), rowHeight: (s, r) => wb.sheets[s].rowHeights?.[r] ?? null,
     display: (s, r, c) => displayText(r, c, s),
   });
-  download(`${safeFileName(name)}.ods`, new Blob([bytes], { type: 'application/vnd.oasis.opendocument.spreadsheet' }));
-  toast('OpenDocument 스프레드시트(.ods)로 저장했습니다.');
+  return new Blob([bytes], { type: 'application/vnd.oasis.opendocument.spreadsheet' });
+}
+async function exportOdsFile(name = docName) {
+  const done = await saveWithPicker(`${safeFileName(name)}.ods`, () => exportOds(name));
+  if (done) toast(`'${done.name}' (OpenDocument 스프레드시트)로 저장했습니다.`);
 }
 
 const XLSX_KINDS = {
@@ -10075,18 +10262,25 @@ const XLSX_KINDS = {
   xltm: { mime: 'application/vnd.ms-excel.template.macroEnabled.12', label: 'Excel 매크로 사용 서식 파일' },
 };
 
-async function exportXlsx(name = docName, kind = null) {
+async function exportXlsx(name = docName, kind = null, target = null) {
   const over = xlsxOverflow(wb);
   if (over) toast(`엑셀 파일은 1,048,576행까지만 저장할 수 있어 그 아래 셀 ${over.toLocaleString()}개는 빠집니다. 전체는 .wixel 로 저장하세요.`);
   const k = kind ?? (wb.vba ? 'xlsm' : 'xlsx');
+  const fileName = `${safeFileName(name)}.${k}`;
+  // 저장 위치를 먼저 고름 (파일을 만드는 동안 기다리면 브라우저가 창을 막음). target = [저장] 이 덮어쓸 파일
+  const handle = target ?? await pickSaveTarget(fileName);
+  if (handle === undefined) return false;
   // 큰 문서는 나눠서 만들고 진행 표시 (압축도 함께 해서 파일이 작아짐)
-  const prog = progressOverlay(`'${safeFileName(name)}' 저장 중`);
+  const prog = progressOverlay(`'${fileName}' 저장 중`);
   exportBusy++;
   try {
-    const bytes = await writeXlsxAsync(wb, { activeSheet: si, fileName: `${safeFileName(name)}.${k}`, kind: k }, (st) => prog.set(st.p, st.msg));
+    const bytes = await writeXlsxAsync(wb, { activeSheet: si, fileName, kind: k }, (st) => prog.set(st.p, st.msg));
+    prog.set(0.98, '파일 쓰는 중');
+    const saved = await writeSaveTarget(handle, fileName, new Blob([bytes], { type: XLSX_KINDS[k].mime }));
     prog.close();
-    download(`${safeFileName(name)}.${k}`, new Blob([bytes], { type: XLSX_KINDS[k].mime }));
-    toast(`${XLSX_KINDS[k].label}(.${k})로 저장했습니다.`);
+    if (handle && /^xls[xm]$/.test(k)) fileHandle = handle; // 이 파일에 이어서 [저장]
+    toast(handle ? `'${saved}' 에 ${XLSX_KINDS[k].label}(.${k})로 저장했습니다.` : `${XLSX_KINDS[k].label}(.${k})로 저장했습니다. (브라우저 다운로드 폴더)`);
+    return true;
   } catch (err) {
     prog.close();
     alertDialog('WIXEL', `저장하지 못했습니다: ${err.message}`);
@@ -10117,16 +10311,29 @@ function saveAs() {
     if (newName !== docName) renameDoc(newName);
     if (XLSX_KINDS[type]) exportXlsx(newName, type === 'xlsx' && wb.vba ? 'xlsx' : type);
     else if (type === 'csv' || type === 'tsv' || type === 'txt') exportCsv(type, newName);
-    else if (type === 'ods') exportOds(newName);
-    else if (type === 'server') saveNow(true);
-    else download(`${safeFileName(newName)}.wixel`, JSON.stringify(snapshot()), 'application/json');
+    else if (type === 'ods') exportOdsFile(newName);
+    else if (type === 'server') saveNow(true, { saveAsFolder: true });
+    else saveWithPicker(`${safeFileName(newName)}.wixel`, () => new Blob([JSON.stringify(snapshot())], { type: 'application/json' })).then((d) => d && toast(`'${d.name}' 로 저장했습니다.`));
     saveToStorage();
-  }, { okLabel: '저장' });
+  }, { okLabel: '저장', note: canPickSave() ? '확인을 누르면 저장할 폴더와 파일 이름을 고르는 창이 열립니다.' : '이 브라우저는 폴더 선택을 지원하지 않아 다운로드 폴더에 저장됩니다. (브라우저 설정 › 다운로드 › "다운로드 전에 저장 위치 확인"을 켜면 위치를 고를 수 있습니다)' });
 }
 
 let fileMode = 'open';
-function pickFile(mode) {
+let templateOpening = false; // 서식 파일을 여는 중 (매크로 안내 생략: 버튼은 내장 동작으로 실행)
+async function pickFile(mode) {
   fileMode = mode;
+  // 크롬 · 엣지: 파일 열기 창에서 연 파일은 [저장] 할 때 같은 파일에 덮어쓸 수 있음 (엑셀과 같게)
+  if (mode === 'open' && typeof window.showOpenFilePicker === 'function' && window.isSecureContext && window.self === window.top) {
+    try {
+      const [h] = await window.showOpenFilePicker({ id: 'wixel-open', types: [{ description: '스프레드시트', accept: { 'application/octet-stream': ['.xlsx', '.xlsm', '.xlsb', '.xls', '.xltx', '.xltm', '.ods', '.csv', '.tsv', '.txt', '.wixel', '.json'] } }] });
+      if (!h) return;
+      await openFileObject(await h.getFile(), mode);
+      if (/\.xls[xm]$/i.test(h.name)) fileHandle = h;
+      return;
+    } catch (err) {
+      if (err?.name === 'AbortError') return;
+    }
+  }
   dom.fileInput.value = '';
   dom.fileInput.click();
 }
@@ -10167,7 +10374,7 @@ async function openFileObject(file, mode) {
         }, meta());
         toast(`시트 ${data.sheets.length}개를 가져왔습니다.`);
       }
-      if (fileMode === 'open' && data.vba) warnings.push('매크로가 포함된 통합 문서입니다. WIXEL 는 매크로를 실행하지 않지만 [보기 → 매크로]에서 코드를 볼 수 있고, .xlsm 으로 저장하면 매크로가 그대로 유지됩니다.');
+      if (fileMode === 'open' && data.vba && !templateOpening) warnings.push('매크로가 포함된 통합 문서입니다. WIXEL 는 매크로를 실행하지 않지만 [보기 → 매크로]에서 코드를 볼 수 있고, .xlsm 으로 저장하면 매크로가 그대로 유지됩니다.');
       if (warnings.length) alertDialog('가져오기', warnings.join('\n'));
       else if (fileMode === 'open') toast(`'${file.name}'을(를) 열었습니다.`);
       return;
@@ -10251,6 +10458,7 @@ function writeRows(rows, r0, c0) {
 function loadWorkbook(data, name, activeSheet = 0) {
   if (editing) endEditUI();
   libraryFlush();
+  fileHandle = null;
   wb.load(data);
   renderImportedPivots();
   afterLoad(name, activeSheet);
@@ -10260,6 +10468,7 @@ function loadWorkbook(data, name, activeSheet = 0) {
 async function loadWorkbookAsync(data, name, activeSheet, prog) {
   if (editing) endEditUI();
   libraryFlush();
+  fileHandle = null;
   const next = new Workbook();
   await next.loadAsync(data, (p) => prog?.set(0.6 + 0.25 * p, '셀 준비 중'));
   next.listeners = wb.listeners; // 화면 갱신 연결 유지
@@ -10426,6 +10635,22 @@ async function serverNames() {
 async function newWorkbook(sample) {
   const go = async () => {
     const names = await serverNames();
+    if (sample?.file) {
+      // 파일로 된 서식 (xlsx · xlsm): 받아서 그대로 열고, 버튼에 내장 동작을 연결
+      try {
+        const res = await fetch(encodeURI(sample.file));
+        if (!res.ok) throw new Error(`${res.status}`);
+        const ext = sample.file.split('.').pop();
+        templateOpening = true;
+        try { await openFileObject(new File([await res.arrayBuffer()], `${sample.name}.${ext}`), 'open'); } finally { templateOpening = false; }
+        wb.sheets.forEach((sh, i) => {
+          const list = (sh.shapes ?? []).map((o) => (!o.macro && /필터만 적용/.test(o.text ?? '') ? { ...o, macro: 'ApplyFilterOnly' } : o));
+          if (list.some((o, k) => o !== sh.shapes[k])) wb.setSheetProp(i, 'shapes', list);
+        });
+        gv.renderObjectsAll();
+      } catch (e) { alertDialog('서식 파일', `'${sample.name}' 서식을 불러오지 못했습니다 (${e.message}). 배포 파일의 assets 폴더를 확인하세요.`); }
+      return;
+    }
     if (sample) {
       let name = sample.name;
       for (let n = 2; names.includes(name); n++) name = `${sample.name} ${n}`;
@@ -10993,12 +11218,52 @@ function scheduleServerSave(delay = 1500) {
 }
 
 /** 저장: 브라우저 + (서버가 있으면) 서버 */
-async function saveNow(explicit) {
+/** [저장] (Ctrl+S): 이전 파일을 덮어쓰므로 한 번 더 확인 (다시 묻지 않기 선택 가능) */
+function confirmOverwrite() {
+  if (viewOnly) { saveNow(true); return; }
+  const target = fileHandle ? `내 컴퓨터의 '${fileHandle.name}'` : server.available ? `서버의 '${docName}'` : `이 브라우저의 '${docName}'`;
+  const go = () => {
+    if (fileHandle) exportXlsx(docName, /\.xlsm$/i.test(fileHandle.name) ? 'xlsm' : 'xlsx', fileHandle).then((ok) => { if (ok) { saveNow(true, { quiet: true }); } });
+    else saveNow(true);
+  };
+  if (opts.saveConfirm === false) { go(); return; }
+  const skip = el('input', { type: 'checkbox' });
+  openDialog({
+    title: '저장', width: 440,
+    body: el('div', {}, el('p', {}, `${target}에 덮어써서 저장합니다. 이전 내용은 바뀐 내용으로 대체됩니다.`),
+      el('p', { class: 'muted' }, '이전 파일을 남기려면 [다른 이름으로 저장]을 사용하세요. (파일 › 정보의 버전 기록에서 예전 버전도 볼 수 있습니다)'),
+      el('label', { class: 'chk' }, skip, '다시 묻지 않기')),
+    buttons: [
+      { label: '덮어쓰기', primary: true, action: () => { if (skip.checked) { opts.saveConfirm = false; saveOptions(); } go(); } },
+      { label: '다른 이름으로 저장...', action: () => saveAs() },
+      { label: '취소' },
+    ],
+  });
+}
+
+async function saveNow(explicit, { quiet = false, saveAsFolder = false } = {}) {
+  if (explicit && saveAsFolder && server.available) {
+    // 서버(다른 기기에서 열기)에 저장할 위치: 폴더 / 파일 이름
+    const names = await serverNames();
+    const folders = [...new Set(names.filter((n) => n.includes('/')).map((n) => n.slice(0, n.lastIndexOf('/'))))].sort();
+    const cur = docName.includes('/') ? docName.slice(0, docName.lastIndexOf('/')) : '';
+    formDialog('서버에 저장 (다른 기기에서 열기)', [
+      { name: 'folder', label: '저장 위치 (폴더, 비우면 맨 위)', value: cur, options: folders.map((f) => ({ value: f, label: f })), type: folders.length ? 'combo' : undefined },
+      { name: 'name', label: '파일 이름', value: docName.slice(docName.lastIndexOf('/') + 1) },
+    ], ({ folder, name }) => {
+      const clean = (x) => String(x ?? '').split('/').map((p) => p.trim().replace(/[\\:*?"<>|]/g, '_')).filter((p) => p && p !== '.' && p !== '..').join('/');
+      const full = [clean(folder), clean(name) || '통합 문서'].filter(Boolean).join('/');
+      const doit = () => { if (full !== docName) renameDoc(full); saveNow(true); };
+      if (full !== docName && names.includes(full)) confirmBox('서버에 저장', `'${full}' 이(가) 이미 있습니다. 덮어쓸까요?`).then((ok) => ok && doit());
+      else doit();
+    }, { okLabel: '저장', note: '폴더 이름에 / 를 넣으면 하위 폴더가 됩니다 (예: 보고서/2026). 같은 서버에 접속한 다른 기기의 [열기 › 서버]에서 이 위치로 찾을 수 있습니다.' });
+    return;
+  }
   if (viewOnly) { if (explicit) toast('읽기 전용 보기입니다. [편집용 사본 만들기]를 누르세요.'); return; }
   const stored = saveToStorage();
   if (explicit) libraryFlush({ version: { label: '저장' } });
   if (!server.available) {
-    if (explicit && stored) toast('이 브라우저에 저장했습니다. (서버 없이 실행 중)');
+    if (explicit && stored && !quiet) toast('이 브라우저에 저장했습니다. (서버 없이 실행 중)');
     return;
   }
   serverState.saving = true;
@@ -11009,7 +11274,7 @@ async function saveNow(explicit) {
     serverState.savedAt = Date.now();
     autoRepublish();
     dirty = false;
-    if (explicit) toast('서버에 저장했습니다. 다른 기기에서도 열 수 있습니다.');
+    if (explicit && !quiet) toast(`서버의 '${docName}' 에 저장했습니다. 다른 기기에서도 열 수 있습니다.`);
   } catch (err) {
     serverState.error = err.message;
     if (err.status === 401) askServerToken(() => saveNow(explicit));
@@ -13218,7 +13483,7 @@ const COMMANDS = {
   slicerBold: () => { const sl = (sheet().slicers ?? []).find((x) => x.id === chartSel); if (sl) { updateObject(sl.id, { bold: !sl.bold || undefined }); gv.renderObjectsAll(); } },
   undo: () => { const m = wb.undo(); if (m) restoreMeta(m); else toast('실행 취소할 작업이 없습니다.'); },
   redo: () => { const m = wb.redo(); if (m) restoreMeta(m); },
-  save: () => saveNow(true),
+  save: () => { confirmOverwrite(); },
   saveAs,
   open: () => openBackstage('open'),
   backstage: () => openBackstage(),

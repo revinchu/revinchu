@@ -255,6 +255,12 @@ export function formDialog(title, fields, onSubmit, { okLabel = '확인', note, 
         input = el('input', { type: 'checkbox', checked: !!f.value });
       } else if (f.type === 'textarea') {
         input = el('textarea', {}, f.value ?? '');
+      } else if (f.type === 'combo') {
+        // 직접 입력 + 목록에서 고르기
+        const id = `dl-${Math.random().toString(36).slice(2, 8)}`;
+        input = el('input', { type: 'text', value: f.value ?? '', list: id });
+        inputs[f.name] = input;
+        return el('label', {}, el('span', {}, f.label), input, el('datalist', { id }, (f.options ?? []).map((o) => el('option', { value: o.value }, o.label))));
       } else {
         input = el('input', { type: f.type || 'text', value: f.value ?? '' });
       }

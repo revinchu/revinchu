@@ -1319,6 +1319,8 @@ function readDrawing(files, path, sheet, ctx) {
     const pad = [ins('tIns', 4.8), ins('rIns', 9.6), ins('bIns', 4.8), ins('lIns', 9.6)].map((v) => Math.round(v * 10) / 10);
     if (pad.join() !== '4.8,9.6,4.8,9.6') shape.pad = pad;
     if (body?.attrs.wrap === 'none') shape.nowrap = true;
+    // 도형에 연결된 매크로 ([0]!이름) — WIXEL 은 VBA 를 실행하지 않고, 같은 이름의 내장 동작이 있으면 그것을 실행
+    if (el.attrs.macro) shape.macro = el.attrs.macro.replace(/^\[\d+\]!/, '');
     out.shapes.push(shape);
   };
 
@@ -1359,6 +1361,7 @@ function readDrawing(files, path, sheet, ctx) {
     const ln = child(child(el, 'spPr'), 'ln');
     const lc = ln && !child(ln, 'noFill') && dmlColor(child(ln, 'solidFill'), ctx.theme);
     if (lc) { im.border = lc; im.borderW = Math.max(1, Math.round(Number(ln.attrs.w ?? 9525) / EMU)); }
+    if (el.attrs.macro) im.macro = el.attrs.macro.replace(/^\[\d+\]!/, '');
     out.images.push(im);
   };
 
@@ -2925,7 +2928,7 @@ function shapeXml(sh, id, xfrm) {
     ? sh.paras.map((p) => `<a:p><a:pPr algn="${algnOf(p.align ?? sh.align)}"/>${p.runs.length ? p.runs.map(runXml).join('') : `<a:endParaRPr lang="ko-KR" sz="${Math.round((p.sz ?? sh.size ?? 11) * 100)}"/>`}</a:p>`).join('')
     : String(sh.text ?? '').split('\n').map((line) => `<a:p><a:pPr algn="${algn}"/>${line ? `<a:r>${rPr}<a:t>${esc(line)}</a:t></a:r>` : `<a:endParaRPr lang="ko-KR" sz="${Math.round((sh.size ?? 11) * 100)}"/>`}</a:p>`).join('');
   const anchor = sh.valign ? { top: 't', middle: 'ctr', bottom: 'b' }[sh.valign] : sh.kind === 'textbox' ? 't' : 'ctr';
-  return `<xdr:sp macro="" textlink=""><xdr:nvSpPr><xdr:cNvPr id="${id}" name="${name}"/><xdr:cNvSpPr${sh.kind === 'textbox' ? ' txBox="1"' : ''}/></xdr:nvSpPr><xdr:spPr>${xfrm(sh)}<a:prstGeom prst="${prstOf(sh.kind)}"><a:avLst/></a:prstGeom>${fill}${ln}</xdr:spPr><xdr:txBody><a:bodyPr vertOverflow="clip" horzOverflow="clip" wrap="square" rtlCol="0" anchor="${anchor}"/><a:lstStyle/>${paras}</xdr:txBody></xdr:sp>`;
+  return `<xdr:sp macro="${sh.macro ? `[0]!${esc(sh.macro)}` : ''}" textlink=""><xdr:nvSpPr><xdr:cNvPr id="${id}" name="${name}"/><xdr:cNvSpPr${sh.kind === 'textbox' ? ' txBox="1"' : ''}/></xdr:nvSpPr><xdr:spPr>${xfrm(sh)}<a:prstGeom prst="${prstOf(sh.kind)}"><a:avLst/></a:prstGeom>${fill}${ln}</xdr:spPr><xdr:txBody><a:bodyPr vertOverflow="clip" horzOverflow="clip" wrap="square" rtlCol="0" anchor="${anchor}"/><a:lstStyle/>${paras}</xdr:txBody></xdr:sp>`;
 }
 
 /** 목록 원본: 범위 참조가 아니면 "a,b" 로 감싸기 */
@@ -3843,7 +3846,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
             svgExt = `<a:extLst><a:ext uri="{96DAC541-7B7A-43D3-8B79-37D633B846F1}"><asvg:svgBlip xmlns:asvg="http://schemas.microsoft.com/office/drawing/2016/SVG/main" r:embed="${sid}"/></a:ext></a:extLst>`;
           }
           objId++;
-          parts.push(anchor(im, `<xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${objId}" name="${esc(im.name || `그림 ${objId - 1}`)}"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill>${svgExt ? `<a:blip r:embed="${id}">${svgExt}</a:blip>` : `<a:blip r:embed="${id}"/>`}${im.crop ? `<a:srcRect${['l', 't', 'r', 'b'].map((k) => (im.crop[k] ? ` ${k}="${Math.round(im.crop[k] * 100000)}"` : '')).join('')}/>` : ''}<a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>${xfrm(im)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${/^#[0-9a-f]{6}$/i.test(im.border ?? "") ? `<a:ln w="${Math.round((im.borderW ?? 2) * EMU)}"><a:solidFill><a:srgbClr val="${im.border.replace('#', '').toUpperCase()}"/></a:solidFill></a:ln>` : ''}</xdr:spPr></xdr:pic>`));
+          parts.push(anchor(im, `<xdr:pic${im.macro ? ` macro="[0]!${esc(im.macro)}"` : ''}><xdr:nvPicPr><xdr:cNvPr id="${objId}" name="${esc(im.name || `그림 ${objId - 1}`)}"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill>${svgExt ? `<a:blip r:embed="${id}">${svgExt}</a:blip>` : `<a:blip r:embed="${id}"/>`}${im.crop ? `<a:srcRect${['l', 't', 'r', 'b'].map((k) => (im.crop[k] ? ` ${k}="${Math.round(im.crop[k] * 100000)}"` : '')).join('')}/>` : ''}<a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>${xfrm(im)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${/^#[0-9a-f]{6}$/i.test(im.border ?? "") ? `<a:ln w="${Math.round((im.borderW ?? 2) * EMU)}"><a:solidFill><a:srgbClr val="${im.border.replace('#', '').toUpperCase()}"/></a:solidFill></a:ln>` : ''}</xdr:spPr></xdr:pic>`));
         } else if (kind === 'slicerTable' || kind === 'slicerPivot') {
           objId++;
           parts.push(slicerAnchorXml(o.sl, o.name, objId, anchorAt, kind === 'slicerTable' ? 'table' : 'pivot'));

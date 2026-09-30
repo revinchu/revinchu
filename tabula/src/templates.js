@@ -858,6 +858,7 @@ function naverReport() {
 // ───────────── 목록 ─────────────
 export const TEMPLATE_CATS = ['기본', '퍼포먼스 마케팅'];
 export const TEMPLATES = [
+  { id: 'naver-kw', cat: '퍼포먼스 마케팅', name: '네이버 연관검색어 키워드 검색', desc: '검색광고 API 로 연관 키워드 · 월 검색수 · 클릭 · 경쟁정도 가져오기, 정렬 · 필터 · 결과 저장 (버튼 동작)', color: '#03c75a', featured: true, file: 'assets/네이버 연관검색어 키워드 검색.xlsm' },
   { id: 'naver-sa', cat: '퍼포먼스 마케팅', name: '네이버 검색광고 주간 리포트', desc: '원본 붙여넣기 → 피벗 · 차트 · 슬라이서 자동 (대시보드 · 키워드 · 검색어)', color: '#03c75a', featured: true, build: naverReport },
   { id: 'perf-dash', cat: '퍼포먼스 마케팅', name: '퍼포먼스 대시보드', desc: 'KPI 카드 · 채널 피벗 · 일별 콤보 차트 · 슬라이서', color: MK, featured: true, build: perfDashboard },
   { id: 'mk-cal', cat: '퍼포먼스 마케팅', name: '퍼포먼스 마케팅 일정', desc: '캠페인 · 채널 · 기간 · 예산 달력', color: MK, build: marketingCalendar },
