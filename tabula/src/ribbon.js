@@ -89,6 +89,13 @@ export const TABS = [
         large('tableStyle', 'table', '표 서식', { menu: 'tableStyles' }),
         large('cellStyle', 'cellStyles', '셀 스타일', { menu: 'cellStyles' }),
       ]),
+      group('빠른 서식', [
+        col(
+          medium('cfUpDown', '<span class="qf-ic"><b style="color:#e00">▲</b><b style="color:#06c">▼</b></span>', '증감 ▲▼', { title: '증감 표시 (조건부 서식): 0보다 크면 빨강 ▲, 작으면 파랑 ▼\n[빨강][>0]"▲"#,##0;[파랑]"▼"#,##0;\n셀 하나만 선택하면 데이터 덩어리 전체에 적용' }),
+          medium('cfUpDownPct', '<span class="qf-ic"><b style="color:#e00">▲</b><b style="color:#06c">%</b></span>', '증감률 ▲▼%', { title: '증감률 표시 (조건부 서식)\n[빨강]"▲"#,##0.00%;[파랑]"▼"#,##0.00%' }),
+          medium('cfWeekend', '<span class="qf-ic"><b style="color:#06c">토</b><b style="color:#e00">일</b></span>', '주말 색', { title: '주말 행 색 (조건부 서식): 토요일 날짜가 든 행은 파랑, 일요일은 빨강' }),
+        ),
+      ]),
       group('셀', [
         large('insertMenu', 'insert', '삽입', { menu: 'insert' }),
         large('deleteMenu', 'delete', '삭제', { menu: 'delete' }),

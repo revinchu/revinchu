@@ -438,3 +438,19 @@ test('셀 그라데이션 채우기 (채우기 효과): xlsx 왕복', async () =
   assert.deepEqual(back.styleAt(0, 0, 0).gradient, lin);
   assert.deepEqual(back.styleAt(0, 0, 1).gradient, path);
 });
+
+test('조건부 서식 표시 형식 ▲▼ ([빨강] → [Red]) · 조건 구역 음수/0 처리 · xlsx 왕복', async () => {
+  const { readXlsx, writeXlsx } = await import('../src/xlsx.js');
+  const { formatValue } = await import('../src/format.js');
+  const code = '[빨강][>0]"▲"#,##0;[파랑]"▼"#,##0;';
+  assert.equal(formatValue(1234, { numFmt: 'custom', code }).text, '▲1,234');
+  assert.equal(formatValue(-567, { numFmt: 'custom', code }).text, '▼567');
+  assert.equal(formatValue(0, { numFmt: 'custom', code }).text, '');
+  const wb = new Workbook({ sheets: [{ name: 'S', cells: { A1: 5 } }] });
+  wb.transact(() => wb.addCondRule(0, { r1: 0, c1: 0, r2: 0, c2: 0, type: 'formula', formula: '=ISNUMBER(A1)', style: { numFmt: 'custom', code } }));
+  const bytes = writeXlsx(wb);
+  const { unzip, textOf } = await import('../src/zip.js');
+  assert.match(textOf(unzip(bytes)['xl/styles.xml']), /\[Red\]\[&gt;0\]/);
+  const back = new Workbook(readXlsx(bytes).data);
+  assert.equal(formatValue(-3, back.sheets[0].cond[0].style).text, '▼3');
+});

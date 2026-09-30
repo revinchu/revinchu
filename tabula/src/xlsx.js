@@ -10,7 +10,8 @@ import {
   quoteSheetName, MAX_ROWS, MAX_COLS, EXCEL_MAX_ROWS, mayReturnArray, unknownFunctions,
 } from './formula.js';
 import { toFileFormula, fromFileFormula } from './xlfn.js';
-import { parseInput, formatGeneral, fmtCode, styleForCode, dateParts, serialOf } from './format.js';
+import { parseInput, formatGeneral, fmtCode as fmtCodeRaw, fileCode, styleForCode, dateParts, serialOf } from './format.js';
+const fmtCode = (style) => fileCode(fmtCodeRaw(style));
 import { DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT, formulaShifter } from './workbook.js';
 import { chartLayout, PALETTE, chartModelData, paletteOf } from './chart.js';
 import { Axis, hid, hidKeys } from './axis.js';

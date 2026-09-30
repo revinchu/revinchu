@@ -5,7 +5,7 @@ import {
   FUNCTION_NAMES, isError, quoteSheetName, MAX_ROWS, MAX_COLS,
 } from './formula.js';
 import {
-  formatValue, NUMBER_FORMATS, dateParts, serialOf, displayedDecimals, parseInput, formatCode, styleForCode, codeOfStyle, adjustCodeDecimals, formatGeneral,
+  formatValue, NUMBER_FORMATS, isDateCode, dateParts, serialOf, displayedDecimals, parseInput, formatCode, styleForCode, codeOfStyle, adjustCodeDecimals, formatGeneral,
 } from './format.js';
 import { buildRibbon, FONTS, FONT_SIZES, TABS, ribbonCommands } from './ribbon.js';
 import { flashFill } from './flashfill.js';
@@ -226,6 +226,83 @@ function selectRange(rg, kind = 'cells', act = { r: rg.r1, c: rg.c1 }) {
 
 function selectAll() {
   selectRange({ r1: 0, c1: 0, r2: MAX_ROWS - 1, c2: MAX_COLS - 1 }, 'all', { ...active });
+}
+/**
+ * Ctrl+A (엑셀과 같음): 첫 번째는 데이터 덩어리(현재 영역) · 표는 데이터 부분 → 표 전체 · 피벗은 피벗 영역,
+ * 이미 그 영역이 선택돼 있으면 한 단계 넓혀 마지막에는 시트 전체
+ */
+function smartSelectAll() {
+  if (selKind === 'all') return;
+  const same = (g) => selKind === 'cells' && sel.r1 === g.r1 && sel.c1 === g.c1 && sel.r2 === g.r2 && sel.c2 === g.c2;
+  const act = { ...active };
+  const steps = [];
+  const t = tableHere();
+  if (t) {
+    const body = { r1: t.header ? t.r1 + 1 : t.r1, c1: t.c1, r2: t.totals ? t.r2 - 1 : t.r2, c2: t.c2 };
+    if (body.r1 <= body.r2 && active.r >= body.r1 && active.r <= body.r2) steps.push(body);
+    steps.push({ r1: t.r1, c1: t.c1, r2: t.r2, c2: t.c2 });
+  }
+  const pv = pivotHere();
+  if (pv?.def.area && active.r >= pv.def.area.r1 && active.r <= pv.def.area.r2 && active.c >= pv.def.area.c1 && active.c <= pv.def.area.c2) steps.push({ ...pv.def.area });
+  const reg = currentRegion(active.r, active.c);
+  if (!(reg.r1 === reg.r2 && reg.c1 === reg.c2 && isEmptyAt(reg.r1, reg.c1))) steps.push(reg);
+  // 선택 영역과 같은 단계의 다음 단계, 없으면 첫 단계 (지금 선택보다 좁은 단계는 건너뜀)
+  const cur = steps.findIndex(same);
+  const next = cur >= 0 ? steps.slice(cur + 1).find((g) => !same(g) && (g.r1 <= sel.r1 && g.c1 <= sel.c1 && g.r2 >= sel.r2 && g.c2 >= sel.c2)) : steps.find((g) => !same(g));
+  if (!next) { selectAll(); return; }
+  selectRange(next, 'cells', act.r >= next.r1 && act.r <= next.r2 && act.c >= next.c1 && act.c <= next.c2 ? act : { r: next.r1, c: next.c1 });
+}
+
+// ───────── 빠른 조건부 서식 (WIXEL): 증감 ▲▼ · 증감률 ▲▼% · 주말 행 색 ─────────
+const UPDOWN_CODE = '[빨강][>0]"▲"#,##0;[파랑]"▼"#,##0;';
+const UPDOWN_PCT_CODE = '[빨강]"▲"#,##0.00%;[파랑]"▼"#,##0.00%';
+/** 대상 범위: 셀 하나만 선택했으면 데이터 덩어리 전체, 아니면 선택 영역(사용 범위까지) */
+function quickCfRange() {
+  if (selKind === 'cells' && selIsActiveOnly()) {
+    const reg = currentRegion(active.r, active.c);
+    return isEmptyAt(reg.r1, reg.c1) && reg.r1 === reg.r2 && reg.c1 === reg.c2 ? { ...sel } : reg;
+  }
+  return usedClip(sel);
+}
+function addQuickRules(rg, rules, label) {
+  const sameRule = (a, b) => a.r1 === b.r1 && a.c1 === b.c1 && a.r2 === b.r2 && a.c2 === b.c2 && a.type === b.type && a.formula === b.formula && JSON.stringify(a.style) === JSON.stringify(b.style);
+  const add = rules.map((r) => ({ ...rg, ...r })).filter((r) => !(sheet().cond ?? []).some((x) => sameRule(x, r)));
+  if (!add.length) { toast('이미 같은 조건부 서식이 적용되어 있습니다.'); return; }
+  wb.transact(() => { for (const r of add.reverse()) wb.addCondRule(si, r); }, meta());
+  selectRange(rg, 'cells', active.r >= rg.r1 && active.r <= rg.r2 && active.c >= rg.c1 && active.c <= rg.c2 ? active : { r: rg.r1, c: rg.c1 });
+  gv.renderAll();
+  toast(`${label} 조건부 서식을 ${cellName(rg.r1, rg.c1)}:${cellName(rg.r2, rg.c2)} 에 적용했습니다. (홈 › 조건부 서식 › 규칙 관리에서 수정)`);
+}
+function quickUpDown(pct) {
+  let rg = quickCfRange();
+  // 셀 하나만 선택했으면 그 열의 데이터 부분만 (날짜 · 코드 열까지 ▲▼ 가 붙지 않게, 글자 머리글 행 제외)
+  if (selKind === 'cells' && selIsActiveOnly() && (rg.c1 !== rg.c2 || rg.r1 !== rg.r2)) {
+    let r1 = rg.r1;
+    while (r1 < rg.r2 && typeof valueAt(r1, active.c) !== 'number') r1++;
+    rg = { r1, c1: active.c, r2: rg.r2, c2: active.c };
+  }
+  // 조건부 서식의 표시 형식 (셀 서식이 아니라서 값 · 서식은 그대로, 복사해 붙여도 색이 그대로)
+  addQuickRules(rg, [{ type: 'formula', formula: `=ISNUMBER(${cellName(rg.r1, rg.c1)})`, style: { numFmt: 'custom', code: pct ? UPDOWN_PCT_CODE : UPDOWN_CODE } }], pct ? '증감률 ▲▼%' : '증감 ▲▼');
+}
+function quickWeekend() {
+  const rg = quickCfRange();
+  // 날짜 열 찾기: 날짜 서식인 숫자가 가장 먼저 나오는 열 (없으면 활성 열)
+  const isDateStyle = (st) => ['date', 'longdate', 'datetime'].includes(st?.numFmt) || (st?.numFmt === 'custom' && isDateCode(st.code ?? ''));
+  let dc = -1;
+  for (let c = rg.c1; c <= rg.c2 && dc < 0; c++) {
+    for (let r = rg.r1; r <= Math.min(rg.r2, rg.r1 + 200); r++) {
+      if (typeof valueAt(r, c) === 'number' && isDateStyle(styleAt(r, c))) { dc = c; break; }
+    }
+  }
+  if (dc < 0) {
+    if (typeof valueAt(active.r, active.c) !== 'number') { alertDialog('주말 색', '날짜가 들어 있는 범위를 선택하세요. (날짜 서식 열을 찾지 못했습니다)'); return; }
+    dc = active.c;
+  }
+  const ref = `$${colToName(dc)}${rg.r1 + 1}`;
+  addQuickRules(rg, [
+    { type: 'formula', formula: `=AND(ISNUMBER(${ref}),WEEKDAY(${ref})=7)`, style: { color: '#0070c0' } },
+    { type: 'formula', formula: `=AND(ISNUMBER(${ref}),WEEKDAY(${ref})=1)`, style: { color: '#ff0000' } },
+  ], `주말 (${colToName(dc)}열 기준: 토요일 파랑 · 일요일 빨강)`);
 }
 function selectCols(c1, c2, act) {
   selectRange({ r1: 0, c1: Math.min(c1, c2), r2: MAX_ROWS - 1, c2: Math.max(c1, c2) }, 'cols', act ?? { r: gv.firstVisibleRow(), c: c1 });
@@ -1125,7 +1202,7 @@ function onGridKey(e) {
       ';': 'insertDate', '`': 'toggleFormulas', 1: 'formatCells', '-': 'deleteMenuKey', F1: 'toggleRibbon',
       9: 'hideRows', 0: 'hideCols', t: 'createTable', l: 'createTable',
     };
-    if (lower === 'a') { handled(); selectAll(); return; }
+    if (lower === 'a') { handled(); if (e.shiftKey) selectAll(); else smartSelectAll(); return; }
     if (lower === ' ' || e.code === 'Space') { handled(); selectCols(sel.c1, sel.c2, active); return; }
     if (k === 'Home') {
       handled();
@@ -14123,6 +14200,10 @@ const COMMANDS = {
   fmtTime: () => applyStyle({ numFmt: 'time', decimals: undefined }, { widen: true }),
   fmtScientific: () => applyStyle({ numFmt: 'scientific', decimals: undefined }, { widen: true }),
   borderNone: () => applyBorder('none'),
+  cfUpDown: () => quickUpDown(false),
+  cfUpDownPct: () => quickUpDown(true),
+  cfWeekend: () => quickWeekend(),
+  selectAllSmart: () => smartSelectAll(),
   selectRegion: () => { const rg = currentRegion(active.r, active.c); selectRange(rg, 'cells', { r: active.r, c: active.c }); },
   newWorkbook: () => newWorkbook(),
   nameManager, defineName, useInFormula: pasteNameDialog, pasteName: pasteNameDialog, createNamesFromSel,

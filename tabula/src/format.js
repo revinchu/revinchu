@@ -650,13 +650,16 @@ export function formatCode(v, code) {
   let autoMinus = true;
   const numeric = secs.slice(0, 3).filter((s, i) => i < 2 || !s.text || secs.length > 3 || s.toks.length);
   if (numeric.some((s) => s.cond)) {
+    // 첫 구역만 조건이 있고 구역이 3개면 둘째 구역은 음수(기호 없이) · 셋째는 나머지(0) — 엑셀과 같음 ([빨강][>0]"▲"#,##0;[파랑]"▼"#,##0;)
+    const impliedNeg = numeric[0].cond && numeric[1] && !numeric[1].cond && numeric.length >= 3;
     if (numeric[0].cond && testCond(numeric[0].cond, n)) sec = numeric[0];
+    else if (impliedNeg) sec = n < 0 ? numeric[1] : numeric[2];
     else if (numeric[1] && (!numeric[1].cond || testCond(numeric[1].cond, n))) sec = numeric[1];
     else if (numeric[2]) sec = numeric[2];
     else if (!numeric[0].cond) sec = numeric[0];
     if (!sec) return { text: '#'.repeat(8), color: null };
     // 조건 구역에서도 음수는 절댓값 대신 기호 표시 (첫 구역은 엑셀과 같이 '-' 자동)
-    autoMinus = sec === numeric[0] || !sec.cond || sec.cond.v >= 0;
+    autoMinus = sec === numeric[0] || (!sec.cond && !impliedNeg) || (sec.cond && sec.cond.v >= 0);
     if (sec !== numeric[0] && sec.cond && sec.cond.v <= 0 && /</.test(sec.cond.op)) autoMinus = false;
   } else if (numeric.length === 1 || (numeric.length >= 2 && n >= 0 && (numeric.length === 2 || n !== 0))) {
     sec = numeric[0];
@@ -701,6 +704,13 @@ export function fmtFromCode(code) {
   if (plain.includes('#,##0') || plain.includes('#,###')) return decimals ? { numFmt: 'number', decimals } : { numFmt: 'comma' };
   if (/0/.test(plain)) return { decimals: decimals ?? 0 };
   return {};
+}
+
+const KO_COLOR_EN = { 검정: 'Black', 파랑: 'Blue', 녹청: 'Cyan', 녹색: 'Green', 자홍: 'Magenta', 빨강: 'Red', 흰색: 'White', 노랑: 'Yellow' };
+/** 파일에 쓸 서식 코드: 한국어 색 이름([빨강])은 엑셀 파일 형식의 영어 이름([Red])으로 (따옴표 안은 그대로) */
+export function fileCode(code) {
+  if (code == null || !/[검파녹자빨흰노]/.test(code)) return code;
+  return String(code).split(/("[^"]*")/).map((part) => (part.startsWith('"') ? part : part.replace(/\[(검정|파랑|녹청|녹색|자홍|빨강|흰색|노랑)\]/g, (m, k) => `[${KO_COLOR_EN[k]}]`))).join('');
 }
 
 /** 기본 표시 형식 → 서식 코드 (사용자 지정이면 그 코드) */
