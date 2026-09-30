@@ -73,3 +73,46 @@ test('연결된 그림: 원본 시트에 행을 넣으면 범위가 따라 내�
   wb.transact(() => wb.insertRows(0, 0, 2));
   assert.deepEqual({ ...wb.sheets[0].images[0].linked, sheet: '' }, { sheet: '', r1: 2, c1: 0, r2: 3, c2: 1 });
 });
+
+test('추천 피벗 테이블: 범주 × 숫자 합계 · 교차 · 개수 후보', async () => {
+  const { recommendPivots } = await import('../src/pivot.js');
+  const recs = recommendPivots(['지역', '채널', '주문번호', '매출', '수량'], [
+    ['서울', '부산', '서울', '대구'], ['검색', '영상', '검색', '검색'], [1, 2, 3, 4], [100, 50, 30, 20], [1, 2, 1, 3],
+  ]);
+  assert.ok(recs.length >= 4);
+  assert.deepEqual(recs[0].rows.length, 1);
+  assert.equal(recs[0].values[0].agg, 'sum');
+  assert.ok(!recs.some((r) => r.values.some((v) => v.field === '주문번호')), 'ID 같은 열은 합계하지 않음');
+  assert.ok(recs.some((r) => r.cols.length === 1), '두 범주 교차');
+  assert.deepEqual(recommendPivots(['이름'], [['a', 'b', 'a']])[0].values[0], { field: '이름', agg: 'count' });
+});
+
+test('피벗 계산 항목: 수도권 = 서울 + 인천 (다른 필드 · 총합계에도 반영), 수식 검사', async () => {
+  const { resolvePivot, computePivot, parseCalcItem } = await import('../src/pivot.js');
+  const rows = [['지역', '채널', '비용', '연도'], ['서울', '검색', 100, 2026], ['인천', '검색', 50, 2026], ['부산', '영상', 30, 2026], ['서울', '영상', 10, 2026]];
+  const def = { rows: ['지역'], cols: [], values: [{ field: '비용', agg: 'sum' }], calcItems: { 지역: [{ name: '수도권', formula: "서울+'인천'" }, { name: '서울 절반', formula: '서울*0.5' }] } };
+  const res = resolvePivot(rows, def);
+  const { grid } = computePivot(res, res.def);
+  const map = Object.fromEntries(grid.filter((r) => /^(rowItem|grandLabel)/.test(r[0]?.role ?? '')).map((r) => [String(r[0].raw).replace(/^'/, ''), Number(r[r.length - 1].raw)]));
+  assert.equal(map['수도권'], 160);
+  assert.equal(map['서울 절반'], 55);
+  assert.equal(map['서울'], 110);
+  assert.deepEqual(parseCalcItem("서울 - '부산'/2"), [{ item: '서울', k: 1 }, { item: '부산', k: -0.5 }]);
+  assert.throws(() => parseCalcItem('서울*부산'), /항목끼리/);
+  assert.throws(() => parseCalcItem('100'), /상수/);
+  // 연도(숫자 차원)는 계수를 곱하지 않음
+  const res2 = resolvePivot(rows, { ...def, rows: ['연도'], calcItems: { 지역: [{ name: '서울 절반', formula: '서울*0.5' }] } });
+  const g2 = computePivot(res2, res2.def).grid;
+  assert.ok(g2.some((r) => String(r[0]?.raw) === '2026'));
+});
+
+test('피벗 계산 항목: xlsx 저장 후 다시 열어도 유지', async () => {
+  const { writeXlsx, readXlsx } = await import('../src/xlsx.js');
+  const wb = new Workbook();
+  put(wb, [['지역', '비용'], ['서울', 10], ['인천', 5]]);
+  const def = { name: '피벗 테이블1', source: wb.sheets[0].name, range: { r1: 0, c1: 0, r2: 2, c2: 1 }, rows: ['지역'], cols: [], values: [{ field: '비용', agg: 'sum' }], top: 0, left: 4, calcItems: { 지역: [{ name: '수도권 "합"', formula: '서울+인천' }] } };
+  wb.transact(() => wb.setSheetProp(0, 'pivot', def));
+  const { data } = readXlsx(writeXlsx(wb));
+  const back = data.sheets.flatMap((s) => [s.pivot, ...(s.pivotsExtra ?? [])]).find(Boolean);
+  assert.deepEqual(back.calcItems, def.calcItems);
+});

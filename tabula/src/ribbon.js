@@ -121,6 +121,7 @@ export const TABS = [
       ]),
       group('표', [
         large('insertPivot', 'pivot', '피벗 테이블'),
+        large('recommendPivot', 'recommendPivot', '추천 피벗 테이블', { title: '데이터를 요약하는 피벗 테이블 후보를 미리 보고 고르기' }),
         large('createTable', 'table', '표', { title: '표 만들기 (Ctrl+T, Ctrl+L)' }),
       ]),
       group('일러스트레이션', [

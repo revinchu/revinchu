@@ -1904,6 +1904,8 @@ function pivotDefFrom(root, cache, tables, sheetName) {
   if (offAxis.length) Object.defineProperty(def, '_offAxis', { value: offAxis, enumerable: false, configurable: true });
   // 이름 · 스타일 · 캡션 · 계산 필드
   if (root.attrs.name) def.name = root.attrs.name;
+  const wxCalc = descendants(child(root, 'extLst'), 'calcItems')[0]?.attrs.json;
+  if (wxCalc) { try { def.calcItems = JSON.parse(wxCalc); } catch { /* 잘못된 확장 무시 */ } }
   const si0 = child(root, 'pivotTableStyleInfo');
   def.style = si0?.attrs.name ?? 'None';
   const so = {
@@ -2557,8 +2559,9 @@ class StylePool {
     if (style.rotate) align.push(`textRotation="${style.rotate === 255 ? 255 : style.rotate < 0 ? 90 - style.rotate : style.rotate}"`);
     if (style.shrink) align.push('shrinkToFit="1"');
     const prot = style.locked === false || style.hideFormula ? `<protection${style.locked === false ? ' locked="0"' : ''}${style.hideFormula ? ' hidden="1"' : ''}/>` : '';
-    // 확인란: WIXEL 확장 (엑셀은 모르는 ext 를 무시하고 TRUE/FALSE 값으로 표시)
-    const ext = style.checkbox ? '<extLst><ext uri="{8F3A2C5B-6D1E-4B7A-9C0D-57495845434B}" xmlns:wx="https://wixel.app/x"><wx:checkbox/></ext></extLst>' : '';
+    // 확인란: 엑셀 365 방식 (xf 의 xfComplement → featurePropertyBag 의 Checkbox 셀 컨트롤). 옛 엑셀은 TRUE/FALSE 로 표시
+    if (style.checkbox) this.hasCheckbox = true;
+    const ext = style.checkbox ? '<extLst><ext uri="{C7286773-470A-42A8-94C5-96B5CB345126}" xmlns:xfpb="http://schemas.microsoft.com/office/spreadsheetml/2022/featurepropertybag"><xfpb:xfComplement i="0"/></ext></extLst>' : '';
     const inner = (align.length ? `<alignment ${align.join(' ')}/>` : '') + prot + ext;
     if (this.styleXfMode) return `<xf numFmtId="${numFmtId}" fontId="${fontId}" fillId="${fillId}" borderId="${borderId}"${numFmtId ? ' applyNumberFormat="1"' : ''}${fontId ? ' applyFont="1"' : ''}${fillId ? ' applyFill="1"' : ''}${borderId ? ' applyBorder="1"' : ''}${align.length ? ' applyAlignment="1"' : ''}${prot ? ' applyProtection="1"' : ''}${inner ? `>${inner}</xf>` : '/>'}`;
     const xml = `<xf numFmtId="${numFmtId}" fontId="${fontId}" fillId="${fillId}" borderId="${borderId}" xfId="0"${numFmtId ? ' applyNumberFormat="1"' : ''}${fontId ? ' applyFont="1"' : ''}${fillId ? ' applyFill="1"' : ''}${borderId ? ' applyBorder="1"' : ''}${align.length ? ' applyAlignment="1"' : ''}${prot ? ' applyProtection="1"' : ''}${inner ? `>${inner}</xf>` : '/>'}`;
@@ -3407,6 +3410,8 @@ function pivotParts(wb, si, def, cache, name, pool) {
     + pivotCondXml(wb, si, def, header, values)
     + `<pivotTableStyleInfo${styleName ? ` name="${esc(styleName)}"` : ''} showRowHeaders="${so.rowHeaders === false ? 0 : 1}" showColHeaders="${so.colHeaders === false ? 0 : 1}" showRowStripes="${so.bandRows ? 1 : 0}" showColStripes="${so.bandCols ? 1 : 0}" showLastColumn="1"/>`
     + (filterXml.length ? `<filters count="${filterXml.length}">${filterXml.join('')}</filters>` : '')
+    // 계산 항목: WIXEL 확장 (엑셀은 모르는 ext 를 무시하고 원래 항목만 보여 줌)
+    + (def.calcItems && Object.keys(def.calcItems).length ? `<extLst><ext uri="{6B1E4C27-3D5A-4F80-9C12-57495845434D}" xmlns:wx="https://wixel.app/x"><wx:calcItems json="${esc(JSON.stringify(def.calcItems))}"/></ext></extLst>` : '')
     + '</pivotTableDefinition>';
 
   // 슬라이서 캐시용: 필드 이름 → 항목 선택 상태 (x 는 캐시의 항목 번호)
@@ -4133,6 +4138,11 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
   const firstVisible = Math.max(0, wb.sheets.findIndex((_, i) => isShown(i)));
   const activeTab = isShown(activeSheet) ? activeSheet : firstVisible;
   files['xl/workbook.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<workbook xmlns="${NS_MAIN}" xmlns:r="${NS_R}">${wb.props?.readOnlyRecommended ? '<fileSharing readOnlyRecommended="1"/>' : ''}${vba ? `<workbookPr codeName="${esc(vba.codeName || 'ThisWorkbook')}"/>` : ''}${wb.props?.lockStructure ? '<workbookProtection lockStructure="1"/>' : ''}<bookViews><workbookView${firstVisible ? ` firstSheet="${firstVisible}"` : ''} activeTab="${activeTab}"/></bookViews><sheets>${wb.sheets.slice(0, nOwn).map((sh, i) => `<sheet name="${esc(sh.name)}" sheetId="${i + 1}"${sh.state === 'hidden' || sh.state === 'veryHidden' ? ` state="${sh.state}"` : ''} r:id="rId${i + 1}"/>`).join('')}</sheets>${extRefsXml}${definedNames.length ? `<definedNames>${definedNames.join('')}</definedNames>` : ''}<calcPr calcId="191029" fullCalcOnLoad="1"/>${pivotCachesXml}${wbExts.length ? `<extLst>${wbExts.join('')}</extLst>` : ''}</workbook>`;
+  if (pool.hasCheckbox) {
+    files['xl/featurePropertyBag/featurePropertyBag.xml'] = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<FeaturePropertyBags xmlns="http://schemas.microsoft.com/office/spreadsheetml/2022/featurepropertybag"><bag type="Checkbox"/><bag type="XFControls"><bagId k="CellControl">0</bagId></bag><bag type="XFComplement"><bagId k="XFControls">1</bagId></bag><bag type="XFComplements" extRef="XFComplementsMapperExtRef"><a k="MappedFeaturePropertyBags"><bagId>2</bagId></a></bag></FeaturePropertyBags>';
+    wbRel('http://schemas.microsoft.com/office/2022/11/relationships/FeaturePropertyBag', 'featurePropertyBag/featurePropertyBag.xml');
+    contentOverrides.push('<Override PartName="/xl/featurePropertyBag/featurePropertyBag.xml" ContentType="application/vnd.ms-excel.featurepropertybag+xml"/>');
+  }
   files['xl/_rels/workbook.xml.rels'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="${NS_PKG}">${wbRels.join('')}</Relationships>`;
   if (vba) files['xl/vbaProject.bin'] = fromBase64(vba.bin);
   files['xl/sharedStrings.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<sst xmlns="${NS_MAIN}" count="${strings.length}" uniqueCount="${strings.length}">${strings.map((s) => `<si><t xml:space="preserve">${esc(s)}</t></si>`).join('')}</sst>`;

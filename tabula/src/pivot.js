@@ -990,9 +990,112 @@ export function withDerivedFields(cube, groups) {
   return c;
 }
 
+// ───────────── 계산 항목 (엑셀 피벗 › 필드, 항목 및 집합 › 계산 항목) ─────────────
+/**
+ * 계산 항목 수식: 같은 필드의 항목에 계수를 곱해 더하고 빼는 식 (예: 서울+부산, '서울 강남'*0.5-인천).
+ * [{ item, k }] 를 돌려주고, 곱셈 · 나눗셈이 항목끼리이거나 상수만 있는 항은 오류 (Error, 한국어 메시지)
+ */
+export function parseCalcItem(formula) {
+  const src = String(formula ?? '').trim().replace(/^=/, '');
+  if (!src) throw new Error('수식을 입력하세요.');
+  const terms = [];
+  let i = 0;
+  let sign = 1;
+  const ws = () => { while (src[i] === ' ') i++; };
+  const atom = () => {
+    ws();
+    if (src[i] === "'") {
+      let t = '';
+      i++;
+      while (i < src.length) { if (src[i] === "'" && src[i + 1] === "'") { t += "'"; i += 2; } else if (src[i] === "'") { i++; break; } else t += src[i++]; }
+      return { item: t };
+    }
+    const m = /^(\d+(?:\.\d+)?(?:e[+-]?\d+)?)/i.exec(src.slice(i));
+    if (m) { i += m[1].length; return { num: Number(m[1]) }; }
+    let t = '';
+    while (i < src.length && !/[+\-*/()]/.test(src[i])) t += src[i++];
+    t = t.trim();
+    if (!t) throw new Error(`수식에 항목 이름이 필요합니다: ${src}`);
+    return { item: t };
+  };
+  while (i < src.length) {
+    ws();
+    if (src[i] === '+') { i++; continue; }
+    if (src[i] === '-') { sign = -sign; i++; continue; }
+    let k = sign;
+    let item = null;
+    for (;;) {
+      const a = atom();
+      if (a.item != null) { if (item != null) throw new Error('항목끼리 곱하거나 나눌 수는 없습니다.'); item = a.item; } else k *= a.num;
+      ws();
+      if (src[i] === '*') { i++; continue; }
+      if (src[i] === '/') {
+        i++;
+        const b = atom();
+        if (b.item != null || !b.num) throw new Error('항목은 0 이 아닌 숫자로만 나눌 수 있습니다.');
+        k /= b.num;
+        ws();
+        if (src[i] === '*') { i++; continue; }
+      }
+      break;
+    }
+    if (item == null) throw new Error('상수만 있는 항은 쓸 수 없습니다. 항목에 곱하세요 (예: 서울*1.1).');
+    terms.push({ item, k });
+    sign = 1;
+    ws();
+    if (i < src.length && src[i] !== '+' && src[i] !== '-') throw new Error(`수식을 이해할 수 없습니다: ${src.slice(i)}`);
+  }
+  if (!terms.length) throw new Error('수식에 항목이 없습니다.');
+  return terms;
+}
+
+const calcItemMemo = new WeakMap();
+/**
+ * 계산 항목을 원본 레코드로 펼친 큐브: 항목 A 의 레코드마다 필드 값을 계산 항목 이름으로 바꾸고 값 필드(measureFields)에 계수를 곱한 레코드를 더함.
+ * 다른 필드 · 필터 · 부분합 · 총합계(엑셀처럼 계산 항목 포함)가 그대로 동작. calcItems = { 필드: [{ name, formula }] }
+ */
+export function withCalcItems(cube, calcItems, measureFields = []) {
+  const list = Object.entries(calcItems ?? {}).flatMap(([field, items]) => (items ?? []).map((it) => ({ field, ...it })));
+  if (!list.length) return cube;
+  const key = JSON.stringify([list, measureFields]);
+  let m = calcItemMemo.get(cube);
+  if (!m) { m = new Map(); calcItemMemo.set(cube, m); }
+  const hit = m.get(key);
+  if (hit) return hit;
+  const lower = cube.header.map((h) => h.toLowerCase());
+  const meas = new Set(measureFields.map((f) => lower.indexOf(String(f).toLowerCase())).filter((j) => j >= 0));
+  const extra = []; // [원본 행, 필드 열, 이름, 계수]
+  for (const ci of list) {
+    const j = lower.indexOf(String(ci.field).toLowerCase());
+    if (j < 0) continue;
+    let terms;
+    try { terms = parseCalcItem(ci.formula); } catch { continue; }
+    const { codes, keys } = cube.col(j).dim();
+    const coef = new Float64Array(keys.length);
+    const want = new Map(terms.map((t) => [t.item.toLowerCase(), 0]));
+    for (const t of terms) want.set(t.item.toLowerCase(), (want.get(t.item.toLowerCase()) ?? 0) + t.k);
+    keys.forEach((k, c) => { const w = want.get(itemText(k).toLowerCase()); if (w) coef[c] = w; });
+    for (let i = 0; i < cube.n; i++) { const w = coef[codes[i]]; if (w) extra.push([i, j, ci.name, w]); }
+  }
+  const n = cube.n;
+  const synth = (x) => {
+    const [i, j, name, w] = extra[x];
+    const r = [...cube.row(i)];
+    r[j] = name;
+    for (const q of meas) if (q !== j && typeof r[q] === 'number') r[q] *= w;
+    return r;
+  };
+  const rowAt = (i) => (i < n ? cube.row(i) : synth(i - n));
+  const c = new Cube(n + extra.length, cube.header, (jj) => { const base = cube.col(jj); return new Column(n + extra.length, (i) => (i < n ? base.get(i) : synth(i - n)[jj] ?? null)); }, rowAt);
+  if (m.size > 20) m.clear();
+  m.set(key, c);
+  return c;
+}
+
 export function resolvePivot(input, def) {
   // input: 행 배열(머리글 포함) 또는 pivotSourceData 결과({ cube })
-  const cube = withDerivedFields(Array.isArray(input) ? cubeFromRows(input) : input.cube, def.groups);
+  let cube = withDerivedFields(Array.isArray(input) ? cubeFromRows(input) : input.cube, def.groups);
+  if (def.calcItems) cube = withCalcItems(cube, def.calcItems, (def.values ?? []).map((v) => v.field));
   let memo = resolveMemo.get(cube);
   if (!memo) { memo = new Map(); resolveMemo.set(cube, memo); }
   const key = pivotDefKey(def);
@@ -1907,4 +2010,43 @@ export function pivotDetail(input, def, gr, gc) {
     out[m++] = i;
   }
   return { header: cube.header, cube, idx: out.slice(0, m), conds, valueField: valueName(d.values[leaf.vi]) };
+}
+
+/**
+ * 추천 피벗 테이블 (엑셀 삽입 › 추천 피벗 테이블): 머리글과 열 값(표본)을 보고 요약 후보 def 조각을 돌려줌
+ * [{ title, rows, cols, values }] — 범주 열(항목 2~60개) × 숫자 열 합계, 두 범주 교차, 숫자 열이 없으면 개수
+ */
+export function recommendPivots(header, columns, max = 8, { dates = [] } = {}) {
+  const info = header.map((name, i) => {
+    const vals = (columns[i] ?? []).filter((v) => v !== null && v !== undefined && v !== '');
+    const nums = vals.filter((v) => typeof v === 'number');
+    const distinct = new Set(vals.map((v) => (typeof v === 'string' ? v.toLowerCase() : v))).size;
+    const idLike = /(^|[^a-z])(id|no)$|번호|코드|순번/i.test(String(name));
+    return { name: String(name), n: vals.length, numeric: !dates[i] && vals.length > 0 && nums.length / vals.length >= 0.8, distinct, idLike, date: !!dates[i] };
+  }).filter((f) => f.n > 0 && f.name);
+  const measures = info.filter((f) => f.numeric && !f.idLike && f.distinct > 1);
+  const dateDim = info.find((f) => f.date && f.distinct >= 2);
+  const dims = info.filter((f) => !f.numeric && !f.date && f.distinct >= 2 && f.distinct <= 60).sort((a, b) => a.distinct - b.distinct);
+  const out = [];
+  const seen = new Set();
+  const push = (title, rows, cols, values, groups) => {
+    const k = JSON.stringify([rows, cols, values]);
+    if (seen.has(k) || out.length >= max) return;
+    seen.add(k);
+    out.push({ title, rows, cols, values, ...(groups ? { groups } : {}) });
+  };
+  const sumOf = (m) => ({ field: m.name, agg: 'sum' });
+  // 날짜 열: 월로 묶어 추이 (엑셀 자동 날짜 그룹과 같음)
+  if (dateDim && measures.length) push(`${measures[0].name} 합계 : ${dateDim.name}(월) 기준`, [dateDim.name], [], [sumOf(measures[0])], { [dateDim.name]: { by: 'months' } });
+  for (const d of dims.slice(0, 3)) for (const m of measures.slice(0, 2)) push(`${m.name} 합계 : ${d.name} 기준`, [d.name], [], [sumOf(m)]);
+  if (measures.length >= 2) for (const d of dims.slice(0, 2)) push(`${measures.slice(0, 3).map((m) => m.name).join(' · ')} 합계 : ${d.name} 기준`, [d.name], [], measures.slice(0, 3).map(sumOf));
+  if (dims.length >= 2 && measures.length) {
+    const [a, b] = dims[0].distinct <= 12 ? [dims[1], dims[0]] : [dims[0], dims[1]];
+    if (b.distinct <= 12) push(`${measures[0].name} 합계 : ${a.name} × ${b.name}`, [a.name], [b.name], [sumOf(measures[0])]);
+    push(`${measures[0].name} 합계 : ${dims[0].name} › ${dims[1].name}`, [dims[0].name, dims[1].name], [], [sumOf(measures[0])]);
+  }
+  if (dateDim && measures.length && dims.length && dims[0].distinct <= 12) push(`${measures[0].name} 합계 : ${dateDim.name}(월) × ${dims[0].name}`, [dateDim.name], [dims[0].name], [sumOf(measures[0])], { [dateDim.name]: { by: 'months' } });
+  for (const d of dims.slice(0, 3)) for (const m of measures.slice(0, 1)) push(`${m.name} 평균 : ${d.name} 기준`, [d.name], [], [{ field: m.name, agg: 'average' }]);
+  for (const d of dims.slice(0, 3)) push(`${d.name} 개수`, [d.name], [], [{ field: d.name, agg: 'count' }]);
+  return out;
 }

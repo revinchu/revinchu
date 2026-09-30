@@ -28,7 +28,7 @@ import { CHART_TYPES, CHART_GALLERY, CHART_PALETTES, PALETTE, paletteOf, renderC
 import {
   computePivot, warmPivots, AGGREGATES, SHOW_AS, BASE_POS, LAYOUTS, pivotSourceData, resolvePivot, itemText, headerNames, normalizeDef, valueName,
   pivotFieldNames, parseCalc, PIVOT_STYLES, PIVOT_STYLE_GROUPS, pivotStyleParts, LABEL_OPS, VALUE_OPS, DATE_OPS, PIVOT_DATE_PERIODS, todaySerial, describeFieldFilter, keyOf, sortKeys, pivotDetail, GROUP_BY,
-  checkCalc, renameCalcRefs, CALC_FUNCS,
+  checkCalc, renameCalcRefs, CALC_FUNCS, recommendPivots, parseCalcItem,
 } from './pivot.js';
 import { SLICER_STYLES, SLICER_STYLE_GROUPS, slicerStyleName, slicerColors, CUSTOM_KEYS } from './slicerstyle.js';
 import { server, idbSet, idbGet, idbDel } from './storage.js';
@@ -7516,7 +7516,7 @@ const KEYTIPS = {
   ae: ['textToColumns', '텍스트 나누기'], at: ['toggleFilter', '필터'], am: ['dedupe', '중복된 항목 제거'],
   avv: ['dataValidation', '데이터 유효성 검사'], ass: ['sortDialog', '정렬'], asa: ['sortAsc', '오름차순 정렬'], asd: ['sortDesc', '내림차순 정렬'],
   aa: ['refreshAll', '모두 새로 고침'], ac: ['clearFilter', '필터 지우기'], ay: ['reapplyFilter', '다시 적용'], aq: ['advancedFilter', '고급 필터'], an: ['consolidate', '통합'], afw: ['webData', '웹에서'], wk: ['navigator', '탐색'], wz: ['focusCellToggle', '포커스 셀'],
-  nt: ['createTable', '표'], nv: ['insertPivot', '피벗 테이블'], nsf: ['insertSlicer', '슬라이서'], np: ['insertPicture', '그림'],
+  nt: ['createTable', '표'], nv: ['insertPivot', '피벗 테이블'], nsp: ['recommendPivot', '추천 피벗 테이블'], nsf: ['insertSlicer', '슬라이서'], np: ['insertPicture', '그림'],
   nsh: ['shapesMenu', '도형'], nx: ['insertTextbox', '텍스트 상자'], nc: ['chartColumn', '세로 막대형 차트'],
   hoe: ['formatCells', '셀 서식'], hoi: ['autofitSel', '열 너비 자동 맞춤'], hoa: ['autofitRowsSel', '행 높이 자동 맞춤'],
   hmc: ['mergeCenter', '병합하고 가운데 맞춤'], hw: ['wrap', '텍스트 줄 바꿈'], hfp: ['painter', '서식 복사'], hb: ['borderLast', '테두리'],
@@ -9573,27 +9573,79 @@ function pivotDialog(tableName = null) {
             else wb.setSheetProp(target, 'pivotsExtra', [...(sheet().pivotsExtra ?? []), def]);
           }, meta());
           selectCell(p.r1, p.c1);
-        } else {
-          let n = 1;
-          while (wb.sheetIndexByName(`피벗${n}`) >= 0) n++;
-          def.top = 2;
-          def.left = 0;
-          target = wb.transact(() => {
-            const idx = wb.addSheet(`피벗${n}`, si + 1);
-            def.area = null;
-            writePivot(idx, def);
-            wb.setSheetProp(idx, 'pivot', def);
-            return idx;
-          }, meta());
-          switchSheet(target, false);
-          selectCell(def.top, 0);
-        }
+        } else pivotOnNewSheet(def);
         pivotPaneOpen = true;
         refreshPivotPane(true);
         return true;
       },
     }, { label: '취소' }],
   });
+}
+
+/** 새 워크시트(피벗N)에 피벗 def 를 그림 */
+function pivotOnNewSheet(def) {
+  let n = 1;
+  while (wb.sheetIndexByName(`피벗${n}`) >= 0) n++;
+  def.top = 2;
+  def.left = 0;
+  const target = wb.transact(() => {
+    const idx = wb.addSheet(`피벗${n}`, si + 1);
+    def.area = null;
+    writePivot(idx, def);
+    wb.setSheetProp(idx, 'pivot', def);
+    return idx;
+  }, meta());
+  switchSheet(target, false);
+  selectCell(def.top, 0);
+  return target;
+}
+
+/** 삽입 › 추천 피벗 테이블 (엑셀): 원본 열을 보고 요약 후보를 미리 보기와 함께 보여 줌 */
+function recommendPivotDialog() {
+  const tbl = tableHere();
+  const rg = tbl ? { r1: tbl.r1, c1: tbl.c1, r2: dataBottom(tbl), c2: tbl.c2 } : dataRange();
+  if (rg.r2 <= rg.r1) { alertDialog('추천 피벗 테이블', '머리글 행과 데이터가 있는 범위를 선택하세요.'); return; }
+  const header = [];
+  const cols = [];
+  const dates = [];
+  const last = Math.min(rg.r2, rg.r1 + 20000); // 표본 (열 종류 · 항목 수 판단용)
+  for (let c = rg.c1; c <= rg.c2; c++) {
+    header.push(displayText(rg.r1, c) || `열${c - rg.c1 + 1}`);
+    const st = styleAt(rg.r1 + 1, c);
+    dates.push(['date', 'longdate', 'datetime'].includes(st.numFmt) || (st.numFmt === 'custom' && isDateCode(st.code ?? '')));
+    const col = [];
+    for (let r = rg.r1 + 1; r <= last; r++) col.push(valueAt(r, c));
+    cols.push(col);
+  }
+  const recs = recommendPivots(header, cols, 8, { dates });
+  if (!recs.length) { alertDialog('추천 피벗 테이블', '추천할 요약을 찾지 못했습니다. [피벗 테이블]로 직접 만드세요.'); return; }
+  const base = tbl ? { table: tbl.name, source: sheet().name, range: rg } : { source: sheet().name, range: rg };
+  const defOf = (rc) => ({ ...base, name: nextPivotName(), ...pivotDefaultsDef(), rows: rc.rows, cols: rc.cols, values: rc.values, ...(rc.groups ? { groups: rc.groups } : {}) });
+  const list = el('div', { class: 'rp-list' });
+  const preview = el('div', { class: 'rp-preview' });
+  let cur = 0;
+  const show = () => {
+    list.querySelectorAll('.rp-item').forEach((x, i) => x.classList.toggle('on', i === cur));
+    preview.replaceChildren();
+    try {
+      const d = defOf(recs[cur]);
+      const src = pivotSource(d);
+      const res = resolvePivot(src, { ...d, style: 'None' });
+      const { grid } = computePivot(res, res.def);
+      const txt = (x) => { const raw = String(x?.raw ?? '').replace(/^'/, ''); return /^-?\d+(\.\d+)?(e[+-]?\d+)?$/i.test(raw) ? formatValue(Number(raw), { numFmt: 'comma', decimals: Number(raw) % 1 ? 2 : 0 }).text : raw; };
+      const rows = grid.slice(0, 16);
+      preview.append(el('div', { class: 'rp-title' }, recs[cur].title), el('table', {}, ...rows.map((row) => el('tr', {}, ...row.slice(0, 7).map((x) => el(/^(rowHead|valueHead|colHead|grand)/.test(x?.role ?? '') ? 'th' : 'td', { class: /^-?[\d,.]+$/.test(txt(x)) ? 'num' : '' }, txt(x)))))));
+      if (grid.length > 16) preview.append(el('div', { class: 'muted' }, `… 모두 ${grid.length}행`));
+    } catch (e) { preview.append(el('div', { class: 'muted' }, `미리 보기를 만들 수 없습니다: ${e.message}`)); }
+  };
+  recs.forEach((rc, i) => list.append(el('div', { class: 'rp-item', onclick: () => { cur = i; show(); }, ondblclick: () => { go(); dlg.close(); } }, rc.title)));
+  const go = () => { pivotOnNewSheet(defOf(recs[cur])); pivotPaneOpen = true; refreshPivotPane(true); };
+  const dlg = openDialog({
+    title: '추천 피벗 테이블', width: 760,
+    body: el('div', { class: 'rp-dlg' }, list, preview),
+    buttons: [{ label: '빈 피벗 테이블...', action: () => { setTimeout(() => pivotDialog(tbl?.name ?? null), 0); } }, { label: '확인', primary: true, action: () => { go(); return true; } }, { label: '취소' }],
+  });
+  show();
 }
 
 function refreshPivots() {
@@ -9986,6 +10038,83 @@ function renderPivotPane(entry) {
 }
 
 // ── 피벗 필터 · 정렬 메뉴 (행 레이블 / 열 레이블 / 보고서 필터 단추, 필드 창) ──
+/**
+ * 계산 항목 (엑셀 피벗 분석 › 필드, 항목 및 집합 › 계산 항목): 행/열 필드에 항목 수식(예: 서울+인천)으로 새 항목을 만듦.
+ * def.calcItems = { 필드: [{ name, formula }] } — 합계 값에 계수를 곱해 더하는 선형 수식 (pivot.js withCalcItems)
+ */
+function calcItemDialog(entry) {
+  if (!entry) { toast('피벗 테이블 안의 셀을 선택하세요.'); return; }
+  const d0 = pivotDefV2(entry.def);
+  const fields = [...(d0.rows ?? []), ...(d0.cols ?? [])];
+  if (!fields.length) { toast('행 또는 열 영역에 필드가 있어야 계산 항목을 만들 수 있습니다.'); return; }
+  const items = { ...(d0.calcItems ?? {}) };
+  const fieldSel = el('select', {}, fields.map((f) => el('option', { value: f }, f)));
+  const nameIn = el('input', { type: 'text', placeholder: '예: 수도권' });
+  const fxIn = el('input', { type: 'text', placeholder: "예: 서울+인천  ·  '서울 강남'*0.5", spellcheck: 'false' });
+  const itemList = el('select', { size: 8, class: 'ci-items' });
+  const mine = el('div', { class: 'ci-mine' });
+  const msg = el('div', { class: 'muted', style: { minHeight: '16px', fontSize: '11px' } });
+  const quote = (t) => (/^[^\s+\-*/()'"0-9][^+\-*/()']*$/.test(t) && !/\s/.test(t) ? t : `'${String(t).replace(/'/g, "''")}'`);
+  const draw = () => {
+    const f = fieldSel.value;
+    const calcNames = new Set((items[f] ?? []).map((x) => x.name));
+    itemList.replaceChildren(...pivotFieldItems(d0, f).filter((t) => !calcNames.has(t)).map((t) => el('option', { value: t }, t === '' ? '(비어 있음)' : t)));
+    const list = items[f] ?? [];
+    mine.replaceChildren(...(list.length ? list.map((x) => el('div', { class: 'ci-row' },
+      el('span', { class: 'ci-name' }, x.name), el('code', {}, `= ${x.formula}`),
+      el('button', { class: 'btn small', onclick: () => { nameIn.value = x.name; fxIn.value = x.formula; } }, '수정'),
+      el('button', { class: 'btn small', onclick: () => { items[f] = list.filter((y) => y !== x); if (!items[f].length) delete items[f]; draw(); } }, '삭제'))) : [el('div', { class: 'muted' }, '이 필드에 계산 항목이 없습니다.')]));
+  };
+  fieldSel.addEventListener('change', draw);
+  itemList.addEventListener('dblclick', () => {
+    if (!itemList.value && itemList.selectedIndex < 0) return;
+    const ins = quote(itemList.value);
+    const pos = fxIn.selectionStart ?? fxIn.value.length;
+    const before = fxIn.value.slice(0, pos);
+    fxIn.value = before + (before && !/[+\-*/(\s]$/.test(before) ? '+' : '') + ins + fxIn.value.slice(pos);
+    fxIn.focus();
+  });
+  const add = () => {
+    const f = fieldSel.value;
+    const name = nameIn.value.trim();
+    if (!name) { msg.textContent = '이름을 입력하세요.'; return false; }
+    if (pivotFieldItems(d0, f).some((t) => t.toLowerCase() === name.toLowerCase()) && !(items[f] ?? []).some((x) => x.name === name)) { msg.textContent = '같은 이름의 항목이 이미 있습니다.'; return false; }
+    let terms;
+    try { terms = parseCalcItem(fxIn.value); } catch (e) { msg.textContent = e.message; return false; }
+    const known = new Set(pivotFieldItems(d0, f).map((t) => t.toLowerCase()));
+    const miss = terms.filter((t) => !known.has(t.item.toLowerCase()));
+    if (miss.length) { msg.textContent = `'${f}' 필드에 없는 항목: ${miss.map((t) => t.item).join(', ')}`; return false; }
+    const list = (items[f] ?? []).filter((x) => x.name !== name);
+    items[f] = [...list, { name, formula: fxIn.value.trim().replace(/^=/, '') }];
+    nameIn.value = ''; fxIn.value = ''; msg.textContent = '';
+    draw();
+    return true;
+  };
+  [nameIn, fxIn].forEach((i) => i.addEventListener('keydown', (e) => e.stopPropagation()));
+  draw();
+  openDialog({
+    title: `계산 항목 삽입 — ${pivotNameOf(entry)}`, width: 560,
+    body: el('div', { class: 'ci-dlg' },
+      el('label', { class: 'form-row' }, el('span', {}, '필드'), fieldSel),
+      el('label', { class: 'form-row' }, el('span', {}, '이름(N)'), nameIn),
+      el('label', { class: 'form-row' }, el('span', {}, '수식(M)'), fxIn),
+      el('div', { class: 'ci-grid' },
+        el('div', {}, el('div', { class: 'muted' }, '항목(I) — 두 번 클릭하면 수식에 넣기'), itemList),
+        el('div', {}, el('div', { class: 'muted' }, '이 필드의 계산 항목'), mine)),
+      el('div', {}, el('button', { class: 'btn', onclick: add }, '추가(A)')),
+      msg,
+      el('div', { class: 'muted', style: { fontSize: '11px' } }, '항목에 숫자를 곱하고 더하거나 빼는 식을 씁니다 (합계 기준). 총합계에는 엑셀처럼 계산 항목도 더해집니다.')),
+    buttons: [{ label: '확인', primary: true, action: () => {
+      if (nameIn.value.trim() || fxIn.value.trim()) { if (!add()) return false; }
+      const def = { ...pivotDefV2(entry.def) };
+      if (Object.keys(items).length) def.calcItems = items; else delete def.calcItems;
+      setPivotDef(entry, def);
+      refreshPivotPane(true);
+      return true;
+    } }, { label: '취소' }],
+  });
+}
+
 function pivotFieldItems(def, field) {
   const src = pivotSource(def);
   if (!src) return [];
@@ -10356,6 +10485,13 @@ function listCalcFormulas(entry = pivotHere()) {
       if (pv && pv[1] !== null) put(3 + i, 3, typeof pv[1] === 'number' ? String(pv[1]) : `'${pv[1]}`, { numFmt: 'number', decimals: 4 });
     });
     if (!calcs.length) put(3, 0, "'(계산 필드가 없습니다)");
+    // 계산 항목 (엑셀 수식 나열과 같이 아래에 따로)
+    const ci = Object.entries(def.calcItems ?? {}).flatMap(([f, list]) => list.map((x) => [f, x]));
+    if (ci.length) {
+      const r0 = 5 + Math.max(1, calcs.length);
+      put(r0, 0, '계산 항목', head); put(r0, 1, '수식', head); put(r0, 2, '필드', head);
+      ci.forEach(([f, x], i) => { put(r0 + 1 + i, 0, `'${x.name}`); put(r0 + 1 + i, 1, `'=${x.formula}`); put(r0 + 1 + i, 2, `'${f}`); });
+    }
     wb.setColWidth(at, 0, 160); wb.setColWidth(at, 1, 360); wb.setColWidth(at, 2, 120); wb.setColWidth(at, 3, 120);
     return at;
   }, meta());
@@ -14309,6 +14445,7 @@ const MENUS = {
     const calcs = e ? pivotDefV2(e.def).calcFields ?? [] : [];
     return [
       { label: '계산 필드...', icon: 'fx', action: () => calcFieldDialog(e, '\u0000new') },
+      { label: '계산 항목...', icon: 'fx', disabled: !e || !(pivotDefV2(e.def).rows?.length || pivotDefV2(e.def).cols?.length), action: () => calcItemDialog(e) },
       ...(calcs.length ? [{ title: '계산 필드 수정' }, ...calcs.slice(0, 20).map((c) => ({ label: `ƒx ${c.name}  =${c.formula}`, action: () => calcFieldDialog(e, c.name) }))] : []),
       { sep: true },
       { label: '수식 나열', action: () => listCalcFormulas(e) },
@@ -14988,6 +15125,8 @@ const COMMANDS = {
   hideCols: () => hideSel('col', true),
 
   insertPivot: pivotDialog,
+  recommendPivot: () => recommendPivotDialog(),
+  calcItem: () => calcItemDialog(pivotHere()),
   pivotFieldList: () => { pivotPaneOpen = !pivotPaneOpen; refreshPivotPane(true); },
   pivotName: (v) => renamePivot(v),
   pivotOptions: () => pivotOptionsDialog(),
@@ -15161,6 +15300,8 @@ const WHATS_NEW = [
   ['데이터', ['정렬 대화 상자: 여러 기준 추가 · 복사 · 순서 바꾸기, 셀 색 · 글꼴 색 · 사용자 지정 목록, 대/소문자 구분 · 왼쪽→오른쪽 · 자연 정렬', '통합 (여러 범위를 첫 행 · 왼쪽 열 이름으로 합계 · 평균 · 개수 …)', '웹에서: 웹 페이지의 표 · 목록 · CSV 미리 보기 → 값 또는 IMPORTHTML 수식으로', '사용자 지정 목록 편집 (채우기 · 정렬에 사용)']],
   ['보기', ['탐색 창 (시트 · 표 · 피벗 · 이름 · 개체 · 메모 · 링크)', '포커스 셀 · 값 강조(Ctrl+F8: 숫자 파랑 · 수식 초록)', '상태 표시줄 사용자 지정 (오른쪽 클릭: 평균 · 개수 · 숫자 셀 수 · 최소 · 최대 · 합계 · 선택 크기, 값 클릭 = 복사)']],
   ['붙여넣기', ['연결된 그림 (카메라: 원본이 바뀌면 같이 바뀜) · 그림 · 연결하여 붙여넣기']],
+  ['피벗', ['추천 피벗 테이블 (삽입 › 추천 피벗 테이블: 요약 후보 미리 보기)', '계산 항목 (예: 수도권 = 서울 + 인천, 피벗 분석 › 필드, 항목 및 집합)']],
+  ['호환', ['확인란을 엑셀 365 고유 형식으로 저장 (엑셀에서도 확인란으로 보임)']],
   ['파일', ['저장 위치(폴더) 선택 · 덮어쓰기 확인 · 연 파일에 바로 [저장]', '파일 › 정보: 통합 문서 보호(구조 보호 · 최종본 · 읽기 전용 권장) · 문서 검사 · 속성 편집', '다른 기기에서 열기(서버 저장)도 폴더 지정']],
   ['편집', ['셀 삽입/삭제 대화 상자 (셀을 오른쪽/아래로 밀기 · 왼쪽/위로 당기기 · 행/열 전체)', '셀 내용 자동 완성 · 자동 고침 · 소수점 자동 삽입 · URL 자동 하이퍼링크', '고급 필터 (조건 범위 · 다른 장소에 복사 · 고유 레코드만)']],
   ['서식', ['채우기 효과 (셀 그라데이션: 가로 · 세로 · 대각선 · 가운데에서)', '무늬 스타일 그림 선택기 · 병합 셀 테두리 · 행 서식 번짐 수정', '스타일시트 v1.0: 표 42 · 피벗 42 · 슬라이서 48종 기본 탑재']],

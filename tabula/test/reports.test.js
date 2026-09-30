@@ -474,11 +474,18 @@ test('셀 이동 (끌어서 옮기기): 옮긴 칸을 가리키는 수식 · 병
   assert.equal(wb.getCell(0, 0, 2).raw, '=SUM(A1:A2)');
 });
 
-test('확인란 칸: 스타일 checkbox + 논리값 · xlsx 왕복 (WIXEL 확장, 엑셀 xfComplement 읽기)', async () => {
+test('확인란 칸: 스타일 checkbox + 논리값 · xlsx 왕복 (엑셀 365 xfComplement + featurePropertyBag)', async () => {
   const { readXlsx, writeXlsx } = await import('../src/xlsx.js');
+  const { unzip, textOf } = await import('../src/zip.js');
   const wb = new Workbook();
   wb.transact(() => { wb.setCellData(0, 0, 0, { raw: 'TRUE', style: { checkbox: true, align: 'center' } }); wb.setCellData(0, 1, 0, { raw: 'FALSE', style: { checkbox: true } }); });
-  const back = new Workbook(readXlsx(writeXlsx(wb)).data);
+  const bytes = writeXlsx(wb);
+  const files = unzip(bytes);
+  assert.match(textOf(files['xl/styles.xml']), /xfpb:xfComplement i="0"/);
+  assert.match(textOf(files['xl/featurePropertyBag/featurePropertyBag.xml']), /<bag type="Checkbox"\/>/);
+  assert.match(textOf(files['xl/_rels/workbook.xml.rels']), /FeaturePropertyBag/);
+  assert.match(textOf(files['[Content_Types].xml']), /featurepropertybag\+xml/);
+  const back = new Workbook(readXlsx(bytes).data);
   assert.equal(back.styleAt(0, 0, 0).checkbox, true);
   assert.equal(back.getValue(0, 0, 0), true);
   assert.equal(back.getValue(0, 1, 0), false);
