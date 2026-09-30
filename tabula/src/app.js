@@ -32,6 +32,7 @@ import {
 } from './pivot.js';
 import { SLICER_STYLES, SLICER_STYLE_GROUPS, slicerStyleName, slicerColors, CUSTOM_KEYS } from './slicerstyle.js';
 import { server, idbSet, idbGet, idbDel } from './storage.js';
+import { NET, netClear } from './fx-web.js';
 import { libList, libSave, libLoad, libLoadVersion, libUpdate, libNameVersion, libRemove, newDocId, packText, unpackText, LIB_MAX, VER_MAX } from './library.js';
 import { itemStats, blockColumn, EMPTY as PIVOT_EMPTY, EMPTY_TEXT as PIVOT_EMPTY_TEXT } from './cube.js';
 import { logicalCol, ColBuilder } from './block.js';
@@ -14232,7 +14233,7 @@ const COMMANDS = {
   zoomIn: () => setZoom(view.zoom + 10),
   zoomOut: () => setZoom(view.zoom - 10),
   zoom100: () => setZoom(100),
-  recalc: () => { wb.calculateNow(); wb.invalidate(); gv.renderAll(); updateStatusCalc(); },
+  recalc: () => { netClear(); wb.calculateNow(); wb.invalidate(); gv.renderAll(); updateStatusCalc(); },
   calcNowSheet: () => { wb.calculateNow(); wb.invalidate(si); gv.renderAll(); updateStatusCalc(); },
   options: () => optionsDialog(),
   calcAuto: () => { opts.calcMode = 'auto'; saveOptions(); applyOptions(); wb.calculateNow(); gv.renderAll(); },
@@ -14288,6 +14289,52 @@ function whatsNewDialog() {
     buttons: [{ label: '확인', primary: true }],
   });
 }
+/**
+ * 웹 가져오기 함수 (IMPORTXML · IMPORTHTML · GOOGLEFINANCE …) 의 네트워크: 서버가 있으면 /api/fetch 중계, 없으면 브라우저가 직접
+ * (CORS 를 허용하지 않는 사이트는 서버 실행(npm start)이 필요). IMPORTRANGE 의 WIXEL 문서는 서버 · 보관함에서 찾음
+ */
+async function webFetch(url) {
+  if (url.startsWith('wixel-doc:')) return wixelRangeCsv(url.slice(10));
+  if (server.available) return server.fetchText(url);
+  let res;
+  try { res = await fetch(url, { cache: 'no-store' }); } catch { throw new Error('이 사이트는 브라우저에서 직접 가져올 수 없습니다 (CORS). WIXEL 서버(npm start)에서 열면 가져올 수 있습니다.'); }
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.text();
+}
+async function wixelRangeCsv(spec) {
+  const [name, sheetName, area] = spec.split('\u0001');
+  let data = null;
+  if (name === docName) data = { workbook: null, live: wb };
+  if (!data && server.available) { try { data = await server.load(name); } catch { /* 없음 */ } }
+  if (!data) {
+    const hit = (await libList()).find((d) => d.name === name);
+    if (hit) data = await libLoad(hit.id);
+  }
+  if (!data) throw new Error(`'${name}' 문서를 찾을 수 없습니다`);
+  const book = data.live ?? new Workbook(data.workbook ?? data);
+  const s = sheetName ? book.sheetIndexByName(sheetName) : 0;
+  if (s < 0 || s == null) throw new Error(`'${sheetName}' 시트가 없습니다`);
+  const rg = parseRangeName(area.replace(/\$/g, ""));
+  if (!rg) throw new Error(`범위 '${area}' 를 읽을 수 없습니다`);
+  const rows = [];
+  for (let r = rg.r1; r <= Math.min(rg.r2, rg.r1 + 50000); r++) {
+    const row = [];
+    for (let c = rg.c1; c <= Math.min(rg.c2, rg.c1 + 500); c++) {
+      const v = book.getValue(s, r, c);
+      const t = v === null || v === undefined ? '' : isError(v) ? v.code : String(v);
+      row.push(/[",\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t);
+    }
+    rows.push(row.join(','));
+  }
+  return rows.join('\n');
+}
+NET.fetcher = webFetch;
+NET.onDone = (sheets) => {
+  if (!wb) return;
+  for (const s of sheets) if (s < wb.sheets.length) wb.invalidate(s);
+  gv?.renderAll();
+};
+
 /** 전역 오류 보호: 명령 하나가 실패해도 앱은 계속 동작하고, 사용자에게는 한국어 안내만 */
 let lastErrToast = 0;
 function reportError(err, where = '') {

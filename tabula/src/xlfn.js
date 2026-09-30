@@ -151,6 +151,9 @@ export function toFileFormula(raw, opt = {}) {
  * opt: { legacy: 동적 배열 표시가 없는 옛 수식이면 true (암시적 교차 '@' 추가), isName }
  */
 export function fromFileFormula(text, opt = {}) {
+  // 구글 스프레드시트가 내보낸 전용 함수: IFERROR(__xludf.DUMMYFUNCTION("IMPORTXML(…)"), 저장값) → 원래 수식
+  const gs = /^\s*(?:IFERROR\(\s*)?__xludf\.DUMMYFUNCTION\(\s*"((?:[^"]|"")*)"\s*\)/i.exec(text);
+  if (gs) return gs[1].replace(/""/g, '"');
   let ast;
   try { ast = parse(text); } catch { return text.replace(/_xlfn\.|_xlws\.|_xlpm\.|_xleta\./gi, ''); }
   return print(ast, text, { ...opt, mode: 'app' }, new Set(), !!opt.legacy);

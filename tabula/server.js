@@ -95,6 +95,27 @@ async function api(req, res, path) {
     return undefined;
   }
   if (!authorized(req)) return send(res, 401, { error: '인증이 필요합니다' });
+  // 웹 가져오기 함수 중계 (IMPORTXML · IMPORTHTML · IMPORTDATA · IMPORTFEED · GOOGLEFINANCE · GOOGLETRANSLATE …)
+  //   GET /api/fetch?url=…  — 공개 http(s) 주소만 (내부망 · localhost 막음), 15초 · 5MB 제한
+  if (path === '/api/fetch' && req.method === 'GET') {
+    const target = new URL(req.url, 'http://x').searchParams.get('url') ?? '';
+    let u;
+    try { u = new URL(target); } catch { return send(res, 400, { error: '잘못된 주소입니다' }); }
+    if (!/^https?:$/.test(u.protocol) || privateHost(u.hostname)) return send(res, 400, { error: '공개 웹 주소(http · https)만 가져올 수 있습니다' });
+    try {
+      const r = await fetch(u, { redirect: 'follow', signal: AbortSignal.timeout(15000), headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 WIXEL', 'Accept-Language': 'ko-KR,ko;q=0.9,en;q=0.8' } });
+      if (privateHost(new URL(r.url).hostname)) return send(res, 400, { error: '내부 주소로 이동하는 링크입니다' });
+      const buf = Buffer.from(await r.arrayBuffer());
+      if (buf.length > 5 * 1024 * 1024) return send(res, 413, { error: '5MB 보다 큰 응답은 가져오지 않습니다' });
+      const type = r.headers.get('content-type') ?? '';
+      const cs = /charset=([\w-]+)/i.exec(type)?.[1] ?? /<meta[^>]+charset=["']?([\w-]+)/i.exec(buf.subarray(0, 4096).toString('latin1'))?.[1] ?? 'utf-8';
+      let text;
+      try { text = new TextDecoder(cs.toLowerCase() === 'ks_c_5601-1987' ? 'euc-kr' : cs).decode(buf); } catch { text = buf.toString('utf8'); }
+      res.writeHead(r.ok ? 200 : 502, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(r.ok ? text : `HTTP ${r.status}`);
+    } catch (e) { return send(res, 502, { error: `가져오지 못했습니다: ${e.message}` }); }
+    return undefined;
+  }
   if (path === '/api/publish' && req.method === 'POST') {
     await mkdir(PUB, { recursive: true });
     const body = await readBody(req);
@@ -152,6 +173,18 @@ async function api(req, res, path) {
     return send(res, 200, { ok: true });
   }
   return send(res, 405, { error: 'method not allowed' });
+}
+
+/** 내부망 · 자기 자신 주소 (웹 가져오기 중계에서 막음) */
+function privateHost(h) {
+  const x = h.toLowerCase().replace(/^\[|\]$/g, '');
+  if (x === 'localhost' || x.endsWith('.localhost') || x.endsWith('.local') || x.endsWith('.internal') || x === '0.0.0.0' || x === '::' || x === '::1') return true;
+  const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(x);
+  if (m) {
+    const [a, b] = [+m[1], +m[2]];
+    return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127);
+  }
+  return /^(fc|fd|fe80)/.test(x);
 }
 
 createServer(async (req, res) => {

@@ -81,6 +81,13 @@ export const server = {
     return res.json();
   },
 
+  /** 웹 가져오기 함수 중계 (/api/fetch): 텍스트 */
+  async fetchText(url) {
+    const res = await fetch(`api/fetch?url=${encodeURIComponent(url)}`, { cache: 'no-store', headers: { 'X-Tabula-Token': token() } });
+    const text = await res.text();
+    if (!res.ok) { let msg = text; try { msg = JSON.parse(text).error ?? text; } catch { /* 글자 */ } throw new Error(msg || `오류 (${res.status})`); }
+    return text;
+  },
   list() { return this.request('files'); },
   publish(data, id = null) { return id ? this.request(`published/${id}`, { method: 'PUT', body: JSON.stringify(data) }).then(() => ({ id })) : this.request('publish', { method: 'POST', body: JSON.stringify(data) }); },
   unpublish(id) { return this.request(`published/${id}`, { method: 'DELETE' }); },

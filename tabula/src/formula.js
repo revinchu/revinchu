@@ -12,6 +12,7 @@ import { DATE } from './fx-date.js';
 import { LOOKUP } from './fx-lookup.js';
 import { LOGIC } from './fx-logic.js';
 import { FIN } from './fx-fin.js';
+import { WEB, WEB_ARRAY } from './fx-web.js';
 
 // 공통 값/오류 (다른 모듈 호환용 재수출)
 export const FormulaError = FormulaErrorCore;
@@ -851,7 +852,7 @@ const CORE = {
   }),
 };
 
-export const FUNCS = { ...MATH, ...STAT, ...TEXT, ...DATE, ...LOOKUP, ...LOGIC, ...FIN, ...CORE };
+export const FUNCS = { ...MATH, ...STAT, ...TEXT, ...DATE, ...LOOKUP, ...LOGIC, ...FIN, ...WEB, ...CORE };
 FUNCS.POWER = FUNCS.POWER ?? ((args) => binary('^', args[0], args[1]));
 
 export const FUNCTION_NAMES = Object.keys(FUNCS).sort();
@@ -861,7 +862,7 @@ const ARRAY_FUNCS = new Set([
   'SEQUENCE', 'RANDARRAY', 'FILTER', 'SORT', 'SORTBY', 'UNIQUE', 'TRANSPOSE', 'TAKE', 'DROP', 'EXPAND', 'CHOOSECOLS', 'CHOOSEROWS',
   'VSTACK', 'HSTACK', 'TOCOL', 'TOROW', 'WRAPCOLS', 'WRAPROWS', 'MMULT', 'MINVERSE', 'MUNIT', 'FREQUENCY', 'TREND', 'GROWTH',
   'LINEST', 'LOGEST', 'MODE.MULT', 'TEXTSPLIT', 'REGEXEXTRACT', 'MAP', 'SCAN', 'BYROW', 'BYCOL', 'MAKEARRAY', 'REDUCE', 'LET',
-  'LAMBDA', 'OFFSET', 'INDIRECT', 'INDEX', 'XLOOKUP', 'CHOOSE', 'GROUPBY', 'PIVOTBY',
+  'LAMBDA', 'OFFSET', 'INDIRECT', 'INDEX', 'XLOOKUP', 'CHOOSE', 'GROUPBY', 'PIVOTBY', ...WEB_ARRAY,
 ]);
 /** 인수 중 어느 하나라도 배열이면 결과도 배열일 수 있는 함수 */
 const PASS_FUNCS = new Set(['IF', 'IFS', 'SWITCH', 'IFERROR', 'IFNA', 'ROW', 'COLUMN', 'CONCATENATE']);
@@ -913,6 +914,10 @@ export function autoFormatFor(ast) {
   if (ast.name === 'NOW') return 'datetime';
   if (['TODAY', 'DATE', 'EDATE', 'EOMONTH', 'WORKDAY', 'WORKDAY.INTL', 'DATEVALUE'].includes(ast.name)) return 'date';
   if (['TIME', 'TIMEVALUE'].includes(ast.name)) return 'time';
+  if (ast.name === 'EPOCHTODATE') return 'datetime';
+  if (ast.name === 'TO_DATE') return 'date';
+  if (ast.name === 'TO_PERCENT') return 'percent';
+  if (ast.name === 'TO_DOLLARS') return 'currency';
   return null;
 }
 
