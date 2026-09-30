@@ -3392,7 +3392,11 @@ function gotoSpecialDialog() {
     { name: 'text', label: '텍스트', type: 'checkbox', value: true },
     { name: 'logical', label: '논리값', type: 'checkbox', value: true },
     { name: 'errors', label: '오류', type: 'checkbox', value: true },
-  ], (v) => {
+  ], (v) => gotoSpecialRun(v));
+}
+/** 이동 옵션 실행 (찾기 및 선택 메뉴의 수식 · 메모 · 상수 · 조건부 서식 · 데이터 유효성 검사도 같은 경로) */
+function gotoSpecialRun(v) {
+  {
     const u = wb.usedRange(si);
     if (v.kind === 'lastCell') { const e = wb.extent(si); selectCell(Math.max(0, e.rows - 1), Math.max(0, e.cols - 1)); return; }
     const rg = selIsActiveOnly() ? { r1: 0, c1: 0, r2: Math.max(0, u.rows - 1), c2: Math.max(0, u.cols - 1) } : usedClip(sel);
@@ -3411,7 +3415,7 @@ function gotoSpecialDialog() {
     gv.ensureVisible(cells[0][0], cells[0][1]);
     gv.renderAll();
     toast(`${cells.length.toLocaleString()}개 칸을 골랐습니다. 입력 후 Ctrl+Enter 로 모두 채우거나 Delete 로 지울 수 있습니다.`);
-  });
+  }
 }
 
 // ───────────────────────── 개요 (그룹 · 부분합) ─────────────────────────
@@ -9385,13 +9389,11 @@ function renderSheetTabs() {
       switchSheet(i);
       openMenu({ x: e.clientX, y: e.clientY - 150 }, [
         { label: '삽입', icon: 'sheetInsert', action: () => run('addSheet') },
-        { label: '삭제', icon: 'delete', action: () => run('deleteSheet') },
+        { label: '삭제', icon: 'delete', disabled: wb.ownSheetCount() < 2, action: () => run('deleteSheet') },
         { label: '이름 바꾸기', action: () => renameSheetInline(i) },
-        { label: '복사본 만들기', icon: 'copy', action: () => run('duplicateSheet') },
-        { sep: true },
-        { label: '왼쪽으로 이동', disabled: i === 0, action: () => moveSheet(i, -1) },
-        { label: '오른쪽으로 이동', disabled: i >= wb.ownSheetCount() - 1, action: () => moveSheet(i, 1) },
-        { sep: true },
+        { label: '이동/복사...', action: () => moveCopySheetDialog(i) },
+        { label: '코드 보기', icon: 'macro', disabled: !wb.vba, action: () => run('macros') },
+        isProtected(wb.sheets[i]) ? { label: '시트 보호 해제...', action: () => run('unprotectSheet') } : { label: '시트 보호...', action: () => run('protectSheet') },
         { label: '탭 색', icon: 'fill', action: () => setTimeout(() => tabColorMenu({ x: e.clientX, y: e.clientY - 330 }, i), 0) },
         { sep: true },
         { label: '숨기기', action: () => hideSheet(i) },
@@ -9449,6 +9451,55 @@ function renameSheetInline(i) {
   input.addEventListener('mousedown', (e) => e.stopPropagation());
 }
 
+const objectsOf = (sh) => OBJECT_PROPS.flatMap((p) => (sh[p] ?? []).filter((o) => !o.hidden));
+/** 개체 선택 (찾기 및 선택): 시트의 모든 그림 개체 선택 */
+function selectAllObjects() {
+  const list = objectsOf(sheet());
+  if (!list.length) return;
+  chartSel = list[0].id;
+  objMulti.clear();
+  for (const o of list.slice(1)) objMulti.add(o.id);
+  gv.renderObjectsAll();
+  updateSelectionUI();
+}
+/** 이동/복사 (엑셀): 다음 시트의 앞에 · (끝으로 이동) + 복사본 만들기 */
+function moveCopySheetDialog(i = si) {
+  const n = wb.ownSheetCount();
+  const list = el('select', { size: 10, class: 'vf-list' },
+    [...wb.sheets.slice(0, n).map((s, j) => el('option', { value: String(j), selected: j === i + 1 }, s.name)), el('option', { value: String(n), selected: i + 1 >= n }, '(끝으로 이동)')]);
+  const copy = el('input', { type: 'checkbox' });
+  openDialog({
+    title: '이동/복사', width: 360,
+    body: el('div', { class: 'vf-dlg' }, el('div', {}, `선택한 시트 이동: ${wb.sheets[i].name}`), el('div', {}, '다음 시트의 앞에(B):'), list, el('label', { class: 'fc-check' }, copy, '복사본 만들기(C)')),
+    buttons: [{
+      label: '확인', primary: true, action: () => {
+        const before = Number(list.value);
+        if (copy.checked) {
+          switchSheet(i, false);
+          run('duplicateSheet'); // si + 1 에 복사본
+          // 복사본은 원본 바로 뒤(si)에 생김 → 고른 시트 앞 자리로
+          if (before !== si) moveSheetTo(si, before);
+          return undefined;
+        }
+        const target = before > i ? before - 1 : before;
+        if (target !== i) moveSheetTo(i, target);
+        return undefined;
+      },
+    }, { label: '취소' }],
+  });
+}
+function moveSheetTo(i, j) {
+  j = Math.max(0, Math.min(wb.ownSheetCount() - 1, j));
+  if (i === j) return;
+  wb.transact(() => {
+    wb.snapshotList();
+    const [s] = wb.sheets.splice(i, 1);
+    wb.sheets.splice(j, 0, s);
+  }, meta());
+  si = j;
+  renderSheetTabs();
+  switchSheet(j);
+}
 function moveSheet(i, d) {
   const j = i + d;
   if (j < 0 || j >= wb.ownSheetCount()) return; // 외부 통합 문서 값 시트(맨 뒤)와는 자리를 바꾸지 않음
@@ -12171,12 +12222,24 @@ const MENUS = {
     },
     { label: '열 너비...', action: () => sizeDialog('col') },
     { label: '열 너비 자동 맞춤', action: () => autofitCols(range(sel.c1, Math.min(sel.c2, sel.c1 + 200))) },
-    ...MENUS_HIDE(),
+    {
+      label: '기본 너비...', action: () => formDialog('기본 너비', [{ name: 'w', label: '표준 열 너비(px)', type: 'number', value: defColW() }], ({ w }) => {
+        const n = Number(w);
+        if (!(n > 0 && n <= 1000)) { toast('1에서 1000 사이의 값을 입력하세요.'); return false; }
+        wb.setSheetProp(si, 'defColW', n === DEFAULT_COL_WIDTH ? undefined : n);
+        gv.layout();
+        return undefined;
+      }),
+    },
+    { title: '표시 유형' },
+    { label: '숨기기 및 숨기기 취소', submenu: MENUS_HIDE().filter((m) => !m.title).concat([{ sep: true }, { label: '시트 숨기기', action: () => hideSheet() }, { label: '시트 숨기기 취소...', disabled: !wb.sheets.some((_, j) => isHiddenSheet(j)), action: () => unhideSheetDialog() }]) },
     { title: '시트 구성' },
     { label: '시트 이름 바꾸기', action: () => renameSheetInline(si) },
-    { label: '시트 복사본 만들기', icon: 'copy', action: () => run('duplicateSheet') },
+    { label: '시트 이동/복사...', action: () => moveCopySheetDialog(si) },
     { label: '탭 색', icon: 'fill', action: () => { const b = document.querySelector('.sheet-tab.active')?.getBoundingClientRect(); setTimeout(() => tabColorMenu({ x: b?.left ?? 200, y: (b?.top ?? 600) - 330 }, si), 0); } },
     { title: '보호' },
+    isProtected(sheet()) ? { label: '시트 보호 해제...', action: () => run('unprotectSheet') } : { label: '시트 보호...', action: () => run('protectSheet') },
+    { label: '셀 잠금', checked: wb.styleAt(si, active.r, active.c).locked !== false, action: () => run('toggleLock') },
     { label: '셀 서식...', key: 'Ctrl+1', action: () => formatCellsDialog() },
   ],
   hideMenu: () => MENUS_HIDE(),
@@ -12210,6 +12273,13 @@ const MENUS = {
     { label: '찾기...', icon: 'search', key: 'Ctrl+F', action: () => openFindDialog('find') },
     { label: '바꾸기...', key: 'Ctrl+H', action: () => openFindDialog('replace') },
     { label: '이동...', key: 'Ctrl+G', action: () => gotoDialog() },
+    { label: '이동 옵션...', action: () => gotoSpecialDialog() },
+    { sep: true },
+    ...[['formulas', '수식'], ['comments', '메모'], ['condfmt', '조건부 서식'], ['constants', '상수'], ['validation', '데이터 유효성 검사']]
+      .map(([kind, label]) => ({ label, action: () => gotoSpecialRun({ kind, numbers: true, text: true, logical: true, errors: true }) })),
+    { sep: true },
+    { label: '개체 선택', icon: 'selectionPane', disabled: !objectsOf(sheet()).length, action: () => selectAllObjects() },
+    { label: '선택 창...', icon: 'selectionPane', action: () => run('selectionPane') },
     { sep: true },
     { label: '다음 메모', icon: 'comment', action: () => jumpComment(1) },
   ],
@@ -12688,6 +12758,7 @@ const COMMANDS = {
   circleInvalid: () => { circles = invalidCells(wb, si); gv.renderOverlays(); if (!circles.length) toast('잘못된 데이터가 없습니다.'); },
   clearCircles: () => { circles = null; gv.renderOverlays(); },
   macros: macroDialog,
+  toggleLock: () => { const on = wb.styleAt(si, active.r, active.c).locked !== false; applyStyle({ locked: on ? false : undefined }); },
 
   insertFunction: insertFunctionDialog,
   insertDate: () => {
