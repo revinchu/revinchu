@@ -1270,3 +1270,7 @@ body.view-mode .titlebar, body.view-mode .ribbon-tabs, body.view-mode .ribbon, b
 .qa-desc { padding: 6px 12px 10px; color: var(--muted); border-top: 1px solid #f0f0f0; }
 .c.cbx-cell { cursor: pointer; }
 .c.cbx-cell .cbx { flex: none; }
+.spell-list { max-height: 55vh; overflow: auto; display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.spell-row { display: grid; grid-template-columns: 56px 1fr; gap: 8px; align-items: start; }
+.spell-ref { color: var(--green); cursor: pointer; font-weight: 600; padding-top: 4px; }
+.spell-row textarea { width: 100%; font: inherit; resize: vertical; }

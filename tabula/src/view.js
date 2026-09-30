@@ -1248,8 +1248,8 @@ export class GridView {
     this.corner.style.height = `${hh}px`;
     // 수준 단추: 행은 모서리 아래쪽 가로로, 열은 오른쪽 세로로
     const lv = [];
-    if (olw) for (let L = 1; L <= maxLevel(ol.rows) + 1; L++) lv.push(`<div class="olv" data-ax="r" data-l="${L}" title="수준 ${L} 표시" style="left:${(L - 1) * 14 + 2}px;top:${hh - 17}px">${L}</div>`);
-    if (olh) for (let L = 1; L <= maxLevel(ol.cols) + 1; L++) lv.push(`<div class="olv" data-ax="c" data-l="${L}" title="수준 ${L} 표시" style="left:${hw - 17}px;top:${(L - 1) * 14 + 2}px">${L}</div>`);
+    if (olw && ol) for (let L = 1; L <= maxLevel(ol.rows) + 1; L++) lv.push(`<div class="olv" data-ax="r" data-l="${L}" title="수준 ${L} 표시" style="left:${(L - 1) * 14 + 2}px;top:${hh - 17}px">${L}</div>`);
+    if (olh && ol) for (let L = 1; L <= maxLevel(ol.cols) + 1; L++) lv.push(`<div class="olv" data-ax="c" data-l="${L}" title="수준 ${L} 표시" style="left:${hw - 17}px;top:${(L - 1) * 14 + 2}px">${L}</div>`);
     const lvHtml = lv.join('');
     if (this.corner._lv !== lvHtml) { this.corner.innerHTML = lvHtml; this.corner._lv = lvHtml; }
     Object.assign(this.colHead.style, { left: '0px', top: '0px', width: `${this.viewW}px`, height: `${hh}px` });

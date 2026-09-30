@@ -253,6 +253,55 @@ function smartSelectAll() {
   selectRange(next, 'cells', act.r >= next.r1 && act.r <= next.r2 && act.c >= next.c1 && act.c <= next.c2 ? act : { r: next.r1, c: next.c1 });
 }
 
+// ───────── F11 차트 시트 · F7 맞춤법 검사 ─────────
+/** F11: 현재 데이터로 새 시트에 기본 차트 (엑셀의 차트 시트처럼 화면을 채우는 차트) */
+function chartSheet() {
+  const rg = dataRange();
+  let hasNum = false;
+  for (const [r, c] of cellsIn({ ...rg, r2: Math.min(rg.r2, rg.r1 + 2000) })) if (typeof valueAt(r, c) === 'number') { hasNum = true; break; }
+  if (!hasNum) { alertDialog('차트', '차트를 만들려면 숫자가 들어 있는 데이터 범위를 선택하세요.'); return; }
+  const src = sheet().name;
+  const w = Math.max(640, Math.round(gv.viewW - 60));
+  const h = Math.max(360, Math.round(gv.viewH - 60));
+  let at;
+  wb.transact(() => {
+    at = wb.addSheet(`Chart${wb.sheets.filter((x) => /^Chart\d+$/.test(x.name)).length + 1}`, si + 1);
+    const chart = { id: `ch${Date.now().toString(36)}`, type: 'column', title: '차트 제목', sheet: src, range: { r1: rg.r1, c1: rg.c1, r2: Math.min(rg.r2, rg.r1 + 2000), c2: rg.c2 }, x: 20, y: 20, w, h, z: 1 };
+    wb.setSheetProp(at, 'charts', [chart]);
+    wb.setSheetProp(at, 'noGrid', true);
+  }, meta());
+  switchSheet(at);
+}
+/** F7: 맞춤법 검사 — 선택 범위(없으면 시트)의 글자 칸을 브라우저 맞춤법 검사로 보여 주고 고친 내용을 반영 */
+function spellCheckDialog() {
+  const rg = selIsActiveOnly() ? (() => { const u = wb.usedRange(si); return { r1: 0, c1: 0, r2: Math.max(0, u.rows - 1), c2: Math.max(0, u.cols - 1) }; })() : usedClip(sel);
+  const items = [];
+  for (let r = rg.r1; r <= rg.r2 && items.length < 300; r++) {
+    for (let c = rg.c1; c <= rg.c2 && items.length < 300; c++) {
+      const cell = wb.getCell(si, r, c);
+      if (cell && !cell.formula && typeof valueAt(r, c) === 'string' && /[A-Za-z가-힣]{2,}/.test(cell.raw)) items.push({ r, c, raw: cell.raw });
+    }
+  }
+  if (!items.length) { alertDialog('맞춤법 검사', '맞춤법을 검사할 글자가 없습니다.'); return; }
+  const list = el('div', { class: 'spell-list' }, items.map((it) => {
+    const ta = el('textarea', { spellcheck: 'true', lang: 'ko', rows: Math.min(4, it.raw.split('\n').length), value: it.raw.replace(/^'/, '') });
+    it.ta = ta;
+    return el('div', { class: 'spell-row' }, el('span', { class: 'spell-ref', onclick: () => selectCell(it.r, it.c) }, cellName(it.r, it.c)), ta);
+  }));
+  openDialog({
+    title: '맞춤법 검사', width: 620,
+    body: el('div', {}, el('div', { class: 'muted' }, `빨간 물결 밑줄이 맞춤법 오류입니다 (브라우저 맞춤법 검사 · 글자 위에서 오른쪽 클릭하면 추천 단어). 고친 뒤 [변경 내용 적용]을 누르세요. (${items.length}칸)`), list),
+    buttons: [{
+      label: '변경 내용 적용', primary: true, action: () => {
+        const changed = items.filter((it) => it.ta.value !== it.raw.replace(/^'/, ''));
+        if (changed.length) wb.transact(() => changed.forEach((it) => wb.setInput(si, it.r, it.c, it.ta.value)), meta());
+        toast(changed.length ? `${changed.length}칸을 고쳤습니다.` : '바뀐 내용이 없습니다.');
+      },
+    }, { label: '닫기' }],
+  });
+  setTimeout(() => items[0]?.ta.focus(), 50);
+}
+
 // ───────── 확인란 (삽입 › 확인란, 엑셀 365): 논리값 칸에 체크 상자 표시 ─────────
 function insertCheckboxes() {
   if (editing && !commitEdit()) return;
@@ -1151,6 +1200,20 @@ function onEditingKey(e) {
     if (e.key === 'Tab') { e.preventDefault(); acceptAutocomplete(); return; }
     if (e.key === 'Escape') { e.preventDefault(); hideAutocomplete(); return; }
   }
+  // Ctrl+Shift+A: 수식에서 함수 이름 뒤에 인수 이름 넣기 (엑셀)
+  if (ctrl && e.shiftKey && (e.code === 'KeyA')) {
+    const inp = edInput();
+    const before = inp.value.slice(0, inp.selectionStart);
+    const m = /([A-Za-z][A-Za-z0-9._]*)\(?$/.exec(before);
+    const info = m && FUNC_INFO[m[1].toUpperCase()];
+    if (info) {
+      e.preventDefault();
+      const args = (/\((.*)\)/.exec(info.sig)?.[1] ?? '').trim();
+      const ins = `${before.endsWith('(') ? '' : '('}${args})`;
+      setEditText(before + ins + inp.value.slice(inp.selectionEnd), before.length + ins.length);
+      return;
+    }
+  }
   switch (e.key) {
     case 'Enter':
       e.preventDefault();
@@ -1263,7 +1326,7 @@ function onGridKey(e) {
     if (k === 'F4') { handled(); repeatLast(); return; }
     if (k === 'F5') { handled(); run(e.shiftKey ? 'find' : 'goto'); return; }
     if (k === 'F3' && e.shiftKey) { handled(); run('insertFunction'); return; }
-    if (k === 'F11' && !e.shiftKey) { handled(); run('chartColumn'); return; }
+    if (k === 'F11' && !e.shiftKey) { handled(); run('chartSheet'); return; }
     if (k === 'F10' && e.shiftKey) {
       handled();
       const rect = gv.clientRect({ r1: active.r, c1: active.c, r2: active.r, c2: active.c });
@@ -1354,6 +1417,8 @@ function onGridKey(e) {
       return;
     case 'Tab': handled(); moveEnterTab(e.shiftKey ? 'left' : 'right'); return;
     case ' ':
+      // Shift+Space: 행 전체 선택
+      if (e.shiftKey && !ctrl && !e.altKey) { handled(); selectRows(sel.r1, sel.r2, active); return; }
       // 확인란 칸: Space 로 선택한 확인란을 모두 켜고 끔 (엑셀 365)
       if (!ctrl && !e.shiftKey && !e.altKey && styleAt(active.r, active.c).checkbox) { handled(); toggleCheckboxes(); return; }
       break;
@@ -1372,7 +1437,8 @@ function onGridKey(e) {
       else startEdit('edit');
       return;
     case 'F9': handled(); run('recalc'); return;
-    case 'F11': if (e.shiftKey) { handled(); run('addSheet'); } return;
+    case 'F11': handled(); run(e.shiftKey ? 'addSheet' : 'chartSheet'); return;
+    case 'F7': handled(); run('spellCheck'); return;
     case 'F12': handled(); run('saveAs'); return;
     case 'Escape':
       handled();
@@ -2249,7 +2315,8 @@ function doFill(src, t) {
 }
 
 function fillCopy(dir) {
-  const rg = usedClip(sel);
+  // 셀 범위는 선택한 그대로 (Ctrl+R 은 빈 오른쪽 칸까지), 행 · 열 전체는 사용 범위까지
+  const rg = selKind === 'cells' ? sel : usedClip(sel);
   // 수식은 한 번만 나눠 두고 옮긴 글자만 만듦 (백만 행 채우기도 빠르게)
   const shifters = new Map();
   const shift = (d, dr, dc) => {
@@ -2856,10 +2923,8 @@ function hideSel(axis, hide) {
   // 엑셀처럼 개체도 셀을 따라 이동 · 크기 변경 (숨긴 행 안의 개체는 높이 0)
   wb.transact(() => anchorObjects(() => wb.setHidden(si, axis, idx, hide), null, true), meta());
   gv.layout();
-  if (hide) {
-    const n = axis === 'row' ? stepFrom({ r: b, c: active.c }, 1, 0) : stepFrom({ r: active.r, c: b }, 0, 1);
-    selectCell(n.r, n.c);
-  }
+  // 엑셀처럼 선택은 숨긴 행 · 열에 그대로 두어 바로 Ctrl+Shift+9 / 0 으로 숨기기 취소 가능
+  updateSelectionUI();
 }
 
 // ───────────────────────── 스파크라인 ─────────────────────────
@@ -13541,7 +13606,10 @@ const SHORTCUTS = [
   ['Ctrl+E', '빠른 채우기 (예시를 보고 나머지 행 자동 채우기)'],
   ["Ctrl+' / Ctrl+Shift+\"", '위 셀의 수식 / 값 복사'],
   ['Alt+=', '자동 합계'],
-  ['Alt+F1 / F11', '차트 삽입'],
+  ['Alt+F1 / F11', '차트 삽입 / 새 시트에 차트 (차트 시트)'],
+  ['Ctrl+Q', '빠른 분석'],
+  ['Alt+; / Ctrl+\\', '화면에 보이는 셀만 선택 / 행 내용 차이'],
+  ['F7', '맞춤법 검사'],
   ['Ctrl+Shift+L / Ctrl+Alt+L', '필터 켜기/끄기 / 필터 다시 적용'],
   ['Ctrl+9 / Ctrl+0', '행 숨기기 / 열 숨기기'],
   ['Ctrl+Shift+9 / Ctrl+Shift+0', '행 숨기기 취소 / 열 숨기기 취소'],
@@ -14447,6 +14515,8 @@ const COMMANDS = {
   fmtScientific: () => applyStyle({ numFmt: 'scientific', decimals: undefined }, { widen: true }),
   borderNone: () => applyBorder('none'),
   quickAnalysis: () => quickAnalysis(),
+  chartSheet: () => chartSheet(),
+  spellCheck: () => spellCheckDialog(),
   insertCheckbox: () => insertCheckboxes(),
   cfUpDown: () => quickUpDown(false),
   cfUpDownPct: () => quickUpDown(true),
