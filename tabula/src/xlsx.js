@@ -20,7 +20,7 @@ import { emfDataUrl } from './emf.js';
 import { GEOM, LINE_KINDS } from './shapes.js';
 import { BLOCK_MIN_ROWS, ColBuilder, inBlock, blockValue } from './block.js';
 import { normalizeStyleName, DEFAULT_TABLE_STYLE, dataTop, dataBottom, canonicalRef, tableAt, columnNames, findTable } from './tables.js';
-import { pivotSourceData, resolvePivot, itemText, keyOf, sortKeys, EMPTY, headerNames, normalizeDef, computePivot, valueName, showAsPercent, excelCalcFormula, pivotFilterKey } from './pivot.js';
+import { pivotSourceData, resolvePivot, itemText, keyOf, sortKeys, EMPTY, headerNames, normalizeDef, computePivot, valueName, showAsPercent, excelCalcFormula, pivotFilterKey, DATE_OP_TYPES } from './pivot.js';
 import { slicerStyleName, slicerColors, isModernSlicer } from './slicerstyle.js';
 import { applyTint, DEFAULT_THEME, PRESET_STYLES, presetStyle, isModernStyle, ELEMENT_TYPES, elementDxfStyle } from './stylepresets.js';
 import { maxOf, minOf, pushAll, DAY_MS } from './fxcore.js';
@@ -1954,6 +1954,12 @@ function pivotDefFrom(root, cache, tables, sheetName) {
     } else if (/^caption/.test(type)) {
       const op = type.replace(/^caption/, '');
       ff[name] = { type: 'label', op: op[0].toLowerCase() + op.slice(1), v1: flt.attrs.stringValue1 ?? '', v2: flt.attrs.stringValue2 ?? '' };
+    } else if (DATE_OP_TYPES.has(type)) {
+      // 날짜 필터: 값은 일련번호 (customFilter val) 또는 ISO 날짜 (stringValue)
+      const cf = descendants(flt, 'customFilter').map((x) => Number(x.attrs.val)).filter(Number.isFinite);
+      const toSerial = (v) => (v === undefined || v === '' ? undefined : Number.isFinite(Number(v)) ? Number(v) : isoSerial(v));
+      ff[name] = { type: 'date', op: type, v1: cf[0] ?? toSerial(flt.attrs.stringValue1), v2: cf[1] ?? toSerial(flt.attrs.stringValue2) };
+      for (const k of ['v1', 'v2']) if (ff[name][k] === undefined) delete ff[name][k];
     } else if (/^value/.test(type)) {
       const op = type.replace(/^value/, '');
       ff[name] = { type: 'value', op: op[0].toLowerCase() + op.slice(1), v1: flt.attrs.stringValue1 ?? '', v2: flt.attrs.stringValue2 ?? '', by };
@@ -3249,6 +3255,15 @@ function pivotParts(wb, si, def, cache, name, pool) {
     if (flt.type === 'top') {
       const mode = flt.mode ?? 'count';
       filterXml.push(`<filter fld="${f}" type="${mode}" evalOrder="-1" id="${filterId++}" iMeasureFld="${Number(flt.by) || 0}"><autoFilter ref="A1"><filterColumn colId="0"><top10${flt.top === false ? ' top="0"' : ''}${mode === 'percent' ? ' percent="1"' : ''} val="${Number(flt.n) || 10}" filterVal="${Number(flt.n) || 10}"/></filterColumn></autoFilter></filter>`);
+    } else if (flt.type === 'date') {
+      const dyn = !/^date/.test(flt.op);
+      const pair = flt.op === 'dateBetween' || flt.op === 'dateNotBetween';
+      const cmpOp = { dateEqual: 'equal', dateNotEqual: 'notEqual', dateOlderThan: 'lessThan', dateOlderThanOrEqual: 'lessThanOrEqual', dateNewerThan: 'greaterThan', dateNewerThanOrEqual: 'greaterThanOrEqual' }[flt.op];
+      const inner = dyn ? `<dynamicFilter type="${flt.op}"/>`
+        : pair ? `<customFilters${flt.op === 'dateBetween' ? ' and="1"' : ''}><customFilter operator="${flt.op === 'dateBetween' ? 'greaterThanOrEqual' : 'lessThan'}" val="${Number(flt.v1)}"/><customFilter operator="${flt.op === 'dateBetween' ? 'lessThanOrEqual' : 'greaterThan'}" val="${Number(flt.v2)}"/></customFilters>`
+          : `<customFilters><customFilter${cmpOp && cmpOp !== 'equal' ? ` operator="${cmpOp}"` : ''} val="${Number(flt.v1)}"/></customFilters>`;
+      const sv = (v) => (v === undefined ? '' : serialIso(Number(v)).slice(0, 10));
+      filterXml.push(`<filter fld="${f}" type="${flt.op}" evalOrder="-1" id="${filterId++}"${dyn ? '' : ` stringValue1="${sv(flt.v1)}"${pair ? ` stringValue2="${sv(flt.v2)}"` : ''}`}><autoFilter ref="A1"><filterColumn colId="0">${inner}</filterColumn></autoFilter></filter>`);
     } else if (flt.type === 'label' || flt.type === 'value') {
       const type = `${flt.type === 'label' ? 'caption' : 'value'}${cap(flt.op)}`;
       const OPS = { equal: 'equal', notEqual: 'notEqual', greaterThan: 'greaterThan', greaterThanOrEqual: 'greaterThanOrEqual', lessThan: 'lessThan', lessThanOrEqual: 'lessThanOrEqual' };

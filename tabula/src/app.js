@@ -5,12 +5,12 @@ import {
   FUNCTION_NAMES, isError, quoteSheetName, MAX_ROWS, MAX_COLS,
 } from './formula.js';
 import {
-  formatValue, NUMBER_FORMATS, displayedDecimals, parseInput, formatCode, styleForCode, codeOfStyle, adjustCodeDecimals, formatGeneral,
+  formatValue, NUMBER_FORMATS, dateParts, serialOf, displayedDecimals, parseInput, formatCode, styleForCode, codeOfStyle, adjustCodeDecimals, formatGeneral,
 } from './format.js';
 import { buildRibbon, FONTS, FONT_SIZES, TABS } from './ribbon.js';
 import { flashFill } from './flashfill.js';
 import {
-  el, hydrateIcons, toast, openMenu, closeMenus, isMenuOpen, openDialog, alertDialog,
+  el, hydrateIcons, toast, openMenu, openSubmenu, closeSubmenus, closeMenus, isMenuOpen, openDialog, alertDialog,
   formDialog, setMenuCloseHandler, setDialogCloseHandler, isDialogOpen,
 } from './ui.js';
 import { FUNC_INFO, CATEGORIES } from './funcinfo.js';
@@ -27,7 +27,7 @@ import { CellMap } from './cellmap.js';
 import { CHART_TYPES, CHART_GALLERY, CHART_PALETTES, PALETTE, paletteOf, renderChartSvg, chartModelData, chartLayout } from './chart.js';
 import {
   computePivot, warmPivots, AGGREGATES, SHOW_AS, BASE_POS, LAYOUTS, pivotSourceData, resolvePivot, itemText, headerNames, normalizeDef, valueName,
-  pivotFieldNames, parseCalc, PIVOT_STYLES, PIVOT_STYLE_GROUPS, pivotStyleParts, LABEL_OPS, VALUE_OPS, describeFieldFilter, keyOf, sortKeys, pivotDetail, GROUP_BY,
+  pivotFieldNames, parseCalc, PIVOT_STYLES, PIVOT_STYLE_GROUPS, pivotStyleParts, LABEL_OPS, VALUE_OPS, DATE_OPS, PIVOT_DATE_PERIODS, todaySerial, describeFieldFilter, keyOf, sortKeys, pivotDetail, GROUP_BY,
   checkCalc, renameCalcRefs, CALC_FUNCS,
 } from './pivot.js';
 import { SLICER_STYLES, SLICER_STYLE_GROUPS, slicerStyleName, slicerColors, CUSTOM_KEYS } from './slicerstyle.js';
@@ -5739,10 +5739,10 @@ function slicerClear(id) {
 }
 
 /** 표 또는 피벗 테이블에 슬라이서 넣기 */
-function insertSlicerDialog() {
+function insertSlicerDialog(only = null, entry = null) {
   if (editing && !commitEdit()) return;
-  const t = tableHere();
-  const pe = t ? null : pivotHere() ?? pivotDefs()[0] ?? null;
+  const t = entry ? null : tableHere();
+  const pe = t ? null : entry ?? pivotHere() ?? pivotDefs()[0] ?? null;
   let fields;
   let makeSource;
   let anchor;
@@ -5764,8 +5764,8 @@ function insertSlicerDialog() {
     alertDialog('슬라이서 삽입', '슬라이서는 표나 피벗 테이블에 넣을 수 있습니다. 데이터 안에서 Ctrl+T 로 표를 만들거나 피벗 테이블 시트에서 다시 시도하세요.');
     return;
   }
-  const checks = fields.map((n) => [n, el('input', { type: 'checkbox' })]);
-  openDialog({
+  const checks = fields.map((n) => [n, el('input', { type: 'checkbox', checked: !!only && n.toLowerCase() === String(only).toLowerCase() })]);
+  const dlg = openDialog({
     title: '슬라이서 삽입', width: 320,
     body: el('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
       el('div', { class: 'muted' }, t ? `'${t.name}' 표에서 필터할 열을 고르세요.` : '피벗 테이블에서 필터할 필드를 고르세요.'),
@@ -5799,6 +5799,8 @@ function insertSlicerDialog() {
       { label: '취소' },
     ],
   });
+  // 필드 목록의 [슬라이서로 추가]: 대화상자 없이 바로
+  if (only) { dlg.root.querySelector('.btn.primary')?.click(); }
 }
 
 function slicerSettings(id) {
@@ -8344,6 +8346,20 @@ function renderPivotPane(entry) {
       if (!calc) {
         const fi = filterInfo(h);
         const item = el('label', { class: `pp-field${fi ? ' filtered' : ''}`, draggable: 'true', title: fi ? `필터 적용됨\n${fi}` : '' }, cb, el('span', { class: 'pp-fname' }, h), fi ? funnel() : null, filterBtn(h));
+        // 엑셀: 필드 오른쪽 클릭 → 영역에 추가 · 슬라이서 · 시간 표시 막대 (피벗 차트를 고른 상태면 축/범례 이름)
+        item.addEventListener('contextmenu', (e) => {
+          e.preventDefault();
+          const onChart = !!chartHere()?.pivot;
+          openMenu({ x: e.clientX, y: e.clientY }, [
+            { label: '보고서 필터에 추가', icon: 'filter', action: () => moveTo(h, 'pages') },
+            { label: onChart ? '축 필드(항목)에 추가' : '행 레이블에 추가', action: () => moveTo(h, 'rows') },
+            { label: onChart ? '범례 필드(계열)에 추가' : '열 레이블에 추가', action: () => moveTo(h, 'cols') },
+            { label: '값에 추가', icon: 'autosum', action: () => moveTo(h, 'values') },
+            { sep: true },
+            { label: '슬라이서로 추가', icon: 'slicer', action: () => insertSlicerDialog(h, entry) },
+            { label: '시간 표시 막대로 추가', icon: 'calendar', disabled: !isDateField(h), action: () => insertTimelineDialog() },
+          ]);
+        });
         item.addEventListener('dragstart', (e) => { pivotDrag = { name: h }; e.dataTransfer.setData('text/plain', h); });
         return item;
       }
@@ -8373,7 +8389,8 @@ function renderPivotPane(entry) {
   search.addEventListener('input', renderFields);
   renderFields();
   // 영역 4개
-  const AREA_LABEL = { pages: '필터', cols: '열', rows: '행', values: 'Σ 값' };
+  // 피벗 차트를 고른 상태면 엑셀처럼 범례(계열) · 축(범주)
+  const AREA_LABEL = chartHere()?.pivot ? { pages: '필터', cols: '범례(계열)', rows: '축(범주)', values: 'Σ 값' } : { pages: '필터', cols: '열', rows: '행', values: 'Σ 값' };
   const areaBox = (area) => {
     const box = el('div', { class: 'pp-area' });
     const items = area === 'values' ? areas.values.map((v, i) => ({ name: v.field, label: valueName(v), i })) : areas[area].map((n, i) => ({ name: n, label: n, i }));
@@ -8412,6 +8429,8 @@ function renderPivotPane(entry) {
         const moves = [
           { label: '위로 이동', disabled: it.i === 0, action: () => { const l = [...list]; [l[it.i - 1], l[it.i]] = [l[it.i], l[it.i - 1]]; apply({ [area]: l }); } },
           { label: '아래로 이동', disabled: it.i === list.length - 1, action: () => { const l = [...list]; [l[it.i + 1], l[it.i]] = [l[it.i], l[it.i + 1]]; apply({ [area]: l }); } },
+          { label: '처음으로 이동', disabled: it.i === 0, action: () => { const l = [...list]; const [x] = l.splice(it.i, 1); l.unshift(x); apply({ [area]: l }); } },
+          { label: '끝으로 이동', disabled: it.i === list.length - 1, action: () => { const l = [...list]; const [x] = l.splice(it.i, 1); l.push(x); apply({ [area]: l }); } },
           { sep: true },
           ...Object.entries(AREA_LABEL).filter(([a]) => a !== area).map(([a, lab]) => ({ label: `${lab}(으)로 이동`, action: () => moveTo(it.name, a, null, area === 'values' ? it.i : null) })),
           { sep: true },
@@ -8599,6 +8618,7 @@ function openPivotFilterMenu(entry, kind, field, anchorEl) {
   const choices = field ? [field] : kind === 'rows' ? def0.rows ?? [] : kind === 'cols' ? def0.cols ?? [] : [];
   if (!choices.length) return;
   let cur = choices[0];
+  let multiPage = null; // 보고서 필터: 엑셀처럼 한 항목 고르기, [여러 항목 선택]을 켜면 체크 목록
   const box = el('div', { class: 'filter-menu' });
   const upd = (patch) => { closeMenus(); setPivotDef(entry, { ...pivotDefV2(entry.def), ...patch }); refreshPivotPane(true); focusGrid(); };
   const render = () => {
@@ -8629,6 +8649,30 @@ function openPivotFilterMenu(entry, kind, field, anchorEl) {
       for (const [t, cb] of checks) { const show = !q || t.toLowerCase().includes(q) || cb.dataset.label.toLowerCase().includes(q); cb.parentElement.style.display = show ? '' : 'none'; if (q) cb.checked = show; }
       syncAll();
     });
+    if (kind === 'page') {
+      if (multiPage === null) multiPage = !!sel && sel.size > 1;
+      if (!multiPage) {
+        // 한 항목 목록: (모두) · 항목 — 누르면 선택, 확인으로 적용
+        let pick = sel && sel.size === 1 ? [...sel][0] : null;
+        const rows = [];
+        const one = el('div', { class: 'filter-list pf-single' });
+        const mk = (t, text) => {
+          const r = el('div', { class: `pf-one${(t === null ? pick === null : pick === t) ? ' on' : ''}`, onclick: () => { pick = t; rows.forEach(([x, rr]) => rr.classList.toggle('on', x === t)); }, ondblclick: () => apply1() }, text);
+          rows.push([t, r]);
+          return r;
+        };
+        one.append(mk(null, '(모두)'), ...items.map((t) => mk(t, label(t))));
+        const apply1 = () => { const nf = { ...(def.filters ?? {}) }; if (pick === null) delete nf[cur]; else nf[cur] = [pick]; upd({ filters: nf }); };
+        const srch = el('input', { type: 'search', placeholder: '검색' });
+        srch.addEventListener('input', () => { const q = srch.value.trim().toLowerCase(); rows.forEach(([t, r]) => { r.style.display = t === null || !q || String(label(t)).toLowerCase().includes(q) ? '' : 'none'; }); });
+        const mcb = el('input', { type: 'checkbox' });
+        mcb.addEventListener('change', () => { multiPage = true; render(); });
+        box.replaceChildren(srch, one, el('label', { class: 'fc-check pf-multi' }, mcb, '여러 항목 선택'),
+          el('div', { class: 'filter-foot' }, el('button', { class: 'btn primary', onclick: apply1 }, '확인'), el('button', { class: 'btn', onclick: () => { closeMenus(); focusGrid(); } }, '취소')));
+        setTimeout(() => srch.focus());
+        return;
+      }
+    }
     const ok = () => {
       const chosen = [...checks.entries()].filter(([, cb]) => cb.checked).map(([t]) => t);
       if (!chosen.length) { toast('항목을 하나 이상 선택하세요.'); return; }
@@ -8639,7 +8683,9 @@ function openPivotFilterMenu(entry, kind, field, anchorEl) {
     const ff = def.fieldFilters?.[cur];
     const fieldSel = choices.length > 1 ? el('select', {}, choices.map((f) => el('option', { value: f, selected: f === cur }, f))) : null;
     fieldSel?.addEventListener('change', () => { cur = fieldSel.value; render(); });
-    const act = (label, fn, disabled = false) => el('button', { type: 'button', class: `pf-act${disabled ? ' off' : ''}`, disabled, onclick: () => { closeMenus(); fn(); } }, label);
+    const PF_ICON = { '텍스트 오름차순 정렬': 'sortAsc', '텍스트 내림차순 정렬': 'sortDesc' };
+    const act = (label, fn, disabled = false) => el('button', { type: 'button', class: `pf-act${disabled ? ' off' : ''}`, disabled, onmouseenter: () => closeSubmenus(), onclick: () => { closeMenus(); fn(); } },
+      el('span', { class: 'pf-ico', html: ICONS[PF_ICON[label] ?? (/필터 해제$/.test(label) ? 'filterClear' : '')] ?? '' }), label);
     const withSort = (s) => ({ sort: { ...(def.sort ?? {}), [cur]: s } });
     const noFilters = () => { const nf = { ...(def.filters ?? {}) }; delete nf[cur]; const nff = { ...(def.fieldFilters ?? {}) }; delete nff[cur]; return { filters: nf, fieldFilters: nff }; };
     box.replaceChildren(
@@ -8652,13 +8698,32 @@ function openPivotFilterMenu(entry, kind, field, anchorEl) {
       ] : []),
       act(`"${cur}"에서 필터 해제`, () => upd(noFilters()), !def.filters?.[cur] && !ff),
       ...(kind !== 'page' ? [
-        act(`레이블 필터...${ff?.type === 'label' ? ' ✔' : ''}`, () => pivotFilterDialog(entry, cur, 'label')),
-        act(`값 필터...${ff?.type === 'value' ? ' ✔' : ''}`, () => pivotFilterDialog(entry, cur, 'value')),
-        act(`상위 10...${ff?.type === 'top' ? ' ✔' : ''}`, () => pivotFilterDialog(entry, cur, 'top')),
+        // 엑셀: [레이블 필터 ▸] · [날짜 필터 ▸] · [값 필터 ▸] 하위 메뉴에서 조건을 고르면 대화상자
+        (() => {
+          const isDate = pivotFieldIsDate(def, cur);
+          const clearType = (t) => ({ label: '필터 해제', icon: 'filterClear', disabled: ff?.type !== t, action: () => { const nff = { ...(def.fieldFilters ?? {}) }; delete nff[cur]; upd({ fieldFilters: nff }); } });
+          const labelItems = () => [clearType('label'), { sep: true },
+            ...[['equal', 'notEqual'], ['beginsWith', 'notBeginsWith', 'endsWith', 'notEndsWith'], ['contains', 'notContains'], ['greaterThan', 'greaterThanOrEqual', 'lessThan', 'lessThanOrEqual'], ['between', 'notBetween']]
+              .flatMap((grp, gi) => [...(gi ? [{ sep: true }] : []), ...grp.map((op) => ({ label: `${LABEL_OPS.find(([k]) => k === op)[1]}...`, checked: ff?.type === 'label' && ff.op === op, action: () => { closeMenus(); pivotFilterDialog(entry, cur, 'label', op); } }))])];
+          const dateItems = () => [clearType('date'), { sep: true },
+            ...DATE_OPS.map((x) => (x ? { label: /^date/.test(x[0]) ? `${x[1]}...` : x[1], checked: ff?.type === 'date' && ff.op === x[0], action: () => { closeMenus(); if (/^date/.test(x[0])) pivotDateFilterDialog(entry, cur, x[0]); else upd({ fieldFilters: { ...(def.fieldFilters ?? {}), [cur]: { type: 'date', op: x[0] } } }); } } : { sep: true })),
+            { label: '해당 기간의 모든 날짜', submenu: PIVOT_DATE_PERIODS.map(([k, l], i) => ({ label: l, checked: ff?.type === 'date' && ff.op === k, action: () => upd({ fieldFilters: { ...(def.fieldFilters ?? {}), [cur]: { type: 'date', op: k } } }) })).flatMap((it, i) => (i === 4 ? [{ sep: true }, it] : [it])) },
+            { sep: true }, { label: '사용자 지정 필터...', action: () => { closeMenus(); pivotDateFilterDialog(entry, cur, ff?.type === 'date' && /^date/.test(ff.op) ? ff.op : 'dateEqual'); } }];
+          const valueItems = () => [clearType(ff?.type === 'top' ? 'top' : 'value'), { sep: true },
+            ...[['equal', 'notEqual'], ['greaterThan', 'greaterThanOrEqual', 'lessThan', 'lessThanOrEqual'], ['between', 'notBetween']]
+              .flatMap((grp, gi) => [...(gi ? [{ sep: true }] : []), ...grp.map((op) => ({ label: `${VALUE_OPS.find(([k]) => k === op)[1]}...`, checked: ff?.type === 'value' && ff.op === op, action: () => { closeMenus(); pivotFilterDialog(entry, cur, 'value', op); } }))]),
+            { sep: true }, { label: '상위 10...', checked: ff?.type === 'top', action: () => { closeMenus(); pivotFilterDialog(entry, cur, 'top'); } }];
+          const sub = (label, items, on) => {
+            const b = el('button', { type: 'button', class: `pf-act pf-sub${on ? ' on' : ''}`, onmouseenter: () => openSubmenu(b, items()), onclick: () => openSubmenu(b, items()) }, el('span', {}, label), el('span', {}, '▸'));
+            return b;
+          };
+          return el('div', {}, isDate ? sub('날짜 필터', dateItems, ff?.type === 'date') : sub('레이블 필터', labelItems, ff?.type === 'label'), sub('값 필터', valueItems, ff?.type === 'value' || ff?.type === 'top'));
+        })(),
         ...(ff ? [el('div', { class: 'muted pf-desc' }, `적용된 필터: ${describeFieldFilter(ff, def.values ?? [])}`)] : []),
       ] : []),
       el('div', { class: 'pf-sep' }),
       search, list,
+      ...(kind === 'page' ? [(() => { const mcb = el('input', { type: 'checkbox', checked: true }); mcb.addEventListener('change', () => { multiPage = false; render(); }); return el('label', { class: 'fc-check pf-multi' }, mcb, '여러 항목 선택'); })()] : []),
       el('div', { class: 'filter-foot' },
         el('button', { class: 'btn primary', onclick: ok }, '확인'),
         el('button', { class: 'btn', onclick: () => { closeMenus(); focusGrid(); } }, '취소')),
@@ -8671,22 +8736,98 @@ function openPivotFilterMenu(entry, kind, field, anchorEl) {
   menu.style.minWidth = '290px';
 }
 
+/** 정렬 (엑셀 [기타 정렬 옵션]): 수동 · 오름차순 기준 · 내림차순 기준 (필드 자체 또는 값 필드) + 요약 정보 + 기타 옵션 */
 function pivotSortDialog(entry, field) {
   const def = pivotDefV2(entry.def);
-  const s = def.sort?.[field] ?? {};
+  const s0 = def.sort?.[field] ?? {};
   const values = def.values ?? [];
-  formDialog(`정렬 (${field})`, [
-    { name: 'dir', label: '정렬 옵션', type: 'select', value: s.dir ? `${s.dir}` : 'manual', options: [{ value: 'manual', label: '수동 (원래 순서)' }, { value: 'asc', label: '오름차순' }, { value: 'desc', label: '내림차순' }] },
-    { name: 'by', label: '기준', type: 'select', value: s.by === undefined || s.by === null ? '' : String(s.by), options: [{ value: '', label: field }, ...values.map((v, i) => ({ value: String(i), label: valueName(v) }))] },
-  ], (v) => {
-    const sort = { ...(def.sort ?? {}) };
-    if (v.dir === 'manual') delete sort[field];
-    else sort[field] = { dir: v.dir, ...(v.by !== '' ? { by: Number(v.by) } : {}) };
-    setPivotDef(entry, { ...def, sort });
+  const opts2 = [[field, ''], ...values.map((v, i) => [valueName(v), String(i)])];
+  const mode = s0.dir ?? 'manual';
+  const by0 = s0.by === undefined || s0.by === null ? '' : String(s0.by);
+  const radio = (v, label) => { const r = el('input', { type: 'radio', name: 'pvsort', value: v, checked: mode === v }); return [r, el('label', { class: 'fc-check' }, r, label)]; };
+  const sel = (dir) => el('select', { disabled: mode !== dir }, opts2.map(([l, v]) => el('option', { value: v, selected: mode === dir ? v === by0 : v === '' }, l)));
+  const [rm, lm] = radio('manual', '수동(항목을 끌어 다시 정렬)');
+  const [ra, la] = radio('asc', '오름차순 기준:');
+  const [rd, ld] = radio('desc', '내림차순 기준:');
+  const sa = sel('asc');
+  const sd = sel('desc');
+  const summary = el('div', { class: 'muted' });
+  const cur = () => (ra.checked ? 'asc' : rd.checked ? 'desc' : 'manual');
+  const upd = () => {
+    sa.disabled = !ra.checked;
+    sd.disabled = !rd.checked;
+    const m = cur();
+    const byName = (m === 'asc' ? sa : sd).selectedOptions[0]?.textContent ?? field;
+    summary.textContent = m === 'manual' ? `${field} 필드의 항목을 끌어 임의의 순서로 표시` : `${field}을(를) ${byName} 기준 ${m === 'asc' ? '오름차순' : '내림차순'}으로 정렬`;
+  };
+  [rm, ra, rd, sa, sd].forEach((x) => x.addEventListener('change', upd));
+  upd();
+  let useList = def.customListSort !== false;
+  const more = el('button', {
+    class: 'btn', style: { marginRight: 'auto' },
+    onclick: () => formDialog(`기타 정렬 옵션(${field})`, [
+      { name: 'list', label: '정렬할 때 사용자 지정 목록 사용 (1월…12월, 요일 등)', type: 'checkbox', value: useList },
+    ], (v) => { useList = !!v.list; }),
+  }, '기타 옵션(R)...');
+  const dlg = openDialog({
+    title: `정렬(${field})`, width: 380,
+    body: el('div', { class: 'vf-dlg' }, el('div', { class: 'opt-title' }, '정렬 옵션'), lm, la, sa, ld, sd, el('div', { class: 'opt-title' }, '요약 정보'), summary),
+    buttons: [{
+      label: '확인', primary: true, action: () => {
+        const sort = { ...(def.sort ?? {}) };
+        const m = cur();
+        if (m === 'manual') delete sort[field];
+        else { const by = (m === 'asc' ? sa : sd).value; sort[field] = { dir: m, ...(by !== '' ? { by: Number(by) } : {}) }; }
+        setPivotDef(entry, { ...def, sort, ...(useList === (def.customListSort !== false) ? {} : { customListSort: useList ? undefined : false }) });
+      },
+    }, { label: '취소' }],
   });
+  dlg.root.querySelector('.dialog-foot').prepend(more);
 }
 
-function pivotFilterDialog(entry, field, type) {
+/** 피벗 필드가 날짜 필드인지 (원본 열이 날짜 서식이고 그룹이 아님) — [날짜 필터] 메뉴 */
+function pivotFieldIsDate(def, field) {
+  if (def.groups?.[field]) return false;
+  try {
+    const src = pivotSourceData(wb, def);
+    if (!src?.ref) return false;
+    const i = src.cube.header.findIndex((h) => String(h).toLowerCase() === String(field).toLowerCase());
+    if (i < 0) return false;
+    // 날짜 서식이고 실제 값이 날짜(숫자)인 열만 — 글자 열에 날짜 서식만 걸린 경우는 레이블 필터
+    const c = src.ref.c1 + i;
+    let dates = 0;
+    let texts = 0;
+    for (let r = src.ref.r1 + 1; r <= Math.min(src.ref.r2, src.ref.r1 + 200); r++) {
+      const v = wb.getValue(src.si, r, c);
+      if (typeof v === 'number') {
+        const st = wb.styleAt(src.si, r, c);
+        if (/date/.test(st?.numFmt ?? '') || (st?.numFmt === 'custom' && /[yd]/i.test(st.code ?? '') && !/[#0]/.test(st.code ?? ''))) dates++;
+        else return false;
+      } else if (v !== null && v !== '') texts++;
+    }
+    return dates > 0 && dates >= texts;
+  } catch { return false; }
+}
+/** 날짜 필터 (같음 · 이전 · 이후 · 해당 범위) */
+function pivotDateFilterDialog(entry, field, op) {
+  const def = pivotDefV2(entry.def);
+  const cur = def.fieldFilters?.[field]?.type === 'date' ? def.fieldFilters[field] : {};
+  const iso = (v) => { if (v === undefined || v === '') return ''; const p = dateParts(Number(v)); return `${p.y}-${String(p.m).padStart(2, '0')}-${String(p.d).padStart(2, '0')}`; };
+  const toSerial = (t) => { const m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(String(t).trim()); return m ? serialOf(+m[1], +m[2], +m[3]) : null; };
+  formDialog(`날짜 필터 (${field})`, [
+    { name: 'op', label: '다음 조건을 만족하는 항목 표시', type: 'select', value: op, options: [['dateEqual', '같음'], ['dateNotEqual', '같지 않음'], ['dateOlderThan', '이전'], ['dateOlderThanOrEqual', '이전 또는 같음'], ['dateNewerThan', '이후'], ['dateNewerThanOrEqual', '이후 또는 같음'], ['dateBetween', '해당 범위'], ['dateNotBetween', '해당 범위 제외']].map(([value, label]) => ({ value, label })) },
+    { name: 'v1', label: '날짜', type: 'date', value: iso(cur.v1) || iso(todaySerial()) },
+    { name: 'v2', label: '그리고 (범위일 때)', type: 'date', value: iso(cur.v2) },
+  ], (v) => {
+    const a = toSerial(v.v1);
+    const b = toSerial(v.v2);
+    if (a === null) { toast('날짜를 입력하세요.'); return false; }
+    if (/Between/.test(v.op) && b === null) { toast('범위의 끝 날짜를 입력하세요.'); return false; }
+    setPivotDef(entry, { ...def, fieldFilters: { ...(def.fieldFilters ?? {}), [field]: { type: 'date', op: v.op, v1: a, ...(/Between/.test(v.op) ? { v2: b } : {}) } } });
+    return true;
+  });
+}
+function pivotFilterDialog(entry, field, type, presetOp = null) {
   const def = pivotDefV2(entry.def);
   const values = def.values ?? [];
   const cur = def.fieldFilters?.[field]?.type === type ? def.fieldFilters[field] : {};
@@ -8694,25 +8835,46 @@ function pivotFilterDialog(entry, field, type) {
   const valueOpts = values.map((v, i) => ({ value: String(i), label: valueName(v) }));
   if (type !== 'label' && !values.length) { alertDialog('값 필터', '값 영역에 필드를 먼저 추가하세요.'); return; }
   if (type === 'top') {
-    formDialog(`상위 10 필터 (${field})`, [
-      { name: 'top', label: '표시', type: 'select', value: cur.top === false ? 'bottom' : 'top', options: [{ value: 'top', label: '상위' }, { value: 'bottom', label: '하위' }] },
-      { name: 'n', label: '개수', type: 'number', value: cur.n ?? 10 },
-      { name: 'mode', label: '기준', type: 'select', value: cur.mode ?? 'count', options: [{ value: 'count', label: '항목' }, { value: 'percent', label: '%' }, { value: 'sum', label: '합계' }] },
-      { name: 'by', label: '값 필드', type: 'select', value: String(cur.by ?? 0), options: valueOpts },
-    ], (v) => save({ type: 'top', top: v.top === 'top', n: Number(v.n) || 10, mode: v.mode, by: Number(v.by) }));
+    // 엑셀 [상위 10 필터]: 한 줄 — [상위|하위] [개수] [항목|%|합계] 기준: [값 필드]
+    const dir = el('select', {}, [['top', '상위'], ['bottom', '하위']].map(([v2, l]) => el('option', { value: v2, selected: (cur.top === false ? 'bottom' : 'top') === v2 }, l)));
+    const n = el('input', { type: 'number', value: cur.n ?? 10, min: 0, style: { width: '64px', flex: 'none' } });
+    const mode = el('select', {}, [['count', '항목'], ['percent', '%'], ['sum', '합계']].map(([v2, l]) => el('option', { value: v2, selected: (cur.mode ?? 'count') === v2 }, l)));
+    const by = el('select', {}, valueOpts.map((o) => el('option', { value: o.value, selected: String(cur.by ?? 0) === o.value }, o.label)));
+    openDialog({
+      title: `상위 10 필터(${field})`, width: 520,
+      body: el('div', { class: 'vf-dlg' }, el('div', { class: 'opt-title' }, '표시'), el('div', { class: 't10-row' }, dir, n, mode, el('span', {}, '기준:'), by)),
+      buttons: [{ label: '확인', primary: true, action: () => { const k = Number(n.value); if (!(k > 0)) { toast('1 이상의 수를 입력하세요.'); return false; } save({ type: 'top', top: dir.value === 'top', n: k, mode: mode.value, by: Number(by.value) }); return true; } }, { label: '취소' }],
+    });
     return;
   }
   const ops = type === 'label' ? LABEL_OPS : VALUE_OPS;
-  formDialog(`${type === 'label' ? '레이블' : '값'} 필터 (${field})`, [
-    ...(type === 'value' ? [{ name: 'by', label: '값 필드', type: 'select', value: String(cur.by ?? 0), options: valueOpts }] : []),
-    { name: 'op', label: '조건', type: 'select', value: cur.op ?? (type === 'label' ? 'contains' : 'greaterThan'), options: ops.map(([id, label]) => ({ value: id, label })) },
-    { name: 'v1', label: '값', value: cur.v1 ?? '' },
-    { name: 'v2', label: '그리고 (범위일 때)', value: cur.v2 ?? '' },
-  ], (v) => {
-    if (String(v.v1).trim() === '') { toast('값을 입력하세요.'); return false; }
-    save({ type, op: v.op, v1: v.v1, v2: v.v2, ...(type === 'value' ? { by: Number(v.by) } : {}) });
-    return true;
-  }, { note: type === 'label' ? '? 는 한 글자, * 는 여러 글자를 나타냅니다.' : '' });
+  // 엑셀처럼 한 줄: ([값 필드]) [조건] [값] (해당 범위면 '에서' [값])
+  const by = type === 'value' ? el('select', {}, valueOpts.map((o) => el('option', { value: o.value, selected: String(cur.by ?? 0) === o.value }, o.label))) : null;
+  const op = el('select', {}, ops.map(([id, label]) => el('option', { value: id, selected: (presetOp ?? cur.op ?? (type === 'label' ? 'contains' : 'greaterThan')) === id }, label)));
+  const v1 = el('input', { type: 'text', value: cur.v1 ?? '' });
+  const v2 = el('input', { type: 'text', value: cur.v2 ?? '' });
+  const mid = el('span', {}, type === 'label' ? '그리고' : '에서');
+  const sync = () => { const two = op.value === 'between' || op.value === 'notBetween'; mid.style.display = two ? '' : 'none'; v2.style.display = two ? '' : 'none'; };
+  op.addEventListener('change', sync);
+  sync();
+  openDialog({
+    title: `${type === 'label' ? '레이블' : '값'} 필터(${field})`, width: 620,
+    body: el('div', { class: 'vf-dlg' },
+      el('div', { class: 'opt-title' }, type === 'label' ? '레이블이 다음 조건을 만족하는 항목 표시' : '다음 조건에 맞는 항목 표시'),
+      el('div', { class: 't10-row' }, by, op, v1, mid, v2),
+      type === 'label' ? el('div', { class: 'muted' }, '? 기호를 사용하여 한 문자를 나타낼 수 있습니다. * 기호를 사용하여 일련의 문자를 나타낼 수 있습니다.') : null),
+    onOpen: () => v1.focus(),
+    buttons: [{
+      label: '확인', primary: true, action: () => {
+        if (String(v1.value).trim() === '') { toast('값을 입력하세요.'); return false; }
+        const two = op.value === 'between' || op.value === 'notBetween';
+        if (two && String(v2.value).trim() === '') { toast('범위의 두 번째 값을 입력하세요.'); return false; }
+        if (type === 'value' && (!Number.isFinite(Number(v1.value)) || (two && !Number.isFinite(Number(v2.value))))) { toast('값 필터에는 숫자를 입력하세요.'); return false; }
+        save({ type, op: op.value, v1: v1.value, v2: two ? v2.value : '', ...(type === 'value' ? { by: Number(by.value) } : {}) });
+        return true;
+      },
+    }, { label: '취소' }],
+  });
 }
 
 /** 원본이 같은 피벗들 (엑셀은 계산 필드를 피벗 캐시에 두므로 같은 원본의 피벗이 함께 씀) */

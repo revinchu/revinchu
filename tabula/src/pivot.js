@@ -9,7 +9,7 @@
 //                                  | { type: 'label', op, v1, v2 } | { type: 'value', op, by, v1, v2 } }
 //              style: 'PivotStyleLight16' 등, rowCaption, colCaption, cellFmt: { 역할: 서식 } (파일에서 가져온 셀 서식) }
 // 옛 정의 { rowField, colField, valueField, agg, fieldNames } 도 그대로 읽음
-import { formatGeneral, formatValue, parseInput } from './format.js';
+import { formatGeneral, formatValue, parseInput, serialOf, dateParts } from './format.js';
 import { findTable, dataTop, dataBottom, columnNames, ACCENTS, tint, shade } from './tables.js';
 import { logicalCol } from './block.js';
 import { presetStyle, presetSwatch, paintPivotPreset, MODERN_STYLES } from './stylepresets.js';
@@ -713,15 +713,77 @@ function compareOp(op, a, v1, v2, text) {
 export const LABEL_OPS = [
   ['equal', '같음'], ['notEqual', '같지 않음'], ['beginsWith', '시작 문자'], ['notBeginsWith', '제외할 시작 문자'], ['endsWith', '끝 문자'], ['notEndsWith', '제외할 끝 문자'],
   ['contains', '포함'], ['notContains', '포함하지 않음'], ['greaterThan', '보다 큼'], ['greaterThanOrEqual', '크거나 같음'], ['lessThan', '보다 작음'], ['lessThanOrEqual', '작거나 같음'],
-  ['between', '해당 범위'], ['notBetween', '해당 범위 제외'],
+  ['between', '해당 범위'], ['notBetween', '제외 범위'],
 ];
 export const VALUE_OPS = LABEL_OPS.filter(([id]) => !/With|ontains/.test(id));
+/** 날짜 필터 (엑셀 피벗 [날짜 필터]: 동적 기간 · 해당 기간의 모든 날짜 · 사용자 지정) — 엑셀 pivotFilter type 이름 그대로 */
+export const DATE_OPS = [
+  ['dateEqual', '같음'], ['dateOlderThan', '이전'], ['dateNewerThan', '이후'], ['dateBetween', '해당 범위'], null,
+  ['tomorrow', '내일'], ['today', '오늘'], ['yesterday', '어제'], null,
+  ['nextWeek', '다음 주'], ['thisWeek', '이번 주'], ['lastWeek', '지난 주'], null,
+  ['nextMonth', '다음 달'], ['thisMonth', '이번 달'], ['lastMonth', '지난 달'], null,
+  ['nextQuarter', '다음 분기'], ['thisQuarter', '이번 분기'], ['lastQuarter', '지난 분기'], null,
+  ['nextYear', '내년'], ['thisYear', '올해'], ['lastYear', '작년'], null,
+  ['yearToDate', '연간 누계'],
+];
+export const PIVOT_DATE_PERIODS = [['Q1', '1분기'], ['Q2', '2분기'], ['Q3', '3분기'], ['Q4', '4분기'], ...Array.from({ length: 12 }, (_, i) => [`M${i + 1}`, `${i + 1}월`])];
+export const DATE_OP_TYPES = new Set([...DATE_OPS.filter(Boolean).map(([k]) => k), ...PIVOT_DATE_PERIODS.map(([k]) => k), 'dateNotEqual', 'dateOlderThanOrEqual', 'dateNewerThanOrEqual', 'dateNotBetween']);
+/** 오늘 일련번호 (로컬 날짜) */
+export function todaySerial(now = new Date()) { return serialOf(now.getFullYear(), now.getMonth() + 1, now.getDate()); }
+/** 날짜 필터 조건 (serial: 항목 날짜 일련번호, today: 오늘) */
+export function dateFilterMatch(op, serial, v1, v2, today = todaySerial()) {
+  if (typeof serial !== 'number' || !Number.isFinite(serial)) return false;
+  const day = Math.floor(serial);
+  const P = dateParts(day);
+  const T = dateParts(today);
+  const q = (m) => Math.floor((m - 1) / 3);
+  const ym = (x) => x.y * 12 + x.m - 1;
+  const yq = (x) => x.y * 4 + q(x.m);
+  const week = (s) => s - ((((s + 6) % 7) + 7) % 7); // 일요일 시작
+  const num = (v) => (typeof v === 'number' ? v : Number(v));
+  switch (op) {
+    case 'today': return day === today;
+    case 'yesterday': return day === today - 1;
+    case 'tomorrow': return day === today + 1;
+    case 'thisWeek': return week(day) === week(today);
+    case 'lastWeek': return week(day) === week(today) - 7;
+    case 'nextWeek': return week(day) === week(today) + 7;
+    case 'thisMonth': return ym(P) === ym(T);
+    case 'lastMonth': return ym(P) === ym(T) - 1;
+    case 'nextMonth': return ym(P) === ym(T) + 1;
+    case 'thisQuarter': return yq(P) === yq(T);
+    case 'lastQuarter': return yq(P) === yq(T) - 1;
+    case 'nextQuarter': return yq(P) === yq(T) + 1;
+    case 'thisYear': return P.y === T.y;
+    case 'lastYear': return P.y === T.y - 1;
+    case 'nextYear': return P.y === T.y + 1;
+    case 'yearToDate': return P.y === T.y && day <= today;
+    case 'dateEqual': return day === Math.floor(num(v1));
+    case 'dateNotEqual': return day !== Math.floor(num(v1));
+    case 'dateOlderThan': return day < Math.floor(num(v1));
+    case 'dateOlderThanOrEqual': return day <= Math.floor(num(v1));
+    case 'dateNewerThan': return day > Math.floor(num(v1));
+    case 'dateNewerThanOrEqual': return day >= Math.floor(num(v1));
+    case 'dateBetween': return day >= Math.floor(num(v1)) && day <= Math.floor(num(v2));
+    case 'dateNotBetween': return day < Math.floor(num(v1)) || day > Math.floor(num(v2));
+    default: {
+      const m = /^([QM])(\d+)$/.exec(op ?? '');
+      if (m) return m[1] === 'Q' ? q(P.m) + 1 === Number(m[2]) : P.m === Number(m[2]);
+      return true;
+    }
+  }
+}
 
 /** 필터 설명 (메뉴 · 필드 창) */
 export function describeFieldFilter(f, values) {
   if (!f) return '';
   const vname = () => { const v = values[valueIndex(values, f.by)]; return v ? valueName(v) : ''; };
   if (f.type === 'top') return `${f.top === false ? '하위' : '상위'} ${f.n}${f.mode === 'percent' ? '%' : f.mode === 'sum' ? ' (합계)' : '개'} · ${vname()}`;
+  if (f.type === 'date') {
+    const lab = [...DATE_OPS.filter(Boolean), ...PIVOT_DATE_PERIODS].find(([k]) => k === f.op)?.[1] ?? f.op;
+    const dt = (v) => { const p = dateParts(Number(v)); return `${p.y}-${String(p.m).padStart(2, '0')}-${String(p.d).padStart(2, '0')}`; };
+    return /^date/.test(f.op) ? `날짜 ${lab} ${dt(f.v1)}${f.op === 'dateBetween' || f.op === 'dateNotBetween' ? ` ~ ${dt(f.v2)}` : ''}` : `날짜: ${lab}`;
+  }
   const op = LABEL_OPS.find(([id]) => id === f.op)?.[1] ?? f.op;
   const rng = f.op === 'between' || f.op === 'notBetween' ? `${f.v1} ~ ${f.v2}` : f.v1;
   return f.type === 'value' ? `${vname()} ${op} ${rng}` : `레이블 ${op} ${rng}`;
@@ -776,6 +838,10 @@ function applyFieldFilters(groups, d, measures) {
         if (flt.type === 'label') {
           const numeric = items.every((it) => typeof it.key === 'number') && Number.isFinite(Number(flt.v1));
           kept = items.filter((it) => compareOp(flt.op, numeric ? it.key : itemText(it.key), numeric ? Number(flt.v1) : flt.v1, numeric ? Number(flt.v2) : flt.v2, !numeric));
+        } else if (flt.type === 'date') {
+          // 날짜 항목만 남김 (글자 · 빈 항목은 날짜 필터에서 빠짐 — 엑셀과 같음)
+          const today = d.today ?? todaySerial();
+          kept = items.filter((it) => dateFilterMatch(flt.op, it.key, flt.v1, flt.v2, today));
         } else if (flt.type === 'value') {
           const vi = valueIndex(d.values, flt.by);
           // 빈 값은 0 으로 비교 (엑셀: '값 = 0' 필터에 빈 항목도 남음)

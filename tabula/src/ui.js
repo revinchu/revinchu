@@ -85,6 +85,18 @@ export function openMenu(anchor, items, { minWidth, scroll } = {}) {
   return buildMenu(anchor, items, { minWidth, scroll });
 }
 
+/** 열린 메뉴 안의 단추에서 오른쪽에 하위 메뉴 (앞 메뉴는 그대로 둠) — 피벗 필터의 [레이블 필터 ▸] 등 */
+export function closeSubmenus() {
+  for (const m of openMenus.filter((x) => Number(x.dataset.level) >= 1)) m.remove();
+  openMenus = openMenus.filter((x) => Number(x.dataset.level) < 1);
+}
+export function openSubmenu(anchorEl, items) {
+  for (const m of openMenus.filter((x) => Number(x.dataset.level) >= 1)) m.remove();
+  openMenus = openMenus.filter((x) => Number(x.dataset.level) < 1);
+  const r = anchorEl.getBoundingClientRect();
+  return buildMenu({ x: r.right - 2, y: r.top - 4 }, items, { level: 1 });
+}
+
 /** 메뉴 하나 (submenu: 오른쪽에 하위 메뉴, swatch: 색 견본, header: 제목 줄) */
 function buildMenu(anchor, items, { minWidth, scroll, level = 0 } = {}) {
   const menu = el('div', { class: 'menu', role: 'menu' });

@@ -1130,3 +1130,12 @@ body.view-mode .titlebar, body.view-mode .ribbon-tabs, body.view-mode .ribbon, b
 .th-bars { display: flex; gap: 1px; }
 .th-bars i { flex: 1; height: 7px; }
 .th-name { font-size: 11px; }
+.t10-row { display: flex; align-items: center; gap: 8px; } .t10-row select { flex: 1; }
+.pf-single .pf-one { padding: 2px 6px; cursor: default; white-space: nowrap; }
+.pf-single .pf-one:hover { background: #eef5f1; }
+.pf-single .pf-one.on { background: #cde6d7; }
+.pf-multi { padding: 6px 2px 0; }
+.pf-sub { display: flex; justify-content: space-between; }
+.pf-sub.on span:first-child::before { content: '✔ '; color: var(--green); }
+.t10-row input[type=text] { flex: 1; min-width: 60px; }
+.pf-act { display: flex; align-items: center; gap: 6px; } .pf-ico { width: 18px; display: inline-flex; } .pf-ico svg { width: 16px; height: 16px; }

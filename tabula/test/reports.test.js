@@ -308,3 +308,22 @@ test('workbook theme is written to theme1.xml and read back', async () => {
   assert.equal(b.theme[4], 'FF0000');
   assert.equal(b.theme[5], 'E97132');
 });
+
+test('pivot date filters (dynamic periods and custom dates) match Excel', async () => {
+  const { dateFilterMatch } = await import('../src/pivot.js');
+  const { serialOf } = await import('../src/format.js');
+  const today = serialOf(2026, 4, 15); // 수요일
+  assert.ok(dateFilterMatch('today', today, null, null, today));
+  assert.ok(dateFilterMatch('yesterday', today - 1, null, null, today));
+  assert.ok(dateFilterMatch('thisWeek', serialOf(2026, 4, 12), null, null, today)); // 일요일 시작
+  assert.ok(!dateFilterMatch('thisWeek', serialOf(2026, 4, 11), null, null, today));
+  assert.ok(dateFilterMatch('lastMonth', serialOf(2026, 3, 31), null, null, today));
+  assert.ok(dateFilterMatch('thisQuarter', serialOf(2026, 6, 30), null, null, today));
+  assert.ok(dateFilterMatch('lastYear', serialOf(2025, 1, 1), null, null, today));
+  assert.ok(dateFilterMatch('yearToDate', serialOf(2026, 1, 2), null, null, today));
+  assert.ok(!dateFilterMatch('yearToDate', serialOf(2026, 5, 2), null, null, today));
+  assert.ok(dateFilterMatch('Q2', serialOf(2024, 5, 1)));
+  assert.ok(dateFilterMatch('M12', serialOf(2023, 12, 25)));
+  assert.ok(dateFilterMatch('dateBetween', serialOf(2026, 4, 3), serialOf(2026, 4, 1), serialOf(2026, 4, 5)));
+  assert.ok(!dateFilterMatch('today', '글자', null, null, today));
+});
