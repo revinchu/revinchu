@@ -246,6 +246,12 @@ function fitSlicerText(root) {
   }
 }
 
+// 선택한 차트 옆 단추 (엑셀: + 차트 요소 · 붓 차트 스타일 · 깔때기 차트 필터)
+const CHART_SIDE = '<div class="ch-side">'
+  + '<button type="button" class="ch-sb" data-a="elements" title="차트 요소"><svg viewBox="0 0 16 16" fill="none" stroke="#217346" stroke-width="1.6"><path d="M8 2.5v11M2.5 8h11"/></svg></button>'
+  + '<button type="button" class="ch-sb" data-a="styles" title="차트 스타일"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M14 2 7.5 9.2"/><path d="M7.4 9.3c-.3-1-1.8-1.3-2.7-.4-1 1-.3 2.2-2.2 3.6 2 .8 4.3.3 5-1 .4-.7.3-1.5-.1-2.2z" fill="#4472c4" stroke="#4472c4"/></svg></button>'
+  + '<button type="button" class="ch-sb" data-a="filter" title="차트 필터"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2 2.5h12L9.3 8.2v5.3l-2.6-1.3V8.2z"/></svg></button></div>';
+
 export class GridView {
   constructor(host) {
     this.host = host;
@@ -900,7 +906,7 @@ export class GridView {
       ...slicers.map((o) => ['slicers', o]),
     ].sort((a, b) => (a[1].z ?? 0) - (b[1].z ?? 0));
     for (const [prop, o] of all) {
-      if (prop === 'charts') box(o, 'chart', this.chartSvg(o) + this.pivotChartButtons(o));
+      if (prop === 'charts') box(o, 'chart', this.chartSvg(o) + this.pivotChartButtons(o) + (st.chartSel === o.id && !st.objMulti?.size && !st.viewOnly ? CHART_SIDE : ''));
       else if (prop === 'slicers') box(o, o.timeline ? 'slicer timeline' : 'slicer', this.slicerHtml(o), slicerCssVars(o));
       else if (prop === 'images') {
         // 그림 스타일: 테두리 · 둥근 모서리 · 그림자 · 회전 · 투명도

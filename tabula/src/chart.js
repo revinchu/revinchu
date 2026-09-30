@@ -8,6 +8,7 @@
 import { formatGeneral, formatValue, formatCode } from './format.js';
 import { pivotSourceData, pivotChartData } from './pivot.js';
 import { maxOf, minOf, pushAll } from './fxcore.js';
+import { THEME, applyTint } from './stylepresets.js';
 
 export const CHART_TYPES = [
   { id: 'column', label: '세로 막대형' },
@@ -48,20 +49,39 @@ export const CHART_GALLERY = [
 ];
 
 export const PALETTE = ['#4472C4', '#ED7D31', '#A5A5A5', '#FFC000', '#5B9BD5', '#70AD47', '#264478', '#9E480E', '#636363', '#997300'];
-/** 색 변경 (엑셀 [차트 디자인] → [색 변경]) + WIXEL 모던 팔레트 */
+/** 색 변경 (엑셀 [차트 디자인] → [색 변경]): 통합 문서 테마의 강조 색으로 만듦 (엑셀과 같음) + WIXEL 팔레트 */
+const accents = () => THEME.colors.slice(4, 10).map((c) => String(c).toUpperCase());
+const hx = (c) => `#${c}`;
+// 7번째 계열부터: 강조 색 60% 밝기(lumMod 60000), 13번째부터: 80% + 20%(lumMod 80000 lumOff 20000)
+const cycle = (list) => [...list.map(hx), ...list.map((c) => hx(applyTint(c, -0.4))), ...list.map((c) => hx(applyTint(c, 0.2)))];
+const pickAcc = (idx) => { const a = accents(); const base = idx.map((k) => a[k]); return [...base.map(hx), ...base.map((c) => hx(applyTint(c, -0.4))), ...base.map((c) => hx(applyTint(c, 0.4)))]; };
+// 단색형: 한 강조 색의 어두운 색 → 밝은 색
+const mono = (k) => { const c = k < 0 ? '7F7F7F' : accents()[k]; return [-0.5, -0.25, 0, 0.25, 0.5, 0.7].map((t) => hx(applyTint(c, t))); };
+const monoRev = (k) => mono(k).reverse();
 export const CHART_PALETTES = {
-  office: { label: '다양한 색 1 (Office)', colors: PALETTE },
-  colorful2: { label: '다양한 색 2', colors: ['#5B9BD5', '#A5A5A5', '#4472C4', '#264478', '#636363', '#255E91'] },
-  colorful3: { label: '다양한 색 3', colors: ['#ED7D31', '#FFC000', '#70AD47', '#9E480E', '#997300', '#43682B'] },
-  mono1: { label: '단색 파랑', colors: ['#264478', '#335AA1', '#4472C4', '#698ED0', '#8FAADC', '#B4C7E7'] },
-  mono2: { label: '단색 주황', colors: ['#843C0C', '#C55A11', '#ED7D31', '#F4B183', '#F8CBAD', '#FBE5D6'] },
-  mono6: { label: '단색 녹색', colors: ['#385723', '#548235', '#70AD47', '#A9D18E', '#C5E0B4', '#E2F0D9'] },
-  modern: { label: 'WIXEL 모던', colors: ['#4F46E5', '#0EA5E9', '#10B981', '#F59E0B', '#F43F5E', '#8B5CF6', '#64748B', '#14B8A6'] },
-  pastel: { label: 'WIXEL 파스텔', colors: ['#818CF8', '#7DD3FC', '#6EE7B7', '#FCD34D', '#FDA4AF', '#C4B5FD', '#CBD5E1', '#5EEAD4'] },
-  slate: { label: 'WIXEL 슬레이트', colors: ['#1E293B', '#475569', '#64748B', '#94A3B8', '#CBD5E1', '#0EA5E9'] },
-  vivid: { label: 'WIXEL 비비드', colors: ['#2563EB', '#DC2626', '#16A34A', '#D97706', '#9333EA', '#0891B2', '#DB2777', '#65A30D'] },
+  office: { label: '다양한 색 팔레트 1', get colors() { return cycle(accents()); } },
+  colorful2: { label: '다양한 색 팔레트 2', get colors() { return pickAcc([0, 2, 4]); } },
+  colorful3: { label: '다양한 색 팔레트 3', get colors() { return pickAcc([1, 3, 5]); } },
+  colorful4: { label: '다양한 색 팔레트 4', get colors() { return pickAcc([5, 4, 3]); } },
+  mono1: { label: '단색 팔레트 1', mono: true, get colors() { return mono(0); } },
+  mono2: { label: '단색 팔레트 2', mono: true, get colors() { return mono(1); } },
+  mono3: { label: '단색 팔레트 3', mono: true, get colors() { return mono(2); } },
+  mono4: { label: '단색 팔레트 4', mono: true, get colors() { return mono(3); } },
+  mono5: { label: '단색 팔레트 5', mono: true, get colors() { return mono(4); } },
+  mono6: { label: '단색 팔레트 6', mono: true, get colors() { return mono(5); } },
+  mono7: { label: '단색 팔레트 7', mono: true, get colors() { return monoRev(0); } },
+  mono8: { label: '단색 팔레트 8', mono: true, get colors() { return monoRev(1); } },
+  mono9: { label: '단색 팔레트 9', mono: true, get colors() { return monoRev(2); } },
+  mono10: { label: '단색 팔레트 10', mono: true, get colors() { return monoRev(3); } },
+  mono11: { label: '단색 팔레트 11', mono: true, get colors() { return monoRev(4); } },
+  mono12: { label: '단색 팔레트 12', mono: true, get colors() { return monoRev(5); } },
+  mono13: { label: '단색 팔레트 13 (회색)', mono: true, get colors() { return mono(-1); } },
+  modern: { wixel: true, label: 'WIXEL 모던', colors: ['#4F46E5', '#0EA5E9', '#10B981', '#F59E0B', '#F43F5E', '#8B5CF6', '#64748B', '#14B8A6'] },
+  pastel: { wixel: true, label: 'WIXEL 파스텔', colors: ['#818CF8', '#7DD3FC', '#6EE7B7', '#FCD34D', '#FDA4AF', '#C4B5FD', '#CBD5E1', '#5EEAD4'] },
+  slate: { wixel: true, label: 'WIXEL 슬레이트', colors: ['#1E293B', '#475569', '#64748B', '#94A3B8', '#CBD5E1', '#0EA5E9'] },
+  vivid: { wixel: true, label: 'WIXEL 비비드', colors: ['#2563EB', '#DC2626', '#16A34A', '#D97706', '#9333EA', '#0891B2', '#DB2777', '#65A30D'] },
 };
-export const paletteOf = (ch) => CHART_PALETTES[ch?.palette]?.colors ?? PALETTE;
+export const paletteOf = (ch) => CHART_PALETTES[ch?.palette]?.colors ?? CHART_PALETTES.office.colors;
 
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 const label = (v) => (v === null || v === undefined ? '' : typeof v === 'number' ? formatGeneral(v) : String(v?.code ?? v));
@@ -191,7 +211,29 @@ export function resolveChart(ch, api) {
   const comboDefault = (i) => (ch.type === 'combo' ? (i === base.series.length - 1 && base.series.length > 1 ? { type: 'line', axis: 1 } : { type: 'column' }) : {});
   // 계열 형식에 종류가 정해져 있으면 축도 그 형식대로 (axis 가 없으면 기본 축) — 파일의 콤보 차트에서 마지막 계열을 보조 축으로 보내지 않게
   base.series = base.series.map((s, i) => ({ ...s, ...(fmt[i]?.type ? { axis: 0 } : comboDefault(i)), ...(fmt[i] ?? {}) }));
-  return base;
+  return filterChart(base, ch);
+}
+
+/**
+ * 차트 필터 (엑셀 차트 옆 깔때기 단추): 숨긴 계열 · 항목은 그리지 않음
+ * ch.hiddenSeries / ch.hiddenCats = 원래 순서의 번호. 계열 색은 숨기기 전 순서대로 유지 (엑셀과 같음)
+ */
+export function filterChart(base, ch) {
+  const hs = ch.hiddenSeries?.length ? new Set(ch.hiddenSeries) : null;
+  const hc = ch.hiddenCats?.length ? new Set(ch.hiddenCats) : null;
+  if (!hs && !hc) return base;
+  const pal = paletteOf(ch);
+  let series = base.series.map((s, i) => ({ ...s, color: s.color ?? pal[i % pal.length] }));
+  if (hs) series = series.filter((_, i) => !hs.has(i));
+  const out = { ...base, series };
+  if (hc) {
+    const keep = (base.categories ?? []).map((_, i) => !hc.has(i));
+    const pick = (arr) => (Array.isArray(arr) ? arr.filter((_, i) => keep[i] ?? true) : arr);
+    out.categories = pick(base.categories);
+    out.series = series.map((s) => ({ ...s, values: pick(s.values), x: pick(s.x), ...(s.size ? { size: pick(s.size) } : {}) }));
+    delete out.catLevels;
+  }
+  return out;
 }
 
 /** 차트 모델 → 그릴 데이터 (범위 · 계열 참조 · 피벗 차트). hostSi: 차트가 있는 시트 */
@@ -322,7 +364,7 @@ export function renderChartSvg(chart, data) {
   let top = 10;
   if (chart.title) {
     parts.push(`<text x="${W / 2}" y="${Math.round(FS.title + 10)}" text-anchor="middle" font-size="${FS.title}"${chart.titleBold ? ' font-weight="700"' : ''} fill="${chart.titleColor ?? TXT}">${escSvg(truncate(chart.title, Math.floor(W / (FS.title * 0.62))))}</text>`);
-    top = Math.round(FS.title * 1.5 + 16);
+    if (!chart.titleOverlay) top = Math.round(FS.title * 1.5 + 16); // 가운데에 맞춰 표시(overlay): 그림 영역을 줄이지 않음
   }
   // 계열 채우기: 단색 또는 그라데이션 (url), 그림자 필터
   const fillOf = (s) => {

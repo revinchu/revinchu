@@ -1037,3 +1037,70 @@ body.view-mode .titlebar, body.view-mode .ribbon-tabs, body.view-mode .ribbon, b
 .cf-pscope { max-width: 260px; font-size: 11.5px; }
 /* 스크롤되는 세로 목록의 항목이 많을 때 줄 높이가 눌려 글자가 잘리지 않게 */
 .menu > *, .filter-list > *, .fc-list > *, .font-list > *, .ver-rows > *, .pm-list > *, .pp-fields > *, .recent-box *, .cf-gallery > * { flex-shrink: 0; }
+
+/* 차트 옆 단추 (+ 요소 · 붓 스타일 · 깔때기 필터) */
+.ch-side { position: absolute; left: calc(100% + 10px); top: 0; display: flex; flex-direction: column; gap: 6px; cursor: default; }
+.ch-sb { width: 26px; height: 26px; padding: 4px; border: 1px solid #c6c6c6; background: #fff; border-radius: 2px; cursor: pointer; display: grid; place-items: center; }
+.ch-sb:hover { background: #e8f2ec; border-color: #217346; }
+.chart .ch-side svg { width: 16px; height: 16px; }
+.cs-pop { min-width: 200px; padding: 2px 0 6px; }
+.cs-tabs { display: flex; gap: 2px; padding: 4px 10px 0; border-bottom: 1px solid #d0d0d0; margin-bottom: 6px; }
+.cs-tabbody { max-height: 60vh; overflow: auto; }
+.ce-pop { min-width: 190px; }
+.ce-row { display: flex; align-items: center; justify-content: space-between; padding: 2px 8px 2px 12px; }
+.ce-row:hover { background: #eef5f1; }
+.ce-row label { display: flex; align-items: center; gap: 8px; cursor: pointer; flex: 1; padding: 2px 0; }
+.ce-row.off { color: #a0a0a0; }
+.ce-sub { border: 0; background: none; cursor: pointer; font-size: 13px; padding: 0 4px; color: #444; }
+.cf-pop .cf-item { display: flex; align-items: center; gap: 6px; padding: 2px 14px; cursor: pointer; }
+.cf-pop .cf-list { max-height: 180px; overflow: auto; padding-left: 12px; }
+.cf-btns { display: flex; gap: 6px; justify-content: flex-end; padding: 8px 10px 2px; border-top: 1px solid #e3e3e3; margin-top: 6px; }
+.pal-list { padding: 0 6px 6px; min-width: 190px; }
+.pal-row { display: flex; gap: 2px; padding: 3px 4px; margin: 1px 0; border: 1px solid transparent; background: none; cursor: pointer; width: 100%; }
+.pal-row i { display: block; width: 24px; height: 16px; }
+.pal-row:hover { border-color: #a8a8a8; }
+.pal-row.on { border-color: #217346; background: #e8f2ec; }
+/* 리본 안 갤러리 */
+.rgallery { display: flex; align-items: stretch; border: 1px solid #d6d6d6; background: #fff; height: 62px; margin: 2px 4px; }
+.rg-strip { display: flex; gap: 3px; padding: 3px; overflow: hidden; max-width: 560px; }
+.rg-chip { padding: 0; border: 1px solid #d6d6d6; background: #fff; cursor: pointer; line-height: 0; width: 78px; height: 52px; flex: none; }
+.rg-chip:hover { outline: 2px solid var(--green); }
+.rg-chip svg { width: 76px; height: 50px; }
+.rg-more { border-left: 1px solid #d6d6d6 !important; width: 18px; padding: 0; }
+/* 데이터 원본 선택 */
+.sd-dlg { display: flex; flex-direction: column; gap: 8px; }
+.sd-range { display: flex; align-items: center; gap: 8px; }
+.sd-range input { flex: 1; }
+.sd-switch { display: flex; justify-content: center; }
+.sd-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.sd-col { border: 1px solid #d0d0d0; padding: 6px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.sd-bar { display: flex; gap: 3px; flex-wrap: wrap; }
+.sd-list { height: 140px; overflow: auto; border: 1px solid #e0e0e0; background: #fff; }
+.sd-item { display: flex; align-items: center; gap: 6px; padding: 2px 6px; cursor: default; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sd-item.on { background: #cde6d7; }
+.sd-preview { border: 1px solid #e0e0e0; height: 200px; overflow: hidden; display: grid; place-items: center; }
+.sd-edit { display: flex; flex-direction: column; gap: 10px; }
+.sd-edit label { display: flex; flex-direction: column; gap: 4px; }
+.sd-ref { display: flex; align-items: center; gap: 8px; }
+.sd-ref input { flex: 1; min-width: 0; }
+.sd-prev { flex: 1; color: #555; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+.ct-grid { display: flex; flex-wrap: wrap; gap: 4px; padding: 2px 12px 6px; max-width: 280px; }
+.ct-chip { width: 50px; height: 42px; padding: 1px; border: 1px solid transparent; background: #fff; cursor: pointer; line-height: 0; }
+.ct-chip:hover { border-color: #217346; background: #e8f2ec; }
+.ct-chip svg { width: 46px; height: 38px; }
+.sd-range .ref-input { flex: 1; width: auto; min-width: 0; }
+.conn { display: flex; flex-direction: column; gap: 6px; }
+.conn-box { border: 1px solid #c8c8c8; height: 260px; overflow: auto; background: #fff; }
+.conn-row { display: grid; align-items: center; gap: 6px; padding: 2px 6px; cursor: pointer; }
+.conn-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conn-row.head { position: sticky; top: 0; background: #f3f3f3; border-bottom: 1px solid #d0d0d0; font-weight: 600; cursor: default; }
+.conn-row:not(.head):hover { background: #eef5f1; }
+.conn-row.on { background: #dcefe3; }
+.cs-chip svg, .rg-chip svg, .ct-chip svg { width: 100%; height: 100%; }
+.vf-dlg { display: flex; flex-direction: column; gap: 8px; }
+.vf-name { display: flex; align-items: center; gap: 8px; }
+.vf-page { display: flex; flex-direction: column; gap: 6px; padding: 6px 2px; }
+.vf-list { width: 100%; min-height: 150px; }
+.vf-show { width: 100%; }
+.vf-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.vf-list:disabled { background: #f4f4f4; color: #999; }

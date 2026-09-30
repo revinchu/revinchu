@@ -125,13 +125,12 @@ export const TABS = [
       group('링크', [large('hyperlink', 'link', '링크', { title: '하이퍼링크 삽입 (Ctrl+K)' })]),
       group('필터', [large('insertSlicer', 'slicer', '슬라이서', { title: '표나 피벗 테이블에 슬라이서 삽입' }), large('insertTimeline', 'calendar', '시간 표시 막대', { title: '날짜 필드를 기간(연 · 분기 · 월 · 일)으로 거르는 시간 표시 막대 삽입' })]),
       group('차트', [
-        large('chartColumn', 'chartColumn', '세로 막대형', { title: '세로 막대형 차트 삽입 (Alt+F1)' }),
-        large('chartBar', 'chartBar', '가로 막대형'),
-        large('chartLine', 'chartLine', '꺾은선형'),
-        large('chartPie', 'chartPie', '원형', { menu: 'pieCharts', split: true }),
-        large('chartArea', 'chartArea', '영역형'),
-        large('chartScatter', 'chartScatter', '분산형', { menu: 'scatterCharts', split: true }),
-        large('insertChartAll', 'chartColumn', '모든 차트', { title: '차트 삽입 — 모든 차트 (엑셀의 [추천 차트] · [모든 차트])' }),
+        large('insertChartAll', 'chartColumn', '추천 차트', { title: '차트 삽입 — 추천 차트 · 모든 차트' }),
+        col(
+          row(btn('chartsColBar', 'chartColumn', '세로 또는 가로 막대형 차트 삽입', { menu: 'chartsColBar' }), btn('chartsHier', 'table', '계층 구조 차트 삽입', { menu: 'chartsHier' }), btn('chartsWaterfall', 'chartBar', '폭포, 깔때기형, 주식형 차트 삽입', { menu: 'chartsWaterfall' })),
+          row(btn('chartsLineArea', 'chartLine', '꺾은선형 또는 영역형 차트 삽입', { menu: 'chartsLineArea' }), btn('chartsStat', 'stats', '통계 차트 삽입', { menu: 'chartsStat' }), btn('chartsCombo', 'chartArea', '콤보 차트 삽입', { menu: 'chartsCombo' })),
+          row(btn('chartPie', 'chartPie', '원형 또는 도넛형 차트 삽입', { menu: 'pieCharts' }), btn('chartsScatter', 'chartScatter', '분산형(X, Y) 또는 거품형 차트 삽입', { menu: 'chartsScatter' })),
+        ),
         large('insertPivotChart', 'pivot', '피벗 차트', { title: '피벗 차트 삽입 (피벗 테이블 + 차트)' }),
       ]),
       group('스파크라인', [
@@ -437,9 +436,10 @@ export const TABS = [
   {
     id: 'chartDesign', label: '차트 디자인', context: 'chart', groups: [
       group('차트 레이아웃', [large('chartElementsBtn', 'chartColumn', '차트 요소 추가', { menu: 'chartElements' }), large('chartLayoutBtn', 'table', '빠른 레이아웃', { menu: 'chartLayouts' })]),
-      group('차트 스타일', [large('chartColorsBtn', 'fill', '색 변경', { menu: 'chartColors' }), large('chartStylesBtn', 'effects', '차트 스타일', { menu: 'chartStyles' })]),
+      group('차트 스타일', [large('chartColorsBtn', 'fill', '색 변경', { menu: 'chartColors' }), { type: 'gallery', gallery: 'chartStyles', stateKey: 'chartGalleryKey', menu: 'chartStyles', title: '차트 스타일' }]),
       group('데이터', [large('chartSwitch', 'refresh', '행/열 전환'), large('chartSelectData', 'table', '데이터 선택')]),
       group('종류', [large('chartChangeType', 'chartColumn', '차트 종류 변경')]),
+      group('위치', [large('chartMove', 'placement', '차트 이동')]),
       group('서식', [large('chartFormat', 'format', '차트 서식 창'), large('chartPivotFields', 'pivot', '필드 단추', { toggle: 'chartFieldButtons' })]),
     ],
   },
@@ -521,6 +521,7 @@ export function buildRibbon(app) {
       case 'spin': return makeSpin(it);
       case 'check': return makeCheck(it);
       case 'color': return makeColor(it);
+      case 'gallery': return makeGallery(it);
       default: return makeButton(it);
     }
   }
@@ -623,6 +624,21 @@ export function buildRibbon(app) {
     });
     bindings.push((s) => { if (document.activeElement !== input) input.value = s[it.stateKey] ?? ''; });
     return el('label', { class: 'rbtn medium rtext-wrap' }, it.label ? el('span', {}, it.label) : null, input);
+  }
+
+  /** 리본 안 갤러리 (엑셀 차트 스타일처럼 견본이 바로 보이고 ▾ 로 전체 목록) */
+  function makeGallery(it) {
+    const strip = el('div', { class: 'rg-strip' });
+    const more = el('button', { class: 'rbtn rg-more', title: `${it.title} 더 보기`, onmousedown: keepFocus, html: ICONS.chevronDown });
+    more.addEventListener('click', () => app.openMenu(it.menu, more));
+    let last = null;
+    bindings.push((s) => {
+      const k = s[it.stateKey] ?? '';
+      if (k === last) return;
+      last = k;
+      strip.replaceChildren(...(k ? app.gallery?.(it.gallery) ?? [] : []));
+    });
+    return el('div', { class: 'rgallery', title: it.title }, strip, more);
   }
 
   function makeCheck(it) {
