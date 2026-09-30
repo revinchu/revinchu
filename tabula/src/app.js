@@ -32,7 +32,7 @@ import {
 } from './pivot.js';
 import { SLICER_STYLES, SLICER_STYLE_GROUPS, slicerStyleName, slicerColors, CUSTOM_KEYS } from './slicerstyle.js';
 import { server, idbSet, idbGet, idbDel } from './storage.js';
-import { NET, netClear } from './fx-web.js';
+import { NET, netClear, parseMarkup, htmlTables, htmlLists, tableRows, textOf, autoValue, parseCsv } from './fx-web.js';
 import { libList, libSave, libLoad, libLoadVersion, libUpdate, libNameVersion, libRemove, newDocId, packText, unpackText, LIB_MAX, VER_MAX } from './library.js';
 import { itemStats, blockColumn, EMPTY as PIVOT_EMPTY, EMPTY_TEXT as PIVOT_EMPTY_TEXT } from './cube.js';
 import { logicalCol, ColBuilder } from './block.js';
@@ -60,7 +60,7 @@ import { extractVbaModules, fromBase64 } from './vba.js';
 import { findMatches, nextMatch, replaceText, FIND_FORMAT_KEYS } from './find.js';
 import {
   ANALYSIS_TOOLS, AnalysisError, splitGroups, descriptive, matrixTool, regression, histogram, rankPercentile, tTest, zTest, fTest, anova1, anova2,
-  movingAverage, expSmoothing, randomNumbers, sampling, solveMin, advancedFilter,
+  movingAverage, expSmoothing, randomNumbers, sampling, solveMin, advancedFilter, consolidate, CONSOLIDATE_FNS,
 } from './analysis.js';
 import { timeAxis } from './ets.js';
 import {
@@ -86,7 +86,7 @@ const REF_COLORS = ['#2f6fd6', '#d13438', '#8a3fd1', '#0f8a3c', '#c75a00', '#009
 const BIG_AREA = 200000;
 
 // ───────────────────────── 상태 ─────────────────────────
-const view = { showGrid: true, printGrid: false, showFormulas: false, showHeaders: true, showFormulaBar: true, zoom: 100 };
+const view = { showGrid: true, printGrid: false, showFormulas: false, showHeaders: true, showFormulaBar: true, zoom: 100, valueHighlight: false };
 let wb;
 let si = 0;
 let docName = '통합 문서1';
@@ -512,6 +512,8 @@ function updateStats() {
   let numCount = 0;
   let sum = 0;
   let fmtStyle = null;
+  let min = Infinity;
+  let max = -Infinity;
   const area = (rg.r2 - rg.r1 + 1) * (rg.c2 - rg.c1 + 1);
   if (area > 2000000) { bigStats(rg); return; }
   if (area > 200000) {
@@ -554,16 +556,43 @@ function updateStats() {
     if (typeof v === 'number') {
       numCount++;
       sum += v;
+      if (v < min) min = v;
+      if (v > max) max = v;
       fmtStyle ??= styleAt(r, c);
     }
   }
+  renderStats({ count, numCount, sum, min: numCount && area <= 200000 ? min : null, max: numCount && area <= 200000 ? max : null, fmtStyle });
+}
+
+// 상태 표시줄 통계 (엑셀: 오른쪽 클릭으로 항목 선택 · 값을 누르면 복사)
+const STAT_ITEMS = [['avg', '평균'], ['count', '개수'], ['numCount', '숫자 셀 수'], ['min', '최소값'], ['max', '최대값'], ['sum', '합계'], ['size', '선택 크기']];
+function renderStats({ count, numCount, sum, min, max, fmtStyle }) {
+  dom.stats.replaceChildren();
   if (!count) return;
   const fmt = (n) => formatValue(n, fmtStyle?.numFmt && fmtStyle.numFmt !== 'general' ? fmtStyle : {}).text;
-  const items = [];
-  if (numCount) items.push(`평균: ${fmt(sum / numCount)}`);
-  items.push(`개수: ${count}`);
-  if (numCount) items.push(`합계: ${fmt(sum)}`);
-  for (const t of items) dom.stats.append(el('span', {}, t));
+  const on = new Set(opts.statusItems ?? ['avg', 'count', 'sum']);
+  const val = { avg: numCount ? sum / numCount : null, count, numCount, min, max, sum: numCount ? sum : null };
+  for (const [k, label] of STAT_ITEMS) {
+    if (k === 'size') { if (on.has(k)) { const h = Math.min(sel.r2, MAX_ROWS - 1) - sel.r1 + 1; const w = Math.min(sel.c2, MAX_COLS - 1) - sel.c1 + 1; dom.stats.append(el('span', { class: 'stat-item', title: 'LibreOffice 처럼 선택한 행 · 열 수' }, `${h.toLocaleString()}행 × ${w.toLocaleString()}열`)); } continue; }
+    if (!on.has(k) || val[k] === null || val[k] === undefined) continue;
+    const text = k === 'count' || k === 'numCount' ? val[k].toLocaleString() : fmt(val[k]);
+    dom.stats.append(el('span', { class: 'stat-item', title: '클릭하면 값을 복사합니다', onclick: () => { navigator.clipboard?.writeText(String(k === 'count' || k === 'numCount' ? val[k] : Number(val[k].toPrecision(15)))).catch(() => {}); toast(`${label} 값을 클립보드에 복사했습니다.`); } }, `${label}: ${text}`));
+  }
+}
+function statusMenu(e) {
+  e.preventDefault();
+  const on = new Set(opts.statusItems ?? ['avg', 'count', 'sum']);
+  openMenu({ x: e.clientX, y: Math.max(40, e.clientY - 200) }, [
+    { title: '상태 표시줄 사용자 지정' },
+    ...STAT_ITEMS.map(([k, label]) => ({
+      label, checked: on.has(k), action: () => {
+        if (on.has(k)) on.delete(k); else on.add(k);
+        opts.statusItems = STAT_ITEMS.map(([x]) => x).filter((x) => on.has(x));
+        saveOptions();
+        updateStats();
+      },
+    })),
+  ]);
 }
 
 /**
@@ -614,12 +643,7 @@ async function bigStats(rg) {
     }
   }
   if (token !== statsToken) return;
-  dom.stats.replaceChildren();
-  if (!count) return;
-  const fmt = (n) => formatValue(n, fmtStyle?.numFmt && fmtStyle.numFmt !== 'general' ? fmtStyle : {}).text;
-  if (numCount) dom.stats.append(el('span', {}, `평균: ${fmt(sum / numCount)}`));
-  dom.stats.append(el('span', {}, `개수: ${count.toLocaleString()}`));
-  if (numCount) dom.stats.append(el('span', {}, `합계: ${fmt(sum)}`));
+  renderStats({ count, numCount, sum, min: null, max: null, fmtStyle });
 }
 
 // ───────────────────────── 이동 ─────────────────────────
@@ -1319,6 +1343,7 @@ function onGridKey(e) {
   if (ctrl && e.altKey && k === 'F9') { handled(); run('recalc'); return; }
   if (e.shiftKey && !ctrl && k === 'F9') { handled(); run('calcNowSheet'); return; }
   if (e.altKey && !ctrl && (k === 'F8' || k === 'F11')) { handled(); run('macros'); return; }
+  if (ctrl && !e.altKey && !e.shiftKey && k === 'F8') { handled(); run('valueHighlight'); return; } // LibreOffice 값 강조
   if (e.altKey && !ctrl && (k === 'PageDown' || k === 'PageUp')) { handled(); gv.scrollBy((k === 'PageDown' ? 1 : -1) * gv.viewW * 0.9, 0); return; }
   if (!ctrl && !e.altKey) {
     // Shift+F4: 다음 찾기 (엑셀과 같음)
@@ -3448,6 +3473,135 @@ function confirmBox(title, msg) {
 const nextSheetName = (base) => { let n = 1; let name = base; while (wb.sheetIndexByName(name) >= 0) name = `${base} (${++n})`; return name.slice(0, 31); };
 
 /** 분석 결과 표를 시트에 쓰기 → { si, r, c, h, w } */
+/** 데이터 › 통합 (엑셀 Consolidate): 여러 참조 영역을 함수로 모아 활성 셀에 결과 */
+let consolidateState = { fn: 'sum', refs: [], topRow: false, leftCol: false };
+function consolidateDialog() {
+  const st = consolidateState;
+  const dest = { si, r: active.r, c: active.c }; // 엑셀처럼 대화상자를 열 때의 활성 셀에 결과 (열린 동안의 선택은 참조 칸으로 감)
+  const fnSel = el('select', {}, CONSOLIDATE_FNS.map(([k, l]) => el('option', { value: k, selected: st.fn === k }, l)));
+  const cur = isSingle(sel) ? '' : refText(usedClip(sel), si, true);
+  const ref = refInput(cur);
+  const list = el('select', { size: 6, class: 'cons-list' });
+  const drawList = () => list.replaceChildren(...st.refs.map((t) => el('option', { value: t }, t)));
+  drawList();
+  list.addEventListener('change', () => { ref.value = list.value; });
+  const top = el('input', { type: 'checkbox', checked: st.topRow });
+  const left = el('input', { type: 'checkbox', checked: st.leftCol });
+  const add = () => {
+    const p = parseRefInput(ref.value);
+    if (!p) { alertDialog('통합', '참조가 올바르지 않습니다.'); return; }
+    const t = refText(p.rg, p.si, true);
+    if (!st.refs.includes(t)) st.refs.push(t);
+    drawList();
+  };
+  const body = el('div', { class: 'cons-dlg' },
+    el('label', { class: 'form-row' }, el('span', {}, '함수(F):'), fnSel),
+    el('div', { class: 'form-row' }, el('span', {}, '참조(R):'), ref, el('button', { class: 'btn', onclick: add }, '추가(A)')),
+    el('div', {}, '모든 참조 영역(E):'),
+    el('div', { style: { display: 'flex', gap: '8px' } }, list, el('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
+      el('button', { class: 'btn', onclick: () => { st.refs = st.refs.filter((x) => x !== list.value); drawList(); } }, '삭제(D)'))),
+    el('fieldset', { class: 'cons-labels' }, el('legend', {}, '사용할 레이블'),
+      el('label', {}, top, ' 첫 행(T)'), el('label', {}, left, ' 왼쪽 열(L)')),
+    el('div', { class: 'muted', style: { fontSize: '11px' } }, `결과는 ${cellName(dest.r, dest.c)} 셀부터 입력됩니다. 시트에서 범위를 선택하면 참조 칸에 들어갑니다.`));
+  const ok = async () => {
+    const p0 = parseRefInput(ref.value);
+    if (p0 && !st.refs.includes(refText(p0.rg, p0.si, true))) st.refs.push(refText(p0.rg, p0.si, true));
+    st.fn = fnSel.value; st.topRow = top.checked; st.leftCol = left.checked;
+    const parsed = st.refs.map(parseRefInput);
+    if (!parsed.length || parsed.some((p) => !p)) { alertDialog('통합', '참조 영역을 하나 이상 추가하세요.'); return; }
+    const res = consolidate(parsed.map(readBlock), { fn: st.fn, topRow: st.topRow, leftCol: st.leftCol });
+    const h = res.rows.length;
+    const w = Math.max(1, ...res.rows.map((r) => r.length));
+    const hit = parsed.some((p) => p.si === dest.si && p.rg.r1 <= dest.r + h - 1 && p.rg.r2 >= dest.r && p.rg.c1 <= dest.c + w - 1 && p.rg.c2 >= dest.c);
+    if (hit) { alertDialog('통합', '원본 참조 영역과 대상 영역이 겹칩니다. 다른 셀을 선택하세요.'); return; }
+    let busy = false;
+    for (let r = dest.r; r < dest.r + h && !busy; r++) for (let c = dest.c; c < dest.c + w; c++) if (wb.getCell(dest.si, r, c)?.raw) { busy = true; break; }
+    if (busy && !(await confirmBox('통합', '대상 범위에 이미 데이터가 있습니다. 덮어쓰시겠습니까?'))) return;
+    dlg.close();
+    if (dest.si !== si) switchSheet(dest.si);
+    const out = writeAnalysis(res, dest);
+    selectRange({ r1: out.r, c1: out.c, r2: out.r + out.h - 1, c2: out.c + out.w - 1 }, 'cells', { r: out.r, c: out.c });
+  };
+  const dlg = openDialog({ title: '통합', body, width: 460, modeless: true, onClose: () => { refPick = null; }, buttons: [{ label: '확인', primary: true, action: () => { ok(); return false; } }, { label: '닫기' }] });
+}
+
+/** 데이터 › 웹에서 (엑셀 Get Data From Web): URL 의 표 · 목록 · CSV 를 찾아 미리 보고 값 또는 IMPORTHTML 수식으로 넣기 */
+function webDataDialog() {
+  const url = el('input', { type: 'url', placeholder: 'https://', value: opts.lastWebUrl ?? '', style: { flex: '1' } });
+  const status = el('div', { class: 'muted', style: { minHeight: '18px' } });
+  const found = el('div', { class: 'web-found' });
+  const preview = el('div', { class: 'web-preview' });
+  const asFormula = el('input', { type: 'checkbox', checked: true });
+  const newSheet = el('input', { type: 'checkbox' });
+  let items = [];
+  let pick = null;
+  const esc = (t) => String(t).replace(/"/g, '""');
+  const showPreview = () => {
+    preview.replaceChildren();
+    if (!pick) return;
+    const rows = pick.rows.slice(0, 30);
+    const w = Math.min(20, Math.max(1, ...rows.map((r) => r.length)));
+    preview.append(el('table', {}, ...rows.map((r, i) => el('tr', {}, ...Array.from({ length: w }, (_, j) => el(i === 0 ? 'th' : 'td', {}, String(r[j] ?? '')))))));
+    if (pick.rows.length > 30) preview.append(el('div', { class: 'muted' }, `… 모두 ${pick.rows.length}행`));
+  };
+  const drawFound = () => {
+    found.replaceChildren(...items.map((it) => el('div', { class: `web-item${pick === it ? ' on' : ''}`, onclick: () => { pick = it; drawFound(); showPreview(); } },
+      el('span', {}, it.label), el('span', { class: 'muted' }, ` ${it.rows.length}×${Math.max(0, ...it.rows.map((r) => r.length))}`))));
+  };
+  const go = async () => {
+    const u = url.value.trim().replace(/^(?!https?:)/i, 'https://');
+    if (!/^https?:\/\/[^/\s]+/i.test(u)) { status.textContent = 'URL 을 입력하세요.'; return; }
+    url.value = u;
+    status.textContent = '가져오는 중…';
+    items = []; pick = null; drawFound(); showPreview();
+    let text;
+    try { text = await webFetch(u); } catch (e) { status.textContent = `가져올 수 없습니다: ${e.message}`; return; }
+    opts.lastWebUrl = u; saveOptions();
+    if (!/<[a-z!?][^>]*>/i.test(text.slice(0, 4000))) {
+      items = [{ label: 'CSV / 텍스트', rows: parseCsv(text).map((r) => r.map(autoValue)), formula: `=IMPORTDATA("${esc(u)}")` }];
+    } else {
+      const root = parseMarkup(text);
+      items = htmlTables(root).map((tb, i) => {
+        const cap = tb.children.find((c) => c.tag === 'caption');
+        return { label: `표 ${i + 1}${cap ? ` · ${textOf(cap).slice(0, 30)}` : ''}`, rows: tableRows(tb), formula: `=IMPORTHTML("${esc(u)}","table",${i + 1})` };
+      }).filter((it) => it.rows.length);
+      htmlLists(root).forEach((ls, i) => {
+        const rows = ls.children.filter((c) => c.tag === 'li').map((li) => [autoValue(textOf(li))]);
+        if (rows.length >= 2) items.push({ label: `목록 ${i + 1}`, rows, formula: `=IMPORTHTML("${esc(u)}","list",${i + 1})` });
+      });
+    }
+    status.textContent = items.length ? `${items.length}개를 찾았습니다. 가져올 항목을 고르세요.` : '표나 목록을 찾지 못했습니다. (자바스크립트로 그리는 페이지는 IMPORTXML 로 시도해 보세요)';
+    pick = items[0] ?? null;
+    drawFound(); showPreview();
+  };
+  url.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); go(); } });
+  const load = () => {
+    if (!pick) { toast('가져올 표를 고르세요.'); return false; }
+    if (newSheet.checked) wb.transact(() => { const at = wb.addSheet(nextSheetName('웹 데이터'), si + 1); switchSheet(at); }, meta());
+    const r0 = newSheet.checked ? 0 : active.r;
+    const c0 = newSheet.checked ? 0 : active.c;
+    if (asFormula.checked) {
+      wb.transact(() => wb.setCellData(si, r0, c0, { raw: pick.formula }), meta());
+      selectCell(r0, c0);
+    } else {
+      const out = writeAnalysis({ rows: pick.rows.map((r) => r.map((v) => (v === '' ? null : v))), heads: [] }, { si, r: r0, c: c0 });
+      selectRange({ r1: out.r, c1: out.c, r2: out.r + out.h - 1, c2: out.c + out.w - 1 }, 'cells', { r: out.r, c: out.c });
+    }
+    return true;
+  };
+  openDialog({
+    title: '웹에서', width: 640,
+    body: el('div', { class: 'web-dlg' },
+      el('div', { style: { display: 'flex', gap: '6px' } }, url, el('button', { class: 'btn', onclick: go }, '이동')),
+      status,
+      el('div', { class: 'web-split' }, found, preview),
+      el('label', {}, asFormula, ' 수식(IMPORTHTML)으로 연결 — [모두 새로 고침] · F9 로 최신 값 받기'),
+      el('label', {}, newSheet, ' 새 워크시트에 넣기')),
+    buttons: [{ label: '가져오기', primary: true, action: load }, { label: '취소' }],
+  });
+  if (url.value) go();
+}
+
 function writeAnalysis(res, dest) {
   const rows = res.rows;
   const h = rows.length;
@@ -6735,6 +6889,7 @@ function saveOptions() {
 /** 옵션을 통합 문서 · 화면에 적용 */
 function applyOptions() {
   if (wb) wb.manualCalc = opts.calcMode === 'manual';
+  syncCustomLists();
   const root = document.documentElement;
   root.style.setProperty('--focus-cell', opts.focusColor);
   if (opts.gridColor) root.style.setProperty('--grid-line', opts.gridColor); else root.style.removeProperty('--grid-line');
@@ -6892,6 +7047,8 @@ function optionsDialog(startTab = 0) {
       number('　소수 자릿수', o.decimalPlaces, -10, 10, (v) => { o.decimalPlaces = v; }),
       check(o.fillHandle !== false, '채우기 핸들 및 셀 끌어서 놓기 사용', (v) => { o.fillHandle = v; }),
       check(o.autoComplete !== false, '셀 내용을 자동 완성', (v) => { o.autoComplete = v; }),
+      title('일반'),
+      el('label', {}, el('span', {}, '정렬 및 채우기 순서에 사용할 목록 만들기'), el('button', { class: 'btn', onclick: () => customListsDialog() }, '사용자 지정 목록 편집(O)...')),
       title('표시'),
       check(view.showFormulaBar, '수식 입력줄 표시', (v) => { o._formulaBar = v; }),
       check(o.browserMenu, '셀에서 브라우저 기본 오른쪽 클릭 메뉴도 허용', (v) => { o.browserMenu = v; }),
@@ -7358,7 +7515,7 @@ function textToColumns() {
 const KEYTIPS = {
   ae: ['textToColumns', '텍스트 나누기'], at: ['toggleFilter', '필터'], am: ['dedupe', '중복된 항목 제거'],
   avv: ['dataValidation', '데이터 유효성 검사'], ass: ['sortDialog', '정렬'], asa: ['sortAsc', '오름차순 정렬'], asd: ['sortDesc', '내림차순 정렬'],
-  aa: ['refreshAll', '모두 새로 고침'], ac: ['clearFilter', '필터 지우기'], ay: ['reapplyFilter', '다시 적용'], aq: ['advancedFilter', '고급 필터'],
+  aa: ['refreshAll', '모두 새로 고침'], ac: ['clearFilter', '필터 지우기'], ay: ['reapplyFilter', '다시 적용'], aq: ['advancedFilter', '고급 필터'], an: ['consolidate', '통합'], afw: ['webData', '웹에서'], wk: ['navigator', '탐색'], wz: ['focusCellToggle', '포커스 셀'],
   nt: ['createTable', '표'], nv: ['insertPivot', '피벗 테이블'], nsf: ['insertSlicer', '슬라이서'], np: ['insertPicture', '그림'],
   nsh: ['shapesMenu', '도형'], nx: ['insertTextbox', '텍스트 상자'], nc: ['chartColumn', '세로 막대형 차트'],
   hoe: ['formatCells', '셀 서식'], hoi: ['autofitSel', '열 너비 자동 맞춤'], hoa: ['autofitRowsSel', '행 높이 자동 맞춤'],
@@ -8418,6 +8575,59 @@ function selectionPaneDialog() {
       list, el('div', { class: 'muted', style: { fontSize: '11px' } }, 'Ctrl+클릭: 여러 개 선택 · 두 번 클릭: 이름 바꾸기')),
   });
   selPaneDlg.redraw = draw;
+}
+
+/**
+ * 탐색 창 (엑셀 보기 › 탐색 · LibreOffice 탐색기 F5): 시트 · 표 · 피벗 · 이름 · 개체 · 메모를 트리로 보여 주고 누르면 이동
+ */
+let navPaneDlg = null;
+function navigatorPane() {
+  if (navPaneDlg) { navPaneDlg.close(); navPaneDlg = null; return; }
+  const search = el('input', { type: 'search', placeholder: '검색', class: 'nav-search' });
+  const list = el('div', { class: 'nav-list' });
+  const open = new Set(JSON.parse(sessionStorage.getItem?.('wixel:navOpen') ?? 'null') ?? ['sheets']);
+  const goCell = (s, r, c, r2 = r, c2 = c) => { switchSheet(s); if (r === r2 && c === c2) selectCell(r, c); else { growTo(r2, c2); gv.ensureVisible(r, c); selectRange({ r1: r, c1: c, r2, c2 }); } };
+  const goObj = (s, o) => { switchSheet(s); objMulti.clear(); chartSel = o.id; gv.ensureVisible(gv.rows.indexAt(o.y ?? 0), gv.cols.indexAt(o.x ?? 0)); gv.renderObjectsAll(); updateSelectionUI(); };
+  const groups = () => {
+    const vis = wb.sheets.map((sh, i) => ({ sh, i })).filter(({ sh }) => sh.state !== 'veryHidden' && !sh.external);
+    const g = [];
+    g.push({ key: 'sheets', label: '시트', items: vis.map(({ sh, i }) => ({ label: sh.name, sub: sh.state === 'hidden' ? '숨김' : '', on: i === si, go: () => { if (isHiddenSheet(i)) { toast('숨겨진 시트입니다. 시트 탭에서 숨기기를 취소하세요.'); return; } switchSheet(i); } })) });
+    g.push({ key: 'tables', label: '표', items: vis.flatMap(({ sh, i }) => (sh.tables ?? []).map((t) => ({ label: t.name, sub: `${sh.name}!${tableRangeText(t)}`, go: () => goCell(i, t.r1, t.c1, t.r2, t.c2) }))) });
+    g.push({ key: 'pivots', label: '피벗 테이블', items: vis.flatMap(({ i }) => pivotDefs(i).map((e) => { const a = e.def.area; return { label: pivotNameOf(e), sub: wb.sheets[i].name, go: () => (a ? goCell(i, a.r1, a.c1) : switchSheet(i)) }; })) });
+    g.push({ key: 'names', label: '이름 정의', items: wb.names.filter((n) => !n.hidden).map((n) => ({ label: n.name, sub: n.ref, go: () => { const t = String(n.ref).replace(/^=/, ''); if (!gotoRef(t)) toast('범위를 가리키는 이름이 아닙니다.'); } })) });
+    for (const p of OBJECT_PROPS) g.push({ key: p, label: OBJECT_LABEL[p], items: vis.flatMap(({ sh, i }) => (sh[p] ?? []).map((o) => ({ label: o.name || o.caption || o.title || `${OBJECT_LABEL[p]} ${String(o.id).slice(-3)}`, sub: sh.name, go: () => goObj(i, o) }))) });
+    const notes = [];
+    for (const { sh, i } of vis) {
+      if (notes.length >= 500) break;
+      if (!sh.cells?.forEachRC) continue;
+      sh.cells.forEachRC((cell, r, c) => { if (cell.comment && notes.length < 500) notes.push({ label: `${sh.name}!${cellName(r, c)}`, sub: String(cell.comment).slice(0, 40), go: () => goCell(i, r, c) }); });
+    }
+    g.push({ key: 'notes', label: '메모', items: notes });
+    const links = [];
+    for (const { sh, i } of vis) {
+      if (links.length >= 500 || !sh.cells?.forEachRC) continue;
+      sh.cells.forEachRC((cell, r, c) => { if (cell.link && links.length < 500) links.push({ label: `${sh.name}!${cellName(r, c)}`, sub: cell.link, go: () => goCell(i, r, c) }); });
+    }
+    g.push({ key: 'links', label: '하이퍼링크', items: links });
+    return g;
+  };
+  const draw = () => {
+    const q = search.value.trim().toLowerCase();
+    list.replaceChildren(...groups().filter((g) => g.items.length).map((g) => {
+      const items = q ? g.items.filter((it) => `${it.label} ${it.sub}`.toLowerCase().includes(q)) : g.items;
+      if (!items.length) return null;
+      const isOpen = q || open.has(g.key);
+      const head = el('div', { class: 'nav-head', onclick: () => { if (open.has(g.key)) open.delete(g.key); else open.add(g.key); try { sessionStorage.setItem('wixel:navOpen', JSON.stringify([...open])); } catch { /* 저장 안 됨 */ } draw(); } },
+        el('span', { class: 'nav-tw' }, isOpen ? '▾' : '▸'), el('span', {}, g.label), el('span', { class: 'nav-count' }, String(items.length)));
+      return el('div', { class: 'nav-group' }, head, isOpen ? el('div', {}, ...items.map((it) => el('div', { class: `nav-item${it.on ? ' on' : ''}`, title: it.sub || it.label, onclick: () => { it.go(); draw(); } }, el('span', { class: 'nav-label' }, it.label), it.sub ? el('span', { class: 'nav-sub' }, it.sub) : null))) : null);
+    }).filter(Boolean));
+    if (!list.children.length) list.append(el('div', { class: 'muted', style: { padding: '10px' } }, q ? '일치하는 항목이 없습니다.' : '항목이 없습니다.'));
+  };
+  search.addEventListener('input', draw);
+  search.addEventListener('keydown', (e) => e.stopPropagation());
+  draw();
+  navPaneDlg = openDialog({ title: '탐색', width: 300, modeless: true, onClose: () => { navPaneDlg = null; }, body: el('div', { class: 'nav-pane' }, search, list) });
+  navPaneDlg.redraw = draw;
 }
 
 /** 채우기 · 윤곽선 · 효과 메뉴 (도형 · 그림 · 텍스트) */
@@ -11048,6 +11258,7 @@ async function exportXlsx(name = docName, kind = null, target = null) {
   exportBusy++;
   if (opts.userName) wb.props = { ...(wb.props ?? {}), lastModifiedBy: opts.userName, creator: wb.props?.creator || opts.userName };
   try {
+    await snapshotLinkedPictures();
     const bytes = await writeXlsxAsync(wb, { activeSheet: si, fileName, kind: k }, (st) => prog.set(st.p, st.msg));
     prog.set(0.98, '파일 쓰는 중');
     const saved = await writeSaveTarget(handle, fileName, new Blob([bytes], { type: XLSX_KINDS[k].mime }));
@@ -12838,21 +13049,219 @@ function sizeDialog(kind) {
   });
 }
 
-function sortDialog() {
-  const rg = dataRange();
-  const header = hasHeader(rg);
-  const options = [];
-  for (let c = rg.c1; c <= rg.c2; c++) {
-    const hv = header ? displayText(rg.r1, c) : '';
-    options.push({ value: String(c), label: hv ? `${hv} (${colToName(c)}열)` : `${colToName(c)}열` });
+/** 배경색이 어두운지 (#rrggbb) — 위에 흰 글자를 쓸지 */
+const isDarkColor = (c) => { const m = /^#?([0-9a-f]{6})$/i.exec(String(c)); if (!m) return false; const n = parseInt(m[1], 16); return ((n >> 16) * 299 + ((n >> 8) & 255) * 587 + (n & 255) * 114) / 1000 < 128; };
+// 사용자 지정 목록 (엑셀 옵션 › 고급 › 사용자 지정 목록 편집): 기본 목록 뒤에 붙여 채우기 핸들 · 정렬 · 피벗이 함께 씀
+const BUILTIN_LISTS = CUSTOM_LISTS.length;
+function syncCustomLists() {
+  CUSTOM_LISTS.length = BUILTIN_LISTS;
+  for (const L of opts.customLists ?? []) if (Array.isArray(L) && L.length >= 2) CUSTOM_LISTS.push(L.map(String));
+}
+function customListsDialog(done) {
+  const mine = (opts.customLists ?? []).map((L) => [...L]);
+  let cur = -1; // -1 = 새 목록
+  const listBox = el('select', { size: 12, class: 'cl-lists' });
+  const entries = el('textarea', { rows: 12, placeholder: '항목을 한 줄에 하나씩 (또는 쉼표로 구분)', spellcheck: 'false' });
+  const all = () => [...CUSTOM_LISTS.slice(0, BUILTIN_LISTS), ...mine];
+  const draw = () => {
+    listBox.replaceChildren(el('option', { value: '-1', selected: cur === -1 }, '새 목록'),
+      ...all().map((L, i) => el('option', { value: String(i), selected: cur === i }, L.join(', ').slice(0, 60))));
+    entries.value = cur >= 0 ? all()[cur].join('\n') : '';
+    entries.readOnly = cur >= 0 && cur < BUILTIN_LISTS;
+  };
+  listBox.addEventListener('change', () => { cur = Number(listBox.value); draw(); });
+  const parseItems = () => entries.value.split(/\n|,/).map((x) => x.trim()).filter(Boolean);
+  const add = () => {
+    const items = parseItems();
+    if (items.length < 2) { toast('항목을 두 개 이상 입력하세요.'); return; }
+    if (cur >= BUILTIN_LISTS) mine[cur - BUILTIN_LISTS] = items; else { mine.push(items); cur = BUILTIN_LISTS + mine.length - 1; }
+    draw();
+  };
+  const importSel = () => {
+    const items = [];
+    for (const [r, c] of cellsIn(usedClip(sel))) { const t = displayText(r, c); if (t) items.push(t); }
+    if (items.length < 2) { toast('셀을 두 개 이상 선택하세요.'); return; }
+    entries.value = items.join('\n'); cur = -1; add();
+  };
+  entries.addEventListener('keydown', (e) => e.stopPropagation());
+  openDialog({
+    title: '사용자 지정 목록', width: 560,
+    body: el('div', { class: 'cl-dlg' },
+      el('div', { class: 'cl-cols' },
+        el('div', {}, el('div', {}, '사용자 지정 목록(L):'), listBox),
+        el('div', {}, el('div', {}, '목록 항목(E):'), entries),
+        el('div', { class: 'cl-btns' },
+          el('button', { class: 'btn', onclick: add }, '추가(A)'),
+          el('button', { class: 'btn', onclick: () => { if (cur >= BUILTIN_LISTS) { mine.splice(cur - BUILTIN_LISTS, 1); cur = -1; draw(); } else toast('기본 목록은 삭제할 수 없습니다.'); } }, '삭제(D)'),
+          el('button', { class: 'btn', onclick: importSel, title: '현재 선택한 셀의 값으로 목록 만들기' }, '가져오기(M)'))),
+      el('div', { class: 'muted', style: { fontSize: '11px' } }, '목록의 첫 항목을 입력하고 채우기 핸들을 끌면 나머지가 채워집니다. 정렬 대화상자의 [정렬] 에서도 고를 수 있습니다.')),
+    buttons: [{ label: '확인', primary: true, action: () => {
+      if (cur === -1 && parseItems().length >= 2) add();
+      opts.customLists = mine; saveOptions(); syncCustomLists(); done?.();
+    } }, { label: '취소' }],
+  });
+  draw();
+}
+
+/**
+ * 그림으로 연결하여 붙여넣기 (엑셀 카메라): 복사한 범위를 원본과 연결된 그림 개체로 (원본이 바뀌면 그림도 바뀜).
+ * still = true 이면 지금 모습의 PNG 그림 (홈 › 붙여넣기 › 그림)
+ */
+async function pasteLinkedPicture(still = false) {
+  if (!clip || clip.cut) { toast('먼저 범위를 복사하세요.'); return; }
+  const src = wb.sheets[clip.si];
+  if (!src) return;
+  const L = { sheet: src.name, r1: clip.r1, c1: clip.c1, r2: clip.r2, c2: clip.c2 };
+  let w = 0;
+  let h = 0;
+  for (let c = L.c1; c <= Math.min(L.c2, L.c1 + 49); c++) w += wb.colWidth(clip.si, c);
+  for (let r = L.r1; r <= Math.min(L.r2, L.r1 + 199); r++) h += wb.rowHeight(clip.si, r);
+  const rc = gv.sheetRect({ r1: active.r, c1: active.c, r2: active.r, c2: active.c });
+  const obj = { id: newObjId('im'), name: still ? '그림' : '연결된 그림', x: Math.round(rc.x), y: Math.round(rc.y), w: Math.max(8, Math.round(w)), h: Math.max(8, Math.round(h)), z: nextZ(), linked: L };
+  if (still) {
+    const png = await linkedPng(obj);
+    if (!png) { toast('그림을 만들 수 없습니다.'); return; }
+    delete obj.linked;
+    obj.src = png;
   }
-  formDialog('정렬', [
-    { name: 'col', label: '정렬 기준', type: 'select', value: String(clamp(active.c, rg.c1, rg.c2)), options },
-    { name: 'order', label: '정렬', type: 'select', value: 'asc', options: [{ value: 'asc', label: '오름차순' }, { value: 'desc', label: '내림차순' }] },
-    { name: 'header', label: '머리글 포함', type: 'checkbox', value: header },
-  ], (v) => {
-    sortData(v.order === 'asc', Number(v.col), v.header, rg);
-  }, { note: `범위: ${cellName(rg.r1, rg.c1)}:${cellName(rg.r2, rg.c2)}` });
+  wb.transact(() => { wb.setSheetProp(si, 'images', [...(sheet().images ?? []), obj]); chartSel = obj.id; }, meta());
+  gv.renderObjectsAll();
+  updateSelectionUI();
+  if (!still) toast(`${quoteSheetName(L.sheet)}!${cellName(L.r1, L.c1)}:${cellName(L.r2, L.c2)} 에 연결된 그림입니다. 원본이 바뀌면 같이 바뀝니다.`);
+}
+/** 연결하여 붙여넣기: 복사한 칸마다 =원본 수식 (빈 칸은 0 이 나오는 것도 엑셀과 같음) */
+function pasteLink() {
+  if (!clip || clip.cut) { toast('먼저 범위를 복사하세요.'); return; }
+  const other = clip.si !== si;
+  const pre = other ? `${quoteSheetName(wb.sheets[clip.si].name)}!` : '';
+  const rows = clip.r2 - clip.r1 + 1;
+  const cols = clip.c2 - clip.c1 + 1;
+  wb.transact(() => {
+    for (let i = 0; i < rows; i++) for (let j = 0; j < cols; j++) wb.setCellData(si, active.r + i, active.c + j, { raw: `=${pre}${cellName(clip.r1 + i, clip.c1 + j)}` });
+  }, meta());
+  selectRange({ r1: active.r, c1: active.c, r2: active.r + rows - 1, c2: active.c + cols - 1 }, 'cells', { ...active });
+}
+/** 연결된 그림 → PNG (SVG foreignObject 를 캔버스에 그림). 저장 · '그림' 붙여넣기용 */
+async function linkedPng(o) {
+  const scale = 2;
+  const css = '.lnk-box{position:absolute;inset:0;overflow:hidden;background:#fff}.lnk-tbl{border-collapse:collapse;table-layout:fixed;transform-origin:0 0;color:#000}.lnk-tbl td{padding:0 3px 1px;overflow:hidden;white-space:pre;box-sizing:border-box;line-height:1.2}';
+  const font = getComputedStyle(document.querySelector('.c') ?? document.body).fontFamily.replace(/"/g, "'");
+  const html = gv.linkedHtml(o);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${o.w * scale}" height="${o.h * scale}"><foreignObject x="0" y="0" width="${o.w}" height="${o.h}" transform="scale(${scale})"><div xmlns="http://www.w3.org/1999/xhtml" style="position:relative;width:${o.w}px;height:${o.h}px;font-family:${font};font-size:11pt"><style>${css}</style>${html.replace(/<col ([^>]*)>/g, '<col $1/>')}</div></foreignObject></svg>`;
+  try {
+    const img = new Image();
+    img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+    await img.decode();
+    const cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.round(o.w * scale));
+    cv.height = Math.max(1, Math.round(o.h * scale));
+    cv.getContext('2d').drawImage(img, 0, 0);
+    return cv.toDataURL('image/png');
+  } catch { return null; }
+}
+/** 저장 전에 연결된 그림의 지금 모습을 PNG 로 (엑셀에서는 이 그림이 보임) */
+async function snapshotLinkedPictures() {
+  for (const sh of wb.sheets) for (const o of sh.images ?? []) if (o.linked) { const png = await linkedPng(o); if (png) o.src = png; }
+}
+
+/** 엑셀 정렬 대화상자: 기준 추가 · 삭제 · 복사 · 위/아래, 정렬 기준(셀 값 · 셀 색 · 글꼴 색), 사용자 지정 목록, 옵션 */
+let sortDlgOpts = { caseSensitive: false, natural: false, byCols: false };
+function sortDialog() {
+  const rg0 = dataRange();
+  if (wb.mergesIn(si, rg0.r1, rg0.c1, rg0.r2, rg0.c2).length) { alertDialog('WIXEL', '병합된 셀이 있으면 정렬할 수 없습니다.'); return; }
+  const o = { ...sortDlgOpts };
+  let header = hasHeader(rg0);
+  const lines = () => (o.byCols ? [rg0.r1, rg0.r2] : [rg0.c1, rg0.c2]);
+  const lineLabel = (i) => {
+    if (o.byCols) { const hv = header ? displayText(i, rg0.c1) : ''; return hv ? `${hv} (${i + 1}행)` : `${i + 1}행`; }
+    const hv = header ? displayText(rg0.r1, i) : '';
+    return hv ? `${hv} (${colToName(i)}열)` : `${colToName(i)}열`;
+  };
+  const colorsOf = (at, on) => {
+    const set = new Map();
+    const [a, b] = o.byCols ? [rg0.c1 + (header ? 1 : 0), rg0.c2] : [rg0.r1 + (header ? 1 : 0), rg0.r2];
+    for (let i = a; i <= Math.min(b, a + 5000); i++) {
+      const st = o.byCols ? styleAt(at, i) : styleAt(i, at);
+      const col = on === 'fill' ? st.fill : st.color;
+      if (col && !set.has(String(col).toLowerCase())) set.set(String(col).toLowerCase(), col);
+    }
+    return [...set.values()];
+  };
+  const keys = [{ at: o.byCols ? active.r : clamp(active.c, rg0.c1, rg0.c2), on: 'value', asc: true }];
+  const box = el('div', { class: 'sort-levels' });
+  let cur = 0;
+  const lists = CUSTOM_LISTS;
+  const draw = () => {
+    const [l1, l2] = lines();
+    box.replaceChildren(el('div', { class: 'sort-row sort-head' }, el('span', {}), el('span', {}, o.byCols ? '행' : '열'), el('span', {}, '정렬 기준'), el('span', {}, '정렬')),
+      ...keys.map((k, idx) => {
+        const lineSel = el('select', {}, Array.from({ length: l2 - l1 + 1 }, (_, j) => el('option', { value: l1 + j, selected: k.at === l1 + j }, lineLabel(l1 + j))));
+        lineSel.addEventListener('change', () => { k.at = Number(lineSel.value); k.color = undefined; draw(); });
+        const onSel = el('select', {}, [['value', '셀 값'], ['fill', '셀 색'], ['font', '글꼴 색']].map(([v, l]) => el('option', { value: v, selected: k.on === v }, l)));
+        onSel.addEventListener('change', () => { k.on = onSel.value; k.list = undefined; k.color = undefined; draw(); });
+        let orderEl;
+        if (k.on === 'value') {
+          const val = k.list ? `list:${lists.indexOf(k.list)}` : k.asc ? 'asc' : 'desc';
+          orderEl = el('select', {}, [['asc', '오름차순'], ['desc', '내림차순'], ...lists.map((L, j) => [`list:${j}`, L.slice(0, 4).join(', ') + (L.length > 4 ? ', …' : '')]), ['edit', '사용자 지정 목록...']].map(([v, l]) => el('option', { value: v, selected: v === val }, l)));
+          orderEl.addEventListener('change', () => { const v = orderEl.value; if (v === 'edit') { customListsDialog(draw); orderEl.value = val; return; } if (v.startsWith('list:')) { k.list = lists[Number(v.slice(5))]; k.asc = true; } else { k.list = undefined; k.asc = v === 'asc'; } });
+        } else {
+          const cols = colorsOf(k.at, k.on);
+          k.color ??= cols[0];
+          const cs = el('select', {}, cols.length ? cols.map((c) => el('option', { value: c, selected: c === k.color, style: { background: c, color: isDarkColor(c) ? '#fff' : '#000' } }, c)) : [el('option', { value: '' }, '(색 없음)')]);
+          cs.addEventListener('change', () => { k.color = cs.value; });
+          const pos = el('select', {}, [['top', '위에 표시'], ['bottom', '아래쪽에 표시']].map(([v, l]) => el('option', { value: v, selected: (k.asc === false ? 'bottom' : 'top') === v }, o.byCols ? l.replace('위에', '왼쪽에').replace('아래쪽에', '오른쪽에') : l)));
+          pos.addEventListener('change', () => { k.asc = pos.value === 'top'; });
+          orderEl = el('span', { style: { display: 'flex', gap: '4px' } }, cs, pos);
+        }
+        const row = el('div', { class: `sort-row${idx === cur ? ' on' : ''}`, onclick: () => { if (cur !== idx) { cur = idx; box.querySelectorAll('.sort-row:not(.sort-head)').forEach((x, j) => x.classList.toggle('on', j === cur)); } } },
+          el('span', { class: 'muted' }, idx === 0 ? '정렬 기준' : '다음 기준'), lineSel, onSel, orderEl);
+        return row;
+      }));
+  };
+  const hdr = el('input', { type: 'checkbox', checked: header });
+  hdr.addEventListener('change', () => { header = hdr.checked; draw(); });
+  const btn = (label, fn) => el('button', { class: 'btn', onclick: () => { fn(); draw(); } }, label);
+  const optionsDlg = () => {
+    const cs = el('input', { type: 'checkbox', checked: o.caseSensitive });
+    const nat = el('input', { type: 'checkbox', checked: o.natural });
+    const dirTop = el('input', { type: 'radio', name: 'sortdir', checked: !o.byCols });
+    const dirLeft = el('input', { type: 'radio', name: 'sortdir', checked: o.byCols });
+    openDialog({
+      title: '정렬 옵션', width: 300,
+      body: el('div', { class: 'form-col' }, el('label', {}, cs, ' 대/소문자 구분(C)'), el('label', {}, nat, ' 자연 정렬 (항목2 < 항목10)'),
+        el('fieldset', {}, el('legend', {}, '방향'), el('label', {}, dirTop, ' 위쪽에서 아래쪽(T)'), el('br'), el('label', {}, dirLeft, ' 왼쪽에서 오른쪽(L)'))),
+      buttons: [{ label: '확인', primary: true, action: () => {
+        const flip = dirLeft.checked !== o.byCols;
+        o.caseSensitive = cs.checked; o.natural = nat.checked; o.byCols = dirLeft.checked;
+        if (flip) { keys.length = 1; keys[0] = { at: o.byCols ? rg0.r1 : rg0.c1, on: 'value', asc: true }; cur = 0; if (o.byCols) { header = false; hdr.checked = false; } }
+        hdr.disabled = o.byCols;
+        draw();
+      } }, { label: '취소' }],
+    });
+  };
+  draw();
+  openDialog({
+    title: '정렬', width: 620,
+    body: el('div', { class: 'sort-dlg' },
+      el('div', { class: 'sort-tools' },
+        btn('+ 기준 추가(A)', () => { if (keys.length < 64) { keys.push({ at: keys[keys.length - 1].at, on: 'value', asc: true }); cur = keys.length - 1; } }),
+        btn('× 기준 삭제(D)', () => { if (keys.length > 1) { keys.splice(cur, 1); cur = Math.min(cur, keys.length - 1); } }),
+        btn('기준 복사(C)', () => { keys.splice(cur + 1, 0, { ...keys[cur] }); cur++; }),
+        btn('▲', () => { if (cur > 0) { [keys[cur - 1], keys[cur]] = [keys[cur], keys[cur - 1]]; cur--; } }),
+        btn('▼', () => { if (cur < keys.length - 1) { [keys[cur + 1], keys[cur]] = [keys[cur], keys[cur + 1]]; cur++; } }),
+        el('button', { class: 'btn', onclick: optionsDlg }, '옵션(O)...'),
+        el('label', { style: { marginLeft: 'auto' } }, hdr, ' 내 데이터에 머리글 표시(H)')),
+      box,
+      el('div', { class: 'muted', style: { fontSize: '11px' } }, `범위: ${cellName(rg0.r1, rg0.c1)}:${cellName(rg0.r2, rg0.c2)}`)),
+    buttons: [{ label: '확인', primary: true, action: () => {
+      sortDlgOpts = { ...o };
+      const h = header && !o.byCols;
+      if (keys.some((k) => k.on !== 'value' && !k.color)) { toast('색을 고르세요.'); return false; }
+      wb.transact(() => wb.sortMulti(si, rg0.r1 + (h ? 1 : 0), rg0.c1 + (o.byCols && header ? 1 : 0), rg0.r2, rg0.c2, keys.map((k) => ({ ...k })), o), meta());
+      selectRange({ r1: rg0.r1, c1: rg0.c1, r2: rg0.r2, c2: rg0.c2 }, 'cells', { r: active.r, c: active.c });
+      return true;
+    } }, { label: '취소' }],
+  });
 }
 
 function gotoDialog() {
@@ -13999,6 +14408,9 @@ const MENUS = {
   ],
   paste: () => [
     { label: '붙여넣기', icon: 'paste', key: 'Ctrl+V', action: () => pasteFromButton('all') },
+    { label: '연결하여 붙여넣기', action: () => pasteLink(), disabled: !clip || clip.cut },
+    { label: '연결된 그림', icon: 'picture', action: () => pasteLinkedPicture(), disabled: !clip || clip.cut },
+    { label: '그림', icon: 'picture', action: () => pasteLinkedPicture(true), disabled: !clip || clip.cut },
     { label: '값 붙여넣기', action: () => pasteFromButton('values'), disabled: !clip },
     { label: '수식 붙여넣기', icon: 'fx', action: () => pasteFromButton('formulas'), disabled: !clip },
     { label: '서식 붙여넣기', icon: 'painter', action: () => pasteFromButton('formats'), disabled: !clip },
@@ -14351,6 +14763,14 @@ const structural = (fn) => () => { fn(); gv.layout(); updateSelectionUI(); };
 
 const COMMANDS = {
   selectionPane: () => selectionPaneDialog(),
+  navigator: () => navigatorPane(),
+  valueHighlight: () => { view.valueHighlight = !view.valueHighlight; gv.renderAll(); updateRibbon(); toast(view.valueHighlight ? '값 강조: 글자는 검정, 숫자는 파랑, 수식은 초록으로 표시합니다.' : '값 강조를 껐습니다.'); },
+  focusCellToggle: () => { opts.focusCell = !opts.focusCell; saveOptions(); applyOptions(); gv.renderSelection(); updateRibbon(); },
+  consolidate: () => consolidateDialog(),
+  pasteLink: () => pasteLink(),
+  pasteLinkedPicture: () => pasteLinkedPicture(),
+  pastePicture: () => pasteLinkedPicture(true),
+  webData: () => webDataDialog(),
   objH: (v) => setObjSize('h', v),
   objW: (v) => setObjSize('w', v),
   objRot: (v) => setObjSize('rot', v),
@@ -14644,7 +15064,7 @@ const COMMANDS = {
   pivotGrandOn: () => pivotLayoutCmd({ grandRows: true, grandCols: true }),
   pivotGrandRows: () => pivotLayoutCmd({ grandRows: true, grandCols: false }),
   pivotGrandCols: () => pivotLayoutCmd({ grandRows: false, grandCols: true }),
-  refreshAll: refreshPivots,
+  refreshAll: () => { for (const s of netClear()) wb.invalidate(s); refreshPivots(); gv.renderAll(); },
   chartColumn: () => insertChart('column'),
   chartBar: () => insertChart('bar'),
   chartLine: () => insertChart('line'),
@@ -14738,6 +15158,9 @@ const NO_COMMIT = new Set(['toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100', 'shor
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '2.0.0';
 const WHATS_NEW = [
+  ['데이터', ['정렬 대화 상자: 여러 기준 추가 · 복사 · 순서 바꾸기, 셀 색 · 글꼴 색 · 사용자 지정 목록, 대/소문자 구분 · 왼쪽→오른쪽 · 자연 정렬', '통합 (여러 범위를 첫 행 · 왼쪽 열 이름으로 합계 · 평균 · 개수 …)', '웹에서: 웹 페이지의 표 · 목록 · CSV 미리 보기 → 값 또는 IMPORTHTML 수식으로', '사용자 지정 목록 편집 (채우기 · 정렬에 사용)']],
+  ['보기', ['탐색 창 (시트 · 표 · 피벗 · 이름 · 개체 · 메모 · 링크)', '포커스 셀 · 값 강조(Ctrl+F8: 숫자 파랑 · 수식 초록)', '상태 표시줄 사용자 지정 (오른쪽 클릭: 평균 · 개수 · 숫자 셀 수 · 최소 · 최대 · 합계 · 선택 크기, 값 클릭 = 복사)']],
+  ['붙여넣기', ['연결된 그림 (카메라: 원본이 바뀌면 같이 바뀜) · 그림 · 연결하여 붙여넣기']],
   ['파일', ['저장 위치(폴더) 선택 · 덮어쓰기 확인 · 연 파일에 바로 [저장]', '파일 › 정보: 통합 문서 보호(구조 보호 · 최종본 · 읽기 전용 권장) · 문서 검사 · 속성 편집', '다른 기기에서 열기(서버 저장)도 폴더 지정']],
   ['편집', ['셀 삽입/삭제 대화 상자 (셀을 오른쪽/아래로 밀기 · 왼쪽/위로 당기기 · 행/열 전체)', '셀 내용 자동 완성 · 자동 고침 · 소수점 자동 삽입 · URL 자동 하이퍼링크', '고급 필터 (조건 범위 · 다른 장소에 복사 · 고유 레코드만)']],
   ['서식', ['채우기 효과 (셀 그라데이션: 가로 · 세로 · 대각선 · 가운데에서)', '무늬 스타일 그림 선택기 · 병합 셀 테두리 · 행 서식 번짐 수정', '스타일시트 v1.0: 표 42 · 피벗 42 · 슬라이서 48종 기본 탑재']],
@@ -14914,7 +15337,7 @@ function ribbonState() {
     alignLeft: st.align === 'left', alignCenter: st.align === 'center', alignRight: st.align === 'right',
     valignTop: st.valign === 'top', valignMiddle: st.valign === 'middle', valignBottom: !st.valign,
     merged: !!wb.mergeAt(si, active.r, active.c), painter: !!painter, filterOn: (() => { const k = filterKeyHere(); return k !== null && !!getFilter(k); })(),
-    frozen: !!(f.rows || f.cols), lastFill, lastFont, ...view, showGrid: !sheet().noGrid,
+    frozen: !!(f.rows || f.cols), lastFill, lastFont, ...view, showGrid: !sheet().noGrid, focusCellOn: !!opts.focusCell,
     ...tableRibbonState(),
   };
 }
@@ -15092,6 +15515,7 @@ function bindEvents() {
     const kind = hit.zone === 'colHeader' ? 'col' : hit.zone === 'rowHeader' ? 'row' : 'cell';
     showContextMenu({ x: e.clientX, y: e.clientY }, kind);
   });
+  document.querySelector('.statusbar')?.addEventListener('contextmenu', statusMenu);
   // 구글 스프레드시트처럼 브라우저 기본 메뉴는 띄우지 않음 (글 입력 칸 · 링크 제외).
   // Windows 는 contextmenu 가 버튼을 뗄 때 오므로, 이미 열린 위셀 메뉴 위에서 받는 경우도 막음
   document.addEventListener('contextmenu', (e) => {
@@ -15261,7 +15685,7 @@ async function init() {
     state: () => ({
       wb, si, sel, selKind, active, editing: !!editing, clip, fillPreview, refs: editRefs, chartSel, chartPart, objMulti, circles, focusCell: opts.focusCell,
       special: special?.si === si ? special.cells : null, arrows: trace?.arrows ?? null,
-      showGrid: view.showGrid && !sheet().noGrid, showFormulas: view.showFormulas, showHeaders: view.showHeaders, fillHandle: opts.fillHandle !== false,
+      showGrid: view.showGrid && !sheet().noGrid, showFormulas: view.showFormulas, showHeaders: view.showHeaders, fillHandle: opts.fillHandle !== false, valueHighlight: view.valueHighlight,
     }),
     onViewScroll: () => positionEditor(),
     pivotChartFields: (ch) => {

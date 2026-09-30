@@ -219,6 +219,7 @@ export const TABS = [
     id: 'data', label: '데이터', groups: [
       group('데이터 가져오기 및 변환', [
         large('importCsv', 'csvIn', '파일에서 가져오기', { title: 'CSV·TSV·Excel(.xlsx) 파일 가져오기' }),
+        large('webData', 'webData', '웹에서', { title: '웹 페이지의 표 · 목록 · CSV 가져오기 (IMPORTHTML)' }),
         large('exportCsv', 'csvOut', 'CSV로 내보내기'),
       ]),
       group('쿼리 및 연결', [large('refreshAll', 'refresh', '모두 새로 고침', { title: '피벗 테이블 새로 고침' })]),
@@ -238,6 +239,7 @@ export const TABS = [
       group('데이터 도구', [
         large('textToColumns', 'textColumns', '텍스트 나누기', { title: '텍스트 나누기 (Alt+A+E)' }),
         large('dedupe', 'dedupe', '중복된 항목 제거'),
+        large('consolidate', 'consolidate', '통합', { title: '여러 범위의 값을 첫 행 · 왼쪽 열 이름으로 모아 합계 · 평균 등을 구함' }),
         large('dataValidation', 'validation', '데이터 유효성 검사', { menu: 'validation', split: true }),
       ]),
       group('예측', [large('whatIfMenu', 'chartLine', '가상 분석', { menu: 'whatIf' }), large('forecastSheet', 'chartLine', '예측 시트', { title: '시간 표시줄의 값으로 미래 값을 예측하는 새 워크시트 (FORECAST.ETS)' })]),
@@ -279,6 +281,10 @@ export const TABS = [
           check('toggleFormulaBar', '수식 입력줄', 'showFormulaBar'),
           check('toggleHeaders', '머리글', 'showHeaders'),
         ),
+        col(
+          check('focusCellToggle', '포커스 셀', 'focusCellOn'),
+          check('valueHighlight', '값 강조', 'valueHighlight'),
+        ),
       ]),
       group('확대/축소', [
         large('zoomIn', 'zoomIn', '확대'),
@@ -286,7 +292,7 @@ export const TABS = [
         large('zoom100', 'zoom100', '100%'),
         large('zoomSel', 'zoomSel', '선택 영역 확대/축소', { title: '선택한 범위가 창에 꽉 차도록 확대/축소' }),
       ]),
-      group('창', [large('freezeMenu', 'freeze', '틀 고정', { menu: 'freeze', toggle: 'frozen' })]),
+      group('창', [large('freezeMenu', 'freeze', '틀 고정', { menu: 'freeze', toggle: 'frozen' }), large('navigator', 'navigator', '탐색', { title: '시트 · 표 · 피벗 · 이름 · 개체 · 메모 목록에서 찾아 이동' })]),
       group('매크로', [large('macros', 'macro', '매크로', { title: '매크로(VBA) 코드 보기' })]),
     ],
   },

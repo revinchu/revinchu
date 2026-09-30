@@ -806,7 +806,8 @@ export class GridView {
     if (style.bold) css.push('font-weight:700');
     if (style.italic) css.push('font-style:italic');
     if (style.underline || style.strike) css.push(`text-decoration:${style.underline ? 'underline ' : ''}${style.strike ? 'line-through' : ''}`);
-    if (fmtColor || style.color) css.push(`color:${fmtColor || style.color}`);
+    if (st.valueHighlight && text) css.push(`color:${cell?.formula ? '#008000' : typeof v === 'number' ? '#0000ff' : '#000000'}`); // LibreOffice 값 강조 (Ctrl+F8)
+    else if (fmtColor || style.color) css.push(`color:${fmtColor || style.color}`);
     if (style.font) css.push(`font-family:${fontStack(style.font)}`);
     if (style.size) css.push(`font-size:${style.size}pt`);
     if (eff !== 'left') css.push(`justify-content:${eff === 'center' ? 'center' : 'flex-end'};text-align:${eff}`);
@@ -931,6 +932,67 @@ export class GridView {
     return `<div class="c${cls.length ? ` ${cls.join(' ')}` : ''}" data-r="${r}" data-c="${c}" style="${css.join(';')}"${comment}>${diagHtml}${iconHtml}${rotBox ?? `<span${spanCss}>${hideValue ? '' : esc(text)}</span>`}</div>`;
   }
 
+  /**
+   * 연결된 그림 (엑셀 카메라 · 그림으로 연결하여 붙여넣기): 원본 범위를 값 · 서식 그대로 그려 개체 크기에 맞춤 (원본이 바뀌면 같이 바뀜)
+   * o.linked = { sheet, r1, c1, r2, c2 }
+   */
+  linkedHtml(o) {
+    const { wb } = this.host.state();
+    const L = o.linked;
+    const s = wb.sheetIndexByName(L.sheet);
+    if (s < 0) return '<div class="lnk-ref">#REF!</div>';
+    const r2 = Math.min(L.r2, L.r1 + 199);
+    const c2 = Math.min(L.c2, L.c1 + 49);
+    const ws = [];
+    for (let c = L.c1; c <= c2; c++) ws.push(wb.colWidth(s, c));
+    const hs = [];
+    for (let r = L.r1; r <= r2; r++) hs.push(wb.rowHeight(s, r));
+    const W = ws.reduce((a, b) => a + b, 0) || 1;
+    const H = hs.reduce((a, b) => a + b, 0) || 1;
+    const merges = (wb.sheets[s].merges ?? []).filter((m) => m.r1 >= L.r1 && m.c1 >= L.c1 && m.r1 <= r2 && m.c1 <= c2);
+    const covered = new Set();
+    for (const m of merges) for (let r = m.r1; r <= Math.min(m.r2, r2); r++) for (let c = m.c1; c <= Math.min(m.c2, c2); c++) if (r !== m.r1 || c !== m.c1) covered.add(`${r},${c}`);
+    const rows = [];
+    for (let r = L.r1; r <= r2; r++) {
+      const tds = [];
+      for (let c = L.c1; c <= c2; c++) {
+        if (covered.has(`${r},${c}`)) continue;
+        const m = merges.find((x) => x.r1 === r && x.c1 === c);
+        const v = wb.getValue(s, r, c);
+        const st = wb.styleAt(s, r, c) ?? {};
+        let text = '';
+        let color = null;
+        if (v !== null && v !== undefined && v !== '') {
+          if (typeof v === 'object' && v.code) text = v.code;
+          else { const f = formatValue(v, st); text = f.text; color = f.color; }
+        }
+        const css = [];
+        if (st.bold) css.push('font-weight:700');
+        if (st.italic) css.push('font-style:italic');
+        if (st.underline || st.strike) css.push(`text-decoration:${st.underline ? 'underline ' : ''}${st.strike ? 'line-through' : ''}`);
+        if (color || st.color) css.push(`color:${color || st.color}`);
+        if (st.font) css.push(`font-family:${fontStack(st.font)}`);
+        if (st.size) css.push(`font-size:${st.size}pt`);
+        const al = st.align === 'centerContinuous' ? 'center' : st.align || (typeof v === 'number' ? 'right' : typeof v === 'boolean' || (v && v.code) ? 'center' : 'left');
+        css.push(`text-align:${al}`);
+        css.push(`vertical-align:${st.valign === 'top' ? 'top' : st.valign === 'middle' ? 'middle' : 'bottom'}`);
+        if (st.gradient) css.push(`background:${gradientCss(st.gradient)}`);
+        else if (st.pattern) css.push(`background:${patternCss(st.pattern, st.patternColor ?? '#000000', st.fill)}`);
+        else if (st.fill) css.push(`background-color:${st.fill}`);
+        if (st.bt) css.push(borderCss('top', st.bts, st.btc));
+        if (st.bb) css.push(borderCss('bottom', st.bbs, st.bbc));
+        if (st.bl) css.push(borderCss('left', st.bls, st.blc));
+        if (st.br) css.push(borderCss('right', st.brs, st.brc));
+        if (st.wrap) css.push('white-space:pre-wrap');
+        const span = m ? `${m.c2 > m.c1 ? ` colspan="${Math.min(m.c2, c2) - m.c1 + 1}"` : ''}${m.r2 > m.r1 ? ` rowspan="${Math.min(m.r2, r2) - m.r1 + 1}"` : ''}` : '';
+        tds.push(`<td${span} style="${css.join(';')}">${esc(text)}</td>`);
+      }
+      rows.push(`<tr style="height:${hs[r - L.r1]}px">${tds.join('')}</tr>`);
+    }
+    const cols = ws.map((w) => `<col style="width:${w}px">`).join('');
+    return `<div class="lnk-box"><table class="lnk-tbl" style="width:${W}px;height:${H}px;font:${BASE_FONT.size}pt ${fontStack(BASE_FONT.name)};transform:scale(${o.w / W},${o.h / H})"><colgroup>${cols}</colgroup>${rows.join('')}</table></div>`;
+  }
+
   /** 그림 개체: 차트 · 그림 · 도형 */
   renderObjects(p) {
     const st = this.host.state();
@@ -968,6 +1030,7 @@ export class GridView {
         box(o, 'chart', this.chartSvg(o) + hl + this.pivotChartButtons(o) + (st.chartSel === o.id && !st.objMulti?.size && !st.viewOnly ? CHART_SIDE : ''));
       }
       else if (prop === 'slicers') box(o, o.timeline ? 'slicer timeline' : 'slicer', this.slicerHtml(o), slicerCssVars(o));
+      else if (prop === 'images' && o.linked) box(o, 'pic linked', this.linkedHtml(o), o.rot ? `transform:rotate(${o.rot}deg)` : '');
       else if (prop === 'images') {
         // 그림 스타일: 테두리 · 둥근 모서리 · 그림자 · 회전 · 투명도
         const ic = [o.border ? `border:${o.borderW ?? 2}px solid ${esc(o.border)}` : '', o.radius ? `border-radius:${o.radius}px` : '', o.shadow ? 'box-shadow:3px 3px 8px rgba(0,0,0,.4)' : '', o.opacity !== undefined ? `opacity:${o.opacity}` : ''].filter(Boolean).join(';');

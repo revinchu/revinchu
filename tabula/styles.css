@@ -444,6 +444,8 @@ pre.plain { margin: 0; font: inherit; white-space: pre-wrap; }
 }
 .status-spacer { flex: 1; }
 #statusStats { display: flex; gap: 18px; white-space: nowrap; }
+#statusStats .stat-item { cursor: pointer; border-radius: 2px; padding: 0 3px; }
+#statusStats .stat-item:hover { background: rgba(0,0,0,.08); }
 .zoom { display: flex; align-items: center; gap: 4px; }
 .zoom button {
   border: 0; background: transparent; cursor: pointer; color: var(--muted); padding: 0 4px; font-size: 13px;
@@ -1274,3 +1276,50 @@ body.view-mode .titlebar, body.view-mode .ribbon-tabs, body.view-mode .ribbon, b
 .spell-row { display: grid; grid-template-columns: 56px 1fr; gap: 8px; align-items: start; }
 .spell-ref { color: var(--green); cursor: pointer; font-weight: 600; padding-top: 4px; }
 .spell-row textarea { width: 100%; font: inherit; resize: vertical; }
+
+/* 탐색 창 */
+.nav-pane { display: flex; flex-direction: column; gap: 6px; }
+.nav-search { width: 100%; box-sizing: border-box; }
+.nav-list { max-height: 60vh; overflow: auto; border: 1px solid var(--border); background: var(--surface); }
+.nav-head { display: flex; align-items: center; gap: 4px; padding: 4px 6px; font-weight: 600; cursor: pointer; user-select: none; }
+.nav-head:hover { background: var(--hover, rgba(0,0,0,.05)); }
+.nav-tw { width: 12px; color: var(--muted, #666); }
+.nav-count { margin-left: auto; font-weight: 400; color: var(--muted, #666); font-size: 11px; }
+.nav-item { display: flex; gap: 8px; padding: 3px 6px 3px 24px; cursor: pointer; white-space: nowrap; overflow: hidden; }
+.nav-item:hover { background: var(--hover, rgba(0,0,0,.05)); }
+.nav-item.on { background: var(--green-tint); }
+.nav-label { overflow: hidden; text-overflow: ellipsis; }
+.nav-sub { color: var(--muted, #777); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+/* 웹에서 */
+.web-dlg { display: flex; flex-direction: column; gap: 8px; }
+.web-split { display: grid; grid-template-columns: 170px 1fr; gap: 8px; height: 300px; }
+.web-found { border: 1px solid var(--border); overflow: auto; background: var(--surface); }
+.web-item { padding: 4px 8px; cursor: pointer; }
+.web-item:hover { background: var(--hover, rgba(0,0,0,.05)); }
+.web-item.on { background: var(--green-tint); }
+.web-preview { border: 1px solid var(--border); overflow: auto; background: var(--surface); font-size: 12px; }
+.web-preview table { border-collapse: collapse; }
+.web-preview th, .web-preview td { border: 1px solid var(--border); padding: 2px 6px; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.web-preview th { background: var(--hover, #f3f3f3); }
+/* 정렬 · 통합 · 사용자 지정 목록 */
+.sort-dlg { display: flex; flex-direction: column; gap: 8px; }
+.sort-tools { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.sort-levels { border: 1px solid var(--border); min-height: 140px; max-height: 280px; overflow: auto; background: var(--surface); }
+.sort-row { display: grid; grid-template-columns: 70px 1fr 100px 1.2fr; gap: 6px; align-items: center; padding: 4px 6px; }
+.sort-row.on { background: var(--green-tint); }
+.sort-head { font-weight: 600; border-bottom: 1px solid var(--border); }
+.sort-row select { min-width: 0; width: 100%; }
+.cons-dlg { display: flex; flex-direction: column; gap: 8px; }
+.cons-dlg .form-row { display: flex; gap: 6px; align-items: center; }
+.cons-dlg .form-row > span { width: 60px; }
+.cons-dlg .ref-input { flex: 1; }
+.cons-list { flex: 1; min-height: 110px; }
+.cons-labels label { margin-right: 16px; }
+.cl-cols { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; }
+.cl-lists, .cl-cols textarea { width: 100%; box-sizing: border-box; height: 230px; }
+.cl-btns { display: flex; flex-direction: column; gap: 6px; padding-top: 18px; }
+/* 연결된 그림 (카메라) */
+.obj.linked .lnk-box { position: absolute; inset: 0; overflow: hidden; background: #fff; }
+.lnk-tbl { border-collapse: collapse; table-layout: fixed; transform-origin: 0 0; color: #000; }
+.lnk-tbl td { padding: 0 3px 1px; overflow: hidden; white-space: pre; box-sizing: border-box; line-height: 1.2; }
+.lnk-ref { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: #fff; color: #c00; border: 1px dashed #c00; }

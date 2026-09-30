@@ -19,8 +19,9 @@ export function netText(url, ctx) {
   const hit = NET.cache.get(url);
   const si = ctx?.here?.si;
   if (hit) {
+    if (si != null) hit.sheets.add(si);
     if (hit.state === 'ok') return hit.data;
-    if (hit.state === 'loading') { if (si != null) hit.sheets.add(si); return LOADING; }
+    if (hit.state === 'loading') return LOADING;
     return ERR.NA;
   }
   if (!NET.fetcher) return ERR.NA;
@@ -39,8 +40,12 @@ export function netText(url, ctx) {
   });
   return LOADING;
 }
-/** 다시 가져오기 (F9 전체 계산) */
-export function netClear() { for (const [k, v] of NET.cache) if (v.state !== 'loading') NET.cache.delete(k); }
+/** 다시 가져오기 (F9 전체 계산 · 모두 새로 고침): 지운 URL 을 쓰던 시트 번호 목록을 돌려줌 */
+export function netClear() {
+  const sheets = new Set();
+  for (const [k, v] of NET.cache) if (v.state !== 'loading') { for (const s of v.sheets ?? []) sheets.add(s); NET.cache.delete(k); }
+  return [...sheets];
+}
 const pending = (v) => v === LOADING || isError(v);
 
 // ───────────── 도우미 ─────────────

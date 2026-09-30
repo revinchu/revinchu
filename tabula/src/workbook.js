@@ -1874,6 +1874,12 @@ export class Workbook {
       if (i !== si && (p !== sh.pivot || x.some((d, j) => d !== sh.pivotsExtra[j]))) { this.propSnap(i, 'pivot'); this.propSnap(i, 'pivotsExtra'); }
       sh.pivot = p;
       sh.pivotsExtra = x;
+      // 연결된 그림(카메라)의 원본 범위도 행/열 삽입 · 삭제를 따라감
+      const lk = (o) => o.linked && o.linked.sheet.toLowerCase() === target.name.toLowerCase();
+      if ((sh.images ?? []).some(lk)) {
+        if (i !== si) this.propSnap(i, 'images');
+        sh.images = sh.images.map((o) => { if (!lk(o)) return o; const rg = adjustRange(o.linked, axis, index, count); return rg ? { ...o, linked: { ...o.linked, r1: rg.r1, c1: rg.c1, r2: rg.r2, c2: rg.c2 } } : o; });
+      }
     });
 
     const deps = this.sheetDeps();
@@ -2096,6 +2102,11 @@ export class Workbook {
       if (p !== sh.pivot || x.some((d, j) => d !== sh.pivotsExtra[j])) { this.propSnap(i, 'pivot'); this.propSnap(i, 'pivotsExtra'); }
       sh.pivot = p;
       sh.pivotsExtra = x;
+      // 연결된 그림(카메라)의 원본 시트 이름
+      if ((sh.images ?? []).some((o) => o.linked && o.linked.sheet.toLowerCase() === old.toLowerCase())) {
+        this.propSnap(i, 'images');
+        sh.images = sh.images.map((o) => (o.linked && o.linked.sheet.toLowerCase() === old.toLowerCase() ? { ...o, linked: { ...o.linked, sheet: newName } } : o));
+      }
     });
     this.sheets.forEach((sheet, i) => {
       if (!refs.has(i)) return;
@@ -2137,6 +2148,69 @@ export class Workbook {
       row.cells.forEach((d, j) => {
         const data = d && d.raw.startsWith('=') ? { ...d, raw: shiftFormula(d.raw, r - row.r, 0) } : d;
         this.setCellData(si, r, c1 + j, data);
+      });
+    });
+  }
+
+  /**
+   * 엑셀 정렬 대화상자: 여러 기준 (keys = [{ at: 열(또는 행) 번호, asc, on: 'value'|'fill'|'font', color, list: [항목…] }])
+   * 옵션: byCols (왼쪽에서 오른쪽 · 열 순서를 바꿈), caseSensitive (대/소문자 구분, 소문자 먼저), natural (자연 정렬: 글자 속 숫자를 수 크기로)
+   */
+  sortMulti(si, r1, c1, r2, c2, keys, { byCols = false, caseSensitive = false, natural = false } = {}) {
+    if (!keys.length) return;
+    const k0 = keys[0];
+    if (!byCols && keys.length === 1 && (k0.on ?? 'value') === 'value' && !k0.list && !caseSensitive && !natural) { this.sortRange(si, r1, c1, r2, c2, k0.at, k0.asc !== false); return; }
+    const coll = caseSensitive || natural ? new Intl.Collator('en', { sensitivity: caseSensitive ? 'case' : 'accent', caseFirst: 'lower', numeric: natural }) : null;
+    const cmpVal = (a, b) => (coll && typeof a === 'string' && typeof b === 'string' ? coll.compare(a, b) : compareSortValues(a, b));
+    const blank = (v) => v === null || v === '' || v === undefined;
+    const lines = [];
+    const n = byCols ? c2 - c1 + 1 : r2 - r1 + 1;
+    for (let i = 0; i < n; i++) {
+      const cells = [];
+      if (byCols) for (let r = r1; r <= r2; r++) cells.push(cellData(this.getCell(si, r, c1 + i)));
+      else for (let c = c1; c <= c2; c++) cells.push(cellData(this.getCell(si, r1 + i, c)));
+      const at = (k) => (byCols ? [k.at, c1 + i] : [r1 + i, k.at]);
+      const key = keys.map((k) => {
+        const [r, c] = at(k);
+        if (k.on === 'fill' || k.on === 'font') {
+          const st = this.styleAt(si, r, c);
+          const col = String((k.on === 'fill' ? st.fill : st.color) ?? '').toLowerCase();
+          return { hit: col === String(k.color ?? '').toLowerCase() };
+        }
+        return { v: this.getValue(si, r, c) };
+      });
+      lines.push({ i, cells, key });
+    }
+    lines.sort((a, b) => {
+      for (let j = 0; j < keys.length; j++) {
+        const k = keys[j];
+        const x = a.key[j];
+        const y = b.key[j];
+        if (k.on === 'fill' || k.on === 'font') {
+          if (x.hit !== y.hit) return (x.hit ? -1 : 1) * (k.asc === false ? -1 : 1);
+          continue;
+        }
+        if (blank(x.v) || blank(y.v)) { const d = blank(x.v) - blank(y.v); if (d) return d; continue; }
+        const ea = isError(x.v);
+        const eb = isError(y.v);
+        if (ea || eb) { const d = ea - eb; if (d) return d; continue; }
+        let c;
+        if (k.list) {
+          const ia = k.list.findIndex((t) => String(t).toLowerCase() === String(x.v).toLowerCase());
+          const ib = k.list.findIndex((t) => String(t).toLowerCase() === String(y.v).toLowerCase());
+          c = ia >= 0 && ib >= 0 ? ia - ib : ia >= 0 ? -1 : ib >= 0 ? 1 : cmpVal(x.v, y.v);
+        } else c = cmpVal(x.v, y.v);
+        if (c) return k.asc === false ? -c : c;
+      }
+      return a.i - b.i;
+    });
+    lines.forEach((line, i) => {
+      if (line.i === i) return;
+      line.cells.forEach((d, j) => {
+        const r = byCols ? r1 + j : r1 + i;
+        const c = byCols ? c1 + i : c1 + j;
+        const data = d && d.raw.startsWith('=') ? { ...d, raw: shiftFormula(d.raw, byCols ? 0 : i - line.i, byCols ? i - line.i : 0) } : d;
+        this.setCellData(si, r, c, data);
       });
     });
   }

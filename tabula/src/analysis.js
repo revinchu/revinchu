@@ -637,3 +637,72 @@ export function advancedFilter(head, rows, critHead, critRows, unique = false) {
   });
   return keep;
 }
+
+// ───────────── 데이터 통합 (엑셀 데이터 › 통합) ─────────────
+export const CONSOLIDATE_FNS = [
+  ['sum', '합계'], ['count', '개수'], ['average', '평균'], ['max', '최대'], ['min', '최소'], ['product', '곱'],
+  ['countNums', '숫자 개수'], ['stdev', '표본 표준 편차'], ['stdevp', '표준 편차'], ['var', '표본 분산'], ['varp', '분산'],
+];
+function consolidateAgg(fn, vals) {
+  const nums = vals.filter(isNum);
+  switch (fn) {
+    case 'count': return vals.filter((v) => v !== null && v !== undefined && v !== '').length;
+    case 'countNums': return nums.length;
+    case 'average': return nums.length ? mean(nums) : { err: '#DIV/0!' };
+    case 'max': return nums.length ? maxOf(nums) : 0;
+    case 'min': return nums.length ? minOf(nums) : 0;
+    case 'product': return nums.length ? nums.reduce((p, x) => p * x, 1) : 0;
+    case 'stdev': return nums.length > 1 ? Math.sqrt(varS(nums)) : { err: '#DIV/0!' };
+    case 'stdevp': return nums.length ? Math.sqrt(devsq(nums) / nums.length) : { err: '#DIV/0!' };
+    case 'var': return nums.length > 1 ? varS(nums) : { err: '#DIV/0!' };
+    case 'varp': return nums.length ? devsq(nums) / nums.length : { err: '#DIV/0!' };
+    default: return sum(nums);
+  }
+}
+const labelKey = (v) => String(v ?? '').trim().toLowerCase();
+/**
+ * 여러 범위(2차원 값 배열)를 통합. topRow/leftCol 이면 첫 행 · 왼쪽 열의 이름으로 맞추고(대소문자 무시, 처음 나온 순서),
+ * 아니면 위치로 맞춤. 결과 { rows, heads } — 이름을 쓰면 왼쪽 위 칸은 비움 (엑셀과 같음)
+ */
+export function consolidate(ranges, { fn = 'sum', topRow = false, leftCol = false } = {}) {
+  const rowKeys = [];
+  const rowIdx = new Map();
+  const colKeys = [];
+  const colIdx = new Map();
+  const cells = new Map(); // 'ri,ci' → 값 목록
+  const slot = (map, keys, key, label) => {
+    if (!map.has(key)) { map.set(key, keys.length); keys.push(label); }
+    return map.get(key);
+  };
+  for (const data of ranges) {
+    if (!data?.length) continue;
+    const r0 = topRow ? 1 : 0;
+    const c0 = leftCol ? 1 : 0;
+    const width = Math.max(...data.map((r) => r.length));
+    for (let r = r0; r < data.length; r++) {
+      const rl = leftCol ? data[r][0] : null;
+      if (leftCol && (rl === null || rl === undefined || rl === '')) continue;
+      const ri = leftCol ? slot(rowIdx, rowKeys, labelKey(rl), rl) : slot(rowIdx, rowKeys, r - r0, null);
+      for (let c = c0; c < width; c++) {
+        const cl = topRow ? data[0][c] : null;
+        if (topRow && (cl === null || cl === undefined || cl === '')) continue;
+        const ci = topRow ? slot(colIdx, colKeys, labelKey(cl), cl) : slot(colIdx, colKeys, c - c0, null);
+        const v = data[r][c];
+        const k = `${ri},${ci}`;
+        if (!cells.has(k)) cells.set(k, []);
+        if (v !== null && v !== undefined && v !== '') cells.get(k).push(v);
+      }
+    }
+  }
+  const rows = [];
+  if (topRow) rows.push([...(leftCol ? [null] : []), ...colKeys]);
+  for (let ri = 0; ri < rowKeys.length; ri++) {
+    const row = leftCol ? [rowKeys[ri]] : [];
+    for (let ci = 0; ci < colKeys.length; ci++) {
+      const vals = cells.get(`${ri},${ci}`);
+      row.push(vals && vals.length ? consolidateAgg(fn, vals) : null);
+    }
+    rows.push(row);
+  }
+  return { rows, heads: [] };
+}

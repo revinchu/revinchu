@@ -1189,6 +1189,18 @@ const prstKind = (prst) => {
   if (/Callout/.test(prst)) return 'wedgeRectCallout';
   return 'rect';
 };
+// 연결된 그림 (카메라): WIXEL 확장 uri · 1×1 투명 PNG (스냅숏이 없을 때 자리만)
+const LINKED_PIC_URI = '{2C7E4B19-5A3D-4F6E-8B21-57495845434C}';
+const BLANK_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==';
+const linkedRef = (L) => `${/^[A-Za-z_][\w.]*$/.test(L.sheet) ? L.sheet : `'${L.sheet.replace(/'/g, "''")}'`}!${colToName(L.c1)}${L.r1 + 1}:${colToName(L.c2)}${L.r2 + 1}`;
+function parseLinkedRef(t) {
+  const m = /^(?:'((?:[^']|'')+)'|([^'!]+))!\$?([A-Z]+)\$?(\d+)(?::\$?([A-Z]+)\$?(\d+))?$/i.exec(String(t).trim());
+  if (!m) return null;
+  const col = (x) => x.toUpperCase().split('').reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1;
+  const r1 = Number(m[4]) - 1;
+  const c1 = col(m[3]);
+  return { sheet: (m[1] ?? m[2]).replace(/''/g, "'"), r1, c1, r2: m[6] ? Number(m[6]) - 1 : r1, c2: m[5] ? col(m[5]) : c1 };
+}
 const MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', bmp: 'image/bmp', svg: 'image/svg+xml', webp: 'image/webp', emf: 'image/x-emf' };
 
 /** DrawingML 색 (srgbClr / schemeClr / sysClr) */
@@ -1354,6 +1366,10 @@ function readDrawing(files, path, sheet, ctx) {
     const name = descendants(child(el, 'nvPicPr'), 'cNvPr')[0]?.attrs.name ?? '그림';
     picSrc.set(target, src); // 같은 그림을 여러 번 쓰면 한 번만 변환
     const im = { id: uid('im'), name, ...round(box), z: ++z, src };
+    // 연결된 그림 (WIXEL 확장: 원본 범위) — 엑셀에서는 저장할 때의 모습(PNG)으로 보임
+    const lk = descendants(child(el, 'nvPicPr'), 'linked')[0]?.attrs.ref;
+    const lr = lk && parseLinkedRef(lk);
+    if (lr) im.linked = lr;
     if (emf) im.emf = emf;
     // SVG 그림(아이콘): svgBlip 원본을 화면에 쓰고 PNG 는 저장용 대체 그림으로 둠
     const svgBlip = descendants(blip, 'svgBlip')[0];
@@ -3869,7 +3885,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
           const im = o;
           // SVG 그림(아이콘): PNG 대체 그림 + svgBlip 으로 원본 SVG (엑셀과 같은 방식)
           const svgSrc = im.png && /^data:image\/svg\+xml;base64,/.test(im.src ?? '') ? im.src : null;
-          const m = /^data:([^;,]+);base64,(.*)$/s.exec(im.emf ?? (svgSrc ? im.png : im.src) ?? '');
+          const m = /^data:([^;,]+);base64,(.*)$/s.exec(im.emf ?? (svgSrc ? im.png : im.src) ?? '') ?? (im.linked ? [0, 'image/png', BLANK_PNG] : null);
           if (!m) continue;
           const ext = Object.keys(MIME).find((k) => MIME[k] === m[1]) ?? 'png';
           mediaNo++;
@@ -3885,7 +3901,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
             svgExt = `<a:extLst><a:ext uri="{96DAC541-7B7A-43D3-8B79-37D633B846F1}"><asvg:svgBlip xmlns:asvg="http://schemas.microsoft.com/office/drawing/2016/SVG/main" r:embed="${sid}"/></a:ext></a:extLst>`;
           }
           objId++;
-          parts.push(anchor(im, `<xdr:pic${im.macro ? ` macro="[0]!${esc(im.macro)}"` : ''}><xdr:nvPicPr><xdr:cNvPr id="${objId}" name="${esc(im.name || `그림 ${objId - 1}`)}"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill>${svgExt ? `<a:blip r:embed="${id}">${svgExt}</a:blip>` : `<a:blip r:embed="${id}"/>`}${im.crop ? `<a:srcRect${['l', 't', 'r', 'b'].map((k) => (im.crop[k] ? ` ${k}="${Math.round(im.crop[k] * 100000)}"` : '')).join('')}/>` : ''}<a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>${xfrm(im)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${/^#[0-9a-f]{6}$/i.test(im.border ?? "") ? `<a:ln w="${Math.round((im.borderW ?? 2) * EMU)}"><a:solidFill><a:srgbClr val="${im.border.replace('#', '').toUpperCase()}"/></a:solidFill></a:ln>` : ''}</xdr:spPr></xdr:pic>`));
+          parts.push(anchor(im, `<xdr:pic${im.macro ? ` macro="[0]!${esc(im.macro)}"` : ''}><xdr:nvPicPr><xdr:cNvPr id="${objId}" name="${esc(im.name || `그림 ${objId - 1}`)}"${im.linked ? `><a:extLst><a:ext uri="${LINKED_PIC_URI}"><wx:linked xmlns:wx="https://wixel.app/x" ref="${esc(linkedRef(im.linked))}"/></a:ext></a:extLst></xdr:cNvPr>` : '/>'}<xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill>${svgExt ? `<a:blip r:embed="${id}">${svgExt}</a:blip>` : `<a:blip r:embed="${id}"/>`}${im.crop ? `<a:srcRect${['l', 't', 'r', 'b'].map((k) => (im.crop[k] ? ` ${k}="${Math.round(im.crop[k] * 100000)}"` : '')).join('')}/>` : ''}<a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>${xfrm(im)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${/^#[0-9a-f]{6}$/i.test(im.border ?? "") ? `<a:ln w="${Math.round((im.borderW ?? 2) * EMU)}"><a:solidFill><a:srgbClr val="${im.border.replace('#', '').toUpperCase()}"/></a:solidFill></a:ln>` : ''}</xdr:spPr></xdr:pic>`));
         } else if (kind === 'slicerTable' || kind === 'slicerPivot') {
           objId++;
           parts.push(slicerAnchorXml(o.sl, o.name, objId, anchorAt, kind === 'slicerTable' ? 'table' : 'pivot'));
