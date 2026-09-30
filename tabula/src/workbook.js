@@ -423,9 +423,9 @@ function sheetFromData(s) {
 
 /** 시트의 부가 속성 (셀 외) — 저장/복원/복제용 */
 const SHEET_PROPS = ['colWidths', 'rowHeights', 'merges', 'cond', 'colStyles', 'rowStyles', 'allStyle',
-  'hiddenRows', 'hiddenCols', 'rowManual', 'freeze', 'filter', 'charts', 'pivot', 'validations', 'images', 'shapes', 'tables', 'slicers', 'pivotsExtra', 'state', 'noGrid', 'outline', 'protect', 'sparklines', 'page', 'defRowH', 'defColW', 'zoom', 'view', 'tabColor', 'scenarios', 'external'];
+  'hiddenRows', 'hiddenCols', 'rowManual', 'freeze', 'filter', 'charts', 'pivot', 'validations', 'images', 'shapes', 'tables', 'slicers', 'pivotsExtra', 'state', 'noGrid', 'noZeros', 'outline', 'protect', 'sparklines', 'page', 'defRowH', 'defColW', 'zoom', 'view', 'tabColor', 'scenarios', 'external'];
 // 바뀌어도 수식 결과가 달라지지 않는 시트 속성
-const CALC_NEUTRAL = new Set(['external', 'scenarios', 'tabColor', 'defRowH', 'defColW', 'zoom', 'view', 'outline', 'protect', 'sparklines', 'page', 'state', 'noGrid', 'charts', 'images', 'shapes', 'slicers', 'freeze', 'cond', 'validations', 'colStyles', 'rowStyles', 'allStyle', 'merges']);
+const CALC_NEUTRAL = new Set(['external', 'scenarios', 'tabColor', 'defRowH', 'defColW', 'zoom', 'view', 'outline', 'protect', 'sparklines', 'page', 'state', 'noGrid', 'noZeros', 'charts', 'images', 'shapes', 'slicers', 'freeze', 'cond', 'validations', 'colStyles', 'rowStyles', 'allStyle', 'merges']);
 
 /** 숫자 키 객체의 키를 삽입/삭제에 맞춰 이동 */
 function shiftKeys(obj, index, count) {

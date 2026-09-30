@@ -461,6 +461,22 @@ export const TABS = [
  * app: { run(cmd, arg), openMenu(name, anchorEl, arg), focusGrid() }
  * 반환: { update(state) }
  */
+/** 리본의 모든 명령 (빠른 실행 도구 모음 사용자 지정용): [{ cmd, icon, label, tab }] */
+export function ribbonCommands() {
+  const out = [];
+  const seen = new Set();
+  const walk = (it, tab) => {
+    if (!it) return;
+    if (it.items) { for (const x of it.items) walk(x, tab); return; }
+    if (!it.cmd || seen.has(it.cmd) || !['large', 'medium', 'btn', 'check'].includes(it.type)) return;
+    seen.add(it.cmd);
+    const label = String(it.label ?? it.title ?? it.cmd).replace(/\s*\(.*\)$/, '').replace(/\n/g, ' ');
+    out.push({ cmd: it.cmd, icon: it.icon, label, tab: tab.label });
+  };
+  for (const t of TABS) for (const g of t.groups ?? []) for (const it of g.items) walk(it, t);
+  return out;
+}
+
 export function buildRibbon(app) {
   const tabsEl = document.getElementById('ribbonTabs');
   const ribbonEl = document.getElementById('ribbon');
@@ -484,8 +500,10 @@ export function buildRibbon(app) {
 
   function renderTabs() {
     tabsEl.replaceChildren();
+    const hidden = app.hiddenTabs?.() ?? [];
     for (const t of TABS) {
       if (t.context && !context.has(t.context)) continue;
+      if (!t.file && hidden.includes(t.id)) continue;
       tabsEl.append(el('button', {
         class: `ribbon-tab${t.file ? ' file' : ''}${t.context ? ' contextual' : ''}${t.id === current ? ' active' : ''}`,
         onmousedown: keepFocus,
@@ -708,6 +726,13 @@ export function buildRibbon(app) {
       for (const fn of bindings) fn(state);
     },
     selectTab,
+    /** 리본 사용자 지정 뒤 다시 그리기 (숨긴 탭이 선택돼 있으면 홈으로) */
+    reset() {
+      if ((app.hiddenTabs?.() ?? []).includes(current)) current = 'home';
+      renderTabs();
+      renderRibbon();
+      app.refreshRibbon();
+    },
     get current() { return current; },
     toggleCollapse() { ribbonEl.classList.toggle('collapsed'); },
   };

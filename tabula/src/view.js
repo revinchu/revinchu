@@ -781,6 +781,7 @@ export class GridView {
     let fmtColor = null;
     let image = null;
     if (st.showFormulas && cell?.formula) { text = cell.raw; align = 'left'; } else ({ text, align, color: fmtColor, image } = formatValue(v, style));
+    if (v === 0 && wb.sheets[si].noZeros && !(st.showFormulas && cell?.formula)) text = ''; // 0 값이 있는 셀에 0 표시 안 함 (엑셀 옵션 › 고급)
     const eff = style.align || align;
     const css = [`left:${x - 1 - p.ox}px`, `top:${y - 1 - p.oy}px`, `width:${w + 1}px`, `height:${h + 1}px`];
     if (style.bold) css.push('font-weight:700');
@@ -1085,7 +1086,7 @@ export class GridView {
       html.push(box('tint', { x: a.x + a.w, y: a.y, w: t.x + t.w - a.x - a.w, h: a.h }));
     }
     html.push(box('sel-border', { x: selRect.x - 1, y: selRect.y - 1, w: selRect.w + 1, h: selRect.h + 1 }));
-    if (!st.editing && selKind === 'cells' && !st.chartSel) {
+    if (!st.editing && selKind === 'cells' && !st.chartSel && st.fillHandle !== false) {
       const hx = selRect.x + selRect.w - 4;
       const hy = selRect.y + selRect.h - 4;
       if (hx >= bx1 && hx <= bx2 && hy >= by1 && hy <= by2) html.push(`<div class="fill-handle" style="left:${hx - p.ox}px;top:${hy - p.oy}px"></div>`);

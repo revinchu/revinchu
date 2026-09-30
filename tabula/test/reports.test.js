@@ -418,3 +418,12 @@ test('문서 속성 · 통합 문서 구조 보호 · 읽기 전용 권장 · �
   assert.equal(back.props.readOnlyRecommended, true);
   assert.equal(back.props.markedFinal, true);
 });
+
+test('0 값 숨기기 (showZeros="0") · 새 문서 기본 글꼴: xlsx 왕복', async () => {
+  const { readXlsx, writeXlsx } = await import('../src/xlsx.js');
+  const wb = new Workbook({ sheets: [{ name: 'S', cells: { A1: 0 } }], defaultFont: { name: '굴림', size: 10 } });
+  wb.transact(() => wb.setSheetProp(0, 'noZeros', true));
+  const back = new Workbook(readXlsx(writeXlsx(wb)).data);
+  assert.equal(back.sheets[0].noZeros, true);
+  assert.equal(back.defaultFont?.name, '굴림');
+});

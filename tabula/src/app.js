@@ -7,7 +7,7 @@ import {
 import {
   formatValue, NUMBER_FORMATS, dateParts, serialOf, displayedDecimals, parseInput, formatCode, styleForCode, codeOfStyle, adjustCodeDecimals, formatGeneral,
 } from './format.js';
-import { buildRibbon, FONTS, FONT_SIZES, TABS } from './ribbon.js';
+import { buildRibbon, FONTS, FONT_SIZES, TABS, ribbonCommands } from './ribbon.js';
 import { flashFill } from './flashfill.js';
 import {
   el, hydrateIcons, toast, openMenu, openSubmenu, closeSubmenus, closeMenus, isMenuOpen, openDialog, alertDialog,
@@ -591,6 +591,7 @@ function commitEdit(dir = null, { fillSel = false } = {}) {
       return false;
     }
   }
+  if (!text.startsWith('=') && text !== editing.original) text = autoDecimalText(autoCorrectText(text));
   const { r, c, original } = editing;
   const rule = validationAt(sheet(), r, c);
   if (rule && rule.showError !== false && text !== original && !editing.dvOk && !checkValidation(wb, si, rule, r, c, text)) {
@@ -609,6 +610,12 @@ function commitEdit(dir = null, { fillSel = false } = {}) {
         autoFitRows(sel.r1, Math.min(sel.r2, sel.r1 + 500));
       } else {
         wb.setInput(si, r, c, text);
+        if (opts.acUrl !== false && URL_TEXT.test(text.trim()) && !wb.getCell(si, r, c)?.link) {
+          // 인터넷 경로를 하이퍼링크로 (엑셀 자동 고침)
+          const cur = wb.getCell(si, r, c);
+          const url = /^www\./i.test(text.trim()) ? `https://${text.trim()}` : text.trim();
+          wb.setCellData(si, r, c, { raw: cur.raw, style: { ...cur.style, color: cur.style?.color ?? '#0563c1', underline: true }, comment: cur.comment, link: url });
+        }
         maybeCalculatedColumn(r, c, text);
         afterDataEntry({ r1: r, c1: c, r2: r, c2: c });
         if (text.includes('\n')) wb.setStyle(si, r, c, { wrap: true });
@@ -621,6 +628,30 @@ function commitEdit(dir = null, { fillSel = false } = {}) {
   if (dir && !multi) moveEnterTab(dir);
   else updateSelectionUI();
   focusGrid();
+  return true;
+}
+
+/** 셀 내용 자동 완성 (엑셀): 같은 열의 위아래로 이어진 텍스트 중 입력한 글자로 시작하는 값이 하나뿐이면 나머지를 선택된 채로 채움 */
+function cellAutoComplete() {
+  if (!editing || opts.autoComplete === false || editing.fromBar) return false;
+  const ed = dom.editor;
+  const t = ed.value;
+  if (!t || t.startsWith('=') || /^[\d\s.,+\-(]/.test(t) || ed.selectionStart !== t.length || ed.selectionEnd !== t.length) return false;
+  const { r, c } = editing;
+  const low = t.toLowerCase();
+  let hit = null;
+  for (const d of [-1, 1]) {
+    for (let rr = r + d, n = 0; rr >= 0 && n < 2000; rr += d, n++) {
+      const v = valueAt(rr, c);
+      if (v == null || v === '') break;
+      if (typeof v !== 'string' || v.length <= t.length || v.toLowerCase().slice(0, t.length) !== low) continue;
+      if (hit && hit.toLowerCase() !== v.toLowerCase()) return false; // 후보가 둘 이상이면 채우지 않음
+      hit ??= v;
+    }
+  }
+  if (!hit) return false;
+  ed.value = t + hit.slice(t.length);
+  ed.setSelectionRange(t.length, ed.value.length);
   return true;
 }
 
@@ -6192,14 +6223,36 @@ const OPTION_DEFAULTS = {
   calcMode: 'auto', getPivotData: false, pivotEdit: false, autoDateGroup: false, focusCell: false, focusColor: '#fff4b8', pivot: PIVOT_DEFAULTS,
   // 고급 · 저장 (엑셀 옵션의 '고급' + 위셀 보관함)
   enterDir: 'down', formulaAutocomplete: true, browserMenu: false, libMax: 30, verMinutes: 10,
+  // 일반 · 언어 교정 · 고급 · 리본 (엑셀 옵션)
+  userName: '', newFont: '맑은 고딕', newSize: 11, newSheets: 1, uiTheme: 'color', uiScale: 100, reduceMotion: false,
+  autoCorrect: true, acList: null, saveFormat: 'xlsx', autoDecimal: false, decimalPlaces: 2, fillHandle: true, autoComplete: true, gridColor: '',
+  hiddenTabs: [], qat: [],
 };
+/** 엑셀 한국어판 자동 고침 기본 목록 (수식에는 적용 안 함) */
+const AUTOCORRECT_DEFAULT = [['(c)', '©'], ['(r)', '®'], ['(tm)', '™'], ['...', '…'], [':)', '☺'], [':-)', '☺'], [':(', '☹'], [':-(', '☹'], ['-->', '→'], ['<--', '←'], ['==>', '⇒'], ['<==', '⇐'], ['<=>', '⇔']];
+const DAY_NAMES = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+/** 입력한 텍스트에 자동 고침 적용 (엑셀: 텍스트 항목만, 수식 · 숫자는 그대로) */
+function autoCorrectText(text) {
+  if (!opts.autoCorrect || !text || text.startsWith('=') || text.startsWith("'")) return text;
+  let out = text;
+  for (const [a, b] of opts.acList ?? AUTOCORRECT_DEFAULT) if (a && out.includes(a)) out = out.split(a).join(b);
+  if (opts.acDays !== false) out = out.replace(/\b[a-z]+day\b/g, (w) => (DAY_NAMES.includes(w) ? w[0].toUpperCase() + w.slice(1) : w));
+  return out;
+}
+/** 소수점 자동 삽입 (엑셀 옵션 › 고급): 소수점 없이 입력한 정수를 10^n 으로 나눔 */
+function autoDecimalText(text) {
+  if (!opts.autoDecimal || !/^[-+]?\d+$/.test(text.trim())) return text;
+  const n = Number(text) / 10 ** (opts.decimalPlaces ?? 2);
+  return Number.isFinite(n) ? String(Number(n.toPrecision(15))) : text;
+}
+const URL_TEXT = /^(https?:\/\/|www\.)[^\s]+$/i;
 const ENTER_OPP = { down: 'up', up: 'down', right: 'left', left: 'right' };
 const opts = (() => {
   try {
     const o = JSON.parse(localStorage.getItem(OPTIONS_KEY) ?? 'null') ?? {};
-    return { ...OPTION_DEFAULTS, ...o, pivot: { ...PIVOT_DEFAULTS, ...(o.pivot ?? {}) } };
+    return { ...OPTION_DEFAULTS, ...o, pivot: { ...PIVOT_DEFAULTS, ...(o.pivot ?? {}) }, acList: o.acList ?? AUTOCORRECT_DEFAULT.map((x) => [...x]), hiddenTabs: o.hiddenTabs ?? [], qat: o.qat ?? [] };
   } catch {
-    return { ...OPTION_DEFAULTS, pivot: { ...PIVOT_DEFAULTS } };
+    return { ...OPTION_DEFAULTS, pivot: { ...PIVOT_DEFAULTS }, acList: AUTOCORRECT_DEFAULT.map((x) => [...x]) };
   }
 })();
 function saveOptions() {
@@ -6208,9 +6261,30 @@ function saveOptions() {
 /** 옵션을 통합 문서 · 화면에 적용 */
 function applyOptions() {
   if (wb) wb.manualCalc = opts.calcMode === 'manual';
-  document.documentElement.style.setProperty('--focus-cell', opts.focusColor);
+  const root = document.documentElement;
+  root.style.setProperty('--focus-cell', opts.focusColor);
+  if (opts.gridColor) root.style.setProperty('--grid-line', opts.gridColor); else root.style.removeProperty('--grid-line');
+  for (const t of ['white', 'gray', 'black']) root.classList.toggle(`theme-${t}`, opts.uiTheme === t);
+  root.classList.toggle('reduce-motion', !!opts.reduceMotion);
+  root.style.setProperty('--ui-scale', String((opts.uiScale || 100) / 100));
+  renderQat();
   gv?.renderOverlays?.();
   updateStatusCalc();
+}
+/** 빠른 실행 도구 모음: 저장 · 실행 취소 · 다시 실행 뒤에 사용자가 고른 명령 */
+function renderQat() {
+  const left = document.querySelector('.tb-left');
+  if (!left) return;
+  left.querySelectorAll('.tb-qat').forEach((b) => b.remove());
+  const cmds = ribbonCommands();
+  for (const id of opts.qat ?? []) {
+    const c = cmds.find((x) => x.cmd === id);
+    if (!c) continue;
+    const icon = c.icon && ICONS[c.icon];
+    const b = el('button', { class: 'tb-btn tb-qat', title: c.label, onmousedown: (e) => e.preventDefault(), onclick: () => run(id) });
+    if (icon) b.innerHTML = icon; else b.textContent = c.label.slice(0, 2);
+    left.append(b);
+  }
 }
 function updateStatusCalc() {
   const elc = document.getElementById('calcState');
@@ -6233,58 +6307,175 @@ function pivotDefaultsDef() {
 
 function optionsDialog(startTab = 0) {
   const o = JSON.parse(JSON.stringify(opts));
+  const book = { noZeros: !!sheet().noZeros, lockStructure: !!wb.props?.lockStructure };
   const radio = (name, v, cur, label, fn) => { const r = el('input', { type: 'radio', name, value: v, checked: cur === v }); r.addEventListener('change', () => { if (r.checked) fn(v); }); return el('label', { class: 'fc-check' }, r, label); };
   const check = (cur, label, fn) => { const c = el('input', { type: 'checkbox', checked: !!cur }); c.addEventListener('change', () => fn(c.checked)); return el('label', { class: 'fc-check' }, c, label); };
   const title = (t) => el('div', { class: 'opt-title' }, t);
+  const note = (t) => el('div', { class: 'muted' }, t);
+  const select = (label, cur, list, fn) => {
+    const s = el('select', {}, list.map(([v, l]) => el('option', { value: v, selected: String(cur) === String(v) }, l)));
+    s.addEventListener('change', () => fn(s.value));
+    return el('label', {}, el('span', {}, label), s);
+  };
+  const number = (label, cur, min, max, fn) => { const i = el('input', { type: 'number', min, max, value: cur, style: { width: '80px' } }); i.addEventListener('change', () => fn(clamp(Number(i.value) || min, min, max))); return el('label', {}, el('span', {}, label), i); };
+  const text = (label, cur, fn, w = 220) => { const i = el('input', { type: 'text', value: cur ?? '', style: { width: `${w}px` } }); i.addEventListener('input', () => fn(i.value)); return el('label', {}, el('span', {}, label), i); };
+
+  // 언어 교정: 자동 고침 목록 (엑셀의 [자동 고침 옵션])
+  const acBox = el('div', { class: 'ac-list' });
+  const drawAc = () => {
+    acBox.replaceChildren(el('div', { class: 'ac-row head' }, el('span', {}, '입력'), el('span', {}, '결과'), el('span')),
+      ...o.acList.map(([a, b], i) => el('div', { class: 'ac-row' }, el('span', {}, a), el('span', {}, b),
+        el('button', { class: 'btn small', title: '삭제', onclick: () => { o.acList.splice(i, 1); drawAc(); } }, '삭제'))));
+  };
+  drawAc();
+  const acFrom = el('input', { type: 'text', placeholder: '입력', style: { width: '110px' } });
+  const acTo = el('input', { type: 'text', placeholder: '결과', style: { width: '110px' } });
+  const acAdd = () => {
+    const a = acFrom.value.trim();
+    if (!a || !acTo.value) return;
+    o.acList = o.acList.filter(([x]) => x !== a);
+    o.acList.push([a, acTo.value]);
+    acFrom.value = ''; acTo.value = '';
+    drawAc();
+  };
+
+  // 리본 사용자 지정: 탭 표시 여부
+  const ribbonList = el('div', { class: 'opt-cols' }, TABS.filter((t) => !t.file && !t.context).map((t) => check(!o.hiddenTabs.includes(t.id), t.label, (v) => {
+    o.hiddenTabs = v ? o.hiddenTabs.filter((x) => x !== t.id) : [...o.hiddenTabs, t.id];
+  })));
+
+  // 빠른 실행 도구 모음: 왼쪽 = 명령 목록, 오른쪽 = 도구 모음
+  const cmds = ribbonCommands();
+  const cmdLabel = (id) => cmds.find((x) => x.cmd === id)?.label ?? id;
+  const qatAll = el('select', { size: 12, class: 'qat-list' });
+  const qatCur = el('select', { size: 12, class: 'qat-list' });
+  const qatFilter = el('select', {}, [el('option', { value: '' }, '모든 명령'), ...[...new Set(cmds.map((x) => x.tab))].map((t) => el('option', { value: t }, `${t} 탭`))]);
+  const drawQat = () => {
+    qatAll.replaceChildren(...cmds.filter((x) => !qatFilter.value || x.tab === qatFilter.value).map((x) => el('option', { value: x.cmd }, `${x.label}`)));
+    qatCur.replaceChildren(el('option', { value: '', disabled: true }, '저장 · 실행 취소 · 다시 실행 (기본)'), ...o.qat.map((id) => el('option', { value: id }, cmdLabel(id))));
+  };
+  qatFilter.addEventListener('change', drawQat);
+  const qatAddBtn = () => { const v = qatAll.value; if (v && !o.qat.includes(v)) { o.qat.push(v); drawQat(); qatCur.value = v; } };
+  const qatMove = (d) => { const i = o.qat.indexOf(qatCur.value); const j = i + d; if (i < 0 || j < 0 || j >= o.qat.length) return; [o.qat[i], o.qat[j]] = [o.qat[j], o.qat[i]]; const v = qatCur.value; drawQat(); qatCur.value = v; };
+  qatAll.addEventListener('dblclick', qatAddBtn);
+  drawQat();
+
   const pages = [
+    ['일반', el('div', { class: 'opt-page' },
+      title('새 통합 문서 만들기'),
+      select('기본 글꼴', o.newFont, FONTS.map((f) => [f, f]), (v) => { o.newFont = v; }),
+      select('글꼴 크기', o.newSize, FONT_SIZES.map((f) => [f, String(f)]), (v) => { o.newSize = Number(v); }),
+      number('포함할 시트 수', o.newSheets, 1, 255, (v) => { o.newSheets = v; }),
+      title('Microsoft Office 개인 설정'),
+      text('사용자 이름', o.userName, (v) => { o.userName = v; }),
+      note('저장할 때 문서 속성의 [마지막으로 수정한 사람]과 새 문서의 [만든 이]에 들어갑니다.'),
+      select('Office 테마', o.uiTheme, [['color', '색상형'], ['white', '흰색'], ['gray', '어두운 회색'], ['black', '검정']], (v) => { o.uiTheme = v; }))],
     ['수식', el('div', { class: 'opt-page' },
       title('계산 옵션'),
       el('div', { class: 'muted' }, '통합 문서 계산'),
       radio('calc', 'auto', o.calcMode, '자동', (v) => { o.calcMode = v; }),
+      radio('calc', 'semi', o.calcMode, '데이터 표만 수동', (v) => { o.calcMode = v; }),
       radio('calc', 'manual', o.calcMode, '수동 (F9를 누를 때 계산 — 큰 통합 문서에서 입력이 빠름)', (v) => { o.calcMode = v; }),
       title('수식 작업'),
+      check(o.formulaAutocomplete !== false, '수식 자동 완성', (v) => { o.formulaAutocomplete = v; }),
       check(o.getPivotData, '피벗 테이블 참조에 GetPivotData 함수 사용', (v) => { o.getPivotData = v; }),
       check(o.pivotEdit, '피벗 테이블 값 영역의 셀 편집 허용 (가상 분석 — 원본 데이터와 달라질 수 있음)', (v) => { o.pivotEdit = v; }))],
     ['데이터', el('div', { class: 'opt-page' },
       title('데이터 옵션'),
       check(o.autoDateGroup, '피벗 테이블에서 날짜/시간 열의 자동 그룹화 사용', (v) => { o.autoDateGroup = v; }),
       el('button', { class: 'btn', onclick: () => pivotDefaultsDialog(o) }, '기본 레이아웃 편집...'),
-      el('div', { class: 'muted' }, '새 피벗 테이블의 보고서 레이아웃 · 부분합 · 총합계 · 옵션 기본값을 정합니다.'))],
-    ['고급', el('div', { class: 'opt-page' },
-      title('편집 옵션'),
-      el('label', {}, el('span', {}, 'Enter 키를 누른 후 다음 셀로 이동 — 방향 '), (() => {
-        const sel = el('select', {}, [['down', '아래쪽'], ['right', '오른쪽'], ['up', '위쪽'], ['left', '왼쪽'], ['none', '이동 안 함']].map(([v, l]) => el('option', { value: v, selected: o.enterDir === v }, l)));
-        sel.addEventListener('change', () => { o.enterDir = sel.value; });
-        return sel;
-      })()),
-      check(o.formulaAutocomplete !== false, '수식 자동 완성 (함수 · 이름 목록)', (v) => { o.formulaAutocomplete = v; }),
-      title('표시'),
-      check(o.browserMenu, '셀에서 브라우저 기본 오른쪽 클릭 메뉴도 허용 (기본: 끔 — 구글 스프레드시트처럼 위셀 메뉴만)', (v) => { o.browserMenu = v; }))],
+      note('새 피벗 테이블의 보고서 레이아웃 · 부분합 · 총합계 · 옵션 기본값을 정합니다.'))],
+    ['언어 교정', el('div', { class: 'opt-page' },
+      title('자동 고침 옵션'),
+      check(o.autoCorrect, '입력할 때 자동으로 바꾸기', (v) => { o.autoCorrect = v; }),
+      check(o.acDays !== false, '요일의 첫 글자를 대문자로 (Monday)', (v) => { o.acDays = v; }),
+      check(o.acUrl !== false, '인터넷 및 네트워크 경로를 하이퍼링크로 설정', (v) => { o.acUrl = v; }),
+      el('div', { class: 'ac-add' }, acFrom, el('span', {}, '→'), acTo, el('button', { class: 'btn small', onclick: acAdd }, '추가'),
+        el('button', { class: 'btn small', onclick: () => { o.acList = AUTOCORRECT_DEFAULT.map((x) => [...x]); drawAc(); } }, '기본값으로')),
+      acBox,
+      note('수식(=로 시작)에는 적용하지 않습니다.'))],
     ['저장', el('div', { class: 'opt-page' },
-      title('이 브라우저의 보관함'),
-      el('label', {}, el('span', {}, '최근 문서 보관 개수 '), (() => { const i = el('input', { type: 'number', min: 5, max: 200, value: o.libMax }); i.addEventListener('change', () => { o.libMax = Number(i.value) || 30; }); return i; })()),
-      el('label', {}, el('span', {}, '편집 중 버전 기록 간격(분) '), (() => { const i = el('input', { type: 'number', min: 1, max: 240, value: o.verMinutes }); i.addEventListener('change', () => { o.verMinutes = Number(i.value) || 10; }); return i; })()),
-      el('div', { class: 'muted' }, `문서마다 버전은 최근 ${VER_MAX}개까지 (이름 붙인 버전은 오래 보관). 셀이 30만 개를 넘는 문서는 큰 문서 자동 저장만 합니다.`),
+      title('통합 문서 저장'),
+      select('다음 형식으로 파일 저장', o.saveFormat, [['xlsx', 'Excel 통합 문서 (*.xlsx)'], ['xlsm', 'Excel 매크로 사용 통합 문서 (*.xlsm)'], ['ods', 'OpenDocument 스프레드시트 (*.ods)'], ['wixel', 'WIXEL 통합 문서 (*.wixel)'], ['csv', 'CSV UTF-8 (*.csv)']], (v) => { o.saveFormat = v; }),
+      check(o.saveAsk !== false, '저장할 때 저장 위치(폴더)와 파일 이름 묻기 (크롬 · 엣지)', (v) => { o.saveAsk = v; }),
+      check(o.saveConfirm !== false, '[저장]으로 기존 파일을 덮어쓰기 전에 확인', (v) => { o.saveConfirm = v; }),
+      title('이 브라우저의 보관함 (자동 복구)'),
+      number('최근 문서 보관 개수', o.libMax, 5, 200, (v) => { o.libMax = v; }),
+      number('편집 중 버전 기록 간격(분)', o.verMinutes, 1, 240, (v) => { o.verMinutes = v; }),
+      note(`문서마다 버전은 최근 ${VER_MAX}개까지 (이름 붙인 버전은 오래 보관). 셀이 30만 개를 넘는 문서는 큰 문서 자동 저장만 합니다.`),
       el('button', { class: 'btn', onclick: () => { openBackstage('open'); } }, '보관함 열기...'))],
     ['접근성', el('div', { class: 'opt-page' },
       title('포커스 셀'),
       check(o.focusCell, '포커스 셀 사용 (활성 셀의 행과 열을 강조)', (v) => { o.focusCell = v; }),
-      el('label', {}, el('span', {}, '강조 색'), (() => { const i = el('input', { type: 'color', value: o.focusColor }); i.addEventListener('input', () => { o.focusColor = i.value; }); return i; })()))],
+      el('label', {}, el('span', {}, '강조 색'), (() => { const i = el('input', { type: 'color', value: o.focusColor }); i.addEventListener('input', () => { o.focusColor = i.value; }); return i; })()),
+      title('문서 표시 옵션'),
+      select('기본 글꼴 크기 배율(%)', o.uiScale ?? 100, [[100, '100'], [110, '110'], [125, '125'], [150, '150']], (v) => { o.uiScale = Number(v); }),
+      check(o.reduceMotion, '애니메이션 줄이기', (v) => { o.reduceMotion = v; }))],
+    ['고급', el('div', { class: 'opt-page' },
+      title('편집 옵션'),
+      select('<Enter> 키를 누른 후 다음 셀로 이동 — 방향', o.enterDir, [['down', '아래쪽'], ['right', '오른쪽'], ['up', '위쪽'], ['left', '왼쪽'], ['none', '이동 안 함']], (v) => { o.enterDir = v; }),
+      check(o.autoDecimal, '소수점 자동 삽입', (v) => { o.autoDecimal = v; }),
+      number('　소수 자릿수', o.decimalPlaces, -10, 10, (v) => { o.decimalPlaces = v; }),
+      check(o.fillHandle !== false, '채우기 핸들 및 셀 끌어서 놓기 사용', (v) => { o.fillHandle = v; }),
+      check(o.autoComplete !== false, '셀 내용을 자동 완성', (v) => { o.autoComplete = v; }),
+      title('표시'),
+      check(view.showFormulaBar, '수식 입력줄 표시', (v) => { o._formulaBar = v; }),
+      check(o.browserMenu, '셀에서 브라우저 기본 오른쪽 클릭 메뉴도 허용', (v) => { o.browserMenu = v; }),
+      title(`통합 문서 표시 옵션 — ${docName}`),
+      check(!book.lockStructure, '시트 탭 편집 허용 (끄면 통합 문서 구조 보호)', (v) => { book.lockStructure = !v; }),
+      title(`워크시트 표시 옵션 — ${sheet().name}`),
+      check(view.showHeaders, '행 및 열 머리글 표시', (v) => { o._headers = v; }),
+      check(!sheet().noGrid, '눈금선 표시', (v) => { o._grid = v; }),
+      check(!book.noZeros, '0 값이 있는 셀에 0 표시', (v) => { book.noZeros = !v; }),
+      el('label', {}, el('span', {}, '눈금선 색'), (() => { const i = el('input', { type: 'color', value: o.gridColor || '#e1e1e1' }); i.addEventListener('input', () => { o.gridColor = i.value; }); return i; })(),
+        el('button', { class: 'btn small', onclick: (e) => { o.gridColor = ''; e.target.previousElementSibling.value = '#e1e1e1'; } }, '자동')))],
+    ['리본 사용자 지정', el('div', { class: 'opt-page' },
+      title('리본 메뉴에 표시할 기본 탭'),
+      ribbonList,
+      el('button', { class: 'btn', onclick: (e) => { o.hiddenTabs = []; e.target.parentElement.querySelectorAll('.opt-cols input').forEach((c) => { c.checked = true; }); } }, '원래대로'),
+      note('상황별 탭(표 디자인 · 피벗 테이블 분석 · 슬라이서 등)은 해당 개체를 선택하면 나타납니다.'))],
+    ['빠른 실행 도구 모음', el('div', { class: 'opt-page' },
+      title('빠른 실행 도구 모음 사용자 지정'),
+      el('label', {}, el('span', {}, '명령 선택'), qatFilter),
+      el('div', { class: 'qat-grid' }, qatAll,
+        el('div', { class: 'qat-mid' },
+          el('button', { class: 'btn', onclick: qatAddBtn }, '추가(A) >>'),
+          el('button', { class: 'btn', onclick: () => { o.qat = o.qat.filter((x) => x !== qatCur.value); drawQat(); } }, '<< 제거(R)'),
+          el('button', { class: 'btn small', title: '위로', onclick: () => qatMove(-1) }, '▲'),
+          el('button', { class: 'btn small', title: '아래로', onclick: () => qatMove(1) }, '▼')),
+        qatCur),
+      el('button', { class: 'btn', onclick: () => { o.qat = []; drawQat(); } }, '원래대로'),
+      note('제목 표시줄의 저장 · 실행 취소 · 다시 실행 옆에 단추로 나타납니다.'))],
   ];
   const tabBar = el('div', { class: 'opt-tabs' });
   const box = el('div', { class: 'opt-box' });
   const show = (i) => { [...tabBar.children].forEach((b, j) => b.classList.toggle('on', i === j)); box.replaceChildren(pages[i][1]); };
   pages.forEach(([n], i) => tabBar.append(el('button', { class: 'opt-tab', onclick: () => show(i) }, n)));
-  show(startTab);
+  show(typeof startTab === 'string' ? Math.max(0, pages.findIndex(([n]) => n === startTab)) : startTab);
   openDialog({
-    title: 'WIXEL 옵션', width: 640, body: el('div', { class: 'opt-wrap' }, tabBar, box),
+    title: 'WIXEL 옵션', width: 760, body: el('div', { class: 'opt-wrap' }, tabBar, box),
     buttons: [{
       label: '확인', primary: true, action: () => {
         const wasManual = opts.calcMode === 'manual';
+        const { _headers, _grid, _formulaBar } = o;
+        delete o._headers; delete o._grid; delete o._formulaBar;
         Object.assign(opts, o);
         saveOptions();
+        if (_headers !== undefined) view.showHeaders = _headers;
+        if (_formulaBar !== undefined) view.showFormulaBar = _formulaBar;
+        const gridChange = _grid !== undefined && _grid === !!sheet().noGrid;
+        const zeroChange = book.noZeros !== !!sheet().noZeros;
+        if (gridChange || zeroChange) {
+          wb.transact(() => {
+            if (gridChange) wb.setSheetProp(si, 'noGrid', _grid ? undefined : true);
+            if (zeroChange) wb.setSheetProp(si, 'noZeros', book.noZeros || undefined);
+          }, meta());
+        }
+        if (book.lockStructure !== !!wb.props?.lockStructure) { wb.props = { ...(wb.props ?? {}), lockStructure: book.lockStructure || undefined }; dirty = true; }
         applyOptions();
-        if (wasManual && opts.calcMode === 'auto') { wb.calculateNow(); gv.renderAll(); }
+        ribbon?.reset?.();
+        if (wasManual && opts.calcMode !== 'manual') wb.calculateNow();
+        applyView();
         gv.renderAll();
       },
     }, { label: '취소' }],
@@ -10327,6 +10518,7 @@ async function exportXlsx(name = docName, kind = null, target = null) {
   // 큰 문서는 나눠서 만들고 진행 표시 (압축도 함께 해서 파일이 작아짐)
   const prog = progressOverlay(`'${fileName}' 저장 중`);
   exportBusy++;
+  if (opts.userName) wb.props = { ...(wb.props ?? {}), lastModifiedBy: opts.userName, creator: wb.props?.creator || opts.userName };
   try {
     const bytes = await writeXlsxAsync(wb, { activeSheet: si, fileName, kind: k }, (st) => prog.set(st.p, st.msg));
     prog.set(0.98, '파일 쓰는 중');
@@ -10347,7 +10539,7 @@ function saveAs() {
   formDialog('다른 이름으로 저장', [
     { name: 'name', label: '파일 이름', value: docName },
     {
-      name: 'type', label: '파일 형식', type: 'select', value: 'xlsx', options: [
+      name: 'type', label: '파일 형식', type: 'select', value: wb.vba && opts.saveFormat === 'xlsx' ? 'xlsm' : (opts.saveFormat || 'xlsx'), options: [
         { value: wb.vba ? 'xlsm' : 'xlsx', label: wb.vba ? 'Excel 매크로 사용 통합 문서 (*.xlsm)' : 'Excel 통합 문서 (*.xlsx)' },
         ...(wb.vba ? [{ value: 'xlsx', label: 'Excel 통합 문서 (*.xlsx) — 매크로 제외' }] : [{ value: 'xlsm', label: 'Excel 매크로 사용 통합 문서 (*.xlsm)' }]),
         { value: 'xltx', label: 'Excel 서식 파일 (*.xltx)' },
@@ -10691,6 +10883,15 @@ async function serverNames() {
   try { return (await server.list()).map((f) => f.name); } catch { return []; }
 }
 
+/** 새 통합 문서 (엑셀 옵션 › 일반: 기본 글꼴 · 크기 · 시트 수 · 사용자 이름) */
+function blankBook() {
+  const n = clamp(Math.round(opts.newSheets || 1), 1, 255);
+  const data = { sheets: [...Array(n)].map((_, i) => ({ name: `Sheet${i + 1}`, cells: {} })) };
+  if ((opts.newFont && opts.newFont !== BASE_FONT.name) || (opts.newSize && opts.newSize !== BASE_FONT.size)) data.defaultFont = { name: opts.newFont || BASE_FONT.name, size: opts.newSize || BASE_FONT.size };
+  if (opts.userName) data.props = { creator: opts.userName };
+  return data;
+}
+
 async function newWorkbook(sample) {
   const go = async () => {
     const names = await serverNames();
@@ -10735,7 +10936,7 @@ async function newWorkbook(sample) {
     } else {
       let n = 1;
       while (names.includes(`통합 문서${n}`) || `통합 문서${n}` === docName) n++;
-      loadWorkbook({ sheets: [{ name: 'Sheet1', cells: {} }] }, `통합 문서${n}`);
+      loadWorkbook(blankBook(), `통합 문서${n}`);
     }
   };
   if (!autosave && dirty) {
@@ -14206,9 +14407,11 @@ function bindEvents() {
     if (!editing && chartSel) { if (!e.isComposing) objectTyped(); return; }
     if (!editing) beginTyping();
     editing.point = null;
+    if (!e.isComposing && e.inputType === 'insertText') cellAutoComplete();
     dom.formula.value = ed.value;
     afterEditInput();
   });
+  ed.addEventListener('compositionend', () => setTimeout(() => { if (editing && cellAutoComplete()) { dom.formula.value = ed.value; afterEditInput(); } }));
   ed.addEventListener('mousedown', (e) => {
     e.stopPropagation();
     if (editing) { editing.mode = 'edit'; editing.point = null; setTimeout(afterCaretMove); }
@@ -14413,7 +14616,7 @@ async function init() {
     state: () => ({
       wb, si, sel, selKind, active, editing: !!editing, clip, fillPreview, refs: editRefs, chartSel, chartPart, objMulti, circles, focusCell: opts.focusCell,
       special: special?.si === si ? special.cells : null, arrows: trace?.arrows ?? null,
-      showGrid: view.showGrid && !sheet().noGrid, showFormulas: view.showFormulas, showHeaders: view.showHeaders,
+      showGrid: view.showGrid && !sheet().noGrid, showFormulas: view.showFormulas, showHeaders: view.showHeaders, fillHandle: opts.fillHandle !== false,
     }),
     onViewScroll: () => positionEditor(),
     pivotChartFields: (ch) => {
@@ -14427,7 +14630,7 @@ async function init() {
     onZoomWheel: (d) => setZoom(view.zoom + d),
     isDragging: () => !!drag,
   });
-  ribbon = buildRibbon({ run, openMenu: openNamedMenu, focusGrid, refreshRibbon: updateRibbon, gallery: (name) => (name === 'chartStyles' ? chartStyleGallery() : []) });
+  ribbon = buildRibbon({ run, openMenu: openNamedMenu, focusGrid, refreshRibbon: updateRibbon, hiddenTabs: () => opts.hiddenTabs ?? [], gallery: (name) => (name === 'chartStyles' ? chartStyleGallery() : []) });
   bindEvents();
   applyView();
   if (stored && stored.rev !== APP_REV) redrawPivotsQuiet();
