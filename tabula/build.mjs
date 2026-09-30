@@ -5,6 +5,7 @@
 import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync } from 'node:fs';
 import { dirname, join, resolve, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { gunzipSync } from 'node:zlib';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const outDir = resolve(root, process.argv[2] ?? 'dist');
@@ -60,5 +61,12 @@ writeFileSync(join(outDir, 'index.html'), html);
 writeFileSync(join(outDir, '.nojekyll'), '');
 // 따로 불러오는 큰 자료 (아이콘 모음 등): dist/assets 로 복사
 mkdirSync(join(outDir, 'assets'), { recursive: true });
-for (const f of ['iconlib.json.gz', '네이버 연관검색어 키워드 검색.xlsm']) if (existsSync(join(root, 'assets', f))) copyFileSync(join(root, 'assets', f), join(outDir, 'assets', f));
+for (const f of ['iconlib.json.gz', '네이버 연관검색어 키워드 검색.xlsm']) {
+  if (!existsSync(join(root, 'assets', f))) continue;
+  copyFileSync(join(root, 'assets', f), join(outDir, 'assets', f));
+  // 압축 · 엑셀 파일을 못 올리는 곳(일부 정적 호스팅)을 위한 대체본: 풀어 둔 JSON · base64 텍스트
+  const bytes = readFileSync(join(root, 'assets', f));
+  if (f.endsWith('.gz')) writeFileSync(join(outDir, 'assets', f.slice(0, -3)), gunzipSync(bytes));
+  else writeFileSync(join(outDir, 'assets', `${f}.b64.txt`), bytes.toString('base64'));
+}
 console.log(`${join(outDir, 'index.html')} (${(html.length / 1024).toFixed(0)} KB)`);

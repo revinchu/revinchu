@@ -7211,8 +7211,10 @@ function runObjectMacro(name) {
 let iconLib = null;
 async function loadIconLib() {
   if (iconLib) return iconLib;
-  const res = await fetch('assets/iconlib.json.gz');
-  if (!res.ok) throw new Error(`아이콘 모음을 불러오지 못했습니다 (${res.status}).`);
+  // 압축본 → (압축 파일을 못 올리는 곳) 풀어 둔 JSON
+  let res = await fetch('assets/iconlib.json.gz').catch(() => null);
+  if (!res?.ok) res = await fetch('assets/iconlib.json').catch(() => null);
+  if (!res?.ok) throw new Error(`아이콘 모음을 불러오지 못했습니다 (${res?.status ?? '연결 안 됨'}).`);
   let buf = new Uint8Array(await res.arrayBuffer());
   // 서버가 이미 풀어서 보냈으면 그대로, 아니면 gzip 풀기
   if (buf[0] === 0x1f && buf[1] === 0x8b) buf = new Uint8Array(await new Response(new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
@@ -10638,11 +10640,18 @@ async function newWorkbook(sample) {
     if (sample?.file) {
       // 파일로 된 서식 (xlsx · xlsm): 받아서 그대로 열고, 버튼에 내장 동작을 연결
       try {
-        const res = await fetch(encodeURI(sample.file));
-        if (!res.ok) throw new Error(`${res.status}`);
+        let res = await fetch(encodeURI(sample.file)).catch(() => null);
+        let bytes;
+        if (res?.ok) bytes = await res.arrayBuffer();
+        else {
+          // 엑셀 파일을 못 올리는 곳: base64 텍스트본
+          res = await fetch(encodeURI(`${sample.file}.b64.txt`)).catch(() => null);
+          if (!res?.ok) throw new Error(`${res?.status ?? '연결 안 됨'}`);
+          bytes = fromBase64((await res.text()).trim());
+        }
         const ext = sample.file.split('.').pop();
         templateOpening = true;
-        try { await openFileObject(new File([await res.arrayBuffer()], `${sample.name}.${ext}`), 'open'); } finally { templateOpening = false; }
+        try { await openFileObject(new File([bytes], `${sample.name}.${ext}`), 'open'); } finally { templateOpening = false; }
         wb.sheets.forEach((sh, i) => {
           const list = (sh.shapes ?? []).map((o) => (!o.macro && /필터만 적용/.test(o.text ?? '') ? { ...o, macro: 'ApplyFilterOnly' } : o));
           if (list.some((o, k) => o !== sh.shapes[k])) wb.setSheetProp(i, 'shapes', list);
