@@ -1110,7 +1110,7 @@ body.view-mode .titlebar, body.view-mode .ribbon-tabs, body.view-mode .ribbon, b
 .nf-ico { font: 700 11px var(--ui-font); color: #444; min-width: 22px; text-align: center; }
 .menu-item .mi-text { display: flex; flex-direction: column; gap: 2px; white-space: normal; max-width: 300px; }
 .menu-item .mi-text b { font-weight: 600; }
-.menu-item .mi-text small { color: var(--muted); font-size: 11px; line-height: 1.35; }
+.menu-item .mi-text small { color: var(--muted); font-size: 11px; line-height: 1.35; white-space: pre-line; }
 .style-grid.cs6 { grid-template-columns: repeat(6, 104px); }
 .cr-wrap { display: flex; gap: 12px; height: 430px; }
 .cr-list { width: 200px; flex: none; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding: 4px; border: 1px solid #e0e0e0; background: #fafafa; }
@@ -1150,3 +1150,7 @@ body.view-mode .titlebar, body.view-mode .ribbon-tabs, body.view-mode .ribbon, b
 .pat-cell { border: 1px solid transparent; background: none; padding: 2px; cursor: pointer; }
 .pat-cell:hover, .pat-cell.on { border-color: #217346; background: #e8f2ec; }
 .pat-cell .pat-tile { width: 26px; height: 18px; }
+/* 고급 필터 대화 상자 */
+.advf .chk { display: flex; align-items: center; gap: 6px; margin: 3px 0 3px 10px; }
+.advf-grid { display: grid; grid-template-columns: auto 1fr; gap: 6px 8px; align-items: center; margin: 10px 0; }
+.advf-grid input:disabled { background: #f0f0f0; }

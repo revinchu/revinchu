@@ -20,7 +20,7 @@ import { SAMPLES } from './samples.js';
 import { TEMPLATES, TEMPLATE_CATS } from './templates.js';
 import { GridView, BASE_FONT, setBaseFont, measureText, fontStack, PATTERNS, patternCss, glyphShift, timelinePeriods } from './view.js';
 import { setThemeColors, THEME, applyTint } from './stylepresets.js';
-import { readXlsxAsync, writeXlsxAsync, xlsxOverflow } from './xlsx.js';
+import { readXlsxAsync, writeXlsxAsync, xlsxOverflow, textRaw } from './xlsx.js';
 import { readOds, writeOds } from './ods.js';
 import { readXls } from './xls.js';
 import { CellMap } from './cellmap.js';
@@ -59,7 +59,7 @@ import { extractVbaModules, fromBase64 } from './vba.js';
 import { findMatches, nextMatch, replaceText, FIND_FORMAT_KEYS } from './find.js';
 import {
   ANALYSIS_TOOLS, AnalysisError, splitGroups, descriptive, matrixTool, regression, histogram, rankPercentile, tTest, zTest, fTest, anova1, anova2,
-  movingAverage, expSmoothing, randomNumbers, sampling, solveMin,
+  movingAverage, expSmoothing, randomNumbers, sampling, solveMin, advancedFilter,
 } from './analysis.js';
 import { timeAxis } from './ets.js';
 import {
@@ -2475,7 +2475,7 @@ const PROTECT_BLOCK = new Set(['mergeCenter', 'createTable', 'condManager', 'con
   'tblLastCol', 'tblFilter', 'textToColumns', 'dedupe', 'sparkLine', 'sparkColumn', 'sparkWinLoss', 'sparkClear', 'sparkEdit']);
 const PROTECT_MAP = {
   insertRows: 'insertRows', insertCols: 'insertColumns', deleteRows: 'deleteRows', deleteCols: 'deleteColumns', sortAsc: 'sort', sortDesc: 'sort', sortDialog: 'sort',
-  clearFilter: 'autoFilter', reapplyFilter: 'autoFilter', toggleFilter: 'autoFilter', hideRows: 'formatRows', unhideRows: 'formatRows', autofitRowsSel: 'formatRows',
+  clearFilter: 'autoFilter', reapplyFilter: 'autoFilter', advancedFilter: 'autoFilter', toggleFilter: 'autoFilter', hideRows: 'formatRows', unhideRows: 'formatRows', autofitRowsSel: 'formatRows',
   hideCols: 'formatColumns', autofitSel: 'formatColumns', refreshAll: 'pivotTables', calcField: 'pivotTables', slicerConnections: 'pivotTables',
   chartColumn: 'objects', chartBar: 'objects', chartLine: 'objects', chartPie: 'objects', chartArea: 'objects', chartScatter: 'objects', shapesMenu: 'objects',
   insertTextbox: 'objects', insertPicture: 'objects', insertSlicer: 'objects', insertTimeline: 'objects',
@@ -2596,7 +2596,7 @@ function tracePrecedents() {
     trace.seen.add(k);
     for (const b of wb.precedentsOf(cell.si, cell.r, cell.c)) {
       const err = [b].some(() => { for (let r = b.r1; r <= Math.min(b.r2, b.r1 + 50); r++) for (let c = b.c1; c <= Math.min(b.c2, b.c1 + 20); c++) if (isError(wb.getValue(b.si, r, c))) return true; return false; });
-      trace.arrows.push({ from: b, to: cell, err });
+      trace.arrows.push({ from: b, to: cell, err, kind: 'p' });
       added++;
       // 다음 단계: 참조한 칸 중 수식 (범위는 앞쪽 일부만)
       for (let r = b.r1; r <= Math.min(b.r2, b.r1 + 200) && next.length < 300; r++) {
@@ -2618,7 +2618,7 @@ function traceDependents() {
     if (trace.seen.has(k)) continue;
     trace.seen.add(k);
     for (const d of wb.dependentsOf(cell.si, cell.r, cell.c).slice(0, 500)) {
-      trace.arrows.push({ from: { si: cell.si, r1: cell.r, c1: cell.c, r2: cell.r, c2: cell.c }, to: d, err: isError(wb.getValue(d.si, d.r, d.c)) });
+      trace.arrows.push({ from: { si: cell.si, r1: cell.r, c1: cell.c, r2: cell.r, c2: cell.c }, to: d, err: isError(wb.getValue(d.si, d.r, d.c)), kind: 'd' });
       added++;
       next.push(d);
     }
@@ -2627,7 +2627,28 @@ function traceDependents() {
   if (!added) toast('이 셀을 참조하는 수식이 없습니다.');
   gv.renderAll();
 }
-function removeArrows() { trace = null; gv.renderAll(); }
+/** 연결선 제거: 전부 · 참조되는 셀('p') · 참조하는 셀('d') 연결선만 (엑셀 수식 › 연결선 제거 메뉴) */
+function removeArrows(kind = null) {
+  if (kind && trace) {
+    trace.arrows = trace.arrows.filter((a) => a.kind !== kind);
+    if (kind === 'p') trace.frontP = null; else trace.frontD = null;
+    for (const k of [...trace.seen]) if (k[0] === kind) trace.seen.delete(k);
+    if (!trace.arrows.length) trace = null;
+  } else trace = null;
+  gv.renderAll();
+}
+/** 오류 추적: 오류 값 셀에서 오류를 만든 셀까지 참조되는 셀 연결선을 따라감 */
+function traceError() {
+  const v = wb.getValue(si, active.r, active.c);
+  if (!isError(v)) { alertDialog('오류 추적', '선택한 셀에 오류 값이 없습니다.'); return; }
+  trace = null;
+  for (let i = 0; i < 6; i++) {
+    const before = trace?.arrows.length ?? 0;
+    tracePrecedents();
+    if (!trace?.frontP?.some((x) => isError(wb.getValue(x.si, x.r, x.c))) || trace.arrows.length === before) break;
+    trace.frontP = trace.frontP.filter((x) => isError(wb.getValue(x.si, x.r, x.c)));
+  }
+}
 
 /** 수식 계산: 안쪽 부분식부터 한 단계씩 값으로 바꿔 보여 줌 */
 function evaluateFormulaDialog() {
@@ -2735,6 +2756,73 @@ function goalSeekDialog() {
     });
     return undefined;
   });
+}
+
+/** 고급 필터 (엑셀 데이터 › 고급): 조건 범위(머리글 + 조건 줄, 줄 안은 AND · 줄끼리 OR)로 목록을 현재 위치에서 거르거나 다른 곳에 복사 */
+let advFilterState = null; // { si, r1, r2 } — [지우기] 가 현재 위치 고급 필터로 숨긴 행을 다시 보이게
+function advancedFilterDialog() {
+  const reg = selKind === 'cells' && (sel.r2 > sel.r1 || sel.c2 > sel.c1) ? usedClip(sel) : currentRegion(active.r, active.c);
+  const listIn = refInput(refText(reg, si));
+  const critIn = refInput('');
+  const copyIn = refInput('');
+  const mode = { copy: false };
+  const radio = (label, on, copy) => {
+    const inp = el('input', { type: 'radio', name: 'advf-mode', checked: on });
+    inp.addEventListener('change', () => { mode.copy = copy; copyIn.disabled = !copy; });
+    return el('label', { class: 'chk' }, inp, label);
+  };
+  copyIn.disabled = true;
+  const uniq = el('input', { type: 'checkbox' });
+  const uniqL = el('label', { class: 'chk' }, uniq, '동일한 레코드는 하나만(R)');
+  const body = el('div', { class: 'advf' },
+    el('div', { class: 'fc-title' }, '결과'), radio('현재 위치에 필터(F)', true, false), radio('다른 장소에 복사(O)', false, true),
+    el('div', { class: 'advf-grid' }, el('span', {}, '목록 범위(L):'), listIn, el('span', {}, '조건 범위(C):'), critIn, el('span', {}, '복사 위치(T):'), copyIn),
+    uniqL);
+  const submit = () => {
+    const L = parseRefInput(listIn.value);
+    if (!L || L.rg.r2 <= L.rg.r1) { alertDialog('고급 필터', '목록 범위가 올바르지 않습니다. 머리글이 있는 범위를 지정하세요.'); return false; }
+    const C = critIn.value.trim() ? parseRefInput(critIn.value) : null;
+    if (critIn.value.trim() && !C) { alertDialog('고급 필터', '조건 범위가 올바르지 않습니다.'); return false; }
+    const T = mode.copy ? parseRefInput(copyIn.value) : null;
+    if (mode.copy && !T) { alertDialog('고급 필터', '복사 위치를 지정하세요.'); return false; }
+    const data = readBlock(L);
+    const head = data[0];
+    const rows = data.slice(1);
+    const crit = C ? readBlock(C) : null;
+    const keep = advancedFilter(head, rows, crit ? crit[0] : [], crit ? crit.slice(1) : [], uniq.checked);
+    refPick = null;
+    if (!mode.copy) {
+      if (L.si !== si) switchSheet(L.si, false);
+      const sh = wb.sheets[L.si];
+      const hr = { ...(sh.hiddenRows ?? {}) };
+      const kept = new Set(keep);
+      for (let i = 0; i < rows.length; i++) { const r = L.rg.r1 + 1 + i; if (kept.has(i)) delete hr[r]; else hr[r] = true; }
+      wb.transact(() => wb.setSheetProp(L.si, 'hiddenRows', hr), meta());
+      advFilterState = { si: L.si, r1: L.rg.r1 + 1, r2: L.rg.r2 };
+      gv.layout();
+      setMode();
+      toast(`${rows.length}개 중 ${keep.length}개의 레코드가 있습니다.`);
+    } else {
+      // 복사: 머리글 + 남은 행 (서식 포함), 복사 위치가 한 칸이면 그 아래로 필요한 만큼
+      const out = [L.rg.r1, ...keep.map((i) => L.rg.r1 + 1 + i)];
+      wb.transact(() => {
+        out.forEach((sr, k) => {
+          for (let c = L.rg.c1; c <= L.rg.c2; c++) {
+            const v = wb.getValue(L.si, sr, c);
+            const st = wb.styleAt(L.si, sr, c);
+            const raw = v === null || v === undefined ? '' : typeof v === 'object' ? String(v.code ?? '') : typeof v === 'number' ? String(v) : typeof v === 'boolean' ? (v ? 'TRUE' : 'FALSE') : textRaw(String(v));
+            wb.setCellData(T.si, T.rg.r1 + k, T.rg.c1 + c - L.rg.c1, { raw, style: Object.keys(st).length ? st : undefined });
+          }
+        });
+      }, meta());
+      if (T.si !== si) switchSheet(T.si, false);
+      selectRange({ r1: T.rg.r1, c1: T.rg.c1, r2: T.rg.r1 + out.length - 1, c2: T.rg.c1 + L.rg.c2 - L.rg.c1 }, 'cells', { r: T.rg.r1, c: T.rg.c1 });
+    }
+    return undefined;
+  };
+  openDialog({ title: '고급 필터', body, width: 380, modeless: true, onClose: () => { refPick = null; },
+    buttons: [{ label: '확인', primary: true, action: () => submit() }, { label: '취소' }] });
+  setTimeout(() => critIn.focus());
 }
 
 /** 데이터 표 (가상 분석): 선택 범위의 첫 행 · 첫 열에 입력 값, 모서리 · 첫 행/열에 수식 */
@@ -6506,7 +6594,7 @@ function textToColumns() {
 const KEYTIPS = {
   ae: ['textToColumns', '텍스트 나누기'], at: ['toggleFilter', '필터'], am: ['dedupe', '중복된 항목 제거'],
   avv: ['dataValidation', '데이터 유효성 검사'], ass: ['sortDialog', '정렬'], asa: ['sortAsc', '오름차순 정렬'], asd: ['sortDesc', '내림차순 정렬'],
-  aa: ['refreshAll', '모두 새로 고침'], ac: ['clearFilter', '필터 지우기'], ay: ['reapplyFilter', '다시 적용'],
+  aa: ['refreshAll', '모두 새로 고침'], ac: ['clearFilter', '필터 지우기'], ay: ['reapplyFilter', '다시 적용'], aq: ['advancedFilter', '고급 필터'],
   nt: ['createTable', '표'], nv: ['insertPivot', '피벗 테이블'], nsf: ['insertSlicer', '슬라이서'], np: ['insertPicture', '그림'],
   nsh: ['shapesMenu', '도형'], nx: ['insertTextbox', '텍스트 상자'], nc: ['chartColumn', '세로 막대형 차트'],
   hoe: ['formatCells', '셀 서식'], hoi: ['autofitSel', '열 너비 자동 맞춤'], hoa: ['autofitRowsSel', '행 높이 자동 맞춤'],
@@ -12490,7 +12578,22 @@ function deleteCellStyleDialog() {
 function tableStylesMenu(anchorEl) { tableStyleGallery(anchorEl, !tableHere()); }
 
 const MENUS = {
-  calcOptions: () => [{ label: '자동', checked: opts.calcMode === 'auto', action: () => run('calcAuto') }, { label: '수동', checked: opts.calcMode === 'manual', action: () => run('calcManual') }],
+  calcOptions: () => [
+    { label: '자동(A)', checked: opts.calcMode !== 'manual' && opts.calcMode !== 'semi', action: () => run('calcAuto') },
+    { label: '데이터 표만 수동(E)', checked: opts.calcMode === 'semi', action: () => { run('calcAuto'); opts.calcMode = 'semi'; saveOptions(); } },
+    { label: '수동(M)', checked: opts.calcMode === 'manual', action: () => run('calcManual') },
+  ],
+  arrowsMenu: () => [
+    { label: '연결선 제거(A)', icon: 'clear', action: () => removeArrows() },
+    { sep: true },
+    { label: '참조되는 셀 연결선 제거(P)', icon: 'prev', disabled: !trace?.arrows.some((a) => a.kind === 'p'), action: () => removeArrows('p') },
+    { label: '참조하는 셀 연결선 제거(D)', icon: 'next', disabled: !trace?.arrows.some((a) => a.kind === 'd'), action: () => removeArrows('d') },
+  ],
+  errorMenu: () => [
+    { label: '오류 검사(K)...', icon: 'validation', action: () => errorCheck() },
+    { label: '오류 추적(E)', icon: 'validation', action: () => traceError() },
+    { label: '순환 참조(C)', disabled: true, submenu: [] },
+  ],
   shapeChange: () => [{ node: shapeGallery((k) => patchObjects({ kind: k }, ['shapes']), true) }],
   shapeFill: (a) => { shapeFillMenu(a); },
   shapeOutline: (a) => { shapeOutlineMenu(a); },
@@ -12578,9 +12681,19 @@ const MENUS = {
   pivotStylesDesign: (a) => { pivotStyleGallery(a); },
   slicerStyles: (a) => { slicerStyleGallery(a); },
   marginsMenu: () => [
-    ...MARGINS.map((m) => ({ label: `${m.label} (위 ${m.m.top}" 아래 ${m.m.bottom}" 왼쪽 ${m.m.left}" 오른쪽 ${m.m.right}")`, action: () => patchPage({ margins: { ...m.m } }) })),
+    // 엑셀 여백 메뉴: 기본 · 넓게 · 좁게 (cm 로 위 · 아래 · 왼쪽 · 오른쪽 · 머리글 · 바닥글)
+    ...MARGINS.map((m) => {
+      const cm = (x) => `${(x * 2.54).toFixed(2)} cm`;
+      const cur = normPage(sheet().page).margins;
+      return {
+        label: m.id === 'normal' ? '기본' : m.label, icon: 'borderOutside',
+        checked: ['top', 'bottom', 'left', 'right'].every((k) => Math.abs((cur?.[k] ?? 0) - m.m[k]) < 1e-6),
+        desc: `위쪽: ${cm(m.m.top)}  아래쪽: ${cm(m.m.bottom)}\n왼쪽: ${cm(m.m.left)}  오른쪽: ${cm(m.m.right)}\n머리글: ${cm(m.m.header)}  바닥글: ${cm(m.m.footer)}`,
+        action: () => patchPage({ margins: { ...m.m } }),
+      };
+    }),
     { sep: true },
-    { label: '사용자 지정 여백...', action: () => pageSetupDialog() },
+    { label: '사용자 지정 여백(A)...', action: () => pageSetupDialog() },
   ],
   orientMenu: () => [
     { label: '세로', action: () => run('orientPortrait') },
@@ -13138,9 +13251,20 @@ const COMMANDS = {
   nameManager, defineName, useInFormula: pasteNameDialog, pasteName: pasteNameDialog, createNamesFromSel,
 
   toggleFilter,
+  advancedFilter: advancedFilterDialog,
   clearFilter: () => {
     const key = filterKeyHere();
     const f = key === null ? null : getFilter(key);
+    if (!f && advFilterState?.si === si) {
+      // 고급 필터(현재 위치)로 숨긴 행을 모두 표시
+      const hr = { ...(sheet().hiddenRows ?? {}) };
+      for (let r = advFilterState.r1; r <= advFilterState.r2; r++) delete hr[r];
+      wb.transact(() => wb.setSheetProp(si, 'hiddenRows', hr), meta());
+      advFilterState = null;
+      gv.layout();
+      setMode();
+      return;
+    }
     if (!f) return;
     wb.transact(() => putFilter(key, { ...f, criteria: {}, hidden: {}, sort: undefined }), meta());
     gv.layout();

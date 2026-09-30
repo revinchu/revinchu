@@ -348,3 +348,13 @@ test('xlsx: 셀 요소의 서식은 행 서식과 섞이지 않음(엑셀), 읽�
   wb.invalidate();
   assert.equal(wb.getValue(0, 0, 1), 7);
 });
+
+test('고급 필터: 조건 줄 안은 AND, 줄끼리 OR, 글자 조건은 시작 일치, 고유 레코드', async () => {
+  const { advancedFilter } = await import('../src/analysis.js');
+  const head = ['이름', '지역', '매출'];
+  const rows = [['김', '서울', 100], ['이', '부산', 200], ['박', '서울', 300], ['김', '서울', 100]];
+  assert.deepEqual(advancedFilter(head, rows, ['지역', '매출'], [['서울', '>150']]), [2]);
+  assert.deepEqual(advancedFilter(head, rows, ['지역'], [['서울'], ['부산']]), [0, 1, 2, 3]);
+  assert.deepEqual(advancedFilter(head, rows, ['지역'], [['서']], true), [0, 2]);
+  assert.deepEqual(advancedFilter(head, rows, ['매출'], [[200]]), [1]);
+});

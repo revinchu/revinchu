@@ -193,11 +193,11 @@ export const TABS = [
         col(
           medium('tracePrecedents', 'prev', '참조되는 셀 추적'),
           medium('traceDependents', 'next', '참조하는 셀 추적'),
-          medium('removeArrows', 'clear', '연결선 제거'),
+          medium('removeArrows', 'clear', '연결선 제거', { menu: 'arrowsMenu', split: true }),
         ),
         col(
           medium('toggleFormulas', 'showFormulas', '수식 표시', { toggle: 'showFormulas' }),
-          medium('errorCheck', 'validation', '오류 검사'),
+          medium('errorCheck', 'validation', '오류 검사', { menu: 'errorMenu', split: true }),
           medium('evaluateFormula', 'fx', '수식 계산'),
         ),
         large('watchWindow', 'search', '조사식 창'),
@@ -223,6 +223,7 @@ export const TABS = [
         col(
           medium('clearFilter', 'filterClear', '지우기'),
           medium('reapplyFilter', 'refresh', '다시 적용'),
+          medium('advancedFilter', 'filter', '고급'),
         ),
       ]),
       group('데이터 도구', [

@@ -2,7 +2,7 @@
 // 각 도구는 입력 값(2차원 배열)과 옵션을 받아 출력 표 { rows, heads, pct } 를 돌려줌.
 // 셀: 숫자 · 문자열 · null · { f: '=수식' } · { err: '#N/A' }. heads = 제목 줄(굵게 · 아래 테두리), pct = 백분율 칸 'r,c'
 import { tCdf, fCdf, invert, normCdf, normInv } from './fx-stat.js';
-import { maxOf, minOf } from './fxcore.js';
+import { maxOf, minOf, makeCriteria } from './fxcore.js';
 
 // ───────────── 도우미 ─────────────
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
@@ -597,4 +597,43 @@ export function solveMin(objective, x0, { ints = [], maxEval = 20000 } = {}) {
   const x = full(y);
   const o = ev(x);
   return { x, f: o.f, pen: o.pen };
+}
+
+// ───────────── 고급 필터 (엑셀 데이터 › 고급) ─────────────
+/**
+ * 조건 범위로 목록의 행을 거름. head = 목록 머리글, rows = 데이터 행(2차원), critHead/critRows = 조건 범위.
+ * 조건 한 줄 안은 AND, 줄끼리는 OR. 연산자 없는 글자 조건은 '그 글자로 시작'(엑셀과 같음), 빈 조건 줄은 모두 통과.
+ * unique = 동일한 레코드는 하나만. 남길 행 번호(rows 기준) 배열을 돌려줌.
+ */
+export function advancedFilter(head, rows, critHead, critRows, unique = false) {
+  const norm = (x) => String(x ?? '').trim().toLowerCase();
+  const colOf = new Map(head.map((h, i) => [norm(h), i]));
+  const lines = (critRows ?? []).map((cr) => {
+    const tests = [];
+    cr.forEach((v, j) => {
+      if (v === null || v === undefined || v === '') return;
+      const col = colOf.get(norm(critHead[j]));
+      let t;
+      if (typeof v === 'number' || typeof v === 'boolean') t = makeCriteria(v);
+      else {
+        const s = String(v);
+        t = /^(<=|>=|<>|<|>|=)/.test(s) || /^-?[\d.,]+%?$/.test(s.trim()) ? makeCriteria(s) : makeCriteria(`${s}*`);
+      }
+      tests.push(col === undefined ? () => false : (row) => t(row[col] ?? null));
+    });
+    return tests;
+  });
+  const keep = [];
+  const seen = new Set();
+  rows.forEach((row, i) => {
+    const ok = !lines.length || lines.some((tests) => tests.every((t) => t(row)));
+    if (!ok) return;
+    if (unique) {
+      const k = JSON.stringify(row.map((v) => (v && typeof v === 'object' ? String(v.code ?? v) : v ?? null)));
+      if (seen.has(k)) return;
+      seen.add(k);
+    }
+    keep.push(i);
+  });
+  return keep;
 }
