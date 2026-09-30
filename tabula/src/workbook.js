@@ -11,7 +11,7 @@ import { hid, shiftHidden } from './axis.js';
 import { CellImage, compareSortValues } from './fxcore.js';
 import { DepGraph, cellNum } from './depgraph.js';
 import { CellMap } from './cellmap.js';
-import { pushAll, CLOSED_BOOK } from './fxcore.js';
+import { pushAll, CLOSED_BOOK, ERR_BY_CODE } from './fxcore.js';
 
 export const DEFAULT_COL_WIDTH = 64;
 export const DEFAULT_ROW_HEIGHT = 20;
@@ -293,7 +293,7 @@ function astDeps(ast) {
 function textRawOf(s) {
   if (s.startsWith('=') || s.startsWith("'")) return `'${s}`;
   const p = parseInput(s);
-  return typeof p.value === 'string' && p.value === s ? s : `'${s}`;
+  return typeof p.value === 'string' && p.value === s && !p.errorLiteral ? s : `'${s}`;
 }
 /** 블록 값 → 셀 값 (오류는 오류 값) */
 function blockCellValue(v) {
@@ -337,7 +337,11 @@ export function makeCellRC(data, r, c) {
   } else if (style?.numFmt === 'text') {
     cell.v = cell.raw === '' ? null : cell.raw;
   } else {
-    cell.v = PLAIN_NUMBER.test(cell.raw) ? Number(cell.raw) : parseInput(cell.raw).value;
+    if (PLAIN_NUMBER.test(cell.raw)) cell.v = Number(cell.raw);
+    else {
+      const p = parseInput(cell.raw);
+      cell.v = p.errorLiteral ? ERR_BY_CODE[p.errorLiteral] : p.value;
+    }
   }
   if (!cell.raw && !cell.style && !cell.comment && !cell.link && !cell.image) return null;
   return cell;

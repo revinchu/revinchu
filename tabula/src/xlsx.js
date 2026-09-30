@@ -62,7 +62,7 @@ export function textRaw(s) {
   if (s === '') return "'"; // 빈 글자("") 셀: 빈 칸과 달리 COUNTA · 피벗 개수에 셈 (엑셀과 같음)
   if (s.startsWith('=') || s.startsWith("'")) return `'${s}`;
   const p = parseInput(s);
-  return typeof p.value === 'string' && p.value === s ? s : `'${s}`;
+  return typeof p.value === 'string' && p.value === s && !p.errorLiteral ? s : `'${s}`;
 }
 
 // ───────────────────────── 색상 ─────────────────────────
@@ -1756,8 +1756,9 @@ function pivotDefFrom(root, cache, tables, sheetName) {
   const first = pfs[rowF[0] ?? colF[0]];
   const tblCompact = root.attrs.compact !== '0';
   const tblOutline = root.attrs.outline !== '0';
-  const fCompact = first ? first.attrs.compact !== '0' && tblCompact : tblCompact;
-  const fOutline = first ? first.attrs.outline !== '0' && tblOutline : tblOutline;
+  // 필드의 compact · outline 기본값은 켜짐 (표의 compact="0" 은 새로 넣는 필드의 기본값일 뿐)
+  const fCompact = first ? first.attrs.compact !== '0' : tblCompact;
+  const fOutline = first ? first.attrs.outline !== '0' : tblOutline;
   // 열 영역에서 '값'(x=-2)의 위치 → valuesPos (맨 안쪽이면 생략)
   const colAll = kids(child(root, 'colFields'), 'field').map((f) => Number(f.attrs.x)).filter((x) => x === -2 || (x >= 0 && x < names.length));
   const vIdx = colAll.indexOf(-2);

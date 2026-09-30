@@ -795,7 +795,17 @@ function refFromText(text, a1, ctx) {
     return null;
   }
   const m = /^(?:(?:'((?:[^']|'')+)'|([^!]+))!)?R(\[?-?\d*\]?)C(\[?-?\d*\]?)(?::R(\[?-?\d*\]?)C(\[?-?\d*\]?))?$/i.exec(t);
-  if (!m) return null;
+  if (!m) {
+    // R1C1 형식이어도 정의된 이름 · 표 참조(표1[일자])는 그대로 씀 (엑셀과 같음)
+    try {
+      const ast = parse(t);
+      if (ast.type !== 'sref' && ast.type !== 'name') return null;
+      const v = evalAny(ast, ctx);
+      return v instanceof RefValue ? v : null;
+    } catch {
+      return null;
+    }
+  }
   const here = ctx.here ?? { r: 0, c: 0 };
   const part = (s, base) => {
     if (s === '' || s === undefined) return base;

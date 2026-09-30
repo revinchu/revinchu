@@ -226,11 +226,14 @@ export function formatValue(v, style) {
  * 사용자가 입력한 문자열 해석 → { value, numFmt? }
  * 수식('=')은 호출하는 쪽에서 처리
  */
+const ERROR_LITERALS = new Set(['#NULL!', '#DIV/0!', '#VALUE!', '#REF!', '#NAME?', '#NUM!', '#N/A', '#SPILL!', '#CALC!']);
 export function parseInput(text) {
   if (text === '') return { value: null };
   if (text.startsWith("'")) return { value: text.slice(1) };
   const t = text.trim();
   if (/^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(t)) return { value: Number(t) };
+  // 오류 값 입력 (#N/A · #VALUE! …): 엑셀처럼 글자가 아닌 오류 값
+  if (t.startsWith('#') && ERROR_LITERALS.has(t.toUpperCase())) return { value: t.toUpperCase(), errorLiteral: t.toUpperCase() };
   if (/^[+-]?\d{1,3}(,\d{3})+(\.\d+)?$/.test(t)) return { value: Number(t.replace(/,/g, '')), numFmt: 'comma' };
   let m = /^([+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)%$/.exec(t);
   if (m) {
