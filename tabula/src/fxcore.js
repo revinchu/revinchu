@@ -193,6 +193,9 @@ export function compareValues(a, b) {
   return x < y ? -1 : x > y ? 1 : 0;
 }
 
+/** 수식 계산 중 닫힌 외부 통합 문서 범위를 *IF(S) 가 읽었는지 (workbook.evalCell 이 칸마다 확인) */
+export const CLOSED_BOOK = { hit: false };
+
 // ───────────────────────── 인수 모으기 ─────────────────────────
 /** SUM 계열 규칙: 범위 안에서는 숫자만, 직접 인수는 숫자로 변환 */
 export function collectNums(args, { errors = true } = {}) {

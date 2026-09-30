@@ -224,3 +224,19 @@ test('한국어 서식: [$-412]ddd = 금 · [$-F800] 시스템 긴 날짜 · 190
   assert.equal(isoSerial('1900-01-28'), 28);
   assert.equal(isoSerial('2021-02-01T12:00:00'), 44228.5);
 });
+
+test('SUM(A1): 참조한 칸의 글자는 무시 (직접 인수 "" 만 #VALUE!) · INDIRECT 배열 수식이 자기 원본을 읽을 때 순환으로 보지 않음', () => {
+  const wb = new Workbook();
+  wb.setInput(0, 0, 0, '=""'); wb.setInput(0, 0, 1, '5'); wb.setInput(0, 0, 2, 'abc');
+  assert.equal(calc(wb, '=SUM(A1,B1)'), 5);
+  assert.equal(calc(wb, '=SUM(A1)'), 0);
+  assert.equal(calc(wb, '=AVERAGE(C1,B1)'), 5);
+  assert.equal(calc(wb, '=SUM("",B1)')?.code, '#VALUE!');
+  assert.equal(calc(wb, '=A1+B1')?.code, '#VALUE!');
+  const w2 = new Workbook();
+  put(w2, [['1', '10'], ['2', '20']]);
+  w2.setInput(0, 5, 0, 'A1:B2');
+  w2.setInput(0, 10, 0, '=INDIRECT(A6)');
+  assert.equal(w2.getValue(0, 10, 0), 1);
+  assert.equal(calc(w2, '=SUM(B11:B12)'), 30);
+});

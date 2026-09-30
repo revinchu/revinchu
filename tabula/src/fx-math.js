@@ -3,7 +3,7 @@ import {
   ERR, Range, isError, scalar, toNum, toInt, toBool, optNum, optInt, checkNum, collectNums, flat, asRange, matrix,
   makeCriteria, lift, fastCount, parseNumberText, r15,
 } from './fxcore.js';
-import { maxOf, minOf } from './fxcore.js';
+import { maxOf, minOf, CLOSED_BOOK } from './fxcore.js';
 
 export function roundTo(n, digits, mode) {
   if (digits > 15) digits = 15;
@@ -141,7 +141,8 @@ function fastIfs(target, args) {
 /** 범위 자리에 온 오류 값 (=SUMIFS(#REF!, #REF!, …) 는 #REF!) */
 // 닫힌 외부 통합 문서의 범위([1]시트!A1:A9)는 엑셀도 *IF 함수에서 #VALUE! (값 캐시로 계산하지 않음)
 const closedBook = (x) => x instanceof Range && /^\[\d+\]/.test(x.ref?.sheet ?? '');
-const rangeError = (list) => list.find((x) => isError(x)) ?? (list.some(closedBook) ? ERR.VALUE : null);
+// 닫힌 외부 통합 문서의 범위: #VALUE! (엑셀) — 다만 파일에 저장된 값이 있으면 다시 계산하기 전까지 그 값을 보임 (CLOSED_BOOK.hit → workbook)
+const rangeError = (list) => list.find((x) => isError(x)) ?? (list.some(closedBook) ? ((CLOSED_BOOK.hit = true), ERR.VALUE) : null);
 
 function ifsValues(target, pairs) {
   const s = asRange(target);

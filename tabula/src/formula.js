@@ -668,6 +668,9 @@ function lookupLambda(name, ctx) {
   return v instanceof Lambda ? v : null;
 }
 
+// 참조 인수의 글자 · 논리값을 무시하는 함수 (SUM(A1) 에서 A1 이 글자면 0, 직접 인수 "abc" 만 #VALUE!): 칸 하나 참조도 범위로 넘김
+const REF_AS_RANGE = new Set(['SUM', 'PRODUCT', 'SUMSQ', 'AVERAGE', 'AVERAGEA', 'COUNT', 'MAX', 'MAXA', 'MIN', 'MINA', 'MEDIAN', 'MODE', 'MODE.SNGL',
+  'STDEV', 'STDEV.S', 'STDEV.P', 'STDEVP', 'STDEVA', 'STDEVPA', 'VAR', 'VAR.S', 'VAR.P', 'VARP', 'VARA', 'VARPA', 'GEOMEAN', 'HARMEAN', 'AVEDEV', 'DEVSQ', 'KURT', 'SKEW']);
 function callFunc(node, ctx) {
   const fn = FUNCS[node.name];
   const ev = evOf(ctx);
@@ -689,6 +692,11 @@ function callFunc(node, ctx) {
       continue;
     }
     if (a.type === 'empty') { args.push(null); continue; }
+    if (a.type === 'ref' && REF_AS_RANGE.has(node.name)) {
+      const v = attempt(() => evalAny(a, ctx));
+      args.push(v instanceof RefValue && v.single ? new Range([[ctx.cell(v.sheet, v.r1, v.c1)]], v) : attempt(() => derefSoft(v, ctx)));
+      continue;
+    }
     args.push(attempt(() => derefSoft(evalAny(a, ctx), ctx)));
   }
   return fn(args, ctx, ev);

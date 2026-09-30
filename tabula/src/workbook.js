@@ -11,7 +11,7 @@ import { hid, shiftHidden } from './axis.js';
 import { CellImage, compareSortValues } from './fxcore.js';
 import { DepGraph, cellNum } from './depgraph.js';
 import { CellMap } from './cellmap.js';
-import { pushAll } from './fxcore.js';
+import { pushAll, CLOSED_BOOK } from './fxcore.js';
 
 export const DEFAULT_COL_WIDTH = 64;
 export const DEFAULT_ROW_HEIGHT = 20;
@@ -591,8 +591,12 @@ export class Workbook {
     ctx.here = { si, r, c, sheet: this.sheets[si]?.name };
     ctx.dr = cell.dr ?? 0;
     ctx.dc = cell.dc ?? 0;
+    const closedPrev = CLOSED_BOOK.hit;
+    CLOSED_BOOK.hit = false;
+    let closed = false;
     try {
       v = evaluateArray(cell.ast, ctx);
+      closed = CLOSED_BOOK.hit;
     } catch (e) {
       if (e instanceof RangeError) throw DEEP;
       throw e;
@@ -600,11 +604,14 @@ export class Workbook {
       ctx.here = ph;
       ctx.dr = pdr;
       ctx.dc = pdc;
+      CLOSED_BOOK.hit = closedPrev;
       this.depth--;
       this.evaluating.delete(k);
     }
     // 지원하지 않는 함수는 파일에 저장된 계산 결과를 그대로 표시
     if (v === ERR.NAME && cell.cached !== undefined) v = cachedValue(cell.cached);
+    // 닫힌 외부 통합 문서를 *IF(S) 로 읽는 수식: 엑셀처럼 파일에 저장된 값 유지 (없으면 #VALUE!)
+    if (closed && cell.cached !== undefined) v = cachedValue(cell.cached);
     // 순환이 이 칸에서 닫힘: 엑셀처럼 계산하지 않고 마지막 값 유지 (=G24/J24 를 J24 에)
     if (this.circHits?.has(k)) { this.circHits.delete(k); if (cell.cached !== undefined) v = cachedValue(cell.cached); }
     if (v instanceof Range) v = this.placeSpill(`${si}:${r},${c}`, si, r, c, v);
@@ -650,7 +657,8 @@ export class Workbook {
       const q = this.spillQueue;
       for (let i = this.spillPos; i < q.length; i++) {
         const [si, r, c] = q[i];
-        if (si === s && r <= r2 && c <= c2) this.getValue(si, r, c);
+        // 지금 계산 중인 수식(자기 원본 범위를 읽는 INDIRECT 등)은 건너뜀 — 다시 부르면 순환 참조로 잘못 봄
+        if (si === s && r <= r2 && c <= c2 && !this.evaluating.has(cellNum(si, r, c))) this.getValue(si, r, c);
       }
       return;
     }
@@ -675,7 +683,7 @@ export class Workbook {
   runSpillQueue() {
     while (this.spillPos < this.spillQueue.length) {
       const [si, r, c] = this.spillQueue[this.spillPos++];
-      this.getValue(si, r, c);
+      if (!this.evaluating.has(cellNum(si, r, c))) this.getValue(si, r, c);
     }
   }
 
