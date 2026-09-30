@@ -243,7 +243,7 @@ function readStyles(files, wbRels, theme) {
   // 셀 스타일(cellStyleXfs): 셀 서식에 맞춤이 없으면 부모 스타일의 맞춤을 물려받음
   // (한국어 엑셀의 '표준' 스타일은 세로 가운데 → 거의 모든 셀이 세로 가운데로 보임)
   const styleXfs = kids(child(root, 'cellStyleXfs'), 'xf');
-  const xfs = kids(child(root, 'cellXfs'), 'xf').map((xf) => {
+  const xfStyle = (xf, parent) => {
     const a = xf.attrs;
     const st = { ...fonts[Number(a.fontId || 0)] };
     if (st.font && st.font === defaultFont) delete st.font;
@@ -253,7 +253,6 @@ function readStyles(files, wbRels, theme) {
     else if (fill) st.fill = fill;
     Object.assign(st, borders[Number(a.borderId || 0)] ?? {});
     Object.assign(st, numFmtOf(a.numFmtId || 0));
-    const parent = styleXfs[Number(a.xfId ?? 0)];
     const al = child(xf, 'alignment') ?? (a.applyAlignment === '1' ? null : child(parent, 'alignment'));
     if (al) {
       const h = al.attrs.horizontal;
@@ -276,7 +275,13 @@ function readStyles(files, wbRels, theme) {
       if (pr.attrs.hidden === '1' || pr.attrs.hidden === 'true') st.hideFormula = true;
     }
     return st;
-  });
+  };
+  const xfs = kids(child(root, 'cellXfs'), 'xf').map((xf) => xfStyle(xf, styleXfs[Number(xf.attrs.xfId ?? 0)]));
+  // 이름 있는 셀 스타일 (엑셀 [셀 스타일]의 사용자 지정 · 기본 제공 스타일을 파일에서 고친 것) — '표준' 은 제외
+  const cellStyles = kids(child(root, 'cellStyles'), 'cellStyle')
+    .filter((c) => c.attrs.builtinId !== '0' && c.attrs.hidden !== '1' && styleXfs[Number(c.attrs.xfId)])
+    .map((c) => ({ name: unx(c.attrs.name ?? ''), style: xfStyle(styleXfs[Number(c.attrs.xfId)], null), ...(c.attrs.builtinId !== undefined ? { builtinId: Number(c.attrs.builtinId) } : {}) }))
+    .filter((c) => c.name);
   const dxfOf = (d) => {
     const st = {};
     const f = child(d, 'font');
@@ -331,7 +336,7 @@ function readStyles(files, wbRels, theme) {
     };
     slicerStyles[ss.attrs.name] = Object.fromEntries(Object.entries(c).filter(([, v]) => v));
   }
-  return { xfs, dxfs, dxfOf, defaultFont, tableStyles, wbFont, slicerStyles };
+  return { xfs, dxfs, dxfOf, defaultFont, tableStyles, wbFont, slicerStyles, cellStyles };
 }
 
 const CHUNK_MIN = 48 << 20;
@@ -2146,7 +2151,7 @@ function* readXlsxSteps(files) {
   const wbRoot = parseXml(textOf(files[wbPath]));
   const wbRels = relsOf(files, wbPath);
   const theme = readTheme(files, wbRels);
-  const { xfs, dxfs, dxfOf, tableStyles, wbFont, slicerStyles } = readStyles(files, wbRels, theme);
+  const { xfs, dxfs, dxfOf, tableStyles, wbFont, slicerStyles, cellStyles } = readStyles(files, wbRels, theme);
   const mdw = digitWidth(wbFont);
   const ssRel = Object.values(wbRels).find((r) => r.type === 'sharedStrings');
   const strings = files.__xlsb ? files.__xlsb.strings : ssRel && files[ssRel.target] ? kids(parseXml(textOf(files[ssRel.target])), 'si').map(allText) : [];
@@ -2233,6 +2238,7 @@ function* readXlsxSteps(files) {
   data.defaultFont = wbFont; // 통합 문서 기본 글꼴 (표준 스타일) — 셀 기본 크기 · 열 너비 변환에 씀
   // 기본 셀 서식(xf 0): s 속성이 없는 셀에 적용됨 (한국어 엑셀은 보통 세로 가운데 맞춤)
   if (xfs[0] && Object.keys(xfs[0]).length) data.baseStyle = { ...xfs[0] };
+  if (cellStyles?.length) data.cellStyles = cellStyles;
   const active = Number(descendants(child(wbRoot, 'bookViews'), 'workbookView')[0]?.attrs.activeTab ?? 0);
   let act = Math.min(active, sheets.length - 1);
   if (sheets[act]?.state) act = Math.max(0, sheets.findIndex((x) => !x.state));
@@ -2394,7 +2400,7 @@ class StylePool {
   xfOf(style) {
     if (!Object.keys(style).length) return 0;
     const k = JSON.stringify(Object.keys(style).sort().map((key) => [key, style[key]]));
-    if (this.maps.xf.has(k)) return this.maps.xf.get(k);
+    if (!this.styleXfMode && this.maps.xf.has(k)) return this.maps.xf.get(k);
     const font = `<font>${style.bold ? '<b/>' : ''}${style.italic ? '<i/>' : ''}${style.strike ? '<strike/>' : ''}${style.underline ? '<u/>' : ''}<sz val="${style.size || this.baseFont.size}"/>${style.color ? `<color rgb="${argb(style.color)}"/>` : '<color theme="1"/>'}<name val="${esc(style.font || this.baseFont.name)}"/><family val="3"/><charset val="129"/></font>`;
     const fontId = this.intern('font', this.fonts, font);
     const fillId = style.pattern
@@ -2415,11 +2421,28 @@ class StylePool {
     if (style.shrink) align.push('shrinkToFit="1"');
     const prot = style.locked === false || style.hideFormula ? `<protection${style.locked === false ? ' locked="0"' : ''}${style.hideFormula ? ' hidden="1"' : ''}/>` : '';
     const inner = (align.length ? `<alignment ${align.join(' ')}/>` : '') + prot;
+    if (this.styleXfMode) return `<xf numFmtId="${numFmtId}" fontId="${fontId}" fillId="${fillId}" borderId="${borderId}"${numFmtId ? ' applyNumberFormat="1"' : ''}${fontId ? ' applyFont="1"' : ''}${fillId ? ' applyFill="1"' : ''}${borderId ? ' applyBorder="1"' : ''}${align.length ? ' applyAlignment="1"' : ''}${prot ? ' applyProtection="1"' : ''}${inner ? `>${inner}</xf>` : '/>'}`;
     const xml = `<xf numFmtId="${numFmtId}" fontId="${fontId}" fillId="${fillId}" borderId="${borderId}" xfId="0"${numFmtId ? ' applyNumberFormat="1"' : ''}${fontId ? ' applyFont="1"' : ''}${fillId ? ' applyFill="1"' : ''}${borderId ? ' applyBorder="1"' : ''}${align.length ? ' applyAlignment="1"' : ''}${prot ? ' applyProtection="1"' : ''}${inner ? `>${inner}</xf>` : '/>'}`;
     const id = this.xfs.length;
     this.xfs.push(xml);
     this.maps.xf.set(k, id);
     return id;
+  }
+
+  /** 이름 있는 셀 스타일 → cellStyleXfs + cellStyles (엑셀 [셀 스타일] 갤러리의 사용자 지정) */
+  namedStyles(list) {
+    this.cellStyleXfs = ['<xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>'];
+    this.cellStyleList = ['<cellStyle name="표준" xfId="0" builtinId="0"/>'];
+    const seen = new Set(['표준']);
+    for (const cs of list ?? []) {
+      if (!cs?.name || seen.has(cs.name)) continue;
+      seen.add(cs.name);
+      this.styleXfMode = true;
+      const xml = Object.keys(cs.style ?? {}).length ? this.xfOf(cs.style) : '<xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>';
+      this.styleXfMode = false;
+      this.cellStyleList.push(`<cellStyle name="${esc(cs.name)}" xfId="${this.cellStyleXfs.length}"${cs.builtinId !== undefined ? ` builtinId="${cs.builtinId}" customBuiltin="1"` : ''}/>`);
+      this.cellStyleXfs.push(xml);
+    }
   }
 
   dxf(style) {
@@ -2483,9 +2506,9 @@ class StylePool {
       + `<fonts count="${this.fonts.length}">${this.fonts.join('')}</fonts>`
       + `<fills count="${this.fills.length}">${this.fills.join('')}</fills>`
       + `<borders count="${this.borders.length}">${this.borders.join('')}</borders>`
-      + '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+      + (this.cellStyleXfs ? `<cellStyleXfs count="${this.cellStyleXfs.length}">${this.cellStyleXfs.join('')}</cellStyleXfs>` : '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>')
       + `<cellXfs count="${this.xfs.length}">${this.xfs.join('')}</cellXfs>`
-      + '<cellStyles count="1"><cellStyle name="표준" xfId="0" builtinId="0"/></cellStyles>'
+      + (this.cellStyleList ? `<cellStyles count="${this.cellStyleList.length}">${this.cellStyleList.join('')}</cellStyles>` : '<cellStyles count="1"><cellStyle name="표준" xfId="0" builtinId="0"/></cellStyles>')
       + `<dxfs count="${this.dxfs.length}">${this.dxfs.join('')}</dxfs>`
       + (this.tableStyles.size ? `<tableStyles count="${this.tableStyles.size}" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16">${[...this.tableStyles.values()].join('')}</tableStyles>` : '')
       + (this.slicerStyles.size ? `<extLst><ext uri="{EB79DEF2-80B8-43e5-95BD-54CBDDF9020C}" xmlns:x14="${NS_X14}"><x14:slicerStyles defaultSlicerStyle="SlicerStyleLight1">${[...this.slicerStyles.values()].join('')}</x14:slicerStyles></ext></extLst>` : '')
@@ -3326,6 +3349,7 @@ const MAIN_TYPES = {
 function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = null } = {}) {
   const files = {};
   const pool = new StylePool(wb.defaultFont ?? WRITE_FONT, wb.baseStyle);
+  if (wb.cellStyles?.length) pool.namedStyles(wb.cellStyles);
   const wmdw = digitWidth(pool.baseFont); // 파일의 열 너비 = 픽셀 ÷ 기본 글꼴 숫자 너비
   const strings = [];
   const stringIndex = new Map();

@@ -2086,6 +2086,7 @@ export class Workbook {
       ...(this.externals?.length ? { externals: this.externals } : {}),
       ...(this.defaultFont ? { defaultFont: { ...this.defaultFont } } : {}),
       ...(this.baseStyle ? { baseStyle: { ...this.baseStyle } } : {}),
+      ...(this.cellStyles?.length ? { cellStyles: this.cellStyles.map((c) => ({ ...c, style: { ...c.style } })) } : {}),
       ...(this.theme ? { theme: [...this.theme] } : {}),
       ...(this.names.length ? { names: this.names.map(({ _ast, _text, ...n }) => ({ ...n })) } : {}),
     };
@@ -2182,6 +2183,7 @@ export class Workbook {
     this.defaultFont = data.defaultFont ?? null; // 통합 문서 기본 글꼴 { name, size } (없으면 맑은 고딕 11)
     this.fitRows = data.fitRows ?? null; // 파일을 열 때 자동 높이로 맞출 행 (저장하지 않음)
     this.theme = data.theme ?? null; // 파일의 테마 색 (없으면 Office 기본)
+    this.cellStyles = data.cellStyles ?? null; // 이름 있는 셀 스타일 [{ name, style, builtinId? }] (엑셀 [셀 스타일] 사용자 지정)
     this.baseStyle = data.baseStyle ?? null; // 기본 셀 서식 (xlsx 의 xf 0) — 서식이 없는 셀에 적용
     this.vba = data.vba ?? null; // .xlsm 의 매크로(vbaProject.bin, base64) — 실행하지 않고 보존만 함
     this.externals = data.externals ?? null; // 외부 통합 문서 연결 (xlsx externalLink 원본 — 저장할 때 그대로 되돌려 씀)

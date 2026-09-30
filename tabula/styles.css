@@ -1111,3 +1111,4 @@ body.view-mode .titlebar, body.view-mode .ribbon-tabs, body.view-mode .ribbon, b
 .menu-item .mi-text { display: flex; flex-direction: column; gap: 2px; white-space: normal; max-width: 300px; }
 .menu-item .mi-text b { font-weight: 600; }
 .menu-item .mi-text small { color: var(--muted); font-size: 11px; line-height: 1.35; }
+.style-grid.cs6 { grid-template-columns: repeat(6, 104px); }

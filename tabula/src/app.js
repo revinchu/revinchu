@@ -19,7 +19,7 @@ import { parseDelimited, toDelimited, guessDelimiter, CsvBlockReader } from './c
 import { SAMPLES } from './samples.js';
 import { TEMPLATES, TEMPLATE_CATS } from './templates.js';
 import { GridView, BASE_FONT, setBaseFont, measureText, fontStack, PATTERNS, patternCss, glyphShift, timelinePeriods } from './view.js';
-import { setThemeColors } from './stylepresets.js';
+import { setThemeColors, THEME, applyTint } from './stylepresets.js';
 import { readXlsxAsync, writeXlsxAsync, xlsxOverflow } from './xlsx.js';
 import { readOds, writeOds } from './ods.js';
 import { readXls } from './xls.js';
@@ -11869,24 +11869,21 @@ const SHORTCUTS = [
 ];
 
 // ───────────────────────── 메뉴 정의 ─────────────────────────
-const THEME = ['#FFFFFF', '#000000', '#E7E6E6', '#44546A', '#4472C4', '#ED7D31', '#A5A5A5', '#FFC000', '#5B9BD5', '#70AD47'];
 const STANDARD = ['#C00000', '#FF0000', '#FFC000', '#FFFF00', '#92D050', '#00B050', '#00B0F0', '#0070C0', '#002060', '#7030A0'];
-function mix(hex, target, t) {
-  const p = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
-  const a = p(hex);
-  const b = p(target);
-  return `#${a.map((x, i) => Math.round(x + (b[i] - x) * t).toString(16).padStart(2, '0')).join('')}`;
-}
+/** 색 상자의 테마 색: 통합 문서 테마(배경1 · 텍스트1 · 배경2 · 텍스트2 · 강조1~6)와 엑셀의 밝기 단계 (밝기에 따라 단계가 다름) */
 function themeRows() {
-  const rows = [THEME];
-  const variants = [[0.8, '#FFFFFF'], [0.6, '#FFFFFF'], [0.4, '#FFFFFF'], [0.25, '#000000'], [0.5, '#000000']];
-  for (const [t, target] of variants) {
-    rows.push(THEME.map((h, i) => {
-      if (i === 0) return mix('#FFFFFF', '#000000', { 0.8: 0.05, 0.6: 0.15, 0.4: 0.25, 0.25: 0.35, 0.5: 0.5 }[t]);
-      if (i === 1) return mix('#000000', '#FFFFFF', { 0.8: 0.5, 0.6: 0.35, 0.4: 0.25, 0.25: 0.15, 0.5: 0.05 }[t]);
-      return mix(h, target, t);
-    }));
-  }
+  const base = THEME.colors.slice(0, 10).map((c) => String(c).toUpperCase().slice(-6));
+  const lum = (h) => { const [r, g, b] = [0, 2, 4].map((k) => parseInt(h.slice(k, k + 2), 16) / 255); return (Math.max(r, g, b) + Math.min(r, g, b)) / 2; };
+  const steps = (h) => {
+    const l = lum(h);
+    if (l <= 0) return [0.5, 0.35, 0.25, 0.15, 0.05];
+    if (l >= 1) return [-0.05, -0.15, -0.25, -0.35, -0.5];
+    if (l < 0.2) return [0.9, 0.75, 0.5, 0.25, 0.1];
+    if (l > 0.8) return [-0.1, -0.25, -0.5, -0.75, -0.9];
+    return [0.8, 0.6, 0.4, -0.25, -0.5];
+  };
+  const rows = [base.map((h) => `#${h}`)];
+  for (let k = 0; k < 5; k++) rows.push(base.map((h) => `#${applyTint(h, steps(h)[k])}`));
   return rows;
 }
 
@@ -11989,20 +11986,81 @@ const CELL_STYLES = [
 const RESET_STYLE = { fill: undefined, color: undefined, bold: undefined, italic: undefined, underline: undefined, strike: undefined, size: undefined, font: undefined, bt: undefined, bb: undefined, bl: undefined, br: undefined,
   btc: undefined, bbc: undefined, blc: undefined, brc: undefined, bts: undefined, bbs: undefined, bls: undefined, brs: undefined };
 
+/** 엑셀 [셀 스타일] 갤러리: 구역별 기본 제공 스타일 (테마 셀 스타일은 통합 문서 테마 색으로) + 파일의 사용자 지정 스타일 */
+function cellStyleSections() {
+  const acc = THEME.colors.slice(4, 10).map((c) => String(c).toUpperCase());
+  const hx = (c) => `#${c}`;
+  const pick = (...names) => names.map((n) => CELL_STYLES.find((c) => c.name === n)).filter(Boolean);
+  const theme = [];
+  for (const [pct, tint, dark] of [['20%', 0.8, true], ['40%', 0.6, true], ['60%', 0.4, false]]) {
+    acc.forEach((a, i) => theme.push({ name: `${pct} - 강조색${i + 1}`, style: { fill: hx(applyTint(a, tint)), color: dark ? '#000000' : '#ffffff' } }));
+  }
+  acc.forEach((a, i) => theme.push({ name: `강조색${i + 1}`, style: { fill: hx(a), color: '#ffffff' } }));
+  const heads = [
+    { name: '제목', style: { size: 18, color: '#44546a', font: '맑은 고딕' } },
+    { name: '제목 1', style: { size: 15, bold: true, color: '#44546a', bb: true, bbs: 'thick', bbc: hx(acc[0]) } },
+    { name: '제목 2', style: { size: 13, bold: true, color: '#44546a', bb: true, bbs: 'thick', bbc: hx(applyTint(acc[0], 0.5)) } },
+    { name: '제목 3', style: { bold: true, color: '#44546a', bb: true, bbs: 'medium', bbc: hx(applyTint(acc[0], 0.4)) } },
+    { name: '제목 4', style: { bold: true, color: '#44546a' } },
+    { name: '요약', style: { bold: true, bt: true, btc: hx(acc[0]), bb: true, bbs: 'double', bbc: hx(acc[0]) } },
+  ];
+  const nums = [
+    { name: '백분율', style: { numFmt: 'percent', decimals: 0 } },
+    { name: '쉼표', style: { numFmt: 'custom', code: '_-* #,##0.00_-;-* #,##0.00_-;_-* "-"??_-;_-@_-' } },
+    { name: '쉼표 [0]', style: { numFmt: 'custom', code: '_-* #,##0_-;-* #,##0_-;_-* "-"_-;_-@_-' } },
+    { name: '통화', style: { numFmt: 'custom', code: '_-"₩"* #,##0.00_-;-"₩"* #,##0.00_-;_-"₩"* "-"??_-;_-@_-' } },
+    { name: '통화 [0]', style: { numFmt: 'custom', code: '_-"₩"* #,##0_-;-"₩"* #,##0_-;_-"₩"* "-"_-;_-@_-' } },
+  ];
+  return [
+    ...(wb.cellStyles?.length ? [['사용자 지정', wb.cellStyles]] : []),
+    ['좋음, 나쁨 및 보통', pick('표준', '나쁨', '보통', '좋음')],
+    ['데이터 및 모델', pick('계산', '확인할 셀', '경고문', '메모', '설명 텍스트', '연결된 셀', '입력', '출력')],
+    ['제목 및 머리글', heads],
+    ['테마 셀 스타일', theme],
+    ['숫자 서식', nums],
+  ];
+}
 function cellStylesMenu(anchorEl) {
   const chip = (s) => {
     const st = s.style ?? {};
+    const edge = (k) => (st[k] ? `${st[`${k}s`] === 'thick' ? 3 : st[`${k}s`] === 'medium' || st[`${k}s`] === 'double' ? 2 : 1}px ${st[`${k}s`] === 'double' ? 'double' : 'solid'} ${st[`${k}c`] ?? '#7f7f7f'}` : undefined);
     return el('button', {
       class: 'style-chip', title: s.name, onmousedown: (e) => e.preventDefault(),
       style: {
         background: st.fill ?? '#fff', color: st.color ?? '#000', fontWeight: st.bold ? '700' : '400',
         fontStyle: st.italic ? 'italic' : 'normal', fontSize: st.size ? `${Math.min(st.size, 14)}px` : '11.5px',
-        borderBottom: st.bb ? '2px solid #44546a' : undefined,
+        borderBottom: edge('bb'), borderTop: edge('bt'),
       },
-      onclick: () => { closeMenus(); applyStyle({ ...RESET_STYLE, ...(s.style ?? {}) }); focusGrid(); },
+      onclick: () => { closeMenus(); applyStyle({ ...RESET_STYLE, numFmt: undefined, code: undefined, decimals: undefined, ...(s.style ?? {}) }, { widen: !!st.numFmt }); focusGrid(); },
     }, s.name);
   };
-  openMenu(anchorEl, [{ title: '셀 스타일' }, { node: el('div', { class: 'style-grid' }, CELL_STYLES.map(chip)) }]);
+  const items = [];
+  for (const [title, list] of cellStyleSections()) items.push({ title }, { node: el('div', { class: 'style-grid cs6' }, list.map(chip)) });
+  items.push({ sep: true },
+    { label: '새 셀 스타일...', icon: 'cellStyles', action: () => newCellStyleDialog() },
+    { label: '사용자 지정 스타일 삭제...', disabled: !wb.cellStyles?.length, action: () => deleteCellStyleDialog() });
+  openMenu(anchorEl, items, { scroll: true });
+}
+/** 새 셀 스타일: 지금 칸의 서식을 이름 붙여 저장 (파일에 cellStyles 로 저장) */
+function newCellStyleDialog() {
+  const cur = wb.styleAt(si, active.r, active.c) ?? {};
+  formDialog('스타일', [{ name: 'n', label: '스타일 이름', value: `스타일 ${(wb.cellStyles?.length ?? 0) + 1}` }], ({ n }) => {
+    const name = String(n).trim();
+    if (!name) { toast('이름을 입력하세요.'); return false; }
+    const style = Object.fromEntries(Object.entries(cur).filter(([, v]) => v !== undefined && v !== null));
+    wb.cellStyles = [...(wb.cellStyles ?? []).filter((c) => c.name !== name), { name, style }];
+    dirty = true;
+    toast(`'${name}' 스타일을 만들었습니다. [셀 스타일]의 사용자 지정에 있습니다.`);
+    return undefined;
+  }, { note: '지금 선택한 셀의 서식(글꼴 · 채우기 · 테두리 · 표시 형식 · 맞춤)이 스타일이 됩니다.' });
+}
+function deleteCellStyleDialog() {
+  const list = wb.cellStyles ?? [];
+  formDialog('스타일 삭제', [{ name: 'n', label: '삭제할 스타일', type: 'select', value: list[0]?.name, options: list.map((c) => ({ value: c.name, label: c.name })) }], ({ n }) => {
+    wb.cellStyles = list.filter((c) => c.name !== n);
+    dirty = true;
+    return undefined;
+  });
 }
 
 function tableStylesMenu(anchorEl) { tableStyleGallery(anchorEl, !tableHere()); }

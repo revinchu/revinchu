@@ -260,3 +260,15 @@ test('find ignores full/half width unless 전자/반자 구분', async () => {
   assert.equal(replaceText('ＡＢ가AB', { text: 'ab' }, 'Z'), 'Z가Z');
   assert.equal(replaceText('ＡＢ가AB', { text: 'ab', matchByte: true }, 'Z'), 'ＡＢ가Z');
 });
+
+test('named cell styles round-trip through xlsx', async () => {
+  const { readXlsx, writeXlsx } = await import('../src/xlsx.js');
+  const wb = new Workbook();
+  wb.cellStyles = [{ name: '20% - 강조색1 2', style: { fill: '#dae3f3', color: '#000000', bold: true } }, { name: '백분율 2', style: { numFmt: 'percent' }, builtinId: 5 }];
+  wb.setCellData(0, 0, 0, { raw: '1' });
+  const back = readXlsx(writeXlsx(wb)).data;
+  assert.deepEqual(back.cellStyles.map((c) => c.name), ['20% - 강조색1 2', '백분율 2']);
+  assert.equal(back.cellStyles[0].style.fill, '#dae3f3');
+  assert.equal(back.cellStyles[0].style.bold, true);
+  assert.equal(back.cellStyles[1].builtinId, 5);
+});
