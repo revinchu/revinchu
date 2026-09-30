@@ -1955,6 +1955,8 @@ function pivotDefFrom(root, cache, tables, sheetName) {
   }
   if (Object.keys(ff).length) def.fieldFilters = ff;
   def.captureFmt = true;
+  const dc = root.attrs.dataCaption;
+  if (dc && dc !== '값' && dc !== 'Values') def.dataCaption = unx(dc);
   const locEl = child(root, 'location');
   const loc = refToRange(locEl?.attrs.ref ?? '');
   // 클래식 레이아웃(열 필드 없이 값 여러 개): 값 이름 위에 '값' 단추 행 (firstHeaderRow 1 · firstDataRow 2)
@@ -3209,7 +3211,7 @@ function pivotParts(wb, si, def, cache, name, pool) {
   else if (styleName && def.styleDef && !/^PivotStyle(Light|Medium|Dark)\d+$/i.test(styleName)) pool.pivotStyle(styleName, def.styleDef);
   const tableAttrs = [
     `name="${esc(name)}"`, `cacheId="${cacheId}"`, 'applyNumberFormats="0"', 'applyBorderFormats="0"', 'applyFontFormats="0"', 'applyPatternFormats="0"',
-    'applyAlignmentFormats="0"', 'applyWidthHeightFormats="1"', 'dataCaption="값"', ...(onRows ? ['dataOnRows="1"'] : []), 'updatedVersion="6"', 'minRefreshableVersion="3"', `useAutoFormatting="${def.autofit === false ? 0 : 1}"`,
+    'applyAlignmentFormats="0"', 'applyWidthHeightFormats="1"', `dataCaption="${esc(d.dataCaption ?? '값')}"`, ...(onRows ? ['dataOnRows="1"'] : []), 'updatedVersion="6"', 'minRefreshableVersion="3"', `useAutoFormatting="${def.autofit === false ? 0 : 1}"`,
     ...(def.mergeLabels ? ['mergeItem="1"'] : []), ...(def.showHeaders === false ? ['showHeaders="0"'] : []), ...(def.preserveFormat === false ? ['preserveFormatting="0"'] : []), ...(def.multiFilters ? [] : []), ...(def.enableDrill === false ? ['enableDrill="0"'] : []),
     ...(d.rowCaption ? [`rowHeaderCaption="${esc(d.rowCaption)}"`] : []),
     ...(d.grandCaption ? [`grandTotalCaption="${esc(d.grandCaption)}"`] : []),

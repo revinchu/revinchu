@@ -7375,7 +7375,9 @@ function writePivot(targetSi, def, { autofit = true } = {}) {
   grid.forEach((row, r) => {
     // 보고서 필터와 표 사이의 빈 줄은 피벗 영역이 아님 (엑셀: 사용자가 제목 등을 적어 둠) — 건드리지 않음
     if (!row.length) return;
-    for (let c = 0; c < colsN; c++) {
+    // 보고서 필터 행은 필드 이름 · 값 두 칸만 피벗 (엑셀: 그 오른쪽 칸은 사용자 내용)
+    const width = row[0]?.role === 'pageLabel' ? row.length : colsN;
+    for (let c = 0; c < width; c++) {
       const cd = row[c];
       const rr = top + r;
       const cc = left + c;

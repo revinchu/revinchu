@@ -540,6 +540,7 @@ export function normalizeDef(def, header) {
     ...(Number.isInteger(def.valuesPos) ? { valuesPos: def.valuesPos } : {}),
     ...(def.valuesOnRows ? { valuesOnRows: true } : {}), // Σ 값을 행 영역에 (엑셀 dataOnRows)
     ...(def.valuesHeadRow ? { valuesHeadRow: true } : {}), // 클래식 레이아웃의 '값' 행
+    ...(def.dataCaption ? { dataCaption: def.dataCaption } : {}), // 엑셀 dataCaption ('값' 대신 '데이터' 등)
     styleOpts: { rowHeaders: true, colHeaders: true, bandRows: false, bandCols: false, ...(def.styleOpts ?? {}) },
     header: allHeader,
   };
@@ -1471,18 +1472,18 @@ export function computePivot(input, d) {
     if (noLabel) return [];
     if (d.showHeaders === false) return Array.from({ length: labelCols }, (_, i) => text('', `rowHead:${i}`));
     if (layout === 'compact') return [text(Lr || onRows ? d.rowCaption ?? '행 레이블' : '', 'rowHead:0')];
-    return Array.from({ length: labelCols }, (_, i) => text(d.rows[i] === undefined ? (onRows && i === Lr ? '값' : '') : fcap(d.rows[i]), `rowHead:${i}`));
+    return Array.from({ length: labelCols }, (_, i) => text(d.rows[i] === undefined ? (onRows && i === Lr ? d.dataCaption ?? '값' : '') : fcap(d.rows[i]), `rowHead:${i}`));
   };
   if (hasColHead) {
     // 열 필드가 있으면 맨 위에 '값 이름 | 열 레이블' 행 (값 필드만 여러 개면 생략)
     // 압축 형식은 '열 레이블' 하나, 개요 · 테이블 형식은 열 필드마다 필드 이름 (값 자리는 '값')
     if (Lc) {
       const caps = d.showHeaders === false ? [] : layout === 'compact' ? [d.colCaption ?? '열 레이블']
-        : Array.from({ length: colLevels }, (_, lvl) => { const vLvl = colMulti ? vp : -1; return lvl === vLvl ? '값' : fcap(d.cols[vLvl >= 0 && lvl > vLvl ? lvl - 1 : lvl]); });
-      grid.push([text(valueCaption, 'valueCaption'), ...Array(labelCols - 1).fill(null).map(() => text('', 'corner')), ...colLeaves.map((_, k) => text(caps[k] ?? '', 'colHead'))]);
+        : Array.from({ length: colLevels }, (_, lvl) => { const vLvl = colMulti ? vp : -1; return lvl === vLvl ? d.dataCaption ?? '값' : fcap(d.cols[vLvl >= 0 && lvl > vLvl ? lvl - 1 : lvl]); });
+      grid.push([text(valueCaption, 'valueCaption'), ...Array(labelCols - 1).fill(null).map(() => text('', 'corner')), ...(colLeaves.length ? colLeaves.map((_, k) => text(caps[k] ?? '', 'colHead')) : [text(caps[0] ?? '', 'colHead')])]);
     }
     // 클래식 레이아웃: 열 필드 없이 값 여러 개면 값 이름 위에 '값' 행 (첫 값 칸에만)
-    if (!Lc && colMulti && d.valuesHeadRow) grid.push([...Array.from({ length: labelCols }, () => text('', 'corner')), ...colLeaves.map((_, k) => text(k ? '' : '값', 'colHead'))]);
+    if (!Lc && colMulti && d.valuesHeadRow) grid.push([...Array.from({ length: labelCols }, () => text('', 'corner')), ...colLeaves.map((_, k) => text(k ? '' : d.dataCaption ?? '값', 'colHead'))]);
     for (let lvl = 0; lvl < colLevels; lvl++) {
       const row = lvl === colLevels - 1 ? rowHeaderCells() : Array.from({ length: labelCols }, () => text('', 'corner'));
       let prev = null;
