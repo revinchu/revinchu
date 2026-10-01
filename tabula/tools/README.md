@@ -251,3 +251,20 @@ node tools/recovery-ux.mjs
 - `tools/ui-regressions.mjs`, `tools/wixel3-ui.mjs`는 내부 모듈을 직접 가져오는 항목이 있으므로 소스 서버에서 실행합니다. 배포본 검사는 `keys`, `keytips`, `chart-upgrade-ux`, `picture-ux`, `recovery-ux` 등 번들 호환 도구를 사용합니다.
 
 - `node tools/excel-pivot-fixtures.mjs D:/Codex/Temp/wixel-pivot-excel`: 합성 피벗 8종 생성. `excel-interop.ps1 -FixtureRoot`는 Excel 새로 고침과 29개 기대값을 검사합니다. 이후 `--verify D:/Codex/Temp/wixel-pivot-excel/excel-saved`로 WIXEL 재읽기 비교합니다.
+
+
+## 피벗 표시·팝업 접근키·한글 지연 입력
+
+아래 도구는 위 Playwright 환경 변수와 `WIXEL_URL`을 사용합니다. 새 컨텍스트의 합성 문서만 사용하고 원격 쓰기를 차단합니다.
+
+| 명령 | 검사 범위 |
+|---|---|
+| `node tools/pivot-display-options.mjs` | XLSX 8개 옵션 조합, 체크 상태·표시 행·취소·Undo/Redo·저장 왕복 |
+| `node tools/pivot-classic-grid.mjs` | 표 안 필드 클릭 메뉴·실제 HTML 드래그·필드 창 연결·Σ 값 이동·보호 |
+| `node tools/keytips-ime.mjs` | 키팁 후 지연 beforeinput/composition/input, 반복 눈금선 전환, 다음 정상 한글/영문 |
+| `node tools/find-replace-access-keys.mjs` | Ctrl+H, Alt+A/D/N/E/T/C/F/I, 중첩 서식 창과 포커스·Undo |
+| `node tools/dialog-access-keys.mjs` | 공통 대화상자·메뉴·하위 메뉴, 중복키·AltGr·동적/숨김/비활성 제어, 별도 팝업 |
+
+`dialog-access-keys.mjs`의 공통 UI 단독 검사는 소스 모듈을 가져오므로 소스 서버에서 실행합니다. 다른 네 도구는 최종 번들에서도 실행합니다. `keytips-ime.mjs`는 Chromium에 합성 이벤트를 보내므로 Windows IME 자체를 검증한 결과와 구분해야 합니다. 상세 범위는 [19번 문서](../docs/codex/19_피벗표시와팝업접근키.md)를 확인하세요.
+
+`pivot-classic-grid.mjs`는 기본 A7 배치를 검사합니다. `CLASSIC_TOP=0`을 지정하면 A1에 피벗을 두고 원본 데이터를 별도 합성 시트로 옮겨 같은 드래그 회귀를 실행합니다. `CLASSIC_SCREENSHOT`으로 D: PNG 경로를 지정하면 기본 화면과 드래그 중 띠 위치를 함께 저장합니다.

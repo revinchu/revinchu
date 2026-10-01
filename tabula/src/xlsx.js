@@ -2039,6 +2039,7 @@ function pivotDefFrom(root, cache, tables, sheetName) {
     ...(vIdx >= 0 && vIdx < colF.length ? { valuesPos: vIdx } : {}),
     ...(root.attrs.dataOnRows === '1' && values.length > 1 ? { valuesOnRows: true } : {}),
     layout: !fOutline ? 'tabular' : !fCompact ? 'outline' : 'compact',
+    classic: root.attrs.gridDropZones === '1' || root.attrs.gridDropZones === 'true',
   };
   // 부분합: 필드마다 (바깥 필드만 켜 둔 보고서가 많음). 안쪽 끝 필드는 부분합이 없으므로 셈에서 뺌
   {
@@ -2245,8 +2246,11 @@ function pivotDefFrom(root, cache, tables, sheetName) {
   if (dc && dc !== '값' && dc !== 'Values') def.dataCaption = unx(dc);
   const locEl = child(root, 'location');
   const loc = refToRange(locEl?.attrs.ref ?? '');
-  // 클래식 레이아웃(열 필드 없이 값 여러 개): 값 이름 위에 '값' 단추 행 (firstHeaderRow 1 · firstDataRow 2)
-  if (def.values.length > 1 && !def.valuesOnRows && !colF.length && Number(locEl?.attrs.firstHeaderRow) === 1 && Number(locEl?.attrs.firstDataRow) === 2) def.valuesHeadRow = true;
+  // Excel 2010+의 값 행 옵션은 위치가 아니라 x14 확장에 저장된다.
+  // classic=true는 hideValuesRow=true여도 헤더를 표시하므로 위치만 보면 체크 상태를 잃는다.
+  const displayExt = kids(child(root, 'extLst'), 'ext').find((e) => e.attrs.uri?.toUpperCase() === '{962EF5D1-5CA2-4C93-8EF4-DBF5C05439D2}');
+  const hideValuesRow = child(displayExt, 'pivotTableDefinition')?.attrs.hideValuesRow;
+  def.showValuesRow = hideValuesRow !== '1' && hideValuesRow !== 'true'; // OOXML 기본값: 표시
   if (loc) {
     const pageRows = def.pages?.length ? def.pages.length + 1 : 0;
     const top = Math.max(0, loc.r1 - pageRows);
@@ -3698,7 +3702,7 @@ function pivotParts(wb, si, def, cache, name, pool) {
     ...(d.grandRows ? [] : ['rowGrandTotals="0"']), ...(d.grandCols ? [] : ['colGrandTotals="0"']),
     ...(d.missingCaption ? [`missingCaption="${esc(d.missingCaption)}"`] : []), ...(d.showExpand ? [] : ['showDrill="0"']),
     'itemPrintTitles="1"', 'createdVersion="6"', 'indent="0"', ...(tabular || outline ? ['compact="0"', 'compactData="0"'] : []),
-    `outline="${tabular ? 0 : 1}"`, `outlineData="${tabular ? 0 : 1}"`, ...(tabular ? ['gridDropZones="1"'] : []), 'multipleFieldFilters="0"',
+    `outline="${tabular ? 0 : 1}"`, `outlineData="${tabular ? 0 : 1}"`, ...(d.classic ? ['gridDropZones="1"'] : []), 'multipleFieldFilters="0"',
   ];
   const tableXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<pivotTableDefinition xmlns="${NS_MAIN}" ${tableAttrs.join(' ')}>`
     + `<location ref="${rangeRef(loc)}" firstHeaderRow="${firstHeaderRow}" firstDataRow="${meta.headerRows}" firstDataCol="${meta.labelCols}"${pageF.length ? ` rowPageCount="${pageF.length}" colPageCount="1"` : ''}/>`
@@ -3712,8 +3716,10 @@ function pivotParts(wb, si, def, cache, name, pool) {
     + pivotCondXml(wb, si, def, header, values)
     + `<pivotTableStyleInfo${styleName ? ` name="${esc(styleName)}"` : ''} showRowHeaders="${so.rowHeaders === false ? 0 : 1}" showColHeaders="${so.colHeaders === false ? 0 : 1}" showRowStripes="${so.bandRows ? 1 : 0}" showColStripes="${so.bandCols ? 1 : 0}" showLastColumn="1"/>`
     + (filterXml.length ? `<filters count="${filterXml.length}">${filterXml.join('')}</filters>` : '')
+    + `<extLst><ext uri="{962EF5D1-5CA2-4c93-8EF4-DBF5C05439D2}" xmlns:x14="${NS_X14}"><x14:pivotTableDefinition hideValuesRow="${d.showValuesRow ? 0 : 1}"/></ext>`
     // 계산 항목: WIXEL 확장 (엑셀은 모르는 ext 를 무시하고 원래 항목만 보여 줌)
-    + (def.calcItems && Object.keys(def.calcItems).length ? `<extLst><ext uri="{6B1E4C27-3D5A-4F80-9C12-57495845434D}" xmlns:wx="https://wixel.app/x"><wx:calcItems json="${esc(JSON.stringify(def.calcItems))}"/></ext></extLst>` : '')
+    + (def.calcItems && Object.keys(def.calcItems).length ? `<ext uri="{6B1E4C27-3D5A-4F80-9C12-57495845434D}" xmlns:wx="https://wixel.app/x"><wx:calcItems json="${esc(JSON.stringify(def.calcItems))}"/></ext>` : '')
+    + '</extLst>'
     + '</pivotTableDefinition>';
 
   // 슬라이서 캐시용: 필드 이름 → 항목 선택 상태 (x 는 캐시의 항목 번호)

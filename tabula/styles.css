@@ -1559,3 +1559,17 @@ body.keytips #ribbon label[data-ribbon-command]:has(input[type="checkbox"]) { pa
 
 /* Logical screen-reader grid: remain in the accessibility tree without visual duplication. */
 .grid-a11y,.grid-a11y-help { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); clip-path:inset(50%); white-space:nowrap; border:0; pointer-events:none; }
+
+/* 대화상자/메뉴 Alt 접근키: 고정 오버레이로 기존 배치에 영향을 주지 않음 */
+.access-key-layer { position: fixed; inset: 0; z-index: 10000; pointer-events: none; }
+.access-key-badge { position: absolute; min-width: 18px; height: 20px; padding: 1px 4px; box-sizing: border-box; border: 1px solid #805b00; border-radius: 3px; background: #fff4c2; color: #312500; font: 700 11px/16px Arial, sans-serif; text-align: center; box-shadow: 0 1px 3px #0003; }
+
+/* 클래식 피벗: 셀 위 필드 단추와 드래그할 때만 표시되는 이동 영역 */
+.pv-classic-frame { position:absolute; box-sizing:border-box; border:1px solid #7d9fb5; pointer-events:none; z-index:2; }
+.pv-classic-field { position:absolute; box-sizing:border-box; border:1px solid #aab5bf; border-radius:2px; background:#e9edf1; color:#17242e; font:inherit; font-size:11px; padding:0 3px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; text-align:left; cursor:grab; z-index:3; }
+.pv-classic-field:focus { outline:2px solid var(--green); outline-offset:-2px; }
+.pv-classic-zones { position:absolute; display:none; z-index:8; }
+.pivot-grid-dragging .pv-classic-zones { display:flex; }
+.pv-classic-zone { flex:1; min-width:0; display:flex; align-items:center; justify-content:center; box-sizing:border-box; border:1px dashed #4e799a; background:#eaf4ff; color:#183d59; font-size:11px; }
+.pv-classic-zone.over { background:#c4e5d1; border:2px solid var(--green); }
+@media print { .pv-classic-frame,.pv-classic-field,.pv-classic-zones { display:none!important; } }

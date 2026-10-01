@@ -18,7 +18,7 @@ import { parseTableRange, tableRangeProblem } from './table-ux.js';
 import { safeUrl, setSafeHtml } from './safe-html.js';
 import {
   el, hydrateIcons, toast, openMenu, openSubmenu, closeSubmenus, closeMenus, isMenuOpen, openDialog, alertDialog,
-  formDialog, setMenuCloseHandler, setDialogCloseHandler, isDialogOpen,
+  formDialog, setMenuCloseHandler, setDialogCloseHandler, setAccessKeyHandler, registerAccessKeyScope, isDialogOpen,
 } from './ui.js';
 import { FUNC_INFO, CATEGORIES } from './funcinfo.js';
 import { makeSeries, CUSTOM_LISTS } from './series.js';
@@ -38,7 +38,7 @@ import {
   computePivot, warmPivots, AGGREGATES, SHOW_AS, BASE_POS, LAYOUTS, pivotSourceData, resolvePivot, itemText, headerNames, normalizeDef, valueName,
   pivotFieldNames, parseCalc, PIVOT_STYLES, PIVOT_STYLE_GROUPS, pivotStyleParts, LABEL_OPS, VALUE_OPS, DATE_OPS, PIVOT_DATE_PERIODS, todaySerial, describeFieldFilter, keyOf, sortKeys, pivotDetail, GROUP_BY,
   checkCalc, renameCalcRefs, CALC_FUNCS, recommendPivots, parseCalcItem,
-  pivotErrorDisplay,
+  pivotErrorDisplay, pivotDisplayOptions,
 } from './pivot.js';
 import { SLICER_STYLES, SLICER_STYLE_GROUPS, slicerStyleName, slicerColors, CUSTOM_KEYS } from './slicerstyle.js';
 import { server, createVaultKey, validVaultKey } from './storage.js';
@@ -425,6 +425,7 @@ function quickAnalysis() {
   pop.style.left = `${Math.max(8, Math.min(innerWidth - 470, vb.left + rc.x + rc.w - 20))}px`;
   pop.style.top = `${Math.min(innerHeight - 190, vb.top + rc.y + rc.h + 6)}px`;
   document.body.append(pop);
+  registerAccessKeyScope(pop, { owner: null, onClose: () => off({ target: document.body }) });
   show(0);
   const off = (e) => { if (!pop.contains(e.target)) { pop.remove(); document.removeEventListener('mousedown', off, true); document.removeEventListener('keydown', esc, true); } };
   const esc = (e) => { if (e.key === 'Escape') { pop.remove(); document.removeEventListener('mousedown', off, true); document.removeEventListener('keydown', esc, true); } };
@@ -791,6 +792,7 @@ function showFinalBar() {
   if (row) row.before(bar); else document.body.prepend(bar);
 }
 function startEdit(mode, text = null, { fromBar = false, caret = null } = {}) {
+  shortcutInputGuard = false;
   if (viewOnly) { toast('읽기 전용 문서입니다. [편집용 사본 만들기]를 누르면 고칠 수 있습니다.'); return; }
   if (wb.props?.markedFinal) { finalNotice(); return; }
   if (editing) return;
@@ -1727,6 +1729,11 @@ function onViewMouseDown(e) {
   if (e.target === dom.editor || dom.ac.contains(e.target)) return;
   closeMenus();
   const t = e.target;
+  if (t.closest('.pv-classic-field, .pv-classic-zone')) {
+    e.stopPropagation();
+    if (editing && !commitEdit()) e.preventDefault();
+    return;
+  }
   if (t.classList.contains('olb') || t.classList.contains('olv')) {
     // 개요: 그룹 +/− 단추, 수준 단추
     e.preventDefault();
@@ -7643,8 +7650,8 @@ function pivotOptionsDialog(entry = pivotHere(), startTab = 0) {
     emptyShow: def.emptyShow !== false, emptyText: def.missingCaption ?? '',
     autofit: def.autofit !== false, preserveFormat: def.preserveFormat !== false,
     grandRows: def.grandRows !== false, grandCols: def.grandCols !== false, subtotalHidden: !!def.subtotalHidden, multiFilters: !!def.multiFilters, customListSort: def.customListSort !== false,
-    showExpand: def.showExpand !== false, tooltips: def.tooltips !== false, fieldCaptions: def.fieldCaptions !== false, classic: !!def.classic, emptyRowsItems: !!def.showEmptyRows, emptyColsItems: !!def.showEmptyCols,
-    showValuesRow: !!def.showValuesRow, sortAZ: def.fieldListSort === 'az',
+    showExpand: def.showExpand !== false, tooltips: def.tooltips !== false, fieldCaptions: def.fieldCaptions !== false, classic: pivotDisplayOptions(def).classic, emptyRowsItems: !!def.showEmptyRows, emptyColsItems: !!def.showEmptyCols,
+    showValuesRow: pivotDisplayOptions(def).showValuesRow, sortAZ: def.fieldListSort === 'az',
     printExpand: !!def.printExpand, printTitles: !!def.printTitles,
     autoRefresh: !!def.autoRefresh, saveData: def.saveData !== false, refreshOnOpen: !!def.refreshOnOpen, missingItems: def.missingItems ?? 'auto', enableDrill: def.enableDrill !== false,
     altTitle: def.altTitle ?? '', altDesc: def.altDesc ?? '',
@@ -7692,8 +7699,9 @@ function pivotOptionsDialog(entry = pivotHere(), startTab = 0) {
           errorShow: v.errorShow, errorCaption: v.errorText, emptyShow: v.emptyShow ? undefined : false, missingCaption: v.emptyShow && v.emptyText ? v.emptyText : undefined,
           autofit: v.autofit ? undefined : false, preserveFormat: v.preserveFormat ? undefined : false,
           grandRows: v.grandRows, grandCols: v.grandCols, subtotalHidden: v.subtotalHidden || undefined, multiFilters: v.multiFilters || undefined, customListSort: v.customListSort ? undefined : false,
-          showExpand: v.showExpand ? undefined : false, tooltips: v.tooltips ? undefined : false, fieldCaptions: v.fieldCaptions ? undefined : false, classic: v.classic || undefined,
-          showEmptyRows: v.emptyRowsItems || undefined, showEmptyCols: v.emptyColsItems || undefined, showValuesRow: v.showValuesRow || undefined, fieldListSort: v.sortAZ ? 'az' : undefined,
+          showExpand: v.showExpand ? undefined : false, tooltips: v.tooltips ? undefined : false, fieldCaptions: v.fieldCaptions ? undefined : false, classic: v.classic,
+          ...(v.classic && !pivotDisplayOptions(def).classic ? { layout: 'tabular' } : {}),
+          showEmptyRows: v.emptyRowsItems || undefined, showEmptyCols: v.emptyColsItems || undefined, showValuesRow: v.showValuesRow, valuesHeadRow: undefined, fieldListSort: v.sortAZ ? 'az' : undefined,
           printExpand: v.printExpand || undefined, printTitles: v.printTitles || undefined, autoRefresh: v.autoRefresh || undefined, saveData: v.saveData ? undefined : false, refreshOnOpen: v.refreshOnOpen || undefined,
           missingItems: v.missingItems === 'auto' ? undefined : v.missingItems, enableDrill: v.enableDrill ? undefined : false,
           altTitle: v.altTitle || undefined, altDesc: v.altDesc || undefined,
@@ -7989,6 +7997,19 @@ const KEYTIP_TABS = { h: 'home', n: 'insert', p: 'layout', m: 'formulas', a: 'da
 const KEYTIP_GROUPS = { wv: '표시', wf: '틀 고정', hb: '테두리', ho: '서식', hm: '병합', he: '지우기', hv: '붙여넣기', ha: '맞춤', hl: '조건부 서식', hi: '삽입', hd: '삭제', hf: '글꼴 · 서식 복사', as: '정렬 · 빠른 채우기', av: '데이터 유효성 검사', af: '가져오기', ps: '페이지 설정' };
 let keytip = null; // { seq, held, clean }
 let keytipMenu = null;
+// IME may dispatch composition/input after a shortcut's terminal key closes KeyTips.
+// Keep the guard until a new input gesture, never discard normal typing by timeout.
+let shortcutInputGuard = false;
+function armShortcutInputGuard() {
+  shortcutInputGuard = true;
+  if (!editing) { dom.editor.value = ''; pendingKey = null; }
+}
+function blockShortcutInput(e) {
+  if (editing || !(keytip || shortcutInputGuard)) return false;
+  if (e.cancelable) e.preventDefault();
+  dom.editor.value = ''; pendingKey = null;
+  return true;
+}
 const KEYTIP_MENU_ANCHORS = { hb: 'borders', he: 'clear', hm: 'merge', hv: 'paste', ho: 'format', hl: 'condFormat', hi: 'insert', hd: 'delete', wf: 'freeze', av: 'validation' };
 const KEYTIP_COMMAND_ALIASES = { tableStyleKey: 'tableStyle', condMenuKey: 'condFormat', shapesMenu: 'shapes', pasteValuesKey: 'paste' };
 
@@ -8074,6 +8095,7 @@ function showKeytipMenu(seq) {
 
 function showKeytip() {
   if (!keytip) return;
+  armShortcutInputGuard();
   closeKeytipMenu();
   const seq = keytip.seq;
   document.body.classList.add('keytips');
@@ -8090,6 +8112,7 @@ function showKeytip() {
 
 function endKeytip() {
   if (!keytip) return;
+  armShortcutInputGuard();
   keytip = null;
   document.body.classList.remove('keytips');
   delete document.body.dataset.keytipSequence;
@@ -8101,6 +8124,7 @@ function endKeytip() {
 
 /** 반환 true 면 키를 처리함. 키보드의 물리 code를 사용해 한글 입력 상태에서도 동일하게 동작합니다. */
 function handleKeytipKey(e) {
+  if (e.defaultPrevented || e.target?.closest?.('.dialog')) return false;
   if (e.getModifierState?.('AltGraph') || e.ctrlKey || e.metaKey) {
     if (keytip) endKeytip();
     return false;
@@ -9996,9 +10020,16 @@ function writePivot(targetSi, def, { autofit = true } = {}) {
       const extra = cellFmt[cd.role];
       wb.setCellData(targetSi, rr, cc, { raw: cd.raw, style: extra ? mergeFmt(cd.style, extra) : cd.style, ...(cd.image ? { image: cd.image } : {}) });
       // 필터 단추: 행 레이블 머리글, 열 레이블 머리글, 보고서 필터 값
-      if (cd.role === 'rowHead:0' && d.rows.length) btns.push({ r: rr, c: cc, kind: 'rows' });
+      if (cd.role === 'rowHead:0' && d.rows.length) btns.push({ r: rr, c: cc, kind: 'rows', ...(d.layout !== 'compact' ? { field: d.rows[0] } : {}) });
       else if (/^rowHead:\d+$/.test(cd.role) && d.layout !== 'compact' && d.rows[+cd.role.split(':')[1]]) btns.push({ r: rr, c: cc, kind: 'rows', field: d.rows[+cd.role.split(':')[1]] });
-      else if (cd.role === 'colHead' && cd.raw) btns.push({ r: rr, c: cc, kind: 'cols' });
+      else if (d.valuesOnRows && d.values.length > 1 && cd.role === `rowHead:${d.rows.length}`) btns.push({ r: rr, c: cc, kind: 'rows', sigma: true });
+      else if (cd.role === 'colHead' && cd.raw) {
+        const level = c - pm.labelCols, multi = d.values.length > 1 && !d.valuesOnRows;
+        const vp = multi ? Math.min(d.cols.length, d.valuesPos ?? d.cols.length) : -1;
+        const sigma = multi && (!d.cols.length || d.layout !== 'compact' && level === vp);
+        const field = d.layout !== 'compact' && !sigma ? d.cols[vp >= 0 && level > vp ? level - 1 : level] : null;
+        btns.push({ r: rr, c: cc, kind: 'cols', ...(field ? { field } : {}), ...(sigma ? { sigma: true } : {}) });
+      }
       else if (cd.role === 'pageValue') btns.push({ r: rr, c: cc, kind: 'page', field: d.pages[r] });
       if (cd.toggle) btns.push({ r: rr, c: cc, kind: 'toggle', field: cd.toggle.field, item: cd.toggle.item, collapsed: cd.toggle.collapsed });
     }
@@ -10403,6 +10434,95 @@ let pivotPaneOpen = true;
 let pivotPaneKey = '';
 let pivotDrag = null;
 
+/** 클래식 격자의 필드 이동도 기존 피벗 계산/실행 취소 경로를 사용한다. */
+function moveClassicPivotField(entry, dragged, area) {
+  if (!entry || entry.si !== si || !entry.def.classic || viewOnly || isProtected(sheet())) return;
+  if (pivotDefs().find((item) => item.prop === entry.prop && item.index === entry.index)?.def !== entry.def) return;
+  const def = pivotDefV2(entry.def), source = pivotSource(def);
+  if (!source || !['pages', 'rows', 'cols', 'values'].includes(area)) return;
+  if (dragged.sigma) {
+    if (def.values.length < 2) return;
+    if (!['rows', 'cols'].includes(area)) { toast('Σ 값은 행 · 열 영역에만 둘 수 있습니다.'); return; }
+    setPivotDef(entry, { ...def, valuesOnRows: area === 'rows', valuesPos: undefined });
+    refreshPivotPane(true); return;
+  }
+  const field = dragged.name;
+  if (!pivotFieldNames(source, def).includes(field)) return;
+  if (dragged.from === 'values' && def.values[dragged.index]?.field !== field) return;
+  if (dragged.from && dragged.from !== 'values' && !(def[dragged.from] ?? []).includes(field)) return;
+  if (area !== 'values' && (def.calcFields ?? []).some((f) => f.name === field)) { toast('계산 필드는 값 영역에만 넣을 수 있습니다.'); return; }
+  const next = { ...def, rows: [...(def.rows ?? [])], cols: [...(def.cols ?? [])], pages: [...(def.pages ?? [])], values: def.values.map((v) => ({ ...v })) };
+  let value = null;
+  if (dragged.from === 'values') value = next.values.splice(dragged.index, 1)[0];
+  else if (dragged.from && Array.isArray(next[dragged.from])) next[dragged.from] = next[dragged.from].filter((f) => f !== field);
+  if (area === 'values') {
+    const index = pivotFieldNames(source, def).indexOf(field), col = source.cube.col(index);
+    let numeric = (def.calcFields ?? []).some((f) => f.name === field);
+    for (let i = 0; col && !numeric && i < Math.min(col.n, 200); i++) numeric = typeof col.get(i) === 'number';
+    next.values.push(value ?? { field, agg: numeric ? 'sum' : 'count' });
+  } else {
+    for (const key of ['rows', 'cols', 'pages']) next[key] = next[key].filter((f) => f !== field);
+    next[area].push(field);
+  }
+  if (def.valuesPos != null) {
+    const before = new Set(def.cols.slice(0, def.valuesPos));
+    next.valuesPos = next.cols.filter((f) => before.has(f)).length;
+    if (next.valuesPos >= next.cols.length) delete next.valuesPos;
+  }
+  setPivotDef(entry, next);
+  refreshPivotPane(true);
+}
+
+function bindClassicPivotGrid() {
+  const wrap = $('gridWrap');
+  const identity = (entry) => `${entry.si}:${entry.prop}:${entry.index}`;
+  const reset = () => { pivotDrag = null; document.body.classList.remove('pivot-grid-dragging'); wrap.querySelectorAll('.pv-classic-zone.over').forEach((n) => n.classList.remove('over')); };
+  wrap.addEventListener('dragstart', (e) => {
+    const target = e.target.closest?.('.pv-classic-field');
+    if (target) {
+      const entry = pivotDefs()[Number(target.dataset.p)];
+      if (!entry?.def.classic || viewOnly || isProtected(sheet())) { e.preventDefault(); return; }
+      pivotDrag = { name: target.dataset.f, sigma: target.dataset.sigma === 'true', from: target.dataset.area, identity: identity(entry), def: entry.def, book: wb };
+      e.dataTransfer.setData('text/plain', target.dataset.f);
+    } else if (e.target.closest?.('#pivotPane') && pivotDrag) {
+      if (viewOnly || isProtected(sheet())) { e.preventDefault(); reset(); return; }
+      pivotDrag.identity = $('pivotPane').dataset.pivotIdentity; pivotDrag.book = wb;
+      pivotDrag.def = pivotDefs().find((entry) => identity(entry) === pivotDrag.identity)?.def;
+    } else return;
+    document.body.classList.add('pivot-grid-dragging');
+  });
+  wrap.addEventListener('dragover', (e) => {
+    const zone = e.target.closest?.('.pv-classic-zone');
+    if (!zone || !pivotDrag) return;
+    const entry = pivotDefs()[Number(zone.dataset.p)];
+    if (!entry || viewOnly || isProtected(sheet()) || pivotDrag.book !== wb || pivotDrag.identity !== identity(entry) || pivotDrag.def !== entry.def) return;
+    e.preventDefault(); zone.classList.add('over'); e.dataTransfer.dropEffect = 'move';
+  });
+  wrap.addEventListener('dragleave', (e) => e.target.closest?.('.pv-classic-zone')?.classList.remove('over'));
+  wrap.addEventListener('drop', (e) => {
+    const zone = e.target.closest?.('.pv-classic-zone'), dragged = pivotDrag;
+    if (!zone || !dragged) return;
+    e.preventDefault(); e.stopPropagation();
+    const entry = pivotDefs()[Number(zone.dataset.p)];
+    reset();
+    if (entry && dragged.book === wb && dragged.identity === identity(entry) && dragged.def === entry.def) moveClassicPivotField(entry, dragged, zone.dataset.area);
+  });
+  document.addEventListener('dragend', reset);
+  wrap.addEventListener('click', (e) => {
+    const target = e.target.closest?.('.pv-classic-field');
+    if (!target) return;
+    e.preventDefault(); e.stopPropagation();
+    const entry = pivotDefs()[Number(target.dataset.p)];
+    if (!entry || viewOnly || isProtected(sheet())) return;
+    const book = wb;
+    openMenu(target, [['rows', '행 영역으로 이동', 'r'], ['cols', '열 영역으로 이동', 'c'], ['pages', '필터 영역으로 이동', 'f'], ['values', '값 영역으로 이동', 'v']].map(([area, label, accessKey]) => ({
+      label, accessKey, disabled: area === target.dataset.area || target.dataset.sigma === 'true' && !['rows', 'cols'].includes(area),
+      action: () => { if (book === wb) moveClassicPivotField(entry, { name: target.dataset.f, sigma: target.dataset.sigma === 'true', from: target.dataset.area }, area); },
+    })));
+  });
+}
+
+
 function pivotPaneEl() {
   let pane = document.getElementById('pivotPane');
   if (!pane) {
@@ -10431,6 +10551,8 @@ function refreshPivotPane(force = false) {
 }
 
 function renderPivotPane(entry) {
+  const book = wb;
+  const canApply = () => book === wb && entry.si === si && !viewOnly && !isProtected(sheet()) && pivotDefs().find((item) => item.prop === entry.prop && item.index === entry.index)?.def === entry.def;
   const pane = pivotPaneEl();
   const identity = `${si}:${entry.prop}:${entry.index}`;
   if (pane.dataset.pivotIdentity !== identity) pane.dataset.fieldSearch = '';
@@ -10452,6 +10574,7 @@ function renderPivotPane(entry) {
     return false;
   };
   const apply = (patch) => {
+    if (!canApply()) return;
     const focusedField = document.activeElement?.dataset.pivotField;
     const searchFocused = document.activeElement === pane.querySelector('.pp-search');
     const next = { ...def, ...patch };
@@ -10666,7 +10789,8 @@ function renderPivotPane(entry) {
       box.classList.remove('over');
       const dr = pivotDrag;
       pivotDrag = null;
-      if (!dr) return;
+      document.body.classList.remove('pivot-grid-dragging');
+      if (!dr || !canApply() || dr.book !== wb || dr.identity !== identity || dr.def !== entry.def) return;
       const rows = [...box.querySelectorAll('.pp-item')];
       let at = rows.findIndex((r) => e.clientY < r.getBoundingClientRect().top + r.offsetHeight / 2);
       if (at < 0) at = rows.length;
@@ -11808,15 +11932,15 @@ let findDlg = null;
 function openFindDialog(tab = 'find') {
   if (findDlg) findDlg.close();
   const sel0 = displayText(active.r, active.c);
-  const findInput = el('input', { type: 'text', value: findState.text || (sel0 && sel0.length < 60 ? sel0 : '') });
-  const replInput = el('input', { type: 'text', value: findState.replace });
-  const caseBox = el('input', { type: 'checkbox', checked: findState.matchCase });
-  const wholeBox = el('input', { type: 'checkbox', checked: findState.whole });
-  const regexBox = el('input', { type: 'checkbox', checked: findState.regex });
-  const byteBox = el('input', { type: 'checkbox', checked: !!findState.matchByte });
-  const scopeSel = el('select', {}, el('option', { value: 'sheet' }, '시트'), el('option', { value: 'book' }, '통합 문서'));
-  const orderSel = el('select', {}, el('option', { value: 'rows' }, '행'), el('option', { value: 'cols' }, '열'));
-  const lookSel = el('select', {});
+  const findInput = el('input', { type: 'text', 'aria-label': '찾을 내용', 'data-access-key': 'n', value: findState.text || (sel0 && sel0.length < 60 ? sel0 : '') });
+  const replInput = el('input', { type: 'text', 'aria-label': '바꿀 내용', 'data-access-key': 'e', value: findState.replace });
+  const caseBox = el('input', { type: 'checkbox', 'data-access-key': 'c', checked: findState.matchCase });
+  const wholeBox = el('input', { type: 'checkbox', 'data-access-key': 'o', checked: findState.whole });
+  const regexBox = el('input', { type: 'checkbox', 'data-access-key': 'x', checked: findState.regex });
+  const byteBox = el('input', { type: 'checkbox', 'data-access-key': 'b', checked: !!findState.matchByte });
+  const scopeSel = el('select', { 'data-access-key': 'h' }, el('option', { value: 'sheet' }, '시트'), el('option', { value: 'book' }, '통합 문서'));
+  const orderSel = el('select', { 'data-access-key': 's' }, el('option', { value: 'rows' }, '행'), el('option', { value: 'cols' }, '열'));
+  const lookSel = el('select', { 'data-access-key': 'l' });
   scopeSel.value = findState.scope;
   orderSel.value = findState.byCols ? 'cols' : 'rows';
   const status = el('div', { class: 'find-status' });
@@ -11833,7 +11957,7 @@ function openFindDialog(tab = 'find') {
   });
   const drawFmt = () => {
     const fmtBtn = (kind) => el('button', {
-      class: 'btn fmt-btn', title: '서식으로 찾기 / 바꾸기',
+      class: 'btn fmt-btn', title: '서식으로 찾기 / 바꾸기', 'data-access-key': kind === 'find' ? 'm' : 'u',
       onclick: () => findFormatDialog(kind === 'find' ? '찾을 서식' : '바꿀 서식', kind === 'find' ? findState.format : findState.replaceFormat, (f) => {
         if (kind === 'find') findState.format = f; else findState.replaceFormat = f;
         drawFmt();
@@ -11857,7 +11981,7 @@ function openFindDialog(tab = 'find') {
     optBtn.textContent = findState.options ? '옵션 <<' : '옵션 >>';
     drawFmt();
   };
-  const optBtn = el('button', { class: 'btn', onclick: () => { findState.options = !findState.options; drawOpts(); } }, '옵션 >>');
+  const optBtn = el('button', { class: 'btn', 'data-access-key': 't', onclick: () => { findState.options = !findState.options; drawOpts(); } }, '옵션 >>');
   const drawTabs = () => {
     tabs.replaceChildren(...[['find', '찾기'], ['replace', '바꾸기']].map(([k, l]) => el('button', { class: mode === k ? 'on' : '', onclick: () => { mode = k; draw(); } }, l)));
   };
@@ -11887,7 +12011,7 @@ function openFindDialog(tab = 'find') {
     btnRow.replaceChildren(
       ...(mode === 'replace' ? [
         el('button', {
-          class: 'btn', onclick: () => {
+          class: 'btn', 'data-access-key': 'a', onclick: () => {
             sync();
             if (!findState.text && !findState.format) return;
             const list = findAllMatches('formulas');
@@ -11900,7 +12024,7 @@ function openFindDialog(tab = 'find') {
           },
         }, '모두 바꾸기'),
         el('button', {
-          class: 'btn', onclick: () => {
+          class: 'btn', 'data-access-key': 'r', onclick: () => {
             sync();
             const list = findAllMatches('formulas');
             const here = list.some((m) => m.si === si && m.r === active.r && m.c === active.c);
@@ -11910,10 +12034,10 @@ function openFindDialog(tab = 'find') {
           },
         }, '바꾸기'),
       ] : []),
-      el('button', { class: 'btn', onclick: () => listAll() }, '모두 찾기'),
-      el('button', { class: 'btn', title: 'Shift+Enter', onclick: () => { sync(); status.textContent = ''; findNext(findState.text, { back: true }); } }, '이전 찾기'),
-      el('button', { class: 'btn primary', title: 'Enter', onclick: () => { sync(); status.textContent = ''; findNext(); } }, '다음 찾기'),
-      el('button', { class: 'btn', onclick: () => findDlg?.close() }, '닫기'),
+      el('button', { class: 'btn', 'data-access-key': 'i', onclick: () => listAll() }, '모두 찾기'),
+      el('button', { class: 'btn', 'data-access-key': 'v', title: 'Shift+Enter', onclick: () => { sync(); status.textContent = ''; findNext(findState.text, { back: true }); } }, '이전 찾기'),
+      el('button', { class: 'btn primary', 'data-access-key': 'f', title: 'Enter', onclick: () => { sync(); status.textContent = ''; findNext(); } }, '다음 찾기'),
+      el('button', { class: 'btn', 'data-access-key': 'd', onclick: () => findDlg?.close() }, '닫기'),
     );
   };
   body.append(tabs,
@@ -13766,6 +13890,7 @@ function openBackstage(panel = 'new') {
   const stage = el('div', { class: 'backstage wixel-hub', role: 'region', 'aria-label': 'WIXEL 시작 화면' }, nav, main);
   stage.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !isDialogOpen()) { e.stopPropagation(); close(); } });
   document.body.append(stage);
+  registerAccessKeyScope(stage, { owner: null, onClose: close });
   const pages = { new: showNew, open: showOpen, info: showInfo, storage: showStorage, share: showShare, templates: showTemplates };
   activate(pages[panel] ? panel : 'new', pages[panel] ?? showNew);
   nav.querySelector(`[data-page="${panel}"]`)?.focus();
@@ -14194,6 +14319,7 @@ function formatCellsDialog(startTab = 0, find = null) {
         return b;
       }))));
     document.body.append(pop);
+    registerAccessKeyScope(pop, { owner: patBtn.closest('.dialog'), onClose: () => { off({ target: document.body }); patBtn.focus(); } });
     const off = (ev) => { if (!pop.contains(ev.target)) { pop.remove(); document.removeEventListener('mousedown', off, true); } };
     setTimeout(() => document.addEventListener('mousedown', off, true), 0);
   });
@@ -14298,11 +14424,11 @@ function formatCellsDialog(startTab = 0, find = null) {
         const f = {};
         for (const k of FIND_FORMAT_KEYS) if (cs[k] !== undefined && cs[k] !== false && cs[k] !== null) f[k] = cs[k];
         for (const k of ['bold', 'italic', 'underline']) f[k] = !!cs[k];
-        dlg.close();
         find.done(f);
+        dlg.close();
       },
     }, '셀에서 서식 선택(A)...'));
-    foot.prepend(el('button', { class: 'btn', onclick: () => { dlg.close(); find.done(null); } }, '지우기(R)'));
+    foot.prepend(el('button', { class: 'btn', onclick: () => { find.done(null); dlg.close(); } }, '지우기(R)'));
     return;
   }
   openDialog({
@@ -16672,6 +16798,9 @@ const NO_COMMIT = new Set(['toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100', 'shor
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['피벗 표시·이동', ['클래식 레이아웃의 표 안 필드 이동 · 값 행 표시 옵션 반영', '행·열·필터·값 영역 끌어 놓기와 실행 취소 · XLSX 표시 옵션 보존']],
+  ['팝업 접근키', ['찾기·바꾸기 Alt+A 모두 바꾸기 · Alt+D 닫기 · 서식 하위 창 포커스 복원', '대화상자·하위 메뉴·빠른 분석·파일 화면의 Alt 키 배지와 키보드 선택']],
+  ['한글 단축키', ['Alt → W → V → G 뒤 지연된 한글 조합 문자가 셀에 남는 문제 수정', '다음 정상 한글·영문 입력 보존']],
   ['파일 저장 창', ['저장 버튼·Ctrl+S·내보내기는 매번 파일 이름과 폴더 선택', '열어 둔 원본에 바로 덮어쓰지 않음 · 취소 시 이름과 파일 유지 · 셀 편집 중 Ctrl+S 지원']],
   ['저장 실패 보호', ['대용량 브라우저 저장을 세대별 원자 저장으로 전환 · 강제 종료와 용량 부족 시 이전 저장본 유지', '복원 전 현재 문서 보관 성공 확인 · 온라인 저장 중 문서 전환 뒤 자동 저장 재개']],
   ['피벗 정확성', ['계산 필드의 음수 반올림·오류 전파·인수 검사와 오류 항목 필터 보완', '다른 시트의 원본 수식 변경도 자동 새로 고침에 반영']],
@@ -16825,7 +16954,7 @@ function run(cmd, arg) {
     reportError(err, cmd);
   }
   if (REPEATABLE.has(cmd)) lastRepeat = () => COMMANDS[cmd](arg);
-  focusGrid();
+  if (!document.activeElement?.closest('.dialog')) focusGrid();
 }
 
 function restoreMeta(m) {
@@ -17004,6 +17133,8 @@ function bindEvents() {
   ed.addEventListener('keydown', onEditorKeyDown);
   document.addEventListener('keyup', handleKeytipUp);
   document.addEventListener('keydown', (e) => {
+    // A fresh physical key starts a new editing gesture. Delayed keyup does not.
+    if (!keytip && shortcutInputGuard && !e.defaultPrevented && !e.repeat && !['Alt', 'Control', 'Meta', 'Shift', 'CapsLock'].includes(e.key)) shortcutInputGuard = false;
     if (keytip && !editing && !isDialogOpen() && !document.querySelector('.backstage')) {
       if (handleKeytipKey(e)) { e.stopPropagation(); return; }
       if (keytipMenu?.contains(e.target)) return;
@@ -17012,7 +17143,12 @@ function bindEvents() {
     if (e.target instanceof Element && e.target.matches('input, textarea, select, [contenteditable]')) return;
     if (handleKeytipKey(e)) e.stopPropagation();
   }, true);
-  document.addEventListener('mousedown', (e) => { if (!e.target.closest?.('.keytip-badges, .keytip-command-menu')) endKeytip(); }, true);
+  document.addEventListener('mousedown', (e) => {
+    if (!e.target.closest?.('.keytip-badges, .keytip-command-menu')) {
+      endKeytip();
+      if (e.target === ed || dom.view.contains(e.target)) shortcutInputGuard = false;
+    }
+  }, true);
   $('ribbon').addEventListener('scroll', () => { if (keytip) drawKeytipBadges(); });
   window.addEventListener('resize', () => { if (keytip) showKeytip(); });
   window.addEventListener('blur', endKeytip);
@@ -17022,9 +17158,11 @@ function bindEvents() {
     ed.value = '';
     if (v && sheet().shapes?.some((x) => x.id === chartSel)) shapeDialog(chartSel, v);
   };
-  ed.addEventListener('compositionstart', () => { if (!editing && !chartSel && !keytip) beginTyping(); });
-  ed.addEventListener('compositionend', () => {
-    if (!editing && keytip) { ed.value = ''; return; }
+  ed.addEventListener('beforeinput', blockShortcutInput);
+  ed.addEventListener('compositionupdate', blockShortcutInput);
+  ed.addEventListener('compositionstart', (e) => { if (blockShortcutInput(e)) return; if (!editing && !chartSel) beginTyping(); });
+  ed.addEventListener('compositionend', (e) => {
+    if (blockShortcutInput(e)) return;
     if (!editing && chartSel) { objectTyped(); return; }
     const k = pendingKey;
     if (!k) return;
@@ -17035,7 +17173,7 @@ function bindEvents() {
     }, 30);
   });
   ed.addEventListener('input', (e) => {
-    if (!editing && keytip) { if (!e.isComposing) ed.value = ''; return; }
+    if (blockShortcutInput(e)) return;
     if (!editing && chartSel) { if (!e.isComposing) objectTyped(); return; }
     if (!editing) beginTyping();
     if (!editing) return;
@@ -17044,7 +17182,10 @@ function bindEvents() {
     dom.formula.value = ed.value;
     afterEditInput();
   });
-  ed.addEventListener('compositionend', () => setTimeout(() => { if (editing && cellAutoComplete()) { dom.formula.value = ed.value; afterEditInput(); } }));
+  ed.addEventListener('compositionend', (e) => {
+    if (blockShortcutInput(e)) return;
+    setTimeout(() => { if (editing && cellAutoComplete()) { dom.formula.value = ed.value; afterEditInput(); } });
+  });
   ed.addEventListener('mousedown', (e) => {
     e.stopPropagation();
     if (editing) { editing.mode = 'edit'; editing.point = null; setTimeout(afterCaretMove); }
@@ -17068,6 +17209,7 @@ function bindEvents() {
   dom.fxEnter.addEventListener('mousedown', (e) => { e.preventDefault(); commitEdit(); });
   $('fxInsert').addEventListener('mousedown', (e) => { e.preventDefault(); run('insertFunction'); });
 
+  bindClassicPivotGrid();
   dom.view.addEventListener('mousedown', onViewMouseDown);
   dom.view.addEventListener('dblclick', onViewDblClick);
   dom.view.addEventListener('mousemove', onViewMouseMove);
@@ -17208,6 +17350,7 @@ function bindEvents() {
     if (e.altKey && (e.key === 'q' || e.key === 'Q') && e.target === dom.editor && !editing) { e.preventDefault(); dom.search.focus(); }
   }, true);
 
+  setAccessKeyHandler(() => { endKeytip(); armShortcutInputGuard(); });
   setMenuCloseHandler(focusGrid);
   setDialogCloseHandler(focusGrid);
   window.addEventListener('beforeunload', (e) => {

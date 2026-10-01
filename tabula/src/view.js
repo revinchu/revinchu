@@ -749,6 +749,19 @@ export class GridView {
     }
     // 피벗 테이블 필터 단추 (행 레이블 · 열 레이블 · 보고서 필터)
     [sheet.pivot, ...(sheet.pivotsExtra ?? [])].filter(Boolean).forEach((pd, pi) => {
+      const area = pd.area;
+      if (pd.classic && area && area.r1 <= r2 && area.r2 >= r1 && area.c1 <= c2 && area.c2 >= c1) {
+        const x = cols.pos(area.c1) - p.ox, y = rows.pos(area.r1) - p.oy;
+        const width = cols.pos(area.c2 + 1) - cols.pos(area.c1), height = rows.pos(area.r2 + 1) - rows.pos(area.r1);
+        html.push(`<div class="pv-classic-frame" aria-hidden="true" style="left:${x}px;top:${y}px;width:${width}px;height:${height}px"></div>`);
+        if (!st.readonly) {
+          const labels = [['pages', '필터'], ['cols', '열'], ['rows', '행'], ['values', '값']];
+          // 드래그 시작 버튼을 덮으면 Chromium의 네이티브 dragstart가 중단될 수 있다.
+          const visibleTop = (p.scrollY ? this.frozenH + this.sy : 0) - p.oy, paneHeight = this.paneRects()[p.id].h;
+          const zoneTop = y >= visibleTop + 28 ? y - 26 : Math.max(visibleTop, Math.min(y + height + 4, visibleTop + paneHeight - 26));
+          html.push(`<div class="pv-classic-zones" style="left:${x}px;top:${zoneTop}px;width:${Math.max(width, 240)}px;height:24px">${labels.map(([kind, label]) => `<div class="pv-classic-zone" data-p="${pi}" data-area="${kind}">${label}에 놓기</div>`).join('')}</div>`);
+        }
+      }
       if (!pd.buttons) return;
       const filtered = (field) => !!(field && (pd.filters?.[field] || pd.fieldFilters?.[field]));
       for (const b of pd.buttons) {
@@ -759,8 +772,13 @@ export class GridView {
           continue;
         }
         if (b.r < r1 || b.r > r2 || b.c < c1 || b.c > c2 || !cols.size(b.c) || !rows.size(b.r)) continue;
-        const fields = b.field ? [b.field] : b.kind === 'rows' ? pd.rows ?? [] : b.kind === 'cols' ? pd.cols ?? [] : [];
+        const fields = b.sigma ? [] : b.field ? [b.field] : b.kind === 'rows' ? pd.rows ?? [] : b.kind === 'cols' ? pd.cols ?? [] : [];
         const on = fields.some(filtered) || (b.kind !== 'page' && fields.some((f) => pd.sort?.[f]));
+        if (pd.classic && pd.fieldCaptions !== false && (fields.length || b.sigma) && !st.readonly) {
+          const dragFields = b.sigma ? ['Σ 값'] : fields;
+          const width = Math.max(20, (cols.size(b.c) - 20) / dragFields.length), height = Math.max(12, rows.size(b.r) - 2);
+          dragFields.forEach((field, i) => html.push(`<button type="button" class="pv-classic-field" draggable="true" data-sigma="${!!b.sigma}" data-p="${pi}" data-f="${esc(field)}" data-area="${b.kind === 'page' ? 'pages' : b.kind}" title="${esc(field)}: 끌어서 영역 이동 · 클릭하여 이동 메뉴" aria-label="${esc(field)} 피벗 필드 이동" style="left:${cols.pos(b.c) - p.ox + width * i}px;top:${rows.pos(b.r) - p.oy + 1}px;width:${width}px;height:${height}px">${esc(field)}</button>`));
+        }
         html.push(`<div class="fbtn pbtn${on ? ' on' : ''}" data-p="${pi}" data-k="${b.kind}" data-f="${esc(b.field ?? '')}" title="${on ? '필터 적용됨' : '필터'}" style="left:${cols.pos(b.c + 1) - 18 - p.ox}px;top:${rows.pos(b.r + 1) - 18 - p.oy}px"></div>`);
       }
     });

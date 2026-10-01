@@ -537,6 +537,14 @@ function dateDef(def, date1904) {
   return { ...def, date1904: !!date1904, groups: Object.fromEntries(Object.entries(def.groups ?? {}).map(([k, v]) => [k, { ...v, date1904: !!date1904 }])) };
 }
 
+/** 표시 옵션은 독립 보존: 클래식 끌어 놓기는 Excel처럼 값 머리글을 강제로 표시한다. */
+export function pivotDisplayOptions(def) {
+  const classic = !!def.classic;
+  // valuesHeadRow는 이전 WIXEL 문서의 별칭. 명시적인 false를 덮어쓰면 안 된다.
+  const showValuesRow = !!(def.showValuesRow ?? def.valuesHeadRow ?? false);
+  return { classic, showValuesRow, valuesHeadRow: classic || showValuesRow };
+}
+
 export function normalizeDef(def, header) {
   const allHeader = [...header, ...(def.calcFields ?? []).map((c) => c.name).filter((n) => !header.some((h) => h.toLowerCase() === String(n).toLowerCase()))];
   const name = (i) => (i === null || i === undefined || i < 0 ? null : allHeader[i] ?? null);
@@ -592,7 +600,7 @@ export function normalizeDef(def, header) {
     colCaption: def.colCaption ?? null,
     ...(Number.isInteger(def.valuesPos) ? { valuesPos: def.valuesPos } : {}),
     ...(def.valuesOnRows ? { valuesOnRows: true } : {}), // Σ 값을 행 영역에 (엑셀 dataOnRows)
-    ...(def.valuesHeadRow ? { valuesHeadRow: true } : {}), // 클래식 레이아웃의 '값' 행
+    ...pivotDisplayOptions(def),
     ...(def.dataCaption ? { dataCaption: def.dataCaption } : {}), // 엑셀 dataCaption ('값' 대신 '데이터' 등)
     styleOpts: { rowHeaders: true, colHeaders: true, bandRows: false, bandCols: false, ...(def.styleOpts ?? {}) },
     header: allHeader,
@@ -1706,7 +1714,7 @@ export function computePivot(input, d) {
         : Array.from({ length: colLevels }, (_, lvl) => { const vLvl = colMulti ? vp : -1; return lvl === vLvl ? d.dataCaption ?? '값' : fcap(d.cols[vLvl >= 0 && lvl > vLvl ? lvl - 1 : lvl]); });
       grid.push([text(valueCaption, 'valueCaption'), ...Array(labelCols - 1).fill(null).map(() => text('', 'corner')), ...(colLeaves.length ? colLeaves.map((_, k) => text(caps[k] ?? '', 'colHead')) : [text(caps[0] ?? '', 'colHead')])]);
     }
-    // 클래식 레이아웃: 열 필드 없이 값 여러 개면 값 이름 위에 '값' 행 (첫 값 칸에만)
+    // 값 행 표시 또는 클래식 끌어 놓기: 열 필드 없이 값 여러 개면 값 이름 위에 '값' 행.
     if (!Lc && colMulti && d.valuesHeadRow) grid.push([...Array.from({ length: labelCols }, () => text('', 'corner')), ...colLeaves.map((_, k) => text(k ? '' : d.dataCaption ?? '값', 'colHead'))]);
     for (let lvl = 0; lvl < colLevels; lvl++) {
       const row = lvl === colLevels - 1 ? rowHeaderCells() : Array.from({ length: labelCols }, () => text('', 'corner'));
