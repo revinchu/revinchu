@@ -1639,3 +1639,285 @@ body.keytips #ribbon label[data-ribbon-command]:has(input[type="checkbox"]) { pa
 .sa-editor{display:flex;flex-direction:column;gap:10px;min-width:0}.sa-controls,.sa-toolbar{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.sa-controls label{display:flex;gap:5px;align-items:center}.sa-gallery{display:flex;gap:8px;overflow:auto;padding:4px;max-height:140px}.sa-layout{min-width:140px;width:140px;border:1px solid var(--line,#d4d4d4);background:var(--panel,#fff);padding:4px;cursor:pointer}.sa-layout>span{display:block}.sa-layout>span:first-child{height:82px}.sa-layout.on{outline:2px solid #217346}.sa-workarea{display:grid;grid-template-columns:minmax(220px,1fr) minmax(240px,2fr);gap:12px}.sa-text-list{max-height:285px;overflow:auto;padding:4px}.sa-text-row{display:flex;align-items:center;gap:4px;margin:4px 0;padding:2px}.sa-text-row.on{background:#e4f0e9}.sa-text-row textarea{width:100%;min-width:0;resize:vertical}.sa-preview{width:100%;aspect-ratio:560/300;align-self:center;background:white;overflow:hidden;border:1px solid #ddd}.sa-note{font-size:12px;line-height:1.5}.sa-picture{display:flex;gap:8px;align-items:center}.sa-editor .sa-toolbar .btn{font-size:12px;padding:3px 6px}@media(max-width:720px){.sa-workarea{grid-template-columns:1fr}.sa-text-list{max-height:160px}.sa-preview{max-height:230px}}
 
 .cell-note-visible{position:absolute;z-index:25;width:190px;min-height:64px;padding:8px;background:#fff9cf;border:1px solid #a99552;box-shadow:2px 3px 5px #0002;color:#252525;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.4 Arial,sans-serif;pointer-events:none}.cell-note-visible>b{display:block;margin-bottom:5px}
+
+/* 모바일 작업 모드: 원본 글자·격자 배율은 유지하고 앱 도구 영역만 재배치한다. */
+body.mobile-work-mode { --mobile-hit: 36px; }
+body.mobile-work-mode #app { width:100%; max-width:100%; height:var(--mobile-vh,100dvh); min-height:0; overflow:hidden; }
+body.mobile-work-mode .titlebar,
+body.mobile-work-mode .ribbon-tabs,
+body.mobile-work-mode .ribbon,
+body.mobile-work-mode .formula-row,
+body.mobile-work-mode .footer,
+body.mobile-work-mode .quick-access { zoom:1; min-width:0; max-width:100%; }
+body.mobile-work-mode .titlebar { display:flex; gap:6px; height:44px; min-height:44px; padding:2px 6px; }
+body.mobile-work-mode .tb-left { flex:0 0 auto; gap:2px; }
+body.mobile-work-mode .tb-brand { min-height:36px; padding:0 6px; font-size:13px; }
+body.mobile-work-mode .tb-center { flex:1 1 0; justify-content:flex-start; overflow:hidden; }
+body.mobile-work-mode .tb-title { width:100%; max-width:none; min-width:0; min-height:36px; line-height:30px; padding:3px 2px; font-size:13px; }
+body.mobile-work-mode .tb-title input { width:100%; min-width:0; font-size:16px; }
+body.mobile-work-mode .tb-search,
+body.mobile-work-mode .autosave,
+body.mobile-work-mode .avatar,
+body.mobile-work-mode .titlebar .save-state,
+body.mobile-work-mode .titlebar .quick-access { display:none; }
+body.mobile-work-mode .titlebar > button,
+body.mobile-work-mode .titlebar .tb-btn { flex-shrink:0; min-width:36px; width:36px; height:36px; }
+body.mobile-work-mode .ribbon-tabs { height:44px; padding:2px 4px 0; gap:2px; align-items:stretch; overflow-x:auto; overflow-y:hidden; flex-shrink:0; scrollbar-width:thin; overscroll-behavior-x:contain; touch-action:pan-x; }
+body.mobile-work-mode .ribbon-tab { flex:0 0 auto; height:38px; min-width:44px; padding:0 12px; font-size:14px; }
+body.mobile-work-mode .ribbon-tabs .spacer,
+body.mobile-work-mode .ribbon-action { display:none; }
+body.mobile-work-mode .ribbon { padding:4px 4px 0; min-height:0; max-width:100%; overflow-x:auto; overflow-y:hidden; overscroll-behavior-x:contain; touch-action:pan-x; scrollbar-width:thin; }
+body.mobile-work-mode .rgroup { flex-shrink:0; min-height:112px; padding:0 6px; }
+body.mobile-work-mode .rgroup:has(.rgroup-launcher) { padding-right:42px; }
+body.mobile-work-mode .rgroup-body { gap:4px; }
+body.mobile-work-mode .rgroup-label { height:22px; line-height:22px; font-size:12px; }
+body.mobile-work-mode .rgroup-launcher { width:36px; height:36px; bottom:2px; right:3px; font-size:15px; border-radius:4px; }
+body.mobile-work-mode .rcol { gap:2px; }
+body.mobile-work-mode .rrow { gap:2px; height:36px; }
+body.mobile-work-mode .rbtn { min-width:36px!important; min-height:36px; height:36px; font-size:13px; padding:0 6px; }
+body.mobile-work-mode .rbtn.medium { min-height:36px; height:36px; font-size:13px; }
+body.mobile-work-mode .rbtn.large { height:90px; min-height:90px; min-width:62px!important; padding:5px 7px; font-size:13px; justify-content:flex-start; }
+body.mobile-work-mode .rbtn.large .lbl { max-width:92px; }
+body.mobile-work-mode .rbtn.split .caret { min-width:36px; min-height:36px; justify-content:center; }
+body.mobile-work-mode .rbtn.large.split .caret { width:100%; min-height:30px; }
+body.mobile-work-mode .rselect,
+body.mobile-work-mode .rtext { height:36px; min-height:36px; font-size:16px; }
+body.mobile-work-mode .font-box { height:36px; }
+body.mobile-work-mode .font-box .rselect.font-family, body.mobile-work-mode .font-box .font-caret { height:36px; }
+body.mobile-work-mode .rselect.font-family { width:144px; }
+body.mobile-work-mode .rselect.font-size { width:62px; }
+body.mobile-work-mode .rselect.print-fit { min-width:84px; }
+body.mobile-work-mode .rbtn input[type=checkbox] { width:20px; height:20px; margin:0 3px 0 0; }
+body.mobile-work-mode .rbtn label { font-size:13px; }
+body.mobile-work-mode .quick-access.below { flex-wrap:nowrap; height:42px; min-height:42px; padding:1px 4px; gap:2px; overflow-x:auto; overflow-y:hidden; scrollbar-width:thin; overscroll-behavior-x:contain; touch-action:pan-x; }
+body.mobile-work-mode .quick-access.below .tb-btn { flex:0 0 38px; width:38px; height:36px; }
+body.mobile-work-mode .formula-row { height:44px; padding:3px 4px; gap:3px; }
+body.mobile-work-mode .formula-row .namebox { width:70px; }
+body.mobile-work-mode .namebox input { font-size:16px; }
+body.mobile-work-mode .namebox-caret { top:10px; }
+body.mobile-work-mode .fx-divider { display:none; }
+body.mobile-work-mode .fx-btn { flex:0 0 36px; width:36px; min-height:36px; }
+body.mobile-work-mode .fx-btn:disabled { display:none; }
+body.mobile-work-mode #formulaInput { font-size:16px; line-height:24px; padding:5px; }
+body.mobile-work-mode .formula-row.tall { height:80px; }
+body.mobile-work-mode .formula-row.tall #formulaInput { height:72px; }
+body.mobile-work-mode .grid-wrap { min-width:0; min-height:96px; }
+body.mobile-work-mode .footer { overflow:hidden; padding-bottom:env(safe-area-inset-bottom,0px); }
+body.mobile-work-mode .sheetbar { height:42px; padding-left:2px; }
+body.mobile-work-mode .sheet-nav,
+body.mobile-work-mode .sheet-add { flex:0 0 36px; min-width:36px; width:36px; height:38px; margin:1px 2px; }
+body.mobile-work-mode .sheet-tabs { min-width:0; max-width:none; flex:1 1 auto; overscroll-behavior-x:contain; touch-action:pan-x; }
+body.mobile-work-mode .sheet-tab { min-height:38px; padding:0 14px; font-size:13px; flex-shrink:0; }
+body.mobile-work-mode .sheet-tab input { font-size:16px; }
+body.mobile-work-mode .statusbar { height:38px; gap:5px; padding:0 4px; overflow:hidden; }
+body.mobile-work-mode #statusMode { max-width:72px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+body.mobile-work-mode #calcState { height:36px; min-width:36px; max-width:100px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+body.mobile-work-mode #statusStats { min-width:0; max-width:32%; overflow-x:auto; gap:8px; }
+body.mobile-work-mode #statusStats .stat-item { min-height:36px; display:flex; align-items:center; }
+body.mobile-work-mode .zoom { flex:none; gap:1px; }
+body.mobile-work-mode .zoom button { min-width:36px; min-height:36px; }
+body.mobile-work-mode #zoomSlider { width:72px; height:36px; margin:0 2px; }
+body.mobile-work-mode #zoomLabel { min-width:48px; font-size:12px; }
+body.mobile-work-mode button,
+body.mobile-work-mode input,
+body.mobile-work-mode select { -webkit-tap-highlight-color:transparent; }
+body.mobile-work-mode .ribbon button:focus-visible,
+body.mobile-work-mode .quick-access button:focus-visible { outline:2px solid var(--green); outline-offset:-2px; }
+@media(max-width:480px) {
+  body.mobile-work-mode #statusStats { display:none; }
+  body.mobile-work-mode #statusMode { max-width:48px; }
+  body.mobile-work-mode #calcState { max-width:66px; }
+  body.mobile-work-mode #zoomSlider { width:60px; }
+}
+/* 가로/작은 화면: 기능을 없애지 않고 중첩 도구 행을 한 줄로 펼친다. */
+@media(max-height:600px) {
+  body.mobile-work-mode .titlebar { height:40px; min-height:40px; }
+  body.mobile-work-mode .ribbon-tabs { height:40px; }
+  body.mobile-work-mode .ribbon-tab { height:36px; }
+  body.mobile-work-mode .quick-access.below { display:none; }
+  body.mobile-work-mode .ribbon { padding-top:3px; }
+  body.mobile-work-mode .rgroup { min-height:60px; }
+  body.mobile-work-mode .rgroup-body { height:36px; align-items:center; flex:none; gap:4px; }
+  body.mobile-work-mode .ribbon .rcol,
+  body.mobile-work-mode .ribbon .rrow { display:contents; }
+  body.mobile-work-mode .rbtn.large { flex-direction:row; align-items:center; height:36px; min-height:36px; padding:0 6px; gap:5px; }
+  body.mobile-work-mode .rbtn.large > svg:first-child { width:22px; height:22px; }
+  body.mobile-work-mode .rbtn.large .lbl { white-space:nowrap; max-width:none; }
+  body.mobile-work-mode .rbtn.large.split .caret { width:36px; height:36px; min-height:36px; }
+  body.mobile-work-mode .rgallery { height:36px; }
+  body.mobile-work-mode .rg-strip { height:36px; }
+  body.mobile-work-mode .rg-strip > * { max-height:36px; }
+  body.mobile-work-mode .rgroup-launcher { top:2px; bottom:auto; }
+  body.mobile-work-mode .formula-row { height:42px; }
+  body.mobile-work-mode .sheetbar { height:40px; }
+}
+/* 가상 뷰포트 높이를 감지하는 컨트롤러의 짧은 화면 모드도 같은 레이아웃을 사용한다. */
+  body.mobile-work-mode.mobile-short .titlebar { height:40px; min-height:40px; }
+  body.mobile-work-mode.mobile-short .ribbon-tabs { height:40px; }
+  body.mobile-work-mode.mobile-short .ribbon-tab { height:36px; }
+  body.mobile-work-mode.mobile-short .quick-access.below { display:none; }
+  body.mobile-work-mode.mobile-short .ribbon { padding-top:3px; }
+  body.mobile-work-mode.mobile-short .rgroup { min-height:60px; }
+  body.mobile-work-mode.mobile-short .rgroup-body { height:36px; align-items:center; flex:none; gap:4px; }
+  body.mobile-work-mode.mobile-short .ribbon .rcol,
+  body.mobile-work-mode.mobile-short .ribbon .rrow { display:contents; }
+  body.mobile-work-mode.mobile-short .rbtn.large { flex-direction:row; align-items:center; height:36px; min-height:36px; padding:0 6px; gap:5px; }
+  body.mobile-work-mode.mobile-short .rbtn.large > svg:first-child { width:22px; height:22px; }
+  body.mobile-work-mode.mobile-short .rbtn.large .lbl { white-space:nowrap; max-width:none; }
+  body.mobile-work-mode.mobile-short .rbtn.large.split .caret { width:36px; height:36px; min-height:36px; }
+  body.mobile-work-mode.mobile-short .rgallery { height:36px; }
+  body.mobile-work-mode.mobile-short .rg-strip { height:36px; }
+  body.mobile-work-mode.mobile-short .rg-strip > * { max-height:36px; }
+  body.mobile-work-mode.mobile-short .rgroup-launcher { top:2px; bottom:auto; }
+  body.mobile-work-mode.mobile-short .formula-row { height:42px; }
+  body.mobile-work-mode.mobile-short .sheetbar { height:40px; }
+
+/* root viewport controller adds this while the software keyboard is open. */
+body.mobile-work-mode.mobile-keyboard .ribbon-tabs,
+body.mobile-work-mode.mobile-keyboard .ribbon,
+body.mobile-work-mode.mobile-keyboard .quick-access { display:none; }
+body.mobile-work-mode.mobile-keyboard .statusbar { display:none; }
+@media print { body.mobile-work-mode #app { display:none!important; } }
+/* 높이 360px 이하에서도 격자 최소 96px와 수식 입력을 유지한다. */
+@media(max-height:360px) {
+  body.mobile-work-mode.mobile-short .titlebar { height:38px; min-height:38px; }
+  body.mobile-work-mode.mobile-short .ribbon-tabs { height:38px; }
+  body.mobile-work-mode.mobile-short .formula-row { height:40px; padding-top:2px; padding-bottom:2px; }
+  body.mobile-work-mode.mobile-short .sheetbar { height:38px; }
+  body.mobile-work-mode.mobile-short .sheet-nav, body.mobile-work-mode.mobile-short .sheet-add { height:36px; margin-top:0; margin-bottom:0; }
+  body.mobile-work-mode.mobile-short .sheet-tab { min-height:36px; }
+  body.mobile-work-mode.mobile-short .statusbar { display:none; }
+}
+body.mobile-work-mode.mobile-keyboard .footer { display:none; }
+
+/* 모바일 작업 모드: 보이는 viewport 안에서 본문만 스크롤하고 확인/닫기 유지 */
+body.mobile-work-mode .dialog-backdrop,
+body.mobile-work-mode .dialog-backdrop.modeless {
+  inset: auto; left: var(--mobile-left, 0px); top: var(--mobile-top, 0px);
+  width: var(--mobile-vw, 100vw); height: var(--mobile-vh, 100dvh);
+  padding: 8px; box-sizing: border-box; place-items: center; overflow: hidden;
+}
+body.mobile-work-mode .dialog,
+body.mobile-work-mode .dialog.pane-dlg {
+  position: relative !important; inset: auto !important; margin: 0 !important;
+  min-width: 0; min-height: 0; max-width: calc(var(--mobile-vw, 100vw) - 16px) !important;
+  max-height: calc(var(--mobile-vh, 100dvh) - 16px) !important; box-sizing: border-box;
+}
+body.mobile-work-mode .dialog-head { flex: none; gap: 8px; padding: 7px 10px; }
+body.mobile-work-mode .dialog-head > button { flex: none; width: 40px; height: 40px; }
+body.mobile-work-mode .dialog-body { flex: 1 1 auto; min-height: 0; min-width: 0; padding: 10px; overscroll-behavior: contain; }
+body.mobile-work-mode .dialog-body > *, body.mobile-work-mode .dialog-body fieldset { min-width: 0; max-width: 100%; box-sizing: border-box; }
+body.mobile-work-mode .dialog-foot { flex: none; flex-wrap: wrap; padding: 7px 10px; gap: 6px; }
+body.mobile-work-mode :is(.dialog, .menu, .pivot-pane) .btn { min-height: 40px; height: auto; white-space: normal; }
+body.mobile-work-mode .dialog-body :is(input:not([type=checkbox]):not([type=radio]), select, textarea) { min-width: 0; max-width: 100%; box-sizing: border-box; font-size: 16px; }
+body.mobile-work-mode .dialog-body :is(input:not([type=checkbox]):not([type=radio]), select:not([size])) { min-height: 38px; }
+body.mobile-work-mode .dialog-body label { min-width: 0; }
+body.mobile-work-mode .dialog-body label > span:first-child { max-width: 45%; overflow-wrap: anywhere; }
+body.mobile-work-mode .dialog-body :is(label.fc-field, label.picture-field) > span:first-child { max-width: 100%; }
+body.mobile-work-mode :is(.dlg-tabs, .format-pane-tabs, .find-tabs) { flex-wrap: wrap; }
+body.mobile-work-mode :is(.dlg-tab, .fc-cat, .fc-item, .cg-cat, .opt-tab) { min-height: 36px; }
+body.mobile-work-mode :is(.fc-page, .ttc-content, .opt-wrap, .cg-wrap) { min-height: 0; }
+body.mobile-work-mode :is(.fc-fontcol, .fc-col, .fc-number > *) { min-width: 0; max-width: 100%; }
+body.mobile-work-mode :is(.fc-number, .fc-bwrap, .cr-wrap) { flex-direction: column; height: auto; }
+body.mobile-work-mode :is(.fc-border-page, .opt-wrap, .cg-wrap, .sa-workarea) { grid-template-columns: minmax(0, 1fr); }
+body.mobile-work-mode :is(.opt-tabs, .cg-cats) { flex-direction: row; flex-wrap: wrap; max-height: 130px; overflow: auto; border-right: 0; border-bottom: 1px solid #ddd; }
+body.mobile-work-mode .cg-sub { width: 125px; }
+body.mobile-work-mode .cg-combo-table { table-layout: auto; min-width: 260px; }
+body.mobile-work-mode .cr-list { width: 100%; max-height: 150px; }
+body.mobile-work-mode .ps-grid { grid-template-columns: minmax(0,1fr) !important; grid-template-rows: none !important; grid-auto-flow: row !important; }
+body.mobile-work-mode .find-dlg .find-row { flex-wrap: wrap; }
+body.mobile-work-mode .find-dlg .find-opts { grid-template-columns: minmax(0,1fr); }
+body.mobile-work-mode .find-dlg .find-opts > span:empty { display: none; }
+body.mobile-work-mode .find-dlg .find-row input { min-width: 130px; }
+body.mobile-work-mode .menu { box-sizing: border-box; max-width: calc(var(--mobile-vw,100vw) - 8px); min-width: 0; overscroll-behavior: contain; }
+body.mobile-work-mode .menu-item { white-space: normal; overflow-wrap: anywhere; min-height: 40px; }
+body.mobile-work-mode .menu-item .mi-key { flex: none; padding-left: 6px; }
+body.mobile-work-mode .filter-menu { width: min(280px, calc(var(--mobile-vw,100vw) - 10px)); box-sizing: border-box; }
+body.mobile-work-mode .filter-menu input[type=search] { height: 38px; font-size: 16px; }
+body.mobile-work-mode .filter-foot { position: sticky; bottom: -10px; background: #fff; padding: 8px 0; }
+body.mobile-work-mode .style-grid { grid-template-columns: repeat(auto-fit, minmax(76px,1fr)); width: min(380px, calc(var(--mobile-vw,100vw) - 12px)); box-sizing: border-box; }
+body.mobile-work-mode .style-grid.tstyles { grid-template-columns: repeat(auto-fit, 52px); }
+body.mobile-work-mode .shape-grid { grid-template-columns: repeat(6,minmax(28px,1fr)); }
+body.mobile-work-mode .online-grid { grid-template-columns: repeat(auto-fit,minmax(120px,1fr)); }
+body.mobile-work-mode .grid-wrap.with-pane .grid-scroll { right: 0; }
+body.mobile-work-mode .pivot-pane, body.mobile-work-mode .watch-pane {
+  position: fixed; left: calc(var(--mobile-left,0px) + 8px); right: auto; top: calc(var(--mobile-top,0px) + 8px); bottom: auto;
+  width: calc(var(--mobile-vw,100vw) - 16px); max-width: 360px; max-height: calc(var(--mobile-vh,100dvh) - 16px);
+  z-index: 180; box-shadow: 0 6px 20px #0004; overscroll-behavior: contain; box-sizing: border-box;
+}
+body.mobile-work-mode .pp-head { position: sticky; top: -8px; flex: none; background: #fafafa; z-index: 1; }
+body.mobile-work-mode .pp-head button { width: 40px; height: 40px; }
+body.mobile-work-mode .pp-field, body.mobile-work-mode .pp-item { min-height: 36px; }
+body.mobile-work-mode .pp-menu { min-width: 36px; min-height: 36px; visibility: visible; }
+body.mobile-work-mode .pp-search { font-size: 16px; min-height: 38px; }
+body.mobile-work-mode .pp-fields, body.mobile-work-mode .pp-area { flex-shrink: 0; }
+
+.mobile-mode-toggle, .mobile-tools-toggle { flex: 0 0 28px; }
+.mobile-mode-toggle[aria-pressed="true"] { background:rgba(255,255,255,.22); box-shadow:inset 0 -2px #fff; }
+.mobile-mode-toggle svg { width:20px;height:20px; }
+.mobile-tools-toggle { display:none; }
+body.mobile-work-mode .mobile-tools-toggle { display:inline-flex; justify-content:center; align-items:center; font-size:18px; }
+.mobile-tools-body { display:grid; gap:12px; min-width:0; }
+.mobile-tools-tip,.mobile-tools-state { margin:0; font-size:12px; line-height:1.6; }
+.mobile-tools-body input[type=search] { width:100%;box-sizing:border-box;min-height:40px; }
+.mobile-tool-section h3 { font-size:13px;margin:0 0 6px; }
+.mobile-tool-grid { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px; }
+.mobile-tool-grid[hidden] { display:none; }
+.mobile-tool-grid .btn { min-height:40px;white-space:normal;text-align:left;padding:8px; }
+
+/* 터치만으로 하위 메뉴에서 부모 메뉴로 돌아가기 */
+.mobile-menu-back { display: none; }
+body.mobile-work-mode .mobile-menu-back { display: block; position: sticky; top: -4px; z-index: 2; width: 100%; min-height: 42px; text-align: left; padding: 8px 12px; border: 0; border-bottom: 1px solid #ddd; background: #f3f7f4; color: #185c37; font: inherit; cursor: pointer; }
+
+body.mobile-work-mode #app { box-sizing:border-box; padding-left:env(safe-area-inset-left,0px);padding-right:env(safe-area-inset-right,0px);padding-top:env(safe-area-inset-top,0px); }
+
+/* Keep native mobile editing legible without Safari input-focus page zoom. */
+body.mobile-work-mode .cell-editor:not(.idle) { font-size:16px !important; min-height:30px; }
+
+/* 파일/시작 화면은 좁은 모바일 화면에서 세로로 쌓고 탐색 단추를 상단에 둔다. */
+body.mobile-work-mode .backstage {
+  inset:auto; left:var(--mobile-left,0px); top:var(--mobile-top,0px);
+  width:var(--mobile-vw,100vw); height:var(--mobile-vh,100dvh);
+  flex-direction:column; overflow:hidden;
+}
+body.mobile-work-mode .wixel-hub .backstage-nav {
+  flex:none; display:grid; grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:4px; width:100%; min-width:0; padding:8px; max-height:48%; overflow:auto;
+}
+body.mobile-work-mode .backstage-nav .hub-brand,
+body.mobile-work-mode .backstage-nav .hub-nav-label,
+body.mobile-work-mode .backstage-nav .hub-nav-footer>span { display:none; }
+body.mobile-work-mode .wixel-hub .backstage-nav button {
+  min-width:0; width:100%; min-height:40px; padding:8px 6px; gap:5px;
+  font-size:12px; white-space:normal; justify-content:center;
+}
+body.mobile-work-mode .wixel-hub .backstage-nav .back { grid-column:span 2; margin:0; order:0; }
+body.mobile-work-mode .backstage-nav [data-page] { order:1; }
+body.mobile-work-mode .backstage-nav .hub-nav-footer { margin:0; padding:0; order:0; }
+body.mobile-work-mode .backstage-nav .hub-icon { width:17px; height:17px; }
+body.mobile-work-mode .wixel-hub .backstage-main {
+  flex:1; min-height:0; min-width:0; width:100%; max-width:none;
+  padding:16px 14px 28px; overflow:auto; overscroll-behavior:contain; overflow-wrap:anywhere;
+}
+body.mobile-work-mode .wixel-hub .hub-topline,
+body.mobile-work-mode .wixel-hub .hub-hero-actions,
+body.mobile-work-mode .wixel-hub .hub-section-heading,
+body.mobile-work-mode .wixel-hub .info-actions { flex-wrap:wrap; gap:8px; }
+body.mobile-work-mode .wixel-hub .hub-hero { padding:12px 0 18px; gap:12px; }
+body.mobile-work-mode .wixel-hub .hub-hero h1 { font-size:28px; }
+body.mobile-work-mode .wixel-hub .hub-heading h2 { font-size:25px; }
+body.mobile-work-mode .wixel-hub .hub-grid,
+body.mobile-work-mode .wixel-hub .info-grid { grid-template-columns:minmax(0,1fr); gap:12px; }
+body.mobile-work-mode .wixel-hub .hub-preview { display:none; }
+body.mobile-work-mode .wixel-hub .hub-card { width:100%; min-width:0; padding:16px; }
+body.mobile-work-mode .wixel-hub .storage-cards .hub-card { padding-bottom:45px; }
+body.mobile-work-mode .wixel-hub .hub-card-copy { min-width:0; }
+body.mobile-work-mode .wixel-hub .hub-callout { padding:14px; gap:10px; }
+body.mobile-work-mode .wixel-hub .hub-dropzone { padding:24px 14px; }
+body.mobile-work-mode .wixel-hub .tpl-search { width:100%; max-width:100%; min-width:0; font-size:16px; }
+body.mobile-work-mode .wixel-hub .bcard.tpl { min-width:0; flex-basis:100%; }
+body.mobile-work-mode .wixel-hub .info-card { grid-template-columns:88px minmax(0,1fr); gap:10px; }
+body.mobile-work-mode .wixel-hub .ip-row { grid-template-columns:minmax(90px,.8fr) minmax(0,1.2fr); }
+body.mobile-work-mode .wixel-hub .info-prop { min-height:38px; min-width:0; font-size:16px; }
+body.mobile-work-mode .wixel-hub .backstage-list { display:block; max-width:100%; overflow:auto; }
+body.mobile-work-mode .wixel-hub .btn { min-height:40px; }

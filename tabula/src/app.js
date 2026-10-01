@@ -1,3 +1,5 @@
+import { installMobileWork, mobileSheetZoom } from './mobile-work.js';
+import { openMobileTools } from './mobile-tools-ui.js';
 import { makeObjectGroup, ungroupObjects } from './object-group.js';
 // WIXEL 메인: 상태 · 선택 · 편집 · 키보드/마우스 · 명령 (그리기는 view.js)
 import { protectedRangeKey, rangeIsUnlocked, cellInEditRange, rangeIntersects, rangesCover, noteVisible, setNoteVisibility } from './review-state.js';
@@ -166,6 +168,8 @@ let lastFont = '#ff0000';
 let lastBorder = 'bottom';
 let ribbon;
 let gv;
+let mobileWork;
+const mobileZooms = new WeakMap();
 const serverState = { saving: false, error: null, savedAt: null };
 
 // ───────────────────────── 유틸 ─────────────────────────
@@ -796,6 +800,7 @@ const edInput = () => (document.activeElement === dom.formula ? dom.formula : do
 function focusGrid() {
   if (isDialogOpen() || document.querySelector('.backstage')) return;
   if (editing?.fromBar) { dom.formula.focus(); return; }
+  if (mobileWork?.active && !editing) { dom.view.tabIndex = -1; dom.view.focus({ preventScroll: true }); return; }
   if (document.activeElement !== dom.editor) dom.editor.focus({ preventScroll: true });
 }
 
@@ -1780,6 +1785,27 @@ function startAutoScroll() {
 }
 function stopAutoScroll() { clearInterval(autoScrollTimer); autoScrollTimer = null; }
 
+// Touch selection avoids focusing the editor until the user explicitly edits.
+function touchGridSelect(hit) {
+  if (hit.zone === 'corner') selectAll();
+  else if (hit.zone === 'colHeader') selectCols(hit.c, hit.c);
+  else if (hit.zone === 'rowHeader') selectRows(hit.r, hit.r);
+  else selectCell(hit.r, hit.c, { scroll: false });
+  if (painter) { touchGridPaint(); return false; }
+  if (hit.zone === 'cell' && styleAt(active.r, active.c).checkbox) {
+    if (!viewOnly && !wb.props?.markedFinal) toggleCheckboxes();
+    return false;
+  }
+  return true;
+}
+function touchGridPaint() {
+  if (painter && !viewOnly && !wb.props?.markedFinal && !protectBlocked('formatCells')) applyPainter();
+}
+function touchGridRange(from, to) {
+  if (from.zone === 'rowHeader') selectRows(from.r, to.r);
+  else if (from.zone === 'colHeader') selectCols(from.c, to.c);
+  else selectRange(norm(from, to), 'cells', { r: from.r, c: from.c });
+}
 function onViewMouseDown(e) {
   if (e.target === dom.editor || dom.ac.contains(e.target)) return;
   closeMenus();
@@ -3234,7 +3260,7 @@ function sparkEditDialog() {
 
 // ───────────────────────── 시트 보호 ─────────────────────────
 // 보호된 시트에서 명령마다 필요한 권한 (없는 명령은 선택한 셀이 모두 잠기지 않았을 때만)
-const PROTECT_FREE = new Set(['privateImportPermission', 'saveLocations', 'publish', 'versionHistory', 'recentFiles', 'dataAnalysis', 'forecastSheet', 'scenarioManager', 'solver', 'undo', 'redo', 'save', 'open', 'backstage', 'print', 'copy', 'find', 'goto', 'prevSheet', 'nextSheet', 'selectRegion',
+const PROTECT_FREE = new Set(['mobileWorkMode', 'mobileTools', 'mobileFit','privateImportPermission', 'saveLocations', 'publish', 'versionHistory', 'recentFiles', 'dataAnalysis', 'forecastSheet', 'scenarioManager', 'solver', 'undo', 'redo', 'save', 'open', 'backstage', 'print', 'copy', 'find', 'goto', 'prevSheet', 'nextSheet', 'selectRegion',
   'newWorkbook', 'pivotFieldList', 'tracePrecedents', 'traceDependents', 'removeArrows', 'evaluateFormula', 'errorCheck', 'calculationStatus', 'watchWindow', 'gotoSpecial',
   'outlineShow', 'outlineHide', 'freezePanes', 'freezeTop', 'freezeFirstCol', 'circleInvalid', 'clearCircles', 'macros', 'prevComment', 'nextComment',
   'workbookStats', 'toggleGrid', 'togglePrintGrid', 'toggleFormulaBar', 'toggleHeaders', 'toggleFormulas', 'toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100',
@@ -17011,6 +17037,9 @@ function showContextMenu(pos, hitKind = 'cell') {
 const structural = (fn) => () => { fn(); gv.layout(); updateSelectionUI(); };
 
 const COMMANDS = {
+  mobileWorkMode: () => mobileWork.toggle(),
+  mobileTools: () => mobileToolsDialog(),
+  mobileFit: () => fitMobileScreen(),
   rowHeight: () => sizeDialog('row'), colWidth: () => sizeDialog('col'),
   pasteFormulas: () => pasteFromButton('formulas'), pasteFormats: () => pasteFromButton('formats'), pasteTranspose: () => pasteFromButton('transpose'),
   contextCellImageFloat: () => cellImageToFloating(active.r, active.c), contextCellImageAlt: () => cellImageAltDialog(active.r, active.c),
@@ -17443,11 +17472,12 @@ const COMMANDS = {
   whatsNew: () => whatsNewDialog(),
 };
 
-const NO_COMMIT = new Set(['toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100', 'shortcuts', 'about', 'whatsNew']);
+const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileFit','toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100', 'shortcuts', 'about', 'whatsNew']);
 
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['모바일 작업 모드', ['좌측 상단 화면 맞춤 아이콘 · 휴대전화 자동 감지 · 가로/세로 화면 대응', '스크롤 리본·시트 탭 · 전체 메뉴와 저장·설정에 접근하는 모바일 도구', '탭 선택·두 번 탭 편집·길게 누른 뒤 범위 선택·핀치 확대/축소', '작은 화면의 서식·차트·피벗 대화상자와 키보드 공간 조정 · 원본 배율 보존']],
   ['페이지 레이아웃과 편집', ['SmartArt 20종 · 텍스트/계층/색 편집 · 도형/그림 그룹화', '테마 색·글꼴·효과 · 너비/높이 자동·인쇄 배율 · 정렬·선택 창·회전', '병합 셀·그림 위치를 반영한 인쇄 미리보기 · 일반 인쇄와 PDF 저장', '편집 허용 범위 · 메모 표시/숨기기 · 온라인 게시 공유 해제', 'Ctrl+Alt+V 선택하여 붙여넣기 12종 · 연산·빈 셀 건너뛰기·전치·연결']],
   ['온라인 그림 검색', ['Creative Commons만 선택 옵션 · 기본 해제 · 여러 공개 이미지 사이트 통합 검색', '출처·이용 조건·원문 링크 표시 · 원본 그림 삽입 · 검색 취소와 중복 결과 제거']],
   ['차트 직접 편집', ['제목·범례를 끌거나 방향키로 이동 · 선택한 요소만 Delete · 실행 취소', '계열·데이터 요소를 선택하면 서식 창도 함께 전환 · Ctrl+1·더블클릭 · 선택한 막대·선·조각만 색 변경', '원형·도넛의 조각별 분리와 계열 분리 · 3차원 원형의 드래그 보정', 'Excel 수동 위치·조각 분리 저장 · 계열 삭제 후 원본 셀 참조 오류 수정']],
@@ -17643,9 +17673,29 @@ function showSheetStart() {
   }
 }
 
-/** 시트마다 저장된 확대/축소 (엑셀과 같이 시트별) */
+function fitMobileScreen() {
+  if (!mobileWork.active) mobileWork.setPreference('on');
+  mobileZooms.delete(sheet()); applySheetZoom();
+  const rail = $('ribbon'); rail.scrollLeft = 0;
+  gv.layout(); gv.ensureVisible(active.r, active.c);
+}
+function mobileToolsDialog() {
+  const catalog = qatCatalog().map(c => ({ ...c, disabled: contextCommandDisabled(c.cmd) }));
+  openMobileTools({
+    zoom: view.zoom, autosave, status: `${dom.saveState.textContent} · ${dom.stats.textContent}`, commands: catalog,
+    quick: qatCommands().map(id => catalog.find(c => c.cmd === id)).filter(Boolean),
+    tabs: TABS.filter(t => !t.context || document.querySelector(`[data-ribbon-tab="${t.id}"]`)),
+    disabled: cmd => contextCommandDisabled(cmd === 'edit' ? 'paste' : cmd), run: cmd => run(cmd),
+    edit: () => startEdit('edit'), fit: fitMobileScreen, preference: p => mobileWork.setPreference(p),
+    toggleAutosave: () => dom.autosave.click(),
+    zoomDialog: () => formDialog('화면 배율', [{ name: 'zoom', label: '확대/축소 (%)', type: 'number', value: view.zoom, min: 25, max: 400 }], v => setZoom(Number(v.zoom))),
+    tab: id => { if (id === 'file') run('backstage'); else { ribbon.selectTab(id); $('ribbon').scrollLeft = 0; document.querySelector(`[data-ribbon-tab="${id}"]`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); gv.layout(); } },
+  });
+}
+
+/** 시트마다 저장된 확대/축소 (모바일 맞춤은 이 기기의 보기만 조정) */
 function applySheetZoom() {
-  const z = clamp(Math.round(sheet().zoom ?? 100), 25, 400);
+  const z = mobileWork?.active ? (mobileZooms.get(sheet()) ?? mobileSheetZoom(window.innerWidth, sheet().zoom)) : clamp(Math.round(sheet().zoom ?? 100), 25, 400);
   if (z === view.zoom) return;
   view.zoom = z;
   dom.zoomSlider.value = z;
@@ -17656,7 +17706,8 @@ function applySheetZoom() {
 function setZoom(z) {
   view.zoom = clamp(Math.round(z), 25, 400);
   // 확대/축소는 시트 속성 (파일에 저장, 실행 취소 기록은 남기지 않음)
-  if (view.zoom === 100) delete sheet().zoom; else sheet().zoom = view.zoom;
+  if (mobileWork?.active) mobileZooms.set(sheet(), view.zoom);
+  else if (view.zoom === 100) delete sheet().zoom; else sheet().zoom = view.zoom;
   dom.zoomSlider.value = view.zoom;
   dom.zoomLabel.textContent = `${view.zoom}%`;
   gv.setZoom(view.zoom);
@@ -18074,9 +18125,28 @@ async function init() {
     },
     slicerModel,
     onZoomWheel: (d) => setZoom(view.zoom + d),
+    onTouchStart: () => {
+      if (isDialogOpen() || drag || drawKind || shapePointDrag || drawPathState) return false;
+      if (editing && !commitEdit()) return false;
+      closeMenus(); deselectChart(); dom.editor.blur(); return true;
+    },
+    onTouchSelect: touchGridSelect,
+    onTouchRange: touchGridRange,
+    onTouchRangeEnd: touchGridPaint,
+    onTouchEdit: () => startEdit('edit'),
+    onTouchZoom: (pct) => setZoom(pct),
     isDragging: () => !!drag,
   });
   ribbon = buildRibbon({ run, openMenu: openNamedMenu, focusGrid, refreshRibbon: updateRibbon, hiddenTabs: () => opts.hiddenTabs ?? [], gallery: (name) => (name === 'chartStyles' ? chartStyleGallery() : []) });
+  mobileWork = installMobileWork({ button: $('mobileModeToggle'), onChange: (next, prev) => {
+    if (!gv) return;
+    if (!prev || next.active !== prev.active || Math.round(next.width) !== Math.round(prev.width)) {
+      // The initial callback runs before the controller is assigned; refresh below applies zoom.
+      if (mobileWork) applySheetZoom();
+      gv.layout(); positionEditor();
+    }
+  } });
+  applySheetZoom();
   applyOptions();
   bindEvents();
   applyView();
@@ -18087,6 +18157,7 @@ async function init() {
   focusGrid();
   window.tabula = {
     keytipRegistry: () => ({ entries: KEYTIP_REGISTRY.entries.map((entry) => ({ ...entry })), controls: KEYTIP_REGISTRY.controls.map(({ item, ...control }) => control), tabs: { ...KEYTIP_REGISTRY.tabs }, currentTab: ribbon.current }),
+    mobile: () => ({ active: mobileWork.active, preference: mobileWork.preference }),
     wb: () => wb, run, commands: () => Object.keys(COMMANDS), menus: () => Object.keys(MENUS), openNamedMenu, selectCell, selectRange, newWorkbook, templates: TEMPLATES, exportXlsx, gv: () => gv, sample: (i) => newWorkbook(SAMPLES[i]), switchSheet: (i) => { switchSheet(i); },
     get active() { return active; }, get sel() { return sel; }, get si() { return si; }, get chartSel() { return chartSel; },
   };

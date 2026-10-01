@@ -334,3 +334,17 @@ node tools/recovery-ux.mjs
 - `node tools/review-ux.mjs`: 편집 허용 범위 암호/취소·보호·Undo·다른 문서 안전성과 메모 표시.
 
 기존 `WIXEL_URL`, `PLAYWRIGHT_MODULE`, `PLAYWRIGHT_BROWSERS_PATH`를 사용합니다. 새 격리 브라우저의 합성 자료만 사용하며 API 쓰기를 차단합니다. 소스와 실제 배포용 번들을 모두 검사하고 결과·지원 범위는 [27번 문서](../docs/codex/27_페이지레이아웃과편집.md)에 기록합니다. PDF 결과는 D: 임시 폴더에 생성하며 사용자 문서나 기존 브라우저 탭을 사용하지 않습니다.
+
+
+## 모바일 작업 모드
+
+로컬 서버 또는 배포 번들을 대상으로 `WIXEL_URL`을 지정해 실행합니다. 실제 사용자 문서를 사용하지 않는 합성 검사입니다.
+
+```sh
+node tools/mobile-work-mode.mjs
+node tools/mobile-touch.mjs
+node tools/mobile-popups.mjs
+node tools/mobile-layout.mjs
+```
+
+`mobile-layout.mjs`의 전체 리본 카탈로그 검사는 소스 서버가 필요합니다. 번들에서는 `MOBILE_LAYOUT_CATALOG=0`으로 실제 앱 화면·모드 전환·가상키보드 검사만 실행합니다. 실제 기기의 IME, iOS/Android 브라우저 바 및 다운로드 UI는 에뮬레이션 결과와 별도로 확인해야 합니다. 자세한 범위는 `docs/codex/28_모바일작업모드.md`를 참고하세요.

@@ -1,3 +1,4 @@
+import { bindGridTouch } from './mobile-grid.js';
 import { noteVisible } from './review-state.js';
 // 가상 스크롤 그리드: 화면에 보이는 행/열만 그림 (20,000,000행 × 16,384열 지원)
 // 틀 고정은 4개 창(TL/TR/BL/BR)으로, 각 창은 시트 좌표계 콘텐츠를 transform 으로 이동시켜 표시.
@@ -571,19 +572,27 @@ export class GridView {
   }
 
   bindTouch() {
-    let last = null;
-    this.viewEl.addEventListener('touchstart', (e) => {
-      if (e.touches.length === 1) last = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-    }, { passive: true });
-    this.viewEl.addEventListener('touchmove', (e) => {
-      if (!last || e.touches.length !== 1 || this.host.isDragging?.()) return;
-      const t = e.touches[0];
-      this.scroll.scrollLeft -= t.clientX - last.x;
-      this.scroll.scrollTop -= t.clientY - last.y;
-      last = { x: t.clientX, y: t.clientY };
-      e.preventDefault();
-    }, { passive: false });
-    this.viewEl.addEventListener('touchend', () => { last = null; });
+    this.unbindTouch = bindGridTouch(this.viewEl, {
+      context: () => { const state = this.host.state(); return state.wb.sheets[state.si]; },
+      hit: (x, y, clamp) => this.hitTest(x, y, clamp),
+      begin: () => this.host.onTouchStart?.(),
+      tap: hit => this.host.onTouchSelect?.(hit),
+      edit: hit => this.host.onTouchEdit?.(hit),
+      end: (phase, cancelled) => { if (phase === 'range' && !cancelled) this.host.onTouchRangeEnd?.(); },
+      range: (from, to) => {
+        this.host.onTouchRange?.(from, to);
+        if (to.dx || to.dy) this.scrollBy((to.dx || 0) * 18, (to.dy || 0) * 18);
+      },
+      scroll: (dx, dy) => this.scrollBy(dx / this.z, dy / this.z),
+      zoom: () => this.z * 100,
+      pinch: (pct, previous, current) => {
+        const before = this.hitTest(previous.x, previous.y);
+        this.host.onTouchZoom?.(pct);
+        const after = this.hitTest(current.x, current.y);
+        this.setScroll(this.sx + (before.sheetX >= this.frozenW ? before.sheetX - after.sheetX : 0),
+          this.sy + (before.sheetY >= this.frozenH ? before.sheetY - after.sheetY : 0));
+      },
+    });
   }
 
   setZoom(pct) {

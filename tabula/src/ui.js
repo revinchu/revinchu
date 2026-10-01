@@ -284,6 +284,14 @@ function buildMenu(anchor, items, { minWidth, scroll, toolbar, level = 0, parent
     for (const m of openMenus.filter((x) => Number(x.dataset.level) > level)) m.remove();
     openMenus = openMenus.filter((x) => Number(x.dataset.level) <= level);
   };
+  if (level && parentItem) menu.append(el('button', {
+    type: 'button', class: 'mobile-menu-back', 'aria-label': '이전 메뉴', 'data-access-key': 'none',
+    onmousedown: (e) => e.preventDefault(), onclick: () => {
+      for (const child of openMenus.filter((node) => Number(node.dataset.level) >= level)) child.remove();
+      openMenus = openMenus.filter((node) => Number(node.dataset.level) < level);
+      parentItem.focus();
+    },
+  }, '‹ 이전 메뉴'));
   for (const it of items) {
     if (!it) continue;
     if (it.sep) { menu.append(el('div', { class: 'menu-sep' })); continue; }
@@ -309,6 +317,7 @@ function buildMenu(anchor, items, { minWidth, scroll, toolbar, level = 0, parent
   }
   document.getElementById('menuLayer').append(menu);
   openMenus.push(menu);
+  menuAnchors.set(menu, anchor);
   if (toolbar instanceof HTMLElement && !level) attachMenuToolbar(menu, toolbar, anchor);
   placeMenu(menu, anchor);
   prepareAccessKeys(menu);
@@ -345,39 +354,38 @@ function buildMenu(anchor, items, { minWidth, scroll, toolbar, level = 0, parent
   return menu;
 }
 
+const mobileMenuSizing = new WeakMap();
+function popupViewport() {
+  const mobile = document.body.classList.contains('mobile-work-mode'), v = mobile ? window.visualViewport : null;
+  const left = v?.offsetLeft ?? 0, top = v?.offsetTop ?? 0, width = v?.width ?? innerWidth, height = v?.height ?? innerHeight;
+  return { mobile, left, top, width, height, right: left + width, bottom: top + height };
+}
 function placeMenu(menu, anchor) {
-  let x;
-  let y;
-  if (anchor instanceof Element) {
-    const r = anchor.getBoundingClientRect();
-    x = r.left;
-    y = r.bottom + 2;
-  } else {
-    ({ x, y } = anchor);
-  }
-  const mw = menu.offsetWidth;
-  const mh = menu.offsetHeight;
-  if (x + mw > innerWidth - 4) x = Math.max(4, innerWidth - mw - 4);
-  if (y + mh > innerHeight - 4) y = Math.max(4, innerHeight - mh - 4);
-  menu.style.left = `${x}px`;
-  menu.style.top = `${y}px`;
+  const bounds = popupViewport(), margin = 4;
+  if (bounds.mobile) {
+    if (!mobileMenuSizing.has(menu)) mobileMenuSizing.set(menu, { minWidth: menu.style.minWidth, maxWidth: menu.style.maxWidth, maxHeight: menu.style.maxHeight, overflowY: menu.style.overflowY });
+    menu.style.minWidth = '0'; menu.style.maxWidth = Math.max(1, bounds.width - margin * 2) + 'px';
+    menu.style.maxHeight = Math.max(1, bounds.height - margin * 2) + 'px'; menu.style.overflowY = 'auto';
+  } else if (mobileMenuSizing.has(menu)) { Object.assign(menu.style, mobileMenuSizing.get(menu)); mobileMenuSizing.delete(menu); }
+  const rect = anchor instanceof Element ? anchor.getBoundingClientRect() : null;
+  let x = rect ? rect.left : anchor?.x ?? bounds.left + margin, y = rect ? rect.bottom + 2 : anchor?.y ?? bounds.top + margin;
+  const clampX = value => Math.max(bounds.left + margin, Math.min(value, bounds.right - margin - menu.offsetWidth));
+  const clampY = value => Math.max(bounds.top + margin, Math.min(value, bounds.bottom - margin - menu.offsetHeight));
+  x = clampX(x); y = clampY(y);
+  menu.style.left = x + 'px'; menu.style.top = y + 'px';
   const toolbar = menuToolbars.get(menu);
   if (toolbar?.isConnected) {
-    const margin = 4, gap = 5;
-    toolbar.style.maxWidth = `${Math.max(1, innerWidth - margin * 2)}px`;
-    toolbar.style.maxHeight = `${Math.max(28, Math.floor((innerHeight - margin * 2 - gap) * .45))}px`;
+    const gap = 5;
+    toolbar.style.maxWidth = Math.max(1, bounds.width - margin * 2) + 'px';
+    toolbar.style.maxHeight = Math.max(28, Math.floor((bounds.height - margin * 2 - gap) * .45)) + 'px';
     const height = toolbar.offsetHeight;
-    // 두 영역이 화면보다 크면 메뉴만 스크롤. 작은 화면에서 위쪽 도구와 항목이 겹치지 않는다.
-    menu.style.maxHeight = `${Math.max(24, innerHeight - margin * 2 - gap - height)}px`;
-    menu.style.maxWidth = `${Math.max(1, innerWidth - margin * 2)}px`;
-    menu.style.minWidth = `${Math.min(menuMinimumWidths.get(menu), Math.max(1, innerWidth - margin * 2))}px`;
-    const menuHeight = menu.offsetHeight;
-    y = Math.max(margin + height + gap, Math.min(y, innerHeight - margin - menuHeight));
-    x = Math.max(margin, Math.min(x, innerWidth - margin - menu.offsetWidth));
-    menu.style.left = `${x}px`;
-    menu.style.top = `${y}px`;
-    toolbar.style.left = `${Math.max(margin, Math.min(x, innerWidth - margin - toolbar.offsetWidth))}px`;
-    toolbar.style.top = `${Math.max(margin, y - height - gap)}px`;
+    menu.style.maxHeight = Math.max(24, bounds.height - margin * 2 - gap - height) + 'px';
+    menu.style.maxWidth = Math.max(1, bounds.width - margin * 2) + 'px';
+    menu.style.minWidth = Math.min(menuMinimumWidths.get(menu) ?? 180, Math.max(1, bounds.width - margin * 2)) + 'px';
+    y = Math.max(bounds.top + margin + height + gap, clampY(y)); x = clampX(x);
+    menu.style.left = x + 'px'; menu.style.top = y + 'px';
+    toolbar.style.left = Math.max(bounds.left + margin, Math.min(x, bounds.right - margin - toolbar.offsetWidth)) + 'px';
+    toolbar.style.top = Math.max(bounds.top + margin, y - height - gap) + 'px';
   }
 }
 
@@ -409,7 +417,22 @@ function attachMenuToolbar(menu, toolbar, anchor) {
     } else if (!editable && event.key === 'ArrowDown') { event.preventDefault(); menu.querySelector(':scope > .menu-item:not(:disabled)')?.focus(); }
   });
 }
-window.addEventListener('resize', () => { for (const menu of openMenus) if (menuToolbars.has(menu) && menu.isConnected) placeMenu(menu, menuAnchors.get(menu)); });
+let popupLayoutFrame = 0;
+function refreshPopupLayout() {
+  if (popupLayoutFrame) return;
+  popupLayoutFrame = requestAnimationFrame(() => {
+    popupLayoutFrame = 0;
+    for (const menu of openMenus) if (menu.matches('.menu') && menu.isConnected) placeMenu(menu, menuAnchors.get(menu));
+    if (document.body.classList.contains('mobile-work-mode')) {
+      const focused = document.activeElement;
+      if (focused?.matches('input,textarea,select') && focused.closest('.dialog,.menu,.pivot-pane')) focused.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+  });
+}
+window.addEventListener('resize', refreshPopupLayout);
+window.visualViewport?.addEventListener('resize', refreshPopupLayout);
+window.visualViewport?.addEventListener('scroll', refreshPopupLayout);
+new MutationObserver(refreshPopupLayout).observe(document.body, { attributes: true, attributeFilter: ['class'] });
 
 document.addEventListener('mousedown', (e) => {
   if (openMenus.length && !openMenus.some((m) => m.contains(e.target))) {
@@ -524,7 +547,7 @@ function dragByHead(dialog) {
   const head = dialog.querySelector('.dialog-head');
   head.style.cursor = 'move';
   head.addEventListener('mousedown', (e) => {
-    if (e.target.tagName === 'BUTTON') return;
+    if (e.target.tagName === 'BUTTON' || document.body.classList.contains('mobile-work-mode')) return;
     const r = dialog.getBoundingClientRect();
     const dx = e.clientX - r.left;
     const dy = e.clientY - r.top;

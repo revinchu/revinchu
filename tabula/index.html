@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-visual">
   <title>통합 문서1 - WIXEL</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='4' width='28' height='24' rx='3' fill='%23217346'/%3E%3Cpath d='M9 11l6 10M15 11l-6 10' stroke='white' stroke-width='2.4' stroke-linecap='round'/%3E%3Cpath d='M18 12h8M18 16h8M18 20h8' stroke='white' stroke-width='1.6'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="styles.css">
@@ -11,6 +11,8 @@
   <div id="app">
     <header class="titlebar">
       <div class="tb-left">
+          <button id="mobileModeToggle" type="button" class="tb-btn mobile-mode-toggle" data-cmd="mobileWorkMode" title="모바일 작업 모드 · 화면 맞춤" aria-label="모바일 작업 모드 · 화면 맞춤" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M10 5h4m-3 14h2M2 8v8m20-8v8M1 8h3m-3 8h3m16-8h3m-3 8h3"/></svg></button>
+          <button id="mobileTools" type="button" class="tb-btn mobile-tools-toggle" data-cmd="mobileTools" title="모바일 작업 도구 · 전체 메뉴" aria-label="모바일 작업 도구 · 전체 메뉴">☰</button>
         <button class="tb-brand" data-cmd="backstage" title="WIXEL 시작 화면">WIXEL</button>
         <div class="autosave">
           <span>자동 저장</span>
