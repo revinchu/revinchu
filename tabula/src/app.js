@@ -33,6 +33,7 @@ import { readOds, writeOds } from './ods.js';
 import { readXls } from './xls.js';
 import { CellMap } from './cellmap.js';
 import { chartDataGuide, chartPresetMatches } from './chart-ui.js';
+import { inferPivotCategorySeries } from './chart-source.js';
 import { CHART_TYPES, CHART_GALLERY, CHART_PALETTES, PALETTE, paletteOf, renderChartSvg, chartModelData, chartLayout } from './chart.js';
 import {
   computePivot, warmPivots, AGGREGATES, SHOW_AS, BASE_POS, LAYOUTS, pivotSourceData, resolvePivot, itemText, headerNames, normalizeDef, valueName,
@@ -5143,8 +5144,11 @@ function insertChart(type, patch = null) {
   let y = box.y;
   if (vis.x + box.w + 24 + 480 > gv.viewW + 200) { x = box.x; y = box.y + box.h + 16; }
   const id = `ch${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
-  const pieTitle = type === 'pie' || type === 'doughnut' ? displayText(rg.r1, rg.c1 + 1) : '';
-  const chart = { id, type, title: pieTitle || '차트 제목', range: { r1: rg.r1, c1: rg.c1, r2: rg.r2, c2: rg.c2 }, x, y, w: 480, h: 288, z: nextZ(), ...(patch ?? {}) };
+  const source = { type, range: { ...rg }, ...(patch ?? {}) };
+  const inferredSeries = inferPivotCategorySeries(wb, si, source);
+  if (inferredSeries) source.series = inferredSeries;
+  const pieTitle = type === 'pie' || type === 'doughnut' ? chartModelData(wb, si, source).series[0]?.name : '';
+  const chart = { id, title: pieTitle || '차트 제목', x, y, w: 480, h: 288, z: nextZ(), ...source };
   wb.transact(() => wb.setSheetProp(si, 'charts', [...sheet().charts.map((c) => ({ ...c })), chart]), meta());
   chartSel = id;
   gv.ensureVisible(gv.rows.indexAt(y + 100), gv.cols.indexAt(x + 200));
@@ -5852,6 +5856,8 @@ const refToText = (ref, ch) => {
 };
 /** 범위 차트 → 계열 참조 목록 (차트가 범위를 해석하는 방식 그대로: 머리글 행/열 · 행/열 방향) */
 function rangeChartSeries(ch) {
+  const inferred = inferPivotCategorySeries(wb, si, ch);
+  if (inferred) return inferred;
   const s = ch.sheet ? wb.sheetIndexByName(ch.sheet) : si;
   const src = s >= 0 ? s : si;
   const rg = ch.range;
@@ -16904,6 +16910,7 @@ const NO_COMMIT = new Set(['toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100', 'shor
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['차트 범례', ['피벗 값 열로 만든 차트도 실제 항목 이름과 연결', '단일 계열 범례 표시와 긴 이름의 전체 툴팁 수정']],
   ['셀·행·열 우클릭', ['선택 종류별 Excel 방식 메뉴와 미니 서식 도구 모음', '셀 서식·행 높이·열 너비·숨기기·숨기기 취소, 메뉴 접근키', '행 높이는 포인트, 열 너비는 문자 수로 조정하고 실행 취소 지원']],
   ['피벗 표시·이동', ['클래식 레이아웃의 표 안 필드 이동 · 값 행 표시 옵션 반영', '행·열·필터·값 영역 끌어 놓기와 실행 취소 · XLSX 표시 옵션 보존']],
   ['팝업 접근키', ['찾기·바꾸기 Alt+A 모두 바꾸기 · Alt+D 닫기 · 서식 하위 창 포커스 복원', '대화상자·하위 메뉴·빠른 분석·파일 화면의 Alt 키 배지와 키보드 선택']],

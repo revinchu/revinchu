@@ -14,6 +14,7 @@ import { parseInput, formatGeneral, fmtCode as fmtCodeRaw, fileCode, styleForCod
 const fmtCode = (style) => fileCode(fmtCodeRaw(style));
 import { DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT, formulaShifter } from './workbook.js';
 import { chartLayout, PALETTE, chartModelData, paletteOf } from './chart.js';
+import { inferPivotCategorySeries } from './chart-source.js';
 import { chartView3D } from './chart-3d.js';
 import { isChartEx, writeChartEx, readChartEx, chartExStyleXml, chartExColorsXml, chartExDrawingProps, applyChartExOptions, CHARTEX_NS, CHARTEX_REL, CHARTEX_CONTENT, CHARTEX_STYLE_CONTENT, CHARTEX_COLOR_CONTENT } from './chart-ex.js';
 import { Axis, hid, hidKeys } from './axis.js';
@@ -3003,6 +3004,8 @@ function cfXml(rule, pool, priority, x14 = null, date1904 = false) {
 }
 
 function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
+  const inferred = inferPivotCategorySeries(wb, si, chart);
+  if (inferred) chart = { ...chart, series: inferred };
   const srcIndex = chart.sheet ? wb.sheetIndexByName(chart.sheet) : si;
   const s = srcIndex >= 0 ? srcIndex : si;
   const refText = (sheetIdx, r1, c1, r2, c2) => `${quoteSheetName(wb.sheets[sheetIdx].name)}!${rangeRef({ r1, c1, r2, c2 }, true)}`;

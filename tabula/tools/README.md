@@ -279,3 +279,8 @@ node tools/recovery-ux.mjs
 | `node tools/context-menu-safety.mjs` | 셀 밀기 보호, 잘라내기·붙여넣기 자료 보존, 변경 범위 권한, 치수 변경의 수식 저장값 유지 |
 
 `WIXEL_URL`과 기존 Playwright 환경 변수를 사용한다. 분리된 컨텍스트의 합성 문서만 만들며 클립보드를 모의 구현하고 원격 쓰기를 차단한다. 사용자 업무 파일이나 열린 탭은 건드리지 않는다. `CONTEXT_MENU_SCREENSHOT`에 D: 절대 PNG 경로를 지정하면 메뉴를 캡처한다. 구체적 한도·결과는 [20번 문서](../docs/codex/20_셀행열_우클릭메뉴.md)를 확인한다.
+
+
+## 차트 범례 항목 이름
+
+`node tools/chart-legend.mjs`는 합성 피벗의 값 열만 선택한 일반 원형/3D 원형 생성, 이름 열을 포함한 선택, 피벗 차트 전용 경로, 기존 숫자 범위 차트, 단일 계열 범례와 지표 선택을 검사한다. `WIXEL_URL`로 소스 또는 배포용 번들을 지정한다. 새 컨텍스트에서만 실행하고 원격 쓰기를 차단한다. `CHART_LEGEND_SCREENSHOT`으로 D: 절대 PNG 경로를 지정할 수 있다. [21번 문서](../docs/codex/21_차트범례_항목이름.md)에서 결과와 자동 이름 보완의 범위를 확인한다.

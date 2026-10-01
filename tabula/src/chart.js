@@ -7,6 +7,7 @@
 //   axes?: { y: { title, numFmt, min, max }, y2: {…}, x: { title } } }
 import { formatGeneral, formatValue, formatCode, isDateCode } from './format.js';
 import { pivotSourceData, pivotChartData } from './pivot.js';
+import { inferPivotCategorySeries } from './chart-source.js';
 import { maxOf, minOf, pushAll } from './fxcore.js';
 import { THEME, applyTint } from './stylepresets.js';
 import { chartDepth, extrudedPolygon, chartWalls3D, pieProjection3D, pieSolid3D } from './chart-3d.js';
@@ -305,6 +306,9 @@ export function filterChart(base, ch) {
 
 /** 차트 모델 → 그릴 데이터 (범위 · 계열 참조 · 피벗 차트). hostSi: 차트가 있는 시트 */
 export function chartModelData(wb, hostSi, ch) {
+  // 과거 위셀의 피벗 숫자 열 범위 차트도 원본·명시 계열을 바꾸지 않고 범주 참조를 복구한다.
+  const inferred = inferPivotCategorySeries(wb, hostSi, ch);
+  if (inferred) ch = { ...ch, series: inferred };
   const sheetOf = (name) => { const i = name ? wb.sheetIndexByName(name) : hostSi; return i >= 0 ? i : hostSi; };
   const read = (s, rg, text = false) => {
     // 행이 아주 많으면 전체 범위에서 고르게 2,000개를 뽑음 (앞부분만 그리지 않게)
@@ -445,7 +449,8 @@ const MARKERS = {
  */
 /** 색 밝기 (0 검정 ~ 1 흰색) */
 function lum(c) {
-  const h = String(c ?? '').replace('#', '');
+  let h = String(c ?? '').replace('#', '');
+  if (/^[0-9a-f]{3}$/i.test(h)) h = [...h].map((v) => v + v).join('');
   if (!/^[0-9a-f]{6}$/i.test(h)) return 0.5;
   const [r, g, b] = [0, 2, 4].map((k) => parseInt(h.slice(k, k + 2), 16) / 255);
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
@@ -511,7 +516,7 @@ export function renderChartSvg(chart, data) {
     : baseType === 'waterfall' ? [{ name: '증가', color: chart.upColor ?? pal[0] }, { name: '감소', color: chart.downColor ?? pal[1] }, { name: '합계', color: chart.totalColor ?? pal[2] }]
       : baseType === 'pareto' ? [{ name: series[0]?.name ?? '', color: series[0]?.color }, { name: '누적 %', color: pal[1], line: true }]
         : series.map((s) => ({ name: s.name, color: s.color, line: s.type === 'line' || s.type === 'radar' }));
-  const showLegend = legendPos !== 'none' && (legendItems.length > 1 || pieLike || baseType === 'treemap');
+  const showLegend = legendPos !== 'none' && legendItems.length > 0;
   const sideLegend = showLegend && (legendPos === 'r' || legendPos === 'l');
   const legendW = sideLegend ? Math.min(180, Math.max(60, maxOf(legendItems.map((it) => [...String(it.name)].length * LW * 1.4 + 22)))) : 0;
   const legendH = showLegend && !sideLegend ? Math.round(FS.legend * 2.2) : 0;
@@ -541,12 +546,16 @@ export function renderChartSvg(chart, data) {
     const key = (it, lx, ly) => (it.line
       ? `<line x1="${lx - 2}" y1="${ly - 4}" x2="${lx + 11}" y2="${ly - 4}" stroke="${it.color}" stroke-width="2.25"/><circle cx="${lx + 4.5}" cy="${ly - 4}" r="2.5" fill="${it.color}"/>`
       : `<rect x="${lx}" y="${ly - 8}" width="9" height="9" fill="${it.color}"${light(it.color) ? ' stroke="#bfbfbf" stroke-width="0.75"' : ''}/>`);
+    const legendText = (name, maxChars) => {
+      const full = String(name), shown = truncate(full, maxChars);
+      return `${shown !== full ? `<title>${escSvg(full)}</title>` : ''}${escSvg(shown)}`;
+    };
     parts.push('<g data-el="legend">');
     if (sideLegend) {
       const lx0 = legendPos === 'r' ? W - legendW - 4 : 8;
       let ly = Math.max(top + 12, H / 2 - (items.length * Math.round(FS.legend * 1.6)) / 2);
       items.forEach((it) => {
-        parts.push(key(it, lx0, ly), `<text x="${lx0 + 15}" y="${ly}" font-size="${FS.legend}" fill="${LTX}"${chart.legendBold ? ' font-weight="700"' : ''}>${escSvg(truncate(String(it.name), Math.floor((legendW - 20) / (LW * 1.4))))}</text>`);
+        parts.push(key(it, lx0, ly), `<text x="${lx0 + 15}" y="${ly}" font-size="${FS.legend}" fill="${LTX}"${chart.legendBold ? ' font-weight="700"' : ''}>${legendText(it.name, Math.floor((legendW - 20) / (LW * 1.4)))}</text>`);
         ly += Math.round(FS.legend * 1.6);
       });
     } else {
@@ -555,7 +564,7 @@ export function renderChartSvg(chart, data) {
       let lx = Math.max(10, (W - total) / 2);
       const ly = legendPos === 't' ? top + 12 : H - 14;
       items.forEach((it) => {
-        parts.push(key(it, lx, ly), `<text x="${lx + 15}" y="${ly}" font-size="${FS.legend}" fill="${LTX}"${chart.legendBold ? ' font-weight="700"' : ''}>${escSvg(truncate(String(it.name), Math.floor((itemW - 18) / (LW * 1.4))))}</text>`);
+        parts.push(key(it, lx, ly), `<text x="${lx + 15}" y="${ly}" font-size="${FS.legend}" fill="${LTX}"${chart.legendBold ? ' font-weight="700"' : ''}>${legendText(it.name, Math.floor((itemW - 18) / (LW * 1.4)))}</text>`);
         lx += itemW;
       });
     }
