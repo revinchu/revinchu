@@ -1255,6 +1255,9 @@ function onEditingKey(e) {
     return;
   }
   pendingKey = null;
+  if (ctrl && !e.altKey && (e.code === 'KeyS' || e.key.toLowerCase() === 's')) {
+    e.preventDefault(); e.stopPropagation(); run(e.shiftKey ? 'saveAs' : 'save'); return;
+  }
   const fromBar = document.activeElement === dom.formula;
   if (ac) {
     if (e.key === 'ArrowDown') { e.preventDefault(); moveAutocomplete(1); return; }
@@ -7437,8 +7440,8 @@ function optionsDialog(startTab = 0) {
     ['저장', el('div', { class: 'opt-page' },
       title('통합 문서 저장'),
       select('다음 형식으로 파일 저장', o.saveFormat, [['xlsx', 'Excel 통합 문서 (*.xlsx)'], ['xlsm', 'Excel 매크로 사용 통합 문서 (*.xlsm)'], ['ods', 'OpenDocument 스프레드시트 (*.ods)'], ['wixel', 'WIXEL 통합 문서 (*.wixel)'], ['csv', 'CSV UTF-8 (*.csv)']], (v) => { o.saveFormat = v; }),
-      check(o.saveAsk !== false, '저장할 때 저장 위치(폴더)와 파일 이름 묻기 (크롬 · 엣지)', (v) => { o.saveAsk = v; }),
-      check(o.saveConfirm !== false, '[저장]으로 기존 파일을 덮어쓰기 전에 확인', (v) => { o.saveConfirm = v; }),
+      note('저장 버튼과 Ctrl+S는 매번 파일 이름과 폴더를 고르는 저장 창을 엽니다. 이전에 연 파일에도 바로 덮어쓰지 않습니다.'),
+      note('시스템 저장 창을 지원하지 않는 브라우저는 파일 이름 확인 후 다운로드합니다. 폴더 선택은 브라우저의 다운로드 설정을 따릅니다.'),
       title('이 브라우저의 보관함 (자동 복구)'),
       number('최근 문서 보관 개수', o.libMax, 5, 200, (v) => { o.libMax = v; }),
       number('편집 중 버전 기록 간격(분)', o.verMinutes, 1, 240, (v) => { o.verMinutes = v; }),
@@ -12167,47 +12170,76 @@ function download(name, content, type) {
 }
 
 // ───────────── 저장 위치 (엑셀처럼 폴더 · 파일 이름을 고름) ─────────────
-// 크롬 · 엣지: 파일 시스템 접근 API 의 저장 창 (마지막 폴더를 기억). 지원하지 않는 브라우저는 다운로드 (브라우저 설정의 '저장 위치 묻기' 사용)
+// 명시적 파일 저장은 항상 선택한 새 대상만 사용한다. 기억한 핸들은 초기 폴더 힌트뿐이다.
 const SAVE_TYPES = {
   xlsx: ['Excel 통합 문서', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'], xlsm: ['Excel 매크로 사용 통합 문서', 'application/vnd.ms-excel.sheet.macroEnabled.12'],
   xltx: ['Excel 서식 파일', 'application/vnd.openxmlformats-officedocument.spreadsheetml.template'], xltm: ['Excel 매크로 사용 서식 파일', 'application/vnd.ms-excel.template.macroEnabled.12'],
-  ods: ['OpenDocument 스프레드시트', 'application/vnd.oasis.opendocument.spreadsheet'], wixel: ['WIXEL 통합 문서', 'application/json'],
+  ods: ['OpenDocument 스프레드시트', 'application/vnd.oasis.opendocument.spreadsheet'], wixel: ['WIXEL 통합 문서', 'application/json'], json: ['JSON 파일', 'application/json'],
   csv: ['CSV UTF-8', 'text/csv'], tsv: ['텍스트 (탭으로 분리)', 'text/tab-separated-values'], txt: ['유니코드 텍스트', 'text/plain'],
   pdf: ['PDF', 'application/pdf'], html: ['웹 페이지', 'text/html'], png: ['PNG 그림', 'image/png'],
 };
 const canPickSave = () => typeof window.showSaveFilePicker === 'function' && window.isSecureContext && window.self === window.top;
-let fileHandle = null; // 지금 문서가 연결된 내 컴퓨터 파일 (열기 · 다른 이름으로 저장으로 정함) — [저장] 은 여기에 덮어씀
-/** 저장 위치 고르기 → handle (취소하면 undefined, 고를 수 없는 브라우저는 null = 다운로드) */
+let fileHandle = null; // 마지막으로 열거나 저장한 파일: 저장 창의 시작 폴더에만 사용
+let savePickerOpen = false;
+/** 시스템 저장 창 미지원 환경도 사용자 확인 없이 다운로드하지 않는다. */
+function confirmFileDownload(fileName) {
+  return new Promise((resolve) => {
+    const input = el('input', { type: 'text', value: fileName });
+    const ext = fileName.includes('.') ? fileName.slice(fileName.lastIndexOf('.')) : '';
+    openDialog({
+      title: '파일로 저장', width: 480,
+      body: el('div', {}, el('label', {}, el('span', {}, '파일 이름'), input),
+        el('p', { class: 'muted' }, '이 브라우저는 시스템 파일 저장 창을 지원하지 않습니다. 폴더를 직접 고르려면 Chrome 또는 Edge에서 여세요. 다운로드를 이용하려면 브라우저 설정의 “다운로드 전에 저장 위치 확인”을 켜세요.')),
+      onClose: () => resolve(null),
+      buttons: [
+        { label: '다운로드', primary: true, action: () => {
+          if (!input.value.trim()) { input.focus(); return false; }
+          let name = safeFileName(input.value);
+          if (ext && !name.toLowerCase().endsWith(ext.toLowerCase())) name += ext;
+          resolve({ handle: null, name });
+        } },
+        { label: '취소' },
+      ],
+    });
+  });
+}
+/** 파일을 만들기 전에 저장 위치 선택. 취소·권한 오류는 파일 쓰기 없이 종료한다. */
 async function pickSaveTarget(fileName) {
-  if (!canPickSave() || opts.saveAsk === false) return null;
-  const ext = fileName.split('.').pop().toLowerCase();
-  const t = SAVE_TYPES[ext];
+  if (savePickerOpen || exportBusy) { toast('진행 중인 파일 저장을 마친 뒤 다시 저장하세요.'); return null; }
+  savePickerOpen = true;
   try {
-    return await window.showSaveFilePicker({
+    if (!canPickSave()) return await confirmFileDownload(fileName);
+    const ext = fileName.split('.').pop().toLowerCase(), t = SAVE_TYPES[ext];
+    const handle = await window.showSaveFilePicker({
       suggestedName: fileName, id: 'wixel-save', startIn: fileHandle ?? 'documents',
       types: t ? [{ description: `${t[0]} (*.${ext})`, accept: { [t[1]]: [`.${ext}`] } }] : undefined,
     });
+    return { handle, name: handle.name };
   } catch (err) {
-    if (err?.name === 'AbortError') return undefined;
-    return null; // 보안 제한 등: 다운로드로
-  }
+    if (err?.name !== 'AbortError') alertDialog('파일 저장', '저장 창을 열지 못했습니다. 파일은 저장하지 않았습니다. 저장 버튼을 다시 누르거나 Chrome 또는 Edge에서 여세요.');
+    return null;
+  } finally { savePickerOpen = false; }
 }
-/** 고른 위치(또는 다운로드)에 쓰기 */
-async function writeSaveTarget(handle, fileName, blob) {
-  if (!handle) { download(fileName, blob); return fileName; }
-  const w = await handle.createWritable();
-  await w.write(blob);
-  await w.close();
-  return handle.name;
+/** 이번 저장 창에서 선택한 대상에만 쓰고, 실패하면 미완료 스트림을 폐기한다. */
+async function writeSaveTarget(target, blob) {
+  if (!target.handle) { download(target.name, blob); return target.name; }
+  const w = await target.handle.createWritable();
+  try { await w.write(blob); await w.close(); }
+  catch (err) { try { await w.abort(); } catch { /* 이미 닫힌 스트림 */ } throw err; }
+  return target.name;
 }
-/** 저장 위치를 고른 뒤 만들어 저장: make() 는 Blob 을 돌려줌. 저장한 파일 이름 (취소면 null) */
+/** 선택 → 파일 생성 → 쓰기. 취소면 null. */
 async function saveWithPicker(fileName, make) {
-  const handle = await pickSaveTarget(fileName);
-  if (handle === undefined) return null;
-  const blob = await make();
-  if (!blob) return null;
-  const name = await writeSaveTarget(handle, fileName, blob);
-  return { name, handle };
+  const savingBook = wb, savingId = docId;
+  const target = await pickSaveTarget(fileName);
+  if (!target) return null;
+  if (wb !== savingBook || docId !== savingId) { toast('문서가 바뀌어 저장을 취소했습니다. 현재 문서에서 다시 저장하세요.'); return null; }
+  try {
+    const blob = await make();
+    if (!blob) return null;
+    await writeSaveTarget(target, blob);
+    return target;
+  } catch (err) { alertDialog('파일 저장', `저장하지 못했습니다: ${err.message}`); return null; }
 }
 
 const safeFileName = (name) => name.replace(/[\\/:*?"<>|]/g, '_').trim() || '통합 문서';
@@ -12228,6 +12260,7 @@ async function exportCsv(kind = 'csv', name = docName) {
   const fileName = `${safeFileName(name)}-${safeFileName(sheet().name)}.${kind}`;
   const done = await saveWithPicker(fileName, () => new Blob([`﻿${toDelimited(sheetToRows(si), tab ? '\t' : ',')}`], { type: `${tab ? 'text/tab-separated-values' : 'text/csv'};charset=utf-8` }));
   if (done) toast(`'${done.name}' 로 내보냈습니다 (현재 시트, UTF-8).`);
+  return done;
 }
 
 /** OpenDocument 스프레드시트(.ods)로 저장 — 값 · 수식 · 서식 · 병합 · 열 너비 */
@@ -12243,6 +12276,7 @@ function exportOds(name = docName) {
 async function exportOdsFile(name = docName) {
   const done = await saveWithPicker(`${safeFileName(name)}.ods`, () => exportOds(name));
   if (done) toast(`'${done.name}' (OpenDocument 스프레드시트)로 저장했습니다.`);
+  return done;
 }
 
 const XLSX_KINDS = {
@@ -12252,27 +12286,33 @@ const XLSX_KINDS = {
   xltm: { mime: 'application/vnd.ms-excel.template.macroEnabled.12', label: 'Excel 매크로 사용 서식 파일' },
 };
 
-async function exportXlsx(name = docName, kind = null, target = null) {
-  const over = xlsxOverflow(wb);
-  if (over) toast(`엑셀 파일은 1,048,576행까지만 저장할 수 있어 그 아래 셀 ${over.toLocaleString()}개는 빠집니다. 전체는 .wixel 로 저장하세요.`);
+async function exportXlsx(name = docName, kind = null) {
+  const savingBook = wb, savingId = docId, savingSheet = si;
   const k = kind ?? (wb.vba ? 'xlsm' : 'xlsx');
   const fileName = `${safeFileName(name)}.${k}`;
-  // 저장 위치를 먼저 고름 (파일을 만드는 동안 기다리면 브라우저가 창을 막음). target = [저장] 이 덮어쓸 파일
-  const handle = target === false ? null : target ?? await pickSaveTarget(fileName);
-  if (handle === undefined) return false;
+  // 사용자 동작 직후 창을 열어야 하므로 직렬화·비동기 작업보다 먼저 호출한다.
+  const target = await pickSaveTarget(fileName);
+  if (!target) return null;
+  if (wb !== savingBook || docId !== savingId) { toast('문서가 바뀌어 저장을 취소했습니다. 현재 문서에서 다시 저장하세요.'); return null; }
+  const over = xlsxOverflow(wb);
+  if (over) toast(`엑셀 파일은 1,048,576행까지만 저장할 수 있어 그 아래 셀 ${over.toLocaleString()}개는 빠집니다. 전체는 .wixel 로 저장하세요.`);
   // 큰 문서는 나눠서 만들고 진행 표시 (압축도 함께 해서 파일이 작아짐)
   const prog = progressOverlay(`'${fileName}' 저장 중`);
   exportBusy++;
   if (opts.userName) wb.props = { ...(wb.props ?? {}), lastModifiedBy: opts.userName, creator: wb.props?.creator || opts.userName };
   try {
     await snapshotLinkedPictures();
-    const bytes = await writeXlsxAsync(wb, { activeSheet: si, fileName, kind: k }, (st) => prog.set(st.p, st.msg));
+    if (wb !== savingBook || docId !== savingId) throw new Error('문서가 바뀌었습니다. 현재 문서에서 다시 저장하세요.');
+    const bytes = await writeXlsxAsync(savingBook, { activeSheet: savingSheet, fileName: target.name, kind: k }, (st) => prog.set(st.p, st.msg));
     prog.set(0.98, '파일 쓰는 중');
-    const saved = await writeSaveTarget(handle, fileName, new Blob([bytes], { type: XLSX_KINDS[k].mime }));
+    const saved = await writeSaveTarget(target, new Blob([bytes], { type: XLSX_KINDS[k].mime }));
     prog.close();
-    if (handle && /^xls[xm]$/.test(k)) { fileHandle = handle; remoteDoc = false; clearTimeout(serverTimer); updateTitle(); } // 이 파일에 이어서 [저장]
-    toast(handle ? `'${saved}' 에 ${XLSX_KINDS[k].label}(.${k})로 저장했습니다.` : `${XLSX_KINDS[k].label}(.${k})로 저장했습니다. (브라우저 다운로드 폴더)`);
-    return true;
+    if (wb === savingBook && docId === savingId && /^xls[xm]$/.test(k)) {
+      fileHandle = target.handle; remoteDoc = false; clearTimeout(serverTimer);
+      renameDoc(saved.replace(/\.xls[xm]$/i, '')); updateTitle();
+    }
+    toast(target.handle ? `'${saved}' 에 ${XLSX_KINDS[k].label}(.${k})로 저장했습니다.` : `'${saved}' 다운로드를 요청했습니다. 저장 위치는 브라우저 설정을 따릅니다.`);
+    return target;
   } catch (err) {
     prog.close();
     alertDialog('WIXEL', `저장하지 못했습니다: ${err.message}`);
@@ -12298,23 +12338,30 @@ function saveAs() {
         ...(server.connected ? [{ value: 'server', label: `${server.label}에 저장 (다른 기기에서 열기)` }] : []),
       ],
     },
-  ], ({ name, type }) => {
+  ], async ({ name, type }) => {
     const newName = name.trim() || docName;
-    if (newName !== docName) renameDoc(newName);
-    if (XLSX_KINDS[type]) exportXlsx(newName, type === 'xlsx' && wb.vba ? 'xlsx' : type);
-    else if (type === 'csv' || type === 'tsv' || type === 'txt') exportCsv(type, newName);
-    else if (type === 'ods') exportOdsFile(newName);
-    else if (type === 'server') saveNow(true, { saveAsFolder: true });
-    else saveWithPicker(`${safeFileName(newName)}.wixel`, () => new Blob([JSON.stringify(snapshot())], { type: 'application/json' })).then((d) => d && toast(`'${d.name}' 로 저장했습니다.`));
-    saveToStorage();
-  }, { okLabel: '저장', note: canPickSave() ? '확인을 누르면 저장할 폴더와 파일 이름을 고르는 창이 열립니다.' : '이 브라우저는 폴더 선택을 지원하지 않아 다운로드 폴더에 저장됩니다. (브라우저 설정 › 다운로드 › "다운로드 전에 저장 위치 확인"을 켜면 위치를 고를 수 있습니다)' });
+    const savingBook = wb, savingId = docId;
+    if (type === 'server') { saveNow(true, { saveAsFolder: true, suggestedName: newName }); return; }
+    let done;
+    if (XLSX_KINDS[type]) done = await exportXlsx(newName, type);
+    else if (type === 'csv' || type === 'tsv' || type === 'txt') done = await exportCsv(type, newName);
+    else if (type === 'ods') done = await exportOdsFile(newName);
+    else {
+      done = await saveWithPicker(`${safeFileName(newName)}.wixel`, () => new Blob([JSON.stringify({ ...snapshot(), docName: newName })], { type: 'application/json' }));
+      if (done) toast(`'${done.name}' 로 저장했습니다.`);
+    }
+    if (done && wb === savingBook && docId === savingId) {
+      if (!XLSX_KINDS[type] || !/^xls[xm]$/.test(type)) renameDoc(newName);
+      saveToStorage();
+    }
+  }, { okLabel: '저장', note: '저장을 누르면 파일 이름과 폴더를 고르는 창이 열립니다. 취소하면 기존 파일과 문서 이름을 유지합니다.' });
 }
 
 let fileMode = 'open';
 let templateOpening = false; // 서식 파일을 여는 중 (매크로 안내 생략: 버튼은 내장 동작으로 실행)
 async function pickFile(mode) {
   fileMode = mode;
-  // 크롬 · 엣지: 파일 열기 창에서 연 파일은 [저장] 할 때 같은 파일에 덮어쓸 수 있음 (엑셀과 같게)
+  // 크롬 · 엣지: 연 파일의 폴더를 다음 저장 창의 시작 위치로 기억한다.
   if (mode === 'open' && typeof window.showOpenFilePicker === 'function' && window.isSecureContext && window.self === window.top) {
     try {
       const [h] = await window.showOpenFilePicker({ id: 'wixel-open', types: [{ description: '스프레드시트', accept: { 'application/octet-stream': ['.xlsx', '.xlsm', '.xlsb', '.xls', '.xltx', '.xltm', '.ods', '.csv', '.tsv', '.txt', '.wixel', '.json'] } }] });
@@ -13292,47 +13339,45 @@ function scheduleServerSave(delay = 1500) {
   serverTimer = setTimeout(() => (big ? whenIdle(() => saveNow(false)) : saveNow(false)), big ? Math.max(delay, 8000) : delay);
 }
 
-/** 저장: 브라우저 + (서버가 있으면) 서버 */
-/** [저장] (Ctrl+S): 이전 파일을 덮어쓰므로 한 번 더 확인 (다시 묻지 않기 선택 가능) */
-function confirmOverwrite() {
-  if (viewOnly) { saveNow(true); return; }
-  const target = fileHandle ? `내 컴퓨터의 '${fileHandle.name}'` : remoteDoc && server.connected ? `${server.label}의 '${docName}'` : `이 브라우저의 '${docName}'`;
-  const go = () => {
-    if (fileHandle) exportXlsx(docName, /\.xlsm$/i.test(fileHandle.name) ? 'xlsm' : 'xlsx', fileHandle).then((ok) => { if (ok) { saveNow(true, { quiet: true }); } });
-    else saveNow(true);
-  };
-  if (opts.saveConfirm === false) { go(); return; }
-  const skip = el('input', { type: 'checkbox' });
-  openDialog({
-    title: '저장', width: 440,
-    body: el('div', {}, el('p', {}, `${target}에 덮어써서 저장합니다. 이전 내용은 바뀐 내용으로 대체됩니다.`),
-      el('p', { class: 'muted' }, '이전 파일을 남기려면 [다른 이름으로 저장]을 사용하세요. (파일 › 정보의 버전 기록에서 예전 버전도 볼 수 있습니다)'),
-      el('label', { class: 'chk' }, skip, '다시 묻지 않기')),
-    buttons: [
-      { label: '덮어쓰기', primary: true, action: () => { if (skip.checked) { opts.saveConfirm = false; saveOptions(); } go(); } },
-      { label: '다른 이름으로 저장...', action: () => saveAs() },
-      { label: '취소' },
-    ],
-  });
+/** [저장]/Ctrl+S도 매번 파일 이름과 폴더를 선택한다. 브라우저 자동 보관은 별도이다. */
+async function saveFile() {
+  if (viewOnly) { toast('읽기 전용 보기입니다. [편집용 사본 만들기]를 누르세요.'); return; }
+  const savingBook = wb, savingId = docId;
+  const done = await exportXlsx(docName, wb.vba || /\.xlsm$/i.test(fileHandle?.name ?? '') ? 'xlsm' : 'xlsx');
+  if (done && wb === savingBook && docId === savingId) await saveNow(true, { quiet: true });
 }
 
-async function saveNow(explicit, { quiet = false, saveAsFolder = false } = {}) {
+async function saveNow(explicit, { quiet = false, saveAsFolder = false, suggestedName = docName } = {}) {
   if (serverRestoreBusy) { if (explicit) toast('온라인 복원 작업이 끝난 뒤 저장하세요.'); return; }
   if (explicit && saveAsFolder && server.connected) {
-    // 서버(다른 기기에서 열기)에 저장할 위치: 폴더 / 파일 이름
-    const names = await serverNames();
+    const sourceBook = wb, sourceId = docId, sourceName = docName, sourceConnection = server.connectionVersion;
+    const current = () => {
+      if (wb === sourceBook && docId === sourceId && docName === sourceName && server.connectionVersion === sourceConnection && server.connected && !viewOnly && !serverRestoreBusy) return true;
+      toast('문서나 보관함 연결이 바뀌어 온라인 저장을 취소했습니다. 현재 문서에서 다시 저장하세요.');
+      return false;
+    };
+    if (!current()) return;
+    // 목록에서 확인한 대상 버전으로만 덮어쓴다. 실패한 목록을 빈 보관함으로 취급하지 않는다.
+    let files;
+    try { files = await server.list(); }
+    catch (err) { if (current()) toast('온라인 문서 목록을 읽지 못해 저장을 취소했습니다: ' + err.message); return; }
+    if (!current()) return;
+    const names = files.map((f) => f.name);
     const folders = [...new Set(names.filter((n) => n.includes('/')).map((n) => n.slice(0, n.lastIndexOf('/'))))].sort();
-    const cur = docName.includes('/') ? docName.slice(0, docName.lastIndexOf('/')) : '';
+    const cur = suggestedName.includes('/') ? suggestedName.slice(0, suggestedName.lastIndexOf('/')) : '';
     formDialog('서버에 저장 (다른 기기에서 열기)', [
       { name: 'folder', label: '저장 위치 (폴더, 비우면 맨 위)', value: cur, options: folders.map((f) => ({ value: f, label: f })), type: folders.length ? 'combo' : undefined },
-      { name: 'name', label: '파일 이름', value: docName.slice(docName.lastIndexOf('/') + 1) },
-    ], ({ folder, name }) => {
+      { name: 'name', label: '파일 이름', value: suggestedName.slice(suggestedName.lastIndexOf('/') + 1) },
+    ], async ({ folder, name }) => {
+      if (!current()) return;
       const clean = (x) => String(x ?? '').split('/').map((p) => p.trim().replace(/[\\:*?"<>|]/g, '_')).filter((p) => p && p !== '.' && p !== '..').join('/');
       const full = [clean(folder), clean(name) || '통합 문서'].filter(Boolean).join('/');
-      const doit = () => { if (full !== docName) renameDoc(full); selectRemoteSave(); };
-      if (full !== docName && names.includes(full)) confirmBox('서버에 저장', `'${full}' 이(가) 이미 있습니다. 덮어쓸까요?`).then((ok) => ok && doit());
-      else doit();
-    }, { okLabel: '저장', note: `폴더 이름에 / 를 넣으면 하위 폴더가 됩니다 (예: 보고서/2026). 같은 ${server.label}에 연결한 기기의 [문서 열기]에서 찾을 수 있습니다.` });
+      const target = files.find((f) => f.name === full), expectedRevision = target ? target.revision : 0;
+      if (server.vault && (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0)) { toast('대상 문서 버전을 확인하지 못했습니다. 목록을 다시 열어 저장하세요.'); return; }
+      if (target && !await confirmBox('서버에 저장', "'" + full + "' 이(가) 이미 있습니다. 덮어쓸까요?")) return;
+      if (!current()) return;
+      selectRemoteSave({ name: full, expectedRevision, guard: current });
+    }, { okLabel: '저장', note: '폴더 이름에 / 를 넣으면 하위 폴더가 됩니다 (예: 보고서/2026). 같은 ' + server.label + '에 연결한 기기의 [문서 열기]에서 찾을 수 있습니다.' });
     return;
   }
   if (viewOnly) { if (explicit) toast('읽기 전용 보기입니다. [편집용 사본 만들기]를 누르세요.'); return; }
@@ -13413,9 +13458,20 @@ function formatDate(ms) {
 }
 
 function storageLabel() { return fileHandle ? `원본 파일 · ${fileHandle.name}` : remoteDoc && server.connected ? server.label : '이 브라우저'; }
-function selectRemoteSave() {
-  if (!server.connected) { connectStorage(selectRemoteSave); return; }
-  if (!remoteDoc) server.restoreRevision(`files/${encodeURIComponent(docName)}`, '0');
+function selectRemoteSave({ name = docName, expectedRevision, guard = null } = {}) {
+  if (guard && !guard()) return;
+  if (!server.connected) {
+    const sourceBook = wb, sourceId = docId, sourceName = docName;
+    connectStorage(() => {
+      if (wb !== sourceBook || docId !== sourceId || docName !== sourceName) { toast('문서가 바뀌어 온라인 저장을 취소했습니다. 현재 문서에서 다시 저장하세요.'); return; }
+      selectRemoteSave({ name, expectedRevision, guard });
+    });
+    return;
+  }
+  if (serverState.saving) { toast('진행 중인 온라인 저장을 마친 뒤 다시 저장하세요.'); return; }
+  if (name !== docName) renameDoc(name);
+  if (expectedRevision !== undefined) server.restoreRevision(`files/${encodeURIComponent(docName)}`, expectedRevision);
+  else if (!remoteDoc) server.restoreRevision(`files/${encodeURIComponent(docName)}`, '0');
   remoteDoc = true;
   fileHandle = null;
   serverState.error = null;
@@ -13423,11 +13479,11 @@ function selectRemoteSave() {
   saveNow(true);
   startCollabWatch();
 }
-function recoveryFile() {
+async function recoveryFile() {
   const key = server.recoveryKey();
   if (!key) return;
-  download('WIXEL-개인보관함-복구키.json', JSON.stringify({ app: 'WIXEL', version: 3, origin: location.origin, key }, null, 2), 'application/json');
-  toast('복구키 파일을 내려받았습니다. 이 파일을 가진 사람은 개인 보관함을 열 수 있습니다.');
+  const done = await saveWithPicker('WIXEL-개인보관함-복구키.json', () => new Blob([JSON.stringify({ app: 'WIXEL', version: 3, origin: location.origin, key }, null, 2)], { type: 'application/json' }));
+  if (done) toast('복구키 파일을 저장했습니다. 이 파일을 가진 사람은 개인 보관함을 열 수 있습니다.');
 }
 function connectStorage(done) {
   if (!server.available) { alertDialog('저장소 연결', '이 실행 환경에서는 온라인 보관함을 사용할 수 없습니다. 브라우저에 보관하거나 파일로 내려받으세요.'); return; }
@@ -13577,19 +13633,19 @@ function openBackstage(panel = 'new') {
   };
   const showStorage = () => {
     const browserSave = () => { remoteDoc = false; fileHandle = null; clearTimeout(serverTimer); serverState.error = null; saveNow(true); showStorage(); };
-    const remoteSave = () => { if (!server.connected) connectStorage(() => { selectRemoteSave(); showStorage(); }); else { selectRemoteSave(); showStorage(); } };
+    const remoteSave = () => { if (!server.connected) connectStorage(() => saveNow(true, { saveAsFolder: true })); else saveNow(true, { saveAsFolder: true }); };
     main.replaceChildren(hubHeading('저장 위치', '내 문서, 내가 고르는 보관 방식', `현재 문서: ${docName} · ${storageLabel()}`),
       el('div', { class: 'hub-callout' }, hubIcon('save'), el('div', {}, el('b', {}, '브라우저에는 작업 사본을 보관합니다'), el('p', {}, '자동 저장을 켜면 이 기기에 변경 내용을 보관합니다. 브라우저 데이터를 지우면 사라질 수 있어 파일이나 온라인 보관함으로도 저장하세요.'))),
       el('div', { class: 'hub-grid two storage-cards' },
         hubCard('table', '이 브라우저', '현재 기기에 자동 보관 · 최근 문서와 버전 기록', browserSave, { tag: !remoteDoc && !fileHandle ? '현재 위치' : '기본' }),
-        hubCard('save', 'Excel 파일 다운로드', 'xlsx 파일로 내려받아 직접 보관하거나 전달', () => exportXlsx(docName, null, false), { tag: '.xlsx' }),
-        hubCard('open', '원본 파일에 저장', fileHandle ? `${fileHandle.name}에 변경 내용 반영` : canPickSave() ? '파일 위치를 정하고 Ctrl+S로 이어서 저장' : '이 브라우저에서는 파일 다운로드를 사용하세요', () => { close(); if (fileHandle) confirmOverwrite(); else exportXlsx(); }, { tag: fileHandle ? '연결됨' : '파일 선택', disabled: !fileHandle && !canPickSave() }),
+        hubCard('save', 'Excel 파일 다운로드', 'xlsx 파일로 내려받아 직접 보관하거나 전달', () => exportXlsx(), { tag: '.xlsx' }),
+        hubCard('open', '내 컴퓨터에 저장', '매번 저장 창에서 파일 이름과 폴더 선택 · Ctrl+S', () => { close(); saveFile(); }, { tag: '파일 선택' }),
         hubCard('folder', server.vault ? '온라인 개인 보관함' : '연결 서버에 저장', server.vault ? '복구키로 다른 기기에서도 내 문서 열기' : server.available ? '연결된 서버에 문서 보관' : '이 환경은 온라인 저장을 제공하지 않습니다', remoteSave, { tag: remoteDoc ? '현재 위치' : server.connected ? '연결됨' : '연결 필요', disabled: !server.available })),
       el('div', { class: 'hub-section-heading' }, el('h3', {}, '연결 관리'), el('span', { class: 'muted' }, server.connected ? `${server.label} 연결됨` : '연결된 온라인 보관함 없음')),
       el('div', { class: 'backstage-actions' },
         el('button', { class: 'btn', disabled: !server.available, onclick: () => connectStorage(showStorage) }, server.vault ? '다른 복구키로 연결' : '서버 연결 설정'),
         server.vault && server.connected ? el('button', { class: 'btn', onclick: recoveryFile }, '복구키 파일 내보내기') : null,
-        server.vault && server.connected ? el('button', { class: 'btn', onclick: async (e) => { const btn = e.currentTarget; btn.disabled = true; try { download('WIXEL-보관함-백업.json', JSON.stringify(await server.backup()), 'application/json'); toast('보관함 백업을 내려받았습니다.'); } catch (err) { toast(`백업 실패: ${err.message}`); } finally { btn.disabled = false; } } }, '보관함 전체 백업') : null,
+        server.vault && server.connected ? el('button', { class: 'btn', onclick: async (e) => { const btn = e.currentTarget; btn.disabled = true; try { const done = await saveWithPicker('WIXEL-보관함-백업.json', async () => new Blob([JSON.stringify(await server.backup())], { type: 'application/json' })); if (done) toast('보관함 백업을 저장했습니다.'); } catch (err) { toast(`백업 실패: ${err.message}`); } finally { btn.disabled = false; } } }, '보관함 전체 백업') : null,
         server.connected && server.capabilities.backupImport ? el('button', { class: 'btn', onclick: () => backupImportDialog(showStorage) }, '보관함 백업 복원') : null,
         server.connected ? el('button', { class: 'btn', onclick: () => { server.disconnect(); remoteDoc = false; clearTimeout(serverTimer); serverState.error = null; saveToStorage(); showStorage(); toast('이 기기의 연결을 해제했습니다. 온라인 문서는 삭제하지 않았습니다.'); } }, '이 기기 연결 해제') : null),
       ...(server.vault ? [el('p', { class: 'backstage-note' }, '개인 보관함: 문서당 최대 20 MB · 전체 100 MB · 최대 50개. 복구키 파일을 다른 사람에게 전달하면 보관함 전체를 열 수 있습니다.')] : []));
@@ -13597,7 +13653,7 @@ function openBackstage(panel = 'new') {
   const showShare = () => {
     main.replaceChildren(hubHeading('공유 · 내보내기', '필요한 형태로 전달하세요', '파일로 보내거나 읽기 전용 링크를 만드세요.'),
     el('div', { class: 'hub-grid two' },
-      hubCard('save', 'Excel 통합 문서', '수식 · 서식 · 여러 시트를 .xlsx 파일로 저장', () => exportXlsx(docName, null, false)),
+      hubCard('save', 'Excel 통합 문서', '수식 · 서식 · 여러 시트를 .xlsx 파일로 저장', () => exportXlsx()),
       hubCard('csvOut', 'CSV 데이터', '현재 시트의 값을 UTF-8 CSV 파일로 저장', () => exportCsv()),
       hubCard('table', '다른 형식으로 저장', 'XLSM · ODS · WIXEL · TSV 등', () => { close(); saveAs(); }),
       hubCard('webData', '읽기 전용 링크 공유', '선택한 문서 내용을 링크가 있는 누구나 열람', () => { close(); publishDialog(); })),
@@ -16238,7 +16294,7 @@ const COMMANDS = {
   slicerBold: () => { const sl = (sheet().slicers ?? []).find((x) => x.id === chartSel); if (sl) { updateObject(sl.id, { bold: !sl.bold || undefined }); gv.renderObjectsAll(); } },
   undo: () => { const m = wb.undo(); if (m) restoreMeta(m); else toast('실행 취소할 작업이 없습니다.'); },
   redo: () => { const m = wb.redo(); if (m) restoreMeta(m); },
-  save: () => { confirmOverwrite(); },
+  save: saveFile,
   saveAs,
   open: () => openBackstage('open'),
   backstage: () => openBackstage(),
@@ -16616,6 +16672,7 @@ const NO_COMMIT = new Set(['toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100', 'shor
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['파일 저장 창', ['저장 버튼·Ctrl+S·내보내기는 매번 파일 이름과 폴더 선택', '열어 둔 원본에 바로 덮어쓰지 않음 · 취소 시 이름과 파일 유지 · 셀 편집 중 Ctrl+S 지원']],
   ['저장 실패 보호', ['대용량 브라우저 저장을 세대별 원자 저장으로 전환 · 강제 종료와 용량 부족 시 이전 저장본 유지', '복원 전 현재 문서 보관 성공 확인 · 온라인 저장 중 문서 전환 뒤 자동 저장 재개']],
   ['피벗 정확성', ['계산 필드의 음수 반올림·오류 전파·인수 검사와 오류 항목 필터 보완', '다른 시트의 원본 수식 변경도 자동 새로 고침에 반영']],
   ['계산·날짜 신뢰성', ['미지원 수식의 오래된 저장값이 정상 합계로 전파되지 않도록 차단 · 계산 상태 및 원인 목록', '1900/1904 날짜 체계의 수식·표시·피벗·QUERY·파일 저장 보존']],
@@ -16644,7 +16701,7 @@ const WHATS_NEW = [
   ['피벗 그룹', ['선택 항목 그룹화 (항목 셀 여러 개 선택 → 그룹1 · 그룹2, 그룹 해제)', '피벗 항목 이름 바꾸기 (항목 칸에 새 이름 입력)', '엑셀 파일의 선택 항목 그룹 · 공유 캐시 날짜 그룹을 그대로 열고 저장']],
   ['피벗', ['피벗 테이블 이동 (새 워크시트 또는 기존 워크시트, 셀 서식 · 수식 참조 · 차트 · 슬라이서 연결과 실행 취소 지원)', '추천 피벗 테이블 (삽입 › 추천 피벗 테이블: 요약 후보 미리 보기)', '계산 항목 (예: 수도권 = 서울 + 인천, 피벗 분석 › 필드, 항목 및 집합)']],
   ['호환', ['확인란을 Excel 365 형식으로 저장 (실제 Excel 표시 검증 필요)']],
-  ['파일', ['저장 위치(폴더) 선택 · 덮어쓰기 확인 · 연 파일에 바로 [저장]', '파일 › 정보: 통합 문서 보호(구조 보호 · 최종본 · 읽기 전용 권장) · 문서 검사 · 속성 편집', '다른 기기에서 열기(서버 저장)도 폴더 지정']],
+  ['파일', ['저장할 때마다 파일 이름·폴더 선택 · 저장 창 취소 시 기존 파일 유지', '파일 › 정보: 통합 문서 보호(구조 보호 · 최종본 · 읽기 전용 권장) · 문서 검사 · 속성 편집', '다른 기기에서 열기(서버 저장)도 폴더 지정']],
   ['편집', ['셀 삽입/삭제 대화 상자 (셀을 오른쪽/아래로 밀기 · 왼쪽/위로 당기기 · 행/열 전체)', '셀 내용 자동 완성 · 자동 고침 · 소수점 자동 삽입 · URL 자동 하이퍼링크', '고급 필터 (조건 범위 · 다른 장소에 복사 · 고유 레코드만)']],
   ['서식', ['채우기 효과 (셀 그라데이션: 가로 · 세로 · 대각선 · 가운데에서)', '무늬 스타일 그림 선택기 · 병합 셀 테두리 · 행 서식 번짐 수정', '스타일시트 v1.0: 표 42 · 피벗 42 · 슬라이서 48종 기본 탑재']],
   ['삽입', ['아이콘 3,663개 (34개 범주, 그래픽 채우기로 색 바꾸기)', '도형 · 그림에 매크로 연결 (내장 동작 실행)']],
@@ -16875,8 +16932,8 @@ function updateTitle() {
   dom.autosaveLabel.textContent = autosave ? '켬' : '끔';
   let state;
   if (storageWarned) state = '브라우저 저장 실패 · 파일로 저장하세요';
-  else if (!remoteDoc || !server.connected) state = dirty ? (autosave ? '브라우저에 저장 대기' : '저장 안 됨') : fileHandle ? '브라우저 사본 저장됨 · 원본은 Ctrl+S' : '이 브라우저에 저장됨';
-  else if (!serverAutosave()) state = dirty ? (autosave ? '브라우저에 저장 중' : '저장 안 됨') : '이 브라우저에 저장됨 (서버는 [저장])';
+  else if (!remoteDoc || !server.connected) state = dirty ? (autosave ? '브라우저에 저장 대기' : '저장 안 됨') : fileHandle ? '브라우저 사본 저장됨 · 파일 저장 Ctrl+S' : '이 브라우저에 저장됨';
+  else if (!serverAutosave()) state = dirty ? (autosave ? '브라우저에 저장 중' : '저장 안 됨') : '이 브라우저에 저장됨 · 온라인 저장은 저장 위치에서';
   else if (serverState.saving) state = '저장 중...';
   else if (serverState.error) state = '서버에 저장하지 못함';
   else if (dirty) state = autosave ? '저장 대기 중' : '저장 안 됨';

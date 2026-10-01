@@ -33,8 +33,18 @@ async function fixture(p,block=false) {
     const t=window.tabula;t.wb().restore({date1904:true,props:{title:'원본 메타'},sheets});t.gv().layout();t.gv().renderAll();t.selectCell(0,0);
   },block);
 }
+// Ctrl+S는 파일 저장이다. 브라우저 사본은 사용자가 고르는 저장 위치 카드로 저장한다.
+async function saveBrowserCopy(p) {
+  await p.evaluate(()=>window.tabula.run('saveLocations'));
+  const hub=p.locator('.wixel-hub');
+  await hub.waitFor({state:'visible'});
+  await hub.getByRole('button',{name:/^이 브라우저/}).click();
+  // 카드를 다시 그리면서 초점이 사라질 수 있어 허브 안에서 Escape를 누른다.
+  await hub.locator('button.back').press('Escape');
+  await hub.waitFor({state:'detached'});
+}
 async function save(p,previous=null,trigger=true) {
-  if(trigger)await p.evaluate(()=>window.tabula.run('save'));
+  if(trigger)await saveBrowserCopy(p);
   await p.evaluate(async ({key,previous})=>{const end=performance.now()+30000;while(performance.now()<end){const idx=await window.__idb('get',key),ptr=JSON.parse(localStorage.getItem(key)||'null');if(idx?.v===3&&idx.generation!==previous&&ptr?.generation===idx.generation)return;await new Promise(r=>setTimeout(r,20));}throw new Error('manifest 저장 시간 초과: '+document.body.innerText.slice(-900));},{key,previous});
   await idle(p);return read(p);
 }
@@ -60,25 +70,25 @@ async function reloadAndCheck(p,expected='OLD',block=false){
 try {
   await test('두 번째 시트 저장 중 실제 IDB abort: 이전 시트·16MB 분할 청크·1904 날짜 복구',async p=>{
     await fixture(p,true);const prior=await save(p),first=await read(p,prior.sheets[0].key);assert.equal(first.partKeys.length,2);
-    const before=await pointer(p);await change(p);await fault(p,'second');await p.evaluate(()=>window.tabula.run('save'));await p.waitForFunction(()=>window.__faultHit);await idle(p);
+    const before=await pointer(p);await change(p);await fault(p,'second');await saveBrowserCopy(p);await p.waitForFunction(()=>window.__faultHit);await idle(p);
     assert.equal((await read(p)).generation,prior.generation);assert.equal(await pointer(p),before);for(const k of first.partKeys)assert.ok(await read(p,k));
     await reloadAndCheck(p,'OLD',true);
   });
   await test('최종 manifest 트랜잭션 abort: 완전한 이전 두 시트 유지',async p=>{
-    await fixture(p);const prior=await save(p),before=await pointer(p);await change(p);await fault(p,'manifest');await p.evaluate(()=>window.tabula.run('save'));await p.waitForFunction(()=>window.__faultHit);await idle(p);
+    await fixture(p);const prior=await save(p),before=await pointer(p);await change(p);await fault(p,'manifest');await saveBrowserCopy(p);await p.waitForFunction(()=>window.__faultHit);await idle(p);
     assert.equal((await read(p)).generation,prior.generation);assert.equal(await pointer(p),before);await reloadAndCheck(p);
   });
   await test('저장 도중 셀 편집: 혼합 스냅샷 거부 후 명시 재저장으로 최신값 복구',async p=>{
-    await fixture(p);const prior=await save(p);await change(p);await fault(p,'edit');await p.evaluate(()=>window.tabula.run('save'));await p.waitForFunction(()=>window.__faultHit);await idle(p);
+    await fixture(p);const prior=await save(p);await change(p);await fault(p,'edit');await saveBrowserCopy(p);await p.waitForFunction(()=>window.__faultHit);await idle(p);
     assert.equal((await read(p)).generation,prior.generation);await save(p,prior.generation);
     p=await reloadAndCheck(p,'NEW');assert.equal(await p.evaluate(()=>window.tabula.wb().getValue(0,2,0)),'편집 중 변경');
   });
   await test('문서 교체로 저장 취소: 이미 쓴 새 시트가 이전 manifest에 노출되지 않음',async p=>{
-    await fixture(p);const prior=await save(p);await change(p);await fault(p,'cancel');await p.evaluate(()=>window.tabula.run('save'));await p.waitForFunction(()=>window.__faultHit);await idle(p);
+    await fixture(p);const prior=await save(p);await change(p);await fault(p,'cancel');await saveBrowserCopy(p);await p.waitForFunction(()=>window.__faultHit);await idle(p);
     assert.equal((await read(p)).generation,prior.generation);await reloadAndCheck(p);
   });
   await test('두 번째 시트 트랜잭션 중 탭 종료: 다음 탭이 이전 완전 문서 복구',async(p,context)=>{
-    await fixture(p);const prior=await save(p);await change(p);await fault(p,'close');await p.evaluate(()=>window.tabula.run('save'));await p.waitForFunction(()=>window.__saveStalled);await p.close();
+    await fixture(p);const prior=await save(p);await change(p);await fault(p,'close');await saveBrowserCopy(p);await p.waitForFunction(()=>window.__saveStalled);await p.close();
     const next=await newPage(context);assert.equal((await read(next)).generation,prior.generation);await reloadAndCheck(next);
   });
   await test('완료된 새 세대 복구·변경 없는 시트 재사용·이전 세대 정리',async p=>{
@@ -88,14 +98,14 @@ try {
     assert.deepEqual(await p.evaluate(()=>[window.tabula.wb().getValue(0,0,0),window.tabula.wb().getValue(1,0,0),window.tabula.wb().date1904]),['NEW-1','OLD-2',true]);
   });
   await test('첫 대용량 저장 실패는 기존 localStorage 작은 문서 포인터를 보존',async p=>{
-    await p.evaluate(()=>{const t=window.tabula;t.wb().restore({sheets:[{name:'작은 원본',cells:{'0,0':{raw:'작은 원본 값'}}}]});t.gv().layout();t.gv().renderAll();t.run('save');});
-    const before=await pointer(p);assert.match(before,/작은 원본 값/);await fixture(p);await fault(p,'second');await p.evaluate(()=>window.tabula.run('save'));await p.waitForFunction(()=>window.__faultHit);await idle(p);assert.equal(await pointer(p),before);
+    await p.evaluate(()=>{const t=window.tabula;t.wb().restore({sheets:[{name:'작은 원본',cells:{'0,0':{raw:'작은 원본 값'}}}]});t.gv().layout();t.gv().renderAll();});await saveBrowserCopy(p);
+    const before=await pointer(p);assert.match(before,/작은 원본 값/);await fixture(p);await fault(p,'second');await saveBrowserCopy(p);await p.waitForFunction(()=>window.__faultHit);await idle(p);assert.equal(await pointer(p),before);
     p=await reopen(p);await p.waitForFunction(()=>window.tabula?.wb());assert.equal(await p.evaluate(()=>window.tabula.wb().getValue(0,0,0)),'작은 원본 값');
   });
   await test('IDB commit 성공 뒤 localStorage 실패: 거짓 성공 없이 새 완전 세대 복구',async p=>{
     await fixture(p);const prior=await save(p),before=await pointer(p);await change(p);
     await p.evaluate(()=>{const original=Storage.prototype.setItem;Storage.prototype.setItem=function(key,value){if(!window.__lsFault&&key==='tabula.workbook.v1'&&JSON.parse(value).idb){window.__lsFault=true;throw new DOMException('합성 quota','QuotaExceededError');}return original.call(this,key,value);};});
-    await p.evaluate(()=>window.tabula.run('save'));await p.waitForFunction(()=>window.__lsFault);await idle(p);
+    await saveBrowserCopy(p);await p.waitForFunction(()=>window.__lsFault);await idle(p);
     assert.notEqual((await read(p)).generation,prior.generation);assert.equal(await pointer(p),before);
     assert.match(await p.locator('#saveState').innerText(),/저장 안 됨/);await reloadAndCheck(p,'NEW');
   });
@@ -108,7 +118,7 @@ try {
   await test('CAS 후 정리 중 편집: 저장 완료 표시를 보류하고 다음 저장에 최신값 반영',async p=>{
     await fixture(p);const prior=await save(p),before=await pointer(p);await change(p);
     await p.evaluate(()=>{const original=IDBObjectStore.prototype.delete;IDBObjectStore.prototype.delete=function(key){const req=original.call(this,key);if(!window.__postCommitEdit&&typeof key==='string'&&key.includes('#g#')){window.__postCommitEdit=true;req.addEventListener('success',()=>window.tabula.wb().transact(()=>window.tabula.wb().setInput(0,2,0,'CAS 이후 편집')));}return req;};});
-    await p.evaluate(()=>window.tabula.run('save'));await p.waitForFunction(()=>window.__postCommitEdit);await idle(p);const staged=await read(p);
+    await saveBrowserCopy(p);await p.waitForFunction(()=>window.__postCommitEdit);await idle(p);const staged=await read(p);
     assert.notEqual(staged.generation,prior.generation);assert.equal(await pointer(p),before);assert.match(await p.locator('#saveState').innerText(),/저장 안 됨/);
     await save(p,staged.generation);p=await reloadAndCheck(p,'NEW');assert.equal(await p.evaluate(()=>window.tabula.wb().getValue(0,2,0)),'CAS 이후 편집');
   });
@@ -125,7 +135,7 @@ try {
   await test('저장 중 외부 manifest 교체는 CAS 충돌로 보존하고 덮어쓰지 않는다',async p=>{
     await fixture(p);const prior=await save(p);await change(p);
     await p.evaluate(prior=>{const original=IDBObjectStore.prototype.put;IDBObjectStore.prototype.put=function(value,key){const req=original.call(this,value,key);if(!window.__competing&&value?.meta?.name==='첫 번째'){window.__competing=true;req.addEventListener('success',()=>original.call(this,{...prior,generation:'synthetic-other-tab'},'tabula.workbook.v1'));}return req;};},prior);
-    await p.evaluate(()=>window.tabula.run('save'));await p.waitForFunction(()=>window.__competing);await idle(p);
+    await saveBrowserCopy(p);await p.waitForFunction(()=>window.__competing);await idle(p);
     assert.equal((await read(p)).generation,'synthetic-other-tab');await reloadAndCheck(p);
   });
   await test('v2→v3 변환은 구버전 탭의 시트·분할 청크·별도 저장 레코드를 보존한다',async p=>{

@@ -20,12 +20,18 @@ const test = async (name, fn, { cloud = false, home = false } = {}) => {
 const grid = async (page) => { await page.locator('#cellEditor').focus(); };
 try {
   await test('첫 화면·4개 저장 방식·파일 다운로드', async (p, start) => {
+    await p.addInitScript(() => { Object.defineProperty(window, 'showSaveFilePicker', { configurable: true, value: undefined }); });
     await start(); await p.waitForSelector('.wixel-hub');
     assert.match(await p.locator('h1').innerText(), /새로운 작업 공간/);
     await p.locator('[data-page=storage]').click(); assert.equal(await p.locator('.storage-cards .hub-card').count(), 4);
     assert.doesNotMatch(await p.locator('.backstage-main').innerText(), /\b(?:null|undefined)\b/);
-    const download = p.waitForEvent('download', { timeout: 30000 }); await p.getByRole('button', { name: /Excel 파일 다운로드/ }).click();
-    assert.match((await download).suggestedFilename(), /\.xlsx$/);
+    await p.getByRole('button', { name: /Excel 파일 다운로드/ }).click();
+    const save = p.getByRole('dialog', { name: '파일로 저장', exact: true });
+    await save.getByRole('textbox', { name: '파일 이름', exact: true }).fill('위셀-다운로드-회귀.xlsx');
+    assert.match(await save.innerText(), /폴더|저장 위치/);
+    const download = p.waitForEvent('download', { timeout: 30000 });
+    await save.getByRole('button', { name: '다운로드', exact: true }).click();
+    assert.equal((await download).suggestedFilename(), '위셀-다운로드-회귀.xlsx');
     await p.screenshot({ path: process.env.WIXEL_STORAGE_SCREENSHOT || 'D:/Codex/Temp/wixel3-storage.png' });
     await p.locator('[data-page=new]').click(); await p.screenshot({ path: process.env.WIXEL_HOME_SCREENSHOT || 'D:/Codex/Temp/wixel3-home.png' });
   }, { home: true });
@@ -77,6 +83,7 @@ try {
     await p.getByRole('button', { name: '기존 복구키로 연결', exact: true }).click();
     assert.equal(puts, 0);
     await p.getByRole('button', { name: /온라인 개인 보관함/ }).click();
+    await p.getByRole('dialog', { name: '서버에 저장 (다른 기기에서 열기)', exact: true }).getByRole('button', { name: '저장', exact: true }).click();
     await p.waitForFunction(() => document.querySelector('#saveState').textContent.includes('저장됨'));
     assert.equal(puts, 1); assert.equal(seen[0]['x-wixel-vault'], 'A'.repeat(43)); assert.equal(seen[0]['if-match'], '"0"');
     await p.keyboard.press('Escape'); revision = 2;
