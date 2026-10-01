@@ -115,7 +115,7 @@ await T('Alt+↓ 목록 선택', async () => {
   }
 });
 await T('Ctrl+F1 리본 접기', async () => { await k('Control+F1'); const c = await ev(() => document.getElementById('ribbon').classList.contains('collapsed')); await k('Control+F1'); return c; });
-await T('Alt → H 키팁 실제 표시·단계 전환·닫기', async () => { assert.equal(await ev(() => document.body.classList.contains('keytips')), false); await k('Alt'); assert.equal(await page.locator('.keytip-panel').isVisible(), true); await k('h'); assert.equal(await ev(() => document.body.dataset.keytipSequence), 'h'); assert.match(await page.locator('.keytip-panel').innerText(), /테두리/); await k('Alt'); assert.equal(await ev(() => document.body.classList.contains('keytips')), false); return true; });
+await T('Alt → H 키팁 실제 표시·단계 전환·닫기', async () => { assert.equal(await ev(() => document.body.classList.contains('keytips')), false); await k('Alt'); assert.equal(await ev(() => document.body.classList.contains('keytips')), true); assert.equal(await page.locator('.keytip-panel').count(), 0); await k('h'); assert.equal(await ev(() => document.body.dataset.keytipSequence), 'h'); const borderBadge = page.locator('.keytip-badge[data-keytip-path="hb"]'); assert.equal(await borderBadge.isVisible(), true); assert.equal(await borderBadge.innerText(), 'B'); await k('Alt'); assert.equal(await ev(() => document.body.classList.contains('keytips')), false); assert.equal(await page.locator('.keytip-badge').count(), 0); return true; });
 await T('F12 다른 이름으로 저장', async () => { await k('F12'); await page.waitForTimeout(150); const d = await ev(() => document.querySelector('.dialog')?.textContent ?? ''); await k('Escape'); return /다른 이름/.test(d) || d.slice(0, 40); });
 await T('Ctrl+Shift+F3 이름 만들기', async () => { await k('Control+Shift+F3'); await page.waitForTimeout(150); const d = await ev(() => document.querySelector('.dialog')?.textContent ?? ''); await k('Escape'); return /이름/.test(d) || d.slice(0, 40); });
 await T('Ctrl+F3 이름 관리자', async () => { await k('Control+F3'); await page.waitForTimeout(150); const d = await ev(() => document.querySelector('.dialog')?.textContent ?? ''); await k('Escape'); return /이름/.test(d) || d.slice(0, 40); });
@@ -209,7 +209,7 @@ await T('기본 Alt→0→8 텍스트 나누기 / Alt→0→7 바꾸기', async 
 });
 await T('빠른 실행 명령 순서·리본 아래·Alt+1·설정 복원', async () => {
   await ev(() => window.tabula.run('options'));
-  await page.getByRole('button', { name: '빠른 실행 도구 모음', exact: true }).click();
+  await page.getByRole('tab', { name: '빠른 실행 도구 모음', exact: true }).click();
   await page.getByLabel('표시 위치', { exact: true }).selectOption('below');
   await page.getByLabel('사용 가능한 명령').selectOption('bold'); await page.getByRole('button', { name: '추가(A) >>', exact: true }).click();
   const moveCount = await page.getByLabel('현재 도구 모음 순서').evaluate((s) => s.selectedIndex);

@@ -198,3 +198,7 @@ Select-String -LiteralPath D:\Codex\Temp\wixel-regression\before.txt, D:\Codex\T
 `keytips.mjs`는 매 시나리오를 별도 컨텍스트에서 실행하고 원격 쓰기 요청을 차단합니다. 요약의 등록 키 수·검사한 중간 경로 수·실제 동작 키 수를 구분해 기록하세요. 한글 물리 키와 AltGr 검사는 합성 KeyboardEvent를 포함하므로 OS의 실제 IME나 브라우저 예약 키까지 검증하는 것은 아닙니다. `keys.mjs`의 직접 단축키 검사와 함께 실행합니다.
 
 `grid-rendering.mjs`는 합성 시트를 새 컨텍스트에 만들고 원격 쓰기를 차단합니다. 흰색·검정 테마, DPR 1·1.25·2, 앱 배율 50·75·100·125%의 24개 조건에서 PNG를 직접 읽어 선 두께를 검사합니다. `GRID_SCREENSHOTS`에 D: 절대 폴더를 지정하면 조건별 PNG를 저장합니다. `ok: true`, 페이지 오류·쓰기 요청 없음과 종료 코드 0을 확인하고 `cases`·`checks`를 별도로 기록하세요. 작은 합성 시트의 `renderMs`는 대형 문서 성능 수치가 아닙니다. 실제 모니터 전환·브라우저 자체 확대/축소와 모든 환경까지 검증하지는 않습니다. 최종 결과와 한계는 [14 문서](../docs/codex/14_차트와표시검증.md)를 확인하세요.
+
+## 차트·그림·필터·설정 확장 검사
+
+`chart-upgrade-ux.mjs`, `chart-map.mjs`, `picture-ux.mjs`, `interaction-ux.mjs`, `settings-ux.mjs`는 위 Playwright 설정과 `WIXEL_URL`을 사용합니다. 합성 데이터만 생성하며 쓰기 API를 차단합니다. `chart-ui.mjs`의 기존 콤보 회귀도 함께 실행하세요. 실행 결과와 검증 제한은 [15_Excel_UI확장검증.md](../docs/codex/15_Excel_UI확장검증.md)에 기록합니다. `update-map-data.mjs`는 검사 명령이 아니라 지도 공개 데이터의 재생성 도구이며 [16번 문서](../docs/codex/16_지도데이터.md)의 고정 버전·출처를 사용합니다.

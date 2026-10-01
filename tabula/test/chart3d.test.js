@@ -7,9 +7,12 @@ import { readXlsx, writeXlsx } from '../src/xlsx.js';
 import { zip, unzip, textOf } from '../src/zip.js';
 import { parseXml, descendants, child } from '../src/xml.js';
 const rows = [['분기', '온라인', '오프라인'], ['1분기', 120, 80], ['2분기', -40, 100], ['3분기', 0, 75], ['4분기', 180, 140]];
-test('3D 갤러리: 12개 유형과 2D 복귀 속성', () => {
+test('3D 갤러리: 기존 12개 투영 변형을 유지하고 표면·거품을 별도 지원', () => {
   const variants = CHART_GALLERY.flatMap(([, entries]) => entries);
-  assert.equal(variants.filter(([, p]) => p.threeD).length, 12);
+  assert.equal(variants.filter(([, p]) => p.threeD && ['column', 'bar', 'pie', 'area', 'line'].includes(p.type)).length, 12);
+  assert.ok(variants.some(([, p]) => p.threeD && p.type === 'surface'));
+  assert.ok(variants.some(([, p]) => p.threeD && p.type === 'bubble'));
+  assert.ok(variants.filter(([, p]) => p.type === 'pieOfPie' || p.type === 'barOfPie').every(([, p]) => !p.threeD));
   assert.ok(variants.every(([, p]) => typeof p.threeD === 'boolean'));
 });
 test('3D 투영: 모든 유형과 누적·음수·영 값이 유효 SVG로 렌더링', () => {

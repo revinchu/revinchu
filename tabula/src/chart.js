@@ -10,6 +10,8 @@ import { pivotSourceData, pivotChartData } from './pivot.js';
 import { maxOf, minOf, pushAll } from './fxcore.js';
 import { THEME, applyTint } from './stylepresets.js';
 import { chartDepth, extrudedPolygon, chartWalls3D, pieProjection3D, pieSolid3D } from './chart-3d.js';
+import { ADVANCED_CHARTS, drawVolumeStock } from './chart-advanced.js';
+import { MAP_CHARTS } from './chart-map.js';
 
 export const CHART_TYPES = [
   { id: 'column', label: '세로 막대형' },
@@ -26,6 +28,11 @@ export const CHART_TYPES = [
   { id: 'histogram', label: '히스토그램' },
   { id: 'pareto', label: '파레토' },
   { id: 'treemap', label: '트리맵' },
+  { id: 'map', label: '지도 (국가/지역)' },
+  { id: 'sunburst', label: '선버스트' },
+  { id: 'surface', label: '표면형' },
+  { id: 'pieOfPie', label: '대조 원형' },
+  { id: 'barOfPie', label: '대조 가로 막대형' },
   { id: 'boxWhisker', label: '상자 수염' },
   { id: 'stock', label: '주식형' },
   { id: 'combo', label: '콤보 (막대 + 꺾은선 보조 축)' },
@@ -35,13 +42,16 @@ export const CHART_TYPES = [
 export const CHART_GALLERY = [
   ['세로 막대형', [['묶은 세로 막대형', { threeD: false, type: 'column', grouping: 'clustered' }], ['누적 세로 막대형', { threeD: false, type: 'column', grouping: 'stacked' }], ['100% 기준 누적 세로 막대형', { threeD: false, type: 'column', grouping: 'percentStacked' }]]],
   ['꺾은선형', [['꺾은선형', { threeD: false, type: 'line', grouping: 'clustered', marker: 'none' }], ['누적 꺾은선형', { threeD: false, type: 'line', grouping: 'stacked', marker: 'none' }], ['100% 기준 누적 꺾은선형', { threeD: false, type: 'line', grouping: 'percentStacked', marker: 'none' }], ['표식이 있는 꺾은선형', { threeD: false, type: 'line', grouping: 'clustered', marker: 'circle' }], ['표식이 있는 누적 꺾은선형', { threeD: false, type: 'line', grouping: 'stacked', marker: 'circle' }], ['표식이 있는 100% 기준 누적 꺾은선형', { threeD: false, type: 'line', grouping: 'percentStacked', marker: 'circle' }]]],
-  ['원형', [['원형', { threeD: false, type: 'pie' }], ['쪼개진 원형', { threeD: false, type: 'pie', explode: 12 }], ['도넛형', { threeD: false, type: 'doughnut' }], ['쪼개진 도넛형', { threeD: false, type: 'doughnut', explode: 12 }]]],
+  ['원형', [['원형', { threeD: false, type: 'pie' }], ['쪼개진 원형', { threeD: false, type: 'pie', explode: 12 }], ['도넛형', { threeD: false, type: 'doughnut' }], ['쪼개진 도넛형', { threeD: false, type: 'doughnut', explode: 12 }], ['대조 원형', { threeD: false, type: 'pieOfPie', splitType: 'position', splitPos: 3 }], ['대조 가로 막대형', { threeD: false, type: 'barOfPie', splitType: 'position', splitPos: 3 }]]],
   ['가로 막대형', [['묶은 가로 막대형', { threeD: false, type: 'bar', grouping: 'clustered' }], ['누적 가로 막대형', { threeD: false, type: 'bar', grouping: 'stacked' }], ['100% 기준 누적 가로 막대형', { threeD: false, type: 'bar', grouping: 'percentStacked' }]]],
   ['영역형', [['영역형', { threeD: false, type: 'area' }], ['누적 영역형', { threeD: false, type: 'area', grouping: 'stacked' }], ['100% 기준 누적 영역형', { threeD: false, type: 'area', grouping: 'percentStacked' }]]],
-  ['분산형', [['분산형', { threeD: false, type: 'scatter' }], ['곡선 및 표식이 있는 분산형', { threeD: false, type: 'scatter', scatterStyle: 'smoothMarker' }], ['곡선이 있는 분산형', { threeD: false, type: 'scatter', scatterStyle: 'smooth' }], ['직선 및 표식이 있는 분산형', { threeD: false, type: 'scatter', scatterStyle: 'lineMarker' }], ['직선이 있는 분산형', { threeD: false, type: 'scatter', scatterStyle: 'line' }], ['거품형', { threeD: false, type: 'bubble' }]]],
-  ['주식형', [['고가-저가-종가', { threeD: false, type: 'stock' }], ['시가-고가-저가-종가', { threeD: false, type: 'stock', ohlc: true }]]],
+  ['분산형', [['분산형', { threeD: false, type: 'scatter' }], ['곡선 및 표식이 있는 분산형', { threeD: false, type: 'scatter', scatterStyle: 'smoothMarker' }], ['곡선이 있는 분산형', { threeD: false, type: 'scatter', scatterStyle: 'smooth' }], ['직선 및 표식이 있는 분산형', { threeD: false, type: 'scatter', scatterStyle: 'lineMarker' }], ['직선이 있는 분산형', { threeD: false, type: 'scatter', scatterStyle: 'line' }], ['거품형', { threeD: false, type: 'bubble' }], ['3차원 효과가 있는 거품형', { threeD: true, type: 'bubble' }]]],
+  ['주식형', [['고가-저가-종가', { threeD: false, type: 'stock', ohlc: false, volume: false }], ['시가-고가-저가-종가', { threeD: false, type: 'stock', ohlc: true, volume: false }], ['거래량-고가-저가-종가', { threeD: false, type: 'stock', ohlc: false, volume: true }], ['거래량-시가-고가-저가-종가', { threeD: false, type: 'stock', ohlc: true, volume: true }]]],
   ['방사형', [['방사형', { threeD: false, type: 'radar' }], ['표식이 있는 방사형', { threeD: false, type: 'radar', radarStyle: 'marker' }], ['채워진 방사형', { threeD: false, type: 'radar', radarStyle: 'filled' }]]],
   ['트리맵', [['트리맵', { threeD: false, type: 'treemap' }]]],
+  ['지도', [['국가/지역 색칠지도', { threeD: false, type: 'map', legend: 'b' }]]],
+  ['선버스트', [['선버스트', { threeD: false, type: 'sunburst' }]]],
+  ['표면형', [['3차원 표면형', { threeD: true, type: 'surface', surfaceStyle: 'surface' }], ['3차원 표면형(골격형)', { threeD: true, type: 'surface', surfaceStyle: 'wireframe' }], ['등고선형', { threeD: false, type: 'surface', surfaceStyle: 'contour' }], ['등고선형(골격형)', { threeD: false, type: 'surface', surfaceStyle: 'wireframeContour' }]]],
   ['히스토그램', [['히스토그램', { threeD: false, type: 'histogram' }], ['파레토', { threeD: false, type: 'pareto' }]]],
   ['상자 수염', [['상자 수염', { threeD: false, type: 'boxWhisker' }]]],
   ['폭포', [['폭포', { threeD: false, type: 'waterfall' }]]],
@@ -112,13 +122,27 @@ export function chartLayout(rows, type = 'column', flip = false) {
   if (!xy) while (lc < C - 1 && (isLabel(lc) || (lc === 0 && groupCol0))) lc++;
   const catCol = C > 1 && (xy || lc > 0);
   const firstDataCol = catCol ? (xy ? 1 : lc) : 0;
-  const auto = xy || type === 'stock' || type === 'boxWhisker' || R - firstDataRow >= C - firstDataCol;
+  const auto = xy || type === 'sunburst' || type === 'stock' || type === 'boxWhisker' || R - firstDataRow >= C - firstDataCol;
   const byCols = flip && !xy ? !auto : auto;
   return { R, C, headRow, catCol, firstDataRow, firstDataCol, byCols };
 }
 
 export function chartData(rows, type = 'column', flip = false) {
   if (!rows.length || !rows[0]?.length) return { categories: [], series: [] };
+  if (type === 'sunburst' || type === 'treemap') {
+    const grid = flip ? rows[0].map((_, c) => rows.map((r) => r[c])) : rows;
+    const width = grid[0].length;
+    if (width < 2) return { categories: [], series: [] };
+    const header = !isNum(grid[0][width - 1]), body = header ? grid.slice(1) : grid;
+    const multi = multiLevel(body.map((r) => r.slice(0, width - 1).map(label)), body.length);
+    return { categories: multi?.categories ?? body.map((r) => label(r[width - 2])), series: [{ name: header ? label(grid[0][width - 1]) : '값', values: body.map((r) => isNum(r[width - 1]) ? r[width - 1] : null), x: null }], ...(multi ? { catLevels: multi.levels } : {}) };
+  }
+  if (type === 'surface') {
+    const grid = flip ? rows[0].map((_, c) => rows.map((r) => r[c])) : rows;
+    const headers = !isNum(grid[0][0]);
+    const body = headers ? grid.slice(1) : grid, offset = headers ? 1 : 0;
+    return { categories: grid[0].slice(offset).map((v, i) => headers ? label(v) : String(i + 1)), series: body.map((row, i) => ({ name: headers ? label(row[0]) : String(i + 1), values: row.slice(offset).map((v) => isNum(v) ? v : null), x: null })) };
+  }
   const { R, C, headRow, catCol, firstDataRow, firstDataCol, byCols } = chartLayout(rows, type, flip);
   const series = [];
   let categories = [];
@@ -225,8 +249,10 @@ export function resolveChart(ch, api) {
     const n = Math.max(0, ...series.map((s) => s.values.length));
     const catRows = catRef ? (api.texts ? api.texts(catRef) : api.values(catRef)?.map((r) => r.map(label))) : null;
     const multi = multiLevel(catRows, n);
-    const categories = multi ? multi.categories : catRef ? (api.texts ? flatRef(catRows, true) : flatRef(api.values(catRef), true).map(label)) : Array.from({ length: n }, (_, i) => String(i + 1));
-    base = { categories, series, ...(multi ? { catLevels: multi.levels } : {}) };
+    const cachedCats = ch.series.find((s) => Array.isArray(s.catCache))?.catCache;
+    const cachedLevels = ch.series.find((s) => Array.isArray(s.catLevels))?.catLevels;
+    const categories = multi ? multi.categories : catRef ? (api.texts ? flatRef(catRows, true) : flatRef(api.values(catRef), true).map(label)) : cachedCats ? cachedCats.map(label) : Array.from({ length: n }, (_, i) => String(i + 1));
+    base = { categories, series, ...(multi ? { catLevels: multi.levels } : cachedLevels ? { catLevels: structuredClone(cachedLevels) } : {}) };
   } else {
     const rows = api.range(ch);
     base = chartData(rows, ch.type === 'combo' ? 'column' : ch.type, !!ch.byRows);
@@ -475,10 +501,10 @@ export function renderChartSvg(chart, data) {
   const tag = (s, p) => ` data-s="${s._fi}"${p === undefined ? '' : ` data-p="${p}"`}`;
   const tagMk = (html, s, p) => html.replace(/^<(\w+)/, `<$1${tag(s, p)}`);
   const pieLike = baseType === 'pie' || baseType === 'doughnut';
-  const special = SPECIAL[baseType];
+  const special = SPECIAL[baseType] ?? ADVANCED_CHARTS[baseType] ?? MAP_CHARTS[baseType];
   const legendPos = chart.legend ?? (special?.legend === false ? 'none' : 'b');
-  const legendItems = baseType === 'treemap' && data.catLevels?.length ? data.catLevels.at(-1).map((g, i) => ({ name: g.text, color: pal[i % pal.length], line: false }))
-    : pieLike || baseType === 'treemap' ? categories.map((c, i) => ({ name: c, color: series[0]?.pointColors?.[i] ?? series[0]?.colors?.[i] ?? pal[i % pal.length], line: false }))
+  const legendItems = special?.legendItems ? special.legendItems(data, chart, pal) : baseType === 'treemap' && data.catLevels?.length ? Array.from(new Set(data.catLevels.at(-1).map((g) => g.text))).map((name, i) => ({ name, color: pal[i % pal.length], line: false }))
+    : pieLike || baseType === 'treemap' || baseType === 'pieOfPie' || baseType === 'barOfPie' ? categories.map((c, i) => ({ name: c, color: series[0]?.pointColors?.[i] ?? series[0]?.colors?.[i] ?? pal[i % pal.length], line: false }))
     : baseType === 'waterfall' ? [{ name: '증가', color: chart.upColor ?? pal[0] }, { name: '감소', color: chart.downColor ?? pal[1] }, { name: '합계', color: chart.totalColor ?? pal[2] }]
       : baseType === 'pareto' ? [{ name: series[0]?.name ?? '', color: series[0]?.color }, { name: '누적 %', color: pal[1], line: true }]
         : series.map((s) => ({ name: s.name, color: s.color, line: s.type === 'line' || s.type === 'radar' }));
@@ -1157,7 +1183,14 @@ export const SPECIAL = {
       const outer = ctx.data?.catLevels?.at(-1);
       if (outer?.length) {
         // 계층 트리맵: 상위 묶음을 먼저 나누고 그 안에 항목 (묶음마다 한 색, 왼쪽 위에 묶음 이름)
-        const groups = outer.map((g, gi) => ({ g, gi, items: items.filter((x) => x.i >= g.start && x.i <= g.end) })).map((x) => ({ ...x, v: x.items.reduce((a2, b2) => a2 + b2.v, 0), i: x.gi })).filter((x) => x.v > 0).sort((a2, b2) => b2.v - a2.v);
+        // 반복해서 적은 같은 상위 항목은 한 영역으로 합칩니다 (예: 아시아/한국, 아시아/일본).
+        const grouped = new Map();
+        for (const g of outer) {
+          let group = grouped.get(g.text);
+          if (!group) { group = { g, gi: grouped.size, items: [] }; grouped.set(g.text, group); }
+          for (const x of items) if (x.i >= g.start && x.i <= g.end) group.items.push(x);
+        }
+        const groups = Array.from(grouped.values()).map((x) => ({ ...x, v: x.items.reduce((a2, b2) => a2 + b2.v, 0), i: x.gi })).filter((x) => x.v > 0).sort((a2, b2) => b2.v - a2.v);
         for (const gr of squarify(groups, { x: plot.x, y: plot.y, w: plot.w, h: plot.h })) {
           const grp = groups.find((x) => x.gi === gr.i);
           const col = pal[gr.i % pal.length];
@@ -1212,9 +1245,10 @@ export const SPECIAL = {
     legend: false,
     draw(ctx) {
       const { chart, series, categories, parts } = ctx;
-      const ohlc = chart.ohlc || series.length >= 4;
+      if (chart.volume) { drawVolumeStock(ctx); return; }
+      const ohlc = chart.ohlc ?? series.length >= 4;
       const [o, h, l, c] = ohlc ? series : [null, ...series];
-      if (!h || !l) return;
+      if (!h || !l || !c || ohlc && !o) return;
       const vals = [...h.values, ...l.values, ...(c?.values ?? []), ...(o?.values ?? [])].filter(isNum);
       const { area, pos, band } = cartesian(ctx, vals, { cats: categories, zero: false, code: c?.numFmt });
       categories.forEach((_, i) => {
@@ -1274,24 +1308,33 @@ export const SPECIAL = {
       const sizes = series.flatMap((s) => s.size ?? []).filter(isNum);
       if (!xs.length || !ys.length) return;
       const xsc = niceScale(minOf(xs), maxOf(xs));
-      const ysc = niceScale(Math.min(0, ...ys), maxOf(ys));
+      const ysc = niceScale(Math.min(0, minOf(ys)), maxOf(ys));
       const CW = FS.axis * 0.58;
       const ticksOf = (sc) => { const t = []; for (let v = sc.min; v <= sc.max + sc.step / 2; v += sc.step) t.push(Number(v.toPrecision(12))); return t; };
       const yt = ticksOf(ysc);
       const lw = maxOf(yt.map((t) => axisLabel(t).length)) * CW + 8;
       const area = { x: plot.x + lw, y: plot.y + 4, w: plot.w - lw - 10, h: plot.h - FS.axis * 1.9 };
+      const maxR = Math.min(area.w, area.h) * Math.min(.25, Math.max(.01, .12 * ((chart.bubbleScale ?? 100) / 100)));
+      area.x += maxR; area.y += maxR; area.w -= 2 * maxR; area.h -= 2 * maxR;
       const X = (v) => area.x + ((v - xsc.min) / (xsc.max - xsc.min)) * area.w;
       const Y = (v) => area.y + area.h - ((v - ysc.min) / (ysc.max - ysc.min)) * area.h;
       for (const t of yt) parts.push(chart.gridY === false ? '' : `<line x1="${area.x}" y1="${Y(t).toFixed(1)}" x2="${area.x + area.w}" y2="${Y(t).toFixed(1)}" stroke="${GRID}"/>`, T(area.x - 5, Y(t) + 3.5, axisLabel(t), FS.axis, TXT, 'end'));
       for (const t of ticksOf(xsc)) parts.push(T(X(t), area.y + area.h + FS.axis * 1.35, axisLabel(t), FS.axis, TXT));
-      const maxS = Math.max(...sizes.map(Math.abs), 1);
-      const maxR = Math.min(area.w, area.h) * 0.12 * ((chart.bubbleScale ?? 100) / 100);
+      const maxS = Math.max(maxOf(sizes.map(Math.abs)), 1);
+
       series.forEach((s) => s.values.forEach((v, i) => {
         const x = s.x ? s.x[i] : i + 1;
         if (!isNum(v) || !isNum(x)) return;
-        const sz = Math.abs(s.size?.[i] ?? 1);
-        const r = Math.max(2, Math.sqrt(sz / maxS) * maxR);
-        parts.push(`<circle cx="${X(x).toFixed(1)}" cy="${Y(v).toFixed(1)}" r="${r.toFixed(1)}" fill="${s.color}" fill-opacity="0.75" stroke="${s.color}"/>`);
+        const rawSize = s.size?.[i] ?? 1;
+        if (!isNum(rawSize) || rawSize === 0 || rawSize < 0 && !chart.showNegBubbles) return;
+        const sz = Math.abs(rawSize), r = Math.sqrt(sz / maxS) * maxR;
+        let fill = s.pointColors?.[i] ?? s.color;
+        if (chart.threeD) {
+          const id = `${ctx.uid}-bubble-${s._fi}-${i}`;
+          ctx.defs.push(`<radialGradient id="${id}" cx="35%" cy="30%" r="70%"><stop offset="0" stop-color="#fff"/><stop offset="0.32" stop-color="${escSvg(fill)}"/><stop offset="1" stop-color="#333"/></radialGradient>`);
+          fill = `url(#${id})`;
+        }
+        parts.push(`<circle cx="${X(x).toFixed(1)}" cy="${Y(v).toFixed(1)}" r="${r.toFixed(2)}" fill="${fill}" fill-opacity="${chart.threeD ? 1 : .75}" stroke="${s.color}" data-s="${s._fi}" data-p="${i}"${chart.threeD ? ' data-3d="bubble"' : ''}/>`);
         if (ctx.wantLabels(s)) labelTxt(ctx, s, v, X(x), Y(v) + 3.5);
       }));
     },

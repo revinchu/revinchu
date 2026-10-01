@@ -2,6 +2,7 @@
 // 틀 고정은 4개 창(TL/TR/BL/BR)으로, 각 창은 시트 좌표계 콘텐츠를 transform 으로 이동시켜 표시.
 import { Axis } from './axis.js';
 import { gridLineWidth, resolveGridBorders } from './grid-lines.js';
+import { pictureCropStyle, pictureTransform } from './picture.js';
 import { sanitizeHtml, setSafeHtml } from './safe-html.js';
 import { colToName, MAX_ROWS, MAX_COLS } from './formula.js';
 import { formatValue, formatGeneral } from './format.js';
@@ -1047,13 +1048,11 @@ export class GridView {
         const cr = o.crop;
         const img = cr
           ? (() => {
-            const w = 1 - (cr.l ?? 0) - (cr.r ?? 0);
-            const h = 1 - (cr.t ?? 0) - (cr.b ?? 0);
-            const pct = (v) => `${(v * 100).toFixed(3)}%`;
-            return `<div style="position:absolute;inset:0;overflow:hidden;${ic}"><img src="${esc(o.src)}" alt="${esc(o.name ?? '')}" draggable="false" style="position:absolute;max-width:none;left:${pct(-(cr.l ?? 0) / w)};top:${pct(-(cr.t ?? 0) / h)};width:${pct(1 / w)};height:${pct(1 / h)}"></div>`;
+            const css = pictureCropStyle(cr);
+            return `<div style="position:absolute;inset:0;overflow:hidden;${ic}"><img src="${esc(o.src)}" alt="${esc(o.alt ?? o.name ?? '')}" draggable="false" style="position:absolute;max-width:none;left:${css.left};top:${css.top};width:${css.width};height:${css.height}"></div>`;
           })()
-          : `<img src="${esc(o.src)}" alt="${esc(o.name ?? '')}" draggable="false"${ic ? ` style="${ic};box-sizing:border-box"` : ''}>`;
-        box(o, 'pic', img, o.rot ? `transform:rotate(${o.rot}deg)` : '');
+          : `<img src="${esc(o.src)}" alt="${esc(o.alt ?? o.name ?? '')}" draggable="false"${ic ? ` style="${ic};box-sizing:border-box"` : ''}>`;
+        box(o, 'pic', img, pictureTransform(o) ? `transform:${pictureTransform(o)}` : '');
       }
       else {
         const isLine = LINE_KINDS.has(o.kind);
