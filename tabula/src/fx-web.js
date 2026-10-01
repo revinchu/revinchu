@@ -3,7 +3,7 @@
 // 네트워크 결과는 NET 캐시에 모아 두고(비동기), 받는 동안은 '로딩 중…' 을 돌려줌. 받으면 NET.onDone 이 요청한 시트를 다시 계산
 import {
   ERR, Range, isError, toNum, toStr, optNum, optInt, optBool, asRange, lift, parseNumberText, makeCriteria,
-  compareValues, CellImage, collectNums, serialToDate, dateToSerial, FormulaError,
+  compareValues, CellImage, collectNums, serialToDate, dateToSerial, FormulaError, minOf, maxOf,
 } from './fxcore.js';
 
 // ───────────── 네트워크 캐시 ─────────────
@@ -53,7 +53,8 @@ const one = (v) => (v instanceof Range ? v.rows[0]?.[0] ?? null : v);
 const str1 = (v) => { const x = one(v); if (isError(x)) throw x; return toStr(x ?? ''); };
 const grid = (rows) => {
   if (!rows.length) return ERR.NA;
-  const w = Math.max(1, ...rows.map((r) => r.length));
+  let w = 1;
+  for (const row of rows) if (row.length > w) w = row.length;
   return new Range(rows.map((r) => { const o = r.slice(); while (o.length < w) o.push(''); return o; }));
 };
 /** 가져온 글자 → 값 (숫자처럼 보이면 숫자: 스프레드시트와 같음) */
@@ -785,8 +786,9 @@ export function sparklineSvg(values, o = {}) {
     const vs = nums.map((v) => v ?? (o.empty === 'zero' ? 0 : null));
     const real = vs.filter(isNum);
     if (!real.length) return null;
-    let lo = o.ymin !== undefined ? Number(o.ymin) : Math.min(...real);
-    let hi = o.ymax !== undefined ? Number(o.ymax) : Math.max(...real);
+    const dataMin = minOf(real), dataMax = maxOf(real);
+    let lo = o.ymin !== undefined ? Number(o.ymin) : dataMin;
+    let hi = o.ymax !== undefined ? Number(o.ymax) : dataMax;
     if (type === 'column' || type === 'winloss') { lo = Math.min(0, lo); hi = Math.max(0, hi); }
     if (hi === lo) { hi += 1; lo -= 1; }
     const n = vs.length;
@@ -799,8 +801,8 @@ export function sparklineSvg(values, o = {}) {
         let fill = neg ? (o.negcolor ?? color) : color;
         if (i === 0 && o.firstcolor) fill = o.firstcolor;
         if (i === n - 1 && o.lastcolor) fill = o.lastcolor;
-        if (o.highcolor && v === Math.max(...real)) fill = o.highcolor;
-        if (o.lowcolor && v === Math.min(...real)) fill = o.lowcolor;
+        if (o.highcolor && v === dataMax) fill = o.highcolor;
+        if (o.lowcolor && v === dataMin) fill = o.lowcolor;
         const x0 = (i * bw + bw * 0.1).toFixed(2);
         if (type === 'winloss') {
           body += `<rect x="${x0}" y="${neg ? H / 2 : 0}" width="${(bw * 0.8).toFixed(2)}" height="${H / 2 - 1}" fill="${esc(fill)}"/>`;

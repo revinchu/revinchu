@@ -1019,13 +1019,17 @@ export function adjustFormulaForStructure(formula, { targetSheet, hostSheet, axi
   });
 }
 
-/** 셀 이동(끌어서 옮기기 · 잘라 붙이기): 옮긴 범위 src 안에 완전히 들어 있는 참조를 (dr, dc) 만큼 이동 */
-export function moveRefsInFormula(formula, { targetSheet, hostSheet, src, dr, dc }) {
+/** 셀 이동: src 안에 완전히 들어 있는 참조를 (dr, dc) 이동. destinationSheet가 있으면 다른 시트로 이동. */
+export function moveRefsInFormula(formula, { targetSheet, hostSheet, src, dr, dc, destinationSheet = targetSheet }) {
   const same = (a, b) => a.toLowerCase() === b.toLowerCase();
   return rewriteRefs(formula, (ref) => {
     if (!same(ref.sheet ?? hostSheet ?? '', targetSheet) || ref.rows || ref.cols) return undefined;
     if (ref.r1 < src.r1 || ref.r2 > src.r2 || ref.c1 < src.c1 || ref.c2 > src.c2) return undefined;
     ref.r1 += dr; ref.r2 += dr; ref.c1 += dc; ref.c2 += dc;
+    if (!same(destinationSheet, targetSheet)) {
+      ref.sheet = destinationSheet;
+      ref.sheetPrefix = `${quoteSheetName(destinationSheet)}!`;
+    }
     return ref;
   });
 }

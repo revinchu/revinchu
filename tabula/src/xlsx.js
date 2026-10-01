@@ -33,6 +33,14 @@ const NS_PKG = 'http://schemas.openxmlformats.org/package/2006/relationships';
 const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
 const EMU = 9525; // 1px
 
+// SpreadsheetML ST_Xstring: 이스케이프처럼 생긴 원문과 XML 금지 문자/CR도 보존.
+// https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/bd0aa042-434a-4ca7-b25f-4e1fd25a954d
+function xesc(value) {
+  let s = String(value);
+  if (s.includes('_x')) s = s.replace(/_(?=x[0-9A-Fa-f]{4}_)/g, '_x005F_');
+  return esc(s.replace(/[\u0000-\u0008\u000b-\u001f\ufffe\uffff]/g, (c) => `_x${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}_`));
+}
+
 const DEFAULT_FONT = '맑은 고딕';
 
 // ───────────────────────── 공통 ─────────────────────────
@@ -630,7 +638,8 @@ function* readSheet(files, path, ctx) {
     const r = rowIdx;
     if (row.attrs.ht && (row.attrs.customHeight === '1' || row.attrs.customHeight === 'true')) {
       const h = pt2px(Number(row.attrs.ht));
-      if (h !== defRowH) { sheet.rowHeights[r] = h; sheet.rowManual[r] = true; }
+      sheet.rowHeights[r] = h;
+      sheet.rowManual[r] = true; // 기본 높이와 같아도 사용자가 고정한 행
     } else if (row.attrs.ht) {
       const h = pt2px(Number(row.attrs.ht));
       if (h !== defRowH) sheet.rowHeights[r] = h;
@@ -2279,6 +2288,8 @@ function* readXlsxSteps(files) {
   const ctx = { mdw, wbFont, xfs, dxfs, dxfOf, tableStyles, slicerStyles, strings, theme, warnings: new Set(), isName, nameMulti, richImages: readRichImages(files, wbRels) };
   const sheets = [];
   const warnings = [];
+  const date1904 = child(wbRoot, 'workbookPr')?.attrs.date1904;
+  if (date1904 === '1' || date1904 === 'true') warnings.push('이 파일은 1904 날짜 체계를 사용합니다. 현재 1900 날짜 체계만 지원하므로 날짜 표시·관련 계산이 원본과 다를 수 있습니다. 수정·저장 전에 Excel에서 날짜를 확인하세요.');
   const sheetCodes = {};
   let unsupported = 0;
   for (const sh of kids(child(wbRoot, 'sheets'), 'sheet')) {
@@ -3638,11 +3649,11 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
   const exportF = (raw, t, dyn, ast = null) => {
     if (ast && !t && !dyn) {
       const same = astSame.get(ast);
-      if (same === true) return esc(raw.slice(1));
+      if (same === true) return xesc(raw.slice(1));
       if (same === undefined) {
         const out = exportFormula(raw, t, dyn);
         astSame.set(ast, out === raw.slice(1));
-        return esc(out);
+        return xesc(out);
       }
     }
     const k = `${t ?? ''}\u0001${dyn ? 1 : 0}\u0001${raw}`;
@@ -3650,10 +3661,10 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
     if (v !== undefined) return v;
     const body = raw.startsWith('=') ? raw.slice(1) : raw;
     const shape = !t && !dyn ? formulaShape(body) : null;
-    if (shape !== null && shapeSame.get(shape) === true) return esc(body);
+    if (shape !== null && shapeSame.get(shape) === true) return xesc(body);
     const out = exportFormula(raw, t, dyn);
     if (shape !== null && !shapeSame.has(shape)) shapeSame.set(shape, out === body);
-    v = esc(out);
+    v = xesc(out);
     if (expMemo.size < 200000) expMemo.set(k, v);
     return v;
   };
@@ -3741,7 +3752,10 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
       }
       cells = cells.sort((a, b) => a[0] - b[0]);
       const attrs = [`r="${r + 1}"`];
-      if (sheet.rowHeights[r] !== undefined) attrs.push(`ht="${px2pt(sheet.rowHeights[r])}"`, 'customHeight="1"');
+      if (sheet.rowHeights[r] !== undefined) {
+        attrs.push(`ht="${px2pt(sheet.rowHeights[r])}"`);
+        if (sheet.rowManual[r]) attrs.push('customHeight="1"');
+      }
       if (sheet.hiddenRows[r] || hid(sheet.filter?.hidden, r) || (sheet.tables ?? []).some((t) => hid(t.filter?.hidden, r))) attrs.push('hidden="1"');
       if (sheet.rowStyles[r]) attrs.push(`s="${pool.xf({ ...sheet.allStyle, ...sheet.rowStyles[r] })}"`, 'customFormat="1"');
       if (sheet.outline?.rows?.[r]) attrs.push(`outlineLevel="${sheet.outline.rows[r]}"`);
@@ -3769,7 +3783,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
           if (typeof v === 'boolean') return `<c r="${ref}"${sAttr} t="b"${cm}>${f}<v>${v ? 1 : 0}</v></c>`;
           if (isError(v)) return `<c r="${ref}"${sAttr} t="e"${cm}>${f}<v>${esc(['#CIRC!', '#SPILL!', '#CALC!', '#BUSY!'].includes(v.code) && !dyn ? '#REF!' : v.code === '#CIRC!' ? '#REF!' : v.code)}</v></c>`;
           if (v instanceof CellImage) return `<c r="${ref}"${sAttr} t="e"${cm}>${f}<v>#VALUE!</v></c>`; // IMAGE: 엑셀이 다시 계산
-          return `<c r="${ref}"${sAttr} t="str"${cm}>${f}<v>${esc(v ?? '')}</v></c>`;
+          return `<c r="${ref}"${sAttr} t="str"${cm}>${f}<v>${xesc(v ?? '')}</v></c>`;
         }
         if (isError(v)) return `<c r="${ref}"${sAttr} t="e"><v>${esc(v.code)}</v></c>`;
         if (v instanceof CellImage) return s ? `<c r="${ref}"${sAttr}/>` : '';
@@ -3977,7 +3991,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
     const comments = [...sheet.cells].filter(([, c]) => c.comment).map(([k, c]) => [k.split(',').map(Number), c.comment]);
     if (comments.length) {
       commentNo++;
-      files[`xl/comments${commentNo}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<comments xmlns="${NS_MAIN}"><authors><author>WIXEL</author></authors><commentList>${comments.map(([[r, c], text]) => `<comment ref="${cellName(r, c)}" authorId="0"><text><r><t xml:space="preserve">${esc(text)}</t></r></text></comment>`).join('')}</commentList></comments>`;
+      files[`xl/comments${commentNo}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<comments xmlns="${NS_MAIN}"><authors><author>WIXEL</author></authors><commentList>${comments.map(([[r, c], text]) => `<comment ref="${cellName(r, c)}" authorId="0"><text><r><t xml:space="preserve">${xesc(text)}</t></r></text></comment>`).join('')}</commentList></comments>`;
       files[`xl/drawings/vmlDrawing${commentNo}.vml`] = `<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><o:shapelayout v:ext="edit"><o:idmap v:ext="edit" data="${commentNo}"/></o:shapelayout><v:shapetype id="_x0000_t202" coordsize="21600,21600" o:spt="202" path="m,l,21600r21600,l21600,xe"><v:stroke joinstyle="miter"/><v:path gradientshapeok="t" o:connecttype="rect"/></v:shapetype>${comments.map(([[r, c]], i) => `<v:shape id="_x0000_s${commentNo * 1024 + i + 1}" type="#_x0000_t202" style="position:absolute;margin-left:80pt;margin-top:2pt;width:108pt;height:59pt;z-index:${i + 1};visibility:hidden" fillcolor="#ffffe1" o:insetmode="auto"><v:fill color2="#ffffe1"/><v:shadow on="t" color="black" obscured="t"/><v:path o:connecttype="none"/><v:textbox style="mso-direction-alt:auto"><div style="text-align:left"></div></v:textbox><x:ClientData ObjectType="Note"><x:MoveWithCells/><x:SizeWithCells/><x:Anchor>${c + 1}, 15, ${Math.max(0, r - 1)}, 10, ${c + 3}, 15, ${r + 3}, 4</x:Anchor><x:AutoFill>False</x:AutoFill><x:Row>${r}</x:Row><x:Column>${c}</x:Column></x:ClientData></v:shape>`).join('')}</xml>`;
       addRel('comments', `../comments${commentNo}.xml`);
       legacy = `<legacyDrawing r:id="${addRel('vmlDrawing', `../drawings/vmlDrawing${commentNo}.vml`)}"/>`;
@@ -4179,7 +4193,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
   }
   files['xl/_rels/workbook.xml.rels'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="${NS_PKG}">${wbRels.join('')}</Relationships>`;
   if (vba) files['xl/vbaProject.bin'] = fromBase64(vba.bin);
-  files['xl/sharedStrings.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<sst xmlns="${NS_MAIN}" count="${strings.length}" uniqueCount="${strings.length}">${strings.map((s) => `<si><t xml:space="preserve">${esc(s)}</t></si>`).join('')}</sst>`;
+  files['xl/sharedStrings.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<sst xmlns="${NS_MAIN}" count="${strings.length}" uniqueCount="${strings.length}">${strings.map((s) => `<si><t xml:space="preserve">${xesc(s)}</t></si>`).join('')}</sst>`;
   files['xl/styles.xml'] = pool.xml();
   files['xl/theme/theme1.xml'] = themeXml(wb);
   contentOverrides.push('<Override PartName="/xl/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>');

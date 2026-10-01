@@ -227,6 +227,13 @@ export function formatValue(v, style) {
  * 수식('=')은 호출하는 쪽에서 처리
  */
 const ERROR_LITERALS = new Set(['#NULL!', '#DIV/0!', '#VALUE!', '#REF!', '#NAME?', '#NUM!', '#N/A', '#SPILL!', '#CALC!']);
+// 직접 입력은 DATE 함수와 달리 2월 30일 등을 다음 달로 넘기면 안 됨.
+function inputDate(y, m, d) {
+  if (y < 1900 || y > 9999 || m < 1 || m > 12 || d < 1 || d > 31) return null;
+  if (y === 1900 && m === 2 && d === 29) return 60; // 엑셀의 가상 윤일
+  const actual = new Date(Date.UTC(y, m - 1, d));
+  return actual.getUTCMonth() === m - 1 && actual.getUTCDate() === d ? serialOf(y, m, d) : null;
+}
 export function parseInput(text) {
   if (text === '') return { value: null };
   if (text.startsWith("'")) return { value: text.slice(1) };
@@ -250,9 +257,8 @@ export function parseInput(text) {
     const y = +m[1];
     const mo = +m[2];
     const d = +m[3];
-    if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) {
-      return { value: serialOf(y, mo, d), numFmt: 'date' };
-    }
+    const value = inputDate(y, mo, d);
+    if (value !== null) return { value, numFmt: 'date' };
   }
   // 월/일만 (1/1 · 3-5 · 1월 1일): 올해 날짜 (한국어 엑셀과 같음). 없는 날(2/30)은 글자
   m = /^(\d{1,2})\s*[-/]\s*(\d{1,2})$/.exec(t) ?? /^(\d{1,2})\s*월\s*(\d{1,2})\s*일$/.exec(t);
@@ -264,8 +270,8 @@ export function parseInput(text) {
   }
   m = /^(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(t);
   if (m && +m[2] >= 1 && +m[2] <= 12 && +m[3] >= 1 && +m[3] <= 31 && +m[4] < 24 && +m[5] < 60 && +(m[6] || 0) < 60) {
-    const day = serialOf(+m[1], +m[2], +m[3]);
-    return { value: day + (+m[4] * 3600 + +m[5] * 60 + +(m[6] || 0)) / 86400, numFmt: 'datetime' };
+    const day = inputDate(+m[1], +m[2], +m[3]);
+    if (day !== null) return { value: day + (+m[4] * 3600 + +m[5] * 60 + +(m[6] || 0)) / 86400, numFmt: 'datetime' };
   }
   m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(t);
   if (m && +m[1] < 24 && +m[2] < 60 && +(m[3] || 0) < 60) {

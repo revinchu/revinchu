@@ -53,6 +53,8 @@ export const server = {
   },
 
   async init() {
+    this.available = false;
+    this.needsToken = false;
     // 한 파일 배포본(build.mjs)이나 파일로 직접 연 경우에는 서버가 없음
     if (globalThis.TABULA_STATIC || globalThis.location?.protocol === 'file:') return false;
     try {
@@ -76,7 +78,7 @@ export const server = {
     if (!res.ok) {
       let msg = `서버 오류 (${res.status})`;
       try { msg = (await res.json()).error ?? msg; } catch { /* 무시 */ }
-      throw new Error(msg);
+      throw Object.assign(new Error(msg), { status: res.status });
     }
     return res.json();
   },
@@ -85,7 +87,7 @@ export const server = {
   async fetchText(url) {
     const res = await fetch(`api/fetch?url=${encodeURIComponent(url)}`, { cache: 'no-store', headers: { 'X-Tabula-Token': token() } });
     const text = await res.text();
-    if (!res.ok) { let msg = text; try { msg = JSON.parse(text).error ?? text; } catch { /* 글자 */ } throw new Error(msg || `오류 (${res.status})`); }
+    if (!res.ok) { let msg = text; try { msg = JSON.parse(text).error ?? text; } catch { /* 글자 */ } throw Object.assign(new Error(msg || `오류 (${res.status})`), { status: res.status }); }
     return text;
   },
   list() { return this.request('files'); },
@@ -93,7 +95,7 @@ export const server = {
   unpublish(id) { return this.request(`published/${id}`, { method: 'DELETE' }); },
   async published(id) {
     const res = await fetch(`api/published/${id}`, { cache: 'no-store' });
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `오류 (${res.status})`);
+    if (!res.ok) throw Object.assign(new Error((await res.json().catch(() => ({}))).error ?? `오류 (${res.status})`), { status: res.status });
     return { data: await res.json(), modified: Number(res.headers.get('X-Modified')) || 0 };
   },
   load(name) { return this.request(`files/${encodeURIComponent(name)}`); },

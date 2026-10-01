@@ -2,7 +2,7 @@
 import { Workbook, formulaShifter, cellData, DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT } from './workbook.js';
 import {
   cellName, colToName, parseRangeName, parse, shiftFormula, listRefs, normalizeFormula, tokenize,
-  FUNCTION_NAMES, isError, quoteSheetName, MAX_ROWS, MAX_COLS,
+  FUNCTION_NAMES, isError, quoteSheetName, MAX_ROWS, MAX_COLS, moveRefsInFormula, rewriteRefs,
 } from './formula.js';
 import {
   formatValue, NUMBER_FORMATS, isDateCode, dateParts, serialOf, displayedDecimals, parseInput, formatCode, styleForCode, codeOfStyle, adjustCodeDecimals, formatGeneral,
@@ -1473,7 +1473,6 @@ function onGridKey(e) {
     case 'PageUp': handled(); move(-gv.pageRows(), 0, { extend: e.shiftKey }); return;
     case 'Delete':
       handled();
-      if (special?.si === si && !protectBlocked('cells')) { const cells = special.cells; wb.transact(() => { for (const [rr, cc] of cells) { const cur = wb.getCell(si, rr, cc); if (cur?.raw) wb.setCellData(si, rr, cc, { raw: '', style: cur.style, comment: cur.comment }); } }, meta()); return; }
       run('clearContents');
       return;
     case 'Backspace': handled(); startEdit('enter', ''); return;
@@ -1598,10 +1597,16 @@ function nextCorner() {
 
 /** Ctrl+Shift+O 메모가 있는 셀 */
 function selectComments() {
-  const hits = [...sheet().cells].filter(([, cell]) => cell.comment).map(([k]) => k.split(',').map(Number));
+  const hits = [];
+  sheet().cells.forEachRC((cell, r, c) => { if (cell.comment) hits.push([r, c]); });
   if (!hits.length) { toast('메모가 있는 셀이 없습니다.'); return; }
+  hits.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
   const rg = { r1: minOf(hits.map((h) => h[0])), c1: minOf(hits.map((h) => h[1])), r2: maxOf(hits.map((h) => h[0])), c2: maxOf(hits.map((h) => h[1])) };
-  selectRange(rg, 'cells', { r: hits[0][0], c: hits[0][1] });
+  keepSpecial = true;
+  try { selectRange(rg, 'cells', { r: hits[0][0], c: hits[0][1] }); } finally { keepSpecial = false; }
+  special = { si, cells: hits };
+  gv.ensureVisible(hits[0][0], hits[0][1]);
+  gv.renderAll();
   toast(`메모가 있는 셀 ${hits.length}개`);
 }
 
@@ -2657,7 +2662,7 @@ function applyStyle(patchOrFn, { widen = false } = {}) {
         if (p) wb.setStyle(si, r, c, p);
       }
     } else {
-      for (const [r, c] of cellsIn(rg)) {
+      for (const [r, c] of special?.si === si ? special.cells : cellsIn(rg)) {
         const cur = wb.getCell(si, r, c)?.style ?? wb.baseStyle ?? {};
         const p = patchFor(cur);
         if (p) wb.setStyle(si, r, c, explicitOff(p, r, c));
@@ -2668,6 +2673,38 @@ function applyStyle(patchOrFn, { widen = false } = {}) {
     if (('wrap' in sample || 'size' in sample || 'font' in sample) && selKind !== 'cols' && selKind !== 'all') {
       const u = usedClip(rg);
       autoFitRows(u.r1, Math.min(u.r2, u.r1 + 1000));
+    }
+  }, meta());
+}
+
+/** Delete · 리본 · 셀 바로 가기 메뉴가 모두 같은 비연속 선택을 지웁니다. */
+function clearSelection(what) {
+  wb.transact(() => {
+    if (special?.si === si) {
+      const selected = what === 'all' ? new CellMap() : null;
+      for (const [r, c] of special.cells) {
+        selected?.setRC(r, c, true);
+        const cell = wb.getCell(si, r, c);
+        if (!cell) continue;
+        if (what === 'all') wb.setCellData(si, r, c, null);
+        else {
+          const data = cellData(cell);
+          if (what === 'formats') delete data.style;
+          else if (what === 'comments') delete data.comment;
+          else { data.raw = ''; delete data.cached; delete data.fx; delete data.image; delete data.link; }
+          wb.setCellData(si, r, c, data);
+        }
+      }
+      if (what === 'all') wb.setSheetProp(si, 'merges', sheet().merges.filter((m) => !selected.hasRC(m.r1, m.c1)));
+    } else if (what === 'contents' && allFilters().some(([, f]) => hidCount(f.hidden))) {
+      for (const [r, c] of cellsIn(usedClip(sel))) {
+        if (filterHidden(r)) continue;
+        const cell = wb.getCell(si, r, c);
+        if (cell?.raw) wb.setCellData(si, r, c, { raw: '', style: cell.style, comment: cell.comment });
+      }
+    } else {
+      wb.clearRange(si, sel.r1, sel.c1, sel.r2, sel.c2, what);
+      if (what === 'all') wb.unmerge(si, sel.r1, sel.c1, sel.r2, sel.c2);
     }
   }, meta());
 }
@@ -3675,7 +3712,7 @@ function webDataDialog() {
   };
   const drawFound = () => {
     found.replaceChildren(...items.map((it) => el('div', { class: `web-item${pick === it ? ' on' : ''}`, onclick: () => { pick = it; drawFound(); showPreview(); } },
-      el('span', {}, it.label), el('span', { class: 'muted' }, ` ${it.rows.length}×${Math.max(0, ...it.rows.map((r) => r.length))}`))));
+      el('span', {}, it.label), el('span', { class: 'muted' }, ` ${it.rows.length}×${it.rows.reduce((n, r) => Math.max(n, r.length), 0)}`))));
   };
   const go = async () => {
     const u = url.value.trim().replace(/^(?!https?:)/i, 'https://');
@@ -3684,7 +3721,11 @@ function webDataDialog() {
     status.textContent = '가져오는 중…';
     items = []; pick = null; drawFound(); showPreview();
     let text;
-    try { text = await webFetch(u); } catch (e) { status.textContent = `가져올 수 없습니다: ${e.message}`; return; }
+    try { text = await webFetch(u); } catch (e) {
+      status.textContent = `가져올 수 없습니다: ${e.message}`;
+      if (e.status === 401) askServerToken(() => { if (url.isConnected) return go(); });
+      return;
+    }
     opts.lastWebUrl = u; saveOptions();
     if (!/<[a-z!?][^>]*>/i.test(text.slice(0, 4000))) {
       items = [{ label: 'CSV / 텍스트', rows: parseCsv(text).map((r) => r.map(autoValue)), formula: `=IMPORTDATA("${esc(u)}")` }];
@@ -8181,10 +8222,7 @@ function nkSortFilter(s, rows) {
 async function nkFetch(params, creds) {
   const q = new URLSearchParams(params);
   if (!globalThis.TABULA_STATIC || server.available) {
-    const res = await fetch(`/api/naver/keywordstool?${q}`, { headers: { 'X-Customer': creds.customer, 'X-API-KEY': creds.key, 'X-Secret': creds.secret } });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(body.error || body.title || `네이버 API 오류 (${res.status}) — 계정 ID · 액세스 라이선스 · 비밀 키를 확인하세요.`);
-    return body;
+    return server.request(`naver/keywordstool?${q}`, { headers: { 'X-Customer': creds.customer, 'X-API-KEY': creds.key, 'X-Secret': creds.secret } });
   }
   // 서버 없이 (웹 배포판): 브라우저에서 바로 서명해 요청 — 네이버가 브라우저 요청(CORS)을 막으면 실패
   const ts = String(Date.now());
@@ -8215,7 +8253,11 @@ const JS_MACROS = {
       const params = { hintKeywords: kw, ...(month >= 1 && month <= 12 ? { month: String(month) } : {}), ...(event !== null && event !== '' && Number.isFinite(Number(event)) ? { event: String(event) } : {}) };
       toast(`'${kw}' 연관검색어를 가져오는 중…`);
       let json;
-      try { json = await nkFetch(params, creds); } catch (e) { alertDialog('연관검색어', `인터넷 접속 또는 API 연결에 실패하였습니다.\n${e.message}`); return; }
+      try { json = await nkFetch(params, creds); } catch (e) {
+        if (e.status === 401) askServerToken(() => { switchSheet(s); return JS_MACROS.GetNaverAdKeyword(opt); });
+        else alertDialog('연관검색어', `인터넷 접속 또는 API 연결에 실패하였습니다.\n${e.message}`);
+        return;
+      }
       const list = json.keywordList ?? [];
       const clean = (v) => { const t = String(v ?? '').replace(/^<\s*/, ''); const n = Number(t); return t !== '' && Number.isFinite(n) ? n : t; };
       rows = [...rows, ...list.map((it) => [kw, ...NK_FIELDS.map((f) => clean(it[f]))])];
@@ -9166,7 +9208,8 @@ function pivotLayoutFrom(grid, pm, d, top, left) {
 }
 function pivotLayoutOf(tsi, def) {
   const k = `${tsi}:${def.name ?? ''}`;
-  if (pivotLayouts.has(k)) return pivotLayouts.get(k);
+  const cached = pivotLayouts.get(k);
+  if (cached && cached.top === (def.top ?? 0) && cached.left === (def.left ?? 0)) return cached;
   const src = pivotSource(def);
   if (!src) return null;
   const res = resolvePivot(src, def);
@@ -9621,6 +9664,133 @@ function putPivotDef(entry, def) {
 function setPivotDef(entry, def, s = entry.si ?? si) {
   wb.transact(() => putPivotDef({ ...entry, si: s }, def), meta());
   entry.def = def;
+}
+
+/** 피벗 테이블 분석 › 동작 › 피벗 테이블 이동. 셀·서식·참조·연결을 한 번에 이동합니다. */
+function pivotMoveDialog() {
+  const entry = pivotHere();
+  if (!entry?.def.area) { toast('피벗 테이블 안의 셀을 선택하세요.'); return; }
+  const home = entry.si;
+  const where = el('select', {}, el('option', { value: 'new' }, '새 워크시트'), el('option', { value: 'existing' }, '기존 워크시트'));
+  const location = refInput(refText({ r1: entry.def.top ?? 0, c1: entry.def.left ?? 0, r2: entry.def.top ?? 0, c2: entry.def.left ?? 0 }, home), home);
+  location.disabled = true;
+  where.addEventListener('change', () => { location.disabled = where.value !== 'existing'; if (!location.disabled) { location.focus(); location.select(); } else refPick = null; });
+  const message = el('div', { class: 'warn', role: 'alert' });
+  const fail = (text) => { message.textContent = text; return false; };
+  openDialog({
+    title: '피벗 테이블 이동', width: 430, modeless: true, onClose: () => { refPick = null; },
+    body: el('div', { class: 'an-dlg' }, el('label', {}, el('span', {}, '피벗 테이블을 배치할 위치'), where), el('label', {}, el('span', {}, '위치'), location), message),
+    buttons: [{ label: '확인', primary: true, action: () => {
+      const source = wb.sheets[home];
+      if (!pivotDefs(home).some((e) => e.def === entry.def)) return fail('피벗 테이블이 변경되었습니다. 창을 닫고 다시 선택하세요.');
+      const old = entry.def.area;
+      const fresh = where.value === 'new';
+      if (fresh && wb.props?.lockStructure) return fail('통합 문서 구조가 보호되어 있어 새 워크시트를 만들 수 없습니다.');
+      const fullRef = parseRangeName(location.value.trim().slice(location.value.lastIndexOf('!') + 1).replace(/\$/g, ''));
+      if (!fresh && (!fullRef || !isSingle(fullRef))) return fail('위치에는 셀 하나를 입력하세요. 예: Sheet1!$H$3');
+      const dest = fresh ? { si: -1, rg: { r1: 0, c1: 0, r2: 0, c2: 0 } } : parseRefInput(location.value);
+      if (!dest || !isSingle(dest.rg)) return fail('위치에는 워크시트와 셀 하나를 입력하세요. 예: Sheet1!$H$3');
+      const dr = dest.rg.r1 - old.r1; const dc = dest.rg.c1 - old.c1;
+      if (!fresh && dest.si === home && !dr && !dc) return true;
+      const shift = (a) => ({ ...a, r1: a.r1 + dr, r2: a.r2 + dr, c1: a.c1 + dc, c2: a.c2 + dc });
+      const area = shift(old);
+      const overlaps = (a, b) => a.r1 <= b.r2 && a.r2 >= b.r1 && a.c1 <= b.c2 && a.c2 >= b.c1;
+      const inside = (a, b) => a.r1 >= b.r1 && a.r2 <= b.r2 && a.c1 >= b.c1 && a.c2 <= b.c2;
+      const inOld = (r, c) => r >= old.r1 && r <= old.r2 && c >= old.c1 && c <= old.c2;
+      if (area.r1 < 0 || area.c1 < 0 || area.r2 >= MAX_ROWS || area.c2 >= MAX_COLS) return fail('피벗 테이블 전체가 워크시트 안에 들어가는 위치를 선택하세요.');
+      const target = fresh ? null : wb.sheets[dest.si];
+      if (isProtected(source) || (target && (isProtected(target) || target.external))) return fail('보호된 워크시트로 이동하거나 보호된 피벗 테이블을 이동할 수 없습니다.');
+      const blocksOverlap = (sh, a) => (sh.blocks ?? []).some((b) => overlaps({ r1: b.r0, c1: b.c0, r2: b.r0 + b.n - 1, c2: b.c0 + b.cols.length - 1 }, a));
+      if (blocksOverlap(source, old) || (target && blocksOverlap(target, area))) return fail('큰 데이터 영역과 겹칩니다. 빈 위치를 선택하세요.');
+      if (source.merges.some((m) => overlaps(m, old) && !inside(m, old))) return fail('피벗 테이블 경계에 걸친 병합된 셀을 먼저 해제하세요.');
+      if (target) {
+        if ((target.tables ?? []).some((t) => overlaps(t, area)) || pivotDefs(dest.si).some((e) => e.def !== entry.def && e.def.area && overlaps(e.def.area, area))) return fail('다른 표 또는 피벗 테이블과 겹칩니다. 빈 위치를 선택하세요.');
+        if (target.merges.some((m) => overlaps(m, area) && !(dest.si === home && inside(m, old)))) return fail('이동할 위치에 병합된 셀이 있습니다.');
+        if (wb.spillsOf(dest.si).some((sp) => {
+          const rg = { r1: sp.r, c1: sp.c, r2: sp.r + sp.h - 1, c2: sp.c + sp.w - 1 };
+          return overlaps(rg, area) && !(dest.si === home && inside(rg, old));
+        })) return fail('이동할 위치에 동적 배열 수식의 분산 결과가 있습니다. 빈 위치를 선택하세요.');
+        let occupied = false;
+        for (let c = area.c1; c <= area.c2; c++) target.cells.col(c)?.forEach((cell, r) => {
+          if (r >= area.r1 && r <= area.r2 && !(dest.si === home && inOld(r, c)) && (cell.raw !== '' || cell.comment || cell.image || cell.link)) occupied = true;
+        });
+        if (occupied) return fail('이동할 위치에 데이터가 있습니다. 기존 내용을 보존할 수 있도록 빈 위치를 선택하세요.');
+      }
+      const records = [];
+      for (let c = old.c1; c <= old.c2; c++) source.cells.col(c)?.forEach((cell, r) => { if (r >= old.r1 && r <= old.r2) records.push([r, c, cellData(cell)]); });
+      const name = entry.def.name ?? nextPivotName();
+      let to = dest.si;
+      wb.transact(() => {
+        if (fresh) to = wb.addSheet(nextSheetName('피벗'));
+        const targetName = wb.sheets[to].name;
+        const fix = (raw, host) => moveRefsInFormula(raw, { targetSheet: source.name, hostSheet: host, src: old, dr, dc, destinationSheet: targetName });
+        const matches = (e) => e?.si === home && e.prop === entry.prop && e.index === entry.index;
+        // 삭제 전에 연결 대상을 해석해야 이름이 없던 피벗의 연결도 보존됩니다.
+        wb.sheets.forEach((sh, i) => {
+          const charts = (sh.charts ?? []).map((ch) => {
+            let out = ch;
+            if (ch.pivot && matches(findPivotEntry(ch.pivot.sheet ?? null, ch.pivot.name ?? null, i))) out = { ...ch, pivot: { ...ch.pivot, sheet: targetName, name } };
+            const moveChartRange = (rg, host) => rg && inside(rg, old) && (rg.sheet ?? host) === source.name ? { ...shift(rg), sheet: targetName } : rg;
+            if (ch.range) { const rg = moveChartRange(ch.range, ch.sheet ?? sh.name); if (rg !== ch.range) out = { ...out, range: rg, sheet: targetName }; }
+            if (ch.series) out = { ...out, series: ch.series.map((sr) => {
+              const n = { ...sr };
+              for (const key of ['cat', 'val', 'x', 'size']) if (sr[key]?.r1 !== undefined) n[key] = moveChartRange(sr[key], ch.sheet ?? sh.name);
+              if (sr.name?.ref?.r1 !== undefined) n.name = { ...sr.name, ref: moveChartRange(sr.name.ref, ch.sheet ?? sh.name) };
+              return n;
+            }) };
+            return out;
+          });
+          if (charts.some((ch, j) => ch !== sh.charts[j])) wb.setSheetProp(i, 'charts', charts);
+          const slicers = (sh.slicers ?? []).map((sl) => {
+            if (sl.source?.kind !== 'pivot') return sl;
+            const targets = slicerPivotTargets(sl.source, i);
+            if (!targets.some(matches)) return sl;
+            return { ...sl, source: { ...sl.source, pivots: targets.map((e) => matches(e) ? { sheet: targetName, name } : { sheet: wb.sheets[e.si].name, name: pivotNameOf(e) }) } };
+          });
+          if (slicers.some((sl, j) => sl !== sh.slicers[j])) wb.setSheetProp(i, 'slicers', slicers);
+        });
+        // 범위 자체의 셀 서식과 사용자 메모도 그대로 옮깁니다.
+        for (const [r, c] of records) wb.setCellData(home, r, c, null);
+        for (const [r, c, data] of records) {
+          if (to !== home && data.raw?.startsWith('=')) data.raw = rewriteRefs(data.raw, (ref) => ref.sheet ? undefined : { ...ref, sheet: source.name, sheetPrefix: `${quoteSheetName(source.name)}!` });
+          wb.setCellData(to, r + dr, c + dc, data);
+        }
+        const merges = source.merges.filter((m) => inside(m, old));
+        wb.setSheetProp(home, 'merges', source.merges.filter((m) => !inside(m, old)));
+        wb.setSheetProp(to, 'merges', [...wb.sheets[to].merges, ...merges.map(shift)]);
+        for (const prop of ['cond', 'validations']) {
+          const moved = []; const kept = [];
+          for (const rule of source[prop] ?? []) {
+            const ranges = [rule, ...(rule.more ?? [])];
+            if (!ranges.every((r) => inside(r, old))) { kept.push(rule); continue; }
+            const next = { ...rule, ...shift(rule), ...(rule.more ? { more: rule.more.map(shift) } : {}) };
+            for (const key of prop === 'cond' ? ['formula', 'v1', 'v2'] : ['f1', 'f2']) if (typeof next[key] === 'string' && next[key].startsWith('=')) next[key] = shiftFormula(next[key], dr, dc);
+            moved.push(next);
+          }
+          wb.setSheetProp(home, prop, kept);
+          wb.setSheetProp(to, prop, [...wb.sheets[to][prop], ...moved]);
+        }
+        if (entry.prop === 'pivot') wb.setSheetProp(home, 'pivot', null);
+        else wb.setSheetProp(home, 'pivotsExtra', source.pivotsExtra.filter((_, i) => i !== entry.index));
+        const def = { ...structuredClone(entry.def), name, top: (entry.def.top ?? old.r1) + dr, left: (entry.def.left ?? old.c1) + dc, area, buttons: (entry.def.buttons ?? []).map((b) => ({ ...b, r: b.r + dr, c: b.c + dc })) };
+        if (!wb.sheets[to].pivot) wb.setSheetProp(to, 'pivot', def);
+        else wb.setSheetProp(to, 'pivotsExtra', [...(wb.sheets[to].pivotsExtra ?? []), def]);
+        wb.sheets.forEach((sh, i) => {
+          const changes = [];
+          sh.cells.forEachRC((cell, r, c) => { if (cell.formula) { const raw = fix(cell.raw, sh.name); if (raw !== cell.raw) changes.push([r, c, { ...cellData(cell), raw }]); } });
+          for (const [r, c, data] of changes) wb.setCellData(i, r, c, data);
+        });
+        const names = wb.names.map((n) => ({ ...n, ref: fix(n.ref, n.sheet ?? source.name) }));
+        if (names.some((n, i) => n.ref !== wb.names[i].ref)) wb.setNames(names);
+      }, meta());
+      pivotLayouts.clear(); pivotWritten.clear();
+      refPick = null;
+      switchSheet(to, false);
+      selectCell(area.r1, area.c1);
+      refreshPivotPane(true);
+      return true;
+    } }, { label: '취소' }],
+  });
 }
 
 /** 파일에서 연 피벗: 서식을 기억하고 피벗 스타일로 다시 그림 (실행 취소 기록 없이) */
@@ -12678,11 +12848,13 @@ async function saveNow(explicit, { quiet = false, saveAsFolder = false } = {}) {
 }
 
 function askServerToken(then) {
-  if (isDialogOpen()) return;
-  formDialog('서버 암호', [{ name: 't', label: '암호', type: 'password', value: '' }], ({ t }) => {
+  if (document.querySelector('[data-server-token]')) return;
+  const dialog = formDialog('서버 암호', [{ name: 't', label: '암호', type: 'password', value: '' }], ({ t }) => {
     server.setToken(t);
-    then?.();
+    // 암호 창이 닫힌 뒤 재시도해야 잘못된 암호의 401 도 다시 입력받을 수 있습니다.
+    queueMicrotask(() => then?.());
   }, { note: '이 서버는 TABULA_TOKEN 으로 보호되어 있습니다.' });
+  dialog.root.dataset.serverToken = 'true';
 }
 
 async function openFromServer(name) {
@@ -15297,18 +15469,10 @@ const COMMANDS = {
   autosum: () => autoSum('SUM'),
   fillDown: () => fillCopy('down'),
   fillRight: () => fillCopy('right'),
-  clearContents: () => wb.transact(() => {
-    if (allFilters().some(([, f]) => hidCount(f.hidden))) {
-      for (const [r, c] of cellsIn(usedClip(sel))) {
-        if (filterHidden(r)) continue;
-        const cell = wb.getCell(si, r, c);
-        if (cell?.raw) wb.setCellData(si, r, c, { raw: '', style: cell.style, comment: cell.comment });
-      }
-    } else wb.clearRange(si, sel.r1, sel.c1, sel.r2, sel.c2, 'contents');
-  }, meta()),
-  clearAll: () => wb.transact(() => { wb.clearRange(si, sel.r1, sel.c1, sel.r2, sel.c2, 'all'); wb.unmerge(si, sel.r1, sel.c1, sel.r2, sel.c2); }, meta()),
-  clearFormats: () => wb.transact(() => wb.clearRange(si, sel.r1, sel.c1, sel.r2, sel.c2, 'formats'), meta()),
-  clearComments: () => wb.transact(() => wb.clearRange(si, sel.r1, sel.c1, sel.r2, sel.c2, 'comments'), meta()),
+  clearContents: () => clearSelection('contents'),
+  clearAll: () => clearSelection('all'),
+  clearFormats: () => clearSelection('formats'),
+  clearComments: () => clearSelection('comments'),
   sortAsc: () => sortData(true),
   sortDesc: () => sortData(false),
   sortDialog,
@@ -15435,6 +15599,7 @@ const COMMANDS = {
   pivotDetail: () => { const pv = pivotHere(); if (!pv || !showPivotDetail(pv, active.r, active.c)) toast('피벗 테이블의 값 셀을 선택하세요.'); },
   pivotShowExpand: () => { const pv = pivotHere(); if (pv) pivotLayoutCmd({ showExpand: pv.def.showExpand === false }); },
   pivotChangeSource: () => pivotChangeSourceDialog(),
+  pivotMove: () => pivotMoveDialog(),
   pivotClear: () => { const e = pivotHere(); if (e) { setPivotDef(e, { ...pivotDefV2(e.def), rows: [], cols: [], values: [], pages: [], filters: {}, fieldFilters: {}, sort: {} }); refreshPivotPane(true); } },
   calcField: () => calcFieldDialog(),
   slicerConnections: () => slicerConnectionsDialog(),
@@ -15550,13 +15715,15 @@ const NO_COMMIT = new Set(['toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100', 'shor
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '2.0.0';
 const WHATS_NEW = [
+  ['호환 · 보안 개선', ['표 구조 참조 · 행 높이 · 문자열 보존 · 잘못된 날짜 입력 처리 수정', '대용량 CSV 가져오기와 스파크라인의 배열 크기 오류 수정', '서버 인증 기본값과 웹·네이버 중계 접근 보호 강화']],
+  ['안정성', ['메모 셀만 선택한 뒤 삭제해도 사이의 일반 셀은 보존', '대화 상자의 키보드 이동 · 중첩 창 포커스 · 한글 입력 · 비동기 작업 오류 안내 개선', '메뉴를 방향키 · Enter · Esc로 선택하고 하위 메뉴 이동', '웹 가져오기와 네이버 연관검색어에서 서버 암호 입력 후 다시 시도']],
   ['데이터', ['정렬 대화 상자: 여러 기준 추가 · 복사 · 순서 바꾸기, 셀 색 · 글꼴 색 · 사용자 지정 목록, 대/소문자 구분 · 왼쪽→오른쪽 · 자연 정렬', '통합 (여러 범위를 첫 행 · 왼쪽 열 이름으로 합계 · 평균 · 개수 …)', '웹에서: 웹 페이지의 표 · 목록 · CSV 미리 보기 → 값 또는 IMPORTHTML 수식으로', '사용자 지정 목록 편집 (채우기 · 정렬에 사용)']],
   ['보기', ['탐색 창 (시트 · 표 · 피벗 · 이름 · 개체 · 메모 · 링크)', '포커스 셀 · 값 강조(Ctrl+F8: 숫자 파랑 · 수식 초록)', '상태 표시줄 사용자 지정 (오른쪽 클릭: 평균 · 개수 · 숫자 셀 수 · 최소 · 최대 · 합계 · 선택 크기, 값 클릭 = 복사)']],
   ['붙여넣기', ['연결된 그림 (카메라: 원본이 바뀌면 같이 바뀜) · 그림 · 연결하여 붙여넣기']],
   ['마케팅', ['이상치 찾기 (데이터 › 분석: 일별 비용 · 전환의 급등 빨강 / 급락 파랑, 수식 조건부 서식)', '광고 지표 (노출 · 클릭 · 비용 · 전환 · 매출 → CTR · CPC · CPM · CVR · CPA · ROAS 열 자동 추가)']],
   ['피벗 그룹', ['선택 항목 그룹화 (항목 셀 여러 개 선택 → 그룹1 · 그룹2, 그룹 해제)', '피벗 항목 이름 바꾸기 (항목 칸에 새 이름 입력)', '엑셀 파일의 선택 항목 그룹 · 공유 캐시 날짜 그룹을 그대로 열고 저장']],
-  ['피벗', ['추천 피벗 테이블 (삽입 › 추천 피벗 테이블: 요약 후보 미리 보기)', '계산 항목 (예: 수도권 = 서울 + 인천, 피벗 분석 › 필드, 항목 및 집합)']],
-  ['호환', ['확인란을 엑셀 365 고유 형식으로 저장 (엑셀에서도 확인란으로 보임)']],
+  ['피벗', ['피벗 테이블 이동 (새 워크시트 또는 기존 워크시트, 셀 서식 · 수식 참조 · 차트 · 슬라이서 연결과 실행 취소 지원)', '추천 피벗 테이블 (삽입 › 추천 피벗 테이블: 요약 후보 미리 보기)', '계산 항목 (예: 수도권 = 서울 + 인천, 피벗 분석 › 필드, 항목 및 집합)']],
+  ['호환', ['확인란을 Excel 365 형식으로 저장 (실제 Excel 표시 검증 필요)']],
   ['파일', ['저장 위치(폴더) 선택 · 덮어쓰기 확인 · 연 파일에 바로 [저장]', '파일 › 정보: 통합 문서 보호(구조 보호 · 최종본 · 읽기 전용 권장) · 문서 검사 · 속성 편집', '다른 기기에서 열기(서버 저장)도 폴더 지정']],
   ['편집', ['셀 삽입/삭제 대화 상자 (셀을 오른쪽/아래로 밀기 · 왼쪽/위로 당기기 · 행/열 전체)', '셀 내용 자동 완성 · 자동 고침 · 소수점 자동 삽입 · URL 자동 하이퍼링크', '고급 필터 (조건 범위 · 다른 장소에 복사 · 고유 레코드만)']],
   ['서식', ['채우기 효과 (셀 그라데이션: 가로 · 세로 · 대각선 · 가운데에서)', '무늬 스타일 그림 선택기 · 병합 셀 테두리 · 행 서식 번짐 수정', '스타일시트 v1.0: 표 42 · 피벗 42 · 슬라이서 48종 기본 탑재']],

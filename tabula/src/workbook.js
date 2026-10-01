@@ -1557,7 +1557,10 @@ export class Workbook {
     this.touch(si);
     const cells = this.sheets[si].cells;
     const old = cells.getRC(r, c);
-    if (old?.maybeArray || cell?.maybeArray) this.arrayList = null;
+    if (old?.maybeArray || cell?.maybeArray) {
+      this.arrayList = null;
+      this.spillState = null; // 새 배열 수식은 의존 셀이 없어도 분산 후보를 다시 탐색해야 함
+    }
     if (old?.formula || cell?.formula) {
       if (this.graph) this.graph.set(si, r, c, cell?.formula ? cell : null);
       else this.graphEpoch = (this.graphEpoch ?? 0) + 1; // 백그라운드로 만들던 그래프는 버림
@@ -1758,8 +1761,12 @@ export class Workbook {
         if (t.columns) {
           const cols = [...t.columns];
           const off = index - t.c1;
-          if (count > 0 && off >= 0 && off <= cols.length) cols.splice(off, 0, ...Array(count).fill(''));
-          else if (count < 0) cols.splice(Math.max(0, off), Math.min(-count, cols.length - Math.max(0, off)));
+          // 표 시작/끝 바깥 삽입은 표 전체를 옮길 뿐 열을 늘리지 않음.
+          if (count > 0 && index > t.c1 && index <= t.c2) cols.splice(off, 0, ...Array(count).fill(''));
+          else if (count < 0) {
+            const first = Math.max(index, t.c1), end = Math.min(index - count, t.c2 + 1);
+            if (end > first) cols.splice(first - t.c1, end - first);
+          }
           nt.columns = cols;
         }
       }

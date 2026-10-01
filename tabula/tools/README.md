@@ -2,7 +2,7 @@
 
 `npm test` 외에 브라우저 동작과 엑셀 파일 회귀를 확인하는 스크립트입니다.
 실제 파일을 비교할 때는 **수정 전에 기준 결과를 저장하고, 수정 후 같은 파일과 명령으로 다시 측정**하세요.
-이번 인계에서 실행한 결과와 미검증 범위는 [`06_검증결과.md`](../docs/codex/06_검증결과.md)에 기록합니다.
+최신 실행 결과와 미검증 범위는 [`07_품질개선결과.md`](../docs/codex/07_품질개선결과.md), 원본 인계 검증은 [`06_검증결과.md`](../docs/codex/06_검증결과.md)에 기록합니다.
 
 ## 준비 (Windows PowerShell)
 
@@ -54,6 +54,7 @@ $env:PLAYWRIGHT_MODULE = 'file:///D:/Codex/Temp/wixel-tools/node_modules/playwri
 서버 포트를 바꿨다면 `WIXEL_URL`도 맞추세요. 브라우저 스크립트는 생성한 테스트 브라우저에서 데이터를 초기화하고 명령을 실행하므로 별도 테스트 서버를 사용합니다.
 네 브라우저 도구는 초기화 스크립트에서 `window.TABULA_STATIC = true`를 설정해
 서버 문서 자동 저장·복원으로 검사 데이터가 바뀌는 것을 막습니다. 도구의 성공은 서버 API 인증·보안 검증을 의미하지 않습니다.
+`ui-regressions.mjs`도 별도 브라우저에서 합성 문서를 사용합니다. 인증 화면 시나리오는 API 응답을 모의하며, 실제 서버 API는 `npm test`의 서버 테스트에서 검증합니다.
 
 ### Git Bash 사용 시
 
@@ -84,12 +85,14 @@ HOST=127.0.0.1 PORT=5178 TABULA_DATA='D:/Codex/Temp/wixel-server-data' npm start
 |------|---------|--------|-----------|
 | `smoke.mjs` | 샘플 데이터에서 실행 가능한 앱 명령을 호출해 콘솔 오류·예외 확인. 파일 선택 등 일부 명령 제외 | `node tools/smoke.mjs` | `bad 0` 및 종료 코드 0 |
 | `keys.mjs` | 단축키 66개 확인. 3개는 실행 오류만 확인한다고 출력 | `node tools/keys.mjs` | 요약의 `bad`·`pageErrors`가 모두 0, 종료 코드 0 |
+| `ui-regressions.mjs` | 비연속 선택·대화상자·메뉴·피벗 이동·인증 재시도의 실제 브라우저 회귀 검사 | `node tools/ui-regressions.mjs` | 모든 항목 통과, 페이지 오류 0, 종료 코드 0 |
 | `check.mjs` | Node에서 수식을 다시 계산해 파일 저장값과 비교하고 xlsx 저장/읽기 왕복 검사 | `node tools/check.mjs 파일.xlsx` | `formula mismatches: 0`, `roundtrip issues: 0`, 종료 코드 0 |
 | `brcheck.mjs` | 브라우저에서 파일을 열고 피벗을 다시 그린 뒤 수식 비교 및 로딩 시간 기록 | `node tools/brcheck.mjs 파일.xlsx` | 브라우저 수식 불일치·오류 없음 및 종료 코드 0 |
 | `pvcmp.mjs` | 피벗 영역별 파일 저장값과 WIXEL 재계산 결과 비교 | `node tools/pvcmp.mjs 파일.xlsx` | `pivots N differing 0`, 종료 코드 0 |
 
 - `check.mjs`·`pvcmp.mjs`: 종료 코드 **0** = 검사상 차이 없음, **1** = 비교 차이, **2** = 입력 문제 또는 검사 중 실행 오류. 비정상 종료만 보고 차이의 원인을 단정하지 말고 출력도 확인하세요.
 - `smoke.mjs`·`keys.mjs`·`brcheck.mjs`: 검출한 오류·실패는 종료 코드 **1**. `brcheck.mjs`의 입력 문제는 **2**입니다. 모듈 설치·브라우저 시작·서버 연결 등 실행 자체의 실패도 비정상 종료이므로 결과 로그를 함께 확인하세요.
+- `ui-regressions.mjs`도 검사 실패·페이지 오류가 있으면 종료 코드 **1**입니다. `WIXEL_UI_SCREENSHOT`에 절대 PNG 경로를 지정하면 피벗 이동 창을 캡처합니다.
 - PowerShell은 명령 직후 `$LASTEXITCODE`, Bash는 `$?`로 종료 코드를 확인합니다. 뒤에 실행한 명령의 코드로 덮이지 않게 바로 기록하세요.
 - `check.mjs`·`pvcmp.mjs`는 **xlsx/xlsm/xlsb**만 받습니다. 옛 `.xls`(BIFF8)는 `brcheck.mjs`로 확인하세요.
 - `TODAY/NOW/RAND` 같은 수식의 날짜·난수 차이는 **자동 제외되지 않습니다**. 실제 차이와 구분해 수동 검토 근거를 남기세요.

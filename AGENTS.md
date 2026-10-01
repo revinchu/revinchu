@@ -11,8 +11,8 @@
 
 ## 공통 규칙
 - 사용자에게 보이는 모든 글자(UI · 메시지 · 토스트 · 대화상자)는 **한국어**.
-- 원본 인계는 `claude/offsro-excel-implementation-zmro3r`의 `f6cbc6e`입니다. 검증 도구·문서를 보완한 `codex/handoff-validation`의 인계 커밋에서 새 작업을 분기하세요. 원격 반영 여부는 `tabula/docs/codex/06_검증결과.md`와 실제 Git 상태를 확인하세요.
-- 커밋 전에 `cd tabula && npm test`가 모두 통과해야 합니다. 실제 개수와 결과는 `tabula/docs/codex/06_검증결과.md`를 참고하세요.
+- 원본 인계는 `claude/offsro-excel-implementation-zmro3r`의 `f6cbc6e`, 도구 검증은 `codex/handoff-validation`의 `0a479d7`입니다. 후속 품질 개선을 포함한 `codex/wixel-quality-improvements`에서 새 작업을 분기하세요. 기준 커밋과 원격 상태를 먼저 확인하세요.
+- 커밋 전에 `cd tabula && npm test`가 모두 통과해야 합니다. 최신 변경·검증 결과는 `tabula/docs/codex/07_품질개선결과.md`를 참고하세요.
 - 기존 체크아웃 경로를 유지하고, 새 로컬 작업은 `D:\Codex\Workspaces`, 임시 파일은 `D:\Codex\Temp`, 캐시는 `D:\Codex\Caches`에 만드세요.
 - 사용자가 올린 실제 업무 파일(xlsx · xlsb 등)은 **절대 커밋하지 마세요** (개인 · 회사 데이터).
 

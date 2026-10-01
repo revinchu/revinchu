@@ -94,11 +94,11 @@ export function openSubmenu(anchorEl, items) {
   for (const m of openMenus.filter((x) => Number(x.dataset.level) >= 1)) m.remove();
   openMenus = openMenus.filter((x) => Number(x.dataset.level) < 1);
   const r = anchorEl.getBoundingClientRect();
-  return buildMenu({ x: r.right - 2, y: r.top - 4 }, items, { level: 1 });
+  return buildMenu({ x: r.right - 2, y: r.top - 4 }, items, { level: 1, parentItem: anchorEl, focus: document.activeElement === anchorEl });
 }
 
 /** 메뉴 하나 (submenu: 오른쪽에 하위 메뉴, swatch: 색 견본, header: 제목 줄) */
-function buildMenu(anchor, items, { minWidth, scroll, level = 0 } = {}) {
+function buildMenu(anchor, items, { minWidth, scroll, level = 0, parentItem = null, focus = true } = {}) {
   const menu = el('div', { class: 'menu', role: 'menu' });
   menu.dataset.level = String(level);
   if (minWidth) menu.style.minWidth = `${minWidth}px`;
@@ -112,16 +112,16 @@ function buildMenu(anchor, items, { minWidth, scroll, level = 0 } = {}) {
     if (it.sep) { menu.append(el('div', { class: 'menu-sep' })); continue; }
     if (it.title || it.header) { menu.append(el('div', { class: 'menu-title' }, it.title ?? it.label)); continue; }
     if (it.node) { menu.append(it.node); continue; }
-    const openSub = () => {
+    const openSub = (focus = false) => {
       closeDeeper();
       const r = btn.getBoundingClientRect();
-      buildMenu({ x: r.right - 2, y: r.top - 4 }, it.submenu, { level: level + 1 });
+      buildMenu({ x: r.right - 2, y: r.top - 4 }, it.submenu, { level: level + 1, parentItem: btn, focus });
     };
     const btn = el('button', {
-      class: `menu-item${it.submenu ? ' has-sub' : ''}`, role: 'menuitem', disabled: it.disabled,
+      class: `menu-item${it.submenu ? ' has-sub' : ''}`, role: 'menuitem', disabled: it.disabled, 'aria-haspopup': it.submenu ? 'menu' : null,
       onmousedown: (e) => e.preventDefault(),
       onmouseenter: () => { if (it.submenu) openSub(); else closeDeeper(); },
-      onclick: () => { if (it.submenu) { openSub(); return; } closeMenus(); it.action?.(); },
+      onclick: () => { if (it.submenu) { openSub(true); return; } closeMenus(); it.action?.(); },
     },
     el('span', { class: 'mi-icon', html: it.checked ? ICONS.check : (it.icon ? ICONS[it.icon] ?? it.icon : '') }),
     it.swatch !== undefined ? el('i', { class: 'mi-swatch', style: { background: it.swatch ?? 'transparent' } }) : null,
@@ -133,6 +133,32 @@ function buildMenu(anchor, items, { minWidth, scroll, level = 0 } = {}) {
   document.getElementById('menuLayer').append(menu);
   placeMenu(menu, anchor);
   openMenus.push(menu);
+  menu.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key === 'Escape' || (e.key === 'ArrowLeft' && level && !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName))) {
+      e.preventDefault(); e.stopPropagation();
+      if (level) {
+        for (const m of openMenus.filter((x) => Number(x.dataset.level) >= level)) m.remove();
+        openMenus = openMenus.filter((x) => Number(x.dataset.level) < level);
+        parentItem?.focus();
+      } else closeMenus();
+      return;
+    }
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable) return;
+    const entries = [...menu.querySelectorAll(':scope > .menu-item:not(:disabled)')];
+    if (!entries.length) return;
+    const at = entries.indexOf(document.activeElement);
+    if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) {
+      e.preventDefault(); e.stopPropagation(); closeDeeper();
+      const i = e.key === 'Home' ? 0 : e.key === 'End' ? entries.length - 1 : (at + (e.key === 'ArrowDown' ? 1 : -1) + entries.length) % entries.length;
+      entries[i].focus();
+    } else if (e.key === 'ArrowRight' && document.activeElement?.classList.contains('has-sub')) {
+      e.preventDefault(); e.stopPropagation(); document.activeElement.click();
+    } else if (e.key === 'Enter' || e.key === ' ') {
+      if (at >= 0) { e.preventDefault(); e.stopPropagation(); entries[at].click(); }
+    }
+  });
+  if (focus) (menu.querySelector('input:not(:disabled), select:not(:disabled), textarea:not(:disabled)') ?? menu.querySelector(':scope > .menu-item:not(:disabled)'))?.focus();
   return menu;
 }
 
@@ -179,36 +205,77 @@ export const isDialogOpen = () => [...document.getElementById('dialogLayer').chi
  */
 export function openDialog({ title, body, buttons = [], onOpen, width, modeless = false, onClose }) {
   const layer = document.getElementById('dialogLayer');
+  const returnFocus = document.activeElement;
+  let busy = false;
+  const focusable = (root) => [...root.querySelectorAll('input, select, textarea, button, a[href], [tabindex]')]
+    .filter((x) => !x.disabled && x.tabIndex >= 0 && x.getClientRects().length);
   const close = () => {
-    if (!backdrop.isConnected) return;
+    if (!backdrop.isConnected || busy) return;
     backdrop.remove();
     onClose?.();
-    dialogCloseHandler?.();
+    const remaining = [...layer.querySelectorAll('.dialog')].at(-1);
+    if (remaining) {
+      if (!remaining.contains(document.activeElement)) (remaining.contains(returnFocus) ? returnFocus : focusable(remaining)[0])?.focus();
+    } else dialogCloseHandler?.();
   };
   const content = typeof body === 'string' ? el('div', { html: body }) : body;
-  const dialog = el('div', { class: 'dialog', role: 'dialog', 'aria-label': title },
+  const dialog = el('div', { class: 'dialog', role: 'dialog', 'aria-label': title, 'aria-modal': String(!modeless), tabindex: '-1' },
     el('div', { class: 'dialog-head' }, title, el('button', { title: '닫기', onclick: close }, '✕')),
     el('div', { class: 'dialog-body' }, content),
     buttons.length ? el('div', { class: 'dialog-foot' }, buttons.map((b) => el('button', {
       class: `btn${b.primary ? ' primary' : ''}`,
-      onclick: () => { if (b.action?.() !== false) close(); },
+      onclick: () => invoke(b),
     }, b.label))) : null);
   if (width) dialog.style.width = `${width}px`;
   const backdrop = el('div', { class: `dialog-backdrop${modeless ? ' modeless' : ''}` }, dialog);
+  const error = el('div', { class: 'warn', role: 'alert', hidden: true });
+  dialog.querySelector('.dialog-body').append(error);
+  const invoke = (button) => {
+    if (busy) return;
+    error.hidden = true;
+    const fail = (err) => { error.textContent = `작업을 완료하지 못했습니다: ${err?.message ?? String(err)}`; error.hidden = false; };
+    try {
+      const result = button.action?.();
+      if (result && typeof result.then === 'function') {
+        busy = true;
+        dialog.setAttribute('aria-busy', 'true');
+        const controls = [...dialog.querySelectorAll('.dialog-foot button, .dialog-head button')];
+        const disabled = controls.map((x) => x.disabled);
+        controls.forEach((x) => { x.disabled = true; });
+        Promise.resolve(result).then((value) => {
+          busy = false;
+          if (value !== false) close();
+        }, fail).finally(() => {
+          busy = false;
+          dialog.removeAttribute('aria-busy');
+          controls.forEach((x, i) => { x.disabled = disabled[i]; });
+          if (dialog.isConnected && !dialog.contains(document.activeElement)) (dialog.querySelector('.btn.primary:not(:disabled)') ?? focusable(dialog)[0] ?? dialog).focus();
+        });
+      } else if (result !== false) close();
+    } catch (err) { fail(err); }
+  };
   backdrop.addEventListener('mousedown', (e) => { if (e.target === backdrop && !modeless) close(); });
   if (modeless) dragByHead(dialog);
   dialog.addEventListener('keydown', (e) => {
     e.stopPropagation();
-    if (e.key === 'Escape') close();
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key === 'Escape') { e.preventDefault(); close(); return; }
+    if (e.key === 'Tab' && !modeless) {
+      const list = focusable(dialog);
+      const first = list[0]; const last = list.at(-1);
+      if (!first) { e.preventDefault(); dialog.focus(); }
+      else if (e.shiftKey && (document.activeElement === first || !list.includes(document.activeElement))) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && (document.activeElement === last || !list.includes(document.activeElement))) { e.preventDefault(); first.focus(); }
+    }
     if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA' && e.target.tagName !== 'BUTTON') {
       e.preventDefault(); // 대화상자가 닫힌 뒤 Enter 가 셀 편집기에 들어가지 않도록
       const primary = buttons.find((b) => b.primary);
-      if (primary && primary.action?.() !== false) close();
+      if (primary) invoke(primary);
     }
   });
   layer.append(backdrop);
-  const first = dialog.querySelector('input, select, textarea');
-  (first ?? dialog.querySelector('.btn.primary'))?.focus();
+  const first = focusable(dialog).find((x) => /^(INPUT|SELECT|TEXTAREA)$/.test(x.tagName));
+  (first ?? dialog.querySelector('.btn.primary') ?? focusable(dialog)[0] ?? dialog).focus();
   first?.select?.();
   onOpen?.(dialog);
   return { close, root: dialog };
@@ -238,7 +305,7 @@ function dragByHead(dialog) {
 
 export function alertDialog(title, message) {
   return new Promise((resolve) => {
-    openDialog({ title, body: el('div', {}, message), buttons: [{ label: '확인', primary: true, action: resolve }] });
+    openDialog({ title, body: el('div', {}, message), onClose: resolve, buttons: [{ label: '확인', primary: true }] });
   });
 }
 
