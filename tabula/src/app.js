@@ -7909,33 +7909,6 @@ function menuAtCell(name) {
   anchor.remove();
 }
 
-function keytipCommandLabel(cmd) { return qatCatalog().find((item) => item.cmd === cmd)?.label ?? cmd; }
-
-function keytipChoices(seq) {
-  if (!seq) return [
-    ...Object.entries(KEYTIP_TABS).filter(([, id]) => TABS.some((t) => t.id === id && (!t.context || ribbonState().context?.includes(t.context))))
-      .map(([key, id]) => [key, TAB_LABELS[id] ?? id]),
-    ['f', '파일'], ['e', '이전 메뉴 키'], ['q', '검색'],
-    ...qatCommands().map((cmd, i) => [qatKey(i), keytipCommandLabel(cmd)]).filter(([key]) => key),
-  ];
-  const choices = new Map();
-  for (const [path, [, label]] of Object.entries(KEYTIPS)) {
-    if (!path.startsWith(seq) || path === seq) continue;
-    const rest = path.slice(seq.length), key = rest[0];
-    const group = seq + key;
-    if (rest.length === 1) choices.set(key, label);
-    else if (!choices.has(key)) choices.set(key, KEYTIP_GROUPS[group] ?? label + ' …');
-  }
-  for (const [key, label] of qatCommands().map((cmd, i) => [qatKey(i), keytipCommandLabel(cmd)])) {
-    if (key?.startsWith(seq) && key !== seq) choices.set(key.slice(seq.length), label);
-  }
-  return [...choices];
-}
-
-function keytipHint(seq) {
-  return `Alt${seq ? ` → ${seq.toUpperCase().split('').join(' → ')}` : ''}: ${keytipChoices(seq).map(([k, label]) => `${k.toUpperCase()} ${label}`).join(' · ')}`;
-}
-
 /** 배지와 키 입력은 같은 경로를 실행합니다. 전체 KEYTIPS 등록표는 변경하지 않습니다. */
 function activateKeytip(seq) {
   if (!keytip) return false;
@@ -8011,18 +7984,6 @@ function showKeytip() {
   const seq = keytip.seq;
   document.body.classList.add('keytips');
   document.body.dataset.keytipSequence = seq;
-  dom.status.textContent = keytipHint(seq);
-  document.querySelector('.keytip-panel')?.remove();
-  const panel = el('div', { class: 'keytip-panel', role: 'status', 'aria-label': '리본 바로 가기 키' },
-    el('div', { class: 'keytip-caption' }, seq ? `Alt → ${seq.toUpperCase().split('').join(' → ')}` : '리본 바로 가기 키',
-      el('span', {}, 'Esc: 이전 단계 · Alt: 닫기')),
-    el('div', { class: 'keytip-choices' }, keytipChoices(seq).map(([k, label]) => el('span', {}, el('kbd', {}, k.toUpperCase()), label))));
-  const ribbonBottom = document.getElementById('ribbon').getBoundingClientRect().bottom;
-  const toolbarBottom = document.querySelector('#quickAccess.below')?.getBoundingClientRect().bottom ?? 0;
-  const top = Math.min(Math.max(ribbonBottom, toolbarBottom) + 4, Math.max(4, window.innerHeight - 96));
-  panel.style.top = `${top}px`;
-  panel.style.maxHeight = `${Math.max(40, Math.min(window.innerHeight * 0.35, window.innerHeight - top - 8))}px`;
-  document.body.append(panel);
   for (const button of document.querySelectorAll('.ribbon-tab')) {
     const pair = Object.entries(KEYTIP_TABS).find(([, id]) => TAB_LABELS[id] === button.textContent);
     const key = button.classList.contains('file') ? 'f' : pair?.[0];
@@ -8030,7 +7991,6 @@ function showKeytip() {
     else delete button.dataset.keytip;
   }
   showKeytipMenu(seq);
-  panel.hidden = !!keytipMenu?.isConnected;
   drawKeytipBadges();
 }
 
@@ -8039,7 +7999,6 @@ function endKeytip() {
   keytip = null;
   document.body.classList.remove('keytips');
   delete document.body.dataset.keytipSequence;
-  document.querySelector('.keytip-panel')?.remove();
   document.querySelector('.keytip-badges')?.remove();
   closeKeytipMenu();
   document.querySelectorAll('[data-keytip]').forEach((node) => delete node.dataset.keytip);
@@ -16503,6 +16462,7 @@ const NO_COMMIT = new Set(['toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100', 'shor
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['리본 키 안내', ['리본 아래의 큰 바로 가기 키 안내판과 상태 표시줄의 키 목록 제거', '버튼 옆 작은 Alt 키 표시와 하위 명령 메뉴로 선택']],
   ['시트 선 표시', ['축소 배율과 디스플레이 배율을 반영한 눈금선·셀 테두리', '공유 경계의 중복 선 제거 · 채움·병합·숨긴 행과 열 주변의 테두리 보완']],
   ['차트와 피벗 호환', ['여러 계열의 도넛 링 · 표식 100% 누적 꺾은선 · 주축/보조축 콤보 견본', '콤보 축별 누적·보조축 기준선과 XLSX 축 설정 보존', '가져온 피벗의 오류 표시 여부와 옵션 체크 상태를 파일 설정대로 유지']],
   ['콤보 차트', ['차트 종류 변경 창에서 계열별 차트 종류와 왼쪽 기본축·오른쪽 보조축을 함께 설정', '실시간 미리보기 · 기존 계열 서식 유지 · 취소 시 원본 보존 · 한 번의 실행 취소']],

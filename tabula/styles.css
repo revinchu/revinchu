@@ -684,7 +684,6 @@ pre.plain { margin: 0; font: inherit; white-space: pre-wrap; }
 .ttc-line .ch:hover { background: #e8f2ec; }
 .ttc-line .ch.brk { border-left: 2px solid #1f6fd1; }
 .ttc-line.scale { color: #888; font-size: 10px; border-bottom: 1px solid #ddd; }
-body.keytips .statusbar { background: #fff4ce; }
 .dialog-body label.fc-field { display: flex; flex-direction: column; align-items: stretch; gap: 4px; }
 .dialog-body label.fc-field > span:first-child { width: auto; }
 .dialog-body label.fc-check { display: inline-flex; flex-direction: row; gap: 6px; }
@@ -1470,12 +1469,6 @@ body.keytips[data-keytip-sequence=""] .quick-access [data-qat-key]:not([data-qat
 .cell-style-file{display:flex;align-items:center;gap:12px}.cell-style-file-name{overflow-wrap:anywhere}.style-chip:focus-visible{outline:2px solid #107c41;outline-offset:1px}
 
 /* 리본 키팁: 현재 단계에서 선택할 수 있는 키를 모두 표시합니다. */
-.keytip-panel { position:fixed; left:12px; right:12px; width:max-content; max-width:calc(100vw - 24px); max-height:35vh; overflow:auto; z-index:1100; background:var(--panel, #fff); color:var(--text, #202820); border:1px solid #b5c4ba; border-radius:6px; padding:10px 14px; box-shadow:0 4px 20px #0003; font-size:12px; }
-.keytip-caption { display:flex; gap:24px; justify-content:space-between; font-weight:600; margin-bottom:9px; }
-.keytip-caption span { font-weight:400; opacity:.7; }
-.keytip-choices { display:flex; flex-wrap:wrap; gap:9px 18px; max-width:860px; }
-.keytip-choices > span { display:flex; align-items:center; gap:6px; white-space:nowrap; }
-.keytip-choices kbd { display:inline-block; min-width:21px; padding:2px 4px; text-align:center; color:#fff; background:#26332c; border-radius:3px; font:600 12px system-ui; }
 .ribbon-tab[data-keytip] { position:relative; }
 .ribbon-tab[data-keytip]::after { content:attr(data-keytip); position:absolute; top:100%; left:calc(50% - 8px); z-index:1200; font-size:10px; line-height:17px; min-width:16px; color:#fff; background:#26332c; border-radius:2px; }
 
@@ -1504,5 +1497,4 @@ body.keytips[data-keytip-sequence=""] .quick-access [data-qat-key]:not([data-qat
 .keytip-badge:hover, .keytip-badge:focus-visible { outline: 2px solid var(--green); background: #fff; }
 .keytip-command-menu { z-index: 1400; }
 .keytip-command-menu .mi-key { min-width: 20px; padding: 1px 5px; text-align: center; border: 1px solid #eadfa9; border-radius: 2px; background: #fff8d9; color: #202820; font: 600 11px/17px system-ui; }
-.keytip-panel[hidden] { display: none; }
 body.keytips #ribbon label[data-ribbon-command]:has(input[type="checkbox"]) { padding-right: 28px; }

@@ -65,7 +65,8 @@ const sequence = async (p, key, start = 'Alt') => { if (start) await p.keyboard.
 const path = async (p, prefix) => {
   const s = await state(p);
   assert.equal(s.keytips, true, `키팁 경로 ${prefix || '(루트)'}가 닫힘: ${JSON.stringify(s)}`);
-  assert.equal(s.sequence, prefix, `현재 키팁 경로: ${s.status}`);
+  assert.equal(s.sequence, prefix, `현재 키팁 경로: ${JSON.stringify(s.sequence)}`);
+  assert.equal(await p.locator('.keytip-panel').count(), 0, '제거한 큰 리본 바로 가기 키 안내판이 표시됨');
   assert.equal(s.editing, false, `키팁 중 편집 진입: ${JSON.stringify(s)}`);
   assert.equal(s.editor, '', `키팁 문자가 셀 편집기에 남음: ${s.editor}`);
   return s;
@@ -91,10 +92,15 @@ try {
     }
   });
   await test('Alt → W → V 표시 계층 → G: 눈금선 전환·재전환·입력 오염 없음', async (p) => {
+    const initialStatus = (await state(p)).status;
     await sequence(p, 'w'); assert.equal((await path(p, 'w')).tab, '보기');
     await sequence(p, 'v', null); await path(p, 'wv');
-    const panel = await p.locator('.keytip-panel').textContent();
-    assert.match(panel, /눈금선/); assert.match(panel, /머리글/); assert.match(panel, /수식 입력줄/);
+    assert.equal((await state(p)).status, initialStatus, '키팁이 기존 상태줄을 긴 키 목록으로 바꿈');
+    for (const [key, label] of [['wvg', '눈금선'], ['wvh', '머리글'], ['wvf', '수식 입력줄']]) {
+      const badge = p.locator(`.keytip-badge[data-keytip-path="${key}"]`);
+      assert.equal(await badge.isVisible(), true);
+      assert.ok((await badge.getAttribute('aria-label')).includes(label));
+    }
     await p.keyboard.press('g');
     let s = await state(p); assert.equal(s.gridHidden, true); assert.equal(s.keytips, false); assert.equal(s.raw, '10'); assert.equal(s.editing, false);
     await sequence(p, 'wvg'); s = await state(p); assert.equal(s.gridHidden, false); assert.equal(s.editor, ''); action('wvg');
@@ -240,30 +246,31 @@ try {
       await p.keyboard.press('Escape');
     }
   });
-  await test('320×240 화면: 패널이 화면 안에 있고 긴 목록 스크롤 및 현재 WV 경로 표시', async (p) => {
+  await test('320×240 화면: 큰 안내판 없이 작은 배지·하위 메뉴·단계 복귀가 작동', async (p) => {
     await p.setViewportSize({ width: 320, height: 240 });
     await p.evaluate(() => window.tabula.selectCell(1, 1));
-    const fits = async () => {
-      const box = await p.locator('.keytip-panel').boundingBox();
-      assert.ok(box && box.x >= 0 && box.y >= 0 && box.x + box.width <= 320.5 && box.y + box.height <= 240.5, `화면 밖 패널: ${JSON.stringify(box)}`);
+    const initialStatus = (await state(p)).status;
+    const fits = async (locator) => {
+      const box = await locator.boundingBox();
+      assert.ok(box && box.x >= 0 && box.y >= 0 && box.x + box.width <= 320.5 && box.y + box.height <= 240.5, `화면 밖 키팁: ${JSON.stringify(box)}`);
       return box;
     };
-    await p.keyboard.press('Alt'); await fits();
-    const scroll = await p.locator('.keytip-panel').evaluate((panel) => {
-      const overflow = getComputedStyle(panel).overflowY;
-      panel.scrollTop = panel.scrollHeight;
-      return { overflow, top: panel.scrollTop, height: panel.clientHeight, content: panel.scrollHeight };
-    });
-    assert.match(scroll.overflow, /auto|scroll/);
-    assert.ok(scroll.content > scroll.height && scroll.top > 0, `긴 키팁 목록 스크롤 불가: ${JSON.stringify(scroll)}`);
-    await p.keyboard.press('Escape'); await sequence(p, 'wv'); await path(p, 'wv');
-    const box = await fits(), caption = await p.locator('.keytip-caption').boundingBox();
-    assert.match(await p.locator('.keytip-caption').textContent(), /Alt → W → V/);
-    assert.ok(caption && caption.y >= box.y && caption.y + caption.height <= box.y + box.height, '현재 WV 경로가 패널에 보이지 않음');
-    const lastChoice = p.locator('.keytip-choices > span').last();
-    await lastChoice.scrollIntoViewIfNeeded();
-    const last = await lastChoice.boundingBox();
-    assert.ok(last && last.y >= box.y && last.y + last.height <= box.y + box.height && last.x >= box.x && last.x + last.width <= box.x + box.width, '마지막 WV 선택 항목에 스크롤로 도달할 수 없음');
+    await p.keyboard.press('Alt'); await path(p, '');
+    assert.ok(await p.locator('.ribbon-tab[data-keytip]').count(), '탭의 작은 키 배지가 없음');
+    await sequence(p, 'wv', null); await path(p, 'wv');
+    await p.locator('#ribbon [data-ribbon-command="toggleGrid"]').scrollIntoViewIfNeeded();
+    const badge = p.locator('.keytip-badge[data-keytip-path="wvg"]');
+    await badge.waitFor({ state: 'visible' }); await fits(badge);
+    assert.equal(await badge.innerText(), 'G');
+    assert.equal((await state(p)).status, initialStatus);
+    await p.keyboard.press('Alt'); await sequence(p, 'hb'); await path(p, 'hb');
+    const menu = p.locator('.keytip-command-menu[data-keytip-menu="hb"]');
+    await fits(menu);
+    const lastChoice = menu.locator('.menu-item').last();
+    await lastChoice.scrollIntoViewIfNeeded(); await fits(lastChoice);
+    assert.ok(await lastChoice.locator('.mi-key').innerText(), '하위 메뉴의 작은 키가 없음');
+    await p.keyboard.press('Escape'); await path(p, 'h');
+    assert.equal(await p.locator('.keytip-command-menu').count(), 0);
   });
   await test('기본 QAT 12개와 사용자 지정 버튼은 좁은 화면에서 줄바꿈하며 넓은 화면의 키팁과 겹치지 않음', async (p) => {
     for (const height of [240, 480]) {
@@ -282,8 +289,14 @@ try {
     await p.setViewportSize({ width: 1440, height: 1000 });
     await p.evaluate(() => window.tabula.selectCell(1, 1));
     await sequence(p, 'wv');
-    const qat = await p.locator('#quickAccess').boundingBox(), panel = await p.locator('.keytip-panel').boundingBox();
-    assert.ok(qat && panel && panel.y >= qat.y + qat.height, `키팁이 QAT를 가림: ${JSON.stringify({ qat, panel })}`);
+    await path(p, 'wv');
+    const qat = await p.locator('#quickAccess').boundingBox();
+    assert.ok(qat);
+    const badges = p.locator('.keytip-badge'); assert.ok(await badges.count());
+    for (const badge of await badges.all()) {
+      const b = await badge.boundingBox();
+      assert.ok(b && (b.x + b.width <= qat.x || b.x >= qat.x + qat.width || b.y + b.height <= qat.y || b.y >= qat.y + qat.height), `작은 키팁이 QAT를 가림: ${JSON.stringify({ qat, b })}`);
+    }
   });
   await test('홈 실제 버튼 옆 B·M·AC 배지와 가로 스크롤 뒤 E 배지', async (p) => {
     await sequence(p, 'h');
