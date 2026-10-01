@@ -7,3 +7,5 @@ debug_*.html
 .venv/
 venv/
 .env
+tabula/data/
+tabula/dist/
