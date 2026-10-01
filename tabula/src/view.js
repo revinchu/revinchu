@@ -14,6 +14,7 @@ import { validationAt } from './validation.js';
 import { prepareCond, condFormatAt, ICON_SVG, EMPTY_MATCH_TYPES, ruleRanges, inRule } from './condfmt.js';
 import { tableAt, tableCellStyle, tableFilterRange, styleByName } from './tables.js';
 import { slicerCssVars } from './slicerstyle.js';
+import { THEME } from './stylepresets.js';
 import { fontAlias } from './fonts.js';
 import { maxLevel, groupsOf } from './outline.js';
 import { sparkValues, sparkSvg } from './sparkline.js';
@@ -35,6 +36,24 @@ const HEAD_H = 20;
 const MAX_PX = 15_000_000; // 스크롤 영역 최대 픽셀 (브라우저 한계 회피)
 const OVER_R = 12;
 const OVER_C = 4;
+
+/** 개체 본문·회전·효과가 렌더 여유 영역과 만나는지. 원본/내보내기에는 관여하지 않는다. */
+export function objectIntersectsWindow(o, rect) {
+  if (o.hidden) return false;
+  const { x, y, w, h } = o;
+  if (![x, y, w, h].every(Number.isFinite)) return true; // 불완전한 모델은 기존 렌더가 처리
+  const angle = (Number(o.rot) || 0) * Math.PI / 180;
+  const width = Math.abs(w), height = Math.max(1, Math.abs(h));
+  const rx = (Math.abs(Math.cos(angle)) * width + Math.abs(Math.sin(angle)) * height) / 2;
+  const ry = (Math.abs(Math.sin(angle)) * width + Math.abs(Math.cos(angle)) * height) / 2;
+  const shadow = o.shadow && typeof o.shadow === 'object' ? o.shadow : {};
+  const num = (v, fallback = 0) => Number.isFinite(Number(v)) ? Math.abs(Number(v)) : fallback;
+  // 선택 손잡이/차트 옆 단추와 흐림 효과까지 보수적으로 남긴다.
+  const pad = 40 + (o.shadow ? Math.max(num(shadow.dx, 3), num(shadow.dy, 3)) + num(shadow.blur, 8) * 2 : 0)
+    + num(o.glow?.size) * 2 + num(o.soft) * 2 + num(o.borderW) + num(o.strokeWidth);
+  const cx = x + w / 2, cy = y + h / 2;
+  return cx + rx + pad >= rect.x1 && cx - rx - pad <= rect.x2 && cy + ry + pad >= rect.y1 && cy - ry - pad <= rect.y2;
+}
 
 const measureCtx = typeof document !== 'undefined' ? document.createElement('canvas').getContext('2d') : null;
 
@@ -1042,16 +1061,38 @@ export class GridView {
     const shapes = sheet.shapes ?? [];
     const slicers = sheet.slicers ?? [];
     if (!sheet.charts.length && !images.length && !shapes.length && !slicers.length) { p.objects.replaceChildren(); p.objHtml = null; return; }
-    const winX1 = p.scrollX ? this.frozenW : 0;
-    const winY1 = p.scrollY ? this.frozenH : 0;
-    const winX2 = p.scrollX ? Infinity : this.frozenW;
-    const winY2 = p.scrollY ? Infinity : this.frozenH;
+    if (!p.win) return;
+    // 가시 화면보다 넓은 셀 렌더 창을 사용한다. 그 안의 작은 스크롤에서는
+    // renderPane가 재실행되지 않으므로 화면만 기준으로 버리면 개체가 늦게 나타난다.
+    const windowRect = {
+      x1: Math.max(p.scrollX ? this.frozenW : 0, this.cols.pos(p.win.c1)),
+      y1: Math.max(p.scrollY ? this.frozenH : 0, this.rows.pos(p.win.r1)),
+      x2: Math.min(p.scrollX ? Infinity : this.frozenW, this.cols.pos(p.win.c2 + 1)),
+      y2: Math.min(p.scrollY ? Infinity : this.frozenH, this.rows.pos(p.win.r2 + 1)),
+    };
+    const appearance = `${THEME.key}|${BASE_FONT.name}|${BASE_FONT.size}|${this.z}|${globalThis.devicePixelRatio || 1}|${!!st.readonly}|${!!st.viewOnly}`;
+    const previous = this._objectRenderState;
+    if (!this._objectRenderCache || previous?.wb !== wb || previous.si !== si || previous.sheet !== sheet || previous.version !== wb.version || previous.appearance !== appearance) {
+      this._objectRenderCache = new Map();
+      this._objectRenderState = { wb, si, sheet, version: wb.version, appearance };
+    }
+    const content = (o, kind, build) => {
+      // 개체를 직접 움직이는 미리보기에서도 위치·크기·서식 변경을 놓치지 않는다.
+      // 연결 그림은 보존용 원본 base64를 사용하지 않으므로 키에서도 제외한다.
+      const { src, emf, ...linkedOptions } = kind === 'linked' ? o : {};
+      const key = JSON.stringify(kind === 'linked' ? linkedOptions : o);
+      const hit = this._objectRenderCache.get(o);
+      if (hit?.kind === kind && hit.key === key) return hit.html;
+      const html = build();
+      // 긴 시트를 두루 스크롤해도 방문한 모든 SVG를 영구 보관하지 않는다.
+      if (!hit && this._objectRenderCache.size >= 128) this._objectRenderCache.delete(this._objectRenderCache.keys().next().value);
+      this._objectRenderCache.set(o, { kind, key, html });
+      return html;
+    };
     const html = [];
     const handles = '<i class="ch-h nw"></i><i class="ch-h ne"></i><i class="ch-h sw"></i><i class="ch-h se"></i>';
     const box = (o, cls, inner, extraCss = '') => {
       const h = Math.max(o.h, cls.includes('line') ? 1 : 0);
-      if (o.hidden) return; // 선택 창에서 숨긴 개체
-      if (o.x + o.w < winX1 || o.x > winX2 || o.y + h < winY1 || o.y > winY2) return;
       const selected = st.chartSel === o.id || !!st.objMulti?.has(o.id);
       html.push(`<div class="obj ${cls}${selected ? ' sel' : ''}${o.macro ? ' macro' : ''}" data-id="${esc(o.id)}" style="left:${o.x - p.ox}px;top:${o.y - p.oy}px;width:${o.w}px;height:${h}px;${extraCss}">${inner}${selected ? handles : ''}</div>`);
     };
@@ -1059,13 +1100,13 @@ export class GridView {
     const all = [
       ...sheet.charts.map((o) => ['charts', o]), ...images.map((o) => ['images', o]), ...shapes.map((o) => ['shapes', o]),
       ...slicers.map((o) => ['slicers', o]),
-    ].sort((a, b) => (a[1].z ?? 0) - (b[1].z ?? 0));
+    ].filter(([, o]) => objectIntersectsWindow(o, windowRect)).sort((a, b) => (a[1].z ?? 0) - (b[1].z ?? 0));
     for (const [prop, o] of all) {
       if (prop === 'charts') {
-        box(o, 'chart', this.chartSvg(o) + this.pivotChartButtons(o) + (st.chartSel === o.id && !st.objMulti?.size && !st.viewOnly ? CHART_SIDE : ''));
+        box(o, 'chart', content(o, 'chart', () => this.chartSvg(o) + this.pivotChartButtons(o)) + (st.chartSel === o.id && !st.objMulti?.size && !st.viewOnly ? CHART_SIDE : ''));
       }
-      else if (prop === 'slicers') box(o, o.timeline ? 'slicer timeline' : 'slicer', this.slicerHtml(o), slicerCssVars(o));
-      else if (prop === 'images' && o.linked) box(o, 'pic linked', this.linkedHtml(o), o.rot ? `transform:rotate(${o.rot}deg)` : '');
+      else if (prop === 'slicers') box(o, o.timeline ? 'slicer timeline' : 'slicer', content(o, 'slicer', () => this.slicerHtml(o)), slicerCssVars(o));
+      else if (prop === 'images' && o.linked) box(o, 'pic linked', content(o, 'linked', () => this.linkedHtml(o)), o.rot ? `transform:rotate(${o.rot}deg)` : '');
       else if (prop === 'images') {
         // 그림 스타일: 테두리 · 둥근 모서리 · 그림자 · 회전 · 투명도
         const ic = [o.border ? `border:${o.borderW ?? 2}px solid ${esc(o.border)}` : '', o.radius ? `border-radius:${pictureEffects(o).radius}px` : '', o.shadow ? `box-shadow:${pictureShadowStyle(o)}` : '', o.opacity !== undefined ? `opacity:${pictureEffects(o).opacity}` : ''].filter(Boolean).join(';');
@@ -1081,8 +1122,8 @@ export class GridView {
       }
       else {
         const isLine = LINE_KINDS.has(o.kind);
-        const text = (o.text || o.paras) && !isLine ? shapeTextHtml(o) : '';
-        box(o, `shape ${isLine ? 'line' : ''}`, shapeSvg(o) + text, o.rot ? `transform:rotate(${o.rot}deg)` : '');
+        const inner = content(o, 'shape', () => shapeSvg(o) + ((o.text || o.paras) && !isLine ? shapeTextHtml(o) : ''));
+        box(o, `shape ${isLine ? 'line' : ''}`, inner, o.rot ? `transform:rotate(${o.rot}deg)` : '');
       }
     }
     // 바뀐 개체만 다시 만듦 (슬라이서 · 차트가 많아도 클릭마다 전부 다시 그리지 않게)

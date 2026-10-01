@@ -71,6 +71,7 @@ if (cloud) {
     if (/^wixel-[a-f0-9]{16}\.js$/.test(old) && old !== cloudName) unlinkSync(join(outDir, old));
   }
   writeFileSync(join(outDir, cloudName), cloudJs);
+  writeFileSync(join(outDir, 'version.json'), `${JSON.stringify({ asset: cloudName })}\n`);
   writeFileSync(join(outDir, '_headers'), `/*
   Content-Security-Policy: script-src 'self'; script-src-attr 'none'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'
   X-Content-Type-Options: nosniff
@@ -79,6 +80,8 @@ if (cloud) {
 /${cloudName}
   Cache-Control: public, max-age=31536000, immutable
 /index.html
+  Cache-Control: no-cache
+/version.json
   Cache-Control: no-cache
 /
   Cache-Control: no-cache

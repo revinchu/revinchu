@@ -284,3 +284,17 @@ node tools/recovery-ux.mjs
 ## 차트 범례 항목 이름
 
 `node tools/chart-legend.mjs`는 합성 피벗의 값 열만 선택한 일반 원형/3D 원형 생성, 이름 열을 포함한 선택, 피벗 차트 전용 경로, 기존 숫자 범위 차트, 단일 계열 범례와 지표 선택을 검사한다. `WIXEL_URL`로 소스 또는 배포용 번들을 지정한다. 새 컨텍스트에서만 실행하고 원격 쓰기를 차단한다. `CHART_LEGEND_SCREENSHOT`으로 D: 절대 PNG 경로를 지정할 수 있다. [21번 문서](../docs/codex/21_차트범례_항목이름.md)에서 결과와 자동 이름 보완의 범위를 확인한다.
+
+
+## 대용량 문서 성능과 필터·개체 회귀
+
+- `node tools/filter-performance.mjs`: 합성 5만 고유 항목의 가상화, 전체 선택·검색·End/Home·Undo와 다른 열의 사용자 지정·색상·상위 조건을 검사한다. 소스/번들 모두 지원한다.
+- `node tools/object-rendering.mjs`: 합성 167개 차트·슬라이서·그림·도형의 화면 밖 생성 생략, 캐시·서식·선택·Undo·스크롤·틀 고정·원본 개수 보존을 검사한다. 소스/번들 모두 지원한다.
+- `node tools/real-workbook-performance.mjs "D:/업무파일.xlsx" "D:/Codex/Temp/result.json"`: localhost 전용 실제 파일 열기·필터·적용·Undo·스크롤 성능 측정. 실제 파일은 커밋하지 않는다. 원격/API 요청을 차단하고 별도 브라우저 컨텍스트를 사용한다. 결과는 시간·개수·함수별 CPU 표본만 기록하며 셀값·수식·시트명·원본 프로파일을 출력하지 않는다.
+
+실제 파일 측정은 `WIXEL_PERF_CPU=4`로 CPU 제한, `WIXEL_PERF_COLUMNS=6,7,8,9,10,11,12,13`으로 0부터 시작하는 열 번호, `WIXEL_PERF_MODES=existing,cleared`로 기존 필터/조건 해제 상태를 지정한다. 각 작업은 최대55초 watchdog을 사용한다. 사용자 탭이나 실제 보관함은 수정하지 않는다. `PLAYWRIGHT_MODULE`, `PLAYWRIGHT_BROWSERS_PATH`, `WIXEL_URL`은 위와 같다.
+
+
+`WIXEL_PERF_RESTORE=1`을 함께 지정하면 원래의 필터 조건을 다시 적용하고, 실제 대용량 IndexedDB 자동 저장 완료 후 같은 격리 컨텍스트의 새 페이지에서 복원한다. 값·서식·필터·날짜 체계·개수의 일치 여부만 기록한다. 임시 프로필에서만 실행하므로 사용자 보관함을 변경하지 않는다.
+
+`node tools/release-update.mjs`는 새 배포 알림의 간격·실패 처리·제목줄 버튼·명시 저장/취소를 합성 응답으로 검사한다. 문서를 자동 새로고침하거나 전송하지 않는지 확인하며 소스/번들 모두 지원한다.

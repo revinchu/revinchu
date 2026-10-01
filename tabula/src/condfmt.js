@@ -143,18 +143,21 @@ export function prepareCond(wb, si) {
     const nums = [];
     const counts = new Map();
     const needCounts = rule.type === 'dup' || rule.type === 'unique';
-    for (const g of ruleRanges(rule)) {
+    // 셀 비교·수식 규칙은 전체 범위 통계가 필요 없으며 표시하는 셀에서만 평가합니다.
+    const needNumbers = ['top', 'bottom', 'aboveAvg', 'belowAvg', 'bar', 'scale', 'icons'].includes(rule.type);
+    const needSort = rule.type === 'top' || rule.type === 'bottom' || rule.cfvo?.some((p) => p.type === 'percentile');
+    for (const g of needCounts || needNumbers ? ruleRanges(rule) : []) {
       const r2 = Math.min(g.r2, used.rows - 1);
       const c2 = Math.min(g.c2, used.cols - 1);
       for (let r = g.r1; r <= r2; r++) {
         for (let c = g.c1; c <= c2; c++) {
           const v = wb.getValue(si, r, c);
-          if (typeof v === 'number') nums.push(v);
+          if (needNumbers && typeof v === 'number') nums.push(v);
           if (needCounts && v !== null && v !== '' && !isError(v)) counts.set(dupKey(v), (counts.get(dupKey(v)) ?? 0) + 1);
         }
       }
     }
-    const desc = [...nums].sort((a, b) => b - a);
+    const desc = needSort ? [...nums].sort((a, b) => b - a) : nums;
     let min = Infinity;
     let max = -Infinity;
     let sum = 0;
@@ -162,7 +165,7 @@ export function prepareCond(wb, si) {
     const rank = Math.max(1, Number(rule.v1) || 10);
     const k = rule.percent ? Math.max(1, Math.floor((desc.length * Math.min(100, rank)) / 100)) : rank;
     const avg = nums.length ? sum / nums.length : 0;
-    const sd = nums.length > 1 ? Math.sqrt(nums.reduce((s2, x) => s2 + (x - avg) ** 2, 0) / (nums.length - 1)) : 0;
+    const sd = (rule.type === 'aboveAvg' || rule.type === 'belowAvg') && Number(rule.stdDev) && nums.length > 1 ? Math.sqrt(nums.reduce((s2, x) => s2 + (x - avg) ** 2, 0) / (nums.length - 1)) : 0;
     const prep = {
       rule, counts, nums: desc,
       min: nums.length ? min : 0,
@@ -189,11 +192,12 @@ function cfvoValue(p, prep, wb, si) {
     case 'autoMax': return Math.max(0, max);
     case 'percent': return min + ((max - min) * (Number.isFinite(v) ? v : 0)) / 100;
     case 'percentile': {
-      const a = [...prep.nums].reverse();
+      const a = prep.nums;
       if (!a.length) return 0;
       const h = (a.length - 1) * Math.max(0, Math.min(100, v)) / 100;
       const lo = Math.floor(h);
-      return a[lo] + (h - lo) * ((a[lo + 1] ?? a[lo]) - a[lo]);
+      const lower = a[a.length - 1 - lo];
+      return lower + (h - lo) * ((a[a.length - 2 - lo] ?? lower) - lower);
     }
     case 'formula': {
       const text = String(p.v ?? '');

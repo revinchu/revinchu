@@ -12,39 +12,65 @@ export function filterChecklist(items, initial = null, label = (value) => value 
   const empty = el('div', { class: 'muted', role: 'status', style: { padding: '8px', display: 'none' } }, '검색 결과가 없습니다.');
   const add = el('input', { type: 'checkbox' });
   const addRow = el('label', { class: 'filter-add', style: { display: 'none' } }, add, '필터에 현재 선택 내용 추가');
-  const sync = () => {
-    const visible = new Set(state.visible());
-    let count = 0;
-    for (const [value, cb] of checks) {
-      cb.parentElement.style.display = visible.has(value) ? '' : 'none';
-      cb.checked = state.checked(value);
-      if (visible.has(value) && cb.checked) count++;
+  // Keep every value in the selection model, but create DOM only for the viewport.
+  const rowHeight = 26, overscan = 8;
+  const header = el('label', { style: { height: `${rowHeight}px`, boxSizing: 'border-box', position: 'sticky', top: '0', zIndex: '1', background: 'var(--surface, #fff)' } }, all, allText);
+  const rows = el('div', { class: 'filter-window', style: { position: 'relative' } });
+  let drawnValues = null, drawnStart = -1, drawnEnd = -1;
+  const draw = () => {
+    const visible = state.visible();
+    const start = Math.max(0, Math.floor((list.scrollTop - rowHeight) / rowHeight) - overscan);
+    const end = Math.min(visible.length, start + Math.ceil((list.clientHeight || 180) / rowHeight) + overscan * 2);
+    rows.style.height = `${visible.length * rowHeight}px`;
+    if (visible !== drawnValues || start !== drawnStart || end !== drawnEnd) {
+      drawnValues = visible; drawnStart = start; drawnEnd = end;
+      checks.clear();
+      const nodes = [];
+      for (let i = start; i < end; i++) {
+        const value = visible[i];
+        const cb = el('input', { type: 'checkbox', 'aria-label': String(label(value)), 'data-filter-index': String(i) });
+        cb.addEventListener('change', () => { state.toggle(value, cb.checked); sync(); });
+        checks.set(value, cb);
+        nodes.push(el('label', { title: String(label(value)), style: { position: 'absolute', top: `${i * rowHeight}px`, left: '0', right: '0', height: `${rowHeight}px`, boxSizing: 'border-box' } }, cb, label(value)));
+      }
+      rows.replaceChildren(...nodes);
     }
-    all.checked = visible.size > 0 && count === visible.size;
-    all.indeterminate = count > 0 && count < visible.size;
-    all.disabled = visible.size === 0;
+    for (const [value, cb] of checks) cb.checked = state.checked(value);
+  };
+  const sync = () => {
+    const visible = state.visible();
+    let count = 0;
+    for (const value of visible) if (state.checked(value)) count++;
+    all.checked = visible.length > 0 && count === visible.length;
+    all.indeterminate = count > 0 && count < visible.length;
+    all.disabled = visible.length === 0;
     allText.textContent = state.searching() ? '(검색 결과 모두 선택)' : '(모두 선택)';
     addRow.style.display = state.searching() ? '' : 'none';
-    empty.style.display = visible.size ? 'none' : '';
+    empty.style.display = visible.length ? 'none' : '';
+    draw();
   };
-  list.append(el('label', {}, all, allText));
-  for (const value of items) {
-    const cb = el('input', { type: 'checkbox', 'aria-label': String(label(value)) });
-    cb.addEventListener('change', () => { state.toggle(value, cb.checked); sync(); });
-    checks.set(value, cb); list.append(el('label', {}, cb, label(value)));
-  }
-  list.append(empty);
+  const focusIndex = (index) => {
+    if (index < 0) { list.scrollTop = 0; draw(); if (!all.disabled) all.focus({ preventScroll: true }); return; }
+    const visible = state.visible();
+    if (!visible.length) return;
+    index = Math.max(0, Math.min(visible.length - 1, index));
+    const top = (index + 1) * rowHeight, bottom = top + rowHeight;
+    if (top < list.scrollTop + rowHeight) list.scrollTop = top - rowHeight;
+    else if (bottom > list.scrollTop + (list.clientHeight || 180)) list.scrollTop = bottom - (list.clientHeight || 180);
+    draw(); checks.get(visible[index])?.focus({ preventScroll: true });
+  };
+  list.append(header, rows, empty);
+  list.addEventListener('scroll', draw);
   all.addEventListener('change', () => { state.selectVisible(all.checked); sync(); });
-  search.addEventListener('input', () => { state.search(search.value); sync(); });
-  const visibleChecks = () => [all, ...state.visible().map((value) => checks.get(value))].filter((cb) => !cb.disabled);
-  search.addEventListener('keydown', (e) => { if (e.key === 'ArrowDown') { e.preventDefault(); visibleChecks()[0]?.focus(); } });
+  search.addEventListener('input', () => { state.search(search.value); list.scrollTop = 0; sync(); });
+  search.addEventListener('keydown', (e) => { if (e.key === 'ArrowDown') { e.preventDefault(); focusIndex(-1); } });
   list.addEventListener('keydown', (e) => {
     if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return;
-    const inputs = visibleChecks(), at = inputs.indexOf(e.target);
-    if (at < 0) return;
+    const at = e.target === all ? -1 : Number(e.target.dataset.filterIndex);
+    if (!Number.isInteger(at)) return;
     e.preventDefault(); e.stopPropagation();
-    const next = e.key === 'Home' ? 0 : e.key === 'End' ? inputs.length - 1 : Math.max(0, Math.min(inputs.length - 1, at + (e.key === 'ArrowDown' ? 1 : -1)));
-    inputs[next]?.focus();
+    const next = e.key === 'Home' ? -1 : e.key === 'End' ? state.visible().length - 1 : Math.max(-1, at + (e.key === 'ArrowDown' ? 1 : -1));
+    focusIndex(next);
   });
   sync();
   return { search, list, addRow, result: () => state.result(add.checked) };

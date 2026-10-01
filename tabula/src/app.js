@@ -1,5 +1,6 @@
 // WIXEL 메인: 상태 · 선택 · 편집 · 키보드/마우스 · 명령 (그리기는 view.js)
 import { publishedWorkbook } from './publish.js';
+import { watchReleaseUpdate } from './release-update.js';
 import { pictureEditor } from './picture-ui.js';
 import { resizePicture } from './picture.js';
 import { Workbook, formulaShifter, cellData, DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT } from './workbook.js';
@@ -56,6 +57,7 @@ import { evalSteps, goalSeek, dataTable, specialCells, GOTO_KINDS, valueText } f
 import { normOutline, outlineEmpty, changeLevels, groupsOf, groupAt, toggleGroup, showLevel, summaryOf, planSubtotals, SUBTOTAL_FNS, maxLevel } from './outline.js';
 import { hid, hidCount } from './axis.js';
 import { currentDataRegion } from './data-region.js';
+import { expandedFilterEnd } from './filter-range.js';
 import { contextMenuKind, contextContains, selectionAxisRanges, selectionAxisTargets } from './context-selection.js';
 import { rowPointsToPixels, rowPixelsToPoints, columnCharsToPixels, pixelsToColumnChars, MAX_ROW_POINTS, MAX_COLUMN_CHARS } from './dimension.js';
 import { createContextMiniToolbar } from './context-mini-toolbar.js';
@@ -4849,11 +4851,7 @@ function blockFilterCol(r1, r2, c) {
   const fmt = bc.fmt ?? {};
   const texts = d.keys.map((k) => (k === PIVOT_EMPTY || k === PIVOT_EMPTY_TEXT ? '' : formatValue(k, fmt, wb.date1904).text));
   const over = [];
-  for (const k of sheet().cells.keys()) {
-    const i = k.indexOf(',');
-    const r = +k.slice(0, i);
-    if (r >= r1 && r <= r2 && +k.slice(i + 1) === c) over.push(r);
-  }
+  for (const r of sheet().cells.col(c)?.keys() ?? []) if (r >= r1 && r <= r2) over.push(r);
   const res = { codes: d.codes, texts, over };
   if (memo.size > 20) memo.clear();
   memo.set(key, res);
@@ -4925,7 +4923,7 @@ function critPredicate(c, cr, r1, r2) {
 }
 
 function recomputeFilter(f, key = '') {
-  const r2 = key ? f.r2 : Math.max(f.r2, currentRegion(f.r1, f.c1).r2);
+  const r2 = key ? f.r2 : expandedFilterEnd(wb, si, f);
   const crit = Object.entries(f.criteria ?? {}).filter(([, v]) => Array.isArray(v)).map(([c, vals]) => [Number(c), new Set(vals)]);
   const preds = Object.entries(f.criteria ?? {}).filter(([, v]) => v && !Array.isArray(v) && typeof v === 'object').map(([c, cr]) => critPredicate(Number(c), cr, f.r1 + 1, r2));
   const n = r2 - f.r1;
@@ -5000,7 +4998,8 @@ function applyFilterCriteria(c, values, key = '', { quiet = false } = {}) {
   if (values === null) delete criteria[c]; else criteria[c] = values;
   const nf = recomputeFilter({ ...f, criteria }, key);
   wb.transact(() => putFilter(key, nf), meta());
-  gv.layout();
+  // onBookChange queues one complete layout. Selection below updates only its
+  // overlay; a second synchronous layout here repeats the same filtered grid.
   const total = nf.r2 - nf.r1;
   if (quiet) return;
   toast(`${total.toLocaleString()}개 중 ${(total - hidCount(nf.hidden)).toLocaleString()}개의 레코드가 있습니다.`);
@@ -5011,9 +5010,10 @@ function applyFilterCriteria(c, values, key = '', { quiet = false } = {}) {
 function openFilterMenu(c, anchorEl, key = '') {
   const f = getFilter(key);
   if (!f) return;
-  const full = recomputeFilter(f, key);
+  const full = { ...f, r2: key ? f.r2 : expandedFilterEnd(wb, si, f) };
   // 다른 열 조건을 통과한 행의 값만 목록에 표시
   const others = Object.entries(f.criteria ?? {}).filter(([k, v]) => Number(k) !== c && Array.isArray(v)).map(([k, v]) => [Number(k), new Set(v)]);
+  const predicates = Object.entries(f.criteria ?? {}).filter(([k, v]) => Number(k) !== c && v && !Array.isArray(v) && typeof v === 'object').map(([k, v]) => critPredicate(Number(k), v, f.r1 + 1, full.r2));
   const values = new Map();
   const bfc = full.r2 - f.r1 > 50000 ? blockFilterCol(f.r1 + 1, full.r2, c) : null;
   const bfo = bfc ? others.map(([k, allowed]) => [blockFilterCol(f.r1 + 1, full.r2, k), allowed]) : [];
@@ -5027,12 +5027,13 @@ function openFilterMenu(c, anchorEl, key = '') {
       let pass = true;
       for (const [codes, ok] of oks) if (!ok[codes[i]]) { pass = false; break; }
       if (!pass) continue;
+      if (predicates.some((p) => !p(f.r1 + 1 + i))) continue;
       const code = bfc.codes[i];
       if (!seen[code]) { seen[code] = 1; left--; values.set(bfc.texts[code], valueAt(f.r1 + 1 + i, c)); }
     }
   } else {
     for (let r = f.r1 + 1; r <= full.r2; r++) {
-      if (others.some(([k, allowed]) => !allowed.has(displayText(r, k)))) continue;
+      if (others.some(([k, allowed]) => !allowed.has(displayText(r, k))) || predicates.some((p) => !p(r))) continue;
       const t = displayText(r, c);
       if (!values.has(t)) values.set(t, valueAt(r, c));
     }
@@ -16910,6 +16911,7 @@ const NO_COMMIT = new Set(['toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100', 'shor
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['대용량 문서 응답성', ['필터 범위의 반복 탐색과 중복 화면 갱신 제거 · 긴 필터 목록 가상화', '사용자 지정·색상·상위 조건을 다른 열의 필터 목록에도 반영', '화면 밖 차트·슬라이서·그림 생성 생략 · 단순 조건부 서식의 전체 범위 집계 제거']],
   ['차트 범례', ['피벗 값 열로 만든 차트도 실제 항목 이름과 연결', '단일 계열 범례 표시와 긴 이름의 전체 툴팁 수정']],
   ['셀·행·열 우클릭', ['선택 종류별 Excel 방식 메뉴와 미니 서식 도구 모음', '셀 서식·행 높이·열 너비·숨기기·숨기기 취소, 메뉴 접근키', '행 높이는 포인트, 열 너비는 문자 수로 조정하고 실행 취소 지원']],
   ['피벗 표시·이동', ['클래식 레이아웃의 표 안 필드 이동 · 값 행 표시 옵션 반영', '행·열·필터·값 영역 끌어 놓기와 실행 취소 · XLSX 표시 옵션 보존']],
@@ -17538,6 +17540,21 @@ async function init() {
     wb: () => wb, run, commands: () => Object.keys(COMMANDS), menus: () => Object.keys(MENUS), openNamedMenu, selectCell, selectRange, newWorkbook, templates: TEMPLATES, exportXlsx, gv: () => gv, sample: (i) => newWorkbook(SAMPLES[i]), switchSheet: (i) => { switchSheet(i); },
     get active() { return active; }, get sel() { return sel; }, get si() { return si; }, get chartSel() { return chartSel; },
   };
+  // 새 배포는 안내만 한다. 사용자가 파일 저장을 마친 뒤 직접 새로고침한다.
+  watchReleaseUpdate({ onUpdate: () => {
+    const host = document.querySelector('.titlebar .tb-center');
+    if (!host || document.getElementById('releaseUpdate')) return;
+    host.append(el('button', {
+      id: 'releaseUpdate', type: 'button', class: 'save-state',
+      title: '새 버전이 있습니다. 파일 저장 후 새로고침해 주세요.',
+      style: { border: '1px solid currentColor', opacity: '1', flexShrink: '0' },
+      onclick: () => openDialog({
+        title: '새 버전 안내', width: 430,
+        body: el('p', {}, '현재 작업을 파일로 저장한 뒤 새로고침하면 적용됩니다.'),
+        buttons: [{ label: '파일로 저장', primary: true, action: () => run('save') }, { label: '닫기' }],
+      }),
+    }, '새 버전'));
+  } });
   // 새 버전 안내 (한 번만)
   try {
     if (localStorage.getItem('wixel:version') !== APP_VERSION) {
