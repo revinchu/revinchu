@@ -2,6 +2,7 @@
 import { publishedWorkbook } from './publish.js';
 import { watchReleaseUpdate } from './release-update.js';
 import { pictureEditor } from './picture-ui.js';
+import { onlinePicturePicker } from './online-picture-ui.js';
 import { resizePicture } from './picture.js';
 import { Workbook, formulaShifter, cellData, DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT } from './workbook.js';
 import {
@@ -9056,7 +9057,7 @@ function addImageSrc(src, name, at = null) {
 /** 웹 그림 → data URL (파일에 함께 저장되게). 사이트가 허용하지 않으면(CORS) null */
 async function fetchImageData(url) {
   try {
-    const res = await fetch(url, { mode: 'cors' });
+    const res = await fetch(url, { mode: 'cors', credentials: 'omit', referrerPolicy: 'no-referrer', signal: AbortSignal.timeout(15000) });
     if (!res.ok) return null;
     const blob = await res.blob();
     if (!/^image\//.test(blob.type) || blob.size > 10 * 1024 * 1024) return null;
@@ -9066,92 +9067,51 @@ async function fetchImageData(url) {
   }
 }
 
-// 온라인 그림 검색: 크리에이티브 커먼즈 (Openverse → 안 되면 Wikimedia Commons)
-async function searchOnlineImages(q, page = 1) {
-  try {
-    const res = await fetch(`https://api.openverse.org/v1/images/?q=${encodeURIComponent(q)}&page_size=30&page=${page}`);
-    if (res.ok) {
-      const j = await res.json();
-      return (j.results ?? []).map((x) => ({ thumb: x.thumbnail ?? x.url, full: x.thumbnail ?? x.url, title: x.title ?? q, credit: [x.creator, x.license ? `CC ${String(x.license).toUpperCase()}` : ''].filter(Boolean).join(' · '), page: x.foreign_landing_url }));
-    }
-  } catch { /* 다음 방법 */ }
-  const url = `https://commons.wikimedia.org/w/api.php?action=query&format=json&origin=*&generator=search&gsrnamespace=6&gsrlimit=30&gsroffset=${(page - 1) * 30}&gsrsearch=${encodeURIComponent(q)}&prop=imageinfo&iiprop=url|extmetadata&iiurlwidth=480`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const j = await res.json();
-  return Object.values(j.query?.pages ?? {}).filter((p) => p.imageinfo?.[0]?.thumburl).map((p) => {
-    const ii = p.imageinfo[0];
-    const md = ii.extmetadata ?? {};
-    const strip = (h) => String(h ?? '').replace(/<[^>]*>/g, '').trim();
-    return { thumb: ii.thumburl, full: ii.thumburl, title: p.title.replace(/^File:/, '').replace(/\.[^.]+$/, ''), credit: [strip(md.Artist?.value), strip(md.LicenseShortName?.value)].filter(Boolean).join(' · '), page: ii.descriptionurl };
-  });
-}
-
-/** 온라인 그림 (엑셀의 [삽입] → [그림] → [온라인 그림]): 검색 또는 웹 주소 */
+/** 온라인 그림 검색은 독립 UI에서 수행하고 삽입은 원래 문서·시트를 확인해 확정한다. */
 function onlinePictureDialog(inCell) {
-  const q = el('input', { type: 'text', placeholder: '검색어 (예: 커피, 그래프, 사무실)', style: { flex: '1' } });
-  const urlIn = el('input', { type: 'url', placeholder: 'https://… 그림 주소', style: { flex: '1' } });
-  const grid = el('div', { class: 'online-grid' });
-  const status = el('div', { class: 'muted', style: { fontSize: '12px', minHeight: '16px' } }, '크리에이티브 커먼즈 그림을 검색합니다. 사용 조건(라이선스)을 확인하고 쓰세요.');
-  const chosen = new Map();
-  let page = 1;
-  let lastQ = '';
-  const run = async (more = false) => {
-    const text = q.value.trim();
-    if (!text) return;
-    if (!more) { page = 1; lastQ = text; grid.replaceChildren(); chosen.clear(); } else page++;
-    status.textContent = '검색 중…';
-    try {
-      const list = await searchOnlineImages(lastQ, page);
-      if (!list.length && !more) { status.textContent = '결과가 없습니다. 다른 검색어를 써 보세요.'; return; }
-      for (const it of list) {
-        const card = el('button', { class: 'online-item', title: `${it.title}${it.credit ? `\n${it.credit}` : ''}` },
-          el('img', { src: it.thumb, alt: it.title, loading: 'lazy', referrerpolicy: 'no-referrer' }),
-          el('span', {}, it.credit || it.title));
-        card.addEventListener('click', () => {
-          if (chosen.has(it.thumb)) { chosen.delete(it.thumb); card.classList.remove('on'); } else { chosen.set(it.thumb, it); card.classList.add('on'); }
-          status.textContent = chosen.size ? `${chosen.size}개 선택됨` : '';
-        });
-        grid.append(card);
+  const book = wb, host = si, target = sheet(), cell = { ...active }, origin = objectOrigin();
+  const valid = () => wb === book && si === host && sheet() === target && !viewOnly;
+  const check = count => {
+    if (!valid()) throw new Error('문서 또는 시트가 바뀌었습니다. 현재 시트에서 그림 삽입을 다시 여세요.');
+    if (inCell && cell.r + count > MAX_ROWS) throw new Error('그림을 배치할 행이 부족합니다.');
+    if (protectBlocked(inCell ? 'cells' : 'objects', { r1: cell.r, c1: cell.c, r2: cell.r + count - 1, c2: cell.c })) throw new Error('보호된 위치에는 그림을 삽입할 수 없습니다.');
+  };
+  onlinePicturePicker({ onInsert: async list => {
+    check(list.length);
+    const ready = [];
+    for (const it of list) {
+      const src = (await fetchImageData(it.full)) ?? it.full;
+      check(list.length);
+      const img = await new Promise((resolve, reject) => {
+        const image = new Image();
+        const timer = setTimeout(() => { image.src = ''; reject(new Error('그림 서버 응답 시간이 초과되었습니다. 다른 그림을 선택하세요.')); }, 15000);
+        image.onload = () => { clearTimeout(timer); resolve(image); };
+        image.onerror = () => { clearTimeout(timer); reject(new Error(`그림을 불러올 수 없습니다: ${it.title}`)); };
+        image.referrerPolicy = 'no-referrer'; image.src = src;
+      });
+      let data = src;
+      if (inCell && src.startsWith('data:') && Math.max(img.naturalWidth, img.naturalHeight) > 800 && !/^data:image\/(svg|gif)/.test(src)) {
+        const scale = 800 / Math.max(img.naturalWidth, img.naturalHeight), canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(img.naturalWidth * scale)); canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height); data = canvas.toDataURL('image/png');
       }
-      status.textContent = `${grid.children.length}개 그림 — 클릭해서 고르고 [삽입]을 누르세요.`;
-    } catch (e) {
-      status.textContent = `검색할 수 없습니다 (${e.message}). 인터넷 연결 또는 이 페이지의 외부 접속 허용 여부를 확인하세요. 웹 주소로 넣을 수도 있습니다.`;
+      const scale = Math.min(1, 480 / (img.naturalWidth || 200), 360 / (img.naturalHeight || 150));
+      ready.push({ src: data, name: it.title, w: Math.max(8, Math.round((img.naturalWidth || 200) * scale)), h: Math.max(8, Math.round((img.naturalHeight || 150) * scale)) });
     }
-  };
-  q.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); run(); } });
-  const more = el('button', { class: 'btn', onclick: () => run(true) }, '더 보기');
-  const insertOne = async (src, name, k) => {
-    const data = (await fetchImageData(src)) ?? src;
-    if (inCell) {
-      shrinkImage(data, 800, (s2) => putCellImage(active.r + k, active.c, { src: s2, alt: name }));
-    } else {
-      const p = objectOrigin();
-      addImageSrc(data, name, { x: p.x + k * 24, y: p.y + k * 24 });
-    }
-  };
-  openDialog({
-    title: '온라인 그림', width: 640,
-    body: el('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
-      el('div', { style: { display: 'flex', gap: '6px' } }, q, el('button', { class: 'btn primary', onclick: () => run() }, '검색')),
-      grid, el('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } }, status, more),
-      el('div', { class: 'menu-title', style: { padding: '6px 0 0' } }, '웹 주소로 삽입'),
-      el('div', { style: { display: 'flex', gap: '6px' } }, urlIn)),
-    buttons: [
-      {
-        label: '삽입', primary: true, action: () => {
-          const list = [...chosen.values()];
-          const u = urlIn.value.trim();
-          if (u) list.push({ full: u, title: u.split('/').pop().replace(/\.[^.]+$/, '') || '그림' });
-          if (!list.length) { toast('그림을 고르거나 웹 주소를 입력하세요.'); return false; }
-          list.forEach((it, k) => insertOne(it.full, it.title, k));
-          return undefined;
-        },
-      },
-      { label: '취소' },
-    ],
-  });
-  setTimeout(() => q.focus(), 0);
+    check(ready.length);
+    wb.transact(() => {
+      if (inCell) ready.forEach((it, k) => {
+        const r = cell.r + k, cur = wb.getCell(host, r, cell.c);
+        wb.setCellData(host, r, cell.c, { raw: '', style: cur?.style, comment: cur?.comment, link: cur?.link, image: { src: it.src, alt: it.name } });
+      });
+      else {
+        const z = nextZ(), objects = ready.map((it, k) => ({ ...it, id: newObjId('im'), x: origin.x + k * 24, y: origin.y + k * 24, z: z + k }));
+        wb.setSheetProp(host, 'images', [...(target.images ?? []), ...objects]); chartSel = objects.at(-1)?.id ?? null;
+      }
+    }, meta());
+    gv.renderObjectsAll(); updateSelectionUI(); focusGrid();
+    if (ready.some(it => !it.src.startsWith('data:'))) toast('일부 그림은 웹 연결로 삽입했습니다. 원본 사이트 연결이 필요합니다.');
+  } });
 }
 
 function resetImageSize(id) {
@@ -17240,6 +17200,7 @@ const NO_COMMIT = new Set(['toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100', 'shor
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['온라인 그림 검색', ['Creative Commons만 선택 옵션 · 기본 해제 · 여러 공개 이미지 사이트 통합 검색', '출처·이용 조건·원문 링크 표시 · 원본 그림 삽입 · 검색 취소와 중복 결과 제거']],
   ['차트 직접 편집', ['제목·범례를 끌거나 방향키로 이동 · 선택한 요소만 Delete · 실행 취소', '계열·데이터 요소를 선택하면 서식 창도 함께 전환 · Ctrl+1·더블클릭 · 선택한 막대·선·조각만 색 변경', '원형·도넛의 조각별 분리와 계열 분리 · 3차원 원형의 드래그 보정', 'Excel 수동 위치·조각 분리 저장 · 계열 삭제 후 원본 셀 참조 오류 수정']],
   ['선·자유곡선과 도형 서식', ['곡선·자유형·자유곡선 그리기 · 점 이동·추가·삭제 · 취소와 실행 취소', '채우기·선·효과·크기·텍스트를 조정하는 도형 서식 패널 · 선 끝·화살표 크기·무늬·겹선', '표준 XLSX 자유 경로 저장 · 텍스트 회전·축소 맞춤과 배율 변경 시 잘림 수정']],
   ['리본 키팁·셀 스타일', ['Alt → H → J 셀 스타일 · H → H 채우기 색 · H → F → C 글꼴 색', '일반·상황별 탭의 메뉴·입력칸·분할 단추 키팁 누락 검사 · 팔레트 방향키 선택', '보고서·KPI·입력·검토 스타일 24개와 검색 · 숫자 표시 형식·맞춤 보존']],
