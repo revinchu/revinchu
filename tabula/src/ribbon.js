@@ -252,6 +252,8 @@ export const TABS = [
       ]),
       group('분석', [
         large('dataAnalysis', 'stats', '데이터 분석', { title: '통계 데이터 분석 도구 (상관 · 회귀 · 기술 통계 · t-검정 · 히스토그램 …)' }),
+        large('anomalies', 'anomaly', '이상치 찾기', { title: '열마다 급등 · 급락 값을 찾아 조건부 서식으로 강조 (MAD · Z · IQR)' }),
+        large('marketingMetrics', 'adMetrics', '광고 지표', { title: '노출 · 클릭 · 비용 · 전환 · 매출 열에서 CTR · CPC · CPM · CVR · CPA · ROAS 열을 수식으로 추가' }),
         large('solver', 'calc', '해 찾기', { title: '제한 조건을 만족하면서 목표 셀을 최대 · 최소 · 지정값으로 만드는 변수 값 찾기' }),
       ]),
     ],

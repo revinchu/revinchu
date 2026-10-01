@@ -61,6 +61,7 @@ import { findMatches, nextMatch, replaceText, FIND_FORMAT_KEYS } from './find.js
 import {
   ANALYSIS_TOOLS, AnalysisError, splitGroups, descriptive, matrixTool, regression, histogram, rankPercentile, tTest, zTest, fTest, anova1, anova2,
   movingAverage, expSmoothing, randomNumbers, sampling, solveMin, advancedFilter, consolidate, CONSOLIDATE_FNS,
+  ANOMALY_METHODS, detectAnomalies, anomalyFormula, marketingMetrics,
 } from './analysis.js';
 import { timeAxis } from './ets.js';
 import {
@@ -3473,6 +3474,114 @@ function confirmBox(title, msg) {
 const nextSheetName = (base) => { let n = 1; let name = base; while (wb.sheetIndexByName(name) >= 0) name = `${base} (${++n})`; return name.slice(0, 31); };
 
 /** 분석 결과 표를 시트에 쓰기 → { si, r, c, h, w } */
+/** 이상치 범위: 선택한 숫자 열들 (셀 하나면 그 열에서 현재 영역의 숫자 행) */
+function anomalyRange() {
+  if (!selIsActiveOnly()) return usedClip(sel);
+  const rg = currentRegion(active.r, active.c);
+  let r1 = rg.r1;
+  while (r1 < rg.r2 && typeof valueAt(r1, active.c) !== 'number') r1++;
+  return { r1, c1: active.c, r2: rg.r2, c2: active.c };
+}
+/**
+ * 데이터 › 이상치 찾기 (퍼포먼스 마케팅): 열마다 MAD · Z · IQR 기준으로 급등(빨강) · 급락(파랑)을 조건부 서식으로 강조.
+ * 규칙은 수식이라 데이터가 바뀌면 강조도 따라 바뀜. 결과 요약을 함께 보여 줌
+ */
+function anomalyDialog() {
+  const rg = anomalyRange();
+  const cols = [];
+  for (let c = rg.c1; c <= rg.c2; c++) {
+    let r1 = rg.r1;
+    while (r1 < rg.r2 && typeof valueAt(r1, c) !== 'number') r1++;
+    let n = 0;
+    for (let r = r1; r <= rg.r2; r++) if (typeof valueAt(r, c) === 'number') n++;
+    if (n >= 4) cols.push({ c, r1, r2: rg.r2 });
+  }
+  if (!cols.length) { alertDialog('이상치 찾기', '숫자가 4개 이상 있는 열을 선택하세요. (예: 일별 비용 · 전환 열)'); return; }
+  const method = el('select', {}, ANOMALY_METHODS.map(([k, l]) => el('option', { value: k }, l)));
+  const thr = el('input', { type: 'number', step: '0.1', min: '0.5', value: String(ANOMALY_METHODS[0][2]) });
+  method.addEventListener('change', () => { thr.value = String(ANOMALY_METHODS.find((m) => m[0] === method.value)[2]); preview(); });
+  thr.addEventListener('input', () => preview());
+  const up = el('input', { type: 'checkbox', checked: true });
+  const down = el('input', { type: 'checkbox', checked: true });
+  const out = el('div', { class: 'an-sum' });
+  const headOf = (c, r1) => (r1 > rg.r1 || r1 > 0 ? displayText(r1 - 1, c) : '') || `${colToName(c)}열`;
+  // 행 이름: 데이터 영역 첫 열(보통 날짜 · 캠페인)의 표시 글자
+  const keyCol = currentRegion(rg.r1, rg.c1).c1;
+  const labelOf = (r) => (cols.some((x) => x.c === keyCol) ? '' : displayText(r, keyCol)) || `${r + 1}행`;
+  const results = () => cols.map((x) => {
+    const vals = [];
+    for (let r = x.r1; r <= x.r2; r++) vals.push(valueAt(r, x.c));
+    return { ...x, res: detectAnomalies(vals, { method: method.value, threshold: Number(thr.value) || undefined }) };
+  });
+  const preview = () => {
+    out.replaceChildren(...results().map(({ c, r1, res }) => {
+      const ups = res.hits.filter((h) => h.dir === 'up');
+      const downs = res.hits.filter((h) => h.dir === 'down');
+      const list = res.hits.slice().sort((a, b) => Math.abs(b.score) - Math.abs(a.score)).slice(0, 6)
+        .map((h) => `${labelOf(r1 + h.i)} ${h.dir === 'up' ? '▲' : '▼'} ${formatValue(h.v, styleAt(r1 + h.i, c)).text}`);
+      return el('div', { class: 'an-col' }, el('b', {}, headOf(c, r1)), ` — 급등 ${ups.length} · 급락 ${downs.length}`, list.length ? el('div', { class: 'muted' }, list.join('   ')) : el('div', { class: 'muted' }, '튀는 값이 없습니다.'));
+    }));
+  };
+  preview();
+  openDialog({
+    title: '이상치 찾기', width: 520,
+    body: el('div', { class: 'an-dlg' },
+      el('label', { class: 'form-row' }, el('span', {}, '기준'), method),
+      el('label', { class: 'form-row' }, el('span', {}, '민감도'), thr, el('span', { class: 'muted' }, '작을수록 더 많이 표시')),
+      el('div', { class: 'form-row' }, el('label', {}, up, ' 급등 강조 (빨강)'), el('label', {}, down, ' 급락 강조 (파랑)')),
+      out,
+      el('div', { class: 'muted', style: { fontSize: '11px' } }, '열마다 따로 계산합니다. 수식 조건부 서식이라 값이 바뀌면 강조도 따라 바뀌고, 엑셀에서도 그대로 보입니다.')),
+    buttons: [{ label: '강조 적용', primary: true, action: () => {
+      const t = Number(thr.value) || ANOMALY_METHODS.find((m) => m[0] === method.value)[2];
+      const rules = [];
+      for (const x of cols) {
+        const area = { r1: x.r1, c1: x.c, r2: x.r2, c2: x.c };
+        const ref = `$${colToName(x.c)}$${x.r1 + 1}:$${colToName(x.c)}$${x.r2 + 1}`;
+        const cell = cellName(x.r1, x.c);
+        if (up.checked) rules.push({ ...area, type: 'formula', formula: anomalyFormula(method.value, t, cell, ref, 'up'), style: { fill: '#ffc7ce', color: '#9c0006' } });
+        if (down.checked) rules.push({ ...area, type: 'formula', formula: anomalyFormula(method.value, t, cell, ref, 'down'), style: { fill: '#ddebf7', color: '#1f4e79' } });
+      }
+      if (!rules.length) { toast('급등 · 급락 중 하나 이상을 고르세요.'); return false; }
+      wb.transact(() => { for (const r of rules.reverse()) wb.addCondRule(si, r); }, meta());
+      gv.renderAll();
+      const n = results().reduce((s2, x) => s2 + x.res.hits.length, 0);
+      toast(`이상치 ${n}개를 강조했습니다. (홈 › 조건부 서식 › 규칙 관리에서 수정)`);
+      return true;
+    } }, { label: '취소' }],
+  });
+}
+
+/** 데이터 › 광고 지표: 노출 · 클릭 · 비용 · 전환 · 매출 열을 찾아 CTR · CPC · CPM · CVR · CPA · ROAS 열을 수식으로 붙임 */
+function addMarketingMetrics() {
+  const tbl = tableHere();
+  const rg = tbl ? { r1: tbl.r1, c1: tbl.c1, r2: dataBottom(tbl), c2: tbl.c2 } : currentRegion(active.r, active.c);
+  if (rg.r2 <= rg.r1) { alertDialog('광고 지표', '머리글 행이 있는 데이터 범위 안의 셀을 선택하세요.'); return; }
+  const header = [];
+  for (let c = rg.c1; c <= rg.c2; c++) header.push(displayText(rg.r1, c));
+  const { cols, list } = marketingMetrics(header);
+  if (!list.length) {
+    const found = Object.keys(cols).length;
+    alertDialog('광고 지표', found ? '계산할 수 있는 지표가 이미 모두 있습니다.' : '머리글에서 노출 · 클릭 · 비용 · 전환 · 매출 열을 찾지 못했습니다. (예: 노출수, 클릭수, 비용, 전환수, 전환매출)');
+    return;
+  }
+  const c0 = rg.c2 + 1;
+  for (let i = 0; i < list.length; i++) for (let r = rg.r1; r <= rg.r2; r++) if (wb.getCell(si, r, c0 + i)?.raw) { alertDialog('광고 지표', `${colToName(c0)}열부터 ${list.length}개 열이 비어 있어야 합니다.`); return; }
+  const hstyle = styleAt(rg.r1, rg.c2);
+  wb.transact(() => {
+    list.forEach((m, i) => {
+      const c = c0 + i;
+      wb.setCellData(si, rg.r1, c, { raw: m.name, style: { ...hstyle } });
+      for (let r = rg.r1 + 1; r <= rg.r2; r++) {
+        const ref = (k) => cellName(r, rg.c1 + cols[k]);
+        wb.setCellData(si, r, c, { raw: m.formula(ref), style: { ...m.fmt } });
+      }
+    });
+    if (tbl) wb.setSheetProp(si, 'tables', sheet().tables.map((t) => (t.id === tbl.id ? { ...t, c2: t.c2 + list.length } : t)));
+  }, meta());
+  selectRange({ r1: rg.r1, c1: c0, r2: rg.r2, c2: c0 + list.length - 1 }, 'cells', { r: rg.r1, c: c0 });
+  toast(`${list.map((m) => m.name).join(' · ')} 열을 추가했습니다.`);
+}
+
 /** 데이터 › 통합 (엑셀 Consolidate): 여러 참조 영역을 함수로 모아 활성 셀에 결과 */
 let consolidateState = { fn: 'sum', refs: [], topRow: false, leftCol: false };
 function consolidateDialog() {
@@ -14904,6 +15013,8 @@ const COMMANDS = {
   valueHighlight: () => { view.valueHighlight = !view.valueHighlight; gv.renderAll(); updateRibbon(); toast(view.valueHighlight ? '값 강조: 글자는 검정, 숫자는 파랑, 수식은 초록으로 표시합니다.' : '값 강조를 껐습니다.'); },
   focusCellToggle: () => { opts.focusCell = !opts.focusCell; saveOptions(); applyOptions(); gv.renderSelection(); updateRibbon(); },
   consolidate: () => consolidateDialog(),
+  anomalies: () => anomalyDialog(),
+  marketingMetrics: () => addMarketingMetrics(),
   pasteLink: () => pasteLink(),
   pasteLinkedPicture: () => pasteLinkedPicture(),
   pastePicture: () => pasteLinkedPicture(true),
@@ -15300,6 +15411,7 @@ const WHATS_NEW = [
   ['데이터', ['정렬 대화 상자: 여러 기준 추가 · 복사 · 순서 바꾸기, 셀 색 · 글꼴 색 · 사용자 지정 목록, 대/소문자 구분 · 왼쪽→오른쪽 · 자연 정렬', '통합 (여러 범위를 첫 행 · 왼쪽 열 이름으로 합계 · 평균 · 개수 …)', '웹에서: 웹 페이지의 표 · 목록 · CSV 미리 보기 → 값 또는 IMPORTHTML 수식으로', '사용자 지정 목록 편집 (채우기 · 정렬에 사용)']],
   ['보기', ['탐색 창 (시트 · 표 · 피벗 · 이름 · 개체 · 메모 · 링크)', '포커스 셀 · 값 강조(Ctrl+F8: 숫자 파랑 · 수식 초록)', '상태 표시줄 사용자 지정 (오른쪽 클릭: 평균 · 개수 · 숫자 셀 수 · 최소 · 최대 · 합계 · 선택 크기, 값 클릭 = 복사)']],
   ['붙여넣기', ['연결된 그림 (카메라: 원본이 바뀌면 같이 바뀜) · 그림 · 연결하여 붙여넣기']],
+  ['마케팅', ['이상치 찾기 (데이터 › 분석: 일별 비용 · 전환의 급등 빨강 / 급락 파랑, 수식 조건부 서식)', '광고 지표 (노출 · 클릭 · 비용 · 전환 · 매출 → CTR · CPC · CPM · CVR · CPA · ROAS 열 자동 추가)']],
   ['피벗', ['추천 피벗 테이블 (삽입 › 추천 피벗 테이블: 요약 후보 미리 보기)', '계산 항목 (예: 수도권 = 서울 + 인천, 피벗 분석 › 필드, 항목 및 집합)']],
   ['호환', ['확인란을 엑셀 365 고유 형식으로 저장 (엑셀에서도 확인란으로 보임)']],
   ['파일', ['저장 위치(폴더) 선택 · 덮어쓰기 확인 · 연 파일에 바로 [저장]', '파일 › 정보: 통합 문서 보호(구조 보호 · 최종본 · 읽기 전용 권장) · 문서 검사 · 속성 편집', '다른 기기에서 열기(서버 저장)도 폴더 지정']],

@@ -1348,3 +1348,9 @@ body.view-mode .titlebar, body.view-mode .ribbon-tabs, body.view-mode .ribbon, b
 .ci-row { display: flex; gap: 6px; align-items: center; padding: 3px 0; }
 .ci-name { font-weight: 600; }
 .ci-row code { flex: 1; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 이상치 찾기 */
+.an-dlg { display: flex; flex-direction: column; gap: 8px; }
+.an-dlg .form-row { display: flex; gap: 10px; align-items: center; }
+.an-dlg .form-row > span:first-child { width: 50px; }
+.an-sum { border: 1px solid var(--border); background: var(--surface); padding: 6px 8px; max-height: 220px; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+.an-col .muted { font-size: 11px; margin-top: 2px; }

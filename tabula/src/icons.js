@@ -115,6 +115,8 @@ export const ICONS = {
   bringForward: svg(`<rect x="3" y="3" width="9" height="9" rx=".8" opacity=".55"/><rect x="8" y="8" width="9" height="9" rx=".8" fill="${BLUE}" stroke="${BLUE}"/>`),
   sendBackward: svg(`<rect x="8" y="8" width="9" height="9" rx=".8" opacity=".55"/><rect x="3" y="3" width="9" height="9" rx=".8" fill="${BLUE}" stroke="${BLUE}"/><rect x="8" y="8" width="4" height="4" fill="var(--surface)" stroke="none"/>`),
   recommendPivot: svg(`<rect x="2.5" y="3" width="12" height="12" rx=".8"/><path d="M2.5 7h12M6.5 3v12"/><path d="M15.5 10.5l.9 1.9 2.1.3-1.5 1.5.4 2.1-1.9-1-1.9 1 .4-2.1-1.5-1.5 2.1-.3z" fill="${ACCENT}" stroke="${ACCENT}" stroke-width=".6"/>`, 28),
+  anomaly: svg(`<path d="M2.5 16.5h15"/><path d="M3 13l3-2 3 1.5 2.5-8 2.5 9 3-1.5" /><circle cx="11.5" cy="4.5" r="1.8" fill="#d13438" stroke="#d13438"/>`, 28),
+  adMetrics: svg(`<rect x="2.5" y="3" width="15" height="14" rx="1"/><path d="M2.5 7h15M7.5 7v10"/><text x="12.6" y="14.6" font-size="6.5" font-weight="700" text-anchor="middle" fill="${BLUE}" stroke="none">%</text>`, 28),
   navigator: svg(`<rect x="3" y="3" width="14" height="14" rx="1"/><path d="M5.5 6.5h2M9 6.5h5.5M7 10h2M10.5 10h4M7 13.5h2M10.5 13.5h4"/><circle cx="5.5" cy="10" r=".8" fill="${BLUE}" stroke="${BLUE}"/>`),
   webData: svg(`<circle cx="9" cy="9" r="6"/><path d="M3 9h12M9 3c-2 2-2 10 0 12M9 3c2 2 2 10 0 12"/><rect x="11.5" y="11.5" width="6" height="6" fill="var(--surface)"/><path d="M12 13h5M12 15h5M14.5 12v5" stroke="${BLUE}"/>`, 28),
   consolidate: svg(`<rect x="2.5" y="3" width="6" height="5"/><rect x="2.5" y="11" width="6" height="5"/><path d="M9 5.5h2.5v8H9M11.5 9.5H13"/><rect x="13" y="7" width="5" height="5" fill="${BLUE}" stroke="${BLUE}"/>`, 28),

@@ -706,3 +706,96 @@ export function consolidate(ranges, { fn = 'sum', topRow = false, leftCol = fals
   }
   return { rows, heads: [] };
 }
+
+// ───────────── 이상치 찾기 (퍼포먼스 마케팅: 일별 비용 · 전환 급변 감지) ─────────────
+export const ANOMALY_METHODS = [
+  ['mad', '중앙값 편차 (MAD, 튀는 값에 강함)', 3.5],
+  ['zscore', '표준 점수 (Z)', 3],
+  ['iqr', '사분위 범위 (IQR, 상자 그림)', 1.5],
+];
+const medianOf = (a) => { const s = [...a].sort((x, y) => x - y); const n = s.length; return n ? (n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2) : NaN; };
+const quartile = (s, q) => { const pos = (s.length - 1) * q; const lo = Math.floor(pos); return s[lo] + (s[Math.min(lo + 1, s.length - 1)] - s[lo]) * (pos - lo); };
+/**
+ * values: 숫자(아니면 무시) 배열 → { hits: [{ i, v, score, dir: 'up'|'down' }], stats } — 엑셀 수식 규칙과 같은 기준
+ * mad: |v − 중앙값| / (1.4826 × MAD) > t · zscore: |v − 평균| / 표본 표준 편차 > t · iqr: Q1 − t·IQR 미만 또는 Q3 + t·IQR 초과
+ */
+export function detectAnomalies(values, { method = 'mad', threshold } = {}) {
+  const nums = values.filter(isNum);
+  const t = threshold ?? ANOMALY_METHODS.find((m) => m[0] === method)?.[2] ?? 3;
+  const hits = [];
+  if (nums.length < 4) return { hits, stats: { n: nums.length } };
+  let score;
+  let stats;
+  if (method === 'zscore') {
+    const m = mean(nums);
+    const sd = Math.sqrt(varS(nums));
+    stats = { n: nums.length, mean: m, sd };
+    score = (v) => (sd ? (v - m) / sd : 0);
+  } else if (method === 'iqr') {
+    const s = [...nums].sort((a, b) => a - b);
+    const q1 = quartile(s, 0.25);
+    const q3 = quartile(s, 0.75);
+    const iqr = q3 - q1;
+    stats = { n: nums.length, q1, q3, iqr };
+    score = (v) => (iqr ? (v < q1 ? (v - q1) / iqr : v > q3 ? (v - q3) / iqr : 0) : 0);
+  } else {
+    const med = medianOf(nums);
+    const mad = medianOf(nums.map((v) => Math.abs(v - med)));
+    stats = { n: nums.length, median: med, mad };
+    score = (v) => (mad ? (v - med) / (1.4826 * mad) : 0);
+  }
+  values.forEach((v, i) => {
+    if (!isNum(v)) return;
+    const sc = score(v);
+    if (Math.abs(sc) > t) hits.push({ i, v, score: sc, dir: sc > 0 ? 'up' : 'down' });
+  });
+  return { hits, stats: { ...stats, threshold: t } };
+}
+/** 같은 기준의 조건부 서식 수식 (cell = 왼쪽 위 상대 참조, rng = 절대 범위). 값이 바뀌면 강조도 따라 바뀜 */
+export function anomalyFormula(method, t, cell, rng, dir = 'both') {
+  const pick = (up, down, both) => (dir === 'up' ? up : dir === 'down' ? down : both);
+  if (method === 'zscore') return `=AND(ISNUMBER(${cell}),${pick(`${cell}-AVERAGE(${rng})`, `AVERAGE(${rng})-${cell}`, `ABS(${cell}-AVERAGE(${rng}))`)}>${t}*STDEV.S(${rng}))`;
+  if (method === 'iqr') {
+    const q1 = `QUARTILE.INC(${rng},1)`;
+    const q3 = `QUARTILE.INC(${rng},3)`;
+    const lo = `${cell}<${q1}-${t}*(${q3}-${q1})`;
+    const hi = `${cell}>${q3}+${t}*(${q3}-${q1})`;
+    return `=AND(ISNUMBER(${cell}),${pick(hi, lo, `OR(${lo},${hi})`)})`;
+  }
+  return `=AND(ISNUMBER(${cell}),${pick(`${cell}-MEDIAN(${rng})`, `MEDIAN(${rng})-${cell}`, `ABS(${cell}-MEDIAN(${rng}))`)}>${t}*1.4826*MEDIAN(ABS(${rng}-MEDIAN(${rng}))))`;
+}
+
+// ───────────── 광고 지표 자동 계산 (CTR · CPC · CVR · CPA · ROAS) ─────────────
+const METRIC_ALIASES = {
+  imp: /^(노출(수)?|impr(ession)?s?|노출 ?수)$/i,
+  click: /^(클릭(수)?|clicks?|클릭 ?수)$/i,
+  cost: /^(비용|광고비|총비용|소진(액)?|spend|cost|광고 ?비용)(\(.*\))?$/i,
+  conv: /^(전환(수)?|conversions?|전환 ?수|구매(수)?)$/i,
+  rev: /^(전환 ?매출(액)?|매출(액)?|revenue|구매 ?금액|전환 ?가치|sales)(\(.*\))?$/i,
+};
+/** 머리글에서 광고 기본 지표 열을 찾아 { imp, click, cost, conv, rev } (열 위치) */
+export function findMetricColumns(header) {
+  const out = {};
+  header.forEach((h, i) => {
+    const t = String(h ?? '').trim().replace(/\s+/g, ' ');
+    for (const [k, re] of Object.entries(METRIC_ALIASES)) if (out[k] === undefined && re.test(t)) out[k] = i;
+  });
+  return out;
+}
+/**
+ * 계산할 지표 목록: [{ name, need: [키], formula(ref) → '=…', fmt }] 중 머리글에 이미 없는 것.
+ * ref(키) = 같은 행의 그 열 셀 주소
+ */
+export function marketingMetrics(header) {
+  const cols = findMetricColumns(header);
+  const have = new Set(header.map((h) => String(h ?? '').trim().toUpperCase()));
+  const defs = [
+    { name: 'CTR', need: ['click', 'imp'], f: (r) => `=IFERROR(${r('click')}/${r('imp')},"")`, fmt: { numFmt: 'percent', decimals: 2 } },
+    { name: 'CPC', need: ['cost', 'click'], f: (r) => `=IFERROR(${r('cost')}/${r('click')},"")`, fmt: { numFmt: 'comma', decimals: 0 } },
+    { name: 'CPM', need: ['cost', 'imp'], f: (r) => `=IFERROR(${r('cost')}/${r('imp')}*1000,"")`, fmt: { numFmt: 'comma', decimals: 0 } },
+    { name: 'CVR', need: ['conv', 'click'], f: (r) => `=IFERROR(${r('conv')}/${r('click')},"")`, fmt: { numFmt: 'percent', decimals: 2 } },
+    { name: 'CPA', need: ['cost', 'conv'], f: (r) => `=IFERROR(${r('cost')}/${r('conv')},"")`, fmt: { numFmt: 'comma', decimals: 0 } },
+    { name: 'ROAS', need: ['rev', 'cost'], f: (r) => `=IFERROR(${r('rev')}/${r('cost')},"")`, fmt: { numFmt: 'percent', decimals: 0 } },
+  ];
+  return { cols, list: defs.filter((d) => d.need.every((k) => cols[k] !== undefined) && !have.has(d.name)).map(({ name, need, f, fmt }) => ({ name, need, formula: f, fmt })) };
+}

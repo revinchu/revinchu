@@ -116,3 +116,31 @@ test('피벗 계산 항목: xlsx 저장 후 다시 열어도 유지', async () =
   const back = data.sheets.flatMap((s) => [s.pivot, ...(s.pivotsExtra ?? [])]).find(Boolean);
   assert.deepEqual(back.calcItems, def.calcItems);
 });
+
+test('이상치 찾기 · 광고 지표 열 찾기', async () => {
+  const { detectAnomalies, marketingMetrics } = await import('../src/analysis.js');
+  const v = [100, 104, 98, 101, 97, 103, 99, 450, 102, 20, 'x', null];
+  for (const method of ['mad', 'zscore', 'iqr']) {
+    const r = detectAnomalies(v, { method, threshold: method === 'zscore' ? 2 : undefined });
+    assert.ok(r.hits.some((h) => h.i === 7 && h.dir === 'up'), method);
+  }
+  assert.ok(detectAnomalies(v, { method: 'mad' }).hits.some((h) => h.i === 9 && h.dir === 'down'));
+  assert.equal(detectAnomalies([1, 2, 3], {}).hits.length, 0);
+  const m = marketingMetrics(['날짜', '노출수', '클릭수', '비용', '전환수', '전환매출', 'CTR']);
+  assert.deepEqual(m.list.map((x) => x.name), ['CPC', 'CPM', 'CVR', 'CPA', 'ROAS']);
+  assert.equal(m.list[0].formula((k) => ({ cost: 'D2', click: 'C2' })[k]), '=IFERROR(D2/C2,"")');
+});
+
+test('이상치 조건부 서식 수식이 JS 판정과 같음', async () => {
+  const { detectAnomalies, anomalyFormula } = await import('../src/analysis.js');
+  const v = [100, 104, 98, 101, 97, 103, 99, 450, 102, 20];
+  for (const [method, t] of [['mad', 3.5], ['zscore', 2], ['iqr', 1.5]]) {
+    const wb = new Workbook();
+    put(wb, v.map((x) => [x]));
+    const f = anomalyFormula(method, t, 'A1', '$A$1:$A$10');
+    wb.transact(() => v.forEach((_, i) => wb.setInput(0, i, 1, f.replace(/\bA1\b(?!:)/g, `A${i + 1}`))));
+    const got = v.map((_, i) => wb.getValue(0, i, 1));
+    const want = v.map((_, i) => detectAnomalies(v, { method, threshold: t }).hits.some((h) => h.i === i));
+    assert.deepEqual(got, want, method);
+  }
+});
