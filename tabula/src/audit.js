@@ -167,6 +167,7 @@ export const GOTO_KINDS = [
 
 /**
  * 범위 rg 에서 조건에 맞는 칸 [[r, c]] (최대 limit 개).
+ * hidden(r, c) → 행 또는 열이 숨겨진 셀 여부 (visible 선택에만 적용).
  * cellAt(r, c) → 셀 객체, valueAt(r, c) → 값, types: { numbers, text, logical, errors } (상수 · 수식일 때)
  */
 const sameVal = (a, b) => (a ?? '') === (b ?? '') || (typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase()) || (isError(a) && isError(b) && a.code === b.code);
@@ -176,8 +177,8 @@ export function specialCells(kind, rg, { cellAt, valueAt, hidden, inCond, inVali
   const t = types ?? { numbers: true, text: true, logical: true, errors: true };
   const typeOk = (v) => (typeof v === 'number' ? t.numbers : typeof v === 'string' ? t.text : typeof v === 'boolean' ? t.logical : isError(v) ? t.errors : false);
   for (let r = rg.r1; r <= rg.r2 && out.length < limit; r++) {
-    if (kind === 'visible' && hidden?.(r)) continue;
     for (let c = rg.c1; c <= rg.c2 && out.length < limit; c++) {
+      if (kind === 'visible' && hidden?.(r, c)) continue;
       const cell = cellAt(r, c);
       let ok = false;
       switch (kind) {

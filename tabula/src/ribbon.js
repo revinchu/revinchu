@@ -554,20 +554,24 @@ export function buildRibbon(app) {
   }
 
   function makeItem(it) {
+    let node;
     switch (it.type) {
       case 'row': return el('div', { class: 'rrow' }, it.items.map(makeItem));
       case 'col': return el('div', { class: 'rcol' }, it.items.map(makeItem));
       case 'sep': return el('span', { class: 'rsep' });
-      case 'select': return makeSelect(it);
-      case 'font': return makeFont(it);
-      case 'text': return makeText(it);
-      case 'spin': return makeSpin(it);
-      case 'check': return makeCheck(it);
-      case 'color': return makeColor(it);
-      case 'gallery': return makeGallery(it);
-      case 'combo': return makeCombo(it);
-      default: return makeButton(it);
+      case 'select': node = makeSelect(it); break;
+      case 'font': node = makeFont(it); break;
+      case 'text': node = makeText(it); break;
+      case 'spin': node = makeSpin(it); break;
+      case 'check': node = makeCheck(it); break;
+      case 'color': node = makeColor(it); break;
+      case 'gallery': node = makeGallery(it); break;
+      case 'combo': node = makeCombo(it); break;
+      default: node = makeButton(it);
     }
+    if (it.cmd) node.dataset.ribbonCommand = it.cmd;
+    if (it.menu) node.dataset.ribbonMenu = it.menu;
+    return node;
   }
 
   function makeButton(it) {
@@ -720,10 +724,10 @@ export function buildRibbon(app) {
     ribbonEl.replaceChildren();
     const tab = TABS.find((t) => t.id === current);
     for (const g of tab.groups) {
-      ribbonEl.append(el('div', { class: 'rgroup' },
+      ribbonEl.append(el('div', { class: 'rgroup', 'data-ribbon-group': g.label },
         el('div', { class: 'rgroup-body' }, g.items.map(makeItem)),
         el('div', { class: 'rgroup-label' }, g.label),
-        g.launcher ? el('button', { class: 'rgroup-launcher', title: '자세히', onmousedown: keepFocus, onclick: () => app.run(g.launcher) }, '⇲') : null));
+        g.launcher ? el('button', { class: 'rgroup-launcher', title: '자세히', 'data-ribbon-command': g.launcher, onmousedown: keepFocus, onclick: () => app.run(g.launcher) }, '⇲') : null));
     }
     ribbonEl.append(el('span', { style: { flex: '1' } }),
       el('button', {

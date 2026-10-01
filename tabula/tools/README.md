@@ -2,7 +2,7 @@
 
 `npm test` 외에 브라우저 동작과 엑셀 파일 회귀를 확인하는 스크립트입니다.
 실제 파일을 비교할 때는 **수정 전에 기준 결과를 저장하고, 수정 후 같은 파일과 명령으로 다시 측정**하세요.
-셀 스타일·지우기의 최신 실행 결과와 미검증 범위는 [`11_셀스타일과지우기.md`](../docs/codex/11_셀스타일과지우기.md), 기본 3.0 검증은 [`09_WIXEL3_구현과검증.md`](../docs/codex/09_WIXEL3_구현과검증.md), 원본 인계 검증은 [`06_검증결과.md`](../docs/codex/06_검증결과.md)에 기록합니다.
+차트·피벗 옵션·화면 표시의 검증 범위는 [`14_차트와표시검증.md`](../docs/codex/14_차트와표시검증.md), 최신 단축키 결과는 [`13_단축키점검.md`](../docs/codex/13_단축키점검.md), 공개 배포는 [`12_공개배포와운영검증.md`](../docs/codex/12_공개배포와운영검증.md), 셀 스타일·지우기의 실행 결과와 미검증 범위는 [`11_셀스타일과지우기.md`](../docs/codex/11_셀스타일과지우기.md), 기본 3.0 검증은 [`09_WIXEL3_구현과검증.md`](../docs/codex/09_WIXEL3_구현과검증.md), 원본 인계 검증은 [`06_검증결과.md`](../docs/codex/06_검증결과.md)에 기록합니다.
 
 ## 준비 (Windows PowerShell)
 
@@ -52,7 +52,7 @@ $env:PLAYWRIGHT_MODULE = 'file:///D:/Codex/Temp/wixel-tools/node_modules/playwri
 
 현재 폴더의 `node_modules`를 쓰려면 `Remove-Item Env:PLAYWRIGHT_MODULE -ErrorAction SilentlyContinue`로 이 설정을 해제합니다.
 서버 포트를 바꿨다면 `WIXEL_URL`도 맞추세요. 브라우저 스크립트는 생성한 테스트 브라우저에서 데이터를 초기화하고 명령을 실행하므로 별도 테스트 서버를 사용합니다.
-네 브라우저 도구는 초기화 스크립트에서 `window.TABULA_STATIC = true`를 설정해
+스모크·키보드·파일 비교 브라우저 도구는 초기화 스크립트에서 `window.TABULA_STATIC = true`를 설정해
 서버 문서 자동 저장·복원으로 검사 데이터가 바뀌는 것을 막습니다. 도구의 성공은 서버 API 인증·보안 검증을 의미하지 않습니다.
 `ui-regressions.mjs`도 별도 브라우저에서 합성 문서를 사용합니다. 인증 화면 시나리오는 API 응답을 모의하며, 실제 서버 API는 `npm test`의 서버 테스트에서 검증합니다.
 
@@ -61,7 +61,7 @@ $env:PLAYWRIGHT_MODULE = 'file:///D:/Codex/Temp/wixel-tools/node_modules/playwri
 Windows Git Bash에서도 같은 D: 경로를 사용합니다. 아래 환경 변수는 명령을 실행하는 각 터미널에 적용합니다.
 
 ```bash
-cd /d/Codex/Workspaces/wixel/tabula
+cd /d/위셀/wixel-3/tabula
 mkdir -p /d/Codex/Temp /d/Codex/Caches/npm /d/Codex/Caches/ms-playwright
 export TEMP='D:/Codex/Temp' TMP='D:/Codex/Temp'
 export npm_config_cache='D:/Codex/Caches/npm'
@@ -84,7 +84,8 @@ HOST=127.0.0.1 PORT=5178 TABULA_DATA='D:/Codex/Temp/wixel-server-data' npm start
 | 파일 | 하는 일 | 사용법 | 성공 기준 |
 |------|---------|--------|-----------|
 | `smoke.mjs` | 샘플 데이터에서 실행 가능한 앱 명령을 호출해 콘솔 오류·예외 확인. 파일 선택 등 일부 명령 제외 | `node tools/smoke.mjs` | `bad 0` 및 종료 코드 0 |
-| `keys.mjs` | 단축키 66개 확인. 3개는 실행 오류만 확인한다고 출력 | `node tools/keys.mjs` | 요약의 `bad`·`pageErrors`가 모두 0, 종료 코드 0 |
+| `keys.mjs` | 직접 단축키의 실제 선택·서식·계산·QAT 결과 확인 | `node tools/keys.mjs` | 요약의 `bad`·`pageErrors`가 모두 0, 종료 코드 0 |
+| `keytips.mjs` | 리본 키팁 등록표·전 중간 입력 경로·키 순서 실제 동작 확인 | `node tools/keytips.mjs` | `failed 0`, 종료 코드 0; 등록·경로·동작 범위 별도 출력 |
 | `ui-regressions.mjs` | 비연속 선택·대화상자·메뉴·피벗 이동·인증 재시도의 실제 브라우저 회귀 검사 | `node tools/ui-regressions.mjs` | 모든 항목 통과, 페이지 오류 0, 종료 코드 0 |
 | `check.mjs` | Node에서 수식을 다시 계산해 파일 저장값과 비교하고 xlsx 저장/읽기 왕복 검사 | `node tools/check.mjs 파일.xlsx` | `formula mismatches: 0`, `roundtrip issues: 0`, 종료 코드 0 |
 | `brcheck.mjs` | 브라우저에서 파일을 열고 피벗을 다시 그린 뒤 수식 비교 및 로딩 시간 기록 | `node tools/brcheck.mjs 파일.xlsx` | 브라우저 수식 불일치·오류 없음 및 종료 코드 0 |
@@ -169,6 +170,10 @@ Select-String -LiteralPath D:\Codex\Temp\wixel-regression\before.txt, D:\Codex\T
 
 | 명령 | 검사 범위 |
 |---|---|
+| `node tools/grid-rendering.mjs` | 합성 시트의 24개 테마·DPR·앱 배율 조건에서 PNG 실제 픽셀 두께, 이중선·채우기 경계, 숨김·고정·스크롤·클릭 좌표·F2 편집 정렬 |
+| `node tools/chart-ui.mjs` | 콤보 계열별 종류·주축/보조축, 즉시 미리보기·취소·확정·실행 취소, 가져온/숨긴 계열, 두 견본과 일반 차트 전환 |
+| `node tools/pivot-options.mjs` | 합성 XLSX 파일 열기 UI, 오류 표시 옵션·계산 결과·재저장 왕복; 사례 수와 assertion 수를 별도 출력 |
+| `node tools/keytips.mjs` | 키팁 등록 중복·접두 충돌·명령 존재, 전 중간 입력 경로, 대표 명령의 실제 결과, 작은 화면 패널·QAT 배치 |
 | `node tools/format-regressions.mjs` | 차트 축/계열 연속 변경, 3D 회전·깊이, 도형 채우기·효과·텍스트와 페이지 오류 |
 | `node tools/security-regressions.mjs` | CSP 우회 테스트 환경에서 HTML/SVG 공격 차단, 인쇄·링크·정상 차트/도형 표현 |
 | `node tools/vault-ui-integration.mjs` | 로컬 workerd의 보관함 연결·저장·다른 기기 복원·게시 관리 UI |
@@ -183,3 +188,13 @@ Select-String -LiteralPath D:\Codex\Temp\wixel-regression\before.txt, D:\Codex\T
 `cell-style-regressions.mjs`와 `clear-ui.mjs`는 별도 브라우저에서 **스크립트가 만든 합성 문서만** 검사합니다. 스타일 병합용 XLSX/WIXEL도 검사 중 생성하며 사용자 업무 파일을 읽지 않습니다. 모든 항목 통과·페이지 오류 없음·종료 코드 0을 확인하고, 실제 파일 회귀와 실제 Excel 앱 검증은 별도로 기록하세요.
 
 `cell-style-regressions.mjs`의 스타일·병합 대화상자 캡처는 기본적으로 `D:\Codex\Temp\wixel3-cell-style.png`, `D:\Codex\Temp\wixel3-style-merge.png`에 저장합니다. `WIXEL_STYLE_SCREENSHOT`, `WIXEL_STYLE_MERGE_SCREENSHOT`으로 다른 D: 절대 경로를 지정할 수 있습니다. 최종 실행 수치는 [`11_셀스타일과지우기.md`](../docs/codex/11_셀스타일과지우기.md)를 확인하세요.
+
+### 차트·피벗·키팁 검사의 범위
+
+`chart-ui.mjs`와 `pivot-options.mjs`는 새 브라우저에서 스크립트가 만든 합성 문서만 사용합니다. `WIXEL_URL`로 소스 서버 또는 검사할 번들을 지정합니다. `chart-ui.mjs`는 계열별 새 선택으로 세로 막대·꺾은선·영역 및 축 0/1을 검사하며 Excel의 모든 차트 조합을 보장하지 않습니다. `pivot-options.mjs`는 플래그와 문구의 조합을 검사하므로 실제 업무 피벗 전체의 계산 회귀를 대신하지 않습니다. 모든 항목 통과·페이지 오류 없음·종료 코드 0을 확인하세요.
+
+차트 화면 캡처는 `D:\Codex\Temp\wixel3-combo-chart.png`가 기본이며 `WIXEL_CHART_SCREENSHOT`에 다른 D: 절대 PNG 경로를 지정할 수 있습니다. 차트 엔진 및 표준 XML 왕복은 `test/chart-combo.test.js`, `test/chart-combo-xlsx.test.js`가 별도로 확인합니다. 브라우저 미리보기 통과와 XLSX 왕복 통과는 서로 다른 검증입니다.
+
+`keytips.mjs`는 매 시나리오를 별도 컨텍스트에서 실행하고 원격 쓰기 요청을 차단합니다. 요약의 등록 키 수·검사한 중간 경로 수·실제 동작 키 수를 구분해 기록하세요. 한글 물리 키와 AltGr 검사는 합성 KeyboardEvent를 포함하므로 OS의 실제 IME나 브라우저 예약 키까지 검증하는 것은 아닙니다. `keys.mjs`의 직접 단축키 검사와 함께 실행합니다.
+
+`grid-rendering.mjs`는 합성 시트를 새 컨텍스트에 만들고 원격 쓰기를 차단합니다. 흰색·검정 테마, DPR 1·1.25·2, 앱 배율 50·75·100·125%의 24개 조건에서 PNG를 직접 읽어 선 두께를 검사합니다. `GRID_SCREENSHOTS`에 D: 절대 폴더를 지정하면 조건별 PNG를 저장합니다. `ok: true`, 페이지 오류·쓰기 요청 없음과 종료 코드 0을 확인하고 `cases`·`checks`를 별도로 기록하세요. 작은 합성 시트의 `renderMs`는 대형 문서 성능 수치가 아닙니다. 실제 모니터 전환·브라우저 자체 확대/축소와 모든 환경까지 검증하지는 않습니다. 최종 결과와 한계는 [14 문서](../docs/codex/14_차트와표시검증.md)를 확인하세요.

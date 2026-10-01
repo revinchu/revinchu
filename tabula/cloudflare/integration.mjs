@@ -38,8 +38,10 @@ publicGet = await call('/api/published/' + publication.id, { vault: null }); sta
 status(await call('/api/published/' + publication.id, { method: 'DELETE', revision: updatedMeta.revision }), 200);
 status(await call('/api/published/' + publication.id, { vault: null }), 404);
 assert.deepEqual(await (await call('/api/publications')).json(), []);
-status(await call('/api/files/report', { method: 'DELETE', revision: saved.revision }), 200);
-status(await call('/api/files/large', { method: 'DELETE', revision: largeRevision }), 200);
+const removedReport = await call('/api/files/report', { method: 'DELETE', revision: saved.revision });
+status(removedReport, 200); assert.deepEqual(await removedReport.json(), { ok: true });
+const removedLarge = await call('/api/files/large', { method: 'DELETE', revision: largeRevision });
+status(removedLarge, 200); assert.deepEqual(await removedLarge.json(), { ok: true });
 status(await call('/api/fetch?url=' + encodeURIComponent(base), { vault: null }), 403);
 status(await call('/api/naver/keywordstool?hintKeywords=test', { vault: null }), 401);
 console.log(JSON.stringify({ ok: true, httpChecks: checks, largeDocumentBytes: Buffer.byteLength(largeData), privateDocumentsRemoved: true, publicationRevoked: true }));

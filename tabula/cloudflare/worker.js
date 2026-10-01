@@ -105,7 +105,11 @@ export async function route(request, env) {
     const name = nameFrom(path, '/api/files/');
     if (method === 'GET') return vault.read(name);
     if (method === 'PUT') { checkBody(request); return vault.put(name, parseRevision(request), request.body); }
-    if (method === 'DELETE') return vault.remove(name, parseRevision(request));
+    if (method === 'DELETE') {
+      const removed = await vault.remove(name, parseRevision(request));
+      // 작은 삭제 응답을 현재 요청 안에서 읽어 RPC 스트림이 먼저 끊기지 않게 합니다.
+      return new Response(await removed.text(), removed);
+    }
   }
   if (path === '/api/publish' && method === 'POST') {
     checkBody(request);

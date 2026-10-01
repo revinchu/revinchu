@@ -222,20 +222,19 @@ input.rselect { padding: 0 4px; }
 .panes, .pane { position: absolute; }
 .panes { inset: 0; }
 .pane { overflow: hidden; }
-.pane-content { position: absolute; left: 0; top: 0; will-change: transform; }
+.pane-content { position: absolute; left: 0; top: 0; }
 .gl, .cells, .objects, .overlay { position: absolute; left: 0; top: 0; }
 /* 셀 층(필터 단추 · 스파크라인 포함)은 개체(슬라이서 · 차트) 아래에 */
 .cells { z-index: 0; }
-.gl i { position: absolute; display: block; background: var(--grid-line); }
-.gl i.gv { top: 0; width: 1px; }
-.gl i.gh { left: 0; height: 1px; }
+.gl > svg { display:block; overflow:visible; }
+.cell-borders { position:absolute; left:0; top:0; overflow:visible; pointer-events:none; z-index:0; }
 .cells {
   font-family: var(--cell-ff, 'Malgun Gothic', '맑은 고딕', 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif);
   font-size: var(--cell-fs, 11pt); color: #000; line-height: 1.2;
 }
 .c {
-  position: absolute; box-sizing: border-box; border: 1px solid transparent; background-clip: padding-box;
-  display: flex; align-items: flex-end; justify-content: flex-start; padding: 0 3px 1px;
+  position: absolute; box-sizing: border-box; border: 0; background-clip: padding-box;
+  display: flex; align-items: flex-end; justify-content: flex-start; padding: 0 3px 2px;
   overflow: hidden; white-space: pre;
 }
 .c > span { flex: none; max-width: none; position: relative; top: var(--glyph-dy, 0); }
@@ -1449,10 +1448,10 @@ body.view-mode .titlebar, body.view-mode .ribbon-tabs, body.view-mode .ribbon, b
 @media(prefers-reduced-motion:reduce) { .hub-card { transition:none; } .hub-card:hover:not(:disabled) { transform:none; } }
 .quick-access { display:flex; align-items:center; gap:3px; flex:none; }
 .quick-access .tb-btn { position:relative; }
-.quick-access.below { height:33px; padding:0 10px; background:var(--ribbon-bg); border-bottom:1px solid var(--border); zoom:var(--ui-scale,1); }
+.quick-access.below { height:auto; min-height:33px; flex-wrap:wrap; row-gap:1px; padding:0 10px; background:var(--ribbon-bg); border-bottom:1px solid var(--border); zoom:var(--ui-scale,1); }
 .quick-access.below .tb-btn { color:var(--text); }
 .quick-access.below .tb-btn:hover { background:var(--hover); }
-body.keytips .quick-access [data-qat-key]:not([data-qat-key=""])::after { content:attr(data-qat-key); position:absolute; top:22px; left:9px; z-index:900; font-size:10px; line-height:17px; min-width:16px; color:#fff; background:#26332c; padding:0 3px; border-radius:2px; }
+body.keytips[data-keytip-sequence=""] .quick-access [data-qat-key]:not([data-qat-key=""])::after { content:attr(data-qat-key); position:absolute; top:22px; left:9px; z-index:900; font-size:10px; line-height:17px; min-width:16px; color:#fff; background:#26332c; padding:0 3px; border-radius:2px; }
 .pp-item:focus-visible { outline:2px solid var(--green); outline-offset:1px; }
 .pp-value-settings { border:0; border-radius:3px; color:var(--green); background:#eaf3e5; padding:2px 5px; margin-left:auto; font-size:11px; cursor:pointer; }
 .pp-value-settings:hover { background:#d9ebce; }
@@ -1469,3 +1468,41 @@ body.keytips .quick-access [data-qat-key]:not([data-qat-key=""])::after { conten
 .cell-style-preview{padding:18px 16px;min-height:60px;border:1px solid #d8ddd9;border-radius:3px;overflow:hidden}
 .cell-style-conflicts{display:flex;flex-direction:column;gap:10px}.cell-style-conflicts[hidden]{display:none}.cell-style-conflicts label{display:flex;align-items:center;gap:12px}
 .cell-style-file{display:flex;align-items:center;gap:12px}.cell-style-file-name{overflow-wrap:anywhere}.style-chip:focus-visible{outline:2px solid #107c41;outline-offset:1px}
+
+/* 리본 키팁: 현재 단계에서 선택할 수 있는 키를 모두 표시합니다. */
+.keytip-panel { position:fixed; left:12px; right:12px; width:max-content; max-width:calc(100vw - 24px); max-height:35vh; overflow:auto; z-index:1100; background:var(--panel, #fff); color:var(--text, #202820); border:1px solid #b5c4ba; border-radius:6px; padding:10px 14px; box-shadow:0 4px 20px #0003; font-size:12px; }
+.keytip-caption { display:flex; gap:24px; justify-content:space-between; font-weight:600; margin-bottom:9px; }
+.keytip-caption span { font-weight:400; opacity:.7; }
+.keytip-choices { display:flex; flex-wrap:wrap; gap:9px 18px; max-width:860px; }
+.keytip-choices > span { display:flex; align-items:center; gap:6px; white-space:nowrap; }
+.keytip-choices kbd { display:inline-block; min-width:21px; padding:2px 4px; text-align:center; color:#fff; background:#26332c; border-radius:3px; font:600 12px system-ui; }
+.ribbon-tab[data-keytip] { position:relative; }
+.ribbon-tab[data-keytip]::after { content:attr(data-keytip); position:absolute; top:100%; left:calc(50% - 8px); z-index:1200; font-size:10px; line-height:17px; min-width:16px; color:#fff; background:#26332c; border-radius:2px; }
+
+/* 콤보 차트: 계열별 종류·왼쪽/오른쪽 축을 한 화면에서 설정 */
+.dialog.chart-type-dialog { max-width: min(920px, calc(100vw - 32px)); }
+.cg-main { min-width: 0; }
+.cg-prev svg, .cr-prev svg { display: block; width: 100%; height: auto; max-height: 260px; }
+.cr-main { min-width: 0; overflow-y: auto; }
+.cg-combo { margin-top: 12px; line-height: 1.5; }
+.cg-combo[hidden] { display: none; }
+.cg-combo-heading { font-weight: 700; }
+.cg-combo-note { margin: 4px 0 8px; }
+.cg-combo-scroll { max-height: 205px; overflow: auto; border: 1px solid var(--line, #ddd); border-radius: 4px; }
+.cg-combo-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12px; }
+.cg-combo-table th, .cg-combo-table td { padding: 7px 8px; text-align: left; border-bottom: 1px solid #ececec; }
+.cg-combo-table thead th { background: #f3f6f4; position: sticky; top: 0; z-index: 1; }
+.cg-combo-table th[scope=row] { font-weight: 400; overflow-wrap: anywhere; }
+.cg-combo-table th:first-child { width: 34%; }
+.cg-combo-table th:nth-child(2) { width: 34%; }
+.cg-combo-table select { width: 100%; min-width: 0; }
+.cg-series-color { display: inline-block; width: 9px; height: 9px; margin-right: 7px; border-radius: 2px; vertical-align: middle; }
+
+/* 실제 리본 명령 옆 KeyTip 배지와 리본에 연결된 하위 명령 메뉴 */
+.keytip-badges { position: fixed; inset: 0; z-index: 1300; pointer-events: none; }
+.keytip-badge { position: fixed; min-width: 18px; height: 19px; padding: 0 4px; border: 1px solid #eee1ae; border-radius: 2px; background: #fff8d9; color: #202820; box-shadow: 0 1px 2px #0003; font: 600 11px/17px system-ui; text-align: center; cursor: pointer; pointer-events: auto; }
+.keytip-badge:hover, .keytip-badge:focus-visible { outline: 2px solid var(--green); background: #fff; }
+.keytip-command-menu { z-index: 1400; }
+.keytip-command-menu .mi-key { min-width: 20px; padding: 1px 5px; text-align: center; border: 1px solid #eadfa9; border-radius: 2px; background: #fff8d9; color: #202820; font: 600 11px/17px system-ui; }
+.keytip-panel[hidden] { display: none; }
+body.keytips #ribbon label[data-ribbon-command]:has(input[type="checkbox"]) { padding-right: 28px; }

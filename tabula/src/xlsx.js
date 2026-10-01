@@ -1623,7 +1623,7 @@ function readChart(files, path, theme = {}) {
   const rows = [];
   for (const g of groups) {
     const gType = typeOf(g);
-    const secondary = isSecondary(g) && groups.length > 1;
+    const secondary = isSecondary(g);
     const gLabels = dl(g);
     for (const ser of kids(g, 'ser')) {
       serOrder.push(Number(child(ser, 'order')?.attrs.val ?? serOrder.length));
@@ -1796,16 +1796,20 @@ function readChart(files, path, theme = {}) {
     const sc = child(ax, 'scaling');
     if (child(sc, 'min')) o.min = Number(child(sc, 'min').attrs.val);
     if (child(sc, 'max')) o.max = Number(child(sc, 'max').attrs.val);
+    if (child(ax, 'majorUnit')) o.major = Number(child(ax, 'majorUnit').attrs.val);
+    if (child(ax, 'delete')?.attrs.val === '1' || child(ax, 'delete')?.attrs.val === 'true') o.hide = true;
     return Object.keys(o).length ? o : null;
   };
   const vals = [...valAxes.values()];
-  const primaryAx = vals.find((ax) => child(ax, 'axPos')?.attrs.val !== 'r' && child(ax, 'crosses')?.attrs.val !== 'max') ?? vals[0];
-  const secondaryAx = vals.find((ax) => ax !== primaryAx);
+  const secondaryValueAxis = (ax) => child(ax, 'axPos')?.attrs.val === 'r' || child(ax, 'crosses')?.attrs.val === 'max';
+  const primaryVals = vals.filter((ax) => !secondaryValueAxis(ax));
+  const primaryAx = primaryVals.find((ax) => child(ax, 'axPos')?.attrs.val === (out.type === 'bar' ? 'b' : 'l')) ?? primaryVals[0];
+  const secondaryAx = vals.find(secondaryValueAxis);
   const axes = {};
   if (axInfo(primaryAx)) axes.y = axInfo(primaryAx);
   if (axInfo(secondaryAx)) axes.y2 = axInfo(secondaryAx);
-  const catT = child(kids(plot, 'catAx')[0], 'title');
-  if (catT) axes.x = { title: descendants(catT, 't').map((x) => x.text).join('') };
+  const catAx = kids(plot, 'catAx')[0];
+  if (axInfo(catAx)) axes.x = axInfo(catAx);
   if (Object.keys(axes).length) out.axes = axes;
   // 피벗 차트: [파일]시트!피벗 이름
   const ps = descendants(child(root, 'pivotSource'), 'name')[0]?.text;
@@ -2026,7 +2030,8 @@ function pivotDefFrom(root, cache, tables, sheetName) {
   if (!so.rowHeaders || !so.colHeaders || so.bandRows || so.bandCols) def.styleOpts = so;
   if (root.attrs.rowHeaderCaption) def.rowCaption = root.attrs.rowHeaderCaption;
   if (root.attrs.grandTotalCaption) def.grandCaption = root.attrs.grandTotalCaption;
-  if (root.attrs.showError === '1' || root.attrs.showError === 'true') def.errorCaption = root.attrs.errorCaption ?? '';
+  def.errorShow = root.attrs.showError === '1' || root.attrs.showError === 'true';
+  if (root.attrs.errorCaption !== undefined || def.errorShow) def.errorCaption = root.attrs.errorCaption ?? '';
   if (root.attrs.colHeaderCaption) def.colCaption = root.attrs.colHeaderCaption;
   if (root.attrs.missingCaption && root.attrs.showMissing !== '0') def.missingCaption = root.attrs.missingCaption;
   if (root.attrs.showHeaders === '0') def.showHeaders = false;
@@ -3049,7 +3054,7 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
     if (!g) { g = { kind, axis, xml: [] }; groups.push(g); }
     g.xml.push(serXml(sr, i));
   });
-  const hasSecondary = groups.some((g) => g.axis === 1) && groups.some((g) => g.axis === 0);
+  const hasSecondary = groups.some((g) => g.axis === 1);
   const ax = (axis) => (axis === 1 && hasSecondary ? '<c:axId val="333333333"/><c:axId val="444444444"/>' : '<c:axId val="111111111"/><c:axId val="222222222"/>');
   const groupXml = groups.map((g) => {
     const body = g.xml.join('');
@@ -3108,10 +3113,10 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
   const areaSpPr = chart.fill || chart.border ? `<c:spPr>${chart.fill ? `<a:solidFill><a:srgbClr val="${hexOf(chart.fill)}"/></a:solidFill>` : ''}${chart.border ? `<a:ln w="9525"><a:solidFill><a:srgbClr val="${hexOf(chart.border)}"/></a:solidFill></a:ln>` : ''}</c:spPr>` : '';
   const plotSpPr = chart.plotFill ? `<c:spPr><a:solidFill><a:srgbClr val="${hexOf(chart.plotFill)}"/></a:solidFill></c:spPr>` : '';
   // WIXEL 전용 설정 (엑셀은 무시): 원래 차트 종류 · 팔레트 · 서식
-  const TB_KEYS = ['threeD', 'view3D', 'titleSize', 'axisSize', 'hiddenSeries', 'hiddenCats', 'legendBold', 'type', 'byRows', 'fieldButtons', 'palette', 'scatterStyle', 'radarStyle', 'ohlc', 'explode', 'hole', 'gap', 'marker', 'gridX', 'gridY', 'fill', 'plotFill', 'border', 'titleColor', 'titleBold', 'textColor', 'gridColor', 'rounded', 'totals', 'binCount', 'binWidth', 'upColor', 'downColor', 'totalColor', 'bubbleScale', 'firstAngle', 'showMean', 'connectors'];
+  const TB_KEYS = ['comboAxis', 'threeD', 'view3D', 'titleSize', 'axisSize', 'hiddenSeries', 'hiddenCats', 'legendBold', 'type', 'byRows', 'fieldButtons', 'palette', 'scatterStyle', 'radarStyle', 'ohlc', 'explode', 'hole', 'gap', 'marker', 'gridX', 'gridY', 'fill', 'plotFill', 'border', 'titleColor', 'titleBold', 'textColor', 'gridColor', 'rounded', 'totals', 'binCount', 'binWidth', 'upColor', 'downColor', 'totalColor', 'bubbleScale', 'firstAngle', 'showMean', 'connectors'];
   const tb = Object.fromEntries(TB_KEYS.filter((k) => chart[k] !== undefined && chart[k] !== null).map((k) => [k, chart[k]]));
   if (subsetPivot) tb.wxPivot = chart.pivot; // 위셀로 다시 열면 슬라이서와 연동되는 피벗 차트로 복원
-  const extLst = Object.keys(tb).length > 1 || FALLBACK[chart.type] ? `<c:extLst><c:ext uri="{5E2A6C7B-8F4D-4B1A-9C3E-7D6F1A2B3C4D}" xmlns:tb="urn:tabula:chart"><tb:props json="${esc(JSON.stringify(tb))}"/></c:ext></c:extLst>` : '';
+  const extLst = Object.keys(tb).length > 1 || chart.type === 'combo' || FALLBACK[chart.type] ? `<c:extLst><c:ext uri="{5E2A6C7B-8F4D-4B1A-9C3E-7D6F1A2B3C4D}" xmlns:tb="urn:tabula:chart"><tb:props json="${esc(JSON.stringify(tb))}"/></c:ext></c:extLst>` : '';
   const v3 = chartView3D(chart);
   const viewXml = threeD ? `<c:view3D><c:rotX val="${Math.round(v3.rotX)}"/><c:rotY val="${Math.round((v3.rotY + (baseType === 'pie' ? chart.firstAngle ?? 0 : 0)) % 360)}"/><c:depthPercent val="${Math.round(v3.depthPercent)}"/><c:rAngAx val="${v3.rAngAx ? 1 : 0}"/><c:perspective val="${Math.round(v3.perspective)}"/></c:view3D>` : '';
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="${NS_R}"><c:roundedCorners val="${chart.rounded ? 1 : 0}"/>${pivotSrc}<c:chart>${title}${pivotFmts}${viewXml}<c:plotArea><c:layout/>${groupXml}${axesXml}${chart.dataTable && !pieLike ? '<c:dTable><c:showHorzBorder val="1"/><c:showVertBorder val="1"/><c:showOutline val="1"/><c:showKeys val="1"/></c:dTable>' : ''}${plotSpPr}</c:plotArea>${legend}<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart>${areaSpPr}${extLst}</c:chartSpace>`;
@@ -3594,7 +3599,7 @@ function pivotParts(wb, si, def, cache, name, pool) {
     ...(def.mergeLabels ? ['mergeItem="1"'] : []), ...(def.showHeaders === false ? ['showHeaders="0"'] : []), ...(def.preserveFormat === false ? ['preserveFormatting="0"'] : []), ...(def.multiFilters ? [] : []), ...(def.enableDrill === false ? ['enableDrill="0"'] : []),
     ...(d.rowCaption ? [`rowHeaderCaption="${esc(d.rowCaption)}"`] : []),
     ...(d.grandCaption ? [`grandTotalCaption="${esc(d.grandCaption)}"`] : []),
-    ...(d.errorCaption !== null && d.errorCaption !== undefined ? ['showError="1"', ...(d.errorCaption ? [`errorCaption="${esc(d.errorCaption)}"`] : [])] : []), ...(d.colCaption ? [`colHeaderCaption="${esc(d.colCaption)}"`] : []),
+    `showError="${d.errorShow ? 1 : 0}"`, ...(def.errorCaption !== null && def.errorCaption !== undefined ? [`errorCaption="${esc(def.errorCaption)}"`] : []), ...(d.colCaption ? [`colHeaderCaption="${esc(d.colCaption)}"`] : []),
     ...(d.grandRows ? [] : ['rowGrandTotals="0"']), ...(d.grandCols ? [] : ['colGrandTotals="0"']),
     ...(d.missingCaption ? [`missingCaption="${esc(d.missingCaption)}"`] : []), ...(d.showExpand ? [] : ['showDrill="0"']),
     'itemPrintTitles="1"', 'createdVersion="6"', 'indent="0"', ...(tabular || outline ? ['compact="0"', 'compactData="0"'] : []),

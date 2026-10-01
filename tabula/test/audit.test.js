@@ -40,3 +40,23 @@ test('데이터 표 · 이동 옵션', () => {
   const found = specialCells('blanks', { r1: 0, c1: 0, r2: 1, c2: 1 }, { cellAt: (r, c) => cells[`${r},${c}`], valueAt: () => 1 });
   assert.deepEqual(found, [[1, 0], [1, 1]]);
 });
+
+
+test('보이는 셀 선택: 숨긴 행과 열을 모두 제외하고 빈 셀은 포함', () => {
+  const rg = { r1: 2, c1: 4, r2: 4, c2: 7 };
+  const cells = { '2,4': { raw: '공개' }, '2,5': { raw: '숨긴 열' }, '3,4': { raw: '숨긴 행' } };
+  const opts = { cellAt: (r, c) => cells[r + ',' + c], valueAt: () => 1, hidden: (r, c) => r === 3 || c === 5 || c === 7 };
+  assert.deepEqual(specialCells('visible', rg, opts), [[2, 4], [2, 6], [4, 4], [4, 6]]);
+  assert.deepEqual(specialCells('visible', rg, { ...opts, limit: 3 }), [[2, 4], [2, 6], [4, 4]], '제한은 숨긴 셀을 제외한 선택 개수에 적용');
+  assert.deepEqual(specialCells('visible', rg, { ...opts, hidden: () => true }), [], '범위 전체가 숨겨진 경우 선택 없음');
+  assert.deepEqual(specialCells('visible', { r1: 2, c1: 5, r2: 4, c2: 5 }, opts), [], '숨긴 열 하나만 선택해도 포함하지 않음');
+});
+
+test('보이는 셀 이외의 이동 옵션은 숨김 여부와 관계없이 검색', () => {
+  const rg = { r1: 2, c1: 4, r2: 3, c2: 5 };
+  const cells = { '2,4': { raw: '공개' }, '2,5': { raw: '숨긴 열' }, '3,4': { raw: '숨긴 행' } };
+  const opts = { cellAt: (r, c) => cells[r + ',' + c], valueAt: (r, c) => cells[r + ',' + c]?.raw, hidden: () => true };
+  assert.deepEqual(specialCells('constants', rg, opts), [[2, 4], [2, 5], [3, 4]]);
+  assert.deepEqual(specialCells('blanks', rg, opts), [[3, 5]]);
+  assert.deepEqual(specialCells('visible', rg, { ...opts, hidden: undefined }), [[2, 4], [2, 5], [3, 4], [3, 5]], '숨김 콜백이 없으면 모든 셀 포함');
+});

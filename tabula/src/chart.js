@@ -34,8 +34,8 @@ export const CHART_TYPES = [
 /** 엑셀 [모든 차트] 대화상자와 같은 분류 · 하위 종류 (차트 모델에 덮어쓸 값) */
 export const CHART_GALLERY = [
   ['세로 막대형', [['묶은 세로 막대형', { threeD: false, type: 'column', grouping: 'clustered' }], ['누적 세로 막대형', { threeD: false, type: 'column', grouping: 'stacked' }], ['100% 기준 누적 세로 막대형', { threeD: false, type: 'column', grouping: 'percentStacked' }]]],
-  ['꺾은선형', [['꺾은선형', { threeD: false, type: 'line', marker: 'none' }], ['누적 꺾은선형', { threeD: false, type: 'line', grouping: 'stacked', marker: 'none' }], ['100% 기준 누적 꺾은선형', { threeD: false, type: 'line', grouping: 'percentStacked', marker: 'none' }], ['표식이 있는 꺾은선형', { threeD: false, type: 'line' }], ['표식이 있는 누적 꺾은선형', { threeD: false, type: 'line', grouping: 'stacked' }]]],
-  ['원형', [['원형', { threeD: false, type: 'pie' }], ['쪼개진 원형', { threeD: false, type: 'pie', explode: 12 }], ['도넛형', { threeD: false, type: 'doughnut' }]]],
+  ['꺾은선형', [['꺾은선형', { threeD: false, type: 'line', grouping: 'clustered', marker: 'none' }], ['누적 꺾은선형', { threeD: false, type: 'line', grouping: 'stacked', marker: 'none' }], ['100% 기준 누적 꺾은선형', { threeD: false, type: 'line', grouping: 'percentStacked', marker: 'none' }], ['표식이 있는 꺾은선형', { threeD: false, type: 'line', grouping: 'clustered', marker: 'circle' }], ['표식이 있는 누적 꺾은선형', { threeD: false, type: 'line', grouping: 'stacked', marker: 'circle' }], ['표식이 있는 100% 기준 누적 꺾은선형', { threeD: false, type: 'line', grouping: 'percentStacked', marker: 'circle' }]]],
+  ['원형', [['원형', { threeD: false, type: 'pie' }], ['쪼개진 원형', { threeD: false, type: 'pie', explode: 12 }], ['도넛형', { threeD: false, type: 'doughnut' }], ['쪼개진 도넛형', { threeD: false, type: 'doughnut', explode: 12 }]]],
   ['가로 막대형', [['묶은 가로 막대형', { threeD: false, type: 'bar', grouping: 'clustered' }], ['누적 가로 막대형', { threeD: false, type: 'bar', grouping: 'stacked' }], ['100% 기준 누적 가로 막대형', { threeD: false, type: 'bar', grouping: 'percentStacked' }]]],
   ['영역형', [['영역형', { threeD: false, type: 'area' }], ['누적 영역형', { threeD: false, type: 'area', grouping: 'stacked' }], ['100% 기준 누적 영역형', { threeD: false, type: 'area', grouping: 'percentStacked' }]]],
   ['분산형', [['분산형', { threeD: false, type: 'scatter' }], ['곡선 및 표식이 있는 분산형', { threeD: false, type: 'scatter', scatterStyle: 'smoothMarker' }], ['곡선이 있는 분산형', { threeD: false, type: 'scatter', scatterStyle: 'smooth' }], ['직선 및 표식이 있는 분산형', { threeD: false, type: 'scatter', scatterStyle: 'lineMarker' }], ['직선이 있는 분산형', { threeD: false, type: 'scatter', scatterStyle: 'line' }], ['거품형', { threeD: false, type: 'bubble' }]]],
@@ -46,7 +46,7 @@ export const CHART_GALLERY = [
   ['상자 수염', [['상자 수염', { threeD: false, type: 'boxWhisker' }]]],
   ['폭포', [['폭포', { threeD: false, type: 'waterfall' }]]],
   ['깔때기형', [['깔때기형', { threeD: false, type: 'funnel' }]]],
-  ['콤보', [['묶은 세로 막대형 - 꺾은선형, 보조 축', { threeD: false, type: 'combo' }]]],
+  ['콤보', [['묶은 세로 막대형 - 꺾은선형, 보조 축', { threeD: false, type: 'combo', grouping: 'clustered', comboAxis: 'secondary' }], ['묶은 세로 막대형 - 꺾은선형, 기본 축', { threeD: false, type: 'combo', grouping: 'clustered', comboAxis: 'primary' }]]],
 ];
 for (const [name, entries] of CHART_GALLERY) {
   if (!['세로 막대형', '가로 막대형', '원형', '영역형', '꺾은선형'].includes(name)) continue;
@@ -246,9 +246,12 @@ export function resolveChart(ch, api) {
     }
   }
   const fmt = ch.seriesFmt ?? [];
-  const comboDefault = (i) => (ch.type === 'combo' ? (i === base.series.length - 1 && base.series.length > 1 ? { type: 'line', axis: 1 } : { type: 'column' }) : {});
+  const comboDefault = (i) => (ch.type === 'combo' ? (i === base.series.length - 1 && base.series.length > 1 ? { type: 'line', axis: ch.comboAxis === 'primary' ? 0 : 1 } : { type: 'column' }) : {});
   // 계열 형식에 종류가 정해져 있으면 축도 그 형식대로 (axis 가 없으면 기본 축) — 파일의 콤보 차트에서 마지막 계열을 보조 축으로 보내지 않게
-  base.series = base.series.map((s, i) => ({ ...s, ...(fmt[i]?.type ? { axis: 0 } : comboDefault(i)), ...(fmt[i] ?? {}), _fi: i }));
+  base.series = base.series.map((s, i) => {
+    const out = { ...s, ...(fmt[i]?.type ? { axis: 0 } : comboDefault(i)), ...(fmt[i] ?? {}), _fi: i };
+    out.axis = chartAxis(out.axis); return out;
+  });
   return filterChart(base, ch);
 }
 
@@ -329,6 +332,36 @@ export function chartModelData(wb, hostSi, ch) {
       return pivotChartData(src, def, fieldStyle);
     },
   });
+}
+
+const chartAxis = (axis) => axis === 1 || axis === 'secondary' || axis === 'right' ? 1 : 0;
+
+/** 축·종류별 누적 값. 눈금 계산과 도형 배치가 같은 합계/분모를 사용한다. */
+export function chartStackValues(series, grouping, n) {
+  const stacked = grouping === 'stacked' || grouping === 'percentStacked', pct = grouping === 'percentStacked';
+  const groups = new Map();
+  const out = series.map((s) => ({ ...s, axis: chartAxis(s.axis), _lower: new Array(n).fill(0), _upper: [...s.values] }));
+  for (const s of out) {
+    if (!stacked || !['column', 'bar', 'line', 'area'].includes(s.type)) continue;
+    const key = `${s.axis}/${s.type}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(s);
+  }
+  for (const group of groups.values()) {
+    const totals = pct ? Array.from({ length: n }, (_, i) => group.reduce((sum, s) => sum + (isNum(s.values[i]) ? Math.abs(s.values[i]) : 0), 0) || 1) : null;
+    const pos = new Array(n).fill(0), neg = new Array(n).fill(0), signed = new Array(n).fill(0);
+    for (const s of group) {
+      const bar = s.type === 'column' || s.type === 'bar';
+      s._stacked = true; s._pct = pct;
+      s.values.forEach((raw, i) => {
+        if (!isNum(raw)) return;
+        const v = pct ? raw / totals[i] : raw;
+        const acc = bar ? (v < 0 ? neg : pos) : signed;
+        s._lower[i] = acc[i]; acc[i] += v; s._upper[i] = acc[i];
+      });
+    }
+  }
+  return out;
 }
 
 /** 보기 좋은 눈금 */
@@ -437,7 +470,7 @@ export function renderChartSvg(chart, data) {
   // 다단계 항목 축 (세로 막대 · 꺾은선 · 콤보): 안쪽 이름 아래에 바깥 묶음 이름 줄
   const catLevels = baseType !== 'bar' && baseType !== 'scatter' && !chart.axes?.x?.hide ? data.catLevels ?? [] : [];
   const LEVEL_H = Math.round(FS.axis * 1.6);
-  const series = data.series.map((s, i) => ({ ...s, type: s.type ?? baseType, axis: s.axis ?? 0, color: s.color ?? pal[i % pal.length], _fi: s._fi ?? i }));
+  const series = chartStackValues(data.series.map((s, i) => ({ ...s, type: s.type ?? baseType, axis: s.axis ?? 0, color: s.color ?? pal[i % pal.length], _fi: s._fi ?? i })), chart.grouping, categories.length);
   // 요소 고르기용 표시 (엑셀처럼 한 번 누르면 계열, 한 번 더 누르면 요소) — data-s = 계열 서식 번호, data-p = 항목 번호
   const tag = (s, p) => ` data-s="${s._fi}"${p === undefined ? '' : ` data-p="${p}"`}`;
   const tagMk = (html, s, p) => html.replace(/^<(\w+)/, `<$1${tag(s, p)}`);
@@ -505,16 +538,21 @@ export function renderChartSvg(chart, data) {
   }
 
   if (pieLike) {
-    const s0 = series[0];
+    const rings = baseType === 'doughnut' ? series : [series[0]];
+    for (const [ringIndex, s0] of rings.entries()) {
     const vals = s0.values.map((v) => (v && v > 0 ? v : 0));
     const sum = vals.reduce((a, b) => a + b, 0);
     const cx = plot.x + plot.w / 2;
     let cy = plot.y + plot.h / 2;
     const ex = chart.explode ? Math.min(0.3, chart.explode / 100) : 0;
     // 항목 이름 레이블(엑셀의 원형 바깥 레이블)이 있으면 원을 줄여 둘레에 글자 자리를 둠
-    const outside = s0.catName || s0.labelPos === 'out';
-    const r = Math.max(10, (Math.min(plot.w, plot.h) / 2 - 6) / (1 + ex) * (outside ? 0.72 : 1));
-    const inner = baseType === 'doughnut' ? r * ((chart.hole ?? 50) / 100) : 0;
+    const outside = ringIndex === rings.length - 1 && (s0.catName || s0.labelPos === 'out');
+    const outerLabels = rings.at(-1).catName || rings.at(-1).labelPos === 'out';
+    const radius = Math.max(10, (Math.min(plot.w, plot.h) / 2 - 6) / (1 + ex) * (outerLabels ? 0.72 : 1));
+    const hole = baseType === 'doughnut' ? radius * Math.max(0.1, Math.min(0.9, (chart.hole ?? 50) / 100)) : 0;
+    const ringWidth = (radius - hole) / rings.length;
+    const r = baseType === 'doughnut' ? hole + ringWidth * (ringIndex + 1) : radius;
+    const inner = baseType === 'doughnut' ? hole + ringWidth * ringIndex : 0;
     const threePie = chart.threeD && baseType === 'pie';
     const projection = threePie ? pieProjection3D(chart, r) : { squash: 1, depth: 0, rotation: 0 };
     cy -= projection.depth / 2;
@@ -540,8 +578,8 @@ export function renderChartSvg(chart, data) {
       const oy = ex ? Math.sin(mid0) * r * ex * projection.squash : 0;
       if (!threePie && ex) parts.push(`<g transform="translate(${ox.toFixed(2)},${oy.toFixed(2)})">`);
       if (!threePie && frac >= 0.9999) {
-        parts.push(`<circle cx="${cx}" cy="${cy}" r="${r}" fill="${color}" stroke="#fff"${tag(s0, i)}/>`);
-        if (inner) parts.push(`<circle cx="${cx}" cy="${cy}" r="${inner}" fill="#fff"/>`);
+        if (inner) parts.push(`<path d="M${cx + r},${cy}A${r},${r} 0 1 1 ${cx - r},${cy}A${r},${r} 0 1 1 ${cx + r},${cy}ZM${cx + inner},${cy}A${inner},${inner} 0 1 1 ${cx - inner},${cy}A${inner},${inner} 0 1 1 ${cx + inner},${cy}Z" fill="${color}" fill-rule="evenodd" stroke="${chart.fill ?? '#fff'}"${tag(s0, i)}/>`);
+        else parts.push(`<circle cx="${cx}" cy="${cy}" r="${r}" fill="${color}" stroke="#fff"${tag(s0, i)}/>`);
       } else if (!threePie) {
         const large = a2 - a > Math.PI ? 1 : 0;
         const p = (ang, rad) => `${(cx + Math.cos(ang) * rad).toFixed(2)},${(cy + Math.sin(ang) * rad).toFixed(2)}`;
@@ -573,6 +611,7 @@ export function renderChartSvg(chart, data) {
       }
       a = a2;
     });
+    }
     return finish();
   }
 
@@ -586,21 +625,10 @@ export function renderChartSvg(chart, data) {
   const scaleFor = (axis) => {
     const ss = series.filter((s) => s.axis === axis && (s.type !== 'scatter' || baseType === 'scatter'));
     if (!ss.length) return null;
-    let vals = ss.flatMap((s) => s.values).filter(isNum);
-    const bars = ss.filter((s) => barTypes.has(s.type) || s.type === 'area' || (s.type === 'line' && stacked));
-    if (stacked && bars.length > 1) {
-      vals = [];
-      for (let i = 0; i < n; i++) {
-        let pos = 0;
-        let neg = 0;
-        for (const s of bars) { const v = s.values[i]; if (isNum(v)) { if (v >= 0) pos += v; else neg += v; } }
-        vals.push(pos, neg);
-      }
-      pushAll(vals, ss.filter((s) => !bars.includes(s)).flatMap((s) => s.values).filter(isNum));
-    }
-    if (pct && bars.length) {
-      vals = [bars.some((s) => s.values.some((v) => isNum(v) && v < 0)) ? -1 : 0, bars.some((s) => s.values.some((v) => isNum(v) && v > 0)) ? 1 : 0];
-      pushAll(vals, ss.filter((s) => !bars.includes(s)).flatMap((s) => s.values).filter(isNum));
+    let vals = ss.flatMap((s) => s._stacked ? [...s._lower, ...s._upper] : s.values).filter(isNum);
+    if (pct && ss.some((s) => s._pct)) {
+      vals.push(ss.some((s) => s._pct && s.values.some((v) => isNum(v) && v < 0)) ? -1 : 0,
+        ss.some((s) => s._pct && s.values.some((v) => isNum(v) && v > 0)) ? 1 : 0);
     }
     if (!vals.length) vals = [0, 1];
     const cfg = chart.axes?.[axis ? 'y2' : 'y'] ?? {};
@@ -614,19 +642,21 @@ export function renderChartSvg(chart, data) {
     const sc = niceScale(isNum(cfg.min) ? cfg.min : min, isNum(cfg.max) ? cfg.max : max);
     if (isNum(cfg.min)) sc.min = cfg.min;
     if (isNum(cfg.max)) sc.max = cfg.max;
+    if (!(sc.max > sc.min)) Object.assign(sc, niceScale(min, max)); // 같은 값·뒤집힌 수동 범위는 0으로 나누지 않음
     if (isNum(cfg.major) && cfg.major > 0 && (sc.max - sc.min) / cfg.major <= 200) sc.step = cfg.major;
     const ticks = [];
     for (let t = sc.min; t <= sc.max + sc.step / 2; t += sc.step) ticks.push(Number(t.toPrecision(12)));
     const srcCode = ss.map((s) => s.numFmt).find((f) => typeof f === 'string' && f !== 'General') ?? null;
-    return { ...sc, ticks, code: pct ? '0%' : cfg.numFmt ?? srcCode };
+    return { ...sc, ticks, reverse: !!cfg.reverse, code: ss.every((s) => s._pct) ? '0%' : cfg.numFmt ?? srcCode };
   };
   const scale = scaleFor(0) ?? scaleFor(1);
   const scale2 = series.some((s) => s.axis === 1) && series.some((s) => s.axis === 0) ? scaleFor(1) : null;
   const primaryAxis = scaleFor(0) ? 0 : 1;
-  const hideY = !!chart.axes?.y?.hide;
+  const hideY = !!chart.axes?.[primaryAxis ? 'y2' : 'y']?.hide;
   const hideX = !!chart.axes?.x?.hide;
-  const labelW = hideY ? 6 : Math.min(100, maxOf(scale.ticks.map((t) => axisLabel(t, scale.code).length)) * CW + 8);
-  const label2W = scale2 ? Math.min(100, maxOf(scale2.ticks.map((t) => axisLabel(t, scale2.code).length)) * CW + 8) : 0;
+  const labelW = hideY || (!horizontal && primaryAxis === 1) ? 6 : Math.min(100, maxOf(scale.ticks.map((t) => axisLabel(t, scale.code).length)) * CW + 8);
+  const rightScale = scale2 ?? (!horizontal && primaryAxis === 1 ? scale : null);
+  const label2W = rightScale && !chart.axes?.y2?.hide ? Math.min(100, maxOf(rightScale.ticks.map((t) => axisLabel(t, rightScale.code).length)) * CW + 8) : 0;
 
   // 가로축 값 범위 (분산형)
   let xScale = null;
@@ -652,14 +682,15 @@ export function renderChartSvg(chart, data) {
   if (area.w < 20 || area.h < 20) return finish();
   if (threeD) parts.push(chartWalls3D(area, depth, chart.plotFill));
   // 값 축 거꾸로 (엑셀 축 서식 '값을 거꾸로')
-  const rev = !!chart.axes?.y?.reverse;
   const posFor = (sc) => (v) => {
     const f = (v - sc.min) / (sc.max - sc.min);
-    return horizontal ? area.x + (rev ? 1 - f : f) * area.w : area.y + area.h - (rev ? 1 - f : f) * area.h;
+    return horizontal ? area.x + (sc.reverse ? 1 - f : f) * area.w : area.y + area.h - (sc.reverse ? 1 - f : f) * area.h;
   };
   const vpos = posFor(scale);
   const vpos2 = scale2 ? posFor(scale2) : vpos;
   const posOf = (s) => (s.axis === 1 && scale2 ? vpos2 : s.axis === primaryAxis || !scale2 ? vpos : vpos2);
+  const scaleOf = (s) => s.axis === 1 && scale2 ? scale2 : scale;
+  const zeroOf = (s) => { const sc = scaleOf(s); return posOf(s)(Math.max(sc.min, Math.min(0, sc.max))); };
 
   // 눈금선 + 값 축 레이블
   for (const t of scale.ticks) {
@@ -669,13 +700,13 @@ export function renderChartSvg(chart, data) {
         hideY ? '' : `<text x="${p}" y="${area.y + area.h + Math.round(FS.axis * 1.35)}" text-anchor="middle" font-size="${FS.axis}" fill="${TXT}">${escSvg(axisLabel(t, scale.code))}</text>`);
     } else {
       parts.push(chart.gridY === false ? '' : `<line x1="${area.x}" y1="${p}" x2="${area.x + area.w}" y2="${p}" stroke="${GRID}"/>`,
-        hideY ? '' : `<text x="${area.x - 5}" y="${Number(p) + FS.axis * 0.35}" text-anchor="end" font-size="${FS.axis}" fill="${TXT}">${escSvg(axisLabel(t, scale.code))}</text>`);
+        hideY || primaryAxis === 1 ? '' : `<text x="${area.x - 5}" y="${Number(p) + FS.axis * 0.35}" text-anchor="end" font-size="${FS.axis}" fill="${TXT}">${escSvg(axisLabel(t, scale.code))}</text>`);
     }
   }
-  if (scale2 && !horizontal) {
-    for (const t of scale2.ticks) {
+  if (rightScale && !horizontal && !chart.axes?.y2?.hide) {
+    for (const t of rightScale.ticks) {
       const p = vpos2(t);
-      parts.push(`<text x="${area.x + area.w + 5}" y="${(p + 3.5).toFixed(1)}" text-anchor="start" font-size="${FS.axis}" fill="${TXT}">${escSvg(axisLabel(t, scale2.code))}</text>`);
+      parts.push(`<text x="${area.x + area.w + 5}" y="${(p + 3.5).toFixed(1)}" text-anchor="start" font-size="${FS.axis}" fill="${TXT}">${escSvg(axisLabel(t, rightScale.code))}</text>`);
     }
   }
   const axisTitle = (txt, x, y, rot) => (txt ? `<text x="${x}" y="${y}" text-anchor="middle" font-size="11" fill="${TXT}"${rot ? ` transform="rotate(${rot} ${x} ${y})"` : ''}>${escSvg(txt)}</text>` : '');
@@ -696,7 +727,7 @@ export function renderChartSvg(chart, data) {
       const pts = [];
       s.values.forEach((v, i) => {
         const x = s.x ? s.x[i] : i + 1;
-        if (isNum(v) && isNum(x)) pts.push([xpos(x), vpos(v), v]);
+        if (isNum(v) && isNum(x)) pts.push([xpos(x), posOf(s)(v), v]);
       });
       if (/line|smooth/i.test(sty) && pts.length > 1) {
         const d = /smooth/i.test(sty) ? smoothPath(pts) : pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join('');
@@ -750,26 +781,21 @@ export function renderChartSvg(chart, data) {
       const barW = groupW / (k - (k - 1) * ov);
       const stepW = barW * (1 - ov);
       const vary = chart.varyColors && bars.length === 1;
-      const posAcc = new Array(n).fill(0);
-      const negAcc = new Array(n).fill(0);
-      const totals = pct ? categories.map((_, i) => bars.reduce((a, s) => a + Math.abs(isNum(s.values[i]) ? s.values[i] : 0), 0) || 1) : null;
       bars.forEach((s, bi) => {
         const vp = posOf(s);
         const bf = fillOf(s);
         const sh = shadowAttr(s);
-        const b0 = vp(Math.max(scale.min, Math.min(0, scale.max)));
+        const b0 = zeroOf(s);
         s.values.forEach((raw, i) => {
           if (!isNum(raw)) return;
-          const v = pct ? raw / totals[i] : raw;
+          const v = s._upper[i];
           const start = (horizontal ? area.y : area.x) + band * i + (band - groupW) / 2 + stepW * (stacked ? 0 : bi);
           const pf = s.pointColors?.[i] ?? (vary ? pal[i % pal.length] : bf);
           let from = b0;
           let to = vp(v);
           if (stacked) {
-            const acc = v >= 0 ? posAcc : negAcc;
-            from = vp(acc[i]);
-            to = vp(acc[i] + v);
-            acc[i] += v;
+            from = vp(s._lower[i]);
+            to = vp(s._upper[i]);
           }
           const a = Math.min(from, to);
           const len = Math.abs(to - from);
@@ -800,24 +826,20 @@ export function renderChartSvg(chart, data) {
     }
     // 영역 · 꺾은선 (막대 위에)
     // 누적 꺾은선 · 영역: 앞 계열 값 위에 쌓음 (100% 기준이면 항목 합계로 나눔)
-    const stackAcc = { area: new Array(n).fill(0), line: new Array(n).fill(0) };
-    const stackTot = (type) => categories.map((_, i) => series.filter((s) => s.type === type).reduce((a, s) => a + Math.abs(isNum(s.values[i]) ? s.values[i] : 0), 0) || 1);
-    const tots = { area: pct ? stackTot('area') : null, line: pct ? stackTot('line') : null };
     for (const type of ['area', 'line']) {
       series.filter((s) => s.type === type).forEach((s) => {
         const vp = posOf(s);
-        const lower = stacked ? [...stackAcc[type]] : null;
+        const lower = stacked ? s._lower : null;
         const pts = s.values.map((v0, i) => {
           if (!isNum(v0)) return null;
-          let v = pct ? v0 / tots[type][i] : v0;
-          if (stacked) { stackAcc[type][i] += v; v = stackAcc[type][i]; }
+          const v = s._upper[i];
           return [area.x + band * (i + 0.5), vp(v), v0, i];
         });
         const segs = [];
         let cur = [];
         for (const p of pts) { if (p) cur.push(p); else if (cur.length) { segs.push(cur); cur = []; } }
         if (cur.length) segs.push(cur);
-        const b0 = vp(Math.max(scale.min, Math.min(0, scale.max)));
+        const b0 = zeroOf(s);
         for (const seg of segs) {
           const d = s.smooth ? smoothPath(seg) : seg.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join('');
           if (type === 'area') {
@@ -909,8 +931,8 @@ export function renderChartSvg(chart, data) {
   if (horizontal) parts.push(`<line x1="${base}" y1="${area.y}" x2="${base}" y2="${area.y + area.h}" stroke="#bfbfbf"/>`);
   else parts.push(`<line x1="${area.x}" y1="${base}" x2="${area.x + area.w}" y2="${base}" stroke="#bfbfbf"/>`);
   pushAll(parts, labelsOut);
-  parts.push(axisTitle(chart.axes?.y?.title, plot.x + 6, area.y + area.h / 2, -90));
-  if (scale2) parts.push(axisTitle(chart.axes?.y2?.title, area.x + area.w + label2W - 2, area.y + area.h / 2, 90));
+  if (primaryAxis === 0 || horizontal) parts.push(axisTitle(chart.axes?.[primaryAxis ? 'y2' : 'y']?.title, plot.x + 6, area.y + area.h / 2, -90));
+  if (rightScale) parts.push(axisTitle(chart.axes?.y2?.title, area.x + area.w + label2W - 2, area.y + area.h / 2, 90));
   parts.push(axisTitle(chart.axes?.x?.title, area.x + area.w / 2, H - (legendH ? legendH + 2 : 2)));
   return finish();
 }

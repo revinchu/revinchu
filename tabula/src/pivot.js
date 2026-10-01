@@ -491,6 +491,11 @@ export function pivotFieldNames(rows, def) {
   return [...header, ...(def.calcFields ?? []).map((c) => c.name).filter((n) => !header.some((h) => h.toLowerCase() === String(n).toLowerCase()))];
 }
 
+/** 오류 대체 글자 사용 여부. 새 피벗 기본은 생성 시 설정하고 파일 옵션은 그대로 따릅니다. */
+export function pivotErrorDisplay(def) {
+  return typeof def.errorShow === 'boolean' ? def.errorShow : def.errorCaption !== null && def.errorCaption !== undefined;
+}
+
 /** 옛 정의까지 포함해 필드 이름 기반 정의로 (header: 원본 머리글) */
 export function normalizeDef(def, header) {
   const allHeader = [...header, ...(def.calcFields ?? []).map((c) => c.name).filter((n) => !header.some((h) => h.toLowerCase() === String(n).toLowerCase()))];
@@ -530,7 +535,8 @@ export function normalizeDef(def, header) {
     style: def.style ?? DEFAULT_PIVOT_STYLE,
     groups: byKey(def.groups),
     styleDef: def.styleDef ?? null,
-    errorCaption: def.errorCaption ?? null,
+    errorShow: pivotErrorDisplay(def),
+    errorCaption: pivotErrorDisplay(def) ? def.errorCaption ?? '' : null,
     showHeaders: def.showHeaders !== false, // 필드 머리글 표시 (끄면 행 · 열 필드 이름 칸이 빈칸)
     fieldCaptions: def.fieldCaptions ?? null,
     grandCaption: def.grandCaption ?? null,

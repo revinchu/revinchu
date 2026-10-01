@@ -1,6 +1,7 @@
 // 가상 스크롤 그리드: 화면에 보이는 행/열만 그림 (20,000,000행 × 16,384열 지원)
 // 틀 고정은 4개 창(TL/TR/BL/BR)으로, 각 창은 시트 좌표계 콘텐츠를 transform 으로 이동시켜 표시.
 import { Axis } from './axis.js';
+import { gridLineWidth, resolveGridBorders } from './grid-lines.js';
 import { sanitizeHtml, setSafeHtml } from './safe-html.js';
 import { colToName, MAX_ROWS, MAX_COLS } from './formula.js';
 import { formatValue, formatGeneral } from './format.js';
@@ -663,13 +664,17 @@ export class GridView {
     const visCols = [];
     for (let c = c1; c <= c2; c++) if (cols.size(c)) visCols.push(c);
 
-    // 눈금선
+    // SVG 선은 CSS border의 최소 1 CSS px 강제 반올림 없이 화면 픽셀에 맞춥니다.
+    const scale = this.z * (globalThis.devicePixelRatio || 1);
+    const gridWidth = 1 / scale;
+    p.borderSegments = [];
+    p.gridCovers = [];
     const g = [];
     if (st.showGrid) {
-      for (const c of visCols) g.push(`<i class="gv" style="left:${cols.pos(c + 1) - 1 - p.ox}px;height:${H}px"></i>`);
-      for (const r of visRows) g.push(`<i class="gh" style="top:${rows.pos(r + 1) - 1 - p.oy}px;width:${W}px"></i>`);
+      for (const c of visCols) g.push(`<rect x="${cols.pos(c + 1) - gridWidth - p.ox}" width="${gridWidth}" height="${H}"/>`);
+      for (const r of visRows) g.push(`<rect y="${rows.pos(r + 1) - gridWidth - p.oy}" width="${W}" height="${gridWidth}"/>`);
     }
-    setSafeHtml(p.grid, g.join(''));
+
 
     const merges = sheet.merges.filter((m) => m.r1 <= r2 && m.r2 >= r1 && m.c1 <= c2 && m.c2 >= c1);
     const inMerge = (r, c) => merges.some((m) => r >= m.r1 && r <= m.r2 && c >= m.c1 && c <= m.c2);
@@ -751,6 +756,23 @@ export class GridView {
         html.push(`<div class="fbtn pbtn${on ? ' on' : ''}" data-p="${pi}" data-k="${b.kind}" data-f="${esc(b.field ?? '')}" title="${on ? '필터 적용됨' : '필터'}" style="left:${cols.pos(b.c + 1) - 18 - p.ox}px;top:${rows.pos(b.r + 1) - 18 - p.oy}px"></div>`);
       }
     });
+    const lines = resolveGridBorders(p.borderSegments).map((e) => {
+      const width = gridLineWidth(e.width, this.z, globalThis.devicePixelRatio || 1, e.pattern);
+      const path = (offset, strokeWidth) => {
+        const at = e.at === 0 ? width + 1 / scale - offset : e.at - offset;
+        if (e.pattern === 'solid' || e.pattern === 'double') return `<rect x="${e.vertical ? at - strokeWidth / 2 : e.start}" y="${e.vertical ? e.start : at - strokeWidth / 2}" width="${e.vertical ? strokeWidth : e.end - e.start}" height="${e.vertical ? e.end - e.start : strokeWidth}" fill="${esc(e.color)}"/>`;
+        const d = e.vertical ? `M${at} ${e.start}V${e.end}` : `M${e.start} ${at}H${e.end}`;
+        const dash = e.pattern === 'dotted' ? ` stroke-dasharray="${strokeWidth} ${strokeWidth}"` : e.pattern === 'dashed' ? ` stroke-dasharray="${strokeWidth * 3} ${strokeWidth * 2}"` : '';
+        return `<path d="${d}" stroke="${esc(e.color)}" stroke-width="${strokeWidth}"${dash}/>`;
+      };
+      if (e.pattern !== 'double') return path(width / 2, width);
+      const stroke = Math.max(1, Math.floor(width * scale / 3)) / scale;
+      return path(stroke / 2, stroke) + path(width - stroke / 2, stroke);
+    });
+    html.push(`<svg class="cell-borders" width="${W}" height="${H}" shape-rendering="crispEdges" fill="none">${lines.join('')}</svg>`);
+    const maskId = `grid-mask-${p.id}`;
+    const mask = p.gridCovers.length ? `<defs><mask id="${maskId}" maskUnits="userSpaceOnUse" x="0" y="0" width="${W}" height="${H}"><rect width="${W}" height="${H}" fill="white"/>${p.gridCovers.join('')}</mask></defs>` : '';
+    setSafeHtml(p.grid, g.length ? `<svg width="${W}" height="${H}" shape-rendering="crispEdges" fill="none">${mask}<g fill="var(--grid-line)"${mask ? ` mask="url(#${maskId})"` : ''}>${g.join('')}</g></svg>` : '');
     setSafeHtml(p.cells, html.join(''));
     this.renderObjects(p);
   }
@@ -803,7 +825,7 @@ export class GridView {
       }
     }
     const eff = style.align === 'centerContinuous' ? 'center' : style.align && style.align !== 'general' ? style.align : align;
-    const css = [`left:${x - 1 - p.ox}px`, `top:${y - 1 - p.oy}px`, `width:${w + 1}px`, `height:${h + 1}px`];
+    const css = [`left:${x - p.ox}px`, `top:${y - p.oy}px`, `width:${w}px`, `height:${h}px`];
     if (style.bold) css.push('font-weight:700');
     if (style.italic) css.push('font-style:italic');
     if (style.underline || style.strike) css.push(`text-decoration:${style.underline ? 'underline ' : ''}${style.strike ? 'line-through' : ''}`);
@@ -827,32 +849,23 @@ export class GridView {
     else if (style.gradient) css.push(`background:${gradientCss(style.gradient)}`);
     else if (style.pattern) css.push(`background:${patternCss(style.pattern, style.patternColor ?? '#000000', bg)}`);
     else if (bg) css.push(`background-color:${bg}`);
-    // 채우기는 칸 둘레의 눈금선까지 덮음 (엑셀: 채운 칸끼리는 사이 선이 없음) — 대신 덮이는 이웃 칸의 테두리는 이 칸이 다시 그림
+    // 채우기는 네 면의 눈금선을 마스크로 지웁니다. 명시적 셀 테두리는 별도 층에 남습니다.
     const covers = !bar && !!(bg || style.pattern || style.gradient);
-    if (covers) css.push('background-clip:border-box');
-    // 테두리: 색 · 선 종류(가는 선 · 중간 · 굵게 · 점선 · 이중선)까지 엑셀처럼
-    // 이웃 칸과 겹치는 선은 한 번만 (엑셀처럼): 위 칸의 아래쪽 · 왼쪽 칸의 오른쪽 선이 같거나 더 굵으면 이 칸의 위 · 왼쪽 선은 생략
-    const weight = (k) => (BORDER_CSS[k ?? 'thin'] ?? BORDER_CSS.thin)[0];
-    const shared = (side) => {
-      const nr = side === 'top' ? r - 1 : r;
-      const nc = side === 'top' ? c : c - 1;
-      if (nr < 0 || nc < 0 || (merge && (side === 'top' ? merge.r1 : merge.c1) !== (side === 'top' ? r : c))) return false;
-      const ns = wb.styleAt(si, nr, nc);
-      const k = side === 'top' ? 'bb' : 'br';
-      return !!ns?.[k] && weight(ns[`${k}s`]) >= weight(style[side === 'top' ? 'bts' : 'bls']);
-    };
-    const ownTop = style.bt && !shared('top');
-    const ownLeft = style.bl && !shared('left');
-    if (ownTop) css.push(borderCss('top', style.bts, style.btc));
-    if (style.bb) css.push(borderCss('bottom', style.bbs, style.bbc));
-    if (ownLeft) css.push(borderCss('left', style.bls, style.blc));
-    // 채운 칸은 자기 오른쪽 · 아래 눈금선까지 덮음. 위 · 왼쪽 선(이웃 칸의 선)은 덮지 않도록 한 칸 안쪽에서 시작
-    // (이웃의 테두리를 다시 그리면 확대 · 축소 때 두 선이 다른 픽셀에 찍혀 두꺼워짐)
     if (covers) {
-      if (!ownTop) { css[1] = `top:${y - p.oy}px`; css[3] = `height:${h}px`; css.push('border-top-width:0'); }
-      if (!ownLeft) { css[0] = `left:${x - p.ox}px`; css[2] = `width:${w}px`; css.push('border-left-width:0'); }
+      css.push('background-clip:border-box');
+      const inset = 2 / (this.z * (globalThis.devicePixelRatio || 1));
+      p.gridCovers.push(`<rect x="${x - p.ox - inset}" y="${y - p.oy - inset}" width="${w + inset}" height="${h + inset}" fill="black"/>`);
     }
-    if (style.br) css.push(borderCss('right', style.brs, style.brc));
+    // 셀 배경과 독립된 선 층: 맞닿은 두 셀·병합 셀의 경계는 굵기 우선으로 한 번만 그립니다.
+    const edge = (key, vertical, at, start, end) => {
+      if (!style[key]) return;
+      const [width, pattern] = BORDER_CSS[style[`${key}s`] ?? 'thin'] ?? BORDER_CSS.thin;
+      p.borderSegments.push({ vertical, at, start, end, width, pattern, color: style[`${key}c`] ?? '#000' });
+    };
+    edge('bt', false, y - p.oy, x - p.ox, x + w - p.ox);
+    edge('bb', false, y + h - p.oy, x - p.ox, x + w - p.ox);
+    edge('bl', true, x - p.ox, y - p.oy, y + h - p.oy);
+    edge('br', true, x + w - p.ox, y - p.oy, y + h - p.oy);
     const cls = [];
     // 숫자는 자동 줄 바꿈이어도 한 줄 (엑셀: 들어가지 않으면 ###)
     const wrap = style.wrap && typeof v !== 'number';

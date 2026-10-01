@@ -35,6 +35,8 @@ export const ICONS = {
   comma: `<span class="glyph glyph-comma">9<sub>,</sub>000</span>`,
   incDecimal: `<span class="glyph glyph-dec"><small>←</small>.0<br>.00</span>`,
   decDecimal: `<span class="glyph glyph-dec"><small>→</small>.00<br>.0</span>`,
+  condColorScale: svg(`<rect x="3" y="3" width="14" height="4" fill="#63be7b" stroke="none"/><rect x="3" y="8" width="14" height="4" fill="#ffeb84" stroke="none"/><rect x="3" y="13" width="14" height="4" fill="#f8696b" stroke="none"/>`, 28),
+  condDataBar: svg(`<rect x="3" y="3" width="14" height="4" fill="#638ec6" stroke="none"/><rect x="3" y="8" width="9" height="4" fill="#638ec6" stroke="none"/><rect x="3" y="13" width="5" height="4" fill="#638ec6" stroke="none"/>`, 28),
   condFormat: svg(`<rect x="3" y="3" width="14" height="14" rx=".5"/><path d="M3 7.7h14M3 12.3h14M7.7 3v14"/><rect x="8.3" y="8.3" width="8.2" height="3.4" fill="#e06666" stroke="none"/><rect x="8.3" y="12.9" width="5" height="3.5" fill="${BLUE}" stroke="none"/>`, 28),
   table: svg(`<rect x="3" y="3" width="14" height="14" rx=".5"/><rect x="3" y="3" width="14" height="3.6" fill="${BLUE}" stroke="${BLUE}"/><path d="M3 10.3h14M3 13.7h14M7.7 6.6V17M12.3 6.6V17"/>`, 28),
   cellStyles: svg(`<rect x="2.5" y="4" width="7" height="5" fill="#c6efce" stroke="#6aa84f"/><rect x="10.5" y="4" width="7" height="5" fill="#ffc7ce" stroke="#e06666"/><rect x="2.5" y="11" width="7" height="5" fill="#ffeb9c" stroke="#d4a000"/><rect x="10.5" y="11" width="7" height="5"/>`, 28),

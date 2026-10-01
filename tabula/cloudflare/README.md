@@ -2,6 +2,8 @@
 
 앱 브라우저 코드는 기존 빌드를 사용하고, 이 폴더는 Wrangler가 별도 번들링합니다. Worker/DO 프로덕션 npm 의존성은 0개입니다. API·보관함 키·공유·용량·보안 한계는 [API_CONTRACT.md](API_CONTRACT.md)에 있습니다.
 
+현재 공개 서비스 주소: [WIXEL 3](https://wixel-3.wizx.workers.dev). 주소 변경 후 HTTPS 접속 확인, 최초 배포 이력 및 운영 검증은 [12_공개배포와운영검증.md](../docs/codex/12_공개배포와운영검증.md)에 기록합니다.
+
 ## 환경
 
 검증 환경은 Node 24.19.0, 외부 도구 폴더의 Wrangler 4.145.0입니다. Node 단위 테스트는 node:sqlite가 있는 Node 22.13 이상을 사용합니다. 작업 파일은 D:에 둡니다. 애플리케이션 package.json에 Wrangler를 추가하지 않습니다.
@@ -11,6 +13,7 @@ PowerShell (저장소의 tabula 폴더):
 $env:TEMP = 'D:\Codex\Temp'
 $env:TMP = 'D:\Codex\Temp'
 $env:npm_config_cache = 'D:\Codex\Caches\npm'
+$env:XDG_CONFIG_HOME = 'D:\Codex\Config'
 $env:WRANGLER_SEND_METRICS = 'false'
 $wrangler = 'D:\Codex\Temp\wixel3-tools\node_modules\wrangler\bin\wrangler.js'
 
@@ -52,7 +55,7 @@ Cloudflare 정적 자산은 API Worker를 거치지 않을 수 있으므로 앱 
 
 ## 배포 인증의 최소 범위
 
-아래는 2026-10-01의 공식 문서와 Wrangler 4.145.0 CLI 설명에 근거한 좁은 OAuth 범위입니다. 실제 계정의 이메일 인증·OAuth 로그인·배포가 완료됐다는 뜻은 아닙니다.
+2026-10-01에 계정 이메일 인증을 확인한 뒤 아래 OAuth 범위로 로그인·최초 배포에 성공했습니다. Wrangler 4.145.0의 whoami와 배포 결과로 확인한 범위이며, 더 넓은 KV·D1·R2·zone 권한을 추가하지 않았습니다. 실제 배포 버전은 12 문서에 있습니다.
 
 - 배포 기능 scope: workers_scripts:write. CLI가 설명하는 대상은 Worker scripts, Durable Objects, workers.dev 하위 도메인, triggers입니다.
 - 계정 검색·선택과 whoami 확인: account:read, user:read. 이 둘은 계정 정보를 확인하기 위한 읽기 권한이며 배포 쓰기 권한은 아닙니다.
@@ -61,16 +64,23 @@ Cloudflare 정적 자산은 API Worker를 거치지 않을 수 있으므로 앱 
 
 PowerShell에서 실행할 정확한 명령(저장소 tabula 기준):
 ~~~powershell
+$env:XDG_CONFIG_HOME = 'D:\Codex\Config'
 $wrangler = 'D:\Codex\Temp\wixel3-tools\node_modules\wrangler\bin\wrangler.js'
-node $wrangler login --scopes-list
-node $wrangler login --scopes account:read user:read workers_scripts:write --use-keyring
 node $wrangler whoami
 node build.mjs --cloud
 node $wrangler deploy --dry-run --outdir ..\.local\worker-build --config cloudflare/wrangler.jsonc
 node $wrangler deploy --config cloudflare/wrangler.jsonc
 ~~~
 
-첫 login은 브라우저 동의 절차가 있습니다. --use-keyring은 OS 자격 증명 저장소를 사용하며 애플리케이션 관리 경로를 임의로 옮기지 않습니다. 여러 계정이 있으면 배포 대상 계정을 확인해 CLOUDFLARE_ACCOUNT_ID에 선택한 실제 계정 ID를 지정합니다. 토큰은 채팅/소스/문서에 붙여 넣지 않습니다.
+최초 인증 또는 필요한 재인증에만 다음 명령을 사용합니다. 위 XDG_CONFIG_HOME 설정을 유지합니다.
+
+~~~powershell
+node $wrangler login --scopes-list
+node $wrangler login --scopes account:read user:read workers_scripts:write --use-keyring
+node $wrangler whoami
+~~~
+
+이미 이 환경에서 인증을 완료했다면 login을 반복하지 말고 whoami로 확인합니다. 재인증이 필요한 경우에만 login의 브라우저 동의 절차를 진행합니다. XDG_CONFIG_HOME은 로그인·whoami·개발·배포 명령 모두 D:\Codex\Config로 유지합니다. 이 위치 아래 Wrangler가 관리하는 암호화 default.enc와 OS 키체인 사용을 확인했습니다. 암호화 파일·키체인 항목·복호화 키를 복사하거나 Git/전달 ZIP에 포함하지 않습니다. 여러 계정이 있으면 배포 대상 계정을 확인해 CLOUDFLARE_ACCOUNT_ID에 선택한 실제 계정 ID를 지정합니다. 토큰은 채팅/소스/문서에 붙여 넣지 않습니다.
 
 OAuth scope와 계정 회원 역할은 구분해야 합니다. 최신 공식 권한 모델에서 **새 Worker 생성에는 Workers 제품 범위 Admin**, 이미 존재하는 Worker의 재배포에는 해당 Worker의 Editor가 필요합니다. DO는 구현 Worker의 권한을 따르며 별도 DO 역할을 추가하지 않습니다. 현재 배포가 요청하지 않는 사용자 지정 도메인/zone route를 나중에 추가할 때만 해당 zone의 Workers Routes Write 권한을 별도로 검토합니다. 이 권한들은 계정의 기존 역할과 결합되므로 실제 배포가 403이면 실패한 엔드포인트와 계정 역할을 확인하고 필요한 범위만 조정합니다.
 
