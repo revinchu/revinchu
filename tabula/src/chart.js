@@ -2,7 +2,8 @@
 // 차트 모델: { type, title, range, sheet, x, y, w, h, z,
 //   series?: [{ name: { ref | text }, cat: ref, val: ref, x: ref }]   파일에서 가져온 계열 참조 (ref = { sheet, r1, c1, r2, c2 })
 //   pivot?: { sheet, name }                                           피벗 차트 (피벗 결과를 따라감)
-//   seriesFmt?: [{ type, axis, color, labels, marker, smooth, numFmt }] 계열별 서식 (순서대로)
+//   seriesFmt?: [{ type, axis, color, labels, marker, smooth, numFmt, explode, pointExplosion, pointColors }] 계열별 서식 (원본 순서)
+//   titleLayout?, legendLayout?: { x, y, w?, h? } 차트 크기에 대한 좌상단/크기 비율 (edge)
 //   labels, legend: 'b'|'t'|'r'|'l'|'none', grouping: 'clustered'|'stacked'|'percentStacked',
 //   axes?: { y: { title, numFmt, min, max }, y2: {…}, x: { title } } }
 import { formatGeneral, formatValue, formatCode, isDateCode } from './format.js';
@@ -291,18 +292,27 @@ export function filterChart(base, ch) {
   const hc = ch.hiddenCats?.length ? new Set(ch.hiddenCats) : null;
   if (!hs && !hc) return base;
   const pal = paletteOf(ch);
-  let series = base.series.map((s, i) => ({ ...s, color: s.color ?? pal[i % pal.length] }));
-  if (hs) series = series.filter((_, i) => !hs.has(i));
+  let series = base.series.map((s, i) => ({ ...s, _fi: s._fi ?? i, color: s.color ?? pal[(s._fi ?? i) % pal.length] }));
+  if (hs) series = series.filter((s) => !hs.has(s._fi));
   const out = { ...base, series };
   if (hc) {
     const keep = (base.categories ?? []).map((_, i) => !hc.has(i));
     const pick = (arr) => (Array.isArray(arr) ? arr.filter((_, i) => keep[i] ?? true) : arr);
     out.categories = pick(base.categories);
-    out.series = series.map((s) => ({ ...s, values: pick(s.values), x: pick(s.x), ...(s.size ? { size: pick(s.size) } : {}) }));
+    out.series = series.map((s) => ({ ...s, _pi: pick(s._pi ?? s.values.map((_, i) => i)), values: pick(s.values), x: pick(s.x), ...(s.size ? { size: pick(s.size) } : {}) }));
     delete out.catLevels;
   }
   return out;
 }
+
+// 데이터 필터로 줄어든 화면 번호와 원본 계열/요소 서식 번호를 구분합니다.
+export function chartPointIndex(series, index) { return series?._pi?.[index] ?? index; }
+const pointColor = (s, i) => s?.pointColors?.[chartPointIndex(s, i)] ?? s?.colors?.[chartPointIndex(s, i)];
+export function chartPointExplosion(chart, series, index) {
+  const amount = series?.pointExplosion?.[chartPointIndex(series, index)] ?? series?.explode ?? chart.explode ?? 0;
+  return Number.isFinite(amount) ? Math.max(0, Math.min(400, amount)) : 0;
+}
+const manualChartLayout = (layout) => Number.isFinite(layout?.x) && Number.isFinite(layout?.y) ? layout : null;
 
 /** 차트 모델 → 그릴 데이터 (범위 · 계열 참조 · 피벗 차트). hostSi: 차트가 있는 시트 */
 export function chartModelData(wb, hostSi, ch) {
@@ -475,12 +485,16 @@ export function renderChartSvg(chart, data) {
   const pal = paletteOf(chart);
   const TXT = chart.textColor ?? '#595959';
   const GRID = chart.gridColor ?? '#d9d9d9';
+  const overlays = [];
   const parts = [`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" ${FONT}>`, '',
     `<rect x="0.5" y="0.5" width="${W - 1}" height="${H - 1}" rx="${chart.rounded ? 8 : 0}" fill="${chart.fill ?? '#fff'}"${chart.border ? ` stroke="${chart.border}"` : ''}/>`];
   let top = 10;
   if (chart.title) {
-    parts.push(`<text data-el="title" x="${W / 2}" y="${Math.round(FS.title + 10)}" text-anchor="middle" font-size="${FS.title}"${chart.titleBold ? ' font-weight="700"' : ''} fill="${chart.titleColor ?? TXT}">${escSvg(truncate(chart.title, Math.floor(W / (FS.title * 0.62))))}</text>`);
-    if (!chart.titleOverlay) top = Math.round(FS.title * 1.5 + 16); // 가운데에 맞춰 표시(overlay): 그림 영역을 줄이지 않음
+    const manual = manualChartLayout(chart.titleLayout);
+    const tw = manual && Number.isFinite(manual.w) && manual.w > 0 ? manual.w * W : Math.min(W, Math.max(FS.title, [...String(chart.title)].length * FS.title * .9));
+    const title = `<text x="${manual ? 0 : W / 2}" y="${manual ? 0 : Math.round(FS.title + 10)}"${manual ? ' dominant-baseline="text-before-edge"' : ' text-anchor="middle"'} font-size="${FS.title}"${chart.titleBold ? ' font-weight="700"' : ''} fill="${chart.titleColor ?? TXT}">${escSvg(truncate(chart.title, Math.floor((manual ? tw : W) / (FS.title * 0.62))))}</text>`;
+    overlays.push(`<g data-el="title"${manual ? ` transform="translate(${manual.x * W},${manual.y * H})"` : ''}>${manual ? `<rect x="0" y="0" width="${tw}" height="${Math.max(FS.title * 1.4, Number.isFinite(manual.h) ? manual.h * H : 0)}" fill="transparent"/>` : ''}${title}</g>`);
+    if (!chart.titleOverlay && !manual) top = Math.round(FS.title * 1.5 + 16); // 수동 위치는 그림 영역 안쪽으로도 이동할 수 있음
   }
   // 계열 채우기: 단색 또는 그라데이션 (url), 그림자 필터
   const fillOf = (s) => {
@@ -498,7 +512,7 @@ export function renderChartSvg(chart, data) {
     if (!shadowId) { shadowId = `${uid}s`; defs.push(`<filter id="${shadowId}" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="1.5" stdDeviation="2" flood-color="#000" flood-opacity="0.45"/></filter>`); }
     return ` filter="url(#${shadowId})"`;
   };
-  const finish = () => { if (defs.length) parts[1] = `<defs>${defs.join('')}</defs>`; parts.push('</svg>'); return parts.join(''); };
+  const finish = () => { if (defs.length) parts[1] = `<defs>${defs.join('')}</defs>`; pushAll(parts, overlays); parts.push('</svg>'); return parts.join(''); };
   const { categories } = data;
   const baseType = chart.type === 'combo' ? 'column' : chart.type;
   // 다단계 항목 축 (세로 막대 · 꺾은선 · 콤보): 안쪽 이름 아래에 바깥 묶음 이름 줄
@@ -506,23 +520,25 @@ export function renderChartSvg(chart, data) {
   const LEVEL_H = Math.round(FS.axis * 1.6);
   const series = chartStackValues(data.series.map((s, i) => ({ ...s, type: s.type ?? baseType, axis: s.axis ?? 0, color: s.color ?? pal[i % pal.length], _fi: s._fi ?? i })), chart.grouping, categories.length);
   // 요소 고르기용 표시 (엑셀처럼 한 번 누르면 계열, 한 번 더 누르면 요소) — data-s = 계열 서식 번호, data-p = 항목 번호
-  const tag = (s, p) => ` data-s="${s._fi}"${p === undefined ? '' : ` data-p="${p}"`}`;
+  const tag = (s, p) => ` data-s="${s._fi}"${p === undefined ? '' : ` data-p="${chartPointIndex(s, p)}"`}`;
   const tagMk = (html, s, p) => html.replace(/^<(\w+)/, `<$1${tag(s, p)}`);
   const pieLike = baseType === 'pie' || baseType === 'doughnut';
+  const pieColor = (s, i) => pointColor(s, i) ?? chart.seriesFmt?.[s?._fi ?? 0]?.color ?? pal[chartPointIndex(s, i) % pal.length];
   const special = SPECIAL[baseType] ?? ADVANCED_CHARTS[baseType] ?? MAP_CHARTS[baseType];
   const legendPos = chart.legend ?? (special?.legend === false ? 'none' : 'b');
   const legendItems = special?.legendItems ? special.legendItems(data, chart, pal) : baseType === 'treemap' && data.catLevels?.length ? Array.from(new Set(data.catLevels.at(-1).map((g) => g.text))).map((name, i) => ({ name, color: pal[i % pal.length], line: false }))
-    : pieLike || baseType === 'treemap' || baseType === 'pieOfPie' || baseType === 'barOfPie' ? categories.map((c, i) => ({ name: c, color: series[0]?.pointColors?.[i] ?? series[0]?.colors?.[i] ?? pal[i % pal.length], line: false }))
+    : pieLike || baseType === 'treemap' || baseType === 'pieOfPie' || baseType === 'barOfPie' ? categories.map((c, i) => ({ name: c, color: pieColor(series[0], i), line: false }))
     : baseType === 'waterfall' ? [{ name: '증가', color: chart.upColor ?? pal[0] }, { name: '감소', color: chart.downColor ?? pal[1] }, { name: '합계', color: chart.totalColor ?? pal[2] }]
       : baseType === 'pareto' ? [{ name: series[0]?.name ?? '', color: series[0]?.color }, { name: '누적 %', color: pal[1], line: true }]
         : series.map((s) => ({ name: s.name, color: s.color, line: s.type === 'line' || s.type === 'radar' }));
   const showLegend = legendPos !== 'none' && legendItems.length > 0;
+  const legendLayout = showLegend ? manualChartLayout(chart.legendLayout) : null;
   const sideLegend = showLegend && (legendPos === 'r' || legendPos === 'l');
   const legendW = sideLegend ? Math.min(180, Math.max(60, maxOf(legendItems.map((it) => [...String(it.name)].length * LW * 1.4 + 22)))) : 0;
   const legendH = showLegend && !sideLegend ? Math.round(FS.legend * 2.2) : 0;
   const plot = {
-    x: 10 + (legendPos === 'l' ? legendW : 0), y: top + (legendPos === 't' ? legendH : 0),
-    w: W - 20 - legendW, h: H - top - 10 - legendH,
+    x: 10 + (!legendLayout && legendPos === 'l' ? legendW : 0), y: top + (!legendLayout && legendPos === 't' ? legendH : 0),
+    w: W - 20 - (legendLayout ? 0 : legendW), h: H - top - 10 - (legendLayout ? 0 : legendH),
   };
   // 데이터 표 (엑셀 [차트 요소 → 데이터 표]): 그림 영역 아래에 항목 × 계열 값 표 (범례 표지 포함)
   const DT_ROW = Math.round(FS.axis * 1.7);
@@ -534,11 +550,12 @@ export function renderChartSvg(chart, data) {
   if (specialTable) plot.h -= specialTableH + 6;
 
   if (!series.length || series.every((s) => s.values.every((v) => v === null))) {
-    parts.push(`<text x="${W / 2}" y="${H / 2}" text-anchor="middle" font-size="12" fill="#999">표시할 숫자 데이터가 없습니다</text></svg>`);
-    return parts.join('');
+    parts.push(`<text x="${W / 2}" y="${H / 2}" text-anchor="middle" font-size="12" fill="#999">표시할 숫자 데이터가 없습니다</text>`);
+    return finish();
   }
 
   if (showLegend) {
+    const legendStart = parts.length;
     const items = legendItems.slice(0, 16);
     // 범례 글자: 범례 색(legendColor) → 차트 글자 색. 배경과 거의 같은 색이면(흰 바탕에 흰 글자) 보이도록 회색
     const LTX = readable(chart.legendColor ?? TXT, chart.fill ?? '#ffffff');
@@ -550,8 +567,19 @@ export function renderChartSvg(chart, data) {
       const full = String(name), shown = truncate(full, maxChars);
       return `${shown !== full ? `<title>${escSvg(full)}</title>` : ''}${escSvg(shown)}`;
     };
-    parts.push('<g data-el="legend">');
-    if (sideLegend) {
+    parts.push(`<g data-el="legend"${legendLayout ? ` transform="translate(${legendLayout.x * W},${legendLayout.y * H})"` : ''}>`);
+    if (legendLayout) {
+      const rowH = Math.round(FS.legend * 1.6);
+      const boxW = Number.isFinite(legendLayout.w) && legendLayout.w > 0 ? Math.max(24, legendLayout.w * W) : sideLegend ? legendW : Math.min(W - 20, 160 * items.length);
+      const columns = sideLegend ? 1 : Math.max(1, Math.min(items.length, Math.floor(boxW / 80)));
+      const itemW = boxW / columns;
+      const boxH = Math.max(rowH * Math.ceil(items.length / columns), Number.isFinite(legendLayout.h) && legendLayout.h > 0 ? legendLayout.h * H : 0);
+      parts.push(`<rect x="0" y="0" width="${boxW}" height="${boxH}" fill="transparent"/>`);
+      items.forEach((it, i) => {
+        const x = (i % columns) * itemW, y = Math.floor(i / columns) * rowH;
+        parts.push(key(it, x + 2, y + 11), `<text x="${x + 17}" y="${y}" dominant-baseline="text-before-edge" font-size="${FS.legend}" fill="${LTX}"${chart.legendBold ? ' font-weight="700"' : ''}>${legendText(it.name, Math.max(1, Math.floor((itemW - 20) / (LW * 1.4))))}</text>`);
+      });
+    } else if (sideLegend) {
       const lx0 = legendPos === 'r' ? W - legendW - 4 : 8;
       let ly = Math.max(top + 12, H / 2 - (items.length * Math.round(FS.legend * 1.6)) / 2);
       items.forEach((it) => {
@@ -569,10 +597,11 @@ export function renderChartSvg(chart, data) {
       });
     }
     parts.push('</g>');
+    pushAll(overlays, parts.splice(legendStart));
   }
 
   const wantLabels = (s) => s.labels ?? chart.labels ?? false;
-  if (chart.plotFill) parts.push(`<rect x="${plot.x}" y="${plot.y}" width="${plot.w}" height="${plot.h}" fill="${chart.plotFill}"/>`);
+  parts.push(`<rect data-el="plot" x="${plot.x}" y="${plot.y}" width="${plot.w}" height="${plot.h}" fill="${chart.plotFill ?? 'transparent'}"/>`);
   if (special) {
     const ctx = { chart, data, series, categories, plot, parts, FS, TXT, GRID, pal, defs, uid, wantLabels, W, H };
     ctx.cartesian = (values, options) => cartesian(ctx, values, options);
@@ -583,16 +612,17 @@ export function renderChartSvg(chart, data) {
 
   if (pieLike) {
     const rings = baseType === 'doughnut' ? series : [series[0]];
+    let maxExplosion = 0;
+    for (const s of rings) for (let i = 0; i < s.values.length; i++) if (s.values[i] > 0) maxExplosion = Math.max(maxExplosion, chartPointExplosion(chart, s, i) / 100);
     for (const [ringIndex, s0] of rings.entries()) {
     const vals = s0.values.map((v) => (v && v > 0 ? v : 0));
     const sum = vals.reduce((a, b) => a + b, 0);
     const cx = plot.x + plot.w / 2;
     let cy = plot.y + plot.h / 2;
-    const ex = chart.explode ? Math.min(0.3, chart.explode / 100) : 0;
     // 항목 이름 레이블(엑셀의 원형 바깥 레이블)이 있으면 원을 줄여 둘레에 글자 자리를 둠
     const outside = ringIndex === rings.length - 1 && (s0.catName || s0.labelPos === 'out');
     const outerLabels = rings.at(-1).catName || rings.at(-1).labelPos === 'out';
-    const radius = Math.max(10, (Math.min(plot.w, plot.h) / 2 - 6) / (1 + ex) * (outerLabels ? 0.72 : 1));
+    const radius = Math.max(2, (Math.min(plot.w, plot.h) / 2 - 6) / (1 + maxExplosion) * (outerLabels ? 0.72 : 1));
     const hole = baseType === 'doughnut' ? radius * Math.max(0.1, Math.min(0.9, (chart.hole ?? 50) / 100)) : 0;
     const ringWidth = (radius - hole) / rings.length;
     const r = baseType === 'doughnut' ? hole + ringWidth * (ringIndex + 1) : radius;
@@ -600,6 +630,7 @@ export function renderChartSvg(chart, data) {
     const threePie = chart.threeD && baseType === 'pie';
     const projection = threePie ? pieProjection3D(chart, r) : { squash: 1, depth: 0, rotation: 0 };
     cy -= projection.depth / 2;
+    const pieTag = (i, angle) => `${tag(s0, i)} data-pie-cx="${cx}" data-pie-cy="${cy}" data-pie-r="${r}" data-pie-angle="${angle}" data-pie-squash="${projection.squash}"`;
     let a = -Math.PI / 2 + ((chart.firstAngle ?? 0) * Math.PI) / 180 + projection.rotation;
     if (threePie && sum) {
       let angle = a;
@@ -607,7 +638,8 @@ export function renderChartSvg(chart, data) {
       vals.forEach((v, i) => {
         if (!v) return;
         const end = angle + v / sum * Math.PI * 2, mid = (angle + end) / 2;
-        slices.push({ a: angle, b: end, ox: Math.cos(mid) * r * ex, oy: Math.sin(mid) * r * ex * projection.squash, color: s0.pointColors?.[i] ?? s0.colors?.[i] ?? pal[i % pal.length], attrs: tag(s0, i) });
+        const ex = chartPointExplosion(chart, s0, i) / 100;
+        slices.push({ a: angle, b: end, ox: Math.cos(mid) * r * ex, oy: Math.sin(mid) * r * ex * projection.squash, color: pieColor(s0, i), attrs: pieTag(i, mid) });
         angle = end;
       });
       parts.push(pieSolid3D(slices, cx, cy, r, projection));
@@ -616,21 +648,22 @@ export function renderChartSvg(chart, data) {
       if (!v) return;
       const frac = v / sum;
       const a2 = a + frac * Math.PI * 2;
-      const color = s0.pointColors?.[i] ?? s0.colors?.[i] ?? pal[i % pal.length];
+      const color = pieColor(s0, i);
       const mid0 = (a + a2) / 2;
+      const ex = chartPointExplosion(chart, s0, i) / 100;
       const ox = ex ? Math.cos(mid0) * r * ex : 0;
       const oy = ex ? Math.sin(mid0) * r * ex * projection.squash : 0;
       if (!threePie && ex) parts.push(`<g transform="translate(${ox.toFixed(2)},${oy.toFixed(2)})">`);
       if (!threePie && frac >= 0.9999) {
-        if (inner) parts.push(`<path d="M${cx + r},${cy}A${r},${r} 0 1 1 ${cx - r},${cy}A${r},${r} 0 1 1 ${cx + r},${cy}ZM${cx + inner},${cy}A${inner},${inner} 0 1 1 ${cx - inner},${cy}A${inner},${inner} 0 1 1 ${cx + inner},${cy}Z" fill="${color}" fill-rule="evenodd" stroke="${chart.fill ?? '#fff'}"${tag(s0, i)}/>`);
-        else parts.push(`<circle cx="${cx}" cy="${cy}" r="${r}" fill="${color}" stroke="#fff"${tag(s0, i)}/>`);
+        if (inner) parts.push(`<path d="M${cx + r},${cy}A${r},${r} 0 1 1 ${cx - r},${cy}A${r},${r} 0 1 1 ${cx + r},${cy}ZM${cx + inner},${cy}A${inner},${inner} 0 1 1 ${cx - inner},${cy}A${inner},${inner} 0 1 1 ${cx + inner},${cy}Z" fill="${color}" fill-rule="evenodd" stroke="${chart.fill ?? '#fff'}"${pieTag(i, mid0)}/>`);
+        else parts.push(`<circle cx="${cx}" cy="${cy}" r="${r}" fill="${color}" stroke="#fff"${pieTag(i, mid0)}/>`);
       } else if (!threePie) {
         const large = a2 - a > Math.PI ? 1 : 0;
         const p = (ang, rad) => `${(cx + Math.cos(ang) * rad).toFixed(2)},${(cy + Math.sin(ang) * rad).toFixed(2)}`;
         const d = inner
           ? `M${p(a, r)}A${r},${r} 0 ${large} 1 ${p(a2, r)}L${p(a2, inner)}A${inner},${inner} 0 ${large} 0 ${p(a, inner)}Z`
           : `M${cx},${cy}L${p(a, r)}A${r},${r} 0 ${large} 1 ${p(a2, r)}Z`;
-        parts.push(`<path d="${d}" fill="${color}" stroke="${chart.fill ?? '#fff'}" stroke-width="1.5"${tag(s0, i)}/>`);
+        parts.push(`<path d="${d}" fill="${color}" stroke="${chart.fill ?? '#fff'}" stroke-width="1.5"${pieTag(i, mid0)}/>`);
       }
       if (!threePie && ex) parts.push('</g>');
       // 레이블: false = 없음(파일에 없던 원형), pct = 백분율, labels = 값, 정하지 않음 = 백분율
@@ -646,12 +679,12 @@ export function renderChartSvg(chart, data) {
         const tc = s0.labelColor ?? color;
         const name = s0.catName ? String(categories[i] ?? '') : '';
         const lines = [name, second].filter(Boolean);
-        lines.forEach((t, k) => parts.push(`<text x="${lx.toFixed(1)}" y="${(ly + 4 + (k - (lines.length - 1) / 2) * (fsz + 2)).toFixed(1)}" text-anchor="${anchor}" font-size="${fsz}" fill="${tc}" font-weight="${k === lines.length - 1 && second ? 700 : 400}">${escSvg(t)}</text>`));
+        lines.forEach((t, k) => parts.push(`<text data-el="label"${tag(s0, i)} x="${lx.toFixed(1)}" y="${(ly + 4 + (k - (lines.length - 1) / 2) * (fsz + 2)).toFixed(1)}" text-anchor="${anchor}" font-size="${fsz}" fill="${tc}" font-weight="${k === lines.length - 1 && second ? 700 : 400}">${escSvg(t)}</text>`));
       } else if (frac >= 0.04 && s0.labels !== false) {
         const mid = (a + a2) / 2;
         const lr = inner ? (r + inner) / 2 : r * 0.65;
         const txt = !s0.pct && wantLabels(s0) ? valueLabel(v, s0.numFmt, chart.date1904) : `${Math.round(frac * 100)}%`;
-        parts.push(`<text x="${(cx + ox + Math.cos(mid) * lr).toFixed(1)}" y="${(cy + oy + Math.sin(mid) * lr * projection.squash + 4).toFixed(1)}" text-anchor="middle" font-size="11" fill="#fff" font-weight="700">${escSvg(txt)}</text>`);
+        parts.push(`<text data-el="label"${tag(s0, i)} x="${(cx + ox + Math.cos(mid) * lr).toFixed(1)}" y="${(cy + oy + Math.sin(mid) * lr * projection.squash + 4).toFixed(1)}" text-anchor="middle" font-size="11" fill="#fff" font-weight="700">${escSvg(txt)}</text>`);
       }
       a = a2;
     });
@@ -757,8 +790,8 @@ export function renderChartSvg(chart, data) {
 
   const base = vpos(Math.max(scale.min, Math.min(0, scale.max)));
   const labelsOut = [];
-  const pushLabel = (x, y, v, s, anchor = 'middle') => {
-    labelsOut.push(`<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="${anchor}" font-size="${pt(s.labelSize ?? 9)}"${s.labelBold ? ' font-weight="700"' : ''} fill="${s.labelColor ?? '#404040'}" paint-order="stroke" stroke="#fff" stroke-width="2.5">${escSvg(valueLabel(v, s.numFmt, chart.date1904))}</text>`);
+  const pushLabel = (x, y, v, s, anchor = 'middle', index) => {
+    labelsOut.push(`<text data-el="label"${tag(s, index)} x="${x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="${anchor}" font-size="${pt(s.labelSize ?? 9)}"${s.labelBold ? ' font-weight="700"' : ''} fill="${s.labelColor ?? '#404040'}" paint-order="stroke" stroke="#fff" stroke-width="2.5">${escSvg(valueLabel(v, s.numFmt, chart.date1904))}</text>`);
   };
 
   if (baseType === 'scatter') {
@@ -771,14 +804,14 @@ export function renderChartSvg(chart, data) {
       const pts = [];
       s.values.forEach((v, i) => {
         const x = s.x ? s.x[i] : i + 1;
-        if (isNum(v) && isNum(x)) pts.push([xpos(x), posOf(s)(v), v]);
+        if (isNum(v) && isNum(x)) pts.push([xpos(x), posOf(s)(v), v, i]);
       });
       if (/line|smooth/i.test(sty) && pts.length > 1) {
         const d = /smooth/i.test(sty) ? smoothPath(pts) : pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join('');
-        parts.push(`<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.lineWidth ?? 2}" stroke-linejoin="round"/>`);
+        parts.push(`<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.lineWidth ?? 2}" stroke-linejoin="round"${tag(s)}/>`);
       }
-      if (sty === 'marker' || /Marker$/.test(sty)) for (const p of pts) parts.push((MARKERS[s.marker] ?? MARKERS.circle)(p[0].toFixed(1), p[1].toFixed(1), 3.5, s.markerColor ?? s.color));
-      if (wantLabels(s)) for (const p of pts) pushLabel(p[0], p[1] - 7, p[2], s);
+      if (sty === 'marker' || /Marker$/.test(sty)) for (const p of pts) parts.push(tagMk((MARKERS[s.marker] ?? MARKERS.circle)(p[0].toFixed(1), p[1].toFixed(1), s.markerSize ? s.markerSize * 2 / 3 : 3.5, pointColor(s, p[3]) ?? s.markerColor ?? s.color), s, p[3]));
+      if (wantLabels(s)) for (const p of pts) pushLabel(p[0], p[1] - 7, p[2], s, 'middle', p[3]);
     });
   } else {
     // 항목 축 레이블
@@ -834,7 +867,7 @@ export function renderChartSvg(chart, data) {
           if (!isNum(raw)) return;
           const v = s._upper[i];
           const start = (horizontal ? area.y : area.x) + band * i + (band - groupW) / 2 + stepW * (stacked ? 0 : bi);
-          const pf = s.pointColors?.[i] ?? (vary ? pal[i % pal.length] : bf);
+          const pf = pointColor(s, i) ?? (vary ? pal[chartPointIndex(s, i) % pal.length] : bf);
           let from = b0;
           let to = vp(v);
           if (stacked) {
@@ -857,12 +890,12 @@ export function renderChartSvg(chart, data) {
               const hi = Math.max(from, to);
               const lo = Math.min(from, to);
               const x = lp === 'center' ? (from + to) / 2 : lp === 'insideEnd' ? hi - 4 : lp === 'insideBase' ? lo + 4 : hi + 4;
-              pushLabel(x, start + barW / 2 + 3.5, raw, s, lp === 'center' ? 'middle' : lp === 'insideEnd' ? 'end' : 'start');
+              pushLabel(x, start + barW / 2 + 3.5, raw, s, lp === 'center' ? 'middle' : lp === 'insideEnd' ? 'end' : 'start', i);
             } else {
               const topY = Math.min(from, to);
               const botY = Math.max(from, to);
               const y = lp === 'center' ? (from + to) / 2 + 3.5 : lp === 'insideEnd' ? topY + 12 : lp === 'insideBase' ? botY - 4 : topY - 4;
-              pushLabel(start + barW / 2, y, raw, s);
+              pushLabel(start + barW / 2, y, raw, s, 'middle', i);
             }
           }
         });
@@ -904,10 +937,10 @@ export function renderChartSvg(chart, data) {
             if (mkName !== false && mkName !== 'none') {
               const mk = MARKERS[mkName] ?? MARKERS.circle;
               const mr = s.markerSize ? (s.markerSize * 4) / 3 / 2 : 3;
-              for (const p of seg) parts.push(tagMk(mk(p[0].toFixed(1), p[1].toFixed(1), mr, s.pointColors?.[p[3]] ?? s.markerColor ?? s.color), s, p[3]));
+              for (const p of seg) parts.push(tagMk(mk(p[0].toFixed(1), p[1].toFixed(1), mr, pointColor(s, p[3]) ?? s.markerColor ?? s.color), s, p[3]));
             }
           }
-          if (wantLabels(s)) for (const p of seg) pushLabel(p[0], p[1] - 7, p[2], s);
+          if (wantLabels(s)) for (const p of seg) pushLabel(p[0], p[1] - 7, p[2], s, 'middle', p[3]);
         }
       });
     }
@@ -1367,8 +1400,8 @@ export const SPECIAL = {
       const filled = chart.radarStyle === 'filled';
       series.forEach((s) => {
         const pts = s.values.map((v, i) => at(i, isNum(v) ? v : sc.min));
-        parts.push(`<path d="${pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join('')}Z" fill="${filled ? s.color : 'none'}" fill-opacity="${filled ? 0.55 : 0}" stroke="${s.color}" stroke-width="2"/>`);
-        if (chart.radarStyle === 'marker') for (const p of pts) parts.push(`<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="3" fill="${s.color}"/>`);
+        parts.push(`<path d="${pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join('')}Z" fill="${filled ? s.color : 'none'}" fill-opacity="${filled ? 0.55 : 0}" stroke="${s.color}" stroke-width="2" data-s="${s._fi}"/>`);
+        if (chart.radarStyle === 'marker') pts.forEach((p, i) => { if (isNum(s.values[i])) parts.push(`<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${s.markerSize ? s.markerSize * 2 / 3 : 3}" fill="${pointColor(s, i) ?? s.markerColor ?? s.color}" data-s="${s._fi}" data-p="${chartPointIndex(s, i)}"/>`); });
         if (ctx.wantLabels(s)) s.values.forEach((v, i) => { if (isNum(v)) { const p = at(i, v); labelTxt(ctx, s, v, p[0], p[1] - 6); } });
       });
     },
@@ -1401,13 +1434,13 @@ export const SPECIAL = {
         const rawSize = s.size?.[i] ?? 1;
         if (!isNum(rawSize) || rawSize === 0 || rawSize < 0 && !chart.showNegBubbles) return;
         const sz = Math.abs(rawSize), r = Math.sqrt(sz / maxS) * maxR;
-        let fill = s.pointColors?.[i] ?? s.color;
+        let fill = pointColor(s, i) ?? s.color;
         if (chart.threeD) {
           const id = `${ctx.uid}-bubble-${s._fi}-${i}`;
           ctx.defs.push(`<radialGradient id="${id}" cx="35%" cy="30%" r="70%"><stop offset="0" stop-color="#fff"/><stop offset="0.32" stop-color="${escSvg(fill)}"/><stop offset="1" stop-color="#333"/></radialGradient>`);
           fill = `url(#${id})`;
         }
-        parts.push(`<circle cx="${X(x).toFixed(1)}" cy="${Y(v).toFixed(1)}" r="${r.toFixed(2)}" fill="${fill}" fill-opacity="${chart.threeD ? 1 : .75}" stroke="${s.color}" data-s="${s._fi}" data-p="${i}"${chart.threeD ? ' data-3d="bubble"' : ''}/>`);
+        parts.push(`<circle cx="${X(x).toFixed(1)}" cy="${Y(v).toFixed(1)}" r="${r.toFixed(2)}" fill="${fill}" fill-opacity="${chart.threeD ? 1 : .75}" stroke="${s.color}" data-s="${s._fi}" data-p="${chartPointIndex(s, i)}"${chart.threeD ? ' data-3d="bubble"' : ''}/>`);
         if (ctx.wantLabels(s)) labelTxt(ctx, s, v, X(x), Y(v) + 3.5);
       }));
     },

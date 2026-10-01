@@ -10,7 +10,7 @@ export const CHARTEX_STYLE_CONTENT = 'application/vnd.ms-office.chartstyle+xml';
 export const CHARTEX_COLOR_CONTENT = 'application/vnd.ms-office.chartcolorstyle+xml';
 const A = 'http://schemas.openxmlformats.org/drawingml/2006/main';
 const TYPES = { waterfall: 'waterfall', funnel: 'funnel', histogram: 'clusteredColumn', pareto: 'clusteredColumn', treemap: 'treemap', sunburst: 'sunburst', boxWhisker: 'boxWhisker', map: 'regionMap' };
-const OWN_KEYS = ['type', 'byRows', 'axes', 'seriesFmt', 'labels', 'dataTable', 'gap', 'legend', 'palette', 'hiddenSeries', 'hiddenCats', 'titleSize', 'titleColor', 'titleBold', 'legendSize', 'legendColor', 'legendBold', 'axisSize', 'textColor', 'gridColor', 'rounded', 'gridX', 'gridY', 'fill', 'plotFill', 'border', 'totals', 'binCount', 'binWidth', 'upColor', 'downColor', 'totalColor', 'showMean', 'connectors', 'quartileMethod', 'showOutliers', 'showInnerPoints', 'mapLowColor', 'mapMidColor', 'mapHighColor'];
+const OWN_KEYS = ['type', 'titleLayout', 'legendLayout', 'byRows', 'axes', 'seriesFmt', 'labels', 'dataTable', 'gap', 'legend', 'palette', 'hiddenSeries', 'hiddenCats', 'titleSize', 'titleColor', 'titleBold', 'legendSize', 'legendColor', 'legendBold', 'axisSize', 'textColor', 'gridColor', 'rounded', 'gridX', 'gridY', 'fill', 'plotFill', 'border', 'totals', 'binCount', 'binWidth', 'upColor', 'downColor', 'totalColor', 'showMean', 'connectors', 'quartileMethod', 'showOutliers', 'showInnerPoints', 'mapLowColor', 'mapMidColor', 'mapHighColor'];
 const num = (v) => typeof v === 'number' && Number.isFinite(v);
 const on = (v) => v === '1' || v === 'true';
 const hex = (v) => /^#?[\da-f]{6}$/i.test(String(v ?? '')) ? String(v).replace('#', '').toUpperCase() : null;
@@ -222,6 +222,12 @@ function supplementalOptions(chart) {
   const props = Object.fromEntries(OWN_KEYS.filter((k) => !NATIVE_OPTIONS.has(k) && chart[k] !== undefined).map((k) => [k, chart[k]]));
   if (chart.axes && typeof chart.axes === 'object') props.axes = Object.fromEntries(Object.entries(chart.axes).filter(([k, v]) => ['x', 'y', 'y2'].includes(k) && v && typeof v === 'object').map(([k, v]) => [k, Object.fromEntries(Object.entries(v).filter(([name]) => !NATIVE_AXIS.has(name)))]).filter(([, v]) => Object.keys(v).length));
   if (Array.isArray(chart.seriesFmt)) props.seriesFmt = chart.seriesFmt.map((s) => Object.fromEntries(Object.entries(s ?? {}).filter(([k]) => !NATIVE_SERIES.has(k))));
+  for (const key of ['titleLayout', 'legendLayout']) {
+    const layout = chart[key];
+    if (!layout || !num(layout.x) || !num(layout.y)) { delete props[key]; continue; }
+    props[key] = { x: Math.max(0, Math.min(1, layout.x)), y: Math.max(0, Math.min(1, layout.y)) };
+    for (const size of ['w', 'h']) if (num(layout[size]) && layout[size] > 0) props[key][size] = Math.min(1, layout[size]);
+  }
   if (chart.pivot) props.wxPivot = chart.pivot;
   return { type: chart.type, ...props };
 }

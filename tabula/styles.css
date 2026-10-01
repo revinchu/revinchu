@@ -1606,3 +1606,9 @@ body.keytips #ribbon label[data-ribbon-command]:has(input[type="checkbox"]) { pa
 .sh-text-content { flex-shrink: 0; min-width: 0; overflow-wrap: anywhere; }
 .sh-text.rich .sh-text-content > div { min-height: 1.2em; }
 .shape-btn:focus-visible { outline: 2px solid var(--green); outline-offset: -2px; }
+
+/* 차트 내부 직접 편집: 선택한 요소와 이동 가능한 제목·범례를 구분 */
+.obj.chart [data-el="title"], .obj.chart [data-el="legend"] { cursor: move; }
+.obj.chart [data-s] { cursor: pointer; }
+.obj.chart [data-pie-r] { cursor: grab; }
+.chart-selection-pane .cfp-selection-name { padding: 8px; background: #edf5fb; color: #164d72; border-radius: 4px; font-weight: 600; }

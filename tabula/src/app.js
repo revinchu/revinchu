@@ -27,6 +27,8 @@ import { makeSeries, CUSTOM_LISTS } from './series.js';
 import { parseDelimited, toDelimited, guessDelimiter, CsvBlockReader } from './csv.js';
 import { SAMPLES } from './samples.js';
 import { TEMPLATES, TEMPLATE_CATS } from './templates.js';
+import { createChartSelectionPanel } from './chart-selection-ui.js';
+import { chartSeriesPatch, chartExplosionPatch, chartPartDeletePatch, chartLayoutAfterDrag, chartExplosionAfterDrag } from './chart-edit.js';
 import { chartView3D } from './chart-3d.js';
 import { GridView, BASE_FONT, setBaseFont, measureText, fontStack, PATTERNS, patternCss, gradientCss, glyphShift, timelinePeriods, shapeTextHtml, fitShapeText } from './view.js';
 import { setThemeColors, THEME, applyTint } from './stylepresets.js';
@@ -138,6 +140,7 @@ let ac = null;
 let editRefs = [];
 let fillPreview = null;
 let chartSel = null; // 선택한 그림 개체(차트·그림·도형) id
+let chartElementDrag = null, suppressChartDoubleClickUntil = 0, lastChartPointer = null;
 let chartPart = null; // 차트 안에서 고른 요소 { id, kind: 'series'|'point'|'legend'|'title', s, p } (엑셀: 한 번 누르면 계열, 한 번 더 누르면 요소)
 let objClip = null; // 복사한 그림 개체
 let drawPathState = null, shapeEdit = null, shapePointDrag = null, suppressShapeDoubleClickUntil = 0;
@@ -789,7 +792,7 @@ function deselectChart() {
   shapeEdit = null; shapePointDrag = null;
   if (!chartSel) return;
   chartSel = null;
-  chartPart = null;
+  chartPart = null; chartElementDrag = null;
   objMulti.clear();
   gv.renderObjectsAll();
 }
@@ -1377,14 +1380,18 @@ function onGridKey(e) {
       commitShapePointPath(moveShapePoint(sh.path, selected, [selected.x + delta[0] / Math.max(1, sh.w), selected.y + delta[1] / Math.max(1, sh.h)])); return;
     }
   }
+  if (chartElementDrag && k === 'Escape') { handled(); chartElementDrag = null; gv.renderObjectsAll(); return; }
   if (chartSel) {
+    if (ctrl && (e.code === 'Digit1' || k === '1') && sheet().charts.some(c => c.id === chartSel)) { handled(); chartFormatPane(chartSel); return; }
+    if ((k === 'Delete' || k === 'Backspace') && chartPart?.id === chartSel) { handled(); deleteChartPart(); return; }
+    if (k === 'Escape' && chartPart?.id === chartSel) { handled(); chartPart = null; gv.renderObjectsAll(); syncChartPane(); return; }
     if (k === 'Delete' || k === 'Backspace') { handled(); deleteObject(chartSel); return; }
     if (k === 'Escape') { handled(); deselectChart(); updateSelectionUI(); return; }
     const step = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[k];
-    if (step) { handled(); nudgeObject(chartSel, step[0] * (ctrl ? 10 : 1), step[1] * (ctrl ? 10 : 1)); return; }
+    if (step) { handled(); if (chartPart?.id === chartSel) nudgeChartPart(step[0] * (ctrl ? 10 : 1), step[1] * (ctrl ? 10 : 1)); else nudgeObject(chartSel, step[0] * (ctrl ? 10 : 1), step[1] * (ctrl ? 10 : 1)); return; }
     if (ctrl && (k === 'c' || k === 'C' || k === 'x' || k === 'X')) { handled(); copyObject(chartSel, k.toLowerCase() === 'x'); return; }
     if (ctrl && (k === 'd' || k === 'D')) { handled(); copyObject(chartSel, false); pasteObject(); return; }
-    if (k === 'Enter' || k === 'F2') { handled(); editObject(chartSel); return; }
+    if (k === 'Enter' || k === 'F2') { handled(); if (chartPart?.id === chartSel) chartFormatPane(chartSel); else editObject(chartSel); return; }
     if (e.altKey && (e.code === 'KeyC' || e.code === 'KeyS') && sheet().slicers?.some((x) => x.id === chartSel)) {
       handled();
       if (e.code === 'KeyC') slicerClear(chartSel); else run('slicerMulti');
@@ -1894,7 +1901,8 @@ function onViewMouseDown(e) {
     const partEl = objEl.classList.contains('chart') ? t.closest('[data-s], [data-el]') : null;
     const prevPart = chartPart;
     if (objEl.classList.contains('chart') && e.button !== 1) {
-      if (partEl?.dataset.s !== undefined) {
+      if (partEl?.dataset.el === 'label') chartPart = { id, kind: 'label', s: Number(partEl.dataset.s) };
+      else if (partEl?.dataset.s !== undefined) {
         const sIdx = Number(partEl.dataset.s);
         const pIdx = partEl.dataset.p !== undefined ? Number(partEl.dataset.p) : null;
         const same = prevPart?.id === id && prevPart.s === sIdx && (prevPart.kind === 'series' || prevPart.kind === 'point');
@@ -1904,10 +1912,20 @@ function onViewMouseDown(e) {
     } else chartPart = null;
     const partChanged = JSON.stringify(prevPart) !== JSON.stringify(chartPart);
     if (chartSel !== id) { shapeEdit = null; shapePointDrag = null; chartSel = id; objMulti.clear(); gv.renderObjectsAll(); updateSelectionUI(); selPaneDlg?.redraw?.(); } else if (partChanged) gv.renderObjectsAll();
+    syncChartPane(); focusGrid();
+    if (objEl.classList.contains('chart') && e.button === 0) {
+      const now = Date.now(), repeat = lastChartPointer?.id === id && now - lastChartPointer.time < 450 && Math.hypot(e.clientX - lastChartPointer.x, e.clientY - lastChartPointer.y) < 5;
+      lastChartPointer = { id, time: now, x: e.clientX, y: e.clientY };
+      if (repeat || e.detail >= 2) { chartFormatPane(id); suppressChartDoubleClickUntil = now + 120; focusGrid(); }
+    }
     if (e.button !== 0) return;
     const found = findObject(sheet(), id);
     if (!found) return;
     const o = found.obj;
+    if (found.prop === 'charts' && chartPart?.id === id && !t.classList.contains('ch-h')) {
+      beginChartPartDrag(e, objEl, partEl, o); return;
+    }
+    if (viewOnly || (o.locked !== false && protectBlocked('objects'))) return;
     // 크기 조정 및 이동 사용 안 함 (엑셀 슬라이서 [위치 및 속성]): 선택만 되고 끌어도 움직이지 않음
     if (o.noMove) return;
     const corner = t.classList.contains('ch-h') ? [...t.classList].find((c) => ['nw', 'ne', 'sw', 'se'].includes(c)) : null;
@@ -2110,6 +2128,7 @@ function dropMove(src, target, { copy, insert }) {
 }
 
 function onDragMove(x, y) {
+  if (chartElementDrag) { moveChartPartDraft(x, y); return; }
   if (drawPathState) { movePathDraft(x, y); return; }
   if (shapePointDrag) { moveShapePointDraft(x, y); return; }
   if (!drag) return;
@@ -2263,6 +2282,7 @@ function onDragMove(x, y) {
 }
 
 function onDragEnd() {
+  if (chartElementDrag) { finishChartPartDrag(); return; }
   if (shapePointDrag) { const session = shapePointDrag; shapePointDrag = null; if (session.moved && session.wb === wb && session.si === si) commitShapePointPath(session.preview.path); gv.renderObjectsAll(); return; }
   if (drawPathState?.dragging) { drawPathState.dragging = false; if (drawPathState.kind === 'scribble') finishPathDraw(false); return; }
   if (!drag) return;
@@ -2332,10 +2352,10 @@ function onDragEnd() {
 }
 
 function onViewDblClick(e) {
-  if (Date.now() < suppressShapeDoubleClickUntil || shapeEdit) { e.preventDefault(); return; }
+  if (Date.now() < suppressShapeDoubleClickUntil || Date.now() < suppressChartDoubleClickUntil || shapeEdit) { e.preventDefault(); return; }
   const t = e.target;
   const objEl = t.closest('.obj');
-  if (objEl) { editObject(objEl.dataset.id); return; }
+  if (objEl) { if (objEl.classList.contains('chart')) chartFormatPane(objEl.dataset.id); else editObject(objEl.dataset.id); return; }
   if (t.classList.contains('fbtn') || t.classList.contains('dv-btn') || t === dom.editor) return;
   const hit = gv.hitTest(e.clientX, e.clientY);
   if (hit.zone === 'colHeader' && hit.edgeCol !== null) {
@@ -5671,7 +5691,7 @@ function chartElementsMenu() {
     },
     {
       label: '범례', submenu: [
-        ...[['none', '없음'], ['r', '오른쪽'], ['t', '위쪽'], ['l', '왼쪽'], ['b', '아래쪽']].map(([v, l]) => ({ label: l, checked: (ch.legend ?? 'b') === v, action: () => up({ legend: v }) })),
+        ...[['none', '없음'], ['r', '오른쪽'], ['t', '위쪽'], ['l', '왼쪽'], ['b', '아래쪽']].map(([v, l]) => ({ label: l, checked: (ch.legend ?? 'b') === v, action: () => up({ legend: v, legendLayout: undefined }) })),
         { sep: true }, { ...more, label: '기타 범례 옵션...' },
       ],
     },
@@ -6130,21 +6150,110 @@ let chartPaneDlg = null;
 /** 데이터 요소(항목 하나)의 색 (엑셀: 요소 하나를 골라 채우기) */
 function pointColorRow(s, f, setF) {
   const cats = s.categories ?? null;
-  const idx = el('select', {}, (s.values ?? []).map((_, k) => el('option', { value: String(k) }, `${k + 1}. ${String(cats?.[k] ?? '').slice(0, 16)}`)));
+  const idx = el('select', {}, (s.values ?? []).map((_, k) => el('option', { value: String(s._pi?.[k] ?? k) }, `${k + 1}. ${String(cats?.[k] ?? '').slice(0, 16)}`)));
   const inp = el('input', { type: 'color', value: '#ed7d31' });
   const apply = () => setF({ pointColors: { ...(f.pointColors ?? {}), [idx.value]: inp.value } });
   inp.addEventListener('change', apply);
   return el('label', { class: 'cfp-row' }, el('span', {}, '요소 색'), el('span', { class: 'cfp-color' }, idx, inp,
     el('button', { class: 'btn small', onclick: () => { const pc = { ...(f.pointColors ?? {}) }; delete pc[idx.value]; setF({ pointColors: Object.keys(pc).length ? pc : undefined }); } }, '되돌리기')));
 }
+function chartCanEdit(chart, notify = true) {
+  const blocked = viewOnly || (isProtected(sheet()) && chart.locked !== false && !allowed(sheet(), 'objects'));
+  if (blocked && notify) toast('읽기 전용이거나 보호된 차트는 변경할 수 없습니다.');
+  return !blocked;
+}
+function chartPartBounds(object, element) {
+  const svg = object?.querySelector('svg'); if (!svg || !element?.getBBox) return null;
+  const b = element.getBBox(), matrix = element.getScreenCTM(), inverse = svg.getScreenCTM()?.inverse();
+  if (!matrix || !inverse) return null;
+  const points = [[b.x, b.y], [b.x + b.width, b.y], [b.x, b.y + b.height], [b.x + b.width, b.y + b.height]].map(([x, y]) => new DOMPoint(x, y).matrixTransform(matrix).matrixTransform(inverse));
+  const xs = points.map(p => p.x), ys = points.map(p => p.y), x = Math.min(...xs), y = Math.min(...ys);
+  return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
+}
+function beginChartPartDrag(event, object, element, chart) {
+  if (!chartCanEdit(chart) || chart.noMove || !element) return;
+  if (!object.isConnected || !element.isConnected) {
+    const clickedPoint = element.dataset.p;
+    object = [...dom.view.querySelectorAll('.obj.chart')].find(n => n.dataset.id === chart.id);
+    element = ['series', 'point'].includes(chartPart.kind) ? object?.querySelector(`[data-s="${chartPart.s}"]${clickedPoint !== undefined ? `[data-p="${clickedPoint}"]` : ''}`) : object?.querySelector(`[data-el="${chartPart.kind}"]`);
+    if (!element) return;
+  }
+  const part = { ...chartPart }, rect = object.querySelector('svg')?.getBoundingClientRect(); if (!rect?.width || !rect.height) return;
+  const session = { book: wb, si, sheet: sheet(), chart, part, start: [event.clientX, event.clientY], scale: [chart.w / rect.width, chart.h / rect.height], moved: false, preview: chart };
+  if (part.kind === 'title' || part.kind === 'legend') {
+    const box = chartPartBounds(object, element); if (!box) return;
+    session.key = part.kind + 'Layout'; session.layout = chart[session.key] ?? { x: box.x / chart.w, y: box.y / chart.h };
+    session.bounds = { w: box.w / chart.w, h: box.h / chart.h };
+  } else if (['series', 'point'].includes(part.kind) && element.dataset.pieR) {
+    session.geometry = { r: Number(element.dataset.pieR), angle: Number(element.dataset.pieAngle), squash: Number(element.dataset.pieSquash) };
+    const fmt = chart.seriesFmt?.[part.s]; session.explode = part.kind === 'point' ? fmt?.pointExplosion?.[part.p] ?? fmt?.explode ?? chart.explode ?? 0 : fmt?.explode ?? chart.explode ?? 0;
+  } else return;
+  chartElementDrag = session;
+}
+function moveChartPartDraft(x, y) {
+  const d = chartElementDrag; if (!d) return;
+  if (d.book !== wb || d.si !== si || d.sheet !== sheet() || !sheet().charts.includes(d.chart) || !chartCanEdit(d.chart, false)) { chartElementDrag = null; gv.renderObjectsAll(); return; }
+  if (!d.moved && Math.hypot(x - d.start[0], y - d.start[1]) < 3) return;
+  const delta = [(x - d.start[0]) * d.scale[0], (y - d.start[1]) * d.scale[1]];
+  d.patch = d.key ? { [d.key]: chartLayoutAfterDrag(d.layout, delta, d.chart.w, d.chart.h, d.bounds) } : chartExplosionPatch(d.chart, d.part, chartExplosionAfterDrag(d.explode, delta, d.geometry));
+  d.preview = { ...d.chart, ...d.patch }; d.moved = true; gv.renderObjectsAll();
+}
+function finishChartPartDrag() {
+  const d = chartElementDrag; chartElementDrag = null;
+  if (d?.moved && d.book === wb && d.si === si && d.sheet === sheet() && sheet().charts.includes(d.chart) && chartCanEdit(d.chart)) {
+    updateChart(d.chart.id, d.patch); suppressChartDoubleClickUntil = Date.now() + 350; syncChartPane();
+  }
+  gv.renderObjectsAll();
+}
+function nudgeChartPart(dx, dy) {
+  const chart = sheet().charts.find(c => c.id === chartSel), part = chartPart; if (!chart || !part || !chartCanEdit(chart)) return;
+  if (part.kind === 'title' || part.kind === 'legend') {
+    const object = [...dom.view.querySelectorAll('.obj.chart')].find(n => n.dataset.id === chart.id), element = object?.querySelector(`[data-el="${part.kind}"]`), box = chartPartBounds(object, element);
+    if (!box || chart.noMove) return;
+    const key = part.kind + 'Layout', layout = chart[key] ?? { x: box.x / chart.w, y: box.y / chart.h };
+    updateChart(chart.id, { [key]: chartLayoutAfterDrag(layout, [dx, dy], chart.w, chart.h, { w: box.w / chart.w, h: box.h / chart.h }) });
+    gv.renderObjectsAll(); syncChartPane();
+  }
+}
+function deleteChartPart() {
+  const chart = sheet().charts.find(c => c.id === chartSel); if (!chart || chartPart?.id !== chart.id || !chartCanEdit(chart)) return;
+  const patch = chartPartDeletePatch(chart, chartPart);
+  if (!patch) { toast('이 요소는 서식 창에서 표시 여부를 조정하세요.'); return; }
+  updateChart(chart.id, patch); chartPart = null; chartElementDrag = null; gv.renderObjectsAll(); syncChartPane(); updateSelectionUI(); focusGrid();
+}
+function syncChartPane() {
+  if (!chartPaneDlg || !chartSel || !sheet().charts.some(c => c.id === chartSel)) return;
+  if (chartPaneDlg.chartId !== chartSel) chartFormatPane(chartSel); else chartPaneDlg.selectPart?.();
+}
+function chartSelectedFormatPane(id) {
+  const book = wb, host = si, hostSheet = sheet();
+  const get = () => wb === book && si === host && sheet() === hostSheet ? hostSheet.charts.find(c => c.id === id) : null;
+  if (!get()) return;
+  if (chartPaneDlg) chartPaneDlg.close();
+  let ownChange = false;
+  const up = patch => { const current = get(); if (!current || !chartCanEdit(current)) return false; if (!Object.keys(patch).some(key => JSON.stringify(current[key]) !== JSON.stringify(patch[key]))) return; ownChange = true; try { updateChart(id, patch); } finally { ownChange = false; } gv.renderObjectsAll(); };
+  const panel = createChartSelectionPanel({ getChart: get, getPart: () => chartPart?.id === id ? chartPart : null,
+    getData: () => chartModelData(book, host, { ...get(), hiddenSeries: undefined, hiddenCats: undefined }), onChange: up,
+    onChoose: part => { chartPart = part.kind === 'chart' ? null : { id, ...part }; chartSel = id; gv.renderObjectsAll(); panel.refresh(); },
+    onDelete: deleteChartPart, onAllOptions: () => { chartPart = null; gv.renderObjectsAll(); chartFormatPane(id); },
+  });
+  const refresh = () => { if (!ownChange) queueMicrotask(() => { if (panel.body.isConnected) panel.refresh(); }); };
+  book.onChange(refresh);
+  const dialog = openDialog({ title: '차트 서식', width: 390, modeless: true, body: panel.body,
+    onClose: () => { book.listeners.delete(refresh); if (chartPaneDlg === dialog) chartPaneDlg = null; } });
+  dialog.root.classList.add('pane-dlg'); dialog.chartId = id; dialog.selectPart = panel.refresh; chartPaneDlg = dialog;
+}
+
 function chartFormatPane(id = chartSel) {
+  if (chartPart?.id === id) { chartSelectedFormatPane(id); return; }
   const ch0 = sheet().charts.find((c) => c.id === id);
   if (!ch0) { toast('차트를 선택하세요.'); return; }
   if (chartPaneDlg) chartPaneDlg.close();
   const body = el('div', { class: 'cfp' });
   let activeCategory = '차트 옵션', activeElement = 'all', selectedPoint = 0;
-  const get = () => sheet().charts.find((c) => c.id === id) ?? ch0;
-  const up = (patch) => { updateChart(id, patch); gv.renderObjectsAll(); };
+  const book = wb, host = si, hostSheet = sheet();
+  const get = () => wb === book && si === host && sheet() === hostSheet ? hostSheet.charts.find(c => c.id === id) : null;
+  const up = patch => { const chart = get(); if (!chart || !chartCanEdit(chart)) return; updateChart(id, patch); gv.renderObjectsAll(); };
   const sec = (title, ...rows) => el('details', { class: 'cfp-sec', open: true }, el('summary', {}, title), ...rows);
   const row = (label, input) => { const control = input?.matches?.('input,select,textarea') ? input : input?.querySelector?.('input,select,textarea'); control?.setAttribute('aria-label', label); return el('label', { class: 'cfp-row' }, el('span', {}, label), input); };
   const color = (v, fn, allowNone = true) => {
@@ -6158,6 +6267,7 @@ function chartFormatPane(id = chartSel) {
   const sel2 = (v, opts, fn) => { const s = el('select', {}, opts.map(([k, l]) => el('option', { value: k, selected: String(v ?? '') === String(k) }, l))); s.addEventListener('change', () => fn(s.value)); return s; };
   const draw = () => {
     const ch = get();
+    if (!ch) { body.replaceChildren(el('p', {}, '차트가 삭제되었거나 다른 문서·시트로 이동했습니다. 차트를 다시 선택하세요.')); return; }
     const axis = (k) => ch.axes?.[k] ?? {};
     const setAx = (k, patch) => { const current = get().axes ?? {}; up({ axes: { ...current, [k]: { ...current[k], ...patch } } }); };
     const data = chartModelData(wb, si, { ...ch, hiddenSeries: undefined });
@@ -6212,7 +6322,7 @@ function chartFormatPane(id = chartSel) {
         row('제목', txt(axis('x').title, (v) => setAx('x', { title: v || undefined }))),
         row('세로 눈금선', chk(ch.gridX, (v) => up({ gridX: v || undefined })))) : null,
       sec('범례 · 레이블',
-        row('범례 위치', sel2(ch.legend ?? 'b', [['b', '아래쪽'], ['t', '위쪽'], ['r', '오른쪽'], ['l', '왼쪽'], ['none', '없음']], (v) => up({ legend: v }))),
+        row('범례 위치', sel2(ch.legend ?? 'b', [['b', '아래쪽'], ['t', '위쪽'], ['r', '오른쪽'], ['l', '왼쪽'], ['none', '없음']], (v) => up({ legend: v, legendLayout: undefined }))),
         row('범례 색', color(ch.legendColor, (v) => up({ legendColor: v }))),
         row('범례 굵게', chk(ch.legendBold, (v) => up({ legendBold: v || undefined }))),
         row('범례 글꼴(pt)', num(ch.legendSize, (v) => up({ legendSize: v }), { min: 6, max: 24 })),
@@ -6326,9 +6436,11 @@ function chartFormatPane(id = chartSel) {
     body.prepend(el('label', { class: 'cfp-element-picker' }, '차트 요소', picker), tabs);
     selectElement();
   };
+  for (const eventName of ['change', 'click']) body.addEventListener(eventName, event => { if (!get()) { event.preventDefault(); event.stopImmediatePropagation(); draw(); } }, true);
   draw();
   chartPaneDlg = openDialog({ title: '차트 서식', width: 390, modeless: true, body, onClose: () => { chartPaneDlg = null; } });
   chartPaneDlg.root.classList.add('pane-dlg');
+  chartPaneDlg.chartId = id; chartPaneDlg.selectPart = () => { if (chartPart?.id === id) chartSelectedFormatPane(id); };
 }
 
 
@@ -8383,6 +8495,7 @@ function addObject(prop, obj) {
 
 function deleteObject(id) {
   const f = findObject(sheet(), id);
+  if (viewOnly || (f?.obj.locked !== false && protectBlocked('objects'))) return;
   if (f) setObjects(f.prop, (list) => list.filter((o) => o.id !== id));
   chartSel = null;
   updateSelectionUI();
@@ -8428,6 +8541,8 @@ function objectOrigin() {
 
 /** 차트 요소 서식 (엑셀: 데이터 계열 서식 · 데이터 요소 서식 · 범례 서식 · 차트 제목 서식) */
 function setSeriesFmt(ch, fi, patch) {
+  ch = sheet().charts.find(c => c.id === ch.id) ?? ch;
+  if (!chartCanEdit(ch)) return;
   const fmt = [...(ch.seriesFmt ?? [])];
   while (fmt.length <= fi) fmt.push({});
   const next = { ...(fmt[fi] ?? {}), ...patch };
@@ -8437,7 +8552,8 @@ function setSeriesFmt(ch, fi, patch) {
   gv.renderObjectsAll();
 }
 function chartPartMenu(ch, part, pos) {
-  const up = (patch) => { updateChart(ch.id, patch); gv.renderObjectsAll(); };
+  const book = wb, hostSheet = sheet();
+  const up = patch => { const current = sheet().charts.find(c => c.id === ch.id); if (wb !== book || sheet() !== hostSheet || !current || !chartCanEdit(current)) return; updateChart(ch.id, patch); gv.renderObjectsAll(); };
   const color = (label, onPick, none = '자동') => ({ label, icon: 'fill', action: () => setTimeout(() => paletteMenu(pos, none, onPick), 0) });
   const PTS = [0.75, 1, 1.5, 2.25, 3, 4.5, 6];
   const items = [];
@@ -8449,7 +8565,8 @@ function chartPartMenu(ch, part, pos) {
     const type = sr.type ?? (ch.type === 'combo' ? 'column' : ch.type);
     const isLine = type === 'line' || type === 'scatter' || type === 'radar';
     const pie = ch.type === 'pie' || ch.type === 'doughnut';
-    const pointName = part.kind === 'point' ? String(data.categories?.[part.p] ?? part.p + 1) : null;
+    const visiblePoint = sr._pi?.indexOf(part.p) ?? part.p;
+    const pointName = part.kind === 'point' ? String(data.categories?.[visiblePoint] ?? part.p + 1) : null;
     items.push({ title: part.kind === 'point' ? `데이터 요소 서식 — ${sr.name} · ${pointName}` : `데이터 계열 서식 — ${sr.name}` });
     if (part.kind === 'point') {
       items.push(color(isLine ? '표식 색...' : '채우기 색 (이 요소만)...', (c) => { const pc = { ...(f.pointColors ?? {}) }; if (c) pc[part.p] = c; else delete pc[part.p]; setSeriesFmt(ch, part.s, { pointColors: Object.keys(pc).length ? pc : undefined }); }));
@@ -8469,25 +8586,27 @@ function chartPartMenu(ch, part, pos) {
       ], (v) => { const g = Math.max(0, Math.min(500, Number(v.gap) || 0)); const o = Math.max(-100, Math.min(100, Number(v.overlap) || 0)); up({ gap: g === 150 ? undefined : g, overlap: o || undefined }); }) });
       items.push(color('윤곽선 색...', (c) => setSeriesFmt(ch, part.s, { outline: c ?? undefined }), '윤곽선 없음'));
     } else {
-      items.push({ label: '조각 분리(%)...', action: () => formDialog('데이터 계열 서식', [{ name: 'e', label: '원형 조각 분리(%)', type: 'number', value: ch.explode ?? 0 }], ({ e }) => up({ explode: Number(e) || undefined })) });
+      items.push({ label: '조각 분리(%)...', action: () => chartSelectedFormatPane(ch.id) });
     }
     items.push({ label: (f.labels ?? ch.labels) ? '데이터 레이블 제거' : '데이터 레이블 추가', action: () => setSeriesFmt(ch, part.s, { labels: (f.labels ?? ch.labels) ? false : true }) });
-    items.push({ sep: true }, { label: '계열 서식 창...', icon: 'format', action: () => chartFormatPane(ch.id) });
+    items.push({ label: '계열 삭제', icon: 'delete', action: deleteChartPart });
+    items.push({ sep: true }, { label: part.kind === 'point' ? '데이터 요소 서식...' : '계열 서식 창...', icon: 'format', action: () => chartFormatPane(ch.id) });
   } else if (part.kind === 'legend') {
     items.push({ title: '범례 서식' },
       color('글꼴 색...', (c) => up({ legendColor: c ?? undefined })),
       { label: '글꼴 크기', submenu: [7, 8, 9, 10, 11, 12, 14, 16].map((n) => ({ label: `${n}pt`, checked: (ch.legendSize ?? 9) === n, action: () => up({ legendSize: n === 9 ? undefined : n }) })) },
       { label: '굵게', checked: !!ch.legendBold, action: () => up({ legendBold: !ch.legendBold || undefined }) },
-      { label: '위치', submenu: [['r', '오른쪽'], ['t', '위쪽'], ['l', '왼쪽'], ['b', '아래쪽']].map(([v, l]) => ({ label: l, checked: (ch.legend ?? 'b') === v, action: () => up({ legend: v }) })) },
-      { sep: true }, { label: '범례 삭제', icon: 'delete', action: () => { chartPart = null; up({ legend: 'none' }); } });
+      { label: '위치', submenu: [['r', '오른쪽'], ['t', '위쪽'], ['l', '왼쪽'], ['b', '아래쪽']].map(([v, l]) => ({ label: l, checked: (ch.legend ?? 'b') === v, action: () => up({ legend: v, legendLayout: undefined }) })) },
+      { sep: true }, { label: '범례 삭제', icon: 'delete', action: deleteChartPart });
   } else if (part.kind === 'title') {
     items.push({ title: '차트 제목 서식' },
       { label: '제목 편집...', action: () => formDialog('차트 제목', [{ name: 't', label: '제목', value: ch.title ?? '' }], ({ t }) => up({ title: t })) },
       color('글꼴 색...', (c) => up({ titleColor: c ?? undefined })),
       { label: '글꼴 크기', submenu: [10, 12, 14, 16, 18, 20, 24].map((n) => ({ label: `${n}pt`, checked: (ch.titleSize ?? 14) === n, action: () => up({ titleSize: n === 14 ? undefined : n }) })) },
       { label: '굵게', checked: !!ch.titleBold, action: () => up({ titleBold: !ch.titleBold || undefined }) },
-      { sep: true }, { label: '제목 삭제', icon: 'delete', action: () => { chartPart = null; up({ title: '' }); } });
+      { sep: true }, { label: '제목 삭제', icon: 'delete', action: deleteChartPart });
   }
+  if (part.kind === 'title' || part.kind === 'legend') items.push({ label: '선택한 요소 서식...', icon: 'format', action: () => chartSelectedFormatPane(ch.id) });
   items.push({ sep: true }, { label: '차트 전체 메뉴...', action: () => { chartPart = null; gv.renderObjectsAll(); objectMenu(ch.id, pos); } });
   openMenu(pos, items);
 }
@@ -12252,6 +12371,7 @@ function jumpComment(dir) {
 
 // ───────────────────────── 시트 ─────────────────────────
 function switchSheet(i, restore = true) {
+  chartElementDrag = null;
   endDraw(); shapeEdit = null; shapePointDrag = null;
   if (i === si || i < 0 || i >= wb.sheets.length) return;
   if (editing && !commitEdit()) return;
@@ -12940,6 +13060,7 @@ function redrawPivotsQuiet() {
 }
 
 function afterLoad(name, activeSheet) {
+  chartElementDrag = null;
   endDraw(); shapeEdit = null; shapePointDrag = null;
   setTimeout(() => {
     showFinalBar();
@@ -17119,6 +17240,7 @@ const NO_COMMIT = new Set(['toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100', 'shor
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['차트 직접 편집', ['제목·범례를 끌거나 방향키로 이동 · 선택한 요소만 Delete · 실행 취소', '계열·데이터 요소를 선택하면 서식 창도 함께 전환 · Ctrl+1·더블클릭 · 선택한 막대·선·조각만 색 변경', '원형·도넛의 조각별 분리와 계열 분리 · 3차원 원형의 드래그 보정', 'Excel 수동 위치·조각 분리 저장 · 계열 삭제 후 원본 셀 참조 오류 수정']],
   ['선·자유곡선과 도형 서식', ['곡선·자유형·자유곡선 그리기 · 점 이동·추가·삭제 · 취소와 실행 취소', '채우기·선·효과·크기·텍스트를 조정하는 도형 서식 패널 · 선 끝·화살표 크기·무늬·겹선', '표준 XLSX 자유 경로 저장 · 텍스트 회전·축소 맞춤과 배율 변경 시 잘림 수정']],
   ['리본 키팁·셀 스타일', ['Alt → H → J 셀 스타일 · H → H 채우기 색 · H → F → C 글꼴 색', '일반·상황별 탭의 메뉴·입력칸·분할 단추 키팁 누락 검사 · 팔레트 방향키 선택', '보고서·KPI·입력·검토 스타일 24개와 검색 · 숫자 표시 형식·맞춤 보존']],
   ['대용량 문서 응답성', ['필터 범위의 반복 탐색과 중복 화면 갱신 제거 · 긴 필터 목록 가상화', '사용자 지정·색상·상위 조건을 다른 열의 필터 목록에도 반영', '화면 밖 차트·슬라이서·그림 생성 생략 · 단순 조건부 서식의 전체 범위 집계 제거']],
@@ -17568,7 +17690,7 @@ function bindEvents() {
     lastCtrl = e.ctrlKey || e.metaKey;
     lastShift = e.shiftKey;
     lastAlt = e.altKey;
-    if (drag || drawPathState || shapePointDrag) onDragMove(e.clientX, e.clientY);
+    if (drag || drawPathState || shapePointDrag || chartElementDrag) onDragMove(e.clientX, e.clientY);
   });
   document.addEventListener('mouseup', (e) => { if (tlDrag) { const d = tlDrag; tlDrag = null; timelineApply(d.id, d.a, d.b); } onDragEnd(e); });
 
@@ -17687,7 +17809,7 @@ function bindEvents() {
     libraryFlush();
     if (!autosave && dirty) { e.preventDefault(); e.returnValue = ''; }
   });
-  window.addEventListener('blur', () => { if (drag) onDragEnd(); });
+  window.addEventListener('blur', () => { if (chartElementDrag) { chartElementDrag = null; gv.renderObjectsAll(); } if (drag) onDragEnd(); });
 window.addEventListener('afterprint', () => { dom.printArea.replaceChildren(); });
 }
 
@@ -17724,6 +17846,7 @@ async function init() {
   gv = new GridView({
     state: () => ({
       wb, si, sel, selKind, active, editing: !!editing, readonly: viewOnly, clip, fillPreview, refs: editRefs, chartSel, chartPart, objMulti, circles, focusCell: opts.focusCell,
+      chartPreview: chartElementDrag?.preview,
       shapeEdit, shapePreview: drawPathState?.preview ?? shapePointDrag?.preview ?? (shapeEdit && !findObject(sheet(), shapeEdit.id)?.obj.path ? editingShape() : null),
       special: special?.si === si ? special.cells : null, arrows: trace?.arrows ?? null,
       showGrid: view.showGrid && !sheet().noGrid, showFormulas: view.showFormulas, showHeaders: view.showHeaders, fillHandle: opts.fillHandle !== false, valueHighlight: view.valueHighlight,

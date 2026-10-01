@@ -243,6 +243,19 @@ function shapePointHandlesHtml(shape, editing, zoom) {
   }
   return `<svg class="shape-point-guides" width="${w}" height="${h}" style="overflow:visible;" stroke="#a22d28" stroke-width="${1 / zoom}" fill="none">${guides.join('')}</svg>${points.join('')}`;
 }
+function markChartSelection(node, part) {
+  if (!part || node.dataset.id !== part.id || !node.classList.contains('chart')) return;
+  const svg = node.querySelector('svg'); if (!svg) return;
+  svg.querySelectorAll('.chart-element-selection').forEach(n => n.remove());
+  if (!['title', 'legend', 'plot', 'dataTable'].includes(part.kind)) return;
+  const element = svg.querySelector(`[data-el="${part.kind}"]`); if (!element?.getBBox) return;
+  const box = element.getBBox(), transform = element.getCTM(), inverse = svg.getCTM()?.inverse(); if (!transform || !inverse) return;
+  const corners = [[box.x, box.y], [box.x + box.width, box.y + box.height]].map(([x, y]) => new DOMPoint(x, y).matrixTransform(transform).matrixTransform(inverse));
+  const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  for (const [key, value] of Object.entries({ x: corners[0].x - 2, y: corners[0].y - 2, width: Math.max(1, corners[1].x - corners[0].x) + 4, height: Math.max(1, corners[1].y - corners[0].y) + 4, fill: 'none', stroke: '#1765b3', 'stroke-width': 1, 'stroke-dasharray': '4 2', 'vector-effect': 'non-scaling-stroke', 'pointer-events': 'none', class: 'chart-element-selection' })) rect.setAttribute(key, value);
+  svg.append(rect);
+}
+
 export function fitShapeText(node, appearance) {
   const box = node.querySelector('.sh-text[data-text-fit="shrink"]');
   if (!box || box.dataset.fitDone === appearance) return;
@@ -1128,7 +1141,7 @@ export class GridView {
     };
     // 엑셀처럼 그림 → 도형 → 차트 순서가 아니라 저장된 순서(z)대로 겹침
     const all = [
-      ...sheet.charts.map((o) => ['charts', o]), ...images.map((o) => ['images', o]), ...shapes.map((o) => ['shapes', o]),
+      ...sheet.charts.map((o) => ['charts', st.chartPreview?.id === o.id ? st.chartPreview : o]), ...images.map((o) => ['images', o]), ...shapes.map((o) => ['shapes', o]),
       ...slicers.map((o) => ['slicers', o]),
     ].filter(([, o]) => objectIntersectsWindow(o, windowRect)).sort((a, b) => (a[1].z ?? 0) - (b[1].z ?? 0));
     for (const [prop, o] of all) {
@@ -1170,7 +1183,7 @@ export class GridView {
           for (const item of node.querySelectorAll('svg [data-s], svg [data-el]')) {
             const selected = part.kind === 'series' ? item.dataset.s === String(part.s)
               : part.kind === 'point' ? item.dataset.s === String(part.s) && item.dataset.p === String(part.p)
-                : item.dataset.el === part.kind;
+                : item.dataset.el === part.kind && (part.kind !== 'label' || item.dataset.s === String(part.s));
             if (!selected) continue;
             item.style.filter = 'drop-shadow(0 0 1.5px #1f6fd1) drop-shadow(0 0 1px #1f6fd1)';
             if (['rect', 'circle'].includes(item.localName) || item.localName === 'path' && item.getAttribute('fill') !== 'none') {
@@ -1196,7 +1209,7 @@ export class GridView {
         if (list) { list.scrollTop = t; list.scrollLeft = l; }
       }
     }
-    for (const node of nodes) fitShapeText(node, appearance);
+    for (const node of nodes) { fitShapeText(node, appearance); markChartSelection(node, st.chartPart); }
   }
 
   /** 시간 표시 막대 (엑셀 Timeline): 날짜 필드를 연 · 분기 · 월 · 일 칸으로, 끌어서 기간 선택 */

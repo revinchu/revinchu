@@ -85,7 +85,8 @@ try {
   });
   await test('기존 차트 편집: 숨긴 계열 번호와 보조축→기본축 0 보존', async () => {
     await fixture({ seriesFmt: [], hiddenSeries: [0] });
-    await page.locator('.obj.chart').first().dblclick({ position: { x: 50, y: 30 } });
+    await page.locator('.obj.chart').first().click({ button: 'right', position: { x: 4, y: 4 } });
+    await page.getByRole('menuitem', { name: '차트 편집...', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '차트 편집', exact: true });
     assert.equal(await dialog.getByRole('combobox', { name: / 축$/ }).count(), 3);
     const last = dialog.getByRole('combobox', { name: '전환율 축', exact: true }); assert.equal(await last.inputValue(), '1');
