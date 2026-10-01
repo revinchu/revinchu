@@ -777,11 +777,13 @@ function startEdit(mode, text = null, { fromBar = false, caret = null } = {}) {
   if (viewOnly) { toast('읽기 전용 문서입니다. [편집용 사본 만들기]를 누르면 고칠 수 있습니다.'); return; }
   if (wb.props?.markedFinal) { finalNotice(); return; }
   if (editing) return;
-  if (protectBlocked('cells', { r1: active.r, c1: active.c, r2: active.r, c2: active.c })) return;
+  // 피벗 항목 셀: 엑셀처럼 새 이름을 입력하면 항목 이름(캡션)이 바뀜
+  const pItem = !opts.pivotEdit && !isProtected(sheet()) ? pivotItemAt(active.r, active.c) : null;
+  if (!pItem && protectBlocked('cells', { r1: active.r, c1: active.c, r2: active.r, c2: active.c })) return;
   deselectChart();
   const { r, c } = active;
   const raw = wb.getRaw(si, r, c);
-  editing = { r, c, mode, original: raw, point: null, fromBar };
+  editing = { r, c, mode, original: raw, point: null, fromBar, pivotItem: pItem };
   const value = text ?? raw;
   dom.editor.value = value;
   dom.formula.value = value;
@@ -798,9 +800,18 @@ function startEdit(mode, text = null, { fromBar = false, caret = null } = {}) {
 
 function beginTyping() {
   if (editing) return;
+  if (viewOnly || wb.props?.markedFinal) { dom.editor.value = ''; if (viewOnly) toast('읽기 전용 문서입니다.'); else finalNotice(); return; }
+  // 키 입력으로 바로 편집할 때도 시트 보호 · 피벗 잠금 (피벗 항목 칸은 이름 바꾸기)
+  const pItem = !opts.pivotEdit && !isProtected(sheet()) ? pivotItemAt(active.r, active.c) : null;
+  if (!pItem && protectBlocked('cells', { r1: active.r, c1: active.c, r2: active.r, c2: active.c })) {
+    dom.editor.value = '';
+    dom.editor.blur();
+    setTimeout(() => { dom.editor.value = ''; focusGrid(); }, 0);
+    return;
+  }
   deselectChart();
   const { r, c } = active;
-  editing = { r, c, mode: 'enter', original: wb.getRaw(si, r, c), point: null, fromBar: false };
+  editing = { r, c, mode: 'enter', original: wb.getRaw(si, r, c), point: null, fromBar: false, pivotItem: pItem };
   dom.editor.classList.remove('idle');
   dom.formula.value = dom.editor.value;
   gv.ensureVisible(r, c);
@@ -861,6 +872,15 @@ function commitEdit(dir = null, { fillSel = false } = {}) {
   if (rule && rule.showError !== false && text !== original && !editing.dvOk && !checkValidation(wb, si, rule, r, c, text)) {
     validationError(rule, dir, fillSel);
     return false;
+  }
+  if (editing.pivotItem) {
+    const { entry, field, item } = editing.pivotItem;
+    endEditUI();
+    const name = text.replace(/^'/, '').trim();
+    if (text !== original && !text.startsWith('=')) renamePivotItem(entry, field, item, name);
+    if (dir) moveEnterTab(dir); else updateSelectionUI();
+    focusGrid();
+    return true;
   }
   endEditUI();
   const multi = fillSel && (!selIsActiveOnly() || special?.si === si);
@@ -10906,6 +10926,98 @@ function pivotActiveField(entry) {
   return (m[1] === 'colItem' ? res.def.cols : res.def.rows)[Number(m[2])] ?? null;
 }
 
+/**
+ * 선택 항목 그룹화 (엑셀 피벗 분석 › 그룹 › 선택 항목 그룹화): 행/열 필드에서 고른 항목들을 '그룹N' 으로 묶음.
+ * 처음이면 '필드2' 파생 필드를 그 필드 바깥에 추가 — def.groups['필드2'] = { by: 'items', base: '필드', map: {항목: 그룹} }
+ */
+function pivotGroupSelection() {
+  const here = pivotHere();
+  if (!here) { toast('피벗 테이블 안의 셀을 선택하세요.'); return; }
+  const def = pivotDefV2(here.def);
+  const src = pivotSource(def);
+  if (!src) return;
+  const res = resolvePivot(src, def);
+  const { grid } = computePivot(res, res.def);
+  const picked = new Map(); // 필드 → Set(항목 글자)
+  for (let r = sel.r1; r <= Math.min(sel.r2, sel.r1 + 5000); r++) for (let c = sel.c1; c <= Math.min(sel.c2, sel.c1 + 200); c++) {
+    const cd = grid[r - (def.top ?? 0)]?.[c - (def.left ?? 0)];
+    const m = /^(rowItem|rowGroup|colItem):(\d+)$/.exec(cd?.role ?? '');
+    if (!m) continue;
+    const f = (m[1] === 'colItem' ? res.def.cols : res.def.rows)[Number(m[2])];
+    if (!f) continue;
+    if (!picked.has(f)) picked.set(f, new Set());
+    picked.get(f).add(String(cd.raw ?? '').replace(/^'/, ''));
+  }
+  if (picked.size !== 1) { toast(picked.size ? '한 필드의 항목만 골라 그룹화하세요.' : '그룹화할 항목 셀들을 선택하세요.'); return; }
+  let [[field, items]] = [...picked];
+  const groups = { ...(def.groups ?? {}) };
+  let gname = null;
+  if (groups[field]?.by === 'items') {
+    // 그룹 필드('상품2')에서 아직 그룹에 안 든 항목들을 고름 → 같은 필드에 새 그룹 (바꾼 이름이면 원래 항목으로)
+    const caps = def.itemCaptions?.[field] ?? {};
+    items = new Set([...items].map((t) => Object.keys(caps).find((k) => caps[k] === t) ?? t));
+    const labels = new Set(Object.values(groups[field].map ?? {}));
+    if ([...items].some((t) => labels.has(t))) { toast('이미 만든 그룹은 다시 묶을 수 없습니다. 그룹에 안 든 항목만 고르세요.'); return; }
+    gname = field;
+    field = groups[field].base;
+  } else if (groups[field]) { toast('날짜 · 숫자로 그룹화한 필드입니다. 먼저 그룹 해제하세요.'); return; }
+  gname ??= Object.keys(groups).find((k) => groups[k]?.by === 'items' && String(groups[k].base).toLowerCase() === field.toLowerCase());
+  const isNew = !gname;
+  if (isNew) {
+    const names = new Set(headerNames(src).map((h) => h.toLowerCase()));
+    let n = 2;
+    while (names.has(`${field}${n}`.toLowerCase()) || groups[`${field}${n}`]) n++;
+    gname = `${field}${n}`;
+  }
+  const map = { ...(groups[gname]?.map ?? {}) };
+  const used = new Set(Object.values(map));
+  let k = 1;
+  while (used.has(`그룹${k}`)) k++;
+  const label = `그룹${k}`;
+  for (const t of items) map[t] = label;
+  groups[gname] = { by: 'items', base: field, map };
+  const next = { ...def, groups };
+  if (isNew) {
+    const put = (arr) => { const i = arr.findIndex((x) => x.toLowerCase() === field.toLowerCase()); return i < 0 ? arr : [...arr.slice(0, i), gname, ...arr.slice(i)]; };
+    next.rows = put(def.rows ?? []);
+    next.cols = put(def.cols ?? []);
+  }
+  setPivotDef(here, next);
+  refreshPivotPane(true);
+  toast(`${items.size}개 항목을 '${label}' (${gname} 필드)로 묶었습니다. 항목 셀에 새 이름을 입력하면 이름이 바뀝니다.`);
+}
+
+/** (r, c) 가 피벗의 행/열 항목 칸이면 { entry, field, item(원래 항목 글자) } */
+function pivotItemAt(r, c) {
+  const entry = pivotDefs().find(({ def: d }) => d.area && r >= d.area.r1 && r <= d.area.r2 && c >= d.area.c1 && c <= d.area.c2);
+  if (!entry) return null;
+  const def = pivotDefV2(entry.def);
+  const src = pivotSource(def);
+  if (!src) return null;
+  const res = resolvePivot(src, def);
+  const { grid } = computePivot(res, res.def);
+  const cd = grid[r - (def.top ?? 0)]?.[c - (def.left ?? 0)];
+  const m = /^(rowItem|rowGroup|colItem):(\d+)$/.exec(cd?.role ?? '');
+  if (!m) return null;
+  const field = (m[1] === 'colItem' ? res.def.cols : res.def.rows)[Number(m[2])];
+  const shown = String(cd.raw ?? '').replace(/^'/, '');
+  if (!field || !shown) return null;
+  const caps = def.itemCaptions?.[field] ?? {};
+  const item = Object.keys(caps).find((k) => caps[k] === shown) ?? shown;
+  return { entry, field, item };
+}
+/** 피벗 항목 이름 바꾸기 (엑셀 item@n): 빈 글자 · 원래 이름이면 원래대로 */
+function renamePivotItem(entry, field, item, name) {
+  const def = pivotDefV2(entry.def);
+  const all = pivotFieldItems(def, field);
+  if (name && name !== item && all.some((t) => t.toLowerCase() === name.toLowerCase())) { alertDialog('WIXEL', '같은 이름의 피벗 테이블 항목이 이미 있습니다.'); return; }
+  const caps = { ...(def.itemCaptions?.[field] ?? {}) };
+  if (!name || name === item) delete caps[item]; else caps[item] = name;
+  const itemCaptions = { ...(def.itemCaptions ?? {}) };
+  if (Object.keys(caps).length) itemCaptions[field] = caps; else delete itemCaptions[field];
+  setPivotDef(entry, { ...def, itemCaptions: Object.keys(itemCaptions).length ? itemCaptions : undefined });
+}
+
 /** 필드 그룹화: 날짜 → 연 · 분기 · 월 · 연-월 · 일, 숫자 → 구간 (시작 · 간격) */
 function pivotGroupDialog() {
   const here = pivotHere();
@@ -10918,7 +11030,7 @@ function pivotGroupDialog() {
   if (j < 0) return;
   const col = src.cube.col(j);
   const keys = col.dim().keys.filter((k) => typeof k === 'number');
-  if (!keys.length) { alertDialog('그룹화', '선택 항목을 그룹화할 수 없습니다. 날짜나 숫자 필드만 그룹화할 수 있습니다.'); return; }
+  if (!keys.length || !isSingle(sel)) { pivotGroupSelection(); return; } // 글자 필드 · 여러 항목 선택 = 선택 항목 그룹화
   const lo = minOf(keys.slice(0, 200000));
   const hi = maxOf(keys.slice(0, 200000));
   const st = src.ref && src.si !== undefined ? wb.styleAt(src.si, Math.min(src.ref.r1 + 1, src.ref.r2), src.ref.c1 + j) : null;
@@ -10951,6 +11063,35 @@ function pivotUngroup() {
   const def = pivotDefV2(here.def);
   const field = pivotActiveField(here) ?? Object.keys(def.groups ?? {})[0];
   if (!field || !def.groups?.[field]) { toast('그룹화된 필드의 항목을 선택하세요.'); return; }
+  if (def.groups[field].by === 'items') {
+    // 선택 항목 그룹: 고른 그룹만 풀고, 남은 그룹이 없으면 파생 필드도 뺌 (엑셀과 같음)
+    const g = def.groups[field];
+    // 고른 칸: 그룹 이름(바꾼 이름이면 원래 이름) 또는 그 그룹에 든 항목
+    let t = pivotItemAt(active.r, active.c)?.item ?? String(wb.getValue(si, active.r, active.c) ?? '');
+    if (g.map?.[t]) t = g.map[t];
+    const map = Object.fromEntries(Object.entries(g.map ?? {}).filter(([, v]) => v !== t));
+    const groups = { ...def.groups };
+    const next = { ...def };
+    if (Object.keys(map).length && Object.keys(map).length !== Object.keys(g.map ?? {}).length) groups[field] = { ...g, map };
+    else {
+      delete groups[field];
+      next.rows = (def.rows ?? []).filter((x) => x !== field);
+      next.cols = (def.cols ?? []).filter((x) => x !== field);
+    }
+    next.groups = Object.keys(groups).length ? groups : undefined;
+    // 푼 그룹의 바꾼 이름도 지움 (새로 만든 '그룹1' 에 옛 이름이 붙지 않게)
+    if (def.itemCaptions?.[field]) {
+      const caps = { ...def.itemCaptions[field] };
+      delete caps[t];
+      if (!groups[field]) Object.keys(caps).forEach((k) => delete caps[k]);
+      const ic = { ...def.itemCaptions };
+      if (Object.keys(caps).length) ic[field] = caps; else delete ic[field];
+      next.itemCaptions = Object.keys(ic).length ? ic : undefined;
+    }
+    setPivotDef(here, next);
+    refreshPivotPane(true);
+    return;
+  }
   const groups = { ...def.groups };
   delete groups[field];
   const drop = (obj) => { if (!obj?.[field]) return obj; const o = { ...obj }; delete o[field]; return Object.keys(o).length ? o : undefined; };
@@ -15290,6 +15431,7 @@ const COMMANDS = {
   pivotCollapseField: () => pivotExpandField(false),
   pivotGroupField: () => pivotGroupDialog(),
   pivotUngroup: () => pivotUngroup(),
+  pivotGroupSelection: () => pivotGroupSelection(),
   pivotDetail: () => { const pv = pivotHere(); if (!pv || !showPivotDetail(pv, active.r, active.c)) toast('피벗 테이블의 값 셀을 선택하세요.'); },
   pivotShowExpand: () => { const pv = pivotHere(); if (pv) pivotLayoutCmd({ showExpand: pv.def.showExpand === false }); },
   pivotChangeSource: () => pivotChangeSourceDialog(),
@@ -15412,6 +15554,7 @@ const WHATS_NEW = [
   ['보기', ['탐색 창 (시트 · 표 · 피벗 · 이름 · 개체 · 메모 · 링크)', '포커스 셀 · 값 강조(Ctrl+F8: 숫자 파랑 · 수식 초록)', '상태 표시줄 사용자 지정 (오른쪽 클릭: 평균 · 개수 · 숫자 셀 수 · 최소 · 최대 · 합계 · 선택 크기, 값 클릭 = 복사)']],
   ['붙여넣기', ['연결된 그림 (카메라: 원본이 바뀌면 같이 바뀜) · 그림 · 연결하여 붙여넣기']],
   ['마케팅', ['이상치 찾기 (데이터 › 분석: 일별 비용 · 전환의 급등 빨강 / 급락 파랑, 수식 조건부 서식)', '광고 지표 (노출 · 클릭 · 비용 · 전환 · 매출 → CTR · CPC · CPM · CVR · CPA · ROAS 열 자동 추가)']],
+  ['피벗 그룹', ['선택 항목 그룹화 (항목 셀 여러 개 선택 → 그룹1 · 그룹2, 그룹 해제)', '피벗 항목 이름 바꾸기 (항목 칸에 새 이름 입력)', '엑셀 파일의 선택 항목 그룹 · 공유 캐시 날짜 그룹을 그대로 열고 저장']],
   ['피벗', ['추천 피벗 테이블 (삽입 › 추천 피벗 테이블: 요약 후보 미리 보기)', '계산 항목 (예: 수도권 = 서울 + 인천, 피벗 분석 › 필드, 항목 및 집합)']],
   ['호환', ['확인란을 엑셀 365 고유 형식으로 저장 (엑셀에서도 확인란으로 보임)']],
   ['파일', ['저장 위치(폴더) 선택 · 덮어쓰기 확인 · 연 파일에 바로 [저장]', '파일 › 정보: 통합 문서 보호(구조 보호 · 최종본 · 읽기 전용 권장) · 문서 검사 · 속성 편집', '다른 기기에서 열기(서버 저장)도 폴더 지정']],
@@ -15727,6 +15870,7 @@ function bindEvents() {
     if (!editing && keytip) { if (!e.isComposing) ed.value = ''; return; }
     if (!editing && chartSel) { if (!e.isComposing) objectTyped(); return; }
     if (!editing) beginTyping();
+    if (!editing) return;
     editing.point = null;
     if (!e.isComposing && e.inputType === 'insertText') cellAutoComplete();
     dom.formula.value = ed.value;

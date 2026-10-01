@@ -145,6 +145,7 @@ export function excelCalcFormula(formula) {
       return `${n.fn}(${n.args.map((x) => txt(x)).join(',')})`;
     }
     if (n.op === 'neg') return `-${txt(n.a, 6)}`;
+    if (n.op === 'pct') return `${txt(n.a, 7)}%`;
     const p = PREC[n.op];
     const s = `${txt(n.a, p)}${n.op}${txt(n.b, p + 1)}`;
     return p < parent ? `(${s})` : s;
@@ -203,7 +204,7 @@ export function parseCalc(src) {
       i = j + 1;
       continue;
     }
-    const op = /^(<>|<=|>=|[-+*/^&=<>(),;])/.exec(text.slice(i));
+    const op = /^(<>|<=|>=|[-+*/^&=<>(),;%])/.exec(text.slice(i));
     if (op) { toks.push({ t: 'op', v: op[0] === ';' ? ',' : op[0] }); i += op[0].length; continue; }
     const nm = /^[^\s\-+*/^&=<>(),;'"]+/.exec(text.slice(i));
     if (!nm) throw new Error('수식 오류');
@@ -219,7 +220,9 @@ export function parseCalc(src) {
   const add = () => { let a = mul(); for (;;) { if (eat('+')) a = { op: '+', a, b: mul() }; else if (eat('-')) a = { op: '-', a, b: mul() }; else return a; } };
   const mul = () => { let a = pow(); for (;;) { if (eat('*')) a = { op: '*', a, b: pow() }; else if (eat('/')) a = { op: '/', a, b: pow() }; else return a; } };
   const pow = () => { let a = un(); while (eat('^')) a = { op: '^', a, b: un() }; return a; };
-  const un = () => (eat('-') ? { op: 'neg', a: un() } : eat('+') ? un() : prim());
+  // 백분율 (후위 %): 엑셀처럼 "0"% = 0, 클릭% = 클릭/100
+  const pct = () => { let a = prim(); while (eat('%')) a = { op: 'pct', a }; return a; };
+  const un = () => (eat('-') ? { op: 'neg', a: un() } : eat('+') ? un() : pct());
   const prim = () => {
     const t = toks[p++];
     if (!t) throw new Error('수식 오류');
@@ -311,6 +314,7 @@ function evalCalc(ast, get) {
       }
     }
     if (n.op === 'neg') { const v = num(ev(n.a)); return isErr(v) ? v : -v; }
+    if (n.op === 'pct') { const v = num(ev(n.a)); return isErr(v) ? v : v / 100; }
     if (n.op === '&') { const a = ev(n.a); const b = ev(n.b); return isErr(a) ? a : isErr(b) ? b : `${a}${b}`; }
     const a = num(ev(n.a));
     const b = num(ev(n.b));
@@ -384,6 +388,8 @@ const usesRows = (ast) => !!ast && (ast.fn === 'ROWS' || ['a', 'b'].some((k) => 
 /** 오류 · 빈 셀 표시 글자 → 칸 입력 (엑셀: 숫자 모양이면 숫자 0 처럼 숫자로 씀) */
 const captionRaw = (t) => (!t ? '' : /^-?\d+(\.\d+)?$/.test(t) ? t : `'${t}`);
 
+/** 계산 필드 결과는 숫자 (엑셀: IFERROR(…,"0") 의 "0" 은 숫자 0 으로 보임) */
+const calcNumber = (v) => (typeof v === 'string' && /^\s*-?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?\s*$/i.test(v) ? Number(v) : v);
 function makeMeasures(header, values, calcFields) {
   const lower = (x) => String(x).toLowerCase();
   const calcByName = new Map((calcFields ?? []).map((c) => {
@@ -447,13 +453,13 @@ function makeMeasures(header, values, calcFields) {
       if (!list) return null;
       const sp = specs[vi];
       if (!sp) return null;
-      if (sp.calc) return calcValue(sp.calc, list);
+      if (sp.calc) return calcNumber(calcValue(sp.calc, list));
       return result(list[sp.slot], sp.agg);
     },
     /** 데이터가 없는 총합계: 엑셀은 계산 필드만 합계 0 으로 계산하고 나머지는 빈칸 */
     emptyValue(vi) {
       const sp = specs[vi];
-      return sp?.calc ? calcValue(sp.calc, cols.map(newAcc)) : null;
+      return sp?.calc ? calcNumber(calcValue(sp.calc, cols.map(newAcc))) : null;
     },
     accumulate(list, r) {
       for (let k = 0; k < n; k++) add(list[k], cols[k] < 0 ? 1 : r[cols[k]]);
@@ -1276,7 +1282,7 @@ function orderTree(root, fields, d, measureAt) {
       const num = (v) => (typeof v === 'number' ? v : v === null || v === undefined ? 0 : -Infinity);
       const tie = tieRank(d, field, n);
       kids = [...kids].sort((a, b) => (s.dir === 'desc' ? num(score.get(b)) - num(score.get(a)) : num(score.get(a)) - num(score.get(b))) || tie(a.key) - tie(b.key));
-    } else if (d.groups?.[field]) {
+    } else if (d.groups?.[field] && d.groups[field].by !== 'items') {
       // 그룹화한 필드: 월 · 분기 · 구간은 숫자 순서
       const spec = d.groups[field];
       const rank = (k) => groupRank(k, spec);
@@ -1916,7 +1922,9 @@ export function pivotLookup(rows, def, dataField, pairs, resolved = null) {
       const ci = d.cols.indexOf(name);
       return ri >= 0 ? ['r', ri] : ci >= 0 ? ['c', ci] : null;
     });
-    e = { vi, pos, idx: null };
+    // 월 · 분기로 묶은 날짜 필드는 엑셀처럼 숫자 항목(12 → '12월', 3 → '3분기')으로도 찾음
+    const by = pairs.map(([f]) => { const name = header.find((h) => h.toLowerCase() === String(f).toLowerCase()); return d.groups?.[name]?.by ?? null; });
+    e = { vi, pos, idx: null, by };
     if (vi >= 0 && !pos.some((p) => !p)) {
       e.idx = new Map();
       // 엑셀: 축소한 항목 아래(보이지 않는) 항목은 GETPIVOTDATA 가 #REF!
@@ -1933,7 +1941,12 @@ export function pivotLookup(rows, def, dataField, pairs, resolved = null) {
     bySig.set(sig, e);
   }
   if (!e.idx) return null;
-  let list = e.idx.get(pairs.length === 1 ? itemText(pairs[0][1]) : pairs.map((p) => itemText(p[1])).join('\u0001'));
+  const itemKey = (v, i) => {
+    const b = e.by[i];
+    if (typeof v === 'number' && Number.isInteger(v)) { if (b === 'months' && v >= 1 && v <= 12) return `${v}월`; if (b === 'quarters' && v >= 1 && v <= 4) return `${v}분기`; }
+    return itemText(v);
+  };
+  let list = e.idx.get(pairs.length === 1 ? itemKey(pairs[0][1], 0) : pairs.map((p, i) => itemKey(p[1], i)).join('\u0001'));
   // 원본 행이 하나도 없는 피벗의 총합계: 엑셀은 빈 집계(합계 0, 계산 필드는 그 결과)를 돌려줌
   if (!list && !pairs.length && !res.groups.length) list = res.measures.newList();
   if (!list) return null;

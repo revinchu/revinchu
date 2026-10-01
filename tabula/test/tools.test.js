@@ -144,3 +144,34 @@ test('이상치 조건부 서식 수식이 JS 판정과 같음', async () => {
     assert.deepEqual(got, want, method);
   }
 });
+
+test('피벗 선택 항목 그룹화: 계산 · xlsx 왕복 (discretePr)', async () => {
+  const { writeXlsx, readXlsx } = await import('../src/xlsx.js');
+  const { resolvePivot, computePivot, pivotSourceData } = await import('../src/pivot.js');
+  const wb = new Workbook();
+  put(wb, [['상품', '비용'], ['A', 10], ['B', 20], ['C', 5], ['D', 1]]);
+  const def = { name: '피벗 테이블1', source: wb.sheets[0].name, range: { r1: 0, c1: 0, r2: 4, c2: 1 }, rows: ['상품2', '상품'], cols: [], values: [{ field: '비용', agg: 'sum' }], top: 0, left: 4, groups: { 상품2: { by: 'items', base: '상품', map: { A: '그룹1', B: '그룹1' } } } };
+  const grid = (w, d) => { const res = resolvePivot(pivotSourceData(w, d), d); return computePivot(res, res.def).grid.map((r) => [String(r[0]?.raw ?? '').replace(/^'/, ''), r[r.length - 1]?.raw]); };
+  const g1 = grid(wb, def);
+  assert.ok(g1.some(([a, b]) => a === '그룹1' && Number(b) === 30));
+  wb.transact(() => wb.setSheetProp(0, 'pivot', def));
+  const back = new Workbook(readXlsx(writeXlsx(wb)).data);
+  const d2 = back.sheets[0].pivot;
+  assert.deepEqual(d2.groups.상품2, def.groups.상품2);
+  const sorted = (g) => g.map((r) => r.join('=')).sort();
+  assert.deepEqual(sorted(grid(back, d2)), sorted(g1));
+});
+
+test('계산 필드: 후위 % · 숫자 글자 결과는 숫자, GETPIVOTDATA 월 그룹에 숫자 항목', async () => {
+  const { resolvePivot, computePivot, pivotLookup, parseCalc } = await import('../src/pivot.js');
+  assert.ok(parseCalc('IFERROR(클릭/노출,"0"%)'));
+  const rows = [['일자', '노출', '클릭'], [46000, 100, 5], [46001, 0, 0], [46040, 50, 1]];
+  const def = { rows: ['일자'], cols: [], values: [{ field: 'CTR', agg: 'sum' }, { field: '클릭', agg: 'sum' }], calcFields: [{ name: 'CTR', formula: 'IFERROR(클릭/노출,"0"%)' }, { name: 'Z', formula: 'IFERROR(클릭/0,"0")' }], groups: { 일자: { by: 'months' } } };
+  const res = resolvePivot(rows, def);
+  const g = computePivot(res, res.def).grid;
+  assert.ok(g.every((r) => !r.some((x) => x?.raw === '#NAME?')));
+  const z = resolvePivot(rows, { ...def, values: [{ field: 'Z', agg: 'sum' }] });
+  assert.ok(computePivot(z, z.def).grid.some((r) => r[r.length - 1]?.raw === '0'));
+  const month = new Date(Date.UTC(1899, 11, 30) + 46000 * 864e5).getUTCMonth() + 1;
+  assert.equal(pivotLookup(rows, def, '클릭', [['일자', month]], res), 5);
+});

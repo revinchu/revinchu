@@ -466,6 +466,8 @@ const p2 = (n) => String(n).padStart(2, '0');
 const isoDay = (v) => { const d = serialDate(v); return `${d.getUTCFullYear()}-${p2(d.getUTCMonth() + 1)}-${p2(d.getUTCDate())}`; };
 /** 원래 값 → 그룹 키 (숫자가 아니면 그대로) */
 export function groupKey(v, spec) {
+  // 선택 항목 그룹화 (엑셀 '그룹1' 등): 원래 항목 글자 → 그룹 이름, 그룹에 안 든 항목은 그대로
+  if (spec.by === 'items') return v === null || v === undefined || v === '' ? v : spec.map?.[itemText(v)] ?? v;
   if (typeof v !== 'number') return v;
   if (spec.by === 'number') {
     const size = Number(spec.size) || 10;
@@ -490,6 +492,7 @@ export function groupKey(v, spec) {
 }
 /** 그룹 키 정렬 순서 (월 · 분기 · 구간은 숫자 순서) */
 export function groupRank(k, spec) {
+  if (spec.by === 'items') return null;
   if (typeof k === 'number') return k;
   if (k === EMPTY) return Infinity;
   if (typeof k === 'string' && k[0] === '<') return -Infinity;

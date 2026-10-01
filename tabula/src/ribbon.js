@@ -339,6 +339,7 @@ export const TABS = [
       ]),
       group('그룹', [
         col(
+          medium('pivotGroupSelection', 'pivot', '선택 항목 그룹화', { title: '선택한 항목 셀들을 그룹1 · 그룹2 … 로 묶기' }),
           medium('pivotGroupField', 'pivot', '필드 그룹', { title: '날짜를 연 · 분기 · 월로, 숫자를 구간으로 묶기' }),
           medium('pivotUngroup', 'clear', '그룹 해제'),
           medium('pivotDetail', 'table', '세부 정보 표시', { title: '선택한 값 셀의 원본 행을 새 시트에 (값 셀 두 번 클릭)' }),

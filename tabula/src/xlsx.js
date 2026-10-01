@@ -22,6 +22,7 @@ import { GEOM, LINE_KINDS } from './shapes.js';
 import { BLOCK_MIN_ROWS, ColBuilder, inBlock, blockValue } from './block.js';
 import { normalizeStyleName, DEFAULT_TABLE_STYLE, dataTop, dataBottom, canonicalRef, tableAt, columnNames, findTable } from './tables.js';
 import { pivotSourceData, resolvePivot, itemText, keyOf, sortKeys, EMPTY, headerNames, normalizeDef, computePivot, valueName, showAsPercent, excelCalcFormula, pivotFilterKey, DATE_OP_TYPES } from './pivot.js';
+import { groupKey } from './cube.js';
 import { slicerStyleName, slicerColors, isModernSlicer } from './slicerstyle.js';
 import { applyTint, DEFAULT_THEME, PRESET_STYLES, presetStyle, isModernStyle, ELEMENT_TYPES, elementDxfStyle } from './stylepresets.js';
 import { maxOf, minOf, pushAll, DAY_MS } from './fxcore.js';
@@ -1743,6 +1744,9 @@ function readPivotCache(files, path) {
       const rp = child(fg, 'rangePr');
       const gi = child(fg, 'groupItems');
       if (gi) gitems = (gi.children ?? []).map((it) => (it.name === 'n' ? Number(it.attrs.v) : it.name === 'm' ? null : it.attrs.v ?? ''));
+      const dp = child(fg, 'discretePr');
+      // 선택 항목 그룹화: discretePr 의 x = 원본 필드 항목마다 groupItems 번호
+      if (dp && !rp) group = { base: fg.attrs.base !== undefined ? Number(fg.attrs.base) : null, derived: true, by: 'discrete', disc: kids(dp, 'x').map((x) => Number(x.attrs.v)) };
       if (rp) {
         group = {
           base: fg.attrs.base !== undefined ? Number(fg.attrs.base) : null,
@@ -1943,9 +1947,22 @@ function pivotDefFrom(root, cache, tables, sheetName) {
   }
   // 날짜 · 숫자 그룹 (파생 필드 '월2' 등은 base 필드에서 만듦)
   const groups = {};
-  for (const f of [...rowF, ...colF, ...pageEls.map((p) => Number(p.attrs.fld))]) {
+  // 그룹은 캐시에 있어 같은 캐시를 쓰는 피벗 모두에 적용됨: 축에 없어도 그 필드로 거르면(슬라이서 · 숨긴 항목 '1월'…) 필요
+  const filtered = new Set(Object.keys(def.filters ?? {}).map((n) => n.toLowerCase()));
+  const groupFields = new Set([...rowF, ...colF, ...pageEls.map((p) => Number(p.attrs.fld))]);
+  names.forEach((n, f) => { if (filtered.has(String(n).toLowerCase())) groupFields.add(f); });
+  for (const f of groupFields) {
     const g = cache.fields[f]?.group;
     if (!g) continue;
+    if (g.by === 'discrete') {
+      const bf = cache.fields[g.base];
+      if (!bf) continue;
+      const gi = cache.fields[f].items ?? [];
+      const map = {};
+      (bf.shared ?? []).forEach((k, i) => { const to = gi[g.disc[i]]; if (to !== undefined && to !== null && itemText(to) !== itemText(k)) map[itemText(k)] = itemText(to); });
+      groups[names[f]] = { by: 'items', base: bf.name, map };
+      continue;
+    }
     const by = { years: 'years', quarters: 'quarters', months: 'months', days: 'mdays' }[g.by] ?? (g.by === 'range' && g.size ? 'number' : null);
     if (!by) continue;
     const spec = by === 'number' ? { by, start: g.startNum, size: g.size } : { by, ...(g.start !== undefined ? { start: g.start, end: g.end } : {}) };
@@ -3114,7 +3131,8 @@ function buildPivotCache(wb, defs, cacheId, extraFields) {
   const bx = (n) => baseHeader.findIndex((h) => h.toLowerCase() === String(n).toLowerCase());
   const grouped = new Map(); // 필드 이름(소문자) → { name, spec, base: 원본 필드 번호, derived }
   for (const d of defs) for (const [n, g] of Object.entries(d.groups ?? {})) {
-    if (!g || !XL_GROUP_BY[g.by] || grouped.has(n.toLowerCase())) continue;
+    if (!g || (!XL_GROUP_BY[g.by] && g.by !== 'items') || grouped.has(n.toLowerCase())) continue;
+    if (g.by === 'items' && (!g.base || bx(n) >= 0)) continue; // 선택 항목 그룹은 파생 필드('상품명2')만
     const derived = !!g.base && bx(n) < 0;
     const base = derived ? bx(g.base) : bx(n);
     if (base >= 0) grouped.set(n.toLowerCase(), { name: n, spec: g, base, derived });
@@ -3130,16 +3148,32 @@ function buildPivotCache(wb, defs, cacheId, extraFields) {
     [...d.rows, ...d.cols, ...d.pages, ...Object.keys(d.filters)].forEach((n) => listed.add(fx(n)));
   }
   header.forEach((h, i) => { if (extraFields?.has(h.toLowerCase())) listed.add(i); });
+  for (const g of grouped.values()) if (g.spec.by === 'items') listed.add(g.base); // discretePr 가 원본 항목 번호를 씀
   const items = new Map();
   for (const f of listed) if (f >= 0 && f < nBase && !grouped.has(header[f].toLowerCase())) items.set(f, fieldItems(data, f));
   // 그룹 필드의 항목 = 엑셀 groupItems 전체 (피벗 필드의 x 가 이 목록을 가리킴)
   const groupXml = new Map();
   for (const g of grouped.values()) {
     const f = fx(g.name);
+    if (g.spec.by === 'items') {
+      // 선택 항목 그룹화: 원본 항목마다 그룹 번호(discretePr) + 그룹 항목(groupItems, 그룹에 안 든 항목은 자기 자신)
+      const bk = items.get(g.base)?.keys ?? [];
+      const keys = [];
+      const pos = new Map();
+      const disc = bk.map((k) => {
+        const to = k === EMPTY ? EMPTY : groupKey(k, g.spec);
+        const id = `${typeof to}:${to}`;
+        if (!pos.has(id)) { pos.set(id, keys.length); keys.push(to); }
+        return pos.get(id);
+      });
+      items.set(f, { keys, index: new Map(keys.map((k, i) => [`${typeof k}:${k}`, i])) });
+      groupXml.set(f, `<fieldGroup base="${g.base}"><discretePr count="${disc.length}">${disc.map((i) => `<x v="${i}"/>`).join('')}</discretePr><groupItems count="${keys.length}">${keys.map((k) => (k === EMPTY ? '<m/>' : `<s v="${esc(itemText(k))}"/>`)).join('')}</groupItems></fieldGroup>`);
+      continue;
+    }
     const vals = data.map((r) => r[g.base]).filter((v) => typeof v === 'number');
     const gi = excelGroupItems(g.spec, vals.length ? minOf(vals) : 0, vals.length ? maxOf(vals) : 0);
     items.set(f, { keys: gi.keys, index: new Map(gi.keys.map((k, i) => [`${typeof k}:${k}`, i])) });
-    const par = !g.derived ? derivedList.find((x) => x.base === g.base) : null;
+    const par = !g.derived ? derivedList.find((x) => x.base === g.base && x.spec.by !== 'items') : null;
     groupXml.set(f, `<fieldGroup${par ? ` par="${fx(par.name)}"` : ''} base="${g.base}">${gi.rangePr}<groupItems count="${gi.keys.length}">${gi.keys.map((k) => `<s v="${esc(itemText(k))}"/>`).join('')}</groupItems></fieldGroup>`);
   }
   // 엑셀에 없는 함수(DIVIDE · ROWS)는 엑셀 수식으로 바꿔 쓰고, 원래 수식은 엑셀이 무시하는 tb:formula 에 (다시 열면 그대로)
