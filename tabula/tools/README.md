@@ -1,39 +1,160 @@
 # 검증 도구 (tools/)
 
-`npm test`(Node 단위 테스트) 외에, 실제 브라우저와 실제 엑셀 파일로 회귀를 잡는 스크립트들입니다.
-엑셀 호환을 고칠 때는 **수정 전/후로 같은 파일을 돌려 숫자가 나빠지지 않았는지** 비교하는 것이 원칙입니다.
+`npm test` 외에 브라우저 동작과 엑셀 파일 회귀를 확인하는 스크립트입니다.
+실제 파일을 비교할 때는 **수정 전에 기준 결과를 저장하고, 수정 후 같은 파일과 명령으로 다시 측정**하세요.
+이번 인계에서 실행한 결과와 미검증 범위는 [`06_검증결과.md`](../docs/codex/06_검증결과.md)에 기록합니다.
 
-## 준비
-```bash
-cd tabula
-npm i -D playwright      # 이 폴더의 스크립트만 씀 (앱 자체는 의존성 0 — package.json 에 넣지 말 것: --no-save 권장)
-npx playwright install chromium
-npm start &              # http://localhost:5178
+## 준비 (Windows PowerShell)
+
+기존 체크아웃 경로는 유지합니다. 새 작업은 `D:\Codex\Workspaces`, 임시 파일은 `D:\Codex\Temp`,
+캐시는 `D:\Codex\Caches`에 둡니다. 아래 경로는 현재 체크아웃 예시입니다.
+
+```powershell
+Set-Location D:\Codex\Workspaces\wixel\tabula
+New-Item -ItemType Directory -Force D:\Codex\Temp, D:\Codex\Caches\npm, D:\Codex\Caches\ms-playwright | Out-Null
+$env:TEMP = 'D:\Codex\Temp'
+$env:TMP = 'D:\Codex\Temp'
+$env:npm_config_cache = 'D:\Codex\Caches\npm'
+$env:PLAYWRIGHT_BROWSERS_PATH = 'D:\Codex\Caches\ms-playwright'
+npm install --no-save --package-lock=false playwright
+node node_modules/playwright/cli.js install chromium
 ```
-- 다른 주소면 `WIXEL_URL=http://localhost:8080/`
-- 전역 설치된 playwright 를 쓰려면 `PLAYWRIGHT_MODULE=/경로/playwright/index.mjs`
-- 실제 업무 파일(xlsx/xlsb)은 저장소에 **커밋하지 마세요.** 로컬 폴더(예: `~/wixel-samples/`)에 두고 경로로 넘깁니다.
 
-## 스크립트
+Playwright는 검증 도구용입니다. 앱의 `package.json`과 잠금 파일에 의존성을 추가하지 마세요.
+`check.mjs`는 Node만 사용하므로 Playwright나 실행 중인 서버가 필요 없습니다.
+
+서버용 터미널에서 다음을 실행합니다. 테스트용 문서 저장 경로를 사용하며, 종료는 `Ctrl+C`입니다.
+
+```powershell
+Set-Location D:\Codex\Workspaces\wixel\tabula
+$env:HOST = '127.0.0.1'
+$env:PORT = '5178'
+$env:TABULA_DATA = 'D:\Codex\Temp\wixel-server-data'
+npm start
+```
+
+검증용 터미널에서는 브라우저 경로를 같은 값으로 지정하고 스크립트를 실행합니다.
+
+```powershell
+Set-Location D:\Codex\Workspaces\wixel\tabula
+$env:PLAYWRIGHT_BROWSERS_PATH = 'D:\Codex\Caches\ms-playwright'
+$env:WIXEL_URL = 'http://127.0.0.1:5178/'
+node tools/smoke.mjs
+$LASTEXITCODE
+```
+
+이미 외부 폴더에 설치한 Playwright를 재사용할 수도 있습니다. `PLAYWRIGHT_MODULE`은
+`import()`가 읽을 수 있는 **파일 URL**을 사용합니다. 아래는 해당 위치에 설치되어 있을 때의 예입니다.
+
+```powershell
+$env:PLAYWRIGHT_MODULE = 'file:///D:/Codex/Temp/wixel-tools/node_modules/playwright/index.mjs'
+```
+
+현재 폴더의 `node_modules`를 쓰려면 `Remove-Item Env:PLAYWRIGHT_MODULE -ErrorAction SilentlyContinue`로 이 설정을 해제합니다.
+서버 포트를 바꿨다면 `WIXEL_URL`도 맞추세요. 브라우저 스크립트는 생성한 테스트 브라우저에서 데이터를 초기화하고 명령을 실행하므로 별도 테스트 서버를 사용합니다.
+네 브라우저 도구는 초기화 스크립트에서 `window.TABULA_STATIC = true`를 설정해
+서버 문서 자동 저장·복원으로 검사 데이터가 바뀌는 것을 막습니다. 도구의 성공은 서버 API 인증·보안 검증을 의미하지 않습니다.
+
+### Git Bash 사용 시
+
+Windows Git Bash에서도 같은 D: 경로를 사용합니다. 아래 환경 변수는 명령을 실행하는 각 터미널에 적용합니다.
+
+```bash
+cd /d/Codex/Workspaces/wixel/tabula
+mkdir -p /d/Codex/Temp /d/Codex/Caches/npm /d/Codex/Caches/ms-playwright
+export TEMP='D:/Codex/Temp' TMP='D:/Codex/Temp'
+export npm_config_cache='D:/Codex/Caches/npm'
+export PLAYWRIGHT_BROWSERS_PATH='D:/Codex/Caches/ms-playwright'
+export WIXEL_URL='http://127.0.0.1:5178/'
+npm install --no-save --package-lock=false playwright
+node node_modules/playwright/cli.js install chromium
+```
+
+서버용 터미널에서는 같은 폴더에서 다음 명령을 실행하고, 다른 터미널에서 `node tools/smoke.mjs`를 실행합니다.
+
+```bash
+HOST=127.0.0.1 PORT=5178 TABULA_DATA='D:/Codex/Temp/wixel-server-data' npm start
+```
+
+외부 Playwright 모듈은 `export PLAYWRIGHT_MODULE='file:///D:/Codex/Temp/wixel-tools/node_modules/playwright/index.mjs'`처럼 지정합니다.
+
+## 스크립트와 판정
+
 | 파일 | 하는 일 | 사용법 | 성공 기준 |
 |------|---------|--------|-----------|
-| `smoke.mjs` | 앱의 모든 명령(`window.tabula.commands()`, 약 280개)을 샘플 데이터 위에서 실행해 콘솔 오류 · 예외 수집 | `node tools/smoke.mjs` | 마지막 줄 `bad 0` |
-| `keys.mjs` | 엑셀에서 많이 쓰는 단축키 66개를 눌러 결과 확인 | `node tools/keys.mjs` | 실패 목록 없음 (Ctrl+Shift+1 은 한국어판처럼 `#,##0` 이 의도된 동작) |
-| `check.mjs` | (Node, 브라우저 불필요) 파일의 모든 수식을 다시 계산해 **엑셀이 저장한 값과 비교** + xlsx 저장/다시 읽기 왕복 검사 | `node tools/check.mjs 파일.xlsx` | `formula mismatches: 0`, `roundtrip issues: 0` (TODAY/NOW/RAND 처럼 날짜 · 난수에 따라 바뀌는 수식은 예외) |
-| `brcheck.mjs` | 같은 비교를 브라우저에서 (피벗을 다시 그린 뒤라 GETPIVOTDATA 등 포함) + 여는 시간 | `node tools/brcheck.mjs 파일.xlsx` | 불일치 0, 로딩 시간 기록 |
-| `pvcmp.mjs` | 피벗 영역마다 **엑셀이 저장한 칸 값 vs WIXEL 이 다시 계산해 그린 값** | `node tools/pvcmp.mjs 파일.xlsx` | `pivots N differing 0` |
+| `smoke.mjs` | 샘플 데이터에서 실행 가능한 앱 명령을 호출해 콘솔 오류·예외 확인. 파일 선택 등 일부 명령 제외 | `node tools/smoke.mjs` | `bad 0` 및 종료 코드 0 |
+| `keys.mjs` | 단축키 66개 확인. 3개는 실행 오류만 확인한다고 출력 | `node tools/keys.mjs` | 요약의 `bad`·`pageErrors`가 모두 0, 종료 코드 0 |
+| `check.mjs` | Node에서 수식을 다시 계산해 파일 저장값과 비교하고 xlsx 저장/읽기 왕복 검사 | `node tools/check.mjs 파일.xlsx` | `formula mismatches: 0`, `roundtrip issues: 0`, 종료 코드 0 |
+| `brcheck.mjs` | 브라우저에서 파일을 열고 피벗을 다시 그린 뒤 수식 비교 및 로딩 시간 기록 | `node tools/brcheck.mjs 파일.xlsx` | 브라우저 수식 불일치·오류 없음 및 종료 코드 0 |
+| `pvcmp.mjs` | 피벗 영역별 파일 저장값과 WIXEL 재계산 결과 비교 | `node tools/pvcmp.mjs 파일.xlsx` | `pivots N differing 0`, 종료 코드 0 |
 
-> `check.mjs` · `pvcmp.mjs` 는 xlsx/xlsm/xlsb 만 받습니다. 옛 `.xls`(BIFF8)는 `readXls` 를 쓰므로 브라우저(`brcheck.mjs`)로 확인하세요.
+- `check.mjs`·`pvcmp.mjs`: 종료 코드 **0** = 검사상 차이 없음, **1** = 비교 차이, **2** = 입력 문제 또는 검사 중 실행 오류. 비정상 종료만 보고 차이의 원인을 단정하지 말고 출력도 확인하세요.
+- `smoke.mjs`·`keys.mjs`·`brcheck.mjs`: 검출한 오류·실패는 종료 코드 **1**. `brcheck.mjs`의 입력 문제는 **2**입니다. 모듈 설치·브라우저 시작·서버 연결 등 실행 자체의 실패도 비정상 종료이므로 결과 로그를 함께 확인하세요.
+- PowerShell은 명령 직후 `$LASTEXITCODE`, Bash는 `$?`로 종료 코드를 확인합니다. 뒤에 실행한 명령의 코드로 덮이지 않게 바로 기록하세요.
+- `check.mjs`·`pvcmp.mjs`는 **xlsx/xlsm/xlsb**만 받습니다. 옛 `.xls`(BIFF8)는 `brcheck.mjs`로 확인하세요.
+- `TODAY/NOW/RAND` 같은 수식의 날짜·난수 차이는 **자동 제외되지 않습니다**. 실제 차이와 구분해 수동 검토 근거를 남기세요.
+- `pivots 0 differing 0`은 피벗이 없는 파일을 뜻하므로 피벗 기능 검증 성공으로 세지 마세요.
+- 스모크와 왕복 검사는 실제 Excel에서의 표시·복구 메시지 여부를 보장하지 않습니다. Excel 365 확인란 실검증은 별도입니다.
 
-## 회귀 비교 방법 (권장)
-```bash
-for f in ~/wixel-samples/*.xls[xmb]; do echo "== $f"; node tools/pvcmp.mjs "$f" | tail -1; done > after.txt
-git stash; (서버는 파일을 바로 읽으므로 재시작 불필요) 같은 명령 > before.txt; git stash pop
-diff before.txt after.txt
+## 회귀 비교 방법 (PowerShell)
+
+실제 업무 파일은 예를 들어 `D:\Codex\Temp\wixel-samples`에 둡니다. 파일과 셀 값이 담긴 로그는
+저장소·전달 ZIP에 넣지 마세요. 아래 예시는 `tabula` 폴더에서 실행합니다.
+
+1. **수정 전**에 입력 파일 목록과 해시를 한 번 저장합니다. 수정 후에는 이 목록을 다시 만들지 않습니다.
+
+```powershell
+$sampleRoot = 'D:\Codex\Temp\wixel-samples'
+$reportRoot = 'D:\Codex\Temp\wixel-regression'
+New-Item -ItemType Directory -Force $reportRoot | Out-Null
+$sampleFiles = @(Get-ChildItem -LiteralPath $sampleRoot -File |
+    Where-Object { $_.Extension.ToLowerInvariant() -in '.xlsx', '.xlsm', '.xlsb' } |
+    Sort-Object FullName)
+if ($sampleFiles.Count -eq 0) { throw '검증할 엑셀 파일이 없습니다.' }
+$sampleFiles | ForEach-Object {
+    [pscustomobject]@{ Path = $_.FullName; SHA256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash }
+} | Export-Csv -LiteralPath (Join-Path $reportRoot 'inputs.csv') -NoTypeInformation -Encoding UTF8
 ```
-나빠진 파일이 하나라도 있으면 원인을 찾을 때까지 커밋하지 않습니다.
 
-## 마지막 측정값 (2026-10-01, 사용자 실제 파일 · 저장소에 없음)
-- 피벗이 있는 실제 파일 50개: 대부분 `differing 0`.
-- 남은 차이: g2.xlsb 3/30, m3.xlsb 2/19, s3.xlsx 1/1, v37.xlsx 6/56, w3.xlsb 1/8, x3.xlsx 1/12, y60.xlsb 27/62, y61.xlsb 5/10, y62.xlsb 3/8, y63.xlsb 4/5
-  → `docs/codex/02_보완항목내역서.md` P1-1 참고 (xlsb 피벗이 대부분).
+2. 다음 블록을 `$phase = 'before'`로 실행합니다. 그 뒤 코드를 수정하고 같은 블록을 `$phase = 'after'`로 실행합니다.
+   파일 해시가 달라지면 중단하므로 같은 입력으로 비교할 수 있습니다. 각 실행의 전체 출력과 종료 코드를 저장합니다.
+
+```powershell
+$phase = 'before' # 수정 후에는 'after'
+$reportRoot = 'D:\Codex\Temp\wixel-regression'
+$logPath = Join-Path $reportRoot ($phase + '.txt')
+Set-Content -LiteralPath $logPath -Value "phase $phase" -Encoding UTF8
+foreach ($item in (Import-Csv -LiteralPath (Join-Path $reportRoot 'inputs.csv'))) {
+    if ((Get-FileHash -LiteralPath $item.Path -Algorithm SHA256).Hash -ne $item.SHA256) {
+        throw "입력 파일이 변경되었습니다: $($item.Path)"
+    }
+    Add-Content -LiteralPath $logPath -Value "== $($item.Path)" -Encoding UTF8
+    foreach ($toolName in 'check', 'pvcmp') {
+        $output = & node "tools/$toolName.mjs" $item.Path 2>&1
+        $resultCode = $LASTEXITCODE
+        Add-Content -LiteralPath $logPath -Value "tool $toolName" -Encoding UTF8
+        Add-Content -LiteralPath $logPath -Value ($output -join [Environment]::NewLine) -Encoding UTF8
+        Add-Content -LiteralPath $logPath -Value "exit $resultCode" -Encoding UTF8
+    }
+}
+```
+
+3. `before.txt`와 `after.txt`를 파일별로 비교합니다. 다음 명령으로 주요 판정 줄을 볼 수 있습니다.
+   총합만 같아도 특정 파일이 나빠질 수 있으므로 개별 파일·피벗의 차이와 실행 오류를 확인하세요.
+
+```powershell
+Select-String -LiteralPath D:\Codex\Temp\wixel-regression\before.txt, D:\Codex\Temp\wixel-regression\after.txt `
+    -Pattern '^== ', '^tool ', '^formula mismatches:', '^roundtrip issues:', '^pivots ', '^exit '
+```
+
+나빠진 파일이 있으면 원인을 해결하기 전에는 커밋하지 않습니다. 이번 결과, 변동 수식 등 검토한 예외,
+사용한 기준 커밋과 Node 버전을 함께 기록하세요. 실제 사용자 파일이 없다면 생성 샘플 검사와 미실행 범위를 명확히 구분합니다.
+
+## 이전 인계의 실제 파일 측정 기록
+
+아래는 **2026-10-01, 원본 인계 `f6cbc6e`에서 전달받은 기록**이며 이번 검증에서 재측정한 결과가 아닙니다.
+입력 파일은 사용자 개인 자료로 저장소에 없습니다.
+
+- 피벗이 있는 실제 파일 50개: 대부분 `differing 0`으로 기록됨.
+- 남은 차이(다른 피벗 수 / 전체): g2.xlsb 3/30, m3.xlsb 2/19, s3.xlsx 1/1, v37.xlsx 6/56, w3.xlsb 1/8, x3.xlsx 1/12, y60.xlsb 27/62, y61.xlsb 5/10, y62.xlsb 3/8, y63.xlsb 4/5.
+- 분석 대상은 `docs/codex/02_보완항목내역서.md` P1-1, 이번 검증 실적은 `docs/codex/06_검증결과.md`를 참고하세요.

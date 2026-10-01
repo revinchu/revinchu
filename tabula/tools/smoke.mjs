@@ -1,13 +1,16 @@
 // WIXEL 검증 도구 (tools/README.md 참고). Playwright 가 필요한 스크립트는 `npm start` 로 서버를 먼저 띄우세요.
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const browser = await chromium.launch();
+try {
 const page = await browser.newPage({ viewport: { width: 1500, height: 900 } });
 let errs = [];
 page.on('pageerror', (e) => errs.push('pageerror: ' + e.message + ' @' + (e.stack ?? '').split('\n')[1]?.trim()));
 page.on('console', (m) => { if (m.type() === 'error') errs.push('console: ' + m.text().slice(0, 200)); });
 page.on('dialog', (d) => d.dismiss());
-await page.addInitScript(() => { window.showSaveFilePicker = undefined; window.showOpenFilePicker = undefined; });
-await page.goto((process.env.WIXEL_URL || 'http://localhost:5178/')); await page.evaluate(() => localStorage.clear()); await page.reload(); await page.waitForTimeout(800);
+await page.addInitScript(() => { window.TABULA_STATIC = true; window.showSaveFilePicker = undefined; window.showOpenFilePicker = undefined; });
+await page.goto((process.env.WIXEL_URL || 'http://localhost:5178/')); await page.evaluate(() => localStorage.clear()); await page.reload();
+await page.waitForFunction(() => typeof window.tabula?.commands === 'function');
+await page.waitForTimeout(800);
 const skip = new Set(['open', 'openFile', 'print', 'newWorkbook', 'insertPicture', 'insertPictureInCell', 'importCsv', 'pickFile', 'closeDoc', 'close', 'quit']);
 const cmds = (await page.evaluate(() => window.tabula.commands())).filter((c) => !skip.has(c));
 console.log('commands', cmds.length);
@@ -21,7 +24,7 @@ const setup = async () => page.evaluate(() => {
   t.switchSheet(0);
   t.selectRange({ r1: 0, c1: 0, r2: 4, c2: 3 }, 'cells', { r: 1, c: 1 });
 });
-const bad = [];
+const bad = errs.length ? [['시작', errs.join(' | ')]] : [];
 for (const c of cmds) {
   errs = [];
   try {
@@ -34,4 +37,7 @@ for (const c of cmds) {
 }
 for (const [c, e] of bad) console.log(c, '::', e.slice(0, 300));
 console.log('bad', bad.length);
-await browser.close();
+if (bad.length) process.exitCode = 1;
+} finally {
+  await browser.close();
+}
