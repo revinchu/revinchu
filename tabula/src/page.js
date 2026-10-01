@@ -18,10 +18,25 @@ export const MARGINS = [
 ];
 
 export function normPage(p) {
-  return {
+  const result = {
     orientation: 'portrait', paper: 9, margins: { ...MARGINS[0].m }, scale: 100, fitW: 0, fitH: 0, hCenter: false, vCenter: false,
     gridlines: false, headings: false, header: '', footer: '', area: null, titleRows: null, titleCols: null, ...(p ?? {}),
   };
+  result.margins = { ...MARGINS[0].m, ...(p?.margins ?? {}) };
+  for (const key of Object.keys(MARGINS[0].m)) if (!Number.isFinite(Number(result.margins[key])) || Number(result.margins[key]) < 0) result.margins[key] = MARGINS[0].m[key]; else result.margins[key] = Number(result.margins[key]);
+  result.scale = Math.max(10, Math.min(400, Number(result.scale) || 100));
+  for (const key of ['fitW', 'fitH']) result[key] = Math.max(0, Math.min(32767, Math.floor(Number(result[key]) || 0)));
+  result.orientation = result.orientation === 'landscape' ? 'landscape' : 'portrait';
+  return result;
+}
+
+/** 리본의 자동 맞춤 입력. 수동 배율을 입력하면 너비/높이 맞춤을 해제한다. */
+export function pageScalePatch(key, value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) throw new Error('인쇄 배율과 쪽 수는 숫자로 입력하세요.');
+  if (key === 'scale') return { scale: Math.max(10, Math.min(400, Math.round(n))), fitW: 0, fitH: 0 };
+  if (key === 'fitW' || key === 'fitH') return { [key]: Math.max(0, Math.min(32767, Math.floor(n))) };
+  throw new Error('지원하지 않는 인쇄 배율 설정입니다.');
 }
 
 export const paperOf = (id) => PAPERS.find((p) => p.id === Number(id)) ?? PAPERS[0];

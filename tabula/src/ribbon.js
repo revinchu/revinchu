@@ -130,6 +130,7 @@ export const TABS = [
         large('insertPicture', 'picture', '그림', { menu: 'picture', title: '이 기기의 그림 삽입 — 셀에 배치 또는 셀 위에 배치 (붙여넣기·끌어 놓기도 가능)' }),
         large('shapesMenu', 'shapes', '도형', { menu: 'shapes' }),
         large('insertIcons', 'iconsLib', '아이콘', { title: '아이콘 삽입 — 34개 범주 3,600여 개 (엑셀 아이콘과 같은 그림, 색 변경 가능)' }),
+        large('insertSmartArt', 'shapes', 'SmartArt', { title: 'SmartArt 그래픽 삽입 · 목록·프로세스·계층 등' }),
         large('insertTextbox', 'textbox', '텍스트 상자'),
       ]),
       group('기호', [large('insertEquation', 'equation', '수식', { menu: 'equations' }), large('insertSymbol', 'symbol', '기호')]),
@@ -160,7 +161,7 @@ export const TABS = [
   },
   {
     id: 'layout', label: '페이지 레이아웃', groups: [
-      group('테마', [large('themesBtn', 'effects', '테마', { menu: 'themes' }), col(medium('themeColorsBtn', 'fill', '색', { menu: 'themeColors' }))]),
+      group('테마', [large('themesBtn', 'effects', '테마', { menu: 'themes' }), col(medium('themeColorsBtn', 'fill', '색', { menu: 'themeColors' }), medium('themeFontsBtn', 'fontColor', '글꼴', { menu: 'themeFonts' }), medium('themeEffectsBtn', 'effects', '효과', { menu: 'themeEffects' }))]),
       group('페이지 설정', [
         large('marginsBtn', 'borderOutside', '여백', { menu: 'marginsMenu' }),
         large('orientBtn', 'print', '용지 방향', { menu: 'orientMenu' }),
@@ -169,8 +170,17 @@ export const TABS = [
         large('printTitles', 'rowInsert', '인쇄 제목', { title: '반복할 행 · 머리글/바닥글 · 페이지 설정' }),
         large('pageSetup', 'format', '페이지 설정'),
       ]),
-      group('크기 조정', [large('fitBtn', 'zoomIn', '배율 조정', { menu: 'fitMenu' })]),
+      group('크기 조정', [col(
+        { type: 'select', cmd: 'pageFitWidth', label: '너비:', cls: 'print-fit', title: '인쇄 너비 맞춤', stateKey: 'printFitW', options: [{ value: '0', label: '자동' }, ...Array.from({ length: 9 }, (_, i) => ({ value: String(i + 1), label: `${i + 1}쪽` }))] },
+        { type: 'select', cmd: 'pageFitHeight', label: '높이:', cls: 'print-fit', title: '인쇄 높이 맞춤', stateKey: 'printFitH', options: [{ value: '0', label: '자동' }, ...Array.from({ length: 9 }, (_, i) => ({ value: String(i + 1), label: `${i + 1}쪽` }))] },
+        { type: 'spin', cmd: 'pageScale', label: '배율:', title: '인쇄 배율 (%) · 너비와 높이가 자동일 때 사용', stateKey: 'printScale', min: 10, max: 400, step: 5, width: 66, suffix: '%', disabledKey: 'printFitActive' }
+      )], 'pageSetup'),
       group('인쇄', [large('print', 'print', '인쇄')]),
+      group('정렬', [
+        col(medium('objForwardBtn', 'bringForward', '앞으로 가져오기', { menu: 'objForward' }), medium('objBackwardBtn', 'sendBackward', '뒤로 보내기', { menu: 'objBackward' }), medium('selectionPane', 'selectionPane', '선택 창')),
+        col(medium('objAlignBtn', 'align', '맞춤', { menu: 'objAlign' }), medium('objGroupBtn', 'shapes', '그룹화', { menu: 'objGroup' }), medium('objRotateBtn', 'rotate', '회전', { menu: 'objRotate' })),
+      ]),
+
       group('시트', [
         large('hideRowsCols', 'hide', '숨기기 및 숨기기 취소', { menu: 'hideMenu' }),
       ]),
@@ -270,11 +280,15 @@ export const TABS = [
         col(
           medium('prevComment', 'prev', '이전 메모'),
           medium('nextComment', 'next', '다음 메모'),
+          medium('toggleComment', 'comment', '메모 표시/숨기기'),
         ),
       ]),
+      group('메모 표시', [col(medium('showAllComments', 'comment', '메모 모두 표시'), medium('hideAllComments', 'hide', '메모 모두 숨기기'))]),
       group('보호', [
         large('protectSheet', 'validation', '시트 보호', { title: '시트 보호 / 시트 보호 해제', toggle: 'sheetProtected' }),
         large('protectWorkbook', 'lock', '통합 문서 보호', { title: '통합 문서 구조 보호 (시트 추가 · 삭제 · 이동 · 이름 변경 막기)', toggle: 'bookProtected' }),
+        large('allowEditRanges', 'lock', '범위 편집 허용'),
+        large('unshareWorkbook', 'share', '통합 문서 공유 해제'),
         large('cellProtection', 'format', '셀 잠금', { title: '셀 잠금 · 수식 숨기기 (시트를 보호하면 적용)' }),
       ]),
     ],
@@ -421,7 +435,7 @@ export const TABS = [
       ]),
       group('정렬', [
         col(medium('objForwardBtn', 'bringForward', '앞으로 가져오기', { menu: 'objForward' }), medium('objBackwardBtn', 'sendBackward', '뒤로 보내기', { menu: 'objBackward' }), medium('selectionPane', 'selectionPane', '선택 창')),
-        col(medium('objAlignBtn', 'align', '맞춤', { menu: 'objAlign' }), medium('objPlacementBtn', 'placement', '위치 속성', { menu: 'objPlacement' })),
+        col(medium('objAlignBtn', 'align', '맞춤', { menu: 'objAlign' }), medium('objGroupBtn', 'shapes', '그룹화', { menu: 'objGroup' }), medium('objPlacementBtn', 'placement', '위치 속성', { menu: 'objPlacement' })),
       ]),
       group('크기', [
         col(
@@ -448,7 +462,7 @@ export const TABS = [
       ]),
       group('정렬', [
         col(medium('objForwardBtn', 'bringForward', '앞으로 가져오기', { menu: 'objForward' }), medium('objBackwardBtn', 'sendBackward', '뒤로 보내기', { menu: 'objBackward' }), medium('selectionPane', 'selectionPane', '선택 창')),
-        col(medium('objAlignBtn', 'align', '맞춤', { menu: 'objAlign' }), medium('objRotateBtn', 'rotate', '회전', { menu: 'objRotate' }), medium('objPlacementBtn', 'placement', '위치 속성', { menu: 'objPlacement' })),
+        col(medium('objAlignBtn', 'align', '맞춤', { menu: 'objAlign' }), medium('objRotateBtn', 'rotate', '회전', { menu: 'objRotate' }), medium('objGroupBtn', 'shapes', '그룹화', { menu: 'objGroup' }), medium('objPlacementBtn', 'placement', '위치 속성', { menu: 'objPlacement' })),
       ]),
       group('크기', [
         col(
@@ -629,8 +643,8 @@ export function buildRibbon(app) {
     const sel = el('select', { class: `rselect ${it.cls}`, title: it.title },
       it.options.map((o) => el('option', { value: o.value }, o.label)));
     sel.addEventListener('change', () => { app.run(it.cmd, sel.value); app.focusGrid(); });
-    bindings.push((s) => { sel.value = s[it.stateKey] ?? it.options[0].value; });
-    return sel;
+    bindings.push((s) => { const value = String(s[it.stateKey] ?? it.options[0].value); if (it.cls === 'print-fit' && ![...sel.options].some(o => o.value === value)) sel.append(el('option', { value }, `${value}쪽`)); sel.value = value; });
+    return it.label ? el('label', { class: 'rbtn medium rtext-wrap', style: { gap: '6px' } }, el('span', {}, it.label), sel) : sel;
   }
 
   /** 글꼴 상자: 이름을 직접 입력하거나 ▾ 로 글꼴 목록 (각 글꼴 모양으로 표시) */
@@ -684,8 +698,8 @@ export function buildRibbon(app) {
       if (e.key === 'Enter') { e.preventDefault(); commit(); input.blur(); app.focusGrid(); }
       if (e.key === 'Escape') { input.blur(); app.focusGrid(); }
     });
-    bindings.push((s) => { if (document.activeElement !== input) input.value = s[it.stateKey] ?? ''; });
-    return el('label', { class: 'rbtn medium rtext-wrap' }, it.label ? el('span', {}, it.label) : null, input);
+    bindings.push((s) => { if (document.activeElement !== input) input.value = s[it.stateKey] ?? ''; if (it.disabledKey) input.disabled = !!s[it.disabledKey]; });
+    return el('label', { class: 'rbtn medium rtext-wrap' }, it.label ? el('span', {}, it.label) : null, input, it.suffix ? el('span', {}, it.suffix) : null);
   }
 
   /** 목록 단추 (엑셀 표시 형식 상자): 현재 값 이름 + ▾, 누르면 그림 · 보기가 있는 메뉴 */

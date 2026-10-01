@@ -1,3 +1,4 @@
+import { groupSvg } from './object-group.js';
 // 그림 개체(차트·그림·도형) 공통 도우미와 도형 SVG (DOM 없음)
 import { validShapePath, shapePathParts } from './shape-path.js';
 
@@ -58,6 +59,7 @@ function shadeHex(hex, t) {
 
 /** 도형 모양 SVG (글자는 따로 HTML 로 그림). 선 굵기만큼 안쪽으로 그려서 잘리지 않게 함 */
 export function shapeSvg(sh) {
+  if (sh.kind === 'group') return groupSvg(sh, shapeSvg);
   const w = Math.max(1, sh.w);
   const h = Math.max(1, sh.h);
   const sw = sh.stroke ? (sh.strokeWidth ?? 1) : 0;

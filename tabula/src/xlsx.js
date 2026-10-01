@@ -1,9 +1,12 @@
+import { noteVisible } from './review-state.js';
+import { isDrawingGroup, drawingGroupXml, readDrawingGroup } from './smartart-xlsx.js';
 // .xlsx 읽기/쓰기 (Office Open XML). DOM 없이 동작하므로 Node 에서도 테스트 가능.
 import { isXlsb, convertXlsb } from './xlsb.js';
 import { unzip, unzipAsync, zip, zipAsync, textOf } from './zip.js';
 import { CellMap } from './cellmap.js';
 import { protectFromAttrs, protectXml } from './protect.js';
 import { pageXml, pageFromXml, normPage } from './page.js';
+import { readThemeOptions, applyThemeOptionsXml } from './theme-options.js';
 import { parseXml, child, kids, descendants, allText, esc, decodeEntities, unx } from './xml.js';
 import {
   parse, tokenize, colToName, nameToCol, cellName, parseRangeName, FUNCS, isError,
@@ -1022,6 +1025,22 @@ function* readSheet(files, path, ctx) {
   // 메모 · 그림(차트)
   const rels = relsOf(files, path);
   for (const rel of Object.values(rels)) {
+    if (rel.type === 'vmlDrawing' && files[rel.target]) {
+      const vml = parseXml(textOf(files[rel.target]));
+      for (const shape of descendants(vml, 'shape')) {
+        const data = child(shape, 'ClientData');
+        if (data?.attrs.ObjectType !== 'Note') continue;
+        const row = child(data, 'Row')?.text.trim() ?? '', col = child(data, 'Column')?.text.trim() ?? '';
+        if (!/^\d+$/.test(row) || !/^\d+$/.test(col)) continue;
+        const r = Number(row), c = Number(col);
+        if (!Number.isSafeInteger(r) || !Number.isSafeInteger(c) || r >= 1048576 || c >= 16384) continue;
+        const visible = child(data, 'Visible');
+        const shown = visible ? !/^(?:false|0)$/i.test(visible.text.trim()) : /visibility\s*:\s*visible/i.test(shape.attrs.style ?? '');
+        if (shown) {
+          sheet.noteVisibility ??= { states: {} }; sheet.noteVisibility.states[`${r},${c}`] = true;
+        }
+      }
+    }
     if (rel.type === 'comments' && files[rel.target]) {
       const croot = parseXml(textOf(files[rel.target]));
       for (const cm of descendants(croot, 'comment')) {
@@ -1115,6 +1134,12 @@ function* readSheet(files, path, ctx) {
   }
   const sp = child(root, 'sheetProtection');
   if (sp) { const p = protectFromAttrs(sp.attrs); if (p) sheet.protect = p; }
+  const editable = kids(child(root, 'protectedRanges'), 'protectedRange').map(p => {
+    const a = p.attrs, ranges = String(a.sqref ?? '').split(/\s+/).map(refToRange).filter(Boolean);
+    return { name: a.name || '범위', ranges, ...(a.password ? { hash: a.password } : {}), ...(a.securityDescriptor ? { securityDescriptor: a.securityDescriptor } : {}),
+      ...(a.algorithmName ? { modern: { algorithmName: a.algorithmName, hashValue: a.hashValue, saltValue: a.saltValue, spinCount: a.spinCount } } : {}) };
+  }).filter(p => p.ranges.length);
+  if (editable.length) sheet.protectedRanges = editable;
   const olp = child(child(root, 'sheetPr'), 'outlinePr');
   if (sheet.outline && olp) {
     if (olp.attrs.summaryBelow === '0' || olp.attrs.summaryBelow === 'false') sheet.outline.below = false;
@@ -1384,6 +1409,7 @@ function readDrawing(files, path, sheet, ctx) {
     }
     const nonVisual = child(el, 'nvSpPr') ?? child(el, 'nvCxnSpPr');
     const shapeName = descendants(nonVisual, 'cNvPr')[0]?.attrs.name;
+    if (['1','true'].includes(descendants(nonVisual, 'cNvPr')[0]?.attrs.hidden)) shape.hidden = true;
     if (shapeName) shape.name = shapeName;
     const alt = descendants(nonVisual, 'cNvPr')[0]?.attrs.descr;
     if (alt !== undefined) shape.alt = alt;
@@ -1489,6 +1515,7 @@ function readDrawing(files, path, sheet, ctx) {
     const im = { id: uid('im'), name, ...round(box), z: ++z, src };
     const nv = descendants(child(el, 'nvPicPr'), 'cNvPr')[0];
     if (nv?.attrs.descr !== undefined) im.alt = nv.attrs.descr;
+    if (['1','true'].includes(nv?.attrs.hidden)) im.hidden = true;
     const locks = descendants(child(el, 'nvPicPr'), 'picLocks')[0];
     im.lockAspect = locks?.attrs.noChangeAspect === '1' || locks?.attrs.noChangeAspect === 'true';
     const xf = child(child(el, 'spPr'), 'xfrm');
@@ -1555,6 +1582,7 @@ function readDrawing(files, path, sheet, ctx) {
         const target = chartRef && rels[rid(chartRef)]?.target;
         const chart = target && readChart(files, target, ctx.theme);
         if (chart) {
+          if (['1','true'].includes(child(child(el, 'nvGraphicFramePr'), 'cNvPr')?.attrs.hidden)) chart.hidden = true;
           if (isChartEx(chart)) {
             const props = descendants(child(child(el, 'nvGraphicFramePr'), 'cNvPr'), 'props').find((p) => p.attrs['xmlns:tb'] === 'urn:tabula:chart');
             if (props?.attrs.json) applyChartExOptions(chart, props.attrs.json);
@@ -1566,6 +1594,8 @@ function readDrawing(files, path, sheet, ctx) {
       }
       case 'grpSp': {
         const gb = place(el);
+        const ownGroup = readDrawingGroup(el, round(gb), uid('sh'), { files, rels });
+        if (ownGroup) { out.shapes.push({ ...ownGroup, z: ++z }); break; }
         const xfrm = descendants(child(el, 'grpSpPr'), 'xfrm')[0];
         const chOff = child(xfrm, 'chOff');
         const chExt = child(xfrm, 'chExt');
@@ -1576,7 +1606,25 @@ function readDrawing(files, path, sheet, ctx) {
         const inner = (x, y, w, h) => ({
           x: gb.x + ((x - ox) / cx) * gb.w, y: gb.y + ((y - oy) / cy) * gb.h, w: (w / cx) * gb.w, h: (h / cy) * gb.h,
         });
+        const ownMetadata = descendants(child(child(el, 'nvGrpSpPr'), 'cNvPr'), 'group').some(n => n.attrs['xmlns:wx'] === 'https://wixel.app/drawing/group/1');
+        const beforeShapes = out.shapes.length, beforeImages = out.images.length, beforeCharts = out.charts.length;
         for (const k of el.children) if (['sp', 'cxnSp', 'pic', 'grpSp', 'graphicFrame'].includes(k.name)) walk(k, gb, inner);
+        if (!ownMetadata && ['1','true'].includes(child(child(el, 'nvGrpSpPr'), 'cNvPr')?.attrs.hidden)) {
+          for (const [items,start] of [[out.shapes,beforeShapes],[out.images,beforeImages],[out.charts,beforeCharts]]) for (let i=start;i<items.length;i++) items[i].hidden = true;
+        }
+        // 외부에서 개별 도형을 바꿨다면 예전 다이어그램을 복원하지 않는다.
+        // 표준 자식 도형으로 일반 그룹을 다시 구성해 부모의 회전/대칭도 유지한다.
+        if (ownMetadata && beforeCharts === out.charts.length) {
+          const children = [...out.shapes.splice(beforeShapes), ...out.images.splice(beforeImages).map(p => ({ ...p, kind: 'picture' }))].sort((a,b) => (a.z ?? 0) - (b.z ?? 0));
+          if (children.length) {
+            out.shapes.push({ id: uid('sh'), kind: 'group', name: child(child(el, 'nvGrpSpPr'), 'cNvPr')?.attrs.name || '그룹', ...round(gb), z: ++z,
+              ...(['1','true'].includes(child(child(el, 'nvGrpSpPr'), 'cNvPr')?.attrs.hidden) ? { hidden: true } : {}),
+              groupSize: { w: gb.w, h: gb.h }, groupItems: children.map(p => ({ ...p, x: p.x - gb.x, y: p.y - gb.y })),
+              ...(Number(xfrm?.attrs.rot) ? { rot: Number(xfrm.attrs.rot) / 60000 } : {}),
+              ...(['1','true'].includes(xfrm?.attrs.flipH) ? { flip: true } : {}), ...(['1','true'].includes(xfrm?.attrs.flipV) ? { flipV: true } : {}) });
+            ctx.warnings.add('외부에서 수정된 SmartArt/그룹은 최신 도형 내용을 보존하는 일반 그룹으로 가져왔습니다.');
+          }
+        }
         break;
       }
       default:
@@ -2589,7 +2637,7 @@ function* readXlsxSteps(files) {
     };
   }
   if (theme.join() !== DEFAULT_THEME.join()) data.theme = [...theme]; // 테마 색 (표 · 피벗 스타일 색 계산)
-  { const trel = Object.values(wbRels).find((r) => r.type === 'theme'); const tx = trel && textOf(files[trel.target]); if (tx && tx.length < 400000) data.themeXml = tx; }
+  { const trel = Object.values(wbRels).find((r) => r.type === 'theme'); const tx = trel && textOf(files[trel.target]); if (tx && tx.length < 400000) { data.themeXml = tx; Object.assign(data, readThemeOptions(tx)); } }
   {
     // 문서 속성 (docProps/core.xml) · 보호 (통합 문서 구조 · 읽기 전용 권장 · 최종본)
     const props = {};
@@ -2735,7 +2783,7 @@ function themeXml(wb) {
       });
     });
     if (wb.themeName) x = x.replace(/(<a:clrScheme name=")[^"]*"/, `$1${esc(wb.themeName)}"`);
-    return x;
+    return applyThemeOptionsXml(x, wb);
   }
   const clr = THEME_SLOTS.map((slot, i) => (i === 0 ? `<a:lt1><a:sysClr val="window" lastClr="${colors[0]}"/></a:lt1>` : i === 1 ? `<a:dk1><a:sysClr val="windowText" lastClr="${colors[1]}"/></a:dk1>` : `<a:${slot}><a:srgbClr val="${colors[i]}"/></a:${slot}>`));
   const order = [clr[1], clr[0], clr[3], clr[2], ...clr.slice(4)].join('');
@@ -2743,10 +2791,10 @@ function themeXml(wb) {
   const solid = '<a:solidFill><a:schemeClr val="phClr"/></a:solidFill>';
   const ln = (w) => `<a:ln w="${w}" cap="flat" cmpd="sng" algn="ctr">${solid}<a:prstDash val="solid"/><a:miter lim="800000"/></a:ln>`;
   const name = esc(wb.themeName ?? 'Office 테마');
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="${name}"><a:themeElements><a:clrScheme name="${name}">${order}</a:clrScheme>`
+  return applyThemeOptionsXml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="${name}"><a:themeElements><a:clrScheme name="${name}">${order}</a:clrScheme>`
     + `<a:fontScheme name="Office"><a:majorFont>${font('맑은 고딕', '맑은 고딕')}</a:majorFont><a:minorFont>${font('맑은 고딕', '맑은 고딕')}</a:minorFont></a:fontScheme>`
     + `<a:fmtScheme name="Office"><a:fillStyleLst>${solid}${solid}${solid}</a:fillStyleLst><a:lnStyleLst>${ln(6350)}${ln(12700)}${ln(19050)}</a:lnStyleLst><a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle></a:effectStyleLst><a:bgFillStyleLst>${solid}${solid}${solid}</a:bgFillStyleLst></a:fmtScheme>`
-    + '</a:themeElements><a:objectDefaults/><a:extraClrSchemeLst/></a:theme>';
+    + '</a:themeElements><a:objectDefaults/><a:extraClrSchemeLst/></a:theme>', wb);
 }
 
 class StylePool {
@@ -3325,7 +3373,7 @@ function shapeEffectsXml(sh) {
 /** 도형 → <xdr:sp> / <xdr:cxnSp> */
 function shapeXml(sh, id, xfrm) {
   const name = esc(sh.name || `${sh.kind === 'textbox' ? 'TextBox' : '도형'} ${id - 1}`);
-  const description = sh.alt !== undefined ? ` descr="${esc(sh.alt)}"` : '';
+  const description = (sh.alt !== undefined ? ` descr="${esc(sh.alt)}"` : '') + (sh.hidden ? ' hidden="1"' : '');
   let fill = sh.fill ? `<a:solidFill>${shapeColorXml(sh.fill, sh.fillOpacity ?? 1)}</a:solidFill>` : '<a:noFill/>';
   if (sh.grad && sh.fill) {
     const tint = (n) => `#${hex6(sh.fill).match(/../g).map((x) => { const v = parseInt(x, 16); return Math.round(n > 0 ? v + (255 - v) * n : v * (1 + n)).toString(16).padStart(2, '0'); }).join('')}`;
@@ -4300,7 +4348,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
           }
           const id = drel(isChartEx(ch) ? CHARTEX_REL : 'chart', `../charts/chart${chartNo}.xml`);
           const chartNamespace = isChartEx(ch) ? CHARTEX_NS : 'http://schemas.openxmlformats.org/drawingml/2006/chart';
-          parts.push(anchor(ch, `<xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="${objId}" name="차트 ${objId - 1}">${isChartEx(ch) ? chartExDrawingProps(ch) : ''}</xdr:cNvPr><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="${chartNamespace}"><c:chart xmlns:c="${chartNamespace}" r:id="${id}"/></a:graphicData></a:graphic></xdr:graphicFrame>`));
+          parts.push(anchor(ch, `<xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="${objId}" name="차트 ${objId - 1}"${ch.hidden ? ' hidden="1"' : ''}>${isChartEx(ch) ? chartExDrawingProps(ch) : ''}</xdr:cNvPr><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="${chartNamespace}"><c:chart xmlns:c="${chartNamespace}" r:id="${id}"/></a:graphicData></a:graphic></xdr:graphicFrame>`));
         } else if (kind === 'image') {
           const im = o;
           // SVG 그림(아이콘): PNG 대체 그림 + svgBlip 으로 원본 SVG (엑셀과 같은 방식)
@@ -4321,10 +4369,20 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
             svgExt = `<a:extLst><a:ext uri="{96DAC541-7B7A-43D3-8B79-37D633B846F1}"><asvg:svgBlip xmlns:asvg="http://schemas.microsoft.com/office/drawing/2016/SVG/main" r:embed="${sid}"/></a:ext></a:extLst>`;
           }
           objId++;
-          parts.push(anchor(im, `<xdr:pic${im.macro ? ` macro="[0]!${esc(im.macro)}"` : ''}><xdr:nvPicPr><xdr:cNvPr id="${objId}" name="${esc(im.name || `그림 ${objId - 1}`)}"${im.alt !== undefined ? ` descr="${esc(im.alt)}"` : ''}${im.linked ? `><a:extLst><a:ext uri="${LINKED_PIC_URI}"><wx:linked xmlns:wx="https://wixel.app/x" ref="${esc(linkedRef(im.linked))}"/></a:ext></a:extLst></xdr:cNvPr>` : '/>'}<xdr:cNvPicPr><a:picLocks noChangeAspect="${im.lockAspect === false ? 0 : 1}"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill>${`<a:blip r:embed="${id}">${pictureEffects(im).opacity !== 1 ? `<a:alphaModFix amt="${Math.round(pictureEffects(im).opacity * 100000)}"/>` : ''}${svgExt ?? ''}</a:blip>`}${im.crop ? `<a:srcRect${['l', 't', 'r', 'b'].map((k) => (im.crop[k] ? ` ${k}="${Math.round(im.crop[k] * 100000)}"` : '')).join('')}/>` : ''}<a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>${xfrm(im)}${pictureEffects(im).radius ? `<a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val ${Math.round(pictureEffects(im).radius / Math.min(im.w, im.h) * 100000)}"/></a:avLst></a:prstGeom>` : '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'}${/^#[0-9a-f]{6}$/i.test(im.border ?? "") ? `<a:ln w="${Math.round((im.borderW ?? 2) * EMU)}"><a:solidFill><a:srgbClr val="${im.border.replace('#', '').toUpperCase()}"/></a:solidFill></a:ln>` : ''}${shapeEffectsXml({ shadow: pictureEffects(im).shadow })}</xdr:spPr></xdr:pic>`));
+          parts.push(anchor(im, `<xdr:pic${im.macro ? ` macro="[0]!${esc(im.macro)}"` : ''}><xdr:nvPicPr><xdr:cNvPr id="${objId}" name="${esc(im.name || `그림 ${objId - 1}`)}"${im.alt !== undefined ? ` descr="${esc(im.alt)}"` : ''}${im.hidden ? ' hidden="1"' : ''}${im.linked ? `><a:extLst><a:ext uri="${LINKED_PIC_URI}"><wx:linked xmlns:wx="https://wixel.app/x" ref="${esc(linkedRef(im.linked))}"/></a:ext></a:extLst></xdr:cNvPr>` : '/>'}<xdr:cNvPicPr><a:picLocks noChangeAspect="${im.lockAspect === false ? 0 : 1}"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill>${`<a:blip r:embed="${id}">${pictureEffects(im).opacity !== 1 ? `<a:alphaModFix amt="${Math.round(pictureEffects(im).opacity * 100000)}"/>` : ''}${svgExt ?? ''}</a:blip>`}${im.crop ? `<a:srcRect${['l', 't', 'r', 'b'].map((k) => (im.crop[k] ? ` ${k}="${Math.round(im.crop[k] * 100000)}"` : '')).join('')}/>` : ''}<a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>${xfrm(im)}${pictureEffects(im).radius ? `<a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val ${Math.round(pictureEffects(im).radius / Math.min(im.w, im.h) * 100000)}"/></a:avLst></a:prstGeom>` : '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'}${/^#[0-9a-f]{6}$/i.test(im.border ?? "") ? `<a:ln w="${Math.round((im.borderW ?? 2) * EMU)}"><a:solidFill><a:srgbClr val="${im.border.replace('#', '').toUpperCase()}"/></a:solidFill></a:ln>` : ''}${shapeEffectsXml({ shadow: pictureEffects(im).shadow })}</xdr:spPr></xdr:pic>`));
         } else if (kind === 'slicerTable' || kind === 'slicerPivot') {
           objId++;
           parts.push(slicerAnchorXml(o.sl, o.name, objId, anchorAt, kind === 'slicerTable' ? 'table' : 'pivot'));
+        } else if (isDrawingGroup(o)) {
+          objId++;
+          const groupXml = drawingGroupXml(o, objId, { shapeXml, xfrm, nextId: () => ++objId, embedImage: im => {
+            const m = /^data:([^;,]+);base64,(.*)$/s.exec(im.png ?? im.src ?? '');
+            if (!m) return null;
+            const ext = Object.keys(MIME).find(k => MIME[k] === m[1]); if (!ext) return null;
+            mediaNo++; mediaExts.add(ext); files[`xl/media/image${mediaNo}.${ext}`] = fromBase64(m[2]);
+            return drel('image', `../media/image${mediaNo}.${ext}`);
+          } });
+          parts.push(anchor(o, groupXml));
         } else {
           objId++;
           parts.push(anchor(o, shapeXml(o, objId, xfrm)));
@@ -4359,7 +4417,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
     if (comments.length) {
       commentNo++;
       files[`xl/comments${commentNo}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<comments xmlns="${NS_MAIN}"><authors><author>WIXEL</author></authors><commentList>${comments.map(([[r, c], text]) => `<comment ref="${cellName(r, c)}" authorId="0"><text><r><t xml:space="preserve">${xesc(text)}</t></r></text></comment>`).join('')}</commentList></comments>`;
-      files[`xl/drawings/vmlDrawing${commentNo}.vml`] = `<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><o:shapelayout v:ext="edit"><o:idmap v:ext="edit" data="${commentNo}"/></o:shapelayout><v:shapetype id="_x0000_t202" coordsize="21600,21600" o:spt="202" path="m,l,21600r21600,l21600,xe"><v:stroke joinstyle="miter"/><v:path gradientshapeok="t" o:connecttype="rect"/></v:shapetype>${comments.map(([[r, c]], i) => `<v:shape id="_x0000_s${commentNo * 1024 + i + 1}" type="#_x0000_t202" style="position:absolute;margin-left:80pt;margin-top:2pt;width:108pt;height:59pt;z-index:${i + 1};visibility:hidden" fillcolor="#ffffe1" o:insetmode="auto"><v:fill color2="#ffffe1"/><v:shadow on="t" color="black" obscured="t"/><v:path o:connecttype="none"/><v:textbox style="mso-direction-alt:auto"><div style="text-align:left"></div></v:textbox><x:ClientData ObjectType="Note"><x:MoveWithCells/><x:SizeWithCells/><x:Anchor>${c + 1}, 15, ${Math.max(0, r - 1)}, 10, ${c + 3}, 15, ${r + 3}, 4</x:Anchor><x:AutoFill>False</x:AutoFill><x:Row>${r}</x:Row><x:Column>${c}</x:Column></x:ClientData></v:shape>`).join('')}</xml>`;
+      files[`xl/drawings/vmlDrawing${commentNo}.vml`] = `<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><o:shapelayout v:ext="edit"><o:idmap v:ext="edit" data="${commentNo}"/></o:shapelayout><v:shapetype id="_x0000_t202" coordsize="21600,21600" o:spt="202" path="m,l,21600r21600,l21600,xe"><v:stroke joinstyle="miter"/><v:path gradientshapeok="t" o:connecttype="rect"/></v:shapetype>${comments.map(([[r, c]], i) => `<v:shape id="_x0000_s${commentNo * 1024 + i + 1}" type="#_x0000_t202" style="position:absolute;margin-left:80pt;margin-top:2pt;width:108pt;height:59pt;z-index:${i + 1};visibility:${noteVisible(sheet.noteVisibility, r, c) ? 'visible' : 'hidden'}" fillcolor="#ffffe1" o:insetmode="auto"><v:fill color2="#ffffe1"/><v:shadow on="t" color="black" obscured="t"/><v:path o:connecttype="none"/><v:textbox style="mso-direction-alt:auto"><div style="text-align:left"></div></v:textbox><x:ClientData ObjectType="Note"><x:MoveWithCells/><x:SizeWithCells/><x:Anchor>${c + 1}, 15, ${Math.max(0, r - 1)}, 10, ${c + 3}, 15, ${r + 3}, 4</x:Anchor>${noteVisible(sheet.noteVisibility, r, c) ? '<x:Visible/>' : ''}<x:AutoFill>False</x:AutoFill><x:Row>${r}</x:Row><x:Column>${c}</x:Column></x:ClientData></v:shape>`).join('')}</xml>`;
       addRel('comments', `../comments${commentNo}.xml`);
       legacy = `<legacyDrawing r:id="${addRel('vmlDrawing', `../drawings/vmlDrawing${commentNo}.vml`)}"/>`;
       contentOverrides.push(`<Override PartName="/xl/comments${commentNo}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/>`);
@@ -4463,6 +4521,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
       + (colsXml ? `<cols>${colsXml}</cols>` : '')
       + `<sheetData>${rowXml}</sheetData>`
       + protectXml(sheet.protect)
+      + (sheet.protectedRanges?.length ? `<protectedRanges>${sheet.protectedRanges.filter(p => p.ranges?.length).map(p => `<protectedRange name="${esc(p.name)}" sqref="${esc(p.ranges.map(rangeRef).join(' '))}"${p.hash ? ` password="${esc(p.hash)}"` : ''}${p.securityDescriptor ? ` securityDescriptor="${esc(p.securityDescriptor)}"` : ''}${p.modern ? Object.entries(p.modern).filter(([,v]) => v !== undefined).map(([k,v]) => ` ${k}="${esc(v)}"`).join('') : ''}/>`).join('')}</protectedRanges>` : '')
       + scenariosXml(sheet.scenarios)
       + autoFilter + merges + cf + dataValidations + hyperlinks
       + pgx.printOptions + pgx.margins + pgx.setup + pgx.headerFooter

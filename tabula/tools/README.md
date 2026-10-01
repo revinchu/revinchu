@@ -323,3 +323,14 @@ node tools/recovery-ux.mjs
 ### 온라인 그림 검색 회귀
 
 `node tools/online-pictures.mjs`는 격리 브라우저와 합성 검색 응답으로 Creative Commons 기본 해제·라이선스 필터·다중 출처·검색 경합·중복·원본 삽입·실행 취소·시트 전환을 검사합니다. `WIXEL_URL`로 소스/배포 번들을 지정합니다. 외부 API는 모의 응답이며 실제 업무 문서와 사용자 브라우저 탭을 사용하지 않습니다. 실제 공개 API 연결 여부는 별도로 확인합니다.
+
+
+### 페이지 레이아웃·SmartArt·붙여넣기·검토 회귀
+
+- `node tools/smartart.mjs`: 20배치/8범주 갤러리, 텍스트·그림·Undo·보호·크기/대칭.
+- `node tools/object-group.mjs`: 도형/그림 여러 개 선택, 그룹화/해제·변환·보호·선택 창.
+- `node tools/page-layout.mjs`: 인쇄 미리보기·PDF 실제 다운로드, 병합 셀·개체 원위치·페이지 경계, 테마/너비/높이/배율.
+- `node tools/paste-special.mjs`: 12모드, 연산·전치·링크·빈 셀·Alt키, 취소·원본 불변·문서 전환·클립보드 지연.
+- `node tools/review-ux.mjs`: 편집 허용 범위 암호/취소·보호·Undo·다른 문서 안전성과 메모 표시.
+
+기존 `WIXEL_URL`, `PLAYWRIGHT_MODULE`, `PLAYWRIGHT_BROWSERS_PATH`를 사용합니다. 새 격리 브라우저의 합성 자료만 사용하며 API 쓰기를 차단합니다. 소스와 실제 배포용 번들을 모두 검사하고 결과·지원 범위는 [27번 문서](../docs/codex/27_페이지레이아웃과편집.md)에 기록합니다. PDF 결과는 D: 임시 폴더에 생성하며 사용자 문서나 기존 브라우저 탭을 사용하지 않습니다.

@@ -75,7 +75,22 @@ await T('F5 이동', async () => { await k('F5'); await page.waitForTimeout(150)
 await T('Ctrl+F 찾기', async () => { await k('Control+f'); await page.waitForTimeout(150); const d = await ev(() => document.querySelector('.dialog')?.textContent ?? ''); await k('Escape'); return /찾기/.test(d) || d.slice(0, 40); });
 await T('Ctrl+H 바꾸기', async () => { await k('Control+h'); await page.waitForTimeout(150); const d = await ev(() => document.querySelector('.dialog')?.textContent ?? ''); await k('Escape'); return /바꾸기/.test(d) || d.slice(0, 40); });
 await T('Ctrl+Alt+V 선택하여 붙여넣기', async () => { await k('Control+c'); await k('Control+Alt+v'); await page.waitForTimeout(150); const d = await ev(() => document.querySelector('.dialog')?.textContent ?? ''); await k('Escape'); return /붙여넣기/.test(d) || d.slice(0, 40); });
-await T('Ctrl+Shift+V 값 붙여넣기', async () => { await ev(() => { const wb = window.tabula.wb(); wb.transact(() => wb.setInput(0, 6, 5, '=1+1')); window.tabula.selectCell(6, 5); }); await k('Control+c'); await ev(() => window.tabula.selectCell(7, 5)); await k('Control+Shift+v'); return (await raw(7, 5)) === '2' || await raw(7, 5); });
+await T('Ctrl+Shift+V 값 붙여넣기', async () => {
+  await ev(() => {
+    const wb = window.tabula.wb(); wb.transact(() => wb.setInput(0, 6, 5, '=1+1')); window.tabula.selectCell(6, 5);
+    window.__keysClipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard'); window.__keysClipboardReads = 0;
+    // 내부 복사 자료를 사용하되 실제 OS 클립보드 읽기/권한에 의존하지 않고 비동기 완료를 검증한다.
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { readText: () => { window.__keysClipboardReads++; return new Promise(resolve => setTimeout(() => resolve(''), 40)); }, writeText: async () => {} } });
+  });
+  try {
+    await k('Control+c'); await ev(() => window.tabula.selectCell(7, 5)); await k('Control+Shift+v');
+    await page.waitForFunction(() => window.tabula.wb().getRaw(0, 7, 5) === '2');
+    assert.equal(await ev(() => window.__keysClipboardReads), 1); assert.equal(await val(7, 5), 2); assert.equal(await raw(6, 5), '=1+1');
+    await k('Control+z'); assert.equal(await val(7, 5), null); return true;
+  } finally {
+    await ev(() => { if (window.__keysClipboardDescriptor) Object.defineProperty(navigator, 'clipboard', window.__keysClipboardDescriptor); else delete navigator.clipboard; delete window.__keysClipboardDescriptor; delete window.__keysClipboardReads; });
+  }
+});
 await T('Ctrl+E 빠른 채우기', async () => { await ev(() => { const wb = window.tabula.wb(); wb.transact(() => { wb.setInput(0, 1, 4, 'A-1'); }); window.tabula.selectCell(2, 4); }); await k('Control+e'); return (await val(2, 4)) === 'B-2' || await val(2, 4); });
 await T('Alt+Shift+→ 그룹', async () => { await k('Shift+Space'); await k('Alt+Shift+ArrowRight'); return ev(() => !!window.tabula.wb().sheets[0].outline); });
 await T('Ctrl+[ 참조 셀로', async () => { await ev(() => { const wb = window.tabula.wb(); wb.transact(() => wb.setInput(0, 8, 0, '=C3')); window.tabula.selectCell(8, 0); }); await k('Control+['); const s = await sel(); return (s.a.r === 2 && s.a.c === 2) || s.a; });

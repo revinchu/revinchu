@@ -548,7 +548,7 @@ export function alertDialog(title, message) {
 }
 
 /** 입력 필드 여러 개를 받는 대화상자. fields: [{name, label, type, value, options}] */
-export function formDialog(title, fields, onSubmit, { okLabel = '확인', note, onChange } = {}) {
+export function formDialog(title, fields, onSubmit, { okLabel = '확인', note, onChange, onClose } = {}) {
   const inputs = {};
   const body = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
     note ? el('div', { class: 'muted' }, note) : null,
@@ -577,7 +577,7 @@ export function formDialog(title, fields, onSubmit, { okLabel = '확인', note, 
   // onChange(inputs): 값이 바뀔 때마다 (다른 칸 보이기 · 목록 바꾸기)
   if (onChange) { body.addEventListener('change', () => onChange(inputs)); onChange(inputs); }
   return openDialog({
-    title, body,
+    title, body, onClose,
     buttons: [
       { label: okLabel, primary: true, action: () => onSubmit(read()) },
       { label: '취소' },

@@ -1,3 +1,4 @@
+import { noteVisible } from './review-state.js';
 // 가상 스크롤 그리드: 화면에 보이는 행/열만 그림 (20,000,000행 × 16,384열 지원)
 // 틀 고정은 4개 창(TL/TR/BL/BR)으로, 각 창은 시트 좌표계 콘텐츠를 transform 으로 이동시켜 표시.
 import { Axis } from './axis.js';
@@ -5,11 +6,13 @@ import { GridAccessibility } from './grid-a11y.js';
 import { gridLineWidth, resolveGridBorders } from './grid-lines.js';
 import { pictureCropStyle, pictureTransform, pictureEffects, pictureShadowStyle } from './picture.js';
 import { sanitizeHtml, setSafeHtml } from './safe-html.js';
-import { colToName, MAX_ROWS, MAX_COLS } from './formula.js';
+import { colToName, cellName, MAX_ROWS, MAX_COLS } from './formula.js';
 import { formatValue, formatGeneral } from './format.js';
 import { DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT } from './workbook.js';
 import { renderChartSvg, chartModelData } from './chart.js';
 import { shapeSvg, LINE_KINDS, isShapeLine } from './shapes.js';
+import { isSmartArt } from './smartart.js';
+import { smartArtSvg } from './smartart-render.js';
 import { shapePathHandles } from './shape-edit.js';
 import { validationAt } from './validation.js';
 import { prepareCond, condFormatAt, ICON_SVG, EMPTY_MATCH_TYPES, ruleRanges, inRule } from './condfmt.js';
@@ -1103,7 +1106,7 @@ export class GridView {
     const images = sheet.images ?? [];
     const shapes = st.shapePreview ? [...(sheet.shapes ?? []).filter((o) => o.id !== st.shapePreview.id), st.shapePreview] : sheet.shapes ?? [];
     const slicers = sheet.slicers ?? [];
-    if (!sheet.charts.length && !images.length && !shapes.length && !slicers.length) { p.objects.replaceChildren(); p.objHtml = null; return; }
+    if (!sheet.charts.length && !images.length && !shapes.length && !slicers.length && !sheet.noteVisibility) { p.objects.replaceChildren(); p.objHtml = null; return; }
     if (!p.win) return;
     // 가시 화면보다 넓은 셀 렌더 창을 사용한다. 그 안의 작은 스크롤에서는
     // renderPane가 재실행되지 않으므로 화면만 기준으로 버리면 개체가 늦게 나타난다.
@@ -1165,8 +1168,16 @@ export class GridView {
       }
       else {
         const isLine = isShapeLine(o);
-        const inner = content(o, 'shape', () => shapeSvg(o) + ((o.text || o.paras) && !isLine ? shapeTextHtml(o) : ''));
+        const inner = content(o, 'shape', () => isSmartArt(o) ? smartArtSvg(o) : shapeSvg(o) + ((o.text || o.paras) && !isLine ? shapeTextHtml(o) : ''));
         box(o, `shape ${isLine ? 'line' : ''}${o.draft ? ' drawing-preview' : ''}`, inner, o.rot ? `transform:rotate(${o.rot}deg)` : '');
+      }
+    }
+    // 표시한 메모는 현재 렌더 창의 셀만 조회한다(전체 셀 저장소를 매번 훑지 않는다).
+    if (sheet.noteVisibility) {
+      for (let c = p.win.c1; c <= p.win.c2; c++) for (let r = p.win.r1; r <= p.win.r2; r++) {
+        if (!noteVisible(sheet.noteVisibility, r, c) || !this.cols.size(c) || !this.rows.size(r)) continue;
+        const text = sheet.cells.getRC(r, c)?.comment; if (!text) continue;
+        html.push(`<div class="cell-note-visible" data-note-r="${r}" data-note-c="${c}" style="left:${this.cols.pos(c + 1) + 8 - p.ox}px;top:${this.rows.pos(r) - p.oy}px"><b>${esc(cellName(r, c))}</b><div>${esc(text)}</div></div>`);
       }
     }
     // 바뀐 개체만 다시 만듦 (슬라이서 · 차트가 많아도 클릭마다 전부 다시 그리지 않게)

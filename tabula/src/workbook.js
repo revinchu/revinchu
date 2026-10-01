@@ -1,4 +1,5 @@
 // 통합 문서 모델: 시트 · 셀 · 재계산 · 실행 취소 · 행/열 구조 변경
+import { shiftNoteVisibility } from './review-state.js';
 import { resolveStructRef, findTable } from './tables.js';
 import { pivotSourceData, pivotLookup, resolvePivot } from './pivot.js';
 import {
@@ -443,9 +444,9 @@ function sheetFromData(s, date1904 = false) {
 
 /** 시트의 부가 속성 (셀 외) — 저장/복원/복제용 */
 const SHEET_PROPS = ['colWidths', 'rowHeights', 'merges', 'cond', 'colStyles', 'rowStyles', 'allStyle',
-  'hiddenRows', 'hiddenCols', 'rowManual', 'freeze', 'filter', 'charts', 'pivot', 'validations', 'images', 'shapes', 'tables', 'slicers', 'pivotsExtra', 'state', 'noGrid', 'noZeros', 'outline', 'protect', 'sparklines', 'page', 'defRowH', 'defColW', 'zoom', 'view', 'tabColor', 'scenarios', 'external'];
+  'hiddenRows', 'hiddenCols', 'rowManual', 'freeze', 'filter', 'charts', 'pivot', 'validations', 'images', 'shapes', 'tables', 'slicers', 'pivotsExtra', 'state', 'noGrid', 'noZeros', 'outline', 'protect', 'sparklines', 'page', 'defRowH', 'defColW', 'zoom', 'view', 'tabColor', 'scenarios', 'external', 'protectedRanges', 'noteVisibility'];
 // 바뀌어도 수식 결과가 달라지지 않는 시트 속성
-const CALC_NEUTRAL = new Set(['rowHeights', 'colWidths', 'rowManual', 'external', 'scenarios', 'tabColor', 'defRowH', 'defColW', 'zoom', 'view', 'outline', 'protect', 'sparklines', 'page', 'state', 'noGrid', 'noZeros', 'charts', 'images', 'shapes', 'slicers', 'freeze', 'cond', 'validations', 'colStyles', 'rowStyles', 'allStyle', 'merges']);
+const CALC_NEUTRAL = new Set(['protectedRanges', 'noteVisibility', 'rowHeights', 'colWidths', 'rowManual', 'external', 'scenarios', 'tabColor', 'defRowH', 'defColW', 'zoom', 'view', 'outline', 'protect', 'sparklines', 'page', 'state', 'noGrid', 'noZeros', 'charts', 'images', 'shapes', 'slicers', 'freeze', 'cond', 'validations', 'colStyles', 'rowStyles', 'allStyle', 'merges']);
 
 /** 숫자 키 객체의 키를 삽입/삭제에 맞춰 이동 */
 function shiftKeys(obj, index, count) {
@@ -1503,6 +1504,7 @@ export class Workbook {
         else if (e.t === 'sheet') e.after = this.serializeSheet(e.si);
         else if (e.t === 'names') e.after = this.copyNames();
         else if (e.t === 'cellStyles') e.after = structuredClone(this.cellStyles ?? null);
+        else if (e.t === 'bookProp') e.after = structuredClone(this[e.prop] ?? null);
         else if (e.t === 'baseStyle') e.after = structuredClone(this.baseStyle ?? null);
         else if (e.t === 'blockStyle') e.after = structuredClone(this.sheets[e.si]?.blocks[e.bi]?.cols[e.ci]?.fmt ?? null);
       }
@@ -1657,6 +1659,7 @@ export class Workbook {
     else if (e.t === 'sheet') this.putSheet(e.si, e[side]);
     else if (e.t === 'names') this.names = e[side].map((n) => ({ ...n }));
     else if (e.t === 'cellStyles') this.cellStyles = structuredClone(e[side]);
+    else if (e.t === 'bookProp') this[e.prop] = structuredClone(e[side]);
     else if (e.t === 'baseStyle') this.baseStyle = structuredClone(e[side]);
     else if (e.t === 'blockStyle') {
       const block = this.sheets[e.si]?.blocks[e.bi], col = block?.cols[e.ci];
@@ -1848,6 +1851,17 @@ export class Workbook {
     this.invalidate(undefined, false);
   }
 
+  /** 통합 문서 표시/문서 속성을 계산값 변경 없이 한 트랜잭션에 기록한다. */
+  setBookProp(prop, value) {
+    if (!['theme', 'themeName', 'defaultFont', 'themeFonts', 'themeEffects', 'themeXml', 'props'].includes(prop)) throw new TypeError('지원하지 않는 통합 문서 속성입니다.');
+    const next = structuredClone(value ?? null);
+    if (JSON.stringify(this[prop] ?? null) === JSON.stringify(next)) return false;
+    if (this.tx && !this.tx.entries.some(e => e.t === 'bookProp' && e.prop === prop)) this.tx.entries.push({ t: 'bookProp', prop, before: structuredClone(this[prop] ?? null) });
+    this[prop] = next;
+    this.version++;
+    return true;
+  }
+
   setCellStyles(list) {
     if (list !== null && !Array.isArray(list)) throw new TypeError('셀 스타일 목록이 올바르지 않습니다.');
     if (this.tx && !this.tx.entries.some((e) => e.t === 'cellStyles')) {
@@ -1909,6 +1923,8 @@ export class Workbook {
     });
     target.cells = moved;
     target.blocks = target.blocks.map((b) => blockShift(b, axis, index, count)).filter(Boolean);
+    if (target.noteVisibility) target.noteVisibility = shiftNoteVisibility(target.noteVisibility, axis, index, count);
+    if (target.protectedRanges) target.protectedRanges = target.protectedRanges.map(a => ({ ...a, ranges: a.ranges.map(rg => adjustRange(rg, axis, index, count)).filter(Boolean) })).filter(a => a.ranges.length);
     const sizes = isRow ? target.rowHeights : target.colWidths;
     const nextSizes = {};
     for (const [k, v] of Object.entries(sizes)) {
@@ -2522,6 +2538,8 @@ export class Workbook {
       ...(this.theme ? { theme: [...this.theme] } : {}),
       ...(this.themeXml ? { themeXml: this.themeXml } : {}),
       ...(this.themeName ? { themeName: this.themeName } : {}),
+      ...(this.themeFonts ? { themeFonts: structuredClone(this.themeFonts) } : {}),
+      ...(this.themeEffects ? { themeEffects: structuredClone(this.themeEffects) } : {}),
       ...(this.props && Object.keys(this.props).length ? { props: { ...this.props } } : {}),
       ...(this.names.length ? { names: this.names.map(({ _ast, _text, ...n }) => ({ ...n })) } : {}),
     };
@@ -2622,6 +2640,8 @@ export class Workbook {
     this.theme = data.theme ?? null; // 파일의 테마 색 (없으면 Office 기본)
     this.themeXml = data.themeXml ?? null; // 파일의 테마 XML (글꼴 · 효과 등을 그대로 저장)
     this.themeName = data.themeName ?? null;
+    this.themeFonts = structuredClone(data.themeFonts ?? null);
+    this.themeEffects = structuredClone(data.themeEffects ?? null);
     // 문서 속성 · 보호 (엑셀 파일 › 정보): { title, subject, tags, category, comments, creator, lastModifiedBy, created, modified, readOnlyRecommended, lockStructure, markedFinal }
     this.props = data.props ? { ...data.props } : {};
     this.cellStyles = structuredClone(data.cellStyles ?? null); // 이름 있는 셀 스타일 [{ name, style, builtinId? }] (엑셀 [셀 스타일] 사용자 지정)
