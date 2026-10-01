@@ -298,3 +298,11 @@ node tools/recovery-ux.mjs
 `WIXEL_PERF_RESTORE=1`을 함께 지정하면 원래의 필터 조건을 다시 적용하고, 실제 대용량 IndexedDB 자동 저장 완료 후 같은 격리 컨텍스트의 새 페이지에서 복원한다. 값·서식·필터·날짜 체계·개수의 일치 여부만 기록한다. 임시 프로필에서만 실행하므로 사용자 보관함을 변경하지 않는다.
 
 `node tools/release-update.mjs`는 새 배포 알림의 간격·실패 처리·제목줄 버튼·명시 저장/취소를 합성 응답으로 검사한다. 문서를 자동 새로고침하거나 전송하지 않는지 확인하며 소스/번들 모두 지원한다.
+
+
+## 리본 키팁 전수 연결과 보고서 셀 스타일
+
+- `node tools/ribbon-keytip-coverage.mjs`: 일반 8개·상황별 7개 탭의 실제 DOM 조작/키팁 등록/배지/입력 포커스 일치, HJ·HH·HFC의 선택·적용·Undo·Esc, held Alt/F10, 한글 지연 조합 회귀를 검사한다. `WIXEL_KEYTIP_FILTER`로 검사 이름을 제한할 수 있다.
+- `node tools/cell-style-presets.mjs`: 새 24개 스타일의 적용·숫자 형식 보존·Undo, 이름 중복 우선순위, 검색·키보드 이동과 좁은 화면의 갤러리를 검사한다.
+
+기존 `keytips.mjs`, `keytips-ime.mjs`, 셀 스타일 검사를 함께 유지한다. `WIXEL_URL`, `PLAYWRIGHT_MODULE`, `PLAYWRIGHT_BROWSERS_PATH`를 사용하며 새 격리 컨텍스트의 합성 문서만 사용하고 원격 쓰기를 차단한다. 소스와 배포용 번들에서 실행할 수 있다. IME 검사는 DOM 이벤트 회귀이며 실제 Windows IME 드라이버의 모든 동작을 보장하는 검사는 아니다. [23번 문서](../docs/codex/23_리본키팁과스타일.md)에서 Excel 호환경로와 WIXEL 보충 키의 범위 및 검증 결과를 확인한다.

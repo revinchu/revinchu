@@ -1594,3 +1594,5 @@ body.keytips #ribbon label[data-ribbon-command]:has(input[type="checkbox"]) { pa
 .mini-fill::after,.mini-color::after { content:''; position:absolute; bottom:1px; left:3px; right:3px; height:3px; border:1px solid #0002; background:var(--mini-fill); }
 .mini-color::after { background:var(--mini-color); }
 @media print { .context-mini-toolbar { display:none!important; } }
+
+.color-palette-menu .swatch:focus-visible, .pattern-swatch:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; position: relative; z-index: 1; }

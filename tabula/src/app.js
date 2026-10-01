@@ -11,6 +11,7 @@ import {
 import {
   formatValue, NUMBER_FORMATS, isDateCode, dateParts, serialOf, displayedDecimals, parseInput, formatCode, styleForCode, codeOfStyle, adjustCodeDecimals, formatGeneral,
 } from './format.js';
+import { createRibbonKeytipRegistry } from './ribbon-keytips.js';
 import { buildRibbon, FONTS, FONT_SIZES, TABS, ribbonCommands } from './ribbon.js';
 import { DEFAULT_QAT_ORDER, DEFAULT_QAT_POSITION, normalizeQatOptions } from './quick-access.js';
 import { flashFill } from './flashfill.js';
@@ -88,6 +89,7 @@ import {
 } from './fmtpresets.js';
 import { maxOf, minOf } from './fxcore.js';
 import { CELL_STYLE_PARTS, cellStyleKey, validCellStyleName, cellStyleIncludes, cellStylePatch, cellStyleUpdatePatch, importCellStyleList } from './cell-style.js';
+import { REPORT_CELL_STYLE_SECTIONS } from './cell-style-presets.js';
 
 const $ = (id) => document.getElementById(id);
 const dom = {
@@ -8037,6 +8039,9 @@ const KEYTIPS = {
 };
 const KEYTIP_TABS = { h: 'home', n: 'insert', p: 'layout', m: 'formulas', a: 'data', r: 'review', w: 'view', j: 'tableDesign' };
 const KEYTIP_GROUPS = { wv: '표시', wf: '틀 고정', hb: '테두리', ho: '서식', hm: '병합', he: '지우기', hv: '붙여넣기', ha: '맞춤', hl: '조건부 서식', hi: '삽입', hd: '삭제', hf: '글꼴 · 서식 복사', as: '정렬 · 빠른 채우기', av: '데이터 유효성 검사', af: '가져오기', ps: '페이지 설정' };
+const KEYTIP_REGISTRY = createRibbonKeytipRegistry(TABS, KEYTIPS);
+const KEYTIP_ENTRIES = new Map(KEYTIP_REGISTRY.entries.map((entry) => [entry.path, entry]));
+const KEYTIP_TAB_PATHS = { ...KEYTIP_TABS, ...KEYTIP_REGISTRY.tabs };
 let keytip = null; // { seq, held, clean }
 let keytipMenu = null;
 // IME may dispatch composition/input after a shortcut's terminal key closes KeyTips.
@@ -8073,15 +8078,37 @@ function activateKeytip(seq) {
   const quick = qatCommands().map((cmd, i) => ({ cmd, key: qatKey(i) })).filter((x) => x.key);
   const hit = quick.find((x) => x.key === seq);
   if (hit) { endKeytip(); run(hit.cmd); return true; }
-  if (KEYTIPS[seq]) { endKeytip(); run(KEYTIPS[seq][0]); return true; }
-  if (KEYTIP_TABS[seq] || Object.keys(KEYTIPS).some((k) => k.startsWith(seq)) || quick.some((x) => x.key.startsWith(seq))) {
-    if (KEYTIP_TABS[seq]) ribbon.selectTab(KEYTIP_TABS[seq]);
+  const entry = KEYTIP_ENTRIES.get(seq);
+  if (entry) {
+    // 숨겨진 상황별 탭의 명령은 다른 개체에 잘못 적용하지 않는다.
+    if (entry.tabId && TABS.find((t) => t.id === entry.tabId)?.context && !document.querySelector(`[data-ribbon-tab="${entry.tabId}"]`)) return false;
+    if (entry.tabId) ribbon.selectTab(entry.tabId);
+    const anchor = keytipAnchor(seq, entry.target);
+    if (entry.kind === 'input' && !anchor) return false;
+    endKeytip();
+    if (entry.kind === 'menu') {
+      if (anchor) { anchor.scrollIntoView({ block: 'nearest', inline: 'nearest' }); openNamedMenu(entry.target, anchor); }
+      else menuAtCell(entry.target);
+    } else if (entry.kind === 'input') {
+      const input = anchor.matches('input,select,textarea') ? anchor : anchor.querySelector('input,select,textarea');
+      input?.focus(); if (input?.select && input.type !== 'number') input.select();
+    } else run(entry.target);
+    return true;
+  }
+  if (KEYTIP_TAB_PATHS[seq] || KEYTIP_REGISTRY.entries.some((entry) => entry.path.startsWith(seq)) || Object.keys(KEYTIP_TAB_PATHS).some((path) => path.startsWith(seq)) || quick.some((x) => x.key.startsWith(seq))) {
+    if (KEYTIP_TAB_PATHS[seq]) ribbon.selectTab(KEYTIP_TAB_PATHS[seq]);
     keytip.seq = seq; keytip.clean = false; showKeytip(); return true;
   }
   return false;
 }
 
 function keytipAnchor(path, cmd) {
+  const entry = KEYTIP_ENTRIES.get(path);
+  if (entry?.controlId) {
+    const control = document.querySelector(`#ribbon [data-ribbon-controls~="${entry.controlId}"]`);
+    if (control) return control;
+  }
+  if (entry?.kind === 'menu') return document.querySelector(`#ribbon [data-ribbon-menu="${entry.target}"]`);
   if (KEYTIP_MENU_ANCHORS[path]) return document.querySelector(`#ribbon [data-ribbon-menu="${KEYTIP_MENU_ANCHORS[path]}"]`);
   if (path === 'wv') return document.querySelector('#ribbon [data-ribbon-group="표시"] .rgroup-label');
   if (!cmd) return null;
@@ -8094,24 +8121,44 @@ function drawKeytipBadges() {
   const seq = keytip.seq;
   const layer = el('div', { class: 'keytip-badges', 'aria-label': '리본 단추 바로 가기 키' });
   const ribbonRect = $('ribbon').getBoundingClientRect();
-  const add = (path, label, anchor) => {
+  const placed = [];
+  document.body.append(layer);
+  const add = (path, label, anchor, controlId) => {
     if (!anchor) return false;
     const r = anchor.getBoundingClientRect();
     if (!r.width || !r.height || r.right < 0 || r.left > innerWidth || r.bottom < ribbonRect.top || r.top > ribbonRect.bottom) return false;
     const key = path.slice(seq.length).toUpperCase();
     const badge = el('button', { class: 'keytip-badge', type: 'button', 'data-keytip-path': path, title: `${key} ${label}`, 'aria-label': `${key} ${label}`,
       onmousedown: (e) => e.preventDefault(), onclick: () => activateKeytip(path) }, key);
+    if (controlId) badge.dataset.keytipControl = controlId;
     badge.dataset.keytipAnchor = anchor.dataset.ribbonCommand ?? anchor.dataset.ribbonMenu ?? 'group';
     const checkbox = anchor.matches('label') && anchor.querySelector('input[type="checkbox"]');
-    badge.style.left = `${Math.max(2, Math.min(innerWidth - 34, checkbox ? r.right - 23 : r.left + r.width / 2 - Math.max(9, key.length * 4)))}px`;
-    badge.style.top = `${Math.max(2, Math.min(innerHeight - 20, checkbox ? r.top + (r.height - 19) / 2 : r.bottom - 5))}px`;
-    layer.append(badge); return true;
+    layer.append(badge);
+    const width = badge.getBoundingClientRect().width, height = 19;
+    const wantedX = checkbox ? r.right - width : r.left + (r.width - width) / 2;
+    const wantedY = checkbox ? r.top + (r.height - height) / 2 : r.bottom - 5;
+    const candidates = [];
+    // 옆에 있는 작은 단추의 배지도 함께 피한다. 같은 anchor만 피하면 색/글꼴 배지가 겹친다.
+    for (const dy of [0, 21, -21, 42, -42, 63, -63, 84, -84]) {
+      for (const dx of [0, -12, 12, -24, 24, -36, 36, -48, 48, -72, 72]) {
+        const x = Math.max(2, Math.min(innerWidth - width - 2, wantedX + dx));
+        const y = Math.max(ribbonRect.top + 2, Math.min(ribbonRect.bottom - height - 2, wantedY + dy));
+        const overlap = placed.reduce((sum, box) => sum + Math.max(0, Math.min(x + width + 2, box.x + box.width) - Math.max(x - 2, box.x)) * Math.max(0, Math.min(y + height + 2, box.y + height) - Math.max(y - 2, box.y)), 0);
+        candidates.push({ x, y, width, score: overlap * 1000 + Math.abs(x - wantedX) + Math.abs(y - wantedY) * 1.15 });
+      }
+    }
+    candidates.sort((a, b) => a.score - b.score);
+    const position = candidates[0]; placed.push(position);
+    badge.style.left = `${position.x}px`; badge.style.top = `${position.y}px`;
+    return true;
   };
   const groups = [...Object.keys(KEYTIP_MENU_ANCHORS), 'wv'].filter((path) => path !== seq && path.startsWith(seq) && keytipAnchor(path));
   for (const path of groups) add(path, KEYTIP_GROUPS[path] ?? path, keytipAnchor(path));
-  for (const [path, [cmd, label]] of Object.entries(KEYTIPS)) {
+  for (const entry of KEYTIP_REGISTRY.entries) {
+    const { path, target, label, controlId } = entry;
     if (path === seq || !path.startsWith(seq) || groups.some((group) => path.startsWith(group))) continue;
-    add(path, label, keytipAnchor(path, cmd));
+    if (!entry.primary && KEYTIP_REGISTRY.entries.some((other) => other.primary && controlId && other.controlId === controlId && other.path.startsWith(seq))) continue;
+    add(path, label, keytipAnchor(path, target), controlId);
   }
   document.body.append(layer);
 }
@@ -8125,14 +8172,14 @@ function showKeytipMenu(seq) {
   const anchor = KEYTIP_MENU_ANCHORS[seq] ? keytipAnchor(seq) : null;
   if (!anchor) return;
   anchor.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-  const choices = Object.entries(KEYTIPS).filter(([path]) => path.startsWith(seq) && path !== seq);
+  const choices = KEYTIP_REGISTRY.entries.filter((entry) => entry.path.startsWith(seq) && entry.path !== seq);
   keytipMenu = openMenu(anchor, [
     { title: `${KEYTIP_GROUPS[seq] ?? '리본 메뉴'} · Alt → ${seq.toUpperCase().split('').join(' → ')}` },
-    ...choices.map(([path, [, label]]) => ({ label, key: path.slice(seq.length).toUpperCase(), action: () => activateKeytip(path) })),
+    ...choices.map(({ path, label }) => ({ label, key: path.slice(seq.length).toUpperCase(), action: () => activateKeytip(path) })),
   ], { minWidth: 230, scroll: true });
   keytipMenu.classList.add('keytip-command-menu');
   keytipMenu.dataset.keytipMenu = seq;
-  keytipMenu.querySelectorAll('.menu-item').forEach((node, i) => { node.dataset.keytipPath = choices[i][0]; });
+  keytipMenu.querySelectorAll('.menu-item').forEach((node, i) => { node.dataset.keytipPath = choices[i].path; });
 }
 
 function showKeytip() {
@@ -8143,9 +8190,9 @@ function showKeytip() {
   document.body.classList.add('keytips');
   document.body.dataset.keytipSequence = seq;
   for (const button of document.querySelectorAll('.ribbon-tab')) {
-    const pair = Object.entries(KEYTIP_TABS).find(([, id]) => TAB_LABELS[id] === button.textContent);
+    const pair = Object.entries(KEYTIP_REGISTRY.tabs).find(([, id]) => id === button.dataset.ribbonTab);
     const key = button.classList.contains('file') ? 'f' : pair?.[0];
-    if (!seq && key) button.dataset.keytip = key.toUpperCase();
+    if (key && key !== seq && key.startsWith(seq)) button.dataset.keytip = key.slice(seq.length).toUpperCase();
     else delete button.dataset.keytip;
   }
   showKeytipMenu(seq);
@@ -15652,9 +15699,9 @@ function paletteMenu(anchorEl, noneLabel, onPick, extra = []) {
     focusGrid();
   };
   const swatches = (colors, gap) => el('div', { class: `palette-row${gap ? ' gap' : ''}` }, colors.map((c) => el('button', {
-    class: 'swatch', title: c, style: { background: c }, onmousedown: (e) => e.preventDefault(), onclick: () => pick(c),
+    class: 'swatch', type: 'button', title: c, 'aria-label': `색 ${c}`, 'data-color': c, style: { background: c }, onmousedown: (e) => e.preventDefault(), onclick: () => pick(c),
   })));
-  const custom = el('input', { type: 'color', style: { width: '0', height: '0', opacity: '0', position: 'absolute' } });
+  const custom = el('input', { type: 'color', tabindex: '-1', 'aria-label': '다른 색', style: { width: '0', height: '0', opacity: '0', position: 'absolute' } });
   custom.addEventListener('change', () => pick(custom.value));
   const rows = themeRows();
   const palette = el('div', { class: 'palette' },
@@ -15664,7 +15711,7 @@ function paletteMenu(anchorEl, noneLabel, onPick, extra = []) {
     swatches(STANDARD));
   // 엑셀: 글꼴 색은 [자동]이 맨 위, 채우기 색은 [채우기 없음]이 표준 색 아래
   const noneTop = !/^채우기 없음|^색 없음|^없음/.test(noneLabel);
-  openMenu(anchorEl, [
+  const menu = openMenu(anchorEl, [
     ...(noneTop ? [{ label: noneLabel, action: () => pick(null) }] : []),
     { node: palette },
     { sep: true },
@@ -15672,8 +15719,33 @@ function paletteMenu(anchorEl, noneLabel, onPick, extra = []) {
     { node: el('div', {}, custom) },
     { label: '다른 색...', action: () => custom.click() },
     ...extra,
-  ]);
+  ], { scroll: true });
+  menu.classList.add('color-palette-menu');
+  // 팔레트도 메뉴의 일부다. 행/열 방향키와 Tab으로 색과 하단 명령을 모두 방문한다.
+  menu.addEventListener('keydown', (event) => {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.isComposing) return;
+    const controls = [...menu.querySelectorAll('.swatch, :scope > .menu-item:not(:disabled)')];
+    const current = controls.indexOf(document.activeElement);
+    if (current < 0) return;
+    const colors = [...palette.querySelectorAll('.swatch')], index = colors.indexOf(document.activeElement);
+    let next = null;
+    if (event.key === 'Tab') next = controls[(current + (event.shiftKey ? -1 : 1) + controls.length) % controls.length];
+    else if (event.key === 'Home') next = index >= 0 && !event.ctrlKey ? colors[Math.floor(index / 10) * 10] : controls[0];
+    else if (event.key === 'End') next = index >= 0 ? colors[Math.min(colors.length - 1, Math.floor(index / 10) * 10 + 9)] : controls.at(-1);
+    else if (index >= 0 && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
+      const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -10, ArrowDown: 10 }[event.key];
+      const to = index + step;
+      const edge = controls.indexOf(step > 0 ? colors.at(-1) : colors[0]) + (step > 0 ? 1 : -1);
+      next = colors[to] ?? controls[Math.max(0, Math.min(controls.length - 1, edge))];
+    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') next = controls[(current + (event.key === 'ArrowDown' ? 1 : -1) + controls.length) % controls.length];
+    else if (index >= 0 && (event.key === 'Enter' || event.key === ' ')) {
+      event.preventDefault(); event.stopImmediatePropagation(); document.activeElement.click(); return;
+    }
+    if (next) { event.preventDefault(); event.stopImmediatePropagation(); next.focus(); next.scrollIntoView({ block: 'nearest' }); }
+  }, true);
+  (noneTop ? menu.querySelector(':scope > .menu-item') : palette.querySelector('.swatch'))?.focus();
 }
+
 
 /** 조건부 서식 견본 모음 (엑셀처럼 작은 견본 격자, 마우스를 올리면 이름) */
 function cfGallery(items, add) {
@@ -15734,12 +15806,13 @@ function cellStyleSections(includeCustom = true) {
     ['좋음, 나쁨 및 보통', pick('표준', '나쁨', '보통', '좋음')],
     ['데이터 및 모델', pick('계산', '확인할 셀', '경고문', '메모', '설명 텍스트', '연결된 셀', '입력', '출력')],
     ['제목 및 머리글', heads],
+    ...REPORT_CELL_STYLE_SECTIONS,
     ['테마 셀 스타일', theme],
     ['숫자 서식', nums],
   ];
   const builtinNames = new Set(sections.flatMap(([, list]) => list.map((s) => cellStyleKey(s.name))));
   const builtins = sections.map(([title, list]) => [title, list.map((s) => {
-    const include = Object.fromEntries(CELL_STYLE_PARTS.map(([part]) => [part, s.name === '표준' || (title === '숫자 서식' ? part === 'number' : ['font', 'border', 'fill'].includes(part))]));
+    const include = s.include ?? Object.fromEntries(CELL_STYLE_PARTS.map(([part]) => [part, s.name === '표준' || (title === '숫자 서식' ? part === 'number' : ['font', 'border', 'fill'].includes(part))]));
     const saved = wb.cellStyles?.find((it) => cellStyleKey(it.name) === cellStyleKey(s.name));
     return { ...s, ...(s.name === '표준' ? { style: wb.baseStyle ?? {} } : {}), include, ...saved, builtin: true };
   }).filter((s) => !s.hidden)]);
@@ -15747,6 +15820,8 @@ function cellStyleSections(includeCustom = true) {
   return [...(includeCustom && custom.length ? [['사용자 지정', custom]] : []), ...builtins];
 }
 function cellStylesMenu(anchorEl) {
+  const columns = Math.max(1, Math.min(6, Math.floor((innerWidth - 48) / 108)));
+  const galleryWidth = Math.min(648, Math.max(120, innerWidth - 32));
   const chip = (s) => {
     const st = s.style ?? {};
     const edge = (k) => (st[k] ? `${st[`${k}s`] === 'thick' ? 3 : st[`${k}s`] === 'medium' || st[`${k}s`] === 'double' ? 2 : 1}px ${st[`${k}s`] === 'double' ? 'double' : 'solid'} ${st[`${k}c`] ?? '#7f7f7f'}` : undefined);
@@ -15764,21 +15839,51 @@ function cellStylesMenu(anchorEl) {
         if ((e.shiftKey && e.key === 'F10') || (e.altKey && e.key === 'ArrowDown')) {
           e.preventDefault(); e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); cellStyleContext(s, { x: r.left, y: r.bottom });
         } else if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) {
-          e.preventDefault(); e.stopPropagation(); const list = [...e.currentTarget.closest('.menu').querySelectorAll('.style-chip')]; const at = list.indexOf(e.currentTarget);
-          const to = e.key === 'Home' ? 0 : e.key === 'End' ? list.length - 1 : Math.max(0, Math.min(list.length - 1, at + ({ ArrowLeft: -1, ArrowRight: 1, ArrowUp: -6, ArrowDown: 6 }[e.key])));
+          e.preventDefault(); e.stopPropagation(); const list = [...e.currentTarget.closest('.menu').querySelectorAll('.style-chip')].filter((button) => !button.hidden && !button.closest('[hidden]')); const at = list.indexOf(e.currentTarget);
+          const to = e.key === 'Home' ? 0 : e.key === 'End' ? list.length - 1 : Math.max(0, Math.min(list.length - 1, at + ({ ArrowLeft: -1, ArrowRight: 1, ArrowUp: -columns, ArrowDown: columns }[e.key])));
           list[to]?.focus();
         }
       },
     }, s.name);
   };
-  const items = [];
-  for (const [title, list] of cellStyleSections()) items.push({ title }, { node: el('div', { class: 'style-grid cs6' }, list.map(chip)) });
+  const groups = [];
+  const search = el('input', { type: 'search', placeholder: '셀 스타일 검색', 'aria-label': '셀 스타일 검색', autocomplete: 'off', style: { width: '100%', boxSizing: 'border-box' } });
+  const status = el('div', { role: 'status', class: 'muted', style: { fontSize: '11px', paddingTop: '4px' } });
+  const items = [{ node: el('div', { style: { width: `${galleryWidth}px`, boxSizing: 'border-box', padding: '8px 10px' } }, search, status) }];
+  for (const [title, list] of cellStyleSections()) {
+    const buttons = list.map(chip);
+    const section = el('section', { 'aria-label': title }, el('div', { class: 'menu-title' }, title),
+      el('div', { class: 'style-grid cs6', style: { width: `${galleryWidth}px`, boxSizing: 'border-box', gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` } }, buttons));
+    groups.push({ section, title, buttons }); items.push({ node: section });
+  }
+  const filter = () => {
+    const query = search.value.trim().toLocaleLowerCase(); let count = 0;
+    for (const { section, title, buttons } of groups) {
+      let shown = 0;
+      for (const button of buttons) {
+        button.hidden = !`${title} ${button.dataset.cellStyle}`.toLocaleLowerCase().includes(query);
+        if (!button.hidden) shown++;
+      }
+      section.hidden = !shown; count += shown;
+    }
+    status.textContent = count ? `${count}개 스타일 · 보고서 스타일은 숫자 표시 형식과 잠금 유지` : '일치하는 셀 스타일이 없습니다.';
+  };
+  search.addEventListener('input', filter);
+  search.addEventListener('keydown', (event) => {
+    if (event.isComposing || event.keyCode === 229) return;
+    if (event.key === 'ArrowDown' || event.key === 'Enter') {
+      event.preventDefault(); event.stopPropagation();
+      const first = groups.flatMap(group => group.buttons).find(button => !button.hidden);
+      if (event.key === 'Enter') first?.click(); else first?.focus();
+    }
+  });
+  filter();
   items.push({ sep: true },
     { label: '새 셀 스타일...', icon: 'cellStyles', action: () => newCellStyleDialog() },
     { label: '스타일 병합...', icon: 'cellStyles', action: () => mergeCellStylesDialog() },
     { label: '사용자 지정 스타일 삭제...', disabled: !(wb.cellStyles ?? []).some((s) => !s.hidden && !isBuiltinCellStyle(s)), action: () => deleteCellStyleDialog() });
   const menu = openMenu(anchorEl, items, { scroll: true });
-  menu.querySelector('.style-chip')?.focus();
+  if (menu.isConnected) search.focus();
 }
 
 function normalCellStyle() { return { name: '표준', style: wb.baseStyle ?? {}, include: cellStyleIncludes(null) }; }
@@ -16895,13 +17000,24 @@ const COMMANDS = {
   calcAuto: () => { opts.calcMode = 'auto'; saveOptions(); applyOptions(); wb.calculateNow(); gv.renderAll(); },
   calcManual: () => { opts.calcMode = 'manual'; saveOptions(); applyOptions(); },
 
-  shortcuts: () => openDialog({
-    title: '바로 가기 키', width: 580,
-    body: el('div', {}, el('table', { class: 'kbd-table' }, SHORTCUTS.map(([k, d]) => el('tr', {}, el('td', {}, k), el('td', {}, d)))),
-      el('h3', {}, '리본 키 순서'), el('p', {}, 'Alt를 눌렀다 뗀 뒤 아래 글자를 순서대로 누르세요. 한글 입력 상태에서도 같은 위치의 키를 누르면 됩니다.'),
-      el('table', { class: 'kbd-table' }, Object.entries(KEYTIPS).map(([k, [, d]]) => el('tr', {}, el('td', {}, `Alt → ${k.toUpperCase().split('').join(' → ')}`), el('td', {}, d))))),
-    buttons: [{ label: '닫기', primary: true }],
-  }),
+  shortcuts: () => {
+    const search = el('input', { type: 'search', class: 'input', placeholder: '기능 이름 또는 키 검색', 'aria-label': '바로 가기 키 검색', style: { width: '100%' } });
+    const rows = KEYTIP_REGISTRY.entries.map((entry) => {
+      const tab = TAB_LABELS[entry.tabId] ?? '공통';
+      const row = el('tr', {}, el('td', {}, `Alt → ${entry.path.toUpperCase().split('').join(' → ')}`), el('td', {}, `${tab} · ${entry.label}`));
+      return { row, text: `${entry.path} ${tab} ${entry.label}`.toLocaleLowerCase() };
+    });
+    search.addEventListener('input', () => {
+      const query = search.value.trim().toLocaleLowerCase().replace(/^alt[ +→]*/i, '').replace(/[ →+]/g, '');
+      for (const { row, text } of rows) row.hidden = !text.replace(/\s/g, '').includes(query);
+    });
+    openDialog({ title: '바로 가기 키', width: 680,
+      body: el('div', {}, el('table', { class: 'kbd-table' }, SHORTCUTS.map(([k, d]) => el('tr', {}, el('td', {}, k), el('td', {}, d)))),
+        el('h3', {}, '리본 키 순서'), el('p', {}, 'Alt를 눌렀다 뗀 뒤 글자를 순서대로 누르세요. 한글 입력 상태에서도 같은 위치의 키를 누르면 됩니다. Z와 숫자로 표시되는 경로는 WIXEL 보충 키입니다.'),
+        search, el('table', { class: 'kbd-table' }, rows.map(({ row }) => row))),
+      buttons: [{ label: '닫기', primary: true }], onOpen: () => search.focus(),
+    });
+  },
   about: () => aboutDialog(),
   whatsNew: () => whatsNewDialog(),
 };
@@ -16911,6 +17027,7 @@ const NO_COMMIT = new Set(['toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100', 'shor
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['리본 키팁·셀 스타일', ['Alt → H → J 셀 스타일 · H → H 채우기 색 · H → F → C 글꼴 색', '일반·상황별 탭의 메뉴·입력칸·분할 단추 키팁 누락 검사 · 팔레트 방향키 선택', '보고서·KPI·입력·검토 스타일 24개와 검색 · 숫자 표시 형식·맞춤 보존']],
   ['대용량 문서 응답성', ['필터 범위의 반복 탐색과 중복 화면 갱신 제거 · 긴 필터 목록 가상화', '사용자 지정·색상·상위 조건을 다른 열의 필터 목록에도 반영', '화면 밖 차트·슬라이서·그림 생성 생략 · 단순 조건부 서식의 전체 범위 집계 제거']],
   ['차트 범례', ['피벗 값 열로 만든 차트도 실제 항목 이름과 연결', '단일 계열 범례 표시와 긴 이름의 전체 툴팁 수정']],
   ['셀·행·열 우클릭', ['선택 종류별 Excel 방식 메뉴와 미니 서식 도구 모음', '셀 서식·행 높이·열 너비·숨기기·숨기기 취소, 메뉴 접근키', '행 높이는 포인트, 열 너비는 문자 수로 조정하고 실행 취소 지원']],
@@ -17250,7 +17367,7 @@ function bindEvents() {
   document.addEventListener('keyup', handleKeytipUp);
   document.addEventListener('keydown', (e) => {
     // A fresh physical key starts a new editing gesture. Delayed keyup does not.
-    if (!keytip && shortcutInputGuard && !e.defaultPrevented && !e.repeat && !['Alt', 'Control', 'Meta', 'Shift', 'CapsLock'].includes(e.key)) shortcutInputGuard = false;
+    if (!keytip && shortcutInputGuard && !isMenuOpen() && !e.defaultPrevented && !e.repeat && !['Alt', 'Control', 'Meta', 'Shift', 'CapsLock', 'Escape'].includes(e.key)) shortcutInputGuard = false;
     if (keytip && !editing && !isDialogOpen() && !document.querySelector('.backstage')) {
       if (handleKeytipKey(e)) { e.stopPropagation(); return; }
       if (keytipMenu?.contains(e.target)) return;
@@ -17537,6 +17654,7 @@ async function init() {
   selectCell(f?.rows || 0, f?.cols || 0);
   focusGrid();
   window.tabula = {
+    keytipRegistry: () => ({ entries: KEYTIP_REGISTRY.entries.map((entry) => ({ ...entry })), controls: KEYTIP_REGISTRY.controls.map(({ item, ...control }) => control), tabs: { ...KEYTIP_REGISTRY.tabs }, currentTab: ribbon.current }),
     wb: () => wb, run, commands: () => Object.keys(COMMANDS), menus: () => Object.keys(MENUS), openNamedMenu, selectCell, selectRange, newWorkbook, templates: TEMPLATES, exportXlsx, gv: () => gv, sample: (i) => newWorkbook(SAMPLES[i]), switchSheet: (i) => { switchSheet(i); },
     get active() { return active; }, get sel() { return sel; }, get si() { return si; }, get chartSel() { return chartSel; },
   };

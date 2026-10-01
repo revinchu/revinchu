@@ -1,4 +1,5 @@
 // 리본 메뉴 정의 및 렌더링
+import { collectRibbonControls } from './ribbon-keytips.js';
 import { ICONS } from './icons.js';
 import { setSafeHtml } from './safe-html.js';
 import { el } from './ui.js';
@@ -502,6 +503,7 @@ export function buildRibbon(app) {
   const tabsEl = document.getElementById('ribbonTabs');
   const ribbonEl = document.getElementById('ribbon');
   const bindings = [];
+  const keytipControls = collectRibbonControls(TABS);
   let current = 'home';
 
   const keepFocus = (e) => e.preventDefault();
@@ -526,6 +528,7 @@ export function buildRibbon(app) {
       if (t.context && !context.has(t.context)) continue;
       if (!t.file && hidden.includes(t.id)) continue;
       tabsEl.append(el('button', {
+        'data-ribbon-tab': t.id,
         class: `ribbon-tab${t.file ? ' file' : ''}${t.context ? ' contextual' : ''}${t.id === current ? ' active' : ''}`,
         onmousedown: keepFocus,
         onclick: () => {
@@ -571,6 +574,16 @@ export function buildRibbon(app) {
     }
     if (it.cmd) node.dataset.ribbonCommand = it.cmd;
     if (it.menu) node.dataset.ribbonMenu = it.menu;
+    for (const control of keytipControls.filter((x) => x.tabId === current && x.item === it)) {
+      let target = node;
+      if (control.kind === 'input') target = node.matches('input,select,textarea') ? node : node.querySelector('input,select,textarea');
+      else if (it.type === 'color') target = node.querySelectorAll('button')[control.kind === 'menu' ? 1 : 0];
+      else if (it.type === 'font' && control.kind === 'menu') target = node.querySelector('.font-caret');
+      else if (it.type === 'gallery') target = node.querySelector('.rg-more');
+      if (!target) continue;
+      target.dataset.ribbonControl ??= control.id;
+      target.dataset.ribbonControls = [target.dataset.ribbonControls, control.id].filter(Boolean).join(' ');
+    }
     return node;
   }
 
@@ -723,15 +736,15 @@ export function buildRibbon(app) {
     bindings.length = 0;
     ribbonEl.replaceChildren();
     const tab = TABS.find((t) => t.id === current);
-    for (const g of tab.groups) {
+    for (const [groupIndex, g] of tab.groups.entries()) {
       ribbonEl.append(el('div', { class: 'rgroup', 'data-ribbon-group': g.label },
         el('div', { class: 'rgroup-body' }, g.items.map(makeItem)),
         el('div', { class: 'rgroup-label' }, g.label),
-        g.launcher ? el('button', { class: 'rgroup-launcher', title: '자세히', 'data-ribbon-command': g.launcher, onmousedown: keepFocus, onclick: () => app.run(g.launcher) }, '⇲') : null));
+        g.launcher ? el('button', { class: 'rgroup-launcher', title: '자세히', 'data-ribbon-command': g.launcher, 'data-ribbon-control': keytipControls.find((x) => x.tabId === current && x.launcher && x.groupIndex === groupIndex)?.id, 'data-ribbon-controls': keytipControls.find((x) => x.tabId === current && x.launcher && x.groupIndex === groupIndex)?.id, onmousedown: keepFocus, onclick: () => app.run(g.launcher) }, '⇲') : null));
     }
     ribbonEl.append(el('span', { style: { flex: '1' } }),
       el('button', {
-        class: 'rbtn', style: { alignSelf: 'flex-end', marginBottom: '2px' }, title: '리본 축소 (Ctrl+F1)',
+        class: 'rbtn', 'data-ribbon-control': `${current}:command:toggleRibbon`, 'data-ribbon-controls': `${current}:command:toggleRibbon`, style: { alignSelf: 'flex-end', marginBottom: '2px' }, title: '리본 축소 (Ctrl+F1)',
         onmousedown: keepFocus, html: ICONS.collapse, onclick: () => ribbonEl.classList.add('collapsed'),
       }));
   }
