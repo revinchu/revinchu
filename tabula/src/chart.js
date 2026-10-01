@@ -5,7 +5,7 @@
 //   seriesFmt?: [{ type, axis, color, labels, marker, smooth, numFmt }] 계열별 서식 (순서대로)
 //   labels, legend: 'b'|'t'|'r'|'l'|'none', grouping: 'clustered'|'stacked'|'percentStacked',
 //   axes?: { y: { title, numFmt, min, max }, y2: {…}, x: { title } } }
-import { formatGeneral, formatValue, formatCode } from './format.js';
+import { formatGeneral, formatValue, formatCode, isDateCode } from './format.js';
 import { pivotSourceData, pivotChartData } from './pivot.js';
 import { maxOf, minOf, pushAll } from './fxcore.js';
 import { THEME, applyTint } from './stylepresets.js';
@@ -242,8 +242,8 @@ export function resolveChart(ch, api) {
       const vals = s.val ? flatRef(api.values(s.val), false) : s.cache ?? [];
       // 이름이 여러 칸이면 빈 칸(병합 안쪽)을 빼고 공백으로 이어 붙임 (엑셀과 같음)
       const name = s.name?.ref ? flatRef(api.values(s.name.ref), true).map(label).filter((t) => t !== '').join(' ') : s.name?.text ?? `계열${i + 1}`;
-      const xs = s.x ? flatRef(api.values(s.x), false) : null;
-      const size = s.size ? flatRef(api.values(s.size), false).map((v) => (isNum(v) ? v : null)) : null;
+      const xs = s.x ? flatRef(api.values(s.x), false) : s.xCache ?? null;
+      const size = (s.size ? flatRef(api.values(s.size), false) : s.sizeCache)?.map((v) => (isNum(v) ? v : null)) ?? null;
       return { name, values: vals.map((v) => (isNum(v) ? v : null)), x: xs ? xs.map((v) => (isNum(v) ? v : null)) : null, ...(size ? { size } : {}) };
     });
     const n = Math.max(0, ...series.map((s) => s.values.length));
@@ -316,10 +316,11 @@ export function chartModelData(wb, hostSi, ch) {
       const row = [];
       for (let c = rg.c1; c <= Math.min(rg.c2, rg.c1 + 100); c++) {
         const v = wb.getValue(s, r, c);
-        if (!text) { row.push(v); continue; }
-        // 항목 축 이름: 날짜 등 셀 표시 형식을 따름
+        if (!text || text === 'category' && c !== rg.c1) { row.push(v); continue; }
+        // 새 차트의 첫 날짜 열은 항목이며, 다른 숫자 값과 분산/거품 X 값은 원래 숫자입니다.
         const st = typeof v === 'number' ? wb.styleAt(s, r, c) : null;
-        row.push(st && (st.numFmt && st.numFmt !== 'general') ? formatValue(v, st).text : label(v));
+        if (text === 'category' && !(/date|time/.test(st?.numFmt ?? '') || st?.code && isDateCode(st.code))) { row.push(v); continue; }
+        row.push(st && (st.numFmt && st.numFmt !== 'general') ? formatValue(v, st, wb.date1904).text : label(v));
       }
       rows.push(row);
     }
@@ -332,8 +333,8 @@ export function chartModelData(wb, hostSi, ch) {
     if (!v || v.r1 === undefined) return null;
     return { sheet: v.sheet ?? ref.sheet ?? null, r1: v.r1, c1: v.c1, r2: v.r2, c2: v.c2 };
   };
-  return resolveChart(ch, {
-    range: (c) => (c.range ? read(sheetOf(c.sheet), c.range) : []),
+  const data = resolveChart(ch, {
+    range: (c) => (c.range ? read(sheetOf(c.sheet), c.range, c.range.c2 > c.range.c1 && !['scatter', 'bubble'].includes(c.type) ? 'category' : false) : []),
     values: (ref) => {
       if (ref.name) { const rg = nameRange(ref); return rg ? read(sheetOf(rg.sheet), rg) : []; }
       return read(sheetOf(ref.sheet ?? ch.sheet), ref);
@@ -358,6 +359,7 @@ export function chartModelData(wb, hostSi, ch) {
       return pivotChartData(src, def, fieldStyle);
     },
   });
+  return { ...data, date1904: !!wb.date1904 };
 }
 
 const chartAxis = (axis) => axis === 1 || axis === 'secondary' || axis === 'right' ? 1 : 0;
@@ -409,8 +411,8 @@ export function niceScale(min, max, ticks = 5) {
 
 const escSvg = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-function axisLabel(n, code) {
-  if (code && code !== 'General') { try { return formatCode(n, code).text; } catch { /* 기본 */ } }
+function axisLabel(n, code, date1904 = false) {
+  if (code && code !== 'General') { try { return formatCode(n, code, date1904).text; } catch { /* 기본 */ } }
   const a = Math.abs(n);
   if (a >= 1e6 && a < 1e15 && !code) return `${formatGeneral(Number((n / 1e6).toPrecision(4)))}M`;
   if (Number.isInteger(n)) return n.toLocaleString('en-US');
@@ -418,10 +420,10 @@ function axisLabel(n, code) {
 }
 
 /** 데이터 레이블 글자 (계열 서식: 서식 코드 문자열 또는 셀 서식) */
-function valueLabel(v, fmt) {
+function valueLabel(v, fmt, date1904 = false) {
   try {
-    if (typeof fmt === 'string' && fmt && fmt !== 'General') return formatCode(v, fmt).text;
-    if (fmt && typeof fmt === 'object' && (fmt.numFmt || fmt.code)) return formatValue(v, fmt).text;
+    if (typeof fmt === 'string' && fmt && fmt !== 'General') return formatCode(v, fmt, date1904).text;
+    if (fmt && typeof fmt === 'object' && (fmt.numFmt || fmt.code)) return formatValue(v, fmt, date1904).text;
   } catch { /* 기본 */ }
   if (Number.isInteger(v)) return v.toLocaleString('en-US');
   return formatGeneral(Number(v.toPrecision(6)));
@@ -454,6 +456,7 @@ function readable(fg, bg) {
 }
 let svgSeq = 0;
 export function renderChartSvg(chart, data) {
+  chart = { ...chart, date1904: data.date1904 ?? chart.date1904 ?? false };
   const W = Math.max(120, chart.w);
   const H = Math.max(90, chart.h);
   const FONT = "font-family=\"'Malgun Gothic','Apple SD Gothic Neo','Noto Sans KR',sans-serif\"";
@@ -518,9 +521,12 @@ export function renderChartSvg(chart, data) {
   };
   // 데이터 표 (엑셀 [차트 요소 → 데이터 표]): 그림 영역 아래에 항목 × 계열 값 표 (범례 표지 포함)
   const DT_ROW = Math.round(FS.axis * 1.7);
+  const specialTable = chart.dataTable && special ? specialDataTable(chart, series, categories) : null;
+  const specialTableH = specialTable ? Math.min(DT_ROW * specialTable.length, Math.max(0, plot.h * .45)) : 0;
   const hasTable = !!chart.dataTable && !pieLike && !special && baseType !== 'scatter' && baseType !== 'bar' && series.length > 0;
   const dtH = hasTable ? DT_ROW * (series.length + 1) : 0;
   plot.h -= Math.max(0, dtH - Math.round(FS.axis * 1.9));
+  if (specialTable) plot.h -= specialTableH + 6;
 
   if (!series.length || series.every((s) => s.values.every((v) => v === null))) {
     parts.push(`<text x="${W / 2}" y="${H / 2}" text-anchor="middle" font-size="12" fill="#999">표시할 숫자 데이터가 없습니다</text></svg>`);
@@ -559,7 +565,10 @@ export function renderChartSvg(chart, data) {
   const wantLabels = (s) => s.labels ?? chart.labels ?? false;
   if (chart.plotFill) parts.push(`<rect x="${plot.x}" y="${plot.y}" width="${plot.w}" height="${plot.h}" fill="${chart.plotFill}"/>`);
   if (special) {
-    special.draw({ chart, data, series, categories, plot, parts, FS, TXT, GRID, pal, defs, uid, wantLabels, W, H });
+    const ctx = { chart, data, series, categories, plot, parts, FS, TXT, GRID, pal, defs, uid, wantLabels, W, H };
+    ctx.cartesian = (values, options) => cartesian(ctx, values, options);
+    special.draw(ctx);
+    if (specialTable) drawSpecialTable(ctx, specialTable, specialTableH);
     return finish();
   }
 
@@ -623,7 +632,7 @@ export function renderChartSvg(chart, data) {
         const lx = cx + ox + Math.cos(mid) * lr;
         const ly = cy + oy + Math.sin(mid) * lr * projection.squash;
         const anchor = Math.cos(mid) > 0.25 ? 'start' : Math.cos(mid) < -0.25 ? 'end' : 'middle';
-        const second = s0.labels === false ? '' : !s0.pct && wantLabels(s0) ? valueLabel(v, s0.numFmt) : `${Math.round(frac * 100)}%`;
+        const second = s0.labels === false ? '' : !s0.pct && wantLabels(s0) ? valueLabel(v, s0.numFmt, chart.date1904) : `${Math.round(frac * 100)}%`;
         const fsz = s0.labelSize ? s0.labelSize * (4 / 3) : 11;
         const tc = s0.labelColor ?? color;
         const name = s0.catName ? String(categories[i] ?? '') : '';
@@ -632,7 +641,7 @@ export function renderChartSvg(chart, data) {
       } else if (frac >= 0.04 && s0.labels !== false) {
         const mid = (a + a2) / 2;
         const lr = inner ? (r + inner) / 2 : r * 0.65;
-        const txt = !s0.pct && wantLabels(s0) ? valueLabel(v, s0.numFmt) : `${Math.round(frac * 100)}%`;
+        const txt = !s0.pct && wantLabels(s0) ? valueLabel(v, s0.numFmt, chart.date1904) : `${Math.round(frac * 100)}%`;
         parts.push(`<text x="${(cx + ox + Math.cos(mid) * lr).toFixed(1)}" y="${(cy + oy + Math.sin(mid) * lr * projection.squash + 4).toFixed(1)}" text-anchor="middle" font-size="11" fill="#fff" font-weight="700">${escSvg(txt)}</text>`);
       }
       a = a2;
@@ -680,9 +689,9 @@ export function renderChartSvg(chart, data) {
   const primaryAxis = scaleFor(0) ? 0 : 1;
   const hideY = !!chart.axes?.[primaryAxis ? 'y2' : 'y']?.hide;
   const hideX = !!chart.axes?.x?.hide;
-  const labelW = hideY || (!horizontal && primaryAxis === 1) ? 6 : Math.min(100, maxOf(scale.ticks.map((t) => axisLabel(t, scale.code).length)) * CW + 8);
+  const labelW = hideY || (!horizontal && primaryAxis === 1) ? 6 : Math.min(100, maxOf(scale.ticks.map((t) => axisLabel(t, scale.code, chart.date1904).length)) * CW + 8);
   const rightScale = scale2 ?? (!horizontal && primaryAxis === 1 ? scale : null);
-  const label2W = rightScale && !chart.axes?.y2?.hide ? Math.min(100, maxOf(rightScale.ticks.map((t) => axisLabel(t, rightScale.code).length)) * CW + 8) : 0;
+  const label2W = rightScale && !chart.axes?.y2?.hide ? Math.min(100, maxOf(rightScale.ticks.map((t) => axisLabel(t, rightScale.code, chart.date1904).length)) * CW + 8) : 0;
 
   // 가로축 값 범위 (분산형)
   let xScale = null;
@@ -723,16 +732,16 @@ export function renderChartSvg(chart, data) {
     const p = vpos(t).toFixed(1);
     if (horizontal) {
       parts.push(chart.gridY === false ? '' : `<line x1="${p}" y1="${area.y}" x2="${p}" y2="${area.y + area.h}" stroke="${GRID}"/>`,
-        hideY ? '' : `<text x="${p}" y="${area.y + area.h + Math.round(FS.axis * 1.35)}" text-anchor="middle" font-size="${FS.axis}" fill="${TXT}">${escSvg(axisLabel(t, scale.code))}</text>`);
+        hideY ? '' : `<text x="${p}" y="${area.y + area.h + Math.round(FS.axis * 1.35)}" text-anchor="middle" font-size="${FS.axis}" fill="${TXT}">${escSvg(axisLabel(t, scale.code, chart.date1904))}</text>`);
     } else {
       parts.push(chart.gridY === false ? '' : `<line x1="${area.x}" y1="${p}" x2="${area.x + area.w}" y2="${p}" stroke="${GRID}"/>`,
-        hideY || primaryAxis === 1 ? '' : `<text x="${area.x - 5}" y="${Number(p) + FS.axis * 0.35}" text-anchor="end" font-size="${FS.axis}" fill="${TXT}">${escSvg(axisLabel(t, scale.code))}</text>`);
+        hideY || primaryAxis === 1 ? '' : `<text x="${area.x - 5}" y="${Number(p) + FS.axis * 0.35}" text-anchor="end" font-size="${FS.axis}" fill="${TXT}">${escSvg(axisLabel(t, scale.code, chart.date1904))}</text>`);
     }
   }
   if (rightScale && !horizontal && !chart.axes?.y2?.hide) {
     for (const t of rightScale.ticks) {
       const p = vpos2(t);
-      parts.push(`<text x="${area.x + area.w + 5}" y="${(p + 3.5).toFixed(1)}" text-anchor="start" font-size="${FS.axis}" fill="${TXT}">${escSvg(axisLabel(t, rightScale.code))}</text>`);
+      parts.push(`<text x="${area.x + area.w + 5}" y="${(p + 3.5).toFixed(1)}" text-anchor="start" font-size="${FS.axis}" fill="${TXT}">${escSvg(axisLabel(t, rightScale.code, chart.date1904))}</text>`);
     }
   }
   const axisTitle = (txt, x, y, rot) => (txt ? `<text x="${x}" y="${y}" text-anchor="middle" font-size="11" fill="${TXT}"${rot ? ` transform="rotate(${rot} ${x} ${y})"` : ''}>${escSvg(txt)}</text>` : '');
@@ -740,7 +749,7 @@ export function renderChartSvg(chart, data) {
   const base = vpos(Math.max(scale.min, Math.min(0, scale.max)));
   const labelsOut = [];
   const pushLabel = (x, y, v, s, anchor = 'middle') => {
-    labelsOut.push(`<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="${anchor}" font-size="${pt(s.labelSize ?? 9)}"${s.labelBold ? ' font-weight="700"' : ''} fill="${s.labelColor ?? '#404040'}" paint-order="stroke" stroke="#fff" stroke-width="2.5">${escSvg(valueLabel(v, s.numFmt))}</text>`);
+    labelsOut.push(`<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="${anchor}" font-size="${pt(s.labelSize ?? 9)}"${s.labelBold ? ' font-weight="700"' : ''} fill="${s.labelColor ?? '#404040'}" paint-order="stroke" stroke="#fff" stroke-width="2.5">${escSvg(valueLabel(v, s.numFmt, chart.date1904))}</text>`);
   };
 
   if (baseType === 'scatter') {
@@ -933,7 +942,7 @@ export function renderChartSvg(chart, data) {
     const y0 = area.y + area.h + 2;
     const bandT = area.w / Math.max(1, n);
     const x0 = plot.x;
-    const rows = [['', ...categories], ...series.map((s) => [s.name, ...s.values.map((v) => (isNum(v) ? valueLabel(v, s.numFmt) : ''))])];
+    const rows = [['', ...categories], ...series.map((s) => [s.name, ...s.values.map((v) => (isNum(v) ? valueLabel(v, s.numFmt, chart.date1904) : ''))])];
     const lineC = '#d9d9d9';
     parts.push(`<rect x="${x0}" y="${y0}" width="${area.x + area.w - x0}" height="${DT_ROW * rows.length}" fill="none" stroke="${lineC}"/>`);
     rows.forEach((row, r) => {
@@ -988,57 +997,81 @@ function smoothPath(pts) {
 // ───────────── 통계 · 계층 차트 (엑셀 2016 이후 차트) 와 방사형 · 거품형 · 주식형 ─────────────
 const T = (x, y, txt, size, fill, anchor = 'middle', extra = '') => `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="${anchor}" font-size="${size}" fill="${fill}"${extra}>${escSvg(txt)}</text>`;
 
-/** 값 축이 있는 직교 영역 (세로 값 축 + 항목 축) — 특수 차트 공용 */
-function cartesian(ctx, vals, { horizontal = false, code = null, cats = null, zero = true, right = 0 } = {}) {
-  const { chart, plot, parts, FS, TXT, GRID } = ctx;
-  const cfg = chart.axes?.y ?? {};
-  let lo = minOf(vals.filter(isNum));
-  let hi = maxOf(vals.filter(isNum));
-  if (zero) { lo = Math.min(0, lo); hi = Math.max(0, hi); }
+/** 값 범위/주 단위를 제한해 잘못된 파일의 무한 눈금 반복을 막습니다. */
+export function chartValueScale(values, cfg = {}, { zero = true, code = null } = {}) {
+  let lo = Infinity, hi = -Infinity;
+  for (const v of values) if (isNum(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
   if (!Number.isFinite(lo)) { lo = 0; hi = 1; }
+  if (zero) { lo = Math.min(0, lo); hi = Math.max(0, hi); }
   const sc = niceScale(isNum(cfg.min) ? cfg.min : lo, isNum(cfg.max) ? cfg.max : hi);
   if (isNum(cfg.min)) sc.min = cfg.min;
   if (isNum(cfg.max)) sc.max = cfg.max;
-  if (isNum(cfg.major) && cfg.major > 0) sc.step = cfg.major;
-  const ticks = [];
-  for (let t = sc.min; t <= sc.max + sc.step / 2; t += sc.step) ticks.push(Number(t.toPrecision(12)));
-  const fmt = cfg.numFmt ?? code;
-  const CW = FS.axis * 0.58;
-  const labelW = horizontal ? Math.min(140, maxOf((cats ?? ['']).map((c) => [...String(c)].length)) * CW * 1.4 + 8) : Math.min(100, maxOf(ticks.map((t) => axisLabel(t, fmt).length)) * CW + 8);
-  const area = horizontal
-    ? { x: plot.x + labelW, y: plot.y, w: plot.w - labelW - 10, h: plot.h - 18 }
-    : { x: plot.x + labelW, y: plot.y + 4, w: plot.w - labelW - 6 - right, h: plot.h - Math.round(FS.axis * 1.9) };
-  const pos = (v) => (horizontal ? area.x + ((v - sc.min) / (sc.max - sc.min)) * area.w : area.y + area.h - ((v - sc.min) / (sc.max - sc.min)) * area.h);
-  for (const t of ticks) {
-    const p = pos(t);
-    if (horizontal) parts.push(chart.gridY === false ? '' : `<line x1="${p.toFixed(1)}" y1="${area.y}" x2="${p.toFixed(1)}" y2="${area.y + area.h}" stroke="${GRID}"/>`, T(p, area.y + area.h + FS.axis * 1.35, axisLabel(t, fmt), FS.axis, TXT));
-    else parts.push(chart.gridY === false ? '' : `<line x1="${area.x}" y1="${p.toFixed(1)}" x2="${area.x + area.w}" y2="${p.toFixed(1)}" stroke="${GRID}"/>`, T(area.x - 5, p + FS.axis * 0.35, axisLabel(t, fmt), FS.axis, TXT, 'end'));
-  }
-  const n = cats?.length ?? 0;
-  const band = (horizontal ? area.h : area.w) / Math.max(1, n);
-  if (cats) {
-    // 이름 길이에 맞춰 건너뛰기 (가로 축은 가장 긴 이름이 잘리지 않을 만큼)
-    const longest = horizontal ? 0 : Math.min(14, Math.max(0, ...cats.slice(0, 400).map((c) => [...String(c)].length)));
-    const every = Math.max(1, Math.ceil(n / Math.max(1, Math.floor((horizontal ? area.h : area.w) / (horizontal ? 28 : Math.max(28, longest * CW * 1.15 + 8))))));
-    cats.forEach((c, i) => {
-      if (i % every) return;
-      const mid = (horizontal ? area.y : area.x) + band * (i + 0.5);
-      if (horizontal) parts.push(T(area.x - 5, mid + 3.5, truncate(String(c), 16), FS.axis, TXT, 'end'));
-      else parts.push(T(mid, area.y + area.h + FS.axis * 1.35, truncate(String(c), Math.max(2, Math.floor((band * every) / (CW * 1.4)))), FS.axis, TXT));
-    });
-  }
-  return { area, pos, band, sc, fmt };
+  if (!(sc.max > sc.min)) Object.assign(sc, niceScale(lo, hi));
+  if (isNum(cfg.major) && cfg.major > 0 && (sc.max - sc.min) / cfg.major <= 200) sc.step = cfg.major;
+  const count = Math.min(200, Math.floor((sc.max - sc.min) / sc.step + 1e-9));
+  const ticks = Array.from({ length: count + 1 }, (_, i) => Number((sc.min + i * sc.step).toPrecision(12)));
+  return { ...sc, ticks, reverse: !!cfg.reverse, code: cfg.numFmt ?? code };
 }
 
-const labelTxt = (ctx, s, v, x, y, anchor = 'middle') => ctx.parts.push(`<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="${anchor}" font-size="${(s?.labelSize ?? 9) * 4 / 3}" fill="${s?.labelColor ?? '#404040'}" paint-order="stroke" stroke="#fff" stroke-width="2.5">${escSvg(valueLabel(v, s?.numFmt))}</text>`);
+/** 특수 차트 공용 직교 영역. 축 숨김과 눈금선 표시는 별개입니다. */
+function cartesian(ctx, vals, { horizontal = false, code = null, cats = null, zero = true, right = 0, secondary = null } = {}) {
+  const { chart, plot, parts, FS, TXT, GRID, defs, uid } = ctx;
+  const cfg = chart.axes?.y ?? {}, xc = chart.axes?.x ?? {}, yc2 = chart.axes?.y2 ?? {};
+  const sc = chartValueScale(vals, cfg, { zero, code });
+  const sc2 = secondary ? chartValueScale(secondary.values, { ...secondary.defaults, ...yc2 }, { zero: secondary.zero ?? false, code: secondary.code }) : null;
+  const CW = FS.axis * .58, titleH = FS.axis * 1.7;
+  const lw = (scale) => Math.min(100, maxOf(scale.ticks.map((t) => axisLabel(t, scale.code, chart.date1904).length)) * CW + 8);
+  const catW = Math.min(140, maxOf((cats ?? ['']).map((c) => [...String(c)].length)) * CW * 1.4 + 8);
+  const left = horizontal ? (xc.hide ? 5 : catW + (xc.title ? titleH : 0)) : cfg.hide ? 5 : lw(sc) + (cfg.title ? titleH : 0);
+  const bottom = horizontal ? (cfg.hide ? 4 : FS.axis * 1.9 + (cfg.title ? titleH : 0)) : xc.hide ? 4 : FS.axis * 1.9 + (xc.title ? titleH : 0);
+  const rightW = sc2 && !yc2.hide ? lw(sc2) + (yc2.title ? titleH : 0) : right;
+  const area = { x: plot.x + left, y: plot.y + 4, w: Math.max(4, plot.w - left - rightW - 6), h: Math.max(4, plot.h - bottom - 4) };
+  const position = (v, scale) => { const q = (v - scale.min) / (scale.max - scale.min), t = scale.reverse ? 1 - q : q; return horizontal ? area.x + t * area.w : area.y + (1 - t) * area.h; };
+  const pos = (v) => position(v, sc), pos2 = (v) => position(v, sc2);
+  const title = (name, x, y, rotation = 0, axis = 'y') => { if (name) parts.push(T(x, y, name, FS.axis, TXT, 'middle', ` data-axis-title="${axis}"${rotation ? ` transform="rotate(${rotation} ${x} ${y})"` : ''}`)); };
+  for (const t of sc.ticks) {
+    const p = pos(t);
+    if (chart.gridY !== false) parts.push(horizontal ? `<line data-grid="y" x1="${p.toFixed(1)}" y1="${area.y}" x2="${p.toFixed(1)}" y2="${area.y + area.h}" stroke="${GRID}"/>` : `<line data-grid="y" x1="${area.x}" y1="${p.toFixed(1)}" x2="${area.x + area.w}" y2="${p.toFixed(1)}" stroke="${GRID}"/>`);
+    if (!cfg.hide) parts.push(horizontal ? T(p, area.y + area.h + FS.axis * 1.35, axisLabel(t, sc.code, chart.date1904), FS.axis, TXT, 'middle', ' data-axis="y"') : T(area.x - 5, p + FS.axis * .35, axisLabel(t, sc.code, chart.date1904), FS.axis, TXT, 'end', ' data-axis="y"'));
+  }
+  if (!cfg.hide) horizontal ? title(cfg.title, area.x + area.w / 2, plot.y + plot.h) : title(cfg.title, plot.x + FS.axis, area.y + area.h / 2, -90);
+  if (sc2 && !yc2.hide) {
+    for (const t of sc2.ticks) parts.push(T(area.x + area.w + 5, pos2(t) + FS.axis * .35, axisLabel(t, sc2.code, chart.date1904), FS.axis, TXT, 'start', ' data-axis="y2"'));
+    title(yc2.title, plot.x + plot.w - FS.axis * .35, area.y + area.h / 2, 90, 'y2');
+  }
+  const n = cats?.length ?? 0, band = (horizontal ? area.h : area.w) / Math.max(1, n);
+  const mid = (i) => (horizontal ? area.y : area.x) + band * (xc.reverse ? n - i - .5 : i + .5);
+  if (cats) {
+    const longest = horizontal ? 0 : Math.min(14, maxOf(cats.slice(0, 400).map((c) => [...String(c)].length)) || 0);
+    const every = Math.max(1, Math.ceil(n / Math.max(1, Math.floor((horizontal ? area.h : area.w) / (horizontal ? 28 : Math.max(28, longest * CW * 1.15 + 8))))));
+    cats.forEach((c, i) => {
+      const p = mid(i);
+      if (chart.gridX) parts.push(horizontal ? `<line data-grid="x" x1="${area.x}" y1="${p}" x2="${area.x + area.w}" y2="${p}" stroke="${GRID}"/>` : `<line data-grid="x" x1="${p}" y1="${area.y}" x2="${p}" y2="${area.y + area.h}" stroke="${GRID}"/>`);
+      if (xc.hide || i % every) return;
+      parts.push(horizontal ? T(area.x - 5, p + FS.axis * .35, truncate(String(c), 16), FS.axis, TXT, 'end', ' data-axis="x"') : T(p, area.y + area.h + FS.axis * 1.35, truncate(String(c), Math.max(2, Math.floor(band * every / (CW * 1.4)))), FS.axis, TXT, 'middle', ' data-axis="x"'));
+    });
+  }
+  if (!xc.hide) horizontal ? title(xc.title, plot.x + FS.axis, area.y + area.h / 2, -90, 'x') : title(xc.title, area.x + area.w / 2, plot.y + plot.h, 0, 'x');
+  const clipId = `${uid}plot`;
+  defs.push(`<clipPath id="${clipId}"><rect x="${area.x}" y="${area.y}" width="${area.w}" height="${area.h}"/></clipPath>`);
+  return { area, pos, pos2, band, mid, sc, sc2, fmt: sc.code, base: pos(Math.max(sc.min, Math.min(0, sc.max))), clip: ` clip-path="url(#${clipId})"` };
+}
 
-/** 사분위수 (엑셀 QUARTILE.EXC 가 아닌 포함 방식: 상자 수염 차트 기본값) */
-function quantile(sorted, q) {
-  if (!sorted.length) return 0;
-  const pos = (sorted.length - 1) * q;
-  const lo = Math.floor(pos);
-  const hi = Math.ceil(pos);
-  return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+const labelTxt = (ctx, s, v, x, y, anchor = 'middle') => ctx.parts.push(`<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="${anchor}" font-size="${(s?.labelSize ?? 9) * 4 / 3}" fill="${s?.labelColor ?? '#404040'}" paint-order="stroke" stroke="#fff" stroke-width="2.5">${escSvg(valueLabel(v, s?.numFmt, ctx.chart.date1904))}</text>`);
+
+/** Excel 상자수염은 홀수 표본의 중앙값을 양쪽 절반에 포함/제외한 뒤 절반의 중앙값을 씁니다.
+ * https://learn.microsoft.com/en-us/openspecs/office_standards/ms-odrawxml/a1463864-276e-4cef-b772-d9b2a046e5a7
+ */
+export function boxWhiskerStats(values, method = 'inclusive') {
+  const v = values.filter(isNum).sort((a, b) => a - b);
+  if (!v.length) return null;
+  const median = (xs) => xs.length % 2 ? xs[(xs.length - 1) / 2] : xs[xs.length / 2 - 1] / 2 + xs[xs.length / 2] / 2;
+  const half = Math.floor(v.length / 2), include = method !== 'exclusive' && v.length % 2;
+  const lower = v.slice(0, half + (include ? 1 : 0)), upper = v.slice(v.length - half - (include ? 1 : 0));
+  const q1 = median(lower.length ? lower : v), q3 = median(upper.length ? upper : v);
+  const iqr = q3 - q1, inside = [], out = [];
+  for (const x of v) (x < q1 - 1.5 * iqr || x > q3 + 1.5 * iqr ? out : inside).push(x);
+  return { count: v.length, q1, q3, med: median(v), mean: v.reduce((sum, x) => sum + x / v.length, 0), lo: inside[0] ?? q1, hi: inside.at(-1) ?? q3, inside, out, min: v[0], max: v.at(-1) };
 }
 
 /** 히스토그램 구간: 엑셀 자동 구간(스콧 규칙)과 비슷하게 */
@@ -1071,43 +1104,85 @@ export function histogramBins(values, count = null, width = null) {
 const binLabel = (b, i) => `${i ? '(' : '['}${axisLabel(Number(b.from.toPrecision(10)))}, ${axisLabel(Number(b.to.toPrecision(10)))}]`;
 const TOTAL_RE = /^(합계|총계|총합계|소계|전체|total|subtotal|grand total|net)$/i;
 
+function waterfallBars(values, categories, chart) {
+  const totals = new Set(chart.totals ?? categories.map((c, i) => TOTAL_RE.test(String(c).trim()) ? i : -1).filter((i) => i >= 0));
+  let run = 0;
+  return values.map((v0, i) => {
+    const v = isNum(v0) ? v0 : 0;
+    if (totals.has(i)) { if (i === 0) run = v; return { a: 0, b: run, v: run, kind: 'total' }; }
+    const a = run; run += v;
+    return { a, b: run, v, kind: v >= 0 ? 'up' : 'down' };
+  });
+}
+
+function paretoItems(series, categories, chart) {
+  const s = series[0];
+  if (!s) return [];
+  const items = categories.every((c, i) => String(c) === String(i + 1))
+    ? histogramBins(s.values, chart.binCount ?? null, chart.binWidth ?? null).map((b, i) => ({ c: binLabel(b, i), v: b.count, i }))
+    : s.values.map((v, i) => ({ c: categories[i], v: isNum(v) ? v : 0, i }));
+  return items.sort((a, b) => b.v - a.v);
+}
+
+/** 통계 차트의 표에는 원자료 대신 화면에 집계된 값/요약 통계를 표시합니다. */
+function specialDataTable(chart, series, categories) {
+  if (!series.length) return null;
+  const s = series[0], values = (row, code = s.numFmt) => row.map((v) => isNum(v) ? valueLabel(v, code, chart.date1904) : '');
+  if (chart.type === 'waterfall') return [['', ...categories], [s.name, ...values(waterfallBars(s.values, categories, chart).map((b) => b.v))]];
+  if (chart.type === 'histogram') { const bins = histogramBins(series.flatMap((s) => s.values), chart.binCount ?? null, chart.binWidth ?? null); return [['구간', ...bins.map(binLabel)], ['빈도', ...values(bins.map((b) => b.count), '0')]]; }
+  if (chart.type === 'pareto') {
+    const items = paretoItems(series, categories, chart), total = items.reduce((sum, p) => sum + Math.max(0, p.v), 0) || 1;
+    let acc = 0;
+    return [['', ...items.map((p) => p.c)], [s.name, ...values(items.map((p) => p.v))], ['누적 %', ...items.map((p) => valueLabel((acc += Math.max(0, p.v)) / total, '0.0%', chart.date1904))]];
+  }
+  if (chart.type === 'boxWhisker') return [['계열', '최솟값', 'Q1', '중앙값', 'Q3', '최댓값', '평균'], ...series.map((sr) => { const st = boxWhiskerStats(sr.values, chart.quartileMethod); return [sr.name, ...values(st ? [st.min, st.q1, st.med, st.q3, st.max, st.mean] : Array(6).fill(null), sr.numFmt)]; })];
+  if (chart.type === 'stock') return [['', ...categories], ...series.map((sr) => [sr.name, ...values(sr.values, sr.numFmt)])];
+  return null;
+}
+
+function drawSpecialTable(ctx, rows, height) {
+  if (!rows.length || height <= 0) return;
+  const { plot, parts, FS, TXT, GRID } = ctx, y = plot.y + plot.h + 6, h = height / rows.length;
+  const count = Math.max(1, maxOf(rows.map((r) => r.length))), w = plot.w / count, font = Math.min(FS.axis, h * .65);
+  parts.push(`<g data-el="dataTable"><rect x="${plot.x}" y="${y}" width="${plot.w}" height="${height}" fill="none" stroke="${GRID}"/>`);
+  for (let c = 1; c < count; c++) parts.push(`<line x1="${plot.x + w * c}" y1="${y}" x2="${plot.x + w * c}" y2="${y + height}" stroke="${GRID}"/>`);
+  rows.forEach((row, r) => {
+    if (r) parts.push(`<line x1="${plot.x}" y1="${y + h * r}" x2="${plot.x + plot.w}" y2="${y + h * r}" stroke="${GRID}"/>`);
+    row.forEach((v, c) => parts.push(T(plot.x + w * (c + .5), y + h * (r + .5) + font * .35, truncate(String(v ?? ''), Math.max(1, Math.floor((w - 5) / (font * .7)))), font, TXT)));
+  });
+  parts.push('</g>');
+}
+
+const specialBarWidth = (band, chart, fallback) => band / (1 + Math.max(0, Math.min(500, isNum(chart.gap) ? chart.gap : fallback)) / 100);
+
 export const SPECIAL = {
   waterfall: {
     draw(ctx) {
       const { chart, series, categories, parts, pal } = ctx;
       const s = series[0];
       if (!s) return;
-      const totals = new Set(chart.totals ?? categories.map((c, i) => (TOTAL_RE.test(String(c).trim()) ? i : -1)).filter((i) => i >= 0));
-      let run = 0;
-      const bars = s.values.map((v0, i) => {
-        const v = isNum(v0) ? v0 : 0;
-        if (totals.has(i)) { run = i === 0 ? v : run; return { a: 0, b: totals.has(i) && i > 0 ? run : v, v: totals.has(i) && i > 0 ? run : v, kind: 'total' }; }
-        const a = run;
-        run += v;
-        return { a, b: run, v, kind: v >= 0 ? 'up' : 'down' };
-      });
-      const { area, pos, band } = cartesian(ctx, bars.flatMap((b) => [b.a, b.b]), { cats: categories, code: s.numFmt });
-      const w = band * 0.62;
+      const bars = waterfallBars(s.values, categories, chart);
+      const { area, pos, band, mid, base, clip } = cartesian(ctx, bars.flatMap((b) => [b.a, b.b]), { cats: categories, code: s.numFmt });
+      const w = specialBarWidth(band, chart, 61), direction = chart.axes?.x?.reverse ? -1 : 1;
       const col = { up: chart.upColor ?? pal[0], down: chart.downColor ?? pal[1], total: chart.totalColor ?? pal[2] };
+      parts.push(`<g data-plot="waterfall"${clip}>`);
       bars.forEach((b, i) => {
-        const x = area.x + band * i + (band - w) / 2;
-        const y1 = pos(Math.max(b.a, b.b));
-        const y2 = pos(Math.min(b.a, b.b));
-        parts.push(`<rect x="${x.toFixed(1)}" y="${y1.toFixed(1)}" width="${w.toFixed(1)}" height="${Math.max(1, y2 - y1).toFixed(1)}" fill="${col[b.kind]}"/>`);
-        // 연결선
+        const x = mid(i) - w / 2, y1 = pos(b.a), y2 = pos(b.b);
+        parts.push(`<rect x="${x.toFixed(1)}" y="${Math.min(y1, y2).toFixed(1)}" width="${w.toFixed(1)}" height="${Math.max(1, Math.abs(y2 - y1)).toFixed(1)}" fill="${s.pointColors?.[i] ?? col[b.kind]}" data-s="${s._fi}" data-p="${i}" data-value="${b.v}"/>`);
         if (i < bars.length - 1 && chart.connectors !== false) {
-          const yb = pos(b.kind === 'total' ? b.b : b.b);
-          parts.push(`<line x1="${(x + w).toFixed(1)}" y1="${yb.toFixed(1)}" x2="${(x + band).toFixed(1)}" y2="${yb.toFixed(1)}" stroke="#a6a6a6" stroke-dasharray="2,2"/>`);
+          const yb = pos(b.b);
+          parts.push(`<line x1="${(mid(i) + direction * w / 2).toFixed(1)}" y1="${yb.toFixed(1)}" x2="${(mid(i + 1) - direction * w / 2).toFixed(1)}" y2="${yb.toFixed(1)}" stroke="#a6a6a6" stroke-dasharray="2,2"/>`);
         }
-        if ((s.labels ?? chart.labels) !== false) labelTxt(ctx, s, b.v, x + w / 2, y1 - 4);
       });
-      parts.push(`<line x1="${area.x}" y1="${pos(0).toFixed(1)}" x2="${area.x + area.w}" y2="${pos(0).toFixed(1)}" stroke="#bfbfbf"/>`);
+      parts.push('</g>');
+      bars.forEach((b, i) => { if ((s.labels ?? chart.labels) !== false) labelTxt(ctx, s, b.v, mid(i), Math.max(area.y + 12, Math.min(pos(b.a), pos(b.b)) - 4)); });
+      if (!chart.axes?.y?.hide) parts.push(`<line x1="${area.x}" y1="${base.toFixed(1)}" x2="${area.x + area.w}" y2="${base.toFixed(1)}" stroke="#bfbfbf"/>`);
     },
   },
   funnel: {
     legend: false,
     draw(ctx) {
-      const { series, categories, plot, parts, FS, TXT } = ctx;
+      const { chart, series, categories, plot, parts, FS, TXT } = ctx;
       const s = series[0];
       if (!s) return;
       const vals = s.values.map((v) => (isNum(v) && v > 0 ? v : 0));
@@ -1122,7 +1197,7 @@ export const SPECIAL = {
         const y = area.y + band * i + band * 0.08;
         parts.push(`<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${Math.max(1, bw).toFixed(1)}" height="${(band * 0.84).toFixed(1)}" fill="${s.colors?.[i] ?? s.color}"/>`);
         parts.push(T(area.x - 6, y + band * 0.42 + 4, truncate(String(categories[i] ?? ''), 20), FS.axis, TXT, 'end'));
-        parts.push(`<text x="${(area.x + area.w / 2).toFixed(1)}" y="${(y + band * 0.42 + 4).toFixed(1)}" text-anchor="middle" font-size="${FS.axis}" fill="#fff" font-weight="700">${escSvg(valueLabel(s.values[i] ?? 0, s.numFmt))}</text>`);
+        parts.push(`<text x="${(area.x + area.w / 2).toFixed(1)}" y="${(y + band * 0.42 + 4).toFixed(1)}" text-anchor="middle" font-size="${FS.axis}" fill="#fff" font-weight="700">${escSvg(valueLabel(s.values[i] ?? 0, s.numFmt, chart.date1904))}</text>`);
       });
     },
   },
@@ -1133,50 +1208,41 @@ export const SPECIAL = {
       const vals = series.flatMap((s) => s.values);
       const bins = histogramBins(vals, chart.binCount ?? null, chart.binWidth ?? null);
       const cats = bins.map(binLabel);
-      const { area, pos, band } = cartesian(ctx, bins.map((b) => b.count), { cats });
-      const s = series[0];
+      const { area, pos, band, mid, base, clip } = cartesian(ctx, bins.map((b) => b.count), { cats });
+      const s = series[0], w = specialBarWidth(band, chart, 0);
+      parts.push(`<g data-plot="histogram"${clip}>`);
       bins.forEach((b, i) => {
-        const x = area.x + band * i;
-        const y = pos(b.count);
-        parts.push(`<rect x="${(x + 0.5).toFixed(1)}" y="${y.toFixed(1)}" width="${Math.max(1, band - 1).toFixed(1)}" height="${(pos(0) - y).toFixed(1)}" fill="${s?.color}"/>`);
-        if (ctx.wantLabels(s ?? {})) labelTxt(ctx, null, b.count, x + band / 2, y - 4);
+        const x = mid(i) - w / 2, y = pos(b.count);
+        parts.push(`<rect x="${(x + .5).toFixed(1)}" y="${Math.min(y, base).toFixed(1)}" width="${Math.max(1, w - 1).toFixed(1)}" height="${Math.abs(base - y).toFixed(1)}" fill="${s?.pointColors?.[i] ?? s?.color}" data-s="${s?._fi ?? 0}" data-p="${i}" data-value="${b.count}"/>`);
       });
+      parts.push('</g>');
+      if (ctx.wantLabels(s ?? {})) bins.forEach((b, i) => labelTxt(ctx, s, b.count, mid(i), Math.max(area.y + 12, Math.min(pos(b.count), base) - 4)));
     },
   },
   pareto: {
     draw(ctx) {
-      const { series, categories, parts, pal, FS, TXT } = ctx;
-      const s = series[0];
+      const { chart, series, categories, parts, pal } = ctx, s = series[0];
       if (!s) return;
-      let items;
-      let cats;
-      const catsAreNums = categories.every((c, i) => String(c) === String(i + 1));
-      if (catsAreNums) {
-        const bins = histogramBins(s.values);
-        items = bins.map((b, i) => ({ c: binLabel(b, i), v: b.count }));
-      } else items = s.values.map((v, i) => ({ c: categories[i], v: isNum(v) ? v : 0 }));
-      items.sort((a, b) => b.v - a.v);
-      cats = items.map((x) => x.c);
-      const total = items.reduce((a, x) => a + Math.max(0, x.v), 0) || 1;
-      const { area, pos, band } = cartesian(ctx, items.map((x) => x.v), { cats, code: s.numFmt, right: FS.axis * 2.6 });
-      const w = band * 0.9;
+      const items = paretoItems(series, categories, chart), cats = items.map((x) => x.c);
+      const total = items.reduce((sum, p) => sum + Math.max(0, p.v), 0) || 1;
+      const { area, pos, pos2, band, mid, base, clip } = cartesian(ctx, items.map((p) => p.v), { cats, code: s.numFmt, secondary: { values: [0, 1], defaults: { min: 0, max: 1, major: .25 }, code: '0%' } });
+      const w = specialBarWidth(band, chart, 11), pts = [];
       let acc = 0;
-      const pts = [];
-      items.forEach((x, i) => {
-        const bx = area.x + band * i + (band - w) / 2;
-        const y = pos(x.v);
-        parts.push(`<rect x="${bx.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${(pos(0) - y).toFixed(1)}" fill="${s.color}"/>`);
-        acc += Math.max(0, x.v);
-        pts.push([area.x + band * (i + 0.5), area.y + area.h - (acc / total) * area.h]);
+      parts.push(`<g data-plot="pareto"${clip}>`);
+      items.forEach((p, i) => {
+        const x = mid(i) - w / 2, y = pos(p.v);
+        parts.push(`<rect x="${x.toFixed(1)}" y="${Math.min(y, base).toFixed(1)}" width="${w.toFixed(1)}" height="${Math.abs(base - y).toFixed(1)}" fill="${s.pointColors?.[p.i] ?? s.color}" data-s="${s._fi}" data-p="${p.i}" data-value="${p.v}"/>`);
+        acc += Math.max(0, p.v); pts.push([mid(i), pos2(acc / total)]);
       });
-      parts.push(`<path d="${pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join('')}" fill="none" stroke="${pal[1]}" stroke-width="2.25"/>`);
+      parts.push(`<path data-pareto="cumulative" d="${pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join('')}" fill="none" stroke="${pal[1]}" stroke-width="2.25"/>`);
       for (const p of pts) parts.push(`<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="2.5" fill="${pal[1]}"/>`);
-      for (let k = 0; k <= 4; k++) parts.push(T(area.x + area.w + 4, area.y + area.h - (k / 4) * area.h + 3.5, `${k * 25}%`, FS.axis, TXT, 'start'));
+      parts.push('</g>');
+      if (ctx.wantLabels(s)) items.forEach((p, i) => labelTxt(ctx, s, p.v, mid(i), Math.max(area.y + 12, Math.min(pos(p.v), base) - 4)));
     },
   },
   treemap: {
     draw(ctx) {
-      const { series, categories, plot, parts, pal } = ctx;
+      const { chart, series, categories, plot, parts, pal } = ctx;
       const s = series[0];
       if (!s) return;
       const items = s.values.map((v, i) => ({ v: isNum(v) && v > 0 ? v : 0, i })).filter((x) => x.v > 0).sort((a, b) => b.v - a.v);
@@ -1210,7 +1276,7 @@ export const SPECIAL = {
         parts.push(`<rect x="${r.x.toFixed(1)}" y="${r.y.toFixed(1)}" width="${Math.max(0, r.w - 1.5).toFixed(1)}" height="${Math.max(0, r.h - 1.5).toFixed(1)}" fill="${col}"/>`);
         if (r.w > 34 && r.h > 18) {
           parts.push(`<text x="${(r.x + 5).toFixed(1)}" y="${(r.y + 14).toFixed(1)}" font-size="11" fill="#fff" font-weight="700">${escSvg(truncate(String(categories[r.i] ?? ''), Math.floor((r.w - 8) / 7)))}</text>`);
-          if (r.h > 32) parts.push(`<text x="${(r.x + 5).toFixed(1)}" y="${(r.y + 28).toFixed(1)}" font-size="10" fill="#fff">${escSvg(valueLabel(r.v, s.numFmt))}</text>`);
+          if (r.h > 32) parts.push(`<text x="${(r.x + 5).toFixed(1)}" y="${(r.y + 28).toFixed(1)}" font-size="10" fill="#fff">${escSvg(valueLabel(r.v, s.numFmt, chart.date1904))}</text>`);
         }
       }
     },
@@ -1218,27 +1284,23 @@ export const SPECIAL = {
   boxWhisker: {
     draw(ctx) {
       const { chart, series, parts } = ctx;
-      const stats = series.map((s) => {
-        const v = s.values.filter(isNum).sort((a, b) => a - b);
-        const q1 = quantile(v, 0.25);
-        const q3 = quantile(v, 0.75);
-        const iqr = q3 - q1;
-        const inside = v.filter((x) => x >= q1 - 1.5 * iqr && x <= q3 + 1.5 * iqr);
-        return { s, q1, q3, med: quantile(v, 0.5), mean: v.reduce((a, b) => a + b, 0) / (v.length || 1), lo: inside[0] ?? q1, hi: inside.at(-1) ?? q3, out: v.filter((x) => x < q1 - 1.5 * iqr || x > q3 + 1.5 * iqr) };
-      });
-      const all = stats.flatMap((x) => [x.lo, x.hi, ...x.out]);
-      const { area, pos, band } = cartesian(ctx, all, { cats: series.map((s) => s.name), zero: false });
+      const stats = series.map((s) => { const st = boxWhiskerStats(s.values, chart.quartileMethod); return st ? { ...st, s } : null; });
+      // 표시하지 않는 이상값도 원자료 범위에 포함: 옵션 토글로 축이 바뀌어 분포가 왜곡되지 않습니다.
+      const all = stats.filter(Boolean).flatMap((s) => [s.min, s.max]);
+      const { pos, band, mid, clip } = cartesian(ctx, all, { cats: series.map((s) => s.name), zero: false, code: series[0]?.numFmt });
+      parts.push(`<g data-plot="boxWhisker"${clip}>`);
       stats.forEach((st, i) => {
-        const cx = area.x + band * (i + 0.5);
-        const w = Math.min(60, band * 0.5);
-        const c = st.s.color;
-        parts.push(`<line x1="${cx}" y1="${pos(st.hi).toFixed(1)}" x2="${cx}" y2="${pos(st.q3).toFixed(1)}" stroke="#595959"/>`, `<line x1="${cx}" y1="${pos(st.q1).toFixed(1)}" x2="${cx}" y2="${pos(st.lo).toFixed(1)}" stroke="#595959"/>`);
-        parts.push(`<line x1="${cx - w / 4}" y1="${pos(st.hi).toFixed(1)}" x2="${cx + w / 4}" y2="${pos(st.hi).toFixed(1)}" stroke="#595959"/>`, `<line x1="${cx - w / 4}" y1="${pos(st.lo).toFixed(1)}" x2="${cx + w / 4}" y2="${pos(st.lo).toFixed(1)}" stroke="#595959"/>`);
-        parts.push(`<rect x="${(cx - w / 2).toFixed(1)}" y="${pos(st.q3).toFixed(1)}" width="${w.toFixed(1)}" height="${Math.max(1, pos(st.q1) - pos(st.q3)).toFixed(1)}" fill="${c}" stroke="#595959" stroke-width="0.75"/>`);
-        parts.push(`<line x1="${(cx - w / 2).toFixed(1)}" y1="${pos(st.med).toFixed(1)}" x2="${(cx + w / 2).toFixed(1)}" y2="${pos(st.med).toFixed(1)}" stroke="#fff" stroke-width="1.5"/>`);
-        if (chart.showMean !== false) { const my = pos(st.mean); parts.push(`<path d="M${cx - 3.5},${my - 3.5}L${cx + 3.5},${my + 3.5}M${cx + 3.5},${my - 3.5}L${cx - 3.5},${my + 3.5}" stroke="#fff" stroke-width="1.5"/>`); }
-        for (const o of st.out) parts.push(`<circle cx="${cx}" cy="${pos(o).toFixed(1)}" r="2.5" fill="none" stroke="${c}"/>`);
+        if (!st) return;
+        const cx = mid(i), w = specialBarWidth(band, chart, 100), c = st.s.color, attrs = ` data-s="${st.s._fi}"`;
+        parts.push(`<line x1="${cx}" y1="${pos(st.hi).toFixed(1)}" x2="${cx}" y2="${pos(st.q3).toFixed(1)}" stroke="#595959"${attrs}/>`, `<line x1="${cx}" y1="${pos(st.q1).toFixed(1)}" x2="${cx}" y2="${pos(st.lo).toFixed(1)}" stroke="#595959"${attrs}/>`);
+        for (const v of [st.hi, st.lo]) parts.push(`<line x1="${cx - w / 4}" y1="${pos(v).toFixed(1)}" x2="${cx + w / 4}" y2="${pos(v).toFixed(1)}" stroke="#595959"${attrs}/>`);
+        parts.push(`<rect data-box="quartiles" data-q1="${st.q1}" data-q3="${st.q3}" x="${(cx - w / 2).toFixed(1)}" y="${Math.min(pos(st.q1), pos(st.q3)).toFixed(1)}" width="${w.toFixed(1)}" height="${Math.max(1, Math.abs(pos(st.q1) - pos(st.q3))).toFixed(1)}" fill="${c}" stroke="#595959" stroke-width=".75"${attrs}/>`);
+        parts.push(`<line data-box="median" data-value="${st.med}" x1="${cx - w / 2}" y1="${pos(st.med).toFixed(1)}" x2="${cx + w / 2}" y2="${pos(st.med).toFixed(1)}" stroke="#fff" stroke-width="1.5"${attrs}/>`);
+        if (chart.showMean !== false) { const my = pos(st.mean); parts.push(`<path data-box="mean" data-value="${st.mean}" d="M${cx - 3.5},${my - 3.5}L${cx + 3.5},${my + 3.5}M${cx + 3.5},${my - 3.5}L${cx - 3.5},${my + 3.5}" stroke="#404040" stroke-width="1.5"${attrs}/>`); }
+        if (chart.showInnerPoints) for (const v of st.inside) parts.push(`<circle data-box="inner" data-value="${v}" cx="${cx}" cy="${pos(v).toFixed(1)}" r="2.5" fill="${c}" stroke="#fff"${attrs}/>`);
+        if (chart.showOutliers !== false) for (const v of st.out) parts.push(`<circle data-box="outlier" data-value="${v}" cx="${cx}" cy="${pos(v).toFixed(1)}" r="2.5" fill="none" stroke="${c}"${attrs}/>`);
       });
+      parts.push('</g>');
     },
   },
   stock: {
@@ -1250,22 +1312,24 @@ export const SPECIAL = {
       const [o, h, l, c] = ohlc ? series : [null, ...series];
       if (!h || !l || !c || ohlc && !o) return;
       const vals = [...h.values, ...l.values, ...(c?.values ?? []), ...(o?.values ?? [])].filter(isNum);
-      const { area, pos, band } = cartesian(ctx, vals, { cats: categories, zero: false, code: c?.numFmt });
+      const { pos, band, mid, clip } = cartesian(ctx, vals, { cats: categories, zero: false, code: c?.numFmt });
+      parts.push(`<g data-plot="stock"${clip}>`);
       categories.forEach((_, i) => {
-        const cx = area.x + band * (i + 0.5);
+        const cx = mid(i);
         const hi = h.values[i];
         const lo = l.values[i];
         if (isNum(hi) && isNum(lo)) parts.push(`<line x1="${cx.toFixed(1)}" y1="${pos(hi).toFixed(1)}" x2="${cx.toFixed(1)}" y2="${pos(lo).toFixed(1)}" stroke="#404040"/>`);
         if (ohlc && isNum(o.values[i]) && isNum(c.values[i])) {
           const up = c.values[i] >= o.values[i];
-          const y1 = pos(Math.max(o.values[i], c.values[i]));
-          const y2 = pos(Math.min(o.values[i], c.values[i]));
+          const y1 = Math.min(pos(o.values[i]), pos(c.values[i]));
+          const y2 = Math.max(pos(o.values[i]), pos(c.values[i]));
           const w = Math.min(14, band * 0.5);
           parts.push(`<rect x="${(cx - w / 2).toFixed(1)}" y="${y1.toFixed(1)}" width="${w.toFixed(1)}" height="${Math.max(1, y2 - y1).toFixed(1)}" fill="${up ? (chart.upColor ?? '#ffffff') : (chart.downColor ?? '#404040')}" stroke="#404040"/>`);
         } else if (c && isNum(c.values[i])) {
           parts.push(`<line x1="${cx.toFixed(1)}" y1="${pos(c.values[i]).toFixed(1)}" x2="${(cx + Math.min(8, band * 0.3)).toFixed(1)}" y2="${pos(c.values[i]).toFixed(1)}" stroke="#404040" stroke-width="2"/>`);
         }
       });
+      parts.push('</g>');
     },
   },
   radar: {

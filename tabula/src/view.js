@@ -1,8 +1,9 @@
 // 가상 스크롤 그리드: 화면에 보이는 행/열만 그림 (20,000,000행 × 16,384열 지원)
 // 틀 고정은 4개 창(TL/TR/BL/BR)으로, 각 창은 시트 좌표계 콘텐츠를 transform 으로 이동시켜 표시.
 import { Axis } from './axis.js';
+import { GridAccessibility } from './grid-a11y.js';
 import { gridLineWidth, resolveGridBorders } from './grid-lines.js';
-import { pictureCropStyle, pictureTransform } from './picture.js';
+import { pictureCropStyle, pictureTransform, pictureEffects, pictureShadowStyle } from './picture.js';
 import { sanitizeHtml, setSafeHtml } from './safe-html.js';
 import { colToName, MAX_ROWS, MAX_COLS } from './formula.js';
 import { formatValue, formatGeneral } from './format.js';
@@ -320,6 +321,11 @@ export class GridView {
     this.corner.title = '모두 선택';
     this.freezeV = mk('freeze-line v');
     this.freezeH = mk('freeze-line h');
+    // Visual panes duplicate frozen/merged cells. Expose one logical grid instead;
+    // floating charts/slicers remain accessible through each pane's objects layer.
+    for (const p of this.panes) for (const el of [p.grid, p.cells, p.overlay]) el.setAttribute('aria-hidden', 'true');
+    for (const el of [this.colHead, this.rowHead, this.corner, this.freezeV, this.freezeH]) el.setAttribute('aria-hidden', 'true');
+    this.a11y = new GridAccessibility(this, document.getElementById('cellEditor'));
 
     this.scroll.addEventListener('scroll', () => this.onScroll());
     this.viewEl.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
@@ -640,6 +646,7 @@ export class GridView {
     this.freezeV.style.left = `${this.hw + this.frozenW - 1}px`;
     this.freezeH.style.top = `${this.hh + this.frozenH - 1}px`;
     this.host.onViewScroll?.();
+    this.a11y?.update();
   }
 
   renderAll() {
@@ -812,7 +819,7 @@ export class GridView {
     let align;
     let fmtColor = null;
     let image = null;
-    if (st.showFormulas && cell?.formula) { text = cell.raw; align = 'left'; } else ({ text, align, color: fmtColor, image } = formatValue(v, style));
+    if (st.showFormulas && cell?.formula) { text = cell.raw; align = 'left'; } else ({ text, align, color: fmtColor, image } = formatValue(v, style, wb.date1904));
     // 확인란 칸: 논리값(또는 빈 칸)을 체크 상자로
     let checkbox = null;
     if (style.checkbox && (typeof v === 'boolean' || v === null || v === undefined || v === '') && !(st.showFormulas && cell?.formula)) { checkbox = v === true; text = ''; }
@@ -979,7 +986,7 @@ export class GridView {
         let color = null;
         if (v !== null && v !== undefined && v !== '') {
           if (typeof v === 'object' && v.code) text = v.code;
-          else { const f = formatValue(v, st); text = f.text; color = f.color; }
+          else { const f = formatValue(v, st, wb.date1904); text = f.text; color = f.color; }
         }
         const css = [];
         if (st.bold) css.push('font-weight:700');
@@ -1043,7 +1050,7 @@ export class GridView {
       else if (prop === 'images' && o.linked) box(o, 'pic linked', this.linkedHtml(o), o.rot ? `transform:rotate(${o.rot}deg)` : '');
       else if (prop === 'images') {
         // 그림 스타일: 테두리 · 둥근 모서리 · 그림자 · 회전 · 투명도
-        const ic = [o.border ? `border:${o.borderW ?? 2}px solid ${esc(o.border)}` : '', o.radius ? `border-radius:${o.radius}px` : '', o.shadow ? 'box-shadow:3px 3px 8px rgba(0,0,0,.4)' : '', o.opacity !== undefined ? `opacity:${o.opacity}` : ''].filter(Boolean).join(';');
+        const ic = [o.border ? `border:${o.borderW ?? 2}px solid ${esc(o.border)}` : '', o.radius ? `border-radius:${pictureEffects(o).radius}px` : '', o.shadow ? `box-shadow:${pictureShadowStyle(o)}` : '', o.opacity !== undefined ? `opacity:${pictureEffects(o).opacity}` : ''].filter(Boolean).join(';');
         // 자르기(crop: 위 · 아래 · 왼쪽 · 오른쪽 비율): 원본을 키워 보이는 부분만 틀에 맞춤
         const cr = o.crop;
         const img = cr
@@ -1158,6 +1165,7 @@ export class GridView {
   renderSelection() {
     this.renderOverlays();
     this.renderHeaders(this.paneRects());
+    this.a11y?.update();
   }
 
   renderObjectsAll() { for (const p of this.panes) if (p.win) this.renderObjects(p); }

@@ -41,7 +41,8 @@ import {
   pivotErrorDisplay,
 } from './pivot.js';
 import { SLICER_STYLES, SLICER_STYLE_GROUPS, slicerStyleName, slicerColors, CUSTOM_KEYS } from './slicerstyle.js';
-import { server, idbSet, idbGet, idbDel, createVaultKey, validVaultKey } from './storage.js';
+import { server, createVaultKey, validVaultKey } from './storage.js';
+import { saveLargeWorkbook, loadLargeWorkbook } from './big-storage.js';
 import { hubIcon, hubHeading, hubCard, hubPreview, hubDropzone, hubEmpty } from './app-start.js';
 import { NET, netClear, parseMarkup, htmlTables, htmlLists, tableRows, textOf, autoValue, parseCsv, importRangeSource, parseImportRange } from './fx-web.js';
 import { libList, libSave, libLoad, libLoadVersion, libUpdate, libNameVersion, libRemove, newDocId, packText, unpackText, LIB_MAX, VER_MAX } from './library.js';
@@ -53,6 +54,7 @@ import { SPARK_TYPES, sparkDefaults, sparkItems, sparkRef } from './sparkline.js
 import { evalSteps, goalSeek, dataTable, specialCells, GOTO_KINDS, valueText } from './audit.js';
 import { normOutline, outlineEmpty, changeLevels, groupsOf, groupAt, toggleGroup, showLevel, summaryOf, planSubtotals, SUBTOTAL_FNS, maxLevel } from './outline.js';
 import { hid, hidCount } from './axis.js';
+import { currentDataRegion } from './data-region.js';
 import { fontList, fontAlias, loadLocalFonts, canListLocalFonts } from './fonts.js';
 import { ICONS } from './icons.js';
 import {
@@ -494,6 +496,7 @@ const selIsActiveOnly = () => {
 };
 
 function updateSelectionUI() {
+  updateStatusCalc();
   if (cfSmartTag && cfSmartTag._at !== `${si}:${sel.r1},${sel.c1},${sel.r2},${sel.c2}`) hideCfSmartTag();
   const selObj = chartSel ? findObject(sheet(), chartSel) : null;
   if (document.activeElement !== dom.nameBox) dom.nameBox.value = selObj ? (selObj.obj.name || OBJECT_LABEL[selObj.prop]) : nameBoxLabel();
@@ -584,7 +587,7 @@ const STAT_ITEMS = [['avg', '평균'], ['count', '개수'], ['numCount', '숫자
 function renderStats({ count, numCount, sum, min, max, fmtStyle }) {
   dom.stats.replaceChildren();
   if (!count) return;
-  const fmt = (n) => formatValue(n, fmtStyle?.numFmt && fmtStyle.numFmt !== 'general' ? fmtStyle : {}).text;
+  const fmt = (n) => formatValue(n, fmtStyle?.numFmt && fmtStyle.numFmt !== 'general' ? fmtStyle : {}, wb.date1904).text;
   const on = new Set(opts.statusItems ?? ['avg', 'count', 'sum']);
   const val = { avg: numCount ? sum / numCount : null, count, numCount, min, max, sum: numCount ? sum : null };
   for (const [k, label] of STAT_ITEMS) {
@@ -1182,7 +1185,7 @@ function neededRowHeight(sIdx, r, cols) {
     const cell = wb.getCell(sIdx, r, c);
     if (!cell?.raw || wb.mergeAt(sIdx, r, c)) continue;
     const st = wb.styleAt(sIdx, r, c);
-    const text = formatValue(wb.getValue(sIdx, r, c), st).text;
+    const text = formatValue(wb.getValue(sIdx, r, c), st, wb.date1904).text;
     const lineH = ((st.size || BASE_FONT.size) * 4 / 3) * 1.2;
     let h;
     if (st.rotate === 255) h = [...text].length * lineH;
@@ -1226,7 +1229,7 @@ function autoWiden(rg, { grow = false } = {}) {
       const v = valueAt(r, c);
       const st = styleAt(r, c);
       if (typeof v !== 'number' || st.wrap || wb.mergeAt(si, r, c)) continue;
-      need = Math.max(need, measureText(formatValue(v, st).text, st) + 10);
+      need = Math.max(need, measureText(formatValue(v, st, wb.date1904).text, st) + 10);
     }
     if (need > (s.colWidths[c] ?? defColW()) + 1 && need < 400) wb.setColWidth(si, c, Math.ceil(need));
   }
@@ -2317,7 +2320,7 @@ function showPivotDetail(entry, r, c) {
   };
   const fmts = header.map((_, j) => fmtOf(j));
   const cols = header.map((_, j) => cube.col(j));
-  const rawOfV = (v) => (v === null || v === undefined || v === '' ? null : typeof v === 'number' ? String(v) : typeof v === 'boolean' ? (v ? 'TRUE' : 'FALSE') : typeof v === 'object' ? v.code ?? v.error ?? null : v.startsWith('=') || parseInput(v).value !== v ? `'${v}` : v);
+  const rawOfV = (v) => (v === null || v === undefined || v === '' ? null : typeof v === 'number' ? String(v) : typeof v === 'boolean' ? (v ? 'TRUE' : 'FALSE') : typeof v === 'object' ? v.code ?? v.error ?? null : v.startsWith('=') || parseInput(v, wb.date1904).value !== v ? `'${v}` : v);
   const t0 = performance.now();
   let at = -1;
   wb.transact(() => {
@@ -2349,7 +2352,7 @@ function showPivotDetail(entry, r, c) {
       let w = measureText(String(header[j]), { bold: true }) + 28;
       for (let r = 1; r <= Math.min(n, 200); r++) {
         const v = wb.getValue(at, r, j);
-        if (v !== null) w = Math.max(w, measureText(formatValue(v, wb.styleAt(at, r, j)).text, {}) + 12);
+        if (v !== null) w = Math.max(w, measureText(formatValue(v, wb.styleAt(at, r, j), wb.date1904).text, {}) + 12);
       }
       if (w > DEFAULT_COL_WIDTH) wb.setColWidth(at, j, Math.min(300, Math.ceil(w)));
     }
@@ -2372,7 +2375,7 @@ function autofitCols(cols) {
         if (v === null || wb.mergeAt(si, r, c)) continue;
         const cell = wb.getCell(si, r, c);
         const st = styleAt(r, c);
-        const text = view.showFormulas && cell?.formula ? cell.raw : formatValue(v, st).text;
+        const text = view.showFormulas && cell?.formula ? cell.raw : formatValue(v, st, wb.date1904).text;
         for (const line of text.split('\n')) w = Math.max(w, measureText(line, st) + (allFilters().some(([, f]) => f.r1 === r && c >= f.c1 && c <= f.c2) ? 28 : 10));
       }
       wb.setColWidth(si, c, w ? Math.min(600, Math.ceil(w)) : defColW());
@@ -2458,7 +2461,7 @@ function fillCopy(dir) {
 
 // ───────────────────────── 클립보드 ─────────────────────────
 function displayText(r, c, s = si) {
-  return formatValue(wb.getValue(s, r, c), wb.styleAt(s, r, c)).text;
+  return formatValue(wb.getValue(s, r, c), wb.styleAt(s, r, c), wb.date1904).text;
 }
 
 function copySelection(cut) {
@@ -2501,7 +2504,7 @@ function valueToRaw(v) {
   if (typeof v === 'number') return String(v);
   if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';
   if (isError(v)) return v.code;
-  const p = parseInput(v);
+  const p = parseInput(v, wb.date1904);
   return typeof p.value === 'string' && !v.startsWith('=') ? v : `'${v}`;
 }
 
@@ -3118,7 +3121,7 @@ function sparkEditDialog() {
 // ───────────────────────── 시트 보호 ─────────────────────────
 // 보호된 시트에서 명령마다 필요한 권한 (없는 명령은 선택한 셀이 모두 잠기지 않았을 때만)
 const PROTECT_FREE = new Set(['privateImportPermission', 'saveLocations', 'publish', 'versionHistory', 'recentFiles', 'dataAnalysis', 'forecastSheet', 'scenarioManager', 'solver', 'undo', 'redo', 'save', 'open', 'backstage', 'print', 'copy', 'find', 'goto', 'prevSheet', 'nextSheet', 'selectRegion',
-  'newWorkbook', 'pivotFieldList', 'tracePrecedents', 'traceDependents', 'removeArrows', 'evaluateFormula', 'errorCheck', 'watchWindow', 'gotoSpecial',
+  'newWorkbook', 'pivotFieldList', 'tracePrecedents', 'traceDependents', 'removeArrows', 'evaluateFormula', 'errorCheck', 'calculationStatus', 'watchWindow', 'gotoSpecial',
   'outlineShow', 'outlineHide', 'freezePanes', 'freezeTop', 'freezeFirstCol', 'circleInvalid', 'clearCircles', 'macros', 'prevComment', 'nextComment',
   'workbookStats', 'toggleGrid', 'togglePrintGrid', 'toggleFormulaBar', 'toggleHeaders', 'toggleFormulas', 'toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100',
   'recalc', 'shortcuts', 'about', 'whatsNew', 'protectSheet', 'unprotectSheet', 'protectWorkbook', 'fileInfo', 'insertMenuKey', 'deleteMenuKey', 'addSheet', 'deleteSheet', 'duplicateSheet',
@@ -3369,7 +3372,7 @@ function renderWatches() {
     const cell = wb.getCell(w.si, w.r, w.c);
     const v = wb.getValue(w.si, w.r, w.c);
     return el('tr', {}, el('td', {}, wb.sheets[w.si].name), el('td', {}, cellName(w.r, w.c)),
-      el('td', { class: 'num' }, formatValue(v, wb.styleAt(w.si, w.r, w.c)).text), el('td', { class: 'f' }, cell?.formula ? cell.raw : ''),
+      el('td', { class: 'num' }, formatValue(v, wb.styleAt(w.si, w.r, w.c), wb.date1904).text), el('td', { class: 'f' }, cell?.formula ? cell.raw : ''),
       el('td', {}, el('button', { class: 'lnk', title: '조사식 삭제', onclick: () => { watches.splice(i, 1); renderWatches(); } }, '✕')));
   });
   watchPane.replaceChildren(
@@ -3627,7 +3630,7 @@ function anomalyDialog() {
       const ups = res.hits.filter((h) => h.dir === 'up');
       const downs = res.hits.filter((h) => h.dir === 'down');
       const list = res.hits.slice().sort((a, b) => Math.abs(b.score) - Math.abs(a.score)).slice(0, 6)
-        .map((h) => `${labelOf(r1 + h.i)} ${h.dir === 'up' ? '▲' : '▼'} ${formatValue(h.v, styleAt(r1 + h.i, c)).text}`);
+        .map((h) => `${labelOf(r1 + h.i)} ${h.dir === 'up' ? '▲' : '▼'} ${formatValue(h.v, styleAt(r1 + h.i, c), wb.date1904).text}`);
       return el('div', { class: 'an-col' }, el('b', {}, headOf(c, r1)), ` — 급등 ${ups.length} · 급락 ${downs.length}`, list.length ? el('div', { class: 'muted' }, list.join('   ')) : el('div', { class: 'muted' }, '튀는 값이 없습니다.'));
     }));
   };
@@ -4131,9 +4134,9 @@ function forecastSheetDialog() {
   if (!axis) { alertDialog('예측 시트', '시간 표시줄의 간격이 일정하지 않습니다 (날짜 · 숫자가 같은 간격이거나 매월 같은 날이어야 합니다).'); return; }
   const kLast = Math.round(axis.pos(sorted[sorted.length - 1]));
   const tStyle = wb.styleAt(si, r1, tc);
-  const fmtT = (x) => formatValue(x, tStyle).text;
+  const fmtT = (x) => formatValue(x, tStyle, wb.date1904).text;
   const last = sorted[sorted.length - 1];
-  const parseT = (s) => { const t = String(s).trim(); if (/^-?\d+(\.\d+)?$/.test(t)) return Number(t); const p = parseInput(t); return typeof p.value === 'number' ? p.value : NaN; };
+  const parseT = (s) => { const t = String(s).trim(); if (/^-?\d+(\.\d+)?$/.test(t)) return Number(t); const p = parseInput(t, wb.date1904); return typeof p.value === 'number' ? p.value : NaN; };
   const tName = header ? displayText(rg.r1, tc) || '타임라인' : '타임라인';
   const vName = header ? displayText(rg.r1, vc) || '값' : '값';
   formDialog('예측 워크시트 만들기', [
@@ -4646,17 +4649,7 @@ function setFreeze(rows, cols) {
 
 // ───────────────────────── 데이터 명령 ─────────────────────────
 function currentRegion(r, c) {
-  const rg = { r1: r, c1: c, r2: r, c2: c };
-  const filledRow = (row, c1, c2) => { for (let x = Math.max(0, c1); x <= c2; x++) if (!isEmptyAt(row, x)) return true; return false; };
-  const filledCol = (col, r1, r2) => { for (let y = Math.max(0, r1); y <= r2; y++) if (!isEmptyAt(y, col)) return true; return false; };
-  for (let changed = true, guard = 0; changed && guard < 200000; guard++) {
-    changed = false;
-    if (rg.r1 > 0 && filledRow(rg.r1 - 1, rg.c1 - 1, rg.c2 + 1)) { rg.r1--; changed = true; }
-    if (rg.r2 < MAX_ROWS - 1 && filledRow(rg.r2 + 1, rg.c1 - 1, rg.c2 + 1)) { rg.r2++; changed = true; }
-    if (rg.c1 > 0 && filledCol(rg.c1 - 1, rg.r1 - 1, rg.r2 + 1)) { rg.c1--; changed = true; }
-    if (rg.c2 < MAX_COLS - 1 && filledCol(rg.c2 + 1, rg.r1 - 1, rg.r2 + 1)) { rg.c2++; changed = true; }
-  }
-  return rg;
+  return currentDataRegion(r, c, isEmptyAt);
 }
 
 function dataRange() {
@@ -4808,7 +4801,7 @@ function blockFilterCol(r1, r2, c) {
   const lc = logicalCol(b, c - b.c0, r1 - b.r0, r2 - r1 + 1); // 정렬 순서가 있으면 보이는 순서로
   const d = blockColumn(lc, lc.a, r2 - r1 + 1).dim();
   const fmt = bc.fmt ?? {};
-  const texts = d.keys.map((k) => (k === PIVOT_EMPTY || k === PIVOT_EMPTY_TEXT ? '' : formatValue(k, fmt).text));
+  const texts = d.keys.map((k) => (k === PIVOT_EMPTY || k === PIVOT_EMPTY_TEXT ? '' : formatValue(k, fmt, wb.date1904).text));
   const over = [];
   for (const k of sheet().cells.keys()) {
     const i = k.indexOf(',');
@@ -5513,7 +5506,7 @@ function chartElementsMenu() {
   const noAxis = NO_AXIS_TYPES.has(t);
   const special = ['waterfall', 'funnel', 'histogram', 'pareto', 'treemap', 'boxWhisker', 'sunburst', 'surface', 'pieOfPie', 'barOfPie'].includes(t);
   const data = chartModelData(wb, si, ch);
-  const hasY2 = data.series.some((s) => s.axis === 1);
+  const hasY2 = t === 'pareto' || t === 'stock' && ch.volume || data.series.some((s) => s.axis === 1);
   const more = { label: '기타 옵션...', action: () => chartFormatPane() };
   const fmtAll = (patch) => {
     const n = data.series.length;
@@ -5569,8 +5562,8 @@ function chartElementsMenu() {
             ...(t === 'pie' ? [{ label: '바깥쪽 끝에', checked: !!ch.labels && lblPos === 'out', action: () => up({ labels: true, seriesFmt: fmtAll({ labelPos: 'out' }) }) }] : [])]
           : [
             { label: '가운데', checked: !!ch.labels && lblPos === 'center', action: () => up({ labels: true, seriesFmt: fmtAll({ labelPos: 'center' }) }) },
-            { label: '안쪽 끝에', checked: !!ch.labels && lblPos === 'inEnd', action: () => up({ labels: true, seriesFmt: fmtAll({ labelPos: 'inEnd' }) }) },
-            { label: '안쪽 기준선에', checked: !!ch.labels && lblPos === 'inBase', action: () => up({ labels: true, seriesFmt: fmtAll({ labelPos: 'inBase' }) }) },
+            { label: '안쪽 끝에', checked: !!ch.labels && ['inEnd', 'insideEnd'].includes(lblPos), action: () => up({ labels: true, seriesFmt: fmtAll({ labelPos: 'insideEnd' }) }) },
+            { label: '안쪽 기준선에', checked: !!ch.labels && ['inBase', 'insideBase'].includes(lblPos), action: () => up({ labels: true, seriesFmt: fmtAll({ labelPos: 'insideBase' }) }) },
             { label: '바깥쪽 끝에', checked: !!ch.labels && (!lblPos || lblPos === 'outEnd'), action: () => up({ labels: true, seriesFmt: fmtAll({ labelPos: undefined }) }) },
           ]),
         { sep: true }, { ...more, label: '기타 데이터 레이블 옵션...' },
@@ -5847,7 +5840,7 @@ function refPreview(text, asText = false) {
   const vals = [];
   for (let r = ref.r1; r <= ref.r2 && vals.length < 8; r++) for (let c = ref.c1; c <= ref.c2 && vals.length < 8; c++) {
     const v = wb.getValue(s, r, c);
-    vals.push(typeof v === 'number' && !asText ? formatValue(v, wb.styleAt(s, r, c)).text : String(v?.code ?? v ?? ''));
+    vals.push(typeof v === 'number' && !asText ? formatValue(v, wb.styleAt(s, r, c), wb.date1904).text : String(v?.code ?? v ?? ''));
   }
   const txt = vals.join(', ');
   return `= ${txt.length > 40 ? `${txt.slice(0, 40)}…` : txt}`;
@@ -6116,7 +6109,7 @@ function chartFormatPane(id = chartSel) {
         row('주 눈금선', chk(ch.gridY !== false, (v) => up({ gridY: v ? undefined : false }))),
         row('눈금선 색', color(ch.gridColor, (v) => up({ gridColor: v }))),
         row('글꼴 크기(pt)', num(ch.axisSize, (v) => up({ axisSize: v }), { min: 6, max: 24 }))) : null,
-      data.series.some((s) => s.axis === 1) ? sec('보조 값 축',
+      ch.type === 'pareto' || ch.type === 'stock' && ch.volume || data.series.some((s) => s.axis === 1) ? sec('보조 값 축',
         row('표시', chk(!axis('y2').hide, (v) => setAx('y2', { hide: !v || undefined }))),
         row('주 단위', num(axis('y2').major, (v) => setAx('y2', { major: v }), { min: 0 })),
         row('값을 거꾸로', chk(axis('y2').reverse, (v) => setAx('y2', { reverse: v || undefined }))),
@@ -6134,7 +6127,8 @@ function chartFormatPane(id = chartSel) {
         row('범례 굵게', chk(ch.legendBold, (v) => up({ legendBold: v || undefined }))),
         row('범례 글꼴(pt)', num(ch.legendSize, (v) => up({ legendSize: v }), { min: 6, max: 24 })),
         row('데이터 레이블', chk(ch.labels, (v) => up({ labels: v }))),
-        row('데이터 표', chk(ch.dataTable, (v) => up({ dataTable: v || undefined })))),
+        ['column', 'line', 'area', 'combo', 'waterfall', 'histogram', 'pareto', 'boxWhisker', 'stock'].includes(ch.type) ? row('데이터 표', chk(ch.dataTable, (v) => { up({ dataTable: v || undefined }); draw(); })) : null,
+        ch.dataTable && ['waterfall', 'histogram', 'pareto', 'boxWhisker'].includes(ch.type) ? el('p', { class: 'muted' }, '통계 데이터 표는 위셀 표시 기능입니다. XLSX에는 위셀 설정으로 보관되며 Excel의 데이터 표로 표시되지는 않습니다.') : null),
       sec('계열 옵션',
         row('간격 너비(%)', num(ch.gap, (v) => up({ gap: v }), { min: 0, max: 500 })),
         !ch.threeD ? row('계열 겹치기(%)', num(ch.overlap, (v) => up({ overlap: v }), { min: -100, max: 100 })) : null,
@@ -6153,7 +6147,11 @@ function chartFormatPane(id = chartSel) {
           row('거품 크기(%)', num(ch.bubbleScale ?? 100, (v) => up({ bubbleScale: v }), { min: 1, max: 300 })),
           row('음수 거품 표시', chk(ch.showNegBubbles, (v) => up({ showNegBubbles: v }))),
           row('3차원 효과', chk(ch.threeD, (v) => up({ threeD: v })))) : null,
-        ch.type === 'boxWhisker' ? row('평균 표식 표시', chk(ch.showMean !== false, (v) => up({ showMean: v }))) : null,
+        ch.type === 'boxWhisker' ? el('div', { class: 'cfp-special' },
+          row('평균 표식 표시', chk(ch.showMean !== false, (v) => up({ showMean: v }))),
+          row('이상값 표시', chk(ch.showOutliers !== false, (v) => up({ showOutliers: v }))),
+          row('내부 데이터 요소 표시', chk(ch.showInnerPoints, (v) => up({ showInnerPoints: v }))),
+          row('사분위수 계산', sel2(ch.quartileMethod ?? 'inclusive', [['inclusive', '중앙값 포함'], ['exclusive', '중앙값 제외']], (v) => up({ quartileMethod: v })))) : null,
         ch.type === 'histogram' ? row('구간 수', num(ch.binCount, (v) => up({ binCount: v, binWidth: undefined }), { min: 1, max: 100 })) : null,
         ch.type === 'histogram' ? row('구간 너비', num(ch.binWidth, (v) => up({ binWidth: v, binCount: undefined }), { min: 0 })) : null,
         ['pieOfPie', 'barOfPie'].includes(ch.type) ? el('div', { class: 'cfp-special' },
@@ -6186,9 +6184,9 @@ function chartFormatPane(id = chartSel) {
             row('선 종류', sel2(f.dash ?? '', [['', '실선'], ['dash', '파선'], ['dot', '점선'], ['dashDot', '일점 쇄선'], ['longDash', '긴 파선']], (v) => setF({ dash: v || undefined }))),
             row('표식 크기', num(f.markerSize, (v) => setF({ markerSize: v }), { min: 2, max: 30 })),
             row('테두리 색', color(f.outline, (v) => setF({ outline: v }))),
-            row('추세선', sel2(f.trend ?? '', [['', '없음'], ['linear', '선형'], ['exp', '지수'], ['movingAvg', '이동 평균']], (v) => { setF({ trend: v || undefined }); draw(); })),
-            f.trend === 'movingAvg' ? row('이동 평균 구간', num(f.trendPeriod ?? 3, (v) => setF({ trendPeriod: v }), { min: 2, max: 50 })) : null,
-            f.trend && f.trend !== 'movingAvg' ? row('앞으로 예측(구간)', num(f.trendForward, (v) => setF({ trendForward: v || undefined }), { min: 0, max: 100 })) : null,
+            !ch.threeD && ['column', 'bar', 'line', 'area', 'combo'].includes(ch.type) ? row('추세선', sel2(f.trend ?? '', [['', '없음'], ['linear', '선형'], ['exp', '지수'], ['movingAvg', '이동 평균']], (v) => { setF({ trend: v || undefined }); draw(); })) : null,
+            !ch.threeD && ['column', 'bar', 'line', 'area', 'combo'].includes(ch.type) && f.trend === 'movingAvg' ? row('이동 평균 구간', num(f.trendPeriod ?? 3, (v) => setF({ trendPeriod: v }), { min: 2, max: 50 })) : null,
+            !ch.threeD && ['column', 'bar', 'line', 'area', 'combo'].includes(ch.type) && f.trend && f.trend !== 'movingAvg' ? row('앞으로 예측(구간)', num(f.trendForward, (v) => setF({ trendForward: v || undefined }), { min: 0, max: 100 })) : null,
             pointColorRow({ ...s, categories: data.categories }, f, setF));
         })),
     ].filter(Boolean));
@@ -6757,7 +6755,7 @@ function slicerModelRaw(sl) {
     // 숫자 항목은 원본 열의 표시 형식으로 (날짜 46204 → 2026-07-01)
     const sd = rows;
     const colStyle = sd?.ref ? wb.styleAt(sd.si, Math.min(sd.ref.r1 + 1, sd.ref.r2), sd.ref.c1 + fi) : null;
-    const shown = (e) => (typeof e.v === 'number' && colStyle?.numFmt && colStyle.numFmt !== 'general' ? formatValue(e.v, colStyle).text : e.key);
+    const shown = (e) => (typeof e.v === 'number' && colStyle?.numFmt && colStyle.numFmt !== 'general' ? formatValue(e.v, colStyle, wb.date1904).text : e.key);
     return {
       items: items.map((e) => ({ key: e.key, v: e.v, text: shown(e), selected: !sel || sel.has(e.key), hasData: e.hasData })),
       filtered: !!sel,
@@ -7308,8 +7306,25 @@ function openQatMenu(cmd) {
 function updateStatusCalc() {
   const elc = document.getElementById('calcState');
   if (!elc) return;
-  elc.textContent = wb?.needsCalc ? '계산' : opts.calcMode === 'manual' ? '수동 계산' : '';
-  elc.title = wb?.needsCalc ? 'F9를 누르면 계산합니다.' : '';
+  const state = wb?.getCalculationStatus(si, active.r, active.c);
+  const uncertain = state && ['cached', 'stale', 'blocked'].includes(state.status);
+  elc.textContent = wb?.needsCalc ? '계산 대기 (F9)' : uncertain ? (state.status === 'cached' ? '파일 저장값 · 확인 필요' : '재계산 불가 · 확인 필요') : opts.calcMode === 'manual' ? '수동 계산' : '계산 상태';
+  elc.title = uncertain ? state.message : wb?.needsCalc ? 'F9를 누르면 계산합니다. 클릭하면 미확인 수식 목록을 엽니다.' : '클릭하여 저장값 사용·재계산 불가 수식을 확인합니다.';
+  elc.classList.toggle('warn', !!uncertain);
+}
+
+function calculationStatusDialog() {
+  const result = wb.calculationIssues({ limit: 200 });
+  const label = { cached: '파일 저장값', stale: '오래된 저장값', blocked: '계산 불가', pending: '계산 대기' };
+  const body = el('div', { class: 'calculation-report' },
+    el('p', {}, '지원하지 않는 수식의 파일 저장값은 직접 계산한 결과가 아닙니다. 입력이 바뀐 뒤에는 오래된 숫자가 합계에 섞이지 않도록 오류로 표시합니다.'),
+    el('p', { role: 'status' }, result.total ? `확인할 수식 ${result.total.toLocaleString()}개${result.truncated ? ' · 처음 200개 표시' : ''}` : '미지원 수식이나 미확인 파일 저장값이 발견되지 않았습니다. 모든 계산의 정확성을 보증하는 검사는 아닙니다.'),
+    result.items.length ? el('table', { class: 'backstage-list' }, el('thead', {}, el('tr', {}, ['셀', '상태', '수식 및 확인 사항'].map(t => el('th', {}, t)))),
+      el('tbody', {}, result.items.map(item => el('tr', {},
+        el('td', {}, el('button', { class: 'lnk', onclick: () => { dlg.close(); switchSheet(item.si); selectCell(item.r, item.c); } }, `${item.sheet}!${cellName(item.r, item.c)}`)),
+        el('td', {}, label[item.status] ?? item.status),
+        el('td', {}, el('code', {}, item.formula), el('p', {}, item.message), item.savedValue !== undefined ? el('small', {}, `파일에 있던 참고값: ${String(item.savedValue?.code ?? item.savedValue).slice(0, 160)} (현재 계산값 아님)`) : null))))) : null);
+  const dlg = openDialog({ title: '계산 상태 확인', body, width: 850, buttons: [{ label: '닫기', primary: true }] });
 }
 
 /** 새 피벗 테이블에 기본 레이아웃 적용 (엑셀의 [기본 레이아웃 편집]) */
@@ -9501,7 +9516,7 @@ function validationDialog() {
     if (!x) return undefined;
     if (t === 'list') return x.startsWith('=') ? x.slice(1) : x;
     if (x.startsWith('=')) return x.slice(1);
-    if (t === 'date' || t === 'time') { const p = parseInput(x).value; return typeof p === 'number' ? String(p) : x; }
+    if (t === 'date' || t === 'time') { const p = parseInput(x, wb.date1904).value; return typeof p === 'number' ? String(p) : x; }
     return x;
   };
   openDialog({
@@ -10349,7 +10364,7 @@ function recommendPivotDialog() {
       const src = pivotSource(d);
       const res = resolvePivot(src, { ...d, style: 'None' });
       const { grid } = computePivot(res, res.def);
-      const txt = (x) => { const raw = String(x?.raw ?? '').replace(/^'/, ''); return /^-?\d+(\.\d+)?(e[+-]?\d+)?$/i.test(raw) ? formatValue(Number(raw), { numFmt: 'comma', decimals: Number(raw) % 1 ? 2 : 0 }).text : raw; };
+      const txt = (x) => { const raw = String(x?.raw ?? '').replace(/^'/, ''); return /^-?\d+(\.\d+)?(e[+-]?\d+)?$/i.test(raw) ? formatValue(Number(raw), { numFmt: 'comma', decimals: Number(raw) % 1 ? 2 : 0 }, wb.date1904).text : raw; };
       const rows = grid.slice(0, 16);
       preview.append(el('div', { class: 'rp-title' }, recs[cur].title), el('table', {}, ...rows.map((row) => el('tr', {}, ...row.slice(0, 7).map((x) => el(/^(rowHead|valueHead|colHead|grand)/.test(x?.role ?? '') ? 'th' : 'td', { class: /^-?[\d,.]+$/.test(txt(x)) ? 'num' : '' }, txt(x)))))));
       if (grid.length > 16) preview.append(el('div', { class: 'muted' }, `… 모두 ${grid.length}행`));
@@ -10490,7 +10505,7 @@ function renderPivotPane(entry) {
       const sel = def.filters[k];
       parts.push(`선택한 항목 ${sel.length}개: ${sel.slice(0, 8).map((x) => label(x) || '(비어 있음)').join(', ')}${sel.length > 8 ? ' …' : ''}`);
     }
-    if (ff) parts.push(describeFieldFilter(ff, def.values ?? []));
+    if (ff) parts.push(describeFieldFilter(ff, def.values ?? [], wb.date1904));
     return parts.join('\n');
   };
   const areaOf = (f) => (areas.rows.some((x) => x.toLowerCase() === f.toLowerCase()) ? 'rows' : areas.cols.some((x) => x.toLowerCase() === f.toLowerCase()) ? 'cols' : 'page');
@@ -10885,7 +10900,7 @@ function pivotItemLabeler(def, field) {
   if (i < 0) return (t) => t;
   const st = wb.styleAt(src.si, Math.min(src.ref.r1 + 1, src.ref.r2), src.ref.c1 + i);
   if (!st?.numFmt || st.numFmt === 'general') return (t) => t;
-  return (t) => (t !== '' && Number.isFinite(Number(t)) ? formatValue(Number(t), st).text : t);
+  return (t) => (t !== '' && Number.isFinite(Number(t)) ? formatValue(Number(t), st, wb.date1904).text : t);
 }
 
 function openPivotFilterMenu(entry, kind, field, anchorEl) {
@@ -10975,7 +10990,7 @@ function openPivotFilterMenu(entry, kind, field, anchorEl) {
           };
           return el('div', {}, isDate ? sub('날짜 필터', dateItems, ff?.type === 'date') : sub('레이블 필터', labelItems, ff?.type === 'label'), sub('값 필터', valueItems, ff?.type === 'value' || ff?.type === 'top'));
         })(),
-        ...(ff ? [el('div', { class: 'muted pf-desc' }, `적용된 필터: ${describeFieldFilter(ff, def.values ?? [])}`)] : []),
+        ...(ff ? [el('div', { class: 'muted pf-desc' }, `적용된 필터: ${describeFieldFilter(ff, def.values ?? [], wb.date1904)}`)] : []),
       ] : []),
       el('div', { class: 'pf-sep' }),
       search, list, addRow,
@@ -11070,11 +11085,11 @@ function pivotFieldIsDate(def, field) {
 function pivotDateFilterDialog(entry, field, op) {
   const def = pivotDefV2(entry.def);
   const cur = def.fieldFilters?.[field]?.type === 'date' ? def.fieldFilters[field] : {};
-  const iso = (v) => { if (v === undefined || v === '') return ''; const p = dateParts(Number(v)); return `${p.y}-${String(p.m).padStart(2, '0')}-${String(p.d).padStart(2, '0')}`; };
-  const toSerial = (t) => { const m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(String(t).trim()); return m ? serialOf(+m[1], +m[2], +m[3]) : null; };
+  const iso = (v) => { if (v === undefined || v === '') return ''; const p = dateParts(Number(v), 1, wb.date1904); return `${p.y}-${String(p.m).padStart(2, '0')}-${String(p.d).padStart(2, '0')}`; };
+  const toSerial = (t) => { const m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(String(t).trim()); return m ? serialOf(+m[1], +m[2], +m[3], wb.date1904) : null; };
   formDialog(`날짜 필터 (${field})`, [
     { name: 'op', label: '다음 조건을 만족하는 항목 표시', type: 'select', value: op, options: [['dateEqual', '같음'], ['dateNotEqual', '같지 않음'], ['dateOlderThan', '이전'], ['dateOlderThanOrEqual', '이전 또는 같음'], ['dateNewerThan', '이후'], ['dateNewerThanOrEqual', '이후 또는 같음'], ['dateBetween', '해당 범위'], ['dateNotBetween', '해당 범위 제외']].map(([value, label]) => ({ value, label })) },
-    { name: 'v1', label: '날짜', type: 'date', value: iso(cur.v1) || iso(todaySerial()) },
+    { name: 'v1', label: '날짜', type: 'date', value: iso(cur.v1) || iso(todaySerial(new Date(), wb.date1904)) },
     { name: 'v2', label: '그리고 (범위일 때)', type: 'date', value: iso(cur.v2) },
   ], (v) => {
     const a = toSerial(v.v1);
@@ -11345,7 +11360,7 @@ function calcFieldDialog(entry = pivotHere(), startName = null) {
     try { rows = calcPreview(pivotDefV2(entry.def), [...others, { name: nm, formula: f }], nm); } catch { rows = []; }
     const code = fmtSel.value;
     const style = code ? styleForCode(code) : { numFmt: 'number', decimals: 2 };
-    const fmt = (v) => (v === null ? '' : typeof v === 'number' ? formatValue(v, style).text : String(v));
+    const fmt = (v) => (v === null ? '' : typeof v === 'number' ? formatValue(v, style, wb.date1904).text : String(v));
     const field = (pivotDefV2(entry.def).rows ?? [])[0] ?? '';
     preview.append(el('tr', {}, el('th', {}, field || '항목'), el('th', {}, nm)),
       ...rows.map(([k, v, tot]) => el('tr', { class: tot ? 'tot' : '' }, el('td', {}, k), el('td', { class: typeof v === 'number' ? 'num' : 'err' }, fmt(v)))));
@@ -12716,23 +12731,48 @@ function libraryFlush({ version = null, force = false } = {}) {
   docId ??= newDocId();
   let json;
   try { json = JSON.stringify(snapshot()); } catch { return Promise.resolve(null); }
+  const savingBook = wb, savingId = docId, savingVersion = wb.version, savingName = docName, previousVersionAt = lastVersionAt;
+  const isCurrent = () => wb === savingBook && wb.version === savingVersion && docId === savingId && docName === savingName;
   libDirty = false;
   const now = Date.now();
   const ver = version ?? (now - lastVersionAt > (Number(opts.verMinutes) || 10) * 60000 ? { label: '' } : null);
   if (ver) lastVersionAt = now;
   const info = { sheets: wb.sheets.length, cells: cellCount(), sheetNames: wb.sheets.slice(0, 6).map((x) => x.name) };
-  return libSave(docId, docName, json, { version: ver, info, max: clamp(Number(opts.libMax) || LIB_MAX, 5, 200) }).catch((err) => { console.warn('보관함 저장 실패', err); return null; });
+  const options = { version: ver, info, max: clamp(Number(opts.libMax) || LIB_MAX, 5, 200) };
+  return libSave(savingId, savingName, json, options).catch(async (err) => {
+    if (err?.code === 'LIB_CONFLICT' && isCurrent()) {
+      // 최신 원본은 유지하고 현재 편집본을 새 보관 문서로 한 번만 재시도합니다.
+      try {
+        const copyId = newDocId();
+        const copyJson = JSON.stringify({ ...JSON.parse(json), docId: copyId });
+        const saved = await libSave(copyId, savingName, copyJson, { ...options, keepIds: [savingId] });
+        if (!isCurrent()) return null;
+        docId = copyId;
+        saveToStorage();
+        toast('다른 저장본을 덮어쓰지 않고 현재 편집 내용을 새 브라우저 보관 사본으로 저장했습니다.');
+        return saved;
+      } catch (copyError) { err = copyError; }
+    }
+    if (wb === savingBook && docId === savingId) {
+      libDirty = true;
+      if (ver && lastVersionAt === now) lastVersionAt = previousVersionAt;
+    }
+    console.warn('보관함 저장 실패', err); return null;
+  });
 }
 async function openFromLibrary(id, { ts = null, copy = false } = {}) {
-  await libraryFlush();
+  const context = recoveryContext();
   const prog = progressOverlay('보관함에서 여는 중');
   try {
+    // 현재 문서부터 보존: 같은 id를 먼저 읽으면 타 탭의 새 revision을 관측해 낡은 화면을 덮어쓸 수 있습니다.
+    await preserveRecoverySnapshot('보관 문서 열기 전', context);
     const data = ts ? await libLoadVersion(id, ts) : await libLoad(id);
+    context.assertCurrent();
     if (!data?.workbook) { alertDialog('WIXEL', '보관함에서 문서를 찾을 수 없습니다.'); return; }
     pendingDocId = copy ? newDocId() : id;
     const name = copy ? `${data.docName ?? '통합 문서'} (${formatDate(ts ?? Date.now())} 버전)` : data.docName;
     await loadWorkbookAsync(data.workbook, name, data.si ?? 0, prog);
-  } finally {
+  } catch (err) { alertDialog('보관 문서 열기', err.message); } finally {
     prog.close();
   }
 }
@@ -12773,9 +12813,130 @@ async function recentTable(close) {
   return box;
 }
 
+function recoveryContext() {
+  const book = wb, version = wb.version, name = docName, connection = server.connectionVersion;
+  let id = docId;
+  const sameContent = () => wb === book && wb.version === version && docName === name && server.connectionVersion === connection;
+  const isCurrent = () => sameContent() && (id === null || docId === id);
+  return { isCurrent, acceptSaved(saved) {
+    if (sameContent() && saved?.id === docId) id = docId;
+  }, assertCurrent() {
+    if (!isCurrent()) throw new Error('작업 중 현재 문서나 보관함이 바뀌었습니다. 현재 내용을 유지했으므로 다시 시도하세요.');
+    id = docId;
+  } };
+}
+async function preserveRecoverySnapshot(label, context) {
+  context.assertCurrent();
+  if (viewOnly) return; // 읽기 전용 게시본에는 보존할 편집 내용이 없습니다.
+  const saved = await libraryFlush({ version: { label } });
+  context.acceptSaved(saved);
+  context.assertCurrent();
+  if (!saved) throw new Error('현재 문서의 복구 사본을 보관하지 못해 작업을 중단했습니다. 저장 공간을 확보하거나 [다른 이름으로 저장]으로 파일을 보관한 뒤 빈 문서에서 다시 시도하세요.');
+}
+
+/** 서버의 과거본은 새 revision으로 복원하며, 현재 화면 사본을 먼저 보관합니다. */
+async function serverVersionHistory(name) {
+  try {
+    const history = await server.versions(name);
+    const body = el('div', { class: 'ver-list' }, el('p', {}, `${name} · 현재 버전 ${history.currentRevision}`),
+      el('p', { class: 'muted' }, `과거 버전은 문서당 최근 ${history.maxVersions}개까지 보관하며 보관함 전체 과거본 용량 한도에서 오래된 순으로 정리합니다. 삭제한 온라인 문서의 과거본도 함께 삭제됩니다.`),
+      history.versions.length ? el('div', { class: 'ver-rows' }, history.versions.map(v => el('div', { class: 'ver-row' },
+        el('div', {}, el('b', {}, formatDate(v.modified)), el('small', {}, ` · 버전 ${v.revision} · ${Math.ceil(v.size / 1024).toLocaleString()} KB`)),
+        el('div', { class: 'ver-acts' }, el('button', { class: 'btn', onclick: async (event) => {
+          if (serverRestoreBusy || serverState.saving) { toast('진행 중인 온라인 저장이 끝난 뒤 다시 시도하세요.'); return; }
+          const button = event.currentTarget, context = recoveryContext();
+          button.disabled = true; serverRestoreBusy = true; clearTimeout(serverTimer);
+          try {
+            const data = await server.loadVersion(name, v.revision);
+            await preserveRecoverySnapshot('이전 버전 사본 열기 전', context);
+            dlg.close(); loadWorkbook(data.workbook ?? data, `${name} (버전 ${v.revision} 사본)`, data.si ?? 0);
+            toast('이전 버전을 브라우저 사본으로 열었습니다. 온라인 원본은 변경되지 않았습니다.');
+          } catch (err) { toast(`버전을 열지 못했습니다: ${err.message}`); }
+          finally { button.disabled = false; serverRestoreBusy = false; if (dirty && remoteDoc && !serverState.error) scheduleServerSave(); }
+        } }, '사본으로 열기'), el('button', { class: 'btn', onclick: () => openDialog({
+          title: '온라인 버전 복원', body: `'${name}'을(를) ${formatDate(v.modified)} 버전으로 복원합니다. 현재 온라인 버전도 과거 기록에 남습니다.`,
+          buttons: [{ label: '복원', primary: true, action: async () => {
+            if (serverRestoreBusy || serverState.saving) throw new Error('진행 중인 온라인 저장이 끝난 뒤 다시 시도하세요.');
+            const context = recoveryContext();
+            serverRestoreBusy = true; clearTimeout(serverTimer);
+            try {
+              const data = await server.loadVersion(name, v.revision);
+              await preserveRecoverySnapshot('온라인 버전 복원 전', context);
+              const result = await server.restoreVersion(name, v.revision, history.currentRevision);
+              if (!context.isCurrent()) { toast('온라인 버전을 복원했습니다. 작업 중 바뀐 현재 화면은 유지됩니다. 온라인 문서를 다시 열어 확인하세요.'); return; }
+              dlg.close(); loadWorkbook(data.workbook ?? data, name, data.si ?? 0);
+              remoteDoc = true; fileHandle = null; dirty = false; serverState.error = null; serverState.savedAt = result.modified;
+              saveToStorage(); updateTitle(); toast(`버전 ${v.revision}의 내용으로 복원했습니다.`);
+            } catch (err) {
+              if (err.status === 412) throw new Error('다른 저장이 먼저 완료되었습니다. 이 창을 닫고 버전 목록을 다시 확인하세요.');
+              throw err;
+            } finally { serverRestoreBusy = false; if (dirty && remoteDoc && !serverState.error) scheduleServerSave(); }
+          } }, { label: '취소' }]
+        }) }, '이 버전 복원'))))) : el('p', { class: 'muted' }, '첫 저장 뒤 내용이 바뀌어 저장되면 이전 버전이 생깁니다.'));
+    const dlg = openDialog({ title: '온라인 버전 기록', body, width: 760, buttons: [
+      { label: '브라우저 버전 기록', action: () => { queueMicrotask(() => versionHistory(docId, { local: true })); } }, { label: '닫기', primary: true }
+    ] });
+  } catch (err) { alertDialog('온라인 버전 기록', err.message); }
+}
+
+function backupImportDialog(onDone) {
+  if (!server.capabilities.backupImport) { alertDialog('백업 복원', '이 서버는 보관함 백업 복원을 지원하지 않습니다.'); return; }
+  let backup = null, expected = [], selections = [], loading = false, request = 0;
+  const input = el('input', { type: 'file', accept: '.json,application/json', 'aria-label': '보관함 백업 파일' });
+  const status = el('p', { role: 'status' }, '위셀의 보관함 전체 백업 JSON 파일을 선택하세요.');
+  const list = el('div', { class: 'backup-documents' });
+  const overwrite = el('input', { type: 'checkbox', 'aria-label': '같은 이름의 온라인 문서 덮어쓰기' });
+  input.addEventListener('change', async () => {
+    const ticket = ++request; backup = null; selections = []; list.replaceChildren();
+    const file = input.files[0]; if (!file) return;
+    loading = true; status.textContent = '백업과 현재 문서 목록을 확인하는 중…';
+    try {
+      if (file.size > 120 * 1024 * 1024) throw new Error('백업 파일이 너무 큽니다. 120 MB 이하 파일을 선택하세요.');
+      const data = JSON.parse(await file.text());
+      if (data?.format !== 'wixel-vault-backup' || data.version !== 1 || !Array.isArray(data.documents) || !data.documents.length || data.documents.length > 50 || data.documents.some(d => typeof d?.name !== 'string' || !d.name || !d.data)) throw new Error('WIXEL 보관함 백업 형식을 확인하세요.');
+      const files = await server.list(); if (ticket !== request) return;
+      expected = files; backup = data;
+      const existing = new Set(files.map(f => f.name));
+      selections = data.documents.map(doc => ({ doc, check: el('input', { type: 'checkbox', checked: true, 'aria-label': `복원할 문서: ${doc.name}` }) }));
+      list.replaceChildren(...selections.map(({ doc, check }) => el('label', { class: 'backup-row' }, check, el('span', {}, doc.name), el('small', {}, existing.has(doc.name) ? '같은 이름 있음' : '새 문서'))));
+      status.textContent = `${data.documents.length}개 중 복원할 문서를 선택하세요. 현재 화면의 문서는 브라우저 사본으로 유지됩니다.`;
+    } catch (err) { if (ticket === request) status.textContent = `파일을 읽지 못했습니다: ${err.message}`; }
+    finally { if (ticket === request) loading = false; }
+  });
+  openDialog({ title: '온라인 보관함 백업 복원', width: 700, body: el('div', {}, input, status, list,
+    el('label', { class: 'backup-row' }, overwrite, '같은 이름의 온라인 문서 덮어쓰기'),
+    el('p', { class: 'muted' }, '덮어쓰기를 선택하지 않으면 기존 이름이 있는 경우 복원하지 않습니다. 확인 이후 온라인 문서가 바뀌어도 덮어쓰지 않습니다. 선택하지 않은 문서와 게시 링크는 유지됩니다.')),
+    buttons: [{ label: '선택한 문서 복원', primary: true, action: async () => {
+      if (loading || !backup) throw new Error('백업 파일을 선택하고 목록 확인이 끝날 때까지 기다리세요.');
+      const documents = selections.filter(s => s.check.checked).map(s => s.doc);
+      if (!documents.length) throw new Error('복원할 문서를 하나 이상 선택하세요.');
+      if (!overwrite.checked && documents.some(d => expected.some(f => f.name === d.name))) throw new Error('이미 있는 문서 이름입니다. 해당 문서의 선택을 해제하거나 덮어쓰기를 선택하세요.');
+      if (serverRestoreBusy || serverState.saving) throw new Error('진행 중인 온라인 저장이 끝난 뒤 다시 시도하세요.');
+      serverRestoreBusy = true; clearTimeout(serverTimer);
+      const connection = server.connectionVersion;
+      const affectsCurrent = () => connection === server.connectionVersion && remoteDoc && documents.some(d => d.name === docName);
+      try {
+        await server.importBackup({ ...backup, documents }, { overwrite: overwrite.checked, expectedRevisions: expected, onProgress: (done, total) => { status.textContent = `복원 준비 ${done}/${total} · 완료 전까지 기존 문서는 유지됩니다.`; } });
+        const affectsOpen = affectsCurrent();
+        if (affectsOpen) { remoteDoc = false; serverState.error = null; saveToStorage(); updateTitle(); }
+        toast(`${documents.length}개 문서를 온라인 보관함에 복원했습니다.${affectsOpen ? ' 현재 화면은 브라우저 사본입니다. 온라인 문서를 다시 열어 확인하세요.' : ''}`);
+        queueMicrotask(() => onDone?.());
+      } catch (err) {
+        if (err.code === 'IMPORT_RESULT_UNKNOWN') {
+          if (affectsCurrent()) { remoteDoc = false; saveToStorage(); updateTitle(); }
+          throw new Error('최종 응답을 확인하지 못했습니다. 온라인 문서 목록을 확인한 후 다시 시도하세요. 현재 화면 사본은 유지됩니다.');
+        }
+        if (err.status === 412) throw new Error('목록 확인 뒤 온라인 문서가 바뀌었습니다. 창을 닫고 백업 파일을 다시 선택하여 최신 목록을 확인하세요.');
+        throw err;
+      } finally { serverRestoreBusy = false; if (dirty && remoteDoc && !serverState.error) scheduleServerSave(); }
+    } }, { label: '취소' }]
+  });
+}
+
 /** 버전 기록 (구글 스프레드시트처럼 시각별 버전 · 이름 붙이기 · 복원 · 사본으로 열기) */
-async function versionHistory(id = docId) {
-  if (id === docId) await libraryFlush({ force: true });
+async function versionHistory(id = docId, { local = false } = {}) {
+  if (!local && id === docId && remoteDoc && server.connected && server.capabilities.versionHistory) return serverVersionHistory(docName);
+  if (id === docId) { const saved = await libraryFlush({ force: true }); if (saved) id = saved.id; }
   const list = await libList().catch(() => []);
   const entry = list.find((x) => x.id === id);
   if (!entry) { alertDialog('버전 기록', cellCount() > LIB_CELL_LIMIT ? '셀이 아주 많은 문서는 버전 기록 대신 큰 문서 자동 저장만 합니다. [다른 이름으로 저장]으로 파일을 보관하세요.' : '아직 보관된 버전이 없습니다.'); return; }
@@ -12792,17 +12953,20 @@ async function versionHistory(id = docId) {
             el('button', { class: 'lnk', onclick: () => formDialog('버전 이름', [{ name: 'n', label: '이름', value: v.label ?? '' }], async ({ n }) => { await libNameVersion(id, v.ts, n.trim()); v.label = n.trim(); v.named = !!n.trim(); draw(); }) }, '이름 지정'),
             el('button', { class: 'lnk', onclick: () => { dlg.close(); openFromLibrary(id, { ts: v.ts, copy: true }); } }, '사본으로 열기'),
             el('button', {
-              class: 'btn', onclick: async () => {
-                dlg.close();
-                // 복원 전 지금 상태도 버전으로 남김
-                if (id === docId) await libraryFlush({ version: { label: '복원 전' } });
-                const data = await libLoadVersion(id, v.ts);
-                if (!data?.workbook) { alertDialog('버전 기록', '버전을 찾을 수 없습니다.'); return; }
-                pendingDocId = id;
-                const prog = progressOverlay('버전 복원 중');
-                try { await loadWorkbookAsync(data.workbook, data.docName ?? entry.name, data.si ?? 0, prog); } finally { prog.close(); }
-                libraryFlush({ version: { label: `${formatDate(v.ts)} 버전으로 복원` } });
-                toast(`${formatDate(v.ts)} 버전으로 복원했습니다.`);
+              class: 'btn', onclick: async (event) => {
+                const button = event.currentTarget, context = recoveryContext();
+                button.disabled = true;
+                try {
+                  const data = await libLoadVersion(id, v.ts);
+                  if (!data?.workbook) throw new Error('버전을 찾을 수 없습니다.');
+                  await preserveRecoverySnapshot('브라우저 버전 복원 전', context);
+                  dlg.close(); pendingDocId = id;
+                  const prog = progressOverlay('버전 복원 중');
+                  try { await loadWorkbookAsync(data.workbook, data.docName ?? entry.name, data.si ?? 0, prog); } finally { prog.close(); }
+                  const saved = await libraryFlush({ version: { label: `${formatDate(v.ts)} 버전으로 복원` } });
+                  toast(saved ? `${formatDate(v.ts)} 버전으로 복원했습니다.` : '이전 버전을 화면에 열었습니다. 브라우저 저장을 완료하지 못했으므로 파일로 저장하세요.');
+                } catch (err) { alertDialog('버전 복원', err.message); }
+                finally { button.disabled = false; }
               },
             }, '이 버전 복원')))),
       ),
@@ -12812,7 +12976,7 @@ async function versionHistory(id = docId) {
   const dlg = openDialog({
     title: '버전 기록', body, width: 560,
     buttons: [
-      ...(id === docId ? [{ label: '지금 버전에 이름 지정...', action: () => { formDialog('버전 이름', [{ name: 'n', label: '이름', value: '' }], async ({ n }) => { const e = await libraryFlush({ version: { label: n.trim() || '이름 없는 버전' } }); if (e) { const last = e.versions[e.versions.length - 1]; await libNameVersion(id, last.ts, n.trim() || '이름 없는 버전'); } toast('버전을 저장했습니다.'); }); return true; } }] : []),
+      ...(id === docId ? [{ label: '지금 버전에 이름 지정...', action: () => { formDialog('버전 이름', [{ name: 'n', label: '이름', value: '' }], async ({ n }) => { const e = await libraryFlush({ version: { label: n.trim() || '이름 없는 버전' } }); if (!e) throw new Error('버전을 저장하지 못했습니다. 저장 공간이나 문서 크기를 확인하세요.'); const last = e.versions[e.versions.length - 1]; await libNameVersion(e.id, last.ts, n.trim() || '이름 없는 버전'); toast('버전을 저장했습니다.'); }); return true; } }] : []),
       { label: '닫기', primary: true },
     ],
   });
@@ -12984,17 +13148,17 @@ function startCollabWatch() {
   clearInterval(collabTimer);
   if (!server.connected) return;
   collabTimer = setInterval(async () => {
-    if (viewOnly || !remoteDoc || dirty || editing || !serverState.savedAt) return;
+    if (serverRestoreBusy || viewOnly || !remoteDoc || dirty || editing || !serverState.savedAt) return;
     const watchingId = docId, watchingVersion = wb.version, watchingName = docName;
     try {
       const files = await server.list();
       const f = files.find((x) => x.name === watchingName);
       if (f && (f.revision != null ? String(f.revision) !== server.revision(`files/${encodeURIComponent(watchingName)}`) : f.modified > serverState.savedAt + 1500)) {
-        if (dirty || editing || docId !== watchingId || wb.version !== watchingVersion || !remoteDoc) return;
+        if (serverRestoreBusy || dirty || editing || docId !== watchingId || wb.version !== watchingVersion || !remoteDoc) return;
         const keep = { si, r: active.r, c: active.c };
         const revisionBefore = server.revision(`files/${encodeURIComponent(watchingName)}`);
         const data = await server.load(watchingName);
-        if (dirty || editing || docId !== watchingId || wb.version !== watchingVersion || !remoteDoc) { server.restoreRevision(`files/${encodeURIComponent(watchingName)}`, revisionBefore); return; }
+        if (serverRestoreBusy || dirty || editing || docId !== watchingId || wb.version !== watchingVersion || !remoteDoc) { server.restoreRevision(`files/${encodeURIComponent(watchingName)}`, revisionBefore); return; }
         pendingDocId = docId;
         loadWorkbook(data.workbook ?? data, data.docName ?? docName, keep.si);
         remoteDoc = true;
@@ -13037,10 +13201,18 @@ function saveToStorage() {
   try {
     if (bigBook()) {
       // 큰 문서: IndexedDB 에 시트별로, 바뀐 시트만, 조금씩 나눠 저장 (화면이 멈추지 않게)
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ docName, docId, si, autosave, remoteDoc, idb: true }));
-      idbSaving = saveBigToIdb().then(() => { if (!serverAutosave()) { dirty = false; updateTitle(); } }).catch((err) => {
-        if (err === SAVE_ABORT) return;
-        if (!storageWarned) { storageWarned = true; toast('브라우저 저장 공간이 부족해 자동 저장하지 못했습니다. [파일 → 다른 이름으로 저장]으로 파일을 내려받으세요.'); }
+      idbSaving = saveBigToIdb().then((result) => {
+        if (!result?.isCurrent()) { scheduleAutosave(); return false; }
+        const saved = result.manifest;
+        // Keep the previous small/large pointer until the full IDB generation commits.
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ rev: saved.rev, docName: saved.docName, docId: saved.docId, si: saved.si, autosave: saved.autosave, remoteDoc: saved.remoteDoc, generation: saved.generation, idb: true }));
+        if (!serverAutosave()) { dirty = false; updateTitle(); }
+        storageWarned = false;
+        return true;
+      }).catch((err) => {
+        if (err?.code === 'BIG_SAVE_ABORT' || err?.code === 'IDB_CONFLICT') return false;
+        if (!storageWarned) { storageWarned = true; toast('브라우저 저장을 완료하지 못했습니다. 이전 저장본은 유지됩니다. [파일 → 다른 이름으로 저장]으로 파일을 내려받으세요.'); }
+        return false;
       });
       return true;
     }
@@ -13059,145 +13231,34 @@ function saveToStorage() {
   }
 }
 
-const SAVE_ABORT = new Error('저장 중단');
 const yieldUI = () => new Promise((res) => setTimeout(res, 0));
 let exportBusy = 0; // 파일로 저장(내보내기) 중이면 브라우저 자동 저장은 잠시 멈춤 (둘이 화면을 나눠 쓰지 않게)
 const exportIdle = async () => { while (exportBusy) await new Promise((res) => setTimeout(res, 250)); };
 let bigSaveRun = null;
 let bigSaveAgain = false;
-/** 큰 문서 저장: 목록 { v: 2, sheets: [{id, ev}] } + 시트마다 { meta, chunks: [JSON 문자열] } */
+/** Immutable generation save: only a complete, unchanged snapshot replaces the manifest. */
 async function saveBigToIdb() {
   if (bigSaveRun) { bigSaveAgain = true; return bigSaveRun; }
+  docId ??= newDocId();
   const book = wb;
-  bigSaveRun = (async () => {
-    const prev = await idbGet(STORAGE_KEY).catch(() => null);
-    const saved = new Map((prev?.v === 2 ? prev.sheets : []).map((x) => [x.id, x.ev]));
-    const list = [];
-    for (let i = 0; i < book.sheets.length; i++) {
-      const s = book.sheets[i];
-      s._sid ??= `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-      const ev = s._ev ?? 0;
-      if (saved.get(s._sid) !== ev) {
-        const chunks = [];
-        let t = performance.now();
-        for (const ch of book.cellChunks(i)) {
-          chunks.push(await packChunk(JSON.stringify(ch)));
-          if (performance.now() - t > 30) {
-            await yieldUI();
-            await exportIdle();
-            if (wb !== book || book.sheets[i] !== s) throw SAVE_ABORT; // 그사이 다른 문서를 열었음
-            t = performance.now();
-          }
-        }
-        // 열 블록: 형식화 배열을 16MB 조각으로 나눠 따로 저장 (천만 행 640MB 를 한 번에 복제하면 메모리가 두 배로 튀어 탭이 죽음)
-        const prevRec = await idbGet(`${STORAGE_KEY}#${s._sid}`).catch(() => null);
-        const gen = Date.now().toString(36);
-        const partKeys = [];
-        const blocks = [];
-        for (let bi = 0; bi < (s.blocks ?? []).length; bi++) {
-          const b = s.blocks[bi];
-          const splitArr = async (arr, tag) => {
-            if (!arr || arr.length * arr.BYTES_PER_ELEMENT <= PART_BYTES) return { inline: arr };
-            const per = Math.floor(PART_BYTES / arr.BYTES_PER_ELEMENT);
-            const keys = [];
-            for (let p = 0; p * per < arr.length; p++) {
-              const key = `${STORAGE_KEY}#${s._sid}#${gen}.${bi}.${tag}.${p}`;
-              await idbSet(key, arr.slice(p * per, Math.min(arr.length, (p + 1) * per)));
-              keys.push(key);
-              partKeys.push(key);
-              await yieldUI();
-              if (wb !== book || book.sheets[i] !== s) throw SAVE_ABORT;
-            }
-            return { parts: keys, len: arr.length, kind: arr.constructor.name };
-          };
-          const cols = [];
-          for (let ci = 0; ci < b.cols.length; ci++) {
-            const c = b.cols[ci];
-            const num = await splitArr(c.num, `${ci}n`);
-            const str = await splitArr(c.str, `${ci}s`);
-            cols.push({ ...c, num: num.inline ?? null, str: str.inline ?? null, ...(num.parts ? { numParts: num } : {}), ...(str.parts ? { strParts: str } : {}) });
-          }
-          const perm = await splitArr(b.perm ?? null, 'perm');
-          blocks.push({ ...b, cols, perm: perm.inline ?? undefined, ...(perm.parts ? { permParts: perm } : {}) });
-        }
-        await idbSet(`${STORAGE_KEY}#${s._sid}`, { meta: book.sheetMeta(i), chunks, gz: GZ, blocks, partKeys });
-        for (const k of prevRec?.partKeys ?? []) idbDel(k).catch(() => {});
-      }
-      list.push({ id: s._sid, ev });
-    }
-    if (wb !== book) throw SAVE_ABORT;
-    await idbSet(STORAGE_KEY, {
-      v: 2, rev: APP_REV, docName, si, autosave, book: book.bookMeta(), vba: book.vba ?? null,
-      names: book.names.map(({ _ast, _text, ...n }) => ({ ...n })), sheets: list,
-    });
-    for (const id of saved.keys()) if (!list.some((x) => x.id === id)) idbDel(`${STORAGE_KEY}#${id}`).catch(() => {});
-    // 저장하는 동안 바뀐 시트는 다음 저장에서 다시 (ev 가 달라짐)
-    if (book.sheets.some((s, i) => (s._ev ?? 0) !== list[i]?.ev)) bigSaveAgain = true;
-  })();
+  const details = { rev: APP_REV, docName, docId, si, autosave, remoteDoc };
+  bigSaveRun = saveLargeWorkbook(STORAGE_KEY, book, details, {
+    isCurrent: () => wb === book && !viewOnly && docName === details.docName && docId === details.docId && autosave === details.autosave && remoteDoc === details.remoteDoc,
+    waitForIdle: exportIdle,
+  });
   try {
-    await bigSaveRun;
+    return await bigSaveRun;
+  } catch (err) {
+    if (err?.code === 'BIG_SAVE_ABORT' || err?.code === 'IDB_CONFLICT') bigSaveAgain = true;
+    throw err;
   } finally {
     bigSaveRun = null;
     if (bigSaveAgain) { bigSaveAgain = false; scheduleAutosave(); }
   }
 }
 
-const PART_BYTES = 16 * 1024 * 1024; // 열 블록 저장 조각 크기
-// 조각은 gzip 으로 압축한 Blob 으로 저장 (문자열 그대로 넣으면 IndexedDB 가 복사하는 동안 화면이 멈춤)
-const GZ = typeof CompressionStream === 'function';
-async function packChunk(text) {
-  const blob = new Blob([text], { type: 'application/json' });
-  return GZ ? new Response(blob.stream().pipeThrough(new CompressionStream('gzip'))).blob() : blob;
-}
-async function unpackChunk(x, gz) {
-  if (typeof x === 'string') return x;
-  return gz ? new Response(x.stream().pipeThrough(new DecompressionStream('gzip'))).text() : x.text();
-}
-
-/** IndexedDB 의 큰 문서 → 불러오기용 데이터 (예전 형식도 읽음) */
-async function loadBigFromIdb(onProgress) {
-  const idx = await idbGet(STORAGE_KEY);
-  if (!idx) return null;
-  if (idx.v !== 2) return idx.workbook ? idx : null;
-  const sheets = [];
-  for (let i = 0; i < idx.sheets.length; i++) {
-    const x = idx.sheets[i];
-    const rec = await idbGet(`${STORAGE_KEY}#${x.id}`);
-    if (!rec) return null;
-    const cells = new Map();
-    for (const ch of rec.chunks) {
-      for (const [k, d] of JSON.parse(await unpackChunk(ch, rec.gz))) cells.set(k, d);
-      onProgress?.((i + 0.5) / idx.sheets.length);
-      await yieldUI();
-    }
-    // 조각으로 나눠 저장한 열 블록을 다시 이어 붙임 (배열 하나를 한 번에 만들고 조각을 차례로 채움)
-    const joinArr = async (info) => {
-      const Ctor = { Float64Array, Int32Array, Uint32Array, Float32Array, Uint8Array, Int16Array, Uint16Array }[info.kind] ?? Float64Array;
-      const out = new Ctor(info.len);
-      let at = 0;
-      for (const key of info.parts) {
-        const part = await idbGet(key);
-        if (!part) throw new Error('저장된 열 블록 조각이 없습니다');
-        out.set(part, at);
-        at += part.length;
-        await yieldUI();
-      }
-      return out;
-    };
-    const blocks = [];
-    for (const b of rec.blocks ?? []) {
-      const cols = [];
-      for (const c of b.cols) {
-        const { numParts, strParts, ...rest } = c;
-        cols.push({ ...rest, num: numParts ? await joinArr(numParts) : c.num, str: strParts ? await joinArr(strParts) : c.str });
-      }
-      const { permParts, ...rb } = b;
-      blocks.push({ ...rb, cols, perm: permParts ? await joinArr(permParts) : b.perm ?? undefined });
-      onProgress?.((i + 0.9) / idx.sheets.length);
-    }
-    sheets.push({ ...rec.meta, cells, blocks, _sid: x.id, _ev: x.ev });
-  }
-  return { rev: idx.rev, docName: idx.docName, si: idx.si, autosave: idx.autosave, workbook: { ...idx.book, names: idx.names, vba: idx.vba, sheets } };
+function loadBigFromIdb(onProgress) {
+  return loadLargeWorkbook(STORAGE_KEY, onProgress);
 }
 
 function loadFromStorage() {
@@ -13211,6 +13272,7 @@ function loadFromStorage() {
 
 let saveTimer = null;
 let serverTimer = null;
+let serverRestoreBusy = false;
 /** 사용자가 쉬는 틈에 실행 (큰 문서 저장이 입력 · 슬라이서 클릭을 막지 않게) */
 const whenIdle = (fn) => (globalThis.requestIdleCallback ? requestIdleCallback(fn, { timeout: 5000 }) : setTimeout(fn, 0));
 function scheduleAutosave() {
@@ -13222,7 +13284,7 @@ function scheduleAutosave() {
 }
 
 function scheduleServerSave(delay = 1500) {
-  if (!server.connected || !remoteDoc || !autosave || viewOnly || serverState.error) return;
+  if (serverRestoreBusy || !server.connected || !remoteDoc || !autosave || viewOnly || serverState.error) return;
   // 셀이 아주 많은 문서는 서버 자동 저장을 하지 않음 (전체를 보내야 해서 느림) — [저장]을 누르면 저장
   if (!serverAutosave()) { updateTitle(); return; }
   clearTimeout(serverTimer);
@@ -13255,6 +13317,7 @@ function confirmOverwrite() {
 }
 
 async function saveNow(explicit, { quiet = false, saveAsFolder = false } = {}) {
+  if (serverRestoreBusy) { if (explicit) toast('온라인 복원 작업이 끝난 뒤 저장하세요.'); return; }
   if (explicit && saveAsFolder && server.connected) {
     // 서버(다른 기기에서 열기)에 저장할 위치: 폴더 / 파일 이름
     const names = await serverNames();
@@ -13273,8 +13336,17 @@ async function saveNow(explicit, { quiet = false, saveAsFolder = false } = {}) {
     return;
   }
   if (viewOnly) { if (explicit) toast('읽기 전용 보기입니다. [편집용 사본 만들기]를 누르세요.'); return; }
-  const stored = saveToStorage();
-  if (explicit) libraryFlush({ version: { label: '저장' } });
+  const localBook = wb, large = bigBook();
+  let stored = saveToStorage();
+  const localId = docId;
+  if (large && stored) stored = await idbSaving;
+  if (wb !== localBook || docId !== localId) return;
+  if (serverRestoreBusy) { if (explicit && !quiet) toast('온라인 복원 작업이 끝난 뒤 저장하세요.'); return; }
+  if (!stored) {
+    if (!server.connected || !remoteDoc) { if (explicit && !quiet) toast('브라우저 저장이 완료되지 않았습니다. 편집 중 내용이 바뀌었거나 저장 공간에 문제가 있습니다. 다시 저장하세요.'); return; }
+    if (explicit && !quiet) toast('브라우저 저장은 완료되지 않아 이전 저장본을 유지합니다. 온라인 저장을 계속합니다.');
+  }
+  if (explicit && stored) libraryFlush({ version: { label: '저장' } });
   if (!server.connected || !remoteDoc) {
     if (explicit && stored && !quiet) toast('이 브라우저에 저장했습니다. 다른 기기로 옮기려면 저장 위치에서 파일 또는 개인 보관함을 선택하세요.');
     return;
@@ -13301,7 +13373,7 @@ async function saveNow(explicit, { quiet = false, saveAsFolder = false } = {}) {
   } finally {
     serverState.saving = false;
     updateTitle();
-    if (dirty && !serverState.error && remoteDoc && savingBook === wb && savingName === docName) scheduleServerSave();
+    if (dirty && !serverState.error && remoteDoc) scheduleServerSave();
   }
 }
 
@@ -13498,7 +13570,7 @@ function openBackstage(panel = 'new') {
         files.map((f) => el('tr', { class: 'file' },
           el('td', {}, el('button', { class: 'lnk hub-file-name', onclick: () => { close(); openFromServer(f.name); } }, f.name)),
           el('td', {}, formatDate(f.modified)), el('td', {}, `${Math.max(1, Math.round(f.size / 1024)).toLocaleString()} KB`),
-          el('td', {}, el('button', { class: 'lnk', onclick: () => openDialog({ title: '온라인 문서 삭제', body: `'${f.name}'을(를) ${server.label}에서 삭제할까요? 브라우저 사본은 유지됩니다.`,
+          el('td', {}, server.capabilities.versionHistory ? el('button', { class: 'lnk', onclick: () => serverVersionHistory(f.name) }, '버전 기록') : null, el('button', { class: 'lnk', onclick: () => openDialog({ title: '온라인 문서 삭제', body: `'${f.name}'을(를) ${server.label}에서 삭제할까요? 온라인 과거 버전도 함께 삭제됩니다. 브라우저 사본은 유지됩니다.`,
             buttons: [{ label: '삭제', action: async () => { await server.remove(f.name, f.revision); showOpen(); } }, { label: '취소', primary: true }] }) }, '삭제')))))
         : hubEmpty('아직 저장된 문서가 없습니다', '저장 위치에서 온라인 보관함을 선택해 첫 문서를 보관하세요.'));
     } catch (err) { remoteHost.replaceChildren(el('p', { class: 'warn', role: 'status' }, `목록을 불러오지 못했습니다: ${err.message}`), el('button', { class: 'btn', onclick: () => connectStorage(showOpen) }, '다시 연결')); }
@@ -13518,6 +13590,7 @@ function openBackstage(panel = 'new') {
         el('button', { class: 'btn', disabled: !server.available, onclick: () => connectStorage(showStorage) }, server.vault ? '다른 복구키로 연결' : '서버 연결 설정'),
         server.vault && server.connected ? el('button', { class: 'btn', onclick: recoveryFile }, '복구키 파일 내보내기') : null,
         server.vault && server.connected ? el('button', { class: 'btn', onclick: async (e) => { const btn = e.currentTarget; btn.disabled = true; try { download('WIXEL-보관함-백업.json', JSON.stringify(await server.backup()), 'application/json'); toast('보관함 백업을 내려받았습니다.'); } catch (err) { toast(`백업 실패: ${err.message}`); } finally { btn.disabled = false; } } }, '보관함 전체 백업') : null,
+        server.connected && server.capabilities.backupImport ? el('button', { class: 'btn', onclick: () => backupImportDialog(showStorage) }, '보관함 백업 복원') : null,
         server.connected ? el('button', { class: 'btn', onclick: () => { server.disconnect(); remoteDoc = false; clearTimeout(serverTimer); serverState.error = null; saveToStorage(); showStorage(); toast('이 기기의 연결을 해제했습니다. 온라인 문서는 삭제하지 않았습니다.'); } }, '이 기기 연결 해제') : null),
       ...(server.vault ? [el('p', { class: 'backstage-note' }, '개인 보관함: 문서당 최대 20 MB · 전체 100 MB · 최대 50개. 복구키 파일을 다른 사람에게 전달하면 보관함 전체를 열 수 있습니다.')] : []));
   };
@@ -13669,7 +13742,7 @@ function printSheet() {
       if (pg.headings) tds.push(`<td class="ph">${r + 1}</td>`);
       for (const c of colsList) {
         const st = styleAt(r, c);
-        const { text, align } = formatValue(valueAt(r, c), st);
+        const { text, align } = formatValue(valueAt(r, c), st, wb.date1904);
         const css = [`text-align:${st.align && st.align !== 'general' ? st.align === 'centerContinuous' ? 'center' : st.align : align}`, st.bold && 'font-weight:700', st.italic && 'font-style:italic', st.color && `color:${st.color}`,
           st.fill && `background:${st.fill}`, st.size && `font-size:${st.size}pt`, st.wrap && 'white-space:pre-wrap',
           st.bb && 'border-bottom:1px solid #000', st.bt && 'border-top:1px solid #000', st.bl && 'border-left:1px solid #000', st.br && 'border-right:1px solid #000'].filter(Boolean).join(';');
@@ -13816,7 +13889,7 @@ function formatCellsDialog(startTab = 0, find = null) {
     let text = '';
     let color = null;
     try {
-      if (sample !== null && sample !== '' && typeof sample !== 'object') ({ text, color } = cat === 'general' ? formatValue(sample, {}) : formatCode(sample, code === 'G/표준' ? 'General' : code));
+      if (sample !== null && sample !== '' && typeof sample !== 'object') ({ text, color } = cat === 'general' ? formatValue(sample, {}, wb.date1904) : formatCode(sample, code === 'G/표준' ? 'General' : code, wb.date1904));
       else if (typeof sample === 'object' && sample) text = sample.code;
       sampleBox.classList.remove('bad');
     } catch {
@@ -13848,7 +13921,7 @@ function formatCellsDialog(startTab = 0, find = null) {
   };
   const sampleOf = (code) => {
     const n = cat === 'date' || cat === 'time' ? (typeof sample === 'number' ? sample : 45366.5625) : typeof sample === 'number' ? sample : 1234.5;
-    try { return formatCode(n, code).text; } catch { return code; }
+    try { return formatCode(n, code, wb.date1904).text; } catch { return code; }
   };
   const negList = () => {
     const box = el('div', { class: 'fc-list short' });
@@ -14117,7 +14190,7 @@ function formatCellsDialog(startTab = 0, find = null) {
     openDialog({ title: '셀 서식', width: 620, body: el('div', {}, tabBar, pageBox), buttons: [
       { label: '확인', primary: true, action: () => {
         let fmt;
-        try { formatCode(1234.5, currentCode()); fmt = cat === 'general' ? { numFmt: 'general', code: undefined, decimals: undefined } : styleForCode(currentCode()); }
+        try { formatCode(1234.5, currentCode(), wb.date1904); fmt = cat === 'general' ? { numFmt: 'general', code: undefined, decimals: undefined } : styleForCode(currentCode()); }
         catch { show(0); toast('입력한 서식 코드를 사용할 수 없습니다.'); return false; }
         const patch = { ...st, ...buildPatch(fmt) };
         if (border === 'edges') {
@@ -14185,7 +14258,7 @@ function formatCellsDialog(startTab = 0, find = null) {
           const code = currentCode();
           let fmt;
           try {
-            formatCode(1234.5, code);
+            formatCode(1234.5, code, wb.date1904);
             fmt = cat === 'general' ? { numFmt: undefined, decimals: undefined, code: undefined } : styleForCode(code);
           } catch {
             show(0);
@@ -15621,6 +15694,7 @@ const MENUS = {
   ],
   errorMenu: () => [
     { label: '오류 검사(K)...', icon: 'validation', action: () => errorCheck() },
+    { label: '계산 상태 확인...', action: () => calculationStatusDialog() },
     { label: '오류 추적(E)', icon: 'validation', action: () => traceError() },
     { label: '순환 참조(C)', disabled: true, submenu: [] },
   ],
@@ -15966,9 +16040,9 @@ const MENUS = {
     const num = typeof v === 'number' ? v : null;
     const ICON = { general: '123', number: '12', currency: '₩', accounting: '₩≡', date: '▦', longdate: '▦▦', time: '◷', percent: '%', fraction: '½', scientific: '10²', text: '가나' };
     const sampleOf = (id) => {
-      if (id === 'general') return num === null ? '특정 서식 없음' : formatValue(num, {}).text;
+      if (id === 'general') return num === null ? '특정 서식 없음' : formatValue(num, {}, wb.date1904).text;
       if (num === null) return typeof v === 'string' && v ? v : '';
-      try { return formatValue(num, { numFmt: id }).text; } catch { return ''; }
+      try { return formatValue(num, { numFmt: id }, wb.date1904).text; } catch { return ''; }
     };
     return NUMBER_FORMATS.filter((f) => f.id !== 'custom' && f.id !== 'more').map((f) => ({
       label: f.label, key: sampleOf(f.id), icon: `<b class="nf-ico">${ICON[f.id] ?? ''}</b>`, action: () => run('numFmt', f.id),
@@ -16396,6 +16470,7 @@ const COMMANDS = {
   removeArrows: () => removeArrows(),
   evaluateFormula: () => evaluateFormulaDialog(),
   errorCheck: () => errorCheck(),
+  calculationStatus: () => calculationStatusDialog(),
   watchWindow: () => watchWindow(!watchPane),
   goalSeek: () => goalSeekDialog(),
   scenarioManager: () => scenarioManager(),
@@ -16541,6 +16616,12 @@ const NO_COMMIT = new Set(['toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100', 'shor
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['저장 실패 보호', ['대용량 브라우저 저장을 세대별 원자 저장으로 전환 · 강제 종료와 용량 부족 시 이전 저장본 유지', '복원 전 현재 문서 보관 성공 확인 · 온라인 저장 중 문서 전환 뒤 자동 저장 재개']],
+  ['피벗 정확성', ['계산 필드의 음수 반올림·오류 전파·인수 검사와 오류 항목 필터 보완', '다른 시트의 원본 수식 변경도 자동 새로 고침에 반영']],
+  ['계산·날짜 신뢰성', ['미지원 수식의 오래된 저장값이 정상 합계로 전파되지 않도록 차단 · 계산 상태 및 원인 목록', '1900/1904 날짜 체계의 수식·표시·피벗·QUERY·파일 저장 보존']],
+  ['온라인 복구', ['문서별 이전 버전 보기 · 사본 열기 · 충돌 확인 후 복원', '보관함 백업에서 선택한 문서 복원 · 덮어쓰기 선택 · 복원 중 실패 시 기존 데이터 보존']],
+  ['Excel 호환 검증', ['최신 차트의 표준 스타일·색 관계 보완 · 등고선 차트 종류 보존 · Excel 수정값 우선 읽기', '그림 투명도·둥근 모서리·그림자·소수 테두리 저장 · 기본 행 높이에 따른 그림/차트 크기 변화 수정']],
+  ['접근성', ['격자 셀의 주소·값·수식·오류·병합·보호 상태 안내 · 고정 창 중복 제거 · 기존 편집 포커스 유지']],
   ['차트 확장', ['22개 유형·61개 세부 형태: 선버스트 · 표면형 4종 · 보조 원형/막대 · 거래량 주식 · 국가/지역 지도', '검색 가능한 차트 갤러리 · 실제 데이터 미리 보기 · 데이터 배치 안내 · 잘못된 주식형 계열 수 검사', '차트 요소·계열 선택 · 보조 축 · 폭포 합계 · 거품 크기 · 표면 색 구간 · 지도 색 서식']],
   ['그림 설정', ['크기·비율 고정 · 회전·대칭 · 사방 자르기 · 원래 크기 · 대체 텍스트를 미리 보며 편집', '확인은 한 번의 실행 취소 · 취소 시 원본 보존 · XLSX 회전·대칭·자르기 유지']],
   ['피벗·필터·설정', ['필터 검색 중 선택 보존 · 검색 결과를 기존 선택에 추가 · 빈 결과 보호', '피벗 필드 검색·포커스 유지 · 슬라이서 삽입 필드 검색과 선택 개수', '설정 검색 · 키보드 범주 이동 · 빠른 실행 명령 검색 · 소수 자릿수 0 저장 수정']],
@@ -16836,6 +16917,9 @@ function autoRefreshPivots() {
     if (was !== undefined && was !== ver) due.push(e);
   }
   if (!due.length) return;
+  // 자동 새로 고침도 저장된 캐시 대신 현재 수식 결과를 읽어야 합니다.
+  for (const e of due) if (e.def.snapshotId) wb.pivotSnapshots?.delete(e.def.snapshotId);
+  wb.pivotMemo = null;
   wb.transact(() => { for (const e of due) writePivot(e.si, e.def, { autofit: false }); }, { ...meta(), joinPrev: true });
   for (const e of due) pivotSrcVer.set(`${e.si}:${pivotNameOf(e)}`, `${wb.sheetVersion(pivotSrcSi(e.def))}`);
   gv.renderObjectsAll();
@@ -16846,7 +16930,7 @@ function onBookChange() {
   libDirty = true;
   scheduleLibrarySave();
   scheduleAutoPivots();
-  if (opts.calcMode === 'manual') updateStatusCalc();
+  updateStatusCalc();
   if (!renderQueued) {
     renderQueued = true;
     queueMicrotask(() => {
@@ -16940,6 +17024,7 @@ function bindEvents() {
     showContextMenu({ x: e.clientX, y: e.clientY }, kind);
   });
   document.querySelector('.statusbar')?.addEventListener('contextmenu', statusMenu);
+  $('calcState').addEventListener('click', calculationStatusDialog);
   // 구글 스프레드시트처럼 브라우저 기본 메뉴는 띄우지 않음 (글 입력 칸 · 링크 제외).
   // Windows 는 contextmenu 가 버튼을 뗄 때 오므로, 이미 열린 위셀 메뉴 위에서 받는 경우도 막음
   document.addEventListener('contextmenu', (e) => {
@@ -17086,7 +17171,7 @@ async function init() {
     try {
       const metaId = stored.docId, remote = stored.remoteDoc;
       stored = await loadBigFromIdb((p) => prog.set(p * 0.6, '불러오는 중'));
-      if (stored) { stored.docId = metaId; stored.remoteDoc = remote; }
+      if (stored && stored.storageFormat !== 3) { stored.docId = metaId; stored.remoteDoc = remote; }
       wb = new Workbook();
       if (stored?.workbook) await wb.loadAsync(stored.workbook, (p) => prog.set(0.6 + 0.4 * p, '셀 준비 중'));
     } catch {
@@ -17109,11 +17194,12 @@ async function init() {
   hydrateIcons();
   gv = new GridView({
     state: () => ({
-      wb, si, sel, selKind, active, editing: !!editing, clip, fillPreview, refs: editRefs, chartSel, chartPart, objMulti, circles, focusCell: opts.focusCell,
+      wb, si, sel, selKind, active, editing: !!editing, readonly: viewOnly, clip, fillPreview, refs: editRefs, chartSel, chartPart, objMulti, circles, focusCell: opts.focusCell,
       special: special?.si === si ? special.cells : null, arrows: trace?.arrows ?? null,
       showGrid: view.showGrid && !sheet().noGrid, showFormulas: view.showFormulas, showHeaders: view.showHeaders, fillHandle: opts.fillHandle !== false, valueHighlight: view.valueHighlight,
     }),
     onViewScroll: () => positionEditor(),
+    onAccessibleCellFocus: (r, c) => { if (!editing) selectCell(r, c); focusGrid(); },
     pivotChartFields: (ch) => {
       const e = findPivotEntry(ch.pivot.sheet ?? null, ch.pivot.name ?? null);
       if (!e) return null;

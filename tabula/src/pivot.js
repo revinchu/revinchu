@@ -91,6 +91,14 @@ export const CALC_FUNCS = [
   ['AND', 'AND(조건1, …)'], ['OR', 'OR(조건1, …)'], ['NOT', 'NOT(조건)'],
 ];
 const CALC_FUNC_SET = new Set(CALC_FUNCS.map(([n]) => n));
+const CALC_ARITY = {
+  IF: [1, 3], IFERROR: [2, 2], DIVIDE: [2, 3], ROWS: [0, 0], PI: [0, 0],
+  ROUND: [2, 2], ROUNDUP: [2, 2], ROUNDDOWN: [2, 2], TRUNC: [1, 2], LOG: [1, 2],
+  ABS: [1, 1], SQRT: [1, 1], INT: [1, 1], MOD: [2, 2], POWER: [2, 2], EXP: [1, 1],
+  LN: [1, 1], LOG10: [1, 1], SIGN: [1, 1], NOT: [1, 1], AND: [1, 255], OR: [1, 255],
+  SUM: [1, 255], MIN: [1, 255], MAX: [1, 255], AVERAGE: [1, 255],
+};
+const validCalcArgs = (n) => !CALC_ARITY[n.fn] || (n.args.length >= CALC_ARITY[n.fn][0] && n.args.length <= CALC_ARITY[n.fn][1]);
 
 /**
  * 계산 필드 수식 검사 → { ok, error, unknown: [없는 필드], funcs: [없는 함수], refs: [참조 필드], cycle }
@@ -105,7 +113,8 @@ export function checkCalc(formula, fields, calcFields = [], selfName = null) {
   const refs = [...calcRefs(ast)];
   const unknown = refs.filter((r) => !known.has(lower(r)) && !calcs.has(lower(r)) && lower(r) !== lower(selfName ?? ''));
   const funcs = [];
-  const walk = (n) => { if (!n) return; if (n.fn && !CALC_FUNC_SET.has(n.fn)) funcs.push(n.fn); ['a', 'b'].forEach((k) => walk(n[k])); (n.args ?? []).forEach(walk); };
+  const badArgs = [];
+  const walk = (n) => { if (!n) return; if (n.fn && !CALC_FUNC_SET.has(n.fn)) funcs.push(n.fn); else if (n.fn && !validCalcArgs(n)) badArgs.push(n.fn); ['a', 'b'].forEach((k) => walk(n[k])); (n.args ?? []).forEach(walk); };
   walk(ast);
   // 다른 계산 필드를 거쳐 자기 자신을 참조하면 순환
   let cycle = false;
@@ -121,7 +130,7 @@ export function checkCalc(formula, fields, calcFields = [], selfName = null) {
     });
     visit(refs);
   }
-  const error = unknown.length ? `없는 필드: ${unknown.join(', ')}` : funcs.length ? `지원하지 않는 함수: ${[...new Set(funcs)].join(', ')}` : cycle ? '순환 참조: 이 계산 필드를 다시 참조합니다.' : null;
+  const error = unknown.length ? `없는 필드: ${unknown.join(', ')}` : funcs.length ? `지원하지 않는 함수: ${[...new Set(funcs)].join(', ')}` : badArgs.length ? `인수 개수가 올바르지 않습니다: ${[...new Set(badArgs)].join(', ')}` : cycle ? '순환 참조: 이 계산 필드를 다시 참조합니다.' : null;
   return { ok: !error, error, unknown, funcs, refs, cycle };
 }
 
@@ -259,16 +268,20 @@ export function calcRefs(ast, out = new Set()) {
 
 function evalCalc(ast, get) {
   const num = (v) => (isErr(v) ? v : typeof v === 'number' ? v : typeof v === 'boolean' ? Number(v) : v === null || v === '' ? 0 : Number.isFinite(Number(v)) ? Number(v) : CALC_ERR('#VALUE!'));
-  const ev = (n) => {
+  // 중첩된 IFERROR도 비정상 숫자를 오류로 처리하게 각 계산 단계에서 검사합니다.
+  const ev = (n) => { const v = evRaw(n); return typeof v === 'number' && !Number.isFinite(v) ? CALC_ERR('#NUM!') : v; };
+  const evRaw = (n) => {
+    if (!n) return CALC_ERR('#VALUE!');
     if ('num' in n) return n.num;
     if ('str' in n) return n.str;
     if (n.field !== undefined) return get(n.field);
     if (n.fn) {
       const A = n.args;
+      if (!validCalcArgs(n)) return CALC_ERR('#VALUE!');
       switch (n.fn) {
         case 'IF': { const c = num(ev(A[0])); if (isErr(c)) return c; return c ? (A[1] ? ev(A[1]) : true) : (A[2] ? ev(A[2]) : false); }
         case 'IFERROR': { const v = ev(A[0]); return isErr(v) ? ev(A[1]) : v; }
-        case 'ROUND': { const v = num(ev(A[0])); const d = A[1] ? num(ev(A[1])) : 0; if (isErr(v)) return v; const f = 10 ** d; return Math.round(v * f) / f; }
+        case 'ROUND': { const v = num(ev(A[0])); const d = num(ev(A[1])); if (isErr(v)) return v; if (isErr(d)) return d; const f = 10 ** Math.trunc(d); return Math.sign(v) * Math.round(Math.abs(v) * f) / f; }
         case 'ABS': { const v = num(ev(A[0])); return isErr(v) ? v : Math.abs(v); }
         case 'SQRT': { const v = num(ev(A[0])); return isErr(v) ? v : v < 0 ? CALC_ERR('#NUM!') : Math.sqrt(v); }
         case 'INT': { const v = num(ev(A[0])); return isErr(v) ? v : Math.floor(v); }
@@ -296,20 +309,25 @@ function evalCalc(ast, get) {
         case 'LOG10': { const v = num(ev(A[0])); return isErr(v) ? v : v <= 0 ? CALC_ERR('#NUM!') : Math.log10(v); }
         case 'LOG': { const v = num(ev(A[0])); const b = A[1] ? num(ev(A[1])) : 10; if (isErr(v)) return v; if (isErr(b)) return b; return v <= 0 || b <= 0 || b === 1 ? CALC_ERR('#NUM!') : Math.log(v) / Math.log(b); }
         case 'SIGN': { const v = num(ev(A[0])); return isErr(v) ? v : Math.sign(v); }
-        case 'TRUNC': { const v = num(ev(A[0])); const d = A[1] ? num(ev(A[1])) : 0; if (isErr(v)) return v; const f = 10 ** d; return Math.trunc(v * f) / f; }
+        case 'TRUNC': { const v = num(ev(A[0])); const d = A[1] ? num(ev(A[1])) : 0; if (isErr(v)) return v; if (isErr(d)) return d; const f = 10 ** Math.trunc(d); return Math.trunc(v * f) / f; }
         case 'ROUNDUP': case 'ROUNDDOWN': {
           const v = num(ev(A[0]));
           const d = A[1] ? num(ev(A[1])) : 0;
           if (isErr(v)) return v;
-          const f = 10 ** d;
+          if (isErr(d)) return d;
+          const f = 10 ** Math.trunc(d);
           const x = Math.abs(v) * f;
           const r = n.fn === 'ROUNDUP' ? Math.ceil(x - 1e-9) : Math.floor(x + 1e-9);
           return (Math.sign(v) * r) / f;
         }
         case 'PI': return Math.PI;
-        case 'AND': return A.every((x) => num(ev(x)));
-        case 'OR': return A.some((x) => num(ev(x)));
-        case 'NOT': return !num(ev(A[0]));
+        case 'AND': case 'OR': {
+          // 논리값이 결정되어도 뒤쪽 인수의 오류를 숨기면 안 됩니다.
+          const vs = A.map((x) => num(ev(x)));
+          const e = vs.find(isErr);
+          return e ?? (n.fn === 'AND' ? vs.every(Boolean) : vs.some(Boolean));
+        }
+        case 'NOT': { const v = num(ev(A[0])); return isErr(v) ? v : !v; }
         default: return CALC_ERR('#NAME?');
       }
     }
@@ -387,6 +405,23 @@ const usesRows = (ast) => !!ast && (ast.fn === 'ROWS' || ['a', 'b'].some((k) => 
 
 /** 오류 · 빈 셀 표시 글자 → 칸 입력 (엑셀: 숫자 모양이면 숫자 0 처럼 숫자로 씀) */
 const captionRaw = (t) => (!t ? '' : /^-?\d+(\.\d+)?$/.test(t) ? t : `'${t}`);
+// Excel 16.0.14334 COM + PDF + GETPIVOTDATA로 확인한 오류 대체문구의 값 변환.
+// 일반 셀 입력 파서와 다름: 소수·지수·퍼센트는 문자열이며 빈 문구만 빈 셀이다.
+function errorCaptionValue(caption) {
+  const text = String(caption ?? '');
+  if (!text) return null;
+  const numberText = text.replace(/[０-９－]/g, (c) => c === '－' ? '-' : String(c.charCodeAt(0) - 0xff10)).replace(/^ +| +$/g, '');
+  if (/^-?\d*$/.test(numberText)) {
+    const n = numberText === '-' ? 0 : Number(numberText);
+    // 음수 끝의 세 값은 Excel이 숫자로 바꾸지 않는다(실제 경계값 검증).
+    if (n >= -32765 && n <= 32767) return n === 0 ? 0 : n;
+  }
+  return text;
+}
+function errorCaptionRaw(caption) {
+  const value = errorCaptionValue(caption);
+  return value === null ? '' : typeof value === 'number' ? String(value) : `'${value}`;
+}
 
 /** 계산 필드 결과는 숫자 (엑셀: IFERROR(…,"0") 의 "0" 은 숫자 0 으로 보임) */
 const calcNumber = (v) => (typeof v === 'string' && /^\s*-?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?\s*$/i.test(v) ? Number(v) : v);
@@ -497,6 +532,11 @@ export function pivotErrorDisplay(def) {
 }
 
 /** 옛 정의까지 포함해 필드 이름 기반 정의로 (header: 원본 머리글) */
+function dateDef(def, date1904) {
+  if (date1904 === undefined) return def;
+  return { ...def, date1904: !!date1904, groups: Object.fromEntries(Object.entries(def.groups ?? {}).map(([k, v]) => [k, { ...v, date1904: !!date1904 }])) };
+}
+
 export function normalizeDef(def, header) {
   const allHeader = [...header, ...(def.calcFields ?? []).map((c) => c.name).filter((n) => !header.some((h) => h.toLowerCase() === String(n).toLowerCase()))];
   const name = (i) => (i === null || i === undefined || i < 0 ? null : allHeader[i] ?? null);
@@ -516,6 +556,7 @@ export function normalizeDef(def, header) {
   const ok = (n) => byName(n) !== null;
   const byKey = (obj) => Object.fromEntries(Object.entries(obj ?? {}).filter(([k]) => ok(k)).map(([k, v]) => [byName(k), v]));
   return {
+    date1904: !!def.date1904,
     rows: (rows ?? []).filter(ok).map(byName),
     cols: (cols ?? []).filter(ok).map(byName),
     pages: (def.pages ?? []).filter(ok).map(byName),
@@ -589,26 +630,26 @@ export function pivotSourceData(wb, def) {
     // 원본 시트의 편집 횟수 (다시 계산으로는 바뀌지 않음) — 사용자가 원본을 고치면 저장본을 버림
     const ver = wb.sheets[si]?._ev ?? 0;
     snap.ver ??= ver;
-    if (snap.ver === ver) return sourceOf(cubeFromRows(snap.rows), si, ref, table, snap.rows);
+    if (snap.ver === ver) return sourceOf(cubeFromRows(snap.rows), si, ref, table, snap.rows, wb.date1904);
     wb.pivotSnapshots.delete(def.snapshotId); // 원본을 고침 → 이제부터 원본에서 계산 (자동 새로 고침)
   }
   // 데이터가 열 블록에 있으면 값을 복사하지 않고 블록의 형식화 배열을 그대로 씀 (천만 행도 즉시)
   const bc = blockCube(wb, si, ref, names);
-  if (bc) return sourceOf(bc, si, ref, table, null);
+  if (bc) return sourceOf(bc, si, ref, table, null, wb.date1904);
   let rows = cachedRead(wb, si, ref);
   if (names) {
     let m = headedMemo.get(rows);
     if (!m || m[0] !== names.join('\u0001')) { m = [names.join('\u0001'), [names, ...rows]]; headedMemo.set(rows, m); }
     rows = m[1];
   }
-  return sourceOf(cubeFromRows(rows), si, ref, table, rows);
+  return sourceOf(cubeFromRows(rows), si, ref, table, rows, wb.date1904);
 }
 const headedMemo = new WeakMap();
 
 /** 피벗 원본: { cube, rows(필요할 때 만듦, 머리글 포함), si, ref, table } */
-function sourceOf(cube, si, ref, table, rows) {
+function sourceOf(cube, si, ref, table, rows, date1904 = false) {
   let made = rows;
-  const src = { cube, si, ref, table };
+  const src = { cube, si, ref, table, date1904 };
   Object.defineProperty(src, 'rows', {
     enumerable: false,
     get() {
@@ -741,17 +782,18 @@ export const DATE_OPS = [
 export const PIVOT_DATE_PERIODS = [['Q1', '1분기'], ['Q2', '2분기'], ['Q3', '3분기'], ['Q4', '4분기'], ...Array.from({ length: 12 }, (_, i) => [`M${i + 1}`, `${i + 1}월`])];
 export const DATE_OP_TYPES = new Set([...DATE_OPS.filter(Boolean).map(([k]) => k), ...PIVOT_DATE_PERIODS.map(([k]) => k), 'dateNotEqual', 'dateOlderThanOrEqual', 'dateNewerThanOrEqual', 'dateNotBetween']);
 /** 오늘 일련번호 (로컬 날짜) */
-export function todaySerial(now = new Date()) { return serialOf(now.getFullYear(), now.getMonth() + 1, now.getDate()); }
+export function todaySerial(now = new Date(), date1904 = false) { return serialOf(now.getFullYear(), now.getMonth() + 1, now.getDate(), date1904); }
 /** 날짜 필터 조건 (serial: 항목 날짜 일련번호, today: 오늘) */
-export function dateFilterMatch(op, serial, v1, v2, today = todaySerial()) {
+export function dateFilterMatch(op, serial, v1, v2, today, date1904 = false) {
+  today ??= todaySerial(new Date(), date1904);
   if (typeof serial !== 'number' || !Number.isFinite(serial)) return false;
   const day = Math.floor(serial);
-  const P = dateParts(day);
-  const T = dateParts(today);
+  const P = dateParts(day, 1, date1904);
+  const T = dateParts(today, 1, date1904);
   const q = (m) => Math.floor((m - 1) / 3);
   const ym = (x) => x.y * 12 + x.m - 1;
   const yq = (x) => x.y * 4 + q(x.m);
-  const week = (s) => s - ((((s + 6) % 7) + 7) % 7); // 일요일 시작
+  const week = (s) => s - dateParts(s, 1, date1904).dow; // 일요일 시작
   const num = (v) => (typeof v === 'number' ? v : Number(v));
   switch (op) {
     case 'today': return day === today;
@@ -787,13 +829,13 @@ export function dateFilterMatch(op, serial, v1, v2, today = todaySerial()) {
 }
 
 /** 필터 설명 (메뉴 · 필드 창) */
-export function describeFieldFilter(f, values) {
+export function describeFieldFilter(f, values, date1904 = false) {
   if (!f) return '';
   const vname = () => { const v = values[valueIndex(values, f.by)]; return v ? valueName(v) : ''; };
   if (f.type === 'top') return `${f.top === false ? '하위' : '상위'} ${f.n}${f.mode === 'percent' ? '%' : f.mode === 'sum' ? ' (합계)' : '개'} · ${vname()}`;
   if (f.type === 'date') {
     const lab = [...DATE_OPS.filter(Boolean), ...PIVOT_DATE_PERIODS].find(([k]) => k === f.op)?.[1] ?? f.op;
-    const dt = (v) => { const p = dateParts(Number(v)); return `${p.y}-${String(p.m).padStart(2, '0')}-${String(p.d).padStart(2, '0')}`; };
+    const dt = (v) => { const p = dateParts(Number(v), 1, date1904); return `${p.y}-${String(p.m).padStart(2, '0')}-${String(p.d).padStart(2, '0')}`; };
     return /^date/.test(f.op) ? `날짜 ${lab} ${dt(f.v1)}${f.op === 'dateBetween' || f.op === 'dateNotBetween' ? ` ~ ${dt(f.v2)}` : ''}` : `날짜: ${lab}`;
   }
   const op = LABEL_OPS.find(([id]) => id === f.op)?.[1] ?? f.op;
@@ -852,8 +894,8 @@ function applyFieldFilters(groups, d, measures) {
           kept = items.filter((it) => compareOp(flt.op, numeric ? it.key : itemText(it.key), numeric ? Number(flt.v1) : flt.v1, numeric ? Number(flt.v2) : flt.v2, !numeric));
         } else if (flt.type === 'date') {
           // 날짜 항목만 남김 (글자 · 빈 항목은 날짜 필터에서 빠짐 — 엑셀과 같음)
-          const today = d.today ?? todaySerial();
-          kept = items.filter((it) => dateFilterMatch(flt.op, it.key, flt.v1, flt.v2, today));
+          const today = d.today ?? todaySerial(new Date(), d.date1904);
+          kept = items.filter((it) => dateFilterMatch(flt.op, it.key, flt.v1, flt.v2, today, d.date1904));
         } else if (flt.type === 'value') {
           const vi = valueIndex(d.values, flt.by);
           // 빈 값은 0 으로 비교 (엑셀: '값 = 0' 필터에 빈 항목도 남음)
@@ -902,7 +944,7 @@ export function warmPivots(wb, defs, extraFields = []) {
     const src = pivotSourceData(wb, def);
     if (!src) continue;
     const e = bySrc.get(src.cube) ?? { cube: src.cube, defs: [] };
-    e.defs.push(def);
+    e.defs.push(dateDef(def, wb.date1904));
     bySrc.set(src.cube, e);
   }
   for (const { cube, defs: list } of bySrc.values()) {
@@ -1105,6 +1147,7 @@ export function withCalcItems(cube, calcItems, measureFields = []) {
 }
 
 export function resolvePivot(input, def) {
+  def = dateDef(def, input.date1904 ?? def.date1904);
   // input: 행 배열(머리글 포함) 또는 pivotSourceData 결과({ cube })
   let cube = withDerivedFields(Array.isArray(input) ? cubeFromRows(input) : input.cube, def.groups);
   if (def.calcItems) cube = withCalcItems(cube, def.calcItems, (def.values ?? []).map((v) => v.field));
@@ -1537,7 +1580,7 @@ export function computePivot(input, d) {
     const field = (axis === 'r' ? d.rows : d.cols)[node.depth];
     if (typeof node.key === 'number' && !d.itemCaptions?.[field]?.[itemText(node.key)]) {
       const st = resolved?.fieldStyle?.(field);
-      if (st?.numFmt && st.numFmt !== 'general') return `${formatValue(node.key, st).text} 요약`;
+      if (st?.numFmt && st.numFmt !== 'general') return `${formatValue(node.key, st, d.date1904).text} 요약`;
     }
     return `${icap(axis, node)} 요약`;
   };
@@ -1612,7 +1655,7 @@ export function computePivot(input, d) {
     // 빈 셀 표시 옵션
     if (n === null || n === undefined) return { raw: captionRaw(d.missingCaption), style, role };
     // 오류 값 표시 옵션: 오류 대신 지정한 글자(빈 칸 포함)
-    if (isErr(n)) return d.errorCaption !== null && d.errorCaption !== undefined ? { raw: captionRaw(d.errorCaption), style, role } : { raw: n.code, style, role };
+    if (isErr(n)) return d.errorCaption !== null && d.errorCaption !== undefined ? { raw: errorCaptionRaw(d.errorCaption), style, role } : { raw: n.code, style, role };
     if (typeof n === 'boolean') return { raw: n ? 'TRUE' : 'FALSE', style, role };
     if (typeof n === 'string') return { raw: `'${n}`, style, role };
     return { raw: String(Number(n.toPrecision(15))), style, role };
@@ -1849,6 +1892,7 @@ export function computePivot(input, d) {
 const chartMemo = new WeakMap();
 /** fieldStyle(필드 이름) → 원본 열 서식 (날짜 항목을 날짜로 표시하는 데 씀) */
 export function pivotChartData(rows, def, fieldStyle = null) {
+  def = dateDef(def, rows.date1904 ?? def.date1904);
   const holder = Array.isArray(rows) ? cubeFromRows(rows) : rows.cube;
   let memo = chartMemo.get(holder);
   if (!memo) { memo = new Map(); chartMemo.set(holder, memo); }
@@ -1879,7 +1923,7 @@ function pivotChartDataRaw(rows, def, fieldStyle) {
     for (let n = it.node; n && n.depth >= 0; n = n.parent) {
       const st = typeof n.key === 'number' ? fieldStyle?.(d.rows[n.depth]) : null;
       const cap = d.itemCaptions?.[d.rows[n.depth]]?.[itemText(n.key)];
-      chain.unshift(cap ?? (st?.numFmt && st.numFmt !== 'general' ? formatValue(n.key, st).text : itemText(n.key)));
+      chain.unshift(cap ?? (st?.numFmt && st.numFmt !== 'general' ? formatValue(n.key, st, d.date1904).text : itemText(n.key)));
     }
     cats.push(chain.join(' / '));
     rowIdx.push(body + i);
@@ -1962,7 +2006,7 @@ export function pivotLookup(rows, def, dataField, pairs, resolved = null) {
   if (isErr(v)) {
     const cap = res.def.errorCaption;
     if (cap === null || cap === undefined) return ERR_BY_CODE[v.code] ?? ERR.VALUE;
-    return cap === '' ? 0 : /^-?\d+(\.\d+)?$/.test(cap) ? Number(cap) : cap;
+    return errorCaptionValue(cap) ?? 0;
   }
   // 있는 항목인데 값이 모두 빈 칸이라 빈칸으로 보이는 칸은 0
   return list && v === null ? 0 : null;

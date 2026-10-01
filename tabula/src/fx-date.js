@@ -1,18 +1,19 @@
 // 날짜/시간 함수 (DOM 없음). 날짜는 엑셀 일련번호 (1899-12-30 = 0)
 import {
   ERR, Range, isError, scalar, toNum, toStr, toInt, optInt, optBool, lift, dateToSerial, serialToDate, todaySerial,
-  toDate, DAY_MS,
+  toDate, DAY_MS, dateSystemFunction,
 } from './fxcore.js';
 import { parseInput } from './format.js';
 
 const ymd = (s) => serialToDate(toDate(s));
 const daysInMonth = (y, m) => new Date(Date.UTC(y, m, 0)).getUTCDate();
 
-function makeDate(y, m, d) {
-  if (y < 0 || y > 9999) throw ERR.NUM;
-  if (y < 1900) y += 1900;
-  const s = dateToSerial(y, m, d);
-  if (s < 0 || y > 9999) throw ERR.NUM;
+function makeDate(y, m, d, shortYear = true) {
+  if (y < 0 || y > 9999 || !shortYear && y < 1900) throw ERR.NUM;
+  if (shortYear && y < 1900) y += 1900;
+  const first = new Date(Date.UTC(y, m - 1, 1));
+  const s = dateToSerial(first.getUTCFullYear(), first.getUTCMonth() + 1, 1) + d - 1;
+  if (s < 0 || s > dateToSerial(9999, 12, 31)) throw ERR.NUM;
   return s;
 }
 
@@ -165,9 +166,9 @@ function timeValue(text) {
   return p.value - Math.floor(p.value);
 }
 
-function dateValue(text) {
-  const p = parseInput(String(text).trim());
-  if (typeof p.value !== 'number' || !/date|time/.test(p.numFmt ?? '')) {
+function dateValue(text, date1904 = false) {
+  const p = parseInput(String(text).trim(), date1904);
+  if (typeof p.value !== 'number' || p.value < 0 || !/date|time/.test(p.numFmt ?? '')) {
     // 숫자만 있는 텍스트는 날짜가 아님
     throw ERR.VALUE;
   }
@@ -181,10 +182,10 @@ const SCALAR = {
     if (t < 0) throw ERR.NUM;
     return (t % 86400) / 86400;
   },
-  DATEVALUE: ([s]) => {
+  DATEVALUE: ([s], ctx) => {
     const v = scalar(s);
     if (typeof v === 'number') throw ERR.VALUE;
-    return dateValue(toStr(v));
+    return dateValue(toStr(v), !!ctx?.date1904);
   },
   TIMEVALUE: ([s]) => {
     const v = scalar(s);
@@ -213,11 +214,11 @@ const SCALAR = {
   ISOWEEKNUM: ([s]) => isoWeek(toDate(s)),
   EDATE: ([s, n]) => {
     const t = addMonths(toDate(s), toInt(n));
-    return makeDate(t.y, t.m, Math.min(t.d, daysInMonth(t.y, t.m)));
+    return makeDate(t.y, t.m, Math.min(t.d, daysInMonth(t.y, t.m)), false);
   },
   EOMONTH: ([s, n]) => {
     const t = addMonths(toDate(s), toInt(n));
-    return makeDate(t.y, t.m, daysInMonth(t.y, t.m));
+    return makeDate(t.y, t.m, daysInMonth(t.y, t.m), false);
   },
   DAYS: ([e, s]) => toDate(e) - toDate(s),
   DAYS360: ([s, e, method]) => days360(toDate(s), toDate(e), optBool(method, false)),
@@ -274,3 +275,13 @@ for (const k of ['NETWORKDAYS', 'NETWORKDAYS.INTL', 'WORKDAY', 'WORKDAY.INTL']) 
   DATE[k] = lift(fn, k.endsWith('INTL') ? [0, 1, 2] : [0, 1]);
 }
 
+
+// Date-system conversion applies only to date serials, never years, months or workday counts.
+for (const k of ['DATE', 'TODAY', 'NOW']) DATE[k] = dateSystemFunction(DATE[k], [], true);
+for (const k of ['YEAR', 'MONTH', 'DAY', 'WEEKDAY', 'WEEKNUM', 'ISOWEEKNUM', 'DATESTRING']) DATE[k] = dateSystemFunction(DATE[k], [0]);
+for (const k of ['EDATE', 'EOMONTH']) DATE[k] = dateSystemFunction(DATE[k], [0], 'signed');
+for (const k of ['DAYS', 'DAYS360', 'YEARFRAC', 'DATEDIF']) DATE[k] = dateSystemFunction(DATE[k], [0, 1]);
+DATE.NETWORKDAYS = dateSystemFunction(DATE.NETWORKDAYS, [0, 1, 2], false, [2]);
+DATE['NETWORKDAYS.INTL'] = dateSystemFunction(DATE['NETWORKDAYS.INTL'], [0, 1, 3], false, [3]);
+DATE.WORKDAY = dateSystemFunction(DATE.WORKDAY, [0, 2], true, [2]);
+DATE['WORKDAY.INTL'] = dateSystemFunction(DATE['WORKDAY.INTL'], [0, 3], true, [3]);

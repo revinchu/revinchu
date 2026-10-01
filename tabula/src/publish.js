@@ -39,6 +39,7 @@ function literalCell(value, style) {
 function chartSnapshot(wb, si, chart) {
   const data = chartModelData(wb, si, chart);
   const snapshotData = {
+    date1904: !!wb.date1904,
     categories: structuredClone(data.categories ?? []),
     series: (data.series ?? []).map(series => pick(series, SERIES_KEYS)),
     ...(data.catLevels ? { catLevels: structuredClone(data.catLevels) } : {}),
@@ -92,7 +93,7 @@ export function publishedWorkbook(wb, selection = 'all', { maxCells = PUBLISH_CE
   sheet.images = (source.images ?? []).map(image => pick(image, IMAGE_KEYS));
   sheet.shapes = (source.shapes ?? []).map(shape => pick(shape, SHAPE_KEYS));
   // names/props/VBA/themeXml/externals/pivotSnapshots는 허용 목록에 포함하지 않습니다.
-  const book = { version: 1, sheets: [sheet] };
+  const book = { version: 1, sheets: [sheet], ...(wb.date1904 ? { date1904: true } : {}) };
   if (wb.defaultFont) book.defaultFont = pick(wb.defaultFont, ['name', 'size']);
   if (wb.baseStyle) book.baseStyle = styleCopy(wb.baseStyle);
   if (wb.theme) book.theme = structuredClone(wb.theme);

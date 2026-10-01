@@ -1,7 +1,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import { VaultStore } from './store.js';
 import { ApiError, LIMITS, documentHeaders, errorResponse, json, parseRevision, randomId, sameHash, securityHeaders, sha256, validPublicId, validateName, validateOrigin, vaultKey } from './shared.js';
-import { fetchPublicText, naverKeywords } from './proxy.js';
+import { boundedBytes, fetchPublicText, naverKeywords } from './proxy.js';
 
 function storeFor(object, create = false, limits = LIMITS) {
   if (object._store) return object._store;
@@ -23,6 +23,18 @@ export class UserVault extends DurableObject {
   read(name) { try { const { meta, body } = requireStore(this).read(name); return new Response(body, { headers: documentHeaders(meta) }); } catch (e) { return errorResponse(e); } }
   async put(name, revision, body) { try { return json(await storeFor(this, true).put(name, revision, body)); } catch (e) { return errorResponse(e); } }
   remove(name, revision) { try { return json(requireStore(this).remove(name, revision)); } catch (e) { return errorResponse(e); } }
+  versions(name) { try { return json(requireStore(this).versions(name)); } catch (e) { return errorResponse(e); } }
+  readVersion(name, revision) { try { const { meta, body } = requireStore(this).readVersion(name, revision); return new Response(body, { headers: documentHeaders(meta) }); } catch (e) { return errorResponse(e); } }
+  restore(name, revision, expected) { try { return json(requireStore(this).restore(name, revision, expected)); } catch (e) { return errorResponse(e); } }
+  async beginImport(manifest) {
+    const store = storeFor(this, true); let session;
+    try { session = store.beginImport(manifest); await this._storage.setAlarm(session.expires); return json(session, 201); }
+    catch (e) { if (session) store.cancelImport(session.id); return errorResponse(e); }
+  }
+  alarm() { storeFor(this)?.expireImports(); }
+  async stageImport(id, name, expected, body) { try { return json(await requireStore(this).stageImport(id, name, expected, body)); } catch (e) { return errorResponse(e); } }
+  commitImport(id) { try { return json(requireStore(this).commitImport(id)); } catch (e) { return errorResponse(e); } }
+  cancelImport(id) { try { return json(requireStore(this).cancelImport(id)); } catch (e) { return errorResponse(e); } }
   reserve(id) { try { return json(storeFor(this, true).reservePublication(id)); } catch (e) { return errorResponse(e); } }
   release(id) { return json(storeFor(this)?.releasePublication(id) ?? { ok: true }); }
   publications() { return json(storeFor(this)?.publications() ?? []); }
@@ -34,7 +46,7 @@ export class UserVault extends DurableObject {
   }
 }
 export class PublishedDocument extends DurableObject {
-  constructor(ctx, env) { super(ctx, env); this._storage = ctx.storage; this._store = null; this._limits = { ...LIMITS, maxDocuments: 1, maxVaultBytes: LIMITS.maxDocumentBytes }; }
+  constructor(ctx, env) { super(ctx, env); this._storage = ctx.storage; this._store = null; this._limits = { ...LIMITS, maxDocuments: 1, maxVaultBytes: LIMITS.maxDocumentBytes, maxVersions: 0, maxHistoryBytes: 0 }; }
   authorize(owner) {
     const store = requireStore(this);
     if (!sameHash(store.meta('owner'), owner)) throw new ApiError(403, '이 게시물을 변경할 권한이 없습니다.', 'PUBLISH_OWNER');
@@ -78,13 +90,27 @@ function checkBody(request) {
   if (!/^application\/json(?:\s*;|$)/i.test(type)) throw new ApiError(415, 'JSON 형식으로 문서를 전송하세요.', 'CONTENT_TYPE');
   if (request.headers.has('Content-Encoding')) throw new ApiError(415, '압축하지 않은 JSON 문서를 전송하세요.', 'CONTENT_ENCODING');
 }
+async function importManifest(request) {
+  checkBody(request);
+  const control = new AbortController(), timer = setTimeout(() => control.abort(), 10000);
+  try {
+    const bytes = await boundedBytes(new Response(request.body, { headers: request.headers }), 32768, control.signal);
+    try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); }
+    catch { throw new ApiError(400, '백업 복원 목록이 올바른 UTF-8 JSON이 아닙니다.', 'INVALID_BACKUP'); }
+  } finally { clearTimeout(timer); }
+}
+function sourceRevision(value) {
+  if (!/^[1-9]\d*$/.test(value ?? '') || !Number.isSafeInteger(Number(value))) throw new ApiError(400, '복원할 버전 번호가 올바르지 않습니다.', 'INVALID_REVISION');
+  return Number(value);
+}
+async function smallResponse(response) { return new Response(await response.text(), response); }
 export async function route(request, env) {
   const url = new URL(request.url), path = url.pathname, method = request.method;
   if (!path.startsWith('/api/')) return env.ASSETS.fetch(request);
   validateOrigin(request);
   const ip = request.headers.get('CF-Connecting-IP') || 'local';
   await limited(env.API_RATE, ip);
-  if (path === '/api/health' && method === 'GET') return json({ ok: true, auth: false, vault: true, publish: true, ...LIMITS });
+  if (path === '/api/health' && method === 'GET') return json({ ok: true, auth: false, vault: true, publish: true, versionHistory: true, backupImport: true, ...LIMITS });
   if (path === '/api/fetch' && method === 'GET') {
     await limited(env.FETCH_RATE, ip);
     return fetchPublicText(url.searchParams.get('url') || '', url.hostname);
@@ -100,6 +126,19 @@ export async function route(request, env) {
   if (path === '/api/files' && method === 'GET') return vault.list();
   if (path === '/api/usage' && method === 'GET') return vault.usage();
   if (path === '/api/backup' && method === 'GET') return vault.backup();
+  if (path === '/api/versions' && method === 'GET') return vault.versions(validateName(url.searchParams.get('name')));
+  if (path === '/api/version' && ['GET', 'POST'].includes(method)) {
+    const name = validateName(url.searchParams.get('name')), revision = sourceRevision(url.searchParams.get('revision'));
+    return method === 'GET' ? vault.readVersion(name, revision) : smallResponse(await vault.restore(name, revision, parseRevision(request)));
+  }
+  if (path === '/api/imports' && method === 'POST') return smallResponse(await vault.beginImport(await importManifest(request)));
+  const importing = /^\/api\/imports\/([A-Za-z0-9_-]{43})(?:\/(commit|files\/(.+)))?$/.exec(path);
+  if (importing) {
+    const id = importing[1];
+    if (!importing[2] && method === 'DELETE') return smallResponse(await vault.cancelImport(id));
+    if (importing[2] === 'commit' && method === 'POST') return smallResponse(await vault.commitImport(id));
+    if (importing[3] && method === 'PUT') { checkBody(request); return smallResponse(await vault.stageImport(id, nameFrom(path, `/api/imports/${id}/files/`), parseRevision(request), request.body)); }
+  }
   if (path === '/api/publications' && method === 'GET') return vault.publications();
   if (path.startsWith('/api/files/')) {
     const name = nameFrom(path, '/api/files/');

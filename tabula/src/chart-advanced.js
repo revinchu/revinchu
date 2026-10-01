@@ -1,5 +1,5 @@
 // 계층·표면·보조 원형·거래량 주식형. 값의 집계/보간은 DOM 없이 검증합니다.
-import { formatGeneral } from './format.js';
+import { formatGeneral, formatCode } from './format.js';
 import { chartView3D } from './chart-3d.js';
 
 const finite = (v) => typeof v === 'number' && Number.isFinite(v);
@@ -8,6 +8,7 @@ const xy = (p) => p.map((v) => Number(v.toFixed(3))).join(',');
 const text = (x, y, value, color = '#404040', anchor = 'middle', size = 11) => `<text x="${x.toFixed(2)}" y="${y.toFixed(2)}" text-anchor="${anchor}" font-size="${size}" fill="${esc(color)}">${esc(value)}</text>`;
 const tag = (s, i) => ` data-s="${s?._fi ?? 0}"${i === undefined ? '' : ` data-p="${i}"`}`;
 const short = (v, n = 14) => [...String(v)].slice(0, n).join('') + ([...String(v)].length > n ? '…' : '');
+const formatted = (v, code) => { try { return code ? formatCode(v, code).text : formatGeneral(Number(v.toPrecision(6))); } catch { return formatGeneral(v); } };
 const message = (ctx, s) => ctx.parts.push(text(ctx.plot.x + ctx.plot.w / 2, ctx.plot.y + ctx.plot.h / 2, s, ctx.TXT));
 const domain = (values, cfg = {}, zero = false) => {
   let lo = Infinity, hi = -Infinity;
@@ -167,37 +168,69 @@ export function surfaceGeometry(data, chart = {}) {
   }
   for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
     const a = { x, y, z: matrix[y][x] };
-    for (const [nx, ny] of [[x + 1, y], [x, y + 1]]) if (nx < cols && ny < rows && finite(a.z) && finite(matrix[ny][nx])) mesh.push([a, { x: nx, y: ny, z: matrix[ny][nx] }]);
+    for (const [nx, ny] of [[x + 1, y], [x, y + 1]]) if (nx < cols && ny < rows && finite(a.z) && finite(matrix[ny][nx])) {
+      const b = { x: nx, y: ny, z: matrix[ny][nx] }, dz = b.z - a.z;
+      if (!dz) { if (a.z >= sc.min && a.z <= sc.max) mesh.push([a, b]); continue; }
+      const lo = Math.max(0, Math.min((sc.min - a.z) / dz, (sc.max - a.z) / dz));
+      const hi = Math.min(1, Math.max((sc.min - a.z) / dz, (sc.max - a.z) / dz));
+      if (lo <= hi) mesh.push([lo, hi].map((t) => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + dz * t })));
+    }
   }
   return { rows, cols, levels, faces, lines, mesh, min: sc.min, max: sc.max };
 }
 
 function surfaceLegend(data, chart, pal) {
   const { levels } = surfaceScale(data, chart);
-  return levels.slice(0, -1).map((v, i) => ({ name: `${formatGeneral(Number(v.toPrecision(4)))}–${formatGeneral(Number(levels[i + 1].toPrecision(4)))}`, color: pal[i % pal.length] }));
+  return levels.slice(0, -1).map((v, i) => ({ name: `${formatted(v, chart.axes?.y?.numFmt)}–${formatted(levels[i + 1], chart.axes?.y?.numFmt)}`, color: pal[i % pal.length] }));
+}
+
+/** 표면의 실제 깊이 축을 늘린 뒤 투영합니다. 직각 축은 평행 사투영, 그 외는 회전된 원근 투영입니다. */
+export function surfaceProjector(g, chart = {}) {
+  const v = chartView3D(chart), ay = v.rotY * Math.PI / 180, ax = v.rotX * Math.PI / 180;
+  const depthRatio = v.depthPercent / 100, radius = Math.hypot(.5, depthRatio / 2, .4);
+  const world = (p) => {
+    const x = (chart.axes?.x?.reverse ? 1 - p.x / (g.cols - 1) : p.x / (g.cols - 1)) - .5;
+    const y = (p.y / (g.rows - 1) - .5) * depthRatio;
+    const value = (p.z - g.min) / (g.max - g.min), z = ((chart.axes?.y?.reverse ? 1 - value : value) - .5) * .8;
+    const rx = x * Math.cos(ay) - y * Math.sin(ay), rz = x * Math.sin(ay) + y * Math.cos(ay);
+    return { x, y, z, rx, rz, depth: rz * Math.cos(ax) + z * Math.sin(ax) };
+  };
+  return {
+    project(p) {
+      const q = world(p);
+      if (v.rAngAx) return [q.x - q.y * Math.sin(ay), q.y * Math.cos(ay) * Math.sin(ax) - q.z];
+      // A bounded camera keeps every corner in front even at depth 2000%, perspective 240.
+      const scale = 1 / (1 + q.depth / radius * (v.perspective / 240) * .8);
+      return [q.rx * scale, (q.rz * Math.sin(ax) - q.z * Math.cos(ax)) * scale];
+    },
+    depth(p) { return world(p).depth; },
+  };
 }
 
 function drawSurface(ctx) {
   const { chart, data, parts, plot, pal, TXT, FS } = ctx, g = surfaceGeometry(data, chart);
-  if (g.rows < 2 || g.cols < 2 || !g.mesh.length) return message(ctx, '표면형에는 2행 × 2열 이상의 수치 격자가 필요합니다');
+  if (g.rows < 2 || g.cols < 2) return message(ctx, '표면형에는 2행 × 2열 이상의 수치 격자가 필요합니다');
   const style = chart.surfaceStyle ?? (chart.threeD === false ? 'contour' : 'surface'), flat = /contour/i.test(style), wire = /wireframe/i.test(style);
   const area = { x: plot.x + 44, y: plot.y + 10, w: Math.max(10, plot.w - 76), h: Math.max(10, plot.h - 42) };
-  const v = chartView3D(chart), angle = v.rotY * Math.PI / 180, tilt = Math.max(.15, Math.sin(Math.abs(v.rotX || 25) * Math.PI / 180));
-  const projectRaw = (p) => { const x = p.x / (g.cols - 1) - .5, y = p.y / (g.rows - 1) - .5, z = (p.z - g.min) / (g.max - g.min); return [x * Math.cos(angle) - y * Math.sin(angle), (x * Math.sin(angle) + y * Math.cos(angle)) * tilt - z * .8]; };
+  const projection = surfaceProjector(g, chart), projectRaw = projection.project;
   const corners = []; for (const x of [0, g.cols - 1]) for (const y of [0, g.rows - 1]) for (const z of [g.min, g.max]) corners.push(projectRaw({ x, y, z }));
   const xd = domain(corners.map((p) => p[0])), yd = domain(corners.map((p) => p[1]));
-  const project = flat ? (p) => [area.x + p.x / (g.cols - 1) * area.w, area.y + area.h - p.y / (g.rows - 1) * area.h] : (p) => { const q = projectRaw(p); return [area.x + (q[0] - xd.min) / (xd.max - xd.min) * area.w, area.y + (q[1] - yd.min) / (yd.max - yd.min) * area.h]; };
-  const depth = (p) => (p.x / (g.cols - 1) - .5) * Math.sin(angle) + (p.y / (g.rows - 1) - .5) * Math.cos(angle);
+  const project = flat ? (p) => [area.x + (chart.axes?.x?.reverse ? 1 - p.x / (g.cols - 1) : p.x / (g.cols - 1)) * area.w, area.y + area.h - p.y / (g.rows - 1) * area.h] : (p) => { const q = projectRaw(p); return [area.x + (q[0] - xd.min) / (xd.max - xd.min) * area.w, area.y + (q[1] - yd.min) / (yd.max - yd.min) * area.h]; };
   parts.push(`<g data-surface="${esc(style)}"${flat ? '' : ' data-3d="surface"'}>`);
-  const faceDepth = (f) => f.points.reduce((sum, p) => sum + depth(p), 0) / f.points.length;
-  if (!wire) for (const face of g.faces.sort((a, b) => faceDepth(a) - faceDepth(b))) parts.push(`<polygon points="${face.points.map((p) => xy(project(p))).join(' ')}" fill="${esc(pal[face.band % pal.length])}" stroke="${esc(pal[face.band % pal.length])}" stroke-width="0.4" data-band="${face.band}" data-s="${data.series[face.y]?._fi ?? face.y}" data-p="${face.x}"/>`);
+  const faceDepth = (f) => f.points.reduce((sum, p) => sum + projection.depth(p), 0) / f.points.length;
+  if (!wire) for (const face of g.faces.sort((a, b) => faceDepth(b) - faceDepth(a))) parts.push(`<polygon points="${face.points.map((p) => xy(project(p))).join(' ')}" fill="${esc(pal[face.band % pal.length])}" stroke="${esc(pal[face.band % pal.length])}" stroke-width="0.4" data-band="${face.band}" data-s="${data.series[face.y]?._fi ?? face.y}" data-p="${face.x}"/>`);
   const paths = flat ? g.lines.map((l) => l.points) : wire ? g.mesh : [];
   for (const segment of paths) parts.push(`<path d="M${segment.map((p) => xy(project(p))).join('L')}" fill="none" stroke="${wire ? esc(TXT) : '#ffffff'}" stroke-opacity="${wire ? 1 : .4}" stroke-width="${wire ? 1 : .6}" data-surface-line="${flat ? 'contour' : 'mesh'}"/>`);
   parts.push('</g>');
   const everyX = Math.max(1, Math.ceil(g.cols / 8)), everyY = Math.max(1, Math.ceil(g.rows / 6));
-  data.categories.forEach((c, i) => { if (i % everyX) return; const p = project({ x: i, y: 0, z: g.min }); parts.push(text(p[0], p[1] + 16, short(c, 9), TXT, 'middle', FS.axis)); });
+  if (!chart.axes?.x?.hide) data.categories.forEach((c, i) => { if (i % everyX) return; const p = project({ x: i, y: 0, z: g.min }); parts.push(text(p[0], p[1] + 16, short(c, 9), TXT, 'middle', FS.axis)); });
   data.series.forEach((s, i) => { if (i % everyY) return; const p = project({ x: 0, y: i, z: g.min }); parts.push(text(p[0] - 7, p[1] + 3, short(s.name, 9), TXT, 'end', FS.axis)); });
-  if (!flat) for (let i = 0; i <= 4; i++) { const value = g.min + (g.max - g.min) * i / 4, p = project({ x: 0, y: 0, z: value }); parts.push(text(p[0] - 6, p[1] + 3, formatGeneral(Number(value.toPrecision(4))), TXT, 'end', FS.axis)); }
+  if (!flat && !chart.axes?.y?.hide) {
+    const major = chart.axes?.y?.major, step = finite(major) && major > 0 && (g.max - g.min) / major <= 200 ? major : (g.max - g.min) / 4;
+    for (let i = 0; i <= Math.floor((g.max - g.min) / step + 1e-9); i++) { const value = g.min + step * i, p = project({ x: 0, y: 0, z: value }); parts.push(text(p[0] - 6, p[1] + 3, formatted(value, chart.axes?.y?.numFmt), TXT, 'end', FS.axis)); }
+    if (chart.axes?.y?.title) parts.push(text(plot.x + 4, plot.y + 4, chart.axes.y.title, TXT, 'start', FS.axis));
+  }
+  if (!chart.axes?.x?.hide && chart.axes?.x?.title) parts.push(text(area.x + area.w / 2, plot.y + plot.h, chart.axes.x.title, TXT, 'middle', FS.axis));
 }
 
 export function stockVolumeData(series, chart = {}) {
@@ -209,25 +242,17 @@ export function stockVolumeData(series, chart = {}) {
 export function drawVolumeStock(ctx) {
   const { chart, series, categories, parts, plot, TXT, GRID, FS } = ctx, s = stockVolumeData(series, chart);
   if (!s.valid) return message(ctx, chart.ohlc ? '거래량·시가·고가·저가·종가 순서의 5개 계열이 필요합니다' : '거래량·고가·저가·종가 순서의 4개 계열이 필요합니다');
-  const area = { x: plot.x + 50, y: plot.y + 8, w: Math.max(10, plot.w - 110), h: Math.max(10, plot.h - 34) }, band = area.w / Math.max(1, categories.length);
-  const vd = domain(s.volume.values, chart.axes?.y, true), pd = domain([...(s.open?.values ?? []), ...s.high.values, ...s.low.values, ...s.close.values], chart.axes?.y2);
-  const Y = (v, d, reverse) => area.y + area.h * (reverse ? (v - d.min) / (d.max - d.min) : 1 - (v - d.min) / (d.max - d.min));
-  const V = (v) => Y(v, vd, chart.axes?.y?.reverse), P = (v) => Y(v, pd, chart.axes?.y2?.reverse);
-  for (let i = 0; i <= 4; i++) {
-    const vv = vd.min + (vd.max - vd.min) * i / 4, pv = pd.min + (pd.max - pd.min) * i / 4, y = V(vv);
-    if (chart.gridY !== false) parts.push(`<line x1="${area.x}" y1="${y}" x2="${area.x + area.w}" y2="${y}" stroke="${esc(GRID)}"/>`);
-    if (!chart.axes?.y?.hide) parts.push(text(area.x - 5, y + 4, formatGeneral(Number(vv.toPrecision(4))), TXT, 'end', FS.axis));
-    if (!chart.axes?.y2?.hide) parts.push(text(area.x + area.w + 5, P(pv) + 4, formatGeneral(Number(pv.toPrecision(4))), TXT, 'start', FS.axis));
-  }
+  const prices = [...(s.open?.values ?? []), ...s.high.values, ...s.low.values, ...s.close.values];
+  const { pos: V, pos2: P, mid, band, base, clip } = ctx.cartesian(s.volume.values, { cats: categories, code: s.volume.numFmt, secondary: { values: prices, code: s.close.numFmt } });
+  parts.push(`<g data-plot="volumeStock"${clip}>`);
   categories.forEach((c, i) => {
-    const x = area.x + band * (i + .5), volume = s.volume.values[i], hi = s.high.values[i], lo = s.low.values[i], close = s.close.values[i], open = s.open?.values[i];
-    if (finite(volume) && volume >= 0) { const base = V(Math.max(vd.min, Math.min(0, vd.max))), y = V(volume); parts.push(`<rect x="${x - band * .3}" y="${Math.min(y, base)}" width="${band * .6}" height="${Math.abs(base - y)}" fill="${esc(s.volume.color ?? '#4472c4')}" fill-opacity="0.42" data-stock="volume"${tag(s.volume, i)}/>`); }
+    const x = mid(i), volume = s.volume.values[i], hi = s.high.values[i], lo = s.low.values[i], close = s.close.values[i], open = s.open?.values[i];
+    if (finite(volume) && volume >= 0) { const y = V(volume); parts.push(`<rect x="${x - band * .3}" y="${Math.min(y, base)}" width="${band * .6}" height="${Math.abs(base - y)}" fill="${esc(s.volume.color ?? '#4472c4')}" fill-opacity="0.42" data-stock="volume"${tag(s.volume, i)}/>`); }
     if (finite(hi) && finite(lo)) parts.push(`<line x1="${x}" y1="${P(hi)}" x2="${x}" y2="${P(lo)}" stroke="${esc(TXT)}" data-stock="highLow"${tag(s.high, i)}/>`);
     if (s.ohlc && finite(open) && finite(close)) { const w = Math.min(16, band * .45), y1 = P(open), y2 = P(close); parts.push(`<rect x="${x - w / 2}" y="${Math.min(y1, y2)}" width="${w}" height="${Math.max(1, Math.abs(y1 - y2))}" fill="${esc(close >= open ? chart.upColor ?? '#fff' : chart.downColor ?? '#404040')}" stroke="${esc(TXT)}" data-stock="openClose"${tag(s.close, i)}/>`); }
     else if (finite(close)) parts.push(`<line x1="${x}" y1="${P(close)}" x2="${x + Math.min(8, band * .3)}" y2="${P(close)}" stroke="${esc(TXT)}" stroke-width="2" data-stock="close"${tag(s.close, i)}/>`);
-    if (i % Math.max(1, Math.ceil(categories.length / 10)) === 0) parts.push(text(x, area.y + area.h + 17, short(c, 8), TXT, 'middle', FS.axis));
   });
-  parts.push(text(area.x, area.y - 2, chart.axes?.y?.title ?? s.volume.name ?? '거래량', TXT, 'start', 10), text(area.x + area.w, area.y - 2, chart.axes?.y2?.title ?? '가격', TXT, 'end', 10));
+  parts.push('</g>');
 }
 
 export const ADVANCED_CHARTS = {

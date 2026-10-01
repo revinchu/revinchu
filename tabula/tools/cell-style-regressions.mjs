@@ -50,11 +50,11 @@ try {
   await page.evaluate((patch) => {
     const w = window.tabula.wb();
     w.transact(() => {
-      w.setCellData(0, 2, 0, { raw: '=1+1', cached: 42, style: { ...patch, color: '#cc00cc' } }); w.sheets[0].fileValues = true; w.invalidate(0);
       w.setLineStyle(0, 'col', 2, patch); w.setLineStyle(0, 'row', 5, patch);
       w.setSheetProp(0, 'blocks', [{ r0: 10, c0: 4, n: 2, cols: [{ num: new Float64Array([11, 12]), str: null, dict: [], fmt: patch }] }]);
     });
-    const data = w.serialize(); data.sheets[0].fileValues = true; data.sheets[0].cells['2,0'].cached = 42; w.restore(data);
+    // 실제 가져오기처럼 clean 파일 저장값을 주입합니다. 입력 무효화로 stale 표시한 캐시는 별도 신뢰성 회귀 대상입니다.
+    const data = w.serialize(); data.sheets[0].fileValues = true; data.sheets[0].cells['2,0'] = { raw: '=1+1', cached: 42, style: { ...patch, color: '#cc00cc' } }; w.restore(data);
   }, fixturePatch);
   assert.equal(await page.evaluate(() => window.tabula.wb().getValue(0, 2, 0)), 42);
   await context('본문', '수정...'); await dialog('스타일 수정').getByLabel('스타일 이름', { exact: true }).fill('본문 수정');

@@ -27,6 +27,7 @@ node $wrangler dev --local --ip 127.0.0.1 --port 8787 --persist-to ..\.local\sta
 다른 터미널에서:
 ~~~powershell
 node cloudflare/integration.mjs
+node cloudflare/recovery-integration.mjs # 로컬 전용: 버전 기록/복원·백업 원자 복원·충돌·정리
 node cloudflare/limits-integration.mjs  # 선택: 20MiB 저장/다운로드와 1바이트 초과 413
 ~~~
 
@@ -38,7 +39,11 @@ macOS/Linux에서도 node 명령은 동일하며 Wrangler 경로와 환경 변�
 
 backend.test.js는 실제 SQLite와 합성 스트림으로 JSON 문법·UTF-8·청크 경계·CAS·원자성·동시 저장·버전 재사용 방지·용량 제한·백업 스냅숏·URL/리디렉션/응답 제한을 검사합니다. integration.mjs는 로컬 workerd의 실제 Durable Object와 HTTP 응답을 확인합니다. 런타임에 해당하는 환경 타입은 Wrangler가 생성한 worker-configuration.d.ts이며, 전체 런타임 타입을 복사하거나 앱에 @types/node를 추가하지 않습니다.
 
-문서 업로드는 총 30초 제한입니다. 문서와 백업 출력은 ReadableStream으로 전달해 큰 파일을 RPC 값으로 한꺼번에 복제하지 않습니다. 조회 중인 이전 리비전 청크는 해당 스트림이 끝날 때 정리합니다. 인스턴스를 다시 열면 미완료 업로드 청크와 이미 교체된 리비전을 정리합니다.
+문서 업로드는 총 30초 제한입니다. 문서와 백업 출력은 ReadableStream으로 전달해 큰 파일을 RPC 값으로 한꺼번에 복제하지 않습니다. 과거 버전은 문서당20개/보관함100MiB 범위에서 보존하며, 보존 대상에서 빠진 청크도 조회 중이면 스트림 완료·취소 후 정리합니다. 인스턴스를 다시 열면 일반 미완료 업로드와 현재·과거 어느 쪽에서도 참조하지 않는 청크만 정리합니다.
+
+백업 복원은 작은 manifest, 문서별 임시 업로드, 최종 원자 commit의 세 단계입니다. 서버가 보관함 전체 JSON을 메모리 객체로 펼치지 않습니다. 현재 문서100MiB와 과거본100MiB 외에 복원 준비용100MiB가 최대30분간 필요할 수 있습니다. SDK는 사용자가 선택한 이름의 교체만 수행하며, 새 연결로 전환되면 다음 업로드를 중단합니다. Node 서버는 capabilities가 없으므로 명확히 미지원으로 안내합니다. API·용량·삭제·결과 불확실 정책은 [API 계약](API_CONTRACT.md#온라인-버전-기록과-복원)을 참고하세요.
+
+recovery-integration.mjs는 localhost/127.0.0.1만 허용하며 합성 보관함을 만들고 실제 HTTP로 과거본·If-Match 복원·잘못된 JSON·중간 충돌·여러 문서의 commit·백업을 확인한 뒤 해당 합성 문서와 과거본을 삭제합니다. backend.test.js에는 구 스키마의 추가 마이그레이션, 재시작, 읽기 스트림 유지/취소, 한도별 정리, 두 번째 문서 SQL 실패의 전체 롤백도 포함합니다. 공개 서버나 사용자 데이터의 검증 결과를 뜻하지 않습니다.
 
 미존재 보관함·게시물의 읽기는 DDL을 실행하지 않습니다. 로컬 workerd는 그 조회에도 자체 SQLite/메타데이터 파일을 만들 수 있습니다. 플랫폼 내부 기록, 요청 실행과 SQL 읽기의 비용이 0이라고 보장하지 않습니다.
 

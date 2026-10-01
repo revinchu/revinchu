@@ -26,3 +26,19 @@ export function pictureTransform(picture) {
 export function resetPictureFormatting() {
   return { crop: undefined, rot: undefined, flip: undefined, flipV: undefined, border: undefined, borderW: undefined, radius: undefined, shadow: undefined, opacity: undefined };
 }
+
+// DrawingML과 화면이 같은 단위(px, 0..1 투명도)를 사용합니다.
+export function pictureEffects(picture) {
+  const opacity = bound(finite(picture.opacity, 1), 0, 1);
+  const radius = bound(finite(picture.radius), 0, Math.min(Math.max(0, finite(picture.w)), Math.max(0, finite(picture.h))) / 2);
+  const raw = picture.shadow;
+  const s = raw && typeof raw === 'object' ? raw : {};
+  const shadow = raw ? { dx: bound(finite(s.dx, 3), -1000, 1000), dy: bound(finite(s.dy, 3), -1000, 1000), blur: bound(finite(s.blur, 8), 0, 1000), color: /^#[0-9a-f]{6}$/i.test(s.color ?? '') ? s.color : '#000000', opacity: bound(finite(s.opacity, .4), 0, 1) } : undefined;
+  return { opacity, radius, shadow };
+}
+export function pictureShadowStyle(picture, scale = 1) {
+  const s = pictureEffects(picture).shadow;
+  if (!s) return '';
+  const c = s.color.slice(1), rgb = [0, 2, 4].map(i => parseInt(c.slice(i, i + 2), 16)).join(',');
+  return `${s.dx * scale}px ${s.dy * scale}px ${s.blur * scale}px rgba(${rgb},${s.opacity})`;
+}

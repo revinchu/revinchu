@@ -202,3 +202,43 @@ Select-String -LiteralPath D:\Codex\Temp\wixel-regression\before.txt, D:\Codex\T
 ## 차트·그림·필터·설정 확장 검사
 
 `chart-upgrade-ux.mjs`, `chart-map.mjs`, `picture-ux.mjs`, `interaction-ux.mjs`, `settings-ux.mjs`는 위 Playwright 설정과 `WIXEL_URL`을 사용합니다. 합성 데이터만 생성하며 쓰기 API를 차단합니다. `chart-ui.mjs`의 기존 콤보 회귀도 함께 실행하세요. 실행 결과와 검증 제한은 [15_Excel_UI확장검증.md](../docs/codex/15_Excel_UI확장검증.md)에 기록합니다. `update-map-data.mjs`는 검사 명령이 아니라 지도 공개 데이터의 재생성 도구이며 [16번 문서](../docs/codex/16_지도데이터.md)의 고정 버전·출처를 사용합니다.
+
+
+## 실제 Excel와 복구·계산·접근성 회귀
+
+합성 파일만 사용하는 Windows Excel 검증(Excel 설치 필요):
+
+```powershell
+node tools/excel-fixtures.mjs D:/Codex/Temp/wixel-production-excel
+& tools/excel-interop.ps1 -FixtureRoot D:/Codex/Temp/wixel-production-excel
+node tools/excel-roundtrip.mjs D:/Codex/Temp/wixel-production-excel
+```
+
+일반 열기에 실패한 파일을 복구하여 통과시키지 않습니다. 생성기 목록의 합성 XLSX만 읽고 별도 `excel-saved` 폴더에 저장합니다. 사용자 Excel 세션을 닫거나 업무 파일을 수정하지 않습니다.
+
+추가 브라우저 검사: `calculation-trust-ux.mjs`(저장값/오류 표시·Undo), `picture-ux.mjs`(효과 포함), `grid-a11y.mjs`(Chromium 접근성 트리), `performance-regression.mjs`(합성 문서/CPU 제한/자료 보존).
+성능 수치는 장치·자동 저장·브라우저 설정에 따라 달라지며 제품 전체의 점수나 SLA가 아닙니다.
+
+로컬 Cloudflare workerd 복구 검사:
+
+```powershell
+$env:WIXEL_WORKER_URL='http://127.0.0.1:8787'
+node cloudflare/recovery-integration.mjs
+node tools/recovery-ux.mjs
+```
+
+두 도구는 localhost를 확인하고 별도 무작위 보관함을 사용하며 종료 시 합성 문서와 이력을 삭제합니다. 공개 배포 주소나 실제 보관함 키를 넣지 마세요.
+결과 및 범위는 [신뢰성 검증 문서](../docs/codex/17_신뢰성_복구_실제Excel검증.md)를 참조하세요.
+
+### 후속 신뢰성 회귀
+
+- `node tools/excel-chart-gallery.mjs D:/Codex/Temp/wixel-gallery-excel`: 61종 합성 차트 생성. `excel-interop.ps1 -FixtureRoot`로 실제 Excel을 거친 뒤 `--verify D:/Codex/Temp/wixel-gallery-excel/excel-saved`로 다시 비교합니다.
+- `node tools/date-system.mjs`: 1900/1904 문서의 표시·입력·파일 저장·Undo.
+- `node tools/pivot-reliability.mjs`: 외부 시트 원본 수식 변경과 자동 새로 고침·Undo.
+- `node tools/storage-atomic.mjs`: 분리된 브라우저 컨텍스트의 실제 IndexedDB에 고장을 주입하여 이전 대용량 저장본 보존을 검사합니다. 사용자 탭의 저장소를 사용하지 않습니다.
+
+- `node tools/library-atomic.mjs`: loopback 소스 서버 전용, 두 탭과 실제 IndexedDB의 문서·이력·목록 동시성/고장 주입.
+- `node tools/library-recovery.mjs`: 초기 복원 후 충돌 사본·원본 재열기·실패 후 재시도·저장 중 편집의 화면 흐름.
+- `tools/ui-regressions.mjs`, `tools/wixel3-ui.mjs`는 내부 모듈을 직접 가져오는 항목이 있으므로 소스 서버에서 실행합니다. 배포본 검사는 `keys`, `keytips`, `chart-upgrade-ux`, `picture-ux`, `recovery-ux` 등 번들 호환 도구를 사용합니다.
+
+- `node tools/excel-pivot-fixtures.mjs D:/Codex/Temp/wixel-pivot-excel`: 합성 피벗 8종 생성. `excel-interop.ps1 -FixtureRoot`는 Excel 새로 고침과 29개 기대값을 검사합니다. 이후 `--verify D:/Codex/Temp/wixel-pivot-excel/excel-saved`로 WIXEL 재읽기 비교합니다.

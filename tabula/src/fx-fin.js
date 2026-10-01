@@ -1,7 +1,7 @@
 // 재무 · 공학 · 데이터베이스 함수 (DOM 없음)
 import {
   ERR, Range, isError, scalar, toNum, toStr, toInt, optNum, optInt, optBool, checkNum, collectNums, asRange,
-  lift, makeCriteria, toDate, serialToDate, dateToSerial,
+  lift, makeCriteria, toDate, serialToDate, dateToSerial, dateSystemFunction,
 } from './fxcore.js';
 import { STAT } from './fx-stat.js';
 import { MATH } from './fx-math.js';
@@ -612,3 +612,7 @@ FIN.DCOUNTA = ([db, field, crit]) => {
 };
 for (const [k, fn] of Object.entries(SCALAR)) FIN[k] = lift(fn);
 
+
+for (const k of ['TBILLPRICE', 'TBILLYIELD', 'TBILLEQ', 'DISC', 'INTRATE', 'RECEIVED', 'PRICEDISC', 'YIELDDISC', 'ACCRINTM', 'PRICE', 'YIELD', 'DURATION', 'MDURATION', 'COUPNUM', 'COUPPCD', 'COUPNCD', 'COUPDAYS', 'COUPDAYBS', 'COUPDAYSNC']) FIN[k] = dateSystemFunction(FIN[k], [0, 1], k === 'COUPPCD' || k === 'COUPNCD' ? 'signed' : false);
+FIN.XNPV = dateSystemFunction(FIN.XNPV, [2]);
+FIN.XIRR = dateSystemFunction(FIN.XIRR, [1]);

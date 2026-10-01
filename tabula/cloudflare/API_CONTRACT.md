@@ -6,7 +6,7 @@
 
 브라우저가 crypto.getRandomValues로 32바이트 복구키를 만들고 padding 없는 base64url 43자로 보관합니다. 개인 요청은 X-Wixel-Vault 헤더로 전달합니다. 서버는 SHA-256 해시를 DO 이름과 게시물 소유자 식별자로 사용합니다. 원문 키를 DB/로그/URL에 저장하지 않습니다. 복구키는 암호와 같은 전체 접근 권한입니다. 키를 잃으면 복구할 수 없으며 서비스 운영자나 이메일 인증으로 재설정하는 기능은 없습니다. 브라우저 저장소에 보관한 키와 문서는 같은 Origin의 스크립트가 읽을 수 있습니다. 서버 저장은 종단간 암호화가 아닙니다.
 
-GET /api/health는 인증 없이 {ok:true,auth:false,vault:true,publish:true,maxDocumentBytes,maxVaultBytes,maxDocuments,maxPublications,maxProxyBytes}를 반환합니다. auth:false는 기존 단일 TABULA_TOKEN이 없다는 뜻이며 개인 API에는 반드시 복구키가 필요합니다. 키가 없거나 형식이 틀리면 401/VAULT_KEY_REQUIRED입니다.
+GET /api/health는 인증 없이 {ok:true,auth:false,vault:true,publish:true,versionHistory:true,backupImport:true,maxDocumentBytes,maxVaultBytes,maxDocuments,maxPublications,maxProxyBytes,maxVersions,maxHistoryBytes,importTimeoutMs}를 반환합니다. auth:false는 기존 단일 TABULA_TOKEN이 없다는 뜻이며 개인 API에는 반드시 복구키가 필요합니다. 키가 없거나 형식이 틀리면 401/VAULT_KEY_REQUIRED입니다. Node 서버와 이전 서버에 versionHistory/backupImport가 없으면 클라이언트는 해당 기능을 지원하지 않는다고 안내합니다.
 
 | 경로 | 요청 | 응답 |
 | --- | --- | --- |
@@ -22,7 +22,38 @@ name은 URL 구성 시 encodeURIComponent로 인코딩합니다. 앞뒤 공백�
 
 동시 업로드는 보관함당 1개로 제한하며 겹치면 429/UPLOAD_BUSY입니다. 오류 응답은 {error:"한국어 설명",code,...추가값}입니다. 429는 Retry-After: 60을 포함합니다. 저장은 완전한 UTF-8 JSON을 검증하고 완료 시 CAS와 SQLite 트랜잭션으로 원자적으로 교체합니다. 잘못된 JSON, 중단된 업로드와 충돌은 기존 문서를 바꾸지 않습니다.
 
-개인 문서는 최대 50개, 문서 하나 20MiB, 합계 100MiB입니다. DB에는 1MiB 청크로 저장합니다. 제한을 넘으면 413입니다. JSON 문법 깊이는 128단계, 값 개수는 300만 개로 제한합니다. 백업 형식은 {"format":"wixel-vault-backup","version":1,"exportedAt":"ISO 날짜","documents":[{"name","revision","modified","data":문서JSON}]}입니다. 이 API는 다운로드만 지원하며 일괄 복원 엔드포인트는 없습니다.
+개인 문서는 최대 50개, 문서 하나 20MiB, 현재 문서 합계 100MiB입니다. DB에는 1MiB 청크로 저장합니다. 제한을 넘으면 413입니다. JSON 문법 깊이는 128단계, 값 개수는 300만 개로 제한합니다. 백업 형식은 {"format":"wixel-vault-backup","version":1,"exportedAt":"ISO 날짜","documents":[{"name","revision","modified","data":문서JSON}]}입니다. 백업은 현재 개인 문서만 포함하며 과거 버전·게시물·복구키는 포함하지 않습니다.
+
+## 온라인 버전 기록과 복원
+
+| 경로 | 요청 | 응답 |
+| --- | --- | --- |
+| GET /api/versions?name=:name | 복구키 | {currentRevision,versions:[{revision,modified,size}],maxVersions,maxHistoryBytes} |
+| GET /api/version?name=:name&revision=:revision | 복구키 | 해당 과거 문서 JSON, ETag/X-Wixel-Revision/X-Modified |
+| POST /api/version?name=:name&revision=:revision | 복구키, 현재 문서의 If-Match | {ok,name,revision,modified,size} |
+
+이름은 encodeURIComponent로 구성합니다. 목록은 과거본만 최신순이며, 현재 버전은 currentRevision입니다. 복원은 현재 문서를 과거 이력에 남기고 선택한 내용을 **새로운 revision**으로 저장합니다. 오래된 If-Match는 412이며 원문을 바꾸지 않습니다. 삭제하거나 정리된 과거본은 404/VERSION_NOT_FOUND입니다.
+
+과거본은 문서당 최대 20개, 보관함 전체 100MiB의 별도 한도로 보관합니다. 최신 버전부터 문서별 개수와 전체 잔여 용량을 만족하는 항목을 남깁니다. 따라서 큰 문서는 20개보다 적게 보존될 수 있습니다. 현재 문서 100MiB와 합하면 보존 데이터는 최대 200MiB이며, 진행 중 읽기가 붙잡은 이전 청크와 업로드 임시 청크는 추가로 잠시 존재할 수 있습니다. 현재 문서 삭제는 그 문서의 모든 과거본도 삭제합니다. 휴지통 기능이 아닙니다. 읽기 중인 청크는 완료/취소 후 지워집니다. 공개 게시물에는 과거본을 남기지 않습니다.
+
+기존 DB에는 versions/imports/import_items/import_chunks 테이블을 CREATE TABLE IF NOT EXISTS로 추가합니다. 기존 현재 문서와 revision을 변환하지 않습니다. 도입 전에 이미 삭제된 과거본을 복구할 수는 없습니다. 재시작 시 현재 또는 이력에 연결된 청크는 보존하고, 일반 업로드의 미완료 staging과 참조되지 않는 청크만 청소합니다.
+
+## 백업의 원자적 일괄 복원
+
+브라우저의 server.importBackup(backup,{overwrite,expectedRevisions,signal,onProgress})가 다음 순서를 처리합니다. overwrite 기본값은 false입니다. true는 사용자가 기존 이름의 교체를 명시적으로 선택한 경우만 사용하고, expectedRevisions에는 확인 화면에서 조회한 server.list() 결과를 전달합니다. **백업 안 revision은 대상 보관함의 권한이나 현재 버전으로 사용하지 않습니다.** 선택한 문서만 추가/교체하며 백업에 없는 현재 문서는 유지합니다.
+
+| 경로 | 요청 | 응답 |
+| --- | --- | --- |
+| POST /api/imports | 복구키, application/json manifest | 201 {id,expires,documents:개수} |
+| PUT /api/imports/:id/files/:name | 복구키, application/json 문서 원문, manifest와 같은 If-Match | {ok,name,size} |
+| POST /api/imports/:id/commit | 복구키 | {ok,documents:[{name,revision,modified,size}]} |
+| DELETE /api/imports/:id | 복구키 | {ok:true} |
+
+manifest는 {format:"wixel-vault-backup",version:1,mode:"create" 또는 "replace",documents:[{name,expectedRevision}]}이며 32KiB/10초로 제한합니다. 문서는 1~50개, 정규화한 이름은 중복할 수 없습니다. create의 expectedRevision은 전부 0이어야 하므로 기존 이름을 덮어쓰지 않습니다. replace도 새 이름은 0, 기존 이름은 조회한 현재 revision이어야 합니다.
+
+각 문서는 기존 저장과 같은 UTF-8·JSON 깊이/복잡도·20MiB·30초 검증을 거쳐 1MiB 청크로 임시 저장합니다. 임시 문서 합계는 100MiB입니다. 일부만 전송한 상태의 commit은 409/IMPORT_INCOMPLETE입니다. 모든 문서의 CAS와 최종 개수·용량을 다시 확인하고, 하나의 SQLite transactionSync 안에서 전체를 반영합니다. JSON 오류, 중단, 충돌, 용량 초과, SQL 오류는 현재 문서를 일부만 바꾸지 않습니다. 전송 완료된 상태는 DO 재시작 후에도 유지됩니다.
+
+보관함별 준비 세션은 한 개이며 30분 후 만료됩니다. DO alarm 또는 다음 접근/재시작에서 만료 데이터를 청소합니다. 취소하면 준비 청크만 지웁니다. SDK는 실패 시 취소를 시도합니다. 최종 commit 뒤 통신이 끊기면 성공 여부가 불확실할 수 있으므로 IMPORT_RESULT_UNKNOWN을 안내하고 자동 재실행하지 않습니다. 현재 온라인 목록을 다시 확인해야 합니다. import ID는 같은 보관함에서만 사용할 수 있으며 URL에 복구키를 넣지 않습니다.
 
 ## 명시적 읽기 전용 게시
 

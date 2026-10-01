@@ -47,7 +47,7 @@ function operand(wb, si, rule, text, r, c) {
       return null;
     }
   }
-  return parseInput(t).value;
+  return parseInput(t, wb.date1904).value;
 }
 
 function compare(op, v, a, b) {
@@ -77,7 +77,7 @@ export function listItems(wb, si, rule) {
     const out = [];
     for (let r = rg.r1; r <= Math.min(rg.r2, rg.r1 + 5000); r++) {
       for (let c = rg.c1; c <= Math.min(rg.c2, rg.c1 + 100); c++) {
-        const t = formatValue(wb.getValue(s, r, c), wb.styleAt(s, r, c)).text;
+        const t = formatValue(wb.getValue(s, r, c), wb.styleAt(s, r, c), wb.date1904).text;
         if (t !== '' && !out.includes(t)) out.push(t);
       }
     }
@@ -97,7 +97,7 @@ export function checkValidation(wb, si, rule, r, c, text) {
   const blank = text === '' || text === null || text === undefined;
   if (blank) return rule.allowBlank !== false;
   if (String(text).startsWith('=')) return true; // 수식은 입력 시 검사하지 않음
-  const value = parseInput(String(text)).value;
+  const value = parseInput(String(text), wb.date1904).value;
   switch (rule.type) {
     case 'list': {
       const items = listItems(wb, si, rule);
@@ -178,7 +178,7 @@ export function invalidCells(wb, si, limit = 2000) {
     const rule = validationAt(sheet, r, c);
     if (!rule || rule.type === 'any') continue;
     const v = wb.getValue(si, r, c);
-    const text = cell.raw.startsWith('=') ? (typeof v === 'number' || typeof v === 'boolean' ? String(v) : formatValue(v, null).text) : cell.raw.replace(/^'/, '');
+    const text = cell.raw.startsWith('=') ? (typeof v === 'number' || typeof v === 'boolean' ? String(v) : formatValue(v, null, wb.date1904).text) : cell.raw.replace(/^'/, '');
     if (!checkValidation(wb, si, rule, r, c, text)) out.push({ r, c });
     if (out.length >= limit) break;
   }

@@ -1,5 +1,5 @@
 import { el } from './ui.js';
-import { resizePicture, setPictureCrop, pictureCropStyle, pictureTransform, resetPictureFormatting } from './picture.js';
+import { resizePicture, setPictureCrop, pictureCropStyle, pictureTransform, resetPictureFormatting, pictureEffects, pictureShadowStyle } from './picture.js';
 
 // 모달 안의 초안만 변경합니다. 확인 전에는 통합 문서와 실행 취소 기록을 건드리지 않습니다.
 export function pictureEditor(original) {
@@ -14,15 +14,20 @@ export function pictureEditor(original) {
     const bw = Math.abs(draft.w * Math.cos(angle)) + Math.abs(draft.h * Math.sin(angle));
     const bh = Math.abs(draft.w * Math.sin(angle)) + Math.abs(draft.h * Math.cos(angle));
     const k = Math.min(1, 260 / Math.max(4, bw), 210 / Math.max(4, bh));
-    Object.assign(frame.style, { width: `${draft.w * k}px`, height: `${draft.h * k}px`, transform: pictureTransform(draft), border: draft.border ? `${(draft.borderW ?? 2) * k}px solid ${draft.border}` : '', borderRadius: draft.radius ? `${draft.radius * k}px` : '', opacity: draft.opacity ?? 1, boxShadow: draft.shadow ? '3px 3px 8px #0006' : '' });
+    Object.assign(frame.style, { width: `${draft.w * k}px`, height: `${draft.h * k}px`, transform: pictureTransform(draft), border: draft.border ? `${(draft.borderW ?? 2) * k}px solid ${draft.border}` : '', borderRadius: draft.radius ? `${draft.radius * k}px` : '', opacity: draft.opacity ?? 1, boxShadow: pictureShadowStyle(draft, k) });
     Object.assign(previewImage.style, pictureCropStyle(draft.crop)); previewImage.alt = draft.alt ?? draft.name ?? '';
     caption.textContent = `${draft.w} × ${draft.h}px · 회전 ${draft.rot ?? 0}°`;
   };
   const sync = () => {
     for (const [key, input] of Object.entries(fields)) {
       if (key.startsWith('crop.')) input.value = Math.round((draft.crop?.[key.slice(5)] ?? 0) * 100000) / 1000;
+      else if (key === 'transparency') input.value = Math.round((1 - pictureEffects(draft).opacity) * 100);
+      else if (key === 'shadow.opacity') input.value = Math.round((1 - pictureEffects({ ...draft, shadow: draft.shadow || true }).shadow.opacity) * 100);
+      else if (key.startsWith('shadow.')) input.value = (pictureEffects({ ...draft, shadow: draft.shadow || true }).shadow)[key.slice(7)];
+      else if (key === 'borderColor') input.value = draft.border ?? '#000000';
+      else if (key === 'borderEnabled') input.checked = !!draft.border;
       else if (input.type === 'checkbox') input.checked = !!draft[key];
-      else input.value = draft[key] ?? (key === 'placement' ? 'twoCell' : key === 'rot' ? 0 : '');
+      else input.value = draft[key] ?? ({ placement: 'twoCell', rot: 0, radius: 0, borderW: 2 }[key] ?? '');
     }
     refresh();
   };
@@ -64,7 +69,28 @@ export function pictureEditor(original) {
     ...[['l', '왼쪽 자르기(%)'], ['r', '오른쪽 자르기(%)'], ['t', '위쪽 자르기(%)'], ['b', '아래쪽 자르기(%)']].map(([side, label]) => num('crop.' + side, label, (draft.crop?.[side] ?? 0) * 100, -1000, 99, n => {
       draft.crop = setPictureCrop(draft.crop, side, n); fields['crop.' + side].value = Math.round(draft.crop[side] * 100000) / 1000;
     })), el('button', { type: 'button', class: 'btn', onclick: () => { draft.crop = undefined; sync(); } }, '자르기 초기화'));
-  const body = el('div', { class: 'picture-editor' }, preview, el('div', { class: 'picture-settings' }, size, rotation, original.linked ? null : crop,
+  const borderEnabled = fields.borderEnabled = el('input', { type: 'checkbox', 'aria-label': '그림 테두리', checked: !!draft.border });
+  const borderColor = fields.borderColor = el('input', { type: 'color', 'aria-label': '그림 테두리 색', value: draft.border ?? '#000000' });
+  borderEnabled.addEventListener('change', () => { draft.border = borderEnabled.checked ? borderColor.value : undefined; refresh(); });
+  borderColor.addEventListener('input', () => { draft.border = borderColor.value; borderEnabled.checked = true; refresh(); });
+  const shadow = pictureEffects({ ...draft, shadow: draft.shadow || true }).shadow;
+  const updateShadow = (key, value) => { draft.shadow = { ...pictureEffects({ ...draft, shadow: draft.shadow || true }).shadow, [key]: value }; fields.shadow.checked = true; refresh(); };
+  const shadowColor = fields['shadow.color'] = el('input', { type: 'color', 'aria-label': '그림자 색', value: shadow.color });
+  shadowColor.addEventListener('input', () => updateShadow('color', shadowColor.value));
+  const effects = section('그림 서식',
+    num('transparency', '그림 투명도(%)', (1 - pictureEffects(draft).opacity) * 100, 0, 100, n => { draft.opacity = 1 - n / 100; }),
+    num('radius', '둥근 모서리(px)', draft.radius ?? 0, 0, 10000, n => { draft.radius = pictureEffects({ ...draft, radius: n }).radius; fields.radius.value = draft.radius; }),
+    row('그림 테두리', borderEnabled), row('그림 테두리 색', borderColor), num('borderW', '그림 테두리 두께(px)', draft.borderW ?? 2, 0, 100),
+    check('shadow', '그림자 표시'), row('그림자 색', shadowColor),
+    num('shadow.opacity', '그림자 투명도(%)', (1 - shadow.opacity) * 100, 0, 100, n => updateShadow('opacity', 1 - n / 100)),
+    num('shadow.blur', '그림자 흐리게(px)', shadow.blur, 0, 1000, n => updateShadow('blur', n)),
+    num('shadow.dx', '그림자 가로 거리(px)', shadow.dx, -1000, 1000, n => updateShadow('dx', n)),
+    num('shadow.dy', '그림자 세로 거리(px)', shadow.dy, -1000, 1000, n => updateShadow('dy', n)));
+  // 표시를 껐다 다시 켜도 방금 조정한 그림자 값을 보존합니다.
+  fields.shadow.addEventListener('change', () => {
+    if (fields.shadow.checked) draft.shadow = { color: shadowColor.value, ...Object.fromEntries(['opacity', 'blur', 'dx', 'dy'].map(k => [k, k === 'opacity' ? 1 - Number(fields['shadow.' + k].value) / 100 : Number(fields['shadow.' + k].value)])) }; refresh();
+  });
+  const body = el('div', { class: 'picture-editor' }, preview, el('div', { class: 'picture-settings' }, size, rotation, original.linked ? null : crop, effects,
     section('대체 텍스트', text('alt', '그림 설명', true)),
     el('button', { type: 'button', class: 'btn', onclick: () => { Object.assign(draft, resetPictureFormatting()); sync(); } }, '그림 서식 원래대로')));
   refresh();

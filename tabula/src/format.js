@@ -56,7 +56,8 @@ function fixed(n, decimals, thousands) {
 function pad(n, w = 2) { return String(n).padStart(w, '0'); }
 
 /** 날짜 → 일련번호 (엑셀 1900 체계: 1900-03-01 앞은 하루 당김, 1900-01-01 = 1) */
-export function serialOf(y, m, d) {
+export function serialOf(y, m, d, date1904 = false) {
+  if (date1904) return (Date.UTC(y, m - 1, d) - Date.UTC(1904, 0, 1)) / DAY_MS;
   const s = (Date.UTC(y, m - 1, d) - EPOCH) / DAY_MS;
   return s >= 1 && s < 61 ? s - 1 : s;
 }
@@ -65,7 +66,11 @@ export function serialOf(y, m, d) {
  * 일련번호 → 날짜 부분. 엑셀 1900 날짜 체계: 0 = 1900-01-00, 1 = 1900-01-01, 60 = 1900-02-29(없는 날),
  * 61 부터 실제 날짜. 요일도 엑셀처럼 1 = 일요일 기준 (step: 반올림 단위 ms)
  */
-export function dateParts(serial, step = 1) {
+export function dateParts(serial, step = 1, date1904 = false) {
+  if (date1904) {
+    const d = new Date(Date.UTC(1904, 0, 1) + Math.round(serial * DAY_MS / step) * step);
+    return { y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate(), hh: d.getUTCHours(), mm: d.getUTCMinutes(), ss: d.getUTCSeconds(), dow: d.getUTCDay() };
+  }
   const ms = Math.round(serial * DAY_MS / step) * step;
   const day = Math.floor(ms / DAY_MS);
   const dow = (((day + 6) % 7) + 7) % 7;
@@ -102,7 +107,8 @@ function toFraction(n) {
 }
 
 /** 숫자에 셀 서식 적용 */
-export function formatNumber(n, fmt = 'general', decimals) {
+export function formatNumber(n, fmt = 'general', decimals, date1904 = false) {
+  if (date1904 && n < 0 && ['date', 'longdate', 'time', 'datetime'].includes(fmt)) return '-' + formatNumber(-n, fmt, decimals, true);
   const d = decimals ?? DEFAULT_DECIMALS[fmt];
   switch (fmt) {
     case 'number': {
@@ -130,25 +136,25 @@ export function formatNumber(n, fmt = 'general', decimals) {
     case 'fraction':
       return toFraction(n);
     case 'date': {
-      if (n < 0) return '#'.repeat(8);
-      const p = dateParts(n);
+      if (n < 0 || n >= (date1904 ? 2957004 : 2958466)) return '#'.repeat(8);
+      const p = dateParts(n, 1, date1904);
       return `${p.y}-${pad(p.m)}-${pad(p.d)}`;
     }
     case 'longdate': {
-      if (n < 0) return '#'.repeat(8);
-      const p = dateParts(n);
+      if (n < 0 || n >= (date1904 ? 2957004 : 2958466)) return '#'.repeat(8);
+      const p = dateParts(n, 1, date1904);
       return `${p.y}년 ${p.m}월 ${p.d}일 ${WEEKDAYS[p.dow]}요일`;
     }
     case 'time': {
-      if (n < 0) return '#'.repeat(8);
-      const p = dateParts(n);
+      if (n < 0 || n >= (date1904 ? 2957004 : 2958466)) return '#'.repeat(8);
+      const p = dateParts(n, 1, date1904);
       const ampm = p.hh < 12 ? '오전' : '오후';
       const h12 = p.hh % 12 || 12;
       return `${ampm} ${h12}:${pad(p.mm)}:${pad(p.ss)}`;
     }
     case 'datetime': {
-      if (n < 0) return '#'.repeat(8);
-      const p = dateParts(n);
+      if (n < 0 || n >= (date1904 ? 2957004 : 2958466)) return '#'.repeat(8);
+      const p = dateParts(n, 1, date1904);
       return `${p.y}-${pad(p.m)}-${pad(p.d)} ${p.hh}:${pad(p.mm)}`;
     }
     default:
@@ -161,18 +167,18 @@ export function formatNumber(n, fmt = 'general', decimals) {
 }
 
 /** TEXT() 함수용 간단한 서식 코드 해석 */
-export function formatWithPattern(n, pattern) {
+export function formatWithPattern(n, pattern, date1904 = false) {
   try {
-    return formatCode(n, pattern).text;
+    return formatCode(n, pattern, date1904).text;
   } catch {
-    return legacyPattern(n, pattern);
+    return legacyPattern(n, pattern, date1904);
   }
 }
 
-function legacyPattern(n, pattern) {
+function legacyPattern(n, pattern, date1904 = false) {
   const p = pattern.trim();
   if (/^[yYmMdDhHsS\-/.: 년월일시분초]+$/.test(p) && /[yYdD]|hh|ss/i.test(p)) {
-    const t = dateParts(n);
+    const t = dateParts(n, 1, date1904);
     // 시:분(:초)를 먼저 처리해야 'mm'이 월로 해석되지 않음
     const TIME = '\u0000';
     const times = [];
@@ -205,31 +211,31 @@ export function displayedDecimals(n, fmt, decimals) {
 /**
  * 셀 값 → { text, align } (align은 서식에서 정렬을 지정하지 않았을 때 기본값)
  */
-export function formatValue(v, style) {
+export function formatValue(v, style, date1904 = false) {
   style ??= {};
   if (v === null || v === undefined || v === '') return { text: '', align: 'left' };
   if (typeof v === 'object' && v.type === 'image') return { text: v.alt || '', align: 'center', image: v };
   if (typeof v === 'object' && 'code' in v) return { text: v.code, align: 'center' };
-  if (style.queryFormat != null) return { text: formatQuery(v, style.queryFormat), align: typeof v === 'number' ? 'right' : typeof v === 'boolean' ? 'center' : 'left' };
+  if (style.queryFormat != null) return { text: formatQuery(v, style.queryFormat, date1904), align: typeof v === 'number' ? 'right' : typeof v === 'boolean' ? 'center' : 'left' };
   if (typeof v === 'boolean') return { text: v ? 'TRUE' : 'FALSE', align: 'center' };
   if (style.numFmt === 'custom' && style.code) {
-    const r = formatCode(v, style.code);
+    const r = formatCode(v, style.code, date1904);
     return { text: r.text, align: typeof v === 'number' ? 'right' : 'left', color: r.color };
   }
   if (typeof v === 'number') {
     if (style.numFmt === 'text') return { text: formatGeneral(v), align: 'left' };
-    return { text: formatNumber(v, style.numFmt, style.decimals), align: 'right' };
+    return { text: formatNumber(v, style.numFmt, style.decimals, date1904), align: 'right' };
   }
   return { text: String(v), align: 'left' };
 }
 
 /** QUERY format의 일반 ICU 숫자·날짜·불리언 패턴. 실제 셀 값은 그대로 둔다. */
-export function formatQuery(v, pattern) {
+export function formatQuery(v, pattern, date1904 = false) {
   if (v === null || v === undefined || v === '') return '';
   if (!pattern) return typeof v === 'boolean' ? (v ? 'TRUE' : 'FALSE') : formatGeneral(v);
   if (typeof v === 'boolean') { const p = String(pattern).split(':'); return p[v ? 0 : 1] ?? p[0]; }
   // ICU 따옴표와 요일/오전오후 토큰을 Excel 표시 코드로 바꾼다. M/m은 formatCode가 문맥으로 구분.
-  return formatCode(v, queryFormatCode(pattern)).text;
+  return formatCode(v, queryFormatCode(pattern), date1904).text;
 }
 export function queryFormatCode(pattern) {
   return String(pattern).replace(/'((?:[^']|'')*)'|E{3,4}|a/g, (m, literal) => literal !== undefined ? `"${literal.replace(/''/g, "'").replace(/"/g, '""')}"` : m[0] === 'E' ? (m.length === 3 ? 'ddd' : 'dddd') : 'AM/PM');
@@ -247,7 +253,7 @@ function inputDate(y, m, d) {
   const actual = new Date(Date.UTC(y, m - 1, d));
   return actual.getUTCMonth() === m - 1 && actual.getUTCDate() === d ? serialOf(y, m, d) : null;
 }
-export function parseInput(text) {
+export function parseInput(text, date1904 = false) {
   if (text === '') return { value: null };
   if (text.startsWith("'")) return { value: text.slice(1) };
   const t = text.trim();
@@ -271,7 +277,7 @@ export function parseInput(text) {
     const mo = +m[2];
     const d = +m[3];
     const value = inputDate(y, mo, d);
-    if (value !== null) return { value, numFmt: 'date' };
+    if (value !== null) return { value: date1904 ? serialOf(y, mo, d, true) : value, numFmt: 'date' };
   }
   // 월/일만 (1/1 · 3-5 · 1월 1일): 올해 날짜 (한국어 엑셀과 같음). 없는 날(2/30)은 글자
   m = /^(\d{1,2})\s*[-/]\s*(\d{1,2})$/.exec(t) ?? /^(\d{1,2})\s*월\s*(\d{1,2})\s*일$/.exec(t);
@@ -279,11 +285,12 @@ export function parseInput(text) {
     const mo = +m[1];
     const d = +m[2];
     const y = new Date().getFullYear();
-    if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31 && new Date(Date.UTC(y, mo - 1, d)).getUTCDate() === d) return { value: serialOf(y, mo, d), numFmt: 'date' };
+    if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31 && new Date(Date.UTC(y, mo - 1, d)).getUTCDate() === d) return { value: serialOf(y, mo, d, date1904), numFmt: 'date' };
   }
   m = /^(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(t);
   if (m && +m[2] >= 1 && +m[2] <= 12 && +m[3] >= 1 && +m[3] <= 31 && +m[4] < 24 && +m[5] < 60 && +(m[6] || 0) < 60) {
-    const day = inputDate(+m[1], +m[2], +m[3]);
+    let day = inputDate(+m[1], +m[2], +m[3]);
+    if (day !== null && date1904) day = serialOf(+m[1], +m[2], +m[3], true);
     if (day !== null) return { value: day + (+m[4] * 3600 + +m[5] * 60 + +(m[6] || 0)) / 86400, numFmt: 'datetime' };
   }
   m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(t);
@@ -448,13 +455,13 @@ const testCond = (c, v) => {
   }
 };
 
-function renderDate(sec, n) {
+function renderDate(sec, n, date1904 = false) {
   if (n < 0 && !sec.elapsed) return '#'.repeat(8);
   const subsec = sec.toks.find((t) => t.t === 'subsec')?.n ?? 0;
   const secs = Math.round(n * 86400 * 10 ** subsec) / 10 ** subsec;
   const whole = Math.floor(secs + 1e-9);
   const frac = secs - whole;
-  const p = dateParts(Math.floor(whole / 86400) + (whole % 86400) / 86400);
+  const p = dateParts(Math.floor(whole / 86400) + (whole % 86400) / 86400, 1, date1904);
   const hour12 = sec.ampm;
   let out = '';
   for (const t of sec.toks) {
@@ -656,7 +663,7 @@ function renderNumber(sec, n, autoMinus) {
  * 엑셀 서식 코드로 값 표시. 반환: { text, color } (color 없으면 null)
  * 숫자·날짜·시간·분수·지수·조건·색·텍스트 구역(@)을 지원
  */
-export function formatCode(v, code) {
+export function formatCode(v, code, date1904 = false) {
   const secs = parseFormat(code);
   if (typeof v === 'string') {
     const s = secs.length >= 4 ? secs[3] : secs.find((x) => x.text && !x.date && !x.toks.some((t) => t.t === 'digit'));
@@ -692,7 +699,7 @@ export function formatCode(v, code) {
     // "@" 만 있는 구역에 숫자 → 일반 형식
     return { text: sec.toks.map((t) => (t.t === 'text' ? formatGeneral(n) : t.t === 'lit' ? t.v : '')).join(''), color: sec.color };
   }
-  const text = sec.date ? renderDate(sec, sec.elapsed ? n : n) : renderNumber(sec, n, autoMinus);
+  const text = sec.date ? ((!date1904 && n < 0) || Math.abs(n) >= (date1904 ? 2957004 : 2958466) ? '#'.repeat(8) : (n < 0 && autoMinus ? '-' : '') + renderDate(sec, Math.abs(n), date1904)) : renderNumber(sec, n, autoMinus);
   return { text, color: sec.color };
 }
 

@@ -6,6 +6,8 @@ import { child, kids, descendants, allText, esc } from './xml.js';
 export const CHARTEX_NS = 'http://schemas.microsoft.com/office/drawing/2014/chartex';
 export const CHARTEX_REL = 'http://schemas.microsoft.com/office/2014/relationships/chartEx';
 export const CHARTEX_CONTENT = 'application/vnd.ms-office.chartex+xml';
+export const CHARTEX_STYLE_CONTENT = 'application/vnd.ms-office.chartstyle+xml';
+export const CHARTEX_COLOR_CONTENT = 'application/vnd.ms-office.chartcolorstyle+xml';
 const A = 'http://schemas.openxmlformats.org/drawingml/2006/main';
 const TYPES = { waterfall: 'waterfall', funnel: 'funnel', histogram: 'clusteredColumn', pareto: 'clusteredColumn', treemap: 'treemap', sunburst: 'sunburst', boxWhisker: 'boxWhisker', map: 'regionMap' };
 const OWN_KEYS = ['type', 'byRows', 'axes', 'seriesFmt', 'labels', 'dataTable', 'gap', 'legend', 'palette', 'hiddenSeries', 'hiddenCats', 'titleSize', 'titleColor', 'titleBold', 'legendSize', 'legendColor', 'legendBold', 'axisSize', 'textColor', 'gridColor', 'rounded', 'gridX', 'gridY', 'fill', 'plotFill', 'border', 'totals', 'binCount', 'binWidth', 'upColor', 'downColor', 'totalColor', 'showMean', 'connectors', 'quartileMethod', 'showOutliers', 'showInnerPoints', 'mapLowColor', 'mapMidColor', 'mapHighColor'];
@@ -19,6 +21,24 @@ const refDirection = (r) => { const m = /\$?[A-Z]+\$?(\d+):\$?[A-Z]+\$?(\d+)$/i.
 const tx = (value, ref) => `<cx:tx><cx:txData>${f(ref)}<cx:v>${esc(value ?? '')}</cx:v></cx:txData></cx:tx>`;
 const textPr = (size, color, bold) => `<cx:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr${num(size) ? ` sz="${Math.round(Math.max(1, Math.min(400, size)) * 100)}"` : ''}${bold !== undefined ? ` b="${bold ? 1 : 0}"` : ''}>${fill(color)}</a:defRPr></a:pPr><a:endParaRPr lang="ko-KR"/></a:p></cx:txPr>`;
 const lvl = (values, numeric, code, name) => `<cx:lvl ptCount="${values.length}"${code ? ` formatCode="${esc(code)}"` : ''}${name ? ` name="${esc(name)}"` : ''}>${values.map((v, i) => (numeric ? num(v) : v !== null && v !== undefined && v !== '') ? `<cx:pt idx="${i}">${esc(v)}</cx:pt>` : '').join('')}</cx:lvl>`;
+
+/** ChartEx의 스타일 파트는 스키마상 선택적이나 실제 Excel 16에서는 관계가 없으면 Open이 실패합니다. */
+export function chartExStyleXml() {
+  const entries = ['axisTitle', 'categoryAxis', 'chartArea', 'dataLabel', 'dataLabelCallout', 'dataPoint', 'dataPoint3D', 'dataPointLine', 'dataPointMarker', 'dataPointWireframe', 'dataTable', 'downBar', 'dropLine', 'errorBar', 'floor', 'gridlineMajor', 'gridlineMinor', 'hiLoLine', 'leaderLine', 'legend', 'plotArea', 'plotArea3D', 'seriesAxis', 'seriesLine', 'title', 'trendline', 'trendlineLabel', 'upBar', 'valueAxis', 'wall'];
+  const body = entries.map((key) => {
+    const point = key.startsWith('dataPoint'), line = /Line|line|Axis|errorBar|dataTable/.test(key), grid = key.startsWith('gridline');
+    const color = point ? '<a:schemeClr val="phClr"/>' : `<a:srgbClr val="${grid ? 'D9D9D9' : '595959'}"/>`;
+    const sp = `<cs:spPr>${point ? `<a:solidFill>${color}</a:solidFill>` : key === 'chartArea' ? '<a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill>' : ''}${line ? `<a:ln w="${point ? 28575 : 9525}"><a:solidFill>${color}</a:solidFill></a:ln>` : ''}</cs:spPr>`;
+    const refs = `<cs:lnRef idx="0"/><cs:fillRef idx="0">${point ? '<cs:styleClr val="auto"/>' : ''}</cs:fillRef><cs:effectRef idx="0"/><cs:fontRef idx="minor"><a:srgbClr val="595959"/></cs:fontRef>`;
+    return `<cs:${key}>${refs}${sp}<cs:defRPr sz="${key === 'title' ? 1400 : 900}"/></cs:${key}>${key === 'dataPointMarker' ? '<cs:dataPointMarkerLayout symbol="circle" size="5"/>' : ''}`;
+  }).join('');
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cs:chartStyle xmlns:cs="http://schemas.microsoft.com/office/drawing/2012/chartStyle" xmlns:a="${A}" id="395">${body}</cs:chartStyle>`;
+}
+
+export function chartExColorsXml(palette = ['#4472c4', '#ed7d31', '#a5a5a5', '#ffc000', '#5b9bd5', '#70ad47']) {
+  const colors = palette.map(hex).filter(Boolean);
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cs:colorStyle xmlns:cs="http://schemas.microsoft.com/office/drawing/2012/chartStyle" xmlns:a="${A}" meth="cycle" id="10">${(colors.length ? colors : ['4472C4']).map((c) => `<a:srgbClr val="${c}"/>`).join('')}<cs:variation/></cs:colorStyle>`;
+}
 
 export function isChartEx(chart) { return Object.hasOwn(TYPES, chart?.type); }
 
@@ -43,7 +63,7 @@ export function writeChartEx(chart, data, refs = [], palette = ['#4472c4', '#ed7
     let p = '';
     if (type === 'treemap') p += '<cx:parentLabelLayout val="banner"/>';
     if (type === 'waterfall') p += `<cx:visibility connectorLines="${chart.connectors === false ? 0 : 1}"/>`;
-    if (type === 'boxWhisker') p += `<cx:visibility meanMarker="${chart.showMean ? 1 : 0}" outliers="${chart.showOutliers === false ? 0 : 1}" nonoutliers="${chart.showInnerPoints ? 1 : 0}"/>`;
+    if (type === 'boxWhisker') p += `<cx:visibility meanMarker="${chart.showMean === false ? 0 : 1}" outliers="${chart.showOutliers === false ? 0 : 1}" nonoutliers="${chart.showInnerPoints ? 1 : 0}"/>`;
     if (type === 'histogram' || type === 'pareto') {
       if (type === 'pareto' && !catAuto) p += '<cx:aggregation/>';
       else p += `<cx:binning intervalClosed="r">${num(chart.binWidth) && chart.binWidth > 0 ? `<cx:binSize>${chart.binWidth}</cx:binSize>` : num(chart.binCount) && chart.binCount > 0 ? `<cx:binCount>${Math.round(chart.binCount)}</cx:binCount>` : ''}</cx:binning>`;
@@ -67,22 +87,23 @@ export function writeChartEx(chart, data, refs = [], palette = ['#4472c4', '#ed7
     const ptColors = sr.pointColors ?? sr.colors ?? {};
     const points = Object.entries(ptColors).filter(([k, v]) => /^\d+$/.test(k) && Number(k) < sr.values.length && hex(v)).map(([k, v]) => `<cx:dataPt idx="${k}">${shape(v)}</cx:dataPt>`).join('');
     const mapColors = type === 'map' ? ['min', 'mid', 'max'].map((stop, k) => { const h = hex(chart[['mapLowColor', 'mapMidColor', 'mapHighColor'][k]]); return h ? `<cx:${stop}Color><a:srgbClr val="${h}"/></cx:${stop}Color>` : ''; }).join('') : '';
-    series.push(`<cx:series layoutId="${TYPES[type]}" formatIdx="${fi}"${(chart.hiddenSeries ?? []).includes(fi) ? ' hidden="1"' : ''}>${tx(sr.name, r.tx)}${shape(color)}${mapColors ? `<cx:valueColors>${mapColors}</cx:valueColors>` : ''}${points}${dataLabels}<cx:dataId val="${i}"/>${layout(sr)}${cartesian ? '<cx:axisId>0</cx:axisId><cx:axisId>1</cx:axisId>' : ''}</cx:series>`);
+    // Excel associates these ChartEx layouts with the plot-area axes. Although axisId
+    // is schema-valid here, Excel 16 rejects files that explicitly link these series.
+    series.push(`<cx:series layoutId="${TYPES[type]}" formatIdx="${fi}"${(chart.hiddenSeries ?? []).includes(fi) ? ' hidden="1"' : ''}>${tx(sr.name, r.tx)}${shape(color)}${mapColors ? `<cx:valueColors>${mapColors}</cx:valueColors>` : ''}${points}${dataLabels}<cx:dataId val="${i}"/>${layout(sr)}</cx:series>`);
   });
-  if (type === 'pareto') series.push('<cx:series layoutId="paretoLine" ownerIdx="0" formatIdx="1"><cx:axisId>0</cx:axisId><cx:axisId>2</cx:axisId></cx:series>');
-  const axis = (id, key, category = false) => {
-    const a = chart.axes?.[key] ?? {};
+  if (type === 'pareto') series.push('<cx:series layoutId="paretoLine" ownerIdx="0" formatIdx="1"/>');
+  const axis = (id, key, category = false, defaults = {}) => {
+    const a = { ...defaults, ...chart.axes?.[key] };
     const scaling = category ? `<cx:catScaling${num(chart.gap) ? ` gapWidth="${Math.max(0, chart.gap / 100)}"` : ''}/>` : `<cx:valScaling${['min', 'max', 'major'].filter((k) => num(a[k]) && (k !== 'major' || a[k] > 0)).map((k) => ` ${k === 'major' ? 'majorUnit' : k}="${a[k]}"`).join('')}/>`;
-    return `<cx:axis id="${id}" hidden="${a.hide ? 1 : 0}">${scaling}${a.title ? `<cx:title>${tx(a.title)}</cx:title>` : ''}${!category && chart.gridY !== false ? '<cx:majorGridlines/>' : ''}<cx:tickLabels/>${a.numFmt ? `<cx:numFmt formatCode="${esc(a.numFmt)}" sourceLinked="0"/>` : ''}${textPr(chart.axisSize, chart.textColor)}</cx:axis>`;
+    return `<cx:axis id="${id}" hidden="${a.hide ? 1 : 0}">${scaling}${a.title ? `<cx:title>${tx(a.title)}</cx:title>` : ''}${key === 'y' && chart.gridY !== false ? '<cx:majorGridlines/>' : ''}<cx:tickLabels/>${a.numFmt ? `<cx:numFmt formatCode="${esc(a.numFmt)}" sourceLinked="0"/>` : ''}${textPr(chart.axisSize, chart.textColor)}</cx:axis>`;
   };
-  const axes = cartesian ? axis(0, 'x', true) + axis(1, 'y') + (type === 'pareto' ? '<cx:axis id="2"><cx:valScaling min="0" max="1"/><cx:tickLabels/><cx:numFmt formatCode="0%" sourceLinked="0"/></cx:axis>' : '') : '';
+  const axes = cartesian ? axis(0, 'x', true) + axis(1, 'y') + (type === 'pareto' ? axis(2, 'y2', false, { min: 0, max: 1, numFmt: '0%' }) : '') : '';
   const title = chart.title ? `<cx:title pos="t" align="ctr" overlay="0">${tx(chart.title)}${textPr(chart.titleSize ?? 14, chart.titleColor, chart.titleBold ?? false)}</cx:title>` : '';
   const lp = chart.legend ?? (source.length > 1 || hierarchy ? 'b' : 'none');
   const legend = ['l', 't', 'r', 'b'].includes(lp) ? `<cx:legend pos="${lp}" align="ctr" overlay="0">${textPr(chart.legendSize, chart.legendColor, chart.legendBold)}</cx:legend>` : '';
-  const props = Object.fromEntries(OWN_KEYS.filter((k) => chart[k] !== undefined).map((k) => [k, chart[k]]));
-  if (chart.pivot) props.wxPivot = chart.pivot;
-  const ext = `<cx:extLst><cx:ext uri="{5E2A6C7B-8F4D-4B1A-9C3E-7D6F1A2B3C4D}"><tb:props xmlns:tb="urn:tabula:chart" json="${esc(JSON.stringify(props))}"/></cx:ext></cx:extLst>`;
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cx:chartSpace xmlns:cx="${CHARTEX_NS}" xmlns:a="${A}"><cx:chartData>${parts.join('')}</cx:chartData><cx:chart>${title}<cx:plotArea><cx:plotAreaRegion>${series.join('')}</cx:plotAreaRegion>${axes}${shape(chart.plotFill)}</cx:plotArea>${legend}</cx:chart>${shape(chart.fill, chart.border)}${ext}</cx:chartSpace>`;
+  // Supplemental options belong to the drawing frame. Excel discards unknown cx
+  // extensions; mc:Ignorable would also leave an invalid empty cx:ext after MC.
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cx:chartSpace xmlns:cx="${CHARTEX_NS}" xmlns:a="${A}"><cx:chartData>${parts.join('')}</cx:chartData><cx:chart>${title}<cx:plotArea><cx:plotAreaRegion>${series.join('')}</cx:plotAreaRegion>${axes}${shape(chart.plotFill)}</cx:plotArea>${legend}</cx:chart>${shape(chart.fill, chart.border)}</cx:chartSpace>`;
 }
 
 const cached = (level, numeric = false) => {
@@ -141,7 +162,7 @@ export function readChartEx(root, refOf = () => null, colorOf = (n) => { const h
     out.series.push(sr);
     const sf = {}, color = colorOf(child(child(s, 'spPr'), 'solidFill'));
     if (color) sf.color = color;
-    const code = child(val, 'lvl')?.attrs.formatCode; if (code) sf.numFmt = code;
+    const code = child(val, 'lvl')?.attrs.formatCode; if (code && code !== 'General') sf.numFmt = code;
     const ptColors = {}; for (const pt of kids(s, 'dataPt')) { const c = colorOf(child(child(pt, 'spPr'), 'solidFill')); if (c) ptColors[pt.attrs.idx] = c; }
     if (Object.keys(ptColors).length) sf.pointColors = ptColors;
     const labels = child(s, 'dataLabels'), visible = child(labels, 'visibility');
@@ -168,6 +189,12 @@ export function readChartEx(root, refOf = () => null, colorOf = (n) => { const h
     const title = text(child(child(a, 'title'), 'tx')); if (title) props.title = title;
     const code = child(a, 'numFmt')?.attrs.formatCode; if (code) props.numFmt = code;
     out.axes[key] = props;
+    if (key === 'y') {
+      out.gridY = !!child(a, 'majorGridlines');
+      const ff = font(child(a, 'txPr'), colorOf);
+      if (ff.size) out.axisSize = ff.size;
+      if (ff.color) out.textColor = ff.color;
+    }
     if (cat && Number.isFinite(Number(cat.attrs.gapWidth))) out.gap = Number(cat.attrs.gapWidth) * 100;
   }
   const title = child(ch, 'title'); out.title = text(child(title, 'tx'));
@@ -179,18 +206,46 @@ export function readChartEx(root, refOf = () => null, colorOf = (n) => { const h
   const border = colorOf(child(child(child(root, 'spPr'), 'ln'), 'solidFill')); if (border) out.border = border;
   const pg = colorOf(child(child(plot, 'spPr'), 'solidFill')); if (pg) out.plotFill = pg;
   const own = descendants(child(root, 'extLst'), 'props').find((p) => p.attrs['xmlns:tb'] === 'urn:tabula:chart');
-  if (own?.attrs.json) { try {
-    const p = JSON.parse(own.attrs.json);
-    if (p && typeof p === 'object' && !Array.isArray(p)) {
-      for (const k of OWN_KEYS) if (k !== 'type' && Object.hasOwn(p, k)) {
-        const v = safeOption(p[k]);
-        if (['axes', 'seriesFmt'].includes(k) && (!v || typeof v !== 'object')) continue;
-        if (['labels', 'dataTable', 'byRows', 'rounded', 'gridX', 'gridY', 'showMean', 'connectors', 'showOutliers', 'showInnerPoints'].includes(k) && typeof v !== 'boolean') continue;
-        if (['hiddenSeries', 'hiddenCats', 'totals'].includes(k) && (!Array.isArray(v) || v.some((n) => !Number.isInteger(n) || n < 0))) continue;
-        if (v !== undefined) out[k] = v;
-      }
-      if (p.wxPivot && typeof p.wxPivot === 'object' && typeof p.wxPivot.name === 'string') out.pivot = safeOption(p.wxPivot);
+  if (own?.attrs.json) applyChartExOptions(out, own.attrs.json);
+
+  return out;
+}
+
+// Native values must win after an Excel edit. The extension stores only settings
+// for which this adapter has no native representation (e.g. WIXEL's data table).
+const NATIVE_OPTIONS = new Set(['type', 'legend', 'hiddenSeries', 'gap', 'titleSize', 'titleColor', 'titleBold', 'legendSize', 'legendColor', 'legendBold', 'axisSize', 'textColor', 'gridY', 'fill', 'plotFill', 'border', 'totals', 'binCount', 'binWidth', 'showMean', 'connectors', 'quartileMethod', 'showOutliers', 'showInnerPoints', 'mapLowColor', 'mapMidColor', 'mapHighColor']);
+const NATIVE_AXIS = new Set(['hide', 'title', 'min', 'max', 'major', 'numFmt']);
+const NATIVE_SERIES = new Set(['color', 'labels', 'numFmt', 'pointColors', 'colors']);
+const BOOLEAN_OPTIONS = new Set(['labels', 'dataTable', 'byRows', 'rounded', 'gridX', 'gridY', 'showMean', 'connectors', 'showOutliers', 'showInnerPoints']);
+
+function supplementalOptions(chart) {
+  const props = Object.fromEntries(OWN_KEYS.filter((k) => !NATIVE_OPTIONS.has(k) && chart[k] !== undefined).map((k) => [k, chart[k]]));
+  if (chart.axes && typeof chart.axes === 'object') props.axes = Object.fromEntries(Object.entries(chart.axes).filter(([k, v]) => ['x', 'y', 'y2'].includes(k) && v && typeof v === 'object').map(([k, v]) => [k, Object.fromEntries(Object.entries(v).filter(([name]) => !NATIVE_AXIS.has(name)))]).filter(([, v]) => Object.keys(v).length));
+  if (Array.isArray(chart.seriesFmt)) props.seriesFmt = chart.seriesFmt.map((s) => Object.fromEntries(Object.entries(s ?? {}).filter(([k]) => !NATIVE_SERIES.has(k))));
+  if (chart.pivot) props.wxPivot = chart.pivot;
+  return { type: chart.type, ...props };
+}
+
+export function chartExDrawingProps(chart) {
+  return `<a:extLst><a:ext uri="{5E2A6C7B-8F4D-4B1A-9C3E-7D6F1A2B3C4D}"><tb:props xmlns:tb="urn:tabula:chart" json="${esc(JSON.stringify(supplementalOptions(chart)))}"/></a:ext></a:extLst>`;
+}
+
+export function applyChartExOptions(out, json) {
+  try {
+    const source = JSON.parse(json);
+    if (!source || typeof source !== 'object' || Array.isArray(source) || source.type !== undefined && source.type !== out.type) return out;
+    const p = supplementalOptions(safeOption(source));
+    for (const k of OWN_KEYS) if (k !== 'type' && Object.hasOwn(p, k)) {
+      const v = p[k];
+      if (BOOLEAN_OPTIONS.has(k) && typeof v !== 'boolean') continue;
+      if (['hiddenSeries', 'hiddenCats', 'totals'].includes(k) && (!Array.isArray(v) || v.some((n) => !Number.isInteger(n) || n < 0))) continue;
+      if (k === 'axes') {
+        if (v && typeof v === 'object' && !Array.isArray(v)) for (const axis of ['x', 'y', 'y2']) if (v[axis] && Object.keys(v[axis]).length) (out.axes ??= {})[axis] = { ...v[axis], ...out.axes?.[axis] };
+      } else if (k === 'seriesFmt') {
+        if (Array.isArray(v)) out.seriesFmt = (out.seriesFmt ?? []).map((native, i) => ({ ...v[i], ...native }));
+      } else if (v !== undefined) out[k] = v;
     }
-  } catch { /* unknown extension does not affect native data */ } }
+    if (source.wxPivot && typeof source.wxPivot === 'object' && typeof source.wxPivot.name === 'string') out.pivot = safeOption(source.wxPivot);
+  } catch { /* unknown extension never prevents native data from loading */ }
   return out;
 }

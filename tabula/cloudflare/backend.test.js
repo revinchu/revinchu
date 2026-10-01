@@ -20,7 +20,7 @@ function fixture(limits) {
     const rows = statement.columns().length ? statement.all(...values) : (statement.run(...values), []);
     return { toArray: () => rows };
   };
-  return { store: new VaultStore(storage, limits), db };
+  return { store: new VaultStore(storage, limits), db, storage };
 }
 function body(text, step = 8192) {
   const bytes = new TextEncoder().encode(text); let offset = 0;
@@ -155,4 +155,142 @@ test('publication quota releases a slot after revoke', () => {
     store.releasePublication('one'); store.reservePublication('three');
     assert.equal(store.publications().length, 2);
   } finally { db.close(); }
+});
+
+test('history records prior content and restore creates a new CAS-protected revision', async () => {
+  const { store, db } = fixture(LIMITS); try {
+    const first = await store.put('a', 0, body('{"a":1}'));
+    const second = await store.put('a', first.revision, body('{"a":2}'));
+    assert.equal(store.versions('a').currentRevision, second.revision);
+    assert.equal(store.versions('a').versions[0].revision, first.revision);
+    assert.equal(await new Response(store.readVersion('a', first.revision).body).text(), '{"a":1}');
+    assert.throws(() => store.restore('a', first.revision, first.revision), { status: 412 });
+    const restored = store.restore('a', first.revision, second.revision);
+    assert.ok(restored.revision > second.revision); assert.equal(await read(store, 'a'), '{"a":1}');
+    assert.equal(store.versions('a').versions[0].revision, second.revision);
+  } finally { db.close(); }
+});
+
+test('bounded history retains open streams through pruning and releases canceled readers', async () => {
+  const { store, db } = fixture({ ...LIMITS, maxVersions: 1, maxHistoryBytes: 3 * 1024 * 1024 }); try {
+    const text = JSON.stringify('x'.repeat(2300000));
+    const a = await store.put('a', 0, body(text)), b = await store.put('a', a.revision, body('{"b":1}'));
+    const old = store.readVersion('a', a.revision).body;
+    const c = await store.put('a', b.revision, body('{"c":1}'));
+    assert.deepEqual(store.versions('a').versions.map(x => x.revision), [b.revision]);
+    assert.equal(await new Response(old).text(), text);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM chunks WHERE revision=?').get(a.revision).n, 0);
+    const canceled = store.readVersion('a', b.revision).body;
+    await store.put('a', c.revision, body('{"d":1}')); await canceled.cancel();
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM chunks WHERE revision=?').get(b.revision).n, 0);
+    assert.equal(store.readers.size, 0);
+  } finally { db.close(); }
+});
+
+test('vault-wide history bytes are bounded without charging current-document quota', async () => {
+  const { store, db } = fixture({ ...LIMITS, maxHistoryBytes: 8, maxVaultBytes: 20 }); try {
+    const a = await store.put('a', 0, body('"1111"')); await store.put('a', a.revision, body('{}'));
+    const b = await store.put('b', 0, body('"2222"')); await store.put('b', b.revision, body('{}'));
+    assert.equal(store.usage().bytes, 4); assert.equal(store.usage().historyBytes, 6);
+    assert.deepEqual(store.versions('a').versions, []); assert.equal(store.versions('b').versions.length, 1);
+  } finally { db.close(); }
+});
+
+test('additive schema reopening preserves current documents and historical chunks', async () => {
+  const { store, db, storage } = fixture(LIMITS); try {
+    const first = await store.put('legacy', 0, body('{"legacy":true}'));
+    db.exec('DROP TABLE versions; DROP TABLE imports; DROP TABLE import_items; DROP TABLE import_chunks');
+    const migrated = new VaultStore(storage, LIMITS);
+    assert.equal(await read(migrated, 'legacy'), '{"legacy":true}');
+    await migrated.put('legacy', first.revision, body('{}'));
+    const restarted = new VaultStore(storage, LIMITS);
+    assert.equal(await new Response(restarted.readVersion('legacy', first.revision).body).text(), '{"legacy":true}');
+  } finally { db.close(); }
+});
+
+test('deletion removes every history entry while an in-flight historical reader finishes', async () => {
+  const { store, db } = fixture(LIMITS); try {
+    const a = await store.put('a', 0, body('{"old":1}')), b = await store.put('a', a.revision, body('{}'));
+    const open = store.readVersion('a', a.revision).body;
+    store.remove('a', b.revision);
+    assert.throws(() => store.readVersion('a', a.revision), { status: 404 });
+    assert.equal(await new Response(open).text(), '{"old":1}');
+    assert.equal(store.usage().historyBytes, 0); assert.equal(db.prepare('SELECT COUNT(*) AS n FROM chunks').get().n, 0);
+  } finally { db.close(); }
+});
+
+function manifest(documents, mode = 'create') { return { format: 'wixel-vault-backup', version: 1, mode, documents }; }
+test('import rejects malformed manifests, duplicate names, implicit overwrite and incomplete uploads', async () => {
+  const { store, db } = fixture(LIMITS); try {
+    const a = await store.put('a', 0, body('{"old":true}'));
+    for (const bad of [null, {}, manifest([]), manifest([{ name: 'a', expectedRevision: a.revision }]), manifest([{ name: 'a', expectedRevision: -1 }]), manifest([{ name: 'b', expectedRevision: 0 }, { name: ' b ', expectedRevision: 0 }]), manifest([{ name: 'bad\u0001', expectedRevision: 0 }])]) assert.throws(() => store.beginImport(bad), { status: 400 });
+    assert.throws(() => store.beginImport(manifest([{ name: 'a', expectedRevision: 0 }])), { status: 412 });
+    const session = store.beginImport(manifest([{ name: 'a', expectedRevision: a.revision }, { name: 'b', expectedRevision: 0 }], 'replace'));
+    assert.throws(() => store.beginImport(manifest([{ name: 'c', expectedRevision: 0 }])), { status: 409 });
+    await assert.rejects(store.stageImport(session.id, 'a', a.revision, body('{"broken":')), { status: 400 });
+    await store.stageImport(session.id, 'b', 0, body('{"b":1}'));
+    assert.throws(() => store.commitImport(session.id), { status: 409 });
+    assert.equal(await read(store, 'a'), '{"old":true}'); assert.equal(store.find('b'), null);
+    store.cancelImport(session.id); assert.equal(db.prepare('SELECT COUNT(*) AS n FROM import_chunks').get().n, 0);
+  } finally { db.close(); }
+});
+
+test('multi-document import commits atomically after restart, creates history and keeps unrelated data', async () => {
+  const { store, db, storage } = fixture(LIMITS); try {
+    const first = await store.put('a', 0, body('{"old":1}')); await store.put('untouched', 0, body('true'));
+    const session = store.beginImport(manifest([{ name: 'a', expectedRevision: first.revision }, { name: 'b', expectedRevision: 0 }], 'replace'));
+    await store.stageImport(session.id, 'a', first.revision, body('{"new":2}'));
+    await store.stageImport(session.id, 'b', 0, body('[1,2,3]'));
+    const restarted = new VaultStore(storage, LIMITS), result = restarted.commitImport(session.id);
+    assert.equal(result.documents.length, 2); assert.equal(await read(restarted, 'a'), '{"new":2}'); assert.equal(await read(restarted, 'b'), '[1,2,3]'); assert.equal(await read(restarted, 'untouched'), 'true');
+    assert.equal(restarted.versions('a').versions[0].revision, first.revision);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM import_chunks').get().n, 0);
+  } finally { db.close(); }
+});
+
+test('import final CAS checks every document and leaves no partial replacements', async () => {
+  const { store, db } = fixture(LIMITS); try {
+    const a = await store.put('a', 0, body('1')), b = await store.put('b', 0, body('2'));
+    const session = store.beginImport(manifest([{ name: 'a', expectedRevision: a.revision }, { name: 'b', expectedRevision: b.revision }], 'replace'));
+    await store.stageImport(session.id, 'a', a.revision, body('11')); await store.stageImport(session.id, 'b', b.revision, body('22'));
+    await store.put('b', b.revision, body('3'));
+    assert.throws(() => store.commitImport(session.id), { status: 412 });
+    assert.equal(await read(store, 'a'), '1'); assert.equal(await read(store, 'b'), '3'); store.cancelImport(session.id);
+  } finally { db.close(); }
+});
+
+test('import SQL failure rolls back documents, revisions, history and all chunk changes', async () => {
+  const { store, db, storage } = fixture(LIMITS); try {
+    const a = await store.put('a', 0, body('1')), b = await store.put('b', 0, body('2'));
+    const session = store.beginImport(manifest([{ name: 'a', expectedRevision: a.revision }, { name: 'b', expectedRevision: b.revision }], 'replace'));
+    await store.stageImport(session.id, 'a', a.revision, body('11')); await store.stageImport(session.id, 'b', b.revision, body('22'));
+    const original = storage.sql.exec;
+    storage.sql.exec = (sql, ...args) => { if (sql.startsWith('INSERT INTO documents') && args[0] === 'b') throw new Error('synthetic disk error'); return original(sql, ...args); };
+    assert.throws(() => store.commitImport(session.id), /synthetic disk error/); storage.sql.exec = original;
+    assert.equal(await read(store, 'a'), '1'); assert.equal(await read(store, 'b'), '2'); assert.equal(store.usage().historyBytes, 0); assert.equal(Number(store.meta('sequence')), b.revision);
+    assert.equal(store.commitImport(session.id).documents.length, 2);
+  } finally { db.close(); }
+});
+
+test('import quota, invalid UTF-8 and deep JSON fail without altering any current documents', async () => {
+  const { store, db } = fixture({ ...LIMITS, maxVaultBytes: 10 }); try {
+    await store.put('old', 0, body('"1234"'));
+    const session = store.beginImport(manifest([{ name: 'a', expectedRevision: 0 }]));
+    await assert.rejects(store.stageImport(session.id, 'a', 0, new Response(new Uint8Array([34, 255, 34])).body), { status: 400 });
+    await assert.rejects(store.stageImport(session.id, 'a', 0, body('['.repeat(129) + '0' + ']'.repeat(129))), { status: 413 });
+    await store.stageImport(session.id, 'a', 0, body('"1234"'));
+    assert.throws(() => store.commitImport(session.id), { status: 413 }); assert.equal(store.find('a'), null); assert.equal(await read(store, 'old'), '"1234"');
+    store.cancelImport(session.id);
+  } finally { db.close(); }
+});
+
+test('expired imports reclaim staged chunks after restart and session ids are vault-local', async () => {
+  const { store, db, storage } = fixture(LIMITS), other = fixture(LIMITS); try {
+    const session = store.beginImport(manifest([{ name: '__proto__', expectedRevision: 0 }]));
+    await store.stageImport(session.id, '__proto__', 0, body('{"__proto__":{"polluted":true}}'));
+    assert.throws(() => other.store.commitImport(session.id), { status: 404 }); assert.equal({}.polluted, undefined);
+    db.prepare('UPDATE imports SET expires=0').run(); const restarted = new VaultStore(storage, LIMITS);
+    assert.throws(() => restarted.commitImport(session.id), { status: 404 }); assert.equal(db.prepare('SELECT COUNT(*) AS n FROM import_chunks').get().n, 0);
+    assert.equal(restarted.list().length, 0);
+  } finally { db.close(); other.db.close(); }
 });

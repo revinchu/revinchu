@@ -44,7 +44,7 @@ try {
         return { enabled: def.errorShow, caption: def.errorCaption, value: value?.code ?? value, book: wb.serialize() };
       });
       assert.equal(result.enabled, enabled); checks++;
-      assert.equal(result.value, enabled ? caption === '-' ? '-' : null : '#DIV/0!'); checks++;
+      assert.equal(result.value, enabled ? caption === '-' ? 0 : null : '#DIV/0!'); checks++;
       assert.equal(result.caption, caption ?? ''); checks++;
       const back = new Workbook(readXlsx(writeXlsx(new Workbook(result.book))).data);
       assert.equal(pivotErrorDisplay(back.sheets[0].pivot), enabled); checks++;

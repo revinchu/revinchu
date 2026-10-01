@@ -569,7 +569,7 @@ export function readXls(bytes) {
       let raw;
       if (formula !== undefined) raw = `=${formula}`;
       else if (value === null || value === undefined) raw = '';
-      else if (typeof value === 'number') raw = numberRaw(date1904 && /date|time/.test(style?.numFmt ?? '') ? value + 1462 : value, style);
+      else if (typeof value === 'number') raw = numberRaw(value, style, date1904);
       else if (typeof value === 'boolean') raw = value ? 'TRUE' : 'FALSE';
       else if (typeof value === 'object') raw = value.error;
       else raw = style?.numFmt === 'text' ? value : textRaw(value);
@@ -760,7 +760,7 @@ export function readXls(bytes) {
       outNames.push({ name: n.name, ref: `=${ref}`, sheet: n.itab ? allNames[n.itab - 1] ?? null : null, ...(n.hidden ? { hidden: true } : {}) });
     } catch { /* 해석하지 못한 이름은 건너뜀 */ }
   }
-  const data = { sheets, defaultFont: wbFont };
+  const data = { sheets, defaultFont: wbFont, ...(date1904 ? { date1904: true } : {}) };
   if (outNames.length) data.names = outNames;
   if (!sheets.length) throw new Error('.xls 파일에 워크시트가 없습니다.');
   return { data, active: 0, warnings: [...new Set(warnings)] };

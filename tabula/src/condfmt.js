@@ -94,7 +94,7 @@ export const ICON_SVG = {
 
 export const iconSetById = (id) => ICON_SETS.find((s) => s.id === id) ?? ICON_SETS[0];
 
-const valueOf = (s) => parseInput(String(s ?? '')).value;
+const valueOf = (s, date1904 = false) => parseInput(String(s ?? ''), date1904).value;
 const dupKey = (v) => (typeof v === 'string' ? `s:${v.toLowerCase()}` : `${typeof v}:${v}`);
 const textOf = (v) => String(typeof v === 'number' ? formatGeneral(v) : v ?? '');
 
@@ -110,8 +110,8 @@ export function scaleColor(colors, t) {
 }
 
 /** 오늘 기준 날짜 범위 [시작, 끝) (엑셀 일련 번호) */
-export function periodRange(period, now = new Date()) {
-  const EPOCH = Date.UTC(1899, 11, 30);
+export function periodRange(period, now = new Date(), date1904 = false) {
+  const EPOCH = date1904 ? Date.UTC(1904, 0, 1) : Date.UTC(1899, 11, 30);
   const today = (Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) - EPOCH) / 86400000;
   const dow = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())).getUTCDay();
   const monthStart = (y, m) => (Date.UTC(y, m, 1) - EPOCH) / 86400000;
@@ -171,7 +171,7 @@ export function prepareCond(wb, si) {
       topCut: desc[Math.min(desc.length, k) - 1],
       bottomCut: desc[Math.max(0, desc.length - k)],
       asts: new Map(),
-      period: rule.type === 'date' ? periodRange(rule.period) : null,
+      period: rule.type === 'date' ? periodRange(rule.period, new Date(), wb.date1904) : null,
     };
     if (rule.cfvo?.length) prep.points = rule.cfvo.map((p) => cfvoValue(p, prep, wb, si));
     return prep;
@@ -201,7 +201,7 @@ function cfvoValue(p, prep, wb, si) {
       try { r = evaluateFormula(parse(text.replace(/^=/, '')), wb.ctxFor(si, prep.rule.r1, prep.rule.c1)); } catch { r = null; }
       return typeof r === 'number' ? r : Number(r) || 0;
     }
-    default: return Number.isFinite(v) ? v : Number(valueOf(p.v)) || 0;
+    default: return Number.isFinite(v) ? v : Number(valueOf(p.v, wb?.date1904)) || 0;
   }
 }
 
@@ -219,7 +219,7 @@ function formulaValue(prep, wb, si, r, c, text) {
 
 function operand(prep, wb, si, r, c, s) {
   const t = String(s ?? '');
-  return t.startsWith('=') ? formulaValue(prep, wb, si, r, c, t) : valueOf(t);
+  return t.startsWith('=') ? formulaValue(prep, wb, si, r, c, t) : valueOf(t, wb?.date1904);
 }
 
 /** 규칙이 이 셀에 맞는지 (막대·색조·아이콘 제외) */

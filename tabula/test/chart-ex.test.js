@@ -7,7 +7,7 @@ import { writeXlsx, readXlsx } from '../src/xlsx.js';
 import { unzip, zip, textOf } from '../src/zip.js';
 import { parseXml, child, kids, descendants } from '../src/xml.js';
 import { chartModelData, chartData } from '../src/chart.js';
-import { isChartEx, writeChartEx, readChartEx, CHARTEX_NS, CHARTEX_CONTENT, CHARTEX_REL } from '../src/chart-ex.js';
+import { isChartEx, writeChartEx, readChartEx, CHARTEX_NS, CHARTEX_CONTENT, CHARTEX_REL, CHARTEX_STYLE_CONTENT, CHARTEX_COLOR_CONTENT } from '../src/chart-ex.js';
 
 const rows = [['분류', '금액', '이익'], ['한국', 10, 2], ['일본', 5, 4], ['미국', 7, 6]];
 const hierarchy = [['지역', '상세', '금액'], ['아시아', '한국', 10], ['아시아', '일본', 5], ['미주', '미국', 7]];
@@ -20,7 +20,8 @@ function book(type, options = {}, cells = rows) {
 const path = 'xl/charts/chart1.xml';
 function noExtension(files) {
   const xml = textOf(files[path]).replace(/<cx:extLst>[\s\S]*?<\/cx:extLst>/g, '');
-  return { ...files, [path]: xml };
+  const drawing = 'xl/drawings/drawing1.xml';
+  return { ...files, [path]: xml, [drawing]: textOf(files[drawing]).replace(/<a:extLst>[\s\S]*?<\/a:extLst>/g, '') };
 }
 function reopen(files) {
   const wb = new Workbook(readXlsx(zip(files)).data);
@@ -130,17 +131,47 @@ test('ChartEx 낯선 레이아웃·빈 차트는 지원된다고 오인하지 �
 test('ChartEx 표준에 없는 위셀 서식도 허용된 확장으로 왕복 보존', () => {
   const options = { axes: { x: { reverse: true, hide: true }, y: { reverse: true, min: -10, max: 30, major: 5, numFmt: '0.0', log: 10 } }, seriesFmt: [{ color: '#123456', labels: false, labelPos: 'outEnd', lineWidth: 3, dash: 'dash', marker: 'diamond', markerSize: 9, trend: { type: 'linear', equation: true, r2: true }, outline: '#654321', pointColors: { 1: '#778899' } }], labels: true, dataTable: true, gap: 80, legend: 't' };
   const { wb, chart } = reopen(unzip(writeXlsx(book('waterfall', options))));
-  for (const [key, value] of Object.entries(options)) assert.deepEqual(chart[key], value, key);
+  for (const [key, value] of Object.entries(options)) assert.deepEqual(key === 'seriesFmt' ? chart[key].slice(0, value.length) : chart[key], value, key);
+  assert.equal(chart.seriesFmt.length, 2, '자체 서식 배열이 짧아도 두 번째 native 계열 서식은 유지');
   const twice = reopen(unzip(writeXlsx(wb))).chart;
-  for (const [key, value] of Object.entries(options)) assert.deepEqual(twice[key], value, key);
+  for (const [key, value] of Object.entries(options)) assert.deepEqual(key === 'seriesFmt' ? twice[key].slice(0, value.length) : twice[key], value, key);
 });
 
 test('ChartEx 외부 확장 데이터는 종류·데이터 참조·프로토타입을 덮어쓰지 않음', () => {
   const xml = writeChartEx({ type: 'funnel' }, { categories: ['A'], series: [{ name: '값', values: [1] }] });
-  const root = parseXml(xml), props = descendants(root, 'props')[0];
+  const root = parseXml(xml.replace('</cx:chartSpace>', '<cx:extLst><cx:ext uri="legacy"><tb:props xmlns:tb="urn:tabula:chart"/></cx:ext></cx:extLst></cx:chartSpace>')), props = descendants(root, 'props')[0];
   props.attrs.json = '{"type":"unknown","series":[{"val":"secret"}],"axes":{"__proto__":{"polluted":1},"y":{"min":0}},"labels":"wrong","hiddenSeries":[-1]}';
   const chart = readChartEx(root);
   assert.equal(chart.type, 'funnel'); assert.deepEqual(chart.series[0].cache, [1]);
   assert.equal(chart.labels, undefined); assert.equal(chart.hiddenSeries, undefined);
-  assert.deepEqual(chart.axes, { y: { min: 0 } }); assert.equal({}.polluted, undefined);
+  assert.deepEqual(chart.axes, {}, '다른 종류의 오래된 확장이 native 축을 주입하지 않음'); assert.equal({}.polluted, undefined);
+});
+
+test('ChartEx Excel 패키지: 스타일·색 관계와 drawing 보조 옵션, 명시 series axisId 금지', () => {
+  const files = unzip(writeXlsx(book('waterfall'))), chart = parseXml(textOf(files[path]));
+  assert.equal(descendants(chart, 'ext').length, 0, 'MC 처리 후 빈 필수 확장 요소가 남지 않음');
+  assert.match(textOf(files['xl/drawings/drawing1.xml']), /<a:extLst><a:ext .*<tb:props/);
+  assert.equal(descendants(chart, 'axisId').length, 0, '스키마상 허용되지만 Excel16 Open을 거부시키는 계열 axisId를 쓰지 않음');
+  assert.ok(files['xl/charts/style1.xml']); assert.ok(files['xl/charts/colors1.xml']);
+  const rels = textOf(files['xl/charts/_rels/chart1.xml.rels']);
+  assert.match(rels, /relationships\/chartStyle/); assert.match(rels, /relationships\/chartColorStyle/);
+  const content = textOf(files['[Content_Types].xml']); assert.ok(content.includes(CHARTEX_STYLE_CONTENT)); assert.ok(content.includes(CHARTEX_COLOR_CONTENT));
+});
+
+test('ChartEx native 서식 변경은 오래된 자체 옵션보다 우선, 미지원 옵션만 보존', () => {
+  const files = unzip(writeXlsx(book('waterfall', { dataTable: true, title: '원래 제목', seriesFmt: [{ color: '#AA0000', marker: 'diamond' }], axes: { y: { min: -5, reverse: true } } })));
+  // Excel 저장처럼 ChartEx 자체 확장은 제거되어도 drawing의 보조 정보는 남습니다.
+  files[path] = textOf(files[path]).replace(/<cx:extLst>[\s\S]*?<\/cx:extLst>/g, '').replace('원래 제목', 'Excel 수정 제목').replace('val="AA0000"', 'val="0066FF"').replace('min="-5"', 'min="-2"');
+  const chart = reopen(files).chart;
+  assert.equal(chart.title, 'Excel 수정 제목'); assert.equal(chart.seriesFmt[0].color, '#0066ff'); assert.equal(chart.axes.y.min, -2);
+  assert.equal(chart.dataTable, true); assert.equal(chart.axes.y.reverse, true); assert.equal(chart.seriesFmt[0].marker, 'diamond');
+  files[path] = files[path].replace('layoutId="waterfall"', 'layoutId="funnel"');
+  const changed = reopen(files).chart; assert.equal(changed.type, 'funnel'); assert.equal(changed.title, 'Excel 수정 제목');
+  assert.equal(changed.dataTable, undefined, '다른 차트 종류에 옛 옵션을 덧씌우지 않음'); assert.equal(changed.axes.y.reverse, undefined);
+});
+
+test('파레토 보조 축: 범위·주 단위·제목·숨김·표시 형식은 표준 XML에 저장', () => {
+  const y2 = { min: 0, max: 1.2, major: .2, title: '누적 비율', hide: true, numFmt: '0.0%' };
+  const files = noExtension(unzip(writeXlsx(book('pareto', { axes: { y2 } }))));
+  assert.deepEqual(reopen(files).chart.axes.y2, y2);
 });

@@ -73,6 +73,20 @@ try {
       const p = await current(); if (expected) eq(Math.abs(p.w / p.h - expected) < .01, true, JSON.stringify({lockAspect,shift,w:p.w,h:p.h})); else eq(Math.abs(p.w / p.h - 2) > .1, true, JSON.stringify({lockAspect,shift,w:p.w,h:p.h}));
     }
   });
+  await test('투명도·모서리·그림자 수치 조절과 저장·재열기·Undo', async () => {
+    await page.setViewportSize({ width: 1440, height: 1000 }); await fixture(); const before = await current(); const dlg = await open();
+    await input('그림 투명도(%)').fill('65'); await input('둥근 모서리(px)').fill('8');
+    await input('그림자 표시').check(); await input('그림자 가로 거리(px)').fill('-4'); await input('그림자 세로 거리(px)').fill('5'); await input('그림자 흐리게(px)').fill('6'); await input('그림자 투명도(%)').fill('75');
+    await input('그림자 표시').uncheck(); await input('그림자 표시').check();
+    eq(await input('그림자 가로 거리(px)').inputValue(), '-4');
+    const preview = await page.locator('.picture-preview-frame').evaluate(el => ({ opacity: el.style.opacity, radius: el.style.borderRadius, shadow: el.style.boxShadow }));
+    eq(preview.opacity, '0.35'); eq(preview.radius, '8px'); eq(preview.shadow.includes('-4px 5px 6px'), true);
+    await dlg.getByRole('button', { name: '확인', exact: true }).click(); const after = await current();
+    eq(after.opacity, .35); eq(after.shadow.dx, -4); eq(after.radius, 8);
+    const serialized = await ev(() => window.tabula.wb().serialize()), back = readXlsx(writeXlsx(new Workbook(serialized))).data.sheets[0].images[0];
+    eq(back.opacity, .35); eq(Math.abs(back.radius - 8) < .001, true); eq(back.shadow.dx, -4);
+    await ev(() => window.tabula.run('undo')); eq(await current(), before); await ev(() => window.tabula.run('redo')); eq(await current(), after);
+  });
   await test('작은 화면에서 대화상자 가로 넘침과 키보드 초점 이탈 없음', async () => {
     await page.setViewportSize({ width: 620, height: 800 }); await fixture(); const dlg = await open();
     const bounds = await dlg.evaluate(el => ({ left: el.getBoundingClientRect().left, right: el.getBoundingClientRect().right, width: innerWidth, over: el.scrollWidth > el.clientWidth + 2 }));

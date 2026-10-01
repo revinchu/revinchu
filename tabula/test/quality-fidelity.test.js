@@ -131,13 +131,14 @@ test('범위 이동: 다른 시트로 옮길 때 외부 참조·GETPIVOTDATA·�
   assert.equal(moveRefsInFormula('=원본!A1+A1', { ...cross, hostSheet: '요약', dr: 0, dc: 0 }), `=${prefix}A1+A1`);
 });
 
-test('xlsx: 미지원 1904 날짜 체계는 원본과 다른 날짜를 조용히 표시하지 않고 경고', () => {
+test('xlsx: 1904 날짜 체계 플래그는 불리언 값으로 가져오고 불필요한 미지원 경고를 내지 않는다', () => {
   const bytes = writeXlsx(new Workbook());
   assert.ok(!readXlsx(bytes).warnings.some((s) => s.includes('1904')));
   for (const flag of ['1', 'true', '0', 'false']) {
     const files = unzip(bytes);
     files['xl/workbook.xml'] = textOf(files['xl/workbook.xml']).replace('<bookViews>', `<workbookPr date1904="${flag}"/><bookViews>`);
-    const warnings = readXlsx(zip(files)).warnings;
-    assert.equal(warnings.some((s) => s.includes('1904')), flag === '1' || flag === 'true');
+    const result = readXlsx(zip(files));
+    assert.equal(!!result.data.date1904, flag === '1' || flag === 'true');
+    assert.equal(result.warnings.some((s) => s.includes('1904')), false);
   }
 });

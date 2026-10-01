@@ -263,10 +263,10 @@ const SCALAR = {
     return st + chars(tail.slice(0, m.index)).length;
   },
   EXACT: ([a, b]) => toStr(a) === toStr(b),
-  VALUE: ([s]) => {
+  VALUE: ([s], ctx) => {
     const v = scalar(s);
     if (typeof v === 'boolean') throw ERR.VALUE;
-    return toNum(v);
+    return typeof v === 'string' ? (parseNumberText(v, !!ctx?.date1904) ?? ERR.VALUE) : toNum(v);
   },
   NUMBERVALUE: ([s, dec, grp]) => {
     let t = toStr(s).replace(/\s/g, '');
@@ -284,16 +284,16 @@ const SCALAR = {
     if (!Number.isFinite(n) || intPart + frac === '') throw ERR.VALUE;
     return n / 100 ** pct;
   },
-  TEXT: ([v, fmt]) => {
+  TEXT: ([v, fmt], ctx) => {
     const x = scalar(v);
     const f = toStr(fmt);
     if (typeof x === 'string') {
-      const n = parseNumberText(x);
-      if (n === null) return f.includes('@') ? formatWithPattern(x, f) : x;
-      return formatWithPattern(n, f);
+      const n = parseNumberText(x, !!ctx?.date1904);
+      if (n === null) return f.includes('@') ? formatWithPattern(x, f, !!ctx?.date1904) : x;
+      return formatWithPattern(n, f, !!ctx?.date1904);
     }
     if (typeof x === 'boolean') return x ? 'TRUE' : 'FALSE';
-    return formatWithPattern(x ?? 0, f);
+    return formatWithPattern(x ?? 0, f, !!ctx?.date1904);
   },
   FIXED: ([n, d, noCommas]) => fixedText(toNum(n), optInt(d, 2), optBool(noCommas, false)),
   DOLLAR: ([n, d]) => {

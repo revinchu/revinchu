@@ -1,4 +1,4 @@
-// WIXEL 3 저장 동의·충돌·키보드·피벗·셀 서식 브라우저 회귀. 실제 문서와 분리된 새 컨텍스트/가상 API 사용.
+// WIXEL 3 소스 서버용 회귀(/src 모듈 상태 검사 포함). 새 컨텍스트/가상 API만 사용한다.
 import assert from 'node:assert/strict';
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const browser = await chromium.launch();
@@ -39,10 +39,11 @@ try {
   });
   await test('빠른 실행 순서·리본 아래·Alt 키·설정 복원', async (p, start) => {
     await start(); await p.evaluate(() => window.tabula.run('options'));
-    await p.getByRole('button', { name: '빠른 실행 도구 모음', exact: true }).click();
+    await p.getByRole('tab', { name: '빠른 실행 도구 모음', exact: true }).click();
     await p.getByLabel('표시 위치', { exact: true }).selectOption('below');
     await p.getByLabel('사용 가능한 명령').selectOption('bold'); await p.getByRole('button', { name: '추가(A) >>', exact: true }).click();
-    for (let i = 0; i < 3; i++) await p.getByRole('button', { name: '위로', exact: true }).click();
+    const moveCount = await p.getByLabel('현재 도구 모음 순서').evaluate((select) => select.selectedIndex);
+    for (let i = 0; i < moveCount; i++) await p.getByRole('button', { name: '위로', exact: true }).click();
     await p.getByRole('button', { name: '확인', exact: true }).click();
     assert.match(await p.locator('#quickAccess').getAttribute('class'), /below/);
     assert.equal(await p.locator('[data-qat-key="1"]').getAttribute('data-qat-cmd'), 'bold');
@@ -86,7 +87,12 @@ try {
     assert.equal(await p.evaluate(() => window.tabula.wb().getValue(0, 0, 0)), 91);
   }, { cloud: true });
   await test('Google Sheets 값 가져오기와 수식 주입 방지', async (p, start) => {
-    await p.route('https://docs.google.com/**', (route) => route.fulfill({ contentType: 'text/csv', body: '부서,금액\n서울,120\n부산,=1+1' }));
+    const reply = (route) => route.fulfill({ contentType: 'text/csv', body: '부서,금액\n서울,120\n부산,=1+1' });
+    await p.route('https://docs.google.com/**', reply);
+    await p.route('**/api/fetch?**', (route) => {
+      assert.equal(new URL(new URL(route.request().url()).searchParams.get('url')).hostname, 'docs.google.com');
+      return reply(route);
+    });
     await start(); await p.evaluate(() => window.tabula.run('googleSheets'));
     await p.getByLabel('Google Sheets 공유 주소').fill('https://docs.google.com/spreadsheets/d/abcdefghijklmnopqrstuvwx/edit#gid=0');
     await p.getByRole('button', { name: '가져오기', exact: true }).click();

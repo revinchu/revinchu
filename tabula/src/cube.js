@@ -21,7 +21,7 @@ export const keyOf = (v) => {
   if (v === null || v === undefined) return EMPTY;
   if (typeof v === 'object') {
     if (v.type === 'image') { const k = `${IMG_KEY}${v.src}`; if (!imageByKey.has(k)) imageByKey.set(k, v); return k; }
-    return String(v.code);
+    return String(v.code ?? v.error);
   }
   return v;
 };
@@ -33,7 +33,7 @@ export const itemText = (v) => {
   if (v === EMPTY_TEXT) return '';
   if (v === null || v === undefined || v === '') return EMPTY;
   if (typeof v === 'number') return formatGeneral(v);
-  if (typeof v === 'object') return v.type === 'image' ? v.alt || `그림 ${String(v.src).slice(-12)}` : v.code;
+  if (typeof v === 'object') return v.type === 'image' ? v.alt || `그림 ${String(v.src).slice(-12)}` : v.code ?? v.error;
   const img = imageOfKey(v);
   return img ? img.alt || `그림 ${String(img.src).slice(-12)}` : String(v);
 };
@@ -461,9 +461,9 @@ export const GROUP_BY = [
   { id: 'days', label: '일' },
   { id: 'number', label: '숫자 구간' },
 ];
-const serialDate = (v) => new Date(Date.UTC(1899, 11, 30) + Math.round(v) * 86400000);
+const serialDate = (v, date1904 = false) => new Date((date1904 ? Date.UTC(1904, 0, 1) : Date.UTC(1899, 11, 30)) + Math.round(v) * 86400000);
 const p2 = (n) => String(n).padStart(2, '0');
-const isoDay = (v) => { const d = serialDate(v); return `${d.getUTCFullYear()}-${p2(d.getUTCMonth() + 1)}-${p2(d.getUTCDate())}`; };
+const isoDay = (v, date1904) => { const d = serialDate(v, date1904); return `${d.getUTCFullYear()}-${p2(d.getUTCMonth() + 1)}-${p2(d.getUTCDate())}`; };
 /** 원래 값 → 그룹 키 (숫자가 아니면 그대로) */
 export function groupKey(v, spec) {
   // 선택 항목 그룹화 (엑셀 '그룹1' 등): 원래 항목 글자 → 그룹 이름, 그룹에 안 든 항목은 그대로
@@ -476,9 +476,9 @@ export function groupKey(v, spec) {
     return `${lo}-${lo + size - 1}`;
   }
   // 엑셀: 시작 날짜보다 앞 · 끝 날짜보다 뒤는 '<2025-11-01' · '>2026-05-01' 항목으로
-  if (spec.start !== undefined && v < Math.floor(spec.start)) return `<${isoDay(spec.start)}`;
-  if (spec.end !== undefined && Math.floor(v) > Math.floor(spec.end)) return `>${isoDay(spec.end)}`;
-  const d = serialDate(v);
+  if (spec.start !== undefined && v < Math.floor(spec.start)) return `<${isoDay(spec.start, spec.date1904)}`;
+  if (spec.end !== undefined && Math.floor(v) > Math.floor(spec.end)) return `>${isoDay(spec.end, spec.date1904)}`;
+  const d = serialDate(v, spec.date1904);
   const y = d.getUTCFullYear();
   const m = d.getUTCMonth() + 1;
   switch (spec.by) {

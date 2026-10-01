@@ -31,7 +31,7 @@ for (const [flag, caption, enabled] of [[null, null, false], [null, '-', false],
     assert.equal(def.errorShow, enabled);
     assert.equal(pivotErrorDisplay(def), enabled, '옵션 UI와 같은 판정');
     assert.equal(def.errorCaption, caption ?? (enabled ? '' : undefined));
-    const error = !enabled ? '#DIV/0!' : caption === '-' ? "'-" : caption ?? '';
+    const error = !enabled ? '#DIV/0!' : caption === '-' ? '0' : caption ?? '';
     assert.deepEqual(result(imported), { error, valid: '10' });
     const exported = writeXlsx(imported);
     const xml = textOf(unzip(exported)[path]);

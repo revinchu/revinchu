@@ -3,7 +3,7 @@
 // 네트워크 결과는 NET 캐시에 모아 두고(비동기), 받는 동안은 '로딩 중…' 을 돌려줌. 받으면 NET.onDone 이 요청한 시트를 다시 계산
 import {
   ERR, Range, isError, toNum, toStr, optNum, optInt, optBool, asRange, lift, parseNumberText, makeCriteria,
-  compareValues, CellImage, collectNums, serialToDate, dateToSerial, FormulaError, minOf, maxOf, queryFormatted,
+  compareValues, CellImage, collectNums, serialToDate, dateToSerial, FormulaError, minOf, maxOf, queryFormatted, dateSystemFunction,
 } from './fxcore.js';
 
 // ───────────── 네트워크 캐시 ─────────────
@@ -571,7 +571,7 @@ function qTokens(s) {
 const AGG = new Set(['sum', 'avg', 'count', 'max', 'min']);
 const SCALAR = new Set(['year', 'month', 'day', 'quarter', 'hour', 'minute', 'second', 'dayofweek', 'upper', 'lower', 'todate', 'now', 'datediff', 'tostring']);
 class QParser {
-  constructor(toks) { this.k = toks; this.i = 0; }
+  constructor(toks, date1904 = false) { this.k = toks; this.i = 0; this.date1904 = date1904; }
   peek(o = 0) { return this.k[this.i + o]; }
   kw(word) {
     const parts = word.split(' ');
@@ -605,7 +605,7 @@ class QParser {
         if (!mm) throw new Error(`QUERY: 날짜 '${s}' 를 읽을 수 없습니다`);
         const d = new Date(Date.UTC(+mm[1], +mm[2] - 1, +mm[3]));
         if (d.getUTCFullYear() !== +mm[1] || d.getUTCMonth() + 1 !== +mm[2] || d.getUTCDate() !== +mm[3] || +(mm[4] ?? 0) > 23 || +(mm[5] ?? 0) > 59 || +(mm[6] ?? 0) >= 60) throw new Error('QUERY: 올바른 날짜를 입력하세요');
-        return { k: 'lit', v: dateToSerial(+mm[1], +mm[2], +mm[3]) + ((+(mm[4] ?? 0)) * 3600 + (+(mm[5] ?? 0)) * 60 + (+(mm[6] ?? 0))) / 86400 };
+        return { k: 'lit', v: dateToSerial(+mm[1], +mm[2], +mm[3], this.date1904) + ((+(mm[4] ?? 0)) * 3600 + (+(mm[5] ?? 0)) * 60 + (+(mm[6] ?? 0))) / 86400 };
       }
       if (this.peek()?.t === 'op' && this.peek().v === '(' && (AGG.has(w) || SCALAR.has(w))) {
         this.i++;
@@ -649,9 +649,9 @@ class QParser {
   orExpr() { let a = this.andExpr(); while (this.kw('or')) a = { k: 'or', a, b: this.andExpr() }; return a; }
   list() { const out = []; do out.push(this.orExpr()); while (this.op(',')); return out; }
 }
-export function parseQuery(text) {
-  const p = new QParser(qTokens(String(text ?? '')));
-  const q = { select: null, where: null, group: [], pivot: [], order: [], limit: null, offset: 0, labels: [], formats: [], options: [] };
+export function parseQuery(text, date1904 = false) {
+  const p = new QParser(qTokens(String(text ?? '')), date1904);
+  const q = { date1904, select: null, where: null, group: [], pivot: [], order: [], limit: null, offset: 0, labels: [], formats: [], options: [] };
   let previous = -1;
   while (p.peek()) {
     const clause = Q_KEYWORDS.findIndex((w) => w.split(' ').every((x, j) => p.peek(j)?.w === x));
@@ -711,9 +711,9 @@ function exprLabel(e, heads) {
   }
 }
 const isNum = (v) => typeof v === 'number';
-function scalarFn(f, args) {
+function scalarFn(f, args, date1904 = false) {
   const a = args[0];
-  const d = isNum(a) ? serialToDate(a) : null;
+  const d = isNum(a) ? serialToDate(a, date1904) : null;
   switch (f) {
     case 'year': return d ? d.y : null;
     case 'month': return d ? d.m - 1 : null; // 스프레드시트처럼 0 = 1월
@@ -728,7 +728,7 @@ function scalarFn(f, args) {
     case 'todate': return isNum(a) ? Math.floor(a) : null;
     case 'datediff': return isNum(a) && isNum(args[1]) ? Math.floor(a) - Math.floor(args[1]) : null;
     case 'tostring': return a == null ? null : String(a);
-    case 'now': return msToSerial(Date.now());
+    case 'now': return msToSerial(Date.now()) - (date1904 ? 1462 : 0);
     default: return null;
   }
 }
@@ -789,7 +789,7 @@ export function runQuery(q, rows, cols, heads) {
         if (!isNum(a) || !isNum(b)) return null;
         return e.o === '+' ? a + b : e.o === '-' ? a - b : e.o === '*' ? a * b : b === 0 ? null : a / b;
       }
-      case 'fn': return scalarFn(e.f, e.args.map((x) => val(x, row, group)));
+      case 'fn': return scalarFn(e.f, e.args.map((x) => val(x, row, group)), q.date1904);
       case 'agg': {
         if (!group) throw new Error('QUERY: 집계 함수는 select · order by · label 에만 쓸 수 있습니다');
         return aggregate(e.f, group.map((r) => (e.a?.k === 'star' ? 1 : val(e.a, r, null))));
@@ -886,7 +886,7 @@ export function runQuery(q, rows, cols, heads) {
   }
   out = out.slice(q.offset ?? 0, q.limit != null ? (q.offset ?? 0) + q.limit : undefined);
   if (q.options?.includes('no_format')) formats = formats.map(() => null);
-  if (q.options?.includes('no_values')) out = out.map((r) => r.map((v, c) => v == null ? null : queryFormatted(v, formats[c])));
+  if (q.options?.includes('no_values')) out = out.map((r) => r.map((v, c) => v == null ? null : queryFormatted(v, formats[c], q.date1904)));
   return { head, rows: out, formats };
 }
 function compareNulls(a, b) {
@@ -1151,8 +1151,8 @@ export const WEB = {
       const endArg = args[3] != null ? toNum(one(args[3])) : start;
       const end = endArg < 10000 ? start + endArg : Math.floor(endArg);
       const iv = args[4] != null ? (/^(week|7)/i.test(str1(args[4])) ? 'w' : 'd') : 'd';
-      return netRange(historyUrl(tk, start, end, iv), ctx, (t) => {
-        const hist = parseHistory(tk, t);
+      return netRange(historyUrl(tk, start + (ctx?.date1904 ? 1462 : 0), end + (ctx?.date1904 ? 1462 : 0), iv), ctx, (t) => {
+        const hist = parseHistory(tk, t).map(row => ctx?.date1904 ? [row[0] - 1462, ...row.slice(1)] : row);
         const col = { open: 1, high: 2, low: 3, close: 4, price: 4, volume: 5 }[attr];
         if (col === undefined) return ERR.VALUE;
         if (attr === 'all') return grid([['Date', 'Open', 'High', 'Low', 'Close', 'Volume'], ...hist]);
@@ -1186,7 +1186,7 @@ export const WEB = {
     const src = sparklineSvg(vals, o);
     return src ? new CellImage({ src, alt: '스파크라인', sizing: 1 }) : '';
   },
-  QUERY: (args) => {
+  QUERY: (args, ctx) => {
     if (isError(one(args[0]))) return one(args[0]);
     if (args[0] === LOADING) return LOADING;
     const data = asRange(args[0]);
@@ -1203,7 +1203,7 @@ export const WEB = {
     const cols = data.ref ? rows[0]?.map((_, i) => colName(data.ref.c1 + i)) ?? [] : (rows[0] ?? []).map((_, i) => `Col${i + 1}`);
     const heads = (rows[0] ?? []).map((_, i) => rows.slice(0, headers).map((r) => toStr(r[i] ?? '')).filter(Boolean).join(' '));
     let q;
-    try { q = parseQuery(text); } catch { return ERR.VALUE; }
+    try { q = parseQuery(text, !!ctx?.date1904); } catch { return ERR.VALUE; }
     let res;
     try { res = runQuery(q, rows.slice(headers).filter((r) => r.some((v) => v !== null && v !== '')), cols, heads); } catch { return ERR.VALUE; }
     if (!res.rows.length) return ERR.NA;
@@ -1386,8 +1386,8 @@ export const WEB = {
     const headers = optInt(one(args[4]), 1);
     const props = args.slice(5).map((p) => Math.trunc(toNum(one(p))));
     const pick = props.length ? props : [0, 1];
-    return netRange(historyUrl(tk, start, end, iv), ctx, (t) => {
-      const hist = parseHistory(tk, t);
+    return netRange(historyUrl(tk, start + (ctx?.date1904 ? 1462 : 0), end + (ctx?.date1904 ? 1462 : 0), iv), ctx, (t) => {
+      const hist = parseHistory(tk, t).map(row => ctx?.date1904 ? [row[0] - 1462, ...row.slice(1)] : row);
       if (!hist.length) return ERR.NA;
       const names = ['날짜', '종가', '시가', '고가', '저가', '거래량'];
       const colOf = [0, 4, 1, 2, 3, 5];
@@ -1459,3 +1459,6 @@ for (const k of ['GOOGLETRANSLATE', 'TRANSLATE', 'DETECTLANGUAGE', 'IMPORTXML', 
 function colName(c) { let s = ''; let n = c + 1; while (n) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
 /** 결과가 여러 칸일 수 있는 웹 함수 (분산 후보) */
 export const WEB_ARRAY = ['IMPORTDATA', 'IMPORTHTML', 'IMPORTXML', 'IMPORTFEED', 'IMPORTRANGE', 'QUERY', 'SPLIT', 'FLATTEN', 'SORTN', 'ARRAY_CONSTRAIN', 'ARRAYFORMULA', 'GOOGLEFINANCE', 'STOCKHISTORY', 'FILTERXML', 'TRIMRANGE'];
+
+WEB.ACCRINT = dateSystemFunction(WEB.ACCRINT, [0, 1, 2]);
+WEB.EPOCHTODATE = dateSystemFunction(WEB.EPOCHTODATE, [], true);

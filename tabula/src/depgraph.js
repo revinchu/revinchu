@@ -9,6 +9,7 @@
 //
 // 수식이 바뀌거나 지워지면 묶음은 그대로 두고, 찾을 때 그 칸의 수식이 묶음을 만든 수식과 같은지 확인한다(verify).
 import { RefValue } from './fxcore.js';
+import { FUNCS } from './formula.js';
 import { resolveStructRef } from './tables.js';
 
 const R_SPAN = 33554432; // 2^25 행
@@ -35,6 +36,7 @@ export function astRefs(ast) {
       case 'name': out.names.push(n); return;
       case 'spill': out.dyn = true; break;
       case 'func':
+        if (!FUNCS[n.name]) out.names.push({ v: n.name });
         if (DYN_FUNCS.has(n.name)) out.dyn = true;
         // GETPIVOTDATA: 피벗 테이블이 있는 시트 전체에 의존 (피벗 결과는 그 시트에만 쓰임). 참조가 아니면 동적
         else if (n.name === 'GETPIVOTDATA') {
@@ -107,7 +109,7 @@ export class DepGraph {
       // 열마다 위에서 아래로 (아래로 채운 수식이 한 묶음이 되도록)
       for (const [c, m] of sheet.cells.cols) {
         const rows = [];
-        for (const [r, cell] of m) if (cell.formula && cell.ast) rows.push(r);
+        for (const [r, cell] of m) if (cell.formula) rows.push(r);
         rows.sort((a, b) => a - b);
         for (const r of rows) {
           this.add(si, r, c, m.get(r));
@@ -178,6 +180,8 @@ export class DepGraph {
    * (참조되는 셀 추적 · 그래프 만들기가 같이 씀)
    */
   refBoxes(si, r, c, cell, cb) {
+    // 해석할 수 없는 수식은 참조를 추측하지 않고 모든 입력 변경에 의존시킨다.
+    if (!cell.ast) { cb(null); return; }
     const info = astRefs(cell.ast);
     const wb = this.wb;
     if (info.dyn) cb(null);
@@ -254,7 +258,7 @@ export class DepGraph {
   /** 칸 (si, r, c) 의 수식이 바뀜: 새 수식의 참조만 추가 (옛 묶음은 찾을 때 확인해서 무시) */
   set(si, r, c, cell) {
     this.dyn.delete(cellNum(si, r, c));
-    if (cell?.formula && cell.ast) { this.added++; this.add(si, r, c, cell); }
+    if (cell?.formula) { this.added++; this.add(si, r, c, cell); }
   }
 
   /** 행 r 에 걸리는 묶음 run 의 수식 i 범위 → 수식마다 fn(시트, 행, 열) */

@@ -47,7 +47,7 @@ export class Range {
   *values() { for (const row of this.rows) yield* row; }
   at(r, c) { return this.rows[r]?.[c]; }
 }
-export function queryFormatted(value, pattern) { return formatQuery(value, pattern); }
+export function queryFormatted(value, pattern, date1904 = false) { return formatQuery(value, pattern, date1904); }
 
 /** 참조 (OFFSET·INDIRECT·INDEX 결과, 범위 연산자 등). sheet: 시트 이름 또는 null(수식이 있는 시트) */
 export class RefValue {
@@ -76,11 +76,11 @@ export function scalar(v) {
 }
 
 /** 숫자 모양 텍스트 → 숫자 (쉼표·%·통화·날짜·시간 포함). 아니면 null */
-export function parseNumberText(s) {
+export function parseNumberText(s, date1904 = false) {
   const t = String(s).trim();
   if (t === '') return null;
   if (/^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(t)) return Number(t);
-  const p = parseInput(t);
+  const p = parseInput(t, date1904);
   return typeof p.value === 'number' ? p.value : null;
 }
 
@@ -408,19 +408,41 @@ export const EPOCH = Date.UTC(1899, 11, 30);
 export const DAY_MS = 86400000;
 // 엑셀 1900 날짜 체계: 1900-03-01 앞은 없는 날 1900-02-29 때문에 하루씩 당겨짐 (1900-01-01 = 1)
 export const dateToSerial = serialOf;
-export function serialToDate(serial) {
+export function serialToDate(serial, date1904 = false) {
   if (serial < 0) throw ERR.NUM;
-  return dateParts(serial, 1000);
+  return dateParts(serial, 1000, date1904);
 }
-export function todaySerial() {
+export function todaySerial(date1904 = false) {
   const n = new Date();
-  return dateToSerial(n.getFullYear(), n.getMonth() + 1, n.getDate());
+  return dateToSerial(n.getFullYear(), n.getMonth() + 1, n.getDate(), date1904);
 }
 /** 날짜 인수: 숫자 또는 날짜 텍스트 */
 export function toDate(v) {
   const n = toNum(v);
   if (n < 0) throw ERR.NUM;
   return Math.floor(n);
+}
+
+/** Convert only declared date arguments at a formula boundary. Stored numbers never change.
+ * Kernels use the 1900 calendar; explicit context keeps simultaneous workbooks independent. */
+export function dateSystemFunction(fn, dateArgs = [], dateResult = false, blankArgs = []) {
+  const map = (v, f) => v instanceof Range ? new Range(v.rows.map(row => row.map(f)), v.ref) : f(v);
+  const input = v => {
+    if (isError(v)) return v;
+    // Calendar text already parses to the kernel's 1900 epoch; numeric/time text is a serial.
+    if (typeof v === 'string' && /^date/.test(parseInput(v).numFmt ?? '')) return parseInput(v, true).value < 0 ? ERR.VALUE : v;
+    let n; try { n = toNum(v); } catch (e) { if (isError(e)) return e; throw e; }
+    return n < 0 || n >= 2957004 ? ERR.NUM : n + 1462;
+  };
+  const output = v => typeof v === 'number' ? (v < (dateResult === 'signed' ? 0 : 1462) || v >= 2958466 ? ERR.NUM : v - 1462) : v;
+  const wrapped = (args, ctx, ...rest) => {
+    if (!ctx?.date1904) return fn(args, ctx, ...rest);
+    const a = args.slice();
+    for (const i of dateArgs) if (i < a.length && a[i] !== undefined) a[i] = map(a[i], blankArgs.includes(i) ? v => v === null || v === '' ? v : input(v) : input);
+    const out = fn(a, ctx, ...rest);
+    return dateResult ? map(out, output) : out;
+  };
+  return Object.assign(wrapped, fn);
 }
 
 // ───────────────────────── 함수 표시 ─────────────────────────

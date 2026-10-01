@@ -136,7 +136,7 @@ test('피벗 오류 값 표시 옵션 (showError) 과 사용자 지정 피벗 �
   };
   assert.equal(cellOf(def, '가').raw, '#DIV/0!');
   assert.equal(cellOf({ ...def, errorCaption: '' }, '가').raw, '');
-  assert.equal(cellOf({ ...def, errorCaption: '-' }, '가').raw, "'-");
+  assert.equal(cellOf({ ...def, errorCaption: '-' }, '가').raw, '0'); // 실제 Excel의 오류 대체문구 변환
   assert.equal(cellOf({ ...def, errorCaption: '' }, '나').raw, '10');
   // 사용자 지정 스타일: 머리글 흰 글씨
   const custom = { header: { color: '#ffffff', fill: '#2f5597', bold: true } };
