@@ -47,7 +47,7 @@ export function hydrateIcons(root = document) {
 // ───────────── 창·메뉴 접근키 ─────────────
 let accessKeyHandler = null;
 export function setAccessKeyHandler(fn) { accessKeyHandler = fn; }
-const accessMemory = new WeakMap(), menuAccessOwners = new WeakMap(), accessScopeOrder = new WeakMap(), accessScopeClose = new WeakMap(), consumedAccessKeys = new Set();
+const accessMemory = new WeakMap(), menuAccessOwners = new WeakMap(), accessScopeOrder = new WeakMap(), accessScopeClose = new WeakMap(), menuToolbars = new WeakMap(), menuToolbarObservers = new WeakMap(), menuAnchors = new WeakMap(), menuMinimumWidths = new WeakMap(), consumedAccessKeys = new Set();
 let accessOrder = 0;
 let accessMode = false, accessScope = null, accessLayer = null;
 /** 공통 메뉴/대화상자 밖의 팝업을 등록. owner는 여는 창/팝업, onClose는 Escape 종료 동작. */
@@ -64,14 +64,14 @@ export function registerAccessKeyScope(root, { owner = document.activeElement?.c
   };
 }
 const ACCESS_CONTROLS = 'button,input:not([type="hidden"]),select,textarea,a[href],[role="tab"],[role="button"],[role="menuitem"],[role="checkbox"],[role="radio"],[role="option"],[role="listbox"],[tabindex]';
-function accessVisible(node) {
+function accessVisible(node, includeClipped = false) {
   if (!node.isConnected || node.matches(':disabled,[aria-disabled="true"]') || node.closest('[hidden],[inert],[aria-hidden="true"]')) return false;
   const rect = node.getBoundingClientRect();
-  if (!rect.width || !rect.height || rect.bottom <= 0 || rect.right <= 0 || rect.top >= innerHeight || rect.left >= innerWidth) return false;
+  if (!rect.width || !rect.height || (!includeClipped && (rect.bottom <= 0 || rect.right <= 0 || rect.top >= innerHeight || rect.left >= innerWidth))) return false;
   for (let p = node; p && p !== document.body; p = p.parentElement) {
     const style = getComputedStyle(p);
     if (style.visibility === 'hidden' || style.visibility === 'collapse' || style.display === 'none') return false;
-    if (p !== node && /(auto|scroll|hidden|clip)/.test(style.overflow + style.overflowX + style.overflowY)) {
+    if (!includeClipped && p !== node && /(auto|scroll|hidden|clip)/.test(style.overflow + style.overflowX + style.overflowY)) {
       const clip = p.getBoundingClientRect();
       if (rect.bottom <= clip.top || rect.top >= clip.bottom || rect.right <= clip.left || rect.left >= clip.right) return false;
     }
@@ -80,7 +80,7 @@ function accessVisible(node) {
 }
 function activeAccessScope() {
   // 리본 키팁 자체의 명령 목록은 app.js의 순차 키 처리에 맡긴다.
-  const dialogs = [...document.querySelectorAll('#dialogLayer .dialog')].filter(accessVisible);
+  const dialogs = [...document.querySelectorAll('#dialogLayer .dialog')].filter((node) => accessVisible(node));
   const modal = dialogs.filter((d) => !d.closest('.dialog-backdrop')?.classList.contains('modeless')).at(-1);
   const owned = (scope) => {
     const seen = new Set(); let hasModal = !modal;
@@ -128,17 +128,21 @@ function prepareAccessKeys(scope) {
   for (const node of scope.querySelectorAll('[data-access-key="none"]')) {
     node.removeAttribute('aria-keyshortcuts'); delete node.dataset.resolvedAccessKey; delete node.dataset.accessKeySource;
   }
-  const targets = [...scope.querySelectorAll(ACCESS_CONTROLS)].filter((node) => node !== scope && accessVisible(node) && node.dataset.accessKey !== 'none' && !node.closest('.access-key-layer'));
+  const toolbar = menuToolbars.get(scope);
+  const targets = [...scope.querySelectorAll(ACCESS_CONTROLS), ...(toolbar?.isConnected ? toolbar.querySelectorAll(ACCESS_CONTROLS) : [])].filter((node) => node !== scope && accessVisible(node) && node.dataset.accessKey !== 'none' && !node.closest('.access-key-layer'));
   const details = targets.map((node) => ({ explicit: node.dataset.accessKey, aliases: node.dataset.accessAliases, label: associatedAccessLabel(node), previous: accessMemory.get(node) }));
-  const keys = allocateAccessKeys(details);
+  // 작은 화면에서 메뉴 아래쪽 항목이 스크롤 밖이어도 그 명시 키를 미니 단추가 빼앗지 않는다.
+  const reservations = scope.dataset.contextMenu ? [...scope.querySelectorAll('[data-access-key],[data-access-aliases]')].filter((node) => !targets.includes(node) && (/^[a-z0-9]$/i.test(node.dataset.accessKey ?? '') || accessKeyAliases(node.dataset.accessAliases).length)).map((node) => ({ explicit: node.dataset.accessKey, aliases: node.dataset.accessAliases })) : [];
+  const keys = allocateAccessKeys([...details, ...reservations]);
   return targets.map((target, i) => {
     const entry = { target, ...keys[i], aliases: accessKeyAliases(details[i].aliases) };
+    if (!entry.key) { target.removeAttribute('aria-keyshortcuts'); delete target.dataset.resolvedAccessKey; delete target.dataset.accessKeySource; return null; }
     accessMemory.set(target, entry.key);
     target.setAttribute('aria-keyshortcuts', [entry.key, ...entry.aliases.filter((key) => key !== entry.key)].map((key) => 'Alt+' + key.toUpperCase()).join(' '));
     target.dataset.resolvedAccessKey = entry.key;
     target.dataset.accessKeySource = entry.automatic ? 'wixel' : details[i].explicit || accessKeyFromLabel(details[i].label) ? 'label' : 'excel';
     return entry;
-  });
+  }).filter(Boolean);
 }
 function endAccessKeys() {
   accessMode = false; accessScope = null; accessLayer?.remove(); accessLayer = null;
@@ -182,6 +186,10 @@ window.addEventListener('keydown', (event) => {
   if (!event.altKey && !accessMode && !menuTyping) return;
   const key = accessKeyFromEvent(event);
   if (!key) return;
+  if (scope.dataset.contextMenu) {
+    const explicit = [...scope.querySelectorAll(':scope > .menu-item')].find((node) => accessVisible(node, true) && (node.dataset.accessKey?.toLowerCase() === key || accessKeyAliases(node.dataset.accessAliases).includes(key)));
+    explicit?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
   const matches = prepareAccessKeys(scope).filter((entry) => entry.key === key || entry.aliases.includes(key));
   if (!matches.length || scope.getAttribute('aria-busy') === 'true') { if (event.altKey || accessMode) consumeAccessKey(event, 'mode', key); return; }
   if (event.repeat) { consumeAccessKey(event, 'mode', key); return; }
@@ -224,7 +232,7 @@ export const isMenuOpen = () => openMenus.length > 0;
 export function closeMenus() {
   if (!openMenus.length) return;
   endAccessKeys();
-  for (const m of openMenus) m.remove();
+  for (const m of openMenus) { menuToolbarObservers.get(m)?.disconnect(); m.remove(); }
   openMenus = [];
   menuAnchor = null;
   onMenuClose?.();
@@ -239,14 +247,16 @@ let menuAnchor = null;
 let suppress = null;
 // 화면을 다시 그려 단추 요소가 바뀌어도 같은 단추로 알아보도록 (종류 · 데이터 · 제목)
 const anchorKey = (el) => `${el.tagName}|${String(el.className).replace(/\b(on|active|open|pressed)\b/g, '').trim()}|${JSON.stringify({ ...el.dataset })}|${el.getAttribute('title') ?? ''}`;
-export function openMenu(anchor, items, { minWidth, scroll } = {}) {
+export function openMenu(anchor, items, { minWidth, scroll, toolbar } = {}) {
   if (anchor instanceof Element && suppress && (suppress.el === anchor || suppress.key === anchorKey(anchor)) && Date.now() - suppress.t < 600) {
     suppress = null;
     return document.createElement('div'); // 호출한 쪽이 style 등을 만져도 안전하게
   }
+  const anchorRect = anchor instanceof Element ? anchor.getBoundingClientRect() : null;
   closeMenus();
   menuAnchor = anchor instanceof Element ? anchor : null;
-  return buildMenu(anchor, items, { minWidth, scroll });
+  const position = anchorRect && !anchor.isConnected ? { x: anchorRect.left, y: anchorRect.bottom + 2 } : anchor;
+  return buildMenu(position, items, { minWidth, scroll, toolbar });
 }
 
 /** 열린 메뉴 안의 단추에서 오른쪽에 하위 메뉴 (앞 메뉴는 그대로 둠) — 피벗 필터의 [레이블 필터 ▸] 등 */
@@ -262,11 +272,12 @@ export function openSubmenu(anchorEl, items) {
 }
 
 /** 메뉴 하나 (submenu: 오른쪽에 하위 메뉴, swatch: 색 견본, header: 제목 줄) */
-function buildMenu(anchor, items, { minWidth, scroll, level = 0, parentItem = null, focus = true } = {}) {
+function buildMenu(anchor, items, { minWidth, scroll, toolbar, level = 0, parentItem = null, focus = true } = {}) {
   const menu = el('div', { class: 'menu', role: 'menu' });
   menuAccessOwners.set(menu, parentItem ? menuAccessOwners.get(parentItem.closest('.menu')) : (anchor instanceof Element ? anchor.closest('.dialog,[data-access-scope]') : null) ?? document.activeElement?.closest('.dialog,[data-access-scope]'));
   accessScopeOrder.set(menu, ++accessOrder);
   menu.dataset.level = String(level);
+  if (toolbar || parentItem?.closest('.menu')?.dataset.contextMenu) menu.dataset.contextMenu = 'true';
   if (minWidth) menu.style.minWidth = `${minWidth}px`;
   if (scroll || level) { menu.style.maxHeight = '60vh'; menu.style.overflowY = 'auto'; }
   const closeDeeper = () => {
@@ -297,11 +308,16 @@ function buildMenu(anchor, items, { minWidth, scroll, level = 0, parentItem = nu
     menu.append(btn);
   }
   document.getElementById('menuLayer').append(menu);
-  placeMenu(menu, anchor);
   openMenus.push(menu);
+  if (toolbar instanceof HTMLElement && !level) attachMenuToolbar(menu, toolbar, anchor);
+  placeMenu(menu, anchor);
   prepareAccessKeys(menu);
   menu.addEventListener('keydown', (e) => {
     if (e.isComposing || e.keyCode === 229) return;
+    if (e.key === 'Tab' && toolbar?.isConnected) {
+      const controls = toolbarControls(toolbar);
+      if (controls.length) { e.preventDefault(); e.stopPropagation(); controls[e.shiftKey ? controls.length - 1 : 0].focus(); return; }
+    }
     if (e.key === 'Escape' || (e.key === 'ArrowLeft' && level && !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName))) {
       e.preventDefault(); e.stopPropagation();
       if (level) {
@@ -345,7 +361,55 @@ function placeMenu(menu, anchor) {
   if (y + mh > innerHeight - 4) y = Math.max(4, innerHeight - mh - 4);
   menu.style.left = `${x}px`;
   menu.style.top = `${y}px`;
+  const toolbar = menuToolbars.get(menu);
+  if (toolbar?.isConnected) {
+    const margin = 4, gap = 5;
+    toolbar.style.maxWidth = `${Math.max(1, innerWidth - margin * 2)}px`;
+    toolbar.style.maxHeight = `${Math.max(28, Math.floor((innerHeight - margin * 2 - gap) * .45))}px`;
+    const height = toolbar.offsetHeight;
+    // 두 영역이 화면보다 크면 메뉴만 스크롤. 작은 화면에서 위쪽 도구와 항목이 겹치지 않는다.
+    menu.style.maxHeight = `${Math.max(24, innerHeight - margin * 2 - gap - height)}px`;
+    menu.style.maxWidth = `${Math.max(1, innerWidth - margin * 2)}px`;
+    menu.style.minWidth = `${Math.min(menuMinimumWidths.get(menu), Math.max(1, innerWidth - margin * 2))}px`;
+    const menuHeight = menu.offsetHeight;
+    y = Math.max(margin + height + gap, Math.min(y, innerHeight - margin - menuHeight));
+    x = Math.max(margin, Math.min(x, innerWidth - margin - menu.offsetWidth));
+    menu.style.left = `${x}px`;
+    menu.style.top = `${y}px`;
+    toolbar.style.left = `${Math.max(margin, Math.min(x, innerWidth - margin - toolbar.offsetWidth))}px`;
+    toolbar.style.top = `${Math.max(margin, y - height - gap)}px`;
+  }
 }
+
+function toolbarControls(toolbar) { return [...toolbar.querySelectorAll('button,input,select,textarea,[tabindex]')].filter((node) => accessVisible(node) && node.tabIndex >= 0); }
+function attachMenuToolbar(menu, toolbar, anchor) {
+  toolbar.classList.add('context-mini-toolbar'); toolbar.dataset.level = '0';
+  toolbar.setAttribute('role', 'toolbar');
+  if (!toolbar.getAttribute('aria-label')) toolbar.setAttribute('aria-label', '미니 서식 도구 모음');
+  menuToolbars.set(menu, toolbar); menuAnchors.set(menu, anchor);
+  menuMinimumWidths.set(menu, parseFloat(getComputedStyle(menu).minWidth) || 180);
+  document.getElementById('menuLayer').append(toolbar); openMenus.push(toolbar);
+  // 외부 코드가 메뉴 DOM만 지우는 경우에도 보조 막대가 홀로 남지 않는다.
+  const observer = new MutationObserver(() => { if (!menu.isConnected) { toolbar.remove(); observer.disconnect(); openMenus = openMenus.filter((node) => node.isConnected); } });
+  menuToolbarObservers.set(menu, observer);
+  observer.observe(menu.parentNode, { childList: true });
+  toolbar.addEventListener('mousedown', (event) => { if (event.target.closest('button')) event.preventDefault(); });
+  toolbar.addEventListener('keydown', (event) => {
+    event.stopPropagation();
+    if (event.isComposing || event.keyCode === 229) return;
+    if (event.key === 'Escape') { event.preventDefault(); closeMenus(); return; }
+    const controls = toolbarControls(toolbar), at = controls.indexOf(document.activeElement);
+    const editable = event.target.matches('input,select,textarea') || event.target.isContentEditable;
+    if (event.key === 'Tab') {
+      event.preventDefault(); const next = at + (event.shiftKey ? -1 : 1);
+      if (next >= 0 && next < controls.length) controls[next].focus();
+      else { const entries = [...menu.querySelectorAll(':scope > .menu-item:not(:disabled)')]; entries[event.shiftKey ? entries.length - 1 : 0]?.focus(); }
+    } else if (!editable && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key) && controls.length) {
+      event.preventDefault(); controls[event.key === 'Home' ? 0 : event.key === 'End' ? controls.length - 1 : (at + (event.key === 'ArrowRight' ? 1 : -1) + controls.length) % controls.length].focus();
+    } else if (!editable && event.key === 'ArrowDown') { event.preventDefault(); menu.querySelector(':scope > .menu-item:not(:disabled)')?.focus(); }
+  });
+}
+window.addEventListener('resize', () => { for (const menu of openMenus) if (menuToolbars.has(menu) && menu.isConnected) placeMenu(menu, menuAnchors.get(menu)); });
 
 document.addEventListener('mousedown', (e) => {
   if (openMenus.length && !openMenus.some((m) => m.contains(e.target))) {

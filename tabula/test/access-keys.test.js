@@ -38,3 +38,9 @@ test('접근키: 공통 확인 O·취소 C·닫기 D 기본 키', () => {
   assert.equal(dialogButtonAccessKey('확인'), 'o'); assert.equal(dialogButtonAccessKey('취소'), 'c');
   assert.equal(dialogButtonAccessKey('닫기(&D)'), 'd'); assert.equal(dialogButtonAccessKey('다음'), '');
 });
+test('접근키: 자동 키가 36개를 넘어도 명시·별칭 예약 키를 재사용하지 않음', () => {
+  const assigned = allocateAccessKeys([{ explicit: 'd', aliases: 'c' }, ...Array.from({ length: 80 }, () => ({ label: '합성 컨트롤' }))]);
+  assert.ok(assigned.slice(1).every((x) => x.key !== 'd' && x.key !== 'c'));
+  const allReserved = allocateAccessKeys([... 'abcdefghijklmnopqrstuvwxyz1234567890'].map((explicit) => ({ explicit })).concat({ label: '추가' }));
+  assert.equal(allReserved.at(-1).key, '', '명시 키만으로 꽉 찬 경우 잘못된 명령과 겹치기보다 Tab 사용');
+});

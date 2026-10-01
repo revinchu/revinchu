@@ -1573,3 +1573,24 @@ body.keytips #ribbon label[data-ribbon-command]:has(input[type="checkbox"]) { pa
 .pv-classic-zone { flex:1; min-width:0; display:flex; align-items:center; justify-content:center; box-sizing:border-box; border:1px dashed #4e799a; background:#eaf4ff; color:#183d59; font-size:11px; }
 .pv-classic-zone.over { background:#c4e5d1; border:2px solid var(--green); }
 @media print { .pv-classic-frame,.pv-classic-field,.pv-classic-zones { display:none!important; } }
+
+/* 우클릭 메뉴에 부속된 미니 서식 도구 모음 */
+.context-mini-toolbar { position:fixed; z-index:251; width:350px; box-sizing:border-box; padding:5px; border:1px solid #b8b8b8; border-radius:3px; background:#fff; box-shadow:0 3px 12px #0003; overflow:auto; color:#222; }
+.mini-format-row { display:flex; flex-wrap:wrap; align-items:center; gap:2px; min-width:0; }
+.mini-format-row ~ .mini-format-row { margin-top:3px; }
+.mini-format-button { width:24px; height:25px; min-width:24px; padding:2px; border:1px solid transparent; border-radius:2px; background:transparent; display:inline-flex; align-items:center; justify-content:center; color:inherit; font:12px Arial,sans-serif; position:relative; }
+.mini-format-button:hover:not(:disabled),.mini-format-button.on { background:#e4eee8; border-color:#abc4b6; }
+.mini-format-button:focus-visible,.context-mini-toolbar input:focus-visible { outline:2px solid var(--green); outline-offset:-2px; }
+.mini-format-button:disabled,.context-mini-toolbar input:disabled { opacity:.45; }
+.mini-format-button .ico { width:18px; height:18px; align-items:center; justify-content:center; }
+.mini-format-button svg { width:18px; height:18px; }
+.mini-format-button .glyph { font-size:14px; line-height:16px; }
+.mini-format-button .glyph-dec { font-size:9px; line-height:9px; }
+.mini-format-button .glyph-comma { font-size:10px; }
+.mini-grow sup { font-size:7px; vertical-align:top; }
+.context-mini-toolbar input { height:25px; min-width:0; padding:2px 4px; border:1px solid #c4c4c4; border-radius:2px; font:12px var(--ui-font,Arial,sans-serif); color:inherit; background:#fff; }
+.context-mini-toolbar .mini-font { width:143px; flex:1 1 110px; max-width:204px; }
+.context-mini-toolbar .mini-size { width:48px; }
+.mini-fill::after,.mini-color::after { content:''; position:absolute; bottom:1px; left:3px; right:3px; height:3px; border:1px solid #0002; background:var(--mini-fill); }
+.mini-color::after { background:var(--mini-color); }
+@media print { .context-mini-toolbar { display:none!important; } }

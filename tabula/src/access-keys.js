@@ -510,11 +510,12 @@ export function allocateAccessKeys(items) {
     const hint = accessKeyHint(items[i].label);
     if (!assigned[i] && hint && !used.has(hint)) { assigned[i] = hint; used.add(hint); }
   }
+  const overflowPool = [...pool].filter((candidate) => !used.has(candidate));
   let overflow = 0;
   return items.map((item, i) => {
     if (assigned[i]) return { key: assigned[i], automatic: false };
     const remembered = /^[a-z0-9]$/i.test(item.previous ?? '') ? item.previous.toLowerCase() : '';
-    const key = remembered && !used.has(remembered) ? remembered : [...pool].find((candidate) => !used.has(candidate)) ?? pool[overflow++ % pool.length];
+    const key = remembered && !used.has(remembered) ? remembered : [...pool].find((candidate) => !used.has(candidate)) ?? overflowPool[overflow++ % overflowPool.length] ?? '';
     used.add(key);
     return { key, automatic: true };
   });

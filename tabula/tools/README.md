@@ -268,3 +268,14 @@ node tools/recovery-ux.mjs
 `dialog-access-keys.mjs`의 공통 UI 단독 검사는 소스 모듈을 가져오므로 소스 서버에서 실행합니다. 다른 네 도구는 최종 번들에서도 실행합니다. `keytips-ime.mjs`는 Chromium에 합성 이벤트를 보내므로 Windows IME 자체를 검증한 결과와 구분해야 합니다. 상세 범위는 [19번 문서](../docs/codex/19_피벗표시와팝업접근키.md)를 확인하세요.
 
 `pivot-classic-grid.mjs`는 기본 A7 배치를 검사합니다. `CLASSIC_TOP=0`을 지정하면 A1에 피벗을 두고 원본 데이터를 별도 합성 시트로 옮겨 같은 드래그 회귀를 실행합니다. `CLASSIC_SCREENSHOT`으로 D: PNG 경로를 지정하면 기본 화면과 드래그 중 띠 위치를 함께 저장합니다.
+
+
+## 셀·행·열 우클릭 회귀
+
+| 명령 | 범위 |
+|---|---|
+| `node tools/context-menu.mjs` | 실제 우클릭/Shift+F10/메뉴 키, 명시 접근키, 선택·치수·숨김·Undo, 보호/읽기 전용, 미니 도구, 작은 화면 |
+| `node tools/context-mini-toolbar.mjs` | 공통 UI의 배치/포커스/접근키/연속 서식/닫힘. 소스 서버 전용 |
+| `node tools/context-menu-safety.mjs` | 셀 밀기 보호, 잘라내기·붙여넣기 자료 보존, 변경 범위 권한, 치수 변경의 수식 저장값 유지 |
+
+`WIXEL_URL`과 기존 Playwright 환경 변수를 사용한다. 분리된 컨텍스트의 합성 문서만 만들며 클립보드를 모의 구현하고 원격 쓰기를 차단한다. 사용자 업무 파일이나 열린 탭은 건드리지 않는다. `CONTEXT_MENU_SCREENSHOT`에 D: 절대 PNG 경로를 지정하면 메뉴를 캡처한다. 구체적 한도·결과는 [20번 문서](../docs/codex/20_셀행열_우클릭메뉴.md)를 확인한다.
