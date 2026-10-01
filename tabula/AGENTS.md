@@ -10,7 +10,7 @@ WIXEL 은 **Microsoft Excel(한국어판)의 화면과 동작을 그대로 따�
 3. `docs/codex/02_보완항목내역서.md` — 남은 일 (우선순위 · 완료 기준)
 4. `docs/codex/03_스킬가이드.md` — 기능을 추가하는 정해진 방법 (레시피)
 5. `docs/codex/04_서버호스팅가이드.md` — 서버 API · 배포 · 보안
-   최신 상태는 `docs/codex/07_품질개선결과.md`, 후속 작업용 지시문은 `docs/codex/08_Codex_다음지시문.md`를 확인하세요.
+   최신 상태는 `docs/codex/09_WIXEL3_구현과검증.md`, 후속 작업용 지시문은 `docs/codex/10_Codex_3.0_인계지시문.md`를 확인하세요.
 6. 저장소 루트의 `CLAUDE.md` 의 "Tabula" 절 — **기술 노트 원본** (엑셀 동작을 맞추며 알아낸 세부 규칙 200여 개). 그 영역을 고치기 전에 해당 항목을 반드시 찾아 읽으세요.
 
 ## 명령
@@ -19,6 +19,7 @@ cd tabula
 npm start        # http://localhost:5178  (server.js: 정적 파일 + 문서 저장 API)
 npm test         # node --test test/*.test.js  (DOM 없는 모듈 단위 테스트)
 npm run build    # dist/index.html 한 파일 배포본 (+ dist/assets/)
+npm run build:cloud # dist-cloudflare/ (외부 JS, CSP, Cloudflare API 연동)
 node tools/smoke.mjs   # (서버 실행 중) 모든 리본 명령을 실행해 오류가 없는지 — 브라우저 필요
 ```
 

@@ -3,7 +3,7 @@
 // 네트워크 결과는 NET 캐시에 모아 두고(비동기), 받는 동안은 '로딩 중…' 을 돌려줌. 받으면 NET.onDone 이 요청한 시트를 다시 계산
 import {
   ERR, Range, isError, toNum, toStr, optNum, optInt, optBool, asRange, lift, parseNumberText, makeCriteria,
-  compareValues, CellImage, collectNums, serialToDate, dateToSerial, FormulaError, minOf, maxOf,
+  compareValues, CellImage, collectNums, serialToDate, dateToSerial, FormulaError, minOf, maxOf, queryFormatted,
 } from './fxcore.js';
 
 // ───────────── 네트워크 캐시 ─────────────
@@ -11,13 +11,23 @@ import {
  * fetcher(url) → Promise<string> (앱이 설정: 서버 프록시 /api/fetch 또는 직접 fetch)
  * onDone(sheetIndexes) → 결과가 도착하면 그 URL 을 요청한 시트를 다시 계산
  */
-export const NET = { cache: new Map(), fetcher: null, onDone: null, waiting: 0 };
+export const NET = { cache: new Map(), fetcher: null, authorize: null, onDone: null, waiting: 0, maxAge: 60 * 60 * 1000 };
 export const LOADING = '로딩 중…';
 
 /** URL 의 텍스트: 있으면 문자열, 받는 중이면 LOADING, 실패하면 ERR.NA (NET.cache 의 message 에 이유) */
 export function netText(url, ctx) {
-  const hit = NET.cache.get(url);
   const si = ctx?.here?.si;
+  // 문서마다 다른 권한을 캐시보다 먼저 검사한다. 이전 문서의 성공 결과도 예외가 아니다.
+  let denied = null;
+  try { denied = NET.authorize?.(url, ctx); } catch { denied = '데이터 가져오기 권한을 확인할 수 없습니다.'; }
+  if (denied != null) {
+    NET.cache.set(url, { state: 'error', blocked: true, message: String(denied), sheets: new Set(si != null ? [si] : []), t: Date.now() });
+    return ERR.NA;
+  }
+  let hit = NET.cache.get(url);
+  // 사용자가 권한을 명시적으로 허용하면 이전 거부를 영구 캐시하지 않고 다시 요청한다.
+  if (hit?.blocked) { NET.cache.delete(url); hit = null; }
+  if (hit && hit.state !== 'loading' && Date.now() - hit.t >= NET.maxAge) { NET.cache.delete(url); hit = null; }
   if (hit) {
     if (si != null) hit.sheets.add(si);
     if (hit.state === 'ok') return hit.data;
@@ -30,6 +40,7 @@ export function netText(url, ctx) {
   NET.waiting++;
   Promise.resolve().then(() => NET.fetcher(url)).then((text) => {
     rec.state = 'ok';
+    rec.t = Date.now();
     rec.data = String(text ?? '');
   }, (e) => {
     rec.state = 'error';
@@ -388,6 +399,63 @@ export function parseCsv(text, delim = null) {
   if (f !== '' || row.length) { row.push(f); rows.push(row); }
   return rows;
 }
+
+/** Google 주소에서 자격 증명·임의 쿼리를 전달하지 않고 공개 시트용 주소만 생성. */
+export function importRangeSource(source, range) {
+  const src = String(source ?? '').trim(), spec = String(range ?? '').trim();
+  if (!src || !spec || /[\u0000-\u001f]/.test(src + spec)) throw new Error('문서 주소와 범위를 확인하세요.');
+  const m = /^(?:'((?:[^']|'')+)'|([^'!]+))!(.+)$/.exec(spec);
+  if (spec.includes('!') && !m) throw new Error('시트 이름과 범위를 확인하세요.');
+  const sheet = m ? (m[1] ?? m[2]).replace(/''/g, "'") : '';
+  const area = (m ? m[3] : spec).replace(/\$/g, '').toUpperCase();
+  let id = /^[\w-]{20,}$/.test(src) ? src : null;
+  let published = false, gid = null;
+  if (/^(?:https?:\/\/|docs\.google\.com\/)/i.test(src)) {
+    let u;
+    try { u = new URL(src.startsWith('docs.') ? `https://${src}` : src); } catch { throw new Error('Google Sheets 주소가 올바르지 않습니다.'); }
+    if (u.hostname !== 'docs.google.com' || u.username || u.password || u.port) throw new Error('docs.google.com의 공개 스프레드시트 주소를 사용하세요.');
+    const path = /^\/(?:a\/[^/]+\/)?spreadsheets\/d\/(e\/)?([\w-]+)(?:\/|$)/.exec(u.pathname);
+    if (!path) throw new Error('Google Sheets 문서 ID를 찾지 못했습니다.');
+    published = !!path[1]; id = path[2];
+    gid = u.searchParams.get('gid') ?? new URLSearchParams(u.hash.slice(1)).get('gid');
+    if (gid !== null && !/^\d+$/.test(gid)) throw new Error('시트 gid는 숫자여야 합니다.');
+  } else if (/^[a-z][\w+.-]*:/i.test(src) || src.includes('/')) throw new Error('지원하지 않는 문서 주소입니다.');
+  if (!id) return { url: `wixel-doc:${src}\u0001${sheet}\u0001${area}` };
+  const valid = /^(?:[A-Z]+[1-9]\d*|(?:[A-Z]+[1-9]\d*|[A-Z]+|[1-9]\d*):(?:[A-Z]+[1-9]\d*|[A-Z]+|[1-9]\d*))$/;
+  if (!valid.test(area)) throw new Error('A1:C10, A1:C 또는 A:C 형식의 범위를 입력하세요. 이름 정의·표 참조는 아직 지원하지 않습니다.');
+  if (published) {
+    if (sheet) throw new Error('게시된 시트 주소는 gid로 탭을 지정하고 범위에는 A1:C10처럼 셀 주소만 입력하세요. 시트 이름 지정은 일반 공유 주소를 사용하세요.');
+    const u = new URL(`https://docs.google.com/spreadsheets/d/e/${id}/pub`);
+    u.searchParams.set('output', 'csv'); u.searchParams.set('single', 'true');
+    if (gid !== null) u.searchParams.set('gid', gid);
+    return { url: u.href, crop: area };
+  }
+  const u = new URL(`https://docs.google.com/spreadsheets/d/${id}/gviz/tq`);
+  u.searchParams.set('tqx', 'out:csv'); u.searchParams.set('headers', '0');
+  if (sheet) u.searchParams.set('sheet', sheet);
+  else if (gid !== null) u.searchParams.set('gid', gid);
+  u.searchParams.set('range', area);
+  return { url: u.href };
+}
+
+export function parseImportRange(text, crop = null) {
+  const t = String(text).replace(/^\ufeff/, '').trimStart();
+  if (/^(?:<!doctype\s+html|<html|<head|<body|<\?xml)/i.test(t) || /^(?:\/\*O_o\*\/|google\.visualization\.Query\.setResponse\()/i.test(t)) {
+    throw new Error('Google Sheets 데이터를 받지 못했습니다. 링크가 있는 모든 사용자에게 보기 허용 또는 웹 게시 상태와 범위를 확인하세요. 비공개 시트에는 별도 Google 인증이 필요합니다.');
+  }
+  let rows = parseCsv(text).map((r) => r.map((s) => { const v = autoValue(s); return typeof v === 'string' ? s : v; }));
+  if (crop) {
+    const col = (s) => { let n = 0; for (const ch of s) n = n * 26 + ch.charCodeAt(0) - 64; return n - 1; };
+    const bound = (s, end) => {
+      const m = /^([A-Z]*)(\d*)$/.exec(s);
+      return { r: m[2] ? Number(m[2]) - 1 : end ? rows.length - 1 : 0, c: m[1] ? col(m[1]) : end ? Math.max(0, rows[0]?.length - 1) : 0 };
+    };
+    const parts = crop.split(':'), a = bound(parts[0], false), b = bound(parts[1] ?? parts[0], true);
+    if (b.r < a.r || b.c < a.c) throw new Error('범위의 끝은 시작보다 앞일 수 없습니다.');
+    rows = rows.slice(a.r, b.r + 1).map((r) => r.slice(a.c, b.c + 1));
+  }
+  return grid(rows);
+}
 /** RSS · Atom 피드 → { feed: {title, description, url}, items: [{title, url, date, summary, author}] } */
 export function parseFeed(text) {
   const root = parseMarkup(text, { xml: true });
@@ -483,13 +551,13 @@ export function parseHistory(tk, text) {
 const Q_KEYWORDS = ['select', 'where', 'group by', 'pivot', 'order by', 'limit', 'offset', 'label', 'format', 'options'];
 function qTokens(s) {
   const out = [];
-  const re = /\s*(?:(`[^`]*`)|('[^']*'|"[^"]*")|(\d+\.?\d*(?:e[+-]?\d+)?)|(<=|>=|!=|<>|[=<>(),*+\-/])|([A-Za-z_][\w.]*))/giy;
+  const re = /\s*(?:(`[^`]*`)|('[^']*'|"[^"]*")|((?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)|(<=|>=|!=|<>|[=<>(),*+\-/])|([A-Za-z_][\w.]*))/giy;
   let m;
   let pos = 0;
   while (pos < s.length) {
     re.lastIndex = pos;
     m = re.exec(s);
-    if (!m || m[0].trim() === '' && re.lastIndex === pos) break;
+    if (!m) { if (/^\s*$/.test(s.slice(pos))) break; throw new Error(`QUERY: '${s.slice(pos, pos + 12)}' 근처를 읽을 수 없습니다`); }
     pos = re.lastIndex;
     if (m[1]) out.push({ t: 'id', v: m[1].slice(1, -1) });
     else if (m[2]) out.push({ t: 'str', v: m[2].slice(1, -1) });
@@ -526,11 +594,17 @@ class QParser {
       const w = t.w ?? t.v.toLowerCase();
       if (w === 'true' || w === 'false') return { k: 'lit', v: w === 'true' };
       if (w === 'null') return { k: 'lit', v: null };
-      if ((w === 'date' || w === 'datetime' || w === 'timeofday') && this.peek()?.t === 'str') {
+      if (['date', 'datetime', 'timestamp', 'timeofday'].includes(w) && this.peek()?.t === 'str') {
         const s = this.k[this.i++].v;
-        const mm = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/.exec(s.trim());
-        if (w === 'timeofday') { const p = s.split(':').map(Number); return { k: 'lit', v: ((p[0] || 0) * 3600 + (p[1] || 0) * 60 + (p[2] || 0)) / 86400 }; }
+        const mm = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}(?:\.\d{1,3})?))?)?$/.exec(s.trim());
+        if (w === 'timeofday') {
+          const p = /^(\d{1,2}):(\d{2}):(\d{2}(?:\.\d{1,3})?)$/.exec(s);
+          if (!p || +p[1] > 23 || +p[2] > 59 || +p[3] >= 60) throw new Error('QUERY: 올바른 시간을 입력하세요');
+          return { k: 'lit', v: (+p[1] * 3600 + +p[2] * 60 + +p[3]) / 86400 };
+        }
         if (!mm) throw new Error(`QUERY: 날짜 '${s}' 를 읽을 수 없습니다`);
+        const d = new Date(Date.UTC(+mm[1], +mm[2] - 1, +mm[3]));
+        if (d.getUTCFullYear() !== +mm[1] || d.getUTCMonth() + 1 !== +mm[2] || d.getUTCDate() !== +mm[3] || +(mm[4] ?? 0) > 23 || +(mm[5] ?? 0) > 59 || +(mm[6] ?? 0) >= 60) throw new Error('QUERY: 올바른 날짜를 입력하세요');
         return { k: 'lit', v: dateToSerial(+mm[1], +mm[2], +mm[3]) + ((+(mm[4] ?? 0)) * 3600 + (+(mm[5] ?? 0)) * 60 + (+(mm[6] ?? 0))) / 86400 };
       }
       if (this.peek()?.t === 'op' && this.peek().v === '(' && (AGG.has(w) || SCALAR.has(w))) {
@@ -540,7 +614,12 @@ class QParser {
           do { args.push(this.op('*') ? { k: 'star' } : this.orExpr()); } while (this.op(','));
           this.expect(')');
         }
-        return AGG.has(w) ? { k: 'agg', f: w, a: args[0] } : { k: 'fn', f: w, args };
+        if (AGG.has(w)) {
+          if (args.length !== 1 || args[0].k !== 'col') throw new Error('QUERY: 집계 함수에는 열 하나를 지정하세요');
+          return { k: 'agg', f: w, a: args[0] };
+        }
+        if (args.length !== (w === 'now' ? 0 : w === 'datediff' ? 2 : 1)) throw new Error('QUERY: 함수 인수 개수를 확인하세요');
+        return { k: 'fn', f: w, args };
       }
       return { k: 'col', v: t.v };
     }
@@ -572,8 +651,12 @@ class QParser {
 }
 export function parseQuery(text) {
   const p = new QParser(qTokens(String(text ?? '')));
-  const q = { select: null, where: null, group: [], pivot: [], order: [], limit: null, offset: 0, labels: [] };
+  const q = { select: null, where: null, group: [], pivot: [], order: [], limit: null, offset: 0, labels: [], formats: [], options: [] };
+  let previous = -1;
   while (p.peek()) {
+    const clause = Q_KEYWORDS.findIndex((w) => w.split(' ').every((x, j) => p.peek(j)?.w === x));
+    if (clause <= previous || clause < 0) throw new Error('QUERY: 절의 순서와 중복을 확인하세요');
+    previous = clause;
     if (p.kw('select')) { q.select = p.op('*') ? null : p.list(); continue; }
     if (p.kw('where')) { q.where = p.orExpr(); continue; }
     if (p.kw('group by')) { q.group = p.list(); continue; }
@@ -587,13 +670,30 @@ export function parseQuery(text) {
       } while (p.op(','));
       continue;
     }
-    if (p.kw('limit')) { q.limit = p.k[p.i++]?.v; continue; }
-    if (p.kw('offset')) { q.offset = p.k[p.i++]?.v ?? 0; continue; }
-    if (p.kw('label')) {
-      do { const e = p.orExpr(); const t = p.k[p.i++]; q.labels.push({ e, text: t?.v ?? '' }); } while (p.op(','));
+    if (p.kw('limit') || p.kw('offset')) {
+      const t = p.k[p.i++];
+      if (t?.t !== 'num' || !Number.isSafeInteger(t.v) || t.v < 0) throw new Error('QUERY: limit·offset은 0 이상의 정수여야 합니다');
+      q[Q_KEYWORDS[clause]] = t.v; continue;
+    }
+    if (p.kw('label') || p.kw('format')) {
+      const dest = Q_KEYWORDS[clause] === 'label' ? q.labels : q.formats;
+      do {
+        const e = p.orExpr(), t = p.k[p.i++];
+        if (t?.t !== 'str') throw new Error('QUERY: label·format 값은 따옴표로 감싸세요');
+        if (dest.some((x) => exprKey(x.e) === exprKey(e))) throw new Error('QUERY: 같은 열의 label·format을 중복 지정할 수 없습니다');
+        dest.push({ e, text: t.v });
+      } while (p.op(','));
       continue;
     }
-    if (p.kw('format') || p.kw('options')) { while (p.peek() && !p.atClause()) p.i++; continue; }
+    if (p.kw('options')) {
+      do {
+        const option = p.k[p.i++]?.w;
+        if (!['no_format', 'no_values'].includes(option)) throw new Error('QUERY: 지원하지 않는 options입니다');
+        q.options.push(option);
+      } while (p.op(','));
+      if (q.options.length !== 1) throw new Error('QUERY: options는 하나만 지정하세요');
+      continue;
+    }
     throw new Error(`QUERY: '${p.peek().v}' 근처를 해석할 수 없습니다`);
   }
   return q;
@@ -636,23 +736,47 @@ function aggregate(f, vals) {
   const xs = vals.filter((v) => v !== null && v !== undefined && v !== '');
   if (f === 'count') return xs.length;
   const ns = xs.filter(isNum);
-  if (f === 'sum') return ns.reduce((a, b) => a + b, 0);
+  if (f === 'sum') return ns.length ? ns.reduce((a, b) => a + b, 0) : null;
   if (f === 'avg') return ns.length ? ns.reduce((a, b) => a + b, 0) / ns.length : null;
   const pool = ns.length ? ns : xs;
   if (!pool.length) return null;
-  return pool.reduce((m, v) => (compareValues(f === 'max' ? v : m, f === 'max' ? m : v) > 0 ? v : m));
+  return pool.reduce((m, v) => (queryCompare(f === 'max' ? v : m, f === 'max' ? m : v) > 0 ? v : m));
 }
+const queryCompare = (a, b) => typeof a === 'string' && typeof b === 'string' ? (a < b ? -1 : a > b ? 1 : 0) : compareValues(a, b);
 /**
  * QUERY 실행: rows = 데이터 행(머리글 제외), cols = 열 식별자 (A,B… 또는 Col1…), heads = 머리글 글자
  */
 export function runQuery(q, rows, cols, heads) {
   const idx = new Map(cols.map((c, i) => [c.toUpperCase(), i]));
+  cols.forEach((_, i) => { if (!idx.has(`COL${i + 1}`)) idx.set(`COL${i + 1}`, i); });
   const colIndex = (name) => {
     const i = idx.get(String(name).toUpperCase());
     if (i === undefined) throw new Error(`QUERY: 열 '${name}' 이(가) 없습니다`);
     return i;
   };
-  const headOf = (name) => heads[colIndex(name)] || String(name);
+  const headOf = (name) => heads[colIndex(name)] ?? '';
+  // Sheets QUERY: 열의 다수 자료형만 값으로 남기고 소수 자료형은 null로 취급.
+  const types = cols.map((_, c) => {
+    const counts = new Map();
+    for (const r of rows) if (!isBlankV(r[c]) && !isError(r[c])) { const t = typeof r[c]; counts.set(t, (counts.get(t) ?? 0) + 1); }
+    return [...counts].sort((a, b) => b[1] - a[1])[0]?.[0];
+  });
+  rows = rows.map((r) => cols.map((_, c) => isBlankV(r[c]) || isError(r[c]) || typeof r[c] !== types[c] ? null : r[c]));
+  const select = q.select ?? cols.map((c) => ({ k: 'col', v: c }));
+  const aggregated = !!(q.group.length || q.pivot.length || select.some(hasAgg));
+  const children = (e) => e.k === 'fn' ? e.args : [e.a, e.b].filter(Boolean);
+  const validate = (e, allowAgg = true) => {
+    if (e.k === 'col') colIndex(e.v);
+    if (e.k === 'agg' && !allowAgg) throw new Error('QUERY: 이 절에서는 집계 함수를 사용할 수 없습니다');
+    children(e).forEach((x) => validate(x, allowAgg));
+  };
+  for (const e of [...select, ...q.order.map((x) => x.e), ...q.labels.map((x) => x.e), ...(q.formats ?? []).map((x) => x.e)]) validate(e);
+  for (const e of [...q.group, ...q.pivot, ...(q.where ? [q.where] : [])]) validate(e, false);
+  const grouped = (e) => e.k === 'agg' || e.k === 'lit' || q.group.some((g) => exprKey(g) === exprKey(e)) || (e.k !== 'col' && children(e).length && children(e).every(grouped));
+  if (aggregated && [...select, ...q.order.map((x) => x.e)].some((e) => !grouped(e))) throw new Error('QUERY: 집계하지 않는 열은 group by에 지정하세요');
+  const usesPivot = (e) => q.pivot.some((p) => exprKey(p) === exprKey(e)) || children(e).some(usesPivot);
+  if (q.pivot.length && ([...select, ...q.group, ...q.order.map((x) => x.e)].some(usesPivot) || q.order.some((o) => hasAgg(o.e)))) throw new Error('QUERY: pivot 열은 select·group by·order by에서 중복 사용할 수 없으며 pivot 결과 집계 정렬은 지원하지 않습니다');
+  for (const entry of [...q.labels, ...(q.formats ?? [])]) if (!select.some((e) => exprKey(e) === exprKey(entry.e))) throw new Error('QUERY: label·format 대상은 select에 포함되어야 합니다');
   // 행 문맥의 식 값
   const val = (e, row, group) => {
     switch (e.k) {
@@ -673,34 +797,34 @@ export function runQuery(q, rows, cols, heads) {
       case 'cmp': {
         const a = val(e.a, row, group);
         const b = val(e.b, row, group);
-        if (a === null || b === null || a === '' || b === '') return e.o === '!=' ? a !== b : e.o === '=' ? a === b : false;
-        const c = compareValues(a, b);
+        if (a === null || b === null) return null;
+        const c = queryCompare(a, b);
         return { '=': c === 0, '!=': c !== 0, '<': c < 0, '>': c > 0, '<=': c <= 0, '>=': c >= 0 }[e.o];
       }
       case 'str': {
         const a = val(e.a, row, group);
-        const b = String(val(e.b, row, group) ?? '');
-        if (a === null || a === undefined) return false;
+        const bv = val(e.b, row, group);
+        if (a === null || a === undefined || bv === null) return null;
+        const b = String(bv);
         const s = String(a);
         if (e.o === 'contains') return s.includes(b);
         if (e.o === 'starts with') return s.startsWith(b);
         if (e.o === 'ends with') return s.endsWith(b);
-        if (e.o === 'matches') { try { return new RegExp(`^(?:${b})$`).test(s); } catch { return false; } }
+        if (e.o === 'matches') return new RegExp(`^(?:${b})$`).test(s);
         const re = new RegExp(`^${b.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/%/g, '.*').replace(/_/g, '.')}$`, 's');
         return re.test(s);
       }
       case 'isnull': { const v = val(e.a, row, group); const n = v === null || v === undefined || v === ''; return e.not ? !n : n; }
-      case 'not': return !val(e.a, row, group);
-      case 'and': return !!val(e.a, row, group) && !!val(e.b, row, group);
-      case 'or': return !!val(e.a, row, group) || !!val(e.b, row, group);
+      case 'not': { const a = val(e.a, row, group); return a === null ? null : !a; }
+      case 'and': { const a = val(e.a, row, group), b = val(e.b, row, group); return a === false || b === false ? false : a === null || b === null ? null : !!a && !!b; }
+      case 'or': { const a = val(e.a, row, group), b = val(e.b, row, group); return a === true || b === true ? true : a === null || b === null ? null : !!a || !!b; }
       default: return null;
     }
   };
   let data = q.where ? rows.filter((r) => val(q.where, r, null) === true) : rows.slice();
-  const select = q.select ?? cols.map((c) => ({ k: 'col', v: c }));
-  const aggregated = q.group.length || q.pivot.length || select.some(hasAgg);
   const labelOf = (e) => q.labels.find((l) => exprKey(l.e) === exprKey(e))?.text ?? exprLabel(e, headOf);
   let head = select.map(labelOf);
+  let formats = select.map((e) => q.formats?.find((f) => exprKey(f.e) === exprKey(e))?.text ?? null);
   let out;
   if (!aggregated) {
     const rowsWithSrc = data.map((r) => ({ src: r, out: select.map((e) => val(e, r, null)) }));
@@ -737,29 +861,39 @@ export function runQuery(q, rows, cols, heads) {
       entries.sort((x, y) => { for (let i = 0; i < x.vals.length; i++) { const c = compareNulls(x.vals[i], y.vals[i]); if (c) return c; } return 0; });
     }
     if (q.pivot.length) {
-      const pkeys = [...new Set(data.map((r) => JSON.stringify(q.pivot.map((p) => val(p, r, null)))))].sort((a, b) => compareNulls(JSON.parse(a)[0], JSON.parse(b)[0]));
+      const pivotKey = (r) => JSON.stringify(q.pivot.map((p) => val(p, r, null)));
+      const pkeys = [...new Set(data.map(pivotKey))].sort((a, b) => {
+        const aa = JSON.parse(a), bb = JSON.parse(b);
+        for (let i = 0; i < aa.length; i++) { const c = compareNulls(aa[i], bb[i]); if (c) return c; } return 0;
+      });
       const plain = select.filter((e) => !hasAgg(e));
       const aggs = select.filter(hasAgg);
-      head = [...plain.map(labelOf), ...pkeys.flatMap((pk) => aggs.map((e) => `${JSON.parse(pk).join(' ')}${aggs.length > 1 ? ` ${labelOf(e)}` : ''}`))];
-      out = entries.map((g) => [
-        ...plain.map((e) => val(e, g.rows[0] ?? [], g.rows)),
-        ...pkeys.flatMap((pk) => {
-          const sub = g.rows.filter((r) => JSON.stringify(q.pivot.map((p) => val(p, r, null))) === pk);
-          return aggs.map((e) => (sub.length ? val(e, sub[0], sub) : null));
-        }),
-      ]);
+      head = [...plain.map(labelOf), ...aggs.flatMap((e) => pkeys.map((pk) => {
+        const label = q.labels.find((l) => exprKey(l.e) === exprKey(e));
+        return `${JSON.parse(pk).map((v) => v ?? 'null').join(',')}${label ? (label.text ? ` ${label.text}` : '') : aggs.length > 1 ? ` ${labelOf(e)}` : ''}`;
+      }))];
+      formats = [...plain, ...aggs.flatMap((e) => pkeys.map(() => e))].map((e) => q.formats?.find((f) => exprKey(f.e) === exprKey(e))?.text ?? null);
+      out = entries.map((g) => {
+        const buckets = new Map();
+        for (const r of g.rows) { const k = pivotKey(r); if (!buckets.has(k)) buckets.set(k, []); buckets.get(k).push(r); }
+        return [...plain.map((e) => val(e, g.rows[0] ?? [], g.rows)), ...aggs.flatMap((e) => pkeys.map((pk) => {
+          const sub = buckets.get(pk); return sub?.length ? val(e, sub[0], sub) : null;
+        }))];
+      });
     } else {
       out = entries.map((g) => select.map((e) => val(e, g.rows[0] ?? [], g.rows)));
     }
   }
   out = out.slice(q.offset ?? 0, q.limit != null ? (q.offset ?? 0) + q.limit : undefined);
-  return { head, rows: out };
+  if (q.options?.includes('no_format')) formats = formats.map(() => null);
+  if (q.options?.includes('no_values')) out = out.map((r) => r.map((v, c) => v == null ? null : queryFormatted(v, formats[c])));
+  return { head, rows: out, formats };
 }
 function compareNulls(a, b) {
   const na = a === null || a === undefined || a === '';
   const nb = b === null || b === undefined || b === '';
   if (na || nb) return na === nb ? 0 : na ? -1 : 1;
-  return compareValues(a, b);
+  return queryCompare(a, b);
 }
 
 // ───────────── SPARKLINE ─────────────
@@ -925,6 +1059,8 @@ const netRange = (url, ctx, parse) => {
     const v = parse(t);
     return v ?? ERR.NA;
   } catch (e) {
+    const rec = NET.cache.get(url);
+    if (rec) rec.message = String(e?.message ?? '가져온 자료의 형식을 확인하세요.');
     if (e instanceof FormulaError) return e;
     return ERR.NA;
   }
@@ -1001,16 +1137,9 @@ export const WEB = {
     });
   },
   IMPORTRANGE: (args, ctx) => {
-    const src = str1(args[0]).trim();
-    const spec = str1(args[1]).trim();
-    const m = /^(?:'((?:[^']|'')+)'|([^!]+))!(.+)$/.exec(spec);
-    const sheet = m ? (m[1] ?? m[2]).replace(/''/g, "'") : '';
-    const area = m ? m[3] : spec;
-    const gid = /\/spreadsheets\/d\/([\w-]{20,})/.exec(src)?.[1] ?? (/^[\w-]{30,}$/.test(src) ? src : null);
-    const url = gid
-      ? `https://docs.google.com/spreadsheets/d/${gid}/gviz/tq?tqx=out:csv${sheet ? `&sheet=${encodeURIComponent(sheet)}` : ''}&range=${encodeURIComponent(area)}`
-      : `wixel-doc:${src}\u0001${sheet}\u0001${area}`;
-    return netRange(url, ctx, (t) => grid(parseCsv(t).map((r) => r.map(autoValue))));
+    let source;
+    try { source = importRangeSource(str1(args[0]), str1(args[1])); } catch { return ERR.VALUE; }
+    return netRange(source.url, ctx, (t) => parseImportRange(t, source.crop));
   },
   GOOGLEFINANCE: (args, ctx) => {
     const tk = parseTicker(str1(args[0]));
@@ -1058,9 +1187,12 @@ export const WEB = {
     return src ? new CellImage({ src, alt: '스파크라인', sizing: 1 }) : '';
   },
   QUERY: (args) => {
+    if (isError(one(args[0]))) return one(args[0]);
+    if (args[0] === LOADING) return LOADING;
     const data = asRange(args[0]);
     const text = str1(args[1] ?? 'select *');
-    let headers = args[2] != null ? Math.trunc(toNum(one(args[2]))) : -1;
+    let headers = args[2] != null ? toNum(one(args[2])) : -1;
+    if (!Number.isSafeInteger(headers) || headers < -1) return ERR.VALUE;
     const rows = data.rows.map((r) => r.map((v) => (v === undefined ? null : v)));
     if (headers < 0) {
       // 추측: 첫 행이 모두 글자이고 아래에 글자가 아닌 값이 있는 열이 있으면 머리글
@@ -1074,9 +1206,12 @@ export const WEB = {
     try { q = parseQuery(text); } catch { return ERR.VALUE; }
     let res;
     try { res = runQuery(q, rows.slice(headers).filter((r) => r.some((v) => v !== null && v !== '')), cols, heads); } catch { return ERR.VALUE; }
-    const showHead = headers > 0 || q.labels.length || res.head.some((h, i) => (q.select?.[i] && hasAgg(q.select[i])));
+    if (!res.rows.length) return ERR.NA;
+    const showHead = res.head.some((h) => h !== '');
     const out = [...(showHead ? [res.head] : []), ...res.rows.map((r) => r.map((v) => v ?? ''))];
-    return out.length ? grid(out) : ERR.NA;
+    const result = grid(out);
+    if (result instanceof Range && res.formats.some((f) => f !== null)) { result.formats = res.formats; result.formatStart = showHead ? 1 : 0; }
+    return result;
   },
   ARRAYFORMULA: (args) => (args.length ? args[0] : ERR.NA),
   SPLIT: (args) => {

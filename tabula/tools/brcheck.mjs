@@ -18,7 +18,7 @@ try {
 const page = await browser.newPage({ viewport: { width: 1500, height: 950 } });
 const errs = [];
 page.on('pageerror', (e) => errs.push('pageerror: ' + e.message));
-await page.addInitScript(() => { window.TABULA_STATIC = true; });
+await page.addInitScript(() => { window.TABULA_STATIC = true; window.WIXEL_SKIP_START = true; });
 await page.goto((process.env.WIXEL_URL || 'http://localhost:5178/')); await page.evaluate(() => localStorage.clear()); await page.reload(); await page.waitForTimeout(300);
 await page.waitForFunction(() => typeof window.tabula?.wb === 'function');
 const t0 = Date.now();

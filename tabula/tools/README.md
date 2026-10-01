@@ -2,7 +2,7 @@
 
 `npm test` 외에 브라우저 동작과 엑셀 파일 회귀를 확인하는 스크립트입니다.
 실제 파일을 비교할 때는 **수정 전에 기준 결과를 저장하고, 수정 후 같은 파일과 명령으로 다시 측정**하세요.
-최신 실행 결과와 미검증 범위는 [`07_품질개선결과.md`](../docs/codex/07_품질개선결과.md), 원본 인계 검증은 [`06_검증결과.md`](../docs/codex/06_검증결과.md)에 기록합니다.
+최신 실행 결과와 미검증 범위는 [`09_WIXEL3_구현과검증.md`](../docs/codex/09_WIXEL3_구현과검증.md), 원본 인계 검증은 [`06_검증결과.md`](../docs/codex/06_검증결과.md)에 기록합니다.
 
 ## 준비 (Windows PowerShell)
 
@@ -10,7 +10,7 @@
 캐시는 `D:\Codex\Caches`에 둡니다. 아래 경로는 현재 체크아웃 예시입니다.
 
 ```powershell
-Set-Location D:\Codex\Workspaces\wixel\tabula
+Set-Location D:\위셀\wixel-3\tabula
 New-Item -ItemType Directory -Force D:\Codex\Temp, D:\Codex\Caches\npm, D:\Codex\Caches\ms-playwright | Out-Null
 $env:TEMP = 'D:\Codex\Temp'
 $env:TMP = 'D:\Codex\Temp'
@@ -26,7 +26,7 @@ Playwright는 검증 도구용입니다. 앱의 `package.json`과 잠금 파일�
 서버용 터미널에서 다음을 실행합니다. 테스트용 문서 저장 경로를 사용하며, 종료는 `Ctrl+C`입니다.
 
 ```powershell
-Set-Location D:\Codex\Workspaces\wixel\tabula
+Set-Location D:\위셀\wixel-3\tabula
 $env:HOST = '127.0.0.1'
 $env:PORT = '5178'
 $env:TABULA_DATA = 'D:\Codex\Temp\wixel-server-data'
@@ -36,7 +36,7 @@ npm start
 검증용 터미널에서는 브라우저 경로를 같은 값으로 지정하고 스크립트를 실행합니다.
 
 ```powershell
-Set-Location D:\Codex\Workspaces\wixel\tabula
+Set-Location D:\위셀\wixel-3\tabula
 $env:PLAYWRIGHT_BROWSERS_PATH = 'D:\Codex\Caches\ms-playwright'
 $env:WIXEL_URL = 'http://127.0.0.1:5178/'
 node tools/smoke.mjs
@@ -161,3 +161,19 @@ Select-String -LiteralPath D:\Codex\Temp\wixel-regression\before.txt, D:\Codex\T
 - 피벗이 있는 실제 파일 50개: 대부분 `differing 0`으로 기록됨.
 - 남은 차이(다른 피벗 수 / 전체): g2.xlsb 3/30, m3.xlsb 2/19, s3.xlsx 1/1, v37.xlsx 6/56, w3.xlsb 1/8, x3.xlsx 1/12, y60.xlsb 27/62, y61.xlsb 5/10, y62.xlsb 3/8, y63.xlsb 4/5.
 - 분석 대상은 `docs/codex/02_보완항목내역서.md` P1-1, 이번 검증 실적은 `docs/codex/06_검증결과.md`를 참고하세요.
+
+
+## WIXEL 3.0 추가 검사
+
+모든 브라우저 검사는 별도 테스트 문서로 실행하며 실제 사용 중인 탭은 변경하지 않습니다. 실행 전에 서버를 시작하고 `WIXEL_URL`을 지정하세요. Playwright가 프로젝트 밖에 설치되어 있으면 `PLAYWRIGHT_MODULE`에 해당 `index.mjs`의 file URL을 지정합니다.
+
+| 명령 | 검사 범위 |
+|---|---|
+| `node tools/format-regressions.mjs` | 차트 축/계열 연속 변경, 3D 회전·깊이, 도형 채우기·효과·텍스트와 페이지 오류 |
+| `node tools/security-regressions.mjs` | CSP 우회 테스트 환경에서 HTML/SVG 공격 차단, 인쇄·링크·정상 차트/도형 표현 |
+| `node tools/vault-ui-integration.mjs` | 로컬 workerd의 보관함 연결·저장·다른 기기 복원·게시 관리 UI |
+| `node tools/wixel3-ui.mjs` | 시작·저장 화면, Ctrl+Space, QAT, 개인 보관함 충돌, Google Sheets, 피벗과 셀 서식 |
+| `node --test cloudflare/backend.test.js` | 개인 보관함 격리·버전·청크·게시 API |
+| `node cloudflare/integration.mjs` | 실제 로컬 workerd API; 별도 Cloudflare dev 서버 필요 |
+
+`format-regressions.mjs`는 저장소 `.local/`에 차트와 도형 화면을 캡처합니다. Cloudflare 설정·실행 환경과 한도 검사 명령은 `cloudflare/README.md`를 확인하세요. 실제 공개 배포 후의 동작은 로컬 통과와 별도로 확인해야 합니다.

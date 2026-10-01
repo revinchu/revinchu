@@ -53,7 +53,7 @@ export function shapeSvg(sh) {
     const col = attr(sh.stroke ?? '#000000');
     const mk = `ar${col.replace('#', '')}`;
     const defs = sh.arrow ? `<defs><marker id="${mk}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 Z" fill="${col}"/></marker></defs>` : '';
-    body = `${defs}<path d="${linePath(sh.kind, w, h, sh.flip, sh.flipV)}" fill="none" stroke="${col}" stroke-width="${Math.max(1, sw)}"${dash}${sh.arrow ? ` marker-end="url(#${mk})"` : ''}${sh.arrow === 'both' ? ` marker-start="url(#${mk})"` : ''}/>`;
+    body = `${defs}<path d="${linePath(sh.kind, w, h, sh.flip, sh.flipV)}" fill="none" stroke="${col}" stroke-width="${Math.max(0.1, sw)}"${sh.strokeOpacity !== undefined ? ` stroke-opacity="${sh.strokeOpacity}"` : ''}${dash}${sh.arrow ? ` marker-end="url(#${mk})"` : ''}${sh.arrow === 'both' ? ` marker-start="url(#${mk})"` : ''}/>`;
   } else {
     const geom = GEOM[sh.kind] ?? GEOM.rect;
     // 선 굵기만큼 안쪽으로
@@ -69,7 +69,7 @@ export function shapeSvg(sh) {
       const gx = Math.cos(a) / 2;
       const gy = Math.sin(a) / 2;
       const stops = sh.grad.stops ?? [[0, shadeHex(sh.fill, 0.35)], [1, shadeHex(sh.fill, -0.15)]];
-      defs.push(`<linearGradient id="g${uid}" x1="${0.5 - gx}" y1="${0.5 - gy}" x2="${0.5 + gx}" y2="${0.5 + gy}">${stops.map(([o, c]) => `<stop offset="${o}" stop-color="${attr(c)}"/>`).join('')}</linearGradient>`);
+      defs.push(`<linearGradient id="g${uid}" x1="${0.5 - gx}" y1="${0.5 - gy}" x2="${0.5 + gx}" y2="${0.5 + gy}">${stops.map(([o, c, opacity]) => `<stop offset="${o}" stop-color="${attr(c)}"${opacity !== undefined ? ` stop-opacity="${opacity}"` : ''} />`).join('')}</linearGradient>`);
       gradRef = `url(#g${uid})`;
     }
     const fx = [];
@@ -77,7 +77,7 @@ export function shapeSvg(sh) {
       const sd = typeof sh.shadow === 'object' ? sh.shadow : {};
       fx.push(`<feDropShadow dx="${sd.dx ?? 2.5}" dy="${sd.dy ?? 2.5}" stdDeviation="${sd.blur ?? 2.5}" flood-color="${attr(sd.color ?? '#000')}" flood-opacity="${sd.opacity ?? 0.4}"/>`);
     }
-    if (sh.glow) fx.push(`<feMorphology operator="dilate" radius="${(sh.glow.size ?? 5) / 2}" in="SourceAlpha" result="gd"/><feGaussianBlur in="gd" stdDeviation="${(sh.glow.size ?? 5) / 2}" result="gb"/><feFlood flood-color="${attr(sh.glow.color ?? '#4472c4')}" flood-opacity="0.6"/><feComposite in2="gb" operator="in" result="gc"/><feMerge><feMergeNode in="gc"/><feMergeNode in="SourceGraphic"/></feMerge>`);
+    if (sh.glow) fx.push(`<feMorphology operator="dilate" radius="${(sh.glow.size ?? 5) / 2}" in="SourceAlpha" result="gd"/><feGaussianBlur in="gd" stdDeviation="${(sh.glow.size ?? 5) / 2}" result="gb"/><feFlood flood-color="${attr(sh.glow.color ?? '#4472c4')}" flood-opacity="${sh.glow.opacity ?? 0.6}"/><feComposite in2="gb" operator="in" result="gc"/><feMerge><feMergeNode in="gc"/><feMergeNode in="SourceGraphic"/></feMerge>`);
     if (sh.soft) fx.push(`<feGaussianBlur stdDeviation="${sh.soft / 2}"/>`);
     let filt = '';
     if (fx.length) {

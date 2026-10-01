@@ -1,0 +1,77 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cloudflare/workers-sdk/main/packages/wrangler/config-schema.json",
+  "name": "wixel-3",
+  "main": "worker.js",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": [
+    "nodejs_compat",
+    "global_fetch_strictly_public"
+  ],
+  "workers_dev": true,
+  "assets": {
+    "directory": "../dist-cloudflare",
+    "binding": "ASSETS",
+    "run_worker_first": [
+      "/api/*"
+    ],
+    "not_found_handling": "single-page-application"
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "VAULTS",
+        "class_name": "UserVault"
+      },
+      {
+        "name": "PUBLISHED",
+        "class_name": "PublishedDocument"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "UserVault",
+        "PublishedDocument"
+      ]
+    }
+  ],
+  "ratelimits": [
+    {
+      "name": "API_RATE",
+      "namespace_id": "310001",
+      "simple": {
+        "limit": 120,
+        "period": 60
+      }
+    },
+    {
+      "name": "FETCH_RATE",
+      "namespace_id": "310002",
+      "simple": {
+        "limit": 20,
+        "period": 60
+      }
+    },
+    {
+      "name": "VAULT_RATE",
+      "namespace_id": "310003",
+      "simple": {
+        "limit": 120,
+        "period": 60
+      }
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "invocation_logs": false
+    },
+    "redact_query_string": true,
+    "traces": {
+      "enabled": false
+    }
+  }
+}

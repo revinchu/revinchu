@@ -5,7 +5,7 @@ import {
   parse, evaluateArray, evalAny, ERR, compareValues, isError, autoFormatFor, mayReturnArray, Range, RefValue,
   adjustFormulaForStructure, renameSheetInFormula, shiftFormula, quoteSheetName, MAX_ROWS, MAX_COLS, moveRefsInFormula,
 } from './formula.js';
-import { parseInput } from './format.js';
+import { parseInput, queryFormatCode } from './format.js';
 import { inBlock, blockValue, blockSet, blockClone, blockShift, rawOf, sortOrder, blockPermute, logicalCol, reorderRows, setRowOrder, materialize } from './block.js';
 import { hid, shiftHidden } from './axis.js';
 import { CellImage, compareSortValues } from './fxcore.js';
@@ -487,7 +487,10 @@ export class Workbook {
     this.ctxs = []; // 시트별 계산 문맥 (셀마다 새로 만들지 않음)
     this.colIdx = []; // 시트별 열 → 셀(Map) 행 목록 (큰 범위 빠르게 읽기)
     if (data) this.load(data);
-    else this.sheets = [newSheet('Sheet1')];
+    else {
+      this.sheets = [newSheet('Sheet1')];
+      this.sheets[0].allStyle = { align: 'center' };
+    }
   }
 
   // ─────────── 조회 ───────────
@@ -640,7 +643,7 @@ export class Workbook {
       }
     }
     if (sheet.merges.some((m) => m.r1 <= r + h - 1 && m.r2 >= r && m.c1 <= c + w - 1 && m.c2 >= c)) return ERR.SPILL;
-    this.spills.set(k, { si, r, c, h, w, rows: arr.rows });
+    this.spills.set(k, { si, r, c, h, w, rows: arr.rows, formats: arr.formats, formatStart: arr.formatStart ?? 0 });
     for (let i = 0; i < h; i++) {
       for (let j = 0; j < w; j++) if (i || j) this.spillOwner.set(`${si}:${r + i},${c + j}`, k);
     }
@@ -813,8 +816,11 @@ export class Workbook {
     if (!own && s.blocks.length) { const b = this.blockAt(si, r, c); if (b) own = b.cols[c - b.c0].fmt ?? undefined; }
     const col = s.colStyles[c];
     const row = s.rowStyles[r];
-    if (!s.allStyle && !col && !row) return own ?? this.baseStyle ?? EMPTY_STYLE;
-    return { ...(own ? null : this.baseStyle), ...s.allStyle, ...col, ...row, ...own };
+    const style = !s.allStyle && !col && !row ? own ?? this.baseStyle ?? EMPTY_STYLE : { ...(own ? null : this.baseStyle), ...s.allStyle, ...col, ...row, ...own };
+    const k = `${si}:${r},${c}`;
+    const spill = this.spills.get(this.spillOwner.get(k) ?? k);
+    const pattern = spill && r - spill.r >= spill.formatStart ? spill.formats?.[c - spill.c] : null;
+    return pattern == null ? style : { ...style, numFmt: 'custom', code: queryFormatCode(pattern), queryFormat: pattern };
   }
 
   hasLineStyle(si, r, c) {
@@ -2075,7 +2081,9 @@ export class Workbook {
     let n = this.sheets.length + 1;
     let nm = name;
     while (!nm || this.sheetIndexByName(nm) >= 0) nm = `Sheet${n++}`;
-    this.sheets.splice(at, 0, newSheet(nm));
+    const added = newSheet(nm);
+    added.allStyle = { align: 'center' };
+    this.sheets.splice(at, 0, added);
     this.invalidateStructure();
     return at;
   }

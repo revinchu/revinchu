@@ -1,4 +1,5 @@
 // WIXEL 메인: 상태 · 선택 · 편집 · 키보드/마우스 · 명령 (그리기는 view.js)
+import { publishedWorkbook } from './publish.js';
 import { Workbook, formulaShifter, cellData, DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT } from './workbook.js';
 import {
   cellName, colToName, parseRangeName, parse, shiftFormula, listRefs, normalizeFormula, tokenize,
@@ -9,6 +10,7 @@ import {
 } from './format.js';
 import { buildRibbon, FONTS, FONT_SIZES, TABS, ribbonCommands } from './ribbon.js';
 import { flashFill } from './flashfill.js';
+import { safeUrl, setSafeHtml } from './safe-html.js';
 import {
   el, hydrateIcons, toast, openMenu, openSubmenu, closeSubmenus, closeMenus, isMenuOpen, openDialog, alertDialog,
   formDialog, setMenuCloseHandler, setDialogCloseHandler, isDialogOpen,
@@ -18,6 +20,7 @@ import { makeSeries, CUSTOM_LISTS } from './series.js';
 import { parseDelimited, toDelimited, guessDelimiter, CsvBlockReader } from './csv.js';
 import { SAMPLES } from './samples.js';
 import { TEMPLATES, TEMPLATE_CATS } from './templates.js';
+import { chartView3D } from './chart-3d.js';
 import { GridView, BASE_FONT, setBaseFont, measureText, fontStack, PATTERNS, patternCss, gradientCss, glyphShift, timelinePeriods } from './view.js';
 import { setThemeColors, THEME, applyTint } from './stylepresets.js';
 import { readXlsxAsync, writeXlsxAsync, xlsxOverflow, textRaw } from './xlsx.js';
@@ -31,8 +34,9 @@ import {
   checkCalc, renameCalcRefs, CALC_FUNCS, recommendPivots, parseCalcItem,
 } from './pivot.js';
 import { SLICER_STYLES, SLICER_STYLE_GROUPS, slicerStyleName, slicerColors, CUSTOM_KEYS } from './slicerstyle.js';
-import { server, idbSet, idbGet, idbDel } from './storage.js';
-import { NET, netClear, parseMarkup, htmlTables, htmlLists, tableRows, textOf, autoValue, parseCsv } from './fx-web.js';
+import { server, idbSet, idbGet, idbDel, createVaultKey, validVaultKey } from './storage.js';
+import { hubIcon, hubHeading, hubCard, hubPreview, hubDropzone, hubEmpty } from './app-start.js';
+import { NET, netClear, parseMarkup, htmlTables, htmlLists, tableRows, textOf, autoValue, parseCsv, importRangeSource, parseImportRange } from './fx-web.js';
 import { libList, libSave, libLoad, libLoadVersion, libUpdate, libNameVersion, libRemove, newDocId, packText, unpackText, LIB_MAX, VER_MAX } from './library.js';
 import { itemStats, blockColumn, EMPTY as PIVOT_EMPTY, EMPTY_TEXT as PIVOT_EMPTY_TEXT } from './cube.js';
 import { logicalCol, ColBuilder } from './block.js';
@@ -92,6 +96,8 @@ let wb;
 let si = 0;
 let docName = '통합 문서1';
 let autosave = true;
+let remoteDoc = false; // 이 문서의 원격 저장은 사용자가 위치를 선택한 뒤에만 시작
+let allowPrivateImports = false; // 파일/JSON에 저장하지 않는 현재 문서 세션의 사용자 권한
 let dirty = false;
 let active = { r: 0, c: 0 };
 let anchor = { r: 0, c: 0 };
@@ -1429,7 +1435,13 @@ function onGridKey(e) {
       9: 'hideRows', 0: 'hideCols', t: 'createTable', l: 'createTable', q: 'quickAnalysis',
     };
     if (lower === 'a') { handled(); if (e.shiftKey) selectAll(); else smartSelectAll(); return; }
-    if (lower === ' ' || e.code === 'Space') { handled(); selectCols(sel.c1, sel.c2, active); return; }
+    if (lower === ' ' || e.code === 'Space') {
+      handled();
+      if (e.shiftKey) selectAll();
+      else if (selKind === 'rows' || selKind === 'all') selectCols(active.c, active.c, active);
+      else selectCols(sel.c1, sel.c2, active);
+      return;
+    }
     if (k === 'Home') {
       handled();
       const t = { r: sheet().freeze?.rows || 0, c: sheet().freeze?.cols || 0 };
@@ -1644,8 +1656,10 @@ function removeHyperlink() {
 }
 
 function openLink(url) {
-  if (url.startsWith('#')) { gotoRef(url.slice(1)); return; }
-  try { window.open(url, '_blank', 'noopener'); } catch { toast(url); }
+  const safe = safeUrl(url, 'link', document.baseURI);
+  if (!safe) { toast('허용되지 않는 링크 주소입니다. http 또는 https 주소를 사용하세요.'); return; }
+  if (safe.startsWith('#')) { gotoRef(safe.slice(1)); return; }
+  try { window.open(safe, '_blank', 'noopener,noreferrer'); } catch { toast(safe); }
 }
 
 // ───────────────────────── 마우스 ─────────────────────────
@@ -3067,7 +3081,7 @@ function sparkEditDialog() {
 
 // ───────────────────────── 시트 보호 ─────────────────────────
 // 보호된 시트에서 명령마다 필요한 권한 (없는 명령은 선택한 셀이 모두 잠기지 않았을 때만)
-const PROTECT_FREE = new Set(['publish', 'versionHistory', 'recentFiles', 'dataAnalysis', 'forecastSheet', 'scenarioManager', 'solver', 'undo', 'redo', 'save', 'open', 'backstage', 'print', 'copy', 'find', 'goto', 'prevSheet', 'nextSheet', 'selectRegion',
+const PROTECT_FREE = new Set(['privateImportPermission', 'saveLocations', 'publish', 'versionHistory', 'recentFiles', 'dataAnalysis', 'forecastSheet', 'scenarioManager', 'solver', 'undo', 'redo', 'save', 'open', 'backstage', 'print', 'copy', 'find', 'goto', 'prevSheet', 'nextSheet', 'selectRegion',
   'newWorkbook', 'pivotFieldList', 'tracePrecedents', 'traceDependents', 'removeArrows', 'evaluateFormula', 'errorCheck', 'watchWindow', 'gotoSpecial',
   'outlineShow', 'outlineHide', 'freezePanes', 'freezeTop', 'freezeFirstCol', 'circleInvalid', 'clearCircles', 'macros', 'prevComment', 'nextComment',
   'workbookStats', 'toggleGrid', 'togglePrintGrid', 'toggleFormulaBar', 'toggleHeaders', 'toggleFormulas', 'toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100',
@@ -5096,6 +5110,11 @@ function insertChart(type, patch = null) {
 }
 
 function updateChart(id, patch) {
+  // Excel 3D charts cannot combine per-series chart types or secondary axes.
+  const current = sheet().charts.find((c) => c.id === id);
+  if (patch.threeD === true && current) {
+    patch = { ...patch, seriesFmt: (patch.seriesFmt ?? current.seriesFmt ?? []).map(({ type, axis, ...format }) => format) };
+  }
   wb.transact(() => wb.setSheetProp(si, 'charts', sheet().charts.map((c) => (c.id === id ? { ...c, ...patch } : { ...c }))), meta());
 }
 
@@ -5131,14 +5150,14 @@ function chartDialog(id) {
       t.addEventListener('change', () => { f.type = t.value || undefined; draw(false); });
       ax.addEventListener('change', () => { f.axis = Number(ax.value) || undefined; draw(false); });
       col.addEventListener('input', () => { f.color = col.value; draw(false); });
-      lab.addEventListener('change', () => { f.labels = lab.checked || undefined; draw(false); });
+      lab.addEventListener('change', () => { f.labels = lab.checked; draw(false); });
       seriesBox.append(el('div', { class: 'fc-row', style: { gap: '6px', alignItems: 'center' } }, el('span', { style: { flex: '1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, s.name), t, ax, col, el('label', { class: 'fc-check' }, lab, '레이블')));
     });
   };
   const draw = (withSeries = true) => {
     const d = draft();
     const data = chartModelData(wb, si, d);
-    preview.innerHTML = renderChartSvg({ ...d, w: 480, h: 220 }, data);
+    setSafeHtml(preview, renderChartSvg({ ...d, w: 480, h: 220 }, data));
     if (withSeries) renderSeries(data);
   };
   [typeSel, titleIn, rangeIn, legendSel, groupSel, labelsIn].forEach((i) => i.addEventListener('input', () => draw(i === rangeIn || i === typeSel)));
@@ -5157,7 +5176,7 @@ function chartDialog(id) {
           const d = draft();
           if (!d.pivot && !d.series?.length && !d.range) { toast('데이터 범위가 올바르지 않습니다.'); return false; }
           const { w, h, ...rest } = d;
-          updateChart(id, { ...rest, seriesFmt: fmt.map((f) => Object.fromEntries(Object.entries(f).filter(([, v]) => v !== undefined))) });
+          updateChart(id, { ...rest, threeD: !!ch.threeD && ['column', 'bar', 'line', 'area', 'pie'].includes(rest.type), seriesFmt: fmt.map((f) => Object.fromEntries(Object.entries(f).filter(([, v]) => v !== undefined))) });
           return true;
         },
       },
@@ -5194,7 +5213,8 @@ function insertChartAllDialog(changeId = null) {
       const d = draftOf(patch);
       const thumb = el('button', { class: 'cg-sub', title: name, html: renderChartSvg({ ...d, title: '', legend: 'none', w: 120, h: 80, axisSize: 6 }, dataFor(d)) });
       thumb.addEventListener('click', () => sel(thumb, name, patch));
-      if (k === 0) setTimeout(() => sel(thumb, name, patch), 0);
+      const match = base ? list.findIndex(([, p]) => p.type === base.type && !!p.threeD === !!base.threeD && (p.grouping ?? 'clustered') === (base.grouping ?? 'clustered') && (p.explode ?? 0) === (base.explode ?? 0)) : -1;
+      if (k === Math.max(0, match)) setTimeout(() => { if (thumb.isConnected) sel(thumb, name, patch); }, 0);
       return thumb;
     }));
   };
@@ -5204,7 +5224,7 @@ function insertChartAllDialog(changeId = null) {
     pick = patch;
     label.textContent = name;
     const d = draftOf(patch);
-    prev.innerHTML = renderChartSvg({ ...d, w: 460, h: 260 }, dataFor(d));
+    setSafeHtml(prev, renderChartSvg({ ...d, w: 460, h: 260 }, dataFor(d)));
   };
   CHART_GALLERY.forEach(([g], i) => cats.append(el('button', { class: 'cg-cat', onclick: () => show(i) }, g)));
   const cur = base ? CHART_GALLERY.findIndex(([, list]) => list.some(([, p]) => p.type === base.type)) : 0;
@@ -5223,7 +5243,7 @@ function insertChartAllDialog(changeId = null) {
       pick = patch;
       rTitle.textContent = name;
       const d = draftOf(patch);
-      rPrev.innerHTML = renderChartSvg({ ...d, w: 400, h: 250 }, dataFor(d));
+      setSafeHtml(rPrev, renderChartSvg({ ...d, w: 400, h: 250 }, dataFor(d)));
       rDesc.textContent = desc;
     };
     recs.forEach(([name, patch], k) => {
@@ -5838,7 +5858,7 @@ function selectDataDialog(id = chartSel) {
       return el('label', { class: 'sd-item' }, cb, el('span', {}, String(c)));
     }));
     const full = final();
-    preview.innerHTML = renderChartSvg({ ...full, w: 520, h: 200 }, chartModelData(wb, si, full));
+    setSafeHtml(preview, renderChartSvg({ ...full, w: 520, h: 200 }, chartModelData(wb, si, full)));
   };
   const final = () => ({
     ...draft(),
@@ -5963,25 +5983,38 @@ function chartFormatPane(id = chartSel) {
   if (!ch0) { toast('차트를 선택하세요.'); return; }
   if (chartPaneDlg) chartPaneDlg.close();
   const body = el('div', { class: 'cfp' });
+  let activeCategory = '차트 옵션';
   const get = () => sheet().charts.find((c) => c.id === id) ?? ch0;
   const up = (patch) => { updateChart(id, patch); gv.renderObjectsAll(); };
   const sec = (title, ...rows) => el('details', { class: 'cfp-sec', open: true }, el('summary', {}, title), ...rows);
-  const row = (label, input) => el('label', { class: 'cfp-row' }, el('span', {}, label), input);
+  const row = (label, input) => { const control = input?.matches?.('input,select,textarea') ? input : input?.querySelector?.('input,select,textarea'); control?.setAttribute('aria-label', label); return el('label', { class: 'cfp-row' }, el('span', {}, label), input); };
   const color = (v, fn, allowNone = true) => {
     const inp = el('input', { type: 'color', value: v ?? '#ffffff' });
     inp.addEventListener('input', () => fn(inp.value));
     return el('span', { class: 'cfp-color' }, inp, allowNone ? el('button', { class: 'btn small', onclick: () => fn(undefined) }, '없음') : null);
   };
-  const num = (v, fn, attrs = {}) => { const i = el('input', { type: 'number', value: v ?? '', ...attrs }); i.addEventListener('change', () => fn(i.value === '' ? undefined : Number(i.value))); return i; };
+  const num = (v, fn, attrs = {}) => { const i = el('input', { type: 'number', value: v ?? '', ...attrs }); i.addEventListener('change', () => { if (i.value === '') { fn(undefined); return; } const v = Number(i.value); if (!Number.isFinite(v)) return; const safe = clamp(v, attrs.min ?? -Infinity, attrs.max ?? Infinity); i.value = String(safe); fn(safe); }); return i; };
   const txt = (v, fn) => { const i = el('input', { type: 'text', value: v ?? '' }); i.addEventListener('change', () => fn(i.value)); return i; };
   const chk = (v, fn) => { const i = el('input', { type: 'checkbox', checked: !!v }); i.addEventListener('change', () => fn(i.checked)); return i; };
   const sel2 = (v, opts, fn) => { const s = el('select', {}, opts.map(([k, l]) => el('option', { value: k, selected: String(v ?? '') === String(k) }, l))); s.addEventListener('change', () => fn(s.value)); return s; };
   const draw = () => {
     const ch = get();
     const axis = (k) => ch.axes?.[k] ?? {};
-    const setAx = (k, patch) => up({ axes: { ...ch.axes, [k]: { ...axis(k), ...patch } } });
+    const setAx = (k, patch) => { const current = get().axes ?? {}; up({ axes: { ...current, [k]: { ...current[k], ...patch } } }); };
     const data = chartModelData(wb, si, ch);
-    body.replaceChildren(
+    const v3 = chartView3D(ch);
+    const set3D = (patch) => up({ view3D: { ...chartView3D(get()), ...patch } });
+    body.replaceChildren(...[
+      ['column', 'bar', 'line', 'area', 'pie'].includes(ch.type) ? sec('3차원 회전',
+        row('3차원 차트', chk(ch.threeD, (v) => { up({ threeD: v }); draw(); })),
+        ...(ch.threeD ? [
+          row('X 회전(°)', num(v3.rotX, (v) => set3D({ rotX: v }), { min: ch.type === 'pie' ? 0 : -90, max: 90, step: 1 })),
+          row('Y 회전(°)', num(v3.rotY, (v) => set3D({ rotY: v }), { min: 0, max: 360, step: 1 })),
+          row('깊이(%)', num(v3.depthPercent, (v) => set3D({ depthPercent: v }), { min: 20, max: 2000, step: 10 })),
+          row('직각 축', chk(v3.rAngAx, (v) => { set3D({ rAngAx: v }); draw(); })),
+          ...(!v3.rAngAx ? [row('원근감', num(v3.perspective, (v) => set3D({ perspective: v }), { min: 0, max: 240, step: 5 }))] : []),
+          el('button', { type: 'button', class: 'btn small', onclick: () => { up({ view3D: undefined }); draw(); } }, '기본 회전으로')
+        ] : [])) : null,
       sec('차트 영역',
         row('너비(px)', num(Math.round(ch.w), (v) => v && up({ w: clamp(v, 120, 4000) }), { min: 120, max: 4000, step: 1 })),
         row('높이(px)', num(Math.round(ch.h), (v) => v && up({ h: clamp(v, 90, 4000) }), { min: 90, max: 4000, step: 1 })),
@@ -5996,7 +6029,7 @@ function chartFormatPane(id = chartSel) {
         row('글꼴 크기(pt)', num(ch.titleSize, (v) => up({ titleSize: v }), { min: 6, max: 40 })),
         row('굵게', chk(ch.titleBold, (v) => up({ titleBold: v || undefined }))),
         row('색', color(ch.titleColor, (v) => up({ titleColor: v })))),
-      sec('세로(값) 축',
+      !['pie', 'doughnut'].includes(ch.type) ? sec(ch.type === 'bar' ? '가로(값) 축' : '세로(값) 축',
         row('표시', chk(!axis('y').hide, (v) => setAx('y', { hide: !v || undefined }))),
         row('최소값', num(axis('y').min, (v) => setAx('y', { min: v }))),
         row('최대값', num(axis('y').max, (v) => setAx('y', { max: v }))),
@@ -6006,24 +6039,24 @@ function chartFormatPane(id = chartSel) {
         row('제목', txt(axis('y').title, (v) => setAx('y', { title: v || undefined }))),
         row('주 눈금선', chk(ch.gridY !== false, (v) => up({ gridY: v ? undefined : false }))),
         row('눈금선 색', color(ch.gridColor, (v) => up({ gridColor: v }))),
-        row('글꼴 크기(pt)', num(ch.axisSize, (v) => up({ axisSize: v }), { min: 6, max: 24 }))),
-      sec('보조 세로 축',
+        row('글꼴 크기(pt)', num(ch.axisSize, (v) => up({ axisSize: v }), { min: 6, max: 24 }))) : null,
+      data.series.some((s) => s.axis === 1) ? sec('보조 값 축',
         row('최소값', num(axis('y2').min, (v) => setAx('y2', { min: v }))),
         row('최대값', num(axis('y2').max, (v) => setAx('y2', { max: v }))),
         row('표시 형식', txt(axis('y2').numFmt, (v) => setAx('y2', { numFmt: v || undefined }))),
-        row('제목', txt(axis('y2').title, (v) => setAx('y2', { title: v || undefined })))),
-      sec('가로(항목) 축',
+        row('제목', txt(axis('y2').title, (v) => setAx('y2', { title: v || undefined })))) : null,
+      !['pie', 'doughnut'].includes(ch.type) ? sec(ch.type === 'bar' ? '세로(항목) 축' : '가로(항목) 축',
         row('표시', chk(!axis('x').hide, (v) => setAx('x', { hide: !v || undefined }))),
         row('제목', txt(axis('x').title, (v) => setAx('x', { title: v || undefined }))),
-        row('세로 눈금선', chk(ch.gridX, (v) => up({ gridX: v || undefined })))),
+        row('세로 눈금선', chk(ch.gridX, (v) => up({ gridX: v || undefined })))) : null,
       sec('범례 · 레이블',
         row('범례 위치', sel2(ch.legend ?? 'b', [['b', '아래쪽'], ['t', '위쪽'], ['r', '오른쪽'], ['l', '왼쪽'], ['none', '없음']], (v) => up({ legend: v }))),
         row('범례 글꼴(pt)', num(ch.legendSize, (v) => up({ legendSize: v }), { min: 6, max: 24 })),
-        row('데이터 레이블', chk(ch.labels, (v) => up({ labels: v || undefined }))),
+        row('데이터 레이블', chk(ch.labels, (v) => up({ labels: v }))),
         row('데이터 표', chk(ch.dataTable, (v) => up({ dataTable: v || undefined })))),
       sec('계열 옵션',
         row('간격 너비(%)', num(ch.gap, (v) => up({ gap: v }), { min: 0, max: 500 })),
-        row('계열 겹치기(%)', num(ch.overlap, (v) => up({ overlap: v }), { min: -100, max: 100 })),
+        !ch.threeD ? row('계열 겹치기(%)', num(ch.overlap, (v) => up({ overlap: v }), { min: -100, max: 100 })) : null,
         row('요소마다 다른 색', chk(ch.varyColors, (v) => up({ varyColors: v || undefined }))),
         row('배치', sel2(ch.grouping ?? 'clustered', [['clustered', '묶은'], ['stacked', '누적'], ['percentStacked', '100% 기준 누적']], (v) => up({ grouping: v === 'clustered' ? undefined : v }))),
         ch.type === 'doughnut' ? row('도넛 구멍 크기(%)', num(ch.hole ?? 50, (v) => up({ hole: v }), { min: 10, max: 90 })) : null,
@@ -6032,17 +6065,17 @@ function chartFormatPane(id = chartSel) {
         ch.type === 'histogram' ? row('구간 수', num(ch.binCount, (v) => up({ binCount: v }), { min: 1, max: 100 })) : null,
         ch.type === 'histogram' ? row('구간 너비', num(ch.binWidth, (v) => up({ binWidth: v }), { min: 0 })) : null,
         ...data.series.map((s, i) => {
-          const f = (ch.seriesFmt ?? [])[i] ?? {};
-          const setF = (patch) => { const list = [...(ch.seriesFmt ?? [])]; while (list.length <= i) list.push({}); list[i] = { ...list[i], ...patch }; up({ seriesFmt: list }); };
+          const f = { ...((ch.seriesFmt ?? [])[i] ?? {}) };
+          const setF = (patch) => { const list = [...(get().seriesFmt ?? [])]; while (list.length <= i) list.push({}); list[i] = { ...list[i], ...patch }; Object.assign(f, patch); up({ seriesFmt: list }); };
           return el('div', { class: 'cfp-series' },
             el('b', {}, s.name || `계열${i + 1}`),
             row('색', color(s.color ?? paletteOf(ch)[i % paletteOf(ch).length], (v) => setF({ color: v }), false)),
-            row('종류', sel2(f.type ?? '', [['', '기본'], ['column', '막대'], ['line', '꺾은선'], ['area', '영역']], (v) => setF({ type: v || undefined }))),
-            row('축', sel2(f.axis ?? 0, [[0, '기본 축'], [1, '보조 축']], (v) => setF({ axis: Number(v) || undefined }))),
+            !ch.threeD ? row('종류', sel2(f.type ?? '', [['', '기본'], ['column', '막대'], ['line', '꺾은선'], ['area', '영역']], (v) => setF({ type: v || undefined }))) : null,
+            !ch.threeD ? row('축', sel2(f.axis ?? 0, [[0, '기본 축'], [1, '보조 축']], (v) => setF({ axis: Number(v) || undefined }))) : null,
             row('선 굵기(px)', num(f.lineWidth, (v) => setF({ lineWidth: v }), { min: 0.5, max: 12, step: 0.25 })),
             row('표식', sel2(f.marker ?? '', [['', '자동'], ['none', '없음'], ['circle', '원'], ['square', '사각형'], ['diamond', '마름모'], ['triangle', '삼각형']], (v) => setF({ marker: v || undefined }))),
             row('부드러운 선', chk(f.smooth, (v) => setF({ smooth: v || undefined }))),
-            row('레이블', chk(f.labels, (v) => setF({ labels: v || undefined }))),
+            row('레이블', chk(f.labels, (v) => setF({ labels: v }))),
             row('레이블 형식', txt(f.numFmt, (v) => setF({ numFmt: v || undefined }))),
             row('레이블 위치', sel2(f.labelPos ?? '', [['', '자동'], ['outEnd', '바깥쪽 끝에'], ['insideEnd', '안쪽 끝에'], ['center', '가운데'], ['insideBase', '축 쪽에']], (v) => setF({ labelPos: v || undefined }))),
             row('선 종류', sel2(f.dash ?? '', [['', '실선'], ['dash', '파선'], ['dot', '점선'], ['dashDot', '일점 쇄선'], ['longDash', '긴 파선']], (v) => setF({ dash: v || undefined }))),
@@ -6053,7 +6086,33 @@ function chartFormatPane(id = chartSel) {
             f.trend && f.trend !== 'movingAvg' ? row('앞으로 예측(구간)', num(f.trendForward, (v) => setF({ trendForward: v || undefined }), { min: 0, max: 100 })) : null,
             pointColorRow({ ...s, categories: data.categories }, f, setF));
         })),
-    );
+    ].filter(Boolean));
+    const sections = [...body.children];
+    const category = (section) => {
+      const title = section.querySelector('summary')?.textContent ?? '';
+      return title === '3차원 회전' ? title : title === '차트 영역' ? '채우기 및 선' : title === '차트 제목' || title === '범례 · 레이블' ? '텍스트 및 범례' : '차트 옵션';
+    };
+    const categories = ['차트 옵션', '채우기 및 선', '텍스트 및 범례', '3차원 회전'].filter((name) => sections.some((s) => category(s) === name));
+    if (!categories.includes(activeCategory)) activeCategory = categories[0];
+    const tabs = el('div', { class: 'format-pane-tabs', role: 'tablist', 'aria-label': '차트 서식 범주' });
+    const select = (name) => {
+      activeCategory = name;
+      for (const section of sections) section.hidden = category(section) !== name;
+      for (const button of tabs.children) { button.setAttribute('aria-selected', String(button.textContent === name)); button.tabIndex = button.textContent === name ? 0 : -1; }
+    };
+    for (const name of categories) {
+      const button = el('button', { type: 'button', role: 'tab', onclick: () => select(name) }, name);
+      button.addEventListener('keydown', (event) => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+        event.preventDefault();
+        const i = categories.indexOf(activeCategory);
+        const next = event.key === 'Home' ? 0 : event.key === 'End' ? categories.length - 1 : (i + (event.key === 'ArrowRight' ? 1 : -1) + categories.length) % categories.length;
+        select(categories[next]); tabs.children[next].focus();
+      });
+      tabs.append(button);
+    }
+    body.prepend(tabs);
+    select(activeCategory);
   };
   draw();
   chartPaneDlg = openDialog({ title: '차트 서식', width: 340, modeless: true, body, onClose: () => { chartPaneDlg = null; } });
@@ -7024,7 +7083,7 @@ const OPTION_DEFAULTS = {
   // 일반 · 언어 교정 · 고급 · 리본 (엑셀 옵션)
   userName: '', newFont: '맑은 고딕', newSize: 11, newSheets: 1, uiTheme: 'color', uiScale: 100, reduceMotion: false,
   autoCorrect: true, acList: null, saveFormat: 'xlsx', autoDecimal: false, decimalPlaces: 2, fillHandle: true, autoComplete: true, gridColor: '',
-  hiddenTabs: [], qat: [],
+  hiddenTabs: [], qat: [], qatOrder: null, qatPosition: 'above',
 };
 /** 엑셀 한국어판 자동 고침 기본 목록 (수식에는 적용 안 함) */
 const AUTOCORRECT_DEFAULT = [['(c)', '©'], ['(r)', '®'], ['(tm)', '™'], ['...', '…'], [':)', '☺'], [':-)', '☺'], [':(', '☹'], [':-(', '☹'], ['-->', '→'], ['<--', '←'], ['==>', '⇒'], ['<==', '⇐'], ['<=>', '⇔']];
@@ -7070,21 +7129,40 @@ function applyOptions() {
   gv?.renderOverlays?.();
   updateStatusCalc();
 }
-/** 빠른 실행 도구 모음: 저장 · 실행 취소 · 다시 실행 뒤에 사용자가 고른 명령 */
+/** 도구 모음의 현재 순서가 Alt 숫자 키 순서입니다. */
+let qatBase = null;
+function qatCommands() { return [...new Set(opts.qatOrder ?? ['save', 'undo', 'redo', ...(opts.qat ?? [])])].filter((id) => ['save', 'undo', 'redo'].includes(id) || ribbonCommands().some((x) => x.cmd === id)); }
+const qatKey = (i) => i < 9 ? String(i + 1) : i < 18 ? `0${18 - i}` : '';
 function renderQat() {
   const left = document.querySelector('.tb-left');
   if (!left) return;
-  left.querySelectorAll('.tb-qat').forEach((b) => b.remove());
-  const cmds = ribbonCommands();
-  for (const id of opts.qat ?? []) {
-    const c = cmds.find((x) => x.cmd === id);
-    if (!c) continue;
-    const icon = c.icon && ICONS[c.icon];
-    const b = el('button', { class: 'tb-btn tb-qat', title: c.label, onmousedown: (e) => e.preventDefault(), onclick: () => run(id) });
-    if (icon) b.innerHTML = icon; else b.textContent = c.label.slice(0, 2);
-    left.append(b);
-  }
+  qatBase ??= { save: document.querySelector('.tb-left [data-cmd="save"]'), undo: dom.undoBtn, redo: dom.redoBtn };
+  let bar = document.getElementById('quickAccess');
+  if (!bar) { bar = el('div', { id: 'quickAccess', class: 'quick-access', role: 'toolbar', 'aria-label': '빠른 실행 도구 모음' }); }
+  bar.replaceChildren();
+  const cmds = [{ cmd: 'save', label: '저장', icon: 'save' }, { cmd: 'undo', label: '실행 취소', icon: 'undo' }, { cmd: 'redo', label: '다시 실행', icon: 'redo' }, ...ribbonCommands()];
+  for (const b of Object.values(qatBase)) b?.remove();
+  qatCommands().forEach((id, i) => {
+    const c = cmds.find((x) => x.cmd === id), key = qatKey(i);
+    const b = qatBase[id] ?? el('button', { class: 'tb-btn tb-qat' });
+    b.title = `${c.label}${key ? ` (Alt+${key.split('').join('+')})` : ''}`;
+    b.setAttribute('aria-label', b.title); b.dataset.qatCmd = id; b.dataset.qatKey = key;
+    if (!b.dataset.qatBound) {
+      b.addEventListener('mousedown', (e) => e.preventDefault()); b.addEventListener('click', () => run(id)); b.dataset.qatBound = '1';
+      b.addEventListener('keydown', (e) => { if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return; e.preventDefault(); const buttons = [...bar.querySelectorAll('button:not(:disabled)')]; const at = buttons.indexOf(b); buttons[e.key === 'Home' ? 0 : e.key === 'End' ? buttons.length - 1 : (at + (e.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length]?.focus(); });
+    }
+    if (!qatBase[id]) { if (c.icon && ICONS[c.icon]) setSafeHtml(b, ICONS[c.icon]); else b.textContent = c.label.slice(0, 2); }
+    bar.append(b);
+  });
+  const menu = el('button', { class: 'tb-btn qat-customize', title: '빠른 실행 도구 모음 사용자 지정', 'aria-label': '빠른 실행 도구 모음 사용자 지정', onclick: () => openMenu(menu, [
+    { label: opts.qatPosition === 'below' ? '리본 메뉴 위에 표시' : '리본 메뉴 아래에 표시', action: () => { opts.qatPosition = opts.qatPosition === 'below' ? 'above' : 'below'; saveOptions(); renderQat(); gv?.layout(); } },
+    { label: '명령 및 순서 지정…', action: () => optionsDialog(8) },
+  ]) }, '⌄');
+  bar.append(menu);
+  bar.classList.toggle('below', opts.qatPosition === 'below');
+  if (opts.qatPosition === 'below') document.getElementById('formulaRow').before(bar); else left.append(bar);
 }
+
 function updateStatusCalc() {
   const elc = document.getElementById('calcState');
   if (!elc) return;
@@ -7106,13 +7184,14 @@ function pivotDefaultsDef() {
 
 function optionsDialog(startTab = 0) {
   const o = JSON.parse(JSON.stringify(opts));
+  o.qatOrder = qatCommands();
   const book = { noZeros: !!sheet().noZeros, lockStructure: !!wb.props?.lockStructure };
   const radio = (name, v, cur, label, fn) => { const r = el('input', { type: 'radio', name, value: v, checked: cur === v }); r.addEventListener('change', () => { if (r.checked) fn(v); }); return el('label', { class: 'fc-check' }, r, label); };
   const check = (cur, label, fn) => { const c = el('input', { type: 'checkbox', checked: !!cur }); c.addEventListener('change', () => fn(c.checked)); return el('label', { class: 'fc-check' }, c, label); };
   const title = (t) => el('div', { class: 'opt-title' }, t);
   const note = (t) => el('div', { class: 'muted' }, t);
   const select = (label, cur, list, fn) => {
-    const s = el('select', {}, list.map(([v, l]) => el('option', { value: v, selected: String(cur) === String(v) }, l)));
+    const s = el('select', { 'aria-label': label }, list.map(([v, l]) => el('option', { value: v, selected: String(cur) === String(v) }, l)));
     s.addEventListener('change', () => fn(s.value));
     return el('label', {}, el('span', {}, label), s);
   };
@@ -7144,18 +7223,18 @@ function optionsDialog(startTab = 0) {
   })));
 
   // 빠른 실행 도구 모음: 왼쪽 = 명령 목록, 오른쪽 = 도구 모음
-  const cmds = ribbonCommands();
+  const cmds = [{ cmd: 'save', label: '저장', tab: '파일' }, { cmd: 'undo', label: '실행 취소', tab: '홈' }, { cmd: 'redo', label: '다시 실행', tab: '홈' }, ...ribbonCommands()].filter((c, i, all) => all.findIndex((x) => x.cmd === c.cmd) === i);
   const cmdLabel = (id) => cmds.find((x) => x.cmd === id)?.label ?? id;
-  const qatAll = el('select', { size: 12, class: 'qat-list' });
-  const qatCur = el('select', { size: 12, class: 'qat-list' });
+  const qatAll = el('select', { size: 12, class: 'qat-list', 'aria-label': '사용 가능한 명령' });
+  const qatCur = el('select', { size: 12, class: 'qat-list', 'aria-label': '현재 도구 모음 순서' });
   const qatFilter = el('select', {}, [el('option', { value: '' }, '모든 명령'), ...[...new Set(cmds.map((x) => x.tab))].map((t) => el('option', { value: t }, `${t} 탭`))]);
   const drawQat = () => {
     qatAll.replaceChildren(...cmds.filter((x) => !qatFilter.value || x.tab === qatFilter.value).map((x) => el('option', { value: x.cmd }, `${x.label}`)));
-    qatCur.replaceChildren(el('option', { value: '', disabled: true }, '저장 · 실행 취소 · 다시 실행 (기본)'), ...o.qat.map((id) => el('option', { value: id }, cmdLabel(id))));
+    qatCur.replaceChildren(...o.qatOrder.map((id, i) => el('option', { value: id }, `${i + 1}. ${cmdLabel(id)}${qatKey(i) ? ` (Alt+${qatKey(i).split('').join('+')})` : ''}`)));
   };
   qatFilter.addEventListener('change', drawQat);
-  const qatAddBtn = () => { const v = qatAll.value; if (v && !o.qat.includes(v)) { o.qat.push(v); drawQat(); qatCur.value = v; } };
-  const qatMove = (d) => { const i = o.qat.indexOf(qatCur.value); const j = i + d; if (i < 0 || j < 0 || j >= o.qat.length) return; [o.qat[i], o.qat[j]] = [o.qat[j], o.qat[i]]; const v = qatCur.value; drawQat(); qatCur.value = v; };
+  const qatAddBtn = () => { const v = qatAll.value; if (v && !o.qatOrder.includes(v)) { o.qatOrder.push(v); drawQat(); qatCur.value = v; } };
+  const qatMove = (d) => { const i = o.qatOrder.indexOf(qatCur.value); const j = i + d; if (i < 0 || j < 0 || j >= o.qatOrder.length) return; [o.qatOrder[i], o.qatOrder[j]] = [o.qatOrder[j], o.qatOrder[i]]; const v = qatCur.value; drawQat(); qatCur.value = v; };
   qatAll.addEventListener('dblclick', qatAddBtn);
   drawQat();
 
@@ -7237,16 +7316,17 @@ function optionsDialog(startTab = 0) {
       note('상황별 탭(표 디자인 · 피벗 테이블 분석 · 슬라이서 등)은 해당 개체를 선택하면 나타납니다.'))],
     ['빠른 실행 도구 모음', el('div', { class: 'opt-page' },
       title('빠른 실행 도구 모음 사용자 지정'),
+      select('표시 위치', o.qatPosition, [['above', '리본 메뉴 위'], ['below', '리본 메뉴 아래']], (v) => { o.qatPosition = v; }),
       el('label', {}, el('span', {}, '명령 선택'), qatFilter),
       el('div', { class: 'qat-grid' }, qatAll,
         el('div', { class: 'qat-mid' },
           el('button', { class: 'btn', onclick: qatAddBtn }, '추가(A) >>'),
-          el('button', { class: 'btn', onclick: () => { o.qat = o.qat.filter((x) => x !== qatCur.value); drawQat(); } }, '<< 제거(R)'),
-          el('button', { class: 'btn small', title: '위로', onclick: () => qatMove(-1) }, '▲'),
-          el('button', { class: 'btn small', title: '아래로', onclick: () => qatMove(1) }, '▼')),
+          el('button', { class: 'btn', onclick: () => { o.qatOrder = o.qatOrder.filter((x) => x !== qatCur.value); drawQat(); } }, '<< 제거(R)'),
+          el('button', { class: 'btn small', title: '위로', 'aria-label': '위로', onclick: () => qatMove(-1) }, '▲'),
+          el('button', { class: 'btn small', title: '아래로', 'aria-label': '아래로', onclick: () => qatMove(1) }, '▼')),
         qatCur),
-      el('button', { class: 'btn', onclick: () => { o.qat = []; drawQat(); } }, '원래대로'),
-      note('제목 표시줄의 저장 · 실행 취소 · 다시 실행 옆에 단추로 나타납니다.'))],
+      el('button', { class: 'btn', onclick: () => { o.qatOrder = ['save', 'undo', 'redo']; drawQat(); } }, '원래대로'),
+      note('순서대로 Alt+1~9로 실행합니다. 10~18번째는 Alt, 0, 9~1 순서로 누릅니다. 리본 메뉴 위 또는 아래에 표시할 수 있습니다.'))],
   ];
   const tabBar = el('div', { class: 'opt-tabs' });
   const box = el('div', { class: 'opt-box' });
@@ -7751,6 +7831,10 @@ function handleKeytipKey(e) {
   e.preventDefault();
   keytip.clean = false;
   const seq = keytip.seq + (m[1] ?? m[2]).toLowerCase();
+  const quick = qatCommands().map((cmd, i) => ({ cmd, key: qatKey(i) })).filter((x) => x.key);
+  const hit = quick.find((x) => x.key === seq);
+  if (hit) { endKeytip(); run(hit.cmd); return true; }
+  if (quick.some((x) => x.key.startsWith(seq))) { keytip.seq = seq; document.body.classList.add('keytips'); dom.status.textContent = '빠른 실행: ' + quick.filter((x) => x.key.startsWith(seq)).map((x) => `${x.key}`).join(' · '); return true; }
   if (seq.length === 1 && KEYTIP_TABS[seq]) ribbon.selectTab(KEYTIP_TABS[seq]);
   if (KEYTIPS[seq]) {
     endKeytip();
@@ -8288,6 +8372,7 @@ const JS_MACROS = {
 };
 /** 도형 · 그림 클릭 → 연결된 매크로 */
 function runObjectMacro(name) {
+  if (viewOnly) { toast('공개 읽기 전용 문서에서는 매크로를 실행할 수 없습니다.'); return; }
   const fn = JS_MACROS[name];
   if (fn) { Promise.resolve(fn()).catch((e) => alertDialog('매크로', e.message)); return; }
   toast(`'${name}' 매크로는 VBA 라서 WIXEL 에서 실행되지 않습니다. (개발 도구 › Visual Basic 에서 코드를 볼 수 있습니다)`);
@@ -8586,52 +8671,118 @@ function endDraw() {
   dom.view.classList.remove('drawing-mode');
 }
 
+let shapePaneDlg = null;
 function shapeDialog(id, typed = null) {
-  const sh = sheet().shapes.find((x) => x.id === id);
-  if (!sh) return;
-  const isLine = LINE_SHAPES.has(sh.kind);
-  const row = (label, ...inputs) => el('label', {}, el('span', {}, label), el('span', { style: { display: 'flex', gap: '8px', alignItems: 'center' } }, ...inputs));
-  const text = el('textarea', { rows: 4, style: { width: '100%', minHeight: '80px' } }, typed ?? sh.text ?? '');
-  const size = el('input', { type: 'number', min: 6, max: 96, value: sh.size ?? 11, style: { width: '70px' } });
-  const bold = el('input', { type: 'checkbox', checked: !!sh.bold });
-  const align = el('select', {}, [['left', '왼쪽'], ['center', '가운데'], ['right', '오른쪽']].map(([v, l]) => el('option', { value: v, selected: (sh.align ?? 'center') === v }, l)));
-  const color = el('input', { type: 'color', value: sh.color ?? '#000000' });
-  const fillOn = el('input', { type: 'checkbox', checked: !!sh.fill });
-  const fill = el('input', { type: 'color', value: sh.fill ?? '#4472c4' });
-  const lineOn = el('input', { type: 'checkbox', checked: !!sh.stroke });
-  const stroke = el('input', { type: 'color', value: sh.stroke ?? '#2f528f' });
-  const width = el('input', { type: 'number', min: 0.25, max: 20, step: 0.25, value: sh.strokeWidth ?? 1, style: { width: '70px' } });
-  const dash = el('select', {}, [['', '실선'], ['dash', '파선'], ['dot', '점선']].map(([v, l]) => el('option', { value: v, selected: (sh.dash ?? '') === v }, l)));
-  const arrow = el('select', {}, [['', '없음'], ['end', '끝 화살표'], ['both', '양쪽 화살표']].map(([v, l]) => el('option', { value: v, selected: (sh.arrow ?? '') === v }, l)));
-  const rot = el('input', { type: 'number', min: -360, max: 360, value: sh.rot ?? 0, style: { width: '70px' } });
-  const valign = el('select', {}, [['top', '위쪽'], ['middle', '가운데'], ['bottom', '아래쪽']].map(([v, l]) => el('option', { value: v, selected: (sh.valign ?? (sh.kind === 'textbox' ? 'top' : 'middle')) === v }, l)));
-  const body = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
-    isLine ? null : row('텍스트', text),
-    isLine ? null : row('글꼴', el('span', {}, '크기'), size, el('label', { style: { display: 'inline-flex', gap: '4px', flexDirection: 'row' } }, bold, '굵게'), color),
-    isLine ? null : row('맞춤', align, el('span', {}, '세로'), valign),
-    isLine ? null : row('채우기', el('label', { style: { display: 'inline-flex', gap: '4px', flexDirection: 'row' } }, fillOn, '사용'), fill),
-    row(isLine ? '선 색' : '윤곽선', isLine ? null : el('label', { style: { display: 'inline-flex', gap: '4px', flexDirection: 'row' } }, lineOn, '사용'), stroke),
-    row('선 굵기(pt)', width, dash),
-    isLine ? row('화살표', arrow) : row('회전(°)', rot));
-  openDialog({
-    title: isLine ? '선 서식' : '도형 서식', body, width: 420,
-    onOpen: () => { if (!isLine) { text.focus(); text.setSelectionRange(text.value.length, text.value.length); } },
-    buttons: [
-      {
-        label: '확인', primary: true,
-        action: () => updateObject(id, isLine
-          ? { stroke: stroke.value, strokeWidth: Number(width.value) || 1, dash: dash.value || undefined, arrow: arrow.value || undefined }
-          : {
-            text: text.value, size: clamp(Number(size.value) || 11, 6, 96), bold: bold.checked || undefined, align: align.value, color: color.value,
-            // 파일에서 가져온 조각별 서식은 글자 · 글꼴 설정을 바꾸지 않았을 때만 유지
-            ...(sh.paras && (text.value !== sh.text || align.value !== (sh.align ?? 'left') || bold.checked !== !!sh.bold) ? { paras: undefined } : {}),
-            fill: fillOn.checked ? fill.value : null, stroke: lineOn.checked ? stroke.value : null, strokeWidth: Number(width.value) || 1,
-            dash: dash.value || undefined, rot: (Number(rot.value) % 360) || undefined, valign: valign.value,
-          }),
-      },
-      { label: '취소' },
-    ],
-  });
+  const host = si;
+  const original = wb.sheets[host]?.shapes.find((o) => o.id === id);
+  if (!original) return;
+  if (shapePaneDlg) shapePaneDlg.close();
+  const get = () => wb.sheets[host]?.shapes.find((o) => o.id === id);
+  const up = (patch) => {
+    if (!get()) return;
+    wb.transact(() => wb.setSheetProp(host, 'shapes', wb.sheets[host].shapes.map((o) => o.id === id ? { ...o, ...patch } : o)), meta());
+    gv.renderObjectsAll();
+  };
+  const textUp = (patch) => up({ ...patch, paras: undefined });
+  const line = LINE_SHAPES.has(original.kind);
+  const body = el('div', { class: 'cfp shape-format-pane' });
+  const tabs = el('div', { class: 'format-pane-tabs', role: 'tablist', 'aria-label': '도형 서식 범주' });
+  let selected = typed !== null ? '텍스트 옵션' : '채우기 및 선';
+  let keepRatio = false;
+  let textInput;
+  const row = (name, input) => { input?.setAttribute('aria-label', name); return el('label', { class: 'cfp-row' }, el('span', {}, name), input); };
+  const sec = (name, ...children) => el('details', { class: 'cfp-sec', open: true }, el('summary', {}, name), ...children);
+  const num = (value, fn, min = 0, max = 100, step = 1) => {
+    const input = el('input', { type: 'number', value, min, max, step });
+    input.addEventListener('change', () => { const v = Number(input.value); if (input.value === '' || !Number.isFinite(v)) return; const safe = clamp(v, min, max); input.value = safe; fn(safe); });
+    return input;
+  };
+  const check = (value, fn) => { const input = el('input', { type: 'checkbox', checked: !!value }); input.addEventListener('change', () => fn(input.checked)); return input; };
+  const color = (value, fn) => { const input = el('input', { type: 'color', value: value ?? '#000000' }); input.addEventListener('change', () => fn(input.value)); return input; };
+  const choose = (value, options, fn) => { const input = el('select', {}, options.map(([v, name]) => el('option', { value: v, selected: String(value) === String(v) }, name))); input.addEventListener('change', () => fn(input.value)); return input; };
+  const draw = () => {
+    const sh = get(); if (!sh) return;
+    const pages = new Map();
+    const gradient = sh.grad?.stops ?? [[0, sh.fill ?? '#4472c4'], [1, '#ffffff']];
+    pages.set('채우기 및 선', el('div', {},
+      !line ? sec('채우기',
+        row('채우기', choose(!sh.fill ? 'none' : sh.grad ? 'gradient' : 'solid', [['none', '채우기 없음'], ['solid', '단색 채우기'], ['gradient', '그라데이션 채우기']], (v) => { up(v === 'none' ? { fill: null, grad: undefined } : { fill: sh.fill ?? '#4472c4', grad: v === 'gradient' ? { ang: 90, stops: gradient } : undefined }); draw(); })),
+        sh.fill ? row('색', color(sh.fill, (v) => up({ fill: v }))) : null,
+        sh.fill ? row('투명도(%)', num(Math.round((1 - (sh.fillOpacity ?? 1)) * 100), (v) => up({ fillOpacity: 1 - v / 100 }))) : null,
+        sh.grad ? row('방향(°)', num(sh.grad.ang ?? 90, (v) => up({ grad: { ...get().grad, ang: v } }), 0, 360)) : null,
+        sh.grad ? row('시작 색', color(gradient[0][1], (v) => { const current = get().grad; const stops = [...(current.stops ?? gradient)]; stops[0] = [stops[0][0], v, ...stops[0].slice(2)]; up({ grad: { ...current, stops } }); })) : null,
+        sh.grad ? row('끝 색', color(gradient.at(-1)[1], (v) => { const current = get().grad; const stops = [...(current.stops ?? gradient)]; stops[stops.length - 1] = [stops.at(-1)[0], v, ...stops.at(-1).slice(2)]; up({ grad: { ...current, stops } }); })) : null) : null,
+      sec('선',
+        row('선 표시', check(!!sh.stroke, (v) => { up({ stroke: v ? sh.stroke ?? '#2f528f' : null }); draw(); })),
+        row('색', color(sh.stroke, (v) => up({ stroke: v }))),
+        row('투명도(%)', num(Math.round((1 - (sh.strokeOpacity ?? 1)) * 100), (v) => up({ strokeOpacity: 1 - v / 100 }))),
+        row('너비(pt)', num((sh.strokeWidth ?? 1) * 0.75, (v) => up({ strokeWidth: v / 0.75 }), 0.25, 100, 0.25)),
+        row('대시 종류', choose(sh.dash ?? '', [['', '실선'], ['dash', '파선'], ['dot', '점선']], (v) => up({ dash: v || undefined }))),
+        line ? row('화살표', choose(sh.arrow ?? '', [['', '없음'], ['end', '끝 화살표'], ['both', '양쪽 화살표']], (v) => up({ arrow: v || undefined }))) : null)));
+    const sd = typeof sh.shadow === 'object' ? sh.shadow : {};
+    if (!line) pages.set('효과', el('div', {},
+      sec('그림자',
+        row('그림자', check(sh.shadow, (v) => { up({ shadow: v ? { dx: 3, dy: 3, blur: 3, opacity: 0.4 } : undefined }); draw(); })),
+        ...(sh.shadow ? [
+          row('색', color(sd.color, (v) => up({ shadow: { ...get().shadow, color: v } }))),
+          row('투명도(%)', num(Math.round((1 - (sd.opacity ?? 0.4)) * 100), (v) => up({ shadow: { ...get().shadow, opacity: 1 - v / 100 } }))),
+          row('흐리게(px)', num(sd.blur ?? 3, (v) => up({ shadow: { ...get().shadow, blur: v } }), 0, 50)),
+          row('가로 거리(px)', num(sd.dx ?? 3, (v) => up({ shadow: { ...get().shadow, dx: v } }), -100, 100)),
+          row('세로 거리(px)', num(sd.dy ?? 3, (v) => up({ shadow: { ...get().shadow, dy: v } }), -100, 100))
+        ] : [])),
+      sec('네온 및 부드러운 가장자리',
+        row('네온', check(sh.glow, (v) => { up({ glow: v ? { color: '#4472c4', size: 6 } : undefined }); draw(); })),
+        sh.glow ? row('네온 색', color(sh.glow.color, (v) => up({ glow: { ...get().glow, color: v } }))) : null,
+        sh.glow ? row('네온 크기(px)', num(sh.glow.size ?? 6, (v) => up({ glow: { ...get().glow, size: v } }), 0, 50)) : null,
+        row('부드러운 가장자리(px)', num(sh.soft ?? 0, (v) => up({ soft: v || undefined }), 0, 30)))));
+    pages.set('크기 및 속성', el('div', {}, sec('크기와 위치',
+      row('가로 세로 비율 고정', check(keepRatio, (v) => { keepRatio = v; })),
+      row('너비(px)', num(sh.w, (v) => { const current = get(); up({ w: v, ...(keepRatio ? { h: v * current.h / current.w } : {}) }); draw(); }, 4, 10000)),
+      row('높이(px)', num(sh.h, (v) => { const current = get(); up({ h: v, ...(keepRatio ? { w: v * current.w / current.h } : {}) }); draw(); }, 4, 10000)),
+      row('가로 위치(px)', num(sh.x, (v) => up({ x: v }), 0, 1000000)),
+      row('세로 위치(px)', num(sh.y, (v) => up({ y: v }), 0, 10000000)),
+      row('회전(°)', num(sh.rot ?? 0, (v) => up({ rot: v || undefined }), -360, 360)),
+      row('좌우 대칭', check(sh.flip, (v) => up({ flip: v || undefined }))),
+      row('상하 대칭', check(sh.flipV, (v) => up({ flipV: v || undefined }))))));
+    if (!line) {
+      textInput = el('textarea', { rows: 4, 'aria-label': '도형 텍스트', style: { width: '100%' } }, sh.text ?? '');
+      textInput.addEventListener('change', () => textUp({ text: textInput.value }));
+      const font = el('input', { type: 'text', value: sh.font ?? BASE_FONT.name, 'aria-label': '도형 글꼴' });
+      font.addEventListener('change', () => textUp({ font: font.value || undefined }));
+      const pad = sh.pad ?? [4.8, 9.6, 4.8, 9.6];
+      pages.set('텍스트 옵션', el('div', {},
+        sec('텍스트 및 글꼴', textInput, row('글꼴', font),
+          row('크기(pt)', num(sh.size ?? 11, (v) => textUp({ size: v }), 6, 400)),
+          row('색', color(sh.color, (v) => textUp({ color: v }))),
+          row('굵게', check(sh.bold, (v) => textUp({ bold: v || undefined }))),
+          row('기울임꼴', check(sh.italic, (v) => textUp({ italic: v || undefined }))),
+          row('밑줄', check(sh.underline, (v) => textUp({ underline: v || undefined })))),
+        sec('텍스트 상자',
+          row('가로 맞춤', choose(sh.align ?? 'center', [['left', '왼쪽'], ['center', '가운데'], ['right', '오른쪽'], ['justify', '양쪽 맞춤']], (v) => textUp({ align: v }))),
+          row('세로 맞춤', choose(sh.valign ?? 'middle', [['top', '위쪽'], ['middle', '가운데'], ['bottom', '아래쪽']], (v) => up({ valign: v }))),
+          row('도형에서 텍스트 줄 바꿈', check(!sh.nowrap, (v) => up({ nowrap: !v || undefined }))),
+          ...['위쪽 여백(px)', '오른쪽 여백(px)', '아래쪽 여백(px)', '왼쪽 여백(px)'].map((name, i) => row(name, num(pad[i], (v) => { const next = [...(get().pad ?? pad)]; next[i] = v; up({ pad: next }); }, 0, 200, 0.5))))));
+    }
+    const names = [...pages.keys()];
+    if (!pages.has(selected)) selected = names[0];
+    const show = (name) => {
+      selected = name;
+      for (const [key, page] of pages) page.hidden = key !== name;
+      for (const button of tabs.children) { button.setAttribute('aria-selected', String(button.textContent === name)); button.tabIndex = button.textContent === name ? 0 : -1; }
+    };
+    tabs.replaceChildren(...names.map((name) => el('button', { type: 'button', role: 'tab', onclick: () => show(name), onkeydown: (event) => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault(); const i = names.indexOf(selected);
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? names.length - 1 : (i + (event.key === 'ArrowRight' ? 1 : -1) + names.length) % names.length;
+      show(names[next]); tabs.children[next].focus();
+    } }, name)));
+    body.replaceChildren(tabs, ...pages.values());
+    show(selected);
+  };
+  if (typed !== null) up({ text: typed, paras: undefined });
+  draw();
+  shapePaneDlg = openDialog({ title: line ? '선 서식' : '도형 서식', body, width: 370, modeless: true, onClose: () => { shapePaneDlg = null; }, onOpen: () => { if (typed !== null && textInput) { textInput.focus(); textInput.setSelectionRange(textInput.value.length, textInput.value.length); } } });
+  shapePaneDlg.root.classList.add('pane-dlg');
 }
 
 
@@ -10029,9 +10180,9 @@ function renderPivotPane(entry) {
     pages: areas.pages.filter((x) => x !== name), cols: areas.cols.filter((x) => x !== name),
     rows: areas.rows.filter((x) => x !== name), values: areas.values.filter((v) => v.field !== name),
   });
-  const moveTo = (name, area, at = null, fromValue = null, extra = {}) => {
+  const moveTo = (name, area, at = null, fromValue = null, extra = {}, fromArea = null) => {
     if (area !== 'values' && calcSet.has(name.toLowerCase())) { toast('계산 필드는 값 영역에만 넣을 수 있습니다.'); refreshPivotPane(true); return; }
-    const base = fromValue !== null ? { ...areas, values: areas.values.filter((_, i) => i !== fromValue) } : area === 'values' ? areas : removeField(name);
+    const base = fromValue !== null ? { ...areas, values: areas.values.filter((_, i) => i !== fromValue) } : area === 'values' && !fromArea ? areas : removeField(name);
     if (area === 'values') {
       const list = [...base.values];
       const v = fromValue !== null ? areas.values[fromValue] : { field: name, agg: isNum(name) ? 'sum' : 'count' };
@@ -10137,7 +10288,7 @@ function renderPivotPane(entry) {
   // 피벗 차트를 고른 상태면 엑셀처럼 범례(계열) · 축(범주)
   const AREA_LABEL = chartHere()?.pivot ? { pages: '필터', cols: '범례(계열)', rows: '축(범주)', values: 'Σ 값' } : { pages: '필터', cols: '열', rows: '행', values: 'Σ 값' };
   const areaBox = (area) => {
-    const box = el('div', { class: 'pp-area' });
+    const box = el('div', { class: 'pp-area', 'data-pivot-area': area, 'aria-label': `${AREA_LABEL[area]} 영역` });
     const items = area === 'values' ? areas.values.map((v, i) => ({ name: v.field, label: valueName(v), i })) : areas[area].map((n, i) => ({ name: n, label: n, i }));
     // 값이 둘 이상이면 열 영역에 'Σ 값' — 엑셀처럼 위아래로 옮겨 지표별(4월·5월 나란히) / 월별 배치를 고름
     // 행 영역에 두면(엑셀 '값'을 행 레이블로) 항목마다 지표가 한 행씩
@@ -10162,12 +10313,24 @@ function renderPivotPane(entry) {
       box.append(row);
     }
     items.forEach((it) => {
-      const menuBtn = el('button', { type: 'button', class: 'pp-menu', title: '필드 설정' }, '▾');
+      const menuBtn = el('button', { type: 'button', class: 'pp-menu', title: '필드 이동 및 설정', 'aria-label': `${it.label} 필드 이동 및 설정` }, '▾');
       const isCalc = calcSet.has(String(it.name).toLowerCase());
       const row = el('div', { class: `pp-item${isCalc ? ' calc' : ''}`, draggable: 'true', title: isCalc ? `계산 필드: =${(def.calcFields ?? []).find((c) => c.name.toLowerCase() === String(it.name).toLowerCase())?.formula ?? ''}` : '' },
         isCalc ? el('span', { class: 'fx-badge' }, 'ƒx') : '', el('span', { class: 'pp-label' }, it.label),
         area !== 'values' && filterInfo(it.name) ? funnel() : null, menuBtn);
       if (area !== 'values' && filterInfo(it.name)) { row.classList.add('filtered'); row.title = `필터 적용됨\n${filterInfo(it.name)}`; }
+      row.tabIndex = 0;
+      row.setAttribute('aria-label', `${AREA_LABEL[area]} 영역 ${it.label}. Enter 설정, Alt 아래쪽 화살표 이동 메뉴`);
+      row.addEventListener('keydown', (e) => {
+        if (e.target !== row) return;
+        if (e.key === 'Enter' && area === 'values') { e.preventDefault(); valueFieldDialog(it.i); }
+        else if (e.key === 'Enter' || e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10') || (e.altKey && e.key === 'ArrowDown')) { e.preventDefault(); menuBtn.click(); }
+        else if (e.key === 'Delete') { e.preventDefault(); apply(area === 'values' ? { values: areas.values.filter((_, i) => i !== it.i) } : { [area]: areas[area].filter((_, i) => i !== it.i) }); }
+      });
+      if (area === 'values') {
+        row.addEventListener('dblclick', () => valueFieldDialog(it.i));
+        row.insertBefore(el('button', { type: 'button', class: 'pp-value-settings', title: '값 요약 · 표시 형식 설정', 'aria-label': `${it.label} 값 요약 및 표시 형식`, onclick: () => valueFieldDialog(it.i) }, 'ƒx'), menuBtn);
+      }
       row.addEventListener('dragstart', (e) => { pivotDrag = { name: it.name, from: area, index: it.i }; e.dataTransfer.setData('text/plain', it.name); });
       menuBtn.addEventListener('click', () => {
         const list = area === 'values' ? areas.values : areas[area];
@@ -10177,7 +10340,7 @@ function renderPivotPane(entry) {
           { label: '처음으로 이동', disabled: it.i === 0, action: () => { const l = [...list]; const [x] = l.splice(it.i, 1); l.unshift(x); apply({ [area]: l }); } },
           { label: '끝으로 이동', disabled: it.i === list.length - 1, action: () => { const l = [...list]; const [x] = l.splice(it.i, 1); l.push(x); apply({ [area]: l }); } },
           { sep: true },
-          ...Object.entries(AREA_LABEL).filter(([a]) => a !== area).map(([a, lab]) => ({ label: `${lab}(으)로 이동`, action: () => moveTo(it.name, a, null, area === 'values' ? it.i : null) })),
+          ...Object.entries(AREA_LABEL).filter(([a]) => a !== area).map(([a, lab]) => ({ label: `${lab}(으)로 이동`, action: () => moveTo(it.name, a, null, area === 'values' ? it.i : null, {}, area) })),
           { sep: true },
           ...(area !== 'values' ? [{ label: area === 'pages' ? '항목 선택...' : '필터 및 정렬...', action: () => openPivotFilterMenu(entry, area === 'pages' ? 'page' : area, it.name, menuBtn) }] : []),
           { label: '필드 제거', action: () => apply(area === 'values' ? { values: areas.values.filter((_, i) => i !== it.i) } : { [area]: list.filter((_, i) => i !== it.i) }) },
@@ -10224,7 +10387,7 @@ function renderPivotPane(entry) {
         const [v] = l.splice(dr.index, 1);
         l.splice(at > dr.index ? at - 1 : at, 0, v);
         apply({ values: l });
-      } else moveTo(dr.name, area, at, dr.from === 'values' ? dr.index : null);
+      } else moveTo(dr.name, area, at, dr.from === 'values' ? dr.index : null, {}, dr.from);
     });
     return el('div', { class: 'pp-areawrap' }, el('div', { class: 'pp-areahead' }, AREA_LABEL[area]), box);
   };
@@ -10326,7 +10489,7 @@ function renderPivotPane(entry) {
   };
   pane.replaceChildren(
     el('div', { class: 'pp-head' }, el('span', {}, '피벗 테이블 필드'), el('button', { type: 'button', title: '닫기', onclick: () => { pivotPaneOpen = false; refreshPivotPane(); } }, '✕')),
-    el('div', { class: 'muted pp-hint' }, '보고서에 추가할 필드 선택 (영역으로 끌어 놓기):'),
+    el('div', { class: 'muted pp-hint' }, '필드를 끌어 영역을 옮기거나 ▾ 메뉴를 사용하세요. 값 필드는 ƒx 또는 Enter로 요약·표시 형식을 설정합니다.'),
     search, fieldList,
     el('div', { class: 'pp-tools' },
       el('button', { type: 'button', class: 'btn', onclick: () => calcFieldDialog(entry) }, 'ƒx 계산 필드...'),
@@ -11807,7 +11970,7 @@ async function exportXlsx(name = docName, kind = null, target = null) {
   const k = kind ?? (wb.vba ? 'xlsm' : 'xlsx');
   const fileName = `${safeFileName(name)}.${k}`;
   // 저장 위치를 먼저 고름 (파일을 만드는 동안 기다리면 브라우저가 창을 막음). target = [저장] 이 덮어쓸 파일
-  const handle = target ?? await pickSaveTarget(fileName);
+  const handle = target === false ? null : target ?? await pickSaveTarget(fileName);
   if (handle === undefined) return false;
   // 큰 문서는 나눠서 만들고 진행 표시 (압축도 함께 해서 파일이 작아짐)
   const prog = progressOverlay(`'${fileName}' 저장 중`);
@@ -11819,7 +11982,7 @@ async function exportXlsx(name = docName, kind = null, target = null) {
     prog.set(0.98, '파일 쓰는 중');
     const saved = await writeSaveTarget(handle, fileName, new Blob([bytes], { type: XLSX_KINDS[k].mime }));
     prog.close();
-    if (handle && /^xls[xm]$/.test(k)) fileHandle = handle; // 이 파일에 이어서 [저장]
+    if (handle && /^xls[xm]$/.test(k)) { fileHandle = handle; remoteDoc = false; clearTimeout(serverTimer); updateTitle(); } // 이 파일에 이어서 [저장]
     toast(handle ? `'${saved}' 에 ${XLSX_KINDS[k].label}(.${k})로 저장했습니다.` : `${XLSX_KINDS[k].label}(.${k})로 저장했습니다. (브라우저 다운로드 폴더)`);
     return true;
   } catch (err) {
@@ -11844,7 +12007,7 @@ function saveAs() {
         { value: 'csv', label: 'CSV UTF-8 (쉼표로 분리) (*.csv) — 현재 시트' },
         { value: 'tsv', label: '텍스트 (탭으로 분리) (*.tsv) — 현재 시트' },
         { value: 'txt', label: '유니코드 텍스트 (*.txt) — 현재 시트' },
-        ...(server.available ? [{ value: 'server', label: '서버에 저장 (다른 기기에서 열기)' }] : []),
+        ...(server.connected ? [{ value: 'server', label: `${server.label}에 저장 (다른 기기에서 열기)` }] : []),
       ],
     },
   ], ({ name, type }) => {
@@ -12000,6 +12163,10 @@ function loadWorkbook(data, name, activeSheet = 0) {
   if (editing) endEditUI();
   libraryFlush();
   fileHandle = null;
+  remoteDoc = false;
+  allowPrivateImports = false;
+  NET.cache.clear();
+  clearTimeout(serverTimer);
   wb.load(data);
   renderImportedPivots();
   afterLoad(name, activeSheet);
@@ -12010,6 +12177,10 @@ async function loadWorkbookAsync(data, name, activeSheet, prog) {
   if (editing) endEditUI();
   libraryFlush();
   fileHandle = null;
+  remoteDoc = false;
+  allowPrivateImports = false;
+  NET.cache.clear();
+  clearTimeout(serverTimer);
   const next = new Workbook();
   await next.loadAsync(data, (p) => prog?.set(0.6 + 0.25 * p, '셀 준비 중'));
   next.listeners = wb.listeners; // 화면 갱신 연결 유지
@@ -12174,7 +12345,7 @@ function afterLoad(name, activeSheet) {
 }
 
 async function serverNames() {
-  if (!server.available) return [];
+  if (!server.connected) return [];
   try { return (await server.list()).map((f) => f.name); } catch { return []; }
 }
 
@@ -12243,12 +12414,9 @@ async function newWorkbook(sample) {
 }
 
 function renameDoc(name) {
-  const old = docName;
+  if (name !== docName) { remoteDoc = false; clearTimeout(serverTimer); serverState.savedAt = null; }
   docName = name;
   updateTitle();
-  if (server.available && old !== name) {
-    server.save(name, snapshot()).then(() => server.remove(old)).catch(() => {});
-  }
 }
 
 const snapshot = () => ({ app: 'wixel', docName, docId, si, workbook: wb.serialize() });
@@ -12304,7 +12472,7 @@ async function recentTable(close) {
   const kb = (n) => (n > 1048576 ? `${(n / 1048576).toFixed(1)}MB` : `${Math.max(1, Math.round(n / 1024))}KB`);
   const draw = () => {
     box.replaceChildren(
-      el('div', { class: 'backstage-note' }, `이 브라우저에 최근 문서 ${LIB_MAX}개까지 자동으로 보관합니다 (문서마다 버전 기록 ${VER_MAX}개). 창을 닫거나 다른 문서를 열어도 사라지지 않습니다.`),
+      el('div', { class: 'backstage-note' }, `최근 문서 ${LIB_MAX}개 · 문서마다 버전 ${VER_MAX}개까지 보관합니다. 브라우저 데이터를 지우면 사라질 수 있습니다.`),
       list.length ? el('table', { class: 'backstage-list' },
         el('tr', {}, el('th', {}, ''), el('th', {}, '이름'), el('th', {}, '수정한 날짜'), el('th', {}, '크기'), el('th', {}, '버전'), el('th', {}, '')),
         list.map((f) => {
@@ -12397,14 +12565,12 @@ const appBase = () => location.href.replace(/[?#].*$/, '');
 
 /** 게시용 스냅샷: 선택한 시트만 · 보기 옵션 */
 function publishSnapshot(opt) {
-  const snap = snapshot();
-  const book = snap.workbook;
-  if (opt.sheet !== 'all') {
-    const i = Number(opt.sheet);
-    book.sheets = book.sheets.map((s, k) => (k === i ? s : { ...s, state: s.state ?? 'hidden' }));
-    snap.si = i;
-  }
-  return { ...snap, view: { headers: !!opt.headers, grid: !!opt.grid, title: opt.title ?? docName, published: Date.now() } };
+  const selection = opt.sheet ?? 'all';
+  return {
+    app: 'wixel', docName, docId, si: selection === 'all' ? si : 0,
+    workbook: publishedWorkbook(wb, selection),
+    view: { headers: !!opt.headers, grid: !!opt.grid, title: opt.title ?? docName, published: Date.now() },
+  };
 }
 
 async function publishDialog() {
@@ -12412,7 +12578,7 @@ async function publishDialog() {
   const sheetSel = el('select', {}, el('option', { value: 'all' }, '전체 통합 문서'), wb.sheets.map((s, i) => (isHiddenSheet(i) ? null : el('option', { value: String(i), selected: i === si && false }, s.name))));
   const headers = el('input', { type: 'checkbox' });
   const grid = el('input', { type: 'checkbox', checked: true });
-  const auto = el('input', { type: 'checkbox', checked: info?.auto ?? true });
+  const auto = el('input', { type: 'checkbox', checked: info?.auto ?? false });
   const out = el('div', { class: 'pub-out' });
   const show = (url, note) => {
     const inp = el('input', { type: 'text', readonly: true, value: url, onclick: (e) => e.target.select() });
@@ -12424,16 +12590,19 @@ async function publishDialog() {
   };
   const opt = () => ({ sheet: sheetSel.value, headers: headers.checked, grid: grid.checked });
   const linkOnly = async () => {
+    try {
     const { blob } = await packText(JSON.stringify(publishSnapshot(opt())));
     const code = b64url(new Uint8Array(await blob.arrayBuffer()));
-    if (code.length > LINK_MAX) { out.replaceChildren(el('div', { class: 'warn' }, `문서가 커서(${Math.round(code.length / 1024)}KB) 링크에 담을 수 없습니다. 서버(npm start)로 게시하거나 시트 하나만 게시하세요.`)); return; }
+    if (code.length > LINK_MAX) { out.replaceChildren(el('div', { class: 'warn' }, `문서가 커서(${Math.round(code.length / 1024)}KB) 링크에 담을 수 없습니다. 온라인 보관함에 연결해 게시하거나 시트 하나만 공유하세요.`)); return; }
     show(`${appBase()}#view=${code}`, '링크 안에 문서 내용이 압축되어 들어 있어 서버 없이도 누구나 볼 수 있습니다 (읽기 전용 · 그 시점의 내용).');
+    } catch (err) { out.replaceChildren(el('div', { class: 'warn' }, `링크를 만들지 못했습니다: ${err.message}`)); }
   };
   const serverPub = async () => {
+    if (!server.connected) { connectStorage(serverPub); return; }
     try {
       const res = await server.publish(publishSnapshot(opt()), info?.id ?? null);
       setPubInfo({ id: res.id, auto: auto.checked, opt: opt() });
-      show(`${appBase()}?view=${res.id}`, `서버에 게시했습니다. ${auto.checked ? '문서를 고치면 게시본도 자동으로 새로 고쳐지고, 보는 사람 화면도 30초마다 갱신됩니다.' : '[다시 게시]를 눌러야 게시본이 바뀝니다.'}`);
+      show(`${appBase()}?view=${res.id}`, `읽기 전용으로 게시했습니다. ${auto.checked ? '온라인 저장 시 게시본도 새로 고쳐지고, 보는 사람 화면은 30초마다 갱신됩니다.' : '[다시 게시]를 눌러야 게시본이 바뀝니다.'}`);
     } catch (err) {
       if (err.status === 401) askServerToken(serverPub);
       else out.replaceChildren(el('div', { class: 'warn' }, `게시하지 못했습니다: ${err.message}`));
@@ -12442,15 +12611,16 @@ async function publishDialog() {
   const body = el('div', { class: 'an-dlg' },
     el('div', { class: 'muted' }, '구글 스프레드시트의 [웹에 게시]처럼 읽기 전용 대시보드 화면(리본 · 수식 입력줄 없이)으로 공유합니다. 보는 사람은 슬라이서 · 필터를 눌러 볼 수 있지만 원본은 바뀌지 않습니다.'),
     el('label', { class: 'an-row' }, el('span', {}, '게시할 내용'), sheetSel),
+    el('div', { class: 'muted' }, '전체 통합 문서는 숨겨진 시트도 포함합니다. 시트 하나를 선택하면 게시 당시의 계산값과 차트만 공유합니다. 수식·피벗 재분석·슬라이서·스파크라인·조건부 서식 막대와 아이콘은 포함하지 않습니다.'),
     el('label', { class: 'an-check' }, grid, '눈금선 표시'),
     el('label', { class: 'an-check' }, headers, '행 · 열 머리글 표시'),
-    server.available ? el('label', { class: 'an-check' }, auto, '변경할 때마다 자동으로 다시 게시 (서버)') : null,
+    server.available ? el('label', { class: 'an-check' }, auto, '온라인 저장할 때 게시본도 함께 갱신') : null,
     el('div', { class: 'backstage-actions' },
-      server.available ? el('button', { class: 'btn primary', onclick: serverPub }, info?.id ? '다시 게시 (같은 링크)' : '서버에 게시 (짧은 링크)') : null,
+      server.available ? el('button', { class: 'btn primary', onclick: serverPub }, info?.id ? '다시 게시 (같은 링크)' : '온라인에 게시 (짧은 링크)') : null,
       el('button', { class: `btn${server.available ? '' : ' primary'}`, onclick: linkOnly }, '링크 만들기 (서버 없이)'),
-      info?.id && server.available ? el('button', { class: 'btn', onclick: async () => { await server.unpublish(info.id).catch(() => {}); setPubInfo(null); out.replaceChildren(el('div', { class: 'muted' }, '게시를 중지했습니다. 이전 링크로는 더 이상 볼 수 없습니다.')); } }, '게시 중지') : null),
+      info?.id && server.available ? el('button', { class: 'btn', onclick: async () => { try { await server.unpublish(info.id); } catch (err) { out.replaceChildren(el('div', { class: 'warn' }, `게시 중지 실패: ${err.message}`)); return; } setPubInfo(null); out.replaceChildren(el('div', { class: 'muted' }, '게시를 중지했습니다. 이전 링크로는 더 이상 볼 수 없습니다.')); } }, '게시 중지') : null),
     out,
-    server.available ? el('div', { class: 'muted' }, `공동 작업: 같은 서버에 접속한 사람에게 ${appBase()}?doc=${encodeURIComponent(docName)} 를 보내면 이 문서를 함께 편집할 수 있습니다 (다른 사람이 저장한 내용은 자동으로 불러옴).`) : null,
+    server.connected && !server.vault ? el('div', { class: 'muted' }, `공동 작업: 같은 서버에 접속한 사람에게 ${appBase()}?doc=${encodeURIComponent(docName)} 를 보내면 이 문서를 함께 편집할 수 있습니다 (다른 사람이 저장한 내용은 자동으로 불러옴).`) : null,
   );
   openDialog({ title: '공유 · 웹에 게시', body, width: 620, buttons: [{ label: '닫기', primary: true }] });
   if (info?.id && server.available) show(`${appBase()}?view=${info.id}`, '이미 게시된 문서입니다.');
@@ -12458,14 +12628,16 @@ async function publishDialog() {
 /** 자동 다시 게시 (서버 저장과 함께) */
 function autoRepublish() {
   const info = pubInfo();
-  if (!info?.id || !info.auto || !server.available || viewOnly) return;
-  server.publish(publishSnapshot(info.opt ?? { sheet: 'all', grid: true }), info.id).catch(() => {});
+  if (!info?.id || !info.auto || !server.connected || viewOnly) return;
+  Promise.resolve().then(() => server.publish(publishSnapshot(info.opt ?? { sheet: 'all', grid: true }), info.id)).catch((err) => { setPubInfo({ ...info, auto: false }); toast(`게시본 자동 갱신을 중단했습니다: ${err.message}. 공유 창에서 확인하세요.`); });
 }
 
 // 읽기 전용 보기 (게시된 문서 · 링크)
 let viewOnly = false;
 function enterViewMode(data, { pubId = null } = {}) {
   viewOnly = true;
+  allowPrivateImports = false;
+  NET.cache.clear();
   autosave = false;
   document.body.classList.add('view-mode');
   const v = data.view ?? {};
@@ -12523,6 +12695,7 @@ async function openFromUrl() {
       return true;
     }
     if (q.get('doc') && server.available) {
+      if (!server.connected) { connectStorage(() => openFromServer(q.get('doc'))); return true; }
       await openFromServer(q.get('doc'));
       return true;
     }
@@ -12536,17 +12709,22 @@ async function openFromUrl() {
 let collabTimer = null;
 function startCollabWatch() {
   clearInterval(collabTimer);
-  if (!server.available) return;
+  if (!server.connected) return;
   collabTimer = setInterval(async () => {
-    if (viewOnly || dirty || editing || !serverState.savedAt) return;
+    if (viewOnly || !remoteDoc || dirty || editing || !serverState.savedAt) return;
+    const watchingId = docId, watchingVersion = wb.version, watchingName = docName;
     try {
       const files = await server.list();
-      const f = files.find((x) => x.name === docName);
-      if (f && f.modified > serverState.savedAt + 1500) {
+      const f = files.find((x) => x.name === watchingName);
+      if (f && (f.revision != null ? String(f.revision) !== server.revision(`files/${encodeURIComponent(watchingName)}`) : f.modified > serverState.savedAt + 1500)) {
+        if (dirty || editing || docId !== watchingId || wb.version !== watchingVersion || !remoteDoc) return;
         const keep = { si, r: active.r, c: active.c };
-        const data = await server.load(docName);
+        const revisionBefore = server.revision(`files/${encodeURIComponent(watchingName)}`);
+        const data = await server.load(watchingName);
+        if (dirty || editing || docId !== watchingId || wb.version !== watchingVersion || !remoteDoc) { server.restoreRevision(`files/${encodeURIComponent(watchingName)}`, revisionBefore); return; }
         pendingDocId = docId;
         loadWorkbook(data.workbook ?? data, data.docName ?? docName, keep.si);
+        remoteDoc = true;
         dirty = false;
         serverState.savedAt = f.modified;
         selectCell(keep.r, keep.c);
@@ -12569,7 +12747,7 @@ function cellCount() {
 }
 /** 서버 자동 저장 대상인지 (셀이 아주 많으면 브라우저에만 자동 저장) */
 function serverAutosave() {
-  return server.available && cellCount() <= 300000;
+  return server.connected && remoteDoc && cellCount() <= 300000;
 }
 function bigBook() {
   return cellCount() > 50000 || imageBytes() > 2e6;
@@ -12586,21 +12764,21 @@ function saveToStorage() {
   try {
     if (bigBook()) {
       // 큰 문서: IndexedDB 에 시트별로, 바뀐 시트만, 조금씩 나눠 저장 (화면이 멈추지 않게)
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ docName, docId, si, autosave, idb: true }));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ docName, docId, si, autosave, remoteDoc, idb: true }));
       idbSaving = saveBigToIdb().then(() => { if (!serverAutosave()) { dirty = false; updateTitle(); } }).catch((err) => {
         if (err === SAVE_ABORT) return;
         if (!storageWarned) { storageWarned = true; toast('브라우저 저장 공간이 부족해 자동 저장하지 못했습니다. [파일 → 다른 이름으로 저장]으로 파일을 내려받으세요.'); }
       });
       return true;
     }
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ rev: APP_REV, docName, docId, si, autosave, workbook: wb.serialize() }));
-    if (!server.available) dirty = false;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ rev: APP_REV, docName, docId, si, autosave, remoteDoc, workbook: wb.serialize() }));
+    if (!remoteDoc) dirty = false;
     updateTitle();
     storageWarned = false;
     return true;
   } catch {
     // 큰 그림 등으로 브라우저 저장 공간(보통 5MB)을 넘은 경우
-    if (!server.available && !storageWarned) {
+    if (!storageWarned) {
       storageWarned = true;
       toast('브라우저 저장 공간이 부족해 자동 저장하지 못했습니다. [파일 → 다른 이름으로 저장]으로 파일을 내려받으세요.');
     }
@@ -12771,7 +12949,7 @@ function scheduleAutosave() {
 }
 
 function scheduleServerSave(delay = 1500) {
-  if (!server.available || !autosave || viewOnly) return;
+  if (!server.connected || !remoteDoc || !autosave || viewOnly || serverState.error) return;
   // 셀이 아주 많은 문서는 서버 자동 저장을 하지 않음 (전체를 보내야 해서 느림) — [저장]을 누르면 저장
   if (!serverAutosave()) { updateTitle(); return; }
   clearTimeout(serverTimer);
@@ -12783,7 +12961,7 @@ function scheduleServerSave(delay = 1500) {
 /** [저장] (Ctrl+S): 이전 파일을 덮어쓰므로 한 번 더 확인 (다시 묻지 않기 선택 가능) */
 function confirmOverwrite() {
   if (viewOnly) { saveNow(true); return; }
-  const target = fileHandle ? `내 컴퓨터의 '${fileHandle.name}'` : server.available ? `서버의 '${docName}'` : `이 브라우저의 '${docName}'`;
+  const target = fileHandle ? `내 컴퓨터의 '${fileHandle.name}'` : remoteDoc && server.connected ? `${server.label}의 '${docName}'` : `이 브라우저의 '${docName}'`;
   const go = () => {
     if (fileHandle) exportXlsx(docName, /\.xlsm$/i.test(fileHandle.name) ? 'xlsm' : 'xlsx', fileHandle).then((ok) => { if (ok) { saveNow(true, { quiet: true }); } });
     else saveNow(true);
@@ -12804,7 +12982,7 @@ function confirmOverwrite() {
 }
 
 async function saveNow(explicit, { quiet = false, saveAsFolder = false } = {}) {
-  if (explicit && saveAsFolder && server.available) {
+  if (explicit && saveAsFolder && server.connected) {
     // 서버(다른 기기에서 열기)에 저장할 위치: 폴더 / 파일 이름
     const names = await serverNames();
     const folders = [...new Set(names.filter((n) => n.includes('/')).map((n) => n.slice(0, n.lastIndexOf('/'))))].sort();
@@ -12815,45 +12993,53 @@ async function saveNow(explicit, { quiet = false, saveAsFolder = false } = {}) {
     ], ({ folder, name }) => {
       const clean = (x) => String(x ?? '').split('/').map((p) => p.trim().replace(/[\\:*?"<>|]/g, '_')).filter((p) => p && p !== '.' && p !== '..').join('/');
       const full = [clean(folder), clean(name) || '통합 문서'].filter(Boolean).join('/');
-      const doit = () => { if (full !== docName) renameDoc(full); saveNow(true); };
+      const doit = () => { if (full !== docName) renameDoc(full); selectRemoteSave(); };
       if (full !== docName && names.includes(full)) confirmBox('서버에 저장', `'${full}' 이(가) 이미 있습니다. 덮어쓸까요?`).then((ok) => ok && doit());
       else doit();
-    }, { okLabel: '저장', note: '폴더 이름에 / 를 넣으면 하위 폴더가 됩니다 (예: 보고서/2026). 같은 서버에 접속한 다른 기기의 [열기 › 서버]에서 이 위치로 찾을 수 있습니다.' });
+    }, { okLabel: '저장', note: `폴더 이름에 / 를 넣으면 하위 폴더가 됩니다 (예: 보고서/2026). 같은 ${server.label}에 연결한 기기의 [문서 열기]에서 찾을 수 있습니다.` });
     return;
   }
   if (viewOnly) { if (explicit) toast('읽기 전용 보기입니다. [편집용 사본 만들기]를 누르세요.'); return; }
   const stored = saveToStorage();
   if (explicit) libraryFlush({ version: { label: '저장' } });
-  if (!server.available) {
-    if (explicit && stored && !quiet) toast('이 브라우저에 저장했습니다. (서버 없이 실행 중)');
+  if (!server.connected || !remoteDoc) {
+    if (explicit && stored && !quiet) toast('이 브라우저에 저장했습니다. 다른 기기로 옮기려면 저장 위치에서 파일 또는 개인 보관함을 선택하세요.');
     return;
   }
+  if (serverState.saving) return;
+  const savingName = docName, savingBook = wb, savingRev = wb.version, savingId = docId, savingConnection = server.connectionVersion;
   serverState.saving = true;
   updateTitle();
   try {
-    await server.save(docName, snapshot());
+    const result = await server.save(savingName, snapshot());
+    if (savingName !== docName || savingBook !== wb || savingId !== docId || savingConnection !== server.connectionVersion || !remoteDoc) return;
     serverState.error = null;
-    serverState.savedAt = Date.now();
+    serverState.savedAt = result.modified ?? Date.now();
     autoRepublish();
-    dirty = false;
-    if (explicit && !quiet) toast(`서버의 '${docName}' 에 저장했습니다. 다른 기기에서도 열 수 있습니다.`);
+    if (wb.version === savingRev) dirty = false;
+    saveToStorage();
+    if (explicit && !quiet) toast(`${server.label}에 '${docName}'을(를) 저장했습니다.`);
   } catch (err) {
+    if (savingName !== docName || savingBook !== wb || savingId !== docId || savingConnection !== server.connectionVersion) return;
     serverState.error = err.message;
-    if (err.status === 401) askServerToken(() => saveNow(explicit));
-    else if (explicit) toast(`서버에 저장하지 못했습니다: ${err.message}`);
+    if (err.status === 412 || err.code === 'REVISION_CONFLICT') remoteConflict();
+    else if (err.status === 401) askServerToken(() => saveNow(explicit));
+    else toast(`${server.label} 저장 실패: ${err.message} · 브라우저의 사본은 유지됩니다.`);
   } finally {
     serverState.saving = false;
     updateTitle();
+    if (dirty && !serverState.error && remoteDoc && savingBook === wb && savingName === docName) scheduleServerSave();
   }
 }
 
 function askServerToken(then) {
+  if (server.vault) { connectStorage(then); return; }
   if (document.querySelector('[data-server-token]')) return;
   const dialog = formDialog('서버 암호', [{ name: 't', label: '암호', type: 'password', value: '' }], ({ t }) => {
     server.setToken(t);
     // 암호 창이 닫힌 뒤 재시도해야 잘못된 암호의 401 도 다시 입력받을 수 있습니다.
     queueMicrotask(() => then?.());
-  }, { note: '이 서버는 TABULA_TOKEN 으로 보호되어 있습니다.' });
+  }, { note: '이 서버에 설정된 문서 접근 암호를 입력하세요.' });
   dialog.root.dataset.serverToken = 'true';
 }
 
@@ -12861,8 +13047,12 @@ async function openFromServer(name) {
   try {
     const data = await server.load(name);
     loadWorkbook(data.workbook ?? data, data.docName ?? name, data.si ?? 0);
+    remoteDoc = true;
+    fileHandle = null;
+    saveToStorage();
     dirty = false;
     serverState.savedAt = Date.now();
+    serverState.error = null;
     updateTitle();
     toast(`'${name}'을(를) 열었습니다.`);
   } catch (err) {
@@ -12877,13 +13067,116 @@ function formatDate(ms) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+function storageLabel() { return fileHandle ? `원본 파일 · ${fileHandle.name}` : remoteDoc && server.connected ? server.label : '이 브라우저'; }
+function selectRemoteSave() {
+  if (!server.connected) { connectStorage(selectRemoteSave); return; }
+  if (!remoteDoc) server.restoreRevision(`files/${encodeURIComponent(docName)}`, '0');
+  remoteDoc = true;
+  fileHandle = null;
+  serverState.error = null;
+  dirty = true;
+  saveNow(true);
+  startCollabWatch();
+}
+function recoveryFile() {
+  const key = server.recoveryKey();
+  if (!key) return;
+  download('WIXEL-개인보관함-복구키.json', JSON.stringify({ app: 'WIXEL', version: 3, origin: location.origin, key }, null, 2), 'application/json');
+  toast('복구키 파일을 내려받았습니다. 이 파일을 가진 사람은 개인 보관함을 열 수 있습니다.');
+}
+function connectStorage(done) {
+  if (!server.available) { alertDialog('저장소 연결', '이 실행 환경에서는 온라인 보관함을 사용할 수 없습니다. 브라우저에 보관하거나 파일로 내려받으세요.'); return; }
+  if (!server.vault) {
+    formDialog('연결 서버 사용', server.needsToken ? [{ name: 'token', label: '서버 암호', type: 'password', value: '' }] : [], async ({ token }) => {
+      if (token !== undefined) server.setToken(token);
+      await server.list();
+      server.connect(); remoteDoc = false; clearTimeout(serverTimer); serverState.error = null;
+      startCollabWatch(); updateTitle(); queueMicrotask(() => done?.());
+      toast('서버에 연결했습니다. 문서의 저장 위치를 선택하면 온라인 저장이 시작됩니다.');
+    }, { okLabel: '연결', note: '이 서버의 접근 권한을 가진 사람과 문서를 보관하는 저장소입니다. 연결만으로 현재 문서를 업로드하지 않습니다.' });
+    return;
+  }
+  const keyInput = el('input', { type: 'password', autocomplete: 'off', spellcheck: 'false', 'aria-label': '개인 보관함 복구키', placeholder: '다른 기기의 복구키 43자 붙여넣기' });
+  const upload = el('input', { type: 'file', accept: '.json,.txt', hidden: true });
+  const error = el('div', { class: 'warn', role: 'status' });
+  upload.addEventListener('change', async () => {
+    try { const text = await upload.files[0].text(); let key = text.trim(); try { key = JSON.parse(text).key; } catch { /* 원문 키 */ } if (!validVaultKey(key)) throw new Error('복구키 파일의 형식을 확인하세요.'); keyInput.value = key; error.textContent = '복구키를 읽었습니다. 연결을 눌러 계속하세요.'; } catch (e) { error.textContent = e.message; }
+  });
+  const finish = (key) => { server.connect(key); remoteDoc = false; clearTimeout(serverTimer); serverState.error = null; saveToStorage(); startCollabWatch(); updateTitle(); toast('개인 보관함에 연결했습니다. 저장 위치를 선택한 문서만 업로드됩니다.'); queueMicrotask(() => done?.()); };
+  const body = el('div', { class: 'vault-connect' },
+    el('div', { class: 'hub-callout' }, hubIcon('lock'), el('div', {}, el('b', {}, '내 문서만 보이는 개인 보관함'), el('p', {}, '복구키가 보관함의 열쇠입니다. 같은 키로 다른 기기에서 연결할 수 있습니다. 키를 잃으면 복구할 수 없으므로 파일로 안전하게 보관하세요.'))),
+    el('label', {}, el('span', {}, '기존 보관함 연결'), keyInput),
+    el('button', { class: 'btn', onclick: () => upload.click() }, '복구키 파일 불러오기'), upload, error,
+    el('p', { class: 'muted' }, '새 보관함 만들기를 누르면 복구키 파일이 다운로드됩니다. 키는 공유 링크에 포함되지 않으며, 문서 저장은 별도로 선택합니다.'));
+  openDialog({ title: '개인 보관함 연결', body, width: 550, buttons: [
+    { label: '기존 복구키로 연결', primary: true, action: () => { const key = keyInput.value.trim(); if (!validVaultKey(key)) throw new Error('43자의 올바른 복구키를 입력하세요.'); finish(key); } },
+    { label: '새 보관함 만들기', action: () => { finish(createVaultKey()); recoveryFile(); } },
+    { label: '취소' },
+  ] });
+}
+function remoteConflict() {
+  if (document.querySelector('[data-remote-conflict]')) return;
+  clearTimeout(serverTimer);
+  const dlg = openDialog({ title: '저장 충돌 — 사본을 유지했습니다', width: 520,
+    body: el('div', {}, el('p', {}, '같은 이름의 문서가 이미 있거나 다른 기기에서 변경되었습니다. 온라인 문서는 덮어쓰지 않았습니다.'),
+      el('p', { class: 'muted' }, '현재 작업은 브라우저에 보관됩니다. 다른 이름으로 저장하거나, 현재 사본을 버전 기록에 남긴 뒤 온라인 문서를 다시 여세요.')),
+    buttons: [
+      { label: '다른 이름으로 저장', primary: true, action: () => { queueMicrotask(() => formDialog('온라인 사본 저장', [{ name: 'name', label: '새 문서 이름', value: `${docName} 사본` }], ({ name }) => { if (!name.trim() || name.trim() === docName) throw new Error('다른 문서 이름을 입력하세요.'); renameDoc(name.trim()); selectRemoteSave(); }, { okLabel: '사본 저장' })); } },
+      { label: '온라인 문서 다시 열기', action: async () => { await libraryFlush({ version: { label: '온라인 충돌 전 사본' } }); await openFromServer(docName); } },
+      { label: '브라우저에 계속 작업', action: () => { remoteDoc = false; serverState.error = null; saveToStorage(); updateTitle(); } },
+    ] });
+  dlg.root.dataset.remoteConflict = 'true';
+}
+function googleSheetsDialog() {
+  if (structureLocked()) { toast('통합 문서 구조 보호를 해제한 뒤 새 시트를 가져오세요.'); return; }
+  const book = wb;
+  formDialog('Google Sheets 가져오기', [
+    { name: 'url', label: 'Google Sheets 공유 주소', value: '' },
+    { name: 'range', label: '범위 (예: Sheet1!A1:F100)', value: 'A1:Z1000' },
+    { name: 'mode', label: '가져오는 방식', type: 'select', value: 'values', options: [{ value: 'values', label: '새 시트에 값으로 가져오기' }, { value: 'linked', label: '새 시트에 IMPORTRANGE 연결 수식' }] },
+  ], async ({ url, range, mode }) => {
+    const source = importRangeSource(url, range);
+    if (!source.url.startsWith('https://docs.google.com/')) throw new Error('Google Sheets의 공유 주소를 입력하세요.');
+    const parsed = parseImportRange(await webFetch(source.url), source.crop);
+    if (!parsed?.rows?.length) throw new Error('선택한 범위에 데이터가 없습니다.');
+    if (wb !== book) throw new Error('통합 문서가 바뀌었습니다. 가져오기를 다시 시작하세요.');
+    if (structureLocked()) throw new Error('통합 문서 구조가 보호되어 새 시트를 추가할 수 없습니다.');
+    let at;
+    wb.transact(() => {
+      let name = 'Google 가져오기'; for (let n = 2; wb.sheetIndexByName(name) >= 0; n++) name = `Google 가져오기 ${n}`;
+      at = wb.addSheet(name);
+      if (mode === 'linked') { const quote = (s) => String(s).replace(/"/g, '""'); wb.setInput(at, 0, 0, `=IMPORTRANGE("${quote(url.trim())}","${quote(range.trim())}")`); }
+      else parsed.rows.forEach((row, r) => row.forEach((v, c) => { if (v !== '' && v != null) wb.setInput(at, r, c, typeof v === 'string' ? textRaw(v) : String(v)); }));
+    }, meta());
+    switchSheet(at);
+    toast(`Google Sheets에서 ${parsed.height.toLocaleString()}행을 새 시트로 가져왔습니다.${mode === 'linked' ? ' 원본 수정은 Google Sheets에서 하세요.' : ''}`);
+  }, { okLabel: '가져오기', note: '공개 또는 ‘링크가 있는 모든 사용자: 뷰어’로 공유된 시트를 읽습니다. 비공개 문서 로그인·Google 원본에 다시 저장은 지원하지 않습니다. 데이터만 가져오며 서식은 Excel 파일로 열어야 유지됩니다.' });
+}
+
+function privateImportPermission() {
+  if (viewOnly) { alertDialog('문서 참조 권한', '공개 읽기 전용 문서는 개인 보관함이나 이 브라우저의 다른 문서를 참조할 수 없습니다.'); return; }
+  const change = (allowed) => {
+    allowPrivateImports = allowed;
+    for (const key of NET.cache.keys()) if (key.startsWith('wixel-doc:')) NET.cache.delete(key);
+    wb.sheets.forEach((_, i) => wb.invalidate(i)); renderAll();
+    toast(allowed ? '현재 문서에서 다른 WIXEL 문서 참조를 허용했습니다. 문서를 다시 열면 차단됩니다.' : '다른 WIXEL 문서 참조를 차단했습니다.');
+  };
+  openDialog({ title: '다른 WIXEL 문서 참조 권한', width: 540,
+    body: el('div', {}, el('p', {}, `현재 상태: ${allowPrivateImports ? '이 문서에서 허용됨' : '차단됨'}`),
+      el('p', {}, '허용하면 이 문서의 IMPORTRANGE 수식이 연결된 개인 보관함·서버와 이 브라우저의 다른 문서 내용을 읽을 수 있습니다. 가져온 값을 다른 웹 주소로 전송하는 수식도 실행될 수 있으므로 신뢰하는 문서에만 허용하세요.'),
+      el('p', { class: 'muted' }, '권한은 현재 편집 세션에만 적용되며 새로 고침하거나 다른 문서를 열면 초기화됩니다. 공개 Google Sheets 주소 가져오기는 이 권한과 관계없습니다.')),
+    buttons: [{ label: allowPrivateImports ? '참조 차단' : '현재 문서에서 참조 허용', action: () => change(!allowPrivateImports) }, { label: '닫기', primary: true }],
+  });
+}
+
 function openBackstage(panel = 'new') {
+  document.querySelector('.backstage')?.remove();
   const close = () => { stage.remove(); focusGrid(); };
   const main = el('div', { class: 'backstage-main' });
   const tplCard = (t) => el('button', { class: `bcard tpl${t.featured ? ' featured' : ''}`, title: t.desc, onclick: () => { close(); newWorkbook(t); } },
     el('div', { class: 'thumb tpl-thumb', style: { '--tc': t.color } }, el('i', {}), el('i', {}), el('i', {}), el('span', {}, t.name.slice(0, 1))),
     el('b', {}, t.name), el('small', {}, t.desc));
-  const tplSearch = el('input', { type: 'search', class: 'tpl-search', placeholder: '온라인 템플릿 검색 (예: 예산, 리포트, 간트)' });
+  const tplSearch = el('input', { type: 'search', class: 'tpl-search', placeholder: '서식 검색 (예: 예산, 리포트, 간트)', 'aria-label': '서식 검색' });
   const tplBox = el('div', {});
   const drawTpl = () => {
     const q = tplSearch.value.trim().toLowerCase();
@@ -12895,67 +13188,96 @@ function openBackstage(panel = 'new') {
   };
   tplSearch.addEventListener('input', drawTpl);
   drawTpl();
-  const showNew = () => main.replaceChildren(
-    el('h2', {}, '새로 만들기'),
-    el('div', { class: 'backstage-cards' },
-      el('button', { class: 'bcard', onclick: () => { close(); newWorkbook(); } }, el('div', { class: 'thumb' }), el('b', {}, '새 통합 문서'), el('small', {}, '빈 시트로 시작')),
-      SAMPLES.map((s) => el('button', { class: 'bcard', onclick: () => { close(); newWorkbook(s); } }, el('div', { class: 'thumb' }), el('b', {}, s.name), el('small', {}, s.desc)))),
-    el('div', { style: { margin: '26px 0 6px' } }, tplSearch), tplBox,
-    el('h2', { style: { marginTop: '36px' } }, '정보'),
-    el('div', { class: 'muted' }, `${docName} · 시트 ${wb.sheets.length}개 · ${server.available ? '서버에 저장 (다른 기기에서 열 수 있음)' : '이 브라우저에 저장'}${autosave ? ' · 자동 저장 켜짐' : ''}`),
-  );
-  const showOpen = async () => {
-    const actions = el('div', { class: 'backstage-actions' },
-      el('button', { class: 'btn primary', onclick: () => { close(); pickFile('open'); } }, '이 기기에서 찾아보기 (.xlsx · .xls · .xlsb · .xlsm · .ods · .csv · .wixel 등)'));
-    main.replaceChildren(el('h2', {}, '열기'), actions, el('h3', { class: 'tpl-cat' }, '최근 항목 (이 브라우저)'), await recentTable(close));
-    if (server.available) main.append(el('h3', { class: 'tpl-cat' }, '서버 (다른 기기와 공유)'));
-    if (!server.available) {
-      main.append(el('div', { class: 'backstage-note' },
-        '서버 없이 실행 중이라 문서가 이 브라우저에만 저장됩니다. ',
-        el('b', {}, 'npm start'), '로 실행하면 같은 네트워크의 다른 기기(휴대폰·다른 PC)에서도 같은 문서를 열 수 있습니다. ',
-        '또는 [다른 이름으로 저장]에서 .xlsx 파일로 내려받아 옮기세요.'));
-      return;
-    }
-    const loading = el('div', { class: 'muted' }, '불러오는 중...');
-    main.append(loading);
-    try {
-      const files = await server.list();
-      loading.remove();
-      main.append(el('div', { class: 'backstage-note' }, `서버에 저장된 통합 문서 · 같은 네트워크의 다른 기기에서 접속해도 이 목록이 보입니다.`));
-      if (!files.length) { main.append(el('div', { class: 'muted' }, '저장된 문서가 없습니다.')); return; }
-      const openF = (f) => { close(); openFromServer(f.name); };
-      main.append(el('table', { class: 'backstage-list' },
-        el('tr', {}, el('th', {}, '이름'), el('th', {}, '수정한 날짜'), el('th', {}, '크기'), el('th', {}, '')),
-        files.map((f) => el('tr', { class: 'file' },
-          el('td', { onclick: () => openF(f) }, el('b', {}, f.name), f.name === docName ? el('span', { class: 'muted' }, ' (현재 문서)') : null),
-          el('td', { onclick: () => openF(f) }, formatDate(f.modified)),
-          el('td', {}, `${Math.max(1, Math.round(f.size / 1024))}KB`),
-          el('td', {}, el('button', {
-            class: 'btn', onclick: () => openDialog({
-              title: '삭제', body: `'${f.name}'을(를) 서버에서 삭제할까요?`,
-              buttons: [{ label: '삭제', primary: true, action: async () => { await server.remove(f.name); showOpen(); } }, { label: '취소' }],
-            }),
-          }, '삭제'))))));
-    } catch (err) {
-      loading.remove();
-      if (err.status === 401) askServerToken(showOpen);
-      main.append(el('div', { class: 'muted' }, `목록을 불러오지 못했습니다: ${err.message}`));
-    }
+  const openLocal = () => { close(); pickFile('open'); };
+  const recentSection = () => {
+    const host = el('div', { class: 'hub-recent' }, el('p', { class: 'muted' }, '최근 문서 불러오는 중…'));
+    recentTable(close).then((table) => { if (host.isConnected) host.replaceChildren(table); });
+    return host;
   };
-  const showShare = () => main.replaceChildren(
-    el('h2', {}, '다른 기기에서 열기'),
-    el('div', { class: 'backstage-note' }, ...(server.available
-      ? ['이 문서는 서버에 자동으로 저장됩니다. 같은 네트워크의 다른 기기에서 아래 주소로 접속한 뒤 ', el('b', {}, '파일 → 열기'), `에서 '${docName}'을(를) 선택하세요.`]
-      : ['서버 없이 실행 중입니다. 다른 기기로 옮기려면 .xlsx 파일로 저장해 전달하거나, npm start 로 서버를 실행하세요.'])),
-    server.available ? el('div', {}, el('input', { type: 'text', value: location.href.replace(/[?#].*$/, ''), readonly: true, style: { width: '420px', height: '30px', padding: '0 8px' }, onclick: (e) => e.target.select() })) : null,
-    el('div', { class: 'backstage-note' }, 'localhost 로 접속 중이면, 서버를 실행한 터미널에 표시된 "다른 기기에서" 주소를 사용하세요.'),
-    el('div', { class: 'backstage-actions' }, el('button', { class: 'btn', onclick: () => { close(); exportXlsx(); } }, 'Excel 파일(.xlsx)로 내려받기')),
-  );
+  const showNew = () => main.replaceChildren(
+    el('div', { class: 'hub-topline' }, el('span', {}, '나의 작업 공간'), el('button', { class: 'hub-status', onclick: () => activate('storage', showStorage) }, '● ', storageLabel(), ' ›')),
+    el('section', { class: 'hub-hero' }, el('div', {}, el('span', { class: 'hub-eyebrow' }, 'WIXEL 3.0'), el('h1', {}, '익숙한 시트,', el('br'), '새로운 작업 공간.'),
+      el('p', {}, '엑셀 파일부터 데이터 분석까지.', el('br'), '지금 하던 일을 이어가거나 새 문서를 시작하세요.'),
+      el('div', { class: 'hub-hero-actions' }, el('button', { class: 'btn primary', onclick: () => { close(); newWorkbook(); } }, '+ 새 통합 문서'), el('button', { class: 'btn', onclick: openLocal }, '파일 열기'))), hubPreview()),
+    el('div', { class: 'hub-grid three' },
+      hubCard('open', '내 파일 가져오기', 'Excel · CSV · ODS 파일 열기', openLocal),
+      hubCard('webData', 'Google Sheets', '공유된 시트를 값 또는 수식으로 연결', () => { close(); googleSheetsDialog(); }),
+      hubCard('save', '저장 위치 선택', '브라우저 · 파일 · 온라인 보관함', () => activate('storage', showStorage))),
+    el('div', { class: 'hub-section-heading' }, el('h3', {}, '최근 문서'), el('button', { class: 'lnk', onclick: () => activate('open', showOpen) }, '모두 보기 →')), recentSection(),
+    el('div', { class: 'hub-section-heading' }, el('h3', {}, '빠르게 시작하는 서식'), el('button', { class: 'lnk', onclick: () => activate('templates', showTemplates) }, `서식 ${TEMPLATES.length}개 보기 →`)),
+    el('div', { class: 'backstage-cards hub-featured' }, TEMPLATES.filter((t) => t.featured).concat(TEMPLATES).filter((t, i, a) => a.indexOf(t) === i).slice(0, 4).map(tplCard)));
+  const showTemplates = () => main.replaceChildren(hubHeading('서식 라이브러리', '빈 화면 대신, 준비된 시작', '업무에 맞는 서식을 고르고 데이터만 바꾸세요.'),
+    el('div', { class: 'backstage-cards' }, SAMPLES.map((sample) => hubCard('table', sample.name, sample.desc, () => { close(); newWorkbook(sample); }))), tplSearch, tplBox);
+  const showOpen = async () => {
+    const remoteHost = el('div', {});
+    main.replaceChildren(hubHeading('문서', '하던 일을 이어가세요', '최근 문서는 이 브라우저에, 온라인 문서는 연결된 보관함에 보관됩니다.'),
+      hubDropzone(openLocal, (file) => { close(); openFileObject(file, 'open'); }), el('h3', { class: 'tpl-cat' }, '이 브라우저의 최근 문서'), recentSection(),
+      el('h3', { class: 'tpl-cat' }, server.label), remoteHost);
+    if (!server.connected) {
+      remoteHost.append(hubEmpty('온라인 보관함에 연결해 보세요', '연결 후에도 저장 위치를 선택한 문서만 업로드합니다.'),
+        el('button', { class: 'btn', disabled: !server.available, onclick: () => connectStorage(showOpen) }, server.available ? `${server.label} 연결` : '온라인 저장소를 사용할 수 없음')); return;
+    }
+    remoteHost.textContent = '문서 불러오는 중…';
+    try {
+      const files = await server.list(); if (!remoteHost.isConnected) return;
+      remoteHost.replaceChildren(files.length ? el('table', { class: 'backstage-list' },
+        el('tr', {}, el('th', {}, '문서 이름'), el('th', {}, '마지막 저장'), el('th', {}, '크기'), el('th', {}, '관리')),
+        files.map((f) => el('tr', { class: 'file' },
+          el('td', {}, el('button', { class: 'lnk hub-file-name', onclick: () => { close(); openFromServer(f.name); } }, f.name)),
+          el('td', {}, formatDate(f.modified)), el('td', {}, `${Math.max(1, Math.round(f.size / 1024)).toLocaleString()} KB`),
+          el('td', {}, el('button', { class: 'lnk', onclick: () => openDialog({ title: '온라인 문서 삭제', body: `'${f.name}'을(를) ${server.label}에서 삭제할까요? 브라우저 사본은 유지됩니다.`,
+            buttons: [{ label: '삭제', action: async () => { await server.remove(f.name, f.revision); showOpen(); } }, { label: '취소', primary: true }] }) }, '삭제')))))
+        : hubEmpty('아직 저장된 문서가 없습니다', '저장 위치에서 온라인 보관함을 선택해 첫 문서를 보관하세요.'));
+    } catch (err) { remoteHost.replaceChildren(el('p', { class: 'warn', role: 'status' }, `목록을 불러오지 못했습니다: ${err.message}`), el('button', { class: 'btn', onclick: () => connectStorage(showOpen) }, '다시 연결')); }
+  };
+  const showStorage = () => {
+    const browserSave = () => { remoteDoc = false; fileHandle = null; clearTimeout(serverTimer); serverState.error = null; saveNow(true); showStorage(); };
+    const remoteSave = () => { if (!server.connected) connectStorage(() => { selectRemoteSave(); showStorage(); }); else { selectRemoteSave(); showStorage(); } };
+    main.replaceChildren(hubHeading('저장 위치', '내 문서, 내가 고르는 보관 방식', `현재 문서: ${docName} · ${storageLabel()}`),
+      el('div', { class: 'hub-callout' }, hubIcon('save'), el('div', {}, el('b', {}, '브라우저에는 작업 사본을 보관합니다'), el('p', {}, '자동 저장을 켜면 이 기기에 변경 내용을 보관합니다. 브라우저 데이터를 지우면 사라질 수 있어 파일이나 온라인 보관함으로도 저장하세요.'))),
+      el('div', { class: 'hub-grid two storage-cards' },
+        hubCard('table', '이 브라우저', '현재 기기에 자동 보관 · 최근 문서와 버전 기록', browserSave, { tag: !remoteDoc && !fileHandle ? '현재 위치' : '기본' }),
+        hubCard('save', 'Excel 파일 다운로드', 'xlsx 파일로 내려받아 직접 보관하거나 전달', () => exportXlsx(docName, null, false), { tag: '.xlsx' }),
+        hubCard('open', '원본 파일에 저장', fileHandle ? `${fileHandle.name}에 변경 내용 반영` : canPickSave() ? '파일 위치를 정하고 Ctrl+S로 이어서 저장' : '이 브라우저에서는 파일 다운로드를 사용하세요', () => { close(); if (fileHandle) confirmOverwrite(); else exportXlsx(); }, { tag: fileHandle ? '연결됨' : '파일 선택', disabled: !fileHandle && !canPickSave() }),
+        hubCard('folder', server.vault ? '온라인 개인 보관함' : '연결 서버에 저장', server.vault ? '복구키로 다른 기기에서도 내 문서 열기' : server.available ? '연결된 서버에 문서 보관' : '이 환경은 온라인 저장을 제공하지 않습니다', remoteSave, { tag: remoteDoc ? '현재 위치' : server.connected ? '연결됨' : '연결 필요', disabled: !server.available })),
+      el('div', { class: 'hub-section-heading' }, el('h3', {}, '연결 관리'), el('span', { class: 'muted' }, server.connected ? `${server.label} 연결됨` : '연결된 온라인 보관함 없음')),
+      el('div', { class: 'backstage-actions' },
+        el('button', { class: 'btn', disabled: !server.available, onclick: () => connectStorage(showStorage) }, server.vault ? '다른 복구키로 연결' : '서버 연결 설정'),
+        server.vault && server.connected ? el('button', { class: 'btn', onclick: recoveryFile }, '복구키 파일 내보내기') : null,
+        server.vault && server.connected ? el('button', { class: 'btn', onclick: async (e) => { const btn = e.currentTarget; btn.disabled = true; try { download('WIXEL-보관함-백업.json', JSON.stringify(await server.backup()), 'application/json'); toast('보관함 백업을 내려받았습니다.'); } catch (err) { toast(`백업 실패: ${err.message}`); } finally { btn.disabled = false; } } }, '보관함 전체 백업') : null,
+        server.connected ? el('button', { class: 'btn', onclick: () => { server.disconnect(); remoteDoc = false; clearTimeout(serverTimer); serverState.error = null; saveToStorage(); showStorage(); toast('이 기기의 연결을 해제했습니다. 온라인 문서는 삭제하지 않았습니다.'); } }, '이 기기 연결 해제') : null),
+      ...(server.vault ? [el('p', { class: 'backstage-note' }, '개인 보관함: 문서당 최대 20 MB · 전체 100 MB · 최대 50개. 복구키 파일을 다른 사람에게 전달하면 보관함 전체를 열 수 있습니다.')] : []));
+  };
+  const showShare = () => {
+    main.replaceChildren(hubHeading('공유 · 내보내기', '필요한 형태로 전달하세요', '파일로 보내거나 읽기 전용 링크를 만드세요.'),
+    el('div', { class: 'hub-grid two' },
+      hubCard('save', 'Excel 통합 문서', '수식 · 서식 · 여러 시트를 .xlsx 파일로 저장', () => exportXlsx(docName, null, false)),
+      hubCard('csvOut', 'CSV 데이터', '현재 시트의 값을 UTF-8 CSV 파일로 저장', () => exportCsv()),
+      hubCard('table', '다른 형식으로 저장', 'XLSM · ODS · WIXEL · TSV 등', () => { close(); saveAs(); }),
+      hubCard('webData', '읽기 전용 링크 공유', '선택한 문서 내용을 링크가 있는 누구나 열람', () => { close(); publishDialog(); })),
+    el('div', { class: 'hub-callout' }, hubIcon('lock'), el('div', {}, el('b', {}, '개인 보관함과 문서 공유는 별개입니다'), el('p', {}, '공유 링크에는 선택한 게시본만 포함됩니다. 개인 보관함 복구키는 포함되지 않습니다. 다른 기기에서 내 문서를 편집하려면 저장 위치에서 복구키로 연결하세요.'))),
+    el('div', { class: 'backstage-actions' }, el('button', { class: 'btn', onclick: () => { close(); versionHistory(); } }, '버전 기록'), el('button', { class: 'btn', onclick: () => { close(); printSheet(); } }, '인쇄 · PDF')));
+    if (!server.vault) return;
+    const list = el('div', { class: 'hub-publications' }, el('p', { class: 'muted' }, server.connected ? '게시 목록을 불러오는 중…' : '복구키로 연결하면 다른 기기에서 만든 게시 링크도 관리할 수 있습니다.'));
+    main.append(el('h3', { class: 'tpl-cat' }, '내가 게시한 링크'), list);
+    if (!server.connected) { list.append(el('button', { class: 'btn', onclick: () => connectStorage(showShare) }, '개인 보관함 연결')); return; }
+    server.publications().then((items) => {
+      if (!list.isConnected) return;
+      list.replaceChildren(items.length ? el('table', { class: 'backstage-list' },
+        el('tr', {}, el('th', {}, '공개 링크'), el('th', {}, '마지막 게시'), el('th', {}, '관리')),
+        items.map((item) => {
+          const link = el('input', { value: `${appBase()}?view=${encodeURIComponent(item.id)}`, readonly: true, 'aria-label': `게시 링크 ${item.id.slice(0, 8)}`, onclick: (e) => e.target.select(), style: { width: '100%', minWidth: '240px', padding: '7px' } });
+          return el('tr', {}, el('td', {}, link), el('td', {}, formatDate(item.modified)), el('td', {}, el('button', { class: 'btn', onclick: () => openDialog({ title: '게시 중지', body: '이 공개 링크를 중지할까요? 이미 내려받은 사본은 회수되지 않습니다.', buttons: [
+            { label: '게시 중지', primary: true, action: async () => { await server.publicationRevision(item.id); await server.unpublish(item.id); if (pubInfo()?.id === item.id) setPubInfo(null); showShare(); toast('게시를 중지했습니다.'); } }, { label: '취소' },
+          ] }) }, '게시 중지')));
+        })) : hubEmpty('게시한 링크가 없습니다', '읽기 전용 링크 공유에서 선택한 문서를 게시할 수 있습니다.'));
+    }).catch((err) => { if (list.isConnected) list.replaceChildren(el('p', { class: 'warn' }, `게시 목록을 불러오지 못했습니다: ${err.message}`)); });
+  };
   // ── 정보 (엑셀 파일 › 정보): 보호 · 검사 · 관리 · 속성 ──
   const showInfo = () => {
     const pr = wb.props ?? {};
     const setProp = (patch) => { wb.props = { ...(wb.props ?? {}), ...patch }; dirty = true; saveToStorage(); };
-    const where = fileHandle ? `내 컴퓨터 › ${fileHandle.name}` : server.available ? `서버 › ${docName}` : `이 브라우저 › ${docName}`;
+    const where = `${storageLabel()} › ${docName}`;
     const cellCount = wb.sheets.reduce((n, sh) => n + sh.cells.size + sh.blocks.reduce((m, b) => m + b.n * b.cols.length, 0), 0);
     const approx = Math.max(1, Math.round(cellCount * 0.03)); // 대략 (KB)
     const card = (icon, title, desc, btnLabel, onBtn, extra = null) => el('div', { class: 'info-card' },
@@ -13031,26 +13353,21 @@ function openBackstage(panel = 'new') {
           el('div', { class: 'ip-row' }, el('span', {}, '마지막으로 수정한 사람'), el('span', {}, pr.lastModifiedBy || opts.userName || '-')))),
     );
   };
-  const nav = el('div', { class: 'backstage-nav' },
-    el('button', { class: 'back', title: '돌아가기', onclick: close }, '←'),
-    el('button', { onclick: showNew }, '새로 만들기'),
-    el('button', { onclick: showOpen }, '열기'),
-    el('button', { onclick: showInfo }, '정보'),
-    el('button', { onclick: () => { close(); run('save'); } }, '저장'),
-    el('button', { onclick: () => { close(); saveAs(); } }, '다른 이름으로 저장'),
-    el('button', { onclick: () => { close(); exportXlsx(); } }, 'Excel(.xlsx)로 내보내기'),
-    el('button', { onclick: () => { close(); exportCsv(); } }, 'CSV로 내보내기'),
-    el('button', { onclick: () => { close(); versionHistory(); } }, '버전 기록'),
-    el('button', { onclick: () => { close(); publishDialog(); } }, '공유 · 웹에 게시'),
-    el('button', { onclick: showShare }, '다른 기기에서 열기'),
-    el('button', { onclick: () => { close(); setTimeout(printSheet, 50); } }, '인쇄'),
-    el('button', { onclick: () => { close(); optionsDialog(); } }, '옵션'),
-    el('button', { onclick: close }, '닫기'));
-  const stage = el('div', { class: 'backstage' }, nav, main);
-  stage.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+  const activate = (key, render) => { nav.querySelectorAll('[data-page]').forEach((b) => { b.classList.toggle('active', b.dataset.page === key); b.setAttribute('aria-current', b.dataset.page === key ? 'page' : 'false'); }); main.scrollTop = 0; render(); };
+  const navItem = (key, icon, label, render) => el('button', { 'data-page': key, onclick: () => activate(key, render) }, hubIcon(icon), label);
+  const nav = el('nav', { class: 'backstage-nav', 'aria-label': '파일 메뉴' },
+    el('div', { class: 'hub-brand' }, el('span', { class: 'hub-logo' }, 'W'), el('b', {}, 'WIXEL'), el('small', {}, '3.0')),
+    el('button', { class: 'back', onclick: close }, '← 작업 화면으로'),
+    navItem('new', 'home', '시작', showNew), navItem('open', 'open', '문서 열기', showOpen), navItem('templates', 'table', '서식 · 샘플', showTemplates),
+    el('div', { class: 'hub-nav-label' }, '현재 문서'), navItem('storage', 'save', '저장 위치', showStorage), navItem('share', 'webData', '공유 · 내보내기', showShare), navItem('info', 'info', '문서 정보', showInfo),
+    el('div', { class: 'hub-nav-footer' }, el('button', { onclick: () => { close(); optionsDialog(); } }, hubIcon('format'), '설정'), el('span', {}, '편집은 익숙하게. 작업은 자유롭게.')));
+  const stage = el('div', { class: 'backstage wixel-hub', role: 'region', 'aria-label': 'WIXEL 시작 화면' }, nav, main);
+  stage.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !isDialogOpen()) { e.stopPropagation(); close(); } });
   document.body.append(stage);
-  if (panel === 'open') showOpen(); else if (panel === 'info') showInfo(); else showNew();
-  nav.children[panel === 'open' ? 2 : panel === 'info' ? 3 : 1].focus();
+  const pages = { new: showNew, open: showOpen, info: showInfo, storage: showStorage, share: showShare, templates: showTemplates };
+  activate(pages[panel] ? panel : 'new', pages[panel] ?? showNew);
+  nav.querySelector(`[data-page="${panel}"]`)?.focus();
+
 }
 
 /** 인쇄: 사용한 범위를 표로 만들어 인쇄 */
@@ -13080,7 +13397,7 @@ function printSheet() {
       for (const c of colsList) {
         const st = styleAt(r, c);
         const { text, align } = formatValue(valueAt(r, c), st);
-        const css = [`text-align:${st.align || align}`, st.bold && 'font-weight:700', st.italic && 'font-style:italic', st.color && `color:${st.color}`,
+        const css = [`text-align:${st.align && st.align !== 'general' ? st.align === 'centerContinuous' ? 'center' : st.align : align}`, st.bold && 'font-weight:700', st.italic && 'font-style:italic', st.color && `color:${st.color}`,
           st.fill && `background:${st.fill}`, st.size && `font-size:${st.size}pt`, st.wrap && 'white-space:pre-wrap',
           st.bb && 'border-bottom:1px solid #000', st.bt && 'border-top:1px solid #000', st.bl && 'border-left:1px solid #000', st.br && 'border-right:1px solid #000'].filter(Boolean).join(';');
         tds.push(`<td style="${css}">${escapeHtml(text)}</td>`);
@@ -13109,7 +13426,7 @@ function printSheet() {
   let st = document.getElementById('pageStyle');
   if (!st) { st = document.createElement('style'); st.id = 'pageStyle'; document.head.append(st); }
   st.textContent = `@page { size: ${paperOf(pg.paper).css} ${pg.orientation}; margin: ${m.top}in ${m.right}in ${m.bottom}in ${m.left}in; }`;
-  dom.printArea.innerHTML = parts.join('');
+  setSafeHtml(dom.printArea, parts.join(''));
   window.print();
 }
 
@@ -13206,7 +13523,7 @@ function formatCellsDialog(startTab = 0, find = null) {
   }
   const col = (...k) => el('div', { class: 'fc-col' }, ...k);
   const row = (...k) => el('div', { class: 'fc-row' }, ...k);
-  const lab = (text, input) => el('label', { class: 'fc-field' }, el('span', {}, text), input);
+  const lab = (text, input) => { if (input.matches('input,select,textarea')) input.setAttribute('aria-label', text); return el('label', { class: 'fc-field' }, el('span', {}, text), input); };
   const chk = (text, checked) => { const i = el('input', { type: 'checkbox', checked: !!checked }); return [i, el('label', { class: 'fc-check' }, i, text)]; };
 
   // ── 표시 형식 ──
@@ -13321,7 +13638,7 @@ function formatCellsDialog(startTab = 0, find = null) {
   const numberPage = el('div', { class: 'fc-number' }, catList, col(sampleBox, optBox, noteBox));
 
   // ── 맞춤 ──
-  const hSel = el('select', {}, [['', '일반'], ['left', '왼쪽 (들여쓰기)'], ['center', '가운데'], ['right', '오른쪽 (들여쓰기)'], ['centerContinuous', '선택 영역의 가운데로']].map(([v, l]) => el('option', { value: v, selected: (st.align ?? '') === v }, l)));
+  const hSel = el('select', {}, [['general', '일반'], ['left', '왼쪽 (들여쓰기)'], ['center', '가운데'], ['right', '오른쪽 (들여쓰기)'], ['centerContinuous', '선택 영역의 가운데로']].map(([v, l]) => el('option', { value: v, selected: (st.align || 'general') === v }, l)));
   const vSel = el('select', {}, [['top', '위쪽'], ['middle', '가운데'], ['', '아래쪽']].map(([v, l]) => el('option', { value: v, selected: (st.valign ?? '') === v }, l)));
   const indentIn = el('input', { type: 'number', min: 0, max: 15, value: st.indent ?? 0, style: { width: '64px' } });
   const [wrapIn, wrapL] = chk('텍스트 줄 바꿈', st.wrap);
@@ -13333,9 +13650,14 @@ function formatCellsDialog(startTab = 0, find = null) {
   // 방향: 각도(-90~90) 또는 세로 쓰기
   const [vertIn, vertL] = chk('세로 쓰기', st.rotate === 255);
   const rotIn = el('input', { type: 'number', min: -90, max: 90, value: st.rotate && st.rotate !== 255 ? st.rotate : 0, style: { width: '64px' } });
+  const alignPreviewText = el('span', {}, String(sample ?? '텍스트 123'));
+  const alignPreview = el('div', { class: 'fc-align-preview', 'aria-label': '맞춤 미리 보기' }, alignPreviewText);
+  const updateAlignPreview = () => { Object.assign(alignPreview.style, { justifyContent: hSel.value === 'right' ? 'flex-end' : hSel.value === 'center' || hSel.value === 'centerContinuous' ? 'center' : 'flex-start', alignItems: vSel.value === 'top' ? 'flex-start' : vSel.value === 'middle' ? 'center' : 'flex-end', paddingLeft: `${8 + Math.max(0, Number(indentIn.value) || 0) * 8}px` }); Object.assign(alignPreviewText.style, { whiteSpace: wrapIn.checked ? 'normal' : 'nowrap', writingMode: vertIn.checked ? 'vertical-rl' : 'horizontal-tb', transform: vertIn.checked ? '' : `rotate(${-Math.max(-90, Math.min(90, Number(rotIn.value) || 0))}deg)` }); };
+  [hSel, vSel, indentIn, wrapIn, shrinkIn, vertIn, rotIn].forEach((node) => node.addEventListener('input', updateAlignPreview));
+  updateAlignPreview();
   const alignPage = col(el('div', { class: 'fc-title' }, '텍스트 맞춤'), row(lab('가로', hSel), lab('세로', vSel), lab('들여쓰기', indentIn)),
     el('div', { class: 'fc-title' }, '텍스트 조정'), wrapL, shrinkL, mergeL,
-    el('div', { class: 'fc-title' }, '방향'), row(lab('각도(도)', rotIn), vertL));
+    el('div', { class: 'fc-title' }, '방향'), row(lab('각도(도)', rotIn), vertL), el('div', { class: 'fc-title' }, '미리 보기'), alignPreview);
 
   // ── 글꼴 ──
   // 글꼴: 이 PC의 글꼴 목록에서 고르거나 이름을 직접 입력
@@ -13496,9 +13818,9 @@ function formatCellsDialog(startTab = 0, find = null) {
     const size = Number(sizeIn.value);
     return {
       ...fmt,
-      align: hSel.value || undefined, valign: vSel.value || undefined, indent: Number(indentIn.value) || undefined, wrap: wrapIn.checked || undefined,
+      align: hSel.value || undefined, valign: vSel.value || undefined, indent: clamp(Number(indentIn.value) || 0, 0, 15) || undefined, wrap: wrapIn.checked || undefined,
       font: fontSel.value === BASE_FONT.name ? undefined : fontSel.value,
-      size: !size || size === BASE_FONT.size ? undefined : Math.min(409, size),
+      size: !size || size === BASE_FONT.size ? undefined : clamp(size, 1, 409),
       bold: bIn.checked || undefined, italic: iIn.checked || undefined, underline: uIn.checked || undefined, strike: sIn.checked || undefined,
       color: colorIn.value === '#000000' ? undefined : colorIn.value,
       fill: grad ? grad.stops[0][1] : noFill.checked ? undefined : fillIn.value,
@@ -13508,10 +13830,12 @@ function formatCellsDialog(startTab = 0, find = null) {
       rotate: vertIn.checked ? 255 : Number(rotIn.value) ? Math.max(-90, Math.min(90, Number(rotIn.value))) : undefined,
     };
   };
-  const tabBar = el('div', { class: 'dlg-tabs' });
-  const pageBox = el('div', { class: 'fc-page' });
-  const show = (i) => { [...tabBar.children].forEach((b, j) => b.classList.toggle('on', i === j)); pageBox.replaceChildren(pages[i][1]); };
-  pages.forEach(([name], i) => tabBar.append(el('button', { type: 'button', class: 'dlg-tab', onclick: () => show(i) }, name)));
+  const tabBar = el('div', { class: 'dlg-tabs', role: 'tablist', 'aria-label': '셀 서식 범주' });
+  const pageBox = el('div', { class: 'fc-page', role: 'tabpanel', id: 'cell-format-panel' });
+  let selectedTab = 0;
+  const show = (i) => { selectedTab = i; [...tabBar.children].forEach((b, j) => { b.classList.toggle('on', i === j); b.setAttribute('aria-selected', String(i === j)); b.tabIndex = i === j ? 0 : -1; }); pageBox.setAttribute('aria-label', pages[i][0]); pageBox.replaceChildren(pages[i][1]); };
+  tabBar.addEventListener('keydown', (e) => { if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return; e.preventDefault(); const i = e.key === 'Home' ? 0 : e.key === 'End' ? pages.length - 1 : (selectedTab + (e.key === 'ArrowRight' ? 1 : -1) + pages.length) % pages.length; show(i); tabBar.children[i].focus(); });
+  pages.forEach(([name], i) => tabBar.append(el('button', { type: 'button', class: 'dlg-tab', role: 'tab', 'aria-controls': 'cell-format-panel', onclick: () => show(i) }, name)));
   show(startTab);
 
   if (find) {
@@ -15179,12 +15503,12 @@ const MENUS = {
 // [삽입] → 차트 종류 단추 (엑셀처럼 구역별 미리 보기 그림 + '다른 … 차트')
 const G = (name) => CHART_GALLERY.find(([g]) => g === name)?.[1] ?? [];
 const CHART_TYPE_MENUS = {
-  colBar: [['2차원 세로 막대형', G('세로 막대형')], ['2차원 가로 막대형', G('가로 막대형')], '다른 세로 막대형 차트...'],
+  colBar: [['2차원 세로 막대형', G('세로 막대형').filter(([, p]) => !p.threeD)], ['3차원 세로 막대형', G('세로 막대형').filter(([, p]) => p.threeD)], ['2차원 가로 막대형', G('가로 막대형').filter(([, p]) => !p.threeD)], ['3차원 가로 막대형', G('가로 막대형').filter(([, p]) => p.threeD)], '다른 세로 막대형 차트...'],
   hier: [['트리맵', G('트리맵')], '다른 계층 구조 차트...'],
   waterfall: [['폭포', G('폭포')], ['깔때기형', G('깔때기형')], ['주식형', G('주식형')], '다른 폭포 또는 주식형 차트...'],
-  lineArea: [['2차원 꺾은선형', G('꺾은선형')], ['2차원 영역형', G('영역형')], ['방사형', G('방사형')], '다른 꺾은선형 차트...'],
+  lineArea: [['2차원 꺾은선형', G('꺾은선형').filter(([, p]) => !p.threeD)], ['3차원 꺾은선형', G('꺾은선형').filter(([, p]) => p.threeD)], ['2차원 영역형', G('영역형').filter(([, p]) => !p.threeD)], ['3차원 영역형', G('영역형').filter(([, p]) => p.threeD)], ['방사형', G('방사형')], '다른 꺾은선형 차트...'],
   stat: [['히스토그램', G('히스토그램')], ['상자 수염', G('상자 수염')], '통계 차트 더 보기...'],
-  pie: [['2차원 원형', G('원형').filter(([, p]) => p.type === 'pie')], ['도넛형', G('원형').filter(([, p]) => p.type === 'doughnut')], '다른 원형 차트...'],
+  pie: [['2차원 원형', G('원형').filter(([, p]) => p.type === 'pie' && !p.threeD)], ['3차원 원형', G('원형').filter(([, p]) => p.type === 'pie' && p.threeD)], ['도넛형', G('원형').filter(([, p]) => p.type === 'doughnut')], '다른 원형 차트...'],
   scatter: [['분산형', G('분산형').filter(([, p]) => p.type === 'scatter')], ['거품형', G('분산형').filter(([, p]) => p.type === 'bubble')], '다른 분산형 차트...'],
   combo: [['콤보', G('콤보')], '사용자 지정 콤보 차트 만들기...'],
 };
@@ -15332,6 +15656,9 @@ const COMMANDS = {
   pasteLinkedPicture: () => pasteLinkedPicture(),
   pastePicture: () => pasteLinkedPicture(true),
   webData: () => webDataDialog(),
+  googleSheets: () => googleSheetsDialog(),
+  privateImportPermission: () => privateImportPermission(),
+  saveLocations: () => openBackstage('storage'),
   objH: (v) => setObjSize('h', v),
   objW: (v) => setObjSize('w', v),
   objRot: (v) => setObjSize('rot', v),
@@ -15713,8 +16040,10 @@ const COMMANDS = {
 const NO_COMMIT = new Set(['toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100', 'shortcuts', 'about', 'whatsNew']);
 
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
-const APP_VERSION = '2.0.0';
+const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['WIXEL 3.0', ['시작 화면: 새 문서 · 파일 드래그 열기 · 최근 문서 · 서식 · Google Sheets 가져오기', '저장 위치 선택: 브라우저 보관 · Excel 다운로드 · 원본 파일 · 서버/온라인 개인 보관함', '개인 보관함 복구키로 다른 기기 연결, 저장 충돌 보호와 읽기 전용 공유', '공개 Google Sheets의 IMPORTRANGE 연결과 QUERY 데이터 분석']],
+  ['작업 공간', ['새 문서의 기본 가로 가운데 맞춤과 기존 파일 서식 유지', 'Ctrl+Space로 행 선택 상태에서도 활성 열만 선택', '빠른 실행 도구 모음의 리본 위/아래 위치 · 명령 순서 · Alt 숫자 키 · 설정 복원', '피벗 필드의 키보드 이동과 값 요약·표시 형식 바로 설정', '셀 서식의 맞춤 미리 보기 · 키보드 탭 · 보호 설정', '3차원 차트와 차트·도형 서식 패널 개선']],
   ['호환 · 보안 개선', ['표 구조 참조 · 행 높이 · 문자열 보존 · 잘못된 날짜 입력 처리 수정', '대용량 CSV 가져오기와 스파크라인의 배열 크기 오류 수정', '서버 인증 기본값과 웹·네이버 중계 접근 보호 강화']],
   ['안정성', ['메모 셀만 선택한 뒤 삭제해도 사이의 일반 셀은 보존', '대화 상자의 키보드 이동 · 중첩 창 포커스 · 한글 입력 · 비동기 작업 오류 안내 개선', '메뉴를 방향키 · Enter · Esc로 선택하고 하위 메뉴 이동', '웹 가져오기와 네이버 연관검색어에서 서버 암호 입력 후 다시 시도']],
   ['데이터', ['정렬 대화 상자: 여러 기준 추가 · 복사 · 순서 바꾸기, 셀 색 · 글꼴 색 · 사용자 지정 목록, 대/소문자 구분 · 왼쪽→오른쪽 · 자연 정렬', '통합 (여러 범위를 첫 행 · 왼쪽 열 이름으로 합계 · 평균 · 개수 …)', '웹에서: 웹 페이지의 표 · 목록 · CSV 미리 보기 → 값 또는 IMPORTHTML 수식으로', '사용자 지정 목록 편집 (채우기 · 정렬에 사용)']],
@@ -15746,7 +16075,7 @@ function aboutDialog() {
       el('div', { class: 'about-lines' },
         el('div', {}, '열기: .xlsx · .xlsm · .xlsb · .xls · .ods · .csv · .tsv · .txt · .wixel'),
         el('div', {}, '저장: .xlsx · .xlsm · .xltx · .xltm · .ods · .csv · .tsv · .txt · .wixel · PDF'),
-        el('div', { class: 'muted' }, server.available ? '서버 저장소에 연결됨 — 다른 기기에서도 열 수 있습니다.' : '서버 없이 실행 중 — 이 브라우저(보관함)에 자동 저장됩니다.'),
+        el('div', { class: 'muted' }, server.connected ? `${server.label}에 연결됨 — 저장 위치를 선택한 문서만 온라인에 보관됩니다.` : '이 브라우저에 보관 — 저장 위치에서 다른 저장 방식을 선택할 수 있습니다.'),
         el('div', { class: 'muted' }, 'VBA 매크로는 보존 · 표시만 하며 실행하지 않습니다 (내장 JS 동작은 실행).'))),
     buttons: [{ label: '새로운 기능', action: () => { setTimeout(whatsNewDialog, 0); } }, { label: '확인', primary: true }],
   });
@@ -15774,9 +16103,11 @@ async function webFetch(url) {
 }
 async function wixelRangeCsv(spec) {
   const [name, sheetName, area] = spec.split('\u0001');
+  const denied = privateImportError(`wixel-doc:${spec}`);
+  if (denied) throw new Error(denied);
   let data = null;
   if (name === docName) data = { workbook: null, live: wb };
-  if (!data && server.available) { try { data = await server.load(name); } catch { /* 없음 */ } }
+  if (!data && server.connected) { try { data = await server.load(name); } catch { /* 없음 */ } }
   if (!data) {
     const hit = (await libList()).find((d) => d.name === name);
     if (hit) data = await libLoad(hit.id);
@@ -15799,7 +16130,14 @@ async function wixelRangeCsv(spec) {
   }
   return rows.join('\n');
 }
+function privateImportError(url) {
+  if (!url.startsWith('wixel-doc:') || url.slice(10).split('\u0001')[0] === docName) return null;
+  if (viewOnly) return '공개 읽기 전용 문서는 개인 보관함이나 브라우저의 다른 문서를 참조할 수 없습니다.';
+  if (!allowPrivateImports) return '다른 WIXEL 문서 참조가 차단되었습니다. 신뢰하는 문서라면 데이터 › 문서 참조 권한에서 현재 세션에 허용하세요.';
+  return null;
+}
 NET.fetcher = webFetch;
+NET.authorize = privateImportError;
 NET.onDone = (sheets) => {
   if (!wb) return;
   for (const s of sheets) if (s < wb.sheets.length) wb.invalidate(s);
@@ -15945,14 +16283,15 @@ function updateTitle() {
   dom.autosave.setAttribute('aria-checked', String(autosave));
   dom.autosaveLabel.textContent = autosave ? '켬' : '끔';
   let state;
-  if (!server.available) state = dirty && !autosave ? '저장 안 됨' : '이 브라우저에 저장됨';
+  if (storageWarned) state = '브라우저 저장 실패 · 파일로 저장하세요';
+  else if (!remoteDoc || !server.connected) state = dirty ? (autosave ? '브라우저에 저장 대기' : '저장 안 됨') : fileHandle ? '브라우저 사본 저장됨 · 원본은 Ctrl+S' : '이 브라우저에 저장됨';
   else if (!serverAutosave()) state = dirty ? (autosave ? '브라우저에 저장 중' : '저장 안 됨') : '이 브라우저에 저장됨 (서버는 [저장])';
   else if (serverState.saving) state = '저장 중...';
   else if (serverState.error) state = '서버에 저장하지 못함';
   else if (dirty) state = autosave ? '저장 대기 중' : '저장 안 됨';
   else state = '저장됨';
   dom.saveState.textContent = `· ${state}`;
-  dom.saveState.title = server.available ? '서버에 저장되어 다른 기기에서도 열 수 있습니다' : '서버 없이 실행 중 (이 브라우저에만 저장)';
+  dom.saveState.title = `${storageLabel()} · 클릭하여 저장 위치 선택${serverState.error ? ` · ${serverState.error}` : ''}`;
 }
 
 function renderAll() {
@@ -16187,6 +16526,7 @@ function bindEvents() {
   });
 
   document.querySelectorAll('[data-cmd]').forEach((b) => {
+    if (b.dataset.qatBound) return;
     b.addEventListener('mousedown', (e) => e.preventDefault());
     b.addEventListener('click', () => run(b.dataset.cmd));
   });
@@ -16213,7 +16553,7 @@ function bindEvents() {
     if (!autosave && dirty) { e.preventDefault(); e.returnValue = ''; }
   });
   window.addEventListener('blur', () => { if (drag) onDragEnd(); });
-  window.addEventListener('afterprint', () => { dom.printArea.innerHTML = ''; });
+window.addEventListener('afterprint', () => { dom.printArea.replaceChildren(); });
 }
 
 // ───────────────────────── 시작 ─────────────────────────
@@ -16223,9 +16563,9 @@ async function init() {
     // 큰 문서는 IndexedDB 에 시트별로 저장되어 있음 — 나눠서 불러옴
     const prog = progressOverlay('저장된 통합 문서를 여는 중');
     try {
-      const metaId = stored.docId;
+      const metaId = stored.docId, remote = stored.remoteDoc;
       stored = await loadBigFromIdb((p) => prog.set(p * 0.6, '불러오는 중'));
-      if (stored) stored.docId = metaId;
+      if (stored) { stored.docId = metaId; stored.remoteDoc = remote; }
       wb = new Workbook();
       if (stored?.workbook) await wb.loadAsync(stored.workbook, (p) => prog.set(0.6 + 0.4 * p, '셀 준비 중'));
     } catch {
@@ -16242,6 +16582,7 @@ async function init() {
     docId = stored.docId ?? null;
     si = clamp(stored.si || 0, 0, wb.sheets.length - 1);
     autosave = stored.autosave !== false;
+    remoteDoc = !!stored.remoteDoc;
   }
   wb.onChange(onBookChange);
   hydrateIcons();
@@ -16264,6 +16605,7 @@ async function init() {
     isDragging: () => !!drag,
   });
   ribbon = buildRibbon({ run, openMenu: openNamedMenu, focusGrid, refreshRibbon: updateRibbon, hiddenTabs: () => opts.hiddenTabs ?? [], gallery: (name) => (name === 'chartStyles' ? chartStyleGallery() : []) });
+  applyOptions();
   bindEvents();
   applyView();
   if (stored && stored.rev !== APP_REV) redrawPivotsQuiet();
@@ -16282,18 +16624,13 @@ async function init() {
       setTimeout(() => toast(`WIXEL ${APP_VERSION} — 새로운 기능은 [도움말 › 새로운 기능]에서 볼 수 있습니다.`), 1200);
     }
   } catch { /* 저장소 없음 */ }
-  // 서버 저장소 (npm start 로 실행한 경우) — 다른 기기와 문서 공유
-  if (await server.init()) {
-    if (!stored) {
-      try {
-        const files = await server.list();
-        if (files.length && !dirty) await openFromServer(files[0].name);
-      } catch { /* 무시 */ }
-    } else if (autosave) scheduleServerSave(500);
-  }
+  // 서버 존재 확인은 연결/업로드 동의가 아닙니다. 사용자가 선택한 문서만 원격 저장합니다.
+  await server.init();
+  if (!server.connected) remoteDoc = false;
   if (location.hash.startsWith('#view=') || /[?&](view|doc)=/.test(location.search)) await openFromUrl();
   startCollabWatch();
   updateTitle();
+  if (!stored && !viewOnly && !globalThis.WIXEL_SKIP_START && !/[?&](view|doc)=/.test(location.search) && !location.hash.startsWith('#view=')) openBackstage();
 }
 
 init();

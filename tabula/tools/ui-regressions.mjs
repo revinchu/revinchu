@@ -9,7 +9,8 @@ const test = async (name, fn, { server = false } = {}) => {
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
   try {
-    if (!server) await page.addInitScript(() => { window.TABULA_STATIC = true; });
+    await page.addInitScript(() => { window.WIXEL_SKIP_START = true; });
+    if (!server) await page.addInitScript(() => { window.TABULA_STATIC = true; window.WIXEL_SKIP_START = true; });
     else {
       await page.route('**/api/health', (route) => route.fulfill({ json: { ok: true, auth: true } }));
       await page.route('**/api/files**', (route) => route.fulfill({ json: [] }));

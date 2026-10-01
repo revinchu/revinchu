@@ -14,6 +14,7 @@ import { parseInput, formatGeneral, fmtCode as fmtCodeRaw, fileCode, styleForCod
 const fmtCode = (style) => fileCode(fmtCodeRaw(style));
 import { DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT, formulaShifter } from './workbook.js';
 import { chartLayout, PALETTE, chartModelData, paletteOf } from './chart.js';
+import { chartView3D } from './chart-3d.js';
 import { Axis, hid, hidKeys } from './axis.js';
 import { toBase64, fromBase64 } from './vba.js';
 import { CellImage } from './fxcore.js';
@@ -276,7 +277,7 @@ function readStyles(files, wbRels, theme) {
     const al = child(xf, 'alignment') ?? (a.applyAlignment === '1' ? null : child(parent, 'alignment'));
     if (al) {
       const h = al.attrs.horizontal;
-      if (h === 'left' || h === 'center' || h === 'right') st.align = h;
+      if (h === 'general' || h === 'left' || h === 'center' || h === 'right') st.align = h;
       else if (h === 'centerContinuous') st.align = 'centerContinuous';
       else if (h === 'distributed') st.align = 'center';
       else if (h === 'justify') { st.align = 'left'; st.wrap = true; }
@@ -1236,6 +1237,20 @@ function dmlColor(el, theme) {
   return `#${applyTint(hex.toUpperCase(), t).toLowerCase()}`;
 }
 
+/** DrawingML 색의 알파 변환 (100000=불투명). 색상 해석과 별도로 유지. */
+function dmlOpacity(el) {
+  const color = el?.children.find((x) => ['srgbClr', 'schemeClr', 'sysClr', 'prstClr'].includes(x.name));
+  let opacity = 1;
+  for (const t of color?.children ?? []) {
+    const n = Number(t.attrs.val) / 100000;
+    if (!Number.isFinite(n)) continue;
+    if (t.name === 'alpha') opacity = n;
+    else if (t.name === 'alphaMod') opacity *= n;
+    else if (t.name === 'alphaOff') opacity += n;
+  }
+  return Math.max(0, Math.min(1, opacity));
+}
+
 /** 개체 좌표용 행 · 열 축 (시트 기본 크기 + 숨긴 행 · 열, 필터로 숨긴 행 포함 — 화면과 같음) */
 function objectAxes(sheet) {
   const hiddenRows = [sheet.hiddenRows, sheet.filter?.hidden, ...(sheet.tables ?? []).map((t) => t.filter?.hidden)];
@@ -1290,9 +1305,9 @@ function readDrawing(files, path, sheet, ctx) {
       const pr = child(r, 'rPr');
       const a = { ...(baseR?.attrs ?? {}), ...(pr?.attrs ?? {}) };
       const out = { t };
-      if (a.b === '1') out.b = true;
-      if (a.i === '1') out.i = true;
-      if (a.u && a.u !== 'none') out.u = true;
+      out.b = a.b === '1';
+      out.i = a.i === '1';
+      out.u = !!a.u && a.u !== 'none';
       if (a.strike && a.strike !== 'noStrike') out.s = true;
       if (a.sz) out.sz = Number(a.sz) / 100;
       const c = dmlColor(child(pr, 'solidFill') ?? child(baseR, 'solidFill'), ctx.theme);
@@ -1315,13 +1330,42 @@ function readDrawing(files, path, sheet, ctx) {
       if (!runs.length && end?.attrs.sz) para.sz = Number(end.attrs.sz) / 100;
       return para;
     });
-    const rPr = descendants(child(el, 'txBody'), 'rPr')[0] ?? descendants(child(el, 'txBody'), 'defRPr')[0];
+    const rPr = descendants(child(el, 'txBody'), 'rPr')[0] ?? descendants(child(el, 'txBody'), 'defRPr')[0] ?? descendants(child(el, 'txBody'), 'endParaRPr')[0];
     // 문단에 algn 이 없으면 목록 스타일, 그것도 없으면 DrawingML 기본값(왼쪽)
     const algn = descendants(child(el, 'txBody'), 'pPr')[0]?.attrs.algn ?? lvl?.attrs.algn;
     const shape = {
       id: uid('sh'), kind: isText ? 'textbox' : prstKind(prst), ...round(box), z: ++z,
       fill, stroke, text,
     };
+    const shapeName = descendants(child(el, 'nvSpPr') ?? child(el, 'nvCxnSpPr'), 'cNvPr')[0]?.attrs.name;
+    if (shapeName) shape.name = shapeName;
+    const grad = child(spPr, 'gradFill');
+    if (grad) {
+      const stops = kids(child(grad, 'gsLst'), 'gs').map((gs) => [Number(gs.attrs.pos ?? 0) / 100000, dmlColor(gs, ctx.theme), dmlOpacity(gs)]).filter((s) => s[1]);
+      if (stops.length) {
+        const equalAlpha = stops.every((s) => s[2] === stops[0][2]);
+        shape.grad = { ang: Number(child(grad, 'lin')?.attrs.ang ?? 5400000) / 60000, stops: stops.map((s) => equalAlpha ? s.slice(0, 2) : s) };
+        shape.fill = stops[0][1];
+        if (equalAlpha && stops[0][2] !== 1) shape.fillOpacity = stops[0][2];
+        if (child(grad, 'path')) ctx.warnings.add('일부 도형의 경로 그라데이션은 선형 그라데이션으로 표시합니다.');
+      }
+    } else if (fill) {
+      const opacity = dmlOpacity(child(spPr, 'solidFill'));
+      if (opacity !== 1) shape.fillOpacity = opacity;
+    }
+    if (stroke) { const opacity = dmlOpacity(child(ln, 'solidFill')); if (opacity !== 1) shape.strokeOpacity = opacity; }
+    const effects = child(spPr, 'effectLst');
+    const shadow = child(effects, 'outerShdw');
+    if (shadow) {
+      const angle = Number(shadow.attrs.dir ?? 0) / 60000 * Math.PI / 180;
+      const dist = Number(shadow.attrs.dist ?? 0) / EMU;
+      const rounded = (n) => Math.round(n * 10000) / 10000;
+      shape.shadow = { dx: rounded(Math.cos(angle) * dist), dy: rounded(Math.sin(angle) * dist), blur: Number(shadow.attrs.blurRad ?? 0) / EMU, color: dmlColor(shadow, ctx.theme) ?? '#000000', opacity: dmlOpacity(shadow) };
+    }
+    const glow = child(effects, 'glow');
+    if (glow) shape.glow = { size: Number(glow.attrs.rad ?? 0) / EMU, color: dmlColor(glow, ctx.theme) ?? '#4472c4', opacity: dmlOpacity(glow) };
+    const soft = child(effects, 'softEdge');
+    if (soft) shape.soft = Number(soft.attrs.rad ?? 0) / EMU;
     const xf = descendants(spPr, 'xfrm')[0];
     if (xf?.attrs.flipH === '1') shape.flip = true;
     if (xf?.attrs.flipV === '1') shape.flipV = true;
@@ -1331,11 +1375,15 @@ function readDrawing(files, path, sheet, ctx) {
     if (LINE_KINDS.has(shape.kind) && (endOn('tailEnd') || endOn('headEnd'))) shape.arrow = endOn('tailEnd') && endOn('headEnd') ? 'both' : 'end';
     if (LINE_KINDS.has(shape.kind) && !endOn('tailEnd') && endOn('headEnd')) { shape.flip = !shape.flip; shape.flipV = !shape.flipV; }
     const dashV = child(ln, 'prstDash')?.attrs.val;
-    if (dashV && dashV !== 'solid') shape.dash = /dot/i.test(dashV) && !/dash/i.test(dashV) ? 'dot' : 'dash';
+    if (dashV && dashV !== 'solid') shape.dash = DASH_FROM[dashV] ?? (/dot/i.test(dashV) && !/dash/i.test(dashV) ? 'dot' : 'dash');
     const lw = Number(ln?.attrs.w);
     if (lw && stroke) shape.strokeWidth = Math.round((lw / EMU) * 4) / 4;
     if (rPr?.attrs.sz) shape.size = Number(rPr.attrs.sz) / 100;
     if (rPr?.attrs.b === '1') shape.bold = true;
+    if (rPr?.attrs.i === '1') shape.italic = true;
+    if (rPr?.attrs.u && rPr.attrs.u !== 'none') shape.underline = true;
+    const face = child(rPr, 'ea')?.attrs.typeface ?? child(rPr, 'latin')?.attrs.typeface;
+    if (face && !face.startsWith('+')) shape.font = face;
     const tc = rPr && dmlColor(child(rPr, 'solidFill'), ctx.theme);
     if (tc) shape.color = tc;
     else if (!isText && fill) shape.color = '#ffffff';
@@ -1345,7 +1393,7 @@ function readDrawing(files, path, sheet, ctx) {
     const same = (k) => flat.every((r) => r[k] === flat[0]?.[k]);
     if (rich.length && (!['b', 'i', 'u', 'sz', 'color', 'font'].every(same) || rich.some((p) => (p.align ?? shape.align) !== shape.align))) {
       shape.paras = rich;
-      delete shape.bold;
+      for (const k of ['bold', 'italic', 'underline', 'font', 'size', 'color']) delete shape[k];
     }
     const body = child(tx, 'bodyPr');
     const anc = body?.attrs.anchor;
@@ -1521,12 +1569,14 @@ function readChart(files, path, theme = {}) {
   const fmtCode = (el) => child(el, 'numFmt')?.attrs.formatCode;
   // 글자 서식 (txPr · rich 의 defRPr / rPr): 크기(pt) · 색 · 굵게
   const runFont = (el) => {
-    const r = el && (descendants(el, 'defRPr')[0] ?? descendants(el, 'rPr')[0]);
-    if (!r) return {};
+    const def = el && descendants(el, 'defRPr')[0];
+    const run = el && descendants(el, 'rPr')[0];
+    if (!def && !run) return {};
+    const attrs = { ...def?.attrs, ...run?.attrs };
     const out = {};
-    if (r.attrs.sz) out.size = Number(r.attrs.sz) / 100;
-    if (r.attrs.b === '1') out.bold = true;
-    const c = dmlColor(child(r, 'solidFill'), theme);
+    if (attrs.sz) out.size = Number(attrs.sz) / 100;
+    if (attrs.b !== undefined) out.bold = attrs.b === '1';
+    const c = dmlColor(child(run, 'solidFill') ?? child(def, 'solidFill'), theme);
     if (c) out.color = c;
     return out;
   };
@@ -1648,10 +1698,23 @@ function readChart(files, path, theme = {}) {
   if (!titleEl && child(chartEl, 'autoTitleDeleted')?.attrs.val === '0' && serNames.length === 1) title = serNames[0] ?? '';
   const types = new Set(fmts.map((f, i) => f.type ?? typeOf(groups[0])));
   const out = { type: types.size > 1 ? 'combo' : typeOf(groups[0]), title, series };
+  if (groups.some((g) => /3DChart$/.test(g.name))) {
+    out.threeD = true;
+    const view = child(chartEl, 'view3D');
+    const config = {};
+    for (const key of ['rotX', 'rotY', 'depthPercent', 'perspective']) {
+      const value = child(view, key)?.attrs.val;
+      if (value !== undefined && Number.isFinite(Number(value))) config[key] = Number(value);
+    }
+    if (child(view, 'rAngAx')) config.rAngAx = child(view, 'rAngAx').attrs.val !== '0';
+    out.view3D = chartView3D({ type: out.type, view3D: config });
+  }
   // 글꼴 크기(pt): 제목 · 축 · 범례 (파일에 있을 때만)
   const tf = runFont(child(titleEl, 'tx')) ;
-  const tf2 = tf.size ? tf : runFont(child(titleEl, 'txPr'));
+  const tf2 = { ...runFont(child(titleEl, 'txPr')), ...tf };
   if (tf2.size) out.titleSize = tf2.size;
+  if (tf2.bold !== undefined) out.titleBold = tf2.bold;
+  if (tf2.color) out.titleColor = tf2.color;
   if (title && child(titleEl, 'overlay')?.attrs.val === '1') out.titleOverlay = true;
   const axEl = kids(plot, 'catAx')[0] ?? kids(plot, 'valAx')[0];
   const af = runFont(child(axEl, 'txPr'));
@@ -1663,7 +1726,7 @@ function readChart(files, path, theme = {}) {
   if (range) out.range = range;
   if (sheetName) out.sheet = sheetName;
   if (fmts.some((f) => Object.keys(f).length)) out.seriesFmt = fmts;
-  const bar = groups.find((g) => g.name === 'barChart') ?? groups.find((g) => g.name === 'lineChart' || g.name === 'areaChart');
+  const bar = groups.find((g) => /^bar(?:3D)?Chart$/.test(g.name)) ?? groups.find((g) => /^(line|area)(?:3D)?Chart$/.test(g.name));
   const grouping = child(bar, 'grouping')?.attrs.val;
   if (grouping === 'stacked' || grouping === 'percentStacked') out.grouping = grouping;
   const g0 = groups[0];
@@ -1673,10 +1736,10 @@ function readChart(files, path, theme = {}) {
   const hole = Number(child(g0, 'holeSize')?.attrs.val);
   if (hole && hole !== 50) out.hole = hole;
   const gapW = Number(child(bar, 'gapWidth')?.attrs.val);
-  if (bar?.name === 'barChart' && gapW && gapW !== 150 && gapW !== 182) out.gap = gapW;
+  if (/^bar(?:3D)?Chart$/.test(bar?.name) && Number.isFinite(gapW) && gapW !== 150 && gapW !== 182) out.gap = gapW;
   const ovl = Number(child(bar, 'overlap')?.attrs.val);
   if (bar?.name === 'barChart' && Number.isFinite(ovl) && ovl !== 0 && ovl !== 100) out.overlap = ovl;
-  if (bar?.name === 'barChart' && child(bar, 'varyColors')?.attrs.val === '1') out.varyColors = true;
+  if (/^bar(?:3D)?Chart$/.test(bar?.name) && child(bar, 'varyColors')?.attrs.val === '1') out.varyColors = true;
   if (child(plot, 'dTable')) out.dataTable = true;
   if (!descendants(plot, 'majorGridlines').length) out.gridY = false;
   // WIXEL 전용 설정 (원래 차트 종류 · 팔레트 · 서식)
@@ -2816,6 +2879,7 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
   // 엑셀 2016 차트(폭포 · 깔때기 · 히스토그램 · 파레토 · 트리맵 · 상자 수염)는 호환 차트로 저장하고 원래 종류는 확장 정보로 보관
   const FALLBACK = { waterfall: 'column', histogram: 'column', pareto: 'column', treemap: 'column', boxWhisker: 'column', funnel: 'bar' };
   const baseType = chart.type === 'combo' ? 'column' : FALLBACK[chart.type] ?? chart.type;
+  const threeD = !!chart.threeD && ['column', 'bar', 'pie', 'area', 'line'].includes(chart.type);
   // 계열마다 { tx, cat, val } 참조 (+ 값 캐시)
   const refs = [];
   if (chart.pivot) {
@@ -2885,7 +2949,7 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
     const markerSym = sr.marker === 'none' || sr.marker === false ? 'none' : typeof sr.marker === 'string' ? sr.marker : 'circle';
     const markerSym2 = sr.marker === undefined && (chart.marker === 'none' || (scatter && /^(line|smooth)$/.test(chart.scatterStyle ?? '')) || (type === 'radar' && chart.radarStyle !== 'marker') || type === 'stock') ? 'none' : markerSym;
     const marker = (type === 'line' || type === 'radar' || type === 'stock' || (scatter && type !== 'bubble')) ? (markerSym2 === 'none' ? '<c:marker><c:symbol val="none"/></c:marker>' : `<c:marker><c:symbol val="${markerSym2}"/><c:size val="5"/><c:spPr>${fill}<a:ln w="9525">${fill}</a:ln></c:spPr></c:marker>`) : '';
-    const dPt = pie ? sr.values.map((_, k) => `<c:dPt><c:idx val="${k}"/><c:bubble3D val="0"/>${chart.explode ? `<c:explosion val="${Math.round(chart.explode)}"/>` : ''}<c:spPr><a:solidFill><a:srgbClr val="${(sr.colors?.[k] ?? pal[k % pal.length]).slice(1)}"/></a:solidFill><a:ln w="19050"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:ln></c:spPr></c:dPt>`).join('') : '';
+    const dPt = pie ? sr.values.map((_, k) => `<c:dPt><c:idx val="${k}"/><c:bubble3D val="0"/>${chart.explode ? `<c:explosion val="${Math.round(chart.explode)}"/>` : ''}<c:spPr><a:solidFill><a:srgbClr val="${(sr.pointColors?.[k] ?? sr.colors?.[k] ?? pal[k % pal.length]).replace('#', '')}"/></a:solidFill><a:ln w="19050"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:ln></c:spPr></c:dPt>`).join('') : '';
     const invert = type === 'column' || type === 'bar' ? '<c:invertIfNegative val="0"/>' : '';
     // 막대 · 꺾은선의 데이터 요소별 색 · '요소마다 다른 색'
     const ptColor = (k) => sr.pointColors?.[k] ?? (chart.varyColors && (type === 'column' || type === 'bar') ? pal[k % pal.length] : null);
@@ -2935,11 +2999,18 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
     switch (g.kind) {
       case 'bar': case 'column': {
         const stackedG = grouping === 'stacked' || grouping === 'percentStacked';
+        if (threeD) return `<c:bar3DChart><c:barDir val="${g.kind === 'bar' ? 'bar' : 'col'}"/><c:grouping val="${grouping}"/><c:varyColors val="${chart.varyColors ? 1 : 0}"/>${body}<c:gapWidth val="${Math.round(Math.max(0, Math.min(500, chart.gap ?? 150)))}"/><c:gapDepth val="150"/><c:shape val="box"/>${a}</c:bar3DChart>`;
         return `<c:barChart><c:barDir val="${g.kind === 'bar' ? 'bar' : 'col'}"/><c:grouping val="${grouping}"/><c:varyColors val="${chart.varyColors ? 1 : 0}"/>${body}<c:gapWidth val="${typeof chart.gap === 'number' ? Math.round(chart.gap) : g.kind === 'bar' ? 182 : 150}"/>${stackedG ? '<c:overlap val="100"/>' : typeof chart.overlap === 'number' ? `<c:overlap val="${Math.round(Math.max(-100, Math.min(100, chart.overlap)))}"/>` : ''}${a}</c:barChart>`;
       }
-      case 'line': return `<c:lineChart><c:grouping val="${grouping === 'clustered' ? 'standard' : grouping}"/><c:varyColors val="0"/>${body}<c:marker val="1"/>${a}</c:lineChart>`;
-      case 'area': return `<c:areaChart><c:grouping val="${grouping === 'clustered' ? 'standard' : grouping}"/><c:varyColors val="0"/>${body}${a}</c:areaChart>`;
-      case 'pie': return `<c:pieChart><c:varyColors val="1"/>${body}<c:firstSliceAng val="${Math.round(chart.firstAngle ?? 0)}"/></c:pieChart>`;
+      case 'line':
+        if (threeD) return `<c:line3DChart><c:grouping val="${grouping === 'clustered' ? 'standard' : grouping}"/><c:varyColors val="0"/>${body}<c:gapDepth val="150"/>${a}</c:line3DChart>`;
+        return `<c:lineChart><c:grouping val="${grouping === 'clustered' ? 'standard' : grouping}"/><c:varyColors val="0"/>${body}<c:marker val="1"/>${a}</c:lineChart>`;
+      case 'area':
+        if (threeD) return `<c:area3DChart><c:grouping val="${grouping === 'clustered' ? 'standard' : grouping}"/><c:varyColors val="0"/>${body}<c:gapDepth val="150"/>${a}</c:area3DChart>`;
+        return `<c:areaChart><c:grouping val="${grouping === 'clustered' ? 'standard' : grouping}"/><c:varyColors val="0"/>${body}${a}</c:areaChart>`;
+      case 'pie':
+        if (threeD) return `<c:pie3DChart><c:varyColors val="1"/>${body}</c:pie3DChart>`;
+        return `<c:pieChart><c:varyColors val="1"/>${body}<c:firstSliceAng val="${Math.round(chart.firstAngle ?? 0)}"/></c:pieChart>`;
       case 'doughnut': return `<c:doughnutChart><c:varyColors val="1"/>${body}<c:firstSliceAng val="${Math.round(chart.firstAngle ?? 0)}"/><c:holeSize val="${Math.round(chart.hole ?? 50)}"/></c:doughnutChart>`;
       case 'scatter': return `<c:scatterChart><c:scatterStyle val="lineMarker"/><c:varyColors val="0"/>${body}${a}</c:scatterChart>`;
       case 'bubble': return `<c:bubbleChart><c:varyColors val="0"/>${body}<c:bubbleScale val="${Math.round(chart.bubbleScale ?? 100)}"/><c:showNegBubbles val="0"/>${a}</c:bubbleChart>`;
@@ -2961,8 +3032,10 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
     axesXml = catAxis(111111111, 222222222, horizontal ? 'l' : 'b', false) + valAxis(222222222, 111111111, horizontal ? 'b' : 'l', chart.axes?.y, true);
     if (hasSecondary) axesXml += catAxis(333333333, 444444444, horizontal ? 'l' : 'b', true) + valAxis(444444444, 333333333, horizontal ? 't' : 'r', chart.axes?.y2, false, 'max');
   }
+  const titleFont = `sz="${Math.round((chart.titleSize ?? 14) * 100)}" b="${chart.titleBold ? 1 : 0}"`;
+  const titleFill = chart.titleColor ? `<a:solidFill><a:srgbClr val="${hex6(chart.titleColor)}"/></a:solidFill>` : '';
   const title = chart.title
-    ? `<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="1400" b="0"/></a:pPr><a:r><a:rPr lang="ko-KR" sz="1400" b="0"/><a:t>${esc(chart.title)}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="${chart.titleOverlay ? 1 : 0}"/></c:title><c:autoTitleDeleted val="0"/>`
+    ? `<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr ${titleFont}>${titleFill}</a:defRPr></a:pPr><a:r><a:rPr lang="ko-KR" ${titleFont}>${titleFill}</a:rPr><a:t>${esc(chart.title)}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="${chart.titleOverlay ? 1 : 0}"/></c:title><c:autoTitleDeleted val="0"/>`
     : '<c:autoTitleDeleted val="1"/>';
   const lp = chart.legend ?? (series.length > 1 || pieLike ? 'b' : 'none');
   // 범례 글꼴 (색 · 크기 · 굵게)
@@ -2977,44 +3050,70 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
   const areaSpPr = chart.fill || chart.border ? `<c:spPr>${chart.fill ? `<a:solidFill><a:srgbClr val="${hexOf(chart.fill)}"/></a:solidFill>` : ''}${chart.border ? `<a:ln w="9525"><a:solidFill><a:srgbClr val="${hexOf(chart.border)}"/></a:solidFill></a:ln>` : ''}</c:spPr>` : '';
   const plotSpPr = chart.plotFill ? `<c:spPr><a:solidFill><a:srgbClr val="${hexOf(chart.plotFill)}"/></a:solidFill></c:spPr>` : '';
   // WIXEL 전용 설정 (엑셀은 무시): 원래 차트 종류 · 팔레트 · 서식
-  const TB_KEYS = ['hiddenSeries', 'hiddenCats', 'legendBold', 'type', 'byRows', 'fieldButtons', 'palette', 'scatterStyle', 'radarStyle', 'ohlc', 'explode', 'hole', 'gap', 'marker', 'gridX', 'gridY', 'fill', 'plotFill', 'border', 'titleColor', 'titleBold', 'textColor', 'gridColor', 'rounded', 'totals', 'binCount', 'binWidth', 'upColor', 'downColor', 'totalColor', 'bubbleScale', 'firstAngle', 'showMean', 'connectors'];
+  const TB_KEYS = ['threeD', 'view3D', 'titleSize', 'axisSize', 'hiddenSeries', 'hiddenCats', 'legendBold', 'type', 'byRows', 'fieldButtons', 'palette', 'scatterStyle', 'radarStyle', 'ohlc', 'explode', 'hole', 'gap', 'marker', 'gridX', 'gridY', 'fill', 'plotFill', 'border', 'titleColor', 'titleBold', 'textColor', 'gridColor', 'rounded', 'totals', 'binCount', 'binWidth', 'upColor', 'downColor', 'totalColor', 'bubbleScale', 'firstAngle', 'showMean', 'connectors'];
   const tb = Object.fromEntries(TB_KEYS.filter((k) => chart[k] !== undefined && chart[k] !== null).map((k) => [k, chart[k]]));
   if (subsetPivot) tb.wxPivot = chart.pivot; // 위셀로 다시 열면 슬라이서와 연동되는 피벗 차트로 복원
   const extLst = Object.keys(tb).length > 1 || FALLBACK[chart.type] ? `<c:extLst><c:ext uri="{5E2A6C7B-8F4D-4B1A-9C3E-7D6F1A2B3C4D}" xmlns:tb="urn:tabula:chart"><tb:props json="${esc(JSON.stringify(tb))}"/></c:ext></c:extLst>` : '';
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="${NS_R}"><c:roundedCorners val="${chart.rounded ? 1 : 0}"/>${pivotSrc}<c:chart>${title}${pivotFmts}<c:plotArea><c:layout/>${groupXml}${axesXml}${chart.dataTable && !pieLike ? '<c:dTable><c:showHorzBorder val="1"/><c:showVertBorder val="1"/><c:showOutline val="1"/><c:showKeys val="1"/></c:dTable>' : ''}${plotSpPr}</c:plotArea>${legend}<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart>${areaSpPr}${extLst}</c:chartSpace>`;
+  const v3 = chartView3D(chart);
+  const viewXml = threeD ? `<c:view3D><c:rotX val="${Math.round(v3.rotX)}"/><c:rotY val="${Math.round((v3.rotY + (baseType === 'pie' ? chart.firstAngle ?? 0 : 0)) % 360)}"/><c:depthPercent val="${Math.round(v3.depthPercent)}"/><c:rAngAx val="${v3.rAngAx ? 1 : 0}"/><c:perspective val="${Math.round(v3.perspective)}"/></c:view3D>` : '';
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="${NS_R}"><c:roundedCorners val="${chart.rounded ? 1 : 0}"/>${pivotSrc}<c:chart>${title}${pivotFmts}${viewXml}<c:plotArea><c:layout/>${groupXml}${axesXml}${chart.dataTable && !pieLike ? '<c:dTable><c:showHorzBorder val="1"/><c:showVertBorder val="1"/><c:showOutline val="1"/><c:showKeys val="1"/></c:dTable>' : ''}${plotSpPr}</c:plotArea>${legend}<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart>${areaSpPr}${extLst}</c:chartSpace>`;
 }
 
 const DASH_XML = { dash: '<a:prstDash val="dash"/>', dot: '<a:prstDash val="sysDot"/>', dashDot: '<a:prstDash val="dashDot"/>', longDash: '<a:prstDash val="lgDash"/>', sysDash: '<a:prstDash val="sysDash"/>' };
 const DASH_FROM = { dash: 'dash', sysDot: 'dot', dot: 'dot', dashDot: 'dashDot', sysDashDot: 'dashDot', lgDash: 'longDash', sysDash: 'sysDash' };
 const KIND_PRST = { arrow: 'rightArrow', textbox: 'rect', line: 'straightConnector1' };
 const prstOf = (kind) => KIND_PRST[kind] ?? (GEOM[kind] || LINE_KINDS.has(kind) ? kind : 'rect');
-const hex6 = (c) => (c ?? '#000000').replace('#', '').toUpperCase().padStart(6, '0').slice(0, 6);
+const hex6 = (c) => { const h = String(c ?? '#000000').replace('#', ''); return (h.length === 3 ? [...h].map((x) => x + x).join('') : h).toUpperCase().padStart(6, '0').slice(0, 6); };
+const shapeColorXml = (color, opacity = 1) => `<a:srgbClr val="${hex6(color)}">${opacity !== 1 ? `<a:alpha val="${Math.round(Math.max(0, Math.min(1, Number(opacity))) * 100000)}"/>` : ''}</a:srgbClr>`;
+function shapeEffectsXml(sh) {
+  let body = '';
+  if (sh.glow) body += `<a:glow rad="${Math.round(Math.max(0, sh.glow.size ?? 5) * EMU)}">${shapeColorXml(sh.glow.color ?? '#4472c4', sh.glow.opacity ?? 0.6)}</a:glow>`;
+  if (sh.shadow) {
+    const sd = typeof sh.shadow === 'object' ? sh.shadow : {};
+    const dx = sd.dx ?? 2.5, dy = sd.dy ?? 2.5;
+    const angle = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
+    body += `<a:outerShdw blurRad="${Math.round(Math.max(0, sd.blur ?? 2.5) * EMU)}" dist="${Math.round(Math.hypot(dx, dy) * EMU)}" dir="${Math.round(angle * 60000) % 21600000}" algn="ctr" rotWithShape="1">${shapeColorXml(sd.color ?? '#000000', sd.opacity ?? 0.4)}</a:outerShdw>`;
+  }
+  if (sh.soft) body += `<a:softEdge rad="${Math.round(Math.max(0, sh.soft) * EMU)}"/>`;
+  return body ? `<a:effectLst>${body}</a:effectLst>` : '';
+}
 
 /** 도형 → <xdr:sp> / <xdr:cxnSp> */
 function shapeXml(sh, id, xfrm) {
   const name = esc(sh.name || `${sh.kind === 'textbox' ? 'TextBox' : '도형'} ${id - 1}`);
-  const fill = sh.fill ? `<a:solidFill><a:srgbClr val="${hex6(sh.fill)}"/></a:solidFill>` : '<a:noFill/>';
+  let fill = sh.fill ? `<a:solidFill>${shapeColorXml(sh.fill, sh.fillOpacity ?? 1)}</a:solidFill>` : '<a:noFill/>';
+  if (sh.grad && sh.fill) {
+    const tint = (n) => `#${hex6(sh.fill).match(/../g).map((x) => { const v = parseInt(x, 16); return Math.round(n > 0 ? v + (255 - v) * n : v * (1 + n)).toString(16).padStart(2, '0'); }).join('')}`;
+    const stops = sh.grad.stops?.length ? sh.grad.stops : [[0, tint(0.35)], [1, tint(-0.15)]];
+    const angle = ((Number(sh.grad.ang ?? 90) % 360) + 360) % 360;
+    fill = `<a:gradFill rotWithShape="1"><a:gsLst>${stops.map(([pos, color, opacity]) => `<a:gs pos="${Math.round(Math.max(0, Math.min(1, pos)) * 100000)}">${shapeColorXml(color, (opacity ?? 1) * (sh.fillOpacity ?? 1))}</a:gs>`).join('')}</a:gsLst><a:lin ang="${Math.round(angle * 60000) % 21600000}" scaled="1"/></a:gradFill>`;
+  }
   const isLine = LINE_KINDS.has(sh.kind);
-  const dashXml = sh.dash ? `<a:prstDash val="${sh.dash === 'dot' ? 'sysDot' : 'dash'}"/>` : '';
+  const dashXml = sh.dash ? DASH_XML[sh.dash] ?? DASH_XML.dash : '';
   const ends = isLine && sh.arrow ? `${sh.arrow === 'both' ? '<a:headEnd type="triangle"/>' : ''}<a:tailEnd type="triangle"/>` : '';
-  const ln = sh.stroke ? `<a:ln w="${Math.round((sh.strokeWidth ?? 1) * EMU)}"><a:solidFill><a:srgbClr val="${hex6(sh.stroke)}"/></a:solidFill>${dashXml}${ends}</a:ln>` : '<a:ln><a:noFill/></a:ln>';
+  const ln = sh.stroke ? `<a:ln w="${Math.round((sh.strokeWidth ?? 1) * EMU)}"><a:solidFill>${shapeColorXml(sh.stroke, sh.strokeOpacity ?? 1)}</a:solidFill>${dashXml}${ends}</a:ln>` : '<a:ln><a:noFill/></a:ln>';
+  const effects = shapeEffectsXml(sh);
   if (isLine) {
-    return `<xdr:cxnSp macro=""><xdr:nvCxnSpPr><xdr:cNvPr id="${id}" name="${name}"/><xdr:cNvCxnSpPr/></xdr:nvCxnSpPr><xdr:spPr>${xfrm(sh)}<a:prstGeom prst="${sh.kind === 'line' ? 'straightConnector1' : sh.kind}"><a:avLst/></a:prstGeom>${ln}</xdr:spPr></xdr:cxnSp>`;
+    return `<xdr:cxnSp macro=""><xdr:nvCxnSpPr><xdr:cNvPr id="${id}" name="${name}"/><xdr:cNvCxnSpPr/></xdr:nvCxnSpPr><xdr:spPr>${xfrm(sh)}<a:prstGeom prst="${sh.kind === 'line' ? 'straightConnector1' : sh.kind}"><a:avLst/></a:prstGeom>${ln}${effects}</xdr:spPr></xdr:cxnSp>`;
   }
   const algnOf = (a) => (a === 'center' ? 'ctr' : a === 'right' ? 'r' : a === 'justify' ? 'just' : 'l');
   const algn = algnOf(sh.align);
-  const rPr = `<a:rPr lang="ko-KR" sz="${Math.round((sh.size ?? 11) * 100)}"${sh.bold ? ' b="1"' : ''}><a:solidFill><a:srgbClr val="${hex6(sh.color ?? '#000000')}"/></a:solidFill></a:rPr>`;
+  const faceXml = (font) => font ? `<a:latin typeface="${esc(font)}"/><a:ea typeface="${esc(font)}"/>` : '';
+  const textPr = `lang="ko-KR" sz="${Math.round((sh.size ?? 11) * 100)}"${sh.bold ? ' b="1"' : ''}${sh.italic ? ' i="1"' : ''}${sh.underline ? ' u="sng"' : ''}`;
+  const textChildren = `<a:solidFill>${shapeColorXml(sh.color ?? '#000000')}</a:solidFill>${faceXml(sh.font)}`;
+  const rPr = `<a:rPr ${textPr}>${textChildren}</a:rPr>`;
   // 문단 · 조각별 서식이 있으면 그대로 저장
   const runXml = (r) => {
     if (r.t === '\n') return '<a:br/>';
-    const a = ['lang="ko-KR"', `sz="${Math.round((r.sz ?? sh.size ?? 11) * 100)}"`, r.b ?? sh.bold ? 'b="1"' : '', r.i ? 'i="1"' : '', r.u ? 'u="sng"' : '', r.s ? 'strike="sngStrike"' : ''].filter(Boolean).join(' ');
-    return `<a:r><a:rPr ${a}><a:solidFill><a:srgbClr val="${hex6(r.color ?? sh.color ?? '#000000')}"/></a:solidFill>${r.font ? `<a:latin typeface="${esc(r.font)}"/><a:ea typeface="${esc(r.font)}"/>` : ''}</a:rPr><a:t>${esc(r.t)}</a:t></a:r>`;
+    const a = ['lang="ko-KR"', `sz="${Math.round((r.sz ?? sh.size ?? 11) * 100)}"`, r.b ?? sh.bold ? 'b="1"' : '', r.i ?? sh.italic ? 'i="1"' : '', r.u ?? sh.underline ? 'u="sng"' : '', r.s ? 'strike="sngStrike"' : ''].filter(Boolean).join(' ');
+    return `<a:r><a:rPr ${a}><a:solidFill>${shapeColorXml(r.color ?? sh.color ?? '#000000')}</a:solidFill>${faceXml(r.font ?? sh.font)}</a:rPr><a:t>${esc(r.t)}</a:t></a:r>`;
   };
   const paras = sh.paras
     ? sh.paras.map((p) => `<a:p><a:pPr algn="${algnOf(p.align ?? sh.align)}"/>${p.runs.length ? p.runs.map(runXml).join('') : `<a:endParaRPr lang="ko-KR" sz="${Math.round((p.sz ?? sh.size ?? 11) * 100)}"/>`}</a:p>`).join('')
-    : String(sh.text ?? '').split('\n').map((line) => `<a:p><a:pPr algn="${algn}"/>${line ? `<a:r>${rPr}<a:t>${esc(line)}</a:t></a:r>` : `<a:endParaRPr lang="ko-KR" sz="${Math.round((sh.size ?? 11) * 100)}"/>`}</a:p>`).join('');
+    : String(sh.text ?? '').split('\n').map((line) => `<a:p><a:pPr algn="${algn}"/>${line ? `<a:r>${rPr}<a:t>${esc(line)}</a:t></a:r>` : `<a:endParaRPr ${textPr}>${textChildren}</a:endParaRPr>`}</a:p>`).join('');
   const anchor = sh.valign ? { top: 't', middle: 'ctr', bottom: 'b' }[sh.valign] : sh.kind === 'textbox' ? 't' : 'ctr';
-  return `<xdr:sp macro="${sh.macro ? `[0]!${esc(sh.macro)}` : ''}" textlink=""><xdr:nvSpPr><xdr:cNvPr id="${id}" name="${name}"/><xdr:cNvSpPr${sh.kind === 'textbox' ? ' txBox="1"' : ''}/></xdr:nvSpPr><xdr:spPr>${xfrm(sh)}<a:prstGeom prst="${prstOf(sh.kind)}"><a:avLst/></a:prstGeom>${fill}${ln}</xdr:spPr><xdr:txBody><a:bodyPr vertOverflow="clip" horzOverflow="clip" wrap="square" rtlCol="0" anchor="${anchor}"/><a:lstStyle/>${paras}</xdr:txBody></xdr:sp>`;
+  const insets = sh.pad ? ['tIns', 'rIns', 'bIns', 'lIns'].map((k, i) => ` ${k}="${Math.round((sh.pad[i] ?? (i % 2 ? 9.6 : 4.8)) * EMU)}"`).join('') : '';
+  return `<xdr:sp macro="${sh.macro ? `[0]!${esc(sh.macro)}` : ''}" textlink=""><xdr:nvSpPr><xdr:cNvPr id="${id}" name="${name}"/><xdr:cNvSpPr${sh.kind === 'textbox' ? ' txBox="1"' : ''}/></xdr:nvSpPr><xdr:spPr>${xfrm(sh)}<a:prstGeom prst="${prstOf(sh.kind)}"><a:avLst/></a:prstGeom>${fill}${ln}${effects}</xdr:spPr><xdr:txBody><a:bodyPr vertOverflow="clip" horzOverflow="clip" wrap="${sh.nowrap ? 'none' : 'square'}" rtlCol="0" anchor="${anchor}"${insets}/><a:lstStyle/>${paras}</xdr:txBody></xdr:sp>`;
 }
 
 /** 목록 원본: 범위 참조가 아니면 "a,b" 로 감싸기 */
@@ -3762,7 +3861,10 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
       if (sheet.outline?.rowsColl?.[r]) attrs.push('collapsed="1"');
       const cx = cells.map(([c, cell]) => {
         const ref = refOf(r, c);
-        const s = plainStyle ? pool.xf(cell.style ?? {}) : xfAt(r, c, cell);
+        const spillKey = `${si}:${r},${c}`;
+        const querySpill = wb.spills.get(wb.spillOwner.get(spillKey) ?? spillKey);
+        const queryFormat = querySpill && r - querySpill.r >= querySpill.formatStart ? querySpill.formats?.[c - querySpill.c] : null;
+        const s = queryFormat != null ? pool.xf(wb.styleAt(si, r, c)) : plainStyle ? pool.xf(cell.style ?? {}) : xfAt(r, c, cell);
         const sAttr = s ? ` s="${s}"` : '';
         const v = wb.getValue(si, r, c);
         if (!cell.raw && cell.image?.src) {

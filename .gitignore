@@ -9,3 +9,10 @@ venv/
 .env
 tabula/data/
 tabula/dist/
+
+tabula/dist-cloudflare/
+.local/
+.wrangler/
+node_modules/
+.dev.vars
+.dev.vars.*

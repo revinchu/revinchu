@@ -5,6 +5,7 @@ import { readXlsx, writeXlsx } from '../src/xlsx.js';
 import { unzip, zip, textOf } from '../src/zip.js';
 import { toFileFormula, fromFileFormula } from '../src/xlfn.js';
 import { ERR } from '../src/formula.js';
+import { parseXml, descendants } from '../src/xml.js';
 
 function book(cells) {
   const wb = new Workbook();
@@ -90,8 +91,13 @@ test('xlsx 왕복: 동적 배열 · 이름 · 지원하지 않는 함수의 저�
   const bytes = writeXlsx(wb);
   const files = unzip(bytes);
   const sheetXml = textOf(files['xl/worksheets/sheet1.xml']);
-  assert.match(sheetXml, /<c r="A1" cm="1"><f t="array" ref="A1:B2" aca="false">_xlfn\.SEQUENCE\(2,2\)<\/f><v>1<\/v><\/c>/);
-  assert.match(sheetXml, /<c r="B2"><v>4<\/v><\/c>/);
+  const cells = descendants(parseXml(sheetXml), 'c');
+  const anchor = cells.find((c) => c.attrs.r === 'A1');
+  assert.equal(anchor.attrs.cm, '1');
+  assert.deepEqual(descendants(anchor, 'f')[0].attrs, { t: 'array', ref: 'A1:B2', aca: 'false' });
+  assert.equal(descendants(anchor, 'f')[0].text, '_xlfn.SEQUENCE(2,2)');
+  assert.equal(descendants(anchor, 'v')[0].text, '1');
+  assert.equal(descendants(cells.find((c) => c.attrs.r === 'B2'), 'v')[0].text, '4');
   assert.match(sheetXml, /_xlfn\.ANCHORARRAY\(A1\)/);
   assert.ok(files['xl/metadata.xml']);
   assert.match(textOf(files['xl/workbook.xml']), /<definedName name="금액">Sheet1!\$F\$1<\/definedName>/);
@@ -106,7 +112,8 @@ test('xlsx 왕복: 동적 배열 · 이름 · 지원하지 않는 함수의 저�
   assert.equal(back.names[0].name, '금액');
 
   // 지원하지 않는 함수: 수식 유지 + 파일의 계산 값 표시
-  const xml = sheetXml.replace('<c r="F1"><v>5</v></c>', '<c r="F1"><f>_xlfn.NOSUCHFN(1)</f><v>77</v></c>');
+  const xml = sheetXml.replace(/(<c\b(?=[^>]*\br="F1")[^>]*>)<v>5<\/v><\/c>/, '$1<f>_xlfn.NOSUCHFN(1)</f><v>77</v></c>');
+  assert.notEqual(xml, sheetXml, '지원하지 않는 함수 fixture 주입 확인');
   const patched = { ...files, 'xl/worksheets/sheet1.xml': new TextEncoder().encode(xml) };
   const res = readXlsx(zip(patched));
   const wb2 = new Workbook(res.data);

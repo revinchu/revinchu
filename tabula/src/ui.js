@@ -1,12 +1,13 @@
 // 공통 UI: 요소 생성 · 메뉴 · 대화상자 · 알림
 import { ICONS } from './icons.js';
+import { sanitizeHtml, setSafeHtml } from './safe-html.js';
 
 export function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
     if (v === undefined || v === null || v === false) continue;
     if (k === 'class') node.className = v;
-    else if (k === 'html') node.innerHTML = v;
+    else if (k === 'html') setSafeHtml(node, v);
     else if (k === 'style' && typeof v === 'object') {
       // CSS 사용자 속성(--이름)은 대입이 안 되므로 setProperty
       for (const [sk, sv] of Object.entries(v)) {
@@ -35,7 +36,7 @@ export function icon(name) {
 export function hydrateIcons(root = document) {
   for (const node of root.querySelectorAll('[data-icon]')) {
     if (!node.dataset.hydrated) {
-      node.insertAdjacentHTML('afterbegin', ICONS[node.dataset.icon] ?? '');
+      node.prepend(sanitizeHtml(ICONS[node.dataset.icon] ?? '', node.ownerDocument));
       node.dataset.hydrated = '1';
     }
   }
@@ -220,7 +221,7 @@ export function openDialog({ title, body, buttons = [], onOpen, width, modeless 
   };
   const content = typeof body === 'string' ? el('div', { html: body }) : body;
   const dialog = el('div', { class: 'dialog', role: 'dialog', 'aria-label': title, 'aria-modal': String(!modeless), tabindex: '-1' },
-    el('div', { class: 'dialog-head' }, title, el('button', { title: '닫기', onclick: close }, '✕')),
+    el('div', { class: 'dialog-head' }, title, el('button', { title: '닫기', 'aria-label': '닫기', onclick: close }, '✕')),
     el('div', { class: 'dialog-body' }, content),
     buttons.length ? el('div', { class: 'dialog-foot' }, buttons.map((b) => el('button', {
       class: `btn${b.primary ? ' primary' : ''}`,

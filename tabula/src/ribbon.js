@@ -1,5 +1,6 @@
 // 리본 메뉴 정의 및 렌더링
 import { ICONS } from './icons.js';
+import { setSafeHtml } from './safe-html.js';
 import { el } from './ui.js';
 import { NUMBER_FORMATS } from './format.js';
 
@@ -221,9 +222,10 @@ export const TABS = [
       group('데이터 가져오기 및 변환', [
         large('importCsv', 'csvIn', '파일에서 가져오기', { title: 'CSV·TSV·Excel(.xlsx) 파일 가져오기' }),
         large('webData', 'webData', '웹에서', { title: '웹 페이지의 표 · 목록 · CSV 가져오기 (IMPORTHTML)' }),
+        large('googleSheets', 'table', 'Google Sheets', { title: '공개 Google Sheets를 값 또는 IMPORTRANGE 수식으로 가져오기' }),
         large('exportCsv', 'csvOut', 'CSV로 내보내기'),
       ]),
-      group('쿼리 및 연결', [large('refreshAll', 'refresh', '모두 새로 고침', { title: '피벗 테이블 새로 고침' })]),
+      group('쿼리 및 연결', [large('refreshAll', 'refresh', '모두 새로 고침', { title: '피벗 테이블 새로 고침' }), large('privateImportPermission', 'hyperlink', '문서 참조 권한', { title: '현재 문서의 수식에서 다른 WIXEL 문서 참조 허용 또는 차단' })]),
       group('정렬 및 필터', [
         col(
           medium('sortAsc', 'sortAsc', '오름차순'),
@@ -576,7 +578,7 @@ export function buildRibbon(app) {
       class: cls.join(' '), title: it.title ?? it.label, onmousedown: keepFocus,
       ondblclick: it.cmd === 'painter' ? () => app.run('painterSticky') : undefined,
     });
-    b.innerHTML = iconHtml;
+    setSafeHtml(b, iconHtml);
     if (it.label) b.append(el('span', { class: 'lbl' }, it.label));
     if (it.menu) {
       const caret = el('span', { class: 'caret', html: ICONS.chevronDown });

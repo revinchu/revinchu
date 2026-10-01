@@ -66,7 +66,7 @@ test('QUERY: select · where · group by · order by · pivot · label', () => {
   assert.equal(val(wb, 'H2'), '검색');
   assert.equal(val(wb, 'I2'), 100);
   assert.equal(val(wb, 'I3'), 120);
-  assert.equal(val(wb, 'L1'), '1월');
+  assert.equal(val(wb, 'L1'), '1월 합계'); // 명시한 label은 단일 집계 피벗에도 붙음 (Google query language)
   assert.equal(val(wb, 'K2'), '검색');
   const q = parseQuery("select Col1, count(Col2) where Col2 contains 'a' or Col2 is null limit 5 offset 1");
   assert.equal(q.limit, 5);

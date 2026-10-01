@@ -4,15 +4,15 @@
 
 | 경로 | 내용 | 상태 |
 |------|------|------|
-| `tabula/` | **WIXEL(위셀)** — 엑셀과 같은 브라우저 스프레드시트 (순수 ES 모듈, 의존성 0) | 주 개발 대상. 버전 2.0.0 |
+| `tabula/` | **WIXEL(위셀)** — 엑셀과 같은 브라우저 스프레드시트 (순수 ES 모듈, 의존성 0) | 주 개발 대상. 버전 3.0.0 |
 | 루트 `*.py` | 네이버 파워링크 광고 순위 체크 CLI (Python) | 별도 소규모 도구 |
 
 **WIXEL 작업이라면 먼저 [`tabula/AGENTS.md`](tabula/AGENTS.md) 를 읽으세요.** 인수인계 문서는 `tabula/docs/codex/` 에 있습니다.
 
 ## 공통 규칙
 - 사용자에게 보이는 모든 글자(UI · 메시지 · 토스트 · 대화상자)는 **한국어**.
-- 원본 인계는 `claude/offsro-excel-implementation-zmro3r`의 `f6cbc6e`, 도구 검증은 `codex/handoff-validation`의 `0a479d7`입니다. 후속 품질 개선을 포함한 `codex/wixel-quality-improvements`에서 새 작업을 분기하세요. 기준 커밋과 원격 상태를 먼저 확인하세요.
-- 커밋 전에 `cd tabula && npm test`가 모두 통과해야 합니다. 최신 변경·검증 결과는 `tabula/docs/codex/07_품질개선결과.md`를 참고하세요.
+- 원본 인계는 `claude/offsro-excel-implementation-zmro3r`의 `f6cbc6e`, 도구 검증은 `codex/handoff-validation`의 `0a479d7`입니다. 3.0 개발 기준은 `codex/wixel-3-cloudflare`이며, 그 부모는 `codex/wixel-quality-improvements`의 `e7fa630`입니다. 현재 원격에 반영된 최신 상태에서 새 작업을 분기하세요. 기준 커밋과 원격 상태를 먼저 확인하세요.
+- 커밋 전에 `cd tabula && npm test`가 모두 통과해야 합니다. 최신 변경·검증 결과는 `tabula/docs/codex/09_WIXEL3_구현과검증.md`를 참고하세요.
 - 기존 체크아웃 경로를 유지하고, 새 로컬 작업은 `D:\Codex\Workspaces`, 임시 파일은 `D:\Codex\Temp`, 캐시는 `D:\Codex\Caches`에 만드세요.
 - 사용자가 올린 실제 업무 파일(xlsx · xlsb 등)은 **절대 커밋하지 마세요** (개인 · 회사 데이터).
 

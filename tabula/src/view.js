@@ -1,6 +1,7 @@
 // 가상 스크롤 그리드: 화면에 보이는 행/열만 그림 (20,000,000행 × 16,384열 지원)
 // 틀 고정은 4개 창(TL/TR/BL/BR)으로, 각 창은 시트 좌표계 콘텐츠를 transform 으로 이동시켜 표시.
 import { Axis } from './axis.js';
+import { sanitizeHtml, setSafeHtml } from './safe-html.js';
 import { colToName, MAX_ROWS, MAX_COLS } from './formula.js';
 import { formatValue, formatGeneral } from './format.js';
 import { DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT } from './workbook.js';
@@ -668,7 +669,7 @@ export class GridView {
       for (const c of visCols) g.push(`<i class="gv" style="left:${cols.pos(c + 1) - 1 - p.ox}px;height:${H}px"></i>`);
       for (const r of visRows) g.push(`<i class="gh" style="top:${rows.pos(r + 1) - 1 - p.oy}px;width:${W}px"></i>`);
     }
-    p.grid.innerHTML = g.join('');
+    setSafeHtml(p.grid, g.join(''));
 
     const merges = sheet.merges.filter((m) => m.r1 <= r2 && m.r2 >= r1 && m.c1 <= c2 && m.c2 >= c1);
     const inMerge = (r, c) => merges.some((m) => r >= m.r1 && r <= m.r2 && c >= m.c1 && c <= m.c2);
@@ -750,7 +751,7 @@ export class GridView {
         html.push(`<div class="fbtn pbtn${on ? ' on' : ''}" data-p="${pi}" data-k="${b.kind}" data-f="${esc(b.field ?? '')}" title="${on ? '필터 적용됨' : '필터'}" style="left:${cols.pos(b.c + 1) - 18 - p.ox}px;top:${rows.pos(b.r + 1) - 18 - p.oy}px"></div>`);
       }
     });
-    p.cells.innerHTML = html.join('');
+    setSafeHtml(p.cells, html.join(''));
     this.renderObjects(p);
   }
 
@@ -801,7 +802,7 @@ export class GridView {
         across += this.cols.size(cc);
       }
     }
-    const eff = style.align === 'centerContinuous' ? 'center' : style.align || align;
+    const eff = style.align === 'centerContinuous' ? 'center' : style.align && style.align !== 'general' ? style.align : align;
     const css = [`left:${x - 1 - p.ox}px`, `top:${y - 1 - p.oy}px`, `width:${w + 1}px`, `height:${h + 1}px`];
     if (style.bold) css.push('font-weight:700');
     if (style.italic) css.push('font-style:italic');
@@ -973,7 +974,7 @@ export class GridView {
         if (color || st.color) css.push(`color:${color || st.color}`);
         if (st.font) css.push(`font-family:${fontStack(st.font)}`);
         if (st.size) css.push(`font-size:${st.size}pt`);
-        const al = st.align === 'centerContinuous' ? 'center' : st.align || (typeof v === 'number' ? 'right' : typeof v === 'boolean' || (v && v.code) ? 'center' : 'left');
+        const al = st.align === 'centerContinuous' ? 'center' : st.align && st.align !== 'general' ? st.align : (typeof v === 'number' ? 'right' : typeof v === 'boolean' || (v && v.code) ? 'center' : 'left');
         css.push(`text-align:${al}`);
         css.push(`vertical-align:${st.valign === 'top' ? 'top' : st.valign === 'middle' ? 'middle' : 'bottom'}`);
         if (st.gradient) css.push(`background:${gradientCss(st.gradient)}`);
@@ -1001,7 +1002,7 @@ export class GridView {
     const images = sheet.images ?? [];
     const shapes = sheet.shapes ?? [];
     const slicers = sheet.slicers ?? [];
-    if (!sheet.charts.length && !images.length && !shapes.length && !slicers.length) { p.objects.innerHTML = ''; p.objHtml = null; return; }
+    if (!sheet.charts.length && !images.length && !shapes.length && !slicers.length) { p.objects.replaceChildren(); p.objHtml = null; return; }
     const winX1 = p.scrollX ? this.frozenW : 0;
     const winY1 = p.scrollY ? this.frozenH : 0;
     const winX2 = p.scrollX ? Infinity : this.frozenW;
@@ -1022,12 +1023,7 @@ export class GridView {
     ].sort((a, b) => (a[1].z ?? 0) - (b[1].z ?? 0));
     for (const [prop, o] of all) {
       if (prop === 'charts') {
-        // 고른 차트 요소 강조 (엑셀: 계열 전체 또는 요소 하나에 선택 표시)
-        const part = st.chartSel === o.id && st.chartPart?.id === o.id ? st.chartPart : null;
-        const sel = !part ? '' : part.kind === 'series' ? `[data-s="${part.s}"]` : part.kind === 'point' ? `[data-s="${part.s}"][data-p="${part.p}"]` : `[data-el="${part.kind}"]`;
-        const scope = `.obj[data-id="${esc(o.id)}"] svg`;
-        const hl = sel ? `<style>${scope} ${sel}{filter:drop-shadow(0 0 1.5px #1f6fd1) drop-shadow(0 0 1px #1f6fd1)}${scope} rect${sel},${scope} circle${sel},${scope} path${sel}:not([fill="none"]){stroke:#1f6fd1;stroke-width:1.5px;stroke-dasharray:3 2}${part.kind === 'legend' || part.kind === 'title' ? `${scope} ${sel}{outline:1px dashed #1f6fd1}` : ''}</style>` : '';
-        box(o, 'chart', this.chartSvg(o) + hl + this.pivotChartButtons(o) + (st.chartSel === o.id && !st.objMulti?.size && !st.viewOnly ? CHART_SIDE : ''));
+        box(o, 'chart', this.chartSvg(o) + this.pivotChartButtons(o) + (st.chartSel === o.id && !st.objMulti?.size && !st.viewOnly ? CHART_SIDE : ''));
       }
       else if (prop === 'slicers') box(o, o.timeline ? 'slicer timeline' : 'slicer', this.slicerHtml(o), slicerCssVars(o));
       else if (prop === 'images' && o.linked) box(o, 'pic linked', this.linkedHtml(o), o.rot ? `transform:rotate(${o.rot}deg)` : '');
@@ -1056,13 +1052,27 @@ export class GridView {
     p.objHtml ??= new Map();
     const next = new Map();
     const nodes = html.map((h) => {
-      let node = p.objHtml.get(h);
+      // 선택 강조도 캐시에 반영하고, 외부 값으로 style 태그/선택자를 생성하지 않는다.
+      const key = h + '\0' + JSON.stringify(st.chartPart ?? null);
+      let node = p.objHtml.get(key);
       if (!node) {
-        const t = document.createElement('template');
-        t.innerHTML = h;
-        node = t.content.firstChild;
+        node = sanitizeHtml(h).firstElementChild;
+        const part = st.chartPart;
+        if (node?.classList.contains('chart') && node.dataset.id === st.chartSel && part?.id === st.chartSel) {
+          for (const item of node.querySelectorAll('svg [data-s], svg [data-el]')) {
+            const selected = part.kind === 'series' ? item.dataset.s === String(part.s)
+              : part.kind === 'point' ? item.dataset.s === String(part.s) && item.dataset.p === String(part.p)
+                : item.dataset.el === part.kind;
+            if (!selected) continue;
+            item.style.filter = 'drop-shadow(0 0 1.5px #1f6fd1) drop-shadow(0 0 1px #1f6fd1)';
+            if (['rect', 'circle'].includes(item.localName) || item.localName === 'path' && item.getAttribute('fill') !== 'none') {
+              item.style.stroke = '#1f6fd1'; item.style.strokeWidth = '1.5px'; item.style.strokeDasharray = '3 2';
+            }
+            if (part.kind === 'legend' || part.kind === 'title') item.style.outline = '1px dashed #1f6fd1';
+          }
+        }
       }
-      next.set(h, node);
+      next.set(key, node);
       return node;
     });
     p.objHtml = next;
@@ -1260,7 +1270,7 @@ export class GridView {
       const r = this.sheetRect(ref.rg);
       html.push(box('ref-box', { x: r.x - 1, y: r.y - 1, w: r.w + 1, h: r.h + 1 }, `border-color:${ref.color};background:${ref.color}14`));
     }
-    p.overlay.innerHTML = html.join('');
+    setSafeHtml(p.overlay, html.join(''));
   }
 
   /** 개요 기호: 그룹 괄호 선 + 요약 행(열)의 +/− 단추 (보이는 범위만) */
@@ -1314,7 +1324,7 @@ export class GridView {
     if (olw && ol) for (let L = 1; L <= maxLevel(ol.rows) + 1; L++) lv.push(`<div class="olv" data-ax="r" data-l="${L}" title="수준 ${L} 표시" style="left:${(L - 1) * 14 + 2}px;top:${hh - 17}px">${L}</div>`);
     if (olh && ol) for (let L = 1; L <= maxLevel(ol.cols) + 1; L++) lv.push(`<div class="olv" data-ax="c" data-l="${L}" title="수준 ${L} 표시" style="left:${hw - 17}px;top:${(L - 1) * 14 + 2}px">${L}</div>`);
     const lvHtml = lv.join('');
-    if (this.corner._lv !== lvHtml) { this.corner.innerHTML = lvHtml; this.corner._lv = lvHtml; }
+    if (this.corner._lv !== lvHtml) { setSafeHtml(this.corner, lvHtml); this.corner._lv = lvHtml; }
     Object.assign(this.colHead.style, { left: '0px', top: '0px', width: `${this.viewW}px`, height: `${hh}px` });
     Object.assign(this.rowHead.style, { left: '0px', top: '0px', width: `${hw}px`, height: `${this.viewH}px` });
     const colFull = selKind === 'cols' || selKind === 'all';
@@ -1331,7 +1341,7 @@ export class GridView {
         out.push(`<div class="hc${colCls(c)}" style="left:${this.cols.pos(c) - offset}px;width:${w}px${olh ? `;top:${olh}px` : ''}">${colToName(c)}</div>`);
       }
       if (olh) out.push(this.outlineMarks('c', ol, c1, c2, offset, olh));
-      clipEl.innerHTML = out.join('');
+      setSafeHtml(clipEl, out.join(''));
     };
     const rowPart = (clipEl, rect, r1, r2, offset) => {
       Object.assign(clipEl.style, { left: '0px', top: `${rect.y}px`, width: `${hw}px`, height: `${rect.h}px`, display: rect.h > 0 ? 'block' : 'none' });
@@ -1342,7 +1352,7 @@ export class GridView {
         out.push(`<div class="hr${rowCls(r)}" style="top:${this.rows.pos(r) - offset}px;height:${h}px;line-height:${h - 1}px${olw ? `;left:${olw}px;width:${hw - olw}px` : ''}">${r + 1}</div>`);
       }
       if (olw) out.push(this.outlineMarks('r', ol, r1, r2, offset, olw));
-      clipEl.innerHTML = out.join('');
+      setSafeHtml(clipEl, out.join(''));
     };
     const tl = rects.tl;
     const br = rects.br;

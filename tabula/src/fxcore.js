@@ -1,5 +1,5 @@
 // 수식 엔진 공통: 오류 값 · 배열(Range) · 참조 · 값 변환 · 조건 · 날짜 · 배열 브로드캐스트 (DOM 없음)
-import { formatGeneral, parseInput, dateParts, serialOf } from './format.js';
+import { formatGeneral, parseInput, dateParts, serialOf, formatQuery } from './format.js';
 
 // ───────────────────────── 오류 값 ─────────────────────────
 export class FormulaError {
@@ -47,6 +47,7 @@ export class Range {
   *values() { for (const row of this.rows) yield* row; }
   at(r, c) { return this.rows[r]?.[c]; }
 }
+export function queryFormatted(value, pattern) { return formatQuery(value, pattern); }
 
 /** 참조 (OFFSET·INDIRECT·INDEX 결과, 범위 연산자 등). sheet: 시트 이름 또는 null(수식이 있는 시트) */
 export class RefValue {

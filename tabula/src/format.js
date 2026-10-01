@@ -210,6 +210,7 @@ export function formatValue(v, style) {
   if (v === null || v === undefined || v === '') return { text: '', align: 'left' };
   if (typeof v === 'object' && v.type === 'image') return { text: v.alt || '', align: 'center', image: v };
   if (typeof v === 'object' && 'code' in v) return { text: v.code, align: 'center' };
+  if (style.queryFormat != null) return { text: formatQuery(v, style.queryFormat), align: typeof v === 'number' ? 'right' : typeof v === 'boolean' ? 'center' : 'left' };
   if (typeof v === 'boolean') return { text: v ? 'TRUE' : 'FALSE', align: 'center' };
   if (style.numFmt === 'custom' && style.code) {
     const r = formatCode(v, style.code);
@@ -220,6 +221,18 @@ export function formatValue(v, style) {
     return { text: formatNumber(v, style.numFmt, style.decimals), align: 'right' };
   }
   return { text: String(v), align: 'left' };
+}
+
+/** QUERY format의 일반 ICU 숫자·날짜·불리언 패턴. 실제 셀 값은 그대로 둔다. */
+export function formatQuery(v, pattern) {
+  if (v === null || v === undefined || v === '') return '';
+  if (!pattern) return typeof v === 'boolean' ? (v ? 'TRUE' : 'FALSE') : formatGeneral(v);
+  if (typeof v === 'boolean') { const p = String(pattern).split(':'); return p[v ? 0 : 1] ?? p[0]; }
+  // ICU 따옴표와 요일/오전오후 토큰을 Excel 표시 코드로 바꾼다. M/m은 formatCode가 문맥으로 구분.
+  return formatCode(v, queryFormatCode(pattern)).text;
+}
+export function queryFormatCode(pattern) {
+  return String(pattern).replace(/'((?:[^']|'')*)'|E{3,4}|a/g, (m, literal) => literal !== undefined ? `"${literal.replace(/''/g, "'").replace(/"/g, '""')}"` : m[0] === 'E' ? (m.length === 3 ? 'ddd' : 'dddd') : 'AM/PM');
 }
 
 /**

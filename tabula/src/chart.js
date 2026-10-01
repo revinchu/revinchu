@@ -9,6 +9,7 @@ import { formatGeneral, formatValue, formatCode } from './format.js';
 import { pivotSourceData, pivotChartData } from './pivot.js';
 import { maxOf, minOf, pushAll } from './fxcore.js';
 import { THEME, applyTint } from './stylepresets.js';
+import { chartDepth, extrudedPolygon, chartWalls3D, pieProjection3D, pieSolid3D } from './chart-3d.js';
 
 export const CHART_TYPES = [
   { id: 'column', label: '세로 막대형' },
@@ -32,21 +33,27 @@ export const CHART_TYPES = [
 
 /** 엑셀 [모든 차트] 대화상자와 같은 분류 · 하위 종류 (차트 모델에 덮어쓸 값) */
 export const CHART_GALLERY = [
-  ['세로 막대형', [['묶은 세로 막대형', { type: 'column', grouping: 'clustered' }], ['누적 세로 막대형', { type: 'column', grouping: 'stacked' }], ['100% 기준 누적 세로 막대형', { type: 'column', grouping: 'percentStacked' }]]],
-  ['꺾은선형', [['꺾은선형', { type: 'line', marker: 'none' }], ['누적 꺾은선형', { type: 'line', grouping: 'stacked', marker: 'none' }], ['100% 기준 누적 꺾은선형', { type: 'line', grouping: 'percentStacked', marker: 'none' }], ['표식이 있는 꺾은선형', { type: 'line' }], ['표식이 있는 누적 꺾은선형', { type: 'line', grouping: 'stacked' }]]],
-  ['원형', [['원형', { type: 'pie' }], ['쪼개진 원형', { type: 'pie', explode: 12 }], ['도넛형', { type: 'doughnut' }]]],
-  ['가로 막대형', [['묶은 가로 막대형', { type: 'bar', grouping: 'clustered' }], ['누적 가로 막대형', { type: 'bar', grouping: 'stacked' }], ['100% 기준 누적 가로 막대형', { type: 'bar', grouping: 'percentStacked' }]]],
-  ['영역형', [['영역형', { type: 'area' }], ['누적 영역형', { type: 'area', grouping: 'stacked' }], ['100% 기준 누적 영역형', { type: 'area', grouping: 'percentStacked' }]]],
-  ['분산형', [['분산형', { type: 'scatter' }], ['곡선 및 표식이 있는 분산형', { type: 'scatter', scatterStyle: 'smoothMarker' }], ['곡선이 있는 분산형', { type: 'scatter', scatterStyle: 'smooth' }], ['직선 및 표식이 있는 분산형', { type: 'scatter', scatterStyle: 'lineMarker' }], ['직선이 있는 분산형', { type: 'scatter', scatterStyle: 'line' }], ['거품형', { type: 'bubble' }]]],
-  ['주식형', [['고가-저가-종가', { type: 'stock' }], ['시가-고가-저가-종가', { type: 'stock', ohlc: true }]]],
-  ['방사형', [['방사형', { type: 'radar' }], ['표식이 있는 방사형', { type: 'radar', radarStyle: 'marker' }], ['채워진 방사형', { type: 'radar', radarStyle: 'filled' }]]],
-  ['트리맵', [['트리맵', { type: 'treemap' }]]],
-  ['히스토그램', [['히스토그램', { type: 'histogram' }], ['파레토', { type: 'pareto' }]]],
-  ['상자 수염', [['상자 수염', { type: 'boxWhisker' }]]],
-  ['폭포', [['폭포', { type: 'waterfall' }]]],
-  ['깔때기형', [['깔때기형', { type: 'funnel' }]]],
-  ['콤보', [['묶은 세로 막대형 - 꺾은선형, 보조 축', { type: 'combo' }]]],
+  ['세로 막대형', [['묶은 세로 막대형', { threeD: false, type: 'column', grouping: 'clustered' }], ['누적 세로 막대형', { threeD: false, type: 'column', grouping: 'stacked' }], ['100% 기준 누적 세로 막대형', { threeD: false, type: 'column', grouping: 'percentStacked' }]]],
+  ['꺾은선형', [['꺾은선형', { threeD: false, type: 'line', marker: 'none' }], ['누적 꺾은선형', { threeD: false, type: 'line', grouping: 'stacked', marker: 'none' }], ['100% 기준 누적 꺾은선형', { threeD: false, type: 'line', grouping: 'percentStacked', marker: 'none' }], ['표식이 있는 꺾은선형', { threeD: false, type: 'line' }], ['표식이 있는 누적 꺾은선형', { threeD: false, type: 'line', grouping: 'stacked' }]]],
+  ['원형', [['원형', { threeD: false, type: 'pie' }], ['쪼개진 원형', { threeD: false, type: 'pie', explode: 12 }], ['도넛형', { threeD: false, type: 'doughnut' }]]],
+  ['가로 막대형', [['묶은 가로 막대형', { threeD: false, type: 'bar', grouping: 'clustered' }], ['누적 가로 막대형', { threeD: false, type: 'bar', grouping: 'stacked' }], ['100% 기준 누적 가로 막대형', { threeD: false, type: 'bar', grouping: 'percentStacked' }]]],
+  ['영역형', [['영역형', { threeD: false, type: 'area' }], ['누적 영역형', { threeD: false, type: 'area', grouping: 'stacked' }], ['100% 기준 누적 영역형', { threeD: false, type: 'area', grouping: 'percentStacked' }]]],
+  ['분산형', [['분산형', { threeD: false, type: 'scatter' }], ['곡선 및 표식이 있는 분산형', { threeD: false, type: 'scatter', scatterStyle: 'smoothMarker' }], ['곡선이 있는 분산형', { threeD: false, type: 'scatter', scatterStyle: 'smooth' }], ['직선 및 표식이 있는 분산형', { threeD: false, type: 'scatter', scatterStyle: 'lineMarker' }], ['직선이 있는 분산형', { threeD: false, type: 'scatter', scatterStyle: 'line' }], ['거품형', { threeD: false, type: 'bubble' }]]],
+  ['주식형', [['고가-저가-종가', { threeD: false, type: 'stock' }], ['시가-고가-저가-종가', { threeD: false, type: 'stock', ohlc: true }]]],
+  ['방사형', [['방사형', { threeD: false, type: 'radar' }], ['표식이 있는 방사형', { threeD: false, type: 'radar', radarStyle: 'marker' }], ['채워진 방사형', { threeD: false, type: 'radar', radarStyle: 'filled' }]]],
+  ['트리맵', [['트리맵', { threeD: false, type: 'treemap' }]]],
+  ['히스토그램', [['히스토그램', { threeD: false, type: 'histogram' }], ['파레토', { threeD: false, type: 'pareto' }]]],
+  ['상자 수염', [['상자 수염', { threeD: false, type: 'boxWhisker' }]]],
+  ['폭포', [['폭포', { threeD: false, type: 'waterfall' }]]],
+  ['깔때기형', [['깔때기형', { threeD: false, type: 'funnel' }]]],
+  ['콤보', [['묶은 세로 막대형 - 꺾은선형, 보조 축', { threeD: false, type: 'combo' }]]],
 ];
+for (const [name, entries] of CHART_GALLERY) {
+  if (!['세로 막대형', '가로 막대형', '원형', '영역형', '꺾은선형'].includes(name)) continue;
+  const base = name === '원형' ? entries.filter(([, p]) => p.type === 'pie') : name === '꺾은선형' ? entries.slice(0, 1) : [...entries];
+  for (const [label, props] of base) entries.push([`3차원 ${label}`, { ...props, threeD: true }]);
+}
+
 
 export const PALETTE = ['#4472C4', '#ED7D31', '#A5A5A5', '#FFC000', '#5B9BD5', '#70AD47', '#264478', '#9E480E', '#636363', '#997300'];
 /** 색 변경 (엑셀 [차트 디자인] → [색 변경]): 통합 문서 테마의 강조 색으로 만듦 (엑셀과 같음) + WIXEL 팔레트 */
@@ -193,6 +200,8 @@ function multiLevel(rows, n) {
  * api: { values(ref) → 2차원 값, pivot({ sheet, name }) → { categories, series } | null, range(ch) → 2차원 값 }
  */
 export function resolveChart(ch, api) {
+  // 선택 시트 게시본은 원본 참조 없이 그 시점의 표시 데이터만 사용합니다.
+  if (ch.snapshotData) return structuredClone(ch.snapshotData);
   let base;
   if (ch.pivot) {
     base = api.pivot(ch.pivot) ?? { categories: [], series: [] };
@@ -442,7 +451,7 @@ export function renderChartSvg(chart, data) {
         : series.map((s) => ({ name: s.name, color: s.color, line: s.type === 'line' || s.type === 'radar' }));
   const showLegend = legendPos !== 'none' && (legendItems.length > 1 || pieLike || baseType === 'treemap');
   const sideLegend = showLegend && (legendPos === 'r' || legendPos === 'l');
-  const legendW = sideLegend ? Math.min(180, Math.max(60, ...legendItems.map((it) => [...String(it.name)].length * LW * 1.4 + 22))) : 0;
+  const legendW = sideLegend ? Math.min(180, Math.max(60, maxOf(legendItems.map((it) => [...String(it.name)].length * LW * 1.4 + 22)))) : 0;
   const legendH = showLegend && !sideLegend ? Math.round(FS.legend * 2.2) : 0;
   const plot = {
     x: 10 + (legendPos === 'l' ? legendW : 0), y: top + (legendPos === 't' ? legendH : 0),
@@ -500,13 +509,27 @@ export function renderChartSvg(chart, data) {
     const vals = s0.values.map((v) => (v && v > 0 ? v : 0));
     const sum = vals.reduce((a, b) => a + b, 0);
     const cx = plot.x + plot.w / 2;
-    const cy = plot.y + plot.h / 2;
+    let cy = plot.y + plot.h / 2;
     const ex = chart.explode ? Math.min(0.3, chart.explode / 100) : 0;
     // 항목 이름 레이블(엑셀의 원형 바깥 레이블)이 있으면 원을 줄여 둘레에 글자 자리를 둠
     const outside = s0.catName || s0.labelPos === 'out';
     const r = Math.max(10, (Math.min(plot.w, plot.h) / 2 - 6) / (1 + ex) * (outside ? 0.72 : 1));
     const inner = baseType === 'doughnut' ? r * ((chart.hole ?? 50) / 100) : 0;
-    let a = -Math.PI / 2 + ((chart.firstAngle ?? 0) * Math.PI) / 180;
+    const threePie = chart.threeD && baseType === 'pie';
+    const projection = threePie ? pieProjection3D(chart, r) : { squash: 1, depth: 0, rotation: 0 };
+    cy -= projection.depth / 2;
+    let a = -Math.PI / 2 + ((chart.firstAngle ?? 0) * Math.PI) / 180 + projection.rotation;
+    if (threePie && sum) {
+      let angle = a;
+      const slices = [];
+      vals.forEach((v, i) => {
+        if (!v) return;
+        const end = angle + v / sum * Math.PI * 2, mid = (angle + end) / 2;
+        slices.push({ a: angle, b: end, ox: Math.cos(mid) * r * ex, oy: Math.sin(mid) * r * ex * projection.squash, color: s0.pointColors?.[i] ?? s0.colors?.[i] ?? pal[i % pal.length], attrs: tag(s0, i) });
+        angle = end;
+      });
+      parts.push(pieSolid3D(slices, cx, cy, r, projection));
+    }
     vals.forEach((v, i) => {
       if (!v) return;
       const frac = v / sum;
@@ -514,12 +537,12 @@ export function renderChartSvg(chart, data) {
       const color = s0.pointColors?.[i] ?? s0.colors?.[i] ?? pal[i % pal.length];
       const mid0 = (a + a2) / 2;
       const ox = ex ? Math.cos(mid0) * r * ex : 0;
-      const oy = ex ? Math.sin(mid0) * r * ex : 0;
-      if (ex) parts.push(`<g transform="translate(${ox.toFixed(2)},${oy.toFixed(2)})">`);
-      if (frac >= 0.9999) {
+      const oy = ex ? Math.sin(mid0) * r * ex * projection.squash : 0;
+      if (!threePie && ex) parts.push(`<g transform="translate(${ox.toFixed(2)},${oy.toFixed(2)})">`);
+      if (!threePie && frac >= 0.9999) {
         parts.push(`<circle cx="${cx}" cy="${cy}" r="${r}" fill="${color}" stroke="#fff"${tag(s0, i)}/>`);
         if (inner) parts.push(`<circle cx="${cx}" cy="${cy}" r="${inner}" fill="#fff"/>`);
-      } else {
+      } else if (!threePie) {
         const large = a2 - a > Math.PI ? 1 : 0;
         const p = (ang, rad) => `${(cx + Math.cos(ang) * rad).toFixed(2)},${(cy + Math.sin(ang) * rad).toFixed(2)}`;
         const d = inner
@@ -527,14 +550,14 @@ export function renderChartSvg(chart, data) {
           : `M${cx},${cy}L${p(a, r)}A${r},${r} 0 ${large} 1 ${p(a2, r)}Z`;
         parts.push(`<path d="${d}" fill="${color}" stroke="${chart.fill ?? '#fff'}" stroke-width="1.5"${tag(s0, i)}/>`);
       }
-      if (ex) parts.push('</g>');
+      if (!threePie && ex) parts.push('</g>');
       // 레이블: false = 없음(파일에 없던 원형), pct = 백분율, labels = 값, 정하지 않음 = 백분율
       if (outside && (s0.labels !== false || s0.catName)) {
         // 바깥 레이블: 항목 이름 + (백분율 · 값) 두 줄, 조각 색 글자
         const mid = (a + a2) / 2;
         const lr = r * 1.2 + 6;
         const lx = cx + ox + Math.cos(mid) * lr;
-        const ly = cy + oy + Math.sin(mid) * lr;
+        const ly = cy + oy + Math.sin(mid) * lr * projection.squash;
         const anchor = Math.cos(mid) > 0.25 ? 'start' : Math.cos(mid) < -0.25 ? 'end' : 'middle';
         const second = s0.labels === false ? '' : !s0.pct && wantLabels(s0) ? valueLabel(v, s0.numFmt) : `${Math.round(frac * 100)}%`;
         const fsz = s0.labelSize ? s0.labelSize * (4 / 3) : 11;
@@ -546,7 +569,7 @@ export function renderChartSvg(chart, data) {
         const mid = (a + a2) / 2;
         const lr = inner ? (r + inner) / 2 : r * 0.65;
         const txt = !s0.pct && wantLabels(s0) ? valueLabel(v, s0.numFmt) : `${Math.round(frac * 100)}%`;
-        parts.push(`<text x="${(cx + ox + Math.cos(mid) * lr).toFixed(1)}" y="${(cy + oy + Math.sin(mid) * lr + 4).toFixed(1)}" text-anchor="middle" font-size="11" fill="#fff" font-weight="700">${escSvg(txt)}</text>`);
+        parts.push(`<text x="${(cx + ox + Math.cos(mid) * lr).toFixed(1)}" y="${(cy + oy + Math.sin(mid) * lr * projection.squash + 4).toFixed(1)}" text-anchor="middle" font-size="11" fill="#fff" font-weight="700">${escSvg(txt)}</text>`);
       }
       a = a2;
     });
@@ -573,13 +596,16 @@ export function renderChartSvg(chart, data) {
         for (const s of bars) { const v = s.values[i]; if (isNum(v)) { if (v >= 0) pos += v; else neg += v; } }
         vals.push(pos, neg);
       }
-      if (pct) vals = [0, 1];
+      pushAll(vals, ss.filter((s) => !bars.includes(s)).flatMap((s) => s.values).filter(isNum));
+    }
+    if (pct && bars.length) {
+      vals = [bars.some((s) => s.values.some((v) => isNum(v) && v < 0)) ? -1 : 0, bars.some((s) => s.values.some((v) => isNum(v) && v > 0)) ? 1 : 0];
       pushAll(vals, ss.filter((s) => !bars.includes(s)).flatMap((s) => s.values).filter(isNum));
     }
     if (!vals.length) vals = [0, 1];
     const cfg = chart.axes?.[axis ? 'y2' : 'y'] ?? {};
-    let min = Math.min(0, ...vals);
-    let max = Math.max(0, ...vals);
+    let min = Math.min(0, minOf(vals));
+    let max = Math.max(0, maxOf(vals));
     if (ss.every((s) => s.type === 'line') && !stacked) {
       min = minOf(vals);
       max = maxOf(vals);
@@ -617,7 +643,14 @@ export function renderChartSvg(chart, data) {
       const lw = hasTable ? Math.max(labelW, Math.min(140, maxOf(series.map((s) => [...String(s.name)].length)) * CW * 1.25 + 24)) : labelW;
       return { x: plot.x + lw, y: plot.y + 4, w: plot.w - lw - 6 - label2W, h: plot.h - Math.round(FS.axis * 1.9) - (hasTable ? 0 : catLevels.length * LEVEL_H) };
     })();
+  const threeD = chart.threeD && ['column', 'bar', 'area', 'line'].includes(chart.type);
+  const depth = threeD ? chartDepth(chart, area.w, area.h) : { dx: 0, dy: 0 };
+  if (threeD) {
+    area.x -= Math.min(0, depth.dx); area.y -= Math.min(0, depth.dy);
+    area.w -= Math.abs(depth.dx); area.h -= Math.abs(depth.dy);
+  }
   if (area.w < 20 || area.h < 20) return finish();
+  if (threeD) parts.push(chartWalls3D(area, depth, chart.plotFill));
   // 값 축 거꾸로 (엑셀 축 서식 '값을 거꾸로')
   const rev = !!chart.axes?.y?.reverse;
   const posFor = (sc) => (v) => {
@@ -741,7 +774,11 @@ export function renderChartSvg(chart, data) {
           const a = Math.min(from, to);
           const len = Math.abs(to - from);
           const stroke = s.outline ? ` stroke="${s.outline}" stroke-width="1"` : '';
-          if (horizontal) parts.push(`<rect x="${a.toFixed(1)}" y="${start.toFixed(1)}" width="${len.toFixed(1)}" height="${Math.max(1, barW - 1).toFixed(1)}" fill="${pf}"${stroke}${sh}${tag(s, i)}/>`);
+          if (threeD) {
+            const x = horizontal ? a : start, y = horizontal ? start : a;
+            const w = horizontal ? len : Math.max(1, barW - 1), h = horizontal ? Math.max(1, barW - 1) : len;
+            parts.push(extrudedPolygon([[x, y], [x + w, y], [x + w, y + h], [x, y + h]], depth.dx, depth.dy, pf, stroke + sh + tag(s, i)));
+          } else if (horizontal) parts.push(`<rect x="${a.toFixed(1)}" y="${start.toFixed(1)}" width="${len.toFixed(1)}" height="${Math.max(1, barW - 1).toFixed(1)}" fill="${pf}"${stroke}${sh}${tag(s, i)}/>`);
           else parts.push(`<rect x="${start.toFixed(1)}" y="${a.toFixed(1)}" width="${Math.max(1, barW - 1).toFixed(1)}" height="${len.toFixed(1)}" fill="${pf}"${stroke}${sh}${tag(s, i)}/>`);
           if (wantLabels(s)) {
             // 레이블 위치: 바깥쪽 끝(기본) · 가운데 · 안쪽 끝 · 안쪽 축
@@ -787,8 +824,15 @@ export function renderChartSvg(chart, data) {
             const back = lower
               ? seg.slice().reverse().map((p) => `L${p[0].toFixed(1)},${vp(lower[p[3]]).toFixed(1)}`).join('')
               : `L${seg.at(-1)[0].toFixed(1)},${b0.toFixed(1)}L${seg[0][0].toFixed(1)},${b0.toFixed(1)}`;
-            parts.push(`<path d="${d}${back}Z" fill="${fillOf(s)}" fill-opacity="${stacked ? 0.9 : 0.75}"${tag(s)}/>`);
+            if (threeD) {
+              const lowerPoints = lower ? seg.slice().reverse().map((p) => [p[0], vp(lower[p[3]])]) : [[seg.at(-1)[0], b0], [seg[0][0], b0]];
+              parts.push(extrudedPolygon([...seg.map((p) => [p[0], p[1]]), ...lowerPoints], depth.dx, depth.dy, fillOf(s), tag(s)));
+            } else parts.push(`<path d="${d}${back}Z" fill="${fillOf(s)}" fill-opacity="${stacked ? 0.9 : 0.75}"${tag(s)}/>`);
           } else {
+            if (threeD) for (let j = 1; j < seg.length; j++) {
+              const a = seg[j - 1], b = seg[j];
+              parts.push(`<polygon data-3d="ribbon" points="${a[0]},${a[1]} ${b[0]},${b[1]} ${b[0] + depth.dx},${b[1] + depth.dy} ${a[0] + depth.dx},${a[1] + depth.dy}" fill="${s.color}" fill-opacity="0.85"${tag(s)}/>`);
+            }
             parts.push(`<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.lineWidth ?? 2.25}" stroke-linejoin="round" stroke-linecap="round"${dashAttr(s.dash, s.lineWidth ?? 2.25)}${shadowAttr(s)}${tag(s)}/>`);
             const mkName = s.marker ?? chart.marker;
             if (mkName !== false && mkName !== 'none') {
@@ -1177,7 +1221,7 @@ export const SPECIAL = {
       const cy = plot.y + plot.h / 2 + 4;
       const R = Math.max(10, Math.min(plot.w / 2 - 40, plot.h / 2 - 16));
       const vals = series.flatMap((s) => s.values).filter(isNum);
-      const sc = niceScale(Math.min(0, ...vals), Math.max(...vals, 1), 4);
+      const sc = niceScale(Math.min(0, minOf(vals)), Math.max(...vals, 1), 4);
       const ang = (i) => -Math.PI / 2 + (i / n) * Math.PI * 2;
       const at = (i, v) => { const r = ((v - sc.min) / (sc.max - sc.min)) * R; return [cx + Math.cos(ang(i)) * r, cy + Math.sin(ang(i)) * r]; };
       for (let t = sc.min; t <= sc.max + sc.step / 2; t += sc.step) {

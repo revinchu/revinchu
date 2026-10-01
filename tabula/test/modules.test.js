@@ -65,4 +65,12 @@ test('한 파일 배포본 빌드', async () => {
   assert.ok(html.includes('__mods["src/app.js"]'));
   assert.ok(!/^\s*(import|export)\s/m.test(html.slice(html.indexOf('const __mods'))));
   assert.ok(!html.includes('href="styles.css"'));
+  assert.ok(html.includes('globalThis.TABULA_STATIC = true;'));
+  execFileSync(process.execPath, [fileURLToPath(new URL('../build.mjs', import.meta.url)), out, '--cloud']);
+  const cloudHtml = readFileSync(join(out, 'index.html'), 'utf8');
+  const script = /<script type="module" src="(wixel-[a-f0-9]+\.js)"><\/script>/.exec(cloudHtml);
+  assert.ok(script, '클라우드 스크립트는 CSP를 위해 외부 파일로 배포');
+  assert.ok(!/<script(?![^>]*src=)[^>]*>/.test(cloudHtml), '인라인 스크립트 없음');
+  assert.ok(readFileSync(join(out, script[1]), 'utf8').includes('globalThis.TABULA_STATIC = false;'), '클라우드 배포본은 저장 API를 탐색해야 함');
+  assert.match(readFileSync(join(out, '_headers'), 'utf8'), /script-src 'self'; script-src-attr 'none'/);
 });

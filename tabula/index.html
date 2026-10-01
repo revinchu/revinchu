@@ -11,6 +11,7 @@
   <div id="app">
     <header class="titlebar">
       <div class="tb-left">
+        <button class="tb-brand" data-cmd="backstage" title="WIXEL 시작 화면">WIXEL</button>
         <div class="autosave">
           <span>자동 저장</span>
           <button id="autosaveToggle" class="toggle" role="switch" aria-checked="true" title="자동 저장 (브라우저에 보관)"><i></i></button>
@@ -22,7 +23,7 @@
       </div>
       <div class="tb-center">
         <div class="tb-title" id="docTitle" title="클릭하여 이름 바꾸기">통합 문서1 - WIXEL</div>
-        <span class="save-state" id="saveState"></span>
+        <button class="save-state" id="saveState" data-cmd="saveLocations" aria-label="저장 상태 및 저장 위치"></button>
       </div>
       <label class="tb-search">
         <span data-icon="search"></span>

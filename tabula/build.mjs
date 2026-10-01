@@ -2,13 +2,18 @@
 //   node build.mjs            → dist/index.html (CSS·JS 를 모두 넣은 단일 HTML) + dist/.nojekyll
 // 정적 호스팅(GitHub Pages 등)에 올리거나 파일을 바로 열어도 동작합니다.
 // 서버 저장소(/api/files)가 없으면 앱이 자동으로 브라우저 저장(localStorage)을 사용합니다.
-import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync, readdirSync, unlinkSync } from 'node:fs';
 import { dirname, join, resolve, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
+import { createHash } from 'node:crypto';
 
 const root = dirname(fileURLToPath(import.meta.url));
-const outDir = resolve(root, process.argv[2] ?? 'dist');
+const args = process.argv.slice(2);
+const cloud = args.includes('--cloud');
+const positional = args.filter((arg) => arg !== '--cloud');
+if (positional.length > 1 || positional.some((arg) => arg.startsWith('--'))) throw new Error('사용법: node build.mjs [출력 폴더] [--cloud]');
+const outDir = resolve(root, positional[0] ?? (cloud ? 'dist-cloudflare' : 'dist'));
 
 /** ES 모듈 하나를 함수 범위로 감싸고 import/export 를 모듈 표 참조로 바꿈 */
 function transform(file, source) {
@@ -53,12 +58,33 @@ if (!html.includes('<script type="module" src="src/app.js"></script>') || !html.
 }
 const css = readFileSync(join(root, 'styles.css'), 'utf8');
 const js = bundle('src/app.js').replace(/<\/script/gi, '<\\/script');
+const cloudJs = `globalThis.TABULA_STATIC = false;\n${js}`;
+const cloudName = `wixel-${createHash('sha256').update(cloudJs).digest('hex').slice(0, 16)}.js`;
 html = html
   .replace('<link rel="stylesheet" href="styles.css">', () => `<style>\n${css}\n</style>`)
-  .replace('<script type="module" src="src/app.js"></script>', () => `<script>globalThis.TABULA_STATIC = true;</script>\n<script type="module">\n${js}\n</script>`);
+  .replace('<script type="module" src="src/app.js"></script>', () => cloud ? `<script type="module" src="${cloudName}"></script>` : `<script>globalThis.TABULA_STATIC = true;</script>\n<script type="module">\n${js}\n</script>`);
 mkdirSync(outDir, { recursive: true });
 writeFileSync(join(outDir, 'index.html'), html);
 writeFileSync(join(outDir, '.nojekyll'), '');
+if (cloud) {
+  for (const old of readdirSync(outDir)) {
+    if (/^wixel-[a-f0-9]{16}\.js$/.test(old) && old !== cloudName) unlinkSync(join(outDir, old));
+  }
+  writeFileSync(join(outDir, cloudName), cloudJs);
+  writeFileSync(join(outDir, '_headers'), `/*
+  Content-Security-Policy: script-src 'self'; script-src-attr 'none'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: same-origin
+  X-Frame-Options: SAMEORIGIN
+/${cloudName}
+  Cache-Control: public, max-age=31536000, immutable
+/index.html
+  Cache-Control: no-cache
+/
+  Cache-Control: no-cache
+`);
+}
+
 // 따로 불러오는 큰 자료 (아이콘 모음 등): dist/assets 로 복사
 mkdirSync(join(outDir, 'assets'), { recursive: true });
 for (const f of ['iconlib.json.gz', '네이버 연관검색어 키워드 검색.xlsm']) {

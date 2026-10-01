@@ -26,7 +26,7 @@ try {
   const page = await browser.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  await page.addInitScript(() => { window.TABULA_STATIC = true; });
+  await page.addInitScript(() => { window.TABULA_STATIC = true; window.WIXEL_SKIP_START = true; });
   await page.goto((process.env.WIXEL_URL || 'http://localhost:5178/')); await page.evaluate(() => localStorage.clear()); await page.reload(); await page.waitForTimeout(300);
   await page.setInputFiles('#fileInput', file);
   await page.waitForTimeout(800);

@@ -1,0 +1,45 @@
+import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
+const base = process.env.WIXEL_WORKER_URL || 'http://127.0.0.1:8787';
+const key = randomBytes(32).toString('base64url'), other = randomBytes(32).toString('base64url');
+let checks = 0;
+async function call(path, { method = 'GET', vault = key, revision, data, headers = {} } = {}) {
+  const requestHeaders = { ...headers };
+  if (vault) requestHeaders['X-Wixel-Vault'] = vault;
+  if (revision !== undefined) requestHeaders['If-Match'] = '"' + revision + '"';
+  if (data !== undefined) requestHeaders['Content-Type'] = 'application/json';
+  return fetch(base + path, { method, headers: requestHeaders, body: data });
+}
+function status(response, expected) { assert.equal(response.status, expected); checks++; }
+const health = await call('/api/health', { vault: null }); status(health, 200); assert.equal((await health.json()).vault, true);
+status(await call('/api/files', { vault: null }), 401);
+status(await call('/api/files', { headers: { Origin: 'https://other.invalid' } }), 403);
+status(await call('/api/files/report', { method: 'PUT', data: '{}' }), 428);
+status(await call('/api/files/report', { method: 'PUT', revision: 0, data: '{"bad":' }), 400);
+const initial = await call('/api/files/report', { method: 'PUT', revision: 0, data: '{"version":1,"한글":"😀"}' });
+status(initial, 200); const saved = await initial.json();
+const got = await call('/api/files/report'); status(got, 200); assert.equal(got.headers.get('ETag'), '"' + saved.revision + '"'); assert.equal((await got.json()).version, 1);
+const privateList = await call('/api/files', { vault: other }); status(privateList, 200); assert.deepEqual(await privateList.json(), []);
+status(await call('/api/files/report', { vault: other }), 404);
+status(await call('/api/files/report', { method: 'PUT', revision: 0, data: '{}' }), 412);
+const largeData = JSON.stringify({ cells: '한글😀'.repeat(350000) });
+const large = await call('/api/files/large', { method: 'PUT', revision: 0, data: largeData }); status(large, 200);
+const largeRevision = (await large.json()).revision;
+const largeGet = await call('/api/files/large'); status(largeGet, 200); assert.equal(await largeGet.text(), largeData);
+const backup = await call('/api/backup'); status(backup, 200); assert.equal((await backup.json()).documents.length, 2);
+const published = await call('/api/publish', { method: 'POST', data: '{"shared":1}' }); status(published, 201);
+const publication = await published.json();
+let publicGet = await call('/api/published/' + publication.id, { vault: null }); status(publicGet, 200); assert.deepEqual(await publicGet.json(), { shared: 1 });
+status(await call('/api/published/' + publication.id, { method: 'DELETE', vault: other, revision: publication.revision }), 403);
+status(await call('/api/published/' + publication.id, { method: 'PUT', revision: 0, data: '{"shared":2}' }), 412);
+const updated = await call('/api/published/' + publication.id, { method: 'PUT', revision: publication.revision, data: '{"shared":2}' }); status(updated, 200);
+const updatedMeta = await updated.json();
+publicGet = await call('/api/published/' + publication.id, { vault: null }); status(publicGet, 200); assert.deepEqual(await publicGet.json(), { shared: 2 });
+status(await call('/api/published/' + publication.id, { method: 'DELETE', revision: updatedMeta.revision }), 200);
+status(await call('/api/published/' + publication.id, { vault: null }), 404);
+assert.deepEqual(await (await call('/api/publications')).json(), []);
+status(await call('/api/files/report', { method: 'DELETE', revision: saved.revision }), 200);
+status(await call('/api/files/large', { method: 'DELETE', revision: largeRevision }), 200);
+status(await call('/api/fetch?url=' + encodeURIComponent(base), { vault: null }), 403);
+status(await call('/api/naver/keywordstool?hintKeywords=test', { vault: null }), 401);
+console.log(JSON.stringify({ ok: true, httpChecks: checks, largeDocumentBytes: Buffer.byteLength(largeData), privateDocumentsRemoved: true, publicationRevoked: true }));

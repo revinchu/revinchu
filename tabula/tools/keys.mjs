@@ -5,7 +5,7 @@ try {
 const page = await browser.newPage({ viewport: { width: 1400, height: 820 } });
 const errs = []; page.on('pageerror', (e) => errs.push(e.message));
 // 서버 문서의 자동 복원·저장이 키보드 검증용 통합 문서와 섞이지 않도록 합니다.
-await page.addInitScript(() => { window.TABULA_STATIC = true; });
+await page.addInitScript(() => { window.TABULA_STATIC = true; window.WIXEL_SKIP_START = true; });
 await page.goto((process.env.WIXEL_URL || 'http://localhost:5178/')); await page.evaluate(() => localStorage.clear()); await page.reload(); await page.waitForFunction(() => window.tabula?.wb());
 const ev = (f, a) => page.evaluate(f, a);
 const reset = async () => {
