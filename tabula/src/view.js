@@ -9,7 +9,8 @@ import { colToName, MAX_ROWS, MAX_COLS } from './formula.js';
 import { formatValue, formatGeneral } from './format.js';
 import { DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT } from './workbook.js';
 import { renderChartSvg, chartModelData } from './chart.js';
-import { shapeSvg, LINE_KINDS } from './shapes.js';
+import { shapeSvg, LINE_KINDS, isShapeLine } from './shapes.js';
+import { shapePathHandles } from './shape-edit.js';
 import { validationAt } from './validation.js';
 import { prepareCond, condFormatAt, ICON_SVG, EMPTY_MATCH_TYPES, ruleRanges, inRule } from './condfmt.js';
 import { tableAt, tableCellStyle, tableFilterRange, styleByName } from './tables.js';
@@ -216,8 +217,10 @@ export function shapeTextHtml(o) {
   if (o.textShadow) tfx.push('2px 2px 3px rgba(0,0,0,.45)');
   if (o.textGlow) tfx.push(`0 0 4px ${esc(o.textGlow)}`, `0 0 8px ${esc(o.textGlow)}`);
   const textFx = `${o.textOutline ? `-webkit-text-stroke:${o.textOutline.w ?? 0.75}px ${esc(o.textOutline.color ?? '#000')};` : ''}${tfx.length ? `text-shadow:${tfx.join(',')};` : ''}${o.font ? `font-family:${fontStack(o.font)};` : ''}${o.italic ? 'font-style:italic;' : ''}${o.underline ? 'text-decoration:underline;' : ''}`;
-  const base = `justify-content:${vj};padding:${pad};text-align:${o.align ?? (o.kind === 'textbox' ? 'left' : 'center')};color:${esc(o.color ?? '#000')};font-size:${o.size ?? 11}pt;${o.bold ? 'font-weight:700;' : ''}${o.nowrap ? 'white-space:pre;' : ''}${textFx}`;
-  if (!o.paras) return `<div class="sh-text" style="${base}">${esc(o.text)}</div>`;
+  const rotation = [90, 270].includes(Number(o.textRot)) ? Number(o.textRot) : 0;
+  const rotateCss = rotation ? `inset:auto;left:50%;top:50%;width:${Math.max(1, o.h)}px;height:${Math.max(1, o.w)}px;transform:translate(-50%,-50%) rotate(${rotation}deg);` : '';
+  const base = `${rotateCss}justify-content:${vj};padding:${pad};text-align:${o.align ?? (o.kind === 'textbox' ? 'left' : 'center')};color:${esc(o.color ?? '#000')};font-size:${o.size ?? 11}pt;${o.bold ? 'font-weight:700;' : ''}${o.nowrap ? 'white-space:pre;' : ''}${textFx}`;
+  if (!o.paras) return `<div class="sh-text" data-text-fit="${o.textFit === 'shrink' ? 'shrink' : 'none'}" style="${base}"><div class="sh-text-content">${esc(o.text)}</div></div>`;
   const runCss = (r) => [r.b ? 'font-weight:700' : '', r.i ? 'font-style:italic' : '', r.u || r.s ? `text-decoration:${r.u ? 'underline ' : ''}${r.s ? 'line-through' : ''}` : '',
     r.sz ? `font-size:${r.sz}pt` : '', r.color ? `color:${esc(r.color)}` : '', r.font ? `font-family:${fontStack(r.font)}` : ''].filter(Boolean).join(';');
   const paras = o.paras.map((p) => {
@@ -226,7 +229,34 @@ export function shapeTextHtml(o) {
       : `<span style="font-size:${p.sz ?? o.size ?? 11}pt">&#8203;</span>`;
     return `<div${p.align ? ` style="text-align:${p.align}"` : ''}>${inner}</div>`;
   }).join('');
-  return `<div class="sh-text rich" style="${base}">${paras}</div>`;
+  return `<div class="sh-text rich" data-text-fit="${o.textFit === 'shrink' ? 'shrink' : 'none'}" style="${base}"><div class="sh-text-content">${paras}</div></div>`;
+}
+
+function shapePointHandlesHtml(shape, editing, zoom) {
+  const nodes = shapePathHandles(shape), w = Math.max(1, shape.w), h = Math.max(1, shape.h);
+  const xy = (x, y) => [(shape.flip ? 1 - x : x) * w, (shape.flipV ? 1 - y : y) * h];
+  const size = 8 / zoom, guides = [], points = [];
+  for (const point of nodes) {
+    const [x, y] = xy(point.x, point.y);
+    if (point.origin) { const [x1, y1] = xy(...point.origin); guides.push(`<line x1="${x1}" y1="${y1}" x2="${x}" y2="${y}"/>`); }
+    points.push(`<i class="shape-point ${point.anchor ? 'anchor' : 'control'}${editing.selected === point.id ? ' active' : ''}" data-point="${point.id}" role="button" aria-label="${point.anchor ? '편집점' : '곡선 조절점'}" style="left:${x - size / 2}px;top:${y - size / 2}px;width:${size}px;height:${size}px;"></i>`);
+  }
+  return `<svg class="shape-point-guides" width="${w}" height="${h}" style="overflow:visible;" stroke="#a22d28" stroke-width="${1 / zoom}" fill="none">${guides.join('')}</svg>${points.join('')}`;
+}
+export function fitShapeText(node, appearance) {
+  const box = node.querySelector('.sh-text[data-text-fit="shrink"]');
+  if (!box || box.dataset.fitDone === appearance) return;
+  const content = box.firstElementChild, css = getComputedStyle(box);
+  content.style.zoom = ''; // Refit cached DOM when sheet zoom or device scale changes.
+  const width = Math.max(1, box.clientWidth - parseFloat(css.paddingLeft) - parseFloat(css.paddingRight));
+  const height = Math.max(1, box.clientHeight - parseFloat(css.paddingTop) - parseFloat(css.paddingBottom));
+  const fits = () => content.scrollWidth * Number(content.style.zoom || 1) <= width + 0.5 && content.scrollHeight * Number(content.style.zoom || 1) <= height + 0.5;
+  let low = 0.05, high = 1;
+  if (!fits()) {
+    for (let i = 0; i < 12; i++) { const mid = (low + high) / 2; content.style.zoom = String(mid); if (fits()) low = mid; else high = mid; }
+    content.style.zoom = String(low);
+  }
+  box.dataset.fitDone = appearance;
 }
 
 /**
@@ -1058,7 +1088,7 @@ export class GridView {
     const { wb, si } = st;
     const sheet = wb.sheets[si];
     const images = sheet.images ?? [];
-    const shapes = sheet.shapes ?? [];
+    const shapes = st.shapePreview ? [...(sheet.shapes ?? []).filter((o) => o.id !== st.shapePreview.id), st.shapePreview] : sheet.shapes ?? [];
     const slicers = sheet.slicers ?? [];
     if (!sheet.charts.length && !images.length && !shapes.length && !slicers.length) { p.objects.replaceChildren(); p.objHtml = null; return; }
     if (!p.win) return;
@@ -1094,7 +1124,7 @@ export class GridView {
     const box = (o, cls, inner, extraCss = '') => {
       const h = Math.max(o.h, cls.includes('line') ? 1 : 0);
       const selected = st.chartSel === o.id || !!st.objMulti?.has(o.id);
-      html.push(`<div class="obj ${cls}${selected ? ' sel' : ''}${o.macro ? ' macro' : ''}" data-id="${esc(o.id)}" style="left:${o.x - p.ox}px;top:${o.y - p.oy}px;width:${o.w}px;height:${h}px;${extraCss}">${inner}${selected ? handles : ''}</div>`);
+      html.push(`<div class="obj ${cls}${selected ? ' sel' : ''}${o.macro ? ' macro' : ''}" data-id="${esc(o.id)}" style="left:${o.x - p.ox}px;top:${o.y - p.oy}px;width:${o.w}px;height:${h}px;${extraCss}">${inner}${selected ? (st.shapeEdit?.id === o.id ? shapePointHandlesHtml(o, st.shapeEdit, this.z) : handles) : ''}</div>`);
     };
     // 엑셀처럼 그림 → 도형 → 차트 순서가 아니라 저장된 순서(z)대로 겹침
     const all = [
@@ -1121,9 +1151,9 @@ export class GridView {
         box(o, 'pic', img, pictureTransform(o) ? `transform:${pictureTransform(o)}` : '');
       }
       else {
-        const isLine = LINE_KINDS.has(o.kind);
+        const isLine = isShapeLine(o);
         const inner = content(o, 'shape', () => shapeSvg(o) + ((o.text || o.paras) && !isLine ? shapeTextHtml(o) : ''));
-        box(o, `shape ${isLine ? 'line' : ''}`, inner, o.rot ? `transform:rotate(${o.rot}deg)` : '');
+        box(o, `shape ${isLine ? 'line' : ''}${o.draft ? ' drawing-preview' : ''}`, inner, o.rot ? `transform:rotate(${o.rot}deg)` : '');
       }
     }
     // 바뀐 개체만 다시 만듦 (슬라이서 · 차트가 많아도 클릭마다 전부 다시 그리지 않게)
@@ -1166,6 +1196,7 @@ export class GridView {
         if (list) { list.scrollTop = t; list.scrollLeft = l; }
       }
     }
+    for (const node of nodes) fitShapeText(node, appearance);
   }
 
   /** 시간 표시 막대 (엑셀 Timeline): 날짜 필드를 연 · 분기 · 월 · 일 칸으로, 끌어서 기간 선택 */

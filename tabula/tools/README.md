@@ -306,3 +306,11 @@ node tools/recovery-ux.mjs
 - `node tools/cell-style-presets.mjs`: 새 24개 스타일의 적용·숫자 형식 보존·Undo, 이름 중복 우선순위, 검색·키보드 이동과 좁은 화면의 갤러리를 검사한다.
 
 기존 `keytips.mjs`, `keytips-ime.mjs`, 셀 스타일 검사를 함께 유지한다. `WIXEL_URL`, `PLAYWRIGHT_MODULE`, `PLAYWRIGHT_BROWSERS_PATH`를 사용하며 새 격리 컨텍스트의 합성 문서만 사용하고 원격 쓰기를 차단한다. 소스와 배포용 번들에서 실행할 수 있다. IME 검사는 DOM 이벤트 회귀이며 실제 Windows IME 드라이버의 모든 동작을 보장하는 검사는 아니다. [23번 문서](../docs/codex/23_리본키팁과스타일.md)에서 Excel 호환경로와 WIXEL 보충 키의 범위 및 검증 결과를 확인한다.
+
+
+### 선·자유곡선과 도형 서식
+
+- `node tools/shape-drawing.mjs`: 갤러리·그리기 완료/취소·점 편집·Undo·보호·선 서식·닫힌 경로를 합성 문서에서 검사합니다.
+- `node tools/shape-text.mjs`: 긴 일반/리치 텍스트를 회전 0/90/270도, 줄바꿈 켬/끔, 배율 50/100/150%에서 검사합니다. 실제 글자 경계와 축소 맞춤, 패널 입력을 확인합니다.
+- 두 도구는 `WIXEL_URL`로 소스 또는 빌드 주소를 선택하고 격리 브라우저 문서에서 실행합니다. 공개 API 쓰기를 차단합니다.
+- 표준 XLSX 저장과 실제 Excel 왕복 결과·한계는 [도형 검증 문서](../docs/codex/24_자유곡선과도형서식.md)를 참고하세요.

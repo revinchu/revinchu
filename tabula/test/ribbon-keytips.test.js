@@ -13,7 +13,8 @@ const fixture = (items, launcher) => [{ id: 'home', label: '홈', groups: [{ lab
 test('실제 리본의 모든 탭·실행·메뉴·입력·런처에 고유한 대표 키가 있다', () => {
   const registry = createRibbonKeytipRegistry(tabs, legacy);
   const { controls, entries, audit } = registry;
-  assert.equal(controls.length, 297);
+  assert.equal(controls.length, 299);
+  for (const target of ['shapeEditPoints', 'shapeFormat']) assert.ok(entries.some(e => e.kind === 'command' && e.target === target && e.primary), target);
   assert.equal(controls.filter(c => c.chrome).length, 15);
   assert.equal(audit.total, audit.covered);
   assert.deepEqual(audit.missingControlIds, []);

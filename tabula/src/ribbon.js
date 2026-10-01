@@ -435,10 +435,11 @@ export const TABS = [
     id: 'objFormat', label: '셰이프 형식', context: 'object', groups: [
       group('도형 삽입', [
         large('shapesMenu', 'shapes', '도형', { menu: 'shapes' }),
-        col(medium('shapeChangeBtn', 'shapes', '도형 모양 변경', { menu: 'shapeChange' }), medium('insertTextbox', 'textbox', '텍스트 상자')),
+        col(medium('shapeChangeBtn', 'shapes', '도형 모양 변경', { menu: 'shapeChange' }), medium('shapeEditPoints', 'shapes', '점 편집'), medium('insertTextbox', 'textbox', '텍스트 상자')),
       ]),
       group('도형 스타일', [
         large('shapeStylesBtn', 'effects', '빠른 스타일', { menu: 'shapeStyles' }),
+        medium('shapeFormat', 'format', '도형 서식'),
         col(medium('shapeFillBtn', 'fill', '도형 채우기', { menu: 'shapeFill' }), medium('shapeOutlineBtn', 'border', '도형 윤곽선', { menu: 'shapeOutline' }), medium('shapeEffectsBtn', 'effects', '도형 효과', { menu: 'shapeEffects' })),
       ]),
       group('WordArt 스타일', [

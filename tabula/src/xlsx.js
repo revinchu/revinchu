@@ -22,7 +22,8 @@ import { toBase64, fromBase64 } from './vba.js';
 import { CellImage } from './fxcore.js';
 import { pictureEffects } from './picture.js';
 import { emfDataUrl } from './emf.js';
-import { GEOM, LINE_KINDS } from './shapes.js';
+import { GEOM, LINE_KINDS, shapeLineEnds } from './shapes.js';
+import { customGeometryXml, readCustomGeometry, storedCustomGeometryXml } from './shape-path.js';
 import { BLOCK_MIN_ROWS, ColBuilder, inBlock, blockValue } from './block.js';
 import { normalizeStyleName, DEFAULT_TABLE_STYLE, dataTop, dataBottom, canonicalRef, tableAt, columnNames, findTable } from './tables.js';
 import { pivotSourceData, resolvePivot, itemText, keyOf, sortKeys, EMPTY, headerNames, normalizeDef, computePivot, valueName, showAsPercent, excelCalcFormula, pivotFilterKey, DATE_OP_TYPES } from './pivot.js';
@@ -1375,8 +1376,24 @@ function readDrawing(files, path, sheet, ctx) {
       id: uid('sh'), kind: isText ? 'textbox' : prstKind(prst), ...round(box), z: ++z,
       fill, stroke, text,
     };
-    const shapeName = descendants(child(el, 'nvSpPr') ?? child(el, 'nvCxnSpPr'), 'cNvPr')[0]?.attrs.name;
+    const custom = child(spPr, 'custGeom');
+    if (custom) {
+      const path = readCustomGeometry(custom, box.w, box.h);
+      if (path) { shape.path = path; shape.kind = path.paths.some(p => p.commands.some(c => c[0] === 'C' || c[0] === 'Q')) ? 'curve' : path.paths.every(p => p.fill === false) ? 'scribble' : 'freeform'; }
+      else { shape.customGeometry = custom; ctx.warnings.add('일부 사용자 지정 도형의 경로 수식은 표시하지 못합니다. 원래 경로는 XLSX 저장 시 보존합니다.'); }
+    }
+    const nonVisual = child(el, 'nvSpPr') ?? child(el, 'nvCxnSpPr');
+    const shapeName = descendants(nonVisual, 'cNvPr')[0]?.attrs.name;
     if (shapeName) shape.name = shapeName;
+    const alt = descendants(nonVisual, 'cNvPr')[0]?.attrs.descr;
+    if (alt !== undefined) shape.alt = alt;
+    const lock = descendants(nonVisual, 'spLocks')[0] ?? descendants(nonVisual, 'cxnSpLocks')[0];
+    if (lock?.attrs.noChangeAspect !== undefined) shape.lockAspect = lock.attrs.noChangeAspect === '1' || lock.attrs.noChangeAspect === 'true';
+    const pattern = child(spPr, 'pattFill');
+    if (pattern) {
+      shape.pattern = { preset: pattern.attrs.prst ?? 'pct5', fg: dmlColor(child(pattern, 'fgClr'), ctx.theme) ?? '#000000', bg: dmlColor(child(pattern, 'bgClr'), ctx.theme) ?? '#ffffff' };
+      const alpha = dmlOpacity(child(pattern, 'fgClr')); if (alpha !== 1 && alpha === dmlOpacity(child(pattern, 'bgClr'))) shape.fillOpacity = alpha;
+    }
     const grad = child(spPr, 'gradFill');
     if (grad) {
       const stops = kids(child(grad, 'gsLst'), 'gs').map((gs) => [Number(gs.attrs.pos ?? 0) / 100000, dmlColor(gs, ctx.theme), dmlOpacity(gs)]).filter((s) => s[1]);
@@ -1409,11 +1426,16 @@ function readDrawing(files, path, sheet, ctx) {
     if (xf?.attrs.flipV === '1') shape.flipV = true;
     if (Number(xf?.attrs.rot)) shape.rot = Math.round(Number(xf.attrs.rot) / 60000);
     // 선 끝 화살표 · 대시
-    const endOn = (n) => { const t = child(ln, n)?.attrs.type; return t && t !== 'none'; };
-    if (LINE_KINDS.has(shape.kind) && (endOn('tailEnd') || endOn('headEnd'))) shape.arrow = endOn('tailEnd') && endOn('headEnd') ? 'both' : 'end';
-    if (LINE_KINDS.has(shape.kind) && !endOn('tailEnd') && endOn('headEnd')) { shape.flip = !shape.flip; shape.flipV = !shape.flipV; }
+    for (const name of ['headEnd', 'tailEnd']) { const end = child(ln, name); if (end) shape[name] = { type: end.attrs.type ?? 'none', w: end.attrs.w ?? 'med', len: end.attrs.len ?? 'med' }; }
+    const endOn = n => shape[n]?.type && shape[n].type !== 'none';
+    if (endOn('tailEnd') || endOn('headEnd')) shape.arrow = endOn('tailEnd') && endOn('headEnd') ? 'both' : endOn('headEnd') ? 'start' : 'end';
+    if (ln?.attrs.cap) shape.lineCap = ln.attrs.cap;
+    if (ln?.attrs.cmpd) shape.compound = ln.attrs.cmpd;
+    if (child(ln, 'round')) shape.lineJoin = 'round';
+    if (child(ln, 'bevel')) shape.lineJoin = 'bevel';
+    if (child(ln, 'miter')) shape.lineJoin = 'miter';
     const dashV = child(ln, 'prstDash')?.attrs.val;
-    if (dashV && dashV !== 'solid') shape.dash = DASH_FROM[dashV] ?? (/dot/i.test(dashV) && !/dash/i.test(dashV) ? 'dot' : 'dash');
+    if (dashV && dashV !== 'solid') shape.dash = dashV === 'sysDot' ? 'dot' : dashV;
     const lw = Number(ln?.attrs.w);
     if (lw && stroke) shape.strokeWidth = Math.round((lw / EMU) * 4) / 4;
     if (rPr?.attrs.sz) shape.size = Number(rPr.attrs.sz) / 100;
@@ -1440,6 +1462,9 @@ function readDrawing(files, path, sheet, ctx) {
     const pad = [ins('tIns', 4.8), ins('rIns', 9.6), ins('bIns', 4.8), ins('lIns', 9.6)].map((v) => Math.round(v * 10) / 10);
     if (pad.join() !== '4.8,9.6,4.8,9.6') shape.pad = pad;
     if (body?.attrs.wrap === 'none') shape.nowrap = true;
+    if (body?.attrs.rot !== undefined) shape.textRot = ((Number(body.attrs.rot) / 60000 % 360) + 360) % 360;
+    if (child(body, 'normAutofit')) shape.textFit = 'shrink';
+    else if (child(body, 'noAutofit')) shape.textFit = 'none';
     // 도형에 연결된 매크로 ([0]!이름) — WIXEL 은 VBA 를 실행하지 않고, 같은 이름의 내장 동작이 있으면 그것을 실행
     if (el.attrs.macro) shape.macro = el.attrs.macro.replace(/^\[\d+\]!/, '');
     out.shapes.push(shape);
@@ -1579,7 +1604,15 @@ function readDrawing(files, path, sheet, ctx) {
     const content = anchor.children.find((k) => ['sp', 'cxnSp', 'pic', 'grpSp', 'graphicFrame'].includes(k.name)) ?? child(child(alt, 'Choice'), 'graphicFrame');
     const before = [out.charts.length, out.images.length, out.shapes.length];
     if (content) walk(content, box, null);
-    if (editAs !== 'twoCell') [out.charts, out.images, out.shapes].forEach((list, k) => { for (let i = before[k]; i < list.length; i++) list[i].placement = editAs; });
+    const client = child(anchor, 'clientData')?.attrs;
+    [out.charts, out.images, out.shapes].forEach((list, k) => {
+      for (let i = before[k]; i < list.length; i++) {
+        if (editAs !== 'twoCell') list[i].placement = editAs;
+        // 두 속성의 기본값은 true. 생략된 경우 기존 모델의 기본값을 그대로 쓴다.
+        if (client?.fPrintsWithSheet !== undefined) list[i].noPrint = ['0', 'false'].includes(client.fPrintsWithSheet.trim());
+        if (client?.fLocksWithSheet !== undefined) list[i].locked = !['0', 'false'].includes(client.fLocksWithSheet.trim());
+      }
+    });
   }
   return out;
 }
@@ -2504,7 +2537,7 @@ function* readXlsxSteps(files) {
   pushAll(sheets, extSheets);
   if (unsupported) warnings.push(`지원하지 않는 함수가 쓰인 수식 ${unsupported}개는 원문과 파일에 저장된 계산 결과를 보존합니다. 관련 입력이 바뀌면 오래된 값을 오류로 표시하므로 [계산 상태 확인]을 확인하세요.`);
   if (files.__xlsb?.unsupported) warnings.push(`바이너리 통합 문서(.xlsb)에서 해석하지 못한 수식 ${files.__xlsb.unsupported}개는 저장된 계산 결과(값)로 가져왔습니다.`);
-  pushAll(warnings, ctx.warnings);
+  pushAll(warnings, [...ctx.warnings]);
   if (!sheets.length) throw new Error('가져올 시트가 없습니다');
   const data = { sheets, ...(date1904 ? { date1904: true } : {}) };
   if (ctx.pivotSnapshots) data.pivotSnapshots = ctx.pivotSnapshots;
@@ -3246,6 +3279,7 @@ function shapeEffectsXml(sh) {
 /** 도형 → <xdr:sp> / <xdr:cxnSp> */
 function shapeXml(sh, id, xfrm) {
   const name = esc(sh.name || `${sh.kind === 'textbox' ? 'TextBox' : '도형'} ${id - 1}`);
+  const description = sh.alt !== undefined ? ` descr="${esc(sh.alt)}"` : '';
   let fill = sh.fill ? `<a:solidFill>${shapeColorXml(sh.fill, sh.fillOpacity ?? 1)}</a:solidFill>` : '<a:noFill/>';
   if (sh.grad && sh.fill) {
     const tint = (n) => `#${hex6(sh.fill).match(/../g).map((x) => { const v = parseInt(x, 16); return Math.round(n > 0 ? v + (255 - v) * n : v * (1 + n)).toString(16).padStart(2, '0'); }).join('')}`;
@@ -3253,13 +3287,20 @@ function shapeXml(sh, id, xfrm) {
     const angle = ((Number(sh.grad.ang ?? 90) % 360) + 360) % 360;
     fill = `<a:gradFill rotWithShape="1"><a:gsLst>${stops.map(([pos, color, opacity]) => `<a:gs pos="${Math.round(Math.max(0, Math.min(1, pos)) * 100000)}">${shapeColorXml(color, (opacity ?? 1) * (sh.fillOpacity ?? 1))}</a:gs>`).join('')}</a:gsLst><a:lin ang="${Math.round(angle * 60000) % 21600000}" scaled="1"/></a:gradFill>`;
   }
-  const isLine = LINE_KINDS.has(sh.kind);
-  const dashXml = sh.dash ? DASH_XML[sh.dash] ?? DASH_XML.dash : '';
-  const ends = isLine && sh.arrow ? `${sh.arrow === 'both' ? '<a:headEnd type="triangle"/>' : ''}<a:tailEnd type="triangle"/>` : '';
-  const ln = sh.stroke ? `<a:ln w="${Math.round((sh.strokeWidth ?? 1) * EMU)}"><a:solidFill>${shapeColorXml(sh.stroke, sh.strokeOpacity ?? 1)}</a:solidFill>${dashXml}${ends}</a:ln>` : '<a:ln><a:noFill/></a:ln>';
+  if (sh.pattern && /^[A-Za-z][A-Za-z0-9]*$/.test(sh.pattern.preset)) fill = `<a:pattFill prst="${esc(sh.pattern.preset)}"><a:fgClr>${shapeColorXml(sh.pattern.fg ?? '#000000', sh.fillOpacity ?? 1)}</a:fgClr><a:bgClr>${shapeColorXml(sh.pattern.bg ?? '#ffffff', sh.fillOpacity ?? 1)}</a:bgClr></a:pattFill>`;
+  const isLine = LINE_KINDS.has(sh.kind) && !sh.path && !sh.customGeometry;
+  const dashes = new Set(['dot', 'dash', 'lgDash', 'dashDot', 'lgDashDot', 'lgDashDotDot', 'sysDash', 'sysDot', 'sysDashDot', 'sysDashDotDot']);
+  const dashName = sh.dash === 'longDash' ? 'lgDash' : sh.dash === 'dot' ? 'sysDot' : sh.dash;
+  const dashXml = dashes.has(dashName) ? `<a:prstDash val="${dashName}"/>` : '';
+  const ends = Object.entries(shapeLineEnds(sh)).filter(([, end]) => end.type !== 'none').map(([name, end]) => `<a:${name} type="${end.type}" w="${end.w}" len="${end.len}"/>`).join('');
+  const cap = ['flat', 'rnd', 'sq'].includes(sh.lineCap) ? ` cap="${sh.lineCap}"` : '';
+  const cmpd = ['sng', 'dbl', 'thickThin', 'thinThick', 'tri'].includes(sh.compound) ? ` cmpd="${sh.compound}"` : '';
+  const join = ['round', 'bevel', 'miter'].includes(sh.lineJoin) ? `<a:${sh.lineJoin}/>` : '';
+  const ln = sh.stroke ? `<a:ln w="${Math.round((sh.strokeWidth ?? 1) * EMU)}"${cap}${cmpd}><a:solidFill>${shapeColorXml(sh.stroke, sh.strokeOpacity ?? 1)}</a:solidFill>${dashXml}${join}${ends}</a:ln>` : '<a:ln><a:noFill/></a:ln>';
   const effects = shapeEffectsXml(sh);
   if (isLine) {
-    return `<xdr:cxnSp macro=""><xdr:nvCxnSpPr><xdr:cNvPr id="${id}" name="${name}"/><xdr:cNvCxnSpPr/></xdr:nvCxnSpPr><xdr:spPr>${xfrm(sh)}<a:prstGeom prst="${sh.kind === 'line' ? 'straightConnector1' : sh.kind}"><a:avLst/></a:prstGeom>${ln}${effects}</xdr:spPr></xdr:cxnSp>`;
+    const locks = sh.lockAspect !== undefined ? `<a:cxnSpLocks noChangeAspect="${sh.lockAspect ? 1 : 0}"/>` : '';
+    return `<xdr:cxnSp macro=""><xdr:nvCxnSpPr><xdr:cNvPr id="${id}" name="${name}"${description}/><xdr:cNvCxnSpPr>${locks}</xdr:cNvCxnSpPr></xdr:nvCxnSpPr><xdr:spPr>${xfrm(sh)}<a:prstGeom prst="${sh.kind === 'line' ? 'straightConnector1' : sh.kind}"><a:avLst/></a:prstGeom>${ln}${effects}</xdr:spPr></xdr:cxnSp>`;
   }
   const algnOf = (a) => (a === 'center' ? 'ctr' : a === 'right' ? 'r' : a === 'justify' ? 'just' : 'l');
   const algn = algnOf(sh.align);
@@ -3278,7 +3319,11 @@ function shapeXml(sh, id, xfrm) {
     : String(sh.text ?? '').split('\n').map((line) => `<a:p><a:pPr algn="${algn}"/>${line ? `<a:r>${rPr}<a:t>${esc(line)}</a:t></a:r>` : `<a:endParaRPr ${textPr}>${textChildren}</a:endParaRPr>`}</a:p>`).join('');
   const anchor = sh.valign ? { top: 't', middle: 'ctr', bottom: 'b' }[sh.valign] : sh.kind === 'textbox' ? 't' : 'ctr';
   const insets = sh.pad ? ['tIns', 'rIns', 'bIns', 'lIns'].map((k, i) => ` ${k}="${Math.round((sh.pad[i] ?? (i % 2 ? 9.6 : 4.8)) * EMU)}"`).join('') : '';
-  return `<xdr:sp macro="${sh.macro ? `[0]!${esc(sh.macro)}` : ''}" textlink=""><xdr:nvSpPr><xdr:cNvPr id="${id}" name="${name}"/><xdr:cNvSpPr${sh.kind === 'textbox' ? ' txBox="1"' : ''}/></xdr:nvSpPr><xdr:spPr>${xfrm(sh)}<a:prstGeom prst="${prstOf(sh.kind)}"><a:avLst/></a:prstGeom>${fill}${ln}${effects}</xdr:spPr><xdr:txBody><a:bodyPr vertOverflow="clip" horzOverflow="clip" wrap="${sh.nowrap ? 'none' : 'square'}" rtlCol="0" anchor="${anchor}"${insets}/><a:lstStyle/>${paras}</xdr:txBody></xdr:sp>`;
+  const geometry = sh.path ? customGeometryXml(sh.path) : sh.customGeometry ? storedCustomGeometryXml(sh.customGeometry) : `<a:prstGeom prst="${prstOf(sh.kind)}"><a:avLst/></a:prstGeom>`;
+  const locks = sh.lockAspect !== undefined ? `<a:spLocks noChangeAspect="${sh.lockAspect ? 1 : 0}"/>` : '';
+  const textRot = [90, 270].includes(sh.textRot) ? ` rot="${(sh.textRot === 270 ? -90 : 90) * 60000}"` : '';
+  const autofit = sh.textFit === 'shrink' ? '<a:normAutofit/>' : sh.textFit === 'none' ? '<a:noAutofit/>' : '';
+  return `<xdr:sp macro="${sh.macro ? `[0]!${esc(sh.macro)}` : ''}" textlink=""><xdr:nvSpPr><xdr:cNvPr id="${id}" name="${name}"${description}/><xdr:cNvSpPr${sh.kind === 'textbox' ? ' txBox="1"' : ''}>${locks}</xdr:cNvSpPr></xdr:nvSpPr><xdr:spPr>${xfrm(sh)}${geometry}${fill}${ln}${effects}</xdr:spPr><xdr:txBody><a:bodyPr vertOverflow="clip" horzOverflow="clip" wrap="${sh.nowrap ? 'none' : 'square'}" rtlCol="0" anchor="${anchor}"${insets}${textRot}>${autofit}</a:bodyPr><a:lstStyle/>${paras}</xdr:txBody></xdr:sp>`;
 }
 
 /** 목록 원본: 범위 참조가 아니면 "a,b" 로 감싸기 */
@@ -4186,7 +4231,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
         const r = rowAxis.indexAt(Math.max(0, y));
         return `<xdr:col>${c}</xdr:col><xdr:colOff>${Math.max(0, Math.round((x - colAxis.pos(c)) * EMU))}</xdr:colOff><xdr:row>${r}</xdr:row><xdr:rowOff>${Math.max(0, Math.round((y - rowAxis.pos(r)) * EMU))}</xdr:rowOff>`;
       };
-      const anchor = (o, body) => `<xdr:twoCellAnchor editAs="${o.placement ?? 'twoCell'}"><xdr:from>${anchorAt(o.x, o.y)}</xdr:from><xdr:to>${anchorAt(o.x + o.w, o.y + o.h)}</xdr:to>${body}<xdr:clientData/></xdr:twoCellAnchor>`;
+      const anchor = (o, body) => `<xdr:twoCellAnchor editAs="${o.placement ?? 'twoCell'}"><xdr:from>${anchorAt(o.x, o.y)}</xdr:from><xdr:to>${anchorAt(o.x + o.w, o.y + o.h)}</xdr:to>${body}<xdr:clientData${o.noPrint !== undefined ? ` fPrintsWithSheet="${o.noPrint ? 0 : 1}"` : ''}${o.locked !== undefined ? ` fLocksWithSheet="${o.locked === false ? 0 : 1}"` : ''}/></xdr:twoCellAnchor>`;
       const xfrm = (o) => `<a:xfrm${o.rot ? ` rot="${Math.round(o.rot * 60000)}"` : ''}${o.flip ? ' flipH="1"' : ''}${o.flipV ? ' flipV="1"' : ''}><a:off x="${Math.round(o.x * EMU)}" y="${Math.round(o.y * EMU)}"/><a:ext cx="${Math.round(o.w * EMU)}" cy="${Math.round(o.h * EMU)}"/></a:xfrm>`;
       let objId = 1;
       const parts = [];

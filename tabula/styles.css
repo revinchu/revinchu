@@ -1596,3 +1596,13 @@ body.keytips #ribbon label[data-ribbon-command]:has(input[type="checkbox"]) { pa
 @media print { .context-mini-toolbar { display:none!important; } }
 
 .color-palette-menu .swatch:focus-visible, .pattern-swatch:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; position: relative; z-index: 1; }
+
+/* 편집 중 경로는 저장 모델과 분리하며 점/제어선은 선택 개체에만 표시한다. */
+.obj.drawing-preview { pointer-events: none; }
+.shape-point-guides { position: absolute; inset: 0; pointer-events: none; z-index: 6; }
+.shape-point { position: absolute; background: #1c1c1c; border: 1px solid #fff; box-sizing: border-box; cursor: crosshair; z-index: 8; }
+.shape-point.control { background: #fff; border-color: #a22d28; }
+.shape-point.active { outline: 2px solid #d13e37; }
+.sh-text-content { flex-shrink: 0; min-width: 0; overflow-wrap: anywhere; }
+.sh-text.rich .sh-text-content > div { min-height: 1.2em; }
+.shape-btn:focus-visible { outline: 2px solid var(--green); outline-offset: -2px; }

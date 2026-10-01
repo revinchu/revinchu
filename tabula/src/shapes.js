@@ -1,4 +1,5 @@
 // 그림 개체(차트·그림·도형) 공통 도우미와 도형 SVG (DOM 없음)
+import { validShapePath, shapePathParts } from './shape-path.js';
 
 export const OBJECT_PROPS = ['charts', 'images', 'shapes', 'slicers'];
 export const OBJECT_LABEL = { charts: '차트', images: '그림', shapes: '도형', slicers: '슬라이서' };
@@ -6,12 +7,17 @@ export const OBJECT_LABEL = { charts: '차트', images: '그림', shapes: '도�
 // 선 갤러리 항목 → 선 종류 + 화살표
 const LINE_PRESET = {
   line: ['line'], lineArrow: ['line', 'end'], lineDblArrow: ['line', 'both'],
-  bentConnector3: ['bentConnector3'], bentArrow3: ['bentConnector3', 'end'], curvedConnector3: ['curvedConnector3'], curvedArrow3: ['curvedConnector3', 'end'],
+  bentConnector3: ['bentConnector3'], bentArrow3: ['bentConnector3', 'end'], bentDblArrow3: ['bentConnector3', 'both'], curvedConnector3: ['curvedConnector3'], curvedArrow3: ['curvedConnector3', 'end'], curvedDblArrow3: ['curvedConnector3', 'both'],
 };
 
 /** 새 도형 기본값 (kind: 갤러리 id = 엑셀 도형 이름) */
 export function newShape(kind, box) {
   const id = `sh${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  if (['scribble', 'freeform', 'curve'].includes(kind)) {
+    const commands = kind === 'curve' ? [['M', 0, 1], ['C', .2, -.2, .8, 1.2, 1, 0]] : kind === 'freeform' ? [['M', 0, 1], ['L', .2, 0], ['L', 1, .4], ['L', .7, 1], ['Z']] : [['M', 0, .6], ['L', .2, .1], ['L', .3, .9], ['L', .6, .3], ['L', 1, .6]];
+    const path = box.path ?? { paths: [{ commands, fill: kind === 'freeform', stroke: true }] };
+    return { id, kind, ...box, path, fill: path.paths.some(p => p.fill !== false) ? '#4472c4' : null, stroke: '#4472c4', strokeWidth: 1.5, text: '', color: '#ffffff', size: 11, align: 'center' };
+  }
   if (kind === 'textbox') return { id, kind, ...box, fill: '#ffffff', stroke: '#000000', text: '', color: '#000000', size: 11, align: 'left' };
   if (LINE_PRESET[kind]) {
     const [k, arrow] = LINE_PRESET[kind];
@@ -33,6 +39,14 @@ export function findObject(sheet, id) {
 }
 
 const attr = (s) => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+export function isShapeLine(sh) { return validShapePath(sh.path) ? sh.path.paths.every(p => p.fill === false) : LINE_KINDS.has(sh.kind); }
+export function shapeLineEnds(sh) {
+  const types = new Set(['none', 'triangle', 'stealth', 'diamond', 'oval', 'arrow']);
+  const clean = (value, fallback) => ({ type: types.has(value?.type) ? value.type : fallback, w: ['sm', 'med', 'lg'].includes(value?.w) ? value.w : 'med', len: ['sm', 'med', 'lg'].includes(value?.len) ? value.len : 'med' });
+  return { headEnd: clean(sh.headEnd, ['start', 'both'].includes(sh.arrow) ? 'triangle' : 'none'), tailEnd: clean(sh.tailEnd, ['end', 'both'].includes(sh.arrow) ? 'triangle' : 'none') };
+}
+export const SHAPE_PATTERN_PRESETS = ['pct5', 'pct25', 'pct50', 'horz', 'vert', 'cross', 'dnDiag', 'upDiag', 'diagCross'];
+const SHAPE_DASHES = { dot: [1, 2], dash: [4, 3], dashDot: [4, 2, 1, 2], lgDash: [8, 3], longDash: [8, 3], lgDashDot: [8, 3, 1, 3], lgDashDotDot: [8, 3, 1, 3, 1, 3], sysDash: [3, 1], sysDot: [1, 1], sysDashDot: [3, 1, 1, 1], sysDashDotDot: [3, 1, 1, 1, 1, 1] };
 
 function shadeHex(hex, t) {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex ?? '');
@@ -47,22 +61,30 @@ export function shapeSvg(sh) {
   const w = Math.max(1, sh.w);
   const h = Math.max(1, sh.h);
   const sw = sh.stroke ? (sh.strokeWidth ?? 1) : 0;
-  const dash = sh.dash ? ` stroke-dasharray="${sh.dash === 'dot' ? `${sw},${sw * 2}` : `${sw * 4},${sw * 3}`}"` : '';
+  const dash = sh.dash ? ` stroke-dasharray="${(SHAPE_DASHES[sh.dash] ?? SHAPE_DASHES.dash).map(n => n * sw).join(',')}"` : '';
   let body;
-  if (LINE_KINDS.has(sh.kind)) {
-    const col = attr(sh.stroke ?? '#000000');
-    const mk = `ar${col.replace('#', '')}`;
-    const defs = sh.arrow ? `<defs><marker id="${mk}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 Z" fill="${col}"/></marker></defs>` : '';
-    body = `${defs}<path d="${linePath(sh.kind, w, h, sh.flip, sh.flipV)}" fill="none" stroke="${col}" stroke-width="${Math.max(0.1, sw)}"${sh.strokeOpacity !== undefined ? ` stroke-opacity="${sh.strokeOpacity}"` : ''}${dash}${sh.arrow ? ` marker-end="url(#${mk})"` : ''}${sh.arrow === 'both' ? ` marker-start="url(#${mk})"` : ''}/>`;
-  } else {
+  {
     const geom = GEOM[sh.kind] ?? GEOM.rect;
     // 선 굵기만큼 안쪽으로
-    const i = sw / 2;
-    const parts = geom(Math.max(0, w - sw), Math.max(0, h - sw));
-    const stroke = sh.stroke ? `stroke="${attr(sh.stroke)}" stroke-width="${sw}" stroke-linejoin="round"${dash}${sh.strokeOpacity !== undefined ? ` stroke-opacity="${sh.strokeOpacity}"` : ''}` : 'stroke="none"';
+    const custom = validShapePath(sh.path), presetLine = LINE_KINDS.has(sh.kind), i = custom || presetLine ? 0 : sw / 2;
+    const gw = Math.max(0, (presetLine ? sh.w : w) - i * 2), gh = Math.max(0, (presetLine ? sh.h : h) - i * 2);
+    const parts = custom ? shapePathParts(sh.path, gw, gh) : LINE_KINDS.has(sh.kind) ? [{ d: linePath(sh.kind, gw, gh), line: true }] : geom(gw, gh);
+    const cap = { flat: 'butt', rnd: 'round', sq: 'square' }[sh.lineCap] ?? 'butt';
+    const join = ['round', 'bevel', 'miter'].includes(sh.lineJoin) ? sh.lineJoin : 'round';
+    const stroke = sh.stroke ? `stroke="${attr(sh.stroke)}" stroke-width="${sw}" stroke-linejoin="${join}" stroke-linecap="${cap}"${dash}${sh.strokeOpacity !== undefined ? ` stroke-opacity="${attr(sh.strokeOpacity)}"` : ''}` : 'stroke="none"';
     // 채우기: 단색 · 그라데이션 · 투명도, 효과: 그림자 · 네온 · 부드러운 가장자리
     const uid = `s${(sh.id ?? '').replace(/[^\w]/g, '')}${Math.round(w)}`;
     const defs = [];
+    let markerAttrs = '';
+    for (const [end, style] of Object.entries(shapeLineEnds(sh))) {
+      if (style.type === 'none' || !sh.stroke) continue;
+      const id = `m${uid}${end}`, color = attr(sh.stroke);
+      const d = { triangle: 'M0,0 L10,5 L0,10 Z', stealth: 'M0,0 L10,5 L0,10 L3,5 Z', diamond: 'M0,5 L5,0 L10,5 L5,10 Z', arrow: 'M0,0 L10,5 L0,10' }[style.type];
+      const opacity = attr(sh.strokeOpacity ?? 1);
+      const figure = style.type === 'oval' ? `<ellipse cx="5" cy="5" rx="5" ry="5" fill="${color}" fill-opacity="${opacity}"/>` : `<path d="${d}" fill="${style.type === 'arrow' ? 'none' : color}" fill-opacity="${opacity}" stroke="${color}" stroke-opacity="${opacity}" stroke-width="${style.type === 'arrow' ? 1.5 : 0}"/>`;
+      defs.push(`<marker id="${id}" viewBox="0 0 10 10" refX="${style.type === 'diamond' || style.type === 'oval' ? 5 : 9}" refY="5" markerWidth="${{ sm: 3, med: 5, lg: 7 }[style.len]}" markerHeight="${{ sm: 3, med: 5, lg: 7 }[style.w]}" orient="auto-start-reverse" overflow="visible">${figure}</marker>`);
+      markerAttrs += ` marker-${end === 'headEnd' ? 'start' : 'end'}="url(#${id})"`;
+    }
     let gradRef = null;
     if (sh.grad && sh.fill) {
       const a = ((sh.grad.ang ?? 90) * Math.PI) / 180;
@@ -71,6 +93,14 @@ export function shapeSvg(sh) {
       const stops = sh.grad.stops ?? [[0, shadeHex(sh.fill, 0.35)], [1, shadeHex(sh.fill, -0.15)]];
       defs.push(`<linearGradient id="g${uid}" x1="${0.5 - gx}" y1="${0.5 - gy}" x2="${0.5 + gx}" y2="${0.5 + gy}">${stops.map(([o, c, opacity]) => `<stop offset="${o}" stop-color="${attr(c)}"${opacity !== undefined ? ` stop-opacity="${opacity}"` : ''} />`).join('')}</linearGradient>`);
       gradRef = `url(#g${uid})`;
+    }
+    if (sh.pattern && SHAPE_PATTERN_PRESETS.includes(sh.pattern.preset)) {
+      const { preset } = sh.pattern, fg = attr(sh.pattern.fg ?? '#000000'), bg = attr(sh.pattern.bg ?? '#ffffff');
+      const step = preset === 'pct5' ? 8 : preset === 'pct25' ? 4 : 6;
+      const d = { horz: 'M0,3 H6', vert: 'M3,0 V6', cross: 'M0,3 H6 M3,0 V6', dnDiag: 'M-1,-1 L7,7', upDiag: 'M-1,7 L7,-1', diagCross: 'M-1,-1 L7,7 M-1,7 L7,-1' }[preset];
+      const figure = d ? `<path d="${d}" stroke="${fg}" stroke-width="1"/>` : preset === 'pct50' ? `<path d="M0,0 H3 V3 H0 Z M3,3 H6 V6 H3 Z" fill="${fg}"/>` : preset === 'pct25' ? `<rect x="1" y="1" width="2" height="2" fill="${fg}"/>` : `<circle cx="${step / 2}" cy="${step / 2}" r="1" fill="${fg}"/>`;
+      defs.push(`<pattern id="p${uid}" patternUnits="userSpaceOnUse" width="${step}" height="${step}"><rect width="${step}" height="${step}" fill="${bg}"/>${figure}</pattern>`);
+      gradRef = `url(#p${uid})`;
     }
     const fx = [];
     if (sh.shadow) {
@@ -82,18 +112,29 @@ export function shapeSvg(sh) {
     let filt = '';
     if (fx.length) {
       // 효과마다 따로 필터 (겹치면 원본 그래픽 기준이 달라지므로 그림자 → 네온 → 부드러운 가장자리 순서로 중첩)
-      const ids = fx.map((f, k) => { defs.push(`<filter id="f${uid}${k}" x="-40%" y="-40%" width="180%" height="180%">${f}</filter>`); return `f${uid}${k}`; });
+      const margin = Math.max(w * .4, h * .4, sw * 4, (sh.glow?.size ?? 0) * 3, (sh.soft ?? 0) * 3, Math.abs(sh.shadow?.dx ?? 0) + Math.abs(sh.shadow?.dy ?? 0) + (sh.shadow?.blur ?? 0) * 3, 12);
+      const ids = fx.map((f, k) => { defs.push(`<filter id="f${uid}${k}" filterUnits="userSpaceOnUse" x="${-margin}" y="${-margin}" width="${w + margin * 2}" height="${h + margin * 2}">${f}</filter>`); return `f${uid}${k}`; });
       filt = ids.reduce((acc, id) => `<g filter="url(#${id})">${acc}</g>`, '§');
     }
     const fillOf = (p) => {
-      if (p.line || !sh.fill) return 'none';
+      if (p.line || (!sh.fill && !gradRef)) return 'none';
       if (p.shade === 'dark') return attr(shadeHex(sh.fill, -0.2));
       if (p.shade === 'light') return attr(shadeHex(sh.fill, 0.2));
       return gradRef ?? attr(sh.fill);
     };
     const op = sh.fillOpacity !== undefined ? ` fill-opacity="${sh.fillOpacity}"` : '';
-    const paths = parts.map((p) => `<path d="${p.d}" fill="${fillOf(p)}"${op}${p.evenodd ? ' fill-rule="evenodd"' : ''} ${p.line && !sh.stroke ? `stroke="${attr(sh.fill ?? '#000')}" stroke-width="1.5"` : stroke}/>`).join('');
-    const flipT = sh.flip || sh.flipV ? ` translate(${sh.flip ? w - sw : 0},${sh.flipV ? h - sw : 0}) scale(${sh.flip ? -1 : 1},${sh.flipV ? -1 : 1})` : '';
+    const paths = parts.map((p, k) => {
+      const fillAttrs = `fill="${fillOf(p)}"${op}${p.evenodd ? ' fill-rule="evenodd"' : ''}`;
+      const outline = p.noStroke ? 'stroke="none"' : p.line && !sh.stroke && !validShapePath(sh.path) && !LINE_KINDS.has(sh.kind) ? `stroke="${attr(sh.fill ?? '#000')}" stroke-width="1.5"` : stroke;
+      if (!p.noStroke && sh.stroke && ['dbl', 'tri'].includes(sh.compound)) {
+        const id = `cm${uid}${k}`;
+        const band = (color, width) => `<path d="${p.d}" fill="none" stroke="${color}" stroke-width="${width}" stroke-linejoin="${join}" stroke-linecap="${cap}"/>`;
+        defs.push(`<mask id="${id}" maskUnits="userSpaceOnUse" x="${-sw * 2}" y="${-sw * 2}" width="${Math.max(1, gw + sw * 4)}" height="${Math.max(1, gh + sw * 4)}">${band('white', sw)}${band('black', sw * (sh.compound === 'tri' ? .6 : 1 / 3))}${sh.compound === 'tri' ? band('white', sw * .2) : ''}</mask>`);
+        return `<path d="${p.d}" ${fillAttrs} stroke="none"/><path d="${p.d}" fill="none" ${outline} mask="url(#${id})"/><path d="${p.d}" fill="none" stroke="${attr(sh.stroke)}" stroke-width="${sw}" stroke-opacity="0"${markerAttrs}/>`;
+      }
+      return `<path d="${p.d}" ${fillAttrs} ${outline}${p.noStroke ? '' : markerAttrs}/>`;
+    }).join('');
+    const flipT = sh.flip || sh.flipV ? ` translate(${sh.flip ? gw : 0},${sh.flipV ? gh : 0}) scale(${sh.flip ? -1 : 1},${sh.flipV ? -1 : 1})` : '';
     const g = `<g transform="translate(${i},${i})${flipT}">${paths}</g>`;
     body = `${defs.length ? `<defs>${defs.join('')}</defs>` : ''}${filt ? filt.replace('§', g) : g}`;
   }
@@ -323,7 +364,7 @@ export function linePath(kind, w, h, flip, flipV) {
 
 /** 도형 갤러리 (엑셀 [삽입] → [도형] 분류) */
 export const SHAPE_GROUPS = [
-  ['선', [['line', '선'], ['lineArrow', '선 화살표'], ['lineDblArrow', '양쪽 화살표 선'], ['bentConnector3', '꺾인 연결선'], ['bentArrow3', '꺾인 화살표 연결선'], ['curvedConnector3', '곡선 연결선'], ['curvedArrow3', '곡선 화살표 연결선']]],
+  ['선', [['line', '선'], ['lineArrow', '선 화살표'], ['lineDblArrow', '양쪽 화살표 선'], ['bentConnector3', '꺾인 연결선'], ['bentArrow3', '꺾인 화살표 연결선'], ['bentDblArrow3', '양쪽 화살표 꺾인 연결선'], ['curvedConnector3', '곡선 연결선'], ['curvedArrow3', '곡선 화살표 연결선'], ['curvedDblArrow3', '양쪽 화살표 곡선 연결선'], ['curve', '곡선'], ['freeform', '자유형: 도형'], ['scribble', '자유형: 자유곡선']]],
   ['사각형', [['rect', '사각형'], ['roundRect', '둥근 사각형'], ['snip1Rect', '한쪽 모서리가 잘린 사각형'], ['snip2SameRect', '위쪽 모서리가 잘린 사각형'], ['snip2DiagRect', '대각선 방향 모서리가 잘린 사각형'], ['snipRoundRect', '한쪽 모서리는 잘리고 다른 쪽은 둥근 사각형'], ['round1Rect', '한쪽 모서리가 둥근 사각형'], ['round2SameRect', '위쪽 모서리가 둥근 사각형'], ['round2DiagRect', '대각선 방향 모서리가 둥근 사각형']]],
   ['기본 도형', [['textbox', '텍스트 상자'], ['ellipse', '타원'], ['triangle', '이등변 삼각형'], ['rtTriangle', '직각 삼각형'], ['parallelogram', '평행 사변형'], ['trapezoid', '사다리꼴'], ['diamond', '다이아몬드'], ['pentagon', '오각형'], ['hexagon', '육각형'], ['heptagon', '칠각형'], ['octagon', '팔각형'], ['decagon', '십각형'], ['dodecagon', '십이각형'], ['pie', '원형'], ['chord', '현'], ['teardrop', '눈물 방울'], ['frame', '액자'], ['halfFrame', 'L 도형 액자'], ['corner', 'L 도형'], ['diagStripe', '대각선 줄무늬'], ['plus', '십자형'], ['plaque', '배지'], ['can', '원통형'], ['cube', '정육면체'], ['bevel', '빗면'], ['donut', '도넛'], ['noSmoking', '금지'], ['blockArc', '막힌 원호'], ['foldedCorner', '모서리가 접힌 도형'], ['smileyFace', '웃는 얼굴'], ['heart', '하트'], ['lightningBolt', '번개'], ['sun', '해'], ['moon', '달'], ['cloud', '구름'], ['arc', '원호'], ['bracketPair', '양쪽 대괄호'], ['bracePair', '양쪽 중괄호'], ['leftBracket', '왼쪽 대괄호'], ['rightBracket', '오른쪽 대괄호'], ['leftBrace', '왼쪽 중괄호'], ['rightBrace', '오른쪽 중괄호']]],
   ['블록 화살표', [['rightArrow', '오른쪽 화살표'], ['leftArrow', '왼쪽 화살표'], ['upArrow', '위쪽 화살표'], ['downArrow', '아래쪽 화살표'], ['leftRightArrow', '왼쪽/오른쪽 화살표'], ['upDownArrow', '위쪽/아래쪽 화살표'], ['quadArrow', '왼쪽/오른쪽/위쪽/아래쪽 화살표'], ['bentUpArrow', '위쪽 굽은 화살표'], ['uturnArrow', 'U자형 화살표'], ['stripedRightArrow', '줄무늬가 있는 오른쪽 화살표'], ['notchedRightArrow', '톱니 모양의 오른쪽 화살표'], ['homePlate', '오각형 화살표'], ['chevron', '갈매기형 수장']]],

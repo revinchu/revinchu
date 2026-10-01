@@ -28,7 +28,7 @@ import { parseDelimited, toDelimited, guessDelimiter, CsvBlockReader } from './c
 import { SAMPLES } from './samples.js';
 import { TEMPLATES, TEMPLATE_CATS } from './templates.js';
 import { chartView3D } from './chart-3d.js';
-import { GridView, BASE_FONT, setBaseFont, measureText, fontStack, PATTERNS, patternCss, gradientCss, glyphShift, timelinePeriods } from './view.js';
+import { GridView, BASE_FONT, setBaseFont, measureText, fontStack, PATTERNS, patternCss, gradientCss, glyphShift, timelinePeriods, shapeTextHtml, fitShapeText } from './view.js';
 import { setThemeColors, THEME, applyTint } from './stylepresets.js';
 import { readXlsxAsync, writeXlsxAsync, xlsxOverflow, textRaw } from './xlsx.js';
 import { readOds, writeOds } from './ods.js';
@@ -75,7 +75,12 @@ import { splitDelimited, splitFixed, suggestBreaks, parseDateOrder, convertPart,
 import {
   VALIDATION_TYPES, VALIDATION_OPS, validationAt, checkValidation, listItems, describeRule, subtractRange, invalidCells,
 } from './validation.js';
-import { OBJECT_PROPS, OBJECT_LABEL, SHAPE_KINDS, SHAPE_GROUPS, LINE_SHAPES, newShape, findObject, shapeSvg } from './shapes.js';
+import { shapeSizePatch } from './shape-format.js';
+import { shapeFromPoints } from './shape-path.js';
+import { editableShapePath, shapePathHandles, shapeLocalPoint, moveShapePoint, deleteShapePoint, insertShapePoint, normalizeEditedShape } from './shape-edit.js';
+import { OBJECT_PROPS, OBJECT_LABEL, SHAPE_KINDS, SHAPE_GROUPS, LINE_SHAPES, newShape, findObject, shapeSvg, isShapeLine } from './shapes.js';
+import { createShapeFormatPanel } from './shape-format-ui.js';
+import { SHAPE_DASH_OPTIONS } from './shape-format.js';
 import { extractVbaModules, fromBase64 } from './vba.js';
 import { findMatches, nextMatch, replaceText, FIND_FORMAT_KEYS } from './find.js';
 import {
@@ -135,6 +140,7 @@ let fillPreview = null;
 let chartSel = null; // 선택한 그림 개체(차트·그림·도형) id
 let chartPart = null; // 차트 안에서 고른 요소 { id, kind: 'series'|'point'|'legend'|'title', s, p } (엑셀: 한 번 누르면 계열, 한 번 더 누르면 요소)
 let objClip = null; // 복사한 그림 개체
+let drawPathState = null, shapeEdit = null, shapePointDrag = null, suppressShapeDoubleClickUntil = 0;
 let drawKind = null; // 그릴 도형 종류 (삽입 → 도형)
 let circles = null; // 잘못된 데이터 표시
 let special = null; // 이동 옵션으로 고른 칸들 { si, cells: [[r, c]] } (Ctrl+Enter 로 한꺼번에 입력, Delete 로 지우기)
@@ -780,6 +786,7 @@ function focusGrid() {
 }
 
 function deselectChart() {
+  shapeEdit = null; shapePointDrag = null;
   if (!chartSel) return;
   chartSel = null;
   chartPart = null;
@@ -1349,7 +1356,27 @@ function onGridKey(e) {
   const k = e.key;
   const handled = () => e.preventDefault();
 
-  if (drawKind && k === 'Escape') { handled(); endDraw(); return; }
+  if (k === 'Escape' && (drawKind || drawPathState || drag?.type === 'draw' || shapePointDrag)) {
+    handled();
+    if (drag?.type === 'draw') { sheet().shapes = sheet().shapes.filter((o) => o.id !== drag.id); drag = null; chartSel = null; }
+    shapePointDrag = null; endDraw(); gv.renderObjectsAll(); return;
+  }
+  if (drawPathState && k === 'Enter') { handled(); finishPathDraw(false); return; }
+  if (drawPathState && (k === 'Backspace' || k === 'Delete')) { handled(); drawPathState.points.pop(); renderPathDraft(); return; }
+  if (shapeEdit && chartSel === shapeEdit.id) {
+    if (k === 'Escape') { handled(); shapeEdit = null; gv.renderObjectsAll(); return; }
+    const selected = shapePathHandles(editingShape() ?? {}).find((h) => h.id === shapeEdit.selected);
+    if ((k === 'Delete' || k === 'Backspace') && selected) { handled(); removeShapePoint(selected); return; }
+    if (k === 'Tab') {
+      handled(); const handles = shapePathHandles(editingShape() ?? {}), at = handles.findIndex((h) => h.id === shapeEdit.selected);
+      shapeEdit.selected = handles[(at + (e.shiftKey ? -1 : 1) + handles.length) % handles.length]?.id; gv.renderObjectsAll(); return;
+    }
+    const delta = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[k];
+    if (delta && selected) {
+      handled(); const sh = editingShape();
+      commitShapePointPath(moveShapePoint(sh.path, selected, [selected.x + delta[0] / Math.max(1, sh.w), selected.y + delta[1] / Math.max(1, sh.h)])); return;
+    }
+  }
   if (chartSel) {
     if (k === 'Delete' || k === 'Backspace') { handled(); deleteObject(chartSel); return; }
     if (k === 'Escape') { handled(); deselectChart(); updateSelectionUI(); return; }
@@ -1716,6 +1743,7 @@ function openLink(url) {
 let autoScrollTimer = null;
 let lastMouse = { x: 0, y: 0 };
 let lastAlt = false; // 개체를 끌 때 Alt: 눈금에 맞춤 전환
+let lastCtrl = false;
 let lastShift = false;
 function startAutoScroll() {
   stopAutoScroll();
@@ -1737,6 +1765,7 @@ function onViewMouseDown(e) {
   if (e.target === dom.editor || dom.ac.contains(e.target)) return;
   closeMenus();
   const t = e.target;
+  if (onPathDrawingMouseDown(e) || onShapePointMouseDown(e)) return;
   if (t.closest('.pv-classic-field, .pv-classic-zone')) {
     e.stopPropagation();
     if (editing && !commitEdit()) e.preventDefault();
@@ -1799,6 +1828,7 @@ function onViewMouseDown(e) {
   }
   if (drawKind) {
     e.preventDefault();
+    if (viewOnly || protectBlocked('objects')) { endDraw(); return; }
     const hit = gv.hitTest(e.clientX, e.clientY);
     const kind = drawKind;
     endDraw();
@@ -1873,7 +1903,7 @@ function onViewMouseDown(e) {
       else if (e.button === 0) chartPart = null;
     } else chartPart = null;
     const partChanged = JSON.stringify(prevPart) !== JSON.stringify(chartPart);
-    if (chartSel !== id) { chartSel = id; objMulti.clear(); gv.renderObjectsAll(); updateSelectionUI(); selPaneDlg?.redraw?.(); } else if (partChanged) gv.renderObjectsAll();
+    if (chartSel !== id) { shapeEdit = null; shapePointDrag = null; chartSel = id; objMulti.clear(); gv.renderObjectsAll(); updateSelectionUI(); selPaneDlg?.redraw?.(); } else if (partChanged) gv.renderObjectsAll();
     if (e.button !== 0) return;
     const found = findObject(sheet(), id);
     if (!found) return;
@@ -2080,6 +2110,8 @@ function dropMove(src, target, { copy, insert }) {
 }
 
 function onDragMove(x, y) {
+  if (drawPathState) { movePathDraft(x, y); return; }
+  if (shapePointDrag) { moveShapePointDraft(x, y); return; }
   if (!drag) return;
   switch (drag.type) {
     case 'move': {
@@ -2196,7 +2228,7 @@ function onDragMove(x, y) {
         if (k.includes('w')) { nw = o.w - dx; nx = o.x + dx; }
         if (k.includes('n')) { nh = o.h - dy; ny = o.y + dy; }
         // 그림은 모서리를 끌면 가로세로 비율 유지 (Shift 누르면 자유롭게)
-        if ((drag.prop === 'images' ? (ch.lockAspect !== false) !== drag.shift : drag.shift) && o.w && o.h) {
+        if ((drag.prop === 'images' ? (ch.lockAspect !== false) !== drag.shift : ch.lockAspect ? !drag.shift : drag.shift) && o.w && o.h) {
           const ratio = o.h / o.w;
           nw = Math.max(nw, minW);
           nh = nw * ratio;
@@ -2216,6 +2248,7 @@ function onDragMove(x, y) {
       let dx = (x - drag.start.x) / gv.z;
       let dy = (y - drag.start.y) / gv.z;
       if (lastShift && !LINE_SHAPES.has(sh.kind)) { const m = Math.max(Math.abs(dx), Math.abs(dy)); dx = Math.sign(dx || 1) * m; dy = Math.sign(dy || 1) * m; }
+      else if (lastShift && LINE_SHAPES.has(sh.kind)) { const angle = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * Math.PI / 4, length = Math.hypot(dx, dy); dx = Math.cos(angle) * length; dy = Math.sin(angle) * length; }
       sh.x = Math.max(0, Math.round(Math.min(drag.x0, drag.x0 + dx)));
       sh.y = Math.max(0, Math.round(Math.min(drag.y0, drag.y0 + dy)));
       sh.w = Math.round(Math.abs(dx));
@@ -2230,6 +2263,8 @@ function onDragMove(x, y) {
 }
 
 function onDragEnd() {
+  if (shapePointDrag) { const session = shapePointDrag; shapePointDrag = null; if (session.moved && session.wb === wb && session.si === si) commitShapePointPath(session.preview.path); gv.renderObjectsAll(); return; }
+  if (drawPathState?.dragging) { drawPathState.dragging = false; if (drawPathState.kind === 'scribble') finishPathDraw(false); return; }
   if (!drag) return;
   const d = drag;
   drag = null;
@@ -2297,6 +2332,7 @@ function onDragEnd() {
 }
 
 function onViewDblClick(e) {
+  if (Date.now() < suppressShapeDoubleClickUntil || shapeEdit) { e.preventDefault(); return; }
   const t = e.target;
   const objEl = t.closest('.obj');
   if (objEl) { editObject(objEl.dataset.id); return; }
@@ -8478,8 +8514,9 @@ function objectMenu(id, pos) {
     );
   } else if (f.prop === 'shapes') {
     items.push({ label: LINE_SHAPES.has(f.obj.kind) ? '선 서식...' : '텍스트 편집 및 도형 서식...', icon: 'shapes', action: () => shapeDialog(id) });
+    items.push({ label: '점 편집', disabled: !editableShapePath(f.obj), action: () => beginShapePointEdit(id) });
     if (!LINE_SHAPES.has(f.obj.kind)) {
-      items.push({ label: '도형 모양 변경...', action: () => setTimeout(() => openMenu({ x: 260, y: 140 }, [{ node: shapeGallery((k) => updateObject(id, { kind: k }), true) }], { scroll: true }), 0) });
+      items.push({ label: '도형 모양 변경...', action: () => setTimeout(() => openMenu({ x: 260, y: 140 }, [{ node: shapeGallery((k) => { shapeEdit = null; shapePointDrag = null; updateObject(id, { kind: k, path: undefined, customGeometry: undefined }); }, true) }], { scroll: true }), 0) });
     }
     items.push({ sep: true }, { label: '맨 앞으로 가져오기', action: () => arrangeObject(id, 'front') }, { label: '앞으로 가져오기', action: () => arrangeObject(id, 'forward') },
       { label: '뒤로 보내기', action: () => arrangeObject(id, 'backward') }, { label: '맨 뒤로 보내기', action: () => arrangeObject(id, 'back') });
@@ -9028,13 +9065,27 @@ function shapeGallery(pick, noLines = false) {
     const sh = newShape(id, { x: 0, y: 0, w: 20, h: 16 });
     return shapeSvg({ ...sh, fill: sh.fill ? (id === 'textbox' ? '#ffffff' : '#dbe5f5') : null, stroke: '#44546a', strokeWidth: 1, flipV: LINE_SHAPES.has(sh.kind) ? true : undefined });
   };
-  return el('div', { class: 'shape-gallery' }, SHAPE_GROUPS.filter(([g]) => !(noLines && g === '선')).map(([g, list]) => [
+  const gallery = el('div', { class: 'shape-gallery' }, SHAPE_GROUPS.filter(([g]) => !(noLines && g === '선')).map(([g, list]) => [
     el('div', { class: 'menu-title' }, g),
     el('div', { class: 'shape-grid' }, list.filter(([id]) => !(noLines && id === 'textbox')).map(([id, label]) => el('button', {
-      class: 'shape-btn', title: label, html: icon(id), onmousedown: (e) => e.preventDefault(),
+      class: 'shape-btn', type: 'button', title: label, 'aria-label': label, html: icon(id), onmousedown: (e) => e.preventDefault(),
       onclick: () => { closeMenus(); pick(id); },
     }))),
   ]));
+  gallery.addEventListener('keydown', (event) => {
+    const buttons = [...gallery.querySelectorAll('.shape-btn')], at = buttons.indexOf(document.activeElement);
+    if (at < 0) return;
+    const grid = buttons[at].parentElement;
+    const columns = Math.max(1, Math.round(grid.clientWidth / Math.max(1, buttons[at].offsetWidth + 2)));
+    const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -columns, ArrowDown: columns }[event.key];
+    if (step || event.key === 'Home' || event.key === 'End') {
+      event.preventDefault(); event.stopPropagation();
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : Math.max(0, Math.min(buttons.length - 1, at + step));
+      buttons[next]?.focus(); buttons[next]?.scrollIntoView({ block: 'nearest' });
+    }
+  });
+  queueMicrotask(() => { if (gallery.closest('.menu')) gallery.querySelector('.shape-btn')?.focus(); });
+  return gallery;
 }
 
 /** 개체 겹치는 순서: 맨 앞 · 앞으로 · 뒤로 · 맨 뒤 (차트 · 그림 · 도형 · 슬라이서 공통) */
@@ -9054,133 +9105,165 @@ function arrangeObject(id, how) {
   gv.renderObjectsAll();
 }
 
-// 도형
+// 도형: 자유 경로 미리보기는 저장 모델에 넣지 않고 완료 시 한 번만 기록한다.
+const FREE_DRAW_KINDS = new Set(['curve', 'freeform', 'scribble']);
+function drawPoint(clientX, clientY) {
+  const hit = gv.hitTest(clientX, clientY);
+  return hit.zone === 'cell' ? [Math.max(0, hit.sheetX), Math.max(0, hit.sheetY)] : null;
+}
+function renderPathDraft(hover = null) {
+  const d = drawPathState; if (!d) return;
+  if (d.wb !== wb || d.si !== si) { endDraw(); return; }
+  const candidates = hover && !d.dragging ? [...d.points, hover] : d.points;
+  const points = candidates.filter((p, i, a) => !i || Math.hypot(p[0] - a[i - 1][0], p[1] - a[i - 1][1]) > 0.001);
+  d.preview = points.length > 1 ? { ...d.base, ...shapeFromPoints(d.kind, points), draft: true } : null;
+  gv.renderObjectsAll();
+}
+function onPathDrawingMouseDown(event) {
+  if (!FREE_DRAW_KINDS.has(drawKind)) return false;
+  event.preventDefault();
+  if (event.button !== 0) return true;
+  if (viewOnly || protectBlocked('objects')) { endDraw(); return true; }
+  const point = drawPoint(event.clientX, event.clientY); if (!point) return true;
+  if (!drawPathState) drawPathState = { wb, si, kind: drawKind, points: [], base: newShape(drawKind, { x: 0, y: 0, w: 1, h: 1 }) };
+  const d = drawPathState;
+  if (d.kind !== 'scribble' && event.detail >= 2 && d.points.length >= 2) { finishPathDraw(false); return true; }
+  if (d.kind !== 'scribble' && d.points.length >= 3 && Math.hypot(point[0] - d.points[0][0], point[1] - d.points[0][1]) * gv.z < 7) { finishPathDraw(true); return true; }
+  d.points.push(point); d.dragging = true; focusGrid(); renderPathDraft(); return true;
+}
+function movePathDraft(x, y) {
+  const d = drawPathState, point = drawPoint(x, y); if (!d || !point) return;
+  if (d.dragging && d.kind !== 'curve') {
+    const prev = d.points.at(-1);
+    if (!prev || Math.hypot(point[0] - prev[0], point[1] - prev[1]) * gv.z >= 2) {
+      if (d.points.length < 9500) d.points.push(point);
+      else { finishPathDraw(false); toast('긴 자유곡선을 완성했습니다. 이어서 새 선을 그릴 수 있습니다.'); return; }
+    }
+    renderPathDraft();
+  } else renderPathDraft(point);
+}
+function finishPathDraw(closed) {
+  const d = drawPathState;
+  if (!d) { endDraw(); return; }
+  const points = d.points.filter((p, i, a) => !i || Math.hypot(p[0] - a[i - 1][0], p[1] - a[i - 1][1]) > 0.001);
+  const valid = d.wb === wb && d.si === si && points.length >= (closed ? 3 : 2);
+  endDraw(); suppressShapeDoubleClickUntil = Date.now() + 400;
+  if (valid && !viewOnly && !protectBlocked('objects')) {
+    const shape = { ...d.base, ...shapeFromPoints(d.kind, points, { closed }) };
+    if (closed) shape.fill = '#4472c4';
+    addObject('shapes', shape);
+  }
+  gv.renderObjectsAll(); focusGrid();
+}
 function startDraw(kind) {
   if (editing && !commitEdit()) return;
-  drawKind = kind;
-  deselectChart();
+  if (viewOnly || protectBlocked('objects')) return;
+  endDraw(); shapeEdit = null; shapePointDrag = null;
+  drawKind = kind; deselectChart();
   dom.view.classList.add('drawing-mode');
   const label = SHAPE_KINDS.find((k) => k.id === kind)?.label ?? '도형';
-  toast(`시트를 끌어서 ${label}을(를) 그리세요. 클릭하면 기본 크기로 들어갑니다. (Esc: 취소)`);
+  toast(kind === 'scribble' ? '마우스를 누른 채 자유곡선을 그리세요. 놓으면 완료, Esc는 취소합니다.'
+    : FREE_DRAW_KINDS.has(kind) ? `${label}: 점을 클릭하고 더블클릭 또는 Enter로 완료하세요. 시작점을 클릭하면 닫힙니다. Esc는 취소합니다.`
+      : `시트를 끌어서 ${label}을(를) 그리세요. 클릭하면 기본 크기로 들어갑니다. (Esc: 취소)`);
 }
-
 function endDraw() {
-  drawKind = null;
+  drawKind = null; drawPathState = null;
   dom.view.classList.remove('drawing-mode');
+  gv?.renderObjectsAll();
+}
+function beginShapePointEdit(id) {
+  const sh = findObject(sheet(), id)?.obj, path = sh && editableShapePath(sh);
+  if (!path || viewOnly || protectBlocked('objects')) { if (!path) toast('자유형·곡선·자유곡선·선 또는 사각형을 선택하세요.'); return; }
+  endDraw(); chartSel = id;
+  shapeEdit = { id, wb, si, sheet: sheet(), basePath: path, selected: null }; objMulti.clear(); gv.renderObjectsAll(); focusGrid();
+  toast('점을 끌어 모양을 바꾸세요. Ctrl+선: 점 추가, Ctrl+점 또는 Delete: 점 삭제, Esc: 취소·종료');
+}
+function editingShape() {
+  if (!shapeEdit || shapeEdit.wb !== wb || shapeEdit.si !== si || shapeEdit.sheet !== sheet()) return null;
+  const sh = shapeEdit && findObject(sheet(), shapeEdit.id)?.obj;
+  return sh ? sh.path ? sh : { ...sh, path: shapeEdit.basePath } : null;
+}
+function commitShapePointPath(path) {
+  const sh = editingShape();
+  if (!sh || !path || viewOnly || protectBlocked('objects')) return;
+  updateObject(sh.id, normalizeEditedShape(sh, path)); gv.renderObjectsAll(); updateSelectionUI();
+}
+function removeShapePoint(handle) {
+  const sh = editingShape();
+  const path = sh && deleteShapePoint(sh.path, handle);
+  if (!path) { toast('열린 선은 두 점, 닫힌 도형은 세 점 이상이어야 합니다.'); return; }
+  commitShapePointPath(path); shapeEdit.selected = null; gv.renderObjectsAll();
+}
+function onShapePointMouseDown(event) {
+  if (!shapeEdit) return false;
+  const sh = editingShape();
+  if (!sh || chartSel !== sh.id) { shapeEdit = null; return false; }
+  const node = event.target.closest('.shape-point');
+  if (node && node.closest('.obj')?.dataset.id === sh.id) {
+    event.preventDefault();
+    const handle = shapePathHandles(sh).find((h) => h.id === node.dataset.point);
+    if (!handle) return true;
+    shapeEdit.selected = handle.id;
+    if (event.button !== 0) return true;
+    if (handle.anchor && (event.ctrlKey || event.metaKey)) { removeShapePoint(handle); return true; }
+    if (viewOnly || protectBlocked('objects')) return true;
+    shapePointDrag = { wb, si, original: structuredClone(sh), preview: structuredClone(sh), handle, moved: false };
+    gv.renderObjectsAll(); focusGrid(); return true;
+  }
+  if (event.target.closest('.obj')?.dataset.id === sh.id && (event.ctrlKey || event.metaKey) && event.button === 0) {
+    event.preventDefault(); const p = drawPoint(event.clientX, event.clientY);
+    const inserted = p && insertShapePoint(sh.path, shapeLocalPoint(sh, p), sh.w, sh.h);
+    if (inserted) { commitShapePointPath(inserted.path); shapeEdit.selected = `${inserted.handle.p}:${inserted.handle.c}:${inserted.handle.slot}`; gv.renderObjectsAll(); }
+    return true;
+  }
+  return false;
+}
+function moveShapePointDraft(x, y) {
+  const d = shapePointDrag, point = drawPoint(x, y); if (!d || !point) return;
+  if (d.wb !== wb || d.si !== si) { shapePointDrag = null; return; }
+  d.preview = { ...d.original, path: moveShapePoint(d.original.path, d.handle, shapeLocalPoint(d.original, point), lastAlt ? false : lastShift ? 'symmetric' : lastCtrl ? 'smooth' : false, d.original.w, d.original.h) };
+  d.moved = true; gv.renderObjectsAll();
+}
+function shapePointMenu(id, position) {
+  const sh = editingShape(), handle = sh && shapePathHandles(sh).find((h) => h.id === id);
+  if (!handle) return;
+  shapeEdit.selected = id;
+  openMenu(position, [
+    { label: '점 삭제', disabled: !handle.anchor, action: () => removeShapePoint(handle) },
+    { label: '점 편집 종료', action: () => { shapeEdit = null; gv.renderObjectsAll(); focusGrid(); } },
+    { label: '도형 서식...', action: () => shapeDialog(sh.id) },
+  ]);
 }
 
 let shapePaneDlg = null;
-function shapeDialog(id, typed = null) {
-  const host = si;
-  const original = wb.sheets[host]?.shapes.find((o) => o.id === id);
+function shapeDialog(id, typed = null, initialTab = null) {
+  const book = wb, host = si, hostSheet = wb.sheets[host];
+  const original = hostSheet?.shapes.find((o) => o.id === id);
   if (!original) return;
+  const get = () => wb === book && si === host && wb.sheets[host] === hostSheet ? hostSheet.shapes.find((o) => o.id === id) : null;
+  const blocked = () => viewOnly || (isProtected(hostSheet) && get()?.locked !== false && !allowed(hostSheet, 'objects'));
+  if (blocked()) { toast('읽기 전용이거나 보호된 도형은 서식을 변경할 수 없습니다.'); return; }
   if (shapePaneDlg) shapePaneDlg.close();
-  const get = () => wb.sheets[host]?.shapes.find((o) => o.id === id);
+  let ownChange = false;
   const up = (patch) => {
-    if (!get()) return;
-    wb.transact(() => wb.setSheetProp(host, 'shapes', wb.sheets[host].shapes.map((o) => o.id === id ? { ...o, ...patch } : o)), meta());
+    if (!get() || blocked()) { toast('도형이 있는 시트와 편집 권한을 확인하세요.'); return false; }
+    if (!Object.keys(patch).some((key) => JSON.stringify(get()[key]) !== JSON.stringify(patch[key]))) return;
+    ownChange = true;
+    try { book.transact(() => book.setSheetProp(host, 'shapes', hostSheet.shapes.map((o) => o.id === id ? { ...o, ...patch } : o)), meta()); }
+    finally { ownChange = false; }
     gv.renderObjectsAll();
-  };
-  const textUp = (patch) => up({ ...patch, paras: undefined });
-  const line = LINE_SHAPES.has(original.kind);
-  const body = el('div', { class: 'cfp shape-format-pane' });
-  const tabs = el('div', { class: 'format-pane-tabs', role: 'tablist', 'aria-label': '도형 서식 범주' });
-  let selected = typed !== null ? '텍스트 옵션' : '채우기 및 선';
-  let keepRatio = false;
-  let textInput;
-  const row = (name, input) => { input?.setAttribute('aria-label', name); return el('label', { class: 'cfp-row' }, el('span', {}, name), input); };
-  const sec = (name, ...children) => el('details', { class: 'cfp-sec', open: true }, el('summary', {}, name), ...children);
-  const num = (value, fn, min = 0, max = 100, step = 1) => {
-    const input = el('input', { type: 'number', value, min, max, step });
-    input.addEventListener('change', () => { const v = Number(input.value); if (input.value === '' || !Number.isFinite(v)) return; const safe = clamp(v, min, max); input.value = safe; fn(safe); });
-    return input;
-  };
-  const check = (value, fn) => { const input = el('input', { type: 'checkbox', checked: !!value }); input.addEventListener('change', () => fn(input.checked)); return input; };
-  const color = (value, fn) => { const input = el('input', { type: 'color', value: value ?? '#000000' }); input.addEventListener('change', () => fn(input.value)); return input; };
-  const choose = (value, options, fn) => { const input = el('select', {}, options.map(([v, name]) => el('option', { value: v, selected: String(value) === String(v) }, name))); input.addEventListener('change', () => fn(input.value)); return input; };
-  const draw = () => {
-    const sh = get(); if (!sh) return;
-    const pages = new Map();
-    const gradient = sh.grad?.stops ?? [[0, sh.fill ?? '#4472c4'], [1, '#ffffff']];
-    pages.set('채우기 및 선', el('div', {},
-      !line ? sec('채우기',
-        row('채우기', choose(!sh.fill ? 'none' : sh.grad ? 'gradient' : 'solid', [['none', '채우기 없음'], ['solid', '단색 채우기'], ['gradient', '그라데이션 채우기']], (v) => { up(v === 'none' ? { fill: null, grad: undefined } : { fill: sh.fill ?? '#4472c4', grad: v === 'gradient' ? { ang: 90, stops: gradient } : undefined }); draw(); })),
-        sh.fill ? row('색', color(sh.fill, (v) => up({ fill: v }))) : null,
-        sh.fill ? row('투명도(%)', num(Math.round((1 - (sh.fillOpacity ?? 1)) * 100), (v) => up({ fillOpacity: 1 - v / 100 }))) : null,
-        sh.grad ? row('방향(°)', num(sh.grad.ang ?? 90, (v) => up({ grad: { ...get().grad, ang: v } }), 0, 360)) : null,
-        sh.grad ? row('시작 색', color(gradient[0][1], (v) => { const current = get().grad; const stops = [...(current.stops ?? gradient)]; stops[0] = [stops[0][0], v, ...stops[0].slice(2)]; up({ grad: { ...current, stops } }); })) : null,
-        sh.grad ? row('끝 색', color(gradient.at(-1)[1], (v) => { const current = get().grad; const stops = [...(current.stops ?? gradient)]; stops[stops.length - 1] = [stops.at(-1)[0], v, ...stops.at(-1).slice(2)]; up({ grad: { ...current, stops } }); })) : null) : null,
-      sec('선',
-        row('선 표시', check(!!sh.stroke, (v) => { up({ stroke: v ? sh.stroke ?? '#2f528f' : null }); draw(); })),
-        row('색', color(sh.stroke, (v) => up({ stroke: v }))),
-        row('투명도(%)', num(Math.round((1 - (sh.strokeOpacity ?? 1)) * 100), (v) => up({ strokeOpacity: 1 - v / 100 }))),
-        row('너비(pt)', num((sh.strokeWidth ?? 1) * 0.75, (v) => up({ strokeWidth: v / 0.75 }), 0.25, 100, 0.25)),
-        row('대시 종류', choose(sh.dash ?? '', [['', '실선'], ['dash', '파선'], ['dot', '점선']], (v) => up({ dash: v || undefined }))),
-        line ? row('화살표', choose(sh.arrow ?? '', [['', '없음'], ['end', '끝 화살표'], ['both', '양쪽 화살표']], (v) => up({ arrow: v || undefined }))) : null)));
-    const sd = typeof sh.shadow === 'object' ? sh.shadow : {};
-    if (!line) pages.set('효과', el('div', {},
-      sec('그림자',
-        row('그림자', check(sh.shadow, (v) => { up({ shadow: v ? { dx: 3, dy: 3, blur: 3, opacity: 0.4 } : undefined }); draw(); })),
-        ...(sh.shadow ? [
-          row('색', color(sd.color, (v) => up({ shadow: { ...get().shadow, color: v } }))),
-          row('투명도(%)', num(Math.round((1 - (sd.opacity ?? 0.4)) * 100), (v) => up({ shadow: { ...get().shadow, opacity: 1 - v / 100 } }))),
-          row('흐리게(px)', num(sd.blur ?? 3, (v) => up({ shadow: { ...get().shadow, blur: v } }), 0, 50)),
-          row('가로 거리(px)', num(sd.dx ?? 3, (v) => up({ shadow: { ...get().shadow, dx: v } }), -100, 100)),
-          row('세로 거리(px)', num(sd.dy ?? 3, (v) => up({ shadow: { ...get().shadow, dy: v } }), -100, 100))
-        ] : [])),
-      sec('네온 및 부드러운 가장자리',
-        row('네온', check(sh.glow, (v) => { up({ glow: v ? { color: '#4472c4', size: 6 } : undefined }); draw(); })),
-        sh.glow ? row('네온 색', color(sh.glow.color, (v) => up({ glow: { ...get().glow, color: v } }))) : null,
-        sh.glow ? row('네온 크기(px)', num(sh.glow.size ?? 6, (v) => up({ glow: { ...get().glow, size: v } }), 0, 50)) : null,
-        row('부드러운 가장자리(px)', num(sh.soft ?? 0, (v) => up({ soft: v || undefined }), 0, 30)))));
-    pages.set('크기 및 속성', el('div', {}, sec('크기와 위치',
-      row('가로 세로 비율 고정', check(keepRatio, (v) => { keepRatio = v; })),
-      row('너비(px)', num(sh.w, (v) => { const current = get(); up({ w: v, ...(keepRatio ? { h: v * current.h / current.w } : {}) }); draw(); }, 4, 10000)),
-      row('높이(px)', num(sh.h, (v) => { const current = get(); up({ h: v, ...(keepRatio ? { w: v * current.w / current.h } : {}) }); draw(); }, 4, 10000)),
-      row('가로 위치(px)', num(sh.x, (v) => up({ x: v }), 0, 1000000)),
-      row('세로 위치(px)', num(sh.y, (v) => up({ y: v }), 0, 10000000)),
-      row('회전(°)', num(sh.rot ?? 0, (v) => up({ rot: v || undefined }), -360, 360)),
-      row('좌우 대칭', check(sh.flip, (v) => up({ flip: v || undefined }))),
-      row('상하 대칭', check(sh.flipV, (v) => up({ flipV: v || undefined }))))));
-    if (!line) {
-      textInput = el('textarea', { rows: 4, 'aria-label': '도형 텍스트', style: { width: '100%' } }, sh.text ?? '');
-      textInput.addEventListener('change', () => textUp({ text: textInput.value }));
-      const font = el('input', { type: 'text', value: sh.font ?? BASE_FONT.name, 'aria-label': '도형 글꼴' });
-      font.addEventListener('change', () => textUp({ font: font.value || undefined }));
-      const pad = sh.pad ?? [4.8, 9.6, 4.8, 9.6];
-      pages.set('텍스트 옵션', el('div', {},
-        sec('텍스트 및 글꼴', textInput, row('글꼴', font),
-          row('크기(pt)', num(sh.size ?? 11, (v) => textUp({ size: v }), 6, 400)),
-          row('색', color(sh.color, (v) => textUp({ color: v }))),
-          row('굵게', check(sh.bold, (v) => textUp({ bold: v || undefined }))),
-          row('기울임꼴', check(sh.italic, (v) => textUp({ italic: v || undefined }))),
-          row('밑줄', check(sh.underline, (v) => textUp({ underline: v || undefined })))),
-        sec('텍스트 상자',
-          row('가로 맞춤', choose(sh.align ?? 'center', [['left', '왼쪽'], ['center', '가운데'], ['right', '오른쪽'], ['justify', '양쪽 맞춤']], (v) => textUp({ align: v }))),
-          row('세로 맞춤', choose(sh.valign ?? 'middle', [['top', '위쪽'], ['middle', '가운데'], ['bottom', '아래쪽']], (v) => up({ valign: v }))),
-          row('도형에서 텍스트 줄 바꿈', check(!sh.nowrap, (v) => up({ nowrap: !v || undefined }))),
-          ...['위쪽 여백(px)', '오른쪽 여백(px)', '아래쪽 여백(px)', '왼쪽 여백(px)'].map((name, i) => row(name, num(pad[i], (v) => { const next = [...(get().pad ?? pad)]; next[i] = v; up({ pad: next }); }, 0, 200, 0.5))))));
-    }
-    const names = [...pages.keys()];
-    if (!pages.has(selected)) selected = names[0];
-    const show = (name) => {
-      selected = name;
-      for (const [key, page] of pages) page.hidden = key !== name;
-      for (const button of tabs.children) { button.setAttribute('aria-selected', String(button.textContent === name)); button.tabIndex = button.textContent === name ? 0 : -1; }
-    };
-    tabs.replaceChildren(...names.map((name) => el('button', { type: 'button', role: 'tab', onclick: () => show(name), onkeydown: (event) => {
-      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-      event.preventDefault(); const i = names.indexOf(selected);
-      const next = event.key === 'Home' ? 0 : event.key === 'End' ? names.length - 1 : (i + (event.key === 'ArrowRight' ? 1 : -1) + names.length) % names.length;
-      show(names[next]); tabs.children[next].focus();
-    } }, name)));
-    body.replaceChildren(tabs, ...pages.values());
-    show(selected);
+    updateSelectionUI();
   };
   if (typed !== null) up({ text: typed, paras: undefined });
-  draw();
-  shapePaneDlg = openDialog({ title: line ? '선 서식' : '도형 서식', body, width: 370, modeless: true, onClose: () => { shapePaneDlg = null; }, onOpen: () => { if (typed !== null && textInput) { textInput.focus(); textInput.setSelectionRange(textInput.value.length, textInput.value.length); } } });
-  shapePaneDlg.root.classList.add('pane-dlg');
+  const pane = createShapeFormatPanel({ getShape: get, onChange: up, isLine: isShapeLine, fontName: BASE_FONT.name, initialTab: initialTab ?? (typed !== null ? '텍스트 옵션' : '채우기 및 선') });
+  const refresh = () => { if (!ownChange) queueMicrotask(() => { if (pane.body.isConnected) pane.refresh(); }); };
+  book.onChange(refresh);
+  const dialog = openDialog({ title: isShapeLine(original) ? '선 서식' : '도형 서식', body: pane.body, width: 390, modeless: true,
+    onClose: () => { book.listeners.delete(refresh); if (shapePaneDlg === dialog) shapePaneDlg = null; },
+    onOpen: () => { if (typed !== null) pane.focusText(); },
+  });
+  shapePaneDlg = dialog;
+  dialog.root.classList.add('pane-dlg');
 }
 
 
@@ -9352,20 +9435,20 @@ function navigatorPane() {
 
 /** 채우기 · 윤곽선 · 효과 메뉴 (도형 · 그림 · 텍스트) */
 function shapeFillMenu(a) {
-  paletteMenu(a, '채우기 없음', (c) => patchObjects({ fill: c, grad: undefined }, ['shapes']));
+  paletteMenu(a, '채우기 없음', (c) => patchObjects({ fill: c, grad: undefined, pattern: undefined }, ['shapes']));
   setTimeout(() => {
     const m = document.querySelector('#menuLayer .menu:last-child');
     if (!m) return;
     m.append(el('div', { class: 'menu-sep' }),
-      el('button', { class: 'menu-item', onclick: () => { closeMenus(); patchObjects((o) => ({ grad: o.grad ? undefined : { ang: 90 } }), ['shapes']); } }, el('span', { class: 'mi-icon' }), el('span', {}, '그라데이션 (켜기/끄기)')),
+      el('button', { class: 'menu-item', onclick: () => { closeMenus(); patchObjects((o) => ({ fill: o.fill || '#4472c4', grad: o.grad ? undefined : { ang: 90 }, pattern: undefined }), ['shapes']); } }, el('span', { class: 'mi-icon' }), el('span', {}, '그라데이션 (켜기/끄기)')),
       el('button', { class: 'menu-item', onclick: () => { closeMenus(); patchObjects((o) => ({ fillOpacity: o.fillOpacity === 0.5 ? undefined : 0.5 }), ['shapes']); } }, el('span', { class: 'mi-icon' }), el('span', {}, '반투명 50% (켜기/끄기)')));
   }, 0);
 }
 function shapeOutlineMenu(a) {
   const items = [
-    { title: '두께' }, ...[0.25, 0.5, 0.75, 1, 1.5, 2.25, 3, 4.5, 6].map((w) => ({ label: `${w}pt`, icon: `<span style="display:block;width:22px;border-top:${Math.max(1, w * 1.33)}px solid #333;margin-top:6px"></span>`, action: () => patchObjects({ strokeWidth: w }) })),
-    { title: '대시' }, ...[['', '실선'], ['dash', '파선'], ['dot', '점선']].map(([v, l]) => ({ label: l, action: () => patchObjects({ dash: v || undefined }) })),
-    { title: '화살표 (선)' }, ...[['', '없음'], ['end', '끝 화살표'], ['both', '양쪽 화살표']].map(([v, l]) => ({ label: l, action: () => patchObjects({ arrow: v || undefined }, ['shapes']) })),
+    { title: '두께' }, ...[0.25, 0.5, 0.75, 1, 1.5, 2.25, 3, 4.5, 6].map((w) => ({ label: `${w}pt`, icon: `<span style="display:block;width:22px;border-top:${Math.max(1, w * 1.33)}px solid #333;margin-top:6px"></span>`, action: () => patchObjects((o, p) => p === 'images' ? { borderW: w / .75 } : { strokeWidth: w / .75 }, ['shapes', 'images']) })),
+    { title: '대시' }, ...SHAPE_DASH_OPTIONS.map(([v, l]) => ({ label: l, action: () => patchObjects({ dash: v || undefined }, ['shapes']) })),
+    { title: '화살표 (선)' }, ...[['', '없음'], ['start', '시작 화살표'], ['end', '끝 화살표'], ['both', '양쪽 화살표']].map(([v, l]) => ({ label: l, action: () => patchObjects((o) => isShapeLine(o) ? { arrow: v || undefined, headEnd: undefined, tailEnd: undefined } : null, ['shapes']) })),
     { sep: true }, { label: '윤곽선 색...', icon: 'border', action: () => setTimeout(() => paletteMenu(a, '윤곽선 없음', (c) => patchObjects((o, p) => (p === 'images' ? { border: c || undefined } : { stroke: c }))), 0) },
   ];
   openMenu(a, items, { scroll: true });
@@ -9376,12 +9459,12 @@ function shapeEffectsMenu(a) {
     { label: '그림자 없음', action: () => patchObjects({ shadow: undefined }) },
     { label: '바깥쪽 (오른쪽 아래)', action: () => patchObjects({ shadow: { dx: 3, dy: 3, blur: 3 } }) },
     { label: '바깥쪽 (가운데)', action: () => patchObjects({ shadow: { dx: 0, dy: 0, blur: 5, opacity: 0.5 } }) },
-    { label: '원근감 (아래)', action: () => patchObjects({ shadow: { dx: 0, dy: 6, blur: 6, opacity: 0.3 } }) },
+    { label: '바깥쪽 (아래)', action: () => patchObjects({ shadow: { dx: 0, dy: 6, blur: 6, opacity: 0.3 } }) },
     { title: '네온' },
     { label: '네온 없음', action: () => patchObjects({ glow: undefined }) },
     ...[['파랑', '#4472c4'], ['주황', '#ed7d31'], ['금색', '#ffc000'], ['녹색', '#70ad47'], ['회색', '#a5a5a5']].map(([n, c]) => ({ label: `네온: ${n}`, icon: `<span style="display:block;width:14px;height:14px;border-radius:50%;box-shadow:0 0 4px 2px ${c};background:#fff"></span>`, action: () => patchObjects({ glow: { color: c, size: 6 } }, ['shapes']) })),
     { title: '부드러운 가장자리' },
-    ...[0, 2.5, 5, 10].map((v) => ({ label: v ? `${v}pt` : '없음', action: () => patchObjects({ soft: v || undefined }, ['shapes']) })),
+    ...[0, 2.5, 5, 10].map((v) => ({ label: v ? `${v}pt` : '없음', action: () => patchObjects({ soft: v / .75 || undefined }, ['shapes']) })),
     { title: '그림 스타일' },
     { label: '둥근 모서리', action: () => patchObjects((o) => ({ radius: o.radius ? undefined : 12 }), ['images']) },
     { label: '흰색 테두리 + 그림자', action: () => patchObjects({ border: '#ffffff', borderW: 6, shadow: true }, ['images']) },
@@ -9402,7 +9485,7 @@ function shapeStylesMenu(a) {
     const p = fn(c);
     return el('button', {
       class: 'qs-chip', title: n, style: { background: p.grad ? `linear-gradient(${shade(c, 0.35)}, ${shade(c, -0.15)})` : p.fill, borderColor: p.stroke ?? 'transparent', color: p.color, boxShadow: p.shadow ? '0 2px 4px rgba(0,0,0,.35)' : 'none' },
-      onmousedown: (e) => e.preventDefault(), onclick: () => { closeMenus(); patchObjects(p, ['shapes']); },
+      onmousedown: (e) => e.preventDefault(), onclick: () => { closeMenus(); patchObjects({ ...p, pattern: undefined }, ['shapes']); },
     }, 'Abc');
   })));
   openMenu(a, [{ title: '테마 스타일' }, { node: grid }]);
@@ -9440,7 +9523,7 @@ function setObjSize(key, v) {
   if (!Number.isFinite(n)) return;
   if (key === 'rot') { patchObjects({ rot: ((n % 360) + 360) % 360 || undefined }, ['shapes', 'images']); return; }
   if (n < 1 || n > 5000) return;
-  patchObjects((o, prop) => (o.noMove ? null : prop === 'images' ? resizePicture(o, key, Math.round(n)) : key === 'h' ? { h: Math.round(n) } : { w: Math.round(n) }));
+  patchObjects((o, prop) => (o.noMove ? null : prop === 'images' ? resizePicture(o, key, Math.round(n)) : prop === 'shapes' ? shapeSizePatch(o, key, n) : key === 'h' ? { h: Math.round(n) } : { w: Math.round(n) }));
 }
 function objPlacementMenu(a) {
   const f = selectedObjects()[0];
@@ -12169,6 +12252,7 @@ function jumpComment(dir) {
 
 // ───────────────────────── 시트 ─────────────────────────
 function switchSheet(i, restore = true) {
+  endDraw(); shapeEdit = null; shapePointDrag = null;
   if (i === si || i < 0 || i >= wb.sheets.length) return;
   if (editing && !commitEdit()) return;
   if (wb.sheets[si]) sheetSel.set(wb.sheets[si], { active, sel, selKind, scroll: [gv.sx, gv.sy] });
@@ -12856,6 +12940,7 @@ function redrawPivotsQuiet() {
 }
 
 function afterLoad(name, activeSheet) {
+  endDraw(); shapeEdit = null; shapePointDrag = null;
   setTimeout(() => {
     showFinalBar();
     // 읽기 전용 권장 (엑셀: 열 때 묻기)
@@ -14032,9 +14117,9 @@ function printSheet() {
     parts.push(`<table class="${gridOn ? 'grid-lines' : ''}" style="zoom:${scale};${pg.hCenter ? 'margin:0 auto;' : ''}"><colgroup>${colgroup}</colgroup>${head.length ? `<thead>${head.join('')}</thead>` : ''}<tbody>${body.join('')}</tbody></table>`);
   }
   if (!pg.area) {
-    for (const ch of s.charts) parts.push(`<div class="chart-print">${gv.chartSvg(ch)}</div>`);
-    for (const im of s.images ?? []) parts.push(`<div class="chart-print"><img src="${escapeHtml(im.src)}" style="width:${im.w}px;height:${im.h}px" alt=""></div>`);
-    for (const sh of s.shapes ?? []) parts.push(`<div class="chart-print" style="position:relative;width:${sh.w}px;height:${Math.max(1, sh.h)}px">${shapeSvg(sh)}${sh.text ? `<div style="position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;padding:4px 8px;white-space:pre-wrap;text-align:${sh.align ?? 'center'};color:${escapeHtml(sh.color ?? '#000')};font-size:${sh.size ?? 11}pt">${escapeHtml(sh.text)}</div>` : ''}</div>`);
+    for (const ch of s.charts.filter(o => !o.noPrint)) parts.push(`<div class="chart-print">${gv.chartSvg(ch)}</div>`);
+    for (const im of (s.images ?? []).filter(o => !o.noPrint)) parts.push(`<div class="chart-print"><img src="${escapeHtml(im.src)}" style="width:${im.w}px;height:${im.h}px" alt=""></div>`);
+    for (const sh of (s.shapes ?? []).filter(o => !o.noPrint)) parts.push(`<div class="chart-print" data-shape-print="${escapeHtml(sh.id)}" style="position:relative;width:${Math.max(1, sh.w)}px;height:${Math.max(1, sh.h)}px;${sh.rot ? `transform:rotate(${sh.rot}deg);` : ''}">${shapeSvg(sh)}${(sh.text || sh.paras) && !isShapeLine(sh) ? shapeTextHtml(sh) : ''}</div>`);
   }
   if (pg.footer) { const ft = hf(pg.footer); parts.push(`<div class="print-hf foot">${['left', 'center', 'right'].map((k) => `<span>${escapeHtml(ft[k])}</span>`).join('')}</div>`); }
   // 용지 · 방향 · 여백
@@ -14043,6 +14128,11 @@ function printSheet() {
   if (!st) { st = document.createElement('style'); st.id = 'pageStyle'; document.head.append(st); }
   st.textContent = `@page { size: ${paperOf(pg.paper).css} ${pg.orientation}; margin: ${m.top}in ${m.right}in ${m.bottom}in ${m.left}in; }`;
   setSafeHtml(dom.printArea, parts.join(''));
+  // Measure print-only text while the sheet remains visible, then restore print CSS.
+  const printCss = dom.printArea.style.cssText;
+  dom.printArea.style.cssText = 'display:block;position:fixed;left:-100000px;top:0;visibility:hidden;';
+  try { for (const node of dom.printArea.querySelectorAll('[data-shape-print]')) fitShapeText(node, 'print'); }
+  finally { dom.printArea.style.cssText = printCss; }
   window.print();
 }
 
@@ -16085,7 +16175,7 @@ const MENUS = {
     { label: '오류 추적(E)', icon: 'validation', action: () => traceError() },
     { label: '순환 참조(C)', disabled: true, submenu: [] },
   ],
-  shapeChange: () => [{ node: shapeGallery((k) => patchObjects({ kind: k }, ['shapes']), true) }],
+  shapeChange: () => [{ node: shapeGallery((k) => { shapeEdit = null; shapePointDrag = null; patchObjects({ kind: k, path: undefined, customGeometry: undefined }, ['shapes']); }, true) }],
   shapeFill: (a) => { shapeFillMenu(a); },
   shapeOutline: (a) => { shapeOutlineMenu(a); },
   shapeEffects: (a) => { shapeEffectsMenu(a); },
@@ -16958,6 +17048,8 @@ const COMMANDS = {
   freezePanes: () => { const f = sheet().freeze ?? {}; if (f.rows || f.cols) setFreeze(0, 0); else setFreeze(active.r, active.c); },
   freezeTop: () => setFreeze(1, 0),
   freezeFirstCol: () => setFreeze(0, 1),
+  shapeEditPoints: () => beginShapePointEdit(chartSel),
+  shapeFormat: () => { if (chartSel) shapeDialog(chartSel); else toast('도형이나 선을 선택하세요.'); },
   shapesMenu: () => startDraw('rect'),
   insertTextbox: () => startDraw('textbox'),
   dataValidation: validationDialog,
@@ -17027,6 +17119,7 @@ const NO_COMMIT = new Set(['toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100', 'shor
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['선·자유곡선과 도형 서식', ['곡선·자유형·자유곡선 그리기 · 점 이동·추가·삭제 · 취소와 실행 취소', '채우기·선·효과·크기·텍스트를 조정하는 도형 서식 패널 · 선 끝·화살표 크기·무늬·겹선', '표준 XLSX 자유 경로 저장 · 텍스트 회전·축소 맞춤과 배율 변경 시 잘림 수정']],
   ['리본 키팁·셀 스타일', ['Alt → H → J 셀 스타일 · H → H 채우기 색 · H → F → C 글꼴 색', '일반·상황별 탭의 메뉴·입력칸·분할 단추 키팁 누락 검사 · 팔레트 방향키 선택', '보고서·KPI·입력·검토 스타일 24개와 검색 · 숫자 표시 형식·맞춤 보존']],
   ['대용량 문서 응답성', ['필터 범위의 반복 탐색과 중복 화면 갱신 제거 · 긴 필터 목록 가상화', '사용자 지정·색상·상위 조건을 다른 열의 필터 목록에도 반영', '화면 밖 차트·슬라이서·그림 생성 생략 · 단순 조건부 서식의 전체 범위 집계 제거']],
   ['차트 범례', ['피벗 값 열로 만든 차트도 실제 항목 이름과 연결', '단일 계열 범례 표시와 긴 이름의 전체 툴팁 수정']],
@@ -17449,6 +17542,8 @@ function bindEvents() {
   dom.view.addEventListener('mouseleave', () => { dom.tip.style.display = 'none'; });
   dom.view.addEventListener('contextmenu', (e) => {
     e.preventDefault();
+    if (drawPathState) { finishPathDraw(false); return; }
+    if (shapeEdit && e.target.closest('.shape-point')) { shapePointMenu(e.target.dataset.point, { x: e.clientX, y: e.clientY }); return; }
     const objEl = e.target.closest('.obj');
     if (objEl) { objectMenu(objEl.dataset.id, { x: e.clientX, y: e.clientY }); return; }
     const hit = gv.hitTest(e.clientX, e.clientY);
@@ -17470,9 +17565,10 @@ function bindEvents() {
       if (c && tlDrag.root.contains(c)) { tlDrag.b = Number(c.dataset.i); markTimelineDrag(); }
     }
     lastMouse = { x: e.clientX, y: e.clientY };
+    lastCtrl = e.ctrlKey || e.metaKey;
     lastShift = e.shiftKey;
     lastAlt = e.altKey;
-    if (drag) onDragMove(e.clientX, e.clientY);
+    if (drag || drawPathState || shapePointDrag) onDragMove(e.clientX, e.clientY);
   });
   document.addEventListener('mouseup', (e) => { if (tlDrag) { const d = tlDrag; tlDrag = null; timelineApply(d.id, d.a, d.b); } onDragEnd(e); });
 
@@ -17628,6 +17724,7 @@ async function init() {
   gv = new GridView({
     state: () => ({
       wb, si, sel, selKind, active, editing: !!editing, readonly: viewOnly, clip, fillPreview, refs: editRefs, chartSel, chartPart, objMulti, circles, focusCell: opts.focusCell,
+      shapeEdit, shapePreview: drawPathState?.preview ?? shapePointDrag?.preview ?? (shapeEdit && !findObject(sheet(), shapeEdit.id)?.obj.path ? editingShape() : null),
       special: special?.si === si ? special.cells : null, arrows: trace?.arrows ?? null,
       showGrid: view.showGrid && !sheet().noGrid, showFormulas: view.showFormulas, showHeaders: view.showHeaders, fillHandle: opts.fillHandle !== false, valueHighlight: view.valueHighlight,
     }),
