@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { zip } from '../src/zip.js';
 import { readXlsx, writeXlsx } from '../src/xlsx.js';
 import { unzip, textOf } from '../src/zip.js';
+import { parseXml, child, kids } from '../src/xml.js';
 import { Workbook } from '../src/workbook.js';
 import { applyTint, presetStyle, tablePresetCell, PRESET_STYLES } from '../src/stylepresets.js';
 import { computePivot } from '../src/pivot.js';
@@ -48,8 +49,15 @@ test('기본 셀 서식(xf 0) · 기본 제공 형식 40 · 회전/축소 · 자
   assert.deepEqual({ ...wb.getCell(0, 4, 4).style }, { valign: 'middle', bold: true });
   // 저장하면 xf 0 에 기본 맞춤, 회전 · 축소도 그대로
   const styles = textOf(unzip(writeXlsx(wb))['xl/styles.xml']);
-  assert.match(styles, /<cellXfs count="\d+"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="center"\/><\/xf>/);
-  assert.match(styles, /textRotation="45" shrinkToFit="1"/);
+  const xfs = kids(child(parseXml(styles), 'cellXfs'), 'xf');
+  assert.ok(xfs.length > 0);
+  for (const key of ['numFmtId', 'fontId', 'fillId', 'borderId', 'xfId']) assert.equal(xfs[0].attrs[key], '0', key);
+  assert.equal(xfs[0].attrs.applyAlignment, '1');
+  assert.equal(child(xfs[0], 'alignment')?.attrs.vertical, 'center');
+  assert.ok(xfs.some((xf) => {
+    const alignment = child(xf, 'alignment');
+    return alignment?.attrs.textRotation === '45' && alignment.attrs.shrinkToFit === '1';
+  }), '회전 45도와 텍스트 축소를 같은 셀 서식에 보존해야 함');
 });
 
 test('엑셀 색 밝기(tint): 윈도 정수 HLS', () => {

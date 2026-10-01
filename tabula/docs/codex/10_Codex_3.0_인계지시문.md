@@ -4,8 +4,8 @@
 
 ```text
 저장소 revinchu/revinchu의 codex/wixel-3-cloudflare 브랜치에서 시작하세요.
-AGENTS.md, tabula/AGENTS.md, docs/codex/09_WIXEL3_구현과검증.md,
-tabula/cloudflare/API_CONTRACT.md를 읽고 실제 Git 상태를 확인하세요.
+AGENTS.md, tabula/AGENTS.md, tabula/docs/codex/09_WIXEL3_구현과검증.md,
+tabula/docs/codex/11_셀스타일과지우기.md, tabula/cloudflare/API_CONTRACT.md를 읽고 실제 Git 상태를 확인하세요.
 기존 사용자 데이터와 복구키를 출력·커밋하거나 임의로 업로드하지 마세요.
 
 D:에 작업·임시·캐시를 두고 기존 작업 경로를 보존하세요.
@@ -16,8 +16,11 @@ Cloudflare 런타임과 Wrangler 개발 도구는 앱과 별도입니다.
 2. npm start와 별도 wrangler dev로 소스·Cloudflare 빌드를 검증하세요.
 3. tools/smoke.mjs, tools/keys.mjs, tools/ui-regressions.mjs,
    tools/format-regressions.mjs, tools/security-regressions.mjs, tools/wixel3-ui.mjs,
+   tools/cell-style-regressions.mjs, tools/clear-ui.mjs,
    tools/vault-ui-integration.mjs 및 cloudflare/backend.test.js와 integration.mjs를 실행하세요.
    브라우저 도구는 WIXEL_URL과 PLAYWRIGHT_MODULE 환경 변수를 사용할 수 있습니다.
+   셀 스타일·지우기 도구는 사용자 파일 대신 합성 문서를 검사하며,
+   상세 범위는 tools/README.md, 최종 결과는 docs/codex/11_셀스타일과지우기.md를 확인하세요.
 4. 실제 파일이 제공되면 고치기 전과 후 check.mjs/pvcmp.mjs/brcheck.mjs 결과를
    파일별로 비교하세요. 테스트 데이터를 사용자 업무 파일이라고 주장하지 마세요.
 5. 새 서식은 화면·실행 취소·브라우저 저장·표준 XLSX 저장/재열기를 함께 검사하세요.

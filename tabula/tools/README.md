@@ -2,7 +2,7 @@
 
 `npm test` 외에 브라우저 동작과 엑셀 파일 회귀를 확인하는 스크립트입니다.
 실제 파일을 비교할 때는 **수정 전에 기준 결과를 저장하고, 수정 후 같은 파일과 명령으로 다시 측정**하세요.
-최신 실행 결과와 미검증 범위는 [`09_WIXEL3_구현과검증.md`](../docs/codex/09_WIXEL3_구현과검증.md), 원본 인계 검증은 [`06_검증결과.md`](../docs/codex/06_검증결과.md)에 기록합니다.
+셀 스타일·지우기의 최신 실행 결과와 미검증 범위는 [`11_셀스타일과지우기.md`](../docs/codex/11_셀스타일과지우기.md), 기본 3.0 검증은 [`09_WIXEL3_구현과검증.md`](../docs/codex/09_WIXEL3_구현과검증.md), 원본 인계 검증은 [`06_검증결과.md`](../docs/codex/06_검증결과.md)에 기록합니다.
 
 ## 준비 (Windows PowerShell)
 
@@ -173,7 +173,13 @@ Select-String -LiteralPath D:\Codex\Temp\wixel-regression\before.txt, D:\Codex\T
 | `node tools/security-regressions.mjs` | CSP 우회 테스트 환경에서 HTML/SVG 공격 차단, 인쇄·링크·정상 차트/도형 표현 |
 | `node tools/vault-ui-integration.mjs` | 로컬 workerd의 보관함 연결·저장·다른 기기 복원·게시 관리 UI |
 | `node tools/wixel3-ui.mjs` | 시작·저장 화면, Ctrl+Space, QAT, 개인 보관함 충돌, Google Sheets, 피벗과 셀 서식 |
+| `node tools/cell-style-regressions.mjs` | 새 스타일의 포함 항목·서식 편집·취소, 수정·복제·삭제·실행 취소, 셀/행/열/블록 연결, XLSX/WIXEL 스타일 병합과 이름 충돌, 표준 스타일 및 시트 보호 |
+| `node tools/clear-ui.mjs` | 지우기 메뉴·우클릭의 하이퍼링크 지우기/제거, 기존 지우기 명령, 비연속 선택·보호·실행 취소, 조건부 서식과 값·메모·그림 보존, 앞자리 0·문자 수식·숫자 타입 유지 |
 | `node --test cloudflare/backend.test.js` | 개인 보관함 격리·버전·청크·게시 API |
 | `node cloudflare/integration.mjs` | 실제 로컬 workerd API; 별도 Cloudflare dev 서버 필요 |
 
 `format-regressions.mjs`는 저장소 `.local/`에 차트와 도형 화면을 캡처합니다. Cloudflare 설정·실행 환경과 한도 검사 명령은 `cloudflare/README.md`를 확인하세요. 실제 공개 배포 후의 동작은 로컬 통과와 별도로 확인해야 합니다.
+
+`cell-style-regressions.mjs`와 `clear-ui.mjs`는 별도 브라우저에서 **스크립트가 만든 합성 문서만** 검사합니다. 스타일 병합용 XLSX/WIXEL도 검사 중 생성하며 사용자 업무 파일을 읽지 않습니다. 모든 항목 통과·페이지 오류 없음·종료 코드 0을 확인하고, 실제 파일 회귀와 실제 Excel 앱 검증은 별도로 기록하세요.
+
+`cell-style-regressions.mjs`의 스타일·병합 대화상자 캡처는 기본적으로 `D:\Codex\Temp\wixel3-cell-style.png`, `D:\Codex\Temp\wixel3-style-merge.png`에 저장합니다. `WIXEL_STYLE_SCREENSHOT`, `WIXEL_STYLE_MERGE_SCREENSHOT`으로 다른 D: 절대 경로를 지정할 수 있습니다. 최종 실행 수치는 [`11_셀스타일과지우기.md`](../docs/codex/11_셀스타일과지우기.md)를 확인하세요.

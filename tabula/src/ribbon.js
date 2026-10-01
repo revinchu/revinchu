@@ -106,7 +106,7 @@ export const TABS = [
         col(
           medium('autosum', 'autosum', '자동 합계', { menu: 'autosum', split: true }),
           medium('fillMenu', 'fillDown', '채우기', { menu: 'fill' }),
-          medium('clearMenu', 'clear', '지우기', { menu: 'clear' }),
+          medium('clearMenu', 'clear', '지우기', { menu: 'clear', title: '내용 · 서식 · 메모 · 하이퍼링크 지우기' }),
         ),
         large('sortMenu', 'sort', '정렬 및 필터', { menu: 'sort' }),
         large('findMenu', 'find', '찾기 및 선택', { menu: 'find' }),

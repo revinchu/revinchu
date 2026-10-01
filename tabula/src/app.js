@@ -72,6 +72,7 @@ import {
   CATEGORIES as FMT_CATEGORIES, CURRENCY_SYMBOLS, NEGATIVE_STYLES, DATE_TYPES, TIME_TYPES, FRACTION_TYPES, SPECIAL_TYPES, CUSTOM_LIST, buildCode, describeCode,
 } from './fmtpresets.js';
 import { maxOf, minOf } from './fxcore.js';
+import { CELL_STYLE_PARTS, cellStyleKey, validCellStyleName, cellStyleIncludes, cellStylePatch, cellStyleUpdatePatch, importCellStyleList } from './cell-style.js';
 
 const $ = (id) => document.getElementById(id);
 const dom = {
@@ -1626,8 +1627,9 @@ function selectComments() {
 function hyperlinkDialog() {
   if (editing && !commitEdit()) return;
   const cell = wb.getCell(si, active.r, active.c);
+  const initialText = displayText(active.r, active.c) || '';
   formDialog('하이퍼링크 삽입', [
-    { name: 'text', label: '표시할 텍스트', value: displayText(active.r, active.c) || '' },
+    { name: 'text', label: '표시할 텍스트', value: initialText },
     { name: 'url', label: '주소 (웹 주소 또는 #시트!A1)', value: cell?.link ?? '' },
   ], (v) => {
     let url = v.url.trim();
@@ -1636,23 +1638,47 @@ function hyperlinkDialog() {
     const text = v.text.trim() || url.replace(/^#/, '');
     const cur = wb.getCell(si, active.r, active.c);
     wb.transact(() => {
-      const raw = cur?.formula ? cur.raw : text;
-      wb.setCellData(si, active.r, active.c, { raw, style: { ...cur?.style, color: cur?.style?.color ?? '#0563c1', underline: true }, comment: cur?.comment, link: url });
+      const style = { ...cur?.style, color: cur?.style?.color ?? '#0563c1', underline: true };
+      const keepContent = cur?.formula || (cur && (cur.raw !== '' || cur.image) && v.text === initialText);
+      const data = keepContent ? cellData(cur, style) : { raw: text, style, comment: cur?.comment };
+      wb.setCellData(si, active.r, active.c, { ...data, link: url });
     }, meta());
     return true;
   }, { okLabel: '확인' });
 }
 
-function removeHyperlink() {
-  const cells = cellsIn(sel).filter(([r, c]) => wb.getCell(si, r, c)?.link);
-  if (!cells.length) return;
-  wb.transact(() => cells.forEach(([r, c]) => {
-    const cur = wb.getCell(si, r, c);
-    const st = { ...cur.style };
-    if (st.color === '#0563c1') delete st.color;
-    delete st.underline;
-    wb.setCellData(si, r, c, { raw: cur.raw, style: st, comment: cur.comment });
-  }), meta());
+function selectedHyperlinks() {
+  const selected = special?.si === si ? new CellMap() : null;
+  if (selected) for (const [r, c] of special.cells) selected.setRC(r, c, true);
+  const cells = [];
+  let formulaLinks = false;
+  // 전체 열/시트를 골라도 존재하는 셀만 검사한다. 비연속 선택 사이의 셀은 건드리지 않는다.
+  sheet().cells.forEachRC((cell, r, c) => {
+    if (selected ? !selected.hasRC(r, c) : !inSel(r, c) || filterHidden(r)) return;
+    if (cell.formula && /\bHYPERLINK\s*\(/i.test(cell.raw)) formulaLinks = true;
+    if (cell.link) cells.push([r, c]);
+  });
+  return { cells, formulaLinks };
+}
+
+function removeHyperlink(removeFormats = true) {
+  if (viewOnly) { toast('읽기 전용 문서입니다.'); return; }
+  const { cells, formulaLinks } = selectedHyperlinks();
+  if (cells.length) {
+    if (removeFormats && protectBlocked('formatCells')) return;
+    const reset = removeFormats ? cellStylePatch({ name: '표준', style: {} }, { font: BASE_FONT.name, size: BASE_FONT.size, ...wb.baseStyle }) : null;
+    wb.transact(() => {
+      for (const [r, c] of cells) {
+        const cell = wb.getCell(si, r, c);
+        const data = reset ? cellData(cell, { ...reset, pattern: reset.pattern ?? '', gradient: reset.gradient ?? false, checkbox: wb.baseStyle?.checkbox ?? false, cellStyleName: '' }) : cellData(cell);
+        delete data.link;
+        wb.setCellData(si, r, c, data);
+        if (reset) wb.clearCondRules(si, { r1: r, c1: c, r2: r, c2: c });
+      }
+    }, meta());
+  }
+  if (formulaLinks) toast('HYPERLINK 수식은 유지됩니다. 수식 링크를 없애려면 복사한 뒤 값으로 붙여넣으세요.');
+  else if (!cells.length) toast('선택한 셀에 하이퍼링크가 없습니다.');
 }
 
 function openLink(url) {
@@ -2509,18 +2535,19 @@ function pasteInternal(mode = 'all', opts = {}) {
         const d = src.data[ci][cj];
         const tr = tgt.r1 + i;
         const tc = tgt.c1 + j;
-        const cur = cellData(wb.getCell(si, tr, tc));
+        const targetCell = wb.getCell(si, tr, tc);
+        const cur = cellData(targetCell);
         const srcR = src.rows[ci];
-        const shifted = d?.raw.startsWith('=') && !cut ? shiftFormula(d.raw, tr - srcR, tc - (src.c1 + cj)) : d?.raw ?? '';
+        const shifted = d?.raw.startsWith('=') && d.inputType !== 'text' && (d.style?.numFmt !== 'text' || d.fx) && !cut ? shiftFormula(d.raw, tr - srcR, tc - (src.c1 + cj)) : d?.raw ?? '';
         if (opts.skipBlanks && !d?.raw) continue;
         const numFmtOf = (st) => (st ? Object.fromEntries(Object.entries(st).filter(([k2]) => ['numFmt', 'decimals', 'code'].includes(k2))) : {});
         let data;
         if (what === 'values') data = { raw: valueToRaw(src.values[ci][cj]), style: cur?.style, comment: cur?.comment };
         else if (what === 'valuesNum') data = { raw: valueToRaw(src.values[ci][cj]), style: { ...cur?.style, ...numFmtOf(d?.style) }, comment: cur?.comment };
-        else if (what === 'formats') data = { ...(cur ?? { raw: '' }), style: d?.style };
+        else if (what === 'formats') data = cellData(targetCell, d?.style) ?? { raw: '', style: d?.style };
         else if (what === 'formulas') data = { raw: shifted, style: cur?.style, comment: cur?.comment };
         else if (what === 'formulasNum') data = { raw: shifted, style: { ...cur?.style, ...numFmtOf(d?.style) }, comment: cur?.comment };
-        else if (what === 'comments') data = { raw: cur?.raw ?? '', style: cur?.style, comment: d?.comment };
+        else if (what === 'comments') data = { ...(cur ?? { raw: '' }), comment: d?.comment };
         else if (what === 'noBorders') {
           const st = { ...d?.style };
           for (const k2 of ['bt', 'bb', 'bl', 'br']) delete st[k2];
@@ -2698,14 +2725,14 @@ function clearSelection(what) {
       const selected = what === 'all' ? new CellMap() : null;
       for (const [r, c] of special.cells) {
         selected?.setRC(r, c, true);
+        if (what === 'all' || what === 'formats') wb.clearCondRules(si, { r1: r, c1: c, r2: r, c2: c });
         const cell = wb.getCell(si, r, c);
         if (!cell) continue;
         if (what === 'all') wb.setCellData(si, r, c, null);
         else {
-          const data = cellData(cell);
-          if (what === 'formats') delete data.style;
-          else if (what === 'comments') delete data.comment;
-          else { data.raw = ''; delete data.cached; delete data.fx; delete data.image; delete data.link; }
+          const data = what === 'formats' ? cellData(cell, null) : cellData(cell);
+          if (what === 'comments') delete data.comment;
+          else if (what !== 'formats') { data.raw = ''; delete data.cached; delete data.fx; delete data.inputType; delete data.image; delete data.link; }
           wb.setCellData(si, r, c, data);
         }
       }
@@ -2941,9 +2968,10 @@ function applyPainter() {
   wb.transact(() => {
     for (let i = 0; i < th; i++) {
       for (let j = 0; j < tw; j++) {
-        const cur = cellData(wb.getCell(si, tgt.r1 + i, tgt.c1 + j));
+        const st = { ...styles[i % h][j % w] };
+        const cur = cellData(wb.getCell(si, tgt.r1 + i, tgt.c1 + j), st);
         // 값 · 수식 · 메모 · 링크 · 셀 안 그림은 그대로, 서식만 바꿈
-        wb.setCellData(si, tgt.r1 + i, tgt.c1 + j, { ...(cur ?? { raw: '' }), style: { ...styles[i % h][j % w] } });
+        wb.setCellData(si, tgt.r1 + i, tgt.c1 + j, cur ?? { raw: '', style: st });
       }
     }
     copyFormatExtras(painter.si, area, tgt, th, tw);
@@ -3100,6 +3128,7 @@ const PROTECT_MAP = {
 };
 const FORMAT_CMDS = /^(painter|painterSticky|bold|italic|underline|strike|fontFamily|fontSize|growFont|shrinkFont|border|fillColor|fontColor|fontDialog|formatCells|align|valign|wrap|indent|numFmt|fmt|incDecimal|decDecimal|clearFormats|cellStyle)/;
 function protectAction(cmd) {
+  if (cmd === 'clearHyperlinks' || cmd === 'removeHyperlink') return 'hyperlinks';
   if (PROTECT_FREE.has(cmd)) return 'free';
   if (PROTECT_BLOCK.has(cmd)) return 'block';
   if (PROTECT_MAP[cmd]) return PROTECT_MAP[cmd];
@@ -3134,7 +3163,8 @@ function protectBlocked(action = 'cells', rg = sel, cmd = null) {
   }
   const sh = sheet();
   if (!isProtected(sh) || action === 'free') return false;
-  const blocked = action === 'cells' ? anyLocked(special?.si === si ? { r1: sel.r1, c1: sel.c1, r2: sel.r2, c2: sel.c2 } : rg) : action === 'block' || !allowed(sh, action);
+  const blocked = action === 'hyperlinks' ? selectedHyperlinks().cells.some(([r, c]) => isLockedStyle(wb.styleAt(si, r, c)))
+    : action === 'cells' ? anyLocked(special?.si === si ? { r1: sel.r1, c1: sel.c1, r2: sel.r2, c2: sel.c2 } : rg) : action === 'block' || !allowed(sh, action);
   if (blocked) alertDialog('WIXEL', '변경하려는 셀이나 차트가 보호된 시트에 있습니다. 변경하려면 [검토] 탭에서 [시트 보호 해제]를 누르세요. 암호를 입력해야 할 수도 있습니다.');
   return blocked;
 }
@@ -13644,6 +13674,7 @@ function formatCellsDialog(startTab = 0, find = null) {
   const [wrapIn, wrapL] = chk('텍스트 줄 바꿈', st.wrap);
   const merged = !!wb.mergeAt(si, active.r, active.c);
   const [mergeIn, mergeL] = chk('셀 병합', merged);
+  if (find?.styleEdit) { mergeIn.disabled = true; mergeL.title = '셀 병합은 셀 스타일에 포함되지 않습니다.'; }
   const [shrinkIn, shrinkL] = chk('셀에 맞춤 (글자 크기 자동 축소)', st.shrink);
   wrapIn.addEventListener('change', () => { if (wrapIn.checked) shrinkIn.checked = false; });
   shrinkIn.addEventListener('change', () => { if (shrinkIn.checked) wrapIn.checked = false; });
@@ -13697,8 +13728,8 @@ function formatCellsDialog(startTab = 0, find = null) {
   // ── 테두리 (엑셀과 같은 구성: 선 스타일 · 색 · 미리 설정 · 가장자리별 단추 · 미리 보기) ──
   let border = null;
   const pen = { style: st.bbs ?? st.bts ?? 'thin', color: st.bbc ?? st.btc ?? '#000000' };
-  const multiR = sel.r2 > sel.r1;
-  const multiC = sel.c2 > sel.c1;
+  const multiR = !find?.styleEdit && sel.r2 > sel.r1;
+  const multiC = !find?.styleEdit && sel.c2 > sel.c1;
   const edges = { top: !!st.bt, bottom: !!st.bb, left: !!st.bl, right: !!st.br, insideH: false, insideV: false, diagUp: !!st.du, diagDown: !!st.dd };
   const edges0 = { ...edges };
   const styleList = el('div', { class: 'fc-linestyles' });
@@ -13812,6 +13843,7 @@ function formatCellsDialog(startTab = 0, find = null) {
   // ── 보호 ──
   const [lockIn, lockL] = chk('잠금', st.locked !== false);
   const [hideFIn, hideFL] = chk('숨김', !!st.hideFormula);
+  if (!find && isProtected(sheet())) { lockIn.disabled = true; hideFIn.disabled = true; lockL.title = hideFL.title = '보호된 시트에서는 셀의 잠금과 수식 숨김을 바꿀 수 없습니다.'; }
   const protPage = col(lockL, hideFL, el('div', { class: 'muted fc-note' }, '셀 잠금 또는 수식 숨기기는 워크시트를 보호해야 적용됩니다. [검토] 탭의 [시트 보호]를 누르세요.'));
   const pages = [['표시 형식', numberPage], ['맞춤', alignPage], ['글꼴', fontPage], ['테두리', borderPage], ['채우기', fillPage], ['보호', protPage]];
   const buildPatch = (fmt) => {
@@ -13838,6 +13870,25 @@ function formatCellsDialog(startTab = 0, find = null) {
   pages.forEach(([name], i) => tabBar.append(el('button', { type: 'button', class: 'dlg-tab', role: 'tab', 'aria-controls': 'cell-format-panel', onclick: () => show(i) }, name)));
   show(startTab);
 
+  if (find?.styleEdit) {
+    openDialog({ title: '셀 서식', width: 620, body: el('div', {}, tabBar, pageBox), buttons: [
+      { label: '확인', primary: true, action: () => {
+        let fmt;
+        try { formatCode(1234.5, currentCode()); fmt = cat === 'general' ? { numFmt: 'general', code: undefined, decimals: undefined } : styleForCode(currentCode()); }
+        catch { show(0); toast('입력한 서식 코드를 사용할 수 없습니다.'); return false; }
+        const patch = { ...st, ...buildPatch(fmt) };
+        if (border === 'edges') {
+          for (const [edge, key] of [['top', 'bt'], ['bottom', 'bb'], ['left', 'bl'], ['right', 'br']]) {
+            patch[key] = edges[edge] && pen.style !== 'none'; patch[`${key}c`] = pen.color; patch[`${key}s`] = pen.style;
+          }
+          patch.du = edges.diagUp; patch.duc = pen.color; patch.dus = pen.style;
+          patch.dd = edges.diagDown; patch.ddc = pen.color; patch.dds = pen.style;
+        }
+        find.done(patch);
+      } }, { label: '취소' },
+    ] });
+    return;
+  }
   if (find) {
     // 서식 찾기: 처음 상태와 달라진 항목만 조건 (엑셀처럼 건드리지 않은 항목은 '상관없음')
     const fmtOf = () => (cat === 'general' ? { numFmt: undefined, code: undefined } : styleForCode(currentCode()));
@@ -15053,11 +15104,8 @@ const CELL_STYLES = [
   { name: '강조색3', style: { fill: '#a5a5a5', color: '#ffffff' } },
   { name: '강조색6', style: { fill: '#70ad47', color: '#ffffff' } },
 ];
-const RESET_STYLE = { fill: undefined, color: undefined, bold: undefined, italic: undefined, underline: undefined, strike: undefined, size: undefined, font: undefined, bt: undefined, bb: undefined, bl: undefined, br: undefined,
-  btc: undefined, bbc: undefined, blc: undefined, brc: undefined, bts: undefined, bbs: undefined, bls: undefined, brs: undefined };
-
 /** 엑셀 [셀 스타일] 갤러리: 구역별 기본 제공 스타일 (테마 셀 스타일은 통합 문서 테마 색으로) + 파일의 사용자 지정 스타일 */
-function cellStyleSections() {
+function cellStyleSections(includeCustom = true) {
   const acc = THEME.colors.slice(4, 10).map((c) => String(c).toUpperCase());
   const hx = (c) => `#${c}`;
   const pick = (...names) => names.map((n) => CELL_STYLES.find((c) => c.name === n)).filter(Boolean);
@@ -15081,55 +15129,233 @@ function cellStyleSections() {
     { name: '통화', style: { numFmt: 'custom', code: '_-"₩"* #,##0.00_-;-"₩"* #,##0.00_-;_-"₩"* "-"??_-;_-@_-' } },
     { name: '통화 [0]', style: { numFmt: 'custom', code: '_-"₩"* #,##0_-;-"₩"* #,##0_-;_-"₩"* "-"_-;_-@_-' } },
   ];
-  return [
-    ...(wb.cellStyles?.length ? [['사용자 지정', wb.cellStyles]] : []),
+  const sections = [
     ['좋음, 나쁨 및 보통', pick('표준', '나쁨', '보통', '좋음')],
     ['데이터 및 모델', pick('계산', '확인할 셀', '경고문', '메모', '설명 텍스트', '연결된 셀', '입력', '출력')],
     ['제목 및 머리글', heads],
     ['테마 셀 스타일', theme],
     ['숫자 서식', nums],
   ];
+  const builtinNames = new Set(sections.flatMap(([, list]) => list.map((s) => cellStyleKey(s.name))));
+  const builtins = sections.map(([title, list]) => [title, list.map((s) => {
+    const include = Object.fromEntries(CELL_STYLE_PARTS.map(([part]) => [part, s.name === '표준' || (title === '숫자 서식' ? part === 'number' : ['font', 'border', 'fill'].includes(part))]));
+    const saved = wb.cellStyles?.find((it) => cellStyleKey(it.name) === cellStyleKey(s.name));
+    return { ...s, ...(s.name === '표준' ? { style: wb.baseStyle ?? {} } : {}), include, ...saved, builtin: true };
+  }).filter((s) => !s.hidden)]);
+  const custom = (wb.cellStyles ?? []).filter((s) => !s.hidden && !builtinNames.has(cellStyleKey(s.name)));
+  return [...(includeCustom && custom.length ? [['사용자 지정', custom]] : []), ...builtins];
 }
 function cellStylesMenu(anchorEl) {
   const chip = (s) => {
     const st = s.style ?? {};
     const edge = (k) => (st[k] ? `${st[`${k}s`] === 'thick' ? 3 : st[`${k}s`] === 'medium' || st[`${k}s`] === 'double' ? 2 : 1}px ${st[`${k}s`] === 'double' ? 'double' : 'solid'} ${st[`${k}c`] ?? '#7f7f7f'}` : undefined);
     return el('button', {
-      class: 'style-chip', title: s.name, onmousedown: (e) => e.preventDefault(),
+      class: 'style-chip', title: `${s.name} · 우클릭 또는 Shift+F10: 수정/복제`, 'aria-label': s.name, 'data-cell-style': s.name,
+      onmousedown: (e) => e.preventDefault(),
       style: {
         background: st.fill ?? '#fff', color: st.color ?? '#000', fontWeight: st.bold ? '700' : '400',
         fontStyle: st.italic ? 'italic' : 'normal', fontSize: st.size ? `${Math.min(st.size, 14)}px` : '11.5px',
         borderBottom: edge('bb'), borderTop: edge('bt'),
       },
-      onclick: () => { closeMenus(); applyStyle({ ...RESET_STYLE, numFmt: undefined, code: undefined, decimals: undefined, ...(s.style ?? {}) }, { widen: !!st.numFmt }); focusGrid(); },
+      onclick: () => { closeMenus(); applyCellStyle(s); },
+      oncontextmenu: (e) => { e.preventDefault(); e.stopPropagation(); cellStyleContext(s, { x: e.clientX, y: e.clientY }); },
+      onkeydown: (e) => {
+        if ((e.shiftKey && e.key === 'F10') || (e.altKey && e.key === 'ArrowDown')) {
+          e.preventDefault(); e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); cellStyleContext(s, { x: r.left, y: r.bottom });
+        } else if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) {
+          e.preventDefault(); e.stopPropagation(); const list = [...e.currentTarget.closest('.menu').querySelectorAll('.style-chip')]; const at = list.indexOf(e.currentTarget);
+          const to = e.key === 'Home' ? 0 : e.key === 'End' ? list.length - 1 : Math.max(0, Math.min(list.length - 1, at + ({ ArrowLeft: -1, ArrowRight: 1, ArrowUp: -6, ArrowDown: 6 }[e.key])));
+          list[to]?.focus();
+        }
+      },
     }, s.name);
   };
   const items = [];
   for (const [title, list] of cellStyleSections()) items.push({ title }, { node: el('div', { class: 'style-grid cs6' }, list.map(chip)) });
   items.push({ sep: true },
     { label: '새 셀 스타일...', icon: 'cellStyles', action: () => newCellStyleDialog() },
-    { label: '사용자 지정 스타일 삭제...', disabled: !wb.cellStyles?.length, action: () => deleteCellStyleDialog() });
-  openMenu(anchorEl, items, { scroll: true });
+    { label: '스타일 병합...', icon: 'cellStyles', action: () => mergeCellStylesDialog() },
+    { label: '사용자 지정 스타일 삭제...', disabled: !(wb.cellStyles ?? []).some((s) => !s.hidden && !isBuiltinCellStyle(s)), action: () => deleteCellStyleDialog() });
+  const menu = openMenu(anchorEl, items, { scroll: true });
+  menu.querySelector('.style-chip')?.focus();
 }
-/** 새 셀 스타일: 지금 칸의 서식을 이름 붙여 저장 (파일에 cellStyles 로 저장) */
-function newCellStyleDialog() {
-  const cur = wb.styleAt(si, active.r, active.c) ?? {};
-  formDialog('스타일', [{ name: 'n', label: '스타일 이름', value: `스타일 ${(wb.cellStyles?.length ?? 0) + 1}` }], ({ n }) => {
-    const name = String(n).trim();
-    if (!name) { toast('이름을 입력하세요.'); return false; }
-    const style = Object.fromEntries(Object.entries(cur).filter(([, v]) => v !== undefined && v !== null));
-    wb.cellStyles = [...(wb.cellStyles ?? []).filter((c) => c.name !== name), { name, style }];
-    dirty = true;
-    toast(`'${name}' 스타일을 만들었습니다. [셀 스타일]의 사용자 지정에 있습니다.`);
-    return undefined;
-  }, { note: '지금 선택한 셀의 서식(글꼴 · 채우기 · 테두리 · 표시 형식 · 맞춤)이 스타일이 됩니다.' });
+
+function normalCellStyle() { return { name: '표준', style: wb.baseStyle ?? {}, include: cellStyleIncludes(null) }; }
+function cellStyleBase() { return { font: BASE_FONT.name, size: BASE_FONT.size, ...(wb.baseStyle ?? {}) }; }
+function isBuiltinCellStyle(s) { return s.builtin || s.builtinId !== undefined || cellStyleSections(false).some(([, list]) => list.some((it) => cellStyleKey(it.name) === cellStyleKey(s.name))); }
+function cellStylesBlocked() {
+  if (viewOnly) { toast('읽기 전용 문서에서는 셀 스타일을 변경할 수 없습니다.'); return true; }
+  if (wb.sheets.some((s) => isProtected(s))) { toast('스타일을 변경하려면 먼저 보호된 시트의 보호를 해제하세요.'); return true; }
+  return false;
 }
-function deleteCellStyleDialog() {
-  const list = wb.cellStyles ?? [];
-  formDialog('스타일 삭제', [{ name: 'n', label: '삭제할 스타일', type: 'select', value: list[0]?.name, options: list.map((c) => ({ value: c.name, label: c.name })) }], ({ n }) => {
-    wb.cellStyles = list.filter((c) => c.name !== n);
-    dirty = true;
-    return undefined;
+function applyCellStyle(s) {
+  if (viewOnly || protectBlocked('formatCells')) return;
+  wb.transact(() => {
+    // 파일에서도 이름과 서식의 연결을 유지하도록 기본 제공 스타일도 적용 시 기록한다.
+    if (s.name !== '표준' && !wb.cellStyles?.some((it) => cellStyleKey(it.name) === cellStyleKey(s.name))) wb.setCellStyles([...(wb.cellStyles ?? []), { name: s.name, style: structuredClone(s.style ?? {}), include: cellStyleIncludes(s), ...(s.builtinId !== undefined ? { builtinId: s.builtinId } : {}) }]);
+    const patch = cellStylePatch(s.name === '표준' ? normalCellStyle() : s, cellStyleBase());
+    // '셀 서식 허용'은 보호 정의를 바꿀 권한이 아니다. 기존 잠금/수식 숨김을 그대로 둔다.
+    if (isProtected(sheet())) { delete patch.locked; delete patch.hideFormula; }
+    applyStyle(patch, { widen: !!s.style?.numFmt });
+  }, meta());
+  focusGrid();
+}
+/** 이름에 연결된 셀/행/열/블록만 바꾼다. 직접 추가한 서식과 셀 값은 유지한다. */
+function updateCellStyleUses(before, after, includeUnnamed = false) {
+  updateCellStyleUsesBatch(new Map([[cellStyleKey(before.name), { before, after }]]), includeUnnamed ? { before, after } : null);
+}
+function updateCellStyleUsesBatch(changes, unnamed = null) {
+  const base = cellStyleBase();
+  const patchFor = (style) => {
+    if (!style) return null;
+    const change = style.cellStyleName ? changes.get(cellStyleKey(style.cellStyleName)) : unnamed;
+    return change ? cellStyleUpdatePatch(style, change.before, change.after, base) : null;
+  };
+  wb.sheets.forEach((s, at) => {
+    let patch = patchFor(s.allStyle); if (patch) wb.setLineStyle(at, 'all', 0, patch);
+    for (const [c, st] of Object.entries(s.colStyles)) { patch = patchFor(st); if (patch) wb.setLineStyle(at, 'col', Number(c), patch); }
+    for (const [r, st] of Object.entries(s.rowStyles)) { patch = patchFor(st); if (patch) wb.setLineStyle(at, 'row', Number(r), patch); }
+    const cells = [];
+    s.cells.forEachRC((cell, r, c) => { const p = patchFor(cell.style); if (p) cells.push([r, c, p]); });
+    for (const [r, c, p] of cells) wb.setStyle(at, r, c, p);
+    for (let bi = 0; bi < s.blocks.length; bi++) for (let ci = 0; ci < s.blocks[bi].cols.length; ci++) {
+      const st = s.blocks[bi].cols[ci].fmt; patch = patchFor(st); if (patch) wb.setBlockStyle(at, bi, ci, { ...st, ...patch });
+    }
+  });
+}
+function cellStyleContext(s, anchor) {
+  openMenu(anchor, [
+    { label: '수정...', action: () => newCellStyleDialog(s, false) },
+    { label: '복제...', action: () => newCellStyleDialog(s, true) },
+    { label: '삭제', disabled: isBuiltinCellStyle(s), action: () => deleteCellStyleDialog(s) },
+  ]);
+}
+
+/** Excel의 스타일 대화상자: 이름 + 포함할 6개 요소 + 별도의 셀 서식 편집. */
+function newCellStyleDialog(source = null, duplicate = false) {
+  if (cellStylesBlocked()) return;
+  const book = wb; const original = source && !duplicate ? source : null;
+  const names = new Set(cellStyleSections().flatMap(([, list]) => list.map((s) => cellStyleKey(s.name))));
+  const prefix = source ? `${source.name} 복사본` : '스타일';
+  let suggested = original?.name ?? prefix;
+  if (!original) for (let n = 1; names.has(cellStyleKey(suggested)) || (!source && n === 1); n++) suggested = `${prefix} ${n}`;
+  let draft = structuredClone(source?.style ?? wb.styleAt(si, active.r, active.c) ?? {});
+  const nameIn = el('input', { type: 'text', value: suggested, maxLength: 255, 'aria-label': '스타일 이름', disabled: !!original && isBuiltinCellStyle(original) });
+  const includes = cellStyleIncludes(source); const checks = {}; const labels = {};
+  const preview = el('div', { class: 'cell-style-preview', 'aria-label': '스타일 미리 보기' }, '가나다 AaBbCc 123');
+  const describe = (part) => {
+    if (part === 'number') return codeOfStyle(draft) || '일반';
+    if (part === 'alignment') return `${({ general: '일반', left: '왼쪽', center: '가운데', right: '오른쪽', centerContinuous: '선택 영역의 가운데' }[draft.align] ?? '일반')}${draft.wrap ? ', 줄 바꿈' : ''}`;
+    if (part === 'font') return `${draft.font || BASE_FONT.name}, ${draft.size || BASE_FONT.size}pt${draft.bold ? ', 굵게' : ''}${draft.italic ? ', 기울임꼴' : ''}`;
+    if (part === 'border') return ['bt', 'bb', 'bl', 'br', 'du', 'dd'].some((key) => draft[key]) ? '사용자 지정 테두리' : '없음';
+    if (part === 'fill') return draft.gradient ? '그라데이션' : draft.pattern ? '무늬 채우기' : draft.fill || '없음';
+    return `${draft.locked === false ? '잠금 해제' : '잠금'}${draft.hideFormula ? ', 수식 숨김' : ''}`;
+  };
+  const refresh = () => {
+    const st = cellStylePatch({ name: '', style: draft, include: Object.fromEntries(CELL_STYLE_PARTS.map(([key]) => [key, checks[key]?.checked ?? includes[key]])) }, cellStyleBase());
+    Object.assign(preview.style, { background: st.fill || '#fff', color: st.color || '#000', fontFamily: fontStack(st.font || BASE_FONT.name), fontWeight: st.bold ? 700 : 400, fontStyle: st.italic ? 'italic' : 'normal', fontSize: `${Math.min(st.size || 11, 24)}pt`, textAlign: st.align === 'general' ? 'left' : st.align || 'left', textDecoration: `${st.underline ? 'underline ' : ''}${st.strike ? 'line-through' : ''}`, borderBottom: st.bb ? `2px solid ${st.bbc || '#000'}` : '1px solid #d8ddd9' });
+    for (const [key] of CELL_STYLE_PARTS) if (labels[key]) { labels[key].textContent = describe(key); labels[key].classList.toggle('muted', !checks[key].checked); }
+  };
+  const rows = CELL_STYLE_PARTS.map(([key, label]) => {
+    const check = el('input', { type: 'checkbox', checked: includes[key], 'aria-label': label }); checks[key] = check;
+    check.addEventListener('change', refresh); const summary = el('span', { class: 'cell-style-detail' }); labels[key] = summary;
+    return el('label', { class: 'cell-style-part' }, check, el('span', {}, label), summary);
+  });
+  openDialog({ title: original ? '스타일 수정' : duplicate ? '스타일 복제' : '스타일', width: 530,
+    body: el('div', { class: 'cell-style-editor' },
+      el('label', { class: 'cell-style-name' }, el('span', {}, '스타일 이름'), nameIn),
+      el('div', { class: 'cell-style-heading' }, el('b', {}, '스타일에 포함할 항목'), el('button', { class: 'btn', onclick: () => formatCellsDialog(0, { styleEdit: true, cur: draft, done: (style) => { draft = style; refresh(); } }) }, '서식...')),
+      el('div', {}, rows), preview, el('div', { class: 'muted' }, '체크하지 않은 항목은 적용할 셀의 기존 서식을 유지합니다.')),
+    buttons: [{ label: '확인', primary: true, action: () => {
+      if (wb !== book || cellStylesBlocked()) return false;
+      const name = nameIn.value.trim(); const key = cellStyleKey(name);
+      if (!validCellStyleName(name)) { toast('올바른 스타일 이름을 입력하세요.'); nameIn.focus(); return false; }
+      if (names.has(key) && key !== cellStyleKey(original?.name)) { toast('같은 이름의 스타일이 있습니다. 다른 이름을 입력하세요.'); nameIn.focus(); return false; }
+      const include = Object.fromEntries(CELL_STYLE_PARTS.map(([part]) => [part, checks[part].checked]));
+      if (!Object.values(include).some(Boolean)) { toast('스타일에 포함할 항목을 하나 이상 선택하세요.'); return false; }
+      // 표준은 이름 목록과 별도로 저장하며 기존 표준을 쓰는 셀의 직접 서식은 유지한다.
+      if (key === '표준' || key === 'normal') {
+        if (!original || !/^(표준|normal)$/i.test(original.name)) { toast('표준은 예약된 이름입니다. 다른 이름을 입력하세요.'); return false; }
+        const def = { name: '표준', style: draft, include };
+        wb.transact(() => { updateCellStyleUses(original, def, true); wb.setBaseStyle({ ...(wb.baseStyle ?? {}), ...cellStylePatch(def, cellStyleBase()) }); }, meta());
+        toast('표준 스타일을 수정했습니다.');
+        return;
+      }
+      const def = importCellStyleList([{ name, style: draft, include, ...(original?.builtinId !== undefined ? { builtinId: original.builtinId } : {}) }])[0];
+      wb.transact(() => {
+        if (original) updateCellStyleUses(original, def);
+        wb.setCellStyles([...(wb.cellStyles ?? []).filter((it) => cellStyleKey(it.name) !== cellStyleKey(original?.name)), def]);
+      }, meta());
+      toast(`'${name}' 스타일을 ${original ? '수정' : '만들기'} 완료했습니다.`);
+    } }, { label: '취소' }],
+  });
+  refresh();
+}
+function deleteCellStyleDialog(source = null) {
+  if (cellStylesBlocked()) return;
+  const list = (wb.cellStyles ?? []).filter((s) => !s.hidden && !isBuiltinCellStyle(s));
+  if (!list.length) { toast('삭제할 사용자 지정 스타일이 없습니다.'); return; }
+  formDialog('스타일 삭제', [{ name: 'n', label: '삭제할 스타일', type: 'select', value: source?.name ?? list[0].name, options: list.map((s) => ({ value: s.name, label: s.name })) }], ({ n }) => {
+    const def = wb.cellStyles?.find((s) => s.name === n); if (!def || isBuiltinCellStyle(def) || cellStylesBlocked()) return false;
+    wb.transact(() => { updateCellStyleUses(def, null); wb.setCellStyles(wb.cellStyles.filter((s) => s !== def)); }, meta());
+    toast(`'${n}' 스타일을 삭제했습니다. 실행 취소로 복원할 수 있습니다.`);
+  }, { okLabel: '삭제', note: '이 스타일을 사용하는 셀도 표준 서식으로 되돌립니다. 셀의 값과 직접 추가한 서식은 유지합니다.' });
+}
+
+function mergeCellStylesDialog() {
+  if (cellStylesBlocked()) return;
+  const book = wb; let styles = []; let loading = false; let generation = 0;
+  const status = el('div', { class: 'muted', role: 'status' }, '스타일을 가져올 파일을 선택하세요. 현재 문서의 셀과 시트는 유지됩니다.');
+  const fileIn = el('input', { type: 'file', accept: '.xlsx,.xlsm,.xltx,.xltm,.wixel,.json', 'aria-label': '스타일을 가져올 파일', hidden: true });
+  const fileName = el('span', { class: 'muted cell-style-file-name' }, '선택한 파일 없음');
+  const conflicts = el('div', { class: 'cell-style-conflicts', hidden: true });
+  const choice = el('select', { 'aria-label': '같은 이름의 스타일' }, el('option', { value: 'keep' }, '현재 문서의 스타일 유지'), el('option', { value: 'replace' }, '가져온 스타일로 덮어쓰기'));
+  fileIn.addEventListener('change', async () => {
+    const file = fileIn.files?.[0]; const at = ++generation; styles = []; conflicts.hidden = true;
+    fileName.textContent = file?.name ?? '선택한 파일 없음';
+    if (!file) return; loading = true; status.textContent = `'${file.name}'의 스타일을 읽는 중…`;
+    try {
+      let data;
+      if (/\.(xlsx|xlsm|xltx|xltm)$/i.test(file.name)) ({ data } = await readXlsxAsync(new Uint8Array(await file.arrayBuffer())));
+      else if (/\.(wixel|json)$/i.test(file.name)) { const parsed = JSON.parse(await file.text()); data = parsed.workbook ?? parsed; }
+      else throw new Error('.xlsx 또는 .wixel 파일을 선택하세요.');
+      if (at !== generation) return;
+      styles = importCellStyleList(data?.cellStyles);
+      const existing = new Set((wb.cellStyles ?? []).map((s) => cellStyleKey(s.name)));
+      for (const [, list] of cellStyleSections(false)) for (const s of list) existing.add(cellStyleKey(s.name));
+      const duplicates = styles.filter((s) => existing.has(cellStyleKey(s.name)));
+      status.textContent = styles.length ? `${file.name}: 스타일 ${styles.length}개${duplicates.length ? ` · 이름 중복 ${duplicates.length}개` : ''}` : '이 파일에는 병합할 이름 있는 셀 스타일이 없습니다.';
+      conflicts.replaceChildren(el('div', {}, duplicates.length ? `중복 이름: ${duplicates.slice(0, 6).map((s) => s.name).join(', ')}${duplicates.length > 6 ? ' 외' : ''}` : ''), el('label', {}, '같은 이름의 스타일', choice));
+      conflicts.hidden = !duplicates.length;
+    } catch (err) { if (at === generation) status.textContent = `스타일을 읽을 수 없습니다: ${err.message}`; }
+    finally { if (at === generation) loading = false; }
+  });
+  openDialog({ title: '스타일 병합', width: 550, body: el('div', { class: 'cell-style-editor' },
+    el('b', {}, '스타일을 가져올 통합 문서'), el('div', { class: 'cell-style-file' }, el('button', { class: 'btn', onclick: () => fileIn.click() }, '파일 선택...'), fileName, fileIn), status, conflicts,
+    el('div', { class: 'muted' }, '스타일 정의만 병합합니다. 파일의 데이터·수식·매크로는 실행하거나 가져오지 않습니다.')),
+    buttons: [{ label: '병합', primary: true, action: () => {
+      if (loading) { toast('파일의 스타일을 읽고 있습니다. 잠시 기다리세요.'); return false; }
+      if (!styles.length) { toast('병합할 스타일이 있는 파일을 선택하세요.'); return false; }
+      if (wb !== book || cellStylesBlocked()) return false;
+      const defs = new Map((wb.cellStyles ?? []).map((s) => [cellStyleKey(s.name), s]));
+      for (const [, list] of cellStyleSections(false)) for (const s of list) if (!defs.has(cellStyleKey(s.name))) defs.set(cellStyleKey(s.name), s);
+      let changed = 0; let skipped = 0;
+      wb.transact(() => {
+        const next = [...(wb.cellStyles ?? [])];
+        const indices = new Map(next.map((s, i) => [cellStyleKey(s.name), i])); const replacements = new Map();
+        for (const def of styles) {
+          const key = cellStyleKey(def.name); const before = defs.get(key);
+          if (before && choice.value !== 'replace') { skipped++; continue; }
+          if (before) replacements.set(key, { before, after: def });
+          const index = indices.get(key);
+          if (index !== undefined) next[index] = def; else { indices.set(key, next.length); next.push(def); }
+          changed++;
+        }
+        if (replacements.size) updateCellStyleUsesBatch(replacements);
+        if (changed) wb.setCellStyles(next);
+      }, meta());
+      toast(`스타일 ${changed}개를 병합했습니다.${skipped ? ` 기존 스타일 ${skipped}개는 유지했습니다.` : ''}`);
+    } }, { label: '취소' }],
   });
 }
 
@@ -15438,6 +15664,9 @@ const MENUS = {
     { label: '서식 지우기', action: () => run('clearFormats') },
     { label: '내용 지우기', key: 'Delete', action: () => run('clearContents') },
     { label: '메모 지우기', action: () => run('clearComments') },
+    { sep: true },
+    { label: '하이퍼링크 지우기', desc: '링크만 지우고 내용과 서식은 유지합니다.', action: () => run('clearHyperlinks') },
+    { label: '하이퍼링크 제거', desc: '링크가 있는 셀의 서식도 표준으로 초기화합니다.', action: () => run('removeHyperlink') },
   ],
   sort: () => [
     { label: '텍스트 오름차순 정렬', icon: 'sortAsc', action: () => sortData(true) },
@@ -15619,7 +15848,7 @@ function showContextMenu(pos, kind) {
     }
     items.push(
       { label: lk ? '하이퍼링크 편집...' : '링크', key: 'Ctrl+K', action: hyperlinkDialog },
-      ...(lk ? [{ label: '하이퍼링크 열기', action: () => openLink(lk) }, { label: '하이퍼링크 제거', action: removeHyperlink }] : []),
+      ...(lk ? [{ label: '하이퍼링크 열기', action: () => openLink(lk) }, { label: '하이퍼링크 지우기', desc: '내용과 서식 유지', action: () => run('clearHyperlinks') }, { label: '하이퍼링크 제거', desc: '해당 셀의 서식도 초기화', action: () => run('removeHyperlink') }] : []),
       { label: '선택하여 붙여넣기...', key: 'Ctrl+Alt+V', action: pasteSpecialDialog, disabled: !clip },
       { sep: true },
       { label: '빠른 분석', key: 'Ctrl+Q', icon: 'stats', action: () => quickAnalysis() },
@@ -15800,6 +16029,7 @@ const COMMANDS = {
   clearAll: () => clearSelection('all'),
   clearFormats: () => clearSelection('formats'),
   clearComments: () => clearSelection('comments'),
+  clearHyperlinks: () => removeHyperlink(false),
   sortAsc: () => sortData(true),
   sortDesc: () => sortData(false),
   sortDialog,
@@ -16042,6 +16272,8 @@ const NO_COMMIT = new Set(['toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100', 'shor
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['지우기', ['하이퍼링크 지우기는 내용·서식을 보존하고 링크만 삭제, 하이퍼링크 제거는 해당 셀 서식도 초기화', '지우기 명령의 수식 저장값·그림·실행 취소 보존과 조건부 서식의 선택 밖 범위 유지']],
+  ['셀 스타일', ['새 스타일의 6개 서식 요소 선택 · 서식 편집 · 미리 보기', '스타일 우클릭 수정 · 복제 · 삭제와 실행 취소, 파일에서 스타일 병합 및 중복 이름 처리']],
   ['WIXEL 3.0', ['시작 화면: 새 문서 · 파일 드래그 열기 · 최근 문서 · 서식 · Google Sheets 가져오기', '저장 위치 선택: 브라우저 보관 · Excel 다운로드 · 원본 파일 · 서버/온라인 개인 보관함', '개인 보관함 복구키로 다른 기기 연결, 저장 충돌 보호와 읽기 전용 공유', '공개 Google Sheets의 IMPORTRANGE 연결과 QUERY 데이터 분석']],
   ['작업 공간', ['새 문서의 기본 가로 가운데 맞춤과 기존 파일 서식 유지', 'Ctrl+Space로 행 선택 상태에서도 활성 열만 선택', '빠른 실행 도구 모음의 리본 위/아래 위치 · 명령 순서 · Alt 숫자 키 · 설정 복원', '피벗 필드의 키보드 이동과 값 요약·표시 형식 바로 설정', '셀 서식의 맞춤 미리 보기 · 키보드 탭 · 보호 설정', '3차원 차트와 차트·도형 서식 패널 개선']],
   ['호환 · 보안 개선', ['표 구조 참조 · 행 높이 · 문자열 보존 · 잘못된 날짜 입력 처리 수정', '대용량 CSV 가져오기와 스파크라인의 배열 크기 오류 수정', '서버 인증 기본값과 웹·네이버 중계 접근 보호 강화']],

@@ -168,6 +168,11 @@ function readTheme(files, wbRels) {
   return order.map((n, i) => get(n) ?? DEFAULT_THEME[i] ?? '000000');
 }
 
+const STYLE_APPLY = { number: 'applyNumberFormat', alignment: 'applyAlignment', font: 'applyFont', border: 'applyBorder', fill: 'applyFill', protection: 'applyProtection' };
+const styleNameKey = (name) => String(name ?? '').trim().toLowerCase();
+const falseAttr = (value) => value === '0' || value === 'false';
+const trueAttr = (value) => value === '1' || value === 'true';
+
 function readStyles(files, wbRels, theme) {
   const rel = Object.values(wbRels).find((r) => r.type === 'styles');
   const xml = rel && textOf(files[rel.target]);
@@ -177,10 +182,10 @@ function readStyles(files, wbRels, theme) {
   for (const f of kids(child(root, 'numFmts'), 'numFmt')) numFmts[f.attrs.numFmtId] = f.attrs.formatCode;
   const fontOf = (f) => {
     const st = {};
-    if (child(f, 'b') && child(f, 'b').attrs.val !== '0') st.bold = true;
-    if (child(f, 'i') && child(f, 'i').attrs.val !== '0') st.italic = true;
+    if (child(f, 'b') && !falseAttr(child(f, 'b').attrs.val)) st.bold = true;
+    if (child(f, 'i') && !falseAttr(child(f, 'i').attrs.val)) st.italic = true;
     if (child(f, 'u') && child(f, 'u').attrs.val !== 'none') st.underline = true;
-    if (child(f, 'strike') && child(f, 'strike').attrs.val !== '0') st.strike = true;
+    if (child(f, 'strike') && !falseAttr(child(f, 'strike').attrs.val)) st.strike = true;
     const sz = Number(child(f, 'sz')?.attrs.val);
     if (sz) st.size = sz;
     const color = colorOf(child(f, 'color'), theme);
@@ -264,17 +269,27 @@ function readStyles(files, wbRels, theme) {
   const styleXfs = kids(child(root, 'cellStyleXfs'), 'xf');
   const xfStyle = (xf, parent) => {
     const a = xf.attrs;
-    const st = { ...fonts[Number(a.fontId || 0)] };
+    // 명시적 apply*=0 또는 생략된 구성요소는 이름 있는 부모 스타일에서 가져옵니다.
+    // 부모가 그 구성요소를 적용하지 않도록 한 경우는 통합 문서 기본 구성요소를 씁니다.
+    const inherited = (flag) => parent && !falseAttr(parent.attrs[flag]);
+    const componentId = (key, flag) => Number(parent && (falseAttr(a[flag]) || a[key] === undefined)
+      ? inherited(flag) ? parent.attrs[key] ?? 0 : 0 : a[key] ?? 0);
+    const componentNode = (name, flag) => {
+      const own = child(xf, name);
+      if (parent && falseAttr(a[flag])) return inherited(flag) ? child(parent, name) : null;
+      return own ?? (trueAttr(a[flag]) ? null : inherited(flag) ? child(parent, name) : null);
+    };
+    const st = { ...fonts[componentId('fontId', 'applyFont')] };
     // 확인란: 엑셀 365 (xfpb:xfComplement → featurePropertyBag 의 CellControl) · WIXEL 확장
     if (descendants(xf, 'xfComplement').length || descendants(xf, 'wx:checkbox').length || descendants(xf, 'checkbox').length) st.checkbox = true;
     if (st.font && st.font === defaultFont) delete st.font;
     if (st.size === defaultSize) delete st.size; // 통합 문서 기본 크기는 적지 않음 (기본 글꼴로 표시)
-    const fill = fills[Number(a.fillId || 0)];
+    const fill = fills[componentId('fillId', 'applyFill')];
     if (fill && typeof fill === 'object') Object.assign(st, fill);
     else if (fill) st.fill = fill;
-    Object.assign(st, borders[Number(a.borderId || 0)] ?? {});
-    Object.assign(st, numFmtOf(a.numFmtId || 0));
-    const al = child(xf, 'alignment') ?? (a.applyAlignment === '1' ? null : child(parent, 'alignment'));
+    Object.assign(st, borders[componentId('borderId', 'applyBorder')] ?? {});
+    Object.assign(st, numFmtOf(componentId('numFmtId', 'applyNumberFormat')));
+    const al = componentNode('alignment', 'applyAlignment');
     if (al) {
       const h = al.attrs.horizontal;
       if (h === 'general' || h === 'left' || h === 'center' || h === 'right') st.align = h;
@@ -282,7 +297,7 @@ function readStyles(files, wbRels, theme) {
       else if (h === 'distributed') st.align = 'center';
       else if (h === 'justify') { st.align = 'left'; st.wrap = true; }
       const v = al.attrs.vertical;
-      if (v === 'top') st.valign = 'top';
+      if (v === 'top' || v === 'bottom') st.valign = v;
       else if (v === 'center' || v === 'justify' || v === 'distributed') st.valign = 'middle';
       if (al.attrs.wrapText === '1' || al.attrs.wrapText === 'true') st.wrap = true;
       if (Number(al.attrs.indent)) st.indent = Number(al.attrs.indent);
@@ -291,19 +306,38 @@ function readStyles(files, wbRels, theme) {
       if (al.attrs.shrinkToFit === '1' || al.attrs.shrinkToFit === 'true') st.shrink = true;
     }
     // 셀 보호: 잠금 해제 · 수식 숨기기
-    const pr = child(xf, 'protection');
+    const pr = componentNode('protection', 'applyProtection');
     if (pr) {
       if (pr.attrs.locked === '0' || pr.attrs.locked === 'false') st.locked = false;
       if (pr.attrs.hidden === '1' || pr.attrs.hidden === 'true') st.hideFormula = true;
     }
     return st;
   };
-  const xfs = kids(child(root, 'cellXfs'), 'xf').map((xf) => xfStyle(xf, styleXfs[Number(xf.attrs.xfId ?? 0)]));
-  // 이름 있는 셀 스타일 (엑셀 [셀 스타일]의 사용자 지정 · 기본 제공 스타일을 파일에서 고친 것) — '표준' 은 제외
-  const cellStyles = kids(child(root, 'cellStyles'), 'cellStyle')
-    .filter((c) => c.attrs.builtinId !== '0' && c.attrs.hidden !== '1' && styleXfs[Number(c.attrs.xfId)])
-    .map((c) => ({ name: unx(c.attrs.name ?? ''), style: xfStyle(styleXfs[Number(c.attrs.xfId)], null), ...(c.attrs.builtinId !== undefined ? { builtinId: Number(c.attrs.builtinId) } : {}) }))
-    .filter((c) => c.name);
+  // 표준은 baseStyle로 보존하고 다른 이름/구성요소/숨김 상태는 갤러리 모델로 전달합니다.
+  // 중복 이름은 대소문자와 양끝 공백을 무시해 첫 정의를 유지합니다.
+  const cellStyles = [], namedByKey = new Map(), nameByXf = new Map();
+  for (const item of kids(child(root, 'cellStyles'), 'cellStyle')) {
+    const a = item.attrs, id = Number(a.xfId), name = unx(a.name ?? '').trim(), key = styleNameKey(name);
+    if (!Number.isInteger(id) || id < 0 || !styleXfs[id] || !name) continue;
+    if (a.builtinId === '0' || key === '표준' || key === 'normal') continue;
+    const previous = namedByKey.get(key);
+    if (previous) { if (!nameByXf.has(id)) nameByXf.set(id, previous.name); continue; }
+    const include = {};
+    for (const [part, flag] of Object.entries(STYLE_APPLY)) include[part] = !falseAttr(styleXfs[id].attrs[flag]);
+    const itemStyle = { name, style: xfStyle(styleXfs[id], null), include };
+    if (/^\d+$/.test(a.builtinId ?? '')) itemStyle.builtinId = Number(a.builtinId);
+    if (a.customBuiltin !== undefined) itemStyle.customBuiltin = trueAttr(a.customBuiltin);
+    if (trueAttr(a.hidden)) itemStyle.hidden = true;
+    if (/^\d+$/.test(a.iLevel ?? '')) itemStyle.iLevel = Number(a.iLevel);
+    cellStyles.push(itemStyle); namedByKey.set(key, itemStyle);
+    if (!nameByXf.has(id)) nameByXf.set(id, name);
+  }
+  const xfs = kids(child(root, 'cellXfs'), 'xf').map((xf) => {
+    const id = Number(xf.attrs.xfId ?? 0), style = xfStyle(xf, styleXfs[id]);
+    const name = nameByXf.get(id);
+    if (name) style.cellStyleName = name;
+    return style;
+  });
   const dxfOf = (d) => {
     const st = {};
     const f = child(d, 'font');
@@ -763,6 +797,7 @@ function* readSheet(files, path, ctx) {
       if (style) d.style = style;
       if (cached !== undefined && cached !== null) d.cached = cached;
       if (formula !== null && style?.numFmt === 'text') d.fx = true; // 텍스트 서식 칸에 저장된 수식
+      if (formula === null && style?.numFmt === 'text' && value !== null && typeof value !== 'string') d.inputType = 'value'; // 표시 형식 @인 숫자·논리·오류 값도 원래 자료형 유지
       sheet.cells.setRC(r, cc, d);
     }
   }
@@ -787,7 +822,7 @@ function* readSheet(files, path, ctx) {
     const b = sheet.blocks[0];
     if (!inBlock(b, rr, cc2)) return undefined;
     const v = blockValue(b, rr, cc2);
-    return v === null ? undefined : { raw: typeof v === 'number' ? numberRaw(v, b.cols[cc2].fmt) : typeof v === 'string' ? textRaw(v) : typeof v === 'boolean' ? (v ? 'TRUE' : 'FALSE') : v.error, ...(b.cols[cc2].fmt ? { style: b.cols[cc2].fmt } : {}) };
+    return v === null ? undefined : { raw: typeof v === 'number' ? numberRaw(v, b.cols[cc2].fmt) : typeof v === 'string' ? textRaw(v) : typeof v === 'boolean' ? (v ? 'TRUE' : 'FALSE') : v.error, ...(b.cols[cc2].fmt ? { style: b.cols[cc2].fmt } : {}), ...(b.cols[cc2].fmt?.numFmt === 'text' ? { inputType: 'value' } : {}) };
   };
 
   for (const m of kids(child(root, 'mergeCells'), 'mergeCell')) {
@@ -2644,7 +2679,7 @@ class StylePool {
     const numFmtId = this.fmtId(style);
     const align = [];
     if (style.align) align.push(`horizontal="${style.align}"`);
-    if (style.valign) align.push(`vertical="${style.valign === 'middle' ? 'center' : 'top'}"`);
+    if (style.valign) align.push(`vertical="${style.valign === 'middle' ? 'center' : style.valign === 'bottom' ? 'bottom' : 'top'}"`);
     if (style.wrap) align.push('wrapText="1"');
     if (style.indent) align.push(`indent="${style.indent}"`);
     if (style.rotate) align.push(`textRotation="${style.rotate === 255 ? 255 : style.rotate < 0 ? 90 - style.rotate : style.rotate}"`);
@@ -2654,8 +2689,20 @@ class StylePool {
     if (style.checkbox) this.hasCheckbox = true;
     const ext = style.checkbox ? '<extLst><ext uri="{C7286773-470A-42A8-94C5-96B5CB345126}" xmlns:xfpb="http://schemas.microsoft.com/office/spreadsheetml/2022/featurepropertybag"><xfpb:xfComplement i="0"/></ext></extLst>' : '';
     const inner = (align.length ? `<alignment ${align.join(' ')}/>` : '') + prot + ext;
-    if (this.styleXfMode) return `<xf numFmtId="${numFmtId}" fontId="${fontId}" fillId="${fillId}" borderId="${borderId}"${numFmtId ? ' applyNumberFormat="1"' : ''}${fontId ? ' applyFont="1"' : ''}${fillId ? ' applyFill="1"' : ''}${borderId ? ' applyBorder="1"' : ''}${align.length ? ' applyAlignment="1"' : ''}${prot ? ' applyProtection="1"' : ''}${inner ? `>${inner}</xf>` : '/>'}`;
-    const xml = `<xf numFmtId="${numFmtId}" fontId="${fontId}" fillId="${fillId}" borderId="${borderId}" xfId="0"${numFmtId ? ' applyNumberFormat="1"' : ''}${fontId ? ' applyFont="1"' : ''}${fillId ? ' applyFill="1"' : ''}${borderId ? ' applyBorder="1"' : ''}${align.length ? ' applyAlignment="1"' : ''}${prot ? ' applyProtection="1"' : ''}${inner ? `>${inner}</xf>` : '/>'}`;
+    const parts = { number: numFmtId, font: fontId, fill: fillId, border: borderId, alignment: align.join(' '), protection: prot };
+    if (this.styleXfMode) {
+      this.lastStyleParts = parts;
+      const flags = Object.entries(STYLE_APPLY).map(([part, flag]) => ` ${flag}="${this.styleXfInclude?.[part] === false ? 0 : 1}"`).join('');
+      return `<xf numFmtId="${numFmtId}" fontId="${fontId}" fillId="${fillId}" borderId="${borderId}"${flags}${inner ? `>${inner}</xf>` : '/>'}`;
+    }
+    const named = this.namedByKey?.get(styleNameKey(style.cellStyleName));
+    // 이름 연결은 xfId로 보존합니다. 부모와 같은 요소는 상속하고 직접 고친 요소는 셀에 기록합니다.
+    const flags = Object.entries(STYLE_APPLY).map(([part, flag]) => {
+      const inherit = named && named.include[part] && named.parts[part] === parts[part];
+      const value = named && inherit ? 0 : 1;
+      return ` ${flag}="${value}"`;
+    }).join('');
+    const xml = `<xf numFmtId="${numFmtId}" fontId="${fontId}" fillId="${fillId}" borderId="${borderId}" xfId="${named?.id ?? 0}"${flags}${inner ? `>${inner}</xf>` : '/>'}`;
     const id = this.xfs.length;
     this.xfs.push(xml);
     this.maps.xf.set(k, id);
@@ -2664,16 +2711,27 @@ class StylePool {
 
   /** 이름 있는 셀 스타일 → cellStyleXfs + cellStyles (엑셀 [셀 스타일] 갤러리의 사용자 지정) */
   namedStyles(list) {
-    this.cellStyleXfs = ['<xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>'];
+    this.namedByKey = new Map();
+    this.cellStyleXfs = [];
     this.cellStyleList = ['<cellStyle name="표준" xfId="0" builtinId="0"/>'];
-    const seen = new Set(['표준']);
+    const compile = (style, include) => {
+      this.styleXfMode = true; this.styleXfInclude = include;
+      try { return this.xfOf(Object.keys(style ?? {}).length ? style : { numFmt: 'general' }); }
+      finally { this.styleXfMode = false; this.styleXfInclude = null; }
+    };
+    this.cellStyleXfs.push(compile(this.baseStyle, null));
+    const seen = new Set(['표준', 'normal']);
     for (const cs of list ?? []) {
-      if (!cs?.name || seen.has(cs.name)) continue;
-      seen.add(cs.name);
-      this.styleXfMode = true;
-      const xml = Object.keys(cs.style ?? {}).length ? this.xfOf(cs.style) : '<xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>';
-      this.styleXfMode = false;
-      this.cellStyleList.push(`<cellStyle name="${esc(cs.name)}" xfId="${this.cellStyleXfs.length}"${cs.builtinId !== undefined ? ` builtinId="${cs.builtinId}" customBuiltin="1"` : ''}/>`);
+      const name = String(cs?.name ?? '').trim(), key = styleNameKey(name);
+      if (!name || seen.has(key) || cs.builtinId === 0) continue;
+      seen.add(key);
+      const include = {};
+      for (const part of Object.keys(STYLE_APPLY)) include[part] = cs.include?.[part] !== false;
+      const xml = compile(cs.style, include), id = this.cellStyleXfs.length;
+      this.namedByKey.set(key, { id, include, parts: this.lastStyleParts });
+      const builtIn = Number.isInteger(cs.builtinId) && cs.builtinId >= 0 ? ` builtinId="${cs.builtinId}" customBuiltin="${cs.customBuiltin === false ? 0 : 1}"` : '';
+      const level = Number.isInteger(cs.iLevel) && cs.iLevel >= 0 ? ` iLevel="${cs.iLevel}"` : '';
+      this.cellStyleList.push(`<cellStyle name="${xesc(name)}" xfId="${id}"${builtIn}${cs.hidden ? ' hidden="1"' : ''}${level}/>`);
       this.cellStyleXfs.push(xml);
     }
   }
@@ -3648,7 +3706,7 @@ const MAIN_TYPES = {
 function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = null } = {}) {
   const files = {};
   const pool = new StylePool(wb.defaultFont ?? WRITE_FONT, wb.baseStyle);
-  if (wb.cellStyles?.length) pool.namedStyles(wb.cellStyles);
+  pool.namedStyles(wb.cellStyles);
   const wmdw = digitWidth(pool.baseFont); // 파일의 열 너비 = 픽셀 ÷ 기본 글꼴 숫자 너비
   const strings = [];
   const stringIndex = new Map();

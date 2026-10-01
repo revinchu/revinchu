@@ -1459,3 +1459,13 @@ body.keytips .quick-access [data-qat-key]:not([data-qat-key=""])::after { conten
 .pp-hint { line-height:1.65; }
 .fc-align-preview { display:flex; min-height:94px; height:94px; border:1px solid var(--border); background:var(--surface); padding:8px; overflow:hidden; }
 .fc-align-preview span { max-width:100%; }
+
+/* 셀 스타일: Excel의 포함 항목/서식 편집 흐름 */
+.cell-style-editor{display:flex;flex-direction:column;gap:14px}
+.cell-style-name{display:flex;align-items:center;gap:16px}.cell-style-name input{flex:1;min-width:100px}
+.cell-style-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.dialog-body .cell-style-part{display:grid;grid-template-columns:18px 76px minmax(0,1fr);align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--line,#e4e7e5)}
+.cell-style-part input{margin:0}.cell-style-detail{overflow-wrap:anywhere;font-size:12px}
+.cell-style-preview{padding:18px 16px;min-height:60px;border:1px solid #d8ddd9;border-radius:3px;overflow:hidden}
+.cell-style-conflicts{display:flex;flex-direction:column;gap:10px}.cell-style-conflicts[hidden]{display:none}.cell-style-conflicts label{display:flex;align-items:center;gap:12px}
+.cell-style-file{display:flex;align-items:center;gap:12px}.cell-style-file-name{overflow-wrap:anywhere}.style-chip:focus-visible{outline:2px solid #107c41;outline-offset:1px}

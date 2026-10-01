@@ -317,9 +317,12 @@ export function makeCellRC(data, r, c) {
   if (data.link) cell.link = data.link; // 하이퍼링크: 주소(URL) 또는 '#시트!A1'
   if (data.cached !== undefined) cell.cached = data.cached;
   if (data.image?.src) cell.image = { ...data.image }; // 셀에 배치한 그림
+  // 서식 변경은 원래 입력의 자료형을 바꾸지 않음. 새 사용자 입력에는 이 힌트를 넘기지 않는다.
+  if (data.inputType === 'text' || data.inputType === 'value') cell.inputType = data.inputType;
+  const textInput = cell.inputType === 'text' || (cell.inputType !== 'value' && style?.numFmt === 'text');
   // 텍스트 서식 칸의 수식: 새로 입력하면 글자지만, 파일에 수식으로 저장된 것(fx)은 엑셀처럼 수식
   if (data.fx) cell.fx = true;
-  if (cell.raw.startsWith('=') && cell.raw.length > 1 && (style?.numFmt !== 'text' || data.fx)) {
+  if (cell.raw.startsWith('=') && cell.raw.length > 1 && (!textInput || data.fx)) {
     cell.formula = true;
     let p;
     if (r !== undefined) {
@@ -334,7 +337,7 @@ export function makeCellRC(data, r, c) {
     else cell.parseError = p.error;
   } else if (cell.image && cell.raw === '') {
     cell.v = new CellImage(cell.image);
-  } else if (style?.numFmt === 'text') {
+  } else if (textInput) {
     cell.v = cell.raw === '' ? null : cell.raw;
   } else {
     if (PLAIN_NUMBER.test(cell.raw)) cell.v = Number(cell.raw);
@@ -370,7 +373,7 @@ const savedCached = (c) => (c.cached !== undefined && c.formula && !c.dirty ? c.
 /** 두 셀의 저장 형태(cellData)가 같은지 — cellData 를 만들어 JSON 으로 비교하는 것과 같지만 훨씬 빠름 */
 function sameCell(a, b) {
   if (!a || !b) return !a && !b;
-  if (a.raw !== b.raw || (a.comment || null) !== (b.comment || null) || (a.link || null) !== (b.link || null) || !!a.fx !== !!b.fx) return false;
+  if (a.raw !== b.raw || (a.comment || null) !== (b.comment || null) || (a.link || null) !== (b.link || null) || !!a.fx !== !!b.fx || a.inputType !== b.inputType) return false;
   if (!sameStyle(a.style, b.style)) return false;
   if ((a.image || b.image) && JSON.stringify(a.image ?? null) !== JSON.stringify(b.image ?? null)) return false;
   const ca = savedCached(a);
@@ -378,7 +381,8 @@ function sameCell(a, b) {
   return ca === cb || JSON.stringify(ca) === JSON.stringify(cb);
 }
 
-export function cellData(cell) {
+/** 두 번째 인수로 서식을 교체할 때는 raw의 원래 해석도 보존한다 (null = 서식 지우기). */
+export function cellData(cell, style) {
   if (!cell) return null;
   const d = { raw: cell.raw };
   if (cell.style) d.style = { ...cell.style };
@@ -386,6 +390,16 @@ export function cellData(cell) {
   if (cell.link) d.link = cell.link;
   if (cell.image) d.image = { ...cell.image };
   if (cell.fx) d.fx = true;
+  if (cell.inputType) d.inputType = cell.inputType;
+  if (arguments.length > 1) {
+    if (style) d.style = { ...style }; else delete d.style;
+    if (cell.formula) { if (style?.numFmt === 'text') d.fx = true; }
+    else if (cell.raw !== '') {
+      const inputType = cell.inputType ?? (cell.block ? 'value' : cell.style?.numFmt === 'text' ? 'text' : 'value');
+      if (inputType !== (style?.numFmt === 'text' ? 'text' : 'value')) d.inputType = inputType;
+      else delete d.inputType;
+    }
+  }
   // 입력이 바뀌어 다시 계산한 수식은 파일의 옛 계산 결과를 버림
   if (cell.cached !== undefined && cell.formula && !cell.dirty) d.cached = cell.cached;
   return d;
@@ -532,7 +546,7 @@ export class Workbook {
       const v = blockValue(b, r, c);
       const fmt = b.cols[c - b.c0].fmt ?? undefined;
       if (v === null) return fmt ? { raw: '', v: null, style: fmt } : undefined;
-      return { raw: rawOf(v, fmt, textRawOf), v: blockCellValue(v), style: fmt, block: true };
+      return { raw: rawOf(v, fmt, textRawOf), v: blockCellValue(v), style: fmt, block: true, ...(fmt?.numFmt === 'text' ? { inputType: 'value' } : {}) };
     }
     return undefined;
   }
@@ -1371,7 +1385,7 @@ export class Workbook {
     for (const e of entries) {
       if (e.t === 'cell') {
         // 셀 변경: 그 칸을 참조하는 수식만 (트랜잭션 안에서 바뀐 칸은 이미 모아 둠)
-        if (!cellsDone && !done.has(e.si)) pts.push(e.si, e.r, e.c);
+        if (!cellsDone && !e.calcNeutral && !done.has(e.si)) pts.push(e.si, e.r, e.c);
       } else if (e.t === 'perm' || e.t === 'order' || (e.t === 'prop' && !CALC_NEUTRAL.has(e.prop))) {
         if (e.t === 'prop' && e.prop === 'tables') { this.deps = null; this.affectMemo.clear(); this.graph = null; this.graphEpoch = (this.graphEpoch ?? 0) + 1; }
         if (!done.has(e.si)) { done.add(e.si); this.invalidate(e.si); }
@@ -1401,6 +1415,9 @@ export class Workbook {
         else if (e.t === 'list') e.after = { sheets: [...this.sheets], names: this.copyNames() };
         else if (e.t === 'sheet') e.after = this.serializeSheet(e.si);
         else if (e.t === 'names') e.after = this.copyNames();
+        else if (e.t === 'cellStyles') e.after = structuredClone(this.cellStyles ?? null);
+        else if (e.t === 'baseStyle') e.after = structuredClone(this.baseStyle ?? null);
+        else if (e.t === 'blockStyle') e.after = structuredClone(this.sheets[e.si]?.blocks[e.bi]?.cols[e.ci]?.fmt ?? null);
       }
       const top = this.undoStack[this.undoStack.length - 1];
       if (tx.entries.length && tx.meta?.joinPrev && top) {
@@ -1547,6 +1564,12 @@ export class Workbook {
     else if (e.t === 'list') { this.sheets = [...e[side].sheets]; this.names = e[side].names.map((n) => ({ ...n })); }
     else if (e.t === 'sheet') this.putSheet(e.si, e[side]);
     else if (e.t === 'names') this.names = e[side].map((n) => ({ ...n }));
+    else if (e.t === 'cellStyles') this.cellStyles = structuredClone(e[side]);
+    else if (e.t === 'baseStyle') this.baseStyle = structuredClone(e[side]);
+    else if (e.t === 'blockStyle') {
+      const block = this.sheets[e.si]?.blocks[e.bi], col = block?.cols[e.ci];
+      if (col) { col.fmt = structuredClone(e[side]); block.ver = (block.ver ?? 0) + 1; this.touch(e.si); }
+    }
     else if (e.t === 'rename') { if (this.sheets[e.si]) this.sheets[e.si].name = e[side]; }
     else if (e.t === 'perm') { const b = this.sheets[e.si]?.blocks[e.bi]; if (b) { materialize(b); blockPermute(b, e.a, e.n, e.j1, e.j2, e.order, side === 'before'); } }
     else if (e.t === 'order') { const b = this.sheets[e.si]?.blocks[e.bi]; if (b) setRowOrder(b, e.a, e[side]); }
@@ -1597,11 +1620,18 @@ export class Workbook {
     const cur = this.getCell(si, r, c);
     const cell = makeCellRC(data, r, c);
     if (sameCell(cur, cell)) return;
+    // 서식·메모·링크 변경은 수식 자체와 파일 계산값을 다시 계산하지 않습니다.
+    const ca = cur ? savedCached(cur) : undefined, cb = cell ? savedCached(cell) : undefined;
+    const neutralFormula = cur?.formula && cell?.formula && cur.raw === cell.raw && !cur.image && !cell.image
+      && (ca === cb || JSON.stringify(ca) === JSON.stringify(cb));
+    const neutralValue = cur && cell && !cur.formula && !cell.formula && !cur.image && !cell.image && sameValue(cur.v, cell.v);
+    const calcNeutral = !!(neutralFormula || neutralValue);
+    if (neutralFormula && cur.dirty) cell.dirty = true;
     // noUndo: 파일을 여는 중(피벗 다시 그리기) — 실행 취소 기록은 끝나면 비우므로 셀 내용 복사를 만들지 않음
-    this.record(this.noUndo ? { t: 'cell', si, r, c } : { t: 'cell', si, r, c, before: cur ? cellData(cur) : null, after: cell ? cellData(cell) : null });
+    this.record(this.noUndo ? { t: 'cell', si, r, c, calcNeutral } : { t: 'cell', si, r, c, calcNeutral, before: cur ? cellData(cur) : null, after: cell ? cellData(cell) : null });
     this.putCell(si, r, c, cell);
     // 서식만 바뀐 값 칸 (피벗 다시 그리기 등): 값이 같으니 참조하는 수식을 다시 계산하지 않음 (엑셀도 서식 변경은 재계산 안 함)
-    if (cur && cell && !cur.formula && !cell.formula && !cur.image && !cell.image && sameValue(cur.v, cell.v)) {
+    if (calcNeutral) {
       this.version++;
       (this.sheetVer ??= [])[si] = (this.sheetVer[si] ?? 0) + 1;
       if (cur.v !== cell.v) this.bumpCol(si, c);
@@ -1639,12 +1669,12 @@ export class Workbook {
   setStyle(si, r, c, patch) {
     const cur = this.getCell(si, r, c);
     const style = { ...(cur?.style || this.baseStyle || {}), ...patch };
-    this.setCellData(si, r, c, { raw: cur?.raw ?? '', style, comment: cur?.comment, link: cur?.link, image: cur?.image, cached: cur?.cached });
+    this.setCellData(si, r, c, cellData(cur, style) ?? { raw: '', style });
   }
 
   setComment(si, r, c, comment) {
     const cur = this.getCell(si, r, c);
-    this.setCellData(si, r, c, { raw: cur?.raw ?? '', style: cur?.style, comment: comment || undefined, link: cur?.link, image: cur?.image });
+    this.setCellData(si, r, c, { ...(cellData(cur) ?? { raw: '' }), comment: comment || undefined });
   }
 
   clearRange(si, r1, c1, r2, c2, what = 'contents') {
@@ -1652,10 +1682,15 @@ export class Workbook {
       const [r, c] = unkey(k);
       if (r < r1 || r > r2 || c < c1 || c > c2) continue;
       if (what === 'all') this.setCellData(si, r, c, null);
-      else if (what === 'formats') this.setCellData(si, r, c, { raw: cell.raw, comment: cell.comment, link: cell.link, image: cell.image });
-      else if (what === 'comments') this.setCellData(si, r, c, { raw: cell.raw, style: cell.style, link: cell.link, image: cell.image });
-      else this.setCellData(si, r, c, { raw: '', style: cell.style, comment: cell.comment });
+      else {
+        const data = what === 'formats' ? cellData(cell, null) : cellData(cell);
+        if (what === 'comments') delete data.comment;
+        else if (what === 'hyperlinks') delete data.link;
+        else if (what !== 'formats') { data.raw = ''; delete data.cached; delete data.fx; delete data.inputType; delete data.image; delete data.link; }
+        this.setCellData(si, r, c, data);
+      }
     }
+    if (what === 'formats' || what === 'all') this.clearCondRules(si, { r1, c1, r2, c2 });
   }
 
   setColWidth(si, c, w) {
@@ -1696,6 +1731,39 @@ export class Workbook {
     this.invalidate(si);
     const map = axis === 'row' ? this.sheets[si].hiddenRows : this.sheets[si].hiddenCols;
     for (const i of indices) { if (hidden) map[i] = true; else delete map[i]; }
+  }
+
+  /** 통합 문서의 표준 셀 서식만 실행 취소용으로 기록합니다. */
+  setBaseStyle(style) {
+    if (this.tx && !this.tx.entries.some((e) => e.t === 'baseStyle')) {
+      this.tx.entries.push({ t: 'baseStyle', before: structuredClone(this.baseStyle ?? null) });
+    }
+    this.baseStyle = structuredClone(style ?? null);
+    this.version++;
+  }
+
+  /** 이름 있는 셀 스타일 목록만 기록합니다. 호출자는 transact로 사용자 작업을 묶습니다. */
+  setCellStyles(list) {
+    if (list !== null && !Array.isArray(list)) throw new TypeError('셀 스타일 목록이 올바르지 않습니다.');
+    if (this.tx && !this.tx.entries.some((e) => e.t === 'cellStyles')) {
+      this.tx.entries.push({ t: 'cellStyles', before: structuredClone(this.cellStyles ?? null) });
+    }
+    this.cellStyles = structuredClone(list);
+    this.version++;
+  }
+
+  /** 대용량 블록의 한 열 서식만 바꾸며 값 배열·수식 캐시는 유지합니다. */
+  setBlockStyle(si, bi, ci, style) {
+    const block = this.sheets[si]?.blocks[bi], col = block?.cols[ci];
+    if (!col) return false;
+    this.touch(si);
+    if (this.tx && !this.tx.entries.some((e) => e.t === 'blockStyle' && e.si === si && e.bi === bi && e.ci === ci)) {
+      this.tx.entries.push({ t: 'blockStyle', si, bi, ci, before: structuredClone(col.fmt ?? null) });
+    }
+    col.fmt = structuredClone(style ?? null);
+    block.ver = (block.ver ?? 0) + 1;
+    this.version++;
+    return true;
   }
 
   setSheetProp(si, prop, value) {
@@ -2302,11 +2370,37 @@ export class Workbook {
   }
 
   clearCondRules(si, range) {
+    if (!this.sheets[si].cond.length) return;
     this.propSnap(si, 'cond');
     const sheet = this.sheets[si];
-    sheet.cond = range
-      ? sheet.cond.filter((c) => !(c.r1 <= range.r2 && c.r2 >= range.r1 && c.c1 <= range.c2 && c.c2 >= range.c1))
-      : [];
+    if (!range) sheet.cond = [];
+    else sheet.cond = sheet.cond.flatMap((rule) => {
+      const remaining = [];
+      for (const g of [rule, ...(rule.more ?? [])]) {
+        const { r1, c1, r2, c2 } = g;
+        if (r2 < range.r1 || r1 > range.r2 || c2 < range.c1 || c1 > range.c2) { remaining.push({ r1, c1, r2, c2 }); continue; }
+        if (r1 < range.r1) remaining.push({ r1, c1, r2: range.r1 - 1, c2 });
+        if (r2 > range.r2) remaining.push({ r1: range.r2 + 1, c1, r2, c2 });
+        const top = Math.max(r1, range.r1), bottom = Math.min(r2, range.r2);
+        if (c1 < range.c1) remaining.push({ r1: top, c1, r2: bottom, c2: range.c1 - 1 });
+        if (c2 > range.c2) remaining.push({ r1: top, c1: range.c2 + 1, r2: bottom, c2 });
+      }
+      if (!remaining.length) return [];
+      const { more, ...rest } = rule;
+      const next = { ...rest, ...remaining[0], ...(remaining.length > 1 ? { more: remaining.slice(1) } : {}) };
+      const dr = next.r1 - rule.r1, dc = next.c1 - rule.c1;
+      // 조건부 수식의 상대 참조 기준은 대표 범위의 왼쪽 위 셀이다.
+      const shift = (text) => {
+        if (typeof text !== 'string' || !(dr || dc)) return text;
+        const prefixed = text.startsWith('=');
+        const moved = shiftFormula(prefixed ? text : `=${text}`, dr, dc);
+        return prefixed ? moved : moved.slice(1);
+      };
+      if (next.formula) next.formula = shift(next.formula);
+      for (const key of ['v1', 'v2']) if (typeof next[key] === 'string' && next[key].startsWith('=')) next[key] = shift(next[key]);
+      if (next.cfvo) next.cfvo = next.cfvo.map((v) => v.type === 'formula' ? { ...v, v: shift(v.v) } : v);
+      return [next];
+    });
     this.version++;
   }
 
@@ -2317,8 +2411,8 @@ export class Workbook {
       ...(this.vba ? { vba: this.vba } : {}),
       ...(this.externals?.length ? { externals: this.externals } : {}),
       ...(this.defaultFont ? { defaultFont: { ...this.defaultFont } } : {}),
-      ...(this.baseStyle ? { baseStyle: { ...this.baseStyle } } : {}),
-      ...(this.cellStyles?.length ? { cellStyles: this.cellStyles.map((c) => ({ ...c, style: { ...c.style } })) } : {}),
+      ...(this.baseStyle ? { baseStyle: structuredClone(this.baseStyle) } : {}),
+      ...(this.cellStyles?.length ? { cellStyles: structuredClone(this.cellStyles) } : {}),
       ...(this.theme ? { theme: [...this.theme] } : {}),
       ...(this.themeXml ? { themeXml: this.themeXml } : {}),
       ...(this.themeName ? { themeName: this.themeName } : {}),
@@ -2422,7 +2516,7 @@ export class Workbook {
     this.themeName = data.themeName ?? null;
     // 문서 속성 · 보호 (엑셀 파일 › 정보): { title, subject, tags, category, comments, creator, lastModifiedBy, created, modified, readOnlyRecommended, lockStructure, markedFinal }
     this.props = data.props ? { ...data.props } : {};
-    this.cellStyles = data.cellStyles ?? null; // 이름 있는 셀 스타일 [{ name, style, builtinId? }] (엑셀 [셀 스타일] 사용자 지정)
+    this.cellStyles = structuredClone(data.cellStyles ?? null); // 이름 있는 셀 스타일 [{ name, style, builtinId? }] (엑셀 [셀 스타일] 사용자 지정)
     this.baseStyle = data.baseStyle ?? null; // 기본 셀 서식 (xlsx 의 xf 0) — 서식이 없는 셀에 적용
     this.vba = data.vba ?? null; // .xlsm 의 매크로(vbaProject.bin, base64) — 실행하지 않고 보존만 함
     this.externals = data.externals ?? null; // 외부 통합 문서 연결 (xlsx externalLink 원본 — 저장할 때 그대로 되돌려 씀)
