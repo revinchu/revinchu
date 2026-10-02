@@ -1,7 +1,9 @@
 // 페이지 설정 (DOM 없음): 용지 방향 · 크기 · 여백 · 배율 · 인쇄 영역 · 인쇄 제목 · 머리글/바닥글
 // 시트 속성 page = { orientation: 'portrait'|'landscape', paper: 9, margins: { left, right, top, bottom, header, footer } (인치),
 //   scale: 100, fitW: 0, fitH: 0 (0 = 맞추지 않음), hCenter, vCenter, gridlines, headings, header, footer,
-//   area: { r1, c1, r2, c2 } | null, titleRows: [r1, r2] | null, titleCols: [c1, c2] | null }
+//   area: { r1, c1, r2, c2 } | null, areas?: [range,...] (별도 페이지, area는 첫 영역),
+//   rowBreaks/colBreaks: [다음 페이지 첫 zero-based 인덱스], order: 'downThenOver'|'overThenDown',
+//   titleRows: [r1, r2] | null, titleCols: [c1, c2] | null }
 export const PAPERS = [
   { id: 9, label: 'A4 (210 × 297mm)', w: 8.27, h: 11.69, css: 'A4' },
   { id: 8, label: 'A3 (297 × 420mm)', w: 11.69, h: 16.54, css: 'A3' },
@@ -20,13 +22,14 @@ export const MARGINS = [
 export function normPage(p) {
   const result = {
     orientation: 'portrait', paper: 9, margins: { ...MARGINS[0].m }, scale: 100, fitW: 0, fitH: 0, hCenter: false, vCenter: false,
-    gridlines: false, headings: false, header: '', footer: '', area: null, titleRows: null, titleCols: null, ...(p ?? {}),
+    gridlines: false, headings: false, header: '', footer: '', area: null, titleRows: null, titleCols: null, order: 'downThenOver', ...(p ?? {}),
   };
   result.margins = { ...MARGINS[0].m, ...(p?.margins ?? {}) };
   for (const key of Object.keys(MARGINS[0].m)) if (!Number.isFinite(Number(result.margins[key])) || Number(result.margins[key]) < 0) result.margins[key] = MARGINS[0].m[key]; else result.margins[key] = Number(result.margins[key]);
   result.scale = Math.max(10, Math.min(400, Number(result.scale) || 100));
   for (const key of ['fitW', 'fitH']) result[key] = Math.max(0, Math.min(32767, Math.floor(Number(result[key]) || 0)));
   result.orientation = result.orientation === 'landscape' ? 'landscape' : 'portrait';
+  result.order = result.order === 'overThenDown' ? 'overThenDown' : 'downThenOver';
   return result;
 }
 
@@ -102,7 +105,7 @@ export function pageXml(page, esc) {
   const m = p.margins;
   const po = [p.gridlines ? 'gridLines="1"' : '', p.headings ? 'headings="1"' : '', p.hCenter ? 'horizontalCentered="1"' : '', p.vCenter ? 'verticalCentered="1"' : ''].filter(Boolean);
   const fit = !!(p.fitW || p.fitH);
-  const setup = [`paperSize="${p.paper}"`, fit ? '' : `scale="${Math.round(p.scale || 100)}"`, fit ? `fitToWidth="${p.fitW || 0}" fitToHeight="${p.fitH || 0}"` : '', `orientation="${p.orientation}"`].filter(Boolean);
+  const setup = [`paperSize="${p.paper}"`, fit ? '' : `scale="${Math.round(p.scale || 100)}"`, fit ? `fitToWidth="${p.fitW || 0}" fitToHeight="${p.fitH || 0}"` : '', `orientation="${p.orientation}"`, `pageOrder="${p.order}"`].filter(Boolean);
   const hf = p.header || p.footer ? `<headerFooter>${p.header ? `<oddHeader>${esc(p.header)}</oddHeader>` : ''}${p.footer ? `<oddFooter>${esc(p.footer)}</oddFooter>` : ''}</headerFooter>` : '';
   return {
     printOptions: po.length ? `<printOptions ${po.join(' ')}/>` : '',
@@ -133,6 +136,7 @@ export function pageFromXml({ printOptions, pageMargins, pageSetup, headerFooter
   }
   if (pageSetup) {
     const a = pageSetup.attrs;
+    if (a.pageOrder === 'overThenDown') { p.order = 'overThenDown'; any = true; }
     if (a.orientation === 'landscape') { p.orientation = 'landscape'; any = true; }
     if (a.paperSize && paperOf(a.paperSize).id === Number(a.paperSize) && Number(a.paperSize) !== 9) { p.paper = Number(a.paperSize); any = true; }
     if (fitToPage) { p.fitW = a.fitToWidth === undefined ? 1 : Number(a.fitToWidth); p.fitH = a.fitToHeight === undefined ? 1 : Number(a.fitToHeight); any = true; }

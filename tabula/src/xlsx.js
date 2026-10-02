@@ -76,6 +76,52 @@ function rangeRef(rg, abs = false) {
   return rg.r1 === rg.r2 && rg.c1 === rg.c2 ? a(rg.r1, rg.c1) : `${a(rg.r1, rg.c1)}:${a(rg.r2, rg.c2)}`;
 }
 
+/** Print_Area / Print_Titles unions. A comma inside a quoted sheet name is not a separator. */
+export function parsePrintAreas(text, sheetName, { strict = true } = {}) {
+  const parts = []; let start = 0, quoted = false;
+  const source = String(text ?? '').trim();
+  for (let i = 0; i < source.length; i++) {
+    if (source[i] === "'") { if (quoted && source[i + 1] === "'") i++; else quoted = !quoted; }
+    else if (source[i] === ',' && !quoted) { parts.push(source.slice(start, i)); start = i + 1; }
+  }
+  if (quoted) return [];
+  parts.push(source.slice(start));
+  const out = [];
+  for (let part of parts) {
+    part = part.trim().replace(/^[=(\s]+|[)\s]+$/g, '');
+    const bang = part.lastIndexOf('!');
+    if (bang >= 0) {
+      const raw = part.slice(0, bang), sheet = raw.startsWith("'") && raw.endsWith("'") ? raw.slice(1, -1).replace(/''/g, "'") : raw;
+      if (sheet.includes('[') || sheetName !== undefined && sheet.toLowerCase() !== String(sheetName).toLowerCase()) { if (strict) return []; continue; }
+      part = part.slice(bang + 1);
+    }
+    part = part.replace(/\$/g, '');
+    const rows = /^(\d+):(\d+)$/.exec(part), cols = /^([A-Z]+):([A-Z]+)$/i.exec(part);
+    const rg = rows ? { r1: Number(rows[1]) - 1, c1: 0, r2: Number(rows[2]) - 1, c2: MAX_COLS - 1 }
+      : cols ? { r1: 0, c1: nameToCol(cols[1].toUpperCase()), r2: EXCEL_MAX_ROWS - 1, c2: nameToCol(cols[2].toUpperCase()) }
+        : /^[A-Z]+[1-9]\d*(?::[A-Z]+[1-9]\d*)?$/i.test(part) ? parseRangeName(part) : null;
+    if (!rg) { if (strict) return []; continue; }
+    const r = { r1: Math.min(rg.r1, rg.r2), c1: Math.min(rg.c1, rg.c2), r2: Math.max(rg.r1, rg.r2), c2: Math.max(rg.c1, rg.c2) };
+    if (!Object.values(r).every(Number.isInteger) || r.r1 < 0 || r.c1 < 0 || r.r2 >= EXCEL_MAX_ROWS || r.c2 >= MAX_COLS) { if (strict) return []; continue; }
+    if (!out.some(v => v.r1 === r.r1 && v.r2 === r.r2 && v.c1 === r.c1 && v.c2 === r.c2)) out.push(r);
+  }
+  return out;
+}
+
+function printAreaRef(rg) {
+  if (rg.r1 === 0 && rg.r2 === EXCEL_MAX_ROWS - 1) return `$${colToName(rg.c1)}:$${colToName(rg.c2)}`;
+  if (rg.c1 === 0 && rg.c2 === MAX_COLS - 1) return `$${rg.r1 + 1}:$${rg.r2 + 1}`;
+  return rangeRef(rg, true);
+}
+
+const validBreaks = (values, max) => [...new Set((Array.isArray(values) ? values : []).filter(n => Number.isInteger(n) && n > 0 && n < max))].sort((a, b) => a - b);
+function pageBreakXml(page) {
+  return [['rowBreaks', EXCEL_MAX_ROWS, MAX_COLS], ['colBreaks', MAX_COLS, EXCEL_MAX_ROWS]].map(([tag, max, span]) => {
+    const breaks = validBreaks(page?.[tag], max);
+    return breaks.length ? `<${tag} count="${breaks.length}" manualBreakCount="${breaks.length}">${breaks.map(id => `<brk id="${id}" min="0" max="${span - 1}" man="1"/>`).join('')}</${tag}>` : '';
+  }).join('');
+}
+
 /** 문자열 값이 입력 해석으로 다른 값이 되지 않도록 raw 생성 */
 export function textRaw(s) {
   if (s === '') return "'"; // 빈 글자("") 셀: 빈 칸과 달리 COUNTA · 피벗 개수에 셈 (엑셀과 같음)
@@ -872,6 +918,7 @@ function* readSheet(files, path, ctx) {
   } else if ((tlc && (tlc.r1 || tlc.c1)) || act) {
     sheet.view = { top: tlc?.r1 ?? 0, left: tlc?.c1 ?? 0, ...(act ? { r: act.r1, c: act.c1 } : {}) };
   }
+  if (['normal', 'pageBreakPreview', 'pageLayout'].includes(sv0?.attrs.view)) sheet.view = { ...(sheet.view ?? {}), mode: sv0.attrs.view };
   sheet.fileValues = true; // 셀의 파일 계산 결과를 그대로 씀 (바뀌기 전까지)
 
   const af = child(root, 'autoFilter');
@@ -1145,6 +1192,10 @@ function* readSheet(files, path, ctx) {
   }
   const pg = pageFromXml({ printOptions: child(root, 'printOptions'), pageMargins: child(root, 'pageMargins'), pageSetup: child(root, 'pageSetup'), headerFooter: child(root, 'headerFooter'), fitToPage: ['1', 'true'].includes(child(child(root, 'sheetPr'), 'pageSetUpPr')?.attrs.fitToPage) });
   if (pg) sheet.page = pg;
+  for (const [tag, max] of [['rowBreaks', EXCEL_MAX_ROWS], ['colBreaks', MAX_COLS]]) {
+    const breaks = validBreaks(kids(child(root, tag), 'brk').filter(b => ['1', 'true'].includes(b.attrs.man)).map(b => Number(b.attrs.id)), max);
+    if (breaks.length) sheet.page = { ...(sheet.page ?? {}), [tag]: breaks };
+  }
   const scn = child(root, 'scenarios');
   if (scn) {
     // 시나리오 관리자: <scenario name> + <inputCells r val>
@@ -2657,12 +2708,11 @@ function* readXlsxSteps(files) {
     const sh = sheets.find((x) => x.name === pn.sheet);
     if (!sh) continue;
     const page = normPage(sh.page);
-    for (const part of pn.text.split(',')) {
-      const ref = part.slice(part.lastIndexOf('!') + 1).replace(/\$/g, '');
-      const rows = /^(\d+):(\d+)$/.exec(ref);
-      const cols = /^([A-Z]+):([A-Z]+)$/i.exec(ref);
-      if (pn.kind === 'area') { const rg = parseRangeName(ref); if (rg) page.area = rg; } else if (rows) page.titleRows = [Number(rows[1]) - 1, Number(rows[2]) - 1];
-      else if (cols) page.titleCols = [nameToCol(cols[1].toUpperCase()), nameToCol(cols[2].toUpperCase())];
+    const areas = parsePrintAreas(pn.text, sh.name);
+    if (pn.kind === 'area' && areas.length) { page.area = areas[0]; if (areas.length > 1) page.areas = areas; }
+    else if (pn.kind === 'titles') for (const rg of areas) {
+      if (rg.c1 === 0 && rg.c2 === MAX_COLS - 1) page.titleRows = [rg.r1, rg.r2];
+      else if (rg.r1 === 0 && rg.r2 === EXCEL_MAX_ROWS - 1) page.titleCols = [rg.c1, rg.c2];
     }
     sh.page = page;
   }
@@ -4296,7 +4346,8 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
       ? `<outlinePr${sheet.outline.below === false ? ' summaryBelow="0"' : ''}${sheet.outline.right === false ? ' summaryRight="0"' : ''}/>` : '')
       + (pgx.fitToPage ? '<pageSetUpPr fitToPage="1"/>' : '');
     // 인쇄 영역 · 인쇄 제목 (이름 정의)
-    if (sheet.page?.area) definedNames.push(`<definedName name="_xlnm.Print_Area" localSheetId="${si}">${esc(`${quoteSheetName(sheet.name)}!${rangeRef(sheet.page.area, true)}`)}</definedName>`);
+    const printAreas = sheet.page?.areas?.length ? sheet.page.areas : sheet.page?.area ? [sheet.page.area] : [];
+    if (printAreas.length) definedNames.push(`<definedName name="_xlnm.Print_Area" localSheetId="${si}">${esc(printAreas.map(rg => `${quoteSheetName(sheet.name)}!${printAreaRef(rg)}`).join(','))}</definedName>`);
     if (sheet.page?.titleRows || sheet.page?.titleCols) {
       const parts = [];
       if (sheet.page.titleCols) parts.push(`${quoteSheetName(sheet.name)}!$${colToName(sheet.page.titleCols[0])}:$${colToName(sheet.page.titleCols[1])}`);
@@ -4591,7 +4642,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
     files[`xl/worksheets/sheet${si + 1}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="${NS_MAIN}" xmlns:r="${NS_R}">`
       + (vba || olPr || tabOk ? `<sheetPr${vba ? ` codeName="${esc(vba.sheetCodes?.[sheet.name] ?? `Sheet${si + 1}`)}"` : ''}>${tabOk ? `<tabColor rgb="${argb(sheet.tabColor)}"/>` : ''}${olPr}</sheetPr>` : '')
       + `<dimension ref="${dim}"/>`
-      + `<sheetViews><sheetView${sheet.noGrid ? ' showGridLines="0"' : ''}${sheet.noZeros ? ' showZeros="0"' : ''}${sheet.zoom && sheet.zoom !== 100 ? ` zoomScale="${sheet.zoom}" zoomScaleNormal="${sheet.zoom}"` : ''}${viewTopLeft !== 'A1' ? ` topLeftCell="${viewTopLeft}"` : ''} workbookViewId="0"${si === (wb.sheets[activeSheet]?.state && wb.sheets[activeSheet].state !== 'visible' ? Math.max(0, wb.sheets.findIndex((x) => !x.state || x.state === 'visible')) : activeSheet) ? ' tabSelected="1"' : ''}>${pane}</sheetView></sheetViews>`
+      + `<sheetViews><sheetView${['normal', 'pageBreakPreview', 'pageLayout'].includes(sheet.view?.mode) ? ` view="${sheet.view.mode}"` : ''}${sheet.noGrid ? ' showGridLines="0"' : ''}${sheet.noZeros ? ' showZeros="0"' : ''}${sheet.zoom && sheet.zoom !== 100 ? ` zoomScale="${sheet.zoom}" zoomScaleNormal="${sheet.zoom}"` : ''}${viewTopLeft !== 'A1' ? ` topLeftCell="${viewTopLeft}"` : ''} workbookViewId="0"${si === (wb.sheets[activeSheet]?.state && wb.sheets[activeSheet].state !== 'visible' ? Math.max(0, wb.sheets.findIndex((x) => !x.state || x.state === 'visible')) : activeSheet) ? ' tabSelected="1"' : ''}>${pane}</sheetView></sheetViews>`
       + `<sheetFormatPr defaultColWidth="${px2widthM(sheet.defColW ?? DEFAULT_COL_WIDTH, wmdw)}" defaultRowHeight="${px2pt(sheet.defRowH ?? DEFAULT_ROW_HEIGHT)}" customHeight="1"${olRowMax ? ` outlineLevelRow="${olRowMax}"` : ''}${olColMax ? ` outlineLevelCol="${olColMax}"` : ''}/>`
       + (colsXml ? `<cols>${colsXml}</cols>` : '')
       + `<sheetData>${rowXml}</sheetData>`
@@ -4599,7 +4650,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
       + (sheet.protectedRanges?.length ? `<protectedRanges>${sheet.protectedRanges.filter(p => p.ranges?.length).map(p => `<protectedRange name="${esc(p.name)}" sqref="${esc(p.ranges.map(rangeRef).join(' '))}"${p.hash ? ` password="${esc(p.hash)}"` : ''}${p.securityDescriptor ? ` securityDescriptor="${esc(p.securityDescriptor)}"` : ''}${p.modern ? Object.entries(p.modern).filter(([,v]) => v !== undefined).map(([k,v]) => ` ${k}="${esc(v)}"`).join('') : ''}/>`).join('')}</protectedRanges>` : '')
       + scenariosXml(sheet.scenarios)
       + autoFilter + merges + cf + dataValidations + hyperlinks
-      + pgx.printOptions + pgx.margins + pgx.setup + pgx.headerFooter
+      + pgx.printOptions + pgx.margins + pgx.setup + pgx.headerFooter + pageBreakXml(sheet.page)
       + drawing + legacy + tableParts + extLst
       + '</worksheet>';
     if (sheetRels.length) {

@@ -2327,3 +2327,30 @@ body.mobile-work-mode .sa-categories{flex-direction:row;flex-wrap:wrap;border-ri
 .cg-combo-table th:first-child { width: 28%; }
 .cg-combo-table th:nth-child(2) { width: 28%; }
 .cg-subs { max-height: 240px; overflow: auto; }
+
+/* 페이지 나누기 미리보기: 일반 격자는 유지하고 인쇄영역 밖만 불투명하게 가린다. */
+.page-preview { position:absolute; inset:0; z-index:4; pointer-events:none; overflow:hidden; }
+.page-preview > svg { display:block; overflow:hidden; pointer-events:none; }
+.page-preview .page-outside { fill:#b6b6b6; }
+.page-preview .page-boundary { fill:none; stroke:#1747d1; }
+.page-preview .page-boundary.draggable { pointer-events:stroke; }
+.page-preview [data-page-break-axis="row"], .page-preview [data-print-area-edge="top"], .page-preview [data-print-area-edge="bottom"] { cursor:row-resize; }
+.page-preview [data-page-break-axis="col"], .page-preview [data-print-area-edge="left"], .page-preview [data-print-area-edge="right"] { cursor:col-resize; }
+.page-preview .page-number { fill:#6d7788; fill-opacity:.4; font-family:'Malgun Gothic',sans-serif; font-weight:700; user-select:none; }
+.page-preview .page-preview-warning { fill:#6d3600; paint-order:stroke; stroke:#fff; stroke-width:3px; stroke-linejoin:round; }
+.sheet-view-modes { display:flex; align-items:center; gap:1px; flex:none; height:100%; }
+.sheet-view-modes button { display:grid; place-items:center; width:28px; height:22px; padding:3px 6px; border:1px solid transparent; background:transparent; color:#626b65; cursor:pointer; border-radius:2px; }
+.sheet-view-modes button > svg { width:16px; height:16px; }
+.sheet-view-modes button:hover { background:#e3e8e5; }
+.sheet-view-modes button[aria-pressed="true"] { color:#175b36; background:#d4e9dc; border-color:#90b59f; }
+.sheet-view-modes button:focus-visible { outline:2px solid #217346; outline-offset:-2px; }
+body.mobile-work-mode .sheet-view-modes button { width:30px; height:34px; padding:5px; }
+body.mobile-work-mode.mobile-compact .sheet-view-modes button { width:28px; height:26px; padding:4px; }
+@media(max-width:450px) {
+  body.mobile-work-mode #calcState { min-width:30px; max-width:40px; }
+  body.mobile-work-mode #statusStats { flex:0 1 auto; min-width:0; }
+  body.mobile-work-mode #zoomSlider { width:44px; }
+}
+@media(max-width:380px) {
+  body.mobile-work-mode #statusMode { display:none; }
+}

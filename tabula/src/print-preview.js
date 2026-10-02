@@ -3,11 +3,12 @@ import { normPage, paperOf, printScale, headerParts } from './page.js';
 import { splitPrintIndexes, imagePagesPdf } from './print-document.js';
 
 const PRINT_CSS = `
-.wixel-print-page{position:relative;box-sizing:border-box;background:#fff;color:#000;font-family:"Malgun Gothic",sans-serif;font-size:10pt;overflow:hidden;break-after:page;print-color-adjust:exact;-webkit-print-color-adjust:exact}
+.wixel-print-page{position:relative;box-sizing:border-box;background:#fff;color:#000;font-family:"Malgun Gothic",sans-serif;font-size:10pt;line-height:1.2;overflow:hidden;break-after:page;print-color-adjust:exact;-webkit-print-color-adjust:exact}
 .wixel-print-page:last-child{break-after:auto}
 .wixel-print-page *{box-sizing:border-box}
 .wixel-print-page table{border-collapse:collapse;table-layout:fixed;font-family:inherit;font-size:10pt;margin:0;zoom:1!important}
 .wixel-print-page td{padding:1px 3px;white-space:nowrap;overflow:hidden;vertical-align:bottom}
+.wixel-print-cell-content{position:absolute;inset:0;padding:1px 3px;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end}
 .wixel-print-page table.grid-lines td{border:1px solid #d9d9d9}
 .wixel-print-page td.ph{background:#f2f2f2;color:#555;text-align:center;border:1px solid #d9d9d9}
 .wixel-print-hf{display:flex;align-items:center;justify-content:space-between;min-height:24px;font-size:9pt;color:#444;gap:8px}
@@ -60,6 +61,13 @@ function copyTable(table, model, columns, rows) {
         seen.add(cell); const node = cell.node.cloneNode(true);
         node.rowSpan = selected.filter(v => v >= cell.r && v < cell.r + cell.rs).length;
         node.colSpan = columns.filter(v => v >= cell.c && v < cell.c + cell.cs).length;
+        // 큰 글꼴·줄 바꿈이 HTML 표의 최소 높이를 늘려 뒤쪽 행을 잘라내지 않게 한다.
+        // 원래 행 높이와 병합 높이는 유지하고 셀 내용만 그 안에서 잘라 표시한다.
+        const content = el('div', { class: 'wixel-print-cell-content' });
+        const valign = node.style.verticalAlign;
+        if (valign === 'top' || valign === 'middle') content.style.justifyContent = valign === 'top' ? 'flex-start' : 'center';
+        while (node.firstChild) content.append(node.firstChild);
+        Object.assign(node.style, { position: 'relative', padding: '0' }); node.append(content);
         row.append(node);
       }
       target.append(row);
@@ -98,12 +106,12 @@ function appendPrintObjects(layer, objects, xs, ys) {
 }
 
 /** 이미 생성·정화한 인쇄 DOM을 값 스냅숏으로 고정한다. 원본 통합 문서는 변경하지 않는다. */
-function preparePages(source, page, name, sheet) {
+function prepareAreaPages(source, page, name, sheet, layout = null, areaIndex = 0) {
   ensurePrintStyle();
   const pg = normPage(page), paper = paperOf(pg.paper), landscape = pg.orientation === 'landscape';
   const width = (landscape ? paper.h : paper.w) * 96, height = (landscape ? paper.w : paper.h) * 96;
   const margins = pg.margins, contentW = width - (margins.left + margins.right) * 96;
-  const contentH = height - (margins.top + margins.bottom) * 96 - 48;
+  const contentH = height - (margins.top + margins.bottom) * 96;
   if (contentW < 20 || contentH < 20) throw new Error('용지에 비해 여백이 너무 큽니다. 페이지 설정에서 여백을 줄이세요.');
   const snapshot = source.cloneNode(true); snapshot.removeAttribute('id'); snapshot.className = 'wixel-print-page';
   snapshot.style.cssText = 'display:block;position:fixed;left:-100000px;top:0;visibility:hidden;width:max-content;overflow:visible;';
@@ -115,18 +123,31 @@ function preparePages(source, page, name, sheet) {
     if (table) {
       model = { head: tableSection(table.querySelector('thead')), body: tableSection(table.querySelector('tbody')) };
       const columns = [...table.querySelector('colgroup').children], sizes = columns.map(col => parseFloat(col.style.width) || 80);
-      const body = [...(table.querySelector('tbody')?.children ?? [])], rows = body.map(row => Math.max(1, row.getBoundingClientRect().height));
-      const headH = table.querySelector('thead')?.getBoundingClientRect().height || 0;
+      const body = [...(table.querySelector('tbody')?.children ?? [])];
+      const rowHeight = row => layout ? Math.max(1, parseFloat(row.style.height) || row.getBoundingClientRect().height) : Math.max(1, row.getBoundingClientRect().height);
+      const rows = body.map(rowHeight);
+      const headH = layout ? model.head.rows.reduce((sum, row) => sum + rowHeight(row), 0) : table.querySelector('thead')?.getBoundingClientRect().height || 0;
       const tableW = sizes.reduce((a, b) => a + b, 0), tableH = rows.reduce((a, b) => a + b, headH);
-      // 머리글/바닥글이 차지하는 공간도 맞춤 계산에 포함한다.
-      scale = printScale({ ...pg, margins: { ...margins, top: margins.top + 24 / 96, bottom: margins.bottom + 24 / 96 } }, tableW, tableH);
+      // 머리글·바닥글은 여백 안에 배치하며 본문에서 높이를 다시 빼지 않는다.
+      scale = layout?.scale ?? printScale(pg, tableW, tableH);
       const repeatCols = columns.map((col, i) => ({ c: Number(col.dataset.printCol), i })).filter(x => pg.headings && x.i === 0 || pg.titleCols && Number.isFinite(x.c) && x.c >= pg.titleCols[0] && x.c <= pg.titleCols[1]).map(x => x.i);
-      const colPages = splitPrintIndexes(sizes, contentW / scale, repeatCols);
-      const rowPages = splitPrintIndexes(rows, contentH / scale - headH);
-      oversized = rows.some(h => (h + headH) * scale > contentH + 1) || sizes.some(w => w * scale > contentW + 1);
-      for (const cols of colPages) for (const rs of rowPages) descriptors.push({ cols, rows: rs,
+      let selections;
+      if (layout) {
+        const repeated = new Set(repeatCols);
+        selections = layout.pages.filter(item => item.areaIndex === areaIndex).map(item => ({
+          cols: columns.map((col, i) => ({ col, i })).filter(({ col, i }) => repeated.has(i) || col.hasAttribute('data-print-col') && Number(col.dataset.printCol) >= item.bodyC1 && Number(col.dataset.printCol) <= item.bodyC2).map(({ i }) => i),
+          rows: body.map((row, i) => ({ row, i })).filter(({ row }) => row.hasAttribute('data-print-row') && Number(row.dataset.printRow) >= item.bodyR1 && Number(row.dataset.printRow) <= item.bodyR2).map(({ i }) => i),
+        }));
+      } else {
+        const colPages = splitPrintIndexes(sizes, contentW / scale, repeatCols), rowPages = splitPrintIndexes(rows, contentH / scale - headH);
+        selections = [];
+        if (pg.order === 'overThenDown') for (const rs of rowPages) for (const cols of colPages) selections.push({ cols, rows: rs });
+        else for (const cols of colPages) for (const rs of rowPages) selections.push({ cols, rows: rs });
+      }
+      oversized = layout?.oversized ?? (rows.some(h => (h + headH) * scale > contentH + 1) || sizes.some(w => w * scale > contentW + 1));
+      for (const { cols, rows: rs } of selections) descriptors.push({ cols, rows: rs,
         xs: printSegments(cols.map(c => ({ start: columns[c].hasAttribute('data-print-x') ? Number(columns[c].dataset.printX) : NaN, size: sizes[c] }))),
-        ys: printSegments([...model.head.rows, ...rs.map(r => body[r])].map(row => ({ start: row.hasAttribute('data-print-y') ? Number(row.dataset.printY) : NaN, size: row.getBoundingClientRect().height }))),
+        ys: printSegments([...model.head.rows, ...rs.map(r => body[r])].map(row => ({ start: row.hasAttribute('data-print-y') ? Number(row.dataset.printY) : NaN, size: rowHeight(row) }))),
         tableW: cols.reduce((sum, c) => sum + sizes[c], 0), tableH: rs.reduce((sum, r) => sum + rows[r], headH) });
     }
     for (const node of snapshot.querySelectorAll(':scope > .chart-print')) {
@@ -140,12 +161,15 @@ function preparePages(source, page, name, sheet) {
       else descriptors.push({ object: node, w, h });
     }
   } finally { snapshot.remove(); }
-  if (!descriptors.length) descriptors.push({ empty: true });
-  const build = index => {
+  if (!descriptors.length && !layout) descriptors.push({ empty: true });
+  const build = (index, globalIndex = index, total = descriptors.length) => {
     const descriptor = descriptors[index];
-    const pageNode = el('section', { class: 'wixel-print-page', 'aria-label': `${index + 1}쪽`, style: { width: `${width}px`, height: `${height}px`, padding: `${margins.top * 96}px ${margins.right * 96}px ${margins.bottom * 96}px ${margins.left * 96}px` } });
-    const context = { page: index + 1, pages: descriptors.length, file: name, sheet };
-    pageNode.append(hfNode(pg.header ? headerParts(pg.header, context) : { left: '', center: `${name} — ${sheet}`, right: '' }));
+    const pageNode = el('section', { class: 'wixel-print-page', 'aria-label': `${globalIndex + 1}쪽`, style: { width: `${width}px`, height: `${height}px`, padding: `${margins.top * 96}px ${margins.right * 96}px ${margins.bottom * 96}px ${margins.left * 96}px` } });
+    const context = { page: globalIndex + 1, pages: total, file: name, sheet };
+    const header = hfNode(headerParts(pg.header, context)), footer = hfNode(headerParts(pg.footer, context));
+    Object.assign(header.style, { position: 'absolute', left: `${margins.left * 96}px`, right: `${margins.right * 96}px`, top: `${margins.header * 96}px` });
+    Object.assign(footer.style, { position: 'absolute', left: `${margins.left * 96}px`, right: `${margins.right * 96}px`, bottom: `${margins.footer * 96}px` });
+    pageNode.append(header);
     const content = el('div', { class: 'wixel-print-body', style: { width: `${contentW}px`, height: `${contentH}px` } });
     if (descriptor.cols) {
       const part = copyTable(table, model, descriptor.cols, descriptor.rows);
@@ -157,10 +181,22 @@ function preparePages(source, page, name, sheet) {
       const object = descriptor.object.cloneNode(true), fit = Math.min(1, contentW / descriptor.w, contentH / descriptor.h);
       Object.assign(object.style, { left: '0', top: '0', width: `${descriptor.w}px`, height: `${descriptor.h}px`, transform: `scale(${fit}) ${object.style.transform || ''}`, transformOrigin: 'top left' }); content.append(object);
     }
-    pageNode.append(content, hfNode(pg.footer ? headerParts(pg.footer, context) : { left: '', center: '', right: '' }));
+    pageNode.append(content, footer);
     return pageNode;
   };
   return { build, width, height, count: descriptors.length, scale, oversized };
+}
+
+// 같은 계획을 화면 페이지 경계·인쇄 미리보기·PDF·HTML에 사용한다.
+function preparePages(source, page, name, sheet, layout = null) {
+  if (layout?.error) throw new Error(layout.error);
+  const sections = [...source.querySelectorAll(':scope > [data-print-area]')];
+  const prepared = sections.length ? sections.map((section, index) => prepareAreaPages(section, page, name, sheet, layout, Number(section.dataset.printArea ?? index))) : [prepareAreaPages(source, page, name, sheet, layout, 0)];
+  const entries = [];
+  for (const item of prepared) for (let index = 0; index < item.count; index++) entries.push({ item, index });
+  if (!entries.length) throw new Error('인쇄할 표시 행과 열이 없습니다. 숨김 또는 인쇄 영역 설정을 확인하세요.');
+  return { width: prepared[0].width, height: prepared[0].height, count: entries.length, scale: layout?.scale ?? prepared[0].scale, oversized: prepared.some(item => item.oversized),
+    build: index => entries[index].item.build(entries[index].index, index, entries.length) };
 }
 
 async function inlineImages(node, signal) {
@@ -193,8 +229,8 @@ async function rasterPage(node, width, height, signal) {
   return { jpeg, width: canvas.width, height: canvas.height, paperWidth: width * 0.75, paperHeight: height * 0.75 };
 }
 
-export function openPrintPreview({ source, page, name, sheet, saveFile = null, pdfPreferred = false }) {
-  const prepared = preparePages(source, page, name, sheet), controller = new AbortController();
+export function openPrintPreview({ source, page, name, sheet, layout = null, saveFile = null, pdfPreferred = false }) {
+  const prepared = preparePages(source, page, name, sheet, layout), controller = new AbortController();
   let index = 0, busy = false, closed = false;
   const status = el('div', { role: 'status', style: { minHeight: '20px', fontSize: '12px' } });
   const counter = el('span', { style: { minWidth: '100px', textAlign: 'center' } });
@@ -257,8 +293,8 @@ export function openPrintPreview({ source, page, name, sheet, saveFile = null, p
 }
 
 /** Static, script-free web page with the same page geometry as print/PDF. */
-export function htmlPrintDocument({ source, page, name, sheet }) {
-  const prepared=preparePages(source,page,name,sheet);
+export function htmlPrintDocument({ source, page, name, sheet, layout = null }) {
+  const prepared=preparePages(source,page,name,sheet,layout);
   if(prepared.count>300)throw new Error('웹페이지 저장은 300쪽 이내로 인쇄 영역을 나누어 주세요.');
   const html=document.implementation.createHTMLDocument(`${name} — ${sheet}`);
   html.documentElement.lang='ko';

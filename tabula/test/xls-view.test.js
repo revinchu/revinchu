@@ -27,7 +27,7 @@ function colorStyles() {
     d.writeUInt32LE(0xc0001111, 10); d.writeUInt32LE(0x06200000, 14); d.writeUInt16LE(10 | (9 << 7), 18); return d;
   });
 }
-function fixture({ zoom = [23, 20], rows = [], defaultTwips = 270, xfs, extensions = [], checksum = true } = {}) {
+function fixture({ zoom = [23, 20], rows = [], defaultTwips = 270, xfs, extensions = [], checksum = true, sheetRecords = [], globalRecords = [] } = {}) {
   const bof = type => record(0x0809, words(0x0600, type, 0x0dbb, 0x07cc, 0, 0, 6, 0));
   const font = Buffer.alloc(16); font.writeUInt16LE(220, 0); font.writeUInt16LE(0x7fff, 4); font.writeUInt16LE(400, 6); font[14] = 7;
   const xf = Buffer.alloc(20); xf.writeUInt16LE(1, 4); xf[6] = 0x10;
@@ -35,14 +35,14 @@ function fixture({ zoom = [23, 20], rows = [], defaultTwips = 270, xfs, extensio
   const styles = xfs || [xf], check = Buffer.alloc(20); check.writeUInt16LE(0x087c, 0); check.writeUInt16LE(styles.length, 14);
   check.writeUInt32LE((extensionChecksum(Buffer.concat(styles)) ^ (checksum === 'stale' ? 1 : 0)) >>> 0, 16);
   const globals = () => Buffer.concat([bof(5), record(0x0031, Buffer.concat([font, Buffer.from('Calibri')])), ...styles.map(x => record(0x00e0, x)),
-    ...(extensions.length && checksum ? [record(0x087c, check)] : []), ...extensions.map(x => record(0x087d, x)), record(0x0085, bound), record(10)]);
+    ...(extensions.length && checksum ? [record(0x087c, check)] : []), ...extensions.map(x => record(0x087d, x)), ...globalRecords, record(0x0085, bound), record(10)]);
   bound.writeUInt32LE(globals().length, 0);
   const rowRecords = rows.map(({ r, twips, manual = false, hidden = false, standardBit = false }) => {
     const d = Buffer.alloc(16); d.writeUInt16LE(r, 0); d.writeUInt16LE(1, 4); d.writeUInt16LE(twips | (standardBit ? 0x8000 : 0), 6);
     d.writeUInt16LE(0x0100 | (manual ? 0x40 : 0) | (hidden ? 0x20 : 0), 12); return record(0x0208, d);
   });
   const cells = styles.map((_, c) => { const cell = Buffer.alloc(14); cell.writeUInt16LE(c, 2); cell.writeUInt16LE(c, 4); cell.writeDoubleLE(42 + c, 6); return record(0x0203, cell); });
-  const data = Buffer.concat([globals(), bof(0x0010), record(0x0225, words(0, defaultTwips)), ...rowRecords, ...cells, ...(zoom ? [record(0x00a0, words(...zoom))] : []), record(10)]);
+  const data = Buffer.concat([globals(), bof(0x0010), record(0x0225, words(0, defaultTwips)), ...rowRecords, ...cells, ...sheetRecords, ...(zoom ? [record(0x00a0, words(...zoom))] : []), record(10)]);
   assert.ok(data.length <= 4096);
   const file = Buffer.alloc(512 * 11); Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]).copy(file);
   file.writeUInt16LE(0x003e, 24); file.writeUInt16LE(3, 26); file.writeUInt16LE(0xfffe, 28); file.writeUInt16LE(9, 30); file.writeUInt16LE(6, 32);
@@ -72,6 +72,62 @@ test('XLS default/equal/invalid SCL keeps 100% and invalid ratios are bounded', 
   for (const zoom of [null, [1, 1], [0, 1], [1, 0], [-1, 10], [1, -10]]) assert.equal(readXls(fixture({ zoom })).data.sheets[0].zoom, undefined);
   assert.equal(readXls(fixture({ zoom: [1, 100] })).data.sheets[0].zoom, 10);
   assert.equal(readXls(fixture({ zoom: [20, 1] })).data.sheets[0].zoom, 400);
+});
+
+test('XLS WINDOW2 and PLV distinguish normal, page-break preview and page-layout modes', () => {
+  for (const [flags, plv, mode] of [[6, false, 'normal'], [0x0806, false, 'pageBreakPreview'], [6, true, 'pageLayout']]) {
+    const window = Buffer.alloc(18); window.writeUInt16LE(flags);
+    const page = Buffer.alloc(16); page.writeUInt16LE(0x088b); page.writeUInt16LE(100, 12); page.writeUInt16LE(1, 14);
+    const wb = new Workbook(readXls(fixture({ sheetRecords: [record(0x023e, window), ...(plv ? [record(0x088b, page)] : [])] })).data);
+    assert.equal(wb.sheets[0].view.mode, mode);
+    assert.equal(new Workbook(readXlsx(writeXlsx(wb)).data).sheets[0].view.mode, mode);
+    assert.equal(wb.getValue(0, 0, 0), 42);
+  }
+});
+
+test('XLS manual page breaks use first following row/column indexes and tolerate truncated records', () => {
+  const breaks = values => Buffer.concat([words(values.length), ...values.map(id => words(id, 0, 255))]);
+  const sheetRecords = [record(0x001b, breaks([7, 19, 7, 0])), record(0x001a, breaks([3, 7, 256])), record(0x088b, words(1))];
+  const wb = new Workbook(readXls(fixture({ sheetRecords })).data);
+  assert.deepEqual(wb.sheets[0].page.rowBreaks, [7, 19]);
+  assert.deepEqual(wb.sheets[0].page.colBreaks, [3, 7]);
+  const back = new Workbook(readXlsx(writeXlsx(wb)).data);
+  assert.deepEqual(back.sheets[0].page.rowBreaks, [7, 19]);
+  assert.deepEqual(back.sheets[0].page.colBreaks, [3, 7]);
+});
+
+test('XLS builtin Print_Area unions and Print_Titles whole axes preserve all regions', () => {
+  const area = (r1, r2, c1, c2) => Buffer.concat([Buffer.from([0x25]), words(r1, r2, c1, c2)]);
+  const name = (id, formula) => { const d = Buffer.alloc(16); d.writeUInt16LE(0x20); d[3] = 1; d.writeUInt16LE(formula.length, 4); d.writeUInt16LE(1, 8); d[15] = id; return record(0x0018, Buffer.concat([d, formula])); };
+  const globalRecords = [name(6, Buffer.concat([area(0, 19, 0, 2), area(0, 7, 4, 5), Buffer.from([0x10])])),
+    name(7, Buffer.concat([area(0, 1, 0, 255), area(0, 65535, 0, 0), Buffer.from([0x10])]))];
+  const wb = new Workbook(readXls(fixture({ globalRecords })).data), p = wb.sheets[0].page;
+  assert.deepEqual(p.areas, [{ r1: 0, c1: 0, r2: 19, c2: 2 }, { r1: 0, c1: 4, r2: 7, c2: 5 }]);
+  assert.deepEqual(p.area, p.areas[0]); assert.deepEqual(p.titleRows, [0, 1]); assert.deepEqual(p.titleCols, [0, 0]);
+  const back = new Workbook(readXlsx(writeXlsx(wb)).data).sheets[0].page;
+  assert.deepEqual(back.areas, p.areas); assert.deepEqual(back.titleRows, p.titleRows); assert.deepEqual(back.titleCols, p.titleCols);
+});
+
+test('XLS Setup/WSBOOL and margins keep print scaling separate from display zoom', () => {
+  const setup = Buffer.alloc(34); setup.writeUInt16LE(9); setup.writeUInt16LE(85, 2); setup.writeUInt16LE(1, 6); setup.writeUInt16LE(2, 10); setup.writeDoubleLE(.3, 16); setup.writeDoubleLE(.4, 24);
+  const margin = value => { const b = Buffer.alloc(8); b.writeDoubleLE(value); return b; };
+  for (const fit of [false, true]) {
+    const sheetRecords = [record(0x00a1, setup), record(0x0081, words(fit ? 0x100 : 0)), record(0x0026, margin(.15)), record(0x0027, margin(.2)), record(0x0028, margin(.25)), record(0x0029, margin(.1)), record(0x0083, words(1)), record(0x0084, words(0)), record(0x002a, words(1)), record(0x002b, words(1))];
+    const wb = new Workbook(readXls(fixture({ zoom: [9, 10], sheetRecords })).data), s = wb.sheets[0], p = s.page;
+    assert.equal(s.zoom, 90); assert.equal(p.scale, 85); assert.equal(p.paper, 9); assert.equal(p.orientation, 'portrait');
+    assert.equal(p.fitW ?? 0, fit ? 1 : 0); assert.equal(p.fitH ?? 0, 0);
+    assert.deepEqual(p.margins, { left: .15, right: .2, top: .25, bottom: .1, header: .3, footer: .4 });
+    assert.equal(p.hCenter, true); assert.equal(p.vCenter, false); assert.equal(p.headings, true); assert.equal(p.gridlines, true);
+    const back = new Workbook(readXlsx(writeXlsx(wb)).data).sheets[0];
+    assert.equal(back.zoom, 90); assert.equal(back.page.scale, fit ? 100 : 85); assert.equal(back.page.fitW, fit ? 1 : 0); assert.deepEqual(back.page.margins, p.margins);
+  }
+});
+
+test('XLS undefined printer fields and short Setup records cannot overwrite defaults', () => {
+  const setup = Buffer.alloc(34); setup.writeUInt16LE(9); setup.writeUInt16LE(175, 2); setup.writeUInt16LE(2, 6); setup.writeUInt16LE(1, 8); setup.writeUInt16LE(5, 10); setup.writeDoubleLE(.25, 16); setup.writeDoubleLE(.3, 24);
+  const p = readXls(fixture({ sheetRecords: [record(0x0081, words(0x100)), record(0x00a1, setup), record(0x00a1, words(1))] })).data.sheets[0].page;
+  assert.equal(p.paper, undefined); assert.equal(p.scale, undefined); assert.equal(p.orientation, undefined);
+  assert.equal(p.order, 'overThenDown'); assert.equal(p.fitW, 2); assert.equal(p.fitH, 1); assert.deepEqual(p.margins, { header: .25, footer: .3 });
 });
 
 test('XLS auto-fit ROW height is preserved independently of manual-height and hidden flags', () => {

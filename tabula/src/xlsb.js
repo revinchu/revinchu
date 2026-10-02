@@ -63,7 +63,7 @@ const R = {
   AFILTER: 161, AFILTER_END: 162, FILTERCOL: 163, FILTERCOL_END: 164, FILTERS: 165, FILTER: 167, TOP10: 170, CUSTFILTERS: 172, CUSTFILTER: 174,
   MERGE: 176, EXTSELF: 357, EXTSAME: 358, EXTREF: 355, EXTADDIN: 667, EXTSHEETS: 362, PIVOTCACHE: 386,
   ARRAY: 426, SHRFMLA: 427, CF: 461, CF_END: 462, CFRULE: 463, CFRULE_END: 464, ICONSET: 465, DATABAR: 467, COLORSCALE: 469, CFVO: 471, CFCOLOR: 564,
-  MARGINS: 476, WSFMT: 485, HLINK: 494, DXF: 507, TSTYLES: 508, TSTYLE: 510, TSTYLE_END: 511, TSELEM: 512, TSINFO: 513,
+  ROWBRK_BEGIN: 392, ROWBRK_END: 393, COLBRK_BEGIN: 394, COLBRK_END: 395, BRK: 396, MARGINS: 476, WSFMT: 485, HLINK: 494, DXF: 507, TSTYLES: 508, TSTYLE: 510, TSTYLE_END: 511, TSELEM: 512, TSINFO: 513,
   PROTECT: 535, DRAWING: 550, LEGACY: 551, TABLEPART: 661,
   CSXFS: 626, CXFS: 617, CAUTHOR: 632, COMMENT: 635, COMMENT_END: 636, CTEXT: 637,
   TABLE: 343, TABLE_END: 344, LISTCOL: 347, LISTCOL_END: 348, LISTCCFMLA: 351,
@@ -953,13 +953,13 @@ function cfRuleAttrs(type, sub, op, flags) {
 
 /** 시트 머리(셀 데이터 밖의 레코드) → { xml, dataStart, dataEnd } */
 function sheetHeadXml(u8, env) {
-  const parts = { pr: '', dim: '', views: [], fmt: '', cols: [], merges: [], cf: [], links: [], af: '', margins: '', drawing: '', legacy: '', tables: [], protect: '' };
+  const parts = { pr: '', dim: '', views: [], fmt: '', cols: [], merges: [], cf: [], links: [], af: '', margins: '', drawing: '', legacy: '', tables: [], protect: '', rowBreaks: [], colBreaks: [] };
   let dataStart = -1; let dataEnd = -1;
   let p = 0;
   const n = u8.length;
   let view = null;
   let cf = null; let rule = null; let sub = null;
-  let afCol = null;
+  let afCol = null; let breakAxis = null;
   const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
   while (p < n) {
     let t = u8[p++];
@@ -994,8 +994,9 @@ function sheetHeadXml(u8, env) {
       }
       case R.DIM: { const rg = rd.rfx(); parts.dim = `<dimension ref="${rangeRef(rg)}"/>`; break; }
       case R.WSVIEW: {
-        const fl = rd.u16(); rd.i32(); const tr = rd.i32(); const tc = rd.i32(); rd.skip(4); const zoom = rd.u16();
-        view = { a: { showGridLines: fl & 4 ? undefined : 0, showRowColHeaders: fl & 8 ? undefined : 0, showZeros: fl & 0x10 ? undefined : 0, rightToLeft: fl & 0x20 ? 1 : undefined, tabSelected: fl & 0x40 ? 1 : undefined, zoomScale: zoom && zoom !== 100 ? zoom : undefined, topLeftCell: tr || tc ? cellRef(tr, tc) : undefined, workbookViewId: 0 }, pane: '' };
+        if (rd.left < 30) break;
+        const fl = rd.u16(); const mode = rd.i32(); const tr = rd.i32(); const tc = rd.i32(); rd.skip(4); const zoom = rd.u16(); rd.skip(6); const workbookViewId = rd.u32();
+        view = { a: { showGridLines: fl & 4 ? undefined : 0, showRowColHeaders: fl & 8 ? undefined : 0, showZeros: fl & 0x10 ? undefined : 0, rightToLeft: fl & 0x20 ? 1 : undefined, tabSelected: fl & 0x40 ? 1 : undefined, zoomScale: zoom && zoom !== 100 ? zoom : undefined, topLeftCell: tr || tc ? cellRef(tr, tc) : undefined, view: ['normal', 'pageBreakPreview', 'pageLayout'][mode], workbookViewId }, pane: '' };
         parts.views.push(view);
         break;
       }
@@ -1063,6 +1064,13 @@ function sheetHeadXml(u8, env) {
       case R.CFRULE_END:
         if (rule && sub) rule.inner = `<${sub.tag}${attrs(sub.a)}>${sub.vos.join('')}${sub.colors.join('')}</${sub.tag}>`;
         sub = null; rule = null; break;
+      case R.ROWBRK_BEGIN: breakAxis = 'rowBreaks'; break;
+      case R.COLBRK_BEGIN: breakAxis = 'colBreaks'; break;
+      case R.ROWBRK_END: case R.COLBRK_END: breakAxis = null; break;
+      case R.BRK: if (breakAxis && rd.left >= 20) {
+        const id = rd.u32(), min = rd.u32(), max = rd.u32(), man = rd.u32(), pt = rd.u32();
+        parts[breakAxis].push(`<brk${attrs({ id, min, max, man, pt })}/>`);
+      } break;
       case R.MARGINS: {
         const [l, rr, tp, b, h, f] = [rd.f64(), rd.f64(), rd.f64(), rd.f64(), rd.f64(), rd.f64()];
         parts.margins = `<pageMargins left="${l}" right="${rr}" top="${tp}" bottom="${b}" header="${h}" footer="${f}"/>`;
@@ -1079,7 +1087,8 @@ function sheetHeadXml(u8, env) {
   const af = parts.af ? `<autoFilter ref="${parts.af.ref}">${parts.af.cols.map((c) => `<filterColumn colId="${c.id}"${c.fl & 1 ? ' hiddenButton="1"' : ''}${c.fl & 2 ? ' showButton="0"' : ''}>${c.vals.length || c.blank ? `<filters${c.blank ? ' blank="1"' : ''}>${c.vals.map((v) => `<filter val="${esc(v)}"/>`).join('')}</filters>` : ''}</filterColumn>`).join('')}</autoFilter>` : '';
   const cfXml = parts.cf.map((x) => `<conditionalFormatting sqref="${x.ranges.map(rangeRef).join(' ')}">${x.rules.map((r) => `<cfRule${attrs(r.a)}>${r.inner}${r.fs.map((f) => `<formula>${esc(f)}</formula>`).join('')}</cfRule>`).join('')}</conditionalFormatting>`).join('');
   const views = parts.views.length ? `<sheetViews>${parts.views.map((v) => `<sheetView${attrs(v.a)}>${v.pane}</sheetView>`).join('')}</sheetViews>` : '';
-  const xml = `<worksheet xmlns="${NS}" xmlns:r="${NS_R}">${parts.pr}${parts.dim}${views}${parts.fmt}${parts.cols.length ? `<cols>${parts.cols.join('')}</cols>` : ''}<sheetData/>${parts.protect}${af}${parts.merges.length ? `<mergeCells count="${parts.merges.length}">${parts.merges.join('')}</mergeCells>` : ''}${cfXml}${parts.links.length ? `<hyperlinks>${parts.links.join('')}</hyperlinks>` : ''}${parts.margins}${parts.drawing}${parts.legacy}${parts.tables.length ? `<tableParts count="${parts.tables.length}">${parts.tables.join('')}</tableParts>` : ''}</worksheet>`;
+  const breaks = ['rowBreaks', 'colBreaks'].map(tag => parts[tag].length ? `<${tag} count="${parts[tag].length}">${parts[tag].join('')}</${tag}>` : '').join('');
+  const xml = `<worksheet xmlns="${NS}" xmlns:r="${NS_R}">${parts.pr}${parts.dim}${views}${parts.fmt}${parts.cols.length ? `<cols>${parts.cols.join('')}</cols>` : ''}<sheetData/>${parts.protect}${af}${parts.merges.length ? `<mergeCells count="${parts.merges.length}">${parts.merges.join('')}</mergeCells>` : ''}${cfXml}${parts.links.length ? `<hyperlinks>${parts.links.join('')}</hyperlinks>` : ''}${parts.margins}${breaks}${parts.drawing}${parts.legacy}${parts.tables.length ? `<tableParts count="${parts.tables.length}">${parts.tables.join('')}</tableParts>` : ''}</worksheet>`;
   return { xml, dataStart, dataEnd };
 }
 

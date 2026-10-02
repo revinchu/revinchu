@@ -25,6 +25,7 @@ import { THEME } from './stylepresets.js';
 import { fontAlias } from './fonts.js';
 import { maxLevel, groupsOf } from './outline.js';
 import { sparkValues, sparkSvg } from './sparkline.js';
+import { computePrintLayout } from './print-layout.js';
 
 const sparkCache = new WeakMap(); // 스파크라인 항목 → { key, svg }
 
@@ -383,6 +384,7 @@ export class GridView {
       return {
         id, el, content,
         grid: mk('gl', content), cells: mk('cells', content), objects: mk('objects', content), overlay: mk('overlay', content),
+        pagePreview: mk('page-preview', el),
         scrollX: id === 'tr' || id === 'br', scrollY: id === 'bl' || id === 'br', win: null, ox: 0, oy: 0,
       };
     });
@@ -399,7 +401,7 @@ export class GridView {
     this.freezeH = mk('freeze-line h');
     // Visual panes duplicate frozen/merged cells. Expose one logical grid instead;
     // floating charts/slicers remain accessible through each pane's objects layer.
-    for (const p of this.panes) for (const el of [p.grid, p.cells, p.overlay]) el.setAttribute('aria-hidden', 'true');
+    for (const p of this.panes) for (const el of [p.grid, p.cells, p.overlay, p.pagePreview]) el.setAttribute('aria-hidden', 'true');
     for (const el of [this.colHead, this.rowHead, this.corner, this.headerLines, this.freezeV, this.freezeH]) el.setAttribute('aria-hidden', 'true');
     this.a11y = new GridAccessibility(this, document.getElementById('cellEditor'));
 
@@ -756,7 +758,11 @@ export class GridView {
       const rect = rects[p.id];
       const visible = rect.w > 0 && rect.h > 0;
       p.el.style.display = visible ? 'block' : 'none';
-      if (!visible) { p.win = null; continue; }
+      if (!visible) {
+        p.win = null; p.pagePlan = null; p.pageKey = null;
+        if (p.pagePreview.childNodes.length) p.pagePreview.replaceChildren();
+        continue;
+      }
       Object.assign(p.el.style, { left: `${rect.x}px`, top: `${rect.y}px`, width: `${rect.w}px`, height: `${rect.h}px` });
       const need = this.visibleRange(p, rect);
       const w = p.win;
@@ -779,6 +785,7 @@ export class GridView {
       const tx = (snapX((paneBox.left + (p.ox - need.x0) * this.z) * dpr) / dpr - paneBox.left) / this.z;
       const ty = (snapY((paneBox.top + (p.oy - need.y0) * this.z) * dpr) / dpr - paneBox.top) / this.z;
       p.content.style.transform = `translate(${tx}px, ${ty}px)`;
+      this.renderPagePreview(p, rect, need);
     }
     this.renderHeaders(rects);
     this.freezeV.style.display = this.frozenW ? 'block' : 'none';
@@ -793,6 +800,75 @@ export class GridView {
     const { wb, si } = this.host.state();
     this.cond = wb.sheets[si].cond.length ? prepareCond(wb, si) : null;
     this.update(true);
+  }
+
+  /** 인쇄 미리보기 좌표는 시트 축을 공유하지만 화면 안의 SVG만 생성한다. */
+  printLayout() {
+    const { wb, si } = this.host.state(), sheet = wb.sheets[si], pageKey = JSON.stringify(sheet.page ?? {});
+    const old = this._printLayout;
+    if (old?.wb === wb && old.sheet === sheet && old.version === wb.version && old.pageKey === pageKey && old.rows === this.rows && old.cols === this.cols) return old.plan;
+    const used = wb.extent(si);
+    let r2 = Math.max(0, used.rows - 1), c2 = Math.max(0, used.cols - 1);
+    for (const m of sheet.merges ?? []) { r2 = Math.max(r2, m.r2); c2 = Math.max(c2, m.c2); }
+    for (const o of [...(sheet.shapes ?? []), ...(sheet.images ?? []), ...(sheet.charts ?? [])]) {
+      if (o.noPrint || o.hidden) continue;
+      if (Number.isFinite(o.y + o.h)) r2 = Math.max(r2, this.rows.indexAt(o.y + o.h - 0.001));
+      if (Number.isFinite(o.x + o.w)) c2 = Math.max(c2, this.cols.indexAt(o.x + o.w - 0.001));
+    }
+    const plan = computePrintLayout({ page: sheet.page, fallbackArea: { r1: 0, c1: 0, r2, c2 }, rows: this.rows, cols: this.cols });
+    this._printLayout = { wb, sheet, version: wb.version, pageKey, rows: this.rows, cols: this.cols, plan };
+    return plan;
+  }
+
+  renderPagePreview(p, rect, need) {
+    const { wb, si, readonly, viewOnly } = this.host.state(), sheet = wb.sheets[si];
+    if (sheet.view?.mode !== 'pageBreakPreview') {
+      if (p.pagePreview.childNodes.length) p.pagePreview.replaceChildren();
+      p.pagePreview.style.display = 'none'; p.pageKey = null; p.pagePlan = null; this._printLayout = null;
+      return;
+    }
+    const plan = this.printLayout(), zoom = this.z, W = rect.w, H = rect.h, x0 = need.x0, y0 = need.y0;
+    const key = `${x0}|${y0}|${W}|${H}|${zoom}|${!!readonly}|${!!viewOnly}|${!!sheet.protect?.on}`;
+    p.pagePreview.style.display = 'block';
+    if (p.pagePlan === plan && p.pageKey === key) return;
+    p.pagePlan = plan; p.pageKey = key;
+    const maskId = `pageMask-${p.id}`;
+    const holes = [], borders = [], numbers = [];
+    const intersects = (a) => a.w > 0 && a.h > 0 && a.x < x0 + W && a.x + a.w > x0 && a.y < y0 + H && a.y + a.h > y0;
+    const interactive = !readonly && !viewOnly && !sheet.protect?.on;
+    const line = (x1, y1, x2, y2, attrs, manual = true) => {
+      // 화면으로 자른 끝을 실제 인쇄영역 경계처럼 표시하지 않는다.
+      if (x1 === x2) { if (x1 < x0 || x1 > x0 + W) return ''; y1 = Math.max(y1, y0); y2 = Math.min(y2, y0 + H); }
+      else { if (y1 < y0 || y1 > y0 + H) return ''; x1 = Math.max(x1, x0); x2 = Math.min(x2, x0 + W); }
+      if (x2 < x1 || y2 < y1) return '';
+      return `<line class="page-boundary${manual ? ' manual' : ' automatic'}${interactive ? ' draggable' : ''}" ${attrs} x1="${x1 - x0}" y1="${y1 - y0}" x2="${x2 - x0}" y2="${y2 - y0}" stroke-width="${(manual ? 2 : 1.5) / zoom}"${manual ? '' : ` stroke-dasharray="${5 / zoom} ${4 / zoom}"`}/>`;
+    };
+    for (const a of plan.areas) {
+      if (!intersects(a)) continue;
+      const x = Math.max(a.x, x0), y = Math.max(a.y, y0), w = Math.min(a.x + a.w, x0 + W) - x, h = Math.min(a.y + a.h, y0 + H) - y;
+      holes.push(`<rect x="${x - x0}" y="${y - y0}" width="${w}" height="${h}" fill="#000"/>`);
+      const attr = `data-print-area-index="${a.index}"`;
+      borders.push(line(a.x, a.y, a.x + a.w, a.y, `${attr} data-print-area-edge="top"`),
+        line(a.x, a.y + a.h, a.x + a.w, a.y + a.h, `${attr} data-print-area-edge="bottom"`),
+        line(a.x, a.y, a.x, a.y + a.h, `${attr} data-print-area-edge="left"`),
+        line(a.x + a.w, a.y, a.x + a.w, a.y + a.h, `${attr} data-print-area-edge="right"`));
+    }
+    const areaByIndex = new Map(plan.areas.map(a => [a.index, a]));
+    for (const b of plan.breaks) {
+      const a = areaByIndex.get(b.areaIndex);
+      if (!a || !intersects(a)) continue;
+      const attr = `data-page-break-axis="${b.axis}" data-page-break-index="${b.index}" data-page-break-manual="${!!b.manual}" data-print-area-index="${b.areaIndex}"`;
+      borders.push(b.axis === 'row' ? line(a.x, b.position, a.x + a.w, b.position, attr, b.manual)
+        : line(b.position, a.y, b.position, a.y + a.h, attr, b.manual));
+    }
+    for (const page of plan.pages) {
+      const x = page.x + page.w / 2, y = page.y + page.h / 2;
+      if (x < x0 || x >= x0 + W || y < y0 || y >= y0 + H) continue;
+      const font = Math.min(72, page.w / Math.max(4, String(page.number).length + 2), page.h / 4);
+      numbers.push(`<text class="page-number" data-page-number="${page.number}" x="${x - x0}" y="${y - y0}" text-anchor="middle" dominant-baseline="central" font-size="${font}">${page.number} 페이지</text>`);
+    }
+    const warning = plan.error ? `<text class="page-preview-warning" x="${12 / zoom}" y="${24 / zoom}" font-size="${12 / zoom}">${esc(plan.error)}</text>` : '';
+    setSafeHtml(p.pagePreview, `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" aria-hidden="true"><defs><mask id="${maskId}" maskUnits="userSpaceOnUse" x="0" y="0" width="${W}" height="${H}"><rect width="${W}" height="${H}" fill="#fff"/>${holes.join('')}</mask></defs><rect class="page-outside" width="${W}" height="${H}" mask="url(#${maskId})"/>${numbers.join('')}${borders.join('')}${warning}</svg>`);
   }
 
   // ───────────── 셀 그리기 ─────────────

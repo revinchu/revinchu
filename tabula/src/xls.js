@@ -9,7 +9,7 @@ import { styleForCode } from './format.js';
 import { colToName, nameToCol, quoteSheetName } from './formula.js';
 import { fromFileFormula } from './xlfn.js';
 import { DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT } from './workbook.js';
-import { textRaw, numberRaw, INDEXED, BUILTIN_FMT, BUILTIN_CODE, digitWidth, width2pxM, baseColPx, pt2px } from './xlsx.js';
+import { textRaw, numberRaw, INDEXED, BUILTIN_FMT, BUILTIN_CODE, digitWidth, width2pxM, baseColPx, pt2px, parsePrintAreas } from './xlsx.js';
 
 // 함수 번호 → 이름 · 고정 인수 개수(-1 = 가변) (MS-XLS 함수 표)
 const FTAB_TEXT = [
@@ -612,6 +612,7 @@ export function readXls(bytes) {
     if (k === undefined) { sheets.push(sheet); continue; }
     const shared = []; // 공유 수식 { r1, r2, c1, c2, rgce, rgcb }
     const pendingStr = [];
+    let printFit = false, fitTo = null;
     const put = (r, c, ixfe, value, formula) => {
       const style = xfStyle(ixfe);
       let raw;
@@ -751,7 +752,47 @@ export function readXls(bytes) {
           break;
         }
         case 0x00ec: dgParts.push(data, ...recs[k].cont); break;
-        case 0x023e: { const g = u16(data, 0); if (!(g & 2)) sheet.noGrid = true; if (g & 8) sheet._frozen = true; break; }
+        case 0x0081: if (data.length >= 2) printFit = !!(u16(data, 0) & 0x100); break; // WsBool.fFitToPage
+        case 0x0026: case 0x0027: case 0x0028: case 0x0029: {
+          if (data.length < 8) break;
+          const value = f64(data, 0), key = ['left', 'right', 'top', 'bottom'][type - 0x0026];
+          if (Number.isFinite(value) && value >= 0) sheet.page = { ...(sheet.page ?? {}), margins: { ...(sheet.page?.margins ?? {}), [key]: value } };
+          break;
+        }
+        case 0x0083: case 0x0084: case 0x002a: case 0x002b: {
+          if (data.length < 2) break;
+          const key = { 0x83: 'hCenter', 0x84: 'vCenter', 0x2a: 'headings', 0x2b: 'gridlines' }[type];
+          sheet.page = { ...(sheet.page ?? {}), [key]: !!u16(data, 0) }; break;
+        }
+        case 0x0014: case 0x0015: {
+          if (data.length < 2) break;
+          sheet.page = { ...(sheet.page ?? {}), [type === 0x14 ? 'header' : 'footer']: rd(data).str(2) }; break;
+        }
+        case 0x00a1: { // Setup; fNoPls/fNoOrient mark undefined printer fields, not zero-valued options.
+          if (data.length < 34) break;
+          const g = u16(data, 10), page = { ...(sheet.page ?? {}), order: g & 1 ? 'overThenDown' : 'downThenOver' };
+          fitTo = { fitW: Math.min(32767, u16(data, 6)), fitH: Math.min(32767, u16(data, 8)) };
+          if (!(g & 4)) {
+            const paper = u16(data, 0), scale = u16(data, 2);
+            if (paper > 0 && paper < 256) page.paper = paper;
+            if (scale >= 10 && scale <= 400) page.scale = scale;
+            if (!(g & 0x40)) page.orientation = g & 2 ? 'portrait' : 'landscape';
+          }
+          for (const [key, offset] of [['header', 16], ['footer', 24]]) {
+            const value = f64(data, offset);
+            if (Number.isFinite(value) && value >= 0) page.margins = { ...(page.margins ?? {}), [key]: value };
+          }
+          sheet.page = page; break;
+        }
+        case 0x023e: { const g = u16(data, 0); if (!(g & 2)) sheet.noGrid = true; if (g & 8) sheet._frozen = true; sheet.view = { ...(sheet.view ?? {}), mode: g & 0x800 ? 'pageBreakPreview' : 'normal' }; break; }
+        case 0x088b: if (data.length >= 16 && (u16(data, 14) & 1)) sheet.view = { ...(sheet.view ?? {}), mode: 'pageLayout' }; break;
+        case 0x001b: case 0x001a: { // Horizontal/VerticalPageBreaks: each 6-byte structure is a manual break.
+          if (data.length < 2) break;
+          const values = [];
+          for (let i = 0, n = Math.min(u16(data, 0), Math.floor((data.length - 2) / 6)); i < n; i++) { const id = u16(data, 2 + i * 6); if (id > 0 && id < (type === 0x001b ? 65536 : 256)) values.push(id); }
+          if (values.length) sheet.page = { ...(sheet.page ?? {}), [type === 0x001b ? 'rowBreaks' : 'colBreaks']: [...new Set(values)].sort((a, b) => a - b) };
+          break;
+        }
         case 0x0041: if (sheet._frozen) sheet.freeze = { rows: u16(data, 2), cols: u16(data, 0) }; break;
         case 0x00a0: { // SCL is a ratio; the sheet model stores percent, as XLSX zoomScale does.
           const num = i16(data, 0); const den = i16(data, 2);
@@ -766,6 +807,7 @@ export function readXls(bytes) {
         default: break;
       }
     }
+    if (printFit && fitTo) sheet.page = { ...(sheet.page ?? {}), ...fitTo };
     delete sheet._frozen;
     const defW = baseColPx(defColChars, mdw);
     if (defW !== DEFAULT_COL_WIDTH) sheet.defColW = defW;
@@ -799,13 +841,19 @@ export function readXls(bytes) {
   // 정의된 이름 (인쇄 영역 등 기본 이름은 제외)
   const outNames = [];
   for (const n of names) {
-    // 인쇄 영역: 그 시트의 페이지 설정으로
-    if (/^(_xlnm\.)?Print_Area$/i.test(n.name) && n.itab) {
+    // 인쇄 영역 · 반복 행/열: 그 시트의 페이지 설정으로.
+    if (/^(_xlnm\.)?Print_(Area|Titles)$/i.test(n.name) && n.itab) {
       try {
         fctx.row = 0; fctx.col = 0;
-        const m = /!\$?([A-Z]+)\$?(\d+):\$?([A-Z]+)\$?(\d+)$/.exec(decodeFormula(n.rgce, n.rgcb, fctx));
         const sh = sheets.find((x) => x.name === allNames[n.itab - 1]);
-        if (m && sh) sh.page = { ...(sh.page ?? {}), area: { r1: Number(m[2]) - 1, c1: nameToCol(m[1]), r2: Math.min(Number(m[4]), 1048576) - 1, c2: nameToCol(m[3]) } };
+        const areas = parsePrintAreas(decodeFormula(n.rgce, n.rgcb, fctx), sh?.name);
+        if (sh && areas.length) {
+          if (/Print_Area$/i.test(n.name)) sh.page = { ...(sh.page ?? {}), area: areas[0], ...(areas.length > 1 ? { areas } : {}) };
+          else for (const rg of areas) {
+            if (rg.c1 === 0 && rg.c2 === 16383) sh.page = { ...(sh.page ?? {}), titleRows: [rg.r1, rg.r2] };
+            else if (rg.r1 === 0 && rg.r2 === 1048575) sh.page = { ...(sh.page ?? {}), titleCols: [rg.c1, rg.c2] };
+          }
+        }
       } catch { /* 무시 */ }
       continue;
     }

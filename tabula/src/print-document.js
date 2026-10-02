@@ -1,13 +1,13 @@
 // 인쇄 페이지 분할과 이미지 PDF 컨테이너. DOM/외부 라이브러리에 의존하지 않는다.
-export function splitPrintIndexes(sizes, capacity, repeated = []) {
+export function splitPrintIndexes(sizes, capacity, repeated = [], manualBreaks = []) {
   const safe = sizes.map(n => Math.max(0, Number(n) || 0));
   const repeats = [...new Set(repeated)].filter(i => Number.isInteger(i) && i >= 0 && i < safe.length);
   const repeatSet = new Set(repeats), repeatSize = repeats.reduce((sum, i) => sum + safe[i], 0);
-  const available = Math.max(1, Number(capacity) - repeatSize), pages = [];
+  const available = Math.max(1, Number(capacity) - repeatSize), pages = [], breaks = new Set(manualBreaks);
   let current = [], used = 0;
   for (let i = 0; i < safe.length; i++) {
     if (repeatSet.has(i)) continue;
-    if (current.length && used + safe[i] > available + 0.01) { pages.push([...repeats, ...current]); current = []; used = 0; }
+    if (current.length && (breaks.has(i) || used + safe[i] > available + 0.01)) { pages.push([...repeats, ...current]); current = []; used = 0; }
     current.push(i); used += safe[i];
   }
   if (current.length || !pages.length) pages.push([...repeats, ...current]);

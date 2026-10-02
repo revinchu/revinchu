@@ -2066,10 +2066,16 @@ export class Workbook {
         return keep.length ? { ...sc, cells: keep.map(([p]) => p), values: keep.map(([, v]) => v) } : null;
       }).filter(Boolean);
     }
-    if (target.page && (target.page.area || target.page.titleRows || target.page.titleCols)) {
+    if (target.page && (target.page.area || target.page.areas || target.page.rowBreaks || target.page.colBreaks || target.page.titleRows || target.page.titleCols)) {
       // 인쇄 영역 · 인쇄 제목도 함께 이동
       const pg = { ...target.page };
       if (pg.area) pg.area = adjustRange(pg.area, axis, index, count);
+      if (Array.isArray(pg.areas)) {
+        pg.areas = pg.areas.map((area) => adjustRange(area, axis, index, count)).filter(Boolean);
+        pg.area = pg.areas[0] ?? null;
+      }
+      const breakKey = isRow ? 'rowBreaks' : 'colBreaks', maximum = isRow ? MAX_ROWS : MAX_COLS;
+      if (Array.isArray(pg[breakKey])) pg[breakKey] = [...new Set(pg[breakKey].filter(Number.isInteger).map(movePosition).filter((n) => n > 0 && n < maximum))].sort((a, b) => a - b);
       const k = isRow ? 'titleRows' : 'titleCols';
       if (pg[k]) {
         const rg = adjustRange(isRow ? { r1: pg[k][0], r2: pg[k][1], c1: 0, c2: 0 } : { c1: pg[k][0], c2: pg[k][1], r1: 0, r2: 0 }, axis, index, count);

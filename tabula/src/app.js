@@ -47,7 +47,7 @@ import { chartSeriesPatch, chartExplosionPatch, chartPartDeletePatch, chartLayou
 import { chartView3D } from './chart-3d.js';
 import { GridView, BASE_FONT, setBaseFont, measureText, fontStack, PATTERNS, patternCss, gradientCss, glyphShift, clearGlyphShifts, timelinePeriods, shapeTextHtml, fitShapeText } from './view.js';
 import { setThemeColors, THEME, applyTint } from './stylepresets.js';
-import { readXlsxAsync, writeXlsxAsync, xlsxOverflow, textRaw } from './xlsx.js';
+import { readXlsxAsync, writeXlsxAsync, xlsxOverflow, textRaw, parsePrintAreas } from './xlsx.js';
 import { readOds, writeOds } from './ods.js';
 import { readXls } from './xls.js';
 import { CellMap } from './cellmap.js';
@@ -74,6 +74,8 @@ import { THEME_FONTS, THEME_EFFECTS } from './theme-options.js';
 import { openPrintPreview, htmlPrintDocument } from './print-preview.js';
 import { prepareCond, condFormatAt } from './condfmt.js';
 import { printMergeMap } from './print-document.js';
+import { normalizePageBreaks } from './print-layout.js';
+import { addPrintAreas, resizePrintArea } from './print-area-edit.js';
 import { SPARK_TYPES, sparkDefaults, sparkItems, sparkRef } from './sparkline.js';
 import { evalSteps, goalSeek, dataTable, specialCells, GOTO_KINDS, valueText } from './audit.js';
 import { normOutline, outlineEmpty, changeLevels, groupsOf, groupAt, toggleGroup, showLevel, summaryOf, planSubtotals, SUBTOTAL_FNS, maxLevel } from './outline.js';
@@ -1870,6 +1872,7 @@ function onViewMouseDown(e) {
   if (e.target === dom.editor || dom.ac.contains(e.target)) return;
   closeMenus();
   const t = e.target;
+  if (beginPrintBoundaryDrag(e)) return;
   if (paletteTool === 'eraser' && e.button === 0) {
     e.preventDefault(); const id = t.closest('.obj')?.dataset.id, f = id && findObject(sheet(), id);
     if (f?.prop === 'shapes' && f.obj.ink === true && !viewOnly && !wb.props?.markedFinal && !protectBlocked('objects')) deleteObject(id);
@@ -3364,7 +3367,7 @@ const PROTECT_FREE = new Set(['mobileWorkMode', 'mobileTools', 'mobileFit','priv
   'outlineShow', 'outlineHide', 'freezePanes', 'freezeTop', 'freezeFirstCol', 'circleInvalid', 'clearCircles', 'macros', 'prevComment', 'nextComment',
   'workbookStats', 'toggleGrid', 'togglePrintGrid', 'toggleFormulaBar', 'toggleHeaders', 'toggleFormulas', 'toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100',
   'recalc', 'shortcuts', 'about', 'whatsNew', 'protectSheet', 'unprotectSheet', 'protectWorkbook', 'fileInfo', 'addSheet', 'deleteSheet', 'duplicateSheet',
-  'hideSheet', 'unhideSheet', 'importCsv', 'exportCsv', 'exportHtml', 'exportPdf', 'fullScreen', 'selectPrecedents', 'selectDependents', 'selectComments', 'pageSetup', 'printArea', 'clearPrintArea',
+  'hideSheet', 'unhideSheet', 'importCsv', 'exportCsv', 'exportHtml', 'exportPdf', 'fullScreen', 'selectPrecedents', 'selectDependents', 'selectComments', 'pageSetup', 'printArea', 'clearPrintArea', 'addPrintArea', 'viewNormal', 'viewPageBreakPreview', 'insertPageBreak', 'removePageBreak', 'resetPageBreaks',
   'pageFitWidth', 'pageFitHeight', 'pageScale', 'orientPortrait', 'orientLandscape', 'insertFunction', 'allowEditRanges', 'unshareWorkbook', 'toggleComment', 'showAllComments', 'hideAllComments', 'selectionPane']);
 const PROTECT_BLOCK = new Set(['mergeCenter', 'unmerge', 'createTable', 'condManager', 'condNewRule', 'condMenuKey', 'condColorScale', 'condDataBar', 'tableStyleKey', 'dataValidation', 'insertPivot', 'outlineGroup',
   'outlineUngroup', 'outlineClear', 'subtotal', 'resizeTable', 'convertToRange', 'tblName', 'tblHeader', 'tblTotals', 'tblBanded', 'tblBandedCols', 'tblFirstCol',
@@ -8538,6 +8541,7 @@ const KEYTIPS = {
   hlr: ['condManager', '조건부 서식 규칙 관리'], hln: ['condNewRule', '새 서식 규칙'], hlm: ['condMenuKey', '조건부 서식 메뉴'], ht: ['tableStyleKey', '표 서식'],
   wff: ['freezePanes', '틀 고정'], wfr: ['freezeTop', '첫 행 고정'], wfc: ['freezeFirstCol', '첫 열 고정'], wg: ['toggleGrid', '눈금선 (기존 키)'],
   wvg: ['toggleGrid', '눈금선'], wvh: ['toggleHeaders', '머리글'], wvf: ['toggleFormulaBar', '수식 입력줄'],
+  wn: ['viewNormal', '기본 보기'], wp: ['viewPageBreakPreview', '페이지 나누기 미리 보기'],
   wj: ['zoom100', '100%'], wi: ['zoomSel', '선택 영역 확대/축소'], wm: ['macros', '매크로'],
   mf: ['insertFunction', '함수 삽입'], mua: ['autosum', '자동 합계'], mn: ['nameManager', '이름 관리자'], mmd: ['defineName', '이름 정의'],
   ms: ['pasteName', '수식에서 사용'], mc: ['createNamesFromSel', '선택 영역에서 만들기'],
@@ -14839,69 +14843,72 @@ function openBackstage(panel = 'new') {
 function printSheet({ htmlOnly = false, pdf = false, name = docName } = {}) {
   const s = sheet();
   const pg = normPage(s.page);
-  const u = wb.usedRange(si);
-  // 인쇄 영역이 있으면 그 범위만
+  const layout = gv.printLayout();
+  if (layout.error) { alertDialog('인쇄 영역', layout.error); return; }
+  if (!layout.pages.length) { alertDialog('인쇄 영역', '표시된 셀을 포함하는 인쇄 영역이 없습니다.'); return; }
   const objects = [...(s.charts ?? []).map(o => ({ kind: 'chart', o })), ...(s.images ?? []).map(o => ({ kind: 'image', o })), ...(s.shapes ?? []).map(o => ({ kind: 'shape', o }))].filter(({ o }) => !o.hidden && !o.noPrint);
-  const area = { ...(pg.area ?? { r1: 0, c1: 0, r2: u.rows - 1, c2: u.cols - 1 }) };
-  if (!pg.area) for (const { o } of objects) {
-    const a = (Number(o.rot) || 0) * Math.PI / 180, w = Math.abs(o.w * Math.cos(a)) + Math.abs(o.h * Math.sin(a)), h = Math.abs(o.w * Math.sin(a)) + Math.abs(o.h * Math.cos(a));
-    area.r2 = Math.max(area.r2, gv.rows.indexAt(Math.max(0, o.y + o.h / 2 + h / 2 - 0.01)));
-    area.c2 = Math.max(area.c2, gv.cols.indexAt(Math.max(0, o.x + o.w / 2 + w / 2 - 0.01)));
+  let printCells = 0;
+  for (const { area, titleRows, titleCols } of layout.areas) {
+    const extra = (title, first, last) => title ? title[1] - title[0] + 1 - Math.max(0, Math.min(last, title[1]) - Math.max(first, title[0]) + 1) : 0;
+    const rows = area.r2 - area.r1 + 1 + extra(titleRows, area.r1, area.r2), cols = area.c2 - area.c1 + 1 + extra(titleCols, area.c1, area.c2);
+    printCells += rows * cols;
+    if (rows > 20000 || cols > 200 || printCells > 500000) { alertDialog('인쇄 영역', '한 번에 20,000행·200열·500,000셀 이내를 인쇄할 수 있습니다. 페이지 레이아웃에서 인쇄 영역을 나누어 지정하세요. 원본 데이터를 잘라서 출력하지 않습니다.'); return; }
   }
-  const printRows = Math.max(0, area.r2 - area.r1 + 1), printCols = Math.max(0, area.c2 - area.c1 + 1);
-  if (printRows > 20000 || printCols > 200 || printRows * printCols > 500000) { alertDialog('인쇄 영역', '한 번에 20,000행·200열·500,000셀 이내를 인쇄할 수 있습니다. 페이지 레이아웃에서 인쇄 영역을 나누어 지정하세요. 원본 데이터를 잘라서 출력하지 않습니다.'); return; }
-  const r1 = area.r1;
-  const c1 = area.c1;
-  const r2 = Math.min(area.r2, r1 + 20000);
-  const c2 = Math.min(area.c2, c1 + 200);
   const hf = (code) => headerParts(code, { file: docName, sheet: s.name });
   const hdr = pg.header ? hf(pg.header) : { left: '', center: `${docName} — ${s.name}`, right: '' };
   const parts = [`<div class="print-hf">${['left', 'center', 'right'].map((k) => `<span>${escapeHtml(hdr[k])}</span>`).join('')}</div>`];
-  const colsList = range(c1, c2).filter((c) => !gv.cols.isHidden(c));
   const printCond = prepareCond(wb, si);
   const gridOn = pg.gridlines || view.printGrid;
-  let tableW = 0;
-  let tableH = 0;
-  if (r2 >= r1 && c2 >= c1) {
-    const colgroup = (pg.headings ? '<col data-print-col="-1" style="width:34px">' : '') + colsList.map((c) => `<col data-print-col="${c}" data-print-x="${gv.cols.pos(c)}" style="width:${gv.cols.size(c)}px">`).join('');
-    tableW = colsList.reduce((w, c) => w + gv.cols.size(c), pg.headings ? 34 : 0);
-    if (pg.titleRows && (pg.titleRows[1] - pg.titleRows[0] + 1 > 20000 || (pg.titleRows[1] - pg.titleRows[0] + 1) * colsList.length > 500000)) { alertDialog('인쇄 영역', '반복할 행이 너무 많습니다. 페이지 설정에서 인쇄 제목 범위를 줄이세요.'); return; }
-    const titleRows = pg.titleRows ? range(pg.titleRows[0], pg.titleRows[1]).filter(r => !gv.rows.isHidden(r)) : [];
-    if (titleRows.length > 20000 || titleRows.length * colsList.length > 500000) { alertDialog('인쇄 영역', '반복할 행이 너무 많습니다. 페이지 설정에서 인쇄 제목 범위를 줄이세요.'); return; }
-    const titleSet = new Set(titleRows), bodyRows = range(r1, r2).filter(r => !gv.rows.isHidden(r) && !titleSet.has(r));
-    const headMerges = printMergeMap(s.merges, colsList, titleRows), bodyMerges = printMergeMap(s.merges, colsList, bodyRows);
-    const rowHtml = (r, mergeMap) => {
-      const tds = [];
-      if (pg.headings) tds.push(`<td class="ph">${r + 1}</td>`);
-      for (const c of colsList) {
-        const key = `${r},${c}`, merge = mergeMap.get(key);
-        if (mergeMap.has(key) && !merge) continue;
-        const cellR = merge?.r ?? r, cellC = merge?.c ?? c;
-        const table = tableAt(s, cellR, cellC);
-        const st = { ...(table ? tableCellStyle(table, cellR, cellC) : {}), ...styleAt(cellR, cellC), ...condFormatAt(printCond, wb, si, cellR, cellC, valueAt(cellR, cellC)).style };
-        const { text, align } = formatValue(valueAt(cellR, cellC), st, wb.date1904);
-        const css = [`text-align:${st.align && st.align !== 'general' ? st.align === 'centerContinuous' ? 'center' : st.align : align}`, st.bold && 'font-weight:700', st.italic && 'font-style:italic', st.color && `color:${st.color}`,
-          st.fill && `background:${st.fill}`, `font-family:${escapeHtml(fontStack(st.font || BASE_FONT.name))}`, `font-size:${st.size || BASE_FONT.size}pt`, st.wrap && 'white-space:pre-wrap',
-          st.underline && 'text-decoration:underline', st.strike && 'text-decoration:line-through',
-          st.bb && `border-bottom:1px solid ${st.bbc || '#000'}`, st.bt && `border-top:1px solid ${st.btc || '#000'}`, st.bl && `border-left:1px solid ${st.blc || '#000'}`, st.br && `border-right:1px solid ${st.brc || '#000'}`].filter(Boolean).join(';');
-        tds.push(`<td${merge ? ` rowspan="${merge.rowSpan}" colspan="${merge.colSpan}"` : ''} style="${css}">${escapeHtml(text)}</td>`);
-      }
-      tableH += gv.rows.size(r);
-      return `<tr data-print-row="${r}" data-print-y="${gv.rows.pos(r)}" style="height:${gv.rows.size(r)}px">${tds.join('')}</tr>`;
-    };
-    // 인쇄 제목(반복할 행)은 thead 로 — 브라우저가 쪽마다 반복
-    const head = [];
-    if (pg.headings) head.push(`<tr><td class="ph"></td>${colsList.map((c) => `<td class="ph">${colToName(c)}</td>`).join('')}</tr>`);
-    for (const r of titleRows) head.push(rowHtml(r, headMerges));
-    const body = bodyRows.map(r => rowHtml(r, bodyMerges));
-    const scale = printScale(pg, tableW, tableH);
-    parts.push(`<table class="${gridOn ? 'grid-lines' : ''}" style="zoom:${scale};${pg.hCenter ? 'margin:0 auto;' : ''}"><colgroup>${colgroup}</colgroup>${head.length ? `<thead>${head.join('')}</thead>` : ''}<tbody>${body.join('')}</tbody></table>`);
-  }
-  for (const { kind, o } of objects) {
-    const attrs = `class="chart-print" data-print-x="${Number(o.x) || 0}" data-print-y="${Number(o.y) || 0}" data-print-object="${escapeHtml(o.id)}" style="position:relative;width:${Math.max(1, o.w)}px;height:${Math.max(1, o.h)}px;${o.rot ? `transform:rotate(${o.rot}deg);` : ''}"`;
-    if (kind === 'chart') parts.push(`<div ${attrs}>${gv.chartSvg(o)}</div>`);
-    else if (kind === 'image') parts.push(`<div ${attrs}><img src="${escapeHtml(o.src)}" style="width:${o.w}px;height:${o.h}px" alt=""></div>`);
-    else parts.push(`<div ${attrs} data-shape-print="${escapeHtml(o.id)}">${isSmartArt(o) ? smartArtSvg(o) : shapeSvg(o)}${!isSmartArt(o) && (o.text || o.paras) && !isShapeLine(o) ? shapeTextHtml(o) : ''}</div>`);
+  for (const { area, index } of layout.areas) {
+    const { r1, r2, c1, c2 } = area;
+    if (pg.titleCols && pg.titleCols[1] - pg.titleCols[0] >= 200) { alertDialog('인쇄 영역', '반복할 열은 200열 이내로 지정하세요.'); return; }
+    const repeatedCols = pg.titleCols ? range(pg.titleCols[0], pg.titleCols[1]).filter(c => !gv.cols.isHidden(c)) : [];
+    const colsList = [...new Set([...repeatedCols, ...range(c1, c2).filter(c => !gv.cols.isHidden(c))])];
+    parts.push(`<section data-print-area="${index}">`);
+    let tableW = 0;
+    let tableH = 0;
+    if (r2 >= r1 && c2 >= c1) {
+      const colgroup = (pg.headings ? '<col data-print-col="-1" style="width:34px">' : '') + colsList.map((c) => `<col data-print-col="${c}" data-print-x="${gv.cols.pos(c)}" style="width:${gv.cols.size(c)}px">`).join('');
+      tableW = colsList.reduce((w, c) => w + gv.cols.size(c), pg.headings ? 34 : 0);
+      if (pg.titleRows && (pg.titleRows[1] - pg.titleRows[0] + 1 > 20000 || (pg.titleRows[1] - pg.titleRows[0] + 1) * colsList.length > 500000)) { alertDialog('인쇄 영역', '반복할 행이 너무 많습니다. 페이지 설정에서 인쇄 제목 범위를 줄이세요.'); return; }
+      const titleRows = pg.titleRows ? range(pg.titleRows[0], pg.titleRows[1]).filter(r => !gv.rows.isHidden(r)) : [];
+      if (titleRows.length > 20000 || titleRows.length * colsList.length > 500000) { alertDialog('인쇄 영역', '반복할 행이 너무 많습니다. 페이지 설정에서 인쇄 제목 범위를 줄이세요.'); return; }
+      const titleSet = new Set(titleRows), bodyRows = range(r1, r2).filter(r => !gv.rows.isHidden(r) && !titleSet.has(r));
+      const headMerges = printMergeMap(s.merges, colsList, titleRows), bodyMerges = printMergeMap(s.merges, colsList, bodyRows);
+      const rowHtml = (r, mergeMap) => {
+        const tds = [];
+        if (pg.headings) tds.push(`<td class="ph">${r + 1}</td>`);
+        for (const c of colsList) {
+          const key = `${r},${c}`, merge = mergeMap.get(key);
+          if (mergeMap.has(key) && !merge) continue;
+          const cellR = merge?.r ?? r, cellC = merge?.c ?? c;
+          const table = tableAt(s, cellR, cellC);
+          const st = { ...(table ? tableCellStyle(table, cellR, cellC) : {}), ...styleAt(cellR, cellC), ...condFormatAt(printCond, wb, si, cellR, cellC, valueAt(cellR, cellC)).style };
+          const { text, align } = formatValue(valueAt(cellR, cellC), st, wb.date1904);
+          const css = [`text-align:${st.align && st.align !== 'general' ? st.align === 'centerContinuous' ? 'center' : st.align : align}`, st.bold && 'font-weight:700', st.italic && 'font-style:italic', st.color && `color:${st.color}`,
+            st.fill && `background:${st.fill}`, `font-family:${escapeHtml(fontStack(st.font || BASE_FONT.name))}`, `font-size:${st.size || BASE_FONT.size}pt`, st.wrap && 'white-space:pre-wrap',
+            st.underline && 'text-decoration:underline', st.strike && 'text-decoration:line-through',
+            st.bb && `border-bottom:1px solid ${st.bbc || '#000'}`, st.bt && `border-top:1px solid ${st.btc || '#000'}`, st.bl && `border-left:1px solid ${st.blc || '#000'}`, st.br && `border-right:1px solid ${st.brc || '#000'}`].filter(Boolean).join(';');
+          tds.push(`<td${merge ? ` rowspan="${merge.rowSpan}" colspan="${merge.colSpan}"` : ''} style="${css}">${escapeHtml(text)}</td>`);
+        }
+        tableH += gv.rows.size(r);
+        return `<tr data-print-row="${r}" data-print-y="${gv.rows.pos(r)}" style="height:${gv.rows.size(r)}px">${tds.join('')}</tr>`;
+      };
+      // 인쇄 제목(반복할 행)은 thead 로 — 브라우저가 쪽마다 반복
+      const head = [];
+      if (pg.headings) head.push(`<tr style="height:20px"><td class="ph"></td>${colsList.map((c) => `<td class="ph">${colToName(c)}</td>`).join('')}</tr>`);
+      for (const r of titleRows) head.push(rowHtml(r, headMerges));
+      const body = bodyRows.map(r => rowHtml(r, bodyMerges));
+      const scale = printScale(pg, tableW, tableH);
+      parts.push(`<table class="${gridOn ? 'grid-lines' : ''}" style="zoom:${scale};${pg.hCenter ? 'margin:0 auto;' : ''}"><colgroup>${colgroup}</colgroup>${head.length ? `<thead>${head.join('')}</thead>` : ''}<tbody>${body.join('')}</tbody></table>`);
+    }
+    for (const { kind, o } of objects) {
+      const attrs = `class="chart-print" data-print-x="${Number(o.x) || 0}" data-print-y="${Number(o.y) || 0}" data-print-object="${escapeHtml(o.id)}" style="position:relative;width:${Math.max(1, o.w)}px;height:${Math.max(1, o.h)}px;${o.rot ? `transform:rotate(${o.rot}deg);` : ''}"`;
+      if (kind === 'chart') parts.push(`<div ${attrs}>${gv.chartSvg(o)}</div>`);
+      else if (kind === 'image') parts.push(`<div ${attrs}><img src="${escapeHtml(o.src)}" style="width:${o.w}px;height:${o.h}px" alt=""></div>`);
+      else parts.push(`<div ${attrs} data-shape-print="${escapeHtml(o.id)}">${isSmartArt(o) ? smartArtSvg(o) : shapeSvg(o)}${!isSmartArt(o) && (o.text || o.paras) && !isShapeLine(o) ? shapeTextHtml(o) : ''}</div>`);
+    }
+    parts.push('</section>');
   }
   if (pg.footer) { const ft = hf(pg.footer); parts.push(`<div class="print-hf foot">${['left', 'center', 'right'].map((k) => `<span>${escapeHtml(ft[k])}</span>`).join('')}</div>`); }
   // 용지 · 방향 · 여백
@@ -14915,9 +14922,91 @@ function printSheet({ htmlOnly = false, pdf = false, name = docName } = {}) {
   dom.printArea.style.cssText = 'display:block;position:fixed;left:-100000px;top:0;visibility:hidden;';
   try { for (const node of dom.printArea.querySelectorAll('[data-shape-print]')) fitShapeText(node, 'print'); }
   finally { dom.printArea.style.cssText = printCss; }
-  if (htmlOnly) return htmlPrintDocument({ source: dom.printArea, page: pg, name, sheet: s.name });
-  try { openPrintPreview({ source: dom.printArea, page: pg, name, sheet: s.name, saveFile: saveWithPicker, pdfPreferred: pdf }); }
+  if (htmlOnly) return htmlPrintDocument({ source: dom.printArea, page: pg, name, sheet: s.name, layout });
+  try { openPrintPreview({ source: dom.printArea, page: pg, name, sheet: s.name, layout, saveFile: saveWithPicker, pdfPreferred: pdf }); }
   catch (error) { alertDialog('인쇄 미리보기', error.message); }
+}
+
+/** 저장된 보기 모드와 인쇄 설정은 시트별로 유지한다. */
+function setSheetViewMode(mode) {
+  if (mode !== 'normal' && mode !== 'pageBreakPreview') return;
+  const next = { ...sheet().view, mode };
+  if (viewOnly) sheet().view = next;
+  else wb.transact(() => wb.setSheetProp(si, 'view', next), meta());
+  gv.renderAll(); updateRibbon();
+}
+function setSelectedPrintArea(append) {
+  if (viewOnly) return;
+  const pg = normPage(sheet().page), selected = { ...sel };
+  const existing = pg.areas?.length ? pg.areas : pg.area ? [pg.area] : [];
+  const areas = append ? addPrintAreas(existing, selected) : [selected];
+  if (areas.length > 128) { toast('인쇄 영역은 128개 이내로 지정하세요.'); return; }
+  wb.transact(() => {
+    wb.setSheetProp(si, 'page', { ...pg, area: areas[0], areas });
+    wb.setSheetProp(si, 'view', { ...sheet().view, mode: 'pageBreakPreview' });
+  }, meta());
+  gv.renderAll(); updateRibbon();
+  toast(`${append ? '인쇄 영역에 추가했습니다' : '인쇄 영역을 설정했습니다'}. 파란 경계를 끌어 조정할 수 있습니다.`);
+}
+function changeSelectedPageBreak(action) {
+  if (viewOnly) return;
+  const pg = normPage(sheet().page), rows = normalizePageBreaks(pg.rowBreaks), cols = normalizePageBreaks(pg.colBreaks, MAX_COLS);
+  const useRow = selKind !== 'cols' && active.r > 0, useCol = selKind !== 'rows' && active.c > 0;
+  const patch = { rowBreaks: rows, colBreaks: cols };
+  for (const [key, index, enabled] of [['rowBreaks', active.r, useRow], ['colBreaks', active.c, useCol]]) {
+    if (enabled) patch[key] = action === 'insert' ? normalizePageBreaks([...patch[key], index]) : patch[key].filter(n => n !== index);
+  }
+  if (action === 'insert' && (pg.fitW || pg.fitH)) { patch.fitW = 0; patch.fitH = 0; toast('수동 페이지 나누기를 적용하기 위해 자동 맞춤을 해제했습니다.'); }
+  wb.transact(() => {
+    wb.setSheetProp(si, 'page', { ...pg, ...patch });
+    wb.setSheetProp(si, 'view', { ...sheet().view, mode: 'pageBreakPreview' });
+  }, meta());
+  gv.renderAll(); updateRibbon();
+}
+function beginPrintBoundaryDrag(e) {
+  const target = e.target.closest?.('.page-boundary.draggable');
+  if (!target || e.button !== 0) return false;
+  e.preventDefault(); e.stopPropagation();
+  if (viewOnly || wb.props?.markedFinal || sheet().protect?.on || editing && !commitEdit()) return true;
+  const owner = { wb, si, sheet: sheet(), page: sheet().page, version: wb.version };
+  const current = () => wb === owner.wb && si === owner.si && sheet() === owner.sheet && sheet().page === owner.page && wb.version === owner.version && sheet().view?.mode === 'pageBreakPreview' && !viewOnly && !wb.props?.markedFinal && !sheet().protect?.on;
+  const pg = normPage(sheet().page), plan = gv.printLayout(), areaIndex = Number(target.dataset.printAreaIndex);
+  const part = plan.areas.find(a => a.index === areaIndex);
+  if (!part) return true;
+  const edge = target.dataset.printAreaEdge, axisName = target.dataset.pageBreakAxis || (edge === 'left' || edge === 'right' ? 'col' : 'row');
+  const axis = axisName === 'row' ? gv.rows : gv.cols;
+  const hint = el('div', { class: 'print-drag-hint', role: 'status' });
+  Object.assign(hint.style, { position: 'fixed', zIndex: 9999, padding: '6px 10px', background: '#174dba', color: '#fff', borderRadius: '4px', pointerEvents: 'none' });
+  document.body.append(hint); let index = null, moved = false;
+  const move = ev => {
+    if (!current()) { cleanup(); return; }
+    const hit = gv.hitTest(ev.clientX, ev.clientY, true), cell = axisName === 'row' ? hit.r : hit.c, point = axisName === 'row' ? hit.sheetY : hit.sheetX;
+    index = clamp(point - axis.pos(cell) < axis.size(cell) / 2 ? cell : cell + 1, 0, axis.max - 1);
+    moved ||= Math.abs(ev.clientX - e.clientX) + Math.abs(ev.clientY - e.clientY) > 3;
+    hint.style.left = `${Math.min(window.innerWidth - 180, ev.clientX + 12)}px`; hint.style.top = `${Math.max(0, ev.clientY - 35)}px`;
+    hint.textContent = `${edge ? '인쇄 영역 경계' : '페이지 나누기'}: ${axisName === 'row' ? `${index + 1}행 앞` : `${colToName(index)}열 앞`}`;
+  };
+  const cleanup = () => { hint.remove(); document.removeEventListener('mousemove', move, true); document.removeEventListener('mouseup', end, true); document.removeEventListener('keydown', cancel, true); };
+  const cancel = ev => { if (ev.key === 'Escape') { ev.preventDefault(); ev.stopImmediatePropagation(); cleanup(); } };
+  const end = ev => {
+    ev.preventDefault(); ev.stopImmediatePropagation(); cleanup();
+    if (!current() || !moved || index === null) return;
+    if (edge) {
+      const areas = plan.areas.map(a => ({ ...a.area }));
+      areas[areaIndex] = resizePrintArea(part.area, edge, index);
+      patchPage({ areas, area: areas[0] });
+    } else {
+      const key = axisName === 'row' ? 'rowBreaks' : 'colBreaks', old = Number(target.dataset.pageBreakIndex);
+      const start = axisName === 'row' ? part.area.r1 : part.area.c1, finish = axisName === 'row' ? part.area.r2 : part.area.c2;
+      const breaks = normalizePageBreaks(pg[key]).filter(n => n !== old);
+      if (index > start && index <= finish) breaks.push(index);
+      patchPage({ [key]: normalizePageBreaks(breaks), fitW: 0, fitH: 0 });
+      if (pg.fitW || pg.fitH) toast('수동 페이지 나누기를 적용하기 위해 자동 맞춤을 해제했습니다.');
+    }
+    focusGrid();
+  };
+  document.addEventListener('mousemove', move, true); document.addEventListener('mouseup', end, true); document.addEventListener('keydown', cancel, true); move(e);
+  return true;
 }
 
 /** 페이지 설정 대화 상자 (용지 · 방향 · 여백 · 배율 · 인쇄 영역 · 인쇄 제목 · 머리글/바닥글) */
@@ -14934,20 +15023,24 @@ function pageSetupDialog() {
     { name: 'hCenter', label: '페이지 가운데 맞춤: 가로', type: 'checkbox', value: pg.hCenter },
     { name: 'header', label: '머리글 (&L 왼쪽 &C 가운데 &R 오른쪽, &P 쪽 &N 전체 &D 날짜 &A 시트 &F 파일)', value: pg.header },
     { name: 'footer', label: '바닥글', value: pg.footer },
-    { name: 'area', label: '인쇄 영역 (예: A1:H40, 비우면 전체)', value: a1(pg.area) },
+    { name: 'area', label: '인쇄 영역 (예: A1:H40,J1:M20 · 비우면 전체)', value: (pg.areas?.length ? pg.areas : pg.area ? [pg.area] : []).map(a1).join(',') },
     { name: 'titleRows', label: '반복할 행 (예: 1:2)', value: pg.titleRows ? `${pg.titleRows[0] + 1}:${pg.titleRows[1] + 1}` : '' },
+    { name: 'titleCols', label: '반복할 열 (예: A:B)', value: pg.titleCols ? `${colToName(pg.titleCols[0])}:${colToName(pg.titleCols[1])}` : '' },
+    { name: 'order', label: '페이지 순서', type: 'select', value: pg.order || 'downThenOver', options: [{ value: 'downThenOver', label: '아래쪽으로 먼저, 다음 오른쪽' }, { value: 'overThenDown', label: '오른쪽으로 먼저, 다음 아래쪽' }] },
     { name: 'gridlines', label: '눈금선 인쇄', type: 'checkbox', value: pg.gridlines },
     { name: 'headings', label: '행/열 머리글 인쇄', type: 'checkbox', value: pg.headings },
   ], (v) => {
     const mm = v.margins.split(/[,\s]+/).map(Number).filter((x) => Number.isFinite(x));
     const tr = /^\$?(\d+):\$?(\d+)$/.exec(v.titleRows.trim());
-    const area = v.area.trim() ? parseRangeName(v.area.trim().replace(/\$/g, '')) : null;
-    if (v.area.trim() && !area) { alertDialog('페이지 설정', '인쇄 영역 참조가 올바르지 않습니다.'); return false; }
+    const areas = v.area.trim() ? parsePrintAreas(v.area, sheet().name) : [];
+    const tc = v.titleCols.trim() ? parsePrintAreas(v.titleCols, sheet().name) : [];
+    if (v.titleRows.trim() && (!tr || Number(tr[1]) < 1 || Number(tr[2]) < Number(tr[1]) || Number(tr[2]) > MAX_ROWS) || v.titleCols.trim() && (!tc.length || !/^\$?[A-Z]+:\$?[A-Z]+$/i.test(v.titleCols.trim()))) { alertDialog('페이지 설정', '반복할 행 또는 열 참조가 올바르지 않습니다.'); return false; }
+    if (v.area.trim() && !areas.length || areas.length > 128) { alertDialog('페이지 설정', '인쇄 영역 참조가 올바르지 않습니다.'); return false; }
     const next = {
       ...pg, orientation: v.orientation, paper: Number(v.paper), scale: Math.max(10, Math.min(400, Number(v.scale) || 100)),
       fitW: Math.max(0, Number(v.fitW) || 0), fitH: Math.max(0, Number(v.fitH) || 0), hCenter: v.hCenter, header: v.header, footer: v.footer,
       margins: mm.length === 4 ? { ...pg.margins, top: mm[0], bottom: mm[1], left: mm[2], right: mm[3] } : pg.margins,
-      area, titleRows: tr ? [Number(tr[1]) - 1, Number(tr[2]) - 1] : null, gridlines: v.gridlines, headings: v.headings,
+      area: areas[0] ?? null, areas, titleCols: tc.length ? [tc[0].c1, tc[0].c2] : null, order: v.order, titleRows: tr ? [Number(tr[1]) - 1, Number(tr[2]) - 1] : null, gridlines: v.gridlines, headings: v.headings,
     };
     setPage(next);
     return undefined;
@@ -14956,7 +15049,7 @@ function pageSetupDialog() {
 function setPage(next) {
   if (viewOnly) return;
   wb.transact(() => wb.setSheetProp(si, 'page', next), meta());
-  gv.renderAll();
+  gv.renderAll(); updateRibbon();
 }
 const patchPage = (patch) => setPage({ ...normPage(sheet().page), ...patch });
 
@@ -17067,8 +17160,16 @@ const MENUS = {
   ],
   paperMenu: () => PAPERS.map((p) => ({ label: p.label, action: () => patchPage({ paper: p.id }) })),
   printAreaMenu: () => [
-    { label: '인쇄 영역 설정', action: () => run('printArea') },
-    { label: '인쇄 영역 해제', action: () => run('clearPrintArea') },
+    { label: '인쇄 영역 설정(S)', action: () => run('printArea') },
+    { label: '인쇄 영역에 추가(A)', action: () => run('addPrintArea') },
+    { label: '인쇄 영역 해제(C)', action: () => run('clearPrintArea') },
+    { sep: true },
+    { label: '페이지 나누기 미리 보기(P)', action: () => run('viewPageBreakPreview') },
+  ],
+  pageBreaksMenu: () => [
+    { label: '페이지 나누기 삽입(I)', action: () => run('insertPageBreak') },
+    { label: '페이지 나누기 제거(R)', action: () => run('removePageBreak') },
+    { label: '모든 페이지 나누기 원래대로(A)', action: () => run('resetPageBreaks') },
   ],
   fitMenu: () => [
     { label: '현재 크기 (100%)', action: () => patchPage({ scale: 100, fitW: 0, fitH: 0 }) },
@@ -17733,8 +17834,14 @@ const COMMANDS = {
   pageSetup: () => pageSetupDialog(),
   orientPortrait: () => patchPage({ orientation: 'portrait' }),
   orientLandscape: () => patchPage({ orientation: 'landscape' }),
-  printArea: () => { patchPage({ area: usedClip(sel) }); toast(`인쇄 영역: ${cellName(sel.r1, sel.c1)}:${cellName(usedClip(sel).r2, usedClip(sel).c2)}`); },
-  clearPrintArea: () => patchPage({ area: null }),
+  printArea: () => setSelectedPrintArea(false),
+  addPrintArea: () => setSelectedPrintArea(true),
+  clearPrintArea: () => { patchPage({ area: null, areas: [] }); toast('인쇄 영역을 해제했습니다. 사용한 범위가 인쇄됩니다.'); },
+  viewNormal: () => setSheetViewMode('normal'),
+  viewPageBreakPreview: () => setSheetViewMode('pageBreakPreview'),
+  insertPageBreak: () => changeSelectedPageBreak('insert'),
+  removePageBreak: () => changeSelectedPageBreak('remove'),
+  resetPageBreaks: () => patchPage({ rowBreaks: [], colBreaks: [] }),
   printTitles: () => pageSetupDialog(),
   sparkLine: () => insertSparkline('line'),
   sparkColumn: () => insertSparkline('column'),
@@ -17931,6 +18038,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileFit','toggleR
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['인쇄 영역과 페이지 나누기', ['인쇄 영역 밖 회색 표시 · 파란 인쇄 경계와 쪽 번호 · 기본 보기 전환', '인쇄 영역 설정·추가·해제 · 경계 끌기 · 수동 페이지 나누기 삽입·이동·제거', 'XLSX·XLS·XLSB의 저장된 보기와 복수 인쇄 영역 복원 · PDF/인쇄와 같은 페이지 경계']],
   ['차트 종류·요소 서식 보강', ['선버스트·트리맵 계층과 선택 색 보존 · 리본에서 모든 차트 종류 접근', '원통·원뿔·피라미드 3차원 막대 · 누적 영역 콤보 · 계열별 배치와 축', '축·데이터 레이블·계층 요소를 선택하여 상세 서식 조정 · 실행 취소 동기화']],
   ['그리기와 도형 조합', ['펜·형광펜·선·도형·지우개 팔레트 · 색·굵기·불투명도 · 터치 그리기', 'SVG 아이콘을 편집 가능한 도형으로 변환 · 그룹 해제 후 부분별 색 변경', '두 개 이상 도형의 결합·병합·조각·교차·빼기 · 실행 취소']],
   ['미디어와 SmartArt 확장', ['Unsplash·Pexels·Pixabay 검색 연결 · 서버 API 키 설정 시 사용', 'GIF 원본 삽입 · Wikimedia·NASA 영상 검색과 시트에서 재생', 'SmartArt 60종 · 8개 분류 · 검색·미리보기 · 그림·계층·색·스타일 편집']],
@@ -18190,6 +18298,7 @@ function ribbonState() {
   const fmt = st.numFmt === 'comma' ? 'number' : st.numFmt === 'datetime' ? 'date' : st.numFmt || 'general';
   const f = sheet().freeze ?? {};
   return {
+    viewNormal: !sheet().view?.mode || sheet().view.mode === 'normal', viewPageBreakPreview: sheet().view?.mode === 'pageBreakPreview',
     printFitW: String(normPage(sheet().page).fitW), printFitH: String(normPage(sheet().page).fitH), printScale: String(normPage(sheet().page).scale), printFitActive: !!(normPage(sheet().page).fitW || normPage(sheet().page).fitH),
     fullScreenOn: !!document.fullscreenElement || document.body.classList.contains('wixel-fullscreen'),
     bold: st.bold, italic: st.italic, underline: st.underline, strike: st.strike, wrap: st.wrap,
@@ -18231,6 +18340,7 @@ function tableRibbonState() {
 
 function updateRibbon() {
   ribbon?.update(ribbonState());
+  document.querySelectorAll('[data-view-mode]').forEach(b => b.setAttribute('aria-pressed', String((sheet().view?.mode || 'normal') === b.dataset.viewMode)));
   dom.undoBtn.disabled = !wb.canUndo();
   dom.redoBtn.disabled = !wb.canRedo();
 }

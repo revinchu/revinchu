@@ -171,6 +171,7 @@ export const TABS = [
         large('orientBtn', 'print', '용지 방향', { menu: 'orientMenu' }),
         large('paperBtn', 'table', '크기', { menu: 'paperMenu' }),
         large('printAreaBtn', 'freeze', '인쇄 영역', { menu: 'printAreaMenu' }),
+        large('pageBreaksBtn', 'table', '나누기', { menu: 'pageBreaksMenu' }),
         large('printTitles', 'rowInsert', '인쇄 제목', { title: '반복할 행 · 머리글/바닥글 · 페이지 설정' }),
         large('pageSetup', 'format', '페이지 설정'),
       ]),
@@ -299,6 +300,7 @@ export const TABS = [
   },
   {
     id: 'view', label: '보기', groups: [
+      group('통합 문서 보기', [large('viewNormal', 'table', '기본', { toggle: 'viewNormal' }), large('viewPageBreakPreview', 'print', '페이지 나누기 미리 보기', { toggle: 'viewPageBreakPreview' })]),
       group('표시', [
         col(
           check('toggleGrid', '눈금선', 'showGrid'),
