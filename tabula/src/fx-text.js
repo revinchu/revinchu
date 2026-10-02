@@ -1,6 +1,6 @@
 // 텍스트 함수 (DOM 없음)
 import {
-  ERR, Range, isError, scalar, toNum, toStr, toInt, toBool, optInt, optBool, flat, asRange, lift,
+  ERR, Range, RefValue, isError, scalar, toNum, toStr, toInt, toBool, optInt, optBool, flat, asRange, lift,
   parseNumberText, wildcardRegex,
 } from './fxcore.js';
 import { formatWithPattern } from './format.js';
@@ -444,4 +444,9 @@ export const TEXT = {
   },
 };
 for (const [k, fn] of Object.entries(SCALAR)) TEXT[k] = lift(fn);
+TEXT.PHONETIC = Object.assign(([ref], ctx) => {
+  if (isError(ref)) return ref;
+  if (ref instanceof RefValue) return ctx.phoneticText ? ctx.phoneticText(ref.sheet, ref.r1, ref.c1) : toStr(ctx.cell(ref.sheet, ref.r1, ref.c1));
+  return toStr(ref);
+}, { ref: true });
 

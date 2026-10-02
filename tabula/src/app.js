@@ -1,3 +1,7 @@
+import { phoneticEditor } from './phonetic-ui.js';
+import { readRangeQuerySource } from './range-query.js';
+import { createRangeQueryEditor } from './range-query-ui.js';
+import { cellPickList } from './cell-pick-list.js';
 import { normalizeVideo, VIDEO_POSTER } from './media-object.js';
 import { createDrawingPalette } from './drawing-palette.js';
 import { BANDING_PALETTES, alternatingRules, isBandingRule } from './alternating-colors.js';
@@ -1249,6 +1253,7 @@ function neededRowHeight(sIdx, r, cols) {
       const lines = st.wrap ? wrappedLines(text, wb.colWidth(sIdx, c) - 7, st) : text.split('\n').length;
       h = lines * lineH;
     }
+    if(cell.phonetic?.visible&&cell.phonetic.runs?.length&&!st.rotate)h+=(cell.phonetic.font?.size??(st.size||BASE_FONT.size)*.55)*4/3*1.15;
     need = Math.max(need, Math.ceil(h + 3));
   }
   return Math.min(545, need);
@@ -1447,7 +1452,7 @@ function onGridKey(e) {
       if (btn) { handled(); openFilterMenu(active.c, btn, hdr ? tt.id : ''); return; }
     }
     const rule = validationAt(sheet(), active.r, active.c);
-    if (rule?.type === 'list') { handled(); openDvList(); return; }
+    handled(); run('pickFromList'); return;
   }
   if (e.altKey && !ctrl && (k === '=' || e.code === 'Equal')) { handled(); run('autosum'); return; }
   // 그룹 / 그룹 해제 (Shift+Alt+→ / ←)
@@ -1723,22 +1728,25 @@ function selectComments() {
 function hyperlinkDialog() {
   if (chartSel && ['shapes', 'images'].includes(findObject(sheet(), chartSel)?.prop)) { objectHyperlinkDialog(chartSel); return; }
   if (editing && !commitEdit()) return;
-  const cell = wb.getCell(si, active.r, active.c);
-  const initialText = displayText(active.r, active.c) || '';
+  const book=wb, host=si, target=sheet(), {r,c}=active, region={r1:r,c1:c,r2:r,c2:c};
+  const cell = book.getCell(host,r,c), state=JSON.stringify(cell);
+  const initialText = displayText(r,c) || '';
   formDialog('하이퍼링크 삽입', [
     { name: 'text', label: '표시할 텍스트', value: initialText },
     { name: 'url', label: '주소 (웹 주소 또는 #시트!A1)', value: cell?.link ?? '' },
   ], (v) => {
+    if(wb!==book||si!==host||sheet()!==target||JSON.stringify(book.getCell(host,r,c))!==state){toast('문서 또는 대상 셀이 변경되었습니다. 링크 창을 다시 여세요.');return false;}
+    if(viewOnly||book.props?.markedFinal||protectBlocked('cells',region))return false;
     let url = v.url.trim();
     if (!url) { toast('주소를 입력하세요.'); return false; }
     if (!url.startsWith('#') && !/^[a-z][\w+.-]*:/i.test(url)) url = /^[^\s/]+![$A-Za-z]+\$?\d+/.test(url) ? `#${url}` : `https://${url}`;
     const text = v.text.trim() || url.replace(/^#/, '');
-    const cur = wb.getCell(si, active.r, active.c);
+    const cur = book.getCell(host,r,c);
     wb.transact(() => {
       const style = { ...cur?.style, color: cur?.style?.color ?? '#0563c1', underline: true };
       const keepContent = cur?.formula || (cur && (cur.raw !== '' || cur.image) && v.text === initialText);
       const data = keepContent ? cellData(cur, style) : { raw: text, style, comment: cur?.comment };
-      wb.setCellData(si, active.r, active.c, { ...data, link: url });
+      book.setCellData(host,r,c, { ...data, link: url });
     }, meta());
     return true;
   }, { okLabel: '확인' });
@@ -3365,7 +3373,7 @@ function sparkEditDialog() {
 
 // ───────────────────────── 시트 보호 ─────────────────────────
 // 보호된 시트에서 명령마다 필요한 권한 (없는 명령은 선택한 셀이 모두 잠기지 않았을 때만)
-const PROTECT_FREE = new Set(['mobileWorkMode', 'mobileTools', 'mobileFit','privateImportPermission', 'saveLocations', 'publish', 'versionHistory', 'recentFiles', 'dataAnalysis', 'forecastSheet', 'scenarioManager', 'solver', 'undo', 'redo', 'save', 'open', 'backstage', 'print', 'copy', 'find', 'goto', 'prevSheet', 'nextSheet', 'selectRegion',
+const PROTECT_FREE = new Set(['contextSmartLookup','mobileWorkMode', 'mobileTools', 'mobileFit','privateImportPermission', 'saveLocations', 'publish', 'versionHistory', 'recentFiles', 'dataAnalysis', 'forecastSheet', 'scenarioManager', 'solver', 'undo', 'redo', 'save', 'open', 'backstage', 'print', 'copy', 'find', 'goto', 'prevSheet', 'nextSheet', 'selectRegion',
   'newWorkbook', 'pivotFieldList', 'tracePrecedents', 'traceDependents', 'removeArrows', 'evaluateFormula', 'errorCheck', 'calculationStatus', 'watchWindow', 'gotoSpecial',
   'outlineShow', 'outlineHide', 'freezePanes', 'freezeTop', 'freezeFirstCol', 'circleInvalid', 'clearCircles', 'macros', 'prevComment', 'nextComment',
   'workbookStats', 'toggleGrid', 'togglePrintGrid', 'toggleFormulaBar', 'toggleHeaders', 'toggleFormulas', 'toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100',
@@ -3376,6 +3384,7 @@ const PROTECT_BLOCK = new Set(['mergeCenter', 'unmerge', 'createTable', 'condMan
   'outlineUngroup', 'outlineClear', 'subtotal', 'resizeTable', 'convertToRange', 'tblName', 'tblHeader', 'tblTotals', 'tblBanded', 'tblBandedCols', 'tblFirstCol',
   'tblLastCol', 'tblFilter', 'textToColumns', 'dedupe', 'sparkLine', 'sparkColumn', 'sparkWinLoss', 'sparkClear', 'sparkEdit']);
 const PROTECT_MAP = {
+  contextSortFill:'sort',contextSortFont:'sort',contextFilterValue:'autoFilter',contextFilterFill:'autoFilter',contextFilterFont:'autoFilter',contextClearColumnFilter:'autoFilter',togglePhonetic:'formatCells',editPhonetic:'formatCells',
   drawingPalette: 'objects', insertGif: 'objects', insertVideo: 'objects', iconToShapes: 'objects', shapeUnion: 'objects', shapeCombine: 'objects', shapeFragment: 'objects', shapeIntersect: 'objects', shapeSubtract: 'objects', alternatingColors: 'formatCells',
   insertRows: 'insertRows', insertCols: 'insertColumns', deleteRows: 'deleteRows', deleteCols: 'deleteColumns', sortAsc: 'sort', sortDesc: 'sort', sortDialog: 'sort',
   clearFilter: 'autoFilter', reapplyFilter: 'autoFilter', advancedFilter: 'autoFilter', toggleFilter: 'autoFilter', hideRows: 'formatRows', unhideRows: 'formatRows', autofitRowsSel: 'formatRows',
@@ -3486,7 +3495,7 @@ function pivotAreaHit(rg) {
 }
 
 // 피벗 테이블 안에서 막는 명령: 셀 값을 바꾸는 것만 (차트 · 슬라이서 · 서식 삽입 등은 엑셀처럼 허용)
-const PIVOT_LOCKED = /^(clear(Contents|All)?|delete(Rows|Cols|Cells|MenuKey)?|paste(ValuesKey|Values|Special|Formulas|Transpose)?|cut|fill(Down|Right|Up|Left|Series)?|flashFill|dedupe|textToColumns|insert(Rows|Cols|Cells|MenuKey|Date|Time)|merge(Center|Across|Cells)?|unmerge|autosum|dataTable|goalSeek|subtotal)$/;
+const PIVOT_LOCKED = /^(pickFromList|clear(Contents|All)?|delete(Rows|Cols|Cells|MenuKey)?|paste(ValuesKey|Values|Special|Formulas|Transpose)?|cut|fill(Down|Right|Up|Left|Series)?|flashFill|dedupe|textToColumns|insert(Rows|Cols|Cells|MenuKey|Date|Time)|merge(Center|Across|Cells)?|unmerge|autosum|dataTable|goalSeek|subtotal)$/;
 function protectBlocked(action = 'cells', rg = sel, cmd = null, retry = null) {
   if (action === 'cells' && !opts.pivotEdit && (!cmd || PIVOT_LOCKED.test(cmd)) && pivotAreaHit(rg)) {
     alertDialog('WIXEL', '피벗 테이블의 일부는 변경할 수 없습니다. 피벗 테이블은 원본 데이터를 계산한 결과이므로 값을 바꾸려면 원본 데이터를 고친 뒤 새로 고치세요.\n(파일 → 옵션 → 피벗 테이블 값 영역의 셀 편집 허용을 켜면 가상 분석용으로 편집할 수 있습니다.)');
@@ -10484,22 +10493,31 @@ function validationError(rule, dir, fillSel) {
   openDialog({ title: rule.errorTitle || 'WIXEL', body, buttons, width: 400 });
 }
 
-function openDvList() {
-  const rule = validationAt(sheet(), active.r, active.c);
-  if (!rule || rule.type !== 'list') return;
-  const items = listItems(wb, si, rule);
-  const m = wb.mergeAt(si, active.r, active.c) ?? { r1: active.r, c1: active.c, r2: active.r, c2: active.c };
-  const b = gv.clientRect(m);
-  const cur = displayText(active.r, active.c);
-  const pick = (it) => {
-    wb.transact(() => { wb.setInput(si, active.r, active.c, it); autoWiden({ r1: active.r, c1: active.c, r2: active.r, c2: active.c }); }, meta());
-    if (circles) circles = invalidCells(wb, si);
-    focusGrid();
+function openDvList() { pickFromList(true); }
+function pickFromList(validationOnly = false) {
+  const book=wb, host=si, target=sheet(), {r,c}=active, rg={r1:r,c1:c,r2:r,c2:c};
+  if(viewOnly || book.props?.markedFinal || protectBlocked('cells',rg)) return;
+  const rule=validationAt(target,r,c), ruleState=JSON.stringify(rule), validation=rule?.type==='list';
+  if(validationOnly&&!validation)return;
+  const found=validation ? {items:listItems(book,host,rule),limited:false} : cellPickList(book,host,r,c);
+  const m=book.mergeAt(host,r,c)??rg, b=gv.clientRect(m), cur=displayText(r,c), original=JSON.stringify(book.getCell(host,r,c));
+  const pick = value => {
+    if(wb!==book||si!==host||sheet()!==target||JSON.stringify(book.getCell(host,r,c))!==original||JSON.stringify(validationAt(target,r,c))!==ruleState){toast('문서 또는 대상 셀이 변경되었습니다. 목록을 다시 여세요.');return;}
+    if(viewOnly||book.props?.markedFinal||protectBlocked('cells',rg))return;
+    book.transact(()=>{if(validation)book.setInput(host,r,c,value);else book.setCellData(host,r,c,{...cellData(book.getCell(host,r,c)),raw:value,inputType:'text'});autoWiden(rg);},meta());
+    if(circles)circles=invalidCells(book,host);focusGrid();
   };
-  const menu = openMenu({ x: b.left, y: b.bottom },
-    items.length ? items.slice(0, 1000).map((it) => ({ label: it, checked: it === cur, action: () => pick(it) })) : [{ label: '(목록이 비어 있습니다)', disabled: true }],
-    { minWidth: Math.max(90, b.width + 17) });
-  menu.classList.add('dv-list');
+  const search=el('input',{type:'search','aria-label':'목록 검색',placeholder:'목록 검색',class:'cell-pick-search','data-access-key':'none'});
+  const choices=el('div',{class:'cell-pick-choices'}), status=el('div',{class:'cell-pick-status'});
+  const paint=()=>{
+    const needle=search.value.toLocaleLowerCase('ko'), matches=found.items.filter(x=>String(x).toLocaleLowerCase('ko').includes(needle));
+    choices.replaceChildren(...matches.slice(0,1000).map(value=>el('button',{class:'menu-item',role:'menuitem','data-access-key':'none',onmousedown:e=>e.preventDefault(),onclick:()=>{closeMenus();pick(value);}},String(value),value===cur?' ✓':'')));
+    status.textContent=!matches.length?'선택할 항목이 없습니다.':`${matches.length.toLocaleString()}개 항목`+(matches.length>1000?' · 검색으로 범위를 좁히세요.':'')+(found.limited?' · 인접 데이터 일부에서 찾음':'');
+  };
+  search.addEventListener('input',paint); search.addEventListener('keydown',e=>{if(e.key==='ArrowDown'||e.key==='Enter'){e.preventDefault();e.stopPropagation();choices.querySelector('button')?.focus();}});
+  choices.addEventListener('keydown',e=>{const buttons=[...choices.querySelectorAll('button')],at=buttons.indexOf(document.activeElement);if(['ArrowDown','ArrowUp','Home','End'].includes(e.key)){e.preventDefault();e.stopPropagation();const next=e.key==='Home'?0:e.key==='End'?buttons.length-1:(at+(e.key==='ArrowDown'?1:-1)+buttons.length)%buttons.length;buttons[next]?.focus();}else if(e.key==='Enter'||e.key===' '){e.preventDefault();e.stopPropagation();buttons[at]?.click();}});
+  paint(); const menu=openMenu({x:b.left,y:b.bottom},[{node:search},{node:choices},{node:status}],{minWidth:Math.max(200,Math.min(360,b.width+17)),scroll:true});
+  menu.classList.add('dv-list','cell-pick-list'); menu.setAttribute('aria-label','드롭다운 목록에서 선택'); menu.addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();closeMenus();focusGrid();}},true); search.focus();
 }
 
 function updateDvPrompt() {
@@ -13110,7 +13128,7 @@ function editComment() {
   const book = wb, index = si, sh = sheet(), {r,c} = active;
   const cur = wb.getCell(si, r, c)?.comment ?? '';
   formDialog('메모 - '+cellName(r,c), [{ name: 'text', label: '내용', type: 'textarea', value: cur }], ({ text }) => {
-    if (wb !== book || sheet() !== sh || protectBlocked('objects')) return false;
+    if (wb !== book || sheet() !== sh || viewOnly || book.props?.markedFinal || protectBlocked('objects')) return false;
     book.transact(() => book.setComment(index, r, c, text.trim()), meta());
   }, { okLabel: '저장' });
 }
@@ -13176,7 +13194,7 @@ const isHiddenSheet = (i) => { const st = wb.sheets[i]?.state; return st === 'hi
 const visibleSheetCount = () => wb.sheets.filter((_, i) => !isHiddenSheet(i)).length;
 
 /** 통합 문서 구조 보호 (엑셀 [통합 문서 보호]): 시트 추가 · 삭제 · 이름 · 이동 · 숨기기를 막음 */
-const STRUCT_CMDS = new Set(['addSheet', 'deleteSheet', 'duplicateSheet', 'hideSheet', 'unhideSheet', 'moveCopySheet', 'renameSheet']);
+const STRUCT_CMDS = new Set(['addSheet', 'deleteSheet', 'duplicateSheet', 'hideSheet', 'unhideSheet', 'moveCopySheet', 'renameSheet', 'fromTableRange']);
 function structureLocked() {
   if (!wb.props?.lockStructure) return false;
   alertDialog('WIXEL', '통합 문서 구조가 보호되어 있어 시트를 추가 · 삭제 · 이동 · 이름 변경 · 숨기기 할 수 없습니다. [검토 › 통합 문서 보호] 또는 [파일 › 정보 › 통합 문서 보호]에서 해제하세요.');
@@ -16054,14 +16072,17 @@ function nameEditor(entry, list, onSave) {
     let ref = v.ref.trim();
     if (!ref.startsWith('=')) ref = `=${ref}`;
     try { parse(ref.slice(1)); } catch { toast('참조 대상 수식에 문제가 있습니다.'); return false; }
-    onSave({ name: v.name.trim(), sheet: v.sheet || null, comment: v.comment || undefined, ref: normalizeFormula(ref), hidden: entry?.hidden });
-    return true;
+    return onSave({ name: v.name.trim(), sheet: v.sheet || null, comment: v.comment || undefined, ref: normalizeFormula(ref), hidden: entry?.hidden }) !== false;
   });
 }
 
 function defineName() {
   if (editing && !commitEdit()) return;
-  nameEditor(null, wb.names, (n) => wb.transact(() => wb.setNames([...wb.names, n]), meta()));
+  const book=wb, target=sheet(), version=wb.version;
+  nameEditor(null, book.names, (n) => {
+    if(wb!==book||sheet()!==target||book.version!==version||viewOnly||book.props?.markedFinal||book.props?.lockStructure||protectBlocked('cells')){toast('문서 또는 편집 권한이 변경되었습니다. 이름 정의를 다시 여세요.');return false;}
+    book.transact(()=>book.setNames([...book.names,n]),meta());
+  });
 }
 
 function nameManager() {
@@ -17705,66 +17726,134 @@ function contextCommandDisabled(cmd) {
   return action === 'cells' ? anyLocked(sel) : action === 'block' || !allowed(sheet(), action);
 }
 
+function fromTableRange() {
+  if(viewOnly||wb.props?.markedFinal||wb.props?.lockStructure){toast('편집 가능한 통합 문서에서 데이터를 가져오세요.');return;}
+  const book=wb, host=si, target=sheet(), version=book.version, table=tableHere();
+  let editor;
+  try { const source=readRangeQuerySource(book,host,table??dataRange(),{table,header:true});editor=createRangeQueryEditor(source,{name:target.name+' 가져오기'}); }
+  catch(err){alertDialog('표/범위에서 데이터 가져오기',err.message);return;}
+  const valid=()=>wb===book&&si===host&&sheet()===target&&book.version===version&&!viewOnly&&!book.props?.markedFinal&&!book.props?.lockStructure;
+  openDialog({title:'표/범위에서 데이터 가져오기',width:1040,body:editor.body,onClose:()=>editor.dispose(),buttons:[
+    {label:'닫기 및 로드(L)',primary:true,action:()=>{
+      if(!valid()){toast('원본 문서 또는 편집 권한이 변경되었습니다. 가져오기를 다시 여세요.');return false;}
+      let result;try{result=editor.read();}catch(err){alertDialog('데이터 가져오기',err.message);return false;}
+      const {matrix,columnFormats}=result;
+      const index=book.transact(()=>{
+        const at=book.addSheet(nextSheetName(result.name||'가져온 데이터'),host+1);
+        for(let r=0;r<matrix.length;r++)for(let c=0;c<matrix[r].length;c++){
+          const value=matrix[r][c];if(value===null||value===undefined||value==='')continue;
+          const raw=typeof value==='object'?value.code:typeof value==='boolean'?(value?'TRUE':'FALSE'):String(value);
+          book.setCellData(at,r,c,{raw,inputType:typeof value==='string'?'text':'value',style:r===0?{bold:true,fill:'#e2f0e9'}:columnFormats[c]??undefined});
+        }
+        const width=matrix[0]?.length??0;
+        if(width&&matrix.length>1)book.setSheetProp(at,'tables',[{id:newTableId(),name:nextTableName(book),r1:0,c1:0,r2:matrix.length-1,c2:width-1,header:true,totals:false,style:DEFAULT_TABLE_STYLE,banded:true,filter:{criteria:{},hidden:{}},totalsFns:{}}]);
+        for(let c=0;c<width;c++)book.setColWidth(at,c,140);
+        return at;
+      },meta());
+      switchSheet(index,false);selectCell(0,0);toast(`${Math.max(0,matrix.length-1).toLocaleString()}행을 새 시트에 가져왔습니다.`);
+    }},{label:'취소'}]});
+}
+function editPhonetic() {
+  const book=wb,host=si,target=sheet(),{r,c}=active,cell=book.getCell(host,r,c),text=book.getValue(host,r,c),rg={r1:r,c1:c,r2:r,c2:c};
+  if(!cell||cell.formula||typeof cell.v!=='string'){toast('윗주를 편집할 텍스트 셀을 선택하세요.');return;}
+  const original=JSON.stringify(cellData(cell)),editor=phoneticEditor({text,phonetic:cell.phonetic});
+  openDialog({title:'윗주 편집',width:640,body:editor.body,buttons:[{label:'확인',primary:true,action:()=>{
+    if(wb!==book||si!==host||sheet()!==target||JSON.stringify(cellData(book.getCell(host,r,c)))!==original){toast('대상 셀이 변경되었습니다. 윗주 편집을 다시 여세요.');return false;}
+    if(viewOnly||book.props?.markedFinal||protectBlocked('formatCells',rg))return false;
+    let result;try{result=editor.read();}catch(err){toast(err.message);return false;}
+    if(result.text!==text&&protectBlocked('cells',rg))return false;
+    book.transact(()=>{book.setPhonetic(host,r,c,result.phonetic,result.text===text?undefined:result.text);autoFitRows(r,r);},meta());
+    gv.renderAll();
+  }},{label:'취소'}]});
+}
+function togglePhonetic() {
+  const target=sheet(),enabled=!wb.getCell(si,active.r,active.c)?.phonetic?.visible, cells=[];
+  const range=usedClip(sel), area=(range.r2-range.r1+1)*(range.c2-range.c1+1);
+  const take=(r,c,cell)=>{if(!filterHidden(r)&&cell&&!cell.formula&&typeof cell.v==='string')cells.push([r,c]);};
+  if(special?.si===si){for(const [r,c]of special.cells)take(r,c,wb.getCell(si,r,c));}
+  else if(area<=50000){for(const [r,c]of cellsIn(range))take(r,c,wb.getCell(si,r,c));}
+  else {if(target.blocks?.some(b=>b.r0<=range.r2&&b.r0+b.n>range.r1&&b.c0<=range.c2&&b.c0+b.cols.length>range.c1)){toast('윗주는 한 번에 50,000셀 이하로 나누어 표시하세요.');return;}target.cells.forEachRC((cell,r,c)=>{if(inSel(r,c))take(r,c,cell);});}
+  if(cells.length>50000){toast('윗주는 한 번에 50,000셀 이하로 나누어 표시하세요.');return;}
+  if(!cells.length){toast('윗주를 표시할 텍스트 셀을 선택하세요.');return;}
+  wb.transact(()=>{const rows=new Set();for(const [r,c]of cells){wb.setPhoneticVisible(si,r,c,enabled);rows.add(r);}for(const r of rows)autoFitRows(r,r);},meta());gv.renderAll();updateRibbon();
+  if(enabled&&!cells.some(([r,c])=>wb.getCell(si,r,c)?.phonetic?.runs?.length))toast('윗주 필드를 켰습니다. [윗주 편집]에서 읽는 법을 입력하세요.');
+}
+function contextDataTarget() {
+  const table=tableHere(), f=sheet().filter;
+  if(table)return {rg:{r1:table.r1,c1:table.c1,r2:dataBottom(table),c2:table.c2},header:!!table.header,table,key:table.id};
+  if(f&&(active.r>=f.r1&&active.r<=f.r2&&active.c>=f.c1&&active.c<=f.c2))return {rg:{r1:f.r1,c1:f.c1,r2:expandedFilterEnd(wb,si,f),c2:f.c2},header:true,key:''};
+  const rg=dataRange();return {rg,header:hasHeader(rg),key:''};
+}
+function contextFilterBy(type) {
+  const {rg,table,key}=contextDataTarget(), c=active.c;
+  if(rg.r2<=rg.r1){toast('머리글과 데이터가 있는 범위를 선택하세요.');return;}
+  if(table&&!table.header){toast('표의 머리글 행을 표시한 뒤 필터를 적용하세요.');return;}
+  const value=type==='value'?[displayText(active.r,c)]:{type,value:(type==='fill'?styleAt(active.r,c).fill:styleAt(active.r,c).color)??''};
+  wb.transact(()=>{
+    if(table&&!table.filter)setTables(list=>list.map(t=>t.id===table.id?{...t,filter:{criteria:{},hidden:{}}}:t));
+    const old=getFilter(key), inside=old&&old.r1===rg.r1&&old.c1===rg.c1;
+    const next={...rg,criteria:{...(inside?old.criteria:{}),[c]:value},hidden:{}};
+    if(inside&&old.sort)next.sort=old.sort;
+    putFilter(key,recomputeFilter(next,key));
+  },meta());
+  gv.layout();updateSelectionUI();
+}
+function contextClearColumnFilter() {
+  const {key}=contextDataTarget(), f=getFilter(key);if(!f||!(active.r>=f.r1&&active.r<=f.r2&&active.c>=f.c1&&active.c<=f.c2))return;
+  applyFilterCriteria(active.c,null,key,{quiet:true});
+}
+function contextSortColor(on) {
+  const {rg,header,key}=contextDataTarget(), c=active.c;
+  if(rg.r2<=rg.r1)return;
+  if(wb.mergesIn(si,rg.r1,rg.c1,rg.r2,rg.c2).length){alertDialog('정렬','병합된 셀이 있으면 정렬할 수 없습니다.');return;}
+  const color=(on==='fill'?styleAt(active.r,c).fill:styleAt(active.r,c).color)??'';
+  wb.transact(()=>{
+    wb.sortMulti(si,rg.r1+(header?1:0),rg.c1,rg.r2,rg.c2,[{at:c,on,color,asc:true}],{});
+    const f=getFilter(key);if(f&&f.r1===rg.r1&&f.c1===rg.c1)putFilter(key,recomputeFilter({...f,sort:undefined},key));
+  },meta());gv.layout();updateSelectionUI();
+}
+function contextSmartLookup() {
+  const text=displayText(active.r,active.c).trim();
+  if(!text){toast('조회할 텍스트가 있는 셀을 선택하세요.');return;}
+  openDialog({title:'스마트 조회',width:440,body:el('div',{},el('p',{},text.slice(0,2000)),el('p',{class:'muted'},'선택한 텍스트로 웹 검색 결과를 엽니다.')),
+    buttons:[{label:'웹에서 검색(S)',primary:true,action:()=>window.open('https://www.bing.com/search?q='+encodeURIComponent(text.slice(0,2000)),'_blank','noopener,noreferrer')},{label:'닫기'}]});
+}
 function showContextMenu(pos, hitKind = 'cell') {
-  if (editing && !commitEdit()) return;
-  const kind = contextMenuKind(selKind, hitKind);
-  const item = (label, cmd, accessKey, extra = {}) => ({ label, accessKey, action: () => run(cmd), ...extra,
-    disabled: !!extra.disabled || contextCommandDisabled(cmd) });
-  const pasteItems = [item('붙여넣기(P)', 'paste', 'p', { icon: 'paste', key: 'Ctrl+V' }),
-    item('값(V)', 'pasteValuesKey', 'v', { disabled: !clip || !!clip.cut }), item('수식(F)', 'pasteFormulas', 'f', { disabled: !clip || !!clip.cut }),
-    item('서식(R)', 'pasteFormats', 'r', { disabled: !clip || !!clip.cut }), item('행/열 바꿈(T)', 'pasteTranspose', 't', { disabled: !clip || !!clip.cut })];
-  const items = [
-    item('잘라내기(T)', 'cut', 't', { icon: 'cut', key: 'Ctrl+X' }),
-    item('복사(C)', 'copy', 'c', { icon: 'copy', key: 'Ctrl+C' }),
-    item('붙여넣기(P)', 'paste', 'p', { icon: 'paste', key: 'Ctrl+V' }),
-    { label: '붙여넣기 옵션', submenu: pasteItems },
-    item('선택하여 붙여넣기(S)...', 'pasteSpecial', 's', { key: 'Ctrl+Alt+V', disabled: !!clip?.cut }),
-    { sep: true },
-    item(kind === 'cell' ? '삽입(I)...' : '삽입(I)', kind === 'row' ? 'insertRows' : kind === 'col' ? 'insertCols' : 'insertMenuKey', 'i', { icon: kind === 'col' ? 'colInsert' : 'rowInsert' }),
-    item(kind === 'cell' ? '삭제(D)...' : '삭제(D)', kind === 'row' ? 'deleteRows' : kind === 'col' ? 'deleteCols' : 'deleteMenuKey', 'd', { icon: 'delete' }),
-    item('내용 지우기(N)', 'clearContents', 'n', { key: 'Delete' }),
-    { sep: true }, item('셀 서식(F)...', 'formatCells', 'f', { key: 'Ctrl+1' }),
-  ];
-  if (kind === 'row' || kind === 'col') {
-    const row = kind === 'row';
-    items.push(item(row ? '행 높이(R)...' : '열 너비(W)...', row ? 'rowHeight' : 'colWidth', row ? 'r' : 'w'),
-      item(row ? '행 높이 자동 맞춤' : '열 너비 자동 맞춤', row ? 'autofitRowsSel' : 'autofitSel'),
-      item('숨기기(H)', row ? 'hideRows' : 'hideCols', 'h', { icon: 'hide' }),
-      item('숨기기 취소(U)', row ? 'unhideRows' : 'unhideCols', 'u'));
-  } else {
-    const cell = wb.getCell(si, active.r, active.c), cm = cell?.comment, lk = cell?.link;
-    items.push(item('행 높이(R)...', 'rowHeight', 'r'), item('열 너비(W)...', 'colWidth', 'w'),
-      { label: '숨기기 및 숨기기 취소(H)', accessKey: 'h', submenu: [
-        item('행 숨기기(R)', 'hideRows', 'r'), item('열 숨기기(C)', 'hideCols', 'c'),
-        item('행 숨기기 취소(U)', 'unhideRows', 'u'), item('열 숨기기 취소(L)', 'unhideCols', 'l'),
-        { sep: true }, item('행 높이 자동 맞춤', 'autofitRowsSel'), item('열 너비 자동 맞춤', 'autofitSel'),
-      ] }, { sep: true },
-      item('빠른 분석', 'quickAnalysis', null, { key: 'Ctrl+Q', icon: 'stats' }),
-      { label: '정렬', icon: 'sortAsc', submenu: [item('오름차순 정렬', 'sortAsc'), item('내림차순 정렬', 'sortDesc'), item('사용자 지정 정렬...', 'sortDialog')] },
-      { label: '필터', icon: 'filter', submenu: [
-        item('필터 사용', 'toggleFilter', null, { checked: filterKeyHere() !== null && !!getFilter(filterKeyHere()) }),
-        item('필터 지우기', 'clearFilter'), item('다시 적용', 'reapplyFilter'), item('고급 필터...', 'advancedFilter'),
-      ] });
-    if (tableHere()) items.push({ label: '표', submenu: [item('표 크기 조정...', 'resizeTable'), item('요약 행', 'tblTotals', null, { checked: !!tableHere().totals }),
-      item('범위로 변환', 'convertToRange'), item('피벗 테이블로 요약...', 'pivotFromTable')] });
-    if (pivotAreaHit(sel)) items.push({ label: '피벗 테이블', submenu: [item('새로 고침', 'pivotRefresh'), item('피벗 테이블 옵션...', 'pivotOptions'), item('필드 목록', 'pivotFieldList', null, { checked: pivotPaneOpen })] });
-    items.push({ sep: true }, item(cm ? '메모 편집' : '새 메모', 'editComment', null, { icon: cm ? 'comment' : 'newComment' }),
-      ...(cm ? [item('메모 삭제', 'deleteComment', null, { icon: 'deleteComment' })] : []),
-      item(lk ? '하이퍼링크 편집...' : '링크...', 'hyperlink', null, { key: 'Ctrl+K' }),
-      ...(lk ? [{ label: '하이퍼링크 열기', action: () => openLink(lk) },
-        item('하이퍼링크 지우기', 'clearHyperlinks', null, { desc: '내용과 서식 유지' }),
-        item('하이퍼링크 제거', 'removeHyperlink', null, { desc: '해당 셀의 서식도 초기화' })] : []));
-    if (cell?.image) items.push({ sep: true }, item('셀 위에 그림 배치', 'contextCellImageFloat', null, { icon: 'picture' }), item('대체 텍스트...', 'contextCellImageAlt'));
+  if(editing&&!commitEdit())return;
+  const kind=contextMenuKind(selKind,hitKind);
+  const item=(label,cmd,accessKey,extra={})=>({label,accessKey,action:()=>run(cmd),...extra,disabled:!!extra.disabled||contextCommandDisabled(cmd)});
+  const pasteItems=[item('붙여넣기(P)','paste','p',{icon:'paste',key:'Ctrl+V'}),item('값(V)','pasteValuesKey','v',{disabled:!clip||!!clip.cut}),item('수식(F)','pasteFormulas','f',{disabled:!clip||!!clip.cut}),item('서식(R)','pasteFormats','r',{disabled:!clip||!!clip.cut}),item('행/열 바꿈(T)','pasteTranspose','t',{disabled:!clip||!!clip.cut})];
+  const items=[item('잘라내기(T)','cut','t',{icon:'cut',key:'Ctrl+X'}),item('복사(C)','copy','c',{icon:'copy',key:'Ctrl+C'}),
+    {label:'붙여넣기 옵션(P)',accessKey:'p',icon:'paste',submenu:pasteItems},item('선택하여 붙여넣기(S)...','pasteSpecial','s',{key:'Ctrl+Alt+V',disabled:!!clip?.cut})];
+  if(kind==='cell')items.push(item('스마트 조회(L)','contextSmartLookup','l',{icon:'search',disabled:!displayText(active.r,active.c).trim()}));
+  items.push({sep:true},item(kind==='cell'?'삽입(I)...':'삽입(I)',kind==='row'?'insertRows':kind==='col'?'insertCols':'insertMenuKey','i',{icon:kind==='col'?'colInsert':'rowInsert'}),
+    item(kind==='cell'?'삭제(D)...':'삭제(D)',kind==='row'?'deleteRows':kind==='col'?'deleteCols':'deleteMenuKey','d',{icon:'delete'}),item('내용 지우기(N)','clearContents','n',{key:'Delete'}),{sep:true});
+  if(kind==='row'||kind==='col'){
+    const row=kind==='row';items.push(item('셀 서식(F)...','formatCells','f',{key:'Ctrl+1'}),item(row?'행 높이(R)...':'열 너비(W)...',row?'rowHeight':'colWidth',row?'r':'w'),
+      item(row?'행 높이 자동 맞춤':'열 너비 자동 맞춤',row?'autofitRowsSel':'autofitSel'),item('숨기기(H)',row?'hideRows':'hideCols','h',{icon:'hide'}),item('숨기기 취소(U)',row?'unhideRows':'unhideCols','u'));
+  }else{
+    const cell=wb.getCell(si,active.r,active.c), cm=cell?.comment, lk=cell?.link, table=tableHere();
+    items.push(item('빠른 분석(Q)','quickAnalysis','q',{key:'Ctrl+Q',icon:'stats'}),
+      {label:'필터(E)',accessKey:'e',icon:'filter',submenu:[
+        item('선택한 셀 값으로 필터링(V)','contextFilterValue','v'),item('선택한 셀 색으로 필터링(C)','contextFilterFill','c'),item('선택한 셀 글꼴 색으로 필터링(F)','contextFilterFont','f'),{sep:true},
+        item('현재 열에서 필터 해제(E)','contextClearColumnFilter','e'),item('필터 사용(T)','toggleFilter','t',{checked:filterKeyHere()!==null&&!!getFilter(filterKeyHere())}),item('모든 필터 지우기(A)','clearFilter','a'),item('다시 적용(R)','reapplyFilter','r'),item('고급 필터(D)...','advancedFilter','d')]},
+      {label:'정렬(O)',accessKey:'o',icon:'sortAsc',submenu:[item('오름차순 정렬(S)','sortAsc','s',{icon:'sortAsc'}),item('내림차순 정렬(O)','sortDesc','o',{icon:'sortDesc'}),{sep:true},
+        item('선택한 셀 색을 맨 위에 배치(C)','contextSortFill','c'),item('선택한 셀 글꼴 색을 맨 위에 배치(F)','contextSortFont','f'),{sep:true},item('사용자 지정 정렬(U)...','sortDialog','u')]},
+      item('표/범위에서 데이터 가져오기(G)...','fromTableRange','g',{icon:'table'}),{sep:true},
+      item(cm?'메모 편집(M)':'메모 삽입(M)','editComment','m',{icon:cm?'comment':'newComment',key:'Shift+F2'}),
+      ...(cm?[item('메모 삭제','deleteComment',null,{icon:'deleteComment'}),item('메모 표시/숨기기','toggleComment',null,{checked:noteVisible(sheet().noteVisibility,active.r,active.c)})]:[]),
+      {sep:true},item('셀 서식(F)...','formatCells','f',{key:'Ctrl+1'}),item('드롭다운 목록에서 선택(K)...','pickFromList','k',{key:'Alt+↓'}),
+      item('윗주 필드 표시(S)','togglePhonetic','s',{checked:!!cell?.phonetic?.visible,accessAliases:['s']}),item('윗주 편집...','editPhonetic',null,{disabled:!cell||!!cell.formula||typeof cell.v!=='string'}),
+      item('이름 정의(A)...','defineName','a'),{sep:true},item(lk?'링크 편집(I)...':'링크(I)...','hyperlink','i',{key:'Ctrl+K',icon:'link'}),
+      ...(lk?[{label:'하이퍼링크 열기',action:()=>openLink(lk)},item('하이퍼링크 지우기','clearHyperlinks',null,{desc:'내용과 서식 유지'}),item('하이퍼링크 제거','removeHyperlink',null,{desc:'해당 셀의 서식도 초기화'})]:[]),
+      {sep:true},{label:'행·열 크기 및 숨기기(H)',accessKey:'h',submenu:[item('행 높이(R)...','rowHeight','r'),item('열 너비(W)...','colWidth','w'),item('행 숨기기','hideRows'),item('열 숨기기','hideCols'),item('행 숨기기 취소','unhideRows'),item('열 숨기기 취소','unhideCols'),item('행 높이 자동 맞춤','autofitRowsSel'),item('열 너비 자동 맞춤','autofitSel')]});
+    if(table)items.push({label:'표',submenu:[item('표 크기 조정...','resizeTable'),item('요약 행','tblTotals',null,{checked:!!table.totals}),item('범위로 변환','convertToRange'),item('피벗 테이블로 요약...','pivotFromTable')]});
+    if(pivotAreaHit(sel))items.push({label:'피벗 테이블',submenu:[item('새로 고침','pivotRefresh'),item('피벗 테이블 옵션...','pivotOptions'),item('필드 목록','pivotFieldList',null,{checked:pivotPaneOpen})]});
+    if(cell?.image)items.push({sep:true},item('셀 위에 그림 배치','contextCellImageFloat',null,{icon:'picture'}),item('대체 텍스트...','contextCellImageAlt'));
   }
-  const toolbar = createContextMiniToolbar({
-    onCommand: (cmd, arg) => run(cmd, arg, { keepMenu: true }),
-    openNamedMenu: (name, anchorEl) => { if (!contextCommandDisabled('formatCells')) openNamedMenu(name, anchorEl); },
-    getStyle: () => ({ ...styleAt(active.r, active.c), font: styleAt(active.r, active.c).font || BASE_FONT.name,
-      size: styleAt(active.r, active.c).size || BASE_FONT.size, lastFill, lastFont, painter: !!painter, merged: !!wb.mergeAt(si, active.r, active.c) }),
-    readonly: () => contextCommandDisabled('formatCells'),
-  });
-  const menu = openMenu(pos, items, { toolbar, scroll: true });
-  if (menu) menu.dataset.contextKind = kind;
+  const toolbar=createContextMiniToolbar({onCommand:(cmd,arg)=>run(cmd,arg,{keepMenu:true}),openNamedMenu:(name,anchorEl)=>{if(!contextCommandDisabled('formatCells'))openNamedMenu(name,anchorEl);},
+    getStyle:()=>({...styleAt(active.r,active.c),font:styleAt(active.r,active.c).font||BASE_FONT.name,size:styleAt(active.r,active.c).size||BASE_FONT.size,lastFill,lastFont,painter:!!painter,merged:!!wb.mergeAt(si,active.r,active.c)}),readonly:()=>contextCommandDisabled('formatCells')});
+  const menu=openMenu(pos,items,{toolbar,scroll:true});if(menu)menu.dataset.contextKind=kind;
 }
 
 // ───────────────────────── 명령 ─────────────────────────
@@ -17963,6 +18052,10 @@ const COMMANDS = {
   clearFormats: () => clearSelection('formats'),
   clearComments: () => clearSelection('comments'),
   clearHyperlinks: () => removeHyperlink(false),
+  fromTableRange,editPhonetic,togglePhonetic,
+  contextSmartLookup, pickFromList: () => pickFromList(),
+  contextFilterValue:()=>contextFilterBy('value'),contextFilterFill:()=>contextFilterBy('fill'),contextFilterFont:()=>contextFilterBy('font'),contextClearColumnFilter,
+  contextSortFill:()=>contextSortColor('fill'),contextSortFont:()=>contextSortColor('font'),
   sortAsc: () => sortData(true),
   sortDesc: () => sortData(false),
   sortDialog,
@@ -18241,6 +18334,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileFit','toggleR
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['셀 우클릭 메뉴', ['선택한 셀 값·색 필터와 색 정렬, 메모·셀 서식·드롭다운 목록·윗주·이름 정의·링크에 바로 접근합니다.', '표/범위 데이터를 미리 보고 열·유형·필터·정렬을 적용해 새 시트에 가져옵니다. 원본과 실행 취소를 보존합니다.']],
   ['그림 서식', ['그림 선택 시 전용 리본 · 우클릭 메뉴 · 그림 스타일 갤러리', '수정·색·꾸밈 효과·투명도·그림 테두리와 효과 · 자르기와 cm 크기', '배경 제거·압축·그림 바꾸기·원본 복원 · 대체 텍스트·그림 레이아웃 · 실행 취소와 파일 보존']],
   ['인쇄 영역과 페이지 나누기', ['인쇄 영역 밖 회색 표시 · 파란 인쇄 경계와 쪽 번호 · 기본 보기 전환', '인쇄 영역 설정·추가·해제 · 경계 끌기 · 수동 페이지 나누기 삽입·이동·제거', 'XLSX·XLS·XLSB의 저장된 보기와 복수 인쇄 영역 복원 · PDF/인쇄와 같은 페이지 경계']],
   ['차트 종류·요소 서식 보강', ['선버스트·트리맵 계층과 선택 색 보존 · 리본에서 모든 차트 종류 접근', '원통·원뿔·피라미드 3차원 막대 · 누적 영역 콤보 · 계열별 배치와 축', '축·데이터 레이블·계층 요소를 선택하여 상세 서식 조정 · 실행 취소 동기화']],
@@ -18424,7 +18518,7 @@ function run(cmd, arg, { keepMenu = false } = {}) {
     reportError(err, cmd);
   }
   if (REPEATABLE.has(cmd)) lastRepeat = () => COMMANDS[cmd](arg);
-  if (!keepMenu && !document.activeElement?.closest('.dialog')) focusGrid();
+  if (!keepMenu && !document.activeElement?.closest('.dialog,.menu')) focusGrid();
 }
 
 function restoreMeta(m) {

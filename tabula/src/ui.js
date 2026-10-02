@@ -378,7 +378,7 @@ function buildMenu(anchor, items, { minWidth, scroll, toolbar, level = 0, parent
     const btn = el('button', {
       class: `menu-item${it.submenu ? ' has-sub' : ''}`, role: 'menuitem', disabled: it.disabled, 'aria-haspopup': it.submenu ? 'menu' : null, 'data-access-key': it.accessKey, 'data-access-aliases': it.accessAliases,
       onmousedown: (e) => e.preventDefault(),
-      onmouseenter: () => { if (it.submenu) openSub(); else closeDeeper(); },
+      onmouseenter: () => { if(document.body.classList.contains('mobile-work-mode'))return; if (it.submenu) openSub(); else closeDeeper(); },
       onclick: () => { if (it.submenu) { openSub(true); return; } closeMenus(); it.action?.(); },
     },
     el('span', { class: 'mi-icon', html: it.checked ? ICONS.check : (it.icon ? ICONS[it.icon] ?? it.icon : '') }),

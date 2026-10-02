@@ -1,3 +1,4 @@
+import { phoneticHtml } from './phonetic.js';
 import { normalizeVideo } from './media-object.js';
 import { bindGridTouch } from './mobile-grid.js';
 import { noteVisible } from './review-state.js';
@@ -1212,7 +1213,8 @@ export class GridView {
       const box = `<svg class="cbx" viewBox="0 0 16 16" width="15" height="15"><rect x="1" y="1" width="14" height="14" rx="2.5" fill="${checkbox ? col : '#fff'}" stroke="${checkbox ? col : '#8a8a8a'}" stroke-width="1.3"/>${checkbox ? '<path d="M4.2 8.3l2.5 2.5 5-5.3" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>' : ''}</svg>`;
       return fillHtml + `<div class="c cbx-cell${cls.length ? ` ${cls.join(' ')}` : ''}" data-r="${r}" data-c="${c}" style="${css.join(';')}"${comment}>${diagHtml}${box}</div>`;
     }
-    return fillHtml + `<div class="c${cls.length ? ` ${cls.join(' ')}` : ''}" data-r="${r}" data-c="${c}" style="${css.join(';')}"${comment}>${diagHtml}${iconHtml}${rotBox ?? `<span${spanCss}>${hideValue ? '' : esc(text)}</span>`}</div>`;
+    const phonetic = !hideValue && !rotBox && !cell?.formula && typeof v === 'string' && text === v ? phoneticHtml(text, cell?.phonetic) : null;
+    return fillHtml + `<div class="c${cls.length ? ` ${cls.join(' ')}` : ''}" data-r="${r}" data-c="${c}" style="${css.join(';')}"${comment}>${diagHtml}${iconHtml}${rotBox ?? phonetic ?? `<span${spanCss}>${hideValue ? '' : esc(text)}</span>`}</div>`;
   }
 
   /**

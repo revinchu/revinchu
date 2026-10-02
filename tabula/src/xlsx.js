@@ -1,3 +1,4 @@
+import { readPhonetic, normalizePhonetic, phoneticXml } from './phonetic.js';
 import { normalizeVideo, MEDIA_OBJECT_URI } from './media-object.js';
 import { noteVisible } from './review-state.js';
 import { isDrawingGroup, drawingGroupXml, readDrawingGroup, readDrawingHyperlink, drawingHyperlinkXml } from './smartart-xlsx.js';
@@ -449,7 +450,7 @@ function readStyles(files, wbRels, theme) {
     };
     slicerStyles[ss.attrs.name] = Object.fromEntries(Object.entries(c).filter(([, v]) => v));
   }
-  return { xfs, dxfs, dxfOf, defaultFont, tableStyles, wbFont, slicerStyles, cellStyles };
+  return { xfs, dxfs, dxfOf, defaultFont, tableStyles, wbFont, slicerStyles, cellStyles, fonts };
 }
 
 const CHUNK_MIN = 48 << 20;
@@ -762,13 +763,18 @@ function* readSheet(files, path, ctx) {
       const vText = c.v;
       const style = ownStyle(styleOf(c.attrs.s), r, cc);
       let raw = '';
-      let value = null;
+      let value = null, phonetic;
+      if (t === 's') phonetic = ctx.phonetics?.[Number(vText)];
       if (t === 's') value = strings[Number(vText)] ?? '';
-      else if (t === 'inlineStr') value = c.is !== null ? allText(parseXml(`<is>${c.is}</is>`)) : '';
+      else if (t === 'inlineStr') {
+        const inline = c.is !== null ? parseXml(`<is>${c.is}</is>`) : null;
+        value = allText(inline); phonetic = readPhonetic(inline, value, ctx.fonts);
+      }
       else if (t === 'str') value = vText ?? '';
       else if (t === 'b') value = vText === '1';
       else if (t === 'e') value = { error: vText ?? '#N/A' };
       else if (vText !== null && vText !== '') value = Number(vText);
+      if (phonetic || c.attrs.ph !== undefined) phonetic = normalizePhonetic({ ...phonetic, visible: c.attrs.ph === '1' || c.attrs.ph === 'true' }, value ?? '');
 
       let formula = null;
       const fa = c.fa;
@@ -832,8 +838,9 @@ function* readSheet(files, path, ctx) {
         } else raw = numberRaw(value, style, ctx.date1904);
       }
       if (noHt && raw !== '' && style && ((style.size && style.size > ctx.wbFont.size) || style.wrap || style.rotate)) (sheet.fitRows ??= new Set()).add(r);
+      if (noHt && phonetic?.visible && phonetic.runs.length) (sheet.fitRows ??= new Set()).add(r);
       if (blockMode && blockStart < 0) blockStart = r + 1; // 첫 행(머리글) 다음부터 블록
-      if (blockMode && r >= blockStart && formula === null && !c.attrs.vm) {
+      if (blockMode && r >= blockStart && formula === null && !c.attrs.vm && !phonetic) {
         if (colFmt[cc] === undefined) colFmt[cc] = style ?? null;
         if ((style ?? null) === colFmt[cc]) {
           if (value !== null && value !== '') {
@@ -850,6 +857,7 @@ function* readSheet(files, path, ctx) {
       if (cellImg) raw = '';
       if (!raw && !style && !cellImg) continue;
       const d = { raw };
+      if (phonetic && formula === null && typeof value === 'string') d.phonetic = phonetic;
       if (cellImg) d.image = { ...cellImg };
       if (style) d.style = style;
       if (cached !== undefined && cached !== null) d.cached = cached;
@@ -2664,10 +2672,13 @@ function* readXlsxSteps(files) {
   const wbRoot = parseXml(textOf(files[wbPath]));
   const wbRels = relsOf(files, wbPath);
   const theme = readTheme(files, wbRels);
-  const { xfs, dxfs, dxfOf, tableStyles, wbFont, slicerStyles, cellStyles } = readStyles(files, wbRels, theme);
+  const { xfs, dxfs, dxfOf, tableStyles, wbFont, slicerStyles, cellStyles, fonts } = readStyles(files, wbRels, theme);
   const mdw = digitWidth(wbFont);
   const ssRel = Object.values(wbRels).find((r) => r.type === 'sharedStrings');
-  const strings = files.__xlsb ? files.__xlsb.strings : ssRel && files[ssRel.target] ? kids(parseXml(textOf(files[ssRel.target])), 'si').map(allText) : [];
+  const stringNodes = !files.__xlsb && ssRel && files[ssRel.target] ? kids(parseXml(textOf(files[ssRel.target])), 'si') : [];
+  const strings = files.__xlsb ? files.__xlsb.strings : stringNodes.map(allText);
+  const phonetics = stringNodes.map((node, i) => readPhonetic(node, strings[i], fonts));
+  stringNodes.length = 0; // 큰 sharedStrings XML 트리는 본문 시트를 읽기 전에 해제 가능하게 합니다.
   // 이름 정의 (시트 범위 이름은 localSheetId → 시트 이름)
   const allSheetNames = kids(child(wbRoot, 'sheets'), 'sheet').map((sh) => sh.attrs.name.slice(0, 31));
   const names = [];
@@ -2689,7 +2700,7 @@ function* readXlsxSteps(files) {
     try { return mayReturnArray(parse(e.ref.slice(1))); } catch { return false; }
   };
   const date1904 = ['1', 'true'].includes(child(wbRoot, 'workbookPr')?.attrs.date1904);
-  const ctx = { mdw, wbFont, xfs, dxfs, dxfOf, tableStyles, slicerStyles, strings, theme, date1904, warnings: new Set(), isName, nameMulti, richImages: readRichImages(files, wbRels) };
+  const ctx = { mdw, wbFont, xfs, dxfs, dxfOf, tableStyles, slicerStyles, strings, phonetics, fonts, theme, date1904, warnings: new Set(), isName, nameMulti, richImages: readRichImages(files, wbRels) };
   const sheets = [];
   const warnings = [];
   const sheetCodes = {};
@@ -4317,6 +4328,12 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
         if (typeof v === 'number') return `<c r="${ref}"${sAttr}><v>${v}</v></c>`;
         if (typeof v === 'boolean') return `<c r="${ref}"${sAttr} t="b"><v>${v ? 1 : 0}</v></c>`;
         if (v === null) return s ? `<c r="${ref}"${sAttr}/>` : '';
+        if (cell.phonetic) {
+          const p = normalizePhonetic(cell.phonetic, String(v));
+          const f = p.font ?? { size: Math.max(6, (wb.defaultFont?.size ?? 11) * .55) };
+          const xf = pool.xf(f), fontId = Number(/fontId="(\d+)"/.exec(pool.xfs[xf])?.[1] ?? 0);
+          return `<c r="${ref}"${sAttr} t="inlineStr" ph="${p.visible ? 1 : 0}"><is><t xml:space="preserve">${xesc(v)}</t>${phoneticXml(String(v), p, fontId, xesc)}</is></c>`;
+        }
         return `<c r="${ref}"${sAttr} t="s"><v>${sst(String(v))}</v></c>`;
       }).join('');
       rowXml.push(`<row ${attrs.join(' ')}>${cx}</row>`);

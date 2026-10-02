@@ -1,4 +1,5 @@
 // 통합 문서 모델: 시트 · 셀 · 재계산 · 실행 취소 · 행/열 구조 변경
+import { normalizePhonetic, phoneticText } from './phonetic.js';
 import { shiftNoteVisibility } from './review-state.js';
 import { rewriteWorkbookLink } from './hyperlink.js';
 import { resolveStructRef, findTable } from './tables.js';
@@ -355,6 +356,7 @@ export function makeCellRC(data, r, c, date1904 = false) {
       cell.v = p.errorLiteral ? ERR_BY_CODE[p.errorLiteral] : p.value;
     }
   }
+  if (data.phonetic && !cell.formula && typeof cell.v === 'string') cell.phonetic = normalizePhonetic(data.phonetic, cell.v);
   if (!cell.raw && !cell.style && !cell.comment && !cell.link && !cell.image) return null;
   return cell;
 }
@@ -385,6 +387,7 @@ function sameCell(a, b) {
   if (a.raw !== b.raw || (a.comment || null) !== (b.comment || null) || (a.link || null) !== (b.link || null) || !!a.fx !== !!b.fx || a.inputType !== b.inputType) return false;
   if (!sameStyle(a.style, b.style)) return false;
   if ((a.image || b.image) && JSON.stringify(a.image ?? null) !== JSON.stringify(b.image ?? null)) return false;
+  if ((a.phonetic || b.phonetic) && JSON.stringify(a.phonetic ?? null) !== JSON.stringify(b.phonetic ?? null)) return false;
   const ca = savedCached(a);
   const cb = savedCached(b);
   return ca === cb || JSON.stringify(ca) === JSON.stringify(cb);
@@ -398,6 +401,7 @@ export function cellData(cell, style) {
   if (cell.comment) d.comment = cell.comment;
   if (cell.link) d.link = cell.link;
   if (cell.image) d.image = { ...cell.image };
+  if (cell.phonetic) d.phonetic = structuredClone(cell.phonetic);
   if (cell.fx) d.fx = true;
   if (cell.inputType) d.inputType = cell.inputType;
   if (arguments.length > 1) {
@@ -932,6 +936,11 @@ export class Workbook {
         if (sp) return new RefValue(name, sp.r, sp.c, sp.r + sp.h - 1, sp.c + sp.w - 1);
         if (!this.getCell(s, rr, cc)?.formula) return null;
         return new RefValue(name, rr, cc);
+      },
+      phoneticText: (sheet, rr, cc) => {
+        const s = this.resolveSheet(sheet, si), cell = this.getCell(s, rr, cc);
+        const value = this.getValue(s, rr, cc);
+        return isError(value) ? value : phoneticText(value, cell?.phonetic);
       },
       formulaText: (sheet, rr, cc) => {
         const cell = this.getCell(this.resolveSheet(sheet, si), rr, cc);
@@ -1703,7 +1712,7 @@ export class Workbook {
     if (b) {
       // 열 블록 칸: 값만 있고 열 서식과 같으면 블록에, 수식 · 메모 · 다른 서식이면 일반 셀로 (블록 칸은 비움)
       const fmt = b.cols[c - b.c0].fmt ?? undefined;
-      const plain = cell && !cell.formula && !cell.comment && !cell.link && !cell.image && cell.cached === undefined && sameStyle(cell.style, fmt);
+      const plain = cell && !cell.formula && !cell.comment && !cell.link && !cell.image && !cell.phonetic && cell.cached === undefined && sameStyle(cell.style, fmt);
       if (!cell || plain) {
         const v = cell ? cell.v : null;
         blockSet(b, r, c, isError(v) ? { error: v.code } : v ?? null);
@@ -1730,7 +1739,8 @@ export class Workbook {
     const neutralFormula = cur?.formula && cell?.formula && cur.raw === cell.raw && !cur.image && !cell.image
       && (ca === cb || JSON.stringify(ca) === JSON.stringify(cb));
     const neutralValue = cur && cell && !cur.formula && !cell.formula && !cur.image && !cell.image && sameValue(cur.v, cell.v);
-    const calcNeutral = !!(neutralFormula || neutralValue);
+    const phoneticChanged = (cur?.phonetic || cell?.phonetic) && phoneticText(cur?.v, cur?.phonetic) !== phoneticText(cell?.v, cell?.phonetic);
+    const calcNeutral = !!(neutralFormula || neutralValue) && !phoneticChanged;
     if (neutralFormula && cur.dirty) cell.dirty = true;
     // noUndo: 파일을 여는 중(피벗 다시 그리기) — 실행 취소 기록은 끝나면 비우므로 셀 내용 복사를 만들지 않음
     this.record(this.noUndo ? { t: 'cell', si, r, c, calcNeutral } : { t: 'cell', si, r, c, calcNeutral, before: cur ? cellData(cur) : null, after: cell ? cellData(cell) : null });
@@ -1768,13 +1778,29 @@ export class Workbook {
         if (p.decimals) style.decimals = p.decimals;
       }
     }
-    this.setCellData(si, r, c, { raw, style, comment: cur?.comment, link: cur?.link });
+    this.setCellData(si, r, c, { raw, style, comment: cur?.comment, link: cur?.link, ...(raw === cur?.raw && cur.phonetic ? { phonetic: cur.phonetic, inputType: cur.inputType } : {}) });
   }
 
   setStyle(si, r, c, patch) {
     const cur = this.getCell(si, r, c);
     const style = { ...(cur?.style || this.baseStyle || {}), ...patch };
     this.setCellData(si, r, c, cellData(cur, style) ?? { raw: '', style });
+  }
+
+  setPhonetic(si, r, c, phonetic, text) {
+    const cur = this.getCell(si, r, c), value = this.getValue(si, r, c);
+    if (cur?.formula || typeof cur?.v !== 'string' || typeof value !== 'string') throw new Error('윗주는 문자열이 들어 있는 셀에서 편집할 수 있습니다.');
+    const nextText = text === undefined ? value : String(text);
+    if (!nextText || nextText.length > 32767) throw new Error('원문은 1~32,767자로 입력하세요.');
+    const data = cellData(cur);
+    if (text !== undefined && nextText !== value) { data.raw = nextText; data.inputType = 'text'; }
+    data.phonetic = normalizePhonetic(phonetic, nextText, true);
+    this.setCellData(si, r, c, data);
+  }
+
+  setPhoneticVisible(si, r, c, visible) {
+    const cur = this.getCell(si, r, c);
+    this.setPhonetic(si, r, c, { ...(cur?.phonetic ?? { runs: [] }), visible: !!visible });
   }
 
   setComment(si, r, c, comment) {
@@ -1791,7 +1817,7 @@ export class Workbook {
         const data = what === 'formats' ? cellData(cell, null) : cellData(cell);
         if (what === 'comments') delete data.comment;
         else if (what === 'hyperlinks') delete data.link;
-        else if (what !== 'formats') { data.raw = ''; delete data.cached; delete data.fx; delete data.inputType; delete data.image; delete data.link; }
+        else if (what !== 'formats') { data.raw = ''; delete data.cached; delete data.fx; delete data.inputType; delete data.image; delete data.link; delete data.phonetic; }
         this.setCellData(si, r, c, data);
       }
     }

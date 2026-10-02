@@ -2403,3 +2403,54 @@ body.mobile-work-mode.mobile-compact .sheet-view-modes button { width:28px; heig
 .picture-v2-crop-handle{position:absolute!important;transform:translate(-50%,-50%);padding:0!important;min-width:0!important;min-height:0!important;border:1px solid #111;background:#fff;box-sizing:border-box;pointer-events:auto;cursor:crosshair;z-index:3;touch-action:none;border-radius:0}
 .picture-v2-crop-handle:focus-visible{outline:2px solid #217346;outline-offset:1px}
 .picture-v2-background-canvas{max-height:none;height:auto;object-fit:fill}
+
+/* 셀 우클릭: 검색 가능한 목록과 윗주 편집 */
+.cell-pick-list{width:280px;max-width:calc(100vw - 12px)}
+.cell-pick-search{box-sizing:border-box;width:calc(100% - 12px);margin:6px;padding:7px 9px;border:1px solid #c7d2ce;border-radius:5px;position:sticky;top:0;background:#fff}
+.cell-pick-choices .menu-item{white-space:normal;overflow-wrap:anywhere;min-height:28px;padding:5px 12px}
+.cell-pick-status{padding:7px 10px;color:#687770;font-size:11px;border-top:1px solid #e5ebe8}
+.phonetic-editor{display:flex;flex-direction:column;gap:12px}.phonetic-editor label{display:flex;align-items:center;gap:10px}.phonetic-editor input:not([type=checkbox]),.phonetic-editor select{min-width:0;max-width:100%}
+.phonetic-runs{display:flex;flex-direction:column;gap:6px}.phonetic-runs>div{display:grid;grid-template-columns:75px 75px minmax(100px,1fr) 60px;gap:8px;align-items:center}
+.cell-phonetic{display:inline-flex;align-items:flex-end;vertical-align:bottom;white-space:nowrap}.phonetic-segment{display:inline-flex;flex-direction:column;align-items:center}.phonetic-guide{font-size:.55em;line-height:1.15;text-align:center}.phonetic-base{line-height:1.2}
+@media(max-width:640px){.phonetic-runs>div{grid-template-columns:repeat(2,minmax(0,1fr))}.phonetic-editor label{flex-wrap:wrap}}
+
+/* 로컬 표/범위 데이터 가져오기 편집기 */
+.range-query-editor{min-width:0;display:flex;flex-direction:column;gap:10px}
+.range-query-editor p{margin:0;line-height:1.5}
+.rq-source{font-weight:600;overflow-wrap:anywhere}
+.rq-options,.rq-actions{display:flex;align-items:center;flex-wrap:wrap;gap:10px}
+.rq-options>label{display:flex;align-items:center;gap:6px;min-width:0}
+.rq-options input[type=text]{width:210px;max-width:100%}
+.rq-workspace{display:grid;grid-template-columns:minmax(200px,260px) minmax(0,1fr);gap:14px;min-width:0}
+.rq-columns,.rq-rules{min-width:0}
+.rq-columns h3{font-size:13px;margin:0 0 8px}
+.rq-column-list{max-height:360px;overflow:auto;margin:8px 0;border:1px solid var(--line,#d9e0e4);border-radius:5px}
+.rq-column{display:grid;grid-template-columns:minmax(0,1fr) 100px;gap:6px;align-items:center;padding:6px;border-bottom:1px solid var(--line,#e2e7ea)}
+.rq-column>label{display:flex;align-items:center;gap:6px;min-width:0}
+.rq-column-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rq-column select{width:100%;min-width:0}
+.rq-rules details{border:1px solid var(--line,#d9e0e4);border-radius:5px;padding:8px;margin-bottom:8px}
+.rq-rules summary{cursor:pointer;font-weight:600;margin-bottom:6px}
+.rq-rule-list{display:flex;flex-direction:column;gap:6px;margin-bottom:6px}
+.rq-rule{display:grid;grid-template-columns:minmax(70px,1fr) minmax(85px,1fr) minmax(65px,1fr) auto;gap:5px;min-width:0}
+.rq-rule select,.rq-rule input{min-width:0;width:100%}
+.rq-sort-rule{grid-template-columns:minmax(80px,1fr) minmax(85px,1fr) auto}
+.rq-preview{max-height:300px;min-height:100px;overflow:auto;border:1px solid var(--line,#d9e0e4);border-radius:5px;margin-top:8px}
+.rq-table{border-collapse:separate;border-spacing:0;white-space:pre;width:max-content;min-width:100%}
+.rq-table th,.rq-table td{border-right:1px solid var(--line,#e2e7ea);border-bottom:1px solid var(--line,#e2e7ea);padding:5px 8px;max-width:260px;overflow:hidden;text-overflow:ellipsis;text-align:left}
+.rq-table th{position:sticky;top:0;background:var(--bg,#f4f6f7);z-index:1}
+.rq-status{font-weight:600;margin-top:8px}
+.rq-steps{font-size:11px;color:var(--muted,#697579);line-height:1.5;margin-top:8px}
+.rq-error{color:#a22525;background:#fff1f0;border:1px solid #e9b9b4;padding:8px;margin-top:8px;overflow-wrap:anywhere}
+.rq-error[hidden]{display:none}
+@media(max-width:660px){.rq-workspace{grid-template-columns:minmax(0,1fr)}.rq-column-list{max-height:180px}.rq-rule{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.rq-rule>.btn{justify-self:end}.rq-preview{max-height:230px}.rq-options>label{flex-wrap:wrap}}
+
+.cell-phonetic{line-height:1.15;max-width:100%}.phonetic-segment{align-items:stretch}.phonetic-guide{font-weight:normal;white-space:pre;text-align:left}.phonetic-center .phonetic-guide{text-align:center}.phonetic-distributed .phonetic-guide{text-align:justify;text-align-last:justify}.phonetic-base{white-space:pre}
+.phonetic-editor label{flex-direction:column;align-items:stretch;gap:5px}.phonetic-editor textarea{width:100%;min-height:60px;box-sizing:border-box}.phonetic-options{display:grid;grid-template-columns:minmax(0,1fr) 100px minmax(0,1fr);gap:10px}.phonetic-editor .phonetic-visible{flex-direction:row;align-items:center}.phonetic-preview{padding:12px;border:1px solid #d4dfd9;border-radius:5px;overflow:auto;min-height:48px}.phonetic-run input{width:100%;box-sizing:border-box}
+@media(max-width:480px){.phonetic-options,.phonetic-runs>.phonetic-run{grid-template-columns:minmax(0,1fr)}}
+
+/* 좁은 아이콘 버튼의 상시 접근키 글자 겹침 방지. Alt 키팁은 별도 레이어 유지. */
+.context-mini-toolbar .access-key-hint{display:none}
+
+.dialog:has(.range-query-editor){max-width:min(1040px,calc(100vw - 32px))}.rq-field{display:flex;flex-direction:column;gap:3px;min-width:0}.rq-field>span{font-size:11px;color:#63736a}
+@media(max-width:660px){.dialog:has(.range-query-editor){max-width:calc(100vw - 16px)}}
