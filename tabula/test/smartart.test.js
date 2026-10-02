@@ -9,9 +9,9 @@ import { parseXml, descendants } from '../src/xml.js';
 
 const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=';
 const model = () => ({ version: 1, layout: 'hierarchy', palette: ['#4472c4'], nodes: [{ id:'a',text:'팀',level:0 },{ id:'b',text:'부서',level:1 },{ id:'c',text:'담당',level:2 },{ id:'d',text:'다른 부서',level:1 }] });
-test('SmartArt 8범주·20배치의 모든 항목과 유한한 양수 크기를 작은/큰 도형에 보존한다', () => {
-  assert.equal(SMARTART_LAYOUTS.length,20);assert.equal(new Set(SMARTART_LAYOUTS.map(x=>x.category)).size,SMARTART_CATEGORIES.length);
-  for(const layout of SMARTART_LAYOUTS) for(const count of [1,3,60]) for(const [w,h] of [[180,120],[600,340]]) {
+test('SmartArt 8범주·60배치의 모든 항목과 유한한 양수 크기를 작은/큰 도형에 보존한다', () => {
+  assert.equal(SMARTART_LAYOUTS.length,60);assert.equal(new Set(SMARTART_LAYOUTS.map(x=>x.category)).size,SMARTART_CATEGORIES.length);
+  for(const layout of SMARTART_LAYOUTS) for(const count of [1,2,3,7,60]) for(const [w,h] of [[60,40],[180,120],[600,340]]) {
     const shape=newSmartArt(layout.id,{w,h}); shape.smartArt.nodes=Array.from({length:count},(_,i)=>({id:`n${i}`,text:`값 ${i}`,level:layout.category==='계층'&&i?1:0}));
     const parts=smartArtParts(shape); assert.deepEqual(new Set(parts.filter(p=>p.smartArtNode).map(p=>p.smartArtNode)),new Set(shape.smartArt.nodes.map(n=>n.id)));
     for(const p of parts){for(const k of ['x','y','w','h'])assert.ok(Number.isFinite(p[k]),`${layout.id}/${k}`);assert.ok(p.w>0&&p.h>0);assert.ok(p.x>=-.01&&p.y>=-.01);assert.ok(p.x+p.w<=w+1&&p.y+p.h<=h+1,`${layout.id} ${JSON.stringify(p)}`);}
@@ -44,12 +44,12 @@ test('SmartArt 한 개 수정은 Undo/Redo 및 WIXEL JSON 복원에서 모델을
   wb.undo();assert.notEqual(wb.sheets[0].shapes[0].smartArt.nodes[0].text,'수정');wb.redo();assert.equal(wb.sheets[0].shapes[0].smartArt.nodes[0].text,'수정');
   const back=new Workbook(wb.serialize());assert.deepEqual(back.sheets[0].shapes,wb.sheets[0].shapes);
 });
-test('SmartArt 20배치 표준 그룹 저장과 편집모델 XLSX 왕복',()=>{
+test('SmartArt 60배치 표준 그룹 저장과 편집모델 XLSX 왕복',()=>{
   const wb=new Workbook();wb.sheets[0].shapes=SMARTART_LAYOUTS.map((x,i)=>newSmartArt(x.id,{x:10,y:i*360,w:600,h:340}));
   wb.sheets[0].shapes.at(-1).smartArt.nodes[0].picture=PNG;
   const bytes=writeXlsx(wb),files=unzip(bytes),xml=textOf(files['xl/drawings/drawing1.xml']),root=parseXml(xml),back=readXlsx(bytes).data.sheets[0].shapes;
-  assert.equal(descendants(root,'grpSp').length,20);assert.equal(back.length,20);assert.equal(descendants(root,'pic').length,1);
-  for(let i=0;i<20;i++){assert.deepEqual(back[i].smartArt,wb.sheets[0].shapes[i].smartArt);assert.equal(back[i].w,600);assert.equal(back[i].h,340);}
+  assert.equal(descendants(root,'grpSp').length,60);assert.equal(back.length,60);assert.equal(descendants(root,'pic').length,1);
+  for(let i=0;i<60;i++){assert.deepEqual(back[i].smartArt,wb.sheets[0].shapes[i].smartArt);assert.equal(back[i].w,600);assert.equal(back[i].h,340);}
   const ids=descendants(root,'cNvPr').map(n=>n.attrs.id);assert.equal(new Set(ids).size,ids.length);assert.match(xml,/a:chExt/);assert.ok(!xml.includes('<dgm:'));
 });
 test('WIXEL 확장을 제거해도 Excel 표준 도형과 그림 및 항목 텍스트가 남는다',()=>{
@@ -134,4 +134,40 @@ test('메타 없는 표준 그룹을 펼쳐 읽을 때 부모 숨김은 모든 �
   files[path]=new TextEncoder().encode(textOf(files[path]).replace(/<a:extLst>.*?<\/a:extLst>/gs,''));
   const sh=readXlsx(zip(files)).data.sheets[0],items=[...sh.shapes,...sh.images];
   assert.equal(items.length,3);assert.ok(items.every(x=>x.hidden===true),'숨긴 부모의 도형·그림·중첩그룹 자식 모두 숨김');
+});
+
+
+test('60 레이아웃은 같은 6항목에서 서로 다른 도형·좌표·연결 구조를 가진다', () => {
+  const geometries = new Map();
+  for (const layout of SMARTART_LAYOUTS) {
+    const shape = newSmartArt(layout.id);
+    shape.smartArt.nodes = Array.from({ length: 6 }, (_, i) => ({ id: 'n' + i, text: '항목 ' + i, level: i ? (i % 3 === 0 ? 2 : 1) : 0 }));
+    const signature = JSON.stringify(smartArtParts(shape).map(({ kind, x, y, w, h, path }) => ({ kind, x, y, w, h, path })));
+    assert.ok(!geometries.has(signature), layout.id + '가 ' + geometries.get(signature) + '와 같은 배치'); geometries.set(signature, layout.id);
+    assert.ok(layout.description.length > 15, '선택 용도 설명');
+  }
+  assert.equal(geometries.size, 60);
+});
+
+test('앞/하위 항목 추가는 모델 복사와 수준·60개 한도를 유지한다', () => {
+  const original = model(), before = structuredClone(original);
+  const child = editSmartArt(original, 'b', 'child'); assert.equal(child.nodes[3].text, '새 하위 항목'); assert.equal(child.nodes[3].level, 2);
+  const previous = editSmartArt(original, 'b', 'before'); assert.equal(previous.nodes[1].text, '새 항목'); assert.equal(previous.nodes[1].level, 1);
+  assert.deepEqual(original, before);
+  const full = { ...original, nodes: Array.from({ length: 60 }, (_,i) => ({ id:'n'+i,text:'항목',level:0 })) };
+  for (const action of ['add','before','child']) assert.throws(() => editSmartArt(full,'n0',action), /60/);
+});
+
+test('새 그라데이션 스타일·새 레이아웃은 표준 그룹과 편집 메타로 왕복한다', () => {
+  const wb = new Workbook(), shape = newSmartArt('segmentedCycle'); shape.smartArt.style = 'gradient'; wb.sheets[0].shapes = [shape];
+  assert.ok(smartArtParts(shape).filter(p => p.smartArtNode).every(p => p.grad));
+  const bytes = writeXlsx(wb), xml = textOf(unzip(bytes)['xl/drawings/drawing1.xml']);
+  assert.match(xml, /a:gradFill/); assert.deepEqual(readXlsx(bytes).data.sheets[0].shapes[0].smartArt, shape.smartArt);
+});
+
+test('긴 다국어 텍스트와 많은 항목의 미리 보기는 유한하고 원본을 변경하지 않는다', () => {
+  const shape = newSmartArt('treeList', { w: 180, h: 120 });
+  shape.smartArt.nodes = Array.from({ length: 60 }, (_, i) => ({ id: 'n' + i, text: '긴 한글과 English 123 '.repeat(20), level: i ? 1 : 0 }));
+  const before = structuredClone(shape), svg = smartArtSvg(shape);
+  assert.ok(!/NaN|Infinity/.test(svg)); assert.match(svg, /<title>긴 한글/); assert.deepEqual(shape,before);
 });

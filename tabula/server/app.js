@@ -5,6 +5,7 @@ import { extname, join, resolve, relative, isAbsolute, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { timingSafeEqual, randomBytes, createHmac } from 'node:crypto';
 import { fetchPublicResource, isLoopbackAddress, ProxyError } from './network.js';
+import { mediaSearch, trackMediaDownload } from './media-search.js';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const SUFFIX = '.tabula.json';
@@ -66,7 +67,7 @@ async function atomicWrite(file, body) {
 
 export function createWixelServer(options = {}) {
   const { host = '127.0.0.1', token = '', data = join(ROOT, 'data'), root = ROOT,
-    fetchResource = fetchPublicResource, proxyRateLimit = 120 } = options;
+    fetchResource = fetchPublicResource, proxyRateLimit = 120, mediaEnv = process.env } = options;
   if (!isLoopbackAddress(host) && !String(token).trim()) throw new Error('외부 접속 주소에서는 TABULA_TOKEN을 설정해야 서버를 시작할 수 있습니다');
   const DATA = resolve(data), PUB = join(DATA, 'published'), staticRoot = resolve(root);
   const wantedToken = Buffer.from(token);
@@ -135,6 +136,16 @@ export function createWixelServer(options = {}) {
     }
     if (!authorized(req)) return send(res, 401, { error: '인증이 필요합니다' });
     if (!sameOrigin(req)) return send(res, 403, { error: '다른 웹사이트에서 보낸 요청은 허용하지 않습니다' });
+
+    if ((path === '/api/media/search' || path === '/api/media/track') && req.method === 'GET') {
+      if (!allowProxy(req, res)) return;
+      const upstream = async (url, opts) => {
+        const result = await fetchResource(url, { headers: opts.headers, maxRedirects: 0, timeoutMs: 10000, maxBytes: 2 * 1024 * 1024 });
+        return new Response(result.body, { status: result.status, headers: result.headers });
+      };
+      const params = new URL(req.url, 'http://x').searchParams;
+      return send(res, 200, await (path.endsWith('/track') ? trackMediaDownload(params, mediaEnv, upstream) : mediaSearch(params, mediaEnv, upstream)));
+    }
 
     if (path === '/api/naver/keywordstool' && req.method === 'GET') {
       if (!allowProxy(req, res)) return;

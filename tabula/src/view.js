@@ -1,3 +1,4 @@
+import { normalizeVideo } from './media-object.js';
 import { bindGridTouch } from './mobile-grid.js';
 import { noteVisible } from './review-state.js';
 // 가상 스크롤 그리드: 화면에 보이는 행/열만 그림 (20,000,000행 × 16,384열 지원)
@@ -1264,7 +1265,7 @@ export class GridView {
             return `<div style="position:absolute;inset:0;overflow:hidden;${ic}"><img src="${esc(o.src)}" alt="${esc(o.alt ?? o.name ?? '')}" draggable="false" style="position:absolute;max-width:none;left:${css.left};top:${css.top};width:${css.width};height:${css.height}"></div>`;
           })()
           : `<img src="${esc(o.src)}" alt="${esc(o.alt ?? o.name ?? '')}" draggable="false"${ic ? ` style="${ic};box-sizing:border-box"` : ''}>`;
-        box(o, 'pic', img, pictureTransform(o) ? `transform:${pictureTransform(o)}` : '');
+        box(o, 'pic', img + (normalizeVideo(o.media) ? `<button type="button" class="media-play" data-media-play="1" aria-label="영상 재생">▶<span>${esc(o.name || '영상')}</span></button>` : ''), pictureTransform(o) ? `transform:${pictureTransform(o)}` : '');
       }
       else {
         const isLine = isShapeLine(o);

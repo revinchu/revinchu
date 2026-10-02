@@ -193,7 +193,7 @@ async function rasterPage(node, width, height, signal) {
   return { jpeg, width: canvas.width, height: canvas.height, paperWidth: width * 0.75, paperHeight: height * 0.75 };
 }
 
-export function openPrintPreview({ source, page, name, sheet }) {
+export function openPrintPreview({ source, page, name, sheet, saveFile = null, pdfPreferred = false }) {
   const prepared = preparePages(source, page, name, sheet), controller = new AbortController();
   let index = 0, busy = false, closed = false;
   const status = el('div', { role: 'status', style: { minHeight: '20px', fontSize: '12px' } });
@@ -221,29 +221,51 @@ export function openPrintPreview({ source, page, name, sheet }) {
     if (busy) return; busy = true; pdf.disabled = true;
     try {
       if (prepared.count > 150) throw new Error('직접 PDF 저장은 150쪽까지 지원합니다. 인쇄 영역을 줄이거나 브라우저 인쇄를 이용하세요.');
-      await document.fonts?.ready;
-      const pages = [];
-      for (let i = 0; i < prepared.count; i++) {
-        if (controller.signal.aborted) return;
-        status.textContent = `PDF 만드는 중… ${i + 1} / ${prepared.count}쪽`;
-        pages.push(await rasterPage(prepared.build(i), prepared.width, prepared.height, controller.signal));
-        await new Promise(resolve => setTimeout(resolve, 0));
+      const make = async () => {
+        await document.fonts?.ready;
+        const pages = [];
+        for (let i = 0; i < prepared.count; i++) {
+          if (controller.signal.aborted) return null;
+          status.textContent = `PDF 만드는 중… ${i + 1} / ${prepared.count}쪽`;
+          pages.push(await rasterPage(prepared.build(i), prepared.width, prepared.height, controller.signal));
+          await new Promise(resolve => setTimeout(resolve, 0));
+        }
+        return closed ? null : new Blob([imagePagesPdf(pages, { title: `${name} — ${sheet}` })], { type: 'application/pdf' });
+      };
+      const fileName = `${String(name || '통합 문서').replace(/[\\/:*?"<>|]/g, '_')}.pdf`;
+      if (saveFile) {
+        const done = await saveFile(fileName, make);
+        if (!closed) status.textContent = done ? `${prepared.count}쪽 PDF 파일을 저장했습니다.` : 'PDF 저장을 취소했습니다.';
+      } else {
+        const blob = await make(); if (!blob) return;
+        const url = URL.createObjectURL(blob), a = el('a', { href: url, download: fileName });
+        document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000);
+        status.textContent = `${prepared.count}쪽 PDF 파일의 다운로드를 시작했습니다.`;
       }
-      if (closed) return;
-      const blob = new Blob([imagePagesPdf(pages, { title: `${name} — ${sheet}` })], { type: 'application/pdf' });
-      const url = URL.createObjectURL(blob), a = el('a', { href: url, download: `${String(name || '통합 문서').replace(/[\\/:*?"<>|]/g, '_')}.pdf` });
-      document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000);
-      status.textContent = `${prepared.count}쪽 PDF 파일의 다운로드를 시작했습니다.`;
     } catch (error) { if (!closed) status.textContent = error.message || 'PDF를 저장하지 못했습니다. 브라우저 인쇄를 이용하세요.'; }
     finally { busy = false; pdf.disabled = false; }
   };
-  const print = el('button', { type: 'button', class: 'btn primary', onclick: nativePrint }, '인쇄');
-  const pdf = el('button', { type: 'button', class: 'btn', onclick: savePdf }, 'PDF 파일 저장');
+  const print = el('button', { type: 'button', class: pdfPreferred ? 'btn' : 'btn primary', onclick: nativePrint }, '인쇄');
+  const pdf = el('button', { type: 'button', class: pdfPreferred ? 'btn primary' : 'btn', onclick: savePdf }, 'PDF 파일 저장');
   const body = el('div', { class: 'print-preview', style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
     el('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } }, print, pdf, prev, counter, nextButton),
     el('div', { class: 'muted', style: { fontSize: '12px' } }, `현재 시트 · ${prepared.count}쪽 · 배율 ${Math.round(prepared.scale * 100)}%. 표와 개체를 시트의 위치에 맞춰 함께 출력합니다. 직접 저장하는 PDF는 화면 모양을 보존하는 이미지 PDF이며 본문 텍스트 검색은 지원하지 않습니다.`),
     ...(prepared.oversized ? [el('div', { role: 'alert', style: { color: '#a65b00' } }, '한 행 또는 열이 인쇄 가능 영역보다 큽니다. 페이지 설정에서 배율을 줄여 잘림을 방지하세요.')] : []), status, stage);
-  const dialog = openDialog({ title: '인쇄 미리보기', width: Math.min(1000, innerWidth - 24), body, buttons: [{ label: '닫기' }], onClose: () => { closed = true; controller.abort(); } });
+  const dialog = openDialog({ title: pdfPreferred ? 'PDF 다운로드' : '인쇄 미리보기', initialFocus: () => pdfPreferred ? pdf : print, width: Math.min(1000, innerWidth - 24), body, buttons: [{ label: '닫기' }], onClose: () => { closed = true; controller.abort(); } });
   dialog.root.style.minWidth = '0'; dialog.root.style.maxWidth = 'calc(100vw - 24px)';
   show(0); return dialog;
+}
+
+/** Static, script-free web page with the same page geometry as print/PDF. */
+export function htmlPrintDocument({ source, page, name, sheet }) {
+  const prepared=preparePages(source,page,name,sheet);
+  if(prepared.count>300)throw new Error('웹페이지 저장은 300쪽 이내로 인쇄 영역을 나누어 주세요.');
+  const html=document.implementation.createHTMLDocument(`${name} — ${sheet}`);
+  html.documentElement.lang='ko';
+  const charset=html.createElement('meta');charset.setAttribute('charset','utf-8');html.head.prepend(charset);
+  const viewport=html.createElement('meta');viewport.name='viewport';viewport.content='width=device-width, initial-scale=1';html.head.append(viewport);
+  const policy=html.createElement('meta');policy.httpEquiv='Content-Security-Policy';policy.content="default-src 'none'; img-src data: https: http:; style-src 'unsafe-inline'; font-src data:; base-uri 'none'; form-action 'none'";html.head.append(policy);
+  const style=html.createElement('style');style.textContent=PRINT_CSS+`body{margin:0;padding:24px;background:#e9edf1;overflow:auto}.wixel-print-page{margin:0 auto 24px;box-shadow:0 2px 16px #0001}@media print{body{padding:0;background:#fff}.wixel-print-page{margin:0;box-shadow:none}@page{size:${prepared.width/96}in ${prepared.height/96}in;margin:0}}`;html.head.append(style);
+  for(let i=0;i<prepared.count;i++)html.body.append(html.importNode(prepared.build(i),true));
+  return '<!doctype html>\n'+html.documentElement.outerHTML;
 }

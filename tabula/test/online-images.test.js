@@ -7,7 +7,7 @@ const response = json => ({ ok: true, json: async () => json });
 const search = (json, options = {}) => searchOnlineImages('고양이', { source: 'openverse', fetcher: async () => response(json), ...options });
 
 test('출처 계약과 Openverse 원본/썸네일 분리, 검색 URL 인코딩 및 요청 개인정보 옵션', async () => {
-  assert.deepEqual(ONLINE_IMAGE_SOURCES.map(s => s.id), ['all', 'openverse', 'wikimedia', 'inaturalist', 'nasa']);
+  assert.deepEqual(ONLINE_IMAGE_SOURCES.map(s => s.id), ['all', 'openverse', 'wikimedia', 'inaturalist', 'nasa', 'unsplash', 'pexels', 'pixabay']);
   let request;
   const result = await searchOnlineImages('고양이 & 꽃', { source: 'openverse', page: 2, ccOnly: true, fetcher: async (url, options) => { request = { url: new URL(url), options }; return response({ results: [photo(7, { source: 'flickr', provider: 'flickr' })], page_count: 3 }); } });
   assert.equal(request.url.searchParams.get('q'), '고양이 & 꽃'); assert.equal(request.url.searchParams.get('page'), '2');
@@ -94,7 +94,7 @@ test('NASA canonical 원본·큰 alternate 우선, CC 전용 검색에서는 요
 
 test('연합 검색은 병렬 실행·교차 배치·중복 원본 URL 제거하고 일부 실패를 알림', async () => {
   const started = [], completions = [];
-  const pending = searchOnlineImages('꽃', { fetcher: url => new Promise((resolve, reject) => { started.push(new URL(url).hostname); completions.push({ resolve, reject }); }) });
+  const pending = searchOnlineImages('꽃', { fetcher: url => String(url).startsWith('/api/media/') ? Promise.resolve(response({ status: 'unconfigured', items: [], hasMore: false })) : new Promise((resolve, reject) => { started.push(new URL(url).hostname); completions.push({ resolve, reject }); }) });
   await Promise.resolve(); await Promise.resolve();
   assert.equal(started.length, 4);
   completions[0].resolve(response({ results: [photo(1), photo(2)], page_count: 2 }));
@@ -123,7 +123,7 @@ test('전 사이트 오류는 한국어로 실패하며 HTTP/오류 JSON/잘못�
 test('취소는 부분 성공보다 우선, 요청 신호 중단·늦게 온 결과 미사용', async () => {
   const controller = new AbortController(), calls = [];
   const pending = searchOnlineImages('꽃', { signal: controller.signal, fetcher: (url, options) => { calls.push(options); return new Promise(() => {}); } });
-  await Promise.resolve(); await Promise.resolve(); assert.equal(calls.length, 4);
+  await Promise.resolve(); await Promise.resolve(); assert.equal(calls.length, 7);
   controller.abort(); await assert.rejects(pending, e => e.name === 'AbortError' && /취소/.test(e.message));
   assert.ok(calls.every(c => c.signal.aborted));
   await assert.rejects(searchOnlineImages('꽃', { signal: controller.signal, fetcher: () => assert.fail('pre-aborted') }), { name: 'AbortError' });

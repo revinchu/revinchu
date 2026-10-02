@@ -2,6 +2,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { VaultStore } from './store.js';
 import { ApiError, LIMITS, documentHeaders, errorResponse, json, parseRevision, randomId, sameHash, securityHeaders, sha256, validPublicId, validateName, validateOrigin, vaultKey } from './shared.js';
 import { boundedBytes, fetchPublicText, naverKeywords } from './proxy.js';
+import { mediaSearch, trackMediaDownload } from '../server/media-search.js';
 
 function storeFor(object, create = false, limits = LIMITS) {
   if (object._store) return object._store;
@@ -114,6 +115,11 @@ export async function route(request, env) {
   if (path === '/api/fetch' && method === 'GET') {
     await limited(env.FETCH_RATE, ip);
     return fetchPublicText(url.searchParams.get('url') || '', url.hostname);
+  }
+  if ((path === '/api/media/search' || path === '/api/media/track') && method === 'GET') {
+    await limited(env.FETCH_RATE, ip);
+    try { return json(await (path.endsWith('/track') ? trackMediaDownload(url.searchParams, env) : mediaSearch(url.searchParams, env))); }
+    catch (e) { throw new ApiError(e.status || 502, e.status ? e.message : '미디어 검색에 실패했습니다.', 'MEDIA_SEARCH'); }
   }
   if (path.startsWith('/api/published/') && method === 'GET') {
     const id = path.slice('/api/published/'.length);

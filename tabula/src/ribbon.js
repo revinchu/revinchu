@@ -90,6 +90,7 @@ export const TABS = [
         large('condFormat', 'condFormat', '조건부 서식', { menu: 'condFormat' }),
         large('tableStyle', 'table', '표 서식', { menu: 'tableStyles' }),
         large('cellStyle', 'cellStyles', '셀 스타일', { menu: 'cellStyles' }),
+        medium('alternatingColors', 'table', '교차색상'),
       ]),
       group('빠른 서식', [
         col(
@@ -131,6 +132,8 @@ export const TABS = [
         large('shapesMenu', 'shapes', '도형', { menu: 'shapes' }),
         large('insertIcons', 'iconsLib', '아이콘', { title: '아이콘 삽입 — 34개 범주 3,600여 개 (엑셀 아이콘과 같은 그림, 색 변경 가능)' }),
         large('insertSmartArt', 'shapes', 'SmartArt', { title: 'SmartArt 그래픽 삽입 · 목록·프로세스·계층 등' }),
+        large('drawingPalette', 'painter', '그리기 팔레트'),
+        col(medium('insertGif', 'picture', 'GIF 검색'), medium('insertVideo', 'picture', '영상 검색')),
         large('insertTextbox', 'textbox', '텍스트 상자'),
       ]),
       group('기호', [large('insertEquation', 'equation', '수식', { menu: 'equations' }), large('insertSymbol', 'symbol', '기호')]),
@@ -312,7 +315,7 @@ export const TABS = [
         large('zoom100', 'zoom100', '100%'),
         large('zoomSel', 'zoomSel', '선택 영역 확대/축소', { title: '선택한 범위가 창에 꽉 차도록 확대/축소' }),
       ]),
-      group('창', [large('freezeMenu', 'freeze', '틀 고정', { menu: 'freeze', toggle: 'frozen' }), large('navigator', 'navigator', '탐색', { title: '시트 · 표 · 피벗 · 이름 · 개체 · 메모 목록에서 찾아 이동' })]),
+      group('창', [large('fullScreen', 'zoomSel', '전체화면', { toggle: 'fullScreenOn' }), large('freezeMenu', 'freeze', '틀 고정', { menu: 'freeze', toggle: 'frozen' }), large('navigator', 'navigator', '탐색', { title: '시트 · 표 · 피벗 · 이름 · 개체 · 메모 목록에서 찾아 이동' })]),
       group('매크로', [large('macros', 'macro', '매크로', { title: '매크로(VBA) 코드 보기' })]),
     ],
   },
@@ -449,6 +452,8 @@ export const TABS = [
     id: 'objFormat', label: '셰이프 형식', context: 'object', groups: [
       group('도형 삽입', [
         large('shapesMenu', 'shapes', '도형', { menu: 'shapes' }),
+        large('shapeMergeMenu', 'shapes', '도형 병합', { menu: 'shapeMerge' }),
+        medium('iconToShapes', 'iconsLib', 'SVG 도형 변환'),
         col(medium('shapeChangeBtn', 'shapes', '도형 모양 변경', { menu: 'shapeChange' }), medium('shapeEditPoints', 'shapes', '점 편집'), medium('insertTextbox', 'textbox', '텍스트 상자')),
       ]),
       group('도형 스타일', [

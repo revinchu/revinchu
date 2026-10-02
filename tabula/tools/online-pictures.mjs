@@ -48,6 +48,7 @@ async function test(name, fn) {
       } catch (e) { if (!/closed|canceled|already handled|aborted/i.test(e.message)) throw e; }
       finally { gate?.done(); }
     }
+    if (u.origin === origin && u.pathname === '/api/media/search') return route.fulfill({ json: { status: 'unconfigured', items: [], hasMore: false, message: '합성 API 키 미설정' } });
     if (u.origin === origin && !u.pathname.startsWith('/api/')) return route.continue();
     // 앱 상태 확인도 실제 보관함/문서를 조회하지 않는다.
     if (u.origin === origin && u.pathname === '/api/health') return route.fulfill({ status: 503, json: { ok: false } });
@@ -79,9 +80,9 @@ const depth = p => p.evaluate(() => window.tabula.wb().undoStack.length);
 const pick = (p, name) => dialog(p).getByRole('button', { name, exact: true }).click();
 const insert = p => dialog(p).getByRole('button', { name: '삽입', exact: true }).click();
 try {
-  await test('기본 CC 해제·다섯 사이트 선택·빈 검색 안내', async (p, net) => {
+  await test('기본 CC 해제·추가 사이트 선택·빈 검색 안내', async (p, net) => {
     const d = await open(p); assert.equal(await d.getByRole('checkbox', { name: 'Creative Commons만', exact: true }).isChecked(), false);
-    assert.deepEqual(await d.getByRole('combobox', { name: '검색 사이트', exact: true }).locator('option').evaluateAll(es => es.map(e => e.value)), ['all', 'openverse', 'wikimedia', 'inaturalist', 'nasa']);
+    assert.deepEqual(await d.getByRole('combobox', { name: '검색 사이트', exact: true }).locator('option').evaluateAll(es => es.map(e => e.value)), ['all', 'openverse', 'wikimedia', 'inaturalist', 'nasa', 'unsplash', 'pexels', 'pixabay']);
     await d.getByRole('button', { name: '검색', exact: true }).click(); assert.match(await d.getByRole('status').textContent(), /검색어를 입력/); assert.equal(net.requests.length, 0); assert.equal(await d.getByRole('button', { name: '더 보기', exact: true }).isDisabled(), true);
   });
   await test('네 출처 통합·라이선스·원문 링크·원본/미리보기 주소 구분', async (p, net) => {
@@ -100,14 +101,14 @@ try {
   });
   await test('사이트 변경 자동 재검색·CC 전용 NASA 빈 결과 안내', async (p, net) => {
     const d = await open(p); await search(p); let before = net.requests.length; await d.getByRole('combobox', { name: '검색 사이트', exact: true }).selectOption('wikimedia'); await settled(p); assert.deepEqual(net.requests.slice(before).map(r => r.source), ['wikimedia']); assert.deepEqual(await titles(p), ['합성 공용']);
-    await d.getByRole('checkbox', { name: 'Creative Commons만', exact: true }).check(); await settled(p); before = net.requests.length; await d.getByRole('combobox', { name: '검색 사이트', exact: true }).selectOption('nasa'); await settled(p); assert.deepEqual(await titles(p), []); assert.equal(net.requests.length, before); assert.match(await d.getByRole('status').textContent(), /NASA.*CC/);
+    await d.getByRole('checkbox', { name: 'Creative Commons만', exact: true }).check(); await settled(p); before = net.requests.length; await d.getByRole('combobox', { name: '검색 사이트', exact: true }).selectOption('nasa'); await settled(p); assert.deepEqual(await titles(p), []); assert.equal(net.requests.length, before); assert.match(await d.getByRole('status').textContent(), /CC.*검색|NASA.*CC/);
   });
   await test('검색어를 지운 뒤 필터 변경은 기존 결과·선택을 모두 초기화', async (p, net) => {
     const d = await open(p); await search(p); await pick(p, '합성 공공영역'); const before = net.requests.length;
     await d.getByRole('searchbox', { name: '그림 검색어', exact: true }).fill(''); await d.getByRole('checkbox', { name: 'Creative Commons만', exact: true }).check();
     assert.deepEqual(await titles(p), []); assert.equal(await d.getByRole('button', { name: '더 보기', exact: true }).isDisabled(), true); assert.equal(net.requests.length, before);
     await d.getByRole('combobox', { name: '검색 사이트', exact: true }).selectOption('wikimedia'); assert.deepEqual(await titles(p), []); assert.equal(net.requests.length, before);
-    await insert(p); assert.match(await d.getByRole('status').textContent(), /그림을 선택/); assert.deepEqual(await images(p), [[], []]);
+    await insert(p); assert.match(await d.getByRole('status').textContent(), /미디어를 선택/); assert.deepEqual(await images(p), [[], []]);
   });
   await test('새 검색 뒤 늦게 도착한 이전 응답 폐기', async (p, net) => {
     const d = await open(p); await d.getByRole('combobox', { name: '검색 사이트', exact: true }).selectOption('openverse'); const g = hold(net, r => r.kind === 'api' && r.q === '이전');
@@ -121,10 +122,10 @@ try {
     net.failed = new Set(['openverse', 'nasa']); const d = await open(p); await search(p); assert.deepEqual(await titles(p), ['합성 공용', '합성 자연']); assert.match(await d.getByRole('status').textContent(), /연결 실패.*Openverse.*NASA.*다른 출처/);
   });
   await test('전체 검색 실패 후 재검색 복구·문서/Undo 무변경', async (p, net) => {
-    const before = await saved(p); net.failed = new Set(Object.values(hosts)); const d = await open(p); await search(p); assert.match(await d.getByRole('status').textContent(), /검색할 수 없습니다/); assert.deepEqual(await titles(p), []); net.failed.clear(); await search(p); assert.equal((await titles(p)).length, 5); assert.equal(await saved(p), before); assert.equal(await depth(p), 0);
+    const before = await saved(p); net.failed = new Set(Object.values(hosts)); const d = await open(p); await search(p); assert.match(await d.getByRole('status').textContent(), /검색할 수 없습니다|연결 실패/); assert.deepEqual(await titles(p), []); net.failed.clear(); await search(p); assert.equal((await titles(p)).length, 5); assert.equal(await saved(p), before); assert.equal(await depth(p), 0);
   });
   await test('결과 없는 검색은 이전 카드·선택 제거', async (p, net) => {
-    const d = await open(p); await search(p); await pick(p, '합성 공개'); net.empty = true; await search(p, '없음'); assert.deepEqual(await titles(p), []); assert.match(await d.getByRole('status').textContent(), /결과가 없습니다/); await insert(p); assert.match(await d.getByRole('status').textContent(), /그림을 선택/); assert.deepEqual(await images(p), [[], []]);
+    const d = await open(p); await search(p); await pick(p, '합성 공개'); net.empty = true; await search(p, '없음'); assert.deepEqual(await titles(p), []); assert.match(await d.getByRole('status').textContent(), /결과가 없습니다/); await insert(p); assert.match(await d.getByRole('status').textContent(), /미디어를 선택/); assert.deepEqual(await images(p), [[], []]);
   });
   await test('여러 그림 원본 삽입·원래 셀 보존·한 번 Undo/Redo', async (p, net) => {
     const before = await saved(p); await open(p); await search(p); await pick(p, '합성 공개'); await pick(p, '합성 공용'); await insert(p); await dialog(p).waitFor({ state: 'detached' });

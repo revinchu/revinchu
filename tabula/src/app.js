@@ -1,3 +1,6 @@
+import { normalizeVideo, VIDEO_POSTER } from './media-object.js';
+import { createDrawingPalette } from './drawing-palette.js';
+import { BANDING_PALETTES, alternatingRules, isBandingRule } from './alternating-colors.js';
 import { installMobileWork, mobileSheetZoom } from './mobile-work.js';
 import { openMobileTools } from './mobile-tools-ui.js';
 import { makeObjectGroup, ungroupObjects } from './object-group.js';
@@ -68,7 +71,8 @@ import { logicalCol, ColBuilder } from './block.js';
 import { PROTECT_OPTIONS, defaultAllow, excelHash, isProtected, isLockedStyle, allowed } from './protect.js';
 import { PAPERS, MARGINS, normPage, paperOf, printScale, headerParts, pageScalePatch } from './page.js';
 import { THEME_FONTS, THEME_EFFECTS } from './theme-options.js';
-import { openPrintPreview } from './print-preview.js';
+import { openPrintPreview, htmlPrintDocument } from './print-preview.js';
+import { prepareCond, condFormatAt } from './condfmt.js';
 import { printMergeMap } from './print-document.js';
 import { SPARK_TYPES, sparkDefaults, sparkItems, sparkRef } from './sparkline.js';
 import { evalSteps, goalSeek, dataTable, specialCells, GOTO_KINDS, valueText } from './audit.js';
@@ -94,6 +98,8 @@ import {
 } from './validation.js';
 import { shapeSizePatch } from './shape-format.js';
 import { shapeFromPoints } from './shape-path.js';
+import { mergeShapes } from './shape-boolean.js';
+import { svgToEditableGroup } from './svg-to-shapes.js';
 import { editableShapePath, shapePathHandles, shapeLocalPoint, moveShapePoint, deleteShapePoint, insertShapePoint, normalizeEditedShape } from './shape-edit.js';
 import { OBJECT_PROPS, OBJECT_LABEL, SHAPE_KINDS, SHAPE_GROUPS, LINE_SHAPES, newShape, findObject, shapeSvg, isShapeLine } from './shapes.js';
 import { createShapeFormatPanel } from './shape-format-ui.js';
@@ -1384,7 +1390,7 @@ function onGridKey(e) {
 
   if (k === 'Escape') endBorderDraw();
   if (k === 'Escape' && drag?.type === 'objectLink') { handled(); drag = null; stopAutoScroll(); return; }
-  if (k === 'Escape' && (drawKind || drawPathState || drag?.type === 'draw' || shapePointDrag)) {
+  if (k === 'Escape' && (drawKind || drawPathState || drag?.type === 'draw' || shapePointDrag || paletteTool !== 'select')) {
     handled();
     if (drag?.type === 'draw') { sheet().shapes = sheet().shapes.filter((o) => o.id !== drag.id); drag = null; chartSel = null; }
     shapePointDrag = null; endDraw(); gv.renderObjectsAll(); return;
@@ -1864,6 +1870,12 @@ function onViewMouseDown(e) {
   if (e.target === dom.editor || dom.ac.contains(e.target)) return;
   closeMenus();
   const t = e.target;
+  if (paletteTool === 'eraser' && e.button === 0) {
+    e.preventDefault(); const id = t.closest('.obj')?.dataset.id, f = id && findObject(sheet(), id);
+    if (f?.prop === 'shapes' && f.obj.ink === true && !viewOnly && !wb.props?.markedFinal && !protectBlocked('objects')) deleteObject(id);
+    return;
+  }
+  if (t.closest('[data-media-play]')) { e.preventDefault(); playMedia(t.closest('.obj')?.dataset.id); return; }
   if (onPathDrawingMouseDown(e) || onShapePointMouseDown(e)) return;
   if (t.closest('.pv-classic-field, .pv-classic-zone')) {
     e.stopPropagation();
@@ -1927,17 +1939,18 @@ function onViewMouseDown(e) {
   }
   if (drawKind) {
     e.preventDefault();
-    if (viewOnly || protectBlocked('objects')) { endDraw(); return; }
+    if (viewOnly || wb.props?.markedFinal || protectBlocked('objects')) { endDraw(); return; }
     const hit = gv.hitTest(e.clientX, e.clientY);
     const kind = drawKind;
-    endDraw();
+    const repeatTool = paletteTool;
+    endDraw(true);
     if (hit.zone !== 'cell' || e.button !== 0) return;
     if (editing && !commitEdit()) return;
     focusGrid();
-    const temp = newShape(kind, { x: Math.round(hit.sheetX), y: Math.round(hit.sheetY), w: 0, h: 0 });
+    const temp = paletteShape(newShape(kind, { x: Math.round(hit.sheetX), y: Math.round(hit.sheetY), w: 0, h: 0 }));
     sheet().shapes.push(temp);
     chartSel = temp.id;
-    drag = { type: 'draw', id: temp.id, x0: hit.sheetX, y0: hit.sheetY, start: { x: e.clientX, y: e.clientY } };
+    drag = { type: 'draw', book: wb, host: sheet(), si, repeatTool, id: temp.id, x0: hit.sheetX, y0: hit.sheetY, start: { x: e.clientX, y: e.clientY } };
     gv.renderObjectsAll();
     return;
   }
@@ -2026,9 +2039,9 @@ function onViewMouseDown(e) {
     }
     if (viewOnly || (o.locked !== false && protectBlocked('objects'))) return;
     // 크기 조정 및 이동 사용 안 함 (엑셀 슬라이서 [위치 및 속성]): 선택만 되고 끌어도 움직이지 않음
-    if (o.noMove) return;
+    if (o.noMove) { objMulti.clear(); gv.renderObjectsAll(); updateSelectionUI(); return; }
     const corner = t.classList.contains('ch-h') ? [...t.classList].find((c) => ['nw', 'ne', 'sw', 'se'].includes(c)) : null;
-    drag = { type: 'obj', prop: found.prop, id, corner, shift: e.shiftKey, start: { x: e.clientX, y: e.clientY }, orig: { x: o.x, y: o.y, w: o.w, h: o.h } };
+    drag = { type: 'obj', singleOnClick: !!objMulti.size && !e.ctrlKey && !e.metaKey && !e.shiftKey, prop: found.prop, id, corner, shift: e.shiftKey, start: { x: e.clientX, y: e.clientY }, orig: { x: o.x, y: o.y, w: o.w, h: o.h } };
     return;
   }
   if (t.classList.contains('fill-handle')) {
@@ -2363,6 +2376,7 @@ function onDragMove(x, y) {
       break;
     }
     case 'draw': {
+      if(drag.book!==wb||drag.host!==sheet()||drag.si!==si){endDraw();break;}
       const sh = sheet().shapes.find((xx) => xx.id === drag.id);
       if (!sh) break;
       let dx = (x - drag.start.x) / gv.z;
@@ -2424,7 +2438,7 @@ function onDragEnd() {
       break;
     }
     case 'obj': {
-      if (!d.moved) break;
+      if (!d.moved) { if(d.singleOnClick){objMulti.clear();gv.renderObjectsAll();updateSelectionUI();selPaneDlg?.redraw?.();} break; }
       const list = sheet()[d.prop];
       const ch = list.find((x) => x.id === d.id);
       if (!ch) break;
@@ -2434,15 +2448,17 @@ function onDragEnd() {
       break;
     }
     case 'draw': {
-      const list = sheet().shapes;
+      const list = d.host?.shapes ?? [];
       const i = list.findIndex((x) => x.id === d.id);
       if (i < 0) break;
       const [temp] = list.splice(i, 1);
+      if(d.book!==wb||d.host!==sheet()||d.si!==si||viewOnly||wb.props?.markedFinal||protectBlocked('objects')){endDraw();break;}
       if (LINE_SHAPES.has(temp.kind) ? temp.w + temp.h < 4 : temp.w < 4 || temp.h < 4) {
         Object.assign(temp, LINE_SHAPES.has(temp.kind) ? { w: 150, h: 0, flip: false } : temp.kind === 'textbox' ? { w: 160, h: 48 } : { w: 150, h: 90 });
       }
       addObject('shapes', temp);
       if (temp.kind === 'textbox') shapeDialog(temp.id);
+      if (d.repeatTool !== 'select' && paletteTool === d.repeatTool) setPaletteTool(d.repeatTool);
       break;
     }
     case 'select':
@@ -3347,12 +3363,13 @@ const PROTECT_FREE = new Set(['mobileWorkMode', 'mobileTools', 'mobileFit','priv
   'outlineShow', 'outlineHide', 'freezePanes', 'freezeTop', 'freezeFirstCol', 'circleInvalid', 'clearCircles', 'macros', 'prevComment', 'nextComment',
   'workbookStats', 'toggleGrid', 'togglePrintGrid', 'toggleFormulaBar', 'toggleHeaders', 'toggleFormulas', 'toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100',
   'recalc', 'shortcuts', 'about', 'whatsNew', 'protectSheet', 'unprotectSheet', 'protectWorkbook', 'fileInfo', 'addSheet', 'deleteSheet', 'duplicateSheet',
-  'hideSheet', 'unhideSheet', 'importCsv', 'exportCsv', 'selectPrecedents', 'selectDependents', 'selectComments', 'pageSetup', 'printArea', 'clearPrintArea',
+  'hideSheet', 'unhideSheet', 'importCsv', 'exportCsv', 'exportHtml', 'exportPdf', 'fullScreen', 'selectPrecedents', 'selectDependents', 'selectComments', 'pageSetup', 'printArea', 'clearPrintArea',
   'pageFitWidth', 'pageFitHeight', 'pageScale', 'orientPortrait', 'orientLandscape', 'insertFunction', 'allowEditRanges', 'unshareWorkbook', 'toggleComment', 'showAllComments', 'hideAllComments', 'selectionPane']);
 const PROTECT_BLOCK = new Set(['mergeCenter', 'unmerge', 'createTable', 'condManager', 'condNewRule', 'condMenuKey', 'condColorScale', 'condDataBar', 'tableStyleKey', 'dataValidation', 'insertPivot', 'outlineGroup',
   'outlineUngroup', 'outlineClear', 'subtotal', 'resizeTable', 'convertToRange', 'tblName', 'tblHeader', 'tblTotals', 'tblBanded', 'tblBandedCols', 'tblFirstCol',
   'tblLastCol', 'tblFilter', 'textToColumns', 'dedupe', 'sparkLine', 'sparkColumn', 'sparkWinLoss', 'sparkClear', 'sparkEdit']);
 const PROTECT_MAP = {
+  drawingPalette: 'objects', insertGif: 'objects', insertVideo: 'objects', iconToShapes: 'objects', shapeUnion: 'objects', shapeCombine: 'objects', shapeFragment: 'objects', shapeIntersect: 'objects', shapeSubtract: 'objects', alternatingColors: 'formatCells',
   insertRows: 'insertRows', insertCols: 'insertColumns', deleteRows: 'deleteRows', deleteCols: 'deleteColumns', sortAsc: 'sort', sortDesc: 'sort', sortDialog: 'sort',
   clearFilter: 'autoFilter', reapplyFilter: 'autoFilter', advancedFilter: 'autoFilter', toggleFilter: 'autoFilter', hideRows: 'formatRows', unhideRows: 'formatRows', autofitRowsSel: 'formatRows',
   hideCols: 'formatColumns', unhideCols: 'formatColumns', colWidth: 'formatColumns', rowHeight: 'formatRows', autofitSel: 'formatColumns', refreshAll: 'pivotTables', calcField: 'pivotTables', slicerConnections: 'pivotTables',
@@ -8957,6 +8974,7 @@ function objectMenu(id, pos) {
     { label: '붙여넣기', icon: 'paste', key: 'Ctrl+V', disabled: !objClip, action: pasteObject },
     { sep: true },
   ];
+  if (normalizeVideo(f.obj.media)) items.push({ label: '영상 재생...', icon: 'picture', action: () => playMedia(id) });
   if (f.prop === 'shapes' || f.prop === 'images') {
     const link = drawingLinkAddress(f.obj.hyperlink);
     if (link) items.push({ label: '하이퍼링크 열기', key: 'Ctrl+Enter', action: () => openLink(link) });
@@ -9012,6 +9030,12 @@ function objectMenu(id, pos) {
         ],
       });
     }
+  }
+  if (f.prop === 'shapes' || f.prop === 'images') {
+    items.push({ sep: true }, { label: '그룹화', disabled: selectedObjects().length < 2, action: groupSelectedObjects },
+      { label: '그룹 해제', disabled: !selectedObjects().some(o => o.obj.kind === 'group' || canConvertSvg(o)), action: ungroupSelectedObjects });
+    if (canConvertSvg(f)) items.push({ label: 'SVG 도형 변환', action: convertSelectedSvg });
+    items.push({ label: '도형 병합', submenu: shapeMergeItems() });
   }
   items.push(
     { sep: true },
@@ -9412,19 +9436,27 @@ async function fetchImageData(url) {
 }
 
 /** 온라인 그림 검색은 독립 UI에서 수행하고 삽입은 원래 문서·시트를 확인해 확정한다. */
-function onlinePictureDialog(inCell) {
+function onlinePictureDialog(inCell, kind = 'image') {
   const book = wb, host = si, target = sheet(), cell = { ...active }, origin = objectOrigin();
-  const valid = () => wb === book && si === host && sheet() === target && !viewOnly;
+  const valid = () => wb === book && si === host && sheet() === target && !viewOnly && !wb.props?.markedFinal;
   const check = count => {
     if (!valid()) throw new Error('문서 또는 시트가 바뀌었습니다. 현재 시트에서 그림 삽입을 다시 여세요.');
     if (inCell && cell.r + count > MAX_ROWS) throw new Error('그림을 배치할 행이 부족합니다.');
     if (protectBlocked(inCell ? 'cells' : 'objects', { r1: cell.r, c1: cell.c, r2: cell.r + count - 1, c2: cell.c })) throw new Error('보호된 위치에는 그림을 삽입할 수 없습니다.');
   };
-  onlinePicturePicker({ onInsert: async list => {
+  onlinePicturePicker({ kind, allowVideo: !inCell, onInsert: async list => {
     check(list.length);
     const ready = [];
     for (const it of list) {
-      const src = (await fetchImageData(it.full)) ?? it.full;
+      if(it.kind === 'video') {
+        if(inCell)throw new Error('영상은 셀 위 개체로 삽입하세요.');
+        const media=normalizeVideo({...it,src:it.full});if(!media)throw new Error('올바른 영상 주소를 확인하세요.');
+        const poster=it.poster ? await fetchImageData(it.poster) : null;
+        check(list.length);ready.push({src:poster||VIDEO_POSTER,media,hyperlink:{target:media.src},name:it.title||'영상',w:480,h:270});continue;
+      }
+      const embedded = it.linkOnly ? null : await fetchImageData(it.full);
+      if(it.embedRequired&&!embedded)throw new Error('이 출처의 그림은 파일에 포함해야 합니다. 다운로드할 수 없어 삽입하지 않았습니다.');
+      const src = embedded ?? it.full;
       check(list.length);
       const img = await new Promise((resolve, reject) => {
         const image = new Image();
@@ -9456,6 +9488,14 @@ function onlinePictureDialog(inCell) {
     gv.renderObjectsAll(); updateSelectionUI(); focusGrid();
     if (ready.some(it => !it.src.startsWith('data:'))) toast('일부 그림은 웹 연결로 삽입했습니다. 원본 사이트 연결이 필요합니다.');
   } });
+}
+
+function playMedia(id) {
+  const object=findObject(sheet(),id)?.obj,media=normalizeVideo(object?.media);if(!media)return;
+  const player=el('video',{controls:true,playsinline:true,preload:'metadata',src:media.src,'aria-label':object.name||'영상',style:{width:'100%',maxHeight:'60vh',background:'#111',borderRadius:'10px'}});
+  const message=el('p',{class:'muted',role:'status'},'재생 버튼을 누르세요. 온라인 영상은 원본 사이트 연결이 필요합니다.');
+  player.addEventListener('error',()=>{message.textContent='이 주소는 브라우저에서 재생할 수 없습니다. 원본 주소를 열거나 MP4/WebM 직접 주소를 사용하세요.';});
+  openDialog({title:object.name||'영상 재생',width:800,body:el('div',{},player,message,el('a',{href:media.src,target:'_blank',rel:'noopener noreferrer'},'영상 원본 열기'),el('p',{class:'muted'},'Excel 파일에는 미리 보기 그림과 영상 링크가 저장됩니다. 위셀에서 다시 열면 재생할 수 있습니다.')),onClose:()=>{player.pause();player.removeAttribute('src');player.load();},buttons:[{label:'닫기'}]});
 }
 
 function resetImageSize(id) {
@@ -9498,6 +9538,73 @@ function smartArtDialog(id = null) {
     chartSel = next.id; gv.renderObjectsAll(); updateSelectionUI(); return true;
   };
   openSmartArtEditor({ shape, onCommit: draft => save(draft), ...(old ? { onConvert: draft => save(draft, true) } : {}) });
+}
+
+let drawingPalette = null, paletteTool = 'select', paletteSettings = { color: '#185c45', width: 3, opacity: 1 };
+function paletteShape(shape) {
+  if (!drawingPalette || paletteTool === 'select') return shape;
+  return { ...shape, ink: true, fill: null, stroke: paletteSettings.color, strokeWidth: paletteTool === 'marker' ? Math.max(12, paletteSettings.width) : paletteSettings.width, strokeOpacity: paletteTool === 'marker' ? Math.min(.35, paletteSettings.opacity) : paletteSettings.opacity, lineCap: 'rnd', lineJoin: 'round' };
+}
+function setPaletteTool(tool) {
+  endDraw(true); endBorderDraw(); paletteTool = tool; drawingPalette?.select(tool);
+  dom.view.classList.toggle('palette-inking', tool !== 'select');
+  if (!['select', 'eraser'].includes(tool)) startDraw({ pen:'scribble', marker:'scribble', arrow:'lineArrow' }[tool] || tool, true);
+  focusGrid();
+}
+function openDrawingPalette() {
+  if (drawingPalette) { drawingPalette.root.querySelector('button')?.focus(); return; }
+  if (viewOnly || wb.props?.markedFinal || protectBlocked('objects')) return;
+  drawingPalette = createDrawingPalette({ onTool:setPaletteTool, onSettings:v => { paletteSettings=v; }, onUndo:()=>{endDraw();run('undo');}, onRedo:()=>{endDraw();run('redo');}, onClose:()=>{endDraw();drawingPalette.close();drawingPalette=null;focusGrid();} });
+  setPaletteTool('pen');
+}
+function bindPalettePointer() {
+  let pointer = null;
+  dom.view.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'mouse' || paletteTool === 'select' || !e.isPrimary) return;
+    pointer = e.pointerId; e.preventDefault(); e.stopPropagation(); dom.view.setPointerCapture(e.pointerId); onViewMouseDown(e);
+  }, { capture:true });
+  dom.view.addEventListener('pointermove', e => { if(e.pointerId !== pointer)return; e.preventDefault();onDragMove(e.clientX,e.clientY); }, { capture:true });
+  dom.view.addEventListener('pointerup', e => { if(e.pointerId !== pointer)return; e.preventDefault();pointer=null;onDragEnd(); }, { capture:true });
+  dom.view.addEventListener('pointercancel', e => { if(e.pointerId !== pointer)return;pointer=null;endDraw(); });
+}
+async function toggleFullScreen() {
+  const active = !!document.fullscreenElement || document.body.classList.contains('wixel-fullscreen');
+  if(active) { if(document.fullscreenElement) await document.exitFullscreen(); document.body.classList.remove('wixel-fullscreen'); }
+  else { try { await document.documentElement.requestFullscreen(); } catch { document.body.classList.add('wixel-fullscreen'); } }
+  refreshFullScreen();
+}
+function refreshFullScreen() {
+  const active = !!document.fullscreenElement || document.body.classList.contains('wixel-fullscreen');
+  let button = document.getElementById('exitFullScreen');
+  if(active&&!button){button=el('button',{id:'exitFullScreen',class:'btn fullscreen-exit',onclick:toggleFullScreen},'전체화면 종료');document.body.append(button);}
+  if(!active)button?.remove(); updateRibbon(); requestAnimationFrame(()=>gv?.layout());
+}
+document.addEventListener('fullscreenchange', refreshFullScreen);
+document.addEventListener('keydown', e=>{if(e.key==='Escape'&&document.body.classList.contains('wixel-fullscreen')){document.body.classList.remove('wixel-fullscreen');refreshFullScreen();}},true);
+async function exportHtmlFile(name = docName) {
+  const done = await saveWithPicker(`${safeFileName(name)}.html`, () => { const html=printSheet({htmlOnly:true,name});return html?new Blob([html],{type:'text/html;charset=utf-8'}):null; });
+  if(done)toast(`'${done.name}' 웹페이지를 저장했습니다.`);
+  return done;
+}
+function alternatingColorsDialog() {
+  const book=wb,host=sheet(),hostIndex=si,initial=selKind==='cells'?{...sel}:usedClip(sel);
+  const ref=el('input',{value:`${cellName(initial.r1,initial.c1)}:${cellName(initial.r2,initial.c2)}`,'aria-label':'교차색상 범위'});
+  const header=el('input',{type:'checkbox',checked:true,'aria-label':'머리글'}),footer=el('input',{type:'checkbox','aria-label':'바닥글'});
+  const colors=BANDING_PALETTES[0].slice(1).map((value,i)=>el('input',{type:'color',value,'aria-label':['머리글 색','첫째 색','둘째 색','바닥글 색'][i],oninput:()=>preview()}));
+  const sample=el('div',{class:'banding-preview','aria-label':'교차색상 미리 보기'});
+  const preview=()=>{sample.replaceChildren(...Array.from({length:6},(_,i)=>el('div',{style:{background:colors[header.checked&&i===0?0:footer.checked&&i===5?3:1+(i-(header.checked?1:0)+2)%2].value,color:header.checked&&i===0?'#fff':'#223'}},el('span',{},header.checked&&i===0?'항목':`데이터 ${i+1}`),el('span',{},header.checked&&i===0?'금액':'12,500'))));};
+  header.onchange=footer.onchange=preview;
+  const grid=el('div',{class:'banding-palettes'},BANDING_PALETTES.map(([label,...cs])=>el('button',{type:'button',title:label,'aria-label':label,onclick:()=>{colors.forEach((c,i)=>c.value=cs[i]);preview();}},...cs.slice(0,3).map(c=>el('i',{style:{background:c}})),el('span',{},label))));
+  const apply=remove=>{
+    if(book!==wb||host!==sheet()||hostIndex!==si||viewOnly||wb.props?.markedFinal)throw new Error('현재 문서에서 교차색상을 다시 여세요.');
+    const area=parseRangeName(ref.value.trim().replace(/\$/g,''));if(!area)throw new Error('올바른 범위를 입력하세요. 예: A1:F20');
+    if(protectBlocked('formatCells',area))return false;
+    const keep=(host.cond??[]).filter(r=>!(isBandingRule(r)&&['r1','c1','r2','c2'].every(k=>r[k]===area[k])));
+    const next=remove?keep:[...alternatingRules(area,{colors:colors.map(c=>c.value),header:header.checked,footer:footer.checked}),...keep];
+    wb.transact(()=>wb.setSheetProp(si,'cond',next),meta());gv.renderAll();
+  };
+  preview();
+  openDialog({title:'교차색상',width:620,body:el('div',{class:'banding-dialog'},el('label',{},'적용 범위',ref),el('div',{class:'banding-checks'},el('label',{},header,'머리글'),el('label',{},footer,'바닥글')),grid,el('div',{class:'banding-work'},sample,el('div',{class:'banding-custom'},colors.map((c,i)=>el('label',{},['머리글','첫째 색','둘째 색','바닥글'][i],c)))),el('p',{class:'muted'},'셀 값과 직접 서식을 유지합니다. Excel 저장 후에도 교차색상이 유지됩니다.')),buttons:[{label:'교차색상 제거',action:()=>apply(true)},{label:'적용',primary:true,action:()=>apply(false)},{label:'취소'}]});
 }
 
 /** 도형 갤러리 (엑셀처럼 분류별 견본 격자) — noLines: 도형 모양 변경용 */
@@ -9566,9 +9673,9 @@ function onPathDrawingMouseDown(event) {
   if (!FREE_DRAW_KINDS.has(drawKind)) return false;
   event.preventDefault();
   if (event.button !== 0) return true;
-  if (viewOnly || protectBlocked('objects')) { endDraw(); return true; }
+  if (viewOnly || wb.props?.markedFinal || protectBlocked('objects')) { endDraw(); return true; }
   const point = drawPoint(event.clientX, event.clientY); if (!point) return true;
-  if (!drawPathState) drawPathState = { wb, si, kind: drawKind, points: [], base: newShape(drawKind, { x: 0, y: 0, w: 1, h: 1 }) };
+  if (!drawPathState) drawPathState = { wb, si, host: sheet(), kind: drawKind, points: [], base: paletteShape(newShape(drawKind, { x: 0, y: 0, w: 1, h: 1 })) };
   const d = drawPathState;
   if (d.kind !== 'scribble' && event.detail >= 2 && d.points.length >= 2) { finishPathDraw(false); return true; }
   if (d.kind !== 'scribble' && d.points.length >= 3 && Math.hypot(point[0] - d.points[0][0], point[1] - d.points[0][1]) * gv.z < 7) { finishPathDraw(true); return true; }
@@ -9589,28 +9696,36 @@ function finishPathDraw(closed) {
   const d = drawPathState;
   if (!d) { endDraw(); return; }
   const points = d.points.filter((p, i, a) => !i || Math.hypot(p[0] - a[i - 1][0], p[1] - a[i - 1][1]) > 0.001);
-  const valid = d.wb === wb && d.si === si && points.length >= (closed ? 3 : 2);
-  endDraw(); suppressShapeDoubleClickUntil = Date.now() + 400;
-  if (valid && !viewOnly && !protectBlocked('objects')) {
+  const valid = d.wb === wb && d.si === si && d.host === sheet() && points.length >= (closed ? 3 : 2);
+  const repeatTool = paletteTool;
+  endDraw(true); suppressShapeDoubleClickUntil = Date.now() + 400;
+  if (valid && !viewOnly && !wb.props?.markedFinal && !protectBlocked('objects')) {
     const shape = { ...d.base, ...shapeFromPoints(d.kind, points, { closed }) };
     if (closed) shape.fill = '#4472c4';
     addObject('shapes', shape);
   }
   gv.renderObjectsAll(); focusGrid();
+  if (repeatTool !== 'select' && paletteTool === repeatTool) setPaletteTool(repeatTool);
 }
-function startDraw(kind) {
+function startDraw(kind, fromPalette = false) {
   if (editing && !commitEdit()) return;
-  if (viewOnly || protectBlocked('objects')) return;
-  endDraw(); endBorderDraw(); shapeEdit = null; shapePointDrag = null;
+  if (viewOnly || wb.props?.markedFinal || protectBlocked('objects')) return;
+  endDraw(fromPalette); endBorderDraw(); shapeEdit = null; shapePointDrag = null;
   if (painter) { painter = null; dom.view.classList.remove('painting'); setMode(); updateRibbon(); }
   drawKind = kind; deselectChart();
   dom.view.classList.add('drawing-mode');
   const label = SHAPE_KINDS.find((k) => k.id === kind)?.label ?? '도형';
-  toast(kind === 'scribble' ? '마우스를 누른 채 자유곡선을 그리세요. 놓으면 완료, Esc는 취소합니다.'
+  if (!fromPalette) toast(kind === 'scribble' ? '마우스를 누른 채 자유곡선을 그리세요. 놓으면 완료, Esc는 취소합니다.'
     : FREE_DRAW_KINDS.has(kind) ? `${label}: 점을 클릭하고 더블클릭 또는 Enter로 완료하세요. 시작점을 클릭하면 닫힙니다. Esc는 취소합니다.`
       : `시트를 끌어서 ${label}을(를) 그리세요. 클릭하면 기본 크기로 들어갑니다. (Esc: 취소)`);
 }
-function endDraw() {
+function endDraw(keepPalette = false) {
+  if (drag?.type === 'draw') {
+    const d=drag;drag=null;
+    const list=d.host?.shapes;if(list){const at=list.findIndex(o=>o.id===d.id);if(at>=0)list.splice(at,1);}
+    if(chartSel===d.id)chartSel=null;
+  }
+  if (!keepPalette) { paletteTool = 'select'; drawingPalette?.select('select'); dom.view?.classList.remove('palette-inking'); }
   drawKind = null; drawPathState = null;
   dom.view.classList.remove('drawing-mode');
   gv?.renderObjectsAll();
@@ -9761,17 +9876,52 @@ function groupSelectedObjects() {
   },meta());
   objMulti.clear();chartSel=group.id;gv.renderObjectsAll();updateSelectionUI();
 }
+function canConvertSvg(f) {
+  return f?.prop === 'images' && (!!f.obj.icon || /^data:image\/svg\+xml[;,]/i.test(f.obj.src ?? ''));
+}
+function editableSvgGroup(f) {
+  const o = f.obj;
+  if (o.crop && Object.values(o.crop).some(Number)) throw new Error('자르기를 원래대로 되돌린 뒤 SVG 도형으로 변환하세요.');
+  let text;
+  if (o.icon) text = iconSvgText(o.icon, o.icon.fill ?? '#000000');
+  else {
+    const comma = o.src.indexOf(','), header = o.src.slice(0, comma), body = o.src.slice(comma + 1);
+    text = /;base64/i.test(header) ? new TextDecoder().decode(Uint8Array.from(atob(body), c => c.charCodeAt(0))) : decodeURIComponent(body);
+  }
+  const group = svgToEditableGroup(text, o);
+  for (const key of ['z', 'locked', 'placement', 'noMove', 'noResize']) if (o[key] !== undefined) group[key] = o[key];
+  return group;
+}
+function convertSelectedSvg() {
+  const list = selectedObjects().filter(canConvertSvg);
+  if (!list.length) { toast('SVG 아이콘이나 SVG 그림을 선택하세요.'); return; }
+  if (objectEditBlocked()) return;
+  let groups;
+  try { groups = list.map(editableSvgGroup); } catch (e) { toast(e.message); return; }
+  const ids = new Set(list.map(f => f.obj.id));
+  wb.transact(() => {
+    wb.setSheetProp(si, 'images', (sheet().images ?? []).filter(o => !ids.has(o.id)));
+    wb.setSheetProp(si, 'shapes', [...(sheet().shapes ?? []), ...groups]);
+  }, meta());
+  objMulti.clear(); chartSel = groups[0]?.id; for (const group of groups.slice(1)) objMulti.add(group.id);
+  gv.renderObjectsAll(); updateSelectionUI();
+  toast('편집 가능한 도형 그룹으로 변환했습니다. 그룹 해제로 각 부분을 편집할 수 있습니다.');
+}
 function ungroupSelectedObjects() {
-  const list=selectedObjects().filter(f=>f.obj.kind==='group');
-  if(!list.length) { toast('그룹화된 개체를 선택하세요.'); return; }
+  const list=selectedObjects().filter(f=>f.obj.kind==='group'||canConvertSvg(f));
+  if(!list.length) { toast('그룹화된 개체나 SVG 아이콘을 선택하세요.'); return; }
   if(objectEditBlocked()) return;
+  const groups=new Map();
+  try { for(const f of list) groups.set(f.obj.id,canConvertSvg(f)?editableSvgGroup(f):f.obj); }
+  catch(e) { toast(e.message); return; }
   const ids=new Set(list.map(f=>f.obj.id)),parts=[],ordered=[];
   const all=OBJECT_PROPS.flatMap(prop=>(sheet()[prop]??[]).map(obj=>({prop,obj}))).sort((a,b)=>(a.obj.z??0)-(b.obj.z??0));
   const usedIds=new Set(all.filter(f=>!ids.has(f.obj.id)).map(f=>f.obj.id));
   for(const f of all) {
     if(!ids.has(f.obj.id)){ordered.push(f);continue;}
-    for(const o of ungroupObjects(f.obj)) {
-      if(!o.id||usedIds.has(o.id))o.id='ung'+Date.now().toString(36)+Math.random().toString(36).slice(2,7);
+    for(const o of ungroupObjects(groups.get(f.obj.id))) {
+      if(!o.id||usedIds.has(o.id))o.id=newObjId('ung');
+      for(const key of ['locked','placement','noMove','noResize','hidden']) if(f.obj[key]!==undefined&&o[key]===undefined)o[key]=f.obj[key];
       usedIds.add(o.id);parts.push(o);
       const prop=o.kind==='picture'?'images':'shapes';
       if(prop==='images')delete o.kind;
@@ -9783,6 +9933,29 @@ function ungroupSelectedObjects() {
   },meta());
   objMulti.clear();chartSel=parts[0]?.id;for(const o of parts.slice(1))objMulti.add(o.id);
   gv.renderObjectsAll();updateSelectionUI();
+}
+function mergeSelectedShapes(operation) {
+  const list=selectedObjects();
+  if(list.length<2) { toast('Ctrl을 누른 채 면적이 있는 도형을 두 개 이상 선택하세요.'); return; }
+  if(list.some(f=>f.prop!=='shapes'||f.obj.kind==='group'||isSmartArt(f.obj))) { toast('SVG는 도형 변환 후 그룹을 해제하고, 일반 도형만 함께 선택하세요.'); return; }
+  if(objectEditBlocked()) return;
+  let result;
+  try { result=mergeShapes(list.map(f=>f.obj),operation); } catch(e) { toast(e.message); return; }
+  const ids=new Set(list.map(f=>f.obj.id)),z=maxOf(list.map(f=>f.obj.z??0));
+  wb.transact(()=>wb.setSheetProp(si,'shapes',[...(sheet().shapes??[]).filter(o=>!ids.has(o.id)),...result.map((o,i)=>({...o,z:z+i/Math.max(1,result.length)}))]),meta());
+  objMulti.clear();chartSel=result[0]?.id??null;for(const o of result.slice(1))objMulti.add(o.id);
+  gv.renderObjectsAll();updateSelectionUI();
+  if(!result.length)toast('남는 영역이 없어 선택한 도형을 제거했습니다. Ctrl+Z로 복원할 수 있습니다.');
+}
+function shapeMergeItems() {
+  const list=selectedObjects(),disabled=list.length<2||list.some(f=>f.prop!=='shapes'||f.obj.kind==='group'||isSmartArt(f.obj));
+  return [
+    ['결합(U)','union','겹친 경계를 합쳐 하나의 도형으로 만듭니다.'],
+    ['병합(C)','combine','겹친 부분을 비우고 나머지를 하나의 도형으로 만듭니다.'],
+    ['조각(F)','fragment','교차 경계마다 별도로 편집할 수 있는 도형으로 나눕니다.'],
+    ['교차(I)','intersect','모든 선택 도형이 겹친 영역만 남깁니다.'],
+    ['빼기(S)','subtract','먼저 선택한 도형에서 나중에 선택한 도형의 영역을 뺍니다.'],
+  ].map(([label,op,desc])=>({label,desc,disabled,action:()=>mergeSelectedShapes(op)}));
 }
 
 /** 맞춤 · 배분 (여러 개체: 선택 영역 기준, 하나: 보이는 화면 기준이 아니라 격자(셀)에 맞춤) */
@@ -13151,6 +13324,8 @@ function saveAs() {
         ...(wb.vba ? [{ value: 'xlsx', label: 'Excel 통합 문서 (*.xlsx) — 매크로 제외' }] : [{ value: 'xlsm', label: 'Excel 매크로 사용 통합 문서 (*.xlsm)' }]),
         { value: 'xltx', label: 'Excel 서식 파일 (*.xltx)' },
         { value: 'xltm', label: 'Excel 매크로 사용 서식 파일 (*.xltm)' },
+        { value: 'html', label: '웹페이지 (*.html) — 현재 시트' },
+        { value: 'pdf', label: 'PDF (*.pdf) — 현재 시트 인쇄 미리보기' },
         { value: 'ods', label: 'OpenDocument 스프레드시트 (*.ods)' },
         { value: 'wixel', label: 'WIXEL 통합 문서 (*.wixel) — 행 제한 없음' },
         { value: 'csv', label: 'CSV UTF-8 (쉼표로 분리) (*.csv) — 현재 시트' },
@@ -13163,6 +13338,8 @@ function saveAs() {
     const newName = name.trim() || docName;
     const savingBook = wb, savingId = docId;
     if (type === 'server') { saveNow(true, { saveAsFolder: true, suggestedName: newName }); return; }
+    if (type === 'html') { await exportHtmlFile(newName); return; }
+    if (type === 'pdf') { printSheet({ pdf: true, name: newName }); return; }
     let done;
     if (XLSX_KINDS[type]) done = await exportXlsx(newName, type);
     else if (type === 'csv' || type === 'tsv' || type === 'txt') done = await exportCsv(type, newName);
@@ -14523,6 +14700,8 @@ function openBackstage(panel = 'new') {
     main.replaceChildren(hubHeading('공유 · 내보내기', '필요한 형태로 전달하세요', '파일로 보내거나 읽기 전용 링크를 만드세요.'),
     el('div', { class: 'hub-grid two' },
       hubCard('save', 'Excel 통합 문서', '수식 · 서식 · 여러 시트를 .xlsx 파일로 저장', () => exportXlsx()),
+      hubCard('webData', '웹페이지 HTML', '현재 시트의 표 · 서식 · 차트를 웹페이지 파일로 저장', () => { close(); exportHtmlFile(); }),
+      hubCard('print', 'PDF 문서', '용지 · 여백 · 쪽 나눔을 확인하고 PDF 파일로 저장', () => { close(); printSheet({ pdf: true }); }),
       hubCard('csvOut', 'CSV 데이터', '현재 시트의 값을 UTF-8 CSV 파일로 저장', () => exportCsv()),
       hubCard('table', '다른 형식으로 저장', 'XLSM · ODS · WIXEL · TSV 등', () => { close(); saveAs(); }),
       hubCard('webData', '읽기 전용 링크 공유', '선택한 문서 내용을 링크가 있는 누구나 열람', () => { close(); publishDialog(); })),
@@ -14643,7 +14822,7 @@ function openBackstage(panel = 'new') {
 }
 
 /** 인쇄: 사용한 범위를 표로 만들어 인쇄 */
-function printSheet() {
+function printSheet({ htmlOnly = false, pdf = false, name = docName } = {}) {
   const s = sheet();
   const pg = normPage(s.page);
   const u = wb.usedRange(si);
@@ -14665,6 +14844,7 @@ function printSheet() {
   const hdr = pg.header ? hf(pg.header) : { left: '', center: `${docName} — ${s.name}`, right: '' };
   const parts = [`<div class="print-hf">${['left', 'center', 'right'].map((k) => `<span>${escapeHtml(hdr[k])}</span>`).join('')}</div>`];
   const colsList = range(c1, c2).filter((c) => !gv.cols.isHidden(c));
+  const printCond = prepareCond(wb, si);
   const gridOn = pg.gridlines || view.printGrid;
   let tableW = 0;
   let tableH = 0;
@@ -14683,7 +14863,8 @@ function printSheet() {
         const key = `${r},${c}`, merge = mergeMap.get(key);
         if (mergeMap.has(key) && !merge) continue;
         const cellR = merge?.r ?? r, cellC = merge?.c ?? c;
-        const st = styleAt(cellR, cellC);
+        const table = tableAt(s, cellR, cellC);
+        const st = { ...(table ? tableCellStyle(table, cellR, cellC) : {}), ...styleAt(cellR, cellC), ...condFormatAt(printCond, wb, si, cellR, cellC, valueAt(cellR, cellC)).style };
         const { text, align } = formatValue(valueAt(cellR, cellC), st, wb.date1904);
         const css = [`text-align:${st.align && st.align !== 'general' ? st.align === 'centerContinuous' ? 'center' : st.align : align}`, st.bold && 'font-weight:700', st.italic && 'font-style:italic', st.color && `color:${st.color}`,
           st.fill && `background:${st.fill}`, `font-family:${escapeHtml(fontStack(st.font || BASE_FONT.name))}`, `font-size:${st.size || BASE_FONT.size}pt`, st.wrap && 'white-space:pre-wrap',
@@ -14720,7 +14901,8 @@ function printSheet() {
   dom.printArea.style.cssText = 'display:block;position:fixed;left:-100000px;top:0;visibility:hidden;';
   try { for (const node of dom.printArea.querySelectorAll('[data-shape-print]')) fitShapeText(node, 'print'); }
   finally { dom.printArea.style.cssText = printCss; }
-  try { openPrintPreview({ source: dom.printArea, page: pg, name: docName, sheet: s.name }); }
+  if (htmlOnly) return htmlPrintDocument({ source: dom.printArea, page: pg, name, sheet: s.name });
+  try { openPrintPreview({ source: dom.printArea, page: pg, name, sheet: s.name, saveFile: saveWithPicker, pdfPreferred: pdf }); }
   catch (error) { alertDialog('인쇄 미리보기', error.message); }
 }
 
@@ -16780,9 +16962,10 @@ const MENUS = {
     { label: '눈금선 보기', icon: 'gridlines', checked: !sheet().noGrid, action: () => run('toggleGrid') },
     { sep: true }, { label: '선택한 개체를 셀 경계에 맞춤', action: () => alignObjects('grid') },
   ],
+  shapeMerge: shapeMergeItems,
   objGroup: () => [
     {label:'그룹화(G)',disabled:selectedObjects().length<2,action:()=>groupSelectedObjects()},
-    {label:'그룹 해제(U)',disabled:!selectedObjects().some(f=>f.obj.kind==='group'),action:()=>ungroupSelectedObjects()},
+    {label:'그룹 해제(U)',disabled:!selectedObjects().some(f=>f.obj.kind==='group'||canConvertSvg(f)),action:()=>ungroupSelectedObjects()},
   ],
   objRotate: () => [
     { label: '오른쪽으로 90도 회전', icon: 'rotate', action: () => rotateObjects('r90') }, { label: '왼쪽으로 90도 회전', action: () => rotateObjects('l90') },
@@ -17283,6 +17466,12 @@ const COMMANDS = {
   contextCellImageFloat: () => cellImageToFloating(active.r, active.c), contextCellImageAlt: () => cellImageAltDialog(active.r, active.c),
   objGroup: () => groupSelectedObjects(),
   objUngroup: () => ungroupSelectedObjects(),
+  iconToShapes: convertSelectedSvg,
+  shapeUnion: () => mergeSelectedShapes('union'),
+  shapeCombine: () => mergeSelectedShapes('combine'),
+  shapeFragment: () => mergeSelectedShapes('fragment'),
+  shapeIntersect: () => mergeSelectedShapes('intersect'),
+  shapeSubtract: () => mergeSelectedShapes('subtract'),
   selectionPane: () => selectionPaneDialog(),
   navigator: () => navigatorPane(),
   valueHighlight: () => { view.valueHighlight = !view.valueHighlight; gv.renderAll(); updateRibbon(); toast(view.valueHighlight ? '값 강조: 글자는 검정, 숫자는 파랑, 수식은 초록으로 표시합니다.' : '값 강조를 껐습니다.'); },
@@ -17644,6 +17833,13 @@ const COMMANDS = {
   freezeFirstCol: () => setFreeze(0, 1),
   shapeEditPoints: () => beginShapePointEdit(chartSel),
   shapeFormat: () => { if (chartSel) shapeDialog(chartSel); else toast('도형이나 선을 선택하세요.'); },
+  drawingPalette: openDrawingPalette,
+  alternatingColors: alternatingColorsDialog,
+  fullScreen: toggleFullScreen,
+  exportHtml: exportHtmlFile,
+  exportPdf: () => printSheet({ pdf: true }),
+  insertGif: () => onlinePictureDialog(false, 'gif'),
+  insertVideo: () => onlinePictureDialog(false, 'video'),
   insertSmartArt: () => smartArtDialog(),
   editSmartArt: () => { if (isSmartArt(findObject(sheet(), chartSel)?.obj)) smartArtDialog(chartSel); else toast('SmartArt를 선택하세요.'); },
   shapesMenu: () => startDraw('rect'),
@@ -17715,6 +17911,9 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileFit','toggleR
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['그리기와 도형 조합', ['펜·형광펜·선·도형·지우개 팔레트 · 색·굵기·불투명도 · 터치 그리기', 'SVG 아이콘을 편집 가능한 도형으로 변환 · 그룹 해제 후 부분별 색 변경', '두 개 이상 도형의 결합·병합·조각·교차·빼기 · 실행 취소']],
+  ['미디어와 SmartArt 확장', ['Unsplash·Pexels·Pixabay 검색 연결 · 서버 API 키 설정 시 사용', 'GIF 원본 삽입 · Wikimedia·NASA 영상 검색과 시트에서 재생', 'SmartArt 60종 · 8개 분류 · 검색·미리보기 · 그림·계층·색·스타일 편집']],
+  ['문서 출력과 작업 화면', ['파일 메뉴에서 웹페이지(HTML)와 PDF 다운로드 · 저장창으로 위치 선택', '홈 → 교차색상 · 머리글/바닥글과 8개 색상표 · XLSX 서식 유지', '보기 → 전체화면 · 화면 위 종료 버튼']],
   ['테두리 한 번 적용 후 일반 선택', ['테두리 그리기·눈금·지우기를 한 번 적용한 뒤 자동 종료하여 다음 셀 선택에 서식이 적용되지 않도록 수정', '선 종류 선택은 펜 설정만 변경 · 테두리 그리기 자동 시작 제거']],
   ['도형과 셀 테두리 작업 분리', ['도형 그리기·취소 뒤 셀 범위 선택만으로 테두리가 적용되는 오류 수정', '도형·테두리·서식 복사 도구 전환 시 이전 그리기 상태 종료 · 취소한 드래그 재적용 방지']],
   ['팝업 키보드와 서식 구성', ['텍스트 나누기 Enter는 다음→다음→마침 · 탭 구분 기호와 일반 서식 기본 선택', '팝업·하위 메뉴의 단축키 문자를 항상 표시 · 창 밖으로 빠진 초점 복원', '차트 데이터 원본의 확인 전 변경 방지 · 차트 이동 위치를 라디오로 선택', '도형 옵션/텍스트 옵션과 세부 범주 분리 · 선택한 도형에만 서식 적용 · 접힘·초점·스크롤 유지']],
@@ -17728,7 +17927,7 @@ const WHATS_NEW = [
   ['모바일 밀도·안정성', ['모바일 메뉴 크기 기본 촘촘하게 · 여유롭게 전환·설정 기억 · 원본 배율 유지', '숨김 행·열이 많은 문서의 격자·메모 표시 가속 · 겹친 표 필터의 행 위치 수정', '대용량 CSV 한글·빈 행·줄바꿈 보존 · 많은 행 가져오기 오류 수정', '늦게 도착한 온라인 문서가 현재 편집을 덮지 않도록 보호']],
   ['홈 화면 아이콘', ['위셀 전용 W 아이콘 · 아이폰/안드로이드 홈 화면 · PNG/ICO 파비콘', '앱 이름·테마·홈 화면 등록용 manifest 연결']],
   ['모바일 작업 모드', ['좌측 상단 화면 맞춤 아이콘 · 휴대전화 자동 감지 · 가로/세로 화면 대응', '스크롤 리본·시트 탭 · 전체 메뉴와 저장·설정에 접근하는 모바일 도구', '탭 선택·두 번 탭 편집·길게 누른 뒤 범위 선택·핀치 확대/축소', '작은 화면의 서식·차트·피벗 대화상자와 키보드 공간 조정 · 원본 배율 보존']],
-  ['페이지 레이아웃과 편집', ['SmartArt 20종 · 텍스트/계층/색 편집 · 도형/그림 그룹화', '테마 색·글꼴·효과 · 너비/높이 자동·인쇄 배율 · 정렬·선택 창·회전', '병합 셀·그림 위치를 반영한 인쇄 미리보기 · 일반 인쇄와 PDF 저장', '편집 허용 범위 · 메모 표시/숨기기 · 온라인 게시 공유 해제', 'Ctrl+Alt+V 선택하여 붙여넣기 12종 · 연산·빈 셀 건너뛰기·전치·연결']],
+  ['페이지 레이아웃과 편집', ['SmartArt 60종 · 텍스트/계층/색 편집 · 도형/그림 그룹화', '테마 색·글꼴·효과 · 너비/높이 자동·인쇄 배율 · 정렬·선택 창·회전', '병합 셀·그림 위치를 반영한 인쇄 미리보기 · 일반 인쇄와 PDF 저장', '편집 허용 범위 · 메모 표시/숨기기 · 온라인 게시 공유 해제', 'Ctrl+Alt+V 선택하여 붙여넣기 12종 · 연산·빈 셀 건너뛰기·전치·연결']],
   ['온라인 그림 검색', ['Creative Commons만 선택 옵션 · 기본 해제 · 여러 공개 이미지 사이트 통합 검색', '출처·이용 조건·원문 링크 표시 · 원본 그림 삽입 · 검색 취소와 중복 결과 제거']],
   ['차트 직접 편집', ['제목·범례를 끌거나 방향키로 이동 · 선택한 요소만 Delete · 실행 취소', '계열·데이터 요소를 선택하면 서식 창도 함께 전환 · Ctrl+1·더블클릭 · 선택한 막대·선·조각만 색 변경', '원형·도넛의 조각별 분리와 계열 분리 · 3차원 원형의 드래그 보정', 'Excel 수동 위치·조각 분리 저장 · 계열 삭제 후 원본 셀 참조 오류 수정']],
   ['선·자유곡선과 도형 서식', ['곡선·자유형·자유곡선 그리기 · 점 이동·추가·삭제 · 취소와 실행 취소', '채우기·선·효과·크기·텍스트를 조정하는 도형 서식 패널 · 선 끝·화살표 크기·무늬·겹선', '표준 XLSX 자유 경로 저장 · 텍스트 회전·축소 맞춤과 배율 변경 시 잘림 수정']],
@@ -17971,6 +18170,7 @@ function ribbonState() {
   const f = sheet().freeze ?? {};
   return {
     printFitW: String(normPage(sheet().page).fitW), printFitH: String(normPage(sheet().page).fitH), printScale: String(normPage(sheet().page).scale), printFitActive: !!(normPage(sheet().page).fitW || normPage(sheet().page).fitH),
+    fullScreenOn: !!document.fullscreenElement || document.body.classList.contains('wixel-fullscreen'),
     bold: st.bold, italic: st.italic, underline: st.underline, strike: st.strike, wrap: st.wrap,
     font: st.font || BASE_FONT.name, size: String(st.size || BASE_FONT.size), numFmt: st.numFmt === 'custom' ? 'custom' : fmt,
     alignLeft: st.align === 'left', alignCenter: st.align === 'center', alignRight: st.align === 'right',
@@ -18173,6 +18373,7 @@ function bindEvents() {
 
   bindClassicPivotGrid();
   dom.view.addEventListener('mousedown', onViewMouseDown);
+  bindPalettePointer();
   dom.view.addEventListener('dblclick', onViewDblClick);
   dom.view.addEventListener('mousemove', onViewMouseMove);
   dom.view.addEventListener('mouseleave', () => { dom.tip.style.display = 'none'; });

@@ -425,3 +425,10 @@ node tools/mobile-layout.mjs
 수정 전 재현은 **소스 서버에서만** `DRAWING_BASELINE_REF=684ba67`로 이전 `app.js`를 격리 브라우저에 제공할 수 있습니다. `DRAWING_TEST_FILTER=outline → 도형 완성`으로 해당 경로 하나를 선택하면 이전 버전은 셀 서식/Undo 불변 검사에서 실패해야 합니다. 수정본 검증에서는 `DRAWING_BASELINE_REF`를 해제합니다. 이전 코드는 디스크의 제품 파일을 바꾸지 않으며 실제 사용자 문서를 사용하지 않습니다.
 
 반복 적용 문제의 수정 전 재현은 소스 서버에서 `DRAWING_BASELINE_REF=e26c98a`와 `DRAWING_TEST_FILTER=명시 outline`을 사용합니다. 한 번 적용 후 다음 셀 클릭이 서식과 Undo를 바꾸는 검사에서 실패해야 합니다. `DRAWING_TEST_FILTER=선 스타일`로 선 종류만 선택해도 펜이 자동 시작되던 경로도 검사할 수 있습니다.
+
+
+## 미디어·그리기·SVG 조합·문서 출력
+
+새 회귀는 `node tools/creative-workspace.mjs`, `node tools/shape-merge-ui.mjs`, `node tools/online-media.mjs`, `node tools/svg-geometry-render.mjs`, `node tools/svg-icon-audit.mjs`입니다. 기존 `online-pictures.mjs`, `smartart.mjs`, `drawing-mode-isolation.mjs`도 함께 확인합니다. `WIXEL_URL`은 로컬 소스 또는 컴파일 번들, Playwright 환경 변수는 위와 같습니다. 모든 브라우저 검사는 격리 합성 문서를 사용합니다. 스크린샷·임시 파일 기본 경로는 D:입니다. 공급자 모킹과 실제 공개 API 읽기, 신규 인증 공급자의 미설정 상태를 구분합니다.
+
+지원 범위·API 키 설정·안전한 SVG 거부·영상 XLSX 호환과 HTML/PDF 한계는 [40번 문서](../docs/codex/40_미디어그리기와문서출력.md)를 참고하세요.

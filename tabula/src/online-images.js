@@ -1,10 +1,12 @@
+import { STOCK_MEDIA_PROVIDERS, safeMediaUrl, mediaSiteSearch } from './stock-media.js';
 // 공개 이미지 검색. 반환 문자열은 HTML이 아니며, UI는 textContent로 표시한다.
 export const ONLINE_IMAGE_SOURCES = [
   { id: 'all', label: '모든 검색 사이트' },
   { id: 'openverse', label: 'Openverse (Flickr·박물관 등)' },
   { id: 'wikimedia', label: 'Wikimedia Commons' },
   { id: 'inaturalist', label: 'iNaturalist' },
-  { id: 'nasa', label: 'NASA 이미지' },
+  { id: 'nasa', label: 'NASA 이미지·영상' },
+  ...STOCK_MEDIA_PROVIDERS.map(({ id, label }) => ({ id, label })),
 ];
 
 const CC_CODES = ['by', 'by-sa', 'by-nc', 'by-nd', 'by-nc-sa', 'by-nc-nd'];
@@ -61,6 +63,38 @@ function queryUrl(base, params) {
 
 function abortError() { const e = new Error('그림 검색을 취소했습니다.'); e.name = 'AbortError'; return e; }
 
+async function stockSearch(source, q, options) {
+  const qs = new URLSearchParams({ source, q, type: options.kind, page: String(options.page) });
+  const json = await requestJson(`/api/media/search?${qs}`, options);
+  if (['unconfigured', 'unsupported'].includes(json.status)) return { items: [], hasMore: false, unavailable: { source, status: json.status, message: text(json.message), searchUrl: mediaSiteSearch(source, q, options.kind), setupUrl: STOCK_MEDIA_PROVIDERS.find(x => x.id === source)?.docs } };
+  if (!Array.isArray(json.items)) throw new Error('미디어 검색 중계가 없습니다. API 키를 설정한 WIXEL 서버에서 사용하세요.');
+  const items = json.items.slice(0, 30).filter(x => x && x.kind === options.kind && webUrl(x.full) && webUrl(x.thumb)).map(x => ({
+    ...x, id: `${source}:${text(x.id)}`, source, provider: source, kind: options.kind, full: webUrl(x.full), thumb: webUrl(x.thumb), poster: webUrl(x.poster), page: webUrl(x.page),
+    title: text(x.title) || '제목 없는 미디어', credit: text(x.credit), license: text(x.license), licenseUrl: webUrl(x.licenseUrl), creatorUrl: webUrl(x.creatorUrl), cc: false,
+    linkOnly: source === 'unsplash', embedRequired: source === 'pixabay' && options.kind === 'image', trackId: source === 'unsplash' ? text(x.trackId) : undefined,
+  }));
+  return { items, hasMore: json.hasMore === true };
+}
+
+/** NASA 영상은 검색 때 목록만 받고 사용자가 미리보기/삽입한 항목의 영상 주소만 요청한다. */
+export async function resolveOnlineMedia(value, { signal, fetcher = fetch } = {}) {
+  if (value?.resolve !== 'nasa') return { ...value, kind: value?.kind || 'image' };
+  if (value.source !== 'nasa' || typeof value.assetId !== 'string' || !value.assetId || value.assetId.length > 200) throw new Error('영상 ID가 올바르지 않습니다.');
+  const json = await requestJson(`https://images-api.nasa.gov/asset/${encodeURIComponent(value.assetId)}`, { signal, fetcher });
+  const candidates = (json.collection?.items || []).map(x => webUrl(x.href)).filter(x => x && /\.mp4(?:[?#]|$)/i.test(x));
+  candidates.sort((a, b) => (/~(?:medium|small)\.mp4/i.test(a) ? 0 : 1) - (/~(?:medium|small)\.mp4/i.test(b) ? 0 : 1));
+  let full = candidates[0];
+  if (!full) throw new Error('브라우저에서 재생할 수 있는 MP4 영상을 찾지 못했습니다. 출처 사이트에서 확인하세요.');
+  if (new URL(full).hostname === 'images-assets.nasa.gov') full = full.replace(/^http:/, 'https:');
+  return { ...value, full, resolve: undefined, mime: 'video/mp4', kind: 'video' };
+}
+
+export async function trackOnlineMediaInsert(value, { signal, fetcher = fetch } = {}) {
+  if (value.source !== 'unsplash') return;
+  if (!/^[\w-]{1,100}$/.test(value.trackId || '')) throw new Error('Unsplash 그림의 출처 ID를 확인하세요.');
+  await requestJson(`/api/media/track?source=unsplash&id=${encodeURIComponent(value.trackId)}`, { signal, fetcher });
+}
+
 async function requestJson(url, { signal, fetcher }) {
   if (signal?.aborted) throw abortError();
   const controller = new AbortController();
@@ -102,13 +136,18 @@ async function openverse(q, options) {
 }
 
 async function wikimedia(q, options) {
-  const json = await requestJson(queryUrl('https://commons.wikimedia.org/w/api.php', { action: 'query', format: 'json', origin: '*', generator: 'search', gsrnamespace: 6, gsrlimit: 30, gsroffset: (options.page - 1) * 30, gsrsearch: q, prop: 'imageinfo', iiprop: 'url|extmetadata|mime', iiurlwidth: 480 }), options);
+  const json = await requestJson(queryUrl('https://commons.wikimedia.org/w/api.php', { action: 'query', format: 'json', origin: '*', generator: 'search', gsrnamespace: 6, gsrlimit: 30, gsroffset: (options.page - 1) * 30, gsrsearch: q + (options.kind === 'gif' ? ' filemime:image/gif' : options.kind === 'video' ? ' filetype:video' : ''), prop: options.kind === 'video' ? 'videoinfo' : 'imageinfo', ...(options.kind === 'video' ? { viprop: 'url|extmetadata|mime|derivatives|size', viurlwidth: 480 } : { iiprop: 'url|extmetadata|mime|size', iiurlwidth: 480 }) }), options);
   // MediaWiki는 일치하는 문서가 없으면 query 자체를 생략한다.
   const pages = Object.values(json.query?.pages ?? {}).sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
   const items = pages.slice(0, 30).map(p => {
-    const ii = p.imageinfo?.[0]; if (!ii || ii.mime && !/^image\//i.test(ii.mime)) return null;
+    const ii = p.videoinfo?.[0] || p.imageinfo?.[0]; if (!ii) return null;
+    const kind = options.kind || 'image';
+    if (kind === 'gif' ? ii.mime !== 'image/gif' : kind === 'video' ? !/^video\//i.test(ii.mime || '') : ii.mime && !/^image\//i.test(ii.mime)) return null;
     const md = ii.extmetadata ?? {}, license = licenseInfo(md.License?.value, md.LicenseUrl?.value, md.LicenseShortName?.value);
-    return item('wikimedia', { id: p.pageid, thumb: ii.thumburl, full: ii.url, title: String(p.title ?? q).replace(/^File:/i, ''), credit: [text(md.Artist?.value), license.license].filter(Boolean).join(' · '), page: ii.descriptionurl, license });
+    const video = (ii.derivatives || []).filter(x => /^video\/(?:mp4|webm)(?:;|$)/i.test(x.type || '') && safeMediaUrl(x.src)).sort((a, b) => Math.abs((Number(a.width) || 720) - 720) - Math.abs((Number(b.width) || 720) - 720))[0];
+    const value = item('wikimedia', { id: p.pageid, thumb: ii.thumburl || ii.thumburls?.[0]?.src, full: video?.src || ii.url, title: String(p.title ?? q).replace(/^File:/i, ''), credit: [text(md.Artist?.value), license.license].filter(Boolean).join(' · '), page: ii.descriptionurl, license });
+    if (value && kind !== 'image') Object.assign(value, { kind, mime: video?.type || ii.mime, poster: kind === 'video' ? value.thumb : undefined, width: video?.width || ii.width, height: video?.height || ii.height, duration: ii.duration });
+    return value;
   });
   return { items, hasMore: Number.isFinite(Number(json.continue?.gsroffset)) && Number(json.continue.gsroffset) > (options.page - 1) * 30 };
 }
@@ -141,11 +180,18 @@ async function inaturalist(q, options) {
 }
 
 async function nasa(q, options) {
-  const json = await requestJson(queryUrl('https://images-api.nasa.gov/search', { q, media_type: 'image', page_size: 30, page: options.page }), options);
+  const json = await requestJson(queryUrl('https://images-api.nasa.gov/search', { q, media_type: options.kind === 'video' ? 'video' : 'image', page_size: 30, page: options.page }), options);
   if (!Array.isArray(json.collection?.items)) throw new Error('NASA 검색 결과 형식이 올바르지 않습니다.');
   const items = json.collection.items.slice(0, 30).map(x => {
-    const data = x.data?.find(d => d.media_type === 'image') ?? x.data?.[0];
-    if (!data || data.media_type && data.media_type !== 'image') return null;
+    const kind = options.kind === 'video' ? 'video' : 'image';
+    const data = x.data?.find(d => d.media_type === kind) ?? x.data?.[0];
+    if (!data || data.media_type && data.media_type !== kind) return null;
+    if (kind === 'video') {
+      const poster = (x.links || []).find(l => l.rel === 'preview' && webUrl(l.href))?.href;
+      const page = data.nasa_id ? `https://images.nasa.gov/details/${encodeURIComponent(data.nasa_id)}` : '';
+      const value = item('nasa', { id: data.nasa_id, full: page, thumb: poster, page, title: data.title || q, credit: data.center || 'NASA', license: { license: 'NASA 이용 조건 확인', licenseUrl: 'https://www.nasa.gov/nasa-brand-center/images-and-media/', cc: false } });
+      return value && poster ? { ...value, kind, poster, resolve: 'nasa', assetId: String(data.nasa_id) } : null;
+    }
     const links = (x.links ?? []).filter(l => webUrl(l.href) && (l.render === 'image' || /\.(jpe?g|png|webp)(?:[?#]|$)/i.test(l.href)));
     const preview = links.find(l => l.rel === 'preview');
     const alternate = links.filter(l => l.rel === 'alternate').sort((a, b) => (Number(b.width) || 0) * (Number(b.height) || 1) - (Number(a.width) || 0) * (Number(a.height) || 1));
@@ -157,25 +203,29 @@ async function nasa(q, options) {
 }
 
 /** 공개 검색 API만 사용한다. 삽입/다운로드·사용자 파일 전송은 호출자의 별도 동작이다. */
-export async function searchOnlineImages(q, { page = 1, source = 'all', ccOnly = false, signal, fetcher = fetch } = {}) {
+export async function searchOnlineImages(q, { page = 1, source = 'all', ccOnly = false, kind = 'image', signal, fetcher = fetch } = {}) {
   if (signal?.aborted) throw abortError();
   if (typeof q !== 'string' || q.trim().length > 200) throw new Error('검색어는 200자 이내로 입력하세요.');
   if (!Number.isInteger(page) || page < 1 || page > 50) throw new Error('검색 페이지는 1부터 50까지 지정하세요.');
   if (!ONLINE_IMAGE_SOURCES.some(s => s.id === source)) throw new Error('지원하지 않는 그림 검색 사이트입니다.');
+  if (!['image', 'gif', 'video'].includes(kind)) throw new Error('지원하지 않는 미디어 종류입니다.');
   q = q.trim();
   if (!q || source === 'nasa' && ccOnly) return { items: [], hasMore: false, failures: [] };
-  const adapters = { openverse, wikimedia, inaturalist, nasa };
-  const sources = ONLINE_IMAGE_SOURCES.filter(s => s.id !== 'all' && (source === 'all' || source === s.id) && !(ccOnly && s.id === 'nasa'));
-  const results = await Promise.allSettled(sources.map(s => adapters[s.id](q, { page, ccOnly, signal, fetcher })));
+  const adapters = { openverse, wikimedia, inaturalist, nasa, ...Object.fromEntries(STOCK_MEDIA_PROVIDERS.map(s => [s.id, (q, o) => stockSearch(s.id, q, o)])) };
+  const kinds = { openverse: ['image'], wikimedia: ['image', 'gif', 'video'], inaturalist: ['image'], nasa: ['image', 'video'], ...Object.fromEntries(STOCK_MEDIA_PROVIDERS.map(s => [s.id, s.kinds])) };
+  if (source !== 'all' && !kinds[source].includes(kind)) return { items: [], hasMore: false, failures: [], unavailable: [{ source, status: 'unsupported', message: '이 검색 사이트 API는 선택한 미디어 종류를 지원하지 않습니다.', searchUrl: mediaSiteSearch(source, q, kind) }] };
+  const sources = ONLINE_IMAGE_SOURCES.filter(s => s.id !== 'all' && (source === 'all' || source === s.id) && kinds[s.id].includes(kind) && !(ccOnly && ['nasa', ...STOCK_MEDIA_PROVIDERS.map(x => x.id)].includes(s.id)));
+  const results = await Promise.allSettled(sources.map(s => adapters[s.id](q, { page, ccOnly, kind, signal, fetcher })));
   if (signal?.aborted) throw abortError();
-  const failures = [], lists = []; let hasMore = false;
+  const failures = [], lists = [], unavailable = []; let hasMore = false;
   for (let i = 0; i < results.length; i++) {
     const result = results[i];
     if (result.status === 'rejected') { failures.push(sources[i].label); continue; }
+    if (result.value.unavailable) unavailable.push(result.value.unavailable);
     hasMore ||= result.value.hasMore;
     lists.push(result.value.items.filter(x => x && (!ccOnly || x.cc)));
   }
-  if (failures.length === sources.length) throw new Error(`그림 검색 사이트에 연결하지 못했습니다. 잠시 후 다시 시도하세요. (${failures.join(', ')})`);
+  if (sources.length && failures.length === sources.length) throw new Error(`그림 검색 사이트에 연결하지 못했습니다. 잠시 후 다시 시도하세요. (${failures.join(', ')})`);
   const items = [], seen = new Set();
   for (let row = 0; lists.some(list => row < list.length); row++) {
     for (const list of lists) {
@@ -185,5 +235,5 @@ export async function searchOnlineImages(q, { page = 1, source = 'all', ccOnly =
       seen.add(key.href); items.push(value);
     }
   }
-  return { items, hasMore: page < 50 && hasMore, failures };
+  return { items, hasMore: page < 50 && hasMore, failures, ...(unavailable.length ? { unavailable } : {}) };
 }
