@@ -1,6 +1,7 @@
 // 합성 차트로만 갤러리/서식 패널을 검사한다. 소스 및 최종 번들 공용.
 import assert from 'node:assert/strict';
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const url = process.env.WIXEL_URL || 'http://127.0.0.1:5191/';
 const browser = await chromium.launch();
 const results = [];
 async function test(name, run) {
@@ -10,11 +11,13 @@ async function test(name, run) {
   page.on('pageerror', (error) => errors.push(error.stack || error.message));
   await context.route('**/*', (route) => {
     if (!['GET', 'HEAD', 'OPTIONS'].includes(route.request().method())) { writes.push(route.request().url()); return route.abort(); }
+    const target = new URL(route.request().url());
+    if (target.origin !== new URL(url).origin || target.pathname.startsWith('/api/')) return route.abort();
     return route.continue();
   });
   try {
     await page.addInitScript(() => { window.TABULA_STATIC = true; window.WIXEL_SKIP_START = true; });
-    await page.goto(process.env.WIXEL_URL || 'http://127.0.0.1:5180/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await page.waitForFunction(() => window.tabula?.wb(), null, { timeout: 60000 });
     await fixture(page); await run(page);
     assert.deepEqual(errors, [], '페이지 오류'); assert.deepEqual(writes, [], '서버 쓰기 요청');
@@ -33,7 +36,16 @@ const fixture = (p, patch = {}) => p.evaluate((patch) => {
   w.undoStack = []; w.redoStack = []; t.gv().renderObjectsAll();
 }, patch);
 const gallery = async (p) => { await command(p, 'chartChangeType'); return p.getByRole('dialog', { name: '차트 종류 변경', exact: true }); };
-const format = async (p) => { await command(p, 'chartFormat'); return p.getByRole('dialog', { name: '차트 서식', exact: true }); };
+const format = async (p) => {
+  await command(p, 'chartFormat');
+  // 서식 명령은 현재 선택한 요소의 창을 연다. 기존 전체 범주 검사는 명시적 전환 뒤 실행한다.
+  const selected = p.getByRole('dialog', { name: '차트 영역 서식', exact: true });
+  await selected.waitFor();
+  assert.equal(await selected.getByRole('combobox', { name: '서식을 지정할 차트 요소' }).inputValue(), 'chart');
+  await selected.getByRole('button', { name: '차트 전체 옵션…', exact: true }).click();
+  const all = p.getByRole('dialog', { name: '차트 서식', exact: true });
+  await all.waitFor(); return all;
+};
 const category = (d, name) => d.locator('.cg-cat').filter({ hasText: new RegExp(`^${name}$`) });
 const optionFor = (picker, label) => picker.locator('option').filter({ hasText: new RegExp(`^${label}$`) }).getAttribute('value');
 const pickerSection = async (d, name) => { const picker = d.getByRole('combobox', { name: '서식을 지정할 차트 요소' }); await picker.selectOption(await optionFor(picker, name)); };

@@ -83,15 +83,19 @@ try {
     await type(0).selectOption('area'); await axis(2).selectOption('0'); await dialog.getByRole('button', { name: '확인', exact: true }).click();
     const c = await current(); assert.equal(c.type, 'combo'); assert.equal(c.seriesFmt[0].type, 'area'); assert.equal(c.seriesFmt[2].axis, 0);
   });
-  await test('기존 차트 편집: 숨긴 계열 번호와 보조축→기본축 0 보존', async () => {
+  await test('차트 우클릭 종류 편집: 숨긴 계열 번호와 보조축→기본축 0 보존', async () => {
     await fixture({ seriesFmt: [], hiddenSeries: [0] });
+    const before = await current();
     await page.locator('.obj.chart').first().click({ button: 'right', position: { x: 4, y: 4 } });
-    await page.getByRole('menuitem', { name: '차트 편집...', exact: true }).click();
-    const dialog = page.getByRole('dialog', { name: '차트 편집', exact: true });
-    assert.equal(await dialog.getByRole('combobox', { name: / 축$/ }).count(), 3);
+    await page.getByRole('menuitem', { name: '차트 종류 변경(Y)...', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: '차트 종류 변경', exact: true });
+    assert.equal(await dialog.locator('[data-combo-axis]').count(), 3);
     const last = dialog.getByRole('combobox', { name: '전환율 축', exact: true }); assert.equal(await last.inputValue(), '1');
-    await last.selectOption('0'); await dialog.getByRole('button', { name: '확인', exact: true }).click();
+    await last.selectOption('0'); assert.deepEqual(await current(), before, '확인 전 초안은 원본 차트를 변경하지 않습니다');
+    await dialog.getByRole('button', { name: '확인', exact: true }).click();
     const c = await current(); assert.equal(c.seriesFmt[2].axis, 0); assert.deepEqual(c.hiddenSeries, [0]);
+    assert.equal(await ev(() => window.tabula.wb().undoStack.length), 1);
+    await ev(() => window.tabula.run('undo')); assert.deepEqual(await current(), before);
   });
   const bad = results.filter((r) => !r.ok).length;
   console.log(JSON.stringify({ total: results.length, ok: results.length - bad, bad, pageErrors: errors.length }));

@@ -5604,6 +5604,48 @@ function insertChartAllDialog(changeId = null, initialType = null) {
   }
   const dataFor = (d) => chartModelData(wb, si, d);
   const source = base ?? { type: 'column', range: rg, title: '차트 제목' };
+  const hasNumbers = (data) => data.series.some((s) => s.values.some((v) => typeof v === 'number' && Number.isFinite(v)));
+  // 갤러리 견본 전용: 실제 계열·셀·삽입 patch에는 넣지 않습니다.
+  const sampleFor = (chart) => {
+    const categories = ['항목 1', '항목 2', '항목 3', '항목 4'];
+    let series = [{ name: '계열 1', values: [4, 7, 5, 8] }, { name: '계열 2', values: [6, 3, 8, 5] }];
+    if (['pie', 'pieOfPie', 'barOfPie', 'funnel', 'waterfall', 'histogram', 'pareto', 'map', 'treemap', 'sunburst'].includes(chart.type)) series = series.slice(0, 1);
+    if (chart.type === 'waterfall') series[0].values = [8, -3, 5, 2];
+    if (chart.type === 'funnel') series[0].values = [10, 8, 5, 3];
+    if (chart.type === 'map') return { categories: ['대한민국', '미국', '영국', '호주'], series };
+    if (chart.type === 'stock') series = [
+      ...(chart.volume ? [{ name: '거래량', values: [90, 120, 80, 110] }] : []),
+      ...(chart.ohlc ? [{ name: '시가', values: [5, 6, 7, 6] }] : []),
+      { name: '고가', values: [8, 9, 10, 9] }, { name: '저가', values: [3, 4, 5, 4] }, { name: '종가', values: [7, 5, 8, 7] },
+    ];
+    if (chart.type === 'scatter' || chart.type === 'bubble') series = series.map((s) => ({ ...s, x: [1, 3, 5, 7], size: [3, 6, 4, 8] }));
+    return { categories, series, ...(['treemap', 'sunburst'].includes(chart.type) ? { hierarchyPaths: [['분류 A', '항목 1'], ['분류 A', '항목 2'], ['분류 B', '항목 3'], ['분류 B', '항목 4']] } : {}) };
+  };
+  const thumbnailSvg = (patch) => renderChartSvg({ ...patch, title: '', legend: 'none', labels: false,
+    w: 300, h: 180, axisSize: 6, axes: { x: { hide: true }, y: { hide: true }, y2: { hide: true } } }, sampleFor(patch));
+  const previews = new Map();
+  const paintPreview = (node, draft) => {
+    const data = dataFor(draft), sample = !hasNumbers(data);
+    const w = Math.max(260, Math.min(600, node.clientWidth || 560)), h = Math.max(220, Math.min(300, w * .52));
+    node.dataset.previewSource = sample ? 'sample' : 'selection';
+    setSafeHtml(node, renderChartSvg({ ...draft, w, h, ...(sample ? { title: '예시', seriesFmt: [], hiddenSeries: undefined, hiddenCats: undefined } : {}) }, sample ? sampleFor(draft) : data));
+    // SVG 글자폭 추정과 실제 한글 글꼴의 차이는 미리보기 화면에만 반영합니다.
+    // 원본 차트의 축·범례 서식이나 데이터는 변경하지 않습니다.
+    const svg = node.querySelector('svg');
+    if (node.isConnected && svg) {
+      const box = svg.getBBox(), left = Math.min(0, box.x - 2), top = Math.min(0, box.y - 2);
+      const width = Math.max(w, box.x + box.width + 2) - left, height = Math.max(h, box.y + box.height + 2) - top;
+      if ([left, top, width, height].every(Number.isFinite)) {
+        svg.setAttribute('viewBox', `${left} ${top} ${width} ${height}`);
+        svg.setAttribute('width', String(width)); svg.setAttribute('height', String(height));
+      }
+    }
+    return { data, sample };
+  };
+  const sampleNote = '선택한 범위에 숫자 데이터가 없어 예시를 표시합니다.';
+  const refreshPreviews = () => { for (const [node, redraw] of previews) if (node.isConnected) redraw(); };
+  let previewObserver, previewFrame = 0;
+
   // 필터로 숨긴 계열도 원래 번호로 편집합니다. 색·레이블 등 기존 개별 서식은 유지합니다.
   const comboData = dataFor({ ...source, type: 'combo', threeD: false, hiddenSeries: undefined });
   const comboTypes = [['column', '묶은 세로 막대형'], ['line', '꺾은선형'], ['area', '영역형']];
@@ -5653,11 +5695,9 @@ function insertChartAllDialog(changeId = null, initialType = null) {
     [...cats.children].forEach((b, i) => b.classList.toggle('on', i === gi));
     const [, list] = CHART_GALLERY[gi];
     subs.replaceChildren(...list.map(([name, patch]) => {
-      const d = draftOf(patch);
-      const thumbnail = { ...d, title: '', legend: 'none', labels: false, w: 120, h: 80, axisSize: 6,
-        axes: { x: { hide: true }, y: { hide: true }, y2: { hide: true } },
-        seriesFmt: d.seriesFmt.map(({ type, axis, ...f }) => ({ ...f, ...(patch.type === 'combo' ? {} : { type, axis }), labels: false })) };
-      const thumb = el('button', { class: 'cg-sub', type: 'button', title: name, 'aria-label': name }, el('span', { class: 'cg-thumb', html: renderChartSvg(thumbnail, dataFor(thumbnail)) }), el('span', { class: 'cg-sub-name' }, name));
+      const thumb = el('button', { class: 'cg-sub', type: 'button', title: name, 'aria-label': name },
+        el('span', { class: 'cg-thumb', 'aria-hidden': 'true', html: thumbnailSvg(patch) }),
+        el('span', { class: 'cg-sub-name', 'data-access-caption-host': 'true' }, name));
       thumb.addEventListener('click', () => sel(thumb, name, patch, true));
       return thumb;
     }));
@@ -5680,8 +5720,8 @@ function insertChartAllDialog(changeId = null, initialType = null) {
       defaults.series.forEach((s, i) => { comboFmt[i] = { ...(base?.seriesFmt?.[i] ?? {}), type: s.type ?? 'column', axis: s.axis ?? 0, grouping: s.grouping }; });
     }
     label.textContent = patch.type === 'combo' ? '사용자 지정 콤보' : name;
-    const redraw = () => { const d = draftOf(patch), data = dataFor(d), info = chartDataGuide(d, data); setSafeHtml(prev, renderChartSvg({ ...d, w: 600, h: 260 }, data)); guide.textContent = info.error || info.description; guide.classList.toggle('error', !!info.error); };
-    redraw();
+    const redraw = () => { const d = draftOf(patch), { data, sample } = paintPreview(prev, d), info = chartDataGuide(d, data); guide.textContent = sample ? sampleNote : info.error || info.description; guide.classList.toggle('error', !sample && !!info.error); };
+    previews.set(prev, redraw); redraw();
     drawCombo(comboBox, patch, redraw);
   };
   CHART_GALLERY.forEach(([g], i) => cats.append(el('button', { class: 'cg-cat', onclick: () => show(i) }, g)));
@@ -5693,7 +5733,7 @@ function insertChartAllDialog(changeId = null, initialType = null) {
     [...cats.children].forEach((button, i) => { button.hidden = !matches[i]; });
     if (matches.some(Boolean)) show(matches[selectedGroup] ? selectedGroup : matches.indexOf(true));
     [...subs.children].forEach((button) => { button.hidden = !!query && !CHART_GALLERY[selectedGroup][0].toLocaleLowerCase().includes(query) && !button.title.toLocaleLowerCase().includes(query); });
-    if (!matches.some(Boolean)) { pick = null; prev.replaceChildren(); label.textContent = ''; comboBox.hidden = true; guide.textContent = '일치하는 차트가 없습니다. 다른 이름으로 검색하세요.'; }
+    if (!matches.some(Boolean)) { pick = null; previews.delete(prev); prev.replaceChildren(); label.textContent = ''; comboBox.hidden = true; guide.classList.remove('error'); guide.textContent = '일치하는 차트가 없습니다. 다른 이름으로 검색하세요.'; }
   };
   search.addEventListener('input', filterChoices);
   const arrowNavigate = (event, parent) => {
@@ -5705,29 +5745,31 @@ function insertChartAllDialog(changeId = null, initialType = null) {
   };
   cats.addEventListener('keydown', (event) => arrowNavigate(event, cats));
   subs.addEventListener('keydown', (event) => arrowNavigate(event, subs));
-  const allView = el('div', { class: 'cg-wrap' }, el('div', { class: 'cg-navigation' }, search, cats), el('div', { class: 'cg-main' }, subs, label, prev, guide, comboBox));
+  const allView = el('div', { class: 'cg-wrap' }, el('div', { class: 'cg-navigation' }, search, cats), el('div', { class: 'cg-main' }, el('p', { class: 'cg-gallery-note' }, '작은 견본은 종류별 예시입니다.'), subs, label, prev, guide, comboBox));
   let body = allView;
   if (!base) {
     // 추천 차트 (엑셀): 데이터 모양(항목 수 · 계열 수 · 값 크기 차이 · 날짜 항목 · 긴 이름)으로 고른 차트 + 설명
-    const recs = recommendCharts(dataFor(draftOf({ type: 'column' })));
-    const rList = el('div', { class: 'cr-list' });
+    const recommendationData = dataFor(draftOf({ type: 'column' }));
+    const recs = recommendCharts(hasNumbers(recommendationData) ? recommendationData : { categories: [], series: [] });
+    const rList = el('div', { class: 'cr-list', role: 'group', 'aria-label': '추천 차트 종류 예시' });
     const rTitle = el('div', { class: 'cr-title' });
-    const rPrev = el('div', { class: 'cr-prev' });
+    const rPrev = el('div', { class: 'cr-prev', 'aria-label': '추천 차트 미리 보기' });
     const rDesc = el('div', { class: 'cr-desc' });
     const rCombo = el('div', { class: 'cg-combo', hidden: true });
     const pickRec = (k) => {
-      [...rList.children].forEach((b, j) => b.classList.toggle('on', j === k));
+      [...rList.children].forEach((b, j) => { b.classList.toggle('on', j === k); b.setAttribute('aria-pressed', String(j === k)); });
       const [name, patch, desc] = recs[k];
       pick = patch;
       rTitle.textContent = name;
-      const redraw = () => { const d = draftOf(patch); setSafeHtml(rPrev, renderChartSvg({ ...d, w: 560, h: 250 }, dataFor(d))); };
-      redraw(); drawCombo(rCombo, patch, redraw);
-      rDesc.textContent = desc;
+      const redraw = () => { const { sample } = paintPreview(rPrev, draftOf(patch)); rDesc.textContent = sample ? sampleNote : desc; };
+      previews.set(rPrev, redraw); redraw(); drawCombo(rCombo, patch, redraw);
     };
     recs.forEach(([name, patch], k) => {
-      const d = draftOf(patch);
-      rList.append(el('button', { class: 'cr-thumb', title: name, html: renderChartSvg({ ...d, w: 170, h: 110, axisSize: 5, legendSize: 5, titleSize: 7 }, dataFor(d)), onclick: () => pickRec(k) }));
+      rList.append(el('button', { class: 'cr-thumb', type: 'button', title: name, 'aria-label': name, onclick: () => pickRec(k) },
+        el('span', { class: 'cr-thumb-preview', 'aria-hidden': 'true', html: thumbnailSvg(patch) }),
+        el('span', { class: 'cr-thumb-name', 'data-access-caption-host': 'true' }, name)));
     });
+    rList.addEventListener('keydown', (event) => arrowNavigate(event, rList));
     const recView = el('div', { class: 'cr-wrap' }, rList, el('div', { class: 'cr-main' }, rTitle, rPrev, rDesc, rCombo));
     const tabs = el('div', { class: 'dlg-tabs' });
     const box = el('div', {});
@@ -5736,18 +5778,27 @@ function insertChartAllDialog(changeId = null, initialType = null) {
       box.replaceChildren(t === 0 ? recView : allView);
       if (t === 0) pickRec(Math.max(0, [...rList.children].findIndex((b) => b.classList.contains('on'))));
       else show(Math.max(0, cur));
+      refreshPreviews();
     };
     tabs.append(el('button', { class: 'dlg-tab', onclick: () => showTab(0) }, '추천 차트'), el('button', { class: 'dlg-tab', onclick: () => showTab(1) }, '모든 차트'));
     body = el('div', {}, tabs, box);
     showTab(initialType || !recs.length ? 1 : 0);
   } else show(Math.max(0, cur));
   openDialog({
-    title: base ? '차트 종류 변경' : '차트 삽입', width: 920, onOpen: (d) => d.classList.add('chart-type-dialog'),
+    title: base ? '차트 종류 변경' : '차트 삽입', width: 920,
+    onOpen: (d) => {
+      d.classList.add('chart-type-dialog'); refreshPreviews();
+      let width = d.clientWidth;
+      previewObserver = new ResizeObserver(() => { if (d.clientWidth === width) return; width = d.clientWidth; cancelAnimationFrame(previewFrame); previewFrame = requestAnimationFrame(refreshPreviews); });
+      previewObserver.observe(d);
+    },
+    onClose: () => { previewObserver?.disconnect(); cancelAnimationFrame(previewFrame); },
     body,
     buttons: [{
       label: '확인', primary: true, action: () => {
         if (!pick) return false;
-        const info = chartDataGuide(draftOf(pick), dataFor(draftOf(pick)));
+        const actual = dataFor(draftOf(pick));
+        const info = chartDataGuide(draftOf(pick), actual);
         if (info.error) { toast(info.error); return false; }
         if (pick.type === 'combo' && !comboFmt.length) { toast('콤보 차트에 표시할 데이터 계열이 없습니다.'); return false; }
         if (base) { updateChart(base.id, chartPatch(pick)); gv.renderObjectsAll(); return undefined; }
@@ -18825,6 +18876,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileFit','toggleR
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['갤러리 글자 배치 개선', ['차트 견본·이름·단축키를 분리하고 긴 한글과 작은 화면의 미리보기, 셀 스타일 줄바꿈을 보강했습니다.']],
   ['그림과 SVG 저장', ['사진·도형·아이콘과 선택한 셀 범위를 PNG·JPEG·SVG로 저장합니다. 미리보기와 배경·해상도 옵션을 제공합니다.']],
   ['데이터 유효성 검사', ['설정·설명·오류·IME 네 탭, 같은 설정 일괄 적용, 범위 선택과 입력 오류 처리를 보강했습니다.']],
   ['슬라이서 리본과 크기', ['스타일 견본·페이지 탐색, cm 단위 단추·전체 크기, 여러 슬라이서 서식과 맞춤을 보강했습니다.']],

@@ -6,6 +6,7 @@ const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright')
 const url = process.env.WIXEL_URL || 'http://127.0.0.1:5178/';
 const out = process.env.WIXEL_DIALOG_OUT || 'D:/Codex/Temp/wixel-dialogs/current';
 const filter = process.env.WIXEL_DIALOG_FILTER || '';
+const exclude = process.env.WIXEL_DIALOG_EXCLUDE || '';
 const widths = process.env.WIXEL_DIALOG_WIDTHS?.trim() ? process.env.WIXEL_DIALOG_WIDTHS.split(',').map(Number) : null;
 const sizes = [[1366, 900], [1024, 700], [390, 844], [320, 640]].filter(([w]) => !widths || widths.includes(w));
 await mkdir(out, { recursive: true });
@@ -31,6 +32,15 @@ async function inside(p, loc, label) {
   ok(b && b.x >= -1 && b.y >= -1 && b.x + b.width <= v.width + 1 && b.y + b.height <= v.height + 1, label + ' 화면 범위 ' + JSON.stringify({ b, v }));
 }
 async function usable(p, loc, label) {
+  // 서식 창의 새 탭/접기 구조에서는 숨겨진 입력을 스크롤만으로 드러낼 수 없다.
+  if (!await loc.isVisible()) {
+    const panel = await loc.evaluate(e => e.closest('[role="tabpanel"]')?.id);
+    if (panel) await p.locator(`[role="tab"][aria-controls="${panel}"]`).click();
+    const summaries = await loc.evaluate(e => {
+      const out = []; for (let n = e.parentElement; n; n = n.parentElement) if (n.matches('details:not([open])')) out.push(n.querySelector('summary')?.textContent); return out.reverse();
+    });
+    for (const text of summaries) if (text) await p.locator('summary').filter({ hasText: text }).first().click();
+  }
   await loc.scrollIntoViewIfNeeded(); await inside(p, loc, label);
   const hit = await loc.evaluate(e => { const r = e.getBoundingClientRect(), h = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return { ok: !!h && (e === h || e.contains(h)), target: [e.tagName, e.getAttribute('aria-label')], rect: { x: r.x, y: r.y, w: r.width, h: r.height }, hit: h?.outerHTML.slice(0, 260) }; });
   ok(hit.ok, label + ' 중심이 다른 요소에 가리지 않음 ' + JSON.stringify(hit));
@@ -70,6 +80,7 @@ async function fixtureObject(p, kind) {
 async function chart(p) { await p.evaluate(() => { const t = window.tabula; t.selectRange({ r1: 0, c1: 0, r2: 3, c2: 2 }); t.run('chartColumn'); }); }
 async function pivot(p) { await p.evaluate(() => { const t = window.tabula, w = t.wb(); w.transact(() => { w.addSheet('피벗 합성'); w.setSheetProp(1, 'pivot', { name: '팝업피벗', source: '팝업 합성', range: { r1: 0, c1: 0, r2: 3, c2: 2 }, rows: ['지역'], cols: [], values: [{ field: '매출', agg: 'sum' }], top: 0, left: 0 }); }); t.switchSheet(1); t.run('pivotRefresh'); t.selectCell(1, 0); }); }
 async function test(p, width, name, fn) {
+  if (exclude && name.includes(exclude)) return;
   if (filter && !name.includes(filter)) return;
   const beforeErrors = errors.length;
   try { await reset(p); await fn(p); eq(errors.slice(beforeErrors), [], '페이지 오류'); results.push({ width, name, ok: true }); console.log('OK ' + width + ' ' + name); }
@@ -146,8 +157,10 @@ try {
         }
         await capture(p, 'shape-format'); await d.locator('.dialog-head button').click(); await d.waitFor({ state: 'detached' });
       });
-      await test(p, width, '그림 서식: 긴 세로 내용·치수 초안·취소 무변경', async p => {
+      await test(p, width, '그림 서식: 전체 탭·긴 세로 내용·치수 초안·취소 무변경', async p => {
         const before = await fixtureObject(p, 'picture'); const d = dialog(p, '그림 서식'); await audit(p, d, '그림 서식');
+        const tabs = await d.getByRole('tab').all(); ok(tabs.length >= 10, '그림 서식의 크기·보정·색·효과·스타일·자르기·접근성·파일 처리 범주');
+        for (const tab of tabs) { const name = await tab.innerText(); await usable(p, tab, name + ' 그림 탭'); await tab.click(); await audit(p, d, '그림 서식 ' + name); }
         const rotate = d.getByLabel('회전(°)', { exact: true }); await usable(p, rotate, '그림 회전'); await rotate.fill('30'); const desc = d.getByLabel('그림 설명', { exact: true }); await usable(p, desc, '그림 설명'); await desc.fill('합성 그림 설명'); await capture(p, 'picture-format'); await d.getByRole('button', { name: '취소', exact: true }).click(); eq(await p.evaluate(() => window.tabula.wb().sheets[0].images[0]), before);
       });
       await test(p, width, '찾기·바꾸기: Alt 입력/옵션/닫기와 셀 무변경', async p => {

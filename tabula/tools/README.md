@@ -455,3 +455,10 @@ node tools/mobile-layout.mjs
 ## 개체·셀 범위의 그림/SVG 저장
 
 `node tools/image-export.mjs`는 실제 우클릭·리본·복사 메뉴에서 사진·도형·아이콘·다중 개체·셀 범위를 PNG/JPEG/SVG로 저장하고 파일 내용을 다시 읽는다. 투명/흰 배경·해상도·회전·색·숫자 서식·범위 크기, 초과 크기 거절, 취소·권한·쓰기 실패·다운로드 확인, 문서/선택 변경 차단·원본/Undo 보존과 320px 화면을 검사한다. `WIXEL_URL`로 소스/번들을 지정하며 출력 변수와 제한은 [49번 문서](../docs/codex/49_그림과SVG저장.md)를 참고한다. 격리 합성 문서와 메모리 파일 선택기를 사용하며 실제 사용자 파일·원격 쓰기를 사용하지 않는다.
+
+
+## 갤러리 글자와 접근키 배치
+
+`node tools/gallery-access-captions.mjs`는 소스 서버의 공통 팝업에서 SVG 텍스트/실제 이름 분리와 동적 접근키를 4개 화면 크기로 검사한다. `GALLERY_CAPTION_BASELINE=ad2dadc`는 이전 공통 UI를 메모리에서만 제공하는 수정 전 재현 옵션이다. `node tools/chart-gallery-layout.mjs`는 소스/배포 번들의 추천·모든 차트, 긴 한글·검색·키보드·시트 배율·작은 화면의 실제 글자 경계를 검사한다. `WIXEL_CHART_GALLERY_OUT`과 `WIXEL_CHART_GALLERY_FILTER`로 D: 출력 경로와 개별 검사를 지정한다. 확대 모의·검증 범위는 [50번 문서](../docs/codex/50_차트갤러리와팝업글자배치.md)에 기록한다. `dialog-layout.mjs`는 `WIXEL_DIALOG_EXCLUDE`에 이름 일부를 지정해 다른 전용 도구에서 검사하는 팝업을 제외할 수 있다.
+
+`node tools/popup-gallery-layout.mjs`는 표·셀·SmartArt·아이콘·그림 스타일 갤러리 5종을 320/390/1024px에서 검사한다. 셀 스타일 이름과 접근키의 잘림, 미리보기 내부 키 삽입, 가로 넘침을 확인하며 `WIXEL_POPUP_OUT`에 D: 출력 폴더를 지정한다. 소스와 최종 번들에 같은 도구를 사용한다.

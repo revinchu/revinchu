@@ -99,17 +99,24 @@ function activeAccessScope() {
   // 찾기 같은 modeless 창은 격자에 초점이 있을 때 리본 Alt 키를 빼앗지 않는다.
   return dialogs.findLast((d) => d.contains(document.activeElement)) ?? null;
 }
+// 미리보기 SVG의 제목·축·안내 문구는 단추의 이름이나 접근키 표시 위치가 아니다.
+function accessText(node, excludeButtons = false) {
+  const excluded = 'input,select,textarea,svg,canvas,img,video,style,script,[hidden],[aria-hidden="true"],.access-key-hint,.ico,.mi-icon,.mi-key,[data-access-preview]' + (excludeButtons ? ',button' : '');
+  if (!node || node.namespaceURI !== 'http://www.w3.org/1999/xhtml' || node.matches(excluded)) return '';
+  // 큰 SVG를 복제하지 않고 미리보기 하위 트리 전체를 건너뛴다.
+  const walker = node.ownerDocument.createTreeWalker(node, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, { acceptNode: part => part.nodeType === Node.TEXT_NODE ? NodeFilter.FILTER_ACCEPT : part.namespaceURI !== 'http://www.w3.org/1999/xhtml' || part.matches(excluded) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_SKIP });
+  let text = '', part; while ((part = walker.nextNode())) text += part.textContent;
+  return text.trim();
+}
 function associatedAccessLabel(target) {
-  const own = target.getAttribute('aria-label') ?? target.textContent?.trim() ?? '';
+  const own = target.getAttribute('aria-label') ?? accessText(target);
   if (accessKeyFromLabel(own)) return own;
   const labels = [...(target.labels ?? [])];
   const wrapper = target.closest('label'); if (wrapper) labels.push(wrapper);
   for (const id of (target.getAttribute('aria-labelledby') ?? '').split(/\s+/)) { const label = id && document.getElementById(id); if (label) labels.push(label); }
   const textOf = (label) => {
     // label 안의 select 옵션 텍스트가 '범위시트통합문서'처럼 레이블에 붙지 않게 한다.
-    const clone = label.cloneNode(true);
-    clone.querySelectorAll('input,select,textarea,button,svg,.access-key-hint').forEach((node) => node.remove());
-    return clone.textContent?.trim() ?? '';
+    return accessText(label, true);
   };
   const texts = labels.map(textOf);
   for (const text of texts) if (accessKeyFromLabel(text)) return text;
@@ -117,7 +124,8 @@ function associatedAccessLabel(target) {
   // 레거시 범위 입력기는 label 대신 span + refInput wrapper 구조를 사용한다.
   for (let at = target, i = 0; at && i < 3; at = at.parentElement, i++) {
     const previous = at.previousElementSibling;
-    if (previous && !previous.matches(ACCESS_CONTROLS) && !previous.querySelector(ACCESS_CONTROLS) && (accessKeyFromLabel(previous.textContent) || accessKeyHint(previous.textContent))) return previous.textContent;
+    const previousText = accessText(previous);
+    if (previous && !previous.matches(ACCESS_CONTROLS) && !previous.querySelector(ACCESS_CONTROLS) && (accessKeyFromLabel(previousText) || accessKeyHint(previousText))) return previousText;
     if (at.parentElement?.matches('.dialog,.dialog-body,.menu')) break;
   }
   return texts[0] ?? own;
@@ -127,17 +135,18 @@ function showAccessCaption(target, key, label, scope) {
   const caption = accessKeyCaption(label, key);
   if (!caption || target.matches('[data-dialog-close-head],.dialog-close')) { hint?.remove(); return; }
   let host;
-  if (target.matches('button,a,[role="tab"],[role="menuitem"],[role="button"],[role="option"]') && target.textContent.trim()) {
-    host = target.querySelector(':scope > .mi-text > b') ?? [...target.children].find((node) => node.matches('span') && !node.matches('.mi-icon,.mi-key,.ico,.access-key-hint') && node.textContent.trim()) ?? target;
+  if (target.matches('button,a,[role="tab"],[role="menuitem"],[role="button"],[role="option"]')) {
+    const explicit = target.querySelector('[data-access-caption-host]');
+    host = explicit && accessText(explicit) ? explicit : target.querySelector(':scope > .mi-text > b') ?? [...target.children].find((node) => node.matches('span') && accessText(node)) ?? (accessText(target) ? target : null);
   } else {
     const wrapper = [...(target.labels ?? [])].find((node) => scope.contains(node)) ?? target.closest('label');
-    if (wrapper) host = wrapper.querySelector('.form-dialog-label') ?? [...wrapper.children].find((node) => node.matches('span') && !node.matches('.access-key-hint,.ico') && node.textContent.trim()) ?? wrapper;
+    if (wrapper) host = wrapper.querySelector('.form-dialog-label') ?? [...wrapper.children].find((node) => node.matches('span') && !node.matches('.access-key-hint,.ico') && accessText(node)) ?? wrapper;
     if (!host) for (const id of (target.getAttribute('aria-labelledby') ?? '').split(/\s+/)) {
       const node = id && document.getElementById(id); if (node && scope.contains(node)) { host = node; break; }
     }
     if (!host) for (let at = target, i = 0; at && i < 3; at = at.parentElement, i++) {
       const prev = at.previousElementSibling;
-      if (prev && !prev.matches(ACCESS_CONTROLS) && !prev.querySelector(ACCESS_CONTROLS) && prev.textContent.trim()) { host = prev; break; }
+      if (prev && !prev.matches(ACCESS_CONTROLS) && !prev.querySelector(ACCESS_CONTROLS) && accessText(prev)) { host = prev; break; }
       if (at.parentElement?.matches('.dialog,.dialog-body,.menu')) break;
     }
   }
