@@ -108,8 +108,9 @@ import {
 } from './tables.js';
 import { splitDelimited, splitFixed, suggestBreaks, parseDateOrder, convertPart, DATE_ORDERS, DATE_ORDER_LABEL } from './textsplit.js';
 import {
-  VALIDATION_TYPES, VALIDATION_OPS, validationAt, checkValidation, listItems, describeRule, subtractRange, invalidCells,
+  VALIDATION_TYPES, VALIDATION_OPS, validationAt, checkValidation, listItems, validationList, describeRule, subtractRange, invalidCells, validationSignature, validateValidationRule, relocateValidation,
 } from './validation.js';
+import { createValidationEditor } from './validation-editor.js';
 import { shapeSizePatch } from './shape-format.js';
 import { shapeFromPoints } from './shape-path.js';
 import { mergeShapes } from './shape-boolean.js';
@@ -945,8 +946,8 @@ function commitEdit(dir = null, { fillSel = false } = {}) {
   if (!text.startsWith('=') && text !== editing.original) text = autoDecimalText(autoCorrectText(text));
   const { r, c, original } = editing;
   const rule = validationAt(sheet(), r, c);
-  if (rule && rule.showError !== false && text !== original && !editing.dvOk && !checkValidation(wb, si, rule, r, c, text)) {
-    validationError(rule, dir, fillSel);
+  if (rule && rule.showError !== false && text !== original && editing.dvOk !== text && !checkValidation(wb, si, rule, r, c, text)) {
+    validationError(rule, dir, fillSel, text);
     return false;
   }
   if (editing.pivotItem) {
@@ -3918,7 +3919,7 @@ function pickRef() {
   const k = selKey();
   if (k === refPick.key) return;
   refPick.key = k;
-  refPick.input.value = refText(usedClip(sel), si, si !== refPick.home);
+  refPick.input.value = (refPick.prefix??'') + refText(usedClip(sel), si, si !== refPick.home);
 }
 /** 'Sheet 2'!$A$1:$B$9 · A1:B9 → { si, rg } (열 전체 · 행 전체는 사용 범위로 자름) */
 function parseRefInput(text) {
@@ -10795,20 +10796,26 @@ function insertEquation(eq) {
 }
 
 // ───────────────────────── 데이터 유효성 검사 ─────────────────────────
-function validationError(rule, dir, fillSel) {
-  const style = rule.errorStyle ?? 'stop';
-  const retry = () => { if (editing) setTimeout(() => { dom.editor.focus(); dom.editor.select(); }, 0); };
-  const cancel = () => cancelEdit();
-  const accept = () => { if (editing) { editing.dvOk = true; setTimeout(() => commitEdit(dir, { fillSel }), 0); } };
-  const body = el('div', { class: 'dv-error' },
-    el('span', { class: `dv-icon ${style}` }, style === 'stop' ? '✕' : style === 'warning' ? '!' : 'i'),
-    el('div', {}, rule.error || describeRule(rule), style === 'warning' ? el('div', { style: { marginTop: '8px' } }, '계속하시겠습니까?') : null));
-  const buttons = style === 'stop'
-    ? [{ label: '다시 시도', primary: true, action: retry }, { label: '취소', action: cancel }]
-    : style === 'warning'
-      ? [{ label: '예', primary: true, action: accept }, { label: '아니요', action: retry }, { label: '취소', action: cancel }]
-      : [{ label: '확인', primary: true, action: accept }, { label: '취소', action: cancel }];
-  openDialog({ title: rule.errorTitle || 'WIXEL', body, buttons, width: 400 });
+let dvErrorDialog=null;
+function validationError(rule,dir,fillSel,value) {
+  if(dvErrorDialog?.root.isConnected)return;
+  const style=rule.errorStyle??'stop',book=wb,host=si,target=sheet(),session=editing,input=dom.editor.value;
+  const signature=JSON.stringify(rule);let decided=false;
+  const valid=()=>wb===book&&si===host&&sheet()===target&&editing===session&&dom.editor.value===input&&JSON.stringify(validationAt(target,session.r,session.c))===signature;
+  const retry=()=>{decided=true;if(valid())setTimeout(()=>{if(valid()){dom.editor.focus();dom.editor.select();}},0);};
+  const cancel=()=>{decided=true;if(valid())cancelEdit();};
+  const accept=()=>{
+    decided=true;if(!valid())return;
+    if(viewOnly||book.props?.markedFinal||protectBlocked('cells',{r1:session.r,c1:session.c,r2:session.r,c2:session.c})){cancelEdit();return;}
+    session.dvOk=value;setTimeout(()=>{if(valid())commitEdit(dir,{fillSel});},0);
+  };
+  const body=el('div',{class:'dv-error'},el('span',{class:`dv-icon ${style}`,'aria-hidden':true},style==='stop'?'✕':style==='warning'?'!':'i'),
+    el('div',{},rule.error||describeRule(rule),style==='warning'?el('div',{style:{marginTop:'8px'}},'계속하시겠습니까?'):null));
+  const buttons=style==='stop'?[{label:'다시 시도(R)',primary:true,action:retry},{label:'취소',action:cancel}]
+    :style==='warning'?[{label:'예(Y)',primary:true,action:accept},{label:'아니요(N)',action:retry},{label:'취소',action:cancel}]
+    :[{label:'확인',primary:true,action:accept},{label:'취소',action:cancel}];
+  const dialog=openDialog({title:rule.errorTitle||'WIXEL',body,buttons,width:420,initialFocus:'.btn.primary',onClose:()=>{if(!decided&&valid())cancelEdit();if(dvErrorDialog===dialog)dvErrorDialog=null;}});
+  dvErrorDialog=dialog;dialog.root.classList.add('dv-error-dialog');
 }
 
 function openDvList() { pickFromList(true); }
@@ -10817,12 +10824,17 @@ function pickFromList(validationOnly = false) {
   if(viewOnly || book.props?.markedFinal || protectBlocked('cells',rg)) return;
   const rule=validationAt(target,r,c), ruleState=JSON.stringify(rule), validation=rule?.type==='list';
   if(validationOnly&&!validation)return;
-  const found=validation ? {items:listItems(book,host,rule),limited:false} : cellPickList(book,host,r,c);
+  const found=validation ? validationList(book,host,rule,r,c) : cellPickList(book,host,r,c);
   const m=book.mergeAt(host,r,c)??rg, b=gv.clientRect(m), cur=displayText(r,c), original=JSON.stringify(book.getCell(host,r,c));
   const pick = value => {
     if(wb!==book||si!==host||sheet()!==target||JSON.stringify(book.getCell(host,r,c))!==original||JSON.stringify(validationAt(target,r,c))!==ruleState){toast('문서 또는 대상 셀이 변경되었습니다. 목록을 다시 여세요.');return;}
     if(viewOnly||book.props?.markedFinal||protectBlocked('cells',rg))return;
-    book.transact(()=>{if(validation)book.setInput(host,r,c,value);else book.setCellData(host,r,c,{...cellData(book.getCell(host,r,c)),raw:value,inputType:'text'});autoWiden(rg);},meta());
+    book.transact(()=>{
+      if(validation&&!found.literal){const index=found.items.indexOf(value),raw=found.itemValues?.[index]??value;book.setCellData(host,r,c,{...cellData(book.getCell(host,r,c)),raw:typeof raw==='boolean'?(raw?'TRUE':'FALSE'):String(raw),inputType:typeof raw==='string'?'text':'value'});}
+      else if(validation&&!String(value).startsWith('='))book.setInput(host,r,c,String(value));
+      else book.setCellData(host,r,c,{...cellData(book.getCell(host,r,c)),raw:String(value),inputType:'text'});
+      autoWiden(rg);
+    },meta());
     if(circles)circles=invalidCells(book,host);focusGrid();
   };
   const search=el('input',{type:'search','aria-label':'목록 검색',placeholder:'목록 검색',class:'cell-pick-search','data-access-key':'none'});
@@ -10830,9 +10842,9 @@ function pickFromList(validationOnly = false) {
   const paint=()=>{
     const needle=search.value.toLocaleLowerCase('ko'), matches=found.items.filter(x=>String(x).toLocaleLowerCase('ko').includes(needle));
     choices.replaceChildren(...matches.slice(0,1000).map(value=>el('button',{class:'menu-item',role:'menuitem','data-access-key':'none',onmousedown:e=>e.preventDefault(),onclick:()=>{closeMenus();pick(value);}},String(value),value===cur?' ✓':'')));
-    status.textContent=!matches.length?'선택할 항목이 없습니다.':`${matches.length.toLocaleString()}개 항목`+(matches.length>1000?' · 검색으로 범위를 좁히세요.':'')+(found.limited?' · 인접 데이터 일부에서 찾음':'');
+    status.textContent=found.error?found.error:!matches.length?'선택할 항목이 없습니다.':`${matches.length.toLocaleString()}개 항목`+(matches.length>1000?' · 검색으로 범위를 좁히세요.':'')+(found.limited?' · '+(validation?'목록 원본 범위를 줄이세요.':'인접 데이터 일부에서 찾음'):'');
   };
-  search.addEventListener('input',paint); search.addEventListener('keydown',e=>{if(e.key==='ArrowDown'||e.key==='Enter'){e.preventDefault();e.stopPropagation();choices.querySelector('button')?.focus();}});
+  search.addEventListener('input',paint); search.addEventListener('keydown',e=>{if(e.isComposing||e.keyCode===229)return;if(e.key==='ArrowDown'||e.key==='Enter'){e.preventDefault();e.stopPropagation();choices.querySelector('button')?.focus();}});
   choices.addEventListener('keydown',e=>{const buttons=[...choices.querySelectorAll('button')],at=buttons.indexOf(document.activeElement);if(['ArrowDown','ArrowUp','Home','End'].includes(e.key)){e.preventDefault();e.stopPropagation();const next=e.key==='Home'?0:e.key==='End'?buttons.length-1:(at+(e.key==='ArrowDown'?1:-1)+buttons.length)%buttons.length;buttons[next]?.focus();}else if(e.key==='Enter'||e.key===' '){e.preventDefault();e.stopPropagation();buttons[at]?.click();}});
   paint(); const menu=openMenu({x:b.left,y:b.bottom},[{node:search},{node:choices},{node:status}],{minWidth:Math.max(200,Math.min(360,b.width+17)),scroll:true});
   menu.classList.add('dv-list','cell-pick-list'); menu.setAttribute('aria-label','드롭다운 목록에서 선택'); menu.addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();closeMenus();focusGrid();}},true); search.focus();
@@ -10848,116 +10860,69 @@ function updateDvPrompt() {
     dvPromptEl = null;
     return;
   }
-  if (!dvPromptEl) { dvPromptEl = el('div', { class: 'dv-prompt' }); document.body.append(dvPromptEl); }
+  if (!dvPromptEl) { dvPromptEl = el('div', { class: 'dv-prompt', role:'tooltip', id:'dv-input-message' }); document.body.append(dvPromptEl); }
   dvPromptEl.replaceChildren(...(rule.promptTitle ? [el('b', {}, rule.promptTitle)] : []), rule.prompt ?? '');
-  dvPromptEl.style.left = `${Math.min(b.left + Math.min(b.width, 48), innerWidth - 250)}px`;
-  dvPromptEl.style.top = `${b.bottom + 6}px`;
+  dvPromptEl.style.maxWidth=`${Math.min(280,Math.max(1,innerWidth-24))}px`;
+  const size=dvPromptEl.getBoundingClientRect();
+  dvPromptEl.style.left=`${Math.max(8,Math.min(b.left+Math.min(b.width,48),innerWidth-size.width-8))}px`;
+  dvPromptEl.style.top=`${Math.max(8,Math.min(b.bottom+6,innerHeight-size.height-8))}px`;
 }
 
 function validationDialog() {
-  if (editing && !commitEdit()) return;
-  const cur = validationAt(sheet(), active.r, active.c) ?? {};
-  const mixed = (sheet().validations ?? []).some((v) => v !== cur && v.r1 <= sel.r2 && v.r2 >= sel.r1 && v.c1 <= sel.c2 && v.c2 >= sel.c1);
-  const label = (text, input) => el('label', {}, el('span', {}, text), input);
-  const inline = (input, text) => el('label', { style: { display: 'flex', flexDirection: 'row', alignItems: 'center', gap: '6px' } }, input, text);
-  const type = el('select', {}, VALIDATION_TYPES.map((t) => el('option', { value: t.id, selected: (cur.type ?? 'any') === t.id }, t.label)));
-  const op = el('select', {}, VALIDATION_OPS.map((o) => el('option', { value: o.id, selected: (cur.op ?? 'between') === o.id }, o.label)));
-  const strip = (f) => {
-    const t = String(f ?? '');
-    return t.startsWith('"') && t.endsWith('"') ? t.slice(1, -1) : t && /^[A-Z$]|!/i.test(t) && parseRangeName(t.replace(/\$/g, '').split('!').pop()) ? `=${t}` : t;
+  if(editing&&!commitEdit())return;
+  if(viewOnly||wb.props?.markedFinal||isProtected(sheet())){toast('보호되지 않은 편집 가능한 시트에서 데이터 유효성을 변경하세요.');return;}
+  const book=wb,host=si,hostSheet=sheet(),target={r1:sel.r1,c1:sel.c1,r2:sel.r2,c2:sel.c2},homeActive={...active},homeKey=selKey();
+  const initial=hostSheet.validations??[],overlap=initial.filter(v=>v.r1<=target.r2&&v.r2>=target.r1&&v.c1<=target.c2&&v.c2>=target.c1);
+  const original=validationAt(hostSheet,active.r,active.c)??overlap[0]??null,signature=original?validationSignature(original):null;
+  const mixed=new Set(overlap.map(validationSignature)).size>1;
+  const rule=original&&!mixed?relocateValidation(original,target):{};
+  let dialog,picking=null,cleared=false;
+  const valid=()=>book===wb&&wb.sheets[host]===hostSheet&&si===host&&hostSheet.validations===initial&&selKey()===homeKey;
+  const pickerBar=el('div',{class:'dv-picker-bar',hidden:true});
+  const restoreSelection=()=>{if(wb!==book||wb.sheets[host]!==hostSheet)return;if(si!==host)switchSheet(host);selectRange(target,'cells',homeActive);};
+  const finishPick=accept=>{
+    if(!picking)return;const item=picking;picking=null;refPick=null;window.removeEventListener('keydown',pickKeys,true);
+    if(accept)item.input.value=item.edit.value;
+    pickerBar.hidden=true;pickerBar.replaceChildren();editor.body.hidden=false;
+    dialog.root.classList.remove('dv-picking');dialog.root.parentElement.classList.remove('modeless');dialog.root.setAttribute('aria-modal','true');
+    restoreSelection();editor.refresh();item.input.focus();
   };
-  const f1 = el('input', { type: 'text', value: strip(cur.f1) });
-  const f2 = el('input', { type: 'text', value: strip(cur.f2) });
-  const blank = el('input', { type: 'checkbox', checked: cur.allowBlank !== false });
-  const dropdown = el('input', { type: 'checkbox', checked: cur.showDropdown !== false });
-  const f1Label = el('span', {});
-  const f2Label = el('span', {}, '최대값');
-  const opRow = label('제한 방법', op);
-  const f1Row = el('label', {}, f1Label, f1);
-  const f2Row = el('label', {}, f2Label, f2);
-  const ddRow = inline(dropdown, '드롭다운 표시');
-  const refresh = () => {
-    const t = type.value;
-    const ranged = ['whole', 'decimal', 'date', 'time', 'textLength'].includes(t);
-    const two = ranged && (op.value === 'between' || op.value === 'notBetween');
-    opRow.style.display = ranged ? '' : 'none';
-    f1Row.style.display = t === 'any' ? 'none' : '';
-    f2Row.style.display = two ? '' : 'none';
-    ddRow.style.display = t === 'list' ? '' : 'none';
-    f1Label.textContent = t === 'list' ? '원본' : t === 'custom' ? '수식' : two ? '최소값' : { equal: '값', notEqual: '값', greaterThan: '최소값', greaterThanOrEqual: '최소값', lessThan: '최대값', lessThanOrEqual: '최대값' }[op.value] ?? '값';
-    f1.placeholder = t === 'list' ? '예: 사과,배,포도 또는 =$A$1:$A$5' : t === 'custom' ? '예: =A1>0' : t === 'date' ? '예: 2024-01-01' : t === 'time' ? '예: 9:00' : '';
-    f2.placeholder = f1.placeholder;
+  const pickKeys=e=>{if(picking&&!e.isComposing&&e.keyCode!==229&&['Enter','Escape'].includes(e.key)){e.preventDefault();e.stopImmediatePropagation();finishPick(e.key==='Enter');}};
+  const pick=(name,input)=>{
+    if(!valid()){editor.setError('문서 또는 선택 영역이 변경되었습니다. 창을 다시 여세요.');return;}
+    const edit=el('input',{type:'text',value:input.value,'aria-label':'범위 참조',spellcheck:false});
+    picking={name,input,edit};
+    pickerBar.replaceChildren(edit,el('button',{type:'button',class:'btn','aria-label':'범위 선택 완료','data-access-key':'none',onclick:()=>finishPick(true)},'▾'));
+    pickerBar.hidden=false;editor.body.hidden=true;dialog.root.classList.add('dv-picking');dialog.root.parentElement.classList.add('modeless');dialog.root.setAttribute('aria-modal','false');
+    refPick={input:edit,key:selKey(),home:host,prefix:'='};window.addEventListener('keydown',pickKeys,true);edit.focus();
   };
-  type.addEventListener('change', refresh);
-  op.addEventListener('change', refresh);
-  refresh();
-  const showPrompt = el('input', { type: 'checkbox', checked: cur.showPrompt !== false });
-  const promptTitle = el('input', { type: 'text', value: cur.promptTitle ?? '' });
-  const prompt = el('textarea', { rows: 4 }, cur.prompt ?? '');
-  const showError = el('input', { type: 'checkbox', checked: cur.showError !== false });
-  const errorStyle = el('select', {}, [['stop', '중지'], ['warning', '경고'], ['info', '정보']].map(([v, l]) => el('option', { value: v, selected: (cur.errorStyle ?? 'stop') === v }, l)));
-  const errorTitle = el('input', { type: 'text', value: cur.errorTitle ?? '' });
-  const error = el('textarea', { rows: 4 }, cur.error ?? '');
-  const col = (...kids) => el('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } }, ...kids);
-  const pages = [
-    ['설정', col(el('div', { class: 'muted' }, '유효성 조건'), label('제한 대상', type), inline(blank, '공백 무시'), opRow, f1Row, f2Row, ddRow)],
-    ['설명 메시지', col(inline(showPrompt, '셀을 선택하면 설명 메시지 표시'), label('제목', promptTitle), label('설명 메시지', prompt))],
-    ['오류 메시지', col(inline(showError, '유효하지 않은 데이터를 입력하면 오류 메시지 표시'), label('스타일', errorStyle), label('제목', errorTitle), label('오류 메시지', error))],
-  ];
-  const tabBar = el('div', { class: 'dlg-tabs' });
-  const pageBox = el('div', { style: { minHeight: '260px', paddingTop: '10px' } });
-  const show = (i) => {
-    [...tabBar.children].forEach((b, j) => b.classList.toggle('on', i === j));
-    pageBox.replaceChildren(pages[i][1]);
+  const editor=createValidationEditor({rule,date1904:book.date1904,canApplySame:!!original&&!mixed,onPick:pick});
+  const note=mixed?el('p',{class:'dv-mixed-note'},'선택 영역의 유효성 설정이 서로 다릅니다. 확인하면 선택 영역 전체를 새 설정으로 바꿉니다.'):null;
+  const apply=()=>{
+    if(!valid()){editor.setError('문서·선택 영역 또는 유효성 설정이 변경되었습니다. 창을 다시 여세요.');return false;}
+    if(viewOnly||book.props?.markedFinal||isProtected(hostSheet)){editor.setError('보호된 시트나 읽기 전용 문서에는 유효성 검사를 변경할 수 없습니다.');return false;}
+    let next=editor.read();const candidate={...target,...next},problem=cleared?null:validateValidationRule(book,host,candidate);
+    if(problem){editor.showTab(0);editor.setError(problem);return false;}
+    const empty=next.type==='any'&&!next.prompt&&!next.promptTitle&&!next.error&&!next.errorTitle&&next.imeMode==='noControl'&&next.showPrompt&&next.showError&&next.allowBlank&&next.errorStyle==='stop';
+    if(cleared||empty)next=null;
+    const ranges=[target];if(editor.fields.applySame.checked&&original)for(const v of initial)if(validationSignature(v)===signature)ranges.push({r1:v.r1,c1:v.c1,r2:v.r2,c2:v.c2});
+    let rest=initial;
+    for(const rg of ranges)rest=rest.flatMap(v=>subtractRange(v,rg));
+    if(next){
+      // 범위 겹침을 빼서 같은 셀에 중복 규칙을 만들지 않는다.
+      let targets=[];for(const rg of ranges){let pieces=[rg];for(const used of targets)pieces=pieces.flatMap(p=>subtractRange(p,used));for(const piece of pieces)targets.push(piece);}
+      for(const rg of targets)rest.push(relocateValidation({...target,...next},rg));
+    }
+    if(JSON.stringify(rest)!==JSON.stringify(initial))book.transact(()=>book.setSheetProp(host,'validations',rest),meta());
+    if(circles)circles=invalidCells(book,host);gv.renderOverlays();updateSelectionUI();return true;
   };
-  pages.forEach(([name], i) => tabBar.append(el('button', { type: 'button', class: 'dlg-tab', onclick: () => show(i) }, name)));
-  show(0);
-  const target = { r1: sel.r1, c1: sel.c1, r2: sel.r2, c2: sel.c2 };
-  const apply = (rule) => {
-    const rest = (sheet().validations ?? []).flatMap((v) => subtractRange(v, target));
-    wb.transact(() => wb.setSheetProp(si, 'validations', rule ? [...rest, { ...target, ...rule }] : rest), meta());
-    if (circles) circles = invalidCells(wb, si);
-    gv.renderOverlays();
-    updateSelectionUI();
-  };
-  const toFormula = (v, t) => {
-    const x = v.trim();
-    if (!x) return undefined;
-    if (t === 'list') return x.startsWith('=') ? x.slice(1) : x;
-    if (x.startsWith('=')) return x.slice(1);
-    if (t === 'date' || t === 'time') { const p = parseInput(x, wb.date1904).value; return typeof p === 'number' ? String(p) : x; }
-    return x;
-  };
-  openDialog({
-    title: '데이터 유효성', width: 460,
-    body: el('div', {}, mixed ? el('div', { class: 'muted', style: { marginBottom: '6px' } }, '선택 영역에 다른 유효성 검사 설정이 섞여 있습니다. 확인을 누르면 모두 이 설정으로 바뀝니다.') : null, tabBar, pageBox),
-    buttons: [
-      { label: '모두 지우기', action: () => apply(null) },
-      {
-        label: '확인', primary: true,
-        action: () => {
-          const t = type.value;
-          const rule = {
-            type: t, op: op.value, allowBlank: blank.checked, showDropdown: dropdown.checked,
-            showPrompt: showPrompt.checked, showError: showError.checked, errorStyle: errorStyle.value,
-          };
-          if (!['whole', 'decimal', 'date', 'time', 'textLength'].includes(t)) delete rule.op;
-          if (t !== 'any') {
-            rule.f1 = toFormula(f1.value, t);
-            if (!rule.f1) { show(0); alertDialog('데이터 유효성', t === 'list' ? '원본을 입력하세요.' : '값을 입력하세요.'); return false; }
-            if (rule.op === 'between' || rule.op === 'notBetween') {
-              rule.f2 = toFormula(f2.value, t);
-              if (!rule.f2) { show(0); alertDialog('데이터 유효성', '최대값을 입력하세요.'); return false; }
-            }
-          }
-          for (const [k, input] of [['promptTitle', promptTitle], ['prompt', prompt], ['errorTitle', errorTitle], ['error', error]]) if (input.value.trim()) rule[k] = input.value;
-          apply(t === 'any' && !rule.prompt && !rule.promptTitle ? null : rule);
-          return undefined;
-        },
-      },
-      { label: '취소' },
-    ],
-  });
+  editor.body.addEventListener('input',()=>{cleared=false;editor.setError(null);});editor.body.addEventListener('change',()=>{cleared=false;editor.setError(null);});
+  dialog=openDialog({title:'데이터 유효성',width:470,body:el('div',{},note,editor.body,pickerBar),initialFocus:editor.fields.type,
+    defaultAction:()=>{if(picking)finishPick(true);else if(apply())dialog.close();},
+    onClose:()=>{window.removeEventListener('keydown',pickKeys,true);if(picking){picking=null;refPick=null;restoreSelection();}},
+    buttons:[{label:'모두 지우기(C)',accessKey:'c',action:()=>{editor.reset();cleared=true;return false;}},{label:'확인',primary:true,action:apply},{label:'취소',accessKey:'none'}]});
+  dialog.root.classList.add('dv-dialog');
+  dialog.root.addEventListener('keydown',e=>{if(picking&&!e.isComposing&&e.keyCode!==229&&['Enter','Escape'].includes(e.key)){e.preventDefault();e.stopImmediatePropagation();finishPick(e.key==='Enter');}},true);
 }
 
 // ───────────────────────── 매크로 ─────────────────────────
@@ -17800,9 +17765,9 @@ const MENUS = {
   tableStylesDesign: (a) => { tableStyleGallery(a, false); },
   shapes: () => [{ node: shapeGallery((k) => startDraw(k)) }],
   validation: () => [
-    { label: '데이터 유효성 검사...', icon: 'validation', action: validationDialog },
-    { label: '잘못된 데이터 표시', action: () => run('circleInvalid') },
-    { label: '유효성 표시 지우기', action: () => run('clearCircles') },
+    { label: '데이터 유효성 검사(V)...', icon: 'validation', disabled:viewOnly||!!wb.props?.markedFinal||isProtected(sheet()), action: validationDialog },
+    { label: '잘못된 데이터(I)', icon:'validationCircle', action: () => run('circleInvalid') },
+    { label: '유효성 표시 지우기(R)', icon:'validationClear', disabled:!circles?.length, action: () => run('clearCircles') },
   ],
   paste: () => [
     { label: '붙여넣기', icon: 'paste', key: 'Ctrl+V', action: () => pasteFromButton('all') },
@@ -18802,6 +18767,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileFit','toggleR
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['데이터 유효성 검사', ['설정·설명·오류·IME 네 탭, 같은 설정 일괄 적용, 범위 선택과 입력 오류 처리를 보강했습니다.']],
   ['슬라이서 리본과 크기', ['스타일 견본·페이지 탐색, cm 단위 단추·전체 크기, 여러 슬라이서 서식과 맞춤을 보강했습니다.']],
   ['피벗 필터 검색과 선택', ['검색 목록 안의 [필터에 현재 선택한 내용 추가]로 기존 선택과 검색 결과를 합칩니다. 끄면 검색 선택만 적용합니다.', '와일드카드 검색·검색 지우기·방향키 이동·한글 Enter 보호·빈 결과 확인 차단을 보강하고, 보고서 필터의 다중 선택 모드를 XLSX에도 보존합니다.']],
   ['슬라이서·피벗·차트 우클릭', ['슬라이서 새로 고침·보고서 연결·순서·대체 텍스트·크기와 속성을 바로 설정합니다.', '피벗의 선택한 값 필드에 요약·표시 형식·정렬을 적용하고 세부 정보·옵션·필드 설정을 엽니다.']],
@@ -19199,6 +19165,7 @@ function onBookChange() {
     renderQueued = true;
     queueMicrotask(() => {
       renderQueued = false;
+      if(circles)circles=invalidCells(wb,si);
       renderAll();
     });
   }

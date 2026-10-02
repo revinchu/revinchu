@@ -2531,3 +2531,42 @@ body.mobile-work-mode .slicer-style-menu .style-grid.slstyles { width:min(336px,
 .slicer-group-edge.top {top:-3px}.slicer-group-edge.bottom{bottom:-3px}
 .slicer-group-edge.left,.slicer-group-edge.right {top:5px;bottom:5px;width:6px}
 .slicer-group-edge.left{left:-3px}.slicer-group-edge.right{right:-3px}
+
+/* 데이터 유효성: 네 탭, 범위 선택 및 초안 편집 */
+.dv-dialog .dialog-body { padding:14px 16px; }
+.dv-editor { min-width:0; }
+.dv-page { min-height:280px; padding-top:14px; }
+.dv-fieldset { min-width:0; margin:10px 0 14px; padding:12px; border:1px solid var(--border,#ddd); border-radius:5px; }
+.dv-fieldset legend { padding:0 6px; color:var(--green,#217346); font-weight:500; }
+.dv-dialog .dialog-body .dv-field { display:flex; flex-direction:column; align-items:stretch; gap:5px; min-width:0; margin:0 0 10px; }
+.dv-dialog .dialog-body label.dv-field > span:first-child { width:auto; max-width:none; align-self:stretch; }
+.dv-dialog .dialog-body .dv-field > input:not([type=checkbox]),.dv-dialog .dialog-body .dv-field select,.dv-dialog .dialog-body .dv-field textarea { flex:none; width:100%; min-width:0; box-sizing:border-box; }
+.dv-field textarea { min-height:105px; resize:vertical; }
+.dv-dialog .dialog-body .dv-check { flex-direction:row; align-items:center; gap:7px; line-height:1.5; }
+.dv-check input { flex:none; margin:0; }
+.dv-condition-grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); column-gap:14px; }
+.dv-condition-grid > .dv-field:not(:first-child) { grid-column:1 / -1; }
+.dv-condition-grid > .dv-field:nth-child(3) { grid-column:1; }
+.dv-options { padding-top:24px; }
+.dv-reference { display:flex; min-width:0; }
+.dv-reference input { min-width:0; width:100%; border-radius:3px 0 0 3px; }
+.dv-ref-pick { flex:none; width:30px; border:1px solid var(--border,#bbb); border-left:0; background:var(--ribbon-bg,#f5f5f5); color:var(--green,#217346); cursor:pointer; }
+.dv-error-grid { display:grid; grid-template-columns:115px minmax(0,1fr); gap:16px; }
+.dv-error-style .dv-icon { width:42px; height:42px; font-size:25px; margin:30px auto 0; }
+.dv-error-style .dv-icon.disabled { opacity:.35; }
+.dv-settings { display:flex; flex-direction:column; min-height:280px; }
+.dv-settings > .dv-check:last-child { margin-top:auto; }
+.dv-ime-note,.dv-mixed-note { font-size:12px; line-height:1.65; color:var(--text-muted,#666); }
+.dv-settings-error { padding:9px 10px; border:1px solid #e6b5ac; color:#9c2922; background:#fff7f5; margin-top:12px; border-radius:4px; }
+.dv-editor [hidden],.dv-picker-bar[hidden] { display:none!important; }
+.dv-dialog .dialog-foot .btn:first-child { margin-right:auto; }
+.dv-picker-bar { display:flex; gap:6px; }
+.dv-picker-bar input { flex:1; min-width:0; }
+.dv-picking .dialog-foot,.dv-picking .dv-mixed-note { display:none; }
+.dv-picking .dialog-body { padding:8px; }
+@media (max-width:480px) {
+  .dv-dialog .dialog-body { padding:10px; }
+  .dv-condition-grid { column-gap:10px; }
+  .dv-error-grid { grid-template-columns:85px minmax(0,1fr); gap:10px; }
+  .dv-editor .dlg-tab { padding:7px 8px; white-space:nowrap; }
+}

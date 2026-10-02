@@ -1,3 +1,4 @@
+import { relocateValidation, VALIDATION_IME_MODES } from './validation.js';
 import { chartAreaFormatXml, readChartAreaFormat } from './chart-area-drawingml.js';
 import { readPhonetic, normalizePhonetic, phoneticXml } from './phonetic.js';
 import { normalizeVideo, MEDIA_OBJECT_URI } from './media-object.js';
@@ -1254,14 +1255,19 @@ function readValidations(root) {
       showPrompt: a.showInputMessage === '1' || a.showInputMessage === 'true',
       errorStyle: a.errorStyle === 'warning' ? 'warning' : a.errorStyle === 'information' ? 'info' : 'stop',
     };
-    if (f1 !== undefined && f1 !== '') base.f1 = f1;
+    if (f1 !== undefined && f1 !== '') {
+      base.f1 = f1;
+      // OOXML 목록 수식은 = 없이 저장된다. 이름·함수는 리터럴 목록과 구별해 둔다.
+      if(type==='list'&&!f1.startsWith('"')) {try {if(!['ref','range','sref','spill'].includes(parse(f1.replace(/^=/,'')).type))base.f1='='+f1.replace(/^=/,'');}catch{base.f1='='+f1.replace(/^=/,'');}}
+    }
     if (f2 !== undefined && f2 !== '') base.f2 = f2;
     for (const k of ['errorTitle', 'error', 'promptTitle', 'prompt']) if (a[k]) base[k] = a[k];
-    if (type === 'any' && !base.prompt) return;
+    if(VALIDATION_IME_MODES.includes(a.imeMode))base.imeMode=a.imeMode;
+    let origin=null;
     for (const part of String(sqref ?? '').trim().split(/\s+/)) {
       if (!part) continue;
       const rg = /^[A-Z]+:[A-Z]+$/i.test(part) ? parseRangeName(`${part.split(':')[0]}1:${part.split(':')[1]}${MAX_ROWS}`) : refToRange(part);
-      if (rg) out.push({ ...rg, r2: Math.min(rg.r2, MAX_ROWS - 1), ...base });
+      if (rg) {const range={...rg,r2:Math.min(rg.r2,MAX_ROWS-1)};origin??=range;out.push(relocateValidation({...origin,...base},range));}
     }
   };
   for (const dv of kids(child(root, 'dataValidations'), 'dataValidation')) {
@@ -3616,11 +3622,11 @@ function shapeXml(sh, id, xfrm, hyperlinkXml = () => '') {
 /** 목록 원본: 범위 참조가 아니면 "a,b" 로 감싸기 */
 function dvFormula(rule, f) {
   if (f === undefined || f === null || f === '') return '';
-  let t = String(f).trim().replace(/^=/, '');
-  if (rule.type === 'list' && !t.startsWith('"')) {
-    const bang = t.lastIndexOf('!');
-    const ref = (bang > 0 ? t.slice(bang + 1) : t).replace(/\$/g, '');
-    if (!parseRangeName(ref)) t = `"${t.replace(/"/g, '')}"`;
+  const source=String(f).trim();
+  let t=source.replace(/^=/,'');
+  if(rule.type==='list'&&!source.startsWith('=')&&!t.startsWith('"')) {
+    let reference=false;try{reference=['ref','range','sref','spill'].includes(parse(t).type);}catch{}
+    if(!reference)t='"'+t.replace(/"/g,'""')+'"';
   }
   return t;
 }
@@ -3631,6 +3637,7 @@ function validationXml(v) {
   if (!['list', 'custom', 'any'].includes(v.type) && v.op && v.op !== 'between') attrs.push(`operator="${v.op}"`);
   if (v.allowBlank !== false) attrs.push('allowBlank="1"');
   if (v.type === 'list' && v.showDropdown === false) attrs.push('showDropDown="1"');
+  if(VALIDATION_IME_MODES.includes(v.imeMode))attrs.push('imeMode="'+v.imeMode+'"');
   if (v.showPrompt !== false) attrs.push('showInputMessage="1"');
   if (v.showError !== false) attrs.push('showErrorMessage="1"');
   for (const k of ['errorTitle', 'error', 'promptTitle', 'prompt']) if (v[k]) attrs.push(`${k}="${esc(v[k])}"`);

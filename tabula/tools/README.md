@@ -445,3 +445,8 @@ node tools/mobile-layout.mjs
 - `node tools/slicer-arrange.mjs`: 슬라이서/도형 혼합 이동, 공통 변위·원점 제한·격자 붙임, noMove/보호 원자 차단, Escape/시트 전환 취소, 그룹 크기·맞춤·분배·쌓임 순서와 Undo/Redo를 검사합니다. 수정 전 재현은 소스에서 `SLICER_ARRANGE_BASELINE=eb6162d`, `SLICER_ARRANGE_FILTER=혼합`로 실행합니다.
 
 `WIXEL_URL`로 소스 또는 최종 번들을 지정하고 기존 Playwright 환경 변수를 사용합니다. 새 격리 브라우저와 합성 자료만 사용하며 외부/API 요청과 쓰기를 차단합니다. 실제 Excel 화면 전체의 픽셀 일치나 모든 조합의 동등성을 판정하는 도구는 아닙니다. 표준 XLSX·실제 Excel 왕복 근거는 [47번 문서](../docs/codex/47_슬라이서리본과배치.md)를 참고하세요.
+
+
+## 데이터 유효성 검사
+
+`node tools/validation-parity.mjs`는 실제 데이터 리본 메뉴와 네 탭을 통해 8종 제한·8종 비교, 설명 메시지, 중지/경고/정보, 같은 설정 적용, 범위 선택과 취소, IME 메타데이터, 잘못된 값 표시, 이름 목록과 숫자 정밀도 보존, Alt/Enter/Escape, 보호·늦은 대상 변경·Undo와 320/390px 화면을 검사합니다. `WIXEL_URL`은 소스 또는 번들 URL, `WIXEL_VALIDATION_OUT`은 D: 출력 폴더(기본 `D:/Codex/Temp/wixel-validation/source`), `WIXEL_VALIDATION_FILTER`는 시나리오 이름 일부입니다. 격리 브라우저의 합성 문서만 사용하며 API·외부 요청·원격 쓰기를 차단합니다. IME composition 이벤트 검사는 실제 운영체제의 입력기 전환 검사가 아닙니다. 표준 파일과 네이티브 Excel 검증·제한은 [48번 문서](../docs/codex/48_데이터유효성검사.md)에 기록합니다.

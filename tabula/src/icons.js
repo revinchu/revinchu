@@ -107,6 +107,8 @@ export const ICONS = {
   picture: svg(`<rect x="2.5" y="4" width="15" height="12" rx="1"/><circle cx="7" cy="8" r="1.5" fill="${ACCENT}" stroke="none"/><path d="M3 15l4.5-4.5 3 3 2.5-2.5L17 15.5" stroke="${BLUE}"/>`, 28),
   shapes: svg(`<rect x="2.5" y="9" width="8" height="8" fill="${BLUE}" stroke="${BLUE}" opacity=".85"/><circle cx="13" cy="7" r="4.5" fill="var(--surface)" stroke="${ACCENT}" stroke-width="1.3"/>`, 28),
   textbox: svg(`<rect x="3" y="3.5" width="14" height="13" stroke-dasharray="1.6 1.2"/><path d="M7 7h6M10 7v7" stroke="${BLUE}" stroke-width="1.5"/>`, 28),
+  validationCircle: svg(`<rect x="3" y="4" width="14" height="12"/><path d="M3 8h14M3 12h14M9 4v12"/><ellipse cx="10" cy="10" rx="9" ry="4" stroke="#D13438" stroke-width="1.5"/>`,28),
+  validationClear: svg(`<rect x="3" y="4" width="14" height="12"/><path d="M3 8h14M3 12h14M9 4v12"/><path d="m11 12 4-4 4 4-4 4h-4z" fill="#d779db" stroke="#9d409f"/><path d="M11 16h9"/>`,28),
   validation: svg(`<rect x="3" y="3" width="10" height="4" rx=".5"/><rect x="3" y="9" width="10" height="4" rx=".5"/><path d="M11.5 15.5l2 2 4-5" stroke="#107C41" stroke-width="1.6"/><path d="M15.5 4.5l2 2m0-2l-2 2" stroke="#D13438" stroke-width="1.4"/>`, 28),
   macro: svg(`<rect x="3" y="3.5" width="14" height="13" rx="1"/><path d="M3 7h14"/><path d="M8 10l-2 2 2 2M12 10l2 2-2 2" stroke="${BLUE}" stroke-width="1.4"/>`, 28),
   chartPie: svg(`<circle cx="10" cy="10" r="7" fill="${BLUE}" stroke="none"/><path d="M10 10V3a7 7 0 0 1 6.6 9.4z" fill="#ED7D31" stroke="#fff"/><path d="M10 10l6.6 2.4A7 7 0 0 1 12 16.7z" fill="#A5A5A5" stroke="#fff"/>`, 28),
