@@ -19,6 +19,9 @@ import { publishedWorkbook } from './publish.js';
 import { watchReleaseUpdate } from './release-update.js';
 import { pictureEditor } from './picture-ui.js';
 import { preparePictureExport, pictureExportBounds } from './picture-export.js';
+import { objectImageSvg, prepareImageSvg, svgImageBlob } from './object-image-export.js';
+import { rangeImageSvg } from './range-image-export.js';
+import { openImageExportDialog } from './image-export-ui.js';
 import { onlinePicturePicker } from './online-picture-ui.js';
 import { newSmartArt, isSmartArt, smartArtParts } from './smartart.js';
 import { smartArtSvg } from './smartart-render.js';
@@ -3430,7 +3433,7 @@ function protectAction(cmd) {
   if (cmd === 'clearHyperlinks' || cmd === 'removeHyperlink') return 'hyperlinks';
   if (cmd === 'pasteSpecial') return 'free';
   if (cmd === 'pasteFormats') return 'formatCells';
-  if (['pictureSave', 'pictureOriginal'].includes(cmd)) return 'free';
+  if (['pictureSave', 'pictureOriginal', 'objectSaveImage', 'objectSaveSvg', 'rangeSaveImage'].includes(cmd)) return 'free';
   if (/^picture/.test(cmd)) return 'objects';
   if (/^slicer/.test(cmd) && !['slicerClear','slicerConnections'].includes(cmd)) return 'objects';
   if (PROTECT_FREE.has(cmd)) return 'free';
@@ -9284,7 +9287,7 @@ function importChartTemplate(id=chartSel) {
 function pictureContextMenu(id, pos) {
   const im = pictureHere(); if (!im || im.id !== id) return;
   const readonly = contextCommandDisabled('pictureFormat');
-  const action = (label, cmd, extra = {}) => ({ label, disabled: !['pictureSave', 'pictureOriginal', 'selectionPane'].includes(cmd) && readonly, action: () => run(cmd), ...extra });
+  const action = (label, cmd, extra = {}) => ({ label, disabled: !['pictureSave', 'pictureOriginal', 'selectionPane', 'objectSaveImage', 'objectSaveSvg'].includes(cmd) && readonly, action: () => run(cmd), ...extra });
   const toolbar = el('div', { class: 'picture-mini-toolbar', 'aria-label': '그림 미니 도구 모음' },
     [['스타일', 'effects', 'styles'], ['자르기', 'pictureCrop', 'crop']].map(([name, icon, section]) => el('button', { type: 'button', disabled: readonly, onclick: () => { closeMenus(); imageDialog(id, section); } }, el('span', { html: ICONS[icon] }), name)));
   const link = drawingLinkAddress(im.hyperlink);
@@ -9301,7 +9304,8 @@ function pictureContextMenu(id, pos) {
     action('선택 창...', 'selectionPane', { icon: 'selectionPane' }), { sep: true },
     { label: link ? '링크 편집(I)...' : '링크(I)...', icon: 'link', disabled: readonly, action: () => objectHyperlinkDialog(id) },
     ...(link ? [{ label: '링크 열기', action: () => openLink(link) }, { label: '링크 제거', disabled: readonly, action: () => updateObject(id, { hyperlink: undefined }) }] : []),
-    action('그림으로 저장(S)...', 'pictureSave', { icon: 'save' }),
+    action('그림으로 저장(S)...', 'objectSaveImage', { icon: 'save' }),
+    ...(svgSelectionAvailable()?[action('SVG로 저장(V)...','objectSaveSvg',{icon:'save'})]:[]),
     action('원본 보기(V)...', 'pictureOriginal'), action('매크로 지정(N)...', 'pictureAssignMacro'), { sep: true },
     action('대체 텍스트 편집(A)...', 'pictureAlt', { icon: 'textbox' }),
     action('크기 및 속성(Z)...', 'pictureSize'), action('그림 서식(O)...', 'pictureFormat', { icon: 'format', key: 'Ctrl+1' }),
@@ -9326,6 +9330,7 @@ function objectMenu(id, pos) {
     { label: '붙여넣기', icon: 'paste', key: 'Ctrl+V', disabled: !objClip, action: pasteObject },
     { sep: true },
   ];
+  if(f.prop==='shapes')items.push({label:'그림으로 저장(S)...',icon:'save',action:()=>run('objectSaveImage')},{label:'SVG로 저장(V)...',icon:'save',action:()=>run('objectSaveSvg')},{sep:true});
   if (normalizeVideo(f.obj.media)) items.push({ label: '영상 재생...', icon: 'picture', action: () => playMedia(id) });
   if (f.prop === 'shapes' || f.prop === 'images') {
     const link = drawingLinkAddress(f.obj.hyperlink);
@@ -9909,6 +9914,56 @@ function pictureOriginal() {
   const im = pictureHere(); if (!im) return;
   openDialog({ title: '그림 원본', width: 800, body: el('div', { class: 'picture-original-view' }, el('img', { src: im.originalSrc || im.src, alt: im.alt || im.name || '원본 그림' }), el('p', { class: 'muted' }, '보정·자르기·테두리를 적용하기 전의 그림입니다.')), buttons: [{ label: '닫기', primary: true }] });
 }
+
+/** 저장은 문서 편집이 아니다. 시작 대상과 문서 버전은 파일 쓰기 직전에도 확인한다. */
+function imageSaveAction(valid) {
+  return async (fileName,make)=>{
+    if(!valid())throw new Error('문서 또는 선택한 대상이 변경되었습니다. 창을 다시 여세요.');
+    const target=await pickSaveTarget(fileName);if(!target)return false;
+    if(!valid())throw new Error('문서 또는 선택한 대상이 변경되어 저장을 취소했습니다.');
+    const blob=await make();
+    if(!valid())throw new Error('그림을 만드는 동안 문서 또는 선택한 대상이 변경되어 저장을 취소했습니다.');
+    await writeSaveTarget(target,blob);toast(`'${target.name}' 파일을 저장했습니다.`);return true;
+  };
+}
+function svgSelectionAvailable() {
+  const entries=selectedObjects();
+  return entries.length>0&&entries.every(f=>f.prop==='shapes'||f.prop==='images'&&(f.obj.icon||/^data:image\/svg\+xml[;,]/i.test(f.obj.src??'')));
+}
+function saveObjectImageDialog(initialFormat='png') {
+  if(editing&&!commitEdit())return;
+  const entries=selectedObjects();
+  if(!entries.length||entries.some(f=>!['shapes','images'].includes(f.prop))){toast('저장할 사진·도형·아이콘을 선택하세요.');return;}
+  const svgAllowed=svgSelectionAvailable();if(initialFormat==='svg'&&!svgAllowed){toast('SVG로 저장할 도형이나 SVG 아이콘을 선택하세요.');return;}
+  const book=wb,host=si,target=sheet(),version=book.version,ids=entries.map(f=>f.obj.id).sort().join('|');
+  const copies=entries.map(f=>({prop:f.prop,obj:structuredClone(f.obj)})),states=copies.map(f=>JSON.stringify(f.obj));
+  const valid=()=>wb===book&&si===host&&sheet()===target&&book.version===version&&selectedObjects().map(f=>f.obj.id).sort().join('|')===ids&&copies.every((f,i)=>JSON.stringify(findObject(target,f.obj.id)?.obj)===states[i]);
+  let source;
+  const prepare=async()=>{
+    await document.fonts?.ready;
+    const linked=async(o,picture)=>{
+      const next=structuredClone(o);
+      if(picture&&next.linked){const l=next.linked,index=book.sheetIndexByName(l.sheet);if(index<0)throw new Error('연결된 그림의 원본 시트를 찾을 수 없습니다.');const result=rangeImageSvg(book,index,l,{gridlines:!book.sheets[index].noGrid});const svg=await prepareImageSvg(result.svg,{resolveImage:fetchImageData});next.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg);delete next.linked;}
+      if(next.groupItems)next.groupItems=await Promise.all(next.groupItems.map(x=>linked(x,x.kind==='picture')));
+      return next;
+    };
+    const list=[];for(const f of [...copies].sort((a,b)=>(a.obj.z??0)-(b.obj.z??0)))list.push({...await linked(f.obj,f.prop==='images'),...(f.prop==='images'?{kind:'picture'}:{})});
+    const object=list.length===1?list[0]:makeObjectGroup(list,'image-export-selection');
+    return objectImageSvg(object,{kind:list.length===1&&copies[0].prop==='images'?'picture':'shape',resolveImage:fetchImageData,title:list.length===1?(object.name||'그림'):'선택한 개체'});
+  };
+  openImageExportDialog({name:copies.length===1?(copies[0].obj.name||'그림'):'선택한 개체',description:copies.length===1?'현재 크기와 서식이 적용된 모습을 저장합니다.':`선택한 개체 ${copies.length}개를 하나의 그림으로 저장합니다.`,svgAllowed,initialFormat,valid,makeSvg:()=>source??=prepare(),save:imageSaveAction(valid)});
+}
+function saveRangeImageDialog() {
+  if(editing&&!commitEdit())return;
+  if(special?.si===si&&!special.visible){toast('연속된 셀 범위를 선택한 뒤 그림으로 저장하세요.');return;}
+  const book=wb,host=si,target=sheet(),version=book.version,range={r1:sel.r1,c1:sel.c1,r2:sel.r2,c2:sel.c2},key=selKey(),selectionSpecial=special;
+  const valid=()=>wb===book&&si===host&&sheet()===target&&book.version===version&&selKey()===key&&special===selectionSpecial&&!chartSel;
+  if(chartSel){toast('그림으로 저장할 셀 범위를 먼저 선택하세요.');return;}
+  const ref=cellName(range.r1,range.c1)+(range.r1===range.r2&&range.c1===range.c2?'':':'+cellName(range.r2,range.c2));
+  openImageExportDialog({title:'선택 영역을 그림으로 저장',name:target.name+'-'+ref,description:`${target.name}!${ref} · 셀 내용과 서식을 저장합니다.`,gridlines:!target.noGrid,valid,
+    makeSvg:async options=>{await document.fonts?.ready;if(!valid())throw new Error('문서 또는 선택 영역이 변경되었습니다.');const result=rangeImageSvg(book,host,range,{gridlines:options.gridlines,background:'transparent'});return {...result,svg:await prepareImageSvg(result.svg,{resolveImage:fetchImageData})};},save:imageSaveAction(valid)});
+}
+
 async function pictureSave() {
   const im = pictureHere(); if (!im) return;
   const copy = structuredClone(im);
@@ -13747,7 +13802,7 @@ const SAVE_TYPES = {
   xltx: ['Excel 서식 파일', 'application/vnd.openxmlformats-officedocument.spreadsheetml.template'], xltm: ['Excel 매크로 사용 서식 파일', 'application/vnd.ms-excel.template.macroEnabled.12'],
   ods: ['OpenDocument 스프레드시트', 'application/vnd.oasis.opendocument.spreadsheet'], wixel: ['WIXEL 통합 문서', 'application/json'], json: ['JSON 파일', 'application/json'],
   csv: ['CSV UTF-8', 'text/csv'], tsv: ['텍스트 (탭으로 분리)', 'text/tab-separated-values'], txt: ['유니코드 텍스트', 'text/plain'],
-  pdf: ['PDF', 'application/pdf'], html: ['웹 페이지', 'text/html'], png: ['PNG 그림', 'image/png'],
+  pdf: ['PDF', 'application/pdf'], html: ['웹 페이지', 'text/html'], png: ['PNG 그림', 'image/png'], jpg: ['JPEG 그림','image/jpeg'], jpeg: ['JPEG 그림','image/jpeg'], svg: ['SVG 그림','image/svg+xml'],
 };
 const canPickSave = () => typeof window.showSaveFilePicker === 'function' && window.isSecureContext && window.self === window.top;
 let fileHandle = null; // 마지막으로 열거나 저장한 파일: 저장 창의 시작 폴더에만 사용
@@ -17596,6 +17651,7 @@ function mergeCellStylesDialog() {
 function tableStylesMenu(anchorEl) { tableStyleGallery(anchorEl, !tableHere()); }
 
 const MENUS = {
+  copyExport:()=>[{label:'복사(C)',icon:'copy',key:'Ctrl+C',action:()=>run('copy')},{sep:true},{label:chartSel?'선택한 개체를 그림으로 저장...':'선택 영역을 그림으로 저장...',icon:'save',action:()=>run(chartSel?'objectSaveImage':'rangeSaveImage')},...(svgSelectionAvailable()?[{label:'SVG로 저장...',icon:'save',action:()=>run('objectSaveSvg')}]:[])],
   calcOptions: () => [
     { label: '자동(A)', checked: opts.calcMode !== 'manual' && opts.calcMode !== 'semi', action: () => run('calcAuto') },
     { label: '데이터 표만 수동(E)', checked: opts.calcMode === 'semi', action: () => { run('calcAuto'); opts.calcMode = 'semi'; saveOptions(); } },
@@ -18220,7 +18276,7 @@ function showPivotContextMenu(pos, entry) {
   const act=(label,fn,extra={})=>({label,...extra,disabled:!!extra.disabled||!editable,action:guarded(()=>{if(!pivotContextGuard(entry)())return;return fn();})});
   const command=(label,cmd,extra={})=>({label,...extra,disabled:!!extra.disabled||contextCommandDisabled(cmd),action:guarded(()=>run(cmd))});
   const apply=next=>{setPivotDef(entry,next);refreshPivotPane(true);};
-  const items=[command('복사(C)','copy',{accessKey:'c',key:'Ctrl+C',icon:'copy'}),command('셀 서식(F)...','formatCells',{accessKey:'f',key:'Ctrl+1'})];
+  const items=[command('복사(C)','copy',{accessKey:'c',key:'Ctrl+C',icon:'copy'}),command('선택 영역을 그림으로 저장...','rangeSaveImage',{icon:'save'}),command('셀 서식(F)...','formatCells',{accessKey:'f',key:'Ctrl+1'})];
   if(target.valueIndex!==null)items.push(act('필드 표시 형식(N)...',()=>pivotContextNumberFormat(entry,target.valueIndex),{accessKey:'n'}));
   items.push({sep:true},act('새로 고침(R)',()=>{wb.pivotSnapshots=null;wb.pivotMemo=null;apply({...def});},{accessKey:'r',icon:'refresh'}));
   if(target.sortField) {
@@ -18253,6 +18309,7 @@ function showContextMenu(pos, hitKind = 'cell') {
   const pasteItems=[item('붙여넣기(P)','paste','p',{icon:'paste',key:'Ctrl+V'}),item('값(V)','pasteValuesKey','v',{disabled:!clip||!!clip.cut}),item('수식(F)','pasteFormulas','f',{disabled:!clip||!!clip.cut}),item('서식(R)','pasteFormats','r',{disabled:!clip||!!clip.cut}),item('행/열 바꿈(T)','pasteTranspose','t',{disabled:!clip||!!clip.cut})];
   const items=[item('잘라내기(T)','cut','t',{icon:'cut',key:'Ctrl+X'}),item('복사(C)','copy','c',{icon:'copy',key:'Ctrl+C'}),
     {label:'붙여넣기 옵션(P)',accessKey:'p',icon:'paste',submenu:pasteItems},item('선택하여 붙여넣기(S)...','pasteSpecial','s',{key:'Ctrl+Alt+V',disabled:!!clip?.cut})];
+  items.push(item('선택 영역을 그림으로 저장...','rangeSaveImage',null,{icon:'save'}));
   if(kind==='cell')items.push(item('스마트 조회(L)','contextSmartLookup','l',{icon:'search',disabled:!displayText(active.r,active.c).trim()}));
   items.push({sep:true},item(kind==='cell'?'삽입(I)...':'삽입(I)',kind==='row'?'insertRows':kind==='col'?'insertCols':'insertMenuKey','i',{icon:kind==='col'?'colInsert':'rowInsert'}),
     item(kind==='cell'?'삭제(D)...':'삭제(D)',kind==='row'?'deleteRows':kind==='col'?'deleteCols':'deleteMenuKey','d',{icon:'delete'}),item('내용 지우기(N)','clearContents','n',{key:'Delete'}),{sep:true});
@@ -18310,6 +18367,7 @@ const COMMANDS = {
   pictureCrop: () => pictureEdit('crop'), pictureAlt: () => pictureEdit('alt'),
   pictureReset: () => pictureReset(), pictureResetSize: () => pictureReset(true),
   pictureChange: () => pictureChange('file'), pictureOriginal, pictureSave, pictureLayout, pictureAssignMacro,
+  objectSaveImage:()=>saveObjectImageDialog(),objectSaveSvg:()=>saveObjectImageDialog('svg'),rangeSaveImage:saveRangeImageDialog,
   pictureH: v => pictureSizeCm('h', v), pictureW: v => pictureSizeCm('w', v),
   pictureLockAspect: v => patchObjects({ lockAspect: v }, ['images']),
   selectionPane: () => selectionPaneDialog(),
@@ -18767,6 +18825,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileFit','toggleR
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['그림과 SVG 저장', ['사진·도형·아이콘과 선택한 셀 범위를 PNG·JPEG·SVG로 저장합니다. 미리보기와 배경·해상도 옵션을 제공합니다.']],
   ['데이터 유효성 검사', ['설정·설명·오류·IME 네 탭, 같은 설정 일괄 적용, 범위 선택과 입력 오류 처리를 보강했습니다.']],
   ['슬라이서 리본과 크기', ['스타일 견본·페이지 탐색, cm 단위 단추·전체 크기, 여러 슬라이서 서식과 맞춤을 보강했습니다.']],
   ['피벗 필터 검색과 선택', ['검색 목록 안의 [필터에 현재 선택한 내용 추가]로 기존 선택과 검색 결과를 합칩니다. 끄면 검색 선택만 적용합니다.', '와일드카드 검색·검색 지우기·방향키 이동·한글 Enter 보호·빈 결과 확인 차단을 보강하고, 보고서 필터의 다중 선택 모드를 XLSX에도 보존합니다.']],
@@ -19061,6 +19120,7 @@ function tableRibbonState() {
   const sameValue=key=>{const values=key==='w'||key==='h'?sizeUnits:dims;return values.length&&values.every(d=>Math.abs(d[key]-values[0][key])<.005)?String(key==='columns'?values[0][key]:Math.round(values[0][key]*2.54/96*100)/100):'';};'';
   const slicerEditDisabled=!slicers.length||slicers.some(sl=>slicerBlocked(sl,'objects',true));
   const base = {
+    objectImageDisabled:!selectedObjects().length||selectedObjects().some(f=>!['shapes','images'].includes(f.prop)),objectSvgDisabled:!svgSelectionAvailable(),
     slicerInputKey:sl?.id??'',slicerEditDisabled,slicerSingleDisabled:slicerEditDisabled||slicers.length!==1,
     slicerResizeDisabled:slicerEditDisabled||slicers.some(sl=>sl.noMove),slicerUnsupported:true,
     slicerGroupDisabled:slicerEditDisabled||(!canGroupSelection()&&!slicers.some(sl=>sl.objectGroup)),

@@ -27,7 +27,7 @@ export const TABS = [
         large('paste', 'paste', '붙여넣기', { menu: 'paste' }),
         col(
           medium('cut', 'cut', '잘라내기', { title: '잘라내기 (Ctrl+X)' }),
-          medium('copy', 'copy', '복사', { title: '복사 (Ctrl+C)' }),
+          medium('copy', 'copy', '복사', { title: '복사 (Ctrl+C)', menu: 'copyExport', split: true }),
           medium('painter', 'painter', '서식 복사', { title: '서식 복사 (두 번 클릭하면 계속 적용)', toggle: 'painter' }),
         ),
       ]),
@@ -460,6 +460,7 @@ export const TABS = [
         col(medium('pictureBorder', 'border', '그림 테두리'), medium('pictureEffects', 'effects', '그림 효과'), medium('pictureLayout', 'shapes', '그림 레이아웃')),
       ], 'pictureFormat'),
       group('접근성', [large('pictureAlt', 'textbox', '대체 텍스트')]),
+      group('저장',[large('objectSaveImage','save','그림으로 저장',{disabledKey:'objectImageDisabled'}),medium('objectSaveSvg','save','SVG로 저장',{disabledKey:'objectSvgDisabled'})]),
       group('정렬', [
         col(medium('objForwardBtn', 'bringForward', '앞으로 가져오기', { menu: 'objForward' }), medium('objBackwardBtn', 'sendBackward', '뒤로 보내기', { menu: 'objBackward' }), medium('selectionPane', 'selectionPane', '선택 창')),
         col(medium('objAlignBtn', 'align', '맞춤', { menu: 'objAlign' }), medium('objGroupBtn', 'shapes', '그룹화', { menu: 'objGroup' }), medium('objRotateBtn', 'rotate', '회전', { menu: 'objRotate' })),
@@ -473,6 +474,7 @@ export const TABS = [
   },
   {
     id: 'objFormat', label: '셰이프 형식', context: 'object', groups: [
+      group('저장',[large('objectSaveImage','save','그림으로 저장',{disabledKey:'objectImageDisabled'}),medium('objectSaveSvg','save','SVG로 저장',{disabledKey:'objectSvgDisabled'})]),
       group('도형 삽입', [
         large('shapesMenu', 'shapes', '도형', { menu: 'shapes' }),
         large('shapeMergeMenu', 'shapes', '도형 병합', { menu: 'shapeMerge' }),

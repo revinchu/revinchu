@@ -21,7 +21,7 @@ export const PREFERRED_RIBBON_KEYTIPS = [
 
 const INPUT_TYPES = new Set(['font', 'select', 'text', 'spin']);
 const BUTTON_TYPES = new Set(['large', 'medium', 'btn', 'check', 'color']);
-const SPLIT_COMMANDS = new Set(['borderLast', 'mergeCenter', 'paste']);
+const SPLIT_COMMANDS = new Set(['borderLast', 'mergeCenter', 'paste', 'copy']);
 const LEGACY_MENUS = { tableStyleKey: 'tableStyles', condMenuKey: 'condFormat', shapesMenu: 'shapes' };
 const labelOf = (item) => String(item.title ?? item.label ?? item.cmd ?? item.menu ?? '').replace(/\n/g, ' ').trim();
 

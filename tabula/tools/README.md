@@ -450,3 +450,8 @@ node tools/mobile-layout.mjs
 ## 데이터 유효성 검사
 
 `node tools/validation-parity.mjs`는 실제 데이터 리본 메뉴와 네 탭을 통해 8종 제한·8종 비교, 설명 메시지, 중지/경고/정보, 같은 설정 적용, 범위 선택과 취소, IME 메타데이터, 잘못된 값 표시, 이름 목록과 숫자 정밀도 보존, Alt/Enter/Escape, 보호·늦은 대상 변경·Undo와 320/390px 화면을 검사합니다. `WIXEL_URL`은 소스 또는 번들 URL, `WIXEL_VALIDATION_OUT`은 D: 출력 폴더(기본 `D:/Codex/Temp/wixel-validation/source`), `WIXEL_VALIDATION_FILTER`는 시나리오 이름 일부입니다. 격리 브라우저의 합성 문서만 사용하며 API·외부 요청·원격 쓰기를 차단합니다. IME composition 이벤트 검사는 실제 운영체제의 입력기 전환 검사가 아닙니다. 표준 파일과 네이티브 Excel 검증·제한은 [48번 문서](../docs/codex/48_데이터유효성검사.md)에 기록합니다.
+
+
+## 개체·셀 범위의 그림/SVG 저장
+
+`node tools/image-export.mjs`는 실제 우클릭·리본·복사 메뉴에서 사진·도형·아이콘·다중 개체·셀 범위를 PNG/JPEG/SVG로 저장하고 파일 내용을 다시 읽는다. 투명/흰 배경·해상도·회전·색·숫자 서식·범위 크기, 초과 크기 거절, 취소·권한·쓰기 실패·다운로드 확인, 문서/선택 변경 차단·원본/Undo 보존과 320px 화면을 검사한다. `WIXEL_URL`로 소스/번들을 지정하며 출력 변수와 제한은 [49번 문서](../docs/codex/49_그림과SVG저장.md)를 참고한다. 격리 합성 문서와 메모리 파일 선택기를 사용하며 실제 사용자 파일·원격 쓰기를 사용하지 않는다.

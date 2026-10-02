@@ -2570,3 +2570,21 @@ body.mobile-work-mode .slicer-style-menu .style-grid.slstyles { width:min(336px,
   .dv-error-grid { grid-template-columns:85px minmax(0,1fr); gap:10px; }
   .dv-editor .dlg-tab { padding:7px 8px; white-space:nowrap; }
 }
+
+/* 개체/셀 범위 이미지 저장: 같은 미리보기로 형식과 배경을 확인한다. */
+.image-export-body { display:flex;flex-direction:column;gap:12px;min-width:0; }
+.image-export-description { margin:0;color:var(--text-muted,#65716b);font-size:12px;line-height:1.6;overflow-wrap:anywhere; }
+.image-export-preview { display:flex;align-items:center;justify-content:center;min-height:130px;height:220px;padding:12px;border:1px solid #d7dfda;border-radius:7px;overflow:hidden;background-color:#fff;background-image:linear-gradient(45deg,#edf0ee 25%,transparent 25%),linear-gradient(-45deg,#edf0ee 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#edf0ee 75%),linear-gradient(-45deg,transparent 75%,#edf0ee 75%);background-size:16px 16px;background-position:0 0,0 8px,8px -8px,-8px 0; }
+.image-export-preview.white { background-image:none; }
+.image-export-preview img { max-width:100%;max-height:100%;object-fit:contain; }
+.image-export-preview img:not([src]) { visibility:hidden; }
+.image-export-status { font-size:12px;color:#536259;min-height:18px;line-height:1.55; }
+.image-export-options { display:grid;grid-template-columns:1fr 1fr;gap:12px 16px;min-width:0; }
+.image-export-dialog .dialog-body .image-export-field { display:flex;flex-direction:column;align-items:stretch;gap:5px;margin:0;min-width:0; }
+.image-export-dialog .dialog-body .image-export-field:first-child { grid-column:1/-1; }
+.image-export-dialog .dialog-body label.image-export-field > span:first-child { width:auto;max-width:none; }
+.image-export-dialog .dialog-body .image-export-field :is(input,select) { flex:none;width:100%;min-width:0;box-sizing:border-box; }
+.image-export-dialog .dialog-body .image-export-check { display:flex;align-items:center;gap:8px;grid-column:1/-1; }
+.image-export-error { padding:10px;border:1px solid #e7b5af;background:#fff6f4;border-radius:5px;color:#9b2e22;font-size:12px;line-height:1.6; }
+.image-export-error[hidden] { display:none; }
+@media(max-width:480px) { .image-export-preview { height:150px;min-height:80px;padding:8px; } .image-export-options { gap:10px; } }
