@@ -353,3 +353,16 @@ node tools/mobile-layout.mjs
 ## 홈 화면 아이콘
 
 `WIXEL_URL`을 실행 중인 소스 서버 또는 배포 주소로 지정하고 `node tools/home-icons.mjs`를 실행합니다. 홈 화면 메타데이터, manifest 파싱, HTTP MIME, 아이콘 실제 디코드 크기·불투명도·안전 영역 및 로컬 파일과의 해시를 검사합니다. 이는 실제 휴대전화 홈 화면 설치 테스트와 별개입니다.
+
+
+## 모바일 밀도·CSV·숨김 행·온라인 열기 회귀
+
+- `node tools/csv-import-quality.mjs`: 로컬 소스/번들 파일 입력으로 16만 행과 대형 UTF-8/UTF-16 LE·BE/CP949 합성 CSV를 검사합니다. `CSV_FIXTURE_DIR`은 D: 경로만 허용하며 기본 `D:/Codex/Temp/wixel-csv-quality`, `CSV_RESULT_PATH`는 JSON 결과 저장 위치입니다.
+- `node tools/csv-row-boundaries.mjs`: LF/CR/CRLF 및 중간 빈 행·인용 줄바꿈을 가진 같은 자료를 소형 UTF-8/대형 UTF-16으로 읽고 전체 행렬 해시를 비교합니다.
+- `node tools/axis-window-benchmark.mjs`: Node에서 보이는 축 항목 열거 결과·조회 수와 시간 비교. Axis 생성 비용은 제외합니다.
+- `node tools/hidden-grid-performance.mjs`: 로컬 소스/번들에서 숨김 행·열, 표시 메모, 틀 고정·스크롤·Undo/Redo를 검사합니다. 소스에서만 `WIXEL_PERF_BASELINE_REF=a6db8e5`로 이전 `view.js`/`axis.js`를 대체해 비교할 수 있습니다. 수정본은 이 변수를 해제합니다.
+- `node tools/axis-overlap.mjs`: 나란한 두 표의 필터가 같은 행을 숨길 때 좌표·클릭 위치·스크롤·Undo/Redo와 원본 비트맵 보존을 검사합니다.
+- `node tools/server-open-guard.mjs`: 로컬 **소스 전용**. 지연된 온라인 열기, 응답 순서 역전, 편집 보존, 401 인증 재시도와 오류 안내를 가상 API로 검사합니다.
+- 기존 `mobile-work-mode.mjs`는 촘촘하게/여유롭게 전환·설정 기억·원본 문서 보존을 포함합니다. `mobile-layout.mjs` 카탈로그는 두 밀도×여섯 화면×15개 탭입니다.
+
+브라우저 도구의 `WIXEL_URL`과 Playwright 환경 변수는 위와 같습니다. 신규 도구는 격리 컨텍스트·합성 자료만 사용하며 외부 쓰기를 막습니다. 시간은 해당 합성 조건의 관측값이며 전체 문서의 속도 보장이 아닙니다. 근거·남은 과제는 [30. 재평가와 품질 개선](../docs/codex/30_재평가와품질개선.md)에 기록합니다.

@@ -12,6 +12,21 @@ async function test(name, width, height, fn, touch=true) {
 const tools=p=>p.locator('#mobileTools').click();
 const drawer=p=>p.getByRole('dialog',{name:'모바일 작업 도구',exact:true});
 try{
+ await test('메뉴 밀도 전환·설정 기억·원본 문서 보존',390,844,async p=>{
+  assert.equal(await p.evaluate(()=>window.tabula.mobile().density),'compact');
+  const initial=await p.evaluate(()=>JSON.stringify(window.tabula.wb().serialize()));
+  const compact=(await p.locator('#gridWrap').boundingBox()).height;
+  await tools(p);await drawer(p).getByRole('button',{name:'여유롭게',exact:true}).click();
+  await p.waitForFunction(()=>!document.body.classList.contains('mobile-compact'));
+  assert.ok(compact-(await p.locator('#gridWrap').boundingBox()).height>80);
+  assert.equal(await p.evaluate(()=>JSON.stringify(window.tabula.wb().serialize())),initial);
+  await p.reload();await p.waitForFunction(()=>window.tabula?.wb());
+  assert.equal(await p.evaluate(()=>window.tabula.mobile().density),'comfortable');
+  await tools(p);await drawer(p).getByRole('button',{name:'촘촘하게',exact:true}).click();
+  assert.equal(await p.evaluate(()=>window.tabula.mobile().density),'compact');
+  await p.locator('#mobileModeToggle').click();
+  assert.equal(await p.locator('body').evaluate(x=>x.classList.contains('mobile-compact')),false);
+ });
  await test('자동 화면 맞춤·명시적 해제·새로고침 기억·문서 배율 보존',390,844,async p=>{
   assert.equal(await p.evaluate(()=>window.tabula.mobile().active),true);
   assert.equal(await p.evaluate(()=>window.tabula.gv().z),.85);

@@ -3,6 +3,7 @@ import { noteVisible } from './review-state.js';
 // 가상 스크롤 그리드: 화면에 보이는 행/열만 그림 (20,000,000행 × 16,384열 지원)
 // 틀 고정은 4개 창(TL/TR/BL/BR)으로, 각 창은 시트 좌표계 콘텐츠를 transform 으로 이동시켜 표시.
 import { Axis } from './axis.js';
+import { visibleAxisIndices } from './axis-window.js';
 import { GridAccessibility } from './grid-a11y.js';
 import { gridLineWidth, resolveGridBorders } from './grid-lines.js';
 import { pictureCropStyle, pictureTransform, pictureEffects, pictureShadowStyle } from './picture.js';
@@ -741,10 +742,8 @@ export class GridView {
     p.oy = rows.pos(r1);
     const W = cols.pos(c2 + 1) - p.ox;
     const H = rows.pos(r2 + 1) - p.oy;
-    const visRows = [];
-    for (let r = r1; r <= r2; r++) if (rows.size(r)) visRows.push(r);
-    const visCols = [];
-    for (let c = c1; c <= c2; c++) if (cols.size(c)) visCols.push(c);
+    const visRows = visibleAxisIndices(rows, r1, r2);
+    const visCols = visibleAxisIndices(cols, c1, c2);
 
     // SVG 선은 CSS border의 최소 1 CSS px 강제 반올림 없이 화면 픽셀에 맞춥니다.
     const scale = this.z * (globalThis.devicePixelRatio || 1);
@@ -1183,8 +1182,10 @@ export class GridView {
     }
     // 표시한 메모는 현재 렌더 창의 셀만 조회한다(전체 셀 저장소를 매번 훑지 않는다).
     if (sheet.noteVisibility) {
-      for (let c = p.win.c1; c <= p.win.c2; c++) for (let r = p.win.r1; r <= p.win.r2; r++) {
-        if (!noteVisible(sheet.noteVisibility, r, c) || !this.cols.size(c) || !this.rows.size(r)) continue;
+      const noteRows = visibleAxisIndices(this.rows, p.win.r1, p.win.r2);
+      const noteCols = visibleAxisIndices(this.cols, p.win.c1, p.win.c2);
+      for (const c of noteCols) for (const r of noteRows) {
+        if (!noteVisible(sheet.noteVisibility, r, c)) continue;
         const text = sheet.cells.getRC(r, c)?.comment; if (!text) continue;
         html.push(`<div class="cell-note-visible" data-note-r="${r}" data-note-c="${c}" style="left:${this.cols.pos(c + 1) + 8 - p.ox}px;top:${this.rows.pos(r) - p.oy}px"><b>${esc(cellName(r, c))}</b><div>${esc(text)}</div></div>`);
       }
@@ -1478,9 +1479,8 @@ export class GridView {
     const colPart = (clipEl, rect, c1, c2, offset) => {
       Object.assign(clipEl.style, { left: `${rect.x}px`, top: '0px', width: `${rect.w}px`, height: `${hh}px`, display: rect.w > 0 ? 'block' : 'none' });
       const out = [];
-      for (let c = c1; c <= c2; c++) {
+      for (const c of visibleAxisIndices(this.cols, c1, c2)) {
         const w = this.cols.size(c);
-        if (!w) continue;
         out.push(`<div class="hc${colCls(c)}" style="left:${this.cols.pos(c) - offset}px;width:${w}px${olh ? `;top:${olh}px` : ''}">${colToName(c)}</div>`);
       }
       if (olh) out.push(this.outlineMarks('c', ol, c1, c2, offset, olh));
@@ -1489,9 +1489,8 @@ export class GridView {
     const rowPart = (clipEl, rect, r1, r2, offset) => {
       Object.assign(clipEl.style, { left: '0px', top: `${rect.y}px`, width: `${hw}px`, height: `${rect.h}px`, display: rect.h > 0 ? 'block' : 'none' });
       const out = [];
-      for (let r = r1; r <= r2; r++) {
+      for (const r of visibleAxisIndices(this.rows, r1, r2)) {
         const h = this.rows.size(r);
-        if (!h) continue;
         out.push(`<div class="hr${rowCls(r)}" style="top:${this.rows.pos(r) - offset}px;height:${h}px;line-height:${h - 1}px${olw ? `;left:${olw}px;width:${hw - olw}px` : ''}">${r + 1}</div>`);
       }
       if (olw) out.push(this.outlineMarks('r', ol, r1, r2, offset, olw));

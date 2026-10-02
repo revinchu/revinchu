@@ -1,3 +1,5 @@
+import { nextVisibleAxisIndex } from './axis-window.js';
+
 // ───────────── 숨긴 행 모음 ─────────────
 // 작은 필터 결과는 { 행: true } 객체, 행이 아주 많으면 비트맵 { __bits: Uint8Array, start, count } (평범한 객체라 복사 · 저장 가능)
 /** 행 r 이 숨겨졌는지 */
@@ -53,12 +55,13 @@ export class Axis {
     this.sizes = sizes;
     this.hidden = new Set();
     // 비트맵(수백만 행 필터 결과)은 따로: 구간마다 누적 개수를 두어 위치를 빠르게 계산
-    this.bits = [];
+    const bitmaps = [];
     for (const h of hiddenSets) {
       if (!h) continue;
-      if (h.__bits) { if (h.count) this.bits.push(prepBits(h)); continue; }
+      if (h.__bits) { if (h.count && h.__bits.length) bitmaps.push(h); continue; }
       for (const k of Object.keys(h)) if (h[k]) this.hidden.add(Number(k));
     }
+    this.bits = prepareBitmaps(bitmaps);
     const keys = new Set([...Object.keys(sizes).map(Number), ...this.hidden]);
     this.keys = [...keys].filter((k) => k >= 0 && k < max && !this.bitHidden(k)).sort((a, b) => a - b);
     this.cum = new Float64Array(this.keys.length + 1);
@@ -118,10 +121,35 @@ export class Axis {
 
   /** i 부터 dir 방향으로 처음 보이는 항목 (없으면 i) */
   nextVisible(i, dir) {
-    let j = i;
-    while (j >= 0 && j < this.max && this.size(j) === 0) j += dir;
-    return j < 0 || j >= this.max ? i : j;
+    return nextVisibleAxisIndex(this, i, dir);
   }
+}
+
+// 여러 표의 필터가 같은 행을 숨겨도 위치에서 한 번만 차감한다.
+// 겹치는 구간끼리만 합치므로 떨어진 두 작은 비트맵 사이의 거대한 공백은 할당하지 않는다.
+// 단일/비중첩 비트맵은 원래 배열을 읽기 전용으로 재사용하며 입력 배열을 정렬·수정하지 않는다.
+function prepareBitmaps(bitmaps) {
+  if (bitmaps.length < 2) return bitmaps.map(prepBits);
+  const sorted = bitmaps.slice().sort((a, b) => a.start - b.start), prepared = [];
+  for (let i = 0; i < sorted.length;) {
+    const start = sorted[i].start;
+    let end = start + sorted[i].__bits.length, next = i + 1;
+    while (next < sorted.length && sorted[next].start < end) {
+      end = Math.max(end, sorted[next].start + sorted[next].__bits.length);
+      next++;
+    }
+    if (next === i + 1) prepared.push(prepBits(sorted[i]));
+    else {
+      const data = new Uint8Array(end - start);
+      for (let k = i; k < next; k++) {
+        const source = sorted[k].__bits, offset = sorted[k].start - start;
+        for (let j = 0; j < source.length; j++) if (source[j]) data[offset + j] = 1;
+      }
+      prepared.push(prepBits({ start, __bits: data }));
+    }
+    i = next;
+  }
+  return prepared;
 }
 
 /** 비트맵 → 256행마다 앞쪽 누적 개수 */

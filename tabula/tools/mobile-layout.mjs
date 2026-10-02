@@ -14,7 +14,7 @@ try {
   await page.goto(url,{waitUntil:'domcontentloaded',timeout:60000});await page.waitForFunction(()=>window.tabula?.wb());
   if(process.env.MOBILE_LAYOUT_DRAFT==='1') await page.addStyleTag({content:readFileSync(new URL('../.local/mobile-layout.css',import.meta.url),'utf8')});
   for(const [width,height] of [[320,568],[390,844],[768,1024],[844,390],[568,320]]) {
-    await page.setViewportSize({width,height}); await page.evaluate(()=>localStorage.removeItem('wixel.mobile-work.v1'));
+    await page.setViewportSize({width,height}); await page.evaluate(()=>{localStorage.removeItem('wixel.mobile-work.v1');localStorage.removeItem('wixel.mobile-density.v1');});
     await page.reload({waitUntil:'domcontentloaded'}); await page.waitForFunction(()=>window.tabula?.wb());
     const automatic=width<=1100;
     assert.equal(await page.locator('body').evaluate(n=>n.classList.contains('mobile-work-mode')),automatic,`자동 감지 ${width}x${height}`);
@@ -24,8 +24,18 @@ try {
       const w=tabula.wb();w.transact(()=>{while(w.sheets.length<8) w.addSheet(`분석 보고서 ${w.sheets.length+1}`);w.setInput(0,0,0,'모바일 실제 앱 합성');w.setInput(0,1,0,'=1+1');});tabula.selectCell(0,0);
       window.__mobileBookBefore=JSON.stringify(w.serialize());
     });
+    assert.equal(await page.locator('body').evaluate(n=>n.classList.contains('mobile-compact')),true,'기본 모바일 밀도 촘촘하게');
+    const densityMetric=async()=>page.evaluate(()=>Object.fromEntries(['.titlebar','.ribbon-tabs','.ribbon','.quick-access','#formulaRow','.sheetbar','.statusbar','#gridWrap'].map(sel=>{const n=document.querySelector(sel),b=n.getBoundingClientRect();return[sel,{w:b.width,h:b.height,font:getComputedStyle(n).fontSize}]})));
+    const compact=await densityMetric();
+    await page.locator('#mobileTools').click();await page.getByRole('dialog',{name:'모바일 작업 도구'}).getByRole('button',{name:'여유롭게',exact:true}).click();
+    await page.waitForFunction(()=>!document.body.classList.contains('mobile-compact'));const comfortable=await densityMetric();
+    assert.ok(compact['#gridWrap'].h>comfortable['#gridWrap'].h,`격자 공간 증가 ${width}x${height}`);
+    await page.screenshot({path:`D:/Codex/Temp/wixel-mobile-comfortable-${width}x${height}.png`});
+    await page.locator('#mobileTools').click();await page.getByRole('dialog',{name:'모바일 작업 도구'}).getByRole('button',{name:'촘촘하게',exact:true}).click();
+    await page.waitForFunction(()=>document.body.classList.contains('mobile-compact'));
+    assert.equal(await page.locator('#formulaInput').evaluate(n=>getComputedStyle(n).fontSize),'16px');
     const header=await page.locator('.titlebar').boundingBox();
-    for(const id of ['mobileModeToggle','mobileTools']) {const b=await page.locator(`#${id}`).boundingBox();assert.ok(b.x>=0&&b.x+b.width<=width+1&&b.width>=35&&b.height>=35,`${id} ${JSON.stringify(b)}`);}
+    for(const id of ['mobileModeToggle','mobileTools']) {const b=await page.locator(`#${id}`).boundingBox();assert.ok(b.x>=0&&b.x+b.width<=width+1&&b.width>=31&&b.height>=31,`${id} ${JSON.stringify(b)}`);}
     assert.ok(header.width<=width+1);
     const tabs=await page.locator('[data-ribbon-tab]').evaluateAll(nodes=>nodes.map(n=>n.dataset.ribbonTab).filter(v=>v!=='file'));
     let minGrid=Infinity;
@@ -46,7 +56,7 @@ try {
     assert.equal(await page.evaluate(()=>JSON.stringify(tabula.wb().serialize())===__mobileBookBefore),true,'모드·메뉴·시트전환은 문서 불변');
     await page.locator('[data-ribbon-tab="home"]').click();await page.evaluate(()=>{document.getElementById('ribbon').scrollLeft=0;document.getElementById('ribbonTabs').scrollLeft=0;});
     await page.screenshot({path:`D:/Codex/Temp/wixel-mobile-integrated-${width}x${height}.png`});
-    appResults.push({viewport:`${width}x${height}`,automatic,tabs:tabs.length,minGrid,sheets:8,modeToggle:true,toolsDialog:true});
+    appResults.push({viewport:`${width}x${height}`,automatic,tabs:tabs.length,minGrid,sheets:8,modeToggle:true,toolsDialog:true,comfortableGrid:comfortable['#gridWrap'].h,compactGrid:compact['#gridWrap'].h,gainedPixels:compact['#gridWrap'].h-comfortable['#gridWrap'].h,chrome:compact});
   }
   await page.setViewportSize({width:390,height:844});
   await page.locator('#formulaInput').focus();
@@ -58,6 +68,12 @@ try {
   await page.evaluate(()=>{delete visualViewport.height;document.activeElement.blur();visualViewport.dispatchEvent(new Event('resize'));});
   await page.waitForFunction(()=>!document.body.classList.contains('mobile-keyboard'));
   appResults.push({keyboardViewport:'390×300 visual viewport (emulated)',...keyboard});
+  const desktop=await browser.newContext({viewport:{width:1366,height:900}});await desktop.addInitScript(()=>{window.WIXEL_SKIP_START=true;window.TABULA_STATIC=true;});
+  await desktop.route('**/*',route=>{const r=route.request(),u=new URL(r.url());return ['GET','HEAD','OPTIONS'].includes(r.method())&&u.origin===new URL(url).origin&&!u.pathname.startsWith('/api/')?route.continue():route.abort();});
+  const dp=await desktop.newPage();dp.on('pageerror',e=>errors.push(e.message));await dp.goto(url,{waitUntil:'domcontentloaded'});await dp.waitForFunction(()=>window.tabula?.wb());
+  const desktopMetrics=await dp.evaluate(()=>({mobile:document.body.classList.contains('mobile-work-mode'),compact:document.body.classList.contains('mobile-compact'),heights:Object.fromEntries(['.titlebar','.ribbon-tabs','.ribbon','.quick-access','#formulaRow','.sheetbar','.statusbar','#gridWrap'].map(s=>[s,document.querySelector(s).getBoundingClientRect().height]))}));
+  assert.equal(desktopMetrics.mobile,false);assert.equal(desktopMetrics.compact,false);assert.deepEqual(desktopMetrics.heights,{'.titlebar':38,'.ribbon-tabs':32,'.ribbon':96,'.quick-access':33,'#formulaRow':28,'.sheetbar':30,'.statusbar':24,'#gridWrap':619});
+  await dp.screenshot({path:'D:/Codex/Temp/wixel-mobile-density-desktop.png'});await desktop.close();appResults.push({desktop:'1366x900',...desktopMetrics});
   if (process.env.MOBILE_LAYOUT_CATALOG !== '0') {
   await page.evaluate(()=>{
     document.body.classList.add('mobile-work-mode');
@@ -73,6 +89,9 @@ try {
     ribbon=buildRibbon(app);ribbon.update(state);window.__mobileRibbon=ribbon;window.__mobileState=state;
     return TABS.filter(t=>!t.file).map(t=>({id:t.id,label:t.label}));
   });
+  for (const density of ['compact','comfortable']) {
+  await page.locator('#mobileTools').click();await page.getByRole('dialog',{name:'모바일 작업 도구'}).getByRole('button',{name:density==='compact'?'촘촘하게':'여유롭게',exact:true}).click();
+  await page.waitForFunction(d=>document.body.classList.contains('mobile-compact')===(d==='compact'),density);
   for(const [width,height] of [[320,568],[360,740],[390,844],[768,1024],[844,390],[568,320]]) {
     await page.setViewportSize({width,height});
     await page.evaluate(({height})=>{document.body.classList.add('mobile-work-mode');document.body.classList.toggle('mobile-short',height<=600);document.documentElement.style.setProperty('--mobile-vh',`${height}px`);document.documentElement.style.setProperty('--mobile-vw',`${innerWidth}px`);tabula.gv().layout();}, {height});
@@ -92,13 +111,14 @@ try {
       assert.ok(metrics.app.h<=height+1 && metrics.app.scrollHeight<=height+1,`${width}x${height} ${tab.id} vertical overflow ${JSON.stringify(metrics)}`);
       assert.ok(metrics.grid.h>=95,`${width}x${height} ${tab.id} grid ${metrics.grid.h}`);
       assert.ok(metrics.ribbon.lastRight<=metrics.ribbon.right+1,`${tab.id} 마지막 그룹 스크롤 접근`);
-      const small=metrics.controls.filter(c=>c.h<35||c.w<35);
+      const hit=density==='compact'?29:35; const small=metrics.controls.filter(c=>c.h<hit||c.w<hit);
       assert.deepEqual(small,[],`${width}x${height} ${tab.id} 작은 터치 대상`);
       minGrid=Math.min(minGrid,metrics.grid.h);controls+=metrics.controls.length;
     }
     await page.evaluate(()=>{__mobileRibbon.selectTab('home');__mobileRibbon.update(__mobileState);document.getElementById('ribbon').scrollLeft=0;document.getElementById('ribbonTabs').scrollLeft=0;tabula.gv().layout();});
-    await page.screenshot({path:`D:/Codex/Temp/wixel-mobile-${width}x${height}.png`});
-    results.push({viewport:`${width}x${height}`,tabs:source.length,controls,minGrid});
+    await page.screenshot({path:`D:/Codex/Temp/wixel-mobile-${density}-${width}x${height}.png`});
+    results.push({viewport:`${width}x${height}`,density,tabs:source.length,controls,minGrid});
+  }
   }
   }
   assert.deepEqual(errors,[]);assert.deepEqual(writes,[]);

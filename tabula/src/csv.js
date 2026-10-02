@@ -1,5 +1,10 @@
 // CSV / TSV 읽기·쓰기
 import { ColBuilder, textValue } from './block.js';
+export function delimitedRowWidth(rows) {
+  let width = 1;
+  for (const row of rows) if (row.length > width) width = row.length;
+  return width;
+}
 export function parseDelimited(text, delim = ',') {
   const rows = [];
   let row = [];
@@ -40,7 +45,7 @@ export function toDelimited(rows, delim = ',', eol = '\r\n') {
 
 /** 쉼표/탭 중 구분 기호 추정 */
 export function guessDelimiter(text) {
-  const first = text.split(/\r?\n/, 1)[0];
+  const first = text.split(/\r\n?|\n/, 1)[0];
   return (first.match(/\t/g)?.length ?? 0) > (first.match(/,/g)?.length ?? 0) ? '\t' : ',';
 }
 
@@ -50,74 +55,64 @@ export class CsvStream {
   constructor(delim, onRow) {
     this.delim = delim;
     this.onRow = onRow;
-    this.rest = '';
+    this.row = [];
+    this.field = '';
+    this.quoted = false;
+    this.quotePending = false;
+    this.skipLF = false;
     this.first = true;
   }
 
   push(text, last = false) {
-    let buf = this.rest + text;
-    if (this.first) { buf = buf.replace(/^\ufeff/, ''); this.first = false; }
-    const d = this.delim;
-    let pos = 0;
-    const n = buf.length;
-    while (pos < n) {
-      const nl = buf.indexOf('\n', pos);
-      if (nl < 0 && !last) break;
-      const end = nl < 0 ? n : nl;
-      const q = buf.indexOf('"', pos);
-      if (q < 0 || q >= end) {
-        // 빠른 길: 따옴표 없는 줄
-        let line = buf.slice(pos, end);
-        if (line.endsWith('\r')) line = line.slice(0, -1);
-        if (line !== '') this.onRow(line.split(d));
-        pos = end + 1;
+    // 작은 CSV와 같이 따옴표 안에서도 CR/CRLF를 LF로 정규화한다.
+    // 앞 조각의 마지막 CR은 이미 처리했으므로 뒤따르는 LF만 한 번 건너뛴다.
+    if (text.length) {
+      if (this.first) { text = text.replace(/^\ufeff/, ''); this.first = false; }
+      const endsCR = text.endsWith('\r');
+      if (this.skipLF && text[0] === '\n') text = text.slice(1);
+      this.skipLF = endsCR;
+      text = text.replace(/\r\n?/g, '\n');
+    }
+    let i = 0;
+    if (this.quotePending && text.length) {
+      this.quotePending = false;
+      if (text[0] === '"') { this.field += '"'; i = 1; }
+      else this.quoted = false;
+    }
+    while (i < text.length) {
+      if (this.quoted) {
+        const q = text.indexOf('"', i);
+        if (q < 0) { this.field += text.slice(i); break; }
+        this.field += text.slice(i, q);
+        if (q + 1 === text.length && !last) { this.quotePending = true; break; }
+        if (text[q + 1] === '"') { this.field += '"'; i = q + 2; }
+        else { this.quoted = false; i = q + 1; }
         continue;
       }
-      // 따옴표가 있는 레코드: 글자 단위 (줄바꿈이 따옴표 안에 있을 수 있음)
-      const row = [];
-      let field = '';
-      let quoted = false;
-      let i = pos;
-      let done = false;
-      while (i < n) {
-        const ch = buf[i];
-        if (quoted) {
-          if (ch === '"') {
-            if (buf[i + 1] === '"') { field += '"'; i += 2; continue; }
-            if (i + 1 >= n && !last) break;
-            quoted = false;
-            i++;
-            continue;
-          }
-          field += ch;
-          i++;
-          continue;
-        }
-        if (ch === '"' && field === '') { quoted = true; i++; continue; }
-        if (ch === d) { row.push(field); field = ''; i++; continue; }
-        if (ch === '\n' || ch === '\r') {
-          row.push(field);
-          i += ch === '\r' && buf[i + 1] === '\n' ? 2 : 1;
-          done = true;
-          break;
-        }
-        field += ch;
-        i++;
-      }
-      if (!done) {
-        if (!last) break; // 다음 조각을 기다림
-        row.push(field);
-        i = n;
-      }
-      this.onRow(row);
-      pos = i;
+      // 완성된 비인용 줄은 기존처럼 native split으로 빠르게 처리한다. 빈 줄도 한 행이다.
+      if (!this.row.length && this.field === '') {
+        const nl = text.indexOf('\n', i), q = text.indexOf('"', i);
+        if (nl >= 0 && (q < 0 || q >= nl)) { this.onRow(text.slice(i, nl).split(this.delim)); i = nl + 1; continue; }
+        if (text[i] === '"') { this.quoted = true; i++; continue; }
+      } else if (this.field === '' && text[i] === '"') { this.quoted = true; i++; continue; }
+      const d = text.indexOf(this.delim, i), nl = text.indexOf('\n', i);
+      const at = d < 0 ? nl : nl < 0 ? d : Math.min(d, nl);
+      if (at < 0) { this.field += text.slice(i); break; }
+      this.field += text.slice(i, at);
+      this.row.push(this.field); this.field = '';
+      if (text[at] === '\n') { const row = this.row; this.row = []; this.onRow(row); }
+      i = at + 1;
     }
-    this.rest = pos < n ? buf.slice(pos) : '';
+    if (last) {
+      this.quotePending = false; this.quoted = false;
+      // 빈 파일/명시적 빈 인용 필드만 있는 EOF/마지막 줄바꿈은 parseDelimited의 기존 정의를 유지한다.
+      if (this.field !== '' || this.row.length) {
+        this.row.push(this.field); const row = this.row; this.row = []; this.field = ''; this.onRow(row);
+      }
+    }
   }
 
-  end() {
-    if (this.rest) this.push('', true);
-  }
+  end() { this.push('', true); }
 }
 
 const ISO_DATE = /^(\d{4})-(\d{1,2})-(\d{1,2})$/;

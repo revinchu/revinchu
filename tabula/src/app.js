@@ -34,7 +34,8 @@ import {
 } from './ui.js';
 import { FUNC_INFO, CATEGORIES } from './funcinfo.js';
 import { makeSeries, CUSTOM_LISTS } from './series.js';
-import { parseDelimited, toDelimited, guessDelimiter, CsvBlockReader } from './csv.js';
+import { detectTextFileEncoding, readDecodedChunks } from './text-file.js';
+import { parseDelimited, toDelimited, guessDelimiter, CsvBlockReader, delimitedRowWidth } from './csv.js';
 import { SAMPLES } from './samples.js';
 import { TEMPLATES, TEMPLATE_CATS } from './templates.js';
 import { createChartSelectionPanel } from './chart-selection-ui.js';
@@ -3986,7 +3987,7 @@ function webDataDialog() {
     preview.replaceChildren();
     if (!pick) return;
     const rows = pick.rows.slice(0, 30);
-    const w = Math.min(20, Math.max(1, ...rows.map((r) => r.length)));
+    const w = Math.min(20, delimitedRowWidth(rows));
     preview.append(el('table', {}, ...rows.map((r, i) => el('tr', {}, ...Array.from({ length: w }, (_, j) => el(i === 0 ? 'th' : 'td', {}, String(r[j] ?? '')))))));
     if (pick.rows.length > 30) preview.append(el('div', { class: 'muted' }, `… 모두 ${pick.rows.length}행`));
   };
@@ -4055,7 +4056,7 @@ function webDataDialog() {
 function writeAnalysis(res, dest) {
   const rows = res.rows;
   const h = rows.length;
-  const w = Math.max(1, ...rows.map((r) => r.length));
+  const w = delimitedRowWidth(rows);
   return wb.transact(() => {
     let at = dest.si;
     if (dest.newSheet) at = wb.addSheet(nextSheetName(dest.newSheet), si + 1);
@@ -8066,7 +8067,7 @@ function textToColumns() {
   body.append(stepTitle, content);
 
   const previewTable = (rows, { headers = null, onPick = null } = {}) => {
-    const n = Math.max(1, ...rows.map((r) => r.length));
+    const n = delimitedRowWidth(rows);
     const t = el('table', { class: 'ttc-table' });
     if (headers) {
       t.append(el('tr', {}, [...Array(n)].map((_, i) => {
@@ -13059,22 +13060,19 @@ async function readTextSmart(file) {
 async function openBigCsv(file, base) {
   const prog = progressOverlay(`'${file.name}' 여는 중`);
   try {
-    const head = await file.slice(0, 65536).text();
-    const reader = new CsvBlockReader(guessDelimiter(head), Math.min(1 << 24, Math.max(1024, Math.round(file.size / 50))));
-    const rd = file.stream().pipeThrough(new TextDecoderStream()).getReader();
-    let read = 0;
     let last = performance.now();
-    for (;;) {
-      const { value, done } = await rd.read();
-      if (done) break;
-      reader.push(value);
-      read += value.length;
+    const encoding = await detectTextFileEncoding(file, async (bytes, total) => {
+      if (performance.now() - last > 80) { prog.set(0.1 * bytes / Math.max(1, total), '문자 인코딩 확인 중'); await yieldUI(); last = performance.now(); }
+    });
+    const head = new TextDecoder(encoding).decode(await file.slice(0, 65536).arrayBuffer(), { stream: true });
+    const reader = new CsvBlockReader(guessDelimiter(head), Math.min(1 << 24, Math.max(1024, Math.round(file.size / 50))));
+    await readDecodedChunks(file, encoding, async (text, bytes) => {
+      reader.push(text);
       if (performance.now() - last > 80) {
-        prog.set(0.85 * Math.min(1, read / file.size), `${reader.n.toLocaleString()}행 읽는 중`);
-        await yieldUI();
-        last = performance.now();
+        prog.set(0.1 + 0.5 * Math.min(1, bytes / file.size), `${reader.n.toLocaleString()}행 읽는 중`);
+        await yieldUI(); last = performance.now();
       }
-    }
+    });
     const { header, block } = reader.finish();
     const cells = new Map();
     header.forEach((h, j) => { if (h !== '') cells.set(`0,${j}`, { raw: h, style: { bold: true } }); });
@@ -13087,7 +13085,7 @@ async function openBigCsv(file, base) {
 
 function writeRows(rows, r0, c0) {
   wb.transact(() => rows.forEach((row, i) => row.forEach((v, j) => { if (v !== '') wb.setInput(si, r0 + i, c0 + j, v); })), meta());
-  if (rows.length) selectRange({ r1: r0, c1: c0, r2: r0 + rows.length - 1, c2: c0 + Math.max(1, ...rows.map((r) => r.length)) - 1 }, 'cells', { r: r0, c: c0 });
+  if (rows.length) selectRange({ r1: r0, c1: c0, r2: r0 + rows.length - 1, c2: c0 + delimitedRowWidth(rows) - 1 }, 'cells', { r: r0, c: c0 });
 }
 
 function loadWorkbook(data, name, activeSheet = 0) {
@@ -14058,9 +14056,15 @@ function askServerToken(then) {
   dialog.root.dataset.serverToken = 'true';
 }
 
+let serverOpenRequest = 0;
 async function openFromServer(name) {
+  const request = ++serverOpenRequest, book = wb, id = docId, version = wb.version;
+  const connection = server.connectionVersion;
+  const sameDocument = () => request === serverOpenRequest && wb === book && docId === id && wb.version === version && !editing;
+  const current = () => sameDocument() && server.connectionVersion === connection;
   try {
     const data = await server.load(name);
+    if (!current()) { if (request === serverOpenRequest) toast('문서가 바뀌거나 편집 중이어서 이전 열기 요청을 취소했습니다.'); return false; }
     loadWorkbook(data.workbook ?? data, data.docName ?? name, data.si ?? 0);
     remoteDoc = true;
     fileHandle = null;
@@ -14070,9 +14074,12 @@ async function openFromServer(name) {
     serverState.error = null;
     updateTitle();
     toast(`'${name}'을(를) 열었습니다.`);
+    return true;
   } catch (err) {
-    if (err.status === 401) askServerToken(() => openFromServer(name));
+    if (!current()) return false;
+    if (err.status === 401) askServerToken(() => { if (sameDocument()) openFromServer(name); });
     else alertDialog('WIXEL', `열 수 없습니다: ${err.message}`);
+    return false;
   }
 }
 
@@ -17477,6 +17484,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileFit','toggleR
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['모바일 밀도·안정성', ['모바일 메뉴 크기 기본 촘촘하게 · 여유롭게 전환·설정 기억 · 원본 배율 유지', '숨김 행·열이 많은 문서의 격자·메모 표시 가속 · 겹친 표 필터의 행 위치 수정', '대용량 CSV 한글·빈 행·줄바꿈 보존 · 많은 행 가져오기 오류 수정', '늦게 도착한 온라인 문서가 현재 편집을 덮지 않도록 보호']],
   ['홈 화면 아이콘', ['위셀 전용 W 아이콘 · 아이폰/안드로이드 홈 화면 · PNG/ICO 파비콘', '앱 이름·테마·홈 화면 등록용 manifest 연결']],
   ['모바일 작업 모드', ['좌측 상단 화면 맞춤 아이콘 · 휴대전화 자동 감지 · 가로/세로 화면 대응', '스크롤 리본·시트 탭 · 전체 메뉴와 저장·설정에 접근하는 모바일 도구', '탭 선택·두 번 탭 편집·길게 누른 뒤 범위 선택·핀치 확대/축소', '작은 화면의 서식·차트·피벗 대화상자와 키보드 공간 조정 · 원본 배율 보존']],
   ['페이지 레이아웃과 편집', ['SmartArt 20종 · 텍스트/계층/색 편집 · 도형/그림 그룹화', '테마 색·글꼴·효과 · 너비/높이 자동·인쇄 배율 · 정렬·선택 창·회전', '병합 셀·그림 위치를 반영한 인쇄 미리보기 · 일반 인쇄와 PDF 저장', '편집 허용 범위 · 메모 표시/숨기기 · 온라인 게시 공유 해제', 'Ctrl+Alt+V 선택하여 붙여넣기 12종 · 연산·빈 셀 건너뛰기·전치·연결']],
@@ -17619,7 +17627,7 @@ function reportError(err, where = '') {
   const now = Date.now();
   if (now - lastErrToast < 4000) return;
   lastErrToast = now;
-  toast(`${where ? `'${where}' 실행 중 ` : ''}문제가 생겼습니다: ${msg.slice(0, 120)} — 작업 내용은 자동 저장되어 있습니다.`);
+  toast(`${where ? `'${where}' 실행 중 ` : ''}문제가 생겼습니다: ${msg.slice(0, 120)} — 저장 상태를 확인하고 필요한 경우 파일로 저장하세요.`);
 }
 window.addEventListener('error', (e) => reportError(e.error ?? e.message));
 window.addEventListener('unhandledrejection', (e) => reportError(e.reason));
@@ -17683,6 +17691,7 @@ function fitMobileScreen() {
 function mobileToolsDialog() {
   const catalog = qatCatalog().map(c => ({ ...c, disabled: contextCommandDisabled(c.cmd) }));
   openMobileTools({
+    density: mobileWork.density, setDensity: value => mobileWork.setDensity(value),
     zoom: view.zoom, autosave, status: `${dom.saveState.textContent} · ${dom.stats.textContent}`, commands: catalog,
     quick: qatCommands().map(id => catalog.find(c => c.cmd === id)).filter(Boolean),
     tabs: TABS.filter(t => !t.context || document.querySelector(`[data-ribbon-tab="${t.id}"]`)),
@@ -18141,7 +18150,7 @@ async function init() {
   ribbon = buildRibbon({ run, openMenu: openNamedMenu, focusGrid, refreshRibbon: updateRibbon, hiddenTabs: () => opts.hiddenTabs ?? [], gallery: (name) => (name === 'chartStyles' ? chartStyleGallery() : []) });
   mobileWork = installMobileWork({ button: $('mobileModeToggle'), onChange: (next, prev) => {
     if (!gv) return;
-    if (!prev || next.active !== prev.active || Math.round(next.width) !== Math.round(prev.width)) {
+    if (!prev || next.active !== prev.active || next.density !== prev.density || Math.round(next.width) !== Math.round(prev.width)) {
       // The initial callback runs before the controller is assigned; refresh below applies zoom.
       if (mobileWork) applySheetZoom();
       gv.layout(); positionEditor();
@@ -18158,7 +18167,7 @@ async function init() {
   focusGrid();
   window.tabula = {
     keytipRegistry: () => ({ entries: KEYTIP_REGISTRY.entries.map((entry) => ({ ...entry })), controls: KEYTIP_REGISTRY.controls.map(({ item, ...control }) => control), tabs: { ...KEYTIP_REGISTRY.tabs }, currentTab: ribbon.current }),
-    mobile: () => ({ active: mobileWork.active, preference: mobileWork.preference }),
+    mobile: () => ({ active: mobileWork.active, preference: mobileWork.preference, density: mobileWork.density }),
     wb: () => wb, run, commands: () => Object.keys(COMMANDS), menus: () => Object.keys(MENUS), openNamedMenu, selectCell, selectRange, newWorkbook, templates: TEMPLATES, exportXlsx, gv: () => gv, sample: (i) => newWorkbook(SAMPLES[i]), switchSheet: (i) => { switchSheet(i); },
     get active() { return active; }, get sel() { return sel; }, get si() { return si; }, get chartSel() { return chartSel; },
   };

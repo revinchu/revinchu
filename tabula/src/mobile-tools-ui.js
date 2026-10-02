@@ -17,6 +17,10 @@ export function openMobileTools(host) {
   const body = el('div', { class: 'mobile-tools-body' },
     el('p', { class: 'mobile-tools-tip' }, '메뉴와 시트 탭을 좌우로 밀어보세요. 셀 한 번 누르기: 선택 · 두 번: 편집 · 길게 누른 뒤 끌기: 범위 · 두 손가락: 확대/축소'),
     search, results,
+    section('메뉴 크기', [
+      button('촘촘하게', () => host.setDensity('compact'), { 'aria-pressed': String(host.density === 'compact') }),
+      button('여유롭게', () => host.setDensity('comfortable'), { 'aria-pressed': String(host.density === 'comfortable') }),
+    ]),
     section('화면 맞춤', [
       button('화면에 맞추기', host.fit), button(`배율 ${host.zoom}% · 변경`, host.zoomDialog),
       button('선택 영역 맞춤', () => host.run('zoomSel')), button('리본 접기 / 펼치기', () => host.run('toggleRibbon')),
