@@ -1529,7 +1529,7 @@ function onGridKey(e) {
     }
     if (k === 'Home') {
       handled();
-      const t = { r: sheet().freeze?.rows || 0, c: sheet().freeze?.cols || 0 };
+      const t = { r: gv.rows.nextVisible(gv.fr, 1), c: gv.cols.nextVisible(gv.fc, 1) };
       if (e.shiftKey) extendTo(t.r, t.c); else selectCell(t.r, t.c);
       return;
     }
@@ -12622,7 +12622,7 @@ function switchSheet(i, restore = true) {
   endDraw(); shapeEdit = null; shapePointDrag = null;
   if (i === si || i < 0 || i >= wb.sheets.length) return;
   if (editing && !commitEdit()) return;
-  if (wb.sheets[si]) sheetSel.set(wb.sheets[si], { active, sel, selKind, scroll: [gv.sx, gv.sy] });
+  if (wb.sheets[si]) sheetSel.set(wb.sheets[si], { active, sel, selKind, scroll: gv.scrollPosition() });
   si = i;
   chartSel = null;
   circles = null;
@@ -12632,7 +12632,7 @@ function switchSheet(i, restore = true) {
   const saved = restore ? sheetSel.get(sheet()) : null;
   if (saved) {
     selectRange(saved.sel, saved.selKind, saved.active);
-    gv.setScroll(...saved.scroll);
+    gv.restoreScrollPosition(saved.scroll);
   } else showSheetStart();
   renderSheetTabs();
   setMode();
@@ -17551,6 +17551,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileFit','toggleR
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['틀 고정과 확대 탐색', ['엑셀에 저장된 고정 시작 행·열과 본문 위치·활성 셀 복원', '고정 영역이 화면을 가득 채우면 잠시 고정을 조정하여 선택 셀 표시 · 축소하면 복원', '행·열 삽입/삭제 시 고정 경계와 저장된 보기 위치 보존']],
   ['병합 제목의 행 높이와 글꼴 위치', ['병합 제목 편집·자동 맞춤 후 원래 행 높이 보존', '셀마다 실제 글꼴의 세로 보정 적용 · 돋움 제목이 위에 붙는 현상 개선']],
   ['확대·축소와 셀 여백', ['배율 변경 시 가는 선·이중선 다시 계산 · 첫 셀과 머리글 사이 틈 제거', '400%에서도 머리글 구분선 1픽셀 · 가운데/왼쪽 맞춤의 미세 여백 조정', 'XLS 자동 행 높이와 저장된 확대율 보존 · 제목이 위에 붙거나 잘리는 문제 수정']],
   ['셀 테두리 정밀 표시', ['가는 선 1픽셀·균일한 이중선 · 회색 가로선과 검정 세로선 교차점 개선', '글자 넘침 셀의 배경과 선 분리 · 분수 배율의 선 두께 오차 수정 · 점쇄선 구분']],
@@ -17743,13 +17744,12 @@ function applyView() {
 /** 시트를 처음 볼 때: 엑셀에서 저장한 첫 화면(처음 보이는 칸 · 활성 셀), 없으면 맨 위 */
 function showSheetStart() {
   const v = sheet().view;
-  const f = sheet().freeze;
   if (v) {
-    gv.setScroll(Math.max(0, gv.cols.pos(v.left ?? 0) - gv.cols.pos(f?.cols || 0)), Math.max(0, gv.rows.pos(v.top ?? 0) - gv.rows.pos(f?.rows || 0)));
-    selectCell(v.r ?? v.top ?? 0, v.c ?? v.left ?? 0, { scroll: false });
+    gv.setScroll(Math.max(0, gv.cols.pos(v.left ?? gv.fc) - gv.boundaryX), Math.max(0, gv.rows.pos(v.top ?? gv.fr) - gv.boundaryY));
+    selectCell(v.r ?? v.top ?? gv.fr, v.c ?? v.left ?? gv.fc, { scroll: false });
   } else {
     gv.setScroll(0, 0);
-    selectCell(f?.rows || 0, f?.cols || 0);
+    selectCell(gv.rows.nextVisible(gv.fr, 1), gv.cols.nextVisible(gv.fc, 1));
   }
 }
 
@@ -17792,6 +17792,7 @@ function setZoom(z) {
   dom.zoomSlider.value = view.zoom;
   dom.zoomLabel.textContent = `${view.zoom}%`;
   gv.setZoom(view.zoom);
+  gv.ensureVisible(active.r, active.c);
   positionEditor();
 }
 
@@ -18196,6 +18197,7 @@ async function init() {
       showGrid: view.showGrid && !sheet().noGrid, showFormulas: view.showFormulas, showHeaders: view.showHeaders, fillHandle: opts.fillHandle !== false, valueHighlight: view.valueHighlight,
     }),
     onViewScroll: () => positionEditor(),
+    onFreezeAdapt: () => toast('확대된 고정 영역이 화면을 가득 채워 해당 방향의 고정을 잠시 해제했습니다. 배율을 줄이거나 창을 넓히면 복원됩니다.'),
     onAccessibleCellFocus: (r, c) => { if (!editing) selectCell(r, c); focusGrid(); },
     pivotChartFields: (ch) => {
       const e = findPivotEntry(ch.pivot.sheet ?? null, ch.pivot.name ?? null);
@@ -18233,8 +18235,7 @@ async function init() {
   applyView();
   if (stored && stored.rev !== APP_REV) redrawPivotsQuiet();
   renderAll();
-  const f = sheet().freeze;
-  selectCell(f?.rows || 0, f?.cols || 0);
+  showSheetStart();
   focusGrid();
   window.tabula = {
     keytipRegistry: () => ({ entries: KEYTIP_REGISTRY.entries.map((entry) => ({ ...entry })), controls: KEYTIP_REGISTRY.controls.map(({ item, ...control }) => control), tabs: { ...KEYTIP_REGISTRY.tabs }, currentTab: ribbon.current }),

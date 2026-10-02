@@ -1953,6 +1953,31 @@ export class Workbook {
     this.snapshotNames();
     const target = this.sheets[si];
     const isRow = axis === 'row';
+    // 고정창은 원점부터 split개 셀이다. 끝 경계에 삽입한 셀은 본문에 속한다.
+    const viewKey = isRow ? 'top' : 'left', cellKey = isRow ? 'r' : 'c', splitKey = isRow ? 'rows' : 'cols';
+    const movePosition = (p) => count > 0 ? (p >= index ? p + count : p) : p > index ? Math.max(index, p + count) : p;
+    const oldSplit = target.freeze?.[splitKey] ?? 0;
+    if (oldSplit > 0) {
+      const origin = target.freeze[viewKey] ?? 0, end = origin + oldSplit;
+      const nextOrigin = movePosition(origin);
+      const nextEnd = count > 0 ? (end > index ? end + count : end) : movePosition(end);
+      const freeze = { ...target.freeze, [splitKey]: Math.max(0, nextEnd - nextOrigin) };
+      if (freeze[splitKey] && nextOrigin) freeze[viewKey] = nextOrigin;
+      else delete freeze[viewKey];
+      target.freeze = freeze;
+    }
+    if (target.view) {
+      const view = { ...target.view };
+      if (Number.isFinite(view[viewKey])) view[viewKey] = movePosition(view[viewKey]);
+      if (Number.isFinite(view[cellKey])) view[cellKey] = movePosition(view[cellKey]);
+      if (target.freeze?.[splitKey] > 0 && Number.isFinite(view[viewKey])) view[viewKey] = Math.max(view[viewKey], (target.freeze[viewKey] ?? 0) + target.freeze[splitKey]);
+      if (oldSplit > 0 && !target.freeze?.[splitKey]) {
+        if (!target.freeze?.rows && !target.freeze?.cols) delete view.activePane;
+        else if (isRow && view.activePane?.startsWith('bottom')) view.activePane = view.activePane === 'bottomRight' ? 'topRight' : 'topLeft';
+        else if (!isRow && view.activePane?.endsWith('Right')) view.activePane = view.activePane === 'bottomRight' ? 'bottomLeft' : 'topLeft';
+      }
+      target.view = view;
+    }
     const moved = new CellMap();
     target.cells.forEachRC((cell, r, c) => {
       const p = isRow ? r : c;

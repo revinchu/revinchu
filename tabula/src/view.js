@@ -416,10 +416,32 @@ export class GridView {
     const s = wb.sheets[si];
     this.cols = new Axis(s.defColW ?? DEFAULT_COL_WIDTH, s.colWidths, [s.hiddenCols], MAX_COLS);
     this.rows = new Axis(s.defRowH ?? DEFAULT_ROW_HEIGHT, s.rowHeights, [s.hiddenRows, s.filter?.hidden, ...(s.tables ?? []).map((t) => t.filter?.hidden)], MAX_ROWS);
-    this.fr = Math.min(s.freeze?.rows || 0, MAX_ROWS - 1);
-    this.fc = Math.min(s.freeze?.cols || 0, MAX_COLS - 1);
-    this.frozenW = this.cols.pos(this.fc);
-    this.frozenH = this.rows.pos(this.fr);
+    const f = s.freeze ?? {}, key = `${f.top || 0},${f.left || 0},${f.rows || 0},${f.cols || 0}`;
+    if (this._freezeSheet !== s || this._freezeKey !== key) {
+      this._revealFrozenRows = this._revealFrozenCols = false;
+      this._freezeNotice = '';
+    }
+    this._freezeSheet = s; this._freezeKey = key;
+    this.frozenTop = f.rows ? Math.min(f.top || 0, MAX_ROWS - 1) : 0;
+    this.frozenLeft = f.cols ? Math.min(f.left || 0, MAX_COLS - 1) : 0;
+    this.fr = Math.min(this.frozenTop + (f.rows || 0), MAX_ROWS - 1);
+    this.fc = Math.min(this.frozenLeft + (f.cols || 0), MAX_COLS - 1);
+    this.boundaryY = this.rows.pos(this.fr); this.boundaryX = this.cols.pos(this.fc);
+    this.computeHeaderSize();
+    const availableH = Math.max(0, this.viewH - this.hh), availableW = Math.max(0, this.viewW - this.hw);
+    const height = this.boundaryY - this.rows.pos(this.frozenTop), width = this.boundaryX - this.cols.pos(this.frozenLeft);
+    // Keep at least one body cell accessible. This is a temporary view adaptation;
+    // the workbook's saved freeze and hidden rows/columns remain untouched.
+    this.freezeOverflowRows = height > 0 && height + Math.min(availableH, this.rows.size(this.rows.nextVisible(this.fr, 1))) > availableH;
+    this.freezeOverflowCols = width > 0 && width + Math.min(availableW, this.cols.size(this.cols.nextVisible(this.fc, 1))) > availableW;
+    if (this.freezeOverflowRows || this._revealFrozenRows) this.fr = this.frozenTop = 0;
+    if (this.freezeOverflowCols || this._revealFrozenCols) this.fc = this.frozenLeft = 0;
+    this.originY = this.rows.pos(this.frozenTop); this.originX = this.cols.pos(this.frozenLeft);
+    this.boundaryY = this.rows.pos(this.fr); this.boundaryX = this.cols.pos(this.fc);
+    this.frozenH = this.boundaryY - this.originY; this.frozenW = this.boundaryX - this.originX;
+    const notice = `${this.freezeOverflowRows},${this.freezeOverflowCols}`;
+    if (notice !== this._freezeNotice && (this.freezeOverflowRows || this.freezeOverflowCols)) this.host.onFreezeAdapt?.();
+    this._freezeNotice = notice;
   }
 
   // 보이는 영역 크기: DOM 을 바꾼 뒤 읽으면 강제 레이아웃이 일어나므로 크기가 바뀔 때만 다시 잼
@@ -439,7 +461,7 @@ export class GridView {
     const r = this.sheetRect(rg);
     const fx = rg.c1 < this.fc;
     const fy = rg.r1 < this.fr;
-    return { x: this.hw + (fx ? r.x : r.x - this.sx), y: this.hh + (fy ? r.y : r.y - this.sy), w: r.w, h: r.h };
+    return { x: this.hw + r.x - this.originX - (fx ? 0 : this.sx), y: this.hh + r.y - this.originY - (fy ? 0 : this.sy), w: r.w, h: r.h };
   }
 
   /** 범위의 브라우저 좌표 */
@@ -467,8 +489,8 @@ export class GridView {
     }
     let zone = y < this.hh && x < this.hw ? 'corner' : y < this.hh ? 'colHeader' : x < this.hw ? 'rowHeader' : 'cell';
     if ((zone === 'rowHeader' && x < (this.olw ?? 0)) || (zone === 'colHeader' && y < (this.olh ?? 0))) zone = 'outline';
-    const sheetX = x - this.hw < this.frozenW ? Math.max(0, x - this.hw) : x - this.hw + this.sx;
-    const sheetY = y - this.hh < this.frozenH ? Math.max(0, y - this.hh) : y - this.hh + this.sy;
+    const sheetX = this.originX + (x - this.hw < this.frozenW ? Math.max(0, x - this.hw) : x - this.hw + this.sx);
+    const sheetY = this.originY + (y - this.hh < this.frozenH ? Math.max(0, y - this.hh) : y - this.hh + this.sy);
     const c = this.cols.indexAt(sheetX);
     const r = this.rows.indexAt(sheetY);
     let edgeCol = null;
@@ -486,8 +508,8 @@ export class GridView {
 
   // ───────────── 스크롤 ─────────────
   maxScroll() {
-    const totalW = this.cols.pos(this.extC);
-    const totalH = this.rows.pos(this.extR);
+    const totalW = Math.max(0, this.cols.pos(this.extC) - this.originX);
+    const totalH = Math.max(0, this.rows.pos(this.extR) - this.originY);
     return {
       x: Math.max(0, this.hw + totalW - this.viewW),
       y: Math.max(0, this.hh + totalH - this.viewH),
@@ -513,8 +535,8 @@ export class GridView {
     this.sy = Math.max(0, Math.min(this.sy, m.y));
   }
 
-  setScroll(sx, sy) {
-    this.ensureExtentFor(this.rows.indexAt(sy + this.frozenH + this.viewH), this.cols.indexAt(sx + this.frozenW + this.viewW));
+  setScroll(sx, sy, render = true) {
+    this.ensureExtentFor(this.rows.indexAt(sy + this.boundaryY + this.viewH), this.cols.indexAt(sx + this.boundaryX + this.viewW));
     const m = this.updateSizer();
     sx = Math.max(0, Math.min(sx, m.x));
     sy = Math.max(0, Math.min(sy, m.y));
@@ -524,7 +546,17 @@ export class GridView {
     this.scroll.scrollTop = m.pxH >= MAX_PX ? (sy / Math.max(1, m.y)) * maxPxY : sy * this.z;
     this.sx = sx;
     this.sy = sy;
-    this.update();
+    if (render) this.update();
+  }
+
+  scrollPosition() {
+    return { x: this.boundaryX + this.sx, y: this.boundaryY + this.sy, revealRows: this._revealFrozenRows, revealCols: this._revealFrozenCols };
+  }
+
+  restoreScrollPosition(saved) {
+    this._revealFrozenRows = !!saved.revealRows; this._revealFrozenCols = !!saved.revealCols;
+    this.layout(false);
+    this.setScroll(saved.x - this.boundaryX, saved.y - this.boundaryY);
   }
 
   scrollBy(dx, dy) { this.setScroll(this.sx + dx, this.sy + dy); }
@@ -598,14 +630,14 @@ export class GridView {
         const before = this.hitTest(previous.x, previous.y);
         this.host.onTouchZoom?.(pct);
         const after = this.hitTest(current.x, current.y);
-        this.setScroll(this.sx + (before.sheetX >= this.frozenW ? before.sheetX - after.sheetX : 0),
-          this.sy + (before.sheetY >= this.frozenH ? before.sheetY - after.sheetY : 0));
+        this.setScroll(this.sx + (before.sheetX >= this.boundaryX ? before.sheetX - after.sheetX : 0),
+          this.sy + (before.sheetY >= this.boundaryY ? before.sheetY - after.sheetY : 0));
       },
     });
   }
 
   setZoom(pct) {
-    const keep = { r: this.rows.indexAt(this.sy + this.frozenH), c: this.cols.indexAt(this.sx + this.frozenW) };
+    const keep = { r: this.rows.indexAt(this.sy + this.boundaryY), c: this.cols.indexAt(this.sx + this.boundaryX) };
     this.z = pct / 100;
     this._cw = null;
     this._ch = null;
@@ -614,23 +646,29 @@ export class GridView {
     // 같아도 이전 DOM을 확대 재사용하면 1px 선까지 4배로 굵어진다.
     for (const p of this.panes) p.win = null;
     this.layout(false);
-    this.setScroll(this.cols.pos(keep.c) - this.frozenW, this.rows.pos(keep.r) - this.frozenH);
+    this.setScroll(this.cols.pos(keep.c) - this.boundaryX, this.rows.pos(keep.r) - this.boundaryY);
   }
 
   /** (r,c)가 보이도록 스크롤 */
   ensureVisible(r, c) {
+    const f = this.host.state().wb.sheets[this.host.state().si].freeze ?? {};
+    const revealRows = !!f.rows && r < (f.top || 0), revealCols = !!f.cols && c < (f.left || 0);
+    if (revealRows !== this._revealFrozenRows || revealCols !== this._revealFrozenCols) {
+      this._revealFrozenRows = revealRows; this._revealFrozenCols = revealCols;
+      this.layout();
+    }
     let { sx, sy } = this;
     const paneW = this.viewW - this.hw - this.frozenW;
     const paneH = this.viewH - this.hh - this.frozenH;
     if (r >= this.fr) {
-      const top = this.rows.pos(r) - this.frozenH;
-      const bottom = this.rows.pos(r + 1) - this.frozenH;
+      const top = this.rows.pos(r) - this.boundaryY;
+      const bottom = this.rows.pos(r + 1) - this.boundaryY;
       if (top < sy) sy = top;
       else if (bottom > sy + paneH) sy = Math.min(top, bottom - paneH);
     }
     if (c >= this.fc) {
-      const left = this.cols.pos(c) - this.frozenW;
-      const right = this.cols.pos(c + 1) - this.frozenW;
+      const left = this.cols.pos(c) - this.boundaryX;
+      const right = this.cols.pos(c + 1) - this.boundaryX;
       if (left < sx) sx = left;
       else if (right > sx + paneW) sx = Math.min(left, right - paneW);
     }
@@ -645,16 +683,21 @@ export class GridView {
     return Math.max(1, Math.floor((this.viewH - this.hh - this.frozenH) / DEFAULT_ROW_HEIGHT) - 1);
   }
 
-  firstVisibleRow() { return this.rows.indexAt(this.sy + this.frozenH); }
+  firstVisibleRow() { return this.rows.indexAt(this.sy + this.boundaryY); }
 
   // ───────────── 배치 ─────────────
   layout(render = true) {
     if (!this.host.state().wb) return;
     this.viewEl.style.width = `${this.viewW}px`;
     this.viewEl.style.height = `${this.viewH}px`;
+    const sameSheet = this._freezeSheet === this.host.state().wb.sheets[this.host.state().si];
+    const oldX = this.boundaryX ?? 0, oldY = this.boundaryY ?? 0;
+    const x = oldX + this.sx, y = oldY + this.sy;
     this.refreshAxes();
-    this.updateSizer();
-    this.readScroll();
+    if (sameSheet && (oldX !== this.boundaryX || oldY !== this.boundaryY)) {
+      for (const p of this.panes) p.win = null;
+      this.setScroll(x - this.boundaryX, y - this.boundaryY, false);
+    } else { this.updateSizer(); this.readScroll(); }
     if (render) this.renderAll();
   }
 
@@ -668,7 +711,7 @@ export class GridView {
     this.olw = rl ? (rl + 1) * 14 + 4 : 0;
     this.olh = cl ? (cl + 1) * 14 + 4 : 0;
     this.hh = HEAD_H + this.olh;
-    const bottom = this.rows.indexAt(this.sy + this.frozenH + this.viewH);
+    const bottom = this.rows.indexAt(this.sy + this.boundaryY + this.viewH);
     this.hw = Math.max(34, String(bottom + 1).length * 8 + 12) + this.olw;
   }
 
@@ -688,14 +731,14 @@ export class GridView {
 
   /** 창에 보이는 시트 영역 */
   visibleRange(p, rect) {
-    const x0 = p.scrollX ? this.frozenW + this.sx : 0;
-    const y0 = p.scrollY ? this.frozenH + this.sy : 0;
+    const x0 = p.scrollX ? this.boundaryX + this.sx : this.originX;
+    const y0 = p.scrollY ? this.boundaryY + this.sy : this.originY;
     let c1 = this.cols.indexAt(x0);
     let c2 = this.cols.indexAt(x0 + Math.max(0, rect.w - 0.5));
     let r1 = this.rows.indexAt(y0);
     let r2 = this.rows.indexAt(y0 + Math.max(0, rect.h - 0.5));
-    if (p.scrollX) c1 = Math.max(c1, this.fc); else { c1 = 0; c2 = Math.max(0, this.fc - 1); }
-    if (p.scrollY) r1 = Math.max(r1, this.fr); else { r1 = 0; r2 = Math.max(0, this.fr - 1); }
+    if (p.scrollX) c1 = Math.max(c1, this.fc); else { c1 = this.frozenLeft; c2 = Math.max(c1, this.fc - 1); }
+    if (p.scrollY) r1 = Math.max(r1, this.fr); else { r1 = this.frozenTop; r2 = Math.max(r1, this.fr - 1); }
     return { r1, r2: Math.max(r1, r2), c1, c2: Math.max(c1, c2), x0, y0 };
   }
 
@@ -737,8 +780,8 @@ export class GridView {
       p.content.style.transform = `translate(${tx}px, ${ty}px)`;
     }
     this.renderHeaders(rects);
-    this.freezeV.style.display = this.fc ? 'block' : 'none';
-    this.freezeH.style.display = this.fr ? 'block' : 'none';
+    this.freezeV.style.display = this.frozenW ? 'block' : 'none';
+    this.freezeH.style.display = this.frozenH ? 'block' : 'none';
     this.freezeV.style.left = `${this.hw + this.frozenW - devicePixel}px`;
     this.freezeH.style.top = `${this.hh + this.frozenH - devicePixel}px`;
     this.host.onViewScroll?.();
@@ -852,7 +895,7 @@ export class GridView {
         if (!st.readonly) {
           const labels = [['pages', '필터'], ['cols', '열'], ['rows', '행'], ['values', '값']];
           // 드래그 시작 버튼을 덮으면 Chromium의 네이티브 dragstart가 중단될 수 있다.
-          const visibleTop = (p.scrollY ? this.frozenH + this.sy : 0) - p.oy, paneHeight = this.paneRects()[p.id].h;
+          const visibleTop = (p.scrollY ? this.boundaryY + this.sy : this.originY) - p.oy, paneHeight = this.paneRects()[p.id].h;
           const zoneTop = y >= visibleTop + 28 ? y - 26 : Math.max(visibleTop, Math.min(y + height + 4, visibleTop + paneHeight - 26));
           html.push(`<div class="pv-classic-zones" style="left:${x}px;top:${zoneTop}px;width:${Math.max(width, 240)}px;height:24px">${labels.map(([kind, label]) => `<div class="pv-classic-zone" data-p="${pi}" data-area="${kind}">${label}에 놓기</div>`).join('')}</div>`);
         }
@@ -1162,10 +1205,10 @@ export class GridView {
     // 가시 화면보다 넓은 셀 렌더 창을 사용한다. 그 안의 작은 스크롤에서는
     // renderPane가 재실행되지 않으므로 화면만 기준으로 버리면 개체가 늦게 나타난다.
     const windowRect = {
-      x1: Math.max(p.scrollX ? this.frozenW : 0, this.cols.pos(p.win.c1)),
-      y1: Math.max(p.scrollY ? this.frozenH : 0, this.rows.pos(p.win.r1)),
-      x2: Math.min(p.scrollX ? Infinity : this.frozenW, this.cols.pos(p.win.c2 + 1)),
-      y2: Math.min(p.scrollY ? Infinity : this.frozenH, this.rows.pos(p.win.r2 + 1)),
+      x1: Math.max(p.scrollX ? this.boundaryX : this.originX, this.cols.pos(p.win.c1)),
+      y1: Math.max(p.scrollY ? this.boundaryY : this.originY, this.rows.pos(p.win.r1)),
+      x2: Math.min(p.scrollX ? Infinity : this.boundaryX, this.cols.pos(p.win.c2 + 1)),
+      y2: Math.min(p.scrollY ? Infinity : this.boundaryY, this.rows.pos(p.win.r2 + 1)),
     };
     const appearance = `${THEME.key}|${BASE_FONT.name}|${BASE_FONT.size}|${this.z}|${globalThis.devicePixelRatio || 1}|${!!st.readonly}|${!!st.viewOnly}`;
     const previous = this._objectRenderState;
@@ -1566,10 +1609,10 @@ export class GridView {
     };
     const tl = rects.tl;
     const br = rects.br;
-    colPart(this.colHeadFrozen, { x: tl.x, w: tl.w }, 0, this.fc - 1, 0);
+    colPart(this.colHeadFrozen, { x: tl.x, w: tl.w }, this.frozenLeft, this.fc - 1, this.originX);
     const vx = this.visibleRange(this.panes[3], br);
     colPart(this.colHeadScroll, { x: br.x, w: br.w }, vx.c1, vx.c2, vx.x0);
-    rowPart(this.rowHeadFrozen, { y: tl.y, h: tl.h }, 0, this.fr - 1, 0);
+    rowPart(this.rowHeadFrozen, { y: tl.y, h: tl.h }, this.frozenTop, this.fr - 1, this.originY);
     rowPart(this.rowHeadScroll, { y: br.y, h: br.h }, vx.r1, vx.r2, vx.y0);
     setSafeHtml(this.headerLines, `<svg width="${this.viewW}" height="${this.viewH}" shape-rendering="crispEdges" fill="none">${lines.join('')}${selectedLines.join('')}</svg>`);
   }

@@ -837,20 +837,38 @@ function* readSheet(files, path, ctx) {
     if (rg && (rg.r2 > rg.r1 || rg.c2 > rg.c1)) sheet.merges.push(rg);
   }
 
-  const sv0 = descendants(child(root, 'sheetViews'), 'sheetView')[0];
+  const sheetViews = kids(child(root, 'sheetViews'), 'sheetView');
+  const sv0 = sheetViews.find((x) => x.attrs.workbookViewId === '0') ?? sheetViews[0];
   if (sv0 && (sv0.attrs.showGridLines === '0' || sv0.attrs.showGridLines === 'false')) sheet.noGrid = true;
   if (sv0 && (sv0.attrs.showZeros === '0' || sv0.attrs.showZeros === 'false')) sheet.noZeros = true;
   // 확대/축소 · 처음 보이는 칸 · 활성 셀 (엑셀에서 저장한 화면 그대로 열기)
   if (sv0?.attrs.zoomScale && Number(sv0.attrs.zoomScale) !== 100) sheet.zoom = Math.max(10, Math.min(400, Number(sv0.attrs.zoomScale)));
   const tlc = sv0?.attrs.topLeftCell ? refToRange(sv0.attrs.topLeftCell) : null;
-  const selEl = descendants(sv0, 'selection').find((x) => !x.attrs.pane || x.attrs.pane === 'bottomRight') ?? descendants(sv0, 'selection')[0];
+  const pane = child(sv0, 'pane');
+  const frozen = pane && (pane.attrs.state === 'frozen' || pane.attrs.state === 'frozenSplit');
+  const split = (v, max) => Number.isFinite(Number(v)) ? Math.max(0, Math.min(max - 1, Math.floor(Number(v)))) : 0;
+  const fr = frozen ? split(pane.attrs.ySplit, EXCEL_MAX_ROWS) : 0;
+  const fc = frozen ? split(pane.attrs.xSplit, MAX_COLS) : 0;
+  const ft = fr ? Math.min(tlc?.r1 ?? 0, EXCEL_MAX_ROWS - 1 - fr) : 0;
+  const fl = fc ? Math.min(tlc?.c1 ?? 0, MAX_COLS - 1 - fc) : 0;
+  const paneTlc = frozen && pane.attrs.topLeftCell ? refToRange(pane.attrs.topLeftCell) : null;
+  const selections = kids(sv0, 'selection');
+  const selEl = selections.find((x) => x.attrs.pane === pane?.attrs.activePane)
+    ?? selections.find((x) => !x.attrs.pane) ?? selections[0];
   const act = selEl?.attrs.activeCell ? refToRange(selEl.attrs.activeCell) : null;
-  if ((tlc && (tlc.r1 || tlc.c1)) || (act && (act.r1 || act.c1))) sheet.view = { top: tlc?.r1 ?? 0, left: tlc?.c1 ?? 0, ...(act ? { r: act.r1, c: act.c1 } : {}) };
-  sheet.fileValues = true; // 셀의 파일 계산 결과를 그대로 씀 (바뀌기 전까지)
-  const pane = descendants(child(root, 'sheetViews'), 'pane')[0];
-  if (pane && (pane.attrs.state === 'frozen' || pane.attrs.state === 'frozenSplit')) {
-    sheet.freeze = { rows: Number(pane.attrs.ySplit || 0), cols: Number(pane.attrs.xSplit || 0) };
+  if (fr || fc) {
+    // sheetView는 고정창 원점, pane은 본문의 스크롤 위치다. 숨긴 행도 split 개수에 포함된다.
+    sheet.freeze = { rows: fr, cols: fc, ...(ft ? { top: ft } : {}), ...(fl ? { left: fl } : {}) };
+    const activePane = ['topLeft', 'topRight', 'bottomLeft', 'bottomRight'].includes(pane.attrs.activePane) ? pane.attrs.activePane : fr && fc ? 'bottomRight' : fr ? 'bottomLeft' : 'topRight';
+    sheet.view = {
+      top: fr ? Math.max(ft + fr, paneTlc?.r1 ?? ft + fr) : paneTlc?.r1 ?? tlc?.r1 ?? 0,
+      left: fc ? Math.max(fl + fc, paneTlc?.c1 ?? fl + fc) : paneTlc?.c1 ?? tlc?.c1 ?? 0,
+      ...(act ? { r: act.r1, c: act.c1 } : {}), activePane,
+    };
+  } else if ((tlc && (tlc.r1 || tlc.c1)) || act) {
+    sheet.view = { top: tlc?.r1 ?? 0, left: tlc?.c1 ?? 0, ...(act ? { r: act.r1, c: act.c1 } : {}) };
   }
+  sheet.fileValues = true; // 셀의 파일 계산 결과를 그대로 씀 (바뀌기 전까지)
 
   const af = child(root, 'autoFilter');
   if (af?.attrs.ref) {
@@ -4252,13 +4270,23 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
     }
 
     // 틀 고정
-    const fr = sheet.freeze?.rows || 0;
-    const fc = sheet.freeze?.cols || 0;
+    const viewIndex = (v, max) => Number.isFinite(Number(v)) ? Math.max(0, Math.min(max - 1, Math.floor(Number(v)))) : 0;
+    const fr = viewIndex(sheet.freeze?.rows, EXCEL_MAX_ROWS);
+    const fc = viewIndex(sheet.freeze?.cols, MAX_COLS);
+    const ft = fr ? Math.min(viewIndex(sheet.freeze?.top, EXCEL_MAX_ROWS), EXCEL_MAX_ROWS - 1 - fr) : 0;
+    const fl = fc ? Math.min(viewIndex(sheet.freeze?.left, MAX_COLS), MAX_COLS - 1 - fc) : 0;
+    const vt = Math.max(fr ? ft + fr : 0, viewIndex(sheet.view?.top, EXCEL_MAX_ROWS));
+    const vl = Math.max(fc ? fl + fc : 0, viewIndex(sheet.view?.left, MAX_COLS));
+    const viewTopLeft = cellName(fr ? ft : vt, fc ? fl : vl);
+    const activeCell = Number.isFinite(sheet.view?.r) && Number.isFinite(sheet.view?.c)
+      ? cellName(viewIndex(sheet.view.r, EXCEL_MAX_ROWS), viewIndex(sheet.view.c, MAX_COLS)) : null;
+    const selectionAttrs = activeCell ? ` activeCell="${activeCell}" sqref="${activeCell}"` : '';
     let pane = '';
     if (fr || fc) {
-      const activePane = fr && fc ? 'bottomRight' : fr ? 'bottomLeft' : 'topRight';
-      pane = `<pane${fc ? ` xSplit="${fc}"` : ''}${fr ? ` ySplit="${fr}"` : ''} topLeftCell="${cellName(fr, fc)}" activePane="${activePane}" state="frozen"/><selection pane="${activePane}"/>`;
-    }
+      const available = fr && fc ? ['topLeft', 'topRight', 'bottomLeft', 'bottomRight'] : fr ? ['topLeft', 'bottomLeft'] : ['topLeft', 'topRight'];
+      const activePane = available.includes(sheet.view?.activePane) ? sheet.view.activePane : available[available.length - 1];
+      pane = `<pane${fc ? ` xSplit="${fc}"` : ''}${fr ? ` ySplit="${fr}"` : ''} topLeftCell="${cellName(vt, vl)}" activePane="${activePane}" state="frozen"/><selection pane="${activePane}"${selectionAttrs}/>`;
+    } else if (activeCell) pane = `<selection${selectionAttrs}/>`;
     const dim = sheet.cells.size ? `A1:${cellName(maxR, maxC)}` : 'A1';
 
     // 필터
@@ -4528,7 +4556,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
     files[`xl/worksheets/sheet${si + 1}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="${NS_MAIN}" xmlns:r="${NS_R}">`
       + (vba || olPr || tabOk ? `<sheetPr${vba ? ` codeName="${esc(vba.sheetCodes?.[sheet.name] ?? `Sheet${si + 1}`)}"` : ''}>${tabOk ? `<tabColor rgb="${argb(sheet.tabColor)}"/>` : ''}${olPr}</sheetPr>` : '')
       + `<dimension ref="${dim}"/>`
-      + `<sheetViews><sheetView${sheet.noGrid ? ' showGridLines="0"' : ''}${sheet.noZeros ? ' showZeros="0"' : ''}${sheet.zoom && sheet.zoom !== 100 ? ` zoomScale="${sheet.zoom}" zoomScaleNormal="${sheet.zoom}"` : ''}${sheet.view && (sheet.view.top || sheet.view.left) ? ` topLeftCell="${cellName(sheet.view.top, sheet.view.left)}"` : ''} workbookViewId="0"${si === (wb.sheets[activeSheet]?.state && wb.sheets[activeSheet].state !== 'visible' ? Math.max(0, wb.sheets.findIndex((x) => !x.state || x.state === 'visible')) : activeSheet) ? ' tabSelected="1"' : ''}>${pane}</sheetView></sheetViews>`
+      + `<sheetViews><sheetView${sheet.noGrid ? ' showGridLines="0"' : ''}${sheet.noZeros ? ' showZeros="0"' : ''}${sheet.zoom && sheet.zoom !== 100 ? ` zoomScale="${sheet.zoom}" zoomScaleNormal="${sheet.zoom}"` : ''}${viewTopLeft !== 'A1' ? ` topLeftCell="${viewTopLeft}"` : ''} workbookViewId="0"${si === (wb.sheets[activeSheet]?.state && wb.sheets[activeSheet].state !== 'visible' ? Math.max(0, wb.sheets.findIndex((x) => !x.state || x.state === 'visible')) : activeSheet) ? ' tabSelected="1"' : ''}>${pane}</sheetView></sheetViews>`
       + `<sheetFormatPr defaultColWidth="${px2widthM(sheet.defColW ?? DEFAULT_COL_WIDTH, wmdw)}" defaultRowHeight="${px2pt(sheet.defRowH ?? DEFAULT_ROW_HEIGHT)}" customHeight="1"${olRowMax ? ` outlineLevelRow="${olRowMax}"` : ''}${olColMax ? ` outlineLevelCol="${olColMax}"` : ''}/>`
       + (colsXml ? `<cols>${colsXml}</cols>` : '')
       + `<sheetData>${rowXml}</sheetData>`
