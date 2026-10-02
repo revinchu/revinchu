@@ -748,7 +748,7 @@ function finish(v, ctx) {
   if (v instanceof Lambda) return ERR.CALC;
   if (v instanceof Range) {
     if (!v.height || !v.width) return ERR.CALC;
-    if (v.height === 1 && v.width === 1 && !v.formats) v = v.rows[0][0];
+    if (v.height === 1 && v.width === 1 && !v.formats && !v.cellFormats) v = v.rows[0][0];
     else return v;
   }
   if (v === null || v === undefined) return 0;

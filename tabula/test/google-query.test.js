@@ -11,14 +11,17 @@ const query = (rows, text, headers = 0) => WEB.QUERY([new Range(rows), text, hea
 const execute = (rows, text) => runQuery(parseQuery(text), rows, ['A', 'B', 'C'], ['', '', '']);
 
 test('IMPORTRANGE: 공유 주소·ID·gid·한글/따옴표 시트 이름과 열린 범위', () => {
-  const a = new URL(importRangeSource(`https://docs.google.com/spreadsheets/d/${ID}/edit#gid=7`, "'매출''분석'!$A$1:$C").url);
+  const source = importRangeSource(`https://docs.google.com/spreadsheets/d/${ID}/edit#gid=7`, "'매출''분석'!$A$1:$C");
+  const a = new URL(source.url);
   assert.equal(a.hostname, 'docs.google.com');
-  assert.equal(a.searchParams.get('headers'), '0');
-  assert.equal(a.searchParams.get('sheet'), "매출'분석");
+  assert.equal(a.pathname.endsWith('/export'), true);
+  assert.equal(a.searchParams.get('format'), 'csv');
+  assert.equal(source.sheet, "매출'분석");
+  assert.equal(new URL(source.tabsUrl).pathname.endsWith('/htmlview'), true);
   assert.equal(a.searchParams.get('range'), 'A1:C');
   assert.equal(a.searchParams.get('gid'), null);
   const b = new URL(importRangeSource(`https://docs.google.com/spreadsheets/d/${ID}/edit?access_token=secret#gid=7`, 'A:C').url);
-  assert.equal(b.searchParams.get('gid'), '7');
+  assert.equal(b.searchParams.get('gid'), null, '시트 이름 생략은 URL gid 대신 첫 탭');
   assert.equal(b.searchParams.get('access_token'), null);
   assert.equal(importRangeSource(ID, 'A1:C').url, importRangeSource(`https://docs.google.com/spreadsheets/d/${ID}`, 'A1:C').url);
   assert.match(importRangeSource('월별 보고서', 'Sheet1!A1:C10').url, /^wixel-doc:/);

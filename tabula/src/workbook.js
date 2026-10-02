@@ -24,6 +24,9 @@ const unkey = (k) => { const i = k.indexOf(','); return [+k.slice(0, i), +k.slic
 
 // 같은 서식 객체를 여러 셀이 공유할 때(파일 가져오기 등) 한 번만 정리. 셀 서식은 바꿀 때 항상 새 객체로 교체하므로 공유해도 안전
 const cleanMemo = new WeakMap();
+function explicitNumberStyle(style) {
+  return style?.numFmt != null || style?.decimals != null || style?.code != null;
+}
 function cleanStyle(style) {
   if (!style) return undefined;
   const hit = cleanMemo.get(style);
@@ -713,7 +716,7 @@ export class Workbook {
       }
     }
     if (sheet.merges.some((m) => m.r1 <= r + h - 1 && m.r2 >= r && m.c1 <= c + w - 1 && m.c2 >= c)) return ERR.SPILL;
-    this.spills.set(k, { si, r, c, h, w, rows: arr.rows, formats: arr.formats, formatStart: arr.formatStart ?? 0 });
+    this.spills.set(k, { si, r, c, h, w, rows: arr.rows, formats: arr.formats, formatStart: arr.formatStart ?? 0, cellFormats: arr.cellFormats });
     for (let i = 0; i < h; i++) {
       for (let j = 0; j < w; j++) if (i || j) this.spillOwner.set(`${si}:${r + i},${c + j}`, k);
     }
@@ -890,7 +893,13 @@ export class Workbook {
     const k = `${si}:${r},${c}`;
     const spill = this.spills.get(this.spillOwner.get(k) ?? k);
     const pattern = spill && r - spill.r >= spill.formatStart ? spill.formats?.[c - spill.c] : null;
-    return pattern == null ? style : { ...style, numFmt: 'custom', code: queryFormatCode(pattern), queryFormat: pattern };
+    if (pattern != null) return { ...style, numFmt: 'custom', code: queryFormatCode(pattern), queryFormat: pattern };
+    // 가져온 값은 숫자로 유지하고, CSV의 쉼표·소수·% 표시는 기본 힌트로만 사용한다.
+    // 명시적 '일반'도 사용자 선택이므로 셀/행/열/시트 서식을 덮어쓰지 않는다.
+    const hint = spill?.cellFormats?.[r - spill.r]?.[c - spill.c];
+    if (!hint || hint.numFmt !== 'custom' || typeof hint.code !== 'string' || typeof spill.rows[r - spill.r]?.[c - spill.c] !== 'number'
+      || explicitNumberStyle(own) || explicitNumberStyle(row) || explicitNumberStyle(col) || explicitNumberStyle(s.allStyle)) return style;
+    return { ...(hint.shrink === true ? { shrink: true } : null), ...style, numFmt: 'custom', code: hint.code };
   }
 
   hasLineStyle(si, r, c) {

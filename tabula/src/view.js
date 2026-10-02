@@ -1047,7 +1047,13 @@ export class GridView {
     if (wrap) cls.push('wrap');
     else if (text && typeof v !== 'number' && !merge && (eff === 'left' || eff === 'center' || eff === 'right')) {
       // 넘친 글자: 왼쪽 맞춤은 오른쪽 빈 칸으로, 오른쪽 맞춤은 왼쪽 빈 칸으로, 가운데는 양쪽이 모두 비었을 때 양쪽으로 (엑셀과 같음)
-      const emptyAt = (cc) => cc < 0 || (!wb.getCell(si, r, cc)?.raw && !merges.some((m) => r >= m.r1 && r <= m.r2 && cc >= m.c1 && cc <= m.c2));
+      const emptyAt = (cc) => {
+        if (cc < 0) return true;
+        if (wb.getCell(si, r, cc)?.raw || merges.some((m) => r >= m.r1 && r <= m.r2 && cc >= m.c1 && cc <= m.c2)) return false;
+        // 배열 수식의 자식 셀은 raw가 없어도 값이 있다. 0·FALSE도 빈 셀이 아니다.
+        const neighbor = wb.getValue(si, r, cc);
+        return neighbor == null || neighbor === '';
+      };
       const ok = eff === 'left' ? emptyAt(c + 1) : eff === 'right' ? c > 0 && emptyAt(c - 1) : c > 0 && emptyAt(c - 1) && emptyAt(c + 1);
       if (ok) cls.push('ovf');
     }
@@ -1064,7 +1070,7 @@ export class GridView {
       const tw = measureText(text, style);
       if (tw > room) {
         // 파일의 글꼴(돋움 등)이 없어 대체 글꼴이 더 넓어서 넘치는 경우: ### 대신 조금 작게 (엑셀 화면에서는 들어맞음)
-        if (tw <= room * 1.3 && fontMissing(style.font || BASE_FONT.name)) css.push(`font-size:${(((style.size ?? BASE_FONT.size) * room) / tw).toFixed(2)}pt`);
+        if ((style.shrink && !style.wrap) || (tw <= room * 1.3 && fontMissing(style.font || BASE_FONT.name))) css.push(`font-size:${(((style.size ?? BASE_FONT.size) * room) / tw).toFixed(2)}pt`);
         else text = fitNumber(v, room, style);
       }
     }

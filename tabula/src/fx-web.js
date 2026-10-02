@@ -423,27 +423,108 @@ export function importRangeSource(source, range) {
   if (!id) return { url: `wixel-doc:${src}\u0001${sheet}\u0001${area}` };
   const valid = /^(?:[A-Z]+[1-9]\d*|(?:[A-Z]+[1-9]\d*|[A-Z]+|[1-9]\d*):(?:[A-Z]+[1-9]\d*|[A-Z]+|[1-9]\d*))$/;
   if (!valid.test(area)) throw new Error('A1:C10, A1:C 또는 A:C 형식의 범위를 입력하세요. 이름 정의·표 참조는 아직 지원하지 않습니다.');
+  const shape = importRangeShape(area);
   if (published) {
     if (sheet) throw new Error('게시된 시트 주소는 gid로 탭을 지정하고 범위에는 A1:C10처럼 셀 주소만 입력하세요. 시트 이름 지정은 일반 공유 주소를 사용하세요.');
     const u = new URL(`https://docs.google.com/spreadsheets/d/e/${id}/pub`);
     u.searchParams.set('output', 'csv'); u.searchParams.set('single', 'true');
     if (gid !== null) u.searchParams.set('gid', gid);
-    return { url: u.href, crop: area };
+    return { url: u.href, crop: area, shape };
   }
-  const u = new URL(`https://docs.google.com/spreadsheets/d/${id}/gviz/tq`);
-  u.searchParams.set('tqx', 'out:csv'); u.searchParams.set('headers', '0');
-  if (sheet) u.searchParams.set('sheet', sheet);
-  else if (gid !== null) u.searchParams.set('gid', gid);
+  // Visualization tables infer one type per column and can discard text/empty
+  // rows before CSV parsing. The sheet export preserves the original cell grid.
+  const u = new URL(`https://docs.google.com/spreadsheets/d/${id}/export`);
+  u.searchParams.set('format', 'csv');
+  // IMPORTRANGE without a sheet name reads the first tab, not the URL's gid.
+  // Omit gid entirely: the first tab need not have gid=0.
   u.searchParams.set('range', area);
-  return { url: u.href };
+  return { url: u.href, shape, ...(sheet ? { sheet, tabsUrl: `https://docs.google.com/spreadsheets/d/${id}/htmlview` } : {}) };
 }
 
-export function parseImportRange(text, crop = null) {
+// Only closed dimensions are padded. Open-ended ranges follow the returned
+// sheet extent; never allocate a million-row rectangle for A:Z by assumption.
+function importRangeShape(area) {
+  const parts = area.split(':'), bound = token => {
+    const m = /^([A-Z]*)(\d*)$/.exec(token); let col = 0;
+    for (const ch of m[1]) col = col * 26 + ch.charCodeAt(0) - 64;
+    return { row: m[2] ? Number(m[2]) : null, col: col || null };
+  };
+  const a = bound(parts[0]), b = bound(parts[1] ?? parts[0]);
+  const height = b.row == null ? null : b.row - (a.row ?? 1) + 1;
+  const width = b.col == null ? null : b.col - (a.col ?? 1) + 1;
+  if ((height != null && height < 1) || (width != null && width < 1)) throw new Error('범위의 끝은 시작보다 앞일 수 없습니다.');
+  if ((height ?? 1) * (width ?? 1) > 1000000) throw new Error('가져올 범위를 100만 셀 이내로 나누어 지정하세요.');
+  return { height, width };
+}
+
+/** Google htmlview의 탭 목록을 데이터로만 읽는다. 내려받은 JavaScript는 실행하지 않는다. */
+function importTabString(literal) {
+  const quote = literal[0];
+  if ((quote !== '"' && quote !== "'") || literal.at(-1) !== quote) throw new Error('Google 시트 이름 정보를 읽지 못했습니다.');
+  let out = '';
+  const escapes = { '"': '"', "'": "'", '\\': '\\', '/': '/', n: '\n', r: '\r', t: '\t', b: '\b', f: '\f', v: '\v' };
+  for (let i = 1; i < literal.length - 1; i++) {
+    const c = literal[i];
+    if (c !== '\\') {
+      if (c.charCodeAt(0) < 32) throw new Error('Google 시트 이름 정보의 문자열이 올바르지 않습니다.');
+      out += c; continue;
+    }
+    const e = literal[++i];
+    if (e === 'x' || e === 'u') {
+      const count = e === 'x' ? 2 : 4, hex = literal.slice(i + 1, i + 1 + count);
+      if (hex.length !== count || !/^[0-9a-f]+$/i.test(hex)) throw new Error('Google 시트 이름 정보의 문자 코드가 올바르지 않습니다.');
+      out += String.fromCharCode(parseInt(hex, 16)); i += count;
+    } else if (Object.hasOwn(escapes, e)) out += escapes[e];
+    else throw new Error('Google 시트 이름 정보의 이스케이프가 올바르지 않습니다.');
+  }
+  if (/[\u0000-\u001f]/.test(out)) throw new Error('Google 시트 이름 정보에 지원하지 않는 제어 문자가 있습니다.');
+  return out;
+}
+
+/** 정확한 시트 이름을 확인한 gid만 CSV 내보내기 주소에 연결한다. */
+export function resolveImportRangeUrl(source, text) {
+  if (!source?.sheet) return source?.url;
+  const fail = message => { throw new Error(message); };
+  const parseUrl = value => {
+    let u; try { u = new URL(value); } catch { return fail('Google 시트 주소를 확인하세요.'); }
+    if (u.protocol !== 'https:' || u.hostname !== 'docs.google.com' || u.username || u.password || u.port || u.hash) return fail('Google 시트 주소를 확인하세요.');
+    return u;
+  };
+  const csv = parseUrl(source.url), tabs = parseUrl(source.tabsUrl);
+  const doc = /^\/spreadsheets\/d\/([\w-]+)\/export$/.exec(csv.pathname);
+  if (!doc || csv.searchParams.get('format') !== 'csv' || tabs.pathname !== `/spreadsheets/d/${doc[1]}/htmlview`) return fail('Google 문서와 시트 목록의 주소가 일치하지 않습니다.');
+  const literal = String.raw`("(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*')`;
+  const entry = new RegExp(String.raw`\s*items\.push\(\s*\{\s*name\s*:\s*${literal}\s*,\s*pageUrl\s*:\s*${literal}\s*,\s*gid\s*:\s*${literal}(?:\s*,\s*initialSheet\s*:\s*\(\s*${literal}\s*==\s*gid\s*\))?\s*\}\s*\)\s*;`, 'y');
+  const found = [], names = new Set(), gids = new Set();
+  for (const script of String(text ?? '').matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/gi)) {
+    const code = script[1];
+    for (const begin of code.matchAll(/\bvar\s+items\s*=\s*\[\s*\]\s*;/g)) {
+      let pos = begin.index + begin[0].length;
+      while (/^\s*items\.push\b/.test(code.slice(pos))) {
+        entry.lastIndex = pos;
+        const m = entry.exec(code);
+        if (!m) return fail('Google 시트 목록의 형식을 확인할 수 없습니다.');
+        pos = entry.lastIndex;
+        const name = importTabString(m[1]), pageUrl = parseUrl(importTabString(m[2])), gid = importTabString(m[3]);
+        if (!name || !/^\d+$/.test(gid) || pageUrl.pathname !== `/spreadsheets/d/${doc[1]}/htmlview/sheet` || pageUrl.searchParams.getAll('gid').length !== 1 || pageUrl.searchParams.get('gid') !== gid || (m[4] && importTabString(m[4]) !== gid)) return fail('Google 시트 목록의 문서 또는 탭 번호가 일치하지 않습니다.');
+        if (names.has(name) || gids.has(gid)) return fail('Google 시트 목록에 중복된 이름 또는 탭 번호가 있습니다.');
+        names.add(name); gids.add(gid); found.push({ name, gid });
+      }
+    }
+  }
+  const match = found.find(item => item.name === source.sheet);
+  if (!match) return fail('지정한 Google 시트 이름을 찾지 못했습니다. 시트 이름과 공개 보기 설정을 확인하세요.');
+  csv.searchParams.set('gid', match.gid);
+  csv.searchParams.delete('sheet');
+  return csv.href;
+}
+
+export function parseImportRange(text, crop = null, shape = null) {
   const t = String(text).replace(/^\ufeff/, '').trimStart();
   if (/^(?:<!doctype\s+html|<html|<head|<body|<\?xml)/i.test(t) || /^(?:\/\*O_o\*\/|google\.visualization\.Query\.setResponse\()/i.test(t)) {
     throw new Error('Google Sheets 데이터를 받지 못했습니다. 링크가 있는 모든 사용자에게 보기 허용 또는 웹 게시 상태와 범위를 확인하세요. 비공개 시트에는 별도 Google 인증이 필요합니다.');
   }
-  let rows = parseCsv(text).map((r) => r.map((s) => { const v = autoValue(s); return typeof v === 'string' ? s : v; }));
+  let rows = parseCsv(text, ',');
   if (crop) {
     const col = (s) => { let n = 0; for (const ch of s) n = n * 26 + ch.charCodeAt(0) - 64; return n - 1; };
     const bound = (s, end) => {
@@ -454,7 +535,33 @@ export function parseImportRange(text, crop = null) {
     if (b.r < a.r || b.c < a.c) throw new Error('범위의 끝은 시작보다 앞일 수 없습니다.');
     rows = rows.slice(a.r, b.r + 1).map((r) => r.slice(a.c, b.c + 1));
   }
-  return grid(rows);
+  if (shape) {
+    let width = shape.width ?? 1;
+    if (shape.width == null) for (const row of rows) width = Math.max(width, row.length);
+    const height = shape.height ?? Math.max(1, rows.length);
+    if (height * width > 1000000) throw new Error('가져올 범위를 100만 셀 이내로 나누어 지정하세요.');
+    rows = Array.from({ length: height }, (_, r) => Array.from({ length: width }, (_, c) => rows[r]?.[c] ?? ''));
+  }
+  const styles = new Map(), cellFormats = [];
+  let hasFormats = false;
+  const values = rows.map((row, r) => row.map((text, c) => {
+    const value = autoValue(text);
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      // CSV carries formatted text rather than cell styles. Retain ordinary
+      // grouping/decimal/percent display as a hint; the underlying value stays numeric.
+      const t = text.trim(), m = /^[+-]?(?:\d{1,3}(?:,\d{3})+|\d+|)(?:\.(\d+))?(%)?$/.exec(t);
+      if (m) {
+        const places = Math.min(15, m[1]?.length ?? 0);
+        const code = (t.includes(',') ? '#,##0' : '0') + (places ? '.' + '0'.repeat(places) : '') + (m[2] ? '%' : '');
+        if (!styles.has(code)) styles.set(code, { numFmt: 'custom', code, shrink: true });
+        (cellFormats[r] ??= [])[c] = styles.get(code); hasFormats = true;
+      }
+    }
+    return typeof value === 'string' ? text : value;
+  }));
+  const result = grid(values);
+  if (hasFormats && result instanceof Range) result.cellFormats = cellFormats;
+  return result;
 }
 /** RSS · Atom 피드 → { feed: {title, description, url}, items: [{title, url, date, summary, author}] } */
 export function parseFeed(text) {
@@ -1139,7 +1246,13 @@ export const WEB = {
   IMPORTRANGE: (args, ctx) => {
     let source;
     try { source = importRangeSource(str1(args[0]), str1(args[1])); } catch { return ERR.VALUE; }
-    return netRange(source.url, ctx, (t) => parseImportRange(t, source.crop));
+    if (source.tabsUrl) {
+      const tabs = netText(source.tabsUrl, ctx);
+      if (pending(tabs)) return tabs;
+      try { source.url = resolveImportRangeUrl(source, tabs); }
+      catch (e) { const rec = NET.cache.get(source.tabsUrl); if (rec) rec.message = e.message; return ERR.NA; }
+    }
+    return netRange(source.url, ctx, (t) => parseImportRange(t, source.crop, source.shape));
   },
   GOOGLEFINANCE: (args, ctx) => {
     const tk = parseTicker(str1(args[0]));

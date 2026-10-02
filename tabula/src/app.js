@@ -61,7 +61,7 @@ import { SLICER_STYLES, SLICER_STYLE_GROUPS, slicerStyleName, slicerColors, CUST
 import { server, createVaultKey, validVaultKey } from './storage.js';
 import { saveLargeWorkbook, loadLargeWorkbook } from './big-storage.js';
 import { hubIcon, hubHeading, hubCard, hubPreview, hubDropzone, hubEmpty } from './app-start.js';
-import { NET, netClear, parseMarkup, htmlTables, htmlLists, tableRows, textOf, autoValue, parseCsv, importRangeSource, parseImportRange } from './fx-web.js';
+import { NET, netClear, parseMarkup, htmlTables, htmlLists, tableRows, textOf, autoValue, parseCsv, importRangeSource, parseImportRange, resolveImportRangeUrl } from './fx-web.js';
 import { libList, libSave, libLoad, libLoadVersion, libUpdate, libNameVersion, libRemove, newDocId, packText, unpackText, LIB_MAX, VER_MAX } from './library.js';
 import { itemStats, blockColumn, EMPTY as PIVOT_EMPTY, EMPTY_TEXT as PIVOT_EMPTY_TEXT } from './cube.js';
 import { logicalCol, ColBuilder } from './block.js';
@@ -14243,7 +14243,8 @@ function googleSheetsDialog() {
   ], async ({ url, range, mode }) => {
     const source = importRangeSource(url, range);
     if (!source.url.startsWith('https://docs.google.com/')) throw new Error('Google Sheets의 공유 주소를 입력하세요.');
-    const parsed = parseImportRange(await webFetch(source.url), source.crop);
+    if (source.tabsUrl) source.url = resolveImportRangeUrl(source, await webFetch(source.tabsUrl));
+    const parsed = parseImportRange(await webFetch(source.url), source.crop, source.shape);
     if (!parsed?.rows?.length) throw new Error('선택한 범위에 데이터가 없습니다.');
     if (wb !== book) throw new Error('통합 문서가 바뀌었습니다. 가져오기를 다시 시작하세요.');
     if (structureLocked()) throw new Error('통합 문서 구조가 보호되어 새 시트를 추가할 수 없습니다.');
@@ -14252,11 +14253,16 @@ function googleSheetsDialog() {
       let name = 'Google 가져오기'; for (let n = 2; wb.sheetIndexByName(name) >= 0; n++) name = `Google 가져오기 ${n}`;
       at = wb.addSheet(name);
       if (mode === 'linked') { const quote = (s) => String(s).replace(/"/g, '""'); wb.setInput(at, 0, 0, `=IMPORTRANGE("${quote(url.trim())}","${quote(range.trim())}")`); }
-      else parsed.rows.forEach((row, r) => row.forEach((v, c) => { if (v !== '' && v != null) wb.setInput(at, r, c, typeof v === 'string' ? textRaw(v) : String(v)); }));
+      else parsed.rows.forEach((row, r) => row.forEach((v, c) => {
+        if (v !== '' && v != null) {
+          wb.setInput(at, r, c, typeof v === 'string' ? textRaw(v) : String(v));
+          if (parsed.cellFormats?.[r]?.[c]) wb.setStyle(at, r, c, parsed.cellFormats[r][c]);
+        }
+      }));
     }, meta());
     switchSheet(at);
     toast(`Google Sheets에서 ${parsed.height.toLocaleString()}행을 새 시트로 가져왔습니다.${mode === 'linked' ? ' 원본 수정은 Google Sheets에서 하세요.' : ''}`);
-  }, { okLabel: '가져오기', note: '공개 또는 ‘링크가 있는 모든 사용자: 뷰어’로 공유된 시트를 읽습니다. 비공개 문서 로그인·Google 원본에 다시 저장은 지원하지 않습니다. 데이터만 가져오며 서식은 Excel 파일로 열어야 유지됩니다.' });
+  }, { okLabel: '가져오기', note: '공개 또는 ‘링크가 있는 모든 사용자: 뷰어’로 공유된 시트를 읽습니다. 비공개 문서 로그인·Google 원본에 다시 저장은 지원하지 않습니다. 시트 이름이 없는 범위는 주소의 gid와 관계없이 첫 탭을 가져옵니다. 셀 위치와 기본 숫자 표시는 유지하며, 글꼴·색·병합·열 너비까지 유지하려면 Excel 파일로 여세요.' });
 }
 
 function privateImportPermission() {
@@ -17551,6 +17557,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileFit','toggleR
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['Google Sheets 가져오기 정확성', ['IMPORTRANGE의 혼합 문자·숫자, 제목, 빈 행·열 누락 수정', '시트 이름 생략 시 Google과 같은 첫 탭 선택 · 쉼표·소수·백분율 표시와 숫자 계산 유지']],
   ['틀 고정과 확대 탐색', ['엑셀에 저장된 고정 시작 행·열과 본문 위치·활성 셀 복원', '고정 영역이 화면을 가득 채우면 잠시 고정을 조정하여 선택 셀 표시 · 축소하면 복원', '행·열 삽입/삭제 시 고정 경계와 저장된 보기 위치 보존']],
   ['병합 제목의 행 높이와 글꼴 위치', ['병합 제목 편집·자동 맞춤 후 원래 행 높이 보존', '셀마다 실제 글꼴의 세로 보정 적용 · 돋움 제목이 위에 붙는 현상 개선']],
   ['확대·축소와 셀 여백', ['배율 변경 시 가는 선·이중선 다시 계산 · 첫 셀과 머리글 사이 틈 제거', '400%에서도 머리글 구분선 1픽셀 · 가운데/왼쪽 맞춤의 미세 여백 조정', 'XLS 자동 행 높이와 저장된 확대율 보존 · 제목이 위에 붙거나 잘리는 문제 수정']],

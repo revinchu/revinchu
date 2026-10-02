@@ -296,6 +296,8 @@ function readStyles(files, wbRels, theme) {
     else if (fill) st.fill = fill;
     Object.assign(st, borders[componentId('borderId', 'applyBorder')] ?? {});
     Object.assign(st, numFmtOf(componentId('numFmtId', 'applyNumberFormat')));
+    if (componentId('numFmtId', 'applyNumberFormat') === 0 && (trueAttr(a.applyNumberFormat)
+      || Number(a.xfId) > 0 && falseAttr(a.applyNumberFormat) && trueAttr(parent?.attrs.applyNumberFormat))) st.numFmt = 'general';
     const al = componentNode('alignment', 'applyAlignment');
     if (al) {
       const h = al.attrs.horizontal;
@@ -311,6 +313,7 @@ function readStyles(files, wbRels, theme) {
       const rot = Number(al.attrs.textRotation ?? 0);
       if (rot) st.rotate = rot === 255 ? 255 : rot > 90 ? -(rot - 90) : rot; // 255 = 세로 쓰기
       if (al.attrs.shrinkToFit === '1' || al.attrs.shrinkToFit === 'true') st.shrink = true;
+      else if (falseAttr(al.attrs.shrinkToFit)) st.shrink = false;
     }
     // 셀 보호: 잠금 해제 · 수식 숨기기
     const pr = componentNode('protection', 'applyProtection');
@@ -2904,22 +2907,25 @@ class StylePool {
     if (style.wrap) align.push('wrapText="1"');
     if (style.indent) align.push(`indent="${style.indent}"`);
     if (style.rotate) align.push(`textRotation="${style.rotate === 255 ? 255 : style.rotate < 0 ? 90 - style.rotate : style.rotate}"`);
-    if (style.shrink) align.push('shrinkToFit="1"');
+    if (style.shrink != null) align.push(`shrinkToFit="${style.shrink ? 1 : 0}"`);
     const prot = style.locked === false || style.hideFormula ? `<protection${style.locked === false ? ' locked="0"' : ''}${style.hideFormula ? ' hidden="1"' : ''}/>` : '';
     // 확인란: 엑셀 365 방식 (xf 의 xfComplement → featurePropertyBag 의 Checkbox 셀 컨트롤). 옛 엑셀은 TRUE/FALSE 로 표시
     if (style.checkbox) this.hasCheckbox = true;
     const ext = style.checkbox ? '<extLst><ext uri="{C7286773-470A-42A8-94C5-96B5CB345126}" xmlns:xfpb="http://schemas.microsoft.com/office/spreadsheetml/2022/featurepropertybag"><xfpb:xfComplement i="0"/></ext></extLst>' : '';
     const inner = (align.length ? `<alignment ${align.join(' ')}/>` : '') + prot + ext;
     const parts = { number: numFmtId, font: fontId, fill: fillId, border: borderId, alignment: align.join(' '), protection: prot };
+    // 글꼴/채우기만 지정한 XF에 일반 표시 형식을 명시하면 다시 읽을 때 사용자 숫자 서식으로 굳어진다.
+    const implicitGeneral = numFmtId === 0 && !style.numFmt && style.decimals == null && !style.code;
     if (this.styleXfMode) {
       this.lastStyleParts = parts;
-      const flags = Object.entries(STYLE_APPLY).map(([part, flag]) => ` ${flag}="${this.styleXfInclude?.[part] === false ? 0 : 1}"`).join('');
+      const flags = Object.entries(STYLE_APPLY).map(([part, flag]) => part === 'number' && implicitGeneral && this.styleXfInclude?.[part] !== false ? '' : ` ${flag}="${this.styleXfInclude?.[part] === false ? 0 : 1}"`).join('');
       return `<xf numFmtId="${numFmtId}" fontId="${fontId}" fillId="${fillId}" borderId="${borderId}"${flags}${inner ? `>${inner}</xf>` : '/>'}`;
     }
     const named = this.namedByKey?.get(styleNameKey(style.cellStyleName));
     // 이름 연결은 xfId로 보존합니다. 부모와 같은 요소는 상속하고 직접 고친 요소는 셀에 기록합니다.
     const flags = Object.entries(STYLE_APPLY).map(([part, flag]) => {
       const inherit = named && named.include[part] && named.parts[part] === parts[part];
+      if (part === 'number' && implicitGeneral && !inherit) return '';
       const value = named && inherit ? 0 : 1;
       return ` ${flag}="${value}"`;
     }).join('');
@@ -4199,7 +4205,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
         const spillKey = `${si}:${r},${c}`;
         const querySpill = wb.spills.get(wb.spillOwner.get(spillKey) ?? spillKey);
         const queryFormat = querySpill && r - querySpill.r >= querySpill.formatStart ? querySpill.formats?.[c - querySpill.c] : null;
-        const s = queryFormat != null ? pool.xf(wb.styleAt(si, r, c)) : plainStyle ? pool.xf(cell.style ?? {}) : xfAt(r, c, cell);
+        const s = queryFormat != null || querySpill?.cellFormats?.[r - querySpill.r]?.[c - querySpill.c] != null ? pool.xf(wb.styleAt(si, r, c)) : plainStyle ? pool.xf(cell.style ?? {}) : xfAt(r, c, cell);
         const sAttr = s ? ` s="${s}"` : '';
         const v = wb.getValue(si, r, c);
         if (!cell.raw && cell.image?.src) {

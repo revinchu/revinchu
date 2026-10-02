@@ -485,7 +485,7 @@ export const FUNC_INFO = {
   'IMPORTHTML': F('구글 스프레드시트', 'IMPORTHTML(url, "table"|"list", index)', '웹 페이지의 몇 번째 표 또는 목록을 가져옵니다.'),
   'IMPORTDATA': F('구글 스프레드시트', 'IMPORTDATA(url, [delimiter], [locale])', '웹의 CSV · TSV 파일을 표로 가져옵니다.'),
   'IMPORTFEED': F('구글 스프레드시트', 'IMPORTFEED(url, [query], [headers], [num_items])', 'RSS · Atom 피드의 항목(제목 · 링크 · 날짜 · 요약)을 가져옵니다.'),
-  'IMPORTRANGE': F('구글 스프레드시트', 'IMPORTRANGE(spreadsheet_url, range_string)', '공개 Google Sheets 주소·문서 ID 또는 WIXEL 문서 이름의 범위를 가져옵니다. A1:C처럼 끝 행을 생략할 수 있습니다. 게시 주소는 gid로 탭을 지정하세요. 비공개 Google 시트 인증은 지원하지 않습니다. F9 또는 모두 새로 고침으로 다시 가져옵니다.'),
+  'IMPORTRANGE': F('구글 스프레드시트', 'IMPORTRANGE(spreadsheet_url, range_string)', '공개 Google Sheets 주소·문서 ID 또는 WIXEL 문서 이름의 범위를 가져옵니다. A1:C처럼 끝 행을 생략할 수 있습니다. 시트 이름을 생략하면 주소의 gid와 관계없이 첫 탭을 가져옵니다. 특정 탭은 시트명!A1:C로 지정하세요. 게시 주소는 gid로 탭을 지정하세요. 비공개 Google 시트 인증은 지원하지 않습니다. F9 또는 모두 새로 고침으로 다시 가져옵니다.'),
   'GOOGLEFINANCE': F('구글 스프레드시트', 'GOOGLEFINANCE(ticker, [attribute], [start_date], [end_date|num_days], [interval])', '주식 · 환율 시세를 가져옵니다. 예: GOOGLEFINANCE("KRX:005930"), GOOGLEFINANCE("NASDAQ:GOOG","price"), GOOGLEFINANCE("CURRENCY:USDKRW")'),
   'GOOGLETRANSLATE': F('구글 스프레드시트', 'GOOGLETRANSLATE(text, [source_language], [target_language])', '텍스트를 번역합니다. 언어 코드 예: "en", "ko", "ja", 자동 감지 "auto"'),
   'DETECTLANGUAGE': F('구글 스프레드시트', 'DETECTLANGUAGE(text_or_range)', '텍스트의 언어 코드를 알아냅니다 (예: "en").'),
