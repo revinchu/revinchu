@@ -5,7 +5,7 @@ import { noteVisible } from './review-state.js';
 import { Axis } from './axis.js';
 import { visibleAxisIndices } from './axis-window.js';
 import { GridAccessibility } from './grid-a11y.js';
-import { gridLineWidth, resolveGridBorders } from './grid-lines.js';
+import { gridLineWidth, resolveGridBorders, gridBorderPaintOrder } from './grid-lines.js';
 import { pictureCropStyle, pictureTransform, pictureEffects, pictureShadowStyle } from './picture.js';
 import { sanitizeHtml, setSafeHtml } from './safe-html.js';
 import { colToName, cellName, MAX_ROWS, MAX_COLS } from './formula.js';
@@ -183,6 +183,7 @@ function fitNumber(v, maxW, style) {
 const esc = (s) => String(s).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
 
 // 엑셀 테두리 선 종류 → CSS (굵기 · 모양)
+const BORDER_DASHES = { hair: [1, 1], dotted: [1, 2], dashed: [3, 2], dashDot: [6, 2, 1, 2], dashDotDot: [6, 2, 1, 2, 1, 2], mediumDashed: [3, 2], mediumDashDot: [4, 2, 1, 2], mediumDashDotDot: [4, 2, 1, 2, 1, 2], slantDashDot: [4, 1, 1, 1] };
 const BORDER_CSS = {
   thin: [1, 'solid'], hair: [1, 'dotted'], dotted: [1, 'dotted'], dashed: [1, 'dashed'], dashDot: [1, 'dashed'], dashDotDot: [1, 'dashed'],
   medium: [2, 'solid'], mediumDashed: [2, 'dashed'], mediumDashDot: [2, 'dashed'], mediumDashDotDot: [2, 'dashed'], slantDashDot: [2, 'dashed'],
@@ -713,7 +714,12 @@ export class GridView {
         this.renderPane(p);
         this.renderPaneOverlay(p);
       }
-      p.content.style.transform = `translate(${p.ox - need.x0}px, ${p.oy - need.y0}px)`;
+      // 분수 스크롤이 선 층 전체를 반 픽셀 옮겨 이미 래스터화한 1px 선을
+      // 두 픽셀로 퍼뜨리지 않도록 창의 실제 화면 원점에 맞춘다.
+      const paneBox = p.el.getBoundingClientRect(), dpr = globalThis.devicePixelRatio || 1;
+      const tx = (Math.round((paneBox.left + (p.ox - need.x0) * this.z) * dpr) / dpr - paneBox.left) / this.z;
+      const ty = (Math.round((paneBox.top + (p.oy - need.y0) * this.z) * dpr) / dpr - paneBox.top) / this.z;
+      p.content.style.transform = `translate(${tx}px, ${ty}px)`;
     }
     this.renderHeaders(rects);
     this.freezeV.style.display = this.fc ? 'block' : 'none';
@@ -748,12 +754,13 @@ export class GridView {
     // SVG 선은 CSS border의 최소 1 CSS px 강제 반올림 없이 화면 픽셀에 맞춥니다.
     const scale = this.z * (globalThis.devicePixelRatio || 1);
     const gridWidth = 1 / scale;
+    const pixel = value => Math.round(value * scale) / scale;
     p.borderSegments = [];
     p.gridCovers = [];
     const g = [];
     if (st.showGrid) {
-      for (const c of visCols) g.push(`<rect x="${cols.pos(c + 1) - gridWidth - p.ox}" width="${gridWidth}" height="${H}"/>`);
-      for (const r of visRows) g.push(`<rect y="${rows.pos(r + 1) - gridWidth - p.oy}" width="${W}" height="${gridWidth}"/>`);
+      for (const c of visCols) g.push(`<rect x="${pixel(cols.pos(c + 1) - p.ox) - gridWidth}" width="${gridWidth}" height="${H}"/>`);
+      for (const r of visRows) g.push(`<rect y="${pixel(rows.pos(r + 1) - p.oy) - gridWidth}" width="${W}" height="${gridWidth}"/>`);
     }
 
 
@@ -855,13 +862,16 @@ export class GridView {
         html.push(`<div class="fbtn pbtn${on ? ' on' : ''}" data-p="${pi}" data-k="${b.kind}" data-f="${esc(b.field ?? '')}" title="${on ? '필터 적용됨' : '필터'}" style="left:${cols.pos(b.c + 1) - 18 - p.ox}px;top:${rows.pos(b.r + 1) - 18 - p.oy}px"></div>`);
       }
     });
-    const lines = resolveGridBorders(p.borderSegments).map((e) => {
+    const lines = gridBorderPaintOrder(resolveGridBorders(p.borderSegments)).map((e) => {
       const width = gridLineWidth(e.width, this.z, globalThis.devicePixelRatio || 1, e.pattern);
       const path = (offset, strokeWidth) => {
-        const at = e.at === 0 ? width + 1 / scale - offset : e.at - offset;
-        if (e.pattern === 'solid' || e.pattern === 'double') return `<rect x="${e.vertical ? at - strokeWidth / 2 : e.start}" y="${e.vertical ? e.start : at - strokeWidth / 2}" width="${e.vertical ? strokeWidth : e.end - e.start}" height="${e.vertical ? e.end - e.start : strokeWidth}" fill="${esc(e.color)}"/>`;
-        const d = e.vertical ? `M${at} ${e.start}V${e.end}` : `M${e.start} ${at}H${e.end}`;
-        const dash = e.pattern === 'dotted' ? ` stroke-dasharray="${strokeWidth} ${strokeWidth}"` : e.pattern === 'dashed' ? ` stroke-dasharray="${strokeWidth * 3} ${strokeWidth * 2}"` : '';
+        const at = (e.at === 0 ? width + 1 / scale : pixel(e.at)) - offset;
+        // 중심선 stroke는 분수 배율의 float 변환에서도 정수 장치 픽셀 폭을
+        // 유지한다. rect 양끝을 따로 반올림하면 2px이 1px/3px로 달라질 수 있다.
+        const d = e.vertical ? `M${at} ${pixel(e.start)}V${pixel(e.end)}` : `M${pixel(e.start)} ${at}H${pixel(e.end)}`;
+        const units = BORDER_DASHES[e.pattern];
+        const phase = e.start + (e.vertical ? p.oy : p.ox);
+        const dash = units ? ` stroke-dasharray="${units.map(n => n * strokeWidth).join(' ')}" stroke-dashoffset="${phase}"` : '';
         return `<path d="${d}" stroke="${esc(e.color)}" stroke-width="${strokeWidth}"${dash}/>`;
       };
       if (e.pattern !== 'double') return path(width / 2, width);
@@ -953,12 +963,14 @@ export class GridView {
     if (covers) {
       css.push('background-clip:border-box');
       const inset = 2 / (this.z * (globalThis.devicePixelRatio || 1));
-      p.gridCovers.push(`<rect x="${x - p.ox - inset}" y="${y - p.oy - inset}" width="${w + inset}" height="${h + inset}" fill="black"/>`);
+      p.gridCovers.push(`<rect x="${x - p.ox - inset}" y="${y - p.oy - inset}" width="${w + inset * 2}" height="${h + inset * 2}" fill="black"/>`);
     }
     // 셀 배경과 독립된 선 층: 맞닿은 두 셀·병합 셀의 경계는 굵기 우선으로 한 번만 그립니다.
     const edge = (key, vertical, at, start, end) => {
       if (!style[key]) return;
-      const [width, pattern] = BORDER_CSS[style[`${key}s`] ?? 'thin'] ?? BORDER_CSS.thin;
+      const kind = style[`${key}s`] ?? 'thin';
+      const [width, cssPattern] = BORDER_CSS[kind] ?? BORDER_CSS.thin;
+      const pattern = cssPattern === 'dotted' || cssPattern === 'dashed' ? kind : cssPattern;
       p.borderSegments.push({ vertical, at, start, end, width, pattern, color: style[`${key}c`] ?? '#000' });
     };
     edge('bt', false, y - p.oy, x - p.ox, x + w - p.ox);
@@ -1037,12 +1049,22 @@ export class GridView {
       if (i < 0) cls.push('ovf');
       spanCss = ` style="position:absolute;left:0;top:0;bottom:0;width:${w + across}px;display:flex;align-items:inherit;justify-content:center;white-space:nowrap"`;
     }
+    // 넘친 글자만 테두리 위에 둔다. 셀 채우기까지 z-index:1로 올리면
+    // 오른쪽·아래 공유 테두리와 교차점이 흰 배경에 잘려 보인다.
+    let fillHtml = '';
+    if (cls.includes('ovf')) {
+      const paint = css.filter(value => value.startsWith('background'));
+      if (paint.length) {
+        fillHtml = `<div class="cell-fill" style="left:${x - p.ox}px;top:${y - p.oy}px;width:${w}px;height:${h}px;${paint.join(';')}"></div>`;
+        for (let i = css.length - 1; i >= 0; i--) if (css[i].startsWith('background')) css.splice(i, 1);
+      }
+    }
     if (checkbox !== null) {
       const col = style.color || '#217346';
       const box = `<svg class="cbx" viewBox="0 0 16 16" width="15" height="15"><rect x="1" y="1" width="14" height="14" rx="2.5" fill="${checkbox ? col : '#fff'}" stroke="${checkbox ? col : '#8a8a8a'}" stroke-width="1.3"/>${checkbox ? '<path d="M4.2 8.3l2.5 2.5 5-5.3" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>' : ''}</svg>`;
-      return `<div class="c cbx-cell${cls.length ? ` ${cls.join(' ')}` : ''}" data-r="${r}" data-c="${c}" style="${css.join(';')}"${comment}>${diagHtml}${box}</div>`;
+      return fillHtml + `<div class="c cbx-cell${cls.length ? ` ${cls.join(' ')}` : ''}" data-r="${r}" data-c="${c}" style="${css.join(';')}"${comment}>${diagHtml}${box}</div>`;
     }
-    return `<div class="c${cls.length ? ` ${cls.join(' ')}` : ''}" data-r="${r}" data-c="${c}" style="${css.join(';')}"${comment}>${diagHtml}${iconHtml}${rotBox ?? `<span${spanCss}>${hideValue ? '' : esc(text)}</span>`}</div>`;
+    return fillHtml + `<div class="c${cls.length ? ` ${cls.join(' ')}` : ''}" data-r="${r}" data-c="${c}" style="${css.join(';')}"${comment}>${diagHtml}${iconHtml}${rotBox ?? `<span${spanCss}>${hideValue ? '' : esc(text)}</span>`}</div>`;
   }
 
   /**

@@ -371,3 +371,8 @@ node tools/mobile-layout.mjs
 ## 도형·그림의 바로가기 버튼
 
 `node tools/drawing-links.mjs`는 합성 문서에서 도형·그림·그룹 자식의 링크 이동, 시트명·이름 범위, 같은 시트 맨위로, Ctrl+클릭/Enter/K, 링크 편집·제거·Undo, 끊어진 링크 안내, 보호 상태와 모바일 탭을 검사합니다. `WIXEL_URL`로 소스 또는 배포 번들을 지정합니다. 기존 Playwright 환경 변수를 사용하며 격리 컨텍스트에서 외부 연결·API 쓰기를 차단합니다. XLSX 왕복·내부 주소·구조 변경 검사는 `test/drawing-hyperlinks.test.js`, `test/hyperlink.test.js`에 있습니다. 실제 업무 파일은 이 도구나 저장소에 포함하지 않습니다. 지원 범위는 [31번 문서](../docs/codex/31_도형버튼과하이퍼링크.md)에 기록합니다.
+
+
+## 셀 테두리 픽셀 비교
+
+`node tools/grid-rendering.mjs`는 가는 선·이중선·중간/굵은 선, 채움+넘침 텍스트, 회색/검정 교차점, 점쇄선, 틀 고정·숨김·스크롤·필터·편집을 검사합니다. `WIXEL_URL`로 소스/배포 번들을 정하고 `GRID_SCREENSHOTS`를 D: 폴더로 지정하면 PNG와 좌표 JSON을 보관합니다. DPR 1/1.25/1.5/2 × 배율 50/75/80/100/125% × 두 테마의 장치 픽셀을 판독합니다. 검사 조건·한계는 [32번 문서](../docs/codex/32_셀테두리정밀표시.md)에 기록합니다.

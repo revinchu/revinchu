@@ -238,6 +238,7 @@ input.rselect { padding: 0 4px; }
   overflow: hidden; white-space: pre;
 }
 .c > span { flex: none; max-width: none; position: relative; top: var(--glyph-dy, 0); }
+.cell-fill { position:absolute; box-sizing:border-box; pointer-events:none; }
 .c.ovf { overflow: visible; z-index: 1; } /* 넘친 글자는 오른쪽 빈 칸의 채우기 위에 (엑셀과 같음) */
 .c.wrap { white-space: pre-wrap; }
 .c.wrap > span { flex: 1 1 auto; min-width: 0; word-break: break-all; }
