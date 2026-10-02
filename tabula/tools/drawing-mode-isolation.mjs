@@ -10,13 +10,14 @@ const baselineApp = baseline ? execFileSync('git', ['-c', `safe.directory=${file
 const browser = await chromium.launch(), results = [];
 const labels = { outline: '테두리 그리기', grid: '테두리 눈금 그리기', erase: '테두리 지우기' };
 const target = { r1: 14, c1: 8, r2: 17, c2: 10 };
+const secondTarget = { r1: 20, c1: 12, r2: 23, c2: 14 };
 const flags = p => p.evaluate(() => ({ border: document.querySelector('#gridView').classList.contains('border-draw'), shape: document.querySelector('#gridView').classList.contains('drawing-mode'), painter: document.querySelector('#gridView').classList.contains('painting') }));
 const snapshot = p => p.evaluate(() => ({ cells: tabula.wb().serialize().sheets.map(s => s.cells), undo: tabula.wb().undoStack.length }));
 const shapes = p => p.evaluate(() => structuredClone(tabula.wb().sheets[0].shapes));
 async function fixture(p, { borders = false, protectedSecond = false, object = false } = {}) {
   await p.evaluate(({ borders, protectedSecond, object }) => {
     const t = tabula, w = t.wb(), cells = { '0,0': { raw: '보존', style: { bold: true, fill: '#fff2cc' } }, '0,1': { raw: '=1+1', cached: 2 } };
-    if (borders) for (let r = 14; r <= 17; r++) for (let c = 8; c <= 10; c++) cells[`${r},${c}`] = { raw: '', style: { bt: true, bb: true, bl: true, br: true, btc: '#123456' } };
+    if (borders) for (const rg of [{ r1: 14, c1: 8, r2: 17, c2: 10 }, { r1: 20, c1: 12, r2: 23, c2: 14 }]) for (let r = rg.r1; r <= rg.r2; r++) for (let c = rg.c1; c <= rg.c2; c++) cells[`${r},${c}`] = { raw: '', style: { bt: true, bb: true, bl: true, br: true, btc: '#123456' } };
     w.restore({ sheets: [{ name: '그리기 합성', cells, shapes: object ? [{ id: 'existing-shape', kind: 'rect', x: 130, y: 80, w: 140, h: 80, fill: '#4472c4', stroke: '#000000', strokeWidth: 1 }] : [] }, { name: '다른 시트', cells: { '0,0': { raw: '둘째' } }, ...(protectedSecond ? { protect: { on: true, allow: { selectLocked: true, selectUnlocked: true, formatCells: false, objects: false } } } : {}) }] });
     t.switchSheet(1); t.switchSheet(0); w.undoStack = []; w.redoStack = []; t.gv().layout(); t.gv().renderAll(); t.selectCell(0, 0);
   }, { borders, protectedSecond, object });
@@ -34,9 +35,9 @@ async function pick(p, label) {
 }
 async function drag(p, a, b) { await p.mouse.move(a.x, a.y); await p.mouse.down(); await p.mouse.move(b.x, b.y, { steps: 8 }); await p.mouse.up(); }
 async function cellPoint(p, r, c) { return p.evaluate(([r, c]) => { const x = tabula.gv().clientRect({ r1: r, c1: c, r2: r, c2: c }); return { x: (x.left + x.right) / 2, y: (x.top + x.bottom) / 2 }; }, [r, c]); }
-async function select(p) {
-  await drag(p, await cellPoint(p, target.r1, target.c1), await cellPoint(p, target.r2, target.c2));
-  assert.deepEqual(await p.evaluate(() => ({ ...tabula.sel })), target, '실제 마우스가 의도한 셀 범위를 선택');
+async function select(p, rg = target) {
+  await drag(p, await cellPoint(p, rg.r1, rg.c1), await cellPoint(p, rg.r2, rg.c2));
+  assert.deepEqual(await p.evaluate(() => ({ ...tabula.sel })), rg, '실제 마우스가 의도한 셀 범위를 선택');
 }
 async function draw(p, label) {
   await pick(p, label); const box = await p.locator('#gridView').boundingBox();
@@ -75,13 +76,18 @@ try {
       await fixture(p, { borders: mode === 'erase' }); const before = await snapshot(p); await border(p, mode); await pick(p, '자유형: 자유곡선'); await p.keyboard.press('Escape');
       await select(p); assert.deepEqual(await snapshot(p), before); assert.equal((await flags(p)).border, false); assert.equal((await shapes(p)).length, 0);
     });
-    await test(`명시 ${mode} 펜은 실제 적용·계속 그리기·Undo`, async p => {
+    await test(`명시 ${mode} 펜은 한 번 적용·다음 선택 불변·재활성화·Undo`, async p => {
       await fixture(p, { borders: mode === 'erase' }); const before = await snapshot(p); await border(p, mode); await select(p);
-      const after = await snapshot(p); assert.notDeepEqual(after.cells, before.cells); assert.equal(after.undo, 1); assert.equal((await flags(p)).border, true);
+      const after = await snapshot(p); assert.notDeepEqual(after.cells, before.cells); assert.equal(after.undo, 1);
       const style = await p.evaluate(() => tabula.wb().getCell(0, 14, 8)?.style ?? {});
       if (mode === 'erase') for (const side of ['bt', 'bb', 'bl', 'br']) assert.ok(!style[side], side);
       else { assert.equal(style.bt, true); assert.equal(style.bl, true); if (mode === 'grid') assert.equal(style.br, true); }
-      await p.keyboard.press('Escape'); await undo(p); assert.deepEqual((await snapshot(p)).cells, before.cells); assert.equal((await flags(p)).border, false);
+      const point = await cellPoint(p, 21, 13); await p.mouse.click(point.x, point.y);
+      assert.deepEqual(await snapshot(p), after, '한 번 적용 뒤 다른 셀 클릭이 서식이나 Undo를 변경');
+      await select(p, secondTarget); assert.deepEqual(await snapshot(p), after, '한 번 적용 뒤 다른 범위 드래그가 서식이나 Undo를 변경'); assert.equal((await flags(p)).border, false);
+      await border(p, mode); await select(p, secondTarget); const second = await snapshot(p); assert.notDeepEqual(second.cells, after.cells); assert.equal(second.undo, 2); assert.equal((await flags(p)).border, false);
+      await undo(p); assert.deepEqual(await snapshot(p), after, '재활성화 적용 한 번 Undo');
+      await undo(p); assert.deepEqual(await snapshot(p), before, '첫 적용 한 번 Undo');
     });
   }
   await test('테두리 눈금 → 자유곡선 완성 → 다음 선택 불변', async p => {
@@ -89,6 +95,23 @@ try {
   });
   await test('일회성 모든 테두리는 기존 펜을 종료', async p => {
     await fixture(p); await border(p, 'outline'); await menu(p, '모든 테두리'); const before = await snapshot(p); assert.equal(before.undo, 1); await select(p); assert.deepEqual(await snapshot(p), before); assert.equal((await flags(p)).border, false);
+  });
+  await test('선 스타일 선택만으로 펜·서식이 바뀌지 않고 명시 펜에 선택 스타일 적용', async p => {
+    await fixture(p); const before = await snapshot(p); await menu(p, '선 스타일...');
+    await p.getByRole('menuitem', { name: /^보통 실선(?:\s|$)/ }).click();
+    assert.deepEqual(await snapshot(p), before, '선 스타일 선택만으로 셀 변경');
+    await select(p, secondTarget); assert.deepEqual(await snapshot(p), before, '선 스타일 선택 뒤 일반 드래그'); assert.equal((await flags(p)).border, false);
+    await border(p, 'outline'); await select(p); const style = await p.evaluate(() => tabula.wb().getCell(0, 14, 8)?.style ?? {});
+    assert.equal(style.bts, 'medium'); assert.equal(style.bls, 'medium'); assert.equal((await flags(p)).border, false);
+    await undo(p); assert.deepEqual(await snapshot(p), before);
+  });
+  await test('모든 테두리와 주 버튼 반복은 현재 범위에만 한 번 적용', async p => {
+    await fixture(p); const before = await snapshot(p); await select(p); await menu(p, '모든 테두리'); const first = await snapshot(p); assert.equal(first.undo, 1);
+    await select(p, secondTarget); assert.deepEqual(await snapshot(p), first, '일반 메뉴 적용 뒤 다음 선택 불변');
+    await p.locator('[data-ribbon-command="borderLast"]').click({ position: { x: 7, y: 8 } }); const second = await snapshot(p); assert.equal(second.undo, 2);
+    const style = await p.evaluate(() => tabula.wb().getCell(0, 20, 12)?.style ?? {}); for (const k of ['bt', 'bb', 'bl', 'br']) assert.equal(style[k], true);
+    const point = await cellPoint(p, 25, 16); await p.mouse.click(point.x, point.y); assert.deepEqual(await snapshot(p), second); assert.equal((await flags(p)).border, false);
+    await undo(p); assert.deepEqual(await snapshot(p), first); await undo(p); assert.deepEqual(await snapshot(p), before);
   });
   await test('펜 → 시트 이동 → 다음 선택은 양 시트·Undo 불변', async p => {
     await fixture(p); await border(p, 'outline'); const before = await snapshot(p); await p.locator('.sheet-tab').filter({ hasText: '다른 시트' }).click(); assert.equal(await p.evaluate(() => tabula.si), 1); await select(p); assert.deepEqual(await snapshot(p), before); assert.equal((await flags(p)).border, false);

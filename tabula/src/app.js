@@ -2395,7 +2395,7 @@ function onDragEnd() {
   // 테두리 그리기 모드: 끌어서 고른 범위에 펜으로 바깥쪽(그리기) · 모든(눈금) 테두리, 또는 지우기
   const stroke = d.borderStroke;
   if (d.type === 'select' && stroke && stroke.book === wb && stroke.sheet === sheet() && stroke.revision === borderDrawRevision && stroke.mode === borderDraw) {
-    applyBorder(stroke.mode === 'grid' ? 'all' : stroke.mode === 'erase' ? 'none' : 'outside', stroke.pen, true);
+    applyBorder(stroke.mode === 'grid' ? 'all' : stroke.mode === 'erase' ? 'none' : 'outside', stroke.pen);
   }
   switch (d.type) {
     case 'move':
@@ -2962,7 +2962,7 @@ const toggleStyle = (key) => {
 
 // 테두리 펜: 선 스타일 · 선 색 (엑셀의 [테두리] → [선 색] · [선 스타일])
 const borderPen = { style: 'thin', color: null };
-let borderDraw = null; // 'outline' | 'grid' | 'erase' — 끌어서 테두리 그리기
+let borderDraw = null; // 'outline' | 'grid' | 'erase' — 다음 한 번의 드래그에만 적용
 let borderDrawRevision = 0; // 시작 뒤 취소·도구 전환이 일어난 드래그는 적용하지 않는다.
 function endBorderDraw() {
   borderDraw = null; borderDrawRevision++;
@@ -2974,7 +2974,7 @@ const BORDER_STYLES = [['thin', '가는 실선'], ['hair', '아주 가는 선'],
 function lineStyleMenu(anchor) {
   openMenu(anchor, BORDER_STYLES.map(([v, l]) => {
     const [w, css] = { thin: [1, 'solid'], hair: [1, 'dotted'], dotted: [1, 'dotted'], dashed: [1, 'dashed'], dashDot: [1, 'dashed'], dashDotDot: [1, 'dashed'], medium: [2, 'solid'], mediumDashed: [2, 'dashed'], mediumDashDot: [2, 'dashed'], mediumDashDotDot: [2, 'dashed'], slantDashDot: [2, 'dashed'], thick: [3, 'solid'], double: [3, 'double'] }[v];
-    return { label: l, checked: borderPen.style === v, icon: `<span style="display:block;width:22px;border-top:${w}px ${css} #333;margin-top:6px"></span>`, action: () => { borderPen.style = v; if (!borderDraw) setBorderDraw('outline'); } };
+    return { label: l, checked: borderPen.style === v, icon: `<span style="display:block;width:22px;border-top:${w}px ${css} #333;margin-top:6px"></span>`, action: () => { borderPen.style = v; } };
   }));
 }
 
@@ -2986,7 +2986,7 @@ function setBorderDraw(mode) {
   if (painter) { painter = null; dom.view.classList.remove('painting'); setMode(); updateRibbon(); }
   borderDraw = next;
   dom.view.classList.add('border-draw');
-  if (borderDraw) toast(`${{ outline: '테두리 그리기', grid: '테두리 눈금 그리기', erase: '테두리 지우기' }[borderDraw]}: 셀을 끌어서 적용하세요. (Esc: 끝내기)`);
+  if (borderDraw) toast(`${{ outline: '테두리 그리기', grid: '테두리 눈금 그리기', erase: '테두리 지우기' }[borderDraw]}: 셀을 끌어서 한 번 적용하면 종료됩니다. (Esc: 취소)`);
 }
 
 /** [셀 서식] → [테두리]: 가장자리마다 켜기/끄기 (바뀐 것만), pen = { style('none' = 지우기), color } */
@@ -3010,8 +3010,9 @@ function applyEdges(edges, edges0, pen) {
   }
 }
 
-function applyBorder(kind, penOverride = null, fromDrawing = false) {
-  if (!fromDrawing) endBorderDraw();
+function applyBorder(kind, penOverride = null) {
+  // 메뉴 명령과 그리기 모두 한 번 적용한 뒤 일반 셀 선택으로 돌아간다.
+  endBorderDraw();
   if (viewOnly || wb.props?.markedFinal || protectBlocked('formatCells')) return;
   lastBorder = kind;
   const pen = penOverride ?? borderPen;
@@ -17714,6 +17715,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileFit','toggleR
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['테두리 한 번 적용 후 일반 선택', ['테두리 그리기·눈금·지우기를 한 번 적용한 뒤 자동 종료하여 다음 셀 선택에 서식이 적용되지 않도록 수정', '선 종류 선택은 펜 설정만 변경 · 테두리 그리기 자동 시작 제거']],
   ['도형과 셀 테두리 작업 분리', ['도형 그리기·취소 뒤 셀 범위 선택만으로 테두리가 적용되는 오류 수정', '도형·테두리·서식 복사 도구 전환 시 이전 그리기 상태 종료 · 취소한 드래그 재적용 방지']],
   ['팝업 키보드와 서식 구성', ['텍스트 나누기 Enter는 다음→다음→마침 · 탭 구분 기호와 일반 서식 기본 선택', '팝업·하위 메뉴의 단축키 문자를 항상 표시 · 창 밖으로 빠진 초점 복원', '차트 데이터 원본의 확인 전 변경 방지 · 차트 이동 위치를 라디오로 선택', '도형 옵션/텍스트 옵션과 세부 범주 분리 · 선택한 도형에만 서식 적용 · 접힘·초점·스크롤 유지']],
   ['팝업·서식 UI 개선', ['이동 옵션을 선택 종류와 데이터 유형으로 구분 · 상수·수식에 해당하는 옵션만 활성화', '옵션·셀/차트/도형 서식의 입력 정렬·행 간격·탭·버튼 디자인 정리 · 작은 화면에서 본문 스크롤과 확인/취소 유지', '자동 고침 입력과 셀 서식의 분류·서식 코드 이름을 명확하게 안내']],
