@@ -342,21 +342,19 @@ input.rselect { padding: 0 4px; }
 .col-head, .row-head, .corner, .head-clip { position: absolute; overflow: hidden; }
 .col-head, .row-head { z-index: 3; pointer-events: none; }
 .head-clip { background: var(--header-bg); }
-.col-head { border-bottom: 1px solid #d0d0d0; box-sizing: border-box; }
+.col-head { box-sizing: border-box; }
+.header-lines { position:absolute; left:0; top:0; z-index:4; pointer-events:none; }
+.header-lines > svg { display:block; overflow:visible; }
 .hc, .hr {
   position: absolute; box-sizing: border-box; color: var(--header-text); font-size: 11px; text-align: center;
   font-family: var(--ui-font); white-space: nowrap; overflow: hidden; background: var(--header-bg);
 }
-.hc { top: 0; height: 20px; line-height: 19px; border-right: 1px solid #d0d0d0; border-bottom: 1px solid #d0d0d0; }
-.hr { left: 0; width: 100%; border-bottom: 1px solid #d0d0d0; border-right: 1px solid #d0d0d0; }
+.hc { top: 0; height: 20px; line-height: 19px; }
+.hr { left: 0; width: 100%; }
 .hc.hl, .hr.hl { background: var(--header-sel); color: var(--green-dark); font-weight: 700; }
-.hc.hl { box-shadow: inset 0 -2px 0 var(--green); }
-.hr.hl { box-shadow: inset -2px 0 0 var(--green); }
 .hc.full, .hr.full { background: var(--green-tint); color: var(--green-dark); font-weight: 700; }
-.hc.full { box-shadow: inset 0 -2px 0 var(--green); }
-.hr.full { box-shadow: inset -2px 0 0 var(--green); }
 .corner {
-  left: 0; top: 0; z-index: 4; background: var(--header-bg); border-right: 1px solid #d0d0d0; border-bottom: 1px solid #d0d0d0;
+  left: 0; top: 0; z-index: 4; background: var(--header-bg);
   box-sizing: border-box; cursor: default;
 }
 .corner::after {
@@ -392,8 +390,8 @@ pre.plain { margin: 0; font: inherit; white-space: pre-wrap; }
 .olv { background: #f3f3f3; font-size: 10px; line-height: 11px; }
 .olb:hover, .olv:hover { border-color: var(--green); color: var(--green-dark); }
 .freeze-line { position: absolute; z-index: 3; background: #9e9e9e; pointer-events: none; display: none; }
-.freeze-line.v { top: 0; bottom: 0; width: 1px; }
-.freeze-line.h { left: 0; right: 0; height: 1px; }
+.freeze-line.v { top: 0; bottom: 0; width: var(--grid-device-pixel, 1px); }
+.freeze-line.h { left: 0; right: 0; height: var(--grid-device-pixel, 1px); }
 
 .cell-editor {
   position: absolute; z-index: 5; margin: 0; resize: none; overflow: hidden; outline: none;

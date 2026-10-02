@@ -387,6 +387,42 @@ function sheetPictures(dg) {
 const DG = ['', 'thin', 'medium', 'dashed', 'dotted', 'thick', 'double', 'hair', 'mediumDashed', 'dashDot', 'mediumDashDot', 'dashDotDot', 'mediumDashDotDot', 'slantDashDot'];
 const FLS = [null, 'solid', 'mediumGray', 'darkGray', 'lightGray', 'darkHorizontal', 'darkVertical', 'darkDown', 'darkUp', 'darkGrid', 'darkTrellis', 'lightHorizontal', 'lightVertical', 'lightDown', 'lightUp', 'lightGrid', 'lightTrellis', 'gray125', 'gray0625'];
 
+// XFExt의 실제 RGB는 기존 팔레트 색의 근사값보다 우선한다. 오래된 앱이 XF만
+// 바꾼 파일의 낡은 확장을 적용하지 않도록 XFCRC(MS-OSHARED 2.4.3, 다항식 AF)를 확인.
+function xfExtendedColors(xfs, extensions, check) {
+  const out = new Map();
+  if (!extensions.length || !check || check.length !== 20 || u16(check, 0) !== 0x087c || u16(check, 14) !== xfs.length) return out;
+  let crc = 0;
+  for (const xf of xfs) for (const byte of xf) {
+    crc ^= byte << 24;
+    for (let bit = 0; bit < 8; bit++) crc = (crc << 1) ^ (crc < 0 ? 0xaf : 0);
+  }
+  if ((crc >>> 0) !== u32(check, 16)) return out;
+  for (const d of extensions) {
+    if (d.length < 20 || u16(d, 0) !== 0x087d) continue;
+    const ix = u16(d, 14), xf = xfs[ix];
+    if (!xf || xf.length < 20 || !(u32(xf, 14) & 0x02000000)) continue;
+    const colors = {}, count = u16(d, 18);
+    let p = 20, valid = true;
+    for (let k = 0; k < count; k++) {
+      if (p + 4 > d.length) { valid = false; break; }
+      const type = u16(d, p), size = u16(d, p + 2);
+      if (size < 4 || p + size > d.length) { valid = false; break; }
+      if ([4, 5, 7, 8, 9, 10, 11, 13].includes(type)) {
+        if (size !== 20) { valid = false; break; }
+        // FullColorExt: 명시적 불투명 RGB만. 자동/인덱스/테마/틴트/알파와
+        // 미지원 속성은 추측하지 않고 원래 XF/FONT 팔레트 색을 유지한다.
+        if (u16(d, p + 4) === 2 && i16(d, p + 6) === 0 && d[p + 11] === 255) {
+          colors[type] = `#${Array.from(d.subarray(p + 8, p + 11), b => b.toString(16).padStart(2, '0')).join('')}`;
+        }
+      }
+      p += size;
+    }
+    if (valid && p === d.length) out.set(ix, colors);
+  }
+  return out;
+}
+
 // ───────────────────────── 읽기 ─────────────────────────
 /** .xls(엑셀 97-2003) → { data: { sheets, names, defaultFont }, warnings } — readXlsx 와 같은 모양 */
 export function readXls(bytes) {
@@ -406,6 +442,8 @@ export function readXls(bytes) {
   const fonts = [];
   const formats = {};
   const xfRaw = [];
+  const xfExtensions = [];
+  let xfCheck = null;
   const bound = [];
   let sst = [];
   const names = [];
@@ -428,6 +466,8 @@ export function readXls(bytes) {
       }
       case 0x041e: { const r = rd(data); const id = r.u16(); formats[id] = r.str(2); break; }
       case 0x00e0: xfRaw.push(data); break;
+      case 0x087c: xfCheck = data; break;
+      case 0x087d: xfExtensions.push(data); break;
       case 0x00eb: dggParts.push(data, ...cont); break;
       case 0x0085: { const r = new Reader([data]); const pos = r.u32(); const state = r.u8(); const dt = r.u8(); bound.push({ pos, state, dt, name: r.str(1) }); break; }
       case 0x00fc: { const r = new Reader([data, ...cont]); r.u32(); const n = r.u32(); sst = new Array(n); for (let k = 0; k < n; k++) sst[k] = r.str(2); break; }
@@ -461,6 +501,7 @@ export function readXls(bytes) {
   const mdw = digitWidth(wbFont);
   // XF → 앱 셀 서식 (xlsx 가져오기와 같은 모양)
   const styleMemo = new Map();
+  const extendedColors = xfExtendedColors(xfRaw, xfExtensions, xfCheck);
   const xfStyle = (ix) => {
     if (styleMemo.has(ix)) return styleMemo.get(ix);
     const d = xfRaw[ix];
@@ -517,6 +558,13 @@ export function readXls(bytes) {
       const back = color((colors >>> 7) & 0x7f);
       if (fls === 1) { if (fore) st.fill = fore; }
       else if (FLS[fls]) { st.pattern = FLS[fls]; st.patternColor = fore ?? '#000000'; if (back) st.fill = back; }
+      const ext = extendedColors.get(ix);
+      if (ext) {
+        if (ext[4]) { if (fls === 1) st.fill = ext[4]; else if (FLS[fls]) st.patternColor = ext[4]; }
+        if (ext[5] && fls !== 1 && FLS[fls]) st.fill = ext[5];
+        if (ext[13]) st.color = ext[13];
+        for (const [type, key] of [[7, 'bt'], [8, 'bb'], [9, 'bl'], [10, 'br'], [11, 'dd'], [11, 'du']]) if (ext[type] && st[key]) st[`${key}c`] = ext[type];
+      }
       for (const k of Object.keys(st)) if (st[k] === undefined) delete st[k];
       if (!Object.keys(st).length) st = undefined;
     }
@@ -607,7 +655,11 @@ export function readXls(bytes) {
           const miy = u16(data, 6) & 0x7fff;
           const flags = u16(data, 12);
           if (flags & 0x20) sheet.hiddenRows[r] = true;
-          if (flags & 0x40) { sheet.rowHeights[r] = pt2px(miy / 20); sheet.rowManual[r] = true; }
+          // ROW.miyRw stores the saved height even when Excel fitted it automatically.
+          // fUnsynced only distinguishes manually fixed heights; it does not gate miyRw.
+          const h = pt2px(miy / 20);
+          if (h !== (sheet.defRowH ?? DEFAULT_ROW_HEIGHT) || (flags & 0x40)) sheet.rowHeights[r] = h;
+          if (flags & 0x40) sheet.rowManual[r] = true;
           if (flags & 0x80) { const st = xfStyle(u16(data, 14) & 0xfff); if (st) sheet.rowStyles[r] = st; }
           break;
         }
@@ -701,7 +753,11 @@ export function readXls(bytes) {
         case 0x00ec: dgParts.push(data, ...recs[k].cont); break;
         case 0x023e: { const g = u16(data, 0); if (!(g & 2)) sheet.noGrid = true; if (g & 8) sheet._frozen = true; break; }
         case 0x0041: if (sheet._frozen) sheet.freeze = { rows: u16(data, 2), cols: u16(data, 0) }; break;
-        case 0x00a0: { const num = u16(data, 0); const den = u16(data, 2); if (num && den && num !== den) sheet.zoom = Math.round((num / den) * 100) / 100; break; }
+        case 0x00a0: { // SCL is a ratio; the sheet model stores percent, as XLSX zoomScale does.
+          const num = i16(data, 0); const den = i16(data, 2);
+          if (num > 0 && den > 0 && num !== den) sheet.zoom = Math.max(10, Math.min(400, Math.round((num / den) * 100)));
+          break;
+        }
         case 0x0809: { // 시트 안의 차트 · 개체 하위 스트림은 건너뜀
           let depth = 1;
           while (depth && ++k < recs.length) { if (recs[k].type === 0x0809) depth++; else if (recs[k].type === 0x000a) depth--; }

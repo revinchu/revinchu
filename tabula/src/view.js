@@ -387,12 +387,13 @@ export class GridView {
     this.rowHeadScroll = mk('head-clip', this.rowHead);
     this.corner = mk('corner');
     this.corner.title = '모두 선택';
+    this.headerLines = mk('header-lines');
     this.freezeV = mk('freeze-line v');
     this.freezeH = mk('freeze-line h');
     // Visual panes duplicate frozen/merged cells. Expose one logical grid instead;
     // floating charts/slicers remain accessible through each pane's objects layer.
     for (const p of this.panes) for (const el of [p.grid, p.cells, p.overlay]) el.setAttribute('aria-hidden', 'true');
-    for (const el of [this.colHead, this.rowHead, this.corner, this.freezeV, this.freezeH]) el.setAttribute('aria-hidden', 'true');
+    for (const el of [this.colHead, this.rowHead, this.corner, this.headerLines, this.freezeV, this.freezeH]) el.setAttribute('aria-hidden', 'true');
     this.a11y = new GridAccessibility(this, document.getElementById('cellEditor'));
 
     this.scroll.addEventListener('scroll', () => this.onScroll());
@@ -603,6 +604,9 @@ export class GridView {
     this._cw = null;
     this._ch = null;
     this.viewEl.style.zoom = this.z;
+    // 선 두께·픽셀 정렬·배경 마스크는 배율별 값이다. 보이는 셀 범위가
+    // 같아도 이전 DOM을 확대 재사용하면 1px 선까지 4배로 굵어진다.
+    for (const p of this.panes) p.win = null;
     this.layout(false);
     this.setScroll(this.cols.pos(keep.c) - this.frozenW, this.rows.pos(keep.r) - this.frozenH);
   }
@@ -693,6 +697,8 @@ export class GridView {
   update(force = false) {
     const prevHw = this.hw;
     const prevHh = this.hh;
+    const devicePixel = 1 / (this.z * (globalThis.devicePixelRatio || 1));
+    this.viewEl.style.setProperty('--grid-device-pixel', `${devicePixel}px`);
     this.computeHeaderSize();
     if (this.hw !== prevHw || this.hh !== prevHh) force = true;
     const rects = this.paneRects();
@@ -717,15 +723,18 @@ export class GridView {
       // 분수 스크롤이 선 층 전체를 반 픽셀 옮겨 이미 래스터화한 1px 선을
       // 두 픽셀로 퍼뜨리지 않도록 창의 실제 화면 원점에 맞춘다.
       const paneBox = p.el.getBoundingClientRect(), dpr = globalThis.devicePixelRatio || 1;
-      const tx = (Math.round((paneBox.left + (p.ox - need.x0) * this.z) * dpr) / dpr - paneBox.left) / this.z;
-      const ty = (Math.round((paneBox.top + (p.oy - need.y0) * this.z) * dpr) / dpr - paneBox.top) / this.z;
+      // 첫 경계는 창의 분수 픽셀 클립 안쪽에 놓아 가는 선이 반쯤 잘리지 않게 한다.
+      const snapX = p.ox === need.x0 ? Math.ceil : Math.round;
+      const snapY = p.oy === need.y0 ? Math.ceil : Math.round;
+      const tx = (snapX((paneBox.left + (p.ox - need.x0) * this.z) * dpr) / dpr - paneBox.left) / this.z;
+      const ty = (snapY((paneBox.top + (p.oy - need.y0) * this.z) * dpr) / dpr - paneBox.top) / this.z;
       p.content.style.transform = `translate(${tx}px, ${ty}px)`;
     }
     this.renderHeaders(rects);
     this.freezeV.style.display = this.fc ? 'block' : 'none';
     this.freezeH.style.display = this.fr ? 'block' : 'none';
-    this.freezeV.style.left = `${this.hw + this.frozenW - 1}px`;
-    this.freezeH.style.top = `${this.hh + this.frozenH - 1}px`;
+    this.freezeV.style.left = `${this.hw + this.frozenW - devicePixel}px`;
+    this.freezeH.style.top = `${this.hh + this.frozenH - devicePixel}px`;
     this.host.onViewScroll?.();
     this.a11y?.update();
   }
@@ -865,7 +874,7 @@ export class GridView {
     const lines = gridBorderPaintOrder(resolveGridBorders(p.borderSegments)).map((e) => {
       const width = gridLineWidth(e.width, this.z, globalThis.devicePixelRatio || 1, e.pattern);
       const path = (offset, strokeWidth) => {
-        const at = (e.at === 0 ? width + 1 / scale : pixel(e.at)) - offset;
+        const at = (e.at === 0 ? width : pixel(e.at)) - offset;
         // 중심선 stroke는 분수 배율의 float 변환에서도 정수 장치 픽셀 폭을
         // 유지한다. rect 양끝을 따로 반올림하면 2px이 1px/3px로 달라질 수 있다.
         const d = e.vertical ? `M${at} ${pixel(e.start)}V${pixel(e.end)}` : `M${pixel(e.start)} ${at}H${pixel(e.end)}`;
@@ -944,7 +953,10 @@ export class GridView {
     if (style.size) css.push(`font-size:${style.size}pt`);
     if (eff !== 'left') css.push(`justify-content:${eff === 'center' ? 'center' : 'flex-end'};text-align:${eff}`);
     if (style.valign === 'top') css.push('align-items:flex-start');
-    else if (style.valign === 'middle') css.push('align-items:center');
+    else if (style.valign === 'middle') css.push('align-items:center;padding-top:1px;padding-bottom:1px');
+    // 왼쪽 본문은 경계에서 2px, 가운데 맞춤은 상하 여백을 같게 둔다.
+    // 행 높이와 가운데/오른쪽의 가로 위치는 파일의 값을 그대로 유지한다.
+    if (eff === 'left') css.push('padding-left:2px');
     if (this._tog?.has(`${r},${c}`)) css.push(`padding-left:${3 + (style.indent ?? 0) * 9 + 14}px`);
     else if (style.indent) css.push(`padding-${eff === 'right' ? 'right' : 'left'}:${3 + style.indent * 9}px`);
     const bg = style.fill || (merge ? '#fff' : null);
@@ -1478,6 +1490,7 @@ export class GridView {
     this.colHead.style.display = show ? 'block' : 'none';
     this.rowHead.style.display = show ? 'block' : 'none';
     this.corner.style.display = show ? 'block' : 'none';
+    this.headerLines.style.display = show ? 'block' : 'none';
     if (!show) return;
     const { hw, hh } = this;
     const olw = this.olw ?? 0;
@@ -1498,11 +1511,32 @@ export class GridView {
     const colCls = (c) => (c >= sel.c1 && c <= sel.c2 ? (colFull ? ' full' : ' hl') : '');
     const rowCls = (r) => (r >= sel.r1 && r <= sel.r2 ? (rowFull ? ' full' : ' hl') : '');
 
+    // CSS border는 높은 DPR에서 최소 1 CSS px로 반올림된다. 머리글 선도
+    // 장치 픽셀 중심선 SVG로 그려 셀 배율·화면 배율에 관계없이 가늘게 유지한다.
+    const dpr = globalThis.devicePixelRatio || 1, scale = this.z * dpr;
+    const origin = this.viewEl.getBoundingClientRect(), ox = origin.left * dpr, oy = origin.top * dpr;
+    const px = x => (Math.round(ox + x * scale) - ox) / scale;
+    const py = y => (Math.round(oy + y * scale) - oy) / scale;
+    const edgeX = (Math.ceil(ox + hw * scale) - ox) / scale;
+    const edgeY = (Math.ceil(oy + hh * scale) - oy) / scale;
+    const lines = [], selectedLines = [];
+    const headLine = (vertical, at, start, end, selected = false) => {
+      if (!(end > start)) return;
+      const width = (selected ? 2 : 1) / scale;
+      const d = vertical ? `M${at - width / 2} ${py(start)}V${py(end)}` : `M${px(start)} ${at - width / 2}H${px(end)}`;
+      (selected ? selectedLines : lines).push(`<path d="${d}" stroke="${selected ? 'var(--green)' : '#d0d0d0'}" stroke-width="${width}"/>`);
+    };
+    headLine(false, edgeY, 0, this.viewW);
+    headLine(true, edgeX, 0, this.viewH);
+
     const colPart = (clipEl, rect, c1, c2, offset) => {
       Object.assign(clipEl.style, { left: `${rect.x}px`, top: '0px', width: `${rect.w}px`, height: `${hh}px`, display: rect.w > 0 ? 'block' : 'none' });
       const out = [];
       for (const c of visibleAxisIndices(this.cols, c1, c2)) {
         const w = this.cols.size(c);
+        const left = rect.x + this.cols.pos(c) - offset, right = left + w;
+        if (rect.w > 0 && right > rect.x && right <= rect.x + rect.w) headLine(true, px(right), olh, hh);
+        if (colCls(c) && rect.w > 0) headLine(false, edgeY, Math.max(rect.x, left), Math.min(rect.x + rect.w, right), true);
         out.push(`<div class="hc${colCls(c)}" style="left:${this.cols.pos(c) - offset}px;width:${w}px${olh ? `;top:${olh}px` : ''}">${colToName(c)}</div>`);
       }
       if (olh) out.push(this.outlineMarks('c', ol, c1, c2, offset, olh));
@@ -1513,6 +1547,9 @@ export class GridView {
       const out = [];
       for (const r of visibleAxisIndices(this.rows, r1, r2)) {
         const h = this.rows.size(r);
+        const top = rect.y + this.rows.pos(r) - offset, bottom = top + h;
+        if (rect.h > 0 && bottom > rect.y && bottom <= rect.y + rect.h) headLine(false, py(bottom), olw, hw);
+        if (rowCls(r) && rect.h > 0) headLine(true, edgeX, Math.max(rect.y, top), Math.min(rect.y + rect.h, bottom), true);
         out.push(`<div class="hr${rowCls(r)}" style="top:${this.rows.pos(r) - offset}px;height:${h}px;line-height:${h - 1}px${olw ? `;left:${olw}px;width:${hw - olw}px` : ''}">${r + 1}</div>`);
       }
       if (olw) out.push(this.outlineMarks('r', ol, r1, r2, offset, olw));
@@ -1525,5 +1562,6 @@ export class GridView {
     colPart(this.colHeadScroll, { x: br.x, w: br.w }, vx.c1, vx.c2, vx.x0);
     rowPart(this.rowHeadFrozen, { y: tl.y, h: tl.h }, 0, this.fr - 1, 0);
     rowPart(this.rowHeadScroll, { y: br.y, h: br.h }, vx.r1, vx.r2, vx.y0);
+    setSafeHtml(this.headerLines, `<svg width="${this.viewW}" height="${this.viewH}" shape-rendering="crispEdges" fill="none">${lines.join('')}${selectedLines.join('')}</svg>`);
   }
 }
