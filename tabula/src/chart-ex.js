@@ -1,3 +1,4 @@
+import { chartAreaFormatXml } from './chart-area-drawingml.js';
 // Office 2016+ ChartEx adapter. MS-ODRAWXML §2.24 / §5.22.
 // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-odrawxml/e2723b0a-9120-42a5-bd11-c252ccb13c1e
 // Chart geometry stays in chart.js; this module only handles standard chart XML.
@@ -10,7 +11,7 @@ export const CHARTEX_STYLE_CONTENT = 'application/vnd.ms-office.chartstyle+xml';
 export const CHARTEX_COLOR_CONTENT = 'application/vnd.ms-office.chartcolorstyle+xml';
 const A = 'http://schemas.openxmlformats.org/drawingml/2006/main';
 const TYPES = { waterfall: 'waterfall', funnel: 'funnel', histogram: 'clusteredColumn', pareto: 'clusteredColumn', treemap: 'treemap', sunburst: 'sunburst', boxWhisker: 'boxWhisker', map: 'regionMap' };
-const OWN_KEYS = ['type', 'treemapLabelLayout', 'titleLayout', 'legendLayout', 'byRows', 'axes', 'seriesFmt', 'labels', 'dataTable', 'gap', 'legend', 'palette', 'hiddenSeries', 'hiddenCats', 'titleSize', 'titleColor', 'titleBold', 'legendSize', 'legendColor', 'legendBold', 'axisSize', 'textColor', 'gridColor', 'rounded', 'gridX', 'gridY', 'fill', 'plotFill', 'border', 'totals', 'binCount', 'binWidth', 'upColor', 'downColor', 'totalColor', 'showMean', 'connectors', 'quartileMethod', 'showOutliers', 'showInnerPoints', 'mapLowColor', 'mapMidColor', 'mapHighColor'];
+const OWN_KEYS = ['chartStyle', 'type', 'treemapLabelLayout', 'titleLayout', 'legendLayout', 'byRows', 'axes', 'seriesFmt', 'labels', 'dataTable', 'gap', 'legend', 'palette', 'hiddenSeries', 'hiddenCats', 'titleSize', 'titleColor', 'titleBold', 'legendSize', 'legendColor', 'legendBold', 'axisSize', 'textColor', 'gridColor', 'rounded', 'gridX', 'gridY', 'fill', 'plotFill', 'border', 'totals', 'binCount', 'binWidth', 'upColor', 'downColor', 'totalColor', 'showMean', 'connectors', 'quartileMethod', 'showOutliers', 'showInnerPoints', 'mapLowColor', 'mapMidColor', 'mapHighColor'];
 const num = (v) => typeof v === 'number' && Number.isFinite(v);
 const on = (v) => v === '1' || v === 'true';
 const hex = (v) => /^#?[\da-f]{6}$/i.test(String(v ?? '')) ? String(v).replace('#', '').toUpperCase() : null;
@@ -52,7 +53,7 @@ function categoryLevels(data) {
 }
 
 /** chartModelData + source refs [{tx,cat,val}] → native ChartEx XML. */
-export function writeChartEx(chart, data, refs = [], palette = ['#4472c4', '#ed7d31', '#a5a5a5']) {
+export function writeChartEx(chart, data, refs = [], palette = ['#4472c4', '#ed7d31', '#a5a5a5'], imageRel) {
   if (!isChartEx(chart)) throw new Error('지원하지 않는 확장 차트입니다.');
   const type = chart.type, hierarchy = type === 'sunburst' || type === 'treemap';
   const cartesian = ['waterfall', 'histogram', 'pareto', 'boxWhisker'].includes(type);
@@ -108,7 +109,7 @@ export function writeChartEx(chart, data, refs = [], palette = ['#4472c4', '#ed7
   const legend = ['l', 't', 'r', 'b'].includes(lp) ? `<cx:legend pos="${lp}" align="ctr" overlay="0">${textPr(chart.legendSize, chart.legendColor, chart.legendBold)}</cx:legend>` : '';
   // Supplemental options belong to the drawing frame. Excel discards unknown cx
   // extensions; mc:Ignorable would also leave an invalid empty cx:ext after MC.
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cx:chartSpace xmlns:cx="${CHARTEX_NS}" xmlns:a="${A}"><cx:chartData>${parts.join('')}</cx:chartData><cx:chart>${title}<cx:plotArea><cx:plotAreaRegion>${series.join('')}</cx:plotAreaRegion>${axes}${shape(chart.plotFill)}</cx:plotArea>${legend}</cx:chart>${shape(chart.fill, chart.border)}</cx:chartSpace>`;
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cx:chartSpace xmlns:cx="${CHARTEX_NS}" xmlns:a="${A}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><cx:chartData>${parts.join('')}</cx:chartData><cx:chart>${title}<cx:plotArea><cx:plotAreaRegion>${series.join('')}</cx:plotAreaRegion>${axes}${chart.plotAreaFormat ? chartAreaFormatXml(chart.plotAreaFormat,{tag:'cx:spPr',kind:'plot',imageRel}) : shape(chart.plotFill)}</cx:plotArea>${legend}</cx:chart>${chart.chartAreaFormat ? chartAreaFormatXml(chart.chartAreaFormat,{tag:'cx:spPr',kind:'chart',imageRel}) : shape(chart.fill, chart.border)}</cx:chartSpace>`;
 }
 
 const cached = (level, numeric = false) => {

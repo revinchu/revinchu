@@ -1,3 +1,4 @@
+import { chartAreaFormatXml, readChartAreaFormat } from './chart-area-drawingml.js';
 import { readPhonetic, normalizePhonetic, phoneticXml } from './phonetic.js';
 import { normalizeVideo, MEDIA_OBJECT_URI } from './media-object.js';
 import { noteVisible } from './review-state.js';
@@ -1746,7 +1747,15 @@ function readDrawing(files, path, sheet, ctx) {
     const sl = alt && descendants(child(alt, 'Choice'), 'slicer')[0];
     // 개체 위치 속성: twoCell(셀에 맞춰 위치와 크기 변경) · oneCell(위치만) · absolute(변경 안 함)
     const editAs = anchor.name === 'absoluteAnchor' ? 'absolute' : anchor.name === 'oneCellAnchor' ? 'oneCell' : anchor.attrs.editAs ?? 'twoCell';
-    if (sl?.attrs.name) { out._slicerBoxes[sl.attrs.name] = { ...round(box), z: ++z, ...(editAs !== 'oneCell' ? { placement: editAs } : {}) }; continue; }
+    if (sl?.attrs.name) {
+      const frame = child(child(alt, 'Choice'), 'graphicFrame'), nv = descendants(frame, 'cNvPr')[0], client = child(anchor, 'clientData')?.attrs;
+      out._slicerBoxes[sl.attrs.name] = { ...round(box), z: ++z, ...(editAs !== 'oneCell' ? { placement: editAs } : {}),
+        ...(nv?.attrs.descr !== undefined ? { alt: nv.attrs.descr } : {}), ...(nv?.attrs.hidden === '1' ? { hidden: true } : {}),
+        ...(frame?.attrs.macro ? { macro: frame.attrs.macro.replace(/^\[0\]!/, '') } : {}),
+        ...(client?.fPrintsWithSheet !== undefined ? { noPrint: ['0','false'].includes(client.fPrintsWithSheet) } : {}),
+        ...(client?.fLocksWithSheet !== undefined ? { locked: !['0','false'].includes(client.fLocksWithSheet) } : {}) };
+      continue;
+    }
     const content = anchor.children.find((k) => ['sp', 'cxnSp', 'pic', 'grpSp', 'graphicFrame'].includes(k.name)) ?? child(child(alt, 'Choice'), 'graphicFrame');
     const before = [out.charts.length, out.images.length, out.shapes.length];
     if (content) walk(content, box, null);
@@ -1800,6 +1809,19 @@ function readChartLayout(element) {
   return out;
 }
 
+/** 표준 .crtx OPC 패키지의 차트만 읽는다. 외부 관계는 열거나 가져오지 않는다. */
+export function readChartTemplatePackage(bytes) {
+  const files = unzip(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
+  const rel = descendants(parseXml(textOf(files['_rels/.rels'])), 'Relationship').find(r => r.attrs.Type?.endsWith('/officeDocument') && r.attrs.TargetMode !== 'External');
+  const path = rel?.attrs.Target?.replace(/^\//, '');
+  if (!path || !files[path]) throw new Error('올바른 차트 서식 파일이 아닙니다.');
+  const relationships = relsOf(files, path);
+  const themeRelationships = Object.fromEntries(Object.entries(relationships).map(([k, r]) => [k, r.type === 'themeOverride' ? { ...r, type: 'theme' } : r]));
+  const chart = readChart(files, path, readTheme(files, themeRelationships));
+  if (!chart) throw new Error('이 차트 서식의 종류를 읽을 수 없습니다.');
+  return chart;
+}
+
 function chartLayoutXml(layout) {
   if (!layout || !Number.isFinite(layout.x) || !Number.isFinite(layout.y)) return '';
   const clamp = n => Math.max(0, Math.min(1, n));
@@ -1807,6 +1829,14 @@ function chartLayoutXml(layout) {
   return `<c:layout><c:manualLayout><c:xMode val="edge"/><c:yMode val="edge"/>${size.map(k => `<c:${k}Mode val="factor"/>`).join('')}<c:x val="${clamp(layout.x)}"/><c:y val="${clamp(layout.y)}"/>${size.map(k => `<c:${k} val="${clamp(layout[k])}"/>`).join('')}</c:manualLayout></c:layout>`;
 }
 
+function chartAreaReader(files, path, theme) {
+  const rels = relsOf(files, path);
+  return (spPr, kind) => readChartAreaFormat(spPr, { kind, readColor: n => dmlColor(n, theme), imageSource: id => {
+    const rel = rels[id]; if (!rel || rel.external || !files[rel.target]) return null;
+    const mime = MIME[rel.target.split('.').pop().toLowerCase()];
+    return mime && `data:${mime};base64,${toBase64(files[rel.target])}`;
+  } });
+}
 function readChart(files, path, theme = {}) {
   const xml = textOf(files[path]);
   if (!xml) return null;
@@ -1818,6 +1848,7 @@ function readChart(files, path, theme = {}) {
       const palette = parseXml(textOf(files[colors.target])).children.filter((n) => ['srgbClr', 'schemeClr', 'sysClr', 'prstClr'].includes(n.name)).map((n) => dmlColor({ children: [n] }, theme)).filter(Boolean);
       if (palette.length) chart.palette = palette;
     }
+    if (chart) { const readArea = chartAreaReader(files, path, theme); const a = readArea(child(root, 'spPr'), 'chart'), p = readArea(child(descendants(root, 'plotArea')[0], 'spPr'), 'plot'); if (a) chart.chartAreaFormat = a; if (p) chart.plotAreaFormat = p; }
     return chart;
   }
   const plot = descendants(root, 'plotArea')[0];
@@ -2121,6 +2152,9 @@ function readChart(files, path, theme = {}) {
     const m = /^(?:\[[^\]]*\])?'?(.*?)'?!(.+)$/.exec(ps.trim());
     if (m) out.pivot = { sheet: m[1].replace(/''/g, "'"), name: m[2] };
   }
+  const readArea = chartAreaReader(files, path, theme);
+  const chartArea = readArea(child(root, 'spPr'), 'chart'), plotArea = readArea(child(plot, 'spPr'), 'plot');
+  if (chartArea) out.chartAreaFormat = chartArea; if (plotArea) out.plotAreaFormat = plotArea;
   return out;
 }
 
@@ -3243,7 +3277,7 @@ function cfXml(rule, pool, priority, x14 = null, date1904 = false) {
   return `<conditionalFormatting${rule.pivot && rule.pivot.scope !== 'selection' ? ' pivot="1"' : ''} sqref="${ref}">${body}</conditionalFormatting>`;
 }
 
-function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
+function chartXml(wb, si, chart, fileName = 'Book1.xlsx', imageRel) {
   const inferred = inferPivotCategorySeries(wb, si, chart);
   if (inferred) chart = { ...chart, series: inferred };
   const srcIndex = chart.sheet ? wb.sheetIndexByName(chart.sheet) : si;
@@ -3317,7 +3351,7 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
     pushAll(refs, (withNums.length ? withNums : sourceRefs));
   }
   const pal = paletteOf(chart);
-  if (isChartEx(chart)) return writeChartEx(chart, data, refs, pal);
+  if (isChartEx(chart)) return writeChartEx(chart, data, refs, pal, imageRel);
   const series = data.series.map((sr, i) => ({
     ...sr, ...refs[chart.pivot ? i : sr._fi ?? i], type: chart.type === 'stock' && chart.volume ? (i === 0 ? 'column' : 'stock') : FALLBACK[sr.type] ?? sr.type ?? baseType,
     axis: chart.type === 'stock' && chart.volume ? (i === 0 ? 0 : 1) : sr.axis ?? 0, color: sr.color ?? pal[i % pal.length],
@@ -3466,10 +3500,10 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
   const pivotFmts = chart.pivot && !subsetPivot ? `<c:pivotFmts>${series.map((_, i) => `<c:pivotFmt><c:idx val="${i}"/></c:pivotFmt>`).join('')}</c:pivotFmts>` : '';
   // 차트 영역 · 그림 영역 채우기와 테두리
   const hexOf = (c) => String(c).replace('#', '').toUpperCase().slice(0, 6);
-  const areaSpPr = chart.fill || chart.border ? `<c:spPr>${chart.fill ? `<a:solidFill><a:srgbClr val="${hexOf(chart.fill)}"/></a:solidFill>` : ''}${chart.border ? `<a:ln w="9525"><a:solidFill><a:srgbClr val="${hexOf(chart.border)}"/></a:solidFill></a:ln>` : ''}</c:spPr>` : '';
-  const plotSpPr = chart.plotFill ? `<c:spPr><a:solidFill><a:srgbClr val="${hexOf(chart.plotFill)}"/></a:solidFill></c:spPr>` : '';
+  const areaSpPr = chart.chartAreaFormat ? chartAreaFormatXml(chart.chartAreaFormat, { imageRel, kind: 'chart' }) : chart.fill || chart.border ? `<c:spPr>${chart.fill ? `<a:solidFill><a:srgbClr val="${hexOf(chart.fill)}"/></a:solidFill>` : ''}${chart.border ? `<a:ln w="9525"><a:solidFill><a:srgbClr val="${hexOf(chart.border)}"/></a:solidFill></a:ln>` : ''}</c:spPr>` : '';
+  const plotSpPr = chart.plotAreaFormat ? chartAreaFormatXml(chart.plotAreaFormat, { imageRel, kind: 'plot' }) : chart.plotFill ? `<c:spPr><a:solidFill><a:srgbClr val="${hexOf(chart.plotFill)}"/></a:solidFill></c:spPr>` : '';
   // WIXEL 전용 설정 (엑셀은 무시): 원래 차트 종류 · 팔레트 · 서식
-  const TB_KEYS = ['mapLowColor', 'mapMidColor', 'mapHighColor', 'bandCount', 'showNegBubbles', 'surfaceStyle', 'volume', 'splitType', 'splitPos', 'splitPoints', 'secondSize', 'splitGap', 'bubble3D', 'comboAxis', 'comboLayout', 'threeD', 'view3D', 'titleSize', 'axisSize', 'hiddenSeries', 'hiddenCats', 'legendBold', 'type', 'byRows', 'fieldButtons', 'palette', 'scatterStyle', 'radarStyle', 'ohlc', 'explode', 'hole', 'gap', 'marker', 'gridX', 'gridY', 'fill', 'plotFill', 'border', 'titleColor', 'titleBold', 'textColor', 'gridColor', 'rounded', 'totals', 'binCount', 'binWidth', 'upColor', 'downColor', 'totalColor', 'bubbleScale', 'firstAngle', 'showMean', 'connectors'];
+  const TB_KEYS = ['chartStyle', 'mapLowColor', 'mapMidColor', 'mapHighColor', 'bandCount', 'showNegBubbles', 'surfaceStyle', 'volume', 'splitType', 'splitPos', 'splitPoints', 'secondSize', 'splitGap', 'bubble3D', 'comboAxis', 'comboLayout', 'threeD', 'view3D', 'titleSize', 'axisSize', 'hiddenSeries', 'hiddenCats', 'legendBold', 'type', 'byRows', 'fieldButtons', 'palette', 'scatterStyle', 'radarStyle', 'ohlc', 'explode', 'hole', 'gap', 'marker', 'gridX', 'gridY', 'fill', 'plotFill', 'border', 'titleColor', 'titleBold', 'textColor', 'gridColor', 'rounded', 'totals', 'binCount', 'binWidth', 'upColor', 'downColor', 'totalColor', 'bubbleScale', 'firstAngle', 'showMean', 'connectors'];
   const tb = Object.fromEntries(TB_KEYS.filter((k) => chart[k] !== undefined && chart[k] !== null).map((k) => [k, chart[k]]));
   // 계열은 위에서 실제로 제거했다. 압축된 ser 목록에 원래 번호를 다시 적용하면
   // 남은 계열까지 숨겨지므로 확장에 hiddenSeries를 중복 저장하지 않는다.
@@ -4034,9 +4068,9 @@ function slicerAnchorXml(sl, name, id, anchorAt, kind) {
   const choice = kind === 'table'
     ? `<mc:Choice xmlns:sle15="http://schemas.microsoft.com/office/drawing/2012/slicer" Requires="sle15">`
     : `<mc:Choice xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main" Requires="a14">`;
-  const frame = `<xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="${id}" name="${esc(name)}"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/drawing/2010/slicer"><sle:slicer xmlns:sle="http://schemas.microsoft.com/office/drawing/2010/slicer" name="${esc(name)}"/></a:graphicData></a:graphic></xdr:graphicFrame>`;
+  const frame = `<xdr:graphicFrame macro="${sl.macro ? `[0]!${esc(sl.macro)}` : ''}"><xdr:nvGraphicFramePr><xdr:cNvPr id="${id}" name="${esc(name)}"${sl.alt !== undefined ? ` descr="${esc(sl.alt)}"` : ''}${sl.hidden ? ' hidden="1"' : ''}/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/drawing/2010/slicer"><sle:slicer xmlns:sle="http://schemas.microsoft.com/office/drawing/2010/slicer" name="${esc(name)}"/></a:graphicData></a:graphic></xdr:graphicFrame>`;
   const fallback = `<mc:Fallback><xdr:sp macro="" textlink=""><xdr:nvSpPr><xdr:cNvPr id="0" name=""/><xdr:cNvSpPr><a:spLocks noTextEdit="1"/></xdr:cNvSpPr></xdr:nvSpPr><xdr:spPr><a:xfrm><a:off x="${EMUv(sl.x)}" y="${EMUv(sl.y)}"/><a:ext cx="${EMUv(sl.w)}" cy="${EMUv(sl.h)}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:prstClr val="white"/></a:solidFill><a:ln w="1"><a:solidFill><a:prstClr val="green"/></a:solidFill></a:ln></xdr:spPr><xdr:txBody><a:bodyPr vertOverflow="clip" horzOverflow="clip"/><a:lstStyle/><a:p><a:r><a:rPr lang="ko-KR" sz="1100"/><a:t>이 도형은 ${kind === 'table' ? '표' : '피벗 테이블'} 슬라이서를 나타냅니다. 슬라이서는 Excel 2010 이상에서 지원됩니다.</a:t></a:r></a:p></xdr:txBody></xdr:sp></mc:Fallback>`;
-  return `<xdr:twoCellAnchor editAs="${sl.placement ?? 'oneCell'}"><xdr:from>${anchorAt(sl.x, sl.y)}</xdr:from><xdr:to>${anchorAt(sl.x + sl.w, sl.y + sl.h)}</xdr:to><mc:AlternateContent xmlns:mc="${NS_MC}">${choice}${frame}</mc:Choice>${fallback}</mc:AlternateContent><xdr:clientData/></xdr:twoCellAnchor>`;
+  return `<xdr:twoCellAnchor editAs="${sl.placement ?? 'oneCell'}"><xdr:from>${anchorAt(sl.x, sl.y)}</xdr:from><xdr:to>${anchorAt(sl.x + sl.w, sl.y + sl.h)}</xdr:to><mc:AlternateContent xmlns:mc="${NS_MC}">${choice}${frame}</mc:Choice>${fallback}</mc:AlternateContent><xdr:clientData${sl.noPrint ? ' fPrintsWithSheet="0"' : ''}${sl.locked === false ? ' fLocksWithSheet="0"' : ''}/></xdr:twoCellAnchor>`;
 }
 
 /** .xlsx 로 저장할 때 엑셀 한도(1,048,576행)를 넘어 빠지는 셀 수 */
@@ -4492,13 +4526,27 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
           const ch = o;
           chartNo++;
           objId++;
-          files[`xl/charts/chart${chartNo}.xml`] = chartXml(wb, si, ch, fileName);
+          const chartImages = [], chartImageIds = new Map();
+          const chartImageRel = source => {
+            if (chartImageIds.has(source)) return chartImageIds.get(source);
+            const m = /^data:([^;,]+);base64,(.*)$/s.exec(source ?? ''); if (!m) return null;
+            const ext = Object.keys(MIME).find(k => MIME[k] === m[1]); if (!ext) return null;
+            mediaNo++; mediaExts.add(ext); files[`xl/media/image${mediaNo}.${ext}`] = fromBase64(m[2]);
+            const id = `rIdAreaImage${chartImages.length + 1}`;
+            chartImages.push(`<Relationship Id="${id}" Type="${NS_R}/image" Target="../media/image${mediaNo}.${ext}"/>`); chartImageIds.set(source, id); return id;
+          };
+          files[`xl/charts/chart${chartNo}.xml`] = chartXml(wb, si, ch, fileName, chartImageRel);
           contentOverrides.push(`<Override PartName="/xl/charts/chart${chartNo}.xml" ContentType="${isChartEx(ch) ? CHARTEX_CONTENT : 'application/vnd.openxmlformats-officedocument.drawingml.chart+xml'}"/>`);
           if (isChartEx(ch)) {
             files[`xl/charts/style${chartNo}.xml`] = chartExStyleXml();
             files[`xl/charts/colors${chartNo}.xml`] = chartExColorsXml(paletteOf(ch));
             files[`xl/charts/_rels/chart${chartNo}.xml.rels`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle" Target="style${chartNo}.xml"/><Relationship Id="rId2" Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle" Target="colors${chartNo}.xml"/></Relationships>`;
             contentOverrides.push(`<Override PartName="/xl/charts/style${chartNo}.xml" ContentType="${CHARTEX_STYLE_CONTENT}"/>`, `<Override PartName="/xl/charts/colors${chartNo}.xml" ContentType="${CHARTEX_COLOR_CONTENT}"/>`);
+          }
+          if (chartImages.length) {
+            const path = `xl/charts/_rels/chart${chartNo}.xml.rels`;
+            const rel = chartImages.join('');
+            files[path] = files[path] ? files[path].replace('</Relationships>', rel + '</Relationships>') : `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rel}</Relationships>`;
           }
           const id = drel(isChartEx(ch) ? CHARTEX_REL : 'chart', `../charts/chart${chartNo}.xml`);
           const chartNamespace = isChartEx(ch) ? CHARTEX_NS : 'http://schemas.openxmlformats.org/drawingml/2006/chart';

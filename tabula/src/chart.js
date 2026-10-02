@@ -15,6 +15,7 @@ import { chartDepth, extrudedPolygon, barSolid3D, chartWalls3D, pieProjection3D,
 import { ADVANCED_CHARTS, drawVolumeStock } from './chart-advanced.js';
 import { MAP_CHARTS } from './chart-map.js';
 import { hierarchyCategories, filterHierarchyData, drawHierarchyTreemap, hierarchyLegend } from './chart-hierarchy.js';
+import { chartAreaFormat, chartAreaSvg } from './chart-area-format.js';
 
 export const CHART_TYPES = [
   { id: 'column', label: '세로 막대형' },
@@ -515,7 +516,7 @@ export function renderChartSvg(chart, data) {
   const GRID = chart.gridColor ?? '#d9d9d9';
   const overlays = [];
   const parts = [`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" ${FONT}>`, '',
-    `<rect x="0.5" y="0.5" width="${W - 1}" height="${H - 1}" rx="${chart.rounded ? 8 : 0}" fill="${chart.fill ?? '#fff'}"${chart.border ? ` stroke="${chart.border}"` : ''}/>`];
+    chart.chartAreaFormat ? chartAreaSvg(chartAreaFormat(chart), { x: .5, y: .5, w: W - 1, h: H - 1 }, { id: uid + 'area', rounded: chart.rounded }) : `<rect x="0.5" y="0.5" width="${W - 1}" height="${H - 1}" rx="${chart.rounded ? 8 : 0}" fill="${chart.fill ?? '#fff'}"${chart.border ? ` stroke="${chart.border}"` : ''}/>`];
   let top = 10;
   if (chart.title) {
     const manual = manualChartLayout(chart.titleLayout);
@@ -584,6 +585,7 @@ export function renderChartSvg(chart, data) {
   if (specialTable) plot.h -= specialTableH + 6;
 
   if (!series.length || series.every((s) => s.values.every((v) => v === null))) {
+    if (chart.plotAreaFormat) parts.push(chartAreaSvg(chartAreaFormat(chart, 'plot'), plot, { id: uid + 'plot', kind: 'plot' }));
     parts.push(`<text x="${W / 2}" y="${H / 2}" text-anchor="middle" font-size="12" fill="#999">표시할 숫자 데이터가 없습니다</text>`);
     return finish();
   }
@@ -635,7 +637,8 @@ export function renderChartSvg(chart, data) {
   }
 
   const wantLabels = (s) => (s.labels ?? chart.labels ?? false) || s.catName || s.serName || s.pct;
-  parts.push(`<rect data-el="plot" x="${plot.x}" y="${plot.y}" width="${plot.w}" height="${plot.h}" fill="${chart.plotFill ?? 'transparent'}"/>`);
+  const plotBackgroundIndex = parts.length;
+  parts.push(chart.plotAreaFormat ? chartAreaSvg(chartAreaFormat(chart, 'plot'), plot, { id: uid + 'plot', kind: 'plot' }) : `<rect data-el="plot" x="${plot.x}" y="${plot.y}" width="${plot.w}" height="${plot.h}" fill="${chart.plotFill ?? 'transparent'}"/>`);
   if (special) {
     const ctx = { chart, data, series, categories, plot, parts, FS, TXT, GRID, pal, defs, uid, wantLabels, axisText, W, H };
     ctx.cartesian = (values, options) => cartesian(ctx, values, options);
@@ -793,6 +796,7 @@ export function renderChartSvg(chart, data) {
     area.w -= Math.abs(depth.dx); area.h -= Math.abs(depth.dy);
   }
   if (area.w < 20 || area.h < 20) return finish();
+  if (chart.plotAreaFormat) parts[plotBackgroundIndex] = chartAreaSvg(chartAreaFormat(chart, 'plot'), area, { id: uid + 'plot', kind: 'plot' });
   if (threeD) parts.push(chartWalls3D(area, depth, chart.plotFill));
   // 값 축 거꾸로 (엑셀 축 서식 '값을 거꾸로')
   const posFor = (sc) => (v) => {

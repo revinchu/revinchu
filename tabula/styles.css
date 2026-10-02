@@ -2454,3 +2454,16 @@ body.mobile-work-mode.mobile-compact .sheet-view-modes button { width:28px; heig
 
 .dialog:has(.range-query-editor){max-width:min(1040px,calc(100vw - 32px))}.rq-field{display:flex;flex-direction:column;gap:3px;min-width:0}.rq-field>span{font-size:11px;color:#63736a}
 @media(max-width:660px){.dialog:has(.range-query-editor){max-width:calc(100vw - 16px)}}
+
+/* 차트 영역의 투명 채우기와 미니 서식 도구 */
+.obj.chart { background: transparent; border-color: transparent; }
+.chart-mini-toolbar { display:flex; align-items:center; gap:6px; padding:8px; }
+.chart-mini-toolbar>button { display:flex; flex-direction:column; align-items:center; gap:3px; border:0; background:transparent; color:inherit; padding:3px 8px; }
+.chart-mini-toolbar>button svg { width:22px;height:22px; }
+.chart-mini-toolbar select { min-width:110px; max-width:150px; }
+.chart-mini-toolbar .access-key-hint { display:none; }
+
+.chart-area-tabs { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:5px; margin-bottom:10px; }
+.chart-area-tabs button { min-width:0; white-space:normal; line-height:1.4; padding:6px 3px; }
+.chart-area-buttons { display:flex; gap:6px; flex-wrap:wrap; }
+.chart-area-image-preview { max-width:100%; max-height:120px; object-fit:contain; }

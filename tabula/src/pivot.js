@@ -2031,14 +2031,16 @@ export function pivotDetail(input, def, gr, gc) {
   if (meta.empty) return null;
   const bi = gr - meta.pageRows - meta.headerRows;
   const ci = gc - meta.labelCols;
-  if (bi < 0 || ci < 0 || ci >= meta.colLeaves.length || meta.colLeaves[ci].vi < 0) return null;
+  if (bi < 0 || ci < 0 || ci >= meta.colLeaves.length) return null;
   const leaf = meta.colLeaves[ci];
+  const vi = leaf.vi < 0 ? meta.rowItems[bi]?.vi : leaf.vi;
+  if (!Number.isInteger(vi) || !d.values[vi]) return null;
   let rnode = null;
   if (d.rows.length) {
     const it = meta.rowItems[bi];
     if (!it || it.kind === 'blank') return null;
     rnode = it.kind === 'grand' ? null : it.node;
-  } else if (bi !== 0) return null;
+  } else if (d.valuesOnRows && d.values.length > 1 ? !meta.rowItems[bi] : bi !== 0) return null;
   const cube = res.cube;
   const lower = cube.header.map((h) => String(h).toLowerCase());
   const dimFor = (name) => {
@@ -2080,7 +2082,7 @@ export function pivotDetail(input, def, gr, gc) {
     }
     out[m++] = i;
   }
-  return { header: cube.header, cube, idx: out.slice(0, m), conds, valueField: valueName(d.values[leaf.vi]) };
+  return { header: cube.header, cube, idx: out.slice(0, m), conds, valueField: valueName(d.values[vi]) };
 }
 
 /**

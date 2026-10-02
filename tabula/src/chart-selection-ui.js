@@ -2,6 +2,8 @@ import { paletteOf, CHART_PALETTES } from './chart.js';
 import { el } from './ui.js';
 import { buildChartHierarchy, hierarchyNodeColor } from './chart-hierarchy.js';
 import { chartSeriesPatch, chartPointColorPatch, chartExplosionPatch } from './chart-edit.js';
+import { chartAreaFormat } from './chart-area-format.js';
+import { createChartAreaFormatPanel } from './chart-area-format-ui.js';
 
 export function createChartSelectionPanel({ getChart, getPart, getData, onChange, onChoose, onDelete, onAllOptions }) {
   const body = el('div', { class: 'cfp chart-selection-pane' });
@@ -15,6 +17,7 @@ export function createChartSelectionPanel({ getChart, getPart, getData, onChange
   const check = (value, change) => { const i = el('input', { type: 'checkbox', checked: !!value }); i.addEventListener('change', () => change(i.checked)); return i; };
   const automatic = (value, change, min = -1e15, max = 1e15) => { const i = num(value ?? '', change, min, max, 'any'); i.placeholder = '자동'; i.addEventListener('change', () => { if (!i.value) change(undefined); }); return i; };
   const expanded = new Map();
+  const areaTabs = new Map();
   const draw = () => {
     for (const item of body.querySelectorAll('details')) expanded.set(item.querySelector('summary')?.textContent, item.open);
     const focused = body.contains(document.activeElement) ? document.activeElement.getAttribute('aria-label') : null;
@@ -133,13 +136,12 @@ export function createChartSelectionPanel({ getChart, getPart, getData, onChange
       rows.push(...labelRows());
       rows.push(el('button', { class: 'btn', onclick: onDelete }, '계열 데이터 레이블 삭제'));
     } else if (part.kind === 'plot') {
-      rows.push(row('그림 영역 채우기 색', color(chart.plotFill ?? '#ffffff', c => up({ plotFill: c }))));
+      extra.push(createChartAreaFormatPanel({kind:'plot',getFormat:()=>chartAreaFormat(getChart(),'plot'),getIdentity:()=>`${getChart()?.id}:${getPart()?.kind}`,initialTab:areaTabs.get('plot'),onTab:tab=>areaTabs.set('plot',tab),onChange:value=>up({plotAreaFormat:value??undefined,...(value?{}:{plotFill:undefined})})}).body);
     } else {
       rows.push(row('색 구성', choose(Array.isArray(chart.palette) ? 'imported' : chart.palette ?? 'office', [...(Array.isArray(chart.palette) ? [['imported', '가져온 색']] : []), ...Object.entries(CHART_PALETTES).map(([k, p]) => [k, p.label])], v => { if (v !== 'imported') up({ palette: v }); })));
-      rows.push(row('차트 채우기 색', color(chart.fill ?? '#ffffff', value => up({ fill: value }))));
-      rows.push(row('차트 테두리 색', color(chart.border ?? '#cccccc', value => up({ border: value }))));
+      extra.push(createChartAreaFormatPanel({kind:'chart',getFormat:()=>chartAreaFormat(getChart()),getIdentity:()=>`${getChart()?.id}:${getPart()?.kind}`,initialTab:areaTabs.get('chart'),onTab:tab=>areaTabs.set('chart',tab),onChange:value=>up({chartAreaFormat:value??undefined,...(value?{}:{fill:undefined,border:undefined})})}).body);
     }
-    body.replaceChildren(row('서식을 지정할 차트 요소', picker), el('p', { class: 'cfp-selection-name', role: 'status' }, title), section('선택한 요소', ...rows), ...extra, el('button', { class: 'btn', onclick: onAllOptions }, '차트 전체 옵션…'));
+    body.replaceChildren(row('서식을 지정할 차트 요소', picker), el('p', { class: 'cfp-selection-name', role: 'status' }, title), ...(rows.length ? [section('선택한 요소', ...rows)] : []), ...extra, el('button', { class: 'btn', onclick: onAllOptions }, '차트 전체 옵션…'));
     for (const item of body.querySelectorAll('details')) if (expanded.has(item.querySelector('summary')?.textContent)) item.open = expanded.get(item.querySelector('summary')?.textContent);
     if (focused) [...body.querySelectorAll('[aria-label]')].find(n => n.getAttribute('aria-label') === focused)?.focus({ preventScroll: true });
     if (scrollBox) scrollBox.scrollTop = scroll;
