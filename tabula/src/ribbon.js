@@ -410,45 +410,39 @@ export const TABS = [
   },
   {
     id: 'slicerTab', label: '슬라이서', context: 'slicer', groups: [
-      group('슬라이서', [
-        col(
-          { type: 'text', cmd: 'slicerCaption', stateKey: 'slicerCaption', label: '캡션:', title: '슬라이서 캡션', width: 110 },
-          medium('slicerSettings', 'slicer', '슬라이서 설정'),
-        ),
+      group('슬라이서', [col(
+        { type: 'text', cmd: 'slicerCaption', stateKey: 'slicerCaption', label: '슬라이서 캡션:', title: '슬라이서 캡션', width: 116, stacked: true, disabledKey: 'slicerSingleDisabled', guardTarget: true },
+        medium('slicerSettings', 'slicer', '슬라이서 설정', {disabledKey:'slicerSingleDisabled'})),
+        large('slicerConnections', 'slicer', '보고서 연결', {disabledKey:'slicerConnectionsDisabled'}),
       ]),
-      group('필터', [
-        large('slicerClear', 'filterClear', '필터 지우기', { title: '필터 지우기 (Alt+C)' }),
-        large('slicerMulti', 'filter', '다중 선택', { title: '다중 선택 (Alt+S)', toggle: 'slicerMultiOn' }),
-      ]),
-      group('슬라이서 스타일', [large('slicerStyleGalleryBtn', 'slicer', '빠른 스타일', { menu: 'slicerStyles' })]),
-      group('단추', [
-        col(
-          { type: 'spin', cmd: 'slicerCols', stateKey: 'slicerCols', label: '열:', title: '열 수', min: 1, max: 20, step: 1 },
-          { type: 'spin', cmd: 'slicerBtnH', stateKey: 'slicerBtnH', label: '높이:', title: '단추 높이 (px)', min: 10, max: 120, step: 1 },
-          { type: 'spin', cmd: 'slicerBtnW', stateKey: 'slicerBtnW', label: '너비:', title: '단추 너비 (px, 0 = 자동)', min: 0, max: 600, step: 1 },
-        ),
-        col(
-          { type: 'spin', cmd: 'slicerGap', stateKey: 'slicerGap', label: '간격:', title: '단추 사이 간격 (px)', min: 0, max: 30, step: 1 },
-        ),
-      ]),
-      group('표시', [col(check('slicerHeader', '머리글 표시', 'slicerHeaderOn')), large('slicerConnections', 'slicer', '보고서 연결')]),
-      group('글꼴', [
-        col(
-          { type: 'spin', cmd: 'slicerFontSize', stateKey: 'slicerFontSize', label: '항목:', title: '항목 글꼴 크기 (pt, 비우면 기본)', min: 5, max: 72, step: 0.5 },
-          { type: 'spin', cmd: 'slicerHeadSize', stateKey: 'slicerHeadSize', label: '머리글:', title: '머리글 글꼴 크기 (pt, 비우면 기본)', min: 5, max: 72, step: 0.5 },
-          check('slicerBold', '굵게', 'slicerBoldOn'),
-        ),
-      ]),
+      group('슬라이서 스타일', [{ type:'gallery', gallery:'slicerStyles', stateKey:'slicerGalleryKey', menu:'slicerStyles', title:'슬라이서 스타일', pageSize:6, disabledKey:'slicerEditDisabled' }]),
       group('정렬', [
-        col(medium('objForwardBtn', 'bringForward', '앞으로 가져오기', { menu: 'objForward' }), medium('objBackwardBtn', 'sendBackward', '뒤로 보내기', { menu: 'objBackward' }), medium('selectionPane', 'selectionPane', '선택 창')),
-        col(medium('objAlignBtn', 'align', '맞춤', { menu: 'objAlign' }), medium('objGroupBtn', 'shapes', '그룹화', { menu: 'objGroup' }), medium('objPlacementBtn', 'placement', '위치 속성', { menu: 'objPlacement' })),
+        large('objForwardBtn', 'bringForward', '앞으로 가져오기', {menu:'objForward',disabledKey:'slicerEditDisabled'}),
+        large('objBackwardBtn', 'sendBackward', '뒤로 보내기', {menu:'objBackward',disabledKey:'slicerEditDisabled'}),
+        large('selectionPane', 'selectionPane', '선택 창'),
+        large('objAlignBtn', 'align', '맞춤', {menu:'objAlign'}),
+        large('objGroupBtn', 'shapes', '그룹화', {menu:'objGroup',disabledKey:'slicerGroupDisabled'}),
+        large('objRotateBtn', 'rotate', '회전', {menu:'objRotate',disabledKey:'slicerUnsupported'}),
       ]),
-      group('크기', [
-        col(
-          { type: 'spin', cmd: 'objH', stateKey: 'objH', label: '높이:', title: '슬라이서 높이 (px)', min: 20, max: 4000, step: 1 },
-          { type: 'spin', cmd: 'objW', stateKey: 'objW', label: '너비:', title: '슬라이서 너비 (px)', min: 30, max: 4000, step: 1 },
-        ),
-      ]),
+      group('단추', [col(
+        {type:'spin',cmd:'slicerCols',stateKey:'slicerCols',label:'열:',title:'슬라이서 단추 열 수',min:1,max:20000,step:1,disabledKey:'slicerResizeDisabled',guardTarget:true,live:false},
+        {type:'spin',cmd:'slicerBtnH',stateKey:'slicerBtnH',label:'높이:',title:'슬라이서 단추 높이 (cm)',suffix:'cm',min:.03,max:529,step:.01,width:64,disabledKey:'slicerResizeDisabled',guardTarget:true,live:false},
+        {type:'spin',cmd:'slicerBtnW',stateKey:'slicerBtnW',label:'너비:',title:'슬라이서 단추 너비 (cm)',suffix:'cm',min:.03,max:529,step:.01,width:64,disabledKey:'slicerResizeDisabled',guardTarget:true,live:false},
+      )]),
+      group('크기', [col(
+        {type:'spin',cmd:'slicerH',stateKey:'slicerH',label:'높이:',title:'슬라이서 높이 (cm)',suffix:'cm',min:1.49,max:529,step:.01,width:64,disabledKey:'slicerResizeDisabled',guardTarget:true,live:false},
+        {type:'spin',cmd:'slicerW',stateKey:'slicerW',label:'너비:',title:'슬라이서 너비 (cm)',suffix:'cm',min:2.12,max:529,step:.01,width:64,disabledKey:'slicerResizeDisabled',guardTarget:true,live:false},
+      )], 'slicerSize'),
+      group('필터', [col(
+        medium('slicerClear','filterClear','필터 지우기',{title:'필터 지우기 (Alt+C)',disabledKey:'slicerFilterDisabled'}),
+        medium('slicerMulti','filter','다중 선택',{title:'다중 선택 (Alt+S)',toggle:'slicerMultiOn',disabledKey:'slicerSingleDisabled'}),
+        check('slicerHeader','머리글 표시','slicerHeaderOn'))]),
+      group('글꼴·간격', [col(
+        {type:'spin',cmd:'slicerFontSize',stateKey:'slicerFontSize',label:'항목:',title:'항목 글꼴 크기 (pt)',min:5,max:72,step:.5,disabledKey:'slicerEditDisabled',guardTarget:true,live:false},
+        {type:'spin',cmd:'slicerHeadSize',stateKey:'slicerHeadSize',label:'머리글:',title:'머리글 글꼴 크기 (pt)',min:5,max:72,step:.5,disabledKey:'slicerEditDisabled',guardTarget:true,live:false},
+        check('slicerBold','굵게','slicerBoldOn')),
+        col({type:'spin',cmd:'slicerGap',stateKey:'slicerGap',label:'간격:',title:'단추 사이 간격 (px)',min:0,max:30,step:1,disabledKey:'slicerResizeDisabled',guardTarget:true,live:false},
+          medium('objPlacementBtn','placement','위치 속성',{menu:'objPlacement'}))]),
     ],
   },
   {
@@ -659,6 +653,7 @@ export function buildRibbon(app) {
       b.addEventListener('click', () => app.run(it.cmd));
     }
     if (it.toggle) bindings.push((s) => b.classList.toggle('on', !!s[it.toggle]));
+    if (it.disabledKey) bindings.push(s => { b.disabled=!!s[it.disabledKey]; });
     return b;
   }
 
@@ -704,22 +699,26 @@ export function buildRibbon(app) {
 
   function makeText(it) {
     const input = el('input', { class: 'rtext', title: it.title, style: { width: `${it.width ?? 110}px` } });
-    const commit = () => { app.run(it.cmd, input.value); };
+    let validTarget = () => true, focusValue = '';
+    input.addEventListener('focus', () => { focusValue=input.value; validTarget = it.guardTarget ? app.inputGuard?.() ?? (()=>true) : ()=>true; });
+    const commit = () => { if(validTarget()) app.run(it.cmd, input.value); app.refreshRibbon(); };
     input.addEventListener('change', commit);
     input.addEventListener('keydown', (e) => {
+      if(e.isComposing||e.keyCode===229)return;
       if (e.key === 'Enter') { e.preventDefault(); input.blur(); app.focusGrid(); }
-      if (e.key === 'Escape') { input.blur(); app.focusGrid(); }
+      if (e.key === 'Escape') { e.preventDefault(); if(it.guardTarget){input.value=focusValue;validTarget=()=>false;} input.blur(); app.refreshRibbon(); app.focusGrid(); }
     });
-    bindings.push((s) => { if (document.activeElement !== input) input.value = s[it.stateKey] ?? ''; });
-    return el('label', { class: 'rbtn medium rtext-wrap' }, it.label ? el('span', {}, it.label) : null, input);
+    bindings.push((s) => { if (document.activeElement !== input) input.value = s[it.stateKey] ?? ''; if(it.disabledKey)input.disabled=!!s[it.disabledKey]; });
+    return el('label', { class: `rbtn medium rtext-wrap${it.stacked?' rtext-stacked':''}` }, it.label ? el('span', {}, it.label) : null, input);
   }
 
   /** 숫자 칸 (▲▼ · 방향키 · 휠로 한 단계씩, 입력하면 바로 적용) */
   function makeSpin(it) {
     const input = el('input', { type: 'number', class: 'rtext rspin', title: it.title, min: it.min, max: it.max, step: it.step ?? 1, style: { width: `${it.width ?? 58}px` } });
-    let t = null;
-    const commit = () => { clearTimeout(t); t = null; app.run(it.cmd, input.value); };
-    input.addEventListener('input', () => { clearTimeout(t); t = setTimeout(commit, 250); });
+    let t = null, validTarget = () => true, focusValue = '';
+    input.addEventListener('focus', () => { focusValue=input.value; validTarget = it.guardTarget ? app.inputGuard?.() ?? (()=>true) : ()=>true; });
+    const commit = () => { clearTimeout(t); t = null; if(validTarget())app.run(it.cmd, input.value); app.refreshRibbon(); };
+    input.addEventListener('input', () => { if(it.live===false)return; clearTimeout(t); t = setTimeout(commit, 250); });
     input.addEventListener('change', commit);
     input.addEventListener('wheel', (e) => {
       if (document.activeElement !== input) return;
@@ -729,8 +728,9 @@ export function buildRibbon(app) {
       commit();
     }, { passive: false });
     input.addEventListener('keydown', (e) => {
+      if(e.isComposing||e.keyCode===229)return;
       if (e.key === 'Enter') { e.preventDefault(); commit(); input.blur(); app.focusGrid(); }
-      if (e.key === 'Escape') { input.blur(); app.focusGrid(); }
+      if (e.key === 'Escape') { e.preventDefault(); if(it.guardTarget){input.value=focusValue;validTarget=()=>false;} input.blur(); app.refreshRibbon(); app.focusGrid(); }
     });
     bindings.push((s) => { if (document.activeElement !== input) input.value = s[it.stateKey] ?? ''; if (it.disabledKey) input.disabled = !!s[it.disabledKey]; });
     return el('label', { class: 'rbtn medium rtext-wrap' }, it.label ? el('span', {}, it.label) : null, input, it.suffix ? el('span', {}, it.suffix) : null);
@@ -747,17 +747,28 @@ export function buildRibbon(app) {
 
   /** 리본 안 갤러리 (엑셀 차트 스타일처럼 견본이 바로 보이고 ▾ 로 전체 목록) */
   function makeGallery(it) {
-    const strip = el('div', { class: 'rg-strip' });
-    const more = el('button', { class: 'rbtn rg-more', title: `${it.title} 더 보기`, onmousedown: keepFocus, html: ICONS.chevronDown });
-    more.addEventListener('click', () => app.openMenu(it.menu, more));
-    let last = null;
-    bindings.push((s) => {
-      const k = s[it.stateKey] ?? '';
-      if (k === last) return;
-      last = k;
-      strip.replaceChildren(...(k ? app.gallery?.(it.gallery) ?? [] : []));
+    const strip = el('div', { class:'rg-strip', 'aria-label':it.title });
+    const more = el('button',{class:'rbtn rg-more',title:`${it.title} 더 보기`,'aria-label':`${it.title} 더 보기`,onmousedown:keepFocus,html:ICONS.chevronDown});
+    more.addEventListener('click',()=>app.openMenu(it.menu,more));
+    let last=null, entries=[], page=0, disabled=false;
+    const draw=()=>{strip.replaceChildren(...(it.pageSize?entries.slice(page*it.pageSize,(page+1)*it.pageSize):entries)); if(prev){prev.disabled=disabled||page===0;next.disabled=disabled||(page+1)*it.pageSize>=entries.length;}};
+    const step=delta=>{page=Math.max(0,Math.min(Math.ceil(entries.length/it.pageSize)-1,page+delta));draw();};
+    const prev=it.pageSize?el('button',{class:'rbtn rg-page',title:'이전 슬라이서 스타일','aria-label':'이전 슬라이서 스타일',onmousedown:keepFocus,onclick:()=>step(-1)},'▴'):null;
+    const next=it.pageSize?el('button',{class:'rbtn rg-page',title:'다음 슬라이서 스타일','aria-label':'다음 슬라이서 스타일',onmousedown:keepFocus,onclick:()=>step(1)},'▾'):null;
+    bindings.push(s=>{
+      disabled=!!s[it.disabledKey];more.disabled=disabled;
+      const k=s[it.stateKey]??'';
+      if(k!==last){last=k;entries=k?app.gallery?.(it.gallery)??[]:[];page=Math.min(page,Math.max(0,Math.ceil(entries.length/(it.pageSize||1))-1));draw();}
+      for(const b of entries)b.disabled=disabled;
+      if(prev){prev.disabled=disabled||page===0;next.disabled=disabled||(page+1)*it.pageSize>=entries.length;}
     });
-    return el('div', { class: 'rgallery', title: it.title }, strip, more);
+    strip.addEventListener('keydown',e=>{
+      if(!it.pageSize||!['ArrowRight','ArrowLeft','Home','End'].includes(e.key))return;
+      const at=entries.indexOf(e.target);if(at<0)return;e.preventDefault();e.stopPropagation();
+      const i=e.key==='Home'?0:e.key==='End'?entries.length-1:Math.max(0,Math.min(entries.length-1,at+(e.key==='ArrowRight'?1:-1)));
+      page=Math.floor(i/it.pageSize);draw();entries[i]?.focus();
+    });
+    return el('div',{class:`rgallery${it.pageSize?' rg-paged':''}`,'data-gallery':it.gallery,title:it.title},strip,it.pageSize?el('div',{class:'rg-pages'},prev,next,more):more);
   }
 
   function makeCheck(it) {
@@ -784,6 +795,7 @@ export function buildRibbon(app) {
   function renderRibbon() {
     bindings.length = 0;
     ribbonEl.replaceChildren();
+    ribbonEl.dataset.activeTab=current;
     const tab = TABS.find((t) => t.id === current);
     for (const [groupIndex, g] of tab.groups.entries()) {
       ribbonEl.append(el('div', { class: 'rgroup', 'data-ribbon-group': g.label },

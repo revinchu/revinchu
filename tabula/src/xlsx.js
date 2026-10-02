@@ -35,6 +35,7 @@ import { normalizeStyleName, DEFAULT_TABLE_STYLE, dataTop, dataBottom, canonical
 import { pivotSourceData, resolvePivot, itemText, keyOf, sortKeys, EMPTY, headerNames, normalizeDef, computePivot, valueName, showAsPercent, excelCalcFormula, pivotFilterKey, pivotPageMulti, DATE_OP_TYPES } from './pivot.js';
 import { groupKey } from './cube.js';
 import { slicerStyleName, slicerColors, isModernSlicer } from './slicerstyle.js';
+import { SLICER_DEFAULT_BUTTON_HEIGHT } from './slicer-properties.js';
 import { applyTint, DEFAULT_THEME, PRESET_STYLES, presetStyle, isModernStyle, ELEMENT_TYPES, elementDxfStyle } from './stylepresets.js';
 import { maxOf, minOf, pushAll, DAY_MS } from './fxcore.js';
 
@@ -1153,7 +1154,7 @@ function* readSheet(files, path, ctx) {
         if (sl.attrs.cache) {
           sheet._slicers.push({
             name: sl.attrs.name, cache: sl.attrs.cache, caption: sl.attrs.caption, columns: Number(sl.attrs.columnCount ?? 1), style: sl.attrs.style,
-            showCaption: sl.attrs.showCaption !== '0', lockedPosition: sl.attrs.lockedPosition === '1', rowHeight: Number(sl.attrs.rowHeight ?? 241300),
+            showCaption: !['0', 'false'].includes(sl.attrs.showCaption), lockedPosition: ['1', 'true'].includes(sl.attrs.lockedPosition), rowHeight: Number(sl.attrs.rowHeight ?? SLICER_DEFAULT_BUTTON_HEIGHT * EMU),
           });
         }
       }
@@ -1658,18 +1659,40 @@ function readDrawing(files, path, sheet, ctx) {
   };
 
   // 그룹 도형 안의 좌표 변환
-  const walk = (el, box, map) => {
+  const slicerOnlyGroup = (el) => {
+    const parts = el.children.filter(k => ['sp', 'cxnSp', 'pic', 'grpSp', 'graphicFrame', 'AlternateContent'].includes(k.name));
+    return parts.length > 0 && parts.every(k => k.name === 'grpSp' ? slicerOnlyGroup(k)
+      : k.name === 'graphicFrame' ? !!descendants(k, 'slicer')[0]?.attrs.name
+        : k.name === 'AlternateContent' && !!descendants(child(k, 'Choice'), 'slicer')[0]?.attrs.name);
+  };
+  const walk = (el, box, map, slicerGroup = null, client = null, editAs = 'twoCell') => {
     const place = (node) => {
-      const xfrm = descendants(child(node, 'spPr') ?? child(node, 'grpSpPr'), 'xfrm')[0];
+      const xfrm = child(node, 'xfrm') ?? descendants(child(node, 'spPr') ?? child(node, 'grpSpPr'), 'xfrm')[0];
       if (!map || !xfrm) return box;
       const off = child(xfrm, 'off');
       const ext = child(xfrm, 'ext');
       return map(Number(off?.attrs.x ?? 0), Number(off?.attrs.y ?? 0), Number(ext?.attrs.cx ?? 0), Number(ext?.attrs.cy ?? 0));
     };
     switch (el.name) {
+      case 'AlternateContent': {
+        const choice = child(el, 'Choice');
+        for (const node of choice?.children ?? []) if (['graphicFrame', 'grpSp'].includes(node.name)) walk(node, box, map, slicerGroup, client, editAs);
+        break;
+      }
       case 'sp': case 'cxnSp': readShape(el, place(el)); break;
       case 'pic': readPic(el, place(el)); break;
       case 'graphicFrame': {
+        const slicer = descendants(el, 'slicer')[0];
+        if (slicer?.attrs.name) {
+          const b = place(el), nv = child(child(el, 'nvGraphicFramePr'), 'cNvPr');
+          out._slicerBoxes[slicer.attrs.name] = { ...b, w: Math.max(1, b.w), h: Math.max(1, b.h), z: ++z,
+            ...(slicerGroup ? { objectGroup: slicerGroup } : {}), ...(editAs !== 'oneCell' ? { placement: editAs } : {}),
+            ...(nv?.attrs.descr !== undefined ? { alt: nv.attrs.descr } : {}), ...(['1','true'].includes(nv?.attrs.hidden) ? { hidden: true } : {}),
+            ...(el.attrs.macro ? { macro: el.attrs.macro.replace(/^\[0\]!/, '') } : {}),
+            ...(client?.fPrintsWithSheet !== undefined ? { noPrint: ['0','false'].includes(client.fPrintsWithSheet) } : {}),
+            ...(client?.fLocksWithSheet !== undefined ? { locked: !['0','false'].includes(client.fLocksWithSheet) } : {}) };
+          break;
+        }
         const chartRef = descendants(el, 'chart')[0];
         const target = chartRef && rels[rid(chartRef)]?.target;
         const chart = target && readChart(files, target, ctx.theme);
@@ -1701,7 +1724,11 @@ function readDrawing(files, path, sheet, ctx) {
         });
         const ownMetadata = descendants(child(child(el, 'nvGrpSpPr'), 'cNvPr'), 'group').some(n => n.attrs['xmlns:wx'] === 'https://wixel.app/drawing/group/1');
         const beforeShapes = out.shapes.length, beforeImages = out.images.length, beforeCharts = out.charts.length;
-        for (const k of el.children) if (['sp', 'cxnSp', 'pic', 'grpSp', 'graphicFrame'].includes(k.name)) walk(k, gb, inner);
+        const group = slicerOnlyGroup(el) ? slicerGroup ?? uid('slg') : null;
+        for (const k of el.children) if (['sp', 'cxnSp', 'pic', 'grpSp', 'graphicFrame', 'AlternateContent'].includes(k.name)) walk(k, gb, inner, group, client, editAs);
+        if (group && ['1','true'].includes(child(child(el, 'nvGrpSpPr'), 'cNvPr')?.attrs.hidden)) {
+          for (const sl of Object.values(out._slicerBoxes)) if (sl.objectGroup === group) sl.hidden = true;
+        }
         if (!ownMetadata && ['1','true'].includes(child(child(el, 'nvGrpSpPr'), 'cNvPr')?.attrs.hidden)) {
           for (const [items,start] of [[out.shapes,beforeShapes],[out.images,beforeImages],[out.charts,beforeCharts]]) for (let i=start;i<items.length;i++) items[i].hidden = true;
         }
@@ -1749,7 +1776,7 @@ function readDrawing(files, path, sheet, ctx) {
     const editAs = anchor.name === 'absoluteAnchor' ? 'absolute' : anchor.name === 'oneCellAnchor' ? 'oneCell' : anchor.attrs.editAs ?? 'twoCell';
     if (sl?.attrs.name) {
       const frame = child(child(alt, 'Choice'), 'graphicFrame'), nv = descendants(frame, 'cNvPr')[0], client = child(anchor, 'clientData')?.attrs;
-      out._slicerBoxes[sl.attrs.name] = { ...round(box), z: ++z, ...(editAs !== 'oneCell' ? { placement: editAs } : {}),
+      out._slicerBoxes[sl.attrs.name] = { ...box, w: Math.max(1, box.w), h: Math.max(1, box.h), z: ++z, ...(editAs !== 'oneCell' ? { placement: editAs } : {}),
         ...(nv?.attrs.descr !== undefined ? { alt: nv.attrs.descr } : {}), ...(nv?.attrs.hidden === '1' ? { hidden: true } : {}),
         ...(frame?.attrs.macro ? { macro: frame.attrs.macro.replace(/^\[0\]!/, '') } : {}),
         ...(client?.fPrintsWithSheet !== undefined ? { noPrint: ['0','false'].includes(client.fPrintsWithSheet) } : {}),
@@ -1758,7 +1785,7 @@ function readDrawing(files, path, sheet, ctx) {
     }
     const content = anchor.children.find((k) => ['sp', 'cxnSp', 'pic', 'grpSp', 'graphicFrame'].includes(k.name)) ?? child(child(alt, 'Choice'), 'graphicFrame');
     const before = [out.charts.length, out.images.length, out.shapes.length];
-    if (content) walk(content, box, null);
+    if (content) walk(content, box, null, null, child(anchor, 'clientData')?.attrs, editAs);
     const client = child(anchor, 'clientData')?.attrs;
     [out.charts, out.images, out.shapes].forEach((list, k) => {
       for (let i = before[k]; i < list.length; i++) {
@@ -2657,7 +2684,7 @@ function linkPivotsAndSlicers(files, wbRels, sheets, ctx) {
         ...(sl.showCaption ? {} : { showHeader: false }),
         ...(sl.lockedPosition ? { noMove: true } : {}),
         ...(c.opts ?? {}),
-        ...(Math.abs(sl.rowHeight - 241300) > 20000 ? { buttonHeight: Math.max(14, Math.round(sl.rowHeight / EMU)) } : {}),
+        ...(Number.isFinite(sl.rowHeight) && sl.rowHeight > 0 ? { buttonHeight: sl.rowHeight / EMU } : {}),
       });
       i++;
     }
@@ -4066,14 +4093,27 @@ function cacheNameFor(base, used) {
   return n;
 }
 
-function slicerAnchorXml(sl, name, id, anchorAt, kind) {
+function slicerContentXml(sl, name, id, kind, grouped = false) {
   const EMUv = (px) => Math.round(px * EMU);
   const choice = kind === 'table'
     ? `<mc:Choice xmlns:sle15="http://schemas.microsoft.com/office/drawing/2012/slicer" Requires="sle15">`
     : `<mc:Choice xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main" Requires="a14">`;
-  const frame = `<xdr:graphicFrame macro="${sl.macro ? `[0]!${esc(sl.macro)}` : ''}"><xdr:nvGraphicFramePr><xdr:cNvPr id="${id}" name="${esc(name)}"${sl.alt !== undefined ? ` descr="${esc(sl.alt)}"` : ''}${sl.hidden ? ' hidden="1"' : ''}/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/drawing/2010/slicer"><sle:slicer xmlns:sle="http://schemas.microsoft.com/office/drawing/2010/slicer" name="${esc(name)}"/></a:graphicData></a:graphic></xdr:graphicFrame>`;
+  const frame = `<xdr:graphicFrame macro="${sl.macro ? `[0]!${esc(sl.macro)}` : ''}"><xdr:nvGraphicFramePr><xdr:cNvPr id="${id}" name="${esc(name)}"${sl.alt !== undefined ? ` descr="${esc(sl.alt)}"` : ''}${sl.hidden ? ' hidden="1"' : ''}/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="${grouped ? EMUv(sl.x) : 0}" y="${grouped ? EMUv(sl.y) : 0}"/><a:ext cx="${grouped ? EMUv(sl.w) : 0}" cy="${grouped ? EMUv(sl.h) : 0}"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/drawing/2010/slicer"><sle:slicer xmlns:sle="http://schemas.microsoft.com/office/drawing/2010/slicer" name="${esc(name)}"/></a:graphicData></a:graphic></xdr:graphicFrame>`;
   const fallback = `<mc:Fallback><xdr:sp macro="" textlink=""><xdr:nvSpPr><xdr:cNvPr id="0" name=""/><xdr:cNvSpPr><a:spLocks noTextEdit="1"/></xdr:cNvSpPr></xdr:nvSpPr><xdr:spPr><a:xfrm><a:off x="${EMUv(sl.x)}" y="${EMUv(sl.y)}"/><a:ext cx="${EMUv(sl.w)}" cy="${EMUv(sl.h)}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:prstClr val="white"/></a:solidFill><a:ln w="1"><a:solidFill><a:prstClr val="green"/></a:solidFill></a:ln></xdr:spPr><xdr:txBody><a:bodyPr vertOverflow="clip" horzOverflow="clip"/><a:lstStyle/><a:p><a:r><a:rPr lang="ko-KR" sz="1100"/><a:t>이 도형은 ${kind === 'table' ? '표' : '피벗 테이블'} 슬라이서를 나타냅니다. 슬라이서는 Excel 2010 이상에서 지원됩니다.</a:t></a:r></a:p></xdr:txBody></xdr:sp></mc:Fallback>`;
-  return `<xdr:twoCellAnchor editAs="${sl.placement ?? 'oneCell'}"><xdr:from>${anchorAt(sl.x, sl.y)}</xdr:from><xdr:to>${anchorAt(sl.x + sl.w, sl.y + sl.h)}</xdr:to><mc:AlternateContent xmlns:mc="${NS_MC}">${choice}${frame}</mc:Choice>${fallback}</mc:AlternateContent><xdr:clientData${sl.noPrint ? ' fPrintsWithSheet="0"' : ''}${sl.locked === false ? ' fLocksWithSheet="0"' : ''}/></xdr:twoCellAnchor>`;
+  return `<mc:AlternateContent xmlns:mc="${NS_MC}">${choice}${frame}</mc:Choice>${fallback}</mc:AlternateContent>`;
+}
+
+function slicerAnchorXml(sl, name, id, anchorAt, kind) {
+  return `<xdr:twoCellAnchor editAs="${sl.placement ?? 'oneCell'}"><xdr:from>${anchorAt(sl.x, sl.y)}</xdr:from><xdr:to>${anchorAt(sl.x + sl.w, sl.y + sl.h)}</xdr:to>${slicerContentXml(sl, name, id, kind)}<xdr:clientData${sl.noPrint ? ' fPrintsWithSheet="0"' : ''}${sl.locked === false ? ' fLocksWithSheet="0"' : ''}/></xdr:twoCellAnchor>`;
+}
+
+function slicerGroupAnchorXml(members, id, nextId, anchorAt) {
+  let x = Infinity, y = Infinity, right = -Infinity, bottom = -Infinity;
+  for (const [, o] of members) { const sl = o.sl; x = Math.min(x, sl.x); y = Math.min(y, sl.y); right = Math.max(right, sl.x + sl.w); bottom = Math.max(bottom, sl.y + sl.h); }
+  const w = right - x, h = bottom - y, emu = px => Math.round(px * EMU);
+  const children = members.map(([kind, o]) => slicerContentXml({ ...o.sl, x: o.sl.x - x, y: o.sl.y - y }, o.name, nextId(), kind === 'slicerTable' ? 'table' : 'pivot', true)).join('');
+  const first = members[0][1].sl;
+  return `<xdr:twoCellAnchor editAs="${first.placement ?? 'oneCell'}"><xdr:from>${anchorAt(x, y)}</xdr:from><xdr:to>${anchorAt(right, bottom)}</xdr:to><xdr:grpSp><xdr:nvGrpSpPr><xdr:cNvPr id="${id}" name="슬라이서 그룹 ${id}"/><xdr:cNvGrpSpPr/></xdr:nvGrpSpPr><xdr:grpSpPr><a:xfrm><a:off x="${emu(x)}" y="${emu(y)}"/><a:ext cx="${emu(w)}" cy="${emu(h)}"/><a:chOff x="0" y="0"/><a:chExt cx="${emu(w)}" cy="${emu(h)}"/></a:xfrm></xdr:grpSpPr>${children}</xdr:grpSp><xdr:clientData${members.every(([,o]) => o.sl.noPrint) ? ' fPrintsWithSheet="0"' : ''}${members.every(([,o]) => o.sl.locked === false) ? ' fLocksWithSheet="0"' : ''}/></xdr:twoCellAnchor>`;
 }
 
 /** .xlsx 로 저장할 때 엑셀 한도(1,048,576행)를 넘어 빠지는 셀 수 */
@@ -4524,6 +4564,13 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
         ...sheet.charts.map((o) => ['chart', o]), ...images.map((o) => ['image', o]), ...shapes.map((o) => ['shape', o]),
         ...sheetSlicers.table.map((o) => ['slicerTable', o]), ...sheetSlicers.pivot.map((o) => ['slicerPivot', o]),
       ].sort((a, b) => ((a[1].sl ?? a[1]).z ?? 0) - ((b[1].sl ?? b[1]).z ?? 0));
+      const slicerGroups = new Map(), writtenSlicerGroups = new Set();
+      for (const entry of ordered) {
+        const group = entry[1].sl?.objectGroup;
+        if (typeof group !== 'string' || !group) continue;
+        if (!slicerGroups.has(group)) slicerGroups.set(group, []);
+        slicerGroups.get(group).push(entry);
+      }
       for (const [kind, o] of ordered) {
         if (kind === 'chart') {
           const ch = o;
@@ -4570,6 +4617,13 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
           const native = `<xdr:pic${im.macro ? ` macro="[0]!${esc(im.macro)}"` : ''}><xdr:nvPicPr><xdr:cNvPr id="${objId}" name="${esc(im.name || `그림 ${objId - 1}`)}"${im.alt !== undefined ? ` descr="${esc(im.alt)}"` : ''}${im.hidden ? ' hidden="1"' : ''}>${hyperlinkXml(im)}${extensions ? `<a:extLst>${extensions}</a:extLst>` : ''}</xdr:cNvPr><xdr:cNvPicPr><a:picLocks noChangeAspect="${im.lockAspect === false ? 0 : 1}"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="${id}">${pictureBlipXml(im)}${svgExt}</a:blip>${im.crop ? `<a:srcRect${['l','t','r','b'].map(k => ` ${k}="${Math.round((im.crop[k] ?? 0) * 100000)}"`).join('')}/>` : ''}<a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>${xfrm(im)}${pictureGeometryXml(im)}${pictureBorderXml(im)}${pictureEffectXml(im)}</xdr:spPr></xdr:pic>`;
           parts.push(anchor(im, native));
         } else if (kind === 'slicerTable' || kind === 'slicerPivot') {
+          const group = o.sl.objectGroup, members = slicerGroups.get(group);
+          if (members?.length > 1) {
+            if (writtenSlicerGroups.has(group)) continue;
+            writtenSlicerGroups.add(group); objId++;
+            parts.push(slicerGroupAnchorXml(members, objId, () => ++objId, anchorAt));
+            continue;
+          }
           objId++;
           parts.push(slicerAnchorXml(o.sl, o.name, objId, anchorAt, kind === 'slicerTable' ? 'table' : 'pivot'));
         } else if (isDrawingGroup(o)) {
@@ -4683,7 +4737,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
       const list = sheetSlicers[kind];
       if (!list.length) continue;
       slicerPartNo++;
-      files[`xl/slicers/slicer${slicerPartNo}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<slicers xmlns="${NS_X14}" xmlns:mc="${NS_MC}" mc:Ignorable="x" xmlns:x="${NS_MAIN}">${list.map(({ sl, name, cache }) => `<slicer name="${esc(name)}" cache="${esc(cache)}" caption="${esc(sl.caption ?? name)}"${(sl.columns ?? 1) > 1 ? ` columnCount="${sl.columns}"` : ''}${((st) => (st !== 'SlicerStyleLight1' ? ` style="${esc(st)}"` : ''))(pool.slicerStyleFor(sl))}${sl.showHeader === false ? ' showCaption="0"' : ''}${sl.noMove ? ' lockedPosition="1"' : ''} rowHeight="${Math.round((sl.buttonHeight ?? 25.3) * EMU)}"/>`).join('')}</slicers>`;
+      files[`xl/slicers/slicer${slicerPartNo}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<slicers xmlns="${NS_X14}" xmlns:mc="${NS_MC}" mc:Ignorable="x" xmlns:x="${NS_MAIN}">${list.map(({ sl, name, cache }) => `<slicer name="${esc(name)}" cache="${esc(cache)}" caption="${esc(sl.caption ?? name)}"${(sl.columns ?? 1) > 1 ? ` columnCount="${sl.columns}"` : ''}${((st) => (st !== 'SlicerStyleLight1' ? ` style="${esc(st)}"` : ''))(pool.slicerStyleFor(sl))}${sl.showHeader === false ? ' showCaption="0"' : ''}${sl.noMove ? ' lockedPosition="1"' : ''} rowHeight="${Math.round((sl.buttonHeight ?? SLICER_DEFAULT_BUTTON_HEIGHT) * EMU)}"/>`).join('')}</slicers>`;
       contentOverrides.push(`<Override PartName="/xl/slicers/slicer${slicerPartNo}.xml" ContentType="application/vnd.ms-excel.slicer+xml"/>`);
       const id = `rId${sheetRels.length + 1}`;
       sheetRels.push(`<Relationship Id="${id}" Type="${REL_MS}/slicer" Target="../slicers/slicer${slicerPartNo}.xml"/>`);

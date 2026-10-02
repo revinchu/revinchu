@@ -437,3 +437,11 @@ node tools/mobile-layout.mjs
 ## 피벗 필터 메뉴와 검색 선택
 
 `node tools/pivot-filter-menu.mjs`는 합성 피벗의 실제 행/열/보고서 드롭다운 버튼을 클릭하여 검색 대체/현재 선택 추가, 전체 선택, 빈 결과·0개 체크·IME Enter, 조건 하위 메뉴, Undo, 다중 선택 모드, 보호·늦은 대상 변경, 작은 화면을 검사한다. `WIXEL_URL`은 로컬 소스 또는 번들 주소, `WIXEL_PIVOT_FILTER_OUT`은 D: 출력 폴더(기본 `D:/Codex/Temp/wixel-pivot-filter/source`)다. `WIXEL_PIVOT_FILTER_FILTER`로 이름을 포함하는 시나리오만 실행할 수 있다. 일반 필터 회귀에는 `tools/interaction-ux.mjs`와 `tools/filter-performance.mjs`를 사용한다. 외부 요청과 문서 API 쓰기를 차단하며 사용자 원본 파일을 변경하지 않는다.
+
+
+## 슬라이서 리본·cm 치수·그룹 배치
+
+- `node tools/slicer-ribbon-parity.mjs`: 합성 피벗/슬라이서에서 캡션·설정·보고서 연결, 페이지형 스타일/키보드, cm 단추/전체 크기, 다중 서식·맞춤·앞뒤 순서·선택 창, 그룹화/해제/복사/삭제/숨김 구성원, 보호·늦은 선택 변경·Escape/IME·Undo와 320/390px 화면을 검사합니다. `WIXEL_SLICER_RIBBON_OUT`은 D: 출력 폴더, `WIXEL_SLICER_RIBBON_FILTER`는 선택할 시나리오 이름 일부입니다.
+- `node tools/slicer-arrange.mjs`: 슬라이서/도형 혼합 이동, 공통 변위·원점 제한·격자 붙임, noMove/보호 원자 차단, Escape/시트 전환 취소, 그룹 크기·맞춤·분배·쌓임 순서와 Undo/Redo를 검사합니다. 수정 전 재현은 소스에서 `SLICER_ARRANGE_BASELINE=eb6162d`, `SLICER_ARRANGE_FILTER=혼합`로 실행합니다.
+
+`WIXEL_URL`로 소스 또는 최종 번들을 지정하고 기존 Playwright 환경 변수를 사용합니다. 새 격리 브라우저와 합성 자료만 사용하며 외부/API 요청과 쓰기를 차단합니다. 실제 Excel 화면 전체의 픽셀 일치나 모든 조합의 동등성을 판정하는 도구는 아닙니다. 표준 XLSX·실제 Excel 왕복 근거는 [47번 문서](../docs/codex/47_슬라이서리본과배치.md)를 참고하세요.

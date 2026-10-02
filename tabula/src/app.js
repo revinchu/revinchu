@@ -2,7 +2,7 @@ import { chartAreaFormatPatch } from './chart-area-format.js';
 import { chartResetFormattingPatch, applyChartTemplatePatch } from './chart-context.js';
 import { writeChartTemplate, readChartTemplate } from './chart-template.js';
 import { pivotContextTarget, pivotValueDef, pivotRemoveContextField } from './pivot-context.js';
-import { slicerSizePatch, slicerSourceKey } from './slicer-properties.js';
+import { slicerSizePatch, slicerSourceKey, slicerDimensions, slicerDimensionPatch } from './slicer-properties.js';
 import { phoneticEditor } from './phonetic-ui.js';
 import { readRangeQuerySource } from './range-query.js';
 import { createRangeQueryEditor } from './range-query-ui.js';
@@ -2000,6 +2000,7 @@ function onViewMouseDown(e) {
     if (editing && !commitEdit()) return;
     focusGrid();
     const id = t.closest('.obj').dataset.id;
+    if(chartSel!==id)objMulti.clear();
     chartSel = id;
     if (slBtn.classList.contains('sl-item')) slicerPick(id, slBtn.dataset.k, e.ctrlKey || e.metaKey);
     else if (slBtn.classList.contains('sl-clear')) slicerClear(id);
@@ -2058,11 +2059,20 @@ function onViewMouseDown(e) {
     if (found.prop === 'charts' && chartPart?.id === id && !t.classList.contains('ch-h')) {
       beginChartPartDrag(e, objEl, partEl, o); return;
     }
-    if (viewOnly || (o.locked !== false && protectBlocked('objects'))) return;
-    // 크기 조정 및 이동 사용 안 함 (엑셀 슬라이서 [위치 및 속성]): 선택만 되고 끌어도 움직이지 않음
-    if (o.noMove) { objMulti.clear(); gv.renderObjectsAll(); updateSelectionUI(); return; }
+    const chosen = selectedObjects();
+    if (objectEditBlocked() || chosen.some(f => f.obj.noMove)) return;
     const corner = t.classList.contains('ch-h') ? [...t.classList].find((c) => ['nw', 'ne', 'sw', 'se'].includes(c)) : null;
-    drag = { type: 'obj', singleOnClick: !!objMulti.size && !e.ctrlKey && !e.metaKey && !e.shiftKey, prop: found.prop, id, corner, shift: e.shiftKey, start: { x: e.clientX, y: e.clientY }, orig: { x: o.x, y: o.y, w: o.w, h: o.h } };
+    // 이동은 선택한 개체 전체를 같은 거리만큼 옮긴다. 크기 조절점은 선택한 개체의 기존 동작을 유지한다.
+    const groupResize = !!(corner && o.objectGroup);
+    const members = (corner ? groupResize ? chosen.filter(f => f.obj.objectGroup === o.objectGroup) : [found] : chosen).map(f => ({ prop: f.prop, id: f.obj.id, object: f.obj, orig: { x: f.obj.x, y: f.obj.y, w: f.obj.w, h: f.obj.h } }));
+    const orig = groupResize ? { x: minOf(members.map(m => m.orig.x)), y: minOf(members.map(m => m.orig.y)) } : { x: o.x, y: o.y, w: o.w, h: o.h };
+    if (groupResize) { orig.w = maxOf(members.map(m => m.orig.x + m.orig.w)) - orig.x; orig.h = maxOf(members.map(m => m.orig.y + m.orig.h)) - orig.y; }
+    const session = { type: 'obj', book: wb, host: sheet(), si, version: wb.version, members, groupResize, singleOnClick: !!objMulti.size && !e.ctrlKey && !e.metaKey && !e.shiftKey, prop: found.prop, id, corner, shift: e.shiftKey, start: { x: e.clientX, y: e.clientY }, orig };
+    session.restore = () => { for (const m of members) if ((session.host[m.prop] ?? []).includes(m.object)) Object.assign(m.object, m.orig); };
+    session.valid = () => session.book === wb && session.host === sheet() && session.si === si && session.version === wb.version && !viewOnly && !wb.props?.markedFinal && members.every(m => (session.host[m.prop] ?? []).includes(m.object) && !m.object.noMove && (m.object.locked === false || allowed(session.host, 'objects')));
+    session.escape = event => { if (event.key === 'Escape' && drag === session) { event.preventDefault(); event.stopPropagation(); session.restore(); drag = null; document.removeEventListener('keydown', session.escape, true); gv.renderObjectsAll(); } };
+    document.addEventListener('keydown', session.escape, true);
+    drag = session;
     return;
   }
   if (t.classList.contains('fill-handle')) {
@@ -2337,45 +2347,44 @@ function onDragMove(x, y) {
       break;
     }
     case 'obj': {
-      const ch = (sheet()[drag.prop] ?? []).find((xx) => xx.id === drag.id);
+      if (!drag.valid()) { const stale = drag; stale.restore(); document.removeEventListener('keydown', stale.escape, true); drag = null; gv.renderObjectsAll(); break; }
+      const ch = drag.members.find(m => m.id === drag.id)?.object;
       if (!ch) break;
       const dx = (x - drag.start.x) / gv.z;
       const dy = (y - drag.start.y) / gv.z;
       const o = drag.orig;
       if (!drag.corner) {
-        ch.x = Math.max(0, Math.round(o.x + dx));
-        ch.y = Math.max(0, Math.round(o.y + dy));
-        // 눈금에 맞춤 (Alt 를 누르면 반대로) · 도형에 맞추기: 가까운 셀 경계 / 다른 개체 가장자리에 붙음
+        const left = minOf(drag.members.map(m => m.orig.x)), top = minOf(drag.members.map(m => m.orig.y));
+        const width = maxOf(drag.members.map(m => m.orig.x + m.orig.w)) - left, height = maxOf(drag.members.map(m => m.orig.y + m.orig.h)) - top;
+        let nx = Math.max(0, Math.round(left + dx)), ny = Math.max(0, Math.round(top + dy));
+        // 그룹 외곽을 셀/다른 개체 경계에 맞춘 뒤 하나의 이동량을 적용해 개체 사이 간격을 보존한다.
         const toGrid = !!opts.snapGrid !== !!lastAlt;
         if (toGrid || opts.snapShape) {
           const snap = (v, size, edges) => {
             let best = null;
-            // 왼쪽(위) 가장자리 또는 오른쪽(아래) 가장자리가 경계에 닿는 자리
-            for (const e of edges) for (const cand of [e, e - size]) if (Math.abs(v - cand) < 8 && (best === null || Math.abs(v - cand) < Math.abs(v - best))) best = cand;
+            for (const edge of edges) for (const cand of [edge, edge - size]) if (Math.abs(v - cand) < 8 && (best === null || Math.abs(v - cand) < Math.abs(v - best))) best = cand;
             return best ?? v;
           };
-          const ex = [];
-          const ey = [];
+          const ex = [], ey = [];
           if (toGrid) {
-            const c0 = gv.cols.indexAt(ch.x);
-            const r0 = gv.rows.indexAt(ch.y);
+            const c0 = gv.cols.indexAt(nx), r0 = gv.rows.indexAt(ny);
             for (let k = -1; k <= 2; k++) { ex.push(gv.cols.pos(Math.max(0, c0 + k))); ey.push(gv.rows.pos(Math.max(0, r0 + k))); }
-            const c1 = gv.cols.indexAt(ch.x + ch.w);
-            const r1 = gv.rows.indexAt(ch.y + ch.h);
+            const c1 = gv.cols.indexAt(nx + width), r1 = gv.rows.indexAt(ny + height);
             for (let k = 0; k <= 1; k++) { ex.push(gv.cols.pos(c1 + k)); ey.push(gv.rows.pos(r1 + k)); }
           }
           if (opts.snapShape) {
-            for (const p2 of OBJECT_PROPS) for (const other of sheet()[p2] ?? []) {
-              if (other.id === ch.id) continue;
+            const ids = new Set(drag.members.map(m => m.id));
+            for (const prop of OBJECT_PROPS) for (const other of sheet()[prop] ?? []) {
+              if (ids.has(other.id) || other.hidden) continue;
               ex.push(other.x, other.x + other.w); ey.push(other.y, other.y + other.h);
             }
           }
-          ch.x = Math.max(0, Math.round(snap(ch.x, ch.w, ex)));
-          ch.y = Math.max(0, Math.round(snap(ch.y, ch.h, ey)));
+          nx = Math.max(0, Math.round(snap(nx, width, ex))); ny = Math.max(0, Math.round(snap(ny, height, ey)));
         }
+        for (const member of drag.members) { member.object.x = member.orig.x + nx - left; member.object.y = member.orig.y + ny - top; }
       } else {
         const k = drag.corner;
-        const [minW, minH] = drag.prop === 'charts' ? [120, 90] : drag.prop === 'slicers' ? [80, 56] : LINE_SHAPES.has(ch.kind) ? [0, 0] : [8, 8];
+        const [minW, minH] = drag.groupResize ? [o.w * maxOf(drag.members.map(m => (m.prop === 'slicers' ? 80 : m.prop === 'charts' ? 120 : 8) / Math.max(.001, m.orig.w))), o.h * maxOf(drag.members.map(m => (m.prop === 'slicers' ? 56 : m.prop === 'charts' ? 90 : 8) / Math.max(.001, m.orig.h)))] : drag.prop === 'charts' ? [120, 90] : drag.prop === 'slicers' ? [80, 56] : LINE_SHAPES.has(ch.kind) ? [0, 0] : [8, 8];
         let { x: nx, y: ny, w: nw, h: nh } = o;
         if (k.includes('e')) nw = o.w + dx;
         if (k.includes('s')) nh = o.h + dy;
@@ -2389,8 +2398,17 @@ function onDragMove(x, y) {
           if (k.includes('w')) nx = o.x + o.w - nw;
           if (k.includes('n')) ny = o.y + o.h - nh;
         }
-        if (nw >= minW) { ch.w = Math.round(nw); ch.x = Math.max(0, Math.round(nx)); }
-        if (nh >= minH) { ch.h = Math.round(nh); ch.y = Math.max(0, Math.round(ny)); }
+        if (drag.groupResize) {
+          nw = Math.max(minW, nw); nh = Math.max(minH, nh);
+          if (k.includes('w')) nx = o.x + o.w - nw;
+          if (k.includes('n')) ny = o.y + o.h - nh;
+          nx = Math.max(0, nx); ny = Math.max(0, ny);
+          const sx = nw / Math.max(.001, o.w), sy = nh / Math.max(.001, o.h);
+          for (const m of drag.members) Object.assign(m.object, { x: nx + (m.orig.x - o.x) * sx, y: ny + (m.orig.y - o.y) * sy, w: m.orig.w * sx, h: m.orig.h * sy });
+        } else {
+          if (nw >= minW) { ch.w = Math.round(nw); ch.x = Math.max(0, Math.round(nx)); }
+          if (nh >= minH) { ch.h = Math.round(nh); ch.y = Math.max(0, Math.round(ny)); }
+        }
       }
       drag.moved = true;
       gv.renderObjectsAll();
@@ -2459,13 +2477,16 @@ function onDragEnd() {
       break;
     }
     case 'obj': {
+      document.removeEventListener('keydown', d.escape, true);
       if (!d.moved) { if(d.singleOnClick){objMulti.clear();gv.renderObjectsAll();updateSelectionUI();selPaneDlg?.redraw?.();} break; }
-      const list = sheet()[d.prop];
-      const ch = list.find((x) => x.id === d.id);
-      if (!ch) break;
-      const final = { ...ch };
-      Object.assign(ch, d.orig);
-      wb.transact(() => wb.setSheetProp(si, d.prop, list.map((x) => (x.id === d.id ? final : { ...x }))), meta());
+      const valid = d.valid(), patches = new Map();
+      if (valid) for (const m of d.members) if (Object.keys(m.orig).some(key => m.orig[key] !== m.object[key])) {
+        if (!patches.has(m.prop)) patches.set(m.prop, new Map());
+        patches.get(m.prop).set(m.id, { ...m.object });
+      }
+      d.restore();
+      if (patches.size) wb.transact(() => { for (const [prop, changes] of patches) wb.setSheetProp(si, prop, sheet()[prop].map(o => changes.get(o.id) ?? o)); }, meta());
+      gv.renderObjectsAll(); updateSelectionUI();
       break;
     }
     case 'draw': {
@@ -3410,6 +3431,7 @@ function protectAction(cmd) {
   if (cmd === 'pasteFormats') return 'formatCells';
   if (['pictureSave', 'pictureOriginal'].includes(cmd)) return 'free';
   if (/^picture/.test(cmd)) return 'objects';
+  if (/^slicer/.test(cmd) && !['slicerClear','slicerConnections'].includes(cmd)) return 'objects';
   if (PROTECT_FREE.has(cmd)) return 'free';
   if (PROTECT_BLOCK.has(cmd)) return 'block';
   if (PROTECT_MAP[cmd]) return PROTECT_MAP[cmd];
@@ -3510,7 +3532,7 @@ function protectBlocked(action = 'cells', rg = sel, cmd = null, retry = null) {
   }
   const sh = sheet();
   if (!isProtected(sh) || action === 'free') return false;
-  if (action === 'objects' && /^picture/.test(cmd ?? '') && selectedObjects().length && selectedObjects().every(f => f.obj.locked === false)) return false;
+  if (action === 'objects' && /^(picture|slicer)/.test(cmd ?? '') && selectedObjects().length && selectedObjects().every(f => f.obj.locked === false)) return false;
   const blocked = action === 'hyperlinks' ? selectedHyperlinks().cells.some(([r, c]) => !canEditCell(r, c))
     : action === 'cells' ? anyLocked(rg) : action === 'block' || !allowed(sh, action);
   if (blocked && action === 'cells') {
@@ -7547,6 +7569,25 @@ function slicerSizeDialog(id) {
     { name: 'noMove', label: '크기 조정 및 이동 사용 안 함', type: 'checkbox', value: !!sl.noMove },
   ], values => { if (!valid()) return false; updateObject(id, slicerSizePatch(sl, values)); gv.renderObjectsAll(); updateSelectionUI(); }, { note: '크기·위치를 cm 단위로 지정합니다. 잠금은 시트 보호 중 적용됩니다.' });
 }
+function slicerSelectionSizeDialog() {
+  const list=selectedSlicers();if(!list.length)return;
+  if(list.length===1){slicerSizeDialog(list[0].id);return;}
+  if(objectEditBlocked())return;
+  const valid=slicerRibbonGuard(),version=wb.version;
+  const x=minOf(list.map(o=>o.x)),y=minOf(list.map(o=>o.y));
+  const bounds={x,y,w:maxOf(list.map(o=>o.x+o.w))-x,h:maxOf(list.map(o=>o.y+o.h))-y};
+  const cm=px=>Math.round(px*2.54/96*10000)/10000;
+  formDialog('슬라이서 그룹 크기 및 위치',[
+    ...[['w','너비(cm)'],['h','높이(cm)'],['x','가로 위치(cm)'],['y','세로 위치(cm)']].map(([name,label])=>({name,label,type:'number',value:cm(bounds[name])})),
+  ],values=>{
+    if(!valid()||wb.version!==version)return false;
+    if(objectEditBlocked())return false;
+    const next=slicerSizePatch(bounds,{...values,placement:'oneCell',locked:true,noMove:list.some(o=>o.noMove)});
+    const sx=next.w/bounds.w,sy=next.h/bounds.h;
+    if(list.some(o=>o.w*sx<80-.02||o.h*sy<56-.02))throw new Error('그룹의 각 슬라이서가 최소 너비 2.12cm, 높이 1.49cm 이상이어야 합니다.');
+    patchObjects(o=>({x:next.x+(o.x-x)*sx,y:next.y+(o.y-y)*sy,w:o.w*sx,h:o.h*sy,...(sx!==1?{buttonWidth:undefined}:{})}),['slicers']);
+  },{note:'선택한 슬라이서 전체의 크기와 위치입니다. 내부 간격과 크기 비율을 유지하며 단추 높이는 유지합니다.'});
+}
 function slicerAltDialog(id) {
   const sl = sheet().slicers?.find(o => o.id === id), valid = slicerGuard(id);
   if (!sl || !valid()) return;
@@ -7576,7 +7617,7 @@ function slicerContextMenu(id, pos) {
     item('다중 선택(M)', () => { setObjects('slicers', list => list.map(o => o.id === id ? { ...o, multi: !o.multi } : o)); gv.renderObjectsAll(); updateSelectionUI(); }, { filter: true, checked: !!sl.multi }),
     item('보고서 연결...', () => slicerConnectionsDialog(id), { filter: true, disabled: sl.source?.kind !== 'pivot' || objectDisabled, icon: 'pivot' }),
     item(`"${sl.caption ?? ''}" 제거(E)`, () => deleteObject(id), { icon: 'delete', key: 'Delete' }), { sep: true },
-    { label: '그룹화(G)', disabled: true, desc: '도형과 그림에서 지원합니다.', submenu: [{ label: '그룹화', disabled: true }, { label: '그룹 해제', disabled: true }] },
+    {label:'그룹화(G)',disabled:objectDisabled||(!canGroupSelection()&&!selectedObjects().some(f=>f.obj.objectGroup)),submenu:MENUS.objGroup()},
     { label: '맨 앞으로 가져오기(B)', disabled: objectDisabled, submenu: [item('맨 앞으로 가져오기', () => arrangeObject(id, 'front')), item('앞으로 가져오기', () => arrangeObject(id, 'forward'))] },
     { label: '맨 뒤로 보내기(K)', disabled: objectDisabled, submenu: [item('맨 뒤로 보내기', () => arrangeObject(id, 'back')), item('뒤로 보내기', () => arrangeObject(id, 'backward'))] }, { sep: true },
     item('매크로 지정(N)...', () => slicerMacroDialog(id)), item('대체 텍스트 편집...', () => slicerAltDialog(id)),
@@ -7636,17 +7677,63 @@ function slicerSettings(id) {
   });
 }
 
-/** 슬라이서 스타일 갤러리 (+ 사용자 지정 색) */
+/** 슬라이서 리본은 선택한 모든 슬라이서에 같은 변경을 한 번에 적용한다. */
+function selectedSlicers() {
+  const list=selectedObjects();
+  return list.length && list.every(f=>f.prop==='slicers') ? list.map(f=>f.obj) : [];
+}
+function slicerRibbonGuard() {
+  const book=wb,host=sheet(),ids=selectedObjects().map(f=>f.obj.id).join('|');
+  return ()=>wb===book&&sheet()===host&&selectedObjects().map(f=>f.obj.id).join('|')===ids;
+}
+function setSlicerDimension(kind,value) {
+  const list=selectedSlicers();if(!list.length)return;
+  try {
+    const patches=new Map();
+    if(kind==='w'||kind==='h') {
+      for(const unit of selectedObjectUnits()) {
+        if(unit.members.length===1) {const sl=unit.members[0].obj;patches.set(sl.id,slicerDimensionPatch(sl,kind,value));continue;}
+        const size=slicerDimensionPatch({...unit,noMove:unit.members.some(f=>f.obj.noMove)},kind,value)[kind];
+        if(size===undefined)continue;
+        const scale=size/unit[kind],horizontal=kind==='w',pos=horizontal?'x':'y',min=horizontal?80:56;
+        if(unit.members.some(f=>f.obj[kind]*scale<min-.02))throw new Error('그룹의 각 슬라이서가 최소 너비 2.12cm, 높이 1.49cm 이상이어야 합니다.');
+        for(const {obj} of unit.members)patches.set(obj.id,{[kind]:obj[kind]*scale,[pos]:unit[pos]+(obj[pos]-unit[pos])*scale,...(horizontal?{buttonWidth:undefined}:{})});
+      }
+    } else for(const sl of list)patches.set(sl.id,slicerDimensionPatch(sl,kind,value));
+    patchObjects(o=>patches.get(o.id),['slicers']);
+  } catch(error) { toast(error.message); }
+  updateRibbon();
+}
+function slicerStyleChip(style,apply,selected=false) {
+  const c=style.colors;
+  return el('button',{type:'button',class:`style-chip slstyle slicer-style-preview${selected?' selected':''}`,title:style.label,'aria-label':style.label,'aria-pressed':String(selected),'data-access-key':'none','data-slicer-style':style.name,
+    onmousedown:e=>e.preventDefault(),onclick:()=>apply(style.name),style:{background:c.frame,borderColor:c.border}},
+    el('span',{class:'sl-preview-head',style:{color:c.head,borderColor:c.headLine??c.border}},'▰'),
+    ...[true,true,false,true,false].map(on=>el('i',{style:{background:on?(c.selGrad??c.selFill):(c.itemGrad??c.item),borderColor:on?c.selBorder:c.itemBorder,color:on?c.selText:c.itemText}},'━')));
+}
+function slicerStyleChoices() {
+  return [...SLICER_STYLES.filter(s=>/^SlicerStyle/.test(s.name)),...SLICER_STYLES.filter(s=>!/^SlicerStyle/.test(s.name))];
+}
+function slicerRibbonGallery() {
+  const list=selectedSlicers(),valid=slicerRibbonGuard();
+  return slicerStyleChoices().map(style=>slicerStyleChip(style,name=>{if(valid())patchObjects({style:name,color:undefined,custom:undefined},['slicers']);},list.length>0&&list.every(sl=>slicerStyleName(sl)===style.name&&!sl.custom)));
+}
+/** 전체 스타일 갤러리: 현재 선택 표시, 방향키 이동, 선택된 슬라이서 모두 적용. */
 function slicerStyleGallery(anchorEl) {
-  const sl = (sheet().slicers ?? []).find((x) => x.id === chartSel);
-  if (!sl) { toast('슬라이서를 선택하세요.'); return; }
-  const chip = (s) => el('button', {
-    class: 'style-chip slstyle', title: s.label, onmousedown: (e) => e.preventDefault(),
-    style: { background: s.colors.frame, borderColor: s.colors.border },
-    onclick: () => { closeMenus(); updateObject(sl.id, { style: s.name, color: undefined, custom: undefined }); gv.renderObjectsAll(); },
-  }, el('i', { style: { background: s.colors.selFill, borderColor: s.colors.selBorder } }), el('i', { style: { background: s.colors.item, borderColor: s.colors.itemBorder } }));
-  const groups = SLICER_STYLE_GROUPS.flatMap((g) => [{ title: g }, { node: el('div', { class: 'style-grid slstyles' }, SLICER_STYLES.filter((s) => s.group === g).map(chip)) }]);
-  openMenu(anchorEl ?? { x: 200, y: 160 }, [...groups, { sep: true }, { label: '새 슬라이서 스타일 (색 · 선 사용자 지정)...', action: () => slicerCustomDialog(sl.id) }], { scroll: true });
+  const list=selectedSlicers(),valid=slicerRibbonGuard();
+  if(!list.length){toast('슬라이서를 선택하세요.');return;}
+  const choices=slicerStyleChoices(),groupNames=[...new Set(choices.map(s=>s.group))],buttons=[];
+  const apply=name=>{if(!valid())return;closeMenus();patchObjects({style:name,color:undefined,custom:undefined},['slicers']);focusGrid();};
+  const groups=groupNames.flatMap(g=>[{title:g},{node:el('div',{class:'style-grid slstyles'},choices.filter(s=>s.group===g).map(style=>{const b=slicerStyleChip(style,apply,list.every(sl=>slicerStyleName(sl)===style.name&&!sl.custom));b.disabled=list.some(sl=>slicerBlocked(sl,'objects',true));buttons.push(b);return b;}))}]);
+  const menu=openMenu(anchorEl??{x:200,y:160},[...groups,{sep:true},{label:'새 슬라이서 스타일 (색 · 선 사용자 지정)...',disabled:list.length!==1||slicerBlocked(list[0],'objects',true),action:()=>{if(valid())slicerCustomDialog(list[0].id);}}],{scroll:true});
+  menu.classList.add('slicer-style-menu');
+  menu.addEventListener('keydown',e=>{
+    const at=buttons.indexOf(e.target);if(at<0||!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(e.key))return;
+    e.preventDefault();e.stopPropagation();const cols=getComputedStyle(e.target.parentElement).gridTemplateColumns.split(' ').length||6;
+    const i=e.key==='Home'?0:e.key==='End'?buttons.length-1:Math.max(0,Math.min(buttons.length-1,at+({ArrowLeft:-1,ArrowRight:1,ArrowUp:-cols,ArrowDown:cols}[e.key])));
+    buttons[i]?.focus();buttons[i]?.scrollIntoView({block:'nearest'});
+  });
+  buttons.find(b=>b.getAttribute('aria-pressed')==='true'&&!b.disabled)?.focus();
 }
 
 function slicerCustomDialog(id) {
@@ -8990,22 +9077,25 @@ function addObject(prop, obj) {
 }
 
 function deleteObject(id) {
-  const f = findObject(sheet(), id);
-  if (viewOnly || wb.props?.markedFinal || (f?.obj.locked !== false && protectBlocked('objects'))) return;
-  if (f) setObjects(f.prop, (list) => list.filter((o) => o.id !== id));
-  chartSel = null;
-  updateSelectionUI();
+  const first=findObject(sheet(),id),list=id===chartSel?selectedObjects():first?[first]:[];
+  if(!list.length||viewOnly||wb.props?.markedFinal||list.some(f=>f.obj.locked!==false)&&protectBlocked('objects'))return;
+  const ids=new Set(list.map(f=>f.obj.id));
+  wb.transact(()=>{for(const prop of new Set(list.map(f=>f.prop)))wb.setSheetProp(si,prop,sheet()[prop].filter(o=>!ids.has(o.id)));},meta());
+  chartSel=null;objMulti.clear();gv.renderObjectsAll();updateSelectionUI();
 }
-
-function nudgeObject(id, dx, dy) {
-  const f = findObject(sheet(), id);
-  if (f && !f.obj.noMove) updateObject(id, { x: Math.max(0, f.obj.x + dx), y: Math.max(0, f.obj.y + dy) });
+function nudgeObject(id,dx,dy) {
+  const list=id===chartSel?selectedObjects():[];
+  if(!list.length||list.some(f=>f.obj.noMove))return;
+  const mx=Math.max(dx,-minOf(list.map(f=>f.obj.x))),my=Math.max(dy,-minOf(list.map(f=>f.obj.y)));
+  patchObjects(o=>({x:o.x+mx,y:o.y+my}));
 }
 
 function copyObject(id, cut) {
   const f = findObject(sheet(), id);
   if (!f || (cut && (viewOnly || wb.props?.markedFinal || (f.obj.locked !== false && protectBlocked('objects'))))) return;
-  objClip = { prop: f.prop, obj: structuredClone(f.obj), n: 0, text: '' };
+  const list=id===chartSel?selectedObjects():[f];
+  if(cut&&list.some(f=>f.obj.locked!==false)&&protectBlocked('objects'))return;
+  objClip = { prop:f.prop,obj:structuredClone(f.obj),entries:list.length>1?list.map(f=>({prop:f.prop,obj:structuredClone(f.obj)})):undefined,n:0,text:'' };
   if (f.prop === 'images' && navigator.clipboard?.write && typeof ClipboardItem === 'function') {
     // Queue the clipboard promise inside the user gesture; keep the editable
     // internal copy even if this browser denies the system clipboard request.
@@ -9020,6 +9110,18 @@ function pasteObject() {
   if (!objClip || viewOnly || wb.props?.markedFinal || protectBlocked('objects')) return;
   objClip.n++;
   const d = objClip.n * 12;
+  if(objClip.entries){
+    const groups=new Map(),added=[],names=new Set(wb.sheets.flatMap(s=>(s.slicers??[]).map(o=>o.name||o.caption||'')));
+    let z=nextZ();
+    for(const entry of objClip.entries){
+      const o={...structuredClone(entry.obj),id:newObjId(entry.prop==='slicers'?'sl':'obj'),z:z++};o.x+=d;o.y+=d;
+      if(o.objectGroup){if(!groups.has(o.objectGroup))groups.set(o.objectGroup,newObjId('slgrp'));o.objectGroup=groups.get(o.objectGroup);}
+      if(entry.prop==='slicers'){const base=o.name||o.caption||'슬라이서';let name=base,n=2;while(names.has(name))name=base+' '+n++;names.add(name);o.name=name;}
+      added.push({prop:entry.prop,obj:o});
+    }
+    wb.transact(()=>{for(const prop of new Set(added.map(f=>f.prop)))wb.setSheetProp(si,prop,[...(sheet()[prop]??[]),...added.filter(f=>f.prop===prop).map(f=>f.obj)]);},meta());
+    chartSel=added[0].obj.id;objMulti.clear();for(const f of added.slice(1))objMulti.add(f.obj.id);gv.renderObjectsAll();updateSelectionUI();return;
+  }
   const o = { ...structuredClone(objClip.obj), id: newObjId({ charts: 'ch', images: 'im', slicers: 'sl' }[objClip.prop] ?? 'sh'), z: undefined };
   o.x += d;
   o.y += d;
@@ -10011,19 +10113,29 @@ function shapeGallery(pick, noLines = false) {
 /** 개체 겹치는 순서: 맨 앞 · 앞으로 · 뒤로 · 맨 뒤 (차트 · 그림 · 도형 · 슬라이서 공통) */
 function arrangeObject(id, how) {
   if(objectEditBlocked()) return;
-  const s=sheet(),selected=new Set([id,...(id===chartSel?objMulti:[])]);
+  const s=sheet(),selected=new Set(id===chartSel?selectedObjects().map(f=>f.obj.id):[id]);
   const all=OBJECT_PROPS.flatMap(p=>(s[p]??[]).map(o=>({p,o}))).sort((a,b)=>(a.o.z??0)-(b.o.z??0));
-  let ordered=all;
+  // 살아 있는 슬라이서는 각 배열에 유지하되 겹치는 순서는 Excel grpSp와 같은 한 단위로 옮긴다.
+  const groups=new Map(),units=[];
+  for(let index=0;index<all.length;index++) {
+    const entry=all[index],key=entry.p==='slicers'?entry.o.objectGroup:null;
+    let unit=key?groups.get(key):null;
+    if(!unit){unit={members:[],top:index,selected:false};units.push(unit);if(key)groups.set(key,unit);}
+    unit.members.push(entry);unit.top=index;unit.selected ||= selected.has(entry.o.id);
+  }
+  units.sort((a,b)=>a.top-b.top);
+  let ordered=units;
   if(how==='front'||how==='back') {
-    const chosen=all.filter(x=>selected.has(x.o.id)),rest=all.filter(x=>!selected.has(x.o.id));
+    const chosen=units.filter(u=>u.selected),rest=units.filter(u=>!u.selected);
     ordered=how==='front'?[...rest,...chosen]:[...chosen,...rest];
   } else if(how==='forward') {
-    for(let i=all.length-2;i>=0;i--) if(selected.has(all[i].o.id)&&!selected.has(all[i+1].o.id)) [all[i],all[i+1]]=[all[i+1],all[i]];
+    for(let i=units.length-2;i>=0;i--) if(units[i].selected&&!units[i+1].selected) [units[i],units[i+1]]=[units[i+1],units[i]];
   } else {
-    for(let i=1;i<all.length;i++) if(selected.has(all[i].o.id)&&!selected.has(all[i-1].o.id)) [all[i],all[i-1]]=[all[i-1],all[i]];
+    for(let i=1;i<units.length;i++) if(units[i].selected&&!units[i-1].selected) [units[i],units[i-1]]=[units[i-1],units[i]];
   }
-  const zOf=new Map(ordered.map((x,k)=>[x.o.id,k+1]));
-  wb.transact(()=>{for(const p of OBJECT_PROPS)if(s[p]?.length)wb.setSheetProp(si,p,s[p].map(o=>({...o,z:zOf.get(o.id)})));},meta());
+  const zOf=new Map();let z=0;
+  for(const unit of ordered)for(const entry of unit.members)zOf.set(entry.o.id,++z);
+  wb.transact(()=>{for(const prop of OBJECT_PROPS)if(s[prop]?.some(o=>o.z!==zOf.get(o.id)))wb.setSheetProp(si,prop,s[prop].map(o=>o.z===zOf.get(o.id)?o:{...o,z:zOf.get(o.id)}));},meta());
   gv.renderObjectsAll();
 }
 
@@ -10206,7 +10318,10 @@ const objMulti = new Set(); // Ctrl/Shift+클릭으로 함께 고른 개체 (cha
 /** 고른 개체들 → [{ prop, obj }] (기준 개체가 처음) */
 function selectedObjects() {
   const s = sheet();
-  return [...new Set([chartSel, ...objMulti])].filter(Boolean).map((id) => findObject(s, id)).filter(Boolean);
+  const picked=[...new Set([chartSel,...objMulti])].filter(Boolean).map(id=>findObject(s,id)).filter(Boolean);
+  const groups=new Set(picked.filter(f=>f.prop==='slicers'&&f.obj.objectGroup).map(f=>f.obj.objectGroup)),ids=new Set(picked.map(f=>f.obj.id));
+  for(const obj of s.slicers??[])if(groups.has(obj.objectGroup)&&!ids.has(obj.id)){picked.push({prop:'slicers',obj});ids.add(obj.id);}
+  return picked;
 }
 
 /** 고른 개체 모두 바꾸기 (patch 또는 (obj, prop) => patch) — 한 번의 실행 취소 */
@@ -10234,8 +10349,27 @@ function objectEditBlocked() {
   if (viewOnly || wb.props?.markedFinal) { toast('편집 가능한 문서에서 개체를 변경하세요.'); return true; }
   return selectedObjects().some(f => f.obj.locked !== false) && protectBlocked('objects');
 }
+function canGroupSelection() {
+  const list=selectedObjects();
+  if(list.length<2)return false;
+  if(list.every(f=>f.prop==='slicers'))return new Set(list.map(f=>f.obj.objectGroup||f.obj.id)).size>1;
+  return list.every(f=>['shapes','images'].includes(f.prop));
+}
 function groupSelectedObjects() {
   const list=selectedObjects().sort((a,b)=>(a.obj.z??0)-(b.obj.z??0));
+  if(list.length>1&&list.every(f=>f.prop==='slicers')){
+    if(!canGroupSelection()||objectEditBlocked())return;
+    const host=sheet(),ids=new Set(list.map(f=>f.obj.id)),objectGroup=newObjId('slgrp');
+    const all=OBJECT_PROPS.flatMap(prop=>(host[prop]??[]).map(obj=>({prop,obj}))).sort((a,b)=>(a.obj.z??0)-(b.obj.z??0));
+    const members=all.filter(f=>ids.has(f.obj.id)),top=members[members.length-1].obj.id,ordered=[];
+    for(const entry of all) {
+      if(!ids.has(entry.obj.id))ordered.push(entry);
+      else if(entry.obj.id===top)for(const member of members)ordered.push(member);
+    }
+    const zOf=new Map(ordered.map((f,index)=>[f.obj.id,index+1]));
+    wb.transact(()=>{for(const prop of OBJECT_PROPS)if(host[prop]?.some(o=>ids.has(o.id)||o.z!==zOf.get(o.id)))wb.setSheetProp(si,prop,host[prop].map(o=>ids.has(o.id)?{...o,objectGroup,z:zOf.get(o.id)}:o.z===zOf.get(o.id)?o:{...o,z:zOf.get(o.id)}));},meta());
+    objMulti.clear();gv.renderObjectsAll();updateSelectionUI();return;
+  }
   if(list.length<2) { toast('Ctrl을 누른 채 도형·그림을 두 개 이상 선택하세요.'); return; }
   if(list.some(f=>!['shapes','images'].includes(f.prop))) { toast('도형과 그림을 그룹화할 수 있습니다. 차트·슬라이서는 따로 선택하세요.'); return; }
   if(objectEditBlocked()) return;
@@ -10285,6 +10419,13 @@ function convertSelectedSvg() {
   toast('편집 가능한 도형 그룹으로 변환했습니다. 그룹 해제로 각 부분을 편집할 수 있습니다.');
 }
 function ungroupSelectedObjects() {
+  const selected=selectedObjects(),grouped=selected.filter(f=>f.prop==='slicers'&&f.obj.objectGroup);
+  if(grouped.length){
+    if(objectEditBlocked())return;
+    patchObjects({objectGroup:undefined},['slicers']);
+    objMulti.clear();for(const f of selected)if(f.obj.id!==chartSel)objMulti.add(f.obj.id);
+    gv.renderObjectsAll();updateSelectionUI();return;
+  }
   const list=selectedObjects().filter(f=>f.obj.kind==='group'||canConvertSvg(f));
   if(!list.length) { toast('그룹화된 개체나 SVG 아이콘을 선택하세요.'); return; }
   if(objectEditBlocked()) return;
@@ -10335,41 +10476,53 @@ function shapeMergeItems() {
   ].map(([label,op,desc])=>({label,desc,disabled,action:()=>mergeSelectedShapes(op)}));
 }
 
-/** 맞춤 · 배분 (여러 개체: 선택 영역 기준, 하나: 보이는 화면 기준이 아니라 격자(셀)에 맞춤) */
+/** 함께 묶인 슬라이서는 맞춤/배분에서도 하나의 외곽 사각형으로 취급한다. */
+function selectedObjectUnits(list = selectedObjects()) {
+  const groups = new Map(), units = [];
+  for (const f of list) {
+    const key = f.obj.objectGroup;
+    let unit = key ? groups.get(key) : null;
+    if (!unit) { unit = { members: [] }; units.push(unit); if (key) groups.set(key, unit); }
+    unit.members.push(f);
+  }
+  for (const unit of units) {
+    unit.x = minOf(unit.members.map(f => f.obj.x)); unit.y = minOf(unit.members.map(f => f.obj.y));
+    unit.w = maxOf(unit.members.map(f => f.obj.x + f.obj.w)) - unit.x;
+    unit.h = maxOf(unit.members.map(f => f.obj.y + f.obj.h)) - unit.y;
+  }
+  return units;
+}
+
+/** 맞춤 · 배분: 여러 그룹은 선택 영역 기준, 한 그룹의 셀 맞춤은 내부 간격을 보존한다. */
 function alignObjects(how) {
   const list = selectedObjects();
-  if (!list.length) return;
+  if (!list.length || objectEditBlocked()) return;
+  if (list.some(f => f.obj.noMove)) { toast('크기 조정 및 이동이 제한된 개체가 포함되어 맞춤을 적용할 수 없습니다.'); return; }
+  const units = selectedObjectUnits(list), changes = new Map();
+  const put = (unit, x, y) => { for (const f of unit.members) changes.set(f.obj.id, { x: f.obj.x + x - unit.x, y: f.obj.y + y - unit.y }); };
   if (how === 'grid') {
     gv.refreshAxes();
-    patchObjects((o) => {
-      const c = gv.cols.indexAt(o.x); const r = gv.rows.indexAt(o.y);
-      const x = gv.cols.pos(o.x - gv.cols.pos(c) > gv.cols.size(c) / 2 ? c + 1 : c);
-      const y = gv.rows.pos(o.y - gv.rows.pos(r) > gv.rows.size(r) / 2 ? r + 1 : r);
-      return { x, y };
-    });
-    return;
+    for (const unit of units) {
+      const c = gv.cols.indexAt(unit.x), r = gv.rows.indexAt(unit.y);
+      put(unit, gv.cols.pos(unit.x - gv.cols.pos(c) > gv.cols.size(c) / 2 ? c + 1 : c), gv.rows.pos(unit.y - gv.rows.pos(r) > gv.rows.size(r) / 2 ? r + 1 : r));
+    }
+  } else {
+    const distribute = how === 'distH' || how === 'distV';
+    if (units.length < (distribute ? 3 : 2)) { toast(distribute ? '배분: 개체 또는 그룹을 세 개 이상 고르세요.' : '맞춤: 개체 또는 그룹을 두 개 이상 고르세요 (Ctrl 또는 Shift+클릭).'); return; }
+    const L = minOf(units.map(u => u.x)), T = minOf(units.map(u => u.y)), R = maxOf(units.map(u => u.x + u.w)), B = maxOf(units.map(u => u.y + u.h));
+    if (distribute) {
+      const horizontal = how === 'distH', sorted = [...units].sort((a, b) => horizontal ? a.x - b.x : a.y - b.y);
+      const total = sorted.reduce((sum, u) => sum + (horizontal ? u.w : u.h), 0), gap = ((horizontal ? R - L : B - T) - total) / (sorted.length - 1);
+      let pos = horizontal ? L : T;
+      for (const unit of sorted) { put(unit, horizontal ? Math.round(pos) : unit.x, horizontal ? unit.y : Math.round(pos)); pos += (horizontal ? unit.w : unit.h) + gap; }
+    } else {
+      for (const unit of units) {
+        const xy = { left: [L, unit.y], center: [Math.round((L + R - unit.w) / 2), unit.y], right: [R - unit.w, unit.y], top: [unit.x, T], middle: [unit.x, Math.round((T + B - unit.h) / 2)], bottom: [unit.x, B - unit.h] }[how];
+        if (xy) put(unit, xy[0], xy[1]);
+      }
+    }
   }
-  if (list.length < 2 && !how.startsWith('dist')) { toast('맞춤: 개체를 두 개 이상 고르세요 (Ctrl 또는 Shift+클릭).'); return; }
-  const L = minOf(list.map((f) => f.obj.x));
-  const T = minOf(list.map((f) => f.obj.y));
-  const R = maxOf(list.map((f) => f.obj.x + f.obj.w));
-  const B = maxOf(list.map((f) => f.obj.y + f.obj.h));
-  if (how === 'distH' || how === 'distV') {
-    if (list.length < 3) { toast('배분: 개체를 세 개 이상 고르세요.'); return; }
-    const h = how === 'distH';
-    const sorted = [...list].sort((a, b) => (h ? a.obj.x - b.obj.x : a.obj.y - b.obj.y));
-    const total = sorted.reduce((a, f) => a + (h ? f.obj.w : f.obj.h), 0);
-    const gap = ((h ? R - L : B - T) - total) / (sorted.length - 1);
-    let p = h ? L : T;
-    const pos = new Map();
-    for (const f of sorted) { pos.set(f.obj.id, Math.round(p)); p += (h ? f.obj.w : f.obj.h) + gap; }
-    patchObjects((o) => (h ? { x: pos.get(o.id) } : { y: pos.get(o.id) }));
-    return;
-  }
-  patchObjects((o) => ({
-    left: { x: L }, center: { x: Math.round((L + R) / 2 - o.w / 2) }, right: { x: R - o.w },
-    top: { y: T }, middle: { y: Math.round((T + B) / 2 - o.h / 2) }, bottom: { y: B - o.h },
-  }[how]));
+  patchObjects(o => changes.get(o.id));
 }
 
 function rotateObjects(how) {
@@ -17509,21 +17662,24 @@ const MENUS = {
   textEffects: (a) => { textEffectsMenu(a); },
   objForward: () => [{ label: '앞으로 가져오기', icon: 'bringForward', action: () => chartSel && arrangeObject(chartSel, 'forward') }, { label: '맨 앞으로 가져오기', icon: 'bringForward', action: () => chartSel && arrangeObject(chartSel, 'front') }],
   objBackward: () => [{ label: '뒤로 보내기', icon: 'sendBackward', action: () => chartSel && arrangeObject(chartSel, 'backward') }, { label: '맨 뒤로 보내기', icon: 'sendBackward', action: () => chartSel && arrangeObject(chartSel, 'back') }],
-  objAlign: () => [
-    // 엑셀: 개체를 두 개 이상 골라야 맞춤, 세 개 이상이어야 간격 동일
-    ...[['왼쪽 맞춤', 'left'], ['가운데 맞춤', 'center'], ['오른쪽 맞춤', 'right'], null, ['위쪽 맞춤', 'top'], ['중간 맞춤', 'middle'], ['아래쪽 맞춤', 'bottom']]
-      .map((x) => (x ? { label: x[0], disabled: selectedObjects().length < 2, action: () => alignObjects(x[1]) } : { sep: true })),
-    { sep: true }, { label: '가로 간격을 동일하게', disabled: selectedObjects().length < 3, action: () => alignObjects('distH') }, { label: '세로 간격을 동일하게', disabled: selectedObjects().length < 3, action: () => alignObjects('distV') },
-    { sep: true },
-    { label: '눈금에 맞춤', icon: 'table', checked: !!opts.snapGrid, desc: '개체를 옮길 때 셀 경계에 붙입니다. (꺼져 있을 때는 Alt 를 누른 채 끌면 붙음)', action: () => { opts.snapGrid = !opts.snapGrid; saveOptions(); } },
-    { label: '도형에 맞추기', checked: !!opts.snapShape, desc: '개체를 옮길 때 다른 도형 · 차트 · 그림의 가장자리에 붙입니다.', action: () => { opts.snapShape = !opts.snapShape; saveOptions(); } },
-    { label: '눈금선 보기', icon: 'gridlines', checked: !sheet().noGrid, action: () => run('toggleGrid') },
-    { sep: true }, { label: '선택한 개체를 셀 경계에 맞춤', action: () => alignObjects('grid') },
-  ],
+  objAlign: () => {
+    const list=selectedObjects(),count=selectedObjectUnits(list).length;
+    const disabled=!list.length||viewOnly||!!wb.props?.markedFinal||list.some(f=>f.obj.noMove||(isProtected(sheet())&&f.obj.locked!==false&&!allowed(sheet(),'objects')));
+    return [
+      ...[['왼쪽 맞춤(L)','left'],['가운데 맞춤(C)','center'],['오른쪽 맞춤(R)','right'],null,['위쪽 맞춤(T)','top'],['중간 맞춤(M)','middle'],['아래쪽 맞춤(B)','bottom']]
+        .map(x=>x?{label:x[0],disabled:disabled||count<2,action:()=>alignObjects(x[1])}:{sep:true}),
+      {sep:true},{label:'가로 간격을 동일하게(H)',disabled:disabled||count<3,action:()=>alignObjects('distH')},{label:'세로 간격을 동일하게(V)',disabled:disabled||count<3,action:()=>alignObjects('distV')},
+      {sep:true},
+      {label:'눈금에 맞춤(P)',icon:'table',checked:!!opts.snapGrid,desc:'개체를 옮길 때 셀 경계에 붙입니다. (꺼져 있을 때는 Alt를 누른 채 끌면 붙음)',action:()=>{opts.snapGrid=!opts.snapGrid;saveOptions();}},
+      {label:'도형에 맞추기(S)',checked:!!opts.snapShape,desc:'개체를 옮길 때 다른 도형 · 차트 · 그림의 가장자리에 붙입니다.',action:()=>{opts.snapShape=!opts.snapShape;saveOptions();}},
+      {label:'눈금선 보기(G)',icon:'gridlines',checked:!sheet().noGrid,action:()=>run('toggleGrid')},
+      {sep:true},{label:'선택한 개체를 셀 경계에 맞춤',disabled,action:()=>alignObjects('grid')},
+    ];
+  },
   shapeMerge: shapeMergeItems,
   objGroup: () => [
-    {label:'그룹화(G)',disabled:selectedObjects().length<2,action:()=>groupSelectedObjects()},
-    {label:'그룹 해제(U)',disabled:!selectedObjects().some(f=>f.obj.kind==='group'||canConvertSvg(f)),action:()=>ungroupSelectedObjects()},
+    {label:'그룹화(G)',disabled:!canGroupSelection(),action:()=>groupSelectedObjects()},
+    {label:'그룹 해제(U)',disabled:!selectedObjects().some(f=>f.obj.objectGroup||f.obj.kind==='group'||canConvertSvg(f)),action:()=>ungroupSelectedObjects()},
   ],
   objRotate: () => [
     { label: '오른쪽으로 90도 회전', icon: 'rotate', action: () => rotateObjects('r90') }, { label: '왼쪽으로 90도 회전', action: () => rotateObjects('l90') },
@@ -18509,8 +18665,11 @@ const COMMANDS = {
   pvColHeaders: () => pivotStyleOpt('colHeaders'),
   pvBandRows: () => pivotStyleOpt('bandRows'),
   pvBandCols: () => pivotStyleOpt('bandCols'),
-  slicerBtnH: (v) => { if (chartSel) updateObject(chartSel, { buttonHeight: clamp(Number(v) || 24, 10, 120) }); },
-  slicerBtnW: (v) => { if (chartSel) { updateObject(chartSel, { buttonWidth: Number(v) > 0 ? clamp(Number(v), 10, 600) : undefined }); gv.renderObjectsAll(); } },
+  slicerBtnH: v => setSlicerDimension('buttonHeight',v),
+  slicerBtnW: v => setSlicerDimension('buttonWidth',v),
+  slicerH: v => setSlicerDimension('h',v),
+  slicerW: v => setSlicerDimension('w',v),
+  slicerSize: slicerSelectionSizeDialog,
   slicerGap: (v) => { if (chartSel && v !== '') { updateObject(chartSel, { gap: clamp(Number(v) || 0, 0, 30) }); gv.renderObjectsAll(); } },
   slicerHeader: () => { const sl = (sheet().slicers ?? []).find((x) => x.id === chartSel); if (sl) updateObject(sl.id, { showHeader: sl.showHeader === false ? undefined : false }); },
   pivotRefresh: () => refreshPivots(),
@@ -18538,11 +18697,11 @@ const COMMANDS = {
   createTable: () => createTableDialog(),
   insertSlicer: insertSlicerDialog,
   insertTimeline: insertTimelineDialog,
-  slicerCaption: (v) => { if (chartSel) updateObject(chartSel, { caption: String(v ?? '') }); },
-  slicerCols: (v) => { if (chartSel) updateObject(chartSel, { columns: clamp(Number(v) || 1, 1, 20) }); },
+  slicerCaption: v => {if(selectedSlicers().length===1)patchObjects({caption:String(v??'')},['slicers']);},
+  slicerCols: v => setSlicerDimension('columns',v),
   slicerClear: () => { if (chartSel) slicerClear(chartSel); },
   slicerMulti: () => { const sl = (sheet().slicers ?? []).find((x) => x.id === chartSel); if (sl) updateObject(sl.id, { multi: !sl.multi }); },
-  slicerSettings: () => { if (chartSel) slicerSettings(chartSel); },
+  slicerSettings: () => { if (selectedSlicers().length===1) slicerSettings(chartSel); },
   tblName: (v) => renameTable(v),
   resizeTable: resizeTableDialog,
   convertToRange: convertTableToRange,
@@ -18643,6 +18802,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileFit','toggleR
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['슬라이서 리본과 크기', ['스타일 견본·페이지 탐색, cm 단위 단추·전체 크기, 여러 슬라이서 서식과 맞춤을 보강했습니다.']],
   ['피벗 필터 검색과 선택', ['검색 목록 안의 [필터에 현재 선택한 내용 추가]로 기존 선택과 검색 결과를 합칩니다. 끄면 검색 선택만 적용합니다.', '와일드카드 검색·검색 지우기·방향키 이동·한글 Enter 보호·빈 결과 확인 차단을 보강하고, 보고서 필터의 다중 선택 모드를 XLSX에도 보존합니다.']],
   ['슬라이서·피벗·차트 우클릭', ['슬라이서 새로 고침·보고서 연결·순서·대체 텍스트·크기와 속성을 바로 설정합니다.', '피벗의 선택한 값 필드에 요약·표시 형식·정렬을 적용하고 세부 정보·옵션·필드 설정을 엽니다.']],
   ['차트 영역 서식', ['차트와 그림 영역의 채우기·테두리·그림자·네온·부드러운 가장자리·입체 서식을 구분해 편집합니다.', '차트 서식 파일(.crtx)을 저장하거나 적용하고, 원본 데이터와 실행 취소를 유지합니다.']],
@@ -18930,17 +19090,28 @@ function tableRibbonState() {
   const context = [...(t ? ['table'] : []), ...(sl ? ['slicer'] : []), ...(pv ? ['pivot'] : []), ...(sg ? ['spark'] : []),
     ...(obj && obj.prop === 'charts' ? ['chart'] : []), ...(obj?.prop === 'images' ? ['picture'] : obj && obj.prop !== 'slicers' ? ['object'] : [])];
   const so = { rowHeaders: true, colHeaders: true, bandRows: false, bandCols: false, ...(pv?.def.styleOpts ?? {}) };
+  const slicers=sl?selectedSlicers():[],dims=slicers.map(slicerDimensions);
+  const sizeUnits=slicers.length?selectedObjectUnits():[];
+  const sameValue=key=>{const values=key==='w'||key==='h'?sizeUnits:dims;return values.length&&values.every(d=>Math.abs(d[key]-values[0][key])<.005)?String(key==='columns'?values[0][key]:Math.round(values[0][key]*2.54/96*100)/100):'';};'';
+  const slicerEditDisabled=!slicers.length||slicers.some(sl=>slicerBlocked(sl,'objects',true));
   const base = {
+    slicerInputKey:sl?.id??'',slicerEditDisabled,slicerSingleDisabled:slicerEditDisabled||slicers.length!==1,
+    slicerResizeDisabled:slicerEditDisabled||slicers.some(sl=>sl.noMove),slicerUnsupported:true,
+    slicerGroupDisabled:slicerEditDisabled||(!canGroupSelection()&&!slicers.some(sl=>sl.objectGroup)),
+    slicerConnectionsDisabled:slicerEditDisabled||slicers.length!==1||sl?.source?.kind!=='pivot'||!!(sl&&slicerBlocked(sl,'filter',true)),
+    slicerFilterDisabled:slicers.length!==1||!!(sl&&slicerBlocked(sl,'filter',true)),
+    slicerGalleryKey:sl?`${slicers.map(o=>o.id).join('|')}|${wb.version}`:'',
+    slicerH:sameValue('h'),slicerW:sameValue('w'),
     pictureH: obj?.prop === 'images' ? String(Math.round(obj.obj.h / 96 * 2.54 * 100) / 100) : '',
     pictureW: obj?.prop === 'images' ? String(Math.round(obj.obj.w / 96 * 2.54 * 100) / 100) : '',
     pictureLockAspect: obj?.prop === 'images' && obj.obj.lockAspect !== false,
     pictureGalleryKey: obj?.prop === 'images' ? `${obj.obj.id}|${wb.version}` : '',
-    context, slicerCaption: sl?.caption ?? '', slicerCols: String(sl?.columns ?? 1), slicerMultiOn: !!sl?.multi,
+    context, slicerCaption: slicers.length===1?sl.caption??'':'', slicerCols:sameValue('columns'), slicerMultiOn:!!sl?.multi,
     objH: obj ? String(Math.round(obj.obj.h)) : '', objW: obj ? String(Math.round(obj.obj.w)) : '', objRot: obj ? String(obj.obj.rot ?? 0) : '',
-    slicerFontSize: sl?.fontSize ? String(sl.fontSize) : '', slicerHeadSize: sl?.headSize ? String(sl.headSize) : '', slicerBtnW: String(sl?.buttonWidth ?? 0), slicerGap: String(sl?.gap ?? 3), slicerBoldOn: !!sl?.bold,
+    slicerFontSize: sl?.fontSize ? String(sl.fontSize) : '', slicerHeadSize: sl?.headSize ? String(sl.headSize) : '', slicerBtnW:sameValue('buttonWidth'), slicerGap: String(sl?.gap ?? 3), slicerBoldOn: !!sl?.bold,
     chartFieldButtons: obj?.prop === 'charts' && !!obj.obj.pivot && obj.obj.fieldButtons !== false,
     chartGalleryKey: obj?.prop === 'charts' ? `${obj.obj.id}|${wb.version}` : '',
-    slicerBtnH: String(sl?.buttonHeight ?? 24), slicerHeaderOn: sl ? sl.showHeader !== false : false,
+    slicerBtnH:sameValue('buttonHeight'), slicerHeaderOn: sl ? sl.showHeader !== false : false,
     sparkIsLine: sg?.type === 'line', sparkIsColumn: sg?.type === 'column', sparkIsWinLoss: sg?.type === 'winloss',
     sparkHigh: !!sg?.high, sparkLow: !!sg?.low, sparkNegative: !!sg?.negative, sparkFirst: !!sg?.first, sparkLast: !!sg?.last, sparkMarkers: !!sg?.markers,
     sheetProtected: isProtected(sheet()), bookProtected: !!wb.props?.lockStructure, pivotName: pv ? pivotNameOf(pv) : '', pvShowExpand: pv ? pv.def.showExpand !== false : false, pvRowHeaders: so.rowHeaders, pvColHeaders: so.colHeaders, pvBandRows: so.bandRows, pvBandCols: so.bandCols,
@@ -19305,7 +19476,7 @@ async function init() {
   hydrateIcons();
   gv = new GridView({
     state: () => ({
-      wb, si, sel, selKind, active, editing: !!editing, readonly: viewOnly, clip, fillPreview, refs: editRefs, chartSel, chartPart, objMulti, circles, focusCell: opts.focusCell,
+      wb, si, sel, selKind, active, editing: !!editing, readonly: viewOnly, clip, fillPreview, refs: editRefs, chartSel, chartPart, objMulti:new Set(selectedObjects().map(f=>f.obj.id).filter(id=>id!==chartSel)), circles, focusCell: opts.focusCell,
       chartPreview: chartElementDrag?.preview,
       shapeEdit, shapePreview: drawPathState?.preview ?? shapePointDrag?.preview ?? (shapeEdit && !findObject(sheet(), shapeEdit.id)?.obj.path ? editingShape() : null),
       special: special?.si === si ? special.cells : null, arrows: trace?.arrows ?? null,
@@ -19335,7 +19506,7 @@ async function init() {
     onTouchZoom: (pct) => setZoom(pct),
     isDragging: () => !!drag,
   });
-  ribbon = buildRibbon({ run, openMenu: openNamedMenu, focusGrid, refreshRibbon: updateRibbon, hiddenTabs: () => opts.hiddenTabs ?? [], gallery: (name) => (name === 'chartStyles' ? chartStyleGallery() : name === 'pictureStyles' ? pictureStyleGallery(true) : []) });
+  ribbon = buildRibbon({ run, openMenu: openNamedMenu, focusGrid, refreshRibbon: updateRibbon, hiddenTabs: () => opts.hiddenTabs ?? [], inputGuard:slicerRibbonGuard, gallery: (name) => (name === 'chartStyles' ? chartStyleGallery() : name === 'pictureStyles' ? pictureStyleGallery(true) : name === 'slicerStyles' ? slicerRibbonGallery() : []) });
   mobileWork = installMobileWork({ button: $('mobileModeToggle'), onChange: (next, prev) => {
     if (!gv) return;
     if (!prev || next.active !== prev.active || next.density !== prev.density || Math.round(next.width) !== Math.round(prev.width)) {

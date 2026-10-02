@@ -7,6 +7,8 @@ let errs = [];
 page.on('pageerror', (e) => errs.push('pageerror: ' + e.message + ' @' + (e.stack ?? '').split('\n')[1]?.trim()));
 page.on('console', (m) => { if (m.type() === 'error') errs.push('console: ' + m.text().slice(0, 200)); });
 page.on('dialog', (d) => d.dismiss());
+// 번들 정적 서버에도 문서 API를 연결하지 않고 같은 기능 가용성으로 검사한다.
+await page.route('**/api/health', route => route.fulfill({ json: { ok: true, vault: false, auth: false, publish: false } }));
 await page.addInitScript(() => { window.TABULA_STATIC = true; window.WIXEL_SKIP_START = true; window.showSaveFilePicker = undefined; window.showOpenFilePicker = undefined; });
 await page.goto((process.env.WIXEL_URL || 'http://localhost:5178/')); await page.evaluate(() => localStorage.clear()); await page.reload();
 await page.waitForFunction(() => typeof window.tabula?.commands === 'function');

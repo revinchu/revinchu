@@ -1320,7 +1320,7 @@ export class GridView {
     const box = (o, cls, inner, extraCss = '') => {
       const h = Math.max(o.h, cls.includes('line') ? 1 : 0);
       const selected = st.chartSel === o.id || !!st.objMulti?.has(o.id);
-      html.push(`<div class="obj ${cls}${selected ? ' sel' : ''}${o.macro ? ' macro' : ''}${o.hyperlink?.target ? ' object-hyperlink' : ''}"${o.hyperlink?.target ? ` title="${esc((o.hyperlink.tooltip ? o.hyperlink.tooltip + ' — ' : '') + o.hyperlink.target + ' · Ctrl+클릭: 개체 선택')}"` : ''} data-id="${esc(o.id)}"${cls.includes('slicer') ? ` role="group" aria-label="${esc(o.alt || o.caption || '슬라이서')}"` : ''} style="left:${o.x - p.ox}px;top:${o.y - p.oy}px;width:${o.w}px;height:${h}px;${extraCss}">${inner}${selected ? (st.shapeEdit?.id === o.id ? shapePointHandlesHtml(o, st.shapeEdit, this.z) : handles) : ''}</div>`);
+      html.push(`<div class="obj ${cls}${selected ? ' sel' : ''}${o.macro ? ' macro' : ''}${o.hyperlink?.target ? ' object-hyperlink' : ''}"${o.hyperlink?.target ? ` title="${esc((o.hyperlink.tooltip ? o.hyperlink.tooltip + ' — ' : '') + o.hyperlink.target + ' · Ctrl+클릭: 개체 선택')}"` : ''} data-id="${esc(o.id)}"${cls.includes('slicer') ? ` role="group" aria-label="${esc(o.alt || o.caption || '슬라이서')}"` : ''} style="left:${o.x - p.ox}px;top:${o.y - p.oy}px;width:${o.w}px;height:${h}px;${extraCss}">${inner}${selected && !(cls.includes('slicer')&&o.objectGroup) ? (st.shapeEdit?.id === o.id ? shapePointHandlesHtml(o, st.shapeEdit, this.z) : handles) : ''}</div>`);
     };
     // 엑셀처럼 그림 → 도형 → 차트 순서가 아니라 저장된 순서(z)대로 겹침
     const all = [
@@ -1342,6 +1342,15 @@ export class GridView {
         const inner = content(o, 'shape', () => isSmartArt(o) ? smartArtSvg(o) : shapeSvg(o) + ((o.text || o.paras) && !isLine ? shapeTextHtml(o) : ''));
         box(o, `shape ${isLine ? 'line' : ''}${o.draft ? ' drawing-preview' : ''}`, inner, o.rot ? `transform:rotate(${o.rot}deg)` : '');
       }
+    }
+    const selectedGroups=new Map();
+    for(const o of slicers)if(o.objectGroup&&(st.chartSel===o.id||st.objMulti?.has(o.id)))selectedGroups.set(o.objectGroup,[]);
+    for(const o of slicers)if(selectedGroups.has(o.objectGroup))selectedGroups.get(o.objectGroup).push(o);
+    for(const parts of selectedGroups.values()){
+      if(!parts.length)continue;
+      let x=Infinity,y=Infinity,r=-Infinity,b=-Infinity;for(const o of parts){x=Math.min(x,o.x);y=Math.min(y,o.y);r=Math.max(r,o.x+o.w);b=Math.max(b,o.y+o.h);}
+      const primary=parts.find(o=>o.id===st.chartSel)??parts[0];
+      html.push(`<div class="obj slicer-group" data-id="${esc(primary.id)}" role="group" aria-label="슬라이서 그룹" style="left:${x-p.ox}px;top:${y-p.oy}px;width:${r-x}px;height:${b-y}px">${['top','bottom','left','right'].map(side=>`<i class="slicer-group-edge ${side}"></i>`).join('')}${handles}</div>`);
     }
     // 표시한 메모는 현재 렌더 창의 셀만 조회한다(전체 셀 저장소를 매번 훑지 않는다).
     if (sheet.noteVisibility) {

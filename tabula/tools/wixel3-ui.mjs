@@ -47,7 +47,7 @@ try {
     await start(); await p.evaluate(() => window.tabula.run('options'));
     await p.getByRole('tab', { name: '빠른 실행 도구 모음', exact: true }).click();
     await p.getByLabel('표시 위치', { exact: true }).selectOption('below');
-    await p.getByLabel('사용 가능한 명령').selectOption('bold'); await p.getByRole('button', { name: '추가(A) >>', exact: true }).click();
+    await p.getByLabel('사용 가능한 명령').selectOption('bold'); await p.getByRole('tabpanel', { name: '빠른 실행 도구 모음', exact: true }).getByRole('button', { name: '추가', exact: true }).click();
     const moveCount = await p.getByLabel('현재 도구 모음 순서').evaluate((select) => select.selectedIndex);
     for (let i = 0; i < moveCount; i++) await p.getByRole('button', { name: '위로', exact: true }).click();
     await p.getByRole('button', { name: '확인', exact: true }).click();
