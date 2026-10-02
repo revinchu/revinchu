@@ -1382,6 +1382,7 @@ function onGridKey(e) {
   const k = e.key;
   const handled = () => e.preventDefault();
 
+  if (k === 'Escape') endBorderDraw();
   if (k === 'Escape' && drag?.type === 'objectLink') { handled(); drag = null; stopAutoScroll(); return; }
   if (k === 'Escape' && (drawKind || drawPathState || drag?.type === 'draw' || shapePointDrag)) {
     handled();
@@ -1585,7 +1586,7 @@ function onGridKey(e) {
     case 'Escape':
       handled();
       if (clip || painter) { clip = null; painter = null; dom.view.classList.remove('painting'); updateSelectionUI(); setMode(); }
-      if (borderDraw) setBorderDraw(borderDraw);
+      endBorderDraw();
       return;
     case 'ContextMenu': {
       handled();
@@ -1976,6 +1977,7 @@ function onViewMouseDown(e) {
   }
   const objEl = t.closest('.obj');
   if (objEl) {
+    endBorderDraw();
     e.preventDefault();
     if (editing && !commitEdit()) return;
     focusGrid();
@@ -2106,7 +2108,8 @@ function onViewMouseDown(e) {
   if (e.shiftKey) extendTo(r, c, { scroll: false });
   else selectCell(r, c, { scroll: false });
   const link = !e.shiftKey && !e.ctrlKey ? wb.getCell(si, r, c)?.link : null;
-  drag = { type: 'select', ...(link ? { link: { r, c, url: link } } : {}) };
+  const borderStroke = borderDraw ? { mode: borderDraw, revision: borderDrawRevision, book: wb, sheet: sheet(), pen: { ...borderPen } } : null;
+  drag = { type: 'select', borderStroke, ...(link && !borderStroke ? { link: { r, c, url: link } } : {}) };
   startAutoScroll();
 }
 
@@ -2390,7 +2393,10 @@ function onDragEnd() {
   if (d.type === 'objectLink') { if (!d.moved && d.book === wb && d.doc === docId && d.si === si) openLink(d.target); return; }
   if (d.type === 'select' && d.link && selIsActiveOnly() && active.r === d.link.r && active.c === d.link.c) openLink(d.link.url);
   // 테두리 그리기 모드: 끌어서 고른 범위에 펜으로 바깥쪽(그리기) · 모든(눈금) 테두리, 또는 지우기
-  if (d.type === 'select' && borderDraw) applyBorder(borderDraw === 'grid' ? 'all' : borderDraw === 'erase' ? 'none' : 'outside');
+  const stroke = d.borderStroke;
+  if (d.type === 'select' && stroke && stroke.book === wb && stroke.sheet === sheet() && stroke.revision === borderDrawRevision && stroke.mode === borderDraw) {
+    applyBorder(stroke.mode === 'grid' ? 'all' : stroke.mode === 'erase' ? 'none' : 'outside', stroke.pen, true);
+  }
   switch (d.type) {
     case 'move':
       fillPreview = null;
@@ -2957,6 +2963,11 @@ const toggleStyle = (key) => {
 // 테두리 펜: 선 스타일 · 선 색 (엑셀의 [테두리] → [선 색] · [선 스타일])
 const borderPen = { style: 'thin', color: null };
 let borderDraw = null; // 'outline' | 'grid' | 'erase' — 끌어서 테두리 그리기
+let borderDrawRevision = 0; // 시작 뒤 취소·도구 전환이 일어난 드래그는 적용하지 않는다.
+function endBorderDraw() {
+  borderDraw = null; borderDrawRevision++;
+  dom.view.classList.remove('border-draw');
+}
 const BORDER_STYLES = [['thin', '가는 실선'], ['hair', '아주 가는 선'], ['dotted', '점선'], ['dashDotDot', '이점쇄선'], ['dashDot', '일점쇄선'], ['dashed', '파선'],
   ['medium', '보통 실선'], ['mediumDashDotDot', '보통 이점쇄선'], ['slantDashDot', '기울어진 일점쇄선'], ['mediumDashDot', '보통 일점쇄선'], ['mediumDashed', '보통 파선'], ['thick', '굵은 실선'], ['double', '이중 실선']];
 
@@ -2968,8 +2979,13 @@ function lineStyleMenu(anchor) {
 }
 
 function setBorderDraw(mode) {
-  borderDraw = borderDraw === mode ? null : mode;
-  dom.view.classList.toggle('border-draw', !!borderDraw);
+  const next = borderDraw === mode ? null : mode;
+  endBorderDraw();
+  if (!next || viewOnly || wb.props?.markedFinal || protectBlocked('formatCells')) return;
+  endDraw(); shapeEdit = null; shapePointDrag = null;
+  if (painter) { painter = null; dom.view.classList.remove('painting'); setMode(); updateRibbon(); }
+  borderDraw = next;
+  dom.view.classList.add('border-draw');
   if (borderDraw) toast(`${{ outline: '테두리 그리기', grid: '테두리 눈금 그리기', erase: '테두리 지우기' }[borderDraw]}: 셀을 끌어서 적용하세요. (Esc: 끝내기)`);
 }
 
@@ -2994,7 +3010,9 @@ function applyEdges(edges, edges0, pen) {
   }
 }
 
-function applyBorder(kind, penOverride = null) {
+function applyBorder(kind, penOverride = null, fromDrawing = false) {
+  if (!fromDrawing) endBorderDraw();
+  if (viewOnly || wb.props?.markedFinal || protectBlocked('formatCells')) return;
   lastBorder = kind;
   const pen = penOverride ?? borderPen;
   const rg = selKind === 'cells' ? sel : usedClip(sel);
@@ -3071,6 +3089,7 @@ function changeFontSize(dir) {
 
 /** 서식 복사 (엑셀): 셀 서식(표 서식 포함) · 병합 · 조건부 서식 · 열 너비/행 높이(행 · 열 전체 선택일 때) */
 function capturePainter(sticky) {
+  endBorderDraw(); endDraw();
   const full = selKind === 'cells' ? sel : usedClip(sel);
   const h = Math.min(full.r2 - full.r1 + 1, 500);
   const w = Math.min(full.c2 - full.c1 + 1, 200);
@@ -3156,6 +3175,7 @@ function copyFormatExtras(srcSi, src, tgt, th, tw) {
 }
 
 function applyPainter() {
+  if (!painter || viewOnly || wb.props?.markedFinal || protectBlocked('formatCells')) return;
   const { styles, area } = painter;
   const h = styles.length;
   const w = styles[0].length;
@@ -9580,7 +9600,8 @@ function finishPathDraw(closed) {
 function startDraw(kind) {
   if (editing && !commitEdit()) return;
   if (viewOnly || protectBlocked('objects')) return;
-  endDraw(); shapeEdit = null; shapePointDrag = null;
+  endDraw(); endBorderDraw(); shapeEdit = null; shapePointDrag = null;
+  if (painter) { painter = null; dom.view.classList.remove('painting'); setMode(); updateRibbon(); }
   drawKind = kind; deselectChart();
   dom.view.classList.add('drawing-mode');
   const label = SHAPE_KINDS.find((k) => k.id === kind)?.label ?? '도형';
@@ -9596,7 +9617,7 @@ function endDraw() {
 function beginShapePointEdit(id) {
   const sh = findObject(sheet(), id)?.obj, path = sh && editableShapePath(sh);
   if (!path || viewOnly || protectBlocked('objects')) { if (!path) toast('자유형·곡선·자유곡선·선 또는 사각형을 선택하세요.'); return; }
-  endDraw(); chartSel = id;
+  endDraw(); endBorderDraw(); chartSel = id;
   shapeEdit = { id, wb, si, sheet: sheet(), basePath: path, selected: null }; objMulti.clear(); gv.renderObjectsAll(); focusGrid();
   toast('점을 끌어 모양을 바꾸세요. Ctrl+선: 점 추가, Ctrl+점 또는 Delete: 점 삭제, Esc: 취소·종료');
 }
@@ -12752,6 +12773,7 @@ function jumpComment(dir) {
 
 // ───────────────────────── 시트 ─────────────────────────
 function switchSheet(i, restore = true) {
+  endBorderDraw();
   chartElementDrag = null;
   endDraw(); shapeEdit = null; shapePointDrag = null;
   if (i === si || i < 0 || i >= wb.sheets.length) return;
@@ -13467,6 +13489,7 @@ function redrawPivotsQuiet() {
 }
 
 function afterLoad(name, activeSheet) {
+  endBorderDraw();
   chartElementDrag = null;
   endDraw(); shapeEdit = null; shapePointDrag = null;
   setTimeout(() => {
@@ -17691,6 +17714,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileFit','toggleR
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['도형과 셀 테두리 작업 분리', ['도형 그리기·취소 뒤 셀 범위 선택만으로 테두리가 적용되는 오류 수정', '도형·테두리·서식 복사 도구 전환 시 이전 그리기 상태 종료 · 취소한 드래그 재적용 방지']],
   ['팝업 키보드와 서식 구성', ['텍스트 나누기 Enter는 다음→다음→마침 · 탭 구분 기호와 일반 서식 기본 선택', '팝업·하위 메뉴의 단축키 문자를 항상 표시 · 창 밖으로 빠진 초점 복원', '차트 데이터 원본의 확인 전 변경 방지 · 차트 이동 위치를 라디오로 선택', '도형 옵션/텍스트 옵션과 세부 범주 분리 · 선택한 도형에만 서식 적용 · 접힘·초점·스크롤 유지']],
   ['팝업·서식 UI 개선', ['이동 옵션을 선택 종류와 데이터 유형으로 구분 · 상수·수식에 해당하는 옵션만 활성화', '옵션·셀/차트/도형 서식의 입력 정렬·행 간격·탭·버튼 디자인 정리 · 작은 화면에서 본문 스크롤과 확인/취소 유지', '자동 고침 입력과 셀 서식의 분류·서식 코드 이름을 명확하게 안내']],
   ['Google Sheets 가져오기 정확성', ['IMPORTRANGE의 혼합 문자·숫자, 제목, 빈 행·열 누락 수정', '시트 이름 생략 시 Google과 같은 첫 탭 선택 · 쉼표·소수·백분율 표시와 숫자 계산 유지']],

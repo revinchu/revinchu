@@ -417,3 +417,9 @@ node tools/mobile-layout.mjs
 - `node tools/chart-dialog-ux.mjs`: 소스/배포 번들. 데이터 범위 변경 취소, 입력 직후 Enter, 계열 목록 키보드, 현재/다른/새 시트 이동과 Undo, 차트 유형별 적용 옵션, 모바일 창을 검사합니다. `CHART_DIALOG_OUT` 기본 경로는 `D:/Codex/Temp/wixel-dialog-keyboard/charts`입니다.
 
 `WIXEL_URL`과 Playwright 환경 변수는 위와 같습니다. 모두 격리 브라우저와 합성 문서를 사용하며 API·외부 요청·원격 쓰기를 차단합니다. 지원 범위와 한계는 [38번 문서](../docs/codex/38_대화상자키보드와서식동작.md)를 참고하세요.
+
+## 도형 그리기와 테두리 펜의 모드 격리
+
+`node tools/drawing-mode-isolation.mjs`는 실제 리본 메뉴·마우스 드래그로 테두리 그리기/눈금/지우기와 도형·자유곡선 모드를 전환합니다. 도형 완료·취소 뒤 범위 선택의 셀 값·서식·Undo 불변, 명시적 펜 적용·Undo, 시트/개체 전환, 서식 복사와 보호 시트, 드래그 도중 펜 시작·Escape 취소를 검사합니다. `WIXEL_URL`은 로컬 소스 또는 번들 주소이며 격리 컨텍스트의 합성 문서만 사용하고 API·외부 연결·원격 쓰기를 차단합니다.
+
+수정 전 재현은 **소스 서버에서만** `DRAWING_BASELINE_REF=684ba67`로 이전 `app.js`를 격리 브라우저에 제공할 수 있습니다. `DRAWING_TEST_FILTER=outline → 도형 완성`으로 해당 경로 하나를 선택하면 이전 버전은 셀 서식/Undo 불변 검사에서 실패해야 합니다. 수정본 검증에서는 `DRAWING_BASELINE_REF`를 해제합니다. 이전 코드는 디스크의 제품 파일을 바꾸지 않으며 실제 사용자 문서를 사용하지 않습니다.
