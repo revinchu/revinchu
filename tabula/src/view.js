@@ -113,8 +113,11 @@ export function timelinePeriods(items, level = 'M') {
  * 글자 세로 보정 (em): 한글 글꼴(맑은 고딕 등)은 아래 여백(descent)이 커서 글자가 줄 상자 위쪽에 붙어 보임.
  * 실제 설치된 글꼴로 한글 · 숫자의 잉크 영역을 재어, 줄 상자(1.2em) 가운데에 오도록 내릴 양을 구함
  */
+const glyphShiftCache = new Map();
+export function clearGlyphShifts() { glyphShiftCache.clear(); }
 export function glyphShift(family) {
   if (!measureCtx) return 0;
+  if (glyphShiftCache.has(family)) return glyphShiftCache.get(family);
   measureCtx.font = `100px ${family}`;
   const m = measureCtx.measureText('가나다0123ABC');
   if (!m.fontBoundingBoxAscent) return 0;
@@ -123,7 +126,10 @@ export function glyphShift(family) {
   const base = (L - (fa + fd)) / 2 + fa;
   const glyphMid = base + (m.actualBoundingBoxDescent - m.actualBoundingBoxAscent) / 2;
   const dy = (L / 2 - glyphMid) / 100;
-  return Math.max(-0.15, Math.min(0.15, Math.round(dy * 1000) / 1000));
+  const shift = Math.max(-0.15, Math.min(0.15, Math.round(dy * 1000) / 1000));
+  if (glyphShiftCache.size >= 256) glyphShiftCache.clear();
+  glyphShiftCache.set(family, shift);
+  return shift;
 }
 const measureCache = new Map();
 export function fontCss(st = {}) {
@@ -949,7 +955,10 @@ export class GridView {
     if (style.underline || style.strike) css.push(`text-decoration:${style.underline ? 'underline ' : ''}${style.strike ? 'line-through' : ''}`);
     if (st.valueHighlight && text) css.push(`color:${cell?.formula ? '#008000' : typeof v === 'number' ? '#0000ff' : '#000000'}`); // LibreOffice 값 강조 (Ctrl+F8)
     else if (fmtColor || style.color) css.push(`color:${fmtColor || style.color}`);
-    if (style.font) css.push(`font-family:${fontStack(style.font)}`);
+    if (style.font) {
+      const family = fontStack(style.font);
+      css.push(`font-family:${family}`, `--glyph-dy:${glyphShift(family)}em`);
+    }
     if (style.size) css.push(`font-size:${style.size}pt`);
     if (eff !== 'left') css.push(`justify-content:${eff === 'center' ? 'center' : 'flex-end'};text-align:${eff}`);
     if (style.valign === 'top') css.push('align-items:flex-start');

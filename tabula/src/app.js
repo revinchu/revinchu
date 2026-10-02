@@ -42,7 +42,7 @@ import { TEMPLATES, TEMPLATE_CATS } from './templates.js';
 import { createChartSelectionPanel } from './chart-selection-ui.js';
 import { chartSeriesPatch, chartExplosionPatch, chartPartDeletePatch, chartLayoutAfterDrag, chartExplosionAfterDrag } from './chart-edit.js';
 import { chartView3D } from './chart-3d.js';
-import { GridView, BASE_FONT, setBaseFont, measureText, fontStack, PATTERNS, patternCss, gradientCss, glyphShift, timelinePeriods, shapeTextHtml, fitShapeText } from './view.js';
+import { GridView, BASE_FONT, setBaseFont, measureText, fontStack, PATTERNS, patternCss, gradientCss, glyphShift, clearGlyphShifts, timelinePeriods, shapeTextHtml, fitShapeText } from './view.js';
 import { setThemeColors, THEME, applyTint } from './stylepresets.js';
 import { readXlsxAsync, writeXlsxAsync, xlsxOverflow, textRaw } from './xlsx.js';
 import { readOds, writeOds } from './ods.js';
@@ -1206,20 +1206,24 @@ function wrappedLines(text, width, st) {
   return Math.max(1, lines);
 }
 
-function autoFitRows(r1, r2) {
+function autoFitRows(r1, r2, force = false) {
   const s = sheet();
   const cols = Math.min(wb.usedRange(si).cols, 500);
   for (let r = r1; r <= r2; r++) {
-    if (s.rowManual[r]) continue;
+    if (s.rowManual[r] && !force) continue;
     const need = neededRowHeight(si, r, cols);
-    if ((s.rowHeights[r] ?? defRowH()) !== need) wb.setRowHeight(si, r, need, false);
+    if ((s.rowHeights[r] ?? defRowH()) !== need || (force && s.rowManual[r])) wb.setRowHeight(si, r, need, false);
   }
 }
 
 /** 행에 필요한 높이(px): 큰 글꼴 · 줄 바꿈 · 텍스트 회전(각도 · 세로 쓰기)까지 엑셀처럼 */
 function neededRowHeight(sIdx, r, cols) {
-  const base = wb.sheets[sIdx].defRowH ?? DEFAULT_ROW_HEIGHT;
-  let need = base;
+  const sh = wb.sheets[sIdx];
+  const base = sh.defRowH ?? DEFAULT_ROW_HEIGHT;
+  // 병합 셀은 아래의 단일 셀 측정에서 제외된다. 그 값을 0 높이로 간주해
+  // 파일의 제목/여러 행 병합 영역을 줄이지 말고 기존 높이를 하한으로 보존한다.
+  const merged = sh.merges.some(m => m.r1 <= r && r <= m.r2);
+  let need = merged ? Math.max(base, sh.rowHeights[r] ?? base) : base;
   for (let c = 0; c < cols; c++) {
     const cell = wb.getCell(sIdx, r, c);
     if (!cell?.raw || wb.mergeAt(sIdx, r, c)) continue;
@@ -2459,7 +2463,7 @@ function onViewDblClick(e) {
     return;
   }
   if (hit.zone === 'rowHeader' && hit.edgeRow !== null) {
-    wb.transact(() => anchorObjects(() => { wb.setRowHeight(si, hit.edgeRow, defRowH(), false); autoFitRows(hit.edgeRow, hit.edgeRow); }), meta());
+    wb.transact(() => anchorObjects(() => { autoFitRows(hit.edgeRow, hit.edgeRow, true); }), meta());
     return;
   }
   if (hit.zone !== 'cell' || editing) return;
@@ -13243,8 +13247,14 @@ function applyBookLook() {
   document.documentElement.style.setProperty('--cell-ff', fontStack(BASE_FONT.name));
   // 설치된 글꼴에 맞춰 글자를 세로 가운데로 (글꼴이 늦게 로드되면 다시 잼)
   const shift = () => document.documentElement.style.setProperty('--glyph-dy', `${glyphShift(fontStack(BASE_FONT.name))}em`);
+  clearGlyphShifts();
   shift();
-  document.fonts?.ready?.then(shift);
+  document.fonts?.ready?.then(() => {
+    clearGlyphShifts();
+    shift();
+    // 셀별 글꼴 보정도 실제 로드된 글꼴 메트릭으로 다시 계산한다.
+    gv.renderAll();
+  });
 }
 
 /** 예전 버전이 자동 저장한 문서: 피벗 결과 칸을 지금 버전으로 다시 그림 (서식 · 색 개선이 반영되게) — 실행 취소 기록 없음 */
@@ -16841,13 +16851,7 @@ const MENUS = {
   format: () => [
     { title: '셀 크기' },
     { label: '행 높이...', action: () => sizeDialog('row') },
-    {
-      label: '행 높이 자동 맞춤', action: () => {
-        const u = usedClip(sel);
-        const r2 = Math.min(u.r2, u.r1 + 5000);
-        wb.transact(() => { for (let r = u.r1; r <= r2; r++) wb.setRowHeight(si, r, defRowH(), false); autoFitRows(u.r1, r2); }, meta());
-      },
-    },
+    { label: '행 높이 자동 맞춤', action: () => autofitSelection('row') },
     { label: '열 너비...', action: () => sizeDialog('col') },
     { label: '열 너비 자동 맞춤', action: () => autofitCols(range(sel.c1, Math.min(sel.c2, sel.c1 + 200))) },
     {
@@ -17547,6 +17551,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileFit','toggleR
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['병합 제목의 행 높이와 글꼴 위치', ['병합 제목 편집·자동 맞춤 후 원래 행 높이 보존', '셀마다 실제 글꼴의 세로 보정 적용 · 돋움 제목이 위에 붙는 현상 개선']],
   ['확대·축소와 셀 여백', ['배율 변경 시 가는 선·이중선 다시 계산 · 첫 셀과 머리글 사이 틈 제거', '400%에서도 머리글 구분선 1픽셀 · 가운데/왼쪽 맞춤의 미세 여백 조정', 'XLS 자동 행 높이와 저장된 확대율 보존 · 제목이 위에 붙거나 잘리는 문제 수정']],
   ['셀 테두리 정밀 표시', ['가는 선 1픽셀·균일한 이중선 · 회색 가로선과 검정 세로선 교차점 개선', '글자 넘침 셀의 배경과 선 분리 · 분수 배율의 선 두께 오차 수정 · 점쇄선 구분']],
   ['도형·그림 하이퍼링크', ['바로가기·맨위로 버튼의 시트·셀 이동 · 도형/그림 링크 XLSX 저장 보존', '공백·작은따옴표 시트명·이름 범위 탐색 · Ctrl+클릭 선택·우클릭 링크 편집/제거']],
