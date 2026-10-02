@@ -66,7 +66,7 @@ try {
   });
   await test('기본축·보조축 콤보 견본 선택과 사용자 설정 보존', async () => {
     await fixture(); const dialog = await open();
-    const choices = dialog.locator('.cg-sub'); assert.equal(await choices.count(), 2);
+    const choices = dialog.locator('.cg-sub'); assert.equal(await choices.count(), 5);
     await dialog.getByRole('button', { name: '묶은 세로 막대형 - 꺾은선형, 기본 축', exact: true }).click(); assert.deepEqual(await page.locator('[data-combo-axis]').evaluateAll((els) => els.map((s) => s.value)), ['0', '0', '0']);
     await dialog.getByRole('button', { name: '묶은 세로 막대형 - 꺾은선형, 보조 축', exact: true }).click(); assert.deepEqual(await page.locator('[data-combo-axis]').evaluateAll((els) => els.map((s) => s.value)), ['0', '0', '1']);
     await type(1).selectOption('area'); await axis(1).selectOption('1'); await dialog.getByRole('button', { name: '확인', exact: true }).click();

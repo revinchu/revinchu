@@ -1,6 +1,7 @@
 // 계층·표면·보조 원형·거래량 주식형. 값의 집계/보간은 DOM 없이 검증합니다.
 import { formatGeneral, formatCode } from './format.js';
 import { chartView3D } from './chart-3d.js';
+import { buildChartHierarchy, hierarchyNodeColor, hierarchyNodeAttrs, hierarchyLabel, hierarchyLegend, fitHierarchyLabel } from './chart-hierarchy.js';
 
 const finite = (v) => typeof v === 'number' && Number.isFinite(v);
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[c]);
@@ -32,33 +33,17 @@ function surfaceScale(data, chart) {
   return { ...sc, count, levels: Array.from({ length: count + 1 }, (_, i) => sc.min + (sc.max - sc.min) * i / count) };
 }
 
-/** 이름이 같아도 부모가 다르면 별도 항목입니다. 끝의 빈 단계는 짧은 가지로 유지합니다. */
+/** 이름이 같아도 부모가 다르면 별도 항목입니다. 원본 점 번호와 경로도 보존합니다. */
 export function sunburstNodes(data) {
-  const root = { name: '', value: 0, own: 0, depth: 0, children: [], map: new Map(), points: [] };
-  const levels = [...(data.catLevels ?? [])].reverse(), values = data.series[0]?.values ?? [];
-  values.forEach((v, i) => {
-    if (!finite(v) || v <= 0) return;
-    const path = levels.map((spans) => spans.find((g) => i >= g.start && i <= g.end)?.text ?? '');
-    path.push(data.categories[i] ?? '');
-    const labels = path.filter((label) => String(label).trim() !== '');
-    if (!labels.length) labels.push('(비어 있음)');
-    let node = root; root.value += v;
-    labels.forEach((label) => {
-      const name = String(label);
-      if (!node.map.has(name)) { const child = { name, value: 0, own: 0, depth: node.depth + 1, children: [], map: new Map(), points: [] }; node.map.set(name, child); node.children.push(child); }
-      node = node.map.get(name); node.value += v; node.points.push(i);
-    });
-    node.own += v;
-  });
-  const out = [];
-  const place = (node, start, span, rootIndex) => {
-    node.start = start; node.end = start + span; node.rootIndex = rootIndex;
-    if (node.depth) out.push(node);
+  const hierarchy = buildChartHierarchy(data);
+  const place = (node, start, span) => {
+    node.start = start; node.end = start + span;
     let angle = start;
-    node.children.forEach((child, i) => { const arc = node.value ? span * child.value / node.value : 0; place(child, angle, arc, node.depth ? rootIndex : i); angle += arc; });
+    for (const child of node.children) { const arc = span * child.value / node.value; place(child, angle, arc); angle += arc; }
   };
-  place(root, -Math.PI / 2, 2 * Math.PI, 0);
-  return { nodes: out.map(({ map, children, ...node }) => node), total: root.value, depth: out.reduce((n, node) => Math.max(n, node.depth), 0) };
+  let angle = -Math.PI / 2;
+  for (const root of hierarchy.roots) { const arc = 2 * Math.PI * root.value / hierarchy.total; place(root, angle, arc); angle += arc; }
+  return hierarchy;
 }
 
 export function annularSector(cx, cy, inner, outer, start, end) {
@@ -74,17 +59,23 @@ export function annularSector(cx, cy, inner, outer, start, end) {
 
 function drawSunburst(ctx) {
   const { data, series, plot, parts, pal, chart } = ctx, hierarchy = sunburstNodes(data), s = series[0];
-  if (!hierarchy.total) return message(ctx, '선버스트에는 양수 값과 계층 항목이 필요합니다');
-  const R = Math.max(1, Math.min(plot.w, plot.h) / 2 - 6), cx = plot.x + plot.w / 2, cy = plot.y + plot.h / 2, band = R / hierarchy.depth;
+  if (hierarchy.error || !hierarchy.total) return message(ctx, hierarchy.error ?? '선버스트에는 양수 값과 계층 항목이 필요합니다');
+  const R = Math.max(1, Math.min(plot.w, plot.h) / 2 - 6), cx = plot.x + plot.w / 2, cy = plot.y + plot.h / 2;
+  const band = R / (hierarchy.depth + 1), shift = (finite(chart.firstAngle) ? chart.firstAngle : 0) * Math.PI / 180;
+  const labelChart = { ...chart, _hierarchyTotal: hierarchy.total };
   for (const node of hierarchy.nodes) {
-    const inner = (node.depth - 1) * band, outer = node.depth * band;
-    const color = s.pointColors?.[node.points[0]] ?? pal[node.rootIndex % pal.length], shift = (chart.firstAngle ?? 0) * Math.PI / 180;
-    const attrs = `${tag(s, node.points.length === 1 ? node.points[0] : undefined)} data-depth="${node.depth}" data-value="${node.value}"`;
-    parts.push(`<path d="${annularSector(cx, cy, inner, outer, node.start + shift, node.end + shift)}" fill="${esc(color)}" fill-opacity="${Math.max(.5, 1 - (node.depth - 1) * .12)}" stroke="#fff" stroke-width="1"${attrs}><title>${esc(node.name)}: ${esc(formatGeneral(node.value))}</title></path>`);
-    const r = inner ? (inner + outer) / 2 : outer * .63, span = node.end - node.start;
-    if (chart.labels !== false && span * r > 24 && band > 13) {
-      const angle = (node.start + node.end) / 2 + shift;
-      parts.push(text(cx + Math.cos(angle) * r, cy + Math.sin(angle) * r + 4, short(node.name, Math.max(2, Math.floor(span * r / 7))), '#fff', 'middle', Math.min(11, band * .6)));
+    const inner = node.depth * band, outer = (node.depth + 1) * band;
+    const color = hierarchyNodeColor(node, s, chart, pal), attrs = hierarchyNodeAttrs(node, s);
+    parts.push(`<path d="${annularSector(cx, cy, inner, outer, node.start + shift, node.end + shift)}" fill="${esc(color)}" stroke="#fff" stroke-width="1"${attrs}><title>${esc(node.path.filter(Boolean).join(' / ') || node.name)}: ${esc(formatGeneral(node.value))}</title></path>`);
+    const r = (inner + outer) / 2, span = node.end - node.start, content = hierarchyLabel(node, s, labelChart);
+    const size = (s.labelSize ?? 8.25) * 4 / 3;
+    // 반지름 방향의 폭도 제한하여 얇은 링의 글자가 이웃 계층을 덮지 않게 합니다.
+    const space = Math.min(span * r, band - 6);
+    if (content && space > size * 2.5 && band > size + 3) {
+      const angle = (node.start + node.end) / 2 + shift, x = cx + Math.cos(angle) * r, y = cy + Math.sin(angle) * r;
+      let rotation = angle * 180 / Math.PI; if (rotation > 90 && rotation < 270) rotation += 180;
+      const clipped = fitHierarchyLabel(content, space, size);
+      parts.push(`<text data-el="label"${attrs} x="0" y="0" transform="translate(${x.toFixed(3)},${y.toFixed(3)}) rotate(${rotation.toFixed(3)})" text-anchor="middle" dominant-baseline="central" font-size="${size}" fill="${esc(s.labelColor ?? '#fff')}"${s.labelBold ? ' font-weight="700"' : ''}><title>${esc(content)}</title>${esc(clipped)}</text>`);
     }
   }
 }
@@ -256,7 +247,7 @@ export function drawVolumeStock(ctx) {
 }
 
 export const ADVANCED_CHARTS = {
-  sunburst: { legend: false, draw: drawSunburst },
+  sunburst: { legend: false, legendItems: hierarchyLegend, draw: drawSunburst },
   surface: { legendItems: surfaceLegend, draw: drawSurface },
   pieOfPie: { draw: drawOfPie },
   barOfPie: { draw: drawOfPie },

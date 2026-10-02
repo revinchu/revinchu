@@ -12,7 +12,7 @@ export function chartDataGuide(chart, data) {
     description = '첫 행·열은 두 축의 항목, 교차하는 셀은 높이 값입니다. 색은 높이 구간을 나타냅니다.';
     if (k < 2 || n < 2) error = '표면형에는 수치 계열 2개와 항목 2개 이상이 필요합니다.';
   } else if (t === 'sunburst' || t === 'treemap') {
-    description = '지역 → 제품처럼 바깥 분류부터 세부 분류까지 여러 열에 놓고 마지막 열에 양수 값을 넣으세요.';
+    description = '첫 행은 제목, 왼쪽 열부터 상위 분류 → 하위 분류, 마지막 열은 양수 값으로 배치하세요. 빈 하위 분류가 있는 항목도 지원합니다.';
   } else if (t === 'pieOfPie' || t === 'barOfPie') {
     description = '첫 수치 계열의 일부 항목을 보조 원형·막대형으로 분리합니다. 차트 서식에서 분할 기준과 보조 크기를 조정하세요.';
     if (n < 3) error = '보조 차트로 나누려면 항목을 3개 이상 선택하세요.';
@@ -25,6 +25,6 @@ export function chartDataGuide(chart, data) {
 }
 
 export function chartPresetMatches(chart, preset) {
-  const defaults = { threeD: false, grouping: 'clustered', explode: 0, ohlc: false, volume: false, radarStyle: 'standard', scatterStyle: 'marker', comboAxis: 'secondary', bubble3D: false, surfaceStyle: 'surface', marker: 'none' };
+  const defaults = { threeD: false, grouping: 'clustered', explode: 0, ohlc: false, volume: false, radarStyle: 'standard', scatterStyle: 'marker', comboAxis: 'secondary', bubble3D: false, surfaceStyle: 'surface', marker: 'none', barShape: 'box', comboLayout: 'columnLine' };
   return Object.entries(preset).every(([key, value]) => (chart[key] ?? defaults[key]) === value);
 }

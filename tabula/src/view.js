@@ -260,7 +260,7 @@ function markChartSelection(node, part) {
   if (!part || node.dataset.id !== part.id || !node.classList.contains('chart')) return;
   const svg = node.querySelector('svg'); if (!svg) return;
   svg.querySelectorAll('.chart-element-selection').forEach(n => n.remove());
-  if (!['title', 'legend', 'plot', 'dataTable'].includes(part.kind)) return;
+  if (!['title', 'legend', 'plot', 'dataTable', 'axis-x', 'axis-y', 'axis-y2'].includes(part.kind)) return;
   const element = svg.querySelector(`[data-el="${part.kind}"]`); if (!element?.getBBox) return;
   const box = element.getBBox(), transform = element.getCTM(), inverse = svg.getCTM()?.inverse(); if (!transform || !inverse) return;
   const corners = [[box.x, box.y], [box.x + box.width, box.y + box.height]].map(([x, y]) => new DOMPoint(x, y).matrixTransform(transform).matrixTransform(inverse));
@@ -1297,6 +1297,7 @@ export class GridView {
           for (const item of node.querySelectorAll('svg [data-s], svg [data-el]')) {
             const selected = part.kind === 'series' ? item.dataset.s === String(part.s)
               : part.kind === 'point' ? item.dataset.s === String(part.s) && item.dataset.p === String(part.p)
+                : part.kind === 'node' ? item.dataset.node === part.node && item.dataset.s === String(part.s)
                 : item.dataset.el === part.kind && (part.kind !== 'label' || item.dataset.s === String(part.s));
             if (!selected) continue;
             item.style.filter = 'drop-shadow(0 0 1.5px #1f6fd1) drop-shadow(0 0 1px #1f6fd1)';

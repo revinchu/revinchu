@@ -141,11 +141,12 @@ export const TABS = [
       group('링크', [large('hyperlink', 'link', '링크', { title: '하이퍼링크 삽입 (Ctrl+K)' })]),
       group('필터', [large('insertSlicer', 'slicer', '슬라이서', { title: '표나 피벗 테이블에 슬라이서 삽입' }), large('insertTimeline', 'calendar', '시간 표시 막대', { title: '날짜 필드를 기간(연 · 분기 · 월 · 일)으로 거르는 시간 표시 막대 삽입' })]),
       group('차트', [
-        large('insertChartAll', 'chartColumn', '추천 차트', { title: '차트 삽입 — 추천 차트 · 모든 차트' }),
+        col(medium('insertChartAll', 'chartColumn', '추천 차트'), medium('insertChartCatalog', 'chartColumn', '모든 차트')),
         col(
           row(btn('chartsColBar', 'chartColumn', '세로 또는 가로 막대형 차트 삽입', { menu: 'chartsColBar' }), btn('chartsHier', 'table', '계층 구조 차트 삽입', { menu: 'chartsHier' }), btn('chartsWaterfall', 'chartBar', '폭포, 깔때기형, 주식형 차트 삽입', { menu: 'chartsWaterfall' })),
           row(btn('chartsLineArea', 'chartLine', '꺾은선형 또는 영역형 차트 삽입', { menu: 'chartsLineArea' }), btn('chartsStat', 'stats', '통계 차트 삽입', { menu: 'chartsStat' }), btn('chartsCombo', 'chartArea', '콤보 차트 삽입', { menu: 'chartsCombo' })),
-          row(btn('chartPie', 'chartPie', '원형 또는 도넛형 차트 삽입', { menu: 'pieCharts' }), btn('chartsScatter', 'chartScatter', '분산형(X, Y) 또는 거품형 차트 삽입', { menu: 'chartsScatter' })),
+          row(btn('chartPie', 'chartPie', '원형 또는 도넛형 차트 삽입', { menu: 'pieCharts' }), btn('chartsScatter', 'chartScatter', '분산형(X, Y) 또는 거품형 차트 삽입', { menu: 'chartsScatter' }), btn('chartsSurface', 'chartArea', '표면형 또는 등고선형 차트 삽입', { menu: 'chartsSurface' })),
+          row(btn('chartsMap', 'table', '지도 차트 삽입', { menu: 'chartsMap' })),
         ),
         large('insertPivotChart', 'pivot', '피벗 차트', { title: '피벗 차트 삽입 (피벗 테이블 + 차트)' }),
       ]),

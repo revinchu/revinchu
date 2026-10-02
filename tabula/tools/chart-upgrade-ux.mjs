@@ -60,9 +60,9 @@ try {
     await p.keyboard.press('Home'); assert.equal(await d.locator('.cg-cat.on').innerText(), '세로 막대형');
     await d.locator('.cg-sub').first().focus(); await p.keyboard.press('ArrowRight');
     assert.equal(await d.locator('.cg-sub[aria-pressed=true]').getAttribute('title'), '누적 세로 막대형');
-    await p.keyboard.press('End'); assert.equal(await d.locator('.cg-sub[aria-pressed=true]').getAttribute('title'), '3차원 100% 기준 누적 세로 막대형');
+    await p.keyboard.press('End'); assert.equal(await d.locator('.cg-sub[aria-pressed=true]').getAttribute('title'), '깊이 축 피라미드 세로 막대형');
     await d.getByRole('button', { name: '확인', exact: true }).click(); const c = await current(p);
-    assert.equal(c.threeD, true); assert.equal(c.grouping, 'percentStacked');
+    assert.equal(c.threeD, true); assert.equal(c.grouping, 'standard'); assert.equal(c.barShape, 'pyramid');
   });
   await test('고른 하위 유형의 재열기 유지: 표식 누적·3D·거품·주식', async (p) => {
     for (const [patch, name] of [

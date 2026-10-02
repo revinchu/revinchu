@@ -57,3 +57,28 @@ export function pieSolid3D(slices, cx, cy, radius, projection) {
   }
   return `<g data-3d="pie">${sides.join('')}${tops.join('')}</g>`;
 }
+
+/** 막대 값축 끝점은 그대로 두고 단면을 원/삼각뿔로 투영한다. */
+export function barSolid3D({ x, y, w, h, from, to, horizontal = false, dx, dy, shape = 'box', fill, attrs = '' }) {
+  if (!['cylinder', 'cone', 'pyramid'].includes(shape)) return extrudedPolygon([[x,y],[x+w,y],[x+w,y+h],[x,y+h]],dx,dy,fill,attrs);
+  const f=safe(fill), circular=shape!=='pyramid', count=circular?32:4;
+  const section=(a,value,r=1)=> {
+    const c=Math.cos(a),s=Math.sin(a);
+    if(horizontal)return [value+dx/2+s*dx*r/2,y+h/2+c*h*r/2+s*dy*r/2];
+    return [x+w/2+c*w*r/2+s*dx*r/2,value+dy/2+s*dy*r/2];
+  };
+  const angle=i=>circular?i*Math.PI*2/count:Math.PI/4+i*Math.PI/2;
+  // 사각 단면은 타원의 내접이 아니라 원래 폭과 깊이를 유지한다.
+  const point=(i,value,r=1)=> {
+    if(circular)return section(angle(i),value,r);
+    const q=[[0,0],[1,0],[1,1],[0,1]][(i+count)%count],a=(q[0]-.5)*r,b=(q[1]-.5)*r;
+    return horizontal?[value+dx/2+b*dx,y+h/2+a*h+b*dy]:[x+w/2+a*w+b*dx,value+dy/2+b*dy];
+  };
+  const cap=(value,r)=>Array.from({length:count},(_,i)=>point(i,value,r));
+  const endRadius=shape==='cylinder'?1:0,base=cap(from,1),end=cap(to,endRadius);
+  let out=`<g data-3d="${shape}"><polygon points="${base.map(p=>pt(...p)).join(' ')}" fill="${f}"${attrs}/>`;
+  const faces=Array.from({length:count},(_,i)=>({i,depth:Math.sin(angle(i)+Math.PI/count)})).sort((a,b)=>b.depth-a.depth);
+  for(const {i} of faces){const next=(i+1)%count,points=[base[i],base[next],end[next],end[i]].map(p=>pt(...p)).join(' '),shade=.06+.28*(1+Math.cos(angle(i)))/2;out+=`<polygon points="${points}" fill="${f}"${attrs}/><polygon points="${points}" fill="#000" fill-opacity="${num(shade)}" pointer-events="none"/>`;}
+  if(endRadius)out+=`<polygon points="${end.map(p=>pt(...p)).join(' ')}" fill="${f}"${attrs}/><polygon points="${end.map(p=>pt(...p)).join(' ')}" fill="#fff" fill-opacity="0.18" pointer-events="none"/>`;
+  return out+'</g>';
+}

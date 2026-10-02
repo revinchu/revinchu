@@ -10,7 +10,7 @@ export const CHARTEX_STYLE_CONTENT = 'application/vnd.ms-office.chartstyle+xml';
 export const CHARTEX_COLOR_CONTENT = 'application/vnd.ms-office.chartcolorstyle+xml';
 const A = 'http://schemas.openxmlformats.org/drawingml/2006/main';
 const TYPES = { waterfall: 'waterfall', funnel: 'funnel', histogram: 'clusteredColumn', pareto: 'clusteredColumn', treemap: 'treemap', sunburst: 'sunburst', boxWhisker: 'boxWhisker', map: 'regionMap' };
-const OWN_KEYS = ['type', 'titleLayout', 'legendLayout', 'byRows', 'axes', 'seriesFmt', 'labels', 'dataTable', 'gap', 'legend', 'palette', 'hiddenSeries', 'hiddenCats', 'titleSize', 'titleColor', 'titleBold', 'legendSize', 'legendColor', 'legendBold', 'axisSize', 'textColor', 'gridColor', 'rounded', 'gridX', 'gridY', 'fill', 'plotFill', 'border', 'totals', 'binCount', 'binWidth', 'upColor', 'downColor', 'totalColor', 'showMean', 'connectors', 'quartileMethod', 'showOutliers', 'showInnerPoints', 'mapLowColor', 'mapMidColor', 'mapHighColor'];
+const OWN_KEYS = ['type', 'treemapLabelLayout', 'titleLayout', 'legendLayout', 'byRows', 'axes', 'seriesFmt', 'labels', 'dataTable', 'gap', 'legend', 'palette', 'hiddenSeries', 'hiddenCats', 'titleSize', 'titleColor', 'titleBold', 'legendSize', 'legendColor', 'legendBold', 'axisSize', 'textColor', 'gridColor', 'rounded', 'gridX', 'gridY', 'fill', 'plotFill', 'border', 'totals', 'binCount', 'binWidth', 'upColor', 'downColor', 'totalColor', 'showMean', 'connectors', 'quartileMethod', 'showOutliers', 'showInnerPoints', 'mapLowColor', 'mapMidColor', 'mapHighColor'];
 const num = (v) => typeof v === 'number' && Number.isFinite(v);
 const on = (v) => v === '1' || v === 'true';
 const hex = (v) => /^#?[\da-f]{6}$/i.test(String(v ?? '')) ? String(v).replace('#', '').toUpperCase() : null;
@@ -61,7 +61,7 @@ export function writeChartEx(chart, data, refs = [], palette = ['#4472c4', '#ed7
   const parts = [], series = [];
   const layout = (sr) => {
     let p = '';
-    if (type === 'treemap') p += '<cx:parentLabelLayout val="banner"/>';
+    if (type === 'treemap') p += `<cx:parentLabelLayout val="${['banner', 'overlapping', 'none'].includes(chart.treemapLabelLayout) ? chart.treemapLabelLayout : 'banner'}"/>`;
     if (type === 'waterfall') p += `<cx:visibility connectorLines="${chart.connectors === false ? 0 : 1}"/>`;
     if (type === 'boxWhisker') p += `<cx:visibility meanMarker="${chart.showMean === false ? 0 : 1}" outliers="${chart.showOutliers === false ? 0 : 1}" nonoutliers="${chart.showInnerPoints ? 1 : 0}"/>`;
     if (type === 'histogram' || type === 'pareto') {
@@ -77,13 +77,18 @@ export function writeChartEx(chart, data, refs = [], palette = ['#4472c4', '#ed7
     return p ? `<cx:layoutPr>${p}</cx:layoutPr>` : '';
   };
   source.forEach((sr, i) => {
-    const r = refs[i] ?? {}, fi = sr._fi ?? i, color = sr.color ?? palette[i % palette.length];
+    const r = refs[i] ?? {}, fi = sr._fi ?? i, color = sr.color ?? (hierarchy ? undefined : palette[i % palette.length]);
     // Size drives area charts; geographic regions use colorVal. Other layouts use val.
     const dim = hierarchy ? 'size' : type === 'map' ? 'colorVal' : 'val';
     const cats = type === 'histogram' || type === 'pareto' && catAuto ? '' : `<cx:strDim type="cat">${f(r.cat, refDirection(r.val))}${levels.map((v) => lvl(v, false)).join('')}</cx:strDim>`;
     parts.push(`<cx:data id="${i}">${cats}<cx:numDim type="${dim}">${f(r.val, refDirection(r.val))}${lvl(sr.values, true, sr.numFmt ?? 'General', sr.name)}</cx:numDim></cx:data>`);
     const labels = sr.labels ?? chart.labels;
-    const dataLabels = labels !== undefined || hierarchy ? `<cx:dataLabels pos="${hierarchy ? 'ctr' : 'bestFit'}"><cx:visibility seriesName="0" categoryName="${hierarchy && labels !== false ? 1 : 0}" value="${labels ? 1 : 0}"/></cx:dataLabels>` : '';
+    const catName = sr.catName ?? hierarchy, serName = sr.serName ?? false;
+    const positions = { center: 'ctr', insideEnd: 'inEnd', insideBase: 'inBase', outEnd: 'outEnd', out: 'outEnd', above: 't', below: 'b', left: 'l', right: 'r', bestFit: 'bestFit' };
+    const labelPos = positions[sr.labelPos] ?? (hierarchy ? 'ctr' : 'bestFit');
+    const hasLabels = labels !== undefined || hierarchy || sr.catName !== undefined || sr.serName !== undefined;
+    const labelFont = sr.labelSize !== undefined || sr.labelColor !== undefined || sr.labelBold !== undefined ? textPr(sr.labelSize, sr.labelColor, sr.labelBold) : '';
+    const dataLabels = hasLabels ? `<cx:dataLabels pos="${labelPos}">${sr.numFmt ? `<cx:numFmt formatCode="${esc(sr.numFmt)}" sourceLinked="0"/>` : ''}${labelFont}<cx:visibility seriesName="${serName ? 1 : 0}" categoryName="${catName ? 1 : 0}" value="${labels ? 1 : 0}"/></cx:dataLabels>` : '';
     const ptColors = sr.pointColors ?? sr.colors ?? {};
     const points = Object.entries(ptColors).filter(([k, v]) => /^\d+$/.test(k) && Number(k) < sr.values.length && hex(v)).map(([k, v]) => `<cx:dataPt idx="${k}">${shape(v)}</cx:dataPt>`).join('');
     const mapColors = type === 'map' ? ['min', 'mid', 'max'].map((stop, k) => { const h = hex(chart[['mapLowColor', 'mapMidColor', 'mapHighColor'][k]]); return h ? `<cx:${stop}Color><a:srgbClr val="${h}"/></cx:${stop}Color>` : ''; }).join('') : '';
@@ -166,10 +171,21 @@ export function readChartEx(root, refOf = () => null, colorOf = (n) => { const h
     const ptColors = {}; for (const pt of kids(s, 'dataPt')) { const c = colorOf(child(child(pt, 'spPr'), 'solidFill')); if (c) ptColors[pt.attrs.idx] = c; }
     if (Object.keys(ptColors).length) sf.pointColors = ptColors;
     const labels = child(s, 'dataLabels'), visible = child(labels, 'visibility');
-    if (visible && (!['sunburst', 'treemap'].includes(type) || on(visible.attrs.value) || !on(visible.attrs.categoryName))) sf.labels = on(visible.attrs.value);
+    if (visible) {
+      if (visible.attrs.value !== undefined) sf.labels = on(visible.attrs.value);
+      if (visible.attrs.categoryName !== undefined && (on(visible.attrs.categoryName) || ['sunburst', 'treemap'].includes(type))) sf.catName = on(visible.attrs.categoryName);
+      if (on(visible.attrs.seriesName)) sf.serName = true;
+    }
+    const positions = { ctr: 'center', inEnd: 'insideEnd', inBase: 'insideBase', outEnd: 'outEnd', t: 'above', b: 'below', l: 'left', r: 'right' };
+    if (positions[labels?.attrs.pos]) sf.labelPos = positions[labels.attrs.pos];
+    const labelFont = font(child(labels, 'txPr'), colorOf);
+    for (const [key, value] of Object.entries(labelFont)) sf[`label${key[0].toUpperCase()}${key.slice(1)}`] = value;
+    const labelCode = child(labels, 'numFmt')?.attrs.formatCode; if (labelCode) sf.numFmt = labelCode;
     out.seriesFmt[i] = sf;
     if (on(s.attrs.hidden)) hidden.push(i);
     if (i !== 0) return;
+    const parent = child(child(s, 'layoutPr'), 'parentLabelLayout')?.attrs.val;
+    if (type === 'treemap' && ['none', 'banner', 'overlapping'].includes(parent)) out.treemapLabelLayout = parent;
     const p = child(s, 'layoutPr'), bin = child(p, 'binning'), vis = child(p, 'visibility');
     for (const [stop, key] of [['minColor', 'mapLowColor'], ['midColor', 'mapMidColor'], ['maxColor', 'mapHighColor']]) { const c = colorOf(child(child(s, 'valueColors'), stop)); if (c) out[key] = c; }
     const width = Number(child(bin, 'binSize')?.text), count = Number(child(bin, 'binCount')?.text);
@@ -213,9 +229,9 @@ export function readChartEx(root, refOf = () => null, colorOf = (n) => { const h
 
 // Native values must win after an Excel edit. The extension stores only settings
 // for which this adapter has no native representation (e.g. WIXEL's data table).
-const NATIVE_OPTIONS = new Set(['type', 'legend', 'hiddenSeries', 'gap', 'titleSize', 'titleColor', 'titleBold', 'legendSize', 'legendColor', 'legendBold', 'axisSize', 'textColor', 'gridY', 'fill', 'plotFill', 'border', 'totals', 'binCount', 'binWidth', 'showMean', 'connectors', 'quartileMethod', 'showOutliers', 'showInnerPoints', 'mapLowColor', 'mapMidColor', 'mapHighColor']);
+const NATIVE_OPTIONS = new Set(['type', 'treemapLabelLayout', 'palette', 'legend', 'hiddenSeries', 'gap', 'titleSize', 'titleColor', 'titleBold', 'legendSize', 'legendColor', 'legendBold', 'axisSize', 'textColor', 'gridY', 'fill', 'plotFill', 'border', 'totals', 'binCount', 'binWidth', 'showMean', 'connectors', 'quartileMethod', 'showOutliers', 'showInnerPoints', 'mapLowColor', 'mapMidColor', 'mapHighColor']);
 const NATIVE_AXIS = new Set(['hide', 'title', 'min', 'max', 'major', 'numFmt']);
-const NATIVE_SERIES = new Set(['color', 'labels', 'numFmt', 'pointColors', 'colors']);
+const NATIVE_SERIES = new Set(['color', 'labels', 'catName', 'serName', 'labelPos', 'labelSize', 'labelColor', 'labelBold', 'numFmt', 'pointColors', 'colors']);
 const BOOLEAN_OPTIONS = new Set(['labels', 'dataTable', 'byRows', 'rounded', 'gridX', 'gridY', 'showMean', 'connectors', 'showOutliers', 'showInnerPoints']);
 
 function supplementalOptions(chart) {
@@ -232,8 +248,15 @@ function supplementalOptions(chart) {
   return { type: chart.type, ...props };
 }
 
-export function chartExDrawingProps(chart) {
-  return `<a:extLst><a:ext uri="{5E2A6C7B-8F4D-4B1A-9C3E-7D6F1A2B3C4D}"><tb:props xmlns:tb="urn:tabula:chart" json="${esc(JSON.stringify(supplementalOptions(chart)))}"/></a:ext></a:extLst>`;
+export function chartExDrawingProps(chart, palette = []) {
+  const props = supplementalOptions(chart);
+  // Preserve preset identity only while the actual native colors remain unchanged.
+  // Excel can edit colorStyle while leaving this drawing extension untouched.
+  if (typeof chart.palette === 'string' && palette.length) {
+    props.palette = chart.palette;
+    props.wxPaletteColors = palette.map(hex).filter(Boolean);
+  }
+  return `<a:extLst><a:ext uri="{5E2A6C7B-8F4D-4B1A-9C3E-7D6F1A2B3C4D}"><tb:props xmlns:tb="urn:tabula:chart" json="${esc(JSON.stringify(props))}"/></a:ext></a:extLst>`;
 }
 
 export function applyChartExOptions(out, json) {
@@ -251,6 +274,7 @@ export function applyChartExOptions(out, json) {
         if (Array.isArray(v)) out.seriesFmt = (out.seriesFmt ?? []).map((native, i) => ({ ...v[i], ...native }));
       } else if (v !== undefined) out[k] = v;
     }
+    if (typeof source.palette === 'string' && source.palette.length <= 128 && Array.isArray(source.wxPaletteColors) && Array.isArray(out.palette) && source.wxPaletteColors.length === out.palette.length && out.palette.length && out.palette.every((color, i) => hex(color) && hex(color) === hex(source.wxPaletteColors[i]))) out.palette = source.palette;
     if (source.wxPivot && typeof source.wxPivot === 'object' && typeof source.wxPivot.name === 'string') out.pivot = safeOption(source.wxPivot);
   } catch { /* unknown extension never prevents native data from loading */ }
   return out;

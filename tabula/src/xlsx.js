@@ -1747,7 +1747,15 @@ function readChart(files, path, theme = {}) {
   const xml = textOf(files[path]);
   if (!xml) return null;
   const root = parseXml(xml);
-  if (child(root, 'chartData') && Object.values(root.attrs).includes(CHARTEX_NS)) return readChartEx(root, seriesRef, (n) => dmlColor(n, theme));
+  if (child(root, 'chartData') && Object.values(root.attrs).includes(CHARTEX_NS)) {
+    const chart = readChartEx(root, seriesRef, (n) => dmlColor(n, theme));
+    const colors = Object.values(relsOf(files, path)).find((r) => r.type === 'chartColorStyle' && !r.external);
+    if (chart && colors && files[colors.target]) {
+      const palette = parseXml(textOf(files[colors.target])).children.filter((n) => ['srgbClr', 'schemeClr', 'sysClr', 'prstClr'].includes(n.name)).map((n) => dmlColor({ children: [n] }, theme)).filter(Boolean);
+      if (palette.length) chart.palette = palette;
+    }
+    return chart;
+  }
   const plot = descendants(root, 'plotArea')[0];
   if (!plot) return null;
   const kinds = { barChart: 'column', bar3DChart: 'column', lineChart: 'line', line3DChart: 'line', pieChart: 'pie', pie3DChart: 'pie', doughnutChart: 'doughnut', areaChart: 'area', area3DChart: 'area', scatterChart: 'scatter', radarChart: 'radar', bubbleChart: 'bubble', stockChart: 'stock', ofPieChart: 'pieOfPie', surfaceChart: 'surface', surface3DChart: 'surface' };
@@ -1829,6 +1837,10 @@ function readChart(files, path, theme = {}) {
       const line = dmlColor(child(child(spPr, 'ln'), 'solidFill'), theme);
       const marker = child(child(ser, 'marker'), 'symbol')?.attrs.val;
       const f = {};
+      const shape = child(ser, 'shape')?.attrs.val ?? child(g, 'shape')?.attrs.val;
+      if (g.name === 'bar3DChart' && ['box', 'cylinder', 'cone', 'pyramid'].includes(shape)) f.barShape = shape;
+      const groupMode = child(g, 'grouping')?.attrs.val;
+      if (groups.length > 1 && ['clustered', 'stacked', 'percentStacked', 'standard'].includes(groupMode)) f.grouping = groupMode === 'standard' && g.name !== 'bar3DChart' ? 'clustered' : groupMode;
       const seriesExplosion = child(ser, 'explosion')?.attrs.val;
       if (seriesExplosion !== undefined && Number.isFinite(Number(seriesExplosion))) f.explode = Math.max(0, Math.min(400, Number(seriesExplosion)));
       const pointExplosion = {};
@@ -1867,7 +1879,7 @@ function readChart(files, path, theme = {}) {
         }
       }
       const lposV = child(child(ser, 'dLbls'), 'dLblPos')?.attrs.val;
-      const LPOS = { ctr: 'center', inEnd: 'insideEnd', inBase: 'insideBase', outEnd: 'outEnd' };
+      const LPOS = { ctr: 'center', inEnd: 'insideEnd', inBase: 'insideBase', outEnd: 'outEnd', t: 'above', b: 'below', l: 'left', r: 'right' };
       if (LPOS[lposV] && gType !== 'pie' && gType !== 'doughnut') f.labelPos = LPOS[lposV];
       {
         const pc = {};
@@ -1877,7 +1889,7 @@ function readChart(files, path, theme = {}) {
       const lf = runFont(child(child(ser, 'dLbls') ?? child(g, 'dLbls'), 'txPr'));
       if (lf.size) f.labelSize = lf.size;
       if (lf.color) f.labelColor = lf.color;
-      if (lf.bold) f.labelBold = true;
+      if (lf.bold !== undefined) f.labelBold = lf.bold;
       const lab = dl(ser) ?? gLabels;
       if (gType === 'pie' || gType === 'doughnut') {
         // 원형 레이블: 파일에 적힌 대로 (없으면 표시하지 않음 — 엑셀과 같음)
@@ -1891,6 +1903,14 @@ function readChart(files, path, theme = {}) {
         const pos = child(d, 'dLblPos')?.attrs.val;
         if (pos === 'outEnd' || pos === 'bestFit') f.labelPos = 'out';
       } else if (lab) f.labels = true;
+      const labelNode = child(ser, 'dLbls') ?? child(g, 'dLbls');
+      if (labelNode) {
+        const deleted = child(labelNode, 'delete')?.attrs.val === '1';
+        for (const [xmlKey, key] of [['showVal', 'labels'], ['showCatName', 'catName'], ['showSerName', 'serName'], ['showPercent', 'pct']]) {
+          const v = child(labelNode, xmlKey)?.attrs.val;
+          if (deleted || v !== undefined && (key === 'labels' || ['1', 'true'].includes(v))) f[key] = !deleted && ['1', 'true'].includes(v);
+        }
+      }
       if (marker) f.marker = marker === 'none' ? 'none' : marker;
       const code = fmtCode(child(ser, 'dLbls')) ?? descendants(valEl, 'formatCode')[0]?.text;
       if (code && code !== 'General') f.numFmt = code;
@@ -1949,7 +1969,9 @@ function readChart(files, path, theme = {}) {
   if (fmts.some((f) => Object.keys(f).length)) out.seriesFmt = fmts;
   const bar = groups.find((g) => /^bar(?:3D)?Chart$/.test(g.name)) ?? groups.find((g) => /^(line|area)(?:3D)?Chart$/.test(g.name));
   const grouping = child(bar, 'grouping')?.attrs.val;
-  if (grouping === 'stacked' || grouping === 'percentStacked') out.grouping = grouping;
+  if (grouping === 'stacked' || grouping === 'percentStacked' || grouping === 'standard' && bar?.name === 'bar3DChart') out.grouping = grouping;
+  const barShape = child(bar, 'shape')?.attrs.val;
+  if (bar?.name === 'bar3DChart' && ['box', 'cylinder', 'cone', 'pyramid'].includes(barShape)) out.barShape = barShape;
   const g0 = groups[0];
   const scatterStyle = child(g0, 'scatterStyle')?.attrs.val;
   if (scatterStyle) {
@@ -3235,9 +3257,12 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
     axis: chart.type === 'stock' && chart.volume ? (i === 0 ? 0 : 1) : sr.axis ?? 0, color: sr.color ?? pal[i % pal.length],
   }));
   const LBL_POS = { center: 'ctr', insideEnd: 'inEnd', insideBase: 'inBase', outEnd: 'outEnd', above: 't', below: 'b', left: 'l', right: 'r' };
-  const dLbls = (on, code, pct = false, pos = null) => (on || pct
-    ? `<c:dLbls>${code && typeof code === 'string' && !pct ? `<c:numFmt formatCode="${esc(code)}" sourceLinked="0"/>` : ''}<c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr>${pos && LBL_POS[pos] ? `<c:dLblPos val="${LBL_POS[pos]}"/>` : ''}<c:showLegendKey val="0"/><c:showVal val="${pct ? 0 : 1}"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="${pct ? 1 : 0}"/><c:showBubbleSize val="0"/></c:dLbls>`
-    : '');
+  const dLbls = (on, code, pct = false, pos = null, sf = {}) => {
+    if (on === undefined && !pct && sf.catName === undefined && sf.serName === undefined) return '';
+    const font = sf.labelSize !== undefined || sf.labelColor !== undefined || sf.labelBold !== undefined
+      ? `<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr${Number.isFinite(sf.labelSize) ? ` sz="${Math.round(Math.max(1, Math.min(400, sf.labelSize)) * 100)}"` : ''}${sf.labelBold !== undefined ? ` b="${sf.labelBold ? 1 : 0}"` : ''}>${sf.labelColor ? `<a:solidFill><a:srgbClr val="${hex6(sf.labelColor)}"/></a:solidFill>` : ''}</a:defRPr></a:pPr><a:endParaRPr lang="ko-KR"/></a:p></c:txPr>` : '';
+    return `<c:dLbls>${code && typeof code === 'string' ? `<c:numFmt formatCode="${esc(code)}" sourceLinked="0"/>` : ''}<c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr>${font}${pos && (LBL_POS[pos] || pos === 'out') ? `<c:dLblPos val="${LBL_POS[pos] ?? 'outEnd'}"/>` : ''}<c:showLegendKey val="0"/><c:showVal val="${on ? 1 : 0}"/><c:showCatName val="${sf.catName ? 1 : 0}"/><c:showSerName val="${sf.serName ? 1 : 0}"/><c:showPercent val="${pct ? 1 : 0}"/><c:showBubbleSize val="0"/></c:dLbls>`;
+  };
   const serXml = (sr, i) => {
     const type = sr.type;
     const scatter = type === 'scatter' || type === 'bubble';
@@ -3271,8 +3296,8 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
     const trend = sr.trend && TREND[sr.trend] && !pie ? `<c:trendline><c:spPr><a:ln w="19050" cap="rnd"><a:solidFill><a:srgbClr val="${String(sr.trendColor ?? sr.color).replace('#', '').toUpperCase().slice(0, 6)}"/></a:solidFill><a:prstDash val="sysDash"/></a:ln></c:spPr><c:trendlineType val="${TREND[sr.trend]}"/>${sr.trend === 'movingAvg' ? `<c:period val="${Math.max(2, sr.trendPeriod ?? 3)}"/>` : sr.trendForward ? `<c:forward val="${sr.trendForward}"/>` : ''}<c:dispRSqr val="0"/><c:dispEq val="0"/></c:trendline>` : '';
     const code = typeof sr.numFmt === 'string' ? sr.numFmt : null;
     // 원형: 레이블을 따로 정하지 않았으면 백분율 (WIXEL 화면과 같게)
-    const pieP = pie && sr.labels !== false && (sr.pct || (sr.labels ?? chart.labels) === undefined);
-    const labels = type === 'surface' ? '' : dLbls(pie && sr.labels === false ? false : sr.labels ?? chart.labels, code, pieP, pie ? null : sr.labelPos);
+    const pieP = !!sr.pct || pie && (sr.labels ?? chart.labels) === undefined && !sr.catName && !sr.serName;
+    const labels = type === 'surface' ? '' : dLbls(sr.labels ?? chart.labels, code, pieP, sr.labelPos, sr);
     const cats = data.categories;
     const catTag = scatter ? 'xVal' : 'cat';
     // 다단계 항목 (여러 열의 항목 범위): 안쪽 → 바깥 순서의 lvl
@@ -3293,7 +3318,7 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
     const bsz = type === 'bubble' ? `<c:bubbleSize>${sr.sz ? `<c:numRef><c:f>${esc(sr.sz)}</c:f>${numCache(sr.size ?? [])}</c:numRef>` : `<c:numLit><c:formatCode>General</c:formatCode><c:ptCount val="${sr.values.length}"/>${(sr.size ?? []).map((v, k) => (typeof v === 'number' ? `<c:pt idx="${k}"><c:v>${v}</c:v></c:pt>` : '')).join('')}</c:numLit>`}</c:bubbleSize><c:bubble3D val="${chart.threeD ? 1 : 0}"/>` : '';
     const smooth = type === 'line' || (scatter && type !== 'bubble') ? `<c:smooth val="${sr.smooth || /smooth/i.test(chart.scatterStyle ?? '') ? 1 : 0}"/>` : '';
     const seriesExplosion = explosion(sr.explode ?? chart.explode);
-    return `<c:ser><c:idx val="${i}"/><c:order val="${i}"/>${tx}${spPr}${pie && seriesExplosion !== null ? `<c:explosion val="${seriesExplosion}"/>` : ''}${invert}${marker}${dPt}${dPtBar}${labels}${trend}${cat}${val}${bsz}${smooth}</c:ser>`;
+    return `<c:ser><c:idx val="${i}"/><c:order val="${i}"/>${tx}${spPr}${pie && seriesExplosion !== null ? `<c:explosion val="${seriesExplosion}"/>` : ''}${invert}${marker}${dPt}${dPtBar}${labels}${trend}${cat}${val}${bsz}${smooth}${threeD && (type === 'column' || type === 'bar') && ['box', 'cylinder', 'cone', 'pyramid'].includes(sr.barShape) ? `<c:shape val="${sr.barShape}"/>` : ''}</c:ser>`;
   };
   const pieLike = ['pie', 'doughnut', 'pieOfPie', 'barOfPie'].includes(baseType);
   const grouping = chart.grouping ?? 'clustered';
@@ -3302,8 +3327,9 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
   series.forEach((sr, i) => {
     const kind = pieLike ? baseType : sr.type === 'bar' || sr.type === 'column' ? (baseType === 'bar' ? 'bar' : 'column') : sr.type;
     const axis = pieLike ? 0 : sr.axis === 1 ? 1 : 0;
-    let g = groups.find((x) => x.kind === kind && x.axis === axis);
-    if (!g) { g = { kind, axis, xml: [] }; groups.push(g); }
+    const mode = sr.grouping ?? grouping;
+    let g = groups.find((x) => x.kind === kind && x.axis === axis && x.grouping === mode);
+    if (!g) { g = { kind, axis, grouping: mode, xml: [] }; groups.push(g); }
     g.xml.push(serXml(sr, i));
   });
   if (!groups.length) groups.push({ kind: baseType, axis: 0, xml: [] });
@@ -3311,11 +3337,12 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
   const ax = (axis) => (axis === 1 && hasSecondary ? '<c:axId val="333333333"/><c:axId val="444444444"/>' : '<c:axId val="111111111"/><c:axId val="222222222"/>');
   const groupXml = groups.map((g) => {
     const body = g.xml.join('');
+    const grouping = g.grouping ?? chart.grouping ?? 'clustered';
     const a = ax(g.axis);
     switch (g.kind) {
       case 'bar': case 'column': {
         const stackedG = grouping === 'stacked' || grouping === 'percentStacked';
-        if (threeD) return `<c:bar3DChart><c:barDir val="${g.kind === 'bar' ? 'bar' : 'col'}"/><c:grouping val="${grouping}"/><c:varyColors val="${chart.varyColors ? 1 : 0}"/>${body}<c:gapWidth val="${Math.round(Math.max(0, Math.min(500, chart.gap ?? 150)))}"/><c:gapDepth val="150"/><c:shape val="box"/>${a}</c:bar3DChart>`;
+        if (threeD) return `<c:bar3DChart><c:barDir val="${g.kind === 'bar' ? 'bar' : 'col'}"/><c:grouping val="${grouping}"/><c:varyColors val="${chart.varyColors ? 1 : 0}"/>${body}<c:gapWidth val="${Math.round(Math.max(0, Math.min(500, chart.gap ?? 150)))}"/><c:gapDepth val="150"/><c:shape val="${['box', 'cylinder', 'cone', 'pyramid'].includes(chart.barShape) ? chart.barShape : 'box'}"/>${a}${grouping === 'standard' ? '<c:axId val="555555555"/>' : ''}</c:bar3DChart>`;
         return `<c:barChart><c:barDir val="${g.kind === 'bar' ? 'bar' : 'col'}"/><c:grouping val="${grouping}"/><c:varyColors val="${chart.varyColors ? 1 : 0}"/>${body}<c:gapWidth val="${typeof chart.gap === 'number' ? Math.round(chart.gap) : g.kind === 'bar' ? 182 : 150}"/>${stackedG ? '<c:overlap val="100"/>' : typeof chart.overlap === 'number' ? `<c:overlap val="${Math.round(Math.max(-100, Math.min(100, chart.overlap)))}"/>` : ''}${a}</c:barChart>`;
       }
       case 'line':
@@ -3357,7 +3384,7 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
     axesXml = catAxis(111111111, 222222222, horizontal ? 'l' : 'b', false) + valAxis(222222222, 111111111, horizontal ? 'b' : 'l', chart.axes?.y, true);
     if (hasSecondary) axesXml += catAxis(333333333, 444444444, horizontal ? 'l' : 'b', true) + valAxis(444444444, 333333333, horizontal ? 't' : 'r', chart.axes?.y2, false, 'max');
   }
-  if (baseType === 'surface' || threeD && baseType === 'line') axesXml += `<c:serAx><c:axId val="555555555"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:tickLblPos val="nextTo"/><c:crossAx val="222222222"/><c:crosses val="autoZero"/><c:tickLblSkip val="1"/><c:tickMarkSkip val="1"/></c:serAx>`;
+  if (baseType === 'surface' || threeD && (baseType === 'line' || ['column', 'bar'].includes(baseType) && groups.some(g => g.grouping === 'standard'))) axesXml += `<c:serAx><c:axId val="555555555"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:tickLblPos val="nextTo"/><c:crossAx val="222222222"/><c:crosses val="autoZero"/><c:tickLblSkip val="1"/><c:tickMarkSkip val="1"/></c:serAx>`;
   const titleFont = `sz="${Math.round((chart.titleSize ?? 14) * 100)}" b="${chart.titleBold ? 1 : 0}"`;
   const titleFill = chart.titleColor ? `<a:solidFill><a:srgbClr val="${hex6(chart.titleColor)}"/></a:solidFill>` : '';
   const title = chart.title
@@ -3376,7 +3403,7 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx') {
   const areaSpPr = chart.fill || chart.border ? `<c:spPr>${chart.fill ? `<a:solidFill><a:srgbClr val="${hexOf(chart.fill)}"/></a:solidFill>` : ''}${chart.border ? `<a:ln w="9525"><a:solidFill><a:srgbClr val="${hexOf(chart.border)}"/></a:solidFill></a:ln>` : ''}</c:spPr>` : '';
   const plotSpPr = chart.plotFill ? `<c:spPr><a:solidFill><a:srgbClr val="${hexOf(chart.plotFill)}"/></a:solidFill></c:spPr>` : '';
   // WIXEL 전용 설정 (엑셀은 무시): 원래 차트 종류 · 팔레트 · 서식
-  const TB_KEYS = ['mapLowColor', 'mapMidColor', 'mapHighColor', 'bandCount', 'showNegBubbles', 'surfaceStyle', 'volume', 'splitType', 'splitPos', 'splitPoints', 'secondSize', 'splitGap', 'bubble3D', 'comboAxis', 'threeD', 'view3D', 'titleSize', 'axisSize', 'hiddenSeries', 'hiddenCats', 'legendBold', 'type', 'byRows', 'fieldButtons', 'palette', 'scatterStyle', 'radarStyle', 'ohlc', 'explode', 'hole', 'gap', 'marker', 'gridX', 'gridY', 'fill', 'plotFill', 'border', 'titleColor', 'titleBold', 'textColor', 'gridColor', 'rounded', 'totals', 'binCount', 'binWidth', 'upColor', 'downColor', 'totalColor', 'bubbleScale', 'firstAngle', 'showMean', 'connectors'];
+  const TB_KEYS = ['mapLowColor', 'mapMidColor', 'mapHighColor', 'bandCount', 'showNegBubbles', 'surfaceStyle', 'volume', 'splitType', 'splitPos', 'splitPoints', 'secondSize', 'splitGap', 'bubble3D', 'comboAxis', 'comboLayout', 'threeD', 'view3D', 'titleSize', 'axisSize', 'hiddenSeries', 'hiddenCats', 'legendBold', 'type', 'byRows', 'fieldButtons', 'palette', 'scatterStyle', 'radarStyle', 'ohlc', 'explode', 'hole', 'gap', 'marker', 'gridX', 'gridY', 'fill', 'plotFill', 'border', 'titleColor', 'titleBold', 'textColor', 'gridColor', 'rounded', 'totals', 'binCount', 'binWidth', 'upColor', 'downColor', 'totalColor', 'bubbleScale', 'firstAngle', 'showMean', 'connectors'];
   const tb = Object.fromEntries(TB_KEYS.filter((k) => chart[k] !== undefined && chart[k] !== null).map((k) => [k, chart[k]]));
   // 계열은 위에서 실제로 제거했다. 압축된 ser 목록에 원래 번호를 다시 적용하면
   // 남은 계열까지 숨겨지므로 확장에 hiddenSeries를 중복 저장하지 않는다.
@@ -4396,7 +4423,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
           }
           const id = drel(isChartEx(ch) ? CHARTEX_REL : 'chart', `../charts/chart${chartNo}.xml`);
           const chartNamespace = isChartEx(ch) ? CHARTEX_NS : 'http://schemas.openxmlformats.org/drawingml/2006/chart';
-          parts.push(anchor(ch, `<xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="${objId}" name="차트 ${objId - 1}"${ch.hidden ? ' hidden="1"' : ''}>${isChartEx(ch) ? chartExDrawingProps(ch) : ''}</xdr:cNvPr><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="${chartNamespace}"><c:chart xmlns:c="${chartNamespace}" r:id="${id}"/></a:graphicData></a:graphic></xdr:graphicFrame>`));
+          parts.push(anchor(ch, `<xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="${objId}" name="차트 ${objId - 1}"${ch.hidden ? ' hidden="1"' : ''}>${isChartEx(ch) ? chartExDrawingProps(ch, paletteOf(ch)) : ''}</xdr:cNvPr><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="${chartNamespace}"><c:chart xmlns:c="${chartNamespace}" r:id="${id}"/></a:graphicData></a:graphic></xdr:graphicFrame>`));
         } else if (kind === 'image') {
           const im = o;
           // SVG 그림(아이콘): PNG 대체 그림 + svgBlip 으로 원본 SVG (엑셀과 같은 방식)

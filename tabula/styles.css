@@ -2313,3 +2313,17 @@ body.mobile-work-mode .sa-categories{flex-direction:row;flex-wrap:wrap;border-ri
 
 @media(min-width:721px){body:not(.mobile-work-mode) .dialog:has(.sa-editor-expanded){max-width:min(1080px,calc(100vw - 32px))}}
 .sa-editor-expanded .sa-text-row textarea{height:52px}
+
+/* 차트: 유형 탐색과 선택한 요소의 세부 서식을 좁은 화면에서도 유지합니다. */
+.ct-grid { max-width: 330px; max-height: 330px; overflow: auto; }
+.ct-chip:focus-visible { outline: 2px solid var(--green); outline-offset: -2px; }
+.chart-selection-pane { display: flex; flex-direction: column; gap: 10px; }
+.chart-selection-pane > .cfp-row { flex-direction: column; align-items: stretch; }
+.chart-selection-pane > .cfp-row > span:first-child { flex-basis: auto; }
+.dialog .chart-selection-pane > .cfp-row > select { flex: 0 0 auto; width: 100%; max-width: 100%; height: 34px; min-height: 34px; }
+.chart-selection-pane .cfp-selection-name { margin: 0; line-height: 1.5; overflow-wrap: anywhere; }
+.chart-selection-pane .cfp-sec .btn { margin: 6px 0; }
+.chart-selection-pane .muted { line-height: 1.6; margin: 8px 0 2px; }
+.cg-combo-table th:first-child { width: 28%; }
+.cg-combo-table th:nth-child(2) { width: 28%; }
+.cg-subs { max-height: 240px; overflow: auto; }

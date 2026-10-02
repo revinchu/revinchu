@@ -2014,6 +2014,7 @@ function onViewMouseDown(e) {
     const prevPart = chartPart;
     if (objEl.classList.contains('chart') && e.button !== 1) {
       if (partEl?.dataset.el === 'label') chartPart = { id, kind: 'label', s: Number(partEl.dataset.s) };
+      else if (partEl?.dataset.node !== undefined) chartPart = { id, kind: 'node', s: Number(partEl.dataset.s ?? 0), node: partEl.dataset.node };
       else if (partEl?.dataset.s !== undefined) {
         const sIdx = Number(partEl.dataset.s);
         const pIdx = partEl.dataset.p !== undefined ? Number(partEl.dataset.p) : null;
@@ -2028,7 +2029,7 @@ function onViewMouseDown(e) {
     if (objEl.classList.contains('chart') && e.button === 0) {
       const now = Date.now(), repeat = lastChartPointer?.id === id && now - lastChartPointer.time < 450 && Math.hypot(e.clientX - lastChartPointer.x, e.clientY - lastChartPointer.y) < 5;
       lastChartPointer = { id, time: now, x: e.clientX, y: e.clientY };
-      if (repeat || e.detail >= 2) { chartFormatPane(id); suppressChartDoubleClickUntil = now + 120; }
+      if (repeat || e.detail >= 2) { chartFormatPane(id); focusGrid(); suppressChartDoubleClickUntil = now + 120; }
     }
     if (e.button !== 0) return;
     const found = findObject(sheet(), id);
@@ -5540,7 +5541,7 @@ function chartMenu(id, pos) { objectMenu(id, pos); }
 const chartHere = () => (chartSel ? sheet().charts.find((c) => c.id === chartSel) : null);
 
 /** 차트 삽입 (엑셀 [모든 차트]): 왼쪽 분류 · 위 하위 종류 · 미리 보기. changeId 가 있으면 [차트 종류 변경] */
-function insertChartAllDialog(changeId = null) {
+function insertChartAllDialog(changeId = null, initialType = null) {
   const base = changeId ? sheet().charts.find((c) => c.id === changeId) : null;
   let rg = null;
   if (!base) {
@@ -5552,12 +5553,12 @@ function insertChartAllDialog(changeId = null) {
   // 필터로 숨긴 계열도 원래 번호로 편집합니다. 색·레이블 등 기존 개별 서식은 유지합니다.
   const comboData = dataFor({ ...source, type: 'combo', threeD: false, hiddenSeries: undefined });
   const comboTypes = [['column', '묶은 세로 막대형'], ['line', '꺾은선형'], ['area', '영역형']];
-  const comboFmt = comboData.series.map((s, i) => ({ ...(base?.seriesFmt?.[i] ?? {}), type: s.type ?? 'column', axis: s.axis ?? 0 }));
+  const comboFmt = comboData.series.map((s, i) => ({ ...(base?.seriesFmt?.[i] ?? {}), type: s.type ?? 'column', axis: s.axis ?? 0, grouping: s.grouping }));
   const chartPatch = (patch) => ({
-    grouping: undefined, marker: undefined, scatterStyle: undefined, radarStyle: undefined, explode: undefined, ohlc: undefined, volume: undefined, surfaceStyle: undefined, bubble3D: undefined,
+    grouping: undefined, marker: undefined, scatterStyle: undefined, radarStyle: undefined, explode: undefined, ohlc: undefined, volume: undefined, surfaceStyle: undefined, bubble3D: undefined, barShape: undefined, comboLayout: undefined, comboAxis: undefined,
     ...(patch.type === 'combo' && base?.type === 'combo' ? { marker: base.marker } : {}),
     ...patch,
-    seriesFmt: patch.type === 'combo' ? comboFmt.map((f) => ({ ...f })) : (base?.seriesFmt ?? []).map(({ type, axis, ...f }) => ({ ...f })),
+    seriesFmt: patch.type === 'combo' ? comboFmt.map((f) => ({ ...f })) : (base?.seriesFmt ?? []).map(({ type, axis, grouping, ...f }) => ({ ...f })),
   });
   const draftOf = (patch) => ({ ...source, ...chartPatch(patch) });
   const drawCombo = (box, patch, redraw) => {
@@ -5572,15 +5573,18 @@ function insertChartAllDialog(changeId = null) {
       const name = s.name || `계열${i + 1}`;
       const options = comboTypes.some(([type]) => type === f.type) ? comboTypes : [[f.type, CHART_TYPES.find((t) => t.id === f.type)?.label ?? f.type], ...comboTypes];
       const type = el('select', { 'aria-label': `${name} 차트 종류`, 'data-combo-type': i }, options.map(([value, label]) => el('option', { value, selected: f.type === value }, label)));
+      const grouping = el('select', { 'aria-label': `${name} 배치` }, [['clustered', '묶은'], ['stacked', '누적'], ['percentStacked', '100% 기준 누적']].map(([value, label]) => el('option', { value, selected: value === (f.grouping ?? (f.type === 'line' ? 'clustered' : patch.grouping ?? 'clustered')) }, label)));
+      grouping.disabled = f.type === 'line';
+      grouping.addEventListener('change', () => { f.grouping = grouping.value; redraw(); });
       const axis = el('select', { 'aria-label': `${name} 축`, 'data-combo-axis': i }, [['0', '기본 축 (왼쪽)'], ['1', '보조 축 (오른쪽)']].map(([value, label]) => el('option', { value, selected: String(f.axis) === value }, label)));
-      type.addEventListener('change', () => { f.type = type.value; redraw(); });
+      type.addEventListener('change', () => { f.type = type.value; grouping.disabled = f.type === 'line'; redraw(); });
       axis.addEventListener('change', () => { f.axis = Number(axis.value); redraw(); });
       return el('tr', {}, el('th', { scope: 'row', title: name },
         el('span', { class: 'cg-series-color', style: { backgroundColor: f.color ?? paletteOf(source)[i % paletteOf(source).length] } }), name,
-        base?.hiddenSeries?.includes(i) ? el('span', { class: 'muted' }, ' (숨김)') : null), el('td', {}, type), el('td', {}, axis));
+        base?.hiddenSeries?.includes(i) ? el('span', { class: 'muted' }, ' (숨김)') : null), el('td', {}, type), el('td', {}, grouping), el('td', {}, axis));
     });
     box.append(el('div', { class: 'cg-combo-scroll' }, el('table', { class: 'cg-combo-table' },
-      el('thead', {}, el('tr', {}, el('th', { scope: 'col' }, '계열 이름'), el('th', { scope: 'col' }, '차트 종류'), el('th', { scope: 'col' }, '축'))), el('tbody', {}, rows))));
+      el('thead', {}, el('tr', {}, el('th', { scope: 'col' }, '계열 이름'), el('th', { scope: 'col' }, '차트 종류'), el('th', { scope: 'col' }, '배치'), el('th', { scope: 'col' }, '축'))), el('tbody', {}, rows))));
   };
   const cats = el('div', { class: 'cg-cats', 'aria-label': '차트 분류' });
   const search = el('input', { type: 'search', class: 'cg-search', placeholder: '차트 종류 검색', 'aria-label': '차트 종류 검색' });
@@ -5604,8 +5608,12 @@ function insertChartAllDialog(changeId = null) {
       return thumb;
     }));
     const match = base ? list.findIndex(([, p]) => chartPresetMatches(base, p)) : -1;
-    const selected = Math.max(0, match);
-    sel(subs.children[selected], ...list[selected]);
+    const query = search.value.trim().toLocaleLowerCase();
+    const groupMatch = CHART_GALLERY[gi][0].toLocaleLowerCase().includes(query);
+    const visible = list.map(([name]) => !query || groupMatch || name.toLocaleLowerCase().includes(query));
+    [...subs.children].forEach((button, index) => { button.hidden = !visible[index]; });
+    const selected = match >= 0 && visible[match] ? match : visible.indexOf(true);
+    if (selected >= 0) sel(subs.children[selected], ...list[selected]);
   };
   const sel = (thumb, name, patch, resetCombo = false) => {
     subs.querySelectorAll('.on').forEach((x) => x.classList.remove('on'));
@@ -5614,8 +5622,8 @@ function insertChartAllDialog(changeId = null) {
     if (patch.type === 'combo' && base?.type === 'combo' && !resetCombo) patch = { ...patch, grouping: base.grouping ?? patch.grouping };
     pick = patch;
     if (patch.type === 'combo' && resetCombo) {
-      const defaults = dataFor({ ...source, ...patch, hiddenSeries: undefined, seriesFmt: (base?.seriesFmt ?? []).map(({ type, axis, ...f }) => ({ ...f })) });
-      defaults.series.forEach((s, i) => { comboFmt[i] = { ...(base?.seriesFmt?.[i] ?? {}), type: s.type ?? 'column', axis: s.axis ?? 0 }; });
+      const defaults = dataFor({ ...source, ...patch, hiddenSeries: undefined, seriesFmt: (base?.seriesFmt ?? []).map(({ type, axis, grouping, ...f }) => ({ ...f })) });
+      defaults.series.forEach((s, i) => { comboFmt[i] = { ...(base?.seriesFmt?.[i] ?? {}), type: s.type ?? 'column', axis: s.axis ?? 0, grouping: s.grouping }; });
     }
     label.textContent = patch.type === 'combo' ? '사용자 지정 콤보' : name;
     const redraw = () => { const d = draftOf(patch), data = dataFor(d), info = chartDataGuide(d, data); setSafeHtml(prev, renderChartSvg({ ...d, w: 600, h: 260 }, data)); guide.textContent = info.error || info.description; guide.classList.toggle('error', !!info.error); };
@@ -5624,7 +5632,7 @@ function insertChartAllDialog(changeId = null) {
   };
   CHART_GALLERY.forEach(([g], i) => cats.append(el('button', { class: 'cg-cat', onclick: () => show(i) }, g)));
   const mixed = base && !base.threeD && (base.type === 'combo' || base.seriesFmt?.some((f) => f?.axis === 1) || new Set((base.seriesFmt ?? []).map((f) => f?.type ?? base.type)).size > 1);
-  const cur = base ? CHART_GALLERY.findIndex(([, list]) => list.some(([, p]) => p.type === (mixed ? 'combo' : base.type))) : 0;
+  const cur = base ? CHART_GALLERY.findIndex(([, list]) => list.some(([, p]) => p.type === (mixed ? 'combo' : base.type))) : initialType ? CHART_GALLERY.findIndex(([, list]) => list.some(([, preset]) => preset.type === initialType)) : 0;
   const filterChoices = () => {
     const query = search.value.trim().toLocaleLowerCase();
     const matches = CHART_GALLERY.map(([group, entries]) => !query || group.toLocaleLowerCase().includes(query) || entries.some(([name]) => name.toLocaleLowerCase().includes(query)));
@@ -5677,7 +5685,7 @@ function insertChartAllDialog(changeId = null) {
     };
     tabs.append(el('button', { class: 'dlg-tab', onclick: () => showTab(0) }, '추천 차트'), el('button', { class: 'dlg-tab', onclick: () => showTab(1) }, '모든 차트'));
     body = el('div', {}, tabs, box);
-    showTab(recs.length ? 0 : 1);
+    showTab(initialType || !recs.length ? 1 : 0);
   } else show(Math.max(0, cur));
   openDialog({
     title: base ? '차트 종류 변경' : '차트 삽입', width: 920, onOpen: (d) => d.classList.add('chart-type-dialog'),
@@ -5844,7 +5852,7 @@ function pivotChartMetrics(chId = chartSel) {
 }
 
 const PIE_TYPES = new Set(['pie', 'doughnut']);
-const NO_AXIS_TYPES = new Set(['pie', 'doughnut', 'pieOfPie', 'barOfPie', 'sunburst', 'funnel', 'treemap', 'map']);
+const NO_AXIS_TYPES = new Set(['pie', 'doughnut', 'pieOfPie', 'barOfPie', 'sunburst', 'funnel', 'treemap', 'map', 'surface']);
 /** 차트 요소 추가 (엑셀 [차트 디자인] → [차트 요소 추가] · 차트 옆 + 단추): 요소마다 하위 메뉴 */
 function chartElementsMenu() {
   const ch = chartHere();
@@ -6437,7 +6445,7 @@ function pointColorRow(s, f, setF) {
     el('button', { class: 'btn small', onclick: () => { const pc = { ...(f.pointColors ?? {}) }; delete pc[idx.value]; setF({ pointColors: Object.keys(pc).length ? pc : undefined }); } }, '되돌리기')));
 }
 function chartCanEdit(chart, notify = true) {
-  const blocked = viewOnly || (isProtected(sheet()) && chart.locked !== false && !allowed(sheet(), 'objects'));
+  const blocked = viewOnly || wb.props?.markedFinal || (isProtected(sheet()) && chart.locked !== false && !allowed(sheet(), 'objects'));
   if (blocked && notify) toast('읽기 전용이거나 보호된 차트는 변경할 수 없습니다.');
   return !blocked;
 }
@@ -6539,7 +6547,8 @@ function chartFormatPane(id = chartSel) {
   const expanded = new Map();
   const book = wb, host = si, hostSheet = sheet();
   const get = () => wb === book && si === host && sheet() === hostSheet ? hostSheet.charts.find(c => c.id === id) : null;
-  const up = patch => { const chart = get(); if (!chart || !chartCanEdit(chart)) return; updateChart(id, patch); gv.renderObjectsAll(); };
+  let ownChange = false;
+  const up = patch => { const chart = get(); if (!chart || !chartCanEdit(chart)) return; ownChange = true; try { updateChart(id, patch); } finally { ownChange = false; } gv.renderObjectsAll(); };
   const sec = (title, ...rows) => el('details', { class: 'cfp-sec', open: true }, el('summary', {}, title), ...rows);
   const row = (label, input) => { const control = input?.matches?.('input,select,textarea') ? input : input?.querySelector?.('input,select,textarea'); control?.setAttribute('aria-label', label); return el('label', { class: 'cfp-row' }, el('span', {}, label), input); };
   const color = (v, fn, allowNone = true) => {
@@ -6583,7 +6592,7 @@ function chartFormatPane(id = chartSel) {
         row('둥근 모서리', chk(ch.rounded, (v) => up({ rounded: v || undefined }))),
         row('글자 색', color(ch.textColor, (v) => up({ textColor: v }))),
         row('그림 영역 채우기', color(ch.plotFill, (v) => up({ plotFill: v }))),
-        row('색 구성', sel2(ch.palette ?? 'office', Object.entries(CHART_PALETTES).map(([k, p]) => [k, p.label]), (v) => up({ palette: v === 'office' ? undefined : v })))),
+        row('색 구성', sel2(Array.isArray(ch.palette) ? 'imported' : ch.palette ?? 'office', [...(Array.isArray(ch.palette) ? [['imported', '가져온 색']] : []), ...Object.entries(CHART_PALETTES).map(([k, p]) => [k, p.label])], (v) => { if (v !== 'imported') up({ palette: v === 'office' ? undefined : v }); }))),
       sec('차트 제목',
         row('제목', txt(ch.title, (v) => up({ title: v }))),
         row('글꼴 크기(pt)', num(ch.titleSize, (v) => up({ titleSize: v }), { min: 6, max: 40 })),
@@ -6622,9 +6631,11 @@ function chartFormatPane(id = chartSel) {
         ch.dataTable && ['waterfall', 'histogram', 'pareto', 'boxWhisker'].includes(ch.type) ? el('p', { class: 'muted' }, '통계 데이터 표는 위셀 표시 기능입니다. XLSX에는 위셀 설정으로 보관되며 Excel의 데이터 표로 표시되지는 않습니다.') : null),
       sec('계열 옵션',
         barSeries ? row('간격 너비(%)', num(ch.gap, (v) => up({ gap: v }), { min: 0, max: 500 })) : null,
+        barSeries && ch.threeD ? row('막대 모양', sel2(ch.barShape ?? 'box', [['box', '상자'], ['cylinder', '원통'], ['cone', '원뿔'], ['pyramid', '피라미드']], v => up({ barShape: v }))) : null,
+        ch.type === 'treemap' ? row('상위 항목 레이블', sel2(ch.treemapLabelLayout ?? 'banner', [['banner', '배너'], ['overlapping', '겹치기'], ['none', '없음']], v => up({ treemapLabelLayout: v }))) : null,
         barSeries && !ch.threeD ? row('계열 겹치기(%)', num(ch.overlap, (v) => up({ overlap: v }), { min: -100, max: 100 })) : null,
         row('요소마다 다른 색', chk(ch.varyColors, (v) => up({ varyColors: v || undefined }))),
-        groupable ? row('배치', sel2(ch.grouping ?? 'clustered', [['clustered', '묶은'], ['stacked', '누적'], ['percentStacked', '100% 기준 누적']], (v) => up({ grouping: v === 'clustered' ? undefined : v }))) : null,
+        groupable ? row('배치', sel2(ch.grouping ?? 'clustered', [['clustered', '묶은'], ['stacked', '누적'], ['percentStacked', '100% 기준 누적'], ...(ch.type === 'column' && ch.threeD ? [['standard', '깊이 축']] : [])], (v) => up({ grouping: v === 'clustered' ? undefined : v }))) : null,
         ch.type === 'doughnut' ? row('도넛 구멍 크기(%)', num(ch.hole ?? 50, (v) => up({ hole: v }), { min: 10, max: 90 })) : null,
         ch.type === 'pie' || ch.type === 'doughnut' ? row('첫째 조각 각(°)', num(ch.firstAngle ?? 0, (v) => up({ firstAngle: v }), { min: 0, max: 360 })) : null,
         ['pie', 'doughnut'].includes(ch.type) ? row('쪼개기(%)', num(ch.explode ?? 0, (v) => up({ explode: v || undefined }), { min: 0, max: 40 })) : null,
@@ -6668,6 +6679,7 @@ function chartFormatPane(id = chartSel) {
             row('색', color(s.color ?? paletteOf(ch)[i % paletteOf(ch).length], (v) => setF({ color: v }), false)),
             !ch.threeD && ['column', 'line', 'area', 'combo'].includes(ch.type) ? row('종류', sel2(f.type ?? '', [['', '기본'], ['column', '막대'], ['line', '꺾은선'], ['area', '영역']], (v) => { setF({ type: v || undefined }); draw(); })) : null,
             !ch.threeD && ['column', 'line', 'area', 'combo'].includes(ch.type) ? row('축', sel2(f.axis ?? s.axis ?? 0, [[0, '기본 축'], [1, '보조 축']], (v) => setF({ axis: Number(v) }))) : null,
+            !ch.threeD && ['column', 'bar', 'area'].includes(type) ? row('계열 배치', sel2(f.grouping ?? s.grouping ?? ch.grouping ?? 'clustered', [['clustered', '묶은'], ['stacked', '누적'], ['percentStacked', '100% 기준 누적']], v => setF({ grouping: v }))) : null,
             hasLine ? row('선 굵기(px)', num(f.lineWidth, (v) => setF({ lineWidth: v }), { min: 0.5, max: 12, step: 0.25 })) : null,
             hasLine ? row('표식', sel2(f.marker ?? '', [['', '자동'], ['none', '없음'], ['circle', '원'], ['square', '사각형'], ['diamond', '마름모'], ['triangle', '삼각형']], (v) => setF({ marker: v || undefined }))) : null,
             canSmooth ? row('부드러운 선', chk(f.smooth, (v) => setF({ smooth: v || undefined }))) : null,
@@ -6734,9 +6746,11 @@ function chartFormatPane(id = chartSel) {
   };
   for (const eventName of ['change', 'click']) body.addEventListener(eventName, event => { if (!get()) { event.preventDefault(); event.stopImmediatePropagation(); draw(); } }, true);
   draw();
-  chartPaneDlg = openDialog({ title: '차트 서식', width: 390, modeless: true, body, onClose: () => { chartPaneDlg = null; } });
-  chartPaneDlg.root.classList.add('pane-dlg');
-  chartPaneDlg.chartId = id; chartPaneDlg.selectPart = () => { if (chartPart?.id === id) chartSelectedFormatPane(id); };
+  const refresh = () => { if (!ownChange) queueMicrotask(() => { if (body.isConnected) draw(); }); };
+  book.onChange(refresh);
+  const dialog = openDialog({ title: '차트 서식', width: 390, modeless: true, body, onClose: () => { book.listeners.delete(refresh); if (chartPaneDlg === dialog) chartPaneDlg = null; } });
+  dialog.root.classList.add('pane-dlg'); dialog.chartId = id;
+  dialog.selectPart = () => { if (chartPart?.id === id) chartSelectedFormatPane(id); }; chartPaneDlg = dialog;
 }
 
 
@@ -17301,18 +17315,22 @@ const MENUS = {
   chartsStat: (a) => { chartTypeMenu('stat', a); },
   chartsScatter: (a) => { chartTypeMenu('scatter', a); },
   chartsCombo: (a) => { chartTypeMenu('combo', a); },
+  chartsSurface: (a) => { chartTypeMenu('surface', a); },
+  chartsMap: (a) => { chartTypeMenu('map', a); },
 };
 
 // [삽입] → 차트 종류 단추 (엑셀처럼 구역별 미리 보기 그림 + '다른 … 차트')
 const G = (name) => CHART_GALLERY.find(([g]) => g === name)?.[1] ?? [];
 const CHART_TYPE_MENUS = {
   colBar: [['2차원 세로 막대형', G('세로 막대형').filter(([, p]) => !p.threeD)], ['3차원 세로 막대형', G('세로 막대형').filter(([, p]) => p.threeD)], ['2차원 가로 막대형', G('가로 막대형').filter(([, p]) => !p.threeD)], ['3차원 가로 막대형', G('가로 막대형').filter(([, p]) => p.threeD)], '다른 세로 막대형 차트...'],
-  hier: [['트리맵', G('트리맵')], '다른 계층 구조 차트...'],
+  hier: [['트리맵', G('트리맵')], ['선버스트', G('선버스트')], '다른 계층 구조 차트...'],
   waterfall: [['폭포', G('폭포')], ['깔때기형', G('깔때기형')], ['주식형', G('주식형')], '다른 폭포 또는 주식형 차트...'],
   lineArea: [['2차원 꺾은선형', G('꺾은선형').filter(([, p]) => !p.threeD)], ['3차원 꺾은선형', G('꺾은선형').filter(([, p]) => p.threeD)], ['2차원 영역형', G('영역형').filter(([, p]) => !p.threeD)], ['3차원 영역형', G('영역형').filter(([, p]) => p.threeD)], ['방사형', G('방사형')], '다른 꺾은선형 차트...'],
   stat: [['히스토그램', G('히스토그램')], ['상자 수염', G('상자 수염')], '통계 차트 더 보기...'],
-  pie: [['2차원 원형', G('원형').filter(([, p]) => p.type === 'pie' && !p.threeD)], ['3차원 원형', G('원형').filter(([, p]) => p.type === 'pie' && p.threeD)], ['도넛형', G('원형').filter(([, p]) => p.type === 'doughnut')], '다른 원형 차트...'],
+  pie: [['2차원 원형', G('원형').filter(([, p]) => p.type === 'pie' && !p.threeD)], ['3차원 원형', G('원형').filter(([, p]) => p.type === 'pie' && p.threeD)], ['도넛형', G('원형').filter(([, p]) => p.type === 'doughnut')], ['대조 원형', G('원형').filter(([, p]) => p.type === 'pieOfPie')], ['대조 가로 막대형', G('원형').filter(([, p]) => p.type === 'barOfPie')], '다른 원형 차트...'],
   scatter: [['분산형', G('분산형').filter(([, p]) => p.type === 'scatter')], ['거품형', G('분산형').filter(([, p]) => p.type === 'bubble')], '다른 분산형 차트...'],
+  surface: [['표면형 · 등고선형', G('표면형')], '다른 표면형 차트...'],
+  map: [['지도', G('지도')], '다른 지도 차트...'],
   combo: [['콤보', G('콤보')], '사용자 지정 콤보 차트 만들기...'],
 };
 const THUMB_DATA = {
@@ -17325,9 +17343,10 @@ const THUMB_DATA = {
 };
 function chartThumb(p) {
   try {
-    const one = ['pie', 'doughnut', 'funnel', 'waterfall', 'treemap', 'histogram', 'pareto'].includes(p.type);
+    const one = ['pie', 'doughnut', 'funnel', 'waterfall', 'treemap', 'sunburst', 'pieOfPie', 'barOfPie', 'map', 'histogram', 'pareto'].includes(p.type);
+    const sample = ['treemap', 'sunburst'].includes(p.type) ? { ...THUMB_DATA, catLevels: [[{ text: '서울', start: 0, end: 1 }, { text: '부산', start: 2, end: 3 }]], series: THUMB_DATA.series.slice(0, 1) } : p.type === 'map' ? { categories: ['KR', 'JP', 'US', 'AU'], series: THUMB_DATA.series.slice(0, 1) } : one ? { ...THUMB_DATA, series: THUMB_DATA.series.slice(0, 1) } : THUMB_DATA;
     return renderChartSvg({ ...p, w: 120, h: 100, title: '', legend: 'none', gridY: false, labels: undefined, axes: { x: { hide: true }, y: { hide: true }, y2: { hide: true } }, axisSize: 1 },
-      one ? { ...THUMB_DATA, series: THUMB_DATA.series.slice(0, 1) } : THUMB_DATA);
+      sample);
   } catch { return ICONS.chartColumn; }
 }
 function chartTypeMenu(kind, anchor) {
@@ -17336,14 +17355,14 @@ function chartTypeMenu(kind, anchor) {
   const items = [];
   for (const part of spec) {
     if (typeof part === 'string') {
-      items.push({ sep: true }, { label: part, icon: 'chartColumn', action: () => run('insertChartAll') });
+      items.push({ sep: true }, { label: part, icon: 'chartColumn', action: () => insertChartAllDialog(null, spec.find(Array.isArray)?.[1]?.[0]?.[1]?.type) });
       continue;
     }
     const [title, list] = part;
     if (!list.length) continue;
     items.push({ title }, {
       node: el('div', { class: 'ct-grid' }, list.map(([n, p]) => el('button', {
-        class: 'ct-chip', title: n, html: chartThumb(p),
+        class: 'ct-chip', type: 'button', title: n, 'aria-label': n, html: chartThumb(p),
         onmousedown: (e) => e.preventDefault(), onclick: () => { closeMenus(); insertChart(p.type, p); },
       }))),
     });
@@ -17492,6 +17511,7 @@ const COMMANDS = {
   zoomSel: () => zoomToSelection(),
   insertSymbol: () => insertSymbolDialog(),
   insertChartAll: () => insertChartAllDialog(),
+  insertChartCatalog: () => insertChartAllDialog(null, 'column'),
   insertPivotChart: () => insertPivotChart(),
   chartSwitch: () => chartSwitchRowCol(),
   chartSelectData: () => { if (chartSel) selectDataDialog(chartSel); },
@@ -17911,6 +17931,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileFit','toggleR
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['차트 종류·요소 서식 보강', ['선버스트·트리맵 계층과 선택 색 보존 · 리본에서 모든 차트 종류 접근', '원통·원뿔·피라미드 3차원 막대 · 누적 영역 콤보 · 계열별 배치와 축', '축·데이터 레이블·계층 요소를 선택하여 상세 서식 조정 · 실행 취소 동기화']],
   ['그리기와 도형 조합', ['펜·형광펜·선·도형·지우개 팔레트 · 색·굵기·불투명도 · 터치 그리기', 'SVG 아이콘을 편집 가능한 도형으로 변환 · 그룹 해제 후 부분별 색 변경', '두 개 이상 도형의 결합·병합·조각·교차·빼기 · 실행 취소']],
   ['미디어와 SmartArt 확장', ['Unsplash·Pexels·Pixabay 검색 연결 · 서버 API 키 설정 시 사용', 'GIF 원본 삽입 · Wikimedia·NASA 영상 검색과 시트에서 재생', 'SmartArt 60종 · 8개 분류 · 검색·미리보기 · 그림·계층·색·스타일 편집']],
   ['문서 출력과 작업 화면', ['파일 메뉴에서 웹페이지(HTML)와 PDF 다운로드 · 저장창으로 위치 선택', '홈 → 교차색상 · 머리글/바닥글과 8개 색상표 · XLSX 서식 유지', '보기 → 전체화면 · 화면 위 종료 버튼']],

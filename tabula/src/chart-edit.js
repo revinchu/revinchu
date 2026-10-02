@@ -22,10 +22,11 @@ export function chartExplosionPatch(chart, part, value) {
 }
 export function chartPartDeletePatch(chart, part) {
   if (!part) return null;
+  if (['axis-x', 'axis-y', 'axis-y2'].includes(part.kind)) { const key = part.kind.slice(5); return { axes: { ...chart.axes, [key]: { ...chart.axes?.[key], hide: true } } }; }
   if (part.kind === 'title') return { title: '', titleLayout: undefined };
   if (part.kind === 'legend') return { legend: 'none', legendLayout: undefined };
   if (part.kind === 'series' || part.kind === 'point') return { hiddenSeries: [...new Set([...(chart.hiddenSeries ?? []), part.s])] };
-  if (part.kind === 'label') return chartSeriesPatch(chart, part.s, { labels: false });
+  if (part.kind === 'label') return chartSeriesPatch(chart, part.s, { labels: false, catName: false, serName: false, pct: false });
   if (part.kind === 'dataTable') return { dataTable: false };
   return null;
 }
