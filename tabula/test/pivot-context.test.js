@@ -35,3 +35,18 @@ test('행 배치 다중값 자세한 정보는 선택값 이름과 원본 행을
 test('값 행 배치의 XLSX 왕복 뒤에도 2번째 값 자세한 정보가 일치한다',()=>{
   const cells={};source.forEach((row,r)=>row.forEach((v,c)=>cells[r+','+c]={raw:String(v)}));const d={...base,valuesOnRows:true,source:'원본',range:{r1:0,c1:0,r2:3,c2:3},name:'합성피벗',top:0,left:0};const w=new Workbook({sheets:[{name:'원본',cells},{name:'피벗',cells:{},pivot:d}]});const restored=new Workbook(readXlsx(writeXlsx(w)).data);const after=restored.sheets[1].pivot;assert.equal(after.valuesOnRows,true);assert.deepEqual(after.values.map(v=>[v.field,v.agg]),d.values.map(v=>[v.field,v.agg]));const {def,out}=result(after);let found=0;out.grid.forEach((row,r)=>row.forEach((cell,c)=>{if(cell.role==='data:1'){assert.equal(pivotDetail(source,def,r,c).valueField,'평균 : 매출');found++;}}));assert.ok(found);
 });
+
+
+test('가로 보고서 필터 문맥은 행 번호 대신 셀의 실제 필드를 사용한다',()=>{
+  const d={...base,pages:['지역','상품','수량'],pageOrder:'over',pageWrap:2};
+  const {def,out}=result(d);
+  for(const point of out.meta.pageFields){
+    for(const c of [point.c,point.c+1]){
+      const t=pivotContextTarget(def,out,point.r,c);
+      assert.equal(t.area,'pages'); assert.equal(t.field,point.field);
+      const next=pivotRemoveContextField(d,t);
+      assert.deepEqual(next.pages,d.pages.filter(f=>f!==point.field));
+      assert.deepEqual(next.values,d.values);
+    }
+  }
+});

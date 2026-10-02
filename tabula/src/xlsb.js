@@ -794,7 +794,7 @@ function pivotTableXml(u8) {
       case R.PTLINE: if (lineList) { const rr = rd.u16(); const t = rd.u16(); rd.i32(); const i = rd.i32(); line = { r: rr, t, i, xs: [] }; lineList.push(line); } break;
       case R.PTLINE_X: if (line) while (rd.left >= 4) line.xs.push(rd.i32()); break;
       case R.PTDEF: {
-        const f1 = rd.u32(); const f2 = rd.u32(); const f3 = rd.u32(); const dataAxis = rd.u8v(); rd.u8v(); rd.skip(2); rd.i32(); rd.u16(); rd.skip(2); rd.i32();
+        const f1 = rd.u32(); const f2 = rd.u32(); const f3 = rd.u32(); const dataAxis = rd.u8v(); const pageWrap = rd.u8v(); rd.skip(2); rd.i32(); rd.u16(); rd.skip(2); rd.i32();
         const cacheId = rd.i32(); const name = rd.str() ?? '';
         const dataCaption = f2 & 0x80000 ? rd.str() : null;
         const grandCaption = f2 & 0x100000 ? rd.str() : null;
@@ -808,6 +808,8 @@ function pivotTableXml(u8) {
         const rowHeaderCaption = f3 & 0x400 ? rd.str() : null;
         head = {
           name, cacheId, dataCaption: dataCaption ?? 'Values', grandTotalCaption: grandCaption ?? undefined, dataOnRows: dataAxis === 1 ? 1 : undefined,
+          // MS-XLSB 2.4.278: fAcrossPageLay = 두 번째 DWORD의 bit 11, cWrapPage = offset 13의 BYTE.
+          pageOverThenDown: f2 & 0x800 ? 1 : undefined, pageWrap: pageWrap || undefined,
           showError: f2 & 0x200 ? 1 : undefined, errorCaption: errorCaption ?? undefined, showMissing: f2 & 0x400 ? undefined : 0, missingCaption: missingCaption ?? undefined,
           rowGrandTotals: f2 & 0x2000 ? undefined : 0, colGrandTotals: f2 & 0x4000 ? undefined : 0, mergeItem: f2 & 0x40000 ? 1 : undefined,
           preserveFormatting: f2 & 0x80 ? undefined : 0, useAutoFormatting: f2 & 0x100 ? 1 : undefined, enableDrill: f2 & 0x20 ? undefined : 0,

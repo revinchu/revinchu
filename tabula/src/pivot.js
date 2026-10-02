@@ -545,6 +545,16 @@ export function pivotDisplayOptions(def) {
   return { classic, showValuesRow, valuesHeadRow: classic || showValuesRow };
 }
 
+/** 보고서 필터 배치. 좌표는 피벗 왼쪽 위 기준이며 값 칸은 c+1, 필터 열 사이는 한 칸 비웁니다. */
+export function pivotPageLayout(def) {
+  const pages = def.pages ?? [], n = pages.length;
+  if (!n) return { fields: [], height: 0, width: 0 };
+  const requested = Math.floor(Number(def.pageWrap)), wrap = Number.isFinite(requested) && requested > 0 ? Math.min(n, requested) : n;
+  const count = Math.max(1, wrap), over = def.pageOrder === 'over';
+  const fields = pages.map((field, i) => ({ field, r: over ? Math.floor(i / count) : i % count, c: 3 * (over ? i % count : Math.floor(i / count)) }));
+  return { fields, height: over ? Math.ceil(n / count) : count, width: 3 * (over ? count : Math.ceil(n / count)) - 1 };
+}
+
 /** 보고서 필터의 체크 목록 모드. 이전 문서는 선택 수로만 복원한다. */
 export function pivotPageMulti(def, field) {
   const explicit = def.pageMulti?.[field];
@@ -575,6 +585,8 @@ export function normalizeDef(def, header) {
     cols: (cols ?? []).filter(ok).map(byName),
     pages: (def.pages ?? []).filter(ok).map(byName),
     pageMulti: Object.fromEntries(Object.entries(byKey(def.pageMulti)).filter(([, value]) => typeof value === 'boolean')),
+    pageOrder: def.pageOrder === 'over' ? 'over' : 'down',
+    pageWrap: Number.isFinite(Number(def.pageWrap)) && Number(def.pageWrap) > 0 ? Math.min(4294967295, Math.floor(Number(def.pageWrap))) : 0,
     values: (values ?? []).filter((v) => ok(v.field)).map((v) => ({ ...v, field: byName(v.field), agg: v.agg ?? 'sum' })),
     layout: def.layout ?? 'compact',
     subtotals: Array.isArray(def.subtotals) ? def.subtotals : def.subtotals !== false,
@@ -593,7 +605,7 @@ export function normalizeDef(def, header) {
     styleDef: def.styleDef ?? null,
     errorShow: pivotErrorDisplay(def),
     errorCaption: pivotErrorDisplay(def) ? def.errorCaption ?? '' : null,
-    showHeaders: def.showHeaders !== false, // 필드 머리글 표시 (끄면 행 · 열 필드 이름 칸이 빈칸)
+    showHeaders: def.showHeaders !== false && def.fieldCaptions !== false, // 이전 fieldCaptions=false도 머리글 표시 끄기로 복원
     fieldCaptions: def.fieldCaptions ?? null,
     grandCaption: def.grandCaption ?? null,
     itemCaptions: def.itemCaptions ?? null,
@@ -1414,15 +1426,32 @@ export function computePivot(input, d) {
   const calcNames = new Set((d.calcFields ?? []).map((c) => c.name.toLowerCase()));
 
   // 글자 항목은 그대로: '=' · 작은따옴표로 시작하거나, 입력으로 읽으면 글자가 달라지는 것(001 · 날짜처럼 보이는 글자)은 앞에 '
-  const text = (s, role) => ({ raw: typeof s === 'number' ? formatGeneral(s) : labelRaw(String(s ?? '')), style: { ...styleFor(role) }, role });
-  // 보고서 필터만 있는 피벗 (월 선택 칸 등으로 씀): 엑셀은 필터 행만 보이고 본문 칸은 비어 있음
-  if (!d.rows.length && !d.cols.length && !V && d.pages?.length) {
-    const grid = d.pages.map((p) => {
-      const allowed = d.filters?.[p];
-      const shown = allowed?.length === 1 ? d.itemCaptions?.[p]?.[allowed[0]] ?? allowed[0] : allowed?.length ? '(다중 항목)' : '(모두)';
-      return [text(d.fieldCaptions?.[p] ?? p, 'pageLabel'), text(shown, 'pageValue')];
-    });
-    return { grid, meta: { header, rowIdx, colIdx, valIdx, values, labelCols: 1, pageRows: grid.length, headerRows: 0, colLeaves: [], rowItems: [], colItems: [], rowTree: null, colTree: null, width: 2, bodyRows: 0, empty: true } };
+  const text = (s, role) => ({ raw: typeof s === 'number' ? formatGeneral(s) : labelRaw(String(s ?? '')), style: { align: 'general', ...styleFor(role) }, role });
+  // 필터만 있는 경우도 본문과 같은 항목 판정·표준 스타일 경로를 사용합니다.
+  const pageLayout = pivotPageLayout(d);
+  const pageRows = Array.from({ length: pageLayout.height }, () => []);
+  const pageColumns = new Map();
+  for (const { field: p, r, c } of pageLayout.fields) {
+    const filters = d.filters ?? {}, allowed = filters[p] ?? filters[Object.keys(filters).find((k) => k.toLowerCase() === p.toLowerCase())];
+    let shown = allowed, all = !allowed;
+    if (allowed && resolved?.cube) {
+      const j = idx(p);
+      if (j >= 0 && j < resolved.cube.header.length) {
+        const have = new Set(resolved.cube.col(j).texts());
+        shown = allowed.filter((t) => have.has(t));
+        all = have.size > 1 && shown.length === have.size;
+      }
+    }
+    const caption = all ? '(모두)' : shown.length === 1 ? d.itemCaptions?.[p]?.[shown[0]] ?? shown[0] : '(다중 항목)';
+    const pair = [{ ...text(d.fieldCaptions?.[p] ?? p, 'pageLabel'), field: p }, { ...text(caption, 'pageValue'), field: p }];
+    pageRows[r][c] = pair[0]; pageRows[r][c + 1] = pair[1];
+    if (!pageColumns.has(c)) pageColumns.set(c, []);
+    pageColumns.get(c).push(pair);
+  }
+  if (preset) for (const column of pageColumns.values()) paintPivotPreset(preset, column, { pages: column.length, top: column.length, headerRows: 0, labelCols: 1, width: 2 }, opts);
+  // 희소 칸은 사용자 셀: 필터 열 사이와 마지막 줄의 빈 필터 위치는 채우거나 지우지 않습니다.
+  if (!d.rows.length && !d.cols.length && !V && pageRows.length) {
+    return { grid: pageRows, meta: { header, rowIdx, colIdx, valIdx, values, labelCols: 1, pageRows: pageRows.length, pageFields: pageLayout.fields, pageWidth: pageLayout.width, headerRows: 0, colLeaves: [], rowItems: [], colItems: [], rowTree: null, colTree: null, width: pageLayout.width, bodyRows: 0, empty: true } };
   }
   if (!d.rows.length && !d.cols.length && !V) {
     const grid = Array.from({ length: 18 }, (_, r) => Array.from({ length: 3 }, (_, c) => ({
@@ -1666,7 +1695,7 @@ export function computePivot(input, d) {
     return v.agg === 'average' || v.agg?.startsWith('std') || v.agg?.startsWith('var') ? { numFmt: 'number', decimals: 2 } : { numFmt: 'comma' };
   };
   const val = (n, vi, role) => {
-    const style = { ...styleFor(role), ...numStyle(vi) };
+    const style = { align: 'general', ...styleFor(role), ...numStyle(vi) };
     // 빈 셀 표시 옵션
     if (n === null || n === undefined) return { raw: captionRaw(d.missingCaption), style, role };
     // 오류 값 표시 옵션: 오류 대신 지정한 글자(빈 칸 포함)
@@ -1684,23 +1713,7 @@ export function computePivot(input, d) {
   const grid = [];
   const rowItems = [];
 
-  // 보고서 필터 (맨 위)
-  const pageRows = [];
-  for (const p of d.pages) {
-    const allowed = d.filters[p] ?? d.filters[Object.keys(d.filters).find((k) => k.toLowerCase() === p.toLowerCase())];
-    // 엑셀: 원본에 실제로 있는 항목 중 보이는 것이 하나일 때만 그 이름 (없는 항목은 세지 않음)
-    let shown = allowed;
-    let all = !allowed;
-    if (allowed && resolved?.cube) {
-      const j = idx(p);
-      if (j >= 0 && j < resolved.cube.header.length) {
-        const have = new Set(resolved.cube.col(j).texts());
-        shown = allowed.filter((t) => have.has(t));
-        all = have.size > 1 && shown.length === have.size; // 원본의 항목이 모두 선택됨 → 엑셀도 '(모두)'
-      }
-    }
-    pageRows.push([text(fcap(p), 'pageLabel'), text(all ? '(모두)' : shown.length === 1 ? d.itemCaptions?.[p]?.[shown[0]] ?? shown[0] : '(다중 항목)', 'pageValue')]);
-  }
+  // 보고서 필터 (공통 경로에서 배치·서식 적용한 결과)
   if (pageRows.length) { pushAll(grid, pageRows); grid.push([]); }
 
   // 열 머리글
@@ -1870,7 +1883,7 @@ export function computePivot(input, d) {
   if (preset) {
     const leafCols = (kind) => colLeaves.map((l, i) => (l.kind === kind ? labelCols + i : -1)).filter((c) => c >= 0);
     paintPivotPreset(preset, grid, {
-      pages: pageRows.length, top: pageRows.length ? pageRows.length + 1 : 0, headerRows: firstDataRowRel, labelCols, width,
+      pages: 0, top: pageRows.length ? pageRows.length + 1 : 0, headerRows: firstDataRowRel, labelCols, width,
       grandCols: leafCols('grand'), subCols: leafCols('sub'), colLevels, colFields: Lc,
     }, opts);
   }
@@ -1893,7 +1906,7 @@ export function computePivot(input, d) {
   return {
     grid,
     meta: {
-      header, rowIdx, colIdx, valIdx, values, labelCols, pageRows: pageRows.length ? pageRows.length + 1 : 0,
+      header, rowIdx, colIdx, valIdx, values, labelCols, pageRows: pageRows.length ? pageRows.length + 1 : 0, pageFields: pageLayout.fields, pageWidth: pageLayout.width,
       headerRows: firstDataRowRel, colLeaves, rowItems, colItems: colLeaves, rowTree, colTree, width,
       bodyRows: grid.length - (pageRows.length ? pageRows.length + 1 : 0),
     },

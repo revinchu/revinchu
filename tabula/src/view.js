@@ -904,12 +904,21 @@ export class GridView {
     const merges = sheet.merges.filter((m) => m.r1 <= r2 && m.r2 >= r1 && m.c1 <= c2 && m.c2 >= c1);
     const inMerge = (r, c) => merges.some((m) => r >= m.r1 && r <= m.r2 && c >= m.c1 && c <= m.c2);
     const html = [];
-    // 피벗 +/− 단추가 있는 셀: 글자를 단추 오른쪽으로
+    // 셀 안 단추의 자리는 텍스트와 공유하지 않는다 (가운데/오른쪽 맞춤 포함).
     this._tog = null;
+    this._filterCells = new Set();
+    const targets = [
+      ...(sheet.filter ? [['', sheet.filter]] : []),
+      ...(sheet.tables ?? []).filter((t) => t.filter && t.header).map((t) => [t.id, tableFilterRange(t)]),
+    ];
+    for (const [, f] of targets) if (f.r1 >= r1 && f.r1 <= r2) {
+      for (let c = Math.max(f.c1, c1); c <= Math.min(f.c2, c2); c++) this._filterCells.add(`${f.r1},${c}`);
+    }
     for (const pd of [sheet.pivot, ...(sheet.pivotsExtra ?? [])]) {
       for (const b of pd?.buttons ?? []) {
-        if (b.kind !== 'toggle' || b.r < r1 || b.r > r2) continue;
-        (this._tog ??= new Set()).add(`${b.r},${b.c}`);
+        if (b.r < r1 || b.r > r2) continue;
+        if (b.kind === 'toggle') (this._tog ??= new Set()).add(`${b.r},${b.c}`);
+        else if (b.kind === 'page' || pd.showHeaders !== false && pd.fieldCaptions !== false) this._filterCells.add(`${b.r},${b.c}`);
       }
     }
     const hasLine = !!(sheet.allStyle || Object.keys(sheet.colStyles).length || Object.keys(sheet.rowStyles).length);
@@ -951,10 +960,6 @@ export class GridView {
     }
 
     // 필터 단추 (시트 필터 + 표마다)
-    const targets = [
-      ...(sheet.filter ? [['', sheet.filter]] : []),
-      ...(sheet.tables ?? []).filter((t) => t.filter && t.header).map((t) => [t.id, tableFilterRange(t)]),
-    ];
     for (const [tid, f] of targets) {
       if (!(f.r1 >= r1 && f.r1 <= r2)) continue;
       for (let c = Math.max(f.c1, c1); c <= Math.min(f.c2, c2); c++) {
@@ -989,6 +994,7 @@ export class GridView {
           continue;
         }
         if (b.r < r1 || b.r > r2 || b.c < c1 || b.c > c2 || !cols.size(b.c) || !rows.size(b.r)) continue;
+        if (b.kind !== 'page' && (pd.showHeaders === false || pd.fieldCaptions === false)) continue;
         const fields = b.sigma ? [] : b.field ? [b.field] : b.kind === 'rows' ? pd.rows ?? [] : b.kind === 'cols' ? pd.cols ?? [] : [];
         const on = fields.some(filtered) || (b.kind !== 'page' && fields.some((f) => pd.sort?.[f]));
         if (pd.classic && pd.fieldCaptions !== false && (fields.length || b.sigma) && !st.readonly) {
@@ -1144,7 +1150,14 @@ export class GridView {
       const i = cls.indexOf('ovf');
       if (i >= 0) cls.splice(i, 1);
     }
-    const room = w - 6 - (icon ? ICON_W : 0);
+    const filterCell = this._filterCells?.has(`${r},${c}`);
+    if (filterCell) {
+      css.push('padding-right:21px');
+      cls.push('filter-cell');
+      const i = cls.indexOf('ovf');
+      if (i >= 0) cls.splice(i, 1);
+    }
+    const room = Math.max(0, w - 6 - (icon ? ICON_W : 0) - (filterCell ? 18 : 0));
     if (typeof v === 'number' && text && !st.showFormulas) {
       const tw = measureText(text, style);
       if (tw > room) {

@@ -33,7 +33,7 @@ import { GEOM, LINE_KINDS, shapeLineEnds } from './shapes.js';
 import { customGeometryXml, readCustomGeometry, storedCustomGeometryXml } from './shape-path.js';
 import { BLOCK_MIN_ROWS, ColBuilder, inBlock, blockValue } from './block.js';
 import { normalizeStyleName, DEFAULT_TABLE_STYLE, dataTop, dataBottom, canonicalRef, tableAt, columnNames, findTable } from './tables.js';
-import { pivotSourceData, resolvePivot, itemText, keyOf, sortKeys, EMPTY, headerNames, normalizeDef, computePivot, valueName, showAsPercent, excelCalcFormula, pivotFilterKey, pivotPageMulti, DATE_OP_TYPES } from './pivot.js';
+import { pivotSourceData, resolvePivot, itemText, keyOf, sortKeys, EMPTY, headerNames, normalizeDef, computePivot, valueName, showAsPercent, excelCalcFormula, pivotFilterKey, pivotPageMulti, pivotPageLayout, DATE_OP_TYPES } from './pivot.js';
 import { groupKey } from './cube.js';
 import { slicerStyleName, slicerColors, isModernSlicer } from './slicerstyle.js';
 import { SLICER_DEFAULT_BUTTON_HEIGHT } from './slicer-properties.js';
@@ -2357,6 +2357,11 @@ function pivotDefFrom(root, cache, tables, sheetName) {
   if (root.attrs.rowGrandTotals === '0') def.grandRows = false;
   if (root.attrs.colGrandTotals === '0') def.grandCols = false;
   if (!def.pages.length) delete def.pages;
+  else {
+    def.pageOrder = root.attrs.pageOverThenDown === '1' || root.attrs.pageOverThenDown === 'true' ? 'over' : 'down';
+    const wrap = Number(root.attrs.pageWrap);
+    def.pageWrap = Number.isInteger(wrap) && wrap > 0 && wrap <= 4294967295 ? wrap : 0;
+  }
   const src = cache.source;
   const tbl = src.name ? tables.find((t) => t.name.toLowerCase() === src.name.toLowerCase()) : null;
   if (tbl) Object.assign(def, { table: tbl.name, source: tbl.sheetName, range: { r1: tbl.r1, c1: tbl.c1, r2: tbl.r2, c2: tbl.c2 } });
@@ -2557,9 +2562,15 @@ function pivotDefFrom(root, cache, tables, sheetName) {
   const hideValuesRow = child(displayExt, 'pivotTableDefinition')?.attrs.hideValuesRow;
   def.showValuesRow = hideValuesRow !== '1' && hideValuesRow !== 'true'; // OOXML 기본값: 표시
   if (loc) {
-    const pageRows = def.pages?.length ? def.pages.length + 1 : 0;
+    const page = pivotPageLayout(def);
+    const pageRows = page.height ? page.height + 1 : 0;
     const top = Math.max(0, loc.r1 - pageRows);
-    Object.assign(def, { top, left: loc.c1, area: { ...loc, r1: top } });
+    const reportOnly = !def.rows.length && !def.cols.length && !def.values.length && page.height > 0;
+    // location은 필터를 제외한 본문이다. 필터 전용 피벗도 빈 본문 한 칸을 앵커로 저장한다.
+    const area = reportOnly
+      ? { r1: top, c1: loc.c1, r2: top + page.height - 1, c2: loc.c1 + page.width - 1 }
+      : { ...loc, r1: top, c2: Math.max(loc.c2, loc.c1 + page.width - 1) };
+    Object.assign(def, { top, left: loc.c1, area });
   }
   return def;
 }
@@ -3837,7 +3848,8 @@ function pivotParts(wb, si, def, cache, name, pool) {
   const isCalc = (f) => f >= nBase && f < nCalcEnd;
   const cacheId = cache.cacheId;
   const d = { ...normalizeDef(def, header), header };
-  if (!d.rows.length && !d.cols.length && !d.values.length) return null;
+  if (!d.rows.length && !d.cols.length && !d.values.length && !d.pages.length) return null;
+  const reportOnly = !d.rows.length && !d.cols.length && !d.values.length;
   const fx = (n) => header.findIndex((h) => h.toLowerCase() === String(n).toLowerCase());
   const rowF = d.rows.map(fx);
   const colF = d.cols.map(fx);
@@ -3970,10 +3982,11 @@ function pivotParts(wb, si, def, cache, name, pool) {
     return `<pivotField ${attrs.join(' ')}><items count="${it.keys.length + (def0 ? 1 : 0)}">${list}${def0}</items>${scope}${fill}</pivotField>`;
   }).join('');
 
-  const top = (def.top ?? 0) + meta.pageRows;
+  const pageLayout = pivotPageLayout(d);
+  const top = (def.top ?? 0) + (reportOnly ? pageLayout.height + 1 : meta.pageRows);
   const left = def.left ?? 0;
-  const loc = { r1: top, c1: left, r2: top + meta.bodyRows - 1, c2: left + meta.width - 1 };
-  const firstHeaderRow = colF.length ? 1 : multiV ? (d.valuesHeadRow && !d.valuesOnRows ? 1 : 0) : 1;
+  const loc = { r1: top, c1: left, r2: top + (reportOnly ? 0 : meta.bodyRows - 1), c2: left + (reportOnly ? 0 : meta.width - 1) };
+  const firstHeaderRow = reportOnly ? 0 : colF.length ? 1 : multiV ? (d.valuesHeadRow && !d.valuesOnRows ? 1 : 0) : 1;
   const pageXml = pageF.length ? `<pageFields count="${pageF.length}">${pageF.map((f) => {
     const allowed = filters.find(([i]) => i === f)?.[1];
     const one = !pivotPageMulti(d, header[f]) && allowed && allowed.size === 1 ? items.get(f)?.keys.findIndex((k) => itemText(k) === [...allowed][0]) : -1;
@@ -4046,16 +4059,17 @@ function pivotParts(wb, si, def, cache, name, pool) {
     ...(d.missingCaption ? [`missingCaption="${esc(d.missingCaption)}"`] : []), ...(d.showExpand ? [] : ['showDrill="0"']),
     'itemPrintTitles="1"', 'createdVersion="6"', 'indent="0"', ...(tabular || outline ? ['compact="0"', 'compactData="0"'] : []),
     `outline="${tabular ? 0 : 1}"`, `outlineData="${tabular ? 0 : 1}"`, ...(d.classic ? ['gridDropZones="1"'] : []), 'multipleFieldFilters="0"',
+    ...(pageF.length && d.pageOrder === 'over' ? ['pageOverThenDown="1"'] : []), ...(pageF.length && d.pageWrap ? [`pageWrap="${d.pageWrap}"`] : []),
   ];
   const tableXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<pivotTableDefinition xmlns="${NS_MAIN}" ${tableAttrs.join(' ')}>`
-    + `<location ref="${rangeRef(loc)}" firstHeaderRow="${firstHeaderRow}" firstDataRow="${meta.headerRows}" firstDataCol="${meta.labelCols}"${pageF.length ? ` rowPageCount="${pageF.length}" colPageCount="1"` : ''}/>`
+    + `<location ref="${rangeRef(loc)}" firstHeaderRow="${firstHeaderRow}" firstDataRow="${meta.headerRows}" firstDataCol="${reportOnly ? 0 : meta.labelCols}"${pageF.length ? ` rowPageCount="${pageLayout.height}" colPageCount="${(pageLayout.width + 1) / 3}"` : ''}/>`
     + `<pivotFields count="${header.length}">${pivotFields}</pivotFields>`
     + (rowF.length || onRows ? `<rowFields count="${rowF.length + (onRows ? 1 : 0)}">${[...rowF, ...(onRows ? [-2] : [])].map((f) => `<field x="${f}"/>`).join('')}</rowFields>` : '')
-    + `<rowItems count="${rowXml.length}">${rowXml.join('')}</rowItems>`
+    + (reportOnly ? '' : `<rowItems count="${rowXml.length}">${rowXml.join('')}</rowItems>`)
     + (colFieldsAll.length ? `<colFields count="${colFieldsAll.length}">${colFieldsAll.map((f) => `<field x="${f}"/>`).join('')}</colFields>` : '')
-    + `<colItems count="${colXml.length}">${colXml.join('')}</colItems>`
+    + (reportOnly ? '' : `<colItems count="${colXml.length}">${colXml.join('')}</colItems>`)
     + pageXml
-    + `<dataFields count="${values.length}">${dataXml}</dataFields>`
+    + (values.length ? `<dataFields count="${values.length}">${dataXml}</dataFields>` : '')
     + pivotCondXml(wb, si, def, header, values)
     + `<pivotTableStyleInfo${styleName ? ` name="${esc(styleName)}"` : ''} showRowHeaders="${so.rowHeaders === false ? 0 : 1}" showColHeaders="${so.colHeaders === false ? 0 : 1}" showRowStripes="${so.bandRows ? 1 : 0}" showColStripes="${so.bandCols ? 1 : 0}" showLastColumn="1"/>`
     + (filterXml.length ? `<filters count="${filterXml.length}">${filterXml.join('')}</filters>` : '')

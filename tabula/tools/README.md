@@ -462,3 +462,8 @@ node tools/mobile-layout.mjs
 `node tools/gallery-access-captions.mjs`는 소스 서버의 공통 팝업에서 SVG 텍스트/실제 이름 분리와 동적 접근키를 4개 화면 크기로 검사한다. `GALLERY_CAPTION_BASELINE=ad2dadc`는 이전 공통 UI를 메모리에서만 제공하는 수정 전 재현 옵션이다. `node tools/chart-gallery-layout.mjs`는 소스/배포 번들의 추천·모든 차트, 긴 한글·검색·키보드·시트 배율·작은 화면의 실제 글자 경계를 검사한다. `WIXEL_CHART_GALLERY_OUT`과 `WIXEL_CHART_GALLERY_FILTER`로 D: 출력 경로와 개별 검사를 지정한다. 확대 모의·검증 범위는 [50번 문서](../docs/codex/50_차트갤러리와팝업글자배치.md)에 기록한다. `dialog-layout.mjs`는 `WIXEL_DIALOG_EXCLUDE`에 이름 일부를 지정해 다른 전용 도구에서 검사하는 팝업을 제외할 수 있다.
 
 `node tools/popup-gallery-layout.mjs`는 표·셀·SmartArt·아이콘·그림 스타일 갤러리 5종을 320/390/1024px에서 검사한다. 셀 스타일 이름과 접근키의 잘림, 미리보기 내부 키 삽입, 가로 넘침을 확인하며 `WIXEL_POPUP_OUT`에 D: 출력 폴더를 지정한다. 소스와 최종 번들에 같은 도구를 사용한다.
+
+
+## 직접 만든 피벗의 보고서 필터
+
+`node tools/pivot-report-layout.mjs`는 실제 피벗 생성/필드 추가 UI로 보고서 필터만 있는 상태와 본문 포함 상태, 행·열 우선과 줄바꿈 배치, 본문 앵커, 선택/우클릭/이름/표시 옵션, 주변 셀 보존, Undo/Redo 및 XLSX 저장 후 다시 열기를 검사한다. 소스/번들은 `WIXEL_URL`, D: 결과 위치는 `WIXEL_PIVOT_REPORT_OUT`을 사용한다. `WIXEL_PIVOT_REPORT_NATIVE_FIXTURE`로 개인 자료가 없는 Excel 합성 파일을 지정해 가져오기와 비교할 수 있다. 네이티브 Excel 근거와 실제 파일 검증의 범위는 [51번 문서](../docs/codex/51_피벗보고서필터.md)를 참고한다.

@@ -74,6 +74,7 @@ import {
   pivotFieldNames, parseCalc, PIVOT_STYLES, PIVOT_STYLE_GROUPS, pivotStyleParts, LABEL_OPS, VALUE_OPS, DATE_OPS, PIVOT_DATE_PERIODS, todaySerial, describeFieldFilter, keyOf, sortKeys, pivotDetail, GROUP_BY,
   checkCalc, renameCalcRefs, CALC_FUNCS, recommendPivots, parseCalcItem,
   pivotErrorDisplay, pivotDisplayOptions,
+  pivotPageLayout,
 } from './pivot.js';
 import { SLICER_STYLES, SLICER_STYLE_GROUPS, slicerStyleName, slicerColors, CUSTOM_KEYS } from './slicerstyle.js';
 import { server, createVaultKey, validVaultKey } from './storage.js';
@@ -8430,7 +8431,7 @@ function pivotOptionsDialog(entry = pivotHere(), startTab = 0) {
     emptyShow: def.emptyShow !== false, emptyText: def.missingCaption ?? '',
     autofit: def.autofit !== false, preserveFormat: def.preserveFormat !== false,
     grandRows: def.grandRows !== false, grandCols: def.grandCols !== false, subtotalHidden: !!def.subtotalHidden, multiFilters: !!def.multiFilters, customListSort: def.customListSort !== false,
-    showExpand: def.showExpand !== false, tooltips: def.tooltips !== false, fieldCaptions: def.fieldCaptions !== false, classic: pivotDisplayOptions(def).classic, emptyRowsItems: !!def.showEmptyRows, emptyColsItems: !!def.showEmptyCols,
+    showExpand: def.showExpand !== false, tooltips: def.tooltips !== false, fieldCaptions: def.showHeaders !== false && def.fieldCaptions !== false, classic: pivotDisplayOptions(def).classic, emptyRowsItems: !!def.showEmptyRows, emptyColsItems: !!def.showEmptyCols,
     showValuesRow: pivotDisplayOptions(def).showValuesRow, sortAZ: def.fieldListSort === 'az',
     printExpand: !!def.printExpand, printTitles: !!def.printTitles,
     autoRefresh: !!def.autoRefresh, saveData: def.saveData !== false, refreshOnOpen: !!def.refreshOnOpen, missingItems: def.missingItems ?? 'auto', enableDrill: def.enableDrill !== false,
@@ -8442,10 +8443,18 @@ function pivotOptionsDialog(entry = pivotHere(), startTab = 0) {
   const num = (k, label) => { const i = el('input', { type: 'number', value: v[k], min: 0, max: 127, style: { width: '70px' } }); i.addEventListener('input', () => { v[k] = Number(i.value) || 0; }); return el('label', {}, el('span', {}, label), i); };
   const sel = (k, label, list) => { const s2 = el('select', {}, list.map(([a, b]) => el('option', { value: a, selected: String(v[k]) === String(a) }, b))); s2.addEventListener('change', () => { v[k] = s2.value; }); return el('label', {}, el('span', {}, label), s2); };
   const t = (x) => el('div', { class: 'opt-title' }, x);
+  const pageOrderControl = sel('pageOrder', '보고서 필터 영역에 필드 표시', [['down', '행 우선'], ['over', '열 우선']]);
+  const pageWrapControl = num('pageWrap', '보고서 필터 열당 필드 수');
+  const pageWrapInput = pageWrapControl.querySelector('input');
+  pageWrapInput.max = 255;
+  pageWrapInput.step = 1;
+  const syncPageWrap = () => { pageWrapControl.querySelector('span').textContent = v.pageOrder === 'over' ? '보고서 필터 행당 필드 수' : '보고서 필터 열당 필드 수'; };
+  pageOrderControl.querySelector('select').addEventListener('change', syncPageWrap);
+  syncPageWrap();
   const pages = [
     ['레이아웃 및 서식', el('div', { class: 'opt-page' },
       t('레이아웃'), chk('mergeLabels', '레이블이 있는 셀 병합 및 가운데 맞춤'), num('indent', '압축 형식일 때 행 레이블 들여쓰기(문자)'),
-      sel('pageOrder', '보고서 필터 영역에 필드 표시', [['down', '행 우선'], ['over', '열 우선']]), num('pageWrap', '보고서 필터 열/행당 필드 수'),
+      pageOrderControl, pageWrapControl,
       t('서식'), chk('errorShow', '오류 값 표시'), txt('errorText', '　표시 글자'), chk('emptyShow', '빈 셀 표시'), txt('emptyText', '　표시 글자'),
       chk('autofit', '업데이트 시 열 자동 맞춤'), chk('preserveFormat', '업데이트 시 셀 서식 유지'))],
     ['요약 및 필터', el('div', { class: 'opt-page' },
@@ -8475,12 +8484,15 @@ function pivotOptionsDialog(entry = pivotHere(), startTab = 0) {
     buttons: [{
       label: '확인', primary: true, action: () => {
         if (!canApply()) return false;
+        if (!pageWrapInput.validity.valid || !Number.isInteger(v.pageWrap) || v.pageWrap < 0 || v.pageWrap > 255) {
+          show(0); pageWrapInput.focus(); toast('보고서 필터의 필드 수는 0부터 255까지의 정수로 입력하세요.'); return false;
+        }
         const next = {
           ...def, mergeLabels: v.mergeLabels || undefined, indent: v.indent === 1 ? undefined : v.indent, pageOrder: v.pageOrder === 'down' ? undefined : v.pageOrder, pageWrap: v.pageWrap || undefined,
           errorShow: v.errorShow, errorCaption: v.errorText, emptyShow: v.emptyShow ? undefined : false, missingCaption: v.emptyShow && v.emptyText ? v.emptyText : undefined,
           autofit: v.autofit ? undefined : false, preserveFormat: v.preserveFormat ? undefined : false,
           grandRows: v.grandRows, grandCols: v.grandCols, subtotalHidden: v.subtotalHidden || undefined, multiFilters: v.multiFilters || undefined, customListSort: v.customListSort ? undefined : false,
-          showExpand: v.showExpand ? undefined : false, tooltips: v.tooltips ? undefined : false, fieldCaptions: v.fieldCaptions ? undefined : false, classic: v.classic,
+          showExpand: v.showExpand ? undefined : false, tooltips: v.tooltips ? undefined : false, showHeaders: v.fieldCaptions, fieldCaptions: typeof def.fieldCaptions === 'object' ? def.fieldCaptions : undefined, classic: v.classic,
           ...(v.classic && !pivotDisplayOptions(def).classic ? { layout: 'tabular' } : {}),
           showEmptyRows: v.emptyRowsItems || undefined, showEmptyCols: v.emptyColsItems || undefined, showValuesRow: v.showValuesRow, valuesHeadRow: undefined, fieldListSort: v.sortAZ ? 'az' : undefined,
           printExpand: v.printExpand || undefined, printTitles: v.printTitles || undefined, autoRefresh: v.autoRefresh || undefined, saveData: v.saveData ? undefined : false, refreshOnOpen: v.refreshOnOpen || undefined,
@@ -11122,12 +11134,16 @@ function pivotLayoutFrom(grid, pm, d, top, left) {
 function pivotLayoutOf(tsi, def) {
   const k = `${tsi}:${def.name ?? ''}`;
   const cached = pivotLayouts.get(k);
-  if (cached && cached.top === (def.top ?? 0) && cached.left === (def.left ?? 0)) return cached;
+  if (cached?.sheet === wb.sheets[tsi] && cached.definition === def && cached.top === (def.top ?? 0) && cached.left === (def.left ?? 0)) return cached;
   const src = pivotSource(def);
   if (!src) return null;
   const res = resolvePivot(src, def);
   const { grid, meta } = computePivot(res, res.def);
   const L = pivotLayoutFrom(grid, meta, res.def, def.top ?? 0, def.left ?? 0);
+  L.sheet = wb.sheets[tsi];
+  L.definition = def;
+  // Undo/Redo는 정의를 복원한다. 이전 상태의 서식 스냅샷을 수동 편집으로 오인하지 않는다.
+  pivotWritten.delete(`${tsi}:${def.name ?? ''}:${L.top},${L.left}`);
   pivotLayouts.set(k, L);
   return L;
 }
@@ -11355,7 +11371,8 @@ function writePivot(targetSi, def, { autofit = true } = {}) {
   const t = wb.sheets[targetSi];
   const top = def.top ?? 0;
   const left = def.left ?? 0;
-  const colsN = Math.max(0, ...grid.map((row) => row.length));
+  let colsN = 0, bodyColsN = 0;
+  grid.forEach((row, r) => { colsN = Math.max(colsN, row.length); if (r >= pm.pageRows) bodyColsN = Math.max(bodyColsN, row.length); });
   // 날짜 · 시간 등 숫자 항목 레이블은 원본 열의 표시 형식으로 (엑셀과 같음)
   if (src.ref && src.si !== undefined) {
     const hdr = (src.cube?.header ?? []).map((h) => String(h ?? '').toLowerCase());
@@ -11417,13 +11434,16 @@ function writePivot(targetSi, def, { autofit = true } = {}) {
   }
   if (def.autofit === false) autofit = false;
   // 업데이트 시 셀 서식 유지: 지난번에 그린 서식과 다른 칸(사용자가 바꾼 서식)은 역할별로 기억해 다시 적용
-  const wkey = `${targetSi}:${def.name ?? ''}:${def.top ?? 0},${def.left ?? 0}`;
-  const written = pivotWritten.get(wkey);
+  const wkey = `${targetSi}:${def.name ?? ''}:${top},${left}`;
+  const cachedLayout = pivotLayouts.get(`${targetSi}:${def.name ?? ''}`);
+  const previousLayout = cachedLayout?.sheet === t ? cachedLayout : null;
+  const written = previousLayout ? pivotWritten.get(`${targetSi}:${def.name ?? ''}:${previousLayout.top},${previousLayout.left}`) : null;
   if (def.preserveFormat !== false && written) {
     const fmt = { ...(def.cellFmt ?? {}) };
     let changedFmt = false;
     grid.forEach((row, r) => row.forEach((cd, c) => {
       if (!cd?.role || cd.role === 'empty') return;
+      if (previousLayout.roles[top + r - previousLayout.top]?.[left + c - previousLayout.left] !== cd.role) return;
       const was = written.getRC(top + r, left + c);
       const now = t.cells.getRC(top + r, left + c)?.style;
       if (was === undefined || !now || now === was) return;
@@ -11436,8 +11456,16 @@ function writePivot(targetSi, def, { autofit = true } = {}) {
   }
   const cellFmt = def.preserveFormat === false ? {} : def.cellFmt ?? {};
   const a = def.area;
-  // 레이블 셀 병합: 이전 영역의 병합은 먼저 풂
-  if (a) for (const m of wb.mergesIn(targetSi, a.r1, a.c1, a.r2, a.c2)) if (m.r1 >= a.r1 && m.c1 >= a.c1 && m.r2 <= a.r2 && m.c2 <= a.c2) wb.unmerge(targetSi, m.r1, m.c1, m.r2, m.c2);
+  // 피벗 레이블 병합만 해제한다. 보고서 필터 사이 사용자 병합은 유지한다.
+  const ownsMerge = (m) => {
+    const roles = previousLayout?.roles, baseR = previousLayout?.top ?? top, baseC = previousLayout?.left ?? left;
+    for (let r = Math.max(0, m.r1 - baseR); r <= Math.min((roles ?? grid).length - 1, m.r2 - baseR); r++) {
+      const row = roles?.[r] ?? grid[r];
+      for (let c = Math.max(0, m.c1 - baseC); c <= Math.min((row?.length ?? 0) - 1, m.c2 - baseC); c++) if (roles ? row[c] : row[c]?.role) return true;
+    }
+    return false;
+  };
+  if (a) for (const m of wb.mergesIn(targetSi, a.r1, a.c1, a.r2, a.c2)) if (m.r1 >= a.r1 && m.c1 >= a.c1 && m.r2 <= a.r2 && m.c2 <= a.c2 && ownsMerge(m)) wb.unmerge(targetSi, m.r1, m.c1, m.r2, m.c2);
   // 처음 그리는 피벗(이전 영역 없음)은 아무것도 지우지 않음 — 같은 시트의 다른 피벗 · 내용을 보존
   const nr2 = top + grid.length - 1;
   const nc2 = left + Math.max(0, colsN - 1);
@@ -11452,21 +11480,29 @@ function writePivot(targetSi, def, { autofit = true } = {}) {
     for (let i = 0; i < gone.length; i += 2) {
       const r = gone[i];
       const c = gone[i + 1];
-      if (!(r >= top && r <= nr2 && c >= left && c <= nc2)) wb.setCellData(targetSi, r, c, null);
+      const gr = r - top, gc = c - left, row = grid[gr];
+      const nextOwns = row?.length && gc >= 0 && (gr < pm.pageRows ? !!row[gc]?.role : gc < bodyColsN);
+      // 필터 재배치로 새 영역 안에 빈 칸이 생겨도 이전 필터/본문 셀은 지운다.
+      // 필터 사이 열, 본문과의 빈 줄, 오른쪽의 사용자 셀은 피벗 소유가 아니다.
+      const oldRole = previousLayout?.roles[r - previousLayout.top]?.[c - previousLayout.left];
+      const oldOwns = previousLayout ? !!oldRole : !(r >= top && r <= nr2 && c >= left && c <= nc2);
+      if (!nextOwns && oldOwns) wb.setCellData(targetSi, r, c, null);
     }
   }
   if (!def.area || def.area.c1 !== left || def.area.c2 !== nc2) wb.dropGraph();
   def.area = { r1: top, c1: left, r2: nr2, c2: nc2 };
-  pivotLayouts.set(`${targetSi}:${def.name ?? ''}`, pivotLayoutFrom(grid, pm, d, top, left));
+  pivotLayouts.set(`${targetSi}:${def.name ?? ''}`, { ...pivotLayoutFrom(grid, pm, d, top, left), sheet: t, definition: def });
   refreshPivotCond(targetSi, def);
   const btns = [];
   grid.forEach((row, r) => {
     // 보고서 필터와 표 사이의 빈 줄은 피벗 영역이 아님 (엑셀: 사용자가 제목 등을 적어 둠) — 건드리지 않음
     if (!row.length) return;
-    // 보고서 필터 행은 필드 이름 · 값 두 칸만 피벗 (엑셀: 그 오른쪽 칸은 사용자 내용)
-    const width = row[0]?.role === 'pageLabel' ? row.length : colsN;
+    // 보고서 필터는 각 이름 · 값 쌍만 쓴다. 가로 배치의 사이 열도 사용자 영역이다.
+    const pageRow = r < pm.pageRows;
+    const width = pageRow ? row.length : bodyColsN;
     for (let c = 0; c < width; c++) {
       const cd = row[c];
+      if (pageRow && !cd) continue;
       const rr = top + r;
       const cc = left + c;
       if (!cd || (!cd.raw && !cd.style && !cd.image)) { if (t.cells.hasRC(rr, cc)) wb.setCellData(targetSi, rr, cc, null); continue; }
@@ -11483,7 +11519,7 @@ function writePivot(targetSi, def, { autofit = true } = {}) {
         const field = d.layout !== 'compact' && !sigma ? d.cols[vp >= 0 && level > vp ? level - 1 : level] : null;
         btns.push({ r: rr, c: cc, kind: 'cols', ...(field ? { field } : {}), ...(sigma ? { sigma: true } : {}) });
       }
-      else if (cd.role === 'pageValue') btns.push({ r: rr, c: cc, kind: 'page', field: d.pages[r] });
+      else if (cd.role === 'pageValue') btns.push({ r: rr, c: cc, kind: 'page', field: cd.field ?? d.pages[r] });
       if (cd.toggle) btns.push({ r: rr, c: cc, kind: 'toggle', field: cd.toggle.field, item: cd.toggle.item, collapsed: cd.toggle.collapsed });
     }
   });
@@ -11514,7 +11550,7 @@ function writePivot(targetSi, def, { autofit = true } = {}) {
   // 셀 서식은 바꿀 때 새 객체로 교체되므로 객체 자체를 기억 (같은 객체면 바뀌지 않은 것)
   grid.forEach((row, r) => row.forEach((cd, c) => { if (cd?.role) wm.setRC(top + r, left + c, t.cells.getRC(top + r, left + c)?.style ?? NO_STYLE); }));
   pivotWritten.set(wkey, wm);
-  if (autofit && !pm.empty) {
+  if (autofit && (!pm.empty || pm.pageFields?.length)) {
     for (let c = 0; c < colsN; c++) {
       let w = 0;
       grid.forEach((row, r) => {
@@ -11570,6 +11606,22 @@ function pivotHere() {
 /** 피벗 정의 저장 (transact 안에서) */
 function putPivotDef(entry, def) {
   const s = entry.si ?? si;
+  const old = entry.def, before = pivotPageLayout(old), after = pivotPageLayout(def);
+  // 복원된 이전 정의의 셀 소유 범위로 정리한다. 좌표만 같은 과거 캐시는 재사용하지 않는다.
+  pivotLayoutOf(s, old);
+  // Excel은 본문 시작 셀을 유지하고 보고서 필터를 그 위에 둔다.
+  // 첫 행 위로는 확장할 수 없으므로 부족한 만큼만 본문을 아래로 민다.
+  if (before.height !== after.height && (def.top ?? 0) === (old.top ?? 0)) {
+    const bodyTop = (old.top ?? 0) + (before.height ? before.height + 1 : 0);
+    const wanted = Math.max(0, bodyTop - (after.height ? after.height + 1 : 0));
+    let occupied = false;
+    for (const point of after.fields) for (const c of [point.c, point.c + 1]) {
+      const r = wanted + point.r;
+      if (r < (old.top ?? 0) && wb.getCell(s, r, (def.left ?? 0) + c)?.raw) occupied = true;
+    }
+    // 위쪽에 사용자 입력이 있으면 기존 시작 행을 유지한다.
+    def.top = occupied ? old.top ?? 0 : wanted;
+  }
   writePivot(s, def);
   if (entry.prop === 'pivot') wb.setSheetProp(s, 'pivot', def);
   else {
@@ -11578,6 +11630,10 @@ function putPivotDef(entry, def) {
     wb.setSheetProp(s, 'pivotsExtra', list);
   }
   entry.def = def;
+  if (s === si && old.area && active.r >= old.area.r1 && active.r <= old.area.r2 && active.c >= old.area.c1 && active.c <= old.area.c2) {
+    const a = def.area;
+    if (a && (active.r < a.r1 || active.r > a.r2 || active.c < a.c1 || active.c > a.c2)) selectCell(a.r1, a.c1);
+  }
 }
 
 /** 피벗 정의 바꾸기 (다시 계산 + 실행 취소 가능) */
@@ -18876,6 +18932,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileFit','toggleR
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['피벗 보고서 필터 표시·저장', ['직접 만든 피벗과 가져온 피벗의 보고서 필터 스타일·정렬을 통일하고 글자와 드롭다운 겹침을 수정했습니다.', '행·열 우선 배치와 줄바꿈, 본문 기준 위치, 사용자 지정 이름과 필터 전용 피벗의 XLSX 저장을 보강했습니다.']],
   ['갤러리 글자 배치 개선', ['차트 견본·이름·단축키를 분리하고 긴 한글과 작은 화면의 미리보기, 셀 스타일 줄바꿈을 보강했습니다.']],
   ['그림과 SVG 저장', ['사진·도형·아이콘과 선택한 셀 범위를 PNG·JPEG·SVG로 저장합니다. 미리보기와 배경·해상도 옵션을 제공합니다.']],
   ['데이터 유효성 검사', ['설정·설명·오류·IME 네 탭, 같은 설정 일괄 적용, 범위 선택과 입력 오류 처리를 보강했습니다.']],

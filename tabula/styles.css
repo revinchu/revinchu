@@ -242,6 +242,7 @@ input.rselect { padding: 0 4px; }
 .c.ovf { overflow: visible; z-index: 1; } /* 넘친 글자는 오른쪽 빈 칸의 채우기 위에 (엑셀과 같음) */
 .c.wrap { white-space: pre-wrap; }
 .c.wrap > span { flex: 1 1 auto; min-width: 0; word-break: break-all; }
+.c.filter-cell > span { min-width: 0; max-width: 100%; overflow: hidden; }
 .c.cm::after {
   content: ''; position: absolute; top: -1px; right: -1px; border: 4px solid transparent;
   border-top-color: #d13438; border-right-color: #d13438;

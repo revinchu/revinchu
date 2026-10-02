@@ -11,7 +11,7 @@ export function pivotContextTarget(def, result, r, c) {
     area = dimension[1] === 'colItem' ? 'cols' : 'rows'; field = def[area]?.[+dimension[2]] ?? null;
     if (!field && def.valuesOnRows && Number.isInteger(rowItem?.vi)) valueIndex = rowItem.vi;
   } else if (role === 'grandLabel' && def.valuesOnRows && Number.isInteger(rowItem?.vi)) valueIndex = rowItem.vi;
-  else if (role === 'pageLabel' || role === 'pageValue') { area = 'pages'; field = def.pages?.[r] ?? null; }
+  else if (role === 'pageLabel' || role === 'pageValue') { area = 'pages'; field = row[c]?.field ?? def.pages?.[r] ?? null; }
   else if (role === 'colHead') {
     area = 'cols'; const raw = String(row[c]?.raw ?? '').replace(/^'/, '');
     field = def.cols?.find(f => f === raw || def.fieldCaptions?.[f] === raw) ?? def.cols?.[0] ?? null;
