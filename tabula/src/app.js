@@ -4731,13 +4731,37 @@ function solverDialog() {
 
 /** 이동 옵션 (Ctrl+G → 옵션) */
 function gotoSpecialDialog() {
-  formDialog('이동 옵션', [
-    { name: 'kind', label: '종류', type: 'select', value: 'blanks', options: GOTO_KINDS.map((k) => ({ value: k.id, label: k.label })) },
-    { name: 'numbers', label: '숫자 (상수 · 수식)', type: 'checkbox', value: true },
-    { name: 'text', label: '텍스트', type: 'checkbox', value: true },
-    { name: 'logical', label: '논리값', type: 'checkbox', value: true },
-    { name: 'errors', label: '오류', type: 'checkbox', value: true },
-  ], (v) => gotoSpecialRun(v));
+  let kind = 'blanks';
+  const types = {};
+  const hint = el('p', { class: 'goto-special-hint', id: 'goto-special-hint' }, '상수 또는 수식을 선택하면 데이터 종류를 지정할 수 있습니다.');
+  const typeList = el('div', { class: 'goto-special-type-list' }, [['numbers', '숫자'], ['text', '텍스트'], ['logical', '논리값'], ['errors', '오류']].map(([name, label]) => {
+    const input = el('input', { type: 'checkbox', name, checked: true, disabled: true });
+    types[name] = input;
+    return el('label', { class: 'goto-special-choice' }, input, el('span', {}, label));
+  }));
+  const typeGroup = el('fieldset', { class: 'goto-special-types', disabled: true, 'aria-describedby': 'goto-special-hint' }, el('legend', {}, '포함할 데이터'), typeList);
+  const radios = GOTO_KINDS.map((k) => {
+    const input = el('input', { type: 'radio', name: 'goto-special-kind', value: k.id, checked: k.id === kind });
+    input.addEventListener('change', () => {
+      if (!input.checked) return;
+      kind = k.id;
+      const enabled = kind === 'constants' || kind === 'formulas';
+      typeGroup.disabled = !enabled;
+      for (const control of Object.values(types)) control.disabled = !enabled;
+    });
+    return el('label', { class: 'goto-special-choice' }, input, el('span', {}, k.label));
+  });
+  const body = el('div', { class: 'goto-special-dialog' },
+    el('fieldset', { class: 'goto-special-kinds' }, el('legend', {}, '선택할 셀'), el('div', { class: 'goto-special-kind-list' }, radios)),
+    typeGroup, hint);
+  openDialog({
+    title: '이동 옵션', body, width: 520,
+    onOpen: (dialog) => dialog.querySelector('input[type="radio"]:checked')?.focus(),
+    buttons: [
+      { label: '확인', primary: true, action: () => gotoSpecialRun({ kind, ...Object.fromEntries(Object.entries(types).map(([name, input]) => [name, input.checked])) }) },
+      { label: '취소' },
+    ],
+  });
 }
 /** 이동 옵션 실행 (찾기 및 선택 메뉴의 수식 · 메모 · 상수 · 조건부 서식 · 데이터 유효성 검사도 같은 경로) */
 function gotoSpecialRun(v) {
@@ -7745,8 +7769,8 @@ function optionsDialog(startTab = 0) {
         el('button', { class: 'btn small', title: '삭제', onclick: () => { o.acList.splice(i, 1); drawAc(); } }, '삭제'))));
   };
   drawAc();
-  const acFrom = el('input', { type: 'text', placeholder: '입력', style: { width: '110px' } });
-  const acTo = el('input', { type: 'text', placeholder: '결과', style: { width: '110px' } });
+  const acFrom = el('input', { type: 'text', placeholder: '입력', 'aria-label': '자동 고침: 바꿀 내용', style: { width: '110px' } });
+  const acTo = el('input', { type: 'text', placeholder: '결과', 'aria-label': '자동 고침: 바뀐 내용', style: { width: '110px' } });
   const acAdd = () => {
     const a = acFrom.value.trim();
     if (!a || !acTo.value) return;
@@ -7766,6 +7790,14 @@ function optionsDialog(startTab = 0) {
   const cmdLabel = (id) => cmds.find((x) => x.cmd === id)?.label ?? id;
   const qatAll = el('select', { size: 12, class: 'qat-list', 'aria-label': '사용 가능한 명령' });
   const qatCur = el('select', { size: 12, class: 'qat-list', 'aria-label': '현재 도구 모음 순서' });
+  const qatAllSelection = el('div', { class: 'qat-selection', role: 'status' });
+  const qatCurSelection = el('div', { class: 'qat-selection', role: 'status' });
+  const showQatSelection = () => {
+    qatAllSelection.textContent = qatAll.selectedOptions[0]?.textContent || (qatAll.options.length ? '목록에서 명령을 선택하세요.' : '일치하는 명령이 없습니다.');
+    qatCurSelection.textContent = qatCur.selectedOptions[0]?.textContent || (qatCur.options.length ? '목록에서 명령을 선택하세요.' : '추가한 명령이 없습니다.');
+  };
+  qatAll.addEventListener('change', showQatSelection);
+  qatCur.addEventListener('change', showQatSelection);
   const qatSearch = el('input', { type: 'search', placeholder: '명령 이름 검색', 'aria-label': '빠른 실행 명령 검색' });
   const qatFilter = el('select', { 'aria-label': '명령을 선택할 탭' }, [el('option', { value: '' }, '모든 명령'), ...[...new Set(cmds.map((x) => x.tab))].map((t) => el('option', { value: t }, `${t} 탭`))]);
   const drawQat = () => {
@@ -7774,11 +7806,12 @@ function optionsDialog(startTab = 0) {
     if ([...qatAll.options].some((x) => x.value === allSelected)) qatAll.value = allSelected;
     qatCur.replaceChildren(...o.qatOrder.map((id, i) => el('option', { value: id }, `${i + 1}. ${cmdLabel(id)}${qatKey(i) ? ` (Alt+${qatKey(i).split('').join('+')})` : ''}`)));
     if ([...qatCur.options].some((x) => x.value === curSelected)) qatCur.value = curSelected;
+    showQatSelection();
   };
   qatFilter.addEventListener('change', drawQat);
   qatSearch.addEventListener('input', drawQat);
-  const qatAddBtn = () => { const v = qatAll.value; if (v && !o.qatOrder.includes(v)) { o.qatOrder.push(v); drawQat(); qatCur.value = v; } };
-  const qatMove = (d) => { const i = o.qatOrder.indexOf(qatCur.value); const j = i + d; if (i < 0 || j < 0 || j >= o.qatOrder.length) return; [o.qatOrder[i], o.qatOrder[j]] = [o.qatOrder[j], o.qatOrder[i]]; const v = qatCur.value; drawQat(); qatCur.value = v; };
+  const qatAddBtn = () => { const v = qatAll.value; if (v && !o.qatOrder.includes(v)) { o.qatOrder.push(v); drawQat(); qatCur.value = v; showQatSelection(); } };
+  const qatMove = (d) => { const i = o.qatOrder.indexOf(qatCur.value); const j = i + d; if (i < 0 || j < 0 || j >= o.qatOrder.length) return; [o.qatOrder[i], o.qatOrder[j]] = [o.qatOrder[j], o.qatOrder[i]]; const v = qatCur.value; drawQat(); qatCur.value = v; showQatSelection(); };
   qatAll.addEventListener('dblclick', qatAddBtn);
   drawQat();
 
@@ -7863,13 +7896,13 @@ function optionsDialog(startTab = 0) {
       select('표시 위치', o.qatPosition, [['above', '리본 메뉴 위'], ['below', '리본 메뉴 아래']], (v) => { o.qatPosition = v; }),
       el('label', {}, el('span', {}, '명령 선택'), qatFilter),
       qatSearch,
-      el('div', { class: 'qat-grid' }, qatAll,
+      el('div', { class: 'qat-grid' }, el('div', { class: 'qat-column' }, el('div', { class: 'qat-caption' }, '사용 가능한 명령'), qatAll, qatAllSelection),
         el('div', { class: 'qat-mid' },
-          el('button', { class: 'btn', onclick: qatAddBtn }, '추가(A) >>'),
-          el('button', { class: 'btn', onclick: () => { o.qatOrder = o.qatOrder.filter((x) => x !== qatCur.value); drawQat(); } }, '<< 제거(R)'),
+          el('button', { class: 'btn', 'data-access-key': 'a', onclick: qatAddBtn }, '추가'),
+          el('button', { class: 'btn', 'data-access-key': 'r', onclick: () => { o.qatOrder = o.qatOrder.filter((x) => x !== qatCur.value); drawQat(); } }, '제거'),
           el('button', { class: 'btn small', title: '위로', 'aria-label': '위로', onclick: () => qatMove(-1) }, '▲'),
           el('button', { class: 'btn small', title: '아래로', 'aria-label': '아래로', onclick: () => qatMove(1) }, '▼')),
-        qatCur),
+        el('div', { class: 'qat-column' }, el('div', { class: 'qat-caption' }, '현재 도구 모음 순서'), qatCur, qatCurSelection)),
       el('button', { class: 'btn', onclick: (e) => { o.qatOrder = [...DEFAULT_QAT_ORDER]; o.qatPosition = DEFAULT_QAT_POSITION; e.currentTarget.closest('.opt-page').querySelector('[aria-label="표시 위치"]').value = o.qatPosition; drawQat(); } }, '원래대로'),
       note('순서대로 Alt+1~9로 실행합니다. 10~18번째는 Alt, 0, 9~1 순서로 누릅니다. 리본 메뉴 위 또는 아래에 표시할 수 있습니다.'))],
   ];
@@ -14668,7 +14701,7 @@ function formatCellsDialog(startTab = 0, find = null) {
   const init = describeCode(startCode);
   const opts = { decimals: init.decimals ?? 2, thousands: init.thousands ?? true, negative: init.negative ?? 'minus', symbol: init.symbol ?? '₩', type: init.type };
   let cat = init.cat;
-  const catList = el('div', { class: 'fc-cats', role: 'listbox' });
+  const catList = el('div', { class: 'fc-cats', role: 'listbox', 'aria-label': '표시 형식 분류' });
   const optBox = el('div', { class: 'fc-opts' });
   const sampleBox = el('div', { class: 'fc-sample' });
   const noteBox = el('div', { class: 'muted fc-note' });
@@ -14754,7 +14787,7 @@ function formatCellsDialog(startTab = 0, find = null) {
         list.append(b);
       }
       codeIn.oninput = () => { customCode = codeIn.value; showSample(); };
-      optBox.append(lab('형식', codeIn), list, el('div', { class: 'muted fc-help' },
+      optBox.append(lab('서식 코드', codeIn), list, el('div', { class: 'muted fc-help' },
         '0 # ? 숫자 자리 · , 천 단위 · % 백분율 · "글자" · @ 텍스트 · [빨강] 색 · [>=100] 조건 · 양수;음수;0;텍스트 · yyyy mm dd aaaa h:mm:ss AM/PM [h]'));
       setTimeout(() => codeIn.focus());
     }
@@ -17557,6 +17590,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileFit','toggleR
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['팝업·서식 UI 개선', ['이동 옵션을 선택 종류와 데이터 유형으로 구분 · 상수·수식에 해당하는 옵션만 활성화', '옵션·셀/차트/도형 서식의 입력 정렬·행 간격·탭·버튼 디자인 정리 · 작은 화면에서 본문 스크롤과 확인/취소 유지', '자동 고침 입력과 셀 서식의 분류·서식 코드 이름을 명확하게 안내']],
   ['Google Sheets 가져오기 정확성', ['IMPORTRANGE의 혼합 문자·숫자, 제목, 빈 행·열 누락 수정', '시트 이름 생략 시 Google과 같은 첫 탭 선택 · 쉼표·소수·백분율 표시와 숫자 계산 유지']],
   ['틀 고정과 확대 탐색', ['엑셀에 저장된 고정 시작 행·열과 본문 위치·활성 셀 복원', '고정 영역이 화면을 가득 채우면 잠시 고정을 조정하여 선택 셀 표시 · 축소하면 복원', '행·열 삽입/삭제 시 고정 경계와 저장된 보기 위치 보존']],
   ['병합 제목의 행 높이와 글꼴 위치', ['병합 제목 편집·자동 맞춤 후 원래 행 높이 보존', '셀마다 실제 글꼴의 세로 보정 적용 · 돋움 제목이 위에 붙는 현상 개선']],
@@ -18269,7 +18303,7 @@ async function init() {
   try {
     if (localStorage.getItem('wixel:version') !== APP_VERSION) {
       localStorage.setItem('wixel:version', APP_VERSION);
-      setTimeout(() => toast(`WIXEL ${APP_VERSION} — 새로운 기능은 [도움말 › 새로운 기능]에서 볼 수 있습니다.`), 1200);
+      setTimeout(() => { if (!document.querySelector('#dialogLayer .dialog')) toast(`WIXEL ${APP_VERSION} — 새로운 기능은 [도움말 › 새로운 기능]에서 볼 수 있습니다.`); }, 1200);
     }
   } catch { /* 저장소 없음 */ }
   // 서버 존재 확인은 연결/업로드 동의가 아닙니다. 사용자가 선택한 문서만 원격 저장합니다.

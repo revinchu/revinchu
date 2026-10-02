@@ -2008,3 +2008,193 @@ body.mobile-work-mode.mobile-compact .mobile-tools-body input[type=search] { min
 
 .obj:not(.sel) [data-object-link] { pointer-events: all; }
 .obj.sel [data-object-link] { pointer-events: none; }
+
+
+/* 공통 팝업: 읽기 쉬운 행 높이, 일관된 입력 정렬과 본문 스크롤 */
+.dialog {
+  --dialog-line: #dce3df; --dialog-soft: #f5f8f6; --dialog-ink: #26332c;
+  min-width: min(380px, calc(100vw - 32px)); min-height: 0;
+  border: 1px solid #cbd5cf; border-radius: 10px;
+  box-shadow: 0 18px 56px #162d2426, 0 3px 12px #162d2414;
+  color: var(--dialog-ink); font-size: 13px; line-height: 1.5; overflow: hidden;
+}
+.dialog-backdrop { background: #13291f38; padding: 16px; }
+.dialog-backdrop.modeless { background: transparent; }
+.dialog-head {
+  flex: none; min-height: 52px; padding: 10px 16px; gap: 16px;
+  border-bottom: 1px solid var(--dialog-line); font-size: 14px; font-weight: 700;
+}
+.dialog-title { min-width: 0; word-break: keep-all; overflow-wrap: break-word; }
+.dialog-head > button {
+  flex: 0 0 30px; width: 30px; height: 30px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center; line-height: 1;
+  border-radius: 5px; color: #64726a;
+}
+.dialog-head > button:hover { color: #26332c; background: #eaf0ed; }
+.dialog-body {
+  flex: 1 1 auto; min-width: 0; min-height: 0; padding: 18px; gap: 14px;
+  overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #b6c3bb transparent;
+}
+.dialog-body > * { flex-shrink: 0; min-width: 0; }
+.dialog-body label { min-width: 0; gap: 10px; line-height: 1.5; }
+.dialog-body label > span:first-child { width: 116px; word-break: keep-all; overflow-wrap: break-word; }
+.dialog-body :is(input, select, textarea) { color: inherit; }
+.dialog-body :is(input[type=text], input[type=number], input[type=search], input[type=password], input[type=url], select, textarea) {
+  min-width: 0; border: 1px solid #bfcac3; border-radius: 5px; background: #fff; font: inherit;
+}
+.dialog-body :is(input[type=text], input[type=number], input[type=search], input[type=password], input[type=url], select:not([size])) {
+  height: 32px; padding: 4px 8px; line-height: normal;
+}
+.dialog-body textarea { padding: 8px 10px; line-height: 1.55; }
+.dialog-body select[size] { flex-shrink: 0; padding: 4px; }
+.dialog-body select[size] option { padding: 4px 7px; }
+.dialog-body :is(input[type=checkbox], input[type=radio]) {
+  flex: 0 0 16px; width: 16px; height: 16px; margin: 0; accent-color: var(--green); vertical-align: middle;
+}
+.dialog-body label:has(> input:is([type=checkbox], [type=radio])) { min-height: 28px; cursor: pointer; }
+.dialog-body label:has(> input:is([type=checkbox], [type=radio])) > span:first-child { width: auto; min-width: 0; max-width: none; flex: 1; }
+.dialog-body :is(input, select, textarea):disabled { background: #f3f5f4; color: #79867e; cursor: default; }
+.dialog-body label:has(> input:disabled) { color: #79867e; cursor: default; }
+.dialog-body :is(input, select, textarea):focus {
+  outline: 2px solid #217346; outline-offset: 1px; border-color: #217346;
+}
+.dialog :is(button, summary, [tabindex]):focus-visible { outline: 2px solid #217346; outline-offset: -2px; }
+.dialog-foot {
+  flex: none; flex-wrap: wrap; padding: 12px 18px; gap: 8px;
+  border-top: 1px solid var(--dialog-line); background: #f8faf9;
+}
+.dialog .btn { min-height: 32px; height: auto; padding: 5px 14px; border-radius: 5px; line-height: 1.45; }
+.dialog-foot .btn { min-width: 84px; }
+.dialog .btn:not(.primary) { border-color: #bfcac3; }
+.dialog .btn:not(.primary):hover:not(:disabled) { background: #eef4f0; border-color: #99ada0; }
+.dialog button:disabled { cursor: default; opacity: .55; }
+.dialog-body :is(fieldset, .fc-sample, .fc-list, .fc-cats, .fc-fontprev) { border-color: var(--dialog-line); border-radius: 6px; }
+.dialog-body fieldset { min-width: 0; margin: 0; padding: 12px; }
+.dialog-body legend { padding: 0 5px; font-weight: 600; color: #46564c; }
+.dialog-body .warn:not([hidden]) { padding: 10px 12px; border: 1px solid #f1c1ad; border-radius: 6px; background: #fff6f0; line-height: 1.5; }
+.dialog-body .muted { color: #65736b; line-height: 1.55; }
+.dialog .dlg-tabs { gap: 4px; flex-wrap: wrap; border-color: var(--dialog-line); }
+.dialog .dlg-tab { min-height: 34px; padding: 6px 12px; border-radius: 5px 5px 0 0; line-height: 1.4; }
+.dialog .dlg-tab.on { background: #eef6f1; border-color: var(--dialog-line); box-shadow: inset 0 2px #217346; }
+
+/* 간단한 옵션 폼: 레이블용 좁은 고정 칸에 체크 항목을 넣지 않는다. */
+.dialog.form-dialog { width: 460px; }
+.form-dialog-fields { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.dialog-body .form-dialog-field { display: grid; grid-template-columns: minmax(100px, .8fr) minmax(140px, 1.4fr); gap: 10px 16px; align-items: center; }
+.dialog-body .form-dialog-field > .form-dialog-label { width: auto; max-width: none; min-width: 0; }
+.form-dialog-field > :is(input, select, textarea) { width: 100%; }
+.dialog-body .form-dialog-check { display: flex; align-items: center; gap: 10px; min-height: 28px; }
+.dialog-body .form-dialog-check > .form-dialog-label { width: auto; max-width: none; min-width: 0; flex: 1; }
+.form-dialog-note { padding: 10px 12px; border-radius: 6px; background: #f1f6f3; line-height: 1.6; }
+
+/* 서식 창과 옵션의 탐색/설정/미리보기 구획 */
+.dialog .opt-wrap { grid-template-columns: 156px minmax(0, 1fr); gap: 18px; }
+.dialog .opt-tabs { gap: 4px; padding-right: 12px; border-color: var(--dialog-line); }
+.dialog .opt-tab { min-height: 34px; padding: 7px 10px; border-radius: 5px; line-height: 1.4; word-break: keep-all; }
+.dialog .opt-tab.on { background: #e8f3ec; color: #185c37; box-shadow: inset 3px 0 #217346; }
+.dialog .opt-box, .dialog .opt-page { min-width: 0; }
+.dialog .opt-page { gap: 10px; }
+.dialog .opt-title { font-size: 13px; color: #334d3f; padding: 10px 0 6px; border-color: var(--dialog-line); }
+.dialog .opt-page label > span:first-child { min-width: 0; }
+.dialog .opt-page label:not(:has(> input:is([type=checkbox], [type=radio]))) > span:first-child { flex: 0 1 150px; }
+.dialog .fc-page { padding-top: 16px; }
+.dialog .fc-row { gap: 14px; }
+.dialog .fc-cats { width: 132px; background: #f7faf8; }
+.dialog :is(.fc-cat, .fc-item) { min-height: 28px; padding: 5px 10px; line-height: 1.4; }
+.dialog .fc-sample { background: #f7faf8; padding: 10px 12px; gap: 5px; }
+.dialog .fc-sample b { font-size: 15px; }
+.dialog .fc-title { padding-bottom: 6px; color: #334d3f; }
+.dialog .cfp { gap: 10px; max-height: none; overflow: visible; }
+.dialog .cfp-sec { padding: 0 10px 8px; border: 1px solid var(--dialog-line); border-radius: 6px; }
+.dialog .cfp-sec > summary { padding: 10px 0 6px; font-weight: 600; }
+.dialog .cfp-row { min-height: 32px; padding: 4px 0; gap: 12px; }
+.dialog .cfp-row > span:first-child { min-width: 0; flex: 1 1 120px; word-break: keep-all; }
+.dialog .cfp-row > :is(input:not([type=checkbox]), select) { flex: 0 1 140px; width: 140px; min-width: 0; }
+.dialog .picture-section > summary { padding: 6px 0; }
+.dialog .picture-preview-stage, .dialog .cg-prev { border-color: var(--dialog-line); border-radius: 6px; }
+.dialog .find-dlg .find-tabs { border-color: var(--dialog-line); }
+.dialog .find-dlg .find-row { gap: 10px; }
+.dialog .find-dlg .find-tabs button { padding: 7px 14px; }
+
+/* 팝업 메뉴에도 같은 글자 기준선과 포커스 스타일 적용 */
+.menu { border-color: #cbd5cf; border-radius: 7px; box-shadow: 0 8px 26px #162d2426, 0 2px 6px #162d2412; padding-top: 5px; padding-bottom: 5px; }
+.menu-item { min-height: 32px; gap: 10px; line-height: 1.45; padding-top: 6px; padding-bottom: 6px; }
+.menu-item:hover:not(:disabled) { background: #edf5f0; }
+.menu-item .mi-key { color: #69766f; line-height: 1.35; }
+.menu-title { color: #65736b; padding-top: 8px; padding-bottom: 5px; }
+.menu-sep { background: #e2e9e5; margin: 5px 8px; }
+
+/* 작은 화면에서는 긴 설명을 세로로 배치하고 확인/취소를 본문 밖에 유지 */
+@media (max-width: 660px) {
+  .dialog-backdrop, .dialog-backdrop.modeless { padding: 8px; place-items: center; }
+  .dialog, .dialog.pane-dlg { min-width: 0; max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); }
+  .dialog-body { padding: 12px; }
+  .dialog-head { padding: 8px 12px; min-height: 46px; }
+  .dialog-foot { padding: 10px 12px; }
+  .dialog .opt-wrap { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .dialog .opt-tabs { flex-direction: row; flex-wrap: nowrap; overflow-x: auto; padding: 0 0 8px; border-right: 0; border-bottom: 1px solid var(--dialog-line); }
+  .dialog .opt-tab { flex: 0 0 auto; white-space: nowrap; }
+  .dialog .fc-number { flex-direction: column; }
+  .dialog .fc-cats { width: 100%; max-height: 120px; }
+}
+@media (max-width: 440px) {
+  .dialog-body .form-dialog-field { grid-template-columns: minmax(0, 1fr); gap: 5px; }
+  .dialog .dlg-tab { padding: 6px 8px; }
+}
+body.mobile-work-mode .dialog { font-size: 13px; line-height: 1.5; }
+body.mobile-work-mode .dialog .opt-wrap { grid-template-columns: minmax(0, 1fr); }
+body.mobile-work-mode .dialog .opt-tabs { flex-direction: row; flex-wrap: nowrap; overflow-x: auto; max-height: none; border-right: 0; border-bottom: 1px solid var(--dialog-line); padding: 0 0 8px; }
+body.mobile-work-mode .dialog .opt-tab { flex: 0 0 auto; white-space: nowrap; }
+body.mobile-work-mode .dialog .form-dialog-label { max-width: none; overflow-wrap: break-word; }
+body.mobile-work-mode .dialog-body :is(input[type=checkbox], input[type=radio]) { width: 18px; height: 18px; flex-basis: 18px; }
+body.mobile-work-mode .dialog .form-dialog-field { grid-template-columns: minmax(0, 1fr); gap: 5px; }
+body.mobile-work-mode .dialog .cfp-row { gap: 8px; }
+body.mobile-work-mode.mobile-compact .dialog-head { min-height: 40px; }
+
+
+/* 이동 옵션: 선택 대상과 그 하위 데이터 유형을 구분한다. */
+.goto-special-dialog { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.goto-special-kind-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 12px; }
+.goto-special-type-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 12px; }
+.dialog-body .goto-special-choice { min-height: 32px; padding: 4px 6px; gap: 9px; border-radius: 5px; }
+.goto-special-choice:hover:has(input:not(:disabled)) { background: #f0f6f2; }
+.goto-special-choice:has(input:checked:not(:disabled)) { background: #eaf4ed; }
+.dialog-body .goto-special-choice > span { width: auto; flex: 1; min-width: 0; max-width: none; word-break: keep-all; }
+.goto-special-types:disabled { color: #79867e; background: #f7f9f8; }
+.goto-special-hint { font-size: 12px; line-height: 1.6; color: #65736b; }
+@media (max-width: 440px) {
+  .goto-special-kind-list { grid-template-columns: minmax(0, 1fr); }
+}
+
+
+/* 빠른 실행 사용자 지정: 잘린 목록 이름은 선택 설명에서 전부 확인 */
+.dialog .qat-grid { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: start; gap: 10px; }
+.qat-column { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.qat-caption { font-size: 12px; color: #46564c; font-weight: 600; }
+.qat-selection { min-height: 36px; font-size: 12px; line-height: 1.5; color: #65736b; word-break: keep-all; overflow-wrap: anywhere; }
+.dialog .qat-mid { padding-top: 27px; }
+@media (max-width: 660px) {
+  .dialog .qat-grid { grid-template-columns: minmax(0, 1fr); }
+  .dialog .qat-mid { flex-direction: row; flex-wrap: wrap; padding-top: 0; }
+  .dialog .qat-list { min-height: 160px; height: 180px; }
+  .dialog .opt-cols { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dialog .ac-add { flex-wrap: wrap; }
+}
+body.mobile-work-mode .dialog .qat-grid { grid-template-columns: minmax(0, 1fr); }
+body.mobile-work-mode .dialog .qat-mid { flex-direction: row; flex-wrap: wrap; padding-top: 0; }
+body.mobile-work-mode .dialog .qat-list { min-height: 160px; height: 180px; }
+
+/* 긴 권한 목록은 항목 사이 간격을 줄여 한눈에 읽는다. */
+.form-dialog-fields { gap: 12px; }
+.form-dialog-check + .form-dialog-check { margin-top: -8px; }
+body.mobile-work-mode .dialog-body .form-dialog-check { min-height: 32px; }
+
+@media (min-width: 661px) {
+  .dialog-backdrop.modeless .dialog { max-height: calc(100dvh - 166px); }
+}
+
+/* 좁은 창에서 두 줄 서식 탭이 스크롤된 입력칸을 덮지 않도록 함께 이동한다. */
+@media (max-width: 660px) {
+  .dialog .format-pane-tabs { position: static; }
+}
+body.mobile-work-mode .dialog .format-pane-tabs { position: static; }

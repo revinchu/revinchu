@@ -449,6 +449,7 @@ document.addEventListener('mousedown', (e) => {
 
 // ───────────── 대화상자 ─────────────
 let dialogCloseHandler = null;
+let dialogSequence = 0, formSequence = 0;
 export function setDialogCloseHandler(fn) { dialogCloseHandler = fn; }
 // 창을 띄워 둔 채 시트를 쓸 수 있는 대화상자(찾기 및 바꾸기 등)는 열린 것으로 치지 않음
 export const isDialogOpen = () => [...document.getElementById('dialogLayer').children].some((x) => !x.classList.contains('modeless'));
@@ -458,14 +459,18 @@ export const isDialogOpen = () => [...document.getElementById('dialogLayer').chi
  * 반환: { close, root }
  */
 export function openDialog({ title, body, buttons = [], onOpen, width, modeless = false, onClose }) {
+  clearTimeout(toastTimer);
+  document.getElementById('toast')?.classList.remove('show');
   const layer = document.getElementById('dialogLayer');
+  const titleId = `dialog-title-${++dialogSequence}`;
   const returnFocus = document.activeElement;
-  let busy = false;
+  let busy = false, disposeDrag = null;
   const focusable = (root) => [...root.querySelectorAll('input, select, textarea, button, a[href], [tabindex]')]
-    .filter((x) => !x.disabled && x.tabIndex >= 0 && x.getClientRects().length);
+    .filter((x) => x.tabIndex >= 0 && accessVisible(x, true));
   const close = () => {
     if (!backdrop.isConnected || busy) return;
     endAccessKeys();
+    disposeDrag?.();
     backdrop.remove();
     onClose?.();
     const remaining = [...layer.querySelectorAll('.dialog')].at(-1);
@@ -479,11 +484,11 @@ export function openDialog({ title, body, buttons = [], onOpen, width, modeless 
     const key = dialogButtonAccessKey(button.getAttribute('aria-label') ?? button.textContent);
     if (key && button.dataset.accessKey === undefined) button.dataset.accessKey = key;
   }
-  const dialog = el('div', { class: 'dialog', role: 'dialog', 'aria-label': title, 'aria-modal': String(!modeless), tabindex: '-1' },
-    el('div', { class: 'dialog-head' }, title, el('button', { title: '닫기', 'aria-label': '닫기', 'data-access-key': 'd', 'data-dialog-close-head': true, onclick: close }, '✕')),
+  const dialog = el('div', { class: 'dialog', role: 'dialog', 'aria-label': title, 'aria-labelledby': titleId, 'aria-modal': String(!modeless), tabindex: '-1' },
+    el('div', { class: 'dialog-head' }, el('span', { class: 'dialog-title', id: titleId }, title), el('button', { class: 'dialog-close', type: 'button', title: '닫기', 'aria-label': '닫기', 'data-access-key': 'd', 'data-dialog-close-head': true, onclick: close }, el('span', { 'aria-hidden': 'true' }, '✕'))),
     el('div', { class: 'dialog-body' }, content),
     buttons.length ? el('div', { class: 'dialog-foot' }, buttons.map((b) => el('button', {
-      class: `btn${b.primary ? ' primary' : ''}`, 'data-access-key': b.accessKey ?? dialogButtonAccessKey(b.label), 'data-access-aliases': b.accessAliases,
+      class: `btn${b.primary ? ' primary' : ''}`, type: 'button', 'data-access-key': b.accessKey ?? dialogButtonAccessKey(b.label), 'data-access-aliases': b.accessAliases,
       onclick: () => invoke(b),
     }, b.label))) : null);
   if (width) dialog.style.width = `${width}px`;
@@ -515,7 +520,7 @@ export function openDialog({ title, body, buttons = [], onOpen, width, modeless 
     } catch (err) { fail(err); }
   };
   backdrop.addEventListener('mousedown', (e) => { if (e.target === backdrop && !modeless) close(); });
-  if (modeless) dragByHead(dialog);
+  if (modeless) disposeDrag = dragByHead(dialog);
   dialog.addEventListener('keydown', (e) => {
     e.stopPropagation();
     if (e.isComposing || e.keyCode === 229) return;
@@ -546,22 +551,55 @@ export function openDialog({ title, body, buttons = [], onOpen, width, modeless 
 function dragByHead(dialog) {
   const head = dialog.querySelector('.dialog-head');
   head.style.cursor = 'move';
-  head.addEventListener('mousedown', (e) => {
-    if (e.target.tagName === 'BUTTON' || document.body.classList.contains('mobile-work-mode')) return;
-    const r = dialog.getBoundingClientRect();
-    const dx = e.clientX - r.left;
-    const dy = e.clientY - r.top;
-    const move = (ev) => {
-      dialog.style.position = 'fixed';
-      dialog.style.margin = '0';
-      dialog.style.left = `${Math.max(0, Math.min(innerWidth - 60, ev.clientX - dx))}px`;
-      dialog.style.top = `${Math.max(0, Math.min(innerHeight - 30, ev.clientY - dy))}px`;
-    };
-    const up = () => { removeEventListener('mousemove', move); removeEventListener('mouseup', up); };
+  let drag = null, frame = 0;
+  const mobile = () => document.body.classList.contains('mobile-work-mode');
+  const place = (left, top, rect = dialog.getBoundingClientRect()) => {
+    // 제목 일부가 아니라 확인/닫기 단추를 포함한 창 전체가 보이도록 한다.
+    const x = `${Math.max(0, Math.min(Math.max(0, innerWidth - rect.width), left))}px`;
+    const y = `${Math.max(0, Math.min(Math.max(0, innerHeight - rect.height), top))}px`;
+    if (dialog.style.left !== x) dialog.style.left = x;
+    if (dialog.style.top !== y) dialog.style.top = y;
+  };
+  const fit = () => {
+    frame = 0;
+    // 움직이지 않은 창과 모바일 창의 위치는 CSS가 관리한다.
+    if (!dialog.isConnected || mobile() || dialog.style.position !== 'fixed') return;
+    const rect = dialog.getBoundingClientRect();
+    place(rect.left, rect.top, rect);
+  };
+  const scheduleFit = () => { if (!frame) frame = requestAnimationFrame(fit); };
+  const endDrag = () => {
+    drag = null;
+    removeEventListener('mousemove', move);
+    removeEventListener('mouseup', endDrag);
+    removeEventListener('blur', endDrag);
+  };
+  const move = (event) => {
+    if (!drag || !dialog.isConnected || mobile()) { endDrag(); return; }
+    dialog.style.position = 'fixed';
+    dialog.style.margin = '0';
+    place(event.clientX - drag.x, event.clientY - drag.y);
+  };
+  const startDrag = (e) => {
+    if (e.button !== 0 || e.target.closest('button') || mobile()) return;
+    const rect = dialog.getBoundingClientRect();
+    drag = { x: e.clientX - rect.left, y: e.clientY - rect.top };
     addEventListener('mousemove', move);
-    addEventListener('mouseup', up);
+    addEventListener('mouseup', endDrag);
+    addEventListener('blur', endDrag);
     e.preventDefault();
-  });
+  };
+  head.addEventListener('mousedown', startDrag);
+  const observer = new ResizeObserver(scheduleFit);
+  observer.observe(dialog);
+  addEventListener('resize', scheduleFit);
+  return () => {
+    endDrag();
+    head.removeEventListener('mousedown', startDrag);
+    removeEventListener('resize', scheduleFit);
+    observer.disconnect();
+    if (frame) cancelAnimationFrame(frame);
+  };
 }
 
 export function alertDialog(title, message) {
@@ -573,37 +611,44 @@ export function alertDialog(title, message) {
 /** 입력 필드 여러 개를 받는 대화상자. fields: [{name, label, type, value, options}] */
 export function formDialog(title, fields, onSubmit, { okLabel = '확인', note, onChange, onClose } = {}) {
   const inputs = {};
-  const body = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
-    note ? el('div', { class: 'muted' }, note) : null,
-    fields.map((f) => {
-      let input;
+  const formId = `form-dialog-${++formSequence}`, noteId = `${formId}-note`;
+  const body = el('div', { class: 'form-dialog-fields' },
+    note ? el('div', { class: 'form-dialog-note muted', id: noteId }, note) : null,
+    fields.map((f, index) => {
+      const id = `${formId}-field-${index}`;
+      const attrs = { id, name: f.name, 'data-access-key': f.accessKey };
+      let input, list;
       if (f.type === 'select') {
-        input = el('select', {}, f.options.map((o) => el('option', { value: o.value, selected: o.value === f.value }, o.label)));
+        input = el('select', attrs, f.options.map((o) => el('option', { value: o.value, selected: o.value === f.value }, o.label)));
       } else if (f.type === 'checkbox') {
-        input = el('input', { type: 'checkbox', checked: !!f.value });
+        input = el('input', { ...attrs, type: 'checkbox', checked: !!f.value });
       } else if (f.type === 'textarea') {
-        input = el('textarea', {}, f.value ?? '');
+        input = el('textarea', attrs, f.value ?? '');
       } else if (f.type === 'combo') {
         // 직접 입력 + 목록에서 고르기
-        const id = `dl-${Math.random().toString(36).slice(2, 8)}`;
-        input = el('input', { type: 'text', value: f.value ?? '', list: id, 'data-access-key': f.accessKey });
-        inputs[f.name] = input;
-        return el('label', {}, el('span', {}, f.label), input, el('datalist', { id }, (f.options ?? []).map((o) => el('option', { value: o.value }, o.label))));
+        const listId = `${id}-options`;
+        input = el('input', { ...attrs, type: 'text', value: f.value ?? '', list: listId });
+        list = el('datalist', { id: listId }, (f.options ?? []).map((o) => el('option', { value: o.value }, o.label)));
       } else {
-        input = el('input', { type: f.type || 'text', value: f.value ?? '' });
+        input = el('input', { ...attrs, type: f.type || 'text', value: f.value ?? '' });
       }
-      if (f.accessKey) input.dataset.accessKey = f.accessKey;
       inputs[f.name] = input;
-      return el('label', {}, el('span', {}, f.label), input);
+      const label = el('span', { class: 'form-dialog-label' }, f.label);
+      // label 래퍼는 onChange 콜백의 closest('label') 사용과 전체 행 클릭을 유지한다.
+      return el('label', { class: `form-dialog-field${f.type === 'checkbox' ? ' form-dialog-check' : ''}`, for: id },
+        ...(f.type === 'checkbox' ? [input, label] : [label, input]), list);
     }));
   const read = () => Object.fromEntries(Object.entries(inputs).map(([k, i]) => [k, i.type === 'checkbox' ? i.checked : i.value]));
   // onChange(inputs): 값이 바뀔 때마다 (다른 칸 보이기 · 목록 바꾸기)
   if (onChange) { body.addEventListener('change', () => onChange(inputs)); onChange(inputs); }
-  return openDialog({
+  const dialog = openDialog({
     title, body, onClose,
     buttons: [
       { label: okLabel, primary: true, action: () => onSubmit(read()) },
       { label: '취소' },
     ],
   });
+  dialog.root.classList.add('form-dialog');
+  if (note) dialog.root.setAttribute('aria-describedby', noteId);
+  return dialog;
 }
