@@ -366,3 +366,8 @@ node tools/mobile-layout.mjs
 - 기존 `mobile-work-mode.mjs`는 촘촘하게/여유롭게 전환·설정 기억·원본 문서 보존을 포함합니다. `mobile-layout.mjs` 카탈로그는 두 밀도×여섯 화면×15개 탭입니다.
 
 브라우저 도구의 `WIXEL_URL`과 Playwright 환경 변수는 위와 같습니다. 신규 도구는 격리 컨텍스트·합성 자료만 사용하며 외부 쓰기를 막습니다. 시간은 해당 합성 조건의 관측값이며 전체 문서의 속도 보장이 아닙니다. 근거·남은 과제는 [30. 재평가와 품질 개선](../docs/codex/30_재평가와품질개선.md)에 기록합니다.
+
+
+## 도형·그림의 바로가기 버튼
+
+`node tools/drawing-links.mjs`는 합성 문서에서 도형·그림·그룹 자식의 링크 이동, 시트명·이름 범위, 같은 시트 맨위로, Ctrl+클릭/Enter/K, 링크 편집·제거·Undo, 끊어진 링크 안내, 보호 상태와 모바일 탭을 검사합니다. `WIXEL_URL`로 소스 또는 배포 번들을 지정합니다. 기존 Playwright 환경 변수를 사용하며 격리 컨텍스트에서 외부 연결·API 쓰기를 차단합니다. XLSX 왕복·내부 주소·구조 변경 검사는 `test/drawing-hyperlinks.test.js`, `test/hyperlink.test.js`에 있습니다. 실제 업무 파일은 이 도구나 저장소에 포함하지 않습니다. 지원 범위는 [31번 문서](../docs/codex/31_도형버튼과하이퍼링크.md)에 기록합니다.

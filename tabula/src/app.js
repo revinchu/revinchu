@@ -28,6 +28,7 @@ import { flashFill } from './flashfill.js';
 import { filterChecklist, searchableFieldPicker } from './app-filter-checklist.js';
 import { parseTableRange, tableRangeProblem } from './table-ux.js';
 import { safeUrl, setSafeHtml } from './safe-html.js';
+import { resolveWorkbookLink } from './hyperlink.js';
 import {
   el, hydrateIcons, toast, openMenu, openSubmenu, closeSubmenus, closeMenus, isMenuOpen, openDialog, alertDialog,
   formDialog, setMenuCloseHandler, setDialogCloseHandler, setAccessKeyHandler, registerAccessKeyScope, isDialogOpen,
@@ -1377,6 +1378,7 @@ function onGridKey(e) {
   const k = e.key;
   const handled = () => e.preventDefault();
 
+  if (k === 'Escape' && drag?.type === 'objectLink') { handled(); drag = null; stopAutoScroll(); return; }
   if (k === 'Escape' && (drawKind || drawPathState || drag?.type === 'draw' || shapePointDrag)) {
     handled();
     if (drag?.type === 'draw') { sheet().shapes = sheet().shapes.filter((o) => o.id !== drag.id); drag = null; chartSel = null; }
@@ -1400,6 +1402,8 @@ function onGridKey(e) {
   }
   if (chartElementDrag && k === 'Escape') { handled(); chartElementDrag = null; gv.renderObjectsAll(); return; }
   if (chartSel) {
+    if (ctrl && !e.altKey && e.code === 'KeyK' && ['shapes', 'images'].includes(findObject(sheet(), chartSel)?.prop)) { handled(); objectHyperlinkDialog(chartSel); return; }
+    if (ctrl && k === 'Enter' && findObject(sheet(), chartSel)?.obj.hyperlink?.target) { handled(); openLink(drawingLinkAddress(findObject(sheet(), chartSel).obj.hyperlink)); return; }
     if (ctrl && (e.code === 'Digit1' || k === '1') && sheet().charts.some(c => c.id === chartSel)) { handled(); chartFormatPane(chartSel); return; }
     if ((k === 'Delete' || k === 'Backspace') && chartPart?.id === chartSel) { handled(); deleteChartPart(); return; }
     if (k === 'Escape' && chartPart?.id === chartSel) { handled(); chartPart = null; gv.renderObjectsAll(); syncChartPane(); return; }
@@ -1701,6 +1705,7 @@ function selectComments() {
 
 /** Ctrl+K 하이퍼링크 */
 function hyperlinkDialog() {
+  if (chartSel && ['shapes', 'images'].includes(findObject(sheet(), chartSel)?.prop)) { objectHyperlinkDialog(chartSel); return; }
   if (editing && !commitEdit()) return;
   const cell = wb.getCell(si, active.r, active.c);
   const initialText = displayText(active.r, active.c) || '';
@@ -1757,11 +1762,54 @@ function removeHyperlink(removeFormats = true) {
   else if (!cells.length) toast('선택한 셀에 하이퍼링크가 없습니다.');
 }
 
+function objectHyperlinkDialog(id) {
+  const f = findObject(sheet(), id);
+  if (!f || viewOnly || wb.props?.markedFinal || (f.obj.locked !== false && protectBlocked('objects'))) return;
+  const book = wb, sourceId = docId, sourceSheet = si;
+  const initial = f.obj.hyperlink;
+  formDialog(initial?.target ? '하이퍼링크 편집' : '하이퍼링크 삽입', [
+    { name: 'url', label: '주소 (웹 주소 또는 #시트!A1)', value: initial?.target ?? '' },
+    { name: 'tooltip', label: '화면 설명', value: initial?.tooltip ?? '' },
+  ], v => {
+    if (wb !== book || docId !== sourceId || si !== sourceSheet || !findObject(sheet(), id)) { toast('문서가 바뀌었습니다. 개체를 다시 선택하세요.'); return false; }
+    let target = v.url.trim();
+    if (!target) { toast('주소를 입력하세요.'); return false; }
+    if (!target.startsWith('#') && !/^[a-z][\w+.-]*:/i.test(target)) {
+      target = !resolveWorkbookLink(wb, si, '#' + target).error ? '#' + target : 'https://' + target;
+    }
+    if (target.startsWith('#')) {
+      const result = resolveWorkbookLink(wb, si, target);
+      if (result.error) { toast(result.error); return false; }
+    } else if (!safeUrl(target, 'link', document.baseURI)) { toast('허용되지 않는 링크 주소입니다.'); return false; }
+    updateObject(id, { hyperlink: { target, targetMode: target.startsWith('#') ? 'Internal' : 'External', ...(v.tooltip.trim() ? { tooltip: v.tooltip.trim() } : {}) } });
+    return true;
+  }, { okLabel: '확인', note: '클릭하면 링크로 이동합니다. Ctrl+클릭으로 개체를 선택하여 이동·서식을 편집할 수 있습니다.' });
+}
+
+function drawingLinkAddress(link) {
+  const target = link?.target;
+  if (typeof target !== 'string' || !target || target.startsWith('#')) return target;
+  return String(link.targetMode ?? '').toLowerCase() !== 'external' && !/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(target) ? '#' + target : target;
+}
+
 function openLink(url) {
+  if (typeof url === 'string' && url.startsWith('#')) {
+    const result = resolveWorkbookLink(wb, si, url);
+    if (result.error) { toast(result.error); return false; }
+    switchSheet(result.sheet);
+    deselectChart();
+    const rg = result.range;
+    if (isSingle(rg)) selectCell(rg.r1, rg.c1);
+    else if (rg.r1 === 0 && rg.r2 === MAX_ROWS - 1) selectCols(rg.c1, rg.c2, { r: 0, c: rg.c1 });
+    else if (rg.c1 === 0 && rg.c2 === MAX_COLS - 1) selectRows(rg.r1, rg.r2, { r: rg.r1, c: 0 });
+    else { growTo(rg.r2, rg.c2); selectRange(rg); }
+    gv.ensureVisible(rg.r1, rg.c1); focusGrid();
+    return true;
+  }
   const safe = safeUrl(url, 'link', document.baseURI);
-  if (!safe) { toast('허용되지 않는 링크 주소입니다. http 또는 https 주소를 사용하세요.'); return; }
-  if (safe.startsWith('#')) { gotoRef(safe.slice(1)); return; }
+  if (!safe) { toast('허용되지 않는 링크 주소입니다. http 또는 https 주소를 사용하세요.'); return false; }
   try { window.open(safe, '_blank', 'noopener,noreferrer'); } catch { toast(safe); }
+  return true;
 }
 
 // ───────────────────────── 마우스 ─────────────────────────
@@ -1929,6 +1977,12 @@ function onViewMouseDown(e) {
     focusGrid();
     const id = objEl.dataset.id;
     const mf = e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey ? findObject(sheet(), id) : null;
+    const childLink = t.closest('[data-object-link]')?.dataset;
+    const objectLink = mf && drawingLinkAddress(childLink?.objectLink ? { target: childLink.objectLink, targetMode: childLink.objectLinkMode } : mf.obj.hyperlink);
+    if (objectLink && chartSel !== id) {
+      drag = { type: 'objectLink', target: objectLink, book: wb, doc: docId, si, start: { x: e.clientX, y: e.clientY }, moved: false };
+      return;
+    }
     if (mf?.obj.macro && chartSel !== id) { runObjectMacro(mf.obj.macro); return; }
     // Ctrl · Shift + 클릭: 여러 개체 선택 (맞춤 · 배분 · 한꺼번에 서식)
     if ((e.ctrlKey || e.metaKey || e.shiftKey) && e.button === 0 && chartSel && chartSel !== id) {
@@ -2167,6 +2221,7 @@ function dropMove(src, target, { copy, insert }) {
 }
 
 function onDragMove(x, y) {
+  if (drag?.type === 'objectLink') { if (Math.hypot(x - drag.start.x, y - drag.start.y) > 6) drag.moved = true; return; }
   if (chartElementDrag) { moveChartPartDraft(x, y); return; }
   if (drawPathState) { movePathDraft(x, y); return; }
   if (shapePointDrag) { moveShapePointDraft(x, y); return; }
@@ -2328,6 +2383,7 @@ function onDragEnd() {
   const d = drag;
   drag = null;
   stopAutoScroll();
+  if (d.type === 'objectLink') { if (!d.moved && d.book === wb && d.doc === docId && d.si === si) openLink(d.target); return; }
   if (d.type === 'select' && d.link && selIsActiveOnly() && active.r === d.link.r && active.c === d.link.c) openLink(d.link.url);
   // 테두리 그리기 모드: 끌어서 고른 범위에 펜으로 바깥쪽(그리기) · 모든(눈금) 테두리, 또는 지우기
   if (d.type === 'select' && borderDraw) applyBorder(borderDraw === 'grid' ? 'all' : borderDraw === 'erase' ? 'none' : 'outside');
@@ -8743,6 +8799,13 @@ function objectMenu(id, pos) {
     { label: '붙여넣기', icon: 'paste', key: 'Ctrl+V', disabled: !objClip, action: pasteObject },
     { sep: true },
   ];
+  if (f.prop === 'shapes' || f.prop === 'images') {
+    const link = drawingLinkAddress(f.obj.hyperlink);
+    if (link) items.push({ label: '하이퍼링크 열기', key: 'Ctrl+Enter', action: () => openLink(link) });
+    items.push({ label: link ? '하이퍼링크 편집...' : '하이퍼링크 삽입...', key: 'Ctrl+K', disabled: viewOnly || !!wb.props?.markedFinal, action: () => objectHyperlinkDialog(id) });
+    if (link) items.push({ label: '하이퍼링크 제거', disabled: viewOnly || !!wb.props?.markedFinal, action: () => updateObject(id, { hyperlink: undefined }) });
+    items.push({ sep: true });
+  }
   if (f.prop === 'charts') {
     items.push(
       { label: '스타일에 맞게 다시 설정', action: () => { updateChart(id, CHART_STYLES[0][1]); gv.renderObjectsAll(); } },
@@ -17484,6 +17547,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileFit','toggleR
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['도형·그림 하이퍼링크', ['바로가기·맨위로 버튼의 시트·셀 이동 · 도형/그림 링크 XLSX 저장 보존', '공백·작은따옴표 시트명·이름 범위 탐색 · Ctrl+클릭 선택·우클릭 링크 편집/제거']],
   ['모바일 밀도·안정성', ['모바일 메뉴 크기 기본 촘촘하게 · 여유롭게 전환·설정 기억 · 원본 배율 유지', '숨김 행·열이 많은 문서의 격자·메모 표시 가속 · 겹친 표 필터의 행 위치 수정', '대용량 CSV 한글·빈 행·줄바꿈 보존 · 많은 행 가져오기 오류 수정', '늦게 도착한 온라인 문서가 현재 편집을 덮지 않도록 보호']],
   ['홈 화면 아이콘', ['위셀 전용 W 아이콘 · 아이폰/안드로이드 홈 화면 · PNG/ICO 파비콘', '앱 이름·테마·홈 화면 등록용 manifest 연결']],
   ['모바일 작업 모드', ['좌측 상단 화면 맞춤 아이콘 · 휴대전화 자동 감지 · 가로/세로 화면 대응', '스크롤 리본·시트 탭 · 전체 메뉴와 저장·설정에 접근하는 모바일 도구', '탭 선택·두 번 탭 편집·길게 누른 뒤 범위 선택·핀치 확대/축소', '작은 화면의 서식·차트·피벗 대화상자와 키보드 공간 조정 · 원본 배율 보존']],

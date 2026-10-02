@@ -1,5 +1,5 @@
 import { noteVisible } from './review-state.js';
-import { isDrawingGroup, drawingGroupXml, readDrawingGroup } from './smartart-xlsx.js';
+import { isDrawingGroup, drawingGroupXml, readDrawingGroup, readDrawingHyperlink, drawingHyperlinkXml } from './smartart-xlsx.js';
 // .xlsx 읽기/쓰기 (Office Open XML). DOM 없이 동작하므로 Node 에서도 테스트 가능.
 import { isXlsb, convertXlsb } from './xlsb.js';
 import { unzip, unzipAsync, zip, zipAsync, textOf } from './zip.js';
@@ -140,7 +140,7 @@ function relsOf(files, path) {
   for (const r of kids(parseXml(xml), 'Relationship')) {
     let target = r.attrs.Target;
     if (r.attrs.TargetMode === 'External') {
-      out[r.attrs.Id] = { target, rawTarget: target, type: r.attrs.Type.split('/').pop(), external: true };
+      out[r.attrs.Id] = { target, rawTarget: target, type: r.attrs.Type.split('/').pop(), external: true, targetMode: 'External' };
       continue;
     }
     if (target.startsWith('/')) target = target.slice(1);
@@ -150,7 +150,7 @@ function relsOf(files, path) {
       for (const p of parts) { if (p === '..') res.pop(); else if (p !== '.') res.push(p); }
       target = res.join('/');
     }
-    out[r.attrs.Id] = { target, type: r.attrs.Type.split('/').pop() };
+    out[r.attrs.Id] = { target, rawTarget: r.attrs.Target, type: r.attrs.Type.split('/').pop(), ...(r.attrs.TargetMode === 'Internal' ? { targetMode: 'Internal' } : {}) };
   }
   return out;
 }
@@ -1408,6 +1408,8 @@ function readDrawing(files, path, sheet, ctx) {
       else { shape.customGeometry = custom; ctx.warnings.add('일부 사용자 지정 도형의 경로 수식은 표시하지 못합니다. 원래 경로는 XLSX 저장 시 보존합니다.'); }
     }
     const nonVisual = child(el, 'nvSpPr') ?? child(el, 'nvCxnSpPr');
+    const hyperlink = readDrawingHyperlink(child(nonVisual, 'cNvPr'), rels);
+    if (hyperlink) shape.hyperlink = hyperlink;
     const shapeName = descendants(nonVisual, 'cNvPr')[0]?.attrs.name;
     if (['1','true'].includes(descendants(nonVisual, 'cNvPr')[0]?.attrs.hidden)) shape.hidden = true;
     if (shapeName) shape.name = shapeName;
@@ -1514,6 +1516,8 @@ function readDrawing(files, path, sheet, ctx) {
     picSrc.set(target, src); // 같은 그림을 여러 번 쓰면 한 번만 변환
     const im = { id: uid('im'), name, ...round(box), z: ++z, src };
     const nv = descendants(child(el, 'nvPicPr'), 'cNvPr')[0];
+    const hyperlink = readDrawingHyperlink(nv, rels);
+    if (hyperlink) im.hyperlink = hyperlink;
     if (nv?.attrs.descr !== undefined) im.alt = nv.attrs.descr;
     if (['1','true'].includes(nv?.attrs.hidden)) im.hidden = true;
     const locks = descendants(child(el, 'nvPicPr'), 'picLocks')[0];
@@ -1594,6 +1598,7 @@ function readDrawing(files, path, sheet, ctx) {
       }
       case 'grpSp': {
         const gb = place(el);
+        const hyperlink = readDrawingHyperlink(child(child(el, 'nvGrpSpPr'), 'cNvPr'), rels);
         const ownGroup = readDrawingGroup(el, round(gb), uid('sh'), { files, rels });
         if (ownGroup) { out.shapes.push({ ...ownGroup, z: ++z }); break; }
         const xfrm = descendants(child(el, 'grpSpPr'), 'xfrm')[0];
@@ -1612,12 +1617,18 @@ function readDrawing(files, path, sheet, ctx) {
         if (!ownMetadata && ['1','true'].includes(child(child(el, 'nvGrpSpPr'), 'cNvPr')?.attrs.hidden)) {
           for (const [items,start] of [[out.shapes,beforeShapes],[out.images,beforeImages],[out.charts,beforeCharts]]) for (let i=start;i<items.length;i++) items[i].hidden = true;
         }
+        // Metadata-free native groups are flattened by the existing reader.
+        // Preserve a parent button link on children that have no link of their own.
+        if (!ownMetadata && hyperlink) {
+          for (const [items,start] of [[out.shapes,beforeShapes],[out.images,beforeImages],[out.charts,beforeCharts]]) for (let i=start;i<items.length;i++) if (!items[i].hyperlink) items[i].hyperlink = { ...hyperlink };
+        }
         // 외부에서 개별 도형을 바꿨다면 예전 다이어그램을 복원하지 않는다.
         // 표준 자식 도형으로 일반 그룹을 다시 구성해 부모의 회전/대칭도 유지한다.
         if (ownMetadata && beforeCharts === out.charts.length) {
           const children = [...out.shapes.splice(beforeShapes), ...out.images.splice(beforeImages).map(p => ({ ...p, kind: 'picture' }))].sort((a,b) => (a.z ?? 0) - (b.z ?? 0));
           if (children.length) {
             out.shapes.push({ id: uid('sh'), kind: 'group', name: child(child(el, 'nvGrpSpPr'), 'cNvPr')?.attrs.name || '그룹', ...round(gb), z: ++z,
+              ...(hyperlink ? { hyperlink } : {}),
               ...(['1','true'].includes(child(child(el, 'nvGrpSpPr'), 'cNvPr')?.attrs.hidden) ? { hidden: true } : {}),
               groupSize: { w: gb.w, h: gb.h }, groupItems: children.map(p => ({ ...p, x: p.x - gb.x, y: p.y - gb.y })),
               ...(Number(xfrm?.attrs.rot) ? { rot: Number(xfrm.attrs.rot) / 60000 } : {}),
@@ -3371,7 +3382,7 @@ function shapeEffectsXml(sh) {
 }
 
 /** 도형 → <xdr:sp> / <xdr:cxnSp> */
-function shapeXml(sh, id, xfrm) {
+function shapeXml(sh, id, xfrm, hyperlinkXml = () => '') {
   const name = esc(sh.name || `${sh.kind === 'textbox' ? 'TextBox' : '도형'} ${id - 1}`);
   const description = (sh.alt !== undefined ? ` descr="${esc(sh.alt)}"` : '') + (sh.hidden ? ' hidden="1"' : '');
   let fill = sh.fill ? `<a:solidFill>${shapeColorXml(sh.fill, sh.fillOpacity ?? 1)}</a:solidFill>` : '<a:noFill/>';
@@ -3394,7 +3405,7 @@ function shapeXml(sh, id, xfrm) {
   const effects = shapeEffectsXml(sh);
   if (isLine) {
     const locks = sh.lockAspect !== undefined ? `<a:cxnSpLocks noChangeAspect="${sh.lockAspect ? 1 : 0}"/>` : '';
-    return `<xdr:cxnSp macro=""><xdr:nvCxnSpPr><xdr:cNvPr id="${id}" name="${name}"${description}/><xdr:cNvCxnSpPr>${locks}</xdr:cNvCxnSpPr></xdr:nvCxnSpPr><xdr:spPr>${xfrm(sh)}<a:prstGeom prst="${sh.kind === 'line' ? 'straightConnector1' : sh.kind}"><a:avLst/></a:prstGeom>${ln}${effects}</xdr:spPr></xdr:cxnSp>`;
+    return `<xdr:cxnSp macro=""><xdr:nvCxnSpPr><xdr:cNvPr id="${id}" name="${name}"${description}>${hyperlinkXml(sh)}</xdr:cNvPr><xdr:cNvCxnSpPr>${locks}</xdr:cNvCxnSpPr></xdr:nvCxnSpPr><xdr:spPr>${xfrm(sh)}<a:prstGeom prst="${sh.kind === 'line' ? 'straightConnector1' : sh.kind}"><a:avLst/></a:prstGeom>${ln}${effects}</xdr:spPr></xdr:cxnSp>`;
   }
   const algnOf = (a) => (a === 'center' ? 'ctr' : a === 'right' ? 'r' : a === 'justify' ? 'just' : 'l');
   const algn = algnOf(sh.align);
@@ -3417,7 +3428,7 @@ function shapeXml(sh, id, xfrm) {
   const locks = sh.lockAspect !== undefined ? `<a:spLocks noChangeAspect="${sh.lockAspect ? 1 : 0}"/>` : '';
   const textRot = [90, 270].includes(sh.textRot) ? ` rot="${(sh.textRot === 270 ? -90 : 90) * 60000}"` : '';
   const autofit = sh.textFit === 'shrink' ? '<a:normAutofit/>' : sh.textFit === 'none' ? '<a:noAutofit/>' : '';
-  return `<xdr:sp macro="${sh.macro ? `[0]!${esc(sh.macro)}` : ''}" textlink=""><xdr:nvSpPr><xdr:cNvPr id="${id}" name="${name}"${description}/><xdr:cNvSpPr${sh.kind === 'textbox' ? ' txBox="1"' : ''}>${locks}</xdr:cNvSpPr></xdr:nvSpPr><xdr:spPr>${xfrm(sh)}${geometry}${fill}${ln}${effects}</xdr:spPr><xdr:txBody><a:bodyPr vertOverflow="clip" horzOverflow="clip" wrap="${sh.nowrap ? 'none' : 'square'}" rtlCol="0" anchor="${anchor}"${insets}${textRot}>${autofit}</a:bodyPr><a:lstStyle/>${paras}</xdr:txBody></xdr:sp>`;
+  return `<xdr:sp macro="${sh.macro ? `[0]!${esc(sh.macro)}` : ''}" textlink=""><xdr:nvSpPr><xdr:cNvPr id="${id}" name="${name}"${description}>${hyperlinkXml(sh)}</xdr:cNvPr><xdr:cNvSpPr${sh.kind === 'textbox' ? ' txBox="1"' : ''}>${locks}</xdr:cNvSpPr></xdr:nvSpPr><xdr:spPr>${xfrm(sh)}${geometry}${fill}${ln}${effects}</xdr:spPr><xdr:txBody><a:bodyPr vertOverflow="clip" horzOverflow="clip" wrap="${sh.nowrap ? 'none' : 'square'}" rtlCol="0" anchor="${anchor}"${insets}${textRot}>${autofit}</a:bodyPr><a:lstStyle/>${paras}</xdr:txBody></xdr:sp>`;
 }
 
 /** 목록 원본: 범위 참조가 아니면 "a,b" 로 감싸기 */
@@ -4318,7 +4329,8 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
     if (sheet.charts.length || images.length || shapes.length || hasSlicers) {
       drawingNo++;
       const drawingRels = [];
-      const drel = (type, target) => { const id = `rId${drawingRels.length + 1}`; drawingRels.push(`<Relationship Id="${id}" Type="${type.startsWith('http:') ? type : `${REL}/${type}`}" Target="${target}"/>`); return id; };
+      const drel = (type, target, mode) => { const id = `rId${drawingRels.length + 1}`; drawingRels.push(`<Relationship Id="${id}" Type="${type.startsWith('http:') ? type : `${REL}/${type}`}" Target="${esc(target)}"${mode ? ` TargetMode="${mode}"` : ''}/>`); return id; };
+      const hyperlinkXml = object => drawingHyperlinkXml(object?.hyperlink, (target, mode) => drel('hyperlink', target, mode));
       const { colAxis, rowAxis } = objectAxes(sheet);
       const anchorAt = (x, y) => {
         const c = colAxis.indexAt(Math.max(0, x));
@@ -4369,13 +4381,13 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
             svgExt = `<a:extLst><a:ext uri="{96DAC541-7B7A-43D3-8B79-37D633B846F1}"><asvg:svgBlip xmlns:asvg="http://schemas.microsoft.com/office/drawing/2016/SVG/main" r:embed="${sid}"/></a:ext></a:extLst>`;
           }
           objId++;
-          parts.push(anchor(im, `<xdr:pic${im.macro ? ` macro="[0]!${esc(im.macro)}"` : ''}><xdr:nvPicPr><xdr:cNvPr id="${objId}" name="${esc(im.name || `그림 ${objId - 1}`)}"${im.alt !== undefined ? ` descr="${esc(im.alt)}"` : ''}${im.hidden ? ' hidden="1"' : ''}${im.linked ? `><a:extLst><a:ext uri="${LINKED_PIC_URI}"><wx:linked xmlns:wx="https://wixel.app/x" ref="${esc(linkedRef(im.linked))}"/></a:ext></a:extLst></xdr:cNvPr>` : '/>'}<xdr:cNvPicPr><a:picLocks noChangeAspect="${im.lockAspect === false ? 0 : 1}"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill>${`<a:blip r:embed="${id}">${pictureEffects(im).opacity !== 1 ? `<a:alphaModFix amt="${Math.round(pictureEffects(im).opacity * 100000)}"/>` : ''}${svgExt ?? ''}</a:blip>`}${im.crop ? `<a:srcRect${['l', 't', 'r', 'b'].map((k) => (im.crop[k] ? ` ${k}="${Math.round(im.crop[k] * 100000)}"` : '')).join('')}/>` : ''}<a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>${xfrm(im)}${pictureEffects(im).radius ? `<a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val ${Math.round(pictureEffects(im).radius / Math.min(im.w, im.h) * 100000)}"/></a:avLst></a:prstGeom>` : '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'}${/^#[0-9a-f]{6}$/i.test(im.border ?? "") ? `<a:ln w="${Math.round((im.borderW ?? 2) * EMU)}"><a:solidFill><a:srgbClr val="${im.border.replace('#', '').toUpperCase()}"/></a:solidFill></a:ln>` : ''}${shapeEffectsXml({ shadow: pictureEffects(im).shadow })}</xdr:spPr></xdr:pic>`));
+          parts.push(anchor(im, `<xdr:pic${im.macro ? ` macro="[0]!${esc(im.macro)}"` : ''}><xdr:nvPicPr><xdr:cNvPr id="${objId}" name="${esc(im.name || `그림 ${objId - 1}`)}"${im.alt !== undefined ? ` descr="${esc(im.alt)}"` : ''}${im.hidden ? ' hidden="1"' : ''}>${hyperlinkXml(im)}${im.linked ? `<a:extLst><a:ext uri="${LINKED_PIC_URI}"><wx:linked xmlns:wx="https://wixel.app/x" ref="${esc(linkedRef(im.linked))}"/></a:ext></a:extLst>` : ''}</xdr:cNvPr><xdr:cNvPicPr><a:picLocks noChangeAspect="${im.lockAspect === false ? 0 : 1}"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill>${`<a:blip r:embed="${id}">${pictureEffects(im).opacity !== 1 ? `<a:alphaModFix amt="${Math.round(pictureEffects(im).opacity * 100000)}"/>` : ''}${svgExt ?? ''}</a:blip>`}${im.crop ? `<a:srcRect${['l', 't', 'r', 'b'].map((k) => (im.crop[k] ? ` ${k}="${Math.round(im.crop[k] * 100000)}"` : '')).join('')}/>` : ''}<a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>${xfrm(im)}${pictureEffects(im).radius ? `<a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val ${Math.round(pictureEffects(im).radius / Math.min(im.w, im.h) * 100000)}"/></a:avLst></a:prstGeom>` : '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'}${/^#[0-9a-f]{6}$/i.test(im.border ?? "") ? `<a:ln w="${Math.round((im.borderW ?? 2) * EMU)}"><a:solidFill><a:srgbClr val="${im.border.replace('#', '').toUpperCase()}"/></a:solidFill></a:ln>` : ''}${shapeEffectsXml({ shadow: pictureEffects(im).shadow })}</xdr:spPr></xdr:pic>`));
         } else if (kind === 'slicerTable' || kind === 'slicerPivot') {
           objId++;
           parts.push(slicerAnchorXml(o.sl, o.name, objId, anchorAt, kind === 'slicerTable' ? 'table' : 'pivot'));
         } else if (isDrawingGroup(o)) {
           objId++;
-          const groupXml = drawingGroupXml(o, objId, { shapeXml, xfrm, nextId: () => ++objId, embedImage: im => {
+          const groupXml = drawingGroupXml(o, objId, { shapeXml, xfrm, hyperlinkXml, nextId: () => ++objId, embedImage: im => {
             const m = /^data:([^;,]+);base64,(.*)$/s.exec(im.png ?? im.src ?? '');
             if (!m) return null;
             const ext = Object.keys(MIME).find(k => MIME[k] === m[1]); if (!ext) return null;
@@ -4385,7 +4397,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
           parts.push(anchor(o, groupXml));
         } else {
           objId++;
-          parts.push(anchor(o, shapeXml(o, objId, xfrm)));
+          parts.push(anchor(o, shapeXml(o, objId, xfrm, hyperlinkXml)));
         }
       }
       files[`xl/drawings/drawing${drawingNo}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="${NS_R}">${parts.join('')}</xdr:wsDr>`;

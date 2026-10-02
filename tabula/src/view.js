@@ -1148,7 +1148,7 @@ export class GridView {
     const box = (o, cls, inner, extraCss = '') => {
       const h = Math.max(o.h, cls.includes('line') ? 1 : 0);
       const selected = st.chartSel === o.id || !!st.objMulti?.has(o.id);
-      html.push(`<div class="obj ${cls}${selected ? ' sel' : ''}${o.macro ? ' macro' : ''}" data-id="${esc(o.id)}" style="left:${o.x - p.ox}px;top:${o.y - p.oy}px;width:${o.w}px;height:${h}px;${extraCss}">${inner}${selected ? (st.shapeEdit?.id === o.id ? shapePointHandlesHtml(o, st.shapeEdit, this.z) : handles) : ''}</div>`);
+      html.push(`<div class="obj ${cls}${selected ? ' sel' : ''}${o.macro ? ' macro' : ''}${o.hyperlink?.target ? ' object-hyperlink' : ''}"${o.hyperlink?.target ? ` title="${esc((o.hyperlink.tooltip ? o.hyperlink.tooltip + ' — ' : '') + o.hyperlink.target + ' · Ctrl+클릭: 개체 선택')}"` : ''} data-id="${esc(o.id)}" style="left:${o.x - p.ox}px;top:${o.y - p.oy}px;width:${o.w}px;height:${h}px;${extraCss}">${inner}${selected ? (st.shapeEdit?.id === o.id ? shapePointHandlesHtml(o, st.shapeEdit, this.z) : handles) : ''}</div>`);
     };
     // 엑셀처럼 그림 → 도형 → 차트 순서가 아니라 저장된 순서(z)대로 겹침
     const all = [

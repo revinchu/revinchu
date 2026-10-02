@@ -2002,3 +2002,10 @@ body.mobile-work-mode.mobile-compact .mobile-tool-section h3 { font-size:12px; m
 body.mobile-work-mode.mobile-compact .mobile-tool-grid { gap:4px; }
 body.mobile-work-mode.mobile-compact .mobile-tool-grid .btn { min-height:32px; padding:5px 7px; font-size:12px; }
 body.mobile-work-mode.mobile-compact .mobile-tools-body input[type=search] { min-height:34px; font-size:16px; }
+
+/* 연결된 개체는 클릭으로 탐색하고 Ctrl+클릭 후에는 기존 개체 편집을 유지한다. */
+.obj.object-hyperlink:not(.sel) { cursor: pointer; }
+.obj.sel [data-object-link] { cursor: inherit !important; }
+
+.obj:not(.sel) [data-object-link] { pointer-events: all; }
+.obj.sel [data-object-link] { pointer-events: none; }

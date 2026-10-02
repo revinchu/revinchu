@@ -1,5 +1,6 @@
 // 통합 문서 모델: 시트 · 셀 · 재계산 · 실행 취소 · 행/열 구조 변경
 import { shiftNoteVisibility } from './review-state.js';
+import { rewriteWorkbookLink } from './hyperlink.js';
 import { resolveStructRef, findTable } from './tables.js';
 import { pivotSourceData, pivotLookup, resolvePivot } from './pivot.js';
 import {
@@ -1908,6 +1909,44 @@ export class Workbook {
 
   // ─────────── 구조 변경 ───────────
   /** axis: 'row'|'col', count>0 삽입, count<0 삭제 */
+  /** 내부 링크만 구조 변경에 맞춘다. 셀 값·수식의 파일 계산값과 외부 URL은 보존한다. */
+  rewriteHyperlinks(transform, wholeSheet = -1) {
+    const hasSheet = (name) => this.sheetIndexByName(name) >= 0;
+    this.sheets.forEach((sh, si) => {
+      const fix = (target, allowBare = false) => rewriteWorkbookLink(target, (formula) => transform(formula, sh.name), hasSheet, allowBare);
+      sh.cells.forEachRC((cell, r, c) => {
+        if (!cell.link) return;
+        const link = fix(cell.link);
+        if (link === cell.link) return;
+        if (si === wholeSheet) sh.cells.setRC(r, c, { ...cell, link });
+        else this.setCellData(si, r, c, { ...cellData(cell), link });
+      });
+      const path = new Set();
+      const visit = (obj, depth = 0) => {
+        if (!obj || typeof obj !== 'object' || depth >= 64 || path.has(obj)) return obj;
+        path.add(obj);
+        let next = obj;
+        if (obj.hyperlink?.target) {
+          const target = fix(obj.hyperlink.target, String(obj.hyperlink.targetMode ?? '').toLowerCase() !== 'external');
+          if (target !== obj.hyperlink.target) next = { ...next, hyperlink: { ...obj.hyperlink, target } };
+        }
+        if (Array.isArray(obj.groupItems)) {
+          const items = obj.groupItems.map((item) => visit(item, depth + 1));
+          if (items.some((item, i) => item !== obj.groupItems[i])) next = { ...next, groupItems: items };
+        }
+        path.delete(obj);
+        return next;
+      };
+      for (const prop of ['shapes', 'images', 'charts', 'slicers']) {
+        if (!sh[prop]?.length) continue;
+        const next = sh[prop].map((obj) => visit(obj));
+        if (next.every((obj, i) => obj === sh[prop][i])) continue;
+        if (si !== wholeSheet) this.propSnap(si, prop);
+        sh[prop] = next;
+      }
+    });
+  }
+
   shiftAxis(si, axis, index, count) {
     // 실행 취소: 대상 시트만 통째로, 다른 시트는 바뀐 수식 셀 · 피벗 정의 · 이름만 기록 (큰 통합 문서도 가볍게)
     this.snapshotSheet(si);
@@ -2084,6 +2123,7 @@ export class Workbook {
       }
     });
 
+    this.rewriteHyperlinks((formula, hostSheet) => adjustFormulaForStructure(formula, { targetSheet: target.name, hostSheet, axis, index, count }), si);
     const deps = this.sheetDeps();
     this.sheets.forEach((sheet, i) => {
       // 다른 시트는 대상 시트를 참조하는 경우만 수식이 바뀜
@@ -2297,6 +2337,7 @@ export class Workbook {
     this.snapshotNames();
     const old = this.sheets[si].name;
     const refs = this.affected(si); // 이 시트를 참조하는 시트 (이름이 바뀐 수식)
+    this.rewriteHyperlinks((formula) => renameSheetInFormula(formula, old, newName));
     this.sheets[si].name = newName;
     this.record({ t: 'rename', si, before: old, after: newName });
     this.sheets.forEach((sh, i) => {

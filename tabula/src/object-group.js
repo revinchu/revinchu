@@ -63,7 +63,7 @@ export function groupSvg(group, renderer) {
       const crop=o.crop??{},l=Number(crop.l??0),t=Number(crop.t??0),r=Number(crop.r??0),b=Number(crop.b??0),cw=1-l-r,ch=1-t-b;
       body=`<defs>${filter}<clipPath id="${clip}"><rect width="${o.w}" height="${o.h}" rx="${effects.radius}"/></clipPath></defs><g opacity="${effects.opacity}"${shadow?` filter="url(#${clip}fx)"`:""}><g clip-path="url(#${clip})"><svg width="${o.w}" height="${o.h}" viewBox="0 0 ${o.w} ${o.h}" overflow="hidden"><g transform="translate(${o.flip?o.w:0},${o.flipV?o.h:0}) scale(${o.flip?-1:1},${o.flipV?-1:1})"><image href="${esc(o.src??'')}" x="${cw>0?-l*o.w/cw:0}" y="${ch>0?-t*o.h/ch:0}" width="${cw>0?o.w/cw:o.w}" height="${ch>0?o.h/ch:o.h}" preserveAspectRatio="none"/></g></svg></g>${o.border?`<rect x="${(o.borderW??1)/2}" y="${(o.borderW??1)/2}" width="${Math.max(0,o.w-(o.borderW??1))}" height="${Math.max(0,o.h-(o.borderW??1))}" rx="${effects.radius}" fill="none" stroke="${esc(o.border)}" stroke-width="${o.borderW??1}"/>`:""}</g>`;
     } else body=renderer({...o,id:String(group.id)+'_'+String(o.id)})+(o.kind==='group'?'':groupText(o));
-    return `<g transform="${transform}">${body}</g>`;
+    return `<g transform="${transform}"${o.hyperlink?.target ? ` data-object-link="${esc(o.hyperlink.target)}" data-object-link-mode="${esc(o.hyperlink.targetMode || '')}" style="cursor:pointer"` : ''}>${o.hyperlink?.target ? `<title>${esc(o.hyperlink.tooltip || o.hyperlink.target)}</title>` : ''}${body}</g>`;
   }).join('');
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${group.w}" height="${group.h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-label="그룹" style="overflow:visible"><g transform="${flip}">${parts}</g></svg>`;
 }
