@@ -432,3 +432,8 @@ node tools/mobile-layout.mjs
 새 회귀는 `node tools/creative-workspace.mjs`, `node tools/shape-merge-ui.mjs`, `node tools/online-media.mjs`, `node tools/svg-geometry-render.mjs`, `node tools/svg-icon-audit.mjs`입니다. 기존 `online-pictures.mjs`, `smartart.mjs`, `drawing-mode-isolation.mjs`도 함께 확인합니다. `WIXEL_URL`은 로컬 소스 또는 컴파일 번들, Playwright 환경 변수는 위와 같습니다. 모든 브라우저 검사는 격리 합성 문서를 사용합니다. 스크린샷·임시 파일 기본 경로는 D:입니다. 공급자 모킹과 실제 공개 API 읽기, 신규 인증 공급자의 미설정 상태를 구분합니다.
 
 지원 범위·API 키 설정·안전한 SVG 거부·영상 XLSX 호환과 HTML/PDF 한계는 [40번 문서](../docs/codex/40_미디어그리기와문서출력.md)를 참고하세요.
+
+
+## 피벗 필터 메뉴와 검색 선택
+
+`node tools/pivot-filter-menu.mjs`는 합성 피벗의 실제 행/열/보고서 드롭다운 버튼을 클릭하여 검색 대체/현재 선택 추가, 전체 선택, 빈 결과·0개 체크·IME Enter, 조건 하위 메뉴, Undo, 다중 선택 모드, 보호·늦은 대상 변경, 작은 화면을 검사한다. `WIXEL_URL`은 로컬 소스 또는 번들 주소, `WIXEL_PIVOT_FILTER_OUT`은 D: 출력 폴더(기본 `D:/Codex/Temp/wixel-pivot-filter/source`)다. `WIXEL_PIVOT_FILTER_FILTER`로 이름을 포함하는 시나리오만 실행할 수 있다. 일반 필터 회귀에는 `tools/interaction-ux.mjs`와 `tools/filter-performance.mjs`를 사용한다. 외부 요청과 문서 API 쓰기를 차단하며 사용자 원본 파일을 변경하지 않는다.

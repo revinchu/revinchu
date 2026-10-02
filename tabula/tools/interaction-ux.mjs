@@ -60,7 +60,7 @@ try {
     await menu.getByRole('checkbox', { name: '표시된 항목 모두 선택', exact: true }).uncheck();
     await menu.getByRole('checkbox', { name: '서울', exact: true }).check();
     await menu.getByRole('searchbox').fill('부산');
-    await menu.getByRole('checkbox', { name: '필터에 현재 선택 내용 추가' }).check();
+    await menu.getByRole('checkbox', { name: '필터에 현재 선택한 내용 추가' }).check();
     await menu.getByRole('searchbox').press('Enter');
     assert.deepEqual(await p.evaluate(() => window.tabula.wb().sheets[0].filter.criteria[0].sort()), ['부산', '서울']);
     assert.deepEqual(await p.evaluate(() => window.tabula.wb().sheets[0].filter.hidden), { 3: true, 4: true });
@@ -83,7 +83,7 @@ try {
     let menu = p.locator('.filter-menu');
     await menu.getByRole('checkbox', { name: '표시된 항목 모두 선택', exact: true }).uncheck();
     await menu.getByRole('checkbox', { name: '서울', exact: true }).check();
-    await menu.getByRole('searchbox').fill('부산'); await menu.getByRole('checkbox', { name: '필터에 현재 선택 내용 추가' }).check();
+    await menu.getByRole('searchbox').fill('부산'); await menu.getByRole('checkbox', { name: '필터에 현재 선택한 내용 추가' }).check();
     await menu.getByRole('searchbox').press('Enter');
     assert.deepEqual(await p.evaluate(() => window.tabula.wb().sheets[1].pivot.filters.지역.sort()), ['부산', '서울']);
     await run(p, 'undo'); assert.deepEqual(await snapshot(p), before);

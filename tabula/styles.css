@@ -2467,3 +2467,34 @@ body.mobile-work-mode.mobile-compact .sheet-view-modes button { width:28px; heig
 .chart-area-tabs button { min-width:0; white-space:normal; line-height:1.4; padding:6px 3px; }
 .chart-area-buttons { display:flex; gap:6px; flex-wrap:wrap; }
 .chart-area-image-preview { max-width:100%; max-height:120px; object-fit:contain; }
+
+
+/* 피벗 필터: 검색·조건 메뉴·선택 결과·확인 영역을 같은 폭으로 정렬한다. */
+.pivot-filter-popup { max-width: calc(100vw - 8px); max-height: calc(100dvh - 8px); overflow-y: auto; padding: 5px; }
+.pivot-filter-menu { width: 294px; max-width: 100%; box-sizing: border-box; padding: 2px 4px 5px; }
+.pivot-filter-menu .pf-act { min-height: 31px; padding: 6px 9px; border-radius: 4px; gap: 9px; color: var(--text); }
+.pivot-filter-menu .pf-act:hover:not(:disabled), .pivot-filter-menu .pf-act:focus-visible { background: var(--green-soft, #edf5f0); outline: none; }
+.pivot-filter-menu .pf-act:focus-visible { box-shadow: inset 0 0 0 1px var(--green); }
+.pivot-filter-menu .pf-act:disabled { color: #929b97; cursor: default; background: none; }
+.pivot-filter-menu .pf-sub { padding-left: 36px; }
+.pivot-filter-menu .pf-sub.on { color: var(--green); font-weight: 600; }
+.pivot-filter-menu .pf-desc { line-height: 1.5; margin: 3px 0; }
+.pivot-filter-menu .pf-search { position: relative; margin: 7px 0; }
+.pivot-filter-menu .pf-search input[type=search] { height: 32px; padding: 0 32px 0 9px; border: 1px solid #b9c8c0; border-radius: 4px; margin: 0; }
+.pivot-filter-menu .pf-search input:focus { outline: 2px solid #217346; outline-offset: -1px; }
+.pivot-filter-menu .pf-search input::-webkit-search-cancel-button { display: none; }
+.pivot-filter-menu .pf-search-clear { position: absolute; right: 3px; top: 3px; width: 27px; height: 26px; border: 0; border-radius: 3px; background: transparent; color: #55665c; font-size: 20px; cursor: pointer; }
+.pivot-filter-menu .pf-search-clear:hover { background: #e7efea; }
+.pivot-filter-menu .filter-list { height: min(246px, 39vh); min-height: 130px; padding: 2px 7px; border: 1px solid #b9c8c0; border-radius: 4px; background: var(--surface); overflow: auto; scrollbar-gutter: stable; }
+.pivot-filter-menu .filter-list label { font-size: 12px; }
+.pivot-filter-menu .filter-list-heading { min-width: max-content; border-bottom: 1px solid #edf1ee; margin-bottom: 2px; }
+.pivot-filter-menu .filter-add { font-weight: 500; color: #1c5035; padding: 2px 0; gap: 6px; }
+.pivot-filter-menu .filter-window label:hover { background: #edf5f0; }
+.pivot-filter-menu .filter-foot { border-top: 1px solid #e0e7e3; padding-top: 9px; margin-top: 9px; gap: 8px; }
+.pivot-filter-menu .filter-foot .btn { min-width: 76px; min-height: 30px; }
+.pivot-filter-menu .pf-one { box-sizing: border-box; display: flex; align-items: center; padding: 3px 7px; font-size: 12px; }
+.pivot-filter-menu .pf-one:focus-visible { outline: 1px solid var(--green); outline-offset: -1px; }
+.pivot-filter-menu .pf-empty { padding: 12px 6px; font-size: 12px; color: var(--muted); }
+body.mobile-work-mode .pivot-filter-menu { width: min(294px, calc(var(--mobile-vw,100vw) - 20px)); }
+body.mobile-work-mode .pivot-filter-menu .pf-act { min-height: 36px; }
+body.mobile-work-mode .pivot-filter-menu .filter-list { height: min(220px, 32vh); }

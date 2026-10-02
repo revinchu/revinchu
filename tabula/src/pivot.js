@@ -545,6 +545,12 @@ export function pivotDisplayOptions(def) {
   return { classic, showValuesRow, valuesHeadRow: classic || showValuesRow };
 }
 
+/** 보고서 필터의 체크 목록 모드. 이전 문서는 선택 수로만 복원한다. */
+export function pivotPageMulti(def, field) {
+  const explicit = def.pageMulti?.[field];
+  return typeof explicit === 'boolean' ? explicit : Array.isArray(def.filters?.[field]) && def.filters[field].length > 1;
+}
+
 export function normalizeDef(def, header) {
   const allHeader = [...header, ...(def.calcFields ?? []).map((c) => c.name).filter((n) => !header.some((h) => h.toLowerCase() === String(n).toLowerCase()))];
   const name = (i) => (i === null || i === undefined || i < 0 ? null : allHeader[i] ?? null);
@@ -568,6 +574,7 @@ export function normalizeDef(def, header) {
     rows: (rows ?? []).filter(ok).map(byName),
     cols: (cols ?? []).filter(ok).map(byName),
     pages: (def.pages ?? []).filter(ok).map(byName),
+    pageMulti: Object.fromEntries(Object.entries(byKey(def.pageMulti)).filter(([, value]) => typeof value === 'boolean')),
     values: (values ?? []).filter((v) => ok(v.field)).map((v) => ({ ...v, field: byName(v.field), agg: v.agg ?? 'sum' })),
     layout: def.layout ?? 'compact',
     subtotals: Array.isArray(def.subtotals) ? def.subtotals : def.subtotals !== false,

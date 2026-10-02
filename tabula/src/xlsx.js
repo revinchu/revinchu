@@ -32,7 +32,7 @@ import { GEOM, LINE_KINDS, shapeLineEnds } from './shapes.js';
 import { customGeometryXml, readCustomGeometry, storedCustomGeometryXml } from './shape-path.js';
 import { BLOCK_MIN_ROWS, ColBuilder, inBlock, blockValue } from './block.js';
 import { normalizeStyleName, DEFAULT_TABLE_STYLE, dataTop, dataBottom, canonicalRef, tableAt, columnNames, findTable } from './tables.js';
-import { pivotSourceData, resolvePivot, itemText, keyOf, sortKeys, EMPTY, headerNames, normalizeDef, computePivot, valueName, showAsPercent, excelCalcFormula, pivotFilterKey, DATE_OP_TYPES } from './pivot.js';
+import { pivotSourceData, resolvePivot, itemText, keyOf, sortKeys, EMPTY, headerNames, normalizeDef, computePivot, valueName, showAsPercent, excelCalcFormula, pivotFilterKey, pivotPageMulti, DATE_OP_TYPES } from './pivot.js';
 import { groupKey } from './cube.js';
 import { slicerStyleName, slicerColors, isModernSlicer } from './slicerstyle.js';
 import { applyTint, DEFAULT_THEME, PRESET_STYLES, presetStyle, isModernStyle, ELEMENT_TYPES, elementDxfStyle } from './stylepresets.js';
@@ -2306,6 +2306,8 @@ function pivotDefFrom(root, cache, tables, sheetName) {
   const vIdx = colAll.indexOf(-2);
   const def = {
     rows: rowF.map((f) => names[f]), cols: colF.map((f) => names[f]), values, pages: pageEls.map((p) => names[Number(p.attrs.fld)]),
+    pageMulti: Object.fromEntries(pfs.flatMap((pf, f) => pf.attrs.multipleItemSelectionAllowed !== undefined || pageEls.some((p) => Number(p.attrs.fld) === f)
+      ? [[names[f], pf.attrs.multipleItemSelectionAllowed === '1' || pf.attrs.multipleItemSelectionAllowed === 'true']] : [])),
     ...(vIdx >= 0 && vIdx < colF.length ? { valuesPos: vIdx } : {}),
     ...(root.attrs.dataOnRows === '1' && values.length > 1 ? { valuesOnRows: true } : {}),
     layout: !fOutline ? 'tabular' : !fCompact ? 'outline' : 'compact',
@@ -2335,7 +2337,7 @@ function pivotDefFrom(root, cache, tables, sheetName) {
     filters[names[f]] = its.filter((it) => it.attrs.h !== '1').map((it) => itemText(cache.fields[f]?.items[Number(it.attrs.x)] ?? null));
   });
   for (const p of pageEls) {
-    if (p.attrs.item === undefined) continue;
+    if (p.attrs.item === undefined || def.pageMulti[names[Number(p.attrs.fld)]]) continue;
     const f = Number(p.attrs.fld);
     const its = kids(child(pfs[f], 'items'), 'item').filter((it) => it.attrs.x !== undefined);
     const it = its[Number(p.attrs.item)];
@@ -3908,6 +3910,7 @@ function pivotParts(wb, si, def, cache, name, pool) {
     if (rowF.includes(f)) attrs.push('axis="axisRow"');
     else if (colF.includes(f)) attrs.push('axis="axisCol"');
     else if (pageF.includes(f)) attrs.push('axis="axisPage"');
+    if (pageF.includes(f) || typeof d.pageMulti[h] === 'boolean') attrs.push(`multipleItemSelectionAllowed="${pivotPageMulti(d, h) ? '1' : '0'}"`);
     if (valueFieldIdx.has(f)) attrs.push('dataField="1"');
     if (tabular || outline) attrs.push('compact="0"');
     if (tabular) attrs.push('outline="0"');
@@ -3939,7 +3942,7 @@ function pivotParts(wb, si, def, cache, name, pool) {
   const firstHeaderRow = colF.length ? 1 : multiV ? (d.valuesHeadRow && !d.valuesOnRows ? 1 : 0) : 1;
   const pageXml = pageF.length ? `<pageFields count="${pageF.length}">${pageF.map((f) => {
     const allowed = filters.find(([i]) => i === f)?.[1];
-    const one = allowed && allowed.size === 1 ? items.get(f)?.keys.findIndex((k) => itemText(k) === [...allowed][0]) : -1;
+    const one = !pivotPageMulti(d, header[f]) && allowed && allowed.size === 1 ? items.get(f)?.keys.findIndex((k) => itemText(k) === [...allowed][0]) : -1;
     return `<pageField fld="${f}"${one >= 0 ? ` item="${one}"` : ''} hier="-1"/>`;
   }).join('')}</pageFields>` : '';
   const dataXml = values.map((v, vi) => {

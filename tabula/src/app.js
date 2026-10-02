@@ -40,6 +40,7 @@ import { buildRibbon, FONTS, FONT_SIZES, TABS, ribbonCommands } from './ribbon.j
 import { DEFAULT_QAT_ORDER, DEFAULT_QAT_POSITION, normalizeQatOptions } from './quick-access.js';
 import { flashFill } from './flashfill.js';
 import { filterChecklist, searchableFieldPicker } from './app-filter-checklist.js';
+import { filterSearchPredicate } from './filter-selection.js';
 import { parseTableRange, tableRangeProblem } from './table-ux.js';
 import { safeUrl, setSafeHtml } from './safe-html.js';
 import { resolveWorkbookLink } from './hyperlink.js';
@@ -5384,9 +5385,11 @@ function openFilterMenu(c, anchorEl, key = '') {
     if (st?.color) fonts.set(st.color, (fonts.get(st.color) ?? 0) + 1);
   }
   const numeric = items.length && items.filter((t) => t !== '').every((t) => typeof values.get(t) === 'number');
-  const selection = filterChecklist(items, current);
+  let confirm = null;
+  const selection = filterChecklist(items, current, undefined, {onChange:ready=>{if(confirm)confirm.disabled=!ready;}});
   const { search, list, addRow } = selection;
   const ok = () => {
+    if(!selection.canApply())return;
     const chosen = selection.result();
     if (!chosen.length) { toast('항목을 하나 이상 선택하세요.'); return; }
     closeMenus();
@@ -5394,14 +5397,15 @@ function openFilterMenu(c, anchorEl, key = '') {
     applyFilterCriteria(c, items.every((item) => chosenSet.has(item)) ? null : chosen, key);
     focusGrid();
   };
+  confirm=el('button',{class:'btn primary',onclick:ok,disabled:!selection.canApply()},'확인');
   const header = displayText(f.r1, c) || `${colToName(c)}열`;
   const node = el('div', {
     class: 'filter-menu',
-    onkeydown: (e) => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); ok(); } if (e.key === 'Escape') { e.preventDefault(); closeMenus(); focusGrid(); } },
+    onkeydown: (e) => { e.stopPropagation(); if(e.isComposing||e.keyCode===229)return; if (e.key === 'Enter') { e.preventDefault(); ok(); } if (e.key === 'Escape') { e.preventDefault(); closeMenus(); focusGrid(); } },
   },
   search, list, addRow,
   el('div', { class: 'filter-foot' },
-    el('button', { class: 'btn primary', onclick: ok }, '확인'),
+    confirm,
     el('button', { class: 'btn', onclick: () => { closeMenus(); focusGrid(); } }, '취소')));
   const menu = openMenu(anchorEl, [
     { label: '텍스트 오름차순 정렬', icon: 'sortAsc', action: () => sortData(true, c, true, full, key) },
@@ -12263,6 +12267,14 @@ function pivotItemLabeler(def, field) {
   return (t) => (t !== '' && Number.isFinite(Number(t)) ? formatValue(Number(t), st, wb.date1904).text : t);
 }
 
+// 검색을 지워 원래 체크 상태로 돌아가는 동작을 키보드와 포인터에서 공유한다.
+function pivotFilterSearchBox(search) {
+  const clear=el('button',{type:'button',class:'pf-search-clear','aria-label':'검색 지우기',title:'검색 지우기','data-access-key':'none',onclick:()=>{search.value='';search.dispatchEvent(new Event('input'));search.focus();}},'×');
+  const sync=()=>{clear.hidden=!search.value;};search.addEventListener('input',sync);sync();
+  const wrap=el('div',{class:'pf-search',onmouseenter:()=>closeSubmenus()},search,clear);
+  return wrap;
+}
+
 function openPivotFilterMenu(entry, kind, field, anchorEl) {
   const canApply = pivotContextGuard(entry);
   const def0 = pivotDefV2(entry.def);
@@ -12270,73 +12282,114 @@ function openPivotFilterMenu(entry, kind, field, anchorEl) {
   if (!choices.length) return;
   let cur = choices[0];
   let multiPage = null; // 보고서 필터: 엑셀처럼 한 항목 고르기, [여러 항목 선택]을 켜면 체크 목록
-  const box = el('div', { class: 'filter-menu' });
+  const box = el('div', { class: 'filter-menu pivot-filter-menu', 'aria-label':'피벗 테이블 필터' });
   const upd = (patch) => { if (!canApply()) return; closeMenus(); setPivotDef(entry, { ...pivotDefV2(entry.def), ...patch }); refreshPivotPane(true); focusGrid(); };
-  const render = () => {
+  const render = (draft, query = '') => {
     const def = pivotDefV2(entry.def);
     const items = pivotFieldItems(def, cur);
-    const label = pivotItemLabeler(def, cur);
-    const sel = def.filters?.[cur] ? new Set(def.filters[cur]) : null;
-    const selection = filterChecklist(items, sel, label);
-    const { search, list, addRow } = selection;
+    const formatItem = pivotItemLabeler(def, cur), label = value => value === '' ? '(비어 있음)' : formatItem(value);
+    const sel = draft ? new Set(draft) : def.filters?.[cur] ? new Set(def.filters[cur]) : null;
+    let confirm = null;
+    const selection = filterChecklist(items, sel, label, {inlineAdd:true,onChange:ready=>{if(confirm)confirm.disabled=!ready||!canApply(true);}});
+    const { search, list } = selection;
     if (kind === 'page') {
-      if (multiPage === null) multiPage = !!sel && sel.size > 1;
+      if (multiPage === null) multiPage = def.pageMulti?.[cur] ?? (!!sel && sel.size > 1);
       if (!multiPage) {
-        // 한 항목 목록: (모두) · 항목 — 누르면 선택, 확인으로 적용
         let pick = sel && sel.size === 1 ? [...sel][0] : null;
-        const rows = [];
-        const one = el('div', { class: 'filter-list pf-single' });
-        const mk = (t, text) => {
-          const r = el('div', { class: `pf-one${(t === null ? pick === null : pick === t) ? ' on' : ''}`, onclick: () => { pick = t; rows.forEach(([x, rr]) => rr.classList.toggle('on', x === t)); }, ondblclick: () => apply1() }, text);
-          rows.push([t, r]);
-          return r;
+        const one = el('div', { class: 'filter-list pf-single', role: 'listbox', 'aria-label': `${cur} 항목`, 'data-access-key': 'none' });
+        const srch = el('input', { type: 'search', placeholder: '검색', 'aria-label': '보고서 필터 항목 검색', 'data-access-key': 'none' });
+        const rows = el('div', { class:'pf-single-window', style:{position:'relative'} });
+        const empty = el('div', {class:'pf-empty',role:'status'}, '검색 결과가 없습니다.');
+        let visible = [null, ...items], rowFocus = 0;
+        const rowHeight = 28, nodes = new Map();
+        let drawnValues = null, drawnStart = -1, drawnEnd = -1;
+        const validPick = () => visible.length > 0 && visible.includes(pick);
+        const apply1 = () => {
+          if (!validPick() || !canApply()) return;
+          const nf = { ...(def.filters ?? {}) }; if (pick === null) delete nf[cur]; else nf[cur] = [pick];
+          upd({ filters: nf, ...(kind === 'page' ? {pageMulti:{...(def.pageMulti??{}),[cur]:!!multiPage}} : {}) });
         };
-        one.append(mk(null, '(모두)'), ...items.map((t) => mk(t, label(t))));
-        const apply1 = () => { const nf = { ...(def.filters ?? {}) }; if (pick === null) delete nf[cur]; else nf[cur] = [pick]; upd({ filters: nf }); };
-        const srch = el('input', { type: 'search', placeholder: '검색', 'aria-label': '보고서 필터 항목 검색' });
-        srch.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); apply1(); } });
-        srch.addEventListener('input', () => { const q = srch.value.trim().toLowerCase(); rows.forEach(([t, r]) => { r.style.display = t === null || !q || String(label(t)).toLowerCase().includes(q) ? '' : 'none'; }); });
-        const mcb = el('input', { type: 'checkbox' });
-        mcb.addEventListener('change', () => { multiPage = true; render(); });
-        box.replaceChildren(srch, one, el('label', { class: 'fc-check pf-multi' }, mcb, '여러 항목 선택'),
-          el('div', { class: 'filter-foot' }, el('button', { class: 'btn primary', onclick: apply1 }, '확인'), el('button', { class: 'btn', onclick: () => { closeMenus(); focusGrid(); } }, '취소')));
-        setTimeout(() => srch.focus());
-        return;
+        const confirm = el('button', {class:'btn primary','data-access-key':'none',onclick:apply1}, '확인');
+        const draw = () => {
+          const start = Math.max(0, Math.floor(one.scrollTop / rowHeight) - 5), end = Math.min(visible.length, start + Math.ceil((one.clientHeight || 220) / rowHeight) + 10);
+          rows.style.height = `${visible.length * rowHeight}px`;
+          if(visible !== drawnValues || start !== drawnStart || end !== drawnEnd) {
+          drawnValues=visible;drawnStart=start;drawnEnd=end;nodes.clear();const children=[];
+          for (let i = start; i < end; i++) {
+            const value = visible[i];
+            const row = el('div', {class:`pf-one${pick === value ? ' on' : ''}`,role:'option','aria-selected':String(pick===value),tabindex:i===rowFocus?'0':'-1','data-access-key':'none','data-item-index':String(i),
+              title:value===null?'(모두)':String(label(value)),style:{position:'absolute',top:`${i*rowHeight}px`,height:`${rowHeight}px`,left:'0',right:'0'},
+              onclick:()=>{pick=value;rowFocus=i;draw();nodes.get(i)?.focus({preventScroll:true});},ondblclick:apply1},value===null?'(모두)':label(value));
+            nodes.set(i,row);children.push(row);
+          }
+          rows.replaceChildren(...children);
+          }
+          for(const [i,row] of nodes){row.classList.toggle('on',pick===visible[i]);row.setAttribute('aria-selected',String(pick===visible[i]));row.tabIndex=i===rowFocus?0:-1;}
+          empty.hidden=visible.length>0;confirm.disabled=!validPick()||!canApply(true);
+        };
+        const focusRow = index => {
+          if (!visible.length) return;
+          rowFocus=Math.max(0,Math.min(visible.length-1,index));pick=visible[rowFocus];
+          const top=rowFocus*rowHeight,bottom=top+rowHeight;
+          if(top<one.scrollTop)one.scrollTop=top;else if(bottom>one.scrollTop+one.clientHeight)one.scrollTop=bottom-one.clientHeight;
+          draw();nodes.get(rowFocus)?.focus({preventScroll:true});
+        };
+        one.append(rows,empty);one.addEventListener('scroll',draw);
+        one.addEventListener('keydown',e=>{
+          if(e.isComposing||e.keyCode===229)return;
+          const at=Number(e.target.dataset.itemIndex??rowFocus);
+          if(['ArrowDown','ArrowUp','Home','End'].includes(e.key)) {e.preventDefault();focusRow(e.key==='Home'?0:e.key==='End'?visible.length-1:at+(e.key==='ArrowDown'?1:-1));}
+          else if(e.key==='Enter'){e.preventDefault();apply1();}
+        });
+        srch.addEventListener('keydown',e=>{if(e.isComposing||e.keyCode===229)return;if(e.key==='Enter'){e.preventDefault();apply1();}else if(e.key==='ArrowDown'){e.preventDefault();focusRow(0);}});
+        srch.addEventListener('input',()=>{
+          const q=srch.value.trim(),match=filterSearchPredicate(q);
+          visible=q?items.filter(value=>match(value,label(value))):[null,...items];rowFocus=0;one.scrollTop=0;draw();
+        });
+        const mcb=el('input',{type:'checkbox','aria-label':'여러 항목 선택'});
+        mcb.addEventListener('change',()=>{multiPage=true;render(pick===null?items:[pick],srch.value);});
+        box.replaceChildren(pivotFilterSearchBox(srch),one,el('label',{class:'fc-check pf-multi'},mcb,'여러 항목 선택'),
+          el('div',{class:'filter-foot'},confirm,el('button',{class:'btn','data-access-key':'none',onclick:()=>{closeMenus();focusGrid();}},'취소')));
+        draw();if(srch.isConnected)srch.focus();return;
       }
     }
     const ok = () => {
+      if (!selection.canApply() || !canApply()) return;
       const chosen = selection.result();
       if (!chosen.length) { toast('항목을 하나 이상 선택하세요.'); return; }
       const nf = { ...(def.filters ?? {}) };
       const chosenSet = new Set(chosen);
       if (items.every((item) => chosenSet.has(item))) delete nf[cur]; else nf[cur] = chosen;
-      upd({ filters: nf });
+      upd({ filters: nf, ...(kind === 'page' ? {pageMulti:{...(def.pageMulti??{}),[cur]:!!multiPage}} : {}) });
     };
+    confirm = el('button', {class:'btn primary','data-access-key':'none',onclick:ok}, '확인');
+    confirm.disabled = !selection.canApply() || !canApply(true);
     const ff = def.fieldFilters?.[cur];
     const fieldSel = choices.length > 1 ? el('select', {}, choices.map((f) => el('option', { value: f, selected: f === cur }, f))) : null;
     fieldSel?.addEventListener('change', () => { cur = fieldSel.value; render(); });
     const PF_ICON = { '텍스트 오름차순 정렬': 'sortAsc', '텍스트 내림차순 정렬': 'sortDesc' };
-    const act = (label, fn, disabled = false) => el('button', { type: 'button', class: `pf-act${disabled ? ' off' : ''}`, disabled, onmouseenter: () => closeSubmenus(), onclick: () => { closeMenus(); fn(); } },
-      el('span', { class: 'pf-ico', html: ICONS[PF_ICON[label] ?? (/필터 해제$/.test(label) ? 'filterClear' : '')] ?? '' }), label);
+    const act = (label, fn, disabled = false, key) => el('button', { type: 'button', role:'menuitem', 'data-access-key':key, class: `pf-act${disabled ? ' off' : ''}`, disabled:disabled||!canApply(true), onmouseenter: () => closeSubmenus(), onclick: () => { if(!canApply())return;closeMenus(); fn(); } },
+      el('span', { class: 'pf-ico ico', 'aria-hidden':'true', html: ICONS[PF_ICON[label] ?? (/필터 해제$/.test(label) ? 'filterClear' : '')] ?? '' }), label);
     const withSort = (s) => ({ sort: { ...(def.sort ?? {}), [cur]: s } });
     const noFilters = () => { const nf = { ...(def.filters ?? {}) }; delete nf[cur]; const nff = { ...(def.fieldFilters ?? {}) }; delete nff[cur]; return { filters: nf, fieldFilters: nff }; };
     box.replaceChildren(
       ...(fieldSel ? [el('label', { class: 'pf-field' }, el('span', {}, '필드 선택:'), fieldSel)] : []),
       ...(kind !== 'page' ? [
-        act('텍스트 오름차순 정렬', () => upd(withSort({ dir: 'asc' }))),
-        act('텍스트 내림차순 정렬', () => upd(withSort({ dir: 'desc' }))),
-        act('기타 정렬 옵션...', () => pivotSortDialog(entry, cur)),
+        act('텍스트 오름차순 정렬', () => upd(withSort({ dir: 'asc' })), false, 'S'),
+        act('텍스트 내림차순 정렬', () => upd(withSort({ dir: 'desc' })), false, 'O'),
+        act('기타 정렬 옵션...', () => pivotSortDialog(entry, cur), false, 'M'),
         el('div', { class: 'pf-sep' }),
       ] : []),
-      act(`"${cur}"에서 필터 해제`, () => upd(noFilters()), !def.filters?.[cur] && !ff),
+      act(`"${cur}"에서 필터 해제`, () => upd(noFilters()), !def.filters?.[cur] && !ff, 'C'),
       ...(kind !== 'page' ? [
         // 엑셀: [레이블 필터 ▸] · [날짜 필터 ▸] · [값 필터 ▸] 하위 메뉴에서 조건을 고르면 대화상자
         (() => {
           const isDate = pivotFieldIsDate(def, cur);
-          const clearType = (t) => ({ label: '필터 해제', icon: 'filterClear', disabled: ff?.type !== t, action: () => { const nff = { ...(def.fieldFilters ?? {}) }; delete nff[cur]; upd({ fieldFilters: nff }); } });
+          const clearType = (t) => ({ label: '필터 해제',accessKey:'C', icon: 'filterClear', disabled: ff?.type !== t, action: () => { const nff = { ...(def.fieldFilters ?? {}) }; delete nff[cur]; upd({ fieldFilters: nff }); } });
+          const labelKeys={equal:'E',notEqual:'N',beginsWith:'I',notBeginsWith:'T',endsWith:'C',notEndsWith:'H',contains:'A',notContains:'D',greaterThan:'G',greaterThanOrEqual:'O',lessThan:'L',lessThanOrEqual:'U',between:'B',notBetween:'S'};
           const labelItems = () => [clearType('label'), { sep: true },
             ...[['equal', 'notEqual'], ['beginsWith', 'notBeginsWith', 'endsWith', 'notEndsWith'], ['contains', 'notContains'], ['greaterThan', 'greaterThanOrEqual', 'lessThan', 'lessThanOrEqual'], ['between', 'notBetween']]
-              .flatMap((grp, gi) => [...(gi ? [{ sep: true }] : []), ...grp.map((op) => ({ label: `${LABEL_OPS.find(([k]) => k === op)[1]}...`, checked: ff?.type === 'label' && ff.op === op, action: () => { closeMenus(); pivotFilterDialog(entry, cur, 'label', op); } }))])];
+              .flatMap((grp, gi) => [...(gi ? [{ sep: true }] : []), ...grp.map((op) => ({ label: `${LABEL_OPS.find(([k]) => k === op)[1]}...`, accessKey:labelKeys[op], checked: ff?.type === 'label' && ff.op === op, action: () => { closeMenus(); pivotFilterDialog(entry, cur, 'label', op); } }))])];
           const dateItems = () => [clearType('date'), { sep: true },
             ...DATE_OPS.map((x) => (x ? { label: /^date/.test(x[0]) ? `${x[1]}...` : x[1], checked: ff?.type === 'date' && ff.op === x[0], action: () => { closeMenus(); if (/^date/.test(x[0])) pivotDateFilterDialog(entry, cur, x[0]); else upd({ fieldFilters: { ...(def.fieldFilters ?? {}), [cur]: { type: 'date', op: x[0] } } }); } } : { sep: true })),
             { label: '해당 기간의 모든 날짜', submenu: PIVOT_DATE_PERIODS.map(([k, l], i) => ({ label: l, checked: ff?.type === 'date' && ff.op === k, action: () => upd({ fieldFilters: { ...(def.fieldFilters ?? {}), [cur]: { type: 'date', op: k } } }) })).flatMap((it, i) => (i === 4 ? [{ sep: true }, it] : [it])) },
@@ -12345,29 +12398,41 @@ function openPivotFilterMenu(entry, kind, field, anchorEl) {
             ...[['equal', 'notEqual'], ['greaterThan', 'greaterThanOrEqual', 'lessThan', 'lessThanOrEqual'], ['between', 'notBetween']]
               .flatMap((grp, gi) => [...(gi ? [{ sep: true }] : []), ...grp.map((op) => ({ label: `${VALUE_OPS.find(([k]) => k === op)[1]}...`, checked: ff?.type === 'value' && ff.op === op, action: () => { closeMenus(); pivotFilterDialog(entry, cur, 'value', op); } }))]),
             { sep: true }, { label: '상위 10...', checked: ff?.type === 'top', action: () => { closeMenus(); pivotFilterDialog(entry, cur, 'top'); } }];
-          const sub = (label, items, on) => {
-            const b = el('button', { type: 'button', class: `pf-act pf-sub${on ? ' on' : ''}`, onmouseenter: () => openSubmenu(b, items()), onclick: () => openSubmenu(b, items()) }, el('span', {}, label), el('span', {}, '▸'));
+          const sub = (label, items, on, key) => {
+            const b = el('button', { type: 'button',role:'menuitem','aria-haspopup':'menu','data-access-key':key,disabled:!canApply(true)||(label==='값 필터'&&!def.values?.length),class:`pf-act pf-sub${on ? ' on' : ''}`, onmouseenter:()=>{if(!document.body.classList.contains('mobile-work-mode')&&!b.disabled&&canApply(true))openSubmenu(b,items());},onclick:()=>{if(canApply())openSubmenu(b,items());} }, el('span', {}, label), el('span', {'aria-hidden':'true'}, '▸'));
             return b;
           };
-          return el('div', {}, isDate ? sub('날짜 필터', dateItems, ff?.type === 'date') : sub('레이블 필터', labelItems, ff?.type === 'label'), sub('값 필터', valueItems, ff?.type === 'value' || ff?.type === 'top'));
+          return el('div', {}, isDate ? sub('날짜 필터', dateItems, ff?.type === 'date', 'F') : sub('레이블 필터', labelItems, ff?.type === 'label', 'L'), sub('값 필터', valueItems, ff?.type === 'value' || ff?.type === 'top', 'V'));
         })(),
         ...(ff ? [el('div', { class: 'muted pf-desc' }, `적용된 필터: ${describeFieldFilter(ff, def.values ?? [], wb.date1904)}`)] : []),
       ] : []),
       el('div', { class: 'pf-sep' }),
-      search, list, addRow,
-      ...(kind === 'page' ? [(() => { const mcb = el('input', { type: 'checkbox', checked: true }); mcb.addEventListener('change', () => { multiPage = false; render(); }); return el('label', { class: 'fc-check pf-multi' }, mcb, '여러 항목 선택'); })()] : []),
+      pivotFilterSearchBox(search), list,
+      ...(kind === 'page' ? [(() => { const mcb = el('input', { type: 'checkbox', checked: true }); mcb.addEventListener('change', () => { multiPage = false; const chosen=selection.result();render(chosen.length===1?chosen:items); }); return el('label', { class: 'fc-check pf-multi' }, mcb, '여러 항목 선택'); })()] : []),
       el('div', { class: 'filter-foot' },
-        el('button', { class: 'btn primary', onclick: ok }, '확인'),
-        el('button', { class: 'btn', onclick: () => { closeMenus(); focusGrid(); } }, '취소')),
+        confirm,
+        el('button', { class: 'btn', 'data-access-key':'none', onclick: () => { closeMenus(); focusGrid(); } }, '취소')),
     );
-    search.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); ok(); } });
-    list.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); ok(); } });
-    setTimeout(() => search.focus());
+    search.addEventListener('keydown', (e) => { if (!e.isComposing && e.keyCode !== 229 && e.key === 'Enter') { e.preventDefault(); ok(); } });
+    list.addEventListener('keydown', (e) => { if (!e.isComposing && e.keyCode !== 229 && e.key === 'Enter') { e.preventDefault(); ok(); } });
+    if(query){search.value=query;search.dispatchEvent(new Event('input'));}
+    if(search.isConnected)search.focus();
   };
   render();
-  box.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Escape') { closeMenus(); focusGrid(); } });
-  const menu = openMenu(anchorEl, [{ node: box }]);
-  menu.style.minWidth = '290px';
+  box.addEventListener('keydown', e => {
+    e.stopPropagation();if(e.isComposing||e.keyCode===229)return;
+    if(e.key==='Escape'){e.preventDefault();closeMenus();focusGrid();return;}
+    const actions=[...box.querySelectorAll('.pf-act:not(:disabled)')],at=actions.indexOf(e.target);
+    if(at>=0&&['ArrowDown','ArrowUp','Home','End'].includes(e.key)){
+      e.preventDefault();closeSubmenus();const next=e.key==='Home'?0:e.key==='End'?actions.length-1:at+(e.key==='ArrowDown'?1:-1);
+      if(next>=actions.length)box.querySelector('input[type=search]')?.focus();else actions[Math.max(0,next)]?.focus();
+    }else if(at>=0&&e.key==='ArrowRight'&&e.target.classList.contains('pf-sub')){e.preventDefault();e.target.click();}
+    else if(e.key==='ArrowUp'&&e.target.matches('input[type=search]')){e.preventDefault();actions.at(-1)?.focus();}
+  });
+  const menu = openMenu(anchorEl, [{ node: box }], {minWidth:300});
+  menu.classList.add('pivot-filter-popup');
+  // 첫 열기와 본문 교체에서 동기적으로 초점을 지정해 이후 키보드 이동을 덮어쓰지 않는다.
+  box.querySelector('input[type=search]')?.focus();
 }
 
 /** 정렬 (엑셀 [기타 정렬 옵션]): 수동 · 오름차순 기준 · 내림차순 기준 (필드 자체 또는 값 필드) + 요약 정보 + 기타 옵션 */
@@ -12473,23 +12538,23 @@ function pivotFilterDialog(entry, field, type, presetOp = null) {
   if (type !== 'label' && !values.length) { alertDialog('값 필터', '값 영역에 필드를 먼저 추가하세요.'); return; }
   if (type === 'top') {
     // 엑셀 [상위 10 필터]: 한 줄 — [상위|하위] [개수] [항목|%|합계] 기준: [값 필드]
-    const dir = el('select', {}, [['top', '상위'], ['bottom', '하위']].map(([v2, l]) => el('option', { value: v2, selected: (cur.top === false ? 'bottom' : 'top') === v2 }, l)));
-    const n = el('input', { type: 'number', value: cur.n ?? 10, min: 0, style: { width: '64px', flex: 'none' } });
-    const mode = el('select', {}, [['count', '항목'], ['percent', '%'], ['sum', '합계']].map(([v2, l]) => el('option', { value: v2, selected: (cur.mode ?? 'count') === v2 }, l)));
-    const by = el('select', {}, valueOpts.map((o) => el('option', { value: o.value, selected: String(cur.by ?? 0) === o.value }, o.label)));
+    const dir = el('select', {'aria-label':'상위 또는 하위'}, [['top', '상위'], ['bottom', '하위']].map(([v2, l]) => el('option', { value: v2, selected: (cur.top === false ? 'bottom' : 'top') === v2 }, l)));
+    const n = el('input', { type: 'number', 'aria-label':'필터 개수', value: cur.n ?? 10, min: 1, style: { width: '64px', flex: 'none' } });
+    const mode = el('select', {'aria-label':'상위 필터 단위'}, [['count', '항목'], ['percent', '%'], ['sum', '합계']].map(([v2, l]) => el('option', { value: v2, selected: (cur.mode ?? 'count') === v2 }, l)));
+    const by = el('select', {'aria-label':'기준 값 필드'}, valueOpts.map((o) => el('option', { value: o.value, selected: String(cur.by ?? 0) === o.value }, o.label)));
     openDialog({
       title: `상위 10 필터(${field})`, width: 520,
       body: el('div', { class: 'vf-dlg' }, el('div', { class: 'opt-title' }, '표시'), el('div', { class: 't10-row' }, dir, n, mode, el('span', {}, '기준:'), by)),
-      buttons: [{ label: '확인', primary: true, action: () => { const k = Number(n.value); if (!(k > 0)) { toast('1 이상의 수를 입력하세요.'); return false; } return save({ type: 'top', top: dir.value === 'top', n: k, mode: mode.value, by: Number(by.value) }); } }, { label: '취소' }],
+      buttons: [{ label: '확인', primary: true, action: () => { const k = Number(n.value); if (!Number.isFinite(k) || !(k > 0) || (mode.value === 'count' && !Number.isInteger(k)) || (mode.value === 'percent' && k > 100)) { toast(mode.value==='percent'?'0보다 크고 100 이하인 백분율을 입력하세요.':mode.value==='count'?'1 이상의 정수를 입력하세요.':'0보다 큰 수를 입력하세요.'); return false; } return save({ type: 'top', top: dir.value === 'top', n: k, mode: mode.value, by: Number(by.value) }); } }, { label: '취소' }],
     });
     return;
   }
   const ops = type === 'label' ? LABEL_OPS : VALUE_OPS;
   // 엑셀처럼 한 줄: ([값 필드]) [조건] [값] (해당 범위면 '에서' [값])
-  const by = type === 'value' ? el('select', {}, valueOpts.map((o) => el('option', { value: o.value, selected: String(cur.by ?? 0) === o.value }, o.label))) : null;
-  const op = el('select', {}, ops.map(([id, label]) => el('option', { value: id, selected: (presetOp ?? cur.op ?? (type === 'label' ? 'contains' : 'greaterThan')) === id }, label)));
-  const v1 = el('input', { type: 'text', value: cur.v1 ?? '' });
-  const v2 = el('input', { type: 'text', value: cur.v2 ?? '' });
+  const by = type === 'value' ? el('select', {'aria-label':'기준 값 필드'}, valueOpts.map((o) => el('option', { value: o.value, selected: String(cur.by ?? 0) === o.value }, o.label))) : null;
+  const op = el('select', {'aria-label':'필터 조건'}, ops.map(([id, label]) => el('option', { value: id, selected: (presetOp ?? cur.op ?? (type === 'label' ? 'contains' : 'greaterThan')) === id }, label)));
+  const v1 = el('input', { type: 'text', 'aria-label':'필터 값', value: cur.v1 ?? '' });
+  const v2 = el('input', { type: 'text', 'aria-label':'범위 끝 값', value: cur.v2 ?? '' });
   const mid = el('span', {}, type === 'label' ? '그리고' : '에서');
   const sync = () => { const two = op.value === 'between' || op.value === 'notBetween'; mid.style.display = two ? '' : 'none'; v2.style.display = two ? '' : 'none'; };
   op.addEventListener('change', sync);
@@ -18578,6 +18643,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileFit','toggleR
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['피벗 필터 검색과 선택', ['검색 목록 안의 [필터에 현재 선택한 내용 추가]로 기존 선택과 검색 결과를 합칩니다. 끄면 검색 선택만 적용합니다.', '와일드카드 검색·검색 지우기·방향키 이동·한글 Enter 보호·빈 결과 확인 차단을 보강하고, 보고서 필터의 다중 선택 모드를 XLSX에도 보존합니다.']],
   ['슬라이서·피벗·차트 우클릭', ['슬라이서 새로 고침·보고서 연결·순서·대체 텍스트·크기와 속성을 바로 설정합니다.', '피벗의 선택한 값 필드에 요약·표시 형식·정렬을 적용하고 세부 정보·옵션·필드 설정을 엽니다.']],
   ['차트 영역 서식', ['차트와 그림 영역의 채우기·테두리·그림자·네온·부드러운 가장자리·입체 서식을 구분해 편집합니다.', '차트 서식 파일(.crtx)을 저장하거나 적용하고, 원본 데이터와 실행 취소를 유지합니다.']],
   ['셀 우클릭 메뉴', ['선택한 셀 값·색 필터와 색 정렬, 메모·셀 서식·드롭다운 목록·윗주·이름 정의·링크에 바로 접근합니다.', '표/범위 데이터를 미리 보고 열·유형·필터·정렬을 적용해 새 시트에 가져옵니다. 원본과 실행 취소를 보존합니다.']],

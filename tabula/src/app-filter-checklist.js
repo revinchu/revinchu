@@ -2,24 +2,27 @@ import { el } from './ui.js';
 import { filterSelection } from './filter-selection.js';
 
 // 일반 필터와 피벗 필터가 같은 검색·선택·키보드 동작을 사용한다.
-export function filterChecklist(items, initial = null, label = (value) => value || '(필드 값 없음)') {
+export function filterChecklist(items, initial = null, label = (value) => value || '(필드 값 없음)', { inlineAdd = false, onChange } = {}) {
   const state = filterSelection(items, initial, label);
-  const search = el('input', { type: 'search', placeholder: '검색', 'aria-label': '필터 항목 검색' });
+  const search = el('input', { type: 'search', placeholder: '검색', 'data-access-key':'none', 'aria-label': '필터 항목 검색' });
   const list = el('div', { class: 'filter-list' });
-  const all = el('input', { type: 'checkbox', 'aria-label': '표시된 항목 모두 선택' });
+  const all = el('input', { type: 'checkbox', 'data-access-key':'none', 'aria-label': '표시된 항목 모두 선택' });
   const allText = document.createTextNode('(모두 선택)');
   const checks = new Map();
   const empty = el('div', { class: 'muted', role: 'status', style: { padding: '8px', display: 'none' } }, '검색 결과가 없습니다.');
-  const add = el('input', { type: 'checkbox' });
-  const addRow = el('label', { class: 'filter-add', style: { display: 'none' } }, add, '필터에 현재 선택 내용 추가');
+  const add = el('input', { type: 'checkbox', 'data-access-key':'none', 'aria-label': '필터에 현재 선택한 내용 추가' });
+  const addRow = el('label', { class: 'filter-add', style: { display: 'none' } }, add, '필터에 현재 선택한 내용 추가');
   // Keep every value in the selection model, but create DOM only for the viewport.
   const rowHeight = 26, overscan = 8;
-  const header = el('label', { style: { height: `${rowHeight}px`, boxSizing: 'border-box', position: 'sticky', top: '0', zIndex: '1', background: 'var(--surface, #fff)' } }, all, allText);
+  const header = el('label', { class:'filter-all', style: { height: `${rowHeight}px`, boxSizing: 'border-box' } }, all, allText);
+  const heading = el('div', {class:'filter-list-heading',style:{position:'sticky',top:'0',zIndex:'1',background:'var(--surface, #fff)'}},header,...(inlineAdd?[addRow]:[]));
+  if(inlineAdd){addRow.style.height=`${rowHeight}px`;addRow.style.boxSizing='border-box';}
+  const headerHeight=()=>rowHeight*(inlineAdd&&state.searching()?2:1);
   const rows = el('div', { class: 'filter-window', style: { position: 'relative' } });
   let drawnValues = null, drawnStart = -1, drawnEnd = -1;
   const draw = () => {
     const visible = state.visible();
-    const start = Math.max(0, Math.floor((list.scrollTop - rowHeight) / rowHeight) - overscan);
+    const start = Math.max(0, Math.floor((list.scrollTop - headerHeight()) / rowHeight) - overscan);
     const end = Math.min(visible.length, start + Math.ceil((list.clientHeight || 180) / rowHeight) + overscan * 2);
     rows.style.height = `${visible.length * rowHeight}px`;
     if (visible !== drawnValues || start !== drawnStart || end !== drawnEnd) {
@@ -28,7 +31,7 @@ export function filterChecklist(items, initial = null, label = (value) => value 
       const nodes = [];
       for (let i = start; i < end; i++) {
         const value = visible[i];
-        const cb = el('input', { type: 'checkbox', 'aria-label': String(label(value)), 'data-filter-index': String(i) });
+        const cb = el('input', { type: 'checkbox', 'data-access-key':'none', 'aria-label': String(label(value)), 'data-filter-index': String(i) });
         cb.addEventListener('change', () => { state.toggle(value, cb.checked); sync(); });
         checks.set(value, cb);
         nodes.push(el('label', { title: String(label(value)), style: { position: 'absolute', top: `${i * rowHeight}px`, left: '0', right: '0', height: `${rowHeight}px`, boxSizing: 'border-box' } }, cb, label(value)));
@@ -37,43 +40,47 @@ export function filterChecklist(items, initial = null, label = (value) => value 
     }
     for (const [value, cb] of checks) cb.checked = state.checked(value);
   };
-  const sync = () => {
+  const sync = (notify = true) => {
     const visible = state.visible();
     let count = 0;
     for (const value of visible) if (state.checked(value)) count++;
     all.checked = visible.length > 0 && count === visible.length;
     all.indeterminate = count > 0 && count < visible.length;
     all.disabled = visible.length === 0;
-    allText.textContent = state.searching() ? '(검색 결과 모두 선택)' : '(모두 선택)';
+    allText.textContent = state.searching() ? '(모든 검색 결과 선택)' : '(모두 선택)';
     addRow.style.display = state.searching() ? '' : 'none';
+    add.disabled = visible.length === 0;
     empty.style.display = visible.length ? 'none' : '';
     draw();
+    if(notify)onChange?.(state.canApply());
   };
   const focusIndex = (index) => {
-    if (index < 0) { list.scrollTop = 0; draw(); if (!all.disabled) all.focus({ preventScroll: true }); return; }
+    if (index < 0) { list.scrollTop = 0; draw(); const cb=index===-1&&inlineAdd&&state.searching()?add:all;if(!cb.disabled)cb.focus({preventScroll:true});return; }
     const visible = state.visible();
     if (!visible.length) return;
     index = Math.max(0, Math.min(visible.length - 1, index));
-    const top = (index + 1) * rowHeight, bottom = top + rowHeight;
-    if (top < list.scrollTop + rowHeight) list.scrollTop = top - rowHeight;
+    const head=headerHeight(),top = index * rowHeight+head, bottom = top + rowHeight;
+    if (top < list.scrollTop + head) list.scrollTop = top - head;
     else if (bottom > list.scrollTop + (list.clientHeight || 180)) list.scrollTop = bottom - (list.clientHeight || 180);
     draw(); checks.get(visible[index])?.focus({ preventScroll: true });
   };
-  list.append(header, rows, empty);
+  list.append(heading, rows, empty);
   list.addEventListener('scroll', draw);
   all.addEventListener('change', () => { state.selectVisible(all.checked); sync(); });
+  add.addEventListener('change',()=>sync());
   search.addEventListener('input', () => { state.search(search.value); list.scrollTop = 0; sync(); });
-  search.addEventListener('keydown', (e) => { if (e.key === 'ArrowDown') { e.preventDefault(); focusIndex(-1); } });
+  search.addEventListener('keydown', (e) => { if (e.key === 'ArrowDown') { e.preventDefault(); focusIndex(-2); } });
   list.addEventListener('keydown', (e) => {
     if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return;
-    const at = e.target === all ? -1 : Number(e.target.dataset.filterIndex);
+    const at = e.target === all ? -2 : e.target === add ? -1 : Number(e.target.dataset.filterIndex);
     if (!Number.isInteger(at)) return;
     e.preventDefault(); e.stopPropagation();
-    const next = e.key === 'Home' ? -1 : e.key === 'End' ? state.visible().length - 1 : Math.max(-1, at + (e.key === 'ArrowDown' ? 1 : -1));
+    let next = e.key === 'Home' ? -2 : e.key === 'End' ? state.visible().length - 1 : Math.max(-2, at + (e.key === 'ArrowDown' ? 1 : -1));
+    if(next===-1&&(!inlineAdd||!state.searching()))next=e.key==='ArrowDown'?0:-2;
     focusIndex(next);
   });
-  sync();
-  return { search, list, addRow, result: () => state.result(add.checked) };
+  sync(false);
+  return { search, list, addRow, result: () => state.result(add.checked), canApply: () => state.canApply() };
 }
 
 export function searchableFieldPicker(fields, initial = []) {
