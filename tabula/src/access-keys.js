@@ -7,6 +7,13 @@ export function accessKeyFromLabel(label) {
   return ampersand ? ampersand[1].toLowerCase() : '';
 }
 
+/** 레이블에 같은 표기가 있으면 반복하지 않는다. 표시 문자는 실제 실행 키를 사용한다. */
+export function accessKeyCaption(label, key) {
+  const normalized = String(key ?? '').toLowerCase();
+  if (!/^[a-z0-9]$/.test(normalized) || accessKeyFromLabel(label) === normalized) return '';
+  return `(${normalized.toUpperCase()})`;
+}
+
 export function accessKeyFromEvent(event) {
   if (event.ctrlKey || event.metaKey || event.getModifierState?.('AltGraph')) return '';
   const physical = /^Key([A-Z])$|^Digit([0-9])$/.exec(event.code ?? '');
@@ -504,7 +511,15 @@ export function accessKeyAliases(value) {
 export function allocateAccessKeys(items) {
   const pool = 'abcdefghijklmnopqrstuvwxyz1234567890';
   const assigned = items.map((item) => /^[a-z0-9]$/i.test(item.explicit ?? '') ? item.explicit.toLowerCase() : accessKeyFromLabel(item.label));
+  const automatic = items.map(() => false);
   const used = new Set([...assigned.filter(Boolean), ...items.flatMap((item) => accessKeyAliases(item.aliases))]);
+  // 동적 옵션 추가/스크롤 때문에 이미 보이던 자동 키가 다른 컨트롤로 바뀌지 않는다.
+  for (let i = 0; i < items.length; i++) {
+    const remembered = /^[a-z0-9]$/i.test(items[i].previous ?? '') ? items[i].previous.toLowerCase() : '';
+    if (!assigned[i] && remembered && !used.has(remembered)) {
+      assigned[i] = remembered; automatic[i] = accessKeyHint(items[i].label) !== remembered; used.add(remembered);
+    }
+  }
   // 레이블 추천은 창별로 지정한 키/별칭을 빼앗지 않는다. 충돌한 추천은 자동 배정으로 돌린다.
   for (let i = 0; i < items.length; i++) {
     const hint = accessKeyHint(items[i].label);
@@ -513,7 +528,7 @@ export function allocateAccessKeys(items) {
   const overflowPool = [...pool].filter((candidate) => !used.has(candidate));
   let overflow = 0;
   return items.map((item, i) => {
-    if (assigned[i]) return { key: assigned[i], automatic: false };
+    if (assigned[i]) return { key: assigned[i], automatic: automatic[i] };
     const remembered = /^[a-z0-9]$/i.test(item.previous ?? '') ? item.previous.toLowerCase() : '';
     const key = remembered && !used.has(remembered) ? remembered : [...pool].find((candidate) => !used.has(candidate)) ?? overflowPool[overflow++ % overflowPool.length] ?? '';
     used.add(key);

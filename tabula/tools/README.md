@@ -403,3 +403,17 @@ node tools/mobile-layout.mjs
 `WIXEL_URL`은 소스 또는 배포 번들 주소이며, `WIXEL_DIALOG_OUT`에 D: 절대 경로를 지정하면 대표 PNG와 상세 좌표 JSON을 보관합니다(기본 `D:/Codex/Temp/wixel-dialogs/current`). 좁은 범위 재검사는 `WIXEL_DIALOG_WIDTHS=320,390`, `WIXEL_DIALOG_FILTER=도형 서식`으로 지정할 수 있습니다. 새 격리 컨텍스트의 합성 문서·모의 클립보드만 사용하고 API·외부 연결·원격 쓰기를 차단합니다. Chromium 화면 크기 시뮬레이션이며 실제 모바일 OS·소프트키보드·화면 읽기 프로그램 검증은 아닙니다. 전체 리본 명령 검사는 별도 `smoke.mjs`로 실행합니다.
 
 `node tools/dialog-toast.mjs`는 로컬 소스 서버(`/src/ui.js`)에서 직전 알림이 새 창 버튼을 가리지 않는지, 창 내부의 새 안내·입력 검증 오류·자동 숨김·중첩/모델리스 창 및 시작 소개 알림 동작을 8개 시나리오로 검사합니다. 실제 사용자 문서와 원격 API는 사용하지 않습니다.
+
+
+## 도형 서식의 옵션 계층과 즉시 적용
+
+`node tools/shape-format-parity.mjs`는 합성 도형에서 도형 옵션 3범주와 텍스트 옵션 2범주, 방향키 탐색, 채우기·선 라디오, 그라데이션 중지점, 비율 잠금, 선 미리 보기, 실제 적용·실행 취소를 검사합니다. 재구성 뒤 접힘 상태·입력 초점·스크롤 유지, 도형 A에서 B로 선택 전환 시 B에만 적용, 320px 화면 접근도 포함합니다. `WIXEL_URL`로 소스/배포 번들을 선택하고 `WIXEL_SHAPE_FORMAT_OUT`에 D: 출력 폴더를 지정합니다(기본 `D:/Codex/Temp/wixel-dialog-keyboard/shape-format`). 새 격리 브라우저에서 사용자 문서를 읽지 않고 API·외부 요청·원격 쓰기를 차단합니다. 실제 Excel 화면 전체와의 픽셀 일치 검증은 아닙니다.
+
+
+## 팝업 기본 버튼·상시 단축키·차트 대화상자
+
+- `node tools/dialog-keyboard-parity.mjs`: 로컬 소스 서버(`/src/ui.js`) 전용. 모달 바깥 초점/Enter, 동적 본문, 단계별 기본 동작, 비활성 기본 버튼, 중첩·모델리스 창, 상시 단축키·작은 화면 닫기·키 안정성을 검사합니다.
+- `node tools/text-to-columns-ux.mjs`: 로컬 소스/번들 전용. Alt A E→Enter 3회, 기본 탭/일반 서식, 고급 숫자 설정, 옵션 접근키·초점, 실제 변환/덮어쓰기/Undo, 320/390px를 검사합니다. 한글 검사는 합성 물리키·조합 이벤트이며 실제 OS IME 구동이 아닙니다.
+- `node tools/chart-dialog-ux.mjs`: 소스/배포 번들. 데이터 범위 변경 취소, 입력 직후 Enter, 계열 목록 키보드, 현재/다른/새 시트 이동과 Undo, 차트 유형별 적용 옵션, 모바일 창을 검사합니다. `CHART_DIALOG_OUT` 기본 경로는 `D:/Codex/Temp/wixel-dialog-keyboard/charts`입니다.
+
+`WIXEL_URL`과 Playwright 환경 변수는 위와 같습니다. 모두 격리 브라우저와 합성 문서를 사용하며 API·외부 요청·원격 쓰기를 차단합니다. 지원 범위와 한계는 [38번 문서](../docs/codex/38_대화상자키보드와서식동작.md)를 참고하세요.

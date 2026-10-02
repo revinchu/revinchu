@@ -1,15 +1,38 @@
 import { el } from './ui.js';
+import { shapeSvg } from './shapes.js';
 import { SHAPE_DASH_OPTIONS, SHAPE_ARROW_OPTIONS, SHAPE_PATTERN_OPTIONS, shapeSizePatch, shapeArrowEnd, shapeGradientStops, shapeGradientStopPatch, addShapeGradientStop } from './shape-format.js';
 
 /** 모델리스 즉시 적용 패널. onChange는 한 편집을 한 트랜잭션으로 기록한다. */
 export function createShapeFormatPanel({ getShape, onChange, isLine, fontName = '맑은 고딕', initialTab = '채우기 및 선' }) {
   const body = el('div', { class: 'cfp shape-format-pane' });
-  const tabs = el('div', { class: 'format-pane-tabs', role: 'tablist', 'aria-label': '도형 서식 범주' });
-  let selected = initialTab, stopIndex = 0, textInput;
-  const up = patch => { if (!getShape()) { draw(); return; } if (onChange(patch) === false) draw(); };
+  const tabs = el('div', { class: 'format-pane-tabs shape-format-categories', role: 'tablist', 'aria-label': '도형 서식 범주' });
+  const options = el('div', { class: 'format-pane-tabs shape-format-options', role: 'tablist', 'aria-label': '서식 옵션' });
+  const navigation = el('div', { class: 'shape-format-navigation' }, options, tabs);
+  const expanded = new Map();
+  let selected = initialTab === '텍스트 옵션' ? '텍스트 및 글꼴' : initialTab, stopIndex = 0, textInput, linePreview;
+  let lastShape = '채우기 및 선', lastText = '텍스트 및 글꼴';
+  const preview = () => {
+    const shape = getShape(); if (!linePreview || !shape) return;
+    // 실제 도형 렌더러를 재사용하므로 대시·복합 선·화살표가 본문과 같은 방식으로 보인다.
+    const sample = el('div', { html: shapeSvg({ ...shape, id: 'shape-format-line-preview', kind: 'line', w: 180, h: 0,
+      path: undefined, customGeometry: undefined, fill: null, grad: undefined, pattern: undefined, shadow: undefined, glow: undefined, soft: undefined }) });
+    linePreview.replaceChildren(sample);
+  };
+  const up = patch => { if (!getShape()) { draw(); return; } if (onChange(patch) === false) draw(); else preview(); };
   const textUp = patch => up({ ...patch, paras: undefined });
   const row = (name, input) => { input?.setAttribute('aria-label', name); return el('label', { class: 'cfp-row' }, el('span', {}, name), input); };
-  const sec = (name, ...children) => el('details', { class: 'cfp-sec', open: true }, el('summary', {}, name), ...children);
+  const sec = (name, ...children) => {
+    const details = el('details', { class: 'cfp-sec', open: expanded.get(name) !== false, 'data-shape-section': name }, el('summary', {}, name), ...children);
+    details.addEventListener('toggle', () => { if (details.isConnected) expanded.set(name, details.open); }); return details;
+  };
+  const modes = (name, value, choices, change) => el('div', { class: 'shape-mode-options', role: 'radiogroup', 'aria-label': name },
+    choices.map(([key, label]) => {
+      const input = el('input', { type: 'radio', name: 'shape-format-' + name, value: key, checked: value === key, 'aria-label': label });
+      input.addEventListener('change', () => { if (input.checked) change(key); });
+      return el('label', {}, input, el('span', {}, label));
+    }));
+  const controlKey = node => node?.getAttribute('data-shape-focus') || node?.getAttribute('aria-label') ||
+    (node?.tagName === 'SUMMARY' ? 'section:' + node.parentElement.dataset.shapeSection : node?.tagName === 'BUTTON' ? 'button:' + node.textContent.trim() : null);
   const num = (value, fn, min = 0, max = 100, step = 1, disabled = false) => {
     const input = el('input', { type: 'number', value: Number.isFinite(Number(value)) ? Math.round(Number(value) * 10000) / 10000 : min, min, max, step, disabled });
     input.addEventListener('change', () => { const n = Number(input.value); if (input.value === '' || !Number.isFinite(n)) return; const v = Math.max(min, Math.min(max, n)); input.value = v; fn(v); }); return input;
@@ -24,6 +47,11 @@ export function createShapeFormatPanel({ getShape, onChange, isLine, fontName = 
   };
   const field = (value, fn) => { const input = el('input', { type: 'text', value: value ?? '' }); input.addEventListener('change', () => fn(input.value)); return input; };
   const draw = () => {
+    // 전체 재구성 전 현재 펼침·초점·스크롤을 읽어 모델 새로 고침/Undo도 같은 편집 위치를 유지한다.
+    for (const section of body.querySelectorAll('details[data-shape-section]')) expanded.set(section.dataset.shapeSection, section.open);
+    const active = body.contains(document.activeElement) ? document.activeElement : null;
+    const focusKey = controlKey(active), selection = active && typeof active.selectionStart === 'number' ? [active.selectionStart, active.selectionEnd] : null;
+    const scroll = body.closest('.dialog-body'), scrollTop = scroll?.scrollTop, scrollLeft = scroll?.scrollLeft;
     const sh = getShape();
     if (!sh) { body.replaceChildren(el('p', { class: 'muted', role: 'status' }, '도형이 삭제되었거나 다른 문서·시트로 이동했습니다. 이 창을 닫고 도형을 다시 선택하세요.')); return; }
     const line = isLine(sh), pages = new Map();
@@ -31,11 +59,11 @@ export function createShapeFormatPanel({ getShape, onChange, isLine, fontName = 
     const stop = stops[stopIndex];
     const mode = sh.pattern ? 'pattern' : sh.grad ? 'gradient' : sh.fill ? 'solid' : 'none';
     const fillPage = !line ? sec('채우기',
-      row('채우기', choose(mode, [['none', '채우기 없음'], ['solid', '단색 채우기'], ['gradient', '그라데이션 채우기'], ['pattern', '무늬 채우기']], v => {
+      modes('채우기', mode, [['none', '채우기 없음'], ['solid', '단색 채우기'], ['gradient', '그라데이션 채우기'], ['pattern', '무늬 채우기']], v => {
         const current = getShape();
         up({ fill: v === 'none' ? null : current.fill || '#4472c4', grad: v === 'gradient' ? current.grad ?? { ang: 90, stops: shapeGradientStops(current) } : undefined,
           pattern: v === 'pattern' ? current.pattern ?? { preset: 'pct25', fg: current.fill || '#4472c4', bg: '#ffffff' } : undefined }); draw();
-      })),
+      }),
       mode === 'solid' ? row('채우기 색', color(sh.fill, v => up({ fill: v }))) : null,
       mode !== 'none' ? row('채우기 투명도(%)', num((1 - (sh.fillOpacity ?? 1)) * 100, v => up({ fillOpacity: 1 - v / 100 }))) : null,
       mode === 'pattern' ? row('무늬 종류', choose(sh.pattern.preset, SHAPE_PATTERN_OPTIONS, v => up({ pattern: { ...getShape().pattern, preset: v } }))) : null,
@@ -57,8 +85,10 @@ export function createShapeFormatPanel({ getShape, onChange, isLine, fontName = 
         ...(state.type !== 'none' ? [row(`${label} 화살표 너비`, choose(state.w, [['sm', '좁게'], ['med', '중간'], ['lg', '넓게']], v => update({ w: v }))),
           row(`${label} 화살표 길이`, choose(state.len, [['sm', '짧게'], ['med', '중간'], ['lg', '길게']], v => update({ len: v })))] : [])];
     };
+    linePreview = el('div', { class: 'shape-line-preview', role: 'img', 'aria-label': '선 서식 미리 보기' });
     pages.set('채우기 및 선', el('div', {}, fillPage, sec('선',
-      row('선 표시', check(!!sh.stroke, v => { up({ stroke: v ? sh.stroke || '#2f528f' : null }); draw(); })),
+      modes('선', sh.stroke ? 'solid' : 'none', [['none', '선 없음'], ['solid', '실선']], v => { up({ stroke: v === 'solid' ? getShape().stroke || '#2f528f' : null }); draw(); }),
+      sh.stroke ? linePreview : null,
       ...(sh.stroke ? [row('선 색', color(sh.stroke, v => up({ stroke: v }))),
         row('선 투명도(%)', num((1 - (sh.strokeOpacity ?? 1)) * 100, v => up({ strokeOpacity: 1 - v / 100 }))),
         row('너비(pt)', num((sh.strokeWidth ?? 1) * .75, v => up({ strokeWidth: v / .75 }), .25, 100, .25)),
@@ -100,31 +130,51 @@ export function createShapeFormatPanel({ getShape, onChange, isLine, fontName = 
       textInput = el('textarea', { rows: 4, 'aria-label': '도형 텍스트', style: { width: '100%', boxSizing: 'border-box' } }, sh.text ?? '');
       textInput.addEventListener('change', () => textUp({ text: textInput.value }));
       const pad = sh.pad ?? [4.8, 9.6, 4.8, 9.6];
-      pages.set('텍스트 옵션', el('div', {}, sec('텍스트 및 글꼴', textInput,
+      pages.set('텍스트 및 글꼴', el('div', {}, sec('텍스트 및 글꼴', textInput,
         row('도형 글꼴', field(sh.font ?? fontName, v => textUp({ font: v || undefined }))),
         row('글자 크기(pt)', num(sh.size ?? 11, v => textUp({ size: v }), 6, 400)),
         row('글자 색', color(sh.color, v => textUp({ color: v }))),
         row('굵게', check(sh.bold, v => textUp({ bold: v || undefined }))),
         row('기울임꼴', check(sh.italic, v => textUp({ italic: v || undefined }))),
-        row('밑줄', check(sh.underline, v => textUp({ underline: v || undefined })))),
-        sec('텍스트 상자', row('가로 맞춤', choose(sh.align ?? 'center', [['left', '왼쪽'], ['center', '가운데'], ['right', '오른쪽'], ['justify', '양쪽 맞춤']], v => textUp({ align: v }))),
+        row('밑줄', check(sh.underline, v => textUp({ underline: v || undefined }))))));
+      pages.set('텍스트 상자', el('div', {}, sec('텍스트 상자', row('가로 맞춤', choose(sh.align ?? 'center', [['left', '왼쪽'], ['center', '가운데'], ['right', '오른쪽'], ['justify', '양쪽 맞춤']], v => textUp({ align: v }))),
           row('세로 맞춤', choose(sh.valign ?? (sh.kind === 'textbox' ? 'top' : 'middle'), [['top', '위쪽'], ['middle', '가운데'], ['bottom', '아래쪽']], v => up({ valign: v }))),
           row('텍스트 회전', choose(sh.textRot ?? 0, [[0, '가로'], [90, '시계 방향 90°'], [270, '시계 방향 270°']], v => up({ textRot: Number(v) }))),
           row('텍스트 자동 맞춤', choose(sh.textFit ?? 'none', [['none', '자동 맞춤 안 함'], ['shrink', '넘치면 텍스트 축소']], v => up({ textFit: v }))),
           row('도형에서 텍스트 줄 바꿈', check(!sh.nowrap, v => up({ nowrap: !v || undefined }))),
           ...['위쪽 여백(px)', '오른쪽 여백(px)', '아래쪽 여백(px)', '왼쪽 여백(px)'].map((name, i) => row(name, num(pad[i], v => { const next = [...(getShape().pad ?? pad)]; next[i] = v; up({ pad: next }); }, 0, 200, .5))))));
     }
-    const names = [...pages.keys()]; if (!pages.has(selected)) selected = names[0];
-    const show = name => { selected = name; for (const [key, page] of pages) page.hidden = key !== name; for (const button of tabs.children) { button.setAttribute('aria-selected', String(button.textContent === name)); button.tabIndex = button.textContent === name ? 0 : -1; } };
-    tabs.replaceChildren(...names.map(name => el('button', { type: 'button', role: 'tab', onclick: () => show(name), onkeydown: event => {
-      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return; event.preventDefault();
-      const at = names.indexOf(selected), next = event.key === 'Home' ? 0 : event.key === 'End' ? names.length - 1 : (at + (event.key === 'ArrowRight' ? 1 : -1) + names.length) % names.length;
-      show(names[next]); tabs.children[next].focus();
-    } }, name)));
-    body.replaceChildren(tabs, el('p', { class: 'muted', style: { margin: '0 0 10px', fontSize: '11px' } }, '변경 내용은 즉시 적용됩니다. 닫기는 취소가 아니며 실행 취소(Ctrl+Z)로 되돌릴 수 있습니다.'), ...pages.values()); show(selected);
+    const shapeNames = ['채우기 및 선', '효과', '크기 및 속성'], textNames = ['텍스트 및 글꼴', '텍스트 상자'];
+    if (!pages.has(selected)) selected = shapeNames[0];
+    const isText = name => textNames.includes(name);
+    const makeTab = (name, activate, names, owner, current, prefix) => el('button', { type: 'button', role: 'tab',
+      'aria-label': name, 'data-shape-focus': prefix + name, 'aria-selected': String(name === current), tabindex: name === current ? 0 : -1,
+      onclick: () => { activate(name); [...owner.children].find(node => node.dataset.shapeFocus === prefix + name)?.focus({ preventScroll: true }); }, onkeydown: event => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return; event.preventDefault(); event.stopPropagation();
+        const at = names.indexOf(name), next = event.key === 'Home' ? 0 : event.key === 'End' ? names.length - 1 : (at + (event.key === 'ArrowRight' ? 1 : -1) + names.length) % names.length;
+        activate(names[next]); owner.children[next]?.focus();
+      }
+    }, name);
+    const show = name => {
+      selected = name; const text = isText(name); if (text) lastText = name; else lastShape = name;
+      for (const [key, page] of pages) { page.hidden = key !== name; page.setAttribute('role', 'tabpanel'); page.setAttribute('aria-label', key); }
+      const groups = line ? ['도형 옵션'] : ['도형 옵션', '텍스트 옵션'], group = text ? '텍스트 옵션' : '도형 옵션';
+      options.replaceChildren(...groups.map(label => makeTab(label, label => show(label === '텍스트 옵션' ? lastText : lastShape), groups, options, group, 'option:')));
+      const names = text ? textNames : shapeNames;
+      tabs.setAttribute('aria-label', text ? '텍스트 서식 범주' : '도형 서식 범주');
+      tabs.replaceChildren(...names.map(label => makeTab(label, show, names, tabs, selected, 'category:')));
+    };
+    body.replaceChildren(navigation, el('p', { class: 'muted shape-format-note' }, '변경 내용은 즉시 적용됩니다. 닫기는 취소가 아니며 실행 취소(Ctrl+Z)로 되돌릴 수 있습니다.'), ...pages.values());
+    show(selected); preview();
+    if (focusKey) {
+      const next = [...body.querySelectorAll('input,select,textarea,button,summary')].find(node => controlKey(node) === focusKey && !node.disabled && !node.closest('[hidden]')) || tabs.querySelector('[aria-selected="true"]');
+      if (next) { next.focus({ preventScroll: true }); if (selection && typeof next.setSelectionRange === 'function') next.setSelectionRange(...selection); }
+    }
+    if (scroll) { scroll.scrollTop = scrollTop; scroll.scrollLeft = scrollLeft; }
+
   };
   // 모델리스 창이 열린 채 문서를 바꾼 뒤의 늦은 change/click은 이전 도형에 쓰지 않는다.
   for (const name of ['change', 'click']) body.addEventListener(name, event => { if (!getShape()) { event.preventDefault(); event.stopImmediatePropagation(); draw(); } }, true);
   draw();
-  return { body, refresh: draw, focusText: () => { textInput?.focus(); textInput?.setSelectionRange(textInput.value.length, textInput.value.length); } };
+  return { body, refresh: draw, getSelectedTab: () => selected, focusText: () => { textInput?.focus(); textInput?.setSelectionRange(textInput.value.length, textInput.value.length); } };
 }

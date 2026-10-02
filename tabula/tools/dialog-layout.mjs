@@ -136,10 +136,14 @@ try {
         if (width >= 1024) { const head = await d.locator('.dialog-head').boundingBox(); await p.mouse.move(head.x + 60, head.y + head.height / 2); await p.mouse.down(); await p.mouse.move(width - 2, height - 2, { steps: 5 }); await p.mouse.up(); await raf(p); await inside(p, d, '드래그한 차트 창'); await p.setViewportSize({ width: 900, height: 600 }); await raf(p); await audit(p, d, '창 축소 후 차트 서식'); await p.setViewportSize({ width, height }); await raf(p); }
         await d.locator('.dialog-head button').click(); await d.waitFor({ state: 'detached' });
       });
-      await test(p, width, '도형 서식: 4개 범주·입력칸 접근·모델리스 닫기', async p => {
+      await test(p, width, '도형 서식: 도형·텍스트 5개 범주·입력칸 접근·모델리스 닫기', async p => {
         await fixtureObject(p, 'shape'); const d = dialog(p, '도형 서식');
-        const tabs = await d.getByRole('tab').allTextContents(); eq(tabs.length, 4);
-        for (const name of tabs) { const tab = d.getByRole('tab', { name, exact: true }); await usable(p, tab, name + ' 도형 탭'); await tab.click(); await audit(p, d, '도형 ' + name); }
+        const groups = [['도형 옵션', '도형 서식 범주', ['채우기 및 선', '효과', '크기 및 속성']], ['텍스트 옵션', '텍스트 서식 범주', ['텍스트 및 글꼴', '텍스트 상자']]];
+        for (const [group, label, names] of groups) {
+          const toggle = d.getByRole('tab', { name: group, exact: true }); await usable(p, toggle, group); await toggle.click();
+          eq(await d.getByRole('tablist', { name: label, exact: true }).getByRole('tab').allTextContents(), names, group + ' 범주');
+          for (const name of names) { const tab = d.getByRole('tab', { name, exact: true }); await usable(p, tab, name + ' 도형 탭'); await tab.click(); await audit(p, d, '도형 ' + name); }
+        }
         await capture(p, 'shape-format'); await d.locator('.dialog-head button').click(); await d.waitFor({ state: 'detached' });
       });
       await test(p, width, '그림 서식: 긴 세로 내용·치수 초안·취소 무변경', async p => {

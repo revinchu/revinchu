@@ -2013,7 +2013,7 @@ function onViewMouseDown(e) {
     if (objEl.classList.contains('chart') && e.button === 0) {
       const now = Date.now(), repeat = lastChartPointer?.id === id && now - lastChartPointer.time < 450 && Math.hypot(e.clientX - lastChartPointer.x, e.clientY - lastChartPointer.y) < 5;
       lastChartPointer = { id, time: now, x: e.clientX, y: e.clientY };
-      if (repeat || e.detail >= 2) { chartFormatPane(id); suppressChartDoubleClickUntil = now + 120; focusGrid(); }
+      if (repeat || e.detail >= 2) { chartFormatPane(id); suppressChartDoubleClickUntil = now + 120; }
     }
     if (e.button !== 0) return;
     const found = findObject(sheet(), id);
@@ -6206,8 +6206,11 @@ function axisLabelDialog(cur, ch, onOk) {
 }
 /** 데이터 원본 선택 대화상자 */
 function selectDataDialog(id = chartSel) {
-  const ch0 = sheet().charts.find((c) => c.id === id);
-  if (!ch0) return;
+  const book = wb, hostSheet = sheet(), hostIndex = si;
+  const original = hostSheet.charts.find((c) => c.id === id);
+  if (!original) return;
+  const ch0 = { ...original }; // 범위 편집은 확인 전까지 원본을 변경하지 않는다.
+  const current = () => wb === book && si === hostIndex && sheet() === hostSheet && hostSheet.charts.some(c => c.id === id);
   if (ch0.pivot) { pivotChartMetrics(id); return; }
   const host = sheet().name;
   const st = {
@@ -6221,8 +6224,10 @@ function selectDataDialog(id = chartSel) {
     return { ...ch0, range: undefined, byRows: undefined, sheet: ch0.sheet ?? host, series: st.list.map((x) => x.s) };
   };
   const rangeIn = refInput(st.range ? `=${refText(st.range, ch0.sheet ? wb.sheetIndexByName(ch0.sheet) : si, true)}` : '', si);
-  const serList = el('div', { class: 'sd-list' });
-  const catList = el('div', { class: 'sd-list' });
+  rangeIn.setAttribute('aria-label', '차트 데이터 범위'); rangeIn.dataset.accessKey = 'd';
+  let acceptedRange = rangeIn.value;
+  const serList = el('div', { class: 'sd-list', role: 'group', tabindex: '0', 'aria-label': '범례 항목(계열)', 'data-access-key': 's' });
+  const catList = el('div', { class: 'sd-list', role: 'group', tabindex: '0', 'aria-label': '가로(항목) 축 레이블', 'data-access-key': 'c' });
   const preview = el('div', { class: 'sd-preview' });
   const catsOf = () => {
     const d = chartModelData(wb, si, { ...draft(), hiddenSeries: undefined, hiddenCats: undefined });
@@ -6231,15 +6236,19 @@ function selectDataDialog(id = chartSel) {
   const draw = () => {
     const { d, cats } = catsOf();
     serList.replaceChildren(...st.list.map((x, i) => {
-      const cb = el('input', { type: 'checkbox', checked: !x.hidden });
-      cb.addEventListener('change', () => { x.hidden = !cb.checked; draw(); });
-      return el('div', { class: `sd-item${st.pick === i ? ' on' : ''}`, onclick: (e) => { if (e.target !== cb) { st.pick = i; draw(); } }, ondblclick: () => edit() }, cb, el('span', {}, d.series[i]?.name ?? `계열${i + 1}`));
+      const name = d.series[i]?.name ?? `계열${i + 1}`;
+      const cb = el('input', { type: 'checkbox', checked: !x.hidden, 'data-access-key': 'none', 'aria-label': `${name} 표시` });
+      cb.addEventListener('change', () => { x.hidden = !cb.checked; const at = i; draw(); serList.children[at]?.querySelector('input')?.focus({ preventScroll: true }); });
+      return el('div', { class: `sd-item${st.pick === i ? ' on' : ''}`, onclick: (e) => { if (e.target !== cb) { st.pick = i; draw(); serList.children[i]?.querySelector('button')?.focus({ preventScroll: true }); } }, ondblclick: () => edit() }, cb, el('button', { type: 'button', class: 'sd-series-name', 'data-access-key': 'none', 'aria-pressed': String(st.pick === i), title: name }, name));
     }));
     catList.replaceChildren(...cats.map((c, k) => {
-      const cb = el('input', { type: 'checkbox', checked: !st.hc.has(k) });
+      const cb = el('input', { type: 'checkbox', checked: !st.hc.has(k), 'data-access-key': 'none' });
       cb.addEventListener('change', () => { if (cb.checked) st.hc.delete(k); else st.hc.add(k); draw(); });
       return el('label', { class: 'sd-item' }, cb, el('span', {}, String(c)));
     }));
+    editButton.disabled = removeButton.disabled = st.list.length === 0;
+    upButton.disabled = st.pick <= 0; downButton.disabled = st.pick >= st.list.length - 1;
+    switchButton.disabled = !st.range;
     const full = final();
     setSafeHtml(preview, renderChartSvg({ ...full, w: 520, h: 200 }, chartModelData(wb, si, full)));
   };
@@ -6258,9 +6267,10 @@ function selectDataDialog(id = chartSel) {
   rangeIn.addEventListener('change', () => {
     const r = refOf(rangeIn.value);
     if (!r) { toast('차트 데이터 범위가 올바르지 않습니다.'); return; }
+    acceptedRange = rangeIn.value; st.pick = 0;
     st.range = { r1: r.r1, c1: r.c1, r2: r.r2, c2: r.c2 };
     st.dirty = false;
-    ch0.sheet = r.sheet === host ? ch0.sheet : r.sheet;
+    ch0.sheet = r.sheet;
     st.list = rangeChartSeries({ ...ch0, range: st.range, byRows: st.byRows, sheet: r.sheet }).map((s) => ({ s, fmt: {}, hidden: false }));
     st.hc.clear();
     draw();
@@ -6269,22 +6279,33 @@ function selectDataDialog(id = chartSel) {
   const btn = (label, fn, title) => el('button', { class: 'btn small', title: title ?? label, onclick: fn }, label);
   const move = (d) => { const i = st.pick; const j = i + d; if (j < 0 || j >= st.list.length) return; toSeries(); [st.list[i], st.list[j]] = [st.list[j], st.list[i]]; st.pick = j; draw(); };
   const catRef = () => st.list.find((x) => x.s.cat)?.s.cat ?? null;
+  serList.addEventListener('keydown', e => {
+    if (!['ArrowUp', 'ArrowDown', 'Home', 'End', 'F2', 'Delete'].includes(e.key) || e.ctrlKey || e.altKey || e.metaKey) return;
+    e.preventDefault(); e.stopPropagation();
+    if (e.key === 'F2') { edit(); return; }
+    if (e.key === 'Delete') { removeButton.click(); serList.focus(); return; }
+    st.pick = Math.max(0, Math.min(st.list.length - 1, e.key === 'Home' ? 0 : e.key === 'End' ? st.list.length - 1 : st.pick + (e.key === 'ArrowDown' ? 1 : -1)));
+    draw(); const target = serList.children[st.pick]?.querySelector('button'); target?.focus(); target?.scrollIntoView({ block: 'nearest' });
+  });
+  const editButton = btn('편집(E)', edit);
+  const removeButton = btn('제거(R)', () => { if (!st.list.length) return; toSeries(); st.list.splice(st.pick, 1); st.pick = Math.max(0, Math.min(st.pick, st.list.length - 1)); draw(); });
+  const upButton = btn('▲', () => move(-1), '위로 이동'), downButton = btn('▼', () => move(1), '아래로 이동');
+  upButton.setAttribute('aria-label', '위로 이동'); downButton.setAttribute('aria-label', '아래로 이동');
+  const switchButton = btn('행/열 전환(W)', () => {
+    if (!st.range) return;
+    st.byRows = !st.byRows; st.dirty = false;
+    st.list = rangeChartSeries({ ...ch0, range: st.range, byRows: st.byRows, sheet: ch0.sheet ?? host }).map(s => ({ s, fmt: {}, hidden: false }));
+    st.hc.clear(); st.pick = 0; draw();
+  });
   const body = el('div', { class: 'sd-dlg' },
     el('div', { class: 'sd-range' }, el('span', {}, '차트 데이터 범위(D):'), rangeIn),
-    el('div', { class: 'sd-switch' }, btn('⇄ 행/열 전환(W)', () => {
-      if (!st.range) { toast('범위로 만든 차트에서만 행/열을 바꿀 수 있습니다. (계열을 직접 편집한 차트)'); return; }
-      st.byRows = !st.byRows; st.dirty = false;
-      st.list = rangeChartSeries({ ...ch0, range: st.range, byRows: st.byRows, sheet: ch0.sheet ?? host }).map((s) => ({ s, fmt: {}, hidden: false }));
-      st.hc.clear(); st.pick = 0; draw();
-    })),
+    el('div', { class: 'sd-switch' }, switchButton),
     el('div', { class: 'sd-cols' },
       el('div', { class: 'sd-col' },
         el('div', { class: 'fc-title' }, '범례 항목(계열)(S)'),
         el('div', { class: 'sd-bar' },
           btn('+ 추가(A)', () => seriesEditDialog({ name: null, val: null, cat: catRef() ?? undefined }, draft(), ({ name, val }) => { toSeries(); st.list.push({ s: { name: name ?? undefined, val, ...(catRef() ? { cat: catRef() } : {}) }, fmt: {}, hidden: false }); st.pick = st.list.length - 1; draw(); })),
-          btn('편집(E)', edit),
-          btn('× 제거(R)', () => { if (!st.list.length) return; toSeries(); st.list.splice(st.pick, 1); st.pick = Math.max(0, Math.min(st.pick, st.list.length - 1)); draw(); }),
-          btn('▲', () => move(-1), '위로 이동'), btn('▼', () => move(1), '아래로 이동')),
+          editButton, removeButton, upButton, downButton),
         serList),
       el('div', { class: 'sd-col' },
         el('div', { class: 'fc-title' }, '가로(항목) 축 레이블(C)'),
@@ -6294,13 +6315,15 @@ function selectDataDialog(id = chartSel) {
           st.hc.clear(); draw();
         }))),
         catList)),
-    preview);
+    el('details', { class: 'sd-preview-section' }, el('summary', {}, '차트 미리 보기'), preview));
   draw();
   openDialog({
     title: '데이터 원본 선택', width: 620, modeless: true, body,
     buttons: [
       {
         label: '확인', primary: true, action: () => {
+          if (!current()) { toast('차트가 있는 문서와 시트에서 다시 여세요.'); return false; }
+          if (rangeIn.value !== acceptedRange) { rangeIn.dispatchEvent(new Event('change')); if (rangeIn.value !== acceptedRange) { rangeIn.focus(); return false; } }
           const f = final();
           if (!f.range && !f.series?.length) { toast('계열이 하나 이상 있어야 합니다.'); return false; }
           if (f.hiddenSeries?.length === st.list.length) { toast('계열을 하나 이상 표시하세요.'); return false; }
@@ -6319,24 +6342,38 @@ function selectDataDialog(id = chartSel) {
 function chartMoveDialog() {
   const ch = chartHere();
   if (!ch) { toast('차트를 선택하세요.'); return; }
-  const others = wb.sheets.map((s, i) => ({ s, i })).filter(({ s, i }) => i !== si && !s.external && !s.veryHidden);
-  formDialog('차트 이동', [
-    { name: 'mode', label: '차트를 넣을 위치', type: 'select', value: others.length ? 'sheet' : 'new', options: [{ value: 'new', label: '새 시트' }, ...(others.length ? [{ value: 'sheet', label: '워크시트에 삽입' }] : [])] },
-    { name: 'newName', label: '새 시트 이름', value: nextSheetName('Chart1') },
-    ...(others.length ? [{ name: 'target', label: '워크시트', type: 'select', value: String(others[0].i), options: others.map(({ s, i }) => ({ value: String(i), label: s.name })) }] : []),
-  ], (v) => {
-    const host = sheet().name;
-    // 다른 시트로 가도 원래 데이터를 가리키도록 시트 이름을 고정
-    const moved = { ...ch, sheet: ch.sheet ?? host, ...(ch.pivot ? { pivot: { ...ch.pivot, sheet: ch.pivot.sheet ?? host } } : {}) };
-    wb.transact(() => {
-      const to = v.mode === 'new' ? wb.addSheet(nextSheetName(v.newName || 'Chart1'), si + 1) : Number(v.target);
-      wb.setSheetProp(si, 'charts', sheet().charts.filter((c) => c.id !== ch.id));
-      const list = wb.sheets[to].charts ?? [];
-      wb.setSheetProp(to, 'charts', [...list, v.mode === 'new' ? { ...moved, x: 20, y: 20, w: Math.max(moved.w, 720), h: Math.max(moved.h, 432) } : moved]);
-      chartSel = null;
-    }, meta());
-    switchSheet(v.mode === 'new' ? si + 1 : Number(v.target));
-    toast('차트를 옮겼습니다.');
+  const book = wb, hostIndex = si, hostSheet = sheet();
+  const targets = wb.sheets.map((sheet, i) => ({ sheet, i })).filter(({ sheet }) => !sheet.external && !sheet.veryHidden && !sheet.hidden);
+  let mode = 'sheet';
+  const newName = el('input', { type: 'text', value: nextSheetName('Chart1'), disabled: true, 'aria-label': '새 시트 이름', maxlength: 31 });
+  const target = el('select', { 'aria-label': '대상 워크시트' }, targets.map(({ sheet, i }) => el('option', { value: i, selected: i === hostIndex }, sheet.name)));
+  const choose = (value, label, input) => {
+    const radio = el('input', { type: 'radio', name: 'chart-move-target', value, checked: value === mode });
+    radio.addEventListener('change', () => { mode = value; newName.disabled = mode !== 'new'; target.disabled = mode !== 'sheet'; });
+    return el('div', { class: 'chart-move-row' }, el('label', {}, radio, el('span', {}, label)), input);
+  };
+  openDialog({ title: '차트 이동', width: 560,
+    body: el('div', { class: 'chart-move' }, el('p', { class: 'chart-move-intro' }, '차트를 넣을 위치를 선택하세요.'),
+      choose('new', '새 시트(S)', newName), choose('sheet', '워크시트에 삽입(O)', target),
+      el('p', { class: 'muted' }, '새 시트는 차트를 크게 배치한 새 워크시트입니다. 원본 데이터 참조는 유지됩니다.')),
+    buttons: [{ label: '확인', primary: true, action: () => {
+      if (wb !== book || si !== hostIndex || sheet() !== hostSheet || !hostSheet.charts.some(c => c.id === ch.id)) { toast('차트가 있는 문서와 시트에서 다시 여세요.'); return false; }
+      const name = newName.value.trim(), toSheet = Number(target.value);
+      if (mode === 'new' && (!name || name.length > 31 || /[\\/?*\[\]:]/.test(name) || wb.sheetIndexByName(name) >= 0)) { toast('새 시트 이름은 중복 없이 31자 이내로 입력하세요. \\ / ? * [ ] : 문자는 사용할 수 없습니다.'); newName.focus(); return false; }
+      if (mode === 'sheet' && toSheet === hostIndex) return true;
+      if (mode === 'sheet' && (!targets.some(t => t.i === toSheet) || (isProtected(wb.sheets[toSheet]) && !allowed(wb.sheets[toSheet], 'objects')))) { toast('대상 워크시트의 편집 권한을 확인하세요.'); return false; }
+      const current = hostSheet.charts.find(c => c.id === ch.id);
+      const moved = { ...current, sheet: current.sheet ?? hostSheet.name, ...(current.pivot ? { pivot: { ...current.pivot, sheet: current.pivot.sheet ?? hostSheet.name } } : {}) };
+      let to = toSheet;
+      wb.transact(() => {
+        if (mode === 'new') to = wb.addSheet(name, hostIndex + 1);
+        wb.setSheetProp(hostIndex, 'charts', hostSheet.charts.filter(c => c.id !== ch.id));
+        wb.setSheetProp(to, 'charts', [...(wb.sheets[to].charts ?? []), mode === 'new' ? { ...moved, x: 20, y: 20, w: Math.max(moved.w, 720), h: Math.max(moved.h, 432) } : moved]);
+        chartSel = null;
+      }, meta());
+      switchSheet(to); toast('차트를 옮겼습니다.');
+      return true;
+    } }, { label: '취소' }],
   });
 }
 
@@ -6426,6 +6463,12 @@ function deleteChartPart() {
   updateChart(chart.id, patch); chartPart = null; chartElementDrag = null; gv.renderObjectsAll(); syncChartPane(); updateSelectionUI(); focusGrid();
 }
 function syncChartPane() {
+  if (shapePaneDlg && shapePaneDlg.chartId !== chartSel) {
+    const tab = shapePaneDlg.getSelectedTab?.();
+    shapePaneDlg.close();
+    const next = findObject(sheet(), chartSel);
+    if (next?.prop === 'shapes' && !isSmartArt(next.obj)) shapeDialog(chartSel, null, tab);
+  }
   if (!chartPaneDlg || !chartSel || !sheet().charts.some(c => c.id === chartSel)) return;
   if (chartPaneDlg.chartId !== chartSel) chartFormatPane(chartSel); else chartPaneDlg.selectPart?.();
 }
@@ -6455,6 +6498,7 @@ function chartFormatPane(id = chartSel) {
   if (chartPaneDlg) chartPaneDlg.close();
   const body = el('div', { class: 'cfp' });
   let activeCategory = '차트 옵션', activeElement = 'all', selectedPoint = 0;
+  const expanded = new Map();
   const book = wb, host = si, hostSheet = sheet();
   const get = () => wb === book && si === host && sheet() === hostSheet ? hostSheet.charts.find(c => c.id === id) : null;
   const up = patch => { const chart = get(); if (!chart || !chartCanEdit(chart)) return; updateChart(id, patch); gv.renderObjectsAll(); };
@@ -6470,11 +6514,16 @@ function chartFormatPane(id = chartSel) {
   const chk = (v, fn) => { const i = el('input', { type: 'checkbox', checked: !!v }); i.addEventListener('change', () => fn(i.checked)); return i; };
   const sel2 = (v, opts, fn) => { const s = el('select', {}, opts.map(([k, l]) => el('option', { value: k, selected: String(v ?? '') === String(k) }, l))); s.addEventListener('change', () => fn(s.value)); return s; };
   const draw = () => {
+    for (const section of body.querySelectorAll(':scope > details')) expanded.set(section.querySelector('summary')?.textContent, section.open);
+    const focus = body.contains(document.activeElement) ? { label: document.activeElement.getAttribute('aria-label'), section: document.activeElement.closest('.cfp-sec')?.querySelector('summary')?.textContent, series: document.activeElement.closest('[data-format-series]')?.dataset.formatSeries, start: document.activeElement.selectionStart, end: document.activeElement.selectionEnd } : null;
+    const scroll = body.closest('.dialog-body')?.scrollTop ?? 0;
     const ch = get();
     if (!ch) { body.replaceChildren(el('p', {}, '차트가 삭제되었거나 다른 문서·시트로 이동했습니다. 차트를 다시 선택하세요.')); return; }
     const axis = (k) => ch.axes?.[k] ?? {};
     const setAx = (k, patch) => { const current = get().axes ?? {}; up({ axes: { ...current, [k]: { ...current[k], ...patch } } }); };
     const data = chartModelData(wb, si, { ...ch, hiddenSeries: undefined });
+    const barSeries = data.series.some(s => ['column', 'bar'].includes(s.type ?? ch.type));
+    const groupable = ['column', 'bar', 'line', 'area', 'combo'].includes(ch.type);
     const v3 = chartView3D(ch);
     const set3D = (patch) => up({ view3D: { ...chartView3D(get()), ...patch } });
     body.replaceChildren(...[
@@ -6534,10 +6583,10 @@ function chartFormatPane(id = chartSel) {
         ['column', 'line', 'area', 'combo', 'waterfall', 'histogram', 'pareto', 'boxWhisker', 'stock'].includes(ch.type) ? row('데이터 표', chk(ch.dataTable, (v) => { up({ dataTable: v || undefined }); draw(); })) : null,
         ch.dataTable && ['waterfall', 'histogram', 'pareto', 'boxWhisker'].includes(ch.type) ? el('p', { class: 'muted' }, '통계 데이터 표는 위셀 표시 기능입니다. XLSX에는 위셀 설정으로 보관되며 Excel의 데이터 표로 표시되지는 않습니다.') : null),
       sec('계열 옵션',
-        row('간격 너비(%)', num(ch.gap, (v) => up({ gap: v }), { min: 0, max: 500 })),
-        !ch.threeD ? row('계열 겹치기(%)', num(ch.overlap, (v) => up({ overlap: v }), { min: -100, max: 100 })) : null,
+        barSeries ? row('간격 너비(%)', num(ch.gap, (v) => up({ gap: v }), { min: 0, max: 500 })) : null,
+        barSeries && !ch.threeD ? row('계열 겹치기(%)', num(ch.overlap, (v) => up({ overlap: v }), { min: -100, max: 100 })) : null,
         row('요소마다 다른 색', chk(ch.varyColors, (v) => up({ varyColors: v || undefined }))),
-        row('배치', sel2(ch.grouping ?? 'clustered', [['clustered', '묶은'], ['stacked', '누적'], ['percentStacked', '100% 기준 누적']], (v) => up({ grouping: v === 'clustered' ? undefined : v }))),
+        groupable ? row('배치', sel2(ch.grouping ?? 'clustered', [['clustered', '묶은'], ['stacked', '누적'], ['percentStacked', '100% 기준 누적']], (v) => up({ grouping: v === 'clustered' ? undefined : v }))) : null,
         ch.type === 'doughnut' ? row('도넛 구멍 크기(%)', num(ch.hole ?? 50, (v) => up({ hole: v }), { min: 10, max: 90 })) : null,
         ch.type === 'pie' || ch.type === 'doughnut' ? row('첫째 조각 각(°)', num(ch.firstAngle ?? 0, (v) => up({ firstAngle: v }), { min: 0, max: 360 })) : null,
         ['pie', 'doughnut'].includes(ch.type) ? row('쪼개기(%)', num(ch.explode ?? 0, (v) => up({ explode: v || undefined }), { min: 0, max: 40 })) : null,
@@ -6573,20 +6622,22 @@ function chartFormatPane(id = chartSel) {
           row('합계 색', color(ch.totalColor ?? paletteOf(ch)[2], (v) => up({ totalColor: v }), false))) : null,
         ...data.series.map((s, i) => {
           const f = { ...((ch.seriesFmt ?? [])[i] ?? {}) };
+          const type = f.type ?? s.type ?? ch.type, hasLine = !ch.threeD && ['line', 'scatter', 'radar'].includes(type);
+          const canSmooth = !ch.threeD && ['line', 'scatter'].includes(type);
           const setF = (patch) => { const list = [...(get().seriesFmt ?? [])]; while (list.length <= i) list.push({}); list[i] = { ...list[i], ...patch }; Object.assign(f, patch); up({ seriesFmt: list }); };
           return el('div', { class: 'cfp-series', 'data-format-series': i },
             el('b', {}, (s.name || `계열${i + 1}`) + (ch.hiddenSeries?.includes(i) ? ' (숨김)' : '')),
             row('색', color(s.color ?? paletteOf(ch)[i % paletteOf(ch).length], (v) => setF({ color: v }), false)),
-            !ch.threeD && ['column', 'line', 'area', 'combo'].includes(ch.type) ? row('종류', sel2(f.type ?? '', [['', '기본'], ['column', '막대'], ['line', '꺾은선'], ['area', '영역']], (v) => setF({ type: v || undefined }))) : null,
+            !ch.threeD && ['column', 'line', 'area', 'combo'].includes(ch.type) ? row('종류', sel2(f.type ?? '', [['', '기본'], ['column', '막대'], ['line', '꺾은선'], ['area', '영역']], (v) => { setF({ type: v || undefined }); draw(); })) : null,
             !ch.threeD && ['column', 'line', 'area', 'combo'].includes(ch.type) ? row('축', sel2(f.axis ?? s.axis ?? 0, [[0, '기본 축'], [1, '보조 축']], (v) => setF({ axis: Number(v) }))) : null,
-            row('선 굵기(px)', num(f.lineWidth, (v) => setF({ lineWidth: v }), { min: 0.5, max: 12, step: 0.25 })),
-            row('표식', sel2(f.marker ?? '', [['', '자동'], ['none', '없음'], ['circle', '원'], ['square', '사각형'], ['diamond', '마름모'], ['triangle', '삼각형']], (v) => setF({ marker: v || undefined }))),
-            row('부드러운 선', chk(f.smooth, (v) => setF({ smooth: v || undefined }))),
+            hasLine ? row('선 굵기(px)', num(f.lineWidth, (v) => setF({ lineWidth: v }), { min: 0.5, max: 12, step: 0.25 })) : null,
+            hasLine ? row('표식', sel2(f.marker ?? '', [['', '자동'], ['none', '없음'], ['circle', '원'], ['square', '사각형'], ['diamond', '마름모'], ['triangle', '삼각형']], (v) => setF({ marker: v || undefined }))) : null,
+            canSmooth ? row('부드러운 선', chk(f.smooth, (v) => setF({ smooth: v || undefined }))) : null,
             row('레이블', chk(f.labels, (v) => setF({ labels: v }))),
             row('레이블 형식', txt(f.numFmt, (v) => setF({ numFmt: v || undefined }))),
             row('레이블 위치', sel2(f.labelPos ?? '', [['', '자동'], ['outEnd', '바깥쪽 끝에'], ['insideEnd', '안쪽 끝에'], ['center', '가운데'], ['insideBase', '축 쪽에']], (v) => setF({ labelPos: v || undefined }))),
-            row('선 종류', sel2(f.dash ?? '', [['', '실선'], ['dash', '파선'], ['dot', '점선'], ['dashDot', '일점 쇄선'], ['longDash', '긴 파선']], (v) => setF({ dash: v || undefined }))),
-            row('표식 크기', num(f.markerSize, (v) => setF({ markerSize: v }), { min: 2, max: 30 })),
+            hasLine ? row('선 종류', sel2(f.dash ?? '', [['', '실선'], ['dash', '파선'], ['dot', '점선'], ['dashDot', '일점 쇄선'], ['longDash', '긴 파선']], (v) => setF({ dash: v || undefined }))) : null,
+            hasLine ? row('표식 크기', num(f.markerSize, (v) => setF({ markerSize: v }), { min: 2, max: 30 })) : null,
             row('테두리 색', color(f.outline, (v) => setF({ outline: v }))),
             !ch.threeD && ['column', 'bar', 'line', 'area', 'combo'].includes(ch.type) ? row('추세선', sel2(f.trend ?? '', [['', '없음'], ['linear', '선형'], ['exp', '지수'], ['movingAvg', '이동 평균']], (v) => { setF({ trend: v || undefined }); draw(); })) : null,
             !ch.threeD && ['column', 'bar', 'line', 'area', 'combo'].includes(ch.type) && f.trend === 'movingAvg' ? row('이동 평균 구간', num(f.trendPeriod ?? 3, (v) => setF({ trendPeriod: v }), { min: 2, max: 50 })) : null,
@@ -6595,6 +6646,7 @@ function chartFormatPane(id = chartSel) {
         })),
     ].filter(Boolean));
     const sections = [...body.children];
+    for (const section of sections) { const title = section.querySelector('summary')?.textContent; if (expanded.has(title)) section.open = expanded.get(title); }
     const category = (section) => {
       const title = section.querySelector('summary')?.textContent ?? '';
       return title === '3차원 회전' ? title : title === '차트 영역' ? '채우기 및 선' : title === '차트 제목' || title === '범례 · 레이블' ? '텍스트 및 범례' : '차트 옵션';
@@ -6602,10 +6654,10 @@ function chartFormatPane(id = chartSel) {
     const categories = ['차트 옵션', '채우기 및 선', '텍스트 및 범례', '3차원 회전'].filter((name) => sections.some((s) => category(s) === name));
     if (!categories.includes(activeCategory)) activeCategory = categories[0];
     const tabs = el('div', { class: 'format-pane-tabs', role: 'tablist', 'aria-label': '차트 서식 범주' });
-    const select = (name, keepElement = false) => {
+    const select = (name, keepElement = false, reveal = true) => {
       if (!keepElement) { activeElement = 'all'; const picker = body.querySelector('.cfp-element-picker select'); if (picker) picker.value = 'all'; body.querySelectorAll('.cfp-series').forEach((node) => { node.hidden = false; }); }
       activeCategory = name;
-      for (const section of sections) { section.hidden = category(section) !== name; if (!keepElement && !section.hidden) section.open = true; }
+      for (const section of sections) { section.hidden = category(section) !== name; if (reveal && !keepElement && !section.hidden) section.open = true; }
       for (const button of tabs.children) { button.setAttribute('aria-selected', String(button.textContent === name)); button.tabIndex = button.textContent === name ? 0 : -1; }
     };
     for (const name of categories) {
@@ -6625,20 +6677,22 @@ function chartFormatPane(id = chartSel) {
       ...data.series.map((series, i) => el('option', { value: `series:${i}` }, `계열: ${series.name || i + 1}${ch.hiddenSeries?.includes(i) ? ' (숨김)' : ''}`)));
     if (![...picker.options].some((option) => option.value === activeElement)) activeElement = 'all';
     picker.value = activeElement;
-    const selectElement = () => {
+    const selectElement = (restore = false) => {
       activeElement = picker.value;
       const [kind, value] = activeElement.split(':'), index = Number(value);
       for (const node of body.querySelectorAll('.cfp-series')) node.hidden = kind === 'series' && Number(node.dataset.formatSeries) !== index;
-      if (kind === 'all') { select(activeCategory); return; }
+      if (kind === 'all') { select(activeCategory, false, !restore); return; }
       const section = kind === 'series' ? [...sections].find((item) => item.querySelector(`[data-format-series="${index}"]`)) : sections[index];
       if (!section) return;
       select(category(section), true);
-      for (const item of sections) { item.hidden = item !== section; item.open = item === section; }
+      for (const item of sections) { item.hidden = item !== section; if (!restore) item.open = item === section; }
     };
-    picker.addEventListener('change', selectElement);
+    picker.addEventListener('change', () => selectElement());
     tabs.addEventListener('click', () => { activeElement = 'all'; picker.value = 'all'; body.querySelectorAll('.cfp-series').forEach((node) => { node.hidden = false; }); });
     body.prepend(el('label', { class: 'cfp-element-picker' }, '차트 요소', picker), tabs);
-    selectElement();
+    selectElement(true);
+    if (focus?.label) { const next = [...body.querySelectorAll('[aria-label]')].find(n => n.getAttribute('aria-label') === focus.label && n.closest('.cfp-sec')?.querySelector('summary')?.textContent === focus.section && n.closest('[data-format-series]')?.dataset.formatSeries === focus.series && !n.disabled && !n.closest('[hidden]')); if (next) { next.focus({ preventScroll: true }); if (typeof focus.start === 'number') { try { next.setSelectionRange(focus.start, focus.end); } catch { /* 숫자 입력 */ } } } }
+    if (body.closest('.dialog-body')) body.closest('.dialog-body').scrollTop = scroll;
   };
   for (const eventName of ['change', 'click']) body.addEventListener(eventName, event => { if (!get()) { event.preventDefault(); event.stopImmediatePropagation(); draw(); } }, true);
   draw();
@@ -8142,15 +8196,13 @@ function textToColumns() {
 
   // 상태
   const firstLines = lines.filter((l) => l).slice(0, 50);
-  const guess = { tab: firstLines.some((l) => l.includes('\t')), comma: firstLines.some((l) => l.includes(',')), semicolon: false, space: false, other: '' };
-  if (!guess.tab && !guess.comma) guess.space = firstLines.some((l) => l.trim().includes(' '));
-  const o = { mode: 'delimited', ...guess, consecutive: guess.space, qualifier: '"', breaks: suggestBreaks(firstLines) };
+  const o = { mode: 'delimited', tab: true, comma: false, semicolon: false, space: false, other: '', otherEnabled: false, consecutive: false, qualifier: '"', breaks: suggestBreaks(firstLines) };
   let colFmts = [];
   let selCol = 0;
   let step = 1;
   const dest = { text: `$${colToName(rg.c1)}$${rg.r1 + 1}` };
 
-  const split = (line) => (o.mode === 'delimited' ? splitDelimited(line, o) : splitFixed(line, o.breaks));
+  const split = (line) => (o.mode === 'delimited' ? splitDelimited(line, { ...o, other: o.otherEnabled ? o.other : '' }) : splitFixed(line, o.breaks));
   const previewRows = () => lines.slice(0, 12).map(split);
   const colCount = () => Math.max(1, ...lines.slice(0, 2000).map((l) => split(l).length));
 
@@ -8158,6 +8210,9 @@ function textToColumns() {
   const stepTitle = el('div', { class: 'ttc-step' });
   const content = el('div', { class: 'ttc-content' });
   body.append(stepTitle, content);
+  let dialogRoot = null;
+  const footerButton = (key) => dialogRoot?.querySelector(`.dialog-foot [data-access-key="${key}"]`);
+  const defaultButton = () => footerButton(step < 3 ? 'n' : 'f');
 
   const previewTable = (rows, { headers = null, onPick = null } = {}) => {
     const n = delimitedRowWidth(rows);
@@ -8165,7 +8220,20 @@ function textToColumns() {
     if (headers) {
       t.append(el('tr', {}, [...Array(n)].map((_, i) => {
         const th = el('th', { class: `${i === selCol ? 'on' : ''}${colFmts[i]?.fmt === 'skip' ? ' skip' : ''}` }, headers(i));
-        if (onPick) th.addEventListener('click', () => onPick(i));
+        if (onPick) {
+          th.tabIndex = i === selCol ? 0 : -1;
+          th.setAttribute('role', 'button');
+          th.setAttribute('aria-label', `${i + 1}번째 열: ${headers(i)}`);
+          th.setAttribute('aria-pressed', String(i === selCol));
+          th.dataset.accessKey = 'none';
+          th.dataset.ttcFocus = `column-${i}`;
+          th.addEventListener('click', () => onPick(i));
+          th.addEventListener('keydown', (e) => {
+            if (e.isComposing || e.keyCode === 229) return;
+            const next = e.key === 'ArrowLeft' ? Math.max(0, i - 1) : e.key === 'ArrowRight' ? Math.min(n - 1, i + 1) : e.key === 'Home' ? 0 : e.key === 'End' ? n - 1 : null;
+            if (next !== null || e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); onPick(next ?? i); }
+          });
+        }
         return th;
       })));
     }
@@ -8179,13 +8247,13 @@ function textToColumns() {
     return el('div', { class: 'ttc-preview' }, t);
   };
 
-  const radio = (name, value, cur, label, onChange) => {
-    const i = el('input', { type: 'radio', name, value, checked: cur === value });
+  const radio = (name, value, cur, label, key, onChange) => {
+    const i = el('input', { type: 'radio', name, value, checked: cur === value, 'data-access-key': key, 'data-ttc-focus': `${name}-${value}` });
     i.addEventListener('change', () => { if (i.checked) onChange(value); });
     return el('label', { class: 'fc-check' }, i, label);
   };
-  const check = (key, label) => {
-    const i = el('input', { type: 'checkbox', checked: !!o[key] });
+  const check = (key, label, accessKey) => {
+    const i = el('input', { type: 'checkbox', checked: !!o[key], 'data-access-key': accessKey, 'data-ttc-focus': key });
     i.addEventListener('change', () => { o[key] = i.checked; render(); });
     return el('label', { class: 'fc-check' }, i, label);
   };
@@ -8216,40 +8284,57 @@ function textToColumns() {
 
   // 텍스트 가져오기 고급 설정: 숫자 데이터 인식 (소수 · 1000 단위 구분 기호, 음수일 경우 마이너스 표시)
   const numOpt = { decimal: '.', thousand: ',', trailingMinus: true };
-  const advDialog = () => formDialog('텍스트 가져오기 고급 설정', [
-    { name: 'decimal', label: '소수 구분 기호', type: 'select', value: numOpt.decimal, options: ['.', ',', "'", ' '].map((c) => ({ value: c, label: c === ' ' ? '(공백)' : c })) },
-    { name: 'thousand', label: '1000 단위 구분 기호', type: 'select', value: numOpt.thousand, options: [',', '.', "'", ' '].map((c) => ({ value: c, label: c === ' ' ? '(공백)' : c })) },
-    { name: 'trailingMinus', label: '음수일 경우 마이너스 표시 (1234- → -1234)', type: 'checkbox', value: numOpt.trailingMinus },
-  ], (v) => {
-    if (v.decimal === v.thousand) { toast('소수 구분 기호와 1000 단위 구분 기호는 달라야 합니다.'); return false; }
-    Object.assign(numOpt, v);
-    return undefined;
-  });
+  const advDialog = () => {
+    const select = (label, key, value, choices) => el('select', { 'aria-label': label, 'data-access-key': key }, choices.map((c) => el('option', { value: c, selected: c === value }, c === ' ' ? '(공백)' : c)));
+    const decimal = select('소수 구분 기호', 'd', numOpt.decimal, ['.', ',', "'", ' ']);
+    const thousand = select('1000 단위 구분 기호', 't', numOpt.thousand, [',', '.', "'", ' ']);
+    const trailingMinus = el('input', { type: 'checkbox', checked: numOpt.trailingMinus, 'data-access-key': 'm' });
+    openDialog({
+      title: '텍스트 가져오기 고급 설정', width: 460,
+      onOpen: (dialog) => { const close = dialog.querySelector('.dialog-head button'); close.removeAttribute('data-dialog-close-head'); close.dataset.accessKey = 'none'; },
+      body: el('div', { class: 'fc-col' },
+        el('label', { class: 'fc-field' }, el('span', {}, '소수 구분 기호(D)'), decimal),
+        el('label', { class: 'fc-field' }, el('span', {}, '1000 단위 구분 기호(T)'), thousand),
+        el('label', { class: 'fc-check' }, trailingMinus, '숫자 뒤의 빼기 기호를 음수로 처리(M) (1234- → -1234)')),
+      initialFocus: () => decimal,
+      buttons: [
+        { label: '원래대로(R)', accessKey: 'r', action: () => { decimal.value = '.'; thousand.value = ','; trailingMinus.checked = true; return false; } },
+        { label: '확인', primary: true, action: () => {
+          if (decimal.value === thousand.value) { toast('소수 구분 기호와 1000 단위 구분 기호는 달라야 합니다.'); return false; }
+          Object.assign(numOpt, { decimal: decimal.value, thousand: thousand.value, trailingMinus: trailingMinus.checked });
+        } },
+        { label: '취소' },
+      ],
+    });
+  };
   const render = () => {
+    const focused = content.contains(document.activeElement) ? document.activeElement : null;
+    const token = focused?.dataset.ttcFocus;
+    const caret = focused?.type === 'text' ? [focused.selectionStart, focused.selectionEnd] : null;
     content.replaceChildren();
     if (step === 1) {
       stepTitle.textContent = '1/3단계 — 원본 데이터 형식';
       content.append(
         el('div', { class: 'muted' }, '데이터를 나눌 방법을 선택하세요.'),
-        radio('ttcmode', 'delimited', o.mode, '구분 기호로 분리됨 — 각 필드가 쉼표나 탭, 공백 같은 문자로 나뉘어 있음', (v) => { o.mode = v; render(); }),
-        radio('ttcmode', 'fixed', o.mode, '너비가 일정함 — 각 필드가 같은 너비로 정렬되어 있음', (v) => { o.mode = v; render(); }),
+        radio('ttcmode', 'delimited', o.mode, '구분 기호로 분리됨(D) — 각 필드가 쉼표나 탭, 공백 같은 문자로 나뉘어 있음', 'd', (v) => { o.mode = v; render(); }),
+        radio('ttcmode', 'fixed', o.mode, '너비가 일정함(W) — 각 필드가 같은 너비로 정렬되어 있음', 'w', (v) => { o.mode = v; render(); }),
         el('div', { class: 'fc-title' }, `선택한 데이터 미리 보기 (${cellName(rg.r1, rg.c1)}:${cellName(rg.r2, rg.c2)})`),
         el('pre', { class: 'ttc-raw' }, lines.slice(0, 10).map((l, i) => `${rg.r1 + i + 1}  ${l}`).join('\n')),
       );
     } else if (step === 2) {
       if (o.mode === 'delimited') {
         stepTitle.textContent = '2/3단계 — 구분 기호';
-        const other = el('input', { type: 'text', value: o.other, maxlength: 1, style: { width: '32px' } });
-        other.addEventListener('input', () => { o.other = other.value; render(); setTimeout(() => { const x = content.querySelector('input[maxlength="1"]'); x?.focus(); x?.setSelectionRange(1, 1); }); });
-        const qual = el('select', {}, [['"', '"'], ["'", "'"], ['', '{없음}']].map(([v, l]) => el('option', { value: v, selected: o.qualifier === v }, l)));
+        const other = el('input', { type: 'text', value: o.other, maxlength: 1, disabled: !o.otherEnabled, 'aria-label': '기타 구분 기호', 'data-access-key': 'none', 'data-ttc-focus': 'other', style: { width: '48px' } });
+        other.addEventListener('input', () => { o.other = other.value; render(); });
+        const qual = el('select', { 'aria-label': '텍스트 한정자', 'data-access-key': 'q', 'data-ttc-focus': 'qualifier' }, [['"', '"'], ["'", "'"], ['', '{없음}']].map(([v, l]) => el('option', { value: v, selected: o.qualifier === v }, l)));
         qual.addEventListener('change', () => { o.qualifier = qual.value; render(); });
         content.append(
           el('div', { class: 'ttc-opts' },
             el('div', { class: 'fc-col' }, el('div', { class: 'fc-title' }, '구분 기호'),
-              check('tab', '탭'), check('semicolon', '세미콜론(;)'), check('comma', '쉼표(,)'), check('space', '공백(띄어쓰기)'),
-              el('label', { class: 'fc-check' }, el('span', {}, '기타:'), other)),
-            el('div', { class: 'fc-col' }, el('div', { class: 'fc-title' }, '옵션'), check('consecutive', '연속된 구분 기호를 하나로 처리'),
-              el('label', { class: 'fc-field' }, el('span', {}, '텍스트 한정자'), qual))),
+              check('tab', '탭(T)', 't'), check('semicolon', '세미콜론(M)', 'm'), check('comma', '쉼표(C)', 'c'), check('space', '공백(S)', 's'),
+              el('div', { class: 'fc-row' }, check('otherEnabled', '기타(O)', 'o'), other)),
+            el('div', { class: 'fc-col' }, el('div', { class: 'fc-title' }, '옵션'), check('consecutive', '연속된 구분 기호를 하나로 처리(R)', 'r'),
+              el('label', { class: 'fc-field' }, el('span', {}, '텍스트 한정자(Q)'), qual))),
           el('div', { class: 'fc-title' }, '데이터 미리 보기'),
           previewTable(previewRows()),
         );
@@ -8268,10 +8353,10 @@ function textToColumns() {
       colFmts = [...Array(n)].map((_, i) => colFmts[i] ?? { fmt: 'general', order: 'YMD' });
       selCol = Math.min(selCol, n - 1);
       const cf = colFmts[selCol];
-      const order = el('select', { disabled: cf.fmt !== 'date' }, DATE_ORDERS.map((d) => el('option', { value: d, selected: cf.order === d }, DATE_ORDER_LABEL[d])));
+      const order = el('select', { disabled: cf.fmt !== 'date', 'aria-label': '날짜 순서', 'data-access-key': 'none', 'data-ttc-focus': 'date-order' }, DATE_ORDERS.map((d) => el('option', { value: d, selected: cf.order === d }, DATE_ORDER_LABEL[d])));
       order.addEventListener('change', () => { cf.order = order.value; render(); });
       const setFmt = (v) => { cf.fmt = v; render(); };
-      const destIn = el('input', { type: 'text', value: dest.text, style: { width: '120px' } });
+      const destIn = el('input', { type: 'text', value: dest.text, 'aria-label': '대상', 'data-access-key': 'e', 'data-ttc-focus': 'destination', style: { width: '120px' } });
       destIn.addEventListener('input', () => { dest.text = destIn.value; });
       const label = (i) => ({ general: '일반', text: '텍스트', date: `날짜(${DATE_ORDER_LABEL[colFmts[i].order]})`, skip: '건너뜀' }[colFmts[i].fmt]);
       const shown = previewRows().map((r) => r.map((v, i) => {
@@ -8283,19 +8368,28 @@ function textToColumns() {
       content.append(
         el('div', { class: 'ttc-opts' },
           el('div', { class: 'fc-col' }, el('div', { class: 'fc-title' }, `열 데이터 서식 — ${selCol + 1}번째 열`),
-            radio('ttcfmt', 'general', cf.fmt, '일반 (숫자는 숫자로, 날짜는 날짜로)', setFmt),
-            radio('ttcfmt', 'text', cf.fmt, '텍스트 (앞의 0 유지)', setFmt),
-            el('div', { class: 'fc-row' }, radio('ttcfmt', 'date', cf.fmt, '날짜:', setFmt), order),
-            radio('ttcfmt', 'skip', cf.fmt, '열 가져오지 않음(건너뜀)', setFmt)),
-          el('div', { class: 'fc-col' }, el('div', { class: 'fc-title' }, '대상'), destIn,
-            el('button', { class: 'btn', onclick: () => advDialog() }, '고급(A)...'),
+            radio('ttcfmt', 'general', cf.fmt, '일반(G) — 숫자는 숫자로, 날짜는 날짜로', 'g', setFmt),
+            radio('ttcfmt', 'text', cf.fmt, '텍스트(T) — 앞의 0 유지', 't', setFmt),
+            el('div', { class: 'fc-row' }, radio('ttcfmt', 'date', cf.fmt, '날짜(D)', 'd', setFmt), order),
+            radio('ttcfmt', 'skip', cf.fmt, '열 가져오지 않음(I) — 건너뜀', 'i', setFmt)),
+          el('div', { class: 'fc-col' }, el('div', { class: 'fc-title' }, '대상(E)'), destIn,
+            el('button', { class: 'btn', 'data-access-key': 'a', 'data-ttc-focus': 'advanced', onclick: () => advDialog() }, '고급(A)...'),
             el('div', { class: 'muted fc-note' }, '날짜 순서 예: YMD = 20240315 · 2024.3.15, MDY = 03/15/2024, DMY = 15-03-2024. 날짜로 바뀐 값은 날짜 서식으로 표시됩니다.'))),
         el('div', { class: 'fc-title' }, '데이터 미리 보기 (열 머리글을 눌러 선택)'),
-        previewTable(shown, { headers: label, onPick: (i) => { selCol = i; render(); } }),
+        previewTable(shown, { headers: label, onPick: (i) => { selCol = i; render(); content.querySelector(`[data-ttc-focus="column-${i}"]`)?.focus(); } }),
       );
     }
-    btnBack.disabled = step === 1;
-    btnNext.disabled = step === 3;
+    if (dialogRoot) {
+      footerButton('b').disabled = step === 1;
+      footerButton('n').disabled = step === 3;
+      footerButton('n').classList.toggle('primary', step < 3);
+      footerButton('f').classList.toggle('primary', step === 3);
+    }
+    if (token) {
+      const next = [...content.querySelectorAll('[data-ttc-focus]')].find((node) => node.dataset.ttcFocus === token);
+      next?.focus();
+      if (caret && next?.type === 'text') next.setSelectionRange(...caret);
+    }
   };
 
   const finish = () => {
@@ -8353,19 +8447,25 @@ function textToColumns() {
     return undefined;
   };
 
-  const btnBack = el('button', { class: 'btn', type: 'button' }, '< 뒤로');
-  const btnNext = el('button', { class: 'btn', type: 'button' }, '다음 >');
-  btnBack.addEventListener('click', () => { if (step > 1) { step--; render(); } });
-  btnNext.addEventListener('click', () => {
-    if (step === 2 && o.mode === 'fixed' && !o.breaks.length) { toast('구분선을 하나 이상 넣으세요.'); return; }
-    if (step < 3) { step++; render(); }
-  });
-  const nav = el('div', { class: 'ttc-nav' }, btnBack, btnNext);
-  body.append(nav);
+  const moveStep = (delta) => {
+    if (delta > 0 && step === 2 && o.mode === 'fixed' && !o.breaks.length) { toast('구분선을 하나 이상 넣으세요.'); return false; }
+    step = clamp(step + delta, 1, 3);
+    render();
+    defaultButton()?.focus();
+    return false;
+  };
   render();
   openDialog({
     title: '텍스트 마법사', width: 640, body,
-    buttons: [{ label: '마침', primary: true, action: finish }, { label: '취소' }],
+    onOpen: (dialog) => { dialogRoot = dialog; const close = dialog.querySelector('.dialog-head button'); close.removeAttribute('data-dialog-close-head'); close.dataset.accessKey = 'none'; render(); },
+    initialFocus: (dialog) => dialog.querySelector(`.dialog-foot [data-access-key="${step < 3 ? 'n' : 'f'}"]`),
+    defaultAction: () => defaultButton()?.click(),
+    buttons: [
+      { label: '< 뒤로(B)', accessKey: 'b', action: () => moveStep(-1) },
+      { label: '다음(N) >', accessKey: 'n', primary: true, action: () => moveStep(1) },
+      { label: '마침(F)', accessKey: 'f', action: finish },
+      { label: '취소', accessKey: 'none' },
+    ],
   });
 }
 
@@ -9563,7 +9663,7 @@ function shapeDialog(id, typed = null, initialTab = null) {
   const book = wb, host = si, hostSheet = wb.sheets[host];
   const original = hostSheet?.shapes.find((o) => o.id === id);
   if (!original) return;
-  const get = () => wb === book && si === host && wb.sheets[host] === hostSheet ? hostSheet.shapes.find((o) => o.id === id) : null;
+  const get = () => chartSel === id && wb === book && si === host && wb.sheets[host] === hostSheet ? hostSheet.shapes.find((o) => o.id === id) : null;
   const blocked = () => viewOnly || (isProtected(hostSheet) && get()?.locked !== false && !allowed(hostSheet, 'objects'));
   if (blocked()) { toast('읽기 전용이거나 보호된 도형은 서식을 변경할 수 없습니다.'); return; }
   if (shapePaneDlg) shapePaneDlg.close();
@@ -9586,6 +9686,7 @@ function shapeDialog(id, typed = null, initialTab = null) {
     onOpen: () => { if (typed !== null) pane.focusText(); },
   });
   shapePaneDlg = dialog;
+  dialog.chartId = id; dialog.getSelectedTab = pane.getSelectedTab;
   dialog.root.classList.add('pane-dlg');
 }
 
@@ -17590,6 +17691,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileFit','toggleR
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['팝업 키보드와 서식 구성', ['텍스트 나누기 Enter는 다음→다음→마침 · 탭 구분 기호와 일반 서식 기본 선택', '팝업·하위 메뉴의 단축키 문자를 항상 표시 · 창 밖으로 빠진 초점 복원', '차트 데이터 원본의 확인 전 변경 방지 · 차트 이동 위치를 라디오로 선택', '도형 옵션/텍스트 옵션과 세부 범주 분리 · 선택한 도형에만 서식 적용 · 접힘·초점·스크롤 유지']],
   ['팝업·서식 UI 개선', ['이동 옵션을 선택 종류와 데이터 유형으로 구분 · 상수·수식에 해당하는 옵션만 활성화', '옵션·셀/차트/도형 서식의 입력 정렬·행 간격·탭·버튼 디자인 정리 · 작은 화면에서 본문 스크롤과 확인/취소 유지', '자동 고침 입력과 셀 서식의 분류·서식 코드 이름을 명확하게 안내']],
   ['Google Sheets 가져오기 정확성', ['IMPORTRANGE의 혼합 문자·숫자, 제목, 빈 행·열 누락 수정', '시트 이름 생략 시 Google과 같은 첫 탭 선택 · 쉼표·소수·백분율 표시와 숫자 계산 유지']],
   ['틀 고정과 확대 탐색', ['엑셀에 저장된 고정 시작 행·열과 본문 위치·활성 셀 복원', '고정 영역이 화면을 가득 채우면 잠시 고정을 조정하여 선택 셀 표시 · 축소하면 복원', '행·열 삽입/삭제 시 고정 경계와 저장된 보기 위치 보존']],

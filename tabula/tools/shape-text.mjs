@@ -49,6 +49,7 @@ try {
   await page.locator('.obj[data-id="text-fit"]').dblclick({ position: { x: 30, y: 30 } });
   const pane = page.locator('.shape-format-pane');
   await pane.getByRole('tab', { name: '텍스트 옵션', exact: true }).click();
+  await pane.getByRole('tab', { name: '텍스트 상자', exact: true }).click();
   await pane.getByLabel('텍스트 자동 맞춤', { exact: true }).selectOption('shrink');
   for (const rotation of [90, 270]) {
     await pane.getByLabel('텍스트 회전', { exact: true }).selectOption(String(rotation));

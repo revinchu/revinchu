@@ -1,7 +1,7 @@
 // 공통 UI: 요소 생성 · 메뉴 · 대화상자 · 알림
 import { ICONS } from './icons.js';
 import { sanitizeHtml, setSafeHtml } from './safe-html.js';
-import { accessKeyFromLabel, accessKeyFromEvent, accessKeyHint, accessKeyAliases, dialogButtonAccessKey, allocateAccessKeys } from './access-keys.js';
+import { accessKeyFromLabel, accessKeyCaption, accessKeyFromEvent, accessKeyHint, accessKeyAliases, dialogButtonAccessKey, allocateAccessKeys } from './access-keys.js';
 
 export function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -48,6 +48,8 @@ export function hydrateIcons(root = document) {
 let accessKeyHandler = null;
 export function setAccessKeyHandler(fn) { accessKeyHandler = fn; }
 const accessMemory = new WeakMap(), menuAccessOwners = new WeakMap(), accessScopeOrder = new WeakMap(), accessScopeClose = new WeakMap(), menuToolbars = new WeakMap(), menuToolbarObservers = new WeakMap(), menuAnchors = new WeakMap(), menuMinimumWidths = new WeakMap(), consumedAccessKeys = new Set();
+const dialogFocusState = new WeakMap();
+const accessCaptionNodes = new WeakMap(), accessScopeTargets = new WeakMap(), accessObservers = new WeakMap();
 let accessOrder = 0;
 let accessMode = false, accessScope = null, accessLayer = null;
 /** 공통 메뉴/대화상자 밖의 팝업을 등록. owner는 여는 창/팝업, onClose는 Escape 종료 동작. */
@@ -59,13 +61,14 @@ export function registerAccessKeyScope(root, { owner = document.activeElement?.c
   prepareAccessKeys(root);
   return () => {
     if (accessScope === root) endAccessKeys();
+    accessObservers.get(root)?.();
     menuAccessOwners.delete(root); accessScopeOrder.delete(root); accessScopeClose.delete(root);
     delete root.dataset.accessScope;
   };
 }
 const ACCESS_CONTROLS = 'button,input:not([type="hidden"]),select,textarea,a[href],[role="tab"],[role="button"],[role="menuitem"],[role="checkbox"],[role="radio"],[role="option"],[role="listbox"],[tabindex]';
-function accessVisible(node, includeClipped = false) {
-  if (!node.isConnected || node.matches(':disabled,[aria-disabled="true"]') || node.closest('[hidden],[inert],[aria-hidden="true"]')) return false;
+function accessVisible(node, includeClipped = false, includeDisabled = false) {
+  if (!node.isConnected || (!includeDisabled && node.matches(':disabled,[aria-disabled="true"]')) || node.closest('[hidden],[inert],[aria-hidden="true"]')) return false;
   const rect = node.getBoundingClientRect();
   if (!rect.width || !rect.height || (!includeClipped && (rect.bottom <= 0 || rect.right <= 0 || rect.top >= innerHeight || rect.left >= innerWidth))) return false;
   for (let p = node; p && p !== document.body; p = p.parentElement) {
@@ -92,7 +95,7 @@ function activeAccessScope() {
   };
   const menus = [...document.querySelectorAll('#menuLayer > .menu:not(.keytip-command-menu),[data-access-scope="popup"]')].filter((menu) => accessScopeOrder.has(menu) && accessVisible(menu) && owned(menu)).sort((a, b) => accessScopeOrder.get(a) - accessScopeOrder.get(b));
   if (menus.length) return menus.at(-1);
-  if (modal) return modal;
+  if (modal) return dialogs.findLast((node) => node.closest('.dialog-backdrop')?.classList.contains('modeless') && node.contains(document.activeElement) && owned(node)) ?? modal;
   // 찾기 같은 modeless 창은 격자에 초점이 있을 때 리본 Alt 키를 빼앗지 않는다.
   return dialogs.findLast((d) => d.contains(document.activeElement)) ?? null;
 }
@@ -105,7 +108,7 @@ function associatedAccessLabel(target) {
   const textOf = (label) => {
     // label 안의 select 옵션 텍스트가 '범위시트통합문서'처럼 레이블에 붙지 않게 한다.
     const clone = label.cloneNode(true);
-    clone.querySelectorAll('input,select,textarea,button,svg').forEach((node) => node.remove());
+    clone.querySelectorAll('input,select,textarea,button,svg,.access-key-hint').forEach((node) => node.remove());
     return clone.textContent?.trim() ?? '';
   };
   const texts = labels.map(textOf);
@@ -119,30 +122,100 @@ function associatedAccessLabel(target) {
   }
   return texts[0] ?? own;
 }
+function showAccessCaption(target, key, label, scope) {
+  let hint = accessCaptionNodes.get(target);
+  const caption = accessKeyCaption(label, key);
+  if (!caption || target.matches('[data-dialog-close-head],.dialog-close')) { hint?.remove(); return; }
+  let host;
+  if (target.matches('button,a,[role="tab"],[role="menuitem"],[role="button"],[role="option"]') && target.textContent.trim()) {
+    host = target.querySelector(':scope > .mi-text > b') ?? [...target.children].find((node) => node.matches('span') && !node.matches('.mi-icon,.mi-key,.ico,.access-key-hint') && node.textContent.trim()) ?? target;
+  } else {
+    const wrapper = [...(target.labels ?? [])].find((node) => scope.contains(node)) ?? target.closest('label');
+    if (wrapper) host = wrapper.querySelector('.form-dialog-label') ?? [...wrapper.children].find((node) => node.matches('span') && !node.matches('.access-key-hint,.ico') && node.textContent.trim()) ?? wrapper;
+    if (!host) for (const id of (target.getAttribute('aria-labelledby') ?? '').split(/\s+/)) {
+      const node = id && document.getElementById(id); if (node && scope.contains(node)) { host = node; break; }
+    }
+    if (!host) for (let at = target, i = 0; at && i < 3; at = at.parentElement, i++) {
+      const prev = at.previousElementSibling;
+      if (prev && !prev.matches(ACCESS_CONTROLS) && !prev.querySelector(ACCESS_CONTROLS) && prev.textContent.trim()) { host = prev; break; }
+      if (at.parentElement?.matches('.dialog,.dialog-body,.menu')) break;
+    }
+  }
+  if (!host || host.closest('[aria-hidden="true"]')) { hint?.remove(); return; }
+  if (!hint) { hint = el('span', { class: 'access-key-hint', 'aria-hidden': 'true' }); accessCaptionNodes.set(target, hint); }
+  if (hint.dataset.accessCaption !== caption) hint.dataset.accessCaption = caption;
+  if (hint.dataset.key !== key) hint.dataset.key = key;
+  if (hint.parentElement !== host) host.append(hint);
+}
+function watchAccessScope(scope) {
+  if (accessObservers.has(scope)) return;
+  let frame = 0;
+  const generated = (node) => node instanceof Element && node.matches('.access-key-hint');
+  const schedule = () => {
+    if (frame) return;
+    frame = requestAnimationFrame(() => {
+      frame = 0;
+      if (!scope.isConnected) { dispose(); return; }
+      prepareAccessKeys(scope);
+      const modal = activeModalDialog();
+      if (modal === scope && !dialogOwnsTarget(modal, document.activeElement)) dialogFocusState.get(modal)?.focus();
+    });
+  };
+  const observer = new MutationObserver((records) => {
+    if (records.some((record) => record.type !== 'childList' || [...record.addedNodes, ...record.removedNodes].some((node) => !generated(node)))) schedule();
+  });
+  observer.observe(scope, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['hidden', 'disabled', 'aria-disabled', 'aria-label', 'aria-labelledby', 'class', 'style', 'data-access-key', 'data-access-aliases'] });
+  const life = new MutationObserver(() => { if (!scope.isConnected) dispose(); });
+  const layer = scope.closest('#dialogLayer,#menuLayer') ?? scope.parentElement;
+  if (layer) life.observe(layer, { childList: true });
+  const dispose = () => {
+    observer.disconnect(); life.disconnect(); if (frame) cancelAnimationFrame(frame);
+    accessObservers.delete(scope);
+  };
+  accessObservers.set(scope, dispose);
+}
 function prepareAccessKeys(scope) {
   const closeHead = scope.querySelector(':scope > .dialog-head button[data-dialog-close-head]');
   if (closeHead) {
     const otherClose = [...scope.querySelectorAll('button')].some((node) => node !== closeHead && node.dataset.accessKey !== 'none' && accessVisible(node) && dialogButtonAccessKey(node.getAttribute('aria-label') ?? node.textContent) === 'd');
-    closeHead.dataset.accessKey = otherClose ? 'none' : 'd';
+    const key = otherClose ? 'none' : 'd';
+    if (closeHead.dataset.accessKey !== key) closeHead.dataset.accessKey = key;
   }
   for (const node of scope.querySelectorAll('[data-access-key="none"]')) {
     node.removeAttribute('aria-keyshortcuts'); delete node.dataset.resolvedAccessKey; delete node.dataset.accessKeySource;
+    accessCaptionNodes.get(node)?.remove();
   }
   const toolbar = menuToolbars.get(scope);
-  const targets = [...scope.querySelectorAll(ACCESS_CONTROLS), ...(toolbar?.isConnected ? toolbar.querySelectorAll(ACCESS_CONTROLS) : [])].filter((node) => node !== scope && accessVisible(node) && node.dataset.accessKey !== 'none' && !node.closest('.access-key-layer'));
+  const visible = [...scope.querySelectorAll(ACCESS_CONTROLS), ...(toolbar?.isConnected ? toolbar.querySelectorAll(ACCESS_CONTROLS) : [])].filter((node) => node !== scope && accessVisible(node, true, true) && node.dataset.accessKey !== 'none' && !node.closest('.access-key-layer'));
+  const current = new Set(visible);
+  for (const target of accessScopeTargets.get(scope) ?? []) if (!current.has(target)) {
+    accessCaptionNodes.get(target)?.remove(); target.removeAttribute('aria-keyshortcuts'); delete target.dataset.resolvedAccessKey; delete target.dataset.accessKeySource;
+  }
+  accessScopeTargets.set(scope, current);
+  const targets = visible.filter((node) => !node.matches(':disabled,[aria-disabled="true"]'));
+  const enabled = new Set(targets), disabled = visible.filter((node) => !enabled.has(node));
   const details = targets.map((node) => ({ explicit: node.dataset.accessKey, aliases: node.dataset.accessAliases, label: associatedAccessLabel(node), previous: accessMemory.get(node) }));
   // 작은 화면에서 메뉴 아래쪽 항목이 스크롤 밖이어도 그 명시 키를 미니 단추가 빼앗지 않는다.
-  const reservations = scope.dataset.contextMenu ? [...scope.querySelectorAll('[data-access-key],[data-access-aliases]')].filter((node) => !targets.includes(node) && (/^[a-z0-9]$/i.test(node.dataset.accessKey ?? '') || accessKeyAliases(node.dataset.accessAliases).length)).map((node) => ({ explicit: node.dataset.accessKey, aliases: node.dataset.accessAliases })) : [];
+  const reserved = scope.dataset.contextMenu ? [...scope.querySelectorAll('[data-access-key],[data-access-aliases]')].filter((node) => !targets.includes(node)) : disabled;
+  const reservations = reserved.map((node) => ({ explicit: node.dataset.accessKey || accessKeyFromLabel(associatedAccessLabel(node)), aliases: node.dataset.accessAliases })).filter((item) => /^[a-z0-9]$/i.test(item.explicit ?? '') || accessKeyAliases(item.aliases).length);
   const keys = allocateAccessKeys([...details, ...reservations]);
-  return targets.map((target, i) => {
+  const entries = targets.map((target, i) => {
     const entry = { target, ...keys[i], aliases: accessKeyAliases(details[i].aliases) };
-    if (!entry.key) { target.removeAttribute('aria-keyshortcuts'); delete target.dataset.resolvedAccessKey; delete target.dataset.accessKeySource; return null; }
+    if (!entry.key) { target.removeAttribute('aria-keyshortcuts'); delete target.dataset.resolvedAccessKey; delete target.dataset.accessKeySource; accessCaptionNodes.get(target)?.remove(); return null; }
     accessMemory.set(target, entry.key);
     target.setAttribute('aria-keyshortcuts', [entry.key, ...entry.aliases.filter((key) => key !== entry.key)].map((key) => 'Alt+' + key.toUpperCase()).join(' '));
     target.dataset.resolvedAccessKey = entry.key;
     target.dataset.accessKeySource = entry.automatic ? 'wixel' : details[i].explicit || accessKeyFromLabel(details[i].label) ? 'label' : 'excel';
+    showAccessCaption(target, entry.key, details[i].label, scope);
     return entry;
   }).filter(Boolean);
+  for (const target of disabled) {
+    target.removeAttribute('aria-keyshortcuts'); delete target.dataset.resolvedAccessKey; delete target.dataset.accessKeySource;
+    const label = associatedAccessLabel(target), key = target.dataset.accessKey || accessKeyFromLabel(label) || accessMemory.get(target);
+    showAccessCaption(target, key, label, scope);
+  }
+  watchAccessScope(scope);
+  return entries.filter((entry) => accessVisible(entry.target));
 }
 function endAccessKeys() {
   accessMode = false; accessScope = null; accessLayer?.remove(); accessLayer = null;
@@ -454,11 +527,43 @@ export function setDialogCloseHandler(fn) { dialogCloseHandler = fn; }
 // 창을 띄워 둔 채 시트를 쓸 수 있는 대화상자(찾기 및 바꾸기 등)는 열린 것으로 치지 않음
 export const isDialogOpen = () => [...document.getElementById('dialogLayer').children].some((x) => !x.classList.contains('modeless'));
 
+function activeModalDialog() {
+  return [...document.querySelectorAll('#dialogLayer > .dialog-backdrop:not(.modeless) > .dialog')].findLast((node) => accessVisible(node, true));
+}
+function dialogOwnsTarget(dialog, target) {
+  if (!(target instanceof Element)) return false;
+  if (dialog.contains(target)) return true;
+  // 대화상자 안의 색상/하위 메뉴는 별도 레이어에 있어도 같은 포커스 범위이다.
+  let owner = target.closest('.dialog,.menu,[data-access-scope="popup"],.context-mini-toolbar');
+  const seen = new Set();
+  while (owner && !seen.has(owner)) {
+    if (dialog.contains(owner)) return true;
+    seen.add(owner); owner = menuAccessOwners.get(owner);
+  }
+  return false;
+}
+document.addEventListener('focusin', (event) => {
+  const dialog = activeModalDialog();
+  if (dialog && !dialogOwnsTarget(dialog, event.target)) { event.stopImmediatePropagation(); dialogFocusState.get(dialog)?.focus(); }
+}, true);
+window.addEventListener('keydown', (event) => {
+  if (event.repeat && event.key === 'Enter' && consumedAccessKeys.has(event.code || event.key)) {
+    event.preventDefault(); event.stopImmediatePropagation(); return;
+  }
+  const dialog = activeModalDialog();
+  if (!dialog || dialogOwnsTarget(dialog, event.target)) return;
+  // 동적 본문 교체/외부의 지연 focus() 뒤에도 키가 격자로 새지 않는다.
+  event.preventDefault(); event.stopImmediatePropagation();
+  dialogFocusState.get(dialog)?.focus();
+  if (event.key === 'Enter' || event.key === 'Escape' || event.key === 'Tab') dialogFocusState.get(dialog)?.key(event);
+}, true);
+
 /**
  * buttons: [{label, primary, action}] — action이 false를 반환하면 닫지 않음
- * 반환: { close, root }
+ * initialFocus: 요소/선택자/(dialog)=>요소. defaultAction은 Enter만 위임하며 자동으로 닫지 않음.
+ * 반환: { close, root, focus }
  */
-export function openDialog({ title, body, buttons = [], onOpen, width, modeless = false, onClose }) {
+export function openDialog({ title, body, buttons = [], onOpen, width, modeless = false, onClose, initialFocus, defaultAction }) {
   clearTimeout(toastTimer);
   document.getElementById('toast')?.classList.remove('show');
   const layer = document.getElementById('dialogLayer');
@@ -471,6 +576,8 @@ export function openDialog({ title, body, buttons = [], onOpen, width, modeless 
     if (!backdrop.isConnected || busy) return;
     endAccessKeys();
     disposeDrag?.();
+    accessObservers.get(dialog)?.();
+    dialogFocusState.delete(dialog);
     backdrop.remove();
     onClose?.();
     const remaining = [...layer.querySelectorAll('.dialog')].at(-1);
@@ -492,6 +599,7 @@ export function openDialog({ title, body, buttons = [], onOpen, width, modeless 
       onclick: () => invoke(b),
     }, b.label))) : null);
   if (width) dialog.style.width = `${width}px`;
+  menuAccessOwners.set(dialog, returnFocus?.closest?.('.dialog,.menu,[data-access-scope="popup"]') ?? null);
   const backdrop = el('div', { class: `dialog-backdrop${modeless ? ' modeless' : ''}` }, dialog);
   const error = el('div', { class: 'warn', role: 'alert', hidden: true });
   dialog.querySelector('.dialog-body').append(error);
@@ -521,9 +629,21 @@ export function openDialog({ title, body, buttons = [], onOpen, width, modeless 
   };
   backdrop.addEventListener('mousedown', (e) => { if (e.target === backdrop && !modeless) close(); });
   if (modeless) disposeDrag = dragByHead(dialog);
-  dialog.addEventListener('keydown', (e) => {
+  let lastFocus = null;
+  const focus = () => {
+    const requested = typeof initialFocus === 'function' ? initialFocus(dialog) : typeof initialFocus === 'string' ? dialog.querySelector(initialFocus) : initialFocus;
+    const valid = (node) => node instanceof HTMLElement && dialog.contains(node) && node.tabIndex >= 0 && accessVisible(node, true);
+    const first = focusable(dialog).find((node) => /^(INPUT|SELECT|TEXTAREA)$/.test(node.tagName));
+    const target = valid(lastFocus) ? lastFocus : valid(requested) ? requested : first ?? dialog.querySelector('.btn.primary:not(:disabled)') ?? focusable(dialog)[0] ?? dialog;
+    target.focus();
+    return target;
+  };
+  dialog.addEventListener('focusin', (event) => { if (event.target instanceof HTMLElement) lastFocus = event.target; });
+  const onKey = (e, outside = false) => {
+    const handled = e.defaultPrevented;
     e.stopPropagation();
     if (e.isComposing || e.keyCode === 229) return;
+    if (handled && !outside) return;
     if (e.key === 'Escape') { e.preventDefault(); close(); return; }
     if (e.key === 'Tab' && !modeless) {
       const list = focusable(dialog);
@@ -532,19 +652,22 @@ export function openDialog({ title, body, buttons = [], onOpen, width, modeless 
       else if (e.shiftKey && (document.activeElement === first || !list.includes(document.activeElement))) { e.preventDefault(); last.focus(); }
       else if (!e.shiftKey && (document.activeElement === last || !list.includes(document.activeElement))) { e.preventDefault(); first.focus(); }
     }
-    if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA' && e.target.tagName !== 'BUTTON') {
+    if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA' && !e.target.isContentEditable) consumedAccessKeys.add(e.code || e.key);
+    if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA' && e.target.tagName !== 'BUTTON' && !e.target.isContentEditable) {
       e.preventDefault(); // 대화상자가 닫힌 뒤 Enter 가 셀 편집기에 들어가지 않도록
-      const primary = buttons.find((b) => b.primary);
-      if (primary) invoke(primary);
+      if (busy) return;
+      if (defaultAction) { invoke({ action: () => { const result = defaultAction(); return result?.then ? result.then(() => false) : false; } }); return; }
+      const primary = dialog.querySelector('.dialog-foot .btn.primary:not(:disabled)');
+      if (primary && accessVisible(primary, true)) primary.click();
     }
-  });
+  };
+  dialog.addEventListener('keydown', (event) => onKey(event));
+  dialogFocusState.set(dialog, { focus, key: (event) => onKey(event, true) });
   layer.append(backdrop);
-  const first = focusable(dialog).find((x) => /^(INPUT|SELECT|TEXTAREA)$/.test(x.tagName));
-  (first ?? dialog.querySelector('.btn.primary') ?? focusable(dialog)[0] ?? dialog).focus();
-  first?.select?.();
+  focus()?.select?.();
   onOpen?.(dialog);
   prepareAccessKeys(dialog);
-  return { close, root: dialog };
+  return { close, root: dialog, focus };
 }
 
 /** 대화상자 머리글을 끌어 옮기기 */

@@ -2198,3 +2198,54 @@ body.mobile-work-mode .dialog-body .form-dialog-check { min-height: 32px; }
   .dialog .format-pane-tabs { position: static; }
 }
 body.mobile-work-mode .dialog .format-pane-tabs { position: static; }
+
+/* 대화상자 접근키를 레이블 옆에 항상 표시한다. */
+.access-key-hint { display: inline-flex; flex: none; margin-inline-start: 2px; white-space: nowrap; font-size: .92em; font-weight: inherit; color: inherit; }
+.access-key-hint::after { content: attr(data-access-caption); }
+.dialog .sd-cols { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.dialog .sd-col { min-width: 0; }
+.dialog .sd-list { height: 180px; border-radius: 5px; border-color: var(--dialog-line); }
+.dialog .sd-item { min-height: 32px; padding: 4px 8px; gap: 8px; }
+.dialog .sd-item > span { width: auto; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.dialog .sd-series-name { flex: 1; min-width: 0; border: 0; padding: 2px 0; font: inherit; text-align: left; background: transparent; color: inherit; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; cursor: pointer; }
+.dialog .sd-range { align-items: center; flex-wrap: wrap; gap: 8px; }
+.dialog .sd-range > span { font-weight: 600; }
+.dialog .sd-range .ref-input { min-width: 140px; }
+.dialog .sd-bar { gap: 5px; }
+.dialog .sd-bar .btn { padding: 4px 8px; }
+.sd-preview-section { border-top: 1px solid var(--dialog-line); padding-top: 10px; }
+.sd-preview-section > summary { cursor: pointer; font-weight: 600; padding: 4px 0 10px; }
+.dialog .sd-preview { width: 100%; border-radius: 5px; }
+.dialog .sd-preview > svg { max-width: 100%; height: auto; }
+.chart-move { display: flex; flex-direction: column; gap: 18px; }
+.chart-move-intro { margin: 0; }
+.chart-move-row { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(160px, 1.5fr); align-items: center; gap: 14px; }
+.dialog .chart-move-row > label { white-space: nowrap; }
+.dialog .chart-move-row > label > span { width: auto; }
+.chart-move-row > :is(input,select) { width: 100%; }
+.shape-format-options { display: flex; gap: 14px; border-bottom: 1px solid var(--dialog-line); margin-bottom: 4px; }
+.shape-format-options > button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; padding: 8px 3px; font: inherit; color: #59675f; cursor: pointer; }
+.shape-format-options > button[aria-pressed=true] { border-color: var(--green); color: var(--green); font-weight: 700; }
+.shape-format-categories { gap: 5px; }
+.shape-mode-options { display: flex; flex-direction: column; align-items: stretch; gap: 3px; padding: 4px 0 8px; }
+.dialog .shape-mode-options label { justify-content: flex-start; min-height: 28px; }
+.dialog .shape-mode-options label > span { width: auto; flex: 1; }
+.shape-line-preview { display: flex; align-items: center; justify-content: center; min-height: 34px; margin: 8px 0; padding: 8px; border: 1px solid var(--dialog-line); border-radius: 5px; background: #fff; }
+@media (max-width: 660px) {
+  .dialog .sd-cols { grid-template-columns: minmax(0, 1fr); }
+  .dialog .sd-list { height: 150px; }
+  .chart-move-row { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .dialog .ttc-content { min-height: 0; }
+  .dialog .ttc-opts { gap: 14px; }
+}
+
+.shape-format-navigation { position: sticky; top: 0; z-index: 2; background: #fff; padding-bottom: 8px; }
+.shape-format-navigation .format-pane-tabs { position: static; padding-bottom: 4px; }
+.shape-format-options > button { flex: 1; }
+.shape-format-options > button[aria-selected=true] { border-bottom-color: var(--green); color: var(--green); font-weight: 700; background: transparent; }
+.shape-format-categories > button { flex: 1; padding: 7px 4px; }
+.shape-format-note { font-size: 11px; margin: 0 0 10px; }
+.shape-line-preview { min-height: 48px; overflow: hidden; }
+.shape-line-preview svg { overflow: visible; max-width: 100%; }
+@media (max-width: 660px) { .shape-format-navigation { position: static; } }
+body.mobile-work-mode .shape-format-navigation { position: static; }

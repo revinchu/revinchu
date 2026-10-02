@@ -136,7 +136,7 @@ try {
   await test('도형 서식: 탭 방향키·텍스트·채우기·즉시적용 후 닫기 유지', async p => {
     await fixture(p, { kind: 'rect', h: 120, fill: '#4472c4', text: '합성 도형' }); const pane = await format(p);
     await pane.getByLabel('채우기 색', { exact: true }).fill('#13579b'); await pane.getByLabel('채우기 색', { exact: true }).dispatchEvent('change');
-    await pane.getByLabel('채우기', { exact: true }).selectOption('gradient'); assert.equal((await shape(p)).grad.stops[0][1], '#13579b', '모드 전환은 최신 채우기색 보존');
+    await pane.getByRole('radio', { name: '그라데이션 채우기', exact: true }).check(); assert.equal((await shape(p)).grad.stops[0][1], '#13579b', '모드 전환은 최신 채우기색 보존');
     await pane.getByRole('button', { name: '중지점 추가', exact: true }).click(); assert.equal((await shape(p)).grad.stops.length, 3);
     await number(pane, '중지점 투명도(%)', 70); await pane.getByLabel('중지점 색', { exact: true }).fill('#345678'); await pane.getByLabel('중지점 색', { exact: true }).dispatchEvent('change');
     assert.ok(Math.abs((await shape(p)).grad.stops[1][2] - .3) < 1e-9, '중지점 색 변경은 투명도 보존');
@@ -144,7 +144,8 @@ try {
     await number(pane, '그림자 투명도(%)', 65); await pane.getByLabel('그림자 색', { exact: true }).fill('#123456'); await pane.getByLabel('그림자 색', { exact: true }).dispatchEvent('change');
     assert.ok(Math.abs((await shape(p)).shadow.opacity - .35) < 1e-9, '그림자 색 변경은 투명도 보존');
     const first = pane.getByRole('tab', { name: '채우기 및 선', exact: true }); await first.focus(); await p.keyboard.press('End');
-    assert.equal(await p.evaluate(() => document.activeElement.textContent), '텍스트 옵션');
+    assert.equal(await p.evaluate(() => document.activeElement.textContent), '크기 및 속성');
+    await pane.getByRole('tab', { name: '텍스트 옵션', exact: true }).click();
     await pane.getByLabel('도형 텍스트', { exact: true }).fill('수정된 합성 도형'); await pane.getByLabel('도형 텍스트', { exact: true }).press('Tab');
     await pane.getByRole('button', { name: '닫기', exact: true }).click(); assert.equal((await shape(p)).text, '수정된 합성 도형');
     await undo(p); assert.equal((await shape(p)).text, '합성 도형');
@@ -221,7 +222,7 @@ try {
     await draw(p, '곡선', true); await p.locator('.obj.shape').first().click({ button: 'right', position: { x: 30, y: 20 } });
     await p.locator('.menu-item').filter({ hasText: /도형 서식|선 서식/ }).click();
     const pane = p.getByRole('dialog', { name: '도형 서식', exact: true }); await pane.waitFor();
-    await pane.getByLabel('채우기', { exact: true }).selectOption('solid'); assert.ok((await shape(p)).fill);
+    await pane.getByRole('radio', { name: '단색 채우기', exact: true }).check(); assert.ok((await shape(p)).fill);
     await pane.getByRole('tab', { name: '텍스트 옵션', exact: true }).click(); await pane.getByLabel('도형 텍스트', { exact: true }).fill('닫힌 곡선'); await pane.getByLabel('도형 텍스트', { exact: true }).press('Tab');
     assert.equal((await shape(p)).text, '닫힌 곡선');
   });
@@ -265,14 +266,14 @@ try {
       const box = node.querySelector('.sh-text'), content = box.firstElementChild, css = getComputedStyle(box), scale = Number(content.style.zoom || 1);
       const range = document.createRange(); range.selectNodeContents(content);
       const rect = element => { const r = element.getBoundingClientRect(); return { x: r.x, y: r.y, right: r.right, bottom: r.bottom }; };
-      return { calls: window.__printCalls, shapeIds: [...area.querySelectorAll('[data-shape-print]')].map(el => el.dataset.shapePrint),
+      return { calls: window.__printCalls, preview: !!document.querySelector('.dialog[aria-label="인쇄 미리보기"]'), shapeIds: [...area.querySelectorAll('[data-shape-print]')].map(el => el.dataset.shapePrint),
         images: area.querySelectorAll('img').length, objects: area.querySelectorAll('.chart-print').length, text: area.textContent,
         fit: box.dataset.fitDone, scale, transform: box.style.transform, rich: box.classList.contains('rich'), bold: [...content.querySelectorAll('span')].some(el => Number(getComputedStyle(el).fontWeight) >= 700),
         available: [box.clientWidth - parseFloat(css.paddingLeft) - parseFloat(css.paddingRight), box.clientHeight - parseFloat(css.paddingTop) - parseFloat(css.paddingBottom)],
         scroll: [content.scrollWidth * scale, content.scrollHeight * scale], box: rect(box), actual: rect(range),
         same: JSON.stringify(window.tabula.wb().serialize()) === window.__printBefore, undoDepth: window.tabula.wb().undoStack.length };
     });
-    assert.equal(actual.calls, 1, 'OS 인쇄 호출은 대체 함수 한 번'); assert.deepEqual(actual.shapeIds, ['print-visible']);
+    assert.equal(actual.calls, 0, '미리보기를 열 때 OS 인쇄를 자동 실행하지 않음'); assert.equal(actual.preview, true, '사용자가 확인할 인쇄 미리보기 열림'); assert.deepEqual(actual.shapeIds, ['print-visible']);
     assert.equal(actual.images, 1); assert.equal(actual.objects, 3); assert.match(actual.text, /인쇄 포함 차트/); assert.doesNotMatch(actual.text, /인쇄 제외 차트/);
     assert.equal(actual.fit, 'print'); assert.equal(actual.rich, true); assert.equal(actual.bold, true); assert.match(actual.transform, /rotate\(90deg\)/);
     assert.ok(actual.scale > 0 && actual.scale < 1, '인쇄용 긴 서식 텍스트 축소');

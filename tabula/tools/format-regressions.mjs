@@ -9,12 +9,14 @@ const page=await browser.newPage({viewport:{width:1440,height:960}});
 const errors=[];page.on('pageerror',e=>errors.push(e.message));
 try{
  await page.addInitScript(()=>{window.TABULA_STATIC=true;window.WIXEL_SKIP_START=true;});
- await page.goto(process.env.WIXEL_URL||'http://127.0.0.1:5180/');
+ const url=process.env.WIXEL_URL||'http://127.0.0.1:5180/';
+ await page.route('**/*',r=>{const q=r.request(),u=new URL(q.url());return ['GET','HEAD','OPTIONS'].includes(q.method())&&u.origin===new URL(url).origin&&!u.pathname.startsWith('/api/')?r.continue():r.abort();});
+ await page.goto(url,{waitUntil:'domcontentloaded',timeout:60000});
  await page.waitForFunction(()=>!!window.tabula);
  await page.evaluate(()=>{
   const t=window.tabula,w=t.wb();
   w.transact(()=>[['분기','온라인','오프라인'],['1분기','120','80'],['2분기','-40','100'],['3분기','0','75'],['4분기','180','140']].forEach((row,r)=>row.forEach((v,c)=>w.setInput(0,r,c,v))));
-  t.selectRange({r1:0,c1:0,r2:4,c2:2});t.run('chartColumn');t.run('chartFormat');
+  t.selectRange({r1:0,c1:0,r2:4,c2:2});t.run('chartLine');t.run('chartFormat');
  });
  const pane=page.getByRole('dialog',{name:'차트 서식',exact:true});
  await pane.waitFor();
@@ -27,6 +29,9 @@ try{
  const chart=()=>page.evaluate(()=>window.tabula.wb().sheets[0].charts[0]);
  assert.equal((await chart()).axes.y.min,-100);assert.equal((await chart()).axes.y.max,250);
  assert.equal((await chart()).seriesFmt[0].lineWidth,4);assert.equal((await chart()).seriesFmt[0].markerSize,8);
+ // 선 계열 전용 옵션을 검증한 뒤 3D를 지원하는 세로 막대로 합성 fixture를 전환한다.
+ await pane.locator('.dialog-head button').click();
+ await page.evaluate(()=>{const t=window.tabula,w=t.wb(),sheet=w.sheets[t.si];w.transact(()=>w.setSheetProp(t.si,'charts',sheet.charts.map(c=>({...c,type:'column'}))));t.run('chartFormat');});
  await pane.getByRole('tab',{name:'3차원 회전',exact:true}).click();
  await pane.getByLabel('3차원 차트',{exact:true}).check();
  await set('X 회전(°)',40);await set('Y 회전(°)',55);await set('깊이(%)',170);
@@ -41,7 +46,7 @@ try{
  });
  await page.locator('.obj[data-id="format-test-shape"]').dblclick({position:{x:100,y:50}});
  const shape=page.getByRole('dialog',{name:'도형 서식',exact:true});await shape.waitFor();
- await shape.getByLabel('채우기',{exact:true}).selectOption('gradient');
+ await shape.getByRole('radio',{name:'그라데이션 채우기',exact:true}).check();
  await shape.getByLabel('채우기 투명도(%)',{exact:true}).fill('25');await shape.getByLabel('채우기 투명도(%)',{exact:true}).press('Tab');
  await shape.getByRole('tab',{name:'효과',exact:true}).click();
  await shape.getByLabel('그림자',{exact:true}).check();
@@ -49,6 +54,8 @@ try{
  await shape.getByLabel('그림자 세로 거리(px)',{exact:true}).fill('12');await shape.getByLabel('그림자 세로 거리(px)',{exact:true}).press('Tab');
  await shape.getByRole('tab',{name:'텍스트 옵션',exact:true}).click();
  await shape.getByLabel('기울임꼴',{exact:true}).check();
+ assert.notEqual(await shape.getByLabel('도형 글꼴',{exact:true}).inputValue(),'[object Object]');
+ await shape.getByRole('tab',{name:'텍스트 상자',exact:true}).click();
  await shape.getByLabel('왼쪽 여백(px)',{exact:true}).fill('20');await shape.getByLabel('왼쪽 여백(px)',{exact:true}).press('Tab');
  assert.notEqual(await shape.getByLabel('도형 글꼴',{exact:true}).inputValue(),'[object Object]');
  const sh=await page.evaluate(()=>window.tabula.wb().sheets[0].shapes[0]);
