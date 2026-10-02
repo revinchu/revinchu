@@ -7,7 +7,8 @@ import { Axis } from './axis.js';
 import { visibleAxisIndices } from './axis-window.js';
 import { GridAccessibility } from './grid-a11y.js';
 import { gridLineWidth, resolveGridBorders, gridBorderPaintOrder } from './grid-lines.js';
-import { pictureCropStyle, pictureTransform, pictureEffects, pictureShadowStyle } from './picture.js';
+import { pictureTransform } from './picture.js';
+import { pictureMarkup } from './picture-render.js';
 import { sanitizeHtml, setSafeHtml } from './safe-html.js';
 import { colToName, cellName, MAX_ROWS, MAX_COLS } from './formula.js';
 import { formatValue, formatGeneral } from './format.js';
@@ -58,7 +59,7 @@ export function objectIntersectsWindow(o, rect) {
   const num = (v, fallback = 0) => Number.isFinite(Number(v)) ? Math.abs(Number(v)) : fallback;
   // 선택 손잡이/차트 옆 단추와 흐림 효과까지 보수적으로 남긴다.
   const pad = 40 + (o.shadow ? Math.max(num(shadow.dx, 3), num(shadow.dy, 3)) + num(shadow.blur, 8) * 2 : 0)
-    + num(o.glow?.size) * 2 + num(o.soft) * 2 + num(o.borderW) + num(o.strokeWidth);
+    + num(o.glow?.size) * 2 + num(o.soft ?? o.softEdge) * 2 + (o.reflection ? height * Math.min(1, num(o.reflection.size, .5)) + num(o.reflection.gap) : 0) + num(o.borderW) + num(o.strokeWidth);
   const cx = x + w / 2, cy = y + h / 2;
   return cx + rx + pad >= rect.x1 && cx - rx - pad <= rect.x2 && cy + ry + pad >= rect.y1 && cy - ry - pad <= rect.y2;
 }
@@ -1331,16 +1332,7 @@ export class GridView {
       else if (prop === 'slicers') box(o, o.timeline ? 'slicer timeline' : 'slicer', content(o, 'slicer', () => this.slicerHtml(o)), slicerCssVars(o));
       else if (prop === 'images' && o.linked) box(o, 'pic linked', content(o, 'linked', () => this.linkedHtml(o)), o.rot ? `transform:rotate(${o.rot}deg)` : '');
       else if (prop === 'images') {
-        // 그림 스타일: 테두리 · 둥근 모서리 · 그림자 · 회전 · 투명도
-        const ic = [o.border ? `border:${o.borderW ?? 2}px solid ${esc(o.border)}` : '', o.radius ? `border-radius:${pictureEffects(o).radius}px` : '', o.shadow ? `box-shadow:${pictureShadowStyle(o)}` : '', o.opacity !== undefined ? `opacity:${pictureEffects(o).opacity}` : ''].filter(Boolean).join(';');
-        // 자르기(crop: 위 · 아래 · 왼쪽 · 오른쪽 비율): 원본을 키워 보이는 부분만 틀에 맞춤
-        const cr = o.crop;
-        const img = cr
-          ? (() => {
-            const css = pictureCropStyle(cr);
-            return `<div style="position:absolute;inset:0;overflow:hidden;${ic}"><img src="${esc(o.src)}" alt="${esc(o.alt ?? o.name ?? '')}" draggable="false" style="position:absolute;max-width:none;left:${css.left};top:${css.top};width:${css.width};height:${css.height}"></div>`;
-          })()
-          : `<img src="${esc(o.src)}" alt="${esc(o.alt ?? o.name ?? '')}" draggable="false"${ic ? ` style="${ic};box-sizing:border-box"` : ''}>`;
+        const img = pictureMarkup(o, `${p.id}_${o.id}`);
         box(o, 'pic', img + (normalizeVideo(o.media) ? `<button type="button" class="media-play" data-media-play="1" aria-label="영상 재생">▶<span>${esc(o.name || '영상')}</span></button>` : ''), pictureTransform(o) ? `transform:${pictureTransform(o)}` : '');
       }
       else {

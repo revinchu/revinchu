@@ -2,7 +2,7 @@
 // not a claim that every Microsoft 365 version uses the same ribbon layout.
 export const RIBBON_TAB_KEYS = {
   h: 'home', n: 'insert', p: 'layout', m: 'formulas', a: 'data', r: 'review', w: 'view', y: 'help',
-  jt: 'tableDesign', jp: 'pivotAnalyze', jd: 'pivotDesign', jk: 'sparkTab', js: 'slicerTab', jo: 'objFormat', jc: 'chartDesign',
+  jt: 'tableDesign', jp: 'pivotAnalyze', jd: 'pivotDesign', jk: 'sparkTab', js: 'slicerTab', jo: 'objFormat', jq: 'pictureFormat', jc: 'chartDesign',
 };
 
 // Excel's documented HH opens the color picker. Requested compatibility keys

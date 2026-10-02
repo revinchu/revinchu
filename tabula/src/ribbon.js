@@ -452,6 +452,32 @@ export const TABS = [
     ],
   },
   {
+    id: 'pictureFormat', label: '그림 서식', context: 'picture', groups: [
+      group('조정', [
+        large('pictureBackground', 'pictureBackground', '배경 제거'),
+        large('pictureCorrections', 'pictureCorrections', '수정'),
+        large('pictureColor', 'fill', '색'),
+        large('pictureArtistic', 'effects', '꾸밈 효과'),
+        large('pictureTransparency', 'pictureTransparency', '투명도'),
+        col(medium('pictureCompress', 'pictureCompress', '그림 압축'), medium('pictureChange', 'picture', '그림 바꾸기', { menu: 'pictureChange' }), medium('pictureReset', 'refresh', '그림 원래대로', { menu: 'pictureResetMenu' })),
+      ]),
+      group('그림 스타일', [
+        { type: 'gallery', gallery: 'pictureStyles', stateKey: 'pictureGalleryKey', menu: 'pictureStyles', title: '그림 스타일' },
+        col(medium('pictureBorder', 'border', '그림 테두리'), medium('pictureEffects', 'effects', '그림 효과'), medium('pictureLayout', 'shapes', '그림 레이아웃')),
+      ], 'pictureFormat'),
+      group('접근성', [large('pictureAlt', 'textbox', '대체 텍스트')]),
+      group('정렬', [
+        col(medium('objForwardBtn', 'bringForward', '앞으로 가져오기', { menu: 'objForward' }), medium('objBackwardBtn', 'sendBackward', '뒤로 보내기', { menu: 'objBackward' }), medium('selectionPane', 'selectionPane', '선택 창')),
+        col(medium('objAlignBtn', 'align', '맞춤', { menu: 'objAlign' }), medium('objGroupBtn', 'shapes', '그룹화', { menu: 'objGroup' }), medium('objRotateBtn', 'rotate', '회전', { menu: 'objRotate' })),
+      ]),
+      group('크기', [large('pictureCrop', 'pictureCrop', '자르기'), col(
+        { type: 'spin', cmd: 'pictureH', stateKey: 'pictureH', label: '높이:', title: '그림 높이 (cm)', suffix: 'cm', min: .11, max: 529, step: .1 },
+        { type: 'spin', cmd: 'pictureW', stateKey: 'pictureW', label: '너비:', title: '그림 너비 (cm)', suffix: 'cm', min: .11, max: 529, step: .1 },
+        check('pictureLockAspect', '비율 고정', 'pictureLockAspect'),
+      )], 'pictureSize'),
+    ],
+  },
+  {
     id: 'objFormat', label: '셰이프 형식', context: 'object', groups: [
       group('도형 삽입', [
         large('shapesMenu', 'shapes', '도형', { menu: 'shapes' }),
@@ -779,8 +805,10 @@ export function buildRibbon(app) {
     update(state) {
       const next = new Set(state.context ?? []);
       if ([...next].join() !== [...context].join()) {
+        const enteringPicture = next.has('picture') && !context.has('picture');
         const leaving = TABS.find((t) => t.id === current)?.context;
         context = next;
+        if (enteringPicture) { current = 'pictureFormat'; renderRibbon(); }
         if (leaving && !context.has(leaving)) { current = 'home'; renderRibbon(); }
         renderTabs();
       }

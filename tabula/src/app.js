@@ -9,13 +9,15 @@ import { protectedRangeKey, rangeIsUnlocked, cellInEditRange, rangeIntersects, r
 import { publishedWorkbook } from './publish.js';
 import { watchReleaseUpdate } from './release-update.js';
 import { pictureEditor } from './picture-ui.js';
+import { preparePictureExport, pictureExportBounds } from './picture-export.js';
 import { onlinePicturePicker } from './online-picture-ui.js';
 import { newSmartArt, isSmartArt, smartArtParts } from './smartart.js';
 import { smartArtSvg } from './smartart-render.js';
 import { openSmartArtEditor } from './smartart-ui.js';
 import { snapshotPasteSource, pasteSpecialRange, applyPasteSpecial, pasteSourceFromText } from './paste-special.js';
 import { showPasteSpecial } from './paste-special-ui.js';
-import { resizePicture } from './picture.js';
+import { resizePicture, PICTURE_STYLES, pictureStylePatch, resetPictureFormatting, resetPictureSource } from './picture.js';
+import { groupSvg } from './object-group.js';
 import { Workbook, formulaShifter, cellData, DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT } from './workbook.js';
 import {
   cellName, colToName, parseRangeName, parse, shiftFormula, listRefs, normalizeFormula, tokenize,
@@ -1417,6 +1419,7 @@ function onGridKey(e) {
   if (chartSel) {
     if (ctrl && !e.altKey && e.code === 'KeyK' && ['shapes', 'images'].includes(findObject(sheet(), chartSel)?.prop)) { handled(); objectHyperlinkDialog(chartSel); return; }
     if (ctrl && k === 'Enter' && findObject(sheet(), chartSel)?.obj.hyperlink?.target) { handled(); openLink(drawingLinkAddress(findObject(sheet(), chartSel).obj.hyperlink)); return; }
+    if (ctrl && (e.code === 'Digit1' || k === '1') && pictureHere()) { handled(); imageDialog(chartSel, 'styles'); return; }
     if (ctrl && (e.code === 'Digit1' || k === '1') && sheet().charts.some(c => c.id === chartSel)) { handled(); chartFormatPane(chartSel); return; }
     if ((k === 'Delete' || k === 'Backspace') && chartPart?.id === chartSel) { handled(); deleteChartPart(); return; }
     if (k === 'Escape' && chartPart?.id === chartSel) { handled(); chartPart = null; gv.renderObjectsAll(); syncChartPane(); return; }
@@ -3389,6 +3392,8 @@ function protectAction(cmd) {
   if (cmd === 'clearHyperlinks' || cmd === 'removeHyperlink') return 'hyperlinks';
   if (cmd === 'pasteSpecial') return 'free';
   if (cmd === 'pasteFormats') return 'formatCells';
+  if (['pictureSave', 'pictureOriginal'].includes(cmd)) return 'free';
+  if (/^picture/.test(cmd)) return 'objects';
   if (PROTECT_FREE.has(cmd)) return 'free';
   if (PROTECT_BLOCK.has(cmd)) return 'block';
   if (PROTECT_MAP[cmd]) return PROTECT_MAP[cmd];
@@ -3489,6 +3494,7 @@ function protectBlocked(action = 'cells', rg = sel, cmd = null, retry = null) {
   }
   const sh = sheet();
   if (!isProtected(sh) || action === 'free') return false;
+  if (action === 'objects' && /^picture/.test(cmd ?? '') && selectedObjects().length && selectedObjects().every(f => f.obj.locked === false)) return false;
   const blocked = action === 'hyperlinks' ? selectedHyperlinks().cells.some(([r, c]) => !canEditCell(r, c))
     : action === 'cells' ? anyLocked(rg) : action === 'block' || !allowed(sh, action);
   if (blocked && action === 'cells') {
@@ -8866,7 +8872,7 @@ function addObject(prop, obj) {
 
 function deleteObject(id) {
   const f = findObject(sheet(), id);
-  if (viewOnly || (f?.obj.locked !== false && protectBlocked('objects'))) return;
+  if (viewOnly || wb.props?.markedFinal || (f?.obj.locked !== false && protectBlocked('objects'))) return;
   if (f) setObjects(f.prop, (list) => list.filter((o) => o.id !== id));
   chartSel = null;
   updateSelectionUI();
@@ -8879,14 +8885,20 @@ function nudgeObject(id, dx, dy) {
 
 function copyObject(id, cut) {
   const f = findObject(sheet(), id);
-  if (!f) return;
+  if (!f || (cut && (viewOnly || wb.props?.markedFinal || (f.obj.locked !== false && protectBlocked('objects'))))) return;
   objClip = { prop: f.prop, obj: structuredClone(f.obj), n: 0, text: '' };
-  navigator.clipboard?.writeText('').catch(() => {});
+  if (f.prop === 'images' && navigator.clipboard?.write && typeof ClipboardItem === 'function') {
+    // Queue the clipboard promise inside the user gesture; keep the editable
+    // internal copy even if this browser denies the system clipboard request.
+    const pixels = pictureRaster(structuredClone(f.obj)).then(src => fetch(src)).then(r => r.blob());
+    pixels.catch(() => {});
+    try { navigator.clipboard.write([new ClipboardItem({ 'image/png': pixels })]).catch(() => toast('그림을 위셀 안에 복사했습니다. 다른 프로그램에는 그림으로 저장한 파일을 사용하세요.')); } catch { toast('그림을 위셀 안에 복사했습니다.'); }
+  } else navigator.clipboard?.writeText('').catch(() => {});
   if (cut) { objClip.n = -1; deleteObject(id); }
 }
 
 function pasteObject() {
-  if (!objClip) return;
+  if (!objClip || viewOnly || wb.props?.markedFinal || protectBlocked('objects')) return;
   objClip.n++;
   const d = objClip.n * 12;
   const o = { ...structuredClone(objClip.obj), id: newObjId({ charts: 'ch', images: 'im', slicers: 'sl' }[objClip.prop] ?? 'sh'), z: undefined };
@@ -8981,10 +8993,42 @@ function chartPartMenu(ch, part, pos) {
   items.push({ sep: true }, { label: '차트 전체 메뉴...', action: () => { chartPart = null; gv.renderObjectsAll(); objectMenu(ch.id, pos); } });
   openMenu(pos, items);
 }
+function pictureContextMenu(id, pos) {
+  const im = pictureHere(); if (!im || im.id !== id) return;
+  const readonly = contextCommandDisabled('pictureFormat');
+  const action = (label, cmd, extra = {}) => ({ label, disabled: !['pictureSave', 'pictureOriginal', 'selectionPane'].includes(cmd) && readonly, action: () => run(cmd), ...extra });
+  const toolbar = el('div', { class: 'picture-mini-toolbar', 'aria-label': '그림 미니 도구 모음' },
+    [['스타일', 'effects', 'styles'], ['자르기', 'pictureCrop', 'crop']].map(([name, icon, section]) => el('button', { type: 'button', disabled: readonly, onclick: () => { closeMenus(); imageDialog(id, section); } }, el('span', { html: ICONS[icon] }), name)));
+  const link = drawingLinkAddress(im.hyperlink);
+  const items = [
+    { label: '잘라내기(T)', icon: 'cut', key: 'Ctrl+X', disabled: readonly, action: () => { if (!objectEditBlocked()) copyObject(id, true); } },
+    { label: '복사(C)', icon: 'copy', key: 'Ctrl+C', action: () => copyObject(id, false) },
+    { label: '붙여넣기(P)', icon: 'paste', key: 'Ctrl+V', disabled: readonly || !objClip, action: () => { if (!objectEditBlocked()) pasteObject(); } }, { sep: true },
+    { label: '그림 바꾸기(4)', icon: 'picture', disabled: readonly, submenu: pictureChangeItems() },
+    { label: '그룹화(G)', disabled: readonly, submenu: MENUS.objGroup() },
+    { label: '맨 앞으로 가져오기(R)', icon: 'bringForward', disabled: readonly, submenu: MENUS.objForward() },
+    { label: '맨 뒤로 보내기(K)', icon: 'sendBackward', disabled: readonly, submenu: MENUS.objBackward() },
+    { label: '맞춤', icon: 'align', disabled: readonly, submenu: MENUS.objAlign() },
+    { label: '회전', icon: 'rotate', disabled: readonly, submenu: MENUS.objRotate() },
+    action('선택 창...', 'selectionPane', { icon: 'selectionPane' }), { sep: true },
+    { label: link ? '링크 편집(I)...' : '링크(I)...', icon: 'link', disabled: readonly, action: () => objectHyperlinkDialog(id) },
+    ...(link ? [{ label: '링크 열기', action: () => openLink(link) }, { label: '링크 제거', disabled: readonly, action: () => updateObject(id, { hyperlink: undefined }) }] : []),
+    action('그림으로 저장(S)...', 'pictureSave', { icon: 'save' }),
+    action('원본 보기(V)...', 'pictureOriginal'), action('매크로 지정(N)...', 'pictureAssignMacro'), { sep: true },
+    action('대체 텍스트 편집(A)...', 'pictureAlt', { icon: 'textbox' }),
+    action('크기 및 속성(Z)...', 'pictureSize'), action('그림 서식(O)...', 'pictureFormat', { icon: 'format', key: 'Ctrl+1' }),
+    action('그림 원래대로', 'pictureReset'),
+    { label: '셀에 배치', disabled: readonly, action: () => imageToCell(id) },
+    ...(im.icon ? [{ label: 'SVG 도형 변환', disabled: readonly, action: convertSelectedSvg }] : []),
+    { sep: true }, { label: '삭제', icon: 'delete', key: 'Delete', disabled: readonly, action: () => { if (!objectEditBlocked()) deleteObject(id); } },
+  ];
+  const menu = openMenu(pos, items, { toolbar, scroll: true }); if (menu) menu.dataset.contextKind = 'picture';
+}
 function objectMenu(id, pos) {
   const f = findObject(sheet(), id);
   if (!f) return;
   if (chartSel !== id) { chartSel = id; gv.renderObjectsAll(); updateSelectionUI(); }
+  if (f.prop === 'images') { pictureContextMenu(id, pos); return; }
   if (f.prop === 'charts' && chartPart?.id === id) { chartPartMenu(f.obj, chartPart, pos); return; }
   const items = [
     { label: '잘라내기', icon: 'cut', key: 'Ctrl+X', action: () => copyObject(id, true) },
@@ -9115,18 +9159,28 @@ function putCellImage(r, c, image) {
 }
 
 /** 셀 위에 떠 있는 그림 → 왼쪽 위 모서리가 있는 셀에 배치 */
-function imageToCell(id) {
+async function imageToCell(id) {
   const im = sheet().images.find((x) => x.id === id);
   if (!im) return;
-  const r = gv.rows.indexAt(im.y + 1);
-  const c = gv.cols.indexAt(im.x + 1);
-  shrinkImage(im.src, 800, (src) => wb.transact(() => {
-    const cur = wb.getCell(si, r, c);
-    wb.setCellData(si, r, c, { raw: '', style: cur?.style, comment: cur?.comment, link: cur?.link, image: { src, alt: im.name ?? '' } });
-    wb.setSheetProp(si, 'images', sheet().images.filter((x) => x.id !== id));
-    chartSel = null;
-    selectCell(r, c);
-  }, meta()));
+  const valid = pictureGuard(id); if (!valid()) return;
+  const book = wb, host = si, target = sheet();
+  const r = gv.rows.indexAt(im.y + 1), c = gv.cols.indexAt(im.x + 1);
+  const destination = {r1:r,c1:c,r2:r,c2:c};
+  if (protectBlocked('cells', destination)) return;
+  const cellState = JSON.stringify(book.getCell(host, r, c));
+  try {
+    const rendered = await pictureRaster(structuredClone(im));
+    const src = await new Promise(resolve => shrinkImage(rendered, 800, resolve));
+    if (!valid()) return;
+    if (protectBlocked('cells', destination)) return;
+    if (JSON.stringify(book.getCell(host, r, c)) !== cellState) { toast('대상 셀이 변경되었습니다. 다시 시도하세요.'); return; }
+    book.transact(() => {
+      const cur = book.getCell(host, r, c);
+      book.setCellData(host, r, c, { raw: '', style: cur?.style, comment: cur?.comment, link: cur?.link, image: { src, alt: im.alt || im.name || '' } });
+      book.setSheetProp(host, 'images', target.images.filter((x) => x.id !== id));
+    }, meta());
+    chartSel = null; selectCell(r, c);
+  } catch (err) { alertDialog('셀에 그림 배치', err.message); }
 }
 
 /** 셀에 배치한 그림 → 셀 위에 떠 있는 그림 */
@@ -9310,7 +9364,7 @@ const JS_MACROS = {
     const d = new Date();
     const p2 = (n) => String(n).padStart(2, '0');
     const fileName = `검색광고결과${String(d.getFullYear()).slice(2)}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}.xlsx`;
-    const done = await saveWithPicker(fileName, async () => new Blob([await writeXlsxAsync(out, { fileName })], { type: XLSX_KINDS.xlsx.mime }));
+    const done = await saveWithPicker(fileName, async () => new Blob([await writeXlsxAsync(await preparePictureExport(out), { fileName })], { type: XLSX_KINDS.xlsx.mime }));
     if (done) toast(`검색결과를 '${done.name}' 에 저장했습니다.`);
   },
 };
@@ -9524,20 +9578,146 @@ function resetImageSize(id) {
   img.src = im.src;
 }
 
-function imageDialog(id) {
-  const host = si, targetSheet = sheet();
-  const im = targetSheet.images.find((x) => x.id === id);
-  if (!im) return;
-  const editor = pictureEditor(im);
-  const dlg = openDialog({ title: '그림 서식', body: editor.body, width: 780, buttons: [
+function pictureHere() { return sheet().images?.find(o => o.id === chartSel); }
+function pictureGuard(id) {
+  const book = wb, host = si, target = sheet(), original = target.images?.find(o => o.id === id);
+  const state = original && JSON.stringify(original);
+  return () => {
+    if (!original || wb !== book || si !== host || sheet() !== target || JSON.stringify(target.images?.find(o => o.id === id)) !== state) {
+      toast('문서 또는 그림이 변경되었습니다. 그림을 다시 선택하세요.'); return false;
+    }
+    return !(viewOnly || book.props?.markedFinal || (original.locked !== false && protectBlocked('objects')));
+  };
+}
+function imageDialog(id, section = 'size') {
+  const im = sheet().images?.find(x => x.id === id); if (!im) return;
+  const valid = pictureGuard(id); if (!valid()) return;
+  const editor = pictureEditor(im, { section });
+  const dlg = openDialog({ title: '그림 서식', body: editor.body, width: 960, onClose: () => editor.dispose?.(), buttons: [
     { label: '확인', primary: true, action: () => {
-      if (wb.sheets[host] !== targetSheet || !targetSheet.images.some((x) => x.id === id)) { toast('원래 그림을 찾을 수 없습니다.'); return false; }
+      if (!valid()) return false;
       const patch = editor.read();
-      wb.transact(() => wb.setSheetProp(host, 'images', targetSheet.images.map((o) => o.id === id ? { ...o, ...patch } : o)), meta());
-      gv.renderObjectsAll(); updateSelectionUI();
+      updateObject(id, patch); gv.renderObjectsAll(); updateSelectionUI();
     } }, { label: '취소' },
   ] });
   dlg.root.classList.add('picture-format-dialog');
+}
+function pictureEdit(section) { if (pictureHere()) imageDialog(chartSel, section); else toast('그림을 선택하세요.'); }
+function pictureSizeCm(axis, value) {
+  const n = Number(value); if (!Number.isFinite(n) || n <= 0) { toast('0보다 큰 크기를 입력하세요.'); updateRibbon(); return; }
+  patchObjects(o => resizePicture(o, axis, n * 96 / 2.54), ['images']);
+}
+function pictureReset(withSize = false) {
+  const im = pictureHere(); if (!im || objectEditBlocked()) return;
+  if (withSize && !im.originalWidth) {
+    const valid = pictureGuard(im.id), image = new Image();
+    image.onload = () => { if (valid()) { updateObject(im.id, { ...resetPictureFormatting(), ...resetPictureSource(im, true), ...resizePicture({ w: image.naturalWidth, h: image.naturalHeight }, 'w', image.naturalWidth) }); gv.renderObjectsAll(); updateSelectionUI(); } };
+    image.onerror = () => toast('원본 크기를 읽지 못했습니다.'); image.src = im.originalSrc || im.src; return;
+  }
+  patchObjects(o => ({ ...resetPictureFormatting(), ...resetPictureSource(o, withSize) }), ['images']);
+}
+function pictureStyleGallery(compact = false) {
+  const im = pictureHere(); if (!im) return [];
+  return (compact ? PICTURE_STYLES.slice(0, 12) : PICTURE_STYLES).map(style => {
+    const patch = pictureStylePatch(style.id, im);
+    const sample = { ...im, ...patch, id: 'style-' + style.id, x: 0, y: 0, w: 80, h: 48, rot: patch.rot || 0 };
+    return el('button', { type: 'button', class: 'picture-style-swatch', title: style.name, 'aria-label': style.name, onmousedown: e => e.preventDefault(), onclick: () => { closeMenus(); patchObjects(o => pictureStylePatch(style.id, o), ['images']); } },
+      el('span', { class: 'picture-style-thumb', html: pictureDisplaySvg(sample) }), compact ? null : el('span', {}, style.name));
+  });
+}
+function pictureDisplaySvg(im) {
+  return groupSvg({ id: 'picture-display-' + im.id, w: im.w, h: im.h, groupSize: { w: im.w, h: im.h }, groupItems: [{ ...im, kind: 'picture', x: 0, y: 0 }] }, shapeSvg);
+}
+function pictureOriginal() {
+  const im = pictureHere(); if (!im) return;
+  openDialog({ title: '그림 원본', width: 800, body: el('div', { class: 'picture-original-view' }, el('img', { src: im.originalSrc || im.src, alt: im.alt || im.name || '원본 그림' }), el('p', { class: 'muted' }, '보정·자르기·테두리를 적용하기 전의 그림입니다.')), buttons: [{ label: '닫기', primary: true }] });
+}
+async function pictureSave() {
+  const im = pictureHere(); if (!im) return;
+  const copy = structuredClone(im);
+  await saveWithPicker(`${safeFileName(copy.name || '그림')}.png`, async () => {
+    const src = await pictureRaster(copy); return (await fetch(src)).blob();
+  });
+}
+async function pictureRaster(im) {
+  const image = new Image();
+  let source = im.src;
+  if (/^https?:/i.test(source)) { source = await fetchImageData(source); if (!source) throw new Error('그림을 다운로드하지 못했습니다. 그림 파일로 바꾼 뒤 다시 시도하세요.'); }
+  const w = Math.max(4, im.w), h = Math.max(4, im.h), bounds = pictureExportBounds(im), width = bounds.w, height = bounds.h;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><g transform="translate(${-bounds.x},${-bounds.y}) rotate(${Number(im.rot) || 0},${w / 2},${h / 2})">${pictureDisplaySvg({ ...im, src: source, x: 0, y: 0, rot: 0, w, h })}</g></svg>`;
+  const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
+  try {
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('그림 변환 시간이 초과되었습니다.')), 15000);
+      image.onload = () => { clearTimeout(timer); resolve(); }; image.onerror = () => { clearTimeout(timer); reject(new Error('그림을 변환하지 못했습니다. 웹 연결 그림은 먼저 파일로 바꾸세요.')); }; image.src = url;
+    });
+    const canvas = document.createElement('canvas'), scale = Math.min(2, 4096 / Math.max(width, height));
+    canvas.width = Math.max(1, Math.round(width * scale)); canvas.height = Math.max(1, Math.round(height * scale));
+    canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height); return canvas.toDataURL('image/png');
+  } finally { URL.revokeObjectURL(url); }
+}
+function pictureChangeItems() {
+  return [
+    { label: '이 장치에서(D)...', icon: 'open', action: () => pictureChange('file') },
+    { label: '온라인 그림(O)...', icon: 'picture', action: () => pictureChange('online') },
+    { label: '클립보드에서(C)', icon: 'paste', action: () => pictureChange('clipboard') },
+  ];
+}
+function pictureChange(kind) {
+  const im = pictureHere(); if (!im) return;
+  const valid = pictureGuard(im.id); if (!valid()) return;
+  const commit = async (src, name) => {
+    if (!valid()) return;
+    const image = new Image();
+    await new Promise((resolve, reject) => { image.onload = resolve; image.onerror = () => reject(new Error('새 그림을 읽지 못했습니다.')); image.src = src; });
+    if (!valid()) return;
+    updateObject(im.id, { src, name: name || im.name, crop: undefined, originalSrc: src, originalWidth: image.naturalWidth, originalHeight: image.naturalHeight, originalEmf: undefined, originalPng: undefined, emf: undefined, png: undefined, icon: undefined, linked: undefined, media: undefined });
+    gv.renderObjectsAll(); updateSelectionUI();
+  };
+  const file = async blob => {
+    if (!blob || !/^image\//.test(blob.type)) throw new Error('그림 파일을 선택하세요.');
+    if (blob.size > 40 * 1024 * 1024) throw new Error('그림 파일은 40MB 이하로 선택하세요.');
+    const src = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = () => reject(new Error('파일을 읽지 못했습니다.')); reader.readAsDataURL(blob); });
+    await commit(src, blob.name);
+  };
+  if (kind === 'file') {
+    const input = el('input', { type: 'file', accept: 'image/*' }); input.addEventListener('change', () => { if (input.files[0]) file(input.files[0]).catch(e => toast(e.message)); }); input.click();
+  } else if (kind === 'online') onlinePicturePicker({ allowVideo: false, onInsert: async items => {
+    if (items.length !== 1) throw new Error('바꿀 그림을 한 개만 선택하세요.');
+    const src = await fetchImageData(items[0].full); if (!src) throw new Error('그림을 다운로드할 수 없습니다. 다른 그림을 선택하세요.');
+    await commit(src, items[0].title);
+  } });
+  else (async () => {
+    if (!navigator.clipboard?.read) throw new Error('이 브라우저에서는 그림 클립보드를 읽을 수 없습니다. 파일을 선택하세요.');
+    const items = await navigator.clipboard.read();
+    for (const item of items) { const type = item.types.find(t => /^image\//.test(t)); if (type) { await file(await item.getType(type)); return; } }
+    throw new Error('클립보드에 그림이 없습니다.');
+  })().catch(e => toast(e.name === 'NotAllowedError' ? '클립보드 읽기 권한을 허용한 뒤 다시 시도하세요.' : e.message));
+}
+function pictureAssignMacro() {
+  const im = pictureHere(); if (!im) return; const valid = pictureGuard(im.id); if (!valid()) return;
+  formDialog('매크로 지정', [{ name: 'macro', label: '매크로 이름(N)', value: im.macro || '' }], ({ macro }) => {
+    if (!valid()) return false;
+    if (macro && !/^[\w가-힣 .!]+$/.test(macro)) throw new Error('올바른 매크로 이름을 입력하세요.');
+    updateObject(im.id, { macro: macro.trim() || undefined });
+  }, { note: 'VBA 이름을 연결하여 Excel 파일에 보존합니다. 위셀은 지원되는 이동 동작만 실행하며, 일반 VBA 코드는 실행하지 않습니다. 이름을 비우면 연결을 해제합니다.' });
+}
+async function pictureLayout() {
+  const list = selectedObjects().filter(f => f.prop === 'images'); if (!list.length || objectEditBlocked()) return;
+  const book = wb, host = si, target = sheet(), original = JSON.stringify(list.map(f => f.obj));
+  const valid = () => wb === book && si === host && sheet() === target && !objectEditBlocked() && JSON.stringify(list.map(f => target.images.find(o => o.id === f.obj.id))) === original;
+  const pictures = [];
+  for (const f of list) pictures.push(await pictureRaster(f.obj));
+  if (!valid()) return;
+  const shape = newSmartArt('pictureCards', { x: list[0].obj.x, y: list[0].obj.y }, book.theme);
+  shape.smartArt.nodes = list.map((f, i) => ({ id: newObjId('node'), text: f.obj.alt || f.obj.name || `그림 ${i + 1}`, level: 0, picture: pictures[i] }));
+  shape.w = Math.max(260, Math.min(900, list.length * 220)); shape.h = Math.max(220, Math.min(600, list[0].obj.h + 70));
+  openSmartArtEditor({ shape, onCommit: draft => {
+    if (!valid()) { toast('그림이 바뀌었습니다. 레이아웃을 다시 여세요.'); return false; }
+    const ids = new Set(list.map(f => f.obj.id));
+    wb.transact(() => { wb.setSheetProp(si, 'images', target.images.filter(o => !ids.has(o.id))); wb.setSheetProp(si, 'shapes', [...(target.shapes || []), { ...draft, z: nextZ() }]); }, meta());
+    objMulti.clear(); chartSel = draft.id; gv.renderObjectsAll(); updateSelectionUI(); return true;
+  } });
 }
 
 function smartArtDialog(id = null) {
@@ -9861,7 +10041,12 @@ function patchObjects(patch, kinds = null) {
   const list = selectedObjects().filter((f) => !kinds || kinds.includes(f.prop));
   if (!list.length) { toast('개체를 선택하세요.'); return; }
   const byProp = new Map();
-  for (const f of list) { if (!byProp.has(f.prop)) byProp.set(f.prop, new Map()); byProp.get(f.prop).set(f.obj.id, typeof patch === 'function' ? patch(f.obj, f.prop) : patch); }
+  for (const f of list) {
+    const change = typeof patch === 'function' ? patch(f.obj, f.prop) : patch;
+    if (!change || Object.entries(change).every(([key, value]) => Object.is(f.obj[key], value))) continue;
+    if (!byProp.has(f.prop)) byProp.set(f.prop, new Map()); byProp.get(f.prop).set(f.obj.id, change);
+  }
+  if (!byProp.size) return;
   wb.transact(() => {
     for (const [prop, m] of byProp) {
       wb.setSheetProp(si, prop, sheet()[prop].map((o) => (m.has(o.id) && m.get(o.id) ? { ...o, ...m.get(o.id) } : o)));
@@ -13315,7 +13500,11 @@ async function exportXlsx(name = docName, kind = null) {
   try {
     await snapshotLinkedPictures();
     if (wb !== savingBook || docId !== savingId) throw new Error('문서가 바뀌었습니다. 현재 문서에서 다시 저장하세요.');
-    const bytes = await writeXlsxAsync(savingBook, { activeSheet: savingSheet, fileName: target.name, kind: k }, (st) => prog.set(st.p, st.msg));
+    const savingVersion = savingBook.version;
+    const pictureBook = await preparePictureExport(savingBook, count => prog.set(.05, `그림 효과 준비 중 (${count}개)`));
+    if (wb !== savingBook || docId !== savingId) throw new Error('문서가 바뀌었습니다. 현재 문서에서 다시 저장하세요.');
+    const bytes = await writeXlsxAsync(pictureBook, { activeSheet: savingSheet, fileName: target.name, kind: k }, (st) => prog.set(st.p, st.msg));
+    if (wb !== savingBook || docId !== savingId || savingBook.version !== savingVersion) throw new Error('저장 중 문서가 변경되었습니다. 다시 저장하세요.');
     prog.set(0.98, '파일 쓰는 중');
     const saved = await writeSaveTarget(target, new Blob([bytes], { type: XLSX_KINDS[k].mime }));
     prog.close();
@@ -14905,7 +15094,7 @@ function printSheet({ htmlOnly = false, pdf = false, name = docName } = {}) {
     for (const { kind, o } of objects) {
       const attrs = `class="chart-print" data-print-x="${Number(o.x) || 0}" data-print-y="${Number(o.y) || 0}" data-print-object="${escapeHtml(o.id)}" style="position:relative;width:${Math.max(1, o.w)}px;height:${Math.max(1, o.h)}px;${o.rot ? `transform:rotate(${o.rot}deg);` : ''}"`;
       if (kind === 'chart') parts.push(`<div ${attrs}>${gv.chartSvg(o)}</div>`);
-      else if (kind === 'image') parts.push(`<div ${attrs}><img src="${escapeHtml(o.src)}" style="width:${o.w}px;height:${o.h}px" alt=""></div>`);
+      else if (kind === 'image') parts.push(`<div ${attrs}>${pictureDisplaySvg({ ...o, rot: 0 })}</div>`);
       else parts.push(`<div ${attrs} data-shape-print="${escapeHtml(o.id)}">${isSmartArt(o) ? smartArtSvg(o) : shapeSvg(o)}${!isSmartArt(o) && (o.text || o.paras) && !isShapeLine(o) ? shapeTextHtml(o) : ''}</div>`);
     }
     parts.push('</section>');
@@ -17047,6 +17236,9 @@ const MENUS = {
     { label: '오류 추적(E)', icon: 'validation', action: () => traceError() },
     { label: '순환 참조(C)', disabled: true, submenu: [] },
   ],
+  pictureChange: pictureChangeItems,
+  pictureResetMenu: () => [{ label: '그림 원래대로(R)', action: () => run('pictureReset') }, { label: '그림 및 크기 원래대로(S)', action: () => run('pictureResetSize') }],
+  pictureStyles: a => openMenu(a, [{ node: el('div', { class: 'picture-style-menu' }, pictureStyleGallery()) }, { label: '그림 스타일 자세히...', action: () => pictureEdit('styles') }]),
   shapeChange: () => [{ node: shapeGallery((k) => { shapeEdit = null; shapePointDrag = null; patchObjects({ kind: k, path: undefined, customGeometry: undefined }, ['shapes']); }, true) }],
   shapeFill: (a) => { shapeFillMenu(a); },
   shapeOutline: (a) => { shapeOutlineMenu(a); },
@@ -17508,6 +17700,7 @@ function contextCommandDisabled(cmd) {
   if (action === 'cells' && !opts.pivotEdit && PIVOT_LOCKED.test(cmd) && pivotAreaHit(sel)) return true;
   if (STRUCT_CMDS.has(cmd) && wb.props?.lockStructure) return true;
   if (!isProtected(sheet()) || action === 'free') return false;
+  if (action === 'objects' && /^picture/.test(cmd) && selectedObjects().length && selectedObjects().every(f => f.obj.locked === false)) return false;
   if (action === 'hyperlinks') return selectedHyperlinks().cells.some(([r, c]) => !canEditCell(r, c));
   return action === 'cells' ? anyLocked(sel) : action === 'block' || !allowed(sheet(), action);
 }
@@ -17592,6 +17785,16 @@ const COMMANDS = {
   shapeFragment: () => mergeSelectedShapes('fragment'),
   shapeIntersect: () => mergeSelectedShapes('intersect'),
   shapeSubtract: () => mergeSelectedShapes('subtract'),
+  pictureFormat: () => pictureEdit('styles'), pictureSize: () => pictureEdit('size'),
+  pictureCorrections: () => pictureEdit('corrections'), pictureColor: () => pictureEdit('color'),
+  pictureArtistic: () => pictureEdit('artistic'), pictureTransparency: () => pictureEdit('effects'),
+  pictureBackground: () => pictureEdit('background'), pictureCompress: () => pictureEdit('compress'),
+  pictureBorder: () => pictureEdit('effects'), pictureEffects: () => pictureEdit('effects'),
+  pictureCrop: () => pictureEdit('crop'), pictureAlt: () => pictureEdit('alt'),
+  pictureReset: () => pictureReset(), pictureResetSize: () => pictureReset(true),
+  pictureChange: () => pictureChange('file'), pictureOriginal, pictureSave, pictureLayout, pictureAssignMacro,
+  pictureH: v => pictureSizeCm('h', v), pictureW: v => pictureSizeCm('w', v),
+  pictureLockAspect: v => patchObjects({ lockAspect: v }, ['images']),
   selectionPane: () => selectionPaneDialog(),
   navigator: () => navigatorPane(),
   valueHighlight: () => { view.valueHighlight = !view.valueHighlight; gv.renderAll(); updateRibbon(); toast(view.valueHighlight ? '값 강조: 글자는 검정, 숫자는 파랑, 수식은 초록으로 표시합니다.' : '값 강조를 껐습니다.'); },
@@ -18038,6 +18241,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileFit','toggleR
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['그림 서식', ['그림 선택 시 전용 리본 · 우클릭 메뉴 · 그림 스타일 갤러리', '수정·색·꾸밈 효과·투명도·그림 테두리와 효과 · 자르기와 cm 크기', '배경 제거·압축·그림 바꾸기·원본 복원 · 대체 텍스트·그림 레이아웃 · 실행 취소와 파일 보존']],
   ['인쇄 영역과 페이지 나누기', ['인쇄 영역 밖 회색 표시 · 파란 인쇄 경계와 쪽 번호 · 기본 보기 전환', '인쇄 영역 설정·추가·해제 · 경계 끌기 · 수동 페이지 나누기 삽입·이동·제거', 'XLSX·XLS·XLSB의 저장된 보기와 복수 인쇄 영역 복원 · PDF/인쇄와 같은 페이지 경계']],
   ['차트 종류·요소 서식 보강', ['선버스트·트리맵 계층과 선택 색 보존 · 리본에서 모든 차트 종류 접근', '원통·원뿔·피라미드 3차원 막대 · 누적 영역 콤보 · 계열별 배치와 축', '축·데이터 레이블·계층 요소를 선택하여 상세 서식 조정 · 실행 취소 동기화']],
   ['그리기와 도형 조합', ['펜·형광펜·선·도형·지우개 팔레트 · 색·굵기·불투명도 · 터치 그리기', 'SVG 아이콘을 편집 가능한 도형으로 변환 · 그룹 해제 후 부분별 색 변경', '두 개 이상 도형의 결합·병합·조각·교차·빼기 · 실행 취소']],
@@ -18318,9 +18522,13 @@ function tableRibbonState() {
   const sg = chartSel ? null : sparkGroupAt(active.r, active.c);
   const obj = chartSel ? findObject(sheet(), chartSel) : null;
   const context = [...(t ? ['table'] : []), ...(sl ? ['slicer'] : []), ...(pv ? ['pivot'] : []), ...(sg ? ['spark'] : []),
-    ...(obj && obj.prop === 'charts' ? ['chart'] : []), ...(obj && obj.prop !== 'slicers' ? ['object'] : [])];
+    ...(obj && obj.prop === 'charts' ? ['chart'] : []), ...(obj?.prop === 'images' ? ['picture'] : obj && obj.prop !== 'slicers' ? ['object'] : [])];
   const so = { rowHeaders: true, colHeaders: true, bandRows: false, bandCols: false, ...(pv?.def.styleOpts ?? {}) };
   const base = {
+    pictureH: obj?.prop === 'images' ? String(Math.round(obj.obj.h / 96 * 2.54 * 100) / 100) : '',
+    pictureW: obj?.prop === 'images' ? String(Math.round(obj.obj.w / 96 * 2.54 * 100) / 100) : '',
+    pictureLockAspect: obj?.prop === 'images' && obj.obj.lockAspect !== false,
+    pictureGalleryKey: obj?.prop === 'images' ? `${obj.obj.id}|${wb.version}` : '',
     context, slicerCaption: sl?.caption ?? '', slicerCols: String(sl?.columns ?? 1), slicerMultiOn: !!sl?.multi,
     objH: obj ? String(Math.round(obj.obj.h)) : '', objW: obj ? String(Math.round(obj.obj.w)) : '', objRot: obj ? String(obj.obj.rot ?? 0) : '',
     slicerFontSize: sl?.fontSize ? String(sl.fontSize) : '', slicerHeadSize: sl?.headSize ? String(sl.headSize) : '', slicerBtnW: String(sl?.buttonWidth ?? 0), slicerGap: String(sl?.gap ?? 3), slicerBoldOn: !!sl?.bold,
@@ -18721,7 +18929,7 @@ async function init() {
     onTouchZoom: (pct) => setZoom(pct),
     isDragging: () => !!drag,
   });
-  ribbon = buildRibbon({ run, openMenu: openNamedMenu, focusGrid, refreshRibbon: updateRibbon, hiddenTabs: () => opts.hiddenTabs ?? [], gallery: (name) => (name === 'chartStyles' ? chartStyleGallery() : []) });
+  ribbon = buildRibbon({ run, openMenu: openNamedMenu, focusGrid, refreshRibbon: updateRibbon, hiddenTabs: () => opts.hiddenTabs ?? [], gallery: (name) => (name === 'chartStyles' ? chartStyleGallery() : name === 'pictureStyles' ? pictureStyleGallery(true) : []) });
   mobileWork = installMobileWork({ button: $('mobileModeToggle'), onChange: (next, prev) => {
     if (!gv) return;
     if (!prev || next.active !== prev.active || next.density !== prev.density || Math.round(next.width) !== Math.round(prev.width)) {

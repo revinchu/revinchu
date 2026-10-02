@@ -6,6 +6,11 @@ const ACCENT = 'var(--icon-accent)';
 const BLUE = 'var(--icon-blue)';
 
 export const ICONS = {
+  pictureCrop: svg(`<path d="M5 2v13h13M2 5h13v13" stroke-width="1.8"/><path d="M8 3h9v9" opacity=".4"/>`, 28),
+  pictureCorrections: svg(`<circle cx="10" cy="10" r="3.5" fill="#ffcc5c" stroke="#d79518"/><path d="M10 1v2M10 17v2M1 10h2M17 10h2M3.6 3.6 5 5M15 15l1.4 1.4M3.6 16.4 5 15M15 5l1.4-1.4" stroke="#d79518"/>`, 28),
+  pictureBackground: svg(`<rect x="2" y="3" width="16" height="14" rx="1" stroke-dasharray="2 2"/><path d="m4 15 4-7 3 4 2-3 3 6z" fill="${BLUE}"/><path d="m13 2 5 5M18 2l-5 5" stroke="#b042a4"/>`, 28),
+  pictureTransparency: svg(`<rect x="2" y="3" width="11" height="12" fill="${BLUE}" opacity=".4"/><rect x="7" y="6" width="11" height="12" fill="${BLUE}" opacity=".6"/>`, 28),
+  pictureCompress: svg(`<rect x="5" y="6" width="10" height="8" stroke="${BLUE}"/><path d="m1 1 4 4M1 5h4V1m14 0-4 4m0-4v4h4M1 19l4-4m-4 0h4v4m14 0-4-4m0 4v-4h4"/>`),
   paste: svg(`<rect x="4" y="3.5" width="10" height="13" rx="1"/><rect x="7" y="2" width="4" height="3" rx=".6" fill="var(--surface)"/><rect x="9" y="8" width="8" height="10" rx=".6" fill="var(--surface)" stroke="${BLUE}"/><path d="M11 11h4M11 13h4M11 15h3" stroke="${BLUE}"/>`),
   cut: svg(`<circle cx="6" cy="14.5" r="2.3"/><circle cx="14" cy="14.5" r="2.3"/><path d="M7.5 12.8 14 3M12.5 12.8 6 3"/>`),
   copy: svg(`<rect x="3.5" y="3.5" width="9" height="11" rx=".8"/><rect x="7.5" y="6.5" width="9" height="11" rx=".8" fill="var(--surface)"/>`),

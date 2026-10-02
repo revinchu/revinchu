@@ -24,7 +24,7 @@ import { isChartEx, writeChartEx, readChartEx, chartExStyleXml, chartExColorsXml
 import { Axis, hid, hidKeys } from './axis.js';
 import { toBase64, fromBase64 } from './vba.js';
 import { CellImage } from './fxcore.js';
-import { pictureEffects } from './picture.js';
+import { pictureMediaSource, pictureBlipXml, pictureGeometryXml, pictureBorderXml, pictureEffectXml, readPictureAdjustments, pictureMetadataXml, restorePictureMetadata } from './picture-drawingml.js';
 import { emfDataUrl } from './emf.js';
 import { GEOM, LINE_KINDS, shapeLineEnds } from './shapes.js';
 import { customGeometryXml, readCustomGeometry, storedCustomGeometryXml } from './shape-path.js';
@@ -1639,6 +1639,11 @@ function readDrawing(files, path, sheet, ctx) {
       const rounded = n => Math.round(n * 1000) / 1000;
       im.shadow = { dx: rounded(Math.cos(angle) * dist), dy: rounded(Math.sin(angle) * dist), blur: Number(shadow.attrs.blurRad ?? 0) / EMU, color: dmlColor(shadow, ctx.theme) ?? '#000000', opacity: dmlOpacity(shadow) };
     }
+    readPictureAdjustments(im, blip, sp, n => dmlColor(n, ctx.theme), dmlOpacity);
+    restorePictureMetadata(im, nv, bytes, rel => {
+      const path = rels[rel]?.target, data = files[path], mime = path && MIME[path.split('.').pop().toLowerCase()];
+      return data && mime ? `data:${mime};base64,${toBase64(data)}` : null;
+    });
     if (el.attrs.macro) im.macro = el.attrs.macro.replace(/^\[\d+\]!/, '');
     out.images.push(im);
   };
@@ -4453,6 +4458,12 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
       };
       const anchor = (o, body) => `<xdr:twoCellAnchor editAs="${o.placement ?? 'twoCell'}"><xdr:from>${anchorAt(o.x, o.y)}</xdr:from><xdr:to>${anchorAt(o.x + o.w, o.y + o.h)}</xdr:to>${body}<xdr:clientData${o.noPrint !== undefined ? ` fPrintsWithSheet="${o.noPrint ? 0 : 1}"` : ''}${o.locked !== undefined ? ` fLocksWithSheet="${o.locked === false ? 0 : 1}"` : ''}/></xdr:twoCellAnchor>`;
       const xfrm = (o) => `<a:xfrm${o.rot ? ` rot="${Math.round(o.rot * 60000)}"` : ''}${o.flip ? ' flipH="1"' : ''}${o.flipV ? ' flipV="1"' : ''}><a:off x="${Math.round(o.x * EMU)}" y="${Math.round(o.y * EMU)}"/><a:ext cx="${Math.round(o.w * EMU)}" cy="${Math.round(o.h * EMU)}"/></a:xfrm>`;
+      const embedPictureSource = source => {
+        const m = /^data:([^;,]+);base64,(.*)$/s.exec(source ?? ''); if (!m) return null;
+        const ext = Object.keys(MIME).find(k => MIME[k] === m[1]); if (!ext) return null;
+        mediaNo++; mediaExts.add(ext); files[`xl/media/image${mediaNo}.${ext}`] = fromBase64(m[2]);
+        return drel('image', `../media/image${mediaNo}.${ext}`);
+      };
       let objId = 1;
       const parts = [];
       const ordered = [
@@ -4476,38 +4487,27 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
           const chartNamespace = isChartEx(ch) ? CHARTEX_NS : 'http://schemas.openxmlformats.org/drawingml/2006/chart';
           parts.push(anchor(ch, `<xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="${objId}" name="차트 ${objId - 1}"${ch.hidden ? ' hidden="1"' : ''}>${isChartEx(ch) ? chartExDrawingProps(ch, paletteOf(ch)) : ''}</xdr:cNvPr><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="${chartNamespace}"><c:chart xmlns:c="${chartNamespace}" r:id="${id}"/></a:graphicData></a:graphic></xdr:graphicFrame>`));
         } else if (kind === 'image') {
-          const im = o;
-          // SVG 그림(아이콘): PNG 대체 그림 + svgBlip 으로 원본 SVG (엑셀과 같은 방식)
-          const svgSrc = im.png && /^data:image\/svg\+xml;base64,/.test(im.src ?? '') ? im.src : null;
-          const m = /^data:([^;,]+);base64,(.*)$/s.exec(im.emf ?? (svgSrc ? im.png : im.src) ?? '') ?? (im.linked ? [0, 'image/png', BLANK_PNG] : null);
-          if (!m) continue;
-          const ext = Object.keys(MIME).find((k) => MIME[k] === m[1]) ?? 'png';
-          mediaNo++;
-          mediaExts.add(ext);
-          files[`xl/media/image${mediaNo}.${ext}`] = fromBase64(m[2]);
-          const id = drel('image', `../media/image${mediaNo}.${ext}`);
+          const im = o, source = pictureMediaSource(im) ?? (im.linked ? 'data:image/png;base64,' + BLANK_PNG : null);
+          const id = embedPictureSource(source); if (!id) continue;
+          const svgSrc = !im.effectPng && im.png && /^data:image\/svg\+xml;base64,/.test(im.src ?? '') ? im.src : null;
           let svgExt = '';
           if (svgSrc) {
-            mediaNo++;
-            mediaExts.add('svg');
-            files[`xl/media/image${mediaNo}.svg`] = fromBase64(svgSrc.slice(svgSrc.indexOf(',') + 1));
-            const sid = drel('image', `../media/image${mediaNo}.svg`);
+            const sid = embedPictureSource(svgSrc);
             svgExt = `<a:extLst><a:ext uri="{96DAC541-7B7A-43D3-8B79-37D633B846F1}"><asvg:svgBlip xmlns:asvg="http://schemas.microsoft.com/office/drawing/2016/SVG/main" r:embed="${sid}"/></a:ext></a:extLst>`;
           }
+          const extensions = (im.linked ? `<a:ext uri="${LINKED_PIC_URI}"><wx:linked xmlns:wx="https://wixel.app/x" ref="${esc(linkedRef(im.linked))}"/></a:ext>` : '')
+            + (normalizeVideo(im.media) ? `<a:ext uri="${MEDIA_OBJECT_URI}"><wx:video xmlns:wx="https://wixel.app/x" json="${esc(JSON.stringify(normalizeVideo(im.media)))}"/></a:ext>` : '')
+            + pictureMetadataXml(im, embedPictureSource);
           objId++;
-          parts.push(anchor(im, `<xdr:pic${im.macro ? ` macro="[0]!${esc(im.macro)}"` : ''}><xdr:nvPicPr><xdr:cNvPr id="${objId}" name="${esc(im.name || `그림 ${objId - 1}`)}"${im.alt !== undefined ? ` descr="${esc(im.alt)}"` : ''}${im.hidden ? ' hidden="1"' : ''}>${hyperlinkXml(im)}${im.linked || normalizeVideo(im.media) ? `<a:extLst>${im.linked ? `<a:ext uri="${LINKED_PIC_URI}"><wx:linked xmlns:wx="https://wixel.app/x" ref="${esc(linkedRef(im.linked))}"/></a:ext>` : ''}${normalizeVideo(im.media) ? `<a:ext uri="${MEDIA_OBJECT_URI}"><wx:video xmlns:wx="https://wixel.app/x" json="${esc(JSON.stringify(normalizeVideo(im.media)))}"/></a:ext>` : ''}</a:extLst>` : ''}</xdr:cNvPr><xdr:cNvPicPr><a:picLocks noChangeAspect="${im.lockAspect === false ? 0 : 1}"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill>${`<a:blip r:embed="${id}">${pictureEffects(im).opacity !== 1 ? `<a:alphaModFix amt="${Math.round(pictureEffects(im).opacity * 100000)}"/>` : ''}${svgExt ?? ''}</a:blip>`}${im.crop ? `<a:srcRect${['l', 't', 'r', 'b'].map((k) => (im.crop[k] ? ` ${k}="${Math.round(im.crop[k] * 100000)}"` : '')).join('')}/>` : ''}<a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>${xfrm(im)}${pictureEffects(im).radius ? `<a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val ${Math.round(pictureEffects(im).radius / Math.min(im.w, im.h) * 100000)}"/></a:avLst></a:prstGeom>` : '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'}${/^#[0-9a-f]{6}$/i.test(im.border ?? "") ? `<a:ln w="${Math.round((im.borderW ?? 2) * EMU)}"><a:solidFill><a:srgbClr val="${im.border.replace('#', '').toUpperCase()}"/></a:solidFill></a:ln>` : ''}${shapeEffectsXml({ shadow: pictureEffects(im).shadow })}</xdr:spPr></xdr:pic>`));
+          const native = `<xdr:pic${im.macro ? ` macro="[0]!${esc(im.macro)}"` : ''}><xdr:nvPicPr><xdr:cNvPr id="${objId}" name="${esc(im.name || `그림 ${objId - 1}`)}"${im.alt !== undefined ? ` descr="${esc(im.alt)}"` : ''}${im.hidden ? ' hidden="1"' : ''}>${hyperlinkXml(im)}${extensions ? `<a:extLst>${extensions}</a:extLst>` : ''}</xdr:cNvPr><xdr:cNvPicPr><a:picLocks noChangeAspect="${im.lockAspect === false ? 0 : 1}"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="${id}">${pictureBlipXml(im)}${svgExt}</a:blip>${im.crop ? `<a:srcRect${['l','t','r','b'].map(k => ` ${k}="${Math.round((im.crop[k] ?? 0) * 100000)}"`).join('')}/>` : ''}<a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>${xfrm(im)}${pictureGeometryXml(im)}${pictureBorderXml(im)}${pictureEffectXml(im)}</xdr:spPr></xdr:pic>`;
+          parts.push(anchor(im, native));
         } else if (kind === 'slicerTable' || kind === 'slicerPivot') {
           objId++;
           parts.push(slicerAnchorXml(o.sl, o.name, objId, anchorAt, kind === 'slicerTable' ? 'table' : 'pivot'));
         } else if (isDrawingGroup(o)) {
           objId++;
-          const groupXml = drawingGroupXml(o, objId, { shapeXml, xfrm, hyperlinkXml, nextId: () => ++objId, embedImage: im => {
-            const m = /^data:([^;,]+);base64,(.*)$/s.exec(im.png ?? im.src ?? '');
-            if (!m) return null;
-            const ext = Object.keys(MIME).find(k => MIME[k] === m[1]); if (!ext) return null;
-            mediaNo++; mediaExts.add(ext); files[`xl/media/image${mediaNo}.${ext}`] = fromBase64(m[2]);
-            return drel('image', `../media/image${mediaNo}.${ext}`);
-          } });
+          const groupXml = drawingGroupXml(o, objId, { shapeXml, xfrm, hyperlinkXml, nextId: () => ++objId,
+            embedImage: im => embedPictureSource(pictureMediaSource(im)), embedSource: embedPictureSource });
           parts.push(anchor(o, groupXml));
         } else {
           objId++;
