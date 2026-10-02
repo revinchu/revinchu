@@ -60,8 +60,11 @@ try {
     assert.equal(await p.evaluate(() => document.activeElement.dataset.miniCommand), 'growFont'); await p.keyboard.press('ArrowRight'); assert.equal(await p.evaluate(() => document.activeElement.dataset.miniCommand), 'shrinkFont');
     await p.keyboard.press('Escape'); assert.equal(await p.getByRole('menu').count(), 0); assert.equal(await p.locator('.context-mini-toolbar').count(), 0);
   });
-  await test('메뉴 명시 C는 미니 자동 키보다 우선하며 Alt 배지는 양쪽 포함', async (p) => {
-    await fixture(p); await p.keyboard.press('Alt'); assert.ok(await p.locator('.access-key-badge').count() > 20);
+  await test('메뉴 명시 C는 미니 자동 키보다 우선하며 미니 힌트·배지는 숨김', async (p) => {
+    await fixture(p); await p.keyboard.press('Alt'); assert.equal(await p.locator('.access-key-badge').count(), 10);
+    assert.equal(await p.locator('.context-mini-toolbar .access-key-hint').count(), 0);
+    const miniRect = await p.locator('.context-mini-toolbar').boundingBox();
+    assert.equal(await p.locator('.access-key-badge').evaluateAll((nodes,b) => nodes.filter(n => { const r=n.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;return x>=b.x&&x<=b.x+b.width&&y>=b.y&&y<=b.y+b.height; }).length, miniRect), 0);
     assert.equal(await p.locator('.context-mini-toolbar [data-resolved-access-key="c"]').count(), 0);
     await p.keyboard.press('c'); assert.deepEqual((await state(p)).calls, [['copy']]); assert.equal(await p.locator('.context-mini-toolbar').count(), 0);
   });

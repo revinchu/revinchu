@@ -133,7 +133,8 @@ function associatedAccessLabel(target) {
 function showAccessCaption(target, key, label, scope) {
   let hint = accessCaptionNodes.get(target);
   const caption = accessKeyCaption(label, key);
-  if (!caption || target.matches('[data-dialog-close-head],.dialog-close')) { hint?.remove(); return; }
+  // 미니 서식 도구 모음은 아이콘/입력 전용이다. 접근키 실행은 유지하되 글자 힌트로 칸을 넓히지 않는다.
+  if (!caption || target.closest('.context-mini-toolbar') || target.matches('[data-dialog-close-head],.dialog-close')) { hint?.remove(); return; }
   let host;
   if (target.matches('button,a,[role="tab"],[role="menuitem"],[role="button"],[role="option"]')) {
     const explicit = target.querySelector('[data-access-caption-host]');
@@ -233,6 +234,7 @@ function drawAccessKeys(scope) {
   accessLayer?.remove();
   accessLayer = el('div', { class: 'access-key-layer', 'aria-hidden': 'true' });
   for (const item of prepareAccessKeys(scope)) {
+    if (item.target.closest('.context-mini-toolbar')) continue;
     const r = item.target.getBoundingClientRect();
     const badge = el('span', { class: 'access-key-badge', 'data-key': item.key, title: item.automatic ? 'WIXEL 자동 접근키' : item.target.dataset.accessKeySource === 'excel' ? '한국어 Excel 레이블 접근키' : '지정 접근키', style: { left: `${Math.max(2, Math.min(innerWidth - 24, r.right - 18))}px`, top: `${Math.max(2, Math.min(innerHeight - 22, r.top - 6))}px` } }, item.key.toUpperCase());
     accessLayer.append(badge);
@@ -401,8 +403,8 @@ function buildMenu(anchor, items, { minWidth, scroll, toolbar, level = 0, parent
   openMenus.push(menu);
   menuAnchors.set(menu, anchor);
   if (toolbar instanceof HTMLElement && !level) attachMenuToolbar(menu, toolbar, anchor);
-  placeMenu(menu, anchor);
   prepareAccessKeys(menu);
+  placeMenu(menu, anchor);
   menu.addEventListener('keydown', (e) => {
     if (e.isComposing || e.keyCode === 229) return;
     if (e.key === 'Tab' && toolbar?.isConnected) {
@@ -453,6 +455,9 @@ function placeMenu(menu, anchor) {
   let x = rect ? rect.left : anchor?.x ?? bounds.left + margin, y = rect ? rect.bottom + 2 : anchor?.y ?? bounds.top + margin;
   const clampX = value => Math.max(bounds.left + margin, Math.min(value, bounds.right - margin - menu.offsetWidth));
   const clampY = value => Math.max(bounds.top + margin, Math.min(value, bounds.bottom - margin - menu.offsetHeight));
+  // Measure at full viewport width first. A fixed auto-width menu otherwise
+  // shrinks beside its previous/right-edge position and wraps after clamping.
+  menu.style.left = `${bounds.left + margin}px`; menu.style.top = `${bounds.top + margin}px`;
   x = clampX(x); y = clampY(y);
   menu.style.left = x + 'px'; menu.style.top = y + 'px';
   const toolbar = menuToolbars.get(menu);
@@ -471,7 +476,7 @@ function placeMenu(menu, anchor) {
   }
 }
 
-function toolbarControls(toolbar) { return [...toolbar.querySelectorAll('button,input,select,textarea,[tabindex]')].filter((node) => accessVisible(node) && node.tabIndex >= 0); }
+function toolbarControls(toolbar) { return [...toolbar.querySelectorAll('button,input,select,textarea,[tabindex]')].filter((node) => accessVisible(node, true) && node.tabIndex >= 0); }
 function attachMenuToolbar(menu, toolbar, anchor) {
   toolbar.classList.add('context-mini-toolbar'); toolbar.dataset.level = '0';
   toolbar.setAttribute('role', 'toolbar');
@@ -484,6 +489,8 @@ function attachMenuToolbar(menu, toolbar, anchor) {
   menuToolbarObservers.set(menu, observer);
   observer.observe(menu.parentNode, { childList: true });
   toolbar.addEventListener('mousedown', (event) => { if (event.target.closest('button')) event.preventDefault(); });
+  // 가로로 스크롤되는 모바일 막대도 Tab/화살표로 모든 도구에 도달할 수 있다.
+  toolbar.addEventListener('focusin', (event) => { if (event.target !== toolbar) event.target.scrollIntoView({ block: 'nearest', inline: 'nearest' }); });
   toolbar.addEventListener('keydown', (event) => {
     event.stopPropagation();
     if (event.isComposing || event.keyCode === 229) return;

@@ -5,7 +5,7 @@ import { FONTS, FONT_SIZES } from './ribbon.js';
 let miniToolbarId = 0;
 /** onCommand(cmd,value), openNamedMenu(name,anchor), getStyle()->현재 서식, readonly:boolean|()=>boolean */
 export function createContextMiniToolbar({ onCommand, openNamedMenu, getStyle = () => ({}), readonly = false } = {}) {
-  const root = el('div', { class: 'context-mini-toolbar', role: 'toolbar', 'aria-label': '미니 서식 도구 모음' });
+  const root = el('div', { class: 'context-mini-toolbar cell-mini-toolbar', role: 'toolbar', 'aria-label': '미니 서식 도구 모음' });
   const controls = [], toggles = [], id = ++miniToolbarId;
   const locked = () => typeof readonly === 'function' ? !!readonly() : !!readonly;
   const invoke = async (cmd, value) => {

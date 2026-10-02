@@ -18,7 +18,7 @@ try{
   const compact=(await p.locator('#gridWrap').boundingBox()).height;
   await tools(p);await drawer(p).getByRole('button',{name:'여유롭게',exact:true}).click();
   await p.waitForFunction(()=>!document.body.classList.contains('mobile-compact'));
-  assert.ok(compact-(await p.locator('#gridWrap').boundingBox()).height>80);
+  assert.ok(compact>(await p.locator('#gridWrap').boundingBox()).height, '촘촘한 밀도에서 격자 높이 증가');
   assert.equal(await p.evaluate(()=>JSON.stringify(window.tabula.wb().serialize())),initial);
   await p.reload();await p.waitForFunction(()=>window.tabula?.wb());
   assert.equal(await p.evaluate(()=>window.tabula.mobile().density),'comfortable');

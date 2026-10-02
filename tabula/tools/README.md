@@ -467,3 +467,8 @@ node tools/mobile-layout.mjs
 ## 직접 만든 피벗의 보고서 필터
 
 `node tools/pivot-report-layout.mjs`는 실제 피벗 생성/필드 추가 UI로 보고서 필터만 있는 상태와 본문 포함 상태, 행·열 우선과 줄바꿈 배치, 본문 앵커, 선택/우클릭/이름/표시 옵션, 주변 셀 보존, Undo/Redo 및 XLSX 저장 후 다시 열기를 검사한다. 소스/번들은 `WIXEL_URL`, D: 결과 위치는 `WIXEL_PIVOT_REPORT_OUT`을 사용한다. `WIXEL_PIVOT_REPORT_NATIVE_FIXTURE`로 개인 자료가 없는 Excel 합성 파일을 지정해 가져오기와 비교할 수 있다. 네이티브 Excel 근거와 실제 파일 검증의 범위는 [51번 문서](../docs/codex/51_피벗보고서필터.md)를 참고한다.
+
+
+## 모바일 한 줄 도구와 우클릭
+
+`node tools/mobile-compact-chrome.mjs`는 상·하단 한 줄 기하, 작은 글꼴/크기 입력, 실제 마우스 휠 가로 탐색, 우클릭 도구의 겹침/키힌트/브라우저 기본 메뉴 차단 및 문서 불변을 검사한다. `WIXEL_URL`로 소스나 Cloudflare 번들을 선택하고 `WIXEL_MOBILE_COMPACT_OUT`으로 D: 캡처 폴더, `WIXEL_MOBILE_COMPACT_FILTER`로 시나리오 이름 일부를 지정한다. `mobile-layout.mjs`는 전체 상황별 리본의 두 밀도, `mobile-popups.mjs`는 팝업 최초 배치·현재 차트 요소 전환·파일 저장 확인과 실제 PDF를 함께 검사한다. 합성 문서만 사용하며 브라우저 검증 범위는 [52번 문서](../docs/codex/52_모바일한줄도구와우클릭.md)를 참고한다.

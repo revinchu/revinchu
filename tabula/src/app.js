@@ -8252,7 +8252,6 @@ function optionsDialog(startTab = 0) {
       el('label', {}, el('span', {}, '정렬 및 채우기 순서에 사용할 목록 만들기'), el('button', { class: 'btn', onclick: () => customListsDialog() }, '사용자 지정 목록 편집(O)...')),
       title('표시'),
       check(view.showFormulaBar, '수식 입력줄 표시', (v) => { o._formulaBar = v; }),
-      check(o.browserMenu, '셀에서 브라우저 기본 오른쪽 클릭 메뉴도 허용', (v) => { o.browserMenu = v; }),
       title(`통합 문서 표시 옵션 — ${docName}`),
       check(!book.lockStructure, '시트 탭 편집 허용 (끄면 통합 문서 구조 보호)', (v) => { book.lockStructure = !v; }),
       title(`워크시트 표시 옵션 — ${sheet().name}`),
@@ -18932,6 +18931,10 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileFit','toggleR
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['모바일 공간 활용과 우클릭 도구', [
+    '모바일 제목줄과 메뉴 탭, 시트 탭과 화면 배율을 각각 한 줄로 합쳤습니다. 글꼴·크기 입력과 아이콘을 줄이고 마우스 휠로 가로 메뉴를 이동합니다.',
+    '셀 우클릭 서식 도구의 글자와 단축키 겹침을 없애고, 앱 위에 브라우저 기본 우클릭 메뉴가 함께 뜨지 않도록 했습니다.',
+  ]],
   ['피벗 보고서 필터 표시·저장', ['직접 만든 피벗과 가져온 피벗의 보고서 필터 스타일·정렬을 통일하고 글자와 드롭다운 겹침을 수정했습니다.', '행·열 우선 배치와 줄바꿈, 본문 기준 위치, 사용자 지정 이름과 필터 전용 피벗의 XLSX 저장을 보강했습니다.']],
   ['갤러리 글자 배치 개선', ['차트 견본·이름·단축키를 분리하고 긴 한글과 작은 화면의 미리보기, 셀 스타일 줄바꿈을 보강했습니다.']],
   ['그림과 SVG 저장', ['사진·도형·아이콘과 선택한 셀 범위를 PNG·JPEG·SVG로 저장합니다. 미리보기와 배경·해상도 옵션을 제공합니다.']],
@@ -19441,13 +19444,9 @@ function bindEvents() {
   });
   document.querySelector('.statusbar')?.addEventListener('contextmenu', statusMenu);
   $('calcState').addEventListener('click', calculationStatusDialog);
-  // 구글 스프레드시트처럼 브라우저 기본 메뉴는 띄우지 않음 (글 입력 칸 · 링크 제외).
-  // Windows 는 contextmenu 가 버튼을 뗄 때 오므로, 이미 열린 위셀 메뉴 위에서 받는 경우도 막음
-  document.addEventListener('contextmenu', (e) => {
-    const t = e.target;
-    const typing = t instanceof Element && t.matches('input:not([type=checkbox]):not([type=radio]), textarea, [contenteditable=""], [contenteditable=true]') && t !== dom.editor;
-    if (!typing && !opts.browserMenu) e.preventDefault();
-  });
+  // 입력란·우클릭 메뉴를 포함한 앱 안에서는 브라우저 메뉴가 위셀 메뉴를 가리지 않는다.
+  // capture에서 기본 동작만 막고 전파는 유지하므로 각 영역의 사용자 메뉴는 계속 열린다.
+  document.addEventListener('contextmenu', (e) => e.preventDefault(), { capture: true });
   document.addEventListener('mousemove', (e) => {
     if (tlDrag) {
       const c = document.elementFromPoint(e.clientX, e.clientY)?.closest?.('.tl-cell');

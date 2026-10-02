@@ -15,7 +15,7 @@ export function openMobileTools(host) {
     if (query) { const found = commandButtons.filter((b, i) => `${host.commands[i].label} ${host.commands[i].tab ?? ''}`.toLocaleLowerCase().includes(query)); results.append(...found); if (!found.length) results.append(el('p', {}, '일치하는 명령이 없습니다. 아래 메뉴 탭에서 찾아보세요.')); }
   });
   const body = el('div', { class: 'mobile-tools-body' },
-    el('p', { class: 'mobile-tools-tip' }, '메뉴와 시트 탭을 좌우로 밀어보세요. 셀 한 번 누르기: 선택 · 두 번: 편집 · 길게 누른 뒤 끌기: 범위 · 두 손가락: 확대/축소'),
+    el('p', { class: 'mobile-tools-tip' }, '메뉴와 시트 탭은 좌우로 밀거나 마우스 휠로 이동합니다. 셀 한 번 누르기: 선택 · 두 번: 편집 · 길게 누른 뒤 끌기: 범위 · 두 손가락: 확대/축소'),
     search, results,
     section('메뉴 크기', [
       button('촘촘하게', () => host.setDensity('compact'), { 'aria-pressed': String(host.density === 'compact') }),
