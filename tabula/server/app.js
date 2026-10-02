@@ -11,7 +11,7 @@ const SUFFIX = '.tabula.json';
 const TYPES = {
   '.gz': 'application/gzip', '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png',
-  '.json': 'application/json; charset=utf-8',
+  '.json': 'application/json; charset=utf-8', '.webmanifest': 'application/manifest+json; charset=utf-8', '.ico': 'image/vnd.microsoft.icon',
 };
 
 export function serverConfig(env = process.env) {
@@ -34,7 +34,8 @@ function within(base, file) {
 
 function allowedAsset(asset) {
   return !asset.split('/').some((part) => part.startsWith('.')) &&
-    /^(index\.html|styles\.css|src\/.+\.js|assets\/.+|dist\/(index\.html|assets\/.+))$/.test(asset);
+    (/^(index\.html|styles\.css|src\/.+\.js|assets\/.+|dist\/(index\.html|assets\/.+))$/.test(asset) ||
+      /^(?:dist\/)?(?:manifest\.webmanifest|apple-touch-icon\.png|favicon\.ico|favicon-32x32\.png|icons\/wixel-(?:192|512|maskable-512)\.png)$/.test(asset));
 }
 
 function send(res, status, body, type = 'application/json; charset=utf-8') {

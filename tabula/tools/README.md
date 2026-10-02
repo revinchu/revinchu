@@ -348,3 +348,8 @@ node tools/mobile-layout.mjs
 ```
 
 `mobile-layout.mjs`의 전체 리본 카탈로그 검사는 소스 서버가 필요합니다. 번들에서는 `MOBILE_LAYOUT_CATALOG=0`으로 실제 앱 화면·모드 전환·가상키보드 검사만 실행합니다. 실제 기기의 IME, iOS/Android 브라우저 바 및 다운로드 UI는 에뮬레이션 결과와 별도로 확인해야 합니다. 자세한 범위는 `docs/codex/28_모바일작업모드.md`를 참고하세요.
+
+
+## 홈 화면 아이콘
+
+`WIXEL_URL`을 실행 중인 소스 서버 또는 배포 주소로 지정하고 `node tools/home-icons.mjs`를 실행합니다. 홈 화면 메타데이터, manifest 파싱, HTTP MIME, 아이콘 실제 디코드 크기·불투명도·안전 영역 및 로컬 파일과의 해시를 검사합니다. 이는 실제 휴대전화 홈 화면 설치 테스트와 별개입니다.

@@ -1,5 +1,5 @@
 // 한 파일짜리 배포본 만들기 (의존성 없음)
-//   node build.mjs            → dist/index.html (CSS·JS 를 모두 넣은 단일 HTML) + dist/.nojekyll
+//   node build.mjs            → dist/index.html (CSS·JS·favicon을 포함한 단일 HTML) + 아이콘/manifest/assets
 // 정적 호스팅(GitHub Pages 등)에 올리거나 파일을 바로 열어도 동작합니다.
 // 서버 저장소(/api/files)가 없으면 앱이 자동으로 브라우저 저장(localStorage)을 사용합니다.
 import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync, readdirSync, unlinkSync } from 'node:fs';
@@ -52,10 +52,19 @@ function bundle(entry) {
   return `const __mods = {};\n${order.join('\n')}`;
 }
 
+const brandingAssets = [
+  'manifest.webmanifest', 'apple-touch-icon.png', 'favicon.ico', 'favicon-32x32.png',
+  'icons/wixel-192.png', 'icons/wixel-512.png', 'icons/wixel-maskable-512.png',
+];
+// Required assets: a missing icon must fail the build rather than become an HTML fallback.
+for (const file of brandingAssets) if (!existsSync(join(root, file))) throw new Error(`배포 아이콘 파일이 없습니다: ${file}`);
+
 let html = readFileSync(join(root, 'index.html'), 'utf8');
 if (!html.includes('<script type="module" src="src/app.js"></script>') || !html.includes('<link rel="stylesheet" href="styles.css">')) {
   throw new Error('index.html 구조가 바뀌었습니다 (styles.css / src/app.js 참조를 찾지 못함)');
 }
+// A copied standalone index.html keeps its favicon without adjacent image files.
+if (!cloud) html = html.replace(/<link rel="icon"[^>]+>/g, tag => tag.replace(/href="([^"]+)"/, (_, file) => `href="data:${file.endsWith('.ico') ? 'image/vnd.microsoft.icon' : 'image/png'};base64,${readFileSync(join(root, file)).toString('base64')}"`));
 const css = readFileSync(join(root, 'styles.css'), 'utf8');
 const js = bundle('src/app.js').replace(/<\/script/gi, '<\\/script');
 const cloudJs = `globalThis.TABULA_STATIC = false;\n${js}`;
@@ -66,6 +75,10 @@ html = html
 mkdirSync(outDir, { recursive: true });
 writeFileSync(join(outDir, 'index.html'), html);
 writeFileSync(join(outDir, '.nojekyll'), '');
+for (const file of brandingAssets) {
+  mkdirSync(dirname(join(outDir, file)), { recursive: true });
+  copyFileSync(join(root, file), join(outDir, file));
+}
 if (cloud) {
   for (const old of readdirSync(outDir)) {
     if (/^wixel-[a-f0-9]{16}\.js$/.test(old) && old !== cloudName) unlinkSync(join(outDir, old));
@@ -82,6 +95,9 @@ if (cloud) {
 /index.html
   Cache-Control: no-cache
 /version.json
+  Cache-Control: no-cache
+/manifest.webmanifest
+  Content-Type: application/manifest+json; charset=utf-8
   Cache-Control: no-cache
 /
   Cache-Control: no-cache
