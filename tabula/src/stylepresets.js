@@ -156,8 +156,17 @@ export const DEFAULT_THEME = ['FFFFFF', '000000', 'E7E6E6', '44546A', '4472C4', 
 export const THEME = { colors: DEFAULT_THEME, key: DEFAULT_THEME.join() };
 export function setThemeColors(list) {
   const colors = list?.length ? list : DEFAULT_THEME;
+  const key = colors.join(); // 검증/키 생성 실패 시 현재 문서의 전역 테마는 그대로 둔다.
   THEME.colors = colors;
-  THEME.key = colors.join();
+  THEME.key = key;
+}
+
+/** 동기 문서 준비는 그 문서의 색을 사용하고, 완료/실패 뒤 화면의 테마를 복원한다. */
+export function withThemeColors(colors, work) {
+  const previous = THEME.colors;
+  setThemeColors(colors);
+  try { return work(); }
+  finally { setThemeColors(previous); }
 }
 
 /**

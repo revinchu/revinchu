@@ -1,3 +1,4 @@
+import { isPivotSnapshot, cubeFromPivotSnapshot } from './pivot-cache-data.js';
 // 피벗 테이블 계산 (DOM 없음)
 // 정의(def): { name, source, range | table, rows: [필드 이름], cols: [필드 이름], values: [{ field, agg, name, showAs, numFmt }],
 //              pages: [필드 이름], filters: { 필드 이름: [보이는 항목 글자] }, layout: 'compact' | 'outline' | 'tabular',
@@ -15,7 +16,7 @@ import { logicalCol } from './block.js';
 import { presetStyle, presetSwatch, paintPivotPreset, MODERN_STYLES, styleElementsPreset } from './stylepresets.js';
 import {
   EMPTY as EMPTY0, IMG_KEY as IMG_KEY0, keyOf as keyOf0, imageOfKey as imageOfKey0, sortKeys as sortKeys0, itemText as itemText0,
-  kk, cubeFromRows, filterRows, groupAggregate, groupAcc, Cube, Column, blockColumn, groupedColumn, groupRank, groupKey, aggregateQuery, planRollup, GROUP_BY as GROUP_BY0,
+  kk, itemIdentity, itemProperty, cubeFromRows, filterRows, groupAggregate, groupAcc, Cube, Column, blockColumn, groupedColumn, groupRank, groupKey, aggregateQuery, planRollup, GROUP_BY as GROUP_BY0,
 } from './cube.js';
 import { maxOf, minOf, pushAll, ERR, ERR_BY_CODE } from './fxcore.js';
 
@@ -621,7 +622,7 @@ export function normalizeDef(def, header) {
     ...(Number.isInteger(def.valuesPos) ? { valuesPos: def.valuesPos } : {}),
     ...(def.valuesOnRows ? { valuesOnRows: true } : {}), // Σ 값을 행 영역에 (엑셀 dataOnRows)
     ...pivotDisplayOptions(def),
-    ...(def.dataCaption ? { dataCaption: def.dataCaption } : {}), // 엑셀 dataCaption ('값' 대신 '데이터' 등)
+    ...(def.dataCaption !== undefined && def.dataCaption !== null ? { dataCaption: def.dataCaption } : {}), // 엑셀 dataCaption ('값' 대신 '데이터' 등)
     styleOpts: { rowHeaders: true, colHeaders: true, bandRows: false, bandCols: false, ...(def.styleOpts ?? {}) },
     header: allHeader,
   };
@@ -656,9 +657,11 @@ export function pivotSourceData(wb, def) {
   const snap = def.snapshotId && wb.pivotSnapshots?.get(def.snapshotId);
   if (snap) {
     // 원본 시트의 편집 횟수 (다시 계산으로는 바뀌지 않음) — 사용자가 원본을 고치면 저장본을 버림
-    const ver = wb.sheets[si]?._ev ?? 0;
+    const ver = wb.sourceVersion?.(si) ?? 0;
     snap.ver ??= ver;
-    if (snap.ver === ver) return sourceOf(cubeFromRows(snap.rows), si, ref, table, snap.rows, wb.date1904);
+    if (snap.ver === ver && (!wb.pivotSnapshotCurrent || wb.pivotSnapshotCurrent(snap, def))) return isPivotSnapshot(snap.rows)
+      ? sourceOf(cubeFromPivotSnapshot(snap.rows), si, ref, table, null, wb.date1904)
+      : sourceOf(cubeFromRows(snap.rows), si, ref, table, snap.rows, wb.date1904);
     wb.pivotSnapshots.delete(def.snapshotId); // 원본을 고침 → 이제부터 원본에서 계산 (자동 새로 고침)
   }
   // 데이터가 열 블록에 있으면 값을 복사하지 않고 블록의 형식화 배열을 그대로 씀 (천만 행도 즉시)
@@ -722,11 +725,10 @@ function blockCube(wb, si, ref, names) {
   });
   // 블록 안에 일반 셀(수식 등)이 있는 열
   const mixed = new Set();
-  for (const k of sheet.cells.keys()) {
-    const comma = k.indexOf(',');
-    const r = +k.slice(0, comma);
-    if (r < d1 || r > d2) continue;
-    mixed.add(+k.slice(comma + 1));
+  for (const [r,c,,count] of sheet.cells.storageEntries()) {
+    // 서식 전용 빈 셀도 블록 값을 덮어쓰므로 겹치는 구간은 반드시 포함한다.
+    if (r + count - 1 < d1 || r > d2) continue;
+    mixed.add(c);
   }
   const cube = new Cube(n, header, (j) => {
     const c = ref.c1 + j;
@@ -881,7 +883,7 @@ function valueIndex(values, by) {
 /** 행·열 필드 필터(레이블 · 값 · 상위 N)를 그룹에 적용 (바깥 필드부터, 부모 그룹 안에서 평가) */
 /** 필터 상태를 비교할 글자 (필드 · 항목 순서와 무관) */
 export function pivotFilterKey(filters) {
-  return JSON.stringify(Object.entries(filters ?? {}).map(([k, v]) => [k.toLowerCase(), [...v].map(String).sort()]).sort((a, b) => (a[0] < b[0] ? -1 : 1)));
+  return JSON.stringify(Object.entries(filters ?? {}).map(([k, v]) => [k.toLowerCase(), [...new Set([...v].map(x => itemIdentity(String(x))))].sort()]).sort((a, b) => (a[0] < b[0] ? -1 : 1)));
 }
 function applyFieldFilters(groups, d, measures) {
   const entries = Object.entries(d.fieldFilters ?? {});
@@ -929,8 +931,8 @@ function applyFieldFilters(groups, d, measures) {
           // 빈 값은 0 으로 비교 (엑셀: '값 = 0' 필터에 빈 항목도 남음)
           kept = items.filter((it) => compareOp(flt.op, measureOf(it, vi) ?? 0, Number(flt.v1), Number(flt.v2), false));
         } else if (flt.type === 'top' && snapshotItems(d, field)) {
-          const snap = new Set(d.tieOrder[field]);
-          kept = items.filter((it) => snap.has(itemText(it.key)));
+          const snap = new Set(d.tieOrder[field].map(itemIdentity));
+          kept = items.filter((it) => snap.has(itemIdentity(itemText(it.key))));
         } else if (flt.type === 'top') {
           const vi = valueIndex(d.values, flt.by);
           const scored = items.map((it) => ({ it, v: measureOf(it, vi) ?? -Infinity }));
@@ -1194,9 +1196,9 @@ export function resolvePivot(input, def) {
     const spec = j >= 0 ? d.groups?.[cube.header[j]] : null;
     if (!spec) return [j, new Set(allowed)];
     // 그룹화한 필드('1월' · '12월9일' 등)의 필터 → 그 그룹에 드는 원래 값들
-    const want = new Set(allowed);
+    const want = new Set(allowed.map(itemIdentity));
     const raw = new Set();
-    for (const k of cube.col(j).dim().keys) if (want.has(itemText(k === EMPTY ? EMPTY : groupKey(k, spec)))) raw.add(itemText(k));
+    for (const k of cube.col(j).dim().keys) if (want.has(itemIdentity(itemText(k === EMPTY ? EMPTY : groupKey(k, spec))))) raw.add(itemText(k));
     return [j, raw];
   }).filter(([i]) => i >= 0);
   const measures = makeMeasures(header, d.values, d.calcFields);
@@ -1334,14 +1336,14 @@ function parentTextPath(n) {
 function tieRank(d, field, parent = null) {
   const local = parent && d.tieByParent?.[field]?.[parentTextPath(parent)];
   if (local?.length) {
-    const pos = new Map(local.map((t, i) => [t, i]));
+    const pos = new Map(local.map((t, i) => [itemIdentity(t), i]));
     const rest = tieRank(d, field);
-    return (key) => { const i = pos.get(itemText(key)); return i !== undefined ? i : local.length + rest(key); };
+    return (key) => { const i = pos.get(itemIdentity(itemText(key))); return i !== undefined ? i : local.length + rest(key); };
   }
   const list = d.tieOrder?.[field];
   if (!list?.length) return () => 0;
-  const pos = new Map(list.map((t, i) => [t, i]));
-  return (key) => pos.get(itemText(key)) ?? list.length;
+  const pos = new Map(list.map((t, i) => [itemIdentity(t), i]));
+  return (key) => pos.get(itemIdentity(itemText(key))) ?? list.length;
 }
 
 /** 항목 순서: 정렬 설정(글자/값) → 수동 순서 → 기본(오름차순) */
@@ -1375,17 +1377,17 @@ function orderTree(root, fields, d, measureAt) {
       const byKey = new Map(kids.map((c) => [kk(c.key), c]));
       kids = keys.map((k) => byKey.get(kk(k)));
       // 글자 정렬 필드인데 항목이 모두 파일에 저장된 순서에 있으면 그 순서 (엑셀이 정렬해 둔 순서: 날짜와 글자가 섞인 경우 등)
-      const filePos = s && order?.length ? new Map(order.map((t, i) => [t, i])) : null;
-      if (filePos && kids.every((c) => filePos.has(itemText(c.key)))) {
-        kids = [...kids].sort((a, b) => filePos.get(itemText(a.key)) - filePos.get(itemText(b.key)));
+      const filePos = s && order?.length ? new Map(order.map((t, i) => [itemIdentity(t), i])) : null;
+      if (filePos && kids.every((c) => filePos.has(itemIdentity(itemText(c.key))))) {
+        kids = [...kids].sort((a, b) => filePos.get(itemIdentity(itemText(a.key))) - filePos.get(itemIdentity(itemText(b.key))));
         n.children = kids;
         kids.forEach(rec);
         return;
       }
       if (order?.length && !s) {
-        const pos = new Map(order.map((t, i) => [t, i]));
-        const known = kids.filter((c) => pos.has(itemText(c.key))).sort((a, b) => pos.get(itemText(a.key)) - pos.get(itemText(b.key)));
-        kids = [...known, ...kids.filter((c) => !pos.has(itemText(c.key)))];
+        const pos = new Map(order.map((t, i) => [itemIdentity(t), i]));
+        const known = kids.filter((c) => pos.has(itemIdentity(itemText(c.key)))).sort((a, b) => pos.get(itemIdentity(itemText(a.key))) - pos.get(itemIdentity(itemText(b.key))));
+        kids = [...known, ...kids.filter((c) => !pos.has(itemIdentity(itemText(c.key))))];
       }
       if (s?.dir === 'desc') {
         const blank = kids.filter((c) => c.key === EMPTY);
@@ -1427,7 +1429,8 @@ export function computePivot(input, d) {
   const calcNames = new Set((d.calcFields ?? []).map((c) => c.name.toLowerCase()));
 
   // 글자 항목은 그대로: '=' · 작은따옴표로 시작하거나, 입력으로 읽으면 글자가 달라지는 것(001 · 날짜처럼 보이는 글자)은 앞에 '
-  const text = (s, role) => ({ raw: typeof s === 'number' ? formatGeneral(s) : labelRaw(String(s ?? '')), style: { align: 'general', ...styleFor(role) }, role });
+  // 명시적 빈 캡션은 값이 없는 셀과 다르게 빈 문자열로 보존합니다.
+  const text = (s, role, explicitEmpty = false) => ({ raw: explicitEmpty && s === '' ? "'" : typeof s === 'number' ? formatGeneral(s) : labelRaw(String(s ?? '')), style: { align: 'general', ...styleFor(role) }, role });
   // 필터만 있는 경우도 본문과 같은 항목 판정·표준 스타일 경로를 사용합니다.
   const pageLayout = pivotPageLayout(d);
   const pageRows = Array.from({ length: pageLayout.height }, () => []);
@@ -1438,12 +1441,12 @@ export function computePivot(input, d) {
     if (allowed && resolved?.cube) {
       const j = idx(p);
       if (j >= 0 && j < resolved.cube.header.length) {
-        const have = new Set(resolved.cube.col(j).texts());
-        shown = allowed.filter((t) => have.has(t));
+        const have = new Map(resolved.cube.col(j).texts().map(t => [itemIdentity(t), t]));
+        shown = [...new Set(allowed.filter(t => have.has(itemIdentity(t))).map(t => have.get(itemIdentity(t))))];
         all = have.size > 1 && shown.length === have.size;
       }
     }
-    const caption = all ? '(모두)' : shown.length === 1 ? d.itemCaptions?.[p]?.[shown[0]] ?? shown[0] : '(다중 항목)';
+    const caption = all ? '(모두)' : shown.length === 1 ? itemProperty(d.itemCaptions?.[p], shown[0]) ?? shown[0] : '(다중 항목)';
     const pair = [{ ...text(d.fieldCaptions?.[p] ?? p, 'pageLabel'), field: p }, { ...text(caption, 'pageValue'), field: p }];
     pageRows[r][c] = pair[0]; pageRows[r][c + 1] = pair[1];
     if (!pageColumns.has(c)) pageColumns.set(c, []);
@@ -1510,7 +1513,7 @@ export function computePivot(input, d) {
     for (const f of fields) {
       const want = at.find(([x]) => x.toLowerCase() === f.toLowerCase());
       if (!want) break;
-      const next = node.children.find((ch) => itemText(ch.key) === want[1]);
+      const next = node.children.find((ch) => itemIdentity(itemText(ch.key)) === itemIdentity(want[1]));
       if (!next) return null;
       node = next;
     }
@@ -1523,8 +1526,8 @@ export function computePivot(input, d) {
   orderTree(rowTree, d.rows, d, (node, vi, field) => { const cp = otherPath(field, colTree, d.cols); return cp === null ? null : raw(node.path, cp, vi); });
   orderTree(colTree, d.cols, d, (node, vi, field) => { const rp = otherPath(field, rowTree, d.rows); return rp === null ? null : raw(rp, node.path, vi); });
   // 축소한 항목 (필드별 항목 글자, 엑셀처럼 필드의 같은 항목은 모두 함께)
-  const collSets = { r: d.rows.map((f) => new Set(d.collapsed?.[f] ?? [])), c: d.cols.map((f) => new Set(d.collapsed?.[f] ?? [])) };
-  const isColl = (axis, node) => node.depth >= 0 && node.depth < (axis === 'r' ? d.rows.length : d.cols.length) - 1 && collSets[axis][node.depth].has(itemText(node.key));
+  const collSets = { r: d.rows.map((f) => new Set((d.collapsed?.[f] ?? []).map(itemIdentity))), c: d.cols.map((f) => new Set((d.collapsed?.[f] ?? []).map(itemIdentity))) };
+  const isColl = (axis, node) => node.depth >= 0 && node.depth < (axis === 'r' ? d.rows.length : d.cols.length) - 1 && collSets[axis][node.depth].has(itemIdentity(itemText(node.key)));
   const toggleOf = (axis, node) => (d.showExpand && node.depth >= 0 && node.depth < (axis === 'r' ? d.rows.length : d.cols.length) - 1
     ? { field: (axis === 'r' ? d.rows : d.cols)[node.depth], item: itemText(node.key), collapsed: isColl(axis, node) } : null);
   const cellValue = (rpath, cpath, vi) => {
@@ -1590,7 +1593,7 @@ export function computePivot(input, d) {
       if (vdef.basePos === 'prev' || vdef.basePos === 'next') b = sibs[pos + (vdef.basePos === 'prev' ? -1 : 1)] ?? a;
       else {
         const want = String(vdef.baseItem ?? '');
-        b = sibs.find((s) => itemText(s.key) === want);
+        b = sibs.find((s) => itemIdentity(itemText(s.key)) === itemIdentity(want));
         if (!b) return CALC_ERR('#N/A');
       }
       const base = at(b.path + rest);
@@ -1626,12 +1629,12 @@ export function computePivot(input, d) {
   const fcap = (f) => d.fieldCaptions?.[f] ?? f;
   const icap = (axis, node) => {
     const t = itemText(node.key);
-    return d.itemCaptions?.[(axis === 'r' ? d.rows : d.cols)[node.depth]]?.[t] ?? t;
+    return itemProperty(d.itemCaptions?.[(axis === 'r' ? d.rows : d.cols)[node.depth]], t) ?? t;
   };
   // 요약 글자: 숫자(날짜) 항목은 원본 열의 표시 형식으로 (엑셀: '2023-12-06 요약')
   const subCap = (axis, node) => {
     const field = (axis === 'r' ? d.rows : d.cols)[node.depth];
-    if (typeof node.key === 'number' && !d.itemCaptions?.[field]?.[itemText(node.key)]) {
+    if (typeof node.key === 'number' && !itemProperty(d.itemCaptions?.[field], itemText(node.key))) {
       const st = resolved?.fieldStyle?.(field);
       if (st?.numFmt && st.numFmt !== 'general') return `${formatValue(node.key, st, d.date1904).text} 요약`;
     }
@@ -1734,8 +1737,8 @@ export function computePivot(input, d) {
   const rowHeaderCells = () => {
     if (noLabel) return [];
     if (d.showHeaders === false) return Array.from({ length: labelCols }, (_, i) => text('', `rowHead:${i}`));
-    if (layout === 'compact') return [text(Lr || onRows ? d.rowCaption ?? '행 레이블' : '', 'rowHead:0')];
-    return Array.from({ length: labelCols }, (_, i) => text(d.rows[i] === undefined ? (onRows && i === Lr ? d.dataCaption ?? '값' : '') : fcap(d.rows[i]), `rowHead:${i}`));
+    if (layout === 'compact') return [text(Lr || onRows ? d.rowCaption ?? '행 레이블' : '', 'rowHead:0', !!(Lr || onRows) && d.rowCaption === '')];
+    return Array.from({ length: labelCols }, (_, i) => text(d.rows[i] === undefined ? (onRows && i === Lr ? d.dataCaption ?? '값' : '') : fcap(d.rows[i]), `rowHead:${i}`, d.rows[i] === undefined && onRows && i === Lr && d.dataCaption === ''));
   };
   if (hasColHead) {
     // 열 필드가 있으면 맨 위에 '값 이름 | 열 레이블' 행 (값 필드만 여러 개면 생략)
@@ -1743,10 +1746,10 @@ export function computePivot(input, d) {
     if (Lc) {
       const caps = d.showHeaders === false ? [] : layout === 'compact' ? [d.colCaption ?? '열 레이블']
         : Array.from({ length: colLevels }, (_, lvl) => { const vLvl = colMulti ? vp : -1; return lvl === vLvl ? d.dataCaption ?? '값' : fcap(d.cols[vLvl >= 0 && lvl > vLvl ? lvl - 1 : lvl]); });
-      grid.push([text(valueCaption, 'valueCaption'), ...Array(labelCols - 1).fill(null).map(() => text('', 'corner')), ...(colLeaves.length ? colLeaves.map((_, k) => text(caps[k] ?? '', 'colHead')) : [text(caps[0] ?? '', 'colHead')])]);
+      grid.push([text(valueCaption, 'valueCaption'), ...Array(labelCols - 1).fill(null).map(() => text('', 'corner')), ...(colLeaves.length ? colLeaves.map((_, k) => text(caps[k] ?? '', 'colHead', k < caps.length && caps[k] === '')) : [text(caps[0] ?? '', 'colHead', caps.length > 0 && caps[0] === '')])]);
     }
     // 값 행 표시 또는 클래식 끌어 놓기: 열 필드 없이 값 여러 개면 값 이름 위에 '값' 행.
-    if (!Lc && colMulti && d.valuesHeadRow) grid.push([...Array.from({ length: labelCols }, () => text('', 'corner')), ...colLeaves.map((_, k) => text(k ? '' : d.dataCaption ?? '값', 'colHead'))]);
+    if (!Lc && colMulti && d.valuesHeadRow) grid.push([...Array.from({ length: labelCols }, () => text('', 'corner')), ...colLeaves.map((_, k) => text(k ? '' : d.dataCaption ?? '값', 'colHead', k === 0 && d.dataCaption === ''))]);
     for (let lvl = 0; lvl < colLevels; lvl++) {
       const row = lvl === colLevels - 1 ? rowHeaderCells() : Array.from({ length: labelCols }, () => text('', 'corner'));
       let prev = null;
@@ -1759,7 +1762,7 @@ export function computePivot(input, d) {
         const vLvl = colMulti ? vp : -1; // 값 이름이 있는 머리글 수준
         const cl = vLvl >= 0 && lvl > vLvl ? lvl - 1 : lvl; // 열 필드 수준
         const role = leaf.kind === 'grand' ? `grandHead:${Math.max(0, leaf.vi)}` : leaf.kind === 'sub' ? 'colSubHead' : lvl === vLvl ? `valueHead:${leaf.vi}` : `colItem:${cl}`;
-        const cell = text(show ? lab : '', role);
+        const cell = text(show ? lab : '', role, show && leaf.kind === 'grand' && !colMulti && d.grandCaption === '' && lab === '');
         // 펼치기 · 축소 단추: 하위 수준이 있는 열 항목
         if (show && lab && leaf.kind === 'item' && lvl !== vLvl && cl < Lc) {
           let n = leaf.node;
@@ -1879,12 +1882,12 @@ export function computePivot(input, d) {
   setParents(rowTree);
   if (Lr) rowTree.children.forEach((ch) => walkRows(ch, { shown: new Set() }));
   else if (onRows) pushValueRows(Array.from({ length: labelCols }, () => text('', 'rowItem:0')), '', 'item', { kind: 'item', node: rowTree }, 'rowItem:0');
-  else if (V) grid.push([...(noLabel ? [] : [text(d.grandCaption ?? TOTAL, 'grandLabel')]), ...valueCells('', 'grand')]);
+  else if (V) grid.push([...(noLabel ? [] : [text(d.grandCaption ?? TOTAL, 'grandLabel', d.grandCaption === '')]), ...valueCells('', 'grand')]);
   if (Lr && d.grandRows && V) {
     const cells = Array.from({ length: labelCols }, () => text('', 'grandLabel'));
     if (onRows) pushValueRows(cells, '', 'grand', { kind: 'grand' }, 'grandLabel');
     else {
-      cells[0] = text(d.grandCaption ?? TOTAL, 'grandLabel');
+      cells[0] = text(d.grandCaption ?? TOTAL, 'grandLabel', d.grandCaption === '');
       grid.push([...cells, ...valueCells('', 'grand')]);
       rowItems.push({ kind: 'grand' });
     }
@@ -1961,7 +1964,7 @@ function pivotChartDataRaw(rows, def, fieldStyle) {
     if (onRows) chain.push(valueName(d.values[it.vi]));
     for (let n = it.node; n && n.depth >= 0; n = n.parent) {
       const st = typeof n.key === 'number' ? fieldStyle?.(d.rows[n.depth]) : null;
-      const cap = d.itemCaptions?.[d.rows[n.depth]]?.[itemText(n.key)];
+      const cap = itemProperty(d.itemCaptions?.[d.rows[n.depth]], itemText(n.key));
       chain.unshift(cap ?? (st?.numFmt && st.numFmt !== 'general' ? formatValue(n.key, st, d.date1904).text : itemText(n.key)));
     }
     cats.push(chain.join(' / '));
@@ -2018,10 +2021,10 @@ export function pivotLookup(rows, def, dataField, pairs, resolved = null) {
       e.idx = new Map();
       // 엑셀: 축소한 항목 아래(보이지 않는) 항목은 GETPIVOTDATA 가 #REF!
       const deep = { r: Math.max(-1, ...pos.filter((p) => p[0] === 'r').map((p) => p[1])), c: Math.max(-1, ...pos.filter((p) => p[0] === 'c').map((p) => p[1])) };
-      const coll = [['r', d.rows], ['c', d.cols]].flatMap(([ax, fields]) => fields.map((f, i) => [ax, i, d.collapsed?.[f]?.length ? new Set(d.collapsed[f]) : null]).filter(([, i, set]) => set && i < deep[ax]));
+      const coll = [['r', d.rows], ['c', d.cols]].flatMap(([ax, fields]) => fields.map((f, i) => [ax, i, d.collapsed?.[f]?.length ? new Set(d.collapsed[f].map(itemIdentity)) : null]).filter(([, i, set]) => set && i < deep[ax]));
       for (const g of res.groups) {
-        if (coll.some(([ax, i, set]) => set.has(itemText(g[ax][i])))) continue;
-        const k = pos.map(([ax, i]) => itemText(g[ax][i])).join('\u0001');
+        if (coll.some(([ax, i, set]) => set.has(itemIdentity(itemText(g[ax][i]))))) continue;
+        const k = pos.map(([ax, i]) => itemIdentity(itemText(g[ax][i]))).join('\u0001');
         let l = e.idx.get(k);
         if (!l) { l = res.measures.newList(); e.idx.set(k, l); }
         mergeList(l, g.list);
@@ -2035,7 +2038,7 @@ export function pivotLookup(rows, def, dataField, pairs, resolved = null) {
     if (typeof v === 'number' && Number.isInteger(v)) { if (b === 'months' && v >= 1 && v <= 12) return `${v}월`; if (b === 'quarters' && v >= 1 && v <= 4) return `${v}분기`; }
     return itemText(v);
   };
-  let list = e.idx.get(pairs.length === 1 ? itemKey(pairs[0][1], 0) : pairs.map((p, i) => itemKey(p[1], i)).join('\u0001'));
+  let list = e.idx.get(pairs.length === 1 ? itemIdentity(itemKey(pairs[0][1], 0)) : pairs.map((p, i) => itemIdentity(itemKey(p[1], i))).join('\u0001'));
   // 원본 행이 하나도 없는 피벗의 총합계: 엑셀은 빈 집계(합계 0, 계산 필드는 그 결과)를 돌려줌
   if (!list && !pairs.length && !res.groups.length) list = res.measures.newList();
   if (!list) return null;

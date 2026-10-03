@@ -5,6 +5,8 @@
 // 레코드 구조: [MS-XLSB] (레코드 번호 · 필드 순서는 LibreOffice oox 가져오기와 같음)
 
 import { toBase64 } from './vba.js';
+import { PivotSnapshotBuilder, pivotCacheDate } from './pivot-cache-data.js';
+import { xlsbRichMetadataXml } from './xlsb-rich-metadata.js';
 
 const enc = new TextEncoder();
 const RK = new DataView(new ArrayBuffer(8));
@@ -71,7 +73,7 @@ const R = {
   TABLE: 343, TABLE_END: 344, LISTCOL: 347, LISTCOL_END: 348, LISTCCFMLA: 351,
   PCDEF: 179, PCDSOURCE: 185, PCDSHEETSRC: 187, PCDFIELD: 183, PCDFIELD_END: 184, PCDFSITEMS: 189, PCDFSITEMS_END: 190, PCITEM_ARRAY: 191,
   PCDFGROUP: 219, PCDFGROUP_END: 220, PCDFGROUPITEMS: 221, PCDFGROUPITEMS_END: 222, PCDPNAMES: 253, PCDPNAME: 255, PCDFGRANGE: 223,
-  PTDEF: 280, PTFITEM: 282, PTFIELD: 285, PTFIELD_END: 286, PTLOCATION: 314, PTROWFIELDS: 309, PTCOLFIELDS: 311, PTPAGEFIELD: 289,
+  PTDEF: 280, PTDEF14: 1062, PTFIELD14: 1061, PTFITEM: 282, PTFIELD: 285, PTFIELD_END: 286, PTLOCATION: 314, PTROWFIELDS: 309, PTCOLFIELDS: 311, PTPAGEFIELD: 289,
   PTDATAFIELD: 293, PTROWITEMS: 299, PTROWITEMS_END: 300, PTCOLITEMS: 301, PTCOLITEMS_END: 302, PTLINE: 297, PTLINE_X: 388, PTFILTER: 601, PTFILTER_END: 602, PTREFERENCE: 251, PTREFITEM: 382, AUTOSORTSCOPE: 459,
   SLC_DEF: 1077, SLC_PIVOTS: 1085, SLC_TABULAR: 1100, SLC_ITEMS: 1102, SLICER: 1083,
 };
@@ -87,7 +89,7 @@ const NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
 const NS_R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
 const put = (files, path, xml) => { files[path] = enc.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n${xml}`); };
 
-const ERRORS = { 0x00: '#NULL!', 0x07: '#DIV/0!', 0x0F: '#VALUE!', 0x17: '#REF!', 0x1D: '#NAME?', 0x24: '#NUM!', 0x2A: '#N/A', 0x2B: '#SPILL!', 0x2C: '#CALC!' };
+const ERRORS = { 0x00: '#NULL!', 0x07: '#DIV/0!', 0x0F: '#VALUE!', 0x17: '#REF!', 0x1D: '#NAME?', 0x24: '#NUM!', 0x2A: '#N/A', 0x2B: '#GETTING_DATA' };
 const errText = (e) => ERRORS[e] ?? '#N/A';
 
 /** BIFF12 색 (8바이트) → xlsx 색 속성 */
@@ -661,21 +663,31 @@ function cacheItem(t, rd) {
   }
 }
 
-/**
- * 피벗 캐시 레코드 (pivotCacheRecords.bin) → xlsx 의 <pivotCacheRecords> XML. 행마다 BrtPCRRecordDt(34) 뒤에 필드별 항목 기록,
- * 또는 BrtPCRRecord(33) 하나에 필드 값을 이어 붙인 형태 (공유 항목이 있는 필드 = u32 번호, 숫자 = f64, 글자 = XLWideString, 날짜 = 8바이트).
- * 형식을 알 수 없으면 null (그러면 원본에서 다시 계산)
- */
+/** MS-XLSB 2.4.742: shared index, numeric, date-only, then XLWideString. */
+function packedCacheKind(field) {
+  if (field.items.some(Boolean)) return 'x';
+  const flags = field.sflags ?? 0;
+  if (!Number.isInteger(flags) || flags < 0 || flags > 0xffff) throw new Error('피벗 캐시 열의 형식 정보가 올바르지 않습니다.');
+  if (flags & 0x40) return 'n';
+  if ((flags & 4) && !(flags & 8)) return 'd';
+  return 's';
+}
+function requireCacheBytes(rd, count) {
+  if (rd.left < count) throw new Error('피벗 캐시 레코드가 끝까지 저장되지 않았습니다.');
+}
+function packedCacheString(rd) {
+  requireCacheBytes(rd, 4);
+  const length = rd.u32();
+  // Cache-record strings have a 32767-character limit, unlike optional nullable strings.
+  if (length > 32767) throw new Error('피벗 캐시 문자열의 길이가 올바르지 않습니다.');
+  requireCacheBytes(rd, length * 2);
+  return rd.chars(length);
+}
+
+/** 피벗 저장 레코드를 XLSX XML로 변환합니다. */
 function pivotRecordsXml(u8, fields, recordCount) {
   const db = fields.filter((f) => f.database);
-  const kinds = db.map((f) => {
-    if (f.items.length) return 'x';
-    const sf = f.sflags ?? 0;
-    const num = sf & 0x40 || !(sf & 8);
-    if (sf & 4 && !(sf & 8)) return 'd';
-    if (sf & 8 && !(sf & 0x40) && !(sf & 4)) return 's';
-    return num ? 'n' : null;
-  });
+  const kinds = db.map(packedCacheKind);
   const out = [];
   let cur = null;
   let count = 0;
@@ -688,9 +700,10 @@ function pivotRecordsXml(u8, fields, recordCount) {
       const rd = new Rd(u8, r.p, r.e);
       const row = [];
       for (const k of kinds) {
+        requireCacheBytes(rd, k === 's' || k === 'x' ? 4 : 8);
         if (k === 'x') row.push(`<x v="${rd.u32()}"/>`);
         else if (k === 'n') row.push(`<n v="${numText(rd.f64())}"/>`);
-        else if (k === 's') row.push(`<s v="${esc(rd.str() ?? '')}"/>`);
+        else if (k === 's') row.push(`<s v="${esc(packedCacheString(rd))}"/>`);
         else if (k === 'd') row.push(cacheItem(25, rd));
         else { bad = true; break; }
       }
@@ -706,6 +719,54 @@ function pivotRecordsXml(u8, fields, recordCount) {
   flush();
   if (!count || (recordCount && count !== recordCount)) return null;
   return `<pivotCacheRecords xmlns="${NS}" count="${count}">${out.join('')}</pivotCacheRecords>`;
+}
+
+/** XLSB 저장 캐시를 XML 중간 문자열 없이 읽습니다. */
+export function* readPivotSnapshotBinary(u8, fields, metadata, date1904 = false) {
+  const db = fields.filter(field => field.db), binary = metadata.fields.filter(field => field.database);
+  const kinds = binary.map(packedCacheKind);
+  const builder = new PivotSnapshotBuilder(db.map(field => field.name), metadata.recordCount);
+  const date = rd => pivotCacheDate(`${rd.u16()}-${pad2(rd.u16())}-${pad2(rd.u8v())}T${pad2(rd.u8v())}:${pad2(rd.u8v())}:${pad2(rd.u8v())}`, date1904);
+  const item = (type, rd, column) => {
+    if (type === 26) return db[column]?.shared[rd.u32()] ?? null;
+    if (type === 20 || type === 27) return null;
+    if (type === 21 || type === 28) return rd.f64();
+    if (type === 22 || type === 29) return !!rd.u8v();
+    if (type === 23 || type === 30) return { error: errText(rd.u8v()) };
+    if (type === 24 || type === 31) return rd.str() ?? '';
+    if (type === 25 || type === 32) return date(rd);
+    throw new Error('지원하지 않는 피벗 캐시 항목입니다.');
+  };
+  let row = null, position = 0;
+  const flush = () => { if (row) { builder.add(row); row = null; } };
+  while (position < u8.length) {
+    let type = u8[position++];
+    if (type & 0x80) type = (type & 0x7f) | ((u8[position++] & 0x7f) << 7);
+    let length = 0;
+    for (let i = 0, shift = 0; i < 4; i++, shift += 7) { const value = u8[position++]; length |= (value & 127) << shift; if (!(value & 128)) break; }
+    const end = position + length;
+    if (end > u8.length || end < position) throw new Error('피벗 캐시 레코드가 끝까지 저장되지 않았습니다.');
+    const rd = new Rd(u8, position, end); position = end;
+    if (type === 34) { flush(); row = []; }
+    else if (type === 33) {
+      flush(); const values = [];
+      for (let j = 0; j < kinds.length; j++) {
+        const kind = kinds[j];
+        requireCacheBytes(rd, kind === 's' || kind === 'x' ? 4 : 8);
+        if (kind === 'x') values.push(db[j]?.shared[rd.u32()] ?? null);
+        else if (kind === 'n') values.push(rd.f64());
+        else if (kind === 's') values.push(packedCacheString(rd));
+        else if (kind === 'd') values.push(date(rd));
+        else throw new Error('피벗 캐시 열의 형식을 읽을 수 없습니다.');
+      }
+      if (rd.p !== end) throw new Error('피벗 캐시 열의 크기가 올바르지 않습니다.');
+      builder.add(values);
+    } else if (row && type >= 20 && type <= 32) row.push(item(type, rd, row.length));
+    if (builder.n && builder.n % 2048 === 0 && (type === 33 || type === 34)) yield builder.n;
+  }
+  flush();
+  if (metadata.recordCount && builder.n !== metadata.recordCount) throw new Error('피벗 캐시의 저장된 행 수가 올바르지 않습니다.');
+  return builder.finish();
 }
 
 function cacheArray(rd) {
@@ -815,6 +876,7 @@ const PT_FILTERS = [null, 'count', 'percent', 'sum', 'captionEqual', 'captionNot
 function pivotTableXml(u8) {
   let head = {};
   let loc = '';
+  let showValuesRow;
   const fields = [];
   let fld = null;
   let rows = []; let cols = [];
@@ -854,9 +916,16 @@ function pivotTableXml(u8) {
           showError: f2 & 0x200 ? 1 : undefined, errorCaption: errorCaption ?? undefined, showMissing: f2 & 0x400 ? undefined : 0, missingCaption: missingCaption ?? undefined,
           rowGrandTotals: f2 & 0x2000 ? undefined : 0, colGrandTotals: f2 & 0x4000 ? undefined : 0, mergeItem: f2 & 0x40000 ? 1 : undefined,
           preserveFormatting: f2 & 0x80 ? undefined : 0, useAutoFormatting: f2 & 0x100 ? 1 : undefined, enableDrill: f2 & 0x20 ? undefined : 0,
+          gridDropZones: f3 & 0x10 ? undefined : 1, // fNewDropZones=0: classic in-grid drop zones
           showDrill: f1 & 0x100000 ? 0 : undefined, showHeaders: f1 & 0x80000000 ? 0 : undefined, indent: (f1 >>> 24) & 0x7f,
           rowHeaderCaption: rowHeaderCaption ?? undefined, colHeaderCaption: colHeaderCaption ?? undefined, _style: ptStyle,
         };
+        break;
+      }
+      case R.PTDEF14: {
+        // MS-XLSB 2.4.279: FRTBlank (4 bytes), then bit 4 fShowValuesRow.
+        // https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-xlsb/e052ecfd-062e-4d59-8733-4423ad99cf62
+        if (rd.left >= 5) { rd.skip(4); showValuesRow = !!(rd.u8v() & 0x10); }
         break;
       }
       case R.PTLOCATION: {
@@ -880,6 +949,10 @@ function pivotTableXml(u8) {
         depth = 1;
         break;
       }
+      case R.PTFIELD14:
+        // MS-XLSB 2.4.841: FRTBlank followed by the field's fFillDownLabels Boolean.
+        if (fld && rd.left >= 8) { rd.skip(4); fld.repeatLabels = rd.u32() === 1; }
+        break;
       case R.PTFIELD_END: depth = 0; break;
       case R.PTFITEM: if (fld) {
         const type = rd.u8v(); const fl = rd.u16(); const x = rd.i32();
@@ -920,12 +993,14 @@ function pivotTableXml(u8) {
   const anyOutline = fields.some((x) => x.a.outline === undefined && x.a.axis);
   const fieldsXml = fields.map((x) => {
     const sort = x.sort && x.a.sortType ? `<autoSortScope><pivotArea dataOnly="0" outline="0" fieldPosition="0"><references count="1"><reference field="${x.sort.field >>> 0}" count="${x.sort.items.length}" selected="0">${x.sort.items.map((v) => `<x v="${v}"/>`).join('')}</reference></references></pivotArea></autoSortScope>` : '';
-    return `<pivotField${attrs(x.a)}>${x.items.length ? `<items count="${x.items.length}">${x.items.join('')}</items>` : ''}${sort}</pivotField>`;
+    const repeat = x.repeatLabels === undefined ? '' : `<extLst><ext uri="{2946ED86-A175-432a-8AC1-64E0C546D7DE}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:pivotField fillDownLabels="${x.repeatLabels ? 1 : 0}"/></ext></extLst>`;
+    return `<pivotField${attrs(x.a)}>${x.items.length ? `<items count="${x.items.length}">${x.items.join('')}</items>` : ''}${sort}${repeat}</pivotField>`;
   }).join('');
   const fl = (tag, list) => (list.length ? `<${tag} count="${list.length}">${list.map((v) => `<field x="${v}"/>`).join('')}</${tag}>` : '');
   const ITEM_T = ['data', 'default', 'sum', 'countA', 'avg', 'max', 'min', 'product', 'count', 'stdDev', 'stdDevP', 'var', 'varP', 'grand', 'blank'];
   const lineXml = (tag, list) => (list.length ? `<${tag} count="${list.length}">${list.map((l) => `<i${attrs({ t: l.t ? ITEM_T[l.t] ?? 'data' : undefined, r: l.r || undefined, i: l.i || undefined })}>${l.xs.map((v) => `<x v="${v}"/>`).join('')}</i>`).join('')}</${tag}>` : '');
-  return `<pivotTableDefinition xmlns="${NS}"${attrs({ ...head, compact: anyCompact ? undefined : 0, compactData: anyCompact ? undefined : 0, outline: anyOutline ? 1 : undefined, outlineData: anyOutline ? 1 : undefined })}>${loc}<pivotFields count="${fields.length}">${fieldsXml}</pivotFields>${fl('rowFields', rows)}${lineXml('rowItems', lines.rowItems)}${fl('colFields', cols)}${lineXml('colItems', lines.colItems)}${pages.length ? `<pageFields count="${pages.length}">${pages.join('')}</pageFields>` : ''}${datas.length ? `<dataFields count="${datas.length}">${datas.join('')}</dataFields>` : ''}${style}${filters.length ? `<filters count="${filters.length}">${filters.map((x) => `<filter${attrs(x.a)}>${x.top}</filter>`).join('')}</filters>` : ''}</pivotTableDefinition>`;
+  const display = showValuesRow === undefined ? '' : `<extLst><ext uri="{962EF5D1-5CA2-4c93-8EF4-DBF5C05439D2}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:pivotTableDefinition hideValuesRow="${showValuesRow ? 0 : 1}"/></ext></extLst>`;
+  return `<pivotTableDefinition xmlns="${NS}"${attrs({ ...head, compact: anyCompact ? undefined : 0, compactData: anyCompact ? undefined : 0, outline: anyOutline ? 1 : undefined, outlineData: anyOutline ? 1 : undefined })}>${loc}<pivotFields count="${fields.length}">${fieldsXml}</pivotFields>${fl('rowFields', rows)}${lineXml('rowItems', lines.rowItems)}${fl('colFields', cols)}${lineXml('colItems', lines.colItems)}${pages.length ? `<pageFields count="${pages.length}">${pages.join('')}</pageFields>` : ''}${datas.length ? `<dataFields count="${datas.length}">${datas.join('')}</dataFields>` : ''}${style}${filters.length ? `<filters count="${filters.length}">${filters.map((x) => `<filter${attrs(x.a)}>${x.top}</filter>`).join('')}</filters>` : ''}${display}</pivotTableDefinition>`;
 }
 
 // ─────────────── 슬라이서 ───────────────
@@ -1203,6 +1278,7 @@ function* rowsOf(u8, start, end, env, warn) {
   let p = start;
   let row = null;
   let col = -1;
+  let valueMeta = null; // BrtValueMeta belongs to the next cell only.
   let pend = null; // 공유/배열 수식 기준 셀 (다음 레코드를 보고 결정)
   const resolvePending = (t, q, qe) => {
     const c = pend;
@@ -1248,6 +1324,13 @@ function* rowsOf(u8, start, end, env, warn) {
       if (fl & 0x4000) { a.customFormat = '1'; a.s = xf; }
       row = { attrs: a, cells: [] };
       col = -1;
+      valueMeta = null;
+      continue;
+    }
+    if (t === 50) {
+      if (sz !== 4 || e > end) throw new Error('XLSB 셀 값 메타데이터가 잘렸습니다.');
+      const index = dv.getInt32(q, true);
+      valueMeta = index > 0 ? index : null;
       continue;
     }
     if (t > 18 && t !== R.RSTR && t !== R.MRSTR) continue;
@@ -1260,6 +1343,7 @@ function* rowsOf(u8, start, end, env, warn) {
     const s = dv.getUint32(o, true) & 0xffffff;
     o += 4;
     const cell = { cc, attrs: { s }, v: null, f: null, fa: null, is: null };
+    if (valueMeta !== null) { cell.attrs.vm = valueMeta; valueMeta = null; }
     switch (t) {
       case R.BLANK: case R.MBLANK: break;
       case R.RK: case R.MRK: {
@@ -1333,13 +1417,13 @@ export function isXlsb(files) {
  * xlsb 부분 파일을 제자리에서 xlsx XML 로 바꿈 (진행 상황을 yield)
  * files.__xlsb = { strings, rows: Map(시트 경로 → 행 생성기 함수), unsupported } (열거되지 않는 속성)
  */
-export function* convertXlsb(files) {
+export function* convertXlsb(files, { lazySheets = false } = {}) {
   const wbPath = Object.keys(files).find((k) => /^xl\/workbook\.bin$/i.test(k));
   const wbU8 = files[wbPath];
   const wbi = readWorkbook(wbU8);
   const rels = relsOf(files, wbPath);
-  const byType = (t) => rels.filter((r) => r.type === t && files[r.target]);
-  const info = { strings: [], rows: new Map(), unsupported: 0, warnings: [] };
+  const byType = (t) => rels.filter((r) => r.type === t && Object.hasOwn(files, r.target));
+  const info = { strings: [], rows: new Map(), cacheRecords: new Map(), unsupported: 0, warnings: [] };
   Object.defineProperty(files, '__xlsb', { value: info, enumerable: false });
   // 표 (구조적 참조용: 수식보다 먼저)
   const tables = new Map();
@@ -1352,30 +1436,44 @@ export function* convertXlsb(files) {
   put(files, wbPath, workbookXml(wbi, env, wbU8));
   yield { p: 0.08, msg: '스타일 읽는 중' };
   for (const r of byType('styles')) put(files, r.target, stylesXml(files[r.target]));
-  for (const r of byType('sharedStrings')) { info.strings = readStrings(files[r.target]); delete files[r.target]; }
+  for (const r of byType('sharedStrings')) {
+    yield { preparePart: r.target, p: 0.08, msg: '공유 문자열 읽는 중' };
+    info.strings = readStrings(files[r.target]); delete files[r.target];
+  }
   for (const k of Object.keys(files)) {
     if (/^xl\/tables\/[^/]+\.bin$/i.test(k)) { const x = tableXml(files[k], env); if (x) put(files, k, x); } else if (/^xl\/pivotCache\/pivotCacheDefinition[^/]*\.bin$/i.test(k)) {
       // 캐시 레코드도 xlsx 형식으로 (엑셀이 저장한 원본 = 새로 고치기 전 피벗 결과)
       const info0 = {};
       pivotCacheXml(files[k], env, info0);
       const rec = relsOf(files, k).find((x) => x.type === 'pivotCacheRecords');
-      const recXml = rec && files[rec.target] && files[rec.target].length < (24 << 20) ? pivotRecordsXml(files[rec.target], info0.fields, info0.recordCount) : null;
-      if (recXml) { put(files, rec.target, recXml); files[rec.target].__xml = true; }
-      put(files, k, pivotCacheXml(files[k], env, { records: !!recXml }));
+      if (lazySheets && rec && Object.hasOwn(files, rec.target)) {
+        info.cacheRecords.set(rec.target, info0);
+        put(files, k, pivotCacheXml(files[k], env, { records: true }));
+      } else {
+        const recXml = rec && files[rec.target] ? pivotRecordsXml(files[rec.target], info0.fields, info0.recordCount) : null;
+        if (recXml) { put(files, rec.target, recXml); files[rec.target].__xml = true; }
+        put(files, k, pivotCacheXml(files[k], env, { records: !!recXml }));
+      }
     }
     else if (/^xl\/pivotTables\/[^/]+\.bin$/i.test(k)) put(files, k, pivotTableXml(files[k]));
     else if (/^xl\/slicerCaches\/[^/]+\.bin$/i.test(k)) put(files, k, slicerCacheXml(files[k]));
     else if (/^xl\/slicers\/[^/]+\.bin$/i.test(k)) put(files, k, slicersXml(files[k]));
     else if (/^xl\/comments[^/]*\.bin$/i.test(k)) put(files, k, commentsXml(files[k]));
-    else if (/^xl\/(calcChain|metadata)\.bin$/i.test(k) || (/pivotCacheRecords/i.test(k) && !files[k].__xml)) delete files[k];
+    else if (/^xl\/metadata\.bin$/i.test(k)) put(files, k, xlsbRichMetadataXml(files[k]));
+    else if (/^xl\/calcChain\.bin$/i.test(k)) delete files[k];
   }
+  for (const k of Object.keys(files)) if (/pivotCacheRecords/i.test(k) && !info.cacheRecords.has(k) && !Object.getOwnPropertyDescriptor(files, k)?.value?.__xml) delete files[k];
   yield { p: 0.1, msg: '시트 준비 중' };
-  for (const r of byType('worksheet')) {
-    const u8 = files[r.target];
-    if (!(u8 instanceof Uint8Array) || !/\.bin$/i.test(r.target)) continue;
+  // 현재 시트만 준비합니다. 모든 BIN을 행 생성기의 closure에 함께 잡아 두지 않습니다.
+  info.prepareSheet = (path) => {
+    const u8 = files[path];
+    if (!(u8 instanceof Uint8Array) || !/\.bin$/i.test(path) || info.rows.has(path)) return;
     const head = sheetHeadXml(u8, env);
-    put(files, r.target, head.xml);
-    if (head.dataStart >= 0) info.rows.set(r.target, () => rowsOf(u8, head.dataStart, head.dataEnd, env, () => { info.unsupported++; }));
+    put(files, path, head.xml);
+    if (head.dataStart >= 0) info.rows.set(path, () => rowsOf(u8, head.dataStart, head.dataEnd, env, () => { info.unsupported++; }));
+  };
+  if (!lazySheets) for (const r of byType('worksheet')) {
+    info.prepareSheet(r.target);
     yield { p: 0.1, msg: '시트 준비 중' };
   }
 }

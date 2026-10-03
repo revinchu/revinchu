@@ -109,7 +109,7 @@ export class DepGraph {
       // 열마다 위에서 아래로 (아래로 채운 수식이 한 묶음이 되도록)
       for (const [c, m] of sheet.cells.cols) {
         const rows = [];
-        for (const [r, cell] of m) if (cell.formula) rows.push(r);
+        for (const [r, cell] of m.storageEntries()) if (cell.formula) rows.push(r);
         rows.sort((a, b) => a - b);
         for (const r of rows) {
           this.add(si, r, c, m.get(r));
@@ -125,28 +125,31 @@ export class DepGraph {
 
   /** 참조 하나를 묶음에 추가 (바로 위 칸의 같은 수식 묶음에 이어 붙일 수 있으면 이어 붙임) */
   addRef(tag, ts, R1, C1, R2, C2, fs, fr, fc, cell) {
-    const kr = (cell.dr ?? 0) - fr;
-    const kc = (cell.dc ?? 0) - fc;
+    const dr = cell.dr ?? 0;
+    const dc = cell.dc ?? 0;
     const last = this.open.get(tag);
     if (last && last.ts === ts && last.s === fs && last.fc === fc && last.fr0 + last.n === fr && last.c1 === C1 && last.c2 === C2
-      && last.ast === cell.ast && last.kr === kr && last.kc === kc) {
+      && last.ast === cell.ast && last.dc === dc) {
       if (last.n === 1) {
         const a = R1 - last.r1;
         const b = R2 - last.r2;
-        if ((a === 0 || a === 1) && (b === 0 || b === 1)) {
+        const ds = dr - last.dr0;
+        // A1 채움은 dr도 증가하지만 표 구조화 참조는 같은 AST에서 dr=0을 유지합니다.
+        if ((a === 0 || a === 1) && (b === 0 || b === 1) && (ds === 0 || ds === 1)) {
           last.r1s = a;
           last.r2s = b;
+          last.drs = ds;
           last.n = 2;
           this.grow(last, R2);
           return;
         }
-      } else if (R1 === last.r1 + last.r1s * last.n && R2 === last.r2 + last.r2s * last.n) {
+      } else if (dr === last.dr0 + last.drs * last.n && R1 === last.r1 + last.r1s * last.n && R2 === last.r2 + last.r2s * last.n) {
         last.n++;
         this.grow(last, R2);
         return;
       }
     }
-    const run = { ts, s: fs, fc, fr0: fr, n: 1, r1: R1, r2: R2, r1s: 0, r2s: 0, c1: C1, c2: C2, lo: R1, hi: R2, ast: cell.ast, kr, kc, buckets: null };
+    const run = { ts, s: fs, fc, fr0: fr, n: 1, r1: R1, r2: R2, r1s: 0, r2s: 0, c1: C1, c2: C2, lo: R1, hi: R2, ast: cell.ast, dr0: dr, drs: 0, dc, buckets: null };
     this.open.set(tag, run);
     if (C2 - C1 >= WIDE) { (this.wide[ts] ??= []).push(run); return; }
     let cols = this.cols[ts];
@@ -288,7 +291,7 @@ export class DepGraph {
   /** 묶음의 수식이 아직 그대로인지 (지우거나 바꾼 수식이면 무시) */
   verify(run, fr) {
     const cell = this.wb.sheets[run.s]?.cells.getRC(fr, run.fc);
-    return !!cell && cell.ast === run.ast && (cell.dr ?? 0) - fr === run.kr && (cell.dc ?? 0) - run.fc === run.kc;
+    return !!cell && cell.ast === run.ast && (cell.dr ?? 0) === run.dr0 + run.drs * (fr - run.fr0) && (cell.dc ?? 0) === run.dc;
   }
 
   /** 칸 (s, r, c) 를 참조하는 묶음마다 fn(run, 수식 행) */

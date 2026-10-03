@@ -144,7 +144,7 @@ export function tokenize(src) {
       const m = sticky(ERROR_RE, src, i);
       if (m) {
         i += m[0].length;
-        toks.push({ t: 'err', v: m[0] === '#GETTING_DATA' ? '#BUSY!' : m[0], s: start, e: i });
+        toks.push({ t: 'err', v: m[0], s: start, e: i });
         continue;
       }
       if (prevIsValue()) {

@@ -90,7 +90,9 @@ test('큰 데이터: 고유 숫자 15만 개인 피벗 원본 저장 · MAX(열 
   wb.transact(() => wb.setSheetProp(0, 'pivot', { name: '피벗1', source: 'Sheet1', range: { r1: 0, c1: 0, r2: 150000, c2: 1 }, rows: ['매체'], cols: [], pages: [], filters: {}, values: [{ field: '비용', agg: 'max' }], top: 0, left: 4, area: { r1: 0, c1: 4, r2: 3, c2: 5 } }));
   wb.transact(() => wb.setInput(0, 0, 8, '=MAX(B:B)-MIN(B:B)'));
   assert.equal(wb.getValue(0, 0, 8), 149999);
-  assert.match(textOf(unzip(writeXlsx(wb))['xl/pivotCache/pivotCacheDefinition1.xml']), /maxValue="150000.5"/);
+  const cacheXml = textOf(unzip(writeXlsx(wb))['xl/pivotCache/pivotCacheDefinition1.xml']);
+  assert.match(cacheXml, /containsNumber="1"/);
+  assert.doesNotMatch(cacheXml, /maxValue=/); // 나열되지 않은 값 필드에는 숫자 자식이 없음
 });
 
 test('.xls (엑셀 97-2003) 읽기: 시트 · 값 · 서식 · 수식(공유 · 시트 참조 · 이름 · 추가 기능 함수 · 배열 상수)', async () => {

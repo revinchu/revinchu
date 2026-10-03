@@ -1,4 +1,10 @@
+import { shiftStoredCells, moveStoredCells } from './cell-transforms.js';
+import { arrayCache, arrayCacheValue, spillOffsets } from './array-cache.js';
+import { blockJsonParts } from './block-storage.js';
 import { jsonPartsBlob } from './snapshot-blob.js';
+import { serializeCells, cellJsonParts, storedCellEntries, storedCellChunks } from './cell-storage.js';
+import { pivotSnapshotJsonParts } from './pivot-snapshot-storage.js';
+import { restorePivotSnapshot } from './pivot-cache-data.js';
 import { filterWithButtons, filterButtonsVisible } from './filter-display.js';
 import { clearedTableCellStyle, explicitTableStylePatch } from './table-format.js';
 // 통합 문서 모델: 시트 · 셀 · 재계산 · 실행 취소 · 행/열 구조 변경
@@ -16,7 +22,8 @@ import { inBlock, blockValue, blockSet, blockClone, blockShift, rawOf, sortOrder
 import { hid, shiftHidden } from './axis.js';
 import { CellImage, compareSortValues } from './fxcore.js';
 import { DepGraph, cellNum } from './depgraph.js';
-import { CellMap } from './cellmap.js';
+import { CellMap, getSharedBlankCell } from './cellmap.js';
+import { createScalarCellMemo } from './scalar-cell-memo.js';
 import { formulaSupportIssue, calculationStatus } from './calculation-state.js';
 import { pushAll, CLOSED_BOOK, ERR_BY_CODE } from './fxcore.js';
 
@@ -321,6 +328,15 @@ export function makeCell(data, k = null, date1904 = false) {
 /** 저장 형태 → 셀 객체 (r · c 를 알면 같은 모양의 수식끼리 AST 공유) */
 export function makeCellRC(data, r, c, date1904 = false) {
   if (!data) return null;
+  // 공유된 서식 전용 빈 셀은 수식 해석·값 객체 생성을 반복하지 않습니다.
+  if (data.raw === '' && data.style) {
+    let plain = true;
+    for (const key in data) if (key !== 'raw' && key !== 'style' && !(key === 'v' && data.v === null)) { plain = false; break; }
+    if (plain) {
+      const style = cleanStyle(data.style);
+      return style ? getSharedBlankCell(style, true) : null;
+    }
+  }
   const cell = { raw: data.raw ?? '' };
   const style = cleanStyle(data.style);
   if (style) cell.style = style;
@@ -348,6 +364,8 @@ export function makeCellRC(data, r, c, date1904 = false) {
     cell.ast = p.ast;
     if (p.ast) cell.maybeArray = p.maybeArray;
     else cell.parseError = p.error;
+    const imported = arrayCache(data.cachedArray ?? data.staleCachedArray);
+    if (imported && imported.values.length && imported.values[0] === 0 && imported.values[1] === 0) { cell.cachedArray = imported; cell.maybeArray = true; if (data.staleCachedArray) cell.dirty = true; }
   } else if (cell.image && cell.raw === '') {
     cell.v = new CellImage(cell.image);
   } else if (textInput) {
@@ -384,11 +402,14 @@ function sameStyle(a, b) {
   return n === 0;
 }
 const savedCached = (c) => (c.cached !== undefined && c.formula && !c.dirty ? c.cached : undefined);
+function sameArrayCache(a, b) {
+  return a?.cachedArray === b?.cachedArray || JSON.stringify(a?.cachedArray) === JSON.stringify(b?.cachedArray);
+}
 /** 두 셀의 저장 형태(cellData)가 같은지 — cellData 를 만들어 JSON 으로 비교하는 것과 같지만 훨씬 빠름 */
 function sameCell(a, b) {
   if (!a || !b) return !a && !b;
   if (a.raw !== b.raw || (a.comment || null) !== (b.comment || null) || (a.link || null) !== (b.link || null) || !!a.fx !== !!b.fx || a.inputType !== b.inputType) return false;
-  if (!sameStyle(a.style, b.style)) return false;
+  if (!sameStyle(a.style, b.style) || !sameArrayCache(a, b)) return false;
   if ((a.image || b.image) && JSON.stringify(a.image ?? null) !== JSON.stringify(b.image ?? null)) return false;
   if ((a.phonetic || b.phonetic) && JSON.stringify(a.phonetic ?? null) !== JSON.stringify(b.phonetic ?? null)) return false;
   const ca = savedCached(a);
@@ -420,6 +441,7 @@ export function cellData(cell, style) {
   if (cell.cached !== undefined && cell.formula) {
     if (cell.dirty) d.staleCached = cell.cached; else d.cached = cell.cached;
   }
+  if (cell.cachedArray && cell.formula) d[cell.dirty ? 'staleCachedArray' : 'cachedArray'] = cell.cachedArray;
   return d;
 }
 
@@ -444,7 +466,11 @@ function sheetFromData(s, date1904 = false) {
   const entries = s.cells instanceof Map || s.cells instanceof CellMap ? s.cells : Object.entries(s.cells || {});
   for (const [k, d] of entries) {
     const cell = makeCell(d, k, date1904);
-    if (cell) sheet.cells.set(k, cell);
+    if (cell) { sheet.cells.set(k, cell); if (cell.cachedArray) sheet._hasCachedArrays = true; }
+  }
+  for (const [r,c,count,data] of s.cellRuns ?? []) {
+    const cell=makeCellRC(data,r,c,date1904);
+    if(cell){sheet.cells.setRunRC(r,c,count,cell);if(cell.cachedArray)sheet._hasCachedArrays=true;}
   }
   for (const p of SHEET_PROPS) if (s[p] !== undefined && s[p] !== null) sheet[p] = structuredClone(s[p]);
   sheet.freeze = { rows: 0, cols: 0, ...(s.freeze || {}) };
@@ -613,6 +639,7 @@ export class Workbook {
     }
     if (!cell || (!cell.formula && cell.raw === '' && !cell.image)) return this.spillValueAt(si, r, c);
     if (!cell.formula) return cell.v ?? null;
+    if (cell.cachedArray && !cell.dirty) return this.placeCachedSpill(si, r, c, cell);
     const cache = this.caches[si] ??= new CellMap();
     const hit = cache.getRC(r, c);
     if (hit !== undefined || cache.hasRC(r, c)) return hit;
@@ -678,7 +705,7 @@ export class Workbook {
     let total = 0;
     for (let si = 0; si < this.sheets.length; si++) {
       const sheet = this.sheets[si];
-      sheet.cells.forEachRC((cell, r, c) => {
+      sheet.cells.forEachStoredRC((cell, r, c) => {
         if (!cell.formula) return;
         const support = this.formulaSupport(si, cell);
         const known = this.caches[si]?.getRC(r, c);
@@ -758,6 +785,30 @@ export class Workbook {
     return v === null || v === undefined ? 0 : v;
   }
 
+  placeCachedSpill(si, r, c, cell) {
+    const k = `${si}:${r},${c}`, data = cell.cachedArray;
+    if (r + data.h > MAX_ROWS || c + data.w > MAX_COLS) return ERR.SPILL;
+    if (!this.spills.has(k)) {
+      const sp = { si, r, c, h: data.h, w: data.w, rows: [], cachedArray: data };
+      this.spills.set(k, sp);
+      for (const [dr, dc] of spillOffsets(sp)) this.spillOwner.set(`${si}:${r + dr},${c + dc}`, k);
+    }
+    const v = arrayCacheValue(data, 0, 0);
+    return v === undefined ? (cell.cached === undefined ? null : cachedValue(cell.cached)) : cachedValue(v);
+  }
+
+  arrayCandidates() {
+    if (!this.arrayList) {
+      const list = [];
+      this.sheets.forEach((sheet, si) => {
+        sheet.cells.forEachStoredRC((cell, r, c) => { if (cell.formula && cell.maybeArray) list.push([si, r, c]); });
+      });
+      list.sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2]);
+      this.arrayList = list;
+    }
+    return this.arrayList;
+  }
+
   /** 분산될 수 있는 수식을 모두 계산해 분산 영역을 확정 */
   /**
    * 분산 후보 수식을 모두 계산 (빈 칸에 보일 분산 값을 알기 위해).
@@ -778,15 +829,7 @@ export class Workbook {
       return;
     }
     this.spillState = 'running';
-    if (!this.arrayList) {
-      const list = [];
-      this.sheets.forEach((sheet, si) => {
-        sheet.cells.forEachRC((cell, r, c) => { if (cell.formula && cell.maybeArray) list.push([si, r, c]); });
-      });
-      list.sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2]);
-      this.arrayList = list;
-    }
-    this.spillQueue = this.arrayList;
+    this.spillQueue = this.arrayCandidates();
     this.spillPos = 0;
     try {
       this.runSpillQueue();
@@ -808,6 +851,7 @@ export class Workbook {
     const owner = this.spillOwner.get(`${si}:${r},${c}`);
     if (!owner) return null;
     const sp = this.spills.get(owner);
+    if (sp.cachedArray) return cachedValue(arrayCacheValue(sp.cachedArray, r - sp.r, c - sp.c) ?? null);
     const v = sp.rows[r - sp.r]?.[c - sp.c];
     return v === null || v === undefined ? 0 : v;
   }
@@ -816,9 +860,9 @@ export class Workbook {
   spillAnchorOf(si, r, c) {
     this.ensureSpills([si, r, c, r, c]);
     const owner = this.spillOwner.get(`${si}:${r},${c}`);
-    if (!owner) return null;
-    const sp = this.spills.get(owner);
-    return { r: sp.r, c: sp.c };
+    let sp = owner ? this.spills.get(owner) : null;
+    if (!sp) for (const item of this.spills.values()) if (item.cachedArray && item.si === si && r >= item.r && r < item.r + item.h && c >= item.c && c < item.c + item.w && (r !== item.r || c !== item.c)) { sp = item; break; }
+    return sp ? { r: sp.r, c: sp.c } : null;
   }
 
   /** 앵커 셀의 분산 영역 {r1,c1,r2,c2} (없으면 null) */
@@ -888,7 +932,7 @@ export class Workbook {
     this.deps = null;
     const after = this.sheetDeps();
     // 이름을 쓰는 시트만 다시 계산
-    this.sheets.forEach((sh, i) => { if (before[i]?.all || after[i]?.all) this.discardFileValues(i); });
+    this.sheets.forEach((sh, i) => { if (before[i]?.all || after[i]?.all) this.discardFileValues(i, true); });
     this.invalidateStructure();
   }
 
@@ -898,7 +942,7 @@ export class Workbook {
     try {
       const list = [];
       this.sheets.forEach((sheet, si) => {
-        sheet.cells.forEachRC((cell, r, c) => { if (cell.formula) list.push([si, r, c]); });
+        sheet.cells.forEachStoredRC((cell, r, c) => { if (cell.formula) list.push([si, r, c]); });
       });
       list.sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2]);
       let pending = list;
@@ -1136,8 +1180,8 @@ export class Workbook {
       for (let r = Math.max(r1, sp.r); r <= Math.min(r2, sp.r + sp.h - 1); r++) {
         for (let c = Math.max(c1, sp.c); c <= Math.min(c2, sp.c + sp.w - 1); c++) {
           if ((r === sp.r && c === sp.c) || rows[r - r1][c - c1] !== null || sh.cells.getRC(r, c)?.raw) continue;
-          const v = sp.rows[r - sp.r]?.[c - sp.c];
-          rows[r - r1][c - c1] = v === null || v === undefined ? 0 : v;
+          const v = sp.cachedArray ? cachedValue(arrayCacheValue(sp.cachedArray, r - sp.r, c - sp.c) ?? null) : sp.rows[r - sp.r]?.[c - sp.c];
+          rows[r - r1][c - c1] = sp.cachedArray ? v : v === null || v === undefined ? 0 : v;
         }
       }
     }
@@ -1285,12 +1329,14 @@ export class Workbook {
     for (let i = 0; i < pts.length; i += 3) sheetsHit.add(pts[i]);
     if (pts.length > 300000) {
       // 한꺼번에 아주 많이 바뀜(채우기 · 붙여넣기 수십만 칸): 칸마다 찾기보다 시트 단위가 빠름
-      for (const s of sheetsHit) this.invalidate(s);
+      for (const s of sheetsHit) { for (const dep of this.affected(s)) if (!sheetsHit.has(dep)) this.touchSource(dep); this.invalidate(s); }
       return;
     }
     // 분산 영역이 걸리면 시트 단위 (분산 크기가 바뀌면 주변 칸 값도 바뀜)
     let fallback = false;
     for (const sp of this.spills.values()) if (sheetsHit.has(sp.si)) { fallback = true; break; }
+    // 복원·셀 교체에서 기록한 존재 힌트로 판별합니다. 작은 편집 때 전체 셀을 탐색하지 않습니다.
+    if (!fallback) for (const si of sheetsHit) if (this.sheets[si]._hasCachedArrays) { fallback = true; break; }
     let dirty = null;
     if (!fallback) {
       try {
@@ -1303,7 +1349,7 @@ export class Workbook {
       }
     }
     if (!dirty) {
-      for (const s of sheetsHit) this.invalidate(s);
+      for (const s of sheetsHit) { for (const dep of this.affected(s)) if (!sheetsHit.has(dep)) this.touchSource(dep); this.invalidate(s); }
       return;
     }
     for (let i = 0; i < pts.length; i += 3) { this.caches[pts[i]]?.deleteRC(pts[i + 1], pts[i + 2]); this.bumpCol(pts[i], pts[i + 2]); }
@@ -1319,40 +1365,61 @@ export class Workbook {
         this.markFormulaDirty(s, dirty[i + 1], dirty[i + 2], cell);
         if (cell.maybeArray) arrays = true;
       }
-      if (!bumped.has(s)) { bumped.add(s); this.sheetVer[s] = (this.sheetVer[s] ?? 0) + 1; }
+      if (!bumped.has(s)) { bumped.add(s); this.touchSource(s); this.sheetVer[s] = (this.sheetVer[s] ?? 0) + 1; }
     }
     if (arrays) {
       // 분산할 수 있는 수식이 다시 계산되면 분산 영역을 다시 정함
       for (const s of bumped) for (const [k, sp] of this.spills) if (sp.si === s) this.spills.delete(k);
       this.spillOwner.clear();
-      for (const [k, sp] of this.spills) for (let i = 0; i < sp.h; i++) for (let j = 0; j < sp.w; j++) if (i || j) this.spillOwner.set(`${sp.si}:${sp.r + i},${sp.c + j}`, k);
+      for (const [k, sp] of this.spills) for (const [i, j] of spillOffsets(sp)) this.spillOwner.set(`${sp.si}:${sp.r + i},${sp.c + j}`, k);
       this.spillState = null;
     }
   }
 
   markFormulaDirty(si, r, c, cell) {
+    // 수동 계산의 변경 좌표에는 불변 공유 빈 셀도 포함됩니다. 계산 상태는 수식에만 둡니다.
+    if (!cell?.formula) return;
+    // cached → staleCached도 저장 데이터 변경입니다. 의존 시트의 IDB 청크 재사용을 막습니다.
+    if (!cell.dirty && cell.formula && (cell.cached !== undefined || cell.cachedArray)) this.touch(si);
     const tx = this.tx ?? this.calcTrustTx;
-    if (tx && !cell.dirty && cell.cached !== undefined && this.formulaSupport(si, cell)) {
-      (tx.cacheTrust ??= []).push({ sheet: this.sheets[si], r, c, raw: cell.raw, cached: cell.cached });
+    if (tx && !cell.dirty && (cell.cachedArray || cell.cached !== undefined && this.formulaSupport(si, cell))) {
+      (tx.cacheTrust ??= []).push({ sheet: this.sheets[si], r, c, raw: cell.raw, cached: cell.cached, cachedArray: cell.cachedArray });
     }
     cell.dirty = true;
   }
 
-  discardFileValues(si) {
+  discardFileValues(si, sourceChanged = false) {
     const sheet = this.sheets[si];
     if (!sheet) return;
+    if (sourceChanged) this.touchSource(si);
     sheet.fileValues = false;
-    sheet.cells.forEachRC((cell, r, c) => { if (cell.formula && cell.cached !== undefined) this.markFormulaDirty(si, r, c, cell); });
+    sheet.cells.forEachStoredRC((cell, r, c) => { if (cell.formula && (cell.cached !== undefined || cell.cachedArray)) this.markFormulaDirty(si, r, c, cell); });
+  }
+
+  entryArrayTrust(entries, side) {
+    const cacheTrust = [], sheets = new Set();
+    const add = (si, r, c, cell) => {
+      if (cell?.cachedArray && !cell.dirty) cacheTrust.push({ sheet: this.sheets[si], r, c, raw: cell.raw, cached: cell.cached, cachedArray: cell.cachedArray });
+    };
+    for (const e of entries) {
+      if (e.t === 'cell' && e[side]?.cachedArray) add(e.si, e.r, e.c, this.sheets[e.si]?.cells.getRC(e.r, e.c));
+      else if (e.t === 'sheet') sheets.add(e.si);
+      else if (e.t === 'all') for (let si = 0; si < this.sheets.length; si++) sheets.add(si);
+    }
+    for (const si of sheets) this.sheets[si]?.cells.forEachStoredRC((cell, r, c) => add(si, r, c, cell));
+    return { cacheTrust };
   }
 
   restoreCacheTrust(tx, trusted) {
     for (const item of tx.cacheTrust ?? []) {
       const si = this.sheets.indexOf(item.sheet);
       const cell = si >= 0 ? this.sheets[si].cells.getRC(item.r, item.c) : null;
-      if (!cell?.formula || cell.raw !== item.raw || cell.cached !== item.cached) continue;
+      if (!cell?.formula || cell.raw !== item.raw || cell.cached !== item.cached || !sameArrayCache(cell, item)) continue;
+      if (!!cell.dirty !== !trusted) this.touch(si);
       cell.dirty = !trusted;
       this.caches[si]?.deleteRC(item.r, item.c);
       this.bumpCol(si, item.c);
+      if (cell.cachedArray) { const key = `${si}:${item.r},${item.c}`, sp = this.spills.get(key); if (sp) { for (const [dr, dc] of spillOffsets(sp)) this.spillOwner.delete(`${si}:${sp.r + dr},${sp.c + dc}`); this.spills.delete(key); } this.spillState = null; }
     }
   }
 
@@ -1383,7 +1450,7 @@ export class Workbook {
         }
       } else {
         // 정적 의존성을 찾지 못한 수식은 저장값을 정확하다고 단정하지 않는다.
-        sheet.cells.forEachRC((cell, r, c) => { if (cell.formula) this.markFormulaDirty(si, r, c, cell); });
+        sheet.cells.forEachStoredRC((cell, r, c) => { if (cell.formula) this.markFormulaDirty(si, r, c, cell); });
       }
     }
     this.version++; this.sheetVer ??= []; this.baseVer ??= [];
@@ -1391,7 +1458,7 @@ export class Workbook {
     sheet.fileValues = false; this.caches[si]?.clear(); this.colIdx[si] = undefined;
     for (const [key, sp] of this.spills) if (sp.si === si) {
       this.spills.delete(key);
-      for (let r = 0; r < sp.h; r++) for (let c = 0; c < sp.w; c++) if (r || c) this.spillOwner.delete(`${si}:${sp.r + r},${sp.c + c}`);
+      for (const [r, c] of spillOffsets(sp)) this.spillOwner.delete(`${si}:${sp.r + r},${sp.c + c}`);
     }
     this.spillState = null;
   }
@@ -1402,12 +1469,10 @@ export class Workbook {
     let rows = 0;
     let cols = 0;
     for (const b of this.sheets[si].blocks) { rows = Math.max(rows, b.r0 + b.n); cols = Math.max(cols, b.c0 + b.cols.length); }
-    for (const [c, m] of this.sheets[si].cells.cols) {
-      for (const [r, cell] of m) {
-        if (!cell.raw && !cell.image) continue;
-        if (r >= rows) rows = r + 1;
-        if (c >= cols) cols = c + 1;
-      }
+    for (const [r,c,cell] of storedCellEntries(this.sheets[si].cells)) {
+      if (!cell.raw && !cell.image) continue;
+      if (r >= rows) rows = r + 1;
+      if (c >= cols) cols = c + 1;
     }
     const res = { rows, cols };
     this.usedCache.set(si, res);
@@ -1421,9 +1486,9 @@ export class Workbook {
     let rows = 0;
     let cols = 0;
     for (const b of this.sheets[si].blocks) { rows = Math.max(rows, b.r0 + b.n); cols = Math.max(cols, b.c0 + b.cols.length); }
-    for (const [c, m] of this.sheets[si].cells.cols) {
+    for (const [r,c,,count] of storedCellEntries(this.sheets[si].cells)) {
       if (c >= cols) cols = c + 1;
-      for (const r of m.keys()) if (r >= rows) rows = r + 1;
+      if (r + count > rows) rows = r + count;
     }
     const res = { rows, cols };
     this.extentCache.set(si, res);
@@ -1475,7 +1540,7 @@ export class Workbook {
     for (const [k, sp] of this.spills) {
       if (!aff.has(sp.si)) continue;
       this.spills.delete(k);
-      for (let i = 0; i < sp.h; i++) for (let j = 0; j < sp.w; j++) if (i || j) this.spillOwner.delete(`${sp.si}:${sp.r + i},${sp.c + j}`);
+      for (const [i, j] of spillOffsets(sp)) this.spillOwner.delete(`${sp.si}:${sp.r + i},${sp.c + j}`);
     }
     this.spillState = null;
   }
@@ -1491,7 +1556,7 @@ export class Workbook {
     this.deps = this.sheets.map((sheet, si) => {
       const d = { sheets: new Set(), all: false };
       const seen = new Set();
-      for (const cell of sheet.cells.values()) {
+      for (const [,,cell] of storedCellEntries(sheet.cells)) {
         if (!cell.formula) continue;
         if (!cell.ast) { d.all = true; continue; }
         if (seen.has(cell.ast)) continue;
@@ -1538,10 +1603,10 @@ export class Workbook {
   /** 실행 취소 기록 목록이 바꾼 시트만 다시 계산 */
   invalidateEntries(entries, cellsDone = false) {
     if (entries.some((e) => e.t === 'all')) { this.invalidate(undefined, false); return; }
-    if (entries.some((e) => e.t === 'list' || e.t === 'sheet' || e.t === 'names' || e.t === 'rename')) {
+    if (entries.some((e) => e.t === 'list' || e.t === 'sheet' && !e.calcNeutral || e.t === 'names' || e.t === 'rename')) {
       // 구조가 바뀐 시트와 그 시트를 참조하는 시트는 다시 계산
-      for (const e of entries) if (e.t === 'sheet') for (const x of this.affected(e.si)) if (this.sheets[x]) this.discardFileValues(x);
-      if (entries.some((e) => e.t === 'names')) this.sheetDeps().forEach((d, i) => { if (d.all) this.discardFileValues(i); });
+      for (const e of entries) if (e.t === 'sheet' && !e.calcNeutral) for (const x of this.affected(e.si)) if (this.sheets[x]) this.discardFileValues(x, true);
+      if (entries.some((e) => e.t === 'names')) this.sheetDeps().forEach((d, i) => { if (d.all) this.discardFileValues(i, true); });
       this.invalidateStructure();
     }
     const done = new Set();
@@ -1590,6 +1655,7 @@ export class Workbook {
         // 자동으로 따라 바뀐 것(피벗 자동 새로 고침 등)은 직전 실행 취소 단계에 합침
         pushAll(top.entries, tx.entries);
         if (tx.cacheTrust) pushAll((top.cacheTrust ??= []), tx.cacheTrust);
+        if (tx.pivotCacheBefore && !top.pivotCacheBefore) top.pivotCacheBefore = tx.pivotCacheBefore;
         this.calcTrustTx = top;
       } else if (tx.entries.length) {
         this.undoStack.push(tx);
@@ -1598,6 +1664,7 @@ export class Workbook {
       }
       this.invalidateEntries(tx.entries, true);
       this.flushPending();
+      if (this.calcTrustTx?.pivotCacheBefore) this.calcTrustTx.pivotCacheAfter = this.snapshotData();
       this.calcTrustTx = null;
       this.emit();
     }
@@ -1606,6 +1673,7 @@ export class Workbook {
 
   record(entry) {
     if (entry.si !== undefined) this.touch(entry.si);
+    if (entry.t === 'perm' || entry.t === 'order') this.touchSource(entry.si);
     if (this.tx) this.tx.entries.push(entry);
   }
 
@@ -1613,6 +1681,25 @@ export class Workbook {
   touch(si) {
     const s = this.sheets[si];
     if (s) s._ev = (s._ev ?? 0) + 1;
+  }
+
+  /** 피벗 저장 캐시용 값/구조 버전. 색·폰트·메모·행 높이는 원본 값을 바꾸지 않는다. */
+  sourceVersion(si) { return this.sheets[si]?._dataEv ?? 0; }
+
+  touchSource(si) {
+    const sheet = this.sheets[si];
+    if (!sheet) return;
+    const tx = this.tx ?? this.calcTrustTx;
+    // 캐시 열 배열은 불변이다. 실행 취소에는 배열 복사가 아닌 유효한 저장본 참조만 둔다.
+    if (tx && this.pivotSnapshots?.size && !tx.pivotCacheBefore) tx.pivotCacheBefore = this.snapshotData();
+    sheet._dataEv = (sheet._dataEv ?? 0) + 1;
+  }
+
+  sourcePropChanged(prop, before, after) {
+    if (prop === 'blocks') return before !== after;
+    if (prop !== 'tables') return false;
+    const bounds = list => (list ?? []).map(t => [t.name,t.r1,t.c1,t.r2,t.c2,t.header,t.totals,...(!t.header?[t.columns]:[])]);
+    return JSON.stringify(bounds(before)) !== JSON.stringify(bounds(after));
   }
 
   copyNames() {
@@ -1627,11 +1714,13 @@ export class Workbook {
   }
 
   /** 시트 하나를 통째로 기록 (행/열 삽입 · 삭제 등) */
-  snapshotSheet(si) {
+  snapshotSheet(si, calcNeutral = false) {
     this.touch(si);
-    if (this.tx && !this.tx.entries.some((e) => e.t === 'sheet' && e.si === si)) {
-      this.tx.entries.push({ t: 'sheet', si, before: this.serializeSheet(si) });
-    }
+    if (!calcNeutral) this.touchSource(si);
+    if (!this.tx) return;
+    const prior = this.tx.entries.find(e => e.t === 'sheet' && e.si === si);
+    if (prior) { if (!calcNeutral) prior.calcNeutral = false; }
+    else this.tx.entries.push({ t: 'sheet', si, calcNeutral, before: this.serializeSheet(si) });
   }
 
   snapshotNames() {
@@ -1640,9 +1729,7 @@ export class Workbook {
 
   serializeSheet(si) {
     const out = this.sheetMeta(si);
-    const cells = {};
-    for (const [k, cell] of this.sheets[si].cells) cells[k] = cellData(cell);
-    out.cells = cells;
+    Object.assign(out, serializeCells(this.sheets[si].cells, cellData));
     out._sid = this.sheets[si]._sid;
     if (this.sheets[si].blocks.length) out.blocks = this.sheets[si].blocks.map(blockClone);
     return out;
@@ -1656,13 +1743,14 @@ export class Workbook {
   }
 
   /** 시트 객체는 그대로 두고 내용만 바꿈 (시트 목록 실행 취소 기록이 같은 객체를 가리키므로) */
-  putSheet(si, data) {
+  putSheet(si, data, calcNeutral = false) {
     const cur = this.sheets[si];
     const next = sheetFromData(data, this.date1904);
-    for (const k of Object.keys(cur)) if (!(k in next) && k !== '_sid' && k !== '_ev') delete cur[k];
+    for (const k of Object.keys(cur)) if (!(k in next) && k !== '_sid' && k !== '_ev' && k !== '_dataEv') delete cur[k];
     Object.assign(cur, next);
     cur.fileValues = !!data.fileValues;
     this.touch(si);
+    if (!calcNeutral) this.touchSource(si);
   }
 
   /** 기록한 셀 교체 (구조 변경 중 다른 시트의 수식 고치기) */
@@ -1699,10 +1787,10 @@ export class Workbook {
   }
 
   snapshotAll() {
-    for (let i = 0; i < this.sheets.length; i++) this.touch(i);
     if (this.tx && !this.tx.entries.some((e) => e.t === 'all')) {
       this.tx.entries.push({ t: 'all', before: this.serialize() });
     }
+    for (let i = 0; i < this.sheets.length; i++) { this.touch(i); this.touchSource(i); }
   }
 
   canUndo() { return this.undoStack.length > 0; }
@@ -1713,8 +1801,11 @@ export class Workbook {
     if (!tx) return null;
     for (const e of [...tx.entries].reverse()) this.applyEntry(e, 'before');
     this.redoStack.push(tx);
+    const arrayTrust = this.entryArrayTrust(tx.entries, 'before');
     this.invalidateEntries(tx.entries);
     this.restoreCacheTrust(tx, true);
+    this.restoreCacheTrust(arrayTrust, true);
+    if (tx.pivotCacheBefore) this.setSnapshots({ pivotSnapshots: tx.pivotCacheBefore });
     this.emit();
     return tx.meta;
   }
@@ -1726,14 +1817,15 @@ export class Workbook {
     this.undoStack.push(tx);
     this.invalidateEntries(tx.entries);
     this.restoreCacheTrust(tx, false);
+    if (tx.pivotCacheAfter) this.setSnapshots({ pivotSnapshots: tx.pivotCacheAfter });
     this.emit();
     return tx.meta;
   }
 
   applyEntry(e, side) {
-    if (e.t === 'cell') this.putCell(e.si, e.r, e.c, makeCellRC(e[side], e.r, e.c, this.date1904));
+    if (e.t === 'cell') this.putCell(e.si, e.r, e.c, makeCellRC(e[side], e.r, e.c, this.date1904), e.calcNeutral);
     else if (e.t === 'list') { this.sheets = [...e[side].sheets]; this.names = e[side].names.map((n) => ({ ...n })); }
-    else if (e.t === 'sheet') this.putSheet(e.si, e[side]);
+    else if (e.t === 'sheet') this.putSheet(e.si, e[side], e.calcNeutral);
     else if (e.t === 'names') this.names = e[side].map((n) => ({ ...n }));
     else if (e.t === 'cellStyles') this.cellStyles = structuredClone(e[side]);
     else if (e.t === 'bookProp') { this[e.prop] = structuredClone(e[side]); if (e.prop === 'calculation') this.manualCalc = this.calculation?.mode === 'manual'; }
@@ -1743,10 +1835,10 @@ export class Workbook {
       if (col) { col.fmt = structuredClone(e[side]); block.ver = (block.ver ?? 0) + 1; this.touch(e.si); }
     }
     else if (e.t === 'rename') { if (this.sheets[e.si]) this.sheets[e.si].name = e[side]; }
-    else if (e.t === 'perm') { const b = this.sheets[e.si]?.blocks[e.bi]; if (b) { materialize(b); blockPermute(b, e.a, e.n, e.j1, e.j2, e.order, side === 'before'); } }
-    else if (e.t === 'order') { const b = this.sheets[e.si]?.blocks[e.bi]; if (b) setRowOrder(b, e.a, e[side]); }
+    else if (e.t === 'perm') { const b = this.sheets[e.si]?.blocks[e.bi]; if (b) { materialize(b); blockPermute(b, e.a, e.n, e.j1, e.j2, e.order, side === 'before'); this.touchSource(e.si); this.touch(e.si); } }
+    else if (e.t === 'order') { const b = this.sheets[e.si]?.blocks[e.bi]; if (b) { setRowOrder(b, e.a, e[side]); this.touchSource(e.si); this.touch(e.si); } }
     else if (e.t === 'all') this.restore(e[side]);
-    else if (e.t === 'prop') { if (this.sheets[e.si]) this.sheets[e.si][e.prop] = structuredClone(e[side]); }
+    else if (e.t === 'prop') { if (this.sheets[e.si]) { if (this.sourcePropChanged(e.prop, this.sheets[e.si][e.prop], e[side])) this.touchSource(e.si); this.sheets[e.si][e.prop] = structuredClone(e[side]); } }
     else if (e.t === 'colWidth') this.sheets[e.si].colWidths = { ...e[side] };
     else if (e.t === 'rowHeight') {
       this.sheets[e.si].rowHeights = { ...e[side] };
@@ -1754,10 +1846,12 @@ export class Workbook {
     }
   }
 
-  putCell(si, r, c, cell) {
+  putCell(si, r, c, cell, calcNeutral = false) {
     this.touch(si);
+    if (!calcNeutral) this.touchSource(si);
     const cells = this.sheets[si].cells;
     const old = cells.getRC(r, c);
+    if (cell?.cachedArray) this.sheets[si]._hasCachedArrays = true;
     if (old?.maybeArray || cell?.maybeArray) {
       this.arrayList = null;
       this.spillState = null; // 새 배열 수식은 의존 셀이 없어도 분산 후보를 다시 탐색해야 함
@@ -1795,7 +1889,7 @@ export class Workbook {
     // 서식·메모·링크 변경은 수식 자체와 파일 계산값을 다시 계산하지 않습니다.
     const ca = cur ? savedCached(cur) : undefined, cb = cell ? savedCached(cell) : undefined;
     const neutralFormula = cur?.formula && cell?.formula && cur.raw === cell.raw && !cur.image && !cell.image
-      && (ca === cb || JSON.stringify(ca) === JSON.stringify(cb));
+      && (ca === cb || JSON.stringify(ca) === JSON.stringify(cb)) && sameArrayCache(cur, cell);
     const neutralValue = cur && cell && !cur.formula && !cell.formula && !cur.image && !cell.image && sameValue(cur.v, cell.v);
     const phoneticChanged = (cur?.phonetic || cell?.phonetic) && phoneticText(cur?.v, cur?.phonetic) !== phoneticText(cell?.v, cell?.phonetic);
     const neutralEmpty = (!cur || cur.raw === '') && (!cell || cell.raw === '') && cur?.v == null && cell?.v == null
@@ -1804,7 +1898,7 @@ export class Workbook {
     if (neutralFormula && cur.dirty) cell.dirty = true;
     // noUndo: 파일을 여는 중(피벗 다시 그리기) — 실행 취소 기록은 끝나면 비우므로 셀 내용 복사를 만들지 않음
     this.record(this.noUndo ? { t: 'cell', si, r, c, calcNeutral } : { t: 'cell', si, r, c, calcNeutral, before: cur ? cellData(cur) : null, after: cell ? cellData(cell) : null });
-    this.putCell(si, r, c, cell);
+    this.putCell(si, r, c, cell, calcNeutral);
     // 서식만 바뀐 값 칸 (피벗 다시 그리기 등): 값이 같으니 참조하는 수식을 다시 계산하지 않음 (엑셀도 서식 변경은 재계산 안 함)
     if (calcNeutral) {
       this.version++;
@@ -1872,19 +1966,96 @@ export class Workbook {
   }
 
   clearRange(si, r1, c1, r2, c2, what = 'contents') {
-    for (const [k, cell] of [...this.sheets[si].cells]) {
-      const [r, c] = unkey(k);
-      if (r < r1 || r > r2 || c < c1 || c > c2) continue;
-      if (what === 'all') this.setCellData(si, r, c, null);
-      else {
-        const data = what === 'formats' ? cellData(cell, null) : cellData(cell);
-        if (what === 'comments') delete data.comment;
-        else if (what === 'hyperlinks') delete data.link;
-        else if (what !== 'formats') { data.raw = ''; delete data.cached; delete data.fx; delete data.inputType; delete data.image; delete data.link; delete data.phonetic; }
-        this.setCellData(si, r, c, data);
+    if (r1 > r2 || c1 > c2) return;
+    const sheet = this.sheets[si];
+    const overlap = b => b.r0 <= r2 && b.r0 + b.n > r1 && b.c0 <= c2 && b.c0 + b.cols.length > c1;
+    const blocks = sheet.blocks.filter(overlap);
+    const formats = what === 'formats' || what === 'all';
+    const values = what === 'contents' || what === 'all';
+    const neutral = !values;
+    const change = cell => {
+      if (what === 'all') return null;
+      const data = what === 'formats' ? cellData(cell, null) : cellData(cell);
+      if (what === 'comments') delete data.comment;
+      else if (what === 'hyperlinks') delete data.link;
+      else if (what !== 'formats') { data.raw = ''; delete data.cached; delete data.staleCached; delete data.cachedArray; delete data.staleCachedArray; delete data.fx; delete data.inputType; delete data.image; delete data.link; delete data.phonetic; }
+      return data;
+    };
+    const relevant = cell => !(what === 'comments' && !cell.comment || what === 'hyperlinks' && !cell.link
+      || what === 'contents' && !cell.raw && !cell.image && !cell.link && !cell.phonetic);
+    // 큰 선택 영역은 압축된 시트 스냅샷 하나로 실행 취소한다. 블록 서식은 열 공통이므로
+    // 작은 부분 범위여도 행 구간을 분할해 선택 밖의 값·서식과 정렬 순서를 보존한다.
+    const bulk = (r2 - r1 + 1) * (c2 - c1 + 1) > 50000 || formats && blocks.length > 0;
+    if (bulk) {
+      this.snapshotSheet(si, neutral);
+      const next = new CellMap();
+      const append = (r, c, count, cell) => { if (cell && count > 0) next.setRunRC(r, c, count, cell); };
+      for (const [start, c, cell, count] of storedCellEntries(sheet.cells)) {
+        const end = start + count, a = Math.max(start, r1), z = Math.min(end, r2 + 1);
+        if (c < c1 || c > c2 || a >= z || !relevant(cell)) { append(start, c, count, cell); continue; }
+        append(start, c, a - start, cell);
+        const changed = makeCellRC(change(cell), a, c, this.date1904);
+        append(a, c, z - a, changed);
+        // 서식만 있던 빈 셀이 없어져도 그 아래 숨겨진 블록 값이 되살아나면 안 된다.
+        if (!changed && what === 'formats') for (const b of blocks) {
+          if (c < b.c0 || c >= b.c0 + b.cols.length) continue;
+          for (let r = Math.max(a, b.r0); r < Math.min(z, b.r0 + b.n); r++) blockSet(b, r, c, null);
+        }
+        append(z, c, end - z, cell);
+      }
+      sheet.cells = next;
+      if (formats && blocks.length) {
+        sheet.blocks = sheet.blocks.flatMap(b => {
+          if (!overlap(b)) return [b];
+          // 표시 행을 실제 순서로 만든 다음 서로 겹치지 않는 뷰를 사용한다.
+          // 선택 행의 서식만 지우려고 셀 객체 수십만 개를 만드는 일을 피한다.
+          materialize(b);
+          const a = Math.max(r1, b.r0) - b.r0, z = Math.min(r2 + 1, b.r0 + b.n) - b.r0;
+          return [[0, a, false], [a, z, true], [z, b.n, false]].flatMap(([from, to, selected]) => {
+            if (from === to) return [];
+            const cols = b.cols.map((col, i) => {
+              const hit = selected && b.c0 + i >= c1 && b.c0 + i <= c2;
+              return { num: hit && values ? null : col.num?.subarray(from, to) ?? null,
+                str: hit && values ? null : col.str?.subarray(from, to) ?? null,
+                dict: hit && values ? [] : [...col.dict], fmt: hit ? null : col.fmt ?? null };
+            });
+            return [{ r0: b.r0 + from, c0: b.c0, n: to - from, ver: (b.ver ?? 0) + 1,
+              dver: (b.dver ?? 0) + (values && selected ? 1 : 0), cols }];
+          });
+        });
+      } else if (values) {
+        for (const b of blocks) for (let c = Math.max(c1, b.c0); c <= Math.min(c2, b.c0 + b.cols.length - 1); c++) {
+          const col = b.cols[c - b.c0], a = Math.max(r1, b.r0) - b.r0, z = Math.min(r2 + 1, b.r0 + b.n) - b.r0;
+          if (a === 0 && z === b.n) { col.num = null; col.str = null; col.dict = []; delete col.index; }
+          else if (!b.perm) { col.num?.fill(NaN, a, z); col.str?.fill(-1, a, z); }
+          else for (let i = a; i < z; i++) { const p = b.perm[i]; if (col.num) col.num[p] = NaN; if (col.str) col.str[p] = -1; }
+          b.ver = (b.ver ?? 0) + 1; b.dver = (b.dver ?? 0) + 1;
+        }
+      }
+      this.invalidateStructure();
+      if (!neutral) {
+        // 트랜잭션 없이 호출해도 이 시트를 참조하는 피벗 원본의 저장 캐시를 무효화한다.
+        for (const dependent of this.affected(si)) if (dependent !== si) this.touchSource(dependent);
+        this.invalidate(si);
+      }
+    } else {
+      const overrides = new Set();
+      // Small selections inspect only selected coordinates, not every stored cell.
+      for (let c = c1; c <= c2; c++) for (let r = r1; r <= r2; r++) {
+        const cell = sheet.cells.getRC(r, c);
+        if (!cell) continue;
+        overrides.add(key(r, c));
+        if (relevant(cell)) this.setCellData(si, r, c, change(cell));
+      }
+      if (values) for (const b of blocks) for (let c = Math.max(c1, b.c0); c <= Math.min(c2, b.c0 + b.cols.length - 1); c++) {
+        for (let r = Math.max(r1, b.r0); r < Math.min(r2 + 1, b.r0 + b.n); r++) {
+          if (overrides.has(key(r, c))) continue;
+          const cell = this.getCell(si, r, c);
+          if (cell && relevant(cell)) this.setCellData(si, r, c, change(cell));
+        }
       }
     }
-    if (what === 'formats' || what === 'all') this.clearCondRules(si, { r1, c1, r2, c2 });
+    if (formats) this.clearCondRules(si, { r1, c1, r2, c2 });
   }
 
   setColWidth(si, c, w) {
@@ -2094,6 +2265,7 @@ export class Workbook {
   }
 
   setSheetProp(si, prop, value) {
+    if (this.sourcePropChanged(prop, this.sheets[si][prop], value)) this.touchSource(si);
     this.propSnap(si, prop);
     // 같은 트랜잭션에서 서식 변경 뒤 구조까지 바꾸면 계산 중립 표시를 해제한다.
     const entry=this.tx?.entries.find(e=>e.t==='prop'&&e.si===si&&e.prop===prop);if(entry)delete entry.calcNeutral;
@@ -2148,7 +2320,7 @@ export class Workbook {
     const hasSheet = (name) => this.sheetIndexByName(name) >= 0;
     this.sheets.forEach((sh, si) => {
       const fix = (target, allowBare = false) => rewriteWorkbookLink(target, (formula) => transform(formula, sh.name), hasSheet, allowBare);
-      sh.cells.forEachRC((cell, r, c) => {
+      sh.cells.forEachStoredRC((cell, r, c) => {
         if (!cell.link) return;
         const link = fix(cell.link);
         if (link === cell.link) return;
@@ -2212,14 +2384,7 @@ export class Workbook {
       }
       target.view = view;
     }
-    const moved = new CellMap();
-    target.cells.forEachRC((cell, r, c) => {
-      const p = isRow ? r : c;
-      if (count < 0 && p >= index && p < index - count) return;
-      const np = p >= index ? p + count : p;
-      if (isRow) moved.setRC(np, c, cell); else moved.setRC(r, np, cell);
-    });
-    target.cells = moved;
+    target.cells = shiftStoredCells(target.cells, axis, index, count);
     target.blocks = target.blocks.map((b) => blockShift(b, axis, index, count)).filter(Boolean);
     if (target.noteVisibility) target.noteVisibility = shiftNoteVisibility(target.noteVisibility, axis, index, count);
     if (target.protectedRanges) target.protectedRanges = target.protectedRanges.map(a => ({ ...a, ranges: a.ranges.map(rg => adjustRange(rg, axis, index, count)).filter(Boolean) })).filter(a => a.ranges.length);
@@ -2414,8 +2579,9 @@ export class Workbook {
     this.sheets.forEach((sheet, i) => {
       // 다른 시트는 대상 시트를 참조하는 경우만 수식이 바뀜
       if (i !== si && !deps[i]?.sheets.has(si) && !deps[i]?.all) return;
-      for (const [k, cell] of [...sheet.cells]) {
+      for (const [r, c, cell] of [...storedCellEntries(sheet.cells)]) {
         if (!cell.formula) continue;
+        const k = `${r},${c}`;
         const raw = adjustFormulaForStructure(cell.raw, {
           targetSheet: target.name, hostSheet: sheet.name, axis, index, count,
         });
@@ -2429,7 +2595,7 @@ export class Workbook {
       const ref = adjustFormulaForStructure(n.ref, { targetSheet: target.name, hostSheet: n.sheet ?? '', axis, index, count });
       return ref === n.ref ? n : { ...n, ref };
     });
-    for (const x of this.affected(si)) this.discardFileValues(x);
+    for (const x of this.affected(si)) this.discardFileValues(x, true);
     this.invalidateStructure();
   }
 
@@ -2457,18 +2623,7 @@ export class Workbook {
     }
     this.snapshotSheet(si);
     this.snapshotNames();
-    const moved = new CellMap();
-    const end = index - count; // 삭제: [index, end)
-    target.cells.forEachRC((cell, r, c) => {
-      const p = isRow ? r : c;
-      const o = isRow ? c : r;
-      if (o < band[0] || o > band[1] || p < index) { moved.setRC(r, c, cell); return; }
-      if (count < 0 && p < end) return;
-      const np = p + count;
-      if (np < 0) return;
-      if (isRow) moved.setRC(np, c, cell); else moved.setRC(r, np, cell);
-    });
-    target.cells = moved;
+    target.cells = shiftStoredCells(target.cells, axis, index, count, band);
     const adj = (x) => (inBand(x) ? adjustRange(x, axis, index, count) : x);
     target.merges = target.merges.map(adj).filter((m) => m && (m.r2 > m.r1 || m.c2 > m.c1));
     target.cond = target.cond.map((rule) => {
@@ -2494,8 +2649,9 @@ export class Workbook {
     const deps = this.sheetDeps();
     this.sheets.forEach((sheet, i) => {
       if (i !== si && !deps[i]?.sheets.has(si) && !deps[i]?.all) return;
-      for (const [k, cell] of [...sheet.cells]) {
+      for (const [r, c, cell] of [...storedCellEntries(sheet.cells)]) {
         if (!cell.formula) continue;
+        const k = `${r},${c}`;
         const raw = adjustFormulaForStructure(cell.raw, { targetSheet: target.name, hostSheet: sheet.name, axis, index, count, band });
         if (raw === cell.raw) continue;
         const next = makeCell({ ...cellData(cell), raw }, k, this.date1904);
@@ -2508,7 +2664,7 @@ export class Workbook {
       const ref = adjustFormulaForStructure(n.ref, { targetSheet: target.name, hostSheet: n.sheet ?? '', axis, index, count, band });
       return ref === n.ref ? n : { ...n, ref };
     });
-    for (const x of this.affected(si)) this.discardFileValues(x);
+    for (const x of this.affected(si)) this.discardFileValues(x, true);
     this.invalidateStructure();
     return null;
   }
@@ -2531,20 +2687,12 @@ export class Workbook {
     this.snapshotNames();
     const name = sh.name;
     const fix = (raw, host) => moveRefsInFormula(raw, { targetSheet: name, hostSheet: host, src, dr, dc });
-    const moved = [];
-    const next = new CellMap();
-    sh.cells.forEachRC((cell, r, c) => {
-      const inSrc = r >= src.r1 && r <= src.r2 && c >= src.c1 && c <= src.c2;
-      if (inSrc) { moved.push([r + dr, c + dc, cell]); return; }
-      if (r >= dst.r1 && r <= dst.r2 && c >= dst.c1 && c <= dst.c2) return; // 덮어씀
-      next.setRC(r, c, cell);
-    });
-    for (const [r, c, cell] of moved) next.setRC(r, c, cell);
-    sh.cells = next;
+    sh.cells = moveStoredCells(sh.cells, src, dr, dc);
     // 수식: 옮긴 칸을 가리키는 참조 이동 (옮긴 수식 자신의 참조는 그대로 — 엑셀과 같음)
     this.sheets.forEach((sheet, i) => {
-      for (const [k, cell] of [...sheet.cells]) {
+      for (const [r, c, cell] of [...storedCellEntries(sheet.cells)]) {
         if (!cell.formula) continue;
+        const k = `${r},${c}`;
         const raw = fix(cell.raw, sheet.name);
         const [rr, cc] = k.split(',').map(Number);
         if (raw === cell.raw && !(i === si && rr >= dst.r1 && rr <= dst.r2 && cc >= dst.c1 && cc <= dst.c2)) continue;
@@ -2576,7 +2724,7 @@ export class Workbook {
       });
       if (nextCharts.some((c, k) => c !== s2.charts[k])) { if (i !== si) this.propSnap(i, 'charts'); s2.charts = nextCharts; }
     });
-    for (const x of this.affected(si)) this.discardFileValues(x);
+    for (const x of this.affected(si)) this.discardFileValues(x, true);
     this.invalidateStructure();
     return null;
   }
@@ -2610,7 +2758,7 @@ export class Workbook {
     this.snapshotList();
     const gone = this.sheets[si].name.toLowerCase();
     // 지운 시트를 참조하던 시트는 다시 계산 (#REF!)
-    for (const x of this.affected(si)) if (x !== si) this.discardFileValues(x);
+    for (const x of this.affected(si)) if (x !== si) this.discardFileValues(x, true);
     this.names = this.names.filter((n) => (n.sheet ?? '').toLowerCase() !== gone);
     this.sheets.splice(si, 1);
     this.invalidateStructure();
@@ -2644,8 +2792,9 @@ export class Workbook {
     });
     this.sheets.forEach((sheet, i) => {
       if (!refs.has(i)) return;
-      for (const [k, cell] of [...sheet.cells]) {
+      for (const [r, c, cell] of [...storedCellEntries(sheet.cells)]) {
         if (!cell.formula) continue;
+        const k = `${r},${c}`;
         const raw = renameSheetInFormula(cell.raw, old, newName);
         if (raw !== cell.raw) this.swapCell(i, k, makeCell({ ...cellData(cell), raw }, k, this.date1904));
       }
@@ -2857,8 +3006,9 @@ export class Workbook {
 
   // ─────────── 저장 / 불러오기 ───────────
   /** 시트 밖의 통합 문서 속성 (저장용: 기본 글꼴 · 기본 서식 · 테마 · 매크로 · 이름) */
-  bookMeta() {
+  bookMeta(includeSnapshots = true) {
     return {
+      ...(includeSnapshots && this.pivotSnapshots?.size ? { pivotSnapshots: this.snapshotData() } : {}),
       ...(this.date1904 ? { date1904: true } : {}),
       ...(this.calculation ? { calculation: structuredClone(this.calculation) } : {}),
       ...(this.vba ? { vba: this.vba } : {}),
@@ -2877,14 +3027,47 @@ export class Workbook {
     };
   }
 
+  /** 새로 고치지 않은 피벗은 원본 셀과 값이 달라도 파일의 캐시를 유지한다.
+   * 원본을 편집한 뒤 아직 피벗을 조회하지 않았더라도 오래된 캐시는 저장하지 않는다. */
+  pivotSnapshotSource(def) {
+    const found = def.table ? findTable(this, def.table) : null;
+    const si = def.table ? found?.si : this.sheetIndexByName(def.source);
+    if (si === undefined || si < 0) return null;
+    const t = found?.t, r = t ? {r1:t.r1,c1:t.c1,r2:t.r2-(t.totals?1:0),c2:t.c2} : def.range;
+    if (!r) return null;
+    return { si, sheet:this.sheets[si], key:JSON.stringify([r.r1,r.c1,r.r2,r.c2,...(t&&!t.header?[t.columns]:[])]) };
+  }
+
+  pivotSnapshotCurrent(snap, def) {
+    const source=this.pivotSnapshotSource(def);
+    if (!source) return false;
+    // 이전 확장 API가 직접 등록한 캐시도 첫 조회에서 원본 정체성을 고정한다.
+    if (!snap.sourceSheet) { snap.sourceSheet=source.sheet; snap.sourceKey=source.key; }
+    snap.ver ??= this.sourceVersion(source.si);
+    return snap.sourceSheet===source.sheet && snap.sourceKey===source.key && snap.ver===this.sourceVersion(source.si);
+  }
+
+  snapshotData() {
+    const out = {};
+    for (const [id, snap] of this.pivotSnapshots ?? []) {
+      let stale = false;
+      if (snap.ver !== undefined) for (const sheet of this.sheets) {
+        for (const def of [sheet.pivot, ...(sheet.pivotsExtra ?? [])]) {
+          if (def?.snapshotId !== id) continue;
+          if (!this.pivotSnapshotCurrent(snap, def)) stale = true;
+        }
+      }
+      if (!stale) out[id] = snap.rows;
+    }
+    return out;
+  }
+
   serialize() {
     return {
       version: 1,
       ...this.bookMeta(),
       sheets: this.sheets.map((s) => {
-        const cells = {};
-        for (const [k, cell] of s.cells) cells[k] = cellData(cell);
-        const out = { name: s.name, cells };
+        const out = { name: s.name, ...serializeCells(s.cells, cellData) };
         if (s.blocks.length) out.blocks = s.blocks.map(blockClone);
         for (const p of SHEET_PROPS) out[p] = structuredClone(s[p]);
         if (s.fileValues) out.fileValues = true; // 셀의 파일 계산 결과가 아직 유효함
@@ -2899,30 +3082,20 @@ export class Workbook {
   serializeBlob() {
     const book = this;
     function* parts() {
-      yield JSON.stringify({ version: 1, ...book.bookMeta() }).slice(0, -1) + ',"sheets":[';
+      yield JSON.stringify({ version: 1, ...book.bookMeta(false) }).slice(0, -1);
+      yield* pivotSnapshotJsonParts(book.snapshotData());
+      yield ',"sheets":[';
       for (let si = 0; si < book.sheets.length; si++) {
         const s = book.sheets[si];
         if (si) yield ',';
-        yield '{"name":' + JSON.stringify(s.name) + ',"cells":{';
-        let first = true, entries = [];
-        for (const [key, cell] of s.cells) {
-          entries.push(JSON.stringify(key) + ':' + JSON.stringify(cellData(cell)));
-          if (entries.length === 512) {
-            yield (first ? '' : ',') + entries.join(',');
-            first = false; entries = [];
-          }
-        }
-        if (entries.length) yield (first ? '' : ',') + entries.join(',');
-        yield '}';
+        yield '{"name":' + JSON.stringify(s.name);
+        yield* cellJsonParts(s.cells, cellData);
         if (s.blocks.length) {
           yield ',"blocks":[';
           for (let i = 0; i < s.blocks.length; i++) {
             const b = s.blocks[i];
             if (i) yield ',';
-            // blockClone의 저장 속성과 순서만 공유하며 typed array를 복제하지 않습니다.
-            yield JSON.stringify({ r0: b.r0, c0: b.c0, n: b.n, ver: b.ver ?? 0,
-              ...(b.perm ? { perm: b.perm } : {}),
-              cols: b.cols.map(c => ({ num: c.num ?? null, str: c.str ?? null, dict: c.dict, fmt: c.fmt ?? null })) });
+            yield* blockJsonParts(b);
           }
           yield ']';
         }
@@ -2945,6 +3118,11 @@ export class Workbook {
     for (const p of SHEET_PROPS) out[p] = structuredClone(s[p]);
     if (s.fileValues) out.fileValues = true;
     return out;
+  }
+
+  /** v4 저장용: [행, 열, 같은 빈 셀 개수, 저장 셀]. 일반 셀은 개수 1. */
+  *cellRunChunks(si, size = 20000) {
+    yield* storedCellChunks(this.sheets[si].cells, cellData, size);
   }
 
   /** 시트의 셀을 size 개씩 [[키, 저장 형태], …] 로 (큰 문서를 나눠 저장) */
@@ -2972,25 +3150,35 @@ export class Workbook {
       const sheet = newSheet(s.name);
       const owned = s.cells instanceof Map || s.cells instanceof CellMap;
       if (owned) {
+        // A previous sheet cannot exhaust this sheet's bounded sharing budget.
+        const shareScalar = createScalarCellMemo(), prepared = new WeakMap();
+        const prepareCell = (data, r, c) => {
+          const immutable = data && typeof data === 'object' && Object.isFrozen(data);
+          if (immutable) { const hit = prepared.get(data); if (hit) return hit; }
+          const cell = shareScalar(makeCellRC(data, r, c, date1904));
+          if (cell?.cachedArray) sheet._hasCachedArrays = true;
+          // Dates, formulas and annotated cells remain independently mutable.
+          if (immutable && cell && Object.isFrozen(cell)) prepared.set(data, cell);
+          return cell;
+        };
         // 파일에서 읽은 셀 Map: 새 Map 을 만들지 않고 그 자리에서 셀 객체로 바꿈 (큰 파일에서 훨씬 빠름)
         const src = s.cells;
         const cells = src instanceof CellMap ? src : new CellMap();
         let n = 0;
         if (src instanceof CellMap) {
-          for (const [c, m] of src.cols) {
-            for (const [r, d] of m) {
-              const cell = makeCellRC(d, r, c, date1904);
-              if (cell) m.set(r, cell);
-              else cells.deleteRC(r, c);
-              if (++n % 50000 === 0) yield (done + n) / total;
-            }
+          let checkpoint = 0;
+          for (const count of cells.mapValues(
+            (d, r, c) => prepareCell(d, r, c),
+            (d) => makeCellRC(d, undefined, undefined, date1904))) {
+            n += count;
+            if (n - checkpoint >= 50000) { checkpoint = n; yield (done + n) / total; }
           }
         } else {
           for (const [k, d] of src) {
             const i = k.indexOf(',');
             const r = +k.slice(0, i);
             const c = +k.slice(i + 1);
-            const cell = makeCellRC(d, r, c, date1904);
+            const cell = prepareCell(d, r, c);
             if (cell) cells.setRC(r, c, cell);
             if (++n % 50000 === 0) yield (done + n) / total;
           }
@@ -3001,8 +3189,12 @@ export class Workbook {
       } else {
         for (const [k, d] of Object.entries(s.cells || {})) {
           const cell = makeCell(d, k, date1904);
-          if (cell) sheet.cells.set(k, cell);
+          if (cell) { sheet.cells.set(k, cell); if (cell.cachedArray) sheet._hasCachedArrays = true; }
         }
+      }
+      for (const [r, c, count, data] of s.cellRuns ?? []) {
+        const cell = makeCellRC(data, r, c, date1904);
+        if (cell) { sheet.cells.setRunRC(r, c, count, cell); if (cell.cachedArray) sheet._hasCachedArrays = true; }
       }
       for (const p of SHEET_PROPS) if (s[p] !== undefined && s[p] !== null) sheet[p] = structuredClone(s[p]);
       sheet.freeze = { rows: 0, cols: 0, ...(s.freeze || {}) };
@@ -3032,10 +3224,10 @@ export class Workbook {
     this.sheets = sheets.length ? sheets : [newSheet('Sheet1')];
     this.invalidate(undefined, true);
     data.sheets.forEach((s, i) => { if (s.fileValues && this.sheets[i]) this.sheets[i].fileValues = true; });
+    this.setSnapshots(data);
   }
 
   load(data) {
-    this.setSnapshots(data);
     this.restore(data);
     this.undoStack = [];
     this.redoStack = [];
@@ -3044,11 +3236,18 @@ export class Workbook {
   /** 큰 문서: 화면이 멈추지 않도록 나눠서 불러옴. onProgress(0~1) */
   /** 파일의 피벗 캐시 저장본 (엑셀이 마지막으로 새로 고친 원본) — 원본을 고치기 전까지 피벗을 이것으로 계산 */
   setSnapshots(data) {
-    this.pivotSnapshots = data?.pivotSnapshots ? new Map(Object.entries(data.pivotSnapshots).map(([k, rows]) => [k, { rows, ver: undefined }])) : null;
+    this.pivotSnapshots = data?.pivotSnapshots ? new Map(Object.entries(data.pivotSnapshots).map(([k, rows]) => [k, { rows: restorePivotSnapshot(rows), ver: undefined }])) : null;
+    // 조회가 아니라 문서를 받아들인 시점의 원본 버전을 고정한다.
+    // 최초 피벗 조회 전에 원본을 고쳐도 이전 저장값을 새 값으로 착각하지 않는다.
+    for (const sheet of this.sheets ?? []) for (const def of [sheet.pivot, ...(sheet.pivotsExtra ?? [])]) {
+      const snap = def?.snapshotId && this.pivotSnapshots?.get(def.snapshotId);
+      if (!snap) continue;
+      const source=this.pivotSnapshotSource(def);
+      if (source) { snap.ver=this.sourceVersion(source.si);snap.sourceSheet=source.sheet;snap.sourceKey=source.key; }
+    }
   }
 
   async loadAsync(data, onProgress) {
-    this.setSnapshots(data);
     const it = this.restoreSteps(data);
     let last = performance.now();
     for (;;) {

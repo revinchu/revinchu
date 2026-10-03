@@ -71,7 +71,18 @@ export function sortKeys(keys) {
 }
 
 /** 키 → 구별용 글자 (숫자 1 과 글자 '1' 을 다르게) */
-export const kk = (k) => `${typeof k}:${k}`;
+// Excel 항목은 대소문자를 구분하지 않되, 표시 값과 원본 레코드는 그대로 둡니다.
+// 그림 주소와 빈 값 표식은 일반 문자열로 정규화하지 않습니다.
+export const itemIdentity = (k) => `${typeof k}:${typeof k === 'string' && k !== EMPTY && k !== EMPTY_TEXT && !k.startsWith(IMG_KEY) ? k.toLowerCase() : k}`;
+export const kk = itemIdentity;
+const selectedIdentities = values => new Set(Array.from(values, itemIdentity));
+export function itemProperty(properties, label) {
+  if (!properties) return undefined;
+  if (Object.hasOwn(properties, label)) return properties[label];
+  const identity = itemIdentity(label);
+  for (const name of Object.keys(properties)) if (itemIdentity(name) === identity) return properties[name];
+  return undefined;
+}
 
 // ───────────── 열 ─────────────
 /**
@@ -104,17 +115,19 @@ export class Column {
         c = numMap.get(v);
         if (c === undefined) { c = keys.length; keys.push(v); numMap.set(v, c); }
       } else if (v === null || v === undefined) {
-        if (empty < 0) { empty = keys.length; keys.push(EMPTY); strMap.set(EMPTY, empty); }
+        if (empty < 0) { empty = keys.length; keys.push(EMPTY); strMap.set(itemIdentity(EMPTY), empty); }
         c = empty;
       } else if (typeof v === 'string') {
         const k = v === '' ? EMPTY_TEXT : v;
-        c = strMap.get(k);
-        if (c === undefined) { c = keys.length; keys.push(k); strMap.set(k, c); }
+        const identity = itemIdentity(k);
+        c = strMap.get(identity);
+        if (c === undefined) { c = keys.length; keys.push(k); strMap.set(identity, c); }
       } else {
         const k = keyOf(v);
         const map = typeof k === 'string' ? strMap : other;
-        c = map.get(k);
-        if (c === undefined) { c = keys.length; keys.push(k); map.set(k, c); if (k === EMPTY) empty = c; }
+        const identity = itemIdentity(k);
+        c = map.get(identity);
+        if (c === undefined) { c = keys.length; keys.push(k); map.set(identity, c); if (k === EMPTY) empty = c; }
       }
       codes[i] = c;
     }
@@ -236,7 +249,8 @@ export function filterRows(cube, filters) {
       const col = cube.col(j);
       const texts = col.texts();
       const ok = new Uint8Array(texts.length);
-      for (let c = 0; c < texts.length; c++) ok[c] = set.has(texts[c]) ? 1 : 0;
+      const selected = selectedIdentities(set);
+      for (let c = 0; c < texts.length; c++) ok[c] = selected.has(itemIdentity(texts[c])) ? 1 : 0;
       return { codes: col.dim().codes, ok };
     });
     const n = cube.n;
@@ -430,8 +444,9 @@ export function blockColumn(bc, a, n) {
         if (c < 0) {
           const k = keyOf(val(dict[s]));
           const km = typeof k === 'string' ? strMap : numMap;
-          c = km.get(k);
-          if (c === undefined) { c = keys.length; keys.push(k); km.set(k, c); if (k === EMPTY) empty = c; }
+          const identity = itemIdentity(k);
+          c = km.get(identity);
+          if (c === undefined) { c = keys.length; keys.push(k); km.set(identity, c); if (k === EMPTY) empty = c; }
           byDict[s] = c;
         }
       } else {
@@ -440,7 +455,7 @@ export function blockColumn(bc, a, n) {
           c = numMap.get(v);
           if (c === undefined) { c = keys.length; keys.push(v); numMap.set(v, c); }
         } else {
-          if (empty < 0) { empty = keys.length; keys.push(EMPTY); strMap.set(EMPTY, empty); }
+          if (empty < 0) { empty = keys.length; keys.push(EMPTY); strMap.set(itemIdentity(EMPTY), empty); }
           c = empty;
         }
       }
@@ -467,7 +482,7 @@ const isoDay = (v, date1904) => { const d = serialDate(v, date1904); return `${d
 /** 원래 값 → 그룹 키 (숫자가 아니면 그대로) */
 export function groupKey(v, spec) {
   // 선택 항목 그룹화 (엑셀 '그룹1' 등): 원래 항목 글자 → 그룹 이름, 그룹에 안 든 항목은 그대로
-  if (spec.by === 'items') return v === null || v === undefined || v === '' ? v : spec.map?.[itemText(v)] ?? v;
+  if (spec.by === 'items') return v === null || v === undefined || v === '' ? v : itemProperty(spec.map, itemText(v)) ?? v;
   if (typeof v !== 'number') return v;
   if (spec.by === 'number') {
     const size = Number(spec.size) || 10;
@@ -518,7 +533,7 @@ export function groupedColumn(cube, j, spec) {
       let empty = -1;
       bd.keys.forEach((k, c) => {
         const g = k === EMPTY ? EMPTY : groupKey(k, spec);
-        const kk2 = `${typeof g}:${g}`;
+        const kk2 = itemIdentity(g);
         let code = index.get(kk2);
         if (code === undefined) { code = keys.length; keys.push(g); index.set(kk2, code); if (g === EMPTY) empty = code; }
         map[c] = code;
@@ -614,7 +629,8 @@ function queryRollup(cube, ru, fs, dims, measures) {
     const col = cube.col(j);
     const texts = col.texts();
     const ok = new Uint8Array(texts.length);
-    for (let c = 0; c < texts.length; c++) ok[c] = set.has(texts[c]) ? 1 : 0;
+    const selected = selectedIdentities(set);
+      for (let c = 0; c < texts.length; c++) ok[c] = selected.has(itemIdentity(texts[c])) ? 1 : 0;
     return { pos: ru.dimIndex.get(dimKey(j)), ok };
   });
   const D = dims.length;
@@ -671,7 +687,8 @@ export function itemStatsRollup(cube, j, others) {
   const tests = others.filter(([o]) => o >= 0).map(([o, set]) => {
     const texts = cube.col(o).texts();
     const ok = new Uint8Array(texts.length);
-    for (let c = 0; c < texts.length; c++) ok[c] = set.has(texts[c]) ? 1 : 0;
+    const selected = selectedIdentities(set);
+      for (let c = 0; c < texts.length; c++) ok[c] = selected.has(itemIdentity(texts[c])) ? 1 : 0;
     return { pos: ru.dimIndex.get(dimKey(o)), ok };
   });
   const has = new Uint8Array(cube.col(j).dim().keys.length);

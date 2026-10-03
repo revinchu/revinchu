@@ -55,7 +55,7 @@ test('SmartArt 60배치 표준 그룹 저장과 편집모델 XLSX 왕복',()=>{
 test('WIXEL 확장을 제거해도 Excel 표준 도형과 그림 및 항목 텍스트가 남는다',()=>{
   const wb=new Workbook(),shape=newSmartArt('pictureCards',{x:50,y:70,w:600,h:340});shape.smartArt.nodes[0].picture=PNG;shape.smartArt.nodes[1].text='표준 텍스트 유지';wb.sheets[0].shapes=[shape];
   const files=unzip(writeXlsx(wb)),path='xl/drawings/drawing1.xml';files[path]=new TextEncoder().encode(textOf(files[path]).replace(/<a:extLst>.*?<\/a:extLst>/gs,''));
-  const back=readXlsx(zip(files)).data.sheets[0];assert.equal(back.images.length,1);assert.ok(back.shapes.some(s=>s.text==='표준 텍스트 유지'));assert.ok(back.shapes.every(s=>s.kind!=='smartart'));assert.ok(back.shapes.every(s=>s.x>=50&&s.y>=70));
+  const back=readXlsx(zip(files)).data.sheets[0],group=back.shapes[0];assert.equal(back.shapes.length,1);assert.equal(group.kind,'group');assert.equal(group.groupItems.filter(s=>s.kind==='picture').length,1);assert.ok(group.groupItems.some(s=>s.text==='표준 텍스트 유지'));assert.deepEqual([group.x,group.y],[50,70]);assert.ok(group.groupItems.every(s=>s.x>=0&&s.y>=0));
 });
 test('일반 중첩그룹의 원래 좌표계와 현재 크기·회전·그림을 XLSX 보존한다',()=>{
   const group={id:'g',kind:'group',x:20,y:40,w:400,h:200,rot:15,groupSize:{w:200,h:100},groupItems:[{id:'box',kind:'rect',x:10,y:10,w:80,h:60,text:'사각형',fill:'#4472c4'},{id:'pic',kind:'picture',src:PNG,x:100,y:10,w:80,h:60},{id:'child',kind:'group',x:2,y:2,w:10,h:10,groupSize:{w:10,h:10},groupItems:[{id:'inner',kind:'ellipse',x:0,y:0,w:8,h:8}]}]};
@@ -76,7 +76,7 @@ test('외부에서 수정한 그룹은 부모 회전·대칭과 표준 자식 �
 test('그룹 그림의 투명도·윤곽·둥근모서리·그림자·자르기는 메타 없이 표준 XML에 저장한다',()=>{
   const wb=new Workbook();wb.sheets[0].shapes=[{id:'g',kind:'group',x:20,y:30,w:400,h:200,groupSize:{w:400,h:200},groupItems:[{id:'p',kind:'picture',src:PNG,x:20,y:30,w:200,h:100,opacity:.4,radius:12,border:'#f12345',borderW:2.5,shadow:{dx:3,dy:4,blur:5,color:'#112233',opacity:.6},crop:{l:.1},alt:'그룹 그림'}]}];
   const files=unzip(writeXlsx(wb)),path='xl/drawings/drawing1.xml',xml=textOf(files[path]);assert.match(xml,/alphaModFix amt="40000"/);assert.match(xml,/roundRect/);assert.match(xml,/F12345/);assert.match(xml,/outerShdw/);assert.match(xml,/l="10000"/);
-  files[path]=new TextEncoder().encode(xml.replace(/<a:extLst>.*?<\/a:extLst>/gs,''));const back=readXlsx(zip(files)).data.sheets[0].images[0];assert.equal(back.opacity,.4);assert.equal(back.border,'#f12345');assert.ok(Math.abs(back.borderW-2.5)<1/9525);assert.equal(back.radius,12);assert.equal(back.shadow.opacity,.6);assert.equal(back.crop.l,.1);assert.equal(back.alt,'그룹 그림');
+  files[path]=new TextEncoder().encode(xml.replace(/<a:extLst>.*?<\/a:extLst>/gs,''));const back=readXlsx(zip(files)).data.sheets[0].shapes[0].groupItems[0];assert.equal(back.kind,'picture');assert.equal(back.opacity,.4);assert.equal(back.border,'#f12345');assert.ok(Math.abs(back.borderW-2.5)<1/9525);assert.equal(back.radius,12);assert.equal(back.shadow.opacity,.6);assert.equal(back.crop.l,.1);assert.equal(back.alt,'그룹 그림');
 });
 
 
@@ -127,13 +127,13 @@ test('숨김 표기의 1/true 및 보임의 생략/0/false는 같은 표준 상�
   }
 });
 
-test('메타 없는 표준 그룹을 펼쳐 읽을 때 부모 숨김은 모든 자식에 상속된다',()=>{
+test('메타 없는 표준 그룹의 부모 숨김은 자식의 독립 표시 설정을 유지한다',()=>{
   const wb=hiddenGroupFixture(),group=wb.sheets[0].shapes[0];
   for(const item of group.groupItems)delete item.hidden;
   const files=unzip(writeXlsx(wb)),path='xl/drawings/drawing1.xml';
   files[path]=new TextEncoder().encode(textOf(files[path]).replace(/<a:extLst>.*?<\/a:extLst>/gs,''));
   const sh=readXlsx(zip(files)).data.sheets[0],items=[...sh.shapes,...sh.images];
-  assert.equal(items.length,3);assert.ok(items.every(x=>x.hidden===true),'숨긴 부모의 도형·그림·중첩그룹 자식 모두 숨김');
+  assert.equal(items.length,1);assert.equal(items[0].kind,'group');assert.equal(items[0].hidden,true);assert.equal(items[0].groupItems.length,3);assert.ok(items[0].groupItems.every(x=>!x.hidden),'부모를 다시 표시하면 원래 표시한 자식도 나타난다');
 });
 
 

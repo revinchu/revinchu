@@ -42,7 +42,7 @@ test('nested group parent and child links use native DrawingML as well as editab
  assert.deepEqual(out.hyperlink,link);assert.deepEqual(out.groupItems,wb.sheets[0].shapes[0].groupItems);
  assert.equal(descendants(parseXml(textOf(files[DRAW])),'hlinkClick').length,5);
  xmlSet(files,DRAW,textOf(files[DRAW]).replace(/<a:extLst>.*?<\/a:extLst>/gs,''));const native=save(files).data.sheets[0];
- assert.equal(native.shapes.find(s=>s.name==='child').hyperlink.target,link.target);assert.equal(native.shapes.find(s=>s.name==='nested-child').hyperlink.target,'#Sheet1!D9');assert.equal(native.images[0].hyperlink.target,'#Sheet1!B7');
+ const group=native.shapes[0];assert.equal(group.kind,'group');assert.equal(group.groupItems.find(s=>s.name==='child').hyperlink.target,link.target);assert.equal(group.groupItems.find(s=>s.name==='nested').groupItems[0].hyperlink.target,'#Sheet1!D9');assert.equal(group.groupItems.find(s=>s.kind==='picture').hyperlink.target,'#Sheet1!B7');
 });
 
 test('external hyperlink target edits override stale group metadata even when XML r:id is unchanged',()=>{
@@ -64,11 +64,11 @@ test('unsafe URLs/actions remain inert model data; drawing import does not fetch
  try{const out=readXlsx(writeXlsx(wb)).data.sheets[0].shapes[0];assert.deepEqual(out.hyperlink,wb.sheets[0].shapes[0].hyperlink);assert.equal(called,0);assert.equal(out.macro,undefined)}finally{globalThis.fetch=fetch}
 });
 
-test('native parent links inherit only when a flattened group child has no own link',()=>{
+test('native group parent links and independent child links retain their separate targets',()=>{
  const wb=groupBook();delete wb.sheets[0].shapes[0].groupItems[0].hyperlink;
  const files=unzip(writeXlsx(wb));xmlSet(files,DRAW,textOf(files[DRAW]).replace(/<a:extLst>.*?<\/a:extLst>/gs,''));
- const out=save(files).data.sheets[0];assert.deepEqual(out.shapes.find(s=>s.name==='child').hyperlink,link);assert.equal(out.images[0].hyperlink.target,'#Sheet1!B7');
- assert.equal(out.shapes.find(s=>s.name==='nested-child').hyperlink.target,'#Sheet1!D9');
+ const out=save(files).data.sheets[0],group=out.shapes[0];assert.deepEqual(group.hyperlink,link);assert.equal(group.groupItems.find(s=>s.name==='child').hyperlink,undefined);assert.equal(group.groupItems.find(s=>s.kind==='picture').hyperlink.target,'#Sheet1!B7');
+ assert.equal(group.groupItems.find(s=>s.name==='nested').hyperlink.target,'#Sheet1!C8');assert.equal(group.groupItems.find(s=>s.name==='nested').groupItems[0].hyperlink.target,'#Sheet1!D9');
 });
 
 test('native removal of a child link cannot be restored by old editable metadata',()=>{

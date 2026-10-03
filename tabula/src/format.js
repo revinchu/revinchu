@@ -245,7 +245,7 @@ export function queryFormatCode(pattern) {
  * 사용자가 입력한 문자열 해석 → { value, numFmt? }
  * 수식('=')은 호출하는 쪽에서 처리
  */
-const ERROR_LITERALS = new Set(['#NULL!', '#DIV/0!', '#VALUE!', '#REF!', '#NAME?', '#NUM!', '#N/A', '#SPILL!', '#CALC!']);
+const ERROR_LITERALS = new Set(['#NULL!', '#DIV/0!', '#VALUE!', '#REF!', '#NAME?', '#NUM!', '#N/A', '#SPILL!', '#CALC!', '#GETTING_DATA']);
 // 직접 입력은 DATE 함수와 달리 2월 30일 등을 다음 달로 넘기면 안 됨.
 function inputDate(y, m, d) {
   if (y < 1900 || y > 9999 || m < 1 || m > 12 || d < 1 || d > 31) return null;

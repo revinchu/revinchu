@@ -18,11 +18,12 @@ export const ERR = {
   SPILL: new FormulaError('#SPILL!'),
   CALC: new FormulaError('#CALC!'),
   BUSY: new FormulaError('#BUSY!'),
+  GETTING_DATA: new FormulaError('#GETTING_DATA'),
 };
 export const ERR_BY_CODE = Object.fromEntries(Object.values(ERR).map((e) => [e.code, e]));
 export const isError = (v) => v instanceof FormulaError;
 /** ERROR.TYPE 번호 */
-export const ERROR_TYPE = { '#NULL!': 1, '#DIV/0!': 2, '#VALUE!': 3, '#REF!': 4, '#NAME?': 5, '#NUM!': 6, '#N/A': 7, '#SPILL!': 9, '#CALC!': 14 };
+export const ERROR_TYPE = { '#NULL!': 1, '#DIV/0!': 2, '#VALUE!': 3, '#REF!': 4, '#NAME?': 5, '#NUM!': 6, '#N/A': 7, '#GETTING_DATA': 8, '#SPILL!': 9, '#CALC!': 14 };
 
 // ───────────────────────── 값 종류 ─────────────────────────
 /** 2차원 배열 값. 셀 범위에서 왔으면 ref 에 { sheet, r1, c1, r2, c2 } */

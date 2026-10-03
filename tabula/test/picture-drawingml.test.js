@@ -48,7 +48,7 @@ test('그룹 그림의 네이티브 효과와 원본 편집 메타는 단독 그
  const image={...pic(native),kind:'picture'},group={id:'g',kind:'group',x:10,y:20,w:220,h:200,groupSize:{w:220,h:200},groupItems:[image]};
  const wb=new Workbook({sheets:[{name:'그룹',cells:{},shapes:[group]}]}),f=unzip(writeXlsx(wb)),path='xl/drawings/drawing1.xml';
  f[path]=textOf(f[path]).replace(/<a:extLst>[\s\S]*?<\/a:extLst>/g,'');
- const nativeBack=readXlsx(zip(f)).data.sheets[0].images[0];
+ const nativeBack=readXlsx(zip(f)).data.sheets[0].shapes[0].groupItems[0];assert.equal(nativeBack.kind,'picture');
  assert.ok(nativeBack.src);assert.deepEqual(nativeBack.correction,native.correction);assert.equal(nativeBack.borderDash,'dashDot');assert.deepEqual(nativeBack.reflection,native.reflection);
 });
 test('Excel이 생략하는 그림자·반사 기본 속성 때문에 정상 그룹을 외부 수정으로 오인하지 않는다',()=>{

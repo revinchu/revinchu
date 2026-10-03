@@ -23,7 +23,7 @@ function shapeRegion(shape,tolerance){
   if(shape.path){if(!validShapePath(shape.path))throw new Error('도형 경로를 해석할 수 없습니다.');
     paths=shape.path.paths.map(p=>({commands:transformCommands(p.commands,[w,0,0,h,0,0]),fill:p.fill!==false,evenodd:!!p.evenodd}));
   }else {const geom=GEOM[shape.kind];if(!geom)throw new Error('이 도형 종류는 조합을 지원하지 않습니다.');
-    paths=geom(w,h).map(p=>({commands:parseSvgPath(p.d),fill:!p.line,evenodd:!!p.evenodd}));}
+    paths=geom(w,h,shape).map(p=>({commands:parseSvgPath(p.d),fill:!p.line,evenodd:!!p.evenodd}));}
   const parts=paths.filter(p=>p.fill).map(p=>({rings:flattenCommands(transformCommands(p.commands,m),tolerance),evenodd:p.evenodd}));
   if(!parts.length)throw new Error('선과 열린 자유곡선은 면적 도형으로 조합할 수 없습니다. 닫힌 도형을 선택하세요.');
   return parts;

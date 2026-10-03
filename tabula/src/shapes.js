@@ -70,7 +70,7 @@ export function shapeSvg(sh) {
     // 선 굵기만큼 안쪽으로
     const custom = validShapePath(sh.path), presetLine = LINE_KINDS.has(sh.kind), i = custom || presetLine ? 0 : sw / 2;
     const gw = Math.max(0, (presetLine ? sh.w : w) - i * 2), gh = Math.max(0, (presetLine ? sh.h : h) - i * 2);
-    const parts = custom ? shapePathParts(sh.path, gw, gh) : LINE_KINDS.has(sh.kind) ? [{ d: linePath(sh.kind, gw, gh), line: true }] : geom(gw, gh);
+    const parts = custom ? shapePathParts(sh.path, gw, gh) : LINE_KINDS.has(sh.kind) ? [{ d: linePath(sh.kind, gw, gh), line: true }] : geom(gw, gh, sh);
     const cap = { flat: 'butt', rnd: 'round', sq: 'square' }[sh.lineCap] ?? 'butt';
     const join = ['round', 'bevel', 'miter'].includes(sh.lineJoin) ? sh.lineJoin : 'round';
     const stroke = sh.stroke ? `stroke="${attr(sh.stroke)}" stroke-width="${sw}" stroke-linejoin="${join}" stroke-linecap="${cap}"${dash}${sh.strokeOpacity !== undefined ? ` stroke-opacity="${attr(sh.strokeOpacity)}"` : ''}` : 'stroke="none"';
@@ -194,7 +194,8 @@ const arrowDown = (w, h, hl = Math.min(w, h) * 0.5) => P([[w * 0.25, 0], [w * 0.
 export const GEOM = {
   // 사각형
   rect: (w, h) => one(rectD(0, 0, w, h)),
-  roundRect: (w, h) => one(roundRectD(w, h, Math.min(w, h) * 0.1667)),
+  // DrawingML adj는 짧은 변의 1/100000 단위이며, 0~50000으로 제한한다.
+  roundRect: (w, h, sh) => one(roundRectD(w, h, Math.min(w, h) * Math.max(0, Math.min(50000, Number.isFinite(sh?.adjustments?.adj) ? sh.adjustments.adj : 16667)) / 100000)),
   snip1Rect: (w, h) => { const s = Math.min(w, h) * 0.1667; return one(P([[0, 0], [w - s, 0], [w, s], [w, h], [0, h]])); },
   snip2SameRect: (w, h) => { const s = Math.min(w, h) * 0.1667; return one(P([[s, 0], [w - s, 0], [w, s], [w, h], [0, h], [0, s]])); },
   snip2DiagRect: (w, h) => { const s = Math.min(w, h) * 0.1667; return one(P([[0, 0], [w - s, 0], [w, s], [w, h], [s, h], [0, h - s]])); },

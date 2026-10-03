@@ -1,3 +1,4 @@
+import { mountSlicerWindow } from './slicer-window.js';
 import { tableCellDisplayStyle } from './table-format.js';
 import { primaryPointerModifier } from './pointer-modifiers.js';
 import { filterButtonVisible } from './filter-display.js';
@@ -1313,6 +1314,7 @@ export class GridView {
     const previous = this._objectRenderState;
     if (!this._objectRenderCache || previous?.wb !== wb || previous.si !== si || previous.sheet !== sheet || previous.version !== wb.version || previous.appearance !== appearance) {
       this._objectRenderCache = new Map();
+      this._slicerVirtualModels = new Map();
       this._objectRenderState = { wb, si, sheet, version: wb.version, appearance };
     }
     const content = (o, kind, build) => {
@@ -1410,13 +1412,19 @@ export class GridView {
       const keep = new Map();
       for (const l of p.objects.querySelectorAll('.sl-items')) if (l.scrollTop || l.scrollLeft) keep.set(l.closest('.obj')?.dataset.id, [l.scrollTop, l.scrollLeft]);
       p.objects.replaceChildren(...nodes);
+      // 스크롤 복원 전에 가상 목록의 전체 높이를 먼저 확보한다.
+      for(const node of nodes){const list=node.querySelector?.('.sl-items[data-virtual]'),model=this._slicerVirtualModels?.get(node.dataset.id);if(list&&model)mountSlicerWindow(list,model);}
       fitSlicerText(p.objects);
       for (const [id, [t, l]] of keep) {
         const list = [...p.objects.querySelectorAll('.obj')].find((o) => o.dataset.id === id)?.querySelector('.sl-items');
         if (list) { list.scrollTop = t; list.scrollLeft = l; }
       }
     }
-    for (const node of nodes) { fitShapeText(node, appearance); markChartSelection(node, st.chartPart); }
+    for (const node of nodes) {
+      const list=node.querySelector?.('.sl-items[data-virtual]'), model=this._slicerVirtualModels?.get(node.dataset.id);
+      if(list&&model)mountSlicerWindow(list,model);
+      fitShapeText(node, appearance); markChartSelection(node, st.chartPart);
+    }
   }
 
   /** 시간 표시 막대 (엑셀 Timeline): 날짜 필드를 연 · 분기 · 월 · 일 칸으로, 끌어서 기간 선택 */
@@ -1444,15 +1452,17 @@ export class GridView {
   slicerHtml(sl) {
     if (sl.timeline) return this.timelineHtml(sl);
     const m = this.host.slicerModel?.(sl) ?? { items: [], filtered: false };
+    const virtual = !m.broken && m.items.length > 500;
+    if(virtual)(this._slicerVirtualModels ??= new Map()).set(sl.id,{items:m.items,columns:Math.max(1,sl.columns??1),height:sl.buttonHeight??24,gap:Number.isFinite(sl.gap)?sl.gap:3,width:sl.buttonWidth,viewport:Math.max(1,sl.h-(sl.showHeader===false?0:26)),onRender:fitSlicerText});
     const items = m.broken
       ? `<div class="sl-broken">${esc(m.broken)}</div>`
-      : m.items.map((it) => `<button type="button" class="sl-item${it.selected ? ' on' : ''}${it.hasData ? '' : ' nodata'}" data-k="${esc(it.key)}" title="${esc(it.text)}">${esc(it.text)}</button>`).join('');
+      : virtual ? '' : m.items.map((it) => `<button type="button" class="sl-item${it.selected ? ' on' : ''}${it.hasData ? '' : ' nodata'}" data-k="${esc(it.key)}" title="${esc(it.text)}">${esc(it.text)}</button>`).join('');
     const head = sl.showHeader === false ? '' : `<div class="sl-head"><span class="sl-cap">${esc(sl.caption ?? '')}</span>`
       + `<button type="button" class="sl-multi${sl.multi ? ' on' : ''}" title="다중 선택 (Alt+S)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1.5 3.5l1.3 1.3 2.2-2.4M1.5 8.5l1.3 1.3 2.2-2.4M1.5 13.2l1.3 1.3 2.2-2.4"/><path d="M7 4h7.5M7 9h7.5M7 14h7.5"/></svg></button>`
       + `<button type="button" class="sl-clear${m.filtered ? '' : ' off'}" title="필터 지우기 (Alt+C)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1.5 2h11l-4.2 5v5l-2.6 1.5V7z"/><path d="M10.5 10l4 4M14.5 10l-4 4" stroke="#d13438"/></svg></button></div>`;
     const gap = Number.isFinite(sl.gap) ? `;gap:${sl.gap}px` : '';
     const btnW = sl.buttonWidth ? `${sl.buttonWidth}px` : 'minmax(0, 1fr)';
-    return `${head}<div class="sl-items" style="grid-template-columns:repeat(${Math.max(1, sl.columns ?? 1)}, ${btnW})${gap}">${items}</div>`;
+    return `${head}<div class="sl-items"${virtual ? ' data-virtual="true"' : ''} style="grid-template-columns:repeat(${Math.max(1, sl.columns ?? 1)}, ${btnW})${gap}">${items}</div>`;
   }
 
   /** 피벗 차트 필드 단추 (엑셀처럼 차트 위에서 바로 거르기) */

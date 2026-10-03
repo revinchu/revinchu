@@ -22,8 +22,8 @@ try{for(const name of names){
    w.sheets[1].cells.setRC(0,0,{raw:'다음',v:'다음',formula:false});
    const withParts=name.startsWith('16MB')||name.startsWith('without');
    if(withParts){const num=new Float64Array(2100000);num[0]=123;num[num.length-1]=987;w.sheets[0].blocks=[{r0:50000,c0:0,n:num.length,ver:0,cols:[{num,str:null,dict:[]}]}];}
-   let counts={};const chunks=w.cellChunks.bind(w),put=IDBObjectStore.prototype.put;
-   w.cellChunks=function*(i,...args){for(const chunk of chunks(i,...args)){counts.rows=(counts.rows??0)+chunk.length;counts.chunks=(counts.chunks??0)+1;yield chunk;}};
+   let counts={};const chunks=w.cellRunChunks.bind(w),put=IDBObjectStore.prototype.put;
+   w.cellRunChunks=function*(i,...args){for(const chunk of chunks(i,...args)){counts.rows=(counts.rows??0)+chunk.length;counts.chunks=(counts.chunks??0)+1;yield chunk;}};
    const save=async()=>{counts={};const t=performance.now(),saved=await saveLargeWorkbook(key,w,{docName:'합성 저장',si:1});return{manifest:saved.manifest,rows:counts.rows??0,chunks:counts.chunks??0,ms:+(performance.now()-t).toFixed(2)};};
    const load=async()=>new Workbook((await loadLargeWorkbook(key)).workbook);
    const first=await save(),prior=first.manifest,record=await idbGet(prior.sheets[0].key);let metrics;

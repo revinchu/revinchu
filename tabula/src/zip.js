@@ -157,39 +157,6 @@ function crcUpdate(c, data, from, to) {
 const crcEnd = (c) => (c ^ 0xffffffff) >>> 0;
 const pause = () => new Promise((res) => setTimeout(res, 0));
 
-/** 큰 데이터의 CRC 를 조금씩 (화면이 멈추지 않게) */
-async function crc32Async(data) {
-  let c = 0xffffffff;
-  const step = 4 << 20;
-  for (let i = 0; i < data.length; i += step) {
-    c = crcUpdate(c, data, i, Math.min(data.length, i + step));
-    if (i + step < data.length) await pause();
-  }
-  return crcEnd(c);
-}
-
-/** 긴 문자열 → UTF-8 바이트를 조각으로 (한 번에 수십 MB 를 바꾸면 화면이 멈춤) */
-async function encodeAsync(text) {
-  const step = 4 << 20;
-  if (text.length <= step) return enc.encode(text);
-  const parts = [];
-  let n = 0;
-  for (let i = 0; i < text.length; i += step) {
-    let end = Math.min(text.length, i + step);
-    const code = text.charCodeAt(end - 1);
-    if (end < text.length && code >= 0xd800 && code <= 0xdbff) end++; // 서로게이트 쌍을 자르지 않음
-    const b = enc.encode(text.slice(i, end));
-    parts.push(b);
-    n += b.length;
-    i = end - step;
-    await pause();
-  }
-  const out = new Uint8Array(n);
-  let p = 0;
-  for (const b of parts) { out.set(b, p); p += b.length; }
-  return out;
-}
-
 // ───────────── ZIP ─────────────
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -204,33 +171,66 @@ export function unzip(bytes) {
   return files;
 }
 
+const pendingZipEntries = new WeakMap();
 function lazyInflate(files, e) {
+  let pending = pendingZipEntries.get(files);
+  if (!pending) pendingZipEntries.set(files, (pending = new Map()));
+  pending.set(e.name, e);
   Object.defineProperty(files, e.name, {
     enumerable: true, configurable: true,
     get() {
       const v = inflate(e.raw, e.size);
+      pending.delete(e.name);
       Object.defineProperty(files, e.name, { value: v, enumerable: true, configurable: true, writable: true });
       return v;
     },
-    set(v) { Object.defineProperty(files, e.name, { value: v, enumerable: true, configurable: true, writable: true }); },
+    set(v) { pending.delete(e.name); Object.defineProperty(files, e.name, { value: v, enumerable: true, configurable: true, writable: true }); },
   });
 }
 
-/** 큰 항목은 브라우저 내장 압축 해제(DecompressionStream)로 미리 풂 — 나머지는 unzip 과 같음 */
-export async function unzipAsync(bytes, pre = (name, size) => size > 1 << 20) {
-  const files = {};
-  const native = typeof DecompressionStream === 'function';
-  for (const e of zipEntries(bytes)) {
-    if (e.method === 0) { files[e.name] = e.raw; continue; }
-    if (native && pre(e.name, e.size)) {
+/** 지정한 ZIP 항목만 해제합니다. 압축을 푼 다른 시트를 미리 보유하지 않습니다. */
+export async function prepareZipEntry(files, name) {
+  const descriptor = Object.getOwnPropertyDescriptor(files, name);
+  const pending = pendingZipEntries.get(files), entry = pending?.get(name);
+  if (!descriptor?.get || !entry) return files[name];
+  if (entry.preparing) return entry.preparing;
+  entry.preparing = (async () => {
+    let value;
+    if (typeof DecompressionStream === 'function') {
       try {
-        const stream = new Blob([e.raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-        files[e.name] = new Uint8Array(await new Response(stream).arrayBuffer());
-        continue;
-      } catch { /* 아래 방식으로 */ }
+        const reader = new Blob([entry.raw]).stream().pipeThrough(new DecompressionStream('deflate-raw')).getReader();
+        // Response.arrayBuffer()의 전체 출력 복사 대신 ZIP에 기록된 크기에 바로 채웁니다.
+        const bytes = new Uint8Array(entry.size);
+        let position = 0;
+        try {
+          for (;;) {
+            const chunk = await reader.read();
+            if (chunk.done) break;
+            if (position + chunk.value.length > bytes.length) throw new Error('ZIP 항목 크기가 올바르지 않습니다.');
+            bytes.set(chunk.value, position); position += chunk.value.length;
+          }
+          if (position !== bytes.length) throw new Error('ZIP 항목 크기가 올바르지 않습니다.');
+          value = bytes;
+        } catch (error) {
+          try { await reader.cancel(error); } catch { /* 이미 실패한 스트림 */ }
+          throw error;
+        } finally { reader.releaseLock(); }
+      } catch { /* 내장 압축 해제가 없는 브라우저와 같은 순수 JS 경로 */ }
     }
-    lazyInflate(files, e);
-  }
+    value ??= inflate(entry.raw, entry.size);
+    // 기다리는 동안 동기 읽기나 변환기가 이미 값을 바꿨으면 그 결과를 유지합니다.
+    if (Object.getOwnPropertyDescriptor(files, name)?.get !== descriptor.get) return files[name];
+    Object.defineProperty(files, name, { value, enumerable: true, configurable: true, writable: true });
+    pending.delete(name);
+    return value;
+  })();
+  return entry.preparing;
+}
+
+/** 선택한 큰 항목을 미리 풉니다. 필요한 항목만 순차로 읽을 때는 prepareZipEntry를 사용합니다. */
+export async function unzipAsync(bytes, pre = (name, size) => size > 1 << 20) {
+  const files = unzip(bytes), pending = pendingZipEntries.get(files);
+  if (pending) for (const [name, entry] of pending) if (pre(name, entry.size)) await prepareZipEntry(files, name);
   return files;
 }
 
@@ -271,91 +271,141 @@ function zipEntries(bytes) {
   return out;
 }
 
-/** { 경로: Uint8Array|string } → ZIP 바이트 (무압축) */
-export function zip(entries) {
-  const list = Object.entries(entries).map(([name, content]) => {
-    const data = typeof content === 'string' ? enc.encode(content) : content;
-    return { name, data, crc: crc32(data), size: data.length, method: 0, body: data };
-  });
+/** 문자열/바이트 조각을 순서대로 읽습니다. 문자열 경계의 surrogate 쌍도 유지합니다. */
+function* zipByteChunks(content) {
+  function* parts(value) {
+    if (typeof value === 'string' || value instanceof Uint8Array) yield value;
+    else if (Array.isArray(value)) { for (const part of value) yield* parts(part); }
+    else throw new TypeError('ZIP 항목은 문자열 또는 바이트 조각이어야 합니다.');
+  }
+  const step = 1 << 20;
+  let high = '';
+  for (const part of parts(content)) {
+    if (typeof part === 'string') {
+      for (let offset = 0; offset < part.length; offset += step) {
+        let text = high + part.slice(offset, offset + step); high = '';
+        const last = text.charCodeAt(text.length - 1);
+        if (last >= 0xd800 && last <= 0xdbff) { high = text.slice(-1); text = text.slice(0, -1); }
+        if (text) yield enc.encode(text);
+      }
+    } else {
+      if (high) { yield enc.encode(high); high = ''; }
+      for (let offset = 0; offset < part.length; offset += step) yield part.subarray(offset, offset + step);
+    }
+  }
+  if (high) yield enc.encode(high);
+}
+
+const ZIP32_MAX = 0xffffffff;
+function zipSize(n) {
+  if (!Number.isSafeInteger(n) || n < 0 || n >= ZIP32_MAX) throw new RangeError('ZIP32로 저장할 수 있는 파일 크기를 넘었습니다.');
+  return n;
+}
+function zipStoredEntry(name, content) {
+  let crc = 0xffffffff, size = 0;
+  const body = [];
+  for (const bytes of zipByteChunks(content)) { crc = crcUpdate(crc, bytes, 0, bytes.length); size = zipSize(size + bytes.length); body.push(bytes); }
+  return { name, crc: crcEnd(crc), size, compressedSize: size, method: 0, body };
+}
+
+/** { 경로: 문자열|Uint8Array|중첩 조각 배열 } → ZIP 바이트 (무압축).
+ * consume은 호출자가 소유권을 넘긴 내부 항목만 완료 후 해제합니다. 기본 입력은 불변입니다. */
+export function zip(entries, { consume = false } = {}) {
+  const list = [];
+  for (const name of Object.keys(entries)) {
+    list.push(zipStoredEntry(name, entries[name]));
+    if (consume) delete entries[name];
+  }
   return zipBuild(list);
 }
 
-/** 큰 항목은 브라우저 내장 압축(deflate)으로 줄여서 ZIP 만들기 — 압축은 화면을 멈추지 않음 */
-export async function zipAsync(entries, onProgress) {
-  const native = typeof CompressionStream === 'function';
-  const list = [];
-  const all = Object.entries(entries);
-  for (let i = 0; i < all.length; i++) {
-    const [name, content] = all[i];
-    const data = typeof content === 'string' ? await encodeAsync(content) : content;
-    const e = { name, crc: await crc32Async(data), size: data.length, method: 0, body: data };
-    if (native && data.length > 4096) {
-      try {
-        const stream = new Blob([data]).stream().pipeThrough(new CompressionStream('deflate-raw'));
-        const comp = new Uint8Array(await new Response(stream).arrayBuffer());
-        if (comp.length < data.length) { e.method = 8; e.body = comp; }
-      } catch { /* 무압축 */ }
+async function zipAsyncEntry(name, content) {
+  let transform;
+  if (typeof CompressionStream === 'function' && typeof ReadableStream === 'function') {
+    // 미지원 브라우저만 stored로 저장합니다. 동작 중 스트림 실패는 숨기지 않습니다.
+    try { transform = new CompressionStream('deflate-raw'); } catch { /* raw deflate 미지원 */ }
+  }
+  const iterator = zipByteChunks(content);
+  let crc = 0xffffffff, size = 0, sincePause = 0;
+  const take = async () => {
+    const next = iterator.next();
+    if (!next.done) {
+      crc = crcUpdate(crc, next.value, 0, next.value.length);
+      size = zipSize(size + next.value.length); sincePause += next.value.length;
+      if (sincePause >= 4 << 20) { sincePause = 0; await pause(); }
     }
-    list.push(e);
-    onProgress?.((i + 1) / all.length);
-    await new Promise((res) => setTimeout(res, 0));
+    return next;
+  };
+  const body = [];
+  let compressedSize = 0;
+  if (!transform) {
+    try { for (;;) { const next = await take(); if (next.done) break; body.push(next.value); } }
+    finally { iterator.return?.(); }
+    return { name, crc: crcEnd(crc), size, compressedSize: size, method: 0, body };
+  }
+  const input = new ReadableStream({
+    async pull(controller) { const next = await take(); if (next.done) controller.close(); else controller.enqueue(next.value); },
+    cancel() { iterator.return?.(); },
+  });
+  const reader = input.pipeThrough(transform).getReader();
+  try {
+    for (;;) {
+      const next = await reader.read(); if (next.done) break;
+      compressedSize = zipSize(compressedSize + next.value.length); body.push(next.value);
+    }
+  } catch (error) {
+    try { await reader.cancel(error); } catch { /* 오류가 난 스트림도 잠금은 해제합니다. */ }
+    throw error;
+  } finally { reader.releaseLock(); iterator.return?.(); }
+  return { name, crc: crcEnd(crc), size, compressedSize, method: 8, body };
+}
+
+/** 전체 XML/UTF-8 입력 복사 없이 청크를 압축하고 CRC와 크기를 누적합니다. */
+export async function zipAsync(entries, onProgress, { consume = false } = {}) {
+  const list = [], names = Object.keys(entries);
+  for (let i = 0; i < names.length; i++) {
+    const name = names[i];
+    list.push(await zipAsyncEntry(name, entries[name]));
+    if (consume) delete entries[name];
+    onProgress?.((i + 1) / names.length);
+    await pause();
   }
   return zipBuild(list);
 }
 
 function zipBuild(list) {
-  const parts = [];
-  const central = [];
+  if (list.length >= 0xffff) throw new RangeError('ZIP32로 저장할 수 있는 항목 수를 넘었습니다.');
+  const parts = [], central = [];
   let offset = 0;
   const now = new Date();
   const time = (now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1);
   const date = ((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
-  for (const { name, crc, size, method, body } of list) {
+  for (const { name, crc, size, compressedSize, method, body } of list) {
     const nameBytes = enc.encode(name);
-    const local = new Uint8Array(30 + nameBytes.length);
-    const lv = new DataView(local.buffer);
-    lv.setUint32(0, 0x04034b50, true);
-    lv.setUint16(4, 20, true);
-    lv.setUint16(6, 0x0800, true);
-    lv.setUint16(8, method, true);
-    lv.setUint16(10, time, true);
-    lv.setUint16(12, date, true);
-    lv.setUint32(14, crc, true);
-    lv.setUint32(18, body.length, true);
-    lv.setUint32(22, size, true);
-    lv.setUint16(26, nameBytes.length, true);
-    local.set(nameBytes, 30);
-    const cd = new Uint8Array(46 + nameBytes.length);
-    const cv = new DataView(cd.buffer);
-    cv.setUint32(0, 0x02014b50, true);
-    cv.setUint16(4, 20, true);
-    cv.setUint16(6, 20, true);
-    cv.setUint16(8, 0x0800, true);
-    cv.setUint16(10, method, true);
-    cv.setUint16(12, time, true);
-    cv.setUint16(14, date, true);
-    cv.setUint32(16, crc, true);
-    cv.setUint32(20, body.length, true);
-    cv.setUint32(24, size, true);
-    cv.setUint16(28, nameBytes.length, true);
-    cv.setUint32(42, offset, true);
-    cd.set(nameBytes, 46);
-    parts.push(local, body);
-    central.push(cd);
-    offset += local.length + body.length;
+    if (nameBytes.length > 0xffff) throw new RangeError('ZIP 항목 이름이 너무 깁니다.');
+    zipSize(size); zipSize(compressedSize); zipSize(offset);
+    const local = new Uint8Array(30 + nameBytes.length), lv = new DataView(local.buffer);
+    lv.setUint32(0, 0x04034b50, true); lv.setUint16(4, 20, true); lv.setUint16(6, 0x0800, true);
+    lv.setUint16(8, method, true); lv.setUint16(10, time, true); lv.setUint16(12, date, true);
+    lv.setUint32(14, crc, true); lv.setUint32(18, compressedSize, true); lv.setUint32(22, size, true);
+    lv.setUint16(26, nameBytes.length, true); local.set(nameBytes, 30);
+    const cd = new Uint8Array(46 + nameBytes.length), cv = new DataView(cd.buffer);
+    cv.setUint32(0, 0x02014b50, true); cv.setUint16(4, 20, true); cv.setUint16(6, 20, true); cv.setUint16(8, 0x0800, true);
+    cv.setUint16(10, method, true); cv.setUint16(12, time, true); cv.setUint16(14, date, true);
+    cv.setUint32(16, crc, true); cv.setUint32(20, compressedSize, true); cv.setUint32(24, size, true);
+    cv.setUint16(28, nameBytes.length, true); cv.setUint32(42, offset, true); cd.set(nameBytes, 46);
+    parts.push(local); for (const chunk of body) parts.push(chunk);
+    central.push(cd); offset = zipSize(offset + local.length + compressedSize);
   }
-  const cdSize = central.reduce((s, c) => s + c.length, 0);
-  const end = new Uint8Array(22);
-  const ev = new DataView(end.buffer);
-  ev.setUint32(0, 0x06054b50, true);
-  ev.setUint16(8, central.length, true);
-  ev.setUint16(10, central.length, true);
-  ev.setUint32(12, cdSize, true);
-  ev.setUint32(16, offset, true);
-  const all = [...parts, ...central, end];
-  const out = new Uint8Array(all.reduce((s, a) => s + a.length, 0));
+  const cdSize = zipSize(central.reduce((s, c) => s + c.length, 0));
+  const end = new Uint8Array(22), ev = new DataView(end.buffer);
+  ev.setUint32(0, 0x06054b50, true); ev.setUint16(8, central.length, true); ev.setUint16(10, central.length, true);
+  ev.setUint32(12, cdSize, true); ev.setUint32(16, offset, true);
+  const out = new Uint8Array(zipSize(offset + cdSize + end.length));
   let p = 0;
-  for (const a of all) { out.set(a, p); p += a.length; }
+  for (const part of parts) { out.set(part, p); p += part.length; }
+  for (const part of central) { out.set(part, p); p += part.length; }
+  out.set(end, p);
   return out;
 }
 

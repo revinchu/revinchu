@@ -103,7 +103,16 @@ test('셀 스타일 1만 개: 선형 이름 매핑·공통 구성요소 재사�
   const bytes = writeXlsx(wb), xml = parsedStyles(bytes), back = new Workbook(readXlsx(bytes).data);
   assert.equal(back.cellStyles.length, 10000); assert.equal(back.cellStyles[9999].name, '스타일 9999');
   assert.equal(back.styleAt(0, 0, 0).cellStyleName, '스타일 9999');
-  assert.equal(child(xml, 'cellStyleXfs').attrs.count, '10001'); assert.ok(kids(child(xml, 'fonts'), 'font').length <= 2);
+  assert.equal(child(xml, 'cellStyleXfs').attrs.count, '10001');
+  const fonts = kids(child(xml, 'fonts'), 'font');
+  // Default, explicitly disabled bold and enabled bold are three distinct
+  // components; 10,000 style names must still reuse exactly those three.
+  assert.equal(fonts.length, 3);
+  assert.equal(fonts.filter(f => !child(f, 'b')).length, 1);
+  assert.equal(fonts.filter(f => child(f, 'b')?.attrs.val === '0').length, 1);
+  assert.equal(fonts.filter(f => child(f, 'b') && child(f, 'b').attrs.val !== '0').length, 1);
+  assert.equal(back.cellStyles[0].style.bold, false);
+  assert.equal(back.cellStyles[1].style.bold, true);
   assert.ok(kids(child(xml, 'fills'), 'fill').length <= 4); assert.ok(kids(child(xml, 'cellXfs'), 'xf').length <= 2);
 });
 

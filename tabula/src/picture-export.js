@@ -29,6 +29,9 @@ export async function preparePictureExport(book, progress = () => {}) {
   }
   if (book.version !== version) throw new Error('저장 중 문서가 변경되었습니다. 다시 저장하세요.');
   const snapshot = Object.create(book); snapshot.sheets = sheets;
+  // Sheet identities changed for the export copy. Bind independent cache metadata
+  // to these sheets while sharing the immutable rows; exporting must not evict live caches.
+  snapshot.setSnapshots({ pivotSnapshots: book.snapshotData() });
   return snapshot;
 }
 

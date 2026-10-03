@@ -1,3 +1,6 @@
+import { isLargeLocalWorkbook } from './local-storage-size.js';
+import { cachedSlicerItems, applyCachedSlicerSelection } from './slicer-cache.js';
+import { applySlicerSettings } from './slicer-settings.js';
 import { createDocumentOpenGate, isDocumentOpenCancelled } from './document-session.js';
 import { tableCellDisplayStyle } from './table-format.js';
 import { filterButtonVisible, filterButtonsVisible, filterWithButtons } from './filter-display.js';
@@ -71,10 +74,10 @@ import { createChartSelectionPanel } from './chart-selection-ui.js';
 import { chartSeriesPatch, chartExplosionPatch, chartPartDeletePatch, chartLayoutAfterDrag, chartExplosionAfterDrag } from './chart-edit.js';
 import { chartView3D } from './chart-3d.js';
 import { GridView, BASE_FONT, setBaseFont, measureText, fontStack, PATTERNS, patternCss, gradientCss, glyphShift, clearGlyphShifts, timelinePeriods, shapeTextHtml, fitShapeText } from './view.js';
-import { setThemeColors, THEME, applyTint, presetStyleElements } from './stylepresets.js';
+import { setThemeColors, withThemeColors, THEME, applyTint, presetStyleElements } from './stylepresets.js';
 import { objectStyleKey, findObjectStyle, normalizeObjectStyles, upsertObjectStyle, objectStylePatch, clearObjectStyle } from './object-styles.js';
 import { objectStyleEditor } from './object-style-editor.js';
-import { readXlsxAsync, writeXlsxAsync, xlsxOverflow, xlsxExportWarnings, textRaw, parsePrintAreas } from './xlsx.js';
+import { readXlsxAsync, writeXlsxAsync, xlsxOverflow, xlsxExportWarnings, mergeXlsxImportWarnings, textRaw, parsePrintAreas } from './xlsx.js';
 import { readOds, writeOds } from './ods.js';
 import { readXls } from './xls.js';
 import { CellMap } from './cellmap.js';
@@ -95,7 +98,7 @@ import { hubIcon, hubHeading, hubCard, hubPreview, hubDropzone, hubEmpty } from 
 import { NET, netClear, parseMarkup, htmlTables, htmlLists, tableRows, textOf, autoValue, parseCsv, importRangeSource, parseImportRange, resolveImportRangeUrl } from './fx-web.js';
 import { libList, libSave, libLoad, libLoadVersion, libUpdate, libNameVersion, libRemove, newDocId, packText, unpackText, LIB_MAX, VER_MAX } from './library.js';
 import { librarySnapshot } from './snapshot-blob.js';
-import { itemStats, blockColumn, EMPTY as PIVOT_EMPTY, EMPTY_TEXT as PIVOT_EMPTY_TEXT } from './cube.js';
+import { itemStats, itemIdentity, blockColumn, EMPTY as PIVOT_EMPTY, EMPTY_TEXT as PIVOT_EMPTY_TEXT } from './cube.js';
 import { logicalCol, ColBuilder } from './block.js';
 import { PROTECT_OPTIONS, defaultAllow, excelHash, isProtected, isLockedStyle, allowed } from './protect.js';
 import { PAPERS, MARGINS, normPage, paperOf, printScale, headerParts, pageScalePatch } from './page.js';
@@ -620,10 +623,7 @@ function updateStats() {
       count++;
       if (typeof v === 'number') { numCount++; sum += v; }
     };
-    for (const [k, cell] of sh.cells) {
-      const i = k.indexOf(',');
-      const r = +k.slice(0, i);
-      const c = +k.slice(i + 1);
+    for (const [r,c,cell] of sh.cells.storageEntries()) {
       if (r < rg.r1 || r > rg.r2 || c < rg.c1 || c > rg.c2 || (!cell.raw && !cell.formula)) continue;
       const v = valueAt(r, c);
       add(v);
@@ -703,10 +703,7 @@ async function bigStats(rg) {
   let numCount = 0;
   let sum = 0;
   let fmtStyle = null;
-  for (const [k, cell] of sh.cells) {
-    const i = k.indexOf(',');
-    const r = +k.slice(0, i);
-    const c = +k.slice(i + 1);
+  for (const [r,c,cell] of sh.cells.storageEntries()) {
     if (r < rg.r1 || r > rg.r2 || c < rg.c1 || c > rg.c2 || (!cell.raw && !cell.formula)) continue;
     const v = valueAt(r, c);
     if (v === null || v === '') continue;
@@ -1759,7 +1756,7 @@ function nextCorner() {
 /** Ctrl+Shift+O 메모가 있는 셀 */
 function selectComments() {
   const hits = [];
-  sheet().cells.forEachRC((cell, r, c) => { if (cell.comment) hits.push([r, c]); });
+  sheet().cells.forEachStoredRC((cell, r, c) => { if (cell.comment) hits.push([r, c]); });
   if (!hits.length) { toast('메모가 있는 셀이 없습니다.'); return; }
   hits.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
   const rg = { r1: minOf(hits.map((h) => h[0])), c1: minOf(hits.map((h) => h[1])), r2: maxOf(hits.map((h) => h[0])), c2: maxOf(hits.map((h) => h[1])) };
@@ -1805,7 +1802,7 @@ function selectedHyperlinks() {
   const cells = [];
   let formulaLinks = false;
   // 전체 열/시트를 골라도 존재하는 셀만 검사한다. 비연속 선택 사이의 셀은 건드리지 않는다.
-  sheet().cells.forEachRC((cell, r, c) => {
+  sheet().cells.forEachStoredRC((cell, r, c) => {
     if (selected ? !selected.hasRC(r, c) : !inSel(r, c) || filterHidden(r)) return;
     if (cell.formula && /\bHYPERLINK\s*\(/i.test(cell.raw)) formulaLinks = true;
     if (cell.link) cells.push([r, c]);
@@ -3896,7 +3893,7 @@ function evaluateFormulaDialog() {
 function errorCheck() {
   const list = [];
   const ext = wb.extent(si);
-  sheet().cells.forEachRC((cell, r, c) => { if (cell.formula && isError(wb.getValue(si, r, c))) list.push([r, c]); });
+  sheet().cells.forEachStoredRC((cell, r, c) => { if (cell.formula && isError(wb.getValue(si, r, c))) list.push([r, c]); });
   if (!list.length || ext.rows === 0) { alertDialog('오류 검사', '시트 전체에서 오류를 검사했습니다. 오류가 없습니다.'); return; }
   list.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
   const at = list.find(([r, c]) => r > active.r || (r === active.r && c > active.c)) ?? list[0];
@@ -7661,6 +7658,10 @@ function slicerModel(sl) {
 /** 슬라이서가 가리키는 대상과 항목 → { caption, items: [{ key, text, selected, hasData }], filtered, broken?, apply(values) } */
 function slicerModelRaw(sl) {
   const src = sl.source ?? {};
+  if (src.kind === 'cache') return {
+    items: sortItems(cachedSlicerItems(sl, wb.date1904).map(it => ({ ...it, cacheKey: it.key, key: it.v == null ? '' : it.text }))).map(({ cacheKey, ...it }) => ({ ...it, key: cacheKey })), filtered: Array.isArray(sl.cacheSelection),
+    apply: values => applyCachedSlicerSelection(wb, src, values, meta()),
+  };
   if (src.kind === 'table') {
     const f = findTable(wb, src.table);
     if (!f) return { items: [], broken: '연결된 표를 찾을 수 없습니다.' };
@@ -7702,7 +7703,7 @@ function slicerModelRaw(sl) {
     if (fi < 0) return { items: [], broken: `'${src.field}' 필드를 찾을 수 없습니다.` };
     const filters = def.filters ?? {};
     const own = Object.keys(filters).find((k) => k.toLowerCase() === header[fi].toLowerCase());
-    const sel = own ? new Set(filters[own]) : null;
+    const sel = own ? new Set(filters[own].map(itemIdentity)) : null;
     // 항목 목록은 원본과 다른 필터가 같으면 다시 계산하지 않음 (슬라이서를 그릴 때마다 원본 전체를 도는 것 방지)
     const memoKey = `${fi}\u0001${JSON.stringify(Object.entries(filters).filter(([k]) => k !== own))}`;
     let memo = slicerMemo.get(rows.cube);
@@ -7730,7 +7731,7 @@ function slicerModelRaw(sl) {
     const colStyle = sd?.ref ? wb.styleAt(sd.si, Math.min(sd.ref.r1 + 1, sd.ref.r2), sd.ref.c1 + fi) : null;
     const shown = (e) => (typeof e.v === 'number' && colStyle?.numFmt && colStyle.numFmt !== 'general' ? formatValue(e.v, colStyle, wb.date1904).text : e.key);
     return {
-      items: items.map((e) => ({ key: e.key, v: e.v, text: shown(e), selected: !sel || sel.has(e.key), hasData: e.hasData })),
+      items: items.map((e) => ({ key: e.key, v: e.v, text: shown(e), selected: !sel || sel.has(itemIdentity(e.key)), hasData: e.hasData })),
       filtered: !!sel,
       targets,
       apply: (values) => {
@@ -7756,6 +7757,7 @@ const slicerMemo = new WeakMap();
 
 /** 피벗 슬라이서가 연결된 피벗 목록 (source.pivots = [{ sheet, name }], 옛 형식 self/sheet 도 읽음) */
 function slicerPivotTargets(src, hostSi = si) {
+  if (src.kind && src.kind !== 'pivot') return [];
   if (src.pivots?.length) return src.pivots.map((p) => findPivotEntry(p.sheet ?? null, p.name ?? null, hostSi)).filter(Boolean);
   const s = src.self || !src.sheet ? hostSi : wb.sheetIndexByName(src.sheet);
   const e = s >= 0 ? pivotDefs(s)[0] : null;
@@ -7956,6 +7958,7 @@ function slicerGuard(id, kind = 'objects') {
 function slicerRefresh(id) {
   const sl = sheet().slicers?.find(o => o.id === id);
   if (!sl || slicerBlocked(sl, 'filter')) return;
+  if (sl.source?.kind === 'cache') { toast('연결된 피벗 테이블 없이 파일에 저장된 항목을 표시합니다.'); return; }
   if (sl.source?.kind === 'table') {
     const f = findTable(wb, sl.source.table);
     if (!f) { toast('연결된 표를 찾을 수 없습니다.'); return; }
@@ -8021,10 +8024,10 @@ function slicerContextMenu(id, pos) {
   const model = slicerModel(sl), objectDisabled = slicerBlocked(sl, 'objects', true), filterDisabled = slicerBlocked(sl, 'filter', true);
   const objectValid = slicerGuard(id), filterValid = slicerGuard(id, 'filter'), readValid = slicerGuard(id, 'read');
   const item = (label, fn, { filter = false, read = false, disabled = false, ...extra } = {}) => ({ label, ...extra, disabled: disabled || (!read && (filter ? filterDisabled : objectDisabled)), action: () => { if ((read ? readValid : filter ? filterValid : objectValid)()) fn(); } });
-  const patch = values => { updateObject(id, values); gv.renderObjectsAll(); updateSelectionUI(); };
+  const patch = values => { updateSlicerSettings(id, values); gv.renderObjectsAll(); updateSelectionUI(); };
   const items = [item('잘라내기', () => copyObject(id, true), { icon: 'cut', key: 'Ctrl+X' }), item('복사', () => copyObject(id, false), { read: true, icon: 'copy', key: 'Ctrl+C' }),
     item('붙여넣기', pasteObject, { icon: 'paste', key: 'Ctrl+V', disabled: !objClip || !allowed(sheet(), 'objects') }), { sep: true },
-    item('새로 고침(R)', () => slicerRefresh(id), { filter: true, disabled: !!model.broken, icon: 'refresh' }),
+    item('새로 고침(R)', () => slicerRefresh(id), { filter: true, disabled: !!model.broken || sl.source?.kind === 'cache', icon: 'refresh' }),
     item('텍스트 오름차순 정렬(S)', () => patch({ sort: undefined }), { icon: 'sortAsc', checked: sl.sort !== 'desc' }),
     item('텍스트 내림차순 정렬(O)', () => patch({ sort: 'desc' }), { icon: 'sortDesc', checked: sl.sort === 'desc' }),
     item(`"${sl.caption ?? ''}"에서 필터 지우기(C)`, () => slicerClear(id), { filter: true, icon: 'filterClear', disabled: !!model.broken || !model.filtered }),
@@ -8039,10 +8042,16 @@ function slicerContextMenu(id, pos) {
   const menu = openMenu(pos, items, { scroll: true }); if (menu) menu.dataset.contextKind = 'slicer';
 }
 
+function updateSlicerSettings(id, patch) {
+  const valid = slicerGuard(id);
+  if (valid()) applySlicerSettings(wb, si, id, patch, slicerPivotTargets, meta());
+}
+
 function slicerSettings(id) {
   const sl = (sheet().slicers ?? []).find((x) => x.id === id), valid = slicerGuard(id);
   if (!sl || !valid()) return;
   const src = sl.source?.kind === 'table' ? `원본 이름: ${sl.source.table}[${sl.source.column}]`
+    : sl.source?.kind === 'cache' ? `원본 이름: ${sl.source.field} (저장된 항목 · 연결된 피벗 테이블 없음)`
     : `원본 이름: ${sl.source?.field} (피벗 테이블 ${slicerPivotTargets(sl.source ?? {}).map((e) => `'${pivotNameOf(e)}'`).join(', ')})`;
   const inp = (v, attrs = {}) => el('input', { type: 'text', value: v ?? '', ...attrs });
   const chk = (on, label) => { const c = el('input', { type: 'checkbox', checked: !!on }); return [c, el('label', { class: 'fc-check' }, c, label)]; };
@@ -8077,7 +8086,7 @@ function slicerSettings(id) {
         label: '확인', primary: true, action: () => {
           if (!valid()) return false;
           if (name.value.trim() && wb.sheets.some(s => s.slicers?.some(o => o.id !== id && (o.name ?? o.caption ?? '').toLowerCase() === name.value.trim().toLowerCase()))) { toast('이미 사용 중인 슬라이서 이름입니다. 다른 이름을 입력하세요.'); return false; }
-          updateObject(id, {
+          updateSlicerSettings(id, {
             name: name.value.trim() || undefined, caption: cap.value, showHeader: hdr.checked ? undefined : false,
             sort: desc.checked ? 'desc' : undefined, customList: cl.checked ? undefined : false,
             hideNoData: hide.checked || undefined, markNoData: mark.checked ? undefined : false, noDataLast: last.checked ? undefined : false,
@@ -8301,6 +8310,9 @@ function pivotChangeSourceDialog(entry = pivotHere()) {
       const { table, ...rest } = def;
       next = { ...rest, source: sname, range: prg };
     }
+    // 사용자가 고른 새 원본은 이전 Excel 저장 캐시와 별개다.
+    // 필드 목록을 읽기 전 해제해야 다른 범위·표의 필드를 이전 캐시로 판단하지 않는다.
+    delete next.snapshotId;
     // 새 원본에 없는 필드는 영역에서 뺌
     const rows = pivotSource(next);
     if (!rows) { toast('원본을 읽을 수 없습니다.'); return false; }
@@ -11116,13 +11128,13 @@ function navigatorPane() {
     for (const { sh, i } of vis) {
       if (notes.length >= 500) break;
       if (!sh.cells?.forEachRC) continue;
-      sh.cells.forEachRC((cell, r, c) => { if (cell.comment && notes.length < 500) notes.push({ label: `${sh.name}!${cellName(r, c)}`, sub: String(cell.comment).slice(0, 40), go: () => goCell(i, r, c) }); });
+      sh.cells.forEachStoredRC((cell, r, c) => { if (cell.comment && notes.length < 500) notes.push({ label: `${sh.name}!${cellName(r, c)}`, sub: String(cell.comment).slice(0, 40), go: () => goCell(i, r, c) }); });
     }
     g.push({ key: 'notes', label: '메모', items: notes });
     const links = [];
     for (const { sh, i } of vis) {
       if (links.length >= 500 || !sh.cells?.forEachRC) continue;
-      sh.cells.forEachRC((cell, r, c) => { if (cell.link && links.length < 500) links.push({ label: `${sh.name}!${cellName(r, c)}`, sub: cell.link, go: () => goCell(i, r, c) }); });
+      sh.cells.forEachStoredRC((cell, r, c) => { if (cell.link && links.length < 500) links.push({ label: `${sh.name}!${cellName(r, c)}`, sub: cell.link, go: () => goCell(i, r, c) }); });
     }
     g.push({ key: 'links', label: '하이퍼링크', items: links });
     return g;
@@ -12147,7 +12159,7 @@ function pivotMoveDialog() {
         else wb.setSheetProp(to, 'pivotsExtra', [...(wb.sheets[to].pivotsExtra ?? []), def]);
         wb.sheets.forEach((sh, i) => {
           const changes = [];
-          sh.cells.forEachRC((cell, r, c) => { if (cell.formula) { const raw = fix(cell.raw, sh.name); if (raw !== cell.raw) changes.push([r, c, { ...cellData(cell), raw }]); } });
+          sh.cells.forEachStoredRC((cell, r, c) => { if (cell.formula) { const raw = fix(cell.raw, sh.name); if (raw !== cell.raw) changes.push([r, c, { ...cellData(cell), raw }]); } });
           for (const [r, c, data] of changes) wb.setCellData(i, r, c, data);
         });
         const names = wb.names.map((n) => ({ ...n, ref: fix(n.ref, n.sheet ?? source.name) }));
@@ -13026,7 +13038,9 @@ function openPivotFilterMenu(entry, kind, field, anchorEl) {
     const def = pivotDefV2(entry.def);
     const items = pivotFieldItems(def, cur);
     const formatItem = pivotItemLabeler(def, cur), label = value => value === '' ? '(비어 있음)' : formatItem(value);
-    const sel = draft ? new Set(draft) : def.filters?.[cur] ? new Set(def.filters[cur]) : null;
+    const allowed = draft ?? def.filters?.[cur];
+    const canonical = new Map(items.map(value => [itemIdentity(value), value]));
+    const sel = allowed ? new Set(allowed.map(value => canonical.get(itemIdentity(value)) ?? value)) : null;
     let confirm = null;
     const selection = filterChecklist(items, sel, label, {inlineAdd:true,onChange:ready=>{if(confirm)confirm.disabled=!ready||!canApply(true);}});
     const { search, list } = selection;
@@ -13662,7 +13676,7 @@ function calcFieldDialog(entry = pivotHere(), startName = null) {
 /** 글꼴 목록 메뉴: 통합 문서에서 쓴 글꼴 + 이 PC의 글꼴 (각 글꼴 모양으로 표시), 검색, 전체 목록 불러오기 */
 function fontMenu(anchorEl) {
   const used = new Set();
-  for (const s of wb.sheets) for (const cell of s.cells.values()) if (cell.style?.font) used.add(cell.style.font);
+  for (const s of wb.sheets) for (const [,,cell] of s.cells.storageEntries()) if (cell.style?.font) used.add(cell.style.font);
   const cur = styleAt(active.r, active.c).font || BASE_FONT.name;
   const mobilePicker = document.body.classList.contains('mobile-work-mode') || matchMedia('(pointer: coarse)').matches;
   const search = el('input', { type: 'search', placeholder: '글꼴 검색', class: 'font-search', style: { fontSize: '16px' } });
@@ -14633,7 +14647,7 @@ function saveAs() {
     else if (type === 'csv' || type === 'tsv' || type === 'txt') done = await exportCsv(type, newName);
     else if (type === 'ods') done = await exportOdsFile(newName);
     else {
-      done = await saveWithPicker(`${safeFileName(newName)}.wixel`, () => new Blob([JSON.stringify({ ...snapshot(), docName: newName })], { type: 'application/json' }));
+      done = await saveWithPicker(`${safeFileName(newName)}.wixel`, () => librarySnapshot(wb, { app: 'wixel', docName: newName, docId, si }).blob);
       if (done) toast(`'${done.name}' 로 저장했습니다.`);
     }
     if (done && wb === savingBook && docId === savingId) {
@@ -14695,11 +14709,8 @@ async function openFileObject(file, mode, request = beginDocumentOpen()) {
         // 이미 불러옴
       } else {
         wb.transact(() => {
-          if (data.props?.xlsxImportWarnings?.includes('dataTableValuesOnly')) {
-            const codes = new Set((wb.props?.xlsxImportWarnings ?? []).filter(code => code === 'dataTableValuesOnly'));
-            codes.add('dataTableValuesOnly');
-            wb.setBookProp('props', { ...wb.props, xlsxImportWarnings: [...codes] });
-          }
+          const codes = mergeXlsxImportWarnings(wb.props, data.props);
+          if (codes.length) wb.setBookProp('props', { ...wb.props, xlsxImportWarnings: codes });
           for (const s of data.sheets) {
             let name = s.name;
             for (let n = 2; wb.sheetIndexByName(name) >= 0; n++) name = `${s.name} (${n})`.slice(0, 31);
@@ -14825,7 +14836,7 @@ function prepareWorkbookStep(book, activeSheet, work) {
   const previousLayouts = pivotLayouts, previousWritten = pivotWritten, cache = workbookPivotCaches(book);
   pivotLayouts = cache.layouts; pivotWritten = cache.written;
   wb = book; si = clamp(activeSheet ?? 0, 0, book.sheets.length - 1); openingPivots = true;
-  try { return work(); }
+  try { return withThemeColors(book.theme, work); }
   finally { wb = previous; si = previousSheet; openingPivots = previousOpening; pivotLayouts = previousLayouts; pivotWritten = previousWritten; }
 }
 function installWorkbook(next, name, activeSheet, request, nextDocId) {
@@ -15628,13 +15639,7 @@ function serverAutosave() {
   return server.connected && remoteDoc && cellCount() <= 300000;
 }
 function bigBook() {
-  return cellCount() > 50000 || imageBytes() > 2e6;
-}
-/** 그림 데이터 URL 길이 합 (그림이 많은 문서는 localStorage 한도를 넘으므로 IndexedDB 에 나눠 저장) */
-function imageBytes() {
-  let n = 0;
-  for (const s of wb.sheets) for (const im of s.images ?? []) n += (im.src?.length ?? 0) + (im.emf?.length ?? 0);
-  return n;
+  return isLargeLocalWorkbook(wb);
 }
 let idbSaving = null;
 function saveToStorage({ closing = false } = {}) {
@@ -16098,7 +16103,7 @@ function openBackstage(panel = 'new') {
   };
   // ── 정보 (엑셀 파일 › 정보): 보호 · 검사 · 관리 · 속성 ──
   const showInfo = () => {
-    const pr = wb.props ?? {};
+    const pr = wb.props ?? {}, compatibilityWarnings = xlsxExportWarnings(wb);
     const setProp = (patch) => { wb.transact(() => wb.setBookProp('props', { ...(wb.props ?? {}), ...patch }), meta()); saveToStorage(); };
     const where = `${storageLabel()} › ${docName}`;
     const cellCount = wb.sheets.reduce((n, sh) => n + sh.cells.size + sh.blocks.reduce((m, b) => m + b.n * b.cols.length, 0), 0);
@@ -16127,7 +16132,7 @@ function openBackstage(panel = 'new') {
       const hid = wb.sheets.filter((x, i) => i < wb.ownSheetCount() && x.state && x.state !== 'visible');
       if (hid.length) rows.push(['숨겨진 시트', hid.map((x) => x.name).join(', ')]);
       let hr = 0; let hc = 0; let cm = 0; let lk = 0;
-      wb.sheets.forEach((x) => { hr += Object.keys(x.hiddenRows ?? {}).length; hc += Object.keys(x.hiddenCols ?? {}).length; x.cells.forEach((c) => { if (c.comment) cm++; if (c.link && !String(c.link).startsWith('#')) lk++; }); });
+      wb.sheets.forEach((x) => { hr += Object.keys(x.hiddenRows ?? {}).length; hc += Object.keys(x.hiddenCols ?? {}).length; x.cells.forEachStoredRC((c) => { if (c.comment) cm++; if (c.link && !String(c.link).startsWith('#')) lk++; }); });
       if (hr || hc) rows.push(['숨겨진 행 · 열', `행 ${hr.toLocaleString()}개 · 열 ${hc.toLocaleString()}개`]);
       if (cm) rows.push(['메모', `${cm.toLocaleString()}개`]);
       if (lk) rows.push(['외부 하이퍼링크', `${lk.toLocaleString()}개`]);
@@ -16150,6 +16155,7 @@ function openBackstage(panel = 'new') {
     const fmt = (iso) => (iso ? formatDate(Date.parse(iso)) : '-');
     main.replaceChildren(
       el('h2', {}, '정보'),
+      compatibilityWarnings.length ? el('div', { class: 'hub-callout', role: 'status', 'data-excel-compatibility': '' }, el('div', {}, el('b', {}, 'Excel 호환성 확인 필요'), ...compatibilityWarnings.map(text => el('p', {}, text)))) : null,
       el('div', { class: 'info-title' }, docName), el('div', { class: 'muted' }, where),
       el('div', { class: 'info-actions' },
         el('button', { class: 'btn', onclick: () => { close(); publishDialog(); } }, '공유'),
@@ -16548,7 +16554,7 @@ function formatCellsDialog(startTab = 0, find = null) {
     else if (cat === 'custom') {
       codeIn.value = customCode;
       const used = new Set();
-      for (const s of wb.sheets) for (const cell of s.cells.values()) if (cell.style?.numFmt === 'custom' && cell.style.code) used.add(cell.style.code);
+      for (const s of wb.sheets) for (const [,,cell] of s.cells.storageEntries()) if (cell.style?.numFmt === 'custom' && cell.style.code) used.add(cell.style.code);
       const list = el('div', { class: 'fc-list tall' });
       for (const code of [...CUSTOM_LIST, ...[...used].filter((x) => !CUSTOM_LIST.includes(x))]) {
         const b = el('button', { type: 'button', class: `fc-item mono${code === codeIn.value ? ' on' : ''}` }, code);
@@ -16951,7 +16957,7 @@ function autofitSelection(axis, explicitTargets = null) {
   if (explicitTargets) targets = explicitTargets;
   else if (ranges.length === 1 && ranges[0][0] === 0 && ranges[0][1] === max - 1) {
     const indices = new Set(Object.keys(axis === 'row' ? sheet().rowHeights : sheet().colWidths).map(Number));
-    sheet().cells.forEachRC((cell, r, c) => { if (cell.raw) indices.add(axis === 'row' ? r : c); });
+    sheet().cells.forEachStoredRC((cell, r, c) => { if (cell.raw) indices.add(axis === 'row' ? r : c); });
     for (const block of sheet().blocks ?? []) {
       const start = axis === 'row' ? block.r0 : block.c0, count = axis === 'row' ? block.n : block.cols.length;
       if (count > 20000) { toast('자동 맞춤 대상이 20,000개를 초과합니다. 범위를 줄여 주세요.'); return; }
@@ -17895,7 +17901,7 @@ function statsDialog() {
   let comments = 0;
   let totalCells = 0;
   wb.sheets.forEach((s, i) => {
-    for (const cell of s.cells.values()) {
+    for (const [,,cell] of s.cells.storageEntries()) {
       if (cell.raw) { totalCells++; if (i === si) cells++; }
       if (cell.formula && i === si) formulas++;
       if (cell.comment && i === si) comments++;
@@ -18191,29 +18197,36 @@ function cellStylesMenu(anchorEl) {
       },
     }, s.name);
   };
-  const groups = [];
+  const groups = [], sections = cellStyleSections(), pageSize = 144;
+  let page = 0;
   const search = el('input', { type: 'search', placeholder: '셀 스타일 검색', 'aria-label': '셀 스타일 검색', autocomplete: 'off', style: { width: '100%', boxSizing: 'border-box' } });
   const status = el('div', { role: 'status', class: 'muted', style: { fontSize: '11px', paddingTop: '4px' } });
-  const items = [{ node: el('div', { style: { width: `${galleryWidth}px`, boxSizing: 'border-box', padding: '8px 10px' } }, search, status) }];
-  for (const [title, list] of cellStyleSections()) {
-    const buttons = list.map(chip);
-    const section = el('section', { 'aria-label': title }, el('div', { class: 'menu-title' }, title),
-      el('div', { class: 'style-grid cs6', style: { width: `${galleryWidth}px`, boxSizing: 'border-box', gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` } }, buttons));
-    groups.push({ section, title, buttons }); items.push({ node: section });
-  }
+  const host = el('div', { 'data-cell-style-results': '' });
+  const previous = el('button', { class: 'btn', type: 'button', 'aria-label': '이전 셀 스타일 페이지', onclick: () => { page--; filter(); } }, '이전');
+  const next = el('button', { class: 'btn', type: 'button', 'aria-label': '다음 셀 스타일 페이지', onclick: () => { page++; filter(); } }, '다음');
+  const pages = el('div', { style: { display: 'flex', gap: '8px', padding: '6px 10px' } }, previous, next);
+  const items = [{ node: el('div', { style: { width: `${galleryWidth}px`, boxSizing: 'border-box', padding: '8px 10px' } }, search, status) }, { node: host }, { node: pages }];
+  // Excel 파일에 수만 개의 사용자 스타일이 있어도 한 페이지 분량만 DOM으로 만든다.
+  // 검색은 모든 스타일을 대상으로 하며 페이지 이동으로 전 항목에 접근할 수 있다.
   const filter = () => {
-    const query = search.value.trim().toLocaleLowerCase(); let count = 0;
-    for (const { section, title, buttons } of groups) {
-      let shown = 0;
-      for (const button of buttons) {
-        button.hidden = !`${title} ${button.dataset.cellStyle}`.toLocaleLowerCase().includes(query);
-        if (!button.hidden) shown++;
-      }
-      section.hidden = !shown; count += shown;
+    const query = search.value.trim().toLocaleLowerCase();
+    const matches = sections.map(([title, list]) => [title, query ? list.filter(s => `${title} ${s.name}`.toLocaleLowerCase().includes(query)) : list]);
+    const count = matches.reduce((n, [, list]) => n + list.length, 0), pageCount = Math.max(1, Math.ceil(count / pageSize));
+    page = clamp(page, 0, pageCount - 1);
+    let offset = 0; const start = page * pageSize, end = start + pageSize;
+    groups.length = 0; host.replaceChildren();
+    for (const [title, list] of matches) {
+      const from = Math.max(0, start - offset), to = Math.min(list.length, end - offset); offset += list.length;
+      if (from >= to) continue;
+      const buttons = list.slice(from, to).map(chip);
+      const section = el('section', { 'aria-label': title }, el('div', { class: 'menu-title' }, title),
+        el('div', { class: 'style-grid cs6', style: { width: `${galleryWidth}px`, boxSizing: 'border-box', gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` } }, buttons));
+      groups.push({ section, title, buttons }); host.append(section);
     }
-    status.textContent = count ? `${count}개 스타일 · 보고서 스타일은 숫자 표시 형식과 잠금 유지` : '일치하는 셀 스타일이 없습니다.';
+    previous.disabled = page === 0; next.disabled = page >= pageCount - 1; pages.hidden = pageCount < 2;
+    status.textContent = count ? `${count.toLocaleString()}개 스타일${pageCount > 1 ? ` · ${page + 1}/${pageCount} 페이지` : ''} · 보고서 스타일은 숫자 표시 형식과 잠금 유지` : '일치하는 셀 스타일이 없습니다.';
   };
-  search.addEventListener('input', filter);
+  search.addEventListener('input', () => { page = 0; filter(); });
   search.addEventListener('keydown', (event) => {
     if (event.isComposing || event.keyCode === 229) return;
     if (event.key === 'ArrowDown' || event.key === 'Enter') {
@@ -19587,6 +19600,8 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['피벗 캡션과 공유 슬라이서 설정', ['빈 피벗 캡션을 Excel 저장 후에도 보존합니다. 같은 캐시를 공유하는 슬라이서의 정렬과 데이터 없는 항목 설정을 함께 적용하며, 개별 캡션·스타일·위치는 유지합니다.']],
+  ['대형 Excel 파일과 저장 정확성', ['큰 시트와 피벗 캐시를 순서대로 읽고, 같은 서식의 빈 셀을 묶어 메모리와 자동 저장 부담을 줄였습니다.', '피벗의 저장된 원본 캐시를 보관·복원하고, 원본 편집 뒤 오래된 캐시가 다시 나타나는 경로를 수정했습니다.', 'Excel 둥근 사각형의 모서리 조정값과 일반 도형 그룹의 중첩·배율·그림 효과를 보존합니다.', '피벗 연결이 없는 슬라이서도 항목과 선택 상태를 유지하며, 피벗 원본 변경·서식 편집·실행 취소에서 저장값이 섞이는 문제를 수정했습니다.', '표 수식의 반복 참조와 큰 슬라이서 목록의 화면 요소를 묶어 메모리 부담을 줄이고, 많은 셀 스타일은 검색·페이지로 선택할 수 있습니다.', '데이터 모델(OLAP/DAX) 피벗은 아직 지원하지 않습니다. 해당 파일을 열거나 다시 내보낼 때 지원 범위와 원본 보관 안내를 표시합니다.']],
   ['파일 전환 시 이전 문서 복귀 방지', ['새 파일을 연 뒤 늦게 완료된 이전 열기·게시본 갱신·시작 링크 응답이 현재 문서를 덮어쓰지 않도록 했습니다. 새 문서와 피벗을 준비한 뒤 한 번에 전환하며, 현재 게시본을 편집용 사본으로 만들 때도 최신 내용을 유지합니다.']],
   ['행·열 경계 크기 조절', ['축소 배율과 틀 고정에서도 머리글 경계를 쉽게 잡아 너비·높이를 조절합니다. 드래그 중 크기와 안내선을 표시하며, 여러 행·열 선택 후 경계를 두 번 클릭하면 함께 자동 맞춤합니다. Esc로 취소하고 실행 취소로 원래 크기를 복원할 수 있습니다.']],
   ['표 빠른 스타일 전체 적용', ['빠른 스타일을 고르면 직접 칠한 색과 기존 선·강조까지 새 표 스타일로 바뀝니다. 값·수식·숫자 형식은 유지하며 실행 취소로 되돌릴 수 있습니다. 기본 셀 색이 머리글을 가리거나 사용자 지정 스타일이 빈 셀에서 빠지는 문제도 수정했습니다.']],
@@ -20360,7 +20375,7 @@ async function init() {
     try {
       const metaId = stored.docId, remote = stored.remoteDoc;
       stored = await loadBigFromIdb((p) => prog.set(p * 0.6, '불러오는 중'));
-      if (stored && stored.storageFormat !== 3) { stored.docId = metaId; stored.remoteDoc = remote; }
+      if (stored && ![3,4].includes(stored.storageFormat)) { stored.docId = metaId; stored.remoteDoc = remote; }
       wb = new Workbook();
       if (stored?.workbook) await wb.loadAsync(stored.workbook, (p) => prog.set(0.6 + 0.4 * p, '셀 준비 중'));
     } catch {

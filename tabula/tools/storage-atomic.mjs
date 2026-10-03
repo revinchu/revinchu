@@ -45,7 +45,7 @@ async function saveBrowserCopy(p) {
 }
 async function save(p,previous=null,trigger=true) {
   if(trigger)await saveBrowserCopy(p);
-  await p.evaluate(async ({key,previous})=>{const end=performance.now()+30000;while(performance.now()<end){const idx=await window.__idb('get',key),ptr=JSON.parse(localStorage.getItem(key)||'null');if(idx?.v===3&&idx.generation!==previous&&ptr?.generation===idx.generation)return;await new Promise(r=>setTimeout(r,20));}throw new Error('manifest 저장 시간 초과: '+document.body.innerText.slice(-900));},{key,previous});
+  await p.evaluate(async ({key,previous})=>{const end=performance.now()+30000;while(performance.now()<end){const idx=await window.__idb('get',key),ptr=JSON.parse(localStorage.getItem(key)||'null');if([3,4].includes(idx?.v)&&idx.generation!==previous&&ptr?.generation===idx.generation)return;await new Promise(r=>setTimeout(r,20));}throw new Error('manifest 저장 시간 초과: '+document.body.innerText.slice(-900));},{key,previous});
   await idle(p);return read(p);
 }
 async function change(p){await p.evaluate(()=>{const w=window.tabula.wb();w.transact(()=>{w.setInput(0,0,0,'NEW-1');w.setInput(1,0,0,'NEW-2');});});}
@@ -53,7 +53,7 @@ async function fault(p,mode){await p.evaluate(mode=>{
   window.__faultMode=mode;window.__faultHit=false;
   const original=IDBObjectStore.prototype.put;
   IDBObjectStore.prototype.put=function(value,key){
-    const selected=!window.__faultHit&&typeof key==='string'&&key.startsWith('tabula.workbook.v1')&&((mode==='second'&&value?.meta?.name==='두 번째')||(mode==='manifest'&&value?.v===3)||(mode==='edit'&&value?.meta?.name==='첫 번째')||(mode==='cancel'&&value?.meta?.name==='첫 번째')||(mode==='close'&&value?.meta?.name==='두 번째'));
+    const selected=!window.__faultHit&&typeof key==='string'&&key.startsWith('tabula.workbook.v1')&&((mode==='second'&&value?.meta?.name==='두 번째')||(mode==='manifest'&&[3,4].includes(value?.v))||(mode==='edit'&&value?.meta?.name==='첫 번째')||(mode==='cancel'&&value?.meta?.name==='첫 번째')||(mode==='close'&&value?.meta?.name==='두 번째'));
     const req=original.call(this,value,key);if(!selected)return req;window.__faultHit=true;
     if(mode==='second'||mode==='manifest'){this.transaction.abort();return req;}
     if(mode==='edit'||mode==='cancel')req.addEventListener('success',()=>{const t=window.tabula,w=t.wb();if(mode==='edit')w.transact(()=>w.setInput(0,2,0,'편집 중 변경'));else{w.restore({sheets:[{name:'취소 후 문서',cells:{'0,0':{raw:'다른 문서'}}}]});t.gv().layout();t.gv().renderAll();}});
@@ -138,7 +138,7 @@ try {
     await saveBrowserCopy(p);await p.waitForFunction(()=>window.__competing);await idle(p);
     assert.equal((await read(p)).generation,'synthetic-other-tab');await reloadAndCheck(p);
   });
-  await test('v2→v3 변환은 구버전 탭의 시트·분할 청크·별도 저장 레코드를 보존한다',async p=>{
+  await test('v2→v4 변환은 구버전 탭의 시트·분할 청크·별도 저장 레코드를 보존한다',async p=>{
     await fixture(p);
     const legacy=await p.evaluate(async key=>{
       const w=window.tabula.wb(),sheets=[],partKey=key+'#legacy-0#p0',otherKey=key+'#legacy-other-tab';
@@ -154,7 +154,7 @@ try {
       return {manifest,partKey,otherKey};
     },key);
     p=await reopen(p);await p.waitForFunction(()=>window.tabula?.wb()?.sheets.length===2);
-    const next=await save(p);assert.equal(next.v,3);assert.ok(next.sheets.every(sheet=>sheet.key.startsWith(key+'#g#')));
+    const next=await save(p);assert.equal(next.v,4);assert.ok(next.sheets.every(sheet=>sheet.key.startsWith(key+'#g#')));
     assert.deepEqual(await p.evaluate(async({key,legacy})=>{
       const first=await window.__idb('get',key+'#'+legacy.manifest.sheets[0].id),second=await window.__idb('get',key+'#'+legacy.manifest.sheets[1].id),part=await window.__idb('get',legacy.partKey),other=await window.__idb('get',legacy.otherKey);
       return {values:[first&&JSON.parse(first.chunks[0])[0][1].raw,second&&JSON.parse(second.chunks[0])[0][1].raw],part:part?[...part]:null,other};

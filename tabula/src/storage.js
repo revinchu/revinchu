@@ -88,7 +88,7 @@ export async function idbCompareAndSet(key, expected, value, validate = () => {}
     const tx = db.transaction('docs', 'readwrite'), store = tx.objectStore('docs');
     let failure = null;
     const fail = (error) => { failure = error; try { tx.abort(); } catch { reject(error); } };
-    const token = (item) => item?.v === 3 ? item.generation : JSON.stringify(item ?? null);
+    const token = (item) => [3,4].includes(item?.v) ? item.generation : JSON.stringify(item ?? null);
     const req = store.get(key);
     req.onsuccess = () => {
       try {

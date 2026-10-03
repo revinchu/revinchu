@@ -117,7 +117,10 @@ test('잘못된 표 스타일 확장은 무시하고 숫자형식/보호 같은 
   const inject = json => source.replace(/(<wx:tableStyleInherit\b[^>]*json=")[^"]*(")/g, `$1${json.replaceAll('"', '&quot;')}$2`);
   files['xl/styles.xml'] = inject('{"fill":"","numFmt":"","locked":false,"bold":false}');
   let back = new Workbook(readXlsx(zip(files)).data), marker = back.getCell(0, 0, 0).style.tableStyleInherit;
-  assert.deepEqual(marker, { fill: '', bold: false });
+  assert.equal(marker.fill, ''); assert.equal(marker.bold, false);
+  assert.equal(marker.numFmt, undefined); assert.equal(marker.locked, undefined);
+  // Import may add safe neutral masks for row/column defaults; the extension
+  // itself must never inject number formats or protection properties.
   files['xl/styles.xml'] = inject('invalid-json');
   back = new Workbook(readXlsx(zip(files)).data); assert.equal(back.getCell(0, 0, 0).style.tableStyleInherit, undefined);
   files['xl/styles.xml'] = source.replaceAll(NS, 'https://example.com/not-wixel');
@@ -150,4 +153,18 @@ test('기본 흰색인 표에서 숫자형식만 고쳐도 XLSX에 직접 흰색
   assert.equal(actual.fill, tableCellStyle(back.sheets[0].tables[0], 1, 0).fill);
   assert.equal(actual.color, tableCellStyle(back.sheets[0].tables[0], 1, 0).color);
   assert.equal(fmtCode(back.styleAt(0, 1, 0)), '0.00%'); assert.equal(back.getValue(0, 1, 0), 0.125);
+});
+
+
+test('새 행 기본값은 다시 연 표에서 다음 굵게 스타일을 가로막지 않는다', () => {
+  const wb = fixture(); applyStyle(wb); const back = roundtrip(wb);
+  const t = back.sheets[0].tables[0];
+  t.styleElements = [{ type: 'wholeTable', style: { bold: true, italic: true, fill: '#123456', color: '#ffffff' } }];
+  const actual = tableCellDisplayStyle(back, 0, 2, 1);
+  assert.equal(actual.bold, true); assert.equal(actual.italic, true);
+  assert.equal(actual.fill, '#123456'); assert.equal(actual.color, '#ffffff');
+  back.transact(() => back.setStyle(0, 2, 1, { bold: false, fill: '#fedcba' }));
+  const explicit = tableCellDisplayStyle(back, 0, 2, 1);
+  assert.equal(explicit.bold, false); assert.equal(explicit.fill, '#fedcba');
+  assert.equal(tableCellDisplayStyle(roundtrip(back), 0, 2, 1).bold, false);
 });

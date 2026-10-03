@@ -216,7 +216,7 @@ try {
       await page.evaluate(async () => {
         for (;;) {
           const ptr = JSON.parse(localStorage.getItem('tabula.workbook.v1') || 'null'), manifest = await window.__realPerfReadManifest(), sheets = window.tabula.wb().sheets;
-          if (manifest?.v === 3 && manifest.generation !== window.__realPerfPriorGeneration && ptr?.generation === manifest.generation
+          if ([3,4].includes(manifest?.v) && manifest.generation !== window.__realPerfPriorGeneration && ptr?.generation === manifest.generation
             && manifest.sheets.length === sheets.length && manifest.sheets.every((entry, i) => entry.id === sheets[i]._sid && entry.ev === (sheets[i]._ev ?? 0))
             && document.getElementById('saveState')?.textContent.includes('이 브라우저에 저장됨')) return;
           await new Promise(resolve => setTimeout(resolve, 30));
