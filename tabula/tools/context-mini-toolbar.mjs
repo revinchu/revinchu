@@ -56,7 +56,7 @@ try {
   await test('Tab/ShiftTab 도구-메뉴 전환, 도구 방향키, Escape 함께 종료', async (p) => {
     await fixture(p); await p.keyboard.press('Tab'); assert.equal(await p.evaluate(() => document.activeElement.getAttribute('aria-label')), '글꼴');
     await p.keyboard.press('Shift+Tab'); assert.equal(await p.evaluate(() => document.activeElement.textContent.trim()), '합성 항목 8');
-    await p.keyboard.press('Tab'); await p.keyboard.press('Tab'); await p.keyboard.press('Tab');
+    await p.keyboard.press('Tab'); await p.keyboard.press('Tab'); await p.keyboard.press('Tab'); await p.keyboard.press('Tab'); await p.keyboard.press('Tab');
     assert.equal(await p.evaluate(() => document.activeElement.dataset.miniCommand), 'growFont'); await p.keyboard.press('ArrowRight'); assert.equal(await p.evaluate(() => document.activeElement.dataset.miniCommand), 'shrinkFont');
     await p.keyboard.press('Escape'); assert.equal(await p.getByRole('menu').count(), 0); assert.equal(await p.locator('.context-mini-toolbar').count(), 0);
   });

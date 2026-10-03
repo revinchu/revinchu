@@ -1,12 +1,12 @@
 // 우클릭 미니 서식 도구 모음. 명령/선택/보호 판단은 app.js의 기존 경로를 사용한다.
 import { el, icon, toast } from './ui.js';
 import { FONTS, FONT_SIZES } from './ribbon.js';
+import { createFormatValuePicker } from './format-value-picker.js';
 
-let miniToolbarId = 0;
 /** onCommand(cmd,value), openNamedMenu(name,anchor), getStyle()->현재 서식, readonly:boolean|()=>boolean */
 export function createContextMiniToolbar({ onCommand, openNamedMenu, getStyle = () => ({}), readonly = false } = {}) {
   const root = el('div', { class: 'context-mini-toolbar cell-mini-toolbar', role: 'toolbar', 'aria-label': '미니 서식 도구 모음' });
-  const controls = [], toggles = [], id = ++miniToolbarId;
+  const controls = [], toggles = [];
   const locked = () => typeof readonly === 'function' ? !!readonly() : !!readonly;
   const invoke = async (cmd, value) => {
     if (locked()) return;
@@ -26,26 +26,13 @@ export function createContextMiniToolbar({ onCommand, openNamedMenu, getStyle = 
     if (pressed) toggles.push([node, pressed]);
     controls.push(node); return node;
   };
-  const font = el('input', { class: 'mini-font', list: `mini-fonts-${id}`, type: 'text', 'aria-label': '글꼴', title: '글꼴', autocomplete: 'off' });
-  const size = el('input', { class: 'mini-size', list: `mini-sizes-${id}`, type: 'text', inputmode: 'decimal', 'aria-label': '글꼴 크기', title: '글꼴 크기', autocomplete: 'off' });
-  controls.push(font, size);
-  const commitFont = () => { const value = font.value.trim(); if (!value) { root.refresh(); return; } if (value !== (getStyle().font || '맑은 고딕')) invoke('fontFamily', value); };
-  const commitSize = () => {
-    const value = Number(size.value);
-    if (!Number.isFinite(value) || value <= 0 || value > 409) { size.setCustomValidity('글꼴 크기는 0보다 크고 409 이하인 숫자여야 합니다.'); size.reportValidity(); return; }
-    size.setCustomValidity(''); if (value !== Number(getStyle().size || 11)) invoke('fontSize', value);
-  };
-  for (const [input, commit] of [[font, commitFont], [size, commitSize]]) {
-    input.addEventListener('change', commit);
-    input.addEventListener('input', () => input.setCustomValidity(''));
-    input.addEventListener('keydown', (event) => { if (event.key === 'Enter' && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); event.stopPropagation(); commit(); input.select(); } });
-  }
-  const fontList = el('datalist', { id: `mini-fonts-${id}` }, FONTS.map((value) => el('option', { value })));
-  const sizeList = el('datalist', { id: `mini-sizes-${id}` }, FONT_SIZES.map((value) => el('option', { value })));
-  root.append(el('div', { class: 'mini-format-row' }, font, size,
+  const fontPicker = createFormatValuePicker({ label: '글꼴', className: 'mini-font-picker', inputClass: 'mini-font', values: FONTS, disabled: locked, onChange: (v) => invoke('fontFamily', v), onOpen: openNamedMenu ? (anchor) => openNamedMenu('fontList', anchor) : undefined });
+  const sizePicker = createFormatValuePicker({ label: '글꼴 크기', className: 'mini-size-picker', inputClass: 'mini-size', values: FONT_SIZES, number: true, disabled: locked, onChange: (v) => invoke('fontSize', v) });
+  controls.push(fontPicker.input, fontPicker.button, sizePicker.input, sizePicker.button);
+  root.append(el('div', { class: 'mini-format-row' }, fontPicker.root, sizePicker.root,
     button('글꼴 크기 크게', el('span', { class: 'mini-grow' }, '가', el('sup', {}, '▲')), 'growFont'),
     button('글꼴 크기 작게', el('span', { class: 'mini-grow' }, '가', el('sup', {}, '▼')), 'shrinkFont'),
-    button('서식 복사', 'painter', 'painter', { pressed: (style) => !!style.painter })), fontList, sizeList);
+    button('서식 복사', 'painter', 'painter', { pressed: (style) => !!style.painter })));
   const fill = button('채우기 색', 'fill', null, { menu: 'fillColor' }); fill.classList.add('mini-fill');
   const color = button('글꼴 색', 'fontColor', null, { menu: 'fontColor' }); color.classList.add('mini-color');
   root.append(el('div', { class: 'mini-format-row' },
@@ -60,7 +47,7 @@ export function createContextMiniToolbar({ onCommand, openNamedMenu, getStyle = 
     button('병합하고 가운데 맞춤', 'merge', 'mergeCenter', { pressed: (style) => !!style.merged })));
   root.refresh = () => {
     const style = getStyle() ?? {}, disabled = locked();
-    font.value = style.font || '맑은 고딕'; size.value = String(style.size || 11);
+    fontPicker.update(style.font || '맑은 고딕'); sizePicker.update(style.size || 11);
     for (const control of controls) control.disabled = disabled;
     for (const [node, read] of toggles) { const pressed = read(style); node.classList.toggle('on', pressed); node.setAttribute('aria-pressed', String(pressed)); }
     root.style.setProperty('--mini-fill', style.lastFill || style.fill || '#ffff00');

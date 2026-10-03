@@ -3,6 +3,7 @@ import { collectRibbonControls } from './ribbon-keytips.js';
 import { ICONS } from './icons.js';
 import { setSafeHtml } from './safe-html.js';
 import { el } from './ui.js';
+import { createFormatValuePicker } from './format-value-picker.js';
 import { NUMBER_FORMATS } from './format.js';
 
 export const FONTS = ['맑은 고딕', '굴림', '돋움', '바탕', '궁서', 'Arial', 'Calibri', 'Consolas', 'Times New Roman', 'Verdana'];
@@ -628,6 +629,11 @@ export function buildRibbon(app) {
       if (!target) continue;
       target.dataset.ribbonControl ??= control.id;
       target.dataset.ribbonControls = [target.dataset.ribbonControls, control.id].filter(Boolean).join(' ');
+      // 모바일의 크기 목록 단추는 숨긴 직접 입력과 동일한 조작이다.
+      if (control.kind === 'input' && it.type === 'select' && it.editable) {
+        const pickerButton = node.querySelector('.format-picker-toggle');
+        if (pickerButton) { pickerButton.dataset.ribbonControl = control.id; pickerButton.dataset.ribbonControls = control.id; }
+      }
     }
     return node;
   }
@@ -661,15 +667,9 @@ export function buildRibbon(app) {
 
   function makeSelect(it) {
     if (it.editable) {
-      const input = el('input', { class: `rselect ${it.cls}`, title: it.title, list: `dl-${it.cmd}` });
-      const dl = el('datalist', { id: `dl-${it.cmd}` }, it.options.map((o) => el('option', { value: o.value })));
-      input.addEventListener('change', () => { app.run(it.cmd, input.value); app.focusGrid(); });
-      input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') { input.blur(); app.focusGrid(); }
-        if (e.key === 'Escape') app.focusGrid();
-      });
-      bindings.push((s) => { if (document.activeElement !== input) input.value = s[it.stateKey] ?? ''; });
-      return el('span', {}, input, dl);
+      const picker = createFormatValuePicker({ label: it.title, className: `${it.cls}-picker`, inputClass: `rselect ${it.cls}`, values: it.options.map((o) => o.value), number: it.cmd === 'fontSize', onChange: (v) => app.run(it.cmd, v), afterCommit: app.focusGrid, onEscape: app.focusGrid });
+      bindings.push((s) => picker.update(s[it.stateKey] ?? ''));
+      return picker.root;
     }
     const sel = el('select', { class: `rselect ${it.cls}`, title: it.title },
       it.options.map((o) => el('option', { value: o.value }, o.label)));
@@ -680,23 +680,13 @@ export function buildRibbon(app) {
 
   /** 글꼴 상자: 이름을 직접 입력하거나 ▾ 로 글꼴 목록 (각 글꼴 모양으로 표시) */
   function makeFont(it) {
-    const input = el('input', { class: `rselect ${it.cls}`, title: it.title, spellcheck: false });
-    const commit = () => { const v = input.value.trim(); if (v) app.run(it.cmd, v); };
-    input.addEventListener('change', commit);
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); commit(); app.focusGrid(); }
-      if (e.key === 'Escape') app.focusGrid();
-      if (e.key === 'ArrowDown' && e.altKey) { e.preventDefault(); app.openMenu(it.menu, wrap); }
-    });
-    const caret = el('button', { class: 'rbtn font-caret', title: '글꼴 목록', onmousedown: keepFocus, html: ICONS.chevronDown });
-    caret.addEventListener('click', () => app.openMenu(it.menu, wrap));
-    const wrap = el('span', { class: 'font-box' }, input, caret);
+    const picker = createFormatValuePicker({ label: '글꼴', className: 'font-box', inputClass: `rselect ${it.cls}`, buttonClass: 'rbtn font-caret', onChange: (v) => app.run(it.cmd, v), onOpen: (anchor) => app.openMenu(it.menu, anchor), afterCommit: app.focusGrid, onEscape: app.focusGrid });
+    picker.input.title = it.title;
     bindings.push((s) => {
-      if (document.activeElement === input) return;
-      input.value = s[it.stateKey] ?? '';
-      input.style.fontFamily = `'${String(input.value).replace(/'/g, '')}', 'Malgun Gothic', sans-serif`;
+      picker.update(s[it.stateKey] ?? '');
+      picker.input.style.fontFamily = `'${String(picker.input.value).replace(/'/g, '')}', 'Malgun Gothic', sans-serif`;
     });
-    return wrap;
+    return picker.root;
   }
 
   function makeText(it) {

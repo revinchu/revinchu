@@ -11,6 +11,7 @@ import { normalizeVideo, VIDEO_POSTER } from './media-object.js';
 import { createDrawingPalette } from './drawing-palette.js';
 import { BANDING_PALETTES, alternatingRules, isBandingRule } from './alternating-colors.js';
 import { installMobileWork, mobileSheetZoom } from './mobile-work.js';
+import { installGridMousePan } from './mouse-work.js';
 import { openMobileTools } from './mobile-tools-ui.js';
 import { makeObjectGroup, ungroupObjects } from './object-group.js';
 // WIXEL 메인: 상태 · 선택 · 편집 · 키보드/마우스 · 명령 (그리기는 view.js)
@@ -8885,8 +8886,10 @@ function activateKeytip(seq) {
       if (anchor) { anchor.scrollIntoView({ block: 'nearest', inline: 'nearest' }); openNamedMenu(entry.target, anchor); }
       else menuAtCell(entry.target);
     } else if (entry.kind === 'input') {
+      if (anchor.matches('.format-picker-toggle')) { anchor.click(); return true; }
       const input = anchor.matches('input,select,textarea') ? anchor : anchor.querySelector('input,select,textarea');
-      input?.focus(); if (input?.select && input.type !== 'number') input.select();
+      if (input && !input.getClientRects().length) input.closest('.format-value-picker')?.querySelector('.format-picker-toggle')?.click();
+      else { input?.focus(); if (input?.select && input.type !== 'number') input.select(); }
     } else run(entry.target);
     return true;
   }
@@ -8900,7 +8903,8 @@ function activateKeytip(seq) {
 function keytipAnchor(path, cmd) {
   const entry = KEYTIP_ENTRIES.get(path);
   if (entry?.controlId) {
-    const control = document.querySelector(`#ribbon [data-ribbon-controls~="${entry.controlId}"]`);
+    const controls = [...document.querySelectorAll(`#ribbon [data-ribbon-controls~="${entry.controlId}"]`)];
+    const control = controls.find(n => n.getClientRects().length) ?? controls[0];
     if (control) return control;
   }
   if (entry?.kind === 'menu') return document.querySelector(`#ribbon [data-ribbon-menu="${entry.target}"]`);
@@ -13163,7 +13167,8 @@ function fontMenu(anchorEl) {
   const used = new Set();
   for (const s of wb.sheets) for (const cell of s.cells.values()) if (cell.style?.font) used.add(cell.style.font);
   const cur = styleAt(active.r, active.c).font || BASE_FONT.name;
-  const search = el('input', { type: 'search', placeholder: '글꼴 검색', class: 'font-search' });
+  const mobilePicker = document.body.classList.contains('mobile-work-mode') || matchMedia('(pointer: coarse)').matches;
+  const search = el('input', { type: 'search', placeholder: '글꼴 검색', class: 'font-search', style: { fontSize: '16px' } });
   const list = el('div', { class: 'font-list' });
   const pick = (f) => { closeMenus(); run('fontFamily', f); };
   const item = (f) => el('button', {
@@ -13173,7 +13178,7 @@ function fontMenu(anchorEl) {
   const render = () => {
     const q = search.value.trim().toLowerCase();
     const match = (f) => !q || f.toLowerCase().includes(q) || (fontAlias(f) ?? '').toLowerCase().includes(q);
-    const all = fontList();
+    const all = [...new Set([...FONTS, ...fontList()])];
     const theme = [BASE_FONT.name].filter(match);
     const usedList = [...used].filter((f) => f !== BASE_FONT.name && match(f));
     list.replaceChildren(
@@ -13203,8 +13208,9 @@ function fontMenu(anchorEl) {
     : null;
   render();
   const node = el('div', { class: 'font-menu' }, search, loadBtn, list);
-  openMenu(anchorEl, [{ node }]);
-  setTimeout(() => search.focus());
+  openMenu(anchorEl, [{ node }], { focus: !mobilePicker });
+  if (mobilePicker) list.querySelector('.font-item')?.focus({ preventScroll:true });
+  else setTimeout(() => search.focus());
 }
 
 function pivotStyleOpt(key) {
@@ -18931,6 +18937,11 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileFit','toggleR
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['모바일 마우스 작업과 작은 화면', [
+    '리본 구분명과 수식 입력줄·하단 여백을 줄였습니다. 글꼴·크기는 전체 목록과 아래 화살표로 선택합니다.',
+    '마우스로 리본을 좌우로 끌고, 본문에서는 마우스 왼쪽·오른쪽 버튼을 함께 누른 채 끌어 화면을 이동합니다.',
+    '낮은 화면 배율에서 글자가 다시 줄바꿈되어 잘리던 문제를 수정했습니다.',
+  ]],
   ['모바일 공간 활용과 우클릭 도구', [
     '모바일 제목줄과 메뉴 탭, 시트 탭과 화면 배율을 각각 한 줄로 합쳤습니다. 글꼴·크기 입력과 아이콘을 줄이고 마우스 휠로 가로 메뉴를 이동합니다.',
     '셀 우클릭 서식 도구의 글자와 단축키 겹침을 없애고, 앱 위에 브라우저 기본 우클릭 메뉴가 함께 뜨지 않도록 했습니다.',
@@ -19346,6 +19357,9 @@ function onBookChange() {
 
 // ───────────────────────── 이벤트 연결 ─────────────────────────
 function bindEvents() {
+  installGridMousePan({ view:dom.view, enabled:()=>!!mobileWork?.active,
+    context:()=>sheet(), canStart:()=>!editing && !isDialogOpen() && !document.querySelector('.backstage'),
+    onDown:onViewMouseDown, onStart:closeMenus, scroll:(dx,dy)=>gv.scrollBy(dx,dy), zoom:()=>gv.z });
   const ed = dom.editor;
   ed.addEventListener('keydown', onEditorKeyDown);
   document.addEventListener('keyup', handleKeytipUp);

@@ -1,0 +1,90 @@
+// 합성 문서와 격리 Chromium 마우스/터치 모의 검사. 실제 iPhone/OS 검사는 아닙니다.
+import assert from 'node:assert/strict';
+import {mkdir,writeFile} from 'node:fs/promises';
+const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
+const url=process.env.WIXEL_URL||'http://127.0.0.1:5191/',out=process.env.WIXEL_MOBILE_POINTER_OUT||'D:/Codex/Temp/wixel-mobile-pointer/source',only=process.env.WIXEL_MOBILE_POINTER_FILTER||'';
+await mkdir(out,{recursive:true});
+const browser=await chromium.launch(),results=[],errors=[],writes=[],blocked=[],measurements=[],assets=new Set();let checks=0;
+const eq=(a,b,m)=>{checks++;assert.deepEqual(a,b,m);},ok=(v,m)=>{checks++;assert.ok(v,m);};
+const raf=p=>p.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));
+const run=(p,cmd)=>p.evaluate(cmd=>window.tabula.run(cmd),cmd);
+const state=p=>p.evaluate(()=>{const t=window.tabula,w=t.wb(),g=t.gv();return{book:JSON.stringify(w.serialize()),undo:w.undoStack.length,redo:w.redoStack.length,active:{...t.active},sel:{...t.sel},kind:g.host.state().selKind,si:t.si,x:g.sx,y:g.sy,z:g.z,editing:g.host.state().editing,menus:document.querySelectorAll('#menuLayer>.menu').length};});
+const preserved=(a,b,m='탐색은 원본·선택·실행 취소 불변')=>{eq(a.book===b.book,true,m+' (통합 문서)');eq([a.undo,a.redo,a.active,a.sel,a.kind,a.si],[b.undo,b.redo,b.active,b.sel,b.kind,b.si],m);eq(a.editing,false,'편집 진입 없음');};
+const shot=(p,name)=>p.screenshot({path:out+'/'+name+'.png'});
+async function setup(p){await p.evaluate(()=>{const t=window.tabula,w=t.wb(),cells={};for(let r=0;r<120;r++)for(let c=0;c<24;c++)cells[r+','+c]={raw:r===0&&c===0?'보존':String(r*100+c)};w.restore({sheets:[{name:'포인터 합성',zoom:100,cells},{name:'다른 합성',cells:{'0,0':{raw:'새 시트 보존'}}}]});t.switchSheet(1);t.switchSheet(0);t.selectCell(0,0);t.gv().setScroll(200,200);w.undoStack=[];w.redoStack=[];document.activeElement?.blur();});await raf(p);}
+async function test(name,fn,{size=[390,844],desktop=false,qat=false}={}){
+ if(only&&!name.includes(only))return;
+ const [width,height]=size,c=await browser.newContext({viewport:{width,height},deviceScaleFactor:1,isMobile:!desktop,hasTouch:!desktop}),p=await c.newPage(),pageErrors=[],pageWrites=[];
+ p.setDefaultTimeout(8000);p.on('pageerror',e=>{pageErrors.push(e.message);errors.push({name,error:e.message});});p.on('dialog',d=>d.type()==='beforeunload'?d.accept():d.dismiss());
+ await c.addInitScript(()=>{window.TABULA_STATIC=true;window.WIXEL_SKIP_START=true;localStorage.setItem('wixel:version','3.0.0');Object.defineProperty(navigator,'clipboard',{configurable:true,value:{readText:async()=>'',writeText:async()=>{},read:async()=>[],write:async()=>{}}});});
+ if(qat)await c.addInitScript(()=>localStorage.setItem('wixel.options',JSON.stringify({qatPosition:'below',qatOrder:['painter','mergeCenter','alignCenter','incDecimal','autosum','calcField','toggleGrid','condColorScale','condDataBar','refreshAll','textToColumns','replace','save','undo','redo','bold','italic','underline','alignLeft','alignRight','growFont','shrinkFont','copy','cut']})));
+ await c.route('**/*',route=>{const req=route.request(),u=new URL(req.url());if(!['GET','HEAD','OPTIONS'].includes(req.method())){writes.push(req.method()+' '+u.pathname);pageWrites.push(u.pathname);return route.abort();}if(u.origin!==new URL(url).origin||u.pathname.startsWith('/api/')){blocked.push(u.pathname);return route.abort();}return route.continue();});
+ try{await p.goto(url,{waitUntil:'domcontentloaded',timeout:60000});await p.waitForFunction(()=>window.tabula?.wb());for(const src of await p.locator('script[src]').evaluateAll(ns=>ns.map(n=>n.getAttribute('src'))))assets.add(src);await setup(p);if(!desktop&&!await p.evaluate(()=>window.tabula.mobile().active))await p.locator('#mobileModeToggle').click();await raf(p);await fn(p,c,width,height);eq(pageErrors,[],'페이지 오류');eq(pageWrites,[],'원격 쓰기');results.push({name,ok:true});console.log('OK '+name);}catch(e){results.push({name,ok:false,error:e.message});console.error('NG '+name+': '+e.stack);await shot(p,'failure-'+results.length).catch(()=>{});}finally{await c.close();}
+}
+async function gridPoint(p){const b=await p.locator('#gridView').boundingBox();return{x:b.x+Math.min(b.width-35,220),y:b.y+Math.min(b.height-50,220)};}
+async function chord(p,{order=['left','right'],release=['right','left'],cancel=null}={}){
+ const a=await gridPoint(p);await p.mouse.move(a.x,a.y);await p.mouse.down({button:order[0]});await p.mouse.down({button:order[1]});await p.mouse.move(a.x-90,a.y-85,{steps:6});await raf(p);const moved=await state(p);
+ if(cancel==='Escape')await p.keyboard.press('Escape');else if(cancel==='blur')await p.evaluate(()=>window.dispatchEvent(new Event('blur')));else if(cancel==='pointercancel')await p.locator('#gridView').dispatchEvent('pointercancel',{bubbles:true,pointerType:'mouse',pointerId:1,buttons:3});
+ const atCancel=await state(p);await p.mouse.up({button:release[0]});await p.mouse.move(a.x-125,a.y-110,{steps:3});await p.mouse.up({button:release[1]});await raf(p);return{moved,atCancel,after:await state(p),point:a};
+}
+async function dragStrip(p,selector,{target=null}={}){
+ const strip=p.locator(selector);await strip.evaluate(n=>n.scrollLeft=0);const n=target?p.locator(target):strip;if(target)await n.scrollIntoViewIfNeeded();const b=await n.boundingBox(),s=await strip.boundingBox(),start={x:Math.max(s.x+18,Math.min(s.x+s.width-24,b.x+b.width/2)),y:Math.max(s.y+3,Math.min(s.y+s.height-3,b.y+b.height/2))};
+ const geometry=await strip.evaluate(n=>({client:n.clientWidth,total:n.scrollWidth}));ok(geometry.total>geometry.client+25,'실제 가로 스크롤 가능한 도구 모음 '+selector);const before=await strip.evaluate(n=>n.scrollLeft);await p.mouse.move(start.x,start.y);await p.mouse.down();await p.mouse.move(Math.max(s.x+4,start.x-120),start.y,{steps:6});await p.mouse.up();await raf(p);return{before,after:await strip.evaluate(n=>n.scrollLeft),start,...geometry};
+}
+try{
+ for(const size of [[320,640],[390,844],[844,390],[1366,900]])await test(size.join('×')+' 리본 그룹명·수식줄·하단 여백 축소',async(p,c,w,h)=>{
+  const before=await state(p),m=await p.evaluate(()=>{const visible=n=>n.getBoundingClientRect().width>0&&n.getBoundingClientRect().height>0&&getComputedStyle(n).display!=='none',box=sel=>{const n=document.querySelector(sel),r=n.getBoundingClientRect(),s=getComputedStyle(n);return{...r.toJSON(),font:s.fontSize,paddingBottom:s.paddingBottom,transform:s.transform,visualFont:(()=>{let k=1;for(let a=n;a&&a.id!=='formulaRow';a=a.parentElement){const t=getComputedStyle(a).transform;if(t!=='none')k*=new DOMMatrixReadOnly(t).a;}return parseFloat(s.fontSize)*k;})(),zoom:s.zoom,clientHeight:n.clientHeight,clientWidth:n.clientWidth};};return{labels:[...document.querySelectorAll('#ribbon .rgroup-label')].filter(visible).map(n=>n.textContent),ribbon:box('#ribbon'),formula:box('#formulaRow'),name:box('#nameBox'),input:box('#formulaInput'),footer:box('.footer'),grid:box('#gridWrap'),app:box('#app')};});measurements.push({name:size.join('×')+' layout',...m});
+  eq(m.labels,[],'모바일 그룹명 숨김');ok(m.ribbon.height<=40,'리본 한 줄 높이');ok(m.formula.height<=27,'수식 입력줄 높이');for(const [name,b] of [['이름 상자',m.name],['수식 입력줄',m.input]]){ok(parseFloat(b.font)>=16,name+' CSS 16px 이상');ok(b.height<=25,name+' 실제 높이');ok(b.visualFont<=13.5,name+' 표시 글자 크기 축소');}ok(m.footer.height<=32,'과잉 safe-area 여백 없는 하단');ok(m.footer.bottom<=h+1&&m.app.height<=h+1,'화면 밖 여백 없음');await shot(p,size.join('×')+'-chrome');preserved(await state(p),before);
+ },{size});
+ for(const [selector,label,target] of [['#ribbon','리본 명령','#ribbon [data-ribbon-controls~="home:command:bold"]'],['#ribbonTabs','리본 탭',null],['#quickAccess','빠른 실행',null],['#sheetTabs','시트 탭',null]])await test(label+' 왼쪽 드래그는 가로 이동하고 클릭 명령을 실행하지 않는다',async p=>{
+  if(selector==='#sheetTabs')await p.evaluate(()=>{const t=window.tabula,w=t.wb();w.transact(()=>{for(let i=2;i<12;i++)w.addSheet('추가 합성 '+i);});t.switchSheet(1);t.switchSheet(0);t.selectCell(0,0);});const before=await state(p),m=await dragStrip(p,selector,{target});ok(m.after>m.before+25,label+' 실제 좌드래그 스크롤 '+JSON.stringify(m));preserved(await state(p),before);eq((await state(p)).menus,0,'드래그 뒤 메뉴 없음');measurements.push({name:label+' drag',...m});
+ },{qat:selector==='#quickAccess'});
+ await test('리본 드래그 뒤 한 번 클릭과 휠은 정상 작동한다',async p=>{
+  const selector='#ribbon [data-ribbon-controls~="home:command:bold"]';await dragStrip(p,'#ribbon',{target:selector});await p.locator(selector).scrollIntoViewIfNeeded();await p.locator(selector).click();eq(await p.evaluate(()=>window.tabula.wb().styleAt(0,0,0).bold),true);await run(p,'undo');eq(!!await p.evaluate(()=>window.tabula.wb().styleAt(0,0,0).bold),false);const ribbon=p.locator('#ribbon');await ribbon.evaluate(n=>n.scrollLeft=0);const b=await ribbon.boundingBox();await p.mouse.move(b.x+b.width/2,b.y+b.height-3);await p.mouse.wheel(0,160);await p.waitForFunction(()=>document.querySelector('#ribbon').scrollLeft>0);ok(await ribbon.evaluate(n=>n.scrollLeft)>0);await p.mouse.wheel(0,-160);await p.waitForFunction(()=>document.querySelector('#ribbon').scrollLeft===0);
+ });
+ await test('데스크톱 글꼴 입력 안의 마우스 선택은 리본을 끌지 않는다',async p=>{
+  const input=p.locator('#ribbon .font-family');await input.scrollIntoViewIfNeeded();await input.focus();const before=await p.locator('#ribbon').evaluate(n=>n.scrollLeft),b=await input.boundingBox();await p.mouse.move(b.x+b.width-6,b.y+b.height/2);await p.mouse.down();await p.mouse.move(b.x+5,b.y+b.height/2,{steps:4});await p.mouse.up();eq(await p.locator('#ribbon').evaluate(n=>n.scrollLeft),before);eq(await p.evaluate(()=>document.activeElement===document.querySelector('#ribbon .font-family')),true);
+ },{size:[1366,900],desktop:true});
+ for(const order of [['left','right'],['right','left']])for(const release of [['left','right'],['right','left']])await test('격자 '+order.join('→')+' 누름·'+release.join('→')+' 해제는 선택을 유지하며 팬한다',async p=>{
+  const before=await state(p),r=await chord(p,{order,release});ok(r.moved.x>before.x+40&&r.moved.y>before.y+40,'가로·세로 손바닥 이동');preserved(r.moved,before);preserved(r.after,before);eq([r.after.x,r.after.y],[r.moved.x,r.moved.y],'한 버튼만 남으면 팬 중단');eq(r.after.menus,0,'해제 후 메뉴 없음');await shot(p,'grid-'+order[0]+'-'+release[0]);
+ });
+ for(const cancel of ['Escape','blur','pointercancel'])await test('격자 팬 중 '+cancel+' 취소는 다음 이동·클릭으로 누수되지 않는다',async p=>{
+  const before=await state(p),r=await chord(p,{cancel});ok(r.moved.x>before.x+40&&r.moved.y>before.y+40);preserved(r.after,before);eq([r.after.x,r.after.y],[r.atCancel.x,r.atCancel.y],'취소 후 위치 고정');await p.mouse.move(r.point.x-145,r.point.y-125);eq([(await state(p)).x,(await state(p)).y],[r.after.x,r.after.y]);const pos=await p.evaluate(pt=>window.tabula.gv().hitTest(pt.x,pt.y),r.point);await p.mouse.click(r.point.x,r.point.y);eq((await state(p)).active,{r:pos.r,c:pos.c},'다음 일반 클릭 정상');eq((await state(p)).undo,before.undo);eq((await state(p)).menus,0);
+ });
+ await test('격자 팬은 시작 셀의 가상 DOM 교체 뒤에도 긴 이동과 복귀를 이어간다',async p=>{
+  const a=await gridPoint(p),before=await state(p);await p.evaluate(pt=>{window.__panStartNode=document.elementFromPoint(pt.x,pt.y);},a);await p.mouse.move(a.x,a.y);await p.mouse.down({button:'left'});await p.mouse.down({button:'right'});
+  for(let i=0;i<3;i++){await p.mouse.move(-400,-300,{steps:6});await raf(p);const far=await state(p);ok(far.x>before.x+500&&far.y>before.y+500,'화면 밖까지 충분한 가로·세로 이동');eq(await p.evaluate(()=>window.__panStartNode.isConnected),false,'시작 DOM이 실제로 교체됨');preserved(far,before);await p.mouse.move(a.x-80,a.y-60,{steps:6});await raf(p);const back=await state(p);ok(Math.abs(back.x-before.x-80/before.z)<1&&Math.abs(back.y-before.y-60/before.z)<1,'프레임 갱신 후 같은 제스처로 복귀 '+JSON.stringify({before:[before.x,before.y,before.z],back:[back.x,back.y]}));preserved(back,before);}
+  await p.mouse.up({button:'right'});await p.mouse.up({button:'left'});eq((await state(p)).menus,0);await shot(p,'grid-long-pan-return');
+ });
+ await test('양버튼 팬 뒤 터치와 펜으로 도구를 열면 이전 클릭 차단이 남지 않는다',async(p,c)=>{
+  const cdp=await c.newCDPSession(p);for(const pointerType of ['touch','pen']){const before=await state(p);await chord(p);const b=await p.locator('#mobileTools').boundingBox(),point={x:b.x+b.width/2,y:b.y+b.height/2};
+    if(pointerType==='touch'){await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{...point,id:1,radiusX:4,radiusY:4,force:1}]});await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});}
+    else{await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',buttons:1,clickCount:1,pointerType:'pen'});await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',buttons:0,clickCount:1,pointerType:'pen'});}
+    const d=p.getByRole('dialog',{name:'모바일 작업 도구',exact:true});await d.waitFor();ok(await d.isVisible(),pointerType+' 실제 도구 클릭 작동');await p.keyboard.press('Escape');await d.waitFor({state:'detached'});preserved(await state(p),before);
+  }
+ });
+ await test('양버튼 팬 뒤 Enter와 Space로 도구를 열면 이전 클릭 차단이 남지 않는다',async p=>{
+  for(const key of ['Enter','Space']){const before=await state(p);await chord(p);await p.locator('#mobileTools').focus();await p.keyboard.press(key);const d=p.getByRole('dialog',{name:'모바일 작업 도구',exact:true});await d.waitFor();ok(await d.isVisible(),key+' 버튼 활성화');await p.keyboard.press('Escape');await d.waitFor({state:'detached'});preserved(await state(p),before);}
+ });
+ await test('격자 팬 중 시트 전환은 새 시트 선택·뷰를 변경하지 않는다',async p=>{
+  const a=await gridPoint(p);await p.mouse.move(a.x,a.y);await p.mouse.down({button:'left'});await p.mouse.down({button:'right'});await p.mouse.move(a.x-40,a.y-40);await p.evaluate(()=>{const t=window.tabula;t.switchSheet(1);t.selectCell(0,0);});const before=await state(p);await p.mouse.move(a.x-100,a.y-100);await p.mouse.up({button:'right'});await p.mouse.up({button:'left'});await raf(p);preserved(await state(p),before);eq([(await state(p)).x,(await state(p)).y],[before.x,before.y]);
+ });
+ await test('일반 왼쪽 범위 드래그 시작 뒤 오른쪽 버튼을 눌러도 팬으로 바뀌지 않는다',async p=>{
+  const a=await gridPoint(p),before=await state(p);await p.mouse.move(a.x-90,a.y-70);await p.mouse.down({button:'left'});await p.mouse.move(a.x-40,a.y-30,{steps:4});await p.mouse.down({button:'right'});await p.mouse.move(a.x+10,a.y+20,{steps:4});eq(await p.locator('body').evaluate(n=>n.classList.contains('grid-mouse-pan')),false);await p.mouse.up({button:'right'});await p.mouse.up({button:'left'});await raf(p);const after=await state(p);eq([after.x,after.y],[before.x,before.y]);eq([after.book,after.undo],[before.book,before.undo]);ok(after.sel.r2>after.sel.r1||after.sel.c2>after.sel.c1,'일반 범위 선택 유지');await p.keyboard.press('Escape');
+ });
+ await test('미니 글꼴·크기 전체 목록은 실제 셀에 적용되고 한 번 Undo로 복원된다',async p=>{
+  await p.evaluate(()=>window.tabula.selectCell(0,0));const before=await state(p);
+  const open=async()=>{const a=await p.evaluate(()=>{const b=window.tabula.gv().clientRect({r1:0,c1:0,r2:0,c2:0});return{x:(b.left+b.right)/2,y:(b.top+b.bottom)/2};});await p.mouse.click(a.x,a.y,{button:'right'});await p.locator('.context-mini-toolbar').waitFor();};
+  await open();await p.locator('.mini-font-picker button').click();await p.locator('.font-menu .font-item[title=Arial]').click();eq(await p.evaluate(()=>window.tabula.wb().styleAt(0,0,0).font),'Arial');eq((await state(p)).undo,before.undo+1);await run(p,'undo');eq((await state(p)).book,before.book);
+  await open();await p.locator('.mini-size-picker button').click();await p.getByRole('menuitem',{name:'18',exact:true}).click();eq(await p.evaluate(()=>window.tabula.wb().styleAt(0,0,0).size),18);eq((await state(p)).undo,before.undo+1);await run(p,'undo');eq((await state(p)).book,before.book);eq(await p.evaluate(()=>window.tabula.wb().getRaw(0,0,0)),'보존');
+ });
+ await test('리본 터치 스와이프는 가로 스크롤과 기존 문서 상태를 유지한다',async(p,c)=>{
+  const ribbon=p.locator('#ribbon');await ribbon.evaluate(n=>n.scrollLeft=0);const b=await ribbon.boundingBox(),before=await state(p),cdp=await c.newCDPSession(p),send=(type,points)=>cdp.send('Input.dispatchTouchEvent',{type,touchPoints:points.map((v,i)=>({...v,id:i+1,radiusX:4,radiusY:4,force:1}))});const a={x:b.x+b.width-35,y:b.y+b.height/2};await send('touchStart',[a]);for(let i=1;i<=7;i++)await send('touchMove',[{x:a.x-i*22,y:a.y}]);await send('touchEnd',[]);await p.waitForFunction(()=>document.querySelector('#ribbon').scrollLeft>20);ok(await ribbon.evaluate(n=>n.scrollLeft)>20);preserved(await state(p),before);
+ });
+ await test('격자 터치 한 손 스크롤은 기존 선택·실행 취소를 유지한다',async(p,c)=>{
+  const s=await c.newCDPSession(p),a=await gridPoint(p),before=await state(p),send=(type,points)=>s.send('Input.dispatchTouchEvent',{type,touchPoints:points.map((v,i)=>({...v,id:i+1,radiusX:4,radiusY:4,force:1}))});await send('touchStart',[a]);for(let i=1;i<=6;i++)await send('touchMove',[{x:a.x-i*15,y:a.y-i*15}]);await send('touchEnd',[]);await raf(p);const after=await state(p);ok(after.x>before.x+40&&after.y>before.y+40);preserved(after,before);
+ });
+ await test('모바일 해제는 데스크톱 그룹명·수식줄과 일반 클릭을 복원한다',async p=>{
+  await p.locator('#mobileModeToggle').click();await p.waitForFunction(()=>window.tabula.mobile().active);await p.locator('#mobileModeToggle').click();await p.waitForFunction(()=>!window.tabula.mobile().active);eq(await p.locator('#ribbon .rgroup-label').first().isVisible(),true);ok((await p.locator('#formulaRow').boundingBox()).height>=27);const a=await gridPoint(p),hit=await p.evaluate(pt=>window.tabula.gv().hitTest(pt.x,pt.y),a);await p.mouse.click(a.x,a.y);eq((await state(p)).active,{r:hit.r,c:hit.c});
+ },{size:[1366,900],desktop:true});
+}finally{await browser.close();const result={url,simulation:'Chromium mouse/touch/viewport simulation; no physical iPhone/Safari guarantee',assets:[...assets],cases:results.length,passed:results.filter(x=>x.ok).length,checks,pageErrors:errors,remoteWrites:writes,blockedRequests:blocked,results};await writeFile(out+'/result.json',JSON.stringify(result,null,2));await writeFile(out+'/measurements.json',JSON.stringify(measurements,null,2));console.log(JSON.stringify(result));if(results.some(x=>!x.ok)||errors.length||writes.length)process.exitCode=1;}

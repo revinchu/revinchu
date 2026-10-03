@@ -331,7 +331,7 @@ let menuAnchor = null;
 let suppress = null;
 // 화면을 다시 그려 단추 요소가 바뀌어도 같은 단추로 알아보도록 (종류 · 데이터 · 제목)
 const anchorKey = (el) => `${el.tagName}|${String(el.className).replace(/\b(on|active|open|pressed)\b/g, '').trim()}|${JSON.stringify({ ...el.dataset })}|${el.getAttribute('title') ?? ''}`;
-export function openMenu(anchor, items, { minWidth, scroll, toolbar } = {}) {
+export function openMenu(anchor, items, { minWidth, scroll, toolbar, focus = true } = {}) {
   if (anchor instanceof Element && suppress && (suppress.el === anchor || suppress.key === anchorKey(anchor)) && Date.now() - suppress.t < 600) {
     suppress = null;
     return document.createElement('div'); // 호출한 쪽이 style 등을 만져도 안전하게
@@ -340,7 +340,7 @@ export function openMenu(anchor, items, { minWidth, scroll, toolbar } = {}) {
   closeMenus();
   menuAnchor = anchor instanceof Element ? anchor : null;
   const position = anchorRect && !anchor.isConnected ? { x: anchorRect.left, y: anchorRect.bottom + 2 } : anchor;
-  return buildMenu(position, items, { minWidth, scroll, toolbar });
+  return buildMenu(position, items, { minWidth, scroll, toolbar, focus });
 }
 
 /** 열린 메뉴 안의 단추에서 오른쪽에 하위 메뉴 (앞 메뉴는 그대로 둠) — 피벗 필터의 [레이블 필터 ▸] 등 */

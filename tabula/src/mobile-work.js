@@ -1,3 +1,4 @@
+import { installRibbonMouseDrag } from './mouse-work.js';
 // Device-only layout preferences; this module never changes workbook data.
 export const MOBILE_MODE_KEY = 'wixel.mobile-work.v1';
 export const MOBILE_DENSITY_KEY = 'wixel.mobile-density.v1';
@@ -54,6 +55,8 @@ export function installMobileWork({ button, onChange }) {
     // At either edge, do not send toolbar scrolling through to the sheet below.
     e.preventDefault();
   }, { passive: false });
+
+  installRibbonMouseDrag({ enabled: () => !!state?.active });
 
   const setPreference = value => {
     preference = ['auto', 'on', 'off'].includes(value) ? value : 'auto';

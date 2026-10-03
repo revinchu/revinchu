@@ -1618,6 +1618,34 @@ body.keytips #ribbon label[data-ribbon-command]:has(input[type="checkbox"]) { pa
 .cell-mini-toolbar .mini-size { flex:0 0 44px; width:44px; }
 .mini-fill::after,.mini-color::after { content:''; position:absolute; bottom:1px; left:3px; right:3px; height:3px; border:1px solid #0002; background:var(--mini-fill); }
 .mini-color::after { background:var(--mini-color); }
+/* 글꼴/크기 목록은 현재 입력값으로 필터링하지 않는 사용자 메뉴다. */
+.format-value-picker { display:inline-flex; align-items:stretch; min-width:0; vertical-align:middle; }
+.format-value-picker .format-picker-input { min-width:0; border-radius:2px 0 0 2px; border-right:0; }
+.format-picker-toggle { display:inline-flex; align-items:center; justify-content:center; gap:3px; min-width:16px; padding:0 2px; border:1px solid #c4c4c4; border-radius:0 2px 2px 0; background:#fff; color:inherit; font:inherit; cursor:pointer; }
+.format-picker-toggle:disabled { opacity:.45; cursor:default; }
+.format-picker-toggle:focus-visible { outline:2px solid var(--green); outline-offset:-2px; }
+.format-picker-value { display:none; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.format-picker-arrow { flex:none; font-size:10px; line-height:1; }
+.cell-mini-toolbar .mini-font-picker { flex:1 1 96px; min-width:65px; }
+.cell-mini-toolbar .mini-size-picker { flex:0 0 59px; width:59px; }
+.cell-mini-toolbar .mini-font-picker .mini-font { flex:1; width:0; min-width:0; }
+.cell-mini-toolbar .mini-size-picker .mini-size { flex:1; width:0; min-width:0; }
+.cell-mini-toolbar .format-picker-toggle { height:23px; box-sizing:border-box; }
+.format-picker-direct { display:flex; flex-direction:column; gap:8px; }
+body.mobile-work-mode .format-value-picker .format-picker-input { display:none; }
+body.mobile-work-mode .format-value-picker .format-picker-value { display:block; flex:1; text-align:left; }
+body.mobile-work-mode .format-value-picker .format-picker-toggle { width:100%; min-width:0!important; border-radius:2px; justify-content:space-between; padding:0 4px; }
+body.mobile-work-mode .format-value-picker.font-box { width:calc(var(--mobile-family,92px) + 18px); }
+body.mobile-work-mode .format-value-picker.font-box .format-picker-toggle.font-caret { width:100%; min-width:0!important; padding:0 4px; }
+body.mobile-work-mode .format-value-picker.font-size-picker { width:calc(var(--mobile-size,36px) + 14px); height:var(--mobile-control,24px); }
+body.mobile-work-mode .cell-mini-toolbar .format-picker-toggle { height:23px; min-height:0; font-size:12px; }
+@media (pointer:coarse) {
+  .format-value-picker .format-picker-input { display:none; }
+  .format-value-picker .format-picker-value { display:block; flex:1; text-align:left; }
+  .format-value-picker .format-picker-toggle { width:100%; min-width:0!important; border-radius:2px; justify-content:space-between; padding:0 4px; }
+  .format-value-picker.font-box { width:calc(var(--mobile-family,128px) + 18px); }
+  .format-value-picker.font-size-picker { width:calc(var(--mobile-size,46px) + 14px); }
+}
 @media print { .context-mini-toolbar { display:none!important; } }
 
 .color-palette-menu .swatch:focus-visible, .pattern-swatch:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; position: relative; z-index: 1; }
@@ -1665,11 +1693,12 @@ body.keytips #ribbon label[data-ribbon-command]:has(input[type="checkbox"]) { pa
 
 .cell-note-visible{position:absolute;z-index:25;width:190px;min-height:64px;padding:8px;background:#fff9cf;border:1px solid #a99552;box-shadow:2px 3px 5px #0002;color:#252525;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.4 Arial,sans-serif;pointer-events:none}.cell-note-visible>b{display:block;margin-bottom:5px}
 
+.formula-input-wrap { display:contents; }
 /* 모바일 도구 밀도는 문서의 셀 서식·저장 배율과 분리한다. */
 body.mobile-work-mode {
-  --mobile-hit:28px; --mobile-chrome:32px; --mobile-footer:32px;
+  --mobile-hit:28px; --mobile-chrome:32px; --mobile-footer:24px;
   --mobile-control:28px; --mobile-label:11.5px; --mobile-icon:17px;
-  --mobile-ribbon:58px; --mobile-family:100px; --mobile-size:40px;
+  --mobile-ribbon:36px; --mobile-family:100px; --mobile-size:40px;
 }
 body.mobile-work-mode #app { width:100%; max-width:100%; height:var(--mobile-vh,100dvh); min-height:0; overflow:hidden; }
 body.mobile-work-mode :is(.titlebar,.ribbon-tabs,.ribbon,.formula-row,.footer,.quick-access) { zoom:1; min-width:0; max-width:100%; }
@@ -1686,11 +1715,11 @@ body.mobile-work-mode .ribbon-tabs { flex:1 1 0; height:100%; padding:1px 0 0; g
 body.mobile-work-mode .ribbon-tab { flex:none; height:auto; min-width:0; padding:0 7px; font-size:var(--mobile-label); }
 body.mobile-work-mode :is(.ribbon-tabs .spacer,.ribbon-action) { display:none; }
 body.mobile-work-mode .ribbon { height:var(--mobile-ribbon); min-height:var(--mobile-ribbon); padding:3px 3px 0; overflow-x:auto; overflow-y:hidden; overscroll-behavior-x:contain; touch-action:pan-x; scrollbar-width:thin; }
-body.mobile-work-mode .rgroup { flex:none; height:calc(var(--mobile-control) + 18px); min-height:0; padding:0 4px; }
+body.mobile-work-mode .rgroup { flex:none; height:var(--mobile-control); min-height:0; padding:0 4px; }
 body.mobile-work-mode .rgroup:has(.rgroup-launcher) { padding-right:23px; }
 body.mobile-work-mode .rgroup-body { height:var(--mobile-control); flex:none; align-items:center; gap:2px; }
 body.mobile-work-mode .ribbon :is(.rcol,.rrow) { display:contents; }
-body.mobile-work-mode .rgroup-label { height:18px; line-height:18px; font-size:10px; }
+body.mobile-work-mode .rgroup-label { display:none; }
 body.mobile-work-mode .rgroup-launcher { top:1px; bottom:auto; right:2px; width:20px; height:var(--mobile-control); font-size:12px; border-radius:3px; }
 body.mobile-work-mode .rbtn,
 body.mobile-work-mode .rbtn.medium { min-width:var(--mobile-control)!important; min-height:var(--mobile-control); height:var(--mobile-control); padding:0 3px; gap:2px; font-size:var(--mobile-label); }
@@ -1716,19 +1745,22 @@ body.mobile-work-mode .rg-strip > * { max-height:var(--mobile-control); }
 body.mobile-work-mode .quick-access.below { flex-wrap:nowrap; height:calc(var(--mobile-control) + 2px); min-height:0; padding:0 3px; gap:0; overflow-x:auto; overflow-y:hidden; scrollbar-width:none; overscroll-behavior-x:contain; touch-action:pan-x; }
 body.mobile-work-mode .quick-access.below .tb-btn { flex:0 0 var(--mobile-control); width:var(--mobile-control); height:var(--mobile-control); }
 body.mobile-work-mode .quick-access.below .tb-btn svg { width:var(--mobile-icon); height:var(--mobile-icon); }
-body.mobile-work-mode .formula-row { height:32px; padding:1px 3px; gap:2px; }
-body.mobile-work-mode .formula-row .namebox { width:62px; }
-body.mobile-work-mode .namebox input { font-size:16px; }
-body.mobile-work-mode .namebox-caret { top:7px; right:3px; }
+/* Native editing stays at 16px to avoid iOS focus zoom; physical chrome is 11px. */
+body.mobile-work-mode .formula-row { --formula-scale:.6875; height:24px; padding:1px 3px; gap:2px; }
+body.mobile-work-mode .formula-row .namebox { width:46px; height:100%; overflow:hidden; }
+body.mobile-work-mode .namebox input { font-size:16px; line-height:20px; width:calc(100% / var(--formula-scale)); height:calc(100% / var(--formula-scale)); padding:0 20px 0 5px; transform:scale(var(--formula-scale)); transform-origin:top left; }
+body.mobile-work-mode .namebox-caret { top:5px; right:2px; width:10px; height:10px; pointer-events:none; }
 body.mobile-work-mode .fx-divider { display:none; }
-body.mobile-work-mode .fx-btn { flex:0 0 26px; width:26px; min-height:26px; }
+body.mobile-work-mode .fx-btn { flex:0 0 20px; width:20px; min-height:20px; height:20px; padding:2px; }
+body.mobile-work-mode .fx-btn svg { width:15px; height:15px; }
 body.mobile-work-mode .fx-btn:disabled { display:none; }
-body.mobile-work-mode #formulaInput { font-size:16px; line-height:22px; padding:3px; }
-body.mobile-work-mode .formula-row.tall { height:70px; }
-body.mobile-work-mode .formula-row.tall #formulaInput { height:66px; }
+body.mobile-work-mode .formula-input-wrap { display:block; position:relative; flex:1 1 0; min-width:0; height:100%; overflow:hidden; }
+body.mobile-work-mode #formulaInput { position:absolute; inset:0 auto auto 0; font-size:16px; line-height:22px; padding:3px 5px; width:calc(100% / var(--formula-scale)); height:calc(100% / var(--formula-scale)); transform:scale(var(--formula-scale)); transform-origin:top left; }
+body.mobile-work-mode .formula-row.tall { height:60px; }
+body.mobile-work-mode .formula-row.tall #formulaInput { height:calc(100% / var(--formula-scale)); }
 body.mobile-work-mode .grid-wrap { min-width:0; min-height:96px; }
 /* 시트·새 시트·보기·배율은 하나의 행. 긴 시트 이름만 내부에서 스크롤한다. */
-body.mobile-work-mode .footer { display:flex; align-items:stretch; min-width:0; overflow:hidden; padding-bottom:env(safe-area-inset-bottom,0px); background:var(--ribbon-bg); }
+body.mobile-work-mode .footer { display:flex; align-items:stretch; min-width:0; overflow:hidden; padding-bottom:max(0px, calc(env(safe-area-inset-bottom,0px) - var(--mobile-footer))); background:var(--ribbon-bg); }
 body.mobile-work-mode .sheetbar { flex:1 1 0; min-width:0; height:var(--mobile-footer); padding:0; }
 body.mobile-work-mode .sheet-nav { flex:0 0 18px; width:18px; min-width:0; height:100%; margin:0; padding:1px; }
 body.mobile-work-mode .sheet-nav svg { width:12px; height:12px; }
@@ -1895,14 +1927,14 @@ body.mobile-work-mode .wixel-hub .btn { min-height:40px; }
 
 /* 촘촘하게: 한 줄 구성은 유지하며 버튼·입력·견본을 함께 축소한다. */
 body.mobile-work-mode.mobile-compact {
-  --mobile-hit:24px; --mobile-chrome:28px; --mobile-footer:28px;
+  --mobile-hit:24px; --mobile-chrome:28px; --mobile-footer:24px;
   --mobile-control:24px; --mobile-label:11px; --mobile-icon:15px;
-  --mobile-ribbon:52px; --mobile-family:92px; --mobile-size:36px;
+  --mobile-ribbon:32px; --mobile-family:92px; --mobile-size:36px;
 }
 body.mobile-work-mode.mobile-compact .ribbon-tab { padding:0 6px; }
 body.mobile-work-mode.mobile-compact .mobile-tools-toggle { font-size:15px; }
-body.mobile-work-mode.mobile-compact .formula-row { height:30px; }
-body.mobile-work-mode.mobile-compact #formulaInput { padding:2px 3px; }
+body.mobile-work-mode.mobile-compact .formula-row { height:24px; }
+body.mobile-work-mode.mobile-compact #formulaInput { padding:3px 5px; }
 body.mobile-work-mode.mobile-compact .formula-row.tall { height:70px; }
 /* 밀도는 메뉴 내용·동작을 바꾸지 않고 여백만 줄인다. */
 body.mobile-work-mode.mobile-compact .menu { padding-top:3px; padding-bottom:3px; }
@@ -2509,3 +2541,6 @@ body.mobile-work-mode .slicer-style-menu .style-grid.slstyles { width:min(336px,
 
 /* 상시 접근키를 포함한 셀 스타일 이름을 줄바꿈하여 표시합니다. */
 .style-chip[data-cell-style] { min-width:0; height:auto; min-height:32px; padding:5px 4px; white-space:normal; overflow:visible; text-overflow:clip; word-break:keep-all; overflow-wrap:anywhere; line-height:1.4; }
+
+body.ribbon-mouse-drag, body.ribbon-mouse-drag *, body.grid-mouse-pan, body.grid-mouse-pan * { cursor:grabbing!important; user-select:none!important; }
+body.mobile-work-mode :is(.app-header,.ribbon,.quick-access,.formula-row,.footer) { -webkit-text-size-adjust:100%; text-size-adjust:100%; }

@@ -646,7 +646,11 @@ export class GridView {
     this.z = pct / 100;
     this._cw = null;
     this._ch = null;
-    this.viewEl.style.zoom = this.z;
+    // 100%에서 정한 글자 폭·줄바꿈을 그대로 확대/축소한다. CSS zoom은
+    // 작은 배율에서 글꼴을 다시 조판해 경계에 맞던 한 줄을 두 줄로 만들 수 있다.
+    this.viewEl.style.zoom = '1';
+    this.viewEl.style.transformOrigin = '0 0';
+    this.viewEl.style.transform = `scale(${this.z})`;
     // 선 두께·픽셀 정렬·배경 마스크는 배율별 값이다. 보이는 셀 범위가
     // 같아도 이전 DOM을 확대 재사용하면 1px 선까지 4배로 굵어진다.
     for (const p of this.panes) p.win = null;
