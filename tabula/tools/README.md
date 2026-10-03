@@ -472,3 +472,14 @@ node tools/mobile-layout.mjs
 ## 모바일 한 줄 도구와 우클릭
 
 `node tools/mobile-compact-chrome.mjs`는 상·하단 한 줄 기하, 작은 글꼴/크기 입력, 실제 마우스 휠 가로 탐색, 우클릭 도구의 겹침/키힌트/브라우저 기본 메뉴 차단 및 문서 불변을 검사한다. `WIXEL_URL`로 소스나 Cloudflare 번들을 선택하고 `WIXEL_MOBILE_COMPACT_OUT`으로 D: 캡처 폴더, `WIXEL_MOBILE_COMPACT_FILTER`로 시나리오 이름 일부를 지정한다. `mobile-layout.mjs`는 전체 상황별 리본의 두 밀도, `mobile-popups.mjs`는 팝업 최초 배치·현재 차트 요소 전환·파일 저장 확인과 실제 PDF를 함께 검사한다. 합성 문서만 사용하며 브라우저 검증 범위는 [52번 문서](../docs/codex/52_모바일한줄도구와우클릭.md)를 참고한다.
+
+
+## 로컬 기능 감사 배치
+
+`node tools/functional-audit.mjs --list`는 기존 도구를 기능·실행 전제별로 분류한 manifest를 만듭니다. 기본 실행은 격리 합성 브라우저/순수 Node 검사만 동시 2개까지 실행하며, `--only settings-ux,keys`, `--concurrency 1`, `--timeout 600`, `--out D:/Codex/Temp/wixel-functional-audit`로 범위를 지정할 수 있습니다. `WIXEL_URL`은 현재 로컬 소스 서버로 지정합니다. 소스 모듈을 직접 읽는 도구가 있으므로 전체 배치를 공개 주소나 번들에 그대로 적용하지 않습니다.
+
+각 도구의 종료 코드·실행 시간·요약·오류·실행 전후 주요 제품 파일 해시·원문 로그를 저장합니다. `--resume`은 기록된 주요 파일 해시가 같은 기존 통과 항목만 재사용합니다. 새 실행의 해시 범위는 `src/**/*.js` 전체(추가·삭제 포함), `styles.css`, `index.html`이며 `sourceScope`에 정확한 목록을 저장합니다. 이전 감사 기록의 5개 파일 범위는 그대로 남기고 새 전체 범위 결과로 간주하거나 재개에 재사용하지 않습니다. 이 해시는 서버가 실제 제공하는 번들의 일치까지 증명하지 않습니다. 동일 릴리즈의 최종 통합 확인은 별도 빌드 검사로 구분합니다. 명시적 파일 입력이 필요한 비교/Excel 도구, 실제 보관함 쓰기 도구, 다른 담당자의 검사, 단독 실행해야 하는 성능 도구와 데이터 갱신 스크립트는 자동 배치에서 제외하고 사유를 manifest에 남깁니다.
+
+`audit-playwright.mjs`와 `audit-network-preload.mjs`는 이 배치 전용 가드입니다. 새 headless 브라우저만 허용하며 외부/API/쓰기 요청의 실제 전송을 차단합니다. 개별 도구가 제공하는 합성 API 응답은 허용하므로 서버 오류·충돌·저장 동작을 원격 문서 없이 시험합니다. 파일 선택기는 각 도구의 메모리 모의 구현을 사용하며 실제 사용자 문서나 열린 브라우저에 연결하지 않습니다. 가드가 막은 요청과 제품 오류는 구분해야 합니다.
+
+`node tools/functional-audit.mjs --only command-connection-audit`는 등록된 COMMANDS/MENUS와 모든 리본 조작·키팁의 연결 목록을 JSON으로 저장합니다. 함수 메뉴의 `fn:` 동적 라우터도 별도로 기록합니다. 이 연결 검사나 명령 열기 smoke, 기존 기능 도구의 통과 수는 모든 기능의 정확성 또는 Excel 완전 동등성을 뜻하지 않습니다. 실패 원인은 제품 결함·낡은 검사 계약·환경/fixture 부족으로 조사한 후 기록합니다.

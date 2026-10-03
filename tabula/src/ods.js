@@ -95,18 +95,19 @@ export function toOdfFormula(f) {
 /** .ods 바이트(또는 .fods 글자) → { data: { sheets }, warnings } */
 export function readOds(input) {
   let xml;
-  let stylesXml = null;
+  let stylesXml = null, settingsXml = null;
   if (typeof input === 'string') xml = input;
   else {
     const files = unzip(input instanceof Uint8Array ? input : new Uint8Array(input));
     xml = textOf(files['content.xml']);
     stylesXml = textOf(files['styles.xml']);
+    settingsXml = textOf(files['settings.xml']);
     if (!xml) throw new Error('OpenDocument 스프레드시트(.ods)가 아닙니다');
   }
   const root = parseXml(xml);
   const styleRoots = [root, stylesXml ? parseXml(stylesXml) : null].filter(Boolean);
   // 스타일: 열 너비 · 행 높이 · 셀 서식 · 숫자 형식
-  const colW = {}; const rowH = {}; const cellSt = {}; const numSt = {};
+  const colW = {}; const rowH = {}; const cellSt = {}; const numSt = {}; const tableHidden = {};
   for (const sr of styleRoots) {
     for (const holder of [child(sr, 'automatic-styles'), child(sr, 'styles')]) {
       for (const st of holder?.children ?? []) {
@@ -124,7 +125,7 @@ export function readOds(input) {
         }
         if (st.name !== 'style') continue;
         const fam = st.attrs['style:family'];
-        if (fam === 'table-column') { const w = toPx(child(st, 'table-column-properties')?.attrs['style:column-width']); if (w) colW[name] = w; } else if (fam === 'table-row') { const h = toPx(child(st, 'table-row-properties')?.attrs['style:row-height']); if (h) rowH[name] = h; } else if (fam === 'table-cell') {
+        if (fam === 'table') { tableHidden[name] = child(st, 'table-properties')?.attrs['table:display'] === 'false'; } else if (fam === 'table-column') { const w = toPx(child(st, 'table-column-properties')?.attrs['style:column-width']); if (w) colW[name] = w; } else if (fam === 'table-row') { const h = toPx(child(st, 'table-row-properties')?.attrs['style:row-height']); if (h) rowH[name] = h; } else if (fam === 'table-cell') {
           const s = {};
           const tp = child(st, 'text-properties')?.attrs ?? {};
           const cp = child(st, 'table-cell-properties')?.attrs ?? {};
@@ -160,9 +161,23 @@ export function readOds(input) {
   const body = child(child(root, 'body'), 'spreadsheet');
   const sheets = [];
   const warnings = [];
+  const found = new Set();
+  const scan = node => {
+    if (!node) return;
+    const a = node.attrs ?? {};
+    if (['true', '1'].includes(a['table:protected']) || ['true', '1'].includes(a['table:structure-protected'])) throw new Error('보호된 OpenDocument의 보호 규칙은 아직 지원하지 않습니다. 보호가 해제된 사본 또는 Excel .xlsx 파일을 여세요.');
+    if (node.name === 'content-validation' || a['table:content-validation-name']) found.add('데이터 유효성');
+    if (node.name === 'calculation-settings') found.add('계산 옵션');
+    if (node.name === 'page-layout' || a['table:print-ranges'] || node.name === 'table-header-rows' || node.name === 'table-header-columns') found.add('인쇄 및 반복 제목');
+    if (node.name === 'database-range' || node.name === 'filter') found.add('필터');
+    if (node.name === 'config-item' && /^(ShowGrid|GridColor|ShowZeroValues|ShowFormulas|HasColumnRowHeaders|ZoomValue|HorizontalSplit|VerticalSplit|HorizontalSplitPosition|VerticalSplitPosition|PositionLeft|PositionTop)$/.test(a['config:name'] ?? '')) found.add('보기 및 틀 고정');
+    for (const sub of node.children ?? []) scan(sub);
+  };
+  for (const sr of [...styleRoots, settingsXml ? parseXml(settingsXml) : null]) scan(sr);
+  if (found.size) warnings.push(`OpenDocument의 ${[...found].join(' · ')} 설정은 현재 가져오지 않습니다. 해당 설정을 확인하고 필요하면 .xlsx 원본을 사용하세요.`);
   for (const t of kids(body, 'table')) {
     const sheet = { name: (t.attrs['table:name'] ?? `Sheet${sheets.length + 1}`).slice(0, 31), cells: new CellMap(), colWidths: {}, rowHeights: {}, merges: [], hiddenRows: {}, hiddenCols: {} };
-    if (t.attrs['table:display'] === 'false') sheet.state = 'hidden';
+    if (t.attrs['table:display'] === 'false' || tableHidden[t.attrs['table:style-name']]) sheet.state = 'hidden';
     const colDefault = [];
     let c = 0;
     const cols = [];
@@ -178,17 +193,23 @@ export function readOds(input) {
         colDefault[c] = ds;
       }
     }
-    let r = 0;
+    let r = 0, hiddenRowCount = 0;
     const rows = [];
     const collectRows = (el) => { for (const k of el.children) { if (k.name === 'table-row') rows.push(k); else if (k.name === 'table-row-group' || k.name === 'table-header-rows' || k.name === 'table-rows') collectRows(k); } };
     collectRows(t);
     for (const row of rows) {
       const rep = Number(row.attrs['table:number-rows-repeated'] ?? 1);
+      if (!Number.isInteger(rep) || rep < 1) throw new Error('OpenDocument 반복 행 개수가 올바르지 않습니다.');
+      if (row.attrs['table:visibility'] === 'collapse') {
+        hiddenRowCount += Math.min(rep, Math.max(0, 1048576 - r));
+        if (hiddenRowCount > 100000) throw new Error('OpenDocument 숨김 행이 100,000개를 넘습니다. 대규모 숨김 구간은 아직 지원하지 않으므로 .xlsx 형식으로 여세요.');
+      }
       const cellsIn = row.children.filter((k) => k.name === 'table-cell' || k.name === 'covered-table-cell');
       const hasContent = cellsIn.some((k) => k.children.length || k.attrs['office:value-type'] || k.attrs['table:formula'] || k.attrs['table:number-columns-spanned'] || k.attrs['table:number-rows-spanned'] || k.attrs['table:style-name']);
       if (!hasContent) {
         const h = rowH[row.attrs['table:style-name']];
         if (h && rep < 1000) for (let i = 0; i < rep; i++) sheet.rowHeights[r + i] = h;
+        if (row.attrs['table:visibility'] === 'collapse') for (let i = 0; i < Math.min(rep, 1048576 - r); i++) sheet.hiddenRows[r + i] = true;
         r += rep;
         continue;
       }
@@ -306,10 +327,15 @@ export function writeOds(sheetsInfo, io) {
   };
   const tables = [];
   for (const sh of sheetsInfo) {
-    const { si, name, merges = [], hidden } = sh;
+    const { si, name, merges = [], hidden, hiddenRows = {}, hiddenCols = {} } = sh;
     const used = io.used(si);
-    const rowsN = Math.min(Math.max(used.rows, ...merges.map((m) => m.r2 + 1)), 1048576);
-    const colsN = Math.min(Math.max(used.cols, ...merges.map((m) => m.c2 + 1)), 16384);
+    let rowsN = used.rows, colsN = used.cols;
+    for (const m of merges) { rowsN = Math.max(rowsN, m.r2 + 1); colsN = Math.max(colsN, m.c2 + 1); }
+    const contentRowsN = Math.min(rowsN, 1048576);
+    const hiddenRowIndices = Object.keys(hiddenRows).filter(r => hiddenRows[r] && Number.isInteger(Number(r)) && Number(r) >= 0 && Number(r) < 1048576).map(Number).sort((a,b) => a-b);
+    for (const r of hiddenRowIndices) rowsN = Math.max(rowsN, r + 1);
+    for (const c of Object.keys(hiddenCols)) if (hiddenCols[c]) colsN = Math.max(colsN, Number(c) + 1);
+    rowsN = Math.min(rowsN, 1048576); colsN = Math.min(colsN, 16384);
     const mergeAt = new Map();
     const covered = new Set();
     for (const m of merges) {
@@ -317,9 +343,9 @@ export function writeOds(sheetsInfo, io) {
       for (let r = m.r1; r <= m.r2; r++) for (let c = m.c1; c <= m.c2; c++) if (r !== m.r1 || c !== m.c1) covered.add(`${r},${c}`);
     }
     const colsXml = [];
-    for (let c = 0; c < Math.max(1, colsN); c++) colsXml.push(`<table:table-column table:style-name="${colStyle(io.colWidth(si, c))}"/>`);
+    for (let c = 0; c < Math.max(1, colsN); c++) colsXml.push(`<table:table-column table:style-name="${colStyle(io.colWidth(si, c))}"${hiddenCols[c] ? ' table:visibility="collapse"' : ''}/>`);
     const rowsXml = [];
-    for (let r = 0; r < rowsN; r++) {
+    for (let r = 0; r < contentRowsN; r++) {
       const cells = [];
       let blank = 0;
       const flush = () => { if (blank) { cells.push(`<table:table-cell${blank > 1 ? ` table:number-columns-repeated="${blank}"` : ''}/>`); blank = 0; } };
@@ -353,8 +379,16 @@ export function writeOds(sheetsInfo, io) {
         cells.push(`<table:table-cell ${a.filter(Boolean).join(' ')}>${body}</table:table-cell>`);
       }
       const h = io.rowHeight(si, r);
-      rowsXml.push(`<table:table-row${h ? ` table:style-name="${rowStyle(h)}"` : ''}>${cells.join('') || '<table:table-cell/>'}</table:table-row>`);
+      rowsXml.push(`<table:table-row${hiddenRows[r] ? ' table:visibility="collapse"' : ''}${h ? ` table:style-name="${rowStyle(h)}"` : ''}>${cells.join('') || '<table:table-cell/>'}</table:table-row>`);
     }
+    // 사용 영역 뒤의 희소 숨김 행은 빈 간격을 반복행으로 기록한다. 100만 행을 셀 단위로 훑지 않는다.
+    let tail = contentRowsN;
+    const emptyRows = (start, count, hidden) => {
+      if (!count) return;
+      const h = io.rowHeight(si, start);
+      rowsXml.push(`<table:table-row${count > 1 ? ` table:number-rows-repeated="${count}"` : ''}${hidden ? ' table:visibility="collapse"' : ''}${h ? ` table:style-name="${rowStyle(h)}"` : ''}><table:table-cell/></table:table-row>`);
+    };
+    for (const r of hiddenRowIndices) if (r >= contentRowsN) { emptyRows(tail, r - tail, false); emptyRows(r, 1, true); tail = r + 1; }
     if (!rowsXml.length) rowsXml.push('<table:table-row><table:table-cell/></table:table-row>');
     tables.push(`<table:table table:name="${esc(name)}"${hidden ? ' table:style-name="taHidden"' : ''}>${colsXml.join('')}${rowsXml.join('')}</table:table>`);
   }

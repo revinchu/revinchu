@@ -52,11 +52,11 @@ try {
     await cur.selectOption(original[1]); await search.fill('굵게'); assert.deepEqual(await listValues(all), ['bold', 'slicerBold']);
     assert.deepEqual(await listValues(cur), original); assert.equal(await cur.inputValue(), original[1]);
     await search.fill('없는명령999'); assert.deepEqual(await listValues(all), []); assert.deepEqual(await listValues(cur), original); assert.equal(await cur.inputValue(), original[1]);
-    await search.fill('굵게'); await all.selectOption('bold'); await d.getByRole('button', { name: '추가(A) >>', exact: true }).click();
+    await search.fill('굵게'); await all.selectOption('bold'); await d.getByRole('button', { name: '추가', exact: true }).click();
     assert.deepEqual(await listValues(cur), [...original, 'bold']); await d.getByRole('button', { name: '취소', exact: true }).click(); assert.deepEqual(await qat(p), original);
     d = await open(p); await d.getByRole('tab', { name: '빠른 실행 도구 모음', exact: true }).click();
     all = d.getByRole('listbox', { name: '사용 가능한 명령', exact: true }); cur = d.getByRole('listbox', { name: '현재 도구 모음 순서', exact: true }); search = d.getByRole('searchbox', { name: '빠른 실행 명령 검색', exact: true });
-    await search.fill('굵게'); await all.selectOption('bold'); await d.getByRole('button', { name: '추가(A) >>', exact: true }).click();
+    await search.fill('굵게'); await all.selectOption('bold'); await d.getByRole('button', { name: '추가', exact: true }).click();
     await cur.selectOption(original[1]); await d.getByRole('button', { name: '위로', exact: true }).click();
     const expected = [original[1], original[0], ...original.slice(2), 'bold']; assert.deepEqual(await listValues(cur), expected);
     await d.getByRole('button', { name: '확인', exact: true }).click(); assert.deepEqual(await qat(p), expected);

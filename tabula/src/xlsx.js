@@ -146,13 +146,40 @@ function colorOf(el, theme) {
   let hex = null;
   if (a.rgb) hex = a.rgb.length === 8 ? a.rgb.slice(2) : a.rgb;
   else if (a.theme !== undefined) hex = theme[Number(a.theme)] ?? null;
-  else if (a.indexed !== undefined) hex = INDEXED[Number(a.indexed)] ?? null;
+  else if (a.indexed !== undefined) hex = (theme.indexedColors ?? INDEXED)[Number(a.indexed)] ?? null;
   if (!hex) return null;
   hex = applyTint(hex.toUpperCase(), Number(a.tint || 0));
   return `#${hex.toLowerCase()}`;
 }
 
 const argb = (color) => `FF${String(color).replace('#', '').toUpperCase().padStart(6, '0').slice(0, 6)}`;
+
+// 계산/구조 보호 설정은 표준 속성만 보존한다. 엔진 미지원 옵션을 지원한다고 해석하지 않는다.
+const CALC_BOOLS = ['fullCalcOnLoad', 'iterate', 'fullPrecision', 'calcCompleted', 'calcOnSave', 'concurrentCalc', 'forceFullCalc'];
+const CALC_INTS = ['calcId', 'iterateCount', 'concurrentManualCount'];
+const WORKBOOK_PROTECTION_KEYS = ['workbookPassword', 'revisionsPassword', 'lockStructure', 'lockWindows', 'lockRevision', 'workbookAlgorithmName', 'workbookHashValue', 'workbookSaltValue', 'workbookSpinCount', 'revisionsAlgorithmName', 'revisionsHashValue', 'revisionsSaltValue', 'revisionsSpinCount'];
+function calculationFromAttrs(a) {
+  const out = { mode: ['auto', 'manual', 'autoNoTable'].includes(a.calcMode) ? a.calcMode : 'auto' };
+  for (const k of CALC_BOOLS) if (a[k] !== undefined) out[k] = !falseAttr(a[k]);
+  for (const k of CALC_INTS) if (/^\d+$/.test(String(a[k] ?? ''))) out[k] = Number(a[k]);
+  if (a.iterateDelta !== undefined && Number.isFinite(Number(a.iterateDelta)) && Number(a.iterateDelta) >= 0) out.iterateDelta = Number(a.iterateDelta);
+  if (['A1', 'R1C1'].includes(a.refMode)) out.refMode = a.refMode;
+  return out;
+}
+function calculationXml(calc) {
+  if (!calc) return '<calcPr calcId="191029" fullCalcOnLoad="1"/>';
+  const a = { calcMode: ['auto', 'manual', 'autoNoTable'].includes(calc.mode) ? calc.mode : 'auto' };
+  for (const k of CALC_BOOLS) if (typeof calc[k] === 'boolean') a[k] = calc[k] ? 1 : 0;
+  for (const k of CALC_INTS) if (Number.isSafeInteger(calc[k]) && calc[k] >= 0) a[k] = calc[k];
+  if (Number.isFinite(calc.iterateDelta) && calc.iterateDelta >= 0) a.iterateDelta = calc.iterateDelta;
+  if (['A1', 'R1C1'].includes(calc.refMode)) a.refMode = calc.refMode;
+  return `<calcPr${Object.entries(a).map(([k, v]) => ` ${k}="${esc(v)}"`).join('')}/>`;
+}
+function workbookProtectionXml(props) {
+  const a = Object.fromEntries(WORKBOOK_PROTECTION_KEYS.filter(k => props?.workbookProtection?.[k] !== undefined).map(k => [k, props.workbookProtection[k]]));
+  if (typeof props?.lockStructure === 'boolean') a.lockStructure = props.lockStructure ? '1' : '0';
+  return Object.keys(a).length ? `<workbookProtection${Object.entries(a).map(([k, v]) => ` ${k}="${esc(v)}"`).join('')}/>` : '';
+}
 
 // ───────────────────────── 표시 형식 ─────────────────────────
 export const BUILTIN_FMT = {
@@ -236,6 +263,8 @@ function readStyles(files, wbRels, theme) {
   const xml = rel && textOf(files[rel.target]);
   if (!xml) return { xfs: [], dxfs: [], defaultFont: null };
   const root = parseXml(xml);
+  const indexed = kids(child(child(root, 'colors'), 'indexedColors'), 'rgbColor');
+  if (indexed.length) theme.indexedColors = indexed.map((c, i) => /^[0-9a-f]{6}([0-9a-f]{2})?$/i.test(c.attrs.rgb ?? '') ? c.attrs.rgb.slice(-6).toUpperCase() : INDEXED[i]);
   const numFmts = {};
   for (const f of kids(child(root, 'numFmts'), 'numFmt')) numFmts[f.attrs.numFmtId] = f.attrs.formatCode;
   const fontOf = (f) => {
@@ -930,6 +959,15 @@ function* readSheet(files, path, ctx) {
     sheet.view = { top: tlc?.r1 ?? 0, left: tlc?.c1 ?? 0, ...(act ? { r: act.r1, c: act.c1 } : {}) };
   }
   if (['normal', 'pageBreakPreview', 'pageLayout'].includes(sv0?.attrs.view)) sheet.view = { ...(sheet.view ?? {}), mode: sv0.attrs.view };
+  for (const [attr, key] of [['showRowColHeaders', 'headers'], ['showFormulas', 'showFormulas']]) {
+    if (sv0?.attrs[attr] !== undefined) sheet.view = { ...(sheet.view ?? {}), [key]: !falseAttr(sv0.attrs[attr]) };
+  }
+  if (sv0 && falseAttr(sv0.attrs.defaultGridColor) && sv0.attrs.colorId !== undefined) {
+    // Excel은 눈금선에 사용자 지정 셀 팔레트가 아닌 고정 ICV 색을 사용한다.
+    const index = Number(sv0.attrs.colorId), own = descendants(child(root, 'extLst'), 'gridColor').find(n => n.attrs['xmlns:wx'] === 'https://wixel.app/view/1' && Number(n.attrs.nativeId) === index);
+    const gridColor = /^#[0-9a-f]{6}$/i.test(own?.attrs.rgb ?? '') ? own.attrs.rgb.toLowerCase() : INDEXED[index] ? `#${INDEXED[index].toLowerCase()}` : null;
+    if (gridColor) sheet.view = { ...(sheet.view ?? {}), gridColor };
+  }
   sheet.fileValues = true; // 셀의 파일 계산 결과를 그대로 씀 (바뀌기 전까지)
 
   const af = child(root, 'autoFilter');
@@ -1994,7 +2032,9 @@ function readChart(files, path, theme = {}) {
       const mSize = Number(child(child(ser, 'marker'), 'size')?.attrs.val ?? 0);
       if (mSize) f.markerSize = mSize;
       const dsh = DASH_FROM[child(child(spPr, 'ln'), 'prstDash')?.attrs.val];
-      if (dsh && gType === 'line') f.dash = dsh;
+      if (dsh && (gType === 'line' || gType === 'scatter')) f.dash = dsh;
+      const smoothValue = child(ser, 'smooth')?.attrs.val;
+      if (smoothValue !== undefined) f.smooth = smoothValue === '1' || smoothValue === 'true';
       if ((gType === 'bar' || gType === 'column') && child(spPr, 'ln') && child(child(spPr, 'ln'), 'solidFill')) f.outline = dmlColor(child(child(spPr, 'ln'), 'solidFill'), theme) ?? undefined;
       const tl = child(ser, 'trendline');
       if (tl) {
@@ -2821,9 +2861,14 @@ function* readXlsxSteps(files) {
   pushAll(sheets, extSheets);
   if (unsupported) warnings.push(`지원하지 않는 함수가 쓰인 수식 ${unsupported}개는 원문과 파일에 저장된 계산 결과를 보존합니다. 관련 입력이 바뀌면 오래된 값을 오류로 표시하므로 [계산 상태 확인]을 확인하세요.`);
   if (files.__xlsb?.unsupported) warnings.push(`바이너리 통합 문서(.xlsb)에서 해석하지 못한 수식 ${files.__xlsb.unsupported}개는 저장된 계산 결과(값)로 가져왔습니다.`);
+  for (const warning of new Set(files.__xlsb?.warnings ?? [])) warnings.push(warning);
   pushAll(warnings, [...ctx.warnings]);
   if (!sheets.length) throw new Error('가져올 시트가 없습니다');
   const data = { sheets, ...(date1904 ? { date1904: true } : {}) };
+  const cp = child(wbRoot, 'calcPr');
+  if (cp) data.calculation = calculationFromAttrs(cp.attrs);
+  if (data.calculation?.iterate) warnings.push('반복 계산 설정은 파일에 보존하지만 현재 계산 엔진에서 반복 계산을 실행하지 않습니다. 순환 참조 결과를 확인하세요.');
+  if (data.calculation?.fullPrecision === false) warnings.push('표시된 정밀도로 계산 설정은 파일에 보존하지만 현재 계산은 원래 숫자의 정밀도를 사용합니다.');
   if (ctx.pivotSnapshots) data.pivotSnapshots = ctx.pivotSnapshots;
   // 자동 높이로 맞출 행 (화면에서 글자 크기를 재어 정함 — 앱이 열 때 한 번 계산)
   if (sheets.some((sh) => sh.fitRows)) data.fitRows = sheets.map((sh) => { const f = sh.fitRows ? [...sh.fitRows] : null; delete sh.fitRows; return f; });
@@ -2854,6 +2899,7 @@ function* readXlsxSteps(files) {
     }
     const wp = child(wbRoot, 'workbookProtection');
     if (wp && (wp.attrs.lockStructure === '1' || wp.attrs.lockStructure === 'true')) props.lockStructure = true;
+    if (wp) props.workbookProtection = Object.fromEntries(WORKBOOK_PROTECTION_KEYS.filter(k => wp.attrs[k] !== undefined).map(k => [k, wp.attrs[k]]));
     const fs = child(wbRoot, 'fileSharing');
     if (fs && (fs.attrs.readOnlyRecommended === '1' || fs.attrs.readOnlyRecommended === 'true')) props.readOnlyRecommended = true;
     const custom = files['docProps/custom.xml'] && textOf(files['docProps/custom.xml']);
@@ -3199,6 +3245,7 @@ class StylePool {
       + (this.cellStyleList ? `<cellStyles count="${this.cellStyleList.length}">${this.cellStyleList.join('')}</cellStyles>` : '<cellStyles count="1"><cellStyle name="표준" xfId="0" builtinId="0"/></cellStyles>')
       + `<dxfs count="${this.dxfs.length}">${this.dxfs.join('')}</dxfs>`
       + (this.tableStyles.size ? `<tableStyles count="${this.tableStyles.size}" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16">${[...this.tableStyles.values()].join('')}</tableStyles>` : '')
+      + (this.indexedColors ? `<colors><indexedColors>${this.indexedColors.map(c => `<rgbColor rgb="FF${c}"/>`).join('')}</indexedColors></colors>` : '')
       + (this.slicerStyles.size ? `<extLst><ext uri="{EB79DEF2-80B8-43e5-95BD-54CBDDF9020C}" xmlns:x14="${NS_X14}"><x14:slicerStyles defaultSlicerStyle="SlicerStyleLight1">${[...this.slicerStyles.values()].join('')}</x14:slicerStyles></ext></extLst>` : '')
       + '</styleSheet>';
   }
@@ -3419,7 +3466,7 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx', imageRel) {
     let spPr;
     if (type === 'bubble') spPr = `<c:spPr>${fill}</c:spPr>`;
     else if (type === 'stock') spPr = '<c:spPr><a:ln w="19050"><a:noFill/></a:ln></c:spPr>';
-    else if (scatter) spPr = /line|smooth/i.test(chart.scatterStyle ?? '') ? `<c:spPr><a:ln w="19050">${fill}</a:ln></c:spPr>` : '<c:spPr><a:ln w="19050"><a:noFill/></a:ln></c:spPr>';
+    else if (scatter) spPr = /line|smooth/i.test(chart.scatterStyle ?? '') ? `<c:spPr><a:ln w="${sr.lineWidth ? Math.round(sr.lineWidth * 9525) : 19050}">${fill}${DASH_XML[sr.dash] ?? ''}</a:ln></c:spPr>` : '<c:spPr><a:ln w="19050"><a:noFill/></a:ln></c:spPr>';
     else if (type === 'radar') spPr = `<c:spPr>${chart.radarStyle === 'filled' ? fill : ''}<a:ln w="28575">${fill}</a:ln></c:spPr>`;
     else if (type === 'line') spPr = `<c:spPr><a:ln w="${sr.lineWidth ? Math.round((sr.lineWidth * 3 / 4) * 12700) : 28575}" cap="rnd">${fill}${DASH_XML[sr.dash] ?? ''}<a:round/></a:ln></c:spPr>`;
     else if (pie) spPr = '<c:spPr><a:ln w="19050"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:ln></c:spPr>';
@@ -3462,7 +3509,7 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx', imageRel) {
       ? `<c:${valTag}><c:numRef><c:f>${esc(sr.val)}</c:f>${numCache(sr.values, code ?? 'General')}</c:numRef></c:${valTag}>`
       : `<c:${valTag}><c:numLit><c:formatCode>General</c:formatCode><c:ptCount val="${sr.values.length}"/>${sr.values.map((v, k) => (typeof v === 'number' ? `<c:pt idx="${k}"><c:v>${v}</c:v></c:pt>` : '')).join('')}</c:numLit></c:${valTag}>`;
     const bsz = type === 'bubble' ? `<c:bubbleSize>${sr.sz ? `<c:numRef><c:f>${esc(sr.sz)}</c:f>${numCache(sr.size ?? [])}</c:numRef>` : `<c:numLit><c:formatCode>General</c:formatCode><c:ptCount val="${sr.values.length}"/>${(sr.size ?? []).map((v, k) => (typeof v === 'number' ? `<c:pt idx="${k}"><c:v>${v}</c:v></c:pt>` : '')).join('')}</c:numLit>`}</c:bubbleSize><c:bubble3D val="${chart.threeD ? 1 : 0}"/>` : '';
-    const smooth = type === 'line' || (scatter && type !== 'bubble') ? `<c:smooth val="${sr.smooth || /smooth/i.test(chart.scatterStyle ?? '') ? 1 : 0}"/>` : '';
+    const smooth = type === 'line' || (scatter && type !== 'bubble') ? `<c:smooth val="${(sr.smooth ?? /smooth/i.test(chart.scatterStyle ?? '')) ? 1 : 0}"/>` : '';
     const seriesExplosion = explosion(sr.explode ?? chart.explode);
     return `<c:ser><c:idx val="${i}"/><c:order val="${i}"/>${tx}${spPr}${pie && seriesExplosion !== null ? `<c:explosion val="${seriesExplosion}"/>` : ''}${invert}${marker}${dPt}${dPtBar}${labels}${trend}${cat}${val}${bsz}${smooth}${threeD && (type === 'column' || type === 'bar') && ['box', 'cylinder', 'cone', 'pyramid'].includes(sr.barShape) ? `<c:shape val="${sr.barShape}"/>` : ''}</c:ser>`;
   };
@@ -4182,6 +4229,11 @@ const MAIN_TYPES = {
 function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = null } = {}) {
   const files = {};
   const pool = new StylePool(wb.defaultFont ?? WRITE_FONT, wb.baseStyle);
+  const gridIndex = color => {
+    const rgb = [1, 3, 5].map(i => parseInt(color.slice(i, i + 2), 16)); let best = 0, distance = Infinity;
+    for (let i = 0; i < 64; i++) { const d = rgb.reduce((sum, n, j) => sum + (n - parseInt(INDEXED[i].slice(j * 2, j * 2 + 2), 16)) ** 2, 0); if (d < distance) { best = i; distance = d; } }
+    return best;
+  };
   pool.namedStyles(wb.cellStyles);
   const wmdw = digitWidth(pool.baseFont); // 파일의 열 너비 = 픽셀 ÷ 기본 글꼴 숫자 너비
   const strings = [];
@@ -4779,13 +4831,14 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
       if (groups.length) exts.push(`<ext uri="{05C60535-1F16-4fd2-B633-F4F36F0B64E0}" xmlns:x14="${NS_X14}"><x14:sparklineGroups xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main">${groups.join('')}</x14:sparklineGroups></ext>`);
     }
     if (cfX14.length) exts.unshift(`<ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}" xmlns:x14="${NS_X14}"><x14:conditionalFormattings>${cfX14.join('')}</x14:conditionalFormattings></ext>`);
+    if (/^#[0-9a-f]{6}$/i.test(sheet.view?.gridColor ?? '') && INDEXED[gridIndex(sheet.view.gridColor)] !== sheet.view.gridColor.slice(1).toUpperCase()) exts.push(`<ext uri="{82745B15-A53C-4F1D-A901-574958454C56}"><wx:gridColor xmlns:wx="https://wixel.app/view/1" rgb="${sheet.view.gridColor.toLowerCase()}" nativeId="${gridIndex(sheet.view.gridColor)}"/></ext>`);
     const extLst = exts.length ? `<extLst>${exts.join('')}</extLst>` : '';
 
     const tabOk = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(String(sheet.tabColor ?? ''));
     files[`xl/worksheets/sheet${si + 1}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="${NS_MAIN}" xmlns:r="${NS_R}">`
       + (vba || olPr || tabOk ? `<sheetPr${vba ? ` codeName="${esc(vba.sheetCodes?.[sheet.name] ?? `Sheet${si + 1}`)}"` : ''}>${tabOk ? `<tabColor rgb="${argb(sheet.tabColor)}"/>` : ''}${olPr}</sheetPr>` : '')
       + `<dimension ref="${dim}"/>`
-      + `<sheetViews><sheetView${['normal', 'pageBreakPreview', 'pageLayout'].includes(sheet.view?.mode) ? ` view="${sheet.view.mode}"` : ''}${sheet.noGrid ? ' showGridLines="0"' : ''}${sheet.noZeros ? ' showZeros="0"' : ''}${sheet.zoom && sheet.zoom !== 100 ? ` zoomScale="${sheet.zoom}" zoomScaleNormal="${sheet.zoom}"` : ''}${viewTopLeft !== 'A1' ? ` topLeftCell="${viewTopLeft}"` : ''} workbookViewId="0"${si === (wb.sheets[activeSheet]?.state && wb.sheets[activeSheet].state !== 'visible' ? Math.max(0, wb.sheets.findIndex((x) => !x.state || x.state === 'visible')) : activeSheet) ? ' tabSelected="1"' : ''}>${pane}</sheetView></sheetViews>`
+      + `<sheetViews><sheetView${['normal', 'pageBreakPreview', 'pageLayout'].includes(sheet.view?.mode) ? ` view="${sheet.view.mode}"` : ''}${sheet.noGrid ? ' showGridLines="0"' : ''}${sheet.noZeros ? ' showZeros="0"' : ''}${typeof sheet.view?.headers === 'boolean' ? ` showRowColHeaders="${sheet.view.headers ? 1 : 0}"` : ''}${typeof sheet.view?.showFormulas === 'boolean' ? ` showFormulas="${sheet.view.showFormulas ? 1 : 0}"` : ''}${/^#[0-9a-f]{6}$/i.test(sheet.view?.gridColor ?? '') ? ` defaultGridColor="0" colorId="${gridIndex(sheet.view.gridColor)}"` : ''}${sheet.zoom && sheet.zoom !== 100 ? ` zoomScale="${sheet.zoom}" zoomScaleNormal="${sheet.zoom}"` : ''}${viewTopLeft !== 'A1' ? ` topLeftCell="${viewTopLeft}"` : ''} workbookViewId="0"${si === (wb.sheets[activeSheet]?.state && wb.sheets[activeSheet].state !== 'visible' ? Math.max(0, wb.sheets.findIndex((x) => !x.state || x.state === 'visible')) : activeSheet) ? ' tabSelected="1"' : ''}>${pane}</sheetView></sheetViews>`
       + `<sheetFormatPr defaultColWidth="${px2widthM(sheet.defColW ?? DEFAULT_COL_WIDTH, wmdw)}" defaultRowHeight="${px2pt(sheet.defRowH ?? DEFAULT_ROW_HEIGHT)}" customHeight="1"${olRowMax ? ` outlineLevelRow="${olRowMax}"` : ''}${olColMax ? ` outlineLevelCol="${olColMax}"` : ''}/>`
       + (colsXml ? `<cols>${colsXml}</cols>` : '')
       + `<sheetData>${rowXml}</sheetData>`
@@ -4880,7 +4933,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
   const isShown = (i) => wb.sheets[i] && wb.sheets[i].state !== 'hidden' && wb.sheets[i].state !== 'veryHidden';
   const firstVisible = Math.max(0, wb.sheets.findIndex((_, i) => isShown(i)));
   const activeTab = isShown(activeSheet) ? activeSheet : firstVisible;
-  files['xl/workbook.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<workbook xmlns="${NS_MAIN}" xmlns:r="${NS_R}">${wb.props?.readOnlyRecommended ? '<fileSharing readOnlyRecommended="1"/>' : ''}${vba || wb.date1904 ? `<workbookPr${vba ? ` codeName="${esc(vba.codeName || 'ThisWorkbook')}"` : ''}${wb.date1904 ? ' date1904="1"' : ''}/>` : ''}${wb.props?.lockStructure ? '<workbookProtection lockStructure="1"/>' : ''}<bookViews><workbookView${firstVisible ? ` firstSheet="${firstVisible}"` : ''} activeTab="${activeTab}"/></bookViews><sheets>${wb.sheets.slice(0, nOwn).map((sh, i) => `<sheet name="${esc(sh.name)}" sheetId="${i + 1}"${sh.state === 'hidden' || sh.state === 'veryHidden' ? ` state="${sh.state}"` : ''} r:id="rId${i + 1}"/>`).join('')}</sheets>${extRefsXml}${definedNames.length ? `<definedNames>${definedNames.join('')}</definedNames>` : ''}<calcPr calcId="191029" fullCalcOnLoad="1"/>${pivotCachesXml}${wbExts.length ? `<extLst>${wbExts.join('')}</extLst>` : ''}</workbook>`;
+  files['xl/workbook.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<workbook xmlns="${NS_MAIN}" xmlns:r="${NS_R}">${wb.props?.readOnlyRecommended ? '<fileSharing readOnlyRecommended="1"/>' : ''}${vba || wb.date1904 ? `<workbookPr${vba ? ` codeName="${esc(vba.codeName || 'ThisWorkbook')}"` : ''}${wb.date1904 ? ' date1904="1"' : ''}/>` : ''}${workbookProtectionXml(wb.props)}<bookViews><workbookView${firstVisible ? ` firstSheet="${firstVisible}"` : ''} activeTab="${activeTab}"/></bookViews><sheets>${wb.sheets.slice(0, nOwn).map((sh, i) => `<sheet name="${esc(sh.name)}" sheetId="${i + 1}"${sh.state === 'hidden' || sh.state === 'veryHidden' ? ` state="${sh.state}"` : ''} r:id="rId${i + 1}"/>`).join('')}</sheets>${extRefsXml}${definedNames.length ? `<definedNames>${definedNames.join('')}</definedNames>` : ''}${calculationXml(wb.calculation)}${pivotCachesXml}${wbExts.length ? `<extLst>${wbExts.join('')}</extLst>` : ''}</workbook>`;
   if (pool.hasCheckbox) {
     files['xl/featurePropertyBag/featurePropertyBag.xml'] = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<FeaturePropertyBags xmlns="http://schemas.microsoft.com/office/spreadsheetml/2022/featurepropertybag"><bag type="Checkbox"/><bag type="XFControls"><bagId k="CellControl">0</bagId></bag><bag type="XFComplement"><bagId k="XFControls">1</bagId></bag><bag type="XFComplements" extRef="XFComplementsMapperExtRef"><a k="MappedFeaturePropertyBags"><bagId>2</bagId></a></bag></FeaturePropertyBags>';
     wbRel('http://schemas.microsoft.com/office/2022/11/relationships/FeaturePropertyBag', 'featurePropertyBag/featurePropertyBag.xml');

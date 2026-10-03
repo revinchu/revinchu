@@ -18,6 +18,7 @@ try{
   w.transact(()=>[['분기','온라인','오프라인'],['1분기','120','80'],['2분기','-40','100'],['3분기','0','75'],['4분기','180','140']].forEach((row,r)=>row.forEach((v,c)=>w.setInput(0,r,c,v))));
   t.selectRange({r1:0,c1:0,r2:4,c2:2});t.run('chartLine');t.run('chartFormat');
  });
+ await page.getByRole('button',{name:'차트 전체 옵션…',exact:true}).click();
  const pane=page.getByRole('dialog',{name:'차트 서식',exact:true});
  await pane.waitFor();
  const set=async(label,value)=>{const i=pane.getByLabel(label,{exact:true});await i.fill(String(value));await i.press('Tab');};
@@ -32,6 +33,7 @@ try{
  // 선 계열 전용 옵션을 검증한 뒤 3D를 지원하는 세로 막대로 합성 fixture를 전환한다.
  await pane.locator('.dialog-head button').click();
  await page.evaluate(()=>{const t=window.tabula,w=t.wb(),sheet=w.sheets[t.si];w.transact(()=>w.setSheetProp(t.si,'charts',sheet.charts.map(c=>({...c,type:'column'}))));t.run('chartFormat');});
+ await page.getByRole('button',{name:'차트 전체 옵션…',exact:true}).click();
  await pane.getByRole('tab',{name:'3차원 회전',exact:true}).click();
  await pane.getByLabel('3차원 차트',{exact:true}).check();
  await set('X 회전(°)',40);await set('Y 회전(°)',55);await set('깊이(%)',170);

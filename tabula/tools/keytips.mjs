@@ -272,9 +272,11 @@ try {
     await p.keyboard.press('Escape'); await path(p, 'h');
     assert.equal(await p.locator('.keytip-command-menu').count(), 0);
   });
-  await test('기본 QAT 12개와 사용자 지정 버튼은 좁은 화면에서 줄바꿈하며 넓은 화면의 키팁과 겹치지 않음', async (p) => {
+  await test('데스크톱 모드 QAT 12개와 사용자 지정 버튼은 좁은 화면에서 줄바꿈하며 넓은 화면의 키팁과 겹치지 않음', async (p) => {
     for (const height of [240, 480]) {
       await p.setViewportSize({ width: 320, height });
+      if (await p.evaluate(() => window.tabula.mobile().active)) await p.locator('#mobileModeToggle').click();
+      assert.equal(await p.evaluate(() => window.tabula.mobile().active), false, 'QAT는 데스크톱 모드에서 검사');
       const layout = await p.locator('#quickAccess').evaluate((bar) => ({
         below: bar.classList.contains('below'), commands: bar.querySelectorAll('[data-qat-cmd]').length,
         buttons: [...bar.querySelectorAll('button')].map((button) => {

@@ -102,7 +102,7 @@ try {
     await p.evaluate(() => window.tabula.selectRange({ r1: 1, c1: 0, r2: 2, c2: 1 })); const before = await state(p), selected = await selection(p);
     await rightClick(p); await p.keyboard.press('f'); await dialog(p, '셀 서식').getByRole('button', { name: '취소', exact: true }).click(); eq(await state(p), before);
     await rightClick(p); const toolbar = p.locator('.context-mini-toolbar');
-    ok(await toolbar.locator('.access-key-hint').evaluateAll(nodes => nodes.length > 0 && nodes.every(n => getComputedStyle(n).display === 'none')), '좁은 아이콘 단추에 상시 접근키 문구를 겹쳐 표시하지 않음');
+    ok(await toolbar.locator('.access-key-hint').evaluateAll(nodes => nodes.length === 0), '좁은 아이콘 단추에 상시 접근키 문구를 겹쳐 표시하지 않음');
     await p.keyboard.press('Tab'); ok(await toolbar.evaluate(el => el.contains(document.activeElement)), '메뉴에서 Tab으로 미니 서식 진입');
     for (let i = 0; i < 20 && await p.evaluate(() => document.activeElement?.dataset.miniCommand !== 'bold'); i++) await p.keyboard.press('Tab');
     eq(await p.evaluate(() => document.activeElement?.dataset.miniCommand), 'bold');

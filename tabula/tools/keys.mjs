@@ -226,7 +226,7 @@ await T('빠른 실행 명령 순서·리본 아래·Alt+1·설정 복원', asyn
   await ev(() => window.tabula.run('options'));
   await page.getByRole('tab', { name: '빠른 실행 도구 모음', exact: true }).click();
   await page.getByLabel('표시 위치', { exact: true }).selectOption('below');
-  await page.getByLabel('사용 가능한 명령').selectOption('bold'); await page.getByRole('button', { name: '추가(A) >>', exact: true }).click();
+  await page.getByLabel('사용 가능한 명령').selectOption('bold'); await page.getByRole('button', { name: '추가', exact: true }).click();
   const moveCount = await page.getByLabel('현재 도구 모음 순서').evaluate((s) => s.selectedIndex);
   for (let i = 0; i < moveCount; i++) await page.getByRole('button', { name: '위로', exact: true }).click();
   await page.getByRole('button', { name: '확인', exact: true }).click();

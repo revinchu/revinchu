@@ -1531,12 +1531,11 @@ export function computePivot(input, d) {
     const v = raw(rpath, cpath, vi);
     const as = values[vi].showAs ?? 'normal';
     if (as === 'normal') return v;
-    if (v !== null && typeof v !== 'number') return v;
     return showValue(as, values[vi], vi, rpath, cpath, v);
   };
   // 값 표시 형식 (엑셀과 같음): 기준 필드의 형제 항목 · 상위 항목 · 합계와 비교
   const num0 = (x) => (typeof x === 'number' ? x : 0);
-  const ratio = (a, b) => (typeof b === 'number' && b ? num0(a) / b : a === null ? null : CALC_ERR('#DIV/0!'));
+  const ratio = (a, b) => (isErr(a) ? a : isErr(b) ? b : typeof b === 'number' && b ? num0(a) / b : CALC_ERR('#DIV/0!'));
   let pathIdx = null;
   const nodeOf = (axis, path) => {
     if (!pathIdx) {
@@ -1554,13 +1553,15 @@ export function computePivot(input, d) {
     if (as === 'percentOfCol') return ratio(v, raw('', cpath, vi));
     if (as === 'index') {
       const g = raw('', '', vi); const rt = raw(rpath, '', vi); const ct = raw('', cpath, vi);
-      return v === null ? null : typeof rt === 'number' && typeof ct === 'number' && rt && ct ? (v * num0(g)) / (rt * ct) : CALC_ERR('#DIV/0!');
+      return isErr(v) ? v : isErr(rt) ? rt : isErr(ct) ? ct : isErr(g) ? g : typeof rt === 'number' && typeof ct === 'number' && rt && ct ? (num0(v) * num0(g)) / (rt * ct) : CALC_ERR('#DIV/0!');
     }
     if (as === 'percentOfParentRow' || as === 'percentOfParentCol') {
       const axis = as === 'percentOfParentRow' ? 'r' : 'c';
+      if (!(axis === 'r' ? d.rows : d.cols).length) return null;
       const node = nodeOf(axis, axis === 'r' ? rpath : cpath);
       const pp = node && node.depth >= 0 ? node.parent?.path ?? '' : axis === 'r' ? rpath : cpath;
-      return ratio(v, axis === 'r' ? raw(pp, cpath, vi) : raw(rpath, pp, vi));
+      const parent = axis === 'r' ? raw(pp, cpath, vi) : raw(rpath, pp, vi);
+      return isErr(parent) ? null : ratio(v, parent);
     }
     // 기준 필드: 행 또는 열 필드 (없으면 첫 행 필드)
     const bf = vdef.baseField ?? d.rows[0] ?? d.cols[0];
@@ -1573,11 +1574,14 @@ export function computePivot(input, d) {
     const at = (p) => (axis === 'r' ? raw(p, cpath, vi) : raw(rpath, p, vi));
     const node = nodeOf(axis, mine);
     if (!node) return null;
-    if (node.depth < L) return as === 'percentOfParent' ? ratio(v, v) : null;
+    if (node.depth < L) return as === 'percentOfRunningTotal' && isErr(v) ? v : null;
     let a = node;
     while (a.depth > L) a = a.parent;
     const rest = mine.slice(a.path.length);
-    if (as === 'percentOfParent') return ratio(v, at(a.path));
+    if (as === 'percentOfParent') {
+      const parent = at(a.path);
+      return typeof parent === 'number' && parent ? ratio(v, parent) : null;
+    }
     const sibs = (a.parent ?? (axis === 'r' ? rowTree : colTree)).children;
     const pos = sibs.indexOf(a);
     if (as === 'percent' || as === 'difference' || as === 'percentDiff') {
@@ -1589,10 +1593,13 @@ export function computePivot(input, d) {
         if (!b) return CALC_ERR('#N/A');
       }
       const base = at(b.path + rest);
-      if (as === 'percent') return base === null ? CALC_ERR('#N/A') : ratio(v, base);
-      if (b === a) return null;
-      if (as === 'difference') return num0(v) - num0(base);
-      return base === null ? CALC_ERR('#N/A') : typeof base === 'number' && base ? (num0(v) - base) / base : CALC_ERR('#DIV/0!');
+      // Excel leaves the base item's difference blank even when its value is an error.
+      if (b === a && as !== 'percent') return null;
+      if (isErr(v) && b !== a) return v;
+      if (as === 'difference') return isErr(base) ? base : num0(v) - num0(base);
+      // An unavailable base is blank; a numeric zero is a division error.
+      if (base === null || isErr(base)) return null;
+      return as === 'percent' ? ratio(v, base) : ratio(num0(v) - base, base);
     }
     // 누계 · 순위: 같은 상위 항목 아래 형제들의 값 (한 번 계산해 둠)
     const mk = `${as}\u0003${axis}\u0003${(a.parent ?? { path: '' }).path}\u0003${rest}\u0003${axis === 'r' ? cpath : rpath}\u0003${vi}`;
@@ -1601,8 +1608,9 @@ export function computePivot(input, d) {
       const vals = sibs.map((s) => at(s.path + rest));
       if (as === 'runTotal' || as === 'percentOfRunningTotal') {
         let acc = 0;
-        arr = vals.map((x) => (acc += num0(x)));
-        if (as === 'percentOfRunningTotal') arr = arr.map((x) => (acc ? x / acc : CALC_ERR('#DIV/0!')));
+        // A later error replaces the preceding error, and subsequent values retain it.
+        arr = vals.map((x) => (acc = isErr(x) ? x : isErr(acc) ? acc : acc + num0(x)));
+        if (as === 'percentOfRunningTotal') arr = arr.map((x) => (isErr(x) ? x : typeof acc === 'number' && acc ? x / acc : CALC_ERR('#DIV/0!')));
       } else {
         const distinct = [...new Set(vals.filter((x) => typeof x === 'number'))].sort((p, q) => (as === 'rankAscending' ? p - q : q - p));
         const rank = new Map(distinct.map((x, i) => [x, i + 1]));

@@ -94,7 +94,7 @@ try {
     results.push('고정 창 겹침과 공통 내용 캐시');
     const shape = await page.evaluate(() => {
       const t = window.tabula, w = t.wb(), v = t.gv();
-      w.transact(() => w.setSheetProp(0, 'freeze', { rows: 0, cols: 0 })); v.layout();
+      w.transact(() => w.setSheetProp(0, 'freeze', { rows: 0, cols: 0 })); v.layout(); v.setScroll(0, 0); // 틀 해제는 현재 스크롤을 보존하므로 선택 검사의 기준 화면으로 복귀
       const p = v.panes[3], edge = v.cols.pos(p.win.c2 + 1);
       w.transact(() => w.setSheetProp(0, 'shapes', [...w.sheets[0].shapes, { id: 'rotated-edge', kind: 'rect', x: edge + 30, y: 150, w: 20, h: 240, rot: 90, fill: '#f00' }]));
       v.renderObjectsAll(); return { shown: !!document.querySelector('[data-id="rotated-edge"]') };

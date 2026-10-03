@@ -30,7 +30,7 @@ async function test(name, run) {
   } catch (e) { results.push({ name, ok: false, error: e.message, errors, writes }); console.error(`NG ${name}: ${e.stack}`); }
   finally { await context.close(); }
 }
-async function format(p) { await command(p, 'chartFormat'); return p.getByRole('dialog', { name: '차트 서식', exact: true }); }
+async function format(p) { await command(p, 'chartFormat'); await p.getByRole('button', { name: '차트 전체 옵션…', exact: true }).click(); return p.getByRole('dialog', { name: '차트 서식', exact: true }); }
 const number = async (d, name, v) => { const el = d.getByRole('spinbutton', { name, exact: true }); await el.fill(String(v)); await el.press('Tab'); };
 try {
   await test('상자수염 옵션: 내부점·이상값·평균·사분위 즉시 반영과 실행 취소', async (p) => {

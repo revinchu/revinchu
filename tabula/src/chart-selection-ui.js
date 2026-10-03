@@ -42,15 +42,16 @@ export function createChartSelectionPanel({ getChart, getPart, getData, onChange
     const button = (label, action) => el('button', { type: 'button', class: 'btn small', onclick: action }, label);
     const setSeries = patch => up(chartSeriesPatch(getChart(), part.s, patch));
     const labelRows = () => [
-      row('값 표시', check(fmt.labels ?? chart.labels ?? false, v => setSeries({ labels: v }))),
+      row('값 표시', check(fmt.labels ?? chart.labels ?? (chart.type === 'funnel'), v => setSeries({ labels: v }))),
       row('항목 이름', check(fmt.catName ?? (hierarchy ? chart.labels !== false : false), v => setSeries({ catName: v }))),
       row('계열 이름', check(fmt.serName, v => setSeries({ serName: v }))),
       ...(['pie', 'doughnut', 'pieOfPie', 'barOfPie', 'sunburst', 'treemap', 'column', 'bar', 'line', 'area', 'combo'].includes(chart.type) ? [row('백분율', check(fmt.pct, v => setSeries({ pct: v })))] : []),
-      ...(!hierarchy ? [row('레이블 위치', choose(fmt.labelPos ?? 'outEnd', [['outEnd', '바깥쪽 끝'], ['insideEnd', '안쪽 끝'], ['center', '가운데'], ['insideBase', '안쪽 기준'], ['out', '바깥쪽']], v => setSeries({ labelPos: v })))] : []),
+      ...(!hierarchy && chart.type !== 'funnel' ? [row('레이블 위치', choose(fmt.labelPos ?? 'outEnd', [['outEnd', '바깥쪽 끝'], ['insideEnd', '안쪽 끝'], ['center', '가운데'], ['insideBase', '안쪽 기준'], ['out', '바깥쪽']], v => setSeries({ labelPos: v })))] : []),
       row('레이블 표시 형식', text(fmt.numFmt, v => setSeries({ numFmt: v || undefined }))),
-      row('레이블 글꼴 색', color(fmt.labelColor ?? (hierarchy ? '#ffffff' : '#404040'), c => setSeries({ labelColor: c }))),
+      row('레이블 글꼴 색', color(fmt.labelColor ?? (hierarchy || chart.type === 'funnel' ? '#ffffff' : '#404040'), c => setSeries({ labelColor: c }))),
       row('레이블 크기(pt)', num(fmt.labelSize ?? (hierarchy ? 8.25 : 9), n => setSeries({ labelSize: n }), 6, 72)),
-      row('레이블 굵게', check(fmt.labelBold, v => setSeries({ labelBold: v }))),
+      row('레이블 굵게', check(fmt.labelBold ?? (chart.type === 'funnel'), v => setSeries({ labelBold: v }))),
+      ...(chart.type === 'funnel' ? [el('p', { class: 'muted' }, '깔때기 데이터 레이블은 가운데에 표시됩니다.')] : []),
     ];
     if (part.kind === 'node') {
       rows.push(row('계층 항목 색', color(node ? hierarchyNodeColor(node, series, chart, paletteOf(chart)) : '#4472c4', c => setSeries({ hierarchyColors: { ...getChart().seriesFmt?.[part.s]?.hierarchyColors, [part.node]: c } }))));
@@ -100,9 +101,9 @@ export function createChartSelectionPanel({ getChart, getPart, getData, onChange
         }
         if (line) {
           settings.push(row('선 종류', choose(fmt.dash ?? '', [['', '실선'], ['dash', '파선'], ['dot', '점선'], ['dashDot', '일점쇄선']], v => setSeries({ dash: v || undefined }))));
-          settings.push(row('표식 모양', choose(fmt.marker ?? chart.marker ?? 'none', [['none', '없음'], ['circle', '원'], ['square', '사각형'], ['diamond', '마름모'], ['triangle', '삼각형']], v => setSeries({ marker: v }))));
+          settings.push(row('표식 모양', choose(fmt.marker ?? chart.marker ?? (type === 'scatter' && /^(marker|.*Marker)$/.test(chart.scatterStyle ?? 'marker') ? 'circle' : 'none'), [['none', '없음'], ['circle', '원'], ['square', '사각형'], ['diamond', '마름모'], ['triangle', '삼각형']], v => setSeries({ marker: v }))));
           settings.push(row('표식 크기', num(fmt.markerSize ?? 6, v => setSeries({ markerSize: v }), 2, 30)));
-          if (['line', 'scatter'].includes(type)) settings.push(row('부드러운 선', check(fmt.smooth, v => setSeries({ smooth: v }))));
+          if (['line', 'scatter'].includes(type)) settings.push(row('부드러운 선', check(fmt.smooth ?? (type === 'scatter' && /smooth/i.test(chart.scatterStyle ?? '')), v => setSeries({ smooth: v }))));
         }
         if (['column', 'bar'].includes(type)) {
           settings.push(row('간격 너비(%)', num(chart.gap ?? 150, v => up({ gap: v }), 0, 500)));

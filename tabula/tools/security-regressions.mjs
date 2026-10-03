@@ -113,7 +113,8 @@ try {
     assert.deepEqual(before, { executed: 0, handlers: 0, number: 'flex-end', text: '', chart: true, shape: true });
     await page.locator('.obj[data-id="security-chart"]').click({ position: { x: 20, y: 20 } });
     await page.evaluate(() => window.tabula.run('chartSelectData'));
-    await page.waitForSelector('.dialog svg');
+    const preview = page.locator('.sd-preview-section'); if (!await preview.evaluate(el => el.open)) await preview.locator('summary').click();
+    await page.waitForSelector('.sd-preview svg');
     assert.equal(await page.locator('.dialog [onmouseover]').count(), 0);
     await page.keyboard.press('Escape');
   });

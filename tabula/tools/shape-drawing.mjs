@@ -267,7 +267,7 @@ try {
       const range = document.createRange(); range.selectNodeContents(content);
       const rect = element => { const r = element.getBoundingClientRect(); return { x: r.x, y: r.y, right: r.right, bottom: r.bottom }; };
       return { calls: window.__printCalls, preview: !!document.querySelector('.dialog[aria-label="인쇄 미리보기"]'), shapeIds: [...area.querySelectorAll('[data-shape-print]')].map(el => el.dataset.shapePrint),
-        images: area.querySelectorAll('img').length, objects: area.querySelectorAll('.chart-print').length, text: area.textContent,
+        images: area.querySelectorAll('[data-print-object="image-visible"] svg image').length, objects: area.querySelectorAll('.chart-print').length, text: area.textContent,
         fit: box.dataset.fitDone, scale, transform: box.style.transform, rich: box.classList.contains('rich'), bold: [...content.querySelectorAll('span')].some(el => Number(getComputedStyle(el).fontWeight) >= 700),
         available: [box.clientWidth - parseFloat(css.paddingLeft) - parseFloat(css.paddingRight), box.clientHeight - parseFloat(css.paddingTop) - parseFloat(css.paddingBottom)],
         scroll: [content.scrollWidth * scale, content.scrollHeight * scale], box: rect(box), actual: rect(range),

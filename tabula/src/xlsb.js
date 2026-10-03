@@ -4,6 +4,8 @@
 // 큰 시트의 셀은 XML 을 만들지 않고 readSheet 가 받는 행 모양({ attrs, cells })으로 바로 넘김 (수백만 행도 빠르게).
 // 레코드 구조: [MS-XLSB] (레코드 번호 · 필드 순서는 LibreOffice oox 가져오기와 같음)
 
+import { toBase64 } from './vba.js';
+
 const enc = new TextEncoder();
 const RK = new DataView(new ArrayBuffer(8));
 const u16dec = new TextDecoder('utf-16le');
@@ -59,12 +61,12 @@ const R = {
   ROW: 0, BLANK: 1, RK: 2, ERROR: 3, BOOL: 4, REAL: 5, ST: 6, ISST: 7, FSTR: 8, FNUM: 9, FBOOL: 10, FERR: 11,
   MBLANK: 12, MRK: 13, MERR: 14, MBOOL: 15, MREAL: 16, MST: 17, MISST: 18, SI: 19, NAME: 39,
   FONT: 43, NUMFMT: 44, FILL: 45, BORDER: 46, XF: 47, CELLSTYLE: 48, COL: 60, MRSTR: 61, RSTR: 62,
-  SHEET: 156, WBPR: 153, BOOKVIEW: 158, WSPR: 147, DIM: 148, WSVIEW: 137, PANE: 151, SHEETDATA: 145, SHEETDATA_END: 146,
+  SHEET: 156, WBPR: 153, CALCPROP: 157, BOOKPROTECT: 534, BOOKVIEW: 158, WSPR: 147, DIM: 148, WSVIEW: 137, PANE: 151, SEL: 152, DVAL: 64, SHEETDATA: 145, SHEETDATA_END: 146,
   AFILTER: 161, AFILTER_END: 162, FILTERCOL: 163, FILTERCOL_END: 164, FILTERS: 165, FILTER: 167, TOP10: 170, CUSTFILTERS: 172, CUSTFILTER: 174,
   MERGE: 176, EXTSELF: 357, EXTSAME: 358, EXTREF: 355, EXTADDIN: 667, EXTSHEETS: 362, PIVOTCACHE: 386,
   ARRAY: 426, SHRFMLA: 427, CF: 461, CF_END: 462, CFRULE: 463, CFRULE_END: 464, ICONSET: 465, DATABAR: 467, COLORSCALE: 469, CFVO: 471, CFCOLOR: 564,
-  ROWBRK_BEGIN: 392, ROWBRK_END: 393, COLBRK_BEGIN: 394, COLBRK_END: 395, BRK: 396, MARGINS: 476, WSFMT: 485, HLINK: 494, DXF: 507, TSTYLES: 508, TSTYLE: 510, TSTYLE_END: 511, TSELEM: 512, TSINFO: 513,
-  PROTECT: 535, DRAWING: 550, LEGACY: 551, TABLEPART: 661,
+  ROWBRK_BEGIN: 392, ROWBRK_END: 393, COLBRK_BEGIN: 394, COLBRK_END: 395, BRK: 396, MARGINS: 476, PRINTOPTIONS: 477, PAGESETUP: 478, HEADERFOOTER: 479, WSFMT: 485, HLINK: 494, DXF: 507, TSTYLES: 508, TSTYLE: 510, TSTYLE_END: 511, TSELEM: 512, TSINFO: 513,
+  PROTECT: 535, BOOKPROTECT_ISO: 677, PROTECT_ISO: 678, DRAWING: 550, LEGACY: 551, TABLEPART: 661,
   CSXFS: 626, CXFS: 617, CAUTHOR: 632, COMMENT: 635, COMMENT_END: 636, CTEXT: 637,
   TABLE: 343, TABLE_END: 344, LISTCOL: 347, LISTCOL_END: 348, LISTCCFMLA: 351,
   PCDEF: 179, PCDSOURCE: 185, PCDSHEETSRC: 187, PCDFIELD: 183, PCDFIELD_END: 184, PCDFSITEMS: 189, PCDFSITEMS_END: 190, PCITEM_ARRAY: 191,
@@ -349,6 +351,24 @@ export function decodeFormula(u8, p, env, base, opts = {}) {
   return { text: st[0], next };
 }
 
+// ISO 보호 레코드의 길이는 다음 레코드까지 읽지 않도록 엄격하게 검사한다.
+function protectionData(rd) {
+  const bytes = () => { if (rd.left < 4) throw new Error('XLSB 보호 설정이 잘렸습니다.'); const n = rd.u32(); if (n > rd.left) throw new Error('XLSB 보호 설정 길이가 잘못되었습니다.'); const b = rd.u8.subarray(rd.p, rd.p + n); rd.skip(n); return n ? toBase64(b) : undefined; };
+  const hashValue = bytes(), saltValue = bytes();
+  if (rd.left < 4) throw new Error('XLSB 보호 알고리즘이 잘렸습니다.');
+  const n = rd.i32(); if (n > rd.left / 2 || n < -1) throw new Error('XLSB 보호 알고리즘 길이가 잘못되었습니다.');
+  const algorithmName = n > 0 ? rd.chars(n) : undefined;
+  if ((hashValue && !algorithmName) || (saltValue && !hashValue)) throw new Error('XLSB 보호 암호 설정이 올바르지 않습니다.');
+  return { hashValue, saltValue, algorithmName };
+}
+const SHEET_ALLOWED = ['objects', 'scenarios', 'formatCells', 'formatColumns', 'formatRows', 'insertColumns', 'insertRows', 'insertHyperlinks', 'deleteColumns', 'deleteRows', 'selectLockedCells', 'sort', 'autoFilter', 'pivotTables', 'selectUnlockedCells'];
+function sheetProtectionFlags(rd) {
+  const a = { sheet: rd.u32() ? 1 : 0 };
+  // XLSB는 허용, SpreadsheetML은 금지 플래그이다.
+  for (const k of SHEET_ALLOWED) a[k] = rd.u32() ? 0 : 1;
+  return a;
+}
+
 // ─────────────── 통합 문서 ───────────────
 function readWorkbook(u8) {
   const out = { sheets: [], names: [], xti: [], links: [], date1904: false, activeTab: 0, firstSheet: 0, pivotCaches: [] };
@@ -359,6 +379,26 @@ function readWorkbook(u8) {
       out.sheets.push({ name, sheetId, rid, state: state === 1 ? 'hidden' : state === 2 ? 'veryHidden' : null });
     } else if (t === R.WBPR) {
       out.date1904 = !!(rd.u32() & 1);
+    } else if (t === R.CALCPROP && rd.left >= 26) {
+      const calcId = rd.u32(), mode = rd.u32(), iterateCount = rd.u32(), iterateDelta = rd.f64(), threads = rd.i32(), fl = rd.u16();
+      out.calculation = { calcId, calcMode: ['manual', 'auto', 'autoNoTable'][mode] ?? 'auto', iterateCount, iterateDelta,
+        fullCalcOnLoad: fl & 1 ? 1 : 0, refMode: fl & 2 ? 'A1' : 'R1C1', iterate: fl & 4 ? 1 : 0,
+        fullPrecision: fl & 8 ? 1 : 0, calcCompleted: fl & 16 ? 0 : 1, calcOnSave: fl & 32 ? 1 : 0,
+        concurrentCalc: fl & 64 ? 1 : 0, concurrentManualCount: fl & 128 && threads > 0 ? threads : undefined, forceFullCalc: fl & 256 ? 1 : 0 };
+    } else if (t === R.BOOKPROTECT) {
+      if (rd.left < 6) throw new Error('XLSB 통합문서 보호 설정이 잘렸습니다.');
+      const password = rd.u16(), revisions = rd.u16(), fl = rd.u16();
+      out.protection = { ...out.protection, ...(password ? { workbookPassword: password.toString(16).toUpperCase().padStart(4, '0') } : {}),
+        ...(revisions ? { revisionsPassword: revisions.toString(16).toUpperCase().padStart(4, '0') } : {}),
+        lockStructure: fl & 1 ? 1 : 0, lockWindows: fl & 2 ? 1 : 0, lockRevision: fl & 4 ? 1 : 0 };
+    } else if (t === R.BOOKPROTECT_ISO) {
+      if (rd.left < 10) throw new Error('XLSB 통합 문서 보호 설정이 잘렸습니다.');
+      const spins = [rd.u32(), rd.u32()], fl = rd.u16();
+      out.protection = { lockStructure: fl & 1 ? 1 : 0, lockWindows: fl & 2 ? 1 : 0, lockRevision: fl & 4 ? 1 : 0 };
+      for (const [i, prefix] of ['workbook', 'revisions'].entries()) {
+        const v = protectionData(rd);
+        if (v.hashValue) Object.assign(out.protection, { [`${prefix}HashValue`]: v.hashValue, [`${prefix}SaltValue`]: v.saltValue, [`${prefix}AlgorithmName`]: v.algorithmName, [`${prefix}SpinCount`]: spins[i] });
+      }
     } else if (t === R.BOOKVIEW) {
       rd.skip(20); out.firstSheet = rd.u32(); out.activeTab = rd.u32();
     } else if (t === R.NAME) {
@@ -390,7 +430,7 @@ function workbookXml(wbi, env, u8) {
     if (text === null) return;
     names.push(`<definedName${attrs({ name: n.name, localSheetId: n.itab >= 0 ? n.itab : undefined, hidden: n.hidden || undefined })}>${esc(text)}</definedName>`);
   });
-  return `<workbook xmlns="${NS}" xmlns:r="${NS_R}"><workbookPr${wbi.date1904 ? ' date1904="1"' : ''}/><bookViews><workbookView${attrs({ activeTab: wbi.activeTab, firstSheet: wbi.firstSheet || undefined })}/></bookViews><sheets>${wbi.sheets.map((s) => `<sheet${attrs({ name: s.name, sheetId: s.sheetId, state: s.state ?? undefined, 'r:id': s.rid })}/>`).join('')}</sheets>${names.length ? `<definedNames>${names.join('')}</definedNames>` : ''}${wbi.pivotCaches.length ? `<pivotCaches>${wbi.pivotCaches.map((c) => `<pivotCache cacheId="${c.id}" r:id="${esc(c.rid)}"/>`).join('')}</pivotCaches>` : ''}</workbook>`;
+  return `<workbook xmlns="${NS}" xmlns:r="${NS_R}"><workbookPr${wbi.date1904 ? ' date1904="1"' : ''}/>${wbi.protection ? `<workbookProtection${attrs(wbi.protection)}/>` : ''}<bookViews><workbookView${attrs({ activeTab: wbi.activeTab, firstSheet: wbi.firstSheet || undefined })}/></bookViews><sheets>${wbi.sheets.map((s) => `<sheet${attrs({ name: s.name, sheetId: s.sheetId, state: s.state ?? undefined, 'r:id': s.rid })}/>`).join('')}</sheets>${names.length ? `<definedNames>${names.join('')}</definedNames>` : ''}${wbi.calculation ? `<calcPr${attrs(wbi.calculation)}/>` : ''}${wbi.pivotCaches.length ? `<pivotCaches>${wbi.pivotCaches.map((c) => `<pivotCache cacheId="${c.id}" r:id="${esc(c.rid)}"/>`).join('')}</pivotCaches>` : ''}</workbook>`;
 }
 
 // ─────────────── 공유 문자열 ───────────────
@@ -425,12 +465,13 @@ function alignXml(flags) {
 }
 
 function stylesXml(u8) {
-  const numFmts = []; const fonts = []; const fills = []; const borders = []; const csxfs = []; const cxfs = []; const cellStyles = []; const dxfs = []; const tstyles = [];
+  const numFmts = []; const fonts = []; const fills = []; const borders = []; const csxfs = []; const cxfs = []; const cellStyles = []; const dxfs = []; const tstyles = []; const indexed = [];
   let xfTarget = null;
   let curTs = null;
   for (const { t, p, e } of records(u8)) {
     const rd = new Rd(u8, p, e);
-    if (t === R.CSXFS) xfTarget = csxfs;
+    if (t === 475 && rd.left >= 4) { const rgb = [rd.u8v(), rd.u8v(), rd.u8v()]; rd.skip(1); indexed.push(`<rgbColor rgb="FF${rgb.map(v => v.toString(16).padStart(2, '0')).join('').toUpperCase()}"/>`); }
+    else if (t === R.CSXFS) xfTarget = csxfs;
     else if (t === R.CXFS) xfTarget = cxfs;
     else if (t === R.NUMFMT) { const id = rd.u16(); numFmts.push(`<numFmt numFmtId="${id}" formatCode="${esc(rd.str() ?? '')}"/>`); } else if (t === R.FONT) {
       const h = rd.u16(); const fl = rd.u16(); const w = rd.u16(); const escp = rd.u16(); const ul = rd.u8v(); const fam = rd.u8v(); const cs = rd.u8v(); rd.skip(1);
@@ -481,7 +522,7 @@ function stylesXml(u8) {
     }
   }
   const sec = (tag, list) => `<${tag} count="${list.length}">${list.join('')}</${tag}>`;
-  return `<styleSheet xmlns="${NS}">${numFmts.length ? sec('numFmts', numFmts) : ''}${sec('fonts', fonts)}${sec('fills', fills)}${sec('borders', borders)}${sec('cellStyleXfs', csxfs)}${sec('cellXfs', cxfs)}${sec('cellStyles', cellStyles)}${sec('dxfs', dxfs)}<tableStyles${attrs({ count: tstyles.length, defaultTableStyle: tstyles.defs?.defaultTableStyle ?? undefined, defaultPivotStyle: tstyles.defs?.defaultPivotStyle ?? undefined })}>${tstyles.join('')}</tableStyles></styleSheet>`;
+  return `<styleSheet xmlns="${NS}">${numFmts.length ? sec('numFmts', numFmts) : ''}${sec('fonts', fonts)}${sec('fills', fills)}${sec('borders', borders)}${sec('cellStyleXfs', csxfs)}${sec('cellXfs', cxfs)}${sec('cellStyles', cellStyles)}${sec('dxfs', dxfs)}<tableStyles${attrs({ count: tstyles.length, defaultTableStyle: tstyles.defs?.defaultTableStyle ?? undefined, defaultPivotStyle: tstyles.defs?.defaultPivotStyle ?? undefined })}>${tstyles.join('')}</tableStyles>${indexed.length ? `<colors><indexedColors>${indexed.join('')}</indexedColors></colors>` : ''}</styleSheet>`;
 }
 
 /** BrtDXF → <dxf> */
@@ -955,7 +996,7 @@ function cfRuleAttrs(type, sub, op, flags) {
 
 /** 시트 머리(셀 데이터 밖의 레코드) → { xml, dataStart, dataEnd } */
 function sheetHeadXml(u8, env) {
-  const parts = { pr: '', dim: '', views: [], fmt: '', cols: [], merges: [], cf: [], links: [], af: '', margins: '', drawing: '', legacy: '', tables: [], protect: '', rowBreaks: [], colBreaks: [] };
+  const parts = { pr: '', dim: '', views: [], fmt: '', cols: [], merges: [], cf: [], links: [], af: '', margins: '', drawing: '', legacy: '', tables: [], protect: null, validations: [], printOptions: '', setup: '', headerFooter: '', rowBreaks: [], colBreaks: [] };
   let dataStart = -1; let dataEnd = -1;
   let p = 0;
   const n = u8.length;
@@ -997,8 +1038,8 @@ function sheetHeadXml(u8, env) {
       case R.DIM: { const rg = rd.rfx(); parts.dim = `<dimension ref="${rangeRef(rg)}"/>`; break; }
       case R.WSVIEW: {
         if (rd.left < 30) break;
-        const fl = rd.u16(); const mode = rd.i32(); const tr = rd.i32(); const tc = rd.i32(); rd.skip(4); const zoom = rd.u16(); rd.skip(6); const workbookViewId = rd.u32();
-        view = { a: { showGridLines: fl & 4 ? undefined : 0, showRowColHeaders: fl & 8 ? undefined : 0, showZeros: fl & 0x10 ? undefined : 0, rightToLeft: fl & 0x20 ? 1 : undefined, tabSelected: fl & 0x40 ? 1 : undefined, zoomScale: zoom && zoom !== 100 ? zoom : undefined, topLeftCell: tr || tc ? cellRef(tr, tc) : undefined, view: ['normal', 'pageBreakPreview', 'pageLayout'][mode], workbookViewId }, pane: '' };
+        const fl = rd.u16(); const mode = rd.i32(); const tr = rd.i32(); const tc = rd.i32(); const colorId = rd.u8v(); rd.skip(3); const zoom = rd.u16(); rd.skip(6); const workbookViewId = rd.u32();
+        view = { a: { showFormulas: fl & 2 ? 1 : 0, defaultGridColor: fl & 512 ? undefined : 0, colorId: fl & 512 ? undefined : colorId, showGridLines: fl & 4 ? undefined : 0, showRowColHeaders: fl & 8 ? undefined : 0, showZeros: fl & 0x10 ? undefined : 0, rightToLeft: fl & 0x20 ? 1 : undefined, tabSelected: fl & 0x40 ? 1 : undefined, zoomScale: zoom && zoom !== 100 ? zoom : undefined, topLeftCell: tr || tc ? cellRef(tr, tc) : undefined, view: ['normal', 'pageBreakPreview', 'pageLayout'][mode], workbookViewId }, pane: '', selections: [] };
         parts.views.push(view);
         break;
       }
@@ -1007,6 +1048,34 @@ function sheetHeadXml(u8, env) {
         const frozen = fl & 1;
         view.pane = `<pane${attrs({ xSplit: xs || undefined, ySplit: ys || undefined, topLeftCell: cellRef(Math.max(0, r2), Math.max(0, c2)), activePane: ['bottomRight', 'topRight', 'bottomLeft', 'topLeft'][act] ?? undefined, state: frozen ? 'frozen' : 'split' })}/>`;
       } break;
+      case R.SEL: if (view && rd.left >= 20) {
+        const pane = rd.u32(), r = rd.u32(), c = rd.u32(), activeCellId = rd.u32(), count = rd.u32(), ranges = [];
+        for (let i = 0; i < count && rd.left >= 16; i++) ranges.push(rangeRef(rd.rfx()));
+        if (r <= MAX_ROW && c <= MAX_COL) view.selections.push(`<selection${attrs({ pane: ['bottomRight', 'topRight', 'bottomLeft', 'topLeft'][pane], activeCell: cellRef(r, c), activeCellId, sqref: ranges.join(' ') || cellRef(r, c) })}/>`);
+      } break;
+      case R.DVAL: {
+        if (rd.left < 8) break;
+        const fl = rd.u32(), count = rd.u32(), ranges = [];
+        if (count > Math.floor(rd.left / 16)) throw new Error('XLSB 데이터 유효성 범위가 잘렸습니다.');
+        for (let i = 0; i < count; i++) ranges.push(rd.rfx());
+        const strings = ['errorTitle', 'error', 'promptTitle', 'prompt'], a = {};
+        for (const k of strings) { const v = rd.str(); if (v) a[k] = v; }
+        const fs = [], base = { r: ranges[0]?.r1 ?? 0, c: ranges[0]?.c1 ?? 0 };
+        for (let i = 0; i < 2; i++) {
+          if (rd.left < 8) throw new Error('XLSB 데이터 유효성 수식이 잘렸습니다.');
+          const cce = rd.dv.getUint32(rd.p, true);
+          if (cce > rd.left - 8) throw new Error('XLSB 데이터 유효성 수식 길이가 잘못되었습니다.');
+          const res = decodeFormula(u8.subarray(0, e), rd.p, env, base, { relN: true });
+          if (res.next > e || res.next <= rd.p) throw new Error('XLSB 데이터 유효성 수식 길이가 잘못되었습니다.');
+          // 모르는 조건을 허용 규칙으로 바꾸지 않고 오류 수식으로 보존한다.
+          if (cce && res.text === null && env.warnings) env.warnings.push('XLSB 데이터 유효성 수식 일부를 해석하지 못해 #NAME? 조건으로 보존했습니다. 규칙을 확인하세요.');
+          fs.push(cce ? res.text ?? '#NAME?' : null); rd.p = res.next;
+        }
+        const type = ['none', 'whole', 'decimal', 'list', 'date', 'time', 'textLength', 'custom'][fl & 15];
+        if (!type && env.warnings) env.warnings.push('XLSB 데이터 유효성의 지원하지 않는 유형을 가져오지 못했습니다.');
+        if (ranges.length && type) parts.validations.push(`<dataValidation${attrs({ ...a, type, errorStyle: ['stop', 'warning', 'information'][(fl >>> 4) & 7], allowBlank: fl & 256 ? 1 : 0, showDropDown: fl & 512 ? 1 : 0, imeMode: ['noControl', 'on', 'off', 'disabled', 'hiragana', 'fullKatakana', 'halfKatakana', 'fullAlpha', 'halfAlpha', 'fullHangul', 'halfHangul'][(fl >>> 10) & 255], showInputMessage: fl & 0x40000 ? 1 : 0, showErrorMessage: fl & 0x80000 ? 1 : 0, operator: ['between', 'notBetween', 'equal', 'notEqual', 'greaterThan', 'lessThan', 'greaterThanOrEqual', 'lessThanOrEqual'][(fl >>> 20) & 15], sqref: ranges.map(rangeRef).join(' ') })}>${fs.map((f, i) => f === null ? '' : `<formula${i + 1}>${esc(f)}</formula${i + 1}>`).join('')}</dataValidation>`);
+        break;
+      }
       case R.WSFMT: {
         const dw = rd.i32(); const base = rd.u16(); const h = rd.u16(); const fl = rd.u16();
         parts.fmt = `<sheetFormatPr${attrs({ baseColWidth: base !== 8 ? base : undefined, defaultColWidth: dw >= 0 ? dw / 256 : undefined, defaultRowHeight: h / 20, customHeight: fl & 1 ? 1 : undefined, zeroHeight: fl & 2 ? 1 : undefined })}/>`;
@@ -1078,19 +1147,40 @@ function sheetHeadXml(u8, env) {
         parts.margins = `<pageMargins left="${l}" right="${rr}" top="${tp}" bottom="${b}" header="${h}" footer="${f}"/>`;
         break;
       }
+      case R.PRINTOPTIONS: if (rd.left >= 2) {
+        const fl = rd.u16(); parts.printOptions = `<printOptions${attrs({ horizontalCentered: fl & 1 ? 1 : 0, verticalCentered: fl & 2 ? 1 : 0, headings: fl & 4 ? 1 : 0, gridLines: fl & 8 ? 1 : 0 })}/>`;
+      } break;
+      case R.PAGESETUP: if (rd.left >= 34) {
+        const paperSize = rd.u32(), scale = rd.u32(), horizontalDpi = rd.u32(), verticalDpi = rd.u32(), copies = rd.u32(), firstPageNumber = rd.i32(), fitToWidth = rd.u32(), fitToHeight = rd.u32(), fl = rd.u16();
+        parts.setup = `<pageSetup${attrs({ paperSize, scale: scale || undefined, horizontalDpi, verticalDpi, copies, firstPageNumber: fl & 128 ? firstPageNumber : undefined, useFirstPageNumber: fl & 128 ? 1 : 0, fitToWidth, fitToHeight, pageOrder: fl & 1 ? 'overThenDown' : 'downThenOver', orientation: fl & 64 ? undefined : fl & 2 ? 'landscape' : 'portrait', blackAndWhite: fl & 8 ? 1 : 0, draft: fl & 16 ? 1 : 0, cellComments: fl & 32 ? fl & 256 ? 'atEnd' : 'asDisplayed' : 'none', errors: ['displayed', 'blank', 'dash', 'NA'][(fl >>> 9) & 3] })}/>`;
+      } break;
+      case R.HEADERFOOTER: if (rd.left >= 2) {
+        const fl = rd.u16(), content = [];
+        for (const k of ['oddHeader', 'oddFooter', 'evenHeader', 'evenFooter', 'firstHeader', 'firstFooter']) { const v = rd.str(); if (v) content.push(`<${k}>${esc(v)}</${k}>`); }
+        parts.headerFooter = `<headerFooter${attrs({ differentOddEven: fl & 1 ? 1 : 0, differentFirst: fl & 2 ? 1 : 0, scaleWithDoc: fl & 4 ? 1 : 0, alignWithMargins: fl & 8 ? 1 : 0 })}>${content.join('')}</headerFooter>`;
+      } break;
       case R.DRAWING: parts.drawing = `<drawing r:id="${esc(rd.str() ?? '')}"/>`; break;
       case R.LEGACY: parts.legacy = `<legacyDrawing r:id="${esc(rd.str() ?? '')}"/>`; break;
       case R.TABLEPART: parts.tables.push(`<tablePart r:id="${esc(rd.str() ?? '')}"/>`); break;
-      case R.PROTECT: parts.protect = '<sheetProtection sheet="1" objects="1" scenarios="1"/>'; break;
+      case R.PROTECT: {
+        if (rd.left < 66) throw new Error('XLSB 시트 보호 설정이 잘렸습니다.');
+        const password = rd.u16();
+        parts.protect = { ...parts.protect, ...sheetProtectionFlags(rd), ...(password ? { password: password.toString(16).toUpperCase().padStart(4, '0') } : {}) }; break;
+      }
+      case R.PROTECT_ISO: {
+        if (rd.left < 68) throw new Error('XLSB 시트 보호 설정이 잘렸습니다.');
+        const spinCount = rd.u32(), a = sheetProtectionFlags(rd), hash = protectionData(rd);
+        parts.protect = { ...a, ...hash, ...(hash.hashValue ? { spinCount } : {}) }; break;
+      }
       default: break;
     }
     p = e;
   }
   const af = parts.af ? `<autoFilter ref="${parts.af.ref}">${parts.af.cols.map((c) => `<filterColumn colId="${c.id}"${c.fl & 1 ? ' hiddenButton="1"' : ''}${c.fl & 2 ? ' showButton="0"' : ''}>${c.vals.length || c.blank ? `<filters${c.blank ? ' blank="1"' : ''}>${c.vals.map((v) => `<filter val="${esc(v)}"/>`).join('')}</filters>` : ''}</filterColumn>`).join('')}</autoFilter>` : '';
   const cfXml = parts.cf.map((x) => `<conditionalFormatting sqref="${x.ranges.map(rangeRef).join(' ')}">${x.rules.map((r) => `<cfRule${attrs(r.a)}>${r.inner}${r.fs.map((f) => `<formula>${esc(f)}</formula>`).join('')}</cfRule>`).join('')}</conditionalFormatting>`).join('');
-  const views = parts.views.length ? `<sheetViews>${parts.views.map((v) => `<sheetView${attrs(v.a)}>${v.pane}</sheetView>`).join('')}</sheetViews>` : '';
+  const views = parts.views.length ? `<sheetViews>${parts.views.map((v) => `<sheetView${attrs(v.a)}>${v.pane}${v.selections.join('')}</sheetView>`).join('')}</sheetViews>` : '';
   const breaks = ['rowBreaks', 'colBreaks'].map(tag => parts[tag].length ? `<${tag} count="${parts[tag].length}">${parts[tag].join('')}</${tag}>` : '').join('');
-  const xml = `<worksheet xmlns="${NS}" xmlns:r="${NS_R}">${parts.pr}${parts.dim}${views}${parts.fmt}${parts.cols.length ? `<cols>${parts.cols.join('')}</cols>` : ''}<sheetData/>${parts.protect}${af}${parts.merges.length ? `<mergeCells count="${parts.merges.length}">${parts.merges.join('')}</mergeCells>` : ''}${cfXml}${parts.links.length ? `<hyperlinks>${parts.links.join('')}</hyperlinks>` : ''}${parts.margins}${breaks}${parts.drawing}${parts.legacy}${parts.tables.length ? `<tableParts count="${parts.tables.length}">${parts.tables.join('')}</tableParts>` : ''}</worksheet>`;
+  const xml = `<worksheet xmlns="${NS}" xmlns:r="${NS_R}">${parts.pr}${parts.dim}${views}${parts.fmt}${parts.cols.length ? `<cols>${parts.cols.join('')}</cols>` : ''}<sheetData/>${parts.protect ? `<sheetProtection${attrs(parts.protect)}/>` : ''}${af}${parts.merges.length ? `<mergeCells count="${parts.merges.length}">${parts.merges.join('')}</mergeCells>` : ''}${cfXml}${parts.validations.length ? `<dataValidations count="${parts.validations.length}">${parts.validations.join('')}</dataValidations>` : ''}${parts.links.length ? `<hyperlinks>${parts.links.join('')}</hyperlinks>` : ''}${parts.printOptions}${parts.margins}${parts.setup}${parts.headerFooter}${breaks}${parts.drawing}${parts.legacy}${parts.tables.length ? `<tableParts count="${parts.tables.length}">${parts.tables.join('')}</tableParts>` : ''}</worksheet>`;
   return { xml, dataStart, dataEnd };
 }
 
@@ -1249,7 +1339,7 @@ export function* convertXlsb(files) {
   const wbi = readWorkbook(wbU8);
   const rels = relsOf(files, wbPath);
   const byType = (t) => rels.filter((r) => r.type === t && files[r.target]);
-  const info = { strings: [], rows: new Map(), unsupported: 0 };
+  const info = { strings: [], rows: new Map(), unsupported: 0, warnings: [] };
   Object.defineProperty(files, '__xlsb', { value: info, enumerable: false });
   // 표 (구조적 참조용: 수식보다 먼저)
   const tables = new Map();
@@ -1258,7 +1348,7 @@ export function* convertXlsb(files) {
     const t = scanTable(files[k]);
     if (t) tables.set(t.id, t);
   }
-  const env = { sheets: wbi.sheets.map((s) => s.name), names: wbi.names, xti: wbi.xti, tables, shared: null, memo: new Map() };
+  const env = { sheets: wbi.sheets.map((s) => s.name), names: wbi.names, xti: wbi.xti, tables, shared: null, memo: new Map(), warnings: info.warnings };
   put(files, wbPath, workbookXml(wbi, env, wbU8));
   yield { p: 0.08, msg: '스타일 읽는 중' };
   for (const r of byType('styles')) put(files, r.target, stylesXml(files[r.target]));

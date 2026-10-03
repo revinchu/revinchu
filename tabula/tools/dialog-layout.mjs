@@ -141,7 +141,7 @@ try {
         const search = d.getByRole('searchbox', { name: '차트 종류 검색' }); await search.fill('꺾은선'); await d.locator('.cg-sub:visible').first().click(); await audit(p, d, '차트 검색 결과'); await capture(p, 'chart-type'); await p.keyboard.press('Escape'); eq(await p.evaluate(() => window.tabula.wb().sheets[0].charts[0]), before);
       });
       await test(p, width, '차트 서식: 범주·요소 선택·닫기 접근', async p => {
-        await chart(p); await run(p, 'chartFormat'); const d = dialog(p, '차트 서식'); const tabs = await d.getByRole('tab').allTextContents();
+        await chart(p); await run(p, 'chartFormat'); await p.getByRole('button', { name: '차트 전체 옵션…', exact: true }).click(); const d = dialog(p, '차트 서식'); const tabs = await d.getByRole('tab').allTextContents();
         for (const name of tabs) { const tab = d.getByRole('tab', { name, exact: true }); await usable(p, tab, name + ' 차트 서식 탭'); await tab.click(); await audit(p, d, '차트 서식 ' + name); }
         const picker = d.getByRole('combobox', { name: '서식을 지정할 차트 요소' }); await usable(p, picker, '차트 요소'); await picker.selectOption({ label: '차트 제목' }); await audit(p, d, '차트 제목 서식'); await capture(p, 'chart-format');
         if (width >= 1024) { const head = await d.locator('.dialog-head').boundingBox(); await p.mouse.move(head.x + 60, head.y + head.height / 2); await p.mouse.down(); await p.mouse.move(width - 2, height - 2, { steps: 5 }); await p.mouse.up(); await raf(p); await inside(p, d, '드래그한 차트 창'); await p.setViewportSize({ width: 900, height: 600 }); await raf(p); await audit(p, d, '창 축소 후 차트 서식'); await p.setViewportSize({ width, height }); await raf(p); }

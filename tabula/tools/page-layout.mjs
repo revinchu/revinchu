@@ -1,6 +1,6 @@
 // 인쇄/테마 합성 문서만 검사한다. 사용자 탭·서버 보관함에는 접근하지 않는다.
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { newSmartArt } from '../src/smartart.js';
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const url = process.env.WIXEL_URL || 'http://127.0.0.1:5180/';
@@ -9,7 +9,8 @@ const browser = await chromium.launch(), context = await browser.newContext({ vi
 const page = await context.newPage(), errors = [], writes = [], results = [];
 page.setDefaultTimeout(20000); page.on('pageerror', e => errors.push(e.message));
 await context.route('**/*', route => { const r = route.request(), u = new URL(r.url()); if (!['GET', 'HEAD', 'OPTIONS'].includes(r.method())) { writes.push(r.method()); return route.abort(); } return u.origin === new URL(url).origin && !u.pathname.startsWith('/api/') ? route.continue() : route.abort(); });
-await context.addInitScript(() => { window.WIXEL_SKIP_START = true; window.TABULA_STATIC = true; window.__printCalls = 0; window.print = () => { window.__printCalls++; }; });
+await context.addInitScript(() => { window.WIXEL_SKIP_START = true; window.TABULA_STATIC = true; window.__printCalls = 0; window.__pdfFiles=[]; window.showSaveFilePicker=async options=>({name:options.suggestedName,createWritable:async()=>{const chunks=[];return{write:async data=>chunks.push(data),close:async()=>{const data=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=reject;reader.readAsDataURL(new Blob(chunks));});window.__pdfFiles.push({name:options.suggestedName,data});}};}}); window.print = () => { window.__printCalls++; }; });
+const savePdf = async path => { const count=await page.evaluate(()=>__pdfFiles.length);await page.getByRole('button',{name:'PDF 파일 저장',exact:true}).click();await page.waitForFunction(n=>__pdfFiles.length===n+1,count,{timeout:60000});const file=await page.evaluate(()=>__pdfFiles.at(-1));assert.ok(file.name.endsWith('.pdf'));const bytes=Buffer.from(file.data.split(',')[1],'base64');writeFileSync(path,bytes);return bytes; };
 const current = () => page.evaluate(() => ({ page: tabula.wb().sheets[0].page, theme: tabula.wb().theme, fonts: tabula.wb().themeFonts, effects: tabula.wb().themeEffects, font: tabula.wb().defaultFont, undo: tabula.wb().undoStack.length }));
 try {
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 }); await page.waitForFunction(() => window.tabula?.wb());
@@ -29,14 +30,12 @@ try {
   const second = await preview.locator('.wixel-print-page').innerText(); assert.match(second, /보고서 2 \/ 2/); assert.match(second, /보고서 제목 1/); assert.match(second, /한글 항목 63/);
   results.push('명령 실행 시 보이는 미리보기·2쪽 분할·한글·반복 제목·쪽수 머리글');
   const pdfPath = process.env.WIXEL_PRINT_PDF || 'D:/Codex/Temp/wixel-page-layout.pdf';
-  const downloadPromise = page.waitForEvent('download', { timeout: 60000 });
-  await preview.getByRole('button', { name: 'PDF 파일 저장', exact: true }).click();
-  const download = await downloadPromise; await download.saveAs(pdfPath);
+  await savePdf(pdfPath);
   const bytes = readFileSync(pdfPath), text = bytes.toString('latin1');
   assert.ok(bytes.length > 20000); assert.ok(text.startsWith('%PDF-1.4')); assert.match(text, /\/Count 2/);
-  assert.equal((text.match(/\/Filter \/DCTDecode/g) ?? []).length, 2); assert.equal(await download.failure(), null);
-  assert.match(await preview.getByRole('status').innerText(), /2쪽 PDF 파일의 다운로드/);
-  results.push('직접 PDF 다운로드·실제 PDF 2페이지/JPEG 스트림·다운로드 성공');
+  assert.equal((text.match(/\/Filter \/DCTDecode/g) ?? []).length, 2); assert.equal(await page.evaluate(()=>__pdfFiles.length), 1);
+  assert.match(await preview.getByRole('status').innerText(), /2쪽 PDF 파일을 저장했습니다/);
+  results.push('명시적 PDF 저장·모의 파일 핸들의 실제 PDF 2페이지/JPEG 스트림·쓰기 완료');
   await preview.getByRole('button', { name: '인쇄', exact: true }).click();
   assert.equal(await page.evaluate(() => __printCalls), 1); assert.equal(await page.locator('#printArea > .wixel-print-page').count(), 2);
   assert.match(await preview.getByRole('status').innerText(), /인쇄 창이 열리지 않으면/);
@@ -76,9 +75,7 @@ try {
   assert.equal(await preview.locator('[data-print-object="print-smartart"]').count(), 1);
   const pictureBox = await preview.locator('[data-print-object="print-image"]').boundingBox(), smartBox = await preview.locator('[data-print-object="print-smartart"]').boundingBox();
   assert.ok(smartBox.y > pictureBox.y + pictureBox.height); assert.ok(Math.abs(smartBox.x - pictureBox.x) < 1);
-  const objectsPromise = page.waitForEvent('download', { timeout: 60000 });
-  await preview.getByRole('button', { name: 'PDF 파일 저장', exact: true }).click();
-  const objectDownload = await objectsPromise; await objectDownload.saveAs('D:/Codex/Temp/wixel-page-layout-objects.pdf');
+  await savePdf('D:/Codex/Temp/wixel-page-layout-objects.pdf');
   const objectPdf = readFileSync('D:/Codex/Temp/wixel-page-layout-objects.pdf'); assert.match(objectPdf.toString('latin1'), /\/Count 1/); assert.ok(objectPdf.length > 30000);
   assert.match(await preview.locator('.wixel-print-page').innerText(), /계획/);
   await page.screenshot({ path: 'D:/Codex/Temp/wixel-print-smartart.png' });
@@ -110,8 +107,7 @@ try {
   const merged2 = preview.locator('td').filter({hasText:'페이지 경계 병합'});
   assert.equal(Number(await merged2.getAttribute('rowspan')) + rs1, 8); assert.equal(await merged2.getAttribute('colspan'), '3');
   const row43 = preview.locator('tr[data-print-row="43"]'); assert.equal(await row43.locator('td').nth(1).innerText(), '행43열4');
-  const mergeDownload = page.waitForEvent('download', {timeout:60000}); await preview.getByRole('button',{name:'PDF 파일 저장',exact:true}).click();
-  await (await mergeDownload).saveAs('D:/Codex/Temp/wixel-page-layout-merged.pdf');
+  await savePdf('D:/Codex/Temp/wixel-page-layout-merged.pdf');
   await page.getByRole('dialog',{name:'인쇄 미리보기'}).getByRole('button',{name:'닫기',exact:true}).last().click();
   results.push('세로2쪽 병합셀 분할·원래8행 합계·열위치 유지·반복 병합제목·실제PDF');
   await page.evaluate(() => {
@@ -143,8 +139,7 @@ try {
   await preview.getByRole('button',{name:'다음 인쇄 페이지'}).click();
   const secondClip = await preview.locator('[data-print-object="cross-page"]').evaluate(n => { const top=parseFloat(n.style.top), h=parseFloat(n.style.height), clip=parseFloat(n.parentElement.style.height); return Math.min(clip,top+h)-Math.max(0,top); });
   assert.ok(Math.abs(firstClip + secondClip - 200)<1, `${firstClip}+${secondClip}`);
-  const crossDownload = page.waitForEvent('download',{timeout:60000}); await preview.getByRole('button',{name:'PDF 파일 저장',exact:true}).click();
-  await (await crossDownload).saveAs('D:/Codex/Temp/wixel-page-layout-cross-object.pdf');
+  await savePdf('D:/Codex/Temp/wixel-page-layout-cross-object.pdf');
   await page.getByRole('dialog',{name:'인쇄 미리보기'}).getByRole('button',{name:'닫기',exact:true}).last().click();
   results.push('명시 인쇄영역 내 개체 포함·2쪽 교차조각 높이 합200px·영역밖/숨김 제외·실제PDF');
   assert.deepEqual(errors, []); assert.deepEqual(writes, []);

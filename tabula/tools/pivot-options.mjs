@@ -35,10 +35,13 @@ try {
       await page.goto(process.env.WIXEL_URL || 'http://localhost:5178/');
       await page.waitForFunction(() => !!window.tabula?.wb());
       await page.locator('#fileInput').setInputFiles({ name: 'synthetic-pivot-options.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: Buffer.from(fixture(flag, caption)) });
-      await page.waitForFunction(() => window.tabula.wb().sheets[0].pivot?.name === '오류옵션검증');
+      await page.waitForFunction(() => window.tabula.wb().sheets[0].pivot?.name === '오류옵션검증' && /synthetic-pivot-options\.xlsx.*열었습니다/.test(document.getElementById('toast')?.textContent || '')); // 이름 설정 뒤 비동기 afterLoad까지 완료
+
       await page.evaluate(() => { window.tabula.selectCell(1, 5); window.tabula.run('pivotOptions'); });
       assert.equal(await page.getByLabel('오류 값 표시', { exact: true }).isChecked(), enabled); checks++;
-      await page.locator('.dialog').getByRole('button', { name: '확인', exact: true }).click();
+      const options = page.getByRole('dialog', { name: '피벗 테이블 옵션', exact: true });
+      await options.getByRole('button', { name: '확인', exact: true }).click();
+      await options.waitFor({ state: 'detached' });
       const result = await page.evaluate(() => {
         const wb = window.tabula.wb(), def = wb.sheets[0].pivot, value = wb.getValue(0, 1, 6);
         return { enabled: def.errorShow, caption: def.errorCaption, value: value?.code ?? value, book: wb.serialize() };

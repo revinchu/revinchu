@@ -3590,18 +3590,53 @@ function protectSheetDialog() {
 }
 
 function unprotectSheet() {
-  const sh = sheet();
-  const p = sh.protect;
-  const done = () => { wb.transact(() => wb.setSheetProp(si, 'protect', null), meta()); ribbon.update?.(ribbonState()); updateSelectionUI(); toast('시트 보호를 해제했습니다.'); };
+  const owner = wb, sh = sheet(), p = sh.protect;
+  const signature = JSON.stringify(p);
+  const done = () => {
+    const target = owner.sheets.indexOf(sh);
+    if (wb !== owner || target < 0 || JSON.stringify(sh.protect) !== signature) throw new Error('시트 또는 보호 설정이 바뀌었습니다. 다시 시도하세요.');
+    owner.transact(() => owner.setSheetProp(target, 'protect', null), meta());
+    ribbon.update?.(ribbonState()); updateSelectionUI(); toast('시트 보호를 해제했습니다.');
+  };
   if (!p?.hash && !p?.modern?.hashValue) { done(); return; }
-  formDialog('시트 보호 해제', [{ name: 'pw', label: '암호', type: 'password', value: '' }], (v) => {
-    if (p.hash) {
-      if (excelHash(v.pw) !== String(p.hash).toUpperCase().padStart(4, '0')) { alertDialog('시트 보호 해제', '암호가 잘못되었습니다. Caps Lock 키가 켜져 있는지 확인하고 대/소문자를 정확히 입력하세요.'); return false; }
-      done();
-      return undefined;
+  formDialog('시트 보호 해제', [{ name: 'pw', label: '암호', type: 'password', value: '' }], async (v) => {
+    const ok = p.modern?.hashValue ? await verifyModernHash(p.modern, v.pw) : excelHash(v.pw) === String(p.hash).toUpperCase().padStart(4, '0');
+    if (!ok) throw new Error('암호가 잘못되었습니다. Caps Lock 키와 대/소문자를 확인하세요.');
+    done();
+  });
+}
+
+/** Excel 구조 보호 암호를 모든 진입점에서 동일하게 확인한다. */
+function protectWorkbookDialog(onDone = () => {}) {
+  if (viewOnly) return;
+  const owner = wb, ownerSheets = wb.sheets, before = structuredClone(wb.props ?? {}), protection = before.workbookProtection ?? {};
+  const signature = JSON.stringify(before);
+  const finish = (on, password = '') => {
+    if (wb !== owner || owner.sheets !== ownerSheets || JSON.stringify(owner.props ?? {}) !== signature) throw new Error('통합 문서 또는 보호 설정이 바뀌었습니다. 다시 시도하세요.');
+    const next = { ...protection, lockStructure: on ? '1' : '0' };
+    if (on || !next.lockWindows || next.lockWindows === '0') {
+      for (const key of ['workbookPassword', 'workbookAlgorithmName', 'workbookHashValue', 'workbookSaltValue', 'workbookSpinCount']) delete next[key];
     }
-    verifyModernHash(p.modern, v.pw).then((ok) => { if (ok) done(); else alertDialog('시트 보호 해제', '암호가 잘못되었습니다.'); }).catch(() => alertDialog('시트 보호 해제', '이 암호 방식은 확인할 수 없습니다.'));
-    return undefined;
+    if (on && password) next.workbookPassword = excelHash(password);
+    owner.transact(() => owner.setBookProp('props', { ...before, lockStructure: on || undefined, workbookProtection: next }), meta());
+    updateRibbon(); onDone();
+    toast(on ? '통합 문서 구조를 보호했습니다. 시트를 추가 · 삭제 · 이동 · 이름 변경 · 숨기기 할 수 없습니다.' : '통합 문서 구조 보호를 해제했습니다.');
+  };
+  if (!before.lockStructure) {
+    formDialog('통합 문서 구조 보호', [
+      { name: 'pw', label: '보호 해제 암호 (선택)', type: 'password', value: '' },
+      { name: 'pw2', label: '암호 확인', type: 'password', value: '' },
+    ], ({ pw, pw2 }) => { if (pw !== pw2) throw new Error('확인 암호가 일치하지 않습니다.'); finish(true, pw); },
+    { note: '시트 추가 · 삭제 · 이동 · 이름 변경 · 숨기기를 제한합니다.' });
+    return;
+  }
+  if (!protection.workbookPassword && !protection.workbookHashValue) { finish(false); return; }
+  formDialog('통합 문서 보호 해제', [{ name: 'pw', label: '암호', type: 'password', value: '' }], async ({ pw }) => {
+    const ok = protection.workbookHashValue
+      ? await verifyModernHash({ algorithmName: protection.workbookAlgorithmName, spinCount: protection.workbookSpinCount, saltValue: protection.workbookSaltValue, hashValue: protection.workbookHashValue }, pw)
+      : excelHash(pw) === String(protection.workbookPassword).toUpperCase().padStart(4, '0');
+    if (!ok) throw new Error('암호가 잘못되었습니다. 대/소문자를 정확히 입력하세요.');
+    finish(false);
   });
 }
 
@@ -3759,32 +3794,54 @@ function renderWatches() {
   );
 }
 
+/** 가상 분석은 별도 계산본을 사용해 취소 시 원본 값·저장값·실행 취소를 건드리지 않는다. */
+function analysisWorkbook() {
+  const copy = new Workbook(wb.serialize());
+  copy.manualCalc = false;
+  copy.invalidate(undefined, true);
+  return copy;
+}
+function analysisValueCell(cell, value) {
+  const raw = value == null ? '' : isError(value) ? value.code : typeof value === 'boolean' ? (value ? 'TRUE' : 'FALSE') : String(value);
+  return { raw, inputType: typeof value === 'string' ? 'text' : 'value', style: cell?.style, comment: cell?.comment, link: cell?.link };
+}
 /** 목표값 찾기 */
 function goalSeekDialog() {
+  const owner = wb, ownerSheet = sheet();
   formDialog('목표값 찾기', [
     { name: 'set', label: '수식 셀', value: cellName(active.r, active.c) },
     { name: 'to', label: '찾는 값', value: '' },
     { name: 'by', label: '값을 바꿀 셀', value: '' },
   ], (v) => {
+    if (wb !== owner || sheet() !== ownerSheet) throw new Error('문서 또는 시트가 바뀌었습니다. 다시 실행하세요.');
     const a = parseRangeName(v.set);
     const b = parseRangeName(v.by);
     const target = Number(v.to);
-    if (!a || !b || !Number.isFinite(target)) { alertDialog('목표값 찾기', '셀 주소와 숫자를 올바르게 입력하세요.'); return false; }
+    if (!a || !b || a.r1 !== a.r2 || a.c1 !== a.c2 || b.r1 !== b.r2 || b.c1 !== b.c2 || !v.to.trim() || !Number.isFinite(target)) { alertDialog('목표값 찾기', '셀 주소와 숫자를 올바르게 입력하세요.'); return false; }
     if (!wb.getCell(si, a.r1, a.c1)?.formula) { alertDialog('목표값 찾기', '수식 셀에는 수식이 있어야 합니다.'); return false; }
     if (wb.getCell(si, b.r1, b.c1)?.formula) { alertDialog('목표값 찾기', '값을 바꿀 셀에는 수식이 아닌 값이 있어야 합니다.'); return false; }
+    if (protectBlocked('cells', b)) return false;
+    const version = wb.version;
     const orig = cellData(wb.getCell(si, b.r1, b.c1));
-    const x0 = Number(valueAt(b.r1, b.c1)) || 0;
-    // 계산 중에는 실행 취소 기록 없이 값만 바꿔 보고, 끝나면 원래대로 돌린 뒤 결과를 한 번에 기록
-    const put = (x) => wb.setCellData(si, b.r1, b.c1, { ...(orig ?? {}), raw: String(x) });
-    const res = goalSeek((x) => { put(x); return wb.getValue(si, a.r1, a.c1); }, x0, target);
-    wb.setCellData(si, b.r1, b.c1, orig);
+    const simulation = analysisWorkbook();
+    const x0 = Number(simulation.getValue(si, b.r1, b.c1)) || 0;
+    const res = goalSeek((x) => {
+      simulation.setCellData(si, b.r1, b.c1, analysisValueCell(orig, x));
+      return simulation.getValue(si, a.r1, a.c1);
+    }, x0, target);
+    if (!Number.isFinite(res.x) || !Number.isFinite(res.value)) throw new Error('수식 결과가 숫자가 아니어서 목표값을 찾을 수 없습니다. 수식 오류와 지원 여부를 확인하세요.');
     const x = Number(res.x.toPrecision(15));
     const msg = `${cellName(a.r1, a.c1)} 셀로 목표값 찾기: ${res.ok ? '해를 찾았습니다.' : '해를 찾지 못했습니다 (가장 가까운 값).'}\n목표값: ${formatGeneral(target)}\n현재값: ${formatGeneral(Number(res.value.toPrecision(12)))}\n${cellName(b.r1, b.c1)} = ${formatGeneral(x)}`;
     openDialog({
       title: '목표값 찾기 상태', body: el('pre', { class: 'plain' }), width: 380,
       onOpen: (d) => { d.querySelector('pre').textContent = msg; },
       buttons: [
-        { label: '확인', primary: true, action: () => { wb.transact(() => wb.setCellData(si, b.r1, b.c1, { ...(orig ?? {}), raw: String(x) }), meta()); } },
+        { label: '확인', primary: true, action: () => {
+          if (wb !== owner || sheet() !== ownerSheet || wb.version !== version) throw new Error('문서가 바뀌었습니다. 목표값 찾기를 다시 실행하세요.');
+          if (protectBlocked('cells', b)) return false;
+          wb.transact(() => wb.setCellData(si, b.r1, b.c1, analysisValueCell(orig, x)), meta());
+          wb.calculateNow(); gv.renderAll(); updateStatusCalc();
+        } },
         { label: '취소' },
       ],
     });
@@ -3891,20 +3948,23 @@ function advancedFilterDialog() {
 
 /** 데이터 표 (가상 분석): 선택 범위의 첫 행 · 첫 열에 입력 값, 모서리 · 첫 행/열에 수식 */
 function dataTableDialog() {
+  const owner = wb, ownerSheet = sheet();
   const rg = usedClip(sel);
   if (rg.r2 <= rg.r1 && rg.c2 <= rg.c1) { alertDialog('데이터 표', '입력 값과 수식을 포함한 표 범위를 선택하세요.'); return; }
   formDialog('데이터 표', [
     { name: 'row', label: '행 입력 셀 (첫 행의 값을 넣을 셀)', value: '' },
     { name: 'col', label: '열 입력 셀 (첫 열의 값을 넣을 셀)', value: '' },
   ], (v) => {
+    if (wb !== owner || sheet() !== ownerSheet) throw new Error('문서 또는 시트가 바뀌었습니다. 다시 실행하세요.');
     const ri = v.row.trim() ? parseRangeName(v.row.trim()) : null;
     const ci = v.col.trim() ? parseRangeName(v.col.trim()) : null;
     if (!ri && !ci) { alertDialog('데이터 표', '입력 셀을 하나 이상 지정하세요.'); return false; }
-    const origs = [ri, ci].filter(Boolean).map((x) => [x, cellData(wb.getCell(si, x.r1, x.c1))]);
-    const setIn = (x, val) => wb.setCellData(si, x.r1, x.c1, { ...(cellData(wb.getCell(si, x.r1, x.c1)) ?? {}), raw: val === null || val === undefined ? '' : isError(val) ? val.code : String(val) });
-    const out = dataTable(rg, ri, ci, setIn, (r, c) => wb.getValue(si, r, c));
-    for (const [x, d] of origs) wb.setCellData(si, x.r1, x.c1, d);
-    wb.transact(() => { for (const [r, c, val] of out) wb.setCellData(si, r, c, { ...(cellData(wb.getCell(si, r, c)) ?? {}), raw: val === null ? '' : isError(val) ? val.code : typeof val === 'string' ? `'${val}` : typeof val === 'boolean' ? (val ? 'TRUE' : 'FALSE') : String(val) }); }, meta());
+    if ((v.row.trim() && !ri) || (v.col.trim() && !ci) || [ri, ci].filter(Boolean).some(x => x.r1 !== x.r2 || x.c1 !== x.c2)) throw new Error('입력 셀은 올바른 단일 셀 주소로 지정하세요.');
+    if (protectBlocked('cells', rg)) return false;
+    const simulation = analysisWorkbook();
+    const setIn = (x, val) => simulation.setCellData(si, x.r1, x.c1, analysisValueCell(simulation.getCell(si, x.r1, x.c1), val));
+    const out = dataTable(rg, ri, ci, setIn, (r, c) => simulation.getValue(si, r, c));
+    wb.transact(() => { for (const [r, c, val] of out) wb.setCellData(si, r, c, analysisValueCell(wb.getCell(si, r, c), val)); }, meta());
     toast(`데이터 표: ${out.length}개 칸을 계산했습니다 (값으로 입력됨, 입력 값을 바꾸면 다시 실행하세요).`);
     return undefined;
   }, { note: '행 입력 셀만 지정하면 첫 열에 수식, 열 입력 셀만 지정하면 첫 행에 수식, 둘 다 지정하면 왼쪽 위 모서리에 수식을 두세요.' });
@@ -8016,13 +8076,37 @@ const opts = (() => {
 function saveOptions() {
   try { localStorage.setItem(OPTIONS_KEY, JSON.stringify(opts)); } catch { /* 저장 못 함 */ }
 }
-/** 옵션을 통합 문서 · 화면에 적용 */
+/** 계산과 시트 보기 설정은 문서에 속하며 기기별 옵션으로 덮어쓰지 않는다. */
+function documentCalcMode() { return wb?.calculation?.mode === 'manual' ? 'manual' : wb?.calculation?.mode === 'autoNoTable' ? 'semi' : 'auto'; }
+function syncDocumentView() {
+  if (!wb?.sheets[si]) return;
+  if (!viewOnly) {
+    view.showHeaders = sheet().view?.headers !== false;
+    view.showFormulas = !!sheet().view?.showFormulas;
+  }
+  view.printGrid = !!sheet().page?.gridlines;
+  const color = sheet().view?.gridColor;
+  if (color) document.documentElement.style.setProperty('--grid-line', color);
+  else document.documentElement.style.removeProperty('--grid-line');
+}
+function changeSheetDisplay(prop, value) {
+  if (viewOnly) { view[prop === 'headers' ? 'showHeaders' : 'showFormulas'] = value; }
+  else wb.transact(() => wb.setSheetProp(si, 'view', { ...sheet().view, [prop]: value }), meta());
+  syncDocumentView(); applyView(); gv.renderAll(); updateRibbon();
+}
+function changeCalculation(mode) {
+  const wasManual = wb.manualCalc;
+  wb.transact(() => wb.setBookProp('calculation', { ...wb.calculation, mode: mode === 'semi' ? 'autoNoTable' : mode }), meta());
+  opts.calcMode = mode; saveOptions();
+  if (wasManual && mode !== 'manual') wb.calculateNow();
+  gv.renderAll(); updateStatusCalc(); updateRibbon();
+}
+/** 기기별 옵션을 화면에 적용 */
 function applyOptions() {
-  if (wb) wb.manualCalc = opts.calcMode === 'manual';
+  syncDocumentView();
   syncCustomLists();
   const root = document.documentElement;
   root.style.setProperty('--focus-cell', opts.focusColor);
-  if (opts.gridColor) root.style.setProperty('--grid-line', opts.gridColor); else root.style.removeProperty('--grid-line');
   for (const t of ['white', 'gray', 'black']) root.classList.toggle(`theme-${t}`, opts.uiTheme === t);
   root.classList.toggle('reduce-motion', !!opts.reduceMotion);
   root.style.setProperty('--ui-scale', String((opts.uiScale || 100) / 100));
@@ -8090,7 +8174,7 @@ function updateStatusCalc() {
   if (!elc) return;
   const state = wb?.getCalculationStatus(si, active.r, active.c);
   const uncertain = state && ['cached', 'stale', 'blocked'].includes(state.status);
-  elc.textContent = wb?.needsCalc ? '계산 대기 (F9)' : uncertain ? (state.status === 'cached' ? '파일 저장값 · 확인 필요' : '재계산 불가 · 확인 필요') : opts.calcMode === 'manual' ? '수동 계산' : '계산 상태';
+  elc.textContent = wb?.needsCalc ? '계산 대기 (F9)' : uncertain ? (state.status === 'cached' ? '파일 저장값 · 확인 필요' : '재계산 불가 · 확인 필요') : documentCalcMode() === 'manual' ? '수동 계산' : '계산 상태';
   elc.title = uncertain ? state.message : wb?.needsCalc ? 'F9를 누르면 계산합니다. 클릭하면 미확인 수식 목록을 엽니다.' : '클릭하여 저장값 사용·재계산 불가 수식을 확인합니다.';
   elc.classList.toggle('warn', !!uncertain);
 }
@@ -8122,9 +8206,11 @@ function pivotDefaultsDef() {
 }
 
 function optionsDialog(startTab = 0) {
+  const owner = wb, ownerSheet = sheet();
   const o = JSON.parse(JSON.stringify(opts));
+  o.calcMode = documentCalcMode(); o.gridColor = sheet().view?.gridColor || '';
   o.qatOrder = qatCommands();
-  const book = { noZeros: !!sheet().noZeros, lockStructure: !!wb.props?.lockStructure };
+  const book = { noZeros: !!sheet().noZeros, calcOnSave: wb.calculation?.calcOnSave !== false };
   const radio = (name, v, cur, label, fn) => { const r = el('input', { type: 'radio', name, value: v, checked: cur === v }); r.addEventListener('change', () => { if (r.checked) fn(v); }); return el('label', { class: 'fc-check' }, r, label); };
   const check = (cur, label, fn) => { const c = el('input', { type: 'checkbox', checked: !!cur }); c.addEventListener('change', () => fn(c.checked)); return el('label', { class: 'fc-check' }, c, label); };
   const title = (t) => el('div', { class: 'opt-title' }, t);
@@ -8207,6 +8293,7 @@ function optionsDialog(startTab = 0) {
       radio('calc', 'auto', o.calcMode, '자동', (v) => { o.calcMode = v; }),
       radio('calc', 'semi', o.calcMode, '데이터 표만 수동', (v) => { o.calcMode = v; }),
       radio('calc', 'manual', o.calcMode, '수동 (F9를 누를 때 계산 — 큰 통합 문서에서 입력이 빠름)', (v) => { o.calcMode = v; }),
+      check(book.calcOnSave, '저장하기 전에 통합 문서 다시 계산', (v) => { book.calcOnSave = v; }),
       title('수식 작업'),
       check(o.formulaAutocomplete !== false, '수식 자동 완성', (v) => { o.formulaAutocomplete = v; }),
       check(o.getPivotData, '피벗 테이블 참조에 GetPivotData 함수 사용', (v) => { o.getPivotData = v; }),
@@ -8254,12 +8341,12 @@ function optionsDialog(startTab = 0) {
       title('표시'),
       check(view.showFormulaBar, '수식 입력줄 표시', (v) => { o._formulaBar = v; }),
       title(`통합 문서 표시 옵션 — ${docName}`),
-      check(!book.lockStructure, '시트 탭 편집 허용 (끄면 통합 문서 구조 보호)', (v) => { book.lockStructure = !v; }),
+      (() => { const button = el('button', { class: 'btn', onclick: () => protectWorkbookDialog(() => { button.textContent = wb.props?.lockStructure ? '통합 문서 구조 보호 해제...' : '통합 문서 구조 보호...'; }) }, wb.props?.lockStructure ? '통합 문서 구조 보호 해제...' : '통합 문서 구조 보호...'); return button; })(),
       title(`워크시트 표시 옵션 — ${sheet().name}`),
       check(view.showHeaders, '행 및 열 머리글 표시', (v) => { o._headers = v; }),
       check(!sheet().noGrid, '눈금선 표시', (v) => { o._grid = v; }),
       check(!book.noZeros, '0 값이 있는 셀에 0 표시', (v) => { book.noZeros = !v; }),
-      el('label', {}, el('span', {}, '눈금선 색'), (() => { const i = el('input', { type: 'color', value: o.gridColor || '#e1e1e1' }); i.addEventListener('input', () => { o.gridColor = i.value; }); return i; })(),
+      el('label', {}, el('span', {}, '눈금선 색'), (() => { const i = el('input', { type: 'color', 'aria-label': '눈금선 색', value: o.gridColor || '#e1e1e1' }); i.addEventListener('input', () => { o.gridColor = i.value; }); return i; })(),
         el('button', { class: 'btn small', onclick: (e) => { o.gridColor = ''; e.target.previousElementSibling.value = '#e1e1e1'; } }, '자동')))],
     ['리본 사용자 지정', el('div', { class: 'opt-page' },
       title('리본 메뉴에 표시할 기본 탭'),
@@ -8319,22 +8406,19 @@ function optionsDialog(startTab = 0) {
     body: el('div', { class: 'opt-dialog-body' }, search, status, el('div', { class: 'opt-wrap' }, tabBar, box)),
     buttons: [{
       label: '확인', primary: true, action: () => {
-        const wasManual = opts.calcMode === 'manual';
-        const { _headers, _grid, _formulaBar } = o;
-        delete o._headers; delete o._grid; delete o._formulaBar;
+        if (wb !== owner || sheet() !== ownerSheet) throw new Error('문서 또는 시트가 바뀌었습니다. 현재 시트에서 옵션을 다시 여세요.');
+        const wasManual = wb.manualCalc;
+        const { _headers, _grid, _formulaBar, gridColor, calcMode } = o;
+        delete o._headers; delete o._grid; delete o._formulaBar; delete o.gridColor;
         Object.assign(opts, o);
         saveOptions();
-        if (_headers !== undefined) view.showHeaders = _headers;
         if (_formulaBar !== undefined) view.showFormulaBar = _formulaBar;
-        const gridChange = _grid !== undefined && _grid === !!sheet().noGrid;
-        const zeroChange = book.noZeros !== !!sheet().noZeros;
-        if (gridChange || zeroChange) {
-          wb.transact(() => {
-            if (gridChange) wb.setSheetProp(si, 'noGrid', _grid ? undefined : true);
-            if (zeroChange) wb.setSheetProp(si, 'noZeros', book.noZeros || undefined);
-          }, meta());
-        }
-        if (book.lockStructure !== !!wb.props?.lockStructure) { wb.props = { ...(wb.props ?? {}), lockStructure: book.lockStructure || undefined }; dirty = true; }
+        wb.transact(() => {
+          if (_grid !== undefined) wb.setSheetProp(si, 'noGrid', _grid ? undefined : true);
+          wb.setSheetProp(si, 'noZeros', book.noZeros || undefined);
+          wb.setSheetProp(si, 'view', { ...sheet().view, ...(_headers !== undefined ? { headers: _headers } : {}), gridColor: gridColor || undefined });
+          wb.setBookProp('calculation', { ...wb.calculation, mode: calcMode === 'semi' ? 'autoNoTable' : calcMode, calcOnSave: book.calcOnSave });
+        }, meta());
         applyOptions();
         ribbon?.reset?.();
         if (wasManual && opts.calcMode !== 'manual') wb.calculateNow();
@@ -9377,7 +9461,7 @@ function pictureContextMenu(id, pos) {
     action('크기 및 속성(Z)...', 'pictureSize'), action('그림 서식(O)...', 'pictureFormat', { icon: 'format', key: 'Ctrl+1' }),
     action('그림 원래대로', 'pictureReset'),
     { label: '셀에 배치', disabled: readonly, action: () => imageToCell(id) },
-    ...(im.icon ? [{ label: 'SVG 도형 변환', disabled: readonly, action: convertSelectedSvg }] : []),
+    ...(canConvertSvg({ prop: 'images', obj: im }) ? [{ label: 'SVG 도형 변환', disabled: readonly, action: convertSelectedSvg }] : []),
     { sep: true }, { label: '삭제', icon: 'delete', key: 'Delete', disabled: readonly, action: () => { if (!objectEditBlocked()) deleteObject(id); } },
   ];
   const menu = openMenu(pos, items, { toolbar, scroll: true }); if (menu) menu.dataset.contextKind = 'picture';
@@ -13697,6 +13781,7 @@ function switchSheet(i, restore = true) {
   if (editing && !commitEdit()) return;
   if (wb.sheets[si]) sheetSel.set(wb.sheets[si], { active, sel, selKind, scroll: gv.scrollPosition() });
   si = i;
+  syncDocumentView();
   chartSel = null;
   circles = null;
   gv.resetExtent();
@@ -14003,7 +14088,7 @@ async function exportCsv(kind = 'csv', name = docName) {
 
 /** OpenDocument 스프레드시트(.ods)로 저장 — 값 · 수식 · 서식 · 병합 · 열 너비 */
 function exportOds(name = docName) {
-  const info = wb.sheets.map((s, i) => ({ si: i, name: s.name, merges: s.merges ?? [], hidden: s.state === 'hidden' || s.state === 'veryHidden' }));
+  const info = wb.sheets.map((s, i) => ({ si: i, name: s.name, merges: s.merges ?? [], hiddenRows: s.hiddenRows, hiddenCols: s.hiddenCols, hidden: s.state === 'hidden' || s.state === 'veryHidden' }));
   const bytes = writeOds(info, {
     raw: (s, r, c) => wb.getRaw(s, r, c), value: (s, r, c) => wb.getValue(s, r, c), style: (s, r, c) => wb.styleAt(s, r, c),
     used: (s) => wb.usedRange(s), colWidth: (s, c) => wb.colWidth(s, c), rowHeight: (s, r) => wb.sheets[s].rowHeights?.[r] ?? null,
@@ -14041,6 +14126,7 @@ async function exportXlsx(name = docName, kind = null) {
   try {
     await snapshotLinkedPictures();
     if (wb !== savingBook || docId !== savingId) throw new Error('문서가 바뀌었습니다. 현재 문서에서 다시 저장하세요.');
+    if (savingBook.calculation?.calcOnSave !== false) savingBook.calculateNow();
     const savingVersion = savingBook.version;
     const pictureBook = await preparePictureExport(savingBook, count => prog.set(.05, `그림 효과 준비 중 (${count}개)`));
     if (wb !== savingBook || docId !== savingId) throw new Error('문서가 바뀌었습니다. 현재 문서에서 다시 저장하세요.');
@@ -14415,6 +14501,8 @@ function redrawPivotsQuiet() {
 }
 
 function afterLoad(name, activeSheet) {
+  // 계산 설정이 없는 외부 파일은 Excel 기본값(자동)을 명시해 로컬 재열기에도 유지한다.
+  if (!wb.calculation) { wb.calculation = { mode: 'auto' }; wb.manualCalc = false; }
   endBorderDraw();
   chartElementDrag = null;
   endDraw(); shapeEdit = null; shapePointDrag = null;
@@ -14464,6 +14552,7 @@ function blankBook() {
   const n = clamp(Math.round(opts.newSheets || 1), 1, 255);
   const data = { sheets: [...Array(n)].map((_, i) => ({ name: `Sheet${i + 1}`, cells: {} })) };
   if ((opts.newFont && opts.newFont !== BASE_FONT.name) || (opts.newSize && opts.newSize !== BASE_FONT.size)) data.defaultFont = { name: opts.newFont || BASE_FONT.name, size: opts.newSize || BASE_FONT.size };
+  data.calculation = { mode: opts.calcMode === 'semi' ? 'autoNoTable' : opts.calcMode || 'auto' };
   if (opts.userName) data.props = { creator: opts.userName };
   return data;
 }
@@ -15474,7 +15563,7 @@ function openBackstage(panel = 'new') {
   // ── 정보 (엑셀 파일 › 정보): 보호 · 검사 · 관리 · 속성 ──
   const showInfo = () => {
     const pr = wb.props ?? {};
-    const setProp = (patch) => { wb.props = { ...(wb.props ?? {}), ...patch }; dirty = true; saveToStorage(); };
+    const setProp = (patch) => { wb.transact(() => wb.setBookProp('props', { ...(wb.props ?? {}), ...patch }), meta()); saveToStorage(); };
     const where = `${storageLabel()} › ${docName}`;
     const cellCount = wb.sheets.reduce((n, sh) => n + sh.cells.size + sh.blocks.reduce((m, b) => m + b.n * b.cols.length, 0), 0);
     const approx = Math.max(1, Math.round(cellCount * 0.03)); // 대략 (KB)
@@ -15492,7 +15581,7 @@ function openBackstage(panel = 'new') {
         { label: '항상 읽기 전용으로 열기', desc: '읽는 사람에게 편집에 동의하도록 요청하여 실수로 인한 변경을 방지합니다.', checked: !!pr.readOnlyRecommended, action: () => { setProp({ readOnlyRecommended: !pr.readOnlyRecommended || undefined }); showInfo(); } },
         { label: '암호 설정', desc: '이 통합 문서를 열려면 암호가 필요합니다. (WIXEL 은 암호화 파일을 만들 수 없어 엑셀에서 설정하세요)', disabled: true },
         { label: '현재 시트 보호', desc: '현재 시트에서 변경할 수 있는 내용을 제어합니다.', checked: !!sheet().protect?.on, action: () => { close(); run(sheet().protect?.on ? 'unprotectSheet' : 'protectSheet'); } },
-        { label: '통합 문서 구조 보호', desc: '통합 문서 구조의 원하지 않는 변경(예: 시트 추가)을 방지합니다.', checked: !!pr.lockStructure, action: () => { setProp({ lockStructure: !pr.lockStructure || undefined }); toast(pr.lockStructure ? '통합 문서 구조 보호를 해제했습니다.' : '통합 문서 구조를 보호했습니다.'); showInfo(); } },
+        { label: '통합 문서 구조 보호', desc: '통합 문서 구조의 원하지 않는 변경(예: 시트 추가)을 방지합니다.', checked: !!pr.lockStructure, action: () => { close(); protectWorkbookDialog(); } },
         { label: '최종본으로 표시', desc: '독자에게 문서가 최종본임을 알립니다.', checked: !!pr.markedFinal, action: () => { setProp({ markedFinal: !pr.markedFinal || undefined }); showFinalBar(); showInfo(); if (!pr.markedFinal) toast('이 통합 문서를 최종본으로 표시했습니다. 저장하면 파일에도 기록됩니다.'); } },
       ]);
     };
@@ -17765,9 +17854,9 @@ function tableStylesMenu(anchorEl) { tableStyleGallery(anchorEl, !tableHere()); 
 const MENUS = {
   copyExport:()=>[{label:'복사(C)',icon:'copy',key:'Ctrl+C',action:()=>run('copy')},{sep:true},{label:chartSel?'선택한 개체를 그림으로 저장...':'선택 영역을 그림으로 저장...',icon:'save',action:()=>run(chartSel?'objectSaveImage':'rangeSaveImage')},...(svgSelectionAvailable()?[{label:'SVG로 저장...',icon:'save',action:()=>run('objectSaveSvg')}]:[])],
   calcOptions: () => [
-    { label: '자동(A)', checked: opts.calcMode !== 'manual' && opts.calcMode !== 'semi', action: () => run('calcAuto') },
-    { label: '데이터 표만 수동(E)', checked: opts.calcMode === 'semi', action: () => { run('calcAuto'); opts.calcMode = 'semi'; saveOptions(); } },
-    { label: '수동(M)', checked: opts.calcMode === 'manual', action: () => run('calcManual') },
+    { label: '자동(A)', checked: documentCalcMode() === 'auto', action: () => run('calcAuto') },
+    { label: '데이터 표만 수동(E)', checked: documentCalcMode() === 'semi', action: () => changeCalculation('semi') },
+    { label: '수동(M)', checked: documentCalcMode() === 'manual', action: () => run('calcManual') },
   ],
   arrowsMenu: () => [
     { label: '연결선 제거(A)', icon: 'clear', action: () => removeArrows() },
@@ -18684,12 +18773,7 @@ const COMMANDS = {
 
   toggleFilter,
   advancedFilter: advancedFilterDialog,
-  protectWorkbook: () => {
-    const on = !wb.props?.lockStructure;
-    wb.transact(() => wb.setBookProp('props', { ...(wb.props ?? {}), lockStructure: on || undefined }), meta());
-    toast(on ? '통합 문서 구조를 보호했습니다. 시트를 추가 · 삭제 · 이동 · 이름 변경 · 숨기기 할 수 없습니다.' : '통합 문서 보호를 해제했습니다.');
-    updateRibbon();
-  },
+  protectWorkbook: () => protectWorkbookDialog(),
   fileInfo: () => openBackstage('info'),
   insertIcons: () => { insertIconsDialog(); },
   clearFilter: () => {
@@ -18896,19 +18980,19 @@ const COMMANDS = {
   exportCsv,
 
   toggleGrid: (v) => { const on = v ?? !!sheet().noGrid; wb.transact(() => wb.setSheetProp(si, 'noGrid', on ? undefined : true), meta()); applyView(); },
-  togglePrintGrid: (v) => { view.printGrid = v ?? !view.printGrid; updateRibbon(); },
+  togglePrintGrid: (v) => { wb.transact(() => wb.setSheetProp(si, 'page', { ...sheet().page, gridlines: v ?? !sheet().page?.gridlines }), meta()); syncDocumentView(); updateRibbon(); },
   toggleFormulaBar: (v) => { view.showFormulaBar = v ?? !view.showFormulaBar; applyView(); },
-  toggleHeaders: (v) => { view.showHeaders = v ?? !view.showHeaders; applyView(); },
-  toggleFormulas: () => { view.showFormulas = !view.showFormulas; gv.renderAll(); updateRibbon(); },
+  toggleHeaders: (v) => changeSheetDisplay('headers', v ?? !view.showHeaders),
+  toggleFormulas: () => changeSheetDisplay('showFormulas', !view.showFormulas),
   toggleRibbon: () => ribbon.toggleCollapse(),
   zoomIn: () => setZoom(view.zoom + 10),
   zoomOut: () => setZoom(view.zoom - 10),
   zoom100: () => setZoom(100),
   recalc: () => { netClear(); wb.calculateNow(); wb.invalidate(); gv.renderAll(); updateStatusCalc(); },
-  calcNowSheet: () => { wb.calculateNow(); wb.invalidate(si); gv.renderAll(); updateStatusCalc(); },
+  calcNowSheet: () => { wb.calculateSheetNow(si); gv.renderAll(); updateStatusCalc(); },
   options: () => optionsDialog(),
-  calcAuto: () => { opts.calcMode = 'auto'; saveOptions(); applyOptions(); wb.calculateNow(); gv.renderAll(); },
-  calcManual: () => { opts.calcMode = 'manual'; saveOptions(); applyOptions(); },
+  calcAuto: () => changeCalculation('auto'),
+  calcManual: () => changeCalculation('manual'),
 
   shortcuts: () => {
     const search = el('input', { type: 'search', class: 'input', placeholder: '기능 이름 또는 키 검색', 'aria-label': '바로 가기 키 검색', style: { width: '100%' } });
@@ -18937,6 +19021,11 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileFit','toggleR
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['기능·Excel 설정 연동 점검', [
+    '계산 모드·저장 전 재계산·시트별 머리글·수식 표시·눈금선 색을 가져오기와 저장에 연결했습니다. 통합 문서 구조 보호 암호를 확인합니다.',
+    '피벗 차이·누계·비율 계산의 오류 처리와 차트 선·레이블·색 설정의 표시를 보강했습니다.',
+    '수동 계산에서 목표값 찾기와 데이터 표를 수정하고, 미리보기·취소가 원본 값을 바꾸지 않도록 했습니다. 일반 SVG 그림의 도형 변환 메뉴를 복원했습니다.',
+  ]],
   ['모바일 마우스 작업과 작은 화면', [
     '리본 구분명과 수식 입력줄·하단 여백을 줄였습니다. 글꼴·크기는 전체 목록과 아래 화살표로 선택합니다.',
     '마우스로 리본을 좌우로 끌고, 본문에서는 마우스 왼쪽·오른쪽 버튼을 함께 누른 채 끌어 화면을 이동합니다.',
@@ -19299,6 +19388,7 @@ function updateTitle() {
 
 function renderAll() {
   if (si >= wb.sheets.length) si = wb.sheets.length - 1;
+  syncDocumentView();
   if (chartSel && !findObject(sheet(), chartSel) && drag?.type !== 'draw') chartSel = null;
   gv.layout();
   renderSheetTabs();
@@ -19611,9 +19701,14 @@ async function init() {
       prog.close();
     }
   }
-  if (!wb || !stored) wb = new Workbook(stored?.workbook);
+  if (!wb || !stored) wb = new Workbook(stored?.workbook ?? blankBook());
   applyBookLook();
-  wb.manualCalc = opts.calcMode === 'manual';
+  // 이전 버전의 로컬 저장본만 기기 계산 설정을 문서 설정으로 한 번 이관한다.
+  // Excel 파일 가져오기는 afterLoad에서 표준 calcPr를 그대로 사용한다.
+  if (stored && !wb.calculation) {
+    wb.calculation = { mode: opts.calcMode === 'semi' ? 'autoNoTable' : opts.calcMode || 'auto' };
+    wb.manualCalc = wb.calculation.mode === 'manual';
+  }
   if (stored) {
     docName = stored.docName || docName;
     docId = stored.docId ?? null;

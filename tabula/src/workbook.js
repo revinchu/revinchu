@@ -1338,6 +1338,34 @@ export class Workbook {
     try { if (pts.length) this.dirtyPoints(pts); } finally { this.manualCalc = m; }
   }
 
+  /** Shift+F9: 현재 시트만 계산하고 다른 시트의 수동 계산 대기는 유지한다. */
+  calculateSheetNow(si) {
+    const sheet = this.sheets[si];
+    if (!sheet) return;
+    const pts = this.manualPts ?? [];
+    if (pts.length) {
+      let dirty = null;
+      try { if (!this.graph || this.graph.stale) this.graph = new DepGraph(this); dirty = this.graph.propagate(pts, DIRTY_LIMIT); } catch { this.graph = null; }
+      if (dirty) {
+        for (let i = 0; i < dirty.length; i += 3) if (dirty[i] === si) {
+          const cell = sheet.cells.getRC(dirty[i + 1], dirty[i + 2]);
+          if (cell) this.markFormulaDirty(si, dirty[i + 1], dirty[i + 2], cell);
+        }
+      } else {
+        // 정적 의존성을 찾지 못한 수식은 저장값을 정확하다고 단정하지 않는다.
+        sheet.cells.forEachRC((cell, r, c) => { if (cell.formula) this.markFormulaDirty(si, r, c, cell); });
+      }
+    }
+    this.version++; this.sheetVer ??= []; this.baseVer ??= [];
+    this.sheetVer[si] = (this.sheetVer[si] ?? 0) + 1; this.baseVer[si] = (this.baseVer[si] ?? 0) + 1;
+    sheet.fileValues = false; this.caches[si]?.clear(); this.colIdx[si] = undefined;
+    for (const [key, sp] of this.spills) if (sp.si === si) {
+      this.spills.delete(key);
+      for (let r = 0; r < sp.h; r++) for (let c = 0; c < sp.w; c++) if (r || c) this.spillOwner.delete(`${si}:${sp.r + r},${sp.c + c}`);
+    }
+    this.spillState = null;
+  }
+
   /** 값이 있는 영역 크기 {rows, cols} */
   usedRange(si) {
     if (this.usedCache.has(si)) return this.usedCache.get(si);
@@ -1412,7 +1440,7 @@ export class Workbook {
       this.sheetVer[s] = (this.sheetVer[s] ?? 0) + 1;
       this.baseVer[s] = (this.baseVer[s] ?? 0) + 1;
       this.caches[s]?.clear();
-      this.discardFileValues(s);
+      if (preserveImported) this.sheets[s].fileValues = false; else this.discardFileValues(s);
     }
     for (const [k, sp] of this.spills) {
       if (!aff.has(sp.si)) continue;
@@ -1678,7 +1706,7 @@ export class Workbook {
     else if (e.t === 'sheet') this.putSheet(e.si, e[side]);
     else if (e.t === 'names') this.names = e[side].map((n) => ({ ...n }));
     else if (e.t === 'cellStyles') this.cellStyles = structuredClone(e[side]);
-    else if (e.t === 'bookProp') this[e.prop] = structuredClone(e[side]);
+    else if (e.t === 'bookProp') { this[e.prop] = structuredClone(e[side]); if (e.prop === 'calculation') this.manualCalc = this.calculation?.mode === 'manual'; }
     else if (e.t === 'baseStyle') this.baseStyle = structuredClone(e[side]);
     else if (e.t === 'blockStyle') {
       const block = this.sheets[e.si]?.blocks[e.bi], col = block?.cols[e.ci];
@@ -1889,11 +1917,12 @@ export class Workbook {
 
   /** 통합 문서 표시/문서 속성을 계산값 변경 없이 한 트랜잭션에 기록한다. */
   setBookProp(prop, value) {
-    if (!['theme', 'themeName', 'defaultFont', 'themeFonts', 'themeEffects', 'themeXml', 'props'].includes(prop)) throw new TypeError('지원하지 않는 통합 문서 속성입니다.');
+    if (!['theme', 'themeName', 'defaultFont', 'themeFonts', 'themeEffects', 'themeXml', 'props', 'calculation'].includes(prop)) throw new TypeError('지원하지 않는 통합 문서 속성입니다.');
     const next = structuredClone(value ?? null);
     if (JSON.stringify(this[prop] ?? null) === JSON.stringify(next)) return false;
     if (this.tx && !this.tx.entries.some(e => e.t === 'bookProp' && e.prop === prop)) this.tx.entries.push({ t: 'bookProp', prop, before: structuredClone(this[prop] ?? null) });
     this[prop] = next;
+    if (prop === 'calculation') this.manualCalc = next?.mode === 'manual';
     this.version++;
     return true;
   }
@@ -2637,6 +2666,7 @@ export class Workbook {
   bookMeta() {
     return {
       ...(this.date1904 ? { date1904: true } : {}),
+      ...(this.calculation ? { calculation: structuredClone(this.calculation) } : {}),
       ...(this.vba ? { vba: this.vba } : {}),
       ...(this.externals?.length ? { externals: this.externals } : {}),
       ...(this.defaultFont ? { defaultFont: { ...this.defaultFont } } : {}),
@@ -2647,7 +2677,7 @@ export class Workbook {
       ...(this.themeName ? { themeName: this.themeName } : {}),
       ...(this.themeFonts ? { themeFonts: structuredClone(this.themeFonts) } : {}),
       ...(this.themeEffects ? { themeEffects: structuredClone(this.themeEffects) } : {}),
-      ...(this.props && Object.keys(this.props).length ? { props: { ...this.props } } : {}),
+      ...(this.props && Object.keys(this.props).length ? { props: structuredClone(this.props) } : {}),
       ...(this.names.length ? { names: this.names.map(({ _ast, _text, ...n }) => ({ ...n })) } : {}),
     };
   }
@@ -2742,6 +2772,8 @@ export class Workbook {
       sheets.push(sheet);
     }
     this.date1904 = date1904;
+    this.calculation = structuredClone(data.calculation ?? null);
+    this.manualCalc = this.calculation?.mode === 'manual';
     this.defaultFont = data.defaultFont ?? null; // 통합 문서 기본 글꼴 { name, size } (없으면 맑은 고딕 11)
     this.fitRows = data.fitRows ?? null; // 파일을 열 때 자동 높이로 맞출 행 (저장하지 않음)
     this.theme = data.theme ?? null; // 파일의 테마 색 (없으면 Office 기본)
@@ -2750,7 +2782,7 @@ export class Workbook {
     this.themeFonts = structuredClone(data.themeFonts ?? null);
     this.themeEffects = structuredClone(data.themeEffects ?? null);
     // 문서 속성 · 보호 (엑셀 파일 › 정보): { title, subject, tags, category, comments, creator, lastModifiedBy, created, modified, readOnlyRecommended, lockStructure, markedFinal }
-    this.props = data.props ? { ...data.props } : {};
+    this.props = data.props ? structuredClone(data.props) : {};
     this.cellStyles = structuredClone(data.cellStyles ?? null); // 이름 있는 셀 스타일 [{ name, style, builtinId? }] (엑셀 [셀 스타일] 사용자 지정)
     this.baseStyle = data.baseStyle ?? null; // 기본 셀 서식 (xlsx 의 xf 0) — 서식이 없는 셀에 적용
     this.vba = data.vba ?? null; // .xlsm 의 매크로(vbaProject.bin, base64) — 실행하지 않고 보존만 함

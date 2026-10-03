@@ -2,6 +2,8 @@
 // OLE 복합 문서(CFB)의 'Workbook' 스트림 → 레코드 → 시트 · 셀 · 서식 · 병합 · 열 너비 · 행 높이 · 틀 고정 · 이름 · 수식.
 // 수식은 토큰(ptg)을 엑셀 파일 형식 글자로 되돌린 뒤 xlsx 와 같은 변환(fromFileFormula)을 거침. 계산 결과는 cached 로 보관.
 import { CellMap } from './cellmap.js';
+import { protectFromAttrs } from './protect.js';
+import { relocateValidation, VALIDATION_IME_MODES } from './validation.js';
 import { toBase64 } from './vba.js';
 import { inflate } from './zip.js';
 import { emfToSvg } from './emf.js';
@@ -120,7 +122,7 @@ class Reader {
   constructor(chunks) { this.chunks = chunks; this.ci = 0; this.p = 0; }
   get cur() { return this.chunks[this.ci]; }
   ensure() { while (this.cur && this.p >= this.cur.length && this.ci < this.chunks.length - 1) { this.ci++; this.p = 0; } }
-  u8() { this.ensure(); return this.cur[this.p++]; }
+  u8() { this.ensure(); if (this.strict && (!this.cur || this.p >= this.cur.length)) throw new Error('XLS 설정 레코드가 잘렸습니다.'); return this.cur[this.p++]; }
   u16() { return this.u8() | (this.u8() << 8); }
   u32() { return (this.u16() | (this.u16() << 16)) >>> 0; }
   skip(n) { for (let i = 0; i < n; i++) this.u8(); }
@@ -435,7 +437,7 @@ export function readXls(bytes) {
   }
   const recs = records(stream);
   // FILEPASS: 열기 암호가 걸린 .xls
-  if (recs.some((r, i) => i < 40 && r.type === 0x002f)) throw new Error('암호로 보호된 파일입니다. 엑셀에서 암호를 해제한 뒤 열어 주세요.');
+  if (recs.some(r => r.type === 0x002f)) throw new Error('암호로 보호된 파일입니다. 엑셀에서 암호를 해제한 뒤 열어 주세요.');
   const warnings = [];
   if (recs[0]?.type !== 0x0809 || u16(recs[0].data, 0) !== 0x0600) warnings.push('엑셀 5.0/95 이전 형식은 일부만 읽을 수 있습니다.');
   const palette = INDEXED.slice();
@@ -450,12 +452,23 @@ export function readXls(bytes) {
   const supbooks = [];
   let xti = [];
   let date1904 = false;
+  const calculation = {}, workbookProtection = {};
   const dggParts = [];
   // 전역 부분 (첫 EOF 까지)
   let i = 1;
   for (; i < recs.length && recs[i].type !== 0x000a; i++) {
     const { type, data, cont } = recs[i];
     switch (type) {
+      case 0x000c: if (data.length >= 2) calculation.iterateCount = u16(data, 0); break;
+      case 0x000d: if (data.length >= 2) calculation.mode = i16(data, 0) === 0 ? 'manual' : i16(data, 0) === -1 ? 'autoNoTable' : 'auto'; break;
+      case 0x000e: if (data.length >= 2) calculation.fullPrecision = !!u16(data, 0); break;
+      case 0x000f: if (data.length >= 2) calculation.refMode = u16(data, 0) ? 'A1' : 'R1C1'; break;
+      case 0x0010: if (data.length >= 8) calculation.iterateDelta = f64(data, 0); break;
+      case 0x0011: if (data.length >= 2) calculation.iterate = !!u16(data, 0); break;
+      case 0x005f: if (data.length >= 2) calculation.calcOnSave = !!u16(data, 0); break;
+      case 0x0012: if (data.length >= 2) workbookProtection.lockStructure = String(u16(data, 0) ? 1 : 0); break;
+      case 0x0019: if (data.length >= 2) workbookProtection.lockWindows = String(u16(data, 0) ? 1 : 0); break;
+      case 0x0013: if (data.length >= 2 && u16(data, 0)) workbookProtection.workbookPassword = u16(data, 0).toString(16).toUpperCase().padStart(4, '0'); break;
       case 0x0022: date1904 = u16(data, 0) === 1; break;
       case 0x0092: { const n = u16(data, 0); for (let k = 0; k < n; k++) palette[8 + k] = [data[2 + k * 4], data[3 + k * 4], data[4 + k * 4]].map((x) => x.toString(16).padStart(2, '0')).join('').toUpperCase(); break; }
       case 0x0031: {
@@ -613,6 +626,7 @@ export function readXls(bytes) {
     const shared = []; // 공유 수식 { r1, r2, c1, c2, rgce, rgcb }
     const pendingStr = [];
     let printFit = false, fitTo = null;
+    const protectionAttrs = {};
     const put = (r, c, ixfe, value, formula) => {
       const style = xfStyle(ixfe);
       let raw;
@@ -636,6 +650,44 @@ export function readXls(bytes) {
     for (k += 1; k < recs.length && recs[k].type !== 0x000a; k++) {
       const { type, data } = recs[k];
       switch (type) {
+        case 0x000c: if (data.length >= 2) calculation.iterateCount = u16(data, 0); break;
+        case 0x000d: if (data.length >= 2) calculation.mode = i16(data, 0) === 0 ? 'manual' : i16(data, 0) === -1 ? 'autoNoTable' : 'auto'; break;
+        case 0x000e: if (data.length >= 2) calculation.fullPrecision = !!u16(data, 0); break;
+        case 0x000f: if (data.length >= 2) calculation.refMode = u16(data, 0) ? 'A1' : 'R1C1'; break;
+        case 0x0010: if (data.length >= 8) calculation.iterateDelta = f64(data, 0); break;
+        case 0x0011: if (data.length >= 2) calculation.iterate = !!u16(data, 0); break;
+        case 0x005f: if (data.length >= 2) calculation.calcOnSave = !!u16(data, 0); break;
+        case 0x01be: {
+          // [MS-XLS] Dv / DVParsedFormula. 첫 영역 기준 상대 수식을 각 sqref로 옮긴다.
+          const reader = new Reader([data, ...recs[k].cont]); reader.strict = true;
+          const fl = reader.u32(), type = ['any', 'whole', 'decimal', 'list', 'date', 'time', 'textLength', 'custom'][fl & 15];
+          if (!type) throw new Error('지원하지 않는 XLS 데이터 유효성 유형입니다. Excel에서 .xlsx로 저장한 파일을 여세요.');
+          const rule = { type, op: ['between', 'notBetween', 'equal', 'notEqual', 'greaterThan', 'lessThan', 'greaterThanOrEqual', 'lessThanOrEqual'][(fl >>> 20) & 15] ?? 'between', allowBlank: !!(fl & 256), showDropdown: !(fl & 512), showPrompt: !!(fl & 0x40000), showError: !!(fl & 0x80000), errorStyle: ['stop', 'warning', 'info'][(fl >>> 4) & 7] ?? 'stop' };
+          const ime = VALIDATION_IME_MODES[(fl >>> 10) & 255]; if (ime) rule.imeMode = ime;
+          for (const key of ['promptTitle', 'errorTitle', 'prompt', 'error']) { const value = reader.str(); if (value && value !== '\0') rule[key] = value; }
+          const formulas = [];
+          for (let i = 0; i < 2; i++) { const n = reader.u16(); reader.skip(2); const bytes = new Uint8Array(n); for (let j = 0; j < n; j++) bytes[j] = reader.u8(); formulas.push(bytes); }
+          const count = reader.u16(), ranges = [];
+          if (!count || count > 432) throw new Error('XLS 데이터 유효성 범위 개수가 올바르지 않습니다.');
+          for (let i = 0; i < count; i++) { const r1 = reader.u16(), r2 = reader.u16(), c1 = reader.u16(), c2 = reader.u16(); if (r1 > r2 || c1 > c2 || c2 > 255) throw new Error('XLS 데이터 유효성 범위가 올바르지 않습니다.'); ranges.push({r1,r2,c1,c2}); }
+          for (let i = 0; i < formulas.length; i++) if (formulas[i].length && type !== 'any') {
+            let formula; try { formula = decode(formulas[i], new Uint8Array(), ranges[0].r1, ranges[0].c1); } catch { formula = null; }
+            if (!formula) { formula = '#NAME?'; warnings.push('XLS 데이터 유효성 수식 일부를 해석하지 못해 #NAME? 조건으로 보존했습니다. 규칙을 확인하세요.'); }
+            if (type === 'list' && i === 0) formula = fl & 128 ? formula.replace(/\0/g, ',') : '=' + formula.replace(/^=/, '');
+            rule[`f${i+1}`] = formula;
+          }
+          for (const range of ranges) sheet.validations.push(relocateValidation({ ...ranges[0], ...rule }, range));
+          break;
+        }
+        case 0x0012: if (data.length < 2) throw new Error('XLS 시트 보호 설정이 잘렸습니다.'); protectionAttrs.sheet = u16(data, 0) ? '1' : '0'; break;
+        case 0x0013: if (data.length < 2) throw new Error('XLS 시트 보호 암호가 잘렸습니다.'); if (u16(data, 0)) protectionAttrs.password = u16(data, 0).toString(16).toUpperCase().padStart(4, '0'); break;
+        case 0x0063: if (data.length < 2) throw new Error('XLS 개체 보호 설정이 잘렸습니다.'); protectionAttrs.objects = u16(data, 0) ? '1' : '0'; break;
+        case 0x00dd: if (data.length < 2) throw new Error('XLS 시나리오 보호 설정이 잘렸습니다.'); protectionAttrs.scenarios = u16(data, 0) ? '1' : '0'; break;
+        case 0x0867: if (data.length >= 19 && u16(data, 12) === 2 && u32(data, 15) === 0xffffffff) {
+          if (data.length < 23) throw new Error('XLS 확장 시트 보호 설정이 잘렸습니다.');
+          const flags = u32(data, 19), keys = ['objects', 'scenarios', 'formatCells', 'formatColumns', 'formatRows', 'insertColumns', 'insertRows', 'insertHyperlinks', 'deleteColumns', 'deleteRows', 'selectLockedCells', 'sort', 'autoFilter', 'pivotTables', 'selectUnlockedCells'];
+          keys.forEach((key, i) => { protectionAttrs[key] = flags & (1 << i) ? '0' : '1'; });
+        } break;
         case 0x0055: defColChars = u16(data, 0); break;
         case 0x0225: { const h = pt2px(u16(data, 2) / 20); if (h && h !== DEFAULT_ROW_HEIGHT) sheet.defRowH = h; break; }
         case 0x007d: {
@@ -784,7 +836,13 @@ export function readXls(bytes) {
           }
           sheet.page = page; break;
         }
-        case 0x023e: { const g = u16(data, 0); if (!(g & 2)) sheet.noGrid = true; if (g & 8) sheet._frozen = true; sheet.view = { ...(sheet.view ?? {}), mode: g & 0x800 ? 'pageBreakPreview' : 'normal' }; break; }
+        case 0x023e: {
+          if (data.length < 10) break;
+          const g = u16(data, 0); if (!(g & 2)) sheet.noGrid = true; if (!(g & 16)) sheet.noZeros = true; if (g & 8) sheet._frozen = true;
+          sheet.view = { ...(sheet.view ?? {}), mode: g & 0x800 ? 'pageBreakPreview' : 'normal', headers: !!(g & 4), showFormulas: !!(g & 1), top: u16(data, 2), left: u16(data, 4) };
+          if (!(g & 32) && u16(data, 6) < 64 && palette[u16(data, 6)]) sheet.view.gridColor = `#${palette[u16(data, 6)].toLowerCase()}`;
+          break;
+        }
         case 0x088b: if (data.length >= 16 && (u16(data, 14) & 1)) sheet.view = { ...(sheet.view ?? {}), mode: 'pageLayout' }; break;
         case 0x001b: case 0x001a: { // Horizontal/VerticalPageBreaks: each 6-byte structure is a manual break.
           if (data.length < 2) break;
@@ -793,7 +851,11 @@ export function readXls(bytes) {
           if (values.length) sheet.page = { ...(sheet.page ?? {}), [type === 0x001b ? 'rowBreaks' : 'colBreaks']: [...new Set(values)].sort((a, b) => a - b) };
           break;
         }
-        case 0x0041: if (sheet._frozen) sheet.freeze = { rows: u16(data, 2), cols: u16(data, 0) }; break;
+        case 0x0041: if (sheet._frozen && data.length >= 9) {
+          const rows = u16(data, 2), cols = u16(data, 0), top = rows ? sheet.view?.top ?? 0 : 0, left = cols ? sheet.view?.left ?? 0 : 0;
+          sheet.freeze = { rows, cols, ...(top ? { top } : {}), ...(left ? { left } : {}) };
+          sheet.view = { ...(sheet.view ?? {}), top: Math.max(top + rows, u16(data, 4)), left: Math.max(left + cols, u16(data, 6)), activePane: ['bottomRight', 'topRight', 'bottomLeft', 'topLeft'][data[8]] ?? 'bottomRight' };
+        } break;
         case 0x00a0: { // SCL is a ratio; the sheet model stores percent, as XLSX zoomScale does.
           const num = i16(data, 0); const den = i16(data, 2);
           if (num > 0 && den > 0 && num !== den) sheet.zoom = Math.max(10, Math.min(400, Math.round((num / den) * 100)));
@@ -807,6 +869,7 @@ export function readXls(bytes) {
         default: break;
       }
     }
+    if (protectionAttrs.sheet === '1') sheet.protect = protectFromAttrs({ objects: '0', ...protectionAttrs });
     if (printFit && fitTo) sheet.page = { ...(sheet.page ?? {}), ...fitTo };
     delete sheet._frozen;
     const defW = baseColPx(defColChars, mdw);
@@ -865,6 +928,10 @@ export function readXls(bytes) {
     } catch { /* 해석하지 못한 이름은 건너뜀 */ }
   }
   const data = { sheets, defaultFont: wbFont, ...(date1904 ? { date1904: true } : {}) };
+  if (Object.keys(calculation).length) data.calculation = { mode: 'auto', ...calculation };
+  if (Object.keys(workbookProtection).length) data.props = { ...(workbookProtection.lockStructure === '1' ? { lockStructure: true } : {}), workbookProtection };
+  if (calculation.iterate) warnings.push('반복 계산 설정은 보존하지만 현재 계산 엔진에서 반복 계산을 실행하지 않습니다.');
+  if (calculation.fullPrecision === false) warnings.push('표시된 정밀도로 계산 설정은 보존하지만 현재 계산은 원래 숫자의 정밀도를 사용합니다.');
   if (outNames.length) data.names = outNames;
   if (!sheets.length) throw new Error('.xls 파일에 워크시트가 없습니다.');
   return { data, active: 0, warnings: [...new Set(warnings)] };

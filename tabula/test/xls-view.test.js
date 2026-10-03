@@ -192,3 +192,76 @@ test('XLS XFExt rejects malformed records, stale or absent XFCRC, and an XF with
   const xfs = colorStyles(); xfs[0].writeUInt32LE(0x04200000, 14);
   assert.equal(new Workbook(readXls(fixture({ xfs, extensions: [valid] })).data).styleAt(0, 0, 0).fill, '#ff0000');
 });
+
+test('XLS 시트 스트림 계산 옵션과 표시 옵션은 XLSX 표준으로 왕복된다', () => {
+  const delta=Buffer.alloc(8);delta.writeDoubleLE(.0025);
+  const win=Buffer.alloc(18);win.writeUInt16LE(1|2|8,0);win.writeUInt16LE(4,2);win.writeUInt16LE(2,4);win.writeUInt16LE(56,6);
+  const pane=Buffer.concat([words(1,2,14,3),Buffer.from([0])]);
+  const bytes=fixture({globalRecords:[record(0x000e,words(0)),record(0x0012,words(1)),record(0x0013,words(0xcafe))],sheetRecords:[record(0x000d,words(0)),record(0x000c,words(77)),record(0x000f,words(1)),record(0x0011,words(1)),record(0x0010,delta),record(0x005f,words(0)),record(0x023e,win),record(0x0041,pane)]});
+  const a=readXls(bytes),wb=new Workbook(a.data);assert.deepEqual(wb.calculation,{mode:'manual',fullPrecision:false,iterateCount:77,refMode:'A1',iterate:true,iterateDelta:.0025,calcOnSave:false});
+  const s=wb.sheets[0];assert.equal(s.view.headers,false);assert.equal(s.view.showFormulas,true);assert.equal(s.view.gridColor,'#003366');assert.equal(s.noZeros,true);assert.deepEqual(s.freeze,{rows:2,cols:1,top:4,left:2});assert.equal(s.view.top,14);assert.equal(s.view.left,3);assert.equal(wb.props.workbookProtection.workbookPassword,'CAFE');
+  const back=new Workbook(readXlsx(writeXlsx(wb)).data);assert.deepEqual(back.calculation,wb.calculation);assert.deepEqual(back.sheets[0].view,s.view);assert.deepEqual(back.sheets[0].freeze,s.freeze);
+});
+test('XLS 자동/자동 데이터 표 제외를 구별하고 기본 시트 보호를 유지한다',()=>{
+ for(const [mode,expected]of [[1,'auto'],[0xffff,'autoNoTable']]){const x=readXls(fixture({sheetRecords:[record(0x000d,words(mode)),record(0x0012,words(1)),record(0x0013,words(0xe2bd))]}));assert.equal(x.data.calculation.mode,expected);assert.equal(x.data.sheets[0].protect.on,true);assert.equal(x.data.sheets[0].protect.hash,'E2BD');}
+ assert.throws(()=>readXls(fixture({sheetRecords:[record(0x01be,Buffer.alloc(8))]})),/잘렸|개수/);
+});
+
+
+const dvText = s => Buffer.concat([words(s.length), Buffer.from([1]), Buffer.from(s, 'utf16le')]);
+const dvInt = n => Buffer.concat([Buffer.from([0x1e]), words(n)]);
+function dvRecord({type=1,flags=0,f1=dvInt(1),f2=dvInt(10),ranges=[[0,0,1,1]],strings=['입력','오류','설명','확인']}={}) {
+ const head=Buffer.alloc(4);head.writeUInt32LE((type|flags)>>>0);
+ return record(0x01be,Buffer.concat([head,...strings.map(dvText),words(f1.length,0),f1,words(f2.length,0),f2,words(ranges.length),...ranges.map(a=>words(...a))]));
+}
+
+test('XLS DV는 8유형·8연산자·오류/IME/메시지·목록을 XLSX로 보존한다',()=>{
+ const types=['any','whole','decimal','list','date','time','textLength','custom'];
+ const ops=['between','notBetween','equal','notEqual','greaterThan','lessThan','greaterThanOrEqual','lessThanOrEqual'];
+ for(let i=0;i<8;i++){
+  const strings=['입력','오류','설명','확인'], op=[0,3,7].includes(i)?0:i, fl=(op<<20)|((i%3)<<4)|256|(i===3?512:0)|0x40000|0x80000|(10<<10);
+  const f1=i===3?Buffer.from([0x17,5,0,65,0,66,0,67]):dvInt(1);
+  const a=readXls(fixture({sheetRecords:[dvRecord({type:i,flags:fl|(i===3?128:0),f1,f2:op<=1&&![0,3,7].includes(i)?dvInt(10):Buffer.alloc(0),strings})]}));
+  const rule=a.data.sheets[0].validations[0];assert.equal(rule.type,types[i]);assert.equal(rule.op,ops[op]);assert.equal(rule.errorStyle,['stop','warning','info'][i%3]);assert.equal(rule.imeMode,'halfHangul');assert.equal(rule.showDropdown,i!==3);assert.equal(rule.allowBlank,true);
+  for(const k of ['showPrompt','showError'])assert.equal(rule[k],true);
+  for(const [j,k]of ['promptTitle','errorTitle','prompt','error'].entries())assert.equal(rule[k],strings[j]);
+  if(i===3)assert.equal(rule.f1,'"A,B,C"');
+  const back=readXlsx(writeXlsx(new Workbook(a.data))).data.sheets[0].validations[0];
+  for(const key of Object.keys(rule))assert.deepEqual(back[key],rule[key],`type ${i} ${key}`);
+ }
+});
+
+test('XLS DV 다중 영역은 첫 영역 상대수식을 옮기고 원본 셀 값을 바꾸지 않는다',()=>{
+ const ref=Buffer.concat([Buffer.from([0x24]),words(0,0xc000),dvInt(0),Buffer.from([0x0d])]);
+ const parsed=readXls(fixture({sheetRecords:[dvRecord({type:7,f1:ref,f2:Buffer.alloc(0),ranges:[[0,0,1,1],[3,4,3,3]]})]}));
+ assert.equal(parsed.data.sheets[0].validations[0].f1,'A1>0');assert.equal(parsed.data.sheets[0].validations[1].f1,'C4>0');
+ const wb=new Workbook(parsed.data);assert.equal(wb.getValue(0,0,0),42);
+ const back=readXlsx(writeXlsx(wb)).data.sheets[0].validations;assert.equal(back.length,2);assert.equal(back[1].f1,'C4>0');
+});
+
+test('XLS 보호의 모든 권한과 암호는 표준 XLSX로 왕복하며 보호 없음도 유지한다',()=>{
+ const keys=['objects',null,'formatCells','formatColumns','formatRows','insertColumns','insertRows','insertHyperlinks','deleteColumns','deleteRows','selectLocked','sort','autoFilter','pivotTables','selectUnlocked'];
+ for(const bit of [0,2,3,4,5,6,7,8,9,10,11,12,13,14]){
+  const feat=Buffer.alloc(23);feat.writeUInt16LE(0x867);feat.writeUInt16LE(2,12);feat[14]=1;feat.writeUInt32LE(0xffffffff,15);feat.writeUInt32LE(1<<bit,19);
+  const wb=new Workbook(readXls(fixture({sheetRecords:[record(0x12,words(1)),record(0x13,words(0xe2bd)),record(0x867,feat)]})).data),p=wb.sheets[0].protect;
+  assert.equal(p.hash,'E2BD');for(const key of keys.filter(Boolean))assert.equal(p.allow[key],key===keys[bit],`bit ${bit}/${key}`);
+  assert.deepEqual(new Workbook(readXlsx(writeXlsx(wb)).data).sheets[0].protect,p);
+ }
+ assert.equal(readXls(fixture({sheetRecords:[record(0x12,words(0)),record(0x13,words(0xe2bd))]})).data.sheets[0].protect,undefined);
+});
+
+test('XLS 잘린 보호·잘못된 유효성·암호화는 무보호 또는 무규칙으로 열리지 않는다',()=>{
+ for(const type of [0x12,0x13,0x63,0xdd])assert.throws(()=>readXls(fixture({sheetRecords:[record(type,Buffer.alloc(1))]})),/잘렸/);
+ const full=dvRecord();for(const cut of [4,14,full.length-1])assert.throws(()=>readXls(fixture({sheetRecords:[record(0x1be,full.subarray(4,cut))]})),/잘렸|개수/);
+ assert.throws(()=>readXls(fixture({sheetRecords:[dvRecord({type:15})]})),/지원하지 않는/);
+ assert.throws(()=>readXls(fixture({sheetRecords:[dvRecord({ranges:[[2,1,0,0]]})]})),/범위/);
+ assert.throws(()=>readXls(fixture({globalRecords:[record(0x2f,words(0,0,0))]})),/암호/);
+});
+
+
+test('XLS 숫자 유효성의 8개 비교 연산자는 전부 보존된다',()=>{
+ for(const [i,op] of ['between','notBetween','equal','notEqual','greaterThan','lessThan','greaterThanOrEqual','lessThanOrEqual'].entries()){
+  const wb=new Workbook(readXls(fixture({sheetRecords:[dvRecord({type:1,flags:i<<20})]})).data);
+  assert.equal(wb.sheets[0].validations[0].op,op);assert.equal(readXlsx(writeXlsx(wb)).data.sheets[0].validations[0].op,op);
+ }
+});

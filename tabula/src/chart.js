@@ -846,10 +846,11 @@ export function renderChartSvg(chart, data) {
         if (isNum(v) && isNum(x)) pts.push([xpos(x), posOf(s)(v), v, i]);
       });
       if (/line|smooth/i.test(sty) && pts.length > 1) {
-        const d = /smooth/i.test(sty) ? smoothPath(pts) : pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join('');
-        parts.push(`<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.lineWidth ?? 2}" stroke-linejoin="round"${tag(s)}/>`);
+        const d = (s.smooth ?? /smooth/i.test(sty)) ? smoothPath(pts) : pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join('');
+        parts.push(`<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.lineWidth ?? 2}" stroke-linejoin="round"${dashAttr(s.dash, s.lineWidth ?? 2)}${shadowAttr(s)}${tag(s)}/>`);
       }
-      if (sty === 'marker' || /Marker$/.test(sty)) for (const p of pts) parts.push(tagMk((MARKERS[s.marker] ?? MARKERS.circle)(p[0].toFixed(1), p[1].toFixed(1), s.markerSize ? s.markerSize * 2 / 3 : 3.5, pointColor(s, p[3]) ?? s.markerColor ?? s.color), s, p[3]));
+      const marker = s.marker ?? chart.marker, hasMarker = marker === undefined ? sty === 'marker' || /Marker$/.test(sty) : marker !== false && marker !== 'none';
+      if (hasMarker) for (const p of pts) parts.push(tagMk((MARKERS[marker] ?? MARKERS.circle)(p[0].toFixed(1), p[1].toFixed(1), s.markerSize ? s.markerSize * 2 / 3 : 3.5, pointColor(s, p[3]) ?? s.markerColor ?? s.color), s, p[3]));
       if (wantLabels(s)) for (const p of pts) pushLabel(p[0], p[1] - 7, p[2], s, 'middle', p[3]);
     });
     parts.push('</g>');
@@ -1275,7 +1276,7 @@ export const SPECIAL = {
       const s = series[0];
       if (!s) return;
       const vals = s.values.map((v) => (isNum(v) && v > 0 ? v : 0));
-      const max = Math.max(...vals, 1);
+      const max = Math.max(maxOf(vals), 1);
       const CW = FS.axis * 0.58;
       const lw = Math.min(160, maxOf(categories.map((c) => [...String(c)].length)) * CW * 1.4 + 10);
       const area = { x: plot.x + lw, y: plot.y + 2, w: plot.w - lw - 4, h: plot.h - 4 };
@@ -1284,9 +1285,11 @@ export const SPECIAL = {
         const bw = (v / max) * area.w;
         const x = area.x + (area.w - bw) / 2;
         const y = area.y + band * i + band * 0.08;
-        parts.push(`<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${Math.max(1, bw).toFixed(1)}" height="${(band * 0.84).toFixed(1)}" fill="${s.colors?.[i] ?? s.color}"/>`);
+        const tag = ` data-s="${s._fi}" data-p="${chartPointIndex(s, i)}"`;
+        parts.push(`<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${Math.max(1, bw).toFixed(1)}" height="${(band * 0.84).toFixed(1)}" fill="${pointColor(s, i) ?? s.color}"${tag}/>`);
         parts.push(T(area.x - 6, y + band * 0.42 + 4, truncate(String(categories[i] ?? ''), 20), FS.axis, TXT, 'end'));
-        parts.push(`<text x="${(area.x + area.w / 2).toFixed(1)}" y="${(y + band * 0.42 + 4).toFixed(1)}" text-anchor="middle" font-size="${FS.axis}" fill="#fff" font-weight="700">${escSvg(valueLabel(s.values[i] ?? 0, s.numFmt, chart.date1904))}</text>`);
+        const labelSeries = { ...s, labels: s.labels ?? chart.labels ?? true };
+        if (labelSeries.labels || s.catName || s.serName || s.pct) parts.push(`<text data-el="label"${tag} x="${(area.x + area.w / 2).toFixed(1)}" y="${(y + band * 0.42 + 4).toFixed(1)}" text-anchor="middle" font-size="${s.labelSize ? s.labelSize * 4 / 3 : FS.axis}" fill="${s.labelColor ?? '#fff'}"${s.labelBold !== false ? ' font-weight="700"' : ''}>${escSvg(chartDataLabel(chart, labelSeries, categories, i, s.values[i] ?? 0))}</text>`);
       });
     },
   },

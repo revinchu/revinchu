@@ -190,15 +190,16 @@ try {
   await test('일반 셀 숨기기 하위 메뉴는 키보드 진입·뒤로 가기·행 숨기기를 지원', async p => {
     const before = await dimensions(p); await clickCell(p, 1, 1); await p.keyboard.press('h');
     let sub = p.locator('#menuLayer > .menu[data-level="1"]'); await sub.waitFor();
-    assert.equal(await sub.getByRole('menuitem', { name: /^행 숨기기\(/ }).count(), 1);
-    assert.equal(await sub.getByRole('menuitem', { name: /^열 숨기기\(/ }).count(), 1);
+    assert.equal(await sub.getByRole('menuitem', { name: /^행 숨기기(?:\(|$)/ }).count(), 1);
+    assert.equal(await sub.getByRole('menuitem', { name: /^열 숨기기(?:\(|$)/ }).count(), 1);
     await p.keyboard.press('ArrowLeft'); assert.equal(await sub.count(), 0);
     assert.equal(await rootMenu(p).locator('[data-access-key="h"]').evaluate(el => el === document.activeElement), true);
-    await p.keyboard.press('ArrowRight'); await sub.waitFor(); await p.keyboard.press('r');
+    await p.keyboard.press('ArrowRight'); await sub.waitFor(); await p.keyboard.press('ArrowDown'); await p.keyboard.press('ArrowDown');
+    assert.match(await p.evaluate(() => document.activeElement.textContent), /^행 숨기기/); await p.keyboard.press('Enter');
     assert.equal((await dimensions(p)).hiddenRows[1], true); await p.keyboard.press('Control+z'); assert.deepEqual(await dimensions(p), before);
   });
   await test('비연속 선택의 행 높이 변경은 선택한 두 행만 바꾸고 Undo로 복원', async p => {
-    await selectComments(p); const before = await dimensions(p); await clickCell(p, 2, 0); await p.keyboard.press('r');
+    await selectComments(p); const before = await dimensions(p); await clickCell(p, 2, 0); await p.keyboard.press('h'); await p.keyboard.press('r');
     await finishSize(p, '행 높이', 36);
     assert.deepEqual((await dimensions(p)).rows, [48, before.rows[1], 48, before.rows[3]]);
     assert.equal((await dimensions(p)).undo, before.undo + 1); await p.keyboard.press('Control+z'); assert.deepEqual(await dimensions(p), before);
@@ -206,6 +207,10 @@ try {
   await test('복사 C·선택하여 붙여넣기 S 취소·붙여넣기 옵션 값은 모의 클립보드만 사용', async p => {
     await clickCell(p, 3, 1); await p.keyboard.press('c'); assert.equal(await p.evaluate(() => window.__mockClipboard), '30');
     const before = await snapshot(p); await clickCell(p, 4, 3); await p.keyboard.press('s');
+    assert.match(await p.evaluate(() => document.activeElement.textContent), /선택하여 붙여넣기/);
+    await p.keyboard.press('s'); assert.match(await p.evaluate(() => document.activeElement.textContent), /윗주 필드 표시/);
+    await p.keyboard.press('Escape'); assert.deepEqual(await snapshot(p), before, '중복 접근키 순환 후 Escape는 문서를 바꾸지 않음');
+    await clickCell(p, 4, 3); await p.keyboard.press('s'); await p.keyboard.press('Enter');
     const d = p.getByRole('dialog', { name: '선택하여 붙여넣기', exact: true }); await d.waitFor(); await d.getByRole('button', { name: '취소', exact: true }).click();
     assert.deepEqual(await snapshot(p), before); await clickCell(p, 4, 3); await menuItem(p, '붙여넣기 옵션').click();
     const sub = p.locator('#menuLayer > .menu[data-level="1"]'); await sub.getByRole('menuitem', { name: /^값\(V\)/ }).click();
