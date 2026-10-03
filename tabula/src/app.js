@@ -69,7 +69,7 @@ import { GridView, BASE_FONT, setBaseFont, measureText, fontStack, PATTERNS, pat
 import { setThemeColors, THEME, applyTint, presetStyleElements } from './stylepresets.js';
 import { objectStyleKey, findObjectStyle, normalizeObjectStyles, upsertObjectStyle, objectStylePatch, clearObjectStyle } from './object-styles.js';
 import { objectStyleEditor } from './object-style-editor.js';
-import { readXlsxAsync, writeXlsxAsync, xlsxOverflow, textRaw, parsePrintAreas } from './xlsx.js';
+import { readXlsxAsync, writeXlsxAsync, xlsxOverflow, xlsxExportWarnings, textRaw, parsePrintAreas } from './xlsx.js';
 import { readOds, writeOds } from './ods.js';
 import { readXls } from './xls.js';
 import { CellMap } from './cellmap.js';
@@ -89,6 +89,7 @@ import { saveLargeWorkbook, loadLargeWorkbook } from './big-storage.js';
 import { hubIcon, hubHeading, hubCard, hubPreview, hubDropzone, hubEmpty } from './app-start.js';
 import { NET, netClear, parseMarkup, htmlTables, htmlLists, tableRows, textOf, autoValue, parseCsv, importRangeSource, parseImportRange, resolveImportRangeUrl } from './fx-web.js';
 import { libList, libSave, libLoad, libLoadVersion, libUpdate, libNameVersion, libRemove, newDocId, packText, unpackText, LIB_MAX, VER_MAX } from './library.js';
+import { librarySnapshot } from './snapshot-blob.js';
 import { itemStats, blockColumn, EMPTY as PIVOT_EMPTY, EMPTY_TEXT as PIVOT_EMPTY_TEXT } from './cube.js';
 import { logicalCol, ColBuilder } from './block.js';
 import { PROTECT_OPTIONS, defaultAllow, excelHash, isProtected, isLockedStyle, allowed } from './protect.js';
@@ -181,6 +182,7 @@ const sheetSel = new Map();
 let editing = null; // { r, c, mode:'enter'|'edit', original, point, fromBar }
 let tabStartCol = null;
 let clip = null;
+let mobileCopySource = null, mobileClipboardEcho = null;
 let painter = null;
 let drag = null;
 let pendingKey = null;
@@ -1568,6 +1570,7 @@ function onGridKey(e) {
       if (byCode[e.code]) { handled(); run(byCode[e.code]); return; }
     }
     const lower = /^Key[A-Z]$/.test(code) ? code.slice(3).toLowerCase() : k.length === 1 ? k.toLowerCase() : k;
+    if (mobileCellClipboardKey(e, lower)) return;
     const map = {
       z: 'undo', y: 'redo', b: 'bold', i: 'italic', u: 'underline', 5: 'strike', d: 'fillDown', r: 'fillRight',
       s: 'save', f: 'find', h: 'replace', g: 'goto', p: 'print', o: 'open', 2: 'bold', 3: 'italic', 4: 'underline',
@@ -1610,7 +1613,7 @@ function onGridKey(e) {
     case 'ArrowRight': handled(); move(0, 1, { extend: e.shiftKey || extendMode }); return;
     case 'Enter':
       handled();
-      if (clip && !e.shiftKey) { pasteInternal('all'); clip = null; updateSelectionUI(); setMode(); return; }
+      if (clip && !e.shiftKey) { pasteInternal('all'); clip = null; mobileCopySource = null; updateSelectionUI(); setMode(); return; }
       if (opts.enterDir !== 'none') moveEnterTab(e.shiftKey ? ENTER_OPP[opts.enterDir] ?? 'up' : opts.enterDir ?? 'down');
       return;
     case 'Tab': handled(); moveEnterTab(e.shiftKey ? 'left' : 'right'); return;
@@ -1639,7 +1642,7 @@ function onGridKey(e) {
     case 'F12': handled(); run('saveAs'); return;
     case 'Escape':
       handled();
-      if (clip || painter) { clip = null; painter = null; dom.view.classList.remove('painting'); updateSelectionUI(); setMode(); }
+      if (clip || painter) { clip = null; mobileCopySource = null; painter = null; dom.view.classList.remove('painting'); updateSelectionUI(); setMode(); }
       endBorderDraw();
       return;
     case 'ContextMenu': {
@@ -2261,7 +2264,7 @@ function dropMove(src, target, { copy, insert }) {
     copySelection(false);
     selectRange(target, 'cells', { r: target.r1, c: target.c1 });
     pasteInternal('all');
-    clip = null;
+    clip = null; mobileCopySource = null;
     setMode();
     return;
   }
@@ -2739,6 +2742,50 @@ function displayText(r, c, s = si) {
   return formatValue(wb.getValue(s, r, c), wb.styleAt(s, r, c), wb.date1904).text;
 }
 
+// 모바일 셀 단축키는 native Ctrl/Command 매핑이 없어도 내부 복사를 수행합니다.
+// 편집 중 텍스트·대화상자 입력은 기존 native 클립보드 경로를 유지합니다.
+function gridClipboardFocus() {
+  if (editing || isDialogOpen() || isMenuOpen() || document.querySelector('.backstage')) return false;
+  return document.activeElement === dom.editor || (mobileWork?.active && document.activeElement === dom.view);
+}
+function mobileClipboardCurrent() {
+  return !!clip && mobileCopySource?.clip === clip && mobileCopySource.book === wb
+    && wb.sheets[clip.si] === mobileCopySource.sheet;
+}
+function clipboardShortcutEcho(type, payload = null) {
+  const token = { type, payload, book: wb, sheet: sheet(), until: performance.now() + 600 };
+  mobileClipboardEcho = token;
+  setTimeout(() => { if (mobileClipboardEcho === token) mobileClipboardEcho = null; }, 600);
+}
+function consumeClipboardEcho(e) {
+  const token = mobileClipboardEcho;
+  if (!token || token.type !== e.type || token.until < performance.now()) return false;
+  mobileClipboardEcho = null;
+  // 같은 단축키 뒤의 native 이벤트는 문서가 바뀌었더라도 재적용하지 않습니다.
+  e.preventDefault();
+  if (token.payload && token.book === wb && token.sheet === sheet() && e.clipboardData) {
+    e.clipboardData.setData('text/plain', token.payload.text);
+    e.clipboardData.setData('text/html', token.payload.html);
+  }
+  return true;
+}
+function mobileCellClipboardKey(e, key) {
+  if (!mobileWork?.active || chartSel || editing || e.shiftKey || e.altKey || !['c', 'x', 'v'].includes(key)) return false;
+  if (key === 'v') {
+    if (!mobileClipboardCurrent()) return false; // 외부 자료는 실제 paste 이벤트로 받습니다.
+    e.preventDefault();
+    pasteInternal('all');
+    clipboardShortcutEcho('paste');
+    return true;
+  }
+  e.preventDefault();
+  const previous = clip;
+  run(key === 'x' ? 'cut' : 'copy');
+  const copied = clip && clip !== previous && mobileClipboardCurrent();
+  clipboardShortcutEcho(key === 'x' ? 'cut' : 'copy', copied ? mobileCopySource.payload : null);
+  return true;
+}
+
 function copySelection(cut) {
   const full = selKind === 'cells' ? { ...sel } : usedClip(sel);
   if ((full.r2 - full.r1 + 1) * (full.c2 - full.c1 + 1) > 2_000_000) { toast('복사하기에는 선택 영역이 너무 큽니다.'); return { text: '', html: '' }; }
@@ -2770,9 +2817,14 @@ function copySelection(cut) {
     const css = [st.bold && 'font-weight:bold', st.italic && 'font-style:italic', st.color && `color:${st.color}`, st.fill && `background:${st.fill}`].filter(Boolean).join(';');
     return `<td${css ? ` style="${css}"` : ''}>${escapeHtml(t)}</td>`;
   }).join('')}</tr>`).join('')}</table>`;
+  const payload = { text: clip.text, html };
+  const source = { book: wb, sheet: sheet(), clip, payload };
+  mobileCopySource = source;
+  queueMicrotask(() => { delete source.payload; }); // 큰 HTML은 다음 동작까지 계속 보관하지 않습니다.
+  objClip = null;
   updateSelectionUI();
   setMode();
-  return { text: clip.text, html };
+  return payload;
 }
 
 function valueToRaw(v) {
@@ -2901,7 +2953,7 @@ function pasteInternal(mode = 'all', opts = {}) {
     }
     if (what !== 'formats' && what !== 'comments' && what !== 'validation') afterDataEntry({ r1: tgt.r1, c1: tgt.c1, r2: tgt.r1 + th - 1, c2: tgt.c1 + tw - 1 });
   }, meta());
-  if (cut) clip = null;
+  if (cut) { clip = null; mobileCopySource = null; }
   selectRange({ r1: tgt.r1, c1: tgt.c1, r2: tgt.r1 + th - 1, c2: tgt.c1 + tw - 1 }, 'cells', { r: tgt.r1, c: tgt.c1 });
   setMode();
 }
@@ -2922,10 +2974,10 @@ function pasteText(text) {
   }
 }
 
-function handlePaste(text) {
+function handlePaste(text, allowInternal = true) {
   if (protectBlocked('cells')) return;
   const n = (s) => (s ?? '').replace(/\r\n?/g, '\n').replace(/\n$/, '');
-  if (clip && (!text || n(text) === n(clip.text))) { pasteInternal('all'); return; }
+  if (allowInternal && clip && (!text || n(text) === n(clip.text))) { pasteInternal('all'); return; }
   if (text) pasteText(text);
 }
 
@@ -2974,7 +3026,7 @@ function explicitOff(patch, r, c) {
 }
 
 function applyStyle(patchOrFn, { widen = false } = {}) {
-  lastRepeat = () => applyStyle(patchOrFn, { widen });
+  lastRepeat = () => run('repeatStyle', { patchOrFn, widen });
   const rg = sel;
   const patchFor = (cur) => {
     const p = typeof patchOrFn === 'function' ? patchOrFn(cur) : patchOrFn;
@@ -3445,6 +3497,7 @@ const PROTECT_BLOCK = new Set(['mergeCenter', 'unmerge', 'createTable', 'condMan
   'outlineUngroup', 'outlineClear', 'subtotal', 'resizeTable', 'convertToRange', 'tblName', 'tblHeader', 'tblTotals', 'tblBanded', 'tblBandedCols', 'tblFirstCol',
   'tblLastCol', 'tblFilter', 'textToColumns', 'dedupe', 'sparkLine', 'sparkColumn', 'sparkWinLoss', 'sparkClear', 'sparkEdit']);
 const PROTECT_MAP = {
+  repeatStyle: 'formatCells',
   contextSortFill:'sort',contextSortFont:'sort',contextFilterValue:'autoFilter',contextFilterFill:'autoFilter',contextFilterFont:'autoFilter',contextClearColumnFilter:'autoFilter',togglePhonetic:'formatCells',editPhonetic:'formatCells',
   drawingPalette: 'objects', insertGif: 'objects', insertVideo: 'objects', iconToShapes: 'objects', shapeUnion: 'objects', shapeCombine: 'objects', shapeFragment: 'objects', shapeIntersect: 'objects', shapeSubtract: 'objects', alternatingColors: 'formatCells',
   insertRows: 'insertRows', insertCols: 'insertColumns', deleteRows: 'deleteRows', deleteCols: 'deleteColumns', sortAsc: 'sort', sortDesc: 'sort', sortDialog: 'sort',
@@ -14438,12 +14491,19 @@ async function exportXlsx(name = docName, kind = null) {
   const savingBook = wb, savingId = docId, savingSheet = si;
   const k = kind ?? (wb.vba ? 'xlsm' : 'xlsx');
   const fileName = `${safeFileName(name)}.${k}`;
-  // 사용자 동작 직후 창을 열어야 하므로 직렬화·비동기 작업보다 먼저 호출한다.
+  const savingRevision = savingBook.version;
+  const over = xlsxOverflow(savingBook);
+  if (over) {
+    alertDialog('Excel 저장 범위 초과', `Excel의 1,048,576행·16,384열 한도 밖에 저장할 셀 ${over.toLocaleString()}개가 있습니다. 데이터가 잘리지 않도록 Excel 저장을 중단했습니다. 전체 문서는 [다른 이름으로 저장]에서 .wixel 형식으로 보관하거나 범위를 나누어 저장하세요.`);
+    return null;
+  }
+  const warnings = xlsxExportWarnings(savingBook);
+  if (warnings.length && !await confirmBox('Excel 호환성 확인', warnings.join('\n\n') + '\n\n이 제한을 확인하고 Excel 파일로 저장하시겠습니까?')) return null;
+  if (wb !== savingBook || docId !== savingId || savingBook.version !== savingRevision) { toast('문서가 바뀌어 저장을 취소했습니다. 현재 문서에서 다시 저장하세요.'); return null; }
+  // 호환성 확인 버튼도 사용자 동작입니다. 파일 선택기는 직렬화·압축보다 먼저 엽니다.
   const target = await pickSaveTarget(fileName);
   if (!target) return null;
-  if (wb !== savingBook || docId !== savingId) { toast('문서가 바뀌어 저장을 취소했습니다. 현재 문서에서 다시 저장하세요.'); return null; }
-  const over = xlsxOverflow(wb);
-  if (over) toast(`엑셀 파일은 1,048,576행까지만 저장할 수 있어 그 아래 셀 ${over.toLocaleString()}개는 빠집니다. 전체는 .wixel 로 저장하세요.`);
+  if (wb !== savingBook || docId !== savingId || savingBook.version !== savingRevision) { toast('문서가 바뀌어 저장을 취소했습니다. 현재 문서에서 다시 저장하세요.'); return null; }
   // 큰 문서는 나눠서 만들고 진행 표시 (압축도 함께 해서 파일이 작아짐)
   const prog = progressOverlay(`'${fileName}' 저장 중`);
   exportBusy++;
@@ -14561,6 +14621,11 @@ async function openFileObject(file, mode) {
         // 이미 불러옴
       } else {
         wb.transact(() => {
+          if (data.props?.xlsxImportWarnings?.includes('dataTableValuesOnly')) {
+            const codes = new Set((wb.props?.xlsxImportWarnings ?? []).filter(code => code === 'dataTableValuesOnly'));
+            codes.add('dataTableValuesOnly');
+            wb.setBookProp('props', { ...wb.props, xlsxImportWarnings: [...codes] });
+          }
           for (const s of data.sheets) {
             let name = s.name;
             for (let n = 2; wb.sheetIndexByName(name) >= 0; n++) name = `${s.name} (${n})`.slice(0, 31);
@@ -14847,7 +14912,7 @@ function afterLoad(name, activeSheet) {
   docName = name || '통합 문서1';
   si = clamp(activeSheet, 0, wb.sheets.length - 1);
   if (isHiddenSheet(si)) si = Math.max(0, wb.sheets.findIndex((_, i) => !isHiddenSheet(i)));
-  clip = null;
+  clip = null; mobileCopySource = null;
   painter = null;
   chartSel = null;
   circles = null;
@@ -14965,8 +15030,8 @@ function libraryFlush({ version = null, force = false } = {}) {
   if (!version && cellCount() === 0 && !wb.sheets.some((x) => x.charts?.length || x.shapes?.length)) return Promise.resolve(null);
   if (!wb?.sheets?.length || cellCount() > LIB_CELL_LIMIT) return Promise.resolve(null);
   docId ??= newDocId();
-  let json;
-  try { json = JSON.stringify(snapshot()); } catch { return Promise.resolve(null); }
+  let captured, json;
+  try { captured = librarySnapshot(wb, { app: 'wixel', docName, docId, si }); json = captured.blob; } catch { return Promise.resolve(null); }
   const savingBook = wb, savingId = docId, savingVersion = wb.version, savingName = docName, previousVersionAt = lastVersionAt;
   const isCurrent = () => wb === savingBook && wb.version === savingVersion && docId === savingId && docName === savingName;
   libDirty = false;
@@ -14980,7 +15045,7 @@ function libraryFlush({ version = null, force = false } = {}) {
       // 최신 원본은 유지하고 현재 편집본을 새 보관 문서로 한 번만 재시도합니다.
       try {
         const copyId = newDocId();
-        const copyJson = JSON.stringify({ ...JSON.parse(json), docId: copyId });
+        const copyJson = captured.withDocId(copyId);
         const saved = await libSave(copyId, savingName, copyJson, { ...options, keepIds: [savingId] });
         if (!isCurrent()) return null;
         docId = copyId;
@@ -15720,13 +15785,22 @@ function connectStorage(done) {
 function remoteConflict() {
   if (document.querySelector('[data-remote-conflict]')) return;
   clearTimeout(serverTimer);
+  const context = recoveryContext(), name = docName;
   const dlg = openDialog({ title: '저장 충돌 — 사본을 유지했습니다', width: 520,
     body: el('div', {}, el('p', {}, '같은 이름의 문서가 이미 있거나 다른 기기에서 변경되었습니다. 온라인 문서는 덮어쓰지 않았습니다.'),
-      el('p', { class: 'muted' }, '현재 작업은 브라우저에 보관됩니다. 다른 이름으로 저장하거나, 현재 사본을 버전 기록에 남긴 뒤 온라인 문서를 다시 여세요.')),
+      el('p', { class: 'muted' }, '현재 작업은 이 화면에 유지됩니다. 다른 이름으로 저장하거나, 복구 사본 보관이 완료된 뒤 온라인 문서를 다시 여세요.')),
     buttons: [
-      { label: '다른 이름으로 저장', primary: true, action: () => { queueMicrotask(() => formDialog('온라인 사본 저장', [{ name: 'name', label: '새 문서 이름', value: `${docName} 사본` }], ({ name }) => { if (!name.trim() || name.trim() === docName) throw new Error('다른 문서 이름을 입력하세요.'); renameDoc(name.trim()); selectRemoteSave(); }, { okLabel: '사본 저장' })); } },
-      { label: '온라인 문서 다시 열기', action: async () => { await libraryFlush({ version: { label: '온라인 충돌 전 사본' } }); await openFromServer(docName); } },
-      { label: '브라우저에 계속 작업', action: () => { remoteDoc = false; serverState.error = null; saveToStorage(); updateTitle(); } },
+      { label: '다른 이름으로 저장', primary: true, action: () => { context.assertCurrent(); queueMicrotask(() => formDialog('온라인 사본 저장', [{ name: 'name', label: '새 문서 이름', value: `${name} 사본` }], ({ name: nextName }) => { context.assertCurrent(); if (!nextName.trim() || nextName.trim() === name) throw new Error('다른 문서 이름을 입력하세요.'); renameDoc(nextName.trim()); selectRemoteSave(); }, { okLabel: '사본 저장' })); } },
+      { label: '온라인 문서 다시 열기', action: async () => {
+        context.assertCurrent();
+        if (serverRestoreBusy || serverState.saving) throw new Error('진행 중인 온라인 저장이 끝난 뒤 다시 시도하세요.');
+        serverRestoreBusy = true; clearTimeout(serverTimer);
+        try {
+          await preserveRecoverySnapshot('온라인 충돌 전 사본', context);
+          return await openFromServer(name);
+        } finally { serverRestoreBusy = false; if (dirty && remoteDoc && !serverState.error) scheduleServerSave(); }
+      } },
+      { label: '브라우저에 계속 작업', action: () => { context.assertCurrent(); remoteDoc = false; serverState.error = null; saveToStorage(); updateTitle(); } },
     ] });
   dlg.root.dataset.remoteConflict = 'true';
 }
@@ -18898,6 +18972,7 @@ function showContextMenu(pos, hitKind = 'cell') {
 const structural = (fn) => () => { fn(); gv.layout(); updateSelectionUI(); };
 
 const COMMANDS = {
+  repeatStyle: (options) => { if (options) applyStyle(options.patchOrFn, { widen: options.widen }); },
   mobileWorkMode: () => mobileWork.toggle(),
   mobileHandPan: () => { if (mobileWork?.active) gridMousePan?.toggle(); },
   mobileTools: () => mobileToolsDialog(),
@@ -19374,6 +19449,9 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['모바일 셀 복사·붙여넣기', ['모바일 셀 간 Ctrl+C·Ctrl+V와 잘라내기를 내부 사본으로 처리해 브라우저 클립보드 이벤트가 없어도 동작합니다. 셀 편집 중 텍스트 복사와 외부 앱 붙여넣기는 구분합니다.']],
+  ['Excel 저장 안전성', ['행·열 한도 밖 셀이 있으면 잘림 저장을 막습니다. 로그 축 설정은 표준 파일에 보존하고 화면 표현의 차이, 동적 데이터 표·반복 계산의 제한을 저장 전에 안내합니다.']],
+  ['반복 작업과 복구 사본 보호', ['F4 반복에도 현재 문서의 보호 상태를 다시 확인합니다. 충돌 복구 사본 저장이 실패하면 온라인 문서로 교체하지 않으며, 자동 보관의 전체 셀 복제를 줄였습니다.']],
   ['모바일 외부 키보드 입력', ['모바일 작업 도구에서 외부 키보드 모드를 선택하면 셀·수식·검색·대화상자의 화면 키보드를 억제하며 키 입력과 한글 조합을 유지합니다. 격자의 키 입력은 자동으로 감지하고, 화면 키보드 입력으로 다시 전환할 수 있습니다.']],
   ['아이폰 홈 화면 앱의 시트 조작 보완', [
     '시트 탭과 팝업을 홈 제스처 안전영역 위에 배치합니다. 모바일 작업 도구에서 현재 앱 버전과 업데이트 안내를 확인할 수 있습니다.',
@@ -19590,7 +19668,7 @@ function run(cmd, arg, { keepMenu = false } = {}) {
   } catch (err) {
     reportError(err, cmd);
   }
-  if (REPEATABLE.has(cmd)) lastRepeat = () => COMMANDS[cmd](arg);
+  if (REPEATABLE.has(cmd)) lastRepeat = () => run(cmd, arg);
   if (!keepMenu && !document.activeElement?.closest('.dialog,.menu')) focusGrid();
 }
 
@@ -19968,9 +20046,16 @@ function bindEvents() {
   });
   document.addEventListener('mouseup', (e) => { if (tlDrag) { const d = tlDrag; tlDrag = null; timelineApply(d.id, d.a, d.b); } onDragEnd(e); });
 
+  // 앱 밖에서 복사했을 수 있으므로 복귀 후 내부 사본을 자동 우선하지 않습니다.
+  window.addEventListener('blur', () => { mobileCopySource = null; mobileClipboardEcho = null; });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) { mobileCopySource = null; mobileClipboardEcho = null; } });
+  // 새 동작은 이전 단축키의 native 중복 방지 범위를 끝냅니다.
+  document.addEventListener('keydown', (e) => { if (!['Control', 'Meta', 'Shift', 'Alt'].includes(e.key)) mobileClipboardEcho = null; }, true);
+  document.addEventListener('pointerdown', () => { mobileClipboardEcho = null; }, true);
   // 클립보드
   document.addEventListener('copy', (e) => {
-    if (editing || document.activeElement !== dom.editor || chartSel) return;
+    if (consumeClipboardEcho(e)) return;
+    if (!gridClipboardFocus() || chartSel || !e.clipboardData) { mobileCopySource = null; return; }
     objClip = null;
     e.preventDefault();
     const { text, html } = copySelection(false);
@@ -19978,7 +20063,8 @@ function bindEvents() {
     e.clipboardData.setData('text/html', html);
   });
   document.addEventListener('cut', (e) => {
-    if (editing || document.activeElement !== dom.editor || chartSel) return;
+    if (consumeClipboardEcho(e)) return;
+    if (!gridClipboardFocus() || chartSel || !e.clipboardData) { mobileCopySource = null; return; }
     objClip = null;
     e.preventDefault();
     const { text, html } = copySelection(true);
@@ -19986,13 +20072,15 @@ function bindEvents() {
     e.clipboardData.setData('text/html', html);
   });
   document.addEventListener('paste', (e) => {
-    if (editing || document.activeElement !== dom.editor) return;
+    if (consumeClipboardEcho(e)) return;
+    if (!gridClipboardFocus() || !e.clipboardData) return;
     e.preventDefault();
     const text = e.clipboardData.getData('text/plain');
     const image = [...(e.clipboardData.files ?? [])].find((f) => f.type.startsWith('image/'));
     if (image && !text) { addImageFile(image); return; }
     if (objClip && (!text || text === objClip.text)) { pasteObject(); return; }
-    handlePaste(text);
+    if (clip && text.replace(/\r\n?/g, '\n').replace(/\n$/, '') !== clip.text.replace(/\r\n?/g, '\n').replace(/\n$/, '')) mobileCopySource = null;
+    handlePaste(text, !mobileWork?.active || mobileClipboardCurrent());
   });
   // 그림 파일을 끌어다 놓기
   dom.view.addEventListener('dragover', (e) => { if ([...(e.dataTransfer?.items ?? [])].some((i) => i.kind === 'file')) e.preventDefault(); });

@@ -536,3 +536,14 @@ node tools/mobile-layout.mjs
 ## 모바일 외부 키보드 입력
 
 `node tools/mobile-hardware-keyboard.mjs`는 격리 합성 문서에서 실제 Playwright 키 입력·마우스·터치를 사용해 첫 문자, Enter/Tab/Escape, 수식, 찾기, 글꼴, 설정 보존·복귀와 Undo를 검사합니다. IME 이벤트는 합성이며 실제 iPhone 시스템 키보드·Bluetooth 검사가 아닙니다. `WIXEL_URL`, `WIXEL_BROWSER`(chromium/webkit), `WIXEL_KEYBOARD_OUT`, `WIXEL_KEYBOARD_FILTER`를 지원하며 외부/API 요청과 원격 쓰기를 차단합니다. 세부 범위는 [62번 문서](../docs/codex/62_모바일외부키보드입력.md)를 참고합니다.
+
+## 개선 계획의 첫 안전성 배치
+
+- `node tools/snapshot-memory.mjs`: 별도 Node 프로세스의 30만 셀 old/Blob 직렬화 3회·동일 byte 비교. `WIXEL_SNAPSHOT_BENCHMARK`는 결과 JSON 경로다. JS heap 관측은 iPhone/전체 peak 메모리가 아니다.
+- `node tools/library-atomic.mjs`: 기존 원자 저장 + Blob/JSON 블록 복원 70검사. 소스 서버 전용, `WIXEL_BROWSER=chromium|webkit`. Windows WebKit은 IDB Blob 검사를 위해 D:의 새 persistent 프로필을 사용한다.
+- `node tools/command-recovery.mjs`: F4 보호 및 온라인 충돌 사본 실패/문서 변경 경로. `WIXEL_URL`, `WIXEL_BROWSER`, `WIXEL_RECOVERY_OUT`을 사용한다. 모든 온라인 API는 메모리 모의다.
+- `node tools/mobile-clipboard.mjs`: 모바일 내부 셀 Ctrl/Meta+C/X/V, native 이벤트 부재/중복, 외부 사본·보호·IME. `WIXEL_URL`, `WIXEL_BROWSER`, `WIXEL_CLIPBOARD_OUT`을 사용한다. OS 클립보드를 모의하며 실물 iPhone 홈 이탈 검사가 아니다.
+- `node tools/xlsx-safety-fixtures.mjs`: 표준 로그축 5종과 TABLE 값-only 합성 자료 생성. 기본 결과는 `D:/Codex/Temp/wixel-xlsx-safety`다.
+- `node tools/xlsx-preflight.mjs`: XLSX 저장 전 한도·미지원 안내 취소/승인·문서 변경과 시트 추가 경고 이력. 시스템 저장 창은 메모리 핸들로 모의한다.
+
+연구·점수·설계는 [63번 문서](../docs/codex/63_개선기획과설계.md), 실행 범위는 [64번 문서](../docs/codex/64_개선실행과검증.md)를 참고한다.

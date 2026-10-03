@@ -1,3 +1,4 @@
+import { jsonPartsBlob } from './snapshot-blob.js';
 import { filterWithButtons, filterButtonsVisible } from './filter-display.js';
 // 통합 문서 모델: 시트 · 셀 · 재계산 · 실행 취소 · 행/열 구조 변경
 import { normalizePhonetic, phoneticText } from './phonetic.js';
@@ -2810,6 +2811,51 @@ export class Workbook {
         return out;
       }),
     };
+  }
+
+  /** 같은 JSON 형식을 전체 셀 사전/통합 문서 복제 없이 동기적으로 고정합니다.
+   * 제너레이터는 이 호출 안에서 끝까지 소비합니다. 편집 사이에 yield하지 않습니다.
+   */
+  serializeBlob() {
+    const book = this;
+    function* parts() {
+      yield JSON.stringify({ version: 1, ...book.bookMeta() }).slice(0, -1) + ',"sheets":[';
+      for (let si = 0; si < book.sheets.length; si++) {
+        const s = book.sheets[si];
+        if (si) yield ',';
+        yield '{"name":' + JSON.stringify(s.name) + ',"cells":{';
+        let first = true, entries = [];
+        for (const [key, cell] of s.cells) {
+          entries.push(JSON.stringify(key) + ':' + JSON.stringify(cellData(cell)));
+          if (entries.length === 512) {
+            yield (first ? '' : ',') + entries.join(',');
+            first = false; entries = [];
+          }
+        }
+        if (entries.length) yield (first ? '' : ',') + entries.join(',');
+        yield '}';
+        if (s.blocks.length) {
+          yield ',"blocks":[';
+          for (let i = 0; i < s.blocks.length; i++) {
+            const b = s.blocks[i];
+            if (i) yield ',';
+            // blockClone의 저장 속성과 순서만 공유하며 typed array를 복제하지 않습니다.
+            yield JSON.stringify({ r0: b.r0, c0: b.c0, n: b.n, ver: b.ver ?? 0,
+              ...(b.perm ? { perm: b.perm } : {}),
+              cols: b.cols.map(c => ({ num: c.num ?? null, str: c.str ?? null, dict: c.dict, fmt: c.fmt ?? null })) });
+          }
+          yield ']';
+        }
+        for (const p of SHEET_PROPS) {
+          const value = JSON.stringify(s[p]);
+          if (value !== undefined) yield ',' + JSON.stringify(p) + ':' + value;
+        }
+        if (s.fileValues) yield ',"fileValues":true';
+        yield '}';
+      }
+      yield ']}';
+    }
+    return jsonPartsBlob(parts());
   }
 
   /** 시트 하나의 셀 외 속성 (저장용) */

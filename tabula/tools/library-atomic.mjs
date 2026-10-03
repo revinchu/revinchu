@@ -1,10 +1,19 @@
 // 새 격리 브라우저 프로필의 합성 IndexedDB만 사용합니다. source 서버 전용, 원격 쓰기 없음.
 // WIXEL_URL=http://127.0.0.1:5180/, PLAYWRIGHT_MODULE, PLAYWRIGHT_BROWSERS_PATH.
 import assert from 'node:assert/strict';
-const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
+import { mkdir, mkdtemp } from 'node:fs/promises';
+const engines = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const engine = process.env.WIXEL_BROWSER || 'chromium';
 const base = new URL(process.env.WIXEL_URL || 'http://127.0.0.1:5180/');
 if (!['127.0.0.1', 'localhost', '[::1]'].includes(base.hostname)) throw new Error('이 합성 IDB 검사는 로컬 source 서버에서만 실행하세요.');
-const browser = await chromium.launch(), context = await browser.newContext();
+// Windows WebKit의 ephemeral context는 앱과 무관하게 IDB Blob put이 실패합니다.
+// 실제 Blob 저장을 검사하려고 새 D: 전용 persistent profile을 씁니다(사용자 프로필 아님).
+let browser, context;
+if (engine === 'webkit' && process.platform === 'win32') {
+  const root = process.env.WIXEL_LIBRARY_PROFILE_ROOT || 'D:/Codex/Temp/wixel-improvement';
+  await mkdir(root, {recursive:true});
+  context = await engines[engine].launchPersistentContext(await mkdtemp(root + '/webkit-library-'));
+} else { browser = await engines[engine].launch(); context = await browser.newContext(); }
 let checks = 0;
 const eq = (a, b, msg) => { assert.deepEqual(a, b, msg); checks++; };
 try {
@@ -12,7 +21,7 @@ try {
   const open = async () => {
     const p = await context.newPage();
     await p.goto(new URL('/__library_test__', base).href);
-    await p.evaluate(async () => { window.L = await import('/src/library.js'); window.S = await import('/src/storage.js'); });
+    await p.evaluate(async () => { window.L = await import('/src/library.js'); window.S = await import('/src/storage.js'); window.W = await import('/src/workbook.js'); window.B = await import('/src/snapshot-blob.js'); });
     return p;
   };
   const p = await open(), q = await open();
@@ -115,5 +124,30 @@ try {
   await save(p, 'keep-copy', 2, { max: 1, keepIds: ['keep-original'] });
   eq(await load(p, 'keep-original'), { value: 1 });
   eq(await load(p, 'keep-copy'), { value: 2 });
-  console.log(JSON.stringify({ ok: true, checks, contexts: 1, tabs: 2, syntheticOnly: true }));
-} finally { await context.close(); await browser.close(); }
+  // 새 경로의 불변 Blob·옛 JSON 블록·첫 저장 revision·실패 복구를 함께 검사합니다.
+  const blobSource = { app:'wixel',docId:'blob-current',docName:'불변 스냅숏',si:0,
+    workbook:{date1904:true,sheets:[{name:'원본',cells:{'0,0':{raw:'😀한글'}},blocks:[{r0:2,c0:0,n:3,ver:0,
+      cols:[{num:{0:0,1:null,2:5},str:null,dict:[],fmt:null}]}]}]} };
+  const savedBlob = await p.evaluate(async data => {
+    const w=new W.Workbook(data.workbook), captured=B.librarySnapshot(w,{app:data.app,docId:data.docId,docName:data.docName,si:data.si});
+    window.__blobSnapshot=captured;
+    w.transact(()=>w.setInput(0,0,0,'스냅숏 뒤 편집'));
+    return L.libSave(data.docId,data.docName,captured.blob,{version:{label:'원본'},max:99});
+  },blobSource);
+  const loaded=await load(p,'blob-current');
+  eq(loaded.workbook.sheets[0].cells['0,0'].raw,'😀한글');
+  eq(await p.evaluate(async()=>{const d=await L.libLoad('blob-current'),w=new W.Workbook(d.workbook);return [w.getValue(0,2,0),w.getValue(0,3,0),w.getValue(0,4,0),w.date1904];}),[0,null,5,true]);
+  eq(await p.evaluate(ts=>L.libLoadVersion('blob-current',ts),savedBlob.versions[0].ts),loaded);
+  // 새 탭은 같은 byte의 Blob만 revision 관측 없이 채택한다.
+  eq(await q.evaluate(async data=>{try{await L.libSave('blob-current','동일',new Blob([JSON.stringify(data)]),{max:99});return 'ok';}catch(e){return e.code;}},loaded),'ok');
+  const fresh=await open();
+  eq(await fresh.evaluate(async data=>{data.workbook.sheets[0].cells['0,0'].raw='다른 내용';try{await L.libSave('blob-current','상이',new Blob([JSON.stringify(data)]));return 'unexpected';}catch(e){return e.code;}},loaded),'LIB_CONFLICT');
+  eq(await load(q,'blob-current'),loaded);
+  await load(p,'blob-current');
+  eq(await p.evaluate(async()=>{const put=IDBObjectStore.prototype.put;IDBObjectStore.prototype.put=function(v,k){if(k==='lib:index')throw new DOMException('합성 quota','QuotaExceededError');return put.call(this,v,k);};try{await L.libSave('blob-current','실패',new Blob(['{"bad":1}']),{version:{}});return 'unexpected';}catch(e){return e.name;}finally{IDBObjectStore.prototype.put=put;}}),'QuotaExceededError');
+  eq(await load(p,'blob-current'),loaded);
+  eq(await p.evaluate(async()=>{await L.libSave('blob-copy','사본',window.__blobSnapshot.withDocId('blob-copy'),{max:99});return (await L.libLoad('blob-copy')).docId;}),'blob-copy');
+  eq(await p.evaluate(async()=>{const original=globalThis.CompressionStream;globalThis.CompressionStream=undefined;try{await L.libSave('plain-blob','압축 없음',new Blob(['{"text":"한글😀"}']),{max:99});return [await L.libLoad('plain-blob'),(await S.idbGet('lib:doc:plain-blob')).gz];}finally{globalThis.CompressionStream=original;}}),[{text:'한글😀'},false]);
+  await fresh.close();
+  console.log(JSON.stringify({ ok: true, engine, checks, contexts: 1, tabs: 3, syntheticOnly: true }));
+} finally { await context.close(); await browser?.close(); }

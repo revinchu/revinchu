@@ -6,9 +6,9 @@ import { Workbook } from '../src/workbook.js';
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const base = new URL(process.env.WIXEL_URL || 'http://127.0.0.1:5180/');
 if (!['127.0.0.1', 'localhost', '[::1]'].includes(base.hostname)) throw new Error('로컬 서버에서 실행하세요.');
-// 배포 번들은 src를 노출하지 않으므로 fixture 준비/읽기용 두 모듈만 테스트 라우트로 공급합니다.
+// 배포 번들은 src를 노출하지 않으므로 fixture 준비/읽기용 세 모듈만 테스트 라우트로 공급합니다.
 // 실제 앱은 source에서는 동일 소스를, compiled에서는 서버의 빌드된 JS를 그대로 실행합니다.
-const fixtureModules = new Map(await Promise.all(['library', 'storage'].map(async n => [`/src/${n}.js`, await readFile(new URL(`../src/${n}.js`, import.meta.url), 'utf8')])));
+const fixtureModules = new Map(await Promise.all(['library', 'storage', 'snapshot-blob'].map(async n => [`/src/${n}.js`, await readFile(new URL(`../src/${n}.js`, import.meta.url), 'utf8')])));
 const browser = await chromium.launch(), errors = [], writes = []; let checks = 0;
 const eq = (a, b) => { assert.deepEqual(a, b); checks++; };
 const snapshot = (value) => ({ app: 'wixel', docId: 'synthetic-original', docName: '합성 복원', si: 0, workbook: new Workbook({ sheets: [{ name: '합성', cells: { '0,0': { raw: String(value) } } }] }).serialize() });

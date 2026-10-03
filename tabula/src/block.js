@@ -104,11 +104,24 @@ export function blockSet(b, r, c, v) {
   col.str[i] = code;
 }
 
+/** 기존 JSON 저장본의 typed array는 숫자 키 객체입니다. null 숫자는 원래 NaN(빈칸).
+ * 살아 있는 typed array의 복사 경로와 JSON 복원 경로를 구분합니다.
+ */
+function restoreBlockArray(value, Type, length, empty) {
+  if (ArrayBuffer.isView(value)) return value.slice();
+  const result = new Type(length).fill(empty);
+  for (const key of Object.keys(value)) {
+    const i = Number(key), v = value[key];
+    if (Number.isSafeInteger(i) && i >= 0 && i < length && String(i) === key && typeof v === 'number' && Number.isFinite(v)) result[i] = v;
+  }
+  return result;
+}
+
 /** 블록 복사본 (실행 취소 기록용) */
 export function blockClone(b) {
   return {
-    r0: b.r0, c0: b.c0, n: b.n, ver: b.ver ?? 0, ...(b.perm ? { perm: b.perm.slice() } : {}),
-    cols: b.cols.map((c) => ({ num: c.num ? c.num.slice() : null, str: c.str ? c.str.slice() : null, dict: [...c.dict], fmt: c.fmt ?? null })),
+    r0: b.r0, c0: b.c0, n: b.n, ver: b.ver ?? 0, ...(b.perm ? { perm: restoreBlockArray(b.perm, Int32Array, b.n, 0) } : {}),
+    cols: b.cols.map((c) => ({ num: c.num ? restoreBlockArray(c.num, Float64Array, b.n, NaN) : null, str: c.str ? restoreBlockArray(c.str, Int32Array, b.n, -1) : null, dict: [...c.dict], fmt: c.fmt ?? null })),
   };
 }
 

@@ -48,6 +48,23 @@ const NS_PKG = 'http://schemas.openxmlformats.org/package/2006/relationships';
 const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
 const EMU = 9525; // 1px
 
+// 변환 이력만 보관한다. 재계산/원본 XML 보존을 뜻하지 않으며, 파일의 임의 문구는 표시하지 않는다.
+const XLSX_IMPORT_WARNINGS = {
+  dataTableValuesOnly: '이 문서는 가져올 때 가상 분석 데이터 표(TABLE)의 저장된 결과만 보존했습니다. WIXEL에서 입력을 바꾸어도 데이터 표는 재계산되지 않으며, XLSX에 저장하면 데이터 표 수식 없이 값으로 저장됩니다. 원래 데이터 표가 필요하면 원본 파일을 유지하세요.',
+};
+const LOG_AXIS_WARNING = '로그 축 설정은 XLSX에 보존하지만 WIXEL 화면에서는 선형 축으로 표시합니다. 차트의 간격과 눈금이 Excel과 다르므로 Excel에서 확인하세요.';
+const importWarningCodes = (props) => Array.isArray(props?.xlsxImportWarnings) ? [...new Set(props.xlsxImportWarnings.filter(k => typeof k === 'string' && Object.hasOwn(XLSX_IMPORT_WARNINGS, k)))] : [];
+const chartHasLogAxis = (chart) => ['x', 'y', 'y2'].some(k => chart.axes?.[k]?.logBase !== undefined);
+
+/** XLSX 저장 전 안내. 값의 계산 또는 통합 문서 변경 없이 현재 보존 한계를 알린다. */
+export function xlsxExportWarnings(wb) {
+  const warnings = importWarningCodes(wb.props).map(k => XLSX_IMPORT_WARNINGS[k]);
+  if (wb.sheets.some(sh => (sh.charts ?? []).some(chartHasLogAxis))) warnings.push(LOG_AXIS_WARNING);
+  if (wb.calculation?.iterate) warnings.push('반복 계산 설정은 파일에 보존하지만 WIXEL은 반복 계산을 실행하지 않습니다. 저장된 계산 결과를 Excel에서 확인하세요.');
+  if (wb.calculation?.fullPrecision === false) warnings.push('표시된 정밀도로 계산 설정은 파일에 보존하지만 WIXEL은 원래 숫자의 정밀도로 계산합니다. 저장된 계산 결과를 Excel에서 확인하세요.');
+  return warnings;
+}
+
 // SpreadsheetML ST_Xstring: 이스케이프처럼 생긴 원문과 XML 금지 문자/CR도 보존.
 // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/bd0aa042-434a-4ca7-b25f-4e1fd25a954d
 function xesc(value) {
@@ -851,7 +868,10 @@ function* readSheet(files, path, ctx) {
       let formula = null;
       const fa = c.fa;
       if (fa) {
-        if (fa.t === 'shared' && fa.si !== undefined) {
+        if (fa.t === 'dataTable') {
+          (ctx.importWarningCodes ??= new Set()).add('dataTableValuesOnly');
+          ctx.warnings.add(XLSX_IMPORT_WARNINGS.dataTableValuesOnly);
+        } else if (fa.t === 'shared' && fa.si !== undefined) {
           if (c.f) shared[fa.si] = { text: c.f, r, c: cc };
           const m = shared[fa.si];
           // 공유 수식: 기준 수식을 한 번만 나눠 두고 칸마다 행 · 열만 옮김
@@ -1781,6 +1801,7 @@ function readDrawing(files, path, sheet, ctx) {
         const target = chartRef && rels[rid(chartRef)]?.target;
         const chart = target && readChart(files, target, ctx.theme);
         if (chart) {
+          if (chartHasLogAxis(chart)) ctx.warnings.add(LOG_AXIS_WARNING);
           if (['1','true'].includes(child(child(el, 'nvGraphicFramePr'), 'cNvPr')?.attrs.hidden)) chart.hidden = true;
           if (isChartEx(chart)) {
             const props = descendants(child(child(el, 'nvGraphicFramePr'), 'cNvPr'), 'props').find((p) => p.attrs['xmlns:tb'] === 'urn:tabula:chart');
@@ -2242,6 +2263,7 @@ function readChart(files, path, theme = {}) {
     const t = child(ax, 'title');
     if (t) o.title = descendants(t, 't').map((x) => x.text).join('');
     const sc = child(ax, 'scaling');
+    if (child(sc, 'logBase')) o.logBase = Number(child(sc, 'logBase').attrs.val);
     if (child(sc, 'min')) o.min = Number(child(sc, 'min').attrs.val);
     if (child(sc, 'max')) o.max = Number(child(sc, 'max').attrs.val);
     if (child(ax, 'majorUnit')) o.major = Number(child(ax, 'majorUnit').attrs.val);
@@ -2256,7 +2278,9 @@ function readChart(files, path, theme = {}) {
   const axes = {};
   if (axInfo(primaryAx)) axes.y = axInfo(primaryAx);
   if (axInfo(secondaryAx)) axes.y2 = axInfo(secondaryAx);
-  const catAx = kids(plot, 'catAx')[0];
+  const catAx = ['scatter', 'bubble'].includes(out.type)
+    ? primaryVals.find(ax => ['b', 't'].includes(child(ax, 'axPos')?.attrs.val))
+    : kids(plot, 'catAx')[0];
   if (axInfo(catAx)) axes.x = axInfo(catAx);
   if (Object.keys(axes).length) out.axes = axes;
   // 피벗 차트: [파일]시트!피벗 이름
@@ -2946,6 +2970,14 @@ function* readXlsxSteps(files) {
     if (fs && (fs.attrs.readOnlyRecommended === '1' || fs.attrs.readOnlyRecommended === 'true')) props.readOnlyRecommended = true;
     const custom = files['docProps/custom.xml'] && textOf(files['docProps/custom.xml']);
     if (custom && /name="_MarkAsFinal"[^>]*>\s*<vt:bool>(true|1)<\/vt:bool>/.test(custom)) props.markedFinal = true;
+    const history = custom && kids(parseXml(custom), 'property').find(p => p.attrs.name === '_WixelXlsxImportWarnings');
+    let savedCodes = [];
+    if (history) { try { savedCodes = importWarningCodes({ xlsxImportWarnings: JSON.parse(child(history, 'lpwstr')?.text ?? '') }); } catch { /* 잘못된 이력은 무시 */ } }
+    const codes = [...new Set([...savedCodes, ...(ctx.importWarningCodes ?? [])])];
+    if (codes.length) {
+      props.xlsxImportWarnings = codes;
+      for (const code of codes) if (!warnings.includes(XLSX_IMPORT_WARNINGS[code])) warnings.push(XLSX_IMPORT_WARNINGS[code]);
+    }
     if (Object.keys(props).length) data.props = props;
   }
   data.defaultFont = wbFont; // 통합 문서 기본 글꼴 (표준 스타일) — 셀 기본 크기 · 열 너비 변환에 씀
@@ -3674,10 +3706,10 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx', imageRel) {
   }).join('');
   const horizontal = baseType === 'bar';
   const axTitle = (t) => (t ? `<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="ko-KR" sz="1000" b="0"/><a:t>${esc(t)}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title>` : '');
-  const scaling = (cfg) => `<c:scaling><c:orientation val="${cfg?.reverse ? 'maxMin' : 'minMax'}"/>${typeof cfg?.max === 'number' ? `<c:max val="${cfg.max}"/>` : ''}${typeof cfg?.min === 'number' ? `<c:min val="${cfg.min}"/>` : ''}</c:scaling>`;
+  const scaling = (cfg) => `<c:scaling>${Number.isFinite(cfg?.logBase) && cfg.logBase >= 2 && cfg.logBase <= 1000 ? `<c:logBase val="${cfg.logBase}"/>` : ''}<c:orientation val="${cfg?.reverse ? 'maxMin' : 'minMax'}"/>${typeof cfg?.max === 'number' ? `<c:max val="${cfg.max}"/>` : ''}${typeof cfg?.min === 'number' ? `<c:min val="${cfg.min}"/>` : ''}</c:scaling>`;
   const numFmt = (cfg) => (cfg?.numFmt ? `<c:numFmt formatCode="${esc(cfg.numFmt)}" sourceLinked="0"/>` : '<c:numFmt formatCode="General" sourceLinked="1"/>');
   const catAxis = (id, cross, pos, del) => (baseType === 'scatter' || baseType === 'bubble'
-    ? `<c:valAx><c:axId val="${id}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="${del ? 1 : 0}"/><c:axPos val="${pos}"/><c:numFmt formatCode="General" sourceLinked="1"/><c:tickLblPos val="nextTo"/><c:crossAx val="${cross}"/><c:crosses val="autoZero"/><c:crossBetween val="midCat"/></c:valAx>`
+    ? `<c:valAx><c:axId val="${id}"/>${scaling(chart.axes?.x)}<c:delete val="${del || chart.axes?.x?.hide ? 1 : 0}"/><c:axPos val="${pos}"/>${del ? '' : axTitle(chart.axes?.x?.title)}${numFmt(chart.axes?.x)}<c:tickLblPos val="nextTo"/><c:crossAx val="${cross}"/><c:crosses val="autoZero"/><c:crossBetween val="midCat"/></c:valAx>`
     : `<c:catAx><c:axId val="${id}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="${del || chart.axes?.x?.hide ? 1 : 0}"/><c:axPos val="${pos}"/>${chart.gridX ? '<c:majorGridlines/>' : ''}${del ? '' : axTitle(chart.axes?.x?.title)}<c:numFmt formatCode="General" sourceLinked="1"/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crossAx val="${cross}"/><c:crosses val="autoZero"/><c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/><c:noMultiLvlLbl val="0"/></c:catAx>`);
   const valAxis = (id, cross, pos, cfg, grid, crosses = 'autoZero') => `<c:valAx><c:axId val="${id}"/>${scaling(cfg)}<c:delete val="${cfg?.hide ? 1 : 0}"/><c:axPos val="${pos}"/>${grid && chart.gridY !== false ? '<c:majorGridlines/>' : ''}${axTitle(cfg?.title)}${numFmt(cfg)}<c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crossAx val="${cross}"/><c:crosses val="${crosses}"/><c:crossBetween val="${baseType === 'area' || baseType === 'scatter' || baseType === 'bubble' ? 'midCat' : 'between'}"/>${typeof cfg?.major === 'number' ? `<c:majorUnit val="${cfg.major}"/>` : ''}</c:valAx>`;
   let axesXml = '';
@@ -4293,11 +4325,43 @@ function slicerGroupAnchorXml(members, id, nextId, anchorAt) {
   return `<xdr:twoCellAnchor editAs="${first.placement ?? 'oneCell'}"><xdr:from>${anchorAt(x, y)}</xdr:from><xdr:to>${anchorAt(right, bottom)}</xdr:to><xdr:grpSp><xdr:nvGrpSpPr><xdr:cNvPr id="${id}" name="슬라이서 그룹 ${id}"/><xdr:cNvGrpSpPr/></xdr:nvGrpSpPr><xdr:grpSpPr><a:xfrm><a:off x="${emu(x)}" y="${emu(y)}"/><a:ext cx="${emu(w)}" cy="${emu(h)}"/><a:chOff x="0" y="0"/><a:chExt cx="${emu(w)}" cy="${emu(h)}"/></a:xfrm></xdr:grpSpPr>${children}</xdr:grpSp><xdr:clientData${members.every(([,o]) => o.sl.noPrint) ? ' fPrintsWithSheet="0"' : ''}${members.every(([,o]) => o.sl.locked === false) ? ' fLocksWithSheet="0"' : ''}/></xdr:twoCellAnchor>`;
 }
 
-/** .xlsx 로 저장할 때 엑셀 한도(1,048,576행)를 넘어 빠지는 셀 수 */
+/** .xlsx 한도 밖의 값/수식/명시적 셀 서식·메타데이터 수. 순수 빈칸과 외부 참조 캐시는 제외한다. */
 export function xlsxOverflow(wb) {
   let n = 0;
-  for (const sheet of wb.sheets) {
-    for (const [k, cell] of sheet.cells) if (cell.raw && Number(k.slice(0, k.indexOf(','))) >= EXCEL_MAX_ROWS) n++;
+  const own = wb.ownSheetCount ? wb.ownSheetCount() : wb.sheets.length;
+  for (let si = 0; si < own; si++) {
+    const sheet = wb.sheets[si], cells = sheet.cells;
+    const outside = (r, c) => r >= EXCEL_MAX_ROWS || c >= MAX_COLS;
+    const each = cells.forEachRC ? fn => cells.forEachRC(fn) : fn => cells.forEach((cell, key) => { const i = key.indexOf(','); fn(cell, +key.slice(0, i), +key.slice(i + 1)); });
+    each((cell, r, c) => { if (outside(r, c) && ((cell.raw != null && cell.raw !== '') || cell.formula || cell.image?.src || cell.comment || cell.link || cell.phonetic || cell.style && Object.keys(cell.style).length)) n++; });
+    const blocks = sheet.blocks ?? [];
+    for (let bi = 0; bi < blocks.length; bi++) {
+      const b = blocks[bi], end = b.r0 + b.n;
+      if (end <= EXCEL_MAX_ROWS && b.c0 + b.cols.length <= MAX_COLS) continue;
+      for (let j = 0; j < b.cols.length; j++) {
+        const c = b.c0 + j, start = c >= MAX_COLS ? b.r0 : Math.max(b.r0, EXCEL_MAX_ROWS);
+        const col = b.cols[j];
+        const formatted = !!col.fmt && Object.keys(col.fmt).length > 0;
+        if (start >= end || !col.num && !col.str && !formatted) continue;
+        // Workbook의 첫 블록 우선 규칙: 앞 블록의 빈칸도 뒤 블록의 값을 가린다.
+        // 좌표 Set 대신 겹치는 행 구간만 보관하여 큰 블록의 추가 메모리를 제한한다.
+        const covered = [];
+        for (let k = 0; k < bi; k++) {
+          const prev = blocks[k];
+          if (c >= prev.c0 && c < prev.c0 + prev.cols.length && prev.r0 < end && prev.r0 + prev.n > start) covered.push([prev.r0, prev.r0 + prev.n]);
+        }
+        covered.sort((a, b) => a[0] - b[0]);
+        const overrides = cells.col ? cells.col(c) : null;
+        let cover = 0;
+        for (let r = start; r < end; r++) {
+          while (cover < covered.length && covered[cover][1] <= r) cover++;
+          if (cover < covered.length && covered[cover][0] <= r) { r = covered[cover][1] - 1; continue; }
+          if (overrides ? overrides.has(r) : !cells.col && cells.has(`${r},${c}`)) continue;
+          const value = blockValue(b, r, c);
+          if (formatted || value !== null && value !== undefined && value !== '') n++;
+        }
+      }
+    }
   }
   return n;
 }
@@ -4496,7 +4560,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
     let maxC = 0;
     const eachCell = (fn) => (sheet.cells.forEachRC ? sheet.cells.forEachRC(fn) : sheet.cells.forEach((cell, k) => { const i = k.indexOf(','); fn(cell, +k.slice(0, i), +k.slice(i + 1)); }));
     eachCell((cell, r, c) => {
-      if (r >= EXCEL_MAX_ROWS) return; // 엑셀 파일에는 1,048,576행까지만 저장 가능
+      if (r >= EXCEL_MAX_ROWS || c >= MAX_COLS) return; // 엑셀 행·열 한도
       let list = rows.get(r);
       if (!list) { list = []; rows.set(r, list); }
       list.push([c, cell]);
@@ -4511,6 +4575,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
         for (let j = 0; j < sp.w; j++) {
           if (!i && !j) continue;
           const c = sp.c + j;
+          if (c >= MAX_COLS) break;
           if (sheet.cells.has(`${r},${c}`)) continue;
           if (!rows.has(r)) rows.set(r, []);
           rows.get(r).push([c, { raw: '', spilled: true }]);
@@ -4524,9 +4589,10 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
     // 열 블록의 행 (셀 객체 없이 형식화 배열에서 바로 씀)
     const blocks = sheet.blocks ?? [];
     for (const b of blocks) {
+      if (b.r0 >= EXCEL_MAX_ROWS || b.c0 >= MAX_COLS) continue;
       for (let r = b.r0; r < Math.min(b.r0 + b.n, EXCEL_MAX_ROWS); r++) rowKeys.add(r);
       maxR = Math.max(maxR, Math.min(b.r0 + b.n, EXCEL_MAX_ROWS) - 1);
-      maxC = Math.max(maxC, b.c0 + b.cols.length - 1);
+      maxC = Math.max(maxC, Math.min(MAX_COLS, b.c0 + b.cols.length) - 1);
     }
     const sortedRows = [...rowKeys].filter((r) => r < EXCEL_MAX_ROWS).sort((a, b) => a - b);
 
@@ -4537,7 +4603,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
         if (r < b.r0 || r >= b.r0 + b.n) continue;
         const i = b.perm ? b.perm[r - b.r0] : r - b.r0;
         const taken = cells.length ? new Set(cells.map((x) => x[0])) : null;
-        for (let j = 0; j < b.cols.length; j++) {
+        for (let j = 0; j < Math.min(b.cols.length, MAX_COLS - b.c0); j++) {
           const col = b.cols[j];
           const has = (col.str && col.str[i] >= 0) || (col.num && col.num[i] === col.num[i]);
           if (!has && !col.fmt) continue;
@@ -4614,7 +4680,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
     const olc = sheet.outline?.cols ?? {};
     const olcc = sheet.outline?.colsColl ?? {};
     const colKeys = new Set([...Object.keys(sheet.colWidths), ...Object.keys(sheet.hiddenCols), ...Object.keys(sheet.colStyles), ...Object.keys(olc), ...Object.keys(olcc)].map(Number));
-    const colsXml = [...colKeys].sort((a, b) => a - b).map((c) => {
+    const colsXml = [...colKeys].filter(c => c < MAX_COLS).sort((a, b) => a - b).map((c) => {
       const w = sheet.colWidths[c] ?? sheet.defColW ?? DEFAULT_COL_WIDTH;
       const st = sheet.colStyles[c] ? ` style="${pool.xf({ ...sheet.allStyle, ...sheet.colStyles[c] })}"` : '';
       const ol = (olc[c] ? ` outlineLevel="${olc[c]}"` : '') + (olcc[c] ? ' collapsed="1"' : '');
@@ -4655,7 +4721,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
       const activePane = available.includes(sheet.view?.activePane) ? sheet.view.activePane : available[available.length - 1];
       pane = `<pane${fc ? ` xSplit="${fc}"` : ''}${fr ? ` ySplit="${fr}"` : ''} topLeftCell="${cellName(vt, vl)}" activePane="${activePane}" state="frozen"/><selection pane="${activePane}"${selectionAttrs}/>`;
     } else if (activeCell) pane = `<selection${selectionAttrs}/>`;
-    const dim = sheet.cells.size ? `A1:${cellName(maxR, maxC)}` : 'A1';
+    const dim = sheet.cells.size || sheet.blocks?.length ? `A1:${cellName(maxR, maxC)}` : 'A1';
 
     // 필터
     let autoFilter = '';
@@ -5055,8 +5121,11 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
   const pr = wb.props ?? {};
   const tagX = (tag, v) => (v ? `<${tag}>${esc(String(v))}</${tag}>` : '');
   files['docProps/core.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">${tagX('dc:title', pr.title)}${tagX('dc:subject', pr.subject)}${tagX('dc:creator', pr.creator || 'WIXEL')}${tagX('cp:keywords', pr.tags)}${tagX('dc:description', pr.comments)}${tagX('cp:lastModifiedBy', pr.lastModifiedBy)}${tagX('cp:category', pr.category)}<dcterms:created xsi:type="dcterms:W3CDTF">${/^\d{4}-\d\d-\d\dT/.test(pr.created ?? '') ? esc(pr.created) : now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified></cp:coreProperties>`;
-  if (pr.markedFinal) {
-    files['docProps/custom.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="2" name="_MarkAsFinal"><vt:bool>true</vt:bool></property></Properties>`;
+  const importCodes = importWarningCodes(pr);
+  if (pr.markedFinal || importCodes.length) {
+    const customProps = (pr.markedFinal ? '<property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="2" name="_MarkAsFinal"><vt:bool>true</vt:bool></property>' : '')
+      + (importCodes.length ? `<property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="3" name="_WixelXlsxImportWarnings"><vt:lpwstr>${esc(JSON.stringify(importCodes))}</vt:lpwstr></property>` : '');
+    files['docProps/custom.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">${customProps}</Properties>`;
     files['_rels/.rels'] = files['_rels/.rels'].replace('</Relationships>', `<Relationship Id="rId4" Type="${REL}/custom-properties" Target="docProps/custom.xml"/></Relationships>`);
     contentOverrides.push('<Override PartName="/docProps/custom.xml" ContentType="application/vnd.openxmlformats-officedocument.custom-properties+xml"/>');
   }

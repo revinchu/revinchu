@@ -1,6 +1,7 @@
 // 이 브라우저의 문서 보관함: 최근 문서 최대 30개 + 문서마다 버전 기록 최대 20개 (IndexedDB, gzip 압축)
 // 창을 닫아도 남고, 다른 문서를 열어도 이전 문서가 사라지지 않음 (구글 스프레드시트의 '최근 문서 · 버전 기록'과 비슷)
 import { idbGet, idbUpdate } from './storage.js';
+import { equalByteStreams } from './snapshot-blob.js';
 
 export const LIB_MAX = 30;
 export const VER_MAX = 20;
@@ -17,13 +18,14 @@ function checkRevision(id, packed) {
 
 export const newDocId = () => `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
 
-/** 문자열 → gzip Blob (압축을 못 하는 브라우저는 그대로) */
+/** 문자열/불변 JSON Blob → gzip Blob (압축 미지원은 그대로) */
 export async function packText(text) {
+  const blob = text instanceof Blob ? text : new Blob([text]);
   if (globalThis.CompressionStream) {
-    const stream = new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'));
+    const stream = blob.stream().pipeThrough(new CompressionStream('gzip'));
     return { gz: true, blob: await new Response(stream).blob() };
   }
-  return { gz: false, blob: new Blob([text]) };
+  return { gz: false, blob };
 }
 export async function unpackText(rec) {
   if (!rec) return null;
@@ -47,7 +49,7 @@ export async function libList() {
 const dropKeys = (e) => [docKey(e.id), ...(e.versions ?? []).map((v) => verKey(e.id, v.ts))];
 
 /**
- * 문서 저장 (json: 스냅샷 JSON 문자열). version: 버전 기록에도 남김 ({ label })
+ * 문서 저장 (json: 스냅샷 JSON 문자열 또는 불변 Blob). version: 버전 기록에도 남김 ({ label })
  * 반환: 갱신된 목록 항목
  */
 export function libSave(id, name, json, { version = null, info = {}, max = LIB_MAX, keepIds = [] } = {}) {
@@ -56,7 +58,14 @@ export function libSave(id, name, json, { version = null, info = {}, max = LIB_M
       // 자동 복원/옛 저장 형식에는 관측 revision이 없을 수 있습니다. 현재 본문과
       // 같은 사본임을 확인한 경우에만 채택하며, 읽은 뒤의 변경도 아래 tx에서 재검사합니다.
       const previous = await idbGet(docKey(id));
-      if (previous && await unpackText(previous) !== json) throw conflict();
+      if (previous) {
+        // 재시작 후 첫 저장도 동일한 원본만 채택합니다. Blob 경로는 전체 문자열을
+        // 다시 만들지 않고 압축을 푼 바이트를 스트림 단위로 정확히 대조합니다.
+        const incoming = json instanceof Blob ? json : new Blob([json]);
+        const prior = previous.gz && globalThis.DecompressionStream
+          ? previous.blob.stream().pipeThrough(new DecompressionStream('gzip')) : previous.blob.stream();
+        if (!await equalByteStreams(prior, incoming.stream())) throw conflict();
+      }
       observed.set(id, revisionOf(previous));
     }
     const packed = await packText(json);
