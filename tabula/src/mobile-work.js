@@ -1,7 +1,11 @@
 import { installRibbonMouseDrag } from './mouse-work.js';
+import { appleTouchDevice } from './keyboard-shortcuts.js';
 // Device-only layout preferences; this module never changes workbook data.
 export const MOBILE_MODE_KEY = 'wixel.mobile-work.v1';
 export const MOBILE_DENSITY_KEY = 'wixel.mobile-density.v1';
+export function pointerNavigationEnabled(active, platform = globalThis.navigator) {
+  return !!active || appleTouchDevice(platform) || /Android/i.test(platform?.userAgent || '') || platform?.userAgentData?.platform === 'Android';
+}
 export function mobileDensity(value) { return value === 'comfortable' ? 'comfortable' : 'compact'; }
 export function mobileLayout({ width, height, layoutHeight = height, coarse = false, preference = 'auto', typing = false }) {
   const active = preference === 'on' || (preference !== 'off' && (width <= 720 || (coarse && width <= 1100)));
@@ -25,10 +29,12 @@ export function installMobileWork({ button, onChange }) {
     const typing = !!focus?.matches('input:not([type=checkbox]):not([type=radio]):not([type=range]), textarea:not(.idle), [contenteditable=true]');
     const next = mobileLayout({ width: window.innerWidth, height, layoutHeight: window.innerHeight, coarse: media.matches, preference, typing });
     next.density = density;
+    next.pointerNavigation = pointerNavigationEnabled(next.active);
     const root = document.documentElement;
     root.style.setProperty('--mobile-vw', `${width}px`); root.style.setProperty('--mobile-vh', `${height}px`);
     root.style.setProperty('--mobile-left', `${viewport?.offsetLeft ?? 0}px`); root.style.setProperty('--mobile-top', `${viewport?.offsetTop ?? 0}px`);
     document.body.classList.toggle('mobile-work-mode', next.active);
+    document.body.classList.toggle('pointer-navigation-enabled', next.pointerNavigation);
     document.body.classList.toggle('mobile-short', next.short);
     document.body.classList.toggle('mobile-compact', next.active && density === 'compact');
     document.body.classList.toggle('mobile-keyboard', next.keyboard);
@@ -46,7 +52,7 @@ export function installMobileWork({ button, onChange }) {
   document.addEventListener('wheel', e => {
     if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
     const strip = e.target?.closest?.('.ribbon-tabs, .ribbon, .quick-access.below, .sheet-tabs');
-    if (!strip || (!state?.active && !strip.matches('.ribbon-tabs')) || strip.scrollWidth <= strip.clientWidth + 1) return;
+    if (!strip || (!state?.pointerNavigation && !strip.matches('.ribbon-tabs')) || strip.scrollWidth <= strip.clientWidth + 1) return;
     if (e.target.closest('input, textarea, select, [contenteditable=true]') === document.activeElement) return;
     const delta = (Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY) *
       (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? strip.clientWidth : 1);
@@ -56,7 +62,7 @@ export function installMobileWork({ button, onChange }) {
     e.preventDefault();
   }, { passive: false });
 
-  installRibbonMouseDrag({ enabled: strip => strip.matches('.ribbon-tabs') || !!state?.active });
+  installRibbonMouseDrag({ enabled: strip => strip.matches('.ribbon-tabs') || !!state?.pointerNavigation });
 
   const setPreference = value => {
     preference = ['auto', 'on', 'off'].includes(value) ? value : 'auto';
@@ -69,6 +75,6 @@ export function installMobileWork({ button, onChange }) {
     refresh(); window.dispatchEvent(new Event('resize'));
   };
   refresh();
-  return { get density() { return density; }, setDensity, get active() { return !!state?.active; }, get preference() { return preference; },
+  return { get density() { return density; }, setDensity, get active() { return !!state?.active; }, get pointerNavigation() { return !!state?.pointerNavigation; }, get preference() { return preference; },
     toggle: () => setPreference(state?.active ? 'off' : 'on'), setPreference, refresh };
 }

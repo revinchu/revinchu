@@ -14,7 +14,7 @@ export function shortcutCode(event) {
 
 // iPadOS can identify itself as a Mac, and a wide iPad or attached pointer can
 // select desktop layout. Clipboard behavior must not depend on layout density.
-export function appleTouchKeyboard(platform = globalThis.navigator) {
+export function appleTouchDevice(platform = globalThis.navigator) {
   return !!platform && (/iPad|iPhone|iPod/.test(platform.userAgent || '')
     || (/^Mac/.test(platform.platform || '') && platform.maxTouchPoints > 1));
 }

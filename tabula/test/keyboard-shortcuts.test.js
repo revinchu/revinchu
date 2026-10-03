@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { shortcutCode, appleTouchKeyboard } from '../src/keyboard-shortcuts.js';
+import { shortcutCode, appleTouchDevice } from '../src/keyboard-shortcuts.js';
 
 test('physical shortcuts keep their position across Korean and Apple Option input', () => {
   for (const key of ['c', 'C', 'ㅊ', 'ç', 'Unidentified']) assert.equal(shortcutCode({ key, code: 'KeyC', keyCode: 67 }), 'KeyC');
@@ -22,11 +22,11 @@ test('composition and dead keys never become spreadsheet shortcuts', () => {
     assert.equal(shortcutCode({ key: 'c', code: 'KeyC', keyCode: 67, ...extra }), '');
 });
 test('iPad desktop user agent is independent of viewport and pointer settings', () => {
-  assert.equal(appleTouchKeyboard({ userAgent: 'iPad', platform: 'iPad', maxTouchPoints: 5 }), true);
-  assert.equal(appleTouchKeyboard({ userAgent: 'iPhone', maxTouchPoints: 5 }), true);
-  assert.equal(appleTouchKeyboard({ userAgent: 'Macintosh', platform: 'MacIntel', maxTouchPoints: 5 }), true);
-  assert.equal(appleTouchKeyboard({ userAgent: 'Macintosh', platform: 'MacIntel', maxTouchPoints: 0 }), false);
-  assert.equal(appleTouchKeyboard({ userAgent: 'Windows', platform: 'Win32', maxTouchPoints: 10 }), false);
-  assert.equal(appleTouchKeyboard({ userAgent: 'Android', platform: 'Linux', maxTouchPoints: 5 }), false);
-  assert.equal(appleTouchKeyboard(null), false);
+  assert.equal(appleTouchDevice({ userAgent: 'iPad', platform: 'iPad', maxTouchPoints: 5 }), true);
+  assert.equal(appleTouchDevice({ userAgent: 'iPhone', maxTouchPoints: 5 }), true);
+  assert.equal(appleTouchDevice({ userAgent: 'Macintosh', platform: 'MacIntel', maxTouchPoints: 5 }), true);
+  assert.equal(appleTouchDevice({ userAgent: 'Macintosh', platform: 'MacIntel', maxTouchPoints: 0 }), false);
+  assert.equal(appleTouchDevice({ userAgent: 'Windows', platform: 'Win32', maxTouchPoints: 10 }), false);
+  assert.equal(appleTouchDevice({ userAgent: 'Android', platform: 'Linux', maxTouchPoints: 5 }), false);
+  assert.equal(appleTouchDevice(null), false);
 });

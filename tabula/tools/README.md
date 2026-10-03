@@ -554,3 +554,8 @@ node tools/mobile-layout.mjs
 - `node tools/keyboard-check.mjs`: 모바일 작업 도구 및 바로 가기 키에서 기기 내 확인 창을 연다. Ctrl/Alt/Meta 수신, 한글/legacy 대체 판정, IME 통과, Tab/Escape, 클립보드 접근 0, 문서 불변과 320px 배치를 검사한다. `WIXEL_URL`은 로컬 서버, `WIXEL_BROWSER=chromium|webkit`, `WIXEL_KEYBOARD_CHECK_OUT`은 D: 결과 경로다.
 - `tools/mobile-clipboard.mjs`에 iPad 데스크톱 UA·모바일 OFF, code 없는 한글+keyCode, Unidentified, 229, Alt 유지, 실제 리본/셀 마우스 복귀 검사를 추가했다. API의 선택 변경을 실제 DOM 포커스 복원으로 간주하지 않는다.
 - [65번 문서](../docs/codex/65_iPad키보드단축키.md)에 기준 릴리스 재현과 최종 번들 결과·실기기 한계를 기록한다.
+
+
+## 모바일 기기 최적화 OFF의 포인터 이동
+
+`node tools/apple-pointer-work.mjs`는 iPhone, Mac 플랫폼으로 표시되는 iPad 및 Android를 모의하고 모바일 최적화 OFF에서 리본/상단 메뉴/빠른 실행/시트 탭의 드래그·휠과 손바닥 도구·양버튼 이동을 검사한다. 문서·선택·Undo 보존, 일반 클릭 복원, ON→OFF 유지, 넓은 iPad, 일반 데스크톱의 기존 제한도 확인한다. `WIXEL_URL`, `WIXEL_BROWSER=chromium|webkit`, `WIXEL_APPLE_POINTER_OUT`(D: 경로), `WIXEL_APPLE_POINTER_FILTER`를 지원한다. OS/Bluetooth 하드웨어 검사가 아니며 [66번 문서](../docs/codex/66_모바일기기마우스이동.md)에 범위와 결과를 기록한다.

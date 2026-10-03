@@ -14,7 +14,7 @@ import { createDrawingPalette } from './drawing-palette.js';
 import { BANDING_PALETTES, alternatingRules, isBandingRule } from './alternating-colors.js';
 import { installMobileWork, mobileSheetZoom } from './mobile-work.js';
 import { installMobileKeyboard } from './mobile-keyboard.js';
-import { shortcutCode, appleTouchKeyboard } from './keyboard-shortcuts.js';
+import { shortcutCode, appleTouchDevice } from './keyboard-shortcuts.js';
 import { openKeyboardCheck } from './keyboard-check.js';
 import { installGridMousePan } from './mouse-work.js';
 import { installPivotFieldDrag } from './pivot-field-drag.js';
@@ -2772,7 +2772,7 @@ function consumeClipboardEcho(e) {
   return true;
 }
 function mobileCellClipboardKey(e, key) {
-  if (!(mobileWork?.active || appleTouchKeyboard()) || chartSel || editing || e.shiftKey || e.altKey || !['c', 'x', 'v'].includes(key)) return false;
+  if (!(mobileWork?.active || appleTouchDevice()) || chartSel || editing || e.shiftKey || e.altKey || !['c', 'x', 'v'].includes(key)) return false;
   if (key === 'v') {
     if (!mobileClipboardCurrent()) return false; // 외부 자료는 실제 paste 이벤트로 받습니다.
     e.preventDefault();
@@ -18977,7 +18977,7 @@ const structural = (fn) => () => { fn(); gv.layout(); updateSelectionUI(); };
 const COMMANDS = {
   repeatStyle: (options) => { if (options) applyStyle(options.patchOrFn, { widen: options.widen }); },
   mobileWorkMode: () => mobileWork.toggle(),
-  mobileHandPan: () => { if (mobileWork?.active) gridMousePan?.toggle(); },
+  mobileHandPan: () => { if (mobileWork?.pointerNavigation) gridMousePan?.toggle(); },
   mobileTools: () => mobileToolsDialog(),
   mobileFit: () => fitMobileScreen(),
   rowHeight: () => sizeDialog('row'), colWidth: () => sizeDialog('col'),
@@ -19452,6 +19452,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['iPad·iPhone·Android 마우스 이동', ['모바일 최적화를 꺼도 리본·메뉴·시트 탭을 마우스로 끌거나 휠로 넘길 수 있습니다. 상단 손바닥 도구와 마우스 양쪽 버튼을 이용한 시트 이동도 사용할 수 있습니다.']],
   ['iPad Bluetooth 키보드', ['iPad의 데스크톱 화면에서도 Ctrl·Command 셀 복사·붙여넣기를 처리하고, 한글 키의 물리 코드가 누락된 경우 대체 키 번호를 확인합니다. 모바일 작업 도구와 바로 가기 키에 키보드 단축키 확인 창을 추가했습니다.']],
   ['모바일 셀 복사·붙여넣기', ['모바일 셀 간 Ctrl+C·Ctrl+V와 잘라내기를 내부 사본으로 처리해 브라우저 클립보드 이벤트가 없어도 동작합니다. 셀 편집 중 텍스트 복사와 외부 앱 붙여넣기는 구분합니다.']],
   ['Excel 저장 안전성', ['행·열 한도 밖 셀이 있으면 잘림 저장을 막습니다. 로그 축 설정은 표준 파일에 보존하고 화면 표현의 차이, 동적 데이터 표·반복 계산의 제한을 저장 전에 안내합니다.']],
@@ -19923,7 +19924,7 @@ function onBookChange() {
 
 // ───────────────────────── 이벤트 연결 ─────────────────────────
 function bindEvents() {
-  gridMousePan = installGridMousePan({ view:dom.view, enabled:()=>!!mobileWork?.active,
+  gridMousePan = installGridMousePan({ view:dom.view, enabled:()=>!!mobileWork?.pointerNavigation,
     context:()=>sheet(), canStart:()=>!editing && !isDialogOpen() && !document.querySelector('.backstage'),
     onArmedChange: armed => {
       const button = $('mobileHandPan');
@@ -20084,7 +20085,7 @@ function bindEvents() {
     if (image && !text) { addImageFile(image); return; }
     if (objClip && (!text || text === objClip.text)) { pasteObject(); return; }
     if (clip && text.replace(/\r\n?/g, '\n').replace(/\n$/, '') !== clip.text.replace(/\r\n?/g, '\n').replace(/\n$/, '')) mobileCopySource = null;
-    handlePaste(text, !(mobileWork?.active || appleTouchKeyboard()) || mobileClipboardCurrent());
+    handlePaste(text, !(mobileWork?.active || appleTouchDevice()) || mobileClipboardCurrent());
   });
   // 그림 파일을 끌어다 놓기
   dom.view.addEventListener('dragover', (e) => { if ([...(e.dataTransfer?.items ?? [])].some((i) => i.kind === 'file')) e.preventDefault(); });
@@ -20249,7 +20250,7 @@ async function init() {
   ribbon = buildRibbon({ run, openMenu: openNamedMenu, focusGrid, refreshRibbon: updateRibbon, hiddenTabs: () => opts.hiddenTabs ?? [], inputGuard:slicerRibbonGuard, gallery: (name) => (name === 'chartStyles' ? chartStyleGallery() : name === 'pictureStyles' ? pictureStyleGallery(true) : name === 'slicerStyles' ? slicerRibbonGallery() : []) });
   mobileWork = installMobileWork({ button: $('mobileModeToggle'), onChange: (next, prev) => {
     mobileKeyboard?.refresh();
-    if (!next.active) gridMousePan?.refresh();
+    gridMousePan?.refresh();
     if (!gv) return;
     // 모드별 메뉴 항목을 다음 열기에서 새로 구성한다. 문서/선택은 그대로 둔다.
     if (prev && next.active !== prev.active) closeMenus();
