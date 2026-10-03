@@ -7,6 +7,7 @@
 //   labels, legend: 'b'|'t'|'r'|'l'|'none', grouping: 'clustered'|'stacked'|'percentStacked',
 //   axes?: { y: { title, numFmt, min, max }, y2: {…}, x: { title } } }
 import { formatGeneral, formatValue, formatCode, isDateCode } from './format.js';
+import { categoryAxisLayout, categoryAxisLabelSvg } from './chart-axis-labels.js';
 import { pivotSourceData, pivotChartData } from './pivot.js';
 import { inferPivotCategorySeries } from './chart-source.js';
 import { maxOf, minOf, pushAll } from './fxcore.js';
@@ -498,6 +499,22 @@ function lum(c) {
 function readable(fg, bg) {
   return Math.abs(lum(fg) - lum(bg)) < 0.25 ? (lum(bg) > 0.5 ? '#595959' : '#f2f2f2') : fg;
 }
+function plotCategoryLabels(categories, area, plot, font, cfg, width) {
+  const options = { length: area.w, depth: Math.max(font * 1.9, Math.min(160, plot.h * .44)), font,
+    interval: cfg.labelInterval, rotation: cfg.labelRotation, reverse: cfg.reverse,
+    startRoom: area.x - plot.x, endRoom: width - 10 - area.x - area.w, allowPadding: cfg.labelRotation === undefined };
+  let plan = categoryAxisLayout(categories, options);
+  if (plan.startPadding > .1 || plan.endPadding > .1) {
+    const left = Math.ceil(plan.startPadding * 1.2 + 2), right = Math.ceil(plan.endPadding * 1.2 + 2);
+    if (left + right < area.w * .3) {
+      const next = { ...area, x: area.x + left, w: area.w - left - right };
+      const fitted = categoryAxisLayout(categories, { ...options, length: next.w, startRoom: next.x - plot.x, endRoom: width - 10 - next.x - next.w, allowPadding: false });
+      if (fitted.angle === plan.angle && fitted.fits) { Object.assign(area, next); plan = fitted; }
+      else plan = categoryAxisLayout(categories, { ...options, allowPadding: false });
+    }
+  }
+  return plan;
+}
 let svgSeq = 0;
 export function renderChartSvg(chart, data) {
   chart = { ...chart, date1904: data.date1904 ?? chart.date1904 ?? false };
@@ -781,9 +798,12 @@ export function renderChartSvg(chart, data) {
     xScale = chartValueScale(xs, chart.axes?.x ?? {}, { zero: false });
   }
 
-  const catLabelW = horizontal ? Math.min(140, maxOf(categories.map((c) => [...c].length)) * CW * 1.4 + 8) : 0;
+  const categoryConfig = chart.axes?.x ?? {};
+  const categoryTitleH = categoryConfig.title ? FS.axis * 1.7 : 0;
+  let categoryLayout = horizontal && !hideX ? categoryAxisLayout(categories, { horizontal: true, length: Math.max(1, plot.h - 24 - (chart.axes?.y?.title ? FS.axis * 1.7 : 0)), depth: Math.min(260, plot.w * .4), font: FS.axis, interval: categoryConfig.labelInterval, rotation: categoryConfig.labelRotation }) : null;
+  const catLabelW = horizontal && !hideX ? (categoryLayout?.extent ?? 0) + categoryTitleH : 0;
   const area = horizontal
-    ? { x: plot.x + catLabelW, y: plot.y, w: plot.w - catLabelW - 10, h: plot.h - 18 }
+    ? { x: plot.x + catLabelW, y: plot.y, w: plot.w - catLabelW - 10, h: plot.h - 24 - (chart.axes?.y?.title ? FS.axis * 1.7 : 0) }
     : (() => {
       // 데이터 표가 있으면 왼쪽에 계열 이름이 들어갈 자리
       const lw = hasTable ? Math.max(labelW, Math.min(140, maxOf(series.map((s) => [...String(s.name)].length)) * CW * 1.25 + 24)) : labelW;
@@ -794,6 +814,15 @@ export function renderChartSvg(chart, data) {
   if (threeD) {
     area.x -= Math.min(0, depth.dx); area.y -= Math.min(0, depth.dy);
     area.w -= Math.abs(depth.dx); area.h -= Math.abs(depth.dy);
+  }
+  if (horizontal && threeD && !hideX) {
+    categoryLayout = categoryAxisLayout(categories, { horizontal: true, length: area.h, depth: Math.min(260, plot.w * .4), font: FS.axis, interval: categoryConfig.labelInterval, rotation: categoryConfig.labelRotation });
+    const delta = categoryLayout.extent + categoryTitleH - catLabelW;
+    area.x += delta; area.w -= delta;
+  }
+  if (!horizontal && baseType !== 'scatter' && !hideX && !hasTable) {
+    categoryLayout = plotCategoryLabels(categories, area, plot, FS.axis, categoryConfig, W);
+    area.h -= categoryLayout.extent - Math.round(FS.axis * 1.9) + categoryTitleH;
   }
   if (area.w < 20 || area.h < 20) return finish();
   if (chart.plotAreaFormat) parts[plotBackgroundIndex] = chartAreaSvg(chartAreaFormat(chart, 'plot'), area, { id: uid + 'plot', kind: 'plot' });
@@ -857,28 +886,22 @@ export function renderChartSvg(chart, data) {
   } else {
     // 항목 축 레이블
     const band = (horizontal ? area.h : area.w) / Math.max(1, n);
-    const maxChars = Math.max(2, Math.floor(band / (CW * 1.4)));
-    // 이름 길이에 맞춰 건너뛰기 (가로 축은 가장 긴 이름이 잘리지 않을 만큼)
-    const longest = horizontal ? 0 : Math.min(14, Math.max(0, ...categories.slice(0, 400).map((c) => [...String(c)].length)));
-    const every = Math.max(1, Math.ceil(n / Math.max(1, Math.floor((horizontal ? area.h : area.w) / (horizontal ? 28 : Math.max(28, longest * CW * 1.15 + 8))))));
     if (chart.gridX) {
       for (let i = 1; i < n; i++) {
         const q = ((horizontal ? area.y : area.x) + band * i).toFixed(1);
         parts.push(horizontal ? `<line x1="${area.x}" y1="${q}" x2="${area.x + area.w}" y2="${q}" stroke="${GRID}"/>` : `<line x1="${q}" y1="${area.y}" x2="${q}" y2="${area.y + area.h}" stroke="${GRID}"/>`);
       }
     }
-    categories.forEach((c, i) => {
-      if (i % every || hideX || hasTable) return;
-      const mid = (horizontal ? area.y : area.x) + band * (categoryIndex(i) + 0.5);
-      if (horizontal) axisText('x', `<text x="${area.x - 5}" y="${(mid + 3.5).toFixed(1)}" text-anchor="end" font-size="${FS.axis}" fill="${TXT}">${escSvg(truncate(c, 16))}</text>`);
-      else axisText('x', `<text x="${mid.toFixed(1)}" y="${area.y + area.h + Math.round(FS.axis * 1.35)}" text-anchor="middle" font-size="${FS.axis}" fill="${TXT}">${escSvg(truncate(c, maxChars * every))}</text>`);
-    });
+    if (!hideX && !hasTable && categoryLayout) for (const label of categoryLayout.labels) {
+      const mid = (horizontal ? area.y : area.x) + band * (categoryIndex(label.index) + .5);
+      axisText('x', categoryAxisLabelSvg(categoryLayout, label, mid, horizontal ? area.x : area.y + area.h, TXT));
+    }
     if (catLevels.length && !horizontal && !hasTable) {
       // 묶음 경계선은 항목 축에서 해당 단계 줄 아래까지
       const y0 = area.y + area.h;
       catLevels.forEach((spans, k) => {
-        const yText = y0 + Math.round(FS.axis * 1.35) + (k + 1) * LEVEL_H;
-        const yEnd = y0 + (k + 1) * LEVEL_H + Math.round(FS.axis * 0.6);
+        const yText = y0 + (categoryLayout?.extent ?? Math.round(FS.axis * 1.9)) + (k + .75) * LEVEL_H;
+        const yEnd = y0 + (categoryLayout?.extent ?? Math.round(FS.axis * 1.9)) + (k + 1) * LEVEL_H;
         for (const sp of spans) {
           const x1 = area.x + band * (chart.axes?.x?.reverse ? n - 1 - sp.end : sp.start);
           const w = band * (sp.end - sp.start + 1);
@@ -1056,9 +1079,14 @@ export function renderChartSvg(chart, data) {
   if (horizontal) parts.push(`<line x1="${base}" y1="${area.y}" x2="${base}" y2="${area.y + area.h}" stroke="#bfbfbf"/>`);
   else parts.push(`<line x1="${area.x}" y1="${base}" x2="${area.x + area.w}" y2="${base}" stroke="#bfbfbf"/>`);
   pushAll(parts, labelsOut);
-  if (!hideY && (primaryAxis === 0 || horizontal)) axisText(primaryAxis ? 'y2' : 'y', axisTitle(chart.axes?.[primaryAxis ? 'y2' : 'y']?.title, plot.x + 6, area.y + area.h / 2, -90));
-  if (rightScale && !chart.axes?.y2?.hide) axisText('y2', axisTitle(chart.axes?.y2?.title, area.x + area.w + label2W - 2, area.y + area.h / 2, 90));
-  if (!hideX) axisText('x', axisTitle(chart.axes?.x?.title, area.x + area.w / 2, H - (legendH ? legendH + 2 : 2)));
+  if (horizontal) {
+    if (!hideY) axisText(primaryAxis ? 'y2' : 'y', axisTitle(chart.axes?.[primaryAxis ? 'y2' : 'y']?.title, area.x + area.w / 2, plot.y + plot.h));
+    if (!hideX) axisText('x', axisTitle(categoryConfig.title, plot.x + FS.axis, area.y + area.h / 2, -90));
+  } else {
+    if (!hideY && primaryAxis === 0) axisText('y', axisTitle(chart.axes?.y?.title, plot.x + 6, area.y + area.h / 2, -90));
+    if (rightScale && !chart.axes?.y2?.hide) axisText('y2', axisTitle(chart.axes?.y2?.title, area.x + area.w + label2W - 2, area.y + area.h / 2, 90));
+    if (!hideX) axisText('x', axisTitle(categoryConfig.title, area.x + area.w / 2, H - (legendH ? legendH + 2 : 2)));
+  }
   return finish();
 }
 
@@ -1111,11 +1139,16 @@ function cartesian(ctx, vals, { horizontal = false, code = null, cats = null, ze
   const sc2 = secondary ? chartValueScale(secondary.values, { ...secondary.defaults, ...yc2 }, { zero: secondary.zero ?? false, code: secondary.code }) : null;
   const CW = FS.axis * .58, titleH = FS.axis * 1.7;
   const lw = (scale) => Math.min(100, maxOf(scale.ticks.map((t) => axisLabel(t, scale.code, chart.date1904).length)) * CW + 8);
-  const catW = Math.min(140, maxOf((cats ?? ['']).map((c) => [...String(c)].length)) * CW * 1.4 + 8);
+  let categoryLayout = horizontal && cats && !xc.hide ? categoryAxisLayout(cats, { horizontal: true, length: Math.max(1, plot.h - FS.axis * 1.9 - (cfg.title ? titleH : 0)), depth: Math.min(260, plot.w * .4), font: FS.axis, interval: xc.labelInterval, rotation: xc.labelRotation }) : null;
+  const catW = categoryLayout?.extent ?? 0;
   const left = horizontal ? (xc.hide ? 5 : catW + (xc.title ? titleH : 0)) : cfg.hide ? 5 : lw(sc) + (cfg.title ? titleH : 0);
   const bottom = horizontal ? (cfg.hide ? 4 : FS.axis * 1.9 + (cfg.title ? titleH : 0)) : xc.hide ? 4 : FS.axis * 1.9 + (xc.title ? titleH : 0);
   const rightW = sc2 && !yc2.hide ? lw(sc2) + (yc2.title ? titleH : 0) : right;
   const area = { x: plot.x + left, y: plot.y + 4, w: Math.max(4, plot.w - left - rightW - 6), h: Math.max(4, plot.h - bottom - 4) };
+  if (!horizontal && cats && !xc.hide) {
+    categoryLayout = plotCategoryLabels(cats, area, plot, FS.axis, xc, ctx.W);
+    area.h = Math.max(4, area.h - categoryLayout.extent + FS.axis * 1.9);
+  }
   const position = (v, scale) => { const q = (v - scale.min) / (scale.max - scale.min), t = scale.reverse ? 1 - q : q; return horizontal ? area.x + t * area.w : area.y + (1 - t) * area.h; };
   const pos = (v) => position(v, sc), pos2 = (v) => position(v, sc2);
   const title = (name, x, y, rotation = 0, axis = 'y') => { if (name) ctx.axisText(axis, T(x, y, name, FS.axis, TXT, 'middle', ` data-axis-title="${axis}"${rotation ? ` transform="rotate(${rotation} ${x} ${y})"` : ''}`)); };
@@ -1132,14 +1165,11 @@ function cartesian(ctx, vals, { horizontal = false, code = null, cats = null, ze
   const n = cats?.length ?? 0, band = (horizontal ? area.h : area.w) / Math.max(1, n);
   const mid = (i) => (horizontal ? area.y : area.x) + band * (xc.reverse ? n - i - .5 : i + .5);
   if (cats) {
-    const longest = horizontal ? 0 : Math.min(14, maxOf(cats.slice(0, 400).map((c) => [...String(c)].length)) || 0);
-    const every = Math.max(1, Math.ceil(n / Math.max(1, Math.floor((horizontal ? area.h : area.w) / (horizontal ? 28 : Math.max(28, longest * CW * 1.15 + 8))))));
     cats.forEach((c, i) => {
       const p = mid(i);
       if (chart.gridX) parts.push(horizontal ? `<line data-grid="x" x1="${area.x}" y1="${p}" x2="${area.x + area.w}" y2="${p}" stroke="${GRID}"/>` : `<line data-grid="x" x1="${p}" y1="${area.y}" x2="${p}" y2="${area.y + area.h}" stroke="${GRID}"/>`);
-      if (xc.hide || i % every) return;
-      ctx.axisText('x', horizontal ? T(area.x - 5, p + FS.axis * .35, truncate(String(c), 16), FS.axis, TXT, 'end', ' data-axis="x"') : T(p, area.y + area.h + FS.axis * 1.35, truncate(String(c), Math.max(2, Math.floor(band * every / (CW * 1.4)))), FS.axis, TXT, 'middle', ' data-axis="x"'));
     });
+    if (!xc.hide && categoryLayout) for (const label of categoryLayout.labels) ctx.axisText('x', categoryAxisLabelSvg(categoryLayout, label, mid(label.index), horizontal ? area.x : area.y + area.h, TXT));
   }
   if (!xc.hide) horizontal ? title(xc.title, plot.x + FS.axis, area.y + area.h / 2, -90, 'x') : title(xc.title, area.x + area.w / 2, plot.y + plot.h, 0, 'x');
   const clipId = `${uid}plot`;

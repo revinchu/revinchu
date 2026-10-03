@@ -70,6 +70,11 @@ export function createChartSelectionPanel({ getChart, getPart, getData, onChange
         rows.push(row('주 단위', automatic(axis.major, v => setAxis({ major: v && v > 0 ? v : undefined }), 0)));
         rows.push(row('축 표시 형식', text(axis.numFmt, v => setAxis({ numFmt: v || undefined }))));
         rows.push(button('축 범위 자동으로', () => { setAxis({ min: undefined, max: undefined, major: undefined }); draw(); }));
+      } else {
+        rows.push(row('레이블 간격', choose(axis.labelInterval === undefined ? 'auto' : 'manual', [['auto', '자동'], ['manual', '간격 단위 지정']], v => { setAxis({ labelInterval: v === 'auto' ? undefined : 1 }); draw(); })));
+        if (axis.labelInterval !== undefined) rows.push(row('간격 단위', automatic(axis.labelInterval, v => setAxis({ labelInterval: v === undefined ? undefined : Math.max(1, Math.round(v)) }), 1)));
+        rows.push(row('텍스트 방향', choose(axis.labelRotation === undefined ? 'auto' : 'manual', [['auto', '자동'], ['manual', '사용자 지정 각도']], v => { setAxis({ labelRotation: v === 'auto' ? undefined : 0 }); draw(); })));
+        if (axis.labelRotation !== undefined) rows.push(row('사용자 지정 각도(°)', automatic(axis.labelRotation, v => setAxis({ labelRotation: v }), -90, 90)));
       }
       rows.push(row('역순으로 표시', check(axis.reverse, v => setAxis({ reverse: v }))));
       rows.push(row('축 글꼴 크기(pt)', num(chart.axisSize ?? 9, v => up({ axisSize: v }), 6, 24)));

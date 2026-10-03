@@ -6887,6 +6887,12 @@ function chartFormatPane(id = chartSel) {
       !NO_AXIS_TYPES.has(ch.type) ? sec(ch.type === 'bar' ? '세로(항목) 축' : '가로(항목) 축',
         row('표시', chk(!axis('x').hide, (v) => setAx('x', { hide: !v || undefined }))),
         row('제목', txt(axis('x').title, (v) => setAx('x', { title: v || undefined }))),
+        ...(!['scatter', 'bubble'].includes(ch.type) ? [
+          row('레이블 간격', sel2(axis('x').labelInterval === undefined ? 'auto' : 'manual', [['auto', '자동'], ['manual', '간격 단위 지정']], (v) => { setAx('x', { labelInterval: v === 'auto' ? undefined : 1 }); draw(); })),
+          ...(axis('x').labelInterval !== undefined ? [row('간격 단위', num(axis('x').labelInterval, (v) => setAx('x', { labelInterval: v === undefined ? undefined : Math.max(1, Math.round(v)) }), { min: 1, step: 1 }))] : []),
+          row('텍스트 방향', sel2(axis('x').labelRotation === undefined ? 'auto' : 'manual', [['auto', '자동'], ['manual', '사용자 지정 각도']], (v) => { setAx('x', { labelRotation: v === 'auto' ? undefined : 0 }); draw(); })),
+          ...(axis('x').labelRotation !== undefined ? [row('사용자 지정 각도(°)', num(axis('x').labelRotation, (v) => setAx('x', { labelRotation: v }), { min: -90, max: 90, step: 1 }))] : []),
+        ] : []),
         row('세로 눈금선', chk(ch.gridX, (v) => up({ gridX: v || undefined })))) : null,
       sec('범례 · 레이블',
         row('범례 위치', sel2(ch.legend ?? 'b', [['b', '아래쪽'], ['t', '위쪽'], ['r', '오른쪽'], ['l', '왼쪽'], ['none', '없음']], (v) => up({ legend: v, legendLayout: undefined }))),
@@ -19453,6 +19459,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['차트 축 레이블 표시 개선', ['항목 이름의 과도한 생략을 줄이고 차트 폭에 맞춰 줄바꿈·회전을 조정합니다. 축 서식에서 레이블 간격과 각도를 지정하며 Excel 파일의 해당 설정도 읽고 저장합니다.']],
   ['iPad 마우스와 개체 메뉴', ['Ctrl·Command 휠로 시트 배율을 바꾸고 슬라이서 항목을 추가 선택할 때 누락된 키 상태를 보완합니다. 개체 재표시 뒤 우클릭이 셀 메뉴로 잘못 열리지 않게 했으며 차트 편집 버튼을 다른 개체 위에 표시합니다.']],
   ['온라인 사진 미리보기 확대', ['검색 결과를 화면 폭에 맞는 큰 미리보기로 표시하고 사진 전체를 확인할 수 있도록 개선했습니다.']],
   ['사진 위치별 표시 오류 수정', ['Safari에서 사진 보정·효과를 적용한 뒤 이동할 때 일부가 잘리거나 사라지는 문제를 수정했습니다. 온라인 그림의 삽입·화면 표시·픽셀 편집 요청 설정도 일치시켰습니다.']],

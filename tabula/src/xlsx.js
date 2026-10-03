@@ -2186,7 +2186,7 @@ function readChart(files, path, theme = {}) {
   if (tf2.bold !== undefined) out.titleBold = tf2.bold;
   if (tf2.color) out.titleColor = tf2.color;
   if (title && child(titleEl, 'overlay')?.attrs.val === '1') out.titleOverlay = true;
-  const axEl = kids(plot, 'catAx')[0] ?? kids(plot, 'valAx')[0];
+  const axEl = kids(plot, 'catAx')[0] ?? kids(plot, 'dateAx')[0] ?? kids(plot, 'valAx')[0];
   const af = runFont(child(axEl, 'txPr'));
   if (af.size) out.axisSize = af.size;
   const lg = runFont(child(child(chartEl, 'legend'), 'txPr'));
@@ -2267,6 +2267,13 @@ function readChart(files, path, theme = {}) {
     if (child(sc, 'min')) o.min = Number(child(sc, 'min').attrs.val);
     if (child(sc, 'max')) o.max = Number(child(sc, 'max').attrs.val);
     if (child(ax, 'majorUnit')) o.major = Number(child(ax, 'majorUnit').attrs.val);
+    if (ax.name === 'catAx' || ax.name === 'dateAx') {
+      const interval = Number(child(ax, 'tickLblSkip')?.attrs.val);
+      if (Number.isSafeInteger(interval) && interval > 0) o.labelInterval = interval;
+      const rawRotation = child(child(ax, 'txPr'), 'bodyPr')?.attrs.rot;
+      const rotation = rawRotation === undefined ? NaN : Number(rawRotation) / 60000;
+      if (Number.isFinite(rotation) && Math.abs(rotation) <= 90) o.labelRotation = rotation;
+    }
     if (child(ax, 'delete')?.attrs.val === '1' || child(ax, 'delete')?.attrs.val === 'true') o.hide = true;
     return Object.keys(o).length ? o : null;
   };
@@ -2280,7 +2287,7 @@ function readChart(files, path, theme = {}) {
   if (axInfo(secondaryAx)) axes.y2 = axInfo(secondaryAx);
   const catAx = ['scatter', 'bubble'].includes(out.type)
     ? primaryVals.find(ax => ['b', 't'].includes(child(ax, 'axPos')?.attrs.val))
-    : kids(plot, 'catAx')[0];
+    : kids(plot, 'catAx')[0] ?? kids(plot, 'dateAx')[0];
   if (axInfo(catAx)) axes.x = axInfo(catAx);
   if (Object.keys(axes).length) out.axes = axes;
   // 피벗 차트: [파일]시트!피벗 이름
@@ -3708,9 +3715,15 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx', imageRel) {
   const axTitle = (t) => (t ? `<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="ko-KR" sz="1000" b="0"/><a:t>${esc(t)}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title>` : '');
   const scaling = (cfg) => `<c:scaling>${Number.isFinite(cfg?.logBase) && cfg.logBase >= 2 && cfg.logBase <= 1000 ? `<c:logBase val="${cfg.logBase}"/>` : ''}<c:orientation val="${cfg?.reverse ? 'maxMin' : 'minMax'}"/>${typeof cfg?.max === 'number' ? `<c:max val="${cfg.max}"/>` : ''}${typeof cfg?.min === 'number' ? `<c:min val="${cfg.min}"/>` : ''}</c:scaling>`;
   const numFmt = (cfg) => (cfg?.numFmt ? `<c:numFmt formatCode="${esc(cfg.numFmt)}" sourceLinked="0"/>` : '<c:numFmt formatCode="General" sourceLinked="1"/>');
+  // Keep explicit category-label settings in standard chart XML, including 0°.
+  // Missing values retain Excel's automatic interval and text direction.
+  const categoryLabels = chart.axes?.x ?? {};
+  const labelIntervalXml = Number.isSafeInteger(categoryLabels.labelInterval) && categoryLabels.labelInterval > 0 ? `<c:tickLblSkip val="${categoryLabels.labelInterval}"/>` : '';
+  const labelRotationXml = Number.isFinite(categoryLabels.labelRotation) && Math.abs(categoryLabels.labelRotation) <= 90
+    ? `<c:txPr><a:bodyPr rot="${Math.round(categoryLabels.labelRotation * 60000)}"/><a:lstStyle/><a:p><a:pPr><a:defRPr${Number.isFinite(chart.axisSize) ? ` sz="${Math.round(Math.max(1, Math.min(400, chart.axisSize)) * 100)}"` : ''}/></a:pPr><a:endParaRPr lang="ko-KR"/></a:p></c:txPr>` : '';
   const catAxis = (id, cross, pos, del) => (baseType === 'scatter' || baseType === 'bubble'
     ? `<c:valAx><c:axId val="${id}"/>${scaling(chart.axes?.x)}<c:delete val="${del || chart.axes?.x?.hide ? 1 : 0}"/><c:axPos val="${pos}"/>${del ? '' : axTitle(chart.axes?.x?.title)}${numFmt(chart.axes?.x)}<c:tickLblPos val="nextTo"/><c:crossAx val="${cross}"/><c:crosses val="autoZero"/><c:crossBetween val="midCat"/></c:valAx>`
-    : `<c:catAx><c:axId val="${id}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="${del || chart.axes?.x?.hide ? 1 : 0}"/><c:axPos val="${pos}"/>${chart.gridX ? '<c:majorGridlines/>' : ''}${del ? '' : axTitle(chart.axes?.x?.title)}<c:numFmt formatCode="General" sourceLinked="1"/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crossAx val="${cross}"/><c:crosses val="autoZero"/><c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/><c:noMultiLvlLbl val="0"/></c:catAx>`);
+    : `<c:catAx><c:axId val="${id}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="${del || chart.axes?.x?.hide ? 1 : 0}"/><c:axPos val="${pos}"/>${chart.gridX ? '<c:majorGridlines/>' : ''}${del ? '' : axTitle(chart.axes?.x?.title)}<c:numFmt formatCode="General" sourceLinked="1"/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/>${labelRotationXml}<c:crossAx val="${cross}"/><c:crosses val="autoZero"/><c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/>${labelIntervalXml}<c:noMultiLvlLbl val="0"/></c:catAx>`);
   const valAxis = (id, cross, pos, cfg, grid, crosses = 'autoZero') => `<c:valAx><c:axId val="${id}"/>${scaling(cfg)}<c:delete val="${cfg?.hide ? 1 : 0}"/><c:axPos val="${pos}"/>${grid && chart.gridY !== false ? '<c:majorGridlines/>' : ''}${axTitle(cfg?.title)}${numFmt(cfg)}<c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crossAx val="${cross}"/><c:crosses val="${crosses}"/><c:crossBetween val="${baseType === 'area' || baseType === 'scatter' || baseType === 'bubble' ? 'midCat' : 'between'}"/>${typeof cfg?.major === 'number' ? `<c:majorUnit val="${cfg.major}"/>` : ''}</c:valAx>`;
   let axesXml = '';
   if (!pieLike) {

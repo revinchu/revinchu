@@ -569,3 +569,7 @@ node tools/mobile-layout.mjs
 ## iPad Ctrl 포인터·개체 메뉴·사진 검색
 
 `ipad-ctrl-wheel.mjs`, `slicer-modifier-selection.mjs`, `chart-controls-layer.mjs`, `online-gallery-layout.mjs`는 로컬 `WIXEL_URL`에서 격리 합성 문서로 동작한다. `WIXEL_BROWSER=chromium|webkit`로 브라우저를 선택한다. 각각 배율·modifier 해제, 슬라이서 추가 선택/개체별 메뉴, 차트 단추의 겹침과 실제 클릭, 화면 크기별 사진 미리보기와 선택 보존을 확인한다. 실제 Bluetooth 기기 검사가 아니며 최종 결과와 범위는 [68번 문서](../docs/codex/68_iPad포인터와개체메뉴.md)에 기록한다.
+
+### 차트 항목 축 레이블
+
+`node tools/chart-axis-labels.mjs`는 실제 축 글자 수, SVG 경계와 회전 사각형의 충돌, 3D/다단계/수동 간격·각도를 검사합니다. `node tools/chart-axis-settings.mjs`는 축 직접 클릭과 전체 서식 패널의 설정·실행 취소·XLSX 저장을 검사합니다. `WIXEL_URL`은 로컬 서버, `WIXEL_BROWSER=chromium|webkit`을 사용하며 Playwright 경로는 위 공통 안내를 따릅니다. 원격 쓰기를 차단한 합성 문서만 사용합니다. 실제 Excel 앱의 자동 배치와 픽셀 동등성을 검사하는 도구는 아닙니다.
