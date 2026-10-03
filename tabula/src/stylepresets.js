@@ -236,6 +236,7 @@ function decodeDxf(s, colors) {
 const presetMemo = new Map();
 /** 기본 제공 스타일 이름 → { 요소: 서식 } (없으면 null) */
 export function presetStyle(name) {
+  if (name && typeof name === 'object') return name;
   const src = PRESET_STYLES[name] ?? PRESET_STYLES[String(name).replace(/^Tabula(?=Table|Pivot)/, 'Wixel')];
   if (!src) return null;
   const key = `${name}|${THEME.key}`;
@@ -266,12 +267,10 @@ export function presetSwatch(name) {
  */
 export function applyElement(st, el, r, c, r1, c1, r2, c2) {
   if (!el) return;
-  if (el.bold) st.bold = true;
-  if (el.italic) st.italic = true;
-  if (el.color) st.color = el.color;
-  if (el.fill) st.fill = el.fill;
-  const s = el.sides;
-  const put = (side, v) => { const k = SIDE_KEYS[side]; st[k] = true; st[`${k}s`] = v[0] === 'thin' ? undefined : v[0]; st[`${k}c`] = v[1] === '#000000' ? undefined : v[1]; };
+  if(el.fill!==undefined||el.gradient!==undefined||el.pattern!==undefined)for(const k of ['fill','gradient','pattern','patternColor'])delete st[k];
+  for (const k of ['bold','italic','underline','strike','font','size','color','fill','pattern','patternColor','gradient','numFmt','code','decimals','thousands','negative','currency','dd','dds','ddc','du','dus','duc']) if (el[k] !== undefined) st[k] = el[k];
+  const s = el.sides ?? {};
+  const put = (side, v) => { const k = SIDE_KEYS[side]; st[k] = v[0] !== 'none'; st[`${k}s`] = v[0] === 'thin' ? undefined : v[0]; st[`${k}c`] = v[1] === '#000000' ? undefined : v[1]; };
   if (s.L && c === c1) put('L', s.L);
   if (s.R && c === c2) put('R', s.R);
   if (s.T && r === r1) put('T', s.T);
@@ -300,11 +299,13 @@ export function tablePresetCell(name, t, r, c) {
   applyElement(st, p.wt, r, c, r1, c1, r2, c2);
   if (t.bandedCols && inData) {
     const j = c - c1;
-    applyElement(st, j % 2 === 0 ? p.cs1 : p.cs2, r, c, d1, c, d2, c);
+    const b = stripeBand(p.cs1,p.cs2,j,c1,c2);
+    applyElement(st,b.element,r,c,d1,b.start,d2,b.end);
   }
   if (t.banded !== false && inData) {
     const i = r - d1;
-    applyElement(st, i % 2 === 0 ? p.rs1 : p.rs2, r, c, r, c1, r, c2);
+    const b = stripeBand(p.rs1,p.rs2,i,d1,d2);
+    applyElement(st,b.element,r,c,b.start,c1,b.end,c2);
   }
   if (t.lastCol && c === c2) applyElement(st, p.lc, r, c, r1, c2, r2, c2);
   if (t.firstCol && c === c1) applyElement(st, p.fc, r, c, r1, c1, r2, c1);
@@ -331,7 +332,7 @@ const ROW_ROLE = /^(rowGroup|rowSub|rowItem|grandLabel|blank)(?::(\d+))?/;
 export function paintPivotPreset(name, grid, g, opts = {}) {
   const p = presetStyle(name);
   if (!p) return false;
-  const { pages, top, headerRows, labelCols, width, grandCols = [], subCols = [], colLevels = 0, colFields = 0 } = g;
+  const { pages, top, headerRows, labelCols, width, grandCols = [], subCols = [], subColDepths = {}, colLevels = 0, colFields = 0 } = g;
   const B = grid.length - 1;
   const body1 = top + headerRows;
   const kindOf = (r) => {
@@ -365,8 +366,8 @@ export function paintPivotPreset(name, grid, g, opts = {}) {
     }
   }
   let stripe = 0;
-  const stripeOf = [];
-  for (let r = body1; r <= lastBody; r++) { if (kinds[r].kind !== 'blank') stripeOf[r] = stripe++; }
+  const stripeOf = [], stripeRows=[];
+  for (let r = body1; r <= lastBody; r++) { if (kinds[r].kind !== 'blank') {stripeOf[r] = stripe++;stripeRows.push(r);} }
   for (let r = top; r <= B; r++) {
     if (!grid[r]) continue;
     for (let c = 0; c < width; c++) {
@@ -376,17 +377,19 @@ export function paintPivotPreset(name, grid, g, opts = {}) {
       const dataCol = c >= labelCols && !grandSet.has(c);
       if (opts.bandCols && inBody && dataCol) {
         const j = c - labelCols;
-        applyElement(st, j % 2 === 0 ? p.cs1 : p.cs2, r, c, body1, c, lastBody, c);
+        const b=stripeBand(p.cs1,p.cs2,j,labelCols,width-1);
+        applyElement(st,b.element,r,c,body1,b.start,lastBody,b.end);
       }
       if (opts.bandRows && inBody && stripeOf[r] !== undefined) {
-        applyElement(st, stripeOf[r] % 2 === 0 ? p.rs1 : p.rs2, r, c, r, 0, r, width - 1);
+        const b=stripeBand(p.rs1,p.rs2,stripeOf[r],0,stripeRows.length-1);
+        applyElement(st,b.element,r,c,stripeRows[b.start],0,stripeRows[b.end],width-1);
       }
       if (opts.rowHeaders !== false && c < labelCols && r >= body1) applyElement(st, p.fc, r, c, body1, 0, B, labelCols - 1);
       if (opts.colHeaders !== false && r < body1) {
         applyElement(st, p.hr, r, c, top, 0, body1 - 1, width - 1);
         if (c < labelCols) applyElement(st, p.fhc, r, c, top, 0, body1 - 1, labelCols - 1);
       }
-      if (subSet.has(c) && r >= body1) applyElement(st, p.sc1, r, c, body1, c, B, c);
+      if (subSet.has(c) && r >= body1) applyElement(st, p[`sc${Math.min(3,(subColDepths[c]??0)+1)}`], r, c, body1, c, B, c);
       if (r >= body1) {
         const k = kinds[r];
         const lvl = Math.min(3, k.depth + 1);
@@ -409,7 +412,11 @@ export function paintPivotPreset(name, grid, g, opts = {}) {
     clean(st);
     if (!Object.keys(st).length) return;
     const cd = grid[r][c];
-    if (cd) cd.style = { ...st, ...cd.style };
+    if (cd) {
+      const own={...cd.style};
+      if(g.defaultNumberCells?.has(cd)&&(st.numFmt!==undefined||st.code!==undefined))for(const k of ['numFmt','code','decimals','thousands','negative','currency'])delete own[k];
+      cd.style = { ...st, ...own };
+    }
     else grid[r][c] = { raw: '', style: st, role: 'fill' };
   }));
   return true;
@@ -509,16 +516,34 @@ export const ELEMENT_TYPES = {
 /** 스타일 요소 → 셀 서식 모양 { bold, color, fill, bl/br/bt/bb/bv/bh(+s, c) } (xlsx 의 dxf 로 씀) */
 export function elementDxfStyle(e) {
   const st = {};
-  if (e.bold) st.bold = true;
-  if (e.italic) st.italic = true;
-  if (e.color) st.color = e.color;
-  if (e.fill) st.fill = e.fill;
+  for (const k of ['bold','italic','underline','strike','font','size','color','fill','pattern','patternColor','gradient','numFmt','code','decimals','thousands','negative','currency','dd','dds','ddc','du','dus','duc']) if(e[k]!==undefined)st[k]=structuredClone(e[k]);
   const key = { L: 'bl', R: 'br', T: 'bt', B: 'bb', V: 'bv', H: 'bh' };
   for (const [side, [line, col]] of Object.entries(e.sides ?? {})) {
     const k = key[side];
-    st[k] = true;
+    st[k] = line !== 'none';
     if (line !== 'thin') st[`${k}s`] = line;
     st[`${k}c`] = col;
   }
   return st;
+}
+
+/** OOXML 사용자 지정 원소를 기존 역할·경계 렌더러에 연결한다. */
+export function styleElementsPreset(elements) {
+  const out={},keys=new Map(Object.entries(ELEMENT_TYPES).map(([k,v])=>[v,k]));
+  for(const e of elements??[]) {
+    const k=keys.get(e.type);if(!k)continue;
+    const st=e.style??{},decoded={sides:{}};
+    for(const [prop,v] of Object.entries(st))if(!/^b[lrbtvh](?:s|c)?$/.test(prop))decoded[prop]=structuredClone(v);
+    for(const [key,side] of Object.entries({bl:'L',br:'R',bt:'T',bb:'B',bv:'V',bh:'H'}))if(st[key]!==undefined)decoded.sides[side]=[st[key]?(st[key+'s']??'thin'):'none',st[key+'c']??'#000000'];
+    decoded.stripeSize=e.size??1;out[k]=decoded;
+  }
+  return out;
+}
+export function presetStyleElements(name) {
+  const p=presetStyle(name);if(!p)return [];
+  return Object.entries(ELEMENT_TYPES).filter(([k])=>p[k]).map(([k,type])=>({type,...(/Stripe$/.test(type)?{size:p[k].stripeSize??1}:{}),style:elementDxfStyle(p[k])}));
+}
+function stripeBand(first,second,index,origin,limit) {
+  const a=first?.stripeSize??1,b=second?.stripeSize??1,n=index%(a+b),start=origin+index-n+(n<a?0:a);
+  return {element:n<a?first:second,start,end:Math.min(limit,start+(n<a?a:b)-1)};
 }

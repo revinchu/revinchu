@@ -498,3 +498,13 @@ node tools/mobile-layout.mjs
 ## 피벗 필드 끌기와 권한
 
 `node tools/pivot-field-drag.mjs`는 네 영역 추가·영역 간 이동·재정렬·중복 값·Σ 위치·Undo·취소·자동 스크롤·작은 화면을 실제 마우스 및 모의 Pointer/CDP 터치로 확인한다. `WIXEL_BROWSER=chromium|webkit`, `WIXEL_URL`, D: 출력 경로 `WIXEL_PIVOT_DRAG_OUT`, 부분 이름 `WIXEL_PIVOT_DRAG_FILTER`를 사용한다. `tools/pivot-pane-permissions.mjs`는 피벗 허용 보호·최종본·읽기 전용·계산 필드 공유 및 오래된 편집기 적용을 검사한다. 개인 문서나 원격 쓰기 없이 합성 문서를 사용하며 실제 기기 검증과 구분한다. 범위와 남은 차이는 [57번 문서](../docs/codex/57_피벗필드이동과검수.md)를 참고한다.
+
+
+## 개체 스타일과 모바일 시트 목록
+
+- `node tools/mobile-slicer-gallery.mjs`: 모바일 320/390px 두 밀도와 데스크톱에서 갤러리 이전·다음·더 보기, 실제 스타일 변경·Undo, 키보드·작은 메뉴 경계를 검사합니다. 출력은 `WIXEL_SLICER_GALLERY_OUT`으로 지정합니다.
+- `node tools/object-style-design.mjs`: 표·피벗·슬라이서 스타일 만들기·수정·복제·삭제·기본값·공유 사용처·요소 상속·명시 해제·숫자 형식·보호·오래된 편집기·실제 채우기와 XLSX 재열기를 검사합니다. `WIXEL_OBJECT_STYLE_OUT`과 부분 이름 `WIXEL_OBJECT_STYLE_FILTER`를 사용합니다.
+- `node tools/mobile-sheet-actions.mjs`: 시트 숨기기 취소와 이동/복사의 앱 목록, 마우스·터치·키보드, 취소·Undo/Redo·보호·오래된 문서, 모바일 경계를 검사합니다. 출력 변수는 `WIXEL_SHEET_ACTIONS_OUT`입니다.
+- `node tools/pivot-style-capture.mjs`: 가져온 피벗의 스타일 변경·지우기 실제 표시와 직접 지정 서식 보존을 확인합니다. 출력 변수는 `WIXEL_PIVOT_STYLE_OUT`입니다.
+
+`WIXEL_URL`에 로컬 소스 또는 최종 번들을 지정합니다. `WIXEL_BROWSER`는 도구별로 Chromium/WebKit를 선택하며 각 파일의 기본값을 참고하세요. 격리 컨텍스트의 합성 문서만 사용하고 외부/API 쓰기를 차단합니다. 실제 Excel 정상 열기/재저장과 WebKit 화면 검사의 구분, iPhone OS 홈 이탈의 미확인 상태는 [58번 문서](../docs/codex/58_개체스타일과모바일목록.md)에 기록합니다.

@@ -1520,7 +1520,7 @@ export class Workbook {
       if (e.t === 'cell') {
         // 셀 변경: 그 칸을 참조하는 수식만 (트랜잭션 안에서 바뀐 칸은 이미 모아 둠)
         if (!cellsDone && !e.calcNeutral && !done.has(e.si)) pts.push(e.si, e.r, e.c);
-      } else if (e.t === 'perm' || e.t === 'order' || (e.t === 'prop' && !CALC_NEUTRAL.has(e.prop))) {
+      } else if (e.t === 'perm' || e.t === 'order' || (e.t === 'prop' && !CALC_NEUTRAL.has(e.prop) && !e.calcNeutral)) {
         if (e.t === 'prop' && e.prop === 'tables') { this.deps = null; this.affectMemo.clear(); this.graph = null; this.graphEpoch = (this.graphEpoch ?? 0) + 1; }
         if (!done.has(e.si)) { done.add(e.si); this.invalidate(e.si); }
       } else if (e.t === 'prop' && e.prop === 'merges') {
@@ -1917,7 +1917,7 @@ export class Workbook {
 
   /** 통합 문서 표시/문서 속성을 계산값 변경 없이 한 트랜잭션에 기록한다. */
   setBookProp(prop, value) {
-    if (!['theme', 'themeName', 'defaultFont', 'themeFonts', 'themeEffects', 'themeXml', 'props', 'calculation'].includes(prop)) throw new TypeError('지원하지 않는 통합 문서 속성입니다.');
+    if (!['theme', 'themeName', 'defaultFont', 'themeFonts', 'themeEffects', 'themeXml', 'props', 'calculation', 'objectStyles'].includes(prop)) throw new TypeError('지원하지 않는 통합 문서 속성입니다.');
     const next = structuredClone(value ?? null);
     if (JSON.stringify(this[prop] ?? null) === JSON.stringify(next)) return false;
     if (this.tx && !this.tx.entries.some(e => e.t === 'bookProp' && e.prop === prop)) this.tx.entries.push({ t: 'bookProp', prop, before: structuredClone(this[prop] ?? null) });
@@ -1925,6 +1925,12 @@ export class Workbook {
     if (prop === 'calculation') this.manualCalc = next?.mode === 'manual';
     this.version++;
     return true;
+  }
+
+  /** 표·피벗·슬라이서의 이름 있는 스타일 목록과 기본값. 변경 이력은 다른 문서 서식과 공유합니다. */
+  setObjectStyles(styles) {
+    if (styles !== null && (typeof styles !== 'object' || Array.isArray(styles))) throw new TypeError('개체 스타일 목록이 올바르지 않습니다.');
+    return this.setBookProp('objectStyles', styles);
   }
 
   setCellStyles(list) {
@@ -1950,8 +1956,23 @@ export class Workbook {
     return true;
   }
 
+  /** 표의 표시 서식만 변경한다. 범위·필터·열 이름은 이 경로로 변경할 수 없다. */
+  setTableStyle(si, id, patch) {
+    const keys=['style','styleDef','styleElements','banded','bandedCols','firstCol','lastCol'];
+    if(Object.keys(patch).some(key=>!keys.includes(key)))throw new TypeError('표 서식 외 속성은 변경할 수 없습니다.');
+    const sh=this.sheets[si],table=sh?.tables?.find(t=>t.id===id);if(!table)return false;
+    const existed=this.tx?.entries.find(e=>e.t==='prop'&&e.si===si&&e.prop==='tables');
+    this.propSnap(si,'tables');
+    const entry=this.tx?.entries.find(e=>e.t==='prop'&&e.si===si&&e.prop==='tables');
+    if(entry&&!existed)entry.calcNeutral=true;
+    sh.tables=sh.tables.map(t=>t.id===id?{...t,...structuredClone(patch)}:t);
+    this.version++;return true;
+  }
+
   setSheetProp(si, prop, value) {
     this.propSnap(si, prop);
+    // 같은 트랜잭션에서 서식 변경 뒤 구조까지 바꾸면 계산 중립 표시를 해제한다.
+    const entry=this.tx?.entries.find(e=>e.t==='prop'&&e.si===si&&e.prop===prop);if(entry)delete entry.calcNeutral;
     this.sheets[si][prop] = value;
     if (prop === 'tables') { this.deps = null; this.affectMemo.clear(); }
     // 그림 개체 · 틀 고정 · 조건부 서식 등은 계산 결과에 영향이 없으므로 수식 캐시를 유지
@@ -2672,6 +2693,7 @@ export class Workbook {
       ...(this.defaultFont ? { defaultFont: { ...this.defaultFont } } : {}),
       ...(this.baseStyle ? { baseStyle: structuredClone(this.baseStyle) } : {}),
       ...(this.cellStyles?.length ? { cellStyles: structuredClone(this.cellStyles) } : {}),
+      ...(this.objectStyles ? { objectStyles: structuredClone(this.objectStyles) } : {}),
       ...(this.theme ? { theme: [...this.theme] } : {}),
       ...(this.themeXml ? { themeXml: this.themeXml } : {}),
       ...(this.themeName ? { themeName: this.themeName } : {}),
@@ -2784,6 +2806,7 @@ export class Workbook {
     // 문서 속성 · 보호 (엑셀 파일 › 정보): { title, subject, tags, category, comments, creator, lastModifiedBy, created, modified, readOnlyRecommended, lockStructure, markedFinal }
     this.props = data.props ? structuredClone(data.props) : {};
     this.cellStyles = structuredClone(data.cellStyles ?? null); // 이름 있는 셀 스타일 [{ name, style, builtinId? }] (엑셀 [셀 스타일] 사용자 지정)
+    this.objectStyles = structuredClone(data.objectStyles ?? null);
     this.baseStyle = data.baseStyle ?? null; // 기본 셀 서식 (xlsx 의 xf 0) — 서식이 없는 셀에 적용
     this.vba = data.vba ?? null; // .xlsm 의 매크로(vbaProject.bin, base64) — 실행하지 않고 보존만 함
     this.externals = data.externals ?? null; // 외부 통합 문서 연결 (xlsx externalLink 원본 — 저장할 때 그대로 되돌려 씀)

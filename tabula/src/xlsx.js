@@ -1,3 +1,4 @@
+import { normalizeObjectStyles, findObjectStyle, objectStylePatch, TABLE_STYLE_ELEMENTS, SLICER_STYLE_ELEMENTS } from './object-styles.js';
 import { relocateValidation, VALIDATION_IME_MODES } from './validation.js';
 import { chartAreaFormatXml, readChartAreaFormat } from './chart-area-drawingml.js';
 import { readPhonetic, normalizePhonetic, phoneticXml } from './phonetic.js';
@@ -35,7 +36,7 @@ import { BLOCK_MIN_ROWS, ColBuilder, inBlock, blockValue } from './block.js';
 import { normalizeStyleName, DEFAULT_TABLE_STYLE, dataTop, dataBottom, canonicalRef, tableAt, columnNames, findTable } from './tables.js';
 import { pivotSourceData, resolvePivot, itemText, keyOf, sortKeys, EMPTY, headerNames, normalizeDef, computePivot, valueName, showAsPercent, excelCalcFormula, pivotFilterKey, pivotPageMulti, pivotPageLayout, DATE_OP_TYPES } from './pivot.js';
 import { groupKey } from './cube.js';
-import { slicerStyleName, slicerColors, isModernSlicer } from './slicerstyle.js';
+import { slicerStyleName, slicerColors, isModernSlicer, slicerStyleElements } from './slicerstyle.js';
 import { SLICER_DEFAULT_BUTTON_HEIGHT } from './slicer-properties.js';
 import { applyTint, DEFAULT_THEME, PRESET_STYLES, presetStyle, isModernStyle, ELEMENT_TYPES, elementDxfStyle } from './stylepresets.js';
 import { maxOf, minOf, pushAll, DAY_MS } from './fxcore.js';
@@ -447,7 +448,38 @@ function readStyles(files, wbRels, theme) {
     if (nf?.attrs.formatCode) Object.assign(st, styleForCode(nf.attrs.formatCode));
     return st;
   };
-  const dxfs = kids(child(root, 'dxfs'), 'dxf').map(dxfOf);
+  const dxfNodes = kids(child(root, 'dxfs'), 'dxf');
+  const dxfs = dxfNodes.map(dxfOf);
+  const objectDxfOf = d => {
+    const st=dxfOf(d),f=child(d,'font');
+    Object.assign(st,fontOf(f));
+    for(const [tag,key]of [['b','bold'],['i','italic'],['strike','strike']])if(child(f,tag))st[key]=!falseAttr(child(f,tag).attrs.val);
+    if(child(f,'u'))st.underline=child(f,'u').attrs.val!=='none';
+    const fc=colorOf(child(f,'color'),theme);if(fc)st.color=fc;
+    const fill=child(d,'fill'),pf=child(fill,'patternFill');
+    if(fill){const val=fillOf(fill,!(child(fill,'gradientFill')||pf?.attrs.patternType&&pf.attrs.patternType!=='solid'));if(val&&typeof val==='object')Object.assign(st,val);else if(val)st.fill=val;}
+    if(pf?.attrs.patternType==='none')st.fill=null;
+    const b=child(d,'border');
+    for(const [tag,key]of [['left','bl'],['right','br'],['top','bt'],['bottom','bb'],['vertical','bv'],['horizontal','bh']]){
+      const e=child(b,tag);if(!e)continue;st[key]=!!e.attrs.style&&e.attrs.style!=='none';
+      if(st[key]){if(e.attrs.style!=='thin')st[key+'s']=e.attrs.style;const c=colorOf(child(e,'color'),theme);if(c)st[key+'c']=c;}
+    }
+    for(const [attr,key]of [['diagonalDown','dd'],['diagonalUp','du']])if(b?.attrs[attr]!==undefined&&!st[key])st[key]=false;
+    return st;
+  };
+  const x14DxfRoot=kids(child(root,'extLst'),'ext').find(e=>e.attrs.uri?.toUpperCase()==='{46F421CA-312F-682F-3DD2-61675219B42D}');
+  const slicerDxfNodes=x14DxfRoot?kids(child(x14DxfRoot,'dxfs'),'dxf'):dxfNodes;
+  const readElement=(e,nodes=dxfNodes)=>{const d=nodes[Number(e.attrs.dxfId)],style=d?objectDxfOf(d):{};return {type:e.attrs.type,...(/Stripe$/.test(e.attrs.type)?{size:Number(e.attrs.size)>0?Number(e.attrs.size):1}:{}),style,...(d?{sourceDxf:structuredClone(d),sourceStyle:structuredClone(style)}:{})};};
+  const tableStylesNode=child(root,'tableStyles'),slicerStylesNode=descendants(root,'slicerStyles')[0];
+  const slicerStyleNames=new Set(kids(slicerStylesNode,'slicerStyle').map(ss=>ss.attrs.name));
+  const objectStyles=normalizeObjectStyles({
+    // 동명 false/false 보조 정의는 아래 슬라이서에 흡수한다. 미참조 정의는 보존한다.
+    tables:kids(tableStylesNode,'tableStyle').filter(ts=>!(falseAttr(ts.attrs.table)&&falseAttr(ts.attrs.pivot)&&slicerStyleNames.has(ts.attrs.name))).map(ts=>({name:ts.attrs.name,table:!falseAttr(ts.attrs.table),pivot:!falseAttr(ts.attrs.pivot),elements:kids(ts,'tableStyleElement').map(e=>readElement(e))})),
+    slicers:kids(slicerStylesNode,'slicerStyle').map(ss=>({name:ss.attrs.name,elements:[...kids(kids(tableStylesNode,'tableStyle').find(t=>t.attrs.name===ss.attrs.name),'tableStyleElement').filter(e=>['wholeTable','headerRow'].includes(e.attrs.type)).map(e=>readElement(e)),...descendants(ss,'slicerStyleElement').map(e=>readElement(e,slicerDxfNodes))]})),
+    ...(tableStylesNode?.attrs.defaultTableStyle?{defaultTableStyle:tableStylesNode.attrs.defaultTableStyle}:{}),
+    ...(tableStylesNode?.attrs.defaultPivotStyle?{defaultPivotStyle:tableStylesNode.attrs.defaultPivotStyle}:{}),
+    ...(slicerStylesNode?.attrs.defaultSlicerStyle?{defaultSlicerStyle:slicerStylesNode.attrs.defaultSlicerStyle}:{})
+  });
   // 사용자 지정 피벗 스타일 (<tableStyles>) → 역할별 서식 { header, sub, grand, body, page, band }
   const tableStyles = {};
   for (const ts of kids(child(root, 'tableStyles'), 'tableStyle')) {
@@ -482,7 +514,7 @@ function readStyles(files, wbRels, theme) {
     };
     slicerStyles[ss.attrs.name] = Object.fromEntries(Object.entries(c).filter(([, v]) => v));
   }
-  return { xfs, dxfs, dxfOf, defaultFont, tableStyles, wbFont, slicerStyles, cellStyles, fonts };
+  return { xfs, dxfs, dxfOf, defaultFont, tableStyles, wbFont, slicerStyles, cellStyles, fonts, objectStyles };
 }
 
 const CHUNK_MIN = 48 << 20;
@@ -1208,7 +1240,7 @@ function* readSheet(files, path, ctx) {
     const target = rels[rid(tp)]?.target;
     const tx = target && textOf(files[target]);
     if (!tx) continue;
-    const t = readTable(parseXml(tx), sheet);
+    const t = readTable(parseXml(tx), sheet, ctx.objectStyles);
     if (t) sheet.tables.push(t);
   }
   sheet.validations = readValidations(root);
@@ -1322,7 +1354,7 @@ function readValidations(root) {
 }
 
 /** tables/tableN.xml → 표 모델 */
-function readTable(root, sheet) {
+function readTable(root, sheet, styles) {
   const rg = refToRange(root.attrs.ref ?? '');
   if (!rg) return null;
   const header = root.attrs.headerRowCount !== '0';
@@ -1357,7 +1389,8 @@ function readTable(root, sheet) {
   const name = (root.attrs.displayName || root.attrs.name || 'Table').replace(/\s/g, '_');
   return {
     id: `tb${Math.random().toString(36).slice(2, 9)}`, name, ...rg, r2: Math.max(rg.r2, rg.r1 + (header ? 1 : 0)),
-    header, totals, style: normalizeStyleName(info?.attrs.name ?? DEFAULT_TABLE_STYLE),
+    header, totals, style: info ? info.attrs.name ?? 'None' : DEFAULT_TABLE_STYLE,
+    ...(findObjectStyle(styles,'table',info?.attrs.name) ? objectStylePatch('table',findObjectStyle(styles,'table',info.attrs.name)) : {}),
     banded: info ? info.attrs.showRowStripes !== '0' : true, bandedCols: info?.attrs.showColumnStripes === '1',
     firstCol: info?.attrs.showFirstColumn === '1', lastCol: info?.attrs.showLastColumn === '1',
     filter, totalsFns, ...(header ? {} : { columns: cols.map((c) => c.attrs.name ?? '') }),
@@ -2707,7 +2740,8 @@ function linkPivotsAndSlicers(files, wbRels, sheets, ctx) {
         }
         if (ctx.pivotSnapshots[p.cachePath]) def.snapshotId = p.cachePath;
       }
-      if (def && ctx.tableStyles?.[def.style] && !PRESET_STYLES[def.style]) def.styleDef = ctx.tableStyles[def.style]; // 파일에 정의된 사용자 지정 스타일 (WIXEL 모던 스타일은 이름으로 앎)
+      if (def && findObjectStyle(ctx.objectStyles,'pivot',def.style)) Object.assign(def,objectStylePatch('pivot',findObjectStyle(ctx.objectStyles,'pivot',def.style)));
+      else if (def && ctx.tableStyles?.[def.style] && !PRESET_STYLES[def.style]) def.styleDef = ctx.tableStyles[def.style]; // 파일에 정의된 사용자 지정 스타일 (WIXEL 모던 스타일은 이름으로 앎)
       if (def) linkPivotCond(s, def, p.root, cache);
       if (!def) ctx.warnings.add('외부 데이터 원본을 쓰는 피벗 테이블은 값으로만 가져왔습니다.');
       else if (!s.pivot) { s.pivot = def; s._pivotName = p.root.attrs.name; } else (s.pivotsExtra ??= []).push(def);
@@ -2734,10 +2768,11 @@ function linkPivotsAndSlicers(files, wbRels, sheets, ctx) {
       }
       if (!source) { ctx.warnings.add('연결 대상을 찾지 못한 슬라이서는 가져오지 않았습니다.'); continue; }
       const box = boxes[sl.name] ?? { x: 20 + i * 190, y: 20, w: 180, h: 200 };
+      const styleName=sl.style??ctx.objectStyles?.defaultSlicerStyle??'SlicerStyleLight1';
       s.slicers.push({
         id: `sl${Math.random().toString(36).slice(2, 9)}`, caption: sl.caption ?? sl.name, source, columns: Math.max(1, sl.columns || 1),
-        style: /^SlicerStyle(Light|Other|Dark)\d$/i.test(sl.style ?? '') || isModernSlicer(sl.style) ? sl.style : 'SlicerStyleLight1', multi: false, ...box,
-        ...(!isModernSlicer(sl.style) && ctx.slicerStyles?.[sl.style] && Object.keys(ctx.slicerStyles[sl.style]).length ? { custom: ctx.slicerStyles[sl.style] } : {}),
+        style: styleName === 'WIXEL Slicer None' ? 'None' : styleName, multi: false, ...box,
+        ...(styleName === 'WIXEL Slicer None' ? {} : findObjectStyle(ctx.objectStyles,'slicer',styleName) ? objectStylePatch('slicer',findObjectStyle(ctx.objectStyles,'slicer',styleName)) : !isModernSlicer(styleName) && ctx.slicerStyles?.[styleName] && Object.keys(ctx.slicerStyles[styleName]).length ? { custom: ctx.slicerStyles[styleName] } : {}),
         ...(sl.showCaption ? {} : { showHeader: false }),
         ...(sl.lockedPosition ? { noMove: true } : {}),
         ...(c.opts ?? {}),
@@ -2792,7 +2827,7 @@ function* readXlsxSteps(files) {
   const wbRoot = parseXml(textOf(files[wbPath]));
   const wbRels = relsOf(files, wbPath);
   const theme = readTheme(files, wbRels);
-  const { xfs, dxfs, dxfOf, tableStyles, wbFont, slicerStyles, cellStyles, fonts } = readStyles(files, wbRels, theme);
+  const { xfs, dxfs, dxfOf, tableStyles, wbFont, slicerStyles, cellStyles, fonts, objectStyles } = readStyles(files, wbRels, theme);
   const mdw = digitWidth(wbFont);
   const ssRel = Object.values(wbRels).find((r) => r.type === 'sharedStrings');
   const stringNodes = !files.__xlsb && ssRel && files[ssRel.target] ? kids(parseXml(textOf(files[ssRel.target])), 'si') : [];
@@ -2820,7 +2855,7 @@ function* readXlsxSteps(files) {
     try { return mayReturnArray(parse(e.ref.slice(1))); } catch { return false; }
   };
   const date1904 = ['1', 'true'].includes(child(wbRoot, 'workbookPr')?.attrs.date1904);
-  const ctx = { mdw, wbFont, xfs, dxfs, dxfOf, tableStyles, slicerStyles, strings, phonetics, fonts, theme, date1904, warnings: new Set(), isName, nameMulti, richImages: readRichImages(files, wbRels) };
+  const ctx = { mdw, wbFont, xfs, dxfs, dxfOf, tableStyles, slicerStyles, objectStyles, strings, phonetics, fonts, theme, date1904, warnings: new Set(), isName, nameMulti, richImages: readRichImages(files, wbRels) };
   const sheets = [];
   const warnings = [];
   const sheetCodes = {};
@@ -2910,6 +2945,7 @@ function* readXlsxSteps(files) {
   // 기본 셀 서식(xf 0): s 속성이 없는 셀에 적용됨 (한국어 엑셀은 보통 세로 가운데 맞춤)
   if (xfs[0] && Object.keys(xfs[0]).length) data.baseStyle = { ...xfs[0] };
   if (cellStyles?.length) data.cellStyles = cellStyles;
+  if (objectStyles) data.objectStyles = objectStyles;
   const active = Number(descendants(child(wbRoot, 'bookViews'), 'workbookView')[0]?.attrs.activeTab ?? 0);
   let act = Math.min(active, sheets.length - 1);
   if (sheets[act]?.state) act = Math.max(0, sheets.findIndex((x) => !x.state));
@@ -3045,6 +3081,13 @@ function themeXml(wb) {
     + '</a:themeElements><a:objectDefaults/><a:extraClrSchemeLst/></a:theme>', wb);
 }
 
+function styleNodeXml(node) {
+  if(!node||!/^[A-Za-z_][\w.-]*$/.test(node.name))return '';
+  const attrs=Object.entries(node.attrs??{}).filter(([k])=>/^[A-Za-z_][\w.:-]*$/.test(k)).map(([k,v])=>` ${k}="${esc(v)}"`).join('');
+  const body=esc(node.text??'')+(node.children??[]).map(styleNodeXml).join('');
+  return `<${node.name}${attrs}${body?`>${body}</${node.name}>`:'/>'}`;
+}
+
 class StylePool {
   constructor(baseFont = WRITE_FONT, baseStyle = null) {
     this.baseFont = { name: baseFont.name || DEFAULT_FONT, size: baseFont.size || 11 };
@@ -3057,6 +3100,7 @@ class StylePool {
     this.dxfs = [];
     this.tableStyles = new Map();
     this.slicerStyles = new Map();
+    this.slicerDxfs = [];
     this.byObj = new WeakMap();
     this.maps = { font: new Map([[this.fonts[0], 0]]), fill: new Map(this.fills.map((f, i) => [f, i])), border: new Map([[this.borders[0], 0]]), fmt: new Map(), xf: new Map([['{}', 0]]) };
     // 기본 셀 서식(xf 0)을 통합 문서의 기본 서식으로 씀 — 서식 없는 셀도 엑셀에서 같은 모양
@@ -3192,6 +3236,49 @@ class StylePool {
     return this.dxfs.length - 1;
   }
 
+  objectDxf(element) {
+    if(element.sourceDxf?.name==='dxf' && JSON.stringify(element.style??{})===JSON.stringify(element.sourceStyle)) {
+      this.dxfs.push(styleNodeXml(element.sourceDxf));return this.dxfs.length-1;
+    }
+    const st=element.style??{};
+    const bools=[['bold','b'],['italic','i'],['strike','strike']].filter(([k])=>st[k]!==undefined).map(([k,t])=>`<${t} val="${st[k]?1:0}"/>`).join('');
+    const f=bools+(st.underline!==undefined?`<u val="${st.underline?'single':'none'}"/>`:'')+(st.size?`<sz val="${Number(st.size)}"/>`:'')+(st.font?`<name val="${esc(st.font)}"/>`:'')+(st.color?`<color rgb="${argb(st.color)}"/>`:'');
+    let fill='';const g=st.gradient;
+    if(g?.stops?.length)fill=`<fill><gradientFill${g.path?` type="path" left="${g.l??0}" right="${g.r??0}" top="${g.t??0}" bottom="${g.b??0}"`:` degree="${Number(g.deg)||0}"`}>${g.stops.map(([p,c])=>`<stop position="${Number(p)||0}"><color rgb="${argb(c)}"/></stop>`).join('')}</gradientFill></fill>`;
+    else if(st.pattern)fill=`<fill><patternFill patternType="${esc(st.pattern)}"><fgColor rgb="${argb(st.patternColor??'#000000')}"/>${st.fill?`<bgColor rgb="${argb(st.fill)}"/>`:''}</patternFill></fill>`;
+    else if(st.fill===null)fill='<fill><patternFill patternType="none"/></fill>';
+    else if(st.fill)fill=`<fill><patternFill patternType="solid"><fgColor rgb="${argb(st.fill)}"/><bgColor rgb="${argb(st.fill)}"/></patternFill></fill>`;
+    const side=(n,k)=>st[k]?`<${n} style="${esc(st[k+'s']??'thin')}"><color rgb="${argb(st[k+'c']??'#000000')}"/></${n}>`:`<${n}/>`;
+    const diag=st.dd!==undefined||st.du!==undefined?side('diagonal',st.dd?'dd':'du'):'';
+    const bd=[['left','bl'],['right','br'],['top','bt'],['bottom','bb']].filter(([,k])=>st[k]!==undefined).map(([n,k])=>side(n,k)).join('')+diag+[['vertical','bv'],['horizontal','bh']].filter(([,k])=>st[k]!==undefined).map(([n,k])=>side(n,k)).join('');
+    const code=st.numFmt||st.code||st.decimals!==undefined?fmtCode(st):null;
+    const nf=code!==null?`<numFmt numFmtId="${this.fmtId(st)}" formatCode="${esc(code)}"/>`:'';
+    this.dxfs.push(`<dxf>${f?`<font>${f}</font>`:''}${nf}${fill}${bd?`<border${st.dd!==undefined?` diagonalDown="${st.dd?1:0}"`:''}${st.du!==undefined?` diagonalUp="${st.du?1:0}"`:''}>${bd}</border>`:''}</dxf>`);return this.dxfs.length-1;
+  }
+  slicerDxf(element) {
+    this.objectDxf(element);this.slicerDxfs.push(this.dxfs.pop());return this.slicerDxfs.length-1;
+  }
+  objectTableStyle(def) {
+    if(this.tableStyles.has(def.name))return;
+    const list=(def.elements??[]).filter(e=>TABLE_STYLE_ELEMENTS.includes(e.type));
+    const els=list.map(e=>`<tableStyleElement type="${e.type}"${Number.isInteger(e.size)&&e.size>0?` size="${e.size}"`:''} dxfId="${this.objectDxf(e)}"/>`);
+    this.tableStyles.set(def.name,`<tableStyle name="${esc(def.name)}" table="${def.table!==false?1:0}" pivot="${def.pivot!==false?1:0}" count="${def._slicerCount??els.length}">${els.join('')}</tableStyle>`);
+  }
+  objectSlicerStyle(def) {
+    if(this.slicerStyles.has(def.name))return;
+    const list=(def.elements??[]).filter(e=>SLICER_STYLE_ELEMENTS.includes(e.type));
+    // 슬라이서의 whole/header 정의는 읽은 보조 tableStyle보다 최신이다.
+    this.tableStyles.delete(def.name);
+    this.objectTableStyle({name:def.name,table:false,pivot:false,_slicerCount:list.length,elements:list.filter(e=>['wholeTable','headerRow'].includes(e.type))});
+    const els=list.filter(e=>!['wholeTable','headerRow'].includes(e.type)).map(e=>`<x14:slicerStyleElement type="${e.type}" dxfId="${this.slicerDxf(e)}"/>`);
+    this.slicerStyles.set(def.name,`<x14:slicerStyle name="${esc(def.name)}">${els.length?`<x14:slicerStyleElements>${els.join('')}</x14:slicerStyleElements>`:''}</x14:slicerStyle>`);
+  }
+  objectStyles(registry) {
+    this.objectRegistry=normalizeObjectStyles(registry);
+    for(const d of this.objectRegistry.tables)this.objectTableStyle(d);
+    for(const d of this.objectRegistry.slicers)this.objectSlicerStyle(d);
+  }
+
   /** WIXEL 모던 스타일 → 사용자 지정 표/피벗 스타일 (<tableStyles>) — 엑셀에서도 같은 모양 */
   presetTableStyle(name, pivot) {
     if (this.tableStyles.has(name)) return;
@@ -3204,6 +3291,8 @@ class StylePool {
   /** 슬라이서 스타일 이름 (모던 · 사용자 지정 색이면 파일에 사용자 지정 슬라이서 스타일을 만듦) */
   slicerStyleFor(sl) {
     const base = slicerStyleName(sl);
+    if (base === 'None') {this.objectSlicerStyle({name:'WIXEL Slicer None',elements:slicerStyleElements({style:'None'})});return 'WIXEL Slicer None';}
+    if (Array.isArray(sl.styleElements) && !sl.custom) {this.objectSlicerStyle({name:base,elements:sl.styleElements});return base;}
     if (!sl.custom && !isModernSlicer(base)) return base;
     const c = slicerColors(sl);
     const name = sl.custom ? `WIXEL 사용자 지정 ${[...JSON.stringify(c)].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) >>> 0, 7).toString(36)}` : base;
@@ -3211,7 +3300,7 @@ class StylePool {
     const bd = (color) => ({ bt: true, bb: true, bl: true, br: true, btc: color, bbc: color, blc: color, brc: color });
     const whole = this.dxf({ fill: c.frame, ...bd(c.border) });
     const head = this.dxf({ color: c.head, bold: true });
-    this.tableStyles.set(name, `<tableStyle name="${esc(name)}" pivot="0" table="0" count="2"><tableStyleElement type="wholeTable" dxfId="${whole}"/><tableStyleElement type="headerRow" dxfId="${head}"/></tableStyle>`);
+    this.tableStyles.set(name, `<tableStyle name="${esc(name)}" pivot="0" table="0" count="8"><tableStyleElement type="wholeTable" dxfId="${whole}"/><tableStyleElement type="headerRow" dxfId="${head}"/></tableStyle>`);
     const els = [
       ['selectedItemWithData', { fill: c.selFill, color: c.selText, ...bd(c.selBorder) }],
       ['selectedItemWithNoData', { fill: c.selFill, color: c.noData, ...bd(c.selBorder) }],
@@ -3219,7 +3308,7 @@ class StylePool {
       ['unselectedItemWithNoData', { fill: c.item, color: c.noData, ...bd(c.itemBorder) }],
       ['hoveredSelectedItemWithData', { fill: c.selFill, color: c.selText, ...bd(c.selBorder) }],
       ['hoveredUnselectedItemWithData', { fill: c.item, color: c.itemText, ...bd(c.selBorder) }],
-    ].map(([type, st]) => `<x14:slicerStyleElement type="${type}" dxfId="${this.dxf(st)}"/>`);
+    ].map(([type, st]) => `<x14:slicerStyleElement type="${type}" dxfId="${this.slicerDxf({style:st})}"/>`);
     this.slicerStyles.set(name, `<x14:slicerStyle name="${esc(name)}"><x14:slicerStyleElements>${els.join('')}</x14:slicerStyleElements></x14:slicerStyle>`);
     return name;
   }
@@ -3244,9 +3333,9 @@ class StylePool {
       + `<cellXfs count="${this.xfs.length}">${this.xfs.join('')}</cellXfs>`
       + (this.cellStyleList ? `<cellStyles count="${this.cellStyleList.length}">${this.cellStyleList.join('')}</cellStyles>` : '<cellStyles count="1"><cellStyle name="표준" xfId="0" builtinId="0"/></cellStyles>')
       + `<dxfs count="${this.dxfs.length}">${this.dxfs.join('')}</dxfs>`
-      + (this.tableStyles.size ? `<tableStyles count="${this.tableStyles.size}" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16">${[...this.tableStyles.values()].join('')}</tableStyles>` : '')
+      + (this.tableStyles.size || this.objectRegistry?.defaultTableStyle || this.objectRegistry?.defaultPivotStyle ? `<tableStyles count="${this.tableStyles.size}" defaultTableStyle="${esc(this.objectRegistry?.defaultTableStyle??'TableStyleMedium2')}" defaultPivotStyle="${esc(this.objectRegistry?.defaultPivotStyle??'PivotStyleLight16')}">${[...this.tableStyles.values()].join('')}</tableStyles>` : '')
       + (this.indexedColors ? `<colors><indexedColors>${this.indexedColors.map(c => `<rgbColor rgb="FF${c}"/>`).join('')}</indexedColors></colors>` : '')
-      + (this.slicerStyles.size ? `<extLst><ext uri="{EB79DEF2-80B8-43e5-95BD-54CBDDF9020C}" xmlns:x14="${NS_X14}"><x14:slicerStyles defaultSlicerStyle="SlicerStyleLight1">${[...this.slicerStyles.values()].join('')}</x14:slicerStyles></ext></extLst>` : '')
+      + (this.slicerStyles.size || this.objectRegistry?.defaultSlicerStyle ? `<extLst>${this.slicerDxfs.length?`<ext uri="{46F421CA-312F-682f-3DD2-61675219B42D}" xmlns:x14="${NS_X14}"><x14:dxfs count="${this.slicerDxfs.length}">${this.slicerDxfs.join('')}</x14:dxfs></ext>`:''}<ext uri="{EB79DEF2-80B8-43e5-95BD-54CBDDF9020C}" xmlns:x14="${NS_X14}"><x14:slicerStyles defaultSlicerStyle="${esc(this.objectRegistry?.defaultSlicerStyle??'SlicerStyleLight1')}">${[...this.slicerStyles.values()].join('')}</x14:slicerStyles></ext></extLst>` : '')
       + '</styleSheet>';
   }
 }
@@ -4093,7 +4182,8 @@ function pivotParts(wb, si, def, cache, name, pool) {
   }
   const so = d.styleOpts ?? {};
   const styleName = d.style === 'None' ? '' : d.style ?? 'PivotStyleLight16';
-  if (styleName && isModernStyle(styleName)) pool.presetTableStyle(styleName, true);
+  if (styleName && Array.isArray(def.styleElements)) pool.objectTableStyle({name:styleName,table:false,pivot:true,elements:def.styleElements});
+  else if (styleName && isModernStyle(styleName)) pool.presetTableStyle(styleName, true);
   else if (styleName && def.styleDef && !/^PivotStyle(Light|Medium|Dark)\d+$/i.test(styleName)) pool.pivotStyle(styleName, def.styleDef);
   const tableAttrs = [
     `name="${esc(name)}"`, `cacheId="${cacheId}"`, 'applyNumberFormats="0"', 'applyBorderFormats="0"', 'applyFontFormats="0"', 'applyPatternFormats="0"',
@@ -4235,6 +4325,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
     return best;
   };
   pool.namedStyles(wb.cellStyles);
+  pool.objectStyles(wb.objectStyles);
   const wmdw = digitWidth(pool.baseFont); // 파일의 열 너비 = 픽셀 ÷ 기본 글꼴 숫자 너비
   const strings = [];
   const stringIndex = new Map();
@@ -4782,8 +4873,9 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
         af = `<autoFilter ref="${rangeRef(fr)}">${fcs}</autoFilter>`;
       }
       const style = t.style && t.style !== 'None' ? t.style : null;
-      if (style && isModernStyle(style)) pool.presetTableStyle(style, false);
-      files[`xl/tables/table${tableNo}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<table xmlns="${NS_MAIN}" id="${tableNo}" name="${esc(t.name)}" displayName="${esc(t.name)}" ref="${rangeRef(t)}"${t.header ? '' : ' headerRowCount="0"'}${t.totals ? ' totalsRowCount="1"' : ' totalsRowShown="0"'}>${af}<tableColumns count="${names.length}">${cols}</tableColumns><tableStyleInfo${style ? ` name="${style}"` : ''} showFirstColumn="${t.firstCol ? 1 : 0}" showLastColumn="${t.lastCol ? 1 : 0}" showRowStripes="${t.banded !== false ? 1 : 0}" showColumnStripes="${t.bandedCols ? 1 : 0}"/></table>`;
+      if (style && Array.isArray(t.styleElements)) pool.objectTableStyle({name:style,table:true,pivot:false,elements:t.styleElements});
+      else if (style && isModernStyle(style)) pool.presetTableStyle(style, false);
+      files[`xl/tables/table${tableNo}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<table xmlns="${NS_MAIN}" id="${tableNo}" name="${esc(t.name)}" displayName="${esc(t.name)}" ref="${rangeRef(t)}"${t.header ? '' : ' headerRowCount="0"'}${t.totals ? ' totalsRowCount="1"' : ' totalsRowShown="0"'}>${af}<tableColumns count="${names.length}">${cols}</tableColumns><tableStyleInfo${style ? ` name="${esc(style)}"` : ''} showFirstColumn="${t.firstCol ? 1 : 0}" showLastColumn="${t.lastCol ? 1 : 0}" showRowStripes="${t.banded !== false ? 1 : 0}" showColumnStripes="${t.bandedCols ? 1 : 0}"/></table>`;
       contentOverrides.push(`<Override PartName="/xl/tables/table${tableNo}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"/>`);
       tableRids.push(addRel('table', `../tables/table${tableNo}.xml`));
     }

@@ -740,7 +740,7 @@ export function buildRibbon(app) {
   /** 리본 안 갤러리 (엑셀 차트 스타일처럼 견본이 바로 보이고 ▾ 로 전체 목록) */
   function makeGallery(it) {
     const strip = el('div', { class:'rg-strip', 'aria-label':it.title });
-    const more = el('button',{class:'rbtn rg-more',title:`${it.title} 더 보기`,'aria-label':`${it.title} 더 보기`,onmousedown:keepFocus,html:ICONS.chevronDown});
+    const more = el('button',{class:'rbtn rg-more',title:`${it.title} 더 보기`,'aria-label':`${it.title} 더 보기`,'aria-haspopup':'menu',onmousedown:keepFocus,html:ICONS.chevronDown});
     more.addEventListener('click',()=>app.openMenu(it.menu,more));
     let last=null, entries=[], page=0, disabled=false;
     const draw=()=>{strip.replaceChildren(...(it.pageSize?entries.slice(page*it.pageSize,(page+1)*it.pageSize):entries)); if(prev){prev.disabled=disabled||page===0;next.disabled=disabled||(page+1)*it.pageSize>=entries.length;}};

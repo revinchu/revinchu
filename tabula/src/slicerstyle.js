@@ -1,4 +1,6 @@
 // 슬라이서 스타일: 엑셀 기본 제공 14개 (밝게 1~6, 기타 1~2, 어둡게 1~6) + 사용자 지정 색 (DOM 없음)
+import { mergeObjectStyle } from './object-styles.js';
+import { objectStyleFillCss } from './object-style-fill.js';
 import { ACCENTS, tint, shade } from './tables.js';
 import { MODERN_PALETTES, presetColor } from './stylepresets.js';
 import { SHEET_SLICER_STYLES } from './stylesheetdata.js';
@@ -85,6 +87,8 @@ export const slicerStyleName = (sl) => sl.style ?? LEGACY[sl.color] ?? 'SlicerSt
 
 /** 실제 색: 스타일 + 사용자 지정(sl.custom) */
 export function slicerColors(sl) {
+  if (sl.style === 'None') return { ...PLAIN_SLICER };
+  if (Array.isArray(sl.styleElements)) return { ...styleElementColors(sl.styleElements), ...(sl.custom ?? {}) };
   return { ...build(slicerStyleName(sl)), ...(sl.custom ?? {}) };
 }
 
@@ -95,6 +99,7 @@ export function slicerCssVars(sl) {
     + `--sl-item:${c.item};--sl-itemtext:${c.itemText};--sl-itemborder:${c.itemBorder};--sl-nodata:${c.noData};--sl-h:${sl.buttonHeight ?? 24}px`
     + [['hline', c.headLine], ['selg', c.selGrad], ['itemg', c.itemGrad], ['hov', c.hover], ['hovtext', c.hoverText], ['hovsel', c.hoverSel], ['hovseltext', c.hoverSelText],
       ['ndfill', c.noDataFill], ['selndfill', c.selNoDataFill], ['selnd', c.selNoData]].map(([k, v]) => (v ? `;--sl-${k}:${v}` : '')).join('')
+    + slicerElementVars(sl)
     + `${sl.fontSize ? `;--sl-fs:${sl.fontSize}pt` : ''}${sl.headSize ? `;--sl-hfs:${sl.headSize}pt` : ''}${sl.bold ? ';--sl-fw:700' : ''}${sl.font ? `;--sl-ff:"${String(sl.font).replace(/"/g, '')}"` : ''}`;
 }
 
@@ -102,3 +107,50 @@ export const CUSTOM_KEYS = [
   ['frame', '슬라이서 배경'], ['border', '테두리'], ['head', '머리글 글자'], ['selFill', '선택한 항목 채우기'], ['selText', '선택한 항목 글자'],
   ['selBorder', '선택한 항목 테두리'], ['item', '선택하지 않은 항목 채우기'], ['itemText', '선택하지 않은 항목 글자'], ['itemBorder', '항목 테두리'], ['noData', '데이터 없는 항목 글자'],
 ];
+
+const PLAIN_SLICER={frame:'#ffffff',border:'transparent',head:'#000000',selFill:'#ffffff',selText:'#000000',selBorder:'transparent',item:'#ffffff',itemText:'#000000',itemBorder:'transparent',noData:'#808080'};
+const STATE_CODES={wholeTable:'whole',headerRow:'header',selectedItemWithData:'selected',unselectedItemWithData:'item',selectedItemWithNoData:'selected-empty',unselectedItemWithNoData:'empty',hoveredSelectedItemWithData:'hover-selected',hoveredUnselectedItemWithData:'hover-item',hoveredSelectedItemWithNoData:'hover-selected-empty',hoveredUnselectedItemWithNoData:'hover-empty'};
+const borderColor=s=>s?.bbc??s?.btc??s?.blc??s?.brc;
+const gradientCss=g=>g?.stops?.length>1&&g.stops.every(s=>Array.isArray(s)&&Number.isFinite(s[0])&&/^#[0-9a-f]{6}$/i.test(s[1]))?`linear-gradient(${((Number(g.deg)||0)+90)%360}deg, ${g.stops.map(([p,c])=>`${c} ${p*100}%`).join(', ')})`:undefined;
+function cssGradient(value) {
+  const m=/^linear-gradient\((-?[\d.]+)deg,\s*(#[0-9a-f]{6}(?:,\s*#[0-9a-f]{6})+)\)$/i.exec(value??'');
+  if(!m)return {};
+  const colors=m[2].split(/,\s*/);return {gradient:{deg:(Number(m[1])-90+360)%360,stops:colors.map((c,i)=>[i/(colors.length-1),c])}};
+}
+function elementState(map,type) {
+  const whole=map.wholeTable??{};if(type==='wholeTable')return {...whole};
+  const parent=type.startsWith('hovered')?type.replace(/^hovered([A-Z])/,(_,c)=>c.toLowerCase()):type.includes('NoData')?type.replace('NoData','Data'):null;
+  return mergeObjectStyle(parent?elementState(map,parent):whole,map[type]);
+}
+function styleElementColors(elements) {
+  const m=Object.fromEntries(elements.map(e=>[e.type,e.style??{}])),get=t=>elementState(m,t),w=get('wholeTable'),h=get('headerRow'),item=get('unselectedItemWithData'),sel=get('selectedItemWithData'),nd=get('unselectedItemWithNoData'),snd=get('selectedItemWithNoData'),hov=get('hoveredUnselectedItemWithData'),hs=get('hoveredSelectedItemWithData');
+  const out={...PLAIN_SLICER};
+  const put=(key,v)=>{if(v!==undefined)out[key]=v};
+  for(const [key,v] of Object.entries({frame:w.fill,border:borderColor(w),head:h.color,headFill:h.fill,headLine:h.bb===false?'transparent':h.bbc,selFill:sel.fill,selText:sel.color,selBorder:borderColor(sel),item:item.fill,itemText:item.color,itemBorder:borderColor(item),noData:nd.color,noDataFill:nd.fill,selNoDataFill:snd.fill,selNoData:snd.color,hover:gradientCss(hov.gradient)??hov.fill,hoverText:hov.color,hoverSel:gradientCss(hs.gradient)??hs.fill,hoverSelText:hs.color,selGrad:gradientCss(sel.gradient),itemGrad:gradientCss(item.gradient)}))put(key,v);
+  return out;
+}
+/** UI 복제 및 표준 XLSX에 쓸 스타일 원소. 기존 객체의 색 재정의도 여기서 확정한다. */
+export function slicerStyleElements(sl) {
+  if(sl.style==='None')return [];
+  if(Array.isArray(sl.styleElements)&&!sl.custom)return structuredClone(sl.styleElements);
+  const c=slicerColors(sl),bd=col=>col&&col!=='transparent'?{bt:true,bb:true,bl:true,br:true,btc:col,bbc:col,blc:col,brc:col}:{};
+  const rows=[['wholeTable',{fill:c.frame,...bd(c.border)}],['headerRow',{color:c.head,...(c.headFill?{fill:c.headFill}:{}),...(c.headLine?{bb:true,bbc:c.headLine}:{}),bold:true}],['selectedItemWithData',{fill:c.selFill,color:c.selText,...bd(c.selBorder)}],['unselectedItemWithData',{fill:c.item,color:c.itemText,...bd(c.itemBorder)}],['selectedItemWithNoData',{fill:c.selNoDataFill??c.selFill,color:c.selNoData??c.noData,...bd(c.selBorder)}],['unselectedItemWithNoData',{fill:c.noDataFill??c.item,color:c.noData,...bd(c.itemBorder)}],['hoveredSelectedItemWithData',{fill:/^#/.test(c.hoverSel??'')?c.hoverSel:c.selFill,color:c.hoverSelText??c.selText,...bd(c.selBorder)}],['hoveredUnselectedItemWithData',{fill:/^#/.test(c.hover??'')?c.hover:c.item,color:c.hoverText??c.itemText,...bd(c.itemBorder)}]];
+  const gradients={selectedItemWithData:c.selGrad,unselectedItemWithData:c.itemGrad,hoveredSelectedItemWithData:c.hoverSel,hoveredUnselectedItemWithData:c.hover};
+  return rows.map(([type,style])=>({type,style:{...style,...cssGradient(gradients[type])}}));
+}
+function slicerElementVars(sl) {
+  const elements=sl.style==='None'?[]:sl.styleElements;if(!Array.isArray(elements))return '';
+  const map=Object.fromEntries(elements.map(e=>[e.type,e.style??{}])),whole=map.wholeTable??{};let css='';
+  const safeColor=v=>/^#[0-9a-f]{6}$/i.test(v??'')?v:undefined;
+  for(const [type,code] of Object.entries(STATE_CODES)) {
+    const st=elementState(map,type),vars={};
+    if(st.font)vars.font='"'+String(st.font).replace(/[";{}<>\\]/g,'')+'"';
+    if(Number.isFinite(st.size)&&st.size>0)vars.size=st.size+'pt';
+    if(st.bold!==undefined)vars.weight=st.bold?700:400;if(st.italic!==undefined)vars.italic=st.italic?'italic':'normal';
+    if(st.underline!==undefined||st.strike!==undefined)vars.decoration=[st.underline?'underline':'',st.strike?'line-through':''].filter(Boolean).join(' ')||'none';
+    const fill=objectStyleFillCss(st);if(fill!==undefined)vars.fill=fill;if(safeColor(st.color))vars.color=st.color;
+    for(const [side,key]of Object.entries({top:'bt',right:'br',bottom:'bb',left:'bl'}))if(st[key]!==undefined){const kind=st[key+'s']??'thin',width=kind==='double'||kind==='thick'?3:kind==='medium'?2:1;vars[side]=st[key]?`${width}px ${kind==='double'?'double':/dash/i.test(kind)?'dashed':/dot/i.test(kind)?'dotted':'solid'} ${safeColor(st[key+'c'])??'#000000'}`:'0 solid transparent';}
+    for(const [key,value]of Object.entries(vars))css+=`;--sl-${code}-${key}:${value}`;
+  }
+  return css;
+}

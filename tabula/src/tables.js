@@ -3,7 +3,7 @@
 //           filter: { criteria, hidden, sort } | null, totalsFns: { [열]: 'sum' | ... }, columns: [이름] }
 // r1 은 머리글 행(header 가 true 일 때), r2 는 요약 행(totals 가 true 일 때)까지 포함.
 
-import { PRESET_STYLES, presetSwatch, tablePresetCell, MODERN_STYLES } from './stylepresets.js';
+import { PRESET_STYLES, presetSwatch, tablePresetCell, MODERN_STYLES, styleElementsPreset } from './stylepresets.js';
 
 // ───────────── 스타일 ─────────────
 export const ACCENTS = [
@@ -62,6 +62,8 @@ export function tableAt(sheet, r, c) {
 
 /** 셀에 입힐 표 서식 (셀에 직접 지정한 서식이 우선) — 엑셀 기본 제공 스타일 정의로 계산 */
 export function tableCellStyle(t, r, c) {
+  if (t.style === 'None' || t.style === '') return null;
+  if (Array.isArray(t.styleElements)) return tablePresetCell(styleElementsPreset(t.styleElements), t, r, c);
   if (!styleByName(t.style)) return null;
   return tablePresetCell(t.style, t, r, c);
 }

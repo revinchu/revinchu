@@ -12,7 +12,7 @@
 import { formatGeneral, formatValue, parseInput, serialOf, dateParts } from './format.js';
 import { findTable, dataTop, dataBottom, columnNames, ACCENTS, tint, shade } from './tables.js';
 import { logicalCol } from './block.js';
-import { presetStyle, presetSwatch, paintPivotPreset, MODERN_STYLES } from './stylepresets.js';
+import { presetStyle, presetSwatch, paintPivotPreset, MODERN_STYLES, styleElementsPreset } from './stylepresets.js';
 import {
   EMPTY as EMPTY0, IMG_KEY as IMG_KEY0, keyOf as keyOf0, imageOfKey as imageOfKey0, sortKeys as sortKeys0, itemText as itemText0,
   kk, cubeFromRows, filterRows, groupAggregate, groupAcc, Cube, Column, blockColumn, groupedColumn, groupRank, groupKey, aggregateQuery, planRollup, GROUP_BY as GROUP_BY0,
@@ -603,6 +603,7 @@ export function normalizeDef(def, header) {
     style: def.style ?? DEFAULT_PIVOT_STYLE,
     groups: byKey(def.groups),
     styleDef: def.styleDef ?? null,
+    styleElements: def.styleElements ?? null,
     errorShow: pivotErrorDisplay(def),
     errorCaption: pivotErrorDisplay(def) ? def.errorCaption ?? '' : null,
     showHeaders: def.showHeaders !== false && def.fieldCaptions !== false, // 이전 fieldCaptions=false도 머리글 표시 끄기로 복원
@@ -1230,7 +1231,7 @@ export const DEFAULT_PIVOT_STYLE = 'PivotStyleLight16';
 /** 스타일 이름 → 역할별 서식 { header, sub, grand, body, page } */
 export function pivotStyleParts(name, custom = null) {
   // 파일에서 가져온 사용자 지정 스타일
-  if (custom) return { header: {}, sub: {}, grand: {}, body: {}, page: {}, band: {}, ...custom };
+  if (name !== 'None' && custom) return { header: {}, sub: {}, grand: {}, body: {}, page: {}, band: {}, ...custom };
   const p = styleParts(name);
   const m = /^PivotStyle(?:Light|Medium|Dark)(\d+)$/i.exec(name ?? '');
   const a = ACCENTS[m ? (Number(m[1]) - 1) % 7 : 1];
@@ -1414,7 +1415,7 @@ export function computePivot(input, d) {
   const opts = d.styleOpts ?? { rowHeaders: true, colHeaders: true };
   const HEAD_ROLES = /^(corner|rowHead|colHead|valueCaption|colItem|valueHead|colSubHead|grandHead)/;
   // 엑셀 기본 제공 스타일은 정확한 정의로 표 모양대로 칠함 (paintPivotPreset) — 역할별 근사 서식은 쓰지 않음
-  const preset = !d.styleDef && presetStyle(d.style) ? d.style : null;
+  const preset = d.style !== 'None' && Array.isArray(d.styleElements) ? styleElementsPreset(d.styleElements) : !d.styleDef && presetStyle(d.style) ? d.style : null;
   const styleFor = (role) => {
     if (preset) return {};
     if (opts.colHeaders === false && HEAD_ROLES.test(role)) return {};
@@ -1692,6 +1693,8 @@ export function computePivot(input, d) {
     }
   }
 
+  const defaultNumberCells=new WeakSet();
+  const numberCell=(raw,style,role,vi)=>{const cd={raw,style,role};if(!values[vi]?.numFmt)defaultNumberCells.add(cd);return cd;};
   const numStyle = (vi) => {
     if (vi < 0) return {};
     const v = values[vi];
@@ -1705,12 +1708,12 @@ export function computePivot(input, d) {
   const val = (n, vi, role) => {
     const style = { align: 'general', ...styleFor(role), ...numStyle(vi) };
     // 빈 셀 표시 옵션
-    if (n === null || n === undefined) return { raw: captionRaw(d.missingCaption), style, role };
+    if (n === null || n === undefined) return numberCell(captionRaw(d.missingCaption),style,role,vi);
     // 오류 값 표시 옵션: 오류 대신 지정한 글자(빈 칸 포함)
-    if (isErr(n)) return d.errorCaption !== null && d.errorCaption !== undefined ? { raw: errorCaptionRaw(d.errorCaption), style, role } : { raw: n.code, style, role };
-    if (typeof n === 'boolean') return { raw: n ? 'TRUE' : 'FALSE', style, role };
-    if (typeof n === 'string') return { raw: `'${n}`, style, role };
-    return { raw: String(Number(n.toPrecision(15))), style, role };
+    if (isErr(n)) return numberCell(d.errorCaption !== null && d.errorCaption !== undefined?errorCaptionRaw(d.errorCaption):n.code,style,role,vi);
+    if (typeof n === 'boolean') return numberCell(n?'TRUE':'FALSE',style,role,vi);
+    if (typeof n === 'string') return numberCell(`'${n}`,style,role,vi);
+    return numberCell(String(Number(n.toPrecision(15))),style,role,vi);
   };
 
   const layout = d.layout;
@@ -1892,7 +1895,7 @@ export function computePivot(input, d) {
     const leafCols = (kind) => colLeaves.map((l, i) => (l.kind === kind ? labelCols + i : -1)).filter((c) => c >= 0);
     paintPivotPreset(preset, grid, {
       pages: 0, top: pageRows.length ? pageRows.length + 1 : 0, headerRows: firstDataRowRel, labelCols, width,
-      grandCols: leafCols('grand'), subCols: leafCols('sub'), colLevels, colFields: Lc,
+      defaultNumberCells, grandCols: leafCols('grand'), subCols: leafCols('sub'), subColDepths:Object.fromEntries(colLeaves.map((leaf,i)=>[labelCols+i,Math.max(0,leaf.node?.depth??0)])), colLevels, colFields: Lc,
     }, opts);
   }
   // 줄무늬 행 · 열 (피벗 스타일 옵션)
