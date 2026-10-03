@@ -395,8 +395,8 @@ function buildMenu(anchor, items, { minWidth, scroll, toolbar, level = 0, parent
     el('span', { class: 'mi-icon', html: it.checked ? ICONS.check : (it.icon ? ICONS[it.icon] ?? it.icon : '') }),
     it.swatch !== undefined ? el('i', { class: 'mi-swatch', style: { background: it.swatch ?? 'transparent' } }) : null,
     it.desc ? el('span', { class: 'mi-text' }, el('b', {}, it.label), el('small', {}, it.desc)) : el('span', {}, it.swatch !== undefined ? it.label.replace(/^(■|A) /, '') : it.label),
-    it.key ? el('span', { class: 'mi-key' }, it.key) : null,
-    it.submenu ? el('span', { class: 'mi-key' }, '▸') : null);
+    it.key ? el('span', { class: 'mi-key mi-shortcut' }, it.key) : null,
+    it.submenu ? el('span', { class: 'mi-key mi-submenu', 'aria-hidden': 'true' }, '▸') : null);
     menu.append(btn);
   }
   document.getElementById('menuLayer').append(menu);
@@ -444,6 +444,53 @@ function popupViewport() {
   const left = v?.offsetLeft ?? 0, top = v?.offsetTop ?? 0, width = v?.width ?? innerWidth, height = v?.height ?? innerHeight;
   return { mobile, left, top, width, height, right: left + width, bottom: top + height };
 }
+// 공통 메뉴 밖의 빠른 분석·무늬 선택 창도 같은 화면 경계를 사용한다.
+const positionedPopups = new Map();
+let popupRemovalObserver = null;
+function positionTrackedPopup(root, state) {
+  if (!root.isConnected) { state.dispose(); return; }
+  const bounds = popupViewport(), margin = 4;
+  const width = Math.max(1, bounds.width - margin * 2), height = Math.max(1, bounds.height - margin * 2);
+  Object.assign(root.style, state.sizing);
+  const css = getComputedStyle(root);
+  const limit = (value, available) => value.endsWith('px') && Number.isFinite(parseFloat(value)) ? Math.min(available, parseFloat(value)) : available;
+  root.style.boxSizing = 'border-box';
+  root.style.minWidth = Math.min(parseFloat(css.minWidth) || 0, width) + 'px';
+  root.style.minHeight = Math.min(parseFloat(css.minHeight) || 0, height) + 'px';
+  root.style.maxWidth = limit(css.maxWidth, width) + 'px';
+  root.style.maxHeight = limit(css.maxHeight, height) + 'px';
+  root.style.overflowX = 'auto'; root.style.overflowY = 'auto';
+  root.style.position = 'fixed'; root.style.right = 'auto'; root.style.bottom = 'auto';
+  root.style.left = bounds.left + margin + 'px'; root.style.top = bounds.top + margin + 'px';
+  const anchor = typeof state.anchor === 'function' ? state.anchor() : state.anchor;
+  const rect = anchor instanceof Element ? anchor.getBoundingClientRect() : null;
+  const x = rect ? rect.left : anchor?.x, y = rect ? rect.bottom + 2 : anchor?.y;
+  root.style.left = Math.max(bounds.left + margin, Math.min(Number.isFinite(x) ? x : bounds.left + margin, bounds.right - margin - root.offsetWidth)) + 'px';
+  root.style.top = Math.max(bounds.top + margin, Math.min(Number.isFinite(y) ? y : bounds.top + margin, bounds.bottom - margin - root.offsetHeight)) + 'px';
+}
+/** DOM에 붙인 창의 위치를 추적한다. 제거하면 자동 해제하며 반환 함수로 먼저 해제할 수도 있다. */
+export function trackPopupPosition(root, anchor) {
+  positionedPopups.get(root)?.dispose();
+  const keys = ['minWidth', 'minHeight', 'maxWidth', 'maxHeight', 'boxSizing', 'overflowX', 'overflowY'];
+  const state = { anchor, sizing: Object.fromEntries(keys.map(key => [key, root.style[key]])) };
+  const resize = new ResizeObserver(refreshPopupLayout);
+  const content = new MutationObserver(refreshPopupLayout);
+  state.dispose = () => {
+    if (positionedPopups.get(root) !== state) return;
+    resize.disconnect(); content.disconnect(); positionedPopups.delete(root);
+    if (!positionedPopups.size) { popupRemovalObserver?.disconnect(); popupRemovalObserver = null; window.removeEventListener('scroll', refreshPopupLayout, true); }
+  };
+  positionedPopups.set(root, state);
+  resize.observe(root); content.observe(root, { childList: true, subtree: true, characterData: true });
+  if (!popupRemovalObserver) {
+    popupRemovalObserver = new MutationObserver(() => { for (const [node, item] of positionedPopups) if (!node.isConnected) item.dispose(); });
+    popupRemovalObserver.observe(document.documentElement, { childList: true, subtree: true });
+    window.addEventListener('scroll', refreshPopupLayout, true);
+  }
+  positionTrackedPopup(root, state);
+  return state.dispose;
+}
+
 function placeMenu(menu, anchor) {
   const bounds = popupViewport(), margin = 4;
   if (bounds.mobile) {
@@ -512,6 +559,7 @@ function refreshPopupLayout() {
   popupLayoutFrame = requestAnimationFrame(() => {
     popupLayoutFrame = 0;
     for (const menu of openMenus) if (menu.matches('.menu') && menu.isConnected) placeMenu(menu, menuAnchors.get(menu));
+    for (const [root, state] of positionedPopups) positionTrackedPopup(root, state);
     if (document.body.classList.contains('mobile-work-mode')) {
       const focused = document.activeElement;
       if (focused?.matches('input,textarea,select') && focused.closest('.dialog,.menu,.pivot-pane')) focused.scrollIntoView({ block: 'nearest', inline: 'nearest' });

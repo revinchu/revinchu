@@ -1937,15 +1937,15 @@ body.mobile-work-mode.mobile-compact .formula-row { height:24px; }
 body.mobile-work-mode.mobile-compact #formulaInput { padding:3px 5px; }
 body.mobile-work-mode.mobile-compact .formula-row.tall { height:70px; }
 /* 밀도는 메뉴 내용·동작을 바꾸지 않고 여백만 줄인다. */
-body.mobile-work-mode.mobile-compact .menu { padding-top:3px; padding-bottom:3px; }
-body.mobile-work-mode.mobile-compact .menu-item { min-height:28px; padding:4px 8px; gap:6px; font-size:11px; }
-body.mobile-work-mode.mobile-compact .menu-item .mi-icon svg { width:15px; height:15px; }
-body.mobile-work-mode.mobile-compact .mobile-menu-back { min-height:34px; padding:6px 9px; font-size:12px; }
-body.mobile-work-mode.mobile-compact .dialog-head { padding:4px 8px; }
-body.mobile-work-mode.mobile-compact .dialog-head > button { width:32px; height:32px; }
-body.mobile-work-mode.mobile-compact .dialog-body { padding:8px; }
-body.mobile-work-mode.mobile-compact .dialog-foot { padding:6px 8px; gap:5px; }
-body.mobile-work-mode.mobile-compact .dialog-foot .btn { min-height:32px; padding:5px 10px; }
+
+
+
+
+
+
+
+
+
 body.mobile-work-mode.mobile-compact .mobile-tools-body { gap:8px; }
 body.mobile-work-mode.mobile-compact .mobile-tools-tip,
 body.mobile-work-mode.mobile-compact .mobile-tools-state { font-size:11px; line-height:1.45; }
@@ -2101,7 +2101,7 @@ body.mobile-work-mode .dialog .form-dialog-label { max-width: none; overflow-wra
 body.mobile-work-mode .dialog-body :is(input[type=checkbox], input[type=radio]) { width: 18px; height: 18px; flex-basis: 18px; }
 body.mobile-work-mode .dialog .form-dialog-field { grid-template-columns: minmax(0, 1fr); gap: 5px; }
 body.mobile-work-mode .dialog .cfp-row { gap: 8px; }
-body.mobile-work-mode.mobile-compact .dialog-head { min-height: 40px; }
+
 
 
 /* 이동 옵션: 선택 대상과 그 하위 데이터 유형을 구분한다. */
@@ -2544,3 +2544,142 @@ body.mobile-work-mode .slicer-style-menu .style-grid.slstyles { width:min(336px,
 
 body.ribbon-mouse-drag, body.ribbon-mouse-drag *, body.grid-mouse-pan, body.grid-mouse-pan * { cursor:grabbing!important; user-select:none!important; }
 body.mobile-work-mode :is(.app-header,.ribbon,.quick-access,.formula-row,.footer) { -webkit-text-size-adjust:100%; text-size-adjust:100%; }
+
+
+/* 모바일 팝업 밀도: 위치/viewport 계산은 ui.js에 맡기고 내용 크기만 조정한다. */
+body.mobile-work-mode {
+  --popup-font:12px; --popup-row:30px; --popup-pad:8px; --popup-gap:6px;
+  --popup-icon:16px; --popup-button:32px; --popup-input:34px; --popup-head:38px;
+  --popup-tab:30px; --popup-mini:23px; --popup-mini-width:300px;
+}
+body.mobile-work-mode.mobile-compact {
+  --popup-font:11px; --popup-row:26px; --popup-pad:6px; --popup-gap:4px;
+  --popup-icon:14px; --popup-button:28px; --popup-input:32px; --popup-head:34px;
+  --popup-tab:28px; --popup-mini:22px; --popup-mini-width:280px;
+}
+body.mobile-work-mode :is(.menu,.dialog,.context-mini-toolbar,.pivot-pane,.watch-pane) { -webkit-text-size-adjust:100%; text-size-adjust:100%; }
+body.mobile-work-mode .menu { padding:3px 0; font-size:var(--popup-font); }
+body.mobile-work-mode .menu-item { min-height:var(--popup-row); padding:3px var(--popup-pad); gap:var(--popup-gap); font-size:var(--popup-font); line-height:1.4; }
+body.mobile-work-mode .menu-item .mi-shortcut { display:none; }
+body.mobile-work-mode .menu-item .mi-submenu { padding-left:3px; font-size:10px; }
+body.mobile-work-mode .menu-item .mi-icon { min-width:var(--popup-icon); height:var(--popup-icon); }
+body.mobile-work-mode .menu-item .mi-icon svg { width:var(--popup-icon); height:var(--popup-icon); }
+body.mobile-work-mode .menu-item .mi-icon > span svg { width:var(--popup-icon)!important; height:var(--popup-icon)!important; }
+body.mobile-work-mode .menu-item .mi-icon .glyph { font-size:var(--popup-font); }
+body.mobile-work-mode .menu-item .mi-text { min-width:0; gap:1px; }
+body.mobile-work-mode .menu-item .mi-text small { font-size:11px; line-height:1.35; }
+body.mobile-work-mode .menu-title { padding:4px var(--popup-pad) 3px; font-size:11px; }
+body.mobile-work-mode .menu-sep { margin:3px 0; }
+body.mobile-work-mode .mobile-menu-back { min-height:var(--popup-row); padding:4px var(--popup-pad); font-size:var(--popup-font); line-height:1.4; }
+/* Editable controls keep a native 16px font: no whole-popup zoom/transform. */
+body.mobile-work-mode :is(.menu,.context-mini-toolbar,.pivot-pane,.watch-pane) :is(input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]),select,textarea) { font-size:16px; }
+body.mobile-work-mode .menu :is(input[type=search],input[type=text],input[type=number],select:not([size])) { min-height:var(--popup-input); box-sizing:border-box; }
+body.mobile-work-mode :is(.menu,.dialog,.pivot-pane) .btn { min-height:var(--popup-button); padding:4px var(--popup-pad); font-size:var(--popup-font); line-height:1.4; }
+body.mobile-work-mode .menu .font-menu { width:min(252px,calc(var(--mobile-vw,100vw) - 16px)); }
+body.mobile-work-mode .font-menu .font-search { height:var(--popup-input); margin:4px var(--popup-pad); padding:2px 6px; }
+body.mobile-work-mode .font-menu .font-load { height:auto; min-height:var(--popup-row); margin:0 var(--popup-pad) 4px; font-size:var(--popup-font); }
+body.mobile-work-mode .font-menu .font-item { min-height:var(--popup-row); padding:3px var(--popup-pad); font-size:var(--popup-font); }
+body.mobile-work-mode .palette { padding:4px var(--popup-pad); }
+body.mobile-work-mode .palette-row { gap:2px; margin-bottom:2px; }
+body.mobile-work-mode .palette-row.gap { margin-bottom:5px; }
+body.mobile-work-mode .cf-gallery { gap:3px; padding:4px var(--popup-pad); }
+body.mobile-work-mode .style-grid { gap:3px; padding:5px var(--popup-pad); }
+body.mobile-work-mode .style-chip[data-cell-style] { min-height:var(--popup-row); padding:3px; font-size:var(--popup-font); }
+body.mobile-work-mode .slicer-style-menu .style-grid.slstyles { gap:4px; padding:5px var(--popup-pad); }
+body.mobile-work-mode .shape-grid { gap:2px; padding:3px var(--popup-pad); }
+body.mobile-work-mode .shape-grid .shape-btn { height:var(--popup-row); }
+body.mobile-work-mode .shape-grid .shape-btn svg { width:22px; height:22px; }
+
+/* 가상 필터 행은 app-filter-checklist.js의 26px 배치와 동일하게 유지한다. */
+body.mobile-work-mode .filter-menu { padding:4px var(--popup-pad) 5px; font-size:var(--popup-font); }
+body.mobile-work-mode .filter-menu input[type=search] { height:var(--popup-input); margin:4px 0; padding:2px 6px; font-size:16px; }
+body.mobile-work-mode .filter-menu .filter-list { padding:2px 5px; }
+body.mobile-work-mode .filter-menu .filter-list label { padding:1px 0; gap:5px; font-size:var(--popup-font); line-height:1.4; }
+body.mobile-work-mode .filter-menu input[type=checkbox] { width:14px; height:14px; margin:0; flex:none; }
+body.mobile-work-mode .filter-menu .filter-add { padding:2px 0; gap:5px; font-size:var(--popup-font); }
+body.mobile-work-mode .filter-menu .filter-foot { margin-top:5px; padding:5px 0; gap:var(--popup-gap); }
+body.mobile-work-mode .filter-menu .filter-foot .btn { min-width:64px; min-height:var(--popup-button); padding:3px 8px; }
+body.mobile-work-mode .pivot-filter-menu .pf-act { min-height:var(--popup-row); padding:3px 6px; gap:var(--popup-gap); font-size:var(--popup-font); }
+body.mobile-work-mode .pivot-filter-menu .pf-sub { padding-left:24px; }
+body.mobile-work-mode .pivot-filter-menu .pf-search { margin:4px 0; }
+body.mobile-work-mode .pivot-filter-menu .pf-search input[type=search] { padding-right:30px; margin:0; }
+body.mobile-work-mode .pivot-filter-menu .pf-one { padding:2px 5px; font-size:var(--popup-font); }
+
+body.mobile-work-mode .dialog { font-size:var(--popup-font); line-height:1.4; }
+body.mobile-work-mode .dialog-head { min-height:var(--popup-head); padding:3px var(--popup-pad); gap:var(--popup-gap); font-size:calc(var(--popup-font) + 1px); }
+body.mobile-work-mode .dialog-head > button { flex:0 0 var(--popup-button); width:var(--popup-button); height:var(--popup-button); }
+body.mobile-work-mode .dialog .dialog-body { padding:var(--popup-pad); gap:var(--popup-gap); }
+body.mobile-work-mode .dialog-foot { padding:5px var(--popup-pad); gap:var(--popup-gap); }
+body.mobile-work-mode .dialog-foot .btn { min-width:66px; }
+body.mobile-work-mode .dialog-body label { gap:var(--popup-gap); line-height:1.4; }
+body.mobile-work-mode .dialog .dialog-body :is(input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]),select,textarea) { font-size:16px; }
+body.mobile-work-mode .dialog .dialog-body :is(input[type=text],input[type=number],input[type=search],input[type=password],input[type=url],select:not([size])) { min-height:var(--popup-input); height:var(--popup-input); padding:3px 6px; }
+body.mobile-work-mode .dialog .dialog-body textarea { padding:5px 6px; line-height:1.4; }
+body.mobile-work-mode .dialog .dialog-body :is(input[type=checkbox],input[type=radio]) { width:16px; height:16px; flex-basis:16px; }
+body.mobile-work-mode .dialog .dialog-body :is(.form-dialog-check,.goto-special-choice,label:has(> input:is([type=checkbox],[type=radio]))) { min-height:var(--popup-row); }
+body.mobile-work-mode .dialog .dialog-body fieldset { padding:var(--popup-pad); }
+body.mobile-work-mode .dialog :is(.form-dialog-fields,.form-dialog-field) { gap:var(--popup-gap); }
+body.mobile-work-mode .dialog :is(.form-dialog-label,.fc-field > span,.fc-title,.fc-note) { font-size:var(--popup-font); }
+body.mobile-work-mode .dialog .form-dialog-note { padding:var(--popup-pad); line-height:1.4; }
+body.mobile-work-mode .dialog :is(.dlg-tab,.fc-cat,.fc-item,.cg-cat,.opt-tab,.format-pane-tabs > button,.find-tabs > button) { min-height:var(--popup-tab); padding:3px 6px; font-size:var(--popup-font); line-height:1.4; }
+body.mobile-work-mode .dialog :is(.fc-page,.fc-opts,.fc-col,.cfp-row,.picture-field,.shape-mode-options,.opt-page,.cg-wrap,.cr-wrap) { gap:var(--popup-gap); }
+body.mobile-work-mode .dialog .fc-page { padding-top:7px; }
+body.mobile-work-mode .dialog :is(.picture-section,.cfp-section,.shape-format-navigation) { padding-bottom:6px; margin-bottom:6px; }
+body.mobile-work-mode .dialog .picture-field { margin:4px 0; }
+body.mobile-work-mode .dialog :is(.cg-navigation,.cg-subs,.cr-list,.cr-main) { gap:5px; }
+body.mobile-work-mode .dialog :is(.cg-sub-name,.cr-thumb-name) { padding:4px 5px 5px; min-height:36px; font-size:var(--popup-font); line-height:1.4; }
+body.mobile-work-mode .dialog :is(.cg-gallery-note,.cg-data-guide,.cr-desc) { font-size:var(--popup-font); line-height:1.4; }
+body.mobile-work-mode .dialog .cg-data-guide { margin:5px 0; padding:5px 7px; }
+body.mobile-work-mode .dialog .dv-field { gap:3px; margin-bottom:7px; }
+body.mobile-work-mode .dialog .dv-tabs .dlg-tab { padding:3px 5px; }
+body.mobile-work-mode .pivot-pane { padding:var(--popup-pad); font-size:var(--popup-font); }
+body.mobile-work-mode .pp-head button { width:var(--popup-button); height:var(--popup-button); }
+body.mobile-work-mode :is(.pp-field,.pp-item,.pp-menu) { min-height:var(--popup-row); }
+body.mobile-work-mode .pp-menu { min-width:var(--popup-row); }
+body.mobile-work-mode .pp-search { min-height:var(--popup-input); }
+
+/* 13개 아이콘을 두 번째 줄에 유지하고 글꼴 목록 단추의 가변 폭을 보존한다. */
+body.mobile-work-mode .context-mini-toolbar { padding:4px; font-size:var(--popup-font); max-width:calc(var(--mobile-vw,100vw) - 8px); }
+body.mobile-work-mode .cell-mini-toolbar { width:var(--popup-mini-width); }
+body.mobile-work-mode .cell-mini-toolbar .mini-format-row { gap:1px; }
+body.mobile-work-mode .cell-mini-toolbar .mini-format-row + .mini-format-row { margin-top:2px; }
+body.mobile-work-mode .cell-mini-toolbar .mini-format-button { flex:0 0 20px; min-width:18px; width:20px; height:var(--popup-mini); padding:1px; font-size:var(--popup-font); }
+body.mobile-work-mode .cell-mini-toolbar .mini-format-row:last-child .mini-format-button { flex:1 1 20px; }
+body.mobile-work-mode .cell-mini-toolbar .mini-format-button :is(svg,.ico) { width:var(--popup-icon); height:var(--popup-icon); }
+body.mobile-work-mode .cell-mini-toolbar .mini-size-picker { flex:0 0 44px; width:44px; }
+body.mobile-work-mode .cell-mini-toolbar .format-picker-toggle { height:var(--popup-mini); min-height:0; font-size:var(--popup-font); }
+body.mobile-work-mode .picture-mini-toolbar.context-mini-toolbar { padding:4px; gap:2px; flex-wrap:wrap; }
+body.mobile-work-mode .picture-mini-toolbar button { gap:2px; padding:2px 5px; font-size:var(--popup-font); }
+body.mobile-work-mode .picture-mini-toolbar svg { width:18px; height:18px; }
+body.mobile-work-mode .chart-mini-toolbar { gap:4px; padding:4px; flex-wrap:wrap; }
+body.mobile-work-mode .chart-mini-toolbar > button { gap:2px; padding:2px 5px; font-size:var(--popup-font); }
+body.mobile-work-mode .chart-mini-toolbar > button svg { width:18px; height:18px; }
+body.mobile-work-mode .chart-mini-toolbar select { min-width:0; max-width:140px; }
+
+/* 공통 .menu 밖의 빠른 분석·무늬·그리기 팔레트도 같은 모바일 밀도를 사용한다. */
+body.mobile-work-mode .qa-pop { width:min(340px,calc(var(--mobile-vw,100vw) - 16px)); max-height:calc(var(--mobile-vh,100dvh) - 16px); overflow:auto; box-sizing:border-box; font-size:var(--popup-font); }
+body.mobile-work-mode .qa-tabs { flex-wrap:wrap; padding:0 3px; }
+body.mobile-work-mode .qa-tab { min-height:var(--popup-row); padding:3px 5px; }
+body.mobile-work-mode .qa-body { min-height:60px; gap:3px; padding:5px; }
+body.mobile-work-mode .qa-tile { width:60px; height:56px; padding:3px; gap:3px; font-size:var(--popup-font); }
+body.mobile-work-mode .qa-ic { height:20px; font-size:var(--popup-font); }
+body.mobile-work-mode .qa-ic svg { width:18px; height:18px; }
+body.mobile-work-mode .qa-desc { padding:5px var(--popup-pad); line-height:1.4; }
+body.mobile-work-mode .pat-pop { max-width:calc(var(--mobile-vw,100vw) - 16px); max-height:calc(var(--mobile-vh,100dvh) - 16px); padding:4px; overflow:auto; box-sizing:border-box; font-size:var(--popup-font); }
+body.mobile-work-mode .pat-row { gap:2px; margin-bottom:2px; }
+body.mobile-work-mode .pat-cell { padding:1px; }
+body.mobile-work-mode .pat-cell .pat-tile { width:24px; height:16px; }
+body.mobile-work-mode .drawing-palette { left:auto; right:calc(100vw - var(--mobile-left,0px) - var(--mobile-vw,100vw) + 8px); top:auto; bottom:calc(100vh - var(--mobile-top,0px) - var(--mobile-vh,100dvh) + var(--mobile-footer,24px) + 8px); width:min(300px,calc(var(--mobile-vw,100vw) - 16px)); max-height:calc(var(--mobile-vh,100dvh) - 56px); padding:var(--popup-pad); border-radius:8px; box-sizing:border-box; font-size:var(--popup-font); }
+body.mobile-work-mode .drawing-palette header { margin-bottom:5px; font-size:calc(var(--popup-font) + 1px); }
+body.mobile-work-mode .drawing-palette header button { width:var(--popup-button); height:var(--popup-button); padding:0; font-size:18px; }
+body.mobile-work-mode .drawing-palette .draw-tools { grid-template-columns:repeat(4,minmax(0,1fr)); gap:3px; }
+body.mobile-work-mode .drawing-palette .draw-tools button { gap:2px; padding:3px 2px; border-radius:4px; }
+body.mobile-work-mode .drawing-palette .draw-tools svg { width:18px; height:18px; }
+body.mobile-work-mode .drawing-palette .draw-swatches { margin:5px 0; }
+body.mobile-work-mode .drawing-palette > label { display:grid; width:auto; margin:4px 0; grid-template-columns:48px minmax(0,1fr) 34px; gap:4px; font-size:var(--popup-font); }
+body.mobile-work-mode .drawing-palette footer { gap:4px; margin-top:5px; }
+body.mobile-work-mode .drawing-palette footer .btn { min-height:var(--popup-button); padding:3px 6px; font-size:var(--popup-font); }
+body.mobile-work-mode .drawing-palette p { margin-top:5px; line-height:1.4; }
+
+body.mobile-work-mode .autocomplete { box-sizing:border-box; font-size:var(--popup-font); overscroll-behavior:contain; }
+body.mobile-work-mode .autocomplete li { min-height:22px; padding:2px 6px; gap:6px; align-items:center; overflow-wrap:anywhere; }

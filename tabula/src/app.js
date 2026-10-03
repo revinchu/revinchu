@@ -50,7 +50,7 @@ import { safeUrl, setSafeHtml } from './safe-html.js';
 import { resolveWorkbookLink } from './hyperlink.js';
 import {
   el, hydrateIcons, toast, openMenu, openSubmenu, closeSubmenus, closeMenus, isMenuOpen, openDialog, alertDialog,
-  formDialog, setMenuCloseHandler, setDialogCloseHandler, setAccessKeyHandler, registerAccessKeyScope, isDialogOpen,
+  formDialog, setMenuCloseHandler, setDialogCloseHandler, setAccessKeyHandler, registerAccessKeyScope, trackPopupPosition, isDialogOpen,
 } from './ui.js';
 import { FUNC_INFO, CATEGORIES } from './funcinfo.js';
 import { makeSeries, CUSTOM_LISTS } from './series.js';
@@ -480,11 +480,11 @@ function quickAnalysis() {
   const show = (i) => { [...tabBar.children].forEach((b, j) => b.classList.toggle('on', i === j)); body.replaceChildren(...tabs[i][1]); desc.textContent = DESC[i]; };
   tabs.forEach(([n], i) => tabBar.append(el('button', { class: 'qa-tab', onmousedown: (e) => e.preventDefault(), onclick: () => show(i) }, n)));
   const pop = el('div', { class: 'qa-pop' }, tabBar, body, desc);
-  const vb = dom.view.getBoundingClientRect();
-  const rc = gv.screenRect(sel);
-  pop.style.left = `${Math.max(8, Math.min(innerWidth - 470, vb.left + rc.x + rc.w - 20))}px`;
-  pop.style.top = `${Math.min(innerHeight - 190, vb.top + rc.y + rc.h + 6)}px`;
   document.body.append(pop);
+  trackPopupPosition(pop, () => {
+    const vb = dom.view.getBoundingClientRect(), rc = gv.screenRect(sel);
+    return { x: vb.left + rc.x + rc.w - 20, y: vb.top + rc.y + rc.h + 6 };
+  });
   registerAccessKeyScope(pop, { owner: null, onClose: () => off({ target: document.body }) });
   show(0);
   const off = (e) => { if (!pop.contains(e.target)) { pop.remove(); document.removeEventListener('mousedown', off, true); document.removeEventListener('keydown', esc, true); } };
@@ -1190,9 +1190,26 @@ function updateAutocomplete() {
 }
 
 function placeAutocomplete() {
-  const ed = dom.editor;
-  dom.ac.style.left = ed.style.left;
-  dom.ac.style.top = `${ed.offsetTop + ed.offsetHeight + 2}px`;
+  const ed = dom.editor, pop = dom.ac;
+  if (!mobileWork?.active) {
+    for (const key of ['maxWidth', 'minWidth', 'maxHeight']) pop.style[key] = '';
+    pop.style.left = ed.style.left;
+    pop.style.top = `${ed.offsetTop + ed.offsetHeight + 2}px`;
+    return;
+  }
+  // 격자의 clipping 영역과 화면 키보드 위의 실제 viewport가 겹치는 공간만 사용한다.
+  const host = dom.view.getBoundingClientRect(), target = ed.getBoundingClientRect(), v = window.visualViewport;
+  const left = Math.max(host.left, v?.offsetLeft ?? 0) + 4, top = Math.max(host.top, v?.offsetTop ?? 0) + 4;
+  const right = Math.min(host.right, (v?.offsetLeft ?? 0) + (v?.width ?? innerWidth)) - 4;
+  const bottom = Math.min(host.bottom, (v?.offsetTop ?? 0) + (v?.height ?? innerHeight)) - 4;
+  pop.style.minWidth = '0'; pop.style.maxWidth = Math.max(1, Math.min(260, right - left)) + 'px';
+  pop.style.left = Math.max(0, left - host.left) + 'px';
+  const below = Math.max(0, bottom - target.bottom - 2), above = Math.max(0, target.top - top - 2);
+  const up = below < Math.min(180, pop.scrollHeight + 2) && above > below;
+  pop.style.maxHeight = Math.max(1, Math.min(180, up ? above : below)) + 'px';
+  const x = Math.max(left, Math.min(target.left, right - pop.offsetWidth));
+  const y = Math.max(top, Math.min(up ? target.top - pop.offsetHeight - 2 : target.bottom + 2, bottom - pop.offsetHeight));
+  pop.style.left = `${x - host.left}px`; pop.style.top = `${y - host.top}px`;
 }
 
 function hideAutocomplete() {
@@ -16187,14 +16204,14 @@ function formatCellsDialog(startTab = 0, find = null) {
   patBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     document.querySelector('.pat-pop')?.remove();
-    const r = patBtn.getBoundingClientRect();
-    const pop = el('div', { class: 'pat-pop', style: { left: `${r.left}px`, top: `${r.bottom + 2}px` } },
+    const pop = el('div', { class: 'pat-pop' },
       PAT_GRID.map((rowV) => el('div', { class: 'pat-row' }, rowV.map((v) => {
         const b = el('button', { type: 'button', class: `pat-cell${patSel.value === v ? ' on' : ''}`, title: patLabel(v) }, patTile(v));
         b.addEventListener('click', () => { patSel.value = v; drawPatBtn(); updFill(); pop.remove(); });
         return b;
       }))));
     document.body.append(pop);
+    trackPopupPosition(pop, patBtn);
     registerAccessKeyScope(pop, { owner: patBtn.closest('.dialog'), onClose: () => { off({ target: document.body }); patBtn.focus(); } });
     const off = (ev) => { if (!pop.contains(ev.target)) { pop.remove(); document.removeEventListener('mousedown', off, true); } };
     setTimeout(() => document.addEventListener('mousedown', off, true), 0);
@@ -18511,7 +18528,7 @@ function showContextMenu(pos, hitKind = 'cell') {
   const items=[item('잘라내기(T)','cut','t',{icon:'cut',key:'Ctrl+X'}),item('복사(C)','copy','c',{icon:'copy',key:'Ctrl+C'}),
     {label:'붙여넣기 옵션(P)',accessKey:'p',icon:'paste',submenu:pasteItems},item('선택하여 붙여넣기(S)...','pasteSpecial','s',{key:'Ctrl+Alt+V',disabled:!!clip?.cut})];
   items.push(item('선택 영역을 그림으로 저장...','rangeSaveImage',null,{icon:'save'}));
-  if(kind==='cell')items.push(item('스마트 조회(L)','contextSmartLookup','l',{icon:'search',disabled:!displayText(active.r,active.c).trim()}));
+  if(kind==='cell'&&!mobileWork?.active)items.push(item('스마트 조회(L)','contextSmartLookup','l',{icon:'search',disabled:!displayText(active.r,active.c).trim()}));
   items.push({sep:true},item(kind==='cell'?'삽입(I)...':'삽입(I)',kind==='row'?'insertRows':kind==='col'?'insertCols':'insertMenuKey','i',{icon:kind==='col'?'colInsert':'rowInsert'}),
     item(kind==='cell'?'삭제(D)...':'삭제(D)',kind==='row'?'deleteRows':kind==='col'?'deleteCols':'deleteMenuKey','d',{icon:'delete'}),item('내용 지우기(N)','clearContents','n',{key:'Delete'}),{sep:true});
   if(kind==='row'||kind==='col'){
@@ -18529,7 +18546,7 @@ function showContextMenu(pos, hitKind = 'cell') {
       item(cm?'메모 편집(M)':'메모 삽입(M)','editComment','m',{icon:cm?'comment':'newComment',key:'Shift+F2'}),
       ...(cm?[item('메모 삭제','deleteComment',null,{icon:'deleteComment'}),item('메모 표시/숨기기','toggleComment',null,{checked:noteVisible(sheet().noteVisibility,active.r,active.c)})]:[]),
       {sep:true},item('셀 서식(F)...','formatCells','f',{key:'Ctrl+1'}),item('드롭다운 목록에서 선택(K)...','pickFromList','k',{key:'Alt+↓'}),
-      item('윗주 필드 표시(S)','togglePhonetic','s',{checked:!!cell?.phonetic?.visible,accessAliases:['s']}),item('윗주 편집...','editPhonetic',null,{disabled:!cell||!!cell.formula||typeof cell.v!=='string'}),
+      ...(!mobileWork?.active?[item('윗주 필드 표시(S)','togglePhonetic','s',{checked:!!cell?.phonetic?.visible,accessAliases:['s']}),item('윗주 편집...','editPhonetic',null,{disabled:!cell||!!cell.formula||typeof cell.v!=='string'})]:[]),
       item('이름 정의(A)...','defineName','a'),{sep:true},item(lk?'링크 편집(I)...':'링크(I)...','hyperlink','i',{key:'Ctrl+K',icon:'link'}),
       ...(lk?[{label:'하이퍼링크 열기',action:()=>openLink(lk)},item('하이퍼링크 지우기','clearHyperlinks',null,{desc:'내용과 서식 유지'}),item('하이퍼링크 제거','removeHyperlink',null,{desc:'해당 셀의 서식도 초기화'})]:[]),
       {sep:true},{label:'행·열 크기 및 숨기기(H)',accessKey:'h',submenu:[item('행 높이(R)...','rowHeight','r'),item('열 너비(W)...','colWidth','w'),item('행 숨기기','hideRows'),item('열 숨기기','hideCols'),item('행 숨기기 취소','unhideRows'),item('열 숨기기 취소','unhideCols'),item('행 높이 자동 맞춤','autofitRowsSel'),item('열 너비 자동 맞춤','autofitSel')]});
@@ -19021,6 +19038,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileFit','toggleR
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['모바일 팝업 공간 절약', ['모바일 작업 모드에서 우클릭·하위 메뉴·미니 서식·필터·대화상자의 글자와 여백을 줄였습니다.', '셀 우클릭의 스마트 조회·윗주 항목과 우측 키 안내를 숨겨 공간을 확보하고, 데스크톱 모드에서는 원래 메뉴를 유지합니다.']],
   ['기능·Excel 설정 연동 점검', [
     '계산 모드·저장 전 재계산·시트별 머리글·수식 표시·눈금선 색을 가져오기와 저장에 연결했습니다. 통합 문서 구조 보호 암호를 확인합니다.',
     '피벗 차이·누계·비율 계산의 오류 처리와 차트 선·레이블·색 설정의 표시를 보강했습니다.',
@@ -19452,6 +19470,10 @@ function bindEvents() {
     onDown:onViewMouseDown, onStart:closeMenus, scroll:(dx,dy)=>gv.scrollBy(dx,dy), zoom:()=>gv.z });
   const ed = dom.editor;
   ed.addEventListener('keydown', onEditorKeyDown);
+  // 모바일의 비입력 격자 포커스에서도 메뉴 단축키를 처리한다. 자식 에디터는 기존 경로만 사용한다.
+  dom.view.addEventListener('keydown', (e) => {
+    if (e.target === dom.view && !e.defaultPrevented) onEditorKeyDown(e);
+  });
   document.addEventListener('keyup', handleKeytipUp);
   document.addEventListener('keydown', (e) => {
     // A fresh physical key starts a new editing gesture. Delayed keyup does not.
@@ -19753,11 +19775,14 @@ async function init() {
   ribbon = buildRibbon({ run, openMenu: openNamedMenu, focusGrid, refreshRibbon: updateRibbon, hiddenTabs: () => opts.hiddenTabs ?? [], inputGuard:slicerRibbonGuard, gallery: (name) => (name === 'chartStyles' ? chartStyleGallery() : name === 'pictureStyles' ? pictureStyleGallery(true) : name === 'slicerStyles' ? slicerRibbonGallery() : []) });
   mobileWork = installMobileWork({ button: $('mobileModeToggle'), onChange: (next, prev) => {
     if (!gv) return;
+    // 모드별 메뉴 항목을 다음 열기에서 새로 구성한다. 문서/선택은 그대로 둔다.
+    if (prev && next.active !== prev.active) closeMenus();
     if (!prev || next.active !== prev.active || next.density !== prev.density || Math.round(next.width) !== Math.round(prev.width)) {
       // The initial callback runs before the controller is assigned; refresh below applies zoom.
       if (mobileWork) applySheetZoom();
       gv.layout(); positionEditor();
     }
+    if (ac) placeAutocomplete();
   } });
   applySheetZoom();
   applyOptions();

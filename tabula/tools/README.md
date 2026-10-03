@@ -483,3 +483,8 @@ node tools/mobile-layout.mjs
 `audit-playwright.mjs`와 `audit-network-preload.mjs`는 이 배치 전용 가드입니다. 새 headless 브라우저만 허용하며 외부/API/쓰기 요청의 실제 전송을 차단합니다. 개별 도구가 제공하는 합성 API 응답은 허용하므로 서버 오류·충돌·저장 동작을 원격 문서 없이 시험합니다. 파일 선택기는 각 도구의 메모리 모의 구현을 사용하며 실제 사용자 문서나 열린 브라우저에 연결하지 않습니다. 가드가 막은 요청과 제품 오류는 구분해야 합니다.
 
 `node tools/functional-audit.mjs --only command-connection-audit`는 등록된 COMMANDS/MENUS와 모든 리본 조작·키팁의 연결 목록을 JSON으로 저장합니다. 함수 메뉴의 `fn:` 동적 라우터도 별도로 기록합니다. 이 연결 검사나 명령 열기 smoke, 기존 기능 도구의 통과 수는 모든 기능의 정확성 또는 Excel 완전 동등성을 뜻하지 않습니다. 실패 원인은 제품 결함·낡은 검사 계약·환경/fixture 부족으로 조사한 후 기록합니다.
+
+
+## 모바일 팝업 밀도와 메뉴 구성
+
+`node tools/mobile-popup-density.mjs`는 실제 모바일 버튼 전환과 데스크톱 복원, 320px 세로/844px 가로 화면의 우클릭 항목 숨김·미니 도구·전체 글꼴/크기 목록·키보드 하위 메뉴·셀 서식·빠른 분석·무늬·그리기를 검사한다. 모바일 격자 Ctrl+1/Shift+F10/한 칸 이동과 Undo도 확인한다. `WIXEL_URL`로 로컬 소스/번들 서버를, `WIXEL_MOBILE_DENSITY_OUT`으로 D: 결과 경로를, `WIXEL_MOBILE_DENSITY_FILTER`로 이름 부분을 선택한다. 외부/API 쓰기를 차단한 합성 문서 검사이며 실제 iPhone Safari 인증과 구분한다. 치수와 검증 범위는 [55번 문서](../docs/codex/55_모바일팝업밀도.md)를 참고한다.
