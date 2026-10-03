@@ -1702,11 +1702,11 @@ body.mobile-work-mode {
 }
 body.mobile-work-mode #app { width:100%; max-width:100%; height:var(--mobile-vh,100dvh); min-height:0; overflow:hidden; }
 body.mobile-work-mode :is(.titlebar,.ribbon-tabs,.ribbon,.formula-row,.footer,.quick-access) { zoom:1; min-width:0; max-width:100%; }
-/* 두 버튼은 고정하고 파일부터 시작하는 탭 목록만 가로로 스크롤한다. */
+/* 모바일 도구 버튼은 고정하고 파일부터 시작하는 탭 목록만 가로로 스크롤한다. */
 body.mobile-work-mode .app-header { display:flex; flex:none; align-items:stretch; height:var(--mobile-chrome); min-width:0; background:var(--green-title); color:#fff; }
 body.mobile-work-mode .app-header .titlebar { display:flex; flex:none; gap:0; height:100%; min-height:0; padding:0 2px; background:transparent; color:inherit; border:0; }
 body.mobile-work-mode .tb-left { flex:none; gap:0; }
-body.mobile-work-mode .tb-left > :not(.mobile-mode-toggle):not(.mobile-tools-toggle),
+body.mobile-work-mode .tb-left > :not(.mobile-mode-toggle):not(.mobile-tools-toggle):not(.mobile-hand-pan),
 body.mobile-work-mode :is(.tb-center,.tb-search,.avatar) { display:none; }
 body.mobile-work-mode .app-header .tb-btn { flex:none; width:var(--mobile-control); min-width:0; height:var(--mobile-control); padding:3px; }
 body.mobile-work-mode .mobile-mode-toggle svg { width:var(--mobile-icon); height:var(--mobile-icon); }
@@ -2683,3 +2683,14 @@ body.mobile-work-mode .drawing-palette p { margin-top:5px; line-height:1.4; }
 
 body.mobile-work-mode .autocomplete { box-sizing:border-box; font-size:var(--popup-font); overscroll-behavior:contain; }
 body.mobile-work-mode .autocomplete li { min-height:22px; padding:2px 6px; gap:6px; align-items:center; overflow-wrap:anywhere; }
+
+/* 모바일 손바닥 이동: 시트 본문에만 제스처를 적용한다. */
+.mobile-hand-pan { display:none; }
+body.mobile-work-mode .app-header .mobile-hand-pan { display:inline-flex; align-items:center; justify-content:center; flex:0 0 24px; width:24px; height:24px; padding:3px; }
+.mobile-hand-pan svg { width:17px; height:17px; }
+.mobile-hand-pan[aria-pressed="true"] { background:rgba(255,255,255,.22); box-shadow:inset 0 -2px #fff; }
+body.grid-pan-armed:not(.grid-mouse-pan) #gridView, body.grid-pan-armed:not(.grid-mouse-pan) #gridView * { cursor:grab!important; }
+body.grid-pan-armed #gridView { touch-action:none!important; }
+#gridPanCursor { position:fixed; z-index:100; width:26px; height:26px; padding:2px; border:1px solid #5b7465; border-radius:6px; background:#fff; color:#185c37; box-shadow:0 1px 4px #0004; pointer-events:none; user-select:none; }
+#gridPanCursor[hidden] { display:none!important; }
+#gridPanCursor svg { display:block; width:100%; height:100%; }

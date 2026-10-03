@@ -488,3 +488,8 @@ node tools/mobile-layout.mjs
 ## 모바일 팝업 밀도와 메뉴 구성
 
 `node tools/mobile-popup-density.mjs`는 실제 모바일 버튼 전환과 데스크톱 복원, 320px 세로/844px 가로 화면의 우클릭 항목 숨김·미니 도구·전체 글꼴/크기 목록·키보드 하위 메뉴·셀 서식·빠른 분석·무늬·그리기를 검사한다. 모바일 격자 Ctrl+1/Shift+F10/한 칸 이동과 Undo도 확인한다. `WIXEL_URL`로 로컬 소스/번들 서버를, `WIXEL_MOBILE_DENSITY_OUT`으로 D: 결과 경로를, `WIXEL_MOBILE_DENSITY_FILTER`로 이름 부분을 선택한다. 외부/API 쓰기를 차단한 합성 문서 검사이며 실제 iPhone Safari 인증과 구분한다. 치수와 검증 범위는 [55번 문서](../docs/codex/55_모바일팝업밀도.md)를 참고한다.
+
+
+## iPhone 마우스 손바닥 이동
+
+`node tools/mobile-hand-pan.mjs`는 포인터만 전달되는 버튼 조합과 호환 Mouse Events 중복, 먼저 뜨는 우클릭, 첫 buttons3, 버튼 지연·해제·취소·시트 전환, 펜 구분, 상단 손바닥 버튼의 한 버튼/터치 이동 및 문서 불변을 검사한다. `WIXEL_BROWSER=chromium|webkit`, 로컬 `WIXEL_URL`, D: 결과용 `WIXEL_HAND_PAN_OUT`, 부분 이름 필터 `WIXEL_HAND_PAN_FILTER`를 사용한다. WebKit에서는 Chromium CDP 터치 주입 2개를 이유와 함께 제외하고 나머지 포인터/마우스/키보드 경로를 검사한다. 실제 iPhone/Bluetooth 인증과 구분하며 [56번 문서](../docs/codex/56_아이폰손바닥이동.md)에 범위를 기록한다.

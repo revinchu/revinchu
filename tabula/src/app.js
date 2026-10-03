@@ -197,6 +197,7 @@ let lastBorder = 'bottom';
 let ribbon;
 let gv;
 let mobileWork;
+let gridMousePan;
 const mobileZooms = new WeakMap();
 const serverState = { saving: false, error: null, savedAt: null };
 
@@ -3424,7 +3425,7 @@ function sparkEditDialog() {
 
 // ───────────────────────── 시트 보호 ─────────────────────────
 // 보호된 시트에서 명령마다 필요한 권한 (없는 명령은 선택한 셀이 모두 잠기지 않았을 때만)
-const PROTECT_FREE = new Set(['contextSmartLookup','mobileWorkMode', 'mobileTools', 'mobileFit','privateImportPermission', 'saveLocations', 'publish', 'versionHistory', 'recentFiles', 'dataAnalysis', 'forecastSheet', 'scenarioManager', 'solver', 'undo', 'redo', 'save', 'open', 'backstage', 'print', 'copy', 'find', 'goto', 'prevSheet', 'nextSheet', 'selectRegion',
+const PROTECT_FREE = new Set(['contextSmartLookup','mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mobileFit','privateImportPermission', 'saveLocations', 'publish', 'versionHistory', 'recentFiles', 'dataAnalysis', 'forecastSheet', 'scenarioManager', 'solver', 'undo', 'redo', 'save', 'open', 'backstage', 'print', 'copy', 'find', 'goto', 'prevSheet', 'nextSheet', 'selectRegion',
   'newWorkbook', 'pivotFieldList', 'tracePrecedents', 'traceDependents', 'removeArrows', 'evaluateFormula', 'errorCheck', 'calculationStatus', 'watchWindow', 'gotoSpecial',
   'outlineShow', 'outlineHide', 'freezePanes', 'freezeTop', 'freezeFirstCol', 'circleInvalid', 'clearCircles', 'macros', 'prevComment', 'nextComment',
   'workbookStats', 'toggleGrid', 'togglePrintGrid', 'toggleFormulaBar', 'toggleHeaders', 'toggleFormulas', 'toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100',
@@ -18564,6 +18565,7 @@ const structural = (fn) => () => { fn(); gv.layout(); updateSelectionUI(); };
 
 const COMMANDS = {
   mobileWorkMode: () => mobileWork.toggle(),
+  mobileHandPan: () => { if (mobileWork?.active) gridMousePan?.toggle(); },
   mobileTools: () => mobileToolsDialog(),
   mobileFit: () => fitMobileScreen(),
   rowHeight: () => sizeDialog('row'), colWidth: () => sizeDialog('col'),
@@ -19033,11 +19035,12 @@ const COMMANDS = {
   whatsNew: () => whatsNewDialog(),
 };
 
-const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileFit','toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100', 'shortcuts', 'about', 'whatsNew']);
+const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mobileFit','toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100', 'shortcuts', 'about', 'whatsNew']);
 
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['모바일 손바닥 이동', ['상단 손바닥 버튼을 켜면 한 버튼 드래그로 시트를 이동합니다. 이동 중 손바닥 표시를 보여주며 모바일 작업 모드를 끄면 이동 모드도 해제됩니다.']],
   ['모바일 팝업 공간 절약', ['모바일 작업 모드에서 우클릭·하위 메뉴·미니 서식·필터·대화상자의 글자와 여백을 줄였습니다.', '셀 우클릭의 스마트 조회·윗주 항목과 우측 키 안내를 숨겨 공간을 확보하고, 데스크톱 모드에서는 원래 메뉴를 유지합니다.']],
   ['기능·Excel 설정 연동 점검', [
     '계산 모드·저장 전 재계산·시트별 머리글·수식 표시·눈금선 색을 가져오기와 저장에 연결했습니다. 통합 문서 구조 보호 암호를 확인합니다.',
@@ -19282,7 +19285,7 @@ function fitMobileScreen() {
   gv.layout(); gv.ensureVisible(active.r, active.c);
 }
 function mobileToolsDialog() {
-  const catalog = qatCatalog().map(c => ({ ...c, disabled: contextCommandDisabled(c.cmd) }));
+  const catalog = [...qatCatalog(), { cmd: 'mobileHandPan', label: '손바닥 이동', tab: '모바일' }].map(c => ({ ...c, disabled: contextCommandDisabled(c.cmd) }));
   openMobileTools({
     density: mobileWork.density, setDensity: value => mobileWork.setDensity(value),
     zoom: view.zoom, autosave, status: `${dom.saveState.textContent} · ${dom.stats.textContent}`, commands: catalog,
@@ -19465,8 +19468,14 @@ function onBookChange() {
 
 // ───────────────────────── 이벤트 연결 ─────────────────────────
 function bindEvents() {
-  installGridMousePan({ view:dom.view, enabled:()=>!!mobileWork?.active,
+  gridMousePan = installGridMousePan({ view:dom.view, enabled:()=>!!mobileWork?.active,
     context:()=>sheet(), canStart:()=>!editing && !isDialogOpen() && !document.querySelector('.backstage'),
+    onArmedChange: armed => {
+      const button = $('mobileHandPan');
+      if (!button) return;
+      button.setAttribute('aria-pressed', String(armed));
+      button.title = armed ? '손바닥 이동 끄기 · Esc' : '손바닥 이동 · 끌어서 화면 이동';
+    },
     onDown:onViewMouseDown, onStart:closeMenus, scroll:(dx,dy)=>gv.scrollBy(dx,dy), zoom:()=>gv.z });
   const ed = dom.editor;
   ed.addEventListener('keydown', onEditorKeyDown);
@@ -19774,6 +19783,7 @@ async function init() {
   });
   ribbon = buildRibbon({ run, openMenu: openNamedMenu, focusGrid, refreshRibbon: updateRibbon, hiddenTabs: () => opts.hiddenTabs ?? [], inputGuard:slicerRibbonGuard, gallery: (name) => (name === 'chartStyles' ? chartStyleGallery() : name === 'pictureStyles' ? pictureStyleGallery(true) : name === 'slicerStyles' ? slicerRibbonGallery() : []) });
   mobileWork = installMobileWork({ button: $('mobileModeToggle'), onChange: (next, prev) => {
+    if (!next.active) gridMousePan?.refresh();
     if (!gv) return;
     // 모드별 메뉴 항목을 다음 열기에서 새로 구성한다. 문서/선택은 그대로 둔다.
     if (prev && next.active !== prev.active) closeMenus();
