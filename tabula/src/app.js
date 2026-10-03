@@ -13,6 +13,7 @@ import { normalizeVideo, VIDEO_POSTER } from './media-object.js';
 import { createDrawingPalette } from './drawing-palette.js';
 import { BANDING_PALETTES, alternatingRules, isBandingRule } from './alternating-colors.js';
 import { installMobileWork, mobileSheetZoom } from './mobile-work.js';
+import { installMobileKeyboard } from './mobile-keyboard.js';
 import { installGridMousePan } from './mouse-work.js';
 import { installPivotFieldDrag } from './pivot-field-drag.js';
 import { openMobileTools } from './mobile-tools-ui.js';
@@ -203,6 +204,7 @@ let lastBorder = 'bottom';
 let ribbon;
 let gv;
 let mobileWork;
+let mobileKeyboard;
 let gridMousePan;
 const mobileZooms = new WeakMap();
 const serverState = { saving: false, error: null, savedAt: null };
@@ -835,7 +837,7 @@ const edInput = () => (document.activeElement === dom.formula ? dom.formula : do
 function focusGrid() {
   if (isDialogOpen() || document.querySelector('.backstage')) return;
   if (editing?.fromBar) { dom.formula.focus(); return; }
-  if (mobileWork?.active && !editing) { dom.view.tabIndex = -1; dom.view.focus({ preventScroll: true }); return; }
+  if (mobileWork?.active && !mobileKeyboard?.suppressed && !editing) { dom.view.tabIndex = -1; dom.view.focus({ preventScroll: true }); return; }
   if (document.activeElement !== dom.editor) dom.editor.focus({ preventScroll: true });
 }
 
@@ -1900,6 +1902,7 @@ function touchGridSelect(hit) {
   else if (hit.zone === 'colHeader') selectCols(hit.c, hit.c);
   else if (hit.zone === 'rowHeader') selectRows(hit.r, hit.r);
   else selectCell(hit.r, hit.c, { scroll: false });
+  if (mobileKeyboard?.suppressed) focusGrid();
   if (painter) { touchGridPaint(); return false; }
   if (hit.zone === 'cell' && styleAt(active.r, active.c).checkbox) {
     if (!viewOnly && !wb.props?.markedFinal) toggleCheckboxes();
@@ -19371,6 +19374,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['모바일 외부 키보드 입력', ['모바일 작업 도구에서 외부 키보드 모드를 선택하면 셀·수식·검색·대화상자의 화면 키보드를 억제하며 키 입력과 한글 조합을 유지합니다. 격자의 키 입력은 자동으로 감지하고, 화면 키보드 입력으로 다시 전환할 수 있습니다.']],
   ['아이폰 홈 화면 앱의 시트 조작 보완', [
     '시트 탭과 팝업을 홈 제스처 안전영역 위에 배치합니다. 모바일 작업 도구에서 현재 앱 버전과 업데이트 안내를 확인할 수 있습니다.',
   ]],
@@ -19641,10 +19645,21 @@ function appVersionDialog() {
     buttons: [{ label: '파일로 저장', primary: true, action: () => run('save') }, { label: '닫기' }],
   });
 }
+function syncMobileKeyboardFocus(next) {
+  if (editing || isDialogOpen() || document.querySelector('.backstage')) return;
+  const focused = document.activeElement;
+  if (focused !== dom.view && focused !== dom.editor) return;
+  // Keep a writable native editor for physical-key input and Korean IME.
+  // Moving focus before the key's default action avoids synthesizing characters.
+  if (next.suppressed || !mobileWork?.active) dom.editor.focus({ preventScroll: true });
+  else { dom.view.tabIndex = -1; dom.view.focus({ preventScroll: true }); }
+}
 function mobileToolsDialog() {
   const catalog = [...qatCatalog(), { cmd: 'mobileHandPan', label: '손바닥 이동', tab: '모바일' }].map(c => ({ ...c, disabled: contextCommandDisabled(c.cmd) }));
   openMobileTools({
     version: { label: mobileVersionLabel(), action: appVersionDialog },
+    keyboard: { preference: mobileKeyboard.preference, suppressed: mobileKeyboard.suppressed,
+      set: value => mobileKeyboard.setPreference(value) },
     density: mobileWork.density, setDensity: value => mobileWork.setDensity(value),
     zoom: view.zoom, autosave, status: `${dom.saveState.textContent} · ${dom.stats.textContent}`, commands: catalog,
     quick: qatCommands().map(id => catalog.find(c => c.cmd === id)).filter(Boolean),
@@ -20134,13 +20149,14 @@ async function init() {
     },
     onTouchSelect: touchGridSelect,
     onTouchRange: touchGridRange,
-    onTouchRangeEnd: touchGridPaint,
+    onTouchRangeEnd: () => { touchGridPaint(); if (mobileKeyboard?.suppressed) focusGrid(); },
     onTouchEdit: () => startEdit('edit'),
     onTouchZoom: (pct) => setZoom(pct),
     isDragging: () => !!drag,
   });
   ribbon = buildRibbon({ run, openMenu: openNamedMenu, focusGrid, refreshRibbon: updateRibbon, hiddenTabs: () => opts.hiddenTabs ?? [], inputGuard:slicerRibbonGuard, gallery: (name) => (name === 'chartStyles' ? chartStyleGallery() : name === 'pictureStyles' ? pictureStyleGallery(true) : name === 'slicerStyles' ? slicerRibbonGallery() : []) });
   mobileWork = installMobileWork({ button: $('mobileModeToggle'), onChange: (next, prev) => {
+    mobileKeyboard?.refresh();
     if (!next.active) gridMousePan?.refresh();
     if (!gv) return;
     // 모드별 메뉴 항목을 다음 열기에서 새로 구성한다. 문서/선택은 그대로 둔다.
@@ -20152,6 +20168,7 @@ async function init() {
     }
     if (ac) placeAutocomplete();
   } });
+  mobileKeyboard = installMobileKeyboard({ isMobile: () => !!mobileWork?.active, onChange: syncMobileKeyboardFocus });
   applySheetZoom();
   applyOptions();
   bindEvents();

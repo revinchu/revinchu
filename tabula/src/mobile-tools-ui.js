@@ -5,6 +5,8 @@ export function openMobileTools(host) {
   let dialog;
   const invoke = action => () => { dialog.close(); action(); };
   const button = (label, action, attrs = {}) => el('button', { type: 'button', class: 'btn', ...attrs, onclick: invoke(action) }, label);
+  // Set input policy before closing the drawer restores focus to an editor.
+  const keyboardButton = (label, value) => el('button', { type: 'button', class: 'btn', 'data-mobile-keyboard': value, 'aria-pressed': String(host.keyboard.preference === value), onclick: () => { host.keyboard.set(value); dialog.close(); } }, label);
   const section = (label, children) => el('section', { class: 'mobile-tool-section' }, el('h3', {}, label), el('div', { class: 'mobile-tool-grid' }, children));
   const search = el('input', { type: 'search', disabled: true, placeholder: '명령 이름 검색', 'aria-label': '모바일 도구 명령 검색', autocomplete: 'off' });
   const results = el('div', { class: 'mobile-tool-grid mobile-tool-results', hidden: true });
@@ -16,6 +18,12 @@ export function openMobileTools(host) {
   });
   const body = el('div', { class: 'mobile-tools-body' },
     el('p', { class: 'mobile-tools-tip' }, '메뉴와 시트 탭은 좌우로 밀거나 마우스로 끌고, 휠로도 이동합니다. 본문은 마우스 왼쪽·오른쪽 버튼을 함께 누른 채 끌면 이동합니다. 셀 한 번 누르기: 선택 · 두 번: 편집 · 길게 누른 뒤 끌기: 범위 · 두 손가락: 확대/축소'),
+    host.keyboard ? section('키보드', [
+      keyboardButton('외부 키보드', 'hardware'),
+      keyboardButton('화면 키보드', 'screen'),
+      keyboardButton('자동 감지', 'auto'),
+      el('p', { class: 'mobile-tools-state' }, host.keyboard.suppressed ? '외부 키보드 입력 · 화면 키보드 숨김' : '화면 키보드 사용 가능'),
+    ]) : null,
     host.version ? section('앱 버전', [button(host.version.label, host.version.action, { 'data-mobile-app-version': 'true' })]) : null,
     search, results,
     section('메뉴 크기', [

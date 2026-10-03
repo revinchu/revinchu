@@ -531,3 +531,8 @@ node tools/mobile-layout.mjs
 - `node tools/sheet-state-storage.mjs`: 로컬 소스 서버의 격리 실제 IndexedDB에 합성 문서만 저장합니다. 30만 셀 숨김/Undo/Redo의 0청크 재사용, 셀·다른 메타 변경, 16MB 분할 청크 GC, 중단·CAS·Web Locks 부재를 검사합니다. `WIXEL_URL`, `WIXEL_SHEET_STORAGE_OUT`을 사용합니다.
 
 검증 결과와 iPhone 실기기 한계는 [61번 문서](../docs/codex/61_아이폰홈화면시트조작.md)에 기록합니다.
+
+
+## 모바일 외부 키보드 입력
+
+`node tools/mobile-hardware-keyboard.mjs`는 격리 합성 문서에서 실제 Playwright 키 입력·마우스·터치를 사용해 첫 문자, Enter/Tab/Escape, 수식, 찾기, 글꼴, 설정 보존·복귀와 Undo를 검사합니다. IME 이벤트는 합성이며 실제 iPhone 시스템 키보드·Bluetooth 검사가 아닙니다. `WIXEL_URL`, `WIXEL_BROWSER`(chromium/webkit), `WIXEL_KEYBOARD_OUT`, `WIXEL_KEYBOARD_FILTER`를 지원하며 외부/API 요청과 원격 쓰기를 차단합니다. 세부 범위는 [62번 문서](../docs/codex/62_모바일외부키보드입력.md)를 참고합니다.

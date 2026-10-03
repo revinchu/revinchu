@@ -1,5 +1,6 @@
 // 공통 UI: 요소 생성 · 메뉴 · 대화상자 · 알림
 import { ICONS } from './icons.js';
+import { prepareKeyboardInput } from './mobile-keyboard.js';
 import { sanitizeHtml, setSafeHtml } from './safe-html.js';
 import { accessKeyFromLabel, accessKeyCaption, accessKeyFromEvent, accessKeyHint, accessKeyAliases, dialogButtonAccessKey, allocateAccessKeys } from './access-keys.js';
 
@@ -25,6 +26,7 @@ export function el(tag, attrs = {}, ...children) {
     if (c === null || c === undefined || c === false) continue;
     node.append(c instanceof Node ? c : document.createTextNode(String(c)));
   }
+  prepareKeyboardInput(node);
   return node;
 }
 
@@ -434,7 +436,11 @@ function buildMenu(anchor, items, { minWidth, scroll, toolbar, level = 0, parent
       if (at >= 0) { e.preventDefault(); e.stopPropagation(); entries[at].click(); }
     }
   });
-  if (focus) (menu.querySelector('input:not(:disabled), select:not(:disabled), textarea:not(:disabled)') ?? menu.querySelector(':scope > .menu-item:not(:disabled)'))?.focus();
+  if (focus) {
+    const target = menu.querySelector('input:not(:disabled), select:not(:disabled), textarea:not(:disabled)') ?? menu.querySelector(':scope > .menu-item:not(:disabled)');
+    prepareKeyboardInput(target);
+    target?.focus();
+  }
   return menu;
 }
 
@@ -705,6 +711,7 @@ export function openDialog({ title, body, buttons = [], onOpen, width, modeless 
     const valid = (node) => node instanceof HTMLElement && dialog.contains(node) && node.tabIndex >= 0 && accessVisible(node, true);
     const first = focusable(dialog).find((node) => /^(INPUT|SELECT|TEXTAREA)$/.test(node.tagName));
     const target = valid(lastFocus) ? lastFocus : valid(requested) ? requested : first ?? dialog.querySelector('.btn.primary:not(:disabled)') ?? focusable(dialog)[0] ?? dialog;
+    prepareKeyboardInput(target);
     target.focus();
     return target;
   };
