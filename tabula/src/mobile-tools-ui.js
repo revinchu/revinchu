@@ -16,6 +16,7 @@ export function openMobileTools(host) {
   });
   const body = el('div', { class: 'mobile-tools-body' },
     el('p', { class: 'mobile-tools-tip' }, '메뉴와 시트 탭은 좌우로 밀거나 마우스로 끌고, 휠로도 이동합니다. 본문은 마우스 왼쪽·오른쪽 버튼을 함께 누른 채 끌면 이동합니다. 셀 한 번 누르기: 선택 · 두 번: 편집 · 길게 누른 뒤 끌기: 범위 · 두 손가락: 확대/축소'),
+    host.version ? section('앱 버전', [button(host.version.label, host.version.action, { 'data-mobile-app-version': 'true' })]) : null,
     search, results,
     section('메뉴 크기', [
       button('촘촘하게', () => host.setDensity('compact'), { 'aria-pressed': String(host.density === 'compact') }),

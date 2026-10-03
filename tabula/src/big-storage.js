@@ -5,6 +5,8 @@ const bigYield = () => new Promise(resolve => setTimeout(resolve, 0));
 const bigAbort = () => Object.assign(new Error('저장 중 문서가 바뀌어 이전 저장본을 유지했습니다.'), { code: 'BIG_SAVE_ABORT' });
 const bigGeneration = () => crypto.randomUUID();
 const sheetRecordKey = (key, entry) => entry.key ?? `${key}#${entry.id}`;
+// state만 달라진 시트는 기존 불변 셀 청크·블록을 새 메타 레코드에서 재사용합니다.
+const stateFreeTag = meta => JSON.stringify({ ...meta, state: undefined });
 const bigLock = (key, action, signal) => globalThis.navigator?.locks?.request
   ? navigator.locks.request(`wixel-large-save:${key}`, { ...(signal ? { signal } : {}) }, () => action(true))
   : action(false);
@@ -66,11 +68,19 @@ export async function saveLargeWorkbook(key, book, metadata, options = {}) {
       valid();
       for (let i=0;i<sheets.length;i++) {
         const sheet=sheets[i], prior=saved.get(sheet._sid), ev=edits[i];
+        const recordKey=`${key}#g#${generation}#s${i}`;
         if (previous?.v === 3 && prior?.ev === ev) {
           const previousRecord = await idbGet(sheetRecordKey(key,prior));
           if (previousRecord && JSON.stringify(previousRecord.meta) === sheetTags[i]) { list.push({...prior,key:sheetRecordKey(key,prior)}); valid(); continue; }
+          if (previousRecord && stateFreeTag(previousRecord.meta) === stateFreeTag(sheetMetadata[i])) {
+            // 원본 청크/partKeys는 staged에 넣지 않습니다. 실패 시 새 메타만 지우고,
+            // 성공 뒤 GC는 새 레코드가 참조하는 기존 분할 청크를 계속 보존합니다.
+            valid();staged.push(recordKey);
+            await idbSet(recordKey,{...previousRecord,meta:sheetMetadata[i]});
+            valid();list.push({id:sheet._sid,ev,key:recordKey});continue;
+          }
         }
-        const recordKey=`${key}#g#${generation}#s${i}`, chunks=[], blocks=[], partKeys=[];
+        const chunks=[], blocks=[], partKeys=[];
         for (const chunk of book.cellChunks(i)) {
           valid(); chunks.push(await bigPack(JSON.stringify(chunk),gz));
           await bigYield(); await options.waitForIdle?.(); valid();

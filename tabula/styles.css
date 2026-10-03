@@ -1,4 +1,8 @@
 :root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
   --green: #217346;
   --green-dark: #185c37;
   --green-title: #175b42;
@@ -31,7 +35,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 button { font: inherit; color: inherit; }
-#app { display: flex; flex-direction: column; height: 100vh; }
+#app { display: flex; flex-direction: column; height: 100vh; padding:var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left); }
 .app-header { display: contents; }
 
 /* ───────── 제목 표시줄 ───────── */
@@ -1763,7 +1767,7 @@ body.mobile-work-mode .formula-row.tall { height:60px; }
 body.mobile-work-mode .formula-row.tall #formulaInput { height:calc(100% / var(--formula-scale)); }
 body.mobile-work-mode .grid-wrap { min-width:0; min-height:96px; }
 /* 시트·새 시트·보기·배율은 하나의 행. 긴 시트 이름만 내부에서 스크롤한다. */
-body.mobile-work-mode .footer { display:flex; align-items:stretch; min-width:0; overflow:hidden; padding-bottom:max(0px, calc(env(safe-area-inset-bottom,0px) - var(--mobile-footer))); background:var(--ribbon-bg); }
+body.mobile-work-mode .footer { display:flex; align-items:stretch; min-width:0; overflow:hidden; padding-bottom:0; background:var(--ribbon-bg); }
 body.mobile-work-mode .sheetbar { flex:1 1 0; min-width:0; height:var(--mobile-footer); padding:0; }
 body.mobile-work-mode .sheet-nav { flex:0 0 18px; width:18px; min-width:0; height:100%; margin:0; padding:1px; }
 body.mobile-work-mode .sheet-nav svg { width:12px; height:12px; }
@@ -1801,13 +1805,13 @@ body.mobile-work-mode .dialog-backdrop,
 body.mobile-work-mode .dialog-backdrop.modeless {
   inset: auto; left: var(--mobile-left, 0px); top: var(--mobile-top, 0px);
   width: var(--mobile-vw, 100vw); height: var(--mobile-vh, 100dvh);
-  padding: 8px; box-sizing: border-box; place-items: center; overflow: hidden;
+  padding:calc(var(--safe-top) + 8px) calc(var(--safe-right) + 8px) calc(var(--safe-bottom) + 8px) calc(var(--safe-left) + 8px); box-sizing: border-box; place-items: center; overflow: hidden;
 }
 body.mobile-work-mode .dialog,
 body.mobile-work-mode .dialog.pane-dlg {
   position: relative !important; inset: auto !important; margin: 0 !important;
-  min-width: 0; min-height: 0; max-width: calc(var(--mobile-vw, 100vw) - 16px) !important;
-  max-height: calc(var(--mobile-vh, 100dvh) - 16px) !important; box-sizing: border-box;
+  min-width: 0; min-height: 0; max-width: calc(var(--mobile-vw, 100vw) - var(--safe-left) - var(--safe-right) - 16px) !important;
+  max-height: calc(var(--mobile-vh, 100dvh) - var(--safe-top) - var(--safe-bottom) - 16px) !important; box-sizing: border-box;
 }
 body.mobile-work-mode .dialog-head { flex: none; gap: 8px; padding: 7px 10px; }
 body.mobile-work-mode .dialog-head > button { flex: none; width: 40px; height: 40px; }
@@ -1875,7 +1879,8 @@ body.mobile-work-mode .mobile-tools-toggle { display:inline-flex; justify-conten
 .mobile-menu-back { display: none; }
 body.mobile-work-mode .mobile-menu-back { display: block; position: sticky; top: -4px; z-index: 2; width: 100%; min-height: 42px; text-align: left; padding: 8px 12px; border: 0; border-bottom: 1px solid #ddd; background: #f3f7f4; color: #185c37; font: inherit; cursor: pointer; }
 
-body.mobile-work-mode #app { box-sizing:border-box; padding-left:env(safe-area-inset-left,0px);padding-right:env(safe-area-inset-right,0px);padding-top:env(safe-area-inset-top,0px); }
+/* Keep controls above the OS Home gesture region, including standalone mode. */
+body.mobile-work-mode #app { box-sizing:border-box; padding:var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left); }
 
 /* Keep native mobile editing legible without Safari input-focus page zoom. */
 body.mobile-work-mode .cell-editor:not(.idle) { font-size:16px !important; min-height:30px; }

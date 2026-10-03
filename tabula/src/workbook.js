@@ -1607,7 +1607,7 @@ export class Workbook {
     if (this.tx) this.tx.entries.push(entry);
   }
 
-  /** 시트 편집 횟수 (자동 저장이 바뀐 시트만 다시 저장하는 데 씀) */
+  /** 시트 데이터 편집 횟수. state(표시/숨김)는 별도 메타 비교로 저장하므로 제외합니다. */
   touch(si) {
     const s = this.sheets[si];
     if (s) s._ev = (s._ev ?? 0) + 1;
@@ -2025,7 +2025,8 @@ export class Workbook {
 
   /** 시트 속성 하나만 실행 취소용으로 기록 (통합 문서 전체 복사보다 훨씬 가벼움) */
   propSnap(si, prop) {
-    this.touch(si);
+    // 표시 상태는 셀·블록과 피벗 원본을 바꾸지 않습니다. 문서 version/Undo는 유지합니다.
+    if (prop !== 'state') this.touch(si);
     const tx = this.tx;
     if (!tx) return;
     const k = `${si}:${prop}`;

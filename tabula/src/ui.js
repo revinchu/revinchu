@@ -441,8 +441,14 @@ function buildMenu(anchor, items, { minWidth, scroll, toolbar, level = 0, parent
 const mobileMenuSizing = new WeakMap();
 function popupViewport() {
   const mobile = document.body.classList.contains('mobile-work-mode'), v = mobile ? window.visualViewport : null;
-  const left = v?.offsetLeft ?? 0, top = v?.offsetTop ?? 0, width = v?.width ?? innerWidth, height = v?.height ?? innerHeight;
-  return { mobile, left, top, width, height, right: left + width, bottom: top + height };
+  const css = getComputedStyle(document.documentElement);
+  const inset = side => Math.max(0, parseFloat(css.getPropertyValue(`--safe-${side}`)) || 0);
+  // Intersect the visual viewport with the device safe area. Menus above the
+  // sheet tabs must not enter the Home gesture region in an installed iOS app.
+  const left = Math.max(v?.offsetLeft ?? 0, inset('left')), top = Math.max(v?.offsetTop ?? 0, inset('top'));
+  const right = Math.max(left + 1, Math.min((v?.offsetLeft ?? 0) + (v?.width ?? innerWidth), innerWidth - inset('right')));
+  const bottom = Math.max(top + 1, Math.min((v?.offsetTop ?? 0) + (v?.height ?? innerHeight), innerHeight - inset('bottom')));
+  return { mobile, left, top, width: right - left, height: bottom - top, right, bottom };
 }
 // 공통 메뉴 밖의 빠른 분석·무늬 선택 창도 같은 화면 경계를 사용한다.
 const positionedPopups = new Map();

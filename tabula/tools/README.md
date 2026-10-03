@@ -504,7 +504,7 @@ node tools/mobile-layout.mjs
 
 - `node tools/mobile-slicer-gallery.mjs`: 모바일 320/390px 두 밀도와 데스크톱에서 갤러리 이전·다음·더 보기, 실제 스타일 변경·Undo, 키보드·작은 메뉴 경계를 검사합니다. 출력은 `WIXEL_SLICER_GALLERY_OUT`으로 지정합니다.
 - `node tools/object-style-design.mjs`: 표·피벗·슬라이서 스타일 만들기·수정·복제·삭제·기본값·공유 사용처·요소 상속·명시 해제·숫자 형식·보호·오래된 편집기·실제 채우기와 XLSX 재열기를 검사합니다. `WIXEL_OBJECT_STYLE_OUT`과 부분 이름 `WIXEL_OBJECT_STYLE_FILTER`를 사용합니다.
-- `node tools/mobile-sheet-actions.mjs`: 시트 숨기기 취소와 이동/복사의 앱 목록, 마우스·터치·키보드, 취소·Undo/Redo·보호·오래된 문서, 모바일 경계를 검사합니다. 출력 변수는 `WIXEL_SHEET_ACTIONS_OUT`입니다.
+- `node tools/mobile-sheet-actions.mjs`: 시트 숨기기 취소와 이동/복사의 앱 목록, 마우스·터치·키보드, 취소·Undo/Redo·보호·오래된 문서, 모바일 경계를 검사합니다. standalone/display-mode 모사와 반복 취소의 pageclose/crash/navigation/newpage·포커스·렌더·직렬화 계측, 0/21/34px 하단 안전영역 및 47px 상단/양옆 노치 검사를 포함합니다. 실제 iPhone OS 제스처 검사는 아닙니다. 출력 변수는 `WIXEL_SHEET_ACTIONS_OUT`입니다.
 - `node tools/pivot-style-capture.mjs`: 가져온 피벗의 스타일 변경·지우기 실제 표시와 직접 지정 서식 보존을 확인합니다. 출력 변수는 `WIXEL_PIVOT_STYLE_OUT`입니다.
 
 `WIXEL_URL`에 로컬 소스 또는 최종 번들을 지정합니다. `WIXEL_BROWSER`는 도구별로 Chromium/WebKit를 선택하며 각 파일의 기본값을 참고하세요. 격리 컨텍스트의 합성 문서만 사용하고 외부/API 쓰기를 차단합니다. 실제 Excel 정상 열기/재저장과 WebKit 화면 검사의 구분, iPhone OS 홈 이탈의 미확인 상태는 [58번 문서](../docs/codex/58_개체스타일과모바일목록.md)에 기록합니다.
@@ -523,3 +523,11 @@ node tools/mobile-layout.mjs
 ## 필터 단추와 Excel 조건 보존
 
 `node tools/table-filter-display.mjs`는 표 디자인의 단추 표시와 데이터 필터 해제를 구분하고, 실제 단추·조건·숨긴 행·합계·슬라이서·부분 단추·Undo/Redo·머리글·기본 줄무늬·보호·모바일·XLSX 재열기를 확인합니다. `WIXEL_URL`은 소스/최종 번들, `WIXEL_BROWSER=chromium,webkit`는 엔진, `WIXEL_FILTER_DISPLAY_OUT`은 D: 출력 경로, `WIXEL_FILTER_DISPLAY_FILTER`는 시나리오 이름 일부입니다. `WIXEL_FILTER_NATIVE_FILE`을 지정하면 Excel에서 만든 합성 파일의 단추 숨김도 검증합니다. 미지원 원형 조건의 재적용 차단과 ~ 리터럴의 저장 후 재적용을 포함하며, 외부/API 쓰기를 차단합니다. [60번 문서](../docs/codex/60_필터단추와표시상태보존.md)에 실제 Excel·표준 검증과 한계를 구분해 기록합니다.
+
+
+## 홈 화면 앱 버전 안내와 시트 상태 저장
+
+- `node tools/mobile-release-notice.mjs`: 모바일 도구의 버전 진입·새 버전 감지·열린 도구 문구 갱신·파일 저장 취소에서 문서/선택/Undo 불변과 추가 이동 없음을 검사합니다. `WIXEL_URL`, `WIXEL_BROWSER`(chromium/webkit), `WIXEL_RELEASE_NOTICE_OUT`을 사용합니다. standalone 표시는 모의 값입니다.
+- `node tools/sheet-state-storage.mjs`: 로컬 소스 서버의 격리 실제 IndexedDB에 합성 문서만 저장합니다. 30만 셀 숨김/Undo/Redo의 0청크 재사용, 셀·다른 메타 변경, 16MB 분할 청크 GC, 중단·CAS·Web Locks 부재를 검사합니다. `WIXEL_URL`, `WIXEL_SHEET_STORAGE_OUT`을 사용합니다.
+
+검증 결과와 iPhone 실기기 한계는 [61번 문서](../docs/codex/61_아이폰홈화면시트조작.md)에 기록합니다.

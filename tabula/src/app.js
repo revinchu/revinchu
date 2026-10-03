@@ -20,7 +20,7 @@ import { makeObjectGroup, ungroupObjects } from './object-group.js';
 // WIXEL 메인: 상태 · 선택 · 편집 · 키보드/마우스 · 명령 (그리기는 view.js)
 import { protectedRangeKey, rangeIsUnlocked, cellInEditRange, rangeIntersects, rangesCover, noteVisible, setNoteVisibility } from './review-state.js';
 import { publishedWorkbook } from './publish.js';
-import { watchReleaseUpdate } from './release-update.js';
+import { releaseUpdateTarget, watchReleaseUpdate } from './release-update.js';
 import { pictureEditor } from './picture-ui.js';
 import { preparePictureExport, pictureExportBounds } from './picture-export.js';
 import { objectImageSvg, prepareImageSvg, svgImageBlob } from './object-image-export.js';
@@ -19371,6 +19371,9 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['아이폰 홈 화면 앱의 시트 조작 보완', [
+    '시트 탭과 팝업을 홈 제스처 안전영역 위에 배치합니다. 모바일 작업 도구에서 현재 앱 버전과 업데이트 안내를 확인할 수 있습니다.',
+  ]],
   ['필터 단추와 표시 상태 보존', ['표의 필터 단추만 숨겨도 필터 조건·결과·정렬 유지', '요약 행을 다시 표시할 때 수식·라벨·서식 복원 · 기본 줄무늬 옵션 첫 클릭 수정', 'Excel 파일의 필터 조건·단추 표시·정렬과 숨긴 요약 설정 저장 보강']],
   ['상단 메뉴 마우스 이동', ['초록색 메뉴 줄을 마우스로 좌우로 끌거나 휠로 이동할 수 있습니다. 일반 마우스 이벤트를 보강하고 모바일 모드 밖에서도 넘치는 메뉴를 탐색합니다.']],
   ['표·피벗·슬라이서 스타일', ['모바일에서 잘리던 슬라이서 스타일 더 보기 버튼을 복원했습니다. 이름 있는 스타일 만들기·요소별 서식·복제·수정·삭제·지우기와 기본 스타일을 추가하고 XLSX 저장·가져오기에 연결했습니다.']],
@@ -19620,9 +19623,28 @@ function fitMobileScreen() {
   const rail = $('ribbon'); rail.scrollLeft = 0;
   gv.layout(); gv.ensureVisible(active.r, active.c);
 }
+let releaseUpdateAvailable = false;
+const mobileVersionLabel = () => releaseUpdateAvailable ? '새 버전이 있습니다 · 저장 후 업데이트' : '앱 버전 및 업데이트';
+function appVersionDialog() {
+  const target = releaseUpdateTarget(document, location.href);
+  const standalone = navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
+  openDialog({
+    title: releaseUpdateAvailable ? '새 버전 안내' : '앱 버전 및 업데이트', width: 430,
+    body: el('div', { class: 'form-dialog-body' },
+      el('p', {}, '현재 버전: WIXEL ' + APP_VERSION),
+      el('p', {}, '실행 방식: ' + (standalone ? '홈 화면 앱' : '브라우저')),
+      el('p', { role: 'status' }, releaseUpdateAvailable
+        ? '새 버전이 있습니다. 현재 작업을 파일로 저장한 뒤 직접 새로고침하면 적용됩니다.'
+        : target ? '새 버전은 온라인 연결 후 자동으로 확인합니다. 파일로 저장하기 전에는 새로고침하지 마세요.' : '이 실행 환경에서는 배포 버전을 자동으로 확인하지 않습니다.'),
+      el('details', {}, el('summary', {}, '진단용 실행 정보'),
+        el('code', { style: { display: 'block', overflowWrap: 'anywhere', whiteSpace: 'normal', marginTop: '8px' } }, target?.asset ?? '개발 서버 또는 단일 파일 실행'))),
+    buttons: [{ label: '파일로 저장', primary: true, action: () => run('save') }, { label: '닫기' }],
+  });
+}
 function mobileToolsDialog() {
   const catalog = [...qatCatalog(), { cmd: 'mobileHandPan', label: '손바닥 이동', tab: '모바일' }].map(c => ({ ...c, disabled: contextCommandDisabled(c.cmd) }));
   openMobileTools({
+    version: { label: mobileVersionLabel(), action: appVersionDialog },
     density: mobileWork.density, setDensity: value => mobileWork.setDensity(value),
     zoom: view.zoom, autosave, status: `${dom.saveState.textContent} · ${dom.stats.textContent}`, commands: catalog,
     quick: qatCommands().map(id => catalog.find(c => c.cmd === id)).filter(Boolean),
@@ -20146,17 +20168,16 @@ async function init() {
   };
   // 새 배포는 안내만 한다. 사용자가 파일 저장을 마친 뒤 직접 새로고침한다.
   watchReleaseUpdate({ onUpdate: () => {
+    releaseUpdateAvailable = true;
+    const mobileNotice = document.querySelector('[data-mobile-app-version]');
+    if (mobileNotice) mobileNotice.textContent = mobileVersionLabel();
     const host = document.querySelector('.titlebar .tb-center');
     if (!host || document.getElementById('releaseUpdate')) return;
     host.append(el('button', {
       id: 'releaseUpdate', type: 'button', class: 'save-state',
       title: '새 버전이 있습니다. 파일 저장 후 새로고침해 주세요.',
       style: { border: '1px solid currentColor', opacity: '1', flexShrink: '0' },
-      onclick: () => openDialog({
-        title: '새 버전 안내', width: 430,
-        body: el('p', {}, '현재 작업을 파일로 저장한 뒤 새로고침하면 적용됩니다.'),
-        buttons: [{ label: '파일로 저장', primary: true, action: () => run('save') }, { label: '닫기' }],
-      }),
+      onclick: appVersionDialog,
     }, '새 버전'));
   } });
   // 새 버전 안내 (한 번만)
