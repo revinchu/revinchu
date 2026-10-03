@@ -2694,3 +2694,15 @@ body.grid-pan-armed #gridView { touch-action:none!important; }
 #gridPanCursor { position:fixed; z-index:100; width:26px; height:26px; padding:2px; border:1px solid #5b7465; border-radius:6px; background:#fff; color:#185c37; box-shadow:0 1px 4px #0004; pointer-events:none; user-select:none; }
 #gridPanCursor[hidden] { display:none!important; }
 #gridPanCursor svg { display:block; width:100%; height:100%; }
+
+/* 피벗 필드 포인터 이동: 삽입 위치와 이동 항목은 입력을 가로채지 않는다. */
+.pp-field, .pp-item { touch-action: none; user-select: none; -webkit-user-select: none; }
+.pp-field :is(input,button), .pp-item button { touch-action: manipulation; }
+body.pivot-field-dragging, body.pivot-field-dragging * { cursor: grabbing !important; user-select: none !important; -webkit-user-select: none !important; }
+.pivot-field-ghost { z-index: 12000; max-width: 240px; padding: 6px 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 1px solid var(--green); border-radius: 5px; background: #fff; color: #183c2d; font: 12px/1.4 "Malgun Gothic", sans-serif; box-shadow: 0 4px 14px #102a2530; opacity: .95; }
+.pivot-field-ghost[data-valid="false"] { border-color: #9aa5a0; color: #59665f; }
+.pivot-field-marker { z-index: 12001; height: 2px; background: var(--green); box-shadow: 0 0 0 1px #fff; }
+.pivot-field-marker[hidden] { display: none; }
+.pp-area.pivot-field-drop-target { border-color: var(--green); background: #f3faf6; }
+.pp-field:focus-within .pp-drop, .pp-field.calc:focus-within .pp-menu { visibility: visible; }
+body.mobile-work-mode .pivot-field-ghost { font-size: 11px; padding: 4px 7px; }

@@ -493,3 +493,8 @@ node tools/mobile-layout.mjs
 ## iPhone 마우스 손바닥 이동
 
 `node tools/mobile-hand-pan.mjs`는 포인터만 전달되는 버튼 조합과 호환 Mouse Events 중복, 먼저 뜨는 우클릭, 첫 buttons3, 버튼 지연·해제·취소·시트 전환, 펜 구분, 상단 손바닥 버튼의 한 버튼/터치 이동 및 문서 불변을 검사한다. `WIXEL_BROWSER=chromium|webkit`, 로컬 `WIXEL_URL`, D: 결과용 `WIXEL_HAND_PAN_OUT`, 부분 이름 필터 `WIXEL_HAND_PAN_FILTER`를 사용한다. WebKit에서는 Chromium CDP 터치 주입 2개를 이유와 함께 제외하고 나머지 포인터/마우스/키보드 경로를 검사한다. 실제 iPhone/Bluetooth 인증과 구분하며 [56번 문서](../docs/codex/56_아이폰손바닥이동.md)에 범위를 기록한다.
+
+
+## 피벗 필드 끌기와 권한
+
+`node tools/pivot-field-drag.mjs`는 네 영역 추가·영역 간 이동·재정렬·중복 값·Σ 위치·Undo·취소·자동 스크롤·작은 화면을 실제 마우스 및 모의 Pointer/CDP 터치로 확인한다. `WIXEL_BROWSER=chromium|webkit`, `WIXEL_URL`, D: 출력 경로 `WIXEL_PIVOT_DRAG_OUT`, 부분 이름 `WIXEL_PIVOT_DRAG_FILTER`를 사용한다. `tools/pivot-pane-permissions.mjs`는 피벗 허용 보호·최종본·읽기 전용·계산 필드 공유 및 오래된 편집기 적용을 검사한다. 개인 문서나 원격 쓰기 없이 합성 문서를 사용하며 실제 기기 검증과 구분한다. 범위와 남은 차이는 [57번 문서](../docs/codex/57_피벗필드이동과검수.md)를 참고한다.
