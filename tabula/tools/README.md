@@ -583,3 +583,12 @@ node tools/mobile-layout.mjs
 ### 행·열 머리글 경계 조절
 
 `node tools/header-resize.mjs`는 마우스 hover·드래그·더블클릭, 배율·틀 고정·스크롤, 다중 선택, Esc/blur 취소, 보호·최종본 및 XLSX 크기 왕복을 검사합니다. `WIXEL_URL`은 로컬 서버이며 `WIXEL_BROWSER=chromium,webkit`, `WIXEL_HEADER_RESIZE_OUT`은 D: 결과 경로, `WIXEL_HEADER_RESIZE_FILTER`는 사례 이름 필터입니다. 실제 iPad 하드웨어 검사가 아닌 격리 합성 문서 검사입니다.
+
+
+### 문서 전환·늦은 응답 회귀
+
+`node tools/document-switch.mjs`는 합성 XLSX/WIXEL의 순차·지연 열기, 늦은 오류·셀 준비, 새 문서, 같은 파일명, 편집·Undo/Redo·자동 저장·재열기와 이전 진행창 제거를 검사합니다. `WIXEL_DOCUMENT_SWITCH_OUT`은 D: 결과 경로, `WIXEL_DOCUMENT_SWITCH_FILTER`는 사례 이름 필터입니다.
+
+`node tools/document-published-switch.mjs`는 합성 API로 게시본·시작 URL의 늦은 응답, 보기 종료, 현재 게시본 갱신과 사본, 실패한 열기 후 갱신 재개, 피벗 준비 취소·서식 보존을 검사합니다. `WIXEL_DOCUMENT_PUBLISHED_OUT`과 `WIXEL_DOCUMENT_PUBLISHED_FILTER`로 결과 경로와 사례를 지정합니다.
+
+두 도구 모두 `WIXEL_URL`은 로컬 서버만 허용하며 `WIXEL_BROWSER=chromium,webkit`와 `PLAYWRIGHT_MODULE`을 사용합니다. 실제 iPad의 Safari 세션을 제어하는 검사는 아닙니다.

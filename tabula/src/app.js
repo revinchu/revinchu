@@ -1,3 +1,4 @@
+import { createDocumentOpenGate, isDocumentOpenCancelled } from './document-session.js';
 import { tableCellDisplayStyle } from './table-format.js';
 import { filterButtonVisible, filterButtonsVisible, filterWithButtons } from './filter-display.js';
 import { createSheetPicker } from './sheet-picker-ui.js';
@@ -174,6 +175,7 @@ let wb;
 let si = 0;
 let docName = '통합 문서1';
 let autosave = true;
+let pageDeparting = false;
 let remoteDoc = false; // 이 문서의 원격 저장은 사용자가 위치를 선택한 뒤에만 시작
 let allowPrivateImports = false; // 파일/JSON에 저장하지 않는 현재 문서 세션의 사용자 권한
 let dirty = false;
@@ -11509,10 +11511,10 @@ function mergeFmt(base, extra) {
   return Object.assign(out, extra);
 }
 
-const pivotWritten = new Map(); // 피벗마다 마지막으로 그린 칸 서식 (업데이트 시 셀 서식 유지)
+let pivotWritten = new Map(); // 피벗마다 마지막으로 그린 칸 서식 (업데이트 시 셀 서식 유지)
 // ── 피벗 테이블 조건부 서식 범위 (엑셀: 선택한 셀 / "값" 을 표시하는 모든 셀 / "행 필드"에 대해 "값"을 표시하는 모든 셀) ──
 // 규칙에 pivot: { name, scope: 'selection' | 'data' | 'field', value, rowField, colField } 를 두고, 피벗을 다시 그릴 때마다 범위를 새로 구함
-const pivotLayouts = new Map();
+let pivotLayouts = new Map();
 let openingPivots = false; // 파일을 열면서 피벗을 그리는 중 (엑셀이 저장한 상위 N 결과를 그대로 씀)
 function pivotLayoutFrom(grid, pm, d, top, left) {
   const base = pm.pageRows + pm.headerRows;
@@ -14650,11 +14652,13 @@ async function pickFile(mode) {
     try {
       const [h] = await window.showOpenFilePicker({ id: 'wixel-open', types: [{ description: '스프레드시트', accept: { 'application/octet-stream': ['.xlsx', '.xlsm', '.xlsb', '.xls', '.xltx', '.xltm', '.ods', '.csv', '.tsv', '.txt', '.wixel', '.json'] } }] });
       if (!h) return;
-      await openFileObject(await h.getFile(), mode);
-      if (/\.xls[xm]$/i.test(h.name)) fileHandle = h;
+      const request = beginDocumentOpen();
+      const file = await h.getFile(); request.assertCurrent();
+      const opened = await openFileObject(file, mode, request);
+      if (opened && request.isCurrent() && /\.xls[xm]$/i.test(h.name)) fileHandle = h;
       return;
     } catch (err) {
-      if (err?.name === 'AbortError') return;
+      if (err?.name === 'AbortError' || isDocumentOpenCancelled(err)) return;
     }
   }
   dom.fileInput.value = '';
@@ -14666,25 +14670,28 @@ async function onFilePicked() {
   if (file) await openFileObject(file, fileMode);
 }
 
-async function openFileObject(file, mode) {
-  fileMode = mode;
+async function openFileObject(file, mode, request = beginDocumentOpen()) {
+  const importBook = wb, importId = docId;
+  const current = () => { request.assertCurrent(); if (mode !== 'open' && (wb !== importBook || docId !== importId)) throw Object.assign(new Error('가져올 문서가 바뀌었습니다.'), { code:'DOCUMENT_OPEN_CANCELLED' }); };
   const base = file.name.replace(/\.[^.]+$/, '');
   try {
     if (/\.(xlsx|xlsm|xlsb|xltx|xltm|xls|xlt)$/i.test(file.name)) {
       // 큰 파일도 화면이 멈추지 않도록 나눠서 읽고, 진행 상황을 보여 줌
-      const prog = progressOverlay(`'${file.name}' 여는 중`);
+      const prog = progressOverlay(`'${file.name}' 여는 중`, request);
       let res;
       try {
-        const bytes = new Uint8Array(await file.arrayBuffer());
+        const bytes = new Uint8Array(await file.arrayBuffer()); current();
         // 엑셀 97-2003(.xls): OLE 복합 문서 (확장자와 달리 내용이 xlsx 인 파일도 있어 서명으로 판단)
         const ole = bytes[0] === 0xd0 && bytes[1] === 0xcf && bytes[2] === 0x11 && bytes[3] === 0xe0;
-        res = ole ? readXls(bytes) : await readXlsxAsync(bytes, (st) => prog.set(st.p * 0.6, st.msg));
-        if (fileMode === 'open') await loadWorkbookAsync(res.data, base, res.active, prog);
+        res = ole ? readXls(bytes) : await readXlsxAsync(bytes, (st) => { current(); prog.set(st.p * 0.6, st.msg); });
+        current();
+        if (mode === 'open') await loadWorkbookAsync(res.data, base, res.active, prog, request);
       } finally {
         prog.close();
       }
+      current();
       const { data, warnings } = res;
-      if (fileMode === 'open') {
+      if (mode === 'open') {
         // 이미 불러옴
       } else {
         wb.transact(() => {
@@ -14702,42 +14709,45 @@ async function openFileObject(file, mode) {
         }, meta());
         toast(`시트 ${data.sheets.length}개를 가져왔습니다.`);
       }
-      if (fileMode === 'open' && data.vba && !templateOpening) warnings.push('매크로가 포함된 통합 문서입니다. WIXEL 는 매크로를 실행하지 않지만 [보기 → 매크로]에서 코드를 볼 수 있고, .xlsm 으로 저장하면 매크로가 그대로 유지됩니다.');
+      if (mode === 'open' && data.vba && !templateOpening) warnings.push('매크로가 포함된 통합 문서입니다. WIXEL 는 매크로를 실행하지 않지만 [보기 → 매크로]에서 코드를 볼 수 있고, .xlsm 으로 저장하면 매크로가 그대로 유지됩니다.');
       if (warnings.length) alertDialog('가져오기', warnings.join('\n'));
-      else if (fileMode === 'open') toast(`'${file.name}'을(를) 열었습니다.`);
-      return;
+      else if (mode === 'open') toast(`'${file.name}'을(를) 열었습니다.`);
+      return true;
     }
     // OpenDocument 스프레드시트 (.ods 압축 · .fods 단일 XML)
     if (/\.(ods|fods)$/i.test(file.name)) {
       const res = readOds(/\.fods$/i.test(file.name) ? await file.text() : new Uint8Array(await file.arrayBuffer()));
-      if (fileMode === 'open') loadWorkbook(res.data, base, 0);
+      current();
+      if (mode === 'open') loadWorkbook(res.data, base, 0, request);
       else wb.transact(() => { for (const s of res.data.sheets) { let nm = s.name; for (let n = 2; wb.sheetIndexByName(nm) >= 0; n++) nm = `${s.name} (${n})`.slice(0, 31); const at = wb.addSheet(nm); wb.replaceSheet(at, { ...s, name: nm }); } }, meta());
       toast(`'${file.name}'을(를) 열었습니다.`);
-      return;
+      return true;
     }
     // 큰 CSV: 조각씩 읽어 바로 열 블록으로 (수백만 행도 화면이 멈추지 않음)
-    if (/\.(csv|tsv|txt)$/i.test(file.name) && file.size > 8 * 1024 * 1024 && fileMode === 'open') {
-      await openBigCsv(file, base);
-      return;
+    if (/\.(csv|tsv|txt)$/i.test(file.name) && file.size > 8 * 1024 * 1024 && mode === 'open') {
+      await openBigCsv(file, base, request);
+      return true;
     }
-    const text = await readTextSmart(file);
+    const text = await readTextSmart(file); current();
     if (/\.(json|tabula|wixel)$/i.test(file.name)) {
       const data = JSON.parse(text);
-      loadWorkbook(data.workbook ?? data, data.docName ?? base, data.si ?? 0);
+      loadWorkbook(data.workbook ?? data, data.docName ?? base, data.si ?? 0, request);
       toast(`'${file.name}'을(를) 열었습니다.`);
-      return;
+      return true;
     }
     const rows = parseDelimited(text.replace(/^﻿/, ''), guessDelimiter(text));
-    if (fileMode === 'open') {
-      loadWorkbook({ sheets: [{ name: base.slice(0, 31) || 'Sheet1', cells: {} }] }, base);
+    if (mode === 'open') {
+      loadWorkbook({ sheets: [{ name: base.slice(0, 31) || 'Sheet1', cells: {} }] }, base, 0, request);
       writeRows(rows, 0, 0);
     } else {
       writeRows(rows, active.r, active.c);
     }
     toast(`${rows.length}개 행을 가져왔습니다.`);
+    return true;
   } catch (err) {
+    if (isDocumentOpenCancelled(err) || !request.isCurrent()) return false;
     alertDialog('WIXEL', `파일을 열 수 없습니다: ${err.message}`);
-  }
+  } finally { finishDocumentOpen(request); }
 }
 
 /** 글자 파일: UTF-8(BOM 포함)이 기본, UTF-8 이 아니면 한글 엑셀 CSV 의 EUC-KR(CP949), UTF-16 BOM 도 인식 */
@@ -14749,17 +14759,20 @@ async function readTextSmart(file) {
   try { return new TextDecoder('euc-kr').decode(bytes); } catch { return new TextDecoder().decode(bytes); }
 }
 
-async function openBigCsv(file, base) {
-  const prog = progressOverlay(`'${file.name}' 여는 중`);
+async function openBigCsv(file, base, request) {
+  const prog = progressOverlay(`'${file.name}' 여는 중`, request);
   try {
     let last = performance.now();
     const encoding = await detectTextFileEncoding(file, async (bytes, total) => {
+      request.assertCurrent();
       if (performance.now() - last > 80) { prog.set(0.1 * bytes / Math.max(1, total), '문자 인코딩 확인 중'); await yieldUI(); last = performance.now(); }
     });
+    request.assertCurrent();
     const head = new TextDecoder(encoding).decode(await file.slice(0, 65536).arrayBuffer(), { stream: true });
+    request.assertCurrent();
     const reader = new CsvBlockReader(guessDelimiter(head), Math.min(1 << 24, Math.max(1024, Math.round(file.size / 50))));
     await readDecodedChunks(file, encoding, async (text, bytes) => {
-      reader.push(text);
+      request.assertCurrent(); reader.push(text);
       if (performance.now() - last > 80) {
         prog.set(0.1 + 0.5 * Math.min(1, bytes / file.size), `${reader.n.toLocaleString()}행 읽는 중`);
         await yieldUI(); last = performance.now();
@@ -14768,7 +14781,7 @@ async function openBigCsv(file, base) {
     const { header, block } = reader.finish();
     const cells = new Map();
     header.forEach((h, j) => { if (h !== '') cells.set(`0,${j}`, { raw: h, style: { bold: true } }); });
-    await loadWorkbookAsync({ sheets: [{ name: base.slice(0, 31) || 'Sheet1', cells, blocks: [block], freeze: { rows: 1, cols: 0 } }] }, base, 0, prog);
+    await loadWorkbookAsync({ sheets: [{ name: base.slice(0, 31) || 'Sheet1', cells, blocks: [block], freeze: { rows: 1, cols: 0 } }] }, base, 0, prog, request);
     toast(`'${file.name}' — ${block.n.toLocaleString()}행을 열었습니다.`);
   } finally {
     prog.close();
@@ -14780,84 +14793,116 @@ function writeRows(rows, r0, c0) {
   if (rows.length) selectRange({ r1: r0, c1: c0, r2: r0 + rows.length - 1, c2: c0 + delimitedRowWidth(rows) - 1 }, 'cells', { r: r0, c: c0 });
 }
 
-function loadWorkbook(data, name, activeSheet = 0) {
-  if (editing) endEditUI();
-  libraryFlush();
-  fileHandle = null;
-  remoteDoc = false;
-  allowPrivateImports = false;
-  NET.cache.clear();
-  clearTimeout(serverTimer);
-  wb.load(data);
-  renderImportedPivots();
-  afterLoad(name, activeSheet);
+const documentOpenGate = createDocumentOpenGate();
+const pendingOpenProgress = new Set();
+function beginDocumentOpen() {
+  const request = documentOpenGate.begin();
+  request.sourceBook = wb;
+  // 취소된 읽기가 끝나기를 기다리며 새 문서의 마우스 입력을 가리지 않는다.
+  for (const progress of pendingOpenProgress) progress.box.remove();
+  pendingOpenProgress.clear();
+  return request;
+}
+let activeDocumentRequest = null;
+function finishDocumentOpen(request) {
+  // 실패·시트 가져오기는 현재 문서를 유지하되 새 토큰으로 감시만 재개한다.
+  // 무효화된 이전 열기나 이미 진행 중이던 응답을 다시 살리지 않는다.
+  if (!request.isCurrent() || wb !== request.sourceBook) return;
+  request.keepUrl = activeDocumentRequest?.keepUrl ?? request.keepUrl;
+  activeDocumentRequest = request;
+  if (publishedWatch?.book === wb) publishedWatch.request = request;
+}
+const preparedPivotCaches = new WeakMap();
+function workbookPivotCaches(book) {
+  let cache = preparedPivotCaches.get(book);
+  if (!cache) { cache = { layouts:new Map(), written:new Map() }; preparedPivotCaches.set(book, cache); }
+  return cache;
 }
 
-/** 큰 파일: 셀 준비와 피벗 다시 그리기를 나눠서 (진행 표시 prog: {set(p, 메시지)}) */
-async function loadWorkbookAsync(data, name, activeSheet, prog) {
+/** 준비 중인 문서는 화면·자동 저장에 노출하지 않는다. 이 콜백 안에서는 await 금지. */
+function prepareWorkbookStep(book, activeSheet, work) {
+  const previous = wb, previousSheet = si, previousOpening = openingPivots;
+  const previousLayouts = pivotLayouts, previousWritten = pivotWritten, cache = workbookPivotCaches(book);
+  pivotLayouts = cache.layouts; pivotWritten = cache.written;
+  wb = book; si = clamp(activeSheet ?? 0, 0, book.sheets.length - 1); openingPivots = true;
+  try { return work(); }
+  finally { wb = previous; si = previousSheet; openingPivots = previousOpening; pivotLayouts = previousLayouts; pivotWritten = previousWritten; }
+}
+function installWorkbook(next, name, activeSheet, request, nextDocId) {
+  request.assertCurrent();
   if (editing) endEditUI();
   libraryFlush();
-  fileHandle = null;
-  remoteDoc = false;
-  allowPrivateImports = false;
+  clearTimeout(saveTimer); clearTimeout(serverTimer); clearTimeout(autoPivotTimer);
+  cancelHeaderResize();
+  if (publishedWatch?.request !== request) stopPublishedWatch();
+  fileHandle = null; remoteDoc = false; allowPrivateImports = false;
   NET.cache.clear();
-  clearTimeout(serverTimer);
+  // 이전 문서의 지연 계산 완료가 새 문서의 변경 알림을 발생시키지 않도록 분리한다.
+  next.listeners = wb.listeners; wb.listeners = new Set();
+  wb = next; activeDocumentRequest = request;
+  request.sourceBook = null; // 전환이 끝난 큰 이전 문서를 토큰이 계속 붙잡지 않는다.
+  const cache = workbookPivotCaches(next); pivotLayouts = cache.layouts; pivotWritten = cache.written; pivotSrcVer.clear();
+  if (!request.keepUrl && (/[?&](view|doc)=/.test(location.search) || location.hash.startsWith('#view='))) {
+    const url = new URL(location.href); url.searchParams.delete('view'); url.searchParams.delete('doc');
+    if (url.hash.startsWith('#view=')) url.hash = '';
+    history.replaceState(null, '', url.pathname + url.search + url.hash);
+  }
+  afterLoad(name, activeSheet, nextDocId);
+}
+function loadWorkbook(data, name, activeSheet = 0, request = beginDocumentOpen()) {
+  request.assertCurrent();
+  const nextDocId = pendingDocId; pendingDocId = null;
+  const next = new Workbook(data);
+  prepareWorkbookStep(next, activeSheet, renderImportedPivots);
+  installWorkbook(next, name, activeSheet, request, nextDocId);
+  return true;
+}
+
+/** 셀·피벗을 새 문서에서 준비한 뒤 최신 열기 요청만 한 번에 화면에 반영한다. */
+async function loadWorkbookAsync(data, name, activeSheet, prog, request = beginDocumentOpen()) {
+  request.assertCurrent();
+  const nextDocId = pendingDocId; pendingDocId = null;
   const next = new Workbook();
-  await next.loadAsync(data, (p) => prog?.set(0.6 + 0.25 * p, '셀 준비 중'));
-  next.listeners = wb.listeners; // 화면 갱신 연결 유지
-  wb = next;
-  si = clamp(activeSheet, 0, wb.sheets.length - 1);
-  if (isHiddenSheet(si)) si = Math.max(0, wb.sheets.findIndex((_, i) => !isHiddenSheet(i)));
-  sheetSel.clear();
-  chartSel = null;
-  const list = allPivots().filter((e) => e.def.captureFmt || e.def.needsRender);
-  // 큰 원본: 모든 피벗 · 슬라이서 필드로 요약 캐시를 한 번에 준비
+  await next.loadAsync(data, (p) => { request.assertCurrent(); prog?.set(0.6 + 0.25 * p, '셀 준비 중'); });
+  request.assertCurrent();
+  const list = prepareWorkbookStep(next, activeSheet, () => allPivots().filter((e) => e.def.captureFmt || e.def.needsRender));
   prog?.set(0.85, '요약 캐시 준비 중');
-  await yieldUI();
-  warmAll();
-  // 모든 피벗의 바뀐 칸을 모았다가 끝에서 한 번에 의존 수식을 찾음 (피벗마다 수십만 수식을 훑지 않게)
-  wb.holdDirty = true;
-  wb.noUndo = true;
-  openingPivots = true;
-  // 피벗마다 화면 전체를 다시 그리지 않게 (afterLoad 에서 한 번 그림)
-  const listeners = wb.listeners;
-  wb.listeners = [];
+  await yieldUI(); request.assertCurrent();
+  prepareWorkbookStep(next, activeSheet, warmAll);
+  next.holdDirty = true; next.noUndo = true;
   try {
     for (let i = 0; i < list.length; i++) {
       prog?.set(0.85 + 0.15 * (i / Math.max(1, list.length)), `피벗 테이블 계산 중 (${i + 1}/${list.length})`);
-      await new Promise((res) => setTimeout(res, 0));
+      await yieldUI(); request.assertCurrent();
       const e = list[i];
-      // 한 피벗의 셀 수만 개를 한 번에 반영 — 실행 취소 기록은 afterLoad 에서 비움
-      try { wb.transact(() => writePivot(e.si, e.def)); } catch (err) { console.warn('피벗 다시 그리기 실패', err); }
+      prepareWorkbookStep(next, activeSheet, () => {
+        try { next.transact(() => writePivot(e.si, e.def)); } catch (err) { console.warn('피벗 다시 그리기 실패', err); }
+      });
     }
-  } finally {
-    openingPivots = false;
-    wb.listeners = listeners;
-    wb.holdDirty = false;
-    wb.noUndo = false;
-    if (!wb.graph && wb.pending.length) {
-      // 피벗이 파일과 다르게 그린 칸의 의존 수식: 수식이 아주 많으면 의존 그래프를 만드는 데 몇 초가 걸리므로
-      // 열기를 막지 않고 백그라운드에서 그래프를 만든 뒤 반영 (그동안은 엑셀이 저장한 값을 보여 줌)
-      const pts = wb.pending;
-      wb.pending = [];
-      const book = wb;
-      setTimeout(() => {
-        book.prepareGraph().catch(() => false).then(() => { book.dirtyPoints(pts); if (wb === book) renderAll(); });
-      }, 0);
-    } else wb.flushPending();
-  }
-  afterLoad(name, activeSheet);
+  } finally { next.holdDirty = false; next.noUndo = false; }
+  request.assertCurrent();
+  if (!next.graph && next.pending.length) {
+    const points = next.pending; next.pending = [];
+    setTimeout(() => {
+      if (wb !== next) return;
+      next.prepareGraph().catch(() => false).then(() => { if (wb !== next) return; next.dirtyPoints(points); renderAll(); });
+    }, 0);
+  } else next.flushPending();
+  installWorkbook(next, name, activeSheet, request, nextDocId);
+  return true;
 }
 
 /** 진행 표시 창 */
-function progressOverlay(title) {
+function progressOverlay(title, request = null) {
   const bar = el('div', { class: 'lp-bar' });
   const msg = el('div', { class: 'lp-msg' }, '');
   const box = el('div', { class: 'load-progress', role: 'progressbar' }, el('div', { class: 'lp-box' }, el('div', { class: 'lp-title' }, title), msg, el('div', { class: 'lp-track' }, bar)));
   document.body.append(box);
+  const progress = { box };
+  if (request) { if (request.isCurrent()) pendingOpenProgress.add(progress); else box.remove(); }
   return {
     set(p, m) { bar.style.width = `${Math.round(Math.max(0, Math.min(1, p)) * 100)}%`; if (m) msg.textContent = m; },
-    close() { box.remove(); },
+    close() { box.remove(); pendingOpenProgress.delete(progress); },
   };
 }
 
@@ -14957,7 +15002,7 @@ function redrawPivotsQuiet() {
   wb.redoStack = [];
 }
 
-function afterLoad(name, activeSheet) {
+function afterLoad(name, activeSheet, nextDocId = null) {
   // 계산 설정이 없는 외부 파일은 Excel 기본값(자동)을 명시해 로컬 재열기에도 유지한다.
   if (!wb.calculation) { wb.calculation = { mode: 'auto' }; wb.manualCalc = false; }
   endBorderDraw();
@@ -14969,8 +15014,7 @@ function afterLoad(name, activeSheet) {
     if (wb.props?.readOnlyRecommended && !viewOnly) toast('작성자가 읽기 전용으로 열도록 권장한 통합 문서입니다. 바꾸지 않을 때는 읽기만 하세요.');
   }, 0);
   // 새로 연 문서는 보관함의 새 항목 (보관함에서 연 문서는 그 항목)
-  docId = pendingDocId ?? newDocId();
-  pendingDocId = null;
+  docId = nextDocId ?? newDocId();
   lastVersionAt = 0;
   libDirty = true;
   scheduleLibrarySave();
@@ -14993,7 +15037,8 @@ function afterLoad(name, activeSheet) {
   renderAll();
   showSheetStart();
   // 수식 의존 그래프를 쉬는 동안 미리 만듦 (첫 편집도 바로 다시 계산)
-  setTimeout(() => { wb.prepareGraph().catch((e) => console.warn('의존 그래프 준비 실패', e)); }, 1200);
+  const loadedBook = wb;
+  setTimeout(() => { if (wb === loadedBook) loadedBook.prepareGraph().catch((e) => console.warn('의존 그래프 준비 실패', e)); }, 1200);
   dirty = true;
   if (bigBook()) scheduleAutosave();
   else { saveToStorage(); scheduleServerSave(0); }
@@ -15016,57 +15061,62 @@ function blankBook() {
 
 async function newWorkbook(sample) {
   const go = async () => {
-    const names = await serverNames();
-    if (sample?.file) {
-      // 파일로 된 서식 (xlsx · xlsm): 받아서 그대로 열고, 버튼에 내장 동작을 연결
-      try {
-        let res = await fetch(encodeURI(sample.file)).catch(() => null);
-        let bytes;
-        if (res?.ok) bytes = await res.arrayBuffer();
-        else {
-          // 엑셀 파일을 못 올리는 곳: base64 텍스트본
-          res = await fetch(encodeURI(`${sample.file}.b64.txt`)).catch(() => null);
-          if (!res?.ok) throw new Error(`${res?.status ?? '연결 안 됨'}`);
-          bytes = fromBase64((await res.text()).trim());
-        }
-        const ext = sample.file.split('.').pop();
-        templateOpening = true;
-        try { await openFileObject(new File([bytes], `${sample.name}.${ext}`), 'open'); } finally { templateOpening = false; }
-        wb.sheets.forEach((sh, i) => {
-          const list = (sh.shapes ?? []).map((o) => (!o.macro && /필터만 적용/.test(o.text ?? '') ? { ...o, macro: 'ApplyFilterOnly' } : o));
-          if (list.some((o, k) => o !== sh.shapes[k])) wb.setSheetProp(i, 'shapes', list);
-        });
-        gv.renderObjectsAll();
-      } catch (e) { alertDialog('서식 파일', `'${sample.name}' 서식을 불러오지 못했습니다 (${e.message}). 배포 파일의 assets 폴더를 확인하세요.`); }
-      return;
-    }
-    if (sample) {
-      let name = sample.name;
-      for (let n = 2; names.includes(name); n++) name = `${sample.name} ${n}`;
-      if (sample.big) {
-        // 빅데이터 예제: 데이터 만들기 · 피벗 계산을 진행 표시와 함께
-        const prog = progressOverlay(`'${sample.name}' 만드는 중`);
+    const request = beginDocumentOpen();
+    try {
+      const names = await serverNames(); request.assertCurrent();
+      if (sample?.file) {
+        // 파일로 된 서식 (xlsx · xlsm): 받아서 그대로 열고, 버튼에 내장 동작을 연결
         try {
-          prog.set(0.05, '데이터 만드는 중');
-          await yieldUI();
-          const data = sample.build();
-          await loadWorkbookAsync(data, name, 0, prog);
-        } finally {
-          prog.close();
-        }
-      } else loadWorkbook(sample.build(), name);
-    } else {
-      let n = 1;
-      while (names.includes(`통합 문서${n}`) || `통합 문서${n}` === docName) n++;
-      loadWorkbook(blankBook(), `통합 문서${n}`);
-    }
+          let res = await fetch(encodeURI(sample.file)).catch(() => null);
+          let bytes;
+          if (res?.ok) bytes = await res.arrayBuffer();
+          else {
+            // 엑셀 파일을 못 올리는 곳: base64 텍스트본
+            res = await fetch(encodeURI(`${sample.file}.b64.txt`)).catch(() => null);
+            if (!res?.ok) throw new Error(`${res?.status ?? '연결 안 됨'}`);
+            bytes = fromBase64((await res.text()).trim());
+          }
+          request.assertCurrent();
+          const ext = sample.file.split('.').pop();
+          templateOpening = true;
+          try { if (!await openFileObject(new File([bytes], `${sample.name}.${ext}`), 'open', request)) return; request.assertCurrent(); } finally { templateOpening = false; }
+          wb.sheets.forEach((sh, i) => {
+            const list = (sh.shapes ?? []).map((o) => (!o.macro && /필터만 적용/.test(o.text ?? '') ? { ...o, macro: 'ApplyFilterOnly' } : o));
+            if (list.some((o, k) => o !== sh.shapes[k])) wb.setSheetProp(i, 'shapes', list);
+          });
+          gv.renderObjectsAll();
+        } catch (e) { if (isDocumentOpenCancelled(e) || !request.isCurrent()) return; alertDialog('서식 파일', `'${sample.name}' 서식을 불러오지 못했습니다 (${e.message}). 배포 파일의 assets 폴더를 확인하세요.`); }
+        return;
+      }
+      if (sample) {
+        let name = sample.name;
+        for (let n = 2; names.includes(name); n++) name = `${sample.name} ${n}`;
+        if (sample.big) {
+          // 빅데이터 예제: 데이터 만들기 · 피벗 계산을 진행 표시와 함께
+          const prog = progressOverlay(`'${sample.name}' 만드는 중`, request);
+          try {
+            prog.set(0.05, '데이터 만드는 중');
+            await yieldUI(); request.assertCurrent();
+            const data = sample.build();
+            await loadWorkbookAsync(data, name, 0, prog, request);
+          } finally {
+            prog.close();
+          }
+        } else loadWorkbook(sample.build(), name, 0, request);
+      } else {
+        let n = 1;
+        while (names.includes(`통합 문서${n}`) || `통합 문서${n}` === docName) n++;
+        loadWorkbook(blankBook(), `통합 문서${n}`, 0, request);
+      }
+    } catch (err) { if (!isDocumentOpenCancelled(err)) throw err; }
+    finally { finishDocumentOpen(request); }
   };
   if (!autosave && dirty) {
     openDialog({
       title: 'WIXEL', body: '저장하지 않은 변경 내용이 있습니다. 새 통합 문서를 만드시겠습니까?',
       buttons: [{ label: '새로 만들기', primary: true, action: go }, { label: '취소' }],
     });
-  } else go();
+  } else return go();
 }
 
 function renameDoc(name) {
@@ -15086,13 +15136,14 @@ let lastVersionAt = 0;
 const LIB_CELL_LIMIT = 300000; // 이보다 큰 문서는 보관함 대신 큰 문서 자동 저장만
 const VERSION_EVERY = 10 * 60 * 1000; // 편집 중에는 10분마다 버전 하나
 function scheduleLibrarySave() {
+  if (pageDeparting) return;
   clearTimeout(libTimer);
   libTimer = setTimeout(() => whenIdle(() => libraryFlush()), 5000);
 }
 /** 지금 문서를 보관함에 (직렬화는 바로 — 다른 문서를 열기 직전에 불러도 안전), version: { label } 이면 버전 기록에도 */
 function libraryFlush({ version = null, force = false } = {}) {
   clearTimeout(libTimer);
-  if (viewOnly) return Promise.resolve(null);
+  if (viewOnly || pageDeparting) return Promise.resolve(null);
   if (!force && !libDirty && !version) return Promise.resolve(null);
   if (!version && cellCount() === 0 && !wb.sheets.some((x) => x.charts?.length || x.shapes?.length)) return Promise.resolve(null);
   if (!wb?.sheets?.length || cellCount() > LIB_CELL_LIMIT) return Promise.resolve(null);
@@ -15129,19 +15180,20 @@ function libraryFlush({ version = null, force = false } = {}) {
   });
 }
 async function openFromLibrary(id, { ts = null, copy = false } = {}) {
+  const request = beginDocumentOpen();
   const context = recoveryContext();
-  const prog = progressOverlay('보관함에서 여는 중');
+  const prog = progressOverlay('보관함에서 여는 중', request);
   try {
     // 현재 문서부터 보존: 같은 id를 먼저 읽으면 타 탭의 새 revision을 관측해 낡은 화면을 덮어쓸 수 있습니다.
     await preserveRecoverySnapshot('보관 문서 열기 전', context);
     const data = ts ? await libLoadVersion(id, ts) : await libLoad(id);
-    context.assertCurrent();
+    request.assertCurrent(); context.assertCurrent();
     if (!data?.workbook) { alertDialog('WIXEL', '보관함에서 문서를 찾을 수 없습니다.'); return; }
     pendingDocId = copy ? newDocId() : id;
     const name = copy ? `${data.docName ?? '통합 문서'} (${formatDate(ts ?? Date.now())} 버전)` : data.docName;
-    await loadWorkbookAsync(data.workbook, name, data.si ?? 0, prog);
-  } catch (err) { alertDialog('보관 문서 열기', err.message); } finally {
-    prog.close();
+    await loadWorkbookAsync(data.workbook, name, data.si ?? 0, prog, request);
+  } catch (err) { if (!isDocumentOpenCancelled(err) && request.isCurrent()) alertDialog('보관 문서 열기', err.message); } finally {
+    finishDocumentOpen(request); prog.close();
   }
 }
 
@@ -15322,19 +15374,20 @@ async function versionHistory(id = docId, { local = false } = {}) {
             el('button', { class: 'lnk', onclick: () => { dlg.close(); openFromLibrary(id, { ts: v.ts, copy: true }); } }, '사본으로 열기'),
             el('button', {
               class: 'btn', onclick: async (event) => {
-                const button = event.currentTarget, context = recoveryContext();
+                const button = event.currentTarget, context = recoveryContext(), request = beginDocumentOpen();
                 button.disabled = true;
                 try {
                   const data = await libLoadVersion(id, v.ts);
                   if (!data?.workbook) throw new Error('버전을 찾을 수 없습니다.');
                   await preserveRecoverySnapshot('브라우저 버전 복원 전', context);
+                  request.assertCurrent();
                   dlg.close(); pendingDocId = id;
-                  const prog = progressOverlay('버전 복원 중');
-                  try { await loadWorkbookAsync(data.workbook, data.docName ?? entry.name, data.si ?? 0, prog); } finally { prog.close(); }
+                  const prog = progressOverlay('버전 복원 중', request);
+                  try { await loadWorkbookAsync(data.workbook, data.docName ?? entry.name, data.si ?? 0, prog, request); } finally { prog.close(); }
                   const saved = await libraryFlush({ version: { label: `${formatDate(v.ts)} 버전으로 복원` } });
                   toast(saved ? `${formatDate(v.ts)} 버전으로 복원했습니다.` : '이전 버전을 화면에 열었습니다. 브라우저 저장을 완료하지 못했으므로 파일로 저장하세요.');
-                } catch (err) { alertDialog('버전 복원', err.message); }
-                finally { button.disabled = false; }
+                } catch (err) { if (!isDocumentOpenCancelled(err) && request.isCurrent()) alertDialog('버전 복원', err.message); }
+                finally { finishDocumentOpen(request); button.disabled = false; }
               },
             }, '이 버전 복원')))),
       ),
@@ -15443,7 +15496,14 @@ function autoRepublish() {
 
 // 읽기 전용 보기 (게시된 문서 · 링크)
 let viewOnly = false;
-function enterViewMode(data, { pubId = null } = {}) {
+let publishedWatch = null;
+function stopPublishedWatch() {
+  if (publishedWatch) clearInterval(publishedWatch.timer);
+  publishedWatch = null;
+}
+function enterViewMode(data, { pubId = null, request = beginDocumentOpen() } = {}) {
+  request.assertCurrent(); request.keepUrl = true;
+  stopPublishedWatch();
   viewOnly = true;
   allowPrivateImports = false;
   NET.cache.clear();
@@ -15452,65 +15512,73 @@ function enterViewMode(data, { pubId = null } = {}) {
   const v = data.view ?? {};
   view.showHeaders = !!v.headers;
   if (v.grid === false) view.showGrid = false;
+  document.querySelector('.view-bar')?.remove();
   const bar = el('div', { class: 'view-bar' },
     el('b', {}, v.title ?? data.docName ?? 'WIXEL'),
     el('span', { class: 'muted' }, ` · 읽기 전용${v.published ? ` · 게시: ${formatDate(v.published)}` : ''}`),
     el('span', { class: 'view-live', hidden: !pubId }, '● 자동 새로 고침'),
-    el('button', { class: 'btn', onclick: () => { exitViewMode(data); } }, '편집용 사본 만들기'));
+    el('button', { class: 'btn', onclick: () => { if (viewOnly && activeDocumentRequest?.isCurrent()) exitViewMode(); } }, '편집용 사본 만들기'));
   document.getElementById('app').prepend(bar);
-  loadWorkbook(data.workbook, data.docName ?? 'WIXEL', data.si ?? 0);
-  applyView();
-  renderAll();
+  loadWorkbook(data.workbook, data.docName ?? 'WIXEL', data.si ?? 0, request);
+  applyView(); renderAll();
   if (pubId) {
-    let seen = 0;
-    setInterval(async () => {
+    const watch = { request, book:wb, seen:null, busy:false, timer:null };
+    const current = () => publishedWatch === watch && viewOnly && watch.request.isCurrent() && wb === watch.book;
+    publishedWatch = watch;
+    watch.timer = setInterval(async () => {
+      if (!current() || watch.busy) return;
+      watch.busy = true;
+      const pollingRequest = watch.request;
       try {
         const res = await server.published(pubId);
-        if (seen && res.modified > seen) {
-          const keep = si;
-          loadWorkbook(res.data.workbook, res.data.docName ?? docName, keep);
+        if (!current() || watch.request !== pollingRequest) return;
+        if (watch.seen !== null && res.modified > watch.seen) {
+          loadWorkbook(res.data.workbook, res.data.docName ?? docName, si, pollingRequest);
+          watch.book = wb;
           toast('게시된 문서가 업데이트되었습니다.');
         }
-        seen = res.modified;
+        watch.seen = res.modified;
       } catch { /* 게시 중지 등 */ }
+      finally { watch.busy = false; }
     }, 30000);
   }
 }
-function exitViewMode(data) {
-  viewOnly = false;
-  autosave = true;
+function exitViewMode() {
+  const data = { workbook:wb.serialize(), docName, si };
+  stopPublishedWatch();
+  viewOnly = false; autosave = true;
   document.body.classList.remove('view-mode');
   document.querySelector('.view-bar')?.remove();
-  view.showHeaders = true;
-  view.showGrid = true;
+  view.showHeaders = true; view.showGrid = true;
   history.replaceState(null, '', appBase());
   loadWorkbook(data.workbook, `${data.docName ?? '통합 문서'} 사본`, data.si ?? 0);
   applyView();
   toast('편집할 수 있는 사본을 만들었습니다 (이 브라우저의 보관함에 저장).');
 }
 /** 주소로 연 경우: #view=압축 · ?view=게시id · ?doc=서버 문서 */
-async function openFromUrl() {
+async function openFromUrl(request = beginDocumentOpen()) {
   const hash = location.hash;
   const q = new URLSearchParams(location.search);
+  request.keepUrl = true;
   try {
+    request.assertCurrent();
     if (hash.startsWith('#view=')) {
       const text = await unpackText({ gz: true, blob: new Blob([fromB64url(hash.slice(6))]) });
-      enterViewMode(JSON.parse(text));
+      request.assertCurrent(); enterViewMode(JSON.parse(text), { request });
       return true;
     }
     if (q.get('view') && server.available) {
       const res = await server.published(q.get('view'));
-      enterViewMode(res.data, { pubId: q.get('view') });
+      request.assertCurrent(); enterViewMode(res.data, { pubId:q.get('view'), request });
       return true;
     }
     if (q.get('doc') && server.available) {
-      if (!server.connected) { connectStorage(() => openFromServer(q.get('doc'))); return true; }
-      await openFromServer(q.get('doc'));
-      return true;
+      if (!server.connected) { connectStorage(() => { if (request.isCurrent()) openFromServer(q.get('doc'), request); }); return true; }
+      return await openFromServer(q.get('doc'), request);
     }
   } catch (err) {
-    alertDialog('WIXEL', `링크의 문서를 열 수 없습니다: ${err.message}`);
-  }
+    if (!isDocumentOpenCancelled(err) && request.isCurrent()) alertDialog('WIXEL', `링크의 문서를 열 수 없습니다: ${err.message}`);
+  } finally { finishDocumentOpen(request); }
   return false;
 }
 
@@ -15521,18 +15589,19 @@ function startCollabWatch() {
   if (!server.connected) return;
   collabTimer = setInterval(async () => {
     if (serverRestoreBusy || viewOnly || !remoteDoc || dirty || editing || !serverState.savedAt) return;
-    const watchingId = docId, watchingVersion = wb.version, watchingName = docName;
+    const watchingId = docId, watchingVersion = wb.version, watchingName = docName, watchingRequest = activeDocumentRequest;
+    if (!watchingRequest?.isCurrent()) return;
     try {
       const files = await server.list();
       const f = files.find((x) => x.name === watchingName);
       if (f && (f.revision != null ? String(f.revision) !== server.revision(`files/${encodeURIComponent(watchingName)}`) : f.modified > serverState.savedAt + 1500)) {
-        if (serverRestoreBusy || dirty || editing || docId !== watchingId || wb.version !== watchingVersion || !remoteDoc) return;
+        if (!watchingRequest.isCurrent() || serverRestoreBusy || dirty || editing || docId !== watchingId || wb.version !== watchingVersion || !remoteDoc) return;
         const keep = { si, r: active.r, c: active.c };
         const revisionBefore = server.revision(`files/${encodeURIComponent(watchingName)}`);
         const data = await server.load(watchingName);
-        if (serverRestoreBusy || dirty || editing || docId !== watchingId || wb.version !== watchingVersion || !remoteDoc) { server.restoreRevision(`files/${encodeURIComponent(watchingName)}`, revisionBefore); return; }
+        if (!watchingRequest.isCurrent() || serverRestoreBusy || dirty || editing || docId !== watchingId || wb.version !== watchingVersion || !remoteDoc) { server.restoreRevision(`files/${encodeURIComponent(watchingName)}`, revisionBefore); return; }
         pendingDocId = docId;
-        loadWorkbook(data.workbook ?? data, data.docName ?? docName, keep.si);
+        loadWorkbook(data.workbook ?? data, data.docName ?? docName, keep.si, watchingRequest);
         remoteDoc = true;
         dirty = false;
         serverState.savedAt = f.modified;
@@ -15568,8 +15637,8 @@ function imageBytes() {
   return n;
 }
 let idbSaving = null;
-function saveToStorage() {
-  if (viewOnly) return false;
+function saveToStorage({ closing = false } = {}) {
+  if ((pageDeparting && !closing) || viewOnly) return false;
   try {
     if (bigBook()) {
       // 큰 문서: IndexedDB 에 시트별로, 바뀐 시트만, 조금씩 나눠 저장 (화면이 멈추지 않게)
@@ -15615,7 +15684,7 @@ async function saveBigToIdb() {
   const book = wb;
   const details = { rev: APP_REV, docName, docId, si, autosave, remoteDoc };
   bigSaveRun = saveLargeWorkbook(STORAGE_KEY, book, details, {
-    isCurrent: () => wb === book && !viewOnly && docName === details.docName && docId === details.docId && autosave === details.autosave && remoteDoc === details.remoteDoc,
+    isCurrent: () => wb === book && !viewOnly && !pageDeparting && docName === details.docName && docId === details.docId && autosave === details.autosave && remoteDoc === details.remoteDoc,
     waitForIdle: exportIdle,
   });
   try {
@@ -15648,6 +15717,7 @@ let serverRestoreBusy = false;
 /** 사용자가 쉬는 틈에 실행 (큰 문서 저장이 입력 · 슬라이서 클릭을 막지 않게) */
 const whenIdle = (fn) => (globalThis.requestIdleCallback ? requestIdleCallback(fn, { timeout: 5000 }) : setTimeout(fn, 0));
 function scheduleAutosave() {
+  if (pageDeparting) return;
   if (!autosave) { updateTitle(); return; }
   clearTimeout(saveTimer);
   const big = bigBook();
@@ -15656,7 +15726,7 @@ function scheduleAutosave() {
 }
 
 function scheduleServerSave(delay = 1500) {
-  if (serverRestoreBusy || !server.connected || !remoteDoc || !autosave || viewOnly || serverState.error) return;
+  if (pageDeparting || serverRestoreBusy || !server.connected || !remoteDoc || !autosave || viewOnly || serverState.error) return;
   // 셀이 아주 많은 문서는 서버 자동 저장을 하지 않음 (전체를 보내야 해서 느림) — [저장]을 누르면 저장
   if (!serverAutosave()) { updateTitle(); return; }
   clearTimeout(serverTimer);
@@ -15759,15 +15829,15 @@ function askServerToken(then) {
 }
 
 let serverOpenRequest = 0;
-async function openFromServer(name) {
+async function openFromServer(name, opening = beginDocumentOpen()) {
   const request = ++serverOpenRequest, book = wb, id = docId, version = wb.version;
   const connection = server.connectionVersion;
-  const sameDocument = () => request === serverOpenRequest && wb === book && docId === id && wb.version === version && !editing;
+  const sameDocument = () => opening.isCurrent() && request === serverOpenRequest && wb === book && docId === id && wb.version === version && !editing;
   const current = () => sameDocument() && server.connectionVersion === connection;
   try {
     const data = await server.load(name);
     if (!current()) { if (request === serverOpenRequest) toast('문서가 바뀌거나 편집 중이어서 이전 열기 요청을 취소했습니다.'); return false; }
-    loadWorkbook(data.workbook ?? data, data.docName ?? name, data.si ?? 0);
+    loadWorkbook(data.workbook ?? data, data.docName ?? name, data.si ?? 0, opening);
     remoteDoc = true;
     fileHandle = null;
     saveToStorage();
@@ -15779,10 +15849,10 @@ async function openFromServer(name) {
     return true;
   } catch (err) {
     if (!current()) return false;
-    if (err.status === 401) askServerToken(() => { if (sameDocument()) openFromServer(name); });
+    if (err.status === 401) askServerToken(() => { if (sameDocument()) openFromServer(name, opening); });
     else alertDialog('WIXEL', `열 수 없습니다: ${err.message}`);
     return false;
-  }
+  } finally { finishDocumentOpen(opening); }
 }
 
 function formatDate(ms) {
@@ -19517,6 +19587,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['파일 전환 시 이전 문서 복귀 방지', ['새 파일을 연 뒤 늦게 완료된 이전 열기·게시본 갱신·시작 링크 응답이 현재 문서를 덮어쓰지 않도록 했습니다. 새 문서와 피벗을 준비한 뒤 한 번에 전환하며, 현재 게시본을 편집용 사본으로 만들 때도 최신 내용을 유지합니다.']],
   ['행·열 경계 크기 조절', ['축소 배율과 틀 고정에서도 머리글 경계를 쉽게 잡아 너비·높이를 조절합니다. 드래그 중 크기와 안내선을 표시하며, 여러 행·열 선택 후 경계를 두 번 클릭하면 함께 자동 맞춤합니다. Esc로 취소하고 실행 취소로 원래 크기를 복원할 수 있습니다.']],
   ['표 빠른 스타일 전체 적용', ['빠른 스타일을 고르면 직접 칠한 색과 기존 선·강조까지 새 표 스타일로 바뀝니다. 값·수식·숫자 형식은 유지하며 실행 취소로 되돌릴 수 있습니다. 기본 셀 색이 머리글을 가리거나 사용자 지정 스타일이 빈 셀에서 빠지는 문제도 수정했습니다.']],
   ['차트 축 레이블 표시 개선', ['항목 이름의 과도한 생략을 줄이고 차트 폭에 맞춰 줄바꿈·회전을 조정합니다. 축 서식에서 레이블 간격과 각도를 지정하며 Excel 파일의 해당 설정도 읽고 저장합니다.']],
@@ -20248,10 +20319,31 @@ function bindEvents() {
   setAccessKeyHandler(() => { endKeytip(); armShortcutInputGuard(); });
   setMenuCloseHandler(focusGrid);
   setDialogCloseHandler(focusGrid);
-  window.addEventListener('beforeunload', (e) => {
+  window.addEventListener('pagehide', () => { pageDeparting = true; });
+  window.addEventListener('pageshow', () => { pageDeparting = false; });
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) { pageDeparting = false; return; }
+    if (pageDeparting) return;
+    // 백그라운드로 이동할 때 보관을 시작한다. unload 중 Blob 압축을 새로 시작하면
+    // WebKit이 폐기된 문서의 Blob 읽기를 차단하고 저장도 완료할 수 없다.
     if (!bigBook() || dirty) saveToStorage();
     libraryFlush();
-    if (!autosave && dirty) { e.preventDefault(); e.returnValue = ''; }
+  });
+  window.addEventListener('beforeunload', (e) => {
+    const warnUnsaved = !autosave && dirty;
+    pageDeparting = true;
+    clearTimeout(saveTimer); clearTimeout(libTimer); clearTimeout(serverTimer);
+    // 사용자가 나가기를 취소하면 다음 이벤트 루프에서 저장 예약도 복구한다.
+    setTimeout(() => {
+      if (!document.hidden) {
+        pageDeparting = false;
+        if (dirty) scheduleAutosave();
+        if (libDirty) scheduleLibrarySave();
+      }
+    }, 0);
+    // 여기서는 동기로 끝나는 작은 복원 사본만 기록한다.
+    if (!bigBook()) saveToStorage({ closing:true });
+    if (warnUnsaved) { dirty = true; e.preventDefault(); e.returnValue = ''; }
   });
   window.addEventListener('blur', () => { if (chartElementDrag) { chartElementDrag = null; gv.renderObjectsAll(); } if (drag) onDragEnd(); });
 window.addEventListener('afterprint', () => { dom.printArea.replaceChildren(); });
@@ -20259,6 +20351,8 @@ window.addEventListener('afterprint', () => { dom.printArea.replaceChildren(); }
 
 // ───────────────────────── 시작 ─────────────────────────
 async function init() {
+  const startupRequest = beginDocumentOpen();
+  activeDocumentRequest = startupRequest;
   let stored = loadFromStorage();
   if (stored?.idb) {
     // 큰 문서는 IndexedDB 에 시트별로 저장되어 있음 — 나눠서 불러옴
@@ -20378,10 +20472,10 @@ async function init() {
   // 서버 존재 확인은 연결/업로드 동의가 아닙니다. 사용자가 선택한 문서만 원격 저장합니다.
   await server.init();
   if (!server.connected) remoteDoc = false;
-  if (location.hash.startsWith('#view=') || /[?&](view|doc)=/.test(location.search)) await openFromUrl();
+  if (startupRequest.isCurrent() && (location.hash.startsWith('#view=') || /[?&](view|doc)=/.test(location.search))) await openFromUrl(startupRequest);
   startCollabWatch();
   updateTitle();
-  if (!stored && !viewOnly && !globalThis.WIXEL_SKIP_START && !/[?&](view|doc)=/.test(location.search) && !location.hash.startsWith('#view=')) openBackstage();
+  if (startupRequest.isCurrent() && !stored && !viewOnly && !globalThis.WIXEL_SKIP_START && !/[?&](view|doc)=/.test(location.search) && !location.hash.startsWith('#view=')) openBackstage();
 }
 
 init();
