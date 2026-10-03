@@ -1925,6 +1925,99 @@ function touchGridRange(from, to) {
   else if (from.zone === 'colHeader') selectCols(from.c, to.c);
   else selectRange(norm(from, to), 'cells', { r: from.r, c: from.c });
 }
+// 머리글 경계 드래그는 미리 보기만 변경하고 놓을 때 한 번에 기록한다.
+let headerResizeHint = null, headerResizeGuide = null;
+function headerResizeAllowed(axis) { return !contextCommandDisabled(axis === 'col' ? 'colWidth' : 'rowHeight'); }
+function headerAxisSelected(axis, index) {
+  return (selKind === 'all' || selKind === (axis === 'col' ? 'cols' : 'rows'))
+    && selectionAxisRanges(sel, axis, selectedAxisOptions()).some(([a, b]) => index >= a && index <= b);
+}
+function clearHeaderResizeUI() {
+  document.body.classList.remove('header-col-resizing', 'header-row-resizing');
+  if (headerResizeHint) headerResizeHint.hidden = true;
+  if (headerResizeGuide) headerResizeGuide.hidden = true;
+}
+function showHeaderResizeUI(axis, index, size, x, y, dragging = false) {
+  // iPad의 시스템 포인터가 CSS 커서를 대체해도 방향과 현재 크기를 확인할 수 있다.
+  if (!dragging && !mobileWork?.pointerNavigation) { clearHeaderResizeUI(); return; }
+  headerResizeHint ??= document.body.appendChild(el('div', { id:'headerResizeHint', 'aria-hidden':'true' }));
+  const amount = axis === 'col' ? pixelsToColumnChars(size, wb.defaultFont) : rowPixelsToPoints(size);
+  headerResizeHint.textContent = `${axis === 'col' ? '↔ 너비' : '↕ 높이'}: ${Number(amount.toFixed(2))}${axis === 'col' ? '' : ' pt'} (${Math.round(size)} px)`;
+  headerResizeHint.hidden = false;
+  const viewport = window.visualViewport, left = viewport?.offsetLeft ?? 0, top = viewport?.offsetTop ?? 0;
+  headerResizeHint.style.left = `${Math.max(left + 2, Math.min(x + 12, left + (viewport?.width ?? innerWidth) - headerResizeHint.offsetWidth - 4))}px`;
+  headerResizeHint.style.top = `${Math.max(top + 2, Math.min(y + 12, top + (viewport?.height ?? innerHeight) - headerResizeHint.offsetHeight - 4))}px`;
+  if (!dragging) { if (headerResizeGuide) headerResizeGuide.hidden = true; return; }
+  headerResizeGuide ??= document.body.appendChild(el('div', { id:'headerResizeGuide', 'aria-hidden':'true' }));
+  const rect = gv.clientRect({r1:axis==='row'?index:gv.firstVisibleRow(),r2:axis==='row'?index:gv.firstVisibleRow(),c1:axis==='col'?index:0,c2:axis==='col'?index:0});
+  const area = dom.view.getBoundingClientRect();
+  headerResizeGuide.className = axis;
+  Object.assign(headerResizeGuide.style, axis === 'col'
+    ? {left:`${rect.right}px`,top:`${area.top}px`,height:`${Math.min(area.height, innerHeight-area.top)}px`,width:'0px'}
+    : {left:`${area.left}px`,top:`${rect.bottom}px`,width:`${Math.min(area.width, innerWidth-area.left)}px`,height:'0px'});
+  headerResizeGuide.hidden = false;
+}
+function restoreHeaderResize(d) {
+  const sizes = d.host[d.axis === 'col' ? 'colWidths' : 'rowHeights'];
+  // 드래그 도중 다른 명령이 크기를 바꿨다면 그 변경을 오래된 미리보기로 덮지 않는다.
+  if (d.next === undefined || sizes[d.index] !== d.next) return;
+  if (d.orig === undefined) delete sizes[d.index]; else sizes[d.index] = d.orig;
+}
+function validHeaderResize(d) {
+  return wb === d.book && si === d.si && sheet() === d.host && wb.version === d.version && headerResizeAllowed(d.axis);
+}
+function cancelHeaderResize() {
+  if (drag?.type === 'colResize' || drag?.type === 'rowResize') {
+    const d = drag; drag = null; restoreHeaderResize(d);
+    if (d.book === wb && d.host === sheet()) { gv.layout(); positionEditor(); }
+  }
+  clearHeaderResizeUI();
+}
+function beginHeaderResize(e, axis, index) {
+  if (!headerResizeAllowed(axis)) { clearHeaderResizeUI(); return; }
+  if (editing && !commitEdit()) return;
+  focusGrid();
+  const all = selKind === 'all', targets = all ? null : headerAxisSelected(axis,index) ? axisTargets(axis) : [index];
+  if (!all && !targets) return;
+  const size = axis === 'col' ? wb.colWidth(si,index) : wb.rowHeight(si,index);
+  drag = {type:axis==='col'?'colResize':'rowResize',axis,index,book:wb,host:sheet(),si,version:wb.version,
+    start:axis==='col'?e.clientX:e.clientY,size,orig:sheet()[axis==='col'?'colWidths':'rowHeights'][index],all,targets};
+  document.body.classList.add(axis==='col'?'header-col-resizing':'header-row-resizing');
+  showHeaderResizeUI(axis,index,size,e.clientX,e.clientY,true);
+}
+function moveHeaderResize(x,y) {
+  const d=drag;
+  if (!validHeaderResize(d)) { cancelHeaderResize(); return; }
+  const delta=(d.axis==='col'?x:y)-d.start;
+  if (d.next === undefined && Math.abs(delta)<1) return;
+  const max=d.axis==='col'?columnCharsToPixels(MAX_COLUMN_CHARS,wb.defaultFont):rowPointsToPixels(MAX_ROW_POINTS);
+  d.next=Math.round(Math.max(0,Math.min(max,d.size+delta/gv.z)));
+  d.host[d.axis==='col'?'colWidths':'rowHeights'][d.index]=d.next;
+  gv.layout(); positionEditor();
+  showHeaderResizeUI(d.axis,d.index,d.next,x,y,true);
+}
+function finishHeaderResize(d) {
+  const valid=validHeaderResize(d); restoreHeaderResize(d); clearHeaderResizeUI();
+  if (!valid || d.next === undefined || d.next === d.size) { if(d.book===wb&&d.host===sheet())gv.layout(); return; }
+  if (d.all && d.next === 0) { gv.layout(); toast('모든 행/열을 숨길 수는 없습니다.'); return; }
+  wb.transact(()=>anchorObjects(()=>{
+    const key=d.axis==='col'?'colWidths':'rowHeights', sizes={...sheet()[key]}, manual={...sheet().rowManual};
+    if(d.all) {
+      wb.setSheetProp(si,d.axis==='col'?'defColW':'defRowH',d.next);
+      for(const k of Object.keys(sizes)) { sizes[k]=d.next; if(d.axis==='row')manual[k]=true; }
+    } else for(const i of d.targets) { sizes[i]=d.next; if(d.axis==='row')manual[i]=true; }
+    wb.setSheetProp(si,key,sizes);
+    if(d.axis==='row')wb.setSheetProp(si,'rowManual',manual);
+  }),meta());
+  gv.layout(); positionEditor(); updateSelectionUI();
+}
+function autofitHeader(axis,index) {
+  if(!headerResizeAllowed(axis))return;
+  if(editing&&!commitEdit())return;
+  clearHeaderResizeUI();
+  autofitSelection(axis,headerAxisSelected(axis,index)?null:[index]);
+}
+
 function onViewMouseDown(e) {
   if (e.target === dom.editor || dom.ac.contains(e.target)) return;
   closeMenus();
@@ -2127,19 +2220,14 @@ function onViewMouseDown(e) {
   const hit = gv.hitTest(e.clientX, e.clientY);
   e.preventDefault();
   // 선택 영역 테두리를 끌어서 옮기기 (Ctrl: 복사 · Shift: 끼워 넣기) — 엑셀
-  if (e.button === 0 && !editing && selBorderHit(e)) {
+  if (hit.zone === 'cell' && e.button === 0 && !editing && selBorderHit(e)) {
     drag = { type: 'move', src: { ...sel }, grab: { r: Math.max(0, Math.min(hit.r ?? sel.r1, sel.r2) - sel.r1), c: Math.max(0, Math.min(hit.c ?? sel.c1, sel.c2) - sel.c1) }, target: null };
     startAutoScroll();
     return;
   }
-  if (hit.zone === 'colHeader' && hit.edgeCol !== null && e.button === 0) {
-    drag = { type: 'colResize', c: hit.edgeCol, x: e.clientX, w: wb.colWidth(si, hit.edgeCol), orig: sheet().colWidths[hit.edgeCol] };
-    return;
-  }
-  if (hit.zone === 'rowHeader' && hit.edgeRow !== null && e.button === 0) {
-    drag = { type: 'rowResize', r: hit.edgeRow, y: e.clientY, h: gv.rows.size(hit.edgeRow), orig: sheet().rowHeights[hit.edgeRow] };
-    return;
-  }
+  if (hit.zone === 'colHeader' && hit.edgeCol !== null && e.button === 0) { beginHeaderResize(e,'col',hit.edgeCol); return; }
+  if (hit.zone === 'rowHeader' && hit.edgeRow !== null && e.button === 0) { beginHeaderResize(e,'row',hit.edgeRow); return; }
+  clearHeaderResizeUI();
   if (chartSel) deselectChart();
 
   if (editing && hit.zone === 'cell' && canPoint() && e.button === 0) {
@@ -2203,12 +2291,17 @@ function onViewMouseMove(e) {
   const t = e.target;
   const cls = dom.view.classList;
   cls.remove('col-resize', 'row-resize', 'col-select', 'row-select', 'default-cursor');
-  if (t.closest?.('.obj') || t.classList?.contains('fbtn') || t.classList?.contains('dv-btn')) return;
+  if (t.closest?.('.obj') || t.classList?.contains('fbtn') || t.classList?.contains('dv-btn')) { clearHeaderResizeUI(); return; }
   const hit = gv.hitTest(e.clientX, e.clientY);
   cls.toggle('move-cursor', hit.zone === 'cell' && !editing && selBorderHit(e));
-  if (hit.zone === 'colHeader') cls.add(hit.edgeCol !== null ? 'col-resize' : 'col-select');
-  else if (hit.zone === 'rowHeader') cls.add(hit.edgeRow !== null ? 'row-resize' : 'row-select');
-  else if (hit.zone === 'corner') cls.add('default-cursor');
+  const axis=hit.zone==='colHeader'?'col':hit.zone==='rowHeader'?'row':null;
+  const edge=axis==='col'?hit.edgeCol:axis==='row'?hit.edgeRow:null;
+  if(axis) {
+    const resize=edge!==null&&headerResizeAllowed(axis);
+    cls.add(resize?`${axis}-resize`:`${axis}-select`);
+    if(resize)showHeaderResizeUI(axis,edge,axis==='col'?wb.colWidth(si,edge):wb.rowHeight(si,edge),e.clientX,e.clientY);
+    else clearHeaderResizeUI();
+  } else { clearHeaderResizeUI(); if(hit.zone==='corner')cls.add('default-cursor'); }
   const cellEl = t.closest?.('.c');
   if (cellEl?.dataset.cm) {
     const b = cellEl.getBoundingClientRect();
@@ -2371,21 +2464,8 @@ function onDragMove(x, y) {
       gv.renderOverlays();
       break;
     }
-    case 'colResize': {
-      const w = Math.max(0, drag.w + (x - drag.x) / gv.z);
-      drag.newW = w;
-      sheet().colWidths[drag.c] = Math.round(w);
-      gv.layout();
-      positionEditor();
-      break;
-    }
-    case 'rowResize': {
-      const h = Math.max(0, drag.h + (y - drag.y) / gv.z);
-      drag.newH = h;
-      sheet().rowHeights[drag.r] = Math.round(h);
-      gv.layout();
-      break;
-    }
+    case 'colResize':
+    case 'rowResize': moveHeaderResize(x,y); break;
     case 'obj': {
       if (!drag.valid()) { const stale = drag; stale.restore(); document.removeEventListener('keydown', stale.escape, true); drag = null; gv.renderObjectsAll(); break; }
       const ch = drag.members.find(m => m.id === drag.id)?.object;
@@ -2502,20 +2582,8 @@ function onDragEnd() {
       gv.renderOverlays();
       if (d.target && !protectBlocked('cells', d.target)) doFill(d.src, d.target);
       break;
-    case 'colResize': {
-      if (d.newW === undefined) break;
-      if (d.orig === undefined) delete sheet().colWidths[d.c]; else sheet().colWidths[d.c] = d.orig;
-      const cols = selKind === 'cols' && d.c >= sel.c1 && d.c <= sel.c2 ? range(sel.c1, Math.min(sel.c2, sel.c1 + 500)) : [d.c];
-      wb.transact(() => anchorObjects(() => cols.forEach((c) => wb.setColWidth(si, c, d.newW))), meta());
-      break;
-    }
-    case 'rowResize': {
-      if (d.newH === undefined) break;
-      if (d.orig === undefined) delete sheet().rowHeights[d.r]; else sheet().rowHeights[d.r] = d.orig;
-      const rows = selKind === 'rows' && d.r >= sel.r1 && d.r <= sel.r2 ? range(sel.r1, Math.min(sel.r2, sel.r1 + 2000)) : [d.r];
-      wb.transact(() => anchorObjects(() => rows.forEach((r) => wb.setRowHeight(si, r, d.newH))), meta());
-      break;
-    }
+    case 'colResize':
+    case 'rowResize': finishHeaderResize(d); break;
     case 'obj': {
       document.removeEventListener('keydown', d.escape, true);
       if (!d.moved) { if(d.singleOnClick){objMulti.clear();gv.renderObjectsAll();updateSelectionUI();selPaneDlg?.redraw?.();} break; }
@@ -2561,15 +2629,8 @@ function onViewDblClick(e) {
   if (objEl) { if (objEl.classList.contains('chart')) chartFormatPane(objEl.dataset.id); else editObject(objEl.dataset.id); return; }
   if (t.classList.contains('fbtn') || t.classList.contains('dv-btn') || t === dom.editor) return;
   const hit = gv.hitTest(e.clientX, e.clientY);
-  if (hit.zone === 'colHeader' && hit.edgeCol !== null) {
-    const cols = selKind === 'cols' && inSel(0, hit.edgeCol) ? range(sel.c1, Math.min(sel.c2, sel.c1 + 200)) : [hit.edgeCol];
-    autofitCols(cols);
-    return;
-  }
-  if (hit.zone === 'rowHeader' && hit.edgeRow !== null) {
-    wb.transact(() => anchorObjects(() => { autoFitRows(hit.edgeRow, hit.edgeRow, true); }), meta());
-    return;
-  }
+  if (hit.zone === 'colHeader' && hit.edgeCol !== null) { e.preventDefault(); autofitHeader('col',hit.edgeCol); return; }
+  if (hit.zone === 'rowHeader' && hit.edgeRow !== null) { e.preventDefault(); autofitHeader('row',hit.edgeRow); return; }
   if (hit.zone !== 'cell' || editing) return;
   // 피벗 값 셀: 세부 정보 표시 (원본 행을 새 시트에)
   const pv = pivotHere();
@@ -16812,12 +16873,13 @@ function sizeDialog(kind) {
 }
 
 /** 자동 맞춤도 희소 선택을 유지하고, 큰 범위를 앞쪽 일부만 처리하지 않는다. */
-function autofitSelection(axis) {
+function autofitSelection(axis, explicitTargets = null) {
   const cmd = axis === 'row' ? 'autofitRowsSel' : 'autofitSel';
   if (contextCommandDisabled(cmd)) { toast('현재 문서 또는 시트 보호 설정에서는 이 작업을 할 수 없습니다.'); return; }
   const ranges = selectionAxisRanges(sel, axis, selectedAxisOptions()), max = axis === 'row' ? MAX_ROWS : MAX_COLS;
   let targets;
-  if (ranges.length === 1 && ranges[0][0] === 0 && ranges[0][1] === max - 1) {
+  if (explicitTargets) targets = explicitTargets;
+  else if (ranges.length === 1 && ranges[0][0] === 0 && ranges[0][1] === max - 1) {
     const indices = new Set(Object.keys(axis === 'row' ? sheet().rowHeights : sheet().colWidths).map(Number));
     sheet().cells.forEachRC((cell, r, c) => { if (cell.raw) indices.add(axis === 'row' ? r : c); });
     for (const block of sheet().blocks ?? []) {
@@ -19455,6 +19517,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['행·열 경계 크기 조절', ['축소 배율과 틀 고정에서도 머리글 경계를 쉽게 잡아 너비·높이를 조절합니다. 드래그 중 크기와 안내선을 표시하며, 여러 행·열 선택 후 경계를 두 번 클릭하면 함께 자동 맞춤합니다. Esc로 취소하고 실행 취소로 원래 크기를 복원할 수 있습니다.']],
   ['표 빠른 스타일 전체 적용', ['빠른 스타일을 고르면 직접 칠한 색과 기존 선·강조까지 새 표 스타일로 바뀝니다. 값·수식·숫자 형식은 유지하며 실행 취소로 되돌릴 수 있습니다. 기본 셀 색이 머리글을 가리거나 사용자 지정 스타일이 빈 셀에서 빠지는 문제도 수정했습니다.']],
   ['차트 축 레이블 표시 개선', ['항목 이름의 과도한 생략을 줄이고 차트 폭에 맞춰 줄바꿈·회전을 조정합니다. 축 서식에서 레이블 간격과 각도를 지정하며 Excel 파일의 해당 설정도 읽고 저장합니다.']],
   ['iPad 마우스와 개체 메뉴', ['Ctrl·Command 휠로 시트 배율을 바꾸고 슬라이서 항목을 추가 선택할 때 누락된 키 상태를 보완합니다. 개체 재표시 뒤 우클릭이 셀 메뉴로 잘못 열리지 않게 했으며 차트 편집 버튼을 다른 개체 위에 표시합니다.']],
@@ -20030,7 +20093,10 @@ function bindEvents() {
   bindPalettePointer();
   dom.view.addEventListener('dblclick', onViewDblClick);
   dom.view.addEventListener('mousemove', onViewMouseMove);
-  dom.view.addEventListener('mouseleave', () => { dom.tip.style.display = 'none'; });
+  dom.view.addEventListener('mouseleave', () => { dom.tip.style.display = 'none'; if (!drag) clearHeaderResizeUI(); });
+  document.addEventListener('keydown', e => { if(e.key==='Escape'&&(drag?.type==='colResize'||drag?.type==='rowResize')) { e.preventDefault();e.stopImmediatePropagation();cancelHeaderResize(); } },true);
+  window.addEventListener('blur',cancelHeaderResize);
+  document.addEventListener('pointercancel',cancelHeaderResize,true);
   dom.view.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     if (drawPathState) { finishPathDraw(false); return; }

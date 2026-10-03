@@ -578,3 +578,8 @@ node tools/mobile-layout.mjs
 ### 표 빠른 스타일 전체 적용
 
 `node tools/table-quick-style.mjs`는 실제 테이블 디자인 리본에서 스타일을 골라 표 전체 채우기·글자색·강조·선 변경을 확인합니다. 직접 강조색과 기존 스타일, 행/열 서식, 기본 셀 서식, 사용자 지정 빈 셀, 모바일 390px, 한 번의 실행 취소·다시 실행과 XLSX 재열기를 검사합니다. `WIXEL_URL`은 로컬 서버, `WIXEL_BROWSER=chromium|webkit`, `WIXEL_TABLE_STYLE_OUT`은 D: 결과 경로이며 외부 쓰기를 차단한 합성 자료를 사용합니다.
+
+
+### 행·열 머리글 경계 조절
+
+`node tools/header-resize.mjs`는 마우스 hover·드래그·더블클릭, 배율·틀 고정·스크롤, 다중 선택, Esc/blur 취소, 보호·최종본 및 XLSX 크기 왕복을 검사합니다. `WIXEL_URL`은 로컬 서버이며 `WIXEL_BROWSER=chromium,webkit`, `WIXEL_HEADER_RESIZE_OUT`은 D: 결과 경로, `WIXEL_HEADER_RESIZE_FILTER`는 사례 이름 필터입니다. 실제 iPad 하드웨어 검사가 아닌 격리 합성 문서 검사입니다.

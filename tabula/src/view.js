@@ -8,6 +8,7 @@ import { noteVisible } from './review-state.js';
 // 가상 스크롤 그리드: 화면에 보이는 행/열만 그림 (20,000,000행 × 16,384열 지원)
 // 틀 고정은 4개 창(TL/TR/BL/BR)으로, 각 창은 시트 좌표계 콘텐츠를 transform 으로 이동시켜 표시.
 import { Axis } from './axis.js';
+import { headerResizeEdge } from './header-resize.js';
 import { visibleAxisIndices } from './axis-window.js';
 import { GridAccessibility } from './grid-a11y.js';
 import { gridLineWidth, resolveGridBorders, gridBorderPaintOrder } from './grid-lines.js';
@@ -503,14 +504,14 @@ export class GridView {
     const r = this.rows.indexAt(sheetY);
     let edgeCol = null;
     let edgeRow = null;
-    if (zone === 'colHeader') {
-      if (this.cols.pos(c + 1) - sheetX < 5) edgeCol = c;
-      else if (sheetX - this.cols.pos(c) < 4 && c > 0) edgeCol = this.cols.nextVisible(c - 1, -1);
-    }
-    if (zone === 'rowHeader') {
-      if (this.rows.pos(r + 1) - sheetY < 4) edgeRow = r;
-      else if (sheetY - this.rows.pos(r) < 3 && r > 0) edgeRow = this.rows.nextVisible(r - 1, -1);
-    }
+    if (zone === 'colHeader') edgeCol = headerResizeEdge(this.cols, x, {
+      zoom: this.z, header: this.hw, viewport: this.viewW, origin: this.originX,
+      scroll: this.sx, frozenStart: this.frozenLeft, frozenEnd: this.fc,
+    });
+    if (zone === 'rowHeader') edgeRow = headerResizeEdge(this.rows, y, {
+      zoom: this.z, header: this.hh, viewport: this.viewH, origin: this.originY,
+      scroll: this.sy, frozenStart: this.frozenTop, frozenEnd: this.fr,
+    });
     return { zone, r, c, x, y, sheetX, sheetY, edgeCol, edgeRow, ...out };
   }
 

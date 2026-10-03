@@ -2850,3 +2850,12 @@ body.mobile-work-mode .object-style-element-preview {padding:4px;min-height:22px
 /* Mobile devices keep pointer navigation in the full-size layout. */
 body.pointer-navigation-enabled:not(.mobile-work-mode) .quick-access.below { flex-wrap:nowrap; overflow-x:auto; overflow-y:hidden; overscroll-behavior-x:contain; touch-action:pan-x; }
 body.pointer-navigation-enabled:not(.mobile-work-mode) .quick-access.below > * { flex-shrink:0; }
+
+/* 머리글 크기 조절: 커서는 격자 밖에서도 드래그 방향을 유지한다. */
+body.header-col-resizing, body.header-col-resizing * { cursor:col-resize!important; user-select:none!important; }
+body.header-row-resizing, body.header-row-resizing * { cursor:row-resize!important; user-select:none!important; }
+#headerResizeHint { position:fixed; z-index:110; padding:4px 7px; border:1px solid #8aab97; border-radius:3px; background:#fff; color:#185c37; font:11px/1.4 var(--ui-font); box-shadow:0 1px 4px #0002; pointer-events:none; white-space:nowrap; }
+#headerResizeGuide { position:fixed; z-index:80; pointer-events:none; }
+#headerResizeGuide.col { border-left:1px dashed #217346; }
+#headerResizeGuide.row { border-top:1px dashed #217346; }
+#headerResizeHint[hidden], #headerResizeGuide[hidden] { display:none!important; }
