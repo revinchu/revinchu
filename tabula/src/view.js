@@ -1,3 +1,4 @@
+import { tableCellDisplayStyle } from './table-format.js';
 import { primaryPointerModifier } from './pointer-modifiers.js';
 import { filterButtonVisible } from './filter-display.js';
 import { phoneticHtml } from './phonetic.js';
@@ -930,7 +931,7 @@ export class GridView {
       }
     }
     const hasLine = !!(sheet.allStyle || Object.keys(sheet.colStyles).length || Object.keys(sheet.rowStyles).length);
-    const tables = (sheet.tables ?? []).filter((t) => t.r1 <= r2 && t.r2 >= r1 && t.c1 <= c2 && t.c2 >= c1 && styleByName(t.style));
+    const tables = (sheet.tables ?? []).filter((t) => t.r1 <= r2 && t.r2 >= r1 && t.c1 <= c2 && t.c2 >= c1 && (styleByName(t.style) || t.style && t.style !== 'None' && t.styleElements?.length));
     const inTable = (r, c) => tables.some((t) => r >= t.r1 && r <= t.r2 && c >= t.c1 && c <= t.c2);
     const emptyRules = (this.cond ?? []).map((pr) => pr.rule).filter((rl) => EMPTY_MATCH_TYPES.has(rl.type) && ruleRanges(rl).some((g) => g.r1 <= r2 && g.r2 >= r1 && g.c1 <= c2 && g.c2 >= c1));
     const emptyCond = (r, c) => emptyRules.some((rl) => inRule(rl, r, c));
@@ -1041,17 +1042,7 @@ export class GridView {
     const st = this.host.state();
     const { wb, si } = st;
     const cell = wb.getCell(si, r, c);
-    let style = wb.styleAt(si, r, c);
-    const tbl = tableAt(sheet, r, c);
-    if (tbl) {
-      // 표 서식은 셀에 직접 지정한 서식 아래에 깔림
-      const ts = tableCellStyle(tbl, r, c);
-      if (ts) {
-        const own = {};
-        for (const [k, val] of Object.entries(style)) if (val !== undefined) own[k] = val;
-        style = { ...ts, ...own };
-      }
-    }
+    let style = tableCellDisplayStyle(wb, si, r, c);
     if (merge && (merge.r2 > merge.r1 || merge.c2 > merge.c1)) style = mergeEdgeBorders(wb, si, merge, style);
     const v = wb.getValue(si, r, c);
     const x = this.cols.pos(c);
@@ -1265,7 +1256,7 @@ export class GridView {
         if (covered.has(`${r},${c}`)) continue;
         const m = merges.find((x) => x.r1 === r && x.c1 === c);
         const v = wb.getValue(s, r, c);
-        const st = wb.styleAt(s, r, c) ?? {};
+        const st = tableCellDisplayStyle(wb, s, r, c);
         let text = '';
         let color = null;
         if (v !== null && v !== undefined && v !== '') {

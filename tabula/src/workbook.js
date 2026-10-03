@@ -1,10 +1,11 @@
 import { jsonPartsBlob } from './snapshot-blob.js';
 import { filterWithButtons, filterButtonsVisible } from './filter-display.js';
+import { clearedTableCellStyle, explicitTableStylePatch } from './table-format.js';
 // 통합 문서 모델: 시트 · 셀 · 재계산 · 실행 취소 · 행/열 구조 변경
 import { normalizePhonetic, phoneticText } from './phonetic.js';
 import { shiftNoteVisibility } from './review-state.js';
 import { rewriteWorkbookLink } from './hyperlink.js';
-import { resolveStructRef, findTable } from './tables.js';
+import { resolveStructRef, findTable, tableAt, tableCellStyle } from './tables.js';
 import { pivotSourceData, pivotLookup, resolvePivot } from './pivot.js';
 import {
   parse, evaluateArray, evalAny, ERR, FUNCS, compareValues, isError, autoFormatFor, mayReturnArray, Range, RefValue,
@@ -1797,7 +1798,9 @@ export class Workbook {
       && (ca === cb || JSON.stringify(ca) === JSON.stringify(cb));
     const neutralValue = cur && cell && !cur.formula && !cell.formula && !cur.image && !cell.image && sameValue(cur.v, cell.v);
     const phoneticChanged = (cur?.phonetic || cell?.phonetic) && phoneticText(cur?.v, cur?.phonetic) !== phoneticText(cell?.v, cell?.phonetic);
-    const calcNeutral = !!(neutralFormula || neutralValue) && !phoneticChanged;
+    const neutralEmpty = (!cur || cur.raw === '') && (!cell || cell.raw === '') && cur?.v == null && cell?.v == null
+      && !cur?.formula && !cell?.formula && !cur?.image && !cell?.image;
+    const calcNeutral = !!(neutralFormula || neutralValue || neutralEmpty) && !phoneticChanged;
     if (neutralFormula && cur.dirty) cell.dirty = true;
     // noUndo: 파일을 여는 중(피벗 다시 그리기) — 실행 취소 기록은 끝나면 비우므로 셀 내용 복사를 만들지 않음
     this.record(this.noUndo ? { t: 'cell', si, r, c, calcNeutral } : { t: 'cell', si, r, c, calcNeutral, before: cur ? cellData(cur) : null, after: cell ? cellData(cell) : null });
@@ -1806,7 +1809,7 @@ export class Workbook {
     if (calcNeutral) {
       this.version++;
       (this.sheetVer ??= [])[si] = (this.sheetVer[si] ?? 0) + 1;
-      if (cur.v !== cell.v) this.bumpCol(si, c);
+      if ((cur?.v ?? null) !== (cell?.v ?? null)) this.bumpCol(si, c);
       return;
     }
     this.changed(si, r, c);
@@ -1840,7 +1843,10 @@ export class Workbook {
 
   setStyle(si, r, c, patch) {
     const cur = this.getCell(si, r, c);
-    const style = { ...(cur?.style || this.baseStyle || {}), ...patch };
+    const table = !cur?.style && tableAt(this.sheets[si], r, c);
+    // 표 안에서 숫자/맞춤만 수정할 때 기본 흰색을 직접 채우기로 복제하지 않는다.
+    const base = table && tableCellStyle(table, r, c) ? clearedTableCellStyle(this.baseStyle, this.baseStyle) : this.baseStyle;
+    const style = explicitTableStylePatch(cur?.style || base || {}, patch);
     this.setCellData(si, r, c, cellData(cur, style) ?? { raw: '', style });
   }
 
@@ -1983,6 +1989,80 @@ export class Workbook {
     block.ver = (block.ver ?? 0) + 1;
     this.version++;
     return true;
+  }
+
+  /** 빠른 표 스타일 적용 전 직접 지정한 색·선·강조만 지운다. 호출자가 스타일 변경과 transact로 묶는다. */
+  clearTableVisualFormatting(si, id) {
+    const sh = this.sheets[si], table = sh?.tables?.find(t => t.id === id);
+    if (!table || ![table.r1, table.c1, table.r2, table.c2].every(Number.isInteger)) return false;
+    const r1 = Math.max(0, table.r1), c1 = Math.max(0, table.c1);
+    const r2 = Math.min(MAX_ROWS - 1, table.r2), c2 = Math.min(MAX_COLS - 1, table.c2);
+    if (r1 > r2 || c1 > c2) return false;
+    const global = { ...sh.allStyle }, columns = new Map();
+    const inherited = (r, c) => {
+      let col = columns.get(c);
+      if (!col) { col = { ...global, ...sh.colStyles[c] }; columns.set(c, col); }
+      return sh.rowStyles[r] ? { ...col, ...sh.rowStyles[r] } : col;
+    };
+    let changed = false;
+    const clearCell = (r, c) => {
+      const cell = this.getCell(si, r, c);
+      const own = cell?.style ?? this.baseStyle;
+      const block = this.blockAt(si, r, c);
+      // 부분 블록의 기본 서식은 그대로 남으므로 셀 서식이 비어도 다시 나타나지 않게 차단한다.
+      const blockStyle = block && (block.r0 < r1 || block.r0 + block.n - 1 > r2) ? block.cols[c - block.c0].fmt : null;
+      const next = cleanStyle(clearedTableCellStyle(own, { ...this.baseStyle, ...blockStyle, ...inherited(r, c) }));
+      if (sameStyle(cell?.style, next)) return;
+      this.setCellData(si, r, c, cellData(cell, next) ?? (next ? { raw: '', style: next } : null));
+      changed = true;
+    };
+    // 희소 셀은 실제 저장된 칸만 방문한다. 블록으로 합쳐져 Map에서 제거되어도 순회는 안전하다.
+    for (const [c, cells] of sh.cells.cols) {
+      if (c < c1 || c > c2) continue;
+      for (const r of cells.keys()) if (r >= r1 && r <= r2) clearCell(r, c);
+    }
+    const covered = new Map();
+    for (let bi = 0; bi < sh.blocks.length; bi++) {
+      const block = sh.blocks[bi], start = Math.max(r1, block.r0), end = Math.min(r2, block.r0 + block.n - 1);
+      if (start > end) continue;
+      const fullRows = start === block.r0 && end === block.r0 + block.n - 1;
+      for (let c = Math.max(c1, block.c0); c <= Math.min(c2, block.c0 + block.cols.length - 1); c++) {
+        if (fullRows) {
+          // 표가 블록 열 전체를 덮을 때만 열 서식을 변경한다. 값 배열·정렬 순열은 복사하지 않는다.
+          const ci = c - block.c0, old = block.cols[ci].fmt;
+          const next = cleanStyle(clearedTableCellStyle(old ?? this.baseStyle, { ...this.baseStyle, ...global, ...sh.colStyles[c] }));
+          if (!sameStyle(old ?? undefined, next)) { this.setBlockStyle(si, bi, ci, next); changed = true; }
+          const spans = covered.get(c) ?? []; spans.push([start, end]); covered.set(c, spans);
+        } else {
+          // 블록 일부만 표인 경우 다른 행의 서식을 변경하지 않는다.
+          for (let r = start; r <= end; r++) clearCell(r, c);
+        }
+      }
+    }
+    // 일반 크기 표는 비어 있는 마지막 행/열도 포함한다. 거대 희소 표는 사용 영역에
+    // 한정하여 100만 행의 빈 셀을 스타일 객체로 실체화하지 않는다.
+    const used = this.usedRange(si), compact = (r2 - r1 + 1) * (c2 - c1 + 1) <= 1000000;
+    const lastRow = compact ? r2 : Math.min(r2, used.rows - 1), lastCol = compact ? c2 : Math.min(c2, used.cols - 1);
+    for (let c = c1; c <= lastCol; c++) {
+      const col = { ...global, ...sh.colStyles[c] };
+      if (!cleanStyle(clearedTableCellStyle(undefined, col))) continue;
+      const spans = (covered.get(c) ?? []).sort((a, b) => a[0] - b[0]);
+      let start = r1;
+      for (const [a, b] of spans) {
+        for (let r = start; r <= Math.min(lastRow, a - 1); r++) clearCell(r, c);
+        start = Math.max(start, b + 1);
+      }
+      for (let r = start; r <= lastRow; r++) clearCell(r, c);
+    }
+    // 드문 행 단위 서식은 큰 블록에서도 그 행만 처리한다.
+    for (const k of Object.keys(sh.rowStyles)) {
+      const r = Number(k);
+      if (!Number.isInteger(r) || r < r1 || r > lastRow) continue;
+      for (let c = c1; c <= lastCol; c++) {
+        if (cleanStyle(clearedTableCellStyle(undefined, inherited(r, c)))) clearCell(r, c);
+      }
+    }
+    return changed;
   }
 
   /** 표의 표시 서식만 변경한다. 범위·필터·열 이름은 이 경로로 변경할 수 없다. */

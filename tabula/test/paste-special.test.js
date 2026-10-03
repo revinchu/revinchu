@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { MAX_ROWS } from '../src/formula.js';
 import { Workbook, cellData } from '../src/workbook.js';
+import { tableCellDisplayStyle } from '../src/table-format.js';
 import { snapshotPasteSource, pasteSourceFromText, pasteSpecialRange, applyPasteSpecial, PASTE_SPECIAL_TYPES, transposePasteFormula } from '../src/paste-special.js';
 const box = (r1, c1, r2 = r1, c2 = c1) => ({ r1, c1, r2, c2 });
 const copy = (w, area, si = 0) => { const rows = [], data = [], values = []; for (let r = area.r1; r <= area.r2; r++) { rows.push(r); const d = [], v = []; for (let c = area.c1; c <= area.c2; c++) { d.push(cellData(w.getCell(si, r, c))); v.push(w.getValue(si, r, c)); } data.push(d); values.push(v); } return snapshotPasteSource(w, { ...area, si, rows, data, values }); };
@@ -83,3 +84,18 @@ test('실제 Excel 전치 참조 21종: 상대/절대/혼합/범위/전체 행·
 });
 
 test('오류 값 복사는 문자열이나 일반 객체로 바뀌지 않는다',()=>{const w=book({'0,0':{raw:'=1/0'},'2,0':{raw:'7'}}),src=copy(w,box(0,0));paste(w,src,box(2,0),{what:'values'});assert.equal(w.getValue(0,2,0).code,'#DIV/0!');w.undo();paste(w,src,box(2,0),{what:'values',op:'add'});assert.equal(w.getValue(0,2,0).code,'#DIV/0!');});
+
+
+test('빠른 표 스타일을 복사하면 중립 상속 표시 대신 화면의 표 색을 붙여넣는다', () => {
+  const w = book({ '0,0': { raw: '제목' }, '1,0': { raw: '42', style: { fill: '#ff0000', numFmt: 'custom', code: '0.00' } } });
+  w.baseStyle = { fill: '#ffffff', color: '#000000' };
+  w.sheets[0].allStyle = { fill: '#abcdef' };
+  w.sheets[0].tables = [{ id: 't', name: '표1', r1: 0, c1: 0, r2: 1, c2: 0, header: true, banded: true, style: 'TableStyleMedium4' }];
+  w.transact(() => w.clearTableVisualFormatting(0, 't'));
+  const shown = [tableCellDisplayStyle(w, 0, 0, 0), tableCellDisplayStyle(w, 0, 1, 0)];
+  const source = copy(w, box(0, 0, 1, 0));
+  assert.equal(source.data[0][0].style.tableStyleInherit, undefined);
+  paste(w, source, box(0, 0), {}, 1);
+  for (let r = 0; r < 2; r++) { assert.equal(w.styleAt(1, r, 0).fill, shown[r].fill); assert.equal(w.styleAt(1, r, 0).color, shown[r].color); }
+  assert.equal(w.getValue(1, 1, 0), 42); assert.equal(w.styleAt(1, 1, 0).code, '0.00');
+});

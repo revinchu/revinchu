@@ -1,3 +1,4 @@
+import { tableCellDisplayStyle } from './table-format.js';
 import { filterButtonVisible, filterButtonsVisible, filterWithButtons } from './filter-display.js';
 import { createSheetPicker } from './sheet-picker-ui.js';
 import { chartAreaFormatPatch } from './chart-area-format.js';
@@ -3248,11 +3249,7 @@ function capturePainter(sticky) {
     for (let j = 0; j < w; j++) {
       const r = full.r1 + i;
       const c = full.c1 + j;
-      let st = { ...styleAt(r, c) };
-      // 표 안의 셀: 표 서식도 직접 서식으로 복사 (엑셀과 같음)
-      const tbl = tableAt(sh, r, c);
-      const ts = tbl ? tableCellStyle(tbl, r, c) : null;
-      if (ts) { const own = Object.fromEntries(Object.entries(st).filter(([, v]) => v !== undefined)); st = { ...ts, ...own }; }
+      const st = { ...tableCellDisplayStyle(wb, si, r, c) };
       row.push(st);
     }
     styles.push(row);
@@ -7036,8 +7033,9 @@ function setTables(fn) {
   wb.setSheetProp(si, 'tables', fn((sheet().tables ?? []).map((t) => ({ ...t }))));
 }
 
-function updateTable(id, patch) {
+function updateTable(id, patch, replaceVisuals = false) {
   wb.transact(() => {
+    if (replaceVisuals) wb.clearTableVisualFormatting(si, id);
     if(Object.keys(patch).every(k=>['style','styleDef','styleElements','banded','bandedCols','firstCol','lastCol'].includes(k)))wb.setTableStyle(si,id,patch);
     else setTables(list=>list.map(t=>t.id===id?{...t,...patch}:t));
   },meta());
@@ -7051,7 +7049,7 @@ function createTableDialog(styleName = null) {
   if (editing && !commitEdit()) return;
   const existing = tableHere();
   if (existing) {
-    if (styleName) updateTable(existing.id, objectStylePickPatch('table',styleName));
+    if (styleName) updateTable(existing.id, objectStylePickPatch('table',styleName), true);
     else toast(`이미 '${existing.name}' 표 안에 있습니다.`);
     return;
   }
@@ -7109,6 +7107,7 @@ function createTable(rg, header, styleName) {
       banded: true, bandedCols: false, firstCol: false, lastCol: false, filter: { criteria: {}, hidden: {} }, totalsFns: {},
     };
     setTables((list) => [...list, t]);
+    if (styleName) wb.clearTableVisualFormatting(si, id);
     widenForFilterButtons({ r1, c1: rg.c1, r2, c2: rg.c2 });
   }, meta());
   const t = sheet().tables.find((x) => x.id === id);
@@ -7347,10 +7346,7 @@ function convertTableToRange() {
             for (let c = t.c1; c <= t.c2; c++) {
               const ts = tableCellStyle(t, r, c);
               if (!ts) continue;
-              const own = wb.getCell(si, r, c)?.style ?? {};
-              const patch = {};
-              for (const [k, v] of Object.entries(ts)) if (own[k] === undefined) patch[k] = v;
-              if (Object.keys(patch).length) wb.setStyle(si, r, c, patch);
+              wb.setStyle(si, r, c, { ...tableCellDisplayStyle(wb, si, r, c, t), tableStyleInherit: null });
             }
           }
           derefTableFormulas(t);
@@ -7550,7 +7546,7 @@ function tableStyleGallery(anchorEl, forCreate = false) {
   const chip=(st,def=null)=>wireObjectStyleChip(el('button',{
     type:'button',class:`style-chip tstyle${t?.style===st.name?' on':''}`,title:st.label||st.name,'aria-label':st.label||st.name,'aria-pressed':String(t?.style===st.name),onmousedown:e=>e.preventDefault(),
     style:{background:`linear-gradient(${st.swatch[0]} 0 28%, ${st.swatch[1]} 28% 52%, ${st.swatch[2]} 52% 76%, ${st.swatch[1]} 76%)`},
-    onclick:()=>{if(!valid())return;closeMenus();if(t&&!forCreate)updateTable(t.id,objectStylePickPatch('table',st.name));else createTableDialog(st.name);focusGrid();}
+    onclick:()=>{if(!valid())return;closeMenus();if(t&&!forCreate)updateTable(t.id,objectStylePickPatch('table',st.name),true);else createTableDialog(st.name);focusGrid();}
   }), 'table',def||{name:st.name,table:true,pivot:false,elements:presetStyleElements(st.name)},!!def);
   const groups=TABLE_STYLE_GROUPS.flatMap(g=>[{title:g},{node:el('div',{class:'style-grid tstyles'},TABLE_STYLES.filter(s=>s.group===g).map(s=>chip(s)))}]);
   const custom=objectStyleDefinitions('table');
@@ -16111,7 +16107,7 @@ function printSheet({ htmlOnly = false, pdf = false, name = docName } = {}) {
           if (mergeMap.has(key) && !merge) continue;
           const cellR = merge?.r ?? r, cellC = merge?.c ?? c;
           const table = tableAt(s, cellR, cellC);
-          const st = { ...(table ? tableCellStyle(table, cellR, cellC) : {}), ...styleAt(cellR, cellC), ...condFormatAt(printCond, wb, si, cellR, cellC, valueAt(cellR, cellC)).style };
+          const st = { ...tableCellDisplayStyle(wb, si, cellR, cellC, table), ...condFormatAt(printCond, wb, si, cellR, cellC, valueAt(cellR, cellC)).style };
           const { text, align } = formatValue(valueAt(cellR, cellC), st, wb.date1904);
           const css = [`text-align:${st.align && st.align !== 'general' ? st.align === 'centerContinuous' ? 'center' : st.align : align}`, st.bold && 'font-weight:700', st.italic && 'font-style:italic', st.color && `color:${st.color}`,
             st.fill && `background:${st.fill}`, `font-family:${escapeHtml(fontStack(st.font || BASE_FONT.name))}`, `font-size:${st.size || BASE_FONT.size}pt`, st.wrap && 'white-space:pre-wrap',
@@ -19459,6 +19455,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['표 빠른 스타일 전체 적용', ['빠른 스타일을 고르면 직접 칠한 색과 기존 선·강조까지 새 표 스타일로 바뀝니다. 값·수식·숫자 형식은 유지하며 실행 취소로 되돌릴 수 있습니다. 기본 셀 색이 머리글을 가리거나 사용자 지정 스타일이 빈 셀에서 빠지는 문제도 수정했습니다.']],
   ['차트 축 레이블 표시 개선', ['항목 이름의 과도한 생략을 줄이고 차트 폭에 맞춰 줄바꿈·회전을 조정합니다. 축 서식에서 레이블 간격과 각도를 지정하며 Excel 파일의 해당 설정도 읽고 저장합니다.']],
   ['iPad 마우스와 개체 메뉴', ['Ctrl·Command 휠로 시트 배율을 바꾸고 슬라이서 항목을 추가 선택할 때 누락된 키 상태를 보완합니다. 개체 재표시 뒤 우클릭이 셀 메뉴로 잘못 열리지 않게 했으며 차트 편집 버튼을 다른 개체 위에 표시합니다.']],
   ['온라인 사진 미리보기 확대', ['검색 결과를 화면 폭에 맞는 큰 미리보기로 표시하고 사진 전체를 확인할 수 있도록 개선했습니다.']],

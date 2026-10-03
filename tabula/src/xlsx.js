@@ -1,4 +1,5 @@
 import { readAutoFilter, readFilterSort, autoFilterXml, filterSortXml } from './xlsx-filter.js';
+import { TABLE_VISUAL_KEYS } from './table-format.js';
 import { normalizeObjectStyles, findObjectStyle, objectStylePatch, TABLE_STYLE_ELEMENTS, SLICER_STYLE_ELEMENTS } from './object-styles.js';
 import { relocateValidation, VALIDATION_IME_MODES } from './validation.js';
 import { chartAreaFormatXml, readChartAreaFormat } from './chart-area-drawingml.js';
@@ -47,6 +48,19 @@ const NS_R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationship
 const NS_PKG = 'http://schemas.openxmlformats.org/package/2006/relationships';
 const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
 const EMU = 9525; // 1px
+const TABLE_STYLE_INHERIT_URI = '{3720B142-2CF8-4B6E-95A7-574958454C54}';
+const TABLE_STYLE_INHERIT_NS = 'https://wixel.app/table-style/1';
+// Native XF stores a neutral component; this extension remembers why it is neutral.
+// Only visual channels can inherit from a table. File metadata cannot alter values or number formats.
+function tableStyleInheritance(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const out = {};
+  for (const [key, neutral] of Object.entries(value)) {
+    if (!TABLE_VISUAL_KEYS.includes(key)) continue;
+    if (neutral === '' || neutral === false || neutral === null) out[key] = neutral;
+  }
+  return Object.keys(out).length ? out : null;
+}
 
 // 변환 이력만 보관한다. 재계산/원본 XML 보존을 뜻하지 않으며, 파일의 임의 문구는 표시하지 않는다.
 const XLSX_IMPORT_WARNINGS = {
@@ -419,6 +433,21 @@ function readStyles(files, wbRels, theme) {
     if (pr) {
       if (pr.attrs.locked === '0' || pr.attrs.locked === 'false') st.locked = false;
       if (pr.attrs.hidden === '1' || pr.attrs.hidden === 'true') st.hideFormula = true;
+    }
+    const extension = kids(child(xf, 'extLst'), 'ext').find(e => e.attrs.uri?.toUpperCase() === TABLE_STYLE_INHERIT_URI);
+    const inheritance = child(extension, 'tableStyleInherit');
+    if (inheritance?.attrs['xmlns:wx'] === TABLE_STYLE_INHERIT_NS) {
+      try {
+        const marker = tableStyleInheritance(JSON.parse(inheritance.attrs.json ?? 'null'));
+        if (marker) {
+          for (const [key, neutral] of Object.entries(marker)) {
+            // Native formatting wins if another editor changed the component after export.
+            if (st[key] === undefined || st[key] === neutral) st[key] = neutral;
+            else delete marker[key];
+          }
+          if (Object.keys(marker).length) st.tableStyleInherit = marker;
+        }
+      } catch { /* Ignore malformed optional metadata; native Excel formatting remains usable. */ }
     }
     return st;
   };
@@ -3217,7 +3246,14 @@ class StylePool {
     const prot = style.locked === false || style.hideFormula ? `<protection${style.locked === false ? ' locked="0"' : ''}${style.hideFormula ? ' hidden="1"' : ''}/>` : '';
     // 확인란: 엑셀 365 방식 (xf 의 xfComplement → featurePropertyBag 의 Checkbox 셀 컨트롤). 옛 엑셀은 TRUE/FALSE 로 표시
     if (style.checkbox) this.hasCheckbox = true;
-    const ext = style.checkbox ? '<extLst><ext uri="{C7286773-470A-42A8-94C5-96B5CB345126}" xmlns:xfpb="http://schemas.microsoft.com/office/spreadsheetml/2022/featurepropertybag"><xfpb:xfComplement i="0"/></ext></extLst>' : '';
+    const extensions = [];
+    if (style.checkbox) extensions.push('<ext uri="{C7286773-470A-42A8-94C5-96B5CB345126}" xmlns:xfpb="http://schemas.microsoft.com/office/spreadsheetml/2022/featurepropertybag"><xfpb:xfComplement i="0"/></ext>');
+    const inheritance = tableStyleInheritance(style.tableStyleInherit);
+    if (inheritance) {
+      for (const [key, neutral] of Object.entries(inheritance)) if (style[key] !== neutral) delete inheritance[key];
+      if (Object.keys(inheritance).length) extensions.push(`<ext uri="${TABLE_STYLE_INHERIT_URI}"><wx:tableStyleInherit xmlns:wx="${TABLE_STYLE_INHERIT_NS}" json="${esc(JSON.stringify(inheritance))}"/></ext>`);
+    }
+    const ext = extensions.length ? `<extLst>${extensions.join('')}</extLst>` : '';
     const inner = (align.length ? `<alignment ${align.join(' ')}/>` : '') + prot + ext;
     const parts = { number: numFmtId, font: fontId, fill: fillId, border: borderId, alignment: align.join(' '), protection: prot };
     // 글꼴/채우기만 지정한 XF에 일반 표시 형식을 명시하면 다시 읽을 때 사용자 숫자 서식으로 굳어진다.

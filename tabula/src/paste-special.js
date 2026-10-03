@@ -1,5 +1,6 @@
 // 선택하여 붙여넣기: 복사 시점의 데이터/서식을 보존하고 단일 트랜잭션에서 적용한다.
 import { cellData, makeCellRC } from './workbook.js';
+import { tableCellDisplayStyle } from './table-format.js';
 import { shiftFormula, cellName, quoteSheetName, MAX_ROWS, MAX_COLS, EXCEL_MAX_ROWS, isError, rewriteRefs } from './formula.js';
 import { parseDelimited } from './csv.js';
 import { parseInput } from './format.js';
@@ -23,7 +24,7 @@ export function snapshotPasteSource(wb, source) {
   const sh = wb.sheets[source.si], rows = source.rows ?? source.data.map((_, i) => source.r1 + i);
   const range = { r1: rows[0], r2: rows.at(-1), c1: source.c1, c2: source.c2 };
   const styles = new Map();
-  const styleAt = (r, c) => { const effective = wb.styleAt(source.si, r, c), key = JSON.stringify(effective); if (!styles.has(key)) styles.set(key, cellStyleDefaults(clone(effective))); return styles.get(key); };
+  const styleAt = (r, c) => { const effective = tableCellDisplayStyle(wb, source.si, r, c), key = JSON.stringify(effective); if (!styles.has(key)) styles.set(key, cellStyleDefaults(clone(effective))); return styles.get(key); };
   return { ...source, rows: [...rows], data: source.data.map((row, i) => row.map((d, j) => { const style = styleAt(rows[i], source.c1 + j), copied = cellData(wb.getCell(source.si, rows[i], source.c1 + j), style) ?? { raw: '' }; copied.style = style; return copied; })), values: source.values.map(row => row.map(value => isError(value) ? value : clone(value))),
     sourceSheet: sh, sourceName: sh.name, widths: Array.from({ length: source.c2 - source.c1 + 1 }, (_, j) => wb.colWidth(source.si, source.c1 + j)),
     cond: clone((sh.cond ?? []).filter(r => rangesOf(r).some(g => intersect(g, range)))), validations: clone((sh.validations ?? []).filter(r => intersect(r, range))), merges: clone((sh.merges ?? []).filter(r => intersect(r, range))), ready: true };

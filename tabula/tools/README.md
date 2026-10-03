@@ -573,3 +573,8 @@ node tools/mobile-layout.mjs
 ### 차트 항목 축 레이블
 
 `node tools/chart-axis-labels.mjs`는 실제 축 글자 수, SVG 경계와 회전 사각형의 충돌, 3D/다단계/수동 간격·각도를 검사합니다. `node tools/chart-axis-settings.mjs`는 축 직접 클릭과 전체 서식 패널의 설정·실행 취소·XLSX 저장을 검사합니다. `WIXEL_URL`은 로컬 서버, `WIXEL_BROWSER=chromium|webkit`을 사용하며 Playwright 경로는 위 공통 안내를 따릅니다. 원격 쓰기를 차단한 합성 문서만 사용합니다. 실제 Excel 앱의 자동 배치와 픽셀 동등성을 검사하는 도구는 아닙니다.
+
+
+### 표 빠른 스타일 전체 적용
+
+`node tools/table-quick-style.mjs`는 실제 테이블 디자인 리본에서 스타일을 골라 표 전체 채우기·글자색·강조·선 변경을 확인합니다. 직접 강조색과 기존 스타일, 행/열 서식, 기본 셀 서식, 사용자 지정 빈 셀, 모바일 390px, 한 번의 실행 취소·다시 실행과 XLSX 재열기를 검사합니다. `WIXEL_URL`은 로컬 서버, `WIXEL_BROWSER=chromium|webkit`, `WIXEL_TABLE_STYLE_OUT`은 D: 결과 경로이며 외부 쓰기를 차단한 합성 자료를 사용합니다.

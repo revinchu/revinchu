@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Workbook } from '../src/workbook.js';
+import { tableCellDisplayStyle } from '../src/table-format.js';
 import { rangeImageSvg } from '../src/range-image-export.js';
 import { safeObjectSvg, prepareImageSvg } from '../src/object-image-export.js';
 import { parseXml, descendants, child } from '../src/xml.js';
@@ -113,4 +114,17 @@ test('대형 범위·모든 행 숨김은 일부만 저장하지 않고 명시�
   wb.sheets[0].defColW=65533;assert.throws(()=>render(wb,area(0,0)),/65,536픽셀/);
   wb.sheets[0].hiddenRows={0:true};assert.throws(()=>render(wb,area(0,0)),/모든 행/);
   assert.throws(()=>render(wb,{r1:-1,c1:0,r2:0,c2:0}),/셀 범위/);
+});
+
+
+test('빠른 표 스타일은 범위 그림 저장에도 기본 흰색·상속 중립값에 가려지지 않는다', () => {
+  const wb = book({ '0,0': '제목', '1,0': '자료' });
+  wb.baseStyle = { fill: '#ffffff', color: '#000000' };
+  wb.sheets[0].allStyle = { fill: '#abcdef' };
+  wb.sheets[0].tables = [{ id: 't', name: '표1', r1: 0, c1: 0, r2: 1, c2: 0, header: true, banded: true, style: 'TableStyleMedium4' }];
+  wb.transact(() => wb.clearTableVisualFormatting(0, 't'));
+  const shown = tableCellDisplayStyle(wb, 0, 0, 0), out = render(wb, area(1, 0));
+  assert.ok(nodes(out, 'rect').some(node => node.attrs.fill === shown.fill));
+  assert.ok(nodes(out, 'text').some(node => node.attrs.fill === shown.color));
+  assert.doesNotMatch(out.svg, /#abcdef|tableStyleInherit/);
 });

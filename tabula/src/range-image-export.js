@@ -5,7 +5,7 @@ import { DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT } from './workbook.js';
 import { MAX_ROWS, MAX_COLS } from './formula.js';
 import { formatValue, formatGeneral } from './format.js';
 import { prepareCond, condFormatAt, ICON_SVG, ruleRanges } from './condfmt.js';
-import { tableAt, tableCellStyle } from './tables.js';
+import { tableCellDisplayStyle } from './table-format.js';
 import { resolveGridBorders, gridBorderPaintOrder } from './grid-lines.js';
 import { fontAlias } from './fonts.js';
 import { safeUrl } from './safe-html.js';
@@ -139,9 +139,9 @@ export function rangeImageSvg(wb, si, range, options = {}) {
   const styleAt = (r, c) => {
     const key = `${r},${c}`;
     if (!styleCache.has(key)) {
-      const table = tableAt(sheet, r, c), own = Object.fromEntries(Object.entries(book.styleAt(si, r, c)).filter(([,v]) => v !== undefined));
+      const displayStyle = tableCellDisplayStyle(book, si, r, c);
       const cf = condFormatAt(cond, book, si, r, c, valueAt(r, c));
-      styleCache.set(key, { style: { ...defaultStyle, ...(table ? tableCellStyle(table, r, c) : null), ...own, ...cf.style }, cf });
+      styleCache.set(key, { style: { ...defaultStyle, ...displayStyle, ...cf.style }, cf });
     }
     return styleCache.get(key);
   };
