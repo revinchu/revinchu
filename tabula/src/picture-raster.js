@@ -2,7 +2,7 @@ import { pictureVisual, needsPictureBake } from './picture-filter.js';
 import { pictureCompressionSize } from './picture-pixels.js';
 export async function loadPictureBitmap(src) {
   if (typeof src !== 'string' || !/^(data:image\/|blob:|https?:\/\/)/i.test(src)) throw new Error('이 그림은 픽셀 편집을 지원하지 않습니다.');
-  const image = new Image(); if (!src.startsWith('data:') && !src.startsWith('blob:')) image.crossOrigin = 'anonymous';
+  const image = new Image(); image.referrerPolicy = 'no-referrer'; if (!src.startsWith('data:') && !src.startsWith('blob:')) image.crossOrigin = 'anonymous';
   await new Promise((resolve, reject) => { const timeout = setTimeout(() => reject(new Error('그림을 읽는 시간이 초과되었습니다.')), 15000); image.onload = () => { clearTimeout(timeout); resolve(); }; image.onerror = () => { clearTimeout(timeout); reject(new Error('그림 픽셀을 읽지 못했습니다. 외부 그림은 파일로 내려받아 삽입하세요.')); }; image.src = src; });
   if (!image.naturalWidth || !image.naturalHeight || image.naturalWidth * image.naturalHeight > 32000000) throw new Error('픽셀 편집은 3,200만 픽셀 이하 그림에서 지원합니다.');
   return image;

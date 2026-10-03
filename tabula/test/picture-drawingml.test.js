@@ -69,3 +69,20 @@ test('격자·그룹 SVG는 같은 보정·자르기·반사·테두리 표현�
  for(const output of [html,svg,group]){assert.match(output,/feDropShadow/);assert.match(output,/stroke-dasharray=/);assert.match(output,/feMorphology/);assert.match(output,/feComponentTransfer/);}
  assert.match(html,/class="picture-reflection"/);assert.match(svg,/<mask/);assert.match(group,/<mask/);assert.match(html,/width:125%/);assert.match(svg,/scale\(-1,1\)/);
 });
+
+// HTML 필터의 위치 의존 잘림은 tools/picture-visibility.mjs의 실제 픽셀로 검사한다.
+test('HTML 효과 경계는 그림 기준이고 SVG 효과 경계와 픽셀 여유가 같다', () => {
+ const p=pic({correction:{brightness:.2},shadow:{dx:16,dy:-8,blur:12}}), before=structuredClone(p);
+ const html=pictureMarkup(p,'grid'), svg=pictureSvg(p,'saved');
+ const region=markup=>Object.fromEntries([...markup.match(/<filter\b[^>]*>/)[0].matchAll(/(\w+)="([^"]*)"/g)].map(([,key,value])=>[key,value]));
+ const a=region(html),b=region(svg);
+ assert.equal(a.filterUnits,'objectBoundingBox');assert.equal(b.filterUnits,'userSpaceOnUse');
+ assert.equal(a.primitiveUnits,'userSpaceOnUse');assert.equal(b.primitiveUnits,'userSpaceOnUse');
+ for(const [key,scale] of [['x',p.w],['y',p.h],['width',p.w],['height',p.h]])assert.ok(Math.abs(Number(a[key])*scale-Number(b[key]))<1e-9,key);
+ assert.deepEqual(p,before);
+});
+test('HTML 그림의 필터 경계는 이동 좌표에 의존하지 않고 효과 없는 그림은 필터를 만들지 않는다', () => {
+ const p=pic({color:{recolor:'grayscale'},crop:{l:.2}});
+ assert.equal(pictureMarkup(p,'same'),pictureMarkup({...p,x:4000,y:9000},'same'));
+ assert.doesNotMatch(pictureMarkup(pic({}),'plain'),/<filter\b|filter:url/);
+});

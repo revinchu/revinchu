@@ -559,3 +559,8 @@ node tools/mobile-layout.mjs
 ## 모바일 기기 최적화 OFF의 포인터 이동
 
 `node tools/apple-pointer-work.mjs`는 iPhone, Mac 플랫폼으로 표시되는 iPad 및 Android를 모의하고 모바일 최적화 OFF에서 리본/상단 메뉴/빠른 실행/시트 탭의 드래그·휠과 손바닥 도구·양버튼 이동을 검사한다. 문서·선택·Undo 보존, 일반 클릭 복원, ON→OFF 유지, 넓은 iPad, 일반 데스크톱의 기존 제한도 확인한다. `WIXEL_URL`, `WIXEL_BROWSER=chromium|webkit`, `WIXEL_APPLE_POINTER_OUT`(D: 경로), `WIXEL_APPLE_POINTER_FILTER`를 지원한다. OS/Bluetooth 하드웨어 검사가 아니며 [66번 문서](../docs/codex/66_모바일기기마우스이동.md)에 범위와 결과를 기록한다.
+
+
+## 사진 위치별 가시성
+
+`node tools/picture-visibility.mjs`는 합성 그림의 실제 PNG 픽셀로 위치별 소실·셀 글자 겹침, 효과·자르기·크기·배율, 틀 고정과 스크롤, 그림 서식 미리보기와 온라인 이미지 로드를 검사한다. `WIXEL_URL`, `WIXEL_BROWSER=chromium|webkit`, `WIXEL_PICTURE_VISIBILITY_OUT`(D: 경로)을 지원한다. 실제 사용자 파일·외부 API·서버 저장을 사용하지 않는다. [67번 문서](../docs/codex/67_사진위치별표시오류.md)에 재현과 최종 검증 범위를 기록한다.

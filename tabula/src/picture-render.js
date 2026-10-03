@@ -9,8 +9,8 @@ const dashOf = (kind, width) => ({dash:[4,3],dot:[1,2],dashDot:[4,2,1,2]})[kind]
 
 /** Inner markup only: caller owns position, rotation and flips. */
 export function pictureMarkup(picture, id = picture.id ?? 'picture') {
-  const visual = pictureVisual(picture, idOf(id)), e = visual.effects, css = pictureCropStyle(picture.crop);
-  const image = `<img src="${esc(picture.src ?? '')}" alt="${esc(picture.alt ?? picture.name ?? '')}" draggable="false" style="position:absolute;max-width:none;left:${css.left};top:${css.top};width:${css.width};height:${css.height}">`;
+  const visual = pictureVisual(picture, idOf(id), 1, 'objectBoundingBox'), e = visual.effects, css = pictureCropStyle(picture.crop);
+  const image = `<img src="${esc(picture.src ?? '')}" alt="${esc(picture.alt ?? picture.name ?? '')}" draggable="false" referrerpolicy="no-referrer" style="position:absolute;max-width:none;left:${css.left};top:${css.top};width:${css.width};height:${css.height}">`;
   const clipped = `<div style="position:absolute;inset:0;overflow:hidden;border-radius:${e.radius}px">${image}</div>`;
   const filter = visual.filter ? `filter:${visual.filter};` : '';
   const content = `<div class="picture-pixels" style="position:absolute;inset:0;${filter}">${clipped}</div>`;

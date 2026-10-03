@@ -207,7 +207,7 @@ export function pictureEditor(original, { section = 'size' } = {}) {
   const body = el('div', { class: 'picture-editor picture-v2' }, nav, el('div', { class: 'picture-v2-body' }, preview, settings), status,
     button('그림 서식 원래대로', () => { Object.assign(draft, resetPictureFormatting()); sync(); }));
   if (!original.linked && !original.media) {
-    const source = new Image(); source.onload = () => { if (closed) return; natural.w = source.naturalWidth; natural.h = source.naturalHeight; originalSize.disabled = !natural.w; originalSize.title = natural.w + ' × ' + natural.h + 'px'; }; source.onerror = () => { if (!closed) originalSize.title = '원본 이미지 크기를 읽지 못했습니다.'; }; source.src = original.originalSrc || original.src;
+    const source = new Image(); source.referrerPolicy = 'no-referrer'; source.onload = () => { if (closed) return; natural.w = source.naturalWidth; natural.h = source.naturalHeight; originalSize.disabled = !natural.w; originalSize.title = natural.w + ' × ' + natural.h + 'px'; }; source.onerror = () => { if (!closed) originalSize.title = '원본 이미지 크기를 읽지 못했습니다.'; }; source.src = original.originalSrc || original.src;
   }
   const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(() => refresh()) : null; observer?.observe(stage);
   activate({ transparency: 'effects', border: 'effects' }[section] ?? section); sync();

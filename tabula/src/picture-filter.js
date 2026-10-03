@@ -17,7 +17,7 @@ export function needsPictureBake(pic) {
   const { correction, color, artistic } = normalizePictureVisual(pic);
   return !!(correction.sharpness || color.saturation !== 1 || color.temperature || artistic.type !== 'none' || ['sepia', 'washout'].includes(color.recolor));
 }
-export function pictureVisual(pic, id = 'picture', scale = 1) {
+export function pictureVisual(pic, id = 'picture', scale = 1, filterUnits = 'userSpaceOnUse') {
   const effects = normalizePictureVisual(pic), { correction, color, artistic, glow, softEdge } = effects;
   const parts = [], k = n(scale, 1, .0001, 1000), fid = 'picfx-' + String(id).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 120);
   const transfer = (slope, intercept) => `<feComponentTransfer>${['R', 'G', 'B'].map(c => `<feFunc${c} type="linear" slope="${slope}" intercept="${intercept}"/>`).join('')}</feComponentTransfer>`;
@@ -45,5 +45,12 @@ export function pictureVisual(pic, id = 'picture', scale = 1) {
   if (effects.shadow) { const s = effects.shadow; parts.push(`<feDropShadow dx="${s.dx * k}" dy="${s.dy * k}" stdDeviation="${s.blur * k / 2}" flood-color="${s.color}" flood-opacity="${s.opacity}"/>`); }
   const shadowPad = effects.shadow ? Math.max(Math.abs(effects.shadow.dx), Math.abs(effects.shadow.dy)) + effects.shadow.blur * 2 : 0;
   const pad = Math.max(12, (softEdge + (glow?.size ?? 0) + (artistic.type === 'blur' ? 15 : 0)) * k * 3, shadowPad * k), w = Math.max(1, Number(pic.w) || 300) * k, h = Math.max(1, Number(pic.h) || 200) * k;
-  return { defs: parts.length ? `<filter id="${fid}" filterUnits="userSpaceOnUse" x="${-pad}" y="${-pad}" width="${w + pad * 2}" height="${h + pad * 2}" color-interpolation-filters="sRGB">${parts.join('')}</filter>` : '', filter: parts.length ? `url(#${fid})` : '', effects };
+  // HTML에 참조한 userSpaceOnUse 영역을 WebKit은 문서 위치에 따라 자른다.
+  // 격자/미리보기는 그림 자체의 경계 비율, SVG/내보내기는 SVG 좌표를 사용한다.
+  // 흐림·그림자 등 효과의 길이는 양쪽 모두 그림 픽셀 단위를 유지한다.
+  const relative = filterUnits === 'objectBoundingBox';
+  const region = relative
+    ? `filterUnits="objectBoundingBox" x="${-pad / w}" y="${-pad / h}" width="${1 + pad * 2 / w}" height="${1 + pad * 2 / h}"`
+    : `filterUnits="userSpaceOnUse" x="${-pad}" y="${-pad}" width="${w + pad * 2}" height="${h + pad * 2}"`;
+  return { defs: parts.length ? `<filter id="${fid}" ${region} primitiveUnits="userSpaceOnUse" color-interpolation-filters="sRGB">${parts.join('')}</filter>` : '', filter: parts.length ? `url(#${fid})` : '', effects };
 }
