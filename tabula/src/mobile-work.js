@@ -44,9 +44,9 @@ export function installMobileWork({ button, onChange }) {
   media.addEventListener?.('change', schedule);
   // Ribbon/QAT contents are rebuilt on tab changes, so delegate wheel navigation.
   document.addEventListener('wheel', e => {
-    if (!state?.active || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
     const strip = e.target?.closest?.('.ribbon-tabs, .ribbon, .quick-access.below, .sheet-tabs');
-    if (!strip || strip.scrollWidth <= strip.clientWidth + 1) return;
+    if (!strip || (!state?.active && !strip.matches('.ribbon-tabs')) || strip.scrollWidth <= strip.clientWidth + 1) return;
     if (e.target.closest('input, textarea, select, [contenteditable=true]') === document.activeElement) return;
     const delta = (Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY) *
       (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? strip.clientWidth : 1);
@@ -56,7 +56,7 @@ export function installMobileWork({ button, onChange }) {
     e.preventDefault();
   }, { passive: false });
 
-  installRibbonMouseDrag({ enabled: () => !!state?.active });
+  installRibbonMouseDrag({ enabled: strip => strip.matches('.ribbon-tabs') || !!state?.active });
 
   const setPreference = value => {
     preference = ['auto', 'on', 'off'].includes(value) ? value : 'auto';

@@ -86,7 +86,10 @@ button { font: inherit; color: inherit; }
 .ribbon-tabs {
   display: flex; align-items: flex-end; gap: 2px; height: 32px; padding: 0 8px;
   background: var(--green-title); color: #fff; flex: none;
+  min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+  overscroll-behavior-x: contain; touch-action: pan-x;
 }
+.ribbon-tabs > :not(.spacer) { flex-shrink: 0; }
 .ribbon-tab {
   height: 28px; padding: 0 12px; border: 0; border-radius: 4px 4px 0 0; background: transparent;
   cursor: pointer; white-space: nowrap; font-size: 12.5px;

@@ -560,11 +560,19 @@ export function buildRibbon(app) {
     const t = TABS.find((x) => x.id === id);
     if (!t || t.file || (t.context && !context.has(t.context))) return;
     ribbonEl.classList.remove('collapsed');
-    if (current === id) return;
-    current = id;
-    renderTabs();
-    renderRibbon();
-    app.refreshRibbon();
+    if (current !== id) {
+      current = id;
+      renderTabs();
+      renderRibbon();
+      app.refreshRibbon();
+    }
+    // 접근키·모바일 전체 메뉴로 선택한 탭도 현재 스크롤 안에서 보이게 한다.
+    const active = tabsEl.querySelector('.ribbon-tab.active');
+    if (!active) return;
+    const strip = tabsEl.getBoundingClientRect(), tab = active.getBoundingClientRect();
+    const scale = strip.width / tabsEl.offsetWidth || 1;
+    if (tab.left < strip.left) tabsEl.scrollLeft += (tab.left - strip.left) / scale;
+    else if (tab.right > strip.right) tabsEl.scrollLeft += (tab.right - strip.right) / scale;
   }
 
   function renderTabs() {

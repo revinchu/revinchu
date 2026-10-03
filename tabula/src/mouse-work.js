@@ -1,51 +1,84 @@
 // Mouse navigation is a view gesture: never write cells, styles or undo history.
 export function installRibbonMouseDrag({ enabled }) {
-  let gesture = null, swallowClick = false;
-  const stop = e => { e.preventDefault(); e.stopImmediatePropagation(); };
-  const end = () => { gesture = null; document.body.classList.remove('ribbon-mouse-drag'); };
+  let gesture = null, swallowClick = false, lastDrag = null, recentTouch = -Infinity;
   const replayed = new WeakSet();
-  const cancel = () => { if (gesture) swallowClick = true; end(); };
-  document.addEventListener('pointerdown', e => {
-    if (e.pointerType !== 'mouse') { end(); swallowClick = false; return; }
-    if (e.button !== 0) return;
-    swallowClick = false;
-    if (!enabled() || e.ctrlKey || e.metaKey || e.altKey) return;
+  const stop = e => { e.preventDefault(); e.stopImmediatePropagation(); };
+  const valid = g => enabled(g.strip) && g.strip.isConnected;
+  const end = () => {
+    const g = gesture; gesture = null;
+    document.body.classList.remove('ribbon-mouse-drag');
+    if (g?.id !== undefined && g.strip.hasPointerCapture?.(g.id)) g.strip.releasePointerCapture(g.id);
+  };
+  const cancel = () => {
+    if (gesture) swallowClick = true;
+    if (gesture?.active) lastDrag = { strip:gesture.strip, time:performance.now() };
+    end();
+  };
+  const begin = (e, source) => {
+    if (e.button !== 0 || e.ctrlKey || e.metaKey || e.altKey) return;
     const strip = e.target.closest?.('.ribbon-tabs, .ribbon, .quick-access.below, .sheet-tabs');
-    if (!strip || strip.scrollWidth <= strip.clientWidth + 1 || e.target.closest('input,textarea,select,[contenteditable=true]')) return;
-    gesture = { strip, id:e.pointerId, x:e.clientX, scroll:strip.scrollLeft, active:false };
+    if (!strip || !enabled(strip) || strip.scrollWidth <= strip.clientWidth + 1 || e.target.closest('input,textarea,select,[contenteditable=true]')) return;
+    gesture = { strip, target:e.target, source, id:e.pointerId, x:e.clientX, lastX:e.clientX, active:false };
+  };
+  document.addEventListener('pointerdown', e => {
+    if (e.pointerType !== 'mouse') { recentTouch = performance.now(); cancel(); swallowClick = false; return; }
+    recentTouch = -Infinity;
+    if (e.button !== 0) return;
+    cancel(); swallowClick = false;
+    begin(e, 'pointer');
   }, true);
-  // Sheet tabs switch on mousedown. Delay that action until this is known to be a click.
+  // Safari/보조 포인터가 Mouse Events만 보내도 같은 탐색을 제공한다.
+  // 시트 탭은 mousedown에 바뀌므로 일반 클릭으로 확정될 때까지 해당 동작을 보류한다.
   document.addEventListener('mousedown', e => {
-    if (!gesture || replayed.has(e) || !gesture.strip.contains(e.target)) return;
+    if (replayed.has(e) || e.sourceCapabilities?.firesTouchEvents || performance.now() - recentTouch < 700 || e.button !== 0) return;
+    if (e.detail <= 1) lastDrag = null;
+    if (!gesture) { swallowClick = false; begin(e, 'mouse'); }
+    if (!gesture || !valid(gesture) || !gesture.strip.contains(e.target)) return;
     gesture.down = e; stop(e);
   }, true);
-  document.addEventListener('pointermove', e => {
+  const move = (e, source) => {
     const g = gesture;
-    if (!g || g.id !== e.pointerId) return;
-    if (!enabled() || !g.strip.isConnected || !(e.buttons & 1)) { end(); return; }
-    const dx = e.clientX - g.x;
-    if (!g.active && Math.abs(dx) < 4) return;
-    g.active = true; swallowClick = true;
-    document.body.classList.add('ribbon-mouse-drag');
-    g.strip.scrollLeft = g.scroll - dx;
-    stop(e);
-  }, true);
-  document.addEventListener('pointerup', e => {
-    if (!gesture || gesture.id !== e.pointerId) return;
+    if (!g || (source === 'pointer' && (e.pointerType !== 'mouse' || g.id !== e.pointerId))) return;
+    if (!valid(g) || !(e.buttons & 1)) { cancel(); return; }
+    if (!g.active && Math.abs(e.clientX - g.x) < 4) return;
+    if (!g.active) {
+      g.active = true; swallowClick = true;
+      document.body.classList.add('ribbon-mouse-drag');
+      if (g.id !== undefined) { try { g.strip.setPointerCapture(g.id); } catch {} }
+    }
+    // 호환 mousemove가 같은 좌표로 이어져도 중복 이동하지 않으며, 끝에서 즉시 반대로 움직인다.
+    const scale = g.strip.getBoundingClientRect().width / g.strip.offsetWidth || 1;
+    g.strip.scrollLeft = Math.max(0, Math.min(g.strip.scrollWidth - g.strip.clientWidth, g.strip.scrollLeft + (g.lastX - e.clientX) / scale));
+    g.lastX = e.clientX; stop(e);
+  };
+  document.addEventListener('pointermove', e => move(e, 'pointer'), true);
+  document.addEventListener('mousemove', e => move(e, 'mouse'), true);
+  const up = (e, source) => {
     const g = gesture;
-    if (g.active) stop(e);
+    if (!g || (source === 'pointer' && g.id !== e.pointerId) || e.button !== 0) return;
+    const accepted = valid(g);
+    if (g.active) { lastDrag = { strip:g.strip, time:performance.now() }; stop(e); }
     end();
-    if (!g.active && g.down?.target.isConnected && enabled()) {
+    if (accepted && !g.active && g.down?.target.isConnected) {
       const down = new MouseEvent('mousedown', { bubbles:true, cancelable:true, view:window,
         button:0, buttons:1, clientX:g.down.clientX, clientY:g.down.clientY,
         ctrlKey:g.down.ctrlKey, shiftKey:g.down.shiftKey, altKey:g.down.altKey, metaKey:g.down.metaKey });
       replayed.add(down); g.down.target.dispatchEvent(down);
     }
-  }, true);
+  };
+  document.addEventListener('pointerup', e => up(e, 'pointer'), true);
+  document.addEventListener('mouseup', e => up(e, 'mouse'), true);
   document.addEventListener('click', e => { if (swallowClick) { stop(e); swallowClick = false; } }, true);
+  document.addEventListener('dblclick', e => {
+    if (lastDrag && performance.now() - lastDrag.time < 700 && lastDrag.strip.contains(e.target)) stop(e);
+  }, true);
+  document.addEventListener('dragstart', e => { if (gesture?.strip.contains(e.target)) stop(e); }, true);
   document.addEventListener('pointercancel', cancel, true);
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') cancel(); else if (!gesture) swallowClick = false; }, true);
+  document.addEventListener('lostpointercapture', e => { if (gesture?.id === e.pointerId) cancel(); }, true);
+  document.addEventListener('touchstart', () => { recentTouch = performance.now(); cancel(); swallowClick = false; }, { capture:true, passive:true });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') cancel(); else if (!gesture) { swallowClick = false; lastDrag = null; } }, true);
   window.addEventListener('blur', cancel);
+  window.addEventListener('resize', cancel);
 }
 
 export function installGridMousePan({ view, enabled, context, canStart, onDown, onStart, scroll, zoom, onArmedChange }) {

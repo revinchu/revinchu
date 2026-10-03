@@ -508,3 +508,9 @@ node tools/mobile-layout.mjs
 - `node tools/pivot-style-capture.mjs`: 가져온 피벗의 스타일 변경·지우기 실제 표시와 직접 지정 서식 보존을 확인합니다. 출력 변수는 `WIXEL_PIVOT_STYLE_OUT`입니다.
 
 `WIXEL_URL`에 로컬 소스 또는 최종 번들을 지정합니다. `WIXEL_BROWSER`는 도구별로 Chromium/WebKit를 선택하며 각 파일의 기본값을 참고하세요. 격리 컨텍스트의 합성 문서만 사용하고 외부/API 쓰기를 차단합니다. 실제 Excel 정상 열기/재저장과 WebKit 화면 검사의 구분, iPhone OS 홈 이탈의 미확인 상태는 [58번 문서](../docs/codex/58_개체스타일과모바일목록.md)에 기록합니다.
+
+## 초록색 상단 탭 가로 탐색
+
+`node tools/mobile-header-scroll.mjs`는 Chromium/WebKit의 320·390px 모바일, 데스크톱에서 수동 모바일 전환, 모바일을 끈 좁은 창에서 리본 탭의 양방향 끌기·휠·클릭·파일 메뉴·취소/재진입을 검사합니다. Pointer Events와 호환 mousemove의 중복 이동, MouseEvents만 전달되는 경로, 터치 이벤트 전달과 문서·Undo 불변도 확인합니다. 모바일 WebKit에서는 Playwright가 실제 휠 입력을 지원하지 않아 WheelEvent 전달/소비로 구분하며, 데스크톱 WebKit과 Chromium에서는 실제 마우스 휠을 사용합니다. 실제 iPhone/Bluetooth 마우스 검증은 포함하지 않습니다.
+
+`WIXEL_URL`은 로컬 소스/번들, `WIXEL_HEADER_SCROLL_OUT`은 D: 출력 폴더, `WIXEL_HEADER_SCROLL_FILTER`는 이름 일부, `WIXEL_BROWSERS=chromium,webkit`은 실행 엔진을 지정합니다. `WIXEL_HEADER_BASELINE_REF`를 지정하면 소스 서버에서 해당 Git 커밋의 `mouse-work.js`, `mobile-work.js`, `styles.css`만 격리 컨텍스트에 응답하여 수정 전 동작을 비교합니다. 제품 파일·사용자 문서는 바꾸지 않으며 외부·API·쓰기 요청을 차단합니다.
