@@ -99,7 +99,7 @@ export function onlinePicturePicker({ onInsert, kind = 'image', allowVideo = tru
     el('div', { class: 'online-filter-row' }, el('label', {}, '종류 ', type), el('label', {}, cc, 'Creative Commons만'), el('label', {}, '검색 사이트 ', source), el('button', { type: 'button', class: 'btn', onclick: setup }, '검색 사이트 설정')), note,
     availability, grid, el('div', { class: 'online-search-footer' }, status, more),
     el('label', { class: 'online-url-row' }, '웹 주소로 삽입', url), el('div', { class: 'online-note muted' }, 'GIF는 원본을 유지합니다. 영상은 웹 연결로 재생하며 XLSX에는 미리보기/링크가 남을 수 있습니다. 외부 사이트의 삭제·접속 제한에 영향을 받습니다.'));
-  const dialog = openDialog({ title: '온라인 그림', width: 880, body, onClose: () => { closed = true; request++; controller?.abort(); }, buttons: [
+  const dialog = openDialog({ title: '온라인 그림', width: 1000, body, onClose: () => { closed = true; request++; controller?.abort(); }, buttons: [
     { label: '삽입', primary: true, action: async () => {
       const list = [...chosen.values()], direct = url.value.trim();
       if (direct) {

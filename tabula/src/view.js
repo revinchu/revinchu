@@ -1,3 +1,4 @@
+import { primaryPointerModifier } from './pointer-modifiers.js';
 import { filterButtonVisible } from './filter-display.js';
 import { phoneticHtml } from './phonetic.js';
 import { normalizeVideo } from './media-object.js';
@@ -596,16 +597,18 @@ export class GridView {
   }
 
   onWheel(e) {
-    // 슬라이서 항목 목록은 그 안에서 스크롤
+    const zoomModifier = primaryPointerModifier(e);
+    // 슬라이서 목록도 Ctrl/Command 휠은 시트 확대에 우선 전달한다.
     const list = e.target.closest?.('.sl-items');
-    if (list && !e.ctrlKey && list.scrollHeight > list.clientHeight) {
+    if (list && !zoomModifier && list.scrollHeight > list.clientHeight) {
       const atTop = list.scrollTop <= 0 && e.deltaY < 0;
       const atEnd = list.scrollTop + list.clientHeight >= list.scrollHeight - 1 && e.deltaY > 0;
       if (!atTop && !atEnd) return;
     }
-    if (e.ctrlKey) {
+    if (zoomModifier) {
       e.preventDefault();
-      this.host.onZoomWheel?.(e.deltaY < 0 ? 10 : -10);
+      // A purely horizontal or zero-delta event is not a zoom-out gesture.
+      if (e.deltaY) this.host.onZoomWheel?.(e.deltaY < 0 ? 10 : -10);
       return;
     }
     e.preventDefault();

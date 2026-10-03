@@ -15,6 +15,7 @@ import { BANDING_PALETTES, alternatingRules, isBandingRule } from './alternating
 import { installMobileWork, mobileSheetZoom } from './mobile-work.js';
 import { installMobileKeyboard } from './mobile-keyboard.js';
 import { shortcutCode, appleTouchDevice } from './keyboard-shortcuts.js';
+import { installPointerModifierTracking, primaryPointerModifier } from './pointer-modifiers.js';
 import { openKeyboardCheck } from './keyboard-check.js';
 import { installGridMousePan } from './mouse-work.js';
 import { installPivotFieldDrag } from './pivot-field-drag.js';
@@ -2040,7 +2041,7 @@ function onViewMouseDown(e) {
     const id = t.closest('.obj').dataset.id;
     if(chartSel!==id)objMulti.clear();
     chartSel = id;
-    if (slBtn.classList.contains('sl-item')) slicerPick(id, slBtn.dataset.k, e.ctrlKey || e.metaKey);
+    if (slBtn.classList.contains('sl-item')) slicerPick(id, slBtn.dataset.k, primaryPointerModifier(e));
     else if (slBtn.classList.contains('sl-clear')) slicerClear(id);
     else { const sl = sheet().slicers.find((x) => x.id === id); updateObject(id, { multi: !sl.multi }); }
     gv.renderObjectsAll();
@@ -19452,6 +19453,8 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['iPad 마우스와 개체 메뉴', ['Ctrl·Command 휠로 시트 배율을 바꾸고 슬라이서 항목을 추가 선택할 때 누락된 키 상태를 보완합니다. 개체 재표시 뒤 우클릭이 셀 메뉴로 잘못 열리지 않게 했으며 차트 편집 버튼을 다른 개체 위에 표시합니다.']],
+  ['온라인 사진 미리보기 확대', ['검색 결과를 화면 폭에 맞는 큰 미리보기로 표시하고 사진 전체를 확인할 수 있도록 개선했습니다.']],
   ['사진 위치별 표시 오류 수정', ['Safari에서 사진 보정·효과를 적용한 뒤 이동할 때 일부가 잘리거나 사라지는 문제를 수정했습니다. 온라인 그림의 삽입·화면 표시·픽셀 편집 요청 설정도 일치시켰습니다.']],
   ['iPad·iPhone·Android 마우스 이동', ['모바일 최적화를 꺼도 리본·메뉴·시트 탭을 마우스로 끌거나 휠로 넘길 수 있습니다. 상단 손바닥 도구와 마우스 양쪽 버튼을 이용한 시트 이동도 사용할 수 있습니다.']],
   ['iPad Bluetooth 키보드', ['iPad의 데스크톱 화면에서도 Ctrl·Command 셀 복사·붙여넣기를 처리하고, 한글 키의 물리 코드가 누락된 경우 대체 키 번호를 확인합니다. 모바일 작업 도구와 바로 가기 키에 키보드 단축키 확인 창을 추가했습니다.']],
@@ -20028,7 +20031,10 @@ function bindEvents() {
     e.preventDefault();
     if (drawPathState) { finishPathDraw(false); return; }
     if (shapeEdit && e.target.closest('.shape-point')) { shapePointMenu(e.target.dataset.point, { x: e.clientX, y: e.clientY }); return; }
-    const objEl = e.target.closest('.obj');
+    // 선택·필터 적용으로 개체 DOM이 교체되면 Safari의 메뉴 대상이 격자로 돌아올 수 있다.
+    // 저장된 선택 대신 현재 포인터 아래의 개체를 확인해 셀 메뉴로 잘못 진입하지 않는다.
+    const underPointer = (e.clientX || e.clientY) ? document.elementFromPoint(e.clientX, e.clientY)?.closest('.obj') : null;
+    const objEl = e.target.closest('.obj') || (underPointer && dom.view.contains(underPointer) ? underPointer : null);
     if (objEl) { objectMenu(objEl.dataset.id, { x: e.clientX, y: e.clientY }); return; }
     const hit = gv.hitTest(e.clientX, e.clientY);
     const kind = hit.zone === 'colHeader' ? 'col' : hit.zone === 'rowHeader' ? 'row' : 'cell';
@@ -20216,6 +20222,7 @@ async function init() {
   }
   wb.onChange(onBookChange);
   hydrateIcons();
+  installPointerModifierTracking(window);
   gv = new GridView({
     state: () => ({
       wb, si, sel, selKind, active, editing: !!editing, readonly: viewOnly, clip, fillPreview, refs: editRefs, chartSel, chartPart, objMulti:new Set(selectedObjects().map(f=>f.obj.id).filter(id=>id!==chartSel)), circles, focusCell: opts.focusCell,

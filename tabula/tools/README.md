@@ -564,3 +564,8 @@ node tools/mobile-layout.mjs
 ## 사진 위치별 가시성
 
 `node tools/picture-visibility.mjs`는 합성 그림의 실제 PNG 픽셀로 위치별 소실·셀 글자 겹침, 효과·자르기·크기·배율, 틀 고정과 스크롤, 그림 서식 미리보기와 온라인 이미지 로드를 검사한다. `WIXEL_URL`, `WIXEL_BROWSER=chromium|webkit`, `WIXEL_PICTURE_VISIBILITY_OUT`(D: 경로)을 지원한다. 실제 사용자 파일·외부 API·서버 저장을 사용하지 않는다. [67번 문서](../docs/codex/67_사진위치별표시오류.md)에 재현과 최종 검증 범위를 기록한다.
+
+
+## iPad Ctrl 포인터·개체 메뉴·사진 검색
+
+`ipad-ctrl-wheel.mjs`, `slicer-modifier-selection.mjs`, `chart-controls-layer.mjs`, `online-gallery-layout.mjs`는 로컬 `WIXEL_URL`에서 격리 합성 문서로 동작한다. `WIXEL_BROWSER=chromium|webkit`로 브라우저를 선택한다. 각각 배율·modifier 해제, 슬라이서 추가 선택/개체별 메뉴, 차트 단추의 겹침과 실제 클릭, 화면 크기별 사진 미리보기와 선택 보존을 확인한다. 실제 Bluetooth 기기 검사가 아니며 최종 결과와 범위는 [68번 문서](../docs/codex/68_iPad포인터와개체메뉴.md)에 기록한다.
