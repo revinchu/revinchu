@@ -245,6 +245,7 @@ node tools/recovery-ux.mjs
 - `node tools/date-system.mjs`: 1900/1904 문서의 표시·입력·파일 저장·Undo.
 - `node tools/pivot-reliability.mjs`: 외부 시트 원본 수식 변경과 자동 새로 고침·Undo.
 - `node tools/storage-atomic.mjs`: 분리된 브라우저 컨텍스트의 실제 IndexedDB에 고장을 주입하여 이전 대용량 저장본 보존을 검사합니다. 사용자 탭의 저장소를 사용하지 않습니다.
+- `node tools/storage-connection.mjs`: 로컬 소스 서버의 격리 Chromium·WebKit 프로필에서 실제 IndexedDB 연결 종료/재열기, 진행 중 쓰기 중단의 중복 실행 방지, CAS 충돌, gzip 셀 청크와 문서 복구 식별자 왕복, Web Lock 대기 중 편집 버전을 검사합니다. `WIXEL_URL`, `WIXEL_CONNECTION_OUT`, `WIXEL_ENGINES`(기본 `chromium,webkit`)를 사용합니다. 실제 iPad의 OS 종료나 업무 파일 부하 검사를 대신하지 않습니다.
 
 - `node tools/library-atomic.mjs`: loopback 소스 서버 전용, 두 탭과 실제 IndexedDB의 문서·이력·목록 동시성/고장 주입.
 - `node tools/library-recovery.mjs`: 초기 복원 후 충돌 사본·원본 재열기·실패 후 재시도·저장 중 편집의 화면 흐름.
@@ -592,3 +593,16 @@ node tools/mobile-layout.mjs
 `node tools/document-published-switch.mjs`는 합성 API로 게시본·시작 URL의 늦은 응답, 보기 종료, 현재 게시본 갱신과 사본, 실패한 열기 후 갱신 재개, 피벗 준비 취소·서식 보존을 검사합니다. `WIXEL_DOCUMENT_PUBLISHED_OUT`과 `WIXEL_DOCUMENT_PUBLISHED_FILTER`로 결과 경로와 사례를 지정합니다.
 
 두 도구 모두 `WIXEL_URL`은 로컬 서버만 허용하며 `WIXEL_BROWSER=chromium,webkit`와 `PLAYWRIGHT_MODULE`을 사용합니다. 실제 iPad의 Safari 세션을 제어하는 검사는 아닙니다.
+
+
+### 대형 XLSB 저장·복구 안정성
+
+`node tools/document-recovery.mjs`는 첫 저장 전 종료, 같은 문서의 미저장 편집, 완료 저장 재시작, 다른 탭의 포인터 변경, 동일 문서 동시 편집 분기, 저장 실패 및 모바일 복구 창을 합성 문서로 검사합니다. `WIXEL_RECOVERY_OUT`과 `WIXEL_RECOVERY_FILTER`를 지원합니다.
+
+`node tools/xlsb-recovery-stress.mjs`는 비공개 JSON 목록(`WIXEL_REAL_AUDIT_MANIFEST`, 항목별 `id`, `path`)의 실제 파일을 로컬 브라우저에서 순서대로 열고 첫 저장 완료, UI 편집, 편집 저장 완료, 재열기 뒤 문서·시트·수식 셀 수와 편집 보존을 확인합니다. `WIXEL_REAL_AUDIT_IDS`, `WIXEL_ROLLBACK_OUT`, `WIXEL_ROLLBACK_TIMEOUT`을 지원합니다. 선택 항목 `WIXEL_CHROMIUM_HEAP_MB`는 Chromium의 old-space 예산(MiB)을 제한하며 결과에 기록합니다. `WIXEL_ISOLATED_FILES=1`은 파일별 새 브라우저 프로필로 개별 복구 검사를 하며, 기본 연속 검사와 구분하여 기록합니다. 명시적 GC는 사용하지 않습니다. 호스트 여유 메모리가 1GiB 아래이면 보호를 위해 중단하며 이를 통과로 계산하지 않습니다. 원본을 수정하지 않으며 결과·브라우저 프로필·화면은 D:의 비공개 검사 폴더에만 둡니다. 실제 업무 파일 및 결과를 커밋하지 마세요.
+
+두 도구의 `WIXEL_URL`은 로컬 서버만 허용하고 `WIXEL_BROWSER=chromium,webkit`를 지원합니다. Windows WebKit의 실제 IndexedDB Blob 검사는 D:의 격리 persistent profile을 사용합니다. 실제 iPad의 OS 메모리 종료 인증과는 다릅니다. 범위와 결과는 [74번 문서](../docs/codex/74_XLSB복구안정성.md)에 기록합니다.
+
+- `tools/pivot-document-release.mjs`: 합성 피벗 필드 창을 열거나 숨긴 뒤 다른 문서를 열어, 이전 창·드래그 리스너·통합문서가 Chromium 강제 GC 후 해제되는지 검사합니다. 동일 문서에서 창을 숨길 때는 상태를 유지합니다. `WIXEL_URL`, `WIXEL_PIVOT_RELEASE_OUT` 사용. 물리 iPad 종료 재현 검사가 아닙니다.
+
+- `tools/reloaded-document-release.mjs`: 합성 문서 저장→재시작→다른 문서 저장 뒤 이전 Workbook의 도달 가능성을 Chromium 강제 GC로 확인합니다. 강제 GC는 참조 해제 진단 전용이며 실제 대형 파일의 자연 메모리 사용량 판정에 대체하지 않습니다. 준비 확인은 Boolean을 반환해 검사 도구가 문서 JSHandle을 보유하지 않습니다.

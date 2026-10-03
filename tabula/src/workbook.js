@@ -1266,6 +1266,11 @@ export class Workbook {
     return this.graphRun;
   }
 
+  /** A document being replaced no longer needs speculative dependency work. */
+  cancelGraphPreparation() {
+    this.graphEpoch = (this.graphEpoch ?? 0) + 1;
+  }
+
   async buildGraphSteps(budgetMs) {
     const epoch = (this.graphEpoch = (this.graphEpoch ?? 0) + 1);
     const g = new DepGraph(this, true);

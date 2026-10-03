@@ -1297,6 +1297,14 @@ export class GridView {
     const st = this.host.state();
     const { wb, si } = st;
     const sheet = wb.sheets[si];
+    // 빈 시트나 아직 렌더 창이 없는 전환에서도 이전 통합 문서 참조를 해제한다.
+    const appearance = `${THEME.key}|${BASE_FONT.name}|${BASE_FONT.size}|${this.z}|${globalThis.devicePixelRatio || 1}|${!!st.readonly}|${!!st.viewOnly}`;
+    const previous = this._objectRenderState;
+    if (!this._objectRenderCache || previous?.wb !== wb || previous.si !== si || previous.sheet !== sheet || previous.version !== wb.version || previous.appearance !== appearance) {
+      this._objectRenderCache = new Map();
+      this._slicerVirtualModels = new Map();
+      this._objectRenderState = { wb, si, sheet, version: wb.version, appearance };
+    }
     const images = sheet.images ?? [];
     const shapes = st.shapePreview ? [...(sheet.shapes ?? []).filter((o) => o.id !== st.shapePreview.id), st.shapePreview] : sheet.shapes ?? [];
     const slicers = sheet.slicers ?? [];
@@ -1310,13 +1318,6 @@ export class GridView {
       x2: Math.min(p.scrollX ? Infinity : this.boundaryX, this.cols.pos(p.win.c2 + 1)),
       y2: Math.min(p.scrollY ? Infinity : this.boundaryY, this.rows.pos(p.win.r2 + 1)),
     };
-    const appearance = `${THEME.key}|${BASE_FONT.name}|${BASE_FONT.size}|${this.z}|${globalThis.devicePixelRatio || 1}|${!!st.readonly}|${!!st.viewOnly}`;
-    const previous = this._objectRenderState;
-    if (!this._objectRenderCache || previous?.wb !== wb || previous.si !== si || previous.sheet !== sheet || previous.version !== wb.version || previous.appearance !== appearance) {
-      this._objectRenderCache = new Map();
-      this._slicerVirtualModels = new Map();
-      this._objectRenderState = { wb, si, sheet, version: wb.version, appearance };
-    }
     const content = (o, kind, build) => {
       // 개체를 직접 움직이는 미리보기에서도 위치·크기·서식 변경을 놓치지 않는다.
       // 연결 그림은 보존용 원본 base64를 사용하지 않으므로 키에서도 제외한다.

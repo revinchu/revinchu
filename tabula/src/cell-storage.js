@@ -52,3 +52,21 @@ export function* storedCellChunks(cells, encode, size = 20000) {
   }
   if(chunk.length)yield chunk;
 }
+
+/** JSON-decoded styles are immutable model values, just like imported shared XFs.
+ * Reuse only byte-for-byte JSON-equivalent styles. Bound both the style count and
+ * retained key text so documents with many unique styles cannot grow this memo.
+ */
+export function createStoredStyleMemo({ limit = 4096, charLimit = 1 << 20 } = {}) {
+  const styles = new Map();
+  let chars = 0;
+  return style => {
+    if (!style || typeof style !== 'object' || Array.isArray(style)) return style;
+    const key = JSON.stringify(style), found = styles.get(key);
+    if (found) return found;
+    if (styles.size < limit && chars + key.length <= charLimit) {
+      styles.set(key, style); chars += key.length;
+    }
+    return style;
+  };
+}

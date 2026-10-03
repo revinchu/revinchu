@@ -1,5 +1,6 @@
 import { idbGet, idbSet, idbCompareAndSet, idbKeys, idbDeleteMany } from './storage.js';
 import { CellMap } from './cellmap.js';
+import { createStoredStyleMemo } from './cell-storage.js';
 
 const savedSnapshots = new WeakMap();
 const sameSnapshots = (a, b) => {
@@ -57,6 +58,9 @@ export async function saveLargeWorkbook(key, book, metadata, options = {}) {
       ids.add(sheet._sid);
     }
     const edits = sheets.map(sheet => sheet._ev ?? 0), meta = structuredClone(metadata);
+    // A queued Web Lock can start after more edits; tag the actual captured
+    // checkpoint, not the version seen before waiting for the lock.
+    if (meta.recovery) meta.recovery = { ...meta.recovery, version };
     const sheetMetadata = sheets.map((_,i) => book.sheetMeta(i)), sheetTags = sheetMetadata.map(item => JSON.stringify(item));
     const bookMeta = structuredClone(book.bookMeta(false)), snapshots = book.snapshotData?.() ?? {};
     const valid = (checkMeta = false) => {
@@ -67,6 +71,13 @@ export async function saveLargeWorkbook(key, book, metadata, options = {}) {
     };
     valid();
     const previous = await idbGet(key);
+    // The caller may bind a working copy to the complete generation it opened.
+    // Checking before GC/staging prevents a later stale tab from overwriting a
+    // different tab's sequential (already committed) edits, not just a CAS race.
+    if (Object.hasOwn(options, 'expectedGeneration')) {
+      const actualGeneration = [3,4].includes(previous?.v) ? previous.generation ?? null : null;
+      if (actualGeneration !== options.expectedGeneration) throw Object.assign(new Error('다른 탭에서 이 문서의 저장본이 바뀌었습니다. 현재 편집 내용을 별도 사본으로 저장하세요.'), { code:'IDB_CONFLICT' });
+    }
     const saved = new Map(([2,3,4].includes(previous?.v) ? previous.sheets : []).map(entry => [entry.id,entry]));
     const generation = bigGeneration(), staged = [], list = [], gz = typeof CompressionStream === 'function';
     let committed = false;
@@ -150,11 +161,12 @@ export async function loadLargeWorkbook(key,onProgress) {
     for(let i=0;i<idx.sheets.length;i++) {
       const entry=idx.sheets[i],record=await idbGet(sheetRecordKey(key,entry));
       if(!record)throw new Error('저장된 시트가 없습니다. 이전 백업을 확인하세요.');
-      const cells=new CellMap();
+      const cells=new CellMap(), shareStyle=createStoredStyleMemo();
+      const prepare=data=>{if(data?.style)data.style=shareStyle(data.style);return data;};
       for(const chunk of record.chunks) {
         const entries=JSON.parse(await bigUnpack(chunk,record.gz));
-        if(record.cellEncoding==='runs-v1')for(const [r,c,count,data] of entries){if(count===1)cells.setRC(r,c,data);else cells.setRunRC(r,c,count,data);}
-        else for(const [cell,data] of entries)cells.set(cell,data);
+        if(record.cellEncoding==='runs-v1')for(const [r,c,count,data] of entries){if(count===1)cells.setRC(r,c,prepare(data));else cells.setRunRC(r,c,count,prepare(data));}
+        else for(const [cell,data] of entries)cells.set(cell,prepare(data));
         onProgress?.((i+.5)/idx.sheets.length);await bigYield();
       }
       const join=async info=>{
@@ -179,6 +191,6 @@ export async function loadLargeWorkbook(key,onProgress) {
     }
     const pivotSnapshots = idx.snapshotKey ? await idbGet(idx.snapshotKey) : idx.book?.pivotSnapshots;
     if (idx.snapshotKey && !pivotSnapshots) throw new Error('저장된 피벗 캐시가 없습니다. 이전 백업을 확인하세요.');
-    return {rev:idx.rev,docName:idx.docName,docId:idx.docId,remoteDoc:idx.remoteDoc,si:idx.si,autosave:idx.autosave,storageFormat:idx.v,workbook:{...idx.book,...(pivotSnapshots?{pivotSnapshots}:{}),...(idx.v===2?{names:idx.names,vba:idx.vba}:{}),sheets}};
+    return {rev:idx.rev,docName:idx.docName,docId:idx.docId,remoteDoc:idx.remoteDoc,si:idx.si,autosave:idx.autosave,generation:idx.generation,recovery:idx.recovery,storageFormat:idx.v,workbook:{...idx.book,...(pivotSnapshots?{pivotSnapshots}:{}),...(idx.v===2?{names:idx.names,vba:idx.vba}:{}),sheets}};
   });
 }

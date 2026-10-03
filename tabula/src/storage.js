@@ -41,51 +41,75 @@ function revision(path, value) {
 }
 
 // 큰 통합 문서는 localStorage(약 5MB, JSON 문자열 변환 필요) 대신 IndexedDB 에 객체 그대로 저장
-let dbPromise = null;
+let dbPromise = null, dbConnection = null;
+function releaseDb(db) {
+  // A late close event from an old connection must not clear a newer open.
+  if (dbConnection === db) { dbConnection = null; dbPromise = null; }
+  try { db.close(); } catch { /* Already closed. */ }
+}
 function openDb() {
   if (!globalThis.indexedDB) return Promise.reject(new Error('IndexedDB 없음'));
-  dbPromise ??= new Promise((resolve, reject) => {
-    const req = indexedDB.open('tabula', 1);
-    req.onupgradeneeded = () => req.result.createObjectStore('docs');
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
+  if (!dbPromise) {
+    const pending = new Promise((resolve, reject) => {
+      const req = indexedDB.open('tabula', 1);
+      req.onupgradeneeded = () => req.result.createObjectStore('docs');
+      req.onsuccess = () => {
+        const db = req.result;
+        dbConnection = db;
+        db.onversionchange = () => releaseDb(db);
+        db.onclose = () => releaseDb(db);
+        resolve(db);
+      };
+      req.onerror = () => reject(req.error);
+    });
+    dbPromise = pending;
+    // A transient open failure must not poison every later autosave in this tab.
+    pending.catch(() => { if (dbPromise === pending) dbPromise = null; });
+  }
   return dbPromise;
 }
+async function withDbTransaction(mode, run) {
+  let db = await openDb(), tx;
+  try { tx = db.transaction('docs', mode); }
+  catch (error) {
+    if (error?.name !== 'InvalidStateError') throw error;
+    // No transaction exists yet, so reopening cannot repeat a committed write.
+    // Never retry a request, callback, or an in-flight/aborted transaction.
+    releaseDb(db);
+    db = await openDb();
+    tx = db.transaction('docs', mode);
+  }
+  // Queue requests synchronously: do not await after creating the transaction.
+  return run(tx);
+}
 export async function idbSet(key, value) {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('docs', 'readwrite');
+  return withDbTransaction('readwrite', tx => new Promise((resolve, reject) => {
     tx.objectStore('docs').put(value, key);
     tx.oncomplete = () => resolve(true);
     tx.onerror = () => reject(tx.error);
     tx.onabort = () => reject(tx.error ?? new DOMException('저장 트랜잭션이 중단되었습니다.', 'AbortError'));
-  });
+  }));
 }
 export async function idbDel(key) {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('docs', 'readwrite');
+  return withDbTransaction('readwrite', tx => new Promise((resolve, reject) => {
     tx.objectStore('docs').delete(key);
     tx.oncomplete = () => resolve(true);
     tx.onerror = () => reject(tx.error);
     tx.onabort = () => reject(tx.error ?? new DOMException('삭제 트랜잭션이 중단되었습니다.', 'AbortError'));
-  });
+  }));
 }
 export async function idbGet(key) {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const req = db.transaction('docs', 'readonly').objectStore('docs').get(key);
+  return withDbTransaction('readonly', tx => new Promise((resolve, reject) => {
+    const req = tx.objectStore('docs').get(key);
     req.onsuccess = () => resolve(req.result ?? null);
     req.onerror = () => reject(req.error);
-  });
+  }));
 }
 
 /** Only the small generation manifest changes in this atomic transaction. */
 export async function idbCompareAndSet(key, expected, value, validate = () => {}) {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('docs', 'readwrite'), store = tx.objectStore('docs');
+  return withDbTransaction('readwrite', tx => new Promise((resolve, reject) => {
+    const store = tx.objectStore('docs');
     let failure = null;
     const fail = (error) => { failure = error; try { tx.abort(); } catch { reject(error); } };
     const token = (item) => [3,4].includes(item?.v) ? item.generation : JSON.stringify(item ?? null);
@@ -101,26 +125,24 @@ export async function idbCompareAndSet(key, expected, value, validate = () => {}
     tx.oncomplete = () => resolve(true);
     tx.onerror = () => reject(failure ?? tx.error);
     tx.onabort = () => reject(failure ?? tx.error ?? new DOMException('저장 트랜잭션이 중단되었습니다.', 'AbortError'));
-  });
+  }));
 }
 
 export async function idbKeys(prefix) {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const req = db.transaction('docs', 'readonly').objectStore('docs').getAllKeys(IDBKeyRange.bound(prefix, prefix + '\uffff'));
+  return withDbTransaction('readonly', tx => new Promise((resolve, reject) => {
+    const req = tx.objectStore('docs').getAllKeys(IDBKeyRange.bound(prefix, prefix + '\uffff'));
     req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error);
-  });
+  }));
 }
 
 export async function idbDeleteMany(keys) {
   if (!keys.length) return;
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('docs', 'readwrite'), store = tx.objectStore('docs');
+  return withDbTransaction('readwrite', tx => new Promise((resolve, reject) => {
+    const store = tx.objectStore('docs');
     for (const key of keys) store.delete(key);
     tx.oncomplete = () => resolve(true); tx.onerror = () => reject(tx.error);
     tx.onabort = () => reject(tx.error ?? new DOMException('삭제 트랜잭션이 중단되었습니다.', 'AbortError'));
-  });
+  }));
 }
 
 /** Atomically read/update related index, document and version records.
@@ -128,9 +150,8 @@ export async function idbDeleteMany(keys) {
  * Prepare compression/network work before entering the transaction.
  */
 export async function idbUpdate(readKeys, update) {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('docs', 'readwrite'), store = tx.objectStore('docs');
+  return withDbTransaction('readwrite', tx => new Promise((resolve, reject) => {
+    const store = tx.objectStore('docs');
     const keys = [...new Set(readKeys)], values = new Map();
     let result, failure, remaining = keys.length;
     const apply = () => {
@@ -151,7 +172,7 @@ export async function idbUpdate(readKeys, update) {
       req.onsuccess = () => { values.set(itemKey, req.result ?? null); if (--remaining === 0) apply(); };
     }
     if (!remaining) apply();
-  });
+  }));
 }
 
 function token() {

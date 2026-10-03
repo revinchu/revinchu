@@ -2,6 +2,7 @@ import { isLargeLocalWorkbook } from './local-storage-size.js';
 import { cachedSlicerItems, applyCachedSlicerSelection } from './slicer-cache.js';
 import { applySlicerSettings } from './slicer-settings.js';
 import { createDocumentOpenGate, isDocumentOpenCancelled } from './document-session.js';
+import { createRecoveryMarker, parseRecoveryMarker, recoveryCheckpoint, markRecoveryPending, markRecoverySaved, markRecoveryFailed, canUpdateRecoveryMarker, selectRecoveryMarker, recoveryDecision } from './document-recovery.js';
 import { tableCellDisplayStyle } from './table-format.js';
 import { filterButtonVisible, filterButtonsVisible, filterWithButtons } from './filter-display.js';
 import { createSheetPicker } from './sheet-picker-ui.js';
@@ -92,7 +93,7 @@ import {
   pivotPageLayout,
 } from './pivot.js';
 import { SLICER_STYLES, SLICER_STYLE_GROUPS, slicerStyleName, slicerColors, slicerStyleElements, CUSTOM_KEYS } from './slicerstyle.js';
-import { server, createVaultKey, validVaultKey } from './storage.js';
+import { server, createVaultKey, validVaultKey, idbGet } from './storage.js';
 import { saveLargeWorkbook, loadLargeWorkbook } from './big-storage.js';
 import { hubIcon, hubHeading, hubCard, hubPreview, hubDropzone, hubEmpty } from './app-start.js';
 import { NET, netClear, parseMarkup, htmlTables, htmlLists, tableRows, textOf, autoValue, parseCsv, importRangeSource, parseImportRange, resolveImportRangeUrl } from './fx-web.js';
@@ -167,6 +168,10 @@ const dom = {
 };
 
 const STORAGE_KEY = 'tabula.workbook.v1';
+const RECOVERY_KEY = 'wixel.document-recovery.v1';
+const recoverySessionId = newDocId();
+let recoveryMarker = null, recoverySavePaused = false, recoveryTrackingWarned = false;
+const recoveryGenerations = new WeakMap();
 // 화면 그리기 규칙(피벗 서식 등)이 바뀔 때 올림: 예전 버전의 자동 저장본은 열 때 피벗을 다시 그림
 const APP_REV = 3;
 const REF_COLORS = ['#2f6fd6', '#d13438', '#8a3fd1', '#0f8a3c', '#c75a00', '#0093b8', '#c2187a'];
@@ -12458,6 +12463,15 @@ function showPivotPane(on) {
   if (was !== on) gv.layout();
 }
 
+/** A hidden field pane still owns workbook/cube closures and document drag listeners.
+ * Release them only at document replacement; hiding within one document keeps its UI state. */
+function releasePivotPaneDocument() {
+  pivotPaneDrag?.dispose(); pivotPaneDrag = null;
+  pivotDrag = null; pivotPaneBook = null; pivotPaneKey = '';
+  document.getElementById('pivotPane')?.remove();
+  document.getElementById('gridWrap')?.classList.remove('with-pane');
+}
+
 function refreshPivotPane(force = false) {
   const here = chartSel || editing ? null : pivotHere();
   if (!here || !pivotPaneOpen) { showPivotPane(false); pivotPaneKey = ''; return; }
@@ -14808,6 +14822,7 @@ const documentOpenGate = createDocumentOpenGate();
 const pendingOpenProgress = new Set();
 function beginDocumentOpen() {
   const request = documentOpenGate.begin();
+  wb?.cancelGraphPreparation();
   request.sourceBook = wb;
   // 취소된 읽기가 끝나기를 기다리며 새 문서의 마우스 입력을 가리지 않는다.
   for (const progress of pendingOpenProgress) progress.box.remove();
@@ -14822,6 +14837,8 @@ function finishDocumentOpen(request) {
   request.keepUrl = activeDocumentRequest?.keepUrl ?? request.keepUrl;
   activeDocumentRequest = request;
   if (publishedWatch?.book === wb) publishedWatch.request = request;
+  const kept = wb;
+  setTimeout(() => { if (kept && wb === kept && request.isCurrent()) kept.prepareGraph().catch(() => false); }, 1200);
 }
 const preparedPivotCaches = new WeakMap();
 function workbookPivotCaches(book) {
@@ -14849,8 +14866,11 @@ function installWorkbook(next, name, activeSheet, request, nextDocId) {
   fileHandle = null; remoteDoc = false; allowPrivateImports = false;
   NET.cache.clear();
   // 이전 문서의 지연 계산 완료가 새 문서의 변경 알림을 발생시키지 않도록 분리한다.
+  wb.dropGraph();
+  releasePivotPaneDocument();
   next.listeners = wb.listeners; wb.listeners = new Set();
   wb = next; activeDocumentRequest = request;
+  si = clamp(activeSheet ?? 0, 0, next.sheets.length - 1); // Early tool cleanup also reads the new sheet.
   request.sourceBook = null; // 전환이 끝난 큰 이전 문서를 토큰이 계속 붙잡지 않는다.
   const cache = workbookPivotCaches(next); pivotLayouts = cache.layouts; pivotWritten = cache.written; pivotSrcVer.clear();
   if (!request.keepUrl && (/[?&](view|doc)=/.test(location.search) || location.hash.startsWith('#view='))) {
@@ -15032,6 +15052,8 @@ function afterLoad(name, activeSheet, nextDocId = null) {
   wb.undoStack = [];
   wb.redoStack = [];
   docName = name || '통합 문서1';
+  recoverySavePaused = false;
+  syncRecoveryJournal({ opening:true });
   si = clamp(activeSheet, 0, wb.sheets.length - 1);
   if (isHiddenSheet(si)) si = Math.max(0, wb.sheets.findIndex((_, i) => !isHiddenSheet(i)));
   clip = null; mobileCopySource = null;
@@ -15049,8 +15071,9 @@ function afterLoad(name, activeSheet, nextDocId = null) {
   showSheetStart();
   // 수식 의존 그래프를 쉬는 동안 미리 만듦 (첫 편집도 바로 다시 계산)
   const loadedBook = wb;
-  setTimeout(() => { if (wb === loadedBook) loadedBook.prepareGraph().catch((e) => console.warn('의존 그래프 준비 실패', e)); }, 1200);
+  setTimeout(() => { if (wb === loadedBook && activeDocumentRequest?.isCurrent()) loadedBook.prepareGraph().catch((e) => console.warn('의존 그래프 준비 실패', e)); }, 1200);
   dirty = true;
+  updateTitle();
   if (bigBook()) scheduleAutosave();
   else { saveToStorage(); scheduleServerSave(0); }
 }
@@ -15133,6 +15156,7 @@ async function newWorkbook(sample) {
 function renameDoc(name) {
   if (name !== docName) { remoteDoc = false; clearTimeout(serverTimer); serverState.savedAt = null; }
   docName = name;
+  syncRecoveryJournal();
   updateTitle();
 }
 
@@ -15624,6 +15648,115 @@ function startCollabWatch() {
   }, 15000);
 }
 
+/** Recovery identity is written synchronously before delayed large-document autosave.
+ * Never replace an older complete payload with an empty marker or an unfinished snapshot.
+ */
+function readRecoveryJournal() {
+  let local = null, global = null;
+  try { local = sessionStorage.getItem(RECOVERY_KEY); } catch { /* session storage may be unavailable */ }
+  try { global = localStorage.getItem(RECOVERY_KEY); } catch { /* storage may be unavailable */ }
+  return selectRecoveryMarker(local, global);
+}
+function persistRecoveryJournal({ opening = false, adopting = false, previousMarker = null } = {}) {
+  if (!recoveryMarker) return;
+  const text = JSON.stringify(recoveryMarker);
+  let recorded = false;
+  try { sessionStorage.setItem(RECOVERY_KEY, text); recorded = true; } catch { /* global fallback below */ }
+  try {
+    const previous = parseRecoveryMarker(localStorage.getItem(RECOVERY_KEY));
+    const adoptCurrent = adopting && JSON.stringify(previous) === JSON.stringify(parseRecoveryMarker(previousMarker));
+    if (opening || adoptCurrent || canUpdateRecoveryMarker(previous, recoveryMarker)) { localStorage.setItem(RECOVERY_KEY, text); recorded = true; }
+  } catch { /* an unavailable journal must not prevent opening a file */ }
+  recoveryTrackingWarned = !recorded;
+}
+function syncRecoveryJournal({ opening = false } = {}) {
+  if (!wb || viewOnly || recoverySavePaused) return null;
+  docId ??= newDocId();
+  if (recoveryMarker?.phase === 'saved' && recoveryMarker.generation === null) opening = true;
+  if (opening || !recoveryMarker || recoveryMarker.docId !== docId || recoveryMarker.docName !== docName) {
+    recoveryMarker = createRecoveryMarker({ docId, docName, sessionId:recoverySessionId, openId:newDocId(), version:wb.version });
+    opening = true;
+  } else recoveryMarker = { ...markRecoveryPending(recoveryMarker, wb.version), docName };
+  persistRecoveryJournal({ opening });
+  return recoveryCheckpoint(recoveryMarker);
+}
+function finishRecoverySave(checkpoint, generation) {
+  recoveryMarker = markRecoverySaved(recoveryMarker, checkpoint, generation);
+  persistRecoveryJournal();
+}
+function failRecoverySave(checkpoint) {
+  recoveryMarker = markRecoveryFailed(recoveryMarker, checkpoint);
+  persistRecoveryJournal();
+  updateTitle();
+}
+function largeDocumentStorageKey(id) { return id ? `${STORAGE_KEY}#doc#${id}` : STORAGE_KEY; }
+function storeRecoveryPointer(value) {
+  const text = JSON.stringify(value);
+  localStorage.setItem(STORAGE_KEY, text);
+  // Each tab keeps its own pointer. Another tab's latest document cannot replace it on restart.
+  try { sessionStorage.setItem(STORAGE_KEY, text); } catch { /* the identity journal still prevents a silent fallback */ }
+}
+async function recoveryCandidate(marker, pointer) {
+  let descriptor = pointer, large = !!pointer?.idb, storageKey = pointer?.storageKey || STORAGE_KEY;
+  const latestKey = marker ? largeDocumentStorageKey(marker.docId) : null;
+  const keys = [...new Set([latestKey, ...(large ? [storageKey] : [])].filter(Boolean))];
+  for (const key of keys) {
+    try {
+      const actual = await idbGet(key);
+      if (actual && ([2,3,4].includes(actual.v) || actual.workbook)) {
+        // Prefer this tab's complete document. Its first commit may have preceded the pointer update.
+        if (actual.docId === marker?.docId && recoveryDecision(marker, descriptor).action !== 'restore') {
+          return { descriptor:actual, large:true, storageKey:key };
+        }
+        if (large && key === storageKey) descriptor = actual;
+      } else if (large && key === storageKey) descriptor = null;
+    } catch { if (large && key === storageKey) descriptor = null; }
+  }
+  return { descriptor, large, storageKey };
+}
+async function readRecoveryCandidate(candidate, request) {
+  if (!candidate?.descriptor) throw new Error('완료된 브라우저 저장본이 없습니다. 원본 파일을 다시 열어 주세요.');
+  if (!candidate.large) return candidate.descriptor;
+  const prog = progressOverlay('저장된 통합 문서를 여는 중', request);
+  try {
+    const data = await loadBigFromIdb(p => { request.assertCurrent(); prog.set(p * 0.6, '불러오는 중'); }, candidate.storageKey); request.assertCurrent();
+    const expected = candidate.descriptor;
+    if (!data || data.docId !== expected.docId || (expected.generation != null && data.generation !== expected.generation)) {
+      throw new Error('다른 탭에서 브라우저 저장본이 바뀌었습니다. 다른 문서를 잘못 열지 않도록 중단했습니다. 원본 파일을 다시 열어 주세요.');
+    }
+    return data;
+  }
+  finally { prog.close(); }
+}
+function showRecoveryChoice(pending, request) {
+  if (!request.isCurrent() || !recoverySavePaused) return;
+  const latest = pending.marker?.docName || '최근 작업 문서';
+  const previous = pending.candidate?.descriptor?.docName || '이전 브라우저 저장본';
+  const message = pending.candidate?.descriptor?.docId === pending.marker?.docId
+    ? `'${latest}'의 최근 변경 내용이 브라우저 저장본에 모두 반영되었는지 확인할 수 없습니다.`
+    : `'${latest}'의 브라우저 저장이 완료되지 않았습니다. 이전 문서를 현재 문서로 자동 복원하지 않았습니다.`;
+  const body = el('div', { 'data-document-recovery':'true', style:{overflowWrap:'anywhere'} }, el('p', {}, message),
+    pending.candidate?.descriptor ? el('p', {class:'muted'}, `완료된 마지막 저장본: ${previous}`) : null,
+    el('p', {}, '원본 파일을 다시 열거나 완료된 마지막 저장본을 직접 선택하세요. 저장본에 없는 변경 내용은 복원할 수 없습니다.'),
+    pending.error ? el('p', { class:'muted' }, pending.error) : null);
+  openDialog({ title:'문서 복구 확인', body, width:520, buttons:[
+    { label:'최근 파일 다시 열기', primary:true, action:() => { if (request.isCurrent()) queueMicrotask(() => pickFile('open')); } },
+    ...(pending.candidate?.descriptor ? [{ label:'마지막 저장본 열기', action:async () => {
+      if (!request.isCurrent()) return;
+      const opening = beginDocumentOpen(); request = opening;
+      try {
+        const data = await readRecoveryCandidate(pending.candidate, opening); opening.assertCurrent();
+        if (!data?.workbook) throw new Error('저장된 문서를 읽지 못했습니다. 원본 파일을 다시 열어 주세요.');
+        // Explicit recovery is a new working copy; the prior stored identity is preserved in its complete snapshot.
+        await loadWorkbookAsync(data.workbook, data.docName || previous, data.si || 0, null, opening);
+        toast('완료된 마지막 저장본을 열었습니다. 저장되지 않은 변경 내용은 포함되지 않을 수 있습니다.');
+      } catch (error) { if (!isDocumentOpenCancelled(error)) { alertDialog('문서 복구', error.message); return false; } }
+      finally { finishDocumentOpen(opening); }
+    } }] : []),
+    { label:'취소' },
+  ] });
+}
+
 let storageWarned = false;
 /** 셀이 많은 통합 문서 (자동 저장을 IndexedDB 로, 더 드물게) */
 function cellCount() {
@@ -15643,7 +15776,8 @@ function bigBook() {
 }
 let idbSaving = null;
 function saveToStorage({ closing = false } = {}) {
-  if ((pageDeparting && !closing) || viewOnly) return false;
+  if ((pageDeparting && !closing) || viewOnly || recoverySavePaused) return false;
+  const checkpoint = syncRecoveryJournal();
   try {
     if (bigBook()) {
       // 큰 문서: IndexedDB 에 시트별로, 바뀐 시트만, 조금씩 나눠 저장 (화면이 멈추지 않게)
@@ -15651,28 +15785,39 @@ function saveToStorage({ closing = false } = {}) {
         if (!result?.isCurrent()) { scheduleAutosave(); return false; }
         const saved = result.manifest;
         // Keep the previous small/large pointer until the full IDB generation commits.
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({ rev: saved.rev, docName: saved.docName, docId: saved.docId, si: saved.si, autosave: saved.autosave, remoteDoc: saved.remoteDoc, generation: saved.generation, idb: true }));
-        if (!serverAutosave()) { dirty = false; updateTitle(); }
+        storeRecoveryPointer({ rev: saved.rev, docName: saved.docName, docId: saved.docId, si: saved.si, autosave: saved.autosave, remoteDoc: saved.remoteDoc, generation: saved.generation, recovery:saved.recovery, storageKey:saved.storageKey || largeDocumentStorageKey(saved.docId), idb: true });
+        finishRecoverySave(saved.recovery, saved.generation);
         storageWarned = false;
+        if (!serverAutosave()) dirty = false;
+        updateTitle();
         return true;
       }).catch((err) => {
         if (err?.code === 'BIG_SAVE_ABORT' || err?.code === 'IDB_CONFLICT') return false;
+        // A conflict retry can move this save to a new document identity.
+        const failedCheckpoint = err?.recoveryCheckpoint ?? checkpoint;
+        if (recoveryMarker?.docId !== failedCheckpoint?.docId || recoveryMarker?.openId !== failedCheckpoint?.openId) return false;
+        failRecoverySave(failedCheckpoint);
         if (!storageWarned) { storageWarned = true; toast('브라우저 저장을 완료하지 못했습니다. 이전 저장본은 유지됩니다. [파일 → 다른 이름으로 저장]으로 파일을 내려받으세요.'); }
+        updateTitle();
         return false;
       });
       return true;
     }
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ rev: APP_REV, docName, docId, si, autosave, remoteDoc, workbook: wb.serialize() }));
+    const generation = newDocId();
+    storeRecoveryPointer({ rev: APP_REV, docName, docId, si, autosave, remoteDoc, generation, recovery:checkpoint, workbook: wb.serialize() });
+    finishRecoverySave(checkpoint, generation);
     if (!remoteDoc) dirty = false;
-    updateTitle();
     storageWarned = false;
+    updateTitle();
     return true;
   } catch {
+    failRecoverySave(checkpoint);
     // 큰 그림 등으로 브라우저 저장 공간(보통 5MB)을 넘은 경우
     if (!storageWarned) {
       storageWarned = true;
       toast('브라우저 저장 공간이 부족해 자동 저장하지 못했습니다. [파일 → 다른 이름으로 저장]으로 파일을 내려받으세요.');
     }
+    updateTitle();
     return false;
   }
 }
@@ -15683,33 +15828,59 @@ const exportIdle = async () => { while (exportBusy) await new Promise((res) => s
 let bigSaveRun = null;
 let bigSaveAgain = false;
 /** Immutable generation save: only a complete, unchanged snapshot replaces the manifest. */
-async function saveBigToIdb() {
+async function saveBigToIdb(allowConflictFork = true) {
   if (bigSaveRun) { bigSaveAgain = true; return bigSaveRun; }
   docId ??= newDocId();
   const book = wb;
-  const details = { rev: APP_REV, docName, docId, si, autosave, remoteDoc };
-  bigSaveRun = saveLargeWorkbook(STORAGE_KEY, book, details, {
+  const storageKey = largeDocumentStorageKey(docId);
+  const details = { rev: APP_REV, docName, docId, si, autosave, remoteDoc, storageKey, recovery:recoveryCheckpoint(recoveryMarker) };
+  const observed = recoveryGenerations.get(book);
+  bigSaveRun = saveLargeWorkbook(storageKey, book, details, {
+    expectedGeneration:observed?.key === storageKey ? observed.generation : null,
     isCurrent: () => wb === book && !viewOnly && !pageDeparting && docName === details.docName && docId === details.docId && autosave === details.autosave && remoteDoc === details.remoteDoc,
     waitForIdle: exportIdle,
   });
+  updateTitle();
+  let retryDocId = null;
   try {
-    return await bigSaveRun;
+    const result = await bigSaveRun;
+    if (result?.manifest) recoveryGenerations.set(book, {key:storageKey, generation:result.manifest.generation});
+    return result;
   } catch (err) {
-    if (err?.code === 'BIG_SAVE_ABORT' || err?.code === 'IDB_CONFLICT') bigSaveAgain = true;
-    throw err;
+    if (err?.code === 'IDB_CONFLICT' && allowConflictFork && wb === book && docId === details.docId && !viewOnly && !pageDeparting) {
+      // Another tab saved this document after we opened it. Preserve both complete versions under separate identities.
+      docId = newDocId(); dirty = true; libDirty = true;
+      syncRecoveryJournal({opening:true});
+      toast('다른 탭의 최신 저장본을 유지하고 현재 편집 내용을 별도 브라우저 사본으로 저장합니다.');
+      updateTitle();
+      retryDocId = docId; bigSaveAgain = false;
+    } else {
+      if (err?.code === 'BIG_SAVE_ABORT') bigSaveAgain = true;
+      // Report a failed fork against the attempted copy, while keeping late errors
+      // from a replaced document out of the current document's recovery state.
+      else if (err && typeof err === 'object') err.recoveryCheckpoint = details.recovery;
+      throw err;
+    }
   } finally {
     bigSaveRun = null;
+    updateTitle();
     if (bigSaveAgain) { bigSaveAgain = false; scheduleAutosave(); }
   }
+  // Complete the caller's explicit save even when automatic saving is off. Never fork in a loop.
+  if (retryDocId && wb === book && docId === retryDocId && !viewOnly && !pageDeparting) return saveBigToIdb(false);
+  throw Object.assign(new Error('문서가 바뀌어 별도 사본 저장을 취소했습니다.'), {code:'BIG_SAVE_ABORT'});
 }
 
-function loadBigFromIdb(onProgress) {
-  return loadLargeWorkbook(STORAGE_KEY, onProgress);
+function loadBigFromIdb(onProgress, key = STORAGE_KEY) {
+  return loadLargeWorkbook(key, onProgress);
 }
 
 function loadFromStorage() {
   try {
-    const data = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? 'null');
+    let data;
+    try { data = JSON.parse(sessionStorage.getItem(STORAGE_KEY) ?? 'null'); } catch { /* global pointer fallback */ }
+    if (data?.workbook || data?.idb) return data;
+    data = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? 'null');
     return data?.workbook || data?.idb ? data : null;
   } catch {
     return null;
@@ -15722,7 +15893,7 @@ let serverRestoreBusy = false;
 /** 사용자가 쉬는 틈에 실행 (큰 문서 저장이 입력 · 슬라이서 클릭을 막지 않게) */
 const whenIdle = (fn) => (globalThis.requestIdleCallback ? requestIdleCallback(fn, { timeout: 5000 }) : setTimeout(fn, 0));
 function scheduleAutosave() {
-  if (pageDeparting) return;
+  if (pageDeparting || recoverySavePaused) return;
   if (!autosave) { updateTitle(); return; }
   clearTimeout(saveTimer);
   const big = bigBook();
@@ -19600,6 +19771,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['대형 문서 자동 저장과 복구', ['대형 문서를 문서별로 자동 저장하고 탭마다 열었던 문서를 구분합니다. 저장이 끝나기 전에 앱이 다시 시작되면 이전 문서를 조용히 여는 대신 복구할 저장본을 확인합니다. 저장 연결이 끊겼을 때 재연결하고, 파일 전환 시 이전 문서의 백그라운드 계산과 피벗 창·개체 캐시의 참조를 해제합니다.']],
   ['피벗 캡션과 공유 슬라이서 설정', ['빈 피벗 캡션을 Excel 저장 후에도 보존합니다. 같은 캐시를 공유하는 슬라이서의 정렬과 데이터 없는 항목 설정을 함께 적용하며, 개별 캡션·스타일·위치는 유지합니다.']],
   ['대형 Excel 파일과 저장 정확성', ['큰 시트와 피벗 캐시를 순서대로 읽고, 같은 서식의 빈 셀을 묶어 메모리와 자동 저장 부담을 줄였습니다.', '피벗의 저장된 원본 캐시를 보관·복원하고, 원본 편집 뒤 오래된 캐시가 다시 나타나는 경로를 수정했습니다.', 'Excel 둥근 사각형의 모서리 조정값과 일반 도형 그룹의 중첩·배율·그림 효과를 보존합니다.', '피벗 연결이 없는 슬라이서도 항목과 선택 상태를 유지하며, 피벗 원본 변경·서식 편집·실행 취소에서 저장값이 섞이는 문제를 수정했습니다.', '표 수식의 반복 참조와 큰 슬라이서 목록의 화면 요소를 묶어 메모리 부담을 줄이고, 많은 셀 스타일은 검색·페이지로 선택할 수 있습니다.', '데이터 모델(OLAP/DAX) 피벗은 아직 지원하지 않습니다. 해당 파일을 열거나 다시 내보낼 때 지원 범위와 원본 보관 안내를 표시합니다.']],
   ['파일 전환 시 이전 문서 복귀 방지', ['새 파일을 연 뒤 늦게 완료된 이전 열기·게시본 갱신·시작 링크 응답이 현재 문서를 덮어쓰지 않도록 했습니다. 새 문서와 피벗을 준비한 뒤 한 번에 전환하며, 현재 게시본을 편집용 사본으로 만들 때도 최신 내용을 유지합니다.']],
@@ -20009,7 +20181,10 @@ function updateTitle() {
   dom.autosave.setAttribute('aria-checked', String(autosave));
   dom.autosaveLabel.textContent = autosave ? '켬' : '끔';
   let state;
-  if (storageWarned) state = '브라우저 저장 실패 · 파일로 저장하세요';
+  if (recoverySavePaused) state = '복구 선택 대기 · 이전 저장본 유지';
+  else if (storageWarned) state = '브라우저 저장 실패 · 파일로 저장하세요';
+  else if (recoveryTrackingWarned) state = '복구 상태 기록 실패 · 파일로 저장하세요';
+  else if (bigSaveRun && dirty) state = '브라우저에 저장 중 · 완료 전에는 창을 닫지 마세요';
   else if (!remoteDoc || !server.connected) state = dirty ? (autosave ? '브라우저에 저장 대기' : '저장 안 됨') : fileHandle ? '브라우저 사본 저장됨 · 파일 저장 Ctrl+S' : '이 브라우저에 저장됨';
   else if (!serverAutosave()) state = dirty ? (autosave ? '브라우저에 저장 중' : '저장 안 됨') : '이 브라우저에 저장됨 · 온라인 저장은 저장 위치에서';
   else if (serverState.saving) state = '저장 중...';
@@ -20062,6 +20237,8 @@ function autoRefreshPivots() {
 }
 
 function onBookChange() {
+  recoverySavePaused = false;
+  syncRecoveryJournal();
   if (bookLookSignature !== bookLookKey()) applyBookLook();
   dirty = true;
   libDirty = true;
@@ -20303,8 +20480,8 @@ function bindEvents() {
     autosave = !autosave;
     if (autosave) saveNow(false);
     try {
-      const data = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? 'null');
-      if (data) { data.autosave = autosave; localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }
+      const data = loadFromStorage();
+      if (data?.docId === docId) { data.autosave = autosave; storeRecoveryPointer(data); }
     } catch { /* 무시 */ }
     updateTitle();
     toast(autosave ? '자동 저장이 켜졌습니다.' : '자동 저장이 꺼졌습니다. Ctrl+S로 저장하세요.');
@@ -20335,9 +20512,9 @@ function bindEvents() {
   setMenuCloseHandler(focusGrid);
   setDialogCloseHandler(focusGrid);
   window.addEventListener('pagehide', () => { pageDeparting = true; });
-  window.addEventListener('pageshow', () => { pageDeparting = false; });
+  window.addEventListener('pageshow', () => { pageDeparting = false; if (dirty && !recoverySavePaused) scheduleAutosave(); });
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) { pageDeparting = false; return; }
+    if (!document.hidden) { pageDeparting = false; if (dirty && !recoverySavePaused) scheduleAutosave(); return; }
     if (pageDeparting) return;
     // 백그라운드로 이동할 때 보관을 시작한다. unload 중 Blob 압축을 새로 시작하면
     // WebKit이 폐기된 문서의 Blob 읽기를 차단하고 저장도 완료할 수 없다.
@@ -20345,7 +20522,7 @@ function bindEvents() {
     libraryFlush();
   });
   window.addEventListener('beforeunload', (e) => {
-    const warnUnsaved = !autosave && dirty;
+    const warnUnsaved = dirty && (!autosave || bigBook() || recoveryMarker?.phase !== 'saved');
     pageDeparting = true;
     clearTimeout(saveTimer); clearTimeout(libTimer); clearTimeout(serverTimer);
     // 사용자가 나가기를 취소하면 다음 이벤트 루프에서 저장 예약도 복구한다.
@@ -20368,22 +20545,25 @@ window.addEventListener('afterprint', () => { dom.printArea.replaceChildren(); }
 async function init() {
   const startupRequest = beginDocumentOpen();
   activeDocumentRequest = startupRequest;
-  let stored = loadFromStorage();
-  if (stored?.idb) {
-    // 큰 문서는 IndexedDB 에 시트별로 저장되어 있음 — 나눠서 불러옴
-    const prog = progressOverlay('저장된 통합 문서를 여는 중');
+  const startupMarker = readRecoveryJournal();
+  const candidate = await recoveryCandidate(startupMarker, loadFromStorage());
+  let startupRecovery = null, stored = null;
+  const decision = recoveryDecision(startupMarker, candidate.descriptor);
+  if (decision.action === 'prompt') startupRecovery = { marker:startupMarker, candidate };
+  else if (candidate.descriptor) {
     try {
-      const metaId = stored.docId, remote = stored.remoteDoc;
-      stored = await loadBigFromIdb((p) => prog.set(p * 0.6, '불러오는 중'));
-      if (stored && ![3,4].includes(stored.storageFormat)) { stored.docId = metaId; stored.remoteDoc = remote; }
-      wb = new Workbook();
-      if (stored?.workbook) await wb.loadAsync(stored.workbook, (p) => prog.set(0.6 + 0.4 * p, '셀 준비 중'));
-    } catch {
-      stored = null;
-    } finally {
-      prog.close();
-    }
+      stored = await readRecoveryCandidate(candidate, startupRequest);
+      // Another tab may have committed a different manifest while this one was being read.
+      if (recoveryDecision(startupMarker, stored).action === 'prompt') {
+        startupRecovery = { marker:startupMarker, candidate }; stored = null;
+      } else if (stored?.workbook) {
+        const prog = progressOverlay('통합 문서 준비 중', startupRequest);
+        try { wb = new Workbook(); await wb.loadAsync(stored.workbook, p => prog.set(p, '셀 준비 중')); }
+        finally { prog.close(); }
+      }
+    } catch (error) { startupRecovery = { marker:startupMarker, candidate, error:'브라우저 저장본을 읽지 못했습니다. 원본 파일을 다시 열어 주세요.' }; stored = null; }
   }
+  recoverySavePaused = !!startupRecovery;
   if (!wb || !stored) wb = new Workbook(stored?.workbook ?? blankBook());
   applyBookLook();
   // 이전 버전의 로컬 저장본만 기기 계산 설정을 문서 설정으로 한 번 이관한다.
@@ -20398,6 +20578,16 @@ async function init() {
     si = clamp(stored.si || 0, 0, wb.sheets.length - 1);
     autosave = stored.autosave !== false;
     remoteDoc = !!stored.remoteDoc;
+  }
+  if (stored) {
+    if (candidate.large && stored.generation != null) recoveryGenerations.set(wb, {key:candidate.storageKey, generation:stored.generation});
+    docId ??= newDocId();
+    recoveryMarker = createRecoveryMarker({ docId, docName, sessionId:recoverySessionId, openId:newDocId(), version:wb.version });
+    // A loaded complete generation is the baseline of this new page session.
+    recoveryMarker = markRecoverySaved(recoveryMarker, recoveryCheckpoint(recoveryMarker), stored.generation ?? null);
+    // Legacy snapshots have no generation tying a newly adopted page identity to their payload.
+    // Leave their existing journal untouched until the first real edit/save records a complete checkpoint.
+    if (stored.generation != null) persistRecoveryJournal({ adopting:true, previousMarker:startupMarker });
   }
   wb.onChange(onBookChange);
   hydrateIcons();
@@ -20463,6 +20653,7 @@ async function init() {
     wb: () => wb, run, commands: () => Object.keys(COMMANDS), menus: () => Object.keys(MENUS), openNamedMenu, selectCell, selectRange, newWorkbook, templates: TEMPLATES, exportXlsx, gv: () => gv, sample: (i) => newWorkbook(SAMPLES[i]), switchSheet: (i) => { switchSheet(i); },
     get active() { return active; }, get sel() { return sel; }, get si() { return si; }, get chartSel() { return chartSel; },
   };
+  if (startupRecovery && startupRequest.isCurrent()) showRecoveryChoice(startupRecovery, startupRequest);
   // 새 배포는 안내만 한다. 사용자가 파일 저장을 마친 뒤 직접 새로고침한다.
   watchReleaseUpdate({ onUpdate: () => {
     releaseUpdateAvailable = true;
@@ -20490,7 +20681,7 @@ async function init() {
   if (startupRequest.isCurrent() && (location.hash.startsWith('#view=') || /[?&](view|doc)=/.test(location.search))) await openFromUrl(startupRequest);
   startCollabWatch();
   updateTitle();
-  if (startupRequest.isCurrent() && !stored && !viewOnly && !globalThis.WIXEL_SKIP_START && !/[?&](view|doc)=/.test(location.search) && !location.hash.startsWith('#view=')) openBackstage();
+  if (startupRequest.isCurrent() && !stored && !startupRecovery && !viewOnly && !globalThis.WIXEL_SKIP_START && !/[?&](view|doc)=/.test(location.search) && !location.hash.startsWith('#view=')) openBackstage();
 }
 
 init();

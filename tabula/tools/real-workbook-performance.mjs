@@ -67,7 +67,8 @@ const initializePage = () => {
     request.onupgradeneeded = () => { if (!request.result.objectStoreNames.contains('docs')) request.result.createObjectStore('docs'); };
     request.onerror = () => reject(new Error('IDB_OPEN_FAILED'));
     request.onsuccess = () => {
-      const db = request.result, tx = db.transaction('docs', 'readonly'), get = tx.objectStore('docs').get('tabula.workbook.v1');
+      const pointer = JSON.parse(sessionStorage.getItem('tabula.workbook.v1') || localStorage.getItem('tabula.workbook.v1') || 'null');
+      const db = request.result, tx = db.transaction('docs', 'readonly'), get = tx.objectStore('docs').get(pointer?.storageKey || 'tabula.workbook.v1');
       let value; get.onsuccess = () => { value = get.result; };
       tx.oncomplete = () => { db.close(); resolve(value); };
       tx.onerror = tx.onabort = () => { db.close(); reject(new Error('IDB_READ_FAILED')); };
@@ -143,7 +144,7 @@ async function measure(name, action) {
 try {
   await context.addInitScript(initializePage);
   await bounded(page.goto(base, { waitUntil: 'domcontentloaded', timeout }), timeout, 'BOOT_WATCHDOG');
-  await bounded(page.waitForFunction(() => window.tabula?.wb()), timeout, 'BOOT_WATCHDOG');
+  await bounded(page.waitForFunction(() => !!window.tabula?.wb()), timeout, 'BOOT_WATCHDOG');
   await configureProfile();
   await page.evaluate(() => { window.__previousBook = window.tabula.wb(); });
   await measure('file-open-first-frame', async () => {
@@ -228,7 +229,7 @@ try {
     await configureProfile();
     await measure('storage-new-page-reopen', async () => {
       await page.goto(base, { waitUntil: 'domcontentloaded', timeout });
-      await page.waitForFunction(() => window.tabula?.wb() && !document.querySelector('.load-progress'));
+      await page.waitForFunction(() => !!window.tabula?.wb() && !document.querySelector('.load-progress'));
     });
     const after = await measure('storage-fingerprint-after', () => page.evaluate(fingerprintBook));
     report.storageRestore = { valuesMatch: before.values === after.values, stylesMatch: before.styles === after.styles,
