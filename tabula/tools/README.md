@@ -514,3 +514,12 @@ node tools/mobile-layout.mjs
 `node tools/mobile-header-scroll.mjs`는 Chromium/WebKit의 320·390px 모바일, 데스크톱에서 수동 모바일 전환, 모바일을 끈 좁은 창에서 리본 탭의 양방향 끌기·휠·클릭·파일 메뉴·취소/재진입을 검사합니다. Pointer Events와 호환 mousemove의 중복 이동, MouseEvents만 전달되는 경로, 터치 이벤트 전달과 문서·Undo 불변도 확인합니다. 모바일 WebKit에서는 Playwright가 실제 휠 입력을 지원하지 않아 WheelEvent 전달/소비로 구분하며, 데스크톱 WebKit과 Chromium에서는 실제 마우스 휠을 사용합니다. 실제 iPhone/Bluetooth 마우스 검증은 포함하지 않습니다.
 
 `WIXEL_URL`은 로컬 소스/번들, `WIXEL_HEADER_SCROLL_OUT`은 D: 출력 폴더, `WIXEL_HEADER_SCROLL_FILTER`는 이름 일부, `WIXEL_BROWSERS=chromium,webkit`은 실행 엔진을 지정합니다. `WIXEL_HEADER_BASELINE_REF`를 지정하면 소스 서버에서 해당 Git 커밋의 `mouse-work.js`, `mobile-work.js`, `styles.css`만 격리 컨텍스트에 응답하여 수정 전 동작을 비교합니다. 제품 파일·사용자 문서는 바꾸지 않으며 외부·API·쓰기 요청을 차단합니다.
+
+## 표 요약행 숨김과 복원
+
+`node tools/table-totals-preservation.mjs`는 합성 표에서 요약행의 평균·사용자 수식·라벨·직접 서식·빈 칸을 숨겼다 복원하고, 필터·정렬·Undo/Redo·보호·원본 값 변경·복원 위치의 사용자 내용 보존 및 숨긴 XLSX 저장 후 다시 열기를 검사합니다. `WIXEL_URL`로 소스/번들 앱을, `WIXEL_BROWSER=chromium|webkit`로 엔진을, `WIXEL_TOTALS_OUT`으로 D: 출력 폴더를 지정합니다. `WIXEL_TOTALS_FILTER`는 시나리오 이름 일부를 선택합니다. 새 격리 컨텍스트의 합성 자료만 사용하며 외부/API/쓰기를 차단합니다. XLSX 생성은 로컬 소스 writer를 사용하고, 다시 열기는 지정한 앱에서 수행합니다. 앱 내부 셀 서식 보존과 XLSX 표준 함수·수식·라벨 보존의 범위 차이, 표시 옵션 24개 관찰 및 네이티브 Excel 근거는 [60번 문서](../docs/codex/60_필터단추와표시상태보존.md)에 기록합니다.
+
+
+## 필터 단추와 Excel 조건 보존
+
+`node tools/table-filter-display.mjs`는 표 디자인의 단추 표시와 데이터 필터 해제를 구분하고, 실제 단추·조건·숨긴 행·합계·슬라이서·부분 단추·Undo/Redo·머리글·기본 줄무늬·보호·모바일·XLSX 재열기를 확인합니다. `WIXEL_URL`은 소스/최종 번들, `WIXEL_BROWSER=chromium,webkit`는 엔진, `WIXEL_FILTER_DISPLAY_OUT`은 D: 출력 경로, `WIXEL_FILTER_DISPLAY_FILTER`는 시나리오 이름 일부입니다. `WIXEL_FILTER_NATIVE_FILE`을 지정하면 Excel에서 만든 합성 파일의 단추 숨김도 검증합니다. 미지원 원형 조건의 재적용 차단과 ~ 리터럴의 저장 후 재적용을 포함하며, 외부/API 쓰기를 차단합니다. [60번 문서](../docs/codex/60_필터단추와표시상태보존.md)에 실제 Excel·표준 검증과 한계를 구분해 기록합니다.

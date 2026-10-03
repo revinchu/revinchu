@@ -1,3 +1,4 @@
+import { filterWithButtons, filterButtonsVisible } from './filter-display.js';
 // 통합 문서 모델: 시트 · 셀 · 재계산 · 실행 취소 · 행/열 구조 변경
 import { normalizePhonetic, phoneticText } from './phonetic.js';
 import { shiftNoteVisibility } from './review-state.js';
@@ -463,6 +464,33 @@ function shiftKeys(obj, index, count) {
     const p = Number(k);
     if (count < 0 && p >= index && p < index - count) continue;
     out[p >= index ? p + count : p] = v;
+  }
+  return out;
+}
+
+/** 필터/정렬 표시는 열 삽입·삭제를 따라가며, 가져온 다중 정렬 범위도 함께 옮긴다. */
+function shiftFilterSort(sort, sheetName, axis, index, count) {
+  if (!sort) return sort;
+  const out = { ...sort };
+  if (axis === 'col' && Number.isInteger(sort.col)) {
+    if (count < 0 && sort.col >= index && sort.col < index - count) {
+      if (!sort.xlsx) return undefined;
+      delete out.col; delete out.asc;
+    } else if (sort.col >= index) out.col += count;
+  }
+  if (sort.xlsx) {
+    const shift = node => {
+      const next = { ...node, attrs: { ...node.attrs } };
+      if (node.attrs?.ref) {
+        const raw = adjustFormulaForStructure(`=${node.attrs.ref}`, { targetSheet: sheetName, hostSheet: sheetName, axis, index, count }).slice(1);
+        if (raw.includes('#REF!')) return null;
+        next.attrs.ref = raw;
+      }
+      if (node.children) next.children = node.children.map(shift).filter(Boolean);
+      return next;
+    };
+    out.xlsx = shift(sort.xlsx);
+    if (!out.xlsx?.children?.length) return undefined;
   }
   return out;
 }
@@ -1969,6 +1997,21 @@ export class Workbook {
     this.version++;return true;
   }
 
+  /** 필터 단추만 표시/숨김. 조건·숨긴 행·정렬·가져온 수식 저장값은 유지한다. */
+  setTableFilterButtons(si, id, visible) {
+    const sh = this.sheets[si], table = sh?.tables?.find(t => t.id === id);
+    if (!table?.header) return false;
+    const filter = filterWithButtons(table.filter ?? { criteria: {}, hidden: {}, ...(table.sort ? { sort: table.sort } : {}) }, table.c1, table.c2, visible);
+    if (JSON.stringify(table.filter?.hiddenButtons ?? {}) === JSON.stringify(filter.hiddenButtons ?? {}) && table.filter) return false;
+    const existed = this.tx?.entries.find(e => e.t === 'prop' && e.si === si && e.prop === 'tables');
+    this.propSnap(si, 'tables');
+    const entry = this.tx?.entries.find(e => e.t === 'prop' && e.si === si && e.prop === 'tables');
+    if (entry && !existed) entry.calcNeutral = true;
+    sh.tables = sh.tables.map(t => t.id === id ? { ...t, sort: undefined, filter } : t);
+    this.version++;
+    return true;
+  }
+
   setSheetProp(si, prop, value) {
     this.propSnap(si, prop);
     // 같은 트랜잭션에서 서식 변경 뒤 구조까지 바꾸면 계산 중립 표시를 해제한다.
@@ -1993,7 +2036,31 @@ export class Workbook {
   }
 
   // ─────────── 구조 변경 ───────────
-  /** axis: 'row'|'col', count>0 삽입, count<0 삭제 */
+  /** 숨긴 요약 행의 수식도 셀 이동·삽입·삭제·이름 변경을 따라간다. */
+  rewriteTableTotals(transform) {
+    this.sheets.forEach((sheet, si) => {
+      let changed = false;
+      const tables = (sheet.tables ?? []).map(table => {
+        if (!table.totalsCells) return table;
+        const cells = { ...table.totalsCells };
+        let edited = false;
+        for (const [col, cell] of Object.entries(cells)) {
+          const textInput = cell?.inputType === 'text' || (cell?.inputType !== 'value' && cell?.style?.numFmt === 'text');
+          if (!cell || !cell.raw?.startsWith('=') || (textInput && !cell.fx)) continue;
+          const raw = transform(cell.raw, sheet.name);
+          if (raw === cell.raw) continue;
+          const { cached, staleCached, ...data } = cell;
+          cells[col] = { ...data, raw };
+          edited = true;
+        }
+        if (!edited) return table;
+        changed = true;
+        return { ...table, totalsCells: cells };
+      });
+      if (changed) { this.propSnap(si, 'tables'); sheet.tables = tables; }
+    });
+  }
+
   /** 내부 링크만 구조 변경에 맞춘다. 셀 값·수식의 파일 계산값과 외부 URL은 보존한다. */
   rewriteHyperlinks(transform, wholeSheet = -1) {
     const hasSheet = (name) => this.sheetIndexByName(name) >= 0;
@@ -2096,11 +2163,21 @@ export class Workbook {
       const rg = adjustRange(t, axis, index, count);
       if (!rg) return null;
       const nt = { ...t, ...rg };
+      if (t.sort) nt.sort = shiftFilterSort(t.sort, target.name, axis, index, count);
       if (isRow) {
         if (t.filter) nt.filter = { ...t.filter, hidden: shiftHidden(t.filter.hidden, index, count) ?? shiftKeys(t.filter.hidden, index, count) };
       } else {
-        if (t.filter) nt.filter = { ...t.filter, criteria: shiftKeys(t.filter.criteria, index, count) };
+        if (t.filter) {
+          nt.filter = { ...t.filter, criteria: shiftKeys(t.filter.criteria, index, count) };
+          if (t.filter.hiddenButtons) {
+            nt.filter.hiddenButtons = shiftKeys(t.filter.hiddenButtons, index, count);
+            if (count > 0 && index > t.c1 && index <= t.c2 && !filterButtonsVisible(t.filter, t.c1, t.c2)) {
+              for (let col = index; col < index + count; col++) nt.filter.hiddenButtons[col] = true;
+            }
+          }
+        }
         nt.totalsFns = shiftKeys(t.totalsFns, index, count);
+        if (t.totalsCells) nt.totalsCells = shiftKeys(t.totalsCells, index, count);
         // 삭제된 열 이름은 빼고, 새 열에는 이름을 채움 (머리글이 없는 표용)
         if (t.columns) {
           const cols = [...t.columns];
@@ -2114,6 +2191,7 @@ export class Workbook {
           nt.columns = cols;
         }
       }
+      if (t.filter?.sort) nt.filter.sort = shiftFilterSort(t.filter.sort, target.name, axis, index, count);
       return nt;
     }).filter(Boolean);
     // 스파크라인: 이 시트의 위치 이동 + 모든 시트의 데이터 범위 조정
@@ -2185,8 +2263,17 @@ export class Workbook {
       const f = adjustRange(target.filter, axis, index, count);
       if (!f) target.filter = null;
       else {
+        if (f.sort) f.sort = shiftFilterSort(f.sort, target.name, axis, index, count);
         if (isRow) f.hidden = shiftHidden(f.hidden, index, count) ?? shiftKeys(f.hidden, index, count);
-        else f.criteria = shiftKeys(f.criteria, index, count);
+        else {
+          f.criteria = shiftKeys(f.criteria, index, count);
+          if (target.filter.hiddenButtons) {
+            f.hiddenButtons = shiftKeys(target.filter.hiddenButtons, index, count);
+            if (count > 0 && index > target.filter.c1 && index <= target.filter.c2 && !filterButtonsVisible(target.filter, target.filter.c1, target.filter.c2)) {
+              for (let col = index; col < index + count; col++) f.hiddenButtons[col] = true;
+            }
+          }
+        }
         target.filter = f;
       }
     }
@@ -2239,6 +2326,7 @@ export class Workbook {
       }
     });
 
+    this.rewriteTableTotals((formula, hostSheet) => adjustFormulaForStructure(formula, { targetSheet: target.name, hostSheet, axis, index, count }));
     this.rewriteHyperlinks((formula, hostSheet) => adjustFormulaForStructure(formula, { targetSheet: target.name, hostSheet, axis, index, count }), si);
     const deps = this.sheetDeps();
     this.sheets.forEach((sheet, i) => {
@@ -2333,6 +2421,7 @@ export class Workbook {
         else this.swapCell(i, k, next);
       }
     });
+    this.rewriteTableTotals((formula, hostSheet) => adjustFormulaForStructure(formula, { targetSheet: target.name, hostSheet, axis, index, count, band }));
     this.names = this.names.map((n) => {
       const ref = adjustFormulaForStructure(n.ref, { targetSheet: target.name, hostSheet: n.sheet ?? '', axis, index, count, band });
       return ref === n.ref ? n : { ...n, ref };
@@ -2381,6 +2470,7 @@ export class Workbook {
         if (i === si) sheet.cells.set(k, nc); else this.swapCell(i, k, nc);
       }
     });
+    this.rewriteTableTotals(fix);
     const mv = (g) => ({ ...g, r1: g.r1 + dr, r2: g.r2 + dr, c1: g.c1 + dc, c2: g.c2 + dc });
     sh.merges = sh.merges.filter((m) => !inside(m, dst) || inside(m, src)).map((m) => (inside(m, src) ? mv(m) : m));
     sh.cond = sh.cond.map((rule) => {
@@ -2453,6 +2543,7 @@ export class Workbook {
     this.snapshotNames();
     const old = this.sheets[si].name;
     const refs = this.affected(si); // 이 시트를 참조하는 시트 (이름이 바뀐 수식)
+    this.rewriteTableTotals((formula) => renameSheetInFormula(formula, old, newName));
     this.rewriteHyperlinks((formula) => renameSheetInFormula(formula, old, newName));
     this.sheets[si].name = newName;
     this.record({ t: 'rename', si, before: old, after: newName });

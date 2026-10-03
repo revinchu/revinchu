@@ -1,3 +1,4 @@
+import { readAutoFilter, readFilterSort, autoFilterXml, filterSortXml } from './xlsx-filter.js';
 import { normalizeObjectStyles, findObjectStyle, objectStylePatch, TABLE_STYLE_ELEMENTS, SLICER_STYLE_ELEMENTS } from './object-styles.js';
 import { relocateValidation, VALIDATION_IME_MODES } from './validation.js';
 import { chartAreaFormatXml, readChartAreaFormat } from './chart-area-drawingml.js';
@@ -33,7 +34,7 @@ import { emfDataUrl } from './emf.js';
 import { GEOM, LINE_KINDS, shapeLineEnds } from './shapes.js';
 import { customGeometryXml, readCustomGeometry, storedCustomGeometryXml } from './shape-path.js';
 import { BLOCK_MIN_ROWS, ColBuilder, inBlock, blockValue } from './block.js';
-import { normalizeStyleName, DEFAULT_TABLE_STYLE, dataTop, dataBottom, canonicalRef, tableAt, columnNames, findTable } from './tables.js';
+import { normalizeStyleName, DEFAULT_TABLE_STYLE, dataTop, dataBottom, canonicalRef, tableAt, columnNames, findTable, TOTAL_FUNCS } from './tables.js';
 import { pivotSourceData, resolvePivot, itemText, keyOf, sortKeys, EMPTY, headerNames, normalizeDef, computePivot, valueName, showAsPercent, excelCalcFormula, pivotFilterKey, pivotPageMulti, pivotPageLayout, DATE_OP_TYPES } from './pivot.js';
 import { groupKey } from './cube.js';
 import { slicerStyleName, slicerColors, isModernSlicer, slicerStyleElements } from './slicerstyle.js';
@@ -450,6 +451,12 @@ function readStyles(files, wbRels, theme) {
   };
   const dxfNodes = kids(child(root, 'dxfs'), 'dxf');
   const dxfs = dxfNodes.map(dxfOf);
+  // Color filters (including font-color filters) use solid foreground fills.
+  const filterDxfs = dxfNodes.map(d => {
+    const st = dxfOf(d), fill = child(d, 'fill'), pf = child(fill, 'patternFill');
+    if (pf) st.fill = pf.attrs.patternType === 'none' ? null : colorOf(child(pf, 'fgColor'), theme) ?? colorOf(child(pf, 'bgColor'), theme) ?? st.fill;
+    return st;
+  });
   const objectDxfOf = d => {
     const st=dxfOf(d),f=child(d,'font');
     Object.assign(st,fontOf(f));
@@ -467,6 +474,7 @@ function readStyles(files, wbRels, theme) {
     for(const [attr,key]of [['diagonalDown','dd'],['diagonalUp','du']])if(b?.attrs[attr]!==undefined&&!st[key])st[key]=false;
     return st;
   };
+  const tableDxfs = dxfNodes.map(objectDxfOf);
   const x14DxfRoot=kids(child(root,'extLst'),'ext').find(e=>e.attrs.uri?.toUpperCase()==='{46F421CA-312F-682F-3DD2-61675219B42D}');
   const slicerDxfNodes=x14DxfRoot?kids(child(x14DxfRoot,'dxfs'),'dxf'):dxfNodes;
   const readElement=(e,nodes=dxfNodes)=>{const d=nodes[Number(e.attrs.dxfId)],style=d?objectDxfOf(d):{};return {type:e.attrs.type,...(/Stripe$/.test(e.attrs.type)?{size:Number(e.attrs.size)>0?Number(e.attrs.size):1}:{}),style,...(d?{sourceDxf:structuredClone(d),sourceStyle:structuredClone(style)}:{})};};
@@ -514,7 +522,7 @@ function readStyles(files, wbRels, theme) {
     };
     slicerStyles[ss.attrs.name] = Object.fromEntries(Object.entries(c).filter(([, v]) => v));
   }
-  return { xfs, dxfs, dxfOf, defaultFont, tableStyles, wbFont, slicerStyles, cellStyles, fonts, objectStyles };
+  return { xfs, dxfs, filterDxfs, tableDxfs, dxfOf, defaultFont, tableStyles, wbFont, slicerStyles, cellStyles, fonts, objectStyles };
 }
 
 const CHUNK_MIN = 48 << 20;
@@ -1006,20 +1014,14 @@ function* readSheet(files, path, ctx) {
   if (af?.attrs.ref) {
     const rg = refToRange(af.attrs.ref);
     if (rg) {
-      const criteria = {};
-      for (const fc of kids(af, 'filterColumn')) {
-        const filters = child(fc, 'filters');
-        if (!filters) continue;
-        const vals = kids(filters, 'filter').map((f) => f.attrs.val);
-        if (filters.attrs.blank === '1') vals.push('');
-        criteria[rg.c1 + Number(fc.attrs.colId)] = vals;
-      }
+      const parsed = readAutoFilter(af, rg, { dxfs: ctx.filterDxfs ?? dxfs, sortNode: child(root, 'sortState') });
+      const criteria = parsed.criteria;
       const hidden = {};
       for (const k of Object.keys(sheet.hiddenRows)) {
         const r = Number(k);
         if (r > rg.r1 && r <= rg.r2 && Object.keys(criteria).length) { hidden[r] = true; delete sheet.hiddenRows[r]; }
       }
-      sheet.filter = { ...rg, criteria, hidden };
+      sheet.filter = { ...rg, ...parsed, hidden };
     }
   }
 
@@ -1240,7 +1242,7 @@ function* readSheet(files, path, ctx) {
     const target = rels[rid(tp)]?.target;
     const tx = target && textOf(files[target]);
     if (!tx) continue;
-    const t = readTable(parseXml(tx), sheet, ctx.objectStyles);
+    const t = readTable(parseXml(tx), sheet, ctx.objectStyles, ctx.filterDxfs ?? ctx.dxfs, ctx.tableDxfs ?? ctx.dxfs);
     if (t) sheet.tables.push(t);
   }
   sheet.validations = readValidations(root);
@@ -1354,29 +1356,35 @@ function readValidations(root) {
 }
 
 /** tables/tableN.xml → 표 모델 */
-function readTable(root, sheet, styles) {
+function readTable(root, sheet, styles, dxfs, tableDxfs) {
   const rg = refToRange(root.attrs.ref ?? '');
   if (!rg) return null;
   const header = root.attrs.headerRowCount !== '0';
   const totals = Number(root.attrs.totalsRowCount ?? 0) > 0;
   const info = child(root, 'tableStyleInfo');
   const cols = kids(child(root, 'tableColumns'), 'tableColumn');
-  const totalsFns = {};
+  const name = (root.attrs.displayName || root.attrs.name || 'Table').replace(/\s/g, '_');
+  const totalsFns = {}, totalsCells = {};
   cols.forEach((tc, i) => {
-    const f = tc.attrs.totalsRowFunction;
-    if (f && f !== 'none' && f !== 'custom') totalsFns[rg.c1 + i] = f;
+    const c = rg.c1 + i, f = tc.attrs.totalsRowFunction;
+    if (f && f !== 'none' && f !== 'custom') totalsFns[c] = f;
+    const formula = child(tc, 'totalsRowFormula');
+    if (formula?.text) totalsCells[c] = { raw: `=${cleanFormula(formula.text)}` };
+    else if (tc.attrs.totalsRowLabel !== undefined) totalsCells[c] = { raw: tc.attrs.totalsRowLabel, inputType: 'text' };
+    const st = tc.attrs.totalsRowDxfId !== undefined ? tableDxfs?.[Number(tc.attrs.totalsRowDxfId)] : null;
+    if (st && Object.keys(st).length) {
+      const fn = TOTAL_FUNCS.find(x => x.id === f && x.code);
+      const col = (tc.attrs.name ?? '').replace(/(['[\]#@])/g, "'$1");
+      totalsCells[c] ??= { raw: fn ? `=SUBTOTAL(${fn.code},${name}[${col}])` : '' };
+      totalsCells[c].style = structuredClone(st);
+      if (st.numFmt === 'text' && totalsCells[c].raw.startsWith('=') && totalsCells[c].inputType !== 'text') totalsCells[c].fx = true;
+    }
   });
   const af = child(root, 'autoFilter');
   let filter = null;
   if (af && header) {
-    const criteria = {};
-    for (const fc of kids(af, 'filterColumn')) {
-      const filters = child(fc, 'filters');
-      if (!filters) continue;
-      const vals = kids(filters, 'filter').map((f) => f.attrs.val);
-      if (filters.attrs.blank === '1') vals.push('');
-      criteria[rg.c1 + Number(fc.attrs.colId)] = vals;
-    }
+    const parsed = readAutoFilter(af, rg, { dxfs, sortNode: child(root, 'sortState') });
+    const criteria = parsed.criteria;
     const hidden = {};
     if (Object.keys(criteria).length) {
       for (const k of Object.keys(sheet.hiddenRows)) {
@@ -1384,16 +1392,15 @@ function readTable(root, sheet, styles) {
         if (r > rg.r1 && r <= rg.r2 - (totals ? 1 : 0)) { hidden[r] = true; delete sheet.hiddenRows[r]; }
       }
     }
-    filter = { criteria, hidden };
+    filter = { ...parsed, hidden };
   }
-  const name = (root.attrs.displayName || root.attrs.name || 'Table').replace(/\s/g, '_');
   return {
     id: `tb${Math.random().toString(36).slice(2, 9)}`, name, ...rg, r2: Math.max(rg.r2, rg.r1 + (header ? 1 : 0)),
     header, totals, style: info ? info.attrs.name ?? 'None' : DEFAULT_TABLE_STYLE,
     ...(findObjectStyle(styles,'table',info?.attrs.name) ? objectStylePatch('table',findObjectStyle(styles,'table',info.attrs.name)) : {}),
     banded: info ? info.attrs.showRowStripes !== '0' : true, bandedCols: info?.attrs.showColumnStripes === '1',
     firstCol: info?.attrs.showFirstColumn === '1', lastCol: info?.attrs.showLastColumn === '1',
-    filter, totalsFns, ...(header ? {} : { columns: cols.map((c) => c.attrs.name ?? '') }),
+    filter, ...(!filter && child(root, 'sortState') ? { sort: readFilterSort(child(root, 'sortState'), dxfs) } : {}), totalsFns, ...(!totals && (Object.keys(totalsCells).length || !falseAttr(root.attrs.totalsRowShown)) ? { totalsCells } : {}), ...(header ? {} : { columns: cols.map((c) => c.attrs.name ?? '') }),
     _xmlId: Number(root.attrs.id), _colNames: cols.map((c) => c.attrs.name ?? ''),
   };
 }
@@ -2827,7 +2834,7 @@ function* readXlsxSteps(files) {
   const wbRoot = parseXml(textOf(files[wbPath]));
   const wbRels = relsOf(files, wbPath);
   const theme = readTheme(files, wbRels);
-  const { xfs, dxfs, dxfOf, tableStyles, wbFont, slicerStyles, cellStyles, fonts, objectStyles } = readStyles(files, wbRels, theme);
+  const { xfs, dxfs, filterDxfs, tableDxfs, dxfOf, tableStyles, wbFont, slicerStyles, cellStyles, fonts, objectStyles } = readStyles(files, wbRels, theme);
   const mdw = digitWidth(wbFont);
   const ssRel = Object.values(wbRels).find((r) => r.type === 'sharedStrings');
   const stringNodes = !files.__xlsb && ssRel && files[ssRel.target] ? kids(parseXml(textOf(files[ssRel.target])), 'si') : [];
@@ -2855,7 +2862,7 @@ function* readXlsxSteps(files) {
     try { return mayReturnArray(parse(e.ref.slice(1))); } catch { return false; }
   };
   const date1904 = ['1', 'true'].includes(child(wbRoot, 'workbookPr')?.attrs.date1904);
-  const ctx = { mdw, wbFont, xfs, dxfs, dxfOf, tableStyles, slicerStyles, objectStyles, strings, phonetics, fonts, theme, date1904, warnings: new Set(), isName, nameMulti, richImages: readRichImages(files, wbRels) };
+  const ctx = { mdw, wbFont, xfs, dxfs, filterDxfs, tableDxfs, dxfOf, tableStyles, slicerStyles, objectStyles, strings, phonetics, fonts, theme, date1904, warnings: new Set(), isName, nameMulti, richImages: readRichImages(files, wbRels) };
   const sheets = [];
   const warnings = [];
   const sheetCodes = {};
@@ -3344,6 +3351,18 @@ class StylePool {
 let fileNameCheck = null;
 function exportFormula(raw, hereTable = null, dynamic = false) {
   return toFileFormula(raw, { hereTable, dynamic, isName: fileNameCheck });
+}
+
+// A remembered menu function cannot overwrite a subsequently edited totals cell.
+function matchingTotalFunction(raw, fn, table, column) {
+  const f = TOTAL_FUNCS.find(x => x.id === fn && x.code);
+  if (!f || !raw?.startsWith('=')) return false;
+  try {
+    const a = parse(raw.slice(1)), arg = a.args?.[1];
+    if (a.type !== 'func' || a.name !== 'SUBTOTAL' || a.args.length !== 2 || a.args[0]?.type !== 'num' || a.args[0].v !== f.code || arg?.type !== 'sref') return false;
+    const expected = column.replace(/(['[\]#@])/g, "'$1");
+    return canonicalRef(arg.table, arg.spec, table.name).toLowerCase() === canonicalRef(table.name, expected, table.name).toLowerCase();
+  } catch { return false; }
 }
 
 const CELL_IS = { gt: 'greaterThan', lt: 'lessThan', ge: 'greaterThanOrEqual', le: 'lessThanOrEqual', eq: 'equal', ne: 'notEqual', between: 'between', notBetween: 'notBetween' };
@@ -4642,11 +4661,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
     let autoFilter = '';
     if (sheet.filter && sheet.filter.r1 < EXCEL_MAX_ROWS) {
       const f = { ...sheet.filter, r2: Math.min(sheet.filter.r2, EXCEL_MAX_ROWS - 1) };
-      const cols = Object.entries(f.criteria ?? {}).filter(([, vals]) => Array.isArray(vals)).map(([c, vals]) => {
-        const blank = vals.includes('');
-        return `<filterColumn colId="${Number(c) - f.c1}"><filters${blank ? ' blank="1"' : ''}>${vals.filter((v) => v !== '').map((v) => `<filter val="${esc(v)}"/>`).join('')}</filters></filterColumn>`;
-      }).join('');
-      autoFilter = `<autoFilter ref="${rangeRef(f)}">${cols}</autoFilter>`;
+      autoFilter = autoFilterXml(f, f, { dxf: style => pool.objectDxf({style}) });
       definedNames.push(`<definedName name="_xlnm._FilterDatabase" localSheetId="${si}" hidden="1">${esc(`${quoteSheetName(sheet.name)}!${rangeRef(f, true)}`)}</definedName>`);
     }
     const fit = (rg) => (rg.r1 >= EXCEL_MAX_ROWS ? null : { ...rg, r2: Math.min(rg.r2, EXCEL_MAX_ROWS - 1) });
@@ -4842,16 +4857,19 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
       const names = columnNames(wb, si, t);
       const cols = names.map((n, i) => {
         const c = t.c1 + i;
-        const fn = t.totals ? t.totalsFns?.[c] : null;
+        const fn = t.totalsFns?.[c];
         let extra = '';
         let inner = '';
-        const tot = t.totals ? wb.getCell(si, t.r2, c) : null;
-        if (fn && fn !== 'none') extra = ` totalsRowFunction="${fn}"`;
-        else if (tot?.formula) {
-          // 요약 행의 사용자 수식
-          extra = ' totalsRowFunction="custom"';
-          inner += `<totalsRowFormula>${esc(exportFormula(tot.raw, t.name))}</totalsRowFormula>`;
-        } else if (tot?.raw) extra = ` totalsRowLabel="${esc(tot.raw.replace(/^'/, ''))}"`;
+        const tot = t.totals ? wb.getCell(si, t.r2, c) : t.totalsCells?.[c];
+        const textInput = tot?.inputType === 'text' || (tot?.inputType !== 'value' && tot?.style?.numFmt === 'text');
+        const isFormula = tot?.formula || (tot?.raw?.startsWith('=') && (!textInput || tot.fx));
+        if (isFormula) {
+          if (matchingTotalFunction(tot.raw, fn, t, n)) extra = ` totalsRowFunction="${fn}"`;
+          else { extra = ' totalsRowFunction="custom"'; inner += `<totalsRowFormula>${esc(exportFormula(tot.raw, t.name))}</totalsRowFormula>`; }
+        } else if (tot?.raw) extra = ` totalsRowLabel="${esc(tot.inputType === 'text' || tot.style?.numFmt === 'text' ? tot.raw : tot.raw.replace(/^'/, ''))}"`;
+        else if (!t.totals && !Object.hasOwn(t.totalsCells ?? {}, c) && TOTAL_FUNCS.some(x => x.id === fn && x.code)) extra = ` totalsRowFunction="${fn}"`;
+        else if (!t.totals && Object.hasOwn(t.totalsCells ?? {}, c)) extra = ' totalsRowLabel=""';
+        if (tot?.style && Object.keys(tot.style).length) extra += ` totalsRowDxfId="${pool.objectDxf({style:tot.style})}"`;
         // 계산된 열: 데이터 행이 모두 같은 수식이면 새 행에도 자동으로 채워지도록
         const top = dataTop(t);
         const bottom = dataBottom(t);
@@ -4863,19 +4881,14 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
         }
         return inner ? `<tableColumn id="${i + 1}" name="${esc(n)}"${extra}>${inner}</tableColumn>` : `<tableColumn id="${i + 1}" name="${esc(n)}"${extra}/>`;
       }).join('');
-      let af = '';
-      if (t.filter && t.header) {
-        const fr = { r1: t.r1, c1: t.c1, r2: dataBottom(t), c2: t.c2 };
-        const fcs = Object.entries(t.filter.criteria ?? {}).filter(([, vals]) => Array.isArray(vals)).map(([c, vals]) => {
-          const blank = vals.includes('');
-          return `<filterColumn colId="${Number(c) - t.c1}"><filters${blank ? ' blank="1"' : ''}>${vals.filter((v) => v !== '').map((v) => `<filter val="${esc(v)}"/>`).join('')}</filters></filterColumn>`;
-        }).join('');
-        af = `<autoFilter ref="${rangeRef(fr)}">${fcs}</autoFilter>`;
-      }
+      const filterRange = { r1: t.r1, c1: t.c1, r2: dataBottom(t), c2: t.c2 };
+      const filterOptions = { dxf: style => pool.objectDxf({style}), includeSort: false, header: t.header };
+      const af = t.filter && t.header ? autoFilterXml(t.filter, filterRange, filterOptions) : '';
+      const tableSort = filterSortXml(t.filter?.sort ?? t.sort, filterRange, filterOptions);
       const style = t.style && t.style !== 'None' ? t.style : null;
       if (style && Array.isArray(t.styleElements)) pool.objectTableStyle({name:style,table:true,pivot:false,elements:t.styleElements});
       else if (style && isModernStyle(style)) pool.presetTableStyle(style, false);
-      files[`xl/tables/table${tableNo}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<table xmlns="${NS_MAIN}" id="${tableNo}" name="${esc(t.name)}" displayName="${esc(t.name)}" ref="${rangeRef(t)}"${t.header ? '' : ' headerRowCount="0"'}${t.totals ? ' totalsRowCount="1"' : ' totalsRowShown="0"'}>${af}<tableColumns count="${names.length}">${cols}</tableColumns><tableStyleInfo${style ? ` name="${esc(style)}"` : ''} showFirstColumn="${t.firstCol ? 1 : 0}" showLastColumn="${t.lastCol ? 1 : 0}" showRowStripes="${t.banded !== false ? 1 : 0}" showColumnStripes="${t.bandedCols ? 1 : 0}"/></table>`;
+      files[`xl/tables/table${tableNo}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<table xmlns="${NS_MAIN}" id="${tableNo}" name="${esc(t.name)}" displayName="${esc(t.name)}" ref="${rangeRef(t)}"${t.header ? '' : ' headerRowCount="0"'}${t.totals ? ' totalsRowCount="1"' : ` totalsRowShown="${t.totalsCells != null || Object.keys(t.totalsFns ?? {}).length ? 1 : 0}"`}>${af}${tableSort}<tableColumns count="${names.length}">${cols}</tableColumns><tableStyleInfo${style ? ` name="${esc(style)}"` : ''} showFirstColumn="${t.firstCol ? 1 : 0}" showLastColumn="${t.lastCol ? 1 : 0}" showRowStripes="${t.banded !== false ? 1 : 0}" showColumnStripes="${t.bandedCols ? 1 : 0}"/></table>`;
       contentOverrides.push(`<Override PartName="/xl/tables/table${tableNo}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"/>`);
       tableRids.push(addRel('table', `../tables/table${tableNo}.xml`));
     }

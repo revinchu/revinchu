@@ -1,3 +1,4 @@
+import { filterButtonVisible, filterButtonsVisible, filterWithButtons } from './filter-display.js';
 import { createSheetPicker } from './sheet-picker-ui.js';
 import { chartAreaFormatPatch } from './chart-area-format.js';
 import { chartResetFormattingPatch, applyChartTemplatePatch } from './chart-context.js';
@@ -139,7 +140,7 @@ import { timeAxis } from './ets.js';
 import {
   CATEGORIES as FMT_CATEGORIES, CURRENCY_SYMBOLS, NEGATIVE_STYLES, DATE_TYPES, TIME_TYPES, FRACTION_TYPES, SPECIAL_TYPES, CUSTOM_LIST, buildCode, describeCode,
 } from './fmtpresets.js';
-import { maxOf, minOf } from './fxcore.js';
+import { maxOf, minOf, wildcardRegex } from './fxcore.js';
 import { CELL_STYLE_PARTS, cellStyleKey, validCellStyleName, cellStyleIncludes, cellStylePatch, cellStyleUpdatePatch, importCellStyleList } from './cell-style.js';
 import { REPORT_CELL_STYLE_SECTIONS } from './cell-style-presets.js';
 import { capturePivotCellFormat } from './pivot-style-format.js';
@@ -2645,7 +2646,7 @@ function autofitCols(cols) {
         const cell = wb.getCell(si, r, c);
         const st = styleAt(r, c);
         const text = view.showFormulas && cell?.formula ? cell.raw : formatValue(v, st, wb.date1904).text;
-        for (const line of text.split('\n')) w = Math.max(w, measureText(line, st) + (allFilters().some(([, f]) => f.r1 === r && c >= f.c1 && c <= f.c2) ? 28 : 10));
+        for (const line of text.split('\n')) w = Math.max(w, measureText(line, st) + (allFilters().some(([, f]) => f.r1 === r && c >= f.c1 && c <= f.c2 && filterButtonVisible(f, c)) ? 28 : 10));
       }
       widths[c] = w ? Math.min(600, Math.ceil(w)) : defColW();
     }
@@ -5159,6 +5160,7 @@ function sortData(ascending, keyCol = active.c, header = null, rgIn = null, fkey
   const tbl = rgIn ? null : tableHere();
   let fkey = fkeyIn ?? (tbl ? (tbl.filter && tbl.header ? tbl.id : null) : sheet().filter ? '' : null);
   const f = fkey === null ? null : getFilter(fkey);
+  if (!canRecomputeFilter(f)) return;
   let rg = rgIn;
   if (!rg && tbl && selIsActiveOnly()) {
     // 표 안: 표의 데이터 행만 정렬 (요약 행 제외)
@@ -5301,7 +5303,7 @@ const FILTER_OPS = [
   ['begins', '시작 문자'], ['notBegins', '시작 문자 아님'], ['ends', '끝 문자'], ['notEnds', '끝 문자 아님'],
   ['contains', '포함'], ['notContains', '포함하지 않음'], ['regex', '정규식과 일치'], ['notRegex', '정규식과 일치하지 않음'],
 ];
-const wildRe = (p) => new RegExp(`^${String(p).replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/~\*/g, '\u0001').replace(/~\?/g, '\u0002').replace(/\*/g, '.*').replace(/\?/g, '.').replace(/\u0001/g, '\\*').replace(/\u0002/g, '\\?')}$`, 'i');
+const wildRe = (pattern) => wildcardRegex(String(pattern));
 function opTest(op, v, text, arg) {
   if (!op || arg === undefined || arg === null || arg === '') return true;
   const a = String(arg);
@@ -5359,6 +5361,12 @@ function critPredicate(c, cr, r1, r2) {
   return () => true;
 }
 
+function canRecomputeFilter(f) {
+  if (!Object.values(f?.criteria ?? {}).some(cr => cr?.type === 'xlsx')) return true;
+  alertDialog('필터 조건 보존', '이 파일에는 아직 다시 계산할 수 없는 Excel 필터 조건이 있습니다. 현재 조건과 숨긴 행은 유지됩니다. 해당 열의 조건을 지원되는 조건으로 바꾸거나 필터를 지운 뒤 다시 적용하세요.');
+  return false;
+}
+
 function recomputeFilter(f, key = '') {
   const r2 = key ? f.r2 : expandedFilterEnd(wb, si, f);
   const crit = Object.entries(f.criteria ?? {}).filter(([, v]) => Array.isArray(v)).map(([c, vals]) => [Number(c), new Set(vals)]);
@@ -5406,7 +5414,15 @@ function recomputeFilter(f, key = '') {
 }
 
 function toggleFilter() {
-  if (tableHere()) { toggleTableOption('filter'); return; }
+  const table = tableHere();
+  if (table) {
+    if (!table.header) { toast('필터를 쓰려면 머리글 행이 있어야 합니다.'); return; }
+    // 데이터 탭의 필터 명령은 조건까지 해제한다. 디자인의 '필터 단추'와 구분한다.
+    wb.transact(() => setTables(list => list.map(t => t.id !== table.id ? t : t.filter
+      ? { ...t, sort: t.filter.sort ?? t.sort, filter: null }
+      : { ...t, sort: undefined, filter: { criteria: {}, hidden: {}, ...(t.sort ? { sort: t.sort } : {}) } })), meta());
+    return;
+  }
   if (sheet().filter) {
     wb.transact(() => wb.setSheetProp(si, 'filter', null), meta());
     toast('필터를 해제했습니다.');
@@ -5433,6 +5449,7 @@ function applyFilterCriteria(c, values, key = '', { quiet = false } = {}) {
   if (!f) return;
   const criteria = { ...f.criteria };
   if (values === null) delete criteria[c]; else criteria[c] = values;
+  if (!canRecomputeFilter({ ...f, criteria })) return;
   const nf = recomputeFilter({ ...f, criteria }, key);
   wb.transact(() => putFilter(key, nf), meta());
   // onBookChange queues one complete layout. Selection below updates only its
@@ -7047,6 +7064,7 @@ function afterDataEntry(rg) {
   for (const e of expansionFor(s, rg)) {
     const t = sheet().tables.find((x) => x.id === e.id);
     const nt = { ...t, ...e };
+    if (t.filter && !filterButtonsVisible(t.filter, t.c1, t.c2)) nt.filter = filterWithButtons(t.filter, nt.c1, nt.c2, false);
     if (e.c2 !== undefined && t.header) {
       const names = columnNames(wb, si, t).map((n) => n.toLowerCase());
       for (let c = t.c2 + 1; c <= e.c2; c++) {
@@ -7110,7 +7128,7 @@ function getFilter(key) {
 }
 
 function putFilter(key, nf) {
-  if (key) setTables((list) => list.map((t) => (t.id === key ? { ...t, filter: nf ? { criteria: nf.criteria ?? {}, hidden: nf.hidden ?? {}, sort: nf.sort } : null } : t)));
+  if (key) setTables((list) => list.map((t) => (t.id === key ? { ...t, filter: nf ? (({ r1, c1, r2, c2, ...state }) => state)({ ...nf, criteria: nf.criteria ?? {}, hidden: nf.hidden ?? {} }) : null } : t)));
   else wb.setSheetProp(si, 'filter', nf);
 }
 
@@ -7147,8 +7165,17 @@ function setTotals(t, on) {
       if (busy || (sheet().tables ?? []).some((o) => o !== t && o.r1 <= row && o.r2 >= row && o.c1 <= t.c2 && o.c2 >= t.c1)) wb.insertRows(si, row, 1);
       const cur = sheet().tables.find((x) => x.id === t.id);
       row = cur.r2 + 1;
-      const nt = { ...cur, r2: row, totals: true, totalsFns: {} };
+      const remembered = cur.totalsCells != null || Object.keys(cur.totalsFns ?? {}).length > 0;
+      const nt = { ...cur, r2: row, totals: true, totalsFns: { ...cur.totalsFns }, totalsCells: undefined };
       setTables((list) => list.map((x) => (x.id === t.id ? nt : x)));
+      // 숨기는 것은 요약 설정을 지우는 작업이 아니다. 빈 칸과 직접 입력한 수식·서식도 복원한다.
+      if (remembered) {
+        for (let c = nt.c1; c <= nt.c2; c++) {
+          if (Object.hasOwn(cur.totalsCells ?? {}, c)) wb.setCellData(si, row, c, structuredClone(cur.totalsCells[c]));
+          else if (nt.totalsFns[c]) wb.setInput(si, row, c, totalsFormula(nt, c, nt.totalsFns[c]));
+        }
+        return;
+      }
       // 마지막 숫자 열은 합계, 첫 열은 '요약'
       let lastNum = null;
       for (let c = nt.c2; c >= nt.c1 && lastNum === null; c--) {
@@ -7159,8 +7186,12 @@ function setTotals(t, on) {
       if (lastNum !== nt.c1) wb.setInput(si, row, nt.c1, '요약');
       setTables((list) => list.map((x) => (x.id === t.id ? { ...x, totalsFns: fns } : x)));
     } else {
-      for (let c = t.c1; c <= t.c2; c++) wb.setCellData(si, t.r2, c, null);
-      setTables((list) => list.map((x) => (x.id === t.id ? { ...x, r2: t.r2 - 1, totals: false, totalsFns: {} } : x)));
+      const totalsCells = {};
+      for (let c = t.c1; c <= t.c2; c++) {
+        totalsCells[c] = structuredClone(cellData(wb.getCell(si, t.r2, c)));
+        wb.setCellData(si, t.r2, c, null);
+      }
+      setTables((list) => list.map((x) => (x.id === t.id ? { ...x, r2: t.r2 - 1, totals: false, totalsCells } : x)));
     }
   }, meta());
 }
@@ -7202,6 +7233,7 @@ function renameTable(name) {
         wb.setCellData(i, r, c, { ...cellData(cell), raw: cell.raw.replace(re, (m0, pre) => `${pre}${n}[`) });
       }
     });
+    wb.rewriteTableTotals((raw) => { re.lastIndex = 0; return raw.replace(re, (m0, pre) => `${pre}${n}[`); });
     setTables((list) => list.map((x) => (x.id === t.id ? { ...x, name: n } : x)));
     wb.sheets.forEach((s2, i) => {
       if (!(s2.slicers ?? []).some((x) => x.source?.table === t.name)) return;
@@ -7225,6 +7257,7 @@ function resizeTableDialog() {
     if ((sheet().tables ?? []).some((o) => o.id !== t.id && o.r1 <= p.r2 && o.r2 >= p.r1 && o.c1 <= p.c2 && o.c2 >= p.c1)) { alertDialog('표 크기 조정', '표는 다른 표와 겹칠 수 없습니다.'); return false; }
     wb.transact(() => {
       const nt = { ...t, ...p, r2: Math.max(p.r2, p.r1 + 1) };
+      if (t.filter && !filterButtonsVisible(t.filter, t.c1, t.c2)) nt.filter = filterWithButtons(t.filter, nt.c1, nt.c2, false);
       if (t.header) {
         const names = uniqueNames([...Array(nt.c2 - nt.c1 + 1)].map((_, i) => displayText(nt.r1, nt.c1 + i)));
         names.forEach((n, i) => { if (displayText(nt.r1, nt.c1 + i) !== n) wb.setInput(si, nt.r1, nt.c1 + i, `'${n}`); });
@@ -7304,7 +7337,7 @@ function toggleTableOption(key) {
   if (key === 'totals') { setTotals(t, !t.totals); return; }
   if (key === 'filter') {
     if (!t.header) { toast('필터 단추를 쓰려면 머리글 행이 있어야 합니다.'); return; }
-    updateTable(t.id, { filter: t.filter ? null : { criteria: {}, hidden: {} } });
+    wb.transact(() => wb.setTableFilterButtons(si, t.id, !filterButtonsVisible(t.filter, t.c1, t.c2)), meta());
     gv.layout();
     return;
   }
@@ -7314,7 +7347,7 @@ function toggleTableOption(key) {
         // 머리글 행을 표에서 빼고 이름은 기억
         const names = columnNames(wb, si, t);
         for (let c = t.c1; c <= t.c2; c++) wb.setCellData(si, t.r1, c, null);
-        setTables((list) => list.map((x) => (x.id === t.id ? { ...x, r1: t.r1 + 1, header: false, columns: names, filter: null } : x)));
+        setTables((list) => list.map((x) => (x.id === t.id ? { ...x, r1: t.r1 + 1, header: false, columns: names, sort: x.filter?.sort ?? x.sort, filter: null } : x)));
       } else {
         let r1 = t.r1 - 1;
         let busy = r1 < 0;
@@ -7326,13 +7359,13 @@ function toggleTableOption(key) {
         const cur = sheet().tables.find((x) => x.id === t.id);
         const names = uniqueNames(cur.columns ?? []);
         names.forEach((n, i) => wb.setInput(si, r1, cur.c1 + i, `'${n}`));
-        setTables((list) => list.map((x) => (x.id === t.id ? { ...x, r1, header: true, columns: undefined, filter: { criteria: {}, hidden: {} } } : x)));
+        setTables((list) => list.map((x) => (x.id === t.id ? { ...x, r1, header: true, columns: undefined, sort: undefined, filter: { criteria: {}, hidden: {}, ...(x.sort ? { sort: x.sort } : {}) } } : x)));
       }
     }, meta());
     gv.layout();
     return;
   }
-  updateTable(t.id, { [key]: !t[key] });
+  updateTable(t.id, { [key]: key === 'banded' ? t.banded === false : !t[key] });
 }
 
 const OBJECT_STYLE_LABELS = {table:'표', pivot:'피벗 테이블', slicer:'슬라이서'};
@@ -16837,6 +16870,8 @@ async function snapshotLinkedPictures() {
 /** 엑셀 정렬 대화상자: 기준 추가 · 삭제 · 복사 · 위/아래, 정렬 기준(셀 값 · 셀 색 · 글꼴 색), 사용자 지정 목록, 옵션 */
 let sortDlgOpts = { caseSensitive: false, natural: false, byCols: false };
 function sortDialog() {
+  const fk = filterKeyHere();
+  if (fk !== null && !canRecomputeFilter(getFilter(fk))) return;
   const rg0 = dataRange();
   if (wb.mergesIn(si, rg0.r1, rg0.c1, rg0.r2, rg0.c2).length) { alertDialog('WIXEL', '병합된 셀이 있으면 정렬할 수 없습니다.'); return; }
   const o = { ...sortDlgOpts };
@@ -18716,10 +18751,12 @@ function contextFilterBy(type) {
   if(rg.r2<=rg.r1){toast('머리글과 데이터가 있는 범위를 선택하세요.');return;}
   if(table&&!table.header){toast('표의 머리글 행을 표시한 뒤 필터를 적용하세요.');return;}
   const value=type==='value'?[displayText(active.r,c)]:{type,value:(type==='fill'?styleAt(active.r,c).fill:styleAt(active.r,c).color)??''};
+  const previous=getFilter(key);
+  if(!canRecomputeFilter({...previous,criteria:{...previous?.criteria,[c]:value}}))return;
   wb.transact(()=>{
     if(table&&!table.filter)setTables(list=>list.map(t=>t.id===table.id?{...t,filter:{criteria:{},hidden:{}}}:t));
     const old=getFilter(key), inside=old&&old.r1===rg.r1&&old.c1===rg.c1;
-    const next={...rg,criteria:{...(inside?old.criteria:{}),[c]:value},hidden:{}};
+    const next={...(inside?old:{}),...rg,criteria:{...(inside?old.criteria:{}),[c]:value},hidden:{}};
     if(inside&&old.sort)next.sort=old.sort;
     putFilter(key,recomputeFilter(next,key));
   },meta());
@@ -18731,6 +18768,7 @@ function contextClearColumnFilter() {
 }
 function contextSortColor(on) {
   const {rg,header,key}=contextDataTarget(), c=active.c;
+  if(!canRecomputeFilter(getFilter(key)))return;
   if(rg.r2<=rg.r1)return;
   if(wb.mergesIn(si,rg.r1,rg.c1,rg.r2,rg.c2).length){alertDialog('정렬','병합된 셀이 있으면 정렬할 수 없습니다.');return;}
   const color=(on==='fill'?styleAt(active.r,c).fill:styleAt(active.r,c).color)??'';
@@ -19109,7 +19147,7 @@ const COMMANDS = {
   reapplyFilter: () => {
     const key = filterKeyHere();
     const f = key === null ? null : getFilter(key);
-    if (!f) return;
+    if (!f || !canRecomputeFilter(f)) return;
     wb.transact(() => putFilter(key, recomputeFilter(f, key)), meta());
     gv.layout();
     setMode();
@@ -19333,6 +19371,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['필터 단추와 표시 상태 보존', ['표의 필터 단추만 숨겨도 필터 조건·결과·정렬 유지', '요약 행을 다시 표시할 때 수식·라벨·서식 복원 · 기본 줄무늬 옵션 첫 클릭 수정', 'Excel 파일의 필터 조건·단추 표시·정렬과 숨긴 요약 설정 저장 보강']],
   ['상단 메뉴 마우스 이동', ['초록색 메뉴 줄을 마우스로 좌우로 끌거나 휠로 이동할 수 있습니다. 일반 마우스 이벤트를 보강하고 모바일 모드 밖에서도 넘치는 메뉴를 탐색합니다.']],
   ['표·피벗·슬라이서 스타일', ['모바일에서 잘리던 슬라이서 스타일 더 보기 버튼을 복원했습니다. 이름 있는 스타일 만들기·요소별 서식·복제·수정·삭제·지우기와 기본 스타일을 추가하고 XLSX 저장·가져오기에 연결했습니다.']],
   ['모바일 시트 목록', ['시트 숨기기 취소와 이동·복사를 앱 안의 목록으로 바꾸고 마우스·터치·키보드 선택을 지원합니다. 복사·위치 지정의 실행 취소와 문서 변경 검사를 보강했습니다.']],
@@ -19675,7 +19714,7 @@ function tableRibbonState() {
   if (!t) return base;
   return {
     ...base, tblName: t.name, tblHeader: t.header, tblTotals: t.totals, tblBanded: t.banded !== false, tblBandedCols: !!t.bandedCols,
-    tblFirstCol: !!t.firstCol, tblLastCol: !!t.lastCol, tblFilter: !!t.filter,
+    tblFirstCol: !!t.firstCol, tblLastCol: !!t.lastCol, tblFilter: !!t.header && filterButtonsVisible(t.filter, t.c1, t.c2),
   };
 }
 

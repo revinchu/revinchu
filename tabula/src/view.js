@@ -1,3 +1,4 @@
+import { filterButtonVisible } from './filter-display.js';
 import { phoneticHtml } from './phonetic.js';
 import { normalizeVideo } from './media-object.js';
 import { bindGridTouch } from './mobile-grid.js';
@@ -916,7 +917,7 @@ export class GridView {
       ...(sheet.tables ?? []).filter((t) => t.filter && t.header).map((t) => [t.id, tableFilterRange(t)]),
     ];
     for (const [, f] of targets) if (f.r1 >= r1 && f.r1 <= r2) {
-      for (let c = Math.max(f.c1, c1); c <= Math.min(f.c2, c2); c++) this._filterCells.add(`${f.r1},${c}`);
+      for (let c = Math.max(f.c1, c1); c <= Math.min(f.c2, c2); c++) if (filterButtonVisible(f, c)) this._filterCells.add(`${f.r1},${c}`);
     }
     for (const pd of [sheet.pivot, ...(sheet.pivotsExtra ?? [])]) {
       for (const b of pd?.buttons ?? []) {
@@ -967,8 +968,8 @@ export class GridView {
     for (const [tid, f] of targets) {
       if (!(f.r1 >= r1 && f.r1 <= r2)) continue;
       for (let c = Math.max(f.c1, c1); c <= Math.min(f.c2, c2); c++) {
-        if (!cols.size(c) || !rows.size(f.r1)) continue;
-        const active = Array.isArray(f.criteria?.[c]);
+        if (!cols.size(c) || !rows.size(f.r1) || !filterButtonVisible(f, c)) continue;
+        const active = f.criteria?.[c] != null;
         const sort = f.sort?.col === c ? (f.sort.asc ? ' asc' : ' desc') : '';
         html.push(`<div class="fbtn${active ? ' on' : ''}${sort}" data-c="${c}" data-t="${esc(tid)}" title="${active ? '필터 적용됨' : '필터'}" style="left:${cols.pos(c + 1) - 18 - p.ox}px;top:${rows.pos(f.r1 + 1) - 18 - p.oy}px"></div>`);
       }
