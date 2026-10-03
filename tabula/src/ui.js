@@ -254,6 +254,7 @@ function activateAccessTarget(target) {
   else if (target.matches('input:not([type="checkbox"]):not([type="radio"]),textarea')) target.select?.();
 }
 window.addEventListener('keydown', (event) => {
+  if (event.target instanceof Element && event.target.closest('[data-keyboard-check-pad]')) { endAccessKeys(); return; }
   if (event.ctrlKey || event.metaKey || event.getModifierState?.('AltGraph')) { endAccessKeys(); return; }
   const scope = activeAccessScope();
   if (!scope) { endAccessKeys(); return; }
@@ -289,6 +290,7 @@ window.addEventListener('keydown', (event) => {
   if (next && next !== scope && (next.classList.contains('menu') || next.dataset.accessScope === 'popup')) { accessMode = true; accessScope = next; drawAccessKeys(next); }
 }, true);
 window.addEventListener('keyup', (event) => {
+  if (event.target instanceof Element && event.target.closest('[data-keyboard-check-pad]')) { consumedAccessKeys.delete(event.code || event.key); return; }
   if (!consumedAccessKeys.delete(event.code || event.key)) return;
   event.preventDefault(); event.stopImmediatePropagation();
 }, true);

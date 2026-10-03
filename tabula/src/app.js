@@ -14,6 +14,8 @@ import { createDrawingPalette } from './drawing-palette.js';
 import { BANDING_PALETTES, alternatingRules, isBandingRule } from './alternating-colors.js';
 import { installMobileWork, mobileSheetZoom } from './mobile-work.js';
 import { installMobileKeyboard } from './mobile-keyboard.js';
+import { shortcutCode, appleTouchKeyboard } from './keyboard-shortcuts.js';
+import { openKeyboardCheck } from './keyboard-check.js';
 import { installGridMousePan } from './mouse-work.js';
 import { installPivotFieldDrag } from './pivot-field-drag.js';
 import { openMobileTools } from './mobile-tools-ui.js';
@@ -1353,7 +1355,7 @@ function onEditingKey(e) {
     return;
   }
   pendingKey = null;
-  if (ctrl && !e.altKey && (e.code === 'KeyS' || e.key.toLowerCase() === 's')) {
+  if (ctrl && !e.altKey && (shortcutCode(e) === 'KeyS' || e.key.toLowerCase() === 's')) {
     e.preventDefault(); e.stopPropagation(); run(e.shiftKey ? 'saveAs' : 'save'); return;
   }
   const fromBar = document.activeElement === dom.formula;
@@ -1430,6 +1432,7 @@ function afterCaretMove() {
 }
 
 function onGridKey(e) {
+  const code = shortcutCode(e);
   if (e.getModifierState?.('AltGraph')) { endKeytip(); return; }
   if (handleKeytipKey(e)) return;
   if (e.isComposing || e.keyCode === 229) return;
@@ -1472,8 +1475,8 @@ function onGridKey(e) {
     if (k === 'Escape') { handled(); deselectChart(); updateSelectionUI(); return; }
     const step = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[k];
     if (step) { handled(); if (chartPart?.id === chartSel) nudgeChartPart(step[0] * (ctrl ? 10 : 1), step[1] * (ctrl ? 10 : 1)); else nudgeObject(chartSel, step[0] * (ctrl ? 10 : 1), step[1] * (ctrl ? 10 : 1)); return; }
-    if (ctrl && (k === 'c' || k === 'C' || k === 'x' || k === 'X')) { handled(); copyObject(chartSel, k.toLowerCase() === 'x'); return; }
-    if (ctrl && (k === 'd' || k === 'D')) { handled(); copyObject(chartSel, false); pasteObject(); return; }
+    if (ctrl && !e.altKey && (code === 'KeyC' || code === 'KeyX')) { handled(); copyObject(chartSel, code === 'KeyX'); return; }
+    if (ctrl && !e.altKey && code === 'KeyD') { handled(); copyObject(chartSel, false); pasteObject(); return; }
     if (k === 'Enter' || k === 'F2') { handled(); if (chartPart?.id === chartSel) chartFormatPane(chartSel); else editObject(chartSel); return; }
     if (e.altKey && (e.code === 'KeyC' || e.code === 'KeyS') && sheet().slicers?.some((x) => x.id === chartSel)) {
       handled();
@@ -1499,7 +1502,6 @@ function onGridKey(e) {
   if (e.altKey && e.shiftKey && !ctrl && (k === 'ArrowRight' || k === 'ArrowLeft')) { handled(); run(k === 'ArrowRight' ? 'outlineGroup' : 'outlineUngroup'); return; }
   if (e.altKey && k === 'F1') { handled(); run('chartColumn'); return; }
   // ── 엑셀 바로 가기 키 ──
-  const code = e.code;
   if (ctrl && e.altKey && code === 'KeyV') { handled(); run('pasteSpecial'); return; }
   // Ctrl+Shift+V: 값만 붙여넣기 (Microsoft 365)
   if (ctrl && e.shiftKey && !e.altKey && code === 'KeyV') { handled(); pasteFromButton('values'); return; }
@@ -1567,7 +1569,7 @@ function onGridKey(e) {
         Digit1: 'fmtNumber', Digit3: 'fmtDate', Digit4: 'fmtCurrency', Digit5: 'fmtPercent', Digit7: 'borderOutside',
         Backquote: 'fmtGeneral', Semicolon: 'insertTime', Equal: 'insertMenuKey', KeyL: 'toggleFilter',
       };
-      if (byCode[e.code]) { handled(); run(byCode[e.code]); return; }
+      if (byCode[code]) { handled(); run(byCode[code]); return; }
     }
     const lower = /^Key[A-Z]$/.test(code) ? code.slice(3).toLowerCase() : k.length === 1 ? k.toLowerCase() : k;
     if (mobileCellClipboardKey(e, lower)) return;
@@ -2770,7 +2772,7 @@ function consumeClipboardEcho(e) {
   return true;
 }
 function mobileCellClipboardKey(e, key) {
-  if (!mobileWork?.active || chartSel || editing || e.shiftKey || e.altKey || !['c', 'x', 'v'].includes(key)) return false;
+  if (!(mobileWork?.active || appleTouchKeyboard()) || chartSel || editing || e.shiftKey || e.altKey || !['c', 'x', 'v'].includes(key)) return false;
   if (key === 'v') {
     if (!mobileClipboardCurrent()) return false; // 외부 자료는 실제 paste 이벤트로 받습니다.
     e.preventDefault();
@@ -9333,13 +9335,14 @@ function endKeytip() {
 
 /** 반환 true 면 키를 처리함. 키보드의 물리 code를 사용해 한글 입력 상태에서도 동일하게 동작합니다. */
 function handleKeytipKey(e) {
+  const code = shortcutCode(e);
   if (e.defaultPrevented || e.target?.closest?.('.dialog')) return false;
   if (e.getModifierState?.('AltGraph') || e.ctrlKey || e.metaKey) {
     if (keytip) endKeytip();
     return false;
   }
   // 슬라이서의 Alt+C/S는 Alt를 먼저 누른 경우에도 개체 명령으로 전달합니다.
-  if ((!keytip || !keytip.seq) && e.altKey && (e.code === 'KeyC' || e.code === 'KeyS') && chartSel && sheet().slicers?.some((x) => x.id === chartSel)) {
+  if ((!keytip || !keytip.seq) && e.altKey && (code === 'KeyC' || code === 'KeyS') && chartSel && sheet().slicers?.some((x) => x.id === chartSel)) {
     endKeytip(); return false;
   }
   if (e.key === 'Alt' || (e.key === 'F10' && !e.shiftKey && !e.altKey)) {
@@ -9349,7 +9352,7 @@ function handleKeytipKey(e) {
     else { keytip = { seq: '', held: e.key === 'Alt', clean: e.key === 'Alt' }; showKeytip(); }
     return true;
   }
-  if (!keytip && !(e.altKey && !e.shiftKey && /^(Key[A-Z]|Digit\d)$/.test(e.code))) return false;
+  if (!keytip && !(e.altKey && !e.shiftKey && /^(Key[A-Z]|Digit\d)$/.test(code))) return false;
   if (!keytip) keytip = { seq: '', held: true, clean: false };
   if (e.key === 'Shift' || e.key === 'CapsLock') return true;
   if (e.key === 'Escape' || e.key === 'Backspace') {
@@ -9360,7 +9363,7 @@ function handleKeytipKey(e) {
   }
   if (keytipMenu?.contains(e.target) && (e.key.startsWith('Arrow') || ['Home', 'End', 'Enter', ' '].includes(e.key))) return false;
   if (e.key === 'Tab' || e.key.startsWith('Arrow') || e.key.startsWith('F') && /^F\d+$/.test(e.key)) { endKeytip(); return false; }
-  const m = /^Key([A-Z])$|^Digit(\d)$/.exec(e.code);
+  const m = /^Key([A-Z])$|^Digit(\d)$/.exec(code);
   if (!m) {
     // Alt+=, Alt+; 등 직접 단축키는 격자 처리기로 전달합니다.
     if (e.altKey) { endKeytip(); return false; }
@@ -19434,7 +19437,7 @@ const COMMANDS = {
       for (const { row, text } of rows) row.hidden = !text.replace(/\s/g, '').includes(query);
     });
     openDialog({ title: '바로 가기 키', width: 680,
-      body: el('div', {}, el('table', { class: 'kbd-table' }, SHORTCUTS.map(([k, d]) => el('tr', {}, el('td', {}, k), el('td', {}, d)))),
+      body: el('div', {}, el('button', { type: 'button', class: 'btn', onclick: () => openKeyboardCheck() }, '키보드 단축키 확인'), el('p', {}, 'iPad·Mac에서는 Command(⌘)+C·V를 사용합니다. 위셀 셀 선택 상태에서는 Ctrl+C·V도 지원합니다.'), el('table', { class: 'kbd-table' }, SHORTCUTS.map(([k, d]) => el('tr', {}, el('td', {}, k), el('td', {}, d)))),
         el('h3', {}, '리본 키 순서'), el('p', {}, 'Alt를 눌렀다 뗀 뒤 글자를 순서대로 누르세요. 한글 입력 상태에서도 같은 위치의 키를 누르면 됩니다. Z와 숫자로 표시되는 경로는 WIXEL 보충 키입니다.'),
         search, el('table', { class: 'kbd-table' }, rows.map(({ row }) => row))),
       buttons: [{ label: '닫기', primary: true }], onOpen: () => search.focus(),
@@ -19449,6 +19452,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['iPad Bluetooth 키보드', ['iPad의 데스크톱 화면에서도 Ctrl·Command 셀 복사·붙여넣기를 처리하고, 한글 키의 물리 코드가 누락된 경우 대체 키 번호를 확인합니다. 모바일 작업 도구와 바로 가기 키에 키보드 단축키 확인 창을 추가했습니다.']],
   ['모바일 셀 복사·붙여넣기', ['모바일 셀 간 Ctrl+C·Ctrl+V와 잘라내기를 내부 사본으로 처리해 브라우저 클립보드 이벤트가 없어도 동작합니다. 셀 편집 중 텍스트 복사와 외부 앱 붙여넣기는 구분합니다.']],
   ['Excel 저장 안전성', ['행·열 한도 밖 셀이 있으면 잘림 저장을 막습니다. 로그 축 설정은 표준 파일에 보존하고 화면 표현의 차이, 동적 데이터 표·반복 계산의 제한을 저장 전에 안내합니다.']],
   ['반복 작업과 복구 사본 보호', ['F4 반복에도 현재 문서의 보호 상태를 다시 확인합니다. 충돌 복구 사본 저장이 실패하면 온라인 문서로 교체하지 않으며, 자동 보관의 전체 셀 복제를 줄였습니다.']],
@@ -19737,7 +19741,7 @@ function mobileToolsDialog() {
   openMobileTools({
     version: { label: mobileVersionLabel(), action: appVersionDialog },
     keyboard: { preference: mobileKeyboard.preference, suppressed: mobileKeyboard.suppressed,
-      set: value => mobileKeyboard.setPreference(value) },
+      set: value => mobileKeyboard.setPreference(value), check: () => openKeyboardCheck() },
     density: mobileWork.density, setDensity: value => mobileWork.setDensity(value),
     zoom: view.zoom, autosave, status: `${dom.saveState.textContent} · ${dom.stats.textContent}`, commands: catalog,
     quick: qatCommands().map(id => catalog.find(c => c.cmd === id)).filter(Boolean),
@@ -20080,7 +20084,7 @@ function bindEvents() {
     if (image && !text) { addImageFile(image); return; }
     if (objClip && (!text || text === objClip.text)) { pasteObject(); return; }
     if (clip && text.replace(/\r\n?/g, '\n').replace(/\n$/, '') !== clip.text.replace(/\r\n?/g, '\n').replace(/\n$/, '')) mobileCopySource = null;
-    handlePaste(text, !mobileWork?.active || mobileClipboardCurrent());
+    handlePaste(text, !(mobileWork?.active || appleTouchKeyboard()) || mobileClipboardCurrent());
   });
   // 그림 파일을 끌어다 놓기
   dom.view.addEventListener('dragover', (e) => { if ([...(e.dataTransfer?.items ?? [])].some((i) => i.kind === 'file')) e.preventDefault(); });

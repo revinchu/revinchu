@@ -547,3 +547,10 @@ node tools/mobile-layout.mjs
 - `node tools/xlsx-preflight.mjs`: XLSX 저장 전 한도·미지원 안내 취소/승인·문서 변경과 시트 추가 경고 이력. 시스템 저장 창은 메모리 핸들로 모의한다.
 
 연구·점수·설계는 [63번 문서](../docs/codex/63_개선기획과설계.md), 실행 범위는 [64번 문서](../docs/codex/64_개선실행과검증.md)를 참고한다.
+
+
+## iPad Bluetooth 보조키·단축키 확인
+
+- `node tools/keyboard-check.mjs`: 모바일 작업 도구 및 바로 가기 키에서 기기 내 확인 창을 연다. Ctrl/Alt/Meta 수신, 한글/legacy 대체 판정, IME 통과, Tab/Escape, 클립보드 접근 0, 문서 불변과 320px 배치를 검사한다. `WIXEL_URL`은 로컬 서버, `WIXEL_BROWSER=chromium|webkit`, `WIXEL_KEYBOARD_CHECK_OUT`은 D: 결과 경로다.
+- `tools/mobile-clipboard.mjs`에 iPad 데스크톱 UA·모바일 OFF, code 없는 한글+keyCode, Unidentified, 229, Alt 유지, 실제 리본/셀 마우스 복귀 검사를 추가했다. API의 선택 변경을 실제 DOM 포커스 복원으로 간주하지 않는다.
+- [65번 문서](../docs/codex/65_iPad키보드단축키.md)에 기준 릴리스 재현과 최종 번들 결과·실기기 한계를 기록한다.

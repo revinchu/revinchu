@@ -22,6 +22,7 @@ export function openMobileTools(host) {
       keyboardButton('외부 키보드', 'hardware'),
       keyboardButton('화면 키보드', 'screen'),
       keyboardButton('자동 감지', 'auto'),
+      host.keyboard.check ? button('키보드 단축키 확인', host.keyboard.check, { 'data-keyboard-check': 'true' }) : null,
       el('p', { class: 'mobile-tools-state' }, host.keyboard.suppressed ? '외부 키보드 입력 · 화면 키보드 숨김' : '화면 키보드 사용 가능'),
     ]) : null,
     host.version ? section('앱 버전', [button(host.version.label, host.version.action, { 'data-mobile-app-version': 'true' })]) : null,
