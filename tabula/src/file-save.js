@@ -19,20 +19,43 @@ export function isFileSaveSource(source) {
     !!source && (typeof source.getReader === 'function' || typeof source[Symbol.asyncIterator] === 'function' || typeof source !== 'string' && typeof source[Symbol.iterator] === 'function');
 }
 
-async function* sourceChunks(source) {
+// Cancellation must settle a paused read without waiting for another chunk.
+// Late settlements are observed and cannot resume writing after cancellation.
+function readWithAbort(promise, options) {
+  const signal = options.signal;
+  if (!signal) return promise;
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      signal.removeEventListener('abort', abort);
+      reject(signal.reason instanceof Error ? signal.reason : abortError());
+    };
+    signal.addEventListener('abort', abort, { once: true });
+    Promise.resolve(promise).then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+    if (signal.aborted) abort();
+  });
+}
+// A producer's cancellation hook can stall or reject. Invoke it, but do not let
+// it hide a disk failure or delay aborting the native temporary file.
+function cleanup(action) { try { Promise.resolve(action()).catch(() => {}); } catch { /* Preserve the original outcome. */ } }
+
+async function* sourceChunks(source, options) {
   if (source instanceof Blob) {
-    for (let at = 0; at < source.size; at += WRITE_CHUNK) yield new Uint8Array(await source.slice(at, at + WRITE_CHUNK).arrayBuffer());
+    for (let at = 0; at < source.size; at += WRITE_CHUNK) yield new Uint8Array(await readWithAbort(source.slice(at, at + WRITE_CHUNK).arrayBuffer(), options));
   } else if (source instanceof ArrayBuffer || ArrayBuffer.isView(source)) yield bytes(source);
   else if (typeof source?.getReader === 'function') {
     const reader = source.getReader(); let ended = false;
     try {
-      for (;;) { const next = await reader.read(); if (next.done) { ended = true; break; } yield bytes(next.value); }
+      for (;;) { const next = await readWithAbort(reader.read(), options); check(options); if (next.done) { ended = true; break; } yield bytes(next.value); }
     } finally {
-      if (!ended) { try { await reader.cancel(); } catch { /* Keep the write failure. */ } }
+      if (!ended) cleanup(() => reader.cancel(options.signal?.reason));
       reader.releaseLock();
     }
   } else if (source && typeof source !== 'string' && (typeof source[Symbol.asyncIterator] === 'function' || typeof source[Symbol.iterator] === 'function')) {
-    for await (const chunk of source) yield bytes(chunk);
+    const iterator = typeof source[Symbol.asyncIterator] === 'function' ? source[Symbol.asyncIterator]() : source[Symbol.iterator]();
+    let ended = false;
+    try {
+      for (;;) { const next = await readWithAbort(iterator.next(), options); check(options); if (next.done) { ended = true; break; } yield bytes(next.value); }
+    } finally { if (!ended) cleanup(() => iterator.return?.()); }
   } else throw sourceError();
 }
 
@@ -93,9 +116,9 @@ export async function writeFileHandle(handle, source, options = {}) {
       pending = job;
       return job.catch(error => { failure ??= error; throw error; }).finally(() => { if (pending === job) pending = null; });
     };
-    if (typeof source === 'function') await source(sink);
+    if (typeof source === 'function') await readWithAbort(source(sink), options);
     else {
-      iterator = sourceChunks(source);
+      iterator = sourceChunks(source, options);
       for (;;) { check(options); const next = await iterator.next(); if (next.done) break; await sink.write(next.value); }
     }
     if (pending) await pending;
@@ -104,15 +127,17 @@ export async function writeFileHandle(handle, source, options = {}) {
     await flush();
     check(options);
     if (!bytesWritten) throw new Error('저장할 파일을 생성하지 못했습니다.');
+    options.onCommitting?.();
     await writable.close(); committed = true;
     return { bytesWritten };
   } catch (error) {
+    failure ??= error;
     if (pending) { try { await pending; } catch { /* Keep the original failure. */ } }
     if (writable && !committed) { try { await writable.abort(error); } catch { /* A failed native stream can already be closed. */ } }
     throw error;
   } finally {
     try { await iterator?.return(); } catch { /* Preserve the write result. */ }
     // A picker/createWritable failure can occur before the stream is read.
-    if (!committed && typeof source?.cancel === 'function') { try { await source.cancel(); } catch { /* Already locked/failed. */ } }
+    if (!committed && typeof source?.cancel === 'function') cleanup(() => source.cancel(options.signal?.reason));
   }
 }

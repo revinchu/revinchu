@@ -33,10 +33,25 @@ if($AdditionalSheetAddressesJson){
 }
 $baselineData=if($Baseline){Get-Content -LiteralPath $Baseline -Raw -Encoding utf8|ConvertFrom-Json}else{$null}
 $before=Get-Item -LiteralPath $inputPath
-$record=[ordered]@{id=$Id;path=$inputPath;mode=$(if($RepairDiagnostic){'repair-diagnostic-only'}else{'normal'});repairLogs=@();bytes=$before.Length;opened=$false;readOnly=$null;repairMode=$null;calculation=$null;sourceUnchanged=$null;sheets=@();pivotCaches=@();slicers=@();errors=@();sampleDifferences=@();structuralDifferences=@();structuralAudit=$null;preservationMatches=$null;contended=[bool]$Contended;timingNote=$(if($Contended){'다른 경량 검증과 CPU 경합 가능. 성능 비교 근거에서 제외.'}else{'독점 슬롯 실행. 별도 전체 프로세스 피크 계측은 아님.'});additionalSampleSheetIndex=$SampleSheetIndex;additionalSampleAddresses=$additionalAddresses;additionalSheetAddresses=$additionalSheetAddresses}
+$record=[ordered]@{id=$Id;path=$inputPath;mode=$(if($RepairDiagnostic){'repair-diagnostic-only'}else{'normal'});repairLogs=@();bytes=$before.Length;opened=$false;readOnly=$null;repairMode=$null;repairModeEvidence='unsupported-property-not-used';corruptLoad=$(if($RepairDiagnostic){1}else{0});readinessVerified=$false;readyWorksheetCount=$null;fullNameMatches=$false;normalOpenCompleted=$false;calculation=$null;sourceUnchanged=$null;sheets=@();pivotCaches=@();slicers=@();errors=@();sampleDifferences=@();structuralDifferences=@();structuralAudit=$null;preservationMatches=$null;contended=[bool]$Contended;timingNote=$(if($Contended){'다른 경량 검증과 CPU 경합 가능. 성능 비교 근거에서 제외.'}else{'독점 슬롯 실행. 별도 전체 프로세스 피크 계측은 아님.'});additionalSampleSheetIndex=$SampleSheetIndex;additionalSampleAddresses=$additionalAddresses;additionalSheetAddresses=$additionalSheetAddresses}
 $xl=$null;$book=$null;$seed=$null;$owned=$false;$started=Get-Date
 function Release($object){if($null -ne $object -and [Runtime.InteropServices.Marshal]::IsComObject($object)){try{[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($object)}catch{}}}
 function Attempt($work){try{& $work}catch{$null}}
+function Busy($error){return $error.Exception.HResult -in @(-2147418111,-2147417846,-2146777998) -or $error.Exception.Message -match 'RPC_E_CALL_REJECTED|RPC_E_SERVERCALL_RETRYLATER|0x80010001|0x8001010A|호출을 거부'}
+function ReadReady($work){for($retry=0;;$retry++){try{return & $work}catch{if($retry-ge 40 -or !(Busy $_)){throw};Start-Sleep -Milliseconds 250}}}
+function WaitNativeWorkbook($workbook){
+ # Open is called once. Only properties of that returned workbook are retried.
+ for($retry=0;$retry-lt 100;$retry++){
+  try{
+   $count=$workbook.Worksheets.Count;$readOnly=$workbook.ReadOnly;$fullName=[string]$workbook.FullName
+   $samePath=$fullName.Equals($inputPath,[StringComparison]::OrdinalIgnoreCase)
+   if($null-ne$count -and [int]$count-ge1 -and $readOnly-eq$true -and $samePath){return @{count=[int]$count;readOnly=$true;fullNameMatches=$true}}
+  }catch{if(!(Busy $_)){throw}}
+  Start-Sleep -Milliseconds 500
+ }
+ throw '통합 문서가 50초 안에 올바른 경로의 읽기 전용 준비 상태를 반환하지 않았습니다.'
+}
+
 function SaveProgress{$record|ConvertTo-Json -Depth 20|Set-Content -LiteralPath $outputPath -Encoding utf8}
 function IsEqual($a,$b){if($null -eq $a -and $null -eq $b){return $true};if($null -eq $a -or $null -eq $b){return $false};if($a -is [ValueType] -and $b -is [ValueType]){return $a -eq $b};return ($a.GetType().Name -eq $b.GetType().Name -and [string]$a -ceq [string]$b)}
 try{
@@ -48,14 +63,15 @@ try{
  SaveProgress
  Write-Output ($Id+' 읽기 전용 수동계산 열기 시작')
  $openStarted=Get-Date
- # CorruptLoad is omitted: Excel defaults to xlNormalLoad. No repair/extract retry is attempted.
- if($RepairDiagnostic){
-  # All optional values are explicit because PowerShell COM does not bind Type.Missing reliably.
-  $book=$xl.Workbooks.Open($inputPath,0,$true,5,'','',$true,2,'',$false,$false,0,$false,$false,1)
- }else{$book=$xl.Workbooks.Open($inputPath,0,$true)}
+ # Workbook.RepairMode is not an Excel property. Record the supported Open
+ # policy explicitly; diagnostic repair output can never certify normal load.
+ # Explicit optional values also avoid PowerShell COM Type.Missing ambiguity.
+ $book=$xl.Workbooks.Open($inputPath,0,$true,5,'','',$true,2,'',$false,$false,0,$false,$false,$record.corruptLoad)
+ $ready=WaitNativeWorkbook $book
  $record.openMs=[math]::Round(((Get-Date)-$openStarted).TotalMilliseconds)
- $record.opened=$true;$record.readOnly=[bool]$book.ReadOnly;$record.repairMode=Attempt {[bool]$book.RepairMode};$record.calculation=$xl.Calculation;$record.saved=$book.Saved;$record.fileFormat=$book.FileFormat
- $seed.Close($false);Release $seed;$seed=$null
+ $record.opened=$true;$record.readOnly=$ready.readOnly;$record.readinessVerified=$true;$record.readyWorksheetCount=$ready.count;$record.fullNameMatches=$ready.fullNameMatches
+ $record.calculation=$xl.Calculation;$record.saved=$book.Saved;$record.fileFormat=$book.FileFormat
+ ReadReady {$seed.Close($false)};Release $seed;$seed=$null
  $allCaches=$book.PivotCaches()
  for($cacheIndex=1;$cacheIndex -le $allCaches.Count;$cacheIndex++){
   $cache=$allCaches.Item($cacheIndex)
@@ -127,9 +143,9 @@ try{
  };Release $caches
 }catch{$record.errors+=$_.Exception.Message;$record.protectedViewCount=Attempt {$xl.ProtectedViewWindows.Count};$record.openWorkbookCount=Attempt {$xl.Workbooks.Count};$record.exception=@{hresult=$_.Exception.HResult;inner=Attempt {$_.Exception.InnerException.Message};innerHresult=Attempt {$_.Exception.InnerException.HResult}}}
 finally{
- if($book){try{$book.Close($false)}catch{$record.errors+='닫기: '+$_.Exception.Message};Release $book}
- if($seed){try{$seed.Close($false)}catch{};Release $seed}
- if($xl){if($owned){try{$xl.Quit()}catch{$record.errors+='종료: '+$_.Exception.Message}};Release $xl}
+ if($book){try{ReadReady {$book.Close($false)}}catch{$record.errors+='닫기: '+$_.Exception.Message};Release $book}
+ if($seed){try{ReadReady {$seed.Close($false)}}catch{};Release $seed}
+ if($xl){if($owned){try{ReadReady {$xl.Quit()}}catch{$record.errors+='종료: '+$_.Exception.Message}};Release $xl}
  [GC]::Collect();[GC]::WaitForPendingFinalizers()
  $after=Get-Item -LiteralPath $inputPath;$record.sourceUnchanged=($before.Length -eq $after.Length -and $before.LastWriteTimeUtc.Ticks -eq $after.LastWriteTimeUtc.Ticks)
  if($RepairDiagnostic){
@@ -139,7 +155,8 @@ finally{
   }
  }
  if($record.opened -and $baselineData.opened){$record.structuralAudit=Compare-NativeAuditStructure $baselineData $record;$record.structuralDifferences=@($record.structuralAudit.differences);$record.preservationMatches=($record.structuralAudit.matches -and $record.sampleDifferences.Count -eq 0)}
+ $record.normalOpenCompleted=(!$RepairDiagnostic -and $record.corruptLoad-eq0 -and $record.readinessVerified -and $record.readOnly -and $record.fullNameMatches -and $record.readyWorksheetCount-eq$record.sheets.Count -and $record.errors.Count-eq0 -and $record.sourceUnchanged)
  $record.totalMs=[math]::Round(((Get-Date)-$started).TotalMilliseconds)
  SaveProgress
- [pscustomobject]@{id=$Id;opened=$record.opened;readOnly=$record.readOnly;repairMode=$record.repairMode;calculation=$record.calculation;sheets=$record.sheets.Count;pivots=(@($record.sheets|ForEach-Object {$_.pivots})).Count;slicers=$record.slicers.Count;sampleDifferences=$record.sampleDifferences.Count;structuralDifferences=$record.structuralDifferences.Count;preservationMatches=$record.preservationMatches;sourceUnchanged=$record.sourceUnchanged;openMs=$record.openMs;totalMs=$record.totalMs;errors=$record.errors}|ConvertTo-Json -Depth 4 -Compress
+ [pscustomobject]@{id=$Id;opened=$record.opened;readOnly=$record.readOnly;corruptLoad=$record.corruptLoad;normalOpenCompleted=$record.normalOpenCompleted;repairModeEvidence=$record.repairModeEvidence;calculation=$record.calculation;sheets=$record.sheets.Count;pivots=(@($record.sheets|ForEach-Object {$_.pivots})).Count;slicers=$record.slicers.Count;sampleDifferences=$record.sampleDifferences.Count;structuralDifferences=$record.structuralDifferences.Count;preservationMatches=$record.preservationMatches;sourceUnchanged=$record.sourceUnchanged;openMs=$record.openMs;totalMs=$record.totalMs;errors=$record.errors}|ConvertTo-Json -Depth 4 -Compress
 }

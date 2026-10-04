@@ -819,6 +819,7 @@ legend { padding: 0 4px; color: #444; }
 .load-progress .lp-msg { color: #555; min-height: 18px; margin-bottom: 10px; }
 .load-progress .lp-track { height: 6px; background: #e6e6e6; border-radius: 3px; overflow: hidden; }
 .load-progress .lp-bar { height: 100%; width: 0; background: #217346; transition: width 0.15s; }
+.load-progress .lp-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
 
 /* ── 계산 필드 ── */
 .fx-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 16px; padding: 0 3px; margin-right: 5px; border-radius: 3px; background: #e8f0fb; color: #1f5fbf; font: italic 700 11px/1 Georgia, 'Times New Roman', serif; flex: none; }

@@ -69,8 +69,8 @@ export class CellMap {
   }
 
   /** [시작 행, 열, 셀, 연속 개수]. 일반 반복자는 여전히 셀마다 한 번 반환합니다. */
-  *storageEntries() {
-    for (const [c, m] of this.cols) for (const [r, value, count] of m.storageEntries()) yield [r, c, value, count];
+  *storageEntries(options) {
+    for (const [c, m] of this.cols) for (const [r, value, count] of m.storageEntries(options)) yield [r, c, value, count];
   }
 
   /** 읽기 전용 메타데이터 조회: 범위 하나당 한 번만 호출합니다. */

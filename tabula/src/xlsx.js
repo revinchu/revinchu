@@ -41,7 +41,7 @@ import { Axis, hid, hidKeys } from './axis.js';
 import { toBase64, fromBase64 } from './vba.js';
 import { CellImage } from './fxcore.js';
 import { pictureMediaSource, pictureBlipXml, pictureGeometryXml, pictureBorderXml, pictureEffectXml, readPictureAdjustments, pictureMetadataXml, restorePictureMetadata } from './picture-drawingml.js';
-import { emfDataUrl } from './emf.js';
+import { emfDataUrl, isEmf } from './emf.js';
 import { GEOM, LINE_KINDS, shapeLineEnds } from './shapes.js';
 import { customGeometryXml, readCustomGeometry, storedCustomGeometryXml } from './shape-path.js';
 import { BLOCK_MIN_ROWS, ColBuilder, inBlock, blockValue } from './block.js';
@@ -1889,7 +1889,7 @@ function readDrawing(files, path, sheet, ctx) {
     const ext = target.split('.').pop().toLowerCase();
     const mime = MIME[ext];
     // EMF: 브라우저가 못 그리므로 SVG 로 바꿔 보여 주고, 저장할 때는 원본 EMF 를 씀
-    const emf = ext === 'emf' && `data:image/x-emf;base64,${toBase64(bytes)}`;
+    const emf = (ext === 'emf' || !mime && isEmf(bytes)) && `data:image/x-emf;base64,${toBase64(bytes)}`;
     const src = picSrc.get(target) ?? (emf ? emfDataUrl(bytes) : mime && `data:${mime};base64,${toBase64(bytes)}`);
     if (!src) { ctx.warnings.add(`지원하지 않는 그림 형식(${ext})은 가져오지 않았습니다.`); return; }
     const name = descendants(child(el, 'nvPicPr'), 'cNvPr')[0]?.attrs.name ?? '그림';
@@ -2007,8 +2007,10 @@ function readDrawing(files, path, sheet, ctx) {
       }
       case 'grpSp': {
         const gb = place(el);
+        // Excel can collapse a group to zero width/height without ungrouping it.
+        const groupBox = { ...round(gb), ...(gb.w === 0 ? { w: 0 } : {}), ...(gb.h === 0 ? { h: 0 } : {}) };
         const hyperlink = readDrawingHyperlink(child(child(el, 'nvGrpSpPr'), 'cNvPr'), rels);
-        const ownGroup = readDrawingGroup(el, round(gb), uid('sh'), { files, rels });
+        const ownGroup = readDrawingGroup(el, groupBox, uid('sh'), { files, rels });
         if (ownGroup) { out.shapes.push({ ...ownGroup, z: ++z }); break; }
         const xfrm = descendants(child(el, 'grpSpPr'), 'xfrm')[0];
         const chOff = child(xfrm, 'chOff');
@@ -2023,7 +2025,7 @@ function readDrawing(files, path, sheet, ctx) {
         const preserveGroup = !group && !descendants(el, 'graphicFrame').length && chExt
           && Number(chExt.attrs.cx) > 0 && Number(chExt.attrs.cy) > 0
           && Number.isFinite(cx) && cx > 0 && Number.isFinite(cy) && cy > 0
-          && Number.isFinite(ox) && Number.isFinite(oy) && gb.w > 0 && gb.h > 0;
+          && Number.isFinite(ox) && Number.isFinite(oy) && Number.isFinite(gb.w) && gb.w >= 0 && Number.isFinite(gb.h) && gb.h >= 0;
         const inner = preserveGroup
           ? (x, y, w, h) => ({ x: (x - ox) / EMU, y: (y - oy) / EMU, w: w / EMU, h: h / EMU })
           : (x, y, w, h) => ({ x: gb.x + ((x - ox) / cx) * gb.w, y: gb.y + ((y - oy) / cy) * gb.h, w: (w / cx) * gb.w, h: (h / cy) * gb.h });
@@ -2045,7 +2047,7 @@ function readDrawing(files, path, sheet, ctx) {
         if (preserveGroup && beforeCharts === out.charts.length) {
           const children = [...out.shapes.splice(beforeShapes), ...out.images.splice(beforeImages).map(p => ({ ...p, kind: 'picture' }))].sort((a,b) => (a.z ?? 0) - (b.z ?? 0));
           if (children.length) {
-            out.shapes.push({ id: uid('sh'), kind: 'group', name: child(child(el, 'nvGrpSpPr'), 'cNvPr')?.attrs.name || '그룹', ...round(gb), z: ++z,
+            out.shapes.push({ id: uid('sh'), kind: 'group', name: child(child(el, 'nvGrpSpPr'), 'cNvPr')?.attrs.name || '그룹', ...groupBox, z: ++z,
               ...(hyperlink ? { hyperlink } : {}),
               ...(['1','true'].includes(child(child(el, 'nvGrpSpPr'), 'cNvPr')?.attrs.hidden) ? { hidden: true } : {}),
               groupSize: { w: cx / EMU, h: cy / EMU }, groupItems: children,
@@ -2517,7 +2519,11 @@ function readPivotCache(files, path, date1904 = false) {
   const ws = descendants(child(root, 'cacheSource'), 'worksheetSource')[0];
   const olap = !!(child(root, 'cacheHierarchies') || child(root, 'dimensions') || child(root, 'measureGroups'));
   const fields = kids(child(root, 'cacheFields'), 'cacheField').map((cf) => {
-    const items = (child(cf, 'sharedItems')?.children ?? []).map((it) => {
+    const sharedNode = child(cf, 'sharedItems'), sharedNodes = sharedNode?.children ?? [];
+    // An unlisted date field can store its values only in cacheRecords.
+    const dateOnly = !sharedNodes.length && ['1', 'true'].includes(sharedNode?.attrs.containsDate) && ['0', 'false'].includes(sharedNode?.attrs.containsNonDate);
+    const sharedTypes = sharedNodes.some(it => it.name === 'd') ? sharedNodes.map(it => it.name).join('') : null;
+    const items = sharedNodes.map((it) => {
       if (it.name === 'n') return Number(it.attrs.v);
       // 날짜 항목 (<d v="2026-05-01T00:00:00"/>): 원본 셀처럼 날짜 일련번호로 (필터 · 슬라이서 선택이 원본과 맞게)
       if (it.name === 'd') return isoSerial(it.attrs.v, date1904);
@@ -2550,15 +2556,17 @@ function readPivotCache(files, path, date1904 = false) {
         };
       }
     }
-    return { name: unx(cf.attrs.name ?? ''), numFmtId: Number(cf.attrs.numFmtId ?? 0), items: gitems && (group || !items.length) ? gitems : items, shared: items, db: formula === undefined && cf.attrs.databaseField !== '0', ...(group ? { group } : {}), ...(formula !== undefined ? { formula } : {}) };
+    return { name: unx(cf.attrs.name ?? ''), numFmtId: Number(cf.attrs.numFmtId ?? 0), items: gitems && (group || !items.length) ? gitems : items, shared: items, ...(sharedTypes ? { sharedTypes } : {}), ...(dateOnly ? { dateOnly: true } : {}), db: formula === undefined && cf.attrs.databaseField !== '0', ...(group ? { group } : {}), ...(formula !== undefined ? { formula } : {}) };
   });
   const recRel = Object.values(relsOf(files, path)).find((r) => r.type === 'pivotCacheRecords');
+  const limit = /^\d+$/.test(root.attrs.missingItemsLimit ?? '') ? Number(root.attrs.missingItemsLimit) : NaN;
+  const missingItems = limit === 0 ? 'none' : limit === 1048576 ? 'max' : Number.isInteger(limit) && limit <= 0xffffffff ? limit : undefined;
   const saveData = !['0', 'false'].includes(root.attrs.saveData);
   const refreshOnOpen = ['1', 'true'].includes(root.attrs.refreshOnLoad);
   const snapshot = !saveData || refreshOnOpen || !recRel ? null : { path: recRel.target };
   const sourceRel = ws && rid(ws) ? relsOf(files, path)[rid(ws)] : null;
   const slicerId = descendants(child(root, 'extLst'), 'pivotCacheDefinition').find(x => x.attrs.pivotCacheId !== undefined)?.attrs.pivotCacheId;
-  return { date1904, slicerId, olap, saveData, refreshOnOpen, source: { ref: ws?.attrs.ref ?? null, sheet: ws?.attrs.sheet ?? null, name: ws?.attrs.name ?? null, ...(sourceRel?.external || sourceRel?.targetMode === 'External' || sourceRel?.type === 'externalLinkPath' ? { external: sourceRel.rawTarget ?? sourceRel.target } : {}) }, fields, snapshot };
+  return { date1904, slicerId, olap, saveData, refreshOnOpen, missingItems, source: { ref: ws?.attrs.ref ?? null, sheet: ws?.attrs.sheet ?? null, name: ws?.attrs.name ?? null, ...(sourceRel?.external || sourceRel?.targetMode === 'External' || sourceRel?.type === 'externalLinkPath' ? { external: sourceRel.rawTarget ?? sourceRel.target } : {}) }, fields, snapshot };
 }
 
 /**
@@ -2643,6 +2651,7 @@ function pivotDefFrom(root, cache, tables, sheetName) {
     classic: root.attrs.gridDropZones === '1' || root.attrs.gridDropZones === 'true',
     ...(cache.saveData === false ? { saveData: false } : {}),
     ...(cache.refreshOnOpen ? { refreshOnOpen: true } : {}),
+    ...(cache.missingItems !== undefined ? { missingItems: cache.missingItems } : {}),
   };
   // 부분합: 필드마다 (바깥 필드만 켜 둔 보고서가 많음). 안쪽 끝 필드는 부분합이 없으므로 셈에서 뺌
   {
@@ -2956,6 +2965,15 @@ function linkPivotsAndSlicers(files, wbRels, sheets, ctx) {
     if (c?.olap) warnOlapImport(ctx);
     if (c?.name) caches.set(c.name, c);
   }
+  const cacheFormat = numFmtId => {
+    if (!numFmtId) return null;
+    if (!ctx.cacheNumberFormats) {
+      const path = Object.values(wbRels).find(r => r.type === 'styles')?.target;
+      ctx.cacheNumberFormats = Object.fromEntries(kids(child(parseXml(textOf(files[path]) || ''), 'numFmts'), 'numFmt').map(f => [f.attrs.numFmtId, f.attrs.formatCode]));
+    }
+    const code = ctx.cacheNumberFormats[numFmtId] ?? BUILTIN_CODE[numFmtId];
+    return code ? styleForCode(code) : BUILTIN_FMT[numFmtId] ?? null;
+  };
   const cacheFiles = new Map();
   sheets.forEach((s) => {
     for (const p of s._pivots) {
@@ -2964,6 +2982,25 @@ function linkPivotsAndSlicers(files, wbRels, sheets, ctx) {
       const cache = cacheFiles.get(p.cachePath);
       if (cache?.olap) warnOlapImport(ctx);
       const def = cache && pivotDefFrom(p.root, cache, tables, s.name);
+      if (def) {
+        // 레코드에 없는 과거 항목도 필터·슬라이서 선택의 원본 번호를 유지합니다.
+        def.cacheItemsId = p.cachePath;
+        // A pivot field's number format is independent of its cache field and
+        // other pivots using that cache. Keep explicit General and native IDs.
+        const fieldFormats = kids(child(p.root, 'pivotFields'), 'pivotField').flatMap((field, i) => {
+          if (field.attrs.numFmtId === undefined || !cache.fields[i]) return [];
+          const id = Number(field.attrs.numFmtId);
+          if (!Number.isInteger(id) || id < 0) return [];
+          const known = cacheFormat(id); // Also initializes the custom format map.
+          const code = ctx.cacheNumberFormats?.[id];
+          const format = code !== undefined ? { numFmt: 'custom', code }
+            : id < 164 ? { ...(known ?? { numFmt: 'general' }), xlsxBuiltinId: id } : null;
+          return format ? [[cache.fields[i].name || `열${i + 1}`, format]] : [];
+        });
+        if (fieldFormats.length) def.fieldNumberFormats = Object.fromEntries(fieldFormats);
+        const retained = (ctx.pivotCacheItems ??= {});
+        retained[p.cachePath] ??= { ...(cache.missingItems !== undefined ? { missingItemsLimit: pivotMissingItemsLimit(cache) } : {}), fields: cache.fields.filter(f => f.db).map(f => ({ name: f.name, shared: f.shared, ...(f.sharedTypes ? { sharedTypes: f.sharedTypes } : {}), ...(f.dateOnly ? { dateOnly: true } : {}), ...(cacheFormat(f.numFmtId) ? { format: cacheFormat(f.numFmtId) } : {}) })) };
+      }
       // 엑셀의 저장본(캐시 레코드)으로 처음 화면을 그림 — 원본을 고치거나 새로 고치면 원본에서 다시 계산
       if (def && cache.snapshot && !cache.snapshot.failed) {
         if (!(ctx.pivotSnapshots ??= {})[p.cachePath]) {
@@ -3190,6 +3227,7 @@ function* readXlsxSteps(files, onDiagnostics) {
   if (data.calculation?.iterate) warnings.push('반복 계산 설정은 파일에 보존하지만 현재 계산 엔진에서 반복 계산을 실행하지 않습니다. 순환 참조 결과를 확인하세요.');
   if (data.calculation?.fullPrecision === false) warnings.push('표시된 정밀도로 계산 설정은 파일에 보존하지만 현재 계산은 원래 숫자의 정밀도를 사용합니다.');
   if (ctx.pivotSnapshots) data.pivotSnapshots = ctx.pivotSnapshots;
+  if (ctx.pivotCacheItems) data.pivotCacheItems = ctx.pivotCacheItems;
   // 자동 높이로 맞출 행 (화면에서 글자 크기를 재어 정함 — 앱이 열 때 한 번 계산)
   if (sheets.some((sh) => sh.fitRows)) data.fitRows = sheets.map((sh) => { const f = sh.fitRows ? [...sh.fitRows] : null; delete sh.fitRows; return f; });
   if (names.length) data.names = names;
@@ -4123,7 +4161,7 @@ const REL_MS = 'http://schemas.microsoft.com/office/2007/relationships';
 const PIVOT_SUBTOTAL = { count: 'count', average: 'average', max: 'max', min: 'min', product: 'product', countNums: 'countNums', stdDev: 'stdDev', stdDevp: 'stdDevp', var: 'var', varp: 'varp' };
 
 /** 필드의 고유 값 (피벗 결과와 같은 순서) → { keys, index: Map(key → 순번) } */
-function fieldItems(data, f, order = null) {
+function fieldItems(data, f, order = null, retained = null) {
   const seen = new Map();
   for (const value of data.values(f)) { const k = keyOf(value); if (!seen.has(itemIdentity(k))) seen.set(itemIdentity(k), k); }
   let keys = sortKeys([...seen.values()]);
@@ -4131,6 +4169,11 @@ function fieldItems(data, f, order = null) {
     // 수동 순서(파일에서 가져온 항목 순서)를 유지하고 새 항목은 뒤에
     const pos = new Map(order.map((t, i) => [itemIdentity(t), i]));
     keys = [...keys.filter((k) => pos.has(itemIdentity(itemText(k)))).sort((a, b) => pos.get(itemIdentity(itemText(a))) - pos.get(itemIdentity(itemText(b)))), ...keys.filter((k) => !pos.has(itemIdentity(itemText(k))))];
+  }
+  if (retained?.length) {
+    // 원래 sharedItems 순서가 캐시 항목 번호이므로 새 값만 뒤에 추가합니다.
+    const prior = retained.map(keyOf), identities = new Set(prior.map(itemIdentity));
+    keys = prior.concat(keys.filter(k => !identities.has(itemIdentity(k))));
   }
   const index = new Map(keys.map((k, i) => [itemIdentity(k), i]));
   return { keys, index };
@@ -4170,8 +4213,27 @@ function dateSharedItemsXml(values, date1904 = false) {
   return `<sharedItems${stat.missing ? '' : ' containsSemiMixedTypes="0"'} containsNonDate="0" containsDate="1" containsString="0"${stat.missing ? ' containsBlank="1"' : ''}/>`;
 }
 
-function sharedItemsXml(values, keys) {
-  const stat = pivotValueStats(values);
+// 숫자로 계산하더라도 OOXML 날짜(<d>)와 일반 숫자(<n>)는 다른 캐시 형식입니다.
+function pivotDateItems(field) {
+  if (field?.dateOnly === true) return value => typeof value === 'number';
+  if (!field?.sharedTypes?.includes('d')) return null;
+  const values = new Set(); let onlyDates = true;
+  for (let i = 0; i < field.shared.length; i++) if (typeof field.shared[i] === 'number') {
+    if (field.sharedTypes[i] === 'd') values.add(field.shared[i]); else onlyDates = false;
+  }
+  return value => typeof value === 'number' && (onlyDates || values.has(value));
+}
+function pivotDateXml(value, date1904) {
+  const d = dateParts(value, 1, date1904), pad = n => String(n).padStart(2, '0');
+  const ms = (Math.round(value * 86400000) % 1000 + 1000) % 1000;
+  return '<d v="' + d.y + '-' + pad(d.m) + '-' + pad(d.d) + 'T' + pad(d.hh) + ':' + pad(d.mm) + ':' + pad(d.ss) + (ms ? '.' + String(ms).padStart(3, '0') : '') + '"/>';
+}
+function sharedItemsXml(values, keys, retained = null, isDate = null, date1904 = false) {
+  const allValues = retained?.length ? { *[Symbol.iterator]() { yield* retained; yield* values; } } : values;
+  const numericValues = isDate ? { *[Symbol.iterator]() { for (const value of allValues) if (!isDate(value)) yield value; } } : allValues;
+  const stat = pivotValueStats(numericValues);
+  let hasDate = false;
+  if (isDate) for (const value of allValues) if (isDate(value)) { hasDate = true; break; }
   const hasStr = stat.hasString || stat.emptyStrings > 0, hasBlank = stat.missing > 0, hasNum = stat.numbers > 0;
   const attrs = [];
   // Office의 빈 문자열(<s/>)과 실제 빈 항목(<m/>)은 서로 다른 형식입니다.
@@ -4185,15 +4247,19 @@ function sharedItemsXml(values, keys) {
     if (keys?.some(k => typeof k === 'number')) attrs.push(`minValue="${stat.min}"`, `maxValue="${stat.max}"`);
   }
   if (hasBlank) attrs.push('containsBlank="1"');
-  if (hasStr && hasNum) attrs.push('containsMixedTypes="1"');
+  if (hasDate) {
+    attrs.push('containsDate="1"');
+    if (!hasStr && !hasNum) attrs.push('containsNonDate="0"');
+  }
+  if (hasStr && hasNum || hasDate && (hasStr || hasNum)) attrs.push('containsMixedTypes="1"');
   if (keys?.some(k => typeof k === 'string' && k.length > 255)) attrs.push('longText="1"');
   if (!keys) return `<sharedItems${attrs.length ? ` ${attrs.join(' ')}` : ''}/>`;
   const original = new Map();
-  for (const value of values) { const k = keyOf(value), tag = itemIdentity(k); if (!original.has(tag)) original.set(tag, value); }
+  for (const value of allValues) { const k = keyOf(value), tag = itemIdentity(k); if (!original.has(tag)) original.set(tag, value); }
   const items = keys.map(k => {
     if (k === EMPTY) return '<m/>';
     if (k === EMPTY_TEXT) return '<s v=""/>';
-    if (typeof k === 'number') return `<n v="${k}"/>`;
+    if (typeof k === 'number') return isDate?.(k) ? pivotDateXml(k, date1904) : `<n v="${k}"/>`;
     if (typeof k === 'boolean') return `<b v="${k ? 1 : 0}"/>`;
     const value = original.get(itemIdentity(k));
     return value && typeof value === 'object' && (value.error || value.code)
@@ -4203,19 +4269,78 @@ function sharedItemsXml(values, keys) {
 }
 
 /** 피벗 원본을 구별하는 키 (같은 원본의 피벗은 캐시 하나를 함께 씀 — 슬라이서 연결에 필요) */
-function pivotSourceKey(def) {
+function pivotWorksheetKey(def) {
   return def.table ? `t:${String(def.table).toLowerCase()}` : `r:${String(def.source ?? '').toLowerCase()}!${def.range ? rangeRef(def.range) : ''}`;
+}
+function pivotSourceKey(def) {
+  const source = pivotWorksheetKey(def);
+  // 독립 캐시는 분리하고, 명시적으로 연결한 슬라이서만 아래에서 합칩니다.
+  return def.cacheItemsId ? JSON.stringify([source, def.cacheItemsId]) : source;
+}
+// MS Excel: auto is omitted; none=0, Excel 2007+ max=1048576.
+// Other unsigned OOXML thresholds (including legacy 32500) remain exact.
+function pivotMissingItemsLimit(def) {
+  const value = def.missingItems;
+  if (value === 'none') return 0;
+  if (value === 'max') return 1048576;
+  if (value === undefined || value === 'auto' || value === null || value === '') return undefined;
+  const n = Number(value); return Number.isInteger(n) && n >= 0 && n <= 0xffffffff ? n : undefined;
+}
+function matchingPivotCacheData(wb, a, b) {
+  const left = pivotSourceData(wb, a), right = pivotSourceData(wb, b);
+  if (!left || !right) return false;
+  if (left.cube === right.cube) return true;
+  const headers = headerNames(left), other = headerNames(right);
+  if (left.cube.n !== right.cube.n || headers.length !== other.length || headers.some((v,i) => v !== other[i])) return false;
+  for (let c = 0; c < headers.length; c++) {
+    const l = left.cube.col(c), r = right.cube.col(c);
+    for (let i = 0; i < left.cube.n; i++) if (itemIdentity(keyOf(l.get(i))) !== itemIdentity(keyOf(r.get(i)))) return false;
+  }
+  return true;
 }
 
 /**
  * 같은 원본을 쓰는 피벗들의 공유 캐시 → { cacheXml, header, nBase, items: Map(필드 → {keys, index}), data, src }
  * extraFields: 슬라이서가 쓰는 필드 이름(소문자)
  */
-function buildPivotCache(wb, defs, cacheId, extraFields) {
+function buildPivotCache(wb, defs, cacheId, extraFields, pool) {
   const src = pivotSourceData(wb, defs[0]);
   if (!src || src.cube.n < 1) return null;
   const baseHeader = headerNames(src);
   const nBase = baseHeader.length;
+  const limits = defs.map(pivotMissingItemsLimit).filter(n => n !== undefined);
+  const missingItemsLimit = limits.length ? minOf(limits) : undefined;
+  const validSnapshots = wb.snapshotData?.() ?? {}, retainedByName = new Map(), retainedMeta = new Map(), retainedIds = new Set();
+  for (const def of defs) {
+    if (!def.cacheItemsId || retainedIds.has(def.cacheItemsId)) continue;
+    retainedIds.add(def.cacheItemsId);
+    const original = wb.pivotCacheItems?.[def.cacheItemsId];
+    // A loaded 'none' cache can still contain selected historical items until
+    // refresh. Style-only saves retain it; a new none policy or refresh prunes it.
+    const prune = missingItemsLimit === 0 && (original?.missingItemsLimit !== 0 || def.snapshotId && !validSnapshots[def.snapshotId]);
+    for (const field of original?.fields ?? []) {
+      const name = String(field.name).toLowerCase();
+      if (!retainedMeta.has(name)) retainedMeta.set(name, field);
+    }
+    if (prune) continue;
+    for (const field of original?.fields ?? []) {
+      const name = String(field.name).toLowerCase(), prior = retainedByName.get(name);
+      if (!prior) retainedByName.set(name, field);
+      else if (prior.shared !== field.shared) {
+        const merged = (prior.shared ?? []).slice(), seen = new Set(merged.map(v => itemIdentity(keyOf(v))));
+        const types = [(prior.sharedTypes ?? '').padEnd(merged.length, ' ')];
+        for (let i = 0; i < (field.shared?.length ?? 0); i++) {
+          const value = field.shared[i], id = itemIdentity(keyOf(value));
+          if (!seen.has(id)) { seen.add(id); merged.push(value); types.push(field.sharedTypes?.[i] ?? ' '); }
+        }
+        retainedByName.set(name, { ...prior, shared: merged, sharedTypes: types.join('') });
+      }
+    }
+  }
+  const retainedFor = f => retainedByName.get(String(baseHeader[f]).toLowerCase())?.shared;
+  const fieldMetaFor = f => retainedByName.get(String(baseHeader[f]).toLowerCase()) ?? retainedMeta.get(String(baseHeader[f]).toLowerCase());
+  const dateItems = new Map();
+  for (let f = 0; f < nBase; f++) { const isDate = pivotDateItems(fieldMetaFor(f)); if (isDate) dateItems.set(f, isDate); }
   const calcs = [];
   for (const d of defs) for (const c of d.calcFields ?? []) {
     if (!baseHeader.some((h) => h.toLowerCase() === c.name.toLowerCase()) && !calcs.some((x) => x.name.toLowerCase() === c.name.toLowerCase())) calcs.push(c);
@@ -4244,10 +4369,10 @@ function buildPivotCache(wb, defs, cacheId, extraFields) {
     const d = normalizeDef(def, header);
     [...d.rows, ...d.cols, ...d.pages, ...Object.keys(d.filters)].forEach((n) => listed.add(fx(n)));
   }
-  header.forEach((h, i) => { if (extraFields?.has(h.toLowerCase())) listed.add(i); });
+  header.forEach((h, i) => { if (extraFields?.has(h.toLowerCase()) || retainedFor(i)?.length) listed.add(i); });
   for (const g of grouped.values()) if (g.spec.by === 'items') listed.add(g.base); // discretePr 가 원본 항목 번호를 씀
   const items = new Map();
-  for (const f of listed) if (f >= 0 && f < nBase && !grouped.has(header[f].toLowerCase())) items.set(f, fieldItems(data, f));
+  for (const f of listed) if (f >= 0 && f < nBase && !grouped.has(header[f].toLowerCase())) items.set(f, fieldItems(data, f, null, retainedFor(f)));
   // 그룹 필드의 항목 = 엑셀 groupItems 전체 (피벗 필드의 x 가 이 목록을 가리킴)
   const groupXml = new Map();
   for (const g of grouped.values()) {
@@ -4284,17 +4409,17 @@ function buildPivotCache(wb, defs, cacheId, extraFields) {
     const g = groupXml.get(f);
     const vals = data.values(f);
     // 날짜로 묶는 필드는 날짜 필드로 표시 (엑셀이 그룹을 다시 만들 수 있게)
-    const shared = g && XL_DATE_GROUP.has(grouped.get(h.toLowerCase())?.spec.by) ? dateSharedItemsXml(vals, wb.date1904) : sharedItemsXml(vals, g ? null : items.get(f)?.keys ?? null);
-    return `<cacheField name="${esc(h)}" numFmtId="${g && XL_DATE_GROUP.has(grouped.get(h.toLowerCase())?.spec.by) ? 14 : 0}">${shared}${g ?? ''}</cacheField>`;
+    const shared = g && XL_DATE_GROUP.has(grouped.get(h.toLowerCase())?.spec.by) ? dateSharedItemsXml(vals, wb.date1904) : sharedItemsXml(vals, g ? null : items.get(f)?.keys ?? null, g ? null : retainedFor(f), dateItems.get(f), wb.date1904);
+    return `<cacheField name="${esc(h)}" numFmtId="${g && XL_DATE_GROUP.has(grouped.get(h.toLowerCase())?.spec.by) ? 14 : pool.fmtId(fieldMetaFor(f)?.format ?? {})}">${shared}${g ?? ''}</cacheField>`;
   }).join('');
   const sourceXml = src.table
     ? `<worksheetSource name="${esc(src.table)}"/>`
     : `<worksheetSource ref="${rangeRef(src.ref)}" sheet="${esc(wb.sheets[src.si].name)}"/>`;
-  const cacheXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<pivotCacheDefinition xmlns="${NS_MAIN}" xmlns:r="${NS_R}" xmlns:mc="${NS_MC}" xmlns:tb="${NS_TB}" mc:Ignorable="tb" saveData="${saveData ? 1 : 0}" refreshOnLoad="${refreshOnOpen ? 1 : 0}"${saveData ? ' r:id="rCacheRecords"' : ''} createdVersion="6" refreshedVersion="6" minRefreshableVersion="3" recordCount="${saveData ? data.length : 0}">`
+  const cacheXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<pivotCacheDefinition xmlns="${NS_MAIN}" xmlns:r="${NS_R}" xmlns:mc="${NS_MC}" xmlns:tb="${NS_TB}" mc:Ignorable="tb"${missingItemsLimit !== undefined ? ` missingItemsLimit="${missingItemsLimit}"` : ''} saveData="${saveData ? 1 : 0}" refreshOnLoad="${refreshOnOpen ? 1 : 0}"${saveData ? ' r:id="rCacheRecords"' : ''} createdVersion="6" refreshedVersion="6" minRefreshableVersion="3" recordCount="${saveData ? data.length : 0}">`
     + `<cacheSource type="worksheet">${sourceXml}</cacheSource><cacheFields count="${header.length}">${cacheFields}</cacheFields>`
     + `<extLst><ext uri="{725AE2AE-9491-48be-B2B4-4EB974FC3084}" xmlns:x14="${NS_X14}"><x14:pivotCacheDefinition pivotCacheId="${cacheId}"/></ext></extLst></pivotCacheDefinition>`;
   const dateFields = new Set([...grouped.values()].filter(g => !g.derived && XL_DATE_GROUP.has(g.spec.by)).map(g => g.base));
-  return { cacheXml, header, nBase, nCalc, items, data, src, cacheId, saveData, dateFields };
+  return { cacheXml, header, nBase, nCalc, items, data, src, cacheId, saveData, dateFields, dateItems };
 }
 
 /** 저장 캐시를 행 단위로 인코딩합니다. 큰 단일 XML 문자열을 만들지 않습니다. */
@@ -4302,10 +4427,7 @@ function savedPivotRecords(cache, date1904, streaming = false) {
   const valueXml = (value, column) => {
     if (value == null) return '<m/>';
     if (typeof value === 'number') {
-      if (cache.dateFields.has(column)) {
-        const d = dateParts(value, 1, date1904), pad = n => String(n).padStart(2,'0');
-        return `<d v="${d.y}-${pad(d.m)}-${pad(d.d)}T${pad(d.hh)}:${pad(d.mm)}:${pad(d.ss)}${Math.round(value * 86400000) % 1000 ? '.' + String((Math.round(value * 86400000) % 1000 + 1000) % 1000).padStart(3,'0') : ''}"/>`;
-      }
+      if (cache.dateFields.has(column) || cache.dateItems?.get(column)?.(value)) return pivotDateXml(value, date1904);
       return `<n v="${value}"/>`;
     }
     if (typeof value === 'boolean') return `<b v="${value ? 1 : 0}"/>`;
@@ -4449,9 +4571,14 @@ function pivotParts(wb, si, def, cache, name, pool) {
   const tabular = d.layout === 'tabular';
   const outline = d.layout === 'outline';
   const valueFieldIdx = new Set(values.map((v) => fx(v.field)).filter((i) => i >= 0));
+  const fieldNumberFormats = new Map(Object.entries(def.fieldNumberFormats ?? {}).map(([field, format]) => [field.toLowerCase(), format]));
   const pivotFields = header.map((h, f) => {
-    if (isCalc(f)) return `<pivotField${valueFieldIdx.has(f) ? ' dataField="1"' : ''} dragToRow="0" dragToCol="0" dragToPage="0" showAll="0" defaultSubtotal="0"/>`;
-    const attrs = [];
+    const format = fieldNumberFormats.get(h.toLowerCase());
+    const builtin = format?.xlsxBuiltinId;
+    const formatId = format ? Number.isInteger(builtin) && builtin >= 0 && builtin < 164 ? builtin : pool.fmtId(format) : null;
+    const formatAttr = formatId === null ? '' : ` numFmtId="${formatId}"`;
+    if (isCalc(f)) return `<pivotField${formatAttr}${valueFieldIdx.has(f) ? ' dataField="1"' : ''} dragToRow="0" dragToCol="0" dragToPage="0" showAll="0" defaultSubtotal="0"/>`;
+    const attrs = formatId === null ? [] : [`numFmtId="${formatId}"`];
     if (d.fieldCaptions?.[h]) attrs.push(`name="${esc(d.fieldCaptions[h])}"`);
     if (rowF.includes(f)) attrs.push('axis="axisRow"');
     else if (colF.includes(f)) attrs.push('axis="axisCol"');
@@ -4566,9 +4693,9 @@ function pivotParts(wb, si, def, cache, name, pool) {
     + `<location ref="${rangeRef(loc)}" firstHeaderRow="${firstHeaderRow}" firstDataRow="${meta.headerRows}" firstDataCol="${reportOnly ? 0 : meta.labelCols}"${pageF.length ? ` rowPageCount="${pageLayout.height}" colPageCount="${(pageLayout.width + 1) / 3}"` : ''}/>`
     + `<pivotFields count="${header.length}">${pivotFields}</pivotFields>`
     + (rowF.length || onRows ? `<rowFields count="${rowF.length + (onRows ? 1 : 0)}">${[...rowF, ...(onRows ? [-2] : [])].map((f) => `<field x="${f}"/>`).join('')}</rowFields>` : '')
-    + (reportOnly ? '' : `<rowItems count="${rowXml.length}">${rowXml.join('')}</rowItems>`)
+    + (reportOnly || !rowXml.length ? '' : `<rowItems count="${rowXml.length}">${rowXml.join('')}</rowItems>`)
     + (colFieldsAll.length ? `<colFields count="${colFieldsAll.length}">${colFieldsAll.map((f) => `<field x="${f}"/>`).join('')}</colFields>` : '')
-    + (reportOnly ? '' : `<colItems count="${colXml.length}">${colXml.join('')}</colItems>`)
+    + (reportOnly || !colXml.length ? '' : `<colItems count="${colXml.length}">${colXml.join('')}</colItems>`)
     + pageXml
     + (values.length ? `<dataFields count="${values.length}">${dataXml}</dataFields>` : '')
     + pivotCondXml(wb, si, def, header, values)
@@ -4702,26 +4829,34 @@ export async function writeXlsxBlobAsync(wb, opts, onProgress) {
 
 /** File System Access 저장용: Excel 호환 ZIP 바이트를 디스크 sink에 순차 기록합니다. */
 export async function writeXlsxToSink(wb, opts, sink, onProgress) {
-  return writeXlsxStreamArchive(wb, opts, onProgress, createZipStreamWriter(sink, { zip64: 'auto' }));
+  return writeXlsxStreamArchive(wb, opts, onProgress, createZipStreamWriter(sink, { zip64: 'auto', signal: opts?.signal }));
 }
 
 // 다운로드는 Blob, 파일 선택기로 얻은 대상은 순차 ZIP sink를 사용합니다.
 async function writeXlsxStreamArchive(wb, opts, onProgress, diskWriter = null) {
   const writer = diskWriter ?? createZipAsyncWriter();
+  const check = () => { opts?.signal?.throwIfAborted(); opts?.assertCurrent?.(); };
+  check();
   let last = performance.now();
-  const rowProgress = value => { if (performance.now() - last > 40) { onProgress?.(value); last = performance.now(); } };
+  const rowProgress = value => { check(); if (performance.now() - last > 40) { onProgress?.(value); last = performance.now(); } };
   const it = writeXlsxSteps(wb, opts, true, rowProgress);
   try {
     for (;;) {
+      check();
       const step = it.next();
       if (step.done) {
         const names = Object.keys(step.value);
         for (let i = 0; i < names.length; i++) {
           const name = names[i];
+          check();
           await writer.add(name, step.value[name]); delete step.value[name];
+          check();
           onProgress?.({ p: 0.85 + 0.15 * (i + 1) / names.length, msg: '파일 마무리 중' });
         }
-        return diskWriter ? writer.finish() : writer.finish({ blob: true, first: '[Content_Types].xml' });
+        check();
+        const result = await (diskWriter ? writer.finish() : writer.finish({ blob: true, first: '[Content_Types].xml' }));
+        check();
+        return result;
       }
       if (step.value.entry) await writer.add(step.value.entry[0], step.value.entry[1]);
       else if (performance.now() - last > 40) {
@@ -4776,6 +4911,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
   let commentNo = 0;
   let tableNo = 0;
   let mediaNo = 0;
+  const drawingMediaTargets = new Map();
   const mediaExts = new Set();
   // 셀에 배치한 그림 → 리치 값 (같은 그림·설명은 하나로)
   const richList = [];
@@ -4811,7 +4947,22 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
   const allDefs = [];
   wb.sheets.forEach((s, i) => [s.pivot, ...(s.pivotsExtra ?? [])].filter(Boolean).forEach((def, j) => allDefs.push({ si: i, j, def })));
   const exportSnapshots = wb.snapshotData?.() ?? {};
-  const exportCacheKey = def => pivotSourceKey(def) + (exportSnapshots[def.snapshotId] ? `!saved:${def.snapshotId}` : '');
+  const originalCacheKeys = new Map(allDefs.map(e => [e.def, pivotSourceKey(e.def) + (exportSnapshots[e.def.snapshotId] ? `!saved:${e.def.snapshotId}` : '')]));
+  const parents = new Map([...originalCacheKeys.values()].map(k => [k,k]));
+  const rootKey = key => { let root = key; while (parents.get(root) !== root) root = parents.get(root); while (key !== root) { const next = parents.get(key); parents.set(key,root); key = next; } return root; };
+  const entryFor = ref => allDefs.find(e => e.si === ref.si && (ref.name === null ? e.j === 0 : String(e.def.name ?? '') === ref.name));
+  // A user-created report connection is explicit permission to share a cache.
+  // Keep independent caches separate; never replace different saved values.
+  wb.sheets.forEach((s,i) => (s.slicers ?? []).forEach(sl => {
+    const linked = slicerPivotRefs(wb,i,sl).map(entryFor).filter(Boolean), first = linked[0];
+    for (const other of linked.slice(1)) {
+      const a = rootKey(originalCacheKeys.get(first.def)), b = rootKey(originalCacheKeys.get(other.def));
+      if (a === b) continue;
+      if (pivotWorksheetKey(first.def) !== pivotWorksheetKey(other.def) || !matchingPivotCacheData(wb,first.def,other.def)) throw new Error('연결된 피벗 테이블의 원본 또는 저장된 데이터가 다릅니다. 같은 원본으로 새로 고친 뒤 다시 저장하거나 보고서 연결을 해제하세요.');
+      parents.set(b,a);
+    }
+  }));
+  const exportCacheKey = def => rootKey(originalCacheKeys.get(def));
   const slicerFields = new Map(); // 원본 키 → 슬라이서 필드 이름(소문자)
   wb.sheets.forEach((s, i) => (s.slicers ?? []).forEach((sl) => {
     for (const ref of slicerPivotRefs(wb, i, sl)) {
@@ -4830,7 +4981,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
     caches.get(k).defs.push(e.def);
   }
   for (const [k, g] of caches) {
-    g.cache = buildPivotCache(wb, g.defs, ++cacheSeq, slicerFields.get(k));
+    g.cache = buildPivotCache(wb, g.defs, ++cacheSeq, slicerFields.get(k), pool);
     yield { p: 0.01, msg: '피벗 캐시 만드는 중' };
   }
   const pivotList = new Map(); // 시트 번호 → [{ name, cacheId, tableNo, parts, cache, j }]
@@ -5178,11 +5329,18 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
       };
       const anchor = (o, body) => `<xdr:twoCellAnchor editAs="${o.placement ?? 'twoCell'}"><xdr:from>${anchorAt(o.x, o.y)}</xdr:from><xdr:to>${anchorAt(o.x + o.w, o.y + o.h)}</xdr:to>${body}<xdr:clientData${o.noPrint !== undefined ? ` fPrintsWithSheet="${o.noPrint ? 0 : 1}"` : ''}${o.locked !== undefined ? ` fLocksWithSheet="${o.locked === false ? 0 : 1}"` : ''}/></xdr:twoCellAnchor>`;
       const xfrm = (o) => `<a:xfrm${o.rot ? ` rot="${Math.round(o.rot * 60000)}"` : ''}${o.flip ? ' flipH="1"' : ''}${o.flipV ? ' flipV="1"' : ''}><a:off x="${Math.round(o.x * EMU)}" y="${Math.round(o.y * EMU)}"/><a:ext cx="${Math.round(o.w * EMU)}" cy="${Math.round(o.h * EMU)}"/></a:xfrm>`;
+      const pictureRelationships = new Map();
       const embedPictureSource = source => {
-        const m = /^data:([^;,]+);base64,(.*)$/s.exec(source ?? ''); if (!m) return null;
-        const ext = Object.keys(MIME).find(k => MIME[k] === m[1]); if (!ext) return null;
-        mediaNo++; mediaExts.add(ext); files[`xl/media/image${mediaNo}.${ext}`] = fromBase64(m[2]);
-        return drel('image', `../media/image${mediaNo}.${ext}`);
+        if (pictureRelationships.has(source)) return pictureRelationships.get(source);
+        let target = drawingMediaTargets.get(source);
+        if (!target) {
+          const m = /^data:([^;,]+);base64,(.*)$/s.exec(source ?? ''); if (!m) return null;
+          const ext = Object.keys(MIME).find(k => MIME[k] === m[1]); if (!ext) return null;
+          mediaNo++; mediaExts.add(ext); target = `../media/image${mediaNo}.${ext}`;
+          files[`xl/media/image${mediaNo}.${ext}`] = fromBase64(m[2]);
+          drawingMediaTargets.set(source, target);
+        }
+        const rel = drel('image', target); pictureRelationships.set(source, rel); return rel;
       };
       let objId = 1;
       const parts = [];

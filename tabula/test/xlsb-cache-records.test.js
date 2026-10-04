@@ -72,3 +72,12 @@ test('invalid cache metadata and invalid string lengths fail explicitly', () => 
   assert.throws(() => consume(readPivotSnapshotBinary(record(33, wide('')), f, { fields: [{ database: true, items: [], sflags: NaN }], recordCount: 1 })), /형식 정보/);
   for (const length of [32768, 0xffffffff]) assert.throws(() => consume(readPivotSnapshotBinary(record(33, u32(length)), f, { fields: [{ database: true, items: [], sflags: 0x12f }], recordCount: 1 })), /문자열의 길이/);
 });
+
+
+// MS-XLSB 2.4.168: signed citmGhostMax at offset 4; -1 means automatic.
+for(const limit of[-1,0,1048576,32500])test(`XLSB pivot cache missing-item threshold survives conversion: ${limit}`,()=>{
+ const head=Buffer.alloc(21);head.writeInt32LE(limit,4);
+ const files={'xl/workbook.bin':new Uint8Array(),'xl/pivotCache/pivotCacheDefinition1.bin':record(179,head)};
+ consume(convertXlsb(files));const xml=textOf(files['xl/pivotCache/pivotCacheDefinition1.bin']);
+ assert.equal(xml.includes('missingItemsLimit='),limit>=0);if(limit>=0)assert.ok(xml.includes(`missingItemsLimit="${limit}"`));
+});

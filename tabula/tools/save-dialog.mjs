@@ -30,13 +30,14 @@ async function test(name, fn, { picker = true } = {}) {
           async write(blob) {
             mock.events.push({ id, stage: 'write' });
             writes++;
+            if (plan.pauseWrite && writes === 1) await new Promise(resolve => { mock.releaseWrite = resolve; });
             if (plan.changeAfterWrite === writes) window.tabula.wb().transact(() => window.tabula.wb().setInput(0, 0, 0, 'changed during save'));
             if (plan.writeError) throw new DOMException('합성 쓰기 권한 오류', 'NotAllowedError');
             const bytes = blob instanceof Blob ? new Uint8Array(await blob.arrayBuffer()) : new Uint8Array(blob.buffer ?? blob, blob.byteOffset ?? 0, blob.byteLength).slice();
             parts.push({position,bytes}); position += bytes.length; extent = Math.max(extent,position);
           },
           async seek(at) { if (plan.seekError) throw new DOMException('위치 이동 실패','InvalidStateError'); position=at; mock.events.push({id,stage:'seek'}); },
-          async close() { if (plan.closeError) throw new DOMException('디스크 공간 부족', 'QuotaExceededError'); const bytes=new Uint8Array(extent); for(const part of parts)bytes.set(part.bytes,part.position); mock.completed.push({ id, name, bytes:Array.from(bytes) }); mock.events.push({ id, stage: 'close' }); },
+          async close() { if (plan.pauseClose) await new Promise(resolve => { mock.releaseClose = resolve; }); if (plan.closeError) throw new DOMException('디스크 공간 부족', 'QuotaExceededError'); const bytes=new Uint8Array(extent); for(const part of parts)bytes.set(part.bytes,part.position); mock.completed.push({ id, name, bytes:Array.from(bytes) }); mock.events.push({ id, stage: 'close' }); },
           async abort() { mock.events.push({ id, stage: 'abort' }); },
         };
       },
@@ -65,6 +66,36 @@ const closed = (p, count) => p.waitForFunction(count => window.__saveMock.events
 const mock = p => p.evaluate(() => window.__saveMock);
 const valueOf = bytes => new Workbook(readXlsx(Uint8Array.from(bytes)).data).getValue(0, 0, 0);
 try {
+
+  for (const kind of ['xlsx','wixel','csv']) await test(`저장 중 취소는 ${kind} 파일을 폐기하고 다시 저장 가능`, async (p, downloads) => {
+    const title = await p.locator('#docTitle').innerText();
+    await p.evaluate(kind => { window.__saveMock.plans.push({name:'취소 검사.'+kind,pauseWrite:true}); }, kind);
+    if (kind === 'xlsx') await ctrlSave(p);
+    else if (kind === 'csv') await p.evaluate(() => window.tabula.run('exportCsv'));
+    else {
+      await p.evaluate(() => window.tabula.run('saveAs'));
+      const d=p.getByRole('dialog',{name:'다른 이름으로 저장',exact:true});
+      await d.locator('select').selectOption('wixel'); await d.getByRole('button',{name:'저장',exact:true}).click();
+    }
+    await p.waitForFunction(() => typeof window.__saveMock.releaseWrite === 'function');
+    await p.getByRole('button',{name:'저장 취소',exact:true}).click();
+    await p.evaluate(() => window.__saveMock.releaseWrite());
+    await p.waitForFunction(() => !document.querySelector('.load-progress'));
+    let m=await mock(p); assert.equal(m.completed.length,0); assert.equal(m.events.filter(e=>e.stage==='abort').length,1);
+    assert.equal(await p.locator('#docTitle').innerText(),title);
+    assert.equal(await p.getByRole('dialog').count(),0); assert.equal(downloads.length,0);
+    await ctrlSave(p); await closed(p,1);
+    m=await mock(p); assert.equal(valueOf(m.completed[0].bytes),42);
+  });
+  await test('디스크 확정 단계에는 취소를 비활성화하고 실제 완료 후 성공 표시', async (p, downloads) => {
+    await p.evaluate(() => window.__saveMock.plans.push({pauseClose:true}));
+    await ctrlSave(p); await p.waitForFunction(() => typeof window.__saveMock.releaseClose === 'function');
+    assert.equal(await p.getByRole('button',{name:'저장 취소',exact:true}).isDisabled(),true);
+    assert.equal((await mock(p)).completed.length,0);
+    await p.evaluate(() => window.__saveMock.releaseClose()); await closed(p,1);
+    assert.equal(downloads.length,0);
+  });
+
   await test('자동 저장은 셀 변경을 브라우저에 보관하고 파일 선택기를 호출하지 않음', async (p, downloads) => {
     await p.locator('#autosaveToggle').click();
     assert.equal(await p.locator('#autosaveToggle').getAttribute('aria-checked'), 'true');

@@ -1,6 +1,7 @@
 import { CellMap } from './cellmap.js';
 import { createStoredStyleMemo } from './cell-storage.js';
 import { createJsonSizer } from './json-size.js';
+import { createStoredFormulaMemo } from './stored-formula-memo.js';
 
 // Framed WIXEL v2: each JSON record is bounded independently. The complete
 // workbook never becomes one string or a second object/cell dictionary.
@@ -224,6 +225,7 @@ export async function readWixelFile(blob,options={}) {
       const [r,c,n,id]=key;if(!Number.isSafeInteger(r)||r<0||!Number.isSafeInteger(c)||c<0||!Number.isSafeInteger(n)||n<1)throw fail();
       if(key.length===4){if(!Number.isSafeInteger(id)||id<0||id>=styles.length||!value||typeof value!=='object'||value.style!==undefined)throw fail();value.style=styles[id];}
       else if(value?.style)value.style=parent.shareStyle(value.style);
+      if(typeof value?.raw==='string')value.raw=parent.shareFormula.share(value.raw);
       if(n===1)parent.value.setRC(r,c,value);else parent.value.setRunRC(r,c,n,value);return;
     }
     if(parent.kind==='a'){parent.value.push(value);return;}
@@ -246,13 +248,14 @@ export async function readWixelFile(blob,options={}) {
     if(op==='o'||op==='a'||op==='c') {
       const value=op==='a'?[]:op==='c'?new CellMap():{};
       // Attach complete values on close so cell styles can be shared then.
-      stack.push({kind:op,key,value,...(op==='c'?{shareStyle:createStoredStyleMemo()}: {})});
+      stack.push({kind:op,key,value,...(op==='c'?{shareStyle:createStoredStyleMemo(),shareFormula:createStoredFormulaMemo()}: {})});
     } else if(op==='s'){if(!Number.isSafeInteger(arg)||arg<0)throw fail();stack.push({kind:op,key,value:[],length:arg,at:0});}
     else if(op==='t'){
       const Type=TYPES[arg];if(!Type||!Number.isSafeInteger(len)||len<0||len*Type.BYTES_PER_ELEMENT>2147483647)throw fail();
       const value=new Type(len);stack.push({kind:op,key,value,bytes:new Uint8Array(value.buffer),at:0});
     } else if(op==='e'){
       if(!parent)throw fail();stack.pop();
+      if(parent.kind==='c')parent.shareFormula.clear();
       if(parent.kind==='s'){if(parent.at!==parent.length)throw fail();parent.value=parent.value.join('');}
       if(parent.kind==='t'&&parent.at!==parent.bytes.length)throw fail();
       attach(parent.key,parent.value);

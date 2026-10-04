@@ -822,11 +822,11 @@ function pivotCacheXml(u8, env, out = null) {
   let inShared = false;
   let inGroup = false;
   const pnames = [];
-  let recordCount = 0;
+  let recordCount = 0, missingItemsLimit;
   for (const r of records(u8)) {
     const rd = new Rd(u8, r.p, r.e);
     switch (r.t) {
-      case R.PCDEF: rd.skip(3); rd.u8v(); rd.i32(); rd.f64(); rd.u8v(); recordCount = rd.i32(); break;
+      case R.PCDEF: rd.skip(3); rd.u8v(); missingItemsLimit = rd.i32(); rd.f64(); rd.u8v(); recordCount = rd.i32(); break;
       case R.PCDSHEETSRC: {
         const isName = rd.u8v(); const builtin = rd.u8v(); const fl = rd.u8v();
         const sheet = fl & 2 ? rd.str() : null;
@@ -878,7 +878,7 @@ function pivotCacheXml(u8, env, out = null) {
   }).join('');
   if (out) { out.fields = fields; out.recordCount = recordCount; }
   // 캐시 레코드(엑셀이 저장한 원본)를 읽을 수 있으면 그것으로 (새로 고침 전의 엑셀 화면과 같게), 없으면 열 때 원본에서 계산
-  return `<pivotCacheDefinition xmlns="${NS}" xmlns:r="${NS_R}"${out?.records ? '' : ' refreshOnLoad="1"'} recordCount="${recordCount}"><cacheSource type="worksheet">${source}</cacheSource><cacheFields count="${fields.length}">${fieldsXml}</cacheFields></pivotCacheDefinition>`;
+  return `<pivotCacheDefinition xmlns="${NS}" xmlns:r="${NS_R}"${missingItemsLimit >= 0 ? ` missingItemsLimit="${missingItemsLimit}"` : ''}${out?.records ? '' : ' refreshOnLoad="1"'} recordCount="${recordCount}"><cacheSource type="worksheet">${source}</cacheSource><cacheFields count="${fields.length}">${fieldsXml}</cacheFields></pivotCacheDefinition>`;
 }
 
 // ─────────────── 피벗 테이블 ───────────────

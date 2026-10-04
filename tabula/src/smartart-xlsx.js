@@ -1,7 +1,7 @@
 // Standard DrawingML groups + WIXEL editable diagram metadata. No native dgm claim.
 import { smartArtParts, normalizeSmartArt, isSmartArt } from './smartart.js';
 import { child, descendants, esc, parseXml } from './xml.js';
-import { fromBase64 } from './vba.js';
+import { fromBase64, toBase64 } from './vba.js';
 import { pictureMediaSource, pictureBlipXml, pictureGeometryXml, pictureBorderXml, pictureEffectXml, pictureMetadataXml } from './picture-drawingml.js';
 const EMU = 9525;
 export const WIXEL_GROUP_URI = '{EE8A84AB-E019-456C-BBCB-374EA11B2A53}';
@@ -36,6 +36,41 @@ function hyperlinkSignature(link) {
 }
 function metadata(shape) {
   return isSmartArt(shape) ? { kind: 'smartart', smartArt: normalizeSmartArt(shape.smartArt) } : { kind: 'group', groupItems: shape.groupItems, groupSize: shape.groupSize ?? { w: shape.w, h: shape.h } };
+}
+// Keep editable originals in package media, not repeated base64 strings in every
+// enclosing group. Relationship attributes survive Excel's relationship renumbering.
+function groupMetadataXml(shape, signature, embedSource) {
+  const sources = new Map(), media = [];
+  const json = JSON.stringify(metadata(shape), (key, value) => {
+    if (key === 'effectPng') return undefined;
+    if (typeof value !== 'string' || !/^data:image\/[a-z0-9.+-]+;base64,/i.test(value)) return value;
+    let id = sources.get(value);
+    if (!id) {
+      const rel = embedSource(value);
+      if (!rel) throw new Error('그룹 안의 원본 그림을 XLSX에 포함할 수 없습니다.');
+      id = 'm' + (sources.size + 1); sources.set(value, id);
+      const mime = value.slice(5, value.indexOf(';'));
+      media.push('<wx:media id="' + id + '" mime="' + esc(mime) + '" r:embed="' + esc(rel) + '"/>');
+    }
+    return { $wixelMedia: id };
+  });
+  return '<a:extLst><a:ext uri="' + WIXEL_GROUP_URI + '"><wx:group xmlns:wx="https://wixel.app/drawing/group/1" version="2" signature="' + signature + '" json="' + esc(json) + '">' + media.join('') + '</wx:group></a:ext></a:extLst>';
+}
+function groupMetadata(data, files, rels) {
+  if (data.attrs.version !== '2') return JSON.parse(data.attrs.json);
+  const sources = new Map();
+  for (const item of data.children ?? []) {
+    if (item.name !== 'media') continue;
+    const { id, mime } = item.attrs, rel = rels[item.attrs['r:embed']];
+    if (!id || sources.has(id) || !/^image\/[a-z0-9.+-]+$/i.test(mime ?? '') || rel?.type !== 'image' || rel.external || rel.targetMode === 'External' || !files[rel.target]) throw new Error('Invalid group media reference');
+    sources.set(id, { mime, bytes: files[rel.target] });
+  }
+  return JSON.parse(data.attrs.json, (key, value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== 1 || typeof value.$wixelMedia !== 'string') return value;
+    const source = sources.get(value.$wixelMedia);
+    if (!source) throw new Error('Missing group media reference');
+    return source.data ??= 'data:' + source.mime + ';base64,' + toBase64(source.bytes);
+  });
 }
 function checksum(data) { let hash = 2166136261; for (let i = 0; i < data.length; i++) hash = Math.imul(hash ^ (typeof data === 'string' ? data.charCodeAt(i) : data[i]), 16777619); return `${data.length}:${(hash >>> 0).toString(16)}`; }
 // Excel may omit DrawingML defaults when saving. Ignore only equivalent defaults.
@@ -91,7 +126,7 @@ export function drawingGroupXml(shape, id, { shapeXml, xfrm, nextId, embedImage,
     return `<xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${childId}" name="${esc(p.name ?? '그림')}"${p.hidden ? ' hidden="1"' : ''}${p.alt !== undefined ? ` descr="${esc(p.alt)}"` : ''}>${linkXml(p)}${metadata ? `<a:extLst>${metadata}</a:extLst>` : ''}</xdr:cNvPr><xdr:cNvPicPr><a:picLocks noChangeAspect="${p.lockAspect === false ? 0 : 1}"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="${rel}">${pictureBlipXml(p)}</a:blip>${p.crop ? `<a:srcRect${['l','t','r','b'].map(k => ` ${k}="${Math.round((p.crop[k] ?? 0) * 100000)}"`).join('')}/>` : ''}<a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>${xfrm(p)}${pictureGeometryXml(p)}${pictureBorderXml(p)}${pictureEffectXml(p)}</xdr:spPr></xdr:pic>`;
   }).join('');
   const signature = nativeSignature(parseXml(`<group>${content}</group>`), rel => images.get(rel) ?? 'missing', nv => readDrawingHyperlink(nv, hyperlinks));
-  const props = `<a:extLst><a:ext uri="${WIXEL_GROUP_URI}"><wx:group xmlns:wx="https://wixel.app/drawing/group/1" signature="${signature}" json="${esc(JSON.stringify(metadata(shape), (key, value) => key === 'effectPng' ? undefined : value))}"/></a:ext></a:extLst>`;
+  const props = groupMetadataXml(shape, signature, embedSource);
   return `<xdr:grpSp><xdr:nvGrpSpPr><xdr:cNvPr id="${id}" name="${esc(shape.name || (isSmartArt(shape) ? 'SmartArt' : '그룹'))}"${shape.hidden ? ' hidden="1"' : ''}>${linkXml(shape)}${props}</xdr:cNvPr><xdr:cNvGrpSpPr/></xdr:nvGrpSpPr><xdr:grpSpPr>${transform}</xdr:grpSpPr>${content}</xdr:grpSp>`;
 }
 export function readDrawingGroup(element, box, id, { files = {}, rels = {} } = {}) {
@@ -99,7 +134,7 @@ export function readDrawingGroup(element, box, id, { files = {}, rels = {} } = {
   if (!data?.attrs.json || data.attrs.json.length > 20000000) return null;
   try {
     if (!data.attrs.signature || data.attrs.signature !== nativeSignature(element, rel => { const bytes = files[rels[rel]?.target]; return bytes ? checksum(bytes) : 'missing'; }, nv => readDrawingHyperlink(nv, rels))) return null;
-    const m = JSON.parse(data.attrs.json);
+    const m = groupMetadata(data, files, rels);
     if (m.kind === 'smartart') m.smartArt = normalizeSmartArt(m.smartArt);
     else if (m.kind !== 'group' || !Array.isArray(m.groupItems) || m.groupItems.length > 1000 || !(m.groupSize?.w > 0 && m.groupSize?.h > 0)) return null;
     const xf = child(child(element, 'grpSpPr'), 'xfrm');

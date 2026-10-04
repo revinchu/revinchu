@@ -147,7 +147,7 @@ function tinyEmf() {
   return new Uint8Array(all);
 }
 
-test('EMF 그림을 SVG 로 그리고 xlsx 로 다시 저장할 때 원본 EMF 를 유지', async () => {
+for (const ext of ['emf', 'bin']) test(`EMF 그림(${ext})을 SVG 로 그리고 xlsx 로 다시 저장할 때 원본 EMF 를 유지`, async () => {
   const { emfToSvg } = await import('../src/emf.js');
   const { zip } = await import('../src/zip.js');
   const emf = tinyEmf();
@@ -165,10 +165,10 @@ test('EMF 그림을 SVG 로 그리고 xlsx 로 다시 저장할 때 원본 EMF �
   const files = unzip(writeXlsx(wb));
   const media = Object.keys(files).find((k) => k.startsWith('xl/media/'));
   delete files[media];
-  files['xl/media/image1.emf'] = emf;
+  files[`xl/media/image1.${ext}`] = emf;
   for (const k of Object.keys(files)) {
-    if (/drawing\d+\.xml\.rels$/.test(k)) files[k] = new TextEncoder().encode(textOf(files[k]).replace(/image1\.png/, 'image1.emf'));
-    if (k === '[Content_Types].xml') files[k] = new TextEncoder().encode(textOf(files[k]).replace('Extension="png" ContentType="image/png"', 'Extension="emf" ContentType="image/x-emf"'));
+    if (/drawing\d+\.xml\.rels$/.test(k)) files[k] = new TextEncoder().encode(textOf(files[k]).replace(/image1\.png/, `image1.${ext}`));
+    if (k === '[Content_Types].xml') files[k] = new TextEncoder().encode(textOf(files[k]).replace('Extension="png" ContentType="image/png"', `Extension="${ext}" ContentType="${ext === 'emf' ? 'image/x-emf' : 'image/unknown'}"`));
   }
   const { data, warnings } = readXlsx(zip(files));
   assert.deepEqual(warnings, []);

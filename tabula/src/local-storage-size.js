@@ -38,7 +38,7 @@ function snapshotSize(rows) {
 
 // 직렬화 대상 속성만 읽습니다. Workbook의 AST/그래프/캐시나 전체 복사본은 만들지 않습니다.
 const BOOK_FIELDS = ['date1904','calculation','vba','externals','defaultFont','baseStyle','cellStyles','objectStyles',
-  'theme','themeXml','themeName','themeFonts','themeEffects','props'];
+  'theme','themeXml','themeName','themeFonts','themeEffects','props','pivotCacheItems'];
 const SHEET_FIELDS = ['name','colWidths','rowHeights','merges','cond','colStyles','rowStyles','allStyle',
   'hiddenRows','hiddenCols','rowManual','freeze','filter','charts','pivot','validations','images','shapes','tables',
   'slicers','pivotsExtra','state','noGrid','noZeros','outline','protect','sparklines','page','defRowH','defColW',

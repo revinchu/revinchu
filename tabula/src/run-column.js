@@ -117,12 +117,35 @@ export class RunColumn {
   [Symbol.iterator]() { return this.entries(); }
   forEach(fn, thisArg) { for (const [row, value] of this) fn.call(thisArg, value, row, this); }
   /** 저장/복원 전용. 한 레코드가 같은 빈 셀의 모든 연속 좌표를 보존합니다. */
-  *storageEntries() {
+  *storageEntries({ bounded = false } = {}) {
     if (this.plain) { for (const [row, value] of this.plain) yield [row, value, 1]; return; }
+    // Autosave opts into a live, constant-space traversal. Its version guard
+    // rejects edits between chunks. Other callers retain the existing snapshot.
+    if (bounded) { yield* this._orderedStorageEntries(); return; }
     const blocks = [...this.runs];
     for (const [row, p] of this.points) blocks.push({ start: row, end: row, ...p });
     blocks.sort((a, b) => a.seq - b.seq);
     for (const block of blocks) yield [block.start, block.value, block.end - block.start + 1];
+  }
+  *_orderedStorageEntries() {
+    this.readers++;
+    try {
+      for (const block of this.order) {
+        let row=block.start;
+        while(row<=block.end) {
+          const seq=block.seq+row-block.start, point=this.points.get(row);
+          if(point) {
+            if(point.seq===seq)yield[row,point.value,1];
+            row++;continue;
+          }
+          const run=this.runs[this._locate(row)];
+          if(run && run.start<=row && run.seq+row-run.start===seq) {
+            const end=Math.min(run.end,block.end);
+            yield[row,run.value,end-row+1];row=end+1;
+          } else row++;
+        }
+      }
+    } finally {this.readers--;}
   }
   /** sharedMapper는 좌표에 의존하지 않는 빈 셀 정규화에만 사용합니다. */
   *mapValues(mapper, sharedMapper) {

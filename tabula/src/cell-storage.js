@@ -1,7 +1,7 @@
 import { createJsonSizer, jsonStringSize } from './json-size.js';
 // 빈 셀 범위는 값/수식/메모가 없는 동일 서식만 묶는다. 좌표와 셀 수는 보존된다.
-export function* storedCellEntries(cells) {
-  if (cells.storageEntries) { yield* cells.storageEntries(); return; }
+export function* storedCellEntries(cells, options) {
+  if (cells.storageEntries) { yield* cells.storageEntries(options); return; }
   for (const [key, cell] of cells) { const at=key.indexOf(','); yield [+key.slice(0,at),+key.slice(at+1),cell,1]; }
 }
 export function serializeCells(cells, encode) {
@@ -35,10 +35,10 @@ export function* cellJsonParts(cells, encode) {
 // 1 Mi UTF-16 characters: about 2 MiB of JS text, at most 3 MiB of UTF-8 JSON.
 export const CELL_CHUNK_CHAR_LIMIT = 1 << 20;
 /** Keep one oversized cell intact; every other chunk is bounded by both count and text. */
-export function* storedCellChunks(cells, encode, size = 20000) {
+export function* storedCellChunks(cells, encode, size = 20000, options) {
   const measure=createJsonSizer(CELL_CHUNK_CHAR_LIMIT,{conservativeStrings:true}).size;
   let chunk=[],chars=2;
-  for(const [r,c,cell,count] of storedCellEntries(cells)) {
+  for(const [r,c,cell,count] of storedCellEntries(cells,options)) {
     const data=encode(cell);
     let entryChars=80; // Coordinates, counts, brackets, property separators, and comma.
     for(const key in data)if(Object.hasOwn(data,key)&&data[key]!==undefined) {

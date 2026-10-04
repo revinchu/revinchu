@@ -184,3 +184,53 @@ test('seekable file writer keeps exact >4GiB positions and extent without alloca
   const result=await writeFileHandle(handle,async sink=>{for(let i=0;i<5120;i++)await sink.write(chunk);await sink.seek(size-3);await sink.write(Uint8Array.from([1,2,3]));await sink.seek(0);await sink.write(Uint8Array.of(9));});
   assert.equal(result.bytesWritten,size);assert.equal(handle.stats().extent,size);assert.equal(handle.stats().closes,1);
 });
+
+
+function deferred() { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
+
+test('취소는 멈춘 ReadableStream 읽기와 멈춘 cancel 콜백을 기다리지 않는다', { timeout: 2000 }, async () => {
+  const started = deferred(), abort = new AbortController(), reason = new Error('사용자 취소');
+  let cancelled = 0;
+  const stream = new ReadableStream({ pull() { started.resolve(); return new Promise(() => {}); }, cancel(value) { assert.equal(value, reason); cancelled++; return new Promise(() => {}); } }, { highWaterMark: 0 });
+  const handle = target(), saving = writeFileHandle(handle, stream, { signal: abort.signal });
+  await started.promise; abort.abort(reason);
+  await assert.rejects(saving, error => error === reason);
+  assert.equal(cancelled, 1); assert.equal(stream.locked, false); assert.equal(handle.log.aborts, 1); assert.equal(handle.log.closes, 0);
+});
+
+test('취소는 멈춘 비동기 iterator를 반환시키며 늦게 도착한 데이터를 기록하지 않는다', { timeout: 2000 }, async () => {
+  const started = deferred(), next = deferred(), abort = new AbortController(); let returned = 0;
+  const source = { [Symbol.asyncIterator]() { return this; }, next() { started.resolve(); return next.promise; }, return() { returned++; return new Promise(() => {}); } };
+  const handle = target(), saving = writeFileHandle(handle, source, { signal: abort.signal });
+  await started.promise; abort.abort(); await assert.rejects(saving, { name: 'AbortError' });
+  next.resolve({ value: new Uint8Array([1, 2]), done: false }); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(returned, 1); assert.equal(handle.log.writes, 0); assert.equal(handle.log.aborts, 1); assert.equal(handle.log.closes, 0);
+});
+
+test('중단한 sink producer의 늦은 쓰기는 거부되고 저장을 확정하지 않는다', { timeout: 2000 }, async () => {
+  const started = deferred(), later = deferred(), abort = new AbortController(), reason = new Error('중단'); let lateError;
+  const handle = target(), saving = writeFileHandle(handle, async sink => {
+    started.resolve(); await later.promise;
+    try { await sink.write(new Uint8Array([1])); } catch (error) { lateError = error; }
+  }, { signal: abort.signal });
+  await started.promise; abort.abort(reason); await assert.rejects(saving, error => error === reason);
+  later.resolve(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(lateError, reason); assert.equal(handle.log.closes, 0); assert.equal(handle.log.aborts, 1); assert.equal(handle.log.writes, 0);
+});
+
+test('디스크 실패 뒤 멈춘 스트림 cancel 정리는 원래 오류를 가리지 않는다', { timeout: 2000 }, async () => {
+  const reason = new Error('disk full'); let cancelled = 0;
+  const stream = new ReadableStream({ pull(controller) { controller.enqueue(new Uint8Array(1 << 20)); }, cancel() { cancelled++; return new Promise(() => {}); } }, { highWaterMark: 0 });
+  const handle = target({ writeError: reason });
+  await assert.rejects(writeFileHandle(handle, stream), error => error === reason);
+  assert.equal(cancelled, 1); assert.equal(stream.locked, false); assert.equal(handle.log.aborts, 1); assert.equal(handle.log.closes, 0);
+});
+
+
+test('최종 확정 알림은 마지막 데이터 검증 뒤 close 직전에 한 번 발생한다', async () => {
+  const handle=target();let calls=0;
+  await writeFileHandle(handle,new Uint8Array([1]),{onCommitting(){calls++;assert.equal(handle.log.writes,1);assert.equal(handle.log.closes,0);}});
+  assert.equal(calls,1);assert.equal(handle.log.closes,1);
+  const abort=new AbortController();abort.abort();
+  await assert.rejects(writeFileHandle(target(),new Uint8Array([1]),{signal:abort.signal,onCommitting(){assert.fail('취소 후 확정 알림 없음');}}));
+});

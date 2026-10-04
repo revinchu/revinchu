@@ -91,3 +91,17 @@ test('disk XLSX writes a sheet before producing the next and stops on disk error
   await assert.rejects(writeXlsxToSink(wb, {}, {async write() { throw Error('disk full'); }}), /disk full/);
   assert.equal(reachedSecond, false, 'disk failure must stop constructing later sheets');
 });
+
+for (const disk of [false, true]) test(`XLSX cancellation stops before later sheets: disk=${disk}`, async () => {
+  const wb = new Workbook({sheets:[{name:'A',cells:{'0,0':{raw:'first'}}},{name:'B',cells:{'0,0':{raw:'second'}}}]}), controller = new AbortController();
+  let second = false;
+  const getValue = wb.getValue.bind(wb);
+  wb.getValue = (si,r,c) => { if (si === 1) second = true; return getValue(si,r,c); };
+  const stop = () => controller.abort(new Error('cancel test'));
+  if (disk) await assert.rejects(writeXlsxToSink(wb, {signal:controller.signal}, {async write() { stop(); }}), /cancel test/);
+  else {
+    controller.abort(new Error('cancel test'));
+    await assert.rejects(writeXlsxBlobAsync(wb, {signal:controller.signal}), /cancel test/);
+  }
+  assert.equal(second, false);
+});

@@ -1738,7 +1738,13 @@ export function computePivot(input, d) {
     if (noLabel) return [];
     if (d.showHeaders === false) return Array.from({ length: labelCols }, (_, i) => text('', `rowHead:${i}`));
     if (layout === 'compact') return [text(Lr || onRows ? d.rowCaption ?? '행 레이블' : '', 'rowHead:0', !!(Lr || onRows) && d.rowCaption === '')];
-    return Array.from({ length: labelCols }, (_, i) => text(d.rows[i] === undefined ? (onRows && i === Lr ? d.dataCaption ?? '값' : '') : fcap(d.rows[i]), `rowHead:${i}`, d.rows[i] === undefined && onRows && i === Lr && d.dataCaption === ''));
+    return Array.from({ length: labelCols }, (_, i) => {
+      // 행 필드가 하나면 테이블·개요 형식에서도 Excel의 사용자 행 캡션을 표시합니다.
+      const customRow = Lr === 1 && i === 0 && d.rowCaption !== undefined && d.rowCaption !== null;
+      const valueHead = d.rows[i] === undefined && onRows && i === Lr;
+      const caption = customRow ? d.rowCaption : d.rows[i] === undefined ? (valueHead ? d.dataCaption ?? '값' : '') : fcap(d.rows[i]);
+      return text(caption, `rowHead:${i}`, customRow && caption === '' || valueHead && d.dataCaption === '');
+    });
   };
   if (hasColHead) {
     // 열 필드가 있으면 맨 위에 '값 이름 | 열 레이블' 행 (값 필드만 여러 개면 생략)

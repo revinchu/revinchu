@@ -1,6 +1,7 @@
 import { isFileSaveSource, writeFileHandle } from './file-save.js';
 import { isLargeLocalWorkbook } from './local-storage-size.js';
 import { cachedSlicerItems, applyCachedSlicerSelection } from './slicer-cache.js';
+import { pivotFieldSourceIndex, pivotFieldItemModel, pivotItemSelection, slicerPickValues } from './pivot-field-items.js';
 import { applySlicerSettings } from './slicer-settings.js';
 import { createDocumentOpenGate, isDocumentOpenCancelled } from './document-session.js';
 import { createRecoveryMarker, parseRecoveryMarker, recoveryCheckpoint, markRecoveryPending, markRecoverySaved, markRecoveryFailed, canUpdateRecoveryMarker, selectRecoveryMarker, recoveryDecision } from './document-recovery.js';
@@ -7677,7 +7678,8 @@ const sortItems = (entries) => entries.sort((a, b) => {
 function slicerModel(sl) {
   const m = slicerModelRaw(sl);
   if (!m.items?.length) return m;
-  let items = m.items;
+  const allItems = m.items;
+  let items = sl.source?.kind === 'pivot' && sl.showDeleted !== true ? allItems.filter(item => !item.deleted) : allItems;
   // 사용자 지정 목록(요일 · 월 · 분기 …): 모든 항목이 한 목록에 들어 있으면 그 순서
   if (sl.customList !== false) {
     const list = CUSTOM_LISTS.find((L) => items.every((it) => it.key === '' || L.includes(it.text)));
@@ -7690,7 +7692,7 @@ function slicerModel(sl) {
   if (sl.hideNoData) items = items.filter((it) => it.hasData || it.selected && m.filtered);
   else if (sl.noDataLast !== false) items = [...items.filter((it) => it.hasData), ...items.filter((it) => !it.hasData)];
   if (sl.markNoData === false) items = items.map((it) => ({ ...it, hasData: true }));
-  return { ...m, items };
+  return { ...m, items, allItems };
 }
 
 /** 슬라이서가 가리키는 대상과 항목 → { caption, items: [{ key, text, selected, hasData }], filtered, broken?, apply(values) } */
@@ -7736,12 +7738,10 @@ function slicerModelRaw(sl) {
     const def = targets[0].def;
     const rows = pivotSource(def);
     if (!rows) return { items: [], broken: '피벗 테이블 원본을 찾을 수 없습니다.' };
-    const header = headerNames(rows);
-    const fi = header.findIndex((h) => h.toLowerCase() === String(src.field).toLowerCase());
+    const fi = pivotFieldSourceIndex(rows, def, src.field);
     if (fi < 0) return { items: [], broken: `'${src.field}' 필드를 찾을 수 없습니다.` };
     const filters = def.filters ?? {};
-    const own = Object.keys(filters).find((k) => k.toLowerCase() === header[fi].toLowerCase());
-    const sel = own ? new Set(filters[own].map(itemIdentity)) : null;
+    const own = Object.keys(filters).find((k) => k.toLowerCase() === String(src.field).toLowerCase());
     // 항목 목록은 원본과 다른 필터가 같으면 다시 계산하지 않음 (슬라이서를 그릴 때마다 원본 전체를 도는 것 방지)
     const memoKey = `${fi}\u0001${JSON.stringify(Object.entries(filters).filter(([k]) => k !== own))}`;
     let memo = slicerMemo.get(rows.cube);
@@ -7764,23 +7764,24 @@ function slicerModelRaw(sl) {
       if (memo.size > 200) memo.clear();
       memo.set(memoKey, items);
     }
-    // 숫자 항목은 원본 열의 표시 형식으로 (날짜 46204 → 2026-07-01)
-    const sd = rows;
-    const colStyle = sd?.ref ? wb.styleAt(sd.si, Math.min(sd.ref.r1 + 1, sd.ref.r2), sd.ref.c1 + fi) : null;
-    const shown = (e) => (typeof e.v === 'number' && colStyle?.numFmt && colStyle.numFmt !== 'general' ? formatValue(e.v, colStyle, wb.date1904).text : e.key);
+    const model = pivotFieldItemModel(wb, def, src.field, { source: rows, currentItems: items });
     return {
-      items: items.map((e) => ({ key: e.key, v: e.v, text: shown(e), selected: !sel || sel.has(itemIdentity(e.key)), hasData: e.hasData })),
-      filtered: !!sel,
+      items: model.items.map(entry => ({ ...entry, key: entry.id })),
+      filtered: model.filtered,
+      preserveSelection: true,
       targets,
       apply: (values) => {
+        const choice = pivotItemSelection(model, values);
+        if (choice.unchanged) return;
+        values = choice.values;
         // 이 슬라이서에 연결된 모든 피벗 테이블(다른 시트 포함)에 같은 필터
         wb.transact(() => {
           for (const tg of slicerPivotTargets(src)) {
             const f0 = tg.def.filters ?? {};
             const nf = { ...f0 };
-            const k0 = Object.keys(f0).find((k) => k.toLowerCase() === header[fi].toLowerCase());
+            const k0 = Object.keys(f0).find((k) => k.toLowerCase() === String(src.field).toLowerCase());
             if (k0) delete nf[k0];
-            if (values) nf[header[fi]] = values;
+            if (values) nf[k0 ?? src.field] = values;
             putPivotDef(tg, { ...tg.def, filters: nf });
           }
         }, meta());
@@ -7878,17 +7879,7 @@ function slicerPick(id, key, additive) {
   if (!sl || slicerBlocked(sl, 'filter')) return;
   const m = slicerModel(sl);
   if (m.broken) return;
-  const all = m.items.map((i) => i.key);
-  let cur;
-  if (additive || sl.multi) {
-    cur = new Set(m.items.filter((i) => i.selected).map((i) => i.key));
-    if (cur.has(key)) cur.delete(key); else cur.add(key);
-    if (!cur.size) cur = new Set(all);
-  } else {
-    cur = new Set([key]);
-    if (m.filtered && m.items.filter((i) => i.selected).length === 1 && m.items.find((i) => i.key === key)?.selected) cur = new Set(all);
-  }
-  m.apply(cur.size === all.length ? null : all.filter((k) => cur.has(k)));
+  m.apply(slicerPickValues(m, key, additive || sl.multi));
   gv.layout();
   setMode();
 }
@@ -8909,7 +8900,7 @@ function pivotOptionsDialog(entry = pivotHere(), startTab = 0) {
       chk('printExpand', '피벗 테이블에 확장/축소 단추가 표시될 때 인쇄'), chk('printTitles', '인쇄 제목 설정 (각 페이지에 행 · 열 레이블 반복)'))],
     ['데이터', el('div', { class: 'opt-page' },
       t('피벗 테이블 데이터'), chk('autoRefresh', '원본 데이터가 바뀌면 자동 새로 고침 (WIXEL)'), chk('saveData', '파일에 원본 데이터 저장'), chk('enableDrill', '세부 정보 표시 사용 (값 셀 두 번 클릭)'), chk('refreshOnOpen', '파일을 열 때 데이터 새로 고침'),
-      t('데이터 원본에서 삭제된 항목 보존'), sel('missingItems', '필드당 반환할 항목 수', [['auto', '자동'], ['none', '없음'], ['max', '최대']]))],
+      t('데이터 원본에서 삭제된 항목 보존'), sel('missingItems', '필드당 반환할 항목 수', [['auto', '자동'], ['none', '없음'], ['max', '최대'], ...(/^\d+$/.test(String(v.missingItems)) ? [[String(v.missingItems), '사용자 지정 (' + v.missingItems + '개)']] : [])]))],
     ['대체 텍스트', el('div', { class: 'opt-page' }, txt('altTitle', '제목', 320), txt('altDesc', '설명', 320))],
   ];
   const tabBar = el('div', { class: 'opt-tabs' });
@@ -13055,24 +13046,12 @@ function calcItemDialog(entry) {
 }
 
 function pivotFieldItems(def, field) {
-  const src = pivotSource(def);
-  if (!src) return [];
-  const header = headerNames(src);
-  const i = header.findIndex((h) => h.toLowerCase() === String(field).toLowerCase());
-  if (i < 0) return [];
-  // 열 기반 엔진의 항목 사전 (행을 다시 훑지 않음)
-  return sortKeys([...src.cube.col(i).dim().keys]).map((k) => itemText(k));
+  return [...new Set(pivotFieldItemModel(wb, def, field).items.map(item => item.key))];
 }
-/** 피벗 항목 표시 글자: 숫자 항목은 원본 열의 표시 형식으로 (날짜 46279 → 2026-09-14) — 필터 키는 그대로 */
+
 function pivotItemLabeler(def, field) {
-  const src = pivotSource(def);
-  if (!src?.ref) return (t) => t;
-  const header = headerNames(src);
-  const i = header.findIndex((h) => h.toLowerCase() === String(field).toLowerCase());
-  if (i < 0) return (t) => t;
-  const st = wb.styleAt(src.si, Math.min(src.ref.r1 + 1, src.ref.r2), src.ref.c1 + i);
-  if (!st?.numFmt || st.numFmt === 'general') return (t) => t;
-  return (t) => (t !== '' && Number.isFinite(Number(t)) ? formatValue(Number(t), st, wb.date1904).text : t);
+  const labels = new Map(pivotFieldItemModel(wb, def, field).items.map(item => [itemIdentity(item.key), item.text]));
+  return value => labels.get(itemIdentity(value)) ?? String(value);
 }
 
 // 검색을 지워 원래 체크 상태로 돌아가는 동작을 키보드와 포인터에서 공유한다.
@@ -13094,11 +13073,19 @@ function openPivotFilterMenu(entry, kind, field, anchorEl) {
   const upd = (patch) => { if (!canApply()) return; closeMenus(); setPivotDef(entry, { ...pivotDefV2(entry.def), ...patch }); refreshPivotPane(true); focusGrid(); };
   const render = (draft, query = '') => {
     const def = pivotDefV2(entry.def);
-    const items = pivotFieldItems(def, cur);
-    const formatItem = pivotItemLabeler(def, cur), label = value => value === '' ? '(비어 있음)' : formatItem(value);
-    const allowed = draft ?? def.filters?.[cur];
-    const canonical = new Map(items.map(value => [itemIdentity(value), value]));
-    const sel = allowed ? new Set(allowed.map(value => canonical.get(itemIdentity(value)) ?? value)) : null;
+    const model = pivotFieldItemModel(wb, def, cur);
+    const items = model.items.map(item => item.v), byValue = new Map(model.items.map(item => [item.v, item]));
+    const label = value => byValue.get(value)?.text ?? String(value);
+    const sel = draft ? new Set(draft) : model.filtered ? new Set(model.items.filter(item => item.selected).map(item => item.v)) : null;
+    const applySelection = chosen => {
+      const choice = pivotItemSelection(model, chosen === null ? null : chosen.map(itemIdentity));
+      const priorMulti = def.pageMulti?.[cur] ?? (model.filtered && model.selected.size > 1);
+      if (choice.unchanged && (kind !== 'page' || priorMulti === !!multiPage)) { closeMenus(); focusGrid(); return; }
+      const nf = { ...(def.filters ?? {}) };
+      delete nf[model.field];
+      if (choice.values !== null) nf[model.field] = choice.values;
+      upd({ filters: nf, ...(kind === 'page' ? { pageMulti: { ...(def.pageMulti ?? {}), [cur]: !!multiPage } } : {}) });
+    };
     let confirm = null;
     const selection = filterChecklist(items, sel, label, {inlineAdd:true,onChange:ready=>{if(confirm)confirm.disabled=!ready||!canApply(true);}});
     const { search, list } = selection;
@@ -13116,8 +13103,7 @@ function openPivotFilterMenu(entry, kind, field, anchorEl) {
         const validPick = () => visible.length > 0 && visible.includes(pick);
         const apply1 = () => {
           if (!validPick() || !canApply()) return;
-          const nf = { ...(def.filters ?? {}) }; if (pick === null) delete nf[cur]; else nf[cur] = [pick];
-          upd({ filters: nf, ...(kind === 'page' ? {pageMulti:{...(def.pageMulti??{}),[cur]:!!multiPage}} : {}) });
+          applySelection(pick === null ? null : [pick]);
         };
         const confirm = el('button', {class:'btn primary','data-access-key':'none',onclick:apply1}, '확인');
         const draw = () => {
@@ -13167,10 +13153,7 @@ function openPivotFilterMenu(entry, kind, field, anchorEl) {
       if (!selection.canApply() || !canApply()) return;
       const chosen = selection.result();
       if (!chosen.length) { toast('항목을 하나 이상 선택하세요.'); return; }
-      const nf = { ...(def.filters ?? {}) };
-      const chosenSet = new Set(chosen);
-      if (items.every((item) => chosenSet.has(item))) delete nf[cur]; else nf[cur] = chosen;
-      upd({ filters: nf, ...(kind === 'page' ? {pageMulti:{...(def.pageMulti??{}),[cur]:!!multiPage}} : {}) });
+      applySelection(chosen);
     };
     confirm = el('button', {class:'btn primary','data-access-key':'none',onclick:ok}, '확인');
     confirm.disabled = !selection.canApply() || !canApply(true);
@@ -14579,18 +14562,19 @@ async function saveWithPicker(fileName, make) {
   const target = await pickSaveTarget(fileName);
   if (!target) return null;
   if (!current()) { toast('문서가 바뀌어 저장을 취소했습니다. 현재 문서에서 다시 저장하세요.'); return null; }
-  const prog = progressOverlay(`'${fileName}' 저장 중`);
+  const controller = new AbortController();
+  const prog = progressOverlay(`'${fileName}' 저장 중`, null, () => controller.abort());
   exportBusy++;
-  const assertCurrent = () => { if (!current()) throw new Error('저장 중 문서가 변경되었습니다. 현재 문서에서 다시 저장하세요.'); };
+  const assertCurrent = () => { controller.signal.throwIfAborted(); if (!current()) throw new Error('저장 중 문서가 변경되었습니다. 현재 문서에서 다시 저장하세요.'); };
   try {
-    const source = await make({ directToFile:!!target.handle, isCurrent:current, assertCurrent, onProgress:(p,msg) => prog.set(p, msg ?? '파일 만드는 중') });
+    const source = await make({ directToFile:!!target.handle, signal:controller.signal, isCurrent:current, assertCurrent, onProgress:(p,msg) => prog.set(p, msg ?? '파일 만드는 중') });
     if (!source) return null;
     assertCurrent();
     if (!isFileSaveSource(source) || source instanceof Blob && !source.size) throw new Error('저장할 파일을 생성하지 못했습니다.');
     prog.set(source instanceof Blob ? .99 : .02, '파일 쓰는 중');
-    await writeSaveTarget(target, source, { assertCurrent });
+    await writeSaveTarget(target, source, { signal:controller.signal, assertCurrent, onCommitting:() => prog.finish() });
     return target;
-  } catch (err) { alertDialog('파일 저장', `저장하지 못했습니다: ${err.message}`); return null; }
+  } catch (err) { if (controller.signal.aborted) toast('파일 저장을 취소했습니다.'); else alertDialog('파일 저장', `저장하지 못했습니다: ${err.message}`); return null; }
   finally { exportBusy--; prog.close(); }
 }
 
@@ -14669,25 +14653,27 @@ async function exportXlsx(name = docName, kind = null) {
   if (!target) return null;
   if (wb !== savingBook || docId !== savingId || savingBook.version !== savingRevision) { toast('문서가 바뀌어 저장을 취소했습니다. 현재 문서에서 다시 저장하세요.'); return null; }
   // 큰 문서는 나눠서 만들고 진행 표시 (압축도 함께 해서 파일이 작아짐)
-  const prog = progressOverlay(`'${fileName}' 저장 중`);
+  const controller = new AbortController();
+  const prog = progressOverlay(`'${fileName}' 저장 중`, null, () => controller.abort());
   exportBusy++;
   if (opts.userName) wb.props = { ...(wb.props ?? {}), lastModifiedBy: opts.userName, creator: wb.props?.creator || opts.userName };
   try {
     await snapshotLinkedPictures();
+    controller.signal.throwIfAborted();
     if (wb !== savingBook || docId !== savingId) throw new Error('문서가 바뀌었습니다. 현재 문서에서 다시 저장하세요.');
     if (savingBook.calculation?.calcOnSave !== false) savingBook.calculateNow();
     const savingVersion = savingBook.version;
-    const pictureBook = await preparePictureExport(savingBook, count => prog.set(.05, `그림 효과 준비 중 (${count}개)`));
+    const pictureBook = await preparePictureExport(savingBook, count => { controller.signal.throwIfAborted(); prog.set(.05, `그림 효과 준비 중 (${count}개)`); });
     if (wb !== savingBook || docId !== savingId) throw new Error('문서가 바뀌었습니다. 현재 문서에서 다시 저장하세요.');
-    const assertCurrent = () => { if (wb !== savingBook || docId !== savingId || savingBook.version !== savingVersion) throw new Error('저장 중 문서가 변경되었습니다. 다시 저장하세요.'); };
+    const assertCurrent = () => { controller.signal.throwIfAborted(); if (wb !== savingBook || docId !== savingId || savingBook.version !== savingVersion) throw new Error('저장 중 문서가 변경되었습니다. 다시 저장하세요.'); };
     assertCurrent();
-    const exportOptions = { activeSheet: savingSheet, fileName: target.name, kind: k };
+    const exportOptions = { activeSheet: savingSheet, fileName: target.name, kind: k, signal:controller.signal, assertCurrent };
     const progress = st => { assertCurrent(); prog.set(st.p, st.msg); };
     const source = target.handle
       ? sink => writeXlsxToSink(pictureBook, exportOptions, sink, progress)
       : (await writeXlsxBlobAsync(pictureBook, exportOptions, progress)).slice(0, undefined, XLSX_KINDS[k].mime);
     assertCurrent();
-    const saved = await writeSaveTarget(target, source, { assertCurrent });
+    const saved = await writeSaveTarget(target, source, { signal:controller.signal, assertCurrent, onCommitting:() => prog.finish() });
     prog.close();
     if (wb === savingBook && docId === savingId && /^xls[xm]$/.test(k)) {
       fileHandle = target.handle; remoteDoc = false; clearTimeout(serverTimer);
@@ -14697,7 +14683,8 @@ async function exportXlsx(name = docName, kind = null) {
     return target;
   } catch (err) {
     prog.close();
-    alertDialog('WIXEL', `저장하지 못했습니다: ${err.message}`);
+    if (controller.signal.aborted) toast('파일 저장을 취소했습니다.');
+    else alertDialog('WIXEL', `저장하지 못했습니다: ${err.message}`);
   } finally {
     exportBusy--;
   }
@@ -15010,15 +14997,23 @@ async function loadWorkbookAsync(data, name, activeSheet, prog, request = beginD
 }
 
 /** 진행 표시 창 */
-function progressOverlay(title, request = null) {
+function progressOverlay(title, request = null, onCancel = null) {
   const bar = el('div', { class: 'lp-bar' });
-  const msg = el('div', { class: 'lp-msg' }, '');
-  const box = el('div', { class: 'load-progress', role: 'progressbar' }, el('div', { class: 'lp-box' }, el('div', { class: 'lp-title' }, title), msg, el('div', { class: 'lp-track' }, bar)));
+  const msg = el('div', { class: 'lp-msg' }, '준비 중…');
+  const track = el('div', { class:'lp-track', role:'progressbar', 'aria-label':title, 'aria-valuemin':0, 'aria-valuemax':100, 'aria-valuenow':0 }, bar);
+  let cancelling = false;
+  const cancel = onCancel ? el('button', { type:'button', class:'btn', onclick:() => {
+    if (cancel.disabled) return;
+    cancelling = true; cancel.disabled = true; msg.textContent = '저장 취소 중…'; onCancel();
+  } }, '저장 취소') : null;
+  const box = el('div', { class: 'load-progress' }, el('div', { class: 'lp-box' }, el('div', { class: 'lp-title' }, title), msg, track,
+    cancel ? el('div', { class:'lp-actions' }, cancel) : null));
   document.body.append(box);
   const progress = { box };
   if (request) { if (request.isCurrent()) pendingOpenProgress.add(progress); else box.remove(); }
   return {
-    set(p, m) { bar.style.width = `${Math.round(Math.max(0, Math.min(1, p)) * 100)}%`; if (m) msg.textContent = m; },
+    set(p, m) { if (cancelling) return; const percent = Math.round(Math.max(0, Math.min(1, p)) * 100); bar.style.width = `${percent}%`; track.setAttribute('aria-valuenow', percent); if (m) { msg.textContent = m; track.setAttribute('aria-valuetext', m); } },
+    finish() { if (cancel) cancel.disabled = true; msg.textContent = '파일 저장 마무리 중'; },
     close() { box.remove(); pendingOpenProgress.delete(progress); },
   };
 }
@@ -15849,7 +15844,7 @@ async function recoveryCandidate(marker, pointer) {
   for (const key of keys) {
     try {
       const actual = await idbGet(key);
-      if (actual && ([2,3,4].includes(actual.v) || actual.workbook)) {
+      if (actual && ([2,3,4,5].includes(actual.v) || actual.workbook)) {
         // Prefer this tab's complete document. Its first commit may have preceded the pointer update.
         if (actual.docId === marker?.docId && recoveryDecision(marker, descriptor).action !== 'restore') {
           return { descriptor:actual, large:true, storageKey:key };
@@ -16018,7 +16013,7 @@ async function saveBigToIdb(allowConflictFork = true) {
 }
 
 function loadBigFromIdb(onProgress, key = STORAGE_KEY) {
-  return loadLargeWorkbook(key, onProgress);
+  return loadLargeWorkbook(key, onProgress, {prepareCells:true});
 }
 
 function loadFromStorage() {
@@ -19939,6 +19934,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['대형 저장 안정성과 취소', ['대형 문서 자동 보관을 작은 조각으로 나누어 셀·열 데이터·피벗 캐시를 한꺼번에 복사하는 메모리를 줄였습니다. 저장 중 취소하면 이전 저장본을 유지합니다.', '파일 저장 진행 창에서 취소할 수 있으며, 디스크에 저장을 확정하는 동안은 완료를 기다립니다. Excel 저장 시 과거 피벗 필터 항목·선택·보고서 연결·항목 보존 옵션을 유지합니다. 필터 결과가 빈 피벗을 저장하면 Excel에서 파일이 열리지 않던 오류를 수정했습니다. 그룹 안의 같은 그림을 중복 저장하지 않고, 크기가 0으로 축소된 그룹과 확장자가 .bin인 EMF 그림도 보존합니다.']],
   ['로컬 파일 순차 저장', ['시스템 저장 창을 지원하는 브라우저에서는 WIXEL·Excel·CSV·HTML을 조각씩 디스크에 기록합니다. 저장 중 오류나 문서 변경이 생기면 미완성 저장을 취소합니다.', 'XLSB 수식 해석 임시 캐시를 제한하고, Excel 테마 색상과 가져온 인쇄 용지 기본값을 보정했습니다.']],
   ['슬라이서 선택 시 화면 키보드 방지', ['슬라이서·시간 표시 막대·차트·사진을 선택하거나 메뉴를 닫을 때 숨은 셀 입력창으로 초점이 이동하지 않도록 했습니다. 모바일 최적화와 외부 키보드 설정에 관계없이 적용하며, 셀·수식의 명시적 편집은 유지합니다.']],
   ['대형 문서 파일 저장과 게시', ['WIXEL 파일과 온라인 게시본을 나누어 압축하고, Excel 파일도 시트와 피벗 캐시를 순서대로 압축하여 저장 시 메모리 사용을 줄였습니다. 새 WIXEL 저장본은 업데이트된 위셀에서 열 수 있으며 이전 저장 형식도 읽습니다.', 'HTML 다운로드는 인쇄 페이지 수와 별도로 생성하며, 큰 시트는 한 파일 안에서 행·열 구간을 넘겨 확인합니다.', '가져온 문서의 피벗과 수식 연결을 정리한 뒤 편집 화면을 열어, 저장 중 늦은 계산 때문에 저장이 취소되는 문제를 수정했습니다.', '숫자 표시 형식의 의미 있는 공백과 XLSB 사용자 피벗 스타일 이름을 보존합니다. 잘못 잘린 서식 코드 때문에 Excel이 저장 파일을 거부하는 문제를 수정했습니다.', '온라인 문서 한도를 압축 게시 형식 기준 32MiB로 조정했으며, 서버 문서 열기·게시 갱신 중 이전 응답이 현재 편집 상태를 덮어쓰지 않도록 했습니다.']],

@@ -103,3 +103,16 @@ test('one array anchor with large cached spill values routes to IDB before JSON 
  cell.dirty=true;assert.equal(isLargeLocalWorkbook(w),true);
  cell.cachedArray={h:2,w:1,values:[0,0,10,1,0,20]};assert.equal(isLargeLocalWorkbook(w),false);
 });
+
+
+test('historical pivot items alone route to IDB and stop at the payload threshold',()=>{
+ const shared=['한글😀','x'.repeat(2000001)];
+ Object.defineProperty(shared,2,{get(){throw Error('must stop before later cache items');}});
+ const pivotCacheItems={cache:{fields:[{name:'분류',shared}]}};
+ pivotCacheItems.toJSON=()=>{throw Error('must not serialize pivot metadata');};
+ assert.equal(isLargeLocalWorkbook({...book(),pivotCacheItems}),true);
+ const small={cache:{fields:[{name:'분류',shared:['현재','과거',null,true,{error:'#N/A'}]}]}};
+ assert.equal(isLargeLocalWorkbook({...book(),pivotCacheItems:small}),false);
+ const combined={first:{fields:[{name:'A',shared:['x'.repeat(1100000)]}]},second:{fields:[{name:'B',shared:['y'.repeat(1100000)]}]}};
+ assert.equal(isLargeLocalWorkbook({...book(),pivotCacheItems:combined}),true);
+});

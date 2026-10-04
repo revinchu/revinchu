@@ -189,3 +189,17 @@ test('reader bounds compressed Blob input independently of native stream chunk s
   assert.equal(new Workbook(data.workbook).sheets[0].cells.getRC(0,0).raw,raw);
   assert.ok(reads>=3);assert.equal(maxRead,65536);
 });
+
+
+for(const gzip of [false,true])test('WIXEL exact formula memo preserves independent cells and oversized text formulas: '+gzip,async()=>{
+  const raw='=IF("한글😀"="한글😀",ROW()+1,0)',huge='="'+'한글😀'.repeat(530000)+'"',cells={};
+  for(let r=0;r<300;r++)cells[r+',0']={raw,cached:r+2,comment:'note'+r,style:{fill:r%2?'#223344':'#556677'}};
+  cells['0,1']={raw,style:{numFmt:'text'},inputType:'text'};cells['1,1']={raw:huge,inputType:'text'};
+  const book=new Workbook({sheets:[{name:'Repeat',fileValues:true,cells},{name:'Next',fileValues:true,cells:{'0,0':{raw,cached:99,comment:'separate'}}}]}),original=book.serialize();
+  const file=await writeWixelFile(book,meta,{gzip}),loaded=await readWixelFile(file),first=loaded.workbook.sheets[0].cells.getRC(0,0),second=loaded.workbook.sheets[0].cells.getRC(1,0);
+  assert.notEqual(first,second);assert.equal(first.raw,raw);assert.equal(second.raw,raw);assert.equal(first.cached,2);assert.equal(second.cached,3);assert.equal(first.comment,'note0');assert.equal(second.comment,'note1');
+  assert.equal(loaded.workbook.sheets[0].cells.getRC(1,1).raw,huge);assert.equal(loaded.workbook.sheets[1].cells.getRC(0,0).cached,99);
+  const back=new Workbook(loaded.workbook);assert.deepEqual(back.serialize(),original);assert.equal(back.getValue(0,0,1),raw);assert.equal(back.getValue(0,1,1),huge);
+  back.transact(()=>back.setInput(0,0,0,'=123'));assert.equal(back.getRaw(0,1,0),raw);assert.equal(back.getCell(0,1,0).comment,'note1');back.undo();assert.equal(back.getRaw(0,0,0),raw);back.redo();assert.equal(back.getRaw(0,0,0),'=123');
+  const again=new Workbook((await readWixelFile(await writeWixelFile(back,meta,{gzip}))).workbook);assert.deepEqual(again.serialize(),back.serialize());assert.deepEqual(book.serialize(),original);
+});

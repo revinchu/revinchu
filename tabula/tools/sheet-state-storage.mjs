@@ -26,7 +26,7 @@ try{for(const name of names){
    w.cellRunChunks=function*(i,...args){for(const chunk of chunks(i,...args)){counts.rows=(counts.rows??0)+chunk.length;counts.chunks=(counts.chunks??0)+1;yield chunk;}};
    const save=async()=>{counts={};const t=performance.now(),saved=await saveLargeWorkbook(key,w,{docName:'합성 저장',si:1});return{manifest:saved.manifest,rows:counts.rows??0,chunks:counts.chunks??0,ms:+(performance.now()-t).toFixed(2)};};
    const load=async()=>new Workbook((await loadLargeWorkbook(key)).workbook);
-   const first=await save(),prior=first.manifest,record=await idbGet(prior.sheets[0].key);let metrics;
+   const first=await save(),prior=first.manifest,record=await idbGet(prior.sheets[0].key),priorKeys=(await idbKeys(key+'#g#')).sort();let metrics;
    if(name.startsWith('300000')){
     const idle=await save();eq(idle.rows,0,'무변경 저장');
     w.transact(()=>w.setSheetProp(0,'state','hidden'));const hidden=await save();eq(hidden.rows,0,'숨김 셀 순회 없음');eq(hidden.chunks,0,'숨김 gzip 없음');eq(hidden.manifest.sheets[1].key,prior.sheets[1].key,'다른 시트 재사용');ok(hidden.manifest.sheets[0].key!==prior.sheets[0].key,'새 메타 레코드');
@@ -38,7 +38,7 @@ try{for(const name of names){
    }else if(name.startsWith('other')){
     w.transact(()=>w.setSheetProp(0,'state','hidden'));w.sheets[0].zoom=175;const next=await save();eq(next.rows,n,'state 이외 메타는 기존 경로');const loaded=await load();eq(loaded.sheets[0].zoom,175,'확대율 보존');eq(loaded.sheets[0].state,'hidden','상태 보존');
    }else if(withParts){
-    eq(record.partKeys.length,2,'16MB 분할 생성');if(name.startsWith('without'))Object.defineProperty(navigator,'locks',{value:undefined,configurable:true});
+    eq(record.blocks[0].cols[0].numParts.parts.length,Math.ceil(2100000*8/(1<<20)),'1MiB 분할 생성');for(const part of record.blocks[0].cols[0].numParts.parts)ok((await idbGet(part)).byteLength<=1<<20,'배열 조각 예산');if(name.startsWith('without'))Object.defineProperty(navigator,'locks',{value:undefined,configurable:true});
     w.transact(()=>w.setSheetProp(0,'state','veryHidden'));const next=await save();eq(next.rows,0,'분할 블록 변경 없음');const now=await idbGet(next.manifest.sheets[0].key);eq(now.partKeys,record.partKeys,'기존 분할 키 재사용');for(const k of record.partKeys)ok(await idbGet(k),'참조 중 분할 보존');
     eq(!!(await idbGet(prior.sheets[0].key)),name.startsWith('without'),'잠금 있으면 이전 메타만 GC');const loaded=await load();eq(loaded.sheets[0].state,'veryHidden','매우 숨김 보존');eq(loaded.sheets[0].blocks[0].cols[0].num[0],123,'첫 블록 값');eq(loaded.sheets[0].blocks[0].cols[0].num.at(-1),987,'마지막 블록 값');
    }else{
@@ -51,7 +51,7 @@ try{for(const name of names){
     let code=null;try{await save();}catch(e){code=e?.code||e?.name||'REJECTED_NULL';}
     ok(hit,'재사용 메타 저장 중 고장 주입');ok(code,'저장 실패가 보고됨');if(name.startsWith('state'))eq(code,'BIG_SAVE_ABORT','state 변경 감지');if(name.startsWith('manifest'))eq(code,'IDB_CONFLICT','CAS 충돌 감지');
     const current=await idbGet(key);eq(current.generation,name.startsWith('manifest')?'synthetic-other-tab':prior.generation,'이전 또는 다른 writer manifest 보존');eq((await load()).sheets[0].state,undefined,'부분 숨김이 복구에 섞이지 않음');eq((await load()).getValue(0,0,0),0,'이전 셀 보존');
-    eq((await idbKeys(key+'#g#')).sort(),prior.sheets.map(x=>x.key).sort(),'미완료 메타 정리');
+    eq((await idbKeys(key+'#g#')).sort(),priorKeys,'미완료 메타 정리');
    }
    return{name,checks,metrics};
   },name);

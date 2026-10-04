@@ -2,6 +2,7 @@ import { shiftStoredCells, moveStoredCells } from './cell-transforms.js';
 import { arrayCache, arrayCacheValue, spillOffsets } from './array-cache.js';
 import { blockJsonParts } from './block-storage.js';
 import { jsonPartsBlob } from './snapshot-blob.js';
+import { jsonValueParts } from './json-parts.js';
 import { serializeCells, cellJsonParts, storedCellEntries, storedCellChunks } from './cell-storage.js';
 import { pivotSnapshotJsonParts } from './pivot-snapshot-storage.js';
 import { restorePivotSnapshot } from './pivot-cache-data.js';
@@ -24,6 +25,7 @@ import { CellImage, compareSortValues } from './fxcore.js';
 import { DepGraph, cellNum } from './depgraph.js';
 import { CellMap, getSharedBlankCell } from './cellmap.js';
 import { createScalarCellMemo } from './scalar-cell-memo.js';
+import { takePreparedWorkbook } from './prepared-sheet-data.js';
 import { formulaSupportIssue, calculationStatus } from './calculation-state.js';
 import { pushAll, CLOSED_BOOK, ERR_BY_CODE } from './fxcore.js';
 
@@ -3017,23 +3019,26 @@ export class Workbook {
 
   // ─────────── 저장 / 불러오기 ───────────
   /** 시트 밖의 통합 문서 속성 (저장용: 기본 글꼴 · 기본 서식 · 테마 · 매크로 · 이름) */
-  bookMeta(includeSnapshots = true) {
+  bookMeta(includeSnapshots = true, includeCacheItems = true, {shareData=false} = {}) {
+    // Internal save validation only reads this view; public callers keep copies.
+    const copy = value => shareData ? value : structuredClone(value);
     return {
       ...(includeSnapshots && this.pivotSnapshots?.size ? { pivotSnapshots: this.snapshotData() } : {}),
+      ...(includeCacheItems && this.pivotCacheItems ? { pivotCacheItems: this.pivotCacheItems } : {}),
       ...(this.date1904 ? { date1904: true } : {}),
-      ...(this.calculation ? { calculation: structuredClone(this.calculation) } : {}),
+      ...(this.calculation ? { calculation: copy(this.calculation) } : {}),
       ...(this.vba ? { vba: this.vba } : {}),
       ...(this.externals?.length ? { externals: this.externals } : {}),
-      ...(this.defaultFont ? { defaultFont: { ...this.defaultFont } } : {}),
-      ...(this.baseStyle ? { baseStyle: structuredClone(this.baseStyle) } : {}),
-      ...(this.cellStyles?.length ? { cellStyles: structuredClone(this.cellStyles) } : {}),
-      ...(this.objectStyles ? { objectStyles: structuredClone(this.objectStyles) } : {}),
-      ...(this.theme ? { theme: [...this.theme] } : {}),
+      ...(this.defaultFont ? { defaultFont: shareData ? this.defaultFont : { ...this.defaultFont } } : {}),
+      ...(this.baseStyle ? { baseStyle: copy(this.baseStyle) } : {}),
+      ...(this.cellStyles?.length ? { cellStyles: copy(this.cellStyles) } : {}),
+      ...(this.objectStyles ? { objectStyles: copy(this.objectStyles) } : {}),
+      ...(this.theme ? { theme: shareData ? this.theme : [...this.theme] } : {}),
       ...(this.themeXml ? { themeXml: this.themeXml } : {}),
       ...(this.themeName ? { themeName: this.themeName } : {}),
-      ...(this.themeFonts ? { themeFonts: structuredClone(this.themeFonts) } : {}),
-      ...(this.themeEffects ? { themeEffects: structuredClone(this.themeEffects) } : {}),
-      ...(this.props && Object.keys(this.props).length ? { props: structuredClone(this.props) } : {}),
+      ...(this.themeFonts ? { themeFonts: copy(this.themeFonts) } : {}),
+      ...(this.themeEffects ? { themeEffects: copy(this.themeEffects) } : {}),
+      ...(this.props && Object.keys(this.props).length ? { props: copy(this.props) } : {}),
       ...(this.names.length ? { names: this.names.map(({ _ast, _text, ...n }) => ({ ...n })) } : {}),
     };
   }
@@ -3093,7 +3098,8 @@ export class Workbook {
   serializeBlob() {
     const book = this;
     function* parts() {
-      yield JSON.stringify({ version: 1, ...book.bookMeta(false) }).slice(0, -1);
+      yield JSON.stringify({ version: 1, ...book.bookMeta(false, false) }).slice(0, -1);
+      if (book.pivotCacheItems) { yield ',"pivotCacheItems":'; yield* jsonValueParts(book.pivotCacheItems); }
       yield* pivotSnapshotJsonParts(book.snapshotData());
       yield ',"sheets":[';
       for (let si = 0; si < book.sheets.length; si++) {
@@ -3132,9 +3138,9 @@ export class Workbook {
   }
 
   /** v4 저장용: [행, 열, 같은 빈 셀 개수, 저장 셀]. 일반 셀은 개수 1. */
-  *cellRunChunks(si, size = 20000, { shareStyle = false } = {}) {
+  *cellRunChunks(si, size = 20000, { shareStyle = false, bounded = false } = {}) {
     const encode = shareStyle ? cell => encodeStoredCell(cell, undefined, false, true) : cellData;
-    yield* storedCellChunks(this.sheets[si].cells, encode, size);
+    yield* storedCellChunks(this.sheets[si].cells, encode, size, { bounded });
   }
 
   /** 시트의 셀을 size 개씩 [[키, 저장 형태], …] 로 (큰 문서를 나눠 저장) */
@@ -3154,6 +3160,7 @@ export class Workbook {
 
   /** 복원 단계: 셀이 많으면 중간중간 진행률(0~1)을 내보냄. 끝날 때까지 통합 문서는 바뀌지 않음 */
   *restoreSteps(data) {
+    const preparedSheets = takePreparedWorkbook(data);
     const date1904 = data.date1904 === true;
     const total = data.sheets.reduce((n, s) => n + (s.cells instanceof Map || s.cells instanceof CellMap ? s.cells.size : 0), 0) || 1;
     let done = 0;
@@ -3161,7 +3168,11 @@ export class Workbook {
     for (const s of data.sheets) {
       const sheet = newSheet(s.name);
       const owned = s.cells instanceof Map || s.cells instanceof CellMap;
-      if (owned) {
+      const preparedSheet = preparedSheets?.[sheets.length];
+      if (preparedSheet) {
+        sheet.cells=s.cells;done+=s.cells.size;s.cells=null;
+        if(preparedSheet.cachedArrays)sheet._hasCachedArrays=true;
+      } else if (owned) {
         // A previous sheet cannot exhaust this sheet's bounded sharing budget.
         const shareScalar = createScalarCellMemo(), prepared = new WeakMap();
         const prepareCell = (data, r, c) => {
@@ -3208,10 +3219,15 @@ export class Workbook {
         const cell = makeCellRC(data, r, c, date1904);
         if (cell) { sheet.cells.setRunRC(r, c, count, cell); if (cell.cachedArray) sheet._hasCachedArrays = true; }
       }
-      for (const p of SHEET_PROPS) if (s[p] !== undefined && s[p] !== null) sheet[p] = structuredClone(s[p]);
+      for (const p of SHEET_PROPS) if (s[p] !== undefined && s[p] !== null) {
+        sheet[p] = preparedSheet ? s[p] : structuredClone(s[p]);
+        // Prepared IDB metadata is exclusively owned, just like its cells.
+        if(preparedSheet && p!=='freeze')delete s[p];
+      }
       sheet.freeze = { rows: 0, cols: 0, ...(s.freeze || {}) };
       // 열 블록: 파일에서 막 읽은 것은 그대로 가져오고, 저장본(실행 취소 기록 등)은 복사
       sheet.blocks = owned || !s.blocks ? (s.blocks ?? []) : s.blocks.map(blockClone);
+      if(preparedSheet){s.blocks=null;delete s.freeze;}
       if (s._sid) { sheet._sid = s._sid; sheet._ev = s._ev; } // 자동 저장 기록 (바뀐 시트만 다시 저장)
       sheets.push(sheet);
     }
@@ -3231,6 +3247,7 @@ export class Workbook {
     this.objectStyles = structuredClone(data.objectStyles ?? null);
     this.baseStyle = data.baseStyle ?? null; // 기본 셀 서식 (xlsx 의 xf 0) — 서식이 없는 셀에 적용
     this.vba = data.vba ?? null; // .xlsm 의 매크로(vbaProject.bin, base64) — 실행하지 않고 보존만 함
+    this.pivotCacheItems = data.pivotCacheItems ?? null; // 캐시별 과거 항목 목록: 원본은 수정하지 않고 공유합니다.
     this.externals = data.externals ?? null; // 외부 통합 문서 연결 (xlsx externalLink 원본 — 저장할 때 그대로 되돌려 씀)
     this.names = (data.names ?? []).map((n) => ({ ...n }));
     this.sheets = sheets.length ? sheets : [newSheet('Sheet1')];

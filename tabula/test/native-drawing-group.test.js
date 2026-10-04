@@ -41,3 +41,16 @@ test('native group membership and independent top-level objects persist through 
  wb.undo();assert.equal(wb.sheets[0].shapes[0].x,50);assert.deepEqual(wb.sheets[0].shapes[0].groupItems,group.groupItems);
  wb.redo();assert.equal(wb.sheets[0].shapes[0].x,150);assert.equal(wb.sheets[0].shapes[1].x,900);
 });
+
+test('collapsed native Excel groups retain zero extents and editable children across saves',()=>{
+ for (const dim of ['w','h']) {
+  const wb=fixture(),g=wb.sheets[0].shapes[0];g[dim]=0;
+  const bytes=native(writeXlsx(wb)),out=readXlsx(bytes).data;
+  assert.equal(out.sheets[0].shapes.length,2);assert.equal(out.sheets[0].images.length,0);
+  const group=out.sheets[0].shapes[0];assert.equal(group[dim],0);
+  assert.deepEqual(geometry(group),geometry(g));
+  assert.ok(!/NaN|Infinity/.test(shapeSvg(group)));
+  const second=readXlsx(writeXlsx(new Workbook(out))).data.sheets[0].shapes[0];
+  assert.deepEqual(geometry(second),geometry(group));
+ }
+});

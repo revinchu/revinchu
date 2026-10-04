@@ -84,3 +84,40 @@ test('workbook compact restore preserves formatting, edits and undo without expa
     for(const r of [1,499,500,501,1000])assert.equal(next.styleAt(0,r,0).fill,style.fill);
   }
 });
+
+
+test('bounded save iterator exactly matches legacy seq sort after mutations and overlapping runs',()=>{
+  const [column]=pair(),other=getSharedBlankCell({italic:true});
+  const sameRecords=()=>assert.deepEqual([...column.storageEntries({bounded:true})],[...column.storageEntries()]);
+  sameRecords();let seed=517;
+  const random=n=>((seed=(Math.imul(seed,1664525)+1013904223)>>>0)%n);
+  for(let i=0;i<4000;i++) {
+    const r=random(450),op=random(9);
+    if(op<2)column.delete(r);
+    else if(op===2)column.setRun(r,random(30)+1,other);
+    else if(op===3)column.set(r,blank);
+    else column.set(r,{raw:String(i)});
+    if(i%40===0)sameRecords();
+  }
+  sameRecords();column.clear();column.setRun(10,500,blank);column.set(0,{raw:'first'});
+  column.delete(10);column.set(10,blank);column.set(509,other);column.set(200,{raw:'middle'});sameRecords();
+  column.set(200,blank);sameRecords();
+});
+
+test('bounded save skips expansion and points enumeration; early return releases reader guard',()=>{
+  const cells=new CellMap();cells.setRunRC(0,0,1_000_000,blank);const col=cells.col(0);
+  col.set(2,{raw:'note'});col.set(999997,{raw:'=1'});
+  const expected=[...col.storageEntries()];
+  const original=col.points[Symbol.iterator];col.points[Symbol.iterator]=()=>{throw Error('must not copy the entire points map');};
+  try {assert.deepEqual([...col.storageEntries({bounded:true})],expected);const it=col.storageEntries({bounded:true});it.next();assert.equal(col.readers,1);it.return();assert.equal(col.readers,0);}
+  finally{col.points[Symbol.iterator]=original;}
+});
+
+test('bounded workbook JSON chunks keep legacy byte sequence for plain and compact columns',()=>{
+  const w=new Workbook({sheets:[{name:'Synthetic',cells:{'0,1':{raw:'1'},'1,1':{raw:'=A1',cached:3,comment:'note',link:'#A1'}}}]});
+  w.sheets[0].cells.setRunRC(0,0,10000,{raw:'',style});
+  for(let r=0;r<10000;r+=5)w.setInput(0,r,0,r%2?'=1+2':String(r));
+  w.sheets[0].cells.deleteRC(127,0);w.sheets[0].cells.setRC(127,0,{raw:'reinserted'});
+  const a=Array.from(w.cellRunChunks(0,211,{shareStyle:true}),JSON.stringify),b=Array.from(w.cellRunChunks(0,211,{shareStyle:true,bounded:true}),JSON.stringify);
+  assert.deepEqual(b,a);
+});
