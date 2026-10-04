@@ -206,6 +206,7 @@ let ac = null;
 let editRefs = [];
 let fillPreview = null;
 let chartSel = null; // 선택한 그림 개체(차트·그림·도형) id
+let objectPointerEvent = null, handlingObjectPointer = false;
 let chartElementDrag = null, suppressChartDoubleClickUntil = 0, lastChartPointer = null;
 let chartPart = null; // 차트 안에서 고른 요소 { id, kind: 'series'|'point'|'legend'|'title', s, p } (엑셀: 한 번 누르면 계열, 한 번 더 누르면 요소)
 let objClip = null; // 복사한 그림 개체
@@ -848,10 +849,29 @@ function moveEnterTab(dir) {
 // ───────────────────────── 편집 ─────────────────────────
 const edInput = () => (document.activeElement === dom.formula ? dom.formula : dom.editor);
 
+function nonTextObjectTarget(target) {
+  return !!target.closest?.('.obj.slicer, .obj.slicer-group, .obj.chart, .obj.pic');
+}
+function objectOwnsGridFocus() {
+  // Shapes retain the native editor path for direct Korean IME text entry.
+  // eventPhase covers document-capture menu dismissal before the grid handler.
+  return handlingObjectPointer || !!objectPointerEvent?.eventPhase
+    || !!(chartSel && !sheet().shapes?.some(o => o.id === chartSel));
+}
+function focusGridSurface() {
+  dom.view.tabIndex = -1;
+  if (document.activeElement !== dom.view) dom.view.focus({ preventScroll: true });
+}
 function focusGrid() {
   if (isDialogOpen() || document.querySelector('.backstage')) return;
+  if (objectOwnsGridFocus()) {
+    // A pointer may still be committing a cell. Leave its native input alone
+    // until commitEdit ends editing, then focus the non-editable grid.
+    if (!editing) focusGridSurface();
+    return;
+  }
   if (editing?.fromBar) { dom.formula.focus(); return; }
-  if (mobileWork?.active && !mobileKeyboard?.suppressed && !editing) { dom.view.tabIndex = -1; dom.view.focus({ preventScroll: true }); return; }
+  if (mobileWork?.active && !mobileKeyboard?.suppressed && !editing) { focusGridSurface(); return; }
   if (document.activeElement !== dom.editor) dom.editor.focus({ preventScroll: true });
 }
 
@@ -1482,7 +1502,7 @@ function onGridKey(e) {
     if ((k === 'Delete' || k === 'Backspace') && chartPart?.id === chartSel) { handled(); deleteChartPart(); return; }
     if (k === 'Escape' && chartPart?.id === chartSel) { handled(); chartPart = null; gv.renderObjectsAll(); syncChartPane(); return; }
     if (k === 'Delete' || k === 'Backspace') { handled(); deleteObject(chartSel); return; }
-    if (k === 'Escape') { handled(); deselectChart(); updateSelectionUI(); return; }
+    if (k === 'Escape') { handled(); deselectChart(); updateSelectionUI(); focusGrid(); return; }
     const step = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[k];
     if (step) { handled(); if (chartPart?.id === chartSel) nudgeChartPart(step[0] * (ctrl ? 10 : 1), step[1] * (ctrl ? 10 : 1)); else nudgeObject(chartSel, step[0] * (ctrl ? 10 : 1), step[1] * (ctrl ? 10 : 1)); return; }
     if (ctrl && !e.altKey && (code === 'KeyC' || code === 'KeyX')) { handled(); copyObject(chartSel, code === 'KeyX'); return; }
@@ -2027,6 +2047,12 @@ function autofitHeader(axis,index) {
 }
 
 function onViewMouseDown(e) {
+  const previous = handlingObjectPointer;
+  handlingObjectPointer = nonTextObjectTarget(e.target);
+  try { handleViewMouseDown(e); }
+  finally { handlingObjectPointer = previous; }
+}
+function handleViewMouseDown(e) {
   if (e.target === dom.editor || dom.ac.contains(e.target)) return;
   closeMenus();
   const t = e.target;
@@ -2633,6 +2659,8 @@ function onDragEnd() {
 function onViewDblClick(e) {
   if (Date.now() < suppressShapeDoubleClickUntil || Date.now() < suppressChartDoubleClickUntil || shapeEdit) { e.preventDefault(); return; }
   const t = e.target;
+  // Rapid filter taps are still filtering; only the object frame/title opens settings.
+  if (t.closest('.sl-item, .sl-clear, .sl-multi, .tl-cell, .tl-level')) { e.preventDefault(); return; }
   const objEl = t.closest('.obj');
   if (objEl) { if (objEl.classList.contains('chart')) chartFormatPane(objEl.dataset.id); else editObject(objEl.dataset.id); return; }
   if (t.classList.contains('fbtn') || t.classList.contains('dv-btn') || t === dom.editor) return;
@@ -2819,7 +2847,7 @@ function displayText(r, c, s = si) {
 // 편집 중 텍스트·대화상자 입력은 기존 native 클립보드 경로를 유지합니다.
 function gridClipboardFocus() {
   if (editing || isDialogOpen() || isMenuOpen() || document.querySelector('.backstage')) return false;
-  return document.activeElement === dom.editor || (mobileWork?.active && document.activeElement === dom.view);
+  return document.activeElement === dom.editor || document.activeElement === dom.view;
 }
 function mobileClipboardCurrent() {
   return !!clip && mobileCopySource?.clip === clip && mobileCopySource.book === wb
@@ -9562,7 +9590,7 @@ function deleteObject(id) {
   if(!list.length||viewOnly||wb.props?.markedFinal||list.some(f=>f.obj.locked!==false)&&protectBlocked('objects'))return;
   const ids=new Set(list.map(f=>f.obj.id));
   wb.transact(()=>{for(const prop of new Set(list.map(f=>f.prop)))wb.setSheetProp(si,prop,sheet()[prop].filter(o=>!ids.has(o.id)));},meta());
-  chartSel=null;objMulti.clear();gv.renderObjectsAll();updateSelectionUI();
+  chartSel=null;objMulti.clear();gv.renderObjectsAll();updateSelectionUI();focusGrid();
 }
 function nudgeObject(id,dx,dy) {
   const list=id===chartSel?selectedObjects():[];
@@ -19888,6 +19916,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['슬라이서 선택 시 화면 키보드 방지', ['슬라이서·시간 표시 막대·차트·사진을 선택하거나 메뉴를 닫을 때 숨은 셀 입력창으로 초점이 이동하지 않도록 했습니다. 모바일 최적화와 외부 키보드 설정에 관계없이 적용하며, 셀·수식의 명시적 편집은 유지합니다.']],
   ['대형 문서 파일 저장과 게시', ['WIXEL 파일과 온라인 게시본을 나누어 압축하고, Excel 파일도 시트와 피벗 캐시를 순서대로 압축하여 저장 시 메모리 사용을 줄였습니다. 새 WIXEL 저장본은 업데이트된 위셀에서 열 수 있으며 이전 저장 형식도 읽습니다.', 'HTML 다운로드는 인쇄 페이지 수와 별도로 생성하며, 큰 시트는 한 파일 안에서 행·열 구간을 넘겨 확인합니다.', '가져온 문서의 피벗과 수식 연결을 정리한 뒤 편집 화면을 열어, 저장 중 늦은 계산 때문에 저장이 취소되는 문제를 수정했습니다.', '숫자 표시 형식의 의미 있는 공백과 XLSB 사용자 피벗 스타일 이름을 보존합니다. 잘못 잘린 서식 코드 때문에 Excel이 저장 파일을 거부하는 문제를 수정했습니다.', '온라인 문서 한도를 압축 게시 형식 기준 32MiB로 조정했으며, 서버 문서 열기·게시 갱신 중 이전 응답이 현재 편집 상태를 덮어쓰지 않도록 했습니다.']],
   ['대형 문서 자동 저장과 복구', ['대형 문서를 문서별로 자동 저장하고 탭마다 열었던 문서를 구분합니다. 저장이 끝나기 전에 앱이 다시 시작되면 이전 문서를 조용히 여는 대신 복구할 저장본을 확인합니다. 저장 연결이 끊겼을 때 재연결하고, 파일 전환 시 이전 문서의 백그라운드 계산과 피벗 창·개체 캐시의 참조를 해제합니다.']],
   ['피벗 캡션과 공유 슬라이서 설정', ['빈 피벗 캡션을 Excel 저장 후에도 보존합니다. 같은 캐시를 공유하는 슬라이서의 정렬과 데이터 없는 항목 설정을 함께 적용하며, 개별 캡션·스타일·위치는 유지합니다.']],
@@ -20179,10 +20208,12 @@ function syncMobileKeyboardFocus(next) {
   if (editing || isDialogOpen() || document.querySelector('.backstage')) return;
   const focused = document.activeElement;
   if (focused !== dom.view && focused !== dom.editor) return;
-  // Keep a writable native editor for physical-key input and Korean IME.
-  // Moving focus before the key's default action avoids synthesizing characters.
+  // Object shortcuts use the grid key handler; they must never summon the
+  // cell keyboard when the first physical key changes the input policy.
+  if (objectOwnsGridFocus()) { focusGridSurface(); return; }
+  // Keep a writable native editor for physical cell input and Korean IME.
   if (next.suppressed || !mobileWork?.active) dom.editor.focus({ preventScroll: true });
-  else { dom.view.tabIndex = -1; dom.view.focus({ preventScroll: true }); }
+  else focusGridSurface();
 }
 function mobileToolsDialog() {
   const catalog = [...qatCatalog(), { cmd: 'mobileHandPan', label: '손바닥 이동', tab: '모바일' }].map(c => ({ ...c, disabled: contextCommandDisabled(c.cmd) }));
@@ -20385,6 +20416,14 @@ function bindEvents() {
       button.title = armed ? '손바닥 이동 끄기 · Esc' : '손바닥 이동 · 끌어서 화면 이동';
     },
     onDown:onViewMouseDown, onStart:closeMenus, scroll:(dx,dy)=>gv.scrollBy(dx,dy), zoom:()=>gv.z });
+  // Window capture precedes ui.js's document-capture menu dismissal. Merely
+  // fixing the final focus still lets Safari briefly open the keyboard.
+  const trackObjectPointer = e => {
+    objectPointerEvent = dom.view.contains(e.target) && nonTextObjectTarget(e.target) ? e : null;
+    if (objectPointerEvent) setTimeout(() => { if (objectPointerEvent === e) objectPointerEvent = null; }, 0);
+  };
+  window.addEventListener('pointerdown', trackObjectPointer, true);
+  window.addEventListener('mousedown', trackObjectPointer, true);
   const ed = dom.editor;
   ed.addEventListener('keydown', onEditorKeyDown);
   // 모바일의 비입력 격자 포커스에서도 메뉴 단축키를 처리한다. 자식 에디터는 기존 경로만 사용한다.
