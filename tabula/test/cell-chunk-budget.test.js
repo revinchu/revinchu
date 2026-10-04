@@ -69,3 +69,16 @@ test('Workbook chunks survive Blob/gzip round trips with formulas, comments, lin
   assert.equal(blobRestored.getCell(0,1,0).comment,'메모');assert.equal(blobRestored.getCell(0,1,0).link,'#A1');
   assert.equal(blobRestored.getRaw(0,69,0),'본문'.repeat(10000));assert.equal(blobRestored.styleAt(0,100099,2).bold,true);
 });
+
+
+test('bounded chunk string sizing avoids scanning source text and remains conservative',async()=>{
+  const {createJsonSizer}=await import('../src/json-size.js');
+  const measure=createJsonSizer(100000,{conservativeStrings:true}).size;
+  const samples=['plain','a\"b\\c\n\u0000','가😀\ud800'.repeat(1000)];
+  const testPattern=RegExp.prototype.test;let scans=0;
+  try {RegExp.prototype.test=function(...args){scans++;return testPattern.apply(this,args);};for(const text of samples)assert.ok(measure(text)>=JSON.stringify(text).length);}
+  finally {RegExp.prototype.test=testPattern;}
+  assert.equal(scans,0);
+  assert.equal(createJsonSizer(10,{conservativeStrings:true}).size('abc'),11);
+  assert.equal(createJsonSizer(100000).size('plain'),JSON.stringify('plain').length);
+});

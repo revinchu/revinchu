@@ -148,7 +148,7 @@ export class VaultStore {
         const value = item.value;
         if (!(value instanceof Uint8Array)) throw new ApiError(400, '문서 전송 형식이 올바르지 않습니다.', 'INVALID_BODY');
         size += value.byteLength;
-        if (size > this.limits.maxDocumentBytes) throw new ApiError(413, '문서 하나는 최대 20MiB까지 저장할 수 있습니다.', 'DOCUMENT_TOO_LARGE');
+        if (size > this.limits.maxDocumentBytes) throw new ApiError(413, `문서 하나는 최대 ${this.limits.maxDocumentBytes / (1024 * 1024)}MiB까지 저장할 수 있습니다.`, 'DOCUMENT_TOO_LARGE');
         try { parser.write(decoder.decode(value, { stream: true })); } catch (error) {
           if (error instanceof ApiError) throw error; throw new ApiError(400, 'UTF-8 JSON 문서만 저장할 수 있습니다.', 'INVALID_JSON');
         }

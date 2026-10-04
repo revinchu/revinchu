@@ -36,7 +36,7 @@ export function* cellJsonParts(cells, encode) {
 export const CELL_CHUNK_CHAR_LIMIT = 1 << 20;
 /** Keep one oversized cell intact; every other chunk is bounded by both count and text. */
 export function* storedCellChunks(cells, encode, size = 20000) {
-  const measure=createJsonSizer(CELL_CHUNK_CHAR_LIMIT).size;
+  const measure=createJsonSizer(CELL_CHUNK_CHAR_LIMIT,{conservativeStrings:true}).size;
   let chunk=[],chars=2;
   for(const [r,c,cell,count] of storedCellEntries(cells)) {
     const data=encode(cell);

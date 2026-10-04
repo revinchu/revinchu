@@ -419,16 +419,22 @@ function sameCell(a, b) {
 
 /** 두 번째 인수로 서식을 교체할 때는 raw의 원래 해석도 보존한다 (null = 서식 지우기). */
 export function cellData(cell, style) {
+  return encodeStoredCell(cell, style, arguments.length > 1, false);
+}
+
+// File streaming may read an immutable style by reference. Clipboard/history
+// callers keep the existing style-copy and explicit override semantics.
+function encodeStoredCell(cell, style, replaceStyle, shareStyle) {
   if (!cell) return null;
   const d = { raw: cell.raw };
-  if (cell.style) d.style = { ...cell.style };
+  if (cell.style) d.style = shareStyle ? cell.style : { ...cell.style };
   if (cell.comment) d.comment = cell.comment;
   if (cell.link) d.link = cell.link;
   if (cell.image) d.image = { ...cell.image };
   if (cell.phonetic) d.phonetic = structuredClone(cell.phonetic);
   if (cell.fx) d.fx = true;
   if (cell.inputType) d.inputType = cell.inputType;
-  if (arguments.length > 1) {
+  if (replaceStyle) {
     if (style) d.style = { ...style }; else delete d.style;
     if (cell.formula) { if (style?.numFmt === 'text') d.fx = true; }
     else if (cell.raw !== '') {
@@ -3126,8 +3132,9 @@ export class Workbook {
   }
 
   /** v4 저장용: [행, 열, 같은 빈 셀 개수, 저장 셀]. 일반 셀은 개수 1. */
-  *cellRunChunks(si, size = 20000) {
-    yield* storedCellChunks(this.sheets[si].cells, cellData, size);
+  *cellRunChunks(si, size = 20000, { shareStyle = false } = {}) {
+    const encode = shareStyle ? cell => encodeStoredCell(cell, undefined, false, true) : cellData;
+    yield* storedCellChunks(this.sheets[si].cells, encode, size);
   }
 
   /** 시트의 셀을 size 개씩 [[키, 저장 형태], …] 로 (큰 문서를 나눠 저장) */

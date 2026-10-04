@@ -735,7 +735,22 @@ export function fmtFromCode(code) {
 const KO_COLOR_EN = { 검정: 'Black', 파랑: 'Blue', 녹청: 'Cyan', 녹색: 'Green', 자홍: 'Magenta', 빨강: 'Red', 흰색: 'White', 노랑: 'Yellow' };
 /** 파일에 쓸 서식 코드: 한국어 색 이름([빨강])은 엑셀 파일 형식의 영어 이름([Red])으로 (따옴표 안은 그대로) */
 export function fileCode(code) {
-  if (code == null || !/[검파녹자빨흰노]/.test(code)) return code;
+  if (typeof code !== 'string') return code;
+  // Older saved WIXEL files could lose the final space after a format operator.
+  // Complete only a dangling operand outside literals/conditions; valid codes,
+  // escaped literal operators and quoted text must remain byte-for-byte intact.
+  let quoted = false, bracket = false;
+  for (let i = 0; i < code.length; i++) {
+    const ch = code[i];
+    if (quoted) { if (ch === '"') quoted = false; continue; }
+    if (bracket) { if (ch === ']') bracket = false; continue; }
+    if (ch === '"') { quoted = true; continue; }
+    if (ch === '[') { bracket = true; continue; }
+    if (ch === '\\' || ch === '_' || ch === '*') {
+      if (++i === code.length) code += ' ';
+    }
+  }
+  if (!/[검파녹자빨흰노]/.test(code)) return code;
   return String(code).split(/("[^"]*")/).map((part) => (part.startsWith('"') ? part : part.replace(/\[(검정|파랑|녹청|녹색|자홍|빨강|흰색|노랑)\]/g, (m, k) => `[${KO_COLOR_EN[k]}]`))).join('');
 }
 
@@ -767,8 +782,11 @@ const SAMPLES = [0, 1, -1, 7, 1234.5678, -1234.5678, 0.123456, 45366.5625, 1e-3,
  * 서식 코드 → 셀 스타일 조각. 기본 형식과 똑같이 보이면 기본 형식으로, 아니면 사용자 지정 코드로 보관
  */
 export function styleForCode(code) {
-  const c = String(code ?? '').trim();
-  if (!c || /^(general|g\/표준)$/i.test(c)) return { numFmt: undefined, decimals: undefined, code: undefined };
+  const c = String(code ?? ''), trimmed = c.trim();
+  if (!trimmed || /^(general|g\/표준)$/i.test(trimmed)) return { numFmt: undefined, decimals: undefined, code: undefined };
+  // Spaces are part of Excel's format language: `_ `, `* ` and `\ ` all need
+  // their final operand. Trimming an imported code can make Excel reject the file.
+  if (c !== trimmed) return { numFmt: 'custom', code: c, decimals: undefined };
   let mapped = {};
   try { mapped = fmtFromCode(c); } catch { /* 무시 */ }
   const same = SAMPLES.every((n) => {

@@ -16,7 +16,7 @@ function requireStore(object) {
   return store;
 }
 // 존재하지 않는 보관함/게시물의 조회는 DDL을 실행하거나 빈 테이블을 저장하지 않습니다.
-// RPC는 Response/ReadableStream을 전달하므로 20MiB 문서를 한 RPC 값으로 복제하지 않습니다.
+// RPC는 Response/ReadableStream을 전달하므로 32MiB 문서를 한 RPC 값으로 복제하지 않습니다.
 export class UserVault extends DurableObject {
   constructor(ctx, env) { super(ctx, env); this._storage = ctx.storage; this._store = null; }
   list() { return json((storeFor(this)?.list() ?? []).map(({ chunks, ...item }) => item)); }
@@ -86,7 +86,7 @@ function nameFrom(path, prefix) {
 }
 function checkBody(request) {
   const length = request.headers.get('Content-Length');
-  if (length !== null && Number(length) > LIMITS.maxDocumentBytes) throw new ApiError(413, '문서 하나는 최대 20MiB까지 저장할 수 있습니다.', 'DOCUMENT_TOO_LARGE');
+  if (length !== null && Number(length) > LIMITS.maxDocumentBytes) throw new ApiError(413, `문서 하나는 최대 ${LIMITS.maxDocumentBytes / (1024 * 1024)}MiB까지 저장할 수 있습니다.`, 'DOCUMENT_TOO_LARGE');
   const type = request.headers.get('Content-Type') ?? '';
   if (!/^application\/json(?:\s*;|$)/i.test(type)) throw new ApiError(415, 'JSON 형식으로 문서를 전송하세요.', 'CONTENT_TYPE');
   if (request.headers.has('Content-Encoding')) throw new ApiError(415, '압축하지 않은 JSON 문서를 전송하세요.', 'CONTENT_ENCODING');

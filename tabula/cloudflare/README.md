@@ -28,7 +28,7 @@ node $wrangler dev --local --ip 127.0.0.1 --port 8787 --persist-to ..\.local\sta
 ~~~powershell
 node cloudflare/integration.mjs
 node cloudflare/recovery-integration.mjs # 로컬 전용: 버전 기록/복원·백업 원자 복원·충돌·정리
-node cloudflare/limits-integration.mjs  # 선택: 20MiB 저장/다운로드와 1바이트 초과 413
+node cloudflare/limits-integration.mjs  # 로컬 전용: 27.5MB packed/32MiB 경계 저장·다운로드·초과 롤백
 ~~~
 
 integration.mjs는 임의의 합성 복구키로 로컬 API를 호출해 격리·충돌·청크·백업·게시를 확인한 뒤 생성한 개인 문서를 지우고 게시를 중지합니다. 실제 사용자 파일/키를 읽지 않습니다. 실패 시 정리되지 않은 합성 데이터가 로컬 .local/state에 남을 수 있습니다. 다른 서버를 검증하려면 WIXEL_WORKER_URL을 명시합니다. 공개 운영 서버에 대한 실행은 실제 저장 요청이 발생하므로 배포 담당자가 범위를 확인해야 합니다.

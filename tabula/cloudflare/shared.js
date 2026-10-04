@@ -1,4 +1,4 @@
-export const LIMITS = Object.freeze({ maxDocumentBytes: 20 * 1024 * 1024, maxVaultBytes: 100 * 1024 * 1024, maxDocuments: 50, maxPublications: 20, maxProxyBytes: 5 * 1024 * 1024, maxVersions: 20, maxHistoryBytes: 100 * 1024 * 1024, importTimeoutMs: 30 * 60 * 1000 });
+export const LIMITS = Object.freeze({ maxDocumentBytes: 32 * 1024 * 1024, maxVaultBytes: 100 * 1024 * 1024, maxDocuments: 50, maxPublications: 20, maxProxyBytes: 5 * 1024 * 1024, maxVersions: 20, maxHistoryBytes: 100 * 1024 * 1024, importTimeoutMs: 30 * 60 * 1000 });
 export class ApiError extends Error {
   constructor(status, message, code = 'REQUEST_FAILED', extra = {}) { super(message); this.status = status; this.code = code; this.extra = extra; }
 }

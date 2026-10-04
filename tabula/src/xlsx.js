@@ -2,6 +2,7 @@ import { arrayCacheValue } from './array-cache.js';
 import { createXmlChunks } from './xml-chunks.js';
 import { pivotExportData, pivotValueStats } from './pivot-export-data.js';
 import { xlsxRowPlan } from './xlsx-row-stream.js';
+import { xlsxBoundedRowPlan } from './xlsx-compact-rows.js';
 import { storedCellEntries } from './cell-storage.js';
 import { readAutoFilter, readFilterSort, autoFilterXml, filterSortXml } from './xlsx-filter.js';
 import { TABLE_VISUAL_KEYS } from './table-format.js';
@@ -15,7 +16,7 @@ import { isDrawingGroup, drawingGroupXml, readDrawingGroup, readDrawingHyperlink
 // .xlsx 읽기/쓰기 (Office Open XML). DOM 없이 동작하므로 Node 에서도 테스트 가능.
 import { isXlsb, convertXlsb, readPivotSnapshotBinary } from './xlsb.js';
 import { isPivotSnapshot, readPivotSnapshotXml } from './pivot-cache-data.js';
-import { unzip, prepareZipEntry, zip, zipAsync, textOf } from './zip.js';
+import { unzip, prepareZipEntry, zip, zipAsync, createZipAsyncWriter, textOf } from './zip.js';
 import { readSharedStrings } from './shared-strings.js';
 import { CellMap } from './cellmap.js';
 import { createImportedLiteralMemo } from './import-cell-memo.js';
@@ -4240,8 +4241,7 @@ function buildPivotCache(wb, defs, cacheId, extraFields) {
 }
 
 /** 저장 캐시를 행 단위로 인코딩합니다. 큰 단일 XML 문자열을 만들지 않습니다. */
-function savedPivotRecords(cache, date1904) {
-  const chunks = createXmlChunks(), append = text => chunks.push(text);
+function savedPivotRecords(cache, date1904, streaming = false) {
   const valueXml = (value, column) => {
     if (value == null) return '<m/>';
     if (typeof value === 'number') {
@@ -4255,9 +4255,15 @@ function savedPivotRecords(cache, date1904) {
     if (typeof value === 'object' && (value.error || value.code)) return `<e v="${esc(value.error ?? value.code)}"/>`;
     return `<s v="${xesc(String(value))}"/>`;
   };
-  append(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><pivotCacheRecords xmlns="${NS_MAIN}" count="${cache.data.length}">`);
-  for (let r = 0; r < cache.data.length; r++) { append('<r>'); for (let c = 0; c < cache.nBase; c++) append(valueXml(cache.data.value(r,c), c)); append('</r>'); }
-  append('</pivotCacheRecords>');
+  function* parts() {
+    yield `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><pivotCacheRecords xmlns="${NS_MAIN}" count="${cache.data.length}">`;
+    for (let r = 0; r < cache.data.length; r++) {
+      yield '<r>'; for (let c = 0; c < cache.nBase; c++) yield valueXml(cache.data.value(r,c), c); yield '</r>';
+    }
+    yield '</pivotCacheRecords>';
+  }
+  if (streaming) return parts();
+  const chunks = createXmlChunks(); for (const text of parts()) chunks.push(text);
   return chunks.finish();
 }
 
@@ -4558,7 +4564,7 @@ function slicerContentXml(sl, name, id, kind, grouped = false) {
     ? `<mc:Choice xmlns:sle15="http://schemas.microsoft.com/office/drawing/2012/slicer" Requires="sle15">`
     : `<mc:Choice xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main" Requires="a14">`;
   const frame = `<xdr:graphicFrame macro="${sl.macro ? `[0]!${esc(sl.macro)}` : ''}"><xdr:nvGraphicFramePr><xdr:cNvPr id="${id}" name="${esc(name)}"${sl.alt !== undefined ? ` descr="${esc(sl.alt)}"` : ''}${sl.hidden ? ' hidden="1"' : ''}/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="${grouped ? EMUv(sl.x) : 0}" y="${grouped ? EMUv(sl.y) : 0}"/><a:ext cx="${grouped ? EMUv(sl.w) : 0}" cy="${grouped ? EMUv(sl.h) : 0}"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/drawing/2010/slicer"><sle:slicer xmlns:sle="http://schemas.microsoft.com/office/drawing/2010/slicer" name="${esc(name)}"/></a:graphicData></a:graphic></xdr:graphicFrame>`;
-  const fallback = `<mc:Fallback><xdr:sp macro="" textlink=""><xdr:nvSpPr><xdr:cNvPr id="0" name=""/><xdr:cNvSpPr><a:spLocks noTextEdit="1"/></xdr:cNvSpPr></xdr:nvSpPr><xdr:spPr><a:xfrm><a:off x="${EMUv(sl.x)}" y="${EMUv(sl.y)}"/><a:ext cx="${EMUv(sl.w)}" cy="${EMUv(sl.h)}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:prstClr val="white"/></a:solidFill><a:ln w="1"><a:solidFill><a:prstClr val="green"/></a:solidFill></a:ln></xdr:spPr><xdr:txBody><a:bodyPr vertOverflow="clip" horzOverflow="clip"/><a:lstStyle/><a:p><a:r><a:rPr lang="ko-KR" sz="1100"/><a:t>이 도형은 ${kind === 'table' ? '표' : '피벗 테이블'} 슬라이서를 나타냅니다. 슬라이서는 Excel 2010 이상에서 지원됩니다.</a:t></a:r></a:p></xdr:txBody></xdr:sp></mc:Fallback>`;
+  const fallback = `<mc:Fallback><xdr:sp macro="" textlink=""><xdr:nvSpPr><xdr:cNvPr id="${id}" name="${esc(name)}"/><xdr:cNvSpPr><a:spLocks noTextEdit="1"/></xdr:cNvSpPr></xdr:nvSpPr><xdr:spPr><a:xfrm><a:off x="${EMUv(sl.x)}" y="${EMUv(sl.y)}"/><a:ext cx="${EMUv(sl.w)}" cy="${EMUv(sl.h)}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:prstClr val="white"/></a:solidFill><a:ln w="1"><a:solidFill><a:prstClr val="green"/></a:solidFill></a:ln></xdr:spPr><xdr:txBody><a:bodyPr vertOverflow="clip" horzOverflow="clip"/><a:lstStyle/><a:p><a:r><a:rPr lang="ko-KR" sz="1100"/><a:t>이 도형은 ${kind === 'table' ? '표' : '피벗 테이블'} 슬라이서를 나타냅니다. 슬라이서는 Excel 2010 이상에서 지원됩니다.</a:t></a:r></a:p></xdr:txBody></xdr:sp></mc:Fallback>`;
   return `<mc:AlternateContent xmlns:mc="${NS_MC}">${choice}${frame}</mc:Choice>${fallback}</mc:AlternateContent>`;
 }
 
@@ -4629,11 +4635,46 @@ export function writeXlsx(wb, opts) {
 
 /** 큰 문서용: 중간중간 브라우저에 제어를 돌려주고, 내장 압축으로 파일 크기도 줄임. onProgress({p, msg}) */
 export async function writeXlsxAsync(wb, opts, onProgress) {
+  return writeXlsxArchive(wb, opts, onProgress, false);
+}
+
+/** 다운로드용: 최종 ZIP 전체를 다시 복사하지 않고 Blob으로 반환합니다. */
+export async function writeXlsxBlobAsync(wb, opts, onProgress) {
+  return writeXlsxStreamArchive(wb, opts, onProgress);
+}
+
+// 새 다운로드 경로만 항목을 즉시 압축합니다. 기존 동기/바이트 API는 유지합니다.
+async function writeXlsxStreamArchive(wb, opts, onProgress) {
+  const writer = createZipAsyncWriter();
+  let last = performance.now();
+  const rowProgress = value => { if (performance.now() - last > 40) { onProgress?.(value); last = performance.now(); } };
+  const it = writeXlsxSteps(wb, opts, true, rowProgress);
+  try {
+    for (;;) {
+      const step = it.next();
+      if (step.done) {
+        const names = Object.keys(step.value);
+        for (let i = 0; i < names.length; i++) {
+          const name = names[i];
+          await writer.add(name, step.value[name]); delete step.value[name];
+          onProgress?.({ p: 0.85 + 0.15 * (i + 1) / names.length, msg: '파일 마무리 중' });
+        }
+        return writer.finish({ blob: true, first: '[Content_Types].xml' });
+      }
+      if (step.value.entry) await writer.add(step.value.entry[0], step.value.entry[1]);
+      else if (performance.now() - last > 40) {
+        onProgress?.(step.value); await new Promise(resolve => setTimeout(resolve, 0)); last = performance.now();
+      }
+    }
+  } finally { it.return?.(); }
+}
+
+async function writeXlsxArchive(wb, opts, onProgress, blob) {
   const it = writeXlsxSteps(wb, opts);
   let last = performance.now();
   for (;;) {
     const s = it.next();
-    if (s.done) return zipAsync(s.value, (p) => onProgress?.({ p: 0.85 + 0.15 * p, msg: '압축 중' }), { consume: true });
+    if (s.done) return zipAsync(s.value, (p) => onProgress?.({ p: 0.85 + 0.15 * p, msg: '압축 중' }), { consume: true, blob });
     if (performance.now() - last > 40) {
       onProgress?.(s.value);
       await new Promise((res) => setTimeout(res, 0));
@@ -4650,7 +4691,7 @@ const MAIN_TYPES = {
   xltm: 'application/vnd.ms-excel.template.macroEnabled.main+xml',
 };
 
-function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = null } = {}) {
+function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = null } = {}, streaming = false, onRows) {
   const files = {};
   const pool = new StylePool(wb.defaultFont ?? WRITE_FONT, wb.baseStyle);
   const gridIndex = color => {
@@ -4789,7 +4830,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
   // 외부 통합 문서 값 시트(맨 뒤)는 시트로 쓰지 않음 — externalLink 원본으로 되돌려 씀
   const nOwn = wb.ownSheetCount ? wb.ownSheetCount() : wb.sheets.length;
   const rowsTotal = wb.sheets.slice(0, nOwn).reduce((n, sh) => n + sh.cells.size, 0) || 1;
-  for (let si = 0; si < nOwn; si++) {
+  function* buildSheetRows(si) {
     const sheet = wb.sheets[si];
     const plainStyle = !sheet.allStyle && !Object.keys(sheet.colStyles ?? {}).length && !Object.keys(sheet.rowStyles ?? {}).length;
     // 열 · 행 · 셀 서식을 합친 서식 번호: 같은 조합(서식 객체 셋)은 한 번만 합치고 찾음 (셀마다 새 객체를 만들지 않게)
@@ -4810,12 +4851,13 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
       return id;
     };
     const blocks = sheet.blocks ?? [];
-    const plan = xlsxRowPlan(sheet.cells, {
+    const plan = (streaming ? xlsxBoundedRowPlan : xlsxRowPlan)(sheet.cells, {
       rowLimit: EXCEL_MAX_ROWS, colLimit: MAX_COLS, blocks, spills: wb.spillsOf(si),
       extraRows: [...Object.keys(sheet.rowHeights), ...Object.keys(sheet.hiddenRows), ...Object.keys(sheet.rowStyles), ...Object.keys(sheet.outline?.rows ?? {}), ...Object.keys(sheet.outline?.rowsColl ?? {}), ...hidKeys(sheet.filter?.hidden, EXCEL_MAX_ROWS), ...(sheet.tables ?? []).flatMap(t => hidKeys(t.filter?.hidden, EXCEL_MAX_ROWS))],
     });
     const { maxR, maxC } = plan;
-    const rowXml = createXmlChunks();
+    function* rowParts() {
+    let rowCount = 0;
     for (const [r, rowCells] of plan.rows) {
       let cells = rowCells;
       for (const b of blocks) {
@@ -4840,7 +4882,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
       if (sheet.rowStyles[r]) attrs.push(`s="${pool.xf({ ...sheet.allStyle, ...sheet.rowStyles[r] })}"`, 'customFormat="1"');
       if (sheet.outline?.rows?.[r]) attrs.push(`outlineLevel="${sheet.outline.rows[r]}"`);
       if (sheet.outline?.rowsColl?.[r]) attrs.push('collapsed="1"');
-      const cx = cells.map(([c, cell]) => {
+      const cellXml = ([c, cell]) => {
         const ref = refOf(r, c);
         const spillKey = `${si}:${r},${c}`;
         const querySpill = wb.spills.get(wb.spillOwner.get(spillKey) ?? spillKey);
@@ -4884,12 +4926,27 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
           return `<c r="${ref}"${sAttr} t="inlineStr" ph="${p.visible ? 1 : 0}"><is><t xml:space="preserve">${xesc(v)}</t>${phoneticXml(String(v), p, fontId, xesc)}</is></c>`;
         }
         return `<c r="${ref}"${sAttr} t="s"><v>${sst(String(v))}</v></c>`;
-      }).join('');
-      rowXml.push(`<row ${attrs.join(' ')}>${cx}</row>`);
+      };
+      if (streaming) {
+        yield `<row ${attrs.join(' ')}>`;
+        for (const cell of cells) yield cellXml(cell);
+        yield '</row>';
+      } else yield `<row ${attrs.join(' ')}>${cells.map(cellXml).join('')}</row>`;
       rowsDone += cells.length;
-      if (rowXml.count % 1000 === 0) yield { p: 0.85 * (rowsDone / rowsTotal), msg: `'${sheet.name}' 시트 저장 중` };
+      if (++rowCount % 1000 === 0) onRows?.({ p: Math.min(0.85, 0.85 * rowsDone / rowsTotal), msg: `'${sheet.name}' 시트 저장 중` });
     }
-    sheetRows.push({ rowXml: rowXml.finish(), maxR, maxC });
+    }
+    if (streaming) return { rowXml: rowParts(), maxR, maxC };
+    const rowXml = createXmlChunks();
+    for (const text of rowParts()) {
+      rowXml.push(text);
+      if (rowXml.count % 1000 === 0) yield { p: 0.85 * rowsDone / rowsTotal, msg: `'${sheet.name}' 시트 저장 중` };
+    }
+    return { rowXml: rowXml.finish(), maxR, maxC };
+  }
+  if (!streaming) for (let si = 0; si < nOwn; si++) {
+    const rows = yield* buildSheetRows(si);
+    sheetRows.push(rows);
   }
 
   for (let si = 0; si < nOwn; si++) {
@@ -4897,7 +4954,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
     const sheetRels = [];
     const addRel = (type, target) => { const id = `rId${sheetRels.length + 1}`; sheetRels.push(`<Relationship Id="${id}" Type="${REL}/${type}" Target="${target}"/>`); return id; };
 
-    const { rowXml, maxR, maxC } = sheetRows[si];
+    const { rowXml, maxR, maxC } = streaming ? yield* buildSheetRows(si) : sheetRows[si];
 
     // 열
     const olc = sheet.outline?.cols ?? {};
@@ -5233,7 +5290,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
         files[`xl/pivotCache/pivotCacheDefinition${c}.xml`] = pinfo.cache.cacheXml;
         contentOverrides.push(`<Override PartName="/xl/pivotCache/pivotCacheDefinition${c}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml"/>`);
         if (pinfo.cache.saveData) {
-          files[`xl/pivotCache/pivotCacheRecords${c}.xml`] = savedPivotRecords(pinfo.cache, wb.date1904);
+          files[`xl/pivotCache/pivotCacheRecords${c}.xml`] = savedPivotRecords(pinfo.cache, wb.date1904, streaming);
           files[`xl/pivotCache/_rels/pivotCacheDefinition${c}.xml.rels`] = `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="${NS_PKG}"><Relationship Id="rCacheRecords" Type="${REL}/pivotCacheRecords" Target="pivotCacheRecords${c}.xml"/></Relationships>`;
           contentOverrides.push(`<Override PartName="/xl/pivotCache/pivotCacheRecords${c}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheRecords+xml"/>`);
         }
@@ -5290,7 +5347,10 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
     if (sheetRels.length) {
       files[`xl/worksheets/_rels/sheet${si + 1}.xml.rels`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="${NS_PKG}">${sheetRels.join('')}</Relationships>`;
     }
-    yield { p: 0.85, msg: '파일 구성 중' };
+    if (streaming) for (const name of Object.keys(files)) {
+      yield { entry: [name, files[name]] }; delete files[name];
+    }
+    yield { p: streaming ? Math.min(0.85, 0.85 * rowsDone / rowsTotal) : 0.85, msg: '파일 구성 중' };
   }
 
   // 통합 문서: 피벗 캐시, 슬라이서 캐시 (확장)
@@ -5379,11 +5439,16 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
   }
   files['xl/_rels/workbook.xml.rels'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="${NS_PKG}">${wbRels.join('')}</Relationships>`;
   if (vba) files['xl/vbaProject.bin'] = fromBase64(vba.bin);
-  const sharedXml = createXmlChunks();
-  sharedXml.push(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<sst xmlns="${NS_MAIN}" count="${strings.length}" uniqueCount="${strings.length}">`);
-  for (const value of strings) sharedXml.push(`<si><t xml:space="preserve">${xesc(value)}</t></si>`);
-  sharedXml.push('</sst>');
-  files['xl/sharedStrings.xml'] = sharedXml.finish();
+  function* sharedParts() {
+    yield `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<sst xmlns="${NS_MAIN}" count="${strings.length}" uniqueCount="${strings.length}">`;
+    for (const value of strings) yield `<si><t xml:space="preserve">${xesc(value)}</t></si>`;
+    yield '</sst>';
+  }
+  if (streaming) files['xl/sharedStrings.xml'] = sharedParts();
+  else {
+    const sharedXml = createXmlChunks(); for (const text of sharedParts()) sharedXml.push(text);
+    files['xl/sharedStrings.xml'] = sharedXml.finish();
+  }
   files['xl/styles.xml'] = pool.xml();
   files['xl/theme/theme1.xml'] = themeXml(wb);
   contentOverrides.push('<Override PartName="/xl/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>');

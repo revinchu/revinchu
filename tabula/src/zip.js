@@ -271,28 +271,35 @@ function zipEntries(bytes) {
   return out;
 }
 
-/** 문자열/바이트 조각을 순서대로 읽습니다. 문자열 경계의 surrogate 쌍도 유지합니다. */
+/** 문자열/바이트/반복자 조각을 제한된 UTF-8 청크로 읽습니다. */
 function* zipByteChunks(content) {
   function* parts(value) {
     if (typeof value === 'string' || value instanceof Uint8Array) yield value;
-    else if (Array.isArray(value)) { for (const part of value) yield* parts(part); }
+    else if (value && typeof value[Symbol.iterator] === 'function') { for (const part of value) yield* parts(part); }
     else throw new TypeError('ZIP 항목은 문자열 또는 바이트 조각이어야 합니다.');
   }
-  const step = 1 << 20;
-  let high = '';
+  const step = 1 << 18;
+  let pending = [], length = 0, high = '';
+  const encode = () => {
+    let text = high + pending.join(''); pending = []; length = 0; high = '';
+    const last = text.charCodeAt(text.length - 1);
+    if (last >= 0xd800 && last <= 0xdbff) { high = text.slice(-1); text = text.slice(0, -1); }
+    return text ? enc.encode(text) : null;
+  };
   for (const part of parts(content)) {
     if (typeof part === 'string') {
-      for (let offset = 0; offset < part.length; offset += step) {
-        let text = high + part.slice(offset, offset + step); high = '';
-        const last = text.charCodeAt(text.length - 1);
-        if (last >= 0xd800 && last <= 0xdbff) { high = text.slice(-1); text = text.slice(0, -1); }
-        if (text) yield enc.encode(text);
+      for (let offset = 0; offset < part.length;) {
+        const end = Math.min(part.length, offset + step - length);
+        pending.push(part.slice(offset, end)); length += end - offset; offset = end;
+        if (length === step) { const bytes = encode(); if (bytes) yield bytes; }
       }
     } else {
+      if (length) { const bytes = encode(); if (bytes) yield bytes; }
       if (high) { yield enc.encode(high); high = ''; }
       for (let offset = 0; offset < part.length; offset += step) yield part.subarray(offset, offset + step);
     }
   }
+  if (length) { const bytes = encode(); if (bytes) yield bytes; }
   if (high) yield enc.encode(high);
 }
 
@@ -320,10 +327,12 @@ export function zip(entries, { consume = false } = {}) {
 }
 
 async function zipAsyncEntry(name, content) {
-  let transform;
+  let transform, zlibWrapped = false;
   if (typeof CompressionStream === 'function' && typeof ReadableStream === 'function') {
-    // 미지원 브라우저만 stored로 저장합니다. 동작 중 스트림 실패는 숨기지 않습니다.
-    try { transform = new CompressionStream('deflate-raw'); } catch { /* raw deflate 미지원 */ }
+    // Try native zlib when only raw deflate is unsupported. Runtime failures
+    // still propagate; consuming the source again could silently lose data.
+    try { transform = new CompressionStream('deflate-raw'); }
+    catch { try { transform = new CompressionStream('deflate'); zlibWrapped = true; } catch { /* 저장 방식으로 대체 */ } }
   }
   const iterator = zipByteChunks(content);
   let crc = 0xffffffff, size = 0, sincePause = 0;
@@ -348,10 +357,28 @@ async function zipAsyncEntry(name, content) {
     cancel() { iterator.return?.(); },
   });
   const reader = input.pipeThrough(transform).getReader();
+  const zlibHeader = new Uint8Array(2); let headerSize = 0;
   try {
     for (;;) {
       const next = await reader.read(); if (next.done) break;
-      compressedSize = zipSize(compressedSize + next.value.length); body.push(next.value);
+      let bytes = next.value;
+      if (zlibWrapped && headerSize < 2) {
+        const count = Math.min(2 - headerSize, bytes.length);
+        zlibHeader.set(bytes.subarray(0, count), headerSize); headerSize += count; bytes = bytes.subarray(count);
+        if (headerSize === 2 && ((zlibHeader[0] & 15) !== 8 || zlibHeader[0] >>> 4 > 7 || zlibHeader[1] & 32 || ((zlibHeader[0] << 8) | zlibHeader[1]) % 31)) throw new Error('ZLIB 압축 헤더가 올바르지 않습니다.');
+      }
+      if (bytes.length) { compressedSize = zipSize(compressedSize + bytes.length); body.push(bytes); }
+    }
+    if (zlibWrapped) {
+      if (headerSize !== 2 || compressedSize < 6) throw new Error('ZLIB 압축 데이터가 잘렸습니다.');
+      // ZIP stores RFC1951 payload only. Trim the Adler-32 trailer in place,
+      // even when its four bytes span several native output chunks.
+      for (let remaining = 4; remaining;) {
+        const last = body.pop(), remove = Math.min(remaining, last.length);
+        if (remove < last.length) body.push(last.subarray(0, last.length - remove));
+        remaining -= remove;
+      }
+      compressedSize -= 4;
     }
   } catch (error) {
     try { await reader.cancel(error); } catch { /* 오류가 난 스트림도 잠금은 해제합니다. */ }
@@ -360,20 +387,57 @@ async function zipAsyncEntry(name, content) {
   return { name, crc: crcEnd(crc), size, compressedSize, method: 8, body };
 }
 
+/** 한 항목을 완료한 뒤에 다음 항목을 생성합니다. 입력 XML 전체를 보관하지 않습니다. */
+export function createZipWriter() {
+  const list = [], names = new Set(); let finished = false;
+  return {
+    add(name, content) {
+      if (finished || names.has(name)) throw new Error('ZIP 항목을 중복 저장할 수 없습니다.');
+      list.push(zipStoredEntry(name, content)); names.add(name);
+    },
+    finish({ blob = false, first = null } = {}) {
+      if (finished) throw new Error('ZIP 저장이 이미 완료되었습니다.');
+      finished = true; return zipBuild(zipFirst(list, first), blob);
+    },
+  };
+}
+
+/** 비동기 ZIP: 항목은 하나씩 압축하고 마지막에 Blob으로 반환할 수 있습니다. */
+export function createZipAsyncWriter() {
+  const list = [], names = new Set(); let finished = false, writing = false;
+  return {
+    async add(name, content) {
+      if (finished || writing || names.has(name)) throw new Error('ZIP 항목은 순서대로 한 번씩 저장해야 합니다.');
+      writing = true;
+      try { list.push(await zipAsyncEntry(name, content)); names.add(name); }
+      finally { writing = false; }
+    },
+    finish({ blob = false, first = null } = {}) {
+      if (finished || writing) throw new Error('ZIP 저장이 완료되지 않았거나 이미 끝났습니다.');
+      finished = true; return zipBuild(zipFirst(list, first), blob);
+    },
+  };
+}
+function zipFirst(list, first) {
+  const index = first ? list.findIndex(entry => entry.name === first) : -1;
+  if (index > 0) list.unshift(list.splice(index, 1)[0]);
+  return list;
+}
+
 /** 전체 XML/UTF-8 입력 복사 없이 청크를 압축하고 CRC와 크기를 누적합니다. */
-export async function zipAsync(entries, onProgress, { consume = false } = {}) {
-  const list = [], names = Object.keys(entries);
+export async function zipAsync(entries, onProgress, { consume = false, blob = false } = {}) {
+  const writer = createZipAsyncWriter(), names = Object.keys(entries);
   for (let i = 0; i < names.length; i++) {
     const name = names[i];
-    list.push(await zipAsyncEntry(name, entries[name]));
+    await writer.add(name, entries[name]);
     if (consume) delete entries[name];
     onProgress?.((i + 1) / names.length);
     await pause();
   }
-  return zipBuild(list);
+  return writer.finish({ blob });
 }
 
-function zipBuild(list) {
+function zipBuild(list, blob = false) {
   if (list.length >= 0xffff) throw new RangeError('ZIP32로 저장할 수 있는 항목 수를 넘었습니다.');
   const parts = [], central = [];
   let offset = 0;
@@ -401,7 +465,9 @@ function zipBuild(list) {
   const end = new Uint8Array(22), ev = new DataView(end.buffer);
   ev.setUint32(0, 0x06054b50, true); ev.setUint16(8, central.length, true); ev.setUint16(10, central.length, true);
   ev.setUint32(12, cdSize, true); ev.setUint32(16, offset, true);
-  const out = new Uint8Array(zipSize(offset + cdSize + end.length));
+  zipSize(offset + cdSize + end.length);
+  if (blob) return new Blob([...parts, ...central, end], { type: 'application/zip' });
+  const out = new Uint8Array(offset + cdSize + end.length);
   let p = 0;
   for (const part of parts) { out.set(part, p); p += part.length; }
   for (const part of central) { out.set(part, p); p += part.length; }

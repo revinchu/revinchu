@@ -1,3 +1,5 @@
+import { Workbook } from './workbook.js';
+import { writeWixelFile } from './wixel-file.js';
 import { chartModelData } from './chart.js';
 import { parseInput } from './format.js';
 import { tableAt, tableCellStyle } from './tables.js';
@@ -98,4 +100,44 @@ export function publishedWorkbook(wb, selection = 'all', { maxCells = PUBLISH_CE
   if (wb.baseStyle) book.baseStyle = styleCopy(wb.baseStyle);
   if (wb.theme) book.theme = structuredClone(wb.theme);
   return book;
+}
+
+/** Preserve the existing all-workbook vs isolated-sheet sharing contract. */
+export function publishedWixelFile(wb, selection='all', metadata={}, options={}) {
+  const book=selection==='all'?wb:new Workbook(publishedWorkbook(wb,selection));
+  return writeWixelFile(book,metadata,options);
+}
+const PACKED_PART_BYTES=192*1024;
+/** JSON envelope for existing server APIs. Base64 is bounded per part. */
+export async function packPublishedBlob(blob, { maxBytes=Infinity }={}) {
+  const estimated=packedPublishedSize(blob.size);
+  if(estimated>maxBytes)throw Object.assign(new Error(`압축된 문서도 온라인 저장 한도(${Math.floor(maxBytes/1024/1024)}MB)를 초과합니다. WIXEL 파일로 저장하거나 게시할 시트를 하나 선택하세요.`),{code:'PUBLISH_TOO_LARGE',bytes:estimated});
+  const signature=new Uint8Array(await blob.slice(0,2).arrayBuffer());
+  const compression=signature[0]===31&&signature[1]===139?'gzip':'none';
+  const parts=['{"format":"wixel-packed","version":1,"compression":'+JSON.stringify(compression)+',"chunks":['];
+  for(let at=0;at<blob.size;at+=PACKED_PART_BYTES) {
+    const bytes=new Uint8Array(await blob.slice(at,at+PACKED_PART_BYTES).arrayBuffer());let binary='';
+    for(let i=0;i<bytes.length;i+=8192)binary+=String.fromCharCode(...bytes.subarray(i,i+8192));
+    parts.push((at?',':'')+'"'+btoa(binary)+'"');
+  }
+  parts.push(']}');return new Blob(parts,{type:'application/json'});
+}
+export function packedPublishedSize(bytes) {
+  return 79+Math.ceil(bytes/3)*4+Math.ceil(bytes/PACKED_PART_BYTES)*3;
+}
+/** Validates the envelope before decoding, without joining base64 strings. */
+export function unpackPublishedBlob(data) {
+  if(data?.format!=='wixel-packed'||data.version!==1||!['gzip','none'].includes(data.compression)||!Array.isArray(data.chunks))throw new Error('게시된 문서의 압축 형식이 올바르지 않습니다.');
+  const parts=[];
+  for(const text of data.chunks) {
+    if(typeof text!=='string'||text.length>PACKED_PART_BYTES*4/3||!text.length||text.length%4||!/^[A-Za-z0-9+/]*={0,2}$/.test(text))throw new Error('게시된 문서의 저장 조각이 손상되었습니다.');
+    const binary=atob(text),bytes=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);parts.push(bytes);
+  }
+  return new Blob(parts,{type:'application/x-wixel'});
+}
+/** Check compressed size before allocating a URL/base64 string. */
+export function assertPublishLinkSize(blob, maxChars=1500000) {
+  const chars=Math.ceil(blob.size/3)*4;
+  if(chars>maxChars)throw Object.assign(new Error(`문서가 커서 서버 없는 링크에 담을 수 없습니다(${Math.ceil(chars/1024)}KB). [온라인에 게시]를 사용하거나 WIXEL·HTML 파일로 저장해 공유하세요. 링크에 맞추려고 데이터나 시트를 생략하지 않았습니다.`),{code:'PUBLISH_LINK_TOO_LARGE',chars});
+  return chars;
 }

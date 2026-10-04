@@ -15,12 +15,14 @@ export function jsonStringSize(value, limit = 2e6) {
   return size;
 }
 
-export function createJsonSizer(limit = 2e6) {
+export function createJsonSizer(limit = 2e6, { conservativeStrings = false } = {}) {
   // 공유 서식도 저장되는 위치마다 크기를 더하되 같은 객체를 반복해서 훑지는 않습니다.
   const over=limit+1, memo=new WeakMap(),parents=new Set();
   const size=value=>{
     if(value==null)return 4;
-    if(typeof value==='string')return jsonStringSize(value,limit);
+    // Scanning a rope/substring can materialize another full string in V8.
+    // Bounded export chunks need only a safe upper bound, not quota precision.
+    if(typeof value==='string')return conservativeStrings ? Math.min(over,value.length*6+2) : jsonStringSize(value,limit);
     if(typeof value==='number')return 24;
     if(typeof value==='boolean')return 5;
     if(typeof value!=='object')return 0;

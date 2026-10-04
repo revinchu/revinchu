@@ -5,6 +5,7 @@ import { VaultStore } from './store.js';
 import { JsonValidator } from './json-stream.js';
 import { LIMITS, parseRevision, randomId, vaultKey, validateOrigin } from './shared.js';
 import { publicUrl, fetchPublicText, boundedBytes } from './proxy.js';
+import { packedPayload, streamDigest } from './large-payload-fixture.mjs';
 
 function fixture(limits) {
   const db = new DatabaseSync(':memory:');
@@ -293,4 +294,45 @@ test('expired imports reclaim staged chunks after restart and session ids are va
     assert.throws(() => restarted.commitImport(session.id), { status: 404 }); assert.equal(db.prepare('SELECT COUNT(*) AS n FROM import_chunks').get().n, 0);
     assert.equal(restarted.list().length, 0);
   } finally { db.close(); other.db.close(); }
+});
+
+
+test('32MiB document capacity leaves vault, history and publication count budgets unchanged', () => {
+  assert.equal(LIMITS.maxDocumentBytes, 32 * 1024 * 1024);
+  assert.equal(LIMITS.maxVaultBytes, 100 * 1024 * 1024);
+  assert.equal(LIMITS.maxHistoryBytes, 100 * 1024 * 1024);
+  assert.equal(LIMITS.maxPublications, 20);
+  assert.equal(LIMITS.maxPublications * LIMITS.maxDocumentBytes, 640 * 1024 * 1024);
+});
+
+test('27.5MB packed JSON persists byte-exactly in bounded SQLite chunks and oversize replacement rolls back', async () => {
+  const { store, db } = fixture(LIMITS);
+  try {
+    const payload = packedPayload(27_536_555);
+    const saved = await store.put('packed-synthetic', 0, payload.stream());
+    assert.equal(saved.size, payload.bytes);
+    assert.equal(store.find('packed-synthetic').chunks, Math.ceil(payload.bytes / (1024 * 1024)));
+    assert.ok(db.prepare('SELECT MAX(length(data)) AS n FROM chunks').get().n <= 1024 * 1024);
+    assert.deepEqual(await streamDigest(store.read('packed-synthetic').body), {bytes:payload.bytes,sha256:payload.sha256});
+    const tooLarge = packedPayload(LIMITS.maxDocumentBytes + 1);
+    await assert.rejects(store.put('packed-synthetic', saved.revision, tooLarge.stream()), {status:413,code:'DOCUMENT_TOO_LARGE'});
+    assert.equal(store.find('packed-synthetic').revision, saved.revision);
+    assert.equal(store.versions('packed-synthetic').versions.length, 0);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM staging').get().n, 0);
+    assert.deepEqual(await streamDigest(store.read('packed-synthetic').body), {bytes:payload.bytes,sha256:payload.sha256});
+  } finally { db.close(); }
+});
+
+test('exact 32MiB packed JSON is accepted and one byte over creates no document or revision', async () => {
+  const { store, db } = fixture(LIMITS);
+  try {
+    const payload = packedPayload(LIMITS.maxDocumentBytes);
+    const saved = await store.put('boundary', 0, payload.stream());
+    assert.equal(saved.size, LIMITS.maxDocumentBytes);
+    assert.deepEqual(await streamDigest(store.read('boundary').body), {bytes:payload.bytes,sha256:payload.sha256});
+    await assert.rejects(store.put('oversized', 0, packedPayload(LIMITS.maxDocumentBytes+1).stream()), {status:413,code:'DOCUMENT_TOO_LARGE'});
+    assert.equal(store.find('oversized'), null);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM staging').get().n, 0);
+    assert.equal((await store.put('next', 0, body('{}'))).revision, saved.revision+1);
+  } finally { db.close(); }
 });

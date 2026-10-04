@@ -513,13 +513,14 @@ function stylesXml(u8) {
       const n = rd.i32(); const defT = rd.str(); const defP = rd.str();
       tstyles.defs = { count: n, defaultTableStyle: defT, defaultPivotStyle: defP };
     } else if (t === R.TSTYLE) {
-      const fl = rd.u16(); rd.skip(2); rd.u32(); const name = rd.str() ?? '';
-      curTs = { name, pivot: !(fl & 2) ? undefined : 0, table: !(fl & 4) ? undefined : 0, els: [] };
+      // BrtBeginTableStyle: 2-byte flags, 4-byte element count, then the name.
+      const fl = rd.u16(); rd.u32(); const name = rd.str() ?? '';
+      curTs = { name, pivot: fl & 2 ? 1 : 0, table: fl & 4 ? 1 : 0, els: [] };
     } else if (t === R.TSELEM && curTs) {
       const type = rd.i32(); const size = rd.i32(); const dxf = rd.i32();
       curTs.els.push(`<tableStyleElement${attrs({ type: TSE_TYPES[type] ?? 'wholeTable', size: size > 1 ? size : undefined, dxfId: dxf })}/>`);
     } else if (t === R.TSTYLE_END && curTs) {
-      tstyles.push(`<tableStyle${attrs({ name: curTs.name, count: curTs.els.length })}>${curTs.els.join('')}</tableStyle>`);
+      tstyles.push(`<tableStyle${attrs({ name: curTs.name, pivot: curTs.pivot, table: curTs.table, count: curTs.els.length })}>${curTs.els.join('')}</tableStyle>`);
       curTs = null;
     }
   }

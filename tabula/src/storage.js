@@ -1,3 +1,12 @@
+import { unpackPublishedBlob } from './publish.js';
+import { readWixelFile } from './wixel-file.js';
+
+async function decodeStoredDocument(data, options = {}) {
+  return data?.format === 'wixel-packed' ? readWixelFile(unpackPublishedBlob(data), options) : data;
+}
+const connectionChanged = () => Object.assign(new Error('보관함 연결이 바뀌었습니다. 현재 연결에서 다시 시도하세요.'), { code:'CONNECTION_CHANGED' });
+const documentChanged = () => Object.assign(new Error('문서가 바뀌어 이전 온라인 요청을 중단했습니다.'), { code:'DOCUMENT_OPEN_CANCELLED' });
+const requestBody = data => data instanceof Blob ? data : JSON.stringify(data);
 // 서버 저장소 (server.js 의 /api) 클라이언트. 정적 호스팅이면 available = false.
 const TOKEN_KEY = 'tabula.serverToken';
 const CONNECTION_KEY = 'wixel.connection.v3';
@@ -225,20 +234,29 @@ export const server = {
   },
 
   async request(path, opts = {}) {
-    const sentConnection = connectionVersion;
+    const sentConnection = connectionVersion, { isCurrent, ...fetchOptions } = opts;
+    const current = () => {
+      if (sentConnection !== connectionVersion) throw connectionChanged();
+      if (isCurrent?.() === false) throw documentChanged();
+      return true;
+    };
+    current();
     const res = await fetch(`api/${path}`, {
-      ...opts,
+      ...fetchOptions,
       cache: 'no-store',
       headers: { 'Content-Type': 'application/json', ...this.headers(), ...(opts.headers ?? {}) },
     });
+    try { current(); } catch (error) { await res.body?.cancel().catch(() => {}); throw error; }
     if (!res.ok) {
       let msg = `서버 오류 (${res.status})`;
       let data = {};
       try { data = await res.json(); msg = data.error ?? msg; } catch { /* 무시 */ }
+      current();
       throw Object.assign(new Error(msg), { status: res.status, code: data.code, currentRevision: data.currentRevision });
     }
-    const data = await res.json();
-    if (sentConnection !== connectionVersion) throw Object.assign(new Error('보관함 연결이 바뀌었습니다. 현재 연결에서 다시 시도하세요.'), { code: 'CONNECTION_CHANGED' });
+    const parsed = await res.json(); current();
+    const data = await decodeStoredDocument(parsed, { isCurrent:current, signal:opts.signal });
+    current();
     if (/^(files|published)\//.test(path)) {
       const rev = res.headers.get('X-Wixel-Revision') ?? res.headers.get('ETag')?.replace(/^"|"$/g, '') ?? data?.revision;
       if (rev != null) revision(path, rev);
@@ -254,22 +272,30 @@ export const server = {
     return text;
   },
   list() { return this.request('files'); },
-  async publish(data, id = null) {
-    const res = id ? await this.mutate(`published/${id}`, 'PUT', data) : await this.request('publish', { method: 'POST', body: JSON.stringify(data) });
+  async publish(data, id = null, options = {}) {
+    const sentConnection = connectionVersion;
+    const res = id ? await this.mutate(`published/${id}`, 'PUT', data, options) : await this.request('publish', { ...options, method: 'POST', body: requestBody(data) });
+    if (sentConnection !== connectionVersion) throw connectionChanged();
+    if (options.isCurrent?.() === false) throw documentChanged();
     if (res.revision != null) revision(`published/${id ?? res.id}`, res.revision);
     return { ...res, id: id ?? res.id };
   },
   unpublish(id) { return this.mutate(`published/${id}`, 'DELETE'); },
-  async published(id) {
-    const res = await fetch(`api/published/${id}`, { cache: 'no-store' });
+  async published(id, options = {}) {
+    const current = () => { if (options.isCurrent?.() === false) throw documentChanged(); return true; };
+    current();
+    const res = await fetch(`api/published/${id}`, { cache: 'no-store', ...(options.signal?{signal:options.signal}:{}) });
+    try { current(); } catch (error) { await res.body?.cancel().catch(() => {}); throw error; }
     if (!res.ok) throw Object.assign(new Error((await res.json().catch(() => ({}))).error ?? `오류 (${res.status})`), { status: res.status });
-    return { data: await res.json(), modified: Number(res.headers.get('X-Modified')) || 0 };
+    const parsed = await res.json(); current();
+    const data = await decodeStoredDocument(parsed, { isCurrent:current, signal:options.signal });
+    current(); return { data, modified: Number(res.headers.get('X-Modified')) || 0 };
   },
-  load(name) { return this.request(`files/${encodeURIComponent(name)}`); },
-  mutate(path, method, data) {
-    return this.request(path, { method, ...(data === undefined ? {} : { body: JSON.stringify(data) }), headers: this.vault ? { 'If-Match': `"${revision(path)}"` } : {} });
+  load(name, options = {}) { return this.request(`files/${encodeURIComponent(name)}`, options); },
+  mutate(path, method, data, options = {}) {
+    return this.request(path, { ...options, method, ...(data === undefined ? {} : { body: requestBody(data) }), headers: { ...options.headers, ...(this.vault ? { 'If-Match': `"${revision(path)}"` } : {}) } });
   },
-  save(name, data) { return this.mutate(`files/${encodeURIComponent(name)}`, 'PUT', data); },
+  save(name, data, options = {}) { return this.mutate(`files/${encodeURIComponent(name)}`, 'PUT', data, options); },
   remove(name, expected) {
     const path = `files/${encodeURIComponent(name)}`;
     return this.vault && expected != null ? this.request(path, { method: 'DELETE', headers: { 'If-Match': `"${expected}"` } }) : this.mutate(path, 'DELETE');
@@ -279,7 +305,7 @@ export const server = {
     if (!this.vault || !this.capabilities[name]) throw Object.assign(new Error('이 서버는 온라인 버전 기록·백업 복원을 지원하지 않습니다. 파일 또는 브라우저 보관함을 사용하세요.'), { code: 'UNSUPPORTED_CAPABILITY' });
   },
   versions(name) { this.requireCapability('versionHistory'); return this.request(`versions?name=${encodeURIComponent(name)}`); },
-  loadVersion(name, value) { this.requireCapability('versionHistory'); return this.request(`version?name=${encodeURIComponent(name)}&revision=${encodeURIComponent(value)}`); },
+  loadVersion(name, value, options = {}) { this.requireCapability('versionHistory'); return this.request(`version?name=${encodeURIComponent(name)}&revision=${encodeURIComponent(value)}`, options); },
   async restoreVersion(name, value, expected) {
     this.requireCapability('versionHistory');
     if (!Number.isSafeInteger(Number(expected)) || Number(expected) < 1) throw new Error('현재 문서 버전을 먼저 확인하세요.');
@@ -312,10 +338,12 @@ export const server = {
   },
   publications() { return this.request('publications'); },
   async publicationRevision(id) {
+    const sentConnection = connectionVersion;
     const res = await fetch(`api/published/${encodeURIComponent(id)}`, { cache: 'no-store' });
     if (!res.ok) throw Object.assign(new Error('게시 문서를 찾을 수 없습니다.'), { status: res.status });
     const rev = res.headers.get('X-Wixel-Revision') ?? res.headers.get('ETag')?.replace(/^"|"$/g, '');
     await res.body?.cancel();
+    if (sentConnection !== connectionVersion) throw connectionChanged();
     if (rev == null) throw new Error('게시 버전을 확인할 수 없습니다. 다시 시도하세요.');
     revision(`published/${id}`, rev);
     return rev;

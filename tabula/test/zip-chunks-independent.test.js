@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { inflateRawSync } from 'node:zlib';
-import { zip, zipAsync } from '../src/zip.js';
+import { zip, zipAsync, createZipAsyncWriter } from '../src/zip.js';
 import { createXmlChunks } from '../src/xml-chunks.js';
 
 // Independent ZIP reader: do not use the production inflater, CRC or directory reader.
@@ -137,4 +137,75 @@ test('consume only releases completed owned entries; default ZIP input remains r
   const stopped = { first: ['one'], second: ['two'] }, stop = new Error('stop after one');
   await assert.rejects(zipAsync(stopped, () => { throw stop; }, { consume: true }), error => error === stop);
   assert.deepEqual(stopped, { second: ['two'] });
+});
+
+
+test('incremental ZIP Blob handles lazy fragments and independent headers/CRC without flattening input', async () => {
+  const writer=createZipAsyncWriter();let produced=0;
+  function* content(){yield '<r>';for(let i=0;i<1000;i++){produced++;yield '가😀';}yield '</r>';}
+  assert.equal(produced,0);await writer.add('first.xml',content());assert.equal(produced,1000);
+  await writer.add('types.xml',['types']);
+  const blob=writer.finish({blob:true,first:'types.xml'});assert.ok(blob instanceof Blob);
+  inspect(new Uint8Array(await blob.arrayBuffer()),new Map([['types.xml',Buffer.from('types')],['first.xml',Buffer.from('<r>'+'가😀'.repeat(1000)+'</r>')]]),[0,8]);
+  assert.throws(()=>writer.finish(),/이미/);await assert.rejects(writer.add('later','no'),/순서대로/);
+});
+
+test('lazy producer errors close the iterator and no partial ZIP is returned', async () => {
+  const failure=new Error('producer failed');let closed=false;
+  function* content(){try{yield 'first';throw failure;}finally{closed=true;}}
+  await assert.rejects(zipAsync({'failed.xml':content()}),error=>error===failure);assert.equal(closed,true);
+});
+
+test('native zlib fallback remains compressed and interoperable across one-byte output boundaries', async () => {
+  const Native = globalThis.CompressionStream, requested = [];
+  try {
+    globalThis.CompressionStream = class {
+      constructor(format) {
+        requested.push(format);
+        if (format === 'deflate-raw') throw new TypeError('raw format unsupported');
+        assert.equal(format, 'deflate');
+        const stream = new Native(format);
+        return { writable: stream.writable, readable: stream.readable.pipeThrough(new TransformStream({
+          transform(chunk, controller) { for (let i = 0; i < chunk.length; i++) controller.enqueue(chunk.subarray(i, i + 1)); },
+        })) };
+      }
+    };
+    const { entries, expected } = fixture();
+    const large = '<r>압축 결과😀</r>'.repeat(30000);
+    entries['large.xml'] = [large]; expected.set('large.xml', Buffer.from(large));
+    const blob = await zipAsync(entries, undefined, { blob: true });
+    assert.ok(blob instanceof Blob); assert.ok(blob.size < Buffer.byteLength(large) / 10);
+    inspect(new Uint8Array(await blob.arrayBuffer()), expected, [8]);
+    assert.deepEqual(requested, Array(expected.size).fill(['deflate-raw', 'deflate']).flat());
+  } finally { globalThis.CompressionStream = Native; }
+});
+
+test('zlib fallback rejects malformed or truncated framing instead of returning a corrupt ZIP', async () => {
+  const Native = globalThis.CompressionStream;
+  try {
+    for (const bytes of [[0x78], [0x00,0x00,0x03,0,0,0,0,1], [0x78,0x20,0x03,0,0,0,0,1], [0x78,0x9c,0x03,0,1]]) {
+      globalThis.CompressionStream = class {
+        constructor(format) {
+          if (format === 'deflate-raw') throw new TypeError('raw format unsupported');
+          return new TransformStream({ transform() {}, flush(controller) { for (const byte of bytes) controller.enqueue(Uint8Array.of(byte)); } });
+        }
+      };
+      await assert.rejects(zipAsync({ 'bad.xml': ['data'] }), /ZLIB/);
+    }
+  } finally { globalThis.CompressionStream = Native; }
+});
+
+test('zlib fallback stream errors preserve the error and close the lazy input', async () => {
+  const Native = globalThis.CompressionStream, failure = new Error('zlib compression failed'); let closed = false;
+  function* input() { try { for (let i = 0; i < 100; i++) yield '가'.repeat(1 << 18); } finally { closed = true; } }
+  try {
+    globalThis.CompressionStream = class {
+      constructor(format) {
+        if (format === 'deflate-raw') throw new TypeError('raw format unsupported');
+        return new TransformStream({ transform() { throw failure; } });
+      }
+    };
+    await assert.rejects(zipAsync({ 'failed.xml': input() }), error => error === failure);
+    assert.equal(closed, true);
+  } finally { globalThis.CompressionStream = Native; }
 });

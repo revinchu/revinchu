@@ -29,7 +29,9 @@ import { openMobileTools } from './mobile-tools-ui.js';
 import { makeObjectGroup, ungroupObjects } from './object-group.js';
 // WIXEL 메인: 상태 · 선택 · 편집 · 키보드/마우스 · 명령 (그리기는 view.js)
 import { protectedRangeKey, rangeIsUnlocked, cellInEditRange, rangeIntersects, rangesCover, noteVisible, setNoteVisibility } from './review-state.js';
-import { publishedWorkbook } from './publish.js';
+import { publishedWixelFile, packPublishedBlob, assertPublishLinkSize } from './publish.js';
+import { writeWixelFile, readWixelFile } from './wixel-file.js';
+import { createSheetHtmlBlob, exportSlicerHtml } from './html-export.js';
 import { releaseUpdateTarget, watchReleaseUpdate } from './release-update.js';
 import { pictureEditor } from './picture-ui.js';
 import { preparePictureExport, pictureExportBounds } from './picture-export.js';
@@ -78,7 +80,7 @@ import { GridView, BASE_FONT, setBaseFont, measureText, fontStack, PATTERNS, pat
 import { setThemeColors, withThemeColors, THEME, applyTint, presetStyleElements } from './stylepresets.js';
 import { objectStyleKey, findObjectStyle, normalizeObjectStyles, upsertObjectStyle, objectStylePatch, clearObjectStyle } from './object-styles.js';
 import { objectStyleEditor } from './object-style-editor.js';
-import { readXlsxAsync, writeXlsxAsync, xlsxOverflow, xlsxExportWarnings, mergeXlsxImportWarnings, textRaw, parsePrintAreas } from './xlsx.js';
+import { readXlsxAsync, writeXlsxBlobAsync, xlsxOverflow, xlsxExportWarnings, mergeXlsxImportWarnings, textRaw, parsePrintAreas } from './xlsx.js';
 import { readOds, writeOds } from './ods.js';
 import { readXls } from './xls.js';
 import { CellMap } from './cellmap.js';
@@ -224,6 +226,8 @@ let mobileKeyboard;
 let gridMousePan;
 const mobileZooms = new WeakMap();
 const serverState = { saving: false, error: null, savedAt: null };
+let serverSaveJob = null;
+let autoPublishJob = null;
 
 // ───────────────────────── 유틸 ─────────────────────────
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -10119,7 +10123,10 @@ const JS_MACROS = {
     const d = new Date();
     const p2 = (n) => String(n).padStart(2, '0');
     const fileName = `검색광고결과${String(d.getFullYear()).slice(2)}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}.xlsx`;
-    const done = await saveWithPicker(fileName, async () => new Blob([await writeXlsxAsync(await preparePictureExport(out), { fileName })], { type: XLSX_KINDS.xlsx.mime }));
+    const done = await saveWithPicker(fileName, async options => {
+      const blob = await writeXlsxBlobAsync(await preparePictureExport(out), { fileName }, st => options.onProgress(st.p, st.msg));
+      return blob.slice(0, blob.size, XLSX_KINDS.xlsx.mime);
+    });
     if (done) toast(`검색결과를 '${done.name}' 에 저장했습니다.`);
   },
 };
@@ -10585,7 +10592,13 @@ function refreshFullScreen() {
 document.addEventListener('fullscreenchange', refreshFullScreen);
 document.addEventListener('keydown', e=>{if(e.key==='Escape'&&document.body.classList.contains('wixel-fullscreen')){document.body.classList.remove('wixel-fullscreen');refreshFullScreen();}},true);
 async function exportHtmlFile(name = docName) {
-  const done = await saveWithPicker(`${safeFileName(name)}.html`, () => { const html=printSheet({htmlOnly:true,name});return html?new Blob([html],{type:'text/html;charset=utf-8'}):null; });
+  const done = await saveWithPicker(`${safeFileName(name)}.html`, options => createSheetHtmlBlob(wb, si, {
+    ...options, name, rows:gv.rows, cols:gv.cols,
+    renderObject:(kind,o) => {
+      const markup = kind === 'slicer' ? exportSlicerHtml(o, slicerModel(o)) : kind === 'chart' ? gv.chartSvg(o) : kind === 'image' ? pictureDisplaySvg({ ...o, rot:0 }) : `${isSmartArt(o) ? smartArtSvg(o) : shapeSvg(o)}${!isSmartArt(o) && (o.text || o.paras) && !isShapeLine(o) ? shapeTextHtml(o) : ''}`;
+      const host = document.createElement('div'); setSafeHtml(host, markup); return host.innerHTML;
+    },
+  }));
   if(done)toast(`'${done.name}' 웹페이지를 저장했습니다.`);
   return done;
 }
@@ -14188,7 +14201,7 @@ function changeNoteVisibility(mode) {
 }
 function unshareWorkbookDialog() {
   if (viewOnly) { toast('이 문서를 게시한 소유자만 공유를 해제할 수 있습니다.'); return; }
-  const info = pubInfo(), book = wb, id = docId;
+  const info = pubInfo(), book = wb, id = docId, connection = server.connectionVersion;
   if (!info?.id) { alertDialog('통합 문서 공유 해제', '이 문서에 활성화된 온라인 게시 링크가 없습니다. 파일 자체를 담은 오프라인 링크나 이미 내려받은 사본은 회수할 수 없습니다. Excel의 공유 통합 문서(레거시)는 이 기능과 별개입니다.'); return; }
   let busy = false;
   openDialog({ title: '통합 문서 공유 해제', width: 500,
@@ -14472,7 +14485,7 @@ const SAVE_TYPES = {
   xlsx: ['Excel 통합 문서', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'], xlsm: ['Excel 매크로 사용 통합 문서', 'application/vnd.ms-excel.sheet.macroEnabled.12'],
   crtx: ['차트 서식 파일', 'application/vnd.ms-office.charttemplate'],
   xltx: ['Excel 서식 파일', 'application/vnd.openxmlformats-officedocument.spreadsheetml.template'], xltm: ['Excel 매크로 사용 서식 파일', 'application/vnd.ms-excel.template.macroEnabled.12'],
-  ods: ['OpenDocument 스프레드시트', 'application/vnd.oasis.opendocument.spreadsheet'], wixel: ['WIXEL 통합 문서', 'application/json'], json: ['JSON 파일', 'application/json'],
+  ods: ['OpenDocument 스프레드시트', 'application/vnd.oasis.opendocument.spreadsheet'], wixel: ['WIXEL 통합 문서', 'application/octet-stream'], json: ['JSON 파일', 'application/json'],
   csv: ['CSV UTF-8', 'text/csv'], tsv: ['텍스트 (탭으로 분리)', 'text/tab-separated-values'], txt: ['유니코드 텍스트', 'text/plain'],
   pdf: ['PDF', 'application/pdf'], html: ['웹 페이지', 'text/html'], png: ['PNG 그림', 'image/png'], jpg: ['JPEG 그림','image/jpeg'], jpeg: ['JPEG 그림','image/jpeg'], svg: ['SVG 그림','image/svg+xml'],
 };
@@ -14528,16 +14541,24 @@ async function writeSaveTarget(target, blob) {
 }
 /** 선택 → 파일 생성 → 쓰기. 취소면 null. */
 async function saveWithPicker(fileName, make) {
-  const savingBook = wb, savingId = docId;
+  const savingBook = wb, savingId = docId, savingSheet = si, savingVersion = wb.version;
+  const current = () => wb === savingBook && docId === savingId && si === savingSheet && savingBook.version === savingVersion;
   const target = await pickSaveTarget(fileName);
   if (!target) return null;
-  if (wb !== savingBook || docId !== savingId) { toast('문서가 바뀌어 저장을 취소했습니다. 현재 문서에서 다시 저장하세요.'); return null; }
+  if (!current()) { toast('문서가 바뀌어 저장을 취소했습니다. 현재 문서에서 다시 저장하세요.'); return null; }
+  const prog = progressOverlay(`'${fileName}' 저장 중`);
+  exportBusy++;
+  const assertCurrent = () => { if (!current()) throw new Error('저장 중 문서가 변경되었습니다. 현재 문서에서 다시 저장하세요.'); };
   try {
-    const blob = await make();
+    const blob = await make({ isCurrent:current, assertCurrent, onProgress:(p,msg) => prog.set(p, msg ?? '파일 만드는 중') });
     if (!blob) return null;
+    assertCurrent();
+    if (!(blob instanceof Blob) || !blob.size) throw new Error('저장할 파일을 생성하지 못했습니다.');
+    prog.set(.99, '파일 쓰는 중');
     await writeSaveTarget(target, blob);
     return target;
   } catch (err) { alertDialog('파일 저장', `저장하지 못했습니다: ${err.message}`); return null; }
+  finally { exportBusy--; prog.close(); }
 }
 
 const safeFileName = (name) => name.replace(/[\\/:*?"<>|]/g, '_').trim() || '통합 문서';
@@ -14612,10 +14633,10 @@ async function exportXlsx(name = docName, kind = null) {
     const savingVersion = savingBook.version;
     const pictureBook = await preparePictureExport(savingBook, count => prog.set(.05, `그림 효과 준비 중 (${count}개)`));
     if (wb !== savingBook || docId !== savingId) throw new Error('문서가 바뀌었습니다. 현재 문서에서 다시 저장하세요.');
-    const bytes = await writeXlsxAsync(pictureBook, { activeSheet: savingSheet, fileName: target.name, kind: k }, (st) => prog.set(st.p, st.msg));
+    const blob = await writeXlsxBlobAsync(pictureBook, { activeSheet: savingSheet, fileName: target.name, kind: k }, (st) => prog.set(st.p, st.msg));
     if (wb !== savingBook || docId !== savingId || savingBook.version !== savingVersion) throw new Error('저장 중 문서가 변경되었습니다. 다시 저장하세요.');
     prog.set(0.98, '파일 쓰는 중');
-    const saved = await writeSaveTarget(target, new Blob([bytes], { type: XLSX_KINDS[k].mime }));
+    const saved = await writeSaveTarget(target, blob.slice(0, blob.size, XLSX_KINDS[k].mime));
     prog.close();
     if (wb === savingBook && docId === savingId && /^xls[xm]$/.test(k)) {
       fileHandle = target.handle; remoteDoc = false; clearTimeout(serverTimer);
@@ -14661,7 +14682,7 @@ function saveAs() {
     else if (type === 'csv' || type === 'tsv' || type === 'txt') done = await exportCsv(type, newName);
     else if (type === 'ods') done = await exportOdsFile(newName);
     else {
-      done = await saveWithPicker(`${safeFileName(newName)}.wixel`, () => librarySnapshot(wb, { app: 'wixel', docName: newName, docId, si }).blob);
+      done = await saveWithPicker(`${safeFileName(newName)}.wixel`, options => writeWixelFile(wb, { app: 'wixel', docName: newName, docId, si }, options));
       if (done) toast(`'${done.name}' 로 저장했습니다.`);
     }
     if (done && wb === savingBook && docId === savingId) {
@@ -14753,13 +14774,16 @@ async function openFileObject(file, mode, request = beginDocumentOpen()) {
       await openBigCsv(file, base, request);
       return true;
     }
-    const text = await readTextSmart(file); current();
     if (/\.(json|tabula|wixel)$/i.test(file.name)) {
-      const data = JSON.parse(text);
-      loadWorkbook(data.workbook ?? data, data.docName ?? base, data.si ?? 0, request);
-      toast(`'${file.name}'을(를) 열었습니다.`);
-      return true;
+      const prog = progressOverlay(`'${file.name}' 여는 중`, request);
+      try {
+        const data = await readWixelFile(file, { isCurrent:request.isCurrent, onProgress:p => prog.set(p * .6, '저장 파일 읽는 중') });
+        current();
+        await loadWorkbookAsync(data.workbook ?? data, data.docName ?? base, data.si ?? 0, prog, request);
+        current(); toast(`'${file.name}'을(를) 열었습니다.`); return true;
+      } finally { prog.close(); }
     }
+    const text = await readTextSmart(file); current();
     const rows = parseDelimited(text.replace(/^﻿/, ''), guessDelimiter(text));
     if (mode === 'open') {
       loadWorkbook({ sheets: [{ name: base.slice(0, 31) || 'Sheet1', cells: {} }] }, base, 0, request);
@@ -14820,9 +14844,12 @@ function writeRows(rows, r0, c0) {
 
 const documentOpenGate = createDocumentOpenGate();
 const pendingOpenProgress = new Set();
+const pendingOpenBooks = new Set();
 function beginDocumentOpen() {
   const request = documentOpenGate.begin();
   wb?.cancelGraphPreparation();
+  for (const book of pendingOpenBooks) book.cancelGraphPreparation();
+  pendingOpenBooks.clear();
   request.sourceBook = wb;
   // 취소된 읽기가 끝나기를 기다리며 새 문서의 마우스 입력을 가리지 않는다.
   for (const progress of pendingOpenProgress) progress.box.remove();
@@ -14864,6 +14891,8 @@ function installWorkbook(next, name, activeSheet, request, nextDocId) {
   cancelHeaderResize();
   if (publishedWatch?.request !== request) stopPublishedWatch();
   fileHandle = null; remoteDoc = false; allowPrivateImports = false;
+  serverSaveJob = null; autoPublishJob = null;
+  Object.assign(serverState, { saving:false, error:null, savedAt:null });
   NET.cache.clear();
   // 이전 문서의 지연 계산 완료가 새 문서의 변경 알림을 발생시키지 않도록 분리한다.
   wb.dropGraph();
@@ -14890,7 +14919,7 @@ function loadWorkbook(data, name, activeSheet = 0, request = beginDocumentOpen()
 }
 
 /** 셀·피벗을 새 문서에서 준비한 뒤 최신 열기 요청만 한 번에 화면에 반영한다. */
-async function loadWorkbookAsync(data, name, activeSheet, prog, request = beginDocumentOpen()) {
+async function loadWorkbookAsync(data, name, activeSheet, prog, request = beginDocumentOpen(), beforeInstall = null) {
   request.assertCurrent();
   const nextDocId = pendingDocId; pendingDocId = null;
   const next = new Workbook();
@@ -14914,11 +14943,17 @@ async function loadWorkbookAsync(data, name, activeSheet, prog, request = beginD
   request.assertCurrent();
   if (!next.graph && next.pending.length) {
     const points = next.pending; next.pending = [];
-    setTimeout(() => {
-      if (wb !== next) return;
-      next.prepareGraph().catch(() => false).then(() => { if (wb !== next) return; next.dirtyPoints(points); renderAll(); });
-    }, 0);
+    // 가져오기에서 바뀐 피벗의 의존성도 설치 전에 확정합니다. 이전의 지연
+    // 콜백은 사용자가 저장을 시작한 뒤 version/계산 캐시를 바꾸었습니다.
+    prog?.set(.98, '피벗과 수식 연결 정리 중');
+    pendingOpenBooks.add(next);
+    try { await next.prepareGraph().catch(() => false); } finally { pendingOpenBooks.delete(next); }
+    request.assertCurrent();
+    next.dirtyPoints(points);
   } else next.flushPending();
+  request.assertCurrent();
+  // 준비가 성공한 뒤 모드 변경·최종 편집 검사를 설치와 같은 동기 구간에서 실행한다.
+  beforeInstall?.();
   installWorkbook(next, name, activeSheet, request, nextDocId);
   return true;
 }
@@ -15457,13 +15492,15 @@ const setPubInfo = (v) => { try { if (v) localStorage.setItem(pubKey(), JSON.str
 const appBase = () => location.href.replace(/[?#].*$/, '');
 
 /** 게시용 스냅샷: 선택한 시트만 · 보기 옵션 */
-function publishSnapshot(opt) {
-  const selection = opt.sheet ?? 'all';
-  return {
+async function publishSnapshot(opt) {
+  const selection = opt.sheet ?? 'all', book = wb, id = docId;
+  return publishedWixelFile(book, selection, {
     app: 'wixel', docName, docId, si: selection === 'all' ? si : 0,
-    workbook: publishedWorkbook(wb, selection),
     view: { headers: !!opt.headers, grid: !!opt.grid, title: opt.title ?? docName, published: Date.now() },
-  };
+  }, { isCurrent:() => wb === book && docId === id });
+}
+async function onlineSnapshot(blob) {
+  return packPublishedBlob(blob, { maxBytes:server.capabilities.maxDocumentBytes ?? 50 * 1024 * 1024 });
 }
 
 async function publishDialog() {
@@ -15482,24 +15519,37 @@ async function publishDialog() {
     inp.select();
   };
   const opt = () => ({ sheet: sheetSel.value, headers: headers.checked, grid: grid.checked });
-  const linkOnly = async () => {
-    try {
-    const { blob } = await packText(JSON.stringify(publishSnapshot(opt())));
-    const code = b64url(new Uint8Array(await blob.arrayBuffer()));
-    if (code.length > LINK_MAX) { out.replaceChildren(el('div', { class: 'warn' }, `문서가 커서(${Math.round(code.length / 1024)}KB) 링크에 담을 수 없습니다. 온라인 보관함에 연결해 게시하거나 시트 하나만 공유하세요.`)); return; }
-    show(`${appBase()}#view=${code}`, '링크 안에 문서 내용이 압축되어 들어 있어 서버 없이도 누구나 볼 수 있습니다 (읽기 전용 · 그 시점의 내용).');
-    } catch (err) { out.replaceChildren(el('div', { class: 'warn' }, `링크를 만들지 못했습니다: ${err.message}`)); }
+  let publishing = false;
+  const publishTask = async (work) => {
+    if (publishing) return;
+    const book = wb, id = docId, revision = wb.version, connection = server.connectionVersion;
+    const current = () => book === wb && id === docId && revision === wb.version && connection === server.connectionVersion;
+    const check = () => { if (!current()) throw new Error('문서나 보관함 연결이 바뀌었습니다. 현재 문서에서 다시 게시하세요.'); };
+    publishing = true; exportBusy++;
+    out.replaceChildren(el('div', { class:'muted' }, '문서를 나누어 압축하는 중…'));
+    try { await work(check); }
+    catch (err) { if (current()) out.replaceChildren(el('div', { class:'warn' }, `게시하지 못했습니다: ${err.message}`)); }
+    finally { publishing = false; exportBusy--; }
   };
+  const linkOnly = () => publishTask(async check => {
+    const blob = await publishSnapshot(opt()); check();
+    assertPublishLinkSize(blob, LINK_MAX);
+    const code = b64url(new Uint8Array(await blob.arrayBuffer())); check();
+    show(`${appBase()}#view=${code}`, '링크 안에 문서 내용이 압축되어 들어 있어 서버 없이도 누구나 볼 수 있습니다 (읽기 전용 · 그 시점의 내용).');
+  });
   const serverPub = async () => {
     if (!server.connected) { connectStorage(serverPub); return; }
-    try {
-      const res = await server.publish(publishSnapshot(opt()), info?.id ?? null);
-      setPubInfo({ id: res.id, auto: auto.checked, opt: opt() });
-      show(`${appBase()}?view=${res.id}`, `읽기 전용으로 게시했습니다. ${auto.checked ? '온라인 저장 시 게시본도 새로 고쳐지고, 보는 사람 화면은 30초마다 갱신됩니다.' : '[다시 게시]를 눌러야 게시본이 바뀝니다.'}`);
-    } catch (err) {
-      if (err.status === 401) askServerToken(serverPub);
-      else out.replaceChildren(el('div', { class: 'warn' }, `게시하지 못했습니다: ${err.message}`));
-    }
+    await publishTask(async check => {
+      const options = opt(), automatic = auto.checked;
+      const blob = await publishSnapshot(options); check();
+      const body = await onlineSnapshot(blob); check();
+      let res;
+      try { res = await server.publish(body, info?.id ?? null, { isCurrent:() => { check(); return true; } }); }
+      catch (err) { if (err.status === 401) { check(); askServerToken(serverPub); return; } throw err; }
+      check();
+      setPubInfo({ id: res.id, auto: automatic, opt: options });
+      show(`${appBase()}?view=${res.id}`, `읽기 전용으로 게시했습니다. ${automatic ? '온라인 저장 시 게시본도 새로 고쳐지고, 보는 사람 화면은 30초마다 갱신됩니다.' : '[다시 게시]를 눌러야 게시본이 바뀝니다.'}`);
+    });
   };
   const body = el('div', { class: 'an-dlg' },
     el('div', { class: 'muted' }, '구글 스프레드시트의 [웹에 게시]처럼 읽기 전용 대시보드 화면(리본 · 수식 입력줄 없이)으로 공유합니다. 보는 사람은 슬라이서 · 필터를 눌러 볼 수 있지만 원본은 바뀌지 않습니다.'),
@@ -15520,13 +15570,38 @@ async function publishDialog() {
 }
 /** 자동 다시 게시 (서버 저장과 함께) */
 function autoRepublish() {
-  const info = pubInfo(), book = wb, id = docId;
+  const info = pubInfo(), book = wb, id = docId, connection = server.connectionVersion;
   if (!info?.id || !info.auto || !server.connected || viewOnly) return;
-  const current = () => wb === book && docId === id && pubInfo()?.id === info.id && pubInfo()?.auto;
-  Promise.resolve().then(() => current() ? server.publish(publishSnapshot(info.opt ?? { sheet: 'all', grid: true }), info.id) : null).catch((err) => {
-    if (!current()) return;
-    setPubInfo({ ...info, auto: false }); toast(`게시본 자동 갱신을 중단했습니다: ${err.message}. 공유 창에서 확인하세요.`);
-  });
+  // A slow upload owns the revision until its response arrives. Coalesce later
+  // saves into one fresh snapshot instead of sending the same If-Match twice.
+  if (autoPublishJob?.book === book && autoPublishJob.id === id && autoPublishJob.connection === connection && autoPublishJob.publication === info.id) {
+    autoPublishJob.pending = true;
+    return autoPublishJob.promise;
+  }
+  const job = { book, id, connection, publication:info.id, pending:false, promise:null };
+  autoPublishJob = job;
+  const samePublication = () => wb === book && docId === id && server.connectionVersion === connection && pubInfo()?.id === info.id;
+  const current = () => autoPublishJob === job && samePublication() && pubInfo()?.auto && !viewOnly;
+  job.promise = Promise.resolve().then(async () => {
+    do {
+      job.pending = false;
+      if (!current()) return;
+      const revision = book.version, latest = pubInfo();
+      try {
+        const body = await onlineSnapshot(await publishSnapshot(latest.opt ?? { sheet: 'all', grid: true }));
+        // After sending, acknowledge its revision even if another edit follows.
+        if (current() && book.version === revision) await server.publish(body, info.id, { isCurrent:samePublication });
+      } catch (err) {
+        // Editing cancels this snapshot; the next saved revision will publish it.
+        if (!current()) return;
+        if (err.code !== 'WIXEL_FILE_ABORT') {
+          setPubInfo({ ...pubInfo(), auto: false }); toast(`게시본 자동 갱신을 중단했습니다: ${err.message}. 공유 창에서 확인하세요.`);
+          return;
+        }
+      }
+    } while (job.pending && current());
+  }).finally(() => { if (autoPublishJob === job) autoPublishJob = null; });
+  return job.promise;
 }
 
 // 읽기 전용 보기 (게시된 문서 · 링크)
@@ -15536,26 +15611,28 @@ function stopPublishedWatch() {
   if (publishedWatch) clearInterval(publishedWatch.timer);
   publishedWatch = null;
 }
-function enterViewMode(data, { pubId = null, request = beginDocumentOpen() } = {}) {
+async function enterViewMode(data, { pubId = null, request = beginDocumentOpen() } = {}) {
   request.assertCurrent(); request.keepUrl = true;
-  stopPublishedWatch();
-  viewOnly = true;
-  allowPrivateImports = false;
-  NET.cache.clear();
-  autosave = false;
-  document.body.classList.add('view-mode');
   const v = data.view ?? {};
-  view.showHeaders = !!v.headers;
-  if (v.grid === false) view.showGrid = false;
-  document.querySelector('.view-bar')?.remove();
   const bar = el('div', { class: 'view-bar' },
     el('b', {}, v.title ?? data.docName ?? 'WIXEL'),
     el('span', { class: 'muted' }, ` · 읽기 전용${v.published ? ` · 게시: ${formatDate(v.published)}` : ''}`),
     el('span', { class: 'view-live', hidden: !pubId }, '● 자동 새로 고침'),
     el('button', { class: 'btn', onclick: () => { if (viewOnly && activeDocumentRequest?.isCurrent()) exitViewMode(); } }, '편집용 사본 만들기'));
-  document.getElementById('app').prepend(bar);
-  loadWorkbook(data.workbook, data.docName ?? 'WIXEL', data.si ?? 0, request);
-  applyView(); renderAll();
+  const prog = progressOverlay('게시된 문서 여는 중', request);
+  try {
+    await loadWorkbookAsync(data.workbook, data.docName ?? 'WIXEL', data.si ?? 0, prog, request, () => {
+      // 읽기 실패·취소 때 기존 문서의 모드와 자동 저장을 그대로 유지한다.
+      libraryFlush();
+      stopPublishedWatch();
+      viewOnly = true; autosave = false;
+      document.body.classList.add('view-mode');
+      view.showHeaders = !!v.headers; view.showGrid = v.grid !== false;
+      document.querySelector('.view-bar')?.remove();
+      document.getElementById('app').prepend(bar);
+    });
+  } finally { prog.close(); }
+  request.assertCurrent(); applyView(); renderAll();
   if (pubId) {
     const watch = { request, book:wb, seen:null, busy:false, timer:null };
     const current = () => publishedWatch === watch && viewOnly && watch.request.isCurrent() && wb === watch.book;
@@ -15565,10 +15642,11 @@ function enterViewMode(data, { pubId = null, request = beginDocumentOpen() } = {
       watch.busy = true;
       const pollingRequest = watch.request;
       try {
-        const res = await server.published(pubId);
+        const res = await server.published(pubId, { isCurrent:current });
         if (!current() || watch.request !== pollingRequest) return;
         if (watch.seen !== null && res.modified > watch.seen) {
-          loadWorkbook(res.data.workbook, res.data.docName ?? docName, si, pollingRequest);
+          await loadWorkbookAsync(res.data.workbook, res.data.docName ?? docName, si, null, pollingRequest);
+          if (!pollingRequest.isCurrent() || !viewOnly) return;
           watch.book = wb;
           toast('게시된 문서가 업데이트되었습니다.');
         }
@@ -15598,13 +15676,13 @@ async function openFromUrl(request = beginDocumentOpen()) {
   try {
     request.assertCurrent();
     if (hash.startsWith('#view=')) {
-      const text = await unpackText({ gz: true, blob: new Blob([fromB64url(hash.slice(6))]) });
-      request.assertCurrent(); enterViewMode(JSON.parse(text), { request });
+      const data = await readWixelFile(new Blob([fromB64url(hash.slice(6))]), { isCurrent:request.isCurrent });
+      request.assertCurrent(); await enterViewMode(data, { request });
       return true;
     }
     if (q.get('view') && server.available) {
-      const res = await server.published(q.get('view'));
-      request.assertCurrent(); enterViewMode(res.data, { pubId:q.get('view'), request });
+      const res = await server.published(q.get('view'), { isCurrent:request.isCurrent });
+      request.assertCurrent(); await enterViewMode(res.data, { pubId:q.get('view'), request });
       return true;
     }
     if (q.get('doc') && server.available) {
@@ -15621,22 +15699,33 @@ async function openFromUrl(request = beginDocumentOpen()) {
 let collabTimer = null;
 function startCollabWatch() {
   clearInterval(collabTimer);
+  collabTimer = null;
   if (!server.connected) return;
-  collabTimer = setInterval(async () => {
-    if (serverRestoreBusy || viewOnly || !remoteDoc || dirty || editing || !serverState.savedAt) return;
-    const watchingId = docId, watchingVersion = wb.version, watchingName = docName, watchingRequest = activeDocumentRequest;
-    if (!watchingRequest?.isCurrent()) return;
+  let busy = false;
+  const timer = setInterval(async () => {
+    if (busy || serverRestoreBusy || viewOnly || !remoteDoc || dirty || editing || !serverState.savedAt) return;
+    const watchingBook = wb, watchingId = docId, watchingVersion = wb.version, watchingName = docName, watchingRequest = activeDocumentRequest;
+    const connection = server.connectionVersion, path = `files/${encodeURIComponent(watchingName)}`;
+    const sameDocument = () => collabTimer === timer && watchingRequest?.isCurrent() && wb === watchingBook && docId === watchingId && docName === watchingName && server.connectionVersion === connection;
+    const current = () => sameDocument() && !serverRestoreBusy && !viewOnly && !dirty && !editing && wb.version === watchingVersion && remoteDoc;
+    if (!current()) return;
+    const revisionBefore = server.revision(path);
+    let loadedRevision;
+    busy = true;
     try {
       const files = await server.list();
+      if (!current()) return;
       const f = files.find((x) => x.name === watchingName);
-      if (f && (f.revision != null ? String(f.revision) !== server.revision(`files/${encodeURIComponent(watchingName)}`) : f.modified > serverState.savedAt + 1500)) {
-        if (!watchingRequest.isCurrent() || serverRestoreBusy || dirty || editing || docId !== watchingId || wb.version !== watchingVersion || !remoteDoc) return;
+      if (f && (f.revision != null ? String(f.revision) !== server.revision(path) : f.modified > serverState.savedAt + 1500)) {
         const keep = { si, r: active.r, c: active.c };
-        const revisionBefore = server.revision(`files/${encodeURIComponent(watchingName)}`);
-        const data = await server.load(watchingName);
-        if (!watchingRequest.isCurrent() || serverRestoreBusy || dirty || editing || docId !== watchingId || wb.version !== watchingVersion || !remoteDoc) { server.restoreRevision(`files/${encodeURIComponent(watchingName)}`, revisionBefore); return; }
-        pendingDocId = docId;
-        loadWorkbook(data.workbook ?? data, data.docName ?? docName, keep.si, watchingRequest);
+        const data = await server.load(watchingName, { isCurrent:current });
+        loadedRevision = server.revision(path);
+        if (!current()) return;
+        pendingDocId = watchingId;
+        await loadWorkbookAsync(data.workbook ?? data, data.docName ?? watchingName, keep.si, null, watchingRequest, () => {
+          if (!current()) throw Object.assign(new Error('편집 중이어서 자동 다시 열기를 취소했습니다.'), { code:'DOCUMENT_OPEN_CANCELLED' });
+        });
+        if (!watchingRequest.isCurrent() || activeDocumentRequest !== watchingRequest || server.connectionVersion !== connection) return;
         remoteDoc = true;
         dirty = false;
         serverState.savedAt = f.modified;
@@ -15644,8 +15733,14 @@ function startCollabWatch() {
         updateTitle();
         toast('다른 사용자가 저장한 내용을 불러왔습니다.');
       }
-    } catch { /* 네트워크 오류 무시 */ }
+    } catch { /* 네트워크 오류·편집으로 인한 취소는 기존 문서를 유지한다. */ }
+    finally {
+      // 새 문서/연결/요청에서 얻은 최신 리비전을 이전 감시 응답으로 되돌리지 않는다.
+      if (loadedRevision !== undefined && sameDocument() && server.revision(path) === loadedRevision) server.restoreRevision(path, revisionBefore);
+      busy = false;
+    }
   }, 15000);
+  collabTimer = timer;
 }
 
 /** Recovery identity is written synchronously before delayed large-document autosave.
@@ -15969,10 +16064,14 @@ async function saveNow(explicit, { quiet = false, saveAsFolder = false, suggeste
   }
   if (serverState.saving) return;
   const savingName = docName, savingBook = wb, savingRev = wb.version, savingId = docId, savingConnection = server.connectionVersion;
+  const saveJob = {}; serverSaveJob = saveJob;
   serverState.saving = true;
   updateTitle();
   try {
-    const result = await server.save(savingName, snapshot());
+    const current = () => savingName === docName && savingBook === wb && savingId === docId && savingConnection === server.connectionVersion && remoteDoc;
+    const body = await onlineSnapshot(await writeWixelFile(savingBook, { app:'wixel', docName:savingName, docId:savingId, si }, { isCurrent:current }));
+    if (!current()) return;
+    const result = await server.save(savingName, body, { isCurrent:current });
     if (savingName !== docName || savingBook !== wb || savingId !== docId || savingConnection !== server.connectionVersion || !remoteDoc) return;
     serverState.error = null;
     serverState.savedAt = result.modified ?? Date.now();
@@ -15981,15 +16080,24 @@ async function saveNow(explicit, { quiet = false, saveAsFolder = false, suggeste
     saveToStorage();
     if (explicit && !quiet) toast(`${server.label}에 '${docName}'을(를) 저장했습니다.`);
   } catch (err) {
-    if (savingName !== docName || savingBook !== wb || savingId !== docId || savingConnection !== server.connectionVersion) return;
+    if (savingName !== docName || savingBook !== wb || savingId !== docId || savingConnection !== server.connectionVersion || !remoteDoc) return;
+    if (err.code === 'WIXEL_FILE_ABORT') {
+      // A new edit invalidated this snapshot. Keep autosave enabled and let the
+      // normal debounce below retry; never spin while the user is still typing.
+      dirty = true; serverState.error = null;
+      if (explicit && !quiet) toast('저장 중 내용이 바뀌었습니다. 편집이 끝난 뒤 다시 저장하세요.');
+      return;
+    }
     serverState.error = err.message;
     if (err.status === 412 || err.code === 'REVISION_CONFLICT') remoteConflict();
     else if (err.status === 401) askServerToken(() => saveNow(explicit));
     else toast(`${server.label} 저장 실패: ${err.message} · 브라우저의 사본은 유지됩니다.`);
   } finally {
-    serverState.saving = false;
-    updateTitle();
-    if (dirty && !serverState.error && remoteDoc) scheduleServerSave();
+    if (serverSaveJob === saveJob) {
+      serverSaveJob = null; serverState.saving = false;
+      updateTitle();
+      if (dirty && !serverState.error && remoteDoc) scheduleServerSave();
+    }
   }
 }
 
@@ -16010,10 +16118,16 @@ async function openFromServer(name, opening = beginDocumentOpen()) {
   const connection = server.connectionVersion;
   const sameDocument = () => opening.isCurrent() && request === serverOpenRequest && wb === book && docId === id && wb.version === version && !editing;
   const current = () => sameDocument() && server.connectionVersion === connection;
+  const path = `files/${encodeURIComponent(name)}`, revisionBefore = server.revision(path);
+  let loadedRevision;
   try {
-    const data = await server.load(name);
+    const data = await server.load(name, { isCurrent:current });
+    loadedRevision = server.revision(path);
     if (!current()) { if (request === serverOpenRequest) toast('문서가 바뀌거나 편집 중이어서 이전 열기 요청을 취소했습니다.'); return false; }
-    loadWorkbook(data.workbook ?? data, data.docName ?? name, data.si ?? 0, opening);
+    await loadWorkbookAsync(data.workbook ?? data, data.docName ?? name, data.si ?? 0, null, opening, () => {
+      if (!current()) throw Object.assign(new Error('문서가 바뀌거나 편집 중이어서 이전 열기 요청을 취소했습니다.'), { code:'DOCUMENT_OPEN_CANCELLED' });
+    });
+    if (!opening.isCurrent() || activeDocumentRequest !== opening || server.connectionVersion !== connection) return false;
     remoteDoc = true;
     fileHandle = null;
     saveToStorage();
@@ -16028,7 +16142,10 @@ async function openFromServer(name, opening = beginDocumentOpen()) {
     if (err.status === 401) askServerToken(() => { if (sameDocument()) openFromServer(name, opening); });
     else alertDialog('WIXEL', `열 수 없습니다: ${err.message}`);
     return false;
-  } finally { finishDocumentOpen(opening); }
+  } finally {
+    if (loadedRevision !== undefined && opening.isCurrent() && request === serverOpenRequest && wb === book && docId === id && server.connectionVersion === connection && server.revision(path) === loadedRevision) server.restoreRevision(path, revisionBefore);
+    finishDocumentOpen(opening);
+  }
 }
 
 function formatDate(ms) {
@@ -19771,6 +19888,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['대형 문서 파일 저장과 게시', ['WIXEL 파일과 온라인 게시본을 나누어 압축하고, Excel 파일도 시트와 피벗 캐시를 순서대로 압축하여 저장 시 메모리 사용을 줄였습니다. 새 WIXEL 저장본은 업데이트된 위셀에서 열 수 있으며 이전 저장 형식도 읽습니다.', 'HTML 다운로드는 인쇄 페이지 수와 별도로 생성하며, 큰 시트는 한 파일 안에서 행·열 구간을 넘겨 확인합니다.', '가져온 문서의 피벗과 수식 연결을 정리한 뒤 편집 화면을 열어, 저장 중 늦은 계산 때문에 저장이 취소되는 문제를 수정했습니다.', '숫자 표시 형식의 의미 있는 공백과 XLSB 사용자 피벗 스타일 이름을 보존합니다. 잘못 잘린 서식 코드 때문에 Excel이 저장 파일을 거부하는 문제를 수정했습니다.', '온라인 문서 한도를 압축 게시 형식 기준 32MiB로 조정했으며, 서버 문서 열기·게시 갱신 중 이전 응답이 현재 편집 상태를 덮어쓰지 않도록 했습니다.']],
   ['대형 문서 자동 저장과 복구', ['대형 문서를 문서별로 자동 저장하고 탭마다 열었던 문서를 구분합니다. 저장이 끝나기 전에 앱이 다시 시작되면 이전 문서를 조용히 여는 대신 복구할 저장본을 확인합니다. 저장 연결이 끊겼을 때 재연결하고, 파일 전환 시 이전 문서의 백그라운드 계산과 피벗 창·개체 캐시의 참조를 해제합니다.']],
   ['피벗 캡션과 공유 슬라이서 설정', ['빈 피벗 캡션을 Excel 저장 후에도 보존합니다. 같은 캐시를 공유하는 슬라이서의 정렬과 데이터 없는 항목 설정을 함께 적용하며, 개별 캡션·스타일·위치는 유지합니다.']],
   ['대형 Excel 파일과 저장 정확성', ['큰 시트와 피벗 캐시를 순서대로 읽고, 같은 서식의 빈 셀을 묶어 메모리와 자동 저장 부담을 줄였습니다.', '피벗의 저장된 원본 캐시를 보관·복원하고, 원본 편집 뒤 오래된 캐시가 다시 나타나는 경로를 수정했습니다.', 'Excel 둥근 사각형의 모서리 조정값과 일반 도형 그룹의 중첩·배율·그림 효과를 보존합니다.', '피벗 연결이 없는 슬라이서도 항목과 선택 상태를 유지하며, 피벗 원본 변경·서식 편집·실행 취소에서 저장값이 섞이는 문제를 수정했습니다.', '표 수식의 반복 참조와 큰 슬라이서 목록의 화면 요소를 묶어 메모리 부담을 줄이고, 많은 셀 스타일은 검색·페이지로 선택할 수 있습니다.', '데이터 모델(OLAP/DAX) 피벗은 아직 지원하지 않습니다. 해당 파일을 열거나 다시 내보낼 때 지원 범위와 원본 보관 안내를 표시합니다.']],

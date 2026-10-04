@@ -1,26 +1,31 @@
-// 큰 합성 문서의 정확한 20MiB 경계 및 초과 거부를 실제 workerd에서 확인합니다.
+// 로컬 workerd에서 실제 크기의 합성 packed JSON 및 정확한 32MiB 경계를 검증합니다.
 import assert from 'node:assert/strict';
-import { randomBytes, createHash } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
+import { LIMITS } from './shared.js';
+import { packedPayload, streamDigest } from './large-payload-fixture.mjs';
 const base = process.env.WIXEL_WORKER_URL || 'http://127.0.0.1:8787';
-const key = randomBytes(32).toString('base64url'), max = 20 * 1024 * 1024;
-const headers = { 'X-Wixel-Vault': key, 'Content-Type': 'application/json', 'If-Match': '"0"' };
-const body = '"' + 'x'.repeat(max - 2) + '"';
-let revision;
+if (!['localhost', '127.0.0.1', '[::1]'].includes(new URL(base).hostname)) throw new Error('이 검사는 로컬 workerd에서만 실행할 수 있습니다.');
+const key = randomBytes(32).toString('base64url'), max = LIMITS.maxDocumentBytes;
+const headers = { 'X-Wixel-Vault': key, 'Content-Type': 'application/json' };
+const name = 'packed-limit-synthetic'; let revision;
+const request = (payload, expected) => fetch(`${base}/api/files/${name}`, { method:'PUT', headers:{...headers,'If-Match':`"${expected}"`}, body:payload.stream(), duplex:'half' });
+async function verify(payload) {
+  const got=await fetch(`${base}/api/files/${name}`,{headers:{'X-Wixel-Vault':key}});
+  assert.equal(got.status,200);
+  assert.deepEqual(await streamDigest(got.body),{bytes:payload.bytes,sha256:payload.sha256});
+}
 try {
-  const put = await fetch(base + '/api/files/limit', { method: 'PUT', headers, body });
-  assert.equal(put.status, 200); revision = (await put.json()).revision;
-  const got = await fetch(base + '/api/files/limit', { headers: { 'X-Wixel-Vault': key } });
-  assert.equal(got.status, 200);
-  const hash = createHash('sha256'); let size = 0;
-  for await (const chunk of got.body) { hash.update(chunk); size += chunk.length; }
-  assert.equal(size, max);
-  assert.equal(hash.digest('hex'), createHash('sha256').update(body).digest('hex'));
-  const rejected = await fetch(base + '/api/files/oversized', { method: 'PUT', headers, body: body + ' ' });
-  assert.equal(rejected.status, 413); await rejected.arrayBuffer();
-  console.log(JSON.stringify({ exactLimitBytes: size, roundTrip: true, overLimitStatus: rejected.status }));
+  const health=await (await fetch(base+'/api/health')).json();
+  assert.equal(health.maxDocumentBytes,max);assert.equal(health.maxVaultBytes,100*1024*1024);assert.equal(health.maxHistoryBytes,100*1024*1024);
+  const packed=packedPayload(27_536_555);
+  const saved=await request(packed,0);assert.equal(saved.status,200);revision=(await saved.json()).revision;
+  await verify(packed);
+  const rejected=await request(packedPayload(max+1),revision);assert.equal(rejected.status,413);assert.equal((await rejected.json()).code,'DOCUMENT_TOO_LARGE');
+  await verify(packed);
+  const list=await (await fetch(base+'/api/files',{headers:{'X-Wixel-Vault':key}})).json();assert.equal(list[0].revision,revision);
+  const exact=packedPayload(max), boundary=await request(exact,revision);assert.equal(boundary.status,200);revision=(await boundary.json()).revision;
+  await verify(exact);
+  console.log(JSON.stringify({packedBytes:packed.bytes,packedRoundTrip:true,overLimitStatus:413,rollback:true,exactLimitBytes:max,exactRoundTrip:true}));
 } finally {
-  if (revision) {
-    const removed = await fetch(base + '/api/files/limit', { method: 'DELETE', headers: { 'X-Wixel-Vault': key, 'If-Match': '"' + revision + '"' } });
-    assert.equal(removed.status, 200); await removed.arrayBuffer();
-  }
+  if(revision){const removed=await fetch(`${base}/api/files/${name}`,{method:'DELETE',headers:{'X-Wixel-Vault':key,'If-Match':`"${revision}"`}});assert.equal(removed.status,200);await removed.arrayBuffer();}
 }
