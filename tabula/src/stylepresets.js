@@ -174,6 +174,9 @@ export function withThemeColors(colors, work) {
  * hex: 'RRGGBB' → 'RRGGBB'
  */
 export function applyTint(hex, tint) {
+  // Excel stores/imports tint in signed 1/32767 steps, including decimal XML
+  // values. Quantizing first also avoids the binary floating point .8 boundary.
+  tint = Math.trunc(tint * 32767) / 32767;
   if (!tint) return hex;
   const HM = 240;
   const RM = 255;
@@ -193,7 +196,11 @@ export function applyTint(hex, tint) {
     if (H < 0) H += HM;
     if (H > HM) H -= HM;
   }
-  L = Math.round(tint < 0 ? L * (1 + tint) : L * (1 - tint) + HM * tint);
+  // Excel truncates each multiplication before the positive-tint addition.
+  // Rounding the final sum changes theme fills (e.g. 4472C4 +80%); simply
+  // flooring that sum also loses an extra luminance step near tint boundaries.
+  L = tint < 0 ? Math.floor(L * (1 + tint))
+    : Math.floor(L * (1 - tint)) + HM - Math.floor(HM * (1 - tint));
   L = Math.max(0, Math.min(HM, L));
   let out;
   if (S === 0) {

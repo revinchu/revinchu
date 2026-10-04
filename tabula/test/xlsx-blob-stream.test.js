@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Workbook } from '../src/workbook.js';
-import { writeXlsxBlobAsync, readXlsx } from '../src/xlsx.js';
+import { writeXlsxBlobAsync, writeXlsxToSink, readXlsx } from '../src/xlsx.js';
 import { unzip, textOf } from '../src/zip.js';
 import { pivotSourceData } from '../src/pivot.js';
 
@@ -18,17 +18,25 @@ function fixture() {
   return wb;
 }
 
-for (const compress of [true,false]) test(`Blob XLSX roundtrip keeps cells, edits, formats, pivot cache and slicer design: native=${compress}`, async () => {
+for (const disk of [false,true]) for (const compress of [true,false]) test(`XLSX roundtrip keeps cells, edits, formats, pivot cache and slicer design: disk=${disk}, native=${compress}`, async () => {
   const wb = fixture(), before = JSON.stringify(wb.serialize()), original = globalThis.CompressionStream;
   let bytes;
   try {
     if (!compress) globalThis.CompressionStream = undefined;
-    const blob = await writeXlsxBlobAsync(wb);
-    assert.ok(blob instanceof Blob); assert.ok(blob.size > 0);
-    bytes = new Uint8Array(await blob.arrayBuffer());
+    if (disk) {
+      const chunks = []; let total = 0;
+      const result = await writeXlsxToSink(wb, {}, { async write(chunk) { total += chunk.length; chunks.push(chunk.slice()); } });
+      assert.equal(result.bytesWritten, total);
+      bytes = new Uint8Array(await new Blob(chunks).arrayBuffer());
+    } else {
+      const blob = await writeXlsxBlobAsync(wb);
+      assert.ok(blob instanceof Blob); assert.ok(blob.size > 0);
+      bytes = new Uint8Array(await blob.arrayBuffer());
+    }
   } finally { globalThis.CompressionStream = original; }
   const files = unzip(bytes);
-  assert.equal(Object.keys(files)[0], '[Content_Types].xml');
+  assert.ok(files['[Content_Types].xml']);
+  if (!disk) assert.equal(Object.keys(files)[0], '[Content_Types].xml');
   const xml = textOf(files['xl/worksheets/sheet1.xml']);
   assert.ok(xml.length > 1 << 20);
   assert.match(xml, /<c r="E32005" s="\d+"\/>/);
@@ -70,4 +78,16 @@ test('wide formula rows stream individual cells without joining one oversized ro
   } finally {Array.prototype.join=join;}
   const back=new Workbook(readXlsx(bytes).data);
   for(let c=0;c<96;c++){assert.equal(back.getRaw(0,0,c),raw);assert.equal(back.getValue(0,0,c),value);}
+});
+
+
+test('disk XLSX writes a sheet before producing the next and stops on disk error', async () => {
+  const wb = new Workbook({sheets:[{name:'A',cells:{'0,0':{raw:'first'}}},{name:'B',cells:{'0,0':{raw:'second'}}}]}), getValue = wb.getValue.bind(wb);
+  let writes = 0, reachedSecond = false;
+  wb.getValue = (si,r,c) => { if (si === 1) { reachedSecond = true; assert.ok(writes > 0); } return getValue(si,r,c); };
+  await writeXlsxToSink(wb, {}, {async write() { writes++; }});
+  assert.equal(reachedSecond, true);
+  reachedSecond = false;
+  await assert.rejects(writeXlsxToSink(wb, {}, {async write() { throw Error('disk full'); }}), /disk full/);
+  assert.equal(reachedSecond, false, 'disk failure must stop constructing later sheets');
 });

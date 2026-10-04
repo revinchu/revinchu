@@ -1,3 +1,4 @@
+import { zip64Directory, zip64Entry } from './zip64-read.js';
 // ZIP 읽기/쓰기 (xlsx 용). 외부 라이브러리 없이 inflate(RFC 1951)를 직접 구현.
 // 쓰기는 무압축(stored) 방식 — 모든 스프레드시트 프로그램이 읽을 수 있음.
 
@@ -248,18 +249,25 @@ function zipEntries(bytes) {
     if (/DRMONE|FASOO|SCDSA|SOFTCAMP|MARKANY|DOCUMENT SECURITY|ENCRYPTED AND PROTECTED/.test(head)) throw new Error('문서 보안(DRM)으로 암호화된 파일이라 열 수 없습니다. 회사 보안 프로그램에서 암호화를 해제(반출)한 파일을 열어 주세요.');
     throw new Error('ZIP 파일이 아닙니다');
   }
-  const count = dv.getUint16(eocd + 10, true);
-  let p = dv.getUint32(eocd + 16, true);
+  let count = dv.getUint16(eocd + 10, true), p = dv.getUint32(eocd + 16, true);
+  // Some ZIP32 writers allow exactly 65,535 entries without ZIP64 end records.
+  const hasZip64Locator = eocd >= 20 && dv.getUint32(eocd - 20, true) === 0x07064b50;
+  if ((count === 0xffff && hasZip64Locator) || p === 0xffffffff || dv.getUint32(eocd + 12, true) === 0xffffffff) {
+    const directory = zip64Directory(dv, eocd); count = directory.count; p = directory.offset;
+  }
   const out = [];
   for (let n = 0; n < count; n++) {
     if (dv.getUint32(p, true) !== 0x02014b50) throw new Error('ZIP 디렉터리가 손상되었습니다');
     const method = dv.getUint16(p + 10, true);
-    const compSize = dv.getUint32(p + 20, true);
-    const size = dv.getUint32(p + 24, true);
+    let compSize = dv.getUint32(p + 20, true), size = dv.getUint32(p + 24, true);
     const nameLen = dv.getUint16(p + 28, true);
     const extraLen = dv.getUint16(p + 30, true);
     const commentLen = dv.getUint16(p + 32, true);
-    const local = dv.getUint32(p + 42, true);
+    let local = dv.getUint32(p + 42, true);
+    if (size === 0xffffffff || compSize === 0xffffffff || local === 0xffffffff) {
+      const entry = zip64Entry(dv, p + 46 + nameLen, extraLen, size, compSize, local);
+      size = entry.size; compSize = entry.compSize; local = entry.local;
+    }
     const name = dec.decode(bytes.subarray(p + 46, p + 46 + nameLen));
     p += 46 + nameLen + extraLen + commentLen;
     if (name.endsWith('/')) continue;

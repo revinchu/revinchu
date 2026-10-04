@@ -36,11 +36,54 @@ export function parseDelimited(text, delim = ',') {
 }
 
 function quote(s, delim) {
-  return s.includes(delim) || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
+  return s.includes(delim) || s.includes('"') || s.includes('\n') || s.includes('\r') ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
 export function toDelimited(rows, delim = ',', eol = '\r\n') {
   return rows.map((r) => r.map((s) => quote(s, delim)).join(delim)).join(eol);
+}
+
+// CSV output is lazy all the way from rows to UTF-8. Large quoted cells are
+// escaped in pieces too, so no row or workbook-sized replacement/join is built.
+function* delimitedTextParts(rows, delim, eol, bom) {
+  if (bom) yield '\ufeff';
+  let firstRow = true;
+  for (const row of rows) {
+    if (!firstRow) yield eol;
+    firstRow = false;
+    let firstCell = true;
+    for (const value of row) {
+      if (!firstCell) yield delim;
+      firstCell = false;
+      const text = String(value ?? '');
+      const quoted = text.includes(delim) || text.includes('"') || text.includes('\n') || text.includes('\r');
+      if (quoted) yield '"';
+      for (let at = 0; at < text.length; at += 32768) {
+        const piece = text.slice(at, at + 32768);
+        yield quoted ? piece.replace(/"/g, '""') : piece;
+      }
+      if (quoted) yield '"';
+    }
+  }
+}
+/** Iterable rows → bounded UTF-8 chunks, at most 64 Ki UTF-16 code units each. */
+export function* toDelimitedChunks(rows, delim = ',', eol = '\r\n', { bom = false } = {}) {
+  const encoder = new TextEncoder(), limit = 65536;
+  let pending = '';
+  for (const text of delimitedTextParts(rows, delim, eol, bom)) {
+    for (let at = 0; at < text.length;) {
+      const count = Math.min(limit - pending.length, text.length - at);
+      pending += text.slice(at, at + count); at += count;
+      if (pending.length === limit) {
+        let cut = pending.length;
+        const last = pending.charCodeAt(cut - 1);
+        if (last >= 0xd800 && last <= 0xdbff) cut--;
+        yield encoder.encode(pending.slice(0, cut));
+        pending = pending.slice(cut);
+      }
+    }
+  }
+  if (pending) yield encoder.encode(pending);
 }
 
 /** 쉼표/탭 중 구분 기호 추정 */

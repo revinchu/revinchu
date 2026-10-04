@@ -113,6 +113,16 @@ export function exportSlicerHtml(sl, model, { start = 0 } = {}) {
 
 /** renderObject(kind, object)는 개체 하나씩 정화한 HTML을 반환해야 합니다. 전체 시트 DOM은 만들지 않습니다. */
 export async function createSheetHtmlBlob(wb, si, options = {}) {
+  return writeSheetHtml(wb, si, options);
+}
+
+/** 디스크 저장: 완성 HTML 전체를 보관하지 않고 한 구간씩 기록합니다. */
+export async function writeSheetHtmlToSink(wb, si, sink, options = {}) {
+  if (!sink || typeof sink.write !== 'function') throw new TypeError('웹페이지 저장 스트림이 필요합니다.');
+  return writeSheetHtml(wb, si, options, sink);
+}
+
+async function writeSheetHtml(wb, si, options, sink = null) {
   const sheet = wb.sheets[si];
   if (!sheet) throw new Error('저장할 시트가 없습니다.');
   const { rows:rowAxis, cols:colAxis } = axes(wb, si, options), fallback = options.range ?? htmlSheetRange(wb, si);
@@ -123,7 +133,16 @@ export async function createSheetHtmlBlob(wb, si, options = {}) {
   const check = () => { options.assertCurrent?.(); if (options.signal?.aborted) throw new Error('웹페이지 저장을 취소했습니다.'); };
   const flush = () => { if (pending.length) { parts.push(new Blob(pending)); pending.length = 0; size = 0; } };
   const push = text => { pending.push(text); size += text.length; if (size >= 262144) flush(); };
-  const yieldWork = async () => { check(); if (Date.now()-tick>=12) { options.onProgress?.(Math.min(.98,work/Math.max(1,estimate)), '웹페이지 만드는 중'); await nextFrame(); check(); tick=Date.now(); } };
+  let bytesWritten = 0;
+  const drain = async () => {
+    if (!sink) return;
+    for (const part of parts) for (let at=0;at<part.size;at+=1<<20) {
+      check(); const bytes = new Uint8Array(await part.slice(at,at+(1<<20)).arrayBuffer());
+      await sink.write(bytes); bytesWritten += bytes.length;
+    }
+    parts.length = 0;
+  };
+  const yieldWork = async () => { check(); await drain(); if (Date.now()-tick>=12) { options.onProgress?.(Math.min(.98,work/Math.max(1,estimate)), '웹페이지 만드는 중'); await nextFrame(); check(); tick=Date.now(); } };
   check();
   push(`<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: https: http:; style-src 'unsafe-inline'; font-src data:; ${paged ? "script-src 'nonce-wixel-html-export'; " : ''}base-uri 'none'; form-action 'none'"><title>${esc(title)}</title><style>${CSS}</style></head><body><h1>${esc(title)}</h1>`);
   if (paged) push('<p class="wx-note">현재 시트의 모든 데이터가 이 파일에 포함되어 있습니다. 표시할 행·열 구간을 이동하세요.</p><nav class="wx-toolbar" aria-label="표 구간 이동"><button id="wx-prev" type="button">이전</button><button id="wx-next" type="button">다음</button><span id="wx-status" role="status"></span><label>행 <input id="wx-jump" type="number" min="1" value="1"></label><button id="wx-go" type="button">이동</button></nav><div id="wx-body" class="wx-sheet"></div><noscript>이 큰 표의 구간을 보려면 JavaScript를 켜세요. 모든 데이터는 파일 안에 저장되어 있습니다.</noscript>');
@@ -142,7 +161,7 @@ export async function createSheetHtmlBlob(wb, si, options = {}) {
       const colgroup=`<colgroup>${cols.map(c=>`<col style="width:${colAxis.size(c)}px">`).join('')}</colgroup>`;
       const grid = !sheet.noGrid || sheet.page?.gridlines;
       let batch=[];
-      const emit = rs => {
+      const emit = async rs => {
         const bands=mergeBands(allMerges,rs,cols);let firstPart=true;
         if(paged)push(`<script type="application/json" data-wx-page data-r1="${rs[0]+1}" data-r2="${rs[rs.length-1]+1}">{"r1":${rs[0]+1},"r2":${rs[rs.length-1]+1},"c1":${cols[0]+1},"c2":${cols[cols.length-1]+1},"html":[`);
         const add = paged ? text=>{if(!firstPart)push(',');firstPart=false;push(json(text));} : push;
@@ -150,15 +169,15 @@ export async function createSheetHtmlBlob(wb, si, options = {}) {
         for(const r of rs){
           add(`<tr style="height:${rowAxis.size(r)}px">`);const merges=bands.get(r)??[];let mi=0;
           for(const c of cols){while(mi<merges.length&&merges[mi].last<c)mi++;const m=merges[mi];if(m&&c>=m.first&&c<=m.last){if(m.top&&c===m.first)add(cellHtml(wb,si,r,c,m,cond,options));}else add(cellHtml(wb,si,r,c,null,cond,options));work++;}
-          add('</tr>');
+          add('</tr>'); if (sink && parts.length) await drain();
         }
         add('</tbody></table></section>');
         if(paged)push(']}</script>');
         pageCount++;
       };
       // 작은 표는 하나의 병합 계산으로 유지하고, 큰 표만 표시 구간별로 나눕니다.
-      for(const r of visible(rowAxis,area.r1,area.r2)){batch.push(r);if(paged&&batch.length>=pageRows){emit(batch);batch=[];await yieldWork();}}
-      if(batch.length){emit(batch);await yieldWork();}
+      for(const r of visible(rowAxis,area.r1,area.r2)){batch.push(r);if(paged&&batch.length>=pageRows){await emit(batch);batch=[];await yieldWork();}}
+      if(batch.length){await emit(batch);await yieldWork();}
     }
   }
   if(objects.length){
@@ -171,5 +190,5 @@ export async function createSheetHtmlBlob(wb, si, options = {}) {
   if(!paged)push('</div></div>');
   if(!pageCount)push('<p>표시할 셀이 없습니다.</p>');
   if(paged&&pageCount)push(`<script nonce="wixel-html-export">${PAGER}</script>`);
-  push('</body></html>');check();flush();options.onProgress?.(1,'웹페이지 준비 완료');return new Blob(parts,{type:'text/html;charset=utf-8'});
+  push('</body></html>');check();flush();await drain();check();options.onProgress?.(1,'웹페이지 준비 완료');return sink ? { bytesWritten } : new Blob(parts,{type:'text/html;charset=utf-8'});
 }

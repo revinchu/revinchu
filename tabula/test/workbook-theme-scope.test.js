@@ -11,9 +11,9 @@ function pagePaint(){
 test('새 문서의 첫 피벗도 이전 문서가 아닌 저장된 테마로 칠한다',()=>{
  const previous=THEME.colors;
  try{
-  setThemeColors(DEFAULT_THEME);assert.equal(pagePaint(),'#dae2f3');
+  setThemeColors(DEFAULT_THEME);assert.equal(pagePaint(),'#d9e1f2');
   assert.equal(withThemeColors(newer,pagePaint),'#c0e6f5');
-  assert.strictEqual(THEME.colors,DEFAULT_THEME);assert.equal(pagePaint(),'#dae2f3');
+  assert.strictEqual(THEME.colors,DEFAULT_THEME);assert.equal(pagePaint(),'#d9e1f2');
   setThemeColors(newer);assert.equal(pagePaint(),'#c0e6f5');
  }finally{setThemeColors(previous);}
 });
@@ -21,7 +21,7 @@ test('준비 실패와 중첩/늦은 준비도 현재 문서의 테마를 덮지
  const previous=THEME.colors;
  try{
   setThemeColors(newer);
-  assert.throws(()=>withThemeColors(DEFAULT_THEME,()=>{assert.equal(pagePaint(),'#dae2f3');throw Error('cancel');}),/cancel/);
+  assert.throws(()=>withThemeColors(DEFAULT_THEME,()=>{assert.equal(pagePaint(),'#d9e1f2');throw Error('cancel');}),/cancel/);
   assert.strictEqual(THEME.colors,newer);
   const key=THEME.key;
   withThemeColors(DEFAULT_THEME,()=>{

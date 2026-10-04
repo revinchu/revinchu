@@ -99,10 +99,13 @@ function* fileRecords(book, metadata) {
   yield ['e'];yield ['e'];yield ['e'];
 }
 
-/** Independent, compressed, lossless .wixel file. Call before writing a target. */
-export async function writeWixelFile(book, metadata = {}, options = {}) {
-  const version=book.version, sheets=[...book.sheets], edits=sheets.map(s=>s._ev??0);
-  const current=()=>{check(options);if(book.version!==version||book.sheets.length!==sheets.length||sheets.some((s,i)=>book.sheets[i]!==s||(s._ev??0)!==edits[i]))throw Object.assign(new Error('저장 중 문서가 편집되었습니다. 편집이 끝난 뒤 다시 저장하세요.'),{code:'WIXEL_FILE_ABORT'});};
+function snapshotCheck(book,options) {
+  const version=book.version,sheets=[...book.sheets],edits=sheets.map(s=>s._ev??0);
+  return ()=>{check(options);if(book.version!==version||book.sheets.length!==sheets.length||sheets.some((s,i)=>book.sheets[i]!==s||(s._ev??0)!==edits[i]))throw Object.assign(new Error('저장 중 문서가 편집되었습니다. 편집이 끝난 뒤 다시 저장하세요.'),{code:'WIXEL_FILE_ABORT'});};
+}
+/** Lossless .wixel byte stream: direct file writes keep only bounded buffers. */
+export function createWixelFileStream(book, metadata = {}, options = {}) {
+  const current=snapshotCheck(book,options);
   current();const records=fileRecords(book,structuredClone(metadata)), encoder=new TextEncoder();let count=0,started=false,done=false,last=performance.now(),failure=null;
   const stream=new ReadableStream({
     async pull(controller) {
@@ -126,11 +129,30 @@ export async function writeWixelFile(book, metadata = {}, options = {}) {
     },cancel(){records.return?.();}
   });
   const compressed=options.gzip!==false&&typeof CompressionStream==='function';
-  let blob;
-  try { blob=await new Response(compressed?stream.pipeThrough(new CompressionStream('gzip')):stream).blob(); }
-  catch(error) { throw failure??error; }
-  current();if(!done)throw fail();
-  return new Blob([blob],{type:'application/x-wixel'});
+  const reader=(compressed?stream.pipeThrough(new CompressionStream('gzip')):stream).getReader();
+  let released=false;
+  const release=()=>{if(!released){reader.releaseLock();released=true;}};
+  return new ReadableStream({
+    async pull(controller) {
+      try {
+        current();const next=await reader.read();current();
+        if(next.done){if(!done)throw fail();release();controller.close();}
+        else controller.enqueue(next.value);
+      } catch(error) {
+        const reason=failure??error;
+        try {await reader.cancel(reason);} catch { /* Preserve the source failure. */ }
+        release();controller.error(reason);
+      }
+    },
+    async cancel(reason) {try{await reader.cancel(reason);}finally{release();}}
+  },{highWaterMark:0});
+}
+
+/** Blob compatibility for browser downloads and existing online storage. */
+export async function writeWixelFile(book, metadata = {}, options = {}) {
+  const current=snapshotCheck(book,options);
+  const blob=await new Response(createWixelFileStream(book,metadata,options)).blob();
+  current();return new Blob([blob],{type:'application/x-wixel'});
 }
 
 // Blob.stream() chunk sizes are browser-specific. In particular, one large

@@ -24,10 +24,28 @@ export async function auditObjects(page,{id,out,metadata,nativeSamples}) {
   const undoTo=async n=>{for(let i=0;i<10;i++){const current=await page.evaluate(()=>tabula.wb().undoStack.length);if(current<=n)break;await page.evaluate(()=>tabula.run('undo'));await settle(page);}};
   async function test(name,fn){const b=await state(page),started=Date.now();try{const details=await fn(b);const ms=Date.now()-started;report.results.push({name,ok:true,ms,...(ms>15000?{slow:true,performanceFailure:true}:{}),...details});}catch(e){report.results.push({name,ok:false,ms:Date.now()-started,error:e.message});await page.screenshot({path:out+'/'+id+'-objects-failure-'+report.results.length+'.png',timeout:10000}).catch(()=>{});}finally{await page.keyboard.press('Escape').catch(()=>{});await undoTo(b.undo);assert.deepEqual(filters(await state(page)),filters(b),'상호작용 실행 취소 후 원본 필터 복원');}}
   try {
-    const candidate=metadata.sheets.find(s=>s.slicers&&s.state!=='hidden'&&s.state!=='veryHidden'&&!s.protected);
+    const candidates=metadata.sheets.filter(s=>s.slicers&&s.state!=='hidden'&&s.state!=='veryHidden'&&!s.protected);
+    let candidate,sl;
+    report.slicerSearch={eligibleSheets:candidates.length,attempts:[]};
+    report.slicerCacheParity={status:'not-verified',reason:'현재 표시 항목의 클릭 동작을 검사합니다. 원본 Excel 캐시의 과거·무데이터 항목을 포함한 전체 목록 동등성은 별도 검증이 필요합니다.'};
+    // Objects can be far below/right of the initial viewport. Reveal their model
+    // coordinates before hit-testing; never move/resize the workbook objects.
+    for(const sheet of candidates){
+      await page.evaluate(i=>{tabula.switchSheet(i);tabula.gv().renderAll();},sheet.index);await settle(page);
+      const objects=await page.evaluate(()=>tabula.wb().sheets[tabula.si].slicers.map((o,index)=>({id:o.id,index,x:o.x,y:o.y})));
+      for(const object of objects){
+        await page.evaluate(({x,y})=>{const g=tabula.gv();g.setScroll(Math.max(0,x-g.boundaryX-24),Math.max(0,y-g.boundaryY-24));g.renderAll();},object);await settle(page);
+        const visible=await page.evaluate(id=>{
+          const hit=e=>{if(!e)return false;const r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;return r.width>0&&r.height>0&&x>=0&&y>=0&&x<innerWidth&&y<innerHeight&&e.contains(document.elementFromPoint(x,y));};
+          const copies=[...document.querySelectorAll('.obj.slicer')].filter(e=>e.dataset.id===id).map(e=>({id,keys:[...e.querySelectorAll('.sl-item:not(.nodata)')].filter(hit).map(b=>b.dataset.k),clear:hit(e.querySelector('.sl-clear'))}));
+          return copies.find(e=>e.keys.length>=2&&e.clear)||copies.sort((a,b)=>b.keys.length-a.keys.length)[0]||{id,keys:[],clear:false};
+        },object.id);
+        report.slicerSearch.attempts.push({sheet:sheet.index,object:object.index,scrolled:true,visibleDataItems:visible.keys.length,clearVisible:visible.clear});
+        if(visible.keys.length>=2&&visible.clear){candidate=sheet;sl=visible;break;}
+      }
+      if(sl)break;
+    }
     if(candidate){
-      await page.evaluate(i=>{tabula.switchSheet(i);tabula.gv().setScroll(0,0);tabula.gv().renderAll();},candidate.index);await settle(page);
-      const sl=await page.evaluate(()=>{const hit=e=>{if(!e)return false;const r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;return r.width>0&&r.height>0&&x>=0&&y>=0&&x<innerWidth&&y<innerHeight&&e.contains(document.elementFromPoint(x,y));};return [...document.querySelectorAll('.obj.slicer')].map(e=>({id:e.dataset.id,keys:[...e.querySelectorAll('.sl-item:not(.nodata)')].filter(hit).map(b=>b.dataset.k),clear:hit(e.querySelector('.sl-clear'))})).find(e=>e.keys.length>=2&&e.clear);});
       if(sl){
         const slicerSelector='.obj.slicer[data-id='+JSON.stringify(sl.id)+']:visible';
         const base=()=>page.locator(slicerSelector).first();
@@ -55,12 +73,17 @@ export async function auditObjects(page,{id,out,metadata,nativeSamples}) {
           await (await target('.sl-item[data-k='+JSON.stringify(keys[1])+']')).click({modifiers:['Control'],timeout:originalTimeout});await settle(page);
           const selected=await base().locator('.sl-item.on').evaluateAll(ns=>ns.map(n=>n.dataset.k));
           assert.ok(keys.every(k=>selected.includes(k)),'Ctrl 클릭이 두 항목을 함께 선택');
+          assert.equal(selected.length,keys.length,'Ctrl 클릭은 지정한 두 항목만 선택');
+          // Two-item slicers select everything after Ctrl-add. Reapply one item
+          // so clear is tested against an active filter, not an already-clear state.
+          await (await target('.sl-item[data-k='+JSON.stringify(keys[0])+']')).click({timeout:originalTimeout});await settle(page);
+          assert.equal(await base().locator('.sl-clear.off').count(),0,'해제 검사 전에 필터 활성');
           await (await target('.sl-clear')).click({timeout:originalTimeout});await settle(page);
           assert.ok(await base().locator('.sl-clear.off').count(),'필터 해제 후 전체 선택 상태');
           return {sheet:candidate.index,linkedFilterChanged:true,multiSelection:true,clear:true};
         });
       }else report.results.push({name:'슬라이서',skipped:'표시 영역에서 데이터 있는 항목 두 개를 가진 슬라이서를 찾지 못함'});
-    }else report.results.push({name:'슬라이서',skipped:'편집 가능한 표시 슬라이서 없음'});
+    }else report.results.push({name:'슬라이서',skipped:candidates.length?'대상 위치로 스크롤한 뒤에도 항목 두 개와 해제 단추를 함께 클릭할 수 있는 슬라이서를 찾지 못함':'편집 가능한 표시 슬라이서 없음'});
     const pivotSheet=metadata.sheets.find(s=>s.pivots&&s.state!=='hidden'&&s.state!=='veryHidden'&&!s.protected);
     if(pivotSheet){
       await page.evaluate(i=>{tabula.switchSheet(i);tabula.gv().setScroll(0,0);tabula.gv().renderAll();},pivotSheet.index);await settle(page);

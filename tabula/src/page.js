@@ -138,7 +138,10 @@ export function pageFromXml({ printOptions, pageMargins, pageSetup, headerFooter
     const a = pageSetup.attrs;
     if (a.pageOrder === 'overThenDown') { p.order = 'overThenDown'; any = true; }
     if (a.orientation === 'landscape') { p.orientation = 'landscape'; any = true; }
-    if (a.paperSize && paperOf(a.paperSize).id === Number(a.paperSize) && Number(a.paperSize) !== 9) { p.paper = Number(a.paperSize); any = true; }
+    // SpreadsheetML pageSetup의 생략된 paperSize는 Letter(1)입니다.
+    // 새 위셀 문서의 A4 기본값과 가져온 파일의 기본값을 구분합니다.
+    const paper = a.paperSize === undefined ? 1 : Number(a.paperSize);
+    if (paperOf(paper).id === paper && paper !== 9) { p.paper = paper; any = true; }
     if (fitToPage) { p.fitW = a.fitToWidth === undefined ? 1 : Number(a.fitToWidth); p.fitH = a.fitToHeight === undefined ? 1 : Number(a.fitToHeight); any = true; }
     else if (a.scale && Number(a.scale) !== 100) { p.scale = Number(a.scale); any = true; }
   }

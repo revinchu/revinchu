@@ -104,10 +104,10 @@ test('옛 fieldCaptions=false는 행·열 머리글만 끄고 보고서 필터�
 test('실제 Excel DisplayFormat 기준 보고서 스타일의 채움·하단선·글자 강조 보존',()=>{
  // Excel Range.Interior는 기본 셀 서식을, DisplayFormat은 피벗 스타일까지 포함한 표시를 반환합니다.
  // 합성 Light16/Medium9/Dark1에서 필터만/본문 있음의 DisplayFormat은 동일했습니다.
- // 채움 hex는 기존 WIXEL tint 기준입니다(Excel Light16 #d9e1f2와 1~2 RGB 차이, 픽셀 동등 검사는 아님).
+ // 채움 hex도 독립 Excel tint oracle의 정수 계산과 동일합니다.
  const expected={
-  PivotStyleLight16:{fill:'#dae2f3',bottom:true,boldLabel:false,color:undefined},
-  PivotStyleMedium9:{fill:'#dae2f3',bottom:false,boldLabel:false,color:'#000000'},
+  PivotStyleLight16:{fill:'#d9e1f2',bottom:true,boldLabel:false,color:undefined},
+  PivotStyleMedium9:{fill:'#d9e1f2',bottom:false,boldLabel:false,color:'#000000'},
   PivotStyleDark1:{fill:'#808080',bottom:false,boldLabel:true,color:'#ffffff'},
  };
  for(const [style,want] of Object.entries(expected))for(const values of [[],[{field:'Amount',agg:'sum'}]]){

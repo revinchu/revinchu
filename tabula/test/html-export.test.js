@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Workbook } from '../src/workbook.js';
-import { createSheetHtmlBlob, htmlSheetRange, exportSlicerHtml } from '../src/html-export.js';
+import { writeSheetHtmlToSink, createSheetHtmlBlob, htmlSheetRange, exportSlicerHtml } from '../src/html-export.js';
 
 const book = cells => new Workbook({sheets:[{name:'보고서',cells}]});
 const pages = html => [...html.matchAll(/<script type="application\/json" data-wx-page[^>]*>([\s\S]*?)<\/script>/g)].map(m=>JSON.parse(m[1]));
@@ -86,4 +86,16 @@ test('slicer snapshot includes visible item states without expanding a 50,000 it
 test('HTML border widths match thin, medium dashed and double UI styles, including no-grid sheets',async()=>{
   const wb=book({'0,0':{raw:'선',style:{bb:true,bbs:'double',bbc:'#123456',bt:true,bts:'mediumDashed',btc:'#abcdef'}}});wb.sheets[0].noGrid=true;
   const html=await(await createSheetHtmlBlob(wb,0)).text();assert.match(html,/border-bottom:3px double #123456/);assert.match(html,/border-top:2px dashed #abcdef/);assert.match(html,/<table class=""/);
+});
+
+
+test('direct disk HTML matches Blob byte for byte and stops producing on disk failure', async () => {
+  const wb=new Workbook(); for(let r=0;r<1200;r++) wb.setInput(0,r,0,'가😀'.repeat(200));
+  const options={staticCellLimit:50,pageRows:30}, parts=[];
+  const result=await writeSheetHtmlToSink(wb,0,{async write(part){assert.ok(part.length<=1<<20);parts.push(part.slice());}},options);
+  const blob=new Blob(parts), expected=await createSheetHtmlBlob(wb,0,options);
+  assert.equal(result.bytesWritten,blob.size); assert.ok(parts.length>1); assert.equal(await blob.text(),await expected.text());
+  let writes=0;
+  await assert.rejects(writeSheetHtmlToSink(wb,0,{async write(){writes++;throw Error('disk full');}},options),/disk full/);
+  assert.equal(writes,1);
 });

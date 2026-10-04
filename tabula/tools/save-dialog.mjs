@@ -3,6 +3,8 @@
 import assert from 'node:assert/strict';
 import { readXlsx } from '../src/xlsx.js';
 import { Workbook } from '../src/workbook.js';
+import { readWixelFile } from '../src/wixel-file.js';
+import { parseDelimited } from '../src/csv.js';
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const url = process.env.WIXEL_URL || 'http://127.0.0.1:5180/';
 const browser = await chromium.launch(), results = [];
@@ -23,13 +25,18 @@ async function test(name, fn, { picker = true } = {}) {
       kind: 'file', name, mockId: id,
       async createWritable() {
         mock.events.push({ id, stage: 'create' });
+        const parts = []; let writes = 0, position = 0, extent = 0;
         return {
           async write(blob) {
             mock.events.push({ id, stage: 'write' });
+            writes++;
+            if (plan.changeAfterWrite === writes) window.tabula.wb().transact(() => window.tabula.wb().setInput(0, 0, 0, 'changed during save'));
             if (plan.writeError) throw new DOMException('합성 쓰기 권한 오류', 'NotAllowedError');
-            mock.completed.push({ id, name, bytes: Array.from(new Uint8Array(await blob.arrayBuffer())) });
+            const bytes = blob instanceof Blob ? new Uint8Array(await blob.arrayBuffer()) : new Uint8Array(blob.buffer ?? blob, blob.byteOffset ?? 0, blob.byteLength).slice();
+            parts.push({position,bytes}); position += bytes.length; extent = Math.max(extent,position);
           },
-          async close() { mock.events.push({ id, stage: 'close' }); },
+          async seek(at) { if (plan.seekError) throw new DOMException('위치 이동 실패','InvalidStateError'); position=at; mock.events.push({id,stage:'seek'}); },
+          async close() { if (plan.closeError) throw new DOMException('디스크 공간 부족', 'QuotaExceededError'); const bytes=new Uint8Array(extent); for(const part of parts)bytes.set(part.bytes,part.position); mock.completed.push({ id, name, bytes:Array.from(bytes) }); mock.events.push({ id, stage: 'close' }); },
           async abort() { mock.events.push({ id, stage: 'abort' }); },
         };
       },
@@ -78,7 +85,8 @@ try {
     assert.ok(m.calls.every(call => call.userActive), 'Ctrl+S 사용자 활성화가 유지된 동안 파일 선택기 호출');
     assert.deepEqual(m.completed.map(x => x.id), ['selected-1', 'selected-2']);
     assert.deepEqual(m.completed.map(x => valueOf(x.bytes)), [42, 73]);
-    assert.deepEqual(m.events.map(e => [e.id, e.stage]), [['selected-1', 'create'], ['selected-1', 'write'], ['selected-1', 'close'], ['selected-2', 'create'], ['selected-2', 'write'], ['selected-2', 'close']]);
+    assert.deepEqual(m.events.filter(e=>!['write','seek'].includes(e.stage)).map(e=>[e.id,e.stage]), [['selected-1','create'],['selected-1','close'],['selected-2','create'],['selected-2','close']]);
+    for(const id of ['selected-1','selected-2'])assert.ok(m.events.some(e=>e.id===id&&e.stage==='write'));
     assert.equal(downloads.length, 0);
   });
   await test('공개 exportXlsx의 이전 target 인수와 저장 버튼 모두 기존 handle 즉시 쓰기 우회 불가', async (p, downloads) => {
@@ -115,6 +123,41 @@ try {
     await p.evaluate(() => window.__saveMock.plans.push({ writeError: true }));
     await ctrlSave(p); await p.getByRole('dialog').filter({ hasText: '저장하지 못했습니다' }).waitFor();
     const m = await mock(p); assert.equal(m.calls.length, 1); assert.equal(m.completed.length, 0); assert.equal(downloads.length, 0);
+  });
+  await test('스트리밍 중 문서 변경·디스크 마무리 실패는 abort하고 성공 파일을 남기지 않음', async (p, downloads) => {
+    for (const plan of [{changeAfterWrite:1}, {closeError:true}]) {
+      await p.evaluate(plan => window.__saveMock.plans.push(plan), plan);
+      await ctrlSave(p); const dialog = p.getByRole('dialog').filter({hasText:'저장하지 못했습니다'}); await dialog.waitFor();
+      await dialog.getByRole('button', {name:/확인/}).click();
+    }
+    const m = await mock(p); assert.equal(m.completed.length,0); assert.equal(m.events.filter(e=>e.stage==='abort').length,2);
+    assert.equal(downloads.length,0);
+  });
+  await test('WIXEL은 picker 직접 저장 후 값·서식 재열기 가능', async (p, downloads) => {
+    await p.evaluate(() => { window.__saveMock.plans.push({name:'보관.wixel'}); window.tabula.wb().setStyle(0,0,0,{bold:true,fill:'#123456'}); window.tabula.run('saveAs'); });
+    const d = p.getByRole('dialog',{name:'다른 이름으로 저장',exact:true});
+    await d.locator('select').selectOption('wixel'); await d.getByRole('button',{name:'저장',exact:true}).click(); await closed(p,1);
+    const m=await mock(p), result=await readWixelFile(new Blob([Uint8Array.from(m.completed[0].bytes)]));
+    const restored=new Workbook(result.workbook);
+    assert.equal(restored.getValue(0,0,0),42); assert.equal(restored.styleAt(0,0,0).bold,true); assert.equal(restored.styleAt(0,0,0).fill,'#123456');
+    assert.equal(downloads.length,0);
+  });
+  await test('ODS 비보존 개체가 있으면 저장 범위를 알리고 취소는 파일을 쓰지 않음', async (p, downloads) => {
+    await p.evaluate(() => { window.tabula.wb().sheets[0].charts.push({id:'chart-save-test',type:'column',range:{r1:0,c1:0,r2:0,c2:0},x:0,y:0,w:200,h:100}); window.tabula.run('saveAs'); });
+    const d=p.getByRole('dialog',{name:'다른 이름으로 저장',exact:true}); await d.locator('select').selectOption('ods'); await d.getByRole('button',{name:'저장',exact:true}).click();
+    const warning=p.getByRole('dialog',{name:'OpenDocument 저장 범위',exact:true}); await warning.waitFor(); assert.match(await warning.innerText(),/피벗.*포함하지 않습니다/);
+    await warning.getByRole('button',{name:'취소',exact:true}).click(); await settle(p);
+    assert.equal((await mock(p)).calls.length,0); assert.equal(downloads.length,0);
+  });
+  await test('CSV는 여러 번 나눠 디스크에 저장하고 전체 행·따옴표·한글 복원', async (p, downloads) => {
+    await p.evaluate(() => {
+      window.__saveMock.plans.push({name:'큰 값.csv'});
+      const book=window.tabula.wb();book.transact(()=>{for(let r=0;r<4500;r++){book.setInput(0,r,0,'한글😀,'.repeat(70));book.setInput(0,r,1,String(r));}});
+      window.tabula.run('exportCsv');
+    });
+    await closed(p,1); const m=await mock(p), bytes=Uint8Array.from(m.completed[0].bytes), rows=parseDelimited(new TextDecoder().decode(bytes));
+    assert.equal(rows.length,4500); assert.equal(rows[0][0],'한글😀,'.repeat(70)); assert.equal(rows[4499][1],'4499');
+    assert.ok(m.events.filter(e=>e.stage==='write').length>1); assert.equal(downloads.length,0);
   });
   await test('다른 이름으로 저장의 native picker 취소는 문서 이름·내용을 그대로 유지', async (p, downloads) => {
     const title = await p.locator('#docTitle').innerText();

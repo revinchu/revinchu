@@ -1,3 +1,4 @@
+import { createZipStreamWriter } from './zip-stream.js';
 import { arrayCacheValue } from './array-cache.js';
 import { createXmlChunks } from './xml-chunks.js';
 import { pivotExportData, pivotValueStats } from './pivot-export-data.js';
@@ -877,7 +878,12 @@ function* readSheet(files, path, ctx) {
   let rowIdx = -1;
   // 행이 아주 많은 시트: 값 셀은 열 블록(형식화 배열)으로 — 셀 객체 수백만 개를 만들지 않음
   const dimRef = refToRange(child(root, 'dimension')?.attrs.ref ?? '');
-  const blockMode = !!dimRef && dimRef.r2 - dimRef.r1 + 1 > BLOCK_MIN_ROWS;
+  const dimRows = dimRef ? dimRef.r2 - dimRef.r1 + 1 : 0;
+  const dimCols = dimRef ? dimRef.c2 - dimRef.c1 + 1 : 0;
+  // Wide data sheets can hold nearly a million cells below the row threshold.
+  // Keep small/sparse-height sheets on their existing path; formulas and local
+  // formatting overrides still use ordinary cells inside an eligible block.
+  let blockMode = dimRows > BLOCK_MIN_ROWS || (dimRows >= 8192 && dimRows * dimCols >= 262144);
   let blockStart = -1;
   let blockLast = -1;
   let lateEmpty = null; // 열 → 연속 [시작 행, 끝 행, 서식]: 블록 끝이 정해질 때까지 보존
@@ -1026,7 +1032,10 @@ function* readSheet(files, path, ctx) {
       if (noHt && raw !== '' && style && ((style.size && style.size > ctx.wbFont.size) || style.wrap || style.rotate)) (sheet.fitRows ??= new Set()).add(r);
       if (noHt && phonetic?.visible && phonetic.runs.length) (sheet.fitRows ??= new Set()).add(r);
       if (blockMode && blockStart < 0) blockStart = r + 1; // 첫 행(머리글) 다음부터 블록
-      if (blockMode && r >= blockStart && formula === null && !c.attrs.vm && !phonetic) {
+      // The newly enabled wide-sheet path keeps @ cells in their original
+      // input representation; legacy blocks add an apostrophe to numeric text.
+      const preserveTextInput = dimRows <= BLOCK_MIN_ROWS && style?.numFmt === 'text';
+      if (blockMode && r >= blockStart && formula === null && !c.attrs.vm && !phonetic && !preserveTextInput) {
         if (colFmt[cc] === undefined) colFmt[cc] = style ?? null;
         if ((style ?? null) === colFmt[cc]) {
           if (value !== null && value !== '') {
@@ -1062,6 +1071,54 @@ function* readSheet(files, path, ctx) {
       if (formula === null && style?.numFmt === 'text' && value !== null && typeof value !== 'string') d.inputType = 'value'; // 표시 형식 @인 숫자·논리·오류 값도 원래 자료형 유지
       sheet.cells.setRC(r, cc, formula === null ? shareLiteral(d) : d);
       if (ctx.onDiagnostics) { if (formula !== null) plainFormulaCells++; else if (raw === '') plainBlankCells++; else plainValueCells++; }
+    }
+  }
+  // The area threshold also catches sparse dashboards with an inflated
+  // dimension. A column block applies its format to every position, including
+  // omitted cells. Only keep the new path if every formatted position existed
+  // in the source; inspect allocated value arrays and stored cell/run spans,
+  // never the full dimension rectangle.
+  if (blockMode && dimRows <= BLOCK_MIN_ROWS && blockLast >= blockStart) {
+    const n = blockLast - blockStart + 1;
+    for (let c = 0; c < colFmt.length; c++) {
+      if (!colFmt[c]) continue;
+      const spans = [], b = builders[c];
+      if (b) {
+        let first = -1;
+        for (let i = 0, end = Math.min(n, b.n); i <= end; i++) {
+          const present = i < end && ((b.str && b.str[i] >= 0) || (b.num && Number.isFinite(b.num[i])));
+          if (present && first < 0) first = i;
+          else if (!present && first >= 0) { spans.push([blockStart + first, blockStart + i - 1]); first = -1; }
+        }
+      }
+      for (const [r, cell, count] of sheet.cells.col(c)?.storageEntries() ?? []) {
+        // Without an explicit style, styleAt would still inherit the block's
+        // format. Such a cell therefore cannot cover a formatting gap.
+        if (cell.style && r <= blockLast && r + count > blockStart) spans.push([Math.max(r, blockStart), Math.min(r + count - 1, blockLast)]);
+      }
+      const pending = lateEmpty?.get(c)?.runs ?? [];
+      for (let i = 0; i < pending.length; i += 3) if (pending[i] <= blockLast && pending[i + 1] >= blockStart) spans.push([Math.max(pending[i], blockStart), Math.min(pending[i + 1], blockLast)]);
+      spans.sort((a, b) => a[0] - b[0]);
+      let next = blockStart;
+      for (const [a, z] of spans) { if (a > next) break; next = Math.max(next, z + 1); }
+      if (next <= blockLast) { blockMode = false; break; }
+    }
+    if (!blockMode) {
+      // Restore only staged source values. The existing lateEmpty restoration
+      // below restores explicit blank/style runs; absent cells remain absent.
+      for (let c = 0; c < builders.length; c++) {
+        const b = builders[c]; if (!b) continue;
+        const style = colFmt[c] ?? undefined;
+        for (let i = 0; i < b.n; i++) {
+          const code = b.str?.[i], value = code >= 0 ? b.dict[code] : b.num?.[i];
+          if (value === undefined || (typeof value === 'number' && !Number.isFinite(value))) continue;
+          const raw = typeof value === 'number' ? numberRaw(value, style, ctx.date1904) : typeof value === 'string' ? textRaw(value) : typeof value === 'boolean' ? (value ? 'TRUE' : 'FALSE') : value.error;
+          if (sheet.cells.hasRC(blockStart + i, c)) continue;
+          sheet.cells.setRC(blockStart + i, c, shareLiteral({ raw, ...(style ? { style } : {}) }));
+          if (ctx.onDiagnostics) plainValueCells++;
+        }
+      }
+      builders.length = 0;
     }
   }
   reportStorage();
@@ -4643,9 +4700,14 @@ export async function writeXlsxBlobAsync(wb, opts, onProgress) {
   return writeXlsxStreamArchive(wb, opts, onProgress);
 }
 
-// 새 다운로드 경로만 항목을 즉시 압축합니다. 기존 동기/바이트 API는 유지합니다.
-async function writeXlsxStreamArchive(wb, opts, onProgress) {
-  const writer = createZipAsyncWriter();
+/** File System Access 저장용: Excel 호환 ZIP 바이트를 디스크 sink에 순차 기록합니다. */
+export async function writeXlsxToSink(wb, opts, sink, onProgress) {
+  return writeXlsxStreamArchive(wb, opts, onProgress, createZipStreamWriter(sink, { zip64: 'auto' }));
+}
+
+// 다운로드는 Blob, 파일 선택기로 얻은 대상은 순차 ZIP sink를 사용합니다.
+async function writeXlsxStreamArchive(wb, opts, onProgress, diskWriter = null) {
+  const writer = diskWriter ?? createZipAsyncWriter();
   let last = performance.now();
   const rowProgress = value => { if (performance.now() - last > 40) { onProgress?.(value); last = performance.now(); } };
   const it = writeXlsxSteps(wb, opts, true, rowProgress);
@@ -4659,7 +4721,7 @@ async function writeXlsxStreamArchive(wb, opts, onProgress) {
           await writer.add(name, step.value[name]); delete step.value[name];
           onProgress?.({ p: 0.85 + 0.15 * (i + 1) / names.length, msg: '파일 마무리 중' });
         }
-        return writer.finish({ blob: true, first: '[Content_Types].xml' });
+        return diskWriter ? writer.finish() : writer.finish({ blob: true, first: '[Content_Types].xml' });
       }
       if (step.value.entry) await writer.add(step.value.entry[0], step.value.entry[1]);
       else if (performance.now() - last > 40) {

@@ -1,3 +1,4 @@
+import { isFileSaveSource, writeFileHandle } from './file-save.js';
 import { isLargeLocalWorkbook } from './local-storage-size.js';
 import { cachedSlicerItems, applyCachedSlicerSelection } from './slicer-cache.js';
 import { applySlicerSettings } from './slicer-settings.js';
@@ -30,8 +31,8 @@ import { makeObjectGroup, ungroupObjects } from './object-group.js';
 // WIXEL 메인: 상태 · 선택 · 편집 · 키보드/마우스 · 명령 (그리기는 view.js)
 import { protectedRangeKey, rangeIsUnlocked, cellInEditRange, rangeIntersects, rangesCover, noteVisible, setNoteVisibility } from './review-state.js';
 import { publishedWixelFile, packPublishedBlob, assertPublishLinkSize } from './publish.js';
-import { writeWixelFile, readWixelFile } from './wixel-file.js';
-import { createSheetHtmlBlob, exportSlicerHtml } from './html-export.js';
+import { createWixelFileStream, writeWixelFile, readWixelFile } from './wixel-file.js';
+import { writeSheetHtmlToSink, createSheetHtmlBlob, exportSlicerHtml } from './html-export.js';
 import { releaseUpdateTarget, watchReleaseUpdate } from './release-update.js';
 import { pictureEditor } from './picture-ui.js';
 import { preparePictureExport, pictureExportBounds } from './picture-export.js';
@@ -70,7 +71,7 @@ import {
 import { FUNC_INFO, CATEGORIES } from './funcinfo.js';
 import { makeSeries, CUSTOM_LISTS } from './series.js';
 import { detectTextFileEncoding, readDecodedChunks } from './text-file.js';
-import { parseDelimited, toDelimited, guessDelimiter, CsvBlockReader, delimitedRowWidth } from './csv.js';
+import { parseDelimited, toDelimited, toDelimitedChunks, guessDelimiter, CsvBlockReader, delimitedRowWidth } from './csv.js';
 import { SAMPLES } from './samples.js';
 import { TEMPLATES, TEMPLATE_CATS } from './templates.js';
 import { createChartSelectionPanel } from './chart-selection-ui.js';
@@ -80,7 +81,7 @@ import { GridView, BASE_FONT, setBaseFont, measureText, fontStack, PATTERNS, pat
 import { setThemeColors, withThemeColors, THEME, applyTint, presetStyleElements } from './stylepresets.js';
 import { objectStyleKey, findObjectStyle, normalizeObjectStyles, upsertObjectStyle, objectStylePatch, clearObjectStyle } from './object-styles.js';
 import { objectStyleEditor } from './object-style-editor.js';
-import { readXlsxAsync, writeXlsxBlobAsync, xlsxOverflow, xlsxExportWarnings, mergeXlsxImportWarnings, textRaw, parsePrintAreas } from './xlsx.js';
+import { readXlsxAsync, writeXlsxBlobAsync, writeXlsxToSink, xlsxOverflow, xlsxExportWarnings, mergeXlsxImportWarnings, textRaw, parsePrintAreas } from './xlsx.js';
 import { readOds, writeOds } from './ods.js';
 import { readXls } from './xls.js';
 import { CellMap } from './cellmap.js';
@@ -10620,13 +10621,15 @@ function refreshFullScreen() {
 document.addEventListener('fullscreenchange', refreshFullScreen);
 document.addEventListener('keydown', e=>{if(e.key==='Escape'&&document.body.classList.contains('wixel-fullscreen')){document.body.classList.remove('wixel-fullscreen');refreshFullScreen();}},true);
 async function exportHtmlFile(name = docName) {
-  const done = await saveWithPicker(`${safeFileName(name)}.html`, options => createSheetHtmlBlob(wb, si, {
-    ...options, name, rows:gv.rows, cols:gv.cols,
+  const done = await saveWithPicker(`${safeFileName(name)}.html`, options => {
+    const htmlOptions = { ...options, name, rows:gv.rows, cols:gv.cols,
     renderObject:(kind,o) => {
       const markup = kind === 'slicer' ? exportSlicerHtml(o, slicerModel(o)) : kind === 'chart' ? gv.chartSvg(o) : kind === 'image' ? pictureDisplaySvg({ ...o, rot:0 }) : `${isSmartArt(o) ? smartArtSvg(o) : shapeSvg(o)}${!isSmartArt(o) && (o.text || o.paras) && !isShapeLine(o) ? shapeTextHtml(o) : ''}`;
       const host = document.createElement('div'); setSafeHtml(host, markup); return host.innerHTML;
     },
-  }));
+    };
+    return options.directToFile ? sink => writeSheetHtmlToSink(wb, si, sink, htmlOptions) : createSheetHtmlBlob(wb, si, htmlOptions);
+  });
   if(done)toast(`'${done.name}' 웹페이지를 저장했습니다.`);
   return done;
 }
@@ -14560,11 +14563,13 @@ async function pickSaveTarget(fileName) {
   } finally { savePickerOpen = false; }
 }
 /** 이번 저장 창에서 선택한 대상에만 쓰고, 실패하면 미완료 스트림을 폐기한다. */
-async function writeSaveTarget(target, blob) {
-  if (!target.handle) { download(target.name, blob); return target.name; }
-  const w = await target.handle.createWritable();
-  try { await w.write(blob); await w.close(); }
-  catch (err) { try { await w.abort(); } catch { /* 이미 닫힌 스트림 */ } throw err; }
+async function writeSaveTarget(target, source, options = {}) {
+  if (!target.handle) {
+    options.assertCurrent?.();
+    if (!(source instanceof Blob) || !source.size) throw new Error('다운로드할 파일을 생성하지 못했습니다.');
+    download(target.name, source); return target.name;
+  }
+  await writeFileHandle(target.handle, source, options);
   return target.name;
 }
 /** 선택 → 파일 생성 → 쓰기. 취소면 null. */
@@ -14578,12 +14583,12 @@ async function saveWithPicker(fileName, make) {
   exportBusy++;
   const assertCurrent = () => { if (!current()) throw new Error('저장 중 문서가 변경되었습니다. 현재 문서에서 다시 저장하세요.'); };
   try {
-    const blob = await make({ isCurrent:current, assertCurrent, onProgress:(p,msg) => prog.set(p, msg ?? '파일 만드는 중') });
-    if (!blob) return null;
+    const source = await make({ directToFile:!!target.handle, isCurrent:current, assertCurrent, onProgress:(p,msg) => prog.set(p, msg ?? '파일 만드는 중') });
+    if (!source) return null;
     assertCurrent();
-    if (!(blob instanceof Blob) || !blob.size) throw new Error('저장할 파일을 생성하지 못했습니다.');
-    prog.set(.99, '파일 쓰는 중');
-    await writeSaveTarget(target, blob);
+    if (!isFileSaveSource(source) || source instanceof Blob && !source.size) throw new Error('저장할 파일을 생성하지 못했습니다.');
+    prog.set(source instanceof Blob ? .99 : .02, '파일 쓰는 중');
+    await writeSaveTarget(target, source, { assertCurrent });
     return target;
   } catch (err) { alertDialog('파일 저장', `저장하지 못했습니다: ${err.message}`); return null; }
   finally { exportBusy--; prog.close(); }
@@ -14591,21 +14596,30 @@ async function saveWithPicker(fileName, make) {
 
 const safeFileName = (name) => name.replace(/[\\/:*?"<>|]/g, '_').trim() || '통합 문서';
 
-function sheetToRows(index) {
+function* sheetRows(index) {
   const u = wb.usedRange(index);
-  const rows = [];
   for (let r = 0; r < u.rows; r++) {
     const row = [];
     for (let c = 0; c < u.cols; c++) row.push(displayText(r, c, index));
-    rows.push(row);
+    yield row;
   }
-  return rows;
 }
 
 async function exportCsv(kind = 'csv', name = docName) {
   const tab = kind !== 'csv';
   const fileName = `${safeFileName(name)}-${safeFileName(sheet().name)}.${kind}`;
-  const done = await saveWithPicker(fileName, () => new Blob([`﻿${toDelimited(sheetToRows(si), tab ? '\t' : ',')}`], { type: `${tab ? 'text/tab-separated-values' : 'text/csv'};charset=utf-8` }));
+  const done = await saveWithPicker(fileName, async options => {
+    async function* chunks() {
+      let last = performance.now();
+      for (const chunk of toDelimitedChunks(sheetRows(si), tab ? '\t' : ',', '\r\n', { bom:true })) {
+        options.assertCurrent(); yield chunk;
+        if (performance.now() - last > 40) { await new Promise(resolve => setTimeout(resolve, 0)); last = performance.now(); }
+      }
+    }
+    if (options.directToFile) return chunks();
+    const parts = []; for await (const chunk of chunks()) parts.push(chunk);
+    return new Blob(parts, { type: `${tab ? 'text/tab-separated-values' : 'text/csv'};charset=utf-8` });
+  });
   if (done) toast(`'${done.name}' 로 내보냈습니다 (현재 시트, UTF-8).`);
   return done;
 }
@@ -14621,6 +14635,10 @@ function exportOds(name = docName) {
   return new Blob([bytes], { type: 'application/vnd.oasis.opendocument.spreadsheet' });
 }
 async function exportOdsFile(name = docName) {
+  const savingBook = wb, savingId = docId, savingVersion = wb.version;
+  const extended = wb.sheets.some(s => s.pivot || s.pivotsExtra?.length || s.slicers?.length || s.charts?.length || s.images?.length || s.shapes?.length || s.cond?.length || s.validations?.length || s.tables?.length || s.filter);
+  if (extended && !await confirmBox('OpenDocument 저장 범위', '현재 ODS 저장은 값·수식·기본 셀 서식·병합·행과 열 크기를 보존합니다. 피벗·슬라이서·차트·그림·도형·조건부 서식·유효성 검사·표 및 필터 설정은 포함하지 않습니다. 이 기능을 보관하려면 WIXEL 또는 Excel 형식으로 저장하세요.\n\n이 범위를 확인하고 ODS로 저장하시겠습니까?')) return null;
+  if (wb !== savingBook || docId !== savingId || wb.version !== savingVersion) { toast('문서가 바뀌어 저장을 취소했습니다. 현재 문서에서 다시 저장하세요.'); return null; }
   const done = await saveWithPicker(`${safeFileName(name)}.ods`, () => exportOds(name));
   if (done) toast(`'${done.name}' (OpenDocument 스프레드시트)로 저장했습니다.`);
   return done;
@@ -14661,10 +14679,15 @@ async function exportXlsx(name = docName, kind = null) {
     const savingVersion = savingBook.version;
     const pictureBook = await preparePictureExport(savingBook, count => prog.set(.05, `그림 효과 준비 중 (${count}개)`));
     if (wb !== savingBook || docId !== savingId) throw new Error('문서가 바뀌었습니다. 현재 문서에서 다시 저장하세요.');
-    const blob = await writeXlsxBlobAsync(pictureBook, { activeSheet: savingSheet, fileName: target.name, kind: k }, (st) => prog.set(st.p, st.msg));
-    if (wb !== savingBook || docId !== savingId || savingBook.version !== savingVersion) throw new Error('저장 중 문서가 변경되었습니다. 다시 저장하세요.');
-    prog.set(0.98, '파일 쓰는 중');
-    const saved = await writeSaveTarget(target, blob.slice(0, blob.size, XLSX_KINDS[k].mime));
+    const assertCurrent = () => { if (wb !== savingBook || docId !== savingId || savingBook.version !== savingVersion) throw new Error('저장 중 문서가 변경되었습니다. 다시 저장하세요.'); };
+    assertCurrent();
+    const exportOptions = { activeSheet: savingSheet, fileName: target.name, kind: k };
+    const progress = st => { assertCurrent(); prog.set(st.p, st.msg); };
+    const source = target.handle
+      ? sink => writeXlsxToSink(pictureBook, exportOptions, sink, progress)
+      : (await writeXlsxBlobAsync(pictureBook, exportOptions, progress)).slice(0, undefined, XLSX_KINDS[k].mime);
+    assertCurrent();
+    const saved = await writeSaveTarget(target, source, { assertCurrent });
     prog.close();
     if (wb === savingBook && docId === savingId && /^xls[xm]$/.test(k)) {
       fileHandle = target.handle; remoteDoc = false; clearTimeout(serverTimer);
@@ -14691,7 +14714,7 @@ function saveAs() {
         { value: 'xltm', label: 'Excel 매크로 사용 서식 파일 (*.xltm)' },
         { value: 'html', label: '웹페이지 (*.html) — 현재 시트' },
         { value: 'pdf', label: 'PDF (*.pdf) — 현재 시트 인쇄 미리보기' },
-        { value: 'ods', label: 'OpenDocument 스프레드시트 (*.ods)' },
+        { value: 'ods', label: 'OpenDocument 스프레드시트 (*.ods) — 값·수식·기본 셀 서식' },
         { value: 'wixel', label: 'WIXEL 통합 문서 (*.wixel) — 행 제한 없음' },
         { value: 'csv', label: 'CSV UTF-8 (쉼표로 분리) (*.csv) — 현재 시트' },
         { value: 'tsv', label: '텍스트 (탭으로 분리) (*.tsv) — 현재 시트' },
@@ -14710,7 +14733,7 @@ function saveAs() {
     else if (type === 'csv' || type === 'tsv' || type === 'txt') done = await exportCsv(type, newName);
     else if (type === 'ods') done = await exportOdsFile(newName);
     else {
-      done = await saveWithPicker(`${safeFileName(newName)}.wixel`, options => writeWixelFile(wb, { app: 'wixel', docName: newName, docId, si }, options));
+      done = await saveWithPicker(`${safeFileName(newName)}.wixel`, options => (options.directToFile ? createWixelFileStream : writeWixelFile)(wb, { app: 'wixel', docName: newName, docId, si }, options));
       if (done) toast(`'${done.name}' 로 저장했습니다.`);
     }
     if (done && wb === savingBook && docId === savingId) {
@@ -19916,6 +19939,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['로컬 파일 순차 저장', ['시스템 저장 창을 지원하는 브라우저에서는 WIXEL·Excel·CSV·HTML을 조각씩 디스크에 기록합니다. 저장 중 오류나 문서 변경이 생기면 미완성 저장을 취소합니다.', 'XLSB 수식 해석 임시 캐시를 제한하고, Excel 테마 색상과 가져온 인쇄 용지 기본값을 보정했습니다.']],
   ['슬라이서 선택 시 화면 키보드 방지', ['슬라이서·시간 표시 막대·차트·사진을 선택하거나 메뉴를 닫을 때 숨은 셀 입력창으로 초점이 이동하지 않도록 했습니다. 모바일 최적화와 외부 키보드 설정에 관계없이 적용하며, 셀·수식의 명시적 편집은 유지합니다.']],
   ['대형 문서 파일 저장과 게시', ['WIXEL 파일과 온라인 게시본을 나누어 압축하고, Excel 파일도 시트와 피벗 캐시를 순서대로 압축하여 저장 시 메모리 사용을 줄였습니다. 새 WIXEL 저장본은 업데이트된 위셀에서 열 수 있으며 이전 저장 형식도 읽습니다.', 'HTML 다운로드는 인쇄 페이지 수와 별도로 생성하며, 큰 시트는 한 파일 안에서 행·열 구간을 넘겨 확인합니다.', '가져온 문서의 피벗과 수식 연결을 정리한 뒤 편집 화면을 열어, 저장 중 늦은 계산 때문에 저장이 취소되는 문제를 수정했습니다.', '숫자 표시 형식의 의미 있는 공백과 XLSB 사용자 피벗 스타일 이름을 보존합니다. 잘못 잘린 서식 코드 때문에 Excel이 저장 파일을 거부하는 문제를 수정했습니다.', '온라인 문서 한도를 압축 게시 형식 기준 32MiB로 조정했으며, 서버 문서 열기·게시 갱신 중 이전 응답이 현재 편집 상태를 덮어쓰지 않도록 했습니다.']],
   ['대형 문서 자동 저장과 복구', ['대형 문서를 문서별로 자동 저장하고 탭마다 열었던 문서를 구분합니다. 저장이 끝나기 전에 앱이 다시 시작되면 이전 문서를 조용히 여는 대신 복구할 저장본을 확인합니다. 저장 연결이 끊겼을 때 재연결하고, 파일 전환 시 이전 문서의 백그라운드 계산과 피벗 창·개체 캐시의 참조를 해제합니다.']],

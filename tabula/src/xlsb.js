@@ -155,6 +155,20 @@ function numText(n) {
 
 const strLit = (s) => `"${s.replace(/"/g, '""')}"`;
 
+// Memoization is an optimization, not workbook state. A distinct raw-byte key
+// for every filled-down formula must not keep millions of extra strings alive.
+const FORMULA_MEMO_ENTRIES = 16384, FORMULA_MEMO_CHARS = 2 << 20;
+const formulaMemoBudgets = new WeakMap();
+function rememberFormula(memo,key,text) {
+  if (memo.size >= FORMULA_MEMO_ENTRIES) return;
+  let budget = formulaMemoBudgets.get(memo);
+  if (!budget || memo.size < budget.size) { budget = { size: memo.size, chars: 0 }; formulaMemoBudgets.set(memo,budget); }
+  const size = key.length + text.length;
+  if (budget.chars + size > FORMULA_MEMO_CHARS) return;
+  memo.set(key,text); budget.size = memo.size; budget.chars += size;
+}
+
+
 /** 구조적 참조 열 이름 이스케이프 ([ ] # ' 앞에 ') */
 const colEsc = (s) => s.replace(/(['#[\]])/g, "'$1");
 
@@ -349,7 +363,7 @@ export function decodeFormula(u8, p, env, base, opts = {}) {
     return { text: null, next };
   }
   if (st.length !== 1) return { text: null, next };
-  if (key !== null && !based) memo.set(key, st[0]);
+  if (key !== null && !based) rememberFormula(memo,key,st[0]);
   return { text: st[0], next };
 }
 
@@ -1265,6 +1279,11 @@ function sheetHeadXml(u8, env) {
  * 공유 수식 · 배열 수식은 기준 셀 바로 뒤의 레코드(BrtShrFmla · BrtArrFmla)에서 읽음
  */
 function* rowsOf(u8, start, end, env, warn) {
+  const memo = new Map();
+  try { yield* sheetRowsOf(u8,start,end,{...env,memo},warn); }
+  finally { memo.clear(); formulaMemoBudgets.delete(memo); }
+}
+function* sheetRowsOf(u8, start, end, env, warn) {
   const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
   const shared = new Map(); // 'r,c' → { p (수식 위치), ref }
   const arrayAnchors = new Set(); // 여러 칸 배열 수식의 기준 칸 'r,c'
