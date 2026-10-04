@@ -76,7 +76,7 @@ import { parseDelimited, toDelimited, toDelimitedChunks, guessDelimiter, CsvBloc
 import { SAMPLES } from './samples.js';
 import { TEMPLATES, TEMPLATE_CATS } from './templates.js';
 import { createChartSelectionPanel } from './chart-selection-ui.js';
-import { chartSeriesPatch, chartExplosionPatch, chartPartDeletePatch, chartLayoutAfterDrag, chartExplosionAfterDrag } from './chart-edit.js';
+import { chartPalettePatch, chartStylePatch, chartSeriesColorPatch, chartPointColorPatch, chartSeriesPatch, chartExplosionPatch, chartPartDeletePatch, chartLayoutAfterDrag, chartExplosionAfterDrag } from './chart-edit.js';
 import { chartView3D } from './chart-3d.js';
 import { GridView, BASE_FONT, setBaseFont, measureText, fontStack, PATTERNS, patternCss, gradientCss, glyphShift, clearGlyphShifts, timelinePeriods, shapeTextHtml, fitShapeText } from './view.js';
 import { setThemeColors, withThemeColors, THEME, applyTint, presetStyleElements } from './stylepresets.js';
@@ -5800,7 +5800,8 @@ function insertChart(type, patch = null) {
 function updateChart(id, patch) {
   // Excel 3D charts cannot combine per-series chart types or secondary axes.
   const current = sheet().charts.find((c) => c.id === id);
-  if (patch.threeD === true && current) {
+  if (!current || !chartCanEdit(current)) return;
+  if (patch.threeD === true) {
     patch = { ...patch, seriesFmt: (patch.seriesFmt ?? current.seriesFmt ?? []).map(({ type, axis, ...format }) => format) };
   }
   wb.transact(() => wb.setSheetProp(si, 'charts', sheet().charts.map((c) => (c.id === id ? { ...c, ...patch } : { ...c }))), meta());
@@ -6368,11 +6369,11 @@ function chartQuickLayouts(ch) {
   ];
 }
 /** 미리 보기 단추 격자 (빠른 레이아웃 · 차트 스타일): 차트 모양 그대로 작게 그림 */
-function chartThumbGrid(ch, list, onPick, { w = 150, h = 96, cols = 4, keep = false } = {}) {
+function chartThumbGrid(ch, list, onPick, { w = 150, h = 96, cols = 4, keep = false, style = false } = {}) {
   const data = chartModelData(wb, si, ch);
   return el('div', { class: 'cs-grid', style: { gridTemplateColumns: `repeat(${cols}, ${w + 2}px)` } }, list.map(([n, p]) => el('button', {
     // 크게 그린 뒤 줄여 보임 (작은 크기로 그리면 여백 때문에 그림 영역이 사라짐)
-    class: 'cs-chip', title: n, style: { width: `${w + 2}px`, height: `${h + 2}px` }, html: renderChartSvg({ ...ch, ...p, ...(keep ? {} : { title: p.title ? p.title : '' }), w: w * 2.6, h: h * 2.6 }, data),
+    class: 'cs-chip', title: n, style: { width: `${w + 2}px`, height: `${h + 2}px` }, html: style ? chartStyleSample(ch, p, data, w * 2.6, h * 2.6) : renderChartSvg({ ...ch, ...p, ...(keep ? {} : { title: p.title ? p.title : '' }), w: w * 2.6, h: h * 2.6 }, data),
     onmousedown: (e) => e.preventDefault(), onclick: () => { closeMenus(); onPick(p); },
   })));
 }
@@ -6396,7 +6397,8 @@ function paletteRows(ch, onPick) {
     el('div', { class: 'menu-title' }, '단색형'), all.filter(([, p]) => p.mono).map(([k, p]) => row(k, p)),
     el('div', { class: 'menu-title' }, 'WIXEL'), all.filter(([, p]) => p.wixel).map(([k, p]) => row(k, p)));
 }
-const setChartPalette = (ch, k) => { updateChart(ch.id, { palette: k === 'office' ? undefined : k, seriesFmt: ch.seriesFmt?.map(({ color, ...f }) => f) }); gv.renderObjectsAll(); };
+const setChartPalette = (ch, k) => { const current = sheet().charts.find(c => c.id === ch.id); if (!current) return; updateChart(ch.id, chartPalettePatch(current, k)); gv.renderObjectsAll(); };
+const setChartStyle = (ch, preset) => { const current = sheet().charts.find(c => c.id === ch.id); if (!current) return; updateChart(ch.id, chartStylePatch(current, preset, CHART_STYLES.findIndex(x => x[1] === preset))); gv.renderObjectsAll(); };
 function chartColorsMenu(a) {
   const ch = chartHere();
   if (!ch) return undefined;
@@ -6418,10 +6420,16 @@ const CHART_STYLES = [
   ['WIXEL 대시보드 다크', { fill: '#0f172a', plotFill: '#0f172a', border: '#1e293b', rounded: true, titleColor: '#f8fafc', textColor: '#94a3b8', gridColor: '#1e293b', palette: 'vivid', titleBold: true }],
   ['WIXEL 미니멀', { fill: '#ffffff', gridY: false, textColor: '#475569', titleColor: '#0f172a', palette: 'slate', border: undefined }],
 ];
+function chartStyleSample(ch, preset, data, w, h) {
+  const preview = { ...ch, ...chartStylePatch(ch, preset, CHART_STYLES.findIndex(x => x[1] === preset)), w, h };
+  // 원본 셀을 매 견본마다 다시 읽지 않으면서 실제 적용과 같은 색 우선순위를 사용한다.
+  const painted = Object.hasOwn(preset, 'palette') ? chartPalettePatch({ snapshotData: data }, preset.palette).snapshotData : data;
+  return renderChartSvg(preview, painted);
+}
 function chartStylesMenu(a) {
   const ch = chartHere();
   if (!ch) return undefined;
-  const grid = chartThumbGrid(ch, CHART_STYLES, (p) => { updateChart(ch.id, { ...p, chartAreaFormat: undefined, plotAreaFormat: undefined, chartStyle: CHART_STYLES.findIndex(x => x[1] === p) }); gv.renderObjectsAll(); }, { keep: true });
+  const grid = chartThumbGrid(ch, CHART_STYLES, (p) => setChartStyle(ch, p), { keep: true, style: true });
   openMenu(a, [{ title: '차트 스타일' }, { node: grid }]);
   return undefined;
 }
@@ -6430,9 +6438,9 @@ function chartStyleGallery() {
   const ch = chartHere();
   if (!ch) return [];
   const data = chartModelData(wb, si, ch);
-  return CHART_STYLES.map(([n, p], styleIndex) => el('button', {
-    class: 'rg-chip', title: n, html: renderChartSvg({ ...ch, ...p, w: 76 * 3.2, h: 50 * 3.2 }, data),
-    onmousedown: (e) => e.preventDefault(), onclick: () => { updateChart(ch.id, { ...p, chartAreaFormat: undefined, plotAreaFormat: undefined, chartStyle: styleIndex }); gv.renderObjectsAll(); },
+  return CHART_STYLES.map(([n, p]) => el('button', {
+    class: 'rg-chip', title: n, html: chartStyleSample(ch, p, data, 76 * 3.2, 50 * 3.2),
+    onmousedown: (e) => e.preventDefault(), onclick: () => setChartStyle(ch, p),
   }));
 }
 
@@ -6509,7 +6517,7 @@ function chartSideButton(kind, anchorEl) {
   };
   if (kind === 'styles') {
     openMenu(anchor, [{ node: tabs(['스타일', '색'], (i) => (i === 0
-      ? chartThumbGrid(ch, CHART_STYLES, (p) => { updateChart(ch.id, p); gv.renderObjectsAll(); }, { w: 180, h: 110, cols: 1, keep: true })
+      ? chartThumbGrid(ch, CHART_STYLES, (p) => setChartStyle(ch, p), { w: 180, h: 110, cols: 1, keep: true, style: true })
       : paletteRows(ch, (k) => setChartPalette(ch, k)))) }], { scroll: true });
     return;
   }
@@ -6825,14 +6833,15 @@ function chartSwitchRowCol() {
 /** 차트 서식 창 (엑셀의 [차트 영역 서식] 작업 창): 영역 · 제목 · 축 · 계열 · 레이블 */
 let chartPaneDlg = null;
 /** 데이터 요소(항목 하나)의 색 (엑셀: 요소 하나를 골라 채우기) */
-function pointColorRow(s, f, setF) {
+function pointColorRow(s, getFormat, onColor, pointPalette) {
   const cats = s.categories ?? null;
-  const idx = el('select', {}, (s.values ?? []).map((_, k) => el('option', { value: String(s._pi?.[k] ?? k) }, `${k + 1}. ${String(cats?.[k] ?? '').slice(0, 16)}`)));
-  const inp = el('input', { type: 'color', value: '#ed7d31' });
-  const apply = () => setF({ pointColors: { ...(f.pointColors ?? {}), [idx.value]: inp.value } });
-  inp.addEventListener('change', apply);
+  const idx = el('select', { 'aria-label': '데이터 요소' }, (s.values ?? []).map((_, k) => el('option', { value: String(s._pi?.[k] ?? k) }, `${k + 1}. ${String(cats?.[k] ?? '').slice(0, 16)}`)));
+  const inp = el('input', { type: 'color', 'aria-label': '요소 색' });
+  const sync = () => { const f = getFormat() ?? {}, p = Number(idx.value); inp.value = f.pointColors?.[p] ?? f.colors?.[p] ?? f.color ?? (pointPalette ? pointPalette[p % pointPalette.length] : f.markerColor ?? s.color) ?? '#4472c4'; };
+  idx.addEventListener('change', sync); sync();
+  inp.addEventListener('change', () => { onColor(Number(idx.value), inp.value); sync(); });
   return el('label', { class: 'cfp-row' }, el('span', {}, '요소 색'), el('span', { class: 'cfp-color' }, idx, inp,
-    el('button', { class: 'btn small', onclick: () => { const pc = { ...(f.pointColors ?? {}) }; delete pc[idx.value]; setF({ pointColors: Object.keys(pc).length ? pc : undefined }); } }, '되돌리기')));
+    el('button', { class: 'btn small', onclick: () => { onColor(Number(idx.value), undefined); sync(); } }, '되돌리기')));
 }
 function chartCanEdit(chart, notify = true) {
   const blocked = viewOnly || wb.props?.markedFinal || (isProtected(sheet()) && chart.locked !== false && !allowed(sheet(), 'objects'));
@@ -6983,7 +6992,7 @@ function chartFormatPane(id = chartSel) {
         row('둥근 모서리', chk(ch.rounded, (v) => up({ rounded: v || undefined }))),
         row('글자 색', color(ch.textColor, (v) => up({ textColor: v }))),
         row('그림 영역 채우기', color(ch.plotFill, (v) => up({ plotFill: v, plotAreaFormat: undefined }))),
-        row('색 구성', sel2(Array.isArray(ch.palette) ? 'imported' : ch.palette ?? 'office', [...(Array.isArray(ch.palette) ? [['imported', '가져온 색']] : []), ...Object.entries(CHART_PALETTES).map(([k, p]) => [k, p.label])], (v) => { if (v !== 'imported') up({ palette: v === 'office' ? undefined : v }); }))),
+        row('색 구성', sel2(Array.isArray(ch.palette) ? 'imported' : ch.palette ?? 'office', [...(Array.isArray(ch.palette) ? [['imported', '가져온 색']] : []), ...Object.entries(CHART_PALETTES).map(([k, p]) => [k, p.label])], (v) => { if (v !== 'imported') up(chartPalettePatch(get(), v)); }))),
       sec('차트 제목',
         row('제목', txt(ch.title, (v) => up({ title: v }))),
         row('글꼴 크기(pt)', num(ch.titleSize, (v) => up({ titleSize: v }), { min: 6, max: 40 })),
@@ -7066,14 +7075,15 @@ function chartFormatPane(id = chartSel) {
           row('증가 색', color(ch.upColor ?? paletteOf(ch)[0], (v) => up({ upColor: v }), false)),
           row('감소 색', color(ch.downColor ?? paletteOf(ch)[1], (v) => up({ downColor: v }), false)),
           row('합계 색', color(ch.totalColor ?? paletteOf(ch)[2], (v) => up({ totalColor: v }), false))) : null,
-        ...data.series.map((s, i) => {
+        ...data.series.map((s, visibleIndex) => {
+          const i = s._fi ?? visibleIndex;
           const f = { ...((ch.seriesFmt ?? [])[i] ?? {}) };
           const type = f.type ?? s.type ?? ch.type, hasLine = !ch.threeD && ['line', 'scatter', 'radar'].includes(type);
           const canSmooth = !ch.threeD && ['line', 'scatter'].includes(type);
           const setF = (patch) => { const list = [...(get().seriesFmt ?? [])]; while (list.length <= i) list.push({}); list[i] = { ...list[i], ...patch }; Object.assign(f, patch); up({ seriesFmt: list }); };
           return el('div', { class: 'cfp-series', 'data-format-series': i },
             el('b', {}, (s.name || `계열${i + 1}`) + (ch.hiddenSeries?.includes(i) ? ' (숨김)' : '')),
-            row('색', color(s.color ?? paletteOf(ch)[i % paletteOf(ch).length], (v) => setF({ color: v }), false)),
+            row('색', color(s.color ?? paletteOf(ch)[i % paletteOf(ch).length], (v) => { up(chartSeriesColorPatch(get(), i, v)); draw(); }, false)),
             !ch.threeD && ['column', 'line', 'area', 'combo'].includes(ch.type) ? row('종류', sel2(f.type ?? '', [['', '기본'], ['column', '막대'], ['line', '꺾은선'], ['area', '영역']], (v) => { setF({ type: v || undefined }); draw(); })) : null,
             !ch.threeD && ['column', 'line', 'area', 'combo'].includes(ch.type) ? row('축', sel2(f.axis ?? s.axis ?? 0, [[0, '기본 축'], [1, '보조 축']], (v) => setF({ axis: Number(v) }))) : null,
             !ch.threeD && ['column', 'bar', 'area'].includes(type) ? row('계열 배치', sel2(f.grouping ?? s.grouping ?? ch.grouping ?? 'clustered', [['clustered', '묶은'], ['stacked', '누적'], ['percentStacked', '100% 기준 누적']], v => setF({ grouping: v }))) : null,
@@ -7089,7 +7099,7 @@ function chartFormatPane(id = chartSel) {
             !ch.threeD && ['column', 'bar', 'line', 'area', 'combo'].includes(ch.type) ? row('추세선', sel2(f.trend ?? '', [['', '없음'], ['linear', '선형'], ['exp', '지수'], ['movingAvg', '이동 평균']], (v) => { setF({ trend: v || undefined }); draw(); })) : null,
             !ch.threeD && ['column', 'bar', 'line', 'area', 'combo'].includes(ch.type) && f.trend === 'movingAvg' ? row('이동 평균 구간', num(f.trendPeriod ?? 3, (v) => setF({ trendPeriod: v }), { min: 2, max: 50 })) : null,
             !ch.threeD && ['column', 'bar', 'line', 'area', 'combo'].includes(ch.type) && f.trend && f.trend !== 'movingAvg' ? row('앞으로 예측(구간)', num(f.trendForward, (v) => setF({ trendForward: v || undefined }), { min: 0, max: 100 })) : null,
-            pointColorRow({ ...s, categories: data.categories }, f, setF));
+            pointColorRow({ ...s, categories: data.categories }, () => { const c = get(); return { ...c?.snapshotData?.series.find((sr, j) => (sr._fi ?? j) === i), ...c?.seriesFmt?.[i] }; }, (p, c) => up(chartPointColorPatch(get(), i, p, c)), ['pie', 'doughnut', 'pieOfPie', 'barOfPie'].includes(ch.type) || ch.varyColors && ['column', 'bar'].includes(type) && data.series.filter(sr => !ch.hiddenSeries?.includes(sr._fi) && ['column', 'bar'].includes(sr.type ?? ch.type)).length === 1 ? paletteOf(ch) : null));
         })),
     ].filter(Boolean));
     const sections = [...body.children];
@@ -9703,10 +9713,10 @@ function chartPartMenu(ch, part, pos) {
     const pointName = part.kind === 'point' ? String(data.categories?.[visiblePoint] ?? part.p + 1) : null;
     items.push({ title: part.kind === 'point' ? `데이터 요소 서식 — ${sr.name} · ${pointName}` : `데이터 계열 서식 — ${sr.name}` });
     if (part.kind === 'point') {
-      items.push(color(isLine ? '표식 색...' : '채우기 색 (이 요소만)...', (c) => { const pc = { ...(f.pointColors ?? {}) }; if (c) pc[part.p] = c; else delete pc[part.p]; setSeriesFmt(ch, part.s, { pointColors: Object.keys(pc).length ? pc : undefined }); }));
-      items.push({ label: '이 요소 색 되돌리기', disabled: !f.pointColors?.[part.p], action: () => { const pc = { ...(f.pointColors ?? {}) }; delete pc[part.p]; setSeriesFmt(ch, part.s, { pointColors: Object.keys(pc).length ? pc : undefined }); } });
+      items.push(color(isLine ? '표식 색...' : '채우기 색 (이 요소만)...', (c) => up(chartPointColorPatch(sheet().charts.find(x => x.id === ch.id) ?? ch, part.s, part.p, c))));
+      items.push({ label: '이 요소 색 되돌리기', disabled: !f.pointColors?.[part.p] && !f.colors?.[part.p], action: () => up(chartPointColorPatch(sheet().charts.find(x => x.id === ch.id) ?? ch, part.s, part.p, undefined)) });
     } else if (!pie) {
-      items.push(color(isLine ? '선 색...' : '채우기 색...', (c) => setSeriesFmt(ch, part.s, { color: c ?? undefined })));
+      items.push(color(isLine ? '선 색...' : '채우기 색...', (c) => up(chartSeriesColorPatch(sheet().charts.find(x => x.id === ch.id) ?? ch, part.s, c))));
     } else {
       items.push({ label: '조각을 한 번 더 누르면 그 조각만 색을 바꿀 수 있습니다', disabled: true });
     }
@@ -19962,6 +19972,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['차트 색·스타일 변경 수정', ['가져온 차트의 단색·그라데이션·개별 요소 색 때문에 새 색 구성이 적용되지 않던 문제를 수정했습니다. 리본·차트 옆 버튼·서식 창을 같은 동작으로 통일하고, 계열 색·요소 색 자동 복원·스타일 미리보기와 배경 변경도 보완했습니다.']],
   ['차트 선형 예측 표시 개선', ['예측 구간까지 자동 축 범위에 반영하고, 고정한 축 범위 밖의 추세선이 제목·범례·다른 영역을 침범하지 않도록 수정했습니다.']],
   ['브라우저 호환성과 입력 보호', ['일부 WebKit 환경에서 자동 보관과 문서 보관함 저장이 실패하던 문제를 보완했습니다. 브라우저 저장소 읽기 중단을 정확하게 처리하고, 파일 저장 준비 중에도 취소할 수 있습니다.', '클립보드 응답을 기다리는 동안 선택 범위나 입력 내용이 바뀌면 이전 붙여넣기가 새 작업을 덮어쓰지 않습니다. 자동 복사가 거절되면 내용을 직접 선택해 복사할 수 있습니다.', '모바일 최적화를 꺼도 화면 확대·키보드로 줄어든 보이는 영역 안에 메뉴와 하위 메뉴를 배치합니다.']],
   ['대형 저장 안정성과 취소', ['대형 문서 자동 보관을 작은 조각으로 나누어 셀·열 데이터·피벗 캐시를 한꺼번에 복사하는 메모리를 줄였습니다. 저장 중 취소하면 이전 저장본을 유지합니다.', '파일 저장 진행 창에서 취소할 수 있으며, 디스크에 저장을 확정하는 동안은 완료를 기다립니다. Excel 저장 시 과거 피벗 필터 항목·선택·보고서 연결·항목 보존 옵션을 유지합니다. 필터 결과가 빈 피벗을 저장하면 Excel에서 파일이 열리지 않던 오류를 수정했습니다. 그룹 안의 같은 그림을 중복 저장하지 않고, 크기가 0으로 축소된 그룹과 확장자가 .bin인 EMF 그림도 보존합니다.']],

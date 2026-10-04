@@ -618,3 +618,7 @@ node tools/mobile-layout.mjs
 ## 차트 예측선 영역 회귀
 
 `tools/chart-forecast-ui.mjs`는 격리 합성 차트로 실제 선형 예측 메뉴, 실행 취소/다시 실행, 자동·고정·보조·역방향 축, 가로 막대, 지수/이동 평균, 작은 차트, 기존 XY 표시를 검사한다. SVG를 래스터화하여 추세선이 그림 영역 밖에 표시되는지도 측정한다. WIXEL_BROWSER는 chromium/webkit/firefox, WIXEL_URL은 로컬 서버, WIXEL_FORECAST_OUT은 D드라이브 결과 위치다. WIXEL_FORECAST_BASELINE에 이전 chart.js 파일을 지정하면 소스 서버의 해당 응답만 이전 코드로 바꿔 재현한다. WIXEL_FORECAST_PUBLIC=1은 정확한 위셀 공개 호스트의 합성 검사만 허용하며 API/외부 요청과 쓰기는 계속 차단한다. 범위·결과는 [80번 문서](../docs/codex/80_차트예측선영역.md)를 따른다.
+
+## 차트 색과 스타일 회귀
+
+`tools/chart-colors-ui.mjs`는 가져온 그라데이션·개별 점 색이 있는 합성 차트에서 실제 리본/옆 버튼/서식 창의 색·스타일·미리보기·Undo·보호 차단을 검사한다. `WIXEL_BROWSER`는 chromium/webkit/firefox, `WIXEL_COLORS_OUT`은 D 결과 경로, `WIXEL_URL`은 로컬 소스/번들 서버이다. `WIXEL_COLORS_BASELINE`은 기준 app.js/chart.js/chart-edit.js/chart-selection-ui.js가 있는 폴더를 지정한다. `WIXEL_COLORS_PUBLIC=1`은 정확한 위셀 공개 호스트에서 합성 검사만 허용한다. API와 외부 요청·쓰기는 계속 차단한다. 상세 범위는 [81번 문서](../docs/codex/81_차트색과스타일명령.md)를 따른다.

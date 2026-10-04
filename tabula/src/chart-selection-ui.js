@@ -1,7 +1,7 @@
 import { paletteOf, CHART_PALETTES } from './chart.js';
 import { el } from './ui.js';
 import { buildChartHierarchy, hierarchyNodeColor } from './chart-hierarchy.js';
-import { chartSeriesPatch, chartPointColorPatch, chartExplosionPatch } from './chart-edit.js';
+import { chartSeriesPatch, chartPointColorPatch, chartExplosionPatch, chartPalettePatch, chartSeriesColorPatch } from './chart-edit.js';
 import { chartAreaFormat } from './chart-area-format.js';
 import { createChartAreaFormatPanel } from './chart-area-format-ui.js';
 
@@ -85,7 +85,7 @@ export function createChartSelectionPanel({ getChart, getPart, getData, onChange
     } else if (part.kind === 'series' || part.kind === 'point') {
       const type = series?.type ?? chart.type, pie = ['pie', 'doughnut'].includes(chart.type), line = ['line', 'scatter', 'radar'].includes(type);
       const label = part.kind === 'point' ? line ? '선택한 표식 색' : '선택한 요소 색' : line ? '계열 선 색' : '계열 채우기 색';
-      rows.push(row(label, color(part.kind === 'point' ? fmt.pointColors?.[point] ?? (pie ? fmt.color ?? series?.colors?.[point] ?? paletteOf(chart)[point % paletteOf(chart).length] : series?.color) : series?.color, c => part.kind === 'point' ? up(chartPointColorPatch(getChart(), part.s, point, c)) : setSeries({ color: c, grad: undefined }))));
+      rows.push(row(label, color(part.kind === 'point' ? fmt.pointColors?.[point] ?? series?.pointColors?.[point] ?? fmt.colors?.[point] ?? series?.colors?.[point] ?? (['pie', 'doughnut', 'pieOfPie', 'barOfPie'].includes(chart.type) ? fmt.color ?? paletteOf(chart)[point % paletteOf(chart).length] : series?.markerColor ?? series?.color) : series?.color, c => part.kind === 'point' ? up(chartPointColorPatch(getChart(), part.s, point, c)) : up(chartSeriesColorPatch(getChart(), part.s, c)))));
       if (part.kind === 'point') {
         rows.push(el('button', { class: 'btn small', onclick: () => { up(chartPointColorPatch(getChart(), part.s, point, undefined)); draw(); } }, '요소 색 자동으로'));
         rows.push(row('데이터 요소', choose(point, data.categories.map((name, p) => [series?._pi?.[p] ?? p, `${(series?._pi?.[p] ?? p) + 1}. ${String(name).slice(0, 70)}`]), p => onChoose({ kind: 'point', s: part.s, p: Number(p) }))));
@@ -144,7 +144,7 @@ export function createChartSelectionPanel({ getChart, getPart, getData, onChange
     } else if (part.kind === 'plot') {
       extra.push(createChartAreaFormatPanel({kind:'plot',getFormat:()=>chartAreaFormat(getChart(),'plot'),getIdentity:()=>`${getChart()?.id}:${getPart()?.kind}`,initialTab:areaTabs.get('plot'),onTab:tab=>areaTabs.set('plot',tab),onChange:value=>up({plotAreaFormat:value??undefined,...(value?{}:{plotFill:undefined})})}).body);
     } else {
-      rows.push(row('색 구성', choose(Array.isArray(chart.palette) ? 'imported' : chart.palette ?? 'office', [...(Array.isArray(chart.palette) ? [['imported', '가져온 색']] : []), ...Object.entries(CHART_PALETTES).map(([k, p]) => [k, p.label])], v => { if (v !== 'imported') up({ palette: v }); })));
+      rows.push(row('색 구성', choose(Array.isArray(chart.palette) ? 'imported' : chart.palette ?? 'office', [...(Array.isArray(chart.palette) ? [['imported', '가져온 색']] : []), ...Object.entries(CHART_PALETTES).map(([k, p]) => [k, p.label])], v => { if (v !== 'imported') up(chartPalettePatch(getChart(), v)); })));
       extra.push(createChartAreaFormatPanel({kind:'chart',getFormat:()=>chartAreaFormat(getChart()),getIdentity:()=>`${getChart()?.id}:${getPart()?.kind}`,initialTab:areaTabs.get('chart'),onTab:tab=>areaTabs.set('chart',tab),onChange:value=>up({chartAreaFormat:value??undefined,...(value?{}:{fill:undefined,border:undefined})})}).body);
     }
     body.replaceChildren(row('서식을 지정할 차트 요소', picker), el('p', { class: 'cfp-selection-name', role: 'status' }, title), ...(rows.length ? [section('선택한 요소', ...rows)] : []), ...extra, el('button', { class: 'btn', onclick: onAllOptions }, '차트 전체 옵션…'));

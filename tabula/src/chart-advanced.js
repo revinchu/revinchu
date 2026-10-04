@@ -103,7 +103,7 @@ function drawOfPie(ctx) {
   const r = Math.max(2, Math.min(plot.h / 2 - 15, (plot.w - 16) / (2 + 2 * ratio + gapFactor))), r2 = r * ratio;
   const width = 2 * r + 2 * r2 + r * gapFactor, x0 = plot.x + (plot.w - width) / 2;
   const cx = x0 + r, cx2 = x0 + 2 * r + r * gapFactor + r2, cy = plot.y + plot.h / 2;
-  const color = (p) => p.i < 0 ? chart.otherColor ?? '#a5a5a5' : s.pointColors?.[p.i] ?? s.colors?.[p.i] ?? pal[p.i % pal.length];
+  const color = (p) => p.i < 0 ? chart.otherColor ?? '#a5a5a5' : s.pointColors?.[s._pi?.[p.i] ?? p.i] ?? s.colors?.[s._pi?.[p.i] ?? p.i] ?? chart.seriesFmt?.[s._fi ?? 0]?.color ?? pal[(s._pi?.[p.i] ?? p.i) % pal.length];
   const slice = (p, x, radius, start, end) => {
     const title = p.i < 0 ? '기타' : categories[p.i] ?? String(p.i + 1);
     parts.push(`<path d="${annularSector(x, cy, 0, radius, start, end)}" fill="${esc(color(p))}" stroke="#fff" data-ofpie="${x === cx ? 'primary' : 'secondary'}" data-value="${p.value}"${tag(s, p.i < 0 ? undefined : p.i)}><title>${esc(title)}: ${formatGeneral(p.value)}</title></path>`);

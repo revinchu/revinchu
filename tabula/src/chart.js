@@ -255,7 +255,11 @@ function multiLevel(rows, n) {
  */
 export function resolveChart(ch, api) {
   // 선택 시트 게시본은 원본 참조 없이 그 시점의 표시 데이터만 사용합니다.
-  if (ch.snapshotData) return structuredClone(ch.snapshotData);
+  if (ch.snapshotData) {
+    const data = structuredClone(ch.snapshotData);
+    data.series = data.series.map((s, i) => ({ ...s, ...ch.seriesFmt?.[s._fi ?? i] }));
+    return data;
+  }
   let base;
   if (ch.pivot) {
     base = api.pivot(ch.pivot) ?? { categories: [], series: [] };
@@ -571,7 +575,7 @@ export function renderChartSvg(chart, data) {
   // 다단계 항목 축 (세로 막대 · 꺾은선 · 콤보): 안쪽 이름 아래에 바깥 묶음 이름 줄
   const catLevels = baseType !== 'bar' && baseType !== 'scatter' && !chart.axes?.x?.hide ? data.catLevels ?? [] : [];
   const LEVEL_H = Math.round(FS.axis * 1.6);
-  const series = chartStackValues(data.series.map((s, i) => { const defaults = chartComboDefaults(chart, i, data.series.length); return { ...defaults, ...s, type: s.type ?? defaults.type ?? baseType, axis: s.axis ?? defaults.axis ?? 0, color: s.color ?? pal[i % pal.length], _fi: s._fi ?? i }; }), chart.grouping, categories.length);
+  const series = chartStackValues(data.series.map((s, i) => { const defaults = chartComboDefaults(chart, i, data.series.length); return { ...defaults, ...s, type: s.type ?? defaults.type ?? baseType, axis: s.axis ?? defaults.axis ?? 0, color: s.color ?? pal[(s._fi ?? i) % pal.length], _fi: s._fi ?? i }; }), chart.grouping, categories.length);
   // 요소 고르기용 표시 (엑셀처럼 한 번 누르면 계열, 한 번 더 누르면 요소) — data-s = 계열 서식 번호, data-p = 항목 번호
   const tag = (s, p) => ` data-s="${s._fi}"${p === undefined ? '' : ` data-p="${chartPointIndex(s, p)}"`}`;
   const tagMk = (html, s, p) => html.replace(/^<(\w+)/, `<$1${tag(s, p)}`);
@@ -942,7 +946,7 @@ export function renderChartSvg(chart, data) {
           if (!isNum(raw)) return;
           const v = s._upper[i];
           const start = (horizontal ? area.y : area.x) + band * categoryIndex(i) + (band - groupW) / 2 + stepW * (deep ? 0 : slotOf.get(s));
-          const pf = pointColor(s, i) ?? (vary ? pal[chartPointIndex(s, i) % pal.length] : bf);
+          const pf = pointColor(s, i) ?? (vary && !chart.seriesFmt?.[s._fi]?.color ? pal[chartPointIndex(s, i) % pal.length] : bf);
           let from = b0;
           let to = vp(v);
           if (s._stacked) {

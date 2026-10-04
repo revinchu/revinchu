@@ -3887,7 +3887,7 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx', imageRel) {
   if (isChartEx(chart)) return writeChartEx(chart, data, refs, pal, imageRel);
   const series = data.series.map((sr, i) => ({
     ...sr, ...refs[chart.pivot ? i : sr._fi ?? i], type: chart.type === 'stock' && chart.volume ? (i === 0 ? 'column' : 'stock') : FALLBACK[sr.type] ?? sr.type ?? baseType,
-    axis: chart.type === 'stock' && chart.volume ? (i === 0 ? 0 : 1) : sr.axis ?? 0, color: sr.color ?? pal[i % pal.length],
+    axis: chart.type === 'stock' && chart.volume ? (i === 0 ? 0 : 1) : sr.axis ?? 0, color: sr.color ?? pal[(sr._fi ?? i) % pal.length],
   }));
   const LBL_POS = { center: 'ctr', insideEnd: 'inEnd', insideBase: 'inBase', outEnd: 'outEnd', above: 't', below: 'b', left: 'l', right: 'r' };
   const dLbls = (on, code, pct = false, pos = null, sf = {}) => {
@@ -3918,11 +3918,11 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx', imageRel) {
     // 한 idx에 색/분리 옵션을 한 dPt로 합친다. 0도 계열 분리의 명시적 덮어쓰기다.
     const dPt = pie ? sr.values.map((_, k) => {
       const p = sr._pi?.[k] ?? k, offset = explosion(sr.pointExplosion?.[p]);
-      return `<c:dPt><c:idx val="${k}"/><c:bubble3D val="0"/>${offset !== null ? `<c:explosion val="${offset}"/>` : ''}<c:spPr><a:solidFill><a:srgbClr val="${(sr.pointColors?.[p] ?? sr.colors?.[p] ?? pal[p % pal.length]).replace('#', '')}"/></a:solidFill><a:ln w="19050"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:ln></c:spPr></c:dPt>`;
+      return `<c:dPt><c:idx val="${k}"/><c:bubble3D val="0"/>${offset !== null ? `<c:explosion val="${offset}"/>` : ''}<c:spPr><a:solidFill><a:srgbClr val="${(sr.pointColors?.[p] ?? sr.colors?.[p] ?? chart.seriesFmt?.[sr._fi ?? i]?.color ?? pal[p % pal.length]).replace('#', '')}"/></a:solidFill><a:ln w="19050"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:ln></c:spPr></c:dPt>`;
     }).join('') : '';
     const invert = type === 'column' || type === 'bar' ? '<c:invertIfNegative val="0"/>' : '';
     // 막대 · 꺾은선의 데이터 요소별 색 · '요소마다 다른 색'
-    const ptColor = (k) => { const p = sr._pi?.[k] ?? k; return sr.pointColors?.[p] ?? (chart.varyColors && (type === 'column' || type === 'bar') ? pal[p % pal.length] : null); };
+    const ptColor = (k) => { const p = sr._pi?.[k] ?? k; return sr.pointColors?.[p] ?? (chart.varyColors && !chart.seriesFmt?.[sr._fi ?? i]?.color && (type === 'column' || type === 'bar') ? pal[p % pal.length] : null); };
     const dPtBar = !pie && (sr.pointColors || chart.varyColors) && (type === 'column' || type === 'bar') ? sr.values.map((_, k) => (ptColor(k) ? `<c:dPt><c:idx val="${k}"/><c:invertIfNegative val="0"/><c:bubble3D val="0"/><c:spPr><a:solidFill><a:srgbClr val="${String(ptColor(k)).replace('#', '').toUpperCase().slice(0, 6)}"/></a:solidFill></c:spPr></c:dPt>` : '')).join('') : '';
     // 추세선
     const TREND = { linear: 'linear', exp: 'exp', movingAvg: 'movingAvg' };
