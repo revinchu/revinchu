@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 // tools/storage-connection.mjs in Chromium/WebKit isolated browser profiles.
 function databaseHarness() {
   const data = new Map(), connections = [];
-  let opens = 0, nextOpenError = null, syncOpenError = null, abortNext = null;
+  let opens = 0, nextOpenError = null, syncOpenError = null, abortNext = null, requestError = null, rejectBlobs = false, blobFailures = 0, synchronousBlobError = false, abortEvents = 0;
   const indexedDB = { open() {
     opens++;
     if (syncOpenError) { const error = syncOpenError; syncOpenError = null; throw error; }
@@ -22,7 +22,7 @@ function databaseHarness() {
           let pending = 0, finished = false;
           const finish = () => setImmediate(() => {
             if (finished || pending) return;
-            if (abortNext) { tx.error = abortNext; abortNext = null; tx.abort(); return; }
+            if (abortNext) { tx.error = abortNext.error; abortNext = null; tx.abort(); return; }
             finished = true;
             for (const key of deletes) data.delete(key);
             for (const [key, value] of writes) data.set(key, value);
@@ -32,15 +32,29 @@ function databaseHarness() {
             const request = {}; pending++; db.requests++;
             queueMicrotask(() => {
               if (finished) { request.error = new DOMException('aborted', 'AbortError'); request.onerror?.(); pending--; return; }
+              if (requestError) {
+                request.error = requestError; requestError = null;
+                request.onerror?.({ target: request });
+                // Native request errors bubble before tx.error is populated.
+                tx.onerror?.({ target: request }); tx.error = request.error;
+                pending--; tx.abort(); return;
+              }
               request.result = action(); request.onsuccess?.(); pending--; finish();
             });
             return request;
           };
           const tx = { error: null,
-            abort() { if (finished) return; finished = true; queueMicrotask(() => tx.onabort?.()); },
+            abort() { if (finished) return; finished = true; queueMicrotask(() => { abortEvents++; tx.onabort?.(); }); },
             objectStore() { return {
               get: key => requestFor(() => structuredClone(writes.has(key) ? writes.get(key) : deletes.has(key) ? undefined : data.get(key))),
-              put: (value, key) => requestFor(() => { writes.set(key, structuredClone(value)); deletes.delete(key); return key; }),
+              put: (value, key) => {
+                if (rejectBlobs && (value instanceof Blob || value?.blob instanceof Blob)) {
+                  blobFailures++; const error = new DOMException('Error preparing Blob/File data to be stored in object store', synchronousBlobError ? 'DataCloneError' : 'UnknownError');
+                  if (synchronousBlobError) throw error;
+                  requestError = error;
+                }
+                return requestFor(() => { writes.set(key, structuredClone(value)); deletes.delete(key); return key; });
+              },
               delete: key => requestFor(() => { writes.delete(key); deletes.add(key); }),
               getAllKeys: range => requestFor(() => [...data.keys()].filter(key => key >= range.lower && key <= range.upper)),
             }; },
@@ -54,7 +68,10 @@ function databaseHarness() {
   } };
   return { indexedDB, data, connections, get opens() { return opens; },
     failOpen(error, sync = false) { if (sync) syncOpenError = error; else nextOpenError = error; },
-    abort(error) { abortNext = error; },
+    abort(error) { abortNext = { error }; },
+    failRequest(error) { requestError = error; },
+    rejectBlobs(sync = false) { rejectBlobs = true; synchronousBlobError = sync; }, get blobFailures() { return blobFailures; },
+    get abortEvents() { return abortEvents; },
   };
 }
 let importId = 0;
@@ -427,4 +444,91 @@ test('prepared exact formula text sharing keeps cell caches, notes and edits ind
   prepared.undo();assert.equal(prepared.getRaw(0,0,0),raw);prepared.redo();assert.equal(prepared.getRaw(0,0,0),'=123');
   await saveLargeWorkbook(key,prepared,{});const out=new Workbook((await loadLargeWorkbook(key,null,{prepareCells:true})).workbook);
   assert.deepEqual(out.serialize(),prepared.serialize());assert.equal(out.getRaw(0,449,0),raw);assert.equal(out.getCell(0,449,0).comment,'note449');
+}));
+
+
+test('읽기 요청 성공 뒤 트랜잭션 중단은 값·키 목록의 성공으로 보고하지 않는다', () => fixture(async (s, h) => {
+  await s.idbSet('doc', 'safe');
+  for (const cause of [new DOMException('storage connection interrupted', 'UnknownError'), null]) for (const read of [() => s.idbGet('doc'), () => s.idbKeys('doc')]) {
+    const before = h.connections[0].requests;
+    h.abort(cause);
+    await assert.rejects(read(), { name: cause?.name ?? 'AbortError' });
+    assert.equal(h.connections[0].requests, before + 1, '중단된 읽기는 자동 재실행하지 않음');
+    assert.equal(h.opens, 1);
+  }
+  assert.equal(await s.idbGet('doc'), 'safe');
+  assert.deepEqual(await s.idbKeys('doc'), ['doc']);
+}));
+
+
+test('네이티브 요청 오류가 tx.error보다 먼저 전달되어도 원인을 보존하고 기존 저장본을 유지한다', () => fixture(async (s, h) => {
+  await s.idbSet('doc', 'safe');
+  const operations = [() => s.idbSet('doc', 'changed'), () => s.idbDel('doc'), () => s.idbDeleteMany(['doc']),
+    () => s.idbCompareAndSet('doc', 'safe', 'changed'), () => s.idbUpdate(['doc'], () => ({ set: [['doc', 'changed']] }))];
+  for (const operation of operations) {
+    const error = new DOMException('native request failed', 'QuotaExceededError');
+    h.failRequest(error);
+    await assert.rejects(operation(), cause => cause === error);
+    assert.equal(await s.idbGet('doc'), 'safe');
+  }
+}));
+
+
+for (const gzip of [true, false]) test('WebKit Blob 거절 후 v5 바이트 조각 저장·재열기·변경·충돌 보존: ' + gzip, () => fixture(async (s, h) => {
+  const { saveLargeWorkbook, loadLargeWorkbook } = await import('../src/big-storage.js');
+  const { Workbook } = await import('../src/workbook.js');
+  const nativeCompression = globalThis.CompressionStream;
+  try {
+    if (!gzip) globalThis.CompressionStream = undefined;
+    const w = new Workbook({sheets:[{name:'보존',cells:{'0,0':{raw:'한글😀'.repeat(240000)},'1,0':{raw:'=1+2',cached:3,style:{bold:true}}},fileValues:true}]}), key = 'blob-fallback-' + gzip;
+    const old = await saveLargeWorkbook(key,w,{docName:'기존'});
+    h.rejectBlobs(); w.transact(() => w.setInput(0,2,0,'새 값'));
+    const next = await saveLargeWorkbook(key,w,{docName:'다음'},{expectedGeneration:old.manifest.generation});
+    const record = h.data.get(next.manifest.sheets[0].key);
+    assert.ok(record.cellPartKeys.every(partKey => h.data.get(partKey).format === 'wixel-blob-bytes-v1'));
+    for (const partKey of record.cellPartKeys) for (const bytes of h.data.get(partKey).parts) assert.ok(bytes.byteLength <= 1 << 20);
+    assert.deepEqual(new Workbook((await loadLargeWorkbook(key,null,{prepareCells:true})).workbook).serialize(),w.serialize());
+    const failures = h.blobFailures; w.transact(() => w.setInput(0,3,0,'추가'));
+    const last = await saveLargeWorkbook(key,w,{}, {expectedGeneration:next.manifest.generation});
+    assert.equal(h.blobFailures,failures,'확인된 동일 저장소에는 Blob 재시도를 반복하지 않음');
+    w.transact(() => w.setInput(0,4,0,'충돌 사본'));
+    await assert.rejects(saveLargeWorkbook(key,w,{}, {expectedGeneration:old.manifest.generation}),{code:'IDB_CONFLICT'});
+    assert.equal(h.data.get(key).generation,last.manifest.generation);
+    assert.equal(new Workbook((await loadLargeWorkbook(key)).workbook).getRaw(0,4,0),'');
+  } finally { globalThis.CompressionStream = nativeCompression; }
+}));
+
+for (const gzip of [true, false]) test('WebKit Blob 거절 후 보관함 본문·버전·다음 편집을 원자 저장한다: ' + gzip, () => fixture(async (s, h) => {
+  const { libSave, libLoad, libLoadVersion, libList } = await import('../src/library.js');
+  const nativeCompression = globalThis.CompressionStream, id = 'synthetic-library-bytes-' + gzip;
+  try {
+    if (!gzip) globalThis.CompressionStream = undefined;
+    const initial = JSON.stringify({name:'이전',text:'가😀'.repeat(400000)}), next = JSON.stringify({name:'새 문서',text:'나😀'.repeat(400000)});
+    await libSave(id,'처음',initial); h.rejectBlobs();
+    const saved = await libSave(id,'두 번째',next,{version:{label:'확인',named:true}});
+    assert.equal(h.data.get('lib:doc:'+id).blob.format,'wixel-blob-bytes-v1');
+    assert.deepEqual(await libLoad(id),JSON.parse(next));
+    assert.deepEqual(await libLoadVersion(id,saved.versions[0].ts),JSON.parse(next));
+    assert.equal((await libList()).find(e=>e.id===id).revision,saved.revision);
+    assert.equal(h.blobFailures,2,'한 트랜잭션의 본문과 버전 Blob 요청');
+    // A failed binary write must leave the previous body, index and named version.
+    const before = [...h.data].map(([k,v])=>[k,structuredClone(v)]);
+    h.failRequest(new DOMException('quota','QuotaExceededError'));
+    await assert.rejects(libSave(id,'실패',JSON.stringify({name:'실패'}),{version:{label:'실패'}}),{name:'QuotaExceededError'});
+    assert.deepEqual([...h.data],before); assert.deepEqual(await libLoad(id),JSON.parse(next));
+    await libSave(id,'세 번째',JSON.stringify({name:'최신'}));
+    assert.deepEqual(await libLoad(id),{name:'최신'}); assert.equal(h.blobFailures,2);
+  } finally { globalThis.CompressionStream = nativeCompression; }
+}));
+
+
+for(const synchronous of [false,true])test('Blob 호환 재시도는 실패 트랜잭션의 abort 완료 뒤에만 시작한다: '+synchronous,()=>fixture(async(s,h)=>{
+  const {storeBlobCompatible,storedBlobText}=await import('../src/stored-blob.js');h.rejectBlobs(synchronous);
+  let writes=0;
+  await storeBlobCompatible(new Blob(['안전한 원자 재시도😀']),async value=>{
+    if(++writes===2)assert.equal(h.abortEvents,1);
+    return s.idbSet('atomic-blob',value);
+  });
+  assert.equal(writes,2);assert.equal(h.abortEvents,1);assert.equal(await storedBlobText(await s.idbGet('atomic-blob')),'안전한 원자 재시도😀');
+  assert.equal(await s.idbGet('missing'),null);
 }));

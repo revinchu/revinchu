@@ -672,6 +672,30 @@ function updateStats() {
   renderStats({ count, numCount, sum, min: numCount && area <= 200000 ? min : null, max: numCount && area <= 200000 ? max : null, fmtStyle });
 }
 
+// A denied/unavailable clipboard must not be reported as a completed copy.
+async function copyTextWithFeedback(value, message, input = null) {
+  const text = String(value);
+  try {
+    if (typeof navigator.clipboard?.writeText !== 'function') throw new Error('클립보드 API 없음');
+    await navigator.clipboard.writeText(text); toast(message); return true;
+  } catch { /* Keep a selectable, read-only manual copy path. */ }
+  const select = node => { node.focus({ preventScroll:true }); node.select(); };
+  const retry = node => {
+    select(node);
+    try { if (document.execCommand?.('copy')) { toast(message); return true; } } catch {}
+    toast('자동 복사가 허용되지 않습니다. 선택한 내용을 Ctrl+C 또는 ⌘C로 복사하세요.');
+    return false;
+  };
+  if (input?.isConnected) return retry(input);
+  const field = el('textarea', { readonly:true, rows:4, 'aria-label':'복사할 내용', style:{width:'100%',boxSizing:'border-box'} });
+  field.value = text;
+  openDialog({ title:'텍스트 복사', width:480,
+    body:el('div', {}, el('p', {}, '브라우저에서 자동 복사를 허용하지 않았습니다. 아래 내용을 선택하여 Ctrl+C 또는 ⌘C로 복사하세요.'), field),
+    buttons:[{label:'선택한 내용 복사', action:()=>retry(field)}, {label:'닫기'}],
+  });
+  select(field); return false;
+}
+
 // 상태 표시줄 통계 (엑셀: 오른쪽 클릭으로 항목 선택 · 값을 누르면 복사)
 const STAT_ITEMS = [['avg', '평균'], ['count', '개수'], ['numCount', '숫자 셀 수'], ['min', '최소값'], ['max', '최대값'], ['sum', '합계'], ['size', '선택 크기']];
 function renderStats({ count, numCount, sum, min, max, fmtStyle }) {
@@ -684,7 +708,7 @@ function renderStats({ count, numCount, sum, min, max, fmtStyle }) {
     if (k === 'size') { if (on.has(k)) { const h = Math.min(sel.r2, MAX_ROWS - 1) - sel.r1 + 1; const w = Math.min(sel.c2, MAX_COLS - 1) - sel.c1 + 1; dom.stats.append(el('span', { class: 'stat-item', title: 'LibreOffice 처럼 선택한 행 · 열 수' }, `${h.toLocaleString()}행 × ${w.toLocaleString()}열`)); } continue; }
     if (!on.has(k) || val[k] === null || val[k] === undefined) continue;
     const text = k === 'count' || k === 'numCount' ? val[k].toLocaleString() : fmt(val[k]);
-    dom.stats.append(el('span', { class: 'stat-item', title: '클릭하면 값을 복사합니다', onclick: () => { navigator.clipboard?.writeText(String(k === 'count' || k === 'numCount' ? val[k] : Number(val[k].toPrecision(15)))).catch(() => {}); toast(`${label} 값을 클립보드에 복사했습니다.`); } }, `${label}: ${text}`));
+    dom.stats.append(el('span', { class: 'stat-item', title: '클릭하면 값을 복사합니다', onclick: () => copyTextWithFeedback(String(k === 'count' || k === 'numCount' ? val[k] : Number(val[k].toPrecision(15))), `${label} 값을 클립보드에 복사했습니다.`) }, `${label}: ${text}`));
   }
 }
 function statusMenu(e) {
@@ -3097,9 +3121,14 @@ function pasteSpecialDialog() {
   } });
 }
 
+let pasteReadRequest = 0;
 async function pasteFromButton(mode = 'all') {
-  const book = wb, host = si, target = sheet(), at = { ...active };
-  const currentTarget = () => wb === book && si === host && sheet() === target && active.r === at.r && active.c === at.c;
+  const request = ++pasteReadRequest, book = wb, host = si, target = sheet(), at = { ...active };
+  const revision = wb.version, range = { ...sel }, kind = selKind, sourceClip = clip;
+  // Permission prompts and clipboard reads may settle after selection, edits or a newer paste.
+  const currentTarget = () => request === pasteReadRequest && wb === book && si === host && sheet() === target
+    && wb.version === revision && clip === sourceClip && !editing && !chartSel && selKind === kind
+    && active.r === at.r && active.c === at.c && ['r1','c1','r2','c2'].every(key => sel[key] === range[key]);
   if (mode !== 'all') {
     let text = null; try { text = await navigator.clipboard.readText(); } catch { /* 내부 복사 또는 선택 창의 Ctrl+V 사용 */ }
     if (!currentTarget()) { toast('붙여넣을 문서 또는 위치가 바뀌었습니다. 다시 붙여넣으세요.'); return; }
@@ -5711,8 +5740,7 @@ function openFilterMenu(c, anchorEl, key = '') {
     ] : []),
     { sep: true },
     { node },
-  ]);
-  menu.style.minWidth = '280px';
+  ], { minWidth:280 });
   setTimeout(() => search.focus());
 }
 
@@ -11516,7 +11544,7 @@ function macroDialog() {
       list.length ? selEl : el('div', {}, '표시할 모듈이 없습니다.'),
       pre),
     buttons: [
-      { label: '코드 복사', action: () => { navigator.clipboard?.writeText(pre.textContent).then(() => toast('코드를 복사했습니다.')).catch(() => {}); return false; } },
+      { label: '코드 복사', action: () => { copyTextWithFeedback(pre.textContent, '코드를 복사했습니다.'); return false; } },
       {
         label: '매크로 제거',
         action: () => {
@@ -15559,7 +15587,7 @@ async function publishDialog() {
   const show = (url, note) => {
     const inp = el('input', { type: 'text', readonly: true, value: url, onclick: (e) => e.target.select() });
     out.replaceChildren(el('div', { class: 'pub-link' }, inp,
-      el('button', { class: 'btn primary', onclick: async () => { try { await navigator.clipboard.writeText(url); toast('링크를 복사했습니다.'); } catch { inp.select(); document.execCommand('copy'); toast('링크를 복사했습니다.'); } } }, '복사'),
+      el('button', { class: 'btn primary', onclick: () => copyTextWithFeedback(url, '링크를 복사했습니다.', inp) }, '복사'),
       el('button', { class: 'btn', onclick: () => window.open(url, '_blank') }, '미리 보기')),
       note ? el('div', { class: 'muted' }, note) : null);
     inp.select();
@@ -16493,7 +16521,7 @@ function openBackstage(panel = 'new') {
       el('div', { class: 'info-title' }, docName), el('div', { class: 'muted' }, where),
       el('div', { class: 'info-actions' },
         el('button', { class: 'btn', onclick: () => { close(); publishDialog(); } }, '공유'),
-        el('button', { class: 'btn', onclick: () => { navigator.clipboard?.writeText(where).then(() => toast('경로를 복사했습니다.')).catch(() => {}); } }, '경로 복사'),
+        el('button', { class: 'btn', onclick: () => copyTextWithFeedback(where, '경로를 복사했습니다.') }, '경로 복사'),
         el('button', { class: 'btn', onclick: () => { close(); saveAs(); } }, '다른 위치에 저장')),
       el('div', { class: 'info-grid' },
         el('div', { class: 'info-cards' },
@@ -19934,6 +19962,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['브라우저 호환성과 입력 보호', ['일부 WebKit 환경에서 자동 보관과 문서 보관함 저장이 실패하던 문제를 보완했습니다. 브라우저 저장소 읽기 중단을 정확하게 처리하고, 파일 저장 준비 중에도 취소할 수 있습니다.', '클립보드 응답을 기다리는 동안 선택 범위나 입력 내용이 바뀌면 이전 붙여넣기가 새 작업을 덮어쓰지 않습니다. 자동 복사가 거절되면 내용을 직접 선택해 복사할 수 있습니다.', '모바일 최적화를 꺼도 화면 확대·키보드로 줄어든 보이는 영역 안에 메뉴와 하위 메뉴를 배치합니다.']],
   ['대형 저장 안정성과 취소', ['대형 문서 자동 보관을 작은 조각으로 나누어 셀·열 데이터·피벗 캐시를 한꺼번에 복사하는 메모리를 줄였습니다. 저장 중 취소하면 이전 저장본을 유지합니다.', '파일 저장 진행 창에서 취소할 수 있으며, 디스크에 저장을 확정하는 동안은 완료를 기다립니다. Excel 저장 시 과거 피벗 필터 항목·선택·보고서 연결·항목 보존 옵션을 유지합니다. 필터 결과가 빈 피벗을 저장하면 Excel에서 파일이 열리지 않던 오류를 수정했습니다. 그룹 안의 같은 그림을 중복 저장하지 않고, 크기가 0으로 축소된 그룹과 확장자가 .bin인 EMF 그림도 보존합니다.']],
   ['로컬 파일 순차 저장', ['시스템 저장 창을 지원하는 브라우저에서는 WIXEL·Excel·CSV·HTML을 조각씩 디스크에 기록합니다. 저장 중 오류나 문서 변경이 생기면 미완성 저장을 취소합니다.', 'XLSB 수식 해석 임시 캐시를 제한하고, Excel 테마 색상과 가져온 인쇄 용지 기본값을 보정했습니다.']],
   ['슬라이서 선택 시 화면 키보드 방지', ['슬라이서·시간 표시 막대·차트·사진을 선택하거나 메뉴를 닫을 때 숨은 셀 입력창으로 초점이 이동하지 않도록 했습니다. 모바일 최적화와 외부 키보드 설정에 관계없이 적용하며, 셀·수식의 명시적 편집은 유지합니다.']],

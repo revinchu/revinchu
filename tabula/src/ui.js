@@ -446,9 +446,9 @@ function buildMenu(anchor, items, { minWidth, scroll, toolbar, level = 0, parent
   return menu;
 }
 
-const mobileMenuSizing = new WeakMap();
+const menuSizing = new WeakMap();
 function popupViewport() {
-  const mobile = document.body.classList.contains('mobile-work-mode'), v = mobile ? window.visualViewport : null;
+  const mobile = document.body.classList.contains('mobile-work-mode'), v = window.visualViewport;
   const css = getComputedStyle(document.documentElement);
   const inset = side => Math.max(0, parseFloat(css.getPropertyValue(`--safe-${side}`)) || 0);
   // Intersect the visual viewport with the device safe area. Menus above the
@@ -507,11 +507,21 @@ export function trackPopupPosition(root, anchor) {
 
 function placeMenu(menu, anchor) {
   const bounds = popupViewport(), margin = 4;
-  if (bounds.mobile) {
-    if (!mobileMenuSizing.has(menu)) mobileMenuSizing.set(menu, { minWidth: menu.style.minWidth, maxWidth: menu.style.maxWidth, maxHeight: menu.style.maxHeight, overflowY: menu.style.overflowY });
-    menu.style.minWidth = '0'; menu.style.maxWidth = Math.max(1, bounds.width - margin * 2) + 'px';
-    menu.style.maxHeight = Math.max(1, bounds.height - margin * 2) + 'px'; menu.style.overflowY = 'auto';
-  } else if (mobileMenuSizing.has(menu)) { Object.assign(menu.style, mobileMenuSizing.get(menu)); mobileMenuSizing.delete(menu); }
+  // Browser zoom and software keyboards shrink the visible area even when the
+  // compact mobile layout is off. Restore the authored limits before measuring,
+  // so closing the keyboard or zooming back out also restores the original size.
+  if (!menuSizing.has(menu)) menuSizing.set(menu, {
+    minWidth: menu.style.minWidth, maxWidth: menu.style.maxWidth, maxHeight: menu.style.maxHeight,
+    overflowY: menu.style.overflowY, boxSizing: menu.style.boxSizing,
+  });
+  Object.assign(menu.style, menuSizing.get(menu));
+  const css = getComputedStyle(menu);
+  const width = Math.max(1, bounds.width - margin * 2), height = Math.max(1, bounds.height - margin * 2);
+  const limit = (value, available) => value.endsWith('px') && Number.isFinite(parseFloat(value)) ? Math.min(available, parseFloat(value)) : available;
+  menu.style.boxSizing = 'border-box';
+  menu.style.minWidth = (bounds.mobile ? 0 : Math.min(parseFloat(css.minWidth) || 0, width)) + 'px';
+  menu.style.maxWidth = limit(css.maxWidth, width) + 'px';
+  menu.style.maxHeight = limit(css.maxHeight, height) + 'px'; menu.style.overflowY = 'auto';
   const rect = anchor instanceof Element ? anchor.getBoundingClientRect() : null;
   let x = rect ? rect.left : anchor?.x ?? bounds.left + margin, y = rect ? rect.bottom + 2 : anchor?.y ?? bounds.top + margin;
   const clampX = value => Math.max(bounds.left + margin, Math.min(value, bounds.right - margin - menu.offsetWidth));

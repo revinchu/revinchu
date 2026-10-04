@@ -1,3 +1,4 @@
+import { storeBlobCompatible, storedBlobText } from './stored-blob.js';
 import { idbGet, idbSet, idbCompareAndSet, idbKeys, idbDeleteMany } from './storage.js';
 import { CellMap } from './cellmap.js';
 import { makeCellRC } from './workbook.js';
@@ -44,7 +45,7 @@ async function bigPack(text, gz) {
 }
 async function bigUnpack(value, gz) {
   if (typeof value === 'string') return value;
-  return gz ? new Response(value.stream().pipeThrough(new DecompressionStream('gzip'))).text() : value.text();
+  return storedBlobText(value, gz);
 }
 async function removeBigKeys(keys) {
   for (let i=0;i<keys.length;i+=128) { await idbDeleteMany(keys.slice(i,i+128)); await bigYield(); }
@@ -142,7 +143,7 @@ export async function saveLargeWorkbook(key, book, metadata, options = {}) {
         for (const chunk of book.cellRunChunks(i, 20000, { shareStyle: true, bounded: true })) {
           valid(); const partKey=`${recordKey}#cells.${cellPartKeys.length}`; staged.push(partKey);
           const packed = await bigPack(JSON.stringify(chunk),gz); valid();
-          await idbSet(partKey,packed); cellPartKeys.push(partKey); partKeys.push(partKey);
+          await storeBlobCompatible(packed, data => idbSet(partKey,data), valid); cellPartKeys.push(partKey); partKeys.push(partKey);
           await checkpoint();
         }
         for (let bi=0;bi<(sheet.blocks??[]).length;bi++) {

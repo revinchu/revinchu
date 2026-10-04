@@ -234,3 +234,18 @@ test('최종 확정 알림은 마지막 데이터 검증 뒤 close 직전에 한
   const abort=new AbortController();abort.abort();
   await assert.rejects(writeFileHandle(target(),new Uint8Array([1]),{signal:abort.signal,onCommitting(){assert.fail('취소 후 확정 알림 없음');}}));
 });
+
+
+test('네이티브 저장 스트림을 여는 중 취소하면 즉시 끝나고 늦게 열린 대상은 중단한다', { timeout: 2000 }, async () => {
+  const opening = deferred(), started = deferred(), abort = new AbortController(), reason = new Error('사용자 취소');
+  let sourceCancelled = 0, writes = 0, closes = 0, aborts = 0;
+  const source = new ReadableStream({ cancel() { sourceCancelled++; } }, { highWaterMark: 0 });
+  const handle = { createWritable() { started.resolve(); return opening.promise; } };
+  const saving = writeFileHandle(handle, source, { signal: abort.signal });
+  await started.promise; abort.abort(reason);
+  await assert.rejects(saving, error => error === reason);
+  assert.equal(sourceCancelled, 1); assert.equal(aborts, 0);
+  opening.resolve({ write() { writes++; }, close() { closes++; }, abort(error) { assert.equal(error, reason); aborts++; } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(aborts, 1); assert.equal(writes, 0); assert.equal(closes, 0);
+});

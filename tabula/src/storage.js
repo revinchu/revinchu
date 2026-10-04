@@ -91,28 +91,43 @@ async function withDbTransaction(mode, run) {
   // Queue requests synchronously: do not await after creating the transaction.
   return run(tx);
 }
+// Request errors bubble before tx.error is populated in WebKit. Wait for the
+// abort event before reporting a failed write, so callers know it did not commit.
+const idbRequestError = (event, tx) => event?.target?.error ?? tx.error ?? new DOMException('브라우저 저장소 요청이 실패했습니다.', 'UnknownError');
 export async function idbSet(key, value) {
   return withDbTransaction('readwrite', tx => new Promise((resolve, reject) => {
-    tx.objectStore('docs').put(value, key);
+    let failure;
     tx.oncomplete = () => resolve(true);
-    tx.onerror = () => reject(tx.error);
-    tx.onabort = () => reject(tx.error ?? new DOMException('저장 트랜잭션이 중단되었습니다.', 'AbortError'));
+    tx.onerror = event => { failure = idbRequestError(event, tx); };
+    tx.onabort = () => reject(failure ?? tx.error ?? new DOMException('저장 트랜잭션이 중단되었습니다.', 'AbortError'));
+    try { tx.objectStore('docs').put(value, key); }
+    catch (error) { failure = error; try { tx.abort(); } catch { reject(error); } }
   }));
 }
 export async function idbDel(key) {
   return withDbTransaction('readwrite', tx => new Promise((resolve, reject) => {
+    let failure;
     tx.objectStore('docs').delete(key);
     tx.oncomplete = () => resolve(true);
-    tx.onerror = () => reject(tx.error);
-    tx.onabort = () => reject(tx.error ?? new DOMException('삭제 트랜잭션이 중단되었습니다.', 'AbortError'));
+    tx.onerror = event => { failure = idbRequestError(event, tx); };
+    tx.onabort = () => reject(failure ?? tx.error ?? new DOMException('삭제 트랜잭션이 중단되었습니다.', 'AbortError'));
+  }));
+}
+function idbRead(request) {
+  return withDbTransaction('readonly', tx => new Promise((resolve, reject) => {
+    let result, failure;
+    // A request can succeed before the browser aborts its transaction (for
+    // example when its storage connection closes). Only complete is success.
+    tx.oncomplete = () => resolve(result);
+    tx.onerror = event => reject(failure ?? idbRequestError(event, tx));
+    tx.onabort = () => reject(failure ?? tx.error ?? new DOMException('읽기 트랜잭션이 중단되었습니다.', 'AbortError'));
+    const req = request(tx.objectStore('docs'));
+    req.onsuccess = () => { result = req.result; };
+    req.onerror = () => { failure = req.error; reject(failure); };
   }));
 }
 export async function idbGet(key) {
-  return withDbTransaction('readonly', tx => new Promise((resolve, reject) => {
-    const req = tx.objectStore('docs').get(key);
-    req.onsuccess = () => resolve(req.result ?? null);
-    req.onerror = () => reject(req.error);
-  }));
+  return (await idbRead(store => store.get(key))) ?? null;
 }
 
 /** Only the small generation manifest changes in this atomic transaction. */
@@ -132,25 +147,22 @@ export async function idbCompareAndSet(key, expected, value, validate = () => {}
       } catch (error) { fail(error); }
     };
     tx.oncomplete = () => resolve(true);
-    tx.onerror = () => reject(failure ?? tx.error);
+    tx.onerror = event => { failure ??= idbRequestError(event, tx); };
     tx.onabort = () => reject(failure ?? tx.error ?? new DOMException('저장 트랜잭션이 중단되었습니다.', 'AbortError'));
   }));
 }
 
 export async function idbKeys(prefix) {
-  return withDbTransaction('readonly', tx => new Promise((resolve, reject) => {
-    const req = tx.objectStore('docs').getAllKeys(IDBKeyRange.bound(prefix, prefix + '\uffff'));
-    req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error);
-  }));
+  return idbRead(store => store.getAllKeys(IDBKeyRange.bound(prefix, prefix + '\uffff')));
 }
 
 export async function idbDeleteMany(keys) {
   if (!keys.length) return;
   return withDbTransaction('readwrite', tx => new Promise((resolve, reject) => {
-    const store = tx.objectStore('docs');
+    const store = tx.objectStore('docs'); let failure;
     for (const key of keys) store.delete(key);
-    tx.oncomplete = () => resolve(true); tx.onerror = () => reject(tx.error);
-    tx.onabort = () => reject(tx.error ?? new DOMException('삭제 트랜잭션이 중단되었습니다.', 'AbortError'));
+    tx.oncomplete = () => resolve(true); tx.onerror = event => { failure = idbRequestError(event, tx); };
+    tx.onabort = () => reject(failure ?? tx.error ?? new DOMException('삭제 트랜잭션이 중단되었습니다.', 'AbortError'));
   }));
 }
 
@@ -174,7 +186,7 @@ export async function idbUpdate(readKeys, update) {
       } catch (error) { failure = error; try { tx.abort(); } catch { reject(error); } }
     };
     tx.oncomplete = () => resolve(result);
-    tx.onerror = () => reject(failure ?? tx.error);
+    tx.onerror = event => { failure ??= idbRequestError(event, tx); };
     tx.onabort = () => reject(failure ?? tx.error ?? new DOMException('저장 트랜잭션이 중단되었습니다.', 'AbortError'));
     for (const itemKey of keys) {
       const req = store.get(itemKey);

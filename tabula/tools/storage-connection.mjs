@@ -62,6 +62,23 @@ for (const engine of (process.env.WIXEL_ENGINES || 'chromium,webkit').split(',')
       connections.at(-1).close(); eq(await s.idbUpdate(['old'], values => ({ set: [['old', values.get('old') + 1]], result: 'done' })), 'done', '원자 갱신 재연결');
       eq(await s.idbGet('old'), 5, '원자 갱신 값');
 
+      // An IDBRequest success can still belong to a transaction which aborts.
+      // Use a real native transaction; only the fault trigger is instrumented.
+      for (const [method, read] of [['get', () => s.idbGet('old')], ['getAllKeys', () => s.idbKeys('concurrent:')]]) {
+        const native = IDBObjectStore.prototype[method]; let reads = 0;
+        IDBObjectStore.prototype[method] = function (...args) {
+          const request = native.apply(this, args), transaction = this.transaction;
+          reads++; request.addEventListener('success', () => transaction.abort(), { once: true });
+          return request;
+        };
+        error = null;
+        try { await read(); } catch (e) { error = e.name; }
+        finally { IDBObjectStore.prototype[method] = native; }
+        eq(error, 'AbortError', method + ': 요청 성공 뒤 트랜잭션 중단 보고');
+        eq(reads, 1, method + ': 중단된 읽기 자동 반복 없음');
+      }
+      eq(await s.idbGet('old'), 5, '읽기 중단 뒤 기존 데이터와 다음 읽기 유지');
+
       const w = new Workbook({ sheets: [{ name: '합성 복구', cells: { '0,0': { raw: '10' } } }] });
       const key = 'synthetic:connection-book', identity = { docId: 'synthetic-doc', sessionId: 'synthetic-session', openId: 'synthetic-open', version: 0 };
       w.transact(() => w.setInput(0, 0, 0, '11'));
@@ -86,8 +103,10 @@ for (const engine of (process.env.WIXEL_ENGINES || 'chromium,webkit').split(',')
       for (let r=0;r<50000;r++) styled.sheets[0].cells.setRC(r,0,{raw:'=1+1',formula:true,cached:2,style:sharedStyle});
       const styledKey='synthetic:styles', styledSaved=await saveLargeWorkbook(styledKey,styled,{docName:'합성 서식'});
       const styledRecord=await s.idbGet(styledSaved.manifest.sheets[0].key);
-      eq(styledRecord.chunks.length>1,true,'서식이 여러 JSON 청크에 걸쳐 저장됨');
-      const firstText=styledRecord.gz?await new Response(styledRecord.chunks[0].stream().pipeThrough(new DecompressionStream('gzip'))).text():await styledRecord.chunks[0].text();
+      const storedChunks=styledRecord.cellPartKeys??styledRecord.chunks;
+      eq(storedChunks.length>1,true,'서식이 여러 JSON 청크에 걸쳐 저장됨');
+      const firstChunk=styledRecord.cellPartKeys?await s.idbGet(storedChunks[0]):storedChunks[0];
+      const firstText=styledRecord.gz?await new Response(firstChunk.stream().pipeThrough(new DecompressionStream('gzip'))).text():await firstChunk.text();
       const rawEntries=JSON.parse(firstText);eq(rawEntries[0][3].style===rawEntries[1][3].style,false,'원래 JSON 복원은 같은 서식을 별개 객체로 생성');
       const styledData=await loadLargeWorkbook(styledKey), styleSet=new Set();
       for(const [,cell] of styledData.workbook.sheets[0].cells)styleSet.add(cell.style);

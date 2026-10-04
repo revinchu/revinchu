@@ -1,3 +1,4 @@
+import { storeBlobCompatible, storedBlobStream, storedBlobText } from './stored-blob.js';
 // 이 브라우저의 문서 보관함: 최근 문서 최대 30개 + 문서마다 버전 기록 최대 20개 (IndexedDB, gzip 압축)
 // 창을 닫아도 남고, 다른 문서를 열어도 이전 문서가 사라지지 않음 (구글 스프레드시트의 '최근 문서 · 버전 기록'과 비슷)
 import { idbGet, idbUpdate } from './storage.js';
@@ -29,8 +30,7 @@ export async function packText(text) {
 }
 export async function unpackText(rec) {
   if (!rec) return null;
-  if (rec.gz && globalThis.DecompressionStream) return new Response(rec.blob.stream().pipeThrough(new DecompressionStream('gzip'))).text();
-  return rec.blob.text();
+  return storedBlobText(rec.blob, rec.gz);
 }
 
 let queue = Promise.resolve();
@@ -62,21 +62,22 @@ export function libSave(id, name, json, { version = null, info = {}, max = LIB_M
         // 재시작 후 첫 저장도 동일한 원본만 채택합니다. Blob 경로는 전체 문자열을
         // 다시 만들지 않고 압축을 푼 바이트를 스트림 단위로 정확히 대조합니다.
         const incoming = json instanceof Blob ? json : new Blob([json]);
-        const prior = previous.gz && globalThis.DecompressionStream
-          ? previous.blob.stream().pipeThrough(new DecompressionStream('gzip')) : previous.blob.stream();
+        if (previous.gz && typeof DecompressionStream !== 'function') throw new Error('압축된 보관 문서를 열려면 최신 브라우저를 사용하세요.');
+        const previousStream = storedBlobStream(previous.blob);
+        const prior = previous.gz ? previousStream.pipeThrough(new DecompressionStream('gzip')) : previousStream;
         if (!await equalByteStreams(prior, incoming.stream())) throw conflict();
       }
       observed.set(id, revisionOf(previous));
     }
     const packed = await packText(json);
     // gzip은 트랜잭션 밖에서 준비하고, 문서·이력·정리·목록은 한 번에 커밋합니다.
-    const result = await idbUpdate([INDEX, docKey(id)], (stored) => {
+    const result = await storeBlobCompatible(packed.blob, blob => idbUpdate([INDEX, docKey(id)], (stored) => {
       checkRevision(id, stored.get(docKey(id)));
       const list = stored.get(INDEX) ?? [], set = [], remove = [];
       let e = list.find((x) => x.id === id);
       if (!e) { e = { id, created: Date.now(), versions: [] }; list.push(e); }
       const revision = newDocId();
-      const record = { ...packed, revision };
+      const record = { ...packed, blob, revision };
       set.push([docKey(id), record]);
       Object.assign(e, { ...info, id, name, created: e.created, versions: e.versions ?? [], updated: Math.max(Date.now(), (e.updated ?? 0) + 1), size: packed.blob.size, revision });
       if (version) {
@@ -100,7 +101,7 @@ export function libSave(id, name, json, { version = null, info = {}, max = LIB_M
       }
       set.push([INDEX, list]);
       return { set, delete: remove, result: e };
-    });
+    }));
     observed.set(id, result.revision);
     return result;
   });

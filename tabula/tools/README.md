@@ -606,3 +606,11 @@ node tools/mobile-layout.mjs
 - `tools/pivot-document-release.mjs`: 합성 피벗 필드 창을 열거나 숨긴 뒤 다른 문서를 열어, 이전 창·드래그 리스너·통합문서가 Chromium 강제 GC 후 해제되는지 검사합니다. 동일 문서에서 창을 숨길 때는 상태를 유지합니다. `WIXEL_URL`, `WIXEL_PIVOT_RELEASE_OUT` 사용. 물리 iPad 종료 재현 검사가 아닙니다.
 
 - `tools/reloaded-document-release.mjs`: 합성 문서 저장→재시작→다른 문서 저장 뒤 이전 Workbook의 도달 가능성을 Chromium 강제 GC로 확인합니다. 강제 GC는 참조 해제 진단 전용이며 실제 대형 파일의 자연 메모리 사용량 판정에 대체하지 않습니다. 준비 확인은 Boolean을 반환해 검사 도구가 문서 JSHandle을 보유하지 않습니다.
+
+## 브라우저 호환성 회귀
+
+- `browser-quality.mjs`: Chromium·WebKit·Firefox 합성 문서 입력/이동/저장/다운로드 재열기. WIXEL_BROWSERS로 엔진 목록, WIXEL_BROWSER_QUALITY_OUT으로 결과 경로를 지정한다. 소스 서버에서는 IndexedDB/보관함 직접 모듈 검사도 한다. 정적 번들은 WIXEL_BROWSER_QUALITY_EXCLUDE=IndexedDB로 이 직접 모듈 사례를 제외한다.
+- `clipboard-feedback.mjs`: 클립보드 API 거절·부재·지연과 수동 복사 재시도. WIXEL_BROWSER로 엔진, WIXEL_CLIPBOARD_FEEDBACK_OUT으로 결과 위치를 지정한다.
+- `popup-viewport-compat.mjs`: 모바일 밀도 OFF/ON의 축소된 visualViewport, 하위 메뉴, 안전 영역, 크기 복원. WIXEL_BROWSER로 엔진, WIXEL_POPUP_VIEWPORT_OUT으로 결과 위치를 지정한다.
+
+실제 장치 OS/Bluetooth 검사와 합성 브라우저 검사를 구분한다. 최신 범위와 한계는 [79번 검증 문서](../docs/codex/79_브라우저호환성과입력저장보강.md)를 따른다.

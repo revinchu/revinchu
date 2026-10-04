@@ -103,7 +103,11 @@ export async function writeFileHandle(handle, source, options = {}) {
   };
   try {
     check(options);
-    writable = await handle.createWritable();
+    // Opening a native writable may wait for the file system. Cancellation
+    // must settle now; if acquisition completes later, abort its temporary file.
+    const opening = Promise.resolve(handle.createWritable());
+    try { writable = await readWithAbort(opening, options); }
+    catch (error) { cleanup(() => opening.then(target => target.abort(error))); throw error; }
     check(options);
     if (typeof writable.seek === 'function') sink.seek = target => {
       if (failure) return Promise.reject(failure);

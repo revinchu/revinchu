@@ -83,5 +83,21 @@ try {
  await test('Ctrl+Shift+V 읽기 대기 중 시트 교체는 쓰기 차단',async p=>{
    await p.evaluate(()=>{navigator.clipboard.readText=()=>new Promise(r=>window.__releaseClipboard=r);window.tabula.selectCell(4,4)});await p.locator('#cellEditor').focus();await p.keyboard.press('Control+Shift+v');await p.waitForFunction(()=>window.__releaseClipboard);await p.evaluate(()=>window.tabula.switchSheet(1));const before=await serialized(p);await p.evaluate(()=>window.__releaseClipboard('99'));await p.waitForTimeout(80);assert.equal(await serialized(p),before);assert.equal((await state(p)).undo,0);
  });
+ for (const mode of ['paste','pasteValuesKey']) await test('늦은 붙여넣기: 같은 시작 셀에서 선택 범위 변경 '+mode,async p=>{
+   await p.evaluate(mode=>{navigator.clipboard.readText=()=>new Promise(r=>window.__releaseClipboard=r);tabula.selectCell(4,4);tabula.run(mode)},mode);
+   await p.waitForFunction(()=>window.__releaseClipboard);
+   await p.evaluate(()=>tabula.selectRange({r1:4,c1:4,r2:5,c2:5},'cells',{r:4,c:4}));const before=await serialized(p);
+   await p.evaluate(()=>window.__releaseClipboard('99'));await p.waitForTimeout(80);assert.equal(await serialized(p),before);assert.equal((await state(p)).undo,0);
+ });
+ await test('늦은 붙여넣기: 대기 중 편집한 값 유지',async p=>{
+   await p.evaluate(()=>{navigator.clipboard.readText=()=>new Promise(r=>window.__releaseClipboard=r);tabula.selectCell(4,4);tabula.run('paste')});await p.waitForFunction(()=>window.__releaseClipboard);
+   await p.evaluate(()=>{const w=tabula.wb();w.transact(()=>w.setInput(0,4,4,'123'))});const before=await serialized(p);
+   await p.evaluate(()=>window.__releaseClipboard('99'));await p.waitForTimeout(80);assert.equal(await serialized(p),before);assert.equal((await state(p)).value,123);
+ });
+ await test('늦은 붙여넣기: 나중 요청의 결과를 이전 응답이 덮어쓰지 않음',async p=>{
+   await p.evaluate(()=>{window.__pasteReads=[];navigator.clipboard.readText=()=>new Promise(r=>window.__pasteReads.push(r));tabula.selectCell(4,4);tabula.run('paste');tabula.run('paste')});await p.waitForFunction(()=>window.__pasteReads.length===2);
+   await p.evaluate(()=>window.__pasteReads[1]('222'));await p.waitForFunction(()=>tabula.wb().getValue(0,4,4)===222);const before=await serialized(p);
+   await p.evaluate(()=>window.__pasteReads[0]('111'));await p.waitForTimeout(80);assert.equal(await serialized(p),before);assert.equal((await state(p)).undo,1);
+ });
 } finally { await browser.close(); }
 const bad=results.filter(x=>!x.ok);console.log(JSON.stringify({total:results.length,good:results.length-bad.length,bad:bad.length,results},null,2));if(bad.length)process.exitCode=1;
