@@ -656,10 +656,10 @@ export function pivotSourceData(wb, def) {
   // 파일에 저장된 피벗 캐시(엑셀이 마지막으로 새로 고친 원본): 원본 시트가 그대로인 동안은 엑셀과 같은 결과가 되게 이것으로 계산
   const snap = def.snapshotId && wb.pivotSnapshots?.get(def.snapshotId);
   if (snap) {
-    // 원본 시트의 편집 횟수 (다시 계산으로는 바뀌지 않음) — 사용자가 원본을 고치면 저장본을 버림
-    const ver = wb.sourceVersion?.(si) ?? 0;
-    snap.ver ??= ver;
-    if (snap.ver === ver && (!wb.pivotSnapshotCurrent || wb.pivotSnapshotCurrent(snap, def))) return isPivotSnapshot(snap.rows)
+    // 같은 시트의 결과 작성과 구별하여 실제 원본 범위의 변경 여부를 확인한다.
+    const valid = wb.pivotSnapshotCurrent ? wb.pivotSnapshotCurrent(snap, def)
+      : (snap.ver ??= wb.sourceVersion?.(si) ?? 0) === (wb.sourceVersion?.(si) ?? 0);
+    if (valid) return isPivotSnapshot(snap.rows)
       ? sourceOf(cubeFromPivotSnapshot(snap.rows), si, ref, table, null, wb.date1904)
       : sourceOf(cubeFromRows(snap.rows), si, ref, table, snap.rows, wb.date1904);
     wb.pivotSnapshots.delete(def.snapshotId); // 원본을 고침 → 이제부터 원본에서 계산 (자동 새로 고침)

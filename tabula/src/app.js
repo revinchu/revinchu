@@ -2,6 +2,8 @@ import { isFileSaveSource, writeFileHandle } from './file-save.js';
 import { isLargeLocalWorkbook } from './local-storage-size.js';
 import { cachedSlicerItems, applyCachedSlicerSelection } from './slicer-cache.js';
 import { pivotFieldSourceIndex, pivotFieldItemModel, pivotItemSelection, slicerPickValues } from './pivot-field-items.js';
+import { slicerDisplayModel } from './slicer-items.js';
+import { slicerPivotFilters, slicerPivotFilterKey } from './slicer-pivot-filters.js';
 import { applySlicerSettings } from './slicer-settings.js';
 import { createDocumentOpenGate, isDocumentOpenCancelled } from './document-session.js';
 import { createRecoveryMarker, parseRecoveryMarker, recoveryCheckpoint, markRecoveryPending, markRecoverySaved, markRecoveryFailed, canUpdateRecoveryMarker, selectRecoveryMarker, recoveryDecision } from './document-recovery.js';
@@ -5628,14 +5630,14 @@ function widenForFilterButtons(rg) {
   }
 }
 
-function applyFilterCriteria(c, values, key = '', { quiet = false } = {}) {
+function applyFilterCriteria(c, values, key = '', { quiet = false, historyMeta = null } = {}) {
   const f = getFilter(key);
   if (!f) return;
   const criteria = { ...f.criteria };
   if (values === null) delete criteria[c]; else criteria[c] = values;
   if (!canRecomputeFilter({ ...f, criteria })) return;
   const nf = recomputeFilter({ ...f, criteria }, key);
-  wb.transact(() => putFilter(key, nf), meta());
+  wb.transact(() => putFilter(key, nf), historyMeta ?? meta());
   // onBookChange queues one complete layout. Selection below updates only its
   // overlay; a second synchronous layout here repeats the same filtered grid.
   const total = nf.r2 - nf.r1;
@@ -7714,23 +7716,7 @@ const sortItems = (entries) => entries.sort((a, b) => {
  * 데이터 없는 항목 숨기기 / 시각적으로 표시 / 마지막에 표시
  */
 function slicerModel(sl) {
-  const m = slicerModelRaw(sl);
-  if (!m.items?.length) return m;
-  const allItems = m.items;
-  let items = sl.source?.kind === 'pivot' && sl.showDeleted !== true ? allItems.filter(item => !item.deleted) : allItems;
-  // 사용자 지정 목록(요일 · 월 · 분기 …): 모든 항목이 한 목록에 들어 있으면 그 순서
-  if (sl.customList !== false) {
-    const list = CUSTOM_LISTS.find((L) => items.every((it) => it.key === '' || L.includes(it.text)));
-    if (list) items = [...items].sort((a, b) => (a.key === '' ? 1 : b.key === '' ? -1 : list.indexOf(a.text) - list.indexOf(b.text)));
-  }
-  if (sl.sort === 'desc') {
-    const blank = items.filter((it) => it.key === '');
-    items = [...items.filter((it) => it.key !== '').reverse(), ...blank];
-  }
-  if (sl.hideNoData) items = items.filter((it) => it.hasData || it.selected && m.filtered);
-  else if (sl.noDataLast !== false) items = [...items.filter((it) => it.hasData), ...items.filter((it) => !it.hasData)];
-  if (sl.markNoData === false) items = items.map((it) => ({ ...it, hasData: true }));
-  return { ...m, items, allItems };
+  return slicerDisplayModel(sl, slicerModelRaw(sl), CUSTOM_LISTS);
 }
 
 /** 슬라이서가 가리키는 대상과 항목 → { caption, items: [{ key, text, selected, hasData }], filtered, broken?, apply(values) } */
@@ -7763,10 +7749,11 @@ function slicerModelRaw(sl) {
     return {
       items, filtered: !!sel,
       apply: (values) => {
-        const prev = si;
-        if (f.si !== si) si = f.si;
-        applyFilterCriteria(c, values, t.id, { quiet: true });
-        si = prev;
+        const prev = si, historyMeta = meta();
+        try {
+          si = f.si;
+          applyFilterCriteria(c, values, t.id, { quiet: true, historyMeta });
+        } finally { si = prev; }
       },
     };
   }
@@ -7778,18 +7765,15 @@ function slicerModelRaw(sl) {
     if (!rows) return { items: [], broken: '피벗 테이블 원본을 찾을 수 없습니다.' };
     const fi = pivotFieldSourceIndex(rows, def, src.field);
     if (fi < 0) return { items: [], broken: `'${src.field}' 필드를 찾을 수 없습니다.` };
-    const filters = def.filters ?? {};
-    const own = Object.keys(filters).find((k) => k.toLowerCase() === String(src.field).toLowerCase());
     // 항목 목록은 원본과 다른 필터가 같으면 다시 계산하지 않음 (슬라이서를 그릴 때마다 원본 전체를 도는 것 방지)
-    const memoKey = `${fi}\u0001${JSON.stringify(Object.entries(filters).filter(([k]) => k !== own))}`;
+    const memoKey = `${fi}\u0001${slicerPivotFilterKey(rows, def, src.field)}`;
     let memo = slicerMemo.get(rows.cube);
     if (!memo) { memo = new Map(); slicerMemo.set(rows.cube, memo); }
     let items = memo.get(memoKey);
     if (!items) {
       // 열 기반 엔진: 항목 코드별로 다른 필터를 통과한 행이 있는지 한 번에 (수백만 행도 한 번 훑기)
       const cube = rows.cube;
-      const lower = cube.header.map((h) => h.toLowerCase());
-      const others = Object.entries(filters).filter(([k]) => k !== own).map(([k, v]) => [lower.indexOf(k.toLowerCase()), new Set(v)]).filter(([i]) => i >= 0);
+      const others = slicerPivotFilters(rows, def, src.field);
       const st = itemStats(cube, fi, others);
       items = st.keys.map((k, c) => ({ key: st.texts[c], v: k, hasData: !!st.has[c] }))
         .sort((x, y) => {
@@ -8031,14 +8015,17 @@ function slicerRefresh(id) {
     if (!f) { toast('연결된 표를 찾을 수 없습니다.'); return; }
     const c = columnNames(wb, f.si, f.t).findIndex(name => name.toLowerCase() === String(sl.source.column).toLowerCase()) + f.t.c1;
     if (c < f.t.c1) { toast('연결된 열을 찾을 수 없습니다.'); return; }
-    const home = si;
-    try { si = f.si; applyFilterCriteria(c, f.t.filter?.criteria?.[c] ?? null, f.t.id, { quiet: true }); } finally { si = home; }
+    const home = si, historyMeta = meta();
+    try { si = f.si; applyFilterCriteria(c, f.t.filter?.criteria?.[c] ?? null, f.t.id, { quiet: true, historyMeta }); } finally { si = home; }
   } else {
     const targets = slicerPivotTargets(sl.source ?? {});
     if (!targets.length) { toast('연결된 피벗 테이블을 찾을 수 없습니다.'); return; }
-    for (const e of targets) { const src = pivotSource(e.def); if (src) slicerMemo.delete(src.cube); if (e.def.snapshotId) wb.pivotSnapshots?.delete(e.def.snapshotId); }
-    wb.pivotMemo = null;
-    wb.transact(() => { for (const e of targets) putPivotDef(e, { ...e.def }); }, meta());
+    wb.transact(() => {
+      for (const e of targets) { const src = pivotSource(e.def); if (src) slicerMemo.delete(src.cube); }
+      wb.clearPivotSnapshots(targets.map(e => e.def.snapshotId).filter(Boolean));
+      wb.pivotMemo = null;
+      for (const e of targets) putPivotDef(e, { ...e.def });
+    }, meta());
   }
   gv.layout(); gv.renderAll(); updateSelectionUI(); toast('슬라이서와 연결된 데이터를 새로 고쳤습니다.');
 }
@@ -12410,9 +12397,9 @@ function recommendPivotDialog() {
 function refreshPivots() {
   let n = 0;
   // 새로 고침: 파일에 저장돼 있던 캐시(저장본) 대신 지금 원본에서 다시 계산 (엑셀과 같음)
-  wb.pivotSnapshots = null;
-  wb.pivotMemo = null;
   wb.transact(() => {
+    wb.clearPivotSnapshots();
+    wb.pivotMemo = null;
     wb.sheets.forEach((s, i) => {
       for (const { def } of pivotDefs(i)) if (writePivot(i, def)) n++;
       if (s.pivot) wb.setSheetProp(i, 'pivot', { ...s.pivot });
@@ -19428,7 +19415,7 @@ function showPivotContextMenu(pos, entry) {
   const apply=next=>{setPivotDef(entry,next);refreshPivotPane(true);};
   const items=[command('복사(C)','copy',{accessKey:'c',key:'Ctrl+C',icon:'copy'}),command('선택 영역을 그림으로 저장...','rangeSaveImage',{icon:'save'}),command('셀 서식(F)...','formatCells',{accessKey:'f',key:'Ctrl+1'})];
   if(target.valueIndex!==null)items.push(act('필드 표시 형식(N)...',()=>pivotContextNumberFormat(entry,target.valueIndex),{accessKey:'n'}));
-  items.push({sep:true},act('새로 고침(R)',()=>{wb.pivotSnapshots=null;wb.pivotMemo=null;apply({...def});},{accessKey:'r',icon:'refresh'}));
+  items.push({sep:true},act('새로 고침(R)',()=>{wb.transact(()=>{wb.clearPivotSnapshots(def.snapshotId?[def.snapshotId]:[]);wb.pivotMemo=null;putPivotDef(entry,{...def});},meta());refreshPivotPane(true);},{accessKey:'r',icon:'refresh'}));
   if(target.sortField) {
     const sorting=dir=>{const sort={...def.sort,[target.sortField]:{dir,...(target.valueIndex!==null?{by:target.valueIndex}:{})}};apply({...def,sort});};
     items.push({label:'정렬(O)',accessKey:'o',disabled:!editable,submenu:[act('오름차순 정렬(S)',()=>sorting('asc'),{accessKey:'s',icon:'sortAsc'}),act('내림차순 정렬(O)',()=>sorting('desc'),{accessKey:'o',icon:'sortDesc'}),{sep:true},act('기타 정렬 옵션(M)...',()=>pivotSortDialog(entry,target.sortField),{accessKey:'m'})]});
@@ -19972,6 +19959,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['슬라이서 항목과 선택 안정성', ['항목을 선택한 뒤 숨겨진 소재가 갑자기 나타나는 문제와, 같은 시트의 피벗 결과 갱신이 원본 변경으로 처리되는 문제를 수정했습니다. 날짜·숫자·사용자 그룹의 교차 필터를 반영하고, 필터·새로 고침 실행 취소 시 항목 목록과 작업 시트를 복원합니다.']],
   ['차트 색·스타일 변경 수정', ['가져온 차트의 단색·그라데이션·개별 요소 색 때문에 새 색 구성이 적용되지 않던 문제를 수정했습니다. 리본·차트 옆 버튼·서식 창을 같은 동작으로 통일하고, 계열 색·요소 색 자동 복원·스타일 미리보기와 배경 변경도 보완했습니다.']],
   ['차트 선형 예측 표시 개선', ['예측 구간까지 자동 축 범위에 반영하고, 고정한 축 범위 밖의 추세선이 제목·범례·다른 영역을 침범하지 않도록 수정했습니다.']],
   ['브라우저 호환성과 입력 보호', ['일부 WebKit 환경에서 자동 보관과 문서 보관함 저장이 실패하던 문제를 보완했습니다. 브라우저 저장소 읽기 중단을 정확하게 처리하고, 파일 저장 준비 중에도 취소할 수 있습니다.', '클립보드 응답을 기다리는 동안 선택 범위나 입력 내용이 바뀌면 이전 붙여넣기가 새 작업을 덮어쓰지 않습니다. 자동 복사가 거절되면 내용을 직접 선택해 복사할 수 있습니다.', '모바일 최적화를 꺼도 화면 확대·키보드로 줄어든 보이는 영역 안에 메뉴와 하위 메뉴를 배치합니다.']],
@@ -20435,13 +20423,17 @@ function autoRefreshPivots() {
     const ver = `${wb.sheetVersion(srcSi)}`;
     const was = pivotSrcVer.get(key);
     pivotSrcVer.set(key, ver);
-    if (was !== undefined && was !== ver) due.push(e);
+    const snap = e.def.snapshotId && wb.pivotSnapshots?.get(e.def.snapshotId);
+    const savedSourceUnchanged = snap && wb.pivotSnapshotCurrent(snap, e.def);
+    if (was !== undefined && was !== ver && !savedSourceUnchanged) due.push(e);
   }
   if (!due.length) return;
   // 자동 새로 고침도 저장된 캐시 대신 현재 수식 결과를 읽어야 합니다.
-  for (const e of due) if (e.def.snapshotId) wb.pivotSnapshots?.delete(e.def.snapshotId);
-  wb.pivotMemo = null;
-  wb.transact(() => { for (const e of due) writePivot(e.si, e.def, { autofit: false }); }, { ...meta(), joinPrev: true });
+  wb.transact(() => {
+    wb.clearPivotSnapshots(due.map(e => e.def.snapshotId).filter(Boolean));
+    wb.pivotMemo = null;
+    for (const e of due) writePivot(e.si, e.def, { autofit: false });
+  }, { ...meta(), joinPrev: true });
   for (const e of due) pivotSrcVer.set(`${e.si}:${pivotNameOf(e)}`, `${wb.sheetVersion(pivotSrcSi(e.def))}`);
   gv.renderObjectsAll();
 }

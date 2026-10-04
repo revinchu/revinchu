@@ -1342,7 +1342,7 @@ export class Workbook {
     for (let i = 0; i < pts.length; i += 3) sheetsHit.add(pts[i]);
     if (pts.length > 300000) {
       // 한꺼번에 아주 많이 바뀜(채우기 · 붙여넣기 수십만 칸): 칸마다 찾기보다 시트 단위가 빠름
-      for (const s of sheetsHit) { for (const dep of this.affected(s)) if (!sheetsHit.has(dep)) this.touchSource(dep); this.invalidate(s); }
+      for (const s of sheetsHit) { for (const dep of this.affected(s)) this.touchSource(dep); this.invalidate(s); }
       return;
     }
     // 분산 영역이 걸리면 시트 단위 (분산 크기가 바뀌면 주변 칸 값도 바뀜)
@@ -1362,13 +1362,13 @@ export class Workbook {
       }
     }
     if (!dirty) {
-      for (const s of sheetsHit) { for (const dep of this.affected(s)) if (!sheetsHit.has(dep)) this.touchSource(dep); this.invalidate(s); }
+      for (const s of sheetsHit) { for (const dep of this.affected(s)) this.touchSource(dep); this.invalidate(s); }
       return;
     }
     for (let i = 0; i < pts.length; i += 3) { this.caches[pts[i]]?.deleteRC(pts[i + 1], pts[i + 2]); this.bumpCol(pts[i], pts[i + 2]); }
     for (const s of sheetsHit) this.sheetVer[s] = (this.sheetVer[s] ?? 0) + 1;
     const bumped = new Set(sheetsHit);
-    let arrays = false;
+    let arraySheets = null;
     for (let i = 0; i < dirty.length; i += 3) {
       const s = dirty[i];
       this.caches[s]?.deleteRC(dirty[i + 1], dirty[i + 2]);
@@ -1376,11 +1376,14 @@ export class Workbook {
       const cell = this.sheets[s]?.cells.getRC(dirty[i + 1], dirty[i + 2]);
       if (cell) {
         this.markFormulaDirty(s, dirty[i + 1], dirty[i + 2], cell);
-        if (cell.maybeArray) arrays = true;
+        if (cell.maybeArray) (arraySheets ??= new Set()).add(s);
       }
-      if (!bumped.has(s)) { bumped.add(s); this.touchSource(s); this.sheetVer[s] = (this.sheetVer[s] ?? 0) + 1; }
+      this.touchSource(s, dirty[i + 1], dirty[i + 2]);
+      if (!bumped.has(s)) { bumped.add(s); this.sheetVer[s] = (this.sheetVer[s] ?? 0) + 1; }
     }
-    if (arrays) {
+    if (arraySheets) {
+      // 앵커 밖의 분산 결과도 원본 값이 된다. 크기 변경까지 포함해 해당 시트를 무효화한다.
+      for (const s of arraySheets) this.touchSource(s);
       // 분산할 수 있는 수식이 다시 계산되면 분산 영역을 다시 정함
       for (const s of bumped) for (const [k, sp] of this.spills) if (sp.si === s) this.spills.delete(k);
       this.spillOwner.clear();
@@ -1699,13 +1702,20 @@ export class Workbook {
   /** 피벗 저장 캐시용 값/구조 버전. 색·폰트·메모·행 높이는 원본 값을 바꾸지 않는다. */
   sourceVersion(si) { return this.sheets[si]?._dataEv ?? 0; }
 
-  touchSource(si) {
+  touchSource(si, r, c) {
     const sheet = this.sheets[si];
     if (!sheet) return;
     const tx = this.tx ?? this.calcTrustTx;
     // 캐시 열 배열은 불변이다. 실행 취소에는 배열 복사가 아닌 유효한 저장본 참조만 둔다.
     if (tx && this.pivotSnapshots?.size && !tx.pivotCacheBefore) tx.pivotCacheBefore = this.snapshotData();
     sheet._dataEv = (sheet._dataEv ?? 0) + 1;
+    // 일반 파일은 감시가 없다. 같은 시트의 피벗 결과 셀은 원본 범위의 세대를 바꾸지 않는다.
+    const ranges = this.pivotSourceRanges?.get(sheet);
+    if (!ranges) return;
+    for (const watch of ranges.values()) {
+      const a = watch.range;
+      if (r === undefined || c === undefined || r >= a.r1 && r <= a.r2 && c >= a.c1 && c <= a.c2) watch.version++;
+    }
   }
 
   sourcePropChanged(prop, before, after) {
@@ -1861,7 +1871,7 @@ export class Workbook {
 
   putCell(si, r, c, cell, calcNeutral = false) {
     this.touch(si);
-    if (!calcNeutral) this.touchSource(si);
+    if (!calcNeutral) this.touchSource(si, r, c);
     const cells = this.sheets[si].cells;
     const old = cells.getRC(r, c);
     if (cell?.cachedArray) this.sheets[si]._hasCachedArrays = true;
@@ -3051,16 +3061,51 @@ export class Workbook {
     if (si === undefined || si < 0) return null;
     const t = found?.t, r = t ? {r1:t.r1,c1:t.c1,r2:t.r2-(t.totals?1:0),c2:t.c2} : def.range;
     if (!r) return null;
-    return { si, sheet:this.sheets[si], key:JSON.stringify([r.r1,r.c1,r.r2,r.c2,...(t&&!t.header?[t.columns]:[])]) };
+    return { si, sheet:this.sheets[si], range:r, key:JSON.stringify([r.r1,r.c1,r.r2,r.c2,...(t&&!t.header?[t.columns]:[])]) };
+  }
+
+  /** 동일 원본 범위는 하나의 변경 세대를 공유한다. 셀 편집 중 피벗 정의를 다시 탐색하지 않는다. */
+  pivotSourceWatch(source) {
+    this.pivotSourceRanges ??= new WeakMap();
+    let ranges = this.pivotSourceRanges.get(source.sheet);
+    if (!ranges) { ranges = new Map(); this.pivotSourceRanges.set(source.sheet, ranges); }
+    let watch = ranges.get(source.key);
+    if (!watch) { watch = { range:{...source.range}, version:this.sourceVersion(source.si) }; ranges.set(source.key, watch); }
+    return watch;
   }
 
   pivotSnapshotCurrent(snap, def) {
     const source=this.pivotSnapshotSource(def);
     if (!source) return false;
-    // 이전 확장 API가 직접 등록한 캐시도 첫 조회에서 원본 정체성을 고정한다.
-    if (!snap.sourceSheet) { snap.sourceSheet=source.sheet; snap.sourceKey=source.key; }
-    snap.ver ??= this.sourceVersion(source.si);
-    return snap.sourceSheet===source.sheet && snap.sourceKey===source.key && snap.ver===this.sourceVersion(source.si);
+    if (snap.sourceSheet && (snap.sourceSheet!==source.sheet || snap.sourceKey!==source.key)) return false;
+    // 이전 확장 API가 직접 등록한 캐시는 최초 조회까지 기존 시트 버전 검사도 유지한다.
+    if (!snap.sourceWatch) {
+      if (snap.ver !== undefined && snap.ver !== this.sourceVersion(source.si)) return false;
+      snap.sourceSheet=source.sheet; snap.sourceKey=source.key;
+      snap.sourceWatch=this.pivotSourceWatch(source); snap.ver=snap.sourceWatch.version;
+    }
+    return snap.ver===snap.sourceWatch.version;
+  }
+
+  /** 명시적 새로고침도 원본 저장값을 실행 취소로 복원할 수 있어야 한다. */
+  clearPivotSnapshots(ids = null) {
+    const snapshots = this.pivotSnapshots;
+    if (!snapshots?.size) return false;
+    const targets = ids == null ? [...snapshots.keys()] : [...new Set(ids)].filter(id => snapshots.has(id));
+    if (!targets.length) return false;
+    const tx = this.tx ?? this.calcTrustTx;
+    if (tx && !tx.pivotCacheBefore) tx.pivotCacheBefore = this.snapshotData();
+    // 표시 값이 같아 셀 변경이 하나도 없어도 새로고침 자체는 Undo 항목이다.
+    if (this.tx && !this.tx.entries.some(e => e.t === 'pivotCaches')) this.record({ t:'pivotCaches' });
+    for (const id of targets) snapshots.delete(id);
+    this.pivotSourceRanges = snapshots.size ? new WeakMap() : null;
+    for (const snap of snapshots.values()) if (snap.sourceSheet && snap.sourceWatch) {
+      let ranges = this.pivotSourceRanges.get(snap.sourceSheet);
+      if (!ranges) { ranges = new Map(); this.pivotSourceRanges.set(snap.sourceSheet, ranges); }
+      ranges.set(snap.sourceKey, snap.sourceWatch);
+    }
+    this.version++;
+    return true;
   }
 
   snapshotData() {
@@ -3266,13 +3311,17 @@ export class Workbook {
   /** 파일의 피벗 캐시 저장본 (엑셀이 마지막으로 새로 고친 원본) — 원본을 고치기 전까지 피벗을 이것으로 계산 */
   setSnapshots(data) {
     this.pivotSnapshots = data?.pivotSnapshots ? new Map(Object.entries(data.pivotSnapshots).map(([k, rows]) => [k, { rows: restorePivotSnapshot(rows), ver: undefined }])) : null;
+    this.pivotSourceRanges = this.pivotSnapshots?.size ? new WeakMap() : null;
     // 조회가 아니라 문서를 받아들인 시점의 원본 버전을 고정한다.
     // 최초 피벗 조회 전에 원본을 고쳐도 이전 저장값을 새 값으로 착각하지 않는다.
     for (const sheet of this.sheets ?? []) for (const def of [sheet.pivot, ...(sheet.pivotsExtra ?? [])]) {
       const snap = def?.snapshotId && this.pivotSnapshots?.get(def.snapshotId);
       if (!snap) continue;
       const source=this.pivotSnapshotSource(def);
-      if (source) { snap.ver=this.sourceVersion(source.si);snap.sourceSheet=source.sheet;snap.sourceKey=source.key; }
+      if (source && !snap.sourceWatch) {
+        snap.sourceSheet=source.sheet; snap.sourceKey=source.key;
+        snap.sourceWatch=this.pivotSourceWatch(source); snap.ver=snap.sourceWatch.version;
+      }
     }
   }
 
