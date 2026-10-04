@@ -38,7 +38,7 @@ function wrap(text, width, font, limit) {
 export function categoryAxisLayout(categories, options = {}) {
   const font = Math.max(1, options.font ?? 12), lineHeight = font * 1.28;
   const length = Math.max(1, options.length ?? 400), depth = Math.max(lineHeight, options.depth ?? 120);
-  const horizontal = !!options.horizontal, n = categories.length, band = length / Math.max(1, n);
+  const horizontal = !!options.horizontal, n = Math.max(categories.length, finite(options.slotCount) ? options.slotCount : 0), band = length / Math.max(1, n);
   const specified = finite(options.interval) && options.interval >= 1;
   // 긴 항목 하나 때문에 다른 항목까지 생략하지 않고, 최소 줄 높이만 확보한다.
   const every = specified ? Math.floor(options.interval) : Math.max(1, Math.ceil((horizontal ? lineHeight + 3 : font * 1.55) / band));
