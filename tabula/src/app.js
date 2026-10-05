@@ -8580,23 +8580,23 @@ function updateStatusCalc() {
   const elc = document.getElementById('calcState');
   if (!elc) return;
   const state = wb?.getCalculationStatus(si, active.r, active.c);
-  const uncertain = state && ['cached', 'stale', 'blocked'].includes(state.status);
-  elc.textContent = wb?.needsCalc ? '계산 대기 (F9)' : uncertain ? (state.status === 'cached' ? '파일 저장값 · 확인 필요' : '재계산 불가 · 확인 필요') : documentCalcMode() === 'manual' ? '수동 계산' : '계산 상태';
+  const uncertain = state && ['cached', 'stale', 'blocked', 'source-error'].includes(state.status);
+  elc.textContent = wb?.needsCalc ? '계산 대기 (F9)' : uncertain ? (state.status === 'source-error' ? '원본 오류 · 확인 필요' : state.status === 'cached' ? '파일 저장값 · 확인 필요' : '재계산 불가 · 확인 필요') : documentCalcMode() === 'manual' ? '수동 계산' : '계산 상태';
   elc.title = uncertain ? state.message : wb?.needsCalc ? 'F9를 누르면 계산합니다. 클릭하면 미확인 수식 목록을 엽니다.' : '클릭하여 저장값 사용·재계산 불가 수식을 확인합니다.';
   elc.classList.toggle('warn', !!uncertain);
 }
 
 function calculationStatusDialog() {
   const result = wb.calculationIssues({ limit: 200 });
-  const label = { cached: '파일 저장값', stale: '오래된 저장값', blocked: '계산 불가', pending: '계산 대기' };
+  const label = { 'source-error': '원본 오류', cached: '파일 저장값', stale: '오래된 저장값', blocked: '계산 불가', pending: '계산 대기' };
   const body = el('div', { class: 'calculation-report' },
-    el('p', {}, '지원하지 않는 수식의 파일 저장값은 직접 계산한 결과가 아닙니다. 입력이 바뀐 뒤에는 오래된 숫자가 합계에 섞이지 않도록 오류로 표시합니다.'),
+    el('p', {}, '원본 파일에도 있던 이름 오류와 위셀에서 재계산할 수 없는 수식을 구분합니다. 원문과 원본 오류는 그대로 보존합니다. 미지원 수식의 저장값은 직접 계산한 결과가 아니며, 입력 변경 후에는 오래된 숫자가 합계에 섞이지 않도록 오류로 표시합니다.'),
     el('p', { role: 'status' }, result.total ? `확인할 수식 ${result.total.toLocaleString()}개${result.truncated ? ' · 처음 200개 표시' : ''}` : '미지원 수식이나 미확인 파일 저장값이 발견되지 않았습니다. 모든 계산의 정확성을 보증하는 검사는 아닙니다.'),
     result.items.length ? el('table', { class: 'backstage-list' }, el('thead', {}, el('tr', {}, ['셀', '상태', '수식 및 확인 사항'].map(t => el('th', {}, t)))),
       el('tbody', {}, result.items.map(item => el('tr', {},
         el('td', {}, el('button', { class: 'lnk', onclick: () => { dlg.close(); switchSheet(item.si); selectCell(item.r, item.c); } }, `${item.sheet}!${cellName(item.r, item.c)}`)),
         el('td', {}, label[item.status] ?? item.status),
-        el('td', {}, el('code', {}, item.formula), el('p', {}, item.message), item.savedValue !== undefined ? el('small', {}, `파일에 있던 참고값: ${String(item.savedValue?.code ?? item.savedValue).slice(0, 160)} (현재 계산값 아님)`) : null))))) : null);
+        el('td', {}, el('code', {}, item.formula), el('p', {}, item.message), item.savedValue !== undefined ? el('small', {}, `파일에 있던 참고값: ${String(item.savedValue?.code ?? item.savedValue?.error ?? item.savedValue).slice(0, 160)} (현재 계산값 아님)`) : null))))) : null);
   const dlg = openDialog({ title: '계산 상태 확인', body, width: 850, buttons: [{ label: '닫기', primary: true }] });
 }
 
@@ -20005,6 +20005,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['가져오기 수식 진단 정확성', ['원본 Excel 파일에도 있던 이름 오류를 새 미지원 함수처럼 안내하지 않고 계산 상태에서 원본 오류로 구분합니다. LET/LAMBDA의 지역 함수 호출은 정상 지원 수식으로 판정합니다.']],
   ['색상표와 갤러리 키보드 이동', ['Alt → H → F → C와 Alt → H → H로 연 색상표에서 Alt를 누른 채로도 화살표 이동·Enter 적용·Esc 취소가 가능합니다. 글꼴 검색과 차트 색 구성, 표·피벗·조건부 서식 등 메뉴 안의 견본도 키보드로 선택합니다.']],
   ['우클릭 서식의 선택 범위 고정', ['색·글꼴·무늬·테두리 메뉴를 이동할 때 셀 선택이 따라 움직이던 오류를 수정했습니다. 취소되거나 놓친 마우스 드래그를 정리하고, 늦게 닫힌 색 선택창이 다른 문서나 시트를 수정하지 않도록 했습니다.']],
   ['차트 색 39개와 사용자 지정 색', ['색 구성을 이름·검색·분류로 선택하고 1~32개의 색을 직접 편집할 수 있습니다. 색 순서·미리보기·취소·실행 취소를 지원하며, 한두 색을 사용하는 폭포·파레토의 색 누락을 수정했습니다.']],

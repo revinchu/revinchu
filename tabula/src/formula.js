@@ -1101,5 +1101,40 @@ export function listRefs(formula) {
 export function unknownFunctions(body, isName = () => false) {
   let toks;
   try { toks = tokenize(body); } catch { return []; }
-  return [...new Set(toks.filter((t) => t.t === 'func' && !FUNCS[t.v] && !isName(t.v)).map((t) => t.v))];
+  const candidates = new Set(toks.filter((t) => t.t === 'func' && !FUNCS[t.v] && !isName(t.v)).map((t) => t.v));
+  // 보통 수식은 토큰 검사로 끝냅니다. 지역 함수 후보가 있을 때만 AST를
+  // 확인하여 LET/LAMBDA의 함수 매개변수를 미지원 함수로 오인하지 않습니다.
+  if (!candidates.size || !toks.some(t => t.t === 'func' && (t.v === 'LET' || t.v === 'LAMBDA'))) return [...candidates];
+  try {
+    const unknown = new Set();
+    const walk = (node, local) => {
+      if (!node || typeof node !== 'object') return;
+      if (Array.isArray(node)) { for (const n of node) walk(n, local); return; }
+      if (node.type === 'func') {
+        if (node.name === 'LET') {
+          const scope = new Set(local);
+          for (let i = 0; i + 1 < node.args.length; i += 2) {
+            // 새 이름은 자신의 값과 이전 바인딩에는 아직 존재하지 않습니다.
+            walk(node.args[i + 1], scope);
+            if (node.args[i].type === 'name') scope.add(node.args[i].v.toLowerCase());
+          }
+          walk(node.args[node.args.length - 1], scope);
+          return;
+        }
+        if (node.name === 'LAMBDA') {
+          const scope = new Set(local);
+          for (const n of node.args.slice(0, -1)) if (n.type === 'name') scope.add(n.v.toLowerCase());
+          walk(node.args[node.args.length - 1], scope);
+          return;
+        }
+        if (candidates.has(node.name) && !local.has(node.name.toLowerCase())) unknown.add(node.name);
+      }
+      for (const [key, value] of Object.entries(node)) if (key !== 'ref' && value && typeof value === 'object') walk(value, local);
+    };
+    walk(parse(body), new Set());
+    return [...unknown];
+  } catch {
+    // 해석하지 못한 식은 기존 토큰 결과를 유지하여 실제 미지원 함수를 숨기지 않습니다.
+    return [...candidates];
+  }
 }

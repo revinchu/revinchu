@@ -1,5 +1,6 @@
 import { createZipStreamWriter } from './zip-stream.js';
 import { arrayCacheValue } from './array-cache.js';
+import { hasSavedNameError } from './calculation-state.js';
 import { createXmlChunks } from './xml-chunks.js';
 import { pivotExportData, pivotValueStats } from './pivot-export-data.js';
 import { xlsxRowPlan } from './xlsx-row-stream.js';
@@ -1009,7 +1010,9 @@ function* readSheet(files, path, ctx) {
         raw = conv.raw;
         // 파일 저장값은 처음 열 때 보존합니다. 입력 변경 이후 캐시 신뢰성은 Workbook에서 판정합니다.
         cached = value;
-        if (conv.unknown) unsupported++;
+        // 원본에서도 #NAME?였던 수식은 새 미지원 계산 결과로 오인하지 않는다.
+        // 원문/오류는 그대로 보존하며 계산 상태 목록에서 '원본 오류'로 확인한다.
+        if (conv.unknown && !hasSavedNameError(value)) unsupported++;
       } else if (arrays.length) {
         const owner = arrays.find(a => r >= a.r1 && r <= a.r2 && cc >= a.c1 && cc <= a.c2 && (r !== a.r || cc !== a.c));
         if (owner) {

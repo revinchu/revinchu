@@ -1,6 +1,11 @@
 // 계산 가능 여부와 파일 저장값의 신뢰 상태. DOM·통합 문서 변경·네트워크 요청 없음.
 import { FUNCS } from './formula.js';
 
+/** 파일에 이미 저장된 이름 오류. 문자열 '#NAME?'는 오류값과 구분한다. */
+export function hasSavedNameError(value) {
+  return !!value && typeof value === 'object' && (value.error ?? value.code) === '#NAME?';
+}
+
 const syntaxMemo = new WeakMap();
 function formulaNames(ast) {
   let result = syntaxMemo.get(ast);
@@ -60,7 +65,10 @@ export function calculationStatus(cell, value, support = null, usesSaved = false
   const hasSaved = cell.cached !== undefined;
   const stale = !!cell.dirty && hasSaved;
   let status = 'calculated', reason = null, message = '현재 입력으로 계산한 결과입니다.';
-  if (hasSaved && !cell.dirty && (usesSaved || support)) {
+  if (!cell.dirty && hasSavedNameError(cell.cached) && error === '#NAME?' && support) {
+    status = 'source-error'; reason = 'source-name-error';
+    message = '원본 Excel 파일에도 #NAME? 오류가 저장되어 있습니다. 원문의 함수 이름·정의된 이름 또는 수식으로 입력된 텍스트를 확인하세요.';
+  } else if (hasSaved && !cell.dirty && (usesSaved || support)) {
     status = 'cached'; reason = support?.reason ?? 'saved-result';
     message = support ? '파일에 저장된 결과를 표시합니다. 이 수식의 재계산은 보장되지 않습니다.' : '파일에 저장된 계산 결과입니다. 현재 입력으로 다시 계산한 값과 다를 수 있습니다.';
   } else if (support && (error === '#NAME?' || support.reason === 'unreadable-formula')) {

@@ -629,3 +629,18 @@ node tools/mobile-layout.mjs
 - `menu-gallery-keyboard.mjs`: 무늬·조건부 서식·표·피벗·슬라이서·차트·테마·도형의 실제 키팁 진입, 이동, 적용/Undo와 기존 Alt+↓/←. `WIXEL_GALLERY_OUT`, `WIXEL_GALLERY_FILTER` 지원.
 
 둘 다 `WIXEL_URL`, `WIXEL_BROWSER=chromium|firefox|webkit` 사용. 기본은 로컬 주소이며 `WIXEL_PALETTE_PUBLIC=1`/`WIXEL_GALLERY_PUBLIC=1`일 때 정확한 위셀 공개 호스트에 한해 합성 검사한다. API·외부 요청·원격 쓰기는 차단한다. 모든 결과는 D: 임시 폴더에 둔다.
+
+## 수식 가져오기 브라우저 회귀 검사
+
+`tools/import-formula-diagnostics.mjs`는 합성 XLSX를 실제 파일 입력으로 열어 원본 `#NAME?` 오류와 미지원 함수의 저장값을 구분하고, LET/LAMBDA 재계산·실행 취소·저장 후 재열기 및 계산 상태 창의 모바일 배치를 검사합니다. 사용자 파일을 사용하지 않으며 외부 요청과 쓰기 요청을 차단합니다.
+
+개발 서버를 실행한 뒤 설치된 Playwright와 브라우저 런타임을 사용해 실행합니다. `PLAYWRIGHT_MODULE`로 모듈 경로, `PLAYWRIGHT_BROWSERS_PATH`로 브라우저 캐시 경로를 지정할 수 있습니다.
+
+```powershell
+$env:WIXEL_URL = 'http://localhost:5178/'
+$env:WIXEL_BROWSER = 'chromium' # firefox 또는 webkit
+$env:WIXEL_OUTPUT = 'D:/Codex/Temp/wixel-import-formula-diagnostics-chromium'
+node tools/import-formula-diagnostics.mjs
+```
+
+URL과 출력 경로의 기본값은 위와 같습니다(출력 폴더 끝은 선택한 브라우저명). `WIXEL_IMPORT_FILTER`에 시나리오 이름 일부를 지정하면 해당 검사만 실행하며, 여러 조건은 `|`로 구분합니다. 결과 JSON, 합성 XLSX와 스크린샷은 출력 폴더에 기록합니다.
