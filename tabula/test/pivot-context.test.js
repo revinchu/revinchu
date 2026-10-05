@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { computePivot, resolvePivot, pivotDetail } from '../src/pivot.js';
+import { computePivot, resolvePivot, pivotDetail, pivotChartData } from '../src/pivot.js';
 import { pivotContextTarget, pivotValueDef, pivotRemoveContextField } from '../src/pivot-context.js';
 import { Workbook } from '../src/workbook.js';
 import { readXlsx, writeXlsx } from '../src/xlsx.js';
@@ -49,4 +49,86 @@ test('가로 보고서 필터 문맥은 행 번호 대신 셀의 실제 필드�
       assert.deepEqual(next.values,d.values);
     }
   }
+});
+
+const targetCells = ({def, out}, role) => out.grid.flatMap((row,r)=>row.flatMap((cell,c)=>role.test(cell.role)?[{r,c,cell,target:pivotContextTarget(def,out,r,c)}]:[]));
+const sortFromTarget = (def, target, dir='desc') => ({...def,sort:{...def.sort,[target.sortField]:{dir,by:target.valueIndex,...(target.sortAt?{at:target.sortAt}:{})}}});
+
+test('값을 고른 열의 실제 항목 경로로 정렬하며 총합계와 피벗 차트가 일치한다',()=>{
+  const data=[['품목','채널','매출'],['A','X',90],['A','Y',1],['B','X',10],['B','Y',200]];
+  const d={rows:['품목'],cols:['채널'],values:[{field:'매출',agg:'sum'}],layout:'tabular',itemCaptions:{채널:{X:'선택 열'}}};
+  const resolved=resolvePivot(data,d), out=computePivot(resolved,resolved.def);
+  const col=out.meta.labelCols+out.meta.colLeaves.findIndex(x=>x.node.key==='X');
+  const r=out.meta.pageRows+out.meta.headerRows;
+  const target=pivotContextTarget(resolved.def,out,r,col);
+  assert.equal(target.sortField,'품목');assert.equal(target.sortAxis,'rows');assert.deepEqual(target.sortAt,[['채널','X']]);
+  const sorted=sortFromTarget(d,target), res=resolvePivot(data,sorted), after=computePivot(res,res.def);
+  assert.deepEqual(after.meta.rowItems.filter(x=>x.kind==='item').map(x=>x.node.key),['A','B']);
+  assert.equal(after.meta.rowItems.at(-1).kind,'grand');assert.equal(after.grid.at(-1).at(-1).raw,'301');
+  const chart=pivotChartData(data,sorted);assert.deepEqual(chart.categories,['A','B']);assert.deepEqual(chart.series.map(x=>x.values),[[90,10],[1,200]]);
+  const totalTarget=pivotContextTarget(resolved.def,out,r,out.meta.labelCols+out.meta.colLeaves.findIndex(x=>x.kind==='grand'));
+  assert.equal(totalTarget.sortField,'품목');assert.equal(totalTarget.sortAt,undefined);
+  const totalRes=resolvePivot(data,sortFromTarget(d,totalTarget));
+  assert.deepEqual(computePivot(totalRes,totalRes.def).meta.rowItems.filter(x=>x.kind==='item').map(x=>x.node.key),['B','A']);
+});
+
+test('총합계 행의 값은 열 항목을 정렬하고 합계 교차점은 정렬 대상으로 삼지 않는다',()=>{
+  const {def,out}=result({...base,cols:['상품'],values:[base.values[0]]});
+  const r=out.grid.length-1, first=out.meta.labelCols;
+  const t=pivotContextTarget(def,out,r,first);
+  assert.equal(t.sortAxis,'cols');assert.equal(t.sortField,'상품');assert.equal(t.valueIndex,0);assert.equal(t.sortAt,undefined);
+  const corner=pivotContextTarget(def,out,r,out.meta.width-1);
+  assert.equal(corner.sortField,null);assert.equal(corner.sortAxis,null);
+  const rowOnly=result({...base,values:[base.values[0]]});
+  assert.equal(pivotContextTarget(rowOnly.def,rowOnly.out,rowOnly.out.grid.length-1,rowOnly.out.meta.width-1).sortField,null);
+});
+
+test('부분합과 축소 그룹 값은 선택 수준과 반대 축 전체 경로를 유지한다',()=>{
+  const data=[['지역','상품','연도','채널','매출'],['서울','A',2025,'X',90],['서울','B',2025,'Y',1],['부산','A',2026,'X',10],['부산','B',2026,'Y',200]];
+  for(const layout of ['compact','outline','tabular'])for(const collapsed of [{},{지역:['서울']}]){
+    const d={rows:['지역','상품'],cols:['연도','채널'],values:[{field:'매출',agg:'sum'}],layout,subtotals:true,subtotalTop:false,collapsed};
+    const res=resolvePivot(data,d), out=computePivot(res,res.def);
+    const r=out.meta.pageRows+out.meta.headerRows+out.meta.rowItems.findIndex(x=>x.node?.key==='서울'&&(x.kind==='sub'||x.coll));
+    const c=out.meta.labelCols+out.meta.colLeaves.findIndex(x=>x.node.key==='X'&&x.node.parent.key===2025);
+    const target=pivotContextTarget(res.def,out,r,c);
+    assert.equal(target.sortField,'지역');assert.deepEqual(target.sortAt,[['연도','2025'],['채널','X']]);
+    const subcol=out.meta.labelCols+out.meta.colLeaves.findIndex(x=>x.kind==='sub'&&x.node.key===2025);
+    assert.deepEqual(pivotContextTarget(res.def,out,r,subcol).sortAt,[['연도','2025']]);
+    const grandRow=out.grid.length-1;
+    assert.equal(pivotContextTarget(res.def,out,grandRow,subcol).sortField,'연도');
+    const subheads=targetCells({def:res.def,out},/^colSubHead$/);
+    assert.ok(subheads.length);assert.ok(subheads.every(x=>x.target.sortAxis==='cols'&&x.target.sortField==='연도'));
+  }
+});
+
+test('보고서 필터와 빈 줄 및 총합계 레이블에서 다른 필드 정렬을 추측하지 않는다',()=>{
+  const computed=result({...base,rows:['지역','상품'],pages:['수량'],blankRows:true,subtotals:true});
+  for(const {target}of targetCells(computed,/^(pageLabel|pageValue|blank|grandLabel)$/)){
+    assert.equal(target.sortField,null);assert.equal(target.sortAxis,null);assert.equal(target.sortAt,undefined);
+  }
+  const outside=pivotContextTarget(computed.def,computed.out,999,999);assert.equal(outside.sortField,null);
+});
+
+test('값 행 배치에서 선택한 지표 인덱스와 열 항목별 정렬 범위를 보존한다',()=>{
+  for(const layout of ['compact','outline','tabular']){
+    const computed=result({...base,cols:['상품'],valuesOnRows:true,layout});
+    const values=targetCells(computed,/^data:1$/);assert.ok(values.length);
+    for(const {target,c}of values){
+      assert.equal(target.valueIndex,1);assert.equal(target.sortField,'지역');assert.equal(target.sortAxis,'rows');
+      assert.deepEqual(target.sortAt,[['상품',computed.out.meta.colLeaves[c-computed.out.meta.labelCols].node.key]]);
+    }
+    const grand=targetCells(computed,/^grandData:1$/).find(x=>computed.out.meta.colLeaves[x.c-computed.out.meta.labelCols].kind==='item');
+    assert.equal(grand.target.sortAxis,'cols');assert.equal(grand.target.sortField,'상품');assert.equal(grand.target.valueIndex,1);
+  }
+});
+
+test('선택 열 값 정렬의 원본 경로는 XLSX 저장·재열기 뒤에도 같은 순서를 낸다',()=>{
+  const cells={};source.forEach((row,r)=>row.forEach((v,c)=>cells[r+','+c]={raw:String(v)}));
+  const d={...base,cols:['상품'],values:[base.values[0]],source:'원본',range:{r1:0,c1:0,r2:3,c2:3},name:'정렬피벗',top:0,left:0};
+  const computed=result(d), c=computed.out.meta.labelCols+computed.out.meta.colLeaves.findIndex(x=>x.node.key==='A');
+  const target=pivotContextTarget(computed.def,computed.out,computed.out.meta.pageRows+computed.out.meta.headerRows,c);
+  const sorted=sortFromTarget(d,target), wb=new Workbook({sheets:[{name:'원본',cells},{name:'피벗',cells:{},pivot:sorted}]});
+  const restored=new Workbook(readXlsx(writeXlsx(wb)).data).sheets[1].pivot;
+  assert.deepEqual(restored.sort.지역.at,[['상품','A']]);
+  assert.deepEqual(result(restored).out.meta.rowItems.filter(x=>x.kind==='item').map(x=>x.node.key),['부산','서울']);
 });

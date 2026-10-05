@@ -4617,9 +4617,21 @@ function pivotParts(wb, si, def, cache, name, pool) {
     const coll = onAxis ? new Set((d.collapsed?.[h] ?? []).map(itemIdentity)) : null;
     // 항목 레이블 반복 (x14 확장)
     const fill = rowF.includes(f) && d.repeatLabels ? `<extLst><ext uri="{2946ED86-A175-432a-8AC1-64E0C546D7DE}" xmlns:x14="${NS_X14}"><x14:pivotField fillDownLabels="1"/></ext></extLst>` : '';
-    const scope = srt && srt.by !== undefined && srt.by !== null
-      ? `<autoSortScope><pivotArea dataOnly="0" outline="0" fieldPosition="0"><references count="1"><reference field="4294967294" count="1" selected="0"><x v="${Number(srt.by) || 0}"/></reference></references></pivotArea></autoSortScope>`
-      : '';
+    let scope = '';
+    if (srt && srt.by !== undefined && srt.by !== null) {
+      const byName = String(srt.by).toLowerCase();
+      const vi = typeof srt.by === 'number' ? srt.by : values.findIndex(v => valueName(v).toLowerCase() === byName || v.field.toLowerCase() === byName);
+      const refs = [`<reference field="4294967294" count="1" selected="0"><x v="${vi >= 0 && vi < V ? vi : 0}"/></reference>`];
+      // autoSortScope item indexes address this pivot's field items, not shared
+      // cache items: caption/manual sorts can give the two different orders.
+      for (const pair of Array.isArray(srt.at) ? srt.at : []) {
+        if (!Array.isArray(pair) || pair.length < 2) continue;
+        const other = fx(pair[0]), keys = items.get(other)?.keys;
+        const at = keys?.findIndex(k => itemIdentity(itemText(k)) === itemIdentity(String(pair[1]))) ?? -1;
+        if (at >= 0) refs.push(`<reference field="${other}" count="1" selected="0"><x v="${at}"/></reference>`);
+      }
+      scope = `<autoSortScope><pivotArea dataOnly="0" outline="0" fieldPosition="0"><references count="${refs.length}">${refs.join('')}</references></pivotArea></autoSortScope>`;
+    }
     const it = items.get(f);
     if (!it) return scope || fill ? `<pivotField ${attrs.join(' ')}>${scope}${fill}</pivotField>` : `<pivotField ${attrs.join(' ')}/>`;
     const caps = new Map(Object.entries(d.itemCaptions?.[h] ?? {}).map(([key, value]) => [itemIdentity(key), value]));

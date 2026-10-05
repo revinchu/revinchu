@@ -1,7 +1,19 @@
+import { itemText } from './cube.js';
+
+// 정렬 기준은 표시 캡션이 아닌 실제 반대 축 항목 경로입니다.
+function itemPath(node, fields) {
+  const path = [];
+  for (let n = node; n && n.depth >= 0; n = n.parent) {
+    if (fields?.[n.depth]) path.unshift([fields[n.depth], itemText(n.key)]);
+  }
+  return path.length ? path : undefined;
+}
+
 // 계산 결과의 역할을 사용하므로 같은 원본 필드를 값 영역에 여러 번 넣어도 정확한 항목을 고릅니다.
 export function pivotContextTarget(def, result, r, c) {
   const row = result.grid[r], role = row?.[c]?.role ?? '', meta = result.meta ?? {};
   const body = r - (meta.pageRows ?? 0) - (meta.headerRows ?? 0), rowItem = meta.rowItems?.[body];
+  const leaf = meta.colLeaves?.[c - (meta.labelCols ?? 0)];
   let valueIndex = null, field = null, area = null;
   const value = /^(data|subData|groupData|grandData|grandColData|colSubData|valueHead|grandHead):(\d+)$/.exec(role);
   if (value) valueIndex = +value[2];
@@ -15,11 +27,30 @@ export function pivotContextTarget(def, result, r, c) {
   else if (role === 'colHead') {
     area = 'cols'; const raw = String(row[c]?.raw ?? '').replace(/^'/, '');
     field = def.cols?.find(f => f === raw || def.fieldCaptions?.[f] === raw) ?? def.cols?.[0] ?? null;
+  } else if (role === 'colSubHead') {
+    area = 'cols'; field = def.cols?.[leaf?.node?.depth] ?? null;
   }
   if (!def.values?.[valueIndex]) valueIndex = null;
   if (valueIndex !== null) { field = def.values[valueIndex].field; area = 'values'; }
-  const sortField = area && area !== 'values' && area !== 'pages' ? field : def.rows?.[rowItem?.node?.depth] ?? def.rows?.at(-1) ?? def.cols?.at(-1) ?? null;
-  return { kind: valueIndex !== null ? 'value' : field ? 'label' : 'pivot', role, field, area, valueIndex, sortField, detail: /^(data|subData|grandData|grandColData|colSubData):/.test(role) && def.enableDrill !== false };
+  let sortField = null, sortAxis = null, sortAt;
+  if (area === 'rows' || area === 'cols') {
+    sortField = field; sortAxis = field ? area : null;
+  } else if (valueIndex !== null) {
+    const grandRow = rowItem?.kind === 'grand' || /^grandData:/.test(role);
+    if (grandRow) {
+      // 맨 아래 합계 행은 열 항목을 정렬합니다. 두 합계가 만나는 칸은 항목이 아닙니다.
+      if (leaf?.kind !== 'grand' && def.cols?.[leaf?.node?.depth]) {
+        sortField = def.cols[leaf.node.depth]; sortAxis = 'cols';
+      }
+    } else if (def.rows?.length) {
+      sortField = def.rows[rowItem?.node?.depth] ?? def.rows.at(-1); sortAxis = 'rows';
+      if (leaf?.kind !== 'grand') sortAt = itemPath(leaf?.node, def.cols);
+    } else if (def.cols?.length && leaf?.kind !== 'grand') {
+      sortField = def.cols[leaf?.node?.depth] ?? def.cols.at(-1); sortAxis = 'cols';
+      sortAt = itemPath(rowItem?.node, def.rows);
+    }
+  }
+  return { kind: valueIndex !== null ? 'value' : field ? 'label' : 'pivot', role, field, area, valueIndex, sortField, sortAxis, sortAt, detail: /^(data|subData|grandData|grandColData|colSubData):/.test(role) && def.enableDrill !== false };
 }
 
 export function pivotValueDef(def, index, patch) {

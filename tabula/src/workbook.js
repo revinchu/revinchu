@@ -1,3 +1,4 @@
+import { assertOrdinarySortRange } from './pivot-sort-scope.js';
 import { shiftStoredCells, moveStoredCells } from './cell-transforms.js';
 import { arrayCache, arrayCacheValue, spillOffsets } from './array-cache.js';
 import { blockJsonParts } from './block-storage.js';
@@ -2833,6 +2834,7 @@ export class Workbook {
 
   /** 범위를 keyCol 기준으로 정렬 (행 단위 이동, 수식 상대 참조 보정) */
   sortRange(si, r1, c1, r2, c2, keyCol, ascending = true) {
+    assertOrdinarySortRange(this.sheets[si], { r1, c1, r2, c2 });
     if (this.sortBlock(si, r1, c1, r2, c2, keyCol, ascending)) return;
     const rows = [];
     for (let r = r1; r <= r2; r++) {
@@ -2863,6 +2865,7 @@ export class Workbook {
    * 옵션: byCols (왼쪽에서 오른쪽 · 열 순서를 바꿈), caseSensitive (대/소문자 구분, 소문자 먼저), natural (자연 정렬: 글자 속 숫자를 수 크기로)
    */
   sortMulti(si, r1, c1, r2, c2, keys, { byCols = false, caseSensitive = false, natural = false } = {}) {
+    assertOrdinarySortRange(this.sheets[si], { r1, c1, r2, c2 });
     if (!keys.length) return;
     const k0 = keys[0];
     if (!byCols && keys.length === 1 && (k0.on ?? 'value') === 'value' && !k0.list && !caseSensitive && !natural) { this.sortRange(si, r1, c1, r2, c2, k0.at, k0.asc !== false); return; }
@@ -2926,6 +2929,7 @@ export class Workbook {
    * 실행 취소 기록은 순서(순열)만 저장
    */
   sortBlock(si, r1, c1, r2, c2, keyCol, ascending) {
+    assertOrdinarySortRange(this.sheets[si], { r1, c1, r2, c2 });
     const sheet = this.sheets[si];
     const bi = sheet.blocks.findIndex((b) => inBlock(b, r1, c1) && inBlock(b, r2, c2));
     if (bi < 0 || r2 - r1 < 1000) return false;

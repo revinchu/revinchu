@@ -127,6 +127,7 @@ import { currentDataRegion } from './data-region.js';
 import { expandedFilterEnd } from './filter-range.js';
 import { sortScope, refreshSortedFilters } from './sort-filter-state.js';
 import { pivotSortPatch } from './pivot-sort-state.js';
+import { pivotSortScope, pivotSortIntersections, PIVOT_SORT_RANGE_MESSAGE } from './pivot-sort-scope.js';
 import { contextMenuKind, contextContains, selectionAxisRanges, selectionAxisTargets } from './context-selection.js';
 import { rowPointsToPixels, rowPixelsToPoints, columnCharsToPixels, pixelsToColumnChars, MAX_ROW_POINTS, MAX_COLUMN_CHARS } from './dimension.js';
 import { createContextMiniToolbar } from './context-mini-toolbar.js';
@@ -3740,6 +3741,7 @@ const PROTECT_MAP = {
 };
 const FORMAT_CMDS = /^(painter|painterSticky|bold|italic|underline|strike|fontFamily|fontSize|growFont|shrinkFont|border|fillColor|fontColor|fontDialog|formatCells|align|valign|wrap|indent|numFmt|fmt|incDecimal|decDecimal|clearFormats|cellStyle)/;
 function protectAction(cmd) {
+  if (['sortAsc', 'sortDesc', 'sortDialog'].includes(cmd) && pivotSortScope(sheet(), sel, active).kind === 'pivot') return 'pivotTables';
   if (cmd === 'insertMenuKey' || cmd === 'deleteMenuKey') {
     const insert = cmd === 'insertMenuKey';
     return selKind === 'rows' ? (insert ? 'insertRows' : 'deleteRows') : selKind === 'cols' ? (insert ? 'insertColumns' : 'deleteColumns') : 'cells';
@@ -5452,7 +5454,38 @@ function hasHeader(rg) {
   return textFirst && (nonTextBelow || styleAt(rg.r1, rg.c1).bold === true);
 }
 
+// Resolve pivot commands before ordinary table/header/current-region heuristics.
+function routePivotSort(ascending, dialog = false) {
+  const scope = pivotSortScope(sheet(), sel, active);
+  if (scope.kind === 'none') return false;
+  if (scope.kind === 'mixed') { toast(PIVOT_SORT_RANGE_MESSAGE); return true; }
+  const entry = pivotDefs().find(e => e.def === scope.def);
+  if (!entry || !pivotContextGuard(entry)()) return true;
+  const def = pivotDefV2(entry.def), src = pivotSource(def), resolved = src ? resolvePivot(src, def) : null;
+  if (!resolved) { toast('피벗 테이블의 원본 데이터를 찾을 수 없어 정렬할 수 없습니다.'); return true; }
+  const result = computePivot(resolved, resolved.def);
+  const target = pivotContextTarget({ ...def, ...resolved.def }, result, active.r - (def.top ?? 0), active.c - (def.left ?? 0));
+  if (!target.sortField) { toast('정렬할 피벗 항목이나 값을 선택하세요. 총합계의 위치는 유지됩니다.'); return true; }
+  if (dialog) pivotSortDialog(entry, target.sortField, target);
+  else {
+    const sort = { dir: ascending ? 'asc' : 'desc', ...(target.valueIndex !== null ? { by: target.valueIndex, ...(target.sortAt ? { at: target.sortAt } : {}) } : {}) };
+    setPivotDef(entry, { ...def, ...pivotSortPatch(def, { field: target.sortField, sort }) });
+    refreshPivotPane(true);
+  }
+  return true;
+}
+
+function canSortOrdinaryRange(range) {
+  if (viewOnly || wb.props?.markedFinal) { toast('현재 문서에서는 정렬할 수 없습니다. 편집 권한을 확인하세요.'); return false; }
+  if (protectBlocked('sort', range)) return false;
+  if (!pivotSortIntersections(sheet(), range).length) return true;
+  toast(PIVOT_SORT_RANGE_MESSAGE);
+  return false;
+}
+
 function sortData(ascending, keyCol = active.c, header = null, rgIn = null, fkeyIn = null) {
+  if (!rgIn && routePivotSort(ascending)) return;
+  if (rgIn && !canSortOrdinaryRange(rgIn)) return;
   const tbl = rgIn ? null : tableHere();
   let fkey = fkeyIn ?? (tbl ? (tbl.filter && tbl.header ? tbl.id : null) : sheet().filter ? '' : null);
   const f = fkey === null ? null : sortFilterRange(fkey, getFilter(fkey));
@@ -5468,7 +5501,7 @@ function sortData(ascending, keyCol = active.c, header = null, rgIn = null, fkey
   }
   rg ??= dataRange();
   if (!rgIn) { const scope = sortScope({ range: rg, activeOnly: selIsActiveOnly(), active, table: tbl, filter: f, header: header ?? hasHeader(rg) }); rg = scope.range; header = scope.header; }
-  if (!rowRangeAllowed(rg)) return;
+  if (!rowRangeAllowed(rg) || !canSortOrdinaryRange(rg)) return;
   if (rg.r2 <= rg.r1 && isSingle(rg)) return;
   const h = header ?? hasHeader(rg);
   const key = clamp(keyCol, rg.c1, rg.c2);
@@ -13545,16 +13578,20 @@ function openPivotFilterMenu(entry, kind, field, anchorEl) {
 }
 
 /** 정렬 (엑셀 [기타 정렬 옵션]): 수동 · 오름차순 기준 · 내림차순 기준 (필드 자체 또는 값 필드) + 요약 정보 + 기타 옵션 */
-function pivotSortDialog(entry, field) {
+function pivotSortDialog(entry, field, target = null) {
   const canApply = pivotContextGuard(entry);
   const def = pivotDefV2(entry.def);
   const s0 = def.sort?.[field] ?? {};
+  const scopeAt = target?.valueIndex != null ? target.sortAt : s0.at;
+  let useScope = !!scopeAt?.length;
   const values = def.values ?? [];
   const opts2 = [[field, ''], ...values.map((v, i) => [valueName(v), String(i)])];
   const mode = s0.dir ?? 'manual';
-  const by0 = s0.by === undefined || s0.by === null ? '' : String(s0.by);
+  const initialBy = target?.valueIndex ?? s0.by;
+  const initialIndex = typeof initialBy === 'string' ? values.findIndex(v => valueName(v).toLowerCase() === initialBy.toLowerCase() || v.field.toLowerCase() === initialBy.toLowerCase()) : initialBy;
+  const by0 = Number.isInteger(initialIndex) && values[initialIndex] ? String(initialIndex) : '';
   const radio = (v, label) => { const r = el('input', { type: 'radio', name: 'pvsort', value: v, checked: mode === v }); return [r, el('label', { class: 'fc-check' }, r, label)]; };
-  const sel = (dir) => el('select', { disabled: mode !== dir }, opts2.map(([l, v]) => el('option', { value: v, selected: mode === dir ? v === by0 : v === '' }, l)));
+  const sel = (dir) => el('select', { disabled: mode !== dir }, opts2.map(([l, v]) => el('option', { value: v, selected: v === by0 }, l)));
   const [rm, lm] = radio('manual', '수동(항목을 끌어 다시 정렬)');
   const [ra, la] = radio('asc', '오름차순 기준:');
   const [rd, ld] = radio('desc', '내림차순 기준:');
@@ -13576,7 +13613,8 @@ function pivotSortDialog(entry, field) {
     class: 'btn', style: { marginRight: 'auto' },
     onclick: () => formDialog(`기타 정렬 옵션(${field})`, [
       { name: 'list', label: '정렬할 때 사용자 지정 목록 사용 (1월…12월, 요일 등)', type: 'checkbox', value: useList },
-    ], (v) => { useList = !!v.list; }),
+      ...(scopeAt?.length ? [{ name: 'scope', label: target?.sortAxis === 'cols' ? '선택한 행의 값으로 정렬 (해제: 총합계)' : '선택한 열의 값으로 정렬 (해제: 총합계)', type: 'checkbox', value: useScope }] : []),
+    ], (v) => { useList = !!v.list; if (scopeAt?.length) useScope = !!v.scope; }),
   }, '기타 옵션(R)...');
   const dlg = openDialog({
     title: `정렬(${field})`, width: 380,
@@ -13585,7 +13623,7 @@ function pivotSortDialog(entry, field) {
       label: '확인', primary: true, action: () => {
         if (!canApply()) return false;
         const m = cur(), by = (m === 'asc' ? sa : sd).value;
-        const sort = m === 'manual' ? null : { dir: m, ...(by !== '' ? { by: Number(by) } : {}) };
+        const sort = m === 'manual' ? null : { dir: m, ...(by !== '' ? { by: Number(by), ...(useScope && scopeAt?.length ? { at: scopeAt } : {}) } : {}) };
         setPivotDef(entry, { ...def, ...pivotSortPatch(def, { field, sort, customListSort: useList }) });
       },
     }, { label: '취소' }],
@@ -17828,10 +17866,12 @@ function canSortFilteredRange(range, filters) {
 }
 
 function sortDialog() {
+  if (routePivotSort(true, true)) return;
   const fk = filterKeyHere();
   if (fk !== null && !canRecomputeFilter(getFilter(fk))) return;
   const base = dataRange(), scope = sortScope({ range: base, activeOnly: selIsActiveOnly(), active, table: tableHere(), filter: fk === null ? null : sortFilterRange(fk, getFilter(fk)), header: hasHeader(base) });
   const rg0 = scope.range, book = wb, host = sheet();
+  if (!canSortOrdinaryRange(rg0)) return;
   if (wb.mergesIn(si, rg0.r1, rg0.c1, rg0.r2, rg0.c2).length) { alertDialog('WIXEL', '병합된 셀이 있으면 정렬할 수 없습니다.'); return; }
   const o = { ...sortDlgOpts };
   let header = scope.header;
@@ -17919,6 +17959,7 @@ function sortDialog() {
       el('div', { class: 'muted', style: { fontSize: '11px' } }, `범위: ${cellName(rg0.r1, rg0.c1)}:${cellName(rg0.r2, rg0.c2)}`)),
     buttons: [{ label: '확인', primary: true, action: () => {
       if (wb !== book || sheet() !== host) { toast('작업 중인 시트가 변경되었습니다. 다시 정렬하세요.'); return false; }
+      if (!canSortOrdinaryRange(rg0)) return false;
       sortDlgOpts = { ...o };
       const h = header && !o.byCols;
       if (keys.some((k) => k.on !== 'value' && !k.color)) { toast('색을 고르세요.'); return false; }
@@ -19747,6 +19788,7 @@ function contextClearColumnFilter() {
 }
 function contextSortColor(on) {
   const {rg,header,key}=contextDataTarget(), c=active.c;
+  if(!canSortOrdinaryRange(rg))return;
   if(!canRecomputeFilter(getFilter(key)))return;
   if(rg.r2<=rg.r1)return;
   if(wb.mergesIn(si,rg.r1,rg.c1,rg.r2,rg.c2).length){alertDialog('정렬','병합된 셀이 있으면 정렬할 수 없습니다.');return;}
@@ -19809,8 +19851,8 @@ function showPivotContextMenu(pos, entry) {
   if(target.valueIndex!==null)items.push(act('필드 표시 형식(N)...',()=>pivotContextNumberFormat(entry,target.valueIndex),{accessKey:'n'}));
   items.push({sep:true},act('새로 고침(R)',()=>{wb.transact(()=>{wb.clearPivotSnapshots(def.snapshotId?[def.snapshotId]:[]);wb.pivotMemo=null;putPivotDef(entry,{...def});},meta());refreshPivotPane(true);},{accessKey:'r',icon:'refresh'}));
   if(target.sortField) {
-    const sorting=dir=>apply({...def,...pivotSortPatch(def,{field:target.sortField,sort:{dir,...(target.valueIndex!==null?{by:target.valueIndex}:{})}})});
-    items.push({label:'정렬(O)',accessKey:'o',disabled:!editable,submenu:[act('오름차순 정렬(S)',()=>sorting('asc'),{accessKey:'s',icon:'sortAsc'}),act('내림차순 정렬(O)',()=>sorting('desc'),{accessKey:'o',icon:'sortDesc'}),{sep:true},act('기타 정렬 옵션(M)...',()=>pivotSortDialog(entry,target.sortField),{accessKey:'m'})]});
+    const sorting=dir=>apply({...def,...pivotSortPatch(def,{field:target.sortField,sort:{dir,...(target.valueIndex!==null?{by:target.valueIndex,...(target.sortAt?{at:target.sortAt}:{})}:{})}})});
+    items.push({label:'정렬(O)',accessKey:'o',disabled:!editable,submenu:[act('오름차순 정렬(S)',()=>sorting('asc'),{accessKey:'s',icon:'sortAsc'}),act('내림차순 정렬(O)',()=>sorting('desc'),{accessKey:'o',icon:'sortDesc'}),{sep:true},act('기타 정렬 옵션(M)...',()=>pivotSortDialog(entry,target.sortField,target),{accessKey:'m'})]});
   }
   if(target.field)items.push(act(`"${target.valueIndex!==null?valueName(def.values[target.valueIndex]):def.fieldCaptions?.[target.field]??target.field}" 제거(E)`,()=>apply(pivotRemoveContextField(def,target)),{accessKey:'e',icon:'delete'}));
   if(target.valueIndex!==null) {
@@ -20367,6 +20409,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['피벗 정렬 안정성', ['리본·우클릭 정렬에서 총합계와 부분합의 위치를 유지하고 같은 수준의 항목만 정렬합니다. 피벗이 섞인 일반 셀 범위 정렬을 차단하며, 선택한 행·열의 값에 따른 정렬 기준도 저장합니다.']],
   ['무료 웹 글꼴 확대', ['Google Fonts와 라이선스가 확인된 한글 무료 글꼴을 추가했습니다. 한글·영문 검색, 한글 글꼴·모양별 분류, 실제 미리보기를 지원합니다.', '사용하거나 미리 보는 글꼴만 다운로드합니다. 글꼴 목록과 셀 서식·기본 글꼴 설정에서 선택할 수 있으며, 늦게 불러온 글꼴도 셀과 도형에 다시 반영합니다.']],
   ['Excel 기본 행 수와 선택적 확장', ['기본 작업 범위를 Excel과 같은 1,048,576행으로 맞췄습니다. 파일 → 옵션 → 일반의 [위셀 행수 확장]을 켜면 20,000,000행까지 작업하며, 설정을 꺼도 확장 영역의 데이터는 보존합니다.', '스크롤·이름 상자·방향키·전체 열 선택·붙여넣기를 현재 행 한도에 맞추고, 빈 행을 한꺼번에 만들지 않는 가상화를 유지합니다.']],
   ['Excel 단축키와 팝업 접근키 보완', ['Alt → D → F → F 필터를 비롯한 이전 Excel 메뉴 경로를 추가했습니다. 현대 리본 키와 직접 조합키를 점검하여 Shift가 있는 키를 다른 기능으로 잘못 처리하던 문제를 수정했습니다.', '팝업 접근키가 겹치면 고유한 키로 표시·실행하며, 도형과 슬라이서의 Ctrl+1은 선택한 개체의 서식·크기 창을 엽니다.']],

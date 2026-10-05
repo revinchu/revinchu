@@ -1361,7 +1361,11 @@ function orderTree(root, fields, d, measureAt) {
       // 빈 값은 0 과 같은 자리 (엑셀), 오류는 맨 끝
       const num = (v) => (typeof v === 'number' ? v : v === null || v === undefined ? 0 : -Infinity);
       const tie = tieRank(d, field, n);
-      kids = [...kids].sort((a, b) => (s.dir === 'desc' ? num(score.get(b)) - num(score.get(a)) : num(score.get(a)) - num(score.get(b))) || tie(a.key) - tie(b.key));
+      kids = [...kids].sort((a, b) => {
+        const av = score.get(a), bv = score.get(b), ae = isErr(av), be = isErr(bv);
+        if (ae || be) return Number(ae) - Number(be) || tie(a.key) - tie(b.key);
+        return (s.dir === 'desc' ? num(bv) - num(av) : num(av) - num(bv)) || tie(a.key) - tie(b.key);
+      });
     } else if (d.groups?.[field] && d.groups[field].by !== 'items') {
       // 그룹화한 필드: 월 · 분기 · 구간은 숫자 순서
       const spec = d.groups[field];
