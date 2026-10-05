@@ -10964,8 +10964,7 @@ function shapeTextClipboard(command) {
   if (!session?.valid()) return;
   const operation = command === 'paste' ? session.editor.paste() : session.editor.copy({ cut: command === 'cut' });
   Promise.resolve(operation).then(ok => {
-    if (shapeTextEdit !== session) return;
-    if (!ok) toast('클립보드에 접근할 수 없습니다. 텍스트를 선택하고 Ctrl/Cmd+C·X·V를 사용하세요.');
+    if (!ok || shapeTextEdit !== session) return;
     session.editor.focus();
   }).catch(error => reportError(error, '텍스트 클립보드'));
 }
@@ -11056,6 +11055,7 @@ function beginShapeTextEdit(id, { typed = null, point = null } = {}) {
     onDraftChange: () => { if (shapeTextEdit === session) updateRibbon(); },
     onSave: options => run(options?.saveAs ? 'saveAs' : 'save'),
     onContextMenu: position => openShapeTextMenu(session, position),
+    onClipboardError: message => { if (shapeTextEdit === session) toast(message); },
   });
   shapeTextEdit = session;
   Object.assign(session.editor.element.style, { position: 'absolute', pointerEvents: 'auto' });

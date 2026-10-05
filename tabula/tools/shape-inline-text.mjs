@@ -87,7 +87,7 @@ async function cellsUnchanged(p) {
 }
 async function exit(p) { await editor(p).focus(); await p.keyboard.press('Escape'); await editor(p).waitFor({ state: 'detached' }); }
 async function test(name, fn, { mobile = false } = {}) {
-  if (filter && !name.includes(filter)) return;
+  if (filter && !filter.split('|').some(part => name.includes(part))) return;
   const context = await browser.newContext({ viewport: mobile ? { width: 390, height: 844 } : { width: 1440, height: 960 }, serviceWorkers: 'block', acceptDownloads: true });
   const p = await context.newPage(), errors = [], writes = [], start = checks;
   p.setDefaultTimeout(10000); p.on('pageerror', error => errors.push(error.message));
@@ -164,6 +164,19 @@ try {
     await test('keyboard-partial-format', async p => {
       const before = await styles(p); await enter(p); await selectText(p, 6, 10);
       await p.keyboard.press('Control+b'); await p.keyboard.press('Control+i'); await p.keyboard.press('Control+u');
+      for (const [key, code] of [['ㅠ', 'KeyB'], ['ㅑ', 'KeyI'], ['ㅕ', 'KeyU']]) {
+        await editor(p).dispatchEvent('keydown', { key, code, ctrlKey: true, bubbles: true, cancelable: true });
+      }
+      eq(await editor(p).evaluate(e => {
+        const walker = document.createTreeWalker(e, NodeFilter.SHOW_TEXT);
+        let remaining = 6, node;
+        while ((node = walker.nextNode())) { if (remaining < node.length) break; remaining -= node.length; }
+        const css = getComputedStyle(node.parentElement);
+        return [css.fontWeight, css.fontStyle, css.textDecorationLine];
+      }), ['400', 'normal', 'none'], '한글 자판 물리 키 B/I/U는 선택 글자 서식 해제');
+      for (const [key, code] of [['ㅠ', 'KeyB'], ['ㅑ', 'KeyI'], ['ㅕ', 'KeyU']]) {
+        await editor(p).dispatchEvent('keydown', { key, code, metaKey: true, bubbles: true, cancelable: true });
+      }
       await exit(p); const after = await styles(p);
       eq(after.slice(0, 6), before.slice(0, 6), '앞쪽 서식 유지'); eq(after.slice(10), before.slice(10), '뒤쪽 서식 유지');
       for (const c of after.slice(6, 10)) eq([c.bold, c.italic, c.underline], [true, true, true], '선택한 글자만 B/I/U');
@@ -195,6 +208,10 @@ try {
       const before = await model(p); await enter(p); await selectText(p, 0, 16); await p.keyboard.insertText('Changed');
       await p.keyboard.press('Control+z'); eq(await text(p), before.text, '편집 중 로컬 Undo');
       await p.keyboard.press('Control+y'); eq(await text(p), 'Changed', '편집 중 로컬 Redo');
+      await editor(p).dispatchEvent('keydown', { key: 'ㅋ', code: 'KeyZ', ctrlKey: true, bubbles: true, cancelable: true });
+      eq(await text(p), before.text, '한글 자판 물리 키 Ctrl+Z 로컬 Undo');
+      await editor(p).dispatchEvent('keydown', { key: 'ㅛ', code: 'KeyY', metaKey: true, bubbles: true, cancelable: true });
+      eq(await text(p), 'Changed', '한글 자판 물리 키 Command+Y 로컬 Redo');
       eq(await p.evaluate(() => tabula.wb().undoStack.length), 0, '입력 도중 통합 문서 Undo 누적 없음');
       await exit(p); eq(await p.evaluate(() => tabula.wb().undoStack.length), 1, '한 편집 세션은 한 번 Undo');
       await run(p, 'undo'); eq(await model(p), before, '통합 문서 Undo는 원래 리치텍스트 복원');
