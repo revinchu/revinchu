@@ -5973,6 +5973,8 @@ function updateChart(id, patch) {
   // Excel 3D charts cannot combine per-series chart types or secondary axes.
   const current = sheet().charts.find((c) => c.id === id);
   if (!current || !chartCanEdit(current)) return;
+  // 새 서식 명령은 이전 포인터 동작의 초안보다 우선한다.
+  chartElementDrag = null;
   if (patch.threeD === true) {
     patch = { ...patch, seriesFmt: (patch.seriesFmt ?? current.seriesFmt ?? []).map(({ type, axis, ...format }) => format) };
   }
@@ -7075,6 +7077,11 @@ function finishChartPartDrag() {
   if (d?.moved && d.book === wb && d.si === si && d.sheet === sheet() && sheet().charts.includes(d.chart) && chartCanEdit(d.chart)) {
     updateChart(d.chart.id, d.patch); suppressChartDoubleClickUntil = Date.now() + 350; syncChartPane();
   }
+  gv.renderObjectsAll();
+}
+function cancelChartPartDrag() {
+  if (!chartElementDrag) return;
+  chartElementDrag = null;
   gv.renderObjectsAll();
 }
 function nudgeChartPart(dx, dy) {
@@ -20447,6 +20454,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['차트 제목 글꼴 적용 안정성', ['제목을 끌다 취소한 뒤 홈에서 글꼴을 바꿀 때 이전 글꼴이 남던 문제를 수정했습니다. 글꼴·크기를 직접 입력한 뒤 목록 화살표를 눌러도 목록이 유지됩니다.']],
   ['글꼴 이름과 Excel 호환', ['G마켓 산스·나눔스퀘어 네오 등 굵기별 설치 글꼴을 직접 선택합니다.', '표시용 별칭과 실제 설치 글꼴명을 구분해 셀·차트·도형·조건부 서식을 Excel에 저장합니다.']],
   ['차트 텍스트 홈 서식', ['차트 제목·축 눈금·축 제목·범례·데이터 레이블을 선택한 뒤 홈에서 글꼴·크기·색·굵게·기울임을 바꿀 수 있습니다. 다시 클릭한 개별 데이터 레이블도 따로 서식을 지정하며 원본 셀 서식은 유지합니다.']],
   ['피벗 정렬 안정성', ['리본·우클릭 정렬에서 총합계와 부분합의 위치를 유지하고 같은 수준의 항목만 정렬합니다. 피벗이 섞인 일반 셀 범위 정렬을 차단하며, 선택한 행·열의 값에 따른 정렬 기준도 저장합니다.']],
@@ -21100,6 +21108,7 @@ function bindEvents() {
   window.addEventListener('blur',cancelCellGesture);
   document.addEventListener('pointercancel',cancelCellGesture,true);
   document.addEventListener('pointercancel',cancelHeaderResize,true);
+  document.addEventListener('pointercancel',cancelChartPartDrag,true);
   dom.view.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     if (drawPathState) { finishPathDraw(false); return; }
@@ -21120,6 +21129,7 @@ function bindEvents() {
   document.addEventListener('contextmenu', (e) => e.preventDefault(), { capture: true });
   document.addEventListener('mousemove', (e) => {
     if (!(e.buttons & 1) || isMenuOpen() || isDialogOpen()) cancelCellGesture();
+    if (!(e.buttons & 1)) cancelChartPartDrag();
     if (tlDrag) {
       const c = document.elementFromPoint(e.clientX, e.clientY)?.closest?.('.tl-cell');
       if (c && tlDrag.root.contains(c)) { tlDrag.b = Number(c.dataset.i); markTimelineDrag(); }
@@ -21289,7 +21299,7 @@ function bindEvents() {
     if (!bigBook()) saveToStorage({ closing:true });
     if (warnUnsaved) { dirty = true; e.preventDefault(); e.returnValue = ''; }
   });
-  window.addEventListener('blur', () => { if (chartElementDrag) { chartElementDrag = null; gv.renderObjectsAll(); } if (drag) onDragEnd(); });
+  window.addEventListener('blur', () => { cancelChartPartDrag(); if (drag) onDragEnd(); });
 window.addEventListener('afterprint', () => { dom.printArea.replaceChildren(); });
 }
 

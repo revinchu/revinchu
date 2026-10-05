@@ -43,6 +43,8 @@ export function createFormatValuePicker({ label, className = '', inputClass = ''
   };
   const open = () => {
     if (locked()) return;
+    // Finish the input change and its focus callback before the menu captures its target.
+    if (document.activeElement === input) input.blur();
     if (onOpen) { onOpen(root); return; }
     const list = typeof values === 'function' ? values() : values;
     openMenu(button, [
