@@ -18,6 +18,7 @@ import { MAP_CHARTS } from './chart-map.js';
 import { hierarchyCategories, filterHierarchyData, drawHierarchyTreemap, hierarchyLegend } from './chart-hierarchy.js';
 import { chartAreaFormat, chartAreaSvg } from './chart-area-format.js';
 import { categoryTrendPoints } from './chart-trend.js';
+import { EXTRA_CHART_PALETTES, normalizeChartPaletteColor } from './chart-palette-options.js';
 
 export const CHART_TYPES = [
   { id: 'column', label: '세로 막대형' },
@@ -117,14 +118,16 @@ export const CHART_PALETTES = {
   mono11: { label: '단색 팔레트 11', mono: true, get colors() { return monoRev(4); } },
   mono12: { label: '단색 팔레트 12', mono: true, get colors() { return monoRev(5); } },
   mono13: { label: '단색 팔레트 13 (회색)', mono: true, get colors() { return mono(-1); } },
-  modern: { wixel: true, label: 'WIXEL 모던', colors: ['#4F46E5', '#0EA5E9', '#10B981', '#F59E0B', '#F43F5E', '#8B5CF6', '#64748B', '#14B8A6'] },
-  pastel: { wixel: true, label: 'WIXEL 파스텔', colors: ['#818CF8', '#7DD3FC', '#6EE7B7', '#FCD34D', '#FDA4AF', '#C4B5FD', '#CBD5E1', '#5EEAD4'] },
-  slate: { wixel: true, label: 'WIXEL 슬레이트', colors: ['#1E293B', '#475569', '#64748B', '#94A3B8', '#CBD5E1', '#0EA5E9'] },
-  vivid: { wixel: true, label: 'WIXEL 비비드', colors: ['#2563EB', '#DC2626', '#16A34A', '#D97706', '#9333EA', '#0891B2', '#DB2777', '#65A30D'] },
+  modern: { group: 'report', wixel: true, label: 'WIXEL 모던', colors: ['#4F46E5', '#0EA5E9', '#10B981', '#F59E0B', '#F43F5E', '#8B5CF6', '#64748B', '#14B8A6'] },
+  pastel: { group: 'pastel', wixel: true, label: 'WIXEL 파스텔', colors: ['#818CF8', '#7DD3FC', '#6EE7B7', '#FCD34D', '#FDA4AF', '#C4B5FD', '#CBD5E1', '#5EEAD4'] },
+  slate: { group: 'dark', wixel: true, label: 'WIXEL 슬레이트', colors: ['#1E293B', '#475569', '#64748B', '#94A3B8', '#CBD5E1', '#0EA5E9'] },
+  vivid: { group: 'vivid', wixel: true, label: 'WIXEL 비비드', colors: ['#2563EB', '#DC2626', '#16A34A', '#D97706', '#9333EA', '#0891B2', '#DB2777', '#65A30D'] },
+  ...EXTRA_CHART_PALETTES,
 };
 export function paletteOf(ch) {
   if (Array.isArray(ch?.palette)) {
-    const colors = ch.palette.filter(color => typeof color === 'string' && /^#[0-9a-f]{6}$/i.test(color));
+    // 기존 파일의 유효한 색·순서·개수는 유지한다. 사용자 입력 개수 제한은 UI에서만 적용한다.
+    const colors = ch.palette.map(color => typeof color === 'string' && /^#[0-9a-f]{6}$/i.test(color) ? color : normalizeChartPaletteColor(color)).filter(Boolean);
     if (colors.length) return colors;
   }
   return CHART_PALETTES[ch?.palette]?.colors ?? CHART_PALETTES.office.colors;
@@ -257,8 +260,8 @@ export function resolveChart(ch, api) {
   // 선택 시트 게시본은 원본 참조 없이 그 시점의 표시 데이터만 사용합니다.
   if (ch.snapshotData) {
     const data = structuredClone(ch.snapshotData);
-    data.series = data.series.map((s, i) => ({ ...s, ...ch.seriesFmt?.[s._fi ?? i] }));
-    return data;
+    data.series = data.series.map((s, i) => ({ ...s, ...ch.seriesFmt?.[s._fi ?? i], _fi: s._fi ?? i }));
+    return filterChart(data, ch);
   }
   let base;
   if (ch.pivot) {
@@ -273,12 +276,14 @@ export function resolveChart(ch, api) {
   else if (ch.series?.length) {
     const catRef = ch.series.find((s) => s.cat)?.cat;
     const series = ch.series.map((s, i) => {
-      const vals = s.val ? flatRef(api.values(s.val), false) : s.cache ?? [];
+      const valueRows = s.val ? api.values(s.val) : null;
+      const vals = valueRows ? flatRef(valueRows, false) : s.cache ?? [];
+      const indexes = valueRows?.length > 1 ? api.rowIndexes?.(valueRows) : null;
       // 이름이 여러 칸이면 빈 칸(병합 안쪽)을 빼고 공백으로 이어 붙임 (엑셀과 같음)
       const name = s.name?.ref ? flatRef(api.values(s.name.ref), true).map(label).filter((t) => t !== '').join(' ') : s.name?.text ?? `계열${i + 1}`;
       const xs = s.x ? flatRef(api.values(s.x), false) : s.xCache ?? null;
       const size = (s.size ? flatRef(api.values(s.size), false) : s.sizeCache)?.map((v) => (isNum(v) ? v : null)) ?? null;
-      return { name, values: vals.map((v) => (isNum(v) ? v : null)), x: xs ? xs.map((v) => (isNum(v) ? v : null)) : null, ...(size ? { size } : {}) };
+      return { name, ...(indexes ? { _pi: indexes } : {}), values: vals.map((v) => (isNum(v) ? v : null)), x: xs ? xs.map((v) => (isNum(v) ? v : null)) : null, ...(size ? { size } : {}) };
     });
     const n = Math.max(0, ...series.map((s) => s.values.length));
     const catRows = catRef ? (api.texts ? api.texts(catRef) : api.values(catRef)?.map((r) => r.map(label))) : null;
@@ -290,16 +295,35 @@ export function resolveChart(ch, api) {
     base = { categories, series, ...(multi ? { catLevels: multi.levels, ...(multi.paths ? { hierarchyPaths: multi.paths } : {}) } : cachedLevels ? { catLevels: structuredClone(cachedLevels) } : {}) };
   } else {
     const rows = api.range(ch);
-    base = chartData(rows, ch.type === 'combo' ? 'column' : ch.type, !!ch.byRows);
+    const type = ch.type === 'combo' ? 'column' : ch.type;
+    base = chartData(rows, type, !!ch.byRows);
+    const indexes = api.rowIndexes?.(rows);
+    if (indexes) {
+      let points, fields;
+      if (type === 'sunburst' || type === 'treemap') {
+        if (!ch.byRows) { const header = !isNum(rows[0][rows[0].length - 1]); points = indexes.slice(header ? 1 : 0).map(i => i - (header ? 1 : 0)); }
+      } else if (type === 'surface') {
+        const offset = !isNum(rows[0][0]) ? 1 : 0;
+        const ids = indexes.slice(offset).map(i => i - offset);
+        if (ch.byRows) points = ids; else fields = ids;
+      } else {
+        const layout = chartLayout(rows, type, !!ch.byRows);
+        const ids = indexes.slice(layout.firstDataRow).map(i => i - layout.firstDataRow);
+        if (layout.byCols) points = ids; else fields = ids;
+      }
+      base.series = base.series.map((sr, i) => ({ ...sr, ...(points ? { _pi: points } : {}), ...(fields ? { _fi: fields[i] } : {}) }));
+    }
 
   }
   const fmt = ch.seriesFmt ?? [];
   const comboDefault = (i) => chartComboDefaults(ch, i, base.series.length);
   // 계열 형식에 종류가 정해져 있으면 축도 그 형식대로 (axis 가 없으면 기본 축) — 파일의 콤보 차트에서 마지막 계열을 보조 축으로 보내지 않게
   base.series = base.series.map((s, i) => {
-    const out = { ...s, ...(fmt[i]?.type ? { axis: 0 } : comboDefault(i)), ...(fmt[i] ?? {}), _fi: i };
+    const index = s._fi ?? i;
+    const out = { ...s, ...(fmt[index]?.type ? { axis: 0 } : comboDefault(index)), ...(fmt[index] ?? {}), _fi: index };
     out.axis = chartAxis(out.axis); return out;
   });
+  if (base.series[0]?._pi) base._ci = base.series[0]._pi;
   return filterChart(base, ch);
 }
 
@@ -316,9 +340,10 @@ export function filterChart(base, ch) {
   if (hs) series = series.filter((s) => !hs.has(s._fi));
   const out = { ...base, series };
   if (hc) {
-    const keep = (base.categories ?? []).map((_, i) => !hc.has(i));
+    const keep = (base.categories ?? []).map((_, i) => !hc.has(base._ci?.[i] ?? base.series[0]?._pi?.[i] ?? i));
     const pick = (arr) => (Array.isArray(arr) ? arr.filter((_, i) => keep[i] ?? true) : arr);
     out.categories = pick(base.categories);
+    if (base._ci) out._ci = pick(base._ci);
     out.series = series.map((s) => ({ ...s, _pi: pick(s._pi ?? s.values.map((_, i) => i)), values: pick(s.values), x: pick(s.x), ...(s.size ? { size: pick(s.size) } : {}) }));
     if (base.catLevels?.length || base.hierarchyPaths) Object.assign(out, filterHierarchyData(base, keep));
   }
@@ -335,20 +360,32 @@ export function chartPointExplosion(chart, series, index) {
 const manualChartLayout = (layout) => Number.isFinite(layout?.x) && Number.isFinite(layout?.y) ? layout : null;
 
 /** 차트 모델 → 그릴 데이터 (범위 · 계열 참조 · 피벗 차트). hostSi: 차트가 있는 시트 */
-export function chartModelData(wb, hostSi, ch) {
+export function chartModelData(wb, hostSi, ch, options = {}) {
   // 과거 위셀의 피벗 숫자 열 범위 차트도 원본·명시 계열을 바꾸지 않고 범주 참조를 복구한다.
   const inferred = inferPivotCategorySeries(wb, hostSi, ch);
   if (inferred) ch = { ...ch, series: inferred };
   const sheetOf = (name) => { const i = name ? wb.sheetIndexByName(name) : hostSi; return i >= 0 ? i : hostSi; };
-  const read = (s, rg, text = false) => {
-    // 행이 아주 많으면 전체 범위에서 고르게 2,000개를 뽑음 (앞부분만 그리지 않게)
-    const total = rg.r2 - rg.r1 + 1;
-    const step = total > 2000 ? (total - 1) / 1999 : 1;
+  const sampled = options.sample !== false;
+  const rowIndexes = new WeakMap();
+  const exportRange = (s, rg) => {
+    if (sampled || !rg) return rg;
+    const fullRows = rg.r2 === 1048575 || rg.r2 === 19999999, fullCols = rg.c2 === 16383;
+    if (!fullRows && !fullCols) return rg;
+    // 전체 열/행 참조의 빈 꼬리를 순회하지 않는다. 참조 자체는 writer가 그대로 보존한다.
+    const used = wb.usedRange(s); let rows = used.rows, cols = used.cols;
+    for (const sp of wb.spillsOf(s)) { rows = Math.max(rows, sp.r + sp.h); cols = Math.max(cols, sp.c + sp.w); }
+    return { ...rg, r2: fullRows ? Math.min(rg.r2, Math.max(rg.r1, rows - 1)) : rg.r2, c2: fullCols ? Math.min(rg.c2, Math.max(rg.c1, cols - 1)) : rg.c2 };
+  };
+  const read = (s, inputRange, text = false) => {
+    const rg = exportRange(s, inputRange);
+    // 화면은 전체 범위의 2,000개 표본, XLSX 저장은 원래 순서의 모든 데이터.
+    const total = rg.r2 - rg.r1 + 1, count = sampled ? Math.min(total, 2000) : total;
+    const step = sampled && total > 2000 ? (total - 1) / 1999 : 1;
     const rows = [];
-    for (let k = 0; k < Math.min(total, 2000); k++) {
+    for (let k = 0; k < count; k++) {
       const r = rg.r1 + Math.round(k * step);
       const row = [];
-      for (let c = rg.c1; c <= Math.min(rg.c2, rg.c1 + 100); c++) {
+      for (let c = rg.c1; c <= (sampled ? Math.min(rg.c2, rg.c1 + 100) : rg.c2); c++) {
         const v = wb.getValue(s, r, c);
         if (!text || text === 'category' && c !== rg.c1) { row.push(v); continue; }
         // 새 차트의 첫 날짜 열은 항목이며, 다른 숫자 값과 분산/거품 X 값은 원래 숫자입니다.
@@ -358,6 +395,7 @@ export function chartModelData(wb, hostSi, ch) {
       }
       rows.push(row);
     }
+    if (step !== 1) rowIndexes.set(rows, Array.from({ length: count }, (_, k) => Math.round(k * step)));
     return rows;
   };
   // 정의된 이름 참조 (OFFSET 등으로 바뀌는 범위): 그릴 때마다 이름을 계산
@@ -367,8 +405,17 @@ export function chartModelData(wb, hostSi, ch) {
     if (!v || v.r1 === undefined) return null;
     return { sheet: v.sheet ?? ref.sheet ?? null, r1: v.r1, c1: v.c1, r2: v.r2, c2: v.c2 };
   };
+  if (!sampled && options.onRange && ch.snapshotData && ch.range && !ch.series?.length && !ch.pivot) {
+    options.onRange(read(sheetOf(ch.sheet), ch.range, ch.range.c2 > ch.range.c1 && !['scatter', 'bubble'].includes(ch.type) ? 'category' : false));
+  }
   const data = resolveChart(ch, {
-    range: (c) => (c.range ? read(sheetOf(c.sheet), c.range, c.range.c2 > c.range.c1 && !['scatter', 'bubble'].includes(c.type) ? 'category' : false) : []),
+    rowIndexes: rows => rowIndexes.get(rows),
+    range: (c) => {
+      if (!c.range) return [];
+      const rows = read(sheetOf(c.sheet), c.range, c.range.c2 > c.range.c1 && !['scatter', 'bubble'].includes(c.type) ? 'category' : false);
+      options.onRange?.(rows);
+      return rows;
+    },
     values: (ref) => {
       if (ref.name) { const rg = nameRange(ref); return rg ? read(sheetOf(rg.sheet), rg) : []; }
       return read(sheetOf(ref.sheet ?? ch.sheet), ref);
@@ -585,8 +632,8 @@ export function renderChartSvg(chart, data) {
   const legendPos = chart.legend ?? (special?.legend === false ? 'none' : 'b');
   const legendItems = special?.legendItems ? special.legendItems(data, chart, pal) : baseType === 'treemap' && data.catLevels?.length ? Array.from(new Set(data.catLevels.at(-1).map((g) => g.text))).map((name, i) => ({ name, color: pal[i % pal.length], line: false }))
     : pieLike || baseType === 'treemap' || baseType === 'pieOfPie' || baseType === 'barOfPie' ? categories.map((c, i) => ({ name: c, color: pieColor(series[0], i), line: false }))
-    : baseType === 'waterfall' ? [{ name: '증가', color: chart.upColor ?? pal[0] }, { name: '감소', color: chart.downColor ?? pal[1] }, { name: '합계', color: chart.totalColor ?? pal[2] }]
-      : baseType === 'pareto' ? [{ name: series[0]?.name ?? '', color: series[0]?.color }, { name: '누적 %', color: pal[1], line: true }]
+    : baseType === 'waterfall' ? [{ name: '증가', color: chart.upColor ?? pal[0] }, { name: '감소', color: chart.downColor ?? pal[1 % pal.length] }, { name: '합계', color: chart.totalColor ?? pal[2 % pal.length] }]
+      : baseType === 'pareto' ? [{ name: series[0]?.name ?? '', color: series[0]?.color }, { name: '누적 %', color: pal[1 % pal.length], line: true }]
         : series.map((s) => ({ name: s.name, color: s.color, line: s.type === 'line' || s.type === 'radar' }));
   const showLegend = legendPos !== 'none' && legendItems.length > 0;
   const legendLayout = showLegend ? manualChartLayout(chart.legendLayout) : null;
@@ -715,15 +762,15 @@ export function renderChartSvg(chart, data) {
       const oy = ex ? Math.sin(mid0) * r * ex * projection.squash : 0;
       if (!threePie && ex) parts.push(`<g transform="translate(${ox.toFixed(2)},${oy.toFixed(2)})">`);
       if (!threePie && frac >= 0.9999) {
-        if (inner) parts.push(`<path d="M${cx + r},${cy}A${r},${r} 0 1 1 ${cx - r},${cy}A${r},${r} 0 1 1 ${cx + r},${cy}ZM${cx + inner},${cy}A${inner},${inner} 0 1 1 ${cx - inner},${cy}A${inner},${inner} 0 1 1 ${cx + inner},${cy}Z" fill="${color}" fill-rule="evenodd" stroke="${chart.fill ?? '#fff'}"${pieTag(i, mid0)}/>`);
-        else parts.push(`<circle cx="${cx}" cy="${cy}" r="${r}" fill="${color}" stroke="#fff"${pieTag(i, mid0)}/>`);
+        if (inner) parts.push(`<path d="M${cx + r},${cy}A${r},${r} 0 1 1 ${cx - r},${cy}A${r},${r} 0 1 1 ${cx + r},${cy}ZM${cx + inner},${cy}A${inner},${inner} 0 1 1 ${cx - inner},${cy}A${inner},${inner} 0 1 1 ${cx + inner},${cy}Z" fill="${color}" fill-rule="evenodd" stroke="${s0.outline ?? chart.fill ?? '#fff'}"${pieTag(i, mid0)}/>`);
+        else parts.push(`<circle cx="${cx}" cy="${cy}" r="${r}" fill="${color}" stroke="${s0.outline ?? '#fff'}"${pieTag(i, mid0)}/>`);
       } else if (!threePie) {
         const large = a2 - a > Math.PI ? 1 : 0;
         const p = (ang, rad) => `${(cx + Math.cos(ang) * rad).toFixed(2)},${(cy + Math.sin(ang) * rad).toFixed(2)}`;
         const d = inner
           ? `M${p(a, r)}A${r},${r} 0 ${large} 1 ${p(a2, r)}L${p(a2, inner)}A${inner},${inner} 0 ${large} 0 ${p(a, inner)}Z`
           : `M${cx},${cy}L${p(a, r)}A${r},${r} 0 ${large} 1 ${p(a2, r)}Z`;
-        parts.push(`<path d="${d}" fill="${color}" stroke="${chart.fill ?? '#fff'}" stroke-width="1.5"${pieTag(i, mid0)}/>`);
+        parts.push(`<path d="${d}" fill="${color}" stroke="${s0.outline ?? chart.fill ?? '#fff'}" stroke-width="1.5"${pieTag(i, mid0)}/>`);
       }
       if (!threePie && ex) parts.push('</g>');
       // 레이블: false = 없음(파일에 없던 원형), pct = 백분율, labels = 값, 정하지 않음 = 백분율
@@ -1275,7 +1322,7 @@ export const SPECIAL = {
       const bars = waterfallBars(s.values, categories, chart);
       const { area, pos, band, mid, base, clip } = cartesian(ctx, bars.flatMap((b) => [b.a, b.b]), { cats: categories, code: s.numFmt });
       const w = specialBarWidth(band, chart, 61), direction = chart.axes?.x?.reverse ? -1 : 1;
-      const col = { up: chart.upColor ?? pal[0], down: chart.downColor ?? pal[1], total: chart.totalColor ?? pal[2] };
+      const col = { up: chart.upColor ?? pal[0], down: chart.downColor ?? pal[1 % pal.length], total: chart.totalColor ?? pal[2 % pal.length] };
       parts.push(`<g data-plot="waterfall"${clip}>`);
       bars.forEach((b, i) => {
         const x = mid(i) - w / 2, y1 = pos(b.a), y2 = pos(b.b);
@@ -1347,8 +1394,8 @@ export const SPECIAL = {
         parts.push(`<rect x="${x.toFixed(1)}" y="${Math.min(y, base).toFixed(1)}" width="${w.toFixed(1)}" height="${Math.abs(base - y).toFixed(1)}" fill="${s.pointColors?.[p.i] ?? s.color}" data-s="${s._fi}" data-p="${p.i}" data-value="${p.v}"/>`);
         acc += Math.max(0, p.v); pts.push([mid(i), pos2(acc / total)]);
       });
-      parts.push(`<path data-pareto="cumulative" d="${pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join('')}" fill="none" stroke="${pal[1]}" stroke-width="2.25"/>`);
-      for (const p of pts) parts.push(`<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="2.5" fill="${pal[1]}"/>`);
+      parts.push(`<path data-pareto="cumulative" d="${pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join('')}" fill="none" stroke="${pal[1 % pal.length]}" stroke-width="2.25"/>`);
+      for (const p of pts) parts.push(`<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="2.5" fill="${pal[1 % pal.length]}"/>`);
       parts.push('</g>');
       if (ctx.wantLabels(s)) items.forEach((p, i) => labelTxt(ctx, s, p.v, mid(i), Math.max(area.y + 12, Math.min(pos(p.v), base) - 4)));
     },
@@ -1431,8 +1478,14 @@ export const SPECIAL = {
       const filled = chart.radarStyle === 'filled';
       series.forEach((s) => {
         const pts = s.values.map((v, i) => at(i, isNum(v) ? v : sc.min));
-        parts.push(`<path d="${pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join('')}Z" fill="${filled ? s.color : 'none'}" fill-opacity="${filled ? 0.55 : 0}" stroke="${s.color}" stroke-width="2" data-s="${s._fi}"/>`);
-        if (chart.radarStyle === 'marker') pts.forEach((p, i) => { if (isNum(s.values[i])) parts.push(`<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${s.markerSize ? s.markerSize * 2 / 3 : 3}" fill="${pointColor(s, i) ?? s.markerColor ?? s.color}" data-s="${s._fi}" data-p="${chartPointIndex(s, i)}"/>`); });
+        parts.push(`<path d="${pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join('')}Z" fill="${filled ? s.color : 'none'}" fill-opacity="${filled ? 0.55 : 0}" stroke="${s.color}" stroke-width="${s.lineWidth ?? 2}"${dashAttr(s.dash, s.lineWidth ?? 2)} data-s="${s._fi}"/>`);
+        const marker = s.marker ?? chart.marker;
+        const showMarker = marker === undefined ? chart.radarStyle === 'marker' : marker !== false && marker !== 'none';
+        if (showMarker) pts.forEach((p, i) => {
+          if (!isNum(s.values[i])) return;
+          const markup = (MARKERS[marker] ?? MARKERS.circle)(Number(p[0].toFixed(1)), Number(p[1].toFixed(1)), s.markerSize ? s.markerSize * 2 / 3 : 3, pointColor(s, i) ?? s.markerColor ?? s.color);
+          parts.push(markup.replace(/^<(\w+)/, `<$1 data-s="${s._fi}" data-p="${chartPointIndex(s, i)}"`));
+        });
         if (ctx.wantLabels(s)) s.values.forEach((v, i) => { if (isNum(v)) { const p = at(i, v); labelTxt(ctx, s, v, p[0], p[1] - 6); } });
       });
     },

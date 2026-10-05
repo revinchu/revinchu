@@ -5,7 +5,7 @@ import { chartSeriesPatch, chartPointColorPatch, chartExplosionPatch, chartPalet
 import { chartAreaFormat } from './chart-area-format.js';
 import { createChartAreaFormatPanel } from './chart-area-format-ui.js';
 
-export function createChartSelectionPanel({ getChart, getPart, getData, onChange, onChoose, onDelete, onAllOptions }) {
+export function createChartSelectionPanel({ getChart, getPart, getData, onChange, onChoose, onDelete, onAllOptions, onCustomPalette }) {
   const body = el('div', { class: 'cfp chart-selection-pane' });
   const row = (name, input) => { input.setAttribute('aria-label', name); return el('label', { class: 'cfp-row' }, el('span', {}, name), input); };
   const section = (name, ...rows) => el('details', { class: 'cfp-sec', open: true }, el('summary', {}, name), ...rows);
@@ -106,7 +106,7 @@ export function createChartSelectionPanel({ getChart, getPart, getData, onChange
         }
         if (line) {
           settings.push(row('선 종류', choose(fmt.dash ?? '', [['', '실선'], ['dash', '파선'], ['dot', '점선'], ['dashDot', '일점쇄선']], v => setSeries({ dash: v || undefined }))));
-          settings.push(row('표식 모양', choose(fmt.marker ?? chart.marker ?? (type === 'scatter' && /^(marker|.*Marker)$/.test(chart.scatterStyle ?? 'marker') ? 'circle' : 'none'), [['none', '없음'], ['circle', '원'], ['square', '사각형'], ['diamond', '마름모'], ['triangle', '삼각형']], v => setSeries({ marker: v }))));
+          settings.push(row('표식 모양', choose(fmt.marker ?? chart.marker ?? (type === 'line' || type === 'scatter' && /^(marker|.*Marker)$/.test(chart.scatterStyle ?? 'marker') || type === 'radar' && chart.radarStyle === 'marker' ? 'circle' : 'none'), [['none', '없음'], ['circle', '원'], ['square', '사각형'], ['diamond', '마름모'], ['triangle', '삼각형']], v => setSeries({ marker: v }))));
           settings.push(row('표식 크기', num(fmt.markerSize ?? 6, v => setSeries({ markerSize: v }), 2, 30)));
           if (['line', 'scatter'].includes(type)) settings.push(row('부드러운 선', check(fmt.smooth ?? (type === 'scatter' && /smooth/i.test(chart.scatterStyle ?? '')), v => setSeries({ smooth: v }))));
         }
@@ -145,6 +145,7 @@ export function createChartSelectionPanel({ getChart, getPart, getData, onChange
       extra.push(createChartAreaFormatPanel({kind:'plot',getFormat:()=>chartAreaFormat(getChart(),'plot'),getIdentity:()=>`${getChart()?.id}:${getPart()?.kind}`,initialTab:areaTabs.get('plot'),onTab:tab=>areaTabs.set('plot',tab),onChange:value=>up({plotAreaFormat:value??undefined,...(value?{}:{plotFill:undefined})})}).body);
     } else {
       rows.push(row('색 구성', choose(Array.isArray(chart.palette) ? 'imported' : chart.palette ?? 'office', [...(Array.isArray(chart.palette) ? [['imported', '가져온 색']] : []), ...Object.entries(CHART_PALETTES).map(([k, p]) => [k, p.label])], v => { if (v !== 'imported') up(chartPalettePatch(getChart(), v)); })));
+      if (onCustomPalette) rows.push(el('button', { type: 'button', class: 'btn small', onclick: onCustomPalette }, '사용자 지정 색 구성…'));
       extra.push(createChartAreaFormatPanel({kind:'chart',getFormat:()=>chartAreaFormat(getChart()),getIdentity:()=>`${getChart()?.id}:${getPart()?.kind}`,initialTab:areaTabs.get('chart'),onTab:tab=>areaTabs.set('chart',tab),onChange:value=>up({chartAreaFormat:value??undefined,...(value?{}:{fill:undefined,border:undefined})})}).body);
     }
     body.replaceChildren(row('서식을 지정할 차트 요소', picker), el('p', { class: 'cfp-selection-name', role: 'status' }, title), ...(rows.length ? [section('선택한 요소', ...rows)] : []), ...extra, el('button', { class: 'btn', onclick: onAllOptions }, '차트 전체 옵션…'));

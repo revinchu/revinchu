@@ -312,7 +312,8 @@ export function toast(msg) {
 
 // ───────────── 메뉴 ─────────────
 let openMenus = [];
-let onMenuClose = null;
+let onMenuClose = null, onPopupOpen = null;
+export function setPopupOpenHandler(fn) { onPopupOpen = fn; }
 
 export function setMenuCloseHandler(fn) { onMenuClose = fn; }
 export const isMenuOpen = () => openMenus.length > 0;
@@ -340,6 +341,7 @@ export function openMenu(anchor, items, { minWidth, scroll, toolbar, focus = tru
     suppress = null;
     return document.createElement('div'); // 호출한 쪽이 style 등을 만져도 안전하게
   }
+  onPopupOpen?.();
   const anchorRect = anchor instanceof Element ? anchor.getBoundingClientRect() : null;
   closeMenus();
   menuAnchor = anchor instanceof Element ? anchor : null;
@@ -652,6 +654,7 @@ window.addEventListener('keydown', (event) => {
  * 반환: { close, root, focus }
  */
 export function openDialog({ title, body, buttons = [], onOpen, width, modeless = false, onClose, initialFocus, defaultAction }) {
+  onPopupOpen?.();
   clearTimeout(toastTimer);
   document.getElementById('toast')?.classList.remove('show');
   const layer = document.getElementById('dialogLayer');

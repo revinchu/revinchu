@@ -69,7 +69,7 @@ import { safeUrl, setSafeHtml } from './safe-html.js';
 import { resolveWorkbookLink } from './hyperlink.js';
 import {
   el, hydrateIcons, toast, openMenu, openSubmenu, closeSubmenus, closeMenus, isMenuOpen, openDialog, alertDialog,
-  formDialog, setMenuCloseHandler, setDialogCloseHandler, setAccessKeyHandler, registerAccessKeyScope, trackPopupPosition, isDialogOpen,
+  formDialog, setMenuCloseHandler, setPopupOpenHandler, setDialogCloseHandler, setAccessKeyHandler, registerAccessKeyScope, trackPopupPosition, isDialogOpen,
 } from './ui.js';
 import { FUNC_INFO, CATEGORIES } from './funcinfo.js';
 import { makeSeries, CUSTOM_LISTS } from './series.js';
@@ -78,6 +78,7 @@ import { parseDelimited, toDelimited, toDelimitedChunks, guessDelimiter, CsvBloc
 import { SAMPLES } from './samples.js';
 import { TEMPLATES, TEMPLATE_CATS } from './templates.js';
 import { createChartSelectionPanel } from './chart-selection-ui.js';
+import { createChartPalettePicker, createChartPaletteEditor } from './chart-palette-ui.js';
 import { chartPalettePatch, chartStylePatch, chartSeriesColorPatch, chartPointColorPatch, chartSeriesPatch, chartExplosionPatch, chartPartDeletePatch, chartLayoutAfterDrag, chartExplosionAfterDrag } from './chart-edit.js';
 import { chartView3D } from './chart-3d.js';
 import { GridView, BASE_FONT, setBaseFont, measureText, fontStack, PATTERNS, patternCss, gradientCss, glyphShift, clearGlyphShifts, timelinePeriods, shapeTextHtml, fitShapeText } from './view.js';
@@ -121,6 +122,8 @@ import { normOutline, outlineEmpty, changeLevels, groupsOf, groupAt, toggleGroup
 import { hid, hidCount } from './axis.js';
 import { currentDataRegion } from './data-region.js';
 import { expandedFilterEnd } from './filter-range.js';
+import { sortScope, refreshSortedFilters } from './sort-filter-state.js';
+import { pivotSortPatch } from './pivot-sort-state.js';
 import { contextMenuKind, contextContains, selectionAxisRanges, selectionAxisTargets } from './context-selection.js';
 import { rowPointsToPixels, rowPixelsToPoints, columnCharsToPixels, pixelsToColumnChars, MAX_ROW_POINTS, MAX_COLUMN_CHARS } from './dimension.js';
 import { createContextMiniToolbar } from './context-mini-toolbar.js';
@@ -368,8 +371,7 @@ function smartSelectAll() {
 /** F11: 현재 데이터로 새 시트에 기본 차트 (엑셀의 차트 시트처럼 화면을 채우는 차트) */
 function chartSheet() {
   const rg = dataRange();
-  let hasNum = false;
-  for (const [r, c] of cellsIn({ ...rg, r2: Math.min(rg.r2, rg.r1 + 2000) })) if (typeof valueAt(r, c) === 'number') { hasNum = true; break; }
+  const hasNum = chartRangeHasNumbers(rg, 'column');
   if (!hasNum) { alertDialog('차트', '차트를 만들려면 숫자가 들어 있는 데이터 범위를 선택하세요.'); return; }
   const src = sheet().name;
   const w = Math.max(640, Math.round(gv.viewW - 60));
@@ -377,7 +379,7 @@ function chartSheet() {
   let at;
   wb.transact(() => {
     at = wb.addSheet(`Chart${wb.sheets.filter((x) => /^Chart\d+$/.test(x.name)).length + 1}`, si + 1);
-    const chart = { id: `ch${Date.now().toString(36)}`, type: 'column', title: '차트 제목', sheet: src, range: { r1: rg.r1, c1: rg.c1, r2: Math.min(rg.r2, rg.r1 + 2000), c2: rg.c2 }, x: 20, y: 20, w, h, z: 1 };
+    const chart = { id: `ch${Date.now().toString(36)}`, type: 'column', title: '차트 제목', sheet: src, range: { r1: rg.r1, c1: rg.c1, r2: rg.r2, c2: rg.c2 }, x: 20, y: 20, w, h, z: 1 };
     wb.setSheetProp(at, 'charts', [chart]);
     wb.setSheetProp(at, 'noGrid', true);
   }, meta());
@@ -1943,9 +1945,18 @@ let lastMouse = { x: 0, y: 0 };
 let lastAlt = false; // 개체를 끌 때 Alt: 눈금에 맞춤 전환
 let lastCtrl = false;
 let lastShift = false;
+// A menu/dialog owns pointer movement; an interrupted selection must not follow it.
+function cancelCellGesture() {
+  if (!['select', 'rowSel', 'colSel', 'point', 'fill', 'move'].includes(drag?.type)) return;
+  drag = null;
+  stopAutoScroll();
+  fillPreview = null;
+  gv.renderOverlays();
+}
 function startAutoScroll() {
   stopAutoScroll();
   autoScrollTimer = setInterval(() => {
+    if (isMenuOpen() || isDialogOpen()) { cancelCellGesture(); return stopAutoScroll(); }
     if (!drag || drag.type === 'colResize' || drag.type === 'rowResize' || drag.type === 'obj' || drag.type === 'draw') return stopAutoScroll();
     const hit = gv.hitTest(lastMouse.x, lastMouse.y, true);
     let { dx, dy } = hit;
@@ -5345,7 +5356,7 @@ function hasHeader(rg) {
 function sortData(ascending, keyCol = active.c, header = null, rgIn = null, fkeyIn = null) {
   const tbl = rgIn ? null : tableHere();
   let fkey = fkeyIn ?? (tbl ? (tbl.filter && tbl.header ? tbl.id : null) : sheet().filter ? '' : null);
-  const f = fkey === null ? null : getFilter(fkey);
+  const f = fkey === null ? null : sortFilterRange(fkey, getFilter(fkey));
   if (!canRecomputeFilter(f)) return;
   let rg = rgIn;
   if (!rg && tbl && selIsActiveOnly()) {
@@ -5357,6 +5368,7 @@ function sortData(ascending, keyCol = active.c, header = null, rgIn = null, fkey
     header = true;
   }
   rg ??= dataRange();
+  if (!rgIn) { const scope = sortScope({ range: rg, activeOnly: selIsActiveOnly(), active, table: tbl, filter: f, header: header ?? hasHeader(rg) }); rg = scope.range; header = scope.header; }
   if (rg.r2 <= rg.r1 && isSingle(rg)) return;
   const h = header ?? hasHeader(rg);
   const key = clamp(keyCol, rg.c1, rg.c2);
@@ -5364,9 +5376,11 @@ function sortData(ascending, keyCol = active.c, header = null, rgIn = null, fkey
     alertDialog('WIXEL', '병합된 셀이 있으면 정렬할 수 없습니다.');
     return;
   }
+  const moved = { ...rg, r1: rg.r1 + (h ? 1 : 0) }, filters = allFilters().map(([key, f]) => [key, sortFilterRange(key, f)]);
+  if (!canSortFilteredRange(moved, filters)) return;
   wb.transact(() => {
-    wb.sortRange(si, rg.r1 + (h ? 1 : 0), rg.c1, rg.r2, rg.c2, key, ascending);
-    if (f && rg.r1 === f.r1 && rg.c1 === f.c1) putFilter(fkey, recomputeFilter({ ...f, sort: { col: key, asc: ascending } }, fkey));
+    wb.sortRange(si, moved.r1, moved.c1, moved.r2, moved.c2, key, ascending);
+    for (const [fk, nf] of refreshSortedFilters({ range: moved, filters, keys: [{ at: key, asc: ascending }], recompute: recomputeFilter })) putFilter(fk, nf);
   }, meta());
   if (!rgIn) selectRange({ r1: rg.r1, c1: rg.c1, r2: rg.r2, c2: rg.c2 }, 'cells', { r: active.r, c: active.c });
 }
@@ -5518,13 +5532,13 @@ function opTest(op, v, text, arg) {
   }
 }
 /** 조건 객체(색 · 정규식 · 사용자 지정 · 상위 N · 평균) → 행 판정 함수 */
-function critPredicate(c, cr, r1, r2) {
-  if (cr.type === 'fill') return (r) => (styleAt(r, c)?.fill ?? '') === (cr.value ?? '');
-  if (cr.type === 'font') return (r) => (styleAt(r, c)?.color ?? '') === (cr.value ?? '');
+function critPredicate(c, cr, r1, r2, host = si) {
+  if (cr.type === 'fill') return (r) => (wb.styleAt(host, r, c)?.fill ?? '') === (cr.value ?? '');
+  if (cr.type === 'font') return (r) => (wb.styleAt(host, r, c)?.color ?? '') === (cr.value ?? '');
   if (cr.type === 'custom') {
     return (r) => {
-      const v = valueAt(r, c);
-      const t = displayText(r, c);
+      const v = wb.getValue(host, r, c);
+      const t = displayText(r, c, host);
       const a = opTest(cr.op1, v, t, cr.v1);
       if (!cr.op2 || cr.v2 === undefined || cr.v2 === '') return a;
       const b = opTest(cr.op2, v, t, cr.v2);
@@ -5533,16 +5547,16 @@ function critPredicate(c, cr, r1, r2) {
   }
   if (cr.type === 'top' || cr.type === 'avg') {
     const nums = [];
-    for (let r = r1; r <= r2; r++) { const v = valueAt(r, c); if (typeof v === 'number') nums.push(v); }
+    for (let r = r1; r <= r2; r++) { const v = wb.getValue(host, r, c); if (typeof v === 'number') nums.push(v); }
     if (!nums.length) return () => true;
     if (cr.type === 'avg') {
       const avg = nums.reduce((x, y) => x + y, 0) / nums.length;
-      return (r) => { const v = valueAt(r, c); return typeof v === 'number' && (cr.above ? v > avg : v < avg); };
+      return (r) => { const v = wb.getValue(host, r, c); return typeof v === 'number' && (cr.above ? v > avg : v < avg); };
     }
     nums.sort((x, y) => (cr.bottom ? x - y : y - x));
     const k = Math.max(1, Math.min(nums.length, cr.percent ? Math.ceil((nums.length * cr.n) / 100) : cr.n));
     const th = nums[k - 1];
-    return (r) => { const v = valueAt(r, c); return typeof v === 'number' && (cr.bottom ? v <= th : v >= th); };
+    return (r) => { const v = wb.getValue(host, r, c); return typeof v === 'number' && (cr.bottom ? v <= th : v >= th); };
   }
   return () => true;
 }
@@ -5775,11 +5789,13 @@ function topFilterDialog(c, key) {
 }
 
 // ───────────────────────── 차트 ─────────────────────────
+function chartRangeHasNumbers(range, type) {
+  return chartModelData(wb, si, { type, range }).series.some(s => s.values.some(v => typeof v === 'number' && Number.isFinite(v)));
+}
+
 function insertChart(type, patch = null) {
-  let rg = dataRange();
-  if (rg.r2 - rg.r1 > 2000) rg = { ...rg, r2: rg.r1 + 2000 };
-  let hasNum = false;
-  for (const [r, c] of cellsIn(rg)) if (typeof valueAt(r, c) === 'number') { hasNum = true; break; }
+  const rg = dataRange();
+  const hasNum = chartRangeHasNumbers(rg, type);
   if (!hasNum) { alertDialog('차트 삽입', '차트를 만들려면 숫자가 들어 있는 데이터 범위를 선택하세요.'); return; }
   const box = gv.sheetRect(rg);
   const vis = gv.screenRect(rg);
@@ -5888,7 +5904,6 @@ function insertChartAllDialog(changeId = null, initialType = null) {
   let rg = null;
   if (!base) {
     rg = dataRange();
-    if (rg.r2 - rg.r1 > 2000) rg = { ...rg, r2: rg.r1 + 2000 };
   }
   const dataFor = (d) => chartModelData(wb, si, d);
   const source = base ?? { type: 'column', range: rg, title: '차트 제목' };
@@ -6389,15 +6404,29 @@ function chartLayoutsMenu(a) {
 
 /** 색 변경 (엑셀: 색상형 · 단색형 견본 줄) */
 function paletteRows(ch, onPick) {
-  const row = (k, p) => el('button', {
-    class: `pal-row${(ch.palette ?? 'office') === k ? ' on' : ''}`, title: p.label,
-    onmousedown: (e) => e.preventDefault(), onclick: () => { closeMenus(); onPick(k); },
-  }, p.colors.slice(0, 6).map((c) => el('i', { style: { background: c } })));
-  const all = Object.entries(CHART_PALETTES);
-  return el('div', { class: 'pal-list' },
-    el('div', { class: 'menu-title' }, '색상형'), all.filter(([, p]) => !p.mono && !p.wixel).map(([k, p]) => row(k, p)),
-    el('div', { class: 'menu-title' }, '단색형'), all.filter(([, p]) => p.mono).map(([k, p]) => row(k, p)),
-    el('div', { class: 'menu-title' }, 'WIXEL'), all.filter(([, p]) => p.wixel).map(([k, p]) => row(k, p)));
+  const book = wb, host = sheet();
+  const valid = () => wb === book && sheet() === host && host.charts.some(c => c.id === ch.id);
+  return createChartPalettePicker({ chart: ch, palettes: CHART_PALETTES,
+    onPick: key => { closeMenus(); if (valid()) onPick(key); },
+    onCustom: () => { closeMenus(); if (valid()) chartPaletteDialog(ch.id); } });
+}
+function chartPaletteDialog(id = chartSel) {
+  const book = wb, host = sheet(), original = host.charts.find(c => c.id === id);
+  if (!original || !chartCanEdit(original)) return;
+  const get = () => wb === book && sheet() === host ? host.charts.find(c => c.id === id) : null;
+  const data = chartModelData(book, si, original);
+  const editor = createChartPaletteEditor({ colors: paletteOf(original), renderPreview: colors => {
+    const painted = chartPalettePatch({ snapshotData: data }, colors).snapshotData;
+    return renderChartSvg({ ...original, ...chartPalettePatch(original, colors), w: 470, h: 245 }, painted);
+  } });
+  openDialog({ title: '사용자 지정 차트 색', width: 820, body: editor.body,
+    buttons: [{ label: '적용', primary: true, action: () => {
+      const chart = get();
+      if (!chart) { toast('대상 차트가 변경되었습니다. 차트를 다시 선택하세요.'); return false; }
+      if (!chartCanEdit(chart)) return false;
+      const colors = editor.getColors(); if (!colors) return false;
+      updateChart(id, chartPalettePatch(chart, colors)); gv.renderObjectsAll(); return true;
+    } }, { label: '취소' }] });
 }
 const setChartPalette = (ch, k) => { const current = sheet().charts.find(c => c.id === ch.id); if (!current) return; updateChart(ch.id, chartPalettePatch(current, k)); gv.renderObjectsAll(); };
 const setChartStyle = (ch, preset) => { const current = sheet().charts.find(c => c.id === ch.id); if (!current) return; updateChart(ch.id, chartStylePatch(current, preset, CHART_STYLES.findIndex(x => x[1] === preset))); gv.renderObjectsAll(); };
@@ -6528,21 +6557,21 @@ function chartSideButton(kind, anchorEl) {
   const hs = new Set(ch.hiddenSeries ?? []);
   const hc = new Set(ch.hiddenCats ?? []);
   const box = (label, on, fn) => { const i = el('input', { type: 'checkbox', checked: on }); i.addEventListener('change', () => fn(i.checked)); return el('label', { class: 'cf-item' }, i, el('span', {}, label)); };
-  const group = (title, items, set) => {
-    const all = box('(모두 선택)', items.every((_, k) => !set.has(k)), (v) => { items.forEach((_, k) => (v ? set.delete(k) : set.add(k))); list.querySelectorAll('input').forEach((x) => { x.checked = v; }); });
-    const list = el('div', { class: 'cf-list' }, items.map((n, k) => box(String(n ?? ''), !set.has(k), (v) => { if (v) set.delete(k); else set.add(k); })));
+  const group = (title, items, set, ids = items.map((_, i) => i)) => {
+    const all = box('(모두 선택)', ids.every(k => !set.has(k)), (v) => { ids.forEach(k => (v ? set.delete(k) : set.add(k))); list.querySelectorAll('input').forEach((x) => { x.checked = v; }); });
+    const list = el('div', { class: 'cf-list' }, items.map((n, k) => box(String(n ?? ''), !set.has(ids[k]), (v) => { if (v) set.delete(ids[k]); else set.add(ids[k]); })));
     return el('div', {}, el('div', { class: 'menu-title' }, title), all, list);
   };
   const pie = PIE_TYPES.has(ch.type);
   const body = el('div', { class: 'cs-pop cf-pop' },
     el('div', { class: 'cs-tabs' }, el('span', { class: 'dlg-tab on' }, '값')),
-    group('계열', data.series.map((s) => s.name), hs),
-    data.categories?.length ? group('범주', data.categories, hc) : null,
+    group('계열', data.series.map((s) => s.name), hs, data.series.map((s, i) => s._fi ?? i)),
+    data.categories?.length ? group('범주', data.categories, hc, data._ci ?? data.categories.map((_, i) => i)) : null,
     el('div', { class: 'cf-btns' },
       el('button', {
         class: 'btn primary', onclick: () => {
           closeMenus();
-          if (hs.size >= data.series.length && data.series.length) { toast('계열을 하나 이상 선택하세요.'); return; }
+          if (data.series.length && data.series.every((s, i) => hs.has(s._fi ?? i))) { toast('계열을 하나 이상 선택하세요.'); return; }
           updateChart(ch.id, { hiddenSeries: hs.size ? [...hs].sort((a, b) => a - b) : undefined, hiddenCats: hc.size ? [...hc].sort((a, b) => a - b) : undefined });
           gv.renderObjectsAll();
         },
@@ -6687,7 +6716,8 @@ function selectDataDialog(id = chartSel) {
       cb.addEventListener('change', () => { x.hidden = !cb.checked; const at = i; draw(); serList.children[at]?.querySelector('input')?.focus({ preventScroll: true }); });
       return el('div', { class: `sd-item${st.pick === i ? ' on' : ''}`, onclick: (e) => { if (e.target !== cb) { st.pick = i; draw(); serList.children[i]?.querySelector('button')?.focus({ preventScroll: true }); } }, ondblclick: () => edit() }, cb, el('button', { type: 'button', class: 'sd-series-name', 'data-access-key': 'none', 'aria-pressed': String(st.pick === i), title: name }, name));
     }));
-    catList.replaceChildren(...cats.map((c, k) => {
+    catList.replaceChildren(...cats.map((c, visible) => {
+      const k = d._ci?.[visible] ?? visible;
       const cb = el('input', { type: 'checkbox', checked: !st.hc.has(k), 'data-access-key': 'none' });
       cb.addEventListener('change', () => { if (cb.checked) st.hc.delete(k); else st.hc.add(k); draw(); });
       return el('label', { class: 'sd-item' }, cb, el('span', {}, String(c)));
@@ -6929,7 +6959,7 @@ function chartSelectedFormatPane(id) {
   const panel = createChartSelectionPanel({ getChart: get, getPart: () => chartPart?.id === id ? chartPart : null,
     getData: () => chartModelData(book, host, { ...get(), hiddenSeries: undefined, hiddenCats: undefined }), onChange: up,
     onChoose: part => { chartPart = part.kind === 'chart' ? null : { id, ...part }; chartSel = id; gv.renderObjectsAll(); panel.refresh(); heading(); },
-    onDelete: deleteChartPart, onAllOptions: () => { chartPart = null; gv.renderObjectsAll(); chartFormatPane(id); },
+    onDelete: deleteChartPart, onCustomPalette: () => chartPaletteDialog(id), onAllOptions: () => { chartPart = null; gv.renderObjectsAll(); chartFormatPane(id); },
   });
   const heading = () => { const title = panel.body.querySelector('.cfp-selection-name')?.textContent; if (title && chartPaneDlg?.chartId === id) chartPaneDlg.root.querySelector('.dialog-title').textContent = title; };
   const refresh = () => { if (!ownChange) queueMicrotask(() => { if (panel.body.isConnected) { panel.refresh(); heading(); } }); };
@@ -6994,7 +7024,8 @@ function chartFormatPane(id = chartSel) {
         row('둥근 모서리', chk(ch.rounded, (v) => up({ rounded: v || undefined }))),
         row('글자 색', color(ch.textColor, (v) => up({ textColor: v }))),
         row('그림 영역 채우기', color(ch.plotFill, (v) => up({ plotFill: v, plotAreaFormat: undefined }))),
-        row('색 구성', sel2(Array.isArray(ch.palette) ? 'imported' : ch.palette ?? 'office', [...(Array.isArray(ch.palette) ? [['imported', '가져온 색']] : []), ...Object.entries(CHART_PALETTES).map(([k, p]) => [k, p.label])], (v) => { if (v !== 'imported') up(chartPalettePatch(get(), v)); }))),
+        row('색 구성', sel2(Array.isArray(ch.palette) ? 'imported' : ch.palette ?? 'office', [...(Array.isArray(ch.palette) ? [['imported', '가져온 색']] : []), ...Object.entries(CHART_PALETTES).map(([k, p]) => [k, p.label])], (v) => { if (v !== 'imported') up(chartPalettePatch(get(), v)); })),
+        row('색 편집', el('button', { type: 'button', class: 'btn small', onclick: () => chartPaletteDialog(id) }, '사용자 지정 색 구성…'))),
       sec('차트 제목',
         row('제목', txt(ch.title, (v) => up({ title: v }))),
         row('글꼴 크기(pt)', num(ch.titleSize, (v) => up({ titleSize: v }), { min: 6, max: 40 })),
@@ -7075,8 +7106,8 @@ function chartFormatPane(id = chartSel) {
           row('데이터 요소', sel2(selectedPoint, data.categories.map((name, i) => [i, name]), (v) => { selectedPoint = Number(v); draw(); })),
           row('합계로 설정', chk(ch.totals?.includes(selectedPoint), (v) => up({ totals: v ? [...new Set([...(get().totals ?? []), selectedPoint])] : (get().totals ?? []).filter((i) => i !== selectedPoint) }))),
           row('증가 색', color(ch.upColor ?? paletteOf(ch)[0], (v) => up({ upColor: v }), false)),
-          row('감소 색', color(ch.downColor ?? paletteOf(ch)[1], (v) => up({ downColor: v }), false)),
-          row('합계 색', color(ch.totalColor ?? paletteOf(ch)[2], (v) => up({ totalColor: v }), false))) : null,
+          row('감소 색', color(ch.downColor ?? paletteOf(ch)[1 % paletteOf(ch).length], (v) => up({ downColor: v }), false)),
+          row('합계 색', color(ch.totalColor ?? paletteOf(ch)[2 % paletteOf(ch).length], (v) => up({ totalColor: v }), false))) : null,
         ...data.series.map((s, visibleIndex) => {
           const i = s._fi ?? visibleIndex;
           const f = { ...((ch.seriesFmt ?? [])[i] ?? {}) };
@@ -7736,18 +7767,22 @@ function slicerModelRaw(sl) {
     const c = t.c1 + ci;
     const crit = t.filter?.criteria ?? {};
     const sel = Array.isArray(crit[c]) ? new Set(crit[c]) : null;
+    const ownPredicate = crit[c] && !Array.isArray(crit[c]) ? critPredicate(c, crit[c], dataTop(t), dataBottom(t), s) : null;
     const others = Object.entries(crit).filter(([k, v]) => Number(k) !== c && Array.isArray(v)).map(([k, v]) => [Number(k), new Set(v)]);
+    const preds = Object.entries(crit).filter(([k, v]) => Number(k) !== c && v && !Array.isArray(v) && typeof v === 'object')
+      .map(([k, v]) => critPredicate(Number(k), v, dataTop(t), dataBottom(t), s));
     const vals = new Map();
     for (let r = dataTop(t); r <= dataBottom(t); r++) {
       const key = displayText(r, c, s);
-      const pass = others.every(([k, set]) => set.has(displayText(r, k, s)));
-      const e = vals.get(key) ?? { key, v: wb.getValue(s, r, c), hasData: false };
+      const pass = others.every(([k, set]) => set.has(displayText(r, k, s))) && preds.every(p => p(r));
+      const e = vals.get(key) ?? { key, v: wb.getValue(s, r, c), hasData: false, selected: false };
       e.hasData ||= pass;
+      e.selected ||= ownPredicate ? ownPredicate(r) : !sel || sel.has(key);
       vals.set(key, e);
     }
-    const items = sortItems([...vals.values()]).map((e) => ({ key: e.key, v: e.v, text: e.key === '' ? '(비어 있음)' : e.key, selected: !sel || sel.has(e.key), hasData: e.hasData }));
+    const items = sortItems([...vals.values()]).map((e) => ({ key: e.key, v: e.v, text: e.key === '' ? '(비어 있음)' : e.key, selected: e.selected, hasData: e.hasData }));
     return {
-      items, filtered: !!sel,
+      items, filtered: !!sel || !!ownPredicate,
       apply: (values) => {
         const prev = si, historyMeta = meta();
         try {
@@ -8954,6 +8989,7 @@ function pivotOptionsDialog(entry = pivotHere(), startTab = 0) {
           missingItems: v.missingItems === 'auto' ? undefined : v.missingItems, enableDrill: v.enableDrill ? undefined : false,
           altTitle: v.altTitle || undefined, altDesc: v.altDesc || undefined,
           rowCaption: v.rowCaption === '행 레이블' ? undefined : v.rowCaption, colCaption: v.colCaption === '열 레이블' ? undefined : v.colCaption,
+          ...pivotSortPatch(def, { customListSort: v.customListSort }),
         };
         setPivotDef(entry, next);
         if (nameIn.value.trim() && nameIn.value.trim() !== pivotNameOf(entry)) renamePivot(nameIn.value, entry);
@@ -13188,7 +13224,7 @@ function openPivotFilterMenu(entry, kind, field, anchorEl) {
     const PF_ICON = { '텍스트 오름차순 정렬': 'sortAsc', '텍스트 내림차순 정렬': 'sortDesc' };
     const act = (label, fn, disabled = false, key) => el('button', { type: 'button', role:'menuitem', 'data-access-key':key, class: `pf-act${disabled ? ' off' : ''}`, disabled:disabled||!canApply(true), onmouseenter: () => closeSubmenus(), onclick: () => { if(!canApply())return;closeMenus(); fn(); } },
       el('span', { class: 'pf-ico ico', 'aria-hidden':'true', html: ICONS[PF_ICON[label] ?? (/필터 해제$/.test(label) ? 'filterClear' : '')] ?? '' }), label);
-    const withSort = (s) => ({ sort: { ...(def.sort ?? {}), [cur]: s } });
+    const withSort = (sort) => pivotSortPatch(def, { field: cur, sort });
     const noFilters = () => { const nf = { ...(def.filters ?? {}) }; delete nf[cur]; const nff = { ...(def.fieldFilters ?? {}) }; delete nff[cur]; return { filters: nf, fieldFilters: nff }; };
     box.replaceChildren(
       ...(fieldSel ? [el('label', { class: 'pf-field' }, el('span', {}, '필드 선택:'), fieldSel)] : []),
@@ -13293,11 +13329,9 @@ function pivotSortDialog(entry, field) {
     buttons: [{
       label: '확인', primary: true, action: () => {
         if (!canApply()) return false;
-        const sort = { ...(def.sort ?? {}) };
-        const m = cur();
-        if (m === 'manual') delete sort[field];
-        else { const by = (m === 'asc' ? sa : sd).value; sort[field] = { dir: m, ...(by !== '' ? { by: Number(by) } : {}) }; }
-        setPivotDef(entry, { ...def, sort, ...(useList === (def.customListSort !== false) ? {} : { customListSort: useList ? undefined : false }) });
+        const m = cur(), by = (m === 'asc' ? sa : sd).value;
+        const sort = m === 'manual' ? null : { dir: m, ...(by !== '' ? { by: Number(by) } : {}) };
+        setPivotDef(entry, { ...def, ...pivotSortPatch(def, { field, sort, customListSort: useList }) });
       },
     }, { label: '취소' }],
   });
@@ -17449,13 +17483,22 @@ async function snapshotLinkedPictures() {
 
 /** 엑셀 정렬 대화상자: 기준 추가 · 삭제 · 복사 · 위/아래, 정렬 기준(셀 값 · 셀 색 · 글꼴 색), 사용자 지정 목록, 옵션 */
 let sortDlgOpts = { caseSensitive: false, natural: false, byCols: false };
+function sortFilterRange(key, filter) {
+  return filter && key === '' ? { ...filter, r2: expandedFilterEnd(wb, si, filter) } : filter;
+}
+
+function canSortFilteredRange(range, filters) {
+  return filters.every(([, f]) => range.r2 < f.r1 + 1 || range.r1 > f.r2 || range.c2 < f.c1 || range.c1 > f.c2 || canRecomputeFilter(f));
+}
+
 function sortDialog() {
   const fk = filterKeyHere();
   if (fk !== null && !canRecomputeFilter(getFilter(fk))) return;
-  const rg0 = dataRange();
+  const base = dataRange(), scope = sortScope({ range: base, activeOnly: selIsActiveOnly(), active, table: tableHere(), filter: fk === null ? null : sortFilterRange(fk, getFilter(fk)), header: hasHeader(base) });
+  const rg0 = scope.range, book = wb, host = sheet();
   if (wb.mergesIn(si, rg0.r1, rg0.c1, rg0.r2, rg0.c2).length) { alertDialog('WIXEL', '병합된 셀이 있으면 정렬할 수 없습니다.'); return; }
   const o = { ...sortDlgOpts };
-  let header = hasHeader(rg0);
+  let header = scope.header;
   const lines = () => (o.byCols ? [rg0.r1, rg0.r2] : [rg0.c1, rg0.c2]);
   const lineLabel = (i) => {
     if (o.byCols) { const hv = header ? displayText(i, rg0.c1) : ''; return hv ? `${hv} (${i + 1}행)` : `${i + 1}행`; }
@@ -17539,10 +17582,16 @@ function sortDialog() {
       box,
       el('div', { class: 'muted', style: { fontSize: '11px' } }, `범위: ${cellName(rg0.r1, rg0.c1)}:${cellName(rg0.r2, rg0.c2)}`)),
     buttons: [{ label: '확인', primary: true, action: () => {
+      if (wb !== book || sheet() !== host) { toast('작업 중인 시트가 변경되었습니다. 다시 정렬하세요.'); return false; }
       sortDlgOpts = { ...o };
       const h = header && !o.byCols;
       if (keys.some((k) => k.on !== 'value' && !k.color)) { toast('색을 고르세요.'); return false; }
-      wb.transact(() => wb.sortMulti(si, rg0.r1 + (h ? 1 : 0), rg0.c1 + (o.byCols && header ? 1 : 0), rg0.r2, rg0.c2, keys.map((k) => ({ ...k })), o), meta());
+      const moved = { ...rg0, r1: rg0.r1 + (h ? 1 : 0), c1: rg0.c1 + (o.byCols && header ? 1 : 0) }, filters = allFilters().map(([key, f]) => [key, sortFilterRange(key, f)]);
+      if (!canSortFilteredRange(moved, filters)) return false;
+      wb.transact(() => {
+        wb.sortMulti(si, moved.r1, moved.c1, moved.r2, moved.c2, keys.map(k => ({ ...k })), o);
+        for (const [key, f] of refreshSortedFilters({ range: moved, filters, keys, options: o, recompute: recomputeFilter })) putFilter(key, f);
+      }, meta());
       selectRange({ r1: rg0.r1, c1: rg0.c1, r2: rg0.r2, c2: rg0.c2 }, 'cells', { r: active.r, c: active.c });
       return true;
     } }, { label: '취소' }],
@@ -18366,8 +18415,23 @@ function themeRows() {
   return rows;
 }
 
+// Keep formatting bound to the selection that opened the popup, including sparse selections.
+// Native color dialogs may return after a sheet/document was replaced.
+function captureSelectionTarget() {
+  const book = wb, host = sheet(), doc = docId, index = si;
+  const range = { ...sel }, cell = { ...active }, start = { ...anchor }, end = { ...focusCell }, kind = selKind, sparse = special;
+  return action => {
+    if (wb !== book || docId !== doc || si !== index || sheet() !== host) { toast('문서나 시트가 변경되었습니다. 범위를 다시 선택해 주세요.'); return; }
+    cancelCellGesture();
+    sel = { ...range }; active = { ...cell }; anchor = { ...start }; focusCell = { ...end }; selKind = kind; special = sparse;
+    updateSelectionUI();
+    return action();
+  };
+}
 let lastPatternColor = '#000000';
 function colorMenu(anchorEl, kind) {
+  cancelCellGesture();
+  const target = captureSelectionTarget(), apply = patch => target(() => { if (!contextCommandDisabled('formatCells')) applyStyle(patch); });
   // 채우기: 엑셀처럼 무늬(패턴) 채우기 · 무늬 색도 바로 고를 수 있게
   const extra = kind !== 'fill' ? [] : (() => {
     const cur = wb.styleAt(si, active.r, active.c);
@@ -18375,29 +18439,29 @@ function colorMenu(anchorEl, kind) {
     const grid = el('div', { class: 'pattern-grid' }, PATTERNS.map(([v, l]) => el('button', {
       class: `pattern-swatch${cur.pattern === v ? ' on' : ''}`, title: l, onmousedown: (e) => e.preventDefault(),
       style: { background: patternCss(v, pc, cur.fill ?? '#ffffff') },
-      onclick: () => { closeMenus(); applyStyle({ pattern: v, patternColor: pc }); focusGrid(); },
+      onclick: () => { closeMenus(); apply({ pattern: v, patternColor: pc }); focusGrid(); },
     })));
     return [
       { sep: true },
       {
         label: '무늬 스타일', icon: 'fill', submenu: [
-          { label: '무늬 없음', action: () => applyStyle({ pattern: undefined, patternColor: undefined }) },
+          { label: '무늬 없음', action: () => apply({ pattern: undefined, patternColor: undefined }) },
           { node: grid },
         ],
       },
       {
         label: '무늬 색', submenu: [
           ...['#000000', '#7f7f7f', '#c00000', '#ff0000', '#ffc000', '#ffff00', '#92d050', '#00b050', '#00b0f0', '#0070c0', '#002060', '#7030a0'].map((c) => ({
-            label: c, swatch: c, action: () => { lastPatternColor = c; applyStyle({ patternColor: c, ...(cur.pattern ? {} : { pattern: 'lightGray' }) }); },
+            label: c, swatch: c, action: () => { lastPatternColor = c; apply({ patternColor: c, ...(cur.pattern ? {} : { pattern: 'lightGray' }) }); },
           })),
         ],
       },
-      { label: '셀 서식 채우기...', action: () => run('formatCells') },
+      { label: '셀 서식 채우기...', action: () => target(() => run('formatCells')) },
     ];
   })();
   paletteMenu(anchorEl, kind === 'fill' ? '채우기 없음' : '자동', (color) => {
-    if (kind === 'fill') { if (color) lastFill = color; applyStyle(color ? { fill: color, gradient: undefined } : { fill: undefined, gradient: undefined, pattern: undefined, patternColor: undefined }); }
-    else { if (color) lastFont = color; applyStyle({ color: color || undefined }); }
+    if (kind === 'fill') { if (color) lastFill = color; apply(color ? { fill: color, gradient: undefined } : { fill: undefined, gradient: undefined, pattern: undefined, patternColor: undefined }); }
+    else { if (color) lastFont = color; apply({ color: color || undefined }); }
   }, extra);
 }
 
@@ -19417,7 +19481,7 @@ function showPivotContextMenu(pos, entry) {
   if(target.valueIndex!==null)items.push(act('필드 표시 형식(N)...',()=>pivotContextNumberFormat(entry,target.valueIndex),{accessKey:'n'}));
   items.push({sep:true},act('새로 고침(R)',()=>{wb.transact(()=>{wb.clearPivotSnapshots(def.snapshotId?[def.snapshotId]:[]);wb.pivotMemo=null;putPivotDef(entry,{...def});},meta());refreshPivotPane(true);},{accessKey:'r',icon:'refresh'}));
   if(target.sortField) {
-    const sorting=dir=>{const sort={...def.sort,[target.sortField]:{dir,...(target.valueIndex!==null?{by:target.valueIndex}:{})}};apply({...def,sort});};
+    const sorting=dir=>apply({...def,...pivotSortPatch(def,{field:target.sortField,sort:{dir,...(target.valueIndex!==null?{by:target.valueIndex}:{})}})});
     items.push({label:'정렬(O)',accessKey:'o',disabled:!editable,submenu:[act('오름차순 정렬(S)',()=>sorting('asc'),{accessKey:'s',icon:'sortAsc'}),act('내림차순 정렬(O)',()=>sorting('desc'),{accessKey:'o',icon:'sortDesc'}),{sep:true},act('기타 정렬 옵션(M)...',()=>pivotSortDialog(entry,target.sortField),{accessKey:'m'})]});
   }
   if(target.field)items.push(act(`"${target.valueIndex!==null?valueName(def.values[target.valueIndex]):def.fieldCaptions?.[target.field]??target.field}" 제거(E)`,()=>apply(pivotRemoveContextField(def,target)),{accessKey:'e',icon:'delete'}));
@@ -19438,11 +19502,13 @@ function showPivotContextMenu(pos, entry) {
 }
 
 function showContextMenu(pos, hitKind = 'cell') {
+  cancelCellGesture();
   if(editing&&!commitEdit())return;
   const kind=contextMenuKind(selKind,hitKind);
   const pivot=kind==='cell'?pivotHere():null;
   if(pivot?.def.area){showPivotContextMenu(pos,pivot);return;}
-  const item=(label,cmd,accessKey,extra={})=>({label,accessKey,action:()=>run(cmd),...extra,disabled:!!extra.disabled||contextCommandDisabled(cmd)});
+  const target=captureSelectionTarget();
+  const item=(label,cmd,accessKey,extra={})=>({label,accessKey,action:()=>target(()=>run(cmd)),...extra,disabled:!!extra.disabled||contextCommandDisabled(cmd)});
   const pasteItems=[item('붙여넣기(P)','paste','p',{icon:'paste',key:'Ctrl+V'}),item('값(V)','pasteValuesKey','v',{disabled:!clip||!!clip.cut}),item('수식(F)','pasteFormulas','f',{disabled:!clip||!!clip.cut}),item('서식(R)','pasteFormats','r',{disabled:!clip||!!clip.cut}),item('행/열 바꿈(T)','pasteTranspose','t',{disabled:!clip||!!clip.cut})];
   const items=[item('잘라내기(T)','cut','t',{icon:'cut',key:'Ctrl+X'}),item('복사(C)','copy','c',{icon:'copy',key:'Ctrl+C'}),
     {label:'붙여넣기 옵션(P)',accessKey:'p',icon:'paste',submenu:pasteItems},item('선택하여 붙여넣기(S)...','pasteSpecial','s',{key:'Ctrl+Alt+V',disabled:!!clip?.cut})];
@@ -19473,7 +19539,7 @@ function showContextMenu(pos, hitKind = 'cell') {
     if(pivotAreaHit(sel))items.push({label:'피벗 테이블',submenu:[item('새로 고침','pivotRefresh'),item('피벗 테이블 옵션...','pivotOptions'),item('필드 목록','pivotFieldList',null,{checked:pivotPaneOpen})]});
     if(cell?.image)items.push({sep:true},item('셀 위에 그림 배치','contextCellImageFloat',null,{icon:'picture'}),item('대체 텍스트...','contextCellImageAlt'));
   }
-  const toolbar=createContextMiniToolbar({onCommand:(cmd,arg)=>run(cmd,arg,{keepMenu:true}),openNamedMenu:(name,anchorEl)=>{if(!contextCommandDisabled('formatCells'))openNamedMenu(name,anchorEl);},
+  const toolbar=createContextMiniToolbar({onCommand:(cmd,arg)=>target(()=>run(cmd,arg,{keepMenu:true})),openNamedMenu:(name,anchorEl)=>target(()=>{if(!contextCommandDisabled('formatCells'))openNamedMenu(name,anchorEl);}),
     getStyle:()=>({...styleAt(active.r,active.c),font:styleAt(active.r,active.c).font||BASE_FONT.name,size:styleAt(active.r,active.c).size||BASE_FONT.size,lastFill,lastFont,painter:!!painter,merged:!!wb.mergeAt(si,active.r,active.c)}),readonly:()=>contextCommandDisabled('formatCells')});
   const menu=openMenu(pos,items,{toolbar,scroll:true});if(menu)menu.dataset.contextKind=kind;
 }
@@ -19959,6 +20025,9 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['우클릭 서식의 선택 범위 고정', ['색·글꼴·무늬·테두리 메뉴를 이동할 때 셀 선택이 따라 움직이던 오류를 수정했습니다. 취소되거나 놓친 마우스 드래그를 정리하고, 늦게 닫힌 색 선택창이 다른 문서나 시트를 수정하지 않도록 했습니다.']],
+  ['차트 색 39개와 사용자 지정 색', ['색 구성을 이름·검색·분류로 선택하고 1~32개의 색을 직접 편집할 수 있습니다. 색 순서·미리보기·취소·실행 취소를 지원하며, 한두 색을 사용하는 폭포·파레토의 색 누락을 수정했습니다.']],
+  ['차트·필터·피벗 설정 동작 보완', ['원형·도넛 테두리 색과 방사형의 선 굵기·파선·표식을 화면과 Excel 저장에 반영하고, 고정 데이터 차트의 필터를 수정했습니다. 새 차트의 원본이 2,000행에서 잘리지 않게 했습니다.', '사용자 지정 정렬 후 필터를 다시 계산하고 표 머리글·요약 행을 보호합니다. 표 슬라이서의 숫자·색·상위 값·평균 조건을 반영합니다.', '가져온 피벗의 명시적 정렬과 사용자 지정 목록 사용 옵션이 화면 및 Excel 저장 후에도 적용됩니다.']],
   ['슬라이서 항목과 선택 안정성', ['항목을 선택한 뒤 숨겨진 소재가 갑자기 나타나는 문제와, 같은 시트의 피벗 결과 갱신이 원본 변경으로 처리되는 문제를 수정했습니다. 날짜·숫자·사용자 그룹의 교차 필터를 반영하고, 필터·새로 고침 실행 취소 시 항목 목록과 작업 시트를 복원합니다.']],
   ['차트 색·스타일 변경 수정', ['가져온 차트의 단색·그라데이션·개별 요소 색 때문에 새 색 구성이 적용되지 않던 문제를 수정했습니다. 리본·차트 옆 버튼·서식 창을 같은 동작으로 통일하고, 계열 색·요소 색 자동 복원·스타일 미리보기와 배경 변경도 보완했습니다.']],
   ['차트 선형 예측 표시 개선', ['예측 구간까지 자동 축 범위에 반영하고, 고정한 축 범위 밖의 추세선이 제목·범례·다른 영역을 침범하지 않도록 수정했습니다.']],
@@ -20461,7 +20530,7 @@ function onBookChange() {
 // ───────────────────────── 이벤트 연결 ─────────────────────────
 function bindEvents() {
   gridMousePan = installGridMousePan({ view:dom.view, enabled:()=>!!mobileWork?.pointerNavigation,
-    context:()=>sheet(), canStart:()=>!editing && !isDialogOpen() && !document.querySelector('.backstage'),
+    context:()=>sheet(), canStart:()=>!editing && !isMenuOpen() && !isDialogOpen() && !document.querySelector('.backstage'),
     onArmedChange: armed => {
       const button = $('mobileHandPan');
       if (!button) return;
@@ -20569,6 +20638,8 @@ function bindEvents() {
   dom.view.addEventListener('mouseleave', () => { dom.tip.style.display = 'none'; if (!drag) clearHeaderResizeUI(); });
   document.addEventListener('keydown', e => { if(e.key==='Escape'&&(drag?.type==='colResize'||drag?.type==='rowResize')) { e.preventDefault();e.stopImmediatePropagation();cancelHeaderResize(); } },true);
   window.addEventListener('blur',cancelHeaderResize);
+  window.addEventListener('blur',cancelCellGesture);
+  document.addEventListener('pointercancel',cancelCellGesture,true);
   document.addEventListener('pointercancel',cancelHeaderResize,true);
   dom.view.addEventListener('contextmenu', (e) => {
     e.preventDefault();
@@ -20589,6 +20660,7 @@ function bindEvents() {
   // capture에서 기본 동작만 막고 전파는 유지하므로 각 영역의 사용자 메뉴는 계속 열린다.
   document.addEventListener('contextmenu', (e) => e.preventDefault(), { capture: true });
   document.addEventListener('mousemove', (e) => {
+    if (!(e.buttons & 1) || isMenuOpen() || isDialogOpen()) cancelCellGesture();
     if (tlDrag) {
       const c = document.elementFromPoint(e.clientX, e.clientY)?.closest?.('.tl-cell');
       if (c && tlDrag.root.contains(c)) { tlDrag.b = Number(c.dataset.i); markTimelineDrag(); }
@@ -20719,6 +20791,7 @@ function bindEvents() {
   }, true);
 
   setAccessKeyHandler(() => { endKeytip(); armShortcutInputGuard(); });
+  setPopupOpenHandler(cancelCellGesture);
   setMenuCloseHandler(focusGrid);
   setDialogCloseHandler(focusGrid);
   window.addEventListener('pagehide', () => { pageDeparting = true; });

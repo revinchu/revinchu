@@ -55,7 +55,7 @@ CUSTOM_LISTS.forEach((list, li) => list.forEach((t, i) => { const k = t.toLowerC
 export const customRank = (s) => CUSTOM_RANK.get(String(s).toLowerCase());
 
 /** 항목 정렬: 숫자 → 사용자 지정 목록 항목(목록 순) → 글자(엑셀 정렬 순) → 빈 칸 */
-export function sortKeys(keys) {
+export function sortKeys(keys, { customList = true } = {}) {
   return keys.sort((a, b) => {
     if (a === EMPTY) return 1;
     if (b === EMPTY) return -1;
@@ -63,9 +63,11 @@ export function sortKeys(keys) {
     if (typeof a === 'number') return -1;
     if (typeof b === 'number') return 1;
     if (a === EMPTY_TEXT || b === EMPTY_TEXT) return a === b ? 0 : a === EMPTY_TEXT ? -1 : 1;
-    const x = customRank(a);
-    const y = customRank(b);
-    if (x !== undefined || y !== undefined) return x === undefined ? 1 : y === undefined ? -1 : x - y;
+    if (customList) {
+      const x = customRank(a);
+      const y = customRank(b);
+      if (x !== undefined || y !== undefined) return x === undefined ? 1 : y === undefined ? -1 : x - y;
+    }
     return collator.compare(String(a), String(b));
   });
 }

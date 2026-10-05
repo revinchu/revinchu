@@ -24,7 +24,8 @@ async function test(name, fn, viewport = { width: 1440, height: 1000 }) {
   page.setDefaultTimeout(10000); page.on('pageerror', (e) => errors.push(e.message));
   await context.route('**/*', (route) => { const req = route.request(); if (!['GET', 'HEAD'].includes(req.method())) { writes.push(req.method() + ' ' + req.url()); return route.abort(); } return route.continue(); });
   try {
-    await page.addInitScript(() => { window.TABULA_STATIC = true; window.WIXEL_SKIP_START = true; });
+    // Keep the layout mode stable: the app intentionally dismisses menus when auto mode changes.
+    await page.addInitScript(mode => { window.TABULA_STATIC = true; window.WIXEL_SKIP_START = true; localStorage.setItem('wixel.mobile-work.v1', mode); }, viewport.width <= 720 ? 'on' : 'off');
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 }); await page.waitForFunction(() => !!window.tabula);
     await fn(page); assert.deepEqual(errors, []); assert.deepEqual(writes, []); results.push({ name, ok: true }); console.log('OK ' + name);
   } catch (error) { results.push({ name, ok: false, error: error.message, errors, writes }); console.error('NG ' + name + ': ' + error.stack); }
@@ -93,7 +94,10 @@ try {
         if (viewport.height < 300) assert.equal(rects[1].scroll, true);
         await p.keyboard.press('Alt'); assert.equal(await p.locator('.context-mini-toolbar [data-resolved-access-key="d"]').count(), 0, '스크롤 밖 메뉴 D 예약'); await p.keyboard.press('Escape');
       }
+      // Escape may dismiss the last menu; resize must start with an open fixture.
+      await fixture(p, { x: viewport.width - 2, y: viewport.height - 2, rows: 22 });
       await p.setViewportSize({ width: 360, height: 280 });
+      await p.waitForFunction(() => window.miniBar?.isConnected && window.miniBar.getBoundingClientRect().right <= innerWidth);
       assert.ok((await p.locator('.context-mini-toolbar').boundingBox()).x >= 0);
     }, viewport);
   }

@@ -2290,14 +2290,14 @@ function readChart(files, path, theme = {}) {
       }
       if (descendants(child(spPr, 'effectLst'), 'outerShdw').length) f.shadow = true;
       const lnW = Number(child(spPr, 'ln')?.attrs.w ?? 0);
-      if (lnW && (gType === 'line' || gType === 'scatter')) f.lineWidth = Math.round((lnW / 12700) * (4 / 3) * 100) / 100;
+      if (lnW && ['line', 'scatter', 'radar'].includes(gType)) f.lineWidth = Math.round((lnW / 12700) * (4 / 3) * 100) / 100;
       const mSize = Number(child(child(ser, 'marker'), 'size')?.attrs.val ?? 0);
       if (mSize) f.markerSize = mSize;
       const dsh = DASH_FROM[child(child(spPr, 'ln'), 'prstDash')?.attrs.val];
-      if (dsh && (gType === 'line' || gType === 'scatter')) f.dash = dsh;
+      if (dsh && ['line', 'scatter', 'radar'].includes(gType)) f.dash = dsh;
       const smoothValue = child(ser, 'smooth')?.attrs.val;
       if (smoothValue !== undefined) f.smooth = smoothValue === '1' || smoothValue === 'true';
-      if ((gType === 'bar' || gType === 'column') && child(spPr, 'ln') && child(child(spPr, 'ln'), 'solidFill')) f.outline = dmlColor(child(child(spPr, 'ln'), 'solidFill'), theme) ?? undefined;
+      if (['bar', 'column', 'pie', 'doughnut'].includes(gType) && child(spPr, 'ln') && child(child(spPr, 'ln'), 'solidFill')) f.outline = dmlColor(child(child(spPr, 'ln'), 'solidFill'), theme) ?? undefined;
       const tl = child(ser, 'trendline');
       if (tl) {
         const tt = child(tl, 'trendlineType')?.attrs.val;
@@ -2726,6 +2726,7 @@ function pivotDefFrom(root, cache, tables, sheetName) {
   if (root.attrs.useAutoFormatting === '0') def.autofit = false;
   if (root.attrs.preserveFormatting === '0') def.preserveFormat = false;
   if (root.attrs.enableDrill === '0') def.enableDrill = false;
+  if (root.attrs.customListSort === '0' || root.attrs.customListSort === 'false') def.customListSort = false;
   // 축소한 항목 · 부분합 위치 · 빈 줄 · 레이블 반복
   const collapsed = {};
   pfs.forEach((pf, f) => {
@@ -3821,7 +3822,8 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx', imageRel) {
   const numCache = (vals, code = 'General') => `<c:numCache><c:formatCode>${esc(code)}</c:formatCode><c:ptCount val="${vals.length}"/>${vals.map((v, i) => (typeof v === 'number' ? `<c:pt idx="${i}"><c:v>${v}</c:v></c:pt>` : '')).join('')}</c:numCache>`;
   // 참조는 원래 범위를 유지하므로 범주 캐시와 dPt 번호도 원본 순서로 쓴다.
   // hiddenCats는 WIXEL 보조 옵션으로만 복원하며 Excel의 범주 필터를 흉내내지 않는다.
-  const data = chartModelData(wb, si, { ...chart, hiddenCats: undefined, ...(isChartEx(chart) ? { hiddenSeries: undefined } : {}) });
+  let sourceRows = null;
+  const data = chartModelData(wb, si, { ...chart, hiddenCats: undefined, ...(isChartEx(chart) ? { hiddenSeries: undefined } : {}) }, { sample: false, onRange: rows => { sourceRows = rows; } });
   // 엑셀 2016 차트(폭포 · 깔때기 · 히스토그램 · 파레토 · 트리맵 · 상자 수염)는 호환 차트로 저장하고 원래 종류는 확장 정보로 보관
   const FALLBACK = { waterfall: 'column', histogram: 'column', pareto: 'column', treemap: 'column', boxWhisker: 'column', funnel: 'bar', sunburst: 'column' };
   const baseType = chart.type === 'combo' ? 'column' : FALLBACK[chart.type] ?? chart.type;
@@ -3851,8 +3853,8 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx', imageRel) {
     }
   } else if (chart.range) {
     const rg = chart.range;
-    const rows = [];
-    for (let r = rg.r1; r <= rg.r2; r++) { const row = []; for (let c = rg.c1; c <= rg.c2; c++) row.push(wb.getValue(s, r, c)); rows.push(row); }
+    // 레이아웃 판정은 이미 읽은 원본 데이터로 수행해 같은 범위를 두 번 적재하지 않는다.
+    const rows = sourceRows ?? [];
     const L = chartLayout(rows, chart.type, !!chart.byRows);
     if (chart.type === 'surface') {
       const header = typeof rows[0]?.[0] !== 'number', off = header ? 1 : 0;
@@ -3871,11 +3873,11 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx', imageRel) {
     const dc0 = rg.c1 + L.firstDataCol;
     const all = [];
     if (L.byCols) {
-      for (let c = dc0; c <= rg.c2; c++) {
+      for (let c = dc0; c <= Math.min(rg.c2, rg.c1 + (rows[0]?.length ?? 0) - 1); c++) {
         all.push({ tx: L.headRow ? refText(s, rg.r1, c, rg.r1, c) : null, cat: L.catCol ? refText(s, dr0, rg.c1, rg.r2, rg.c1 + Math.max(0, L.firstDataCol - 1)) : null, val: refText(s, dr0, c, rg.r2, c), nums: rows.slice(L.firstDataRow).some((r) => typeof r[c - rg.c1] === 'number') });
       }
     } else {
-      for (let r = dr0; r <= rg.r2; r++) {
+      for (let r = dr0; r <= Math.min(rg.r2, rg.r1 + rows.length - 1); r++) {
         all.push({ tx: L.catCol ? refText(s, r, rg.c1, r, rg.c1) : null, cat: L.headRow ? refText(s, rg.r1, dc0, ['sunburst', 'treemap'].includes(chart.type) ? rg.r2 - 1 : rg.r1, rg.c2) : null, val: refText(s, r, dc0, r, rg.c2), nums: rows[r - rg.r1].slice(L.firstDataCol).some((v) => typeof v === 'number') });
       }
     }
@@ -3883,6 +3885,7 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx', imageRel) {
     const withNums = sourceRefs.filter((x) => x.nums);
     pushAll(refs, (withNums.length ? withNums : sourceRefs));
   }
+  sourceRows = null;
   const pal = paletteOf(chart);
   if (isChartEx(chart)) return writeChartEx(chart, data, refs, pal, imageRel);
   const series = data.series.map((sr, i) => ({
@@ -3900,6 +3903,7 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx', imageRel) {
     const type = sr.type;
     const scatter = type === 'scatter' || type === 'bubble';
     const pie = ['pie', 'doughnut', 'pieOfPie', 'barOfPie'].includes(type);
+    const pieOutline = ['pie', 'doughnut'].includes(type) ? hex6(sr.outline ?? '#ffffff') : 'FFFFFF';
     const hex = String(sr.color).replace('#', '').toUpperCase().slice(0, 6);
     const fill = `<a:solidFill><a:srgbClr val="${hex}"/></a:solidFill>`;
     const tx = sr.tx ? `<c:tx><c:strRef><c:f>${esc(sr.tx)}</c:f>${strCache([sr.name])}</c:strRef></c:tx>` : `<c:tx><c:v>${esc(sr.name)}</c:v></c:tx>`;
@@ -3907,9 +3911,9 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx', imageRel) {
     if (type === 'bubble') spPr = `<c:spPr>${fill}</c:spPr>`;
     else if (type === 'stock') spPr = '<c:spPr><a:ln w="19050"><a:noFill/></a:ln></c:spPr>';
     else if (scatter) spPr = /line|smooth/i.test(chart.scatterStyle ?? '') ? `<c:spPr><a:ln w="${sr.lineWidth ? Math.round(sr.lineWidth * 9525) : 19050}">${fill}${DASH_XML[sr.dash] ?? ''}</a:ln></c:spPr>` : '<c:spPr><a:ln w="19050"><a:noFill/></a:ln></c:spPr>';
-    else if (type === 'radar') spPr = `<c:spPr>${chart.radarStyle === 'filled' ? fill : ''}<a:ln w="28575">${fill}</a:ln></c:spPr>`;
+    else if (type === 'radar') spPr = `<c:spPr>${chart.radarStyle === 'filled' ? fill : ''}<a:ln w="${sr.lineWidth ? Math.round(sr.lineWidth * 9525) : 28575}">${fill}${DASH_XML[sr.dash] ?? ''}</a:ln></c:spPr>`;
     else if (type === 'line') spPr = `<c:spPr><a:ln w="${sr.lineWidth ? Math.round((sr.lineWidth * 3 / 4) * 12700) : 28575}" cap="rnd">${fill}${DASH_XML[sr.dash] ?? ''}<a:round/></a:ln></c:spPr>`;
-    else if (pie) spPr = '<c:spPr><a:ln w="19050"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:ln></c:spPr>';
+    else if (pie) spPr = `<c:spPr><a:ln w="19050"><a:solidFill><a:srgbClr val="${pieOutline}"/></a:solidFill></a:ln></c:spPr>`;
     else spPr = `<c:spPr>${fill}${sr.outline ? `<a:ln w="9525"><a:solidFill><a:srgbClr val="${String(sr.outline).replace('#', '').toUpperCase().slice(0, 6)}"/></a:solidFill></a:ln>` : ''}</c:spPr>`;
     const markerSym = sr.marker === 'none' || sr.marker === false ? 'none' : typeof sr.marker === 'string' ? sr.marker : 'circle';
     const markerSym2 = sr.marker === undefined && (chart.marker === 'none' || (scatter && /^(line|smooth)$/.test(chart.scatterStyle ?? '')) || (type === 'radar' && chart.radarStyle !== 'marker') || type === 'stock') ? 'none' : markerSym;
@@ -3918,7 +3922,7 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx', imageRel) {
     // 한 idx에 색/분리 옵션을 한 dPt로 합친다. 0도 계열 분리의 명시적 덮어쓰기다.
     const dPt = pie ? sr.values.map((_, k) => {
       const p = sr._pi?.[k] ?? k, offset = explosion(sr.pointExplosion?.[p]);
-      return `<c:dPt><c:idx val="${k}"/><c:bubble3D val="0"/>${offset !== null ? `<c:explosion val="${offset}"/>` : ''}<c:spPr><a:solidFill><a:srgbClr val="${(sr.pointColors?.[p] ?? sr.colors?.[p] ?? chart.seriesFmt?.[sr._fi ?? i]?.color ?? pal[p % pal.length]).replace('#', '')}"/></a:solidFill><a:ln w="19050"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:ln></c:spPr></c:dPt>`;
+      return `<c:dPt><c:idx val="${k}"/><c:bubble3D val="0"/>${offset !== null ? `<c:explosion val="${offset}"/>` : ''}<c:spPr><a:solidFill><a:srgbClr val="${(sr.pointColors?.[p] ?? sr.colors?.[p] ?? chart.seriesFmt?.[sr._fi ?? i]?.color ?? pal[p % pal.length]).replace('#', '')}"/></a:solidFill><a:ln w="19050"><a:solidFill><a:srgbClr val="${pieOutline}"/></a:solidFill></a:ln></c:spPr></c:dPt>`;
     }).join('') : '';
     const invert = type === 'column' || type === 'bar' ? '<c:invertIfNegative val="0"/>' : '';
     // 막대 · 꺾은선의 데이터 요소별 색 · '요소마다 다른 색'
@@ -4480,12 +4484,18 @@ function pivotParts(wb, si, def, cache, name, pool) {
   // 이 피벗의 항목 순서 (캐시 순서를 수동 순서대로 재배열) → x 는 이 목록의 위치
   const items = new Map();
   for (const [f, it] of cache.items) {
-    const ord = d.sort[header[f]] ? null : d.order[header[f]];
-    let keys = it.keys;
+    const sorting = d.sort[header[f]], group = d.groups?.[header[f]];
+    const captionSort = (sorting?.by === undefined || sorting?.by === null) && (!group || group.by === 'items');
+    const savedOrder = d.order[header[f]];
+    const orderSet = sorting && captionSort && savedOrder?.length ? new Set(savedOrder.map(itemIdentity)) : null;
+    const ord = !sorting || captionSort && orderSet && it.keys.every(k => orderSet.has(itemIdentity(itemText(k)))) ? savedOrder : null;
+    // Item order belongs to this pivot, while cacheIndex keeps the shared cache
+    // untouched. Write the same caption order that a fresh read will restore.
+    let keys = captionSort && (sorting || d.customListSort === false) ? sortKeys([...it.keys], { customList: d.customListSort !== false }) : it.keys;
     if (ord?.length) {
       const pos = new Map(ord.map((t, i) => [itemIdentity(t), i]));
       keys = [...keys.filter((k) => pos.has(itemIdentity(itemText(k)))).sort((a, b) => pos.get(itemIdentity(itemText(a))) - pos.get(itemIdentity(itemText(b)))), ...keys.filter((k) => !pos.has(itemIdentity(itemText(k))))];
-    }
+    } else if (captionSort && sorting?.dir === 'desc') keys = [...keys.filter(k => k !== EMPTY).reverse(), ...keys.filter(k => k === EMPTY)];
     items.set(f, { keys, index: new Map(keys.map((k, i) => [itemIdentity(k), i])), cacheIndex: it.index });
   }
 
@@ -4684,6 +4694,7 @@ function pivotParts(wb, si, def, cache, name, pool) {
     ...(d.grandCaption !== null && d.grandCaption !== undefined ? [`grandTotalCaption="${esc(d.grandCaption)}"`] : []),
     `showError="${d.errorShow ? 1 : 0}"`, ...(def.errorCaption !== null && def.errorCaption !== undefined ? [`errorCaption="${esc(def.errorCaption)}"`] : []), ...(d.colCaption !== null && d.colCaption !== undefined ? [`colHeaderCaption="${esc(d.colCaption)}"`] : []),
     ...(d.grandRows ? [] : ['rowGrandTotals="0"']), ...(d.grandCols ? [] : ['colGrandTotals="0"']),
+    ...(d.customListSort === false ? ['customListSort="0"'] : []),
     ...(d.missingCaption ? [`missingCaption="${esc(d.missingCaption)}"`] : []), ...(d.showExpand ? [] : ['showDrill="0"']),
     'itemPrintTitles="1"', 'createdVersion="6"', 'indent="0"', ...(tabular || outline ? ['compact="0"', 'compactData="0"'] : []),
     `outline="${tabular ? 0 : 1}"`, `outlineData="${tabular ? 0 : 1}"`, ...(d.classic ? ['gridDropZones="1"'] : []), 'multipleFieldFilters="0"',

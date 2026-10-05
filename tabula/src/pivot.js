@@ -596,6 +596,7 @@ export function normalizeDef(def, header) {
     filters: def.filters ?? {},
     calcFields: def.calcFields ?? [],
     sort: byKey(def.sort),
+    customListSort: def.customListSort !== false,
     order: byKey(def.order),
     tieOrder: byKey(def.tieOrder),
     tieByParent: byKey(def.tieByParent),
@@ -1373,7 +1374,7 @@ function orderTree(root, fields, d, measureAt) {
       });
       if (s?.dir === 'desc') kids.reverse();
     } else {
-      const keys = sortKeys(kids.map((c) => c.key));
+      const keys = sortKeys(kids.map((c) => c.key), { customList: d.customListSort !== false });
       const byKey = new Map(kids.map((c) => [kk(c.key), c]));
       kids = keys.map((k) => byKey.get(kk(k)));
       // 글자 정렬 필드인데 항목이 모두 파일에 저장된 순서에 있으면 그 순서 (엑셀이 정렬해 둔 순서: 날짜와 글자가 섞인 경우 등)
