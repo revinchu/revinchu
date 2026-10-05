@@ -1,4 +1,5 @@
 import { createZipStreamWriter } from './zip-stream.js';
+import { fontDesktopStyle } from './font-identity.js';
 import { arrayCacheValue } from './array-cache.js';
 import { hasSavedNameError } from './calculation-state.js';
 import { createXmlChunks } from './xml-chunks.js';
@@ -493,15 +494,11 @@ function readStyles(files, wbRels, theme) {
     return style;
   });
   const dxfOf = (d) => {
-    const st = {};
-    const f = child(d, 'font');
+    const st = {}, f = child(d, 'font');
     if (f) {
+      Object.assign(st, fontOf(f));
       const c = colorOf(child(f, 'color'), theme);
       if (c) st.color = c;
-      if (child(f, 'b') && child(f, 'b').attrs.val !== '0') st.bold = true;
-      if (child(f, 'i') && child(f, 'i').attrs.val !== '0') st.italic = true;
-      if (child(f, 'strike') && child(f, 'strike').attrs.val !== '0') st.strike = true;
-      if (child(f, 'u') && child(f, 'u').attrs.val !== 'none') st.underline = true;
     }
     const fill = child(d, 'fill');
     if (fill) { const c = fillOf(fill, true); if (c) st.fill = c; }
@@ -3422,6 +3419,21 @@ function themeXml(wb) {
 
 function styleNodeXml(node) {
   if(!node||!/^[A-Za-z_][\w.-]*$/.test(node.name))return '';
+  // 미편집 DXF의 원본 속성은 보존하고 웹 별칭만 설치 글꼴 이름으로 기록한다.
+  if (node.name === 'font') {
+    const name = child(node, 'name'), bold = child(node, 'b');
+    if (name?.attrs.val) {
+      const mapped = fontDesktopStyle(name.attrs.val, bold ? { bold: !['0', 'false'].includes(bold.attrs.val) } : {});
+      if (mapped.font !== name.attrs.val || mapped.bold !== undefined) {
+        const children = (node.children ?? []).map(item => item === name ? { ...item, attrs: { ...item.attrs, val: mapped.font } } : item);
+        if (mapped.bold !== undefined) {
+          const at = children.indexOf(bold), value = { name: 'b', attrs: { ...(bold?.attrs ?? {}), val: mapped.bold ? '1' : '0' }, children: [] };
+          if (at < 0) children.unshift(value); else children[at] = value;
+        }
+        node = { ...node, children };
+      }
+    }
+  }
   const attrs=Object.entries(node.attrs??{}).filter(([k])=>/^[A-Za-z_][\w.:-]*$/.test(k)).map(([k,v])=>` ${k}="${esc(v)}"`).join('');
   const body=esc(node.text??'')+(node.children??[]).map(styleNodeXml).join('');
   return `<${node.name}${attrs}${body?`>${body}</${node.name}>`:'/>'}`;
@@ -3431,7 +3443,8 @@ class StylePool {
   constructor(baseFont = WRITE_FONT, baseStyle = null) {
     this.baseFont = { name: baseFont.name || DEFAULT_FONT, size: baseFont.size || 11 };
     this.baseStyle = baseStyle && Object.keys(baseStyle).length ? baseStyle : null;
-    this.fonts = [`<font><sz val="${this.baseFont.size}"/><color theme="1"/><name val="${esc(this.baseFont.name)}"/><family val="3"/><charset val="129"/></font>`];
+    const desktop = fontDesktopStyle(this.baseFont.name);
+    this.fonts = [`<font>${desktop.bold !== undefined ? `<b val="${desktop.bold ? 1 : 0}"/>` : ''}<sz val="${this.baseFont.size}"/><color theme="1"/><name val="${esc(desktop.font)}"/><family val="3"/><charset val="129"/></font>`];
     this.fills = ['<fill><patternFill patternType="none"/></fill>', '<fill><patternFill patternType="gray125"/></fill>'];
     this.borders = ['<border><left/><right/><top/><bottom/><diagonal/></border>'];
     this.numFmts = [];
@@ -3485,8 +3498,9 @@ class StylePool {
     if (!Object.keys(style).length) return 0;
     const k = JSON.stringify(Object.keys(style).sort().map((key) => [key, style[key]]));
     if (!this.styleXfMode && this.maps.xf.has(k)) return this.maps.xf.get(k);
-    const fontFlag = (key, tag) => style[key] ? `<${tag}/>` : style[key] === false ? `<${tag} val="${tag === 'u' ? 'none' : '0'}"/>` : '';
-    const font = `<font>${fontFlag('bold', 'b')}${fontFlag('italic', 'i')}${fontFlag('strike', 'strike')}${fontFlag('underline', 'u')}<sz val="${style.size || this.baseFont.size}"/>${style.color ? `<color rgb="${argb(style.color)}"/>` : '<color theme="1"/>'}<name val="${esc(style.font || this.baseFont.name)}"/><family val="3"/><charset val="129"/></font>`;
+    const desktop = { ...style, ...fontDesktopStyle(style.font || this.baseFont.name, style) };
+    const fontFlag = (key, tag) => desktop[key] ? `<${tag}/>` : desktop[key] === false ? `<${tag} val="${tag === 'u' ? 'none' : '0'}"/>` : '';
+    const font = `<font>${fontFlag('bold', 'b')}${fontFlag('italic', 'i')}${fontFlag('strike', 'strike')}${fontFlag('underline', 'u')}<sz val="${style.size || this.baseFont.size}"/>${style.color ? `<color rgb="${argb(style.color)}"/>` : '<color theme="1"/>'}<name val="${esc(desktop.font)}"/><family val="3"/><charset val="129"/></font>`;
     const fontId = this.intern('font', this.fonts, font);
     const g = style.gradient;
     const gStops = g?.stops?.length ? g.stops.map(([p, c]) => `<stop position="${Number(p) || 0}"><color rgb="${argb(c)}"/></stop>`).join('') : '';
@@ -3571,8 +3585,10 @@ class StylePool {
   }
 
   dxf(style) {
-    const font = style.color || style.bold || style.italic || style.underline || style.strike
-      ? `<font>${style.bold ? '<b/>' : ''}${style.italic ? '<i/>' : ''}${style.strike ? '<strike/>' : ''}${style.underline ? '<u/>' : ''}${style.color ? `<color rgb="${argb(style.color)}"/>` : ''}</font>` : '';
+    const desktop = { ...style, ...fontDesktopStyle(style.font, style) };
+    const flag = (key, tag) => desktop[key] !== undefined ? `<${tag} val="${desktop[key] ? (tag === 'u' ? 'single' : '1') : (tag === 'u' ? 'none' : '0')}"/>` : '';
+    const font = ['font', 'size', 'color', 'bold', 'italic', 'underline', 'strike'].some(key => desktop[key] !== undefined)
+      ? `<font>${flag('bold', 'b')}${flag('italic', 'i')}${flag('strike', 'strike')}${flag('underline', 'u')}${desktop.font ? `<name val="${esc(desktop.font)}"/>` : ''}${desktop.size ? `<sz val="${Number(desktop.size)}"/>` : ''}${desktop.color ? `<color rgb="${argb(desktop.color)}"/>` : ''}</font>` : '';
     const fill = style.fill ? `<fill><patternFill><bgColor rgb="${argb(style.fill)}"/></patternFill></fill>` : '';
     const side = (n, k) => (style[k] ? `<${n} style="${style[`${k}s`] ?? 'thin'}">${style[`${k}c`] ? `<color rgb="${argb(style[`${k}c`])}"/>` : '<color auto="1"/>'}</${n}>` : '');
     const border = style.bt || style.bb || style.bl || style.br || style.bv || style.bh ? `<border>${side('left', 'bl')}${side('right', 'br')}${side('top', 'bt')}${side('bottom', 'bb')}${side('vertical', 'bv')}${side('horizontal', 'bh')}</border>` : '';
@@ -3587,7 +3603,7 @@ class StylePool {
     if(element.sourceDxf?.name==='dxf' && JSON.stringify(element.style??{})===JSON.stringify(element.sourceStyle)) {
       this.dxfs.push(styleNodeXml(element.sourceDxf));return this.dxfs.length-1;
     }
-    const st=element.style??{};
+    const original=element.style??{},st={...original,...fontDesktopStyle(original.font,original)};
     const bools=[['bold','b'],['italic','i'],['strike','strike']].filter(([k])=>st[k]!==undefined).map(([k,t])=>`<${t} val="${st[k]?1:0}"/>`).join('');
     const f=bools+(st.underline!==undefined?`<u val="${st.underline?'single':'none'}"/>`:'')+(st.size?`<sz val="${Number(st.size)}"/>`:'')+(st.font?`<name val="${esc(st.font)}"/>`:'')+(st.color?`<color rgb="${argb(st.color)}"/>`:'');
     let fill='';const g=st.gradient;
@@ -4119,13 +4135,15 @@ function shapeXml(sh, id, xfrm, hyperlinkXml = () => '') {
   const defaultAlign = sh.align ?? (sh.kind === 'textbox' ? 'left' : 'center');
   const algn = algnOf(defaultAlign);
   const faceXml = (font) => font ? `<a:latin typeface="${esc(font)}"/><a:ea typeface="${esc(font)}"/>` : '';
-  const textPr = `lang="ko-KR" sz="${Math.round((sh.size ?? 11) * 100)}" b="${sh.bold ? 1 : 0}" i="${sh.italic ? 1 : 0}" u="${sh.underline ? 'sng' : 'none'}" strike="${sh.strike ? 'sngStrike' : 'noStrike'}"`;
-  const textChildren = `<a:solidFill>${shapeColorXml(sh.color ?? '#000000')}</a:solidFill>${faceXml(sh.font)}`;
+  const desktop = { ...sh, ...fontDesktopStyle(sh.font, sh) };
+  const textPr = `lang="ko-KR" sz="${Math.round((sh.size ?? 11) * 100)}" b="${desktop.bold ? 1 : 0}" i="${sh.italic ? 1 : 0}" u="${sh.underline ? 'sng' : 'none'}" strike="${sh.strike ? 'sngStrike' : 'noStrike'}"`;
+  const textChildren = `<a:solidFill>${shapeColorXml(sh.color ?? '#000000')}</a:solidFill>${faceXml(desktop.font)}`;
   const rPr = `<a:rPr ${textPr}>${textChildren}</a:rPr>`;
   // false/none도 명시하여 Excel의 목록·문단 기본값이 다시 적용되지 않게 한다.
   const runXml = (r) => {
-    const a = `lang="ko-KR" sz="${Math.round((r.sz ?? sh.size ?? 11) * 100)}" b="${(r.b ?? sh.bold) ? 1 : 0}" i="${(r.i ?? sh.italic) ? 1 : 0}" u="${(r.u ?? sh.underline) ? 'sng' : 'none'}" strike="${(r.s ?? sh.strike) ? 'sngStrike' : 'noStrike'}"`;
-    const pr = `<a:rPr ${a}><a:solidFill>${shapeColorXml(r.color ?? sh.color ?? '#000000')}</a:solidFill>${faceXml(r.font ?? sh.font)}</a:rPr>`;
+    const source = { font: r.font ?? sh.font, bold: r.b ?? sh.bold }, face = { ...source, ...fontDesktopStyle(source.font, source) };
+    const a = `lang="ko-KR" sz="${Math.round((r.sz ?? sh.size ?? 11) * 100)}" b="${face.bold ? 1 : 0}" i="${(r.i ?? sh.italic) ? 1 : 0}" u="${(r.u ?? sh.underline) ? 'sng' : 'none'}" strike="${(r.s ?? sh.strike) ? 'sngStrike' : 'noStrike'}"`;
+    const pr = `<a:rPr ${a}><a:solidFill>${shapeColorXml(r.color ?? sh.color ?? '#000000')}</a:solidFill>${faceXml(face.font)}</a:rPr>`;
     const parts = String(r.t ?? '').split('\n');
     return parts.map((text, i) => `${i ? `<a:br>${pr}</a:br>` : ''}${text || parts.length === 1 ? `<a:r>${pr}<a:t xml:space="preserve">${esc(text)}</a:t></a:r>` : ''}`).join('');
   };

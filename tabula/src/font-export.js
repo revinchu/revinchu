@@ -1,5 +1,6 @@
 // 선택한 무료 웹폰트만 출력 문서에 담는다. 문서 문자열은 서버로 전송하지 않는다.
 import { getWebFont, webFontCssUrl, isAllowedFontUrl, fontFamilyCandidates } from './fonts.js';
+import { parseFontFaces, fontIdentityFaces } from './font-faces.js';
 
 const binaryCache = new Map(), licenseCache = new Map();
 let cachedBytes = 0;
@@ -57,17 +58,6 @@ export function collectMarkupFontUsage(markup, usage = createFontUsage()) {
   return usage;
 }
 
-function parseFaces(css, baseUrl) {
-  const faces = [];
-  for (const [block] of String(css).replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/@font-face\s*\{[^}]*\}/gi)) {
-    const field = name => new RegExp(`(?:[;{])\\s*${name}\\s*:\\s*([^;}]+)`, 'i').exec(block)?.[1]?.trim();
-    const source = field('src') ?? '';
-    const urls = [...source.matchAll(/url\(\s*(?:"([^"]+)"|'([^']+)'|([^\s)]+))\s*\)\s*(?:format\(['"]?([^)'"\s]+)['"]?\))?/gi)];
-    const pick = urls.find(m => /woff2/i.test(m[4] ?? '') || /\.woff2(?:[?#]|$)/i.test(m[1] ?? m[2] ?? m[3])) ?? urls[0];
-    if (pick) { let url; try { url = new URL(pick[1] ?? pick[2] ?? pick[3], baseUrl).href; } catch { continue; } faces.push({ url, weight: field('font-weight') ?? '400', style: field('font-style') ?? 'normal', unicodeRange: field('unicode-range') }); }
-  }
-  return faces;
-}
 function rangeContains(range, points) {
   if (!range) return true;
   for (const item of String(range).split(',')) {
@@ -151,7 +141,7 @@ export async function embedFontCss(usage, { onWarning, signal, fetchImpl = globa
     try {
       const entry = record.entry, url = webFontCssUrl(entry);
       const license = await fontLicense(entry, options);
-      const faces = entry.faces?.length ? entry.faces : url ? parseFaces(await fetchAsset(url, options, true), url) : [];
+      const faces = fontIdentityFaces(entry, entry.faces?.length ? entry.faces : url ? parseFontFaces(await fetchAsset(url, options, true), url) : []);
       const selected = usedFaces(faces, record);
       if (!selected.length) { warn(record.family); continue; }
       const familyCss = [];

@@ -1,0 +1,7438 @@
+{
+  "version": 1,
+  "verifiedAt": "2026-10-05",
+  "specification": "https://learn.microsoft.com/en-us/typography/opentype/spec/name",
+  "method": "Read OpenType name table Windows platform 3. IDs 1/2 are legacy family/style; IDs 16/17 are typographic family/style. Export uses verified ID 1. Default package preference TTF; preserve explicit valid OTF/TTF names. CSS source weights follow current web catalogue, not OS/2 numeric weight. Source ZIP entry sha256 covers the uncompressed font file; direct URL sha256 covers the response body.",
+  "scope": {
+    "cdnFamilies": 43,
+    "googleFamilies": [
+      "Nanum Gothic",
+      "Nanum Myeongjo",
+      "Nanum Gothic Coding",
+      "Nanum Pen Script",
+      "Nanum Brush Script"
+    ],
+    "additionalGoogleSamples": [
+      "Do Hyeon",
+      "Jua",
+      "Noto Sans KR"
+    ],
+    "allGoogleFamiliesAudited": false,
+    "variableFontsMapped": false
+  },
+  "reproduce": "Fetch each url; when entry is present inside a ZIP, inflate that exact entry. Verify SHA-256, parse the SFNT table directory and name table, and compare Windows name records. No user workbook or document content is used.",
+  "sources": [
+    {
+      "family": "cafe24Proup",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24PROUP_v0.2.zip",
+      "entry": "Cafe24PROUP_v0.2/Cafe24PROUP.otf",
+      "sha256": "203d75b68b07643c74f76db640b2bc387c526f45dd7bea2a818b9399c646da77",
+      "bytes": 413448,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "카페24 프로업"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24 PRO UP"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24PROUP"
+        ],
+        [
+          "0x0409",
+          16,
+          "카페24 프로업"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "카페24 프로업"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 프로업"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 프로업"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Proup",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24PROUP_v0.2.zip",
+      "entry": "Cafe24PROUP_v0.2/Cafe24PROUP.ttf",
+      "sha256": "73aad4cc2914ad419d654116ae49680c5213db6184db5063cee2362427d133be",
+      "bytes": 585668,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "카페24 프로업"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24 PRO UP"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24PROUP"
+        ],
+        [
+          "0x0409",
+          16,
+          "카페24 프로업"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "카페24 프로업"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 프로업"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 프로업"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "Cafe24ProSlimFit",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24PROSlimFit_v2.0.zip",
+      "entry": "Cafe24 PRO Slim Fit_v2.0/Cafe24PROSlimFit.otf",
+      "sha256": "d8a053788b5e9d7bf78686740ea378703447f21702a2169f43a7dfbbcbea8d2e",
+      "bytes": 284776,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 PRO Slim Fit"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24 PRO Slim Fit"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24PROSlimFit"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 PRO Slim"
+        ],
+        [
+          "0x0409",
+          17,
+          "Fit"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 PRO Slim Fit"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 프로슬림 핏"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 프로슬림"
+        ],
+        [
+          "0x0412",
+          17,
+          "Fit"
+        ]
+      ]
+    },
+    {
+      "family": "Cafe24ProSlimFit",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24PROSlimFit_v2.0.zip",
+      "entry": "Cafe24 PRO Slim Fit_v2.0/Cafe24PROSlimFit.ttf",
+      "sha256": "543304120153fbd8fd69ddc23ac9dfa8b06ca6dbd6cf34dd85ce3b5ab82c6f69",
+      "bytes": 798372,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 PRO Slim Fit"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24 PRO Slim Fit"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24PROSlimFit"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 PRO Slim"
+        ],
+        [
+          "0x0409",
+          17,
+          "Fit"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 PRO Slim Fit"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 프로슬림 핏"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 프로슬림"
+        ],
+        [
+          "0x0412",
+          17,
+          "Fit"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24MoyamoyaFace",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24MoyamoyaFace-v1.0.zip",
+      "entry": "Cafe24MoyamoyaFace-v1.0/Cafe24Moyamoya-Face-v1.0.otf",
+      "sha256": "2f571a5c40051c202f1e784d9e9a37e53c81a542c66e2f1767552089ff0c2a60",
+      "bytes": 341800,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Moyamoya OTF Face"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "카페24 모야모야 OTF Face"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24Moyamoya-OTF-Face"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Moyamoya OTF"
+        ],
+        [
+          "0x0409",
+          17,
+          "Face"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 Moyamoya OTF Face"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 모야모야 OTF Face"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 모야모야 OTF"
+        ],
+        [
+          "0x0412",
+          17,
+          "Face"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24MoyamoyaFace",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24MoyamoyaFace-v1.0.zip",
+      "entry": "Cafe24MoyamoyaFace-v1.0/Cafe24Moyamoya-Face-v1.0.ttf",
+      "sha256": "3ee18be7525d5c18a6fde9f939a9cce3a43319dba69035050b481008a3d516bf",
+      "bytes": 799204,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Moyamoya Face"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "카페24 모야모야 Face"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24Moyamoya-Face"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Moyamoya"
+        ],
+        [
+          "0x0409",
+          17,
+          "Face"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 Moyamoya Face"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 모야모야 Face"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 모야모야"
+        ],
+        [
+          "0x0412",
+          17,
+          "Face"
+        ]
+      ]
+    },
+    {
+      "family": "Cafe24ProSlimMax",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24PROSlimMax_v2.0.zip",
+      "entry": "Cafe24 PRO Slim Max_v2.0/Cafe24PROSlimMax.otf",
+      "sha256": "4b8ee1be8adb4d3fc8958ada15044916f26b0dcca8b0db8341eb8a78662ad787",
+      "bytes": 298052,
+      "weight": 700,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 PRO Slim Max"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24 PRO Slim Max"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24PROSlimMax"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 PRO Slim"
+        ],
+        [
+          "0x0409",
+          17,
+          "Max"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 PRO Slim Max"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 프로슬림 맥스"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 프로슬림"
+        ],
+        [
+          "0x0412",
+          17,
+          "Max"
+        ]
+      ]
+    },
+    {
+      "family": "Cafe24ProSlimMax",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24PROSlimMax_v2.0.zip",
+      "entry": "Cafe24 PRO Slim Max_v2.0/Cafe24PROSlimMax.ttf",
+      "sha256": "ea7896a5e4c89f426d5145bd1b2fb94b44eb6936ecfa38eb2b4ba803846493b1",
+      "bytes": 794488,
+      "weight": 700,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 PRO Slim Max"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24 PRO Slim Max"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24PROSlimMax"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 PRO Slim"
+        ],
+        [
+          "0x0409",
+          17,
+          "Max"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 PRO Slim Max"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 프로슬림 맥스"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 프로슬림"
+        ],
+        [
+          "0x0412",
+          17,
+          "Max"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Moyamoya",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24Moyamoya-v1.0.zip",
+      "entry": "Cafe24Moyamoya-v1.0/Cafe24Moyamoya-Regular-v1.0.otf",
+      "sha256": "1c3558362b6d7e1749b8b13c79457cc432daf05e8cdb8994eec431fc4d7d257d",
+      "bytes": 330420,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Moyamoya OTF"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "카페24 모야모야 OTF Regular"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24Moyamoya-OTF-Regular"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Moyamoya OTF"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 Moyamoya OTF"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 모야모야 OTF Regular"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 모야모야 OTF"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Moyamoya",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24Moyamoya-v1.0.zip",
+      "entry": "Cafe24Moyamoya-v1.0/Cafe24Moyamoya-Regular-v1.0.ttf",
+      "sha256": "2932addb84bb80eb66fb55edd043ab0674b56d37827b97a423f1c5d5902a910e",
+      "bytes": 798256,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Moyamoya"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "카페24 모야모야 Regular"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24Moyamoya-Regular"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Moyamoya"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 Moyamoya"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 모야모야 Regular"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 모야모야"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24SupermagicBold",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24Supermagic-Bold-v1.0.zip",
+      "entry": "Cafe24Supermagic-Bold-v1.0/Cafe24Supermagic-Bold-v1.0.ttf",
+      "sha256": "b357361e34af1c42219455ae09b6bb627baa6e816bfcd9d19ee8351a56932cef",
+      "bytes": 5746492,
+      "weight": 700,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Supermagic Bold"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "카페24 슈퍼매직 Bold"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24Supermagic-Bold"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Supermagic"
+        ],
+        [
+          "0x0409",
+          17,
+          "Bold"
+        ],
+        [
+          "0x0412",
+          1,
+          "카페24 슈퍼매직 Bold"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 슈퍼매직 Bold"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 슈퍼매직"
+        ],
+        [
+          "0x0412",
+          17,
+          "Bold"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24SupermagicBold",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24Supermagic-Bold-v1.0.zip",
+      "entry": "Cafe24Supermagic-Bold-v1.0/Cafe24Supermagic-Bold-v1.0.otf",
+      "sha256": "72701cf253a4116220597cca8eea30d7736069923d7e4d70c25278f3a2caf5c4",
+      "bytes": 2470768,
+      "weight": 700,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Supermagic OTF Bold"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "카페24 슈퍼매직 OTF Bold"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24Supermagic-OTF-Bold"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Supermagic OTF"
+        ],
+        [
+          "0x0409",
+          17,
+          "Bold"
+        ],
+        [
+          "0x0412",
+          1,
+          "카페24 슈퍼매직 OTF Bold"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 슈퍼매직 OTF Bold"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 슈퍼매직 OTF"
+        ],
+        [
+          "0x0412",
+          17,
+          "Bold"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Classictype",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24Classictype-v1.1.zip",
+      "entry": "Cafe24Classictype-v1.1/Cafe24Classictype-v1.1.ttf",
+      "sha256": "5426948b60b7d1e68bc676065ab049ebbc20843e5bf0bc7b102247f9b8b95cfc",
+      "bytes": 2512660,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 ClassicType"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "카페24 클래식타입 Regular"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24ClassicType-Regular"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 ClassicType"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 ClassicType"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 클래식타입 Regular"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 클래식타입"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Classictype",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24Classictype-v1.1.zip",
+      "entry": "Cafe24Classictype-v1.1/Cafe24Classictype-v1.1.otf",
+      "sha256": "e05bb7d4ed85268e0b7bfd0e68d66946cc90a174796619e52801401413cb9737",
+      "bytes": 1913912,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 ClassicType OTF"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "카페24 클래식타입 OTF"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24ClassicType-Regular-OTF"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 ClassicType OTF"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 ClassicType OTF"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 클래식타입 OTF"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 클래식타입 OTF"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "Cafe24ProSlimAir",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24PROSlimAir_v2.0.zip",
+      "entry": "Cafe24 PRO Slim Air_v2.0/Cafe24PROSlimAir.otf",
+      "sha256": "a61bae08ccf16e18e6187354af16b322d8484e475607ff249cdbc361fd6cdc52",
+      "bytes": 290776,
+      "weight": 300,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 PRO Slim Air"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24 PRO Slim Air"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24PROSlimAir"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 PRO Slim"
+        ],
+        [
+          "0x0409",
+          17,
+          "Air"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 PRO Slim Air"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 프로슬림 에어"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 프로슬림"
+        ],
+        [
+          "0x0412",
+          17,
+          "Air"
+        ]
+      ]
+    },
+    {
+      "family": "Cafe24ProSlimAir",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24PROSlimAir_v2.0.zip",
+      "entry": "Cafe24 PRO Slim Air_v2.0/Cafe24PROSlimAir.ttf",
+      "sha256": "f102c7628eb6be998378820baadf3d5abdb9bb4f32f39799f0117c8ec21fbd32",
+      "bytes": 783188,
+      "weight": 300,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 PRO Slim Air"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24 PRO Slim Air"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24PROSlimAir"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 PRO Slim"
+        ],
+        [
+          "0x0409",
+          17,
+          "Air"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 PRO Slim Air"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 프로슬림 에어"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 프로슬림"
+        ],
+        [
+          "0x0412",
+          17,
+          "Air"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24SsurroundAir",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24SsurroundAir-v1.1.zip",
+      "entry": "Cafe24SsurroundAir-v1.1/Cafe24SsurroundAir-v1.1.ttf",
+      "sha256": "16861fe2aa2702188a229291b98f540175dac3d420e37e616df9ef0bd37d6e47",
+      "bytes": 4124024,
+      "weight": 300,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Ssurround air Light"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "카페24 써라운드 에어"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24Ssurroundair"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Ssurround air"
+        ],
+        [
+          "0x0409",
+          17,
+          "Light"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 Ssurround air Light"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 써라운드 에어"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 써라운드 에어"
+        ],
+        [
+          "0x0412",
+          17,
+          "Light"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24SsurroundAir",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24SsurroundAir-v1.1.zip",
+      "entry": "Cafe24SsurroundAir-v1.1/Cafe24SsurroundAir-v1.1.otf",
+      "sha256": "7049851a7e8eadaf6bdabe95facc696cf7d06a05028ccc322053836e4f930946",
+      "bytes": 1266476,
+      "weight": 300,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Ssurround air OTF Light"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "카페24 써라운드 에어 OTF"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24SsurroundairOTF"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Ssurround air OTF"
+        ],
+        [
+          "0x0409",
+          17,
+          "Light"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 Ssurround air OTF Light"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 써라운드 에어 OTF"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 써라운드 에어 OTF"
+        ],
+        [
+          "0x0412",
+          17,
+          "Light"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24OhsquareAir",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24OhsquareAir-v2.0.zip",
+      "entry": "Cafe24OhsquareAir-v2.0/Cafe24OhsquareAir-v2.0.ttf",
+      "sha256": "519235bd3e337aba5610be6ce07a2f24a8c12f6876ffe290e488c53b79c3e6ef",
+      "bytes": 1804352,
+      "weight": 300,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Ohsquare air Light"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "카페24 아네모네 에어"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24-Ohsquareair"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Ohsquare air"
+        ],
+        [
+          "0x0409",
+          17,
+          "Light"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 Ohsquare air Light"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 아네모네 에어"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 아네모네에어"
+        ],
+        [
+          "0x0412",
+          17,
+          "Light"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24OhsquareAir",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24OhsquareAir-v2.0.zip",
+      "entry": "Cafe24OhsquareAir-v2.0/Cafe24OhsquareAir-v2.0.otf",
+      "sha256": "b030aa5e4f279649fde3d20cb2e6167e67ceb89ec1e85721228db1e4ce533aa3",
+      "bytes": 1097432,
+      "weight": 300,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Ohsquare air OTF Light"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "카페24 아네모네 에어 OTF"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24-Ohsquareair-OTF"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Ohsquare air OTF"
+        ],
+        [
+          "0x0409",
+          17,
+          "Light"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 Ohsquare air OTF Light"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 아네모네 에어 OTF"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 아네모네에어 OTF"
+        ],
+        [
+          "0x0412",
+          17,
+          "Light"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Ssurround",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24Ssurround-v2.0.zip",
+      "entry": "Cafe24Ssurround-v2.0/Cafe24Ssurround-v2.0.otf",
+      "sha256": "6729ca473ab04f145b5246fa66128c474749e06b62ae07e94eab7b7850cf0b23",
+      "bytes": 1609932,
+      "weight": 700,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Ssurround OTF Bold"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "카페24 써라운드 OTF"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24SsurroundOTF"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Ssurround OTF"
+        ],
+        [
+          "0x0409",
+          17,
+          "Bold"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 Ssurround OTF Bold"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 써라운드 OTF"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 써라운드 OTF"
+        ],
+        [
+          "0x0412",
+          17,
+          "Bold"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Ssurround",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24Ssurround-v2.0.zip",
+      "entry": "Cafe24Ssurround-v2.0/Cafe24Ssurround-v2.0.ttf",
+      "sha256": "def521fb935f84b88a01e83631171fc9beb1208075b7cbeb6017daab590b63b5",
+      "bytes": 3844448,
+      "weight": 700,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Ssurround Bold"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "카페24 써라운드"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24Ssurround"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Ssurround"
+        ],
+        [
+          "0x0409",
+          17,
+          "Bold"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 Ssurround Bold"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 써라운드"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 써라운드"
+        ],
+        [
+          "0x0412",
+          17,
+          "Bold"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24SupermagicRegular",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24Supermagic-Regular-v1.0.zip",
+      "entry": "Cafe24Supermagic-Regular-v1.0/Cafe24Supermagic-Regular-v1.0.otf",
+      "sha256": "47d5a9cd62000db5afe5687adb5155f308908eac997a77a2b42c87ebf5ed7e5c",
+      "bytes": 2666628,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Supermagic OTF"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "카페24 슈퍼매직 OTF Regular"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24Supermagic-OTF-Regular"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Supermagic OTF"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "카페24 슈퍼매직 OTF"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 슈퍼매직 OTF Regular"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 슈퍼매직 OTF"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24SupermagicRegular",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24Supermagic-Regular-v1.0.zip",
+      "entry": "Cafe24Supermagic-Regular-v1.0/Cafe24Supermagic-Regular-v1.0.ttf",
+      "sha256": "2486b3ce600be80e933f48e2d6e4957edf688a972ab1868128f78270f6175e84",
+      "bytes": 5592920,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Supermagic"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "카페24 슈퍼매직 Regular"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24Supermagic-Regular"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Supermagic"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "카페24 슈퍼매직"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 슈퍼매직 Regular"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 슈퍼매직"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Dangdanghae",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24Dangdanghae-v2.0.zip",
+      "entry": "Cafe24Dangdanghae-v2.0/Cafe24Dangdanghae-v2.0.otf",
+      "sha256": "c529a0460485354361afb07957c9a943085d4e13e561cf826fb312fdf2f226b1",
+      "bytes": 1973888,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Dangdanghae OTF"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "카페24 당당해 OTF"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24DangdanghaeOTF"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Dangdanghae OTF"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 Dangdanghae OTF"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 당당해 OTF"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 당당해 OTF"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Dangdanghae",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24Dangdanghae-v2.0.zip",
+      "entry": "Cafe24Dangdanghae-v2.0/Cafe24Dangdanghae-v2.0.ttf",
+      "sha256": "da1450113466eb448ce6e58a2e563abdad22c8920b776d97062557a4d0338c07",
+      "bytes": 2139296,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Dangdanghae"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "카페24 당당해"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24Dangdanghae"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Dangdanghae"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 Dangdanghae"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 당당해"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 당당해"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Ohsquare",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24Ohsquare-v2.0.zip",
+      "entry": "Cafe24Ohsquare-v2.0/Cafe24Ohsquare-v2.0.ttf",
+      "sha256": "873eda89c8b36e3b35fa21f16c20579ed61494eb75aadb7eb1929dac60454780",
+      "bytes": 1733404,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Ohsquare"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "카페24 아네모네 Regular"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24Ohsquare"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Ohsquare"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 Ohsquare"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 아네모네 Regular"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 아네모네"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Ohsquare",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24Ohsquare-v2.0.zip",
+      "entry": "Cafe24Ohsquare-v2.0/Cafe24Ohsquare-v2.0.otf",
+      "sha256": "df9e2695ec0c5c4b3061a42691d92a43918b81e4bb7eb3d29bf02931ed20e4cf",
+      "bytes": 1291720,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Ohsquare OTF"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "카페24 아네모네 OTF"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24OhsquareOTF"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Ohsquare OTF"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 Ohsquare OTF"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 아네모네 OTF"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 아네모네 OTF"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Oneprettynight",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24Oneprettynight-v2.0.zip",
+      "entry": "Cafe24Oneprettynight-v2.0/Cafe24Oneprettynight-v2.0.otf",
+      "sha256": "455a3782416ca53d1ee0a425a3ea0a6b25227429a9947e3f997aaffab48e6744",
+      "bytes": 2318592,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 OnePrettyNight OTF"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "카페24 고운밤 OTF"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24OneprettynightOTF"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Oneprettynight OTF"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 OnePrettyNight OTF"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 고운밤 OTF"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 고운밤 OTF"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Oneprettynight",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24Oneprettynight-v2.0.zip",
+      "entry": "Cafe24Oneprettynight-v2.0/Cafe24Oneprettynight-v2.0.ttf",
+      "sha256": "9d9110d9a4a35628b72d1fb37c37cd04f69968dd0f81832c1054e06545c02f31",
+      "bytes": 6417080,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 OnePrettyNight"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "카페24 고운밤"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24Oneprettynight"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Oneprettynight"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 OnePrettyNight"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 고운밤"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 고운밤"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24DongdongLight",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24DongdongLight_v3.0.zip",
+      "entry": "Cafe24DongdongLight_v3.0/Cafe24DongdongLight.otf",
+      "sha256": "e60b260daf0e4915b67db51cf1eac66c850dc8756ed46cd6961a90df6a05a064",
+      "bytes": 417240,
+      "weight": 300,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Dongdong Light"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24 Dongdong"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24DongdongLight"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Dongdong"
+        ],
+        [
+          "0x0409",
+          17,
+          "Light"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 Dongdong Light"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "Cafe24 동동 라이트"
+        ],
+        [
+          "0x0412",
+          16,
+          "Cafe24 동동"
+        ],
+        [
+          "0x0412",
+          17,
+          "Light"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24DongdongLight",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24DongdongLight_v3.0.zip",
+      "entry": "Cafe24DongdongLight_v3.0/Cafe24DongdongLight.ttf",
+      "sha256": "542e5298893e7b043047c208953e1f908bba99c05e444f572022717e2e6c5bbb",
+      "bytes": 1503404,
+      "weight": 300,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Dongdong Light"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24 Dongdong"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24DongdongLight"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Dongdong"
+        ],
+        [
+          "0x0409",
+          17,
+          "Light"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 Dongdong Light"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "Cafe24 동동 라이트"
+        ],
+        [
+          "0x0412",
+          16,
+          "Cafe24 동동"
+        ],
+        [
+          "0x0412",
+          17,
+          "Light"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Simplehae",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24Simplehae-v2.0.zip",
+      "entry": "Cafe24Simplehae-v2.0/Cafe24Simplehae-v2.0.ttf",
+      "sha256": "0f0a46971b93bfb7c3d7ffc78febdaeaf1e22ad92d43a5207287028838033db4",
+      "bytes": 2019940,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Simplehae"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "카페24 심플해 "
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24Simplehae"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Simplehae"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 Simplehae"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 심플해 "
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 심플해"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Simplehae",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24Simplehae-v2.0.zip",
+      "entry": "Cafe24Simplehae-v2.0/Cafe24Simplehae-v2.0.otf",
+      "sha256": "ffb9cb9aa4981ea90c12a5c7b3d8aa87ab2d429a3da2f1eb4461af80b7840116",
+      "bytes": 1535204,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Simplehae OTF"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "카페24 심플해 OTF"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24SimplehaeOTF"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Simplehae OTF"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 Simplehae OTF"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 심플해 OTF"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 심플해 OTF"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Shiningstar",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24Shiningstar-v2.0.zip",
+      "entry": "Cafe24Shiningstar-v2.0/Cafe24Shiningstar-v2.0.otf",
+      "sha256": "2bc347416fb881ac753a69e679255770f919cf1e39c3a7893b2009db588ec177",
+      "bytes": 3927988,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Shiningstar OTF"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "카페24 빛나는별 OTF"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24Shiningstar OTF"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Shiningstar OTF"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 Shiningstar OTF"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 빛나는별 OTF"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 빛나는별 OTF"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Shiningstar",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24Shiningstar-v2.0.zip",
+      "entry": "Cafe24Shiningstar-v2.0/Cafe24Shiningstar-v2.0.ttf",
+      "sha256": "6e8f5d9ace7f27e71f7081a1829fb1ea7ab979ee9cbf26e551d80114b3a86ecd",
+      "bytes": 9172384,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Shiningstar"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "카페24 빛나는별 Regular"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24Shiningstar"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Shiningstar"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 Shiningstar"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 빛나는별 Regular"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 빛나는별"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Danjunghae",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24Danjunghae-v2.0.zip",
+      "entry": "Cafe24Danjunghae-v2.0/Cafe24Danjunghae-v2.0.otf",
+      "sha256": "ac0b718e6cb5c9da4020b0d8235bfa25b4787ef56c4c1dad26c1e2fc5e1dc646",
+      "bytes": 1892952,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Danjunghae OTF"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "카페24 단정해 OTF"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24DanjunghaeOTF"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Danjunghae OTF"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 Danjunghae OTF"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 단정해 OTF"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 단정해 OTF"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Danjunghae",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24Danjunghae-v2.0.zip",
+      "entry": "Cafe24Danjunghae-v2.0/Cafe24Danjunghae-v2.0.ttf",
+      "sha256": "9ae10a66b2ef8633319a984b926aa46faa9e5edf04eb2a20026c15cd4ad7e550",
+      "bytes": 2538588,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Danjunghae"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "카페24 단정해"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24Danjunghae"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Danjunghae"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 Danjunghae"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 단정해"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 단정해"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24SsukssukLight",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24SsukssukLight_v3.0.zip",
+      "entry": "Cafe24SsukssukLight_v3.0/Cafe24SsukssukLight.otf",
+      "sha256": "5f2836dc647d613dd74a1ff1de50e1dc914a093f1e6f432573cd69a891a5edd9",
+      "bytes": 519284,
+      "weight": 300,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Ssukssuk Light"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24 Ssukssuk"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24SsukssukLight"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Ssukssuk"
+        ],
+        [
+          "0x0409",
+          17,
+          "Light"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 Ssukssuk Light"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 쑥쑥 라이트"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 쑥쑥 "
+        ],
+        [
+          "0x0412",
+          17,
+          "Light"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24SsukssukLight",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24SsukssukLight_v3.0.zip",
+      "entry": "Cafe24SsukssukLight_v3.0/Cafe24SsukssukLight.ttf",
+      "sha256": "23a351d5a7501495e72002553637a7c6f582cc42f661fab3da5fc77b4177ecdc",
+      "bytes": 1569652,
+      "weight": 300,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Ssukssuk Light"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24 Ssukssuk"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24SsukssukLight"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Ssukssuk"
+        ],
+        [
+          "0x0409",
+          17,
+          "Light"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 Ssukssuk Light"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 쑥쑥 라이트"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 쑥쑥 "
+        ],
+        [
+          "0x0412",
+          17,
+          "Light"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Angbanana",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/en/Cafe24Angbanana.zip",
+      "entry": "Cafe24Angbanana/Cafe24Angbanana.otf",
+      "sha256": "111ae9e7f2d41d84f316d0683f444c5e07958e0f126884a21b3c732ab615be7d",
+      "bytes": 28200,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Angbanana"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24 Angbanana"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24Angbanana"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Angbanana"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Angbanana",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/en/Cafe24Angbanana.zip",
+      "entry": "Cafe24Angbanana/Cafe24Angbanana.ttf",
+      "sha256": "48edbb548ef4809cbc40aadda964ce32b604f99825a2f70c76b28e6c6c3c25df",
+      "bytes": 41144,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Angbanana"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24 Angbanana"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24Angbanana"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Angbanana"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24NyangiW",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/en/Cafe24NyangiW-v1.0.zip",
+      "entry": "Cafe24Nyangi-W-v1.0.otf",
+      "sha256": "979c80be46ae7b2575c97eb4b2daa312c09bd1db4f64e3166bc7691c59bf7f44",
+      "bytes": 40064,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Nyangi W"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24NyangiW"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24NyangiW"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Nyangi W"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24NyangiW",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/en/Cafe24NyangiW-v1.0.zip",
+      "entry": "Cafe24Nyangi-W-v1.0.ttf",
+      "sha256": "b29fbfa9b51042642ab1a1afb7344c2014a73659b6e02998a1a8eeb7bafb830f",
+      "bytes": 107384,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Nyangi W"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24NyangiW"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24NyangiW"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Nyangi W"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24NyangiB",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/en/Cafe24NyangiB-v1.0.zip",
+      "entry": "Cafe24Nyangi-B-v1.0.otf",
+      "sha256": "e40a433daeccc6a2bfeaef04ef241448f6a14195563cf49197189d06219a6793",
+      "bytes": 32000,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Nyangi B"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24NyangiB"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24NyangiB"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Nyangi B"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24NyangiB",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/en/Cafe24NyangiB-v1.0.zip",
+      "entry": "Cafe24Nyangi-B-v1.0.ttf",
+      "sha256": "574a0f4b32f42db8bb86874c3a3d632000b08ceadb4fb051916113fb93841369",
+      "bytes": 50372,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Nyangi B"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24NyangiB"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24NyangiB"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Nyangi B"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Syongsyong",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24Syongsyong-v2.0.zip",
+      "entry": "Cafe24Syongsyong-v2.0/Cafe24Syongsyong-v2.0.otf",
+      "sha256": "108e23dc88948d866c345f0f6fd2cad7e0356ff7a964580d5be028ce03e7dd20",
+      "bytes": 1952708,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Syongsyong OTF"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "카페24 숑숑 OTF"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24SyongsyongOTF"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Syongsyong OTF"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 Syongsyong OTF"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 숑숑 OTF"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 숑숑 OTF"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Syongsyong",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24Syongsyong-v2.0.zip",
+      "entry": "Cafe24Syongsyong-v2.0/Cafe24Syongsyong-v2.0.ttf",
+      "sha256": "998ce839b421fa3677bdbb6cf81277ffd842962792c66642dcfff2c787192994",
+      "bytes": 5215780,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Syongsyong"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "카페24 숑숑"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24Syongsyong"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Syongsyong"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 Syongsyong"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 숑숑"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 숑숑"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24MeongiW",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/en/Cafe24MeongiW-v1.0.zip",
+      "entry": "Cafe24MeongiW-v1.0/Cafe24Meongi-W-v1.0.otf",
+      "sha256": "cf330c027f6736c183b278a0964edf73abff710760f15f306fb2757b7608e5fa",
+      "bytes": 93168,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Meongi W"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24 Meongi W"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24Meongi W"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Meongi W"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24MeongiW",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/en/Cafe24MeongiW-v1.0.zip",
+      "entry": "Cafe24MeongiW-v1.0/Cafe24Meongi-W-v1.0.ttf",
+      "sha256": "8b0fc17b2ba3db81bd260975b3419d8d02b45ffe5bffe518bbfeb2bf8d76e650",
+      "bytes": 205768,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Meongi W"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24 Meongi W"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24Meongi W"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Meongi W"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Behappy",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/en/Cafe24Behappy.zip",
+      "entry": "Cafe24Behappy.ttf",
+      "sha256": "a1188c4b979c43266622e40800a5dc10797c4c98e8be700c067f7602911b59e6",
+      "bytes": 61268,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Behappy"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24 Behappy"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24Behappy"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Behappy"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Decobox",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/en/Cafe24Decobox.zip",
+      "entry": "Cafe24Decobox.ttf",
+      "sha256": "e7dd8470a27436bf8c3b567c0b0db225bfdadfe249ebb932381446c436b8a50e",
+      "bytes": 92220,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Decobox"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24 Decobox"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24Decobox"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Decobox"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24MeongiB",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/en/Cafe24MeongiB-v1.0.zip",
+      "entry": "Cafe24MeongiB-v1.0/Cafe24Meongi-B-v1.0.otf",
+      "sha256": "15f46484ec831b261fc744ff63b5fcb87a2246f0fe076064418974c1dd315a48",
+      "bytes": 41384,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Meongi B"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24 Meongi B"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24Meongi B"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Meongi B"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24MeongiB",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/en/Cafe24MeongiB-v1.0.zip",
+      "entry": "Cafe24MeongiB-v1.0/Cafe24Meongi-B-v1.0.ttf",
+      "sha256": "40ba08cec3b54009422bcbd955b56f841e2b44836586f1307d78bce3c8d6b9ca",
+      "bytes": 74056,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Meongi B"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24 Meongi B"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24Meongi B"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Meongi B"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Decoline",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/en/Cafe24Decoline.zip",
+      "entry": "Cafe24Decoline.ttf",
+      "sha256": "f9d98c7caf0dc255e95d32c8c75b702112e4155e22774205c194d7ff013f0e90",
+      "bytes": 170836,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Decoline"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24 Decoline"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24Decoline"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Decoline"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Decomilk",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/en/Cafe24Decomilk.zip",
+      "entry": "Cafe24Decomilk.ttf",
+      "sha256": "18c3f401bf8b602c18244aaa0734323beee11c28d8a2e5e37151ee2591c8a631",
+      "bytes": 215796,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Decomilk"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24 Decomilk"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24Decomilk"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Decomilk"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Decoshadow",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/en/Cafe24Decoshadow.zip",
+      "entry": "Cafe24Decoshadow.ttf",
+      "sha256": "bff9c0a3d28f8590d18da25dba772941dda716984074e738fd803884cb3b4e35",
+      "bytes": 180544,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Decoshadow"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24 Decoshadow"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24Decoshadow"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Decoshadow"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Decozoo",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/en/Cafe24Decozoo.zip",
+      "entry": "Cafe24Decozoo.ttf",
+      "sha256": "0120d99b72f1d637048ad6a5132f7aea2ead7e8fa9f1b176a8b8a4ff5f85ee5f",
+      "bytes": 302868,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Decozoo"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24 Decozoo"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24Decozoo"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Decozoo"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Lovingu",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/en/Cafe24Lovingu.zip",
+      "entry": "Cafe24Lovingu.ttf",
+      "sha256": "6a231b89464c2afd05b00dccc22361876efec4e976acb70733fe53738a66e69b",
+      "bytes": 61292,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Lovingu"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24 Lovingu"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24Lovingu"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Lovingu"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Dongdong",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24DongdongRegular_v3.0.zip",
+      "entry": "Cafe24DongdongRegular_v3.0/Cafe24DongdongRegular.otf",
+      "sha256": "9768b4c22405d8aea8f84f0f59748f80fa4e78ef32a4b64851a427cd8bbd2bab",
+      "bytes": 1875928,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Dongdong"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24 Dongdong"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24DongdongRegular"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Dongdong"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 Dongdong"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "Cafe24 동동 레귤러"
+        ],
+        [
+          "0x0412",
+          16,
+          "Cafe24 동동"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Dongdong",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24DongdongRegular_v3.0.zip",
+      "entry": "Cafe24DongdongRegular_v3.0/Cafe24DongdongRegular.ttf",
+      "sha256": "a5ccae1a8c108ba15535ea3b08f8f4ef63b6fc2a45848c5fa6c570d741146d8d",
+      "bytes": 8175088,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Dongdong"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24 Dongdong"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24DongdongRegular"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Dongdong"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 Dongdong"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "Cafe24 동동 레귤러"
+        ],
+        [
+          "0x0412",
+          16,
+          "Cafe24 동동"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Decoschool",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/en/Cafe24Decoschool.zip",
+      "entry": "Cafe24Decoschool.ttf",
+      "sha256": "03d42278a77c77ff9a22edd05b28bc42cc7181e2871427f7f30acc9aecc08df5",
+      "bytes": 511100,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Decoschool"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24 Decoschool"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24Decoschool"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Decoschool"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Ssukssuk",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24SsukssukRegular_v3.0.zip",
+      "entry": "Cafe24Ssukssuk Regular_v3.0/Cafe24SsukssukRegular.otf",
+      "sha256": "041ee97e729ecd786708a11f368b60cbd5e6c54cb25c6df494ae7159d13806f5",
+      "bytes": 2038456,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Ssukssuk"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24 Ssukssuk"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24SsukssukRegular"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Ssukssuk"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 Ssukssuk"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 쑥쑥 레귤러"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 쑥쑥"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "cafe24Ssukssuk",
+      "url": "https://img.cafe24.com/csdstatic/freefonts/download/kr/Cafe24SsukssukRegular_v3.0.zip",
+      "entry": "Cafe24Ssukssuk Regular_v3.0/Cafe24SsukssukRegular.ttf",
+      "sha256": "f6c70cd91fba998d4cbf91e3ff48213248aae0d21a993a1431a078c1f72887f6",
+      "bytes": 9053076,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Cafe24 Ssukssuk"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Cafe24 Ssukssuk"
+        ],
+        [
+          "0x0409",
+          6,
+          "Cafe24SsukssukRegular"
+        ],
+        [
+          "0x0409",
+          16,
+          "Cafe24 Ssukssuk"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "Cafe24 Ssukssuk"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "카페24 쑥쑥 레귤러"
+        ],
+        [
+          "0x0412",
+          16,
+          "카페24 쑥쑥"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "Pretendard",
+      "url": "https://raw.githubusercontent.com/orioncactus/pretendard/v1.3.9/packages/pretendard/dist/public/static/Pretendard-Bold.otf",
+      "sha256": "2e91915fab54df71cc9598ebf608b2bdb54c6fe3c066ac61dff0bc44fca71cc7",
+      "bytes": 1576660,
+      "weight": 700,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Pretendard"
+        ],
+        [
+          "0x0409",
+          2,
+          "Bold"
+        ],
+        [
+          "0x0409",
+          4,
+          "Pretendard Bold"
+        ],
+        [
+          "0x0409",
+          6,
+          "Pretendard-Bold"
+        ],
+        [
+          "0x0409",
+          16,
+          "Pretendard"
+        ],
+        [
+          "0x0409",
+          17,
+          "Bold"
+        ]
+      ]
+    },
+    {
+      "family": "Pretendard",
+      "url": "https://raw.githubusercontent.com/orioncactus/pretendard/v1.3.9/packages/pretendard/dist/public/static/Pretendard-Regular.otf",
+      "sha256": "3ffbacde6ab8411f1d2db54bb9b1f0b3ee2a738932033722cf0388c06aed1c93",
+      "bytes": 1574352,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Pretendard"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Pretendard Regular"
+        ],
+        [
+          "0x0409",
+          6,
+          "Pretendard-Regular"
+        ],
+        [
+          "0x0409",
+          16,
+          "Pretendard"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "Pretendard",
+      "url": "https://raw.githubusercontent.com/orioncactus/pretendard/v1.3.9/packages/pretendard/dist/public/static/Pretendard-Medium.otf",
+      "sha256": "d39e50e4bb52b4993b6a4eeb821a171254745bd824446af01e1f616b89fface0",
+      "bytes": 1584068,
+      "weight": 500,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Pretendard Medium"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Pretendard Medium"
+        ],
+        [
+          "0x0409",
+          6,
+          "Pretendard-Medium"
+        ],
+        [
+          "0x0409",
+          16,
+          "Pretendard"
+        ],
+        [
+          "0x0409",
+          17,
+          "Medium"
+        ]
+      ]
+    },
+    {
+      "family": "Pretendard",
+      "url": "https://raw.githubusercontent.com/orioncactus/pretendard/v1.3.9/packages/pretendard/dist/public/static/alternative/Pretendard-ExtraBold.ttf",
+      "sha256": "eedbd2877218242323bdff816684f7f5c325e54ae820d5b78eec9a5e5c7edef6",
+      "bytes": 2669648,
+      "weight": 800,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Pretendard ExtraBold"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Pretendard ExtraBold"
+        ],
+        [
+          "0x0409",
+          6,
+          "Pretendard-ExtraBold"
+        ],
+        [
+          "0x0409",
+          16,
+          "Pretendard"
+        ],
+        [
+          "0x0409",
+          17,
+          "ExtraBold"
+        ]
+      ]
+    },
+    {
+      "family": "Pretendard",
+      "url": "https://raw.githubusercontent.com/orioncactus/pretendard/v1.3.9/packages/pretendard/dist/public/static/alternative/Pretendard-Bold.ttf",
+      "sha256": "c16b88c670d23e83fa1170c954cbc4822d3b8dad3c3cde15d798a94b43d97985",
+      "bytes": 2661752,
+      "weight": 700,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Pretendard"
+        ],
+        [
+          "0x0409",
+          2,
+          "Bold"
+        ],
+        [
+          "0x0409",
+          4,
+          "Pretendard Bold"
+        ],
+        [
+          "0x0409",
+          6,
+          "Pretendard-Bold"
+        ],
+        [
+          "0x0409",
+          16,
+          "Pretendard"
+        ],
+        [
+          "0x0409",
+          17,
+          "Bold"
+        ]
+      ]
+    },
+    {
+      "family": "Pretendard",
+      "url": "https://raw.githubusercontent.com/orioncactus/pretendard/v1.3.9/packages/pretendard/dist/public/static/alternative/Pretendard-ExtraLight.ttf",
+      "sha256": "041fad1c6a532208d52def16576f0d1dd7f1b77b9306c657f69bf619f2b638cc",
+      "bytes": 2838808,
+      "weight": 200,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Pretendard ExtraLight"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Pretendard ExtraLight"
+        ],
+        [
+          "0x0409",
+          6,
+          "Pretendard-ExtraLight"
+        ],
+        [
+          "0x0409",
+          16,
+          "Pretendard"
+        ],
+        [
+          "0x0409",
+          17,
+          "ExtraLight"
+        ]
+      ]
+    },
+    {
+      "family": "Pretendard",
+      "url": "https://raw.githubusercontent.com/orioncactus/pretendard/v1.3.9/packages/pretendard/dist/public/static/alternative/Pretendard-Black.ttf",
+      "sha256": "0a7c1fd65a599f9d25de860cc832ea9ac40c207775e33eb4344a4647392a2b5d",
+      "bytes": 2665004,
+      "weight": 900,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Pretendard Black"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Pretendard Black"
+        ],
+        [
+          "0x0409",
+          6,
+          "Pretendard-Black"
+        ],
+        [
+          "0x0409",
+          16,
+          "Pretendard"
+        ],
+        [
+          "0x0409",
+          17,
+          "Black"
+        ]
+      ]
+    },
+    {
+      "family": "Pretendard",
+      "url": "https://raw.githubusercontent.com/orioncactus/pretendard/v1.3.9/packages/pretendard/dist/public/static/alternative/Pretendard-Light.ttf",
+      "sha256": "1ba73b22955754bb9ed6bbf7678416af647f90704e9064661f7924da578dad3e",
+      "bytes": 2813692,
+      "weight": 300,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Pretendard Light"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Pretendard Light"
+        ],
+        [
+          "0x0409",
+          6,
+          "Pretendard-Light"
+        ],
+        [
+          "0x0409",
+          16,
+          "Pretendard"
+        ],
+        [
+          "0x0409",
+          17,
+          "Light"
+        ]
+      ]
+    },
+    {
+      "family": "Pretendard",
+      "url": "https://raw.githubusercontent.com/orioncactus/pretendard/v1.3.9/packages/pretendard/dist/public/static/alternative/Pretendard-Medium.ttf",
+      "sha256": "3bae579377eb8e9ac412cb4809ebc3de1d956ed75995c1e346f0c1311053f4e2",
+      "bytes": 2701192,
+      "weight": 500,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Pretendard Medium"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Pretendard Medium"
+        ],
+        [
+          "0x0409",
+          6,
+          "Pretendard-Medium"
+        ],
+        [
+          "0x0409",
+          16,
+          "Pretendard"
+        ],
+        [
+          "0x0409",
+          17,
+          "Medium"
+        ]
+      ]
+    },
+    {
+      "family": "Pretendard",
+      "url": "https://raw.githubusercontent.com/orioncactus/pretendard/v1.3.9/packages/pretendard/dist/public/static/alternative/Pretendard-SemiBold.ttf",
+      "sha256": "5e1c548732af70873103066c16e1369b9a8a871f0b38c321a1d5bc73e43cea2d",
+      "bytes": 2671468,
+      "weight": 600,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Pretendard SemiBold"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Pretendard SemiBold"
+        ],
+        [
+          "0x0409",
+          6,
+          "Pretendard-SemiBold"
+        ],
+        [
+          "0x0409",
+          16,
+          "Pretendard"
+        ],
+        [
+          "0x0409",
+          17,
+          "SemiBold"
+        ]
+      ]
+    },
+    {
+      "family": "Pretendard",
+      "url": "https://raw.githubusercontent.com/orioncactus/pretendard/v1.3.9/packages/pretendard/dist/public/static/alternative/Pretendard-Regular.ttf",
+      "sha256": "6d0af5258997aec7354a6e340fc2325ba321c410ca48b3af858c8c3d6e92a324",
+      "bytes": 2725828,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Pretendard"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Pretendard Regular"
+        ],
+        [
+          "0x0409",
+          6,
+          "Pretendard-Regular"
+        ],
+        [
+          "0x0409",
+          16,
+          "Pretendard"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "SUIT",
+      "url": "https://raw.githubusercontent.com/sun-typeface/SUIT/v2.0.5/fonts/static/otf/SUIT-Bold.otf",
+      "sha256": "40178aa07b8ce5ef7bfe8381641272de8e6020095245995d95ed71c26f54f2a8",
+      "bytes": 352192,
+      "weight": 700,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "SUIT"
+        ],
+        [
+          "0x0409",
+          2,
+          "Bold"
+        ],
+        [
+          "0x0409",
+          4,
+          "SUIT Bold"
+        ],
+        [
+          "0x0409",
+          6,
+          "SUIT-Bold"
+        ],
+        [
+          "0x0409",
+          16,
+          "SUIT"
+        ],
+        [
+          "0x0409",
+          17,
+          "Bold"
+        ]
+      ]
+    },
+    {
+      "family": "SUIT",
+      "url": "https://raw.githubusercontent.com/sun-typeface/SUIT/v2.0.5/fonts/static/otf/SUIT-Medium.otf",
+      "sha256": "204c9e9caad3a1f7cfe45bbec9e71cd679f6f009edfaa9fae85363722f5b333e",
+      "bytes": 352024,
+      "weight": 500,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "SUIT Medium"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "SUIT Medium"
+        ],
+        [
+          "0x0409",
+          6,
+          "SUIT-Medium"
+        ],
+        [
+          "0x0409",
+          16,
+          "SUIT"
+        ],
+        [
+          "0x0409",
+          17,
+          "Medium"
+        ]
+      ]
+    },
+    {
+      "family": "SUIT",
+      "url": "https://raw.githubusercontent.com/sun-typeface/SUIT/v2.0.5/fonts/static/otf/SUIT-Regular.otf",
+      "sha256": "75559147fba6cf373d3a9b5e4a2ea3ba2f8dfb22e5debaabb90277365b8831ad",
+      "bytes": 351524,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "SUIT"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "SUIT Regular"
+        ],
+        [
+          "0x0409",
+          6,
+          "SUIT-Regular"
+        ],
+        [
+          "0x0409",
+          16,
+          "SUIT"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "SUIT",
+      "url": "https://raw.githubusercontent.com/sun-typeface/SUIT/v2.0.5/fonts/static/ttf/SUIT-Bold.ttf",
+      "sha256": "e9b000dcc7a21bc82289fa7d159119ed6dbae621fabdb2553a104394a208e23d",
+      "bytes": 589892,
+      "weight": 700,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "SUIT"
+        ],
+        [
+          "0x0409",
+          2,
+          "Bold"
+        ],
+        [
+          "0x0409",
+          4,
+          "SUIT Bold"
+        ],
+        [
+          "0x0409",
+          6,
+          "SUIT-Bold"
+        ],
+        [
+          "0x0409",
+          16,
+          "SUIT"
+        ],
+        [
+          "0x0409",
+          17,
+          "Bold"
+        ]
+      ]
+    },
+    {
+      "family": "Pretendard",
+      "url": "https://raw.githubusercontent.com/orioncactus/pretendard/v1.3.9/packages/pretendard/dist/public/static/alternative/Pretendard-Thin.ttf",
+      "sha256": "5f65cfe7d99934ee73de983df26154666c65418d73a62f634110945f2ddc0caf",
+      "bytes": 2868924,
+      "weight": 100,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Pretendard Thin"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Pretendard Thin"
+        ],
+        [
+          "0x0409",
+          6,
+          "Pretendard-Thin"
+        ],
+        [
+          "0x0409",
+          16,
+          "Pretendard"
+        ],
+        [
+          "0x0409",
+          17,
+          "Thin"
+        ]
+      ]
+    },
+    {
+      "family": "SUIT",
+      "url": "https://raw.githubusercontent.com/sun-typeface/SUIT/v2.0.5/fonts/static/ttf/SUIT-ExtraBold.ttf",
+      "sha256": "4603d335820213dd248c545c2f5d54041d047022039932e6133a9032027e3862",
+      "bytes": 586272,
+      "weight": 800,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "SUIT ExtraBold"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "SUIT ExtraBold"
+        ],
+        [
+          "0x0409",
+          6,
+          "SUIT-ExtraBold"
+        ],
+        [
+          "0x0409",
+          16,
+          "SUIT"
+        ],
+        [
+          "0x0409",
+          17,
+          "ExtraBold"
+        ]
+      ]
+    },
+    {
+      "family": "SUIT",
+      "url": "https://raw.githubusercontent.com/sun-typeface/SUIT/v2.0.5/fonts/static/ttf/SUIT-ExtraLight.ttf",
+      "sha256": "905a952a6121fb3b9979c28ad245c23f24fe3fdc700ad9329b32ba40a91c4ec4",
+      "bytes": 600984,
+      "weight": 200,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "SUIT ExtraLight"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "SUIT ExtraLight"
+        ],
+        [
+          "0x0409",
+          6,
+          "SUIT-ExtraLight"
+        ],
+        [
+          "0x0409",
+          16,
+          "SUIT"
+        ],
+        [
+          "0x0409",
+          17,
+          "ExtraLight"
+        ]
+      ]
+    },
+    {
+      "family": "SUIT",
+      "url": "https://raw.githubusercontent.com/sun-typeface/SUIT/v2.0.5/fonts/static/ttf/SUIT-Heavy.ttf",
+      "sha256": "9dbd449ccaeb26bc154d66fa6a8d8a9089a00abdf4f556707031c710ab1b46f9",
+      "bytes": 583792,
+      "weight": 900,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "SUIT Heavy"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "SUIT Heavy"
+        ],
+        [
+          "0x0409",
+          6,
+          "SUIT-Heavy"
+        ],
+        [
+          "0x0409",
+          16,
+          "SUIT"
+        ],
+        [
+          "0x0409",
+          17,
+          "Heavy"
+        ]
+      ]
+    },
+    {
+      "family": "SUIT",
+      "url": "https://raw.githubusercontent.com/sun-typeface/SUIT/v2.0.5/fonts/static/ttf/SUIT-Light.ttf",
+      "sha256": "15626037d575857c10fb189cd7f12a81fb80821aa3fd823c5985aab67a9255cf",
+      "bytes": 598200,
+      "weight": 300,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "SUIT Light"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "SUIT Light"
+        ],
+        [
+          "0x0409",
+          6,
+          "SUIT-Light"
+        ],
+        [
+          "0x0409",
+          16,
+          "SUIT"
+        ],
+        [
+          "0x0409",
+          17,
+          "Light"
+        ]
+      ]
+    },
+    {
+      "family": "Pretendard",
+      "url": "https://raw.githubusercontent.com/orioncactus/pretendard/v1.3.9/packages/pretendard/dist/public/variable/PretendardVariable.ttf",
+      "sha256": "3090ccde0442bb347aa7685d9ba8b17436a60682df6e8f92a9a670de14056e22",
+      "bytes": 6739336,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Pretendard Variable"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Pretendard Variable"
+        ],
+        [
+          "0x0409",
+          6,
+          "PretendardVariable-Regular"
+        ],
+        [
+          "0x0409",
+          16,
+          "Pretendard Variable"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "SUIT",
+      "url": "https://raw.githubusercontent.com/sun-typeface/SUIT/v2.0.5/fonts/static/ttf/SUIT-Medium.ttf",
+      "sha256": "06be0060927642883b9027b275744fc8234826e6563015ebe3324f3802ae005f",
+      "bytes": 592832,
+      "weight": 500,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "SUIT Medium"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "SUIT Medium"
+        ],
+        [
+          "0x0409",
+          6,
+          "SUIT-Medium"
+        ],
+        [
+          "0x0409",
+          16,
+          "SUIT"
+        ],
+        [
+          "0x0409",
+          17,
+          "Medium"
+        ]
+      ]
+    },
+    {
+      "family": "SUIT",
+      "url": "https://raw.githubusercontent.com/sun-typeface/SUIT/v2.0.5/fonts/static/ttf/SUIT-Regular.ttf",
+      "sha256": "88c94c990b9996c558666ef07c11664ab177c3be191e2846950b48f245d02274",
+      "bytes": 594324,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "SUIT"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "SUIT Regular"
+        ],
+        [
+          "0x0409",
+          6,
+          "SUIT-Regular"
+        ],
+        [
+          "0x0409",
+          16,
+          "SUIT"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "NanumSquareNeo",
+      "url": "https://campaign.naver.com/nanumsquare_neo/download/NaverNanumSquareNeo.zip",
+      "entry": "NanumSquareNeo/NanumSquareNeo-Variable.ttf",
+      "sha256": "069c5694c25caf917c1d0db89ad876b2ccfb858636d82ce547841062b3f42869",
+      "bytes": 8336580,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "NanumSquare Neo variable"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "NanumSquare Neo variable"
+        ],
+        [
+          "0x0409",
+          6,
+          "NanumSquareNeo-Variable"
+        ],
+        [
+          "0x0409",
+          16,
+          "NanumSquare Neo variable"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "나눔스퀘어 네오 variable"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "나눔스퀘어 네오 variable"
+        ],
+        [
+          "0x0412",
+          16,
+          "나눔스퀘어 네오 variable"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "NanumSquareNeo",
+      "url": "https://campaign.naver.com/nanumsquare_neo/download/NaverNanumSquareNeo.zip",
+      "entry": "NanumSquareNeo/TTF/NanumSquareNeo-cBd.ttf",
+      "sha256": "4749fa5691157cf56a59d297b45e88894a646846048018cd7a4117ffb2869767",
+      "bytes": 2173148,
+      "weight": 700,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "NanumSquare Neo Bold"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "NanumSquare Neo Bold"
+        ],
+        [
+          "0x0409",
+          6,
+          "NanumSquareNeoTTF-cBd"
+        ],
+        [
+          "0x0409",
+          16,
+          "NanumSquare Neo"
+        ],
+        [
+          "0x0409",
+          17,
+          "Bold"
+        ],
+        [
+          "0x0412",
+          1,
+          "나눔스퀘어 네오 Bold"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "나눔스퀘어 네오 Bold"
+        ],
+        [
+          "0x0412",
+          16,
+          "나눔스퀘어 네오"
+        ],
+        [
+          "0x0412",
+          17,
+          "Bold"
+        ]
+      ]
+    },
+    {
+      "family": "NanumSquareNeo",
+      "url": "https://campaign.naver.com/nanumsquare_neo/download/NaverNanumSquareNeo.zip",
+      "entry": "NanumSquareNeo/TTF/NanumSquareNeo-dEb.ttf",
+      "sha256": "3cedb3ee07aabd894f2c1ad4f0434739ecf28a870674ba73cff016057c764750",
+      "bytes": 2155336,
+      "weight": 800,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "NanumSquare Neo ExtraBold"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "NanumSquare Neo ExtraBold"
+        ],
+        [
+          "0x0409",
+          6,
+          "NanumSquareNeoTTF-dEb"
+        ],
+        [
+          "0x0409",
+          16,
+          "NanumSquare Neo"
+        ],
+        [
+          "0x0409",
+          17,
+          "ExtraBold"
+        ],
+        [
+          "0x0412",
+          1,
+          "나눔스퀘어 네오 ExtraBold"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "나눔스퀘어 네오 ExtraBold"
+        ],
+        [
+          "0x0412",
+          16,
+          "나눔스퀘어 네오"
+        ],
+        [
+          "0x0412",
+          17,
+          "ExtraBold"
+        ]
+      ]
+    },
+    {
+      "family": "NanumSquareNeo",
+      "url": "https://campaign.naver.com/nanumsquare_neo/download/NaverNanumSquareNeo.zip",
+      "entry": "NanumSquareNeo/TTF/NanumSquareNeo-eHv.ttf",
+      "sha256": "a2850a335d3211ef19b130d368c961ea11822b67e2b7332bd2de78a486f69005",
+      "bytes": 2121084,
+      "weight": 900,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "NanumSquare Neo Heavy"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "NanumSquare Neo Heavy"
+        ],
+        [
+          "0x0409",
+          6,
+          "NanumSquareNeoTTF-eHv"
+        ],
+        [
+          "0x0409",
+          16,
+          "NanumSquare Neo"
+        ],
+        [
+          "0x0409",
+          17,
+          "Heavy"
+        ],
+        [
+          "0x0412",
+          1,
+          "나눔스퀘어 네오 Heavy"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "나눔스퀘어 네오 Heavy"
+        ],
+        [
+          "0x0412",
+          16,
+          "나눔스퀘어 네오"
+        ],
+        [
+          "0x0412",
+          17,
+          "Heavy"
+        ]
+      ]
+    },
+    {
+      "family": "NanumSquareNeo",
+      "url": "https://campaign.naver.com/nanumsquare_neo/download/NaverNanumSquareNeo.zip",
+      "entry": "NanumSquareNeo/TTF/NanumSquareNeo-bRg.ttf",
+      "sha256": "864de849b9d0af7efbd9e855044f5ab3bbf44cc88ddff6b9873ee830b9d3a61f",
+      "bytes": 2189452,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "NanumSquare Neo Regular"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "NanumSquare Neo Regular"
+        ],
+        [
+          "0x0409",
+          6,
+          "NanumSquareNeoTTF-bRg"
+        ],
+        [
+          "0x0409",
+          16,
+          "NanumSquare Neo"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "나눔스퀘어 네오 Regular"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "나눔스퀘어 네오 Regular"
+        ],
+        [
+          "0x0412",
+          16,
+          "나눔스퀘어 네오"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "NanumSquareNeo",
+      "url": "https://campaign.naver.com/nanumsquare_neo/download/NaverNanumSquareNeo.zip",
+      "entry": "NanumSquareNeo/TTF/NanumSquareNeo-aLt.ttf",
+      "sha256": "1b9af8b2f1a60c35a12f1fd59d99d5fdf9bf970ebdf08221ee247e7c16fc1d06",
+      "bytes": 2185392,
+      "weight": 350,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "NanumSquare Neo Light"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "NanumSquare Neo Light"
+        ],
+        [
+          "0x0409",
+          6,
+          "NanumSquareNeoTTF-aLt"
+        ],
+        [
+          "0x0409",
+          16,
+          "NanumSquare Neo"
+        ],
+        [
+          "0x0409",
+          17,
+          "Light"
+        ],
+        [
+          "0x0412",
+          1,
+          "나눔스퀘어 네오 Light"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "나눔스퀘어 네오 Light"
+        ],
+        [
+          "0x0412",
+          16,
+          "나눔스퀘어 네오"
+        ],
+        [
+          "0x0412",
+          17,
+          "Light"
+        ]
+      ]
+    },
+    {
+      "family": "NanumSquareNeo",
+      "url": "https://campaign.naver.com/nanumsquare_neo/download/NaverNanumSquareNeo.zip",
+      "entry": "NanumSquareNeo/OTF/NanumSquareNeoOTF-Eb.otf",
+      "sha256": "e13237e91ad428f5347d6cc8880a7c4b961e31c26a7eae2bf3394b77a41577cb",
+      "bytes": 1681436,
+      "weight": 800,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "NanumSquare Neo OTF ExtraBold"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "NanumSquare Neo OTF ExtraBold"
+        ],
+        [
+          "0x0409",
+          6,
+          "NanumSquareNeo-dEb"
+        ],
+        [
+          "0x0409",
+          16,
+          "NanumSquare Neo OTF"
+        ],
+        [
+          "0x0409",
+          17,
+          "ExtraBold"
+        ],
+        [
+          "0x0412",
+          1,
+          "나눔스퀘어 네오 OTF ExtraBold"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "나눔스퀘어 네오 OTF ExtraBold"
+        ],
+        [
+          "0x0412",
+          16,
+          "나눔스퀘어 네오 OTF"
+        ],
+        [
+          "0x0412",
+          17,
+          "ExtraBold"
+        ]
+      ]
+    },
+    {
+      "family": "NanumSquareNeo",
+      "url": "https://campaign.naver.com/nanumsquare_neo/download/NaverNanumSquareNeo.zip",
+      "entry": "NanumSquareNeo/OTF/NanumSquareNeoOTF-Hv.otf",
+      "sha256": "d314fdf7cd91dbf665a0277daade267f6ae3d7cca1c5d086a18b1f73b664d90a",
+      "bytes": 1673844,
+      "weight": 900,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "NanumSquare Neo OTF Heavy"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "NanumSquare Neo OTF Heavy"
+        ],
+        [
+          "0x0409",
+          6,
+          "NanumSquareNeo-eHv"
+        ],
+        [
+          "0x0409",
+          16,
+          "NanumSquare Neo OTF"
+        ],
+        [
+          "0x0409",
+          17,
+          "Heavy"
+        ],
+        [
+          "0x0412",
+          1,
+          "나눔스퀘어 네오 OTF Heavy"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "나눔스퀘어 네오 OTF Heavy"
+        ],
+        [
+          "0x0412",
+          16,
+          "나눔스퀘어 네오 OTF"
+        ],
+        [
+          "0x0412",
+          17,
+          "Heavy"
+        ]
+      ]
+    },
+    {
+      "family": "NanumSquareNeo",
+      "url": "https://campaign.naver.com/nanumsquare_neo/download/NaverNanumSquareNeo.zip",
+      "entry": "NanumSquareNeo/OTF/NanumSquareNeoOTF-Bd.otf",
+      "sha256": "f15d5d97e65bbdbf3630ecaa62331e256d45516ea523d7155d5f29a778c2ece4",
+      "bytes": 1643528,
+      "weight": 700,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "NanumSquare Neo OTF Bold"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "NanumSquare Neo OTF Bold"
+        ],
+        [
+          "0x0409",
+          6,
+          "NanumSquareNeo-cBd"
+        ],
+        [
+          "0x0409",
+          16,
+          "NanumSquare Neo OTF"
+        ],
+        [
+          "0x0409",
+          17,
+          "Bold"
+        ],
+        [
+          "0x0412",
+          1,
+          "나눔스퀘어 네오 OTF Bold"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "나눔스퀘어 네오 OTF Bold"
+        ],
+        [
+          "0x0412",
+          16,
+          "나눔스퀘어 네오 OTF"
+        ],
+        [
+          "0x0412",
+          17,
+          "Bold"
+        ]
+      ]
+    },
+    {
+      "family": "NanumSquareNeo",
+      "url": "https://campaign.naver.com/nanumsquare_neo/download/NaverNanumSquareNeo.zip",
+      "entry": "NanumSquareNeo/OTF/NanumSquareNeoOTF-Lt.otf",
+      "sha256": "ddf2cd75c80be915ee7feffd139185a17de2d6fa018f51cf7096b3be4ba26de8",
+      "bytes": 1670640,
+      "weight": 350,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "NanumSquare Neo OTF Light"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "NanumSquare Neo OTF Light"
+        ],
+        [
+          "0x0409",
+          6,
+          "NanumSquareNeo-aLt"
+        ],
+        [
+          "0x0409",
+          16,
+          "NanumSquare Neo OTF"
+        ],
+        [
+          "0x0409",
+          17,
+          "Light"
+        ],
+        [
+          "0x0412",
+          1,
+          "나눔스퀘어 네오 OTF Light"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "나눔스퀘어 네오 OTF Light"
+        ],
+        [
+          "0x0412",
+          16,
+          "나눔스퀘어 네오 OTF"
+        ],
+        [
+          "0x0412",
+          17,
+          "Light"
+        ]
+      ]
+    },
+    {
+      "family": "NanumSquareNeo",
+      "url": "https://campaign.naver.com/nanumsquare_neo/download/NaverNanumSquareNeo.zip",
+      "entry": "NanumSquareNeo/OTF/NanumSquareNeoOTF-Rg.otf",
+      "sha256": "76e9f1d818b10994cf37c58c637692445a2414fe6c4a8c3ec4ec59aa3c1b9050",
+      "bytes": 1669400,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "NanumSquare Neo OTF Regular"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "NanumSquare Neo OTF Regular"
+        ],
+        [
+          "0x0409",
+          6,
+          "NanumSquareNeo-bRg"
+        ],
+        [
+          "0x0409",
+          16,
+          "NanumSquare Neo OTF"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "나눔스퀘어 네오 OTF Regular"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "나눔스퀘어 네오 OTF Regular"
+        ],
+        [
+          "0x0412",
+          16,
+          "나눔스퀘어 네오 OTF"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "SUIT",
+      "url": "https://raw.githubusercontent.com/sun-typeface/SUIT/v2.0.5/fonts/static/ttf/SUIT-SemiBold.ttf",
+      "sha256": "8d202e0341b9426b653c1b3d36b2c0d1f4b482a7dfa83baaccf84d355d688fbd",
+      "bytes": 591696,
+      "weight": 600,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "SUIT SemiBold"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "SUIT SemiBold"
+        ],
+        [
+          "0x0409",
+          6,
+          "SUIT-SemiBold"
+        ],
+        [
+          "0x0409",
+          16,
+          "SUIT"
+        ],
+        [
+          "0x0409",
+          17,
+          "SemiBold"
+        ]
+      ]
+    },
+    {
+      "family": "SUIT",
+      "url": "https://raw.githubusercontent.com/sun-typeface/SUIT/v2.0.5/fonts/static/ttf/SUIT-Thin.ttf",
+      "sha256": "c72d5ae2ac8bbe89eab79d82218d47f5474a9c0b3261ac439080d13064c19766",
+      "bytes": 604912,
+      "weight": 100,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "SUIT Thin"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "SUIT Thin"
+        ],
+        [
+          "0x0409",
+          6,
+          "SUIT-Thin"
+        ],
+        [
+          "0x0409",
+          16,
+          "SUIT"
+        ],
+        [
+          "0x0409",
+          17,
+          "Thin"
+        ]
+      ]
+    },
+    {
+      "family": "Wanted Sans",
+      "url": "https://raw.githubusercontent.com/wanteddev/wanted-sans/v1.0.3/packages/wanted-sans/fonts/otf/WantedSans-Bold.otf",
+      "sha256": "bf29dc540812833b954ae2531a119256305849530d8e191def07f4a9cdeea5c7",
+      "bytes": 1349152,
+      "weight": 700,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Wanted Sans"
+        ],
+        [
+          "0x0409",
+          2,
+          "Bold"
+        ],
+        [
+          "0x0409",
+          4,
+          "Wanted Sans Bold"
+        ],
+        [
+          "0x0409",
+          6,
+          "WantedSans-Bold"
+        ],
+        [
+          "0x0409",
+          16,
+          "Wanted Sans"
+        ],
+        [
+          "0x0409",
+          17,
+          "Bold"
+        ]
+      ]
+    },
+    {
+      "family": "SUIT",
+      "url": "https://raw.githubusercontent.com/sun-typeface/SUIT/v2.0.5/fonts/variable/ttf/SUIT-Variable.ttf",
+      "sha256": "12e1fea375d27869a686d7432c1e6a38154d394994f5d82ace24f36a7db68333",
+      "bytes": 1585020,
+      "weight": 100,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "SUIT Variable Thin"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "SUIT Variable Thin"
+        ],
+        [
+          "0x0409",
+          6,
+          "SUITVariable-Thin"
+        ],
+        [
+          "0x0409",
+          16,
+          "SUIT Variable"
+        ],
+        [
+          "0x0409",
+          17,
+          "Thin"
+        ]
+      ]
+    },
+    {
+      "family": "Wanted Sans",
+      "url": "https://raw.githubusercontent.com/wanteddev/wanted-sans/v1.0.3/packages/wanted-sans/fonts/ttf/WantedSans-Bold.ttf",
+      "sha256": "7d97a38d0c35b2e43ff2ae47040133faf0324d1c78800a16aaaa5d276376037c",
+      "bytes": 2344596,
+      "weight": 700,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Wanted Sans"
+        ],
+        [
+          "0x0409",
+          2,
+          "Bold"
+        ],
+        [
+          "0x0409",
+          4,
+          "Wanted Sans Bold"
+        ],
+        [
+          "0x0409",
+          6,
+          "WantedSans-Bold"
+        ],
+        [
+          "0x0409",
+          16,
+          "Wanted Sans"
+        ],
+        [
+          "0x0409",
+          17,
+          "Bold"
+        ]
+      ]
+    },
+    {
+      "family": "Wanted Sans",
+      "url": "https://raw.githubusercontent.com/wanteddev/wanted-sans/v1.0.3/packages/wanted-sans/fonts/otf/WantedSans-Medium.otf",
+      "sha256": "7dad2dfda91663fb8cf98907dc7839c1fa89ddb3a8e0b98dffe55a6ebaff2604",
+      "bytes": 1360032,
+      "weight": 500,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Wanted Sans Medium"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Wanted Sans Medium"
+        ],
+        [
+          "0x0409",
+          6,
+          "WantedSans-Medium"
+        ],
+        [
+          "0x0409",
+          16,
+          "Wanted Sans"
+        ],
+        [
+          "0x0409",
+          17,
+          "Medium"
+        ]
+      ]
+    },
+    {
+      "family": "Wanted Sans",
+      "url": "https://raw.githubusercontent.com/wanteddev/wanted-sans/v1.0.3/packages/wanted-sans/fonts/ttf/WantedSans-Black.ttf",
+      "sha256": "02092d69b9518a541eb2dd96037e50f2a2d660bbf3168f987f38fa9718cf362b",
+      "bytes": 2350312,
+      "weight": 900,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Wanted Sans Black"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Wanted Sans Black"
+        ],
+        [
+          "0x0409",
+          6,
+          "WantedSans-Black"
+        ],
+        [
+          "0x0409",
+          16,
+          "Wanted Sans"
+        ],
+        [
+          "0x0409",
+          17,
+          "Black"
+        ]
+      ]
+    },
+    {
+      "family": "Wanted Sans",
+      "url": "https://raw.githubusercontent.com/wanteddev/wanted-sans/v1.0.3/packages/wanted-sans/fonts/ttf/WantedSans-ExtraBlack.ttf",
+      "sha256": "ede63d59b0a60a07123afb84a89d1322743d358d28c8db3dbf04acd9688e1f17",
+      "bytes": 2372768,
+      "weight": 900,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Wanted Sans ExtraBlack"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Wanted Sans ExtraBlack"
+        ],
+        [
+          "0x0409",
+          6,
+          "WantedSans-ExtraBlack"
+        ],
+        [
+          "0x0409",
+          16,
+          "Wanted Sans"
+        ],
+        [
+          "0x0409",
+          17,
+          "ExtraBlack"
+        ]
+      ]
+    },
+    {
+      "family": "Wanted Sans",
+      "url": "https://raw.githubusercontent.com/wanteddev/wanted-sans/v1.0.3/packages/wanted-sans/fonts/otf/WantedSans-Regular.otf",
+      "sha256": "1944767d948318570793eda00986d463e07017d9dcc7cef3bd7e77fe032fd2fb",
+      "bytes": 1346604,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Wanted Sans"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Wanted Sans Regular"
+        ],
+        [
+          "0x0409",
+          6,
+          "WantedSans-Regular"
+        ],
+        [
+          "0x0409",
+          16,
+          "Wanted Sans"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "Wanted Sans",
+      "url": "https://raw.githubusercontent.com/wanteddev/wanted-sans/v1.0.3/packages/wanted-sans/fonts/ttf/WantedSans-Regular.ttf",
+      "sha256": "849b51938f5779e7526fcf09b3c737e9d401261d111f626280af16423bf19f40",
+      "bytes": 2401736,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Wanted Sans"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Wanted Sans Regular"
+        ],
+        [
+          "0x0409",
+          6,
+          "WantedSans-Regular"
+        ],
+        [
+          "0x0409",
+          16,
+          "Wanted Sans"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "Wanted Sans",
+      "url": "https://raw.githubusercontent.com/wanteddev/wanted-sans/v1.0.3/packages/wanted-sans/fonts/ttf/WantedSans-Medium.ttf",
+      "sha256": "e5f05e044e105b699f7eea82f9875ebcad46bfe73118a6ef60d48889631816aa",
+      "bytes": 2379572,
+      "weight": 500,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Wanted Sans Medium"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Wanted Sans Medium"
+        ],
+        [
+          "0x0409",
+          6,
+          "WantedSans-Medium"
+        ],
+        [
+          "0x0409",
+          16,
+          "Wanted Sans"
+        ],
+        [
+          "0x0409",
+          17,
+          "Medium"
+        ]
+      ]
+    },
+    {
+      "family": "Wanted Sans",
+      "url": "https://raw.githubusercontent.com/wanteddev/wanted-sans/v1.0.3/packages/wanted-sans/fonts/ttf/WantedSans-SemiBold.ttf",
+      "sha256": "1378a4914ebc4f658af9d68284048ddbc904a9704ae78fcdd84e7862bde89d70",
+      "bytes": 2352124,
+      "weight": 600,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Wanted Sans SemiBold"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Wanted Sans SemiBold"
+        ],
+        [
+          "0x0409",
+          6,
+          "WantedSans-SemiBold"
+        ],
+        [
+          "0x0409",
+          16,
+          "Wanted Sans"
+        ],
+        [
+          "0x0409",
+          17,
+          "SemiBold"
+        ]
+      ]
+    },
+    {
+      "family": "Wanted Sans",
+      "url": "https://raw.githubusercontent.com/wanteddev/wanted-sans/v1.0.3/packages/wanted-sans/fonts/ttf/WantedSans-ExtraBold.ttf",
+      "sha256": "1614d814a293c877dc103a8751fc629cf772ddecd3ac3f26b634f529241dd47f",
+      "bytes": 2344992,
+      "weight": 800,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Wanted Sans ExtraBold"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Wanted Sans ExtraBold"
+        ],
+        [
+          "0x0409",
+          6,
+          "WantedSans-ExtraBold"
+        ],
+        [
+          "0x0409",
+          16,
+          "Wanted Sans"
+        ],
+        [
+          "0x0409",
+          17,
+          "ExtraBold"
+        ]
+      ]
+    },
+    {
+      "family": "Wanted Sans",
+      "url": "https://raw.githubusercontent.com/wanteddev/wanted-sans/v1.0.3/packages/wanted-sans/fonts/variable/WantedSansVariable.ttf",
+      "sha256": "9953a7cfc4a3cba4ef1242abaf89779b3cd15fd9729c2d67d9e9d37a0da967f5",
+      "bytes": 4669352,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Wanted Sans Variable"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Wanted Sans Variable"
+        ],
+        [
+          "0x0409",
+          6,
+          "WantedSansVariable-Regular"
+        ],
+        [
+          "0x0409",
+          16,
+          "Wanted Sans Variable"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "Gmarket Sans",
+      "url": "https://news.gmarket.com/fonts/GmarketSansOTF.zip",
+      "entry": "GmarketSansBold.otf",
+      "sha256": "251d33f2be9af17b94037db112dbe1dd07351eb12202231cd38e17cd0a6c50a5",
+      "bytes": 889716,
+      "weight": 500,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Gmarket Sans Bold"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Gmarket Sans Bold"
+        ],
+        [
+          "0x0409",
+          6,
+          "GmarketSansBold"
+        ],
+        [
+          "0x0409",
+          16,
+          "Gmarket Sans"
+        ],
+        [
+          "0x0409",
+          17,
+          "Bold"
+        ],
+        [
+          "0x0412",
+          1,
+          "G마켓 산스 Bold"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "G마켓 산스 Bold"
+        ],
+        [
+          "0x0412",
+          16,
+          "G마켓 산스"
+        ],
+        [
+          "0x0412",
+          17,
+          "Bold"
+        ]
+      ]
+    },
+    {
+      "family": "Gmarket Sans",
+      "url": "https://news.gmarket.com/fonts/GmarketSansOTF.zip",
+      "entry": "GmarketSansLight.otf",
+      "sha256": "4d0e36f3449e0e334d625b2f246adbb2c575d1764d750b49bc6bb9bc83922317",
+      "bytes": 842968,
+      "weight": 300,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Gmarket Sans Light"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Gmarket Sans Light"
+        ],
+        [
+          "0x0409",
+          6,
+          "GmarketSansLight"
+        ],
+        [
+          "0x0409",
+          16,
+          "Gmarket Sans"
+        ],
+        [
+          "0x0409",
+          17,
+          "Light"
+        ],
+        [
+          "0x0412",
+          1,
+          "G마켓 산스 Light"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "G마켓 산스 Light"
+        ],
+        [
+          "0x0412",
+          16,
+          "G마켓 산스"
+        ],
+        [
+          "0x0412",
+          17,
+          "Light"
+        ]
+      ]
+    },
+    {
+      "family": "Gmarket Sans",
+      "url": "https://news.gmarket.com/fonts/GmarketSansOTF.zip",
+      "entry": "GmarketSansMedium.otf",
+      "sha256": "39845e70b83555398b0710e85fa389702757dcb22a7241d5a196e90bc23ac9c8",
+      "bytes": 868048,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Gmarket Sans Medium"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Gmarket Sans Medium"
+        ],
+        [
+          "0x0409",
+          6,
+          "GmarketSansMedium"
+        ],
+        [
+          "0x0409",
+          16,
+          "Gmarket Sans"
+        ],
+        [
+          "0x0409",
+          17,
+          "Medium"
+        ],
+        [
+          "0x0412",
+          1,
+          "G마켓 산스 Medium"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "G마켓 산스 Medium"
+        ],
+        [
+          "0x0412",
+          16,
+          "G마켓 산스"
+        ],
+        [
+          "0x0412",
+          17,
+          "Medium"
+        ]
+      ]
+    },
+    {
+      "family": "Gmarket Sans",
+      "url": "https://news.gmarket.com/fonts/GmarketSansTTF.zip",
+      "entry": "GmarketSansTTFBold.ttf",
+      "sha256": "ff7c354dd1a324e4cecc1223c4f71e74fa81be7027e0c7f6324c475909cacefc",
+      "bytes": 2511976,
+      "weight": 700,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Gmarket Sans TTF Bold"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Gmarket Sans TTF Bold"
+        ],
+        [
+          "0x0409",
+          6,
+          "GmarketSansTTFBold"
+        ],
+        [
+          "0x0409",
+          16,
+          "Gmarket Sans TTF"
+        ],
+        [
+          "0x0409",
+          17,
+          "Bold"
+        ],
+        [
+          "0x0412",
+          1,
+          "G마켓 산스 TTF Bold"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "G마켓 산스 TTF Bold"
+        ],
+        [
+          "0x0412",
+          16,
+          "G마켓 산스 TTF"
+        ],
+        [
+          "0x0412",
+          17,
+          "Bold"
+        ]
+      ]
+    },
+    {
+      "family": "Gmarket Sans",
+      "url": "https://news.gmarket.com/fonts/GmarketSansTTF.zip",
+      "entry": "GmarketSansTTFLight.ttf",
+      "sha256": "7e8e8c70349ed94acf3ea4c6962a56417fdfa0a8803bc6cf9dc36324d5656849",
+      "bytes": 2413604,
+      "weight": 300,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Gmarket Sans TTF Light"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Gmarket Sans TTF Light"
+        ],
+        [
+          "0x0409",
+          6,
+          "GmarketSansTTFLight"
+        ],
+        [
+          "0x0409",
+          16,
+          "Gmarket Sans TTF"
+        ],
+        [
+          "0x0409",
+          17,
+          "Light"
+        ],
+        [
+          "0x0412",
+          1,
+          "G마켓 산스 TTF Light"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "G마켓 산스 TTF Light"
+        ],
+        [
+          "0x0412",
+          16,
+          "G마켓 산스 TTF"
+        ],
+        [
+          "0x0412",
+          17,
+          "Light"
+        ]
+      ]
+    },
+    {
+      "family": "Gmarket Sans",
+      "url": "https://news.gmarket.com/fonts/GmarketSansTTF.zip",
+      "entry": "GmarketSansTTFMedium.ttf",
+      "sha256": "c6b9a2c10bfdb55975948ce191f9cf638955b5cfdc99149969add5b579262fc1",
+      "bytes": 2417020,
+      "weight": 500,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Gmarket Sans TTF Medium"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Gmarket Sans TTF Medium"
+        ],
+        [
+          "0x0409",
+          6,
+          "GmarketSansTTFMedium"
+        ],
+        [
+          "0x0409",
+          16,
+          "Gmarket Sans TTF"
+        ],
+        [
+          "0x0409",
+          17,
+          "Medium"
+        ],
+        [
+          "0x0412",
+          1,
+          "G마켓 산스 TTF Medium"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "G마켓 산스 TTF Medium"
+        ],
+        [
+          "0x0412",
+          16,
+          "G마켓 산스 TTF"
+        ],
+        [
+          "0x0412",
+          17,
+          "Medium"
+        ]
+      ]
+    },
+    {
+      "family": "Jalnan 2",
+      "url": "https://framerusercontent.com/assets/uK4mTd9JFejCoAXNZyXHV6glsI.zip",
+      "entry": "Jalnan2/Jalnan2TTF.ttf",
+      "sha256": "bd0028223d1e69c0bf76266bee52931be26a5f8a9fce517bb8765371d57836a3",
+      "bytes": 3714412,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Jalnan 2 TTF"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Jalnan 2 TTF"
+        ],
+        [
+          "0x0409",
+          6,
+          "Jalnan2TTF"
+        ],
+        [
+          "0x0409",
+          16,
+          "Jalnan 2 TTF"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "여기어때 잘난체 2 TTF"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "여기어때 잘난체 2 TTF"
+        ],
+        [
+          "0x0412",
+          16,
+          "여기어때 잘난체 2 TTF"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "Jalnan 2",
+      "url": "https://framerusercontent.com/assets/uK4mTd9JFejCoAXNZyXHV6glsI.zip",
+      "entry": "Jalnan2/Jalnan2.otf",
+      "sha256": "fbb5e40dce9602bc1bc4aa48d930a0ece789fe12f0e473a41e95b73b69e81e62",
+      "bytes": 2760076,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Jalnan 2"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Jalnan 2"
+        ],
+        [
+          "0x0409",
+          6,
+          "Jalnan2"
+        ],
+        [
+          "0x0409",
+          16,
+          "Jalnan 2"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "여기어때 잘난체 2"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "여기어때 잘난체 2"
+        ],
+        [
+          "0x0412",
+          16,
+          "여기어때 잘난체 2"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "Jalnan Gothic",
+      "url": "https://framerusercontent.com/assets/nDlVcfwW7fVXLTZeKX4WdTVY1Yk.zip",
+      "entry": "JalnanGothic/JalnanGothic.otf",
+      "sha256": "039cef18494d3b8ee13b46f75af3fc3122a607867b742aad6bba786c743625b1",
+      "bytes": 1723800,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Jalnan Gothic"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Jalnan Gothic"
+        ],
+        [
+          "0x0409",
+          6,
+          "JalnanGothic"
+        ],
+        [
+          "0x0409",
+          16,
+          "Jalnan Gothic"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "여기어때 잘난체 고딕"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "여기어때 잘난체 고딕"
+        ],
+        [
+          "0x0412",
+          16,
+          "여기어때 잘난체 고딕"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "Jalnan Gothic",
+      "url": "https://framerusercontent.com/assets/nDlVcfwW7fVXLTZeKX4WdTVY1Yk.zip",
+      "entry": "JalnanGothic/JalnanGothicTTF.ttf",
+      "sha256": "74948e73be281c1956565003ae4d8980ea7e556b7d61ffc37ec2653020fdffce",
+      "bytes": 2234992,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Jalnan Gothic TTF"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Jalnan Gothic TTF"
+        ],
+        [
+          "0x0409",
+          6,
+          "JalnanGothicTTF"
+        ],
+        [
+          "0x0409",
+          16,
+          "Jalnan Gothic TTF"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "여기어때 잘난체 고딕 TTF"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "여기어때 잘난체 고딕 TTF"
+        ],
+        [
+          "0x0412",
+          16,
+          "여기어때 잘난체 고딕 TTF"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "Do Hyeon",
+      "url": "https://fonts.gstatic.com/s/dohyeon/v21/TwMN-I8CRRU2zM86HFE3ZwaH__-C.ttf",
+      "entry": "DoHyeon-Regular.ttf",
+      "sha256": "7dfbed010e12bae0e8fb50dc61ba429c7687d8cea49419bd6c466b6a6682bdba",
+      "bytes": 858836,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Do Hyeon"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Do Hyeon Regular"
+        ],
+        [
+          "0x0409",
+          6,
+          "DoHyeon-Regular"
+        ]
+      ]
+    },
+    {
+      "family": "Nanum Gothic",
+      "url": "https://fonts.gstatic.com/s/nanumgothic/v26/PN_oRfi-oW3hYwmKDpxS7F_LXv77zlEn14YEUQ.ttf",
+      "entry": "NanumGothic-ExtraBold.ttf",
+      "sha256": "1c371e405ff21058ff6ebd8190177a9135c0526c03dbe6b4119e3c960a70004e",
+      "bytes": 2111196,
+      "weight": 800,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "NanumGothicExtraBold"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "NanumGothicExtraBold"
+        ],
+        [
+          "0x0409",
+          6,
+          "NanumGothicExtraBold"
+        ],
+        [
+          "0x0409",
+          16,
+          "NanumGothic"
+        ],
+        [
+          "0x0409",
+          17,
+          "ExtraBold"
+        ]
+      ]
+    },
+    {
+      "family": "Nanum Gothic",
+      "url": "https://fonts.gstatic.com/s/nanumgothic/v26/PN_3Rfi-oW3hYwmKDpxS7F_z_tLfxno73g.ttf",
+      "entry": "NanumGothic-Regular.ttf",
+      "sha256": "cf050025dcce823de644153981ff8b171d5b78d7d0ddd6e3c9f39e814fad3564",
+      "bytes": 2053328,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "NanumGothic"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "NanumGothic"
+        ],
+        [
+          "0x0409",
+          6,
+          "NanumGothic"
+        ],
+        [
+          "0x0409",
+          16,
+          "NanumGothic"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "Jua",
+      "url": "https://fonts.gstatic.com/s/jua/v18/co3KmW9ljjAjc-DZCsKgsg.ttf",
+      "entry": "Jua-Regular.ttf",
+      "sha256": "a1ad0976608d0dd6d298cb01de8431f20e9416b330dd8f58cb0e5f88cee39985",
+      "bytes": 2101500,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Jua"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Jua Regular"
+        ],
+        [
+          "0x0409",
+          6,
+          "Jua-Regular"
+        ]
+      ]
+    },
+    {
+      "family": "Nanum Gothic",
+      "url": "https://fonts.gstatic.com/s/nanumgothic/v26/PN_oRfi-oW3hYwmKDpxS7F_LQv37zlEn14YEUQ.ttf",
+      "entry": "NanumGothic-Bold.ttf",
+      "sha256": "c2b3913902193593a9f86fef6ebef3d016490bddb0e52e91d732a477578bbc57",
+      "bytes": 2072388,
+      "weight": 700,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "NanumGothic"
+        ],
+        [
+          "0x0409",
+          2,
+          "Bold"
+        ],
+        [
+          "0x0409",
+          4,
+          "NanumGothicBold"
+        ],
+        [
+          "0x0409",
+          6,
+          "NanumGothicBold"
+        ],
+        [
+          "0x0409",
+          16,
+          "NanumGothic"
+        ],
+        [
+          "0x0409",
+          17,
+          "Bold"
+        ]
+      ]
+    },
+    {
+      "family": "Noto Sans KR",
+      "url": "https://fonts.gstatic.com/s/notosanskr/v40/PbyxFmXiEBPT4ITbgNA5Cgms3VYcOA-vvnIzzmo1eLTq8H4hfeE.ttf",
+      "entry": "static/NotoSansKR-ExtraBold.ttf",
+      "sha256": "0cf9b50edb488028e138b928ce1ff50dd143d907f14f247ca462d3cad561ca41",
+      "bytes": 6188464,
+      "weight": 800,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Noto Sans KR ExtraBold"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Noto Sans KR ExtraBold"
+        ],
+        [
+          "0x0409",
+          6,
+          "NotoSansKR-ExtraBold"
+        ],
+        [
+          "0x0409",
+          16,
+          "Noto Sans KR"
+        ],
+        [
+          "0x0409",
+          17,
+          "ExtraBold"
+        ]
+      ]
+    },
+    {
+      "family": "Noto Sans KR",
+      "url": "https://fonts.gstatic.com/s/notosanskr/v40/PbyxFmXiEBPT4ITbgNA5Cgms3VYcOA-vvnIzzuoyeLTq8H4hfeE.ttf",
+      "entry": "static/NotoSansKR-Regular.ttf",
+      "sha256": "b4a747e78805bc25b610dcfc3003cb5fb2e2ec034763774b24216ed15889eef4",
+      "bytes": 6191364,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Noto Sans KR"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Noto Sans KR Regular"
+        ],
+        [
+          "0x0409",
+          6,
+          "NotoSansKR-Regular"
+        ]
+      ]
+    },
+    {
+      "family": "Noto Sans KR",
+      "url": "https://fonts.gstatic.com/s/notosanskr/v40/PbyxFmXiEBPT4ITbgNA5Cgms3VYcOA-vvnIzzjQ1eLTq8H4hfeE.ttf",
+      "entry": "static/NotoSansKR-SemiBold.ttf",
+      "sha256": "131664ca93a3abd646beca72779b4332db02949eb0f3e763ecd7e756589330fa",
+      "bytes": 6187524,
+      "weight": 600,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Noto Sans KR SemiBold"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Noto Sans KR SemiBold"
+        ],
+        [
+          "0x0409",
+          6,
+          "NotoSansKR-SemiBold"
+        ],
+        [
+          "0x0409",
+          16,
+          "Noto Sans KR"
+        ],
+        [
+          "0x0409",
+          17,
+          "SemiBold"
+        ]
+      ]
+    },
+    {
+      "family": "Noto Sans KR",
+      "url": "https://fonts.gstatic.com/s/notosanskr/v40/PbyxFmXiEBPT4ITbgNA5Cgms3VYcOA-vvnIzzg01eLTq8H4hfeE.ttf",
+      "entry": "static/NotoSansKR-Bold.ttf",
+      "sha256": "c76f806dc46b8e7981410cb083801f7f124b7f8bc0d181cdae80e78f16d0e9cc",
+      "bytes": 6189424,
+      "weight": 700,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Noto Sans KR"
+        ],
+        [
+          "0x0409",
+          2,
+          "Bold"
+        ],
+        [
+          "0x0409",
+          4,
+          "Noto Sans KR Bold"
+        ],
+        [
+          "0x0409",
+          6,
+          "NotoSansKR-Bold"
+        ]
+      ]
+    },
+    {
+      "family": "Noto Sans KR",
+      "url": "https://fonts.gstatic.com/s/notosanskr/v40/PbykFmXiEBPT4ITbgNA5Cgm21nTs4JMMuA.ttf",
+      "entry": "NotoSansKR-VariableFont_wght.ttf",
+      "sha256": "16efec3833f189345a7185d85790cd0db4d9729ea2d58c57fccc06ba5d1f3017",
+      "bytes": 10359708,
+      "weight": 100,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Noto Sans KR Thin"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Noto Sans KR Thin"
+        ],
+        [
+          "0x0409",
+          6,
+          "NotoSansKR-Thin"
+        ],
+        [
+          "0x0409",
+          16,
+          "Noto Sans KR"
+        ],
+        [
+          "0x0409",
+          17,
+          "Thin"
+        ]
+      ]
+    },
+    {
+      "family": "Nanum Myeongjo",
+      "url": "https://fonts.gstatic.com/s/nanummyeongjo/v31/9Btx3DZF0dXLMZlywRbVRNhxy1LreHQ8juyl.ttf",
+      "entry": "NanumMyeongjo-Regular.ttf",
+      "sha256": "f529803189c52cb64a8f7a4b66f955cce3e8dc44044041eca0af191a3b7f82ff",
+      "bytes": 3056932,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "NanumMyeongjo"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "NanumMyeongjo"
+        ],
+        [
+          "0x0409",
+          6,
+          "NanumMyeongjo"
+        ],
+        [
+          "0x0409",
+          16,
+          "NanumMyeongjo"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "family": "Nanum Myeongjo",
+      "url": "https://fonts.gstatic.com/s/nanummyeongjo/v31/9Bty3DZF0dXLMZlywRbVRNhxy2pXV1A0pfCs5Kos.ttf",
+      "entry": "NanumMyeongjo-Bold.ttf",
+      "sha256": "fe22a50c17d820f496a32f511ee33a7832372c3a0ed4baeeb2a34baf66233eb1",
+      "bytes": 3073164,
+      "weight": 700,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "NanumMyeongjo"
+        ],
+        [
+          "0x0409",
+          2,
+          "Bold"
+        ],
+        [
+          "0x0409",
+          4,
+          "NanumMyeongjoBold"
+        ],
+        [
+          "0x0409",
+          6,
+          "NanumMyeongjoBold"
+        ],
+        [
+          "0x0409",
+          16,
+          "NanumMyeongjo"
+        ],
+        [
+          "0x0409",
+          17,
+          "Bold"
+        ]
+      ]
+    },
+    {
+      "family": "Nanum Myeongjo",
+      "url": "https://fonts.gstatic.com/s/nanummyeongjo/v31/9Bty3DZF0dXLMZlywRbVRNhxy2pLVFA0pfCs5Kos.ttf",
+      "entry": "NanumMyeongjo-ExtraBold.ttf",
+      "sha256": "1bfd8fc3dbb399b8ec5a1743f12190197f9a16c40ae17a256a1053052c950cba",
+      "bytes": 3179248,
+      "weight": 800,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "NanumMyeongjoExtraBold"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "NanumMyeongjoExtraBold"
+        ],
+        [
+          "0x0409",
+          6,
+          "NanumMyeongjoExtraBold"
+        ],
+        [
+          "0x0409",
+          16,
+          "NanumMyeongjo"
+        ],
+        [
+          "0x0409",
+          17,
+          "ExtraBold"
+        ]
+      ]
+    },
+    {
+      "family": "Nanum Gothic Coding",
+      "url": "https://fonts.gstatic.com/s/nanumgothiccoding/v27/8QIVdjzHisX_8vv59_xMxtPFW4IXROwsy6QxVs1X7tc.ttf",
+      "entry": "NanumGothicCoding-Regular.ttf",
+      "sha256": "e6df02d6a15be7f198d5aa2fc1bd4fae91968d809a1c4fa5694c10f164222348",
+      "bytes": 2042524,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "NanumGothicCoding"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "NanumGothicCoding"
+        ],
+        [
+          "0x0409",
+          6,
+          "NanumGothicCoding"
+        ]
+      ]
+    },
+    {
+      "family": "Nanum Gothic Coding",
+      "url": "https://fonts.gstatic.com/s/nanumgothiccoding/v27/8QIYdjzHisX_8vv59_xMxtPFW4IXROws8xgecsV88t5V9r4.ttf",
+      "entry": "NanumGothicCoding-Bold.ttf",
+      "sha256": "77aa59d507580b05c24f4a099e89229f97b88e4d38fb15569cd0db2d14b83e35",
+      "bytes": 1940240,
+      "weight": 700,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "NanumGothicCoding"
+        ],
+        [
+          "0x0409",
+          2,
+          "Bold"
+        ],
+        [
+          "0x0409",
+          4,
+          "NanumGothicCoding-Bold"
+        ],
+        [
+          "0x0409",
+          6,
+          "NanumGothicCoding-Bold"
+        ]
+      ]
+    },
+    {
+      "family": "Nanum Pen Script",
+      "url": "https://fonts.gstatic.com/s/nanumpenscript/v25/daaDSSYiLGqEal3MvdA_FOL_3FkN2z7-aMFCcTU.ttf",
+      "entry": "NanumPenScript-Regular.ttf",
+      "sha256": "a0bc8ec50075e11496defe34eb9036d56907d44f880b80b2032ac0dbff140e88",
+      "bytes": 3200444,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Nanum Pen"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Nanum Pen Regular"
+        ],
+        [
+          "0x0409",
+          6,
+          "NanumPen-Regular"
+        ]
+      ]
+    },
+    {
+      "family": "Nanum Brush Script",
+      "url": "https://fonts.gstatic.com/s/nanumbrushscript/v26/wXK2E2wfpokopxzthSqPbcR5_gVaxazyjqBr1lO97Q.ttf",
+      "entry": "NanumBrushScript-Regular.ttf",
+      "sha256": "98e3c5323f813ff6a61486af27aa49073262686bf336eacb77b024fa624254bf",
+      "bytes": 3563520,
+      "weight": 400,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "Nanum Brush Script"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "Nanum Brush Script"
+        ],
+        [
+          "0x0409",
+          6,
+          "NanumBrush"
+        ]
+      ]
+    }
+  ],
+  "installedAliasEvidence": [
+    {
+      "filename": "NanumGothic.ttf",
+      "sha256": "31cf6994c8c022a086d8ac6f5662b5729d1cdbe26e6886eeeb43e59e89de05dd",
+      "bytes": 4343844,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "NanumGothic"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "NanumGothic"
+        ],
+        [
+          "0x0409",
+          6,
+          "NanumGothic"
+        ],
+        [
+          "0x0409",
+          16,
+          "NanumGothic"
+        ],
+        [
+          "0x0409",
+          17,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          1,
+          "나눔고딕"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "나눔고딕"
+        ],
+        [
+          "0x0412",
+          16,
+          "나눔고딕"
+        ],
+        [
+          "0x0412",
+          17,
+          "Regular"
+        ]
+      ]
+    },
+    {
+      "filename": "NanumGothicBold.ttf",
+      "sha256": "9a83877e343381d01b0b39a83be28fa4ece1309e73583663feb656a3da2a0ad2",
+      "bytes": 4288380,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "NanumGothic"
+        ],
+        [
+          "0x0409",
+          2,
+          "Bold"
+        ],
+        [
+          "0x0409",
+          4,
+          "NanumGothicBold"
+        ],
+        [
+          "0x0409",
+          6,
+          "NanumGothicBold"
+        ],
+        [
+          "0x0409",
+          16,
+          "NanumGothic"
+        ],
+        [
+          "0x0409",
+          17,
+          "Bold"
+        ],
+        [
+          "0x0412",
+          1,
+          "나눔고딕"
+        ],
+        [
+          "0x0412",
+          2,
+          "Bold"
+        ],
+        [
+          "0x0412",
+          4,
+          "나눔고딕 Bold"
+        ],
+        [
+          "0x0412",
+          16,
+          "나눔고딕"
+        ],
+        [
+          "0x0412",
+          17,
+          "Bold"
+        ]
+      ]
+    },
+    {
+      "filename": "NanumGothicCoding-Bold.ttf",
+      "sha256": "5d15781e7a53b39130b9d87cb0681d7605ec380374cd0046210f61ce3ec070be",
+      "bytes": 1800792,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "NanumGothicCoding"
+        ],
+        [
+          "0x0409",
+          2,
+          "Bold"
+        ],
+        [
+          "0x0409",
+          4,
+          "NanumGothicCoding Bold"
+        ],
+        [
+          "0x0409",
+          6,
+          "NanumGothicCoding-Bold"
+        ],
+        [
+          "0x0409",
+          6,
+          "NanumGothicCoding-Bold"
+        ],
+        [
+          "0x0412",
+          1,
+          "나눔고딕코딩"
+        ],
+        [
+          "0x0412",
+          2,
+          "Bold"
+        ],
+        [
+          "0x0412",
+          4,
+          "나눔고딕코딩 Bold"
+        ]
+      ]
+    },
+    {
+      "filename": "NanumGothicCoding.ttf",
+      "sha256": "0ef917c452fbcbd8107c69fcd0fe899b5ca6d09c42e9fdcc725cc0ed2c29aaa4",
+      "bytes": 2779112,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "NanumGothicCoding"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "NanumGothicCoding"
+        ],
+        [
+          "0x0409",
+          6,
+          "NanumGothicCoding"
+        ],
+        [
+          "0x0409",
+          6,
+          "NanumGothicCoding"
+        ],
+        [
+          "0x0412",
+          1,
+          "나눔고딕코딩"
+        ],
+        [
+          "0x0412",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0412",
+          4,
+          "나눔고딕코딩"
+        ]
+      ]
+    },
+    {
+      "filename": "NanumGothicExtraBold.ttf",
+      "sha256": "9aae816805e79b28e573d9f775f589690665cc1db06c3eb6c3967059b5191e68",
+      "bytes": 4171172,
+      "names": [
+        [
+          "0x0409",
+          1,
+          "NanumGothicExtraBold"
+        ],
+        [
+          "0x0409",
+          2,
+          "Regular"
+        ],
+        [
+          "0x0409",
+          4,
+          "NanumGothicExtraBold"
+        ],
+        [
+          "0x0409",
+          6,
+          "NanumGothicExtraBold"
+        ],
+        [
+          "0x0409",
+          16,
+          "NanumGothic"
+        ],
+        [
+          "0x0409",
+          17,
+          "ExtraBold"
+        ],
+        [
+          "0x0412",
+          1,
+          "나눔고딕 ExtraBold"
+        ],
+        [
+          "0x0412",
+          2,
+          "Bold"
+        ],
+        [
+          "0x0412",
+          4,
+          "나눔고딕 ExtraBold"
+        ],
+        [
+          "0x0412",
+          16,
+          "나눔고딕"
+        ],
+        [
+          "0x0412",
+          17,
+          "ExtraBold"
+        ]
+      ]
+    }
+  ],
+  "webCssEvidence": [
+    {
+      "family": "Wanted Sans",
+      "url": "https://cdn.jsdelivr.net/gh/wanteddev/wanted-sans@v1.0.3/packages/wanted-sans/fonts/webfonts/static/split/WantedSans.min.css",
+      "sha256": "d9dd2141b02d94de10aea7a3fa3dc88167e28d75e48baa3cfd7aec7e4af6b9ee",
+      "mapping": {
+        "Wanted Sans Black": 900,
+        "Wanted Sans ExtraBlack": 1000
+      },
+      "note": "Static desktop ExtraBlack OS/2 weight is 900 but its official web CSS source weight is 1000. Registry weight selects the web source face."
+    }
+  ]
+}

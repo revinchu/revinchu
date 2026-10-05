@@ -1,3 +1,4 @@
+import { fontDesktopStyle } from './font-identity.js';
 // OpenDocument 스프레드시트(.ods / .fods) 읽기 · 쓰기 — DOM 없음
 // 값 · 수식(of:= ↔ A1) · 병합 · 열 너비 · 행 높이 · 기본 서식(굵게 · 기울임 · 글자색 · 채우기 · 크기 · 맞춤 · 숫자 형식)
 import { unzip, zip, textOf } from './zip.js';
@@ -299,6 +300,7 @@ export function writeOds(sheetsInfo, io) {
   };
   const cellStyleFor = (st) => {
     if (!st) return null;
+    st = { ...st, ...fontDesktopStyle(st.font, st) };
     const ds = numStyleFor(st);
     const tp = [st.bold ? 'fo:font-weight="bold"' : '', st.italic ? 'fo:font-style="italic"' : '', st.underline ? 'style:text-underline-style="solid" style:text-underline-width="auto" style:text-underline-color="font-color"' : '',
       /^#[0-9a-f]{6}$/i.test(st.color ?? '') ? `fo:color="${st.color}"` : '', st.size ? `fo:font-size="${st.size}pt"` : '', st.font ? `style:font-name="${esc(st.font)}"` : ''].filter(Boolean).join(' ');

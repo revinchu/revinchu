@@ -132,6 +132,7 @@ import { pivotSortScope, pivotSortIntersections, PIVOT_SORT_RANGE_MESSAGE } from
 import { contextMenuKind, contextContains, selectionAxisRanges, selectionAxisTargets } from './context-selection.js';
 import { rowPointsToPixels, rowPixelsToPoints, columnCharsToPixels, pixelsToColumnChars, MAX_ROW_POINTS, MAX_COLUMN_CHARS } from './dimension.js';
 import { createContextMiniToolbar } from './context-mini-toolbar.js';
+import { fontIdentityPatch } from './font-identity.js';
 import { fontList, fontAlias, loadLocalFonts, canListLocalFonts, getWebFont, fontLabel, fontMatches, fontIsKorean, fontInSource, requestWebFont, webFontStatus, onWebFontChange } from './fonts.js';
 import { ICONS } from './icons.js';
 import {
@@ -3260,7 +3261,7 @@ function applyStyle(patchOrFn, { widen = false } = {}) {
     if (!chartCanEdit(chart)) return;
     const part = selectedChartTextPart(), current = chartTextStyle(chart, part);
     if (!current) { toast('차트 제목, 축, 범례 또는 데이터 레이블을 선택하세요.'); return; }
-    const values = typeof patchOrFn === 'function' ? patchOrFn(current) : patchOrFn;
+    const values = fontIdentityPatch(typeof patchOrFn === 'function' ? patchOrFn(current) : patchOrFn, current);
     const patch = chartTextFormatPatch(chart, part, values ?? {});
     if (!patch || !Object.keys(patch).length) return;
     if (values?.font) requestWebFont(values.font, { retry: true });
@@ -3270,11 +3271,11 @@ function applyStyle(patchOrFn, { widen = false } = {}) {
   }
   if (selectedTextShape()) {
     if (objectEditBlocked()) return;
-    if (shapeTextEdit) { if (shapeTextEdit.valid()) shapeTextEdit.editor.format(patchOrFn); return; }
+    if (shapeTextEdit) { if (shapeTextEdit.valid()) shapeTextEdit.editor.format(current => fontIdentityPatch(typeof patchOrFn === 'function' ? patchOrFn(current) : patchOrFn, current)); return; }
     patchObjects(o => {
       if (!textEditableShape(o)) return null;
       const current = shapeSelectionStyle(o, shapeTextParagraphs(o), { start: 0, end: shapeTextString(shapeTextParagraphs(o)).length });
-      const patch = typeof patchOrFn === 'function' ? patchOrFn(current) : patchOrFn;
+      const patch = fontIdentityPatch(typeof patchOrFn === 'function' ? patchOrFn(current) : patchOrFn, current);
       const textPatch = Object.fromEntries(Object.entries(patch ?? {}).filter(([k]) => SHAPE_TEXT_STYLE_KEYS.has(k)));
       return shapeTextFormatPatch(o, textPatch);
     }, ['shapes']);
@@ -3284,7 +3285,7 @@ function applyStyle(patchOrFn, { widen = false } = {}) {
   lastRepeat = () => run('repeatStyle', { patchOrFn, widen });
   const rg = sel;
   const patchFor = (cur) => {
-    const p = typeof patchOrFn === 'function' ? patchOrFn(cur) : patchOrFn;
+    const p = fontIdentityPatch(typeof patchOrFn === 'function' ? patchOrFn(cur) : patchOrFn, cur);
     // 기본 표시 형식을 고르면 사용자 지정 코드는 지움
     return p && 'numFmt' in p && p.numFmt !== 'custom' ? { ...p, code: undefined } : p;
   };
@@ -20446,6 +20447,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['글꼴 이름과 Excel 호환', ['G마켓 산스·나눔스퀘어 네오 등 굵기별 설치 글꼴을 직접 선택합니다.', '표시용 별칭과 실제 설치 글꼴명을 구분해 셀·차트·도형·조건부 서식을 Excel에 저장합니다.']],
   ['차트 텍스트 홈 서식', ['차트 제목·축 눈금·축 제목·범례·데이터 레이블을 선택한 뒤 홈에서 글꼴·크기·색·굵게·기울임을 바꿀 수 있습니다. 다시 클릭한 개별 데이터 레이블도 따로 서식을 지정하며 원본 셀 서식은 유지합니다.']],
   ['피벗 정렬 안정성', ['리본·우클릭 정렬에서 총합계와 부분합의 위치를 유지하고 같은 수준의 항목만 정렬합니다. 피벗이 섞인 일반 셀 범위 정렬을 차단하며, 선택한 행·열의 값에 따른 정렬 기준도 저장합니다.']],
   ['무료 웹 글꼴 확대', ['Google Fonts와 라이선스가 확인된 한글 무료 글꼴을 추가했습니다. 한글·영문 검색, 한글 글꼴·모양별 분류, 실제 미리보기를 지원합니다.', '사용하거나 미리 보는 글꼴만 다운로드합니다. 글꼴 목록과 셀 서식·기본 글꼴 설정에서 선택할 수 있으며, 늦게 불러온 글꼴도 셀과 도형에 다시 반영합니다.']],

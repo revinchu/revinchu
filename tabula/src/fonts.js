@@ -1,5 +1,7 @@
 // 기기 글꼴 + 라이선스가 확인된 무료 웹 글꼴. 목록/이름 조회는 네트워크 요청을 만들지 않는다.
 import { WEB_FONT_CATALOG } from './web-font-catalog.js';
+import { fontDesktopStyle, fontIdentityForFamily, fontIdentityCompatibleAliases } from './font-identity.js';
+import { parseFontFaces, fontIdentityFaces } from './font-faces.js';
 
 // 한글 이름 ↔ 영문 이름 (윈도우는 한글 이름, 맥 · 다른 브라우저는 영문 이름만 아는 경우가 있음)
 const ALIASES = [
@@ -74,14 +76,41 @@ export async function loadLocalFonts() {
 
 /** 무료 웹 글꼴은 기기 글꼴 접근 권한과 관계없이 모든 브라우저에 제공한다. */
 export function fontList() {
-  return [...new Set([...DEFAULT_FONTS, ...(localList ?? detectFonts()), ...WEB_FONT_CATALOG.map((f) => f.family)])];
+  return [...new Set([...DEFAULT_FONTS, ...(localList ?? detectFonts()).map(f => fontDesktopStyle(f).font), ...desktopFontChoices])];
 }
 
 
 const fontKey = (name) => String(name ?? '').trim().toLocaleLowerCase().replace(/\s+/g, '');
-const webFontIndex = new Map();
+const webFontIndex = new Map(), desktopFontChoices = [];
+const nativeEntries = [];
 for (const font of WEB_FONT_CATALOG) {
   for (const name of [font.family, font.label, ...(font.aliases || [])]) if (name) webFontIndex.set(fontKey(name), font);
+}
+// Native weight families are Regular within their own family. Register the matching
+// web face at CSS 400, so a selected Bold/Light family does not become Medium on screen.
+for (const entry of WEB_FONT_CATALOG) {
+  const identity = fontIdentityForFamily(entry.family);
+  if (!identity) { desktopFontChoices.push(entry.family); continue; }
+  for (const face of identity.faces) {
+    const sameFamily = face.font === entry.family;
+    const fixed = face.font !== identity.normal || identity.bold !== identity.normal;
+    const native = sameFamily ? entry : { ...entry, family: face.font,
+      label: (entry.aliases?.find(a => /[가-힣]/.test(a)) || entry.label || entry.family),
+      aliases: [...new Set([...(entry.aliases || []), entry.family, ...face.aliases])],
+      sourceFamily: entry.family, sourceVariants: entry.variants, ...(fixed ? { fixedWeight: face.weight, weights: [400], variants: ['400'] } : {}) };
+    if (!sameFamily && native.faces) native.faces = fontIdentityFaces(native, native.faces);
+    nativeEntries.push([face, native]);
+    if (face.format !== 'otf' || !identity.faces.some(f => f.format === 'ttf')) desktopFontChoices.push(face.font);
+  }
+  if (!desktopFontChoices.includes(identity.normal)) desktopFontChoices.push(identity.normal);
+  if (identity.faces.some(face => face.font === entry.family)) desktopFontChoices.push(entry.family);
+}
+for (const [face, native] of nativeEntries) {
+  for (const name of [face.font, ...face.aliases]) webFontIndex.set(fontKey(name), native);
+}
+for (const [alias, native] of fontIdentityCompatibleAliases()) {
+  const entry = webFontIndex.get(fontKey(native));
+  if (entry) webFontIndex.set(fontKey(alias), entry);
 }
 /** CSS 이름/한글 별칭을 같은 무료 웹 글꼴로 해석한다. 임의의 URL은 받지 않는다. */
 export function getWebFont(name) { return webFontIndex.get(fontKey(name)) ?? webFontIndex.get(fontKey(fontAlias(name))) ?? null; }
@@ -114,13 +143,14 @@ export function webFontCssUrl(nameOrEntry) {
   if (!f) return null;
   if (f.cssUrl) return isAllowedFontUrl(f.cssUrl) ? f.cssUrl : null;
   if (f.source !== 'google') return null;
-  const variants = (f.variants || []).map((v) => typeof v === 'string' && /^\d{1,4}i?$/.test(v) ? [v.endsWith('i') ? 1 : 0, Number(v.replace('i', ''))] : null).filter((v) => v && v[1] >= 1 && v[1] <= 1000);
-  const weights = (f.weights || [400]).filter((w) => Number.isInteger(w) && w >= 1 && w <= 1000);
+  const sourceVariants = Number.isFinite(f.fixedWeight) ? (f.sourceVariants || []).filter(v => Number(String(v).replace('i', '')) === f.fixedWeight) : f.variants;
+  const variants = (sourceVariants || []).map((v) => typeof v === 'string' && /^\d{1,4}i?$/.test(v) ? [v.endsWith('i') ? 1 : 0, Number(v.replace('i', ''))] : null).filter((v) => v && v[1] >= 1 && v[1] <= 1000);
+  const weights = (Number.isFinite(f.fixedWeight) ? [f.fixedWeight] : f.weights || [400]).filter((w) => Number.isInteger(w) && w >= 1 && w <= 1000);
   const tuples = variants.length ? variants : (f.styles?.includes('italic') ? [0, 1] : [0]).flatMap((i) => weights.map((w) => [i, w]));
   tuples.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
   const italic = tuples.some(([i]) => i);
   const axis = tuples.length ? (italic ? ':ital,wght@' + tuples.map(([i,w]) => i + ',' + w).join(';') : ':wght@' + tuples.map(([,w]) => w).join(';')) : '';
-  return 'https://fonts.googleapis.com/css2?family=' + encodeURIComponent(f.family).replace(/%20/g, '+') + axis + '&display=swap';
+  return 'https://fonts.googleapis.com/css2?family=' + encodeURIComponent(f.sourceFamily || f.family).replace(/%20/g, '+') + axis + '&display=swap';
 }
 
 const webLoads = new Map();
@@ -141,6 +171,9 @@ export function webFontStatus(name) {
   return f ? webLoads.get(f.family)?.status || 'idle' : 'local';
 }
 const cssQuote = (value) => '"' + String(value).replace(/["\\\n\r\f]/g, '') + '"';
+function fontFaceCss(family, face) {
+  return '@font-face{font-family:' + cssQuote(family) + ';src:url(' + cssQuote(face.url) + ');font-weight:' + (/^[\d ]+$/.test(String(face.weight)) ? face.weight : 400) + ';font-style:' + (face.style === 'italic' ? 'italic' : 'normal') + ';font-display:swap;' + (face.unicodeRange && /^[uU+\da-fA-F?,\s-]+$/.test(face.unicodeRange) ? 'unicode-range:' + face.unicodeRange + ';' : '') + '}';
+}
 /** Download only a used/previewed font. Completion never changes document styles, history or selection. */
 export function requestWebFont(name, options = {}) {
   const f = getWebFont(name);
@@ -150,11 +183,11 @@ export function requestWebFont(name, options = {}) {
   const state = { status: 'loading', promise: null };
   webLoads.set(f.family, state);
   state.promise = new Promise((resolve) => {
-    let finished = false, node = null;
+    let finished = false, node = null, controller = null;
     const done = (status) => {
       if (finished) return;
       finished = true;
-      clearTimeout(timer);
+      clearTimeout(timer); controller?.abort();
       if (status === 'error') node?.remove();
       state.status = status;
       const detail = { status, family: f.family };
@@ -176,7 +209,24 @@ export function requestWebFont(name, options = {}) {
       } catch { done('error'); }
     };
     const url = webFontCssUrl(f);
-    if (url) {
+    if (url && f.sourceFamily) {
+      // A catalog stylesheet may contain hundreds of Korean subsets. Keep all ranges,
+      // but use the selected desktop family's face and register its real family name.
+      controller = new AbortController();
+      (async () => {
+        try {
+          const response = await fetch(url, { signal: controller.signal, credentials: 'omit', referrerPolicy: 'no-referrer' });
+          if (!response.ok || (response.url && !isAllowedFontUrl(response.url))) throw new Error('font stylesheet');
+          const css = await response.text();
+          if (css.length > 2 * 1024 * 1024 || finished) throw new Error('font stylesheet');
+          const faces = fontIdentityFaces(f, parseFontFaces(css, url));
+          if (!faces.length || !faces.every(face => isAllowedFontUrl(face.url))) throw new Error('font sources');
+          node = document.createElement('style'); node.dataset.webFont = f.family;
+          node.textContent = faces.map(face => fontFaceCss(f.family, face)).join('\n');
+          document.head.append(node); load();
+        } catch { done('error'); }
+      })();
+    } else if (url) {
       node = document.createElement('link');
       node.rel = 'stylesheet'; node.href = url;
       node.crossOrigin = 'anonymous'; node.referrerPolicy = 'no-referrer';
@@ -186,7 +236,7 @@ export function requestWebFont(name, options = {}) {
     } else if (f.faces?.length && f.faces.every((face) => isAllowedFontUrl(face.url))) {
       node = document.createElement('style');
       node.dataset.webFont = f.family;
-      node.textContent = f.faces.map((face) => '@font-face{font-family:' + cssQuote(f.family) + ';src:url(' + cssQuote(face.url) + ');font-weight:' + (/^[\d ]+$/.test(String(face.weight)) ? face.weight : 400) + ';font-style:' + (face.style === 'italic' ? 'italic' : 'normal') + ';font-display:swap;' + (face.unicodeRange && /^[uU+\da-fA-F?,\s-]+$/.test(face.unicodeRange) ? 'unicode-range:' + face.unicodeRange + ';' : '') + '}').join('\n');
+      node.textContent = f.faces.map(face => fontFaceCss(f.family, face)).join('\n');
       document.head.append(node);
       load();
     } else done('error');

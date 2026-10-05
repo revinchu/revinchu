@@ -1,4 +1,5 @@
 import { child, descendants, esc } from './xml.js';
+import { fontDesktopStyle } from './font-identity.js';
 
 const TEXT_KEYS = ['font', 'size', 'color', 'bold', 'italic', 'underline', 'strike'];
 const prefixKey = (prefix, key) => prefix ? prefix + key[0].toUpperCase() + key.slice(1) : key;
@@ -37,6 +38,7 @@ export function readChartTextFont(node, colorOf) {
 }
 
 export function chartTextRunXml(style = {}, tag = 'a:defRPr') {
+  style = { ...style, ...fontDesktopStyle(style.font, style) };
   let attrs = '';
   if (Number.isFinite(style.size)) attrs += ` sz="${Math.round(Math.max(1, Math.min(409, style.size)) * 100)}"`;
   for (const [key, attr] of [['bold', 'b'], ['italic', 'i']]) if (style[key] !== undefined) attrs += ` ${attr}="${style[key] ? 1 : 0}"`;

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { fontDesktopStyle } from '../src/font-identity.js';
 import { WEB_FONT_CATALOG } from '../src/web-font-catalog.js';
 import { getWebFont, fontList, fontFamilyCandidates, fontLabel, fontMatches, fontInSource, fontIsKorean, webFontCssUrl, isAllowedFontUrl, requestWebFont, webFontStatus, onWebFontChange } from '../src/fonts.js';
 
@@ -8,8 +9,8 @@ test('무료 글꼴 목록은 기기 권한 없이 1,900종 이상이며 모든 
   assert.ok(WEB_FONT_CATALOG.length >= 1900);
   assert.equal(new Set(all).size, all.length);
   for (const f of WEB_FONT_CATALOG) {
-    assert.ok(all.includes(f.family), f.family);
-    assert.equal(getWebFont(f.family), f);
+    assert.ok(all.includes(fontDesktopStyle(f.family).font), f.family);
+    assert.equal(getWebFont(f.family).licenseUrl, f.licenseUrl);
     assert.ok(f.licenseUrl.startsWith('https://'), f.family);
     assert.ok(f.rawLicenseUrl?.startsWith('https://') || f.licenseText?.length > 100, f.family);
     assert.ok(f.source === 'google' || f.source === 'cdn');
@@ -19,9 +20,9 @@ test('무료 글꼴 목록은 기기 권한 없이 1,900종 이상이며 모든 
 });
 
 test('한글·기존 영어 별칭은 실제 CSS 글꼴명으로 연결한다', () => {
-  assert.equal(getWebFont('나눔고딕').family, 'Nanum Gothic');
-  assert.equal(getWebFont('NanumGothic').family, 'Nanum Gothic');
-  assert.ok(fontFamilyCandidates('나눔고딕').includes('Nanum Gothic'));
+  assert.equal(getWebFont('나눔고딕').family, 'NanumGothic');
+  assert.equal(getWebFont('NanumGothic').family, 'NanumGothic');
+  assert.ok(fontFamilyCandidates('나눔고딕').includes('NanumGothic'));
   assert.equal(fontMatches('Nanum Gothic', '나눔'), true);
   assert.equal(fontMatches('Nanum Gothic', 'NANUMGOTHIC'), true);
   assert.equal(fontIsKorean('Noto Sans KR'), true);

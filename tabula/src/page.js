@@ -1,3 +1,4 @@
+import { fontDesktopStyle } from './font-identity.js';
 // 페이지 설정 (DOM 없음): 용지 방향 · 크기 · 여백 · 배율 · 인쇄 영역 · 인쇄 제목 · 머리글/바닥글
 // 시트 속성 page = { orientation: 'portrait'|'landscape', paper: 9, margins: { left, right, top, bottom, header, footer } (인치),
 //   scale: 100, fitW: 0, fitH: 0 (0 = 맞추지 않음), hCenter, vCenter, gridlines, headings, header, footer,
@@ -97,6 +98,18 @@ export function headerParts(code, { page = 1, pages = 1, file = '', sheet = '', 
   return parts;
 }
 
+// 이스케이프된 &&와 나머지 필드 코드는 그대로 두고 글꼴 선언만 변환한다.
+function desktopHeaderFonts(code) {
+  return String(code).replace(/&&|&"([^"]*)"/g, (token, spec) => {
+    if (spec === undefined) return token;
+    const comma = spec.indexOf(','), name = comma < 0 ? spec : spec.slice(0, comma), suffix = comma < 0 ? '' : spec.slice(comma + 1);
+    const bold = /\bBold\b|굵게/i.test(suffix), desktop = fontDesktopStyle(name, { bold });
+    let style = suffix;
+    if (desktop.bold === false && bold) style = suffix.replace(/\bBold\b|굵게/gi, '').trim() || 'Regular';
+    return '&"' + desktop.font + (comma < 0 ? '' : ',' + style) + '"';
+  });
+}
+
 const inch = (v) => Number(Number(v).toFixed(4));
 /** xlsx: <printOptions/> <pageMargins/> <pageSetup/> <headerFooter/> (+ sheetPr 의 pageSetUpPr fitToPage) */
 export function pageXml(page, esc) {
@@ -106,7 +119,7 @@ export function pageXml(page, esc) {
   const po = [p.gridlines ? 'gridLines="1"' : '', p.headings ? 'headings="1"' : '', p.hCenter ? 'horizontalCentered="1"' : '', p.vCenter ? 'verticalCentered="1"' : ''].filter(Boolean);
   const fit = !!(p.fitW || p.fitH);
   const setup = [`paperSize="${p.paper}"`, fit ? '' : `scale="${Math.round(p.scale || 100)}"`, fit ? `fitToWidth="${p.fitW || 0}" fitToHeight="${p.fitH || 0}"` : '', `orientation="${p.orientation}"`, `pageOrder="${p.order}"`].filter(Boolean);
-  const hf = p.header || p.footer ? `<headerFooter>${p.header ? `<oddHeader>${esc(p.header)}</oddHeader>` : ''}${p.footer ? `<oddFooter>${esc(p.footer)}</oddFooter>` : ''}</headerFooter>` : '';
+  const hf = p.header || p.footer ? `<headerFooter>${p.header ? `<oddHeader>${esc(desktopHeaderFonts(p.header))}</oddHeader>` : ''}${p.footer ? `<oddFooter>${esc(desktopHeaderFonts(p.footer))}</oddFooter>` : ''}</headerFooter>` : '';
   return {
     printOptions: po.length ? `<printOptions ${po.join(' ')}/>` : '',
     margins: `<pageMargins left="${inch(m.left)}" right="${inch(m.right)}" top="${inch(m.top)}" bottom="${inch(m.bottom)}" header="${inch(m.header)}" footer="${inch(m.footer)}"/>`,

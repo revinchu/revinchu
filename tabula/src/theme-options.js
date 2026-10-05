@@ -1,4 +1,5 @@
-import { parseXml, descendants, child, esc } from './xml.js';
+import { parseXml, descendants, child, esc, decodeEntities } from './xml.js';
+import { fontDesktopStyle } from './font-identity.js';
 
 export const THEME_FONTS = [
   { name: 'Office', major: '맑은 고딕', minor: '맑은 고딕', majorLatin: 'Aptos Display', minorLatin: 'Aptos' },
@@ -72,5 +73,10 @@ export function applyThemeOptionsXml(xml, wb) {
     const style = `<${prefix}effectStyle><${prefix}effectLst>${effect}</${prefix}effectLst></${prefix}effectStyle>`;
     return replaceElement(original.replace(/\bname="[^"]*"/, `name="${esc(`WIXEL ${effects.name}`)}"`), 'effectStyleLst', `<${prefix}effectStyleLst>${style.repeat(3)}</${prefix}effectStyleLst>`);
   });
+  // 원본 스킴의 알 수 없는 글꼴과 메타데이터를 유지하고 알려진 표시 별칭만 변환한다.
+  result = replaceElement(result, 'fontScheme', block => block.replace(/(<(?:[A-Za-z_][\w.-]*:)?(?:latin|ea|cs|font)\b[^>]*\btypeface=)(["'])(.*?)\2/g, (token, start, quote, value) => {
+    const name = decodeEntities(value), desktop = fontDesktopStyle(name).font;
+    return desktop === name ? token : start + quote + esc(desktop) + quote;
+  }));
   return result;
 }
