@@ -37,6 +37,7 @@ import { DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT, formulaShifter } from './workboo
 import { chartLayout, PALETTE, chartModelData, paletteOf } from './chart.js';
 import { inferPivotCategorySeries } from './chart-source.js';
 import { chartView3D } from './chart-3d.js';
+import { chartTextFields, assignChartTextFields, readChartTextFont, chartTextPropertiesXml, chartRichTextXml, chartTextSupplement, applyChartTextSupplement } from './chart-text-xml.js';
 import { isChartEx, writeChartEx, readChartEx, chartExStyleXml, chartExColorsXml, chartExDrawingProps, applyChartExOptions, CHARTEX_NS, CHARTEX_REL, CHARTEX_CONTENT, CHARTEX_STYLE_CONTENT, CHARTEX_COLOR_CONTENT } from './chart-ex.js';
 import { Axis, hid, hidKeys } from './axis.js';
 import { toBase64, fromBase64 } from './vba.js';
@@ -2215,19 +2216,7 @@ function readChart(files, path, theme = {}) {
     return child(d, 'showVal')?.attrs.val === '1' || child(d, 'showPercent')?.attrs.val === '1' ? true : undefined;
   };
   const fmtCode = (el) => child(el, 'numFmt')?.attrs.formatCode;
-  // 글자 서식 (txPr · rich 의 defRPr / rPr): 크기(pt) · 색 · 굵게
-  const runFont = (el) => {
-    const def = el && descendants(el, 'defRPr')[0];
-    const run = el && descendants(el, 'rPr')[0];
-    if (!def && !run) return {};
-    const attrs = { ...def?.attrs, ...run?.attrs };
-    const out = {};
-    if (attrs.sz) out.size = Number(attrs.sz) / 100;
-    if (attrs.b !== undefined) out.bold = attrs.b === '1';
-    const c = dmlColor(child(run, 'solidFill') ?? child(def, 'solidFill'), theme);
-    if (c) out.color = c;
-    return out;
-  };
+  const runFont = el => readChartTextFont(el, n => dmlColor(n, theme));
   const series = [];
   const serNames = []; // 계열 이름(파일에 저장된 값) — 자동 제목용
   const serOrder = [];
@@ -2323,10 +2312,15 @@ function readChart(files, path, theme = {}) {
         for (const dp of kids(ser, 'dPt')) { const c = dmlColor(child(child(dp, 'spPr'), 'solidFill'), theme); if (c) pc[Number(child(dp, 'idx')?.attrs.val)] = c; }
         if (Object.keys(pc).length) f.pointColors = pc;
       }
-      const lf = runFont(child(child(ser, 'dLbls') ?? child(g, 'dLbls'), 'txPr'));
-      if (lf.size) f.labelSize = lf.size;
-      if (lf.color) f.labelColor = lf.color;
-      if (lf.bold !== undefined) f.labelBold = lf.bold;
+      const lf = { ...runFont(child(child(g, 'dLbls'), 'txPr')), ...runFont(child(child(ser, 'dLbls'), 'txPr')) };
+      assignChartTextFields(f, lf, 'label');
+      const pointLabels = {};
+      for (const labels of [child(g, 'dLbls'), child(ser, 'dLbls')]) for (const label of kids(labels, 'dLbl')) {
+        const p = Number(child(label, 'idx')?.attrs.val);
+        const font = { ...runFont(child(label, 'txPr')), ...runFont(child(label, 'tx')) };
+        if (Number.isInteger(p) && p >= 0 && Object.keys(font).length) pointLabels[p] = { ...pointLabels[p], ...font };
+      }
+      if (Object.keys(pointLabels).length) f.pointLabelStyles = pointLabels;
       const lab = dl(ser) ?? gLabels;
       if (gType === 'pie' || gType === 'doughnut') {
         // 원형 레이블: 파일에 적힌 대로 (없으면 표시하지 않음 — 엑셀과 같음)
@@ -2376,6 +2370,7 @@ function readChart(files, path, theme = {}) {
   if (!titleEl && child(chartEl, 'autoTitleDeleted')?.attrs.val === '0' && serNames.length === 1) title = serNames[0] ?? '';
   const types = new Set(fmts.map((f, i) => f.type ?? typeOf(groups[0])));
   const out = { type: types.size > 1 ? 'combo' : typeOf(groups[0]), title, series };
+  assignChartTextFields(out, runFont(child(root, 'txPr')), '', true);
   if (groups.some((g) => /3DChart$/.test(g.name))) {
     out.threeD = true;
     const view = child(chartEl, 'view3D');
@@ -2390,17 +2385,10 @@ function readChart(files, path, theme = {}) {
   // 글꼴 크기(pt): 제목 · 축 · 범례 (파일에 있을 때만)
   const tf = runFont(child(titleEl, 'tx')) ;
   const tf2 = { ...runFont(child(titleEl, 'txPr')), ...tf };
-  if (tf2.size) out.titleSize = tf2.size;
-  if (tf2.bold !== undefined) out.titleBold = tf2.bold;
-  if (tf2.color) out.titleColor = tf2.color;
+  assignChartTextFields(out, tf2, 'title');
   if (title && child(titleEl, 'overlay')?.attrs.val === '1') out.titleOverlay = true;
-  const axEl = kids(plot, 'catAx')[0] ?? kids(plot, 'dateAx')[0] ?? kids(plot, 'valAx')[0];
-  const af = runFont(child(axEl, 'txPr'));
-  if (af.size) out.axisSize = af.size;
   const lg = runFont(child(child(chartEl, 'legend'), 'txPr'));
-  if (lg.size) out.legendSize = lg.size;
-  if (lg.color && lg.color !== '#000000' && lg.color !== '#595959') out.legendColor = lg.color;
-  if (lg.bold) out.legendBold = true;
+  assignChartTextFields(out, lg, 'legend');
   if (range) out.range = range;
   if (sheetName) out.sheet = sheetName;
   if (fmts.some((f) => Object.keys(f).length)) out.seriesFmt = fmts;
@@ -2449,11 +2437,18 @@ function readChart(files, path, theme = {}) {
   const ovl = Number(child(bar, 'overlap')?.attrs.val);
   if (bar?.name === 'barChart' && Number.isFinite(ovl) && ovl !== 0 && ovl !== 100) out.overlap = ovl;
   if (/^bar(?:3D)?Chart$/.test(bar?.name) && child(bar, 'varyColors')?.attrs.val === '1') out.varyColors = true;
-  if (child(plot, 'dTable')) out.dataTable = true;
+  if (child(plot, 'dTable')) {
+    out.dataTable = true;
+    const font = runFont(child(child(plot, 'dTable'), 'txPr'));
+    if (Object.keys(font).length) out.dataTableText = font;
+  }
   if (!descendants(plot, 'majorGridlines').length) out.gridY = false;
   // WIXEL 전용 설정 (원래 차트 종류 · 팔레트 · 서식)
+  const nativeText = {};
+  for (const prefix of ['', 'title', 'legend']) assignChartTextFields(nativeText, chartTextFields(out, prefix, !prefix), prefix, !prefix);
+  if (out.dataTableText) nativeText.dataTableText = out.dataTableText;
   const tbEl = descendants(root, 'props').find((x) => x.attrs.json);
-  if (tbEl) { try { Object.assign(out, JSON.parse(tbEl.attrs.json)); } catch { /* 무시 */ } }
+  if (tbEl) { try { Object.assign(out, JSON.parse(tbEl.attrs.json), nativeText); } catch { /* 무시 */ } }
   if (out.wxPivot) { out.pivot = out.wxPivot; delete out.wxPivot; }
   const legend = child(chartEl, 'legend');
   const titleLayout = readChartLayout(titleEl), legendLayout = readChartLayout(legend);
@@ -2470,6 +2465,8 @@ function readChart(files, path, theme = {}) {
     if (child(child(ax, 'scaling'), 'orientation')?.attrs.val === 'maxMin' && ax.name === 'valAx') o.reverse = true;
     const t = child(ax, 'title');
     if (t) o.title = descendants(t, 't').map((x) => x.text).join('');
+    assignChartTextFields(o, runFont(child(ax, 'txPr')));
+    assignChartTextFields(o, { ...runFont(child(t, 'txPr')), ...runFont(child(t, 'tx')) }, 'title');
     const sc = child(ax, 'scaling');
     if (child(sc, 'logBase')) o.logBase = Number(child(sc, 'logBase').attrs.val);
     if (child(sc, 'min')) o.min = Number(child(sc, 'min').attrs.val);
@@ -2498,6 +2495,9 @@ function readChart(files, path, theme = {}) {
     : kids(plot, 'catAx')[0] ?? kids(plot, 'dateAx')[0];
   if (axInfo(catAx)) axes.x = axInfo(catAx);
   if (Object.keys(axes).length) out.axes = axes;
+  const axisFonts = [catAx, primaryAx, secondaryAx].filter(Boolean).map(ax => runFont(child(ax, 'txPr')));
+  if (axisFonts.length && axisFonts[0].size && axisFonts.every(font => font.size === axisFonts[0].size)) out.axisSize = axisFonts[0].size;
+  applyChartTextSupplement(out, out.wxText); delete out.wxText;
   // 피벗 차트: [파일]시트!피벗 이름
   const ps = descendants(child(root, 'pivotSource'), 'name')[0]?.text;
   if (ps) {
@@ -3902,9 +3902,13 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx', imageRel) {
   const LBL_POS = { center: 'ctr', insideEnd: 'inEnd', insideBase: 'inBase', outEnd: 'outEnd', above: 't', below: 'b', left: 'l', right: 'r' };
   const dLbls = (on, code, pct = false, pos = null, sf = {}) => {
     if (on === undefined && !pct && sf.catName === undefined && sf.serName === undefined) return '';
-    const font = sf.labelSize !== undefined || sf.labelColor !== undefined || sf.labelBold !== undefined
-      ? `<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr${Number.isFinite(sf.labelSize) ? ` sz="${Math.round(Math.max(1, Math.min(400, sf.labelSize)) * 100)}"` : ''}${sf.labelBold !== undefined ? ` b="${sf.labelBold ? 1 : 0}"` : ''}>${sf.labelColor ? `<a:solidFill><a:srgbClr val="${hex6(sf.labelColor)}"/></a:solidFill>` : ''}</a:defRPr></a:pPr><a:endParaRPr lang="ko-KR"/></a:p></c:txPr>` : '';
-    return `<c:dLbls>${code && typeof code === 'string' ? `<c:numFmt formatCode="${esc(code)}" sourceLinked="0"/>` : ''}<c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr>${font}${pos && (LBL_POS[pos] || pos === 'out') ? `<c:dLblPos val="${LBL_POS[pos] ?? 'outEnd'}"/>` : ''}<c:showLegendKey val="0"/><c:showVal val="${on ? 1 : 0}"/><c:showCatName val="${sf.catName ? 1 : 0}"/><c:showSerName val="${sf.serName ? 1 : 0}"/><c:showPercent val="${pct ? 1 : 0}"/><c:showBubbleSize val="0"/></c:dLbls>`;
+    const font = chartTextPropertiesXml({ ...chartTextFields(chart, '', true), ...chartTextFields(sf, 'label') });
+    const pointLabels = (sf.values ?? []).map((_, i) => {
+      const p = sf._pi?.[i] ?? i, style = sf.pointLabelStyles?.[p];
+      const text = style && chartTextPropertiesXml({ ...chartTextFields(chart, '', true), ...chartTextFields(sf, 'label'), ...chartTextFields(style) });
+      return text ? `<c:dLbl><c:idx val="${i}"/>${text}</c:dLbl>` : '';
+    }).join('');
+    return `<c:dLbls>${pointLabels}${code && typeof code === 'string' ? `<c:numFmt formatCode="${esc(code)}" sourceLinked="0"/>` : ''}<c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr>${font}${pos && (LBL_POS[pos] || pos === 'out') ? `<c:dLblPos val="${LBL_POS[pos] ?? 'outEnd'}"/>` : ''}<c:showLegendKey val="0"/><c:showVal val="${on ? 1 : 0}"/><c:showCatName val="${sf.catName ? 1 : 0}"/><c:showSerName val="${sf.serName ? 1 : 0}"/><c:showPercent val="${pct ? 1 : 0}"/><c:showBubbleSize val="0"/></c:dLbls>`;
   };
   const serXml = (sr, i) => {
     const type = sr.type;
@@ -4016,33 +4020,32 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx', imageRel) {
     }
   }).join('');
   const horizontal = baseType === 'bar';
-  const axTitle = (t) => (t ? `<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="ko-KR" sz="1000" b="0"/><a:t>${esc(t)}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title>` : '');
+  const axTitle = cfg => cfg?.title ? `<c:title>${chartRichTextXml(cfg.title, { ...chartTextFields(chart, '', true), ...chartTextFields(cfg, 'title') })}<c:overlay val="0"/></c:title>` : '';
+  const axisText = (cfg, rotation = null) => chartTextPropertiesXml({ ...chartTextFields(chart, '', true), ...(Number.isFinite(chart.axisSize) ? { size: chart.axisSize } : {}), ...chartTextFields(cfg) }, 'c', rotation);
   const scaling = (cfg) => `<c:scaling>${Number.isFinite(cfg?.logBase) && cfg.logBase >= 2 && cfg.logBase <= 1000 ? `<c:logBase val="${cfg.logBase}"/>` : ''}<c:orientation val="${cfg?.reverse ? 'maxMin' : 'minMax'}"/>${typeof cfg?.max === 'number' ? `<c:max val="${cfg.max}"/>` : ''}${typeof cfg?.min === 'number' ? `<c:min val="${cfg.min}"/>` : ''}</c:scaling>`;
   const numFmt = (cfg) => (cfg?.numFmt ? `<c:numFmt formatCode="${esc(cfg.numFmt)}" sourceLinked="0"/>` : '<c:numFmt formatCode="General" sourceLinked="1"/>');
   // Keep explicit category-label settings in standard chart XML, including 0°.
   // Missing values retain Excel's automatic interval and text direction.
   const categoryLabels = chart.axes?.x ?? {};
   const labelIntervalXml = Number.isSafeInteger(categoryLabels.labelInterval) && categoryLabels.labelInterval > 0 ? `<c:tickLblSkip val="${categoryLabels.labelInterval}"/>` : '';
-  const labelRotationXml = Number.isFinite(categoryLabels.labelRotation) && Math.abs(categoryLabels.labelRotation) <= 90
-    ? `<c:txPr><a:bodyPr rot="${Math.round(categoryLabels.labelRotation * 60000)}"/><a:lstStyle/><a:p><a:pPr><a:defRPr${Number.isFinite(chart.axisSize) ? ` sz="${Math.round(Math.max(1, Math.min(400, chart.axisSize)) * 100)}"` : ''}/></a:pPr><a:endParaRPr lang="ko-KR"/></a:p></c:txPr>` : '';
+  const labelRotationXml = axisText(categoryLabels, categoryLabels.labelRotation);
   const catAxis = (id, cross, pos, del) => (baseType === 'scatter' || baseType === 'bubble'
-    ? `<c:valAx><c:axId val="${id}"/>${scaling(chart.axes?.x)}<c:delete val="${del || chart.axes?.x?.hide ? 1 : 0}"/><c:axPos val="${pos}"/>${del ? '' : axTitle(chart.axes?.x?.title)}${numFmt(chart.axes?.x)}<c:tickLblPos val="nextTo"/><c:crossAx val="${cross}"/><c:crosses val="autoZero"/><c:crossBetween val="midCat"/></c:valAx>`
-    : `<c:catAx><c:axId val="${id}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="${del || chart.axes?.x?.hide ? 1 : 0}"/><c:axPos val="${pos}"/>${chart.gridX ? '<c:majorGridlines/>' : ''}${del ? '' : axTitle(chart.axes?.x?.title)}<c:numFmt formatCode="General" sourceLinked="1"/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/>${labelRotationXml}<c:crossAx val="${cross}"/><c:crosses val="autoZero"/><c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/>${labelIntervalXml}<c:noMultiLvlLbl val="0"/></c:catAx>`);
-  const valAxis = (id, cross, pos, cfg, grid, crosses = 'autoZero') => `<c:valAx><c:axId val="${id}"/>${scaling(cfg)}<c:delete val="${cfg?.hide ? 1 : 0}"/><c:axPos val="${pos}"/>${grid && chart.gridY !== false ? '<c:majorGridlines/>' : ''}${axTitle(cfg?.title)}${numFmt(cfg)}<c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crossAx val="${cross}"/><c:crosses val="${crosses}"/><c:crossBetween val="${baseType === 'area' || baseType === 'scatter' || baseType === 'bubble' ? 'midCat' : 'between'}"/>${typeof cfg?.major === 'number' ? `<c:majorUnit val="${cfg.major}"/>` : ''}</c:valAx>`;
+    ? `<c:valAx><c:axId val="${id}"/>${scaling(chart.axes?.x)}<c:delete val="${del || chart.axes?.x?.hide ? 1 : 0}"/><c:axPos val="${pos}"/>${del ? '' : axTitle(chart.axes?.x)}${numFmt(chart.axes?.x)}<c:tickLblPos val="nextTo"/>${axisText(chart.axes?.x)}<c:crossAx val="${cross}"/><c:crosses val="autoZero"/><c:crossBetween val="midCat"/></c:valAx>`
+    : `<c:catAx><c:axId val="${id}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="${del || chart.axes?.x?.hide ? 1 : 0}"/><c:axPos val="${pos}"/>${chart.gridX ? '<c:majorGridlines/>' : ''}${del ? '' : axTitle(chart.axes?.x)}<c:numFmt formatCode="General" sourceLinked="1"/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/>${labelRotationXml}<c:crossAx val="${cross}"/><c:crosses val="autoZero"/><c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/>${labelIntervalXml}<c:noMultiLvlLbl val="0"/></c:catAx>`);
+  const valAxis = (id, cross, pos, cfg, grid, crosses = 'autoZero') => `<c:valAx><c:axId val="${id}"/>${scaling(cfg)}<c:delete val="${cfg?.hide ? 1 : 0}"/><c:axPos val="${pos}"/>${grid && chart.gridY !== false ? '<c:majorGridlines/>' : ''}${axTitle(cfg)}${numFmt(cfg)}<c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/>${axisText(cfg)}<c:crossAx val="${cross}"/><c:crosses val="${crosses}"/><c:crossBetween val="${baseType === 'area' || baseType === 'scatter' || baseType === 'bubble' ? 'midCat' : 'between'}"/>${typeof cfg?.major === 'number' ? `<c:majorUnit val="${cfg.major}"/>` : ''}</c:valAx>`;
   let axesXml = '';
   if (!pieLike) {
     axesXml = catAxis(111111111, 222222222, horizontal ? 'l' : 'b', false) + valAxis(222222222, 111111111, horizontal ? 'b' : 'l', chart.axes?.y, true);
     if (hasSecondary) axesXml += catAxis(333333333, 444444444, horizontal ? 'l' : 'b', true) + valAxis(444444444, 333333333, horizontal ? 't' : 'r', chart.axes?.y2, false, 'max');
   }
   if (baseType === 'surface' || threeD && (baseType === 'line' || ['column', 'bar'].includes(baseType) && groups.some(g => g.grouping === 'standard'))) axesXml += `<c:serAx><c:axId val="555555555"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:tickLblPos val="nextTo"/><c:crossAx val="222222222"/><c:crosses val="autoZero"/><c:tickLblSkip val="1"/><c:tickMarkSkip val="1"/></c:serAx>`;
-  const titleFont = `sz="${Math.round((chart.titleSize ?? 14) * 100)}" b="${chart.titleBold ? 1 : 0}"`;
-  const titleFill = chart.titleColor ? `<a:solidFill><a:srgbClr val="${hex6(chart.titleColor)}"/></a:solidFill>` : '';
+  const titleStyle = { size: chart.size ?? 14, bold: chart.bold ?? false, ...chartTextFields(chart, '', true), ...chartTextFields(chart, 'title') };
   const title = chart.title
-    ? `<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr ${titleFont}>${titleFill}</a:defRPr></a:pPr><a:r><a:rPr lang="ko-KR" ${titleFont}>${titleFill}</a:rPr><a:t>${esc(chart.title)}</a:t></a:r></a:p></c:rich></c:tx>${chartLayoutXml(chart.titleLayout)}<c:overlay val="${chart.titleOverlay ? 1 : 0}"/></c:title><c:autoTitleDeleted val="0"/>`
+    ? `<c:title>${chartRichTextXml(chart.title, titleStyle)}${chartLayoutXml(chart.titleLayout)}<c:overlay val="${chart.titleOverlay ? 1 : 0}"/></c:title><c:autoTitleDeleted val="0"/>`
     : '<c:autoTitleDeleted val="1"/>';
   const lp = chart.legend ?? (series.length > 1 || pieLike ? 'b' : 'none');
   // 범례 글꼴 (색 · 크기 · 굵게)
-  const legTx = chart.legendColor || chart.legendSize || chart.legendBold ? `<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr${chart.legendSize ? ` sz="${Math.round(chart.legendSize * 100)}"` : ''}${chart.legendBold ? ' b="1"' : ''}>${chart.legendColor ? `<a:solidFill><a:srgbClr val="${String(chart.legendColor).replace('#', '').toUpperCase()}"/></a:solidFill>` : ''}</a:defRPr></a:pPr><a:endParaRPr lang="ko-KR"/></a:p></c:txPr>` : '';
+  const legTx = chartTextPropertiesXml({ ...chartTextFields(chart, '', true), ...chartTextFields(chart, 'legend') });
   const legend = lp !== 'none' ? `<c:legend><c:legendPos val="${lp}"/>${chartLayoutXml(chart.legendLayout)}<c:overlay val="0"/>${legTx}</c:legend>` : '';
   // 위셀 지표 선택 피벗 차트: 엑셀에는 피벗 테이블 범위를 참조하는 일반 차트로 (엑셀 피벗 차트는 모든 값 필드를 강제로 보이므로)
   const subsetPivot = !!chart.pivot?.values?.length;
@@ -4058,11 +4061,13 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx', imageRel) {
   // 계열은 위에서 실제로 제거했다. 압축된 ser 목록에 원래 번호를 다시 적용하면
   // 남은 계열까지 숨겨지므로 확장에 hiddenSeries를 중복 저장하지 않는다.
   delete tb.hiddenSeries;
+  const textSupplement = chartTextSupplement(chart, series);
+  if (textSupplement) tb.wxText = textSupplement;
   if (subsetPivot) tb.wxPivot = chart.pivot; // 위셀로 다시 열면 슬라이서와 연동되는 피벗 차트로 복원
   const extLst = Object.keys(tb).length > 1 || chart.type === 'combo' || FALLBACK[chart.type] ? `<c:extLst><c:ext uri="{5E2A6C7B-8F4D-4B1A-9C3E-7D6F1A2B3C4D}" xmlns:tb="urn:tabula:chart"><tb:props json="${esc(JSON.stringify(tb))}"/></c:ext></c:extLst>` : '';
   const v3 = chartView3D(baseType === 'surface' && !threeD ? { type: 'surface', view3D: { rotX: 90, rotY: 0, depthPercent: 100, rAngAx: true, perspective: 0 } } : chart);
   const viewXml = threeD || baseType === 'surface' ? `<c:view3D><c:rotX val="${Math.round(v3.rotX)}"/><c:rotY val="${Math.round((v3.rotY + (baseType === 'pie' ? chart.firstAngle ?? 0 : 0)) % 360)}"/><c:depthPercent val="${Math.round(v3.depthPercent)}"/><c:rAngAx val="${v3.rAngAx ? 1 : 0}"/><c:perspective val="${Math.round(v3.perspective)}"/></c:view3D>` : '';
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="${NS_R}"><c:date1904 val="${wb.date1904 ? 1 : 0}"/><c:roundedCorners val="${chart.rounded ? 1 : 0}"/>${pivotSrc}<c:chart>${title}${pivotFmts}${viewXml}<c:plotArea><c:layout/>${groupXml}${axesXml}${chart.dataTable && !pieLike ? '<c:dTable><c:showHorzBorder val="1"/><c:showVertBorder val="1"/><c:showOutline val="1"/><c:showKeys val="1"/></c:dTable>' : ''}${plotSpPr}</c:plotArea>${legend}<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart>${areaSpPr}${extLst}</c:chartSpace>`;
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="${NS_R}"><c:date1904 val="${wb.date1904 ? 1 : 0}"/><c:roundedCorners val="${chart.rounded ? 1 : 0}"/>${pivotSrc}<c:chart>${title}${pivotFmts}${viewXml}<c:plotArea><c:layout/>${groupXml}${axesXml}${chart.dataTable && !pieLike ? `<c:dTable><c:showHorzBorder val="1"/><c:showVertBorder val="1"/><c:showOutline val="1"/><c:showKeys val="1"/>${chartTextPropertiesXml({ ...chartTextFields(chart, '', true), ...chartTextFields(chart.dataTableText) })}</c:dTable>` : ''}${plotSpPr}</c:plotArea>${legend}<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart>${areaSpPr}${chartTextPropertiesXml(chartTextFields(chart, '', true))}${extLst}</c:chartSpace>`;
 }
 
 const DASH_XML = { dash: '<a:prstDash val="dash"/>', dot: '<a:prstDash val="sysDot"/>', dashDot: '<a:prstDash val="dashDot"/>', longDash: '<a:prstDash val="lgDash"/>', sysDash: '<a:prstDash val="sysDash"/>' };

@@ -17,3 +17,18 @@ test('계층 레이블 Delete는 기본 항목명과 명시 값/백분율/계열
   const data = { categories: ['가', '나'], series: [{ name: '매출', values: [20, 30], ...patch.seriesFmt[0], _fi: 0 }] };
   assert.doesNotMatch(renderChartSvg({ ...chart, ...patch }, data), /data-el="label"/);
 });
+
+test('축 제목 Delete는 제목만 지우고 눈금·기본/보조축·계열은 보존한다', () => {
+  const original = { type: 'column', w: 500, h: 300, title: '차트', axes: { x: { title: '기간', font: 'Arial', min: 0 }, y: { title: '매출', titleFont: 'Georgia', min: 0, max: 100 }, y2: { title: '비율', numFmt: '0%' } } };
+  for (const axis of ['x', 'y', 'y2']) {
+    const patch = chartPartDeletePatch(original, { kind: 'axis-title-' + axis }), next = { ...original, ...patch };
+    assert.equal(next.axes[axis].title, ''); assert.equal(next.axes[axis].hide, undefined);
+    for (const other of ['x', 'y', 'y2'].filter(k => k !== axis)) assert.deepEqual(next.axes[other], original.axes[other]);
+    assert.equal(next.title, '차트'); assert.ok(original.axes[axis].title);
+    if (axis !== 'y2') {
+      const svg = renderChartSvg(next, { categories: ['가', '나'], series: [{ name: '매출', values: [20, 30] }] });
+      assert.doesNotMatch(svg, new RegExp('data-el="axis-title-' + axis + '"'));
+      assert.match(svg, new RegExp('data-el="axis-' + axis + '"'));
+    }
+  }
+});

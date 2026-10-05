@@ -68,3 +68,52 @@ test('CRTX 저장 시 계열 서식에 끼어든 값과 이름은 예시 데이�
   assert.doesNotMatch(xml, /민감계열표식|918273645/);
   assert.equal(readChartTemplate(writeChartTemplate(chart)).seriesFmt[0].color, '#123456');
 });
+
+test('텍스트 초기화는 새 글꼴 속성 모두와 대상만 복원하고 계열 채우기는 보존한다', () => {
+  const chart = { font: 'Arial', size: 12, titleFont: 'Georgia', titleItalic: true, titleUnderline: true, legendFont: 'Verdana', legendStrike: true, axes: { x: { title: '기간', font: 'Arial', size: 14, min: 1, titleFont: 'Georgia', titleSize: 20 }, y: { title: '매출', max: 100 } }, seriesFmt: [{ color: '#ff0000', lineWidth: 3, labelFont: 'Georgia', labelItalic: true, pointLabelStyles: { 0: { font: 'Verdana' }, 1: { size: 16 } } }], dataTableText: { font: 'Georgia' } };
+  const before = structuredClone(chart);
+  const title = { ...chart, ...chartResetFormattingPatch(chart, { kind: 'title' }) };
+  assert.equal(title.titleFont, undefined); assert.equal(title.titleItalic, undefined); assert.equal(title.titleUnderline, undefined); assert.equal(title.legendFont, 'Verdana');
+  const axis = { ...chart, ...chartResetFormattingPatch(chart, { kind: 'axis-title-x' }) };
+  assert.deepEqual(axis.axes.x, { title: '기간', font: 'Arial', size: 14, min: 1 }); assert.deepEqual(axis.axes.y, chart.axes.y);
+  const tick = { ...chart, ...chartResetFormattingPatch(chart, { kind: 'axis-x' }) };
+  assert.deepEqual(tick.axes.x, { title: '기간', min: 1, titleFont: 'Georgia', titleSize: 20 });
+  const point = chartResetFormattingPatch(chart, { kind: 'label', s: 0, p: 0 }).seriesFmt[0];
+  assert.deepEqual(point.pointLabelStyles, { 1: { size: 16 } }); assert.equal(point.labelFont, 'Georgia'); assert.equal(point.color, '#ff0000');
+  const labels = chartResetFormattingPatch(chart, { kind: 'label', s: 0 }).seriesFmt[0];
+  assert.deepEqual(labels, { color: '#ff0000', lineWidth: 3 });
+  const whole = { ...chart, ...chartResetFormattingPatch(chart) };
+  assert.equal(whole.font, undefined); assert.equal(whole.legendFont, undefined); assert.equal(whole.dataTableText, undefined);
+  assert.deepEqual(whole.axes, { x: { title: '기간', min: 1 }, y: { title: '매출', max: 100 } }); assert.deepEqual(whole.seriesFmt[0], { color: '#ff0000', lineWidth: 3 });
+  assert.deepEqual(chart, before);
+});
+
+test('새 차트 글꼴 템플릿은 축 문구·범위·민감 데이터 없이 텍스트 서식만 보존한다', () => {
+  const chart = { type: 'column', font: 'Arial', italic: true, titleFont: 'Georgia', titleUnderline: true, legendFont: 'Verdana', legendStrike: true, axes: { x: { title: '비공개기간문구', font: 'Arial', min: 918273645, max: 987654321, titleFont: 'Georgia', labelRotation: 45 }, y: { title: '비공개금액문구', size: 14, titleItalic: true, metadata: '유출금지표식' } }, dataTableText: { font: 'Georgia', color: '#123456', values: ['유출금지표식'] }, seriesFmt: [{ labelFont: 'Georgia', labelItalic: true, pointLabelStyles: { 1: { font: 'Verdana', size: 16, color: '#aa3344', values: [918273645], name: '유출금지표식' }, invalid: { font: '민감' } } }] };
+  const before = structuredClone(chart), format = chartTemplateFormat(chart);
+  assert.deepEqual(format.axes, { x: { font: 'Arial', titleFont: 'Georgia' }, y: { size: 14, titleItalic: true } });
+  assert.deepEqual(format.dataTableText, { font: 'Georgia', color: '#123456' });
+  assert.deepEqual(format.seriesFmt[0].pointLabelStyles, { 1: { font: 'Verdana', size: 16, color: '#aa3344' } });
+  const bytes = writeChartTemplate(chart), xml = Object.values(unzip(bytes)).map(b => new TextDecoder().decode(b)).join('');
+  assert.doesNotMatch(xml, /비공개기간문구|비공개금액문구|918273645|987654321|유출금지표식/);
+  const back = readChartTemplate(bytes);
+  for (const key of ['font', 'italic', 'titleFont', 'titleUnderline', 'legendFont', 'legendStrike', 'dataTableText']) assert.deepEqual(back[key], format[key], key);
+  assert.equal(back.axes.x.font, 'Arial'); assert.equal(back.axes.x.titleFont, 'Georgia'); assert.equal(back.axes.y.titleItalic, true);
+  assert.deepEqual(back.seriesFmt[0].pointLabelStyles, format.seriesFmt[0].pointLabelStyles);
+  const current = { title: '현재 차트', axes: { x: { title: '현재 기간', font: '이전글꼴', min: 0, max: 15, labelRotation: 30 }, y: { title: '현재 금액', numFmt: '0.0%', color: '#ffffff' } } };
+  const next = { ...current, ...applyChartTemplatePatch(current, format) };
+  assert.equal(next.title, '현재 차트'); assert.equal(next.axes.x.title, '현재 기간'); assert.equal(next.axes.x.max, 15); assert.equal(next.axes.x.labelRotation, 30); assert.equal(next.axes.x.font, 'Arial');
+  assert.equal(next.axes.y.numFmt, '0.0%'); assert.equal(next.axes.y.title, '현재 금액'); assert.equal(next.axes.y.color, undefined); assert.equal(next.axes.y.size, 14);
+  assert.deepEqual(chart, before);
+});
+
+test('원본 계열 안에 저장된 레이블 글꼴도 초기화하지만 원본 값·참조는 보존한다', () => {
+  const ref = { sheet: '자료', r1: 1, c1: 1, r2: 3, c2: 1 }, cache = [10, 20, 30];
+  const chart = { series: [{ name: { text: '매출' }, val: ref, cache, labelFont: 'Georgia', labelItalic: true, pointLabelStyles: { 0: { size: 15 }, 1: { font: 'Verdana' } } }] };
+  const point = chartResetFormattingPatch(chart, { kind: 'label', s: 0, p: 0 });
+  assert.deepEqual(point.series[0].pointLabelStyles, { 1: { font: 'Verdana' } }); assert.equal(point.series[0].labelFont, 'Georgia');
+  for (const patch of [chartResetFormattingPatch(chart), chartResetFormattingPatch(chart, { kind: 'label', s: 0 }), applyChartTemplatePatch(chart, { font: 'Arial' })]) {
+    assert.equal(patch.series[0].labelFont, undefined); assert.equal(patch.series[0].pointLabelStyles, undefined); assert.equal(patch.series[0].cache, cache); assert.equal(patch.series[0].val, ref); assert.deepEqual(patch.series[0].name, chart.series[0].name);
+  }
+  assert.equal(chart.series[0].labelFont, 'Georgia');
+});

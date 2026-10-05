@@ -1,11 +1,14 @@
 import { paletteOf, CHART_PALETTES } from './chart.js';
 import { el } from './ui.js';
+import { chartTextStyle, chartTextFormatPatch } from './chart-text-format.js';
+import { createFormatValuePicker } from './format-value-picker.js';
+import { fontList } from './fonts.js';
 import { buildChartHierarchy, hierarchyNodeColor } from './chart-hierarchy.js';
 import { chartSeriesPatch, chartPointColorPatch, chartExplosionPatch, chartPalettePatch, chartSeriesColorPatch } from './chart-edit.js';
 import { chartAreaFormat } from './chart-area-format.js';
 import { createChartAreaFormatPanel } from './chart-area-format-ui.js';
 
-export function createChartSelectionPanel({ getChart, getPart, getData, onChange, onChoose, onDelete, onAllOptions, onCustomPalette }) {
+export function createChartSelectionPanel({ getChart, getPart, getData, onChange, onChoose, onDelete, onAllOptions, onCustomPalette, onFontMenu }) {
   const body = el('div', { class: 'cfp chart-selection-pane' });
   const row = (name, input) => { input.setAttribute('aria-label', name); return el('label', { class: 'cfp-row' }, el('span', {}, name), input); };
   const section = (name, ...rows) => el('details', { class: 'cfp-sec', open: true }, el('summary', {}, name), ...rows);
@@ -31,12 +34,15 @@ export function createChartSelectionPanel({ getChart, getPart, getData, onChange
     const hierarchy = ['treemap', 'sunburst'].includes(chart.type) ? buildChartHierarchy(data) : null;
     const node = hierarchy?.nodes.find(n => n.key === part.node);
     const noAxes = ['pie', 'doughnut', 'pieOfPie', 'barOfPie', 'sunburst', 'treemap', 'funnel', 'map', 'surface'].includes(chart.type);
-    const title = part.kind === 'point' ? `데이터 요소 서식 — ${series?.name ?? ''} · ${pointName}` : part.kind === 'series' ? `데이터 계열 서식 — ${series?.name ?? ''}` : part.kind === 'node' ? `계층 항목 서식 — ${node?.path.filter(Boolean).join(' / ') ?? ''}${node?.children.length ? ' (상위 항목)' : ''}` : { 'axis-x': '가로·항목 축 서식', 'axis-y': '기본 값 축 서식', 'axis-y2': '보조 값 축 서식', title: '차트 제목 서식', legend: '범례 서식', label: '데이터 레이블 서식', dataTable: '데이터 표 서식', plot: '그림 영역 서식', chart: '차트 영역 서식' }[part.kind] ?? '차트 요소 서식';
+    const title = part.kind === 'point' ? `데이터 요소 서식 — ${series?.name ?? ''} · ${pointName}` : part.kind === 'series' ? `데이터 계열 서식 — ${series?.name ?? ''}` : part.kind === 'node' ? `계층 항목 서식 — ${node?.path.filter(Boolean).join(' / ') ?? ''}${node?.children.length ? ' (상위 항목)' : ''}` : { 'axis-title-x': '가로·항목 축 제목 서식', 'axis-title-y': '기본 값 축 제목 서식', 'axis-title-y2': '보조 값 축 제목 서식', 'axis-x': '가로·항목 축 서식', 'axis-y': '기본 값 축 서식', 'axis-y2': '보조 값 축 서식', title: '차트 제목 서식', legend: '범례 서식', label: '데이터 레이블 서식', dataTable: '데이터 표 서식', plot: '그림 영역 서식', chart: '차트 영역 서식' }[part.kind] ?? '차트 요소 서식';
     const options = [['chart', '차트 영역'], ['plot', '그림 영역'], ...(!noAxes ? [['axis-x', chart.type === 'bar' ? '세로(항목) 축' : '가로 축'], ['axis-y', chart.type === 'bar' ? '가로(값) 축' : '기본 세로(값) 축'], ...(data.series.some(s => s.axis === 1) || chart.type === 'pareto' || chart.volume ? [['axis-y2', '보조 값 축']] : [])] : []), ...(chart.title ? [['title', '차트 제목']] : []), ...(chart.legend !== 'none' ? [['legend', '범례']] : []), ...data.series.map((s, i) => [`series:${s._fi ?? i}`, `계열: ${s.name || i + 1}${chart.hiddenSeries?.includes(s._fi ?? i) ? ' (삭제됨)' : ''}`])];
     for (const [i, s] of data.series.entries()) options.push([`label:${s._fi ?? i}`, `데이터 레이블: ${s.name || i + 1}`]);
+    for (const key of ['x', 'y', 'y2']) if (!noAxes && chart.axes?.[key]?.title) options.push([`axis-title-${key}`, `${key === 'x' ? '가로·항목' : key === 'y' ? '기본 값' : '보조 값'} 축 제목`]);
+    if (chart.dataTable) options.push(['dataTable', '데이터 표']);
+    if (part.kind === 'label' && part.p !== undefined) options.push([`label:${part.s}:${point}`, `개별 데이터 레이블: ${pointName}`]);
     if (part.kind === 'node') options.push([`node:${part.s}:${encodeURIComponent(part.node)}`, `계층 항목: ${node?.name ?? ''}`]);
     if (part.kind === 'point') options.push([`point:${part.s}:${point}`, `데이터 요소: ${pointName}`]);
-    const value = part.kind === 'node' ? `node:${part.s}:${encodeURIComponent(part.node)}` : ['series', 'point', 'label'].includes(part.kind) ? `${part.kind}:${part.s}${part.kind === 'point' ? ':' + point : ''}` : part.kind;
+    const value = part.kind === 'node' ? `node:${part.s}:${encodeURIComponent(part.node)}` : ['series', 'point', 'label'].includes(part.kind) ? `${part.kind}:${part.s}${part.kind === 'point' || part.kind === 'label' && part.p !== undefined ? ':' + point : ''}` : part.kind;
     const picker = choose(value, options, v => { const [kind, s, p] = v.split(':'); onChoose({ kind, ...(s !== undefined ? { s: Number(s) } : {}), ...(kind === 'node' ? { node: decodeURIComponent(p) } : p !== undefined ? { p: Number(p) } : {}) }); });
     const rows = [], extra = [];
     const button = (label, action) => el('button', { type: 'button', class: 'btn small', onclick: action }, label);
@@ -59,7 +65,12 @@ export function createChartSelectionPanel({ getChart, getPart, getData, onChange
       rows.push(row('계층 항목', choose(part.node, hierarchy.nodes.map(n => [n.key, `${'　'.repeat(Math.min(n.depth, 8))}${n.name || '(빈 항목)'}`]), key => onChoose({ kind: 'node', s: part.s, node: key }))));
       rows.push(el('p', { class: 'muted' }, '상위 항목의 색은 하위 항목에도 적용됩니다. 별도로 지정한 하위 색은 유지됩니다.'));
       extra.push(section('데이터 레이블', ...labelRows()));
-    } else if (part.kind.startsWith('axis-')) {
+    } else if (/^axis-title-(x|y|y2)$/.test(part.kind)) {
+      const key = part.kind.slice(11);
+      const setTitle = value => { const axes = getChart().axes ?? {}; up({ axes: { ...axes, [key]: { ...axes[key], title: value || undefined } } }); };
+      rows.push(row('축 제목 텍스트', text(chart.axes?.[key]?.title, setTitle)));
+      rows.push(button('축 제목 삭제', () => setTitle(undefined)));
+    } else if (/^axis-(x|y|y2)$/.test(part.kind)) {
       const key = part.kind.slice(5), axis = chart.axes?.[key] ?? {};
       const setAxis = patch => { const axes = getChart().axes ?? {}; up({ axes: { ...axes, [key]: { ...axes[key], ...patch } } }); };
       rows.push(row('축 표시', check(!axis.hide, v => setAxis({ hide: !v }))));
@@ -77,7 +88,6 @@ export function createChartSelectionPanel({ getChart, getPart, getData, onChange
         if (axis.labelRotation !== undefined) rows.push(row('사용자 지정 각도(°)', automatic(axis.labelRotation, v => setAxis({ labelRotation: v }), -90, 90)));
       }
       rows.push(row('역순으로 표시', check(axis.reverse, v => setAxis({ reverse: v }))));
-      rows.push(row('축 글꼴 크기(pt)', num(chart.axisSize ?? 9, v => up({ axisSize: v }), 6, 24)));
       const grid = key === 'x' ? 'gridX' : 'gridY';
       rows.push(row('주 눈금선', check(key === 'x' ? !!chart.gridX : chart.gridY !== false, v => up({ [grid]: v }))));
       rows.push(row('눈금선 색', color(chart.gridColor ?? '#d9d9d9', v => up({ gridColor: v }))));
@@ -126,9 +136,6 @@ export function createChartSelectionPanel({ getChart, getPart, getData, onChange
     } else if (part.kind === 'title' || part.kind === 'legend') {
       const titlePart = part.kind === 'title', prefix = titlePart ? 'title' : 'legend', layoutKey = prefix + 'Layout', layout = chart[layoutKey];
       if (titlePart) rows.push(row('제목 텍스트', text(chart.title, value => up({ title: value }))));
-      rows.push(row('글꼴 색', color(chart[prefix + 'Color'] ?? '#333333', value => up({ [prefix + 'Color']: value }))));
-      rows.push(row('글꼴 크기(pt)', num(chart[prefix + 'Size'] ?? (titlePart ? 14 : 9), value => up({ [prefix + 'Size']: value }), 6, 72)));
-      const bold = el('input', { type: 'checkbox', checked: !!chart[prefix + 'Bold'] }); bold.addEventListener('change', () => up({ [prefix + 'Bold']: bold.checked })); rows.push(row('굵게', bold));
       if (!titlePart) rows.push(row('범례 위치', choose(chart.legend ?? 'b', [['b', '아래쪽'], ['t', '위쪽'], ['l', '왼쪽'], ['r', '오른쪽']], value => { up({ legend: value, legendLayout: undefined }); draw(); })));
       if (layout) {
         rows.push(row('가로 위치(%)', num(layout.x * 100, x => up({ [layoutKey]: { ...getChart()[layoutKey], x: x / 100 } }), 0, 100, .1)));
@@ -139,14 +146,31 @@ export function createChartSelectionPanel({ getChart, getPart, getData, onChange
       rows.push(el('p', { class: 'muted' }, '차트에서 선택한 제목·범례를 끌거나 방향키로 이동할 수 있습니다.'));
       if (['waterfall', 'histogram', 'pareto', 'boxWhisker', 'treemap', 'sunburst', 'funnel', 'map'].includes(chart.type)) rows.push(el('p', { class: 'muted' }, '이 차트 종류의 자유 위치는 위셀에서 보존됩니다. Excel에서는 기본 위치로 표시될 수 있습니다.'));
     } else if (part.kind === 'label') {
-      rows.push(...labelRows());
-      rows.push(el('button', { class: 'btn', onclick: onDelete }, '계열 데이터 레이블 삭제'));
+      if (part.p === undefined) {
+        rows.push(...labelRows());
+        rows.push(el('button', { class: 'btn', onclick: onDelete }, '계열 데이터 레이블 삭제'));
+      } else rows.push(el('p', { class: 'muted' }, `선택한 데이터 레이블: ${pointName}. 아래 글꼴 설정은 이 레이블에만 적용됩니다.`));
+    } else if (part.kind === 'dataTable') {
+      rows.push(el('p', { class: 'muted' }, '차트 아래 데이터 표의 글꼴을 변경합니다.'));
     } else if (part.kind === 'plot') {
       extra.push(createChartAreaFormatPanel({kind:'plot',getFormat:()=>chartAreaFormat(getChart(),'plot'),getIdentity:()=>`${getChart()?.id}:${getPart()?.kind}`,initialTab:areaTabs.get('plot'),onTab:tab=>areaTabs.set('plot',tab),onChange:value=>up({plotAreaFormat:value??undefined,...(value?{}:{plotFill:undefined})})}).body);
     } else {
       rows.push(row('색 구성', choose(Array.isArray(chart.palette) ? 'imported' : chart.palette ?? 'office', [...(Array.isArray(chart.palette) ? [['imported', '가져온 색']] : []), ...Object.entries(CHART_PALETTES).map(([k, p]) => [k, p.label])], v => { if (v !== 'imported') up(chartPalettePatch(getChart(), v)); })));
       if (onCustomPalette) rows.push(el('button', { type: 'button', class: 'btn small', onclick: onCustomPalette }, '사용자 지정 색 구성…'));
       extra.push(createChartAreaFormatPanel({kind:'chart',getFormat:()=>chartAreaFormat(getChart()),getIdentity:()=>`${getChart()?.id}:${getPart()?.kind}`,initialTab:areaTabs.get('chart'),onTab:tab=>areaTabs.set('chart',tab),onChange:value=>up({chartAreaFormat:value??undefined,...(value?{}:{fill:undefined,border:undefined})})}).body);
+    }
+    const textStyle = chartTextStyle(chart, part);
+    if (textStyle) {
+      const setText = delta => {
+        if (JSON.stringify(getPart() ?? { kind: 'chart' }) !== JSON.stringify(part)) return;
+        const patch = chartTextFormatPatch(getChart(), part, delta); if (patch) up(patch);
+      };
+      const font = createFormatValuePicker({ label: '차트 글꼴', value: textStyle.font, values: fontList, onOpen: onFontMenu, onChange: value => setText({ font: value }) });
+      const size = createFormatValuePicker({ label: '차트 글꼴 크기(pt)', value: textStyle.size, number: true, values: [8,9,10,11,12,14,16,18,20,24,28,32,36,48,72], onChange: value => setText({ size: value }) });
+      extra.unshift(section('텍스트 서식', row('글꼴', font.root), row('글꼴 크기(pt)', size.root),
+        row('글꼴 색', color(textStyle.color, value => setText({ color: value }))),
+        ...[['bold','굵게'],['italic','기울임'],['underline','밑줄'],['strike','취소선']].map(([key,label]) => row(label, check(textStyle[key], value => setText({ [key]: value })))),
+        el('p', { class: 'muted' }, '홈 리본의 글꼴·크기·색으로도 선택한 텍스트를 변경할 수 있습니다.')));
     }
     body.replaceChildren(row('서식을 지정할 차트 요소', picker), el('p', { class: 'cfp-selection-name', role: 'status' }, title), ...(rows.length ? [section('선택한 요소', ...rows)] : []), ...extra, el('button', { class: 'btn', onclick: onAllOptions }, '차트 전체 옵션…'));
     for (const item of body.querySelectorAll('details')) if (expanded.has(item.querySelector('summary')?.textContent)) item.open = expanded.get(item.querySelector('summary')?.textContent);

@@ -1,4 +1,5 @@
 import { chartAreaFormatXml } from './chart-area-drawingml.js';
+import { chartTextFields, assignChartTextFields, readChartTextFont, chartTextPropertiesXml, chartTextSupplement, applyChartTextSupplement } from './chart-text-xml.js';
 // Office 2016+ ChartEx adapter. MS-ODRAWXML §2.24 / §5.22.
 // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-odrawxml/e2723b0a-9120-42a5-bd11-c252ccb13c1e
 // Chart geometry stays in chart.js; this module only handles standard chart XML.
@@ -11,7 +12,7 @@ export const CHARTEX_STYLE_CONTENT = 'application/vnd.ms-office.chartstyle+xml';
 export const CHARTEX_COLOR_CONTENT = 'application/vnd.ms-office.chartcolorstyle+xml';
 const A = 'http://schemas.openxmlformats.org/drawingml/2006/main';
 const TYPES = { waterfall: 'waterfall', funnel: 'funnel', histogram: 'clusteredColumn', pareto: 'clusteredColumn', treemap: 'treemap', sunburst: 'sunburst', boxWhisker: 'boxWhisker', map: 'regionMap' };
-const OWN_KEYS = ['chartStyle', 'type', 'treemapLabelLayout', 'titleLayout', 'legendLayout', 'byRows', 'axes', 'seriesFmt', 'labels', 'dataTable', 'gap', 'legend', 'palette', 'hiddenSeries', 'hiddenCats', 'titleSize', 'titleColor', 'titleBold', 'legendSize', 'legendColor', 'legendBold', 'axisSize', 'textColor', 'gridColor', 'rounded', 'gridX', 'gridY', 'fill', 'plotFill', 'border', 'totals', 'binCount', 'binWidth', 'upColor', 'downColor', 'totalColor', 'showMean', 'connectors', 'quartileMethod', 'showOutliers', 'showInnerPoints', 'mapLowColor', 'mapMidColor', 'mapHighColor'];
+const OWN_KEYS = ['font', 'size', 'textColor', 'bold', 'italic', 'underline', 'strike', 'titleFont', 'titleSize', 'titleColor', 'titleBold', 'titleItalic', 'titleUnderline', 'titleStrike', 'legendFont', 'legendSize', 'legendColor', 'legendBold', 'legendItalic', 'legendUnderline', 'legendStrike', 'dataTableText', 'chartStyle', 'type', 'treemapLabelLayout', 'titleLayout', 'legendLayout', 'byRows', 'axes', 'seriesFmt', 'labels', 'dataTable', 'gap', 'legend', 'palette', 'hiddenSeries', 'hiddenCats', 'titleSize', 'titleColor', 'titleBold', 'legendSize', 'legendColor', 'legendBold', 'axisSize', 'textColor', 'gridColor', 'rounded', 'gridX', 'gridY', 'fill', 'plotFill', 'border', 'totals', 'binCount', 'binWidth', 'upColor', 'downColor', 'totalColor', 'showMean', 'connectors', 'quartileMethod', 'showOutliers', 'showInnerPoints', 'mapLowColor', 'mapMidColor', 'mapHighColor'];
 const num = (v) => typeof v === 'number' && Number.isFinite(v);
 const on = (v) => v === '1' || v === 'true';
 const hex = (v) => /^#?[\da-f]{6}$/i.test(String(v ?? '')) ? String(v).replace('#', '').toUpperCase() : null;
@@ -20,7 +21,6 @@ const shape = (v, border) => v || border ? `<cx:spPr>${fill(v)}${border ? `<a:ln
 const f = (value, dir) => value ? `<cx:f${dir ? ` dir="${dir}"` : ''}>${esc(value)}</cx:f>` : '';
 const refDirection = (r) => { const m = /\$?[A-Z]+\$?(\d+):\$?[A-Z]+\$?(\d+)$/i.exec(r ?? ''); return m && m[1] === m[2] ? 'row' : 'col'; };
 const tx = (value, ref) => `<cx:tx><cx:txData>${f(ref)}<cx:v>${esc(value ?? '')}</cx:v></cx:txData></cx:tx>`;
-const textPr = (size, color, bold) => `<cx:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr${num(size) ? ` sz="${Math.round(Math.max(1, Math.min(400, size)) * 100)}"` : ''}${bold !== undefined ? ` b="${bold ? 1 : 0}"` : ''}>${fill(color)}</a:defRPr></a:pPr><a:endParaRPr lang="ko-KR"/></a:p></cx:txPr>`;
 const lvl = (values, numeric, code, name) => `<cx:lvl ptCount="${values.length}"${code ? ` formatCode="${esc(code)}"` : ''}${name ? ` name="${esc(name)}"` : ''}>${values.map((v, i) => (numeric ? num(v) : v !== null && v !== undefined && v !== '') ? `<cx:pt idx="${i}">${esc(v)}</cx:pt>` : '').join('')}</cx:lvl>`;
 
 /** ChartEx의 스타일 파트는 스키마상 선택적이나 실제 Excel 16에서는 관계가 없으면 Open이 실패합니다. */
@@ -88,8 +88,13 @@ export function writeChartEx(chart, data, refs = [], palette = ['#4472c4', '#ed7
     const positions = { center: 'ctr', insideEnd: 'inEnd', insideBase: 'inBase', outEnd: 'outEnd', out: 'outEnd', above: 't', below: 'b', left: 'l', right: 'r', bestFit: 'bestFit' };
     const labelPos = positions[sr.labelPos] ?? (hierarchy ? 'ctr' : 'bestFit');
     const hasLabels = labels !== undefined || hierarchy || sr.catName !== undefined || sr.serName !== undefined;
-    const labelFont = sr.labelSize !== undefined || sr.labelColor !== undefined || sr.labelBold !== undefined ? textPr(sr.labelSize, sr.labelColor, sr.labelBold) : '';
-    const dataLabels = hasLabels ? `<cx:dataLabels pos="${labelPos}">${sr.numFmt ? `<cx:numFmt formatCode="${esc(sr.numFmt)}" sourceLinked="0"/>` : ''}${labelFont}<cx:visibility seriesName="${serName ? 1 : 0}" categoryName="${catName ? 1 : 0}" value="${labels ? 1 : 0}"/></cx:dataLabels>` : '';
+    const labelFont = chartTextPropertiesXml({ ...chartTextFields(chart, '', true), ...chartTextFields(sr, 'label') }, 'cx');
+    const pointLabels = sr.values.map((_, p) => {
+      const style = sr.pointLabelStyles?.[sr._pi?.[p] ?? p];
+      const font = style && chartTextPropertiesXml({ ...chartTextFields(chart, '', true), ...chartTextFields(sr, 'label'), ...chartTextFields(style) }, 'cx');
+      return font ? `<cx:dataLabel idx="${p}">${font}</cx:dataLabel>` : '';
+    }).join('');
+    const dataLabels = hasLabels ? `<cx:dataLabels pos="${labelPos}">${sr.numFmt ? `<cx:numFmt formatCode="${esc(sr.numFmt)}" sourceLinked="0"/>` : ''}${labelFont}<cx:visibility seriesName="${serName ? 1 : 0}" categoryName="${catName ? 1 : 0}" value="${labels ? 1 : 0}"/>${pointLabels}</cx:dataLabels>` : '';
     const ptColors = sr.pointColors ?? sr.colors ?? {};
     const points = Object.entries(ptColors).filter(([k, v]) => /^\d+$/.test(k) && Number(k) < sr.values.length && hex(v)).map(([k, v]) => `<cx:dataPt idx="${k}">${shape(v)}</cx:dataPt>`).join('');
     const mapColors = type === 'map' ? ['min', 'mid', 'max'].map((stop, k) => { const h = hex(chart[['mapLowColor', 'mapMidColor', 'mapHighColor'][k]]); return h ? `<cx:${stop}Color><a:srgbClr val="${h}"/></cx:${stop}Color>` : ''; }).join('') : '';
@@ -101,15 +106,15 @@ export function writeChartEx(chart, data, refs = [], palette = ['#4472c4', '#ed7
   const axis = (id, key, category = false, defaults = {}) => {
     const a = { ...defaults, ...chart.axes?.[key] };
     const scaling = category ? `<cx:catScaling${num(chart.gap) ? ` gapWidth="${Math.max(0, chart.gap / 100)}"` : ''}/>` : `<cx:valScaling${['min', 'max', 'major'].filter((k) => num(a[k]) && (k !== 'major' || a[k] > 0)).map((k) => ` ${k === 'major' ? 'majorUnit' : k}="${a[k]}"`).join('')}/>`;
-    return `<cx:axis id="${id}" hidden="${a.hide ? 1 : 0}">${scaling}${a.title ? `<cx:title>${tx(a.title)}</cx:title>` : ''}${key === 'y' && chart.gridY !== false ? '<cx:majorGridlines/>' : ''}<cx:tickLabels/>${a.numFmt ? `<cx:numFmt formatCode="${esc(a.numFmt)}" sourceLinked="0"/>` : ''}${textPr(chart.axisSize, chart.textColor)}</cx:axis>`;
+    return `<cx:axis id="${id}" hidden="${a.hide ? 1 : 0}">${scaling}${a.title ? `<cx:title>${tx(a.title)}${chartTextPropertiesXml({ ...chartTextFields(chart, '', true), ...chartTextFields(a, 'title') }, 'cx')}</cx:title>` : ''}${key === 'y' && chart.gridY !== false ? '<cx:majorGridlines/>' : ''}<cx:tickLabels/>${a.numFmt ? `<cx:numFmt formatCode="${esc(a.numFmt)}" sourceLinked="0"/>` : ''}${chartTextPropertiesXml({ ...chartTextFields(chart, '', true), ...(num(chart.axisSize) ? { size: chart.axisSize } : {}), ...chartTextFields(a) }, 'cx')}</cx:axis>`;
   };
   const axes = cartesian ? axis(0, 'x', true) + axis(1, 'y') + (type === 'pareto' ? axis(2, 'y2', false, { min: 0, max: 1, numFmt: '0%' }) : '') : '';
-  const title = chart.title ? `<cx:title pos="t" align="ctr" overlay="0">${tx(chart.title)}${textPr(chart.titleSize ?? 14, chart.titleColor, chart.titleBold ?? false)}</cx:title>` : '';
+  const title = chart.title ? `<cx:title pos="t" align="ctr" overlay="0">${tx(chart.title)}${chartTextPropertiesXml({ size: chart.size ?? 14, bold: chart.bold ?? false, ...chartTextFields(chart, '', true), ...chartTextFields(chart, 'title') }, 'cx')}</cx:title>` : '';
   const lp = chart.legend ?? (source.length > 1 || hierarchy ? 'b' : 'none');
-  const legend = ['l', 't', 'r', 'b'].includes(lp) ? `<cx:legend pos="${lp}" align="ctr" overlay="0">${textPr(chart.legendSize, chart.legendColor, chart.legendBold)}</cx:legend>` : '';
+  const legend = ['l', 't', 'r', 'b'].includes(lp) ? `<cx:legend pos="${lp}" align="ctr" overlay="0">${chartTextPropertiesXml({ ...chartTextFields(chart, '', true), ...chartTextFields(chart, 'legend') }, 'cx')}</cx:legend>` : '';
   // Supplemental options belong to the drawing frame. Excel discards unknown cx
   // extensions; mc:Ignorable would also leave an invalid empty cx:ext after MC.
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cx:chartSpace xmlns:cx="${CHARTEX_NS}" xmlns:a="${A}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><cx:chartData>${parts.join('')}</cx:chartData><cx:chart>${title}<cx:plotArea><cx:plotAreaRegion>${series.join('')}</cx:plotAreaRegion>${axes}${chart.plotAreaFormat ? chartAreaFormatXml(chart.plotAreaFormat,{tag:'cx:spPr',kind:'plot',imageRel}) : shape(chart.plotFill)}</cx:plotArea>${legend}</cx:chart>${chart.chartAreaFormat ? chartAreaFormatXml(chart.chartAreaFormat,{tag:'cx:spPr',kind:'chart',imageRel}) : shape(chart.fill, chart.border)}</cx:chartSpace>`;
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cx:chartSpace xmlns:cx="${CHARTEX_NS}" xmlns:a="${A}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><cx:chartData>${parts.join('')}</cx:chartData><cx:chart>${title}<cx:plotArea><cx:plotAreaRegion>${series.join('')}</cx:plotAreaRegion>${axes}${chart.plotAreaFormat ? chartAreaFormatXml(chart.plotAreaFormat,{tag:'cx:spPr',kind:'plot',imageRel}) : shape(chart.plotFill)}</cx:plotArea>${legend}</cx:chart>${chart.chartAreaFormat ? chartAreaFormatXml(chart.chartAreaFormat,{tag:'cx:spPr',kind:'chart',imageRel}) : shape(chart.fill, chart.border)}${chartTextPropertiesXml(chartTextFields(chart, '', true), 'cx')}</cx:chartSpace>`;
 }
 
 const cached = (level, numeric = false) => {
@@ -121,14 +126,7 @@ const cached = (level, numeric = false) => {
   }
   return values;
 };
-const font = (n, colorOf) => {
-  const p = descendants(n, 'defRPr')[0] ?? descendants(n, 'rPr')[0];
-  const out = {};
-  if (p?.attrs.sz) out.size = Number(p.attrs.sz) / 100;
-  if (p?.attrs.b !== undefined) out.bold = on(p.attrs.b);
-  const color = colorOf(child(p, 'solidFill')); if (color) out.color = color;
-  return out;
-};
+const font = (n, colorOf) => readChartTextFont(n, colorOf);
 const text = (n) => child(child(n, 'txData'), 'v')?.text ?? allText(child(n, 'rich'));
 // Extensions are optional untrusted JSON; copy only the chart option allowlist,
 // ordinary values and bounded nesting. Never restore paths/URLs or object keys.
@@ -151,6 +149,7 @@ export function readChartEx(root, refOf = () => null, colorOf = (n) => { const h
   const type = layout === 'clusteredColumn' ? (all.some((s) => s.attrs.layoutId === 'paretoLine') ? 'pareto' : 'histogram') : layout === 'regionMap' ? 'map' : layout;
   if (!isChartEx({ type })) return null;
   const out = { type, series: [], seriesFmt: [], axes: {}, legend: child(ch, 'legend')?.attrs.pos ?? 'none' };
+  assignChartTextFields(out, font(child(root, 'txPr'), colorOf), '', true);
   const data = new Map(kids(child(root, 'chartData'), 'data').map((d) => [d.attrs.id, d]));
   const hidden = [];
   main.forEach((s, i) => {
@@ -181,6 +180,12 @@ export function readChartEx(root, refOf = () => null, colorOf = (n) => { const h
     if (positions[labels?.attrs.pos]) sf.labelPos = positions[labels.attrs.pos];
     const labelFont = font(child(labels, 'txPr'), colorOf);
     for (const [key, value] of Object.entries(labelFont)) sf[`label${key[0].toUpperCase()}${key.slice(1)}`] = value;
+    const pointLabels = {};
+    for (const label of kids(labels, 'dataLabel')) {
+      const p = Number(label.attrs.idx), style = font(child(label, 'txPr'), colorOf);
+      if (Number.isInteger(p) && p >= 0 && Object.keys(style).length) pointLabels[p] = style;
+    }
+    if (Object.keys(pointLabels).length) sf.pointLabelStyles = pointLabels;
     const labelCode = child(labels, 'numFmt')?.attrs.formatCode; if (labelCode) sf.numFmt = labelCode;
     out.seriesFmt[i] = sf;
     if (on(s.attrs.hidden)) hidden.push(i);
@@ -204,16 +209,17 @@ export function readChartEx(root, refOf = () => null, colorOf = (n) => { const h
     if (on(a.attrs.hidden)) props.hide = true;
     for (const [attr, k] of [['min', 'min'], ['max', 'max'], ['majorUnit', 'major']]) if (v?.attrs[attr] !== undefined && Number.isFinite(Number(v.attrs[attr]))) props[k] = Number(v.attrs[attr]);
     const title = text(child(child(a, 'title'), 'tx')); if (title) props.title = title;
+    assignChartTextFields(props, font(child(a, 'txPr'), colorOf));
+    assignChartTextFields(props, font(child(child(a, 'title'), 'txPr'), colorOf), 'title');
     const code = child(a, 'numFmt')?.attrs.formatCode; if (code) props.numFmt = code;
     out.axes[key] = props;
     if (key === 'y') {
       out.gridY = !!child(a, 'majorGridlines');
-      const ff = font(child(a, 'txPr'), colorOf);
-      if (ff.size) out.axisSize = ff.size;
-      if (ff.color) out.textColor = ff.color;
     }
     if (cat && Number.isFinite(Number(cat.attrs.gapWidth))) out.gap = Number(cat.attrs.gapWidth) * 100;
   }
+  const axisFonts = kids(plot, 'axis').map(a => font(child(a, 'txPr'), colorOf));
+  if (axisFonts.length && axisFonts[0].size && axisFonts.every(f => f.size === axisFonts[0].size)) out.axisSize = axisFonts[0].size;
   const title = child(ch, 'title'); out.title = text(child(title, 'tx'));
   for (const [node, prefix] of [[title, 'title'], [child(ch, 'legend'), 'legend']]) {
     const ff = font(child(node, 'txPr') ?? node, colorOf);
@@ -230,9 +236,9 @@ export function readChartEx(root, refOf = () => null, colorOf = (n) => { const h
 
 // Native values must win after an Excel edit. The extension stores only settings
 // for which this adapter has no native representation (e.g. WIXEL's data table).
-const NATIVE_OPTIONS = new Set(['type', 'treemapLabelLayout', 'palette', 'legend', 'hiddenSeries', 'gap', 'titleSize', 'titleColor', 'titleBold', 'legendSize', 'legendColor', 'legendBold', 'axisSize', 'textColor', 'gridY', 'fill', 'plotFill', 'border', 'totals', 'binCount', 'binWidth', 'showMean', 'connectors', 'quartileMethod', 'showOutliers', 'showInnerPoints', 'mapLowColor', 'mapMidColor', 'mapHighColor']);
-const NATIVE_AXIS = new Set(['hide', 'title', 'min', 'max', 'major', 'numFmt']);
-const NATIVE_SERIES = new Set(['color', 'labels', 'catName', 'serName', 'labelPos', 'labelSize', 'labelColor', 'labelBold', 'numFmt', 'pointColors', 'colors']);
+const NATIVE_OPTIONS = new Set(['font', 'size', 'textColor', 'bold', 'italic', 'underline', 'strike', 'titleFont', 'titleSize', 'titleColor', 'titleBold', 'titleItalic', 'titleUnderline', 'titleStrike', 'legendFont', 'legendSize', 'legendColor', 'legendBold', 'legendItalic', 'legendUnderline', 'legendStrike', 'type', 'treemapLabelLayout', 'palette', 'legend', 'hiddenSeries', 'gap', 'titleSize', 'titleColor', 'titleBold', 'legendSize', 'legendColor', 'legendBold', 'axisSize', 'textColor', 'gridY', 'fill', 'plotFill', 'border', 'totals', 'binCount', 'binWidth', 'showMean', 'connectors', 'quartileMethod', 'showOutliers', 'showInnerPoints', 'mapLowColor', 'mapMidColor', 'mapHighColor']);
+const NATIVE_AXIS = new Set(['font', 'size', 'color', 'bold', 'italic', 'underline', 'strike', 'titleFont', 'titleSize', 'titleColor', 'titleBold', 'titleItalic', 'titleUnderline', 'titleStrike', 'hide', 'title', 'min', 'max', 'major', 'numFmt']);
+const NATIVE_SERIES = new Set(['pointLabelStyles', 'labelFont', 'labelItalic', 'labelUnderline', 'labelStrike', 'color', 'labels', 'catName', 'serName', 'labelPos', 'labelSize', 'labelColor', 'labelBold', 'numFmt', 'pointColors', 'colors']);
 const BOOLEAN_OPTIONS = new Set(['labels', 'dataTable', 'byRows', 'rounded', 'gridX', 'gridY', 'showMean', 'connectors', 'showOutliers', 'showInnerPoints']);
 
 function supplementalOptions(chart) {
@@ -251,6 +257,8 @@ function supplementalOptions(chart) {
 
 export function chartExDrawingProps(chart, palette = []) {
   const props = supplementalOptions(chart);
+  const textSupplement = chartTextSupplement(chart, (chart.series ?? chart.seriesFmt ?? []).map((sr, i) => ({ ...sr, ...chart.seriesFmt?.[i] })));
+  if (textSupplement) props.wxText = textSupplement;
   // Preserve preset identity only while the actual native colors remain unchanged.
   // Excel can edit colorStyle while leaving this drawing extension untouched.
   if (typeof chart.palette === 'string' && palette.length) {
@@ -276,6 +284,7 @@ export function applyChartExOptions(out, json) {
       } else if (v !== undefined) out[k] = v;
     }
     if (typeof source.palette === 'string' && source.palette.length <= 128 && Array.isArray(source.wxPaletteColors) && Array.isArray(out.palette) && source.wxPaletteColors.length === out.palette.length && out.palette.length && out.palette.every((color, i) => hex(color) && hex(color) === hex(source.wxPaletteColors[i]))) out.palette = source.palette;
+    applyChartTextSupplement(out, source.wxText);
     if (source.wxPivot && typeof source.wxPivot === 'object' && typeof source.wxPivot.name === 'string') out.pivot = safeOption(source.wxPivot);
   } catch { /* unknown extension never prevents native data from loading */ }
   return out;

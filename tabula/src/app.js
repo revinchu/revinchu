@@ -11,6 +11,7 @@ import { tableCellDisplayStyle } from './table-format.js';
 import { filterButtonVisible, filterButtonsVisible, filterWithButtons } from './filter-display.js';
 import { createSheetPicker } from './sheet-picker-ui.js';
 import { chartAreaFormatPatch } from './chart-area-format.js';
+import { chartTextStyle, chartTextFormatPatch, chartTextFontNames } from './chart-text-format.js';
 import { chartResetFormattingPatch, applyChartTemplatePatch } from './chart-context.js';
 import { writeChartTemplate, readChartTemplate } from './chart-template.js';
 import { pivotContextTarget, pivotValueDef, pivotRemoveContextField } from './pivot-context.js';
@@ -1590,7 +1591,7 @@ function onGridKey(e) {
     if (ctrl && !e.altKey && !e.shiftKey && code === 'Digit1' && pictureHere()) { handled(); imageDialog(chartSel, 'styles'); return; }
     if (ctrl && !e.altKey && !e.shiftKey && code === 'Digit1' && sheet().charts.some(c => c.id === chartSel)) { handled(); chartFormatPane(chartSel); return; }
     if ((k === 'Delete' || k === 'Backspace') && chartPart?.id === chartSel) { handled(); deleteChartPart(); return; }
-    if (k === 'Escape' && chartPart?.id === chartSel) { handled(); chartPart = null; gv.renderObjectsAll(); syncChartPane(); return; }
+    if (k === 'Escape' && chartPart?.id === chartSel) { handled(); chartPart = null; gv.renderObjectsAll(); syncChartPane(); updateRibbon(); return; }
     if (k === 'Delete' || k === 'Backspace') { handled(); deleteObject(chartSel); return; }
     if (k === 'Escape') { handled(); deselectChart(); updateSelectionUI(); focusGrid(); return; }
     const step = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[k];
@@ -2305,7 +2306,11 @@ function handleViewMouseDown(e) {
     const partEl = objEl.classList.contains('chart') ? t.closest('[data-s], [data-el]') : null;
     const prevPart = chartPart;
     if (objEl.classList.contains('chart') && e.button !== 1) {
-      if (partEl?.dataset.el === 'label') chartPart = { id, kind: 'label', s: Number(partEl.dataset.s) };
+      if (partEl?.dataset.el === 'label') {
+        const s = Number(partEl.dataset.s), p = partEl.dataset.p === undefined ? null : Number(partEl.dataset.p);
+        const same = prevPart?.id === id && prevPart.kind === 'label' && prevPart.s === s;
+        chartPart = e.button === 2 && same ? prevPart : { id, kind: 'label', s, ...(same && p !== null ? { p } : {}) };
+      }
       else if (partEl?.dataset.node !== undefined) chartPart = { id, kind: 'node', s: Number(partEl.dataset.s ?? 0), node: partEl.dataset.node };
       else if (partEl?.dataset.s !== undefined) {
         const sIdx = Number(partEl.dataset.s);
@@ -2316,7 +2321,7 @@ function handleViewMouseDown(e) {
       else if (e.button === 0) chartPart = null;
     } else chartPart = null;
     const partChanged = JSON.stringify(prevPart) !== JSON.stringify(chartPart);
-    if (chartSel !== id) { shapeEdit = null; shapePointDrag = null; chartSel = id; objMulti.clear(); gv.renderObjectsAll(); updateSelectionUI(); selPaneDlg?.redraw?.(); } else if (partChanged) gv.renderObjectsAll();
+    if (chartSel !== id) { shapeEdit = null; shapePointDrag = null; chartSel = id; objMulti.clear(); gv.renderObjectsAll(); updateSelectionUI(); selPaneDlg?.redraw?.(); } else if (partChanged) { gv.renderObjectsAll(); updateRibbon(); }
     syncChartPane(); focusGrid();
     if (objEl.classList.contains('shape') && e.button === 0 && !shapeEdit && !t.closest('.ch-h')) {
       const now = Date.now(), repeat = lastShapeTextPointer?.id === id && now - lastShapeTextPointer.time < 450 && Math.hypot(e.clientX - lastShapeTextPointer.x, e.clientY - lastShapeTextPointer.y) < 5;
@@ -3250,6 +3255,19 @@ function explicitOff(patch, r, c) {
 }
 
 function applyStyle(patchOrFn, { widen = false } = {}) {
+  const chart = chartHere();
+  if (chart) {
+    if (!chartCanEdit(chart)) return;
+    const part = selectedChartTextPart(), current = chartTextStyle(chart, part);
+    if (!current) { toast('차트 제목, 축, 범례 또는 데이터 레이블을 선택하세요.'); return; }
+    const values = typeof patchOrFn === 'function' ? patchOrFn(current) : patchOrFn;
+    const patch = chartTextFormatPatch(chart, part, values ?? {});
+    if (!patch || !Object.keys(patch).length) return;
+    if (values?.font) requestWebFont(values.font, { retry: true });
+    updateChart(chart.id, patch);
+    gv.renderObjectsAll(); syncChartPane(); updateRibbon();
+    return;
+  }
   if (selectedTextShape()) {
     if (objectEditBlocked()) return;
     if (shapeTextEdit) { if (shapeTextEdit.valid()) shapeTextEdit.editor.format(patchOrFn); return; }
@@ -3338,7 +3356,7 @@ function clearSelection(what) {
 
 const toggleStyle = (key) => {
   const next = !formattingStyle()[key];
-  applyStyle({ [key]: selectedTextShape() ? next : next || undefined });
+  applyStyle({ [key]: selectedTextShape() || chartHere() ? next : next || undefined });
 };
 
 // 테두리 펜: 선 스타일 · 선 색 (엑셀의 [테두리] → [선 색] · [선 스타일])
@@ -3466,7 +3484,7 @@ function changeDecimals(delta) {
 function changeFontSize(dir) {
   const cur = formattingStyle().size || BASE_FONT.size;
   const next = dir > 0 ? FONT_SIZES.find((s) => s > cur) ?? cur + 4 : [...FONT_SIZES].reverse().find((s) => s < cur) ?? Math.max(1, cur - 1);
-  applyStyle({ size: !selectedTextShape() && next === BASE_FONT.size ? undefined : next });
+  applyStyle({ size: !selectedTextShape() && !chartHere() && next === BASE_FONT.size ? undefined : next });
 }
 
 /** 서식 복사 (엑셀): 셀 서식(표 서식 포함) · 병합 · 조건부 서식 · 열 너비/행 높이(행 · 열 전체 선택일 때) */
@@ -3741,6 +3759,7 @@ const PROTECT_MAP = {
 };
 const FORMAT_CMDS = /^(painter|painterSticky|bold|italic|underline|strike|fontFamily|fontSize|growFont|shrinkFont|border|fillColor|fontColor|fontDialog|formatCells|align|valign|wrap|indent|numFmt|fmt|incDecimal|decDecimal|clearFormats|cellStyle)/;
 function protectAction(cmd) {
+  if (CHART_TEXT_COMMANDS.has(cmd) && chartHere()) return 'objects';
   if (['sortAsc', 'sortDesc', 'sortDialog'].includes(cmd) && pivotSortScope(sheet(), sel, active).kind === 'pivot') return 'pivotTables';
   if (cmd === 'insertMenuKey' || cmd === 'deleteMenuKey') {
     const insert = cmd === 'insertMenuKey';
@@ -7089,11 +7108,11 @@ function chartSelectedFormatPane(id) {
   if (!get()) return;
   if (chartPaneDlg) chartPaneDlg.close();
   let ownChange = false;
-  const up = patch => { const current = get(); if (!current || !chartCanEdit(current)) return false; if (!Object.keys(patch).some(key => JSON.stringify(current[key]) !== JSON.stringify(patch[key]))) return; ownChange = true; try { updateChart(id, patch); } finally { ownChange = false; } gv.renderObjectsAll(); };
+  const up = patch => { const current = get(); if (!current || !chartCanEdit(current)) return false; if (!Object.keys(patch).some(key => JSON.stringify(current[key]) !== JSON.stringify(patch[key]))) return; ownChange = true; try { updateChart(id, patch); } finally { ownChange = false; } gv.renderObjectsAll(); updateRibbon(); };
   const panel = createChartSelectionPanel({ getChart: get, getPart: () => chartPart?.id === id ? chartPart : null,
     getData: () => chartModelData(book, host, { ...get(), hiddenSeries: undefined, hiddenCats: undefined }), onChange: up,
-    onChoose: part => { chartPart = part.kind === 'chart' ? null : { id, ...part }; chartSel = id; gv.renderObjectsAll(); panel.refresh(); heading(); },
-    onDelete: deleteChartPart, onCustomPalette: () => chartPaletteDialog(id), onAllOptions: () => { chartPart = null; gv.renderObjectsAll(); chartFormatPane(id); },
+    onChoose: part => { chartPart = part.kind === 'chart' ? null : { id, ...part }; chartSel = id; gv.renderObjectsAll(); panel.refresh(); heading(); updateRibbon(); },
+    onDelete: deleteChartPart, onCustomPalette: () => chartPaletteDialog(id), onFontMenu: anchor => fontMenu(anchor), onAllOptions: () => { chartPart = null; gv.renderObjectsAll(); updateRibbon(); chartFormatPane(id); },
   });
   const heading = () => { const title = panel.body.querySelector('.cfp-selection-name')?.textContent; if (title && chartPaneDlg?.chartId === id) chartPaneDlg.root.querySelector('.dialog-title').textContent = title; };
   const refresh = () => { if (!ownChange) queueMicrotask(() => { if (panel.body.isConnected) { panel.refresh(); heading(); } }); };
@@ -11063,7 +11082,21 @@ const SHAPE_TEXT_STYLE_KEYS = new Set(['font', 'size', 'color', 'bold', 'italic'
 const SHAPE_TEXT_COMMANDS = new Set(['bold', 'italic', 'underline', 'strike', 'fontFamily', 'fontSize', 'growFont', 'shrinkFont', 'fontColor', 'alignLeft', 'alignCenter', 'alignRight', 'valignTop', 'valignMiddle', 'valignBottom']);
 function textEditableShape(o) { return !!o && o.kind !== 'group' && !isSmartArt(o) && !isShapeLine(o); }
 function selectedTextShape() { const f = chartSel && findObject(sheet(), chartSel); return f?.prop === 'shapes' && textEditableShape(f.obj) ? f.obj : null; }
+const CHART_TEXT_COMMANDS = new Set(['bold', 'italic', 'underline', 'strike', 'fontFamily', 'fontSize', 'growFont', 'shrinkFont', 'fontColor', 'fontDialog', 'formatCells']);
+function selectedChartTextPart() { return chartPart?.id === chartSel ? chartPart : null; }
+function captureChartTextTarget() {
+  const chart = chartHere(); if (!chart) return null;
+  const book = wb, host = sheet(), index = si, request = activeDocumentRequest, id = chart.id;
+  const part = selectedChartTextPart(), signature = JSON.stringify(part);
+  return patch => {
+    if (wb !== book || si !== index || sheet() !== host || activeDocumentRequest !== request || chartSel !== id
+      || JSON.stringify(selectedChartTextPart()) !== signature || chartHere() !== chart) return;
+    applyStyle(patch);
+  };
+}
 function formattingStyle() {
+  const chart = chartHere();
+  if (chart) return chartTextStyle(chart, selectedChartTextPart()) ?? chartTextStyle(chart);
   if (shapeTextEdit?.valid()) return shapeTextEdit.editor.style();
   const o = selectedTextShape();
   if (!o) return styleAt(active.r, active.c);
@@ -14079,6 +14112,7 @@ function documentFontNames() {
     for (const st of Object.values(sh.colStyles || {})) style(st);
     for (const [,,cell] of sh.cells.storageEntries()) style(cell.style);
     for (const block of sh.blocks || []) for (const c of block.cols) style(c.fmt);
+    for (const chart of sh.charts ?? []) for (const font of chartTextFontNames(chart)) used.add(font);
     for (const obj of [...(sh.shapes || []), ...(sh.slicers || [])]) {
       style(obj); style(obj.style);
       for (const p of obj.paras || []) for (const r of p.runs || []) style(r);
@@ -14091,7 +14125,7 @@ function documentFontNames() {
 /** Free web fonts + local fonts. Paging limits DOM work, never the accessible catalogue. */
 function fontMenu(anchorEl) {
   const used = documentFontNames();
-  const textTarget = captureShapeTextTarget();
+  const textTarget = captureChartTextTarget() ?? captureShapeTextTarget();
   const cur = formattingStyle().font || BASE_FONT.name;
   const mobilePicker = document.body.classList.contains('mobile-work-mode') || matchMedia('(pointer: coarse)').matches;
   const search = el('input', { type: 'search', placeholder: '한글·영문 글꼴 검색', 'aria-label': '글꼴 검색', 'data-menu-search-target': '.font-list', class: 'font-search', style: { fontSize: '16px' } });
@@ -18228,6 +18262,7 @@ function nameBoxEnter(text) {
         if (rg.r1 === 0 && rg.r2 === MAX_ROWS - 1) rg.r2 = rowLimit() - 1;
         if (!rowRangeAllowed(rg, s)) return false;
         switchSheet(s);
+        deselectChart();
         if (isSingle(rg)) selectCell(rg.r1, rg.c1); else { growTo(rg.r2, rg.c2); gv.ensureVisible(rg.r1, rg.c1); selectRange(rg); }
         return true;
       }
@@ -18260,6 +18295,7 @@ function gotoRef(text) {
   if (!colOnly && !rowOnly && !rg) { toast('참조가 올바르지 않습니다.'); return false; }
   if (!colOnly && !rowRangeAllowed(rowOnly ? { r1: Math.min(Number(rowOnly[1]), Number(rowOnly[2])) - 1, r2: Math.max(Number(rowOnly[1]), Number(rowOnly[2])) - 1, c1: 0, c2: MAX_COLS - 1 } : rg, target)) return false;
   switchSheet(target);
+  deselectChart();
   if (colOnly) {
     const a = parseRangeName(`${colOnly[1]}1`);
     const b = parseRangeName(`${colOnly[2]}1`);
@@ -18820,7 +18856,7 @@ function captureSelectionTarget() {
 let lastPatternColor = '#000000';
 function colorMenu(anchorEl, kind) {
   cancelCellGesture();
-  const textTarget = kind === 'font' && captureShapeTextTarget();
+  const textTarget = kind === 'font' && (captureChartTextTarget() ?? captureShapeTextTarget());
   if (textTarget) { paletteMenu(anchorEl, '자동', color => { if (color) lastFont = color; textTarget({ color: color || '#000000' }); }); return; }
   const target = captureSelectionTarget(), apply = patch => target(() => { if (!contextCommandDisabled('formatCells')) applyStyle(patch); });
   // 채우기: 엑셀처럼 무늬(패턴) 채우기 · 무늬 색도 바로 고를 수 있게
@@ -19696,6 +19732,7 @@ function openNamedMenu(name, anchorEl) {
 
 /** 메뉴의 비활성 상태도 실제 run()과 같은 보호·게시 정책을 따른다. 실행 직전 run()이 다시 검사한다. */
 function contextCommandDisabled(cmd) {
+  if (CHART_TEXT_COMMANDS.has(cmd) && chartHere()) return !chartCanEdit(chartHere(), false);
   const action = protectAction(cmd);
   if ((cmd === 'insertMenuKey' || cmd === 'deleteMenuKey') && selKind !== 'rows' && selKind !== 'cols' && isProtected(sheet())) return true;
   if (viewOnly && action !== 'free' && !VIEW_CMDS.has(cmd)) return true;
@@ -20003,8 +20040,8 @@ const COMMANDS = {
   italic: () => toggleStyle('italic'),
   underline: () => toggleStyle('underline'),
   strike: () => toggleStyle('strike'),
-  fontFamily: (f) => { requestWebFont(f, { retry: true }); applyStyle({ font: !selectedTextShape() && f === BASE_FONT.name ? undefined : f }); },
-  fontSize: (s) => { const n = Number(s); if (n > 0 && n <= 409) applyStyle({ size: !selectedTextShape() && n === BASE_FONT.size ? undefined : n }); },
+  fontFamily: (f) => { requestWebFont(f, { retry: true }); applyStyle({ font: !selectedTextShape() && !chartHere() && f === BASE_FONT.name ? undefined : f }); },
+  fontSize: (s) => { const n = Number(s); if (n > 0 && n <= 409) applyStyle({ size: !selectedTextShape() && !chartHere() && n === BASE_FONT.size ? undefined : n }); },
   growFont: () => changeFontSize(1),
   shrinkFont: () => changeFontSize(-1),
   borderLast: () => applyBorder(lastBorder),
@@ -20409,6 +20446,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['차트 텍스트 홈 서식', ['차트 제목·축 눈금·축 제목·범례·데이터 레이블을 선택한 뒤 홈에서 글꼴·크기·색·굵게·기울임을 바꿀 수 있습니다. 다시 클릭한 개별 데이터 레이블도 따로 서식을 지정하며 원본 셀 서식은 유지합니다.']],
   ['피벗 정렬 안정성', ['리본·우클릭 정렬에서 총합계와 부분합의 위치를 유지하고 같은 수준의 항목만 정렬합니다. 피벗이 섞인 일반 셀 범위 정렬을 차단하며, 선택한 행·열의 값에 따른 정렬 기준도 저장합니다.']],
   ['무료 웹 글꼴 확대', ['Google Fonts와 라이선스가 확인된 한글 무료 글꼴을 추가했습니다. 한글·영문 검색, 한글 글꼴·모양별 분류, 실제 미리보기를 지원합니다.', '사용하거나 미리 보는 글꼴만 다운로드합니다. 글꼴 목록과 셀 서식·기본 글꼴 설정에서 선택할 수 있으며, 늦게 불러온 글꼴도 셀과 도형에 다시 반영합니다.']],
   ['Excel 기본 행 수와 선택적 확장', ['기본 작업 범위를 Excel과 같은 1,048,576행으로 맞췄습니다. 파일 → 옵션 → 일반의 [위셀 행수 확장]을 켜면 20,000,000행까지 작업하며, 설정을 꺼도 확장 영역의 데이터는 보존합니다.', '스크롤·이름 상자·방향키·전체 열 선택·붙여넣기를 현재 행 한도에 맞추고, 빈 행을 한꺼번에 만들지 않는 가상화를 유지합니다.']],
@@ -20648,6 +20686,7 @@ function run(cmd, arg, { keepMenu = false } = {}) {
     if (!SHAPE_TEXT_COMMANDS.has(cmd) && !['zoomIn', 'zoomOut', 'zoom100'].includes(cmd) && !finishShapeTextEdit(() => run(cmd, arg, { keepMenu }))) return;
   }
   if (!keepMenu) closeMenus();
+  if (['fontDialog', 'formatCells'].includes(cmd) && chartHere()) { if (chartCanEdit(chartHere())) chartSelectedFormatPane(chartSel); return; }
   if (['fontDialog', 'formatCells'].includes(cmd) && selectedTextShape()) { shapeDialog(chartSel, null, '텍스트 옵션'); return; }
   const changesDocument = protectAction(cmd) !== 'free' || STRUCT_CMDS.has(cmd) || cmd === 'sheetTabColor';
   if (viewOnly && changesDocument && !VIEW_CMDS.has(cmd)) { toast('읽기 전용으로 게시된 문서입니다. [편집용 사본 만들기]를 누르면 고칠 수 있습니다.'); return; }
@@ -20657,7 +20696,8 @@ function run(cmd, arg, { keepMenu = false } = {}) {
   }
   const fn = COMMANDS[cmd];
   if (!fn) { toast('지원하지 않는 기능입니다.'); return; }
-  if (SHAPE_TEXT_COMMANDS.has(cmd) && selectedTextShape()) { if (objectEditBlocked()) return; }
+  if (CHART_TEXT_COMMANDS.has(cmd) && chartHere()) { if (!chartCanEdit(chartHere())) return; }
+  else if (SHAPE_TEXT_COMMANDS.has(cmd) && selectedTextShape()) { if (objectEditBlocked()) return; }
   else if (protectBlocked(protectAction(cmd), sel, cmd, () => run(cmd, arg, { keepMenu }))) return;
   if (STRUCT_CMDS.has(cmd) && structureLocked()) return;
   if (wb.props?.markedFinal && changesDocument && !VIEW_CMDS.has(cmd) && !FINAL_OK.has(cmd)) { finalNotice(); return; }

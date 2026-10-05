@@ -29,9 +29,10 @@ test('항목 축 간격·회전은 표준 XML로 저장되고 WIXEL 확장 없�
     assert.equal(child(child(ax, 'txPr'), 'bodyPr')?.attrs.rot, '-2700000', type);
     assert.equal(descendants(child(ax, 'txPr'), 'defRPr')[0]?.attrs.sz, '1100', type);
     const chart = read(files);
-    assert.deepEqual(chart.axes, axes, type);
+    const nativeAxes={x:{...axes.x,size:11},y:{...axes.y,size:11}};
+    assert.deepEqual(chart.axes, nativeAxes, type);
     assert.equal(chart.axisSize, 11, type);
-    assert.deepEqual(read(withoutExtension(unzip(writeXlsx(book(chart))))).axes, axes, type);
+    assert.deepEqual(read(withoutExtension(unzip(writeXlsx(book(chart))))).axes, nativeAxes, type);
   }
 });
 
@@ -55,7 +56,7 @@ test('날짜 축의 기존 제목·글꼴과 명시 회전을 읽되 날짜 단�
   const files = withoutExtension(unzip(writeXlsx(book({ axisSize: 10, axes: { x: { title: '날짜', labelRotation: 0 } } }))));
   files[path] = xmlText(files[path]).replace(/c:catAx/g, 'c:dateAx');
   const chart = read(files);
-  assert.deepEqual(chart.axes.x, { title: '날짜', labelRotation: 0 });
+  assert.deepEqual(chart.axes.x, { title: '날짜', size: 10, labelRotation: 0 });
   assert.equal(chart.axisSize, 10);
 });
 

@@ -44,10 +44,10 @@ test('3D 원형 범례는 한글 항목명과 항목별 색을 보존한다', ()
   assert.deepEqual(source, before, '범례를 그릴 때 항목명·값을 바꾸지 않는다');
 });
 
-test('범례 글자와 배경이 같은 색이면 읽을 수 있는 색을 쓰고 대비 있는 지정색은 유지한다', () => {
+test('명시 범례 글자색은 배경과 같아도 사용자가 지정한 정확한 색을 유지한다', () => {
   for (const [fill, legendColor, expected] of [
-    ['#ffffff', '#ffffff', '#595959'], ['#000000', '#000000', '#f2f2f2'],
-    ['#fff', '#ffffff', '#595959'], ['#000', '#000', '#f2f2f2'],
+    ['#ffffff', '#ffffff', '#ffffff'], ['#000000', '#000000', '#000000'],
+    ['#fff', '#ffffff', '#ffffff'], ['#000', '#000', '#000'],
     ['#ffffff', '#123456', '#123456'],
   ]) assert.equal(labels(draw({ fill, legendColor }))[0].attrs.fill, expected);
 });
