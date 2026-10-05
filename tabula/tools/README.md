@@ -672,3 +672,10 @@ node tools/popup-key-conflicts.mjs
 `shortcut-review-regressions.mjs`는 추가 검수에서 발견한 시트 이름 입력 후 Enter 누수, 보호 문서의 저장/구조 변경, End→Alt 전환과 키 안내 표시를 검사합니다. 환경 변수는 도구 상단을 참고합니다.
 
 `keytips.mjs`에는 새 호환 등록표의 전체 접두 경로도 포함됩니다. `ribbon-keytip-coverage.mjs`는 구 경로 별칭이 현대 리본 배지를 대체하지 않는지 실제 16탭/364조작을 검사합니다. `keytips-ime.mjs`는 활성 Alt 순서의 Process/229와 일반 한글 입력을 구분합니다. UI 테스트는 실제 iPad Bluetooth 장치나 Windows IME 드라이버 검증과 다릅니다. 검수 분모·미지원 목록은 `docs/codex/87_Excel단축키와접근키충돌.md`에 있습니다.
+
+
+## 기본 행수와 확장 옵션 회귀
+
+row-limit-mode.mjs는 기본 1,048,576행/확장 20,000,000행의 12가지 UI 사례를 검사한다. row-limit-safety.mjs는 마지막 행의 편집·메타데이터·인쇄/HTML 보존 9사례를 검사한다. WIXEL_URL로 소스/번들을, WIXEL_BROWSER=chromium|firefox|webkit으로 엔진을 지정한다. 출력과 사례 필터 환경 변수는 각 도구 첫 부분을 따른다. 승인된 공개주소의 합성 검증에만 WIXEL_ROW_LIMIT_PUBLIC=1을 추가한다. 외부 요청·API·원격 쓰기는 차단한다.
+
+row-limit-storage.mjs는 로컬 Chromium에서 CSV 확장 행 가져오기 및 실제 WIXEL 다운로드/재열기를 확인한다. WIXEL_ROW_STORAGE_OUT은 D: 출력 폴더다. 실제 사용자 파일을 사용하지 않는다.

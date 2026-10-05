@@ -27,7 +27,7 @@ test('병합 셀은 원점·행열 범위로 표현하고 후보 인덱스는 �
   assert.equal(found.size, 2); assert.equal(found.get('2,3'), merge);
 });
 test('좌표 수와 숨긴 거대 영역 방문 횟수를 제한하고 활성 셀은 항상 포함한다', () => {
-  let calls = 0; const visible = { size: () => { calls++; return 20; } };
+  let calls = 0; const visible = { max: MAX_ROWS, size: () => { calls++; return 20; } };
   const window = { r1: 0, c1: 0, r2: 5000000, c2: 10000 };
   const coords = gridCoordinates({ r: MAX_ROWS - 1, c: MAX_COLS - 1 }, [window, window, window, window], visible, visible);
   assert.equal(coords.length, 400); assert.deepEqual(coords[0], { r: MAX_ROWS - 1, c: MAX_COLS - 1 });

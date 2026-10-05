@@ -5,6 +5,7 @@ const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright')
 const browser = await chromium.launch(), results = [];
 const base = process.env.WIXEL_URL || 'http://127.0.0.1:5180/';
 const fixture = { sheets: [{ name: '접근성 합성 검사', cells: { '0,0': { raw: '제목' }, '0,1': { raw: '=1+1', comment: '메모' }, '0,2': { raw: '=1/0' }, '1,1': { raw: '7' } } }] };
+const publishedFixture = { workbook: fixture, docName: '접근성 게시 합성 문서', si: 0, view: { grid: true, headers: true } };
 async function test(name, check, view = false) {
   const context = await browser.newContext({ viewport: { width: 1380, height: 900 } });
   const page = await context.newPage(), errors = [], writes = [];
@@ -12,9 +13,17 @@ async function test(name, check, view = false) {
   await context.route('**/*', route => { if (!['GET','HEAD','OPTIONS'].includes(route.request().method())) { writes.push(route.request().url()); return route.abort(); } return route.continue(); });
   try {
     await page.addInitScript(() => { window.TABULA_STATIC = true; window.WIXEL_SKIP_START = true; });
-    await page.goto(base + (view ? '#view=' + gzipSync(JSON.stringify(fixture)).toString('base64url') : ''), { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.goto(base + (view ? '#view=' + gzipSync(JSON.stringify(publishedFixture)).toString('base64url') : ''), { waitUntil: 'domcontentloaded', timeout: 60000 });
     await page.waitForFunction(() => window.tabula?.wb() && document.querySelector('#accessibleGrid [role=gridcell]'));
     if (!view) await page.evaluate(f => { const t = window.tabula; t.wb().restore(f); t.gv().layout(); t.gv().renderAll(); t.selectCell(0,0); }, fixture);
+    // #view 문서는 시작 격자를 만든 뒤 비동기로 설치된다. 빈 Sheet1을 검사하지 않는다.
+    // readonly 자체는 여기서 기다리지 않고 아래 검사에서 독립적으로 검증한다.
+    await page.waitForFunction(f => {
+      const t = window.tabula, grid = document.querySelector('#accessibleGrid');
+      return t?.wb().sheets[0]?.name === f.sheets[0].name && t.wb().getValue(0,0,0) === f.sheets[0].cells['0,0'].raw
+        && grid?.getAttribute('aria-label') === f.sheets[0].name + ' 워크시트'
+        && !document.querySelector('.load-progress');
+    }, fixture);
     await page.locator('#cellEditor').focus(); await check(page, context);
     assert.deepEqual(errors, [], '페이지 오류'); assert.deepEqual(writes, [], '서버 쓰기');
     results.push({ name, ok:true }); console.log('OK ' + name);
@@ -33,7 +42,7 @@ try {
     const editor = nodes.find(n => n.role?.value === 'textbox' && n.name?.value === '워크시트 셀 탐색');
     assert.ok(editor); assert.ok(editor.properties.some(v => v.name === 'activedescendant' && v.value.relatedNodes?.length));
     assert.equal((await active(p)).focus,'cellEditor');
-    assert.equal(await p.locator('#accessibleGrid').getAttribute('aria-rowcount'),'20000000');
+    assert.equal(await p.locator('#accessibleGrid').getAttribute('aria-rowcount'),'1048576');
   });
   await test('키보드 이동·범위·행/열 선택의 활성 후손과 선택 안내', async p => {
     await p.evaluate(() => { window.__a11yRow = document.querySelector('#accessibleGrid [role=row]'); });

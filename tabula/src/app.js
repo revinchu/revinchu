@@ -47,6 +47,7 @@ import { onlinePicturePicker } from './online-picture-ui.js';
 import { newSmartArt, isSmartArt, smartArtParts } from './smartart.js';
 import { smartArtSvg } from './smartart-render.js';
 import { openSmartArtEditor } from './smartart-ui.js';
+import { worksheetRowLimit } from './row-limits.js';
 import { snapshotPasteSource, pasteSpecialRange, applyPasteSpecial, pasteSourceFromText } from './paste-special.js';
 import { showPasteSpecial } from './paste-special-ui.js';
 import { resizePicture, PICTURE_STYLES, pictureStylePatch, resetPictureFormatting, resetPictureSource } from './picture.js';
@@ -120,7 +121,7 @@ import { addPrintAreas, resizePrintArea } from './print-area-edit.js';
 import { SPARK_TYPES, sparkDefaults, sparkItems, sparkRef } from './sparkline.js';
 import { evalSteps, goalSeek, dataTable, specialCells, GOTO_KINDS, valueText } from './audit.js';
 import { normOutline, outlineEmpty, changeLevels, groupsOf, groupAt, toggleGroup, showLevel, summaryOf, planSubtotals, SUBTOTAL_FNS, maxLevel } from './outline.js';
-import { hid, hidCount } from './axis.js';
+import { Axis, hid, hidCount } from './axis.js';
 import { currentDataRegion } from './data-region.js';
 import { expandedFilterEnd } from './filter-range.js';
 import { sortScope, refreshSortedFilters } from './sort-filter-state.js';
@@ -295,8 +296,46 @@ function usedClip(rg) {
 }
 
 // ───────────────────────── 선택 영역 ─────────────────────────
+function rowLimit() { return worksheetRowLimit(opts); }
+function visibleRange(rg) {
+  return { r1: clamp(rg.r1, 0, rowLimit() - 1), c1: clamp(rg.c1, 0, MAX_COLS - 1), r2: clamp(rg.r2, 0, rowLimit() - 1), c2: clamp(rg.c2, 0, MAX_COLS - 1) };
+}
+/** Keep the file's full data model intact; this preference bounds interactive work. */
+function rowRangeAllowed(rg, at = si) {
+  const crossesMerge = at >= 0 && wb.mergesIn(at, rg.r1, rg.c1, rg.r2, rg.c2).some(m => m.r2 >= rowLimit());
+  if (!crossesMerge && rg.r1 >= 0 && rg.r2 < rowLimit() && rg.c1 >= 0 && rg.c2 < MAX_COLS) return true;
+  toast((crossesMerge || rg.r2 >= rowLimit()) && !opts.extendedRows
+    ? '기본 작업 범위는 1,048,576행입니다. [파일 → 옵션 → 일반]에서 위셀 행수 확장을 켜세요.'
+    : '작업 범위가 시트의 마지막 행 또는 열을 넘습니다.');
+  return false;
+}
+function rowTailAllowed(extra = 0) {
+  const sh = sheet();
+  let rows = wb.extent(si).rows;
+  for (const map of [sh.rowHeights, sh.rowStyles, sh.rowManual, sh.hiddenRows, sh.filter?.hidden, ...(sh.tables ?? []).map(t => t.filter?.hidden)]) {
+    if (map?.__bits) { if (map.count) rows = Math.max(rows, map.start + map.__bits.length); }
+    else for (const key of Object.keys(map ?? {})) rows = Math.max(rows, Number(key) + 1);
+  }
+  for (const merge of sh.merges ?? []) rows = Math.max(rows, merge.r2 + 1);
+  return rowRangeAllowed({ r1: 0, c1: 0, r2: Math.max(0, rows + extra - 1), c2: 0 });
+}
+/** Output and object anchoring retain the full document coordinates in either view mode. */
+function documentRows() {
+  const sh = sheet();
+  return new Axis(sh.defRowH ?? DEFAULT_ROW_HEIGHT, sh.rowHeights,
+    [sh.hiddenRows, sh.filter?.hidden, ...(sh.tables ?? []).map(t => t.filter?.hidden)], MAX_ROWS);
+}
+function applyRowLimit() {
+  if (!gv) return;
+  endMode = false;
+  if (clip?.cut && clip.r2 >= rowLimit()) { clip = null; mobileCopySource = null; }
+  gv.resetExtent(); gv.layout();
+  selectRange(visibleRange(sel), selKind, active);
+  gv.ensureVisible(active.r, active.c);
+  setMode();
+}
 function setSel(rg, kind = 'cells') {
-  sel = expandMerges(rg);
+  sel = visibleRange(expandMerges(visibleRange(rg)));
   selKind = kind;
   if (!keepSpecial) special = null;
 }
@@ -307,7 +346,7 @@ function growTo(r, c) {
 
 function selectCell(r, c, { keepTab = false, scroll = true } = {}) {
   if (!finishShapeTextEdit(() => selectCell(r, c, { keepTab, scroll }))) return;
-  r = clamp(r, 0, MAX_ROWS - 1);
+  r = clamp(r, 0, rowLimit() - 1);
   c = clamp(c, 0, MAX_COLS - 1);
   const m = wb.mergeAt(si, r, c);
   if (m) { r = m.r1; c = m.c1; }
@@ -322,11 +361,11 @@ function selectCell(r, c, { keepTab = false, scroll = true } = {}) {
 }
 
 function extendTo(r, c, { scroll = true } = {}) {
-  r = clamp(r, 0, MAX_ROWS - 1);
+  r = clamp(r, 0, rowLimit() - 1);
   c = clamp(c, 0, MAX_COLS - 1);
   focusCell = { r, c };
   const rg = norm(anchor, focusCell);
-  const fullRows = rg.r1 === 0 && rg.r2 === MAX_ROWS - 1;
+  const fullRows = rg.r1 === 0 && rg.r2 === rowLimit() - 1;
   const fullCols = rg.c1 === 0 && rg.c2 === MAX_COLS - 1;
   setSel(rg, fullRows && fullCols ? 'all' : fullRows ? 'cols' : fullCols ? 'rows' : 'cells');
   tabStartCol = null;
@@ -337,6 +376,8 @@ function extendTo(r, c, { scroll = true } = {}) {
 
 function selectRange(rg, kind = 'cells', act = { r: rg.r1, c: rg.c1 }) {
   if (!finishShapeTextEdit(() => selectRange(rg, kind, act))) return;
+  rg = visibleRange(rg);
+  act = { r: clamp(act.r, rg.r1, rg.r2), c: clamp(act.c, rg.c1, rg.c2) };
   active = { ...act };
   anchor = { ...act };
   focusCell = { r: rg.r2, c: rg.c2 };
@@ -345,7 +386,7 @@ function selectRange(rg, kind = 'cells', act = { r: rg.r1, c: rg.c1 }) {
 }
 
 function selectAll() {
-  selectRange({ r1: 0, c1: 0, r2: MAX_ROWS - 1, c2: MAX_COLS - 1 }, 'all', { ...active });
+  selectRange({ r1: 0, c1: 0, r2: rowLimit() - 1, c2: MAX_COLS - 1 }, 'all', { ...active });
 }
 /**
  * Ctrl+A (엑셀과 같음): 첫 번째는 데이터 덩어리(현재 영역) · 표는 데이터 부분 → 표 전체 · 피벗은 피벗 영역,
@@ -586,7 +627,7 @@ function quickWeekend() {
   ], `주말 (${colToName(dc)}열 기준: 토요일 파랑 · 일요일 빨강)`);
 }
 function selectCols(c1, c2, act) {
-  selectRange({ r1: 0, c1: Math.min(c1, c2), r2: MAX_ROWS - 1, c2: Math.max(c1, c2) }, 'cols', act ?? { r: gv.firstVisibleRow(), c: c1 });
+  selectRange({ r1: 0, c1: Math.min(c1, c2), r2: rowLimit() - 1, c2: Math.max(c1, c2) }, 'cols', act ?? { r: gv.firstVisibleRow(), c: c1 });
 }
 function selectRows(r1, r2, act) {
   selectRange({ r1: Math.min(r1, r2), c1: 0, r2: Math.max(r1, r2), c2: MAX_COLS - 1 }, 'rows', act ?? { r: r1, c: 0 });
@@ -715,7 +756,7 @@ function renderStats({ count, numCount, sum, min, max, fmtStyle }) {
   const on = new Set(opts.statusItems ?? ['avg', 'count', 'sum']);
   const val = { avg: numCount ? sum / numCount : null, count, numCount, min, max, sum: numCount ? sum : null };
   for (const [k, label] of STAT_ITEMS) {
-    if (k === 'size') { if (on.has(k)) { const h = Math.min(sel.r2, MAX_ROWS - 1) - sel.r1 + 1; const w = Math.min(sel.c2, MAX_COLS - 1) - sel.c1 + 1; dom.stats.append(el('span', { class: 'stat-item', title: 'LibreOffice 처럼 선택한 행 · 열 수' }, `${h.toLocaleString()}행 × ${w.toLocaleString()}열`)); } continue; }
+    if (k === 'size') { if (on.has(k)) { const h = Math.min(sel.r2, rowLimit() - 1) - sel.r1 + 1; const w = Math.min(sel.c2, MAX_COLS - 1) - sel.c1 + 1; dom.stats.append(el('span', { class: 'stat-item', title: 'LibreOffice 처럼 선택한 행 · 열 수' }, `${h.toLocaleString()}행 × ${w.toLocaleString()}열`)); } continue; }
     if (!on.has(k) || val[k] === null || val[k] === undefined) continue;
     const text = k === 'count' || k === 'numCount' ? val[k].toLocaleString() : fmt(val[k]);
     dom.stats.append(el('span', { class: 'stat-item', title: '클릭하면 값을 복사합니다', onclick: () => copyTextWithFeedback(String(k === 'count' || k === 'numCount' ? val[k] : Number(val[k].toPrecision(15))), `${label} 값을 클립보드에 복사했습니다.`) }, `${label}: ${text}`));
@@ -795,7 +836,7 @@ function stepFrom(pos, dr, dc) {
     if (dr < 0) r = m.r1;
     if (dc < 0) c = m.c1;
   }
-  let nr = clamp(r + dr, 0, MAX_ROWS - 1);
+  let nr = clamp(r + dr, 0, rowLimit() - 1);
   let nc = clamp(c + dc, 0, MAX_COLS - 1);
   // 숨겨진 행/열 건너뛰기
   if (dr) { nr = gv.rows.nextVisible(nr, Math.sign(dr)); if (gv.rows.isHidden(nr)) nr = pos.r; }
@@ -805,7 +846,7 @@ function stepFrom(pos, dr, dc) {
 
 /** Ctrl+방향키: 데이터 영역 끝으로 이동 (빈 영역이면 시트 끝까지) */
 function jump(pos, dr, dc) {
-  const inside = (r, c) => r >= 0 && c >= 0 && r < MAX_ROWS && c < MAX_COLS;
+  const inside = (r, c) => r >= 0 && c >= 0 && r < rowLimit() && c < MAX_COLS;
   const hidden = (r, c) => (dr && gv.rows.isHidden(r)) || (dc && gv.cols.isHidden(c));
   const filled = (r, c) => !isEmptyAt(r, c);
   const u = wb.usedRange(si);
@@ -824,7 +865,7 @@ function jump(pos, dr, dc) {
     c = pc;
     if (filled(r, c)) return { r, c };
     if ((dr > 0 && r >= u.rows) || (dc > 0 && c >= u.cols)) {
-      return { r: dr > 0 ? gv.rows.nextVisible(MAX_ROWS - 1, -1) : r, c: dc > 0 ? gv.cols.nextVisible(MAX_COLS - 1, -1) : c };
+      return { r: dr > 0 ? gv.rows.nextVisible(rowLimit() - 1, -1) : r, c: dc > 0 ? gv.cols.nextVisible(MAX_COLS - 1, -1) : c };
     }
   }
 }
@@ -1199,7 +1240,7 @@ function insertPointText(ref) {
 function pointMove(dr, dc, extend) {
   const p = editing.point;
   const cur = p?.cur ?? { r: editing.r, c: editing.c };
-  const next = { r: clamp(cur.r + dr, 0, MAX_ROWS - 1), c: clamp(cur.c + dc, 0, MAX_COLS - 1) };
+  const next = { r: clamp(cur.r + dr, 0, rowLimit() - 1), c: clamp(cur.c + dc, 0, MAX_COLS - 1) };
   if (extend && p) {
     insertPointRef(norm(p.anchor, next));
     editing.point.cur = next;
@@ -2066,6 +2107,7 @@ function beginHeaderResize(e, axis, index) {
   focusGrid();
   const all = selKind === 'all', targets = all ? null : headerAxisSelected(axis,index) ? axisTargets(axis) : [index];
   if (!all && !targets) return;
+  if (all && axis === 'row' && !rowTailAllowed()) return;
   const size = axis === 'col' ? wb.colWidth(si,index) : wb.rowHeight(si,index);
   drag = {type:axis==='col'?'colResize':'rowResize',axis,index,book:wb,host:sheet(),si,version:wb.version,
     start:axis==='col'?e.clientX:e.clientY,size,orig:sheet()[axis==='col'?'colWidths':'rowHeights'][index],all,targets};
@@ -2086,6 +2128,7 @@ function moveHeaderResize(x,y) {
 function finishHeaderResize(d) {
   const valid=validHeaderResize(d); restoreHeaderResize(d); clearHeaderResizeUI();
   if (!valid || d.next === undefined || d.next === d.size) { if(d.book===wb&&d.host===sheet())gv.layout(); return; }
+  if (d.all && d.axis === 'row' && !rowTailAllowed()) { gv.layout(); return; }
   if (d.all && d.next === 0) { gv.layout(); toast('모든 행/열을 숨길 수는 없습니다.'); return; }
   wb.transact(()=>anchorObjects(()=>{
     const key=d.axis==='col'?'colWidths':'rowHeights', sizes={...sheet()[key]}, manual={...sheet().rowManual};
@@ -2438,7 +2481,7 @@ function fillToAdjacentEnd() {
   const endOf = (c) => {
     if (c < 0 || isEmptyAt(src.r2 + 1, c) && isEmptyAt(src.r2, c)) return -1;
     let r = src.r2;
-    const last = wb.usedRange(si).rows - 1;
+    const last = Math.min(wb.usedRange(si).rows, rowLimit()) - 1;
     while (r + 1 <= last && !isEmptyAt(r + 1, c)) r++;
     return r;
   };
@@ -2831,6 +2874,7 @@ function autofitCols(cols) {
 
 // ───────────────────────── 채우기 ─────────────────────────
 function doFill(src, t) {
+  if (!rowRangeAllowed(t)) return;
   const vertical = t.dir === 'down' || t.dir === 'up';
   const forward = t.dir === 'down' || t.dir === 'right';
   wb.transact(() => {
@@ -3017,6 +3061,7 @@ function pasteInternal(mode = 'all', opts = {}) {
     const target = selKind === 'cells' ? { ...sel } : { r1: active.r, c1: active.c, r2: active.r, c2: active.c };
     let area;
     try { area = pasteSpecialRange(source, target, options); } catch (error) { toast(error.message); return false; }
+    if (!rowRangeAllowed(area)) return false;
     if (contextCommandDisabled(command)) {
       // 기존 보호 판정을 유지한다. 잠금 해제 창만 열고 이번 붙여넣기는 항상 중단한다.
       if (viewOnly || wb.props?.markedFinal) toast('현재 문서 또는 시트 보호 설정에서는 붙여넣을 수 없습니다.');
@@ -3059,6 +3104,7 @@ function pasteInternal(mode = 'all', opts = {}) {
   const targetRange = { r1: tgt.r1, c1: tgt.c1, r2: tgt.r1 + th - 1, c2: tgt.c1 + tw - 1 };
   if (protectBlocked(protectAction(command), targetRange, command)) return;
   const cut = clip.cut;
+  if (cut && !rowRangeAllowed(clip, clip.si)) return false;
   const src = clip;
   wb.transact(() => {
     if (cut) for (const r of src.rows) for (let c = src.c1; c <= src.c2; c++) wb.setCellData(src.si, r, c, null);
@@ -3129,6 +3175,8 @@ function pasteInternal(mode = 'all', opts = {}) {
 function pasteText(text) {
   const rows = parseDelimited(text.replace(/\r\n?/g, '\n').replace(/\n$/, ''), '\t');
   if (!rows.length) return;
+  const area = { r1: active.r, c1: active.c, r2: active.r + rows.length - 1, c2: active.c + maxOf(rows.map(row => row.length)) - 1 };
+  if (!rowRangeAllowed(area)) return false;
   wb.transact(() => {
     if (rows.length === 1 && rows[0].length === 1 && !selIsActiveOnly() && selKind === 'cells') {
       for (const [r, c] of cellsIn(sel)) wb.setInput(si, r, c, rows[0][0]);
@@ -3212,6 +3260,7 @@ function applyStyle(patchOrFn, { widen = false } = {}) {
     }, ['shapes']);
     return;
   }
+  if (!rowRangeAllowed(sel) || ((selKind === 'all' || selKind === 'cols') && !rowTailAllowed())) return;
   lastRepeat = () => run('repeatStyle', { patchOrFn, widen });
   const rg = sel;
   const patchFor = (cur) => {
@@ -3587,7 +3636,7 @@ function axisTargets(axis, options = selectedAxisOptions(), selection = sel, lim
 function hideSel(axis, hide) {
   const cmd = axis === 'row' ? (hide ? 'hideRows' : 'unhideRows') : (hide ? 'hideCols' : 'unhideCols');
   if (contextCommandDisabled(cmd)) { toast('현재 문서 또는 시트 보호 설정에서는 이 작업을 할 수 없습니다.'); return; }
-  const ranges = selectionAxisRanges(sel, axis, selectedAxisOptions()), limit = axis === 'row' ? MAX_ROWS : MAX_COLS;
+  const ranges = selectionAxisRanges(sel, axis, selectedAxisOptions()), limit = axis === 'row' ? rowLimit() : MAX_COLS;
   if (hide && ranges.length === 1 && ranges[0][0] === 0 && ranges[0][1] >= limit - 1) { toast('모든 행/열을 숨길 수는 없습니다.'); return; }
   const sh = sheet(), dimension = axis === 'row' ? 'rowHeights' : 'colWidths';
   let idx;
@@ -3795,6 +3844,7 @@ function pivotAreaHit(rg) {
 // 피벗 테이블 안에서 막는 명령: 셀 값을 바꾸는 것만 (차트 · 슬라이서 · 서식 삽입 등은 엑셀처럼 허용)
 const PIVOT_LOCKED = /^(pickFromList|clear(Contents|All)?|delete(Rows|Cols|Cells|MenuKey)?|paste(ValuesKey|Values|Special|Formulas|Transpose)?|cut|fill(Down|Right|Up|Left|Series)?|flashFill|dedupe|textToColumns|insert(Rows|Cols|Cells|MenuKey|Date|Time)|merge(Center|Across|Cells)?|unmerge|autosum|dataTable|goalSeek|subtotal)$/;
 function protectBlocked(action = 'cells', rg = sel, cmd = null, retry = null) {
+  if (action !== 'free' && action !== 'objects' && !rowRangeAllowed(rg)) return true;
   if (action === 'cells' && !opts.pivotEdit && (!cmd || PIVOT_LOCKED.test(cmd)) && pivotAreaHit(rg)) {
     alertDialog('WIXEL', '피벗 테이블의 일부는 변경할 수 없습니다. 피벗 테이블은 원본 데이터를 계산한 결과이므로 값을 바꾸려면 원본 데이터를 고친 뒤 새로 고치세요.\n(파일 → 옵션 → 피벗 테이블 값 영역의 셀 편집 허용을 켜면 가상 분석용으로 편집할 수 있습니다.)');
     return true;
@@ -4135,6 +4185,7 @@ function shiftCellsRun(insert, dir) {
   if (dir === 'col') { run(insert ? 'insertCols' : 'deleteCols'); return; }
   if (isProtected(sheet())) { toast('보호된 시트에서는 셀을 밀 수 없습니다. 시트 보호를 해제한 뒤 다시 실행하세요.'); return; }
   const rg = { r1: sel.r1, c1: sel.c1, r2: sel.r2, c2: sel.c2 };
+  if (!rowRangeAllowed(rg) || ((dir === 'down' || dir === 'up') && !rowTailAllowed(insert ? rg.r2 - rg.r1 + 1 : 0))) return;
   let err = null;
   wb.transact(() => { err = wb.shiftCells(si, rg, dir); }, meta());
   if (err) { alertDialog('WIXEL', err); return; }
@@ -4189,6 +4240,7 @@ function advancedFilterDialog() {
     } else {
       // 복사: 머리글 + 남은 행 (서식 포함), 복사 위치가 한 칸이면 그 아래로 필요한 만큼
       const out = [L.rg.r1, ...keep.map((i) => L.rg.r1 + 1 + i)];
+      if (!rowRangeAllowed({ ...T.rg, r2: T.rg.r1 + out.length - 1, c2: T.rg.c1 + L.rg.c2 - L.rg.c1 }, T.si)) return false;
       wb.transact(() => {
         out.forEach((sr, k) => {
           for (let c = L.rg.c1; c <= L.rg.c2; c++) {
@@ -4262,6 +4314,8 @@ function parseRefInput(text) {
   }
   const rg = parseRangeName(body.replace(/\$/g, ''));
   if (!rg) return null;
+  if (/^\$?[A-Z]+:\$?[A-Z]+$/i.test(body)) rg.r2 = rowLimit() - 1;
+  if (!rowRangeAllowed(rg, s)) return null;
   const u = wb.usedRange(s);
   return { si: s, rg: { r1: rg.r1, c1: rg.c1, r2: Math.min(rg.r2, Math.max(rg.r1, u.rows - 1)), c2: Math.min(rg.c2, Math.max(rg.c1, u.cols - 1)) } };
 }
@@ -4532,6 +4586,8 @@ function writeAnalysis(res, dest) {
   const rows = res.rows;
   const h = rows.length;
   const w = delimitedRowWidth(rows);
+  const firstRow = dest.newSheet ? 0 : dest.r, firstCol = dest.newSheet ? 0 : dest.c;
+  if (!rowRangeAllowed({ r1: firstRow, c1: firstCol, r2: firstRow + h - 1, c2: firstCol + w - 1 }, dest.newSheet ? -1 : dest.si)) throw new Error('분석 결과가 현재 작업 범위를 넘습니다. 행수 확장 옵션 또는 출력 위치를 확인하세요.');
   return wb.transact(() => {
     let at = dest.si;
     if (dest.newSheet) at = wb.addSheet(nextSheetName(dest.newSheet), si + 1);
@@ -5374,7 +5430,7 @@ function setFreeze(rows, cols) {
 
 // ───────────────────────── 데이터 명령 ─────────────────────────
 function currentRegion(r, c) {
-  return currentDataRegion(r, c, isEmptyAt);
+  return currentDataRegion(r, c, isEmptyAt, rowLimit(), MAX_COLS);
 }
 
 function dataRange() {
@@ -5411,6 +5467,7 @@ function sortData(ascending, keyCol = active.c, header = null, rgIn = null, fkey
   }
   rg ??= dataRange();
   if (!rgIn) { const scope = sortScope({ range: rg, activeOnly: selIsActiveOnly(), active, table: tbl, filter: f, header: header ?? hasHeader(rg) }); rg = scope.range; header = scope.header; }
+  if (!rowRangeAllowed(rg)) return;
   if (rg.r2 <= rg.r1 && isSingle(rg)) return;
   const h = header ?? hasHeader(rg);
   const key = clamp(keyCol, rg.c1, rg.c2);
@@ -5487,6 +5544,7 @@ function autoSum(fn = 'SUM') {
   const rg = usedClip(sel);
   const lastRowEmpty = (() => { for (let c = rg.c1; c <= rg.c2; c++) if (!isEmptyAt(rg.r2, c)) return false; return true; })();
   const target = lastRowEmpty ? rg.r2 : rg.r2 + 1;
+  if (!rowRangeAllowed({ ...rg, r2: target })) return;
   wb.transact(() => {
     for (let c = rg.c1; c <= rg.c2; c++) {
       let any = false;
@@ -7293,7 +7351,7 @@ function createTable(rg, header, styleName) {
   const s = sheet();
   const effective = { ...rg, r2: header ? Math.max(rg.r2, rg.r1 + 1) : rg.r2 + 1 };
   const problem = tableRangeProblem(wb, si, header ? effective : rg);
-  if (problem || effective.r2 >= MAX_ROWS) { alertDialog('표 만들기', problem || '표의 머리글과 데이터가 시트 범위를 벗어납니다.'); return false; }
+  if (problem || effective.r2 >= rowLimit()) { alertDialog('표 만들기', problem || '표의 머리글과 데이터가 시트 범위를 벗어납니다.'); return false; }
   const id = newTableId();
   const name = nextTableName(wb);
   wb.transact(() => {
@@ -8487,6 +8545,7 @@ const PIVOT_DEFAULTS = {
   errorShow: true, errorText: '', emptyShow: true, emptyText: '', autofit: false, preserveFormat: true, style: 'PivotStyleLight16',
 };
 const OPTION_DEFAULTS = {
+  extendedRows: false,
   calcMode: 'auto', getPivotData: false, pivotEdit: false, autoDateGroup: false, focusCell: false, focusColor: '#fff4b8', pivot: PIVOT_DEFAULTS,
   // 고급 · 저장 (엑셀 옵션의 '고급' + 위셀 보관함)
   enterDir: 'down', formulaAutocomplete: true, browserMenu: false, libMax: 30, verMinutes: 10,
@@ -8517,7 +8576,7 @@ const ENTER_OPP = { down: 'up', up: 'down', right: 'left', left: 'right' };
 const opts = (() => {
   try {
     const o = JSON.parse(localStorage.getItem(OPTIONS_KEY) ?? 'null') ?? {};
-    return { ...OPTION_DEFAULTS, ...o, ...normalizeQatOptions(o), pivot: { ...PIVOT_DEFAULTS, ...(o.pivot ?? {}) }, acList: o.acList ?? AUTOCORRECT_DEFAULT.map((x) => [...x]), hiddenTabs: o.hiddenTabs ?? [], qat: o.qat ?? [] };
+    return { ...OPTION_DEFAULTS, ...o, extendedRows: o.extendedRows === true, ...normalizeQatOptions(o), pivot: { ...PIVOT_DEFAULTS, ...(o.pivot ?? {}) }, acList: o.acList ?? AUTOCORRECT_DEFAULT.map((x) => [...x]), hiddenTabs: o.hiddenTabs ?? [], qat: o.qat ?? [] };
   } catch {
     return { ...OPTION_DEFAULTS, ...normalizeQatOptions({}), pivot: { ...PIVOT_DEFAULTS }, acList: AUTOCORRECT_DEFAULT.map((x) => [...x]) };
   }
@@ -8728,6 +8787,10 @@ function optionsDialog(startTab = 0) {
 
   const pages = [
     ['일반', el('div', { class: 'opt-page' },
+      title('워크시트 행 수'),
+      check(o.extendedRows, '위셀 행수 확장', (v) => { o.extendedRows = v; }),
+      note('기본: 1,048,576행 (Excel과 동일). 켜면 최대 20,000,000행까지 표시하고 편집합니다. 이 브라우저에 설정을 기억합니다.'),
+      note('꺼도 확장 영역의 기존 데이터는 보존됩니다. 확장 영역까지 저장하려면 WIXEL 형식을 사용하세요. Excel 형식은 1,048,576행까지만 지원합니다.'),
       title('새 통합 문서 만들기'),
       select('기본 글꼴', o.newFont, FONTS.map((f) => [f, f]), (v) => { o.newFont = v; }),
       select('글꼴 크기', o.newSize, FONT_SIZES.map((f) => [f, String(f)]), (v) => { o.newSize = Number(v); }),
@@ -8856,17 +8919,20 @@ function optionsDialog(startTab = 0) {
     buttons: [{
       label: '확인', primary: true, action: () => {
         if (wb !== owner || sheet() !== ownerSheet) throw new Error('문서 또는 시트가 바뀌었습니다. 현재 시트에서 옵션을 다시 여세요.');
-        const wasManual = wb.manualCalc;
+        const wasManual = wb.manualCalc, previousRowLimit = rowLimit();
         const { _headers, _grid, _formulaBar, gridColor, calcMode } = o;
         delete o._headers; delete o._grid; delete o._formulaBar; delete o.gridColor;
         Object.assign(opts, o);
         saveOptions();
+        if (rowLimit() !== previousRowLimit) applyRowLimit();
         if (_formulaBar !== undefined) view.showFormulaBar = _formulaBar;
-        wb.transact(() => {
+        const bookChanged = _grid !== undefined || _headers !== undefined || !!sheet().noZeros !== book.noZeros ||
+          (sheet().view?.gridColor || '') !== (gridColor || '') || documentCalcMode() !== calcMode || (wb.calculation?.calcOnSave !== false) !== book.calcOnSave;
+        if (bookChanged) wb.transact(() => {
           if (_grid !== undefined) wb.setSheetProp(si, 'noGrid', _grid ? undefined : true);
-          wb.setSheetProp(si, 'noZeros', book.noZeros || undefined);
-          wb.setSheetProp(si, 'view', { ...sheet().view, ...(_headers !== undefined ? { headers: _headers } : {}), gridColor: gridColor || undefined });
-          wb.setBookProp('calculation', { ...wb.calculation, mode: calcMode === 'semi' ? 'autoNoTable' : calcMode, calcOnSave: book.calcOnSave });
+          if (!!sheet().noZeros !== book.noZeros) wb.setSheetProp(si, 'noZeros', book.noZeros || undefined);
+          if (_headers !== undefined || (sheet().view?.gridColor || '') !== (gridColor || '')) wb.setSheetProp(si, 'view', { ...sheet().view, ...(_headers !== undefined ? { headers: _headers } : {}), gridColor: gridColor || undefined });
+          if (documentCalcMode() !== calcMode || (wb.calculation?.calcOnSave !== false) !== book.calcOnSave) wb.setBookProp('calculation', { ...wb.calculation, mode: calcMode === 'semi' ? 'autoNoTable' : calcMode, calcOnSave: book.calcOnSave });
         }, meta());
         applyOptions();
         ribbon?.reset?.();
@@ -9632,7 +9698,7 @@ function anchorObjects(fn, shift = null, moveOnly = false) {
   if (!props.length) return fn();
   gv.refreshAxes();
   const cols0 = gv.cols;
-  const rows0 = gv.rows;
+  const rows0 = documentRows();
   const at = (ax, p) => { const i = ax.indexAt(Math.max(0, p)); return [i, Math.max(0, p - ax.pos(i))]; };
   const anchors = new Map();
   for (const p of props) {
@@ -9644,6 +9710,7 @@ function anchorObjects(fn, shift = null, moveOnly = false) {
   }
   const res = fn();
   gv.refreshAxes();
+  const rows1 = documentRows();
   const move = (ax, [i, off], kind) => {
     let j = i;
     let o = off;
@@ -9664,9 +9731,9 @@ function anchorObjects(fn, shift = null, moveOnly = false) {
       const a = anchors.get(o.id);
       if (!a) return o;
       const x = Math.round(move(gv.cols, a.c1, 'col'));
-      const y = Math.round(move(gv.rows, a.r1, 'row'));
+      const y = Math.round(move(rows1, a.r1, 'row'));
       const w = a.place === 'twoCell' && !moveOnly ? Math.max(1, Math.round(move(gv.cols, a.c2, 'col')) - x) : o.w;
-      const h = a.place === 'twoCell' && !moveOnly ? Math.max(LINE_SHAPES.has(o.kind) ? 0 : 1, Math.round(move(gv.rows, a.r2, 'row')) - y) : o.h;
+      const h = a.place === 'twoCell' && !moveOnly ? Math.max(LINE_SHAPES.has(o.kind) ? 0 : 1, Math.round(move(rows1, a.r2, 'row')) - y) : o.h;
       if (x === o.x && y === o.y && w === o.w && h === o.h) return o;
       changed = true;
       return { ...o, x, y, w, h };
@@ -10410,7 +10477,7 @@ function onlinePictureDialog(inCell, kind = 'image') {
   const valid = () => wb === book && si === host && sheet() === target && !viewOnly && !wb.props?.markedFinal;
   const check = count => {
     if (!valid()) throw new Error('문서 또는 시트가 바뀌었습니다. 현재 시트에서 그림 삽입을 다시 여세요.');
-    if (inCell && cell.r + count > MAX_ROWS) throw new Error('그림을 배치할 행이 부족합니다.');
+    if (inCell && cell.r + count > rowLimit()) throw new Error('그림을 배치할 행이 부족합니다.');
     if (protectBlocked(inCell ? 'cells' : 'objects', { r1: cell.r, c1: cell.c, r2: cell.r + count - 1, c2: cell.c })) throw new Error('보호된 위치에는 그림을 삽입할 수 없습니다.');
   };
   onlinePicturePicker({ kind, allowVideo: !inCell, onInsert: async list => {
@@ -10728,7 +10795,7 @@ document.addEventListener('fullscreenchange', refreshFullScreen);
 document.addEventListener('keydown', e=>{if(e.key==='Escape'&&document.body.classList.contains('wixel-fullscreen')){document.body.classList.remove('wixel-fullscreen');refreshFullScreen();}},true);
 async function exportHtmlFile(name = docName) {
   const done = await saveWithPicker(`${safeFileName(name)}.html`, options => {
-    const htmlOptions = { ...options, name, rows:gv.rows, cols:gv.cols,
+    const htmlOptions = { ...options, name, cols:gv.cols,
     renderObject:(kind,o) => {
       const markup = kind === 'slicer' ? exportSlicerHtml(o, slicerModel(o)) : kind === 'chart' ? gv.chartSvg(o) : kind === 'image' ? pictureDisplaySvg({ ...o, rot:0 }) : `${isSmartArt(o) ? smartArtSvg(o) : shapeSvg(o)}${!isSmartArt(o) && (o.text || o.paras) && !isShapeLine(o) ? shapeTextHtml(o) : ''}`;
       const host = document.createElement('div'); setSafeHtml(host, markup); return host.innerHTML;
@@ -12367,7 +12434,7 @@ function pivotMoveDialog() {
       const overlaps = (a, b) => a.r1 <= b.r2 && a.r2 >= b.r1 && a.c1 <= b.c2 && a.c2 >= b.c1;
       const inside = (a, b) => a.r1 >= b.r1 && a.r2 <= b.r2 && a.c1 >= b.c1 && a.c2 <= b.c2;
       const inOld = (r, c) => r >= old.r1 && r <= old.r2 && c >= old.c1 && c <= old.c2;
-      if (area.r1 < 0 || area.c1 < 0 || area.r2 >= MAX_ROWS || area.c2 >= MAX_COLS) return fail('피벗 테이블 전체가 워크시트 안에 들어가는 위치를 선택하세요.');
+      if (area.r1 < 0 || area.c1 < 0 || area.r2 >= rowLimit() || area.c2 >= MAX_COLS) return fail('피벗 테이블 전체가 워크시트 안에 들어가는 위치를 선택하세요.');
       const target = fresh ? null : wb.sheets[dest.si];
       if (isProtected(source) || (target && (isProtected(target) || target.external))) return fail('보호된 워크시트로 이동하거나 보호된 피벗 테이블을 이동할 수 없습니다.');
       const blocksOverlap = (sh, a) => (sh.blocks ?? []).some((b) => overlaps({ r1: b.r0, c1: b.c0, r2: b.r0 + b.n - 1, c2: b.c0 + b.cols.length - 1 }, a));
@@ -14255,9 +14322,9 @@ const findOpts = (lookIn = findState.lookIn) => ({
 /** 조건에 맞는 모든 칸 (같은 조건 · 같은 내용이면 다시 계산하지 않음) */
 function findAllMatches(lookIn) {
   const opts = findOpts(lookIn);
-  const key = `${JSON.stringify(opts)}|${wb.version}|${opts.sheets.map((i) => wb.sheets[i]._ev ?? 0).join(',')}`;
+  const key = `${JSON.stringify(opts)}|${rowLimit()}|${wb.version}|${opts.sheets.map((i) => wb.sheets[i]._ev ?? 0).join(',')}`;
   if (findCache?.key === key) return findCache.list;
-  const list = findMatches(wb, opts, { display: (s, r, c) => displayText(r, c, s) });
+  const list = findMatches(wb, opts, { display: (s, r, c) => displayText(r, c, s) }).filter(m => m.r < rowLimit());
   findCache = { key, list };
   return list;
 }
@@ -15080,7 +15147,7 @@ async function openFileObject(file, mode, request = beginDocumentOpen()) {
     const rows = parseDelimited(text.replace(/^﻿/, ''), guessDelimiter(text));
     if (mode === 'open') {
       loadWorkbook({ sheets: [{ name: base.slice(0, 31) || 'Sheet1', cells: {} }] }, base, 0, request);
-      writeRows(rows, 0, 0);
+      writeRows(rows, 0, 0, { documentImport: true });
     } else {
       writeRows(rows, active.r, active.c);
     }
@@ -15130,7 +15197,8 @@ async function openBigCsv(file, base, request) {
   }
 }
 
-function writeRows(rows, r0, c0) {
+function writeRows(rows, r0, c0, { documentImport = false } = {}) {
+  if (!documentImport && rows.length && !rowRangeAllowed({ r1: r0, c1: c0, r2: r0 + rows.length - 1, c2: c0 + delimitedRowWidth(rows) - 1 })) return false;
   wb.transact(() => rows.forEach((row, i) => row.forEach((v, j) => { if (v !== '') wb.setInput(si, r0 + i, c0 + j, v); })), meta());
   if (rows.length) selectRange({ r1: r0, c1: c0, r2: r0 + rows.length - 1, c2: c0 + delimitedRowWidth(rows) - 1 }, 'cells', { r: r0, c: c0 });
 }
@@ -16794,6 +16862,7 @@ function openBackstage(panel = 'new') {
 /** 인쇄: 사용한 범위를 표로 만들어 인쇄 */
 function printSheet({ htmlOnly = false, pdf = false, name = docName } = {}) {
   const s = sheet();
+  const printRows = documentRows();
   const pg = normPage(s.page);
   const layout = gv.printLayout();
   if (layout.error) { alertDialog('인쇄 영역', layout.error); return; }
@@ -16823,9 +16892,9 @@ function printSheet({ htmlOnly = false, pdf = false, name = docName } = {}) {
       const colgroup = (pg.headings ? '<col data-print-col="-1" style="width:34px">' : '') + colsList.map((c) => `<col data-print-col="${c}" data-print-x="${gv.cols.pos(c)}" style="width:${gv.cols.size(c)}px">`).join('');
       tableW = colsList.reduce((w, c) => w + gv.cols.size(c), pg.headings ? 34 : 0);
       if (pg.titleRows && (pg.titleRows[1] - pg.titleRows[0] + 1 > 20000 || (pg.titleRows[1] - pg.titleRows[0] + 1) * colsList.length > 500000)) { alertDialog('인쇄 영역', '반복할 행이 너무 많습니다. 페이지 설정에서 인쇄 제목 범위를 줄이세요.'); return; }
-      const titleRows = pg.titleRows ? range(pg.titleRows[0], pg.titleRows[1]).filter(r => !gv.rows.isHidden(r)) : [];
+      const titleRows = pg.titleRows ? range(pg.titleRows[0], pg.titleRows[1]).filter(r => !printRows.isHidden(r)) : [];
       if (titleRows.length > 20000 || titleRows.length * colsList.length > 500000) { alertDialog('인쇄 영역', '반복할 행이 너무 많습니다. 페이지 설정에서 인쇄 제목 범위를 줄이세요.'); return; }
-      const titleSet = new Set(titleRows), bodyRows = range(r1, r2).filter(r => !gv.rows.isHidden(r) && !titleSet.has(r));
+      const titleSet = new Set(titleRows), bodyRows = range(r1, r2).filter(r => !printRows.isHidden(r) && !titleSet.has(r));
       const headMerges = printMergeMap(s.merges, colsList, titleRows), bodyMerges = printMergeMap(s.merges, colsList, bodyRows);
       const rowHtml = (r, mergeMap) => {
         const tds = [];
@@ -16843,8 +16912,8 @@ function printSheet({ htmlOnly = false, pdf = false, name = docName } = {}) {
             st.bb && `border-bottom:1px solid ${st.bbc || '#000'}`, st.bt && `border-top:1px solid ${st.btc || '#000'}`, st.bl && `border-left:1px solid ${st.blc || '#000'}`, st.br && `border-right:1px solid ${st.brc || '#000'}`].filter(Boolean).join(';');
           tds.push(`<td${merge ? ` rowspan="${merge.rowSpan}" colspan="${merge.colSpan}"` : ''} style="${css}">${escapeHtml(text)}</td>`);
         }
-        tableH += gv.rows.size(r);
-        return `<tr data-print-row="${r}" data-print-y="${gv.rows.pos(r)}" style="height:${gv.rows.size(r)}px">${tds.join('')}</tr>`;
+        tableH += printRows.size(r);
+        return `<tr data-print-row="${r}" data-print-y="${printRows.pos(r)}" style="height:${printRows.size(r)}px">${tds.join('')}</tr>`;
       };
       // 인쇄 제목(반복할 행)은 thead 로 — 브라우저가 쪽마다 반복
       const head = [];
@@ -17501,7 +17570,7 @@ function sizeDialog(kind) {
   const isCol = kind === 'col', cmd = isCol ? 'colWidth' : 'rowHeight';
   if (contextCommandDisabled(cmd)) { toast('현재 문서 또는 시트 보호 설정에서는 이 작업을 할 수 없습니다.'); return; }
   const selection = { ...sel }, options = selectedAxisOptions(), ranges = selectionAxisRanges(selection, kind, options);
-  const max = isCol ? MAX_COLS : MAX_ROWS, all = ranges.length === 1 && ranges[0][0] === 0 && ranges[0][1] === max - 1;
+  const max = isCol ? MAX_COLS : rowLimit(), all = ranges.length === 1 && ranges[0][0] === 0 && ranges[0][1] === max - 1;
   const targets = all ? null : axisTargets(kind, options, selection);
   if (!all && !targets) return;
   const book = wb, sheetIndex = si, font = { ...wb.defaultFont }, sh = sheet();
@@ -17517,6 +17586,7 @@ function sizeDialog(kind) {
       px = isCol ? columnCharsToPixels(n, font) : rowPointsToPixels(n);
     } catch (error) { toast(error.message); return false; }
     if (px === 0 && all) { toast('모든 행/열을 숨길 수는 없습니다.'); return false; }
+    if (all && !isCol && !rowTailAllowed()) return false;
     const sizesKey = isCol ? 'colWidths' : 'rowHeights', hiddenKey = isCol ? 'hiddenCols' : 'hiddenRows';
     wb.transact(() => anchorObjects(() => {
       const sizes = { ...sheet()[sizesKey] }, hiddenMap = { ...sheet()[hiddenKey] }, manual = { ...sheet().rowManual };
@@ -17543,20 +17613,21 @@ function sizeDialog(kind) {
 function autofitSelection(axis, explicitTargets = null) {
   const cmd = axis === 'row' ? 'autofitRowsSel' : 'autofitSel';
   if (contextCommandDisabled(cmd)) { toast('현재 문서 또는 시트 보호 설정에서는 이 작업을 할 수 없습니다.'); return; }
-  const ranges = selectionAxisRanges(sel, axis, selectedAxisOptions()), max = axis === 'row' ? MAX_ROWS : MAX_COLS;
+  const ranges = selectionAxisRanges(sel, axis, selectedAxisOptions()), max = axis === 'row' ? rowLimit() : MAX_COLS;
   let targets;
   if (explicitTargets) targets = explicitTargets;
   else if (ranges.length === 1 && ranges[0][0] === 0 && ranges[0][1] === max - 1) {
-    const indices = new Set(Object.keys(axis === 'row' ? sheet().rowHeights : sheet().colWidths).map(Number));
-    sheet().cells.forEachStoredRC((cell, r, c) => { if (cell.raw) indices.add(axis === 'row' ? r : c); });
+    const indices = new Set(Object.keys(axis === 'row' ? sheet().rowHeights : sheet().colWidths).map(Number).filter(i => i < max));
+    sheet().cells.forEachStoredRC((cell, r, c) => { const i = axis === 'row' ? r : c; if (cell.raw && i < max) indices.add(i); });
     for (const block of sheet().blocks ?? []) {
-      const start = axis === 'row' ? block.r0 : block.c0, count = axis === 'row' ? block.n : block.cols.length;
+      const start = axis === 'row' ? block.r0 : block.c0, count = Math.max(0, Math.min(axis === 'row' ? block.n : block.cols.length, max - start));
       if (count > 20000) { toast('자동 맞춤 대상이 20,000개를 초과합니다. 범위를 줄여 주세요.'); return; }
       for (let i = start; i < start + count; i++) indices.add(i);
     }
     targets = Array.from(indices).sort((a, b) => a - b);
     if (targets.length > 20000) { toast('자동 맞춤 대상이 20,000개를 초과합니다. 범위를 줄여 주세요.'); return; }
   } else { targets = axisTargets(axis); if (!targets) return; }
+  targets = targets.filter(i => i >= 0 && i < max);
   if (axis === 'col') { autofitCols(targets); return; }
   wb.transact(() => anchorObjects(() => {
     const heights = { ...sheet().rowHeights }, manual = { ...sheet().rowManual }, cols = Math.min(wb.usedRange(si).cols, 500);
@@ -18045,8 +18116,10 @@ function nameBoxEnter(text) {
     if (v && v.constructor?.name === 'RefValue') {
       const s = v.sheet ? wb.sheetIndexByName(v.sheet) : si;
       if (s >= 0) {
-        switchSheet(s);
         const rg = { r1: v.r1, c1: v.c1, r2: v.r2, c2: v.c2 };
+        if (rg.r1 === 0 && rg.r2 === MAX_ROWS - 1) rg.r2 = rowLimit() - 1;
+        if (!rowRangeAllowed(rg, s)) return false;
+        switchSheet(s);
         if (isSingle(rg)) selectCell(rg.r1, rg.c1); else { growTo(rg.r2, rg.c2); gv.ensureVisible(rg.r1, rg.c1); selectRange(rg); }
         return true;
       }
@@ -18077,6 +18150,7 @@ function gotoRef(text) {
   const rowOnly = /^\$?(\d+):\$?(\d+)$/.exec(t);
   const rg = parseRangeName(t);
   if (!colOnly && !rowOnly && !rg) { toast('참조가 올바르지 않습니다.'); return false; }
+  if (!colOnly && !rowRangeAllowed(rowOnly ? { r1: Math.min(Number(rowOnly[1]), Number(rowOnly[2])) - 1, r2: Math.max(Number(rowOnly[1]), Number(rowOnly[2])) - 1, c1: 0, c2: MAX_COLS - 1 } : rg, target)) return false;
   switchSheet(target);
   if (colOnly) {
     const a = parseRangeName(`${colOnly[1]}1`);
@@ -18086,7 +18160,7 @@ function gotoRef(text) {
   if (rowOnly) {
     const a = Number(rowOnly[1]) - 1;
     const b = Number(rowOnly[2]) - 1;
-    if (a >= 0 && b >= 0 && b < MAX_ROWS) { growTo(Math.max(a, b), 0); gv.ensureVisible(a, 0); selectRows(a, b); return true; }
+    if (a >= 0 && b >= 0 && a < rowLimit() && b < rowLimit()) { growTo(Math.max(a, b), 0); gv.ensureVisible(a, 0); selectRows(a, b); return true; }
   }
   if (!rg) return false;
   if (isSingle(rg)) selectCell(rg.r1, rg.c1);
@@ -19731,7 +19805,7 @@ function showContextMenu(pos, hitKind = 'cell') {
 }
 
 // ───────────────────────── 명령 ─────────────────────────
-const structural = (fn) => () => { fn(); gv.layout(); updateSelectionUI(); };
+const structural = (fn) => () => { if (!rowRangeAllowed(sel) || !rowTailAllowed()) return; fn(); gv.layout(); updateSelectionUI(); };
 
 const COMMANDS = {
   repeatStyle: (options) => { if (options) applyStyle(options.patchOrFn, { widen: options.widen }); },
@@ -19861,6 +19935,7 @@ const COMMANDS = {
 
   insertRows: structural(() => {
     const n = selKind === 'cols' || selKind === 'all' ? 1 : Math.min(sel.r2 - sel.r1 + 1, 100000);
+    if (!rowTailAllowed(n)) return;
     wb.transact(() => anchorObjects(() => wb.insertRows(si, sel.r1, n), { axis: 'row', index: sel.r1, count: n }), meta());
   }),
   insertCols: structural(() => {
@@ -20224,6 +20299,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['Excel 기본 행 수와 선택적 확장', ['기본 작업 범위를 Excel과 같은 1,048,576행으로 맞췄습니다. 파일 → 옵션 → 일반의 [위셀 행수 확장]을 켜면 20,000,000행까지 작업하며, 설정을 꺼도 확장 영역의 데이터는 보존합니다.', '스크롤·이름 상자·방향키·전체 열 선택·붙여넣기를 현재 행 한도에 맞추고, 빈 행을 한꺼번에 만들지 않는 가상화를 유지합니다.']],
   ['Excel 단축키와 팝업 접근키 보완', ['Alt → D → F → F 필터를 비롯한 이전 Excel 메뉴 경로를 추가했습니다. 현대 리본 키와 직접 조합키를 점검하여 Shift가 있는 키를 다른 기능으로 잘못 처리하던 문제를 수정했습니다.', '팝업 접근키가 겹치면 고유한 키로 표시·실행하며, 도형과 슬라이서의 Ctrl+1은 선택한 개체의 서식·크기 창을 엽니다.']],
   ['도형과 텍스트 상자 직접 편집', ['F2·더블클릭·텍스트 편집 메뉴로 도형 안에서 커서를 놓고 입력합니다. 선택한 글자에 굵게·기울임·밑줄·글꼴·크기·색을 적용하고, 리본과 Alt 키 색상표에서도 선택 범위를 유지합니다.', '편집 중 복사·잘라내기·붙여넣기는 선택한 텍스트에만 적용합니다. 한글 입력·줄바꿈·실행 취소와 혼합 텍스트 서식의 XLSX 저장·재열기를 보강했습니다.']],
   ['가져오기 수식 진단 정확성', ['원본 Excel 파일에도 있던 이름 오류를 새 미지원 함수처럼 안내하지 않고 계산 상태에서 원본 오류로 구분합니다. LET/LAMBDA의 지역 함수 호출은 정상 지원 수식으로 판정합니다.']],
@@ -21116,7 +21192,7 @@ async function init() {
   installPointerModifierTracking(window);
   gv = new GridView({
     state: () => ({
-      wb, si, sel, selKind, active, editing: !!editing, readonly: viewOnly, clip, fillPreview, refs: editRefs, chartSel, chartPart, objMulti:new Set(selectedObjects().map(f=>f.obj.id).filter(id=>id!==chartSel)), circles, focusCell: opts.focusCell,
+      wb, si, sel, selKind, active, rowLimit: rowLimit(), editing: !!editing, readonly: viewOnly, clip, fillPreview, refs: editRefs, chartSel, chartPart, objMulti:new Set(selectedObjects().map(f=>f.obj.id).filter(id=>id!==chartSel)), circles, focusCell: opts.focusCell,
       chartPreview: chartElementDrag?.preview,
       shapeEdit, shapePreview: drawPathState?.preview ?? shapePointDrag?.preview ?? (shapeEdit && !findObject(sheet(), shapeEdit.id)?.obj.path ? editingShape() : null),
       special: special?.si === si ? special.cells : null, arrows: trace?.arrows ?? null,
