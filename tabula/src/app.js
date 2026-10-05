@@ -8246,6 +8246,7 @@ function slicerStyleGallery(anchorEl) {
     {label:'지우기',disabled:list.some(sl=>slicerBlocked(sl,'objects',true)),action:()=>{if(valid())patchObjects(clearObjectStyle('slicer'),['slicers']);}}],{scroll:true});
   menu.classList.add('slicer-style-menu');
   menu.addEventListener('keydown',e=>{
+    if(e.defaultPrevented)return;
     const at=buttons.indexOf(e.target);if(at<0||!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(e.key))return;
     e.preventDefault();e.stopPropagation();const cols=getComputedStyle(e.target.parentElement).gridTemplateColumns.split(' ').length||6;
     const i=e.key==='Home'?0:e.key==='End'?buttons.length-1:Math.max(0,Math.min(buttons.length-1,at+({ArrowLeft:-1,ArrowRight:1,ArrowUp:-cols,ArrowDown:cols}[e.key])));
@@ -13779,7 +13780,7 @@ function fontMenu(anchorEl) {
   for (const s of wb.sheets) for (const [,,cell] of s.cells.storageEntries()) if (cell.style?.font) used.add(cell.style.font);
   const cur = styleAt(active.r, active.c).font || BASE_FONT.name;
   const mobilePicker = document.body.classList.contains('mobile-work-mode') || matchMedia('(pointer: coarse)').matches;
-  const search = el('input', { type: 'search', placeholder: '글꼴 검색', class: 'font-search', style: { fontSize: '16px' } });
+  const search = el('input', { type: 'search', placeholder: '글꼴 검색', 'aria-label': '글꼴 검색', 'data-menu-search-target': '.font-list', class: 'font-search', style: { fontSize: '16px' } });
   const list = el('div', { class: 'font-list' });
   const pick = (f) => { closeMenus(); run('fontFamily', f); };
   const item = (f) => el('button', {
@@ -13802,9 +13803,10 @@ function fontMenu(anchorEl) {
   };
   search.addEventListener('input', render);
   search.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) return;
+    if (['ArrowDown', 'ArrowUp', 'Tab', 'Escape'].includes(e.key)) return;
     e.stopPropagation();
-    if (e.key === 'Enter' && search.value.trim()) pick(search.value.trim());
-    if (e.key === 'Escape') { closeMenus(); focusGrid(); }
+    if (e.key === 'Enter' && search.value.trim()) { e.preventDefault(); pick(search.value.trim()); }
   });
   const loadBtn = canListLocalFonts()
     ? el('button', {
@@ -13821,7 +13823,7 @@ function fontMenu(anchorEl) {
   const node = el('div', { class: 'font-menu' }, search, loadBtn, list);
   openMenu(anchorEl, [{ node }], { focus: !mobilePicker });
   if (mobilePicker) list.querySelector('.font-item')?.focus({ preventScroll:true });
-  else setTimeout(() => search.focus());
+
 }
 
 function pivotStyleOpt(key) {
@@ -18495,28 +18497,6 @@ function paletteMenu(anchorEl, noneLabel, onPick, extra = []) {
     ...extra,
   ], { scroll: true });
   menu.classList.add('color-palette-menu');
-  // 팔레트도 메뉴의 일부다. 행/열 방향키와 Tab으로 색과 하단 명령을 모두 방문한다.
-  menu.addEventListener('keydown', (event) => {
-    if (event.altKey || event.ctrlKey || event.metaKey || event.isComposing) return;
-    const controls = [...menu.querySelectorAll('.swatch, :scope > .menu-item:not(:disabled)')];
-    const current = controls.indexOf(document.activeElement);
-    if (current < 0) return;
-    const colors = [...palette.querySelectorAll('.swatch')], index = colors.indexOf(document.activeElement);
-    let next = null;
-    if (event.key === 'Tab') next = controls[(current + (event.shiftKey ? -1 : 1) + controls.length) % controls.length];
-    else if (event.key === 'Home') next = index >= 0 && !event.ctrlKey ? colors[Math.floor(index / 10) * 10] : controls[0];
-    else if (event.key === 'End') next = index >= 0 ? colors[Math.min(colors.length - 1, Math.floor(index / 10) * 10 + 9)] : controls.at(-1);
-    else if (index >= 0 && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
-      const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -10, ArrowDown: 10 }[event.key];
-      const to = index + step;
-      const edge = controls.indexOf(step > 0 ? colors.at(-1) : colors[0]) + (step > 0 ? 1 : -1);
-      next = colors[to] ?? controls[Math.max(0, Math.min(controls.length - 1, edge))];
-    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') next = controls[(current + (event.key === 'ArrowDown' ? 1 : -1) + controls.length) % controls.length];
-    else if (index >= 0 && (event.key === 'Enter' || event.key === ' ')) {
-      event.preventDefault(); event.stopImmediatePropagation(); document.activeElement.click(); return;
-    }
-    if (next) { event.preventDefault(); event.stopImmediatePropagation(); next.focus(); next.scrollIntoView({ block: 'nearest' }); }
-  }, true);
   (noneTop ? menu.querySelector(':scope > .menu-item') : palette.querySelector('.swatch'))?.focus();
 }
 
@@ -20025,6 +20005,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['색상표와 갤러리 키보드 이동', ['Alt → H → F → C와 Alt → H → H로 연 색상표에서 Alt를 누른 채로도 화살표 이동·Enter 적용·Esc 취소가 가능합니다. 글꼴 검색과 차트 색 구성, 표·피벗·조건부 서식 등 메뉴 안의 견본도 키보드로 선택합니다.']],
   ['우클릭 서식의 선택 범위 고정', ['색·글꼴·무늬·테두리 메뉴를 이동할 때 셀 선택이 따라 움직이던 오류를 수정했습니다. 취소되거나 놓친 마우스 드래그를 정리하고, 늦게 닫힌 색 선택창이 다른 문서나 시트를 수정하지 않도록 했습니다.']],
   ['차트 색 39개와 사용자 지정 색', ['색 구성을 이름·검색·분류로 선택하고 1~32개의 색을 직접 편집할 수 있습니다. 색 순서·미리보기·취소·실행 취소를 지원하며, 한두 색을 사용하는 폭포·파레토의 색 누락을 수정했습니다.']],
   ['차트·필터·피벗 설정 동작 보완', ['원형·도넛 테두리 색과 방사형의 선 굵기·파선·표식을 화면과 Excel 저장에 반영하고, 고정 데이터 차트의 필터를 수정했습니다. 새 차트의 원본이 2,000행에서 잘리지 않게 했습니다.', '사용자 지정 정렬 후 필터를 다시 계산하고 표 머리글·요약 행을 보호합니다. 표 슬라이서의 숫자·색·상위 값·평균 조건을 반영합니다.', '가져온 피벗의 명시적 정렬과 사용자 지정 목록 사용 옵션이 화면 및 Excel 저장 후에도 적용됩니다.']],

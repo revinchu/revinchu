@@ -622,3 +622,10 @@ node tools/mobile-layout.mjs
 ## 차트 색과 스타일 회귀
 
 `tools/chart-colors-ui.mjs`는 가져온 그라데이션·개별 점 색이 있는 합성 차트에서 실제 리본/옆 버튼/서식 창의 색·스타일·미리보기·Undo·보호 차단을 검사한다. `WIXEL_BROWSER`는 chromium/webkit/firefox, `WIXEL_COLORS_OUT`은 D 결과 경로, `WIXEL_URL`은 로컬 소스/번들 서버이다. `WIXEL_COLORS_BASELINE`은 기준 app.js/chart.js/chart-edit.js/chart-selection-ui.js가 있는 폴더를 지정한다. `WIXEL_COLORS_PUBLIC=1`은 정확한 위셀 공개 호스트에서 합성 검사만 허용한다. API와 외부 요청·쓰기는 계속 차단한다. 상세 범위는 [81번 문서](../docs/codex/81_차트색과스타일명령.md)를 따른다.
+
+## 색상표·메뉴 갤러리 키보드 회귀
+
+- `palette-keyboard.mjs`: HFC/HH 실제 Alt 경로, Alt 유지·해제, 모바일/데스크톱, 화살표·Home/End·Tab·Enter/Esc, 적용/Undo와 고정 선택 범위, 글꼴·차트 색 검색. `WIXEL_PALETTE_OUT`, `WIXEL_PALETTE_FILTER`, `WIXEL_PALETTE_BASELINE` 지원.
+- `menu-gallery-keyboard.mjs`: 무늬·조건부 서식·표·피벗·슬라이서·차트·테마·도형의 실제 키팁 진입, 이동, 적용/Undo와 기존 Alt+↓/←. `WIXEL_GALLERY_OUT`, `WIXEL_GALLERY_FILTER` 지원.
+
+둘 다 `WIXEL_URL`, `WIXEL_BROWSER=chromium|firefox|webkit` 사용. 기본은 로컬 주소이며 `WIXEL_PALETTE_PUBLIC=1`/`WIXEL_GALLERY_PUBLIC=1`일 때 정확한 위셀 공개 호스트에 한해 합성 검사한다. API·외부 요청·원격 쓰기는 차단한다. 모든 결과는 D: 임시 폴더에 둔다.

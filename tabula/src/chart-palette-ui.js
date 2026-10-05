@@ -3,7 +3,7 @@ import { CHART_PALETTE_GROUPS, chartPaletteOptions, normalizeChartPalette } from
 
 /** 색 견본과 이름을 함께 표시하며, 검색은 적용 전 목록만 바꾼다. */
 export function createChartPalettePicker({ chart, palettes, onPick, onCustom }) {
-  const search = el('input', { type: 'search', placeholder: '색 구성 검색', 'aria-label': '색 구성 검색', autocomplete: 'off' });
+  const search = el('input', { type: 'search', placeholder: '색 구성 검색', 'aria-label': '색 구성 검색', 'data-menu-search-target': '.chart-palette-results', autocomplete: 'off' });
   const group = el('select', { 'aria-label': '색 구성 분류' }, el('option', { value: 'all' }, '모든 색'),
     CHART_PALETTE_GROUPS.map(g => el('option', { value: g.id }, g.label)));
   const list = el('div', { class: 'chart-palette-results' }), count = el('span', { class: 'chart-palette-count', role: 'status' });
@@ -19,7 +19,10 @@ export function createChartPalettePicker({ chart, palettes, onPick, onCustom }) 
   search.addEventListener('input', draw); group.addEventListener('change', draw);
   const root = el('div', { class: 'pal-list chart-palette-picker' }, el('div', { class: 'chart-palette-search' }, search, group), count, list,
     el('button', { type: 'button', class: 'btn chart-palette-custom', onclick: onCustom }, '사용자 지정 색 구성…'));
-  root.addEventListener('keydown', e => { if (e.target.matches('input,select') && e.key !== 'Escape') e.stopPropagation(); });
+  root.addEventListener('keydown', e => {
+    if (e.target.matches('input,select') && !['Escape', 'Tab'].includes(e.key)
+      && !(e.target === search && ['ArrowDown', 'ArrowUp'].includes(e.key))) e.stopPropagation();
+  });
   draw(); return root;
 }
 

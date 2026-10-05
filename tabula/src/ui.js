@@ -1,6 +1,7 @@
 // 공통 UI: 요소 생성 · 메뉴 · 대화상자 · 알림
 import { ICONS } from './icons.js';
 import { prepareKeyboardInput } from './mobile-keyboard.js';
+import { menuNavigationTarget } from './menu-navigation.js';
 import { sanitizeHtml, setSafeHtml } from './safe-html.js';
 import { accessKeyFromLabel, accessKeyCaption, accessKeyFromEvent, accessKeyHint, accessKeyAliases, dialogButtonAccessKey, allocateAccessKeys } from './access-keys.js';
 
@@ -386,7 +387,7 @@ function buildMenu(anchor, items, { minWidth, scroll, toolbar, level = 0, parent
     if (!it) continue;
     if (it.sep) { menu.append(el('div', { class: 'menu-sep' })); continue; }
     if (it.title || it.header) { menu.append(el('div', { class: 'menu-title' }, it.title ?? it.label)); continue; }
-    if (it.node) { menu.append(it.node); continue; }
+    if (it.node) { if (it.node instanceof Element) it.node.dataset.menuGallery = ''; menu.append(it.node); continue; }
     const openSub = (focus = false) => {
       closeDeeper();
       const r = btn.getBoundingClientRect();
@@ -412,13 +413,28 @@ function buildMenu(anchor, items, { minWidth, scroll, toolbar, level = 0, parent
   prepareAccessKeys(menu);
   placeMenu(menu, anchor);
   menu.addEventListener('keydown', (e) => {
-    if (e.isComposing || e.keyCode === 229) return;
-    if (e.key === 'Tab' && toolbar?.isConnected) {
-      const controls = toolbarControls(toolbar);
-      if (controls.length) { e.preventDefault(); e.stopPropagation(); controls[e.shiftKey ? controls.length - 1 : 0].focus(); return; }
+    // 개별 갤러리나 검색 목록이 이미 처리한 키는 두 번 이동하지 않는다.
+    if (e.defaultPrevented || e.isComposing || e.keyCode === 229 || e.getModifierState?.('AltGraph')) return;
+    const focused = document.activeElement;
+    const editable = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable;
+    const direct = focused?.parentElement === menu && focused?.classList.contains('menu-item');
+    const controls = menuKeyboardControls(menu);
+    const actions = controls.filter(node => node.matches('button,[role="menuitem"],[role="button"]') && !node.classList.contains('mobile-menu-back'));
+    const take = () => { e.preventDefault(); e.stopPropagation(); };
+    const focusOn = node => { if (!node) return; take(); closeDeeper(); node.focus({ preventScroll: true }); node.scrollIntoView({ block: 'nearest', inline: 'nearest' }); };
+    if (e.key === 'Tab') {
+      if (toolbar?.isConnected) {
+        const tools = toolbarControls(toolbar);
+        if (tools.length) { take(); tools[e.shiftKey ? tools.length - 1 : 0].focus(); return; }
+      }
+      if (controls.length) {
+        const at = controls.indexOf(focused), next = at < 0 ? (e.shiftKey ? controls.length - 1 : 0) : (at + (e.shiftKey ? -1 : 1) + controls.length) % controls.length;
+        focusOn(controls[next]);
+      }
+      return;
     }
-    if (e.key === 'Escape' || (e.key === 'ArrowLeft' && level && !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName))) {
-      e.preventDefault(); e.stopPropagation();
+    if (e.key === 'Escape' || (e.key === 'ArrowLeft' && level && direct && !editable)) {
+      take();
       if (level) {
         for (const m of openMenus.filter((x) => Number(x.dataset.level) >= level)) m.remove();
         openMenus = openMenus.filter((x) => Number(x.dataset.level) < level);
@@ -426,26 +442,43 @@ function buildMenu(anchor, items, { minWidth, scroll, toolbar, level = 0, parent
       } else closeMenus();
       return;
     }
-    if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable) return;
-    const entries = [...menu.querySelectorAll(':scope > .menu-item:not(:disabled)')];
-    if (!entries.length) return;
-    const at = entries.indexOf(document.activeElement);
-    if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) {
-      e.preventDefault(); e.stopPropagation(); closeDeeper();
-      const i = e.key === 'Home' ? 0 : e.key === 'End' ? entries.length - 1 : (at + (e.key === 'ArrowDown' ? 1 : -1) + entries.length) % entries.length;
-      entries[i].focus();
-    } else if (e.key === 'ArrowRight' && document.activeElement?.classList.contains('has-sub')) {
-      e.preventDefault(); e.stopPropagation(); document.activeElement.click();
-    } else if (e.key === 'Enter' || e.key === ' ') {
-      if (at >= 0) { e.preventDefault(); e.stopPropagation(); entries[at].click(); }
+    if (editable) {
+      // 텍스트/검색의 좌우·Home·End와 select의 기본 방향키는 편집 동작이다.
+      if (e.target.matches('input[type="search"],input[type="text"],input:not([type])') && !e.ctrlKey && !e.metaKey && ['ArrowDown', 'ArrowUp'].includes(e.key)) {
+        const group = e.target.closest('[data-menu-gallery]');
+        const selector = e.target.dataset.menuSearchTarget;
+        let resultsRoot = group;
+        if (selector) { try { resultsRoot = menu.querySelector(selector); } catch { resultsRoot = null; } }
+        const results = actions.filter(node => resultsRoot?.contains(node));
+        const entries = results.length ? results : actions;
+        focusOn(e.key === 'ArrowDown' ? entries[0] : entries.at(-1));
+      }
+      return;
     }
+    if ((e.ctrlKey || e.metaKey) && !['Home', 'End'].includes(e.key)) return;
+    if (e.key === 'ArrowRight' && direct && focused.classList.contains('has-sub')) { take(); focused.click(); return; }
+    const at = actions.indexOf(focused);
+    // 일반 세로 메뉴의 좌우는 하위 메뉴용이다. 색상표 앞 명령의 오른쪽만 견본으로 연결한다.
+    if (direct && e.key === 'ArrowLeft') return;
+    if (direct && e.key === 'ArrowRight' && !actions[at + 1]?.closest('[data-menu-gallery]')) return;
+    if (['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
+      const entries = actions.map(node => ({ group: node.parentElement === menu && node.classList.contains('menu-item') ? null : node.closest('[data-menu-gallery]'), rect: node.getBoundingClientRect() }));
+      focusOn(actions[menuNavigationTarget(entries, at, e.key, { whole: e.ctrlKey || e.metaKey })]);
+    } else if ((e.key === 'Enter' || e.key === ' ') && at >= 0) { take(); focused.click(); }
   });
   if (focus) {
-    const target = menu.querySelector('input:not(:disabled), select:not(:disabled), textarea:not(:disabled)') ?? menu.querySelector(':scope > .menu-item:not(:disabled)');
+    const controls = menuKeyboardControls(menu);
+    const target = controls.find(node => node.matches('input,select,textarea')) ?? controls.find(node => !node.classList.contains('mobile-menu-back'));
     prepareKeyboardInput(target);
-    target?.focus();
+    target?.focus({ preventScroll: true });
   }
   return menu;
+}
+
+// 스크롤 아래의 실제 항목도 탐색하되 숨긴 색 선택기·비활성 입력은 제외한다.
+function menuKeyboardControls(menu) {
+  return [...menu.querySelectorAll('button,input,select,textarea,[role="menuitem"],[role="button"],[tabindex]')]
+    .filter(node => node.closest('.menu') === menu && node.tabIndex >= 0 && accessVisible(node, true));
 }
 
 const menuSizing = new WeakMap();
