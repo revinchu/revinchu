@@ -14,6 +14,15 @@ export function accessKeyCaption(label, key) {
   return `(${normalized.toUpperCase()})`;
 }
 
+/** 충돌로 다시 배정된 키를 기존 레이블 표기에도 반영한다. 영문 단어 자체는 바꾸지 않는다. */
+export function accessKeyDisplayLabel(label, key) {
+  const text = String(label ?? ''), normalized = /^[a-z0-9]$/i.test(key ?? '') ? key.toLowerCase() : '';
+  const original = accessKeyFromLabel(text);
+  if (!original || original === normalized) return text;
+  if (/\(\s*&?[a-z0-9]\s*\)/i.test(text)) return text.replace(/\(\s*&?[a-z0-9]\s*\)/i, normalized ? `(${normalized.toUpperCase()})` : '').trimEnd();
+  return text.replace(/(^|[^&])&([a-z0-9])/i, '$1$2');
+}
+
 export function accessKeyFromEvent(event) {
   if (event.ctrlKey || event.metaKey || event.getModifierState?.('AltGraph')) return '';
   const physical = /^Key([A-Z])$|^Digit([0-9])$/.exec(event.code ?? '');
@@ -507,31 +516,29 @@ export function accessKeyAliases(value) {
   return [...new Set(String(value ?? '').toLowerCase().split(/[\s,|]+/).filter((key) => /^[a-z0-9]$/.test(key)))];
 }
 
-/** 명시 키/기존 레이블 표기가 우선. 같은 키는 유지하여 호출 측에서 포커스를 순환한다. */
+/** 한 범위에서 주 키와 별칭은 한 컨트롤만 소유한다. 남는 단일 키가 없으면 Tab 탐색을 사용한다. */
 export function allocateAccessKeys(items) {
-  const pool = 'abcdefghijklmnopqrstuvwxyz1234567890';
-  const assigned = items.map((item) => /^[a-z0-9]$/i.test(item.explicit ?? '') ? item.explicit.toLowerCase() : accessKeyFromLabel(item.label));
-  const automatic = items.map(() => false);
-  const used = new Set([...assigned.filter(Boolean), ...items.flatMap((item) => accessKeyAliases(item.aliases))]);
-  // 동적 옵션 추가/스크롤 때문에 이미 보이던 자동 키가 다른 컨트롤로 바뀌지 않는다.
+  const pool = 'abcdefghijklmnopqrstuvwxyz1234567890', valid = value => /^[a-z0-9]$/i.test(value ?? '') ? value.toLowerCase() : '';
+  const assigned = items.map(() => ''), automatic = items.map(() => false), aliases = items.map(() => []), owners = new Map();
+  const requested = items.map(item => valid(item.explicit) || accessKeyFromLabel(item.label));
+  // 호출부가 직접 지정한 키/레이블 표기는 공통 확인·취소·닫기의 기본 키보다 우선한다.
+  const order = items.map((_, i) => i).sort((a, b) => Number(!!items[a].default) - Number(!!items[b].default) || a - b);
+  const claim = (key, i) => { if (!key || owners.has(key) && owners.get(key) !== i) return false; owners.set(key, i); return true; };
+  for (const i of order) if (claim(requested[i], i)) assigned[i] = requested[i];
+  // 동적 옵션 추가 후에도 기존 자동 키를 유지하되 새 명시 키를 빼앗지 않는다.
   for (let i = 0; i < items.length; i++) {
-    const remembered = /^[a-z0-9]$/i.test(items[i].previous ?? '') ? items[i].previous.toLowerCase() : '';
-    if (!assigned[i] && remembered && !used.has(remembered)) {
-      assigned[i] = remembered; automatic[i] = accessKeyHint(items[i].label) !== remembered; used.add(remembered);
-    }
+    const previous = valid(items[i].previous);
+    if (!assigned[i] && claim(previous, i)) { assigned[i] = previous; automatic[i] = accessKeyHint(items[i].label) !== previous; }
   }
-  // 레이블 추천은 창별로 지정한 키/별칭을 빼앗지 않는다. 충돌한 추천은 자동 배정으로 돌린다.
   for (let i = 0; i < items.length; i++) {
     const hint = accessKeyHint(items[i].label);
-    if (!assigned[i] && hint && !used.has(hint)) { assigned[i] = hint; used.add(hint); }
+    if (!assigned[i] && claim(hint, i)) assigned[i] = hint;
   }
-  const overflowPool = [...pool].filter((candidate) => !used.has(candidate));
-  let overflow = 0;
-  return items.map((item, i) => {
-    if (assigned[i]) return { key: assigned[i], automatic: automatic[i] };
-    const remembered = /^[a-z0-9]$/i.test(item.previous ?? '') ? item.previous.toLowerCase() : '';
-    const key = remembered && !used.has(remembered) ? remembered : [...pool].find((candidate) => !used.has(candidate)) ?? overflowPool[overflow++ % overflowPool.length] ?? '';
-    used.add(key);
-    return { key, automatic: true };
-  });
+  // 별칭은 다른 컨트롤의 실제 주 키를 가리지 않는다. 별칭끼리 충돌하면 첫 소유자만 유지한다.
+  for (const i of order) for (const key of accessKeyAliases(items[i].aliases)) if (key !== assigned[i] && claim(key, i)) aliases[i].push(key);
+  for (let i = 0; i < items.length; i++) if (!assigned[i]) {
+    const key = [...pool].find(candidate => !owners.has(candidate)) ?? aliases[i].shift() ?? '';
+    if (key) owners.set(key, i); assigned[i] = key; automatic[i] = true;
+  }
+  return items.map((_, i) => ({ key: assigned[i], automatic: automatic[i], aliases: aliases[i] }));
 }

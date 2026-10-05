@@ -24,7 +24,8 @@ import { createDrawingPalette } from './drawing-palette.js';
 import { BANDING_PALETTES, alternatingRules, isBandingRule } from './alternating-colors.js';
 import { installMobileWork, mobileSheetZoom } from './mobile-work.js';
 import { installMobileKeyboard } from './mobile-keyboard.js';
-import { shortcutCode, appleTouchDevice } from './keyboard-shortcuts.js';
+import { EXCEL_KEYTIP_COMPAT, EXCEL_LEGACY_GROUPS } from './excel-keytip-compat.js';
+import { shortcutCode, appleTouchDevice, excelDirectCommand } from './keyboard-shortcuts.js';
 import { installPointerModifierTracking, primaryPointerModifier } from './pointer-modifiers.js';
 import { openKeyboardCheck } from './keyboard-check.js';
 import { installGridMousePan } from './mouse-work.js';
@@ -986,7 +987,7 @@ function setMode() {
     const f = allFilters().map(([, x]) => x).find((x) => hidCount(x.hidden)) ?? null;
     const hidden = f ? hidCount(f.hidden) : 0;
     dom.status.textContent = painter ? '서식 복사' : clip ? '대상을 선택한 후 Enter 키를 누르거나 붙여넣기를 선택하세요.'
-      : hidden ? `필터 모드: ${f.r2 - f.r1 - hidden}/${f.r2 - f.r1}개 레코드 표시` : '준비';
+      : endMode ? '끝 모드' : extendMode ? '선택 영역 확장' : hidden ? `필터 모드: ${f.r2 - f.r1 - hidden}/${f.r2 - f.r1}개 레코드 표시` : '준비';
   } else if (canPoint()) dom.status.textContent = '참조';
   else dom.status.textContent = editing.mode === 'enter' ? '입력' : '편집';
 }
@@ -1507,6 +1508,12 @@ function onGridKey(e) {
   const ctrl = e.ctrlKey || e.metaKey;
   const k = e.key;
   const handled = () => e.preventDefault();
+  if (!chartSel && !ctrl && !e.altKey && k === 'End') { handled(); endMode = !endMode; setMode(); return; }
+  if (endMode && !['Shift', 'Control', 'Meta', 'Alt'].includes(k)) {
+    endMode = false; setMode();
+    const direction = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] }[k];
+    if (direction && !e.altKey && !chartSel) { handled(); move(...direction, { ctrl: true, extend: e.shiftKey || extendMode }); return; }
+  }
 
   if (k === 'Escape') endBorderDraw();
   if (k === 'Escape' && drag?.type === 'objectLink') { handled(); drag = null; stopAutoScroll(); return; }
@@ -1535,8 +1542,10 @@ function onGridKey(e) {
   if (chartSel) {
     if (ctrl && !e.altKey && e.code === 'KeyK' && ['shapes', 'images'].includes(findObject(sheet(), chartSel)?.prop)) { handled(); objectHyperlinkDialog(chartSel); return; }
     if (ctrl && k === 'Enter' && findObject(sheet(), chartSel)?.obj.hyperlink?.target) { handled(); openLink(drawingLinkAddress(findObject(sheet(), chartSel).obj.hyperlink)); return; }
-    if (ctrl && (e.code === 'Digit1' || k === '1') && pictureHere()) { handled(); imageDialog(chartSel, 'styles'); return; }
-    if (ctrl && (e.code === 'Digit1' || k === '1') && sheet().charts.some(c => c.id === chartSel)) { handled(); chartFormatPane(chartSel); return; }
+    if (ctrl && !e.altKey && !e.shiftKey && code === 'Digit1' && sheet().slicers?.some(o => o.id === chartSel)) { handled(); run('slicerSize'); return; }
+    if (ctrl && !e.altKey && !e.shiftKey && code === 'Digit1' && sheet().shapes?.some(o => o.id === chartSel)) { handled(); run('shapeFormat'); return; }
+    if (ctrl && !e.altKey && !e.shiftKey && code === 'Digit1' && pictureHere()) { handled(); imageDialog(chartSel, 'styles'); return; }
+    if (ctrl && !e.altKey && !e.shiftKey && code === 'Digit1' && sheet().charts.some(c => c.id === chartSel)) { handled(); chartFormatPane(chartSel); return; }
     if ((k === 'Delete' || k === 'Backspace') && chartPart?.id === chartSel) { handled(); deleteChartPart(); return; }
     if (k === 'Escape' && chartPart?.id === chartSel) { handled(); chartPart = null; gv.renderObjectsAll(); syncChartPane(); return; }
     if (k === 'Delete' || k === 'Backspace') { handled(); deleteObject(chartSel); return; }
@@ -1554,6 +1563,8 @@ function onGridKey(e) {
     }
     if (!ctrl && !e.altKey && k.length === 1 && sheet().shapes?.some((x) => x.id === chartSel)) { handled(); beginShapeTextEdit(chartSel, { typed: k }); return; }
   }
+  const directCommand = excelDirectCommand(e);
+  if (directCommand) { handled(); run(directCommand); return; }
   if (e.altKey && k === 'ArrowDown' && !ctrl) {
     const tt = tableHere();
     if (tt?.totals && active.r === tt.r2) { handled(); openTotalsMenu(); return; }
@@ -1568,7 +1579,7 @@ function onGridKey(e) {
   if (e.altKey && !ctrl && (k === '=' || e.code === 'Equal')) { handled(); run('autosum'); return; }
   // 그룹 / 그룹 해제 (Shift+Alt+→ / ←)
   if (e.altKey && e.shiftKey && !ctrl && (k === 'ArrowRight' || k === 'ArrowLeft')) { handled(); run(k === 'ArrowRight' ? 'outlineGroup' : 'outlineUngroup'); return; }
-  if (e.altKey && k === 'F1') { handled(); run('chartColumn'); return; }
+  if (e.altKey && !ctrl && !e.shiftKey && k === 'F1') { handled(); run('chartColumn'); return; }
   // ── 엑셀 바로 가기 키 ──
   if (ctrl && e.altKey && code === 'KeyV') { handled(); run('pasteSpecial'); return; }
   // Ctrl+Shift+V: 값만 붙여넣기 (Microsoft 365)
@@ -1607,7 +1618,7 @@ function onGridKey(e) {
     if (code === 'BracketLeft') { handled(); run('selectPrecedents'); return; }
     if (code === 'BracketRight') { handled(); run('selectDependents'); return; }
     if (code === 'Quote') { handled(); copyFromAbove(e.shiftKey); return; }
-    if (k === 'F2') { handled(); run('print'); return; }
+    if (k === 'F2' && !e.shiftKey) { handled(); run('print'); return; }
     if (!e.shiftKey && code === 'KeyE') { handled(); run('flashFill'); return; }
     if (!e.shiftKey && code === 'KeyK') { handled(); run('hyperlink'); return; }
     if (!e.shiftKey && code === 'KeyN') { handled(); run('newWorkbook'); return; }
@@ -1672,7 +1683,7 @@ function onGridKey(e) {
     if (k === 'PageUp') { handled(); run('prevSheet'); return; }
     const arrows = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
     if (arrows[k]) { handled(); move(...arrows[k], { extend: e.shiftKey, ctrl: true }); return; }
-    if (map[lower]) { handled(); run(map[lower]); return; }
+    if (!e.shiftKey && map[lower]) { handled(); run(map[lower]); return; }
     return;
   }
 
@@ -1731,6 +1742,7 @@ function onGridKey(e) {
 
 // ───────────────────────── 엑셀 바로 가기 키 도우미 ─────────────────────────
 let lastRepeat = null; // F4 / Ctrl+Y: 마지막 작업 반복
+let endMode = false; // End → 방향키: 현재 데이터 영역 경계로 이동 후 종료
 let extendMode = false; // F8: 선택 영역 확장 모드
 const REPEATABLE = new Set(['insertRows', 'insertCols', 'deleteRows', 'deleteCols', 'mergeCenter', 'wrap', 'clearContents', 'clearFormats', 'clearAll',
   'hideRows', 'hideCols', 'indentInc', 'indentDec', 'incDecimal', 'decDecimal', 'growFont', 'shrinkFont', 'autofitSel', 'autofitRowsSel', 'addSheet', 'fillDown', 'fillRight']);
@@ -3656,10 +3668,10 @@ function sparkEditDialog() {
 
 // ───────────────────────── 시트 보호 ─────────────────────────
 // 보호된 시트에서 명령마다 필요한 권한 (없는 명령은 선택한 셀이 모두 잠기지 않았을 때만)
-const PROTECT_FREE = new Set(['contextSmartLookup','mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mobileFit','privateImportPermission', 'saveLocations', 'publish', 'versionHistory', 'recentFiles', 'dataAnalysis', 'forecastSheet', 'scenarioManager', 'solver', 'undo', 'redo', 'save', 'open', 'backstage', 'print', 'copy', 'find', 'goto', 'prevSheet', 'nextSheet', 'selectRegion',
-  'newWorkbook', 'pivotFieldList', 'tracePrecedents', 'traceDependents', 'removeArrows', 'evaluateFormula', 'errorCheck', 'calculationStatus', 'watchWindow', 'gotoSpecial',
+const PROTECT_FREE = new Set(['contextSmartLookup','mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mobileFit','privateImportPermission', 'saveLocations', 'publish', 'versionHistory', 'recentFiles', 'dataAnalysis', 'forecastSheet', 'scenarioManager', 'solver', 'undo', 'redo', 'save', 'saveAs', 'exportXlsx', 'open', 'backstage', 'print', 'copy', 'find', 'goto', 'prevSheet', 'nextSheet', 'selectRegion',
+  'newWorkbook', 'renameSheet', 'moveCopySheet', 'redoOrRepeat', 'traceError', 'pivotFieldList', 'tracePrecedents', 'traceDependents', 'removeArrows', 'evaluateFormula', 'errorCheck', 'calculationStatus', 'watchWindow', 'gotoSpecial',
   'outlineShow', 'outlineHide', 'freezePanes', 'freezeTop', 'freezeFirstCol', 'circleInvalid', 'clearCircles', 'macros', 'prevComment', 'nextComment',
-  'workbookStats', 'toggleGrid', 'togglePrintGrid', 'toggleFormulaBar', 'toggleHeaders', 'toggleFormulas', 'toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100',
+  'zoomDialog', 'autoCorrectOptions', 'sheetTabColor', 'workbookStats', 'toggleGrid', 'togglePrintGrid', 'toggleFormulaBar', 'toggleHeaders', 'toggleFormulas', 'toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100',
   'recalc', 'shortcuts', 'about', 'whatsNew', 'protectSheet', 'unprotectSheet', 'protectWorkbook', 'fileInfo', 'addSheet', 'deleteSheet', 'duplicateSheet',
   'hideSheet', 'unhideSheet', 'importCsv', 'exportCsv', 'exportHtml', 'exportPdf', 'fullScreen', 'selectPrecedents', 'selectDependents', 'selectComments', 'pageSetup', 'printArea', 'clearPrintArea', 'addPrintArea', 'viewNormal', 'viewPageBreakPreview', 'insertPageBreak', 'removePageBreak', 'resetPageBreaks',
   'pageFitWidth', 'pageFitHeight', 'pageScale', 'orientPortrait', 'orientLandscape', 'insertFunction', 'allowEditRanges', 'unshareWorkbook', 'toggleComment', 'showAllComments', 'hideAllComments', 'selectionPane']);
@@ -9330,7 +9342,7 @@ const KEYTIPS = {
   h1: ['bold', '굵게'], h2: ['italic', '기울임꼴'], h3: ['underline', '밑줄'], hc: ['copy', '복사'], hx: ['cut', '잘라내기'],
   ae: ['textToColumns', '텍스트 나누기'], at: ['toggleFilter', '필터'], am: ['dedupe', '중복된 항목 제거'],
   avv: ['dataValidation', '데이터 유효성 검사'], ass: ['sortDialog', '정렬'], asa: ['sortAsc', '오름차순 정렬'], asd: ['sortDesc', '내림차순 정렬'],
-  aa: ['refreshAll', '모두 새로 고침'], ac: ['clearFilter', '필터 지우기'], ay: ['reapplyFilter', '다시 적용'], aq: ['advancedFilter', '고급 필터'], an: ['consolidate', '통합'], afw: ['webData', '웹에서'], wk: ['navigator', '탐색'], wz: ['focusCellToggle', '포커스 셀'],
+  aa: ['refreshAll', '모두 새로 고침'], ac: ['clearFilter', '필터 지우기'], ay3: ['reapplyFilter', '다시 적용'], aq: ['advancedFilter', '고급 필터'], an: ['consolidate', '통합'], afw: ['webData', '웹에서'], wk: ['navigator', '탐색'], wz: ['focusCellToggle', '포커스 셀'],
   nt: ['createTable', '표'], nv: ['insertPivot', '피벗 테이블'], nsp: ['recommendPivot', '추천 피벗 테이블'], nsf: ['insertSlicer', '슬라이서'], np: ['insertPicture', '그림'],
   nsh: ['shapesMenu', '도형'], nx: ['insertTextbox', '텍스트 상자'], nc: ['chartColumn', '세로 막대형 차트'],
   hoe: ['formatCells', '셀 서식'], hoi: ['autofitSel', '열 너비 자동 맞춤'], hoa: ['autofitRowsSel', '행 높이 자동 맞춤'],
@@ -9356,8 +9368,8 @@ const KEYTIPS = {
   psp: ['pageSetup', '페이지 설정'], rs: ['spellCheck', '맞춤법 검사'],
 };
 const KEYTIP_TABS = { h: 'home', n: 'insert', p: 'layout', m: 'formulas', a: 'data', r: 'review', w: 'view', j: 'tableDesign' };
-const KEYTIP_GROUPS = { wv: '표시', wf: '틀 고정', hb: '테두리', ho: '서식', hm: '병합', he: '지우기', hv: '붙여넣기', ha: '맞춤', hl: '조건부 서식', hi: '삽입', hd: '삭제', hf: '글꼴 · 서식 복사', as: '정렬 · 빠른 채우기', av: '데이터 유효성 검사', af: '가져오기', ps: '페이지 설정' };
-const KEYTIP_REGISTRY = createRibbonKeytipRegistry(TABS, KEYTIPS);
+const KEYTIP_GROUPS = { ...EXCEL_LEGACY_GROUPS, ay: '다시 적용', hs: '정렬 및 필터', wv: '표시', wf: '틀 고정', hb: '테두리', ho: '서식', hm: '병합', he: '지우기', hv: '붙여넣기', ha: '맞춤', hl: '조건부 서식', hi: '삽입', hd: '삭제', hf: '글꼴 · 서식 복사', as: '정렬 · 빠른 채우기', av: '데이터 유효성 검사', af: '가져오기', ps: '페이지 설정' };
+const KEYTIP_REGISTRY = createRibbonKeytipRegistry(TABS, KEYTIPS, EXCEL_KEYTIP_COMPAT);
 const KEYTIP_ENTRIES = new Map(KEYTIP_REGISTRY.entries.map((entry) => [entry.path, entry]));
 const KEYTIP_TAB_PATHS = { ...KEYTIP_TABS, ...KEYTIP_REGISTRY.tabs };
 let keytip = null; // { seq, held, clean }
@@ -9400,7 +9412,7 @@ function activateKeytip(seq) {
   if (entry) {
     // 숨겨진 상황별 탭의 명령은 다른 개체에 잘못 적용하지 않는다.
     if (entry.tabId && TABS.find((t) => t.id === entry.tabId)?.context && !document.querySelector(`[data-ribbon-tab="${entry.tabId}"]`)) return false;
-    if (entry.tabId) ribbon.selectTab(entry.tabId);
+    if (entry.tabId && entry.tabId !== 'file') ribbon.selectTab(entry.tabId);
     const anchor = keytipAnchor(seq, entry.target);
     if (entry.kind === 'input' && !anchor) return false;
     endKeytip();
@@ -9490,13 +9502,20 @@ function closeKeytipMenu() {
 }
 
 function showKeytipMenu(seq) {
-  const anchor = KEYTIP_MENU_ANCHORS[seq] ? keytipAnchor(seq) : null;
+  const legacy = Object.hasOwn(EXCEL_LEGACY_GROUPS, seq);
+  const anchor = KEYTIP_MENU_ANCHORS[seq] ? keytipAnchor(seq) : legacy || seq === 'ay' || seq === 'hs' ? $('ribbonTabs') : null;
   if (!anchor) return;
   anchor.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-  const choices = KEYTIP_REGISTRY.entries.filter((entry) => entry.path.startsWith(seq) && entry.path !== seq);
+  const matching = KEYTIP_REGISTRY.entries.filter((entry) => entry.path.startsWith(seq) && entry.path !== seq);
+  // Legacy menus expose one step at a time; D → F opens the filter submenu,
+  // and no action fires until its complete path is entered.
+  const choices = legacy ? [...new Set(matching.map(entry => entry.path.slice(0, seq.length + 1)))].map(path => {
+    const exact = KEYTIP_ENTRIES.get(path);
+    return { path, label: exact?.label ?? KEYTIP_GROUPS[path] ?? path.toUpperCase() };
+  }) : matching;
   keytipMenu = openMenu(anchor, [
     { title: `${KEYTIP_GROUPS[seq] ?? '리본 메뉴'} · Alt → ${seq.toUpperCase().split('').join(' → ')}` },
-    ...choices.map(({ path, label }) => ({ label, key: path.slice(seq.length).toUpperCase(), action: () => activateKeytip(path) })),
+    ...choices.map(({ path, label }) => ({ label, accessKey: 'none', key: path.slice(seq.length).toUpperCase(), action: () => activateKeytip(path) })),
   ], { minWidth: 230, scroll: true });
   keytipMenu.classList.add('keytip-command-menu');
   keytipMenu.dataset.keytipMenu = seq;
@@ -9534,7 +9553,9 @@ function endKeytip() {
 
 /** 반환 true 면 키를 처리함. 키보드의 물리 code를 사용해 한글 입력 상태에서도 동일하게 동작합니다. */
 function handleKeytipKey(e) {
-  const code = shortcutCode(e);
+  // An active Alt sequence owns physical letter keys even when Korean IME
+  // reports Process/229. Ordinary composing text keeps the stricter guard.
+  const code = (keytip || e.altKey) && /^(Key[A-Z]|Digit\d)$/.test(e.code ?? '') ? e.code : shortcutCode(e);
   if (e.defaultPrevented || e.target?.closest?.('.dialog')) return false;
   if (e.getModifierState?.('AltGraph') || e.ctrlKey || e.metaKey) {
     if (keytip) endKeytip();
@@ -9545,6 +9566,7 @@ function handleKeytipKey(e) {
     endKeytip(); return false;
   }
   if (e.key === 'Alt' || (e.key === 'F10' && !e.shiftKey && !e.altKey)) {
+    if (endMode) { endMode = false; setMode(); }
     e.preventDefault();
     if (e.repeat) return true;
     if (keytip) endKeytip();
@@ -14468,6 +14490,7 @@ function jumpComment(dir) {
 
 // ───────────────────────── 시트 ─────────────────────────
 function switchSheet(i, restore = true) {
+  endMode = false;
   endBorderDraw();
   chartElementDrag = null;
   endDraw(); shapeEdit = null; shapePointDrag = null;
@@ -14597,15 +14620,19 @@ function contrastText(hex) {
 
 /** 시트 탭 색 */
 function tabColorMenu(anchor, i) {
+  const valid = sheetDialogGuard();
+  if (!valid || !wb.sheets[i]) return;
   const targets = [i];
   paletteMenu(anchor, '색 없음', (color) => {
+    if (!valid()) return;
     wb.transact(() => { for (const t of targets) wb.setSheetProp(t, 'tabColor', color || null); }, meta());
     renderSheetTabs();
   });
 }
 
 function renameSheetInline(i) {
-  if (structureLocked()) return;
+  const valid = sheetDialogGuard();
+  if (!valid || !wb.sheets[i]) return;
   const tab = dom.sheetTabs.children[i];
   if (!tab) return;
   const input = el('input', { value: wb.sheets[i].name, maxlength: 31 });
@@ -14616,7 +14643,7 @@ function renameSheetInline(i) {
   const finish = (ok) => {
     if (done) return;
     done = true;
-    if (ok && input.value.trim() !== wb.sheets[i].name) {
+    if (ok && valid() && input.value.trim() !== wb.sheets[i].name) {
       const res = wb.transact(() => wb.renameSheet(i, input.value), meta());
       if (!res) toast('시트 이름이 올바르지 않거나 이미 사용 중입니다.');
     }
@@ -14625,8 +14652,8 @@ function renameSheetInline(i) {
   };
   input.addEventListener('keydown', (e) => {
     e.stopPropagation();
-    if (e.key === 'Enter') finish(true);
-    if (e.key === 'Escape') finish(false);
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); finish(e.key === 'Enter'); }
   });
   input.addEventListener('blur', () => finish(true));
   input.addEventListener('mousedown', (e) => e.stopPropagation());
@@ -18512,6 +18539,7 @@ const SHORTCUTS = [
   ['Shift+방향키 / F8', '선택 영역 확장 / 확장 모드 켜기·끄기'],
   ['Ctrl+Space / Shift+Space', '열 전체 / 행 전체 선택'],
   ['Ctrl+A / Ctrl+Shift+*', '모두 선택 / 현재 영역 선택'],
+  ['End → 방향키', '현재 데이터 영역의 경계로 이동 (Shift: 선택 확장)'],
   ['Ctrl+Home / Ctrl+End', '처음 셀 / 마지막 셀로 이동'],
   ['Ctrl+. / Shift+Backspace / Ctrl+Backspace', '선택 영역의 다음 모서리 / 활성 셀만 선택 / 활성 셀로 화면 이동'],
   ['Alt+PageDown / Alt+PageUp', '한 화면 오른쪽 / 왼쪽으로'],
@@ -18527,6 +18555,11 @@ const SHORTCUTS = [
   ['Ctrl+Q', '빠른 분석'],
   ['Alt+; / Ctrl+\\', '화면에 보이는 셀만 선택 / 행 내용 차이'],
   ['F7', '맞춤법 검사'],
+  ['Alt → D → F → F / Alt → A → T', '필터 켜기/끄기 (이전 Excel 메뉴 / 데이터 리본)'],
+  ['Alt → D → F → S / Alt → A → C', '필터 조건 지우기 (필터 단추 유지)'],
+  ['Ctrl+Shift+G', '통합 문서 통계'],
+  ['Ctrl+Shift+F1', '전체 화면'],
+  ['Ctrl+Alt+= / Ctrl+Alt+-', '확대 / 축소'],
   ['Ctrl+Shift+L / Ctrl+Alt+L', '필터 켜기/끄기 / 필터 다시 적용'],
   ['Ctrl+9 / Ctrl+0', '행 숨기기 / 열 숨기기'],
   ['Ctrl+Shift+9 / Ctrl+Shift+0', '행 숨기기 취소 / 열 숨기기 취소'],
@@ -18558,7 +18591,9 @@ const SHORTCUTS = [
   ['Ctrl+Shift+= / Ctrl+-', '행·열 삽입 / 삭제'],
   ['Ctrl+PageUp / PageDown', '이전 / 다음 시트'],
   ['Ctrl+마우스 휠', '확대/축소'],
-  ['Shift+F11', '새 시트'],
+  ['Shift+F11 / Alt+Shift+F1', '새 시트'],
+  ['Ctrl+F12 / Shift+F12 / Ctrl+Shift+F12', '열기 / 저장 / 인쇄'],
+  ['Ctrl+Shift+S', '다른 이름으로 저장'],
   ['Shift+F2', '메모 편집'],
   ['Shift+F10', '바로 가기 메뉴'],
   ['Ctrl+N / Ctrl+O / Ctrl+S / F12', '새 통합 문서 / 열기 / 저장 / 다른 이름으로 저장'],
@@ -19891,6 +19926,11 @@ const COMMANDS = {
   autosum: () => autoSum('SUM'),
   fillDown: () => fillCopy('down'),
   fillRight: () => fillCopy('right'),
+  fillUp: () => fillCopy('up'),
+  fillLeft: () => fillCopy('left'),
+  traceError,
+  renameSheet: () => renameSheetInline(si),
+  moveCopySheet: () => moveCopySheetDialog(si),
   clearContents: () => clearSelection('contents'),
   clearAll: () => clearSelection('all'),
   clearFormats: () => clearSelection('formats'),
@@ -19908,6 +19948,7 @@ const COMMANDS = {
   replace: () => openFindDialog('replace'),
   goto: gotoDialog,
   pasteValuesKey: () => pasteFromButton('values'),
+  redoOrRepeat: () => { if (wb.canRedo()) run('redo'); else repeatLast(); },
   repeatLast, flashFill: flashFillCmd, pasteSpecial: pasteSpecialDialog, hyperlink: hyperlinkDialog, removeHyperlink,
   selectPrecedents, selectDependents, selectComments,
   unhideRows: () => hideSel('row', false), unhideCols: () => hideSel('col', false),
@@ -20147,6 +20188,12 @@ const COMMANDS = {
   recalc: () => { netClear(); wb.calculateNow(); wb.invalidate(); gv.renderAll(); updateStatusCalc(); },
   calcNowSheet: () => { wb.calculateSheetNow(si); gv.renderAll(); updateStatusCalc(); },
   options: () => optionsDialog(),
+  autoCorrectOptions: () => optionsDialog(3),
+  sheetTabColor: () => {
+    const b = document.querySelector('.sheet-tab.active')?.getBoundingClientRect();
+    tabColorMenu({ x: b?.left ?? 200, y: (b?.top ?? 600) - 330 }, si);
+  },
+  zoomDialog: () => formDialog('화면 배율', [{ name: 'zoom', label: '확대/축소 (%)', type: 'number', value: view.zoom, min: 25, max: 400 }], v => setZoom(Number(v.zoom))),
   calcAuto: () => changeCalculation('auto'),
   calcManual: () => changeCalculation('manual'),
 
@@ -20163,7 +20210,7 @@ const COMMANDS = {
     });
     openDialog({ title: '바로 가기 키', width: 680,
       body: el('div', {}, el('button', { type: 'button', class: 'btn', onclick: () => openKeyboardCheck() }, '키보드 단축키 확인'), el('p', {}, 'iPad·Mac에서는 Command(⌘)+C·V를 사용합니다. 위셀 셀 선택 상태에서는 Ctrl+C·V도 지원합니다.'), el('table', { class: 'kbd-table' }, SHORTCUTS.map(([k, d]) => el('tr', {}, el('td', {}, k), el('td', {}, d)))),
-        el('h3', {}, '리본 키 순서'), el('p', {}, 'Alt를 눌렀다 뗀 뒤 글자를 순서대로 누르세요. 한글 입력 상태에서도 같은 위치의 키를 누르면 됩니다. Z와 숫자로 표시되는 경로는 WIXEL 보충 키입니다.'),
+        el('h3', {}, '리본 키 순서'), el('p', {}, 'Alt를 눌렀다 뗀 뒤 글자를 순서대로 누르세요. 한글 입력 상태에서도 같은 위치의 키를 누르면 됩니다. D·E·I·O·T·V는 이전 Excel 메뉴 경로도 지원합니다. Z와 숫자로 표시되는 경로는 WIXEL 보충 키입니다.'),
         search, el('table', { class: 'kbd-table' }, rows.map(({ row }) => row))),
       buttons: [{ label: '닫기', primary: true }], onOpen: () => search.focus(),
     });
@@ -20177,6 +20224,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['Excel 단축키와 팝업 접근키 보완', ['Alt → D → F → F 필터를 비롯한 이전 Excel 메뉴 경로를 추가했습니다. 현대 리본 키와 직접 조합키를 점검하여 Shift가 있는 키를 다른 기능으로 잘못 처리하던 문제를 수정했습니다.', '팝업 접근키가 겹치면 고유한 키로 표시·실행하며, 도형과 슬라이서의 Ctrl+1은 선택한 개체의 서식·크기 창을 엽니다.']],
   ['도형과 텍스트 상자 직접 편집', ['F2·더블클릭·텍스트 편집 메뉴로 도형 안에서 커서를 놓고 입력합니다. 선택한 글자에 굵게·기울임·밑줄·글꼴·크기·색을 적용하고, 리본과 Alt 키 색상표에서도 선택 범위를 유지합니다.', '편집 중 복사·잘라내기·붙여넣기는 선택한 텍스트에만 적용합니다. 한글 입력·줄바꿈·실행 취소와 혼합 텍스트 서식의 XLSX 저장·재열기를 보강했습니다.']],
   ['가져오기 수식 진단 정확성', ['원본 Excel 파일에도 있던 이름 오류를 새 미지원 함수처럼 안내하지 않고 계산 상태에서 원본 오류로 구분합니다. LET/LAMBDA의 지역 함수 호출은 정상 지원 수식으로 판정합니다.']],
   ['색상표와 갤러리 키보드 이동', ['Alt → H → F → C와 Alt → H → H로 연 색상표에서 Alt를 누른 채로도 화살표 이동·Enter 적용·Esc 취소가 가능합니다. 글꼴 검색과 차트 색 구성, 표·피벗·조건부 서식 등 메뉴 안의 견본도 키보드로 선택합니다.']],
@@ -20413,7 +20461,8 @@ function run(cmd, arg, { keepMenu = false } = {}) {
   }
   if (!keepMenu) closeMenus();
   if (['fontDialog', 'formatCells'].includes(cmd) && selectedTextShape()) { shapeDialog(chartSel, null, '텍스트 옵션'); return; }
-  if (viewOnly && protectAction(cmd) !== 'free' && !VIEW_CMDS.has(cmd)) { toast('읽기 전용으로 게시된 문서입니다. [편집용 사본 만들기]를 누르면 고칠 수 있습니다.'); return; }
+  const changesDocument = protectAction(cmd) !== 'free' || STRUCT_CMDS.has(cmd) || cmd === 'sheetTabColor';
+  if (viewOnly && changesDocument && !VIEW_CMDS.has(cmd)) { toast('읽기 전용으로 게시된 문서입니다. [편집용 사본 만들기]를 누르면 고칠 수 있습니다.'); return; }
   if (editing && !NO_COMMIT.has(cmd)) {
     if (cmd === 'undo') { cancelEdit(); return; }
     if (!commitEdit()) return;
@@ -20423,7 +20472,7 @@ function run(cmd, arg, { keepMenu = false } = {}) {
   if (SHAPE_TEXT_COMMANDS.has(cmd) && selectedTextShape()) { if (objectEditBlocked()) return; }
   else if (protectBlocked(protectAction(cmd), sel, cmd, () => run(cmd, arg, { keepMenu }))) return;
   if (STRUCT_CMDS.has(cmd) && structureLocked()) return;
-  if (wb.props?.markedFinal && protectAction(cmd) !== 'free' && !VIEW_CMDS.has(cmd) && !FINAL_OK.has(cmd)) { finalNotice(); return; }
+  if (wb.props?.markedFinal && changesDocument && !VIEW_CMDS.has(cmd) && !FINAL_OK.has(cmd)) { finalNotice(); return; }
   try {
     const out = fn(arg);
     if (out && typeof out.catch === 'function') out.catch((err) => reportError(err, cmd));
@@ -20431,7 +20480,7 @@ function run(cmd, arg, { keepMenu = false } = {}) {
     reportError(err, cmd);
   }
   if (REPEATABLE.has(cmd)) lastRepeat = () => run(cmd, arg);
-  if (!keepMenu && !document.activeElement?.closest('.dialog,.menu')) focusGrid();
+  if (!keepMenu && !document.activeElement?.closest('.dialog,.menu') && !(cmd === 'renameSheet' && dom.sheetTabs.contains(document.activeElement))) focusGrid();
 }
 
 function restoreMeta(m) {
@@ -20509,7 +20558,7 @@ function mobileToolsDialog() {
     disabled: cmd => contextCommandDisabled(cmd === 'edit' ? 'paste' : cmd), run: cmd => run(cmd),
     edit: () => startEdit('edit'), fit: fitMobileScreen, preference: p => mobileWork.setPreference(p),
     toggleAutosave: () => dom.autosave.click(),
-    zoomDialog: () => formDialog('화면 배율', [{ name: 'zoom', label: '확대/축소 (%)', type: 'number', value: view.zoom, min: 25, max: 400 }], v => setZoom(Number(v.zoom))),
+    zoomDialog: () => run('zoomDialog'),
     tab: id => { if (id === 'file') run('backstage'); else { ribbon.selectTab(id); $('ribbon').scrollLeft = 0; document.querySelector(`[data-ribbon-tab="${id}"]`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); gv.layout(); } },
   });
 }
@@ -20744,6 +20793,7 @@ function bindEvents() {
     if (handleKeytipKey(e)) e.stopPropagation();
   }, true);
   document.addEventListener('mousedown', (e) => {
+    if (endMode) { endMode = false; setMode(); }
     if (!e.target.closest?.('.keytip-badges, .keytip-command-menu')) {
       endKeytip();
       if (e.target === ed || dom.view.contains(e.target)) shortcutInputGuard = false;
@@ -20751,7 +20801,7 @@ function bindEvents() {
   }, true);
   $('ribbon').addEventListener('scroll', () => { if (keytip) drawKeytipBadges(); });
   window.addEventListener('resize', () => { if (keytip) showKeytip(); });
-  window.addEventListener('blur', endKeytip);
+  window.addEventListener('blur', () => { endMode = false; endKeytip(); });
   // 그림 개체를 선택한 채로 입력하면 셀 대신 도형 글자로 (차트·그림은 무시)
   const objectTyped = () => {
     const v = ed.value;
@@ -20905,6 +20955,8 @@ function bindEvents() {
   // 이름 상자
   dom.nameBox.addEventListener('focus', () => { refreshNameList(); dom.nameBox.select(); });
   dom.nameBox.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key === 'Escape') e.preventDefault();
     if (e.key === 'Enter') { e.preventDefault(); if (nameBoxEnter(dom.nameBox.value)) focusGrid(); }
     if (e.key === 'Escape') { dom.nameBox.value = nameBoxLabel(); focusGrid(); }
   });
@@ -20912,6 +20964,9 @@ function bindEvents() {
 
   dom.search.addEventListener('keydown', (e) => {
     e.stopPropagation();
+    if (e.isComposing || e.keyCode === 229) return;
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && shortcutCode(e) === 'KeyS') { e.preventDefault(); run(e.shiftKey ? 'saveAs' : 'save'); return; }
+    if (e.key === 'Enter' || e.key === 'Escape') e.preventDefault();
     if (e.key === 'Enter') { findState.text = dom.search.value; findNext(dom.search.value); }
     if (e.key === 'Escape') { dom.search.value = ''; focusGrid(); }
   });
@@ -20925,6 +20980,8 @@ function bindEvents() {
     let cancelled = false;
     input.addEventListener('keydown', (e) => {
       e.stopPropagation();
+      if (e.isComposing || e.keyCode === 229) return;
+      if (e.key === 'Enter' || e.key === 'Escape') e.preventDefault();
       if (e.key === 'Enter') input.blur();
       if (e.key === 'Escape') { cancelled = true; input.blur(); }
     });
@@ -20960,11 +21017,11 @@ function bindEvents() {
   dom.fileInput.addEventListener('change', onFilePicked);
 
   document.addEventListener('keydown', (e) => {
-    if (e.target === dom.editor || e.target === dom.formula) return;
-    if (e.altKey && (e.key === 'q' || e.key === 'Q')) { e.preventDefault(); dom.search.focus(); return; }
+    if (e.defaultPrevented || e.isComposing || e.keyCode === 229 || e.getModifierState?.('AltGraph') || e.target === dom.editor || e.target === dom.formula) return;
+    if (e.altKey && !e.ctrlKey && !e.metaKey && shortcutCode(e) === 'KeyQ') { e.preventDefault(); dom.search.focus(); return; }
     if (isDialogOpen() || document.querySelector('.backstage')) return;
     if (isMenuOpen() && e.key === 'Escape') { closeMenus(); focusGrid(); return; }
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); run('save'); }
+    if (!e.altKey && (e.ctrlKey || e.metaKey) && shortcutCode(e) === 'KeyS') { e.preventDefault(); run(e.shiftKey ? 'saveAs' : 'save'); }
   });
   document.addEventListener('keydown', (e) => {
     if (e.altKey && (e.key === 'q' || e.key === 'Q') && e.target === dom.editor && !editing) { e.preventDefault(); dom.search.focus(); }

@@ -18,3 +18,25 @@ export function appleTouchDevice(platform = globalThis.navigator) {
   return !!platform && (/iPad|iPhone|iPod/.test(platform.userAgent || '')
     || (/^Mac/.test(platform.platform || '') && platform.maxTouchPoints > 1));
 }
+
+// Exact modifier combinations run before broader grid fallbacks. No aliases
+// for unsupported desktop features (for example threaded comments or VBA).
+export function excelDirectCommand(event) {
+  if (!event || event.isComposing || event.keyCode === 229 || event.getModifierState?.('AltGraph')) return '';
+  const code = shortcutCode(event), ctrl = !!(event.ctrlKey || event.metaKey), alt = !!event.altKey, shift = !!event.shiftKey;
+  if (!ctrl && alt && shift && event.key === 'F1') return 'addSheet';
+  if (ctrl && !alt && shift) {
+    if (event.key === 'F1') return 'fullScreen';
+    if (event.key === 'F12') return 'print';
+    return { KeyG: 'workbookStats', KeyS: 'saveAs', KeyZ: 'redo' }[code] ?? '';
+  }
+  if (!alt && event.key === 'F12') {
+    if (ctrl && !shift) return 'open';
+    if (!ctrl && shift) return 'save';
+  }
+  if (ctrl && alt && !shift) {
+    if (code === 'Equal' || code === 'NumpadAdd') return 'zoomIn';
+    if (code === 'Minus' || code === 'NumpadSubtract') return 'zoomOut';
+  }
+  return '';
+}

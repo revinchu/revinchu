@@ -86,7 +86,7 @@ export function auditRibbonKeytips(controls, entries, tabs = {}) {
   return { total: controls.length, covered: covered.size, missingControlIds: controls.filter(c => !covered.has(c.id)).map(c => c.id), duplicatePaths, prefixConflicts, invalidEntries };
 }
 
-export function createRibbonKeytipRegistry(tabs, legacy = {}) {
+export function createRibbonKeytipRegistry(tabs, legacy = {}, compatibility = []) {
   const controls = collectRibbonControls(tabs);
   const knownTabs = new Set(tabs.map(t => t.id));
   const tabKeys = Object.fromEntries(Object.entries(RIBBON_TAB_KEYS).filter(([, id]) => knownTabs.has(id)));
@@ -97,7 +97,7 @@ export function createRibbonKeytipRegistry(tabs, legacy = {}) {
   const add = (entry) => {
     const old = byPath.get(entry.path);
     if (old) {
-      if (!actionMatches(old, entry)) throw new Error(`리본 키 충돌: ${entry.path}`);
+      if (!actionMatches(old, entry) && !(old.kind === entry.kind && old.target === entry.target && !old.tabId)) throw new Error(`리본 키 충돌: ${entry.path}`);
       Object.assign(old, entry); return old;
     }
     entries.push(entry); byPath.set(entry.path, entry); return entry;
@@ -112,9 +112,13 @@ export function createRibbonKeytipRegistry(tabs, legacy = {}) {
     const control = controls.find(c => actionMatches(c, preferred));
     if (control) add({ ...preferred, label: control.label, controlId: control.id, primary: false });
   }
+  for (const compatible of compatibility) {
+    const control = controls.find(c => actionMatches(c, compatible));
+    add({ ...compatible, controlId: control?.id ?? null, primary: false });
+  }
   // Fixed-width codes avoid Z1 consuming Z10. Never silently drop a control.
   for (const control of controls) {
-    let entry = entries.find(e => e.controlId === control.id && e.source !== 'legacy') ?? entries.find(e => e.controlId === control.id);
+    let entry = entries.find(e => e.controlId === control.id && e.source !== 'legacy' && e.source !== 'excel-legacy') ?? entries.find(e => e.controlId === control.id && e.source === 'legacy');
     if (!entry) {
       const prefix = Object.entries(tabKeys).find(([, id]) => id === control.tabId)?.[0];
       let path = null;

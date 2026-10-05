@@ -1,6 +1,7 @@
 // Alt 키팁 등록표·모든 접두 경로·실제 동작 회귀. 합성 문서와 새 브라우저 컨텍스트만 사용한다.
 // PLAYWRIGHT_MODULE, PLAYWRIGHT_BROWSERS_PATH, WIXEL_URL은 tools/README.md의 다른 브라우저 도구와 같다.
 import assert from 'node:assert/strict';
+import { EXCEL_KEYTIP_COMPAT } from '../src/excel-keytip-compat.js';
 import { readFile } from 'node:fs/promises';
 
 const source = await readFile(new URL('../src/app.js', import.meta.url), 'utf8');
@@ -9,6 +10,7 @@ assert.ok(table, 'app.js KEYTIPS 등록표를 찾을 수 없음');
 const clean = table.replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g, '');
 const entryPattern = /\b([a-z][a-z0-9]*)\s*:\s*\[\s*'([^']+)'\s*,\s*'((?:\\.|[^'])*)'\s*\]/g;
 const entries = [...clean.matchAll(entryPattern)].map((m) => ({ key: m[1], command: m[2], label: m[3] }));
+for (const compatible of EXCEL_KEYTIP_COMPAT) if (!entries.some(e => e.key === compatible.path)) entries.push({ key: compatible.path, command: compatible.target, kind: compatible.kind, label: compatible.label });
 const parsedRemainder = clean.replace(entryPattern, '').replace(/[\s,]/g, '');
 const tabsText = source.match(/const KEYTIP_TABS\s*=\s*\{([^}]+)\}/)?.[1] ?? '';
 const tabs = [...tabsText.matchAll(/\b([a-z])\s*:\s*'([^']+)'/g)].map((m) => m[1]);
@@ -79,7 +81,8 @@ try {
     assert.ok(entries.length > 0); assert.ok(tabs.length > 0);
     assert.deepEqual(duplicates, []); assert.deepEqual(prefixConflicts, []);
     const commands = new Set(await p.evaluate(() => window.tabula.commands()));
-    assert.deepEqual(entries.filter((e) => !commands.has(e.command)), [], '존재하지 않는 명령');
+    const menus = new Set(await p.evaluate(() => window.tabula.menus()));
+    assert.deepEqual(entries.filter((e) => !(e.kind === 'menu' ? menus : commands).has(e.command)), [], '존재하지 않는 명령 또는 메뉴');
     for (const [key, command] of [['wvg', 'toggleGrid'], ['wvh', 'toggleHeaders'], ['wvf', 'toggleFormulaBar']]) {
       assert.equal(entries.find((e) => e.key === key)?.command, command, `${key.toUpperCase()} 등록`);
     }

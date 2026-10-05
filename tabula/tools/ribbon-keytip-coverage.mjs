@@ -178,13 +178,19 @@ try {
     }
     assert.deepEqual(await snapshot(p), before); await idleEditor(p);
   });
-  await test('조합 중인 키는 리본 명령이나 셀 입력으로 실행하지 않음', async p => {
-    const before = await snapshot(p); await p.keyboard.press('Alt');
+  await test('일반 한글 조합은 명령이 아니며 활성 Alt 순서만 물리 키를 처리한다', async p => {
+    const before = await snapshot(p);
     await p.evaluate(() => {
       const ed = document.getElementById('cellEditor');
       for (const [key, code] of [['ㅗ', 'KeyH'], ['ㄹ', 'KeyF'], ['ㅊ', 'KeyC']]) ed.dispatchEvent(new KeyboardEvent('keydown', { key, code, keyCode: 229, isComposing: true, bubbles: true, cancelable: true }));
     });
-    assert.equal(await p.locator('.palette').count(), 0); assert.equal((await p.evaluate(() => document.body.dataset.keytipSequence)), '');
+    assert.equal(await p.locator('.palette').count(), 0); assert.equal(await p.locator('body.keytips').count(), 0);
+    await p.keyboard.press('Alt');
+    await p.evaluate(() => {
+      const ed = document.getElementById('cellEditor');
+      for (const code of ['KeyH', 'KeyF', 'KeyC']) ed.dispatchEvent(new KeyboardEvent('keydown', { key: 'Process', code, keyCode: 229, isComposing: true, bubbles: true, cancelable: true }));
+    });
+    await p.locator('.palette').waitFor();
     await p.keyboard.press('Escape'); await idleEditor(p); assert.deepEqual(await snapshot(p), before);
   });
   await test('한글 물리 키·지연 composition은 팔레트 취소 뒤 셀/선택을 오염하지 않음', async p => {

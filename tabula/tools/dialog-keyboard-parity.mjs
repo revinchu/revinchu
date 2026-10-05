@@ -71,9 +71,9 @@ try {
   const keys=await p.locator('#keyScroller button').evaluateAll(ns=>ns.map(n=>n.dataset.resolvedAccessKey));ok(keys.every(Boolean));await p.locator('#scrollKey17').scrollIntoViewIfNeeded();await raf(p);
   eq(await p.locator('#keyScroller button').evaluateAll(ns=>ns.map(n=>n.dataset.resolvedAccessKey)),keys);eq(await p.locator('#scrollKey17 .access-key-hint').getAttribute('data-access-caption'),'('+keys[17].toUpperCase()+')');await p.keyboard.press('Alt+'+keys[17]);eq(await p.evaluate(()=>parityCalls),[17]);
  });
- await test('동일 명시 키는 순환·동적 표시 뒤 표기 중복/관찰자 반복 없음',async p=>{
+ await test('동일 명시 키는 재배정·동적 표시 뒤 표기 중복/관찰자 반복 없음',async p=>{
   await ui(p,({openDialog,el})=>openDialog({title:'순환 키',body:el('div',{id:'cycleBody'},el('button',{accessKey:'a',onclick:()=>parityCalls.push('one')},'첫째'),el('button',{accessKey:'a',onclick:()=>parityCalls.push('two')},'둘째'),el('button',{id:'showLater',hidden:true,accessKey:'b'},'나중'))}));await raf(p);
-  await p.keyboard.press('Alt+a');eq(await p.evaluate(()=>document.activeElement.textContent),'첫째');await p.keyboard.press('Alt+a');eq(await p.evaluate(()=>document.activeElement.textContent),'둘째');await p.keyboard.press('Enter');eq(await p.evaluate(()=>parityCalls),['two']);
+  await p.keyboard.press('Alt+a');eq(await p.evaluate(()=>parityCalls),['one']);const second=p.locator('#cycleBody button').nth(1),secondKey=await second.getAttribute('data-resolved-access-key');ok(secondKey!=='a');await p.keyboard.press('Alt+'+secondKey);eq(await p.evaluate(()=>parityCalls),['one','two']);
   await p.evaluate(()=>document.querySelector('#showLater').hidden=false);await raf(p);eq(await p.locator('#showLater .access-key-hint').count(),1);
   const mutations=await p.evaluate(()=>new Promise(resolve=>{let count=0;const observer=new MutationObserver(rs=>count+=rs.length);observer.observe(document.querySelector('.dialog'),{subtree:true,childList:true,attributes:true});setTimeout(()=>{observer.disconnect();resolve(count);},150);}));eq(mutations,0,'정지 상태에서 힌트 갱신 무한반복 없음');
  });

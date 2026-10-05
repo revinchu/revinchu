@@ -75,11 +75,11 @@ try {
     await p.keyboard.press('Alt+t'); assert.equal(await p.evaluate(() => document.activeElement.tagName), 'SELECT');
     await p.keyboard.press('ArrowDown'); assert.equal(await p.getByRole('dialog').getByRole('combobox').inputValue(), '2');
   });
-  await test('중복 명시 키는 포커스 순환, Enter에서 선택 항목만 실행', async (p) => {
+  await test('중복 명시 키는 재배정하고 표시 키가 명령을 한 번 실행', async (p) => {
     await openUi(p, ({ openDialog, el }) => openDialog({ title: '중복 키', body: el('input', { accessKey: 'n' }), buttons: ['첫째', '둘째'].map((label) => ({ label, accessKey: 'a', action: () => { window.accessCalls.push(label); return false; } })) }));
-    await p.keyboard.press('Alt+a'); assert.equal(await p.evaluate(() => document.activeElement.textContent), '첫째');
-    await p.keyboard.press('Alt+a'); assert.equal(await p.evaluate(() => document.activeElement.textContent), '둘째');
-    assert.deepEqual(await calls(p), []); await p.keyboard.press('Enter'); assert.deepEqual(await calls(p), ['둘째']);
+    await p.keyboard.press('Alt+a'); assert.deepEqual(await calls(p), ['첫째']);
+    const second = p.locator('.dialog-foot button').nth(1), key = await second.getAttribute('data-resolved-access-key');
+    assert.ok(key && key !== 'a'); await p.keyboard.press('Alt+' + key); assert.deepEqual(await calls(p), ['첫째', '둘째']);
   });
   await test('숨김·disabled·disabled fieldset 컨트롤은 키 대상에서 제외', async (p) => {
     await openUi(p, ({ openDialog, el }) => openDialog({ title: '비활성 제외', body: el('div', {}, el('button', { hidden: true, accessKey: 'a', onclick: () => window.accessCalls.push('hidden') }, '숨김'), el('fieldset', { disabled: true }, el('button', { accessKey: 'a', onclick: () => window.accessCalls.push('fieldset') }, '비활성')), el('button', { disabled: true, accessKey: 'a', onclick: () => window.accessCalls.push('disabled') }, '비활성2')), buttons: [{ label: '활성', accessKey: 'a', action: () => { window.accessCalls.push('active'); return false; } }] }));
@@ -151,10 +151,10 @@ try {
     await p.keyboard.press('Alt+p'); assert.equal(await p.evaluate(() => document.activeElement.id), 'nativePassword');
     await p.keyboard.press('Alt+f'); assert.deepEqual(await calls(p), ['explicit']);
   });
-  await test('스크롤 밖·숨긴 탭 제외 후 새로 표시한 동적 필드 접근 가능', async (p) => {
+  await test('스크롤 밖 키는 자동 스크롤하여 실행하고 숨긴 탭은 제외', async (p) => {
     await openUi(p, ({ openDialog, el }) => openDialog({ title: '동적 표시', body: el('div', {}, el('button', { id: 'dynamicTarget', hidden: true, accessKey: 'z', onclick: () => window.accessCalls.push('dynamic') }, '동적 대상'), el('div', { style: { height: '50px', overflow: 'auto' } }, el('div', { style: { height: '120px' } }), el('button', { accessKey: 'z', onclick: () => window.accessCalls.push('outside') }, '스크롤 밖'))), buttons: [{ label: '보이기', accessKey: 'v', action: () => { document.querySelector('#dynamicTarget').hidden = false; return false; } }] }));
-    await p.keyboard.press('Alt+z'); assert.deepEqual(await calls(p), []);
-    await p.keyboard.press('Alt+v'); await p.keyboard.press('Alt+z'); assert.deepEqual(await calls(p), ['dynamic']);
+    await p.keyboard.press('Alt+z'); assert.deepEqual(await calls(p), ['outside']);
+    await p.keyboard.press('Alt+v'); await p.keyboard.press('Alt+z'); assert.deepEqual(await calls(p), ['outside', 'dynamic']);
   });
   await test('실제 셀 서식 창에서 Alt 배지 표시 및 폼 필드 포커스', async (p) => {
     await p.keyboard.press('Control+1'); await p.getByRole('dialog').waitFor(); await p.getByRole('dialog').getByRole('tab', { name: '맞춤', exact: true }).click(); await p.keyboard.press('Alt');

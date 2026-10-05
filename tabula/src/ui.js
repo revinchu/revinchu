@@ -3,7 +3,7 @@ import { ICONS } from './icons.js';
 import { prepareKeyboardInput } from './mobile-keyboard.js';
 import { menuNavigationTarget } from './menu-navigation.js';
 import { sanitizeHtml, setSafeHtml } from './safe-html.js';
-import { accessKeyFromLabel, accessKeyCaption, accessKeyFromEvent, accessKeyHint, accessKeyAliases, dialogButtonAccessKey, allocateAccessKeys } from './access-keys.js';
+import { accessKeyFromLabel, accessKeyCaption, accessKeyDisplayLabel, accessKeyFromEvent, accessKeyHint, dialogButtonAccessKey, allocateAccessKeys } from './access-keys.js';
 
 export function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -52,6 +52,7 @@ let accessKeyHandler = null;
 export function setAccessKeyHandler(fn) { accessKeyHandler = fn; }
 const accessMemory = new WeakMap(), menuAccessOwners = new WeakMap(), accessScopeOrder = new WeakMap(), accessScopeClose = new WeakMap(), menuToolbars = new WeakMap(), menuToolbarObservers = new WeakMap(), menuAnchors = new WeakMap(), menuMinimumWidths = new WeakMap(), consumedAccessKeys = new Set();
 const dialogFocusState = new WeakMap();
+const accessLabelSources = new WeakMap(), accessTextEdits = new WeakMap(), accessAttributeEdits = new WeakMap();
 const accessCaptionNodes = new WeakMap(), accessScopeTargets = new WeakMap(), accessObservers = new WeakMap();
 let accessOrder = 0;
 let accessMode = false, accessScope = null, accessLayer = null;
@@ -111,7 +112,7 @@ function accessText(node, excludeButtons = false) {
   let text = '', part; while ((part = walker.nextNode())) text += part.textContent;
   return text.trim();
 }
-function associatedAccessLabel(target) {
+function rawAssociatedAccessLabel(target) {
   const own = target.getAttribute('aria-label') ?? accessText(target);
   if (accessKeyFromLabel(own)) return own;
   const labels = [...(target.labels ?? [])];
@@ -133,11 +134,33 @@ function associatedAccessLabel(target) {
   }
   return texts[0] ?? own;
 }
+function associatedAccessLabel(target) {
+  const label = rawAssociatedAccessLabel(target), previous = accessLabelSources.get(target);
+  return previous && previous.displayed === label ? previous.original : label;
+}
+function updateAccessLabel(target, host, label, key) {
+  if (host) {
+    const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT, { acceptNode: node => node.parentElement?.closest('.access-key-hint,.ico,.mi-key,svg,[data-access-preview]') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
+    let node;
+    while ((node = walker.nextNode())) {
+      const previous = accessTextEdits.get(node), source = previous?.rendered === node.data ? previous.source : node.data;
+      if (!accessKeyFromLabel(source)) continue;
+      const rendered = accessKeyDisplayLabel(source, key); accessTextEdits.set(node, { source, rendered });
+      if (node.data !== rendered) node.data = rendered;
+    }
+  }
+  for (const attribute of ['aria-label', 'title']) {
+    const value = target.getAttribute(attribute); if (value === null) continue;
+    const records = accessAttributeEdits.get(target) ?? {}, previous = records[attribute], source = previous?.rendered === value ? previous.source : value;
+    if (!accessKeyFromLabel(source)) continue;
+    const rendered = accessKeyDisplayLabel(source, key); records[attribute] = { source, rendered }; accessAttributeEdits.set(target, records);
+    if (value !== rendered) target.setAttribute(attribute, rendered);
+  }
+  accessLabelSources.set(target, { original: label, displayed: rawAssociatedAccessLabel(target) });
+}
 function showAccessCaption(target, key, label, scope) {
   let hint = accessCaptionNodes.get(target);
-  const caption = accessKeyCaption(label, key);
   // 미니 서식 도구 모음은 아이콘/입력 전용이다. 접근키 실행은 유지하되 글자 힌트로 칸을 넓히지 않는다.
-  if (!caption || target.closest('.context-mini-toolbar') || target.matches('[data-dialog-close-head],.dialog-close')) { hint?.remove(); return; }
   let host;
   if (target.matches('button,a,[role="tab"],[role="menuitem"],[role="button"],[role="option"]')) {
     const explicit = target.querySelector('[data-access-caption-host]');
@@ -154,7 +177,9 @@ function showAccessCaption(target, key, label, scope) {
       if (at.parentElement?.matches('.dialog,.dialog-body,.menu')) break;
     }
   }
-  if (!host || host.closest('[aria-hidden="true"]')) { hint?.remove(); return; }
+  updateAccessLabel(target, host, label, key);
+  const caption = accessKeyCaption(accessKeyDisplayLabel(label, key), key);
+  if (!caption || target.closest('.context-mini-toolbar') || target.matches('[data-dialog-close-head],.dialog-close') || !host || host.closest('[aria-hidden="true"]')) { hint?.remove(); return; }
   if (!hint) { hint = el('span', { class: 'access-key-hint', 'aria-hidden': 'true' }); accessCaptionNodes.set(target, hint); }
   if (hint.dataset.accessCaption !== caption) hint.dataset.accessCaption = caption;
   if (hint.dataset.key !== key) hint.dataset.key = key;
@@ -175,9 +200,13 @@ function watchAccessScope(scope) {
     });
   };
   const observer = new MutationObserver((records) => {
-    if (records.some((record) => record.type !== 'childList' || [...record.addedNodes, ...record.removedNodes].some((node) => !generated(node)))) schedule();
+    if (records.some(record => {
+      if (record.type === 'characterData' && accessTextEdits.get(record.target)?.rendered === record.target.data) return false;
+      if (record.type === 'attributes' && accessAttributeEdits.get(record.target)?.[record.attributeName]?.rendered === record.target.getAttribute(record.attributeName)) return false;
+      return record.type !== 'childList' || [...record.addedNodes, ...record.removedNodes].some(node => !generated(node));
+    })) schedule();
   });
-  observer.observe(scope, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['hidden', 'disabled', 'aria-disabled', 'aria-label', 'aria-labelledby', 'class', 'style', 'data-access-key', 'data-access-aliases'] });
+  observer.observe(scope, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['hidden', 'disabled', 'aria-disabled', 'aria-label', 'aria-labelledby', 'class', 'style', 'data-access-key', 'data-access-aliases', 'data-access-default'] });
   const life = new MutationObserver(() => { if (!scope.isConnected) dispose(); });
   const layer = scope.closest('#dialogLayer,#menuLayer') ?? scope.parentElement;
   if (layer) life.observe(layer, { childList: true });
@@ -187,7 +216,7 @@ function watchAccessScope(scope) {
   };
   accessObservers.set(scope, dispose);
 }
-function prepareAccessKeys(scope) {
+function prepareAccessKeys(scope, { includeClipped = false } = {}) {
   const closeHead = scope.querySelector(':scope > .dialog-head button[data-dialog-close-head]');
   if (closeHead) {
     const otherClose = [...scope.querySelectorAll('button')].some((node) => node !== closeHead && node.dataset.accessKey !== 'none' && accessVisible(node) && dialogButtonAccessKey(node.getAttribute('aria-label') ?? node.textContent) === 'd');
@@ -199,7 +228,7 @@ function prepareAccessKeys(scope) {
     accessCaptionNodes.get(node)?.remove();
   }
   const toolbar = menuToolbars.get(scope);
-  const visible = [...scope.querySelectorAll(ACCESS_CONTROLS), ...(toolbar?.isConnected ? toolbar.querySelectorAll(ACCESS_CONTROLS) : [])].filter((node) => node !== scope && accessVisible(node, true, true) && node.dataset.accessKey !== 'none' && !node.closest('.access-key-layer'));
+  const visible = [...scope.querySelectorAll(ACCESS_CONTROLS), ...(toolbar?.isConnected ? toolbar.querySelectorAll(ACCESS_CONTROLS) : [])].filter((node) => node !== scope && accessVisible(node, true, true) && (node.closest('.dialog,.menu,[data-access-scope="popup"]') === scope || toolbar?.contains(node)) && node.dataset.accessKey !== 'none' && !node.closest('.access-key-layer'));
   const current = new Set(visible);
   for (const target of accessScopeTargets.get(scope) ?? []) if (!current.has(target)) {
     accessCaptionNodes.get(target)?.remove(); target.removeAttribute('aria-keyshortcuts'); delete target.dataset.resolvedAccessKey; delete target.dataset.accessKeySource;
@@ -207,28 +236,26 @@ function prepareAccessKeys(scope) {
   accessScopeTargets.set(scope, current);
   const targets = visible.filter((node) => !node.matches(':disabled,[aria-disabled="true"]'));
   const enabled = new Set(targets), disabled = visible.filter((node) => !enabled.has(node));
-  const details = targets.map((node) => ({ explicit: node.dataset.accessKey, aliases: node.dataset.accessAliases, label: associatedAccessLabel(node), previous: accessMemory.get(node) }));
-  // 작은 화면에서 메뉴 아래쪽 항목이 스크롤 밖이어도 그 명시 키를 미니 단추가 빼앗지 않는다.
-  const reserved = scope.dataset.contextMenu ? [...scope.querySelectorAll('[data-access-key],[data-access-aliases]')].filter((node) => !targets.includes(node)) : disabled;
-  const reservations = reserved.map((node) => ({ explicit: node.dataset.accessKey || accessKeyFromLabel(associatedAccessLabel(node)), aliases: node.dataset.accessAliases })).filter((item) => /^[a-z0-9]$/i.test(item.explicit ?? '') || accessKeyAliases(item.aliases).length);
-  const keys = allocateAccessKeys([...details, ...reservations]);
+  const allocated = [...targets, ...disabled];
+  const details = allocated.map(node => ({ explicit: node.dataset.accessKey, default: node.dataset.accessDefault === 'true', aliases: node.dataset.accessAliases, label: associatedAccessLabel(node), previous: accessMemory.get(node) }));
+  const keys = allocateAccessKeys(details);
   const entries = targets.map((target, i) => {
-    const entry = { target, ...keys[i], aliases: accessKeyAliases(details[i].aliases) };
-    if (!entry.key) { target.removeAttribute('aria-keyshortcuts'); delete target.dataset.resolvedAccessKey; delete target.dataset.accessKeySource; accessCaptionNodes.get(target)?.remove(); return null; }
+    const entry = { target, ...keys[i] };
+    showAccessCaption(target, entry.key, details[i].label, scope);
+    if (!entry.key) { target.removeAttribute('aria-keyshortcuts'); delete target.dataset.resolvedAccessKey; delete target.dataset.accessKeySource; return null; }
     accessMemory.set(target, entry.key);
-    target.setAttribute('aria-keyshortcuts', [entry.key, ...entry.aliases.filter((key) => key !== entry.key)].map((key) => 'Alt+' + key.toUpperCase()).join(' '));
+    target.setAttribute('aria-keyshortcuts', [entry.key, ...entry.aliases].map(key => 'Alt+' + key.toUpperCase()).join(' '));
     target.dataset.resolvedAccessKey = entry.key;
     target.dataset.accessKeySource = entry.automatic ? 'wixel' : details[i].explicit || accessKeyFromLabel(details[i].label) ? 'label' : 'excel';
-    showAccessCaption(target, entry.key, details[i].label, scope);
     return entry;
   }).filter(Boolean);
-  for (const target of disabled) {
+  for (let i = targets.length; i < allocated.length; i++) {
+    const target = allocated[i];
     target.removeAttribute('aria-keyshortcuts'); delete target.dataset.resolvedAccessKey; delete target.dataset.accessKeySource;
-    const label = associatedAccessLabel(target), key = target.dataset.accessKey || accessKeyFromLabel(label) || accessMemory.get(target);
-    showAccessCaption(target, key, label, scope);
+    showAccessCaption(target, keys[i].key, details[i].label, scope);
   }
   watchAccessScope(scope);
-  return entries.filter((entry) => accessVisible(entry.target));
+  return entries.filter((entry) => accessVisible(entry.target, includeClipped));
 }
 function endAccessKeys() {
   accessMode = false; accessScope = null; accessLayer?.remove(); accessLayer = null;
@@ -270,22 +297,16 @@ window.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && accessScopeClose.has(scope)) { consumeAccessKey(event, 'cancel'); endAccessKeys(); accessScopeClose.get(scope)(); return; }
   if (['Tab', 'Enter', ' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) { endAccessKeys(); return; }
   const editable = event.target instanceof Element && (event.target.matches('input,textarea,select') || event.target.isContentEditable);
+  if ((event.isComposing || event.keyCode === 229) && !event.altKey) { endAccessKeys(); return; }
   const menuTyping = scope.classList.contains('menu') && !editable && !event.altKey && !event.shiftKey && !event.isComposing && event.keyCode !== 229;
   if (!event.altKey && !accessMode && !menuTyping) return;
   const key = accessKeyFromEvent(event);
   if (!key) return;
-  if (scope.dataset.contextMenu) {
-    const explicit = [...scope.querySelectorAll(':scope > .menu-item')].find((node) => accessVisible(node, true) && (node.dataset.accessKey?.toLowerCase() === key || accessKeyAliases(node.dataset.accessAliases).includes(key)));
-    explicit?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-  }
-  const matches = prepareAccessKeys(scope).filter((entry) => entry.key === key || entry.aliases.includes(key));
+  const matches = prepareAccessKeys(scope, { includeClipped: true }).filter(entry => entry.key === key || entry.aliases.includes(key));
   if (!matches.length || scope.getAttribute('aria-busy') === 'true') { if (event.altKey || accessMode) consumeAccessKey(event, 'mode', key); return; }
   if (event.repeat) { consumeAccessKey(event, 'mode', key); return; }
-  if (matches.length > 1) {
-    const at = matches.findIndex((entry) => entry.target === document.activeElement), target = matches[(at + 1) % matches.length].target;
-    consumeAccessKey(event, 'cycle', key, target); target.focus(); accessMode = true; accessScope = scope; drawAccessKeys(scope); return;
-  }
-  const target = matches[0].target;
+  if (matches.length !== 1) { consumeAccessKey(event, 'mode', key); return; }
+  const target = matches[0].target; target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   consumeAccessKey(event, 'activate', key, target); endAccessKeys(); activateAccessTarget(target);
   const next = activeAccessScope();
   if (next && next !== scope && (next.classList.contains('menu') || next.dataset.accessScope === 'popup')) { accessMode = true; accessScope = next; drawAccessKeys(next); }
@@ -713,13 +734,13 @@ export function openDialog({ title, body, buttons = [], onOpen, width, modeless 
   const bodyButtons = [...(content?.matches?.('button') ? [content] : []), ...(content?.querySelectorAll('button') ?? [])];
   for (const button of bodyButtons) {
     const key = dialogButtonAccessKey(button.getAttribute('aria-label') ?? button.textContent);
-    if (key && button.dataset.accessKey === undefined) button.dataset.accessKey = key;
+    if (key && button.dataset.accessKey === undefined) { button.dataset.accessKey = key; if (!accessKeyFromLabel(button.getAttribute('aria-label') ?? button.textContent)) button.dataset.accessDefault = 'true'; }
   }
   const dialog = el('div', { class: 'dialog', role: 'dialog', 'aria-label': title, 'aria-labelledby': titleId, 'aria-modal': String(!modeless), tabindex: '-1' },
-    el('div', { class: 'dialog-head' }, el('span', { class: 'dialog-title', id: titleId }, title), el('button', { class: 'dialog-close', type: 'button', title: '닫기', 'aria-label': '닫기', 'data-access-key': 'd', 'data-dialog-close-head': true, onclick: close }, el('span', { 'aria-hidden': 'true' }, '✕'))),
+    el('div', { class: 'dialog-head' }, el('span', { class: 'dialog-title', id: titleId }, title), el('button', { class: 'dialog-close', type: 'button', title: '닫기', 'aria-label': '닫기', 'data-access-key': 'd', 'data-access-default': 'true', 'data-dialog-close-head': true, onclick: close }, el('span', { 'aria-hidden': 'true' }, '✕'))),
     el('div', { class: 'dialog-body' }, content),
     buttons.length ? el('div', { class: 'dialog-foot' }, buttons.map((b) => el('button', {
-      class: `btn${b.primary ? ' primary' : ''}`, type: 'button', 'data-access-key': b.accessKey ?? dialogButtonAccessKey(b.label), 'data-access-aliases': b.accessAliases,
+      class: `btn${b.primary ? ' primary' : ''}`, type: 'button', 'data-access-key': b.accessKey ?? dialogButtonAccessKey(b.label), 'data-access-default': b.accessKey === undefined && !accessKeyFromLabel(b.label) ? 'true' : null, 'data-access-aliases': b.accessAliases,
       onclick: () => invoke(b),
     }, b.label))) : null);
   if (width) dialog.style.width = `${width}px`;

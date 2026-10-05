@@ -650,3 +650,25 @@ URL과 출력 경로의 기본값은 위와 같습니다(출력 폴더 끝은 �
 `node tools/shape-inline-text.mjs`는 15개 합성 사례로 도형에서 F2·더블클릭·우클릭·문자 입력으로 본문 편집에 진입하고, 마우스 커서/선택 치환, Ctrl+B/I/U 및 리본 글꼴·크기·색의 부분 적용, 줄바꿈·조합 이벤트·일반 텍스트 붙여넣기, 로컬 Undo/Redo와 한 번의 통합 문서 Undo를 검사합니다. Alt H F C·F10 색상 키팁, 리본의 선택 텍스트 복사·잘라내기·붙여넣기, 클립보드 권한 거절과 종료 후 지연 응답도 확인합니다. 빈 편집 여백 클릭 뒤 초점 유지와 이전 조합 종료의 예약 프레임을 다음 조합 중 강제로 실행하는 커서 경합도 포함합니다. 아래 셀 보존, 보호·문서/시트 전환 시 대상 격리, 스크롤·배율·틀 고정 추적, 기존 서식 패널의 리치텍스트 보존, 합성 XLSX 다운로드→재열기, 좁은 모바일 배치도 포함합니다.
 
 `WIXEL_URL`로 소스 또는 번들을 지정하고 `WIXEL_BROWSER=chromium|firefox|webkit`, `WIXEL_SHAPE_INLINE_OUT`(D: 출력 폴더), `WIXEL_SHAPE_INLINE_FILTER`(사례명 부분 문자열, 여러 조건은 `|`로 구분)를 사용할 수 있습니다. 한글 자판의 물리 키 코드와 Ctrl·Command 조합도 서식·실행 취소 사례에서 검사합니다. 수정 전 소스 서버에는 `WIXEL_SHAPE_INLINE_BASELINE=1`을 지정해 F2·더블클릭이 본문 커서 대신 서식 패널을 여는 상태를 기록합니다. 공개 주소의 합성 검증은 `WIXEL_SHAPE_INLINE_PUBLIC=1`과 승인된 위셀 공개 주소를 함께 지정할 때만 허용합니다. 모든 외부/API 요청과 쓰기를 차단하며 실제 업무 문서는 도구에 포함하지 않습니다. IME·붙여넣기는 합성 DOM 이벤트, 모바일은 화면 크기 시뮬레이션으로 실제 기기의 입력기·클립보드 검증을 대신하지 않습니다.
+
+
+## 팝업 접근키 충돌 회귀
+
+`node tools/popup-key-conflicts.mjs`는 공통 UI 소스 모듈을 호출하여 팝업 접근키와 별칭의 단일 할당, 표시된 괄호 키와 실행 대상 일치, 창별 명시 키와 공통 취소 기본값, 숨김·비활성·동적 항목, 부모/자식 범위, 한글 IME 및 일반 입력, 스크롤 밖 항목, 36개 초과 옵션의 Tab 접근을 확인합니다. 기존 `dialog-access-keys.mjs`도 중복 키를 재배정한 뒤 해당 표시 키가 즉시 한 명령을 실행하는 기준을 사용합니다.
+
+```powershell
+$env:WIXEL_URL = 'http://localhost:5178/'
+$env:WIXEL_BROWSER = 'chromium' # firefox, webkit도 지원
+$env:WIXEL_OUTPUT = 'D:/Codex/Temp/wixel-popup-key-conflicts-chromium'
+node tools/popup-key-conflicts.mjs
+```
+
+소스 서버 전용이며 사용자 파일을 열지 않습니다. 외부 요청과 서버 쓰기를 차단하고 사례별 PNG, 오류 및 검사 수를 `result.json`에 저장합니다. `WIXEL_FILTER`로 사례 이름 일부를 지정할 수 있습니다. 실제 앱 및 최종 번들 단축키는 `excel-shortcut-audit.mjs`를 함께 사용합니다. 합성 한글 이벤트는 실제 iOS/Windows IME 장치 검증과 구분합니다.
+
+### Excel Alt 호환·직접 단축키 회귀 (2026-10-05)
+
+`excel-shortcut-audit.mjs`는 합성 문서에서 구/현대 필터 경로, 조건 보존·Undo, 물리 한글 키, 취소/입력 격리, Shift 조합, 슬라이서 Ctrl+1, End 이동, 포커스별 저장을 검증합니다. `WIXEL_BROWSER=chromium|firefox|webkit`, `WIXEL_URL`, `WIXEL_SHORTCUT_OUT`(D: 폴더), 필요시 `WIXEL_SHORTCUT_FILTER`를 지정합니다. `PLAYWRIGHT_MODULE`은 Windows 경로와 file URL을 지원합니다. 공개 합성 검사에는 승인된 workers.dev URL과 `WIXEL_SHORTCUT_PUBLIC=1`을 함께 지정합니다. 모든 API·외부 요청·원격 쓰기는 차단합니다.
+
+`shortcut-review-regressions.mjs`는 추가 검수에서 발견한 시트 이름 입력 후 Enter 누수, 보호 문서의 저장/구조 변경, End→Alt 전환과 키 안내 표시를 검사합니다. 환경 변수는 도구 상단을 참고합니다.
+
+`keytips.mjs`에는 새 호환 등록표의 전체 접두 경로도 포함됩니다. `ribbon-keytip-coverage.mjs`는 구 경로 별칭이 현대 리본 배지를 대체하지 않는지 실제 16탭/364조작을 검사합니다. `keytips-ime.mjs`는 활성 Alt 순서의 Process/229와 일반 한글 입력을 구분합니다. UI 테스트는 실제 iPad Bluetooth 장치나 Windows IME 드라이버 검증과 다릅니다. 검수 분모·미지원 목록은 `docs/codex/87_Excel단축키와접근키충돌.md`에 있습니다.

@@ -206,11 +206,13 @@ try {
   });
   await test('복사 C·선택하여 붙여넣기 S 취소·붙여넣기 옵션 값은 모의 클립보드만 사용', async p => {
     await clickCell(p, 3, 1); await p.keyboard.press('c'); assert.equal(await p.evaluate(() => window.__mockClipboard), '30');
-    const before = await snapshot(p); await clickCell(p, 4, 3); await p.keyboard.press('s');
-    assert.match(await p.evaluate(() => document.activeElement.textContent), /선택하여 붙여넣기/);
-    await p.keyboard.press('s'); assert.match(await p.evaluate(() => document.activeElement.textContent), /윗주 필드 표시/);
-    await p.keyboard.press('Escape'); assert.deepEqual(await snapshot(p), before, '중복 접근키 순환 후 Escape는 문서를 바꾸지 않음');
-    await clickCell(p, 4, 3); await p.keyboard.press('s'); await p.keyboard.press('Enter');
+    const before = await snapshot(p); await clickCell(p, 4, 3);
+    const specialKey = await menuItem(p, /선택하여 붙여넣기/).getAttribute('data-resolved-access-key');
+    const phoneticKey = await menuItem(p, /윗주 필드 표시/).getAttribute('data-resolved-access-key');
+    assert.equal(specialKey, 's'); assert.notEqual(phoneticKey, specialKey, '충돌하던 윗주 필드는 별도 접근키 사용');
+    await p.keyboard.press('s'); await p.getByRole('dialog', { name: '선택하여 붙여넣기', exact: true }).waitFor();
+    await p.keyboard.press('Escape'); assert.deepEqual(await snapshot(p), before, '접근키 한 번으로 열린 창 취소는 문서를 바꾸지 않음');
+    await clickCell(p, 4, 3); await p.keyboard.press('s');
     const d = p.getByRole('dialog', { name: '선택하여 붙여넣기', exact: true }); await d.waitFor(); await d.getByRole('button', { name: '취소', exact: true }).click();
     assert.deepEqual(await snapshot(p), before); await clickCell(p, 4, 3); await menuItem(p, '붙여넣기 옵션').click();
     const sub = p.locator('#menuLayer > .menu[data-level="1"]'); await sub.getByRole('menuitem', { name: /^값\(V\)/ }).click();
