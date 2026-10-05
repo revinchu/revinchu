@@ -148,6 +148,8 @@ import { svgToEditableGroup } from './svg-to-shapes.js';
 import { editableShapePath, shapePathHandles, shapeLocalPoint, moveShapePoint, deleteShapePoint, insertShapePoint, normalizeEditedShape } from './shape-edit.js';
 import { OBJECT_PROPS, OBJECT_LABEL, SHAPE_KINDS, SHAPE_GROUPS, LINE_SHAPES, newShape, findObject, shapeSvg, isShapeLine } from './shapes.js';
 import { createShapeFormatPanel } from './shape-format-ui.js';
+import { createShapeTextEditor, shapeSelectionStyle, shapeTextParagraphs, shapeTextString } from './shape-text-editor.js';
+import { shapeTextFormatPatch } from './shape-text-format.js';
 import { SHAPE_DASH_OPTIONS } from './shape-format.js';
 import { extractVbaModules, fromBase64 } from './vba.js';
 import { findMatches, nextMatch, replaceText, FIND_FORMAT_KEYS } from './find.js';
@@ -212,6 +214,7 @@ let pendingKey = null;
 let ac = null;
 let editRefs = [];
 let fillPreview = null;
+let shapeTextEdit = null, lastShapeTextPointer = null;
 let chartSel = null; // 선택한 그림 개체(차트·그림·도형) id
 let objectPointerEvent = null, handlingObjectPointer = false;
 let chartElementDrag = null, suppressChartDoubleClickUntil = 0, lastChartPointer = null;
@@ -302,6 +305,7 @@ function growTo(r, c) {
 }
 
 function selectCell(r, c, { keepTab = false, scroll = true } = {}) {
+  if (!finishShapeTextEdit(() => selectCell(r, c, { keepTab, scroll }))) return;
   r = clamp(r, 0, MAX_ROWS - 1);
   c = clamp(c, 0, MAX_COLS - 1);
   const m = wb.mergeAt(si, r, c);
@@ -331,6 +335,7 @@ function extendTo(r, c, { scroll = true } = {}) {
 }
 
 function selectRange(rg, kind = 'cells', act = { r: rg.r1, c: rg.c1 }) {
+  if (!finishShapeTextEdit(() => selectRange(rg, kind, act))) return;
   active = { ...act };
   anchor = { ...act };
   focusCell = { r: rg.r2, c: rg.c2 };
@@ -894,6 +899,7 @@ function focusGridSurface() {
 }
 function focusGrid() {
   if (isDialogOpen() || document.querySelector('.backstage')) return;
+  if (shapeTextEdit?.valid()) { shapeTextEdit.editor.focus(); return; }
   if (objectOwnsGridFocus()) {
     // A pointer may still be committing a cell. Leave its native input alone
     // until commitEdit ends editing, then focus the non-editable grid.
@@ -906,6 +912,7 @@ function focusGrid() {
 }
 
 function deselectChart() {
+  if (!finishShapeTextEdit(deselectChart)) return;
   shapeEdit = null; shapePointDrag = null;
   if (!chartSel) return;
   chartSel = null;
@@ -1106,6 +1113,7 @@ function cancelEdit() {
 }
 
 function positionEditor() {
+  positionShapeTextEditor();
   if (!gv?.cols) return;
   const ed = dom.editor;
   const target = editing ?? active;
@@ -1544,7 +1552,7 @@ function onGridKey(e) {
       gv.renderObjectsAll();
       return;
     }
-    if (!ctrl && !e.altKey && k.length === 1 && sheet().shapes?.some((x) => x.id === chartSel)) { handled(); shapeDialog(chartSel, k); return; }
+    if (!ctrl && !e.altKey && k.length === 1 && sheet().shapes?.some((x) => x.id === chartSel)) { handled(); beginShapeTextEdit(chartSel, { typed: k }); return; }
   }
   if (e.altKey && k === 'ArrowDown' && !ctrl) {
     const tt = tableHere();
@@ -2253,6 +2261,14 @@ function handleViewMouseDown(e) {
     const partChanged = JSON.stringify(prevPart) !== JSON.stringify(chartPart);
     if (chartSel !== id) { shapeEdit = null; shapePointDrag = null; chartSel = id; objMulti.clear(); gv.renderObjectsAll(); updateSelectionUI(); selPaneDlg?.redraw?.(); } else if (partChanged) gv.renderObjectsAll();
     syncChartPane(); focusGrid();
+    if (objEl.classList.contains('shape') && e.button === 0 && !shapeEdit && !t.closest('.ch-h')) {
+      const now = Date.now(), repeat = lastShapeTextPointer?.id === id && now - lastShapeTextPointer.time < 450 && Math.hypot(e.clientX - lastShapeTextPointer.x, e.clientY - lastShapeTextPointer.y) < 5;
+      lastShapeTextPointer = { id, time: now, x: e.clientX, y: e.clientY };
+      if ((repeat || e.detail >= 2) && textEditableShape(mf?.obj)) {
+        drag = null; suppressShapeDoubleClickUntil = now + 120;
+        beginShapeTextEdit(id, { point: { x: e.clientX, y: e.clientY } }); return;
+      }
+    }
     if (objEl.classList.contains('chart') && e.button === 0) {
       const now = Date.now(), repeat = lastChartPointer?.id === id && now - lastChartPointer.time < 450 && Math.hypot(e.clientX - lastChartPointer.x, e.clientY - lastChartPointer.y) < 5;
       lastChartPointer = { id, time: now, x: e.clientX, y: e.clientY };
@@ -2680,7 +2696,7 @@ function onDragEnd() {
         Object.assign(temp, LINE_SHAPES.has(temp.kind) ? { w: 150, h: 0, flip: false } : temp.kind === 'textbox' ? { w: 160, h: 48 } : { w: 150, h: 90 });
       }
       addObject('shapes', temp);
-      if (temp.kind === 'textbox') shapeDialog(temp.id);
+      if (temp.kind === 'textbox') beginShapeTextEdit(temp.id);
       if (d.repeatTool !== 'select' && paletteTool === d.repeatTool) setPaletteTool(d.repeatTool);
       break;
     }
@@ -3136,6 +3152,7 @@ function pasteSpecialDialog() {
 
 let pasteReadRequest = 0;
 async function pasteFromButton(mode = 'all') {
+  if (shapeTextEdit) { shapeTextClipboard('paste'); return; }
   const request = ++pasteReadRequest, book = wb, host = si, target = sheet(), at = { ...active };
   const revision = wb.version, range = { ...sel }, kind = selKind, sourceClip = clip;
   // Permission prompts and clipboard reads may settle after selection, edits or a newer paste.
@@ -3171,6 +3188,18 @@ function explicitOff(patch, r, c) {
 }
 
 function applyStyle(patchOrFn, { widen = false } = {}) {
+  if (selectedTextShape()) {
+    if (objectEditBlocked()) return;
+    if (shapeTextEdit) { if (shapeTextEdit.valid()) shapeTextEdit.editor.format(patchOrFn); return; }
+    patchObjects(o => {
+      if (!textEditableShape(o)) return null;
+      const current = shapeSelectionStyle(o, shapeTextParagraphs(o), { start: 0, end: shapeTextString(shapeTextParagraphs(o)).length });
+      const patch = typeof patchOrFn === 'function' ? patchOrFn(current) : patchOrFn;
+      const textPatch = Object.fromEntries(Object.entries(patch ?? {}).filter(([k]) => SHAPE_TEXT_STYLE_KEYS.has(k)));
+      return shapeTextFormatPatch(o, textPatch);
+    }, ['shapes']);
+    return;
+  }
   lastRepeat = () => run('repeatStyle', { patchOrFn, widen });
   const rg = sel;
   const patchFor = (cur) => {
@@ -3245,8 +3274,8 @@ function clearSelection(what) {
 }
 
 const toggleStyle = (key) => {
-  const next = !styleAt(active.r, active.c)[key];
-  applyStyle({ [key]: next || undefined });
+  const next = !formattingStyle()[key];
+  applyStyle({ [key]: selectedTextShape() ? next : next || undefined });
 };
 
 // 테두리 펜: 선 스타일 · 선 색 (엑셀의 [테두리] → [선 색] · [선 스타일])
@@ -3372,9 +3401,9 @@ function changeDecimals(delta) {
 }
 
 function changeFontSize(dir) {
-  const cur = styleAt(active.r, active.c).size || BASE_FONT.size;
+  const cur = formattingStyle().size || BASE_FONT.size;
   const next = dir > 0 ? FONT_SIZES.find((s) => s > cur) ?? cur + 4 : [...FONT_SIZES].reverse().find((s) => s < cur) ?? Math.max(1, cur - 1);
-  applyStyle({ size: next === BASE_FONT.size ? undefined : next });
+  applyStyle({ size: !selectedTextShape() && next === BASE_FONT.size ? undefined : next });
 }
 
 /** 서식 복사 (엑셀): 셀 서식(표 서식 포함) · 병합 · 조건부 서식 · 열 너비/행 높이(행 · 열 전체 선택일 때) */
@@ -3653,6 +3682,7 @@ function protectAction(cmd) {
     const insert = cmd === 'insertMenuKey';
     return selKind === 'rows' ? (insert ? 'insertRows' : 'deleteRows') : selKind === 'cols' ? (insert ? 'insertColumns' : 'deleteColumns') : 'cells';
   }
+  if (cmd === 'shapeTextEdit') return 'objects';
   if (cmd === 'clearHyperlinks' || cmd === 'removeHyperlink') return 'hyperlinks';
   if (cmd === 'pasteSpecial') return 'free';
   if (cmd === 'pasteFormats') return 'formatCells';
@@ -9695,7 +9725,7 @@ function editObject(id) {
   const f = findObject(sheet(), id);
   if (!f) return;
   if (f.prop === 'charts') chartDialog(id);
-  else if (f.prop === 'shapes') shapeDialog(id);
+  else if (f.prop === 'shapes') { if (textEditableShape(f.obj)) beginShapeTextEdit(id); else shapeDialog(id); }
   else if (f.prop === 'slicers') slicerSettings(id);
   else imageDialog(id);
 }
@@ -9911,7 +9941,8 @@ function objectMenu(id, pos) {
   } else if (f.prop === 'shapes' && isSmartArt(f.obj)) {
     items.push({ label: 'SmartArt 편집...', icon: 'shapes', action: () => smartArtDialog(id) });
   } else if (f.prop === 'shapes') {
-    items.push({ label: LINE_SHAPES.has(f.obj.kind) ? '선 서식...' : '텍스트 편집 및 도형 서식...', icon: 'shapes', action: () => shapeDialog(id) });
+    if (textEditableShape(f.obj)) items.push({ label: '텍스트 편집', key: 'F2', action: () => beginShapeTextEdit(id) });
+    items.push({ label: LINE_SHAPES.has(f.obj.kind) ? '선 서식...' : '도형 서식...', icon: 'shapes', action: () => shapeDialog(id) });
     items.push({ label: '점 편집', disabled: !editableShapePath(f.obj), action: () => beginShapePointEdit(id) });
     if (!LINE_SHAPES.has(f.obj.kind)) {
       items.push({ label: '도형 모양 변경...', action: () => setTimeout(() => openMenu({ x: 260, y: 140 }, [{ node: shapeGallery((k) => { shapeEdit = null; shapePointDrag = null; updateObject(id, { kind: k, path: undefined, customGeometry: undefined }); }, true) }], { scroll: true }), 0) });
@@ -10904,8 +10935,141 @@ function shapePointMenu(id, position) {
   ]);
 }
 
+// 도형 텍스트는 문서와 분리된 초안으로 편집하고 종료할 때 한 번만 기록한다.
+const SHAPE_TEXT_STYLE_KEYS = new Set(['font', 'size', 'color', 'bold', 'italic', 'underline', 'strike', 'align', 'valign']);
+const SHAPE_TEXT_COMMANDS = new Set(['bold', 'italic', 'underline', 'strike', 'fontFamily', 'fontSize', 'growFont', 'shrinkFont', 'fontColor', 'alignLeft', 'alignCenter', 'alignRight', 'valignTop', 'valignMiddle', 'valignBottom']);
+function textEditableShape(o) { return !!o && o.kind !== 'group' && !isSmartArt(o) && !isShapeLine(o); }
+function selectedTextShape() { const f = chartSel && findObject(sheet(), chartSel); return f?.prop === 'shapes' && textEditableShape(f.obj) ? f.obj : null; }
+function formattingStyle() {
+  if (shapeTextEdit?.valid()) return shapeTextEdit.editor.style();
+  const o = selectedTextShape();
+  if (!o) return styleAt(active.r, active.c);
+  const paras = shapeTextParagraphs(o);
+  return shapeSelectionStyle(o, paras, { start: 0, end: shapeTextString(paras).length });
+}
+/** Menus retain both the object and text selection. A delayed picker never falls through to cells. */
+function captureShapeTextTarget() {
+  const o = selectedTextShape(); if (!o) return null;
+  const session = shapeTextEdit, book = wb, host = sheet(), index = si, doc = docId, id = o.id;
+  session?.editor.rememberSelection();
+  return patch => {
+    if (wb !== book || si !== index || docId !== doc || sheet() !== host || chartSel !== id) return;
+    if (session) { if (shapeTextEdit === session && session.valid()) session.editor.format(patch); return; }
+    if (shapeTextEdit || host.shapes.find(x => x.id === id) !== o || objectEditBlocked()) return;
+    applyStyle(patch);
+  };
+}
+function shapeTextClipboard(command) {
+  const session = shapeTextEdit;
+  if (!session?.valid()) return;
+  const operation = command === 'paste' ? session.editor.paste() : session.editor.copy({ cut: command === 'cut' });
+  Promise.resolve(operation).then(ok => {
+    if (shapeTextEdit !== session) return;
+    if (!ok) toast('클립보드에 접근할 수 없습니다. 텍스트를 선택하고 Ctrl/Cmd+C·X·V를 사용하세요.');
+    session.editor.focus();
+  }).catch(error => reportError(error, '텍스트 클립보드'));
+}
+function openShapeTextMenu(session, position) {
+  if (shapeTextEdit !== session || !session.valid()) return;
+  const action = command => () => { if (shapeTextEdit === session && session.valid()) run(command); };
+  const style = session.editor.style();
+  openMenu(position, [
+    { label: '잘라내기', icon: 'cut', key: 'Ctrl+X', action: action('cut') },
+    { label: '복사', icon: 'copy', key: 'Ctrl+C', action: action('copy') },
+    { label: '텍스트 붙여넣기', icon: 'paste', key: 'Ctrl+V', action: action('paste') },
+    { sep: true },
+    { label: '굵게', key: 'Ctrl+B', checked: !!style.bold, action: action('bold') },
+    { label: '기울임꼴', key: 'Ctrl+I', checked: !!style.italic, action: action('italic') },
+    { label: '밑줄', key: 'Ctrl+U', checked: !!style.underline, action: action('underline') },
+    { label: '모두 선택', key: 'Ctrl+A', action: action('selectAll') },
+    { sep: true }, { label: '텍스트 편집 끝내기', key: 'Esc', action: () => { if (shapeTextEdit === session) finishShapeTextEdit(); } },
+  ]);
+}
+function cleanupShapeTextEdit(session) {
+  if (!session) return;
+  cancelAnimationFrame(session.frame);
+  for (const [node, visibility] of session.hidden) node.style.visibility = visibility;
+  session.hidden.clear(); session.viewport.remove();
+  if (shapeTextEdit === session) shapeTextEdit = null;
+}
+function discardShapeTextEdit() {
+  const session = shapeTextEdit;
+  if (!session) return;
+  session.editor.destroy(); cleanupShapeTextEdit(session);
+}
+function finishShapeTextEdit(after = null) {
+  const session = shapeTextEdit; if (!session) return true;
+  if (!session.valid()) { discardShapeTextEdit(); return true; }
+  if (session.editor.commit()) return true;
+  if (shapeTextEdit === session) { session.after = after; return false; }
+  return true;
+}
+function positionShapeTextEditor() {
+  const session = shapeTextEdit; if (!session?.editor) return;
+  if (!session.valid()) { discardShapeTextEdit(); return; }
+  const nodes = [...dom.view.querySelectorAll('.obj.shape')].filter(n => n.dataset.id === session.id);
+  let best = null, bestArea = -1;
+  for (const node of nodes) {
+    const rect = node.getBoundingClientRect(), clip = (node.closest('.pane') ?? dom.view).getBoundingClientRect();
+    const area = Math.max(0, Math.min(rect.right, clip.right) - Math.max(rect.left, clip.left)) * Math.max(0, Math.min(rect.bottom, clip.bottom) - Math.max(rect.top, clip.top));
+    const hit = session.point && session.point.x >= clip.left && session.point.x <= clip.right && session.point.y >= clip.top && session.point.y <= clip.bottom;
+    const rank = area + (hit ? 1e9 : 0);
+    if (rank > bestArea) { bestArea = rank; best = { node, rect, clip, area }; }
+    for (const text of node.querySelectorAll(':scope > .sh-text')) {
+      if (!session.hidden.has(text)) session.hidden.set(text, text.style.visibility);
+      text.style.visibility = 'hidden';
+    }
+  }
+  for (const node of session.hidden.keys()) if (!node.isConnected) session.hidden.delete(node);
+  session.viewport.style.display = best?.area > 0 ? '' : 'none';
+  if (!best) return;
+  const { rect, clip } = best, o = session.original, width = o.w * gv.z, height = o.h * gv.z;
+  Object.assign(session.viewport.style, { left: clip.left + 'px', top: clip.top + 'px', width: clip.width + 'px', height: clip.height + 'px' });
+  session.editor.reposition({ x: rect.left + (rect.width - width) / 2 - clip.left, y: rect.top + (rect.height - height) / 2 - clip.top, width, height, zoom: gv.z, rotation: o.rot ?? 0 });
+}
+function beginShapeTextEdit(id, { typed = null, point = null } = {}) {
+  if (shapeTextEdit?.id === id && shapeTextEdit.valid()) { shapeTextEdit.editor.focus(point ? { point } : {}); return true; }
+  if (!finishShapeTextEdit(() => beginShapeTextEdit(id, { typed, point }))) return false;
+  const book = wb, host = sheet(), index = si, doc = docId, original = host.shapes?.find(o => o.id === id);
+  if (!textEditableShape(original)) return false;
+  if (viewOnly || wb.props?.markedFinal || isProtected(host) && original.locked !== false && !allowed(host, 'objects')) { toast('읽기 전용이거나 보호된 도형은 텍스트를 편집할 수 없습니다.'); return false; }
+  if (editing && !commitEdit()) return false;
+  closeMenus(); endKeytip(); cancelCellGesture(); endDraw();
+  shapeEdit = null; shapePointDrag = null; drag = null; lastShapeTextPointer = null;
+  shapePaneDlg?.close();
+  chartSel = id; chartPart = null; objMulti.clear(); gv.renderObjectsAll();
+  const viewport = document.createElement('div'); viewport.className = 'shape-text-edit-viewport';
+  Object.assign(viewport.style, { position: 'fixed', overflow: 'hidden', pointerEvents: 'none', zIndex: '35' });
+  document.body.append(viewport);
+  const session = { id, original, viewport, hidden: new Map(), frame: 0, point, after: null,
+    valid: () => wb === book && si === index && docId === doc && sheet() === host && host.shapes?.find(o => o.id === id) === original && !viewOnly && !book.props?.markedFinal && (!isProtected(host) || original.locked === false || allowed(host, 'objects')) };
+  const done = () => { cleanupShapeTextEdit(session); gv.renderObjectsAll(); updateSelectionUI(); };
+  session.editor = createShapeTextEditor({ container: viewport, shape: original, fontStack, isValid: session.valid,
+    onCommit: patch => {
+      const valid = session.valid(), after = session.after;
+      cleanupShapeTextEdit(session);
+      if (valid && Object.keys(patch).length) book.transact(() => book.setSheetProp(index, 'shapes', host.shapes.map(o => o.id === id ? { ...o, ...patch } : o)), meta());
+      gv.renderObjectsAll(); updateSelectionUI();
+      if (valid && after) after(); else if (valid && !isMenuOpen() && !isDialogOpen()) focusGridSurface();
+    },
+    onCancel: done, onSelectionChange: () => { if (shapeTextEdit === session) updateRibbon(); },
+    onDraftChange: () => { if (shapeTextEdit === session) updateRibbon(); },
+    onSave: options => run(options?.saveAs ? 'saveAs' : 'save'),
+    onContextMenu: position => openShapeTextMenu(session, position),
+  });
+  shapeTextEdit = session;
+  Object.assign(session.editor.element.style, { position: 'absolute', pointerEvents: 'auto' });
+  const follow = () => { if (shapeTextEdit !== session) return; positionShapeTextEditor(); if (shapeTextEdit === session) session.frame = requestAnimationFrame(follow); };
+  follow(); updateSelectionUI();
+  mobileKeyboard?.prepare(session.editor.element);
+  session.editor.focus(typed !== null ? { selectAll: true } : point ? { point } : {});
+  if (typed !== null) session.editor.insertText(typed);
+  return true;
+}
+
 let shapePaneDlg = null;
 function shapeDialog(id, typed = null, initialTab = null) {
+  if (!finishShapeTextEdit(() => shapeDialog(id, typed, initialTab))) return;
   if (isSmartArt(findObject(sheet(), id)?.obj)) { smartArtDialog(id); return; }
   const book = wb, host = si, hostSheet = wb.sheets[host];
   const original = hostSheet?.shapes.find((o) => o.id === id);
@@ -13778,11 +13942,12 @@ function calcFieldDialog(entry = pivotHere(), startName = null) {
 function fontMenu(anchorEl) {
   const used = new Set();
   for (const s of wb.sheets) for (const [,,cell] of s.cells.storageEntries()) if (cell.style?.font) used.add(cell.style.font);
-  const cur = styleAt(active.r, active.c).font || BASE_FONT.name;
+  const textTarget = captureShapeTextTarget();
+  const cur = formattingStyle().font || BASE_FONT.name;
   const mobilePicker = document.body.classList.contains('mobile-work-mode') || matchMedia('(pointer: coarse)').matches;
   const search = el('input', { type: 'search', placeholder: '글꼴 검색', 'aria-label': '글꼴 검색', 'data-menu-search-target': '.font-list', class: 'font-search', style: { fontSize: '16px' } });
   const list = el('div', { class: 'font-list' });
-  const pick = (f) => { closeMenus(); run('fontFamily', f); };
+  const pick = (f) => { closeMenus(); if (textTarget) textTarget({ font: f }); else run('fontFamily', f); focusGrid(); };
   const item = (f) => el('button', {
     type: 'button', class: `font-item${f === cur ? ' on' : ''}`, title: f, onmousedown: (e) => e.preventDefault(),
     style: { fontFamily: fontStack(f) }, onclick: () => pick(f),
@@ -14307,6 +14472,7 @@ function switchSheet(i, restore = true) {
   chartElementDrag = null;
   endDraw(); shapeEdit = null; shapePointDrag = null;
   if (i === si || i < 0 || i >= wb.sheets.length) return;
+  if (!finishShapeTextEdit(() => switchSheet(i, restore))) return;
   if (editing && !commitEdit()) return;
   if (wb.sheets[si]) sheetSel.set(wb.sheets[si], { active, sel, selKind, scroll: gv.scrollPosition() });
   si = i;
@@ -14697,6 +14863,7 @@ const XLSX_KINDS = {
 };
 
 async function exportXlsx(name = docName, kind = null) {
+  if (!finishShapeTextEdit(() => exportXlsx(name, kind))) return null;
   const savingBook = wb, savingId = docId, savingSheet = si;
   const k = kind ?? (wb.vba ? 'xlsm' : 'xlsx');
   const fileName = `${safeFileName(name)}.${k}`;
@@ -14984,6 +15151,7 @@ function prepareWorkbookStep(book, activeSheet, work) {
 }
 function installWorkbook(next, name, activeSheet, request, nextDocId) {
   request.assertCurrent();
+  discardShapeTextEdit();
   if (editing) endEditUI();
   libraryFlush();
   clearTimeout(saveTimer); clearTimeout(serverTimer); clearTimeout(autoPivotTimer);
@@ -15176,6 +15344,7 @@ function redrawPivotsQuiet() {
 }
 
 function afterLoad(name, activeSheet, nextDocId = null) {
+  discardShapeTextEdit();
   // 계산 설정이 없는 외부 파일은 Excel 기본값(자동)을 명시해 로컬 재열기에도 유지한다.
   if (!wb.calculation) { wb.calculation = { mode: 'auto' }; wb.manualCalc = false; }
   endBorderDraw();
@@ -18334,7 +18503,7 @@ function statsDialog() {
 const SHORTCUTS = [
   ['Enter / Shift+Enter', '입력 후 아래/위로 이동 (Tab으로 이동한 경우 시작 열로 복귀)'],
   ['Tab / Shift+Tab', '입력 후 오른쪽/왼쪽으로 이동'],
-  ['F2', '셀 편집 (편집 중에는 입력/편집 모드 전환)'],
+  ['F2', '셀 또는 선택한 도형 텍스트 편집'],
   ['Alt+Enter', '셀 안에서 줄 바꿈'],
   ['Ctrl+Enter', '선택한 모든 셀에 같은 내용 입력'],
   ['F4', '수식 편집 중: 절대/상대 참조 전환 · 그 밖에는 마지막 작업 반복'],
@@ -18433,6 +18602,8 @@ function captureSelectionTarget() {
 let lastPatternColor = '#000000';
 function colorMenu(anchorEl, kind) {
   cancelCellGesture();
+  const textTarget = kind === 'font' && captureShapeTextTarget();
+  if (textTarget) { paletteMenu(anchorEl, '자동', color => { if (color) lastFont = color; textTarget({ color: color || '#000000' }); }); return; }
   const target = captureSelectionTarget(), apply = patch => target(() => { if (!contextCommandDisabled('formatCells')) applyStyle(patch); });
   // 채우기: 엑셀처럼 무늬(패턴) 채우기 · 무늬 색도 바로 고를 수 있게
   const extra = kind !== 'fill' ? [] : (() => {
@@ -19003,7 +19174,7 @@ const MENUS = {
     { label: '잘못된 데이터(I)', icon:'validationCircle', action: () => run('circleInvalid') },
     { label: '유효성 표시 지우기(R)', icon:'validationClear', disabled:!circles?.length, action: () => run('clearCircles') },
   ],
-  paste: () => [
+  paste: () => shapeTextEdit ? [{ label: '텍스트 붙여넣기', key: 'Ctrl+V', action: () => shapeTextClipboard('paste') }] : [
     { label: '붙여넣기', icon: 'paste', key: 'Ctrl+V', action: () => pasteFromButton('all') },
     { label: '연결하여 붙여넣기', action: () => pasteLink(), disabled: !clip || clip.cut },
     { label: '연결된 그림', icon: 'picture', action: () => pasteLinkedPicture(), disabled: !clip || clip.cut },
@@ -19613,8 +19784,8 @@ const COMMANDS = {
   italic: () => toggleStyle('italic'),
   underline: () => toggleStyle('underline'),
   strike: () => toggleStyle('strike'),
-  fontFamily: (f) => applyStyle({ font: f === BASE_FONT.name ? undefined : f }),
-  fontSize: (s) => { const n = Number(s); if (n > 0 && n <= 409) applyStyle({ size: n === BASE_FONT.size ? undefined : n }); },
+  fontFamily: (f) => applyStyle({ font: !selectedTextShape() && f === BASE_FONT.name ? undefined : f }),
+  fontSize: (s) => { const n = Number(s); if (n > 0 && n <= 409) applyStyle({ size: !selectedTextShape() && n === BASE_FONT.size ? undefined : n }); },
   growFont: () => changeFontSize(1),
   shrinkFont: () => changeFontSize(-1),
   borderLast: () => applyBorder(lastBorder),
@@ -19632,12 +19803,12 @@ const COMMANDS = {
   fontDialog: formatCellsDialog,
   formatCells: formatCellsDialog,
 
-  alignLeft: () => applyStyle({ align: styleAt(active.r, active.c).align === 'left' ? undefined : 'left' }),
-  alignCenter: () => applyStyle({ align: styleAt(active.r, active.c).align === 'center' ? undefined : 'center' }),
-  alignRight: () => applyStyle({ align: styleAt(active.r, active.c).align === 'right' ? undefined : 'right' }),
+  alignLeft: () => applyStyle({ align: !selectedTextShape() && formattingStyle().align === 'left' ? undefined : 'left' }),
+  alignCenter: () => applyStyle({ align: !selectedTextShape() && formattingStyle().align === 'center' ? undefined : 'center' }),
+  alignRight: () => applyStyle({ align: !selectedTextShape() && formattingStyle().align === 'right' ? undefined : 'right' }),
   valignTop: () => applyStyle({ valign: 'top' }),
   valignMiddle: () => applyStyle({ valign: 'middle' }),
-  valignBottom: () => applyStyle({ valign: undefined }),
+  valignBottom: () => applyStyle({ valign: selectedTextShape() ? 'bottom' : undefined }),
   wrap: () => toggleStyle('wrap'),
   indentInc: () => applyStyle((s) => ({ indent: Math.min(15, (s.indent || 0) + 1), align: s.align === 'right' ? 'right' : 'left' })),
   indentDec: () => applyStyle((s) => ({ indent: Math.max(0, (s.indent || 0) - 1) || undefined })),
@@ -19926,6 +20097,7 @@ const COMMANDS = {
   freezeTop: () => setFreeze(1, 0),
   freezeFirstCol: () => setFreeze(0, 1),
   shapeEditPoints: () => beginShapePointEdit(chartSel),
+  shapeTextEdit: () => { if (chartSel) beginShapeTextEdit(chartSel); else toast('텍스트를 편집할 도형을 선택하세요.'); },
   shapeFormat: () => { if (chartSel) shapeDialog(chartSel); else toast('도형이나 선을 선택하세요.'); },
   drawingPalette: openDrawingPalette,
   alternatingColors: alternatingColorsDialog,
@@ -20005,6 +20177,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['도형과 텍스트 상자 직접 편집', ['F2·더블클릭·텍스트 편집 메뉴로 도형 안에서 커서를 놓고 입력합니다. 선택한 글자에 굵게·기울임·밑줄·글꼴·크기·색을 적용하고, 리본과 Alt 키 색상표에서도 선택 범위를 유지합니다.', '편집 중 복사·잘라내기·붙여넣기는 선택한 텍스트에만 적용합니다. 한글 입력·줄바꿈·실행 취소와 혼합 텍스트 서식의 XLSX 저장·재열기를 보강했습니다.']],
   ['가져오기 수식 진단 정확성', ['원본 Excel 파일에도 있던 이름 오류를 새 미지원 함수처럼 안내하지 않고 계산 상태에서 원본 오류로 구분합니다. LET/LAMBDA의 지역 함수 호출은 정상 지원 수식으로 판정합니다.']],
   ['색상표와 갤러리 키보드 이동', ['Alt → H → F → C와 Alt → H → H로 연 색상표에서 Alt를 누른 채로도 화살표 이동·Enter 적용·Esc 취소가 가능합니다. 글꼴 검색과 차트 색 구성, 표·피벗·조건부 서식 등 메뉴 안의 견본도 키보드로 선택합니다.']],
   ['우클릭 서식의 선택 범위 고정', ['색·글꼴·무늬·테두리 메뉴를 이동할 때 셀 선택이 따라 움직이던 오류를 수정했습니다. 취소되거나 놓친 마우스 드래그를 정리하고, 늦게 닫힌 색 선택창이 다른 문서나 시트를 수정하지 않도록 했습니다.']],
@@ -20232,7 +20405,14 @@ window.addEventListener('error', (e) => reportError(e.error ?? e.message));
 window.addEventListener('unhandledrejection', (e) => reportError(e.reason));
 
 function run(cmd, arg, { keepMenu = false } = {}) {
+  if (shapeTextEdit) {
+    if (['copy', 'cut', 'paste', 'pasteSpecial'].includes(cmd)) { if (!keepMenu) closeMenus(); shapeTextClipboard(cmd === 'pasteSpecial' ? 'paste' : cmd); return; }
+    if (cmd === 'selectAll') { shapeTextEdit.editor.focus({ selectAll: true }); return; }
+    if (cmd === 'undo' || cmd === 'redo') { shapeTextEdit.editor[cmd](); shapeTextEdit?.editor.focus(); updateRibbon(); return; }
+    if (!SHAPE_TEXT_COMMANDS.has(cmd) && !['zoomIn', 'zoomOut', 'zoom100'].includes(cmd) && !finishShapeTextEdit(() => run(cmd, arg, { keepMenu }))) return;
+  }
   if (!keepMenu) closeMenus();
+  if (['fontDialog', 'formatCells'].includes(cmd) && selectedTextShape()) { shapeDialog(chartSel, null, '텍스트 옵션'); return; }
   if (viewOnly && protectAction(cmd) !== 'free' && !VIEW_CMDS.has(cmd)) { toast('읽기 전용으로 게시된 문서입니다. [편집용 사본 만들기]를 누르면 고칠 수 있습니다.'); return; }
   if (editing && !NO_COMMIT.has(cmd)) {
     if (cmd === 'undo') { cancelEdit(); return; }
@@ -20240,7 +20420,8 @@ function run(cmd, arg, { keepMenu = false } = {}) {
   }
   const fn = COMMANDS[cmd];
   if (!fn) { toast('지원하지 않는 기능입니다.'); return; }
-  if (protectBlocked(protectAction(cmd), sel, cmd, () => run(cmd, arg, { keepMenu }))) return;
+  if (SHAPE_TEXT_COMMANDS.has(cmd) && selectedTextShape()) { if (objectEditBlocked()) return; }
+  else if (protectBlocked(protectAction(cmd), sel, cmd, () => run(cmd, arg, { keepMenu }))) return;
   if (STRUCT_CMDS.has(cmd) && structureLocked()) return;
   if (wb.props?.markedFinal && protectAction(cmd) !== 'free' && !VIEW_CMDS.has(cmd) && !FINAL_OK.has(cmd)) { finalNotice(); return; }
   try {
@@ -20351,12 +20532,12 @@ function setZoom(z) {
   dom.zoomSlider.value = view.zoom;
   dom.zoomLabel.textContent = `${view.zoom}%`;
   gv.setZoom(view.zoom);
-  gv.ensureVisible(active.r, active.c);
+  if (!shapeTextEdit) gv.ensureVisible(active.r, active.c);
   positionEditor();
 }
 
 function ribbonState() {
-  const st = styleAt(active.r, active.c);
+  const st = formattingStyle();
   const fmt = st.numFmt === 'comma' ? 'number' : st.numFmt === 'datetime' ? 'date' : st.numFmt || 'general';
   const f = sheet().freeze ?? {};
   return {
@@ -20364,9 +20545,9 @@ function ribbonState() {
     printFitW: String(normPage(sheet().page).fitW), printFitH: String(normPage(sheet().page).fitH), printScale: String(normPage(sheet().page).scale), printFitActive: !!(normPage(sheet().page).fitW || normPage(sheet().page).fitH),
     fullScreenOn: !!document.fullscreenElement || document.body.classList.contains('wixel-fullscreen'),
     bold: st.bold, italic: st.italic, underline: st.underline, strike: st.strike, wrap: st.wrap,
-    font: st.font || BASE_FONT.name, size: String(st.size || BASE_FONT.size), numFmt: st.numFmt === 'custom' ? 'custom' : fmt,
+    font: selectedTextShape() ? st.font ?? '' : st.font || BASE_FONT.name, size: selectedTextShape() ? st.size == null ? '' : String(st.size) : String(st.size || BASE_FONT.size), numFmt: st.numFmt === 'custom' ? 'custom' : fmt,
     alignLeft: st.align === 'left', alignCenter: st.align === 'center', alignRight: st.align === 'right',
-    valignTop: st.valign === 'top', valignMiddle: st.valign === 'middle', valignBottom: !st.valign,
+    valignTop: st.valign === 'top', valignMiddle: st.valign === 'middle', valignBottom: !st.valign || st.valign === 'bottom',
     merged: !!wb.mergeAt(si, active.r, active.c), painter: !!painter, filterOn: (() => { const k = filterKeyHere(); return k !== null && !!getFilter(k); })(),
     frozen: !!(f.rows || f.cols), lastFill, lastFont, ...view, showGrid: !sheet().noGrid, focusCellOn: !!opts.focusCell,
     ...tableRibbonState(),
@@ -20419,8 +20600,8 @@ function tableRibbonState() {
 function updateRibbon() {
   ribbon?.update(ribbonState());
   document.querySelectorAll('[data-view-mode]').forEach(b => b.setAttribute('aria-pressed', String((sheet().view?.mode || 'normal') === b.dataset.viewMode)));
-  dom.undoBtn.disabled = !wb.canUndo();
-  dom.redoBtn.disabled = !wb.canRedo();
+  dom.undoBtn.disabled = shapeTextEdit ? !shapeTextEdit.editor.hasUndo() : !wb.canUndo();
+  dom.redoBtn.disabled = shapeTextEdit ? !shapeTextEdit.editor.hasRedo() : !wb.canRedo();
 }
 
 function updateTitle() {
@@ -20445,6 +20626,7 @@ function updateTitle() {
 }
 
 function renderAll() {
+  if (shapeTextEdit && !shapeTextEdit.valid()) discardShapeTextEdit();
   if (si >= wb.sheets.length) si = wb.sheets.length - 1;
   syncDocumentView();
   if (chartSel && !findObject(sheet(), chartSel) && drag?.type !== 'draw') chartSel = null;
@@ -20512,7 +20694,7 @@ function onBookChange() {
 // ───────────────────────── 이벤트 연결 ─────────────────────────
 function bindEvents() {
   gridMousePan = installGridMousePan({ view:dom.view, enabled:()=>!!mobileWork?.pointerNavigation,
-    context:()=>sheet(), canStart:()=>!editing && !isMenuOpen() && !isDialogOpen() && !document.querySelector('.backstage'),
+    context:()=>sheet(), canStart:()=>!editing && !shapeTextEdit && !isMenuOpen() && !isDialogOpen() && !document.querySelector('.backstage'),
     onArmedChange: armed => {
       const button = $('mobileHandPan');
       if (!button) return;
@@ -20528,14 +20710,29 @@ function bindEvents() {
   };
   window.addEventListener('pointerdown', trackObjectPointer, true);
   window.addEventListener('mousedown', trackObjectPointer, true);
+  const finishTextPointer = e => {
+    const session = shapeTextEdit;
+    if (!session || session.editor.contains(e.target)) return;
+    session.editor.rememberSelection();
+    if (e.target.closest?.('#ribbon, #ribbonTabs, .titlebar, .quick-access, .qat, .menu, .keytip-command-menu')) return;
+    if (!finishShapeTextEdit()) { e.preventDefault(); e.stopPropagation(); }
+  };
+  window.addEventListener('pointerdown', finishTextPointer, true);
+  window.addEventListener('mousedown', finishTextPointer, true);
   const ed = dom.editor;
   ed.addEventListener('keydown', onEditorKeyDown);
   // 모바일의 비입력 격자 포커스에서도 메뉴 단축키를 처리한다. 자식 에디터는 기존 경로만 사용한다.
   dom.view.addEventListener('keydown', (e) => {
     if (e.target === dom.view && !e.defaultPrevented) onEditorKeyDown(e);
   });
-  document.addEventListener('keyup', handleKeytipUp);
+  document.addEventListener('keyup', handleKeytipUp, true);
   document.addEventListener('keydown', (e) => {
+    if (shapeTextEdit?.editor.contains(e.target)) {
+      if (!e.isComposing && e.keyCode !== 229 && (keytip || e.key === 'Alt' || e.key === 'F10' && !e.shiftKey || e.altKey)) {
+        if (handleKeytipKey(e)) e.stopPropagation();
+      }
+      return;
+    }
     // A fresh physical key starts a new editing gesture. Delayed keyup does not.
     if (!keytip && shortcutInputGuard && !isMenuOpen() && !e.defaultPrevented && !e.repeat && !['Alt', 'Control', 'Meta', 'Shift', 'CapsLock', 'Escape'].includes(e.key)) shortcutInputGuard = false;
     if (keytip && !editing && !isDialogOpen() && !document.querySelector('.backstage')) {
@@ -20559,7 +20756,7 @@ function bindEvents() {
   const objectTyped = () => {
     const v = ed.value;
     ed.value = '';
-    if (v && sheet().shapes?.some((x) => x.id === chartSel)) shapeDialog(chartSel, v);
+    if (v && sheet().shapes?.some((x) => x.id === chartSel)) beginShapeTextEdit(chartSel, { typed: v });
   };
   ed.addEventListener('beforeinput', blockShortcutInput);
   ed.addEventListener('compositionupdate', blockShortcutInput);
@@ -20741,6 +20938,7 @@ function bindEvents() {
   });
 
   dom.autosave.addEventListener('click', () => {
+    if (!finishShapeTextEdit(() => dom.autosave.click())) return;
     autosave = !autosave;
     if (autosave) saveNow(false);
     try {
@@ -20781,13 +20979,15 @@ function bindEvents() {
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) { pageDeparting = false; if (dirty && !recoverySavePaused) scheduleAutosave(); return; }
     if (pageDeparting) return;
+    finishShapeTextEdit();
     // 백그라운드로 이동할 때 보관을 시작한다. unload 중 Blob 압축을 새로 시작하면
     // WebKit이 폐기된 문서의 Blob 읽기를 차단하고 저장도 완료할 수 없다.
     if (!bigBook() || dirty) saveToStorage();
     libraryFlush();
   });
   window.addEventListener('beforeunload', (e) => {
-    const warnUnsaved = dirty && (!autosave || bigBook() || recoveryMarker?.phase !== 'saved');
+    finishShapeTextEdit();
+    const warnUnsaved = !!shapeTextEdit || dirty && (!autosave || bigBook() || recoveryMarker?.phase !== 'saved');
     pageDeparting = true;
     clearTimeout(saveTimer); clearTimeout(libTimer); clearTimeout(serverTimer);
     // 사용자가 나가기를 취소하면 다음 이벤트 루프에서 저장 예약도 복구한다.

@@ -46,7 +46,8 @@ try {
     w.restore({ sheets: [{ name: '패널 확인', cells: { '0,0': { raw: '보존' } }, shapes: [{ id: 'text-fit', kind: 'rect', x: 100, y: 80, w: 320, h: 190, fill: '#ffffff', stroke: '#4472c4', text: '텍스트 '.repeat(60), size: 32, pad: [13, 19, 23, 29] }] }] });
     t.gv().setZoom(100); t.gv().layout(); t.gv().renderAll();
   });
-  await page.locator('.obj[data-id="text-fit"]').dblclick({ position: { x: 30, y: 30 } });
+  await page.locator('.obj[data-id="text-fit"]').click({ position: { x: 30, y: 30 } });
+  await page.evaluate(() => window.tabula.run('shapeFormat'));
   const pane = page.locator('.shape-format-pane');
   await pane.getByRole('tab', { name: '텍스트 옵션', exact: true }).click();
   await pane.getByRole('tab', { name: '텍스트 상자', exact: true }).click();

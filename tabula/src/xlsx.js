@@ -1739,39 +1739,42 @@ function readDrawing(files, path, sheet, ctx) {
     if (isText && !ln) stroke = null;
     const tx = child(el, 'txBody');
     const paras = kids(tx, 'p');
-    const text = paras.map((p) => descendants(p, 't').map((t) => t.text).join('')).join('\n');
-    // 글자 서식을 문단 · 글자 조각(run)마다 그대로 (엑셀과 같은 모양)
-    const lvl = child(child(tx, 'lstStyle'), 'lvl1pPr');
-    const baseR = child(lvl, 'defRPr');
-    const runOf = (r, t) => {
-      const pr = child(r, 'rPr');
-      const a = { ...(baseR?.attrs ?? {}), ...(pr?.attrs ?? {}) };
-      const out = { t };
-      out.b = a.b === '1';
-      out.i = a.i === '1';
-      out.u = !!a.u && a.u !== 'none';
-      if (a.strike && a.strike !== 'noStrike') out.s = true;
-      if (a.sz) out.sz = Number(a.sz) / 100;
-      const c = dmlColor(child(pr, 'solidFill') ?? child(baseR, 'solidFill'), ctx.theme);
-      if (c) out.color = c;
-      const face = child(pr, 'ea')?.attrs.typeface ?? child(pr, 'latin')?.attrs.typeface;
-      if (face && !face.startsWith('+')) out.font = face;
+    // 목록 기본/단계 → 문단 기본 → 조각 서식을 속성별로 상속한다.
+    const listStyle = child(tx, 'lstStyle');
+    const defaultPara = child(listStyle, 'defPPr');
+    const lvl = child(listStyle, 'lvl1pPr');
+    const runStyle = (pr, pPr, level) => {
+      const props = [child(defaultPara, 'defRPr'), child(level, 'defRPr'), child(pPr, 'defRPr'), pr].filter(Boolean);
+      const attrs = Object.assign({}, ...props.map(p => p.attrs));
+      const out = { b: ['1', 'true'].includes(attrs.b), i: ['1', 'true'].includes(attrs.i),
+        u: !!attrs.u && attrs.u !== 'none', s: !!attrs.strike && attrs.strike !== 'noStrike' };
+      if (attrs.sz) out.sz = Number(attrs.sz) / 100;
+      for (let i = props.length - 1; i >= 0; i--) {
+        if (!out.color) out.color = dmlColor(child(props[i], 'solidFill'), ctx.theme) || undefined;
+        if (!out.font) {
+          const face = child(props[i], 'ea')?.attrs.typeface || child(props[i], 'latin')?.attrs.typeface;
+          if (face && !face.startsWith('+')) out.font = face;
+        }
+      }
+      if (!out.color) delete out.color;
       return out;
     };
     const rich = paras.map((p) => {
       const pPr = child(p, 'pPr');
-      const al = pPr?.attrs.algn ?? lvl?.attrs.algn;
+      const level = child(listStyle, `lvl${Math.max(0, Math.min(8, Number(pPr?.attrs.lvl) || 0)) + 1}pPr`);
+      const al = pPr?.attrs.algn ?? level?.attrs.algn ?? defaultPara?.attrs.algn;
       const runs = [];
       for (const r of p.children) {
-        if (r.name === 'r' || r.name === 'fld') runs.push(runOf(r, child(r, 't')?.text ?? ''));
-        else if (r.name === 'br') runs.push({ t: '\n' });
+        if (r.name === 'r' || r.name === 'fld') runs.push({ t: child(r, 't')?.text ?? '', ...runStyle(child(r, 'rPr'), pPr, level) });
+        else if (r.name === 'br') runs.push({ t: '\n', ...runStyle(child(r, 'rPr'), pPr, level) });
       }
-      const end = child(p, 'endParaRPr');
       const para = { runs };
       if (al) para.align = al === 'ctr' ? 'center' : al === 'r' ? 'right' : al === 'just' || al === 'dist' ? 'justify' : 'left';
-      if (!runs.length && end?.attrs.sz) para.sz = Number(end.attrs.sz) / 100;
+      if (!runs.length) { const endStyle = runStyle(child(p, 'endParaRPr'), pPr, level); if (endStyle.sz) para.sz = endStyle.sz; }
       return para;
     });
+    // a:br 은 문단 안 줄바꿈이다. 편집용 평문에도 보존하여 편집 시 줄이 합쳐지지 않게 한다.
+    const text = rich.map(p => p.runs.map(r => r.t).join('')).join('\n');
     const rPr = descendants(child(el, 'txBody'), 'rPr')[0] ?? descendants(child(el, 'txBody'), 'defRPr')[0] ?? descendants(child(el, 'txBody'), 'endParaRPr')[0];
     // 문단에 algn 이 없으면 목록 스타일, 그것도 없으면 DrawingML 기본값(왼쪽)
     const algn = descendants(child(el, 'txBody'), 'pPr')[0]?.attrs.algn ?? lvl?.attrs.algn;
@@ -1849,22 +1852,23 @@ function readDrawing(files, path, sheet, ctx) {
     if (dashV && dashV !== 'solid') shape.dash = dashV === 'sysDot' ? 'dot' : dashV;
     const lw = Number(ln?.attrs.w);
     if (lw && stroke) shape.strokeWidth = Math.round((lw / EMU) * 4) / 4;
-    if (rPr?.attrs.sz) shape.size = Number(rPr.attrs.sz) / 100;
-    if (rPr?.attrs.b === '1') shape.bold = true;
-    if (rPr?.attrs.i === '1') shape.italic = true;
-    if (rPr?.attrs.u && rPr.attrs.u !== 'none') shape.underline = true;
-    const face = child(rPr, 'ea')?.attrs.typeface ?? child(rPr, 'latin')?.attrs.typeface;
-    if (face && !face.startsWith('+')) shape.font = face;
-    const tc = rPr && dmlColor(child(rPr, 'solidFill'), ctx.theme);
-    if (tc) shape.color = tc;
+    const firstRun = rich.find(p => p.runs.length)?.runs[0] ?? runStyle(rPr, child(paras[0], 'pPr'), lvl);
+    if (firstRun.sz) shape.size = firstRun.sz;
+    if (firstRun.b) shape.bold = true;
+    if (firstRun.i) shape.italic = true;
+    if (firstRun.u) shape.underline = true;
+    if (firstRun.s) shape.strike = true;
+    if (firstRun.font) shape.font = firstRun.font;
+    if (firstRun.color) shape.color = firstRun.color;
     else if (!isText && fill) shape.color = '#ffffff';
-    shape.align = algn === 'ctr' ? 'center' : algn === 'r' ? 'right' : algn === 'just' || algn === 'dist' ? 'justify' : 'left';
-    // 서식이 섞여 있으면 문단 · 조각 그대로 보관 (한 가지 서식이면 단순 글자로 충분)
+    shape.align = rich[0]?.align ?? (algn === 'ctr' ? 'center' : algn === 'r' ? 'right' : algn === 'just' || algn === 'dist' ? 'justify' : 'left');
+    // 줄바꿈 및 빈 문단 크기도 조각의 일부다. 생략하면 편집/재저장 때 구조가 달라진다.
     const flat = rich.flatMap((p) => p.runs);
     const same = (k) => flat.every((r) => r[k] === flat[0]?.[k]);
-    if (rich.length && (!['b', 'i', 'u', 'sz', 'color', 'font'].every(same) || rich.some((p) => (p.align ?? shape.align) !== shape.align))) {
+    if (rich.length && (!['b', 'i', 'u', 's', 'sz', 'color', 'font'].every(same) ||
+      rich.some(p => (p.align ?? shape.align) !== shape.align || p.sz !== undefined && p.sz !== shape.size || p.runs.some(r => r.t.includes('\n'))))) {
       shape.paras = rich;
-      for (const k of ['bold', 'italic', 'underline', 'font', 'size', 'color']) delete shape[k];
+      for (const k of ['bold', 'italic', 'underline', 'strike', 'font', 'size', 'color']) delete shape[k];
     }
     const body = child(tx, 'bodyPr');
     const anc = body?.attrs.anchor;
@@ -4107,20 +4111,22 @@ function shapeXml(sh, id, xfrm, hyperlinkXml = () => '') {
     return `<xdr:cxnSp macro=""><xdr:nvCxnSpPr><xdr:cNvPr id="${id}" name="${name}"${description}>${hyperlinkXml(sh)}</xdr:cNvPr><xdr:cNvCxnSpPr>${locks}</xdr:cNvCxnSpPr></xdr:nvCxnSpPr><xdr:spPr>${xfrm(sh)}<a:prstGeom prst="${sh.kind === 'line' ? 'straightConnector1' : sh.kind}"><a:avLst/></a:prstGeom>${ln}${effects}</xdr:spPr></xdr:cxnSp>`;
   }
   const algnOf = (a) => (a === 'center' ? 'ctr' : a === 'right' ? 'r' : a === 'justify' ? 'just' : 'l');
-  const algn = algnOf(sh.align);
+  const defaultAlign = sh.align ?? (sh.kind === 'textbox' ? 'left' : 'center');
+  const algn = algnOf(defaultAlign);
   const faceXml = (font) => font ? `<a:latin typeface="${esc(font)}"/><a:ea typeface="${esc(font)}"/>` : '';
-  const textPr = `lang="ko-KR" sz="${Math.round((sh.size ?? 11) * 100)}"${sh.bold ? ' b="1"' : ''}${sh.italic ? ' i="1"' : ''}${sh.underline ? ' u="sng"' : ''}`;
+  const textPr = `lang="ko-KR" sz="${Math.round((sh.size ?? 11) * 100)}" b="${sh.bold ? 1 : 0}" i="${sh.italic ? 1 : 0}" u="${sh.underline ? 'sng' : 'none'}" strike="${sh.strike ? 'sngStrike' : 'noStrike'}"`;
   const textChildren = `<a:solidFill>${shapeColorXml(sh.color ?? '#000000')}</a:solidFill>${faceXml(sh.font)}`;
   const rPr = `<a:rPr ${textPr}>${textChildren}</a:rPr>`;
-  // 문단 · 조각별 서식이 있으면 그대로 저장
+  // false/none도 명시하여 Excel의 목록·문단 기본값이 다시 적용되지 않게 한다.
   const runXml = (r) => {
-    if (r.t === '\n') return '<a:br/>';
-    const a = ['lang="ko-KR"', `sz="${Math.round((r.sz ?? sh.size ?? 11) * 100)}"`, r.b ?? sh.bold ? 'b="1"' : '', r.i ?? sh.italic ? 'i="1"' : '', r.u ?? sh.underline ? 'u="sng"' : '', r.s ? 'strike="sngStrike"' : ''].filter(Boolean).join(' ');
-    return `<a:r><a:rPr ${a}><a:solidFill>${shapeColorXml(r.color ?? sh.color ?? '#000000')}</a:solidFill>${faceXml(r.font ?? sh.font)}</a:rPr><a:t>${esc(r.t)}</a:t></a:r>`;
+    const a = `lang="ko-KR" sz="${Math.round((r.sz ?? sh.size ?? 11) * 100)}" b="${(r.b ?? sh.bold) ? 1 : 0}" i="${(r.i ?? sh.italic) ? 1 : 0}" u="${(r.u ?? sh.underline) ? 'sng' : 'none'}" strike="${(r.s ?? sh.strike) ? 'sngStrike' : 'noStrike'}"`;
+    const pr = `<a:rPr ${a}><a:solidFill>${shapeColorXml(r.color ?? sh.color ?? '#000000')}</a:solidFill>${faceXml(r.font ?? sh.font)}</a:rPr>`;
+    const parts = String(r.t ?? '').split('\n');
+    return parts.map((text, i) => `${i ? `<a:br>${pr}</a:br>` : ''}${text || parts.length === 1 ? `<a:r>${pr}<a:t xml:space="preserve">${esc(text)}</a:t></a:r>` : ''}`).join('');
   };
   const paras = sh.paras
-    ? sh.paras.map((p) => `<a:p><a:pPr algn="${algnOf(p.align ?? sh.align)}"/>${p.runs.length ? p.runs.map(runXml).join('') : `<a:endParaRPr lang="ko-KR" sz="${Math.round((p.sz ?? sh.size ?? 11) * 100)}"/>`}</a:p>`).join('')
-    : String(sh.text ?? '').split('\n').map((line) => `<a:p><a:pPr algn="${algn}"/>${line ? `<a:r>${rPr}<a:t>${esc(line)}</a:t></a:r>` : `<a:endParaRPr ${textPr}>${textChildren}</a:endParaRPr>`}</a:p>`).join('');
+    ? sh.paras.map((p) => `<a:p><a:pPr algn="${algnOf(p.align ?? defaultAlign)}"/>${p.runs.length ? p.runs.map(runXml).join('') : `<a:endParaRPr ${textPr.replace(/sz="[^"]*"/, `sz="${Math.round((p.sz ?? sh.size ?? 11) * 100)}"`)}>${textChildren}</a:endParaRPr>`}</a:p>`).join('')
+    : String(sh.text ?? '').split('\n').map((line) => `<a:p><a:pPr algn="${algn}"/>${line ? `<a:r>${rPr}<a:t${/^\s|\s$/.test(line) ? ' xml:space="preserve"' : ''}>${esc(line)}</a:t></a:r>` : `<a:endParaRPr ${textPr}>${textChildren}</a:endParaRPr>`}</a:p>`).join('');
   const anchor = sh.valign ? { top: 't', middle: 'ctr', bottom: 'b' }[sh.valign] : sh.kind === 'textbox' ? 't' : 'ctr';
   const insets = sh.pad ? ['tIns', 'rIns', 'bIns', 'lIns'].map((k, i) => ` ${k}="${Math.round((sh.pad[i] ?? (i % 2 ? 9.6 : 4.8)) * EMU)}"`).join('') : '';
   const adjustment = sh.kind === 'roundRect' && Number.isSafeInteger(sh.adjustments?.adj) ? `<a:avLst><a:gd name="adj" fmla="val ${sh.adjustments.adj}"/></a:avLst>` : '<a:avLst/>';

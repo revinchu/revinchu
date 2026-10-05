@@ -237,16 +237,22 @@ export function shapeTextHtml(o) {
   const tfx = [];
   if (o.textShadow) tfx.push('2px 2px 3px rgba(0,0,0,.45)');
   if (o.textGlow) tfx.push(`0 0 4px ${esc(o.textGlow)}`, `0 0 8px ${esc(o.textGlow)}`);
-  const textFx = `${o.textOutline ? `-webkit-text-stroke:${o.textOutline.w ?? 0.75}px ${esc(o.textOutline.color ?? '#000')};` : ''}${tfx.length ? `text-shadow:${tfx.join(',')};` : ''}${o.font ? `font-family:${fontStack(o.font)};` : ''}${o.italic ? 'font-style:italic;' : ''}${o.underline ? 'text-decoration:underline;' : ''}`;
+  const textFx = `${o.textOutline ? `-webkit-text-stroke:${o.textOutline.w ?? 0.75}px ${esc(o.textOutline.color ?? '#000')};` : ''}${tfx.length ? `text-shadow:${tfx.join(',')};` : ''}${o.font ? `font-family:${fontStack(o.font)};` : ''}${!o.paras && o.italic ? 'font-style:italic;' : ''}${!o.paras && (o.underline || o.strike) ? `text-decoration:${o.underline ? 'underline ' : ''}${o.strike ? 'line-through' : ''};` : ''}`;
   const rotation = [90, 270].includes(Number(o.textRot)) ? Number(o.textRot) : 0;
   const rotateCss = rotation ? `inset:auto;left:50%;top:50%;width:${Math.max(1, o.h)}px;height:${Math.max(1, o.w)}px;transform:translate(-50%,-50%) rotate(${rotation}deg);` : '';
-  const base = `${rotateCss}justify-content:${vj};padding:${pad};text-align:${o.align ?? (o.kind === 'textbox' ? 'left' : 'center')};color:${esc(o.color ?? '#000')};font-size:${o.size ?? 11}pt;${o.bold ? 'font-weight:700;' : ''}${o.nowrap ? 'white-space:pre;' : ''}${textFx}`;
+  const base = `${rotateCss}justify-content:${vj};padding:${pad};text-align:${o.align ?? (o.kind === 'textbox' ? 'left' : 'center')};color:${esc(o.color ?? '#000')};font-size:${o.size ?? 11}pt;${!o.paras && o.bold ? 'font-weight:700;' : ''}${o.nowrap ? 'white-space:pre;' : ''}${textFx}`;
   if (!o.paras) return `<div class="sh-text" data-text-fit="${o.textFit === 'shrink' ? 'shrink' : 'none'}" style="${base}"><div class="sh-text-content">${esc(o.text)}</div></div>`;
-  const runCss = (r) => [r.b ? 'font-weight:700' : '', r.i ? 'font-style:italic' : '', r.u || r.s ? `text-decoration:${r.u ? 'underline ' : ''}${r.s ? 'line-through' : ''}` : '',
-    r.sz ? `font-size:${r.sz}pt` : '', r.color ? `color:${esc(r.color)}` : '', r.font ? `font-family:${fontStack(r.font)}` : ''].filter(Boolean).join(';');
+  // rich 텍스트의 장식은 부모가 아니라 각 run에 적용한다. 부모의 밑줄은
+  // 자식의 text-decoration:none으로 취소할 수 없어 명시 false를 무시하게 된다.
+  const runCss = (r) => {
+    const bold = r.b ?? o.bold, italic = r.i ?? o.italic, underline = r.u ?? o.underline, strike = r.s ?? o.strike;
+    return [bold ? 'font-weight:700' : 'font-weight:400', italic ? 'font-style:italic' : 'font-style:normal',
+      `text-decoration:${underline || strike ? `${underline ? 'underline ' : ''}${strike ? 'line-through' : ''}`.trim() : 'none'}`,
+      r.sz ? `font-size:${r.sz}pt` : '', r.color ? `color:${esc(r.color)}` : '', r.font ? `font-family:${fontStack(r.font)}` : ''].filter(Boolean).join(';');
+  };
   const paras = o.paras.map((p) => {
     const inner = p.runs.length
-      ? p.runs.map((r) => (r.t === '\n' ? '<br>' : `<span style="${runCss(r)}">${esc(r.t)}</span>`)).join('')
+      ? p.runs.map((r) => (r.t === '\n' ? `<br style="${runCss(r)}">` : `<span style="${runCss(r)}">${esc(r.t)}</span>`)).join('')
       : `<span style="font-size:${p.sz ?? o.size ?? 11}pt">&#8203;</span>`;
     return `<div${p.align ? ` style="text-align:${p.align}"` : ''}>${inner}</div>`;
   }).join('');

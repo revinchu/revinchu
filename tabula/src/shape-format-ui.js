@@ -1,4 +1,5 @@
 import { el } from './ui.js';
+import { shapeTextFormatPatch } from './shape-text-format.js';
 import { shapeSvg } from './shapes.js';
 import { SHAPE_DASH_OPTIONS, SHAPE_ARROW_OPTIONS, SHAPE_PATTERN_OPTIONS, shapeSizePatch, shapeArrowEnd, shapeGradientStops, shapeGradientStopPatch, addShapeGradientStop } from './shape-format.js';
 
@@ -19,7 +20,7 @@ export function createShapeFormatPanel({ getShape, onChange, isLine, fontName = 
     linePreview.replaceChildren(sample);
   };
   const up = patch => { if (!getShape()) { draw(); return; } if (onChange(patch) === false) draw(); else preview(); };
-  const textUp = patch => up({ ...patch, paras: undefined });
+  const textUp = patch => { const shape = getShape(); if (!shape) return; const next = shapeTextFormatPatch(shape, patch); if (Object.keys(next).length) up(next); };
   const row = (name, input) => { input?.setAttribute('aria-label', name); return el('label', { class: 'cfp-row' }, el('span', {}, name), input); };
   const sec = (name, ...children) => {
     const details = el('details', { class: 'cfp-sec', open: expanded.get(name) !== false, 'data-shape-section': name }, el('summary', {}, name), ...children);
