@@ -679,3 +679,10 @@ node tools/popup-key-conflicts.mjs
 row-limit-mode.mjs는 기본 1,048,576행/확장 20,000,000행의 12가지 UI 사례를 검사한다. row-limit-safety.mjs는 마지막 행의 편집·메타데이터·인쇄/HTML 보존 9사례를 검사한다. WIXEL_URL로 소스/번들을, WIXEL_BROWSER=chromium|firefox|webkit으로 엔진을 지정한다. 출력과 사례 필터 환경 변수는 각 도구 첫 부분을 따른다. 승인된 공개주소의 합성 검증에만 WIXEL_ROW_LIMIT_PUBLIC=1을 추가한다. 외부 요청·API·원격 쓰기는 차단한다.
 
 row-limit-storage.mjs는 로컬 Chromium에서 CSV 확장 행 가져오기 및 실제 WIXEL 다운로드/재열기를 확인한다. WIXEL_ROW_STORAGE_OUT은 D: 출력 폴더다. 실제 사용자 파일을 사용하지 않는다.
+
+
+### 무료 웹 글꼴 회귀
+
+`node tools/web-fonts.mjs`: 한/영 검색·400종 이후 더 보기·분류·실제 Google/CDN 바이너리 로드·모바일·셀/도형 서식·기본 글꼴·XLSX 이름 왕복·늦은 로드와 Undo/문서 전환·실패 재시도·연속 미니 서식 명령을 확인한다. `WIXEL_URL`, `WIXEL_BROWSER=chromium|firefox|webkit`, `WIXEL_OUTPUT`(D: 경로), 선택 `WIXEL_FILTER`로 실행한다. 공개검사는 `WIXEL_FONTS_PUBLIC=1`과 정확한 공개주소를 지정하고 문서 API 및 관계없는 외부 요청을 차단한다. `PLAYWRIGHT_MODULE`과 `PLAYWRIGHT_BROWSERS_PATH`는 기존 번들 런타임을 사용할 수 있다.
+
+`node tools/update-font-catalog.mjs --cache-dir D:/Codex/Temp/wixel-font-catalog`: 공식 목록과 라이선스 확인 후 카탈로그 갱신. 자세한 검증/재생성 절차와 제외 기준은 [무료 글꼴 라이선스](../docs/font-licenses.md)를 참조한다.

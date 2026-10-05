@@ -6,6 +6,8 @@ import { prepareCond, condFormatAt } from './condfmt.js';
 import { safeUrl } from './safe-html.js';
 import { slicerColors } from './slicerstyle.js';
 import { normalizePrintAreas } from './print-layout.js';
+import { fontFamilyCandidates } from './fonts.js';
+import { createFontUsage, addFontUsage, collectMarkupFontUsage, embedFontCss } from './font-export.js';
 
 const esc = value => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 const finite = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
@@ -41,7 +43,7 @@ function* visible(axis, first, last) {
 function cssFor(st, formatted) {
   const align = st.align && st.align !== 'general' ? st.align === 'centerContinuous' ? 'center' : st.align : formatted.align;
   const css = [`text-align:${['left','center','right','justify'].includes(align) ? align : 'left'}`, `font-size:${Math.max(1, Math.min(512, finite(st.size, 11)))}pt`];
-  if (st.font && !/[;{}<>\\\r\n]/.test(st.font)) css.push(`font-family:${String(st.font).replace(/["']/g, '')},sans-serif`);
+  if (st.font && !/[;{}<>\\\r\n]/.test(st.font)) css.push(`font-family:${fontFamilyCandidates(st.font).map(f => `'${String(f).replace(/[\\'"\r\n\f<>]/g, '')}'`).join(',')},sans-serif`);
   if (st.bold) css.push('font-weight:700');
   if (st.italic) css.push('font-style:italic');
   if (color(formatted.color ?? st.color)) css.push(`color:${color(formatted.color ?? st.color)}`);
@@ -59,6 +61,8 @@ function cellHtml(wb, si, r, c, merge, cond, options) {
   const rr = merge?.r ?? r, cc = merge?.c ?? c, value = wb.getValue(si, rr, cc);
   const st = { ...tableCellDisplayStyle(wb, si, rr, cc), ...condFormatAt(cond, wb, si, rr, cc, value).style };
   const formatted = formatValue(value, st, wb.date1904), cell = wb.getCell(si, rr, cc);
+  st.font ||= wb.defaultFont?.name || '맑은 고딕';
+  addFontUsage(options.fontUsage, st.font, formatted.text, st);
   let content = esc(formatted.text);
   const image = formatted.image ?? cell?.image, src = image && safeUrl(image.src, 'image');
   if (src) content = `<img src="${esc(src)}" alt="${esc(image.alt ?? '')}" style="max-width:100%;max-height:100%;object-fit:contain">`;
@@ -123,6 +127,7 @@ export async function writeSheetHtmlToSink(wb, si, sink, options = {}) {
 }
 
 async function writeSheetHtml(wb, si, options, sink = null) {
+  const fontUsage = createFontUsage(); options = { ...options, fontUsage };
   const sheet = wb.sheets[si];
   if (!sheet) throw new Error('저장할 시트가 없습니다.');
   const { rows:rowAxis, cols:colAxis } = axes(wb, si, options), fallback = options.range ?? htmlSheetRange(wb, si);
@@ -184,11 +189,16 @@ async function writeSheetHtml(wb, si, options, sink = null) {
     if(!options.renderObject)throw new Error('차트·그림·도형 저장 준비가 필요합니다.');
     // HTML은 인쇄물이 아니므로 noPrint 개체도 표시합니다. 숨겨진 개체만 제외합니다.
     if(paged)push(`<section aria-label="차트 · 그림 · 도형 · 슬라이서"><p class="wx-note">개체는 표 구간과 별도로 시트의 원래 좌표에 배치했습니다.</p><div class="wx-canvas-view"><div class="wx-canvas" style="width:${objectW}px;height:${objectH}px">`);
-    for(const [kind,o]of objects){check();const html=await options.renderObject(kind,o);if(typeof html!=='string')throw new Error('개체를 웹페이지로 변환하지 못했습니다.');push(`<div class="wx-object" data-object="${esc(o.id)}" style="left:${finite(o.x)}px;top:${finite(o.y)}px;width:${Math.max(1,finite(o.w,100))}px;height:${Math.max(1,finite(o.h,100))}px;${o.rot?`transform:rotate(${finite(o.rot)}deg);`:''}">${html}</div>`);await yieldWork();}
+    for(const [kind,o]of objects){check();const html=await options.renderObject(kind,o);if(typeof html!=='string')throw new Error('개체를 웹페이지로 변환하지 못했습니다.');collectMarkupFontUsage(html,fontUsage);push(`<div class="wx-object" data-object="${esc(o.id)}" style="left:${finite(o.x)}px;top:${finite(o.y)}px;width:${Math.max(1,finite(o.w,100))}px;height:${Math.max(1,finite(o.h,100))}px;${o.rot?`transform:rotate(${finite(o.rot)}deg);`:''}">${html}</div>`);await yieldWork();}
     if(paged)push('</div></div></section>');
   }
   if(!paged)push('</div></div>');
   if(!pageCount)push('<p>표시할 셀이 없습니다.</p>');
   if(paged&&pageCount)push(`<script nonce="wixel-html-export">${PAGER}</script>`);
+  options.onProgress?.(.99,'출력 글꼴 준비 중');
+  const fonts = await embedFontCss(fontUsage, { signal: options.signal, onWarning: options.onWarning, fetchImpl: options.fetchFont });
+  check();
+  if (fonts.css) push(`<style data-wixel-embedded-fonts="true">${fonts.css}</style>`);
+  for (const warning of fonts.warnings) push(`<p class="wx-note" role="alert">${esc(warning)}</p>`);
   push('</body></html>');check();flush();await drain();check();options.onProgress?.(1,'웹페이지 준비 완료');return sink ? { bytesWritten } : new Blob(parts,{type:'text/html;charset=utf-8'});
 }

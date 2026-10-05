@@ -83,7 +83,7 @@ import { createChartSelectionPanel } from './chart-selection-ui.js';
 import { createChartPalettePicker, createChartPaletteEditor } from './chart-palette-ui.js';
 import { chartPalettePatch, chartStylePatch, chartSeriesColorPatch, chartPointColorPatch, chartSeriesPatch, chartExplosionPatch, chartPartDeletePatch, chartLayoutAfterDrag, chartExplosionAfterDrag } from './chart-edit.js';
 import { chartView3D } from './chart-3d.js';
-import { GridView, BASE_FONT, setBaseFont, measureText, fontStack, PATTERNS, patternCss, gradientCss, glyphShift, clearGlyphShifts, timelinePeriods, shapeTextHtml, fitShapeText } from './view.js';
+import { GridView, BASE_FONT, setBaseFont, measureText, fontStack, PATTERNS, patternCss, gradientCss, glyphShift, clearGlyphShifts, clearFontMetrics, timelinePeriods, shapeTextHtml, fitShapeText } from './view.js';
 import { setThemeColors, withThemeColors, THEME, applyTint, presetStyleElements } from './stylepresets.js';
 import { objectStyleKey, findObjectStyle, normalizeObjectStyles, upsertObjectStyle, objectStylePatch, clearObjectStyle } from './object-styles.js';
 import { objectStyleEditor } from './object-style-editor.js';
@@ -113,7 +113,8 @@ import { logicalCol, ColBuilder } from './block.js';
 import { PROTECT_OPTIONS, defaultAllow, excelHash, isProtected, isLockedStyle, allowed } from './protect.js';
 import { PAPERS, MARGINS, normPage, paperOf, printScale, headerParts, pageScalePatch } from './page.js';
 import { THEME_FONTS, THEME_EFFECTS } from './theme-options.js';
-import { openPrintPreview, htmlPrintDocument } from './print-preview.js';
+import { openPrintPreview, htmlPrintDocumentWithFonts } from './print-preview.js';
+import { embedSvgFonts } from './font-export.js';
 import { prepareCond, condFormatAt } from './condfmt.js';
 import { printMergeMap } from './print-document.js';
 import { normalizePageBreaks } from './print-layout.js';
@@ -129,7 +130,7 @@ import { pivotSortPatch } from './pivot-sort-state.js';
 import { contextMenuKind, contextContains, selectionAxisRanges, selectionAxisTargets } from './context-selection.js';
 import { rowPointsToPixels, rowPixelsToPoints, columnCharsToPixels, pixelsToColumnChars, MAX_ROW_POINTS, MAX_COLUMN_CHARS } from './dimension.js';
 import { createContextMiniToolbar } from './context-mini-toolbar.js';
-import { fontList, fontAlias, loadLocalFonts, canListLocalFonts } from './fonts.js';
+import { fontList, fontAlias, loadLocalFonts, canListLocalFonts, getWebFont, fontLabel, fontMatches, fontIsKorean, fontInSource, requestWebFont, webFontStatus, onWebFontChange } from './fonts.js';
 import { ICONS } from './icons.js';
 import {
   CELL_OPS, TEXT_OPS, DATE_PERIODS, ICON_SETS, ICON_SVG, VISUAL_TYPES, iconSetById, describeCond, SCALE_PRESETS, BAR_PRESETS, DEFAULT_SCALE2, DEFAULT_SCALE3, ruleRanges,
@@ -8792,7 +8793,7 @@ function optionsDialog(startTab = 0) {
       note('기본: 1,048,576행 (Excel과 동일). 켜면 최대 20,000,000행까지 표시하고 편집합니다. 이 브라우저에 설정을 기억합니다.'),
       note('꺼도 확장 영역의 기존 데이터는 보존됩니다. 확장 영역까지 저장하려면 WIXEL 형식을 사용하세요. Excel 형식은 1,048,576행까지만 지원합니다.'),
       title('새 통합 문서 만들기'),
-      select('기본 글꼴', o.newFont, FONTS.map((f) => [f, f]), (v) => { o.newFont = v; }),
+      select('기본 글꼴', o.newFont, fontList().map((f) => [f, fontLabel(f)]), (v) => { o.newFont = v; }),
       select('글꼴 크기', o.newSize, FONT_SIZES.map((f) => [f, String(f)]), (v) => { o.newSize = Number(v); }),
       number('포함할 시트 수', o.newSheets, 1, 255, (v) => { o.newSheets = v; }),
       title('Microsoft Office 개인 설정'),
@@ -10625,7 +10626,7 @@ function saveObjectImageDialog(initialFormat='png') {
     await document.fonts?.ready;
     const linked=async(o,picture)=>{
       const next=structuredClone(o);
-      if(picture&&next.linked){const l=next.linked,index=book.sheetIndexByName(l.sheet);if(index<0)throw new Error('연결된 그림의 원본 시트를 찾을 수 없습니다.');const result=rangeImageSvg(book,index,l,{gridlines:!book.sheets[index].noGrid});const svg=await prepareImageSvg(result.svg,{resolveImage:fetchImageData});next.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg);delete next.linked;}
+      if(picture&&next.linked){const l=next.linked,index=book.sheetIndexByName(l.sheet);if(index<0)throw new Error('연결된 그림의 원본 시트를 찾을 수 없습니다.');const result=rangeImageSvg(book,index,l,{gridlines:!book.sheets[index].noGrid});const svg=await embedSvgFonts(await prepareImageSvg(result.svg,{resolveImage:fetchImageData}),{onWarning:toast});next.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg);delete next.linked;}
       if(next.groupItems)next.groupItems=await Promise.all(next.groupItems.map(x=>linked(x,x.kind==='picture')));
       return next;
     };
@@ -11039,10 +11040,10 @@ function formattingStyle() {
 /** Menus retain both the object and text selection. A delayed picker never falls through to cells. */
 function captureShapeTextTarget() {
   const o = selectedTextShape(); if (!o) return null;
-  const session = shapeTextEdit, book = wb, host = sheet(), index = si, doc = docId, id = o.id;
+  const session = shapeTextEdit, book = wb, host = sheet(), index = si, request = activeDocumentRequest, id = o.id;
   session?.editor.rememberSelection();
   return patch => {
-    if (wb !== book || si !== index || docId !== doc || sheet() !== host || chartSel !== id) return;
+    if (wb !== book || si !== index || activeDocumentRequest !== request || sheet() !== host || chartSel !== id) return;
     if (session) { if (shapeTextEdit === session && session.valid()) session.editor.format(patch); return; }
     if (shapeTextEdit || host.shapes.find(x => x.id === id) !== o || objectEditBlocked()) return;
     applyStyle(patch);
@@ -11118,7 +11119,7 @@ function positionShapeTextEditor() {
 function beginShapeTextEdit(id, { typed = null, point = null } = {}) {
   if (shapeTextEdit?.id === id && shapeTextEdit.valid()) { shapeTextEdit.editor.focus(point ? { point } : {}); return true; }
   if (!finishShapeTextEdit(() => beginShapeTextEdit(id, { typed, point }))) return false;
-  const book = wb, host = sheet(), index = si, doc = docId, original = host.shapes?.find(o => o.id === id);
+  const book = wb, host = sheet(), index = si, request = activeDocumentRequest, original = host.shapes?.find(o => o.id === id);
   if (!textEditableShape(original)) return false;
   if (viewOnly || wb.props?.markedFinal || isProtected(host) && original.locked !== false && !allowed(host, 'objects')) { toast('읽기 전용이거나 보호된 도형은 텍스트를 편집할 수 없습니다.'); return false; }
   if (editing && !commitEdit()) return false;
@@ -11130,7 +11131,7 @@ function beginShapeTextEdit(id, { typed = null, point = null } = {}) {
   Object.assign(viewport.style, { position: 'fixed', overflow: 'hidden', pointerEvents: 'none', zIndex: '35' });
   document.body.append(viewport);
   const session = { id, original, viewport, hidden: new Map(), frame: 0, point, after: null,
-    valid: () => wb === book && si === index && docId === doc && sheet() === host && host.shapes?.find(o => o.id === id) === original && !viewOnly && !book.props?.markedFinal && (!isProtected(host) || original.locked === false || allowed(host, 'objects')) };
+    valid: () => wb === book && si === index && activeDocumentRequest === request && sheet() === host && host.shapes?.find(o => o.id === id) === original && !viewOnly && !book.props?.markedFinal && (!isProtected(host) || original.locked === false || allowed(host, 'objects')) };
   const done = () => { cleanupShapeTextEdit(session); gv.renderObjectsAll(); updateSelectionUI(); };
   session.editor = createShapeTextEditor({ container: viewport, shape: original, fontStack, isValid: session.valid,
     onCommit: patch => {
@@ -14027,57 +14028,113 @@ function calcFieldDialog(entry = pivotHere(), startName = null) {
   focusTimer = setTimeout(() => { if (body.isConnected) (sel === -1 ? nameIn : formulaIn).focus(); }, 30);
 }
 
-/** 글꼴 목록 메뉴: 통합 문서에서 쓴 글꼴 + 이 PC의 글꼴 (각 글꼴 모양으로 표시), 검색, 전체 목록 불러오기 */
+/** Document fonts are collected once per revision, without expanding column blocks or blank runs. */
+let usedFontsBook = null, usedFontsVersion = -1, usedFontsCache = [];
+function documentFontNames() {
+  if (usedFontsBook === wb && usedFontsVersion === wb.version) return usedFontsCache;
+  const used = new Set([wb.defaultFont?.name || BASE_FONT.name]);
+  const style = (st) => { if (st?.font) used.add(st.font); };
+  style(wb.baseStyle);
+  for (const sh of wb.sheets) {
+    style(sh.allStyle);
+    for (const st of Object.values(sh.rowStyles || {})) style(st);
+    for (const st of Object.values(sh.colStyles || {})) style(st);
+    for (const [,,cell] of sh.cells.storageEntries()) style(cell.style);
+    for (const block of sh.blocks || []) for (const c of block.cols) style(c.fmt);
+    for (const obj of [...(sh.shapes || []), ...(sh.slicers || [])]) {
+      style(obj); style(obj.style);
+      for (const p of obj.paras || []) for (const r of p.runs || []) style(r);
+    }
+  }
+  usedFontsBook = wb; usedFontsVersion = wb.version; usedFontsCache = [...used];
+  return usedFontsCache;
+}
+
+/** Free web fonts + local fonts. Paging limits DOM work, never the accessible catalogue. */
 function fontMenu(anchorEl) {
-  const used = new Set();
-  for (const s of wb.sheets) for (const [,,cell] of s.cells.storageEntries()) if (cell.style?.font) used.add(cell.style.font);
+  const used = documentFontNames();
   const textTarget = captureShapeTextTarget();
   const cur = formattingStyle().font || BASE_FONT.name;
   const mobilePicker = document.body.classList.contains('mobile-work-mode') || matchMedia('(pointer: coarse)').matches;
-  const search = el('input', { type: 'search', placeholder: '글꼴 검색', 'aria-label': '글꼴 검색', 'data-menu-search-target': '.font-list', class: 'font-search', style: { fontSize: '16px' } });
+  const search = el('input', { type: 'search', placeholder: '한글·영문 글꼴 검색', 'aria-label': '글꼴 검색', 'data-menu-search-target': '.font-list', class: 'font-search', style: { fontSize: '16px' } });
+  const source = el('select', { class: 'font-source', 'aria-label': '글꼴 분류' }, [['all','모든 글꼴'],['korean','한글 무료 글꼴'],['google','Google Fonts'],['cdn','그 외 무료 웹 글꼴'],['local','기기 전용 글꼴']].map(([value,label])=>el('option',{value},label)));
+  const category = el('select', { class: 'font-category', 'aria-label': '글꼴 모양' }, [['','모든 모양'],['sans-serif','고딕'],['serif','명조'],['handwriting','손글씨'],['display','제목·장식'],['monospace','고정 폭']].map(([value,label])=>el('option',{value},label)));
+  const count = el('div', { class: 'font-count', 'aria-live': 'polite' });
+  const previewName = el('div', { class: 'font-preview-name' });
+  const previewText = el('div', { class: 'font-preview-text' }, '가나다 AaBbCc 123');
+  const previewState = el('span', { class: 'font-preview-state', 'aria-live': 'polite' });
+  const license = el('a', { class: 'font-license', target: '_blank', rel: 'noopener noreferrer', referrerpolicy: 'no-referrer' }, '라이선스');
+  const retry = el('button', { type: 'button', class: 'font-retry', hidden: true }, '다시 불러오기');
+  const preview = el('div', { class: 'font-preview' }, previewName, previewText, el('div', { class: 'font-preview-meta' }, previewState, license, retry));
   const list = el('div', { class: 'font-list' });
-  const pick = (f) => { closeMenus(); if (textTarget) textTarget({ font: f }); else run('fontFamily', f); focusGrid(); };
+  let limit = 100, matches = [], previewTimer = 0, previewFamily = cur;
+  const showPreview = (name, force = false) => {
+    previewFamily = name;
+    previewName.textContent = fontLabel(name);
+    previewText.style.fontFamily = fontStack(name);
+    const f = getWebFont(name);
+    previewText.textContent = f && !fontIsKorean(name) ? 'AaBbCc 0123' : '가나다 AaBbCc 123';
+    license.hidden = !f; if (f) license.href = f.licenseUrl;
+    retry.hidden = true;
+    previewState.textContent = f ? webFontStatus(name) === 'loaded' ? '무료 웹 글꼴 · 준비됨' : '무료 웹 글꼴 · 불러오는 중…' : '기기에 설치된 글꼴';
+    if (!f) return;
+    requestWebFont(name, { retry: force }).then(({status}) => {
+      if (previewFamily !== name || !preview.isConnected) return;
+      previewState.textContent = status === 'loaded' ? '무료 웹 글꼴 · 준비됨' : '연결을 확인해 주세요. 임시 글꼴로 표시 중';
+      retry.hidden = status !== 'error';
+    });
+  };
+  retry.onclick = () => showPreview(previewFamily, true);
+  const previewSoon = (name) => { clearTimeout(previewTimer); previewTimer = setTimeout(() => { if (list.isConnected) showPreview(name); }, 160); };
+  const pick = (f) => { clearTimeout(previewTimer); requestWebFont(f, { retry: true }); closeMenus(); if (textTarget) textTarget({ font: f }); else run('fontFamily', f); focusGrid(); };
   const item = (f) => el('button', {
-    type: 'button', class: `font-item${f === cur ? ' on' : ''}`, title: f, onmousedown: (e) => e.preventDefault(),
+    type: 'button', class: 'font-item' + (f === cur ? ' on' : ''), title: fontLabel(f), 'data-font-family': f,
+    onmousedown: (e) => e.preventDefault(), onfocus: () => previewSoon(f), onmouseenter: () => previewSoon(f),
     style: { fontFamily: fontStack(f) }, onclick: () => pick(f),
-  }, f);
-  const render = () => {
-    const q = search.value.trim().toLowerCase();
-    const match = (f) => !q || f.toLowerCase().includes(q) || (fontAlias(f) ?? '').toLowerCase().includes(q);
-    const all = [...new Set([...FONTS, ...fontList()])];
+  }, fontLabel(f));
+  const render = (more = false) => {
+    const q = search.value.trim();
+    if (!more) limit = 100;
+    const all = fontList(), defaults = new Set(FONTS);
+    const ordered = [...all.filter(f=>defaults.has(f)), ...all.filter(f=>!defaults.has(f)&&fontIsKorean(f)), ...all.filter(f=>!defaults.has(f)&&!fontIsKorean(f))];
+    const match = f => fontMatches(f,q) && fontInSource(f,source.value) && (!category.value || getWebFont(f)?.category === category.value);
+    matches = ordered.filter(match);
     const theme = [BASE_FONT.name].filter(match);
-    const usedList = [...used].filter((f) => f !== BASE_FONT.name && match(f));
+    const usedList = used.filter(f=>f!==BASE_FONT.name&&match(f));
+    const oldScroll = list.scrollTop;
+    count.textContent = '전체 ' + all.length.toLocaleString() + '종 · 검색 결과 ' + matches.length.toLocaleString() + '종';
     list.replaceChildren(
       ...(theme.length ? [el('div', { class: 'menu-title' }, '테마 글꼴'), ...theme.map(item)] : []),
       ...(usedList.length ? [el('div', { class: 'menu-title' }, '이 통합 문서에서 쓴 글꼴'), ...usedList.map(item)] : []),
-      el('div', { class: 'menu-title' }, `모든 글꼴 (${all.length})`),
-      ...all.filter(match).slice(0, 400).map(item),
-      ...(q && !all.some((f) => f.toLowerCase() === q) ? [el('button', { type: 'button', class: 'font-item', onclick: () => pick(search.value.trim()) }, `'${search.value.trim()}' 글꼴 사용`)] : []),
+      el('div', { class: 'menu-title' }, '글꼴 목록'),
+      ...matches.slice(0, limit).map(item),
+      ...(limit < matches.length ? [el('button', { type: 'button', class: 'font-more', onclick: () => {
+        const next = matches[limit]; limit += 100; render(true);
+        [...list.querySelectorAll('.font-item')].find(n=>n.dataset.fontFamily===next)?.focus({preventScroll:true});
+      } }, '더 보기 (' + Math.min(limit, matches.length) + '/' + matches.length + ')')] : []),
+      ...(q && !matches.length ? [el('button', { type: 'button', class: 'font-item', onclick: () => pick(q) }, "'" + q + "' 글꼴 사용")] : []),
     );
+    list.scrollTop = more ? oldScroll : 0;
   };
-  search.addEventListener('input', render);
+  search.addEventListener('input', () => render());
+  source.addEventListener('change', () => render()); category.addEventListener('change', () => render());
   search.addEventListener('keydown', (e) => {
     if (e.isComposing || e.keyCode === 229) return;
     if (['ArrowDown', 'ArrowUp', 'Tab', 'Escape'].includes(e.key)) return;
     e.stopPropagation();
-    if (e.key === 'Enter' && search.value.trim()) { e.preventDefault(); pick(search.value.trim()); }
+    if (e.key === 'Enter' && search.value.trim()) { e.preventDefault(); pick(getWebFont(search.value.trim())?.family || matches[0] || search.value.trim()); }
   });
-  const loadBtn = canListLocalFonts()
-    ? el('button', {
-      type: 'button', class: 'btn font-load',
-      onclick: async () => {
-        try {
-          const l = await loadLocalFonts();
-          if (l) { toast(`이 PC의 글꼴 ${l.length}개를 불러왔습니다.`); loadBtn.remove(); render(); }
-        } catch { toast('글꼴 목록을 볼 권한이 없습니다. 글꼴 이름을 직접 입력할 수도 있습니다.'); }
-      },
-    }, '이 PC의 모든 글꼴 불러오기')
-    : null;
+  const loadBtn = canListLocalFonts() ? el('button', {
+    type: 'button', class: 'btn font-load', onclick: async () => {
+      try { const l = await loadLocalFonts(); if (l) { toast('이 PC의 글꼴 ' + l.length + '개를 불러왔습니다.'); loadBtn.remove(); render(); } }
+      catch { toast('글꼴 목록을 볼 권한이 없습니다. 무료 웹 글꼴은 권한 없이 사용할 수 있습니다.'); }
+    },
+  }, '이 PC의 모든 글꼴 불러오기') : null;
   render();
-  const node = el('div', { class: 'font-menu' }, search, loadBtn, list);
+  const node = el('div', { class: 'font-menu' }, search, el('div',{class:'font-filters'},source,category), count, preview, loadBtn, list);
   openMenu(anchorEl, [{ node }], { focus: !mobilePicker });
+  showPreview(cur);
   if (mobilePicker) list.querySelector('.font-item')?.focus({ preventScroll:true });
-
 }
 
 function pivotStyleOpt(key) {
@@ -15344,10 +15401,20 @@ function progressOverlay(title, request = null, onCancel = null) {
 
 /** 통합 문서 기본 글꼴 (엑셀의 표준 스타일: 셀 기본 크기 · 열 너비 기준) · 테마 색 */
 let bookLookSignature = '';
+let fontPaintFrame = 0;
+onWebFontChange(({status}) => {
+  if (status !== 'loaded' || fontPaintFrame || !gv) return;
+  fontPaintFrame = requestAnimationFrame(() => {
+    fontPaintFrame = 0; clearFontMetrics();
+    document.documentElement.style.setProperty('--glyph-dy', `${glyphShift(fontStack(BASE_FONT.name))}em`);
+    gv.renderAll(); positionEditor();
+  });
+});
 const bookLookKey = () => JSON.stringify([wb.theme, wb.defaultFont]);
 function applyBookLook() {
   bookLookSignature = bookLookKey();
   setBaseFont(wb.defaultFont);
+  requestWebFont(BASE_FONT.name);
   setThemeColors(wb.theme);
   document.documentElement.style.setProperty('--cell-fs', `${BASE_FONT.size}pt`);
   document.documentElement.style.setProperty('--cell-ff', fontStack(BASE_FONT.name));
@@ -16943,7 +17010,7 @@ function printSheet({ htmlOnly = false, pdf = false, name = docName } = {}) {
   dom.printArea.style.cssText = 'display:block;position:fixed;left:-100000px;top:0;visibility:hidden;';
   try { for (const node of dom.printArea.querySelectorAll('[data-shape-print]')) fitShapeText(node, 'print'); }
   finally { dom.printArea.style.cssText = printCss; }
-  if (htmlOnly) return htmlPrintDocument({ source: dom.printArea, page: pg, name, sheet: s.name, layout });
+  if (htmlOnly) return htmlPrintDocumentWithFonts({ source: dom.printArea, page: pg, name, sheet: s.name, layout });
   try { openPrintPreview({ source: dom.printArea, page: pg, name, sheet: s.name, layout, saveFile: saveWithPicker, pdfPreferred: pdf }); }
   catch (error) { alertDialog('인쇄 미리보기', error.message); }
 }
@@ -17270,11 +17337,11 @@ function formatCellsDialog(startTab = 0, find = null) {
   // 엑셀처럼 입력 칸 + 전체 글꼴 목록 (입력하면 목록에서 찾아 줌)
   const fontSel = el('input', { type: 'text', value: st.font || BASE_FONT.name, spellcheck: false });
   const allFonts = [...new Set([BASE_FONT.name, '맑은 고딕', '나눔고딕', '돋움', '굴림', '바탕', '궁서', 'Calibri', 'Arial', 'Times New Roman', 'Segoe UI', 'Verdana', 'Tahoma', 'Consolas', ...fontList()])];
-  const fontBox = el('select', { size: 7, class: 'fc-fontlist' }, allFonts.map((f) => el('option', { value: f, selected: f === fontSel.value, style: { fontFamily: fontStack(f) } }, f)));
+  const fontBox = el('select', { size: 7, class: 'fc-fontlist' }, allFonts.map((f) => el('option', { value: f, selected: f === fontSel.value, style: { fontFamily: fontStack(f) } }, fontLabel(f))));
   fontBox.addEventListener('change', () => { fontSel.value = fontBox.value; updFont(); });
   fontSel.addEventListener('input', () => {
     const q = fontSel.value.toLowerCase();
-    const hit = allFonts.find((f) => f.toLowerCase().startsWith(q)) ?? allFonts.find((f) => f.toLowerCase().includes(q));
+    const hit = getWebFont(fontSel.value)?.family ?? allFonts.find((f) => fontMatches(f, q));
     if (hit) fontBox.value = hit;
   });
   const fontDl = canListLocalFonts() ? el('button', {
@@ -17292,10 +17359,10 @@ function formatCellsDialog(startTab = 0, find = null) {
   const [sIn, sL] = chk('취소선', st.strike);
   const colorIn = el('input', { type: 'color', value: st.color || '#000000' });
   const fontPreview = el('div', { class: 'fc-fontprev' }, '가나다 AaBbCc 123');
-  const updFont = () => Object.assign(fontPreview.style, {
+  const updFont = () => { requestWebFont(fontSel.value); Object.assign(fontPreview.style, {
     fontFamily: fontStack(fontSel.value), fontSize: `${Math.min(Number(sizeIn.value) || 11, 36)}pt`, fontWeight: bIn.checked ? 700 : 400,
     fontStyle: iIn.checked ? 'italic' : 'normal', textDecoration: `${uIn.checked ? 'underline ' : ''}${sIn.checked ? 'line-through' : ''}`, color: colorIn.value,
-  });
+  }); };
   [fontSel, sizeIn, bIn, iIn, uIn, sIn, colorIn].forEach((x) => x.addEventListener('input', updFont));
   updFont();
   const fontPage = col(row(el('div', { class: 'fc-fontcol' }, lab('글꼴', fontSel), fontBox, fontDl), lab('크기', sizeIn)), row(bL, iL, uL, sL), lab('색', colorIn), el('div', { class: 'fc-title' }, '미리 보기'), fontPreview);
@@ -18698,10 +18765,11 @@ function themeRows() {
 // Keep formatting bound to the selection that opened the popup, including sparse selections.
 // Native color dialogs may return after a sheet/document was replaced.
 function captureSelectionTarget() {
-  const book = wb, host = sheet(), doc = docId, index = si;
+  const book = wb, host = sheet(), request = activeDocumentRequest, index = si;
   const range = { ...sel }, cell = { ...active }, start = { ...anchor }, end = { ...focusCell }, kind = selKind, sparse = special;
   return action => {
-    if (wb !== book || docId !== doc || si !== index || sheet() !== host) { toast('문서나 시트가 변경되었습니다. 범위를 다시 선택해 주세요.'); return; }
+    // A local autosave can allocate/fork a storage ID without changing the open document.
+    if (wb !== book || activeDocumentRequest !== request || si !== index || sheet() !== host) { toast('문서나 시트가 변경되었습니다. 범위를 다시 선택해 주세요.'); return; }
     cancelCellGesture();
     sel = { ...range }; active = { ...cell }; anchor = { ...start }; focusCell = { ...end }; selKind = kind; special = sparse;
     updateSelectionUI();
@@ -19893,7 +19961,7 @@ const COMMANDS = {
   italic: () => toggleStyle('italic'),
   underline: () => toggleStyle('underline'),
   strike: () => toggleStyle('strike'),
-  fontFamily: (f) => applyStyle({ font: !selectedTextShape() && f === BASE_FONT.name ? undefined : f }),
+  fontFamily: (f) => { requestWebFont(f, { retry: true }); applyStyle({ font: !selectedTextShape() && f === BASE_FONT.name ? undefined : f }); },
   fontSize: (s) => { const n = Number(s); if (n > 0 && n <= 409) applyStyle({ size: !selectedTextShape() && n === BASE_FONT.size ? undefined : n }); },
   growFont: () => changeFontSize(1),
   shrinkFont: () => changeFontSize(-1),
@@ -20299,6 +20367,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['무료 웹 글꼴 확대', ['Google Fonts와 라이선스가 확인된 한글 무료 글꼴을 추가했습니다. 한글·영문 검색, 한글 글꼴·모양별 분류, 실제 미리보기를 지원합니다.', '사용하거나 미리 보는 글꼴만 다운로드합니다. 글꼴 목록과 셀 서식·기본 글꼴 설정에서 선택할 수 있으며, 늦게 불러온 글꼴도 셀과 도형에 다시 반영합니다.']],
   ['Excel 기본 행 수와 선택적 확장', ['기본 작업 범위를 Excel과 같은 1,048,576행으로 맞췄습니다. 파일 → 옵션 → 일반의 [위셀 행수 확장]을 켜면 20,000,000행까지 작업하며, 설정을 꺼도 확장 영역의 데이터는 보존합니다.', '스크롤·이름 상자·방향키·전체 열 선택·붙여넣기를 현재 행 한도에 맞추고, 빈 행을 한꺼번에 만들지 않는 가상화를 유지합니다.']],
   ['Excel 단축키와 팝업 접근키 보완', ['Alt → D → F → F 필터를 비롯한 이전 Excel 메뉴 경로를 추가했습니다. 현대 리본 키와 직접 조합키를 점검하여 Shift가 있는 키를 다른 기능으로 잘못 처리하던 문제를 수정했습니다.', '팝업 접근키가 겹치면 고유한 키로 표시·실행하며, 도형과 슬라이서의 Ctrl+1은 선택한 개체의 서식·크기 창을 엽니다.']],
   ['도형과 텍스트 상자 직접 편집', ['F2·더블클릭·텍스트 편집 메뉴로 도형 안에서 커서를 놓고 입력합니다. 선택한 글자에 굵게·기울임·밑줄·글꼴·크기·색을 적용하고, 리본과 Alt 키 색상표에서도 선택 범위를 유지합니다.', '편집 중 복사·잘라내기·붙여넣기는 선택한 텍스트에만 적용합니다. 한글 입력·줄바꿈·실행 취소와 혼합 텍스트 서식의 XLSX 저장·재열기를 보강했습니다.']],

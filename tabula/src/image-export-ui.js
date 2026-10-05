@@ -31,7 +31,9 @@ export function openImageExportDialog({title='그림으로 저장',name='그림'
       if(!valid())throw new Error('문서 또는 선택한 대상이 변경되었습니다. 창을 다시 여세요.');
       prepared=result;
       if(automaticScale){const preferred=[2,1].find(n=>fits(result.width,result.height,n));scale.value=String(preferred??1);}
-      const blob=await svgImageBlob(result.svg,{width:result.width,height:result.height,format:'svg',scale:1,background:'transparent'});
+      const fontWarnings=[];
+      const blob=await svgImageBlob(result.svg,{width:result.width,height:result.height,format:'svg',scale:1,background:'transparent',onWarning:message=>fontWarnings.push(message)});
+      if(fontWarnings.length)result.warnings=[...(result.warnings||[]),...fontWarnings];
       if(!alive||request!==revision)return;
       if(previewUrl)URL.revokeObjectURL(previewUrl);previewUrl=URL.createObjectURL(blob);preview.src=previewUrl;update();
     }).catch(error=>{if(alive&&request===revision){prepared=null;status.textContent='미리보기를 만들지 못했습니다.';showError(error.message);}});

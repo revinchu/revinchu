@@ -9,6 +9,7 @@ import { isSmartArt, smartArtParts } from './smartart.js';
 import { smartArtSvg } from './smartart-render.js';
 import { safeUrl } from './safe-html.js';
 import { esc, decodeEntities } from './xml.js';
+import { embedSvgFonts } from './font-export.js';
 
 export const OBJECT_IMAGE_MAX_SIDE = 4096;
 export const OBJECT_IMAGE_MAX_PIXELS = 16000000;
@@ -267,10 +268,11 @@ export function objectRasterSize(width,height,scale=2) {
 }
 
 /** Shared by object and cell-range exports. Browser APIs are used only for raster. */
-export async function svgImageBlob(svg,{width,height,format='png',scale=2,background='transparent',resolveImage}={}) {
+export async function svgImageBlob(svg,{width,height,format='png',scale=2,background='transparent',resolveImage,onWarning,fetchFont}={}) {
   if(!['png','jpeg','svg'].includes(format)||!['transparent','white'].includes(background))fail('지원하지 않는 그림 저장 형식입니다.');
   if(!Number.isFinite(width)||!Number.isFinite(height)||width<=0||height<=0||width>65536||height>65536)fail('SVG 그림의 크기는 0보다 크고 한 변 65,536픽셀 이하여야 합니다.');
   let safe=await prepareImageSvg(svg,{resolveImage});
+  safe=await embedSvgFonts(safe,{onWarning,fetchImpl:fetchFont});
   if(background==='white'||format==='jpeg') {
     const root=/^\s*<svg\b[^>]*>/.exec(safe),vb=root&&/\sviewBox="([^"]+)"/.exec(root[0]);
     const box=vb?vb[1].trim().split(/[\s,]+/).map(Number):[0,0,width,height];

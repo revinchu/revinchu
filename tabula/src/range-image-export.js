@@ -7,7 +7,7 @@ import { formatValue, formatGeneral } from './format.js';
 import { prepareCond, condFormatAt, ICON_SVG, ruleRanges } from './condfmt.js';
 import { tableCellDisplayStyle } from './table-format.js';
 import { resolveGridBorders, gridBorderPaintOrder } from './grid-lines.js';
-import { fontAlias } from './fonts.js';
+import { fontFamilyCandidates } from './fonts.js';
 import { safeUrl } from './safe-html.js';
 import { esc } from './xml.js';
 
@@ -17,10 +17,8 @@ const DASH = { hair:'1 1', dotted:'1 2', dashed:'3 2', dashDot:'6 2 1 2', dashDo
 const color = (value, fallback = '#000000') => typeof value === 'string' && /^(?:#[\da-f]{3,8}|[a-z]+|rgba?\([\d\s.,%/+-]+\))$/i.test(value.trim()) ? value.trim() : fallback;
 const number = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
 const n = value => String(Math.round(value * 1000) / 1000);
-const family = value => {
-  const name = String(value || '맑은 고딕').replace(/['";\\]/g, '');
-  return `'${name}'${fontAlias(name) ? `, '${fontAlias(name)}'` : ''}, 'Malgun Gothic', 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif`;
-};
+const family = value => `${fontFamilyCandidates(value || '맑은 고딕')
+  .map(name => `'${String(name).replace(/[\\'"\r\n\f<>]/g, '')}'`).join(', ')}, 'Malgun Gothic', 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif`;
 
 // 수식 결과·이름·분산 및 조건부서식의 계산 캐시는 출력용 인스턴스에만 기록한다.
 // 셀과 대형 열 블록은 읽기 전용으로 공유하므로 전체 통합 문서를 복사하지 않는다.

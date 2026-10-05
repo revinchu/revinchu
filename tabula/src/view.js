@@ -30,7 +30,7 @@ import { prepareCond, condFormatAt, ICON_SVG, EMPTY_MATCH_TYPES, ruleRanges, inR
 import { tableAt, tableCellStyle, tableFilterRange, styleByName } from './tables.js';
 import { slicerCssVars } from './slicerstyle.js';
 import { THEME } from './stylepresets.js';
-import { fontAlias } from './fonts.js';
+import { fontFamilyCandidates, requestWebFont } from './fonts.js';
 import { maxLevel, groupsOf } from './outline.js';
 import { sparkValues, sparkSvg } from './sparkline.js';
 import { computePrintLayout } from './print-layout.js';
@@ -43,11 +43,10 @@ export function setBaseFont(f) {
   BASE_FONT.name = f?.name || '맑은 고딕';
   BASE_FONT.size = f?.size || 11;
 }
-export const fontStack = (f) => {
-  const name = String(f).replace(/'/g, '');
-  const alias = fontAlias(name);
-  return `'${name}'${alias ? `, '${alias}'` : ''}, 'Malgun Gothic', '맑은 고딕', 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif`;
-};
+// 목록의 미리보기에도 쓰인다. CSS 이름만 만들고 네트워크 요청은 하지 않는다.
+const quotedFontFamilies = (name) => fontFamilyCandidates(name || BASE_FONT.name)
+  .map(family => `'${String(family).replace(/[\\'"\r\n\f<>]/g, '')}'`).join(', ');
+export const fontStack = (f) => `${quotedFontFamilies(f)}, 'Malgun Gothic', '맑은 고딕', 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif`;
 const HEAD_H = 20;
 const MAX_PX = 15_000_000; // 스크롤 영역 최대 픽셀 (브라우저 한계 회피)
 const OVER_R = 12;
@@ -146,6 +145,7 @@ export function fontCss(st = {}) {
   return `${st.italic ? 'italic ' : ''}${st.bold ? '700 ' : ''}${st.size || BASE_FONT.size}pt ${fontStack(st.font || BASE_FONT.name)}`;
 }
 export function measureText(text, st) {
+  requestWebFont(st?.font || BASE_FONT.name);
   const font = fontCss(st);
   const k = `${font}\u0001${text}`;
   let w = measureCache.get(k);
@@ -160,6 +160,12 @@ export function measureText(text, st) {
 
 /** 글꼴이 이 컴퓨터에 없는지 (없으면 대체 글꼴로 그려져 너비가 파일을 만든 엑셀과 다름) */
 const missingFont = new Map();
+let fontMetricsEpoch = 0;
+/** 웹폰트가 준비되면 표시용 측정만 갱신한다. 문서 크기·서식·변경 이력은 그대로 둔다. */
+export function clearFontMetrics() {
+  measureCache.clear(); missingFont.clear(); glyphShiftCache.clear();
+  fontMetricsEpoch++;
+}
 export function fontMissing(name) {
   if (!name || typeof document === 'undefined') return false;
   let v = missingFont.get(name);
@@ -168,7 +174,7 @@ export function fontMissing(name) {
     v = ['monospace', 'serif'].every((fb) => {
       measureCtx.font = `40px ${fb}`;
       const a = measureCtx.measureText(probe).width;
-      measureCtx.font = `40px "${name}", ${fb}`;
+      measureCtx.font = `40px ${quotedFontFamilies(name)}, ${fb}`;
       return measureCtx.measureText(probe).width === a;
     });
     missingFont.set(name, v);
@@ -232,6 +238,7 @@ export function borderCss(side, kind, color) {
 
 /** 도형 글자: 문단 · 글자 조각(run)의 서식 · 맞춤 · 세로 위치 · 안쪽 여백 (엑셀과 같은 모양) */
 export function shapeTextHtml(o) {
+  requestWebFont(o.font || BASE_FONT.name);
   const vj = { top: 'flex-start', middle: 'center', bottom: 'flex-end' }[o.valign ?? (o.kind === 'textbox' ? 'top' : 'middle')];
   const pad = o.pad ? o.pad.map((v) => `${v}px`).join(' ') : '4.8px 9.6px';
   // 텍스트 채우기 · 윤곽선 · 효과(그림자 · 네온) — 엑셀 WordArt 서식
@@ -246,6 +253,7 @@ export function shapeTextHtml(o) {
   // rich 텍스트의 장식은 부모가 아니라 각 run에 적용한다. 부모의 밑줄은
   // 자식의 text-decoration:none으로 취소할 수 없어 명시 false를 무시하게 된다.
   const runCss = (r) => {
+    if (r.font) requestWebFont(r.font);
     const bold = r.b ?? o.bold, italic = r.i ?? o.italic, underline = r.u ?? o.underline, strike = r.s ?? o.strike;
     return [bold ? 'font-weight:700' : 'font-weight:400', italic ? 'font-style:italic' : 'font-style:normal',
       `text-decoration:${underline || strike ? `${underline ? 'underline ' : ''}${strike ? 'line-through' : ''}`.trim() : 'none'}`,
@@ -1090,6 +1098,10 @@ export class GridView {
     let checkbox = null;
     if (style.checkbox && (typeof v === 'boolean' || v === null || v === undefined || v === '') && !(st.showFormulas && cell?.formula)) { checkbox = v === true; text = ''; }
     if (v === 0 && wb.sheets[si].noZeros && !(st.showFormulas && cell?.formula)) text = ''; // 0 값이 있는 셀에 0 표시 안 함 (엑셀 옵션 › 고급)
+    if (text) {
+      requestWebFont(style.font || BASE_FONT.name);
+      if (cell?.phonetic?.visible && cell.phonetic.font?.font) requestWebFont(cell.phonetic.font.font);
+    }
     // 선택 영역의 가운데로 (centerContinuous): 오른쪽의 빈 같은 맞춤 칸들까지 합친 너비의 가운데
     let across = 0;
     if (style.align === 'centerContinuous' && text && !merge) {
@@ -1286,6 +1298,7 @@ export class GridView {
           if (typeof v === 'object' && v.code) text = v.code;
           else { const f = formatValue(v, st, wb.date1904); text = f.text; color = f.color; }
         }
+        if (text) requestWebFont(st.font || BASE_FONT.name);
         const css = [];
         if (st.bold) css.push('font-weight:700');
         if (st.italic) css.push('font-style:italic');
@@ -1319,7 +1332,7 @@ export class GridView {
     const { wb, si } = st;
     const sheet = wb.sheets[si];
     // 빈 시트나 아직 렌더 창이 없는 전환에서도 이전 통합 문서 참조를 해제한다.
-    const appearance = `${THEME.key}|${BASE_FONT.name}|${BASE_FONT.size}|${this.z}|${globalThis.devicePixelRatio || 1}|${!!st.readonly}|${!!st.viewOnly}`;
+    const appearance = `${THEME.key}|${BASE_FONT.name}|${BASE_FONT.size}|${fontMetricsEpoch}|${this.z}|${globalThis.devicePixelRatio || 1}|${!!st.readonly}|${!!st.viewOnly}`;
     const previous = this._objectRenderState;
     if (!this._objectRenderCache || previous?.wb !== wb || previous.si !== si || previous.sheet !== sheet || previous.version !== wb.version || previous.appearance !== appearance) {
       this._objectRenderCache = new Map();
@@ -1365,6 +1378,10 @@ export class GridView {
       ...slicers.map((o) => ['slicers', o]),
     ].filter(([, o]) => objectIntersectsWindow(o, windowRect)).sort((a, b) => (a[1].z ?? 0) - (b[1].z ?? 0));
     for (const [prop, o] of all) {
+      if (prop === 'shapes' || prop === 'slicers') {
+        if (o.font) requestWebFont(o.font);
+        if (o.smartArt?.font) requestWebFont(o.smartArt.font);
+      }
       if (prop === 'charts') {
         box(o, 'chart', content(o, 'chart', () => this.chartSvg(o) + this.pivotChartButtons(o)) + (st.chartSel === o.id && !st.objMulti?.size && !st.viewOnly ? CHART_SIDE : ''));
       }
@@ -1436,12 +1453,13 @@ export class GridView {
       p.objects.replaceChildren(...nodes);
       // 스크롤 복원 전에 가상 목록의 전체 높이를 먼저 확보한다.
       for(const node of nodes){const list=node.querySelector?.('.sl-items[data-virtual]'),model=this._slicerVirtualModels?.get(node.dataset.id);if(list&&model)mountSlicerWindow(list,model);}
-      fitSlicerText(p.objects);
+      fitSlicerText(p.objects); p.fontMetricsEpoch = fontMetricsEpoch;
       for (const [id, [t, l]] of keep) {
         const list = [...p.objects.querySelectorAll('.obj')].find((o) => o.dataset.id === id)?.querySelector('.sl-items');
         if (list) { list.scrollTop = t; list.scrollLeft = l; }
       }
     }
+    if (p.fontMetricsEpoch !== fontMetricsEpoch) { fitSlicerText(p.objects); p.fontMetricsEpoch = fontMetricsEpoch; }
     for (const node of nodes) {
       const list=node.querySelector?.('.sl-items[data-virtual]'), model=this._slicerVirtualModels?.get(node.dataset.id);
       if(list&&model)mountSlicerWindow(list,model);

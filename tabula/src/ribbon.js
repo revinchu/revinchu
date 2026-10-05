@@ -35,7 +35,7 @@ export const TABS = [
       group('글꼴', [
         col(
           row(
-            { type: 'font', cmd: 'fontFamily', cls: 'font-family', stateKey: 'font', title: '글꼴 (이 PC에 설치된 글꼴 이름을 입력하거나 목록에서 선택)', menu: 'fontList' },
+            { type: 'font', cmd: 'fontFamily', cls: 'font-family', stateKey: 'font', title: '글꼴 (무료 웹 글꼴과 기기의 글꼴을 검색하거나 목록에서 선택)', menu: 'fontList' },
             { type: 'select', cmd: 'fontSize', cls: 'font-size', options: FONT_SIZES.map((s) => ({ value: String(s), label: String(s) })), stateKey: 'size', editable: true, title: '글꼴 크기' },
             btn('growFont', kr('', '가', '<sup>▲</sup>'), '글꼴 크기 크게'),
             btn('shrinkFont', kr('', '가', '<sub>▼</sub>'), '글꼴 크기 작게'),

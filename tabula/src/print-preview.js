@@ -1,6 +1,7 @@
 import { el, openDialog } from './ui.js';
 import { normPage, paperOf, printScale, headerParts } from './page.js';
 import { splitPrintIndexes, imagePagesPdf } from './print-document.js';
+import { collectMarkupFontUsage, embedFontCss, fontCssForSvg } from './font-export.js';
 
 const PRINT_CSS = `
 .wixel-print-page{position:relative;box-sizing:border-box;background:#fff;color:#000;font-family:"Malgun Gothic",sans-serif;font-size:10pt;line-height:1.2;overflow:hidden;break-after:page;print-color-adjust:exact;-webkit-print-color-adjust:exact}
@@ -217,10 +218,10 @@ async function inlineImages(node, signal) {
   }
 }
 
-async function rasterPage(node, width, height, signal) {
+async function rasterPage(node, width, height, signal, fontCss = '') {
   await inlineImages(node, signal); if (signal.aborted) throw new Error('PDF 저장을 취소했습니다.');
   const content = new XMLSerializer().serializeToString(node);
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml"><style>${PRINT_CSS}</style>${content}</div></foreignObject></svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml"><style>${fontCssForSvg(PRINT_CSS + '\n' + fontCss)}</style>${content}</div></foreignObject></svg>`;
   const image = new Image(); image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`; await image.decode();
   const canvas = document.createElement('canvas'); canvas.width = Math.ceil(width * 2); canvas.height = Math.ceil(height * 2);
   const ctx = canvas.getContext('2d'); ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, canvas.width, canvas.height); ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
@@ -231,7 +232,12 @@ async function rasterPage(node, width, height, signal) {
 
 export function openPrintPreview({ source, page, name, sheet, layout = null, saveFile = null, pdfPreferred = false }) {
   const prepared = preparePages(source, page, name, sheet, layout), controller = new AbortController();
-  let index = 0, busy = false, closed = false;
+  let index = 0, busy = false, closed = false, embeddedFonts;
+  const fontWarnings = [];
+  const fonts = () => embeddedFonts ??= embedFontCss(collectMarkupFontUsage(source.innerHTML), {
+    signal: controller.signal, onWarning: warning => fontWarnings.push(warning),
+  });
+  const warningsText = () => fontWarnings.length ? ' ' + fontWarnings.join(' ') : '';
   const status = el('div', { role: 'status', style: { minHeight: '20px', fontSize: '12px' } });
   const counter = el('span', { style: { minWidth: '100px', textAlign: 'center' } });
   const stage = el('div', { class: 'print-preview-stage', style: { overflow: 'auto', maxHeight: 'min(65vh,750px)', background: '#dfe3e8', padding: '12px', display: 'grid', justifyItems: 'center' } });
@@ -243,27 +249,38 @@ export function openPrintPreview({ source, page, name, sheet, layout = null, sav
   };
   const prev = el('button', { type: 'button', class: 'btn', 'aria-label': '이전 인쇄 페이지', onclick: () => show(index - 1) }, '이전');
   const nextButton = el('button', { type: 'button', class: 'btn', 'aria-label': '다음 인쇄 페이지', onclick: () => show(index + 1) }, '다음');
-  const nativePrint = () => {
+  const nativePrint = async () => {
     if (busy) return;
-    const printArea = document.getElementById('printArea');
-    printArea.replaceChildren(); for (let i = 0; i < prepared.count; i++) printArea.append(prepared.build(i));
-    const pageStyle = document.getElementById('pageStyle') || el('style', { id: 'pageStyle' });
-    if (!pageStyle.isConnected) document.head.append(pageStyle);
-    pageStyle.textContent = `@page{size:${prepared.width / 96}in ${prepared.height / 96}in;margin:0;}`;
-    status.textContent = '인쇄 창이 열리지 않으면 PDF 파일 저장을 이용하세요. 브라우저 인쇄 창에서도 PDF로 저장할 수 있습니다.';
-    try { window.print(); } catch { status.textContent = '이 환경에서는 인쇄 창을 열 수 없습니다. PDF 파일 저장을 이용하세요.'; }
+    busy = true; print.disabled = true;
+    try {
+      status.textContent = '출력 글꼴 준비 중…';
+      const embedded = await fonts(); if (closed) return;
+      const printArea = document.getElementById('printArea');
+      printArea.replaceChildren();
+      if (embedded.css) printArea.append(el('style', {}, embedded.css));
+      for (let i = 0; i < prepared.count; i++) printArea.append(prepared.build(i));
+      const pageStyle = document.getElementById('pageStyle') || el('style', { id: 'pageStyle' });
+      if (!pageStyle.isConnected) document.head.append(pageStyle);
+      pageStyle.textContent = `@page{size:${prepared.width / 96}in ${prepared.height / 96}in;margin:0;}`;
+      await document.fonts?.ready; if (closed) return;
+      status.textContent = '인쇄 창이 열리지 않으면 PDF 파일 저장을 이용하세요. 브라우저 인쇄 창에서도 PDF로 저장할 수 있습니다.' + warningsText();
+      window.print();
+    } catch (error) { if (!closed) status.textContent = (error.message || '이 환경에서는 인쇄 창을 열 수 없습니다. PDF 파일 저장을 이용하세요.') + warningsText(); }
+    finally { busy = false; print.disabled = false; }
   };
   const savePdf = async () => {
     if (busy) return; busy = true; pdf.disabled = true;
     try {
       if (prepared.count > 150) throw new Error('직접 PDF 저장은 150쪽까지 지원합니다. 인쇄 영역을 줄이거나 브라우저 인쇄를 이용하세요.');
       const make = async () => {
+        status.textContent = '출력 글꼴 준비 중…';
+        const embedded = await fonts();
         await document.fonts?.ready;
         const pages = [];
         for (let i = 0; i < prepared.count; i++) {
           if (controller.signal.aborted) return null;
           status.textContent = `PDF 만드는 중… ${i + 1} / ${prepared.count}쪽`;
-          pages.push(await rasterPage(prepared.build(i), prepared.width, prepared.height, controller.signal));
+          pages.push(await rasterPage(prepared.build(i), prepared.width, prepared.height, controller.signal, embedded.css));
           await new Promise(resolve => setTimeout(resolve, 0));
         }
         return closed ? null : new Blob([imagePagesPdf(pages, { title: `${name} — ${sheet}` })], { type: 'application/pdf' });
@@ -271,12 +288,12 @@ export function openPrintPreview({ source, page, name, sheet, layout = null, sav
       const fileName = `${String(name || '통합 문서').replace(/[\\/:*?"<>|]/g, '_')}.pdf`;
       if (saveFile) {
         const done = await saveFile(fileName, make);
-        if (!closed) status.textContent = done ? `${prepared.count}쪽 PDF 파일을 저장했습니다.` : 'PDF 저장을 취소했습니다.';
+        if (!closed) status.textContent = done ? `${prepared.count}쪽 PDF 파일을 저장했습니다.` + warningsText() : 'PDF 저장을 취소했습니다.';
       } else {
         const blob = await make(); if (!blob) return;
         const url = URL.createObjectURL(blob), a = el('a', { href: url, download: fileName });
         document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000);
-        status.textContent = `${prepared.count}쪽 PDF 파일의 다운로드를 시작했습니다.`;
+        status.textContent = `${prepared.count}쪽 PDF 파일의 다운로드를 시작했습니다.` + warningsText();
       }
     } catch (error) { if (!closed) status.textContent = error.message || 'PDF를 저장하지 못했습니다. 브라우저 인쇄를 이용하세요.'; }
     finally { busy = false; pdf.disabled = false; }
@@ -293,7 +310,7 @@ export function openPrintPreview({ source, page, name, sheet, layout = null, sav
 }
 
 /** Static, script-free web page with the same page geometry as print/PDF. */
-export function htmlPrintDocument({ source, page, name, sheet, layout = null }) {
+export function htmlPrintDocument({ source, page, name, sheet, layout = null, fontCss = '', fontWarnings = [] }) {
   const prepared=preparePages(source,page,name,sheet,layout);
   if(prepared.count>300)throw new Error('웹페이지 저장은 300쪽 이내로 인쇄 영역을 나누어 주세요.');
   const html=document.implementation.createHTMLDocument(`${name} — ${sheet}`);
@@ -301,7 +318,14 @@ export function htmlPrintDocument({ source, page, name, sheet, layout = null }) 
   const charset=html.createElement('meta');charset.setAttribute('charset','utf-8');html.head.prepend(charset);
   const viewport=html.createElement('meta');viewport.name='viewport';viewport.content='width=device-width, initial-scale=1';html.head.append(viewport);
   const policy=html.createElement('meta');policy.httpEquiv='Content-Security-Policy';policy.content="default-src 'none'; img-src data: https: http:; style-src 'unsafe-inline'; font-src data:; base-uri 'none'; form-action 'none'";html.head.append(policy);
-  const style=html.createElement('style');style.textContent=PRINT_CSS+`body{margin:0;padding:24px;background:#e9edf1;overflow:auto}.wixel-print-page{margin:0 auto 24px;box-shadow:0 2px 16px #0001}@media print{body{padding:0;background:#fff}.wixel-print-page{margin:0;box-shadow:none}@page{size:${prepared.width/96}in ${prepared.height/96}in;margin:0}}`;html.head.append(style);
+  const style=html.createElement('style');style.textContent=PRINT_CSS+fontCss+`body{margin:0;padding:24px;background:#e9edf1;overflow:auto}.wixel-print-page{margin:0 auto 24px;box-shadow:0 2px 16px #0001}@media print{body{padding:0;background:#fff}.wixel-print-page{margin:0;box-shadow:none}@page{size:${prepared.width/96}in ${prepared.height/96}in;margin:0}}`;html.head.append(style);
   for(let i=0;i<prepared.count;i++)html.body.append(html.importNode(prepared.build(i),true));
+  for(const warning of fontWarnings){const note=html.createElement('p');note.setAttribute('role','alert');note.textContent=warning;html.body.append(note);}
   return '<!doctype html>\n'+html.documentElement.outerHTML;
+}
+
+/** 비동기 저장 호출부용: 독립 HTML의 글꼴도 파일에 포함한다. */
+export async function htmlPrintDocumentWithFonts(options) {
+  const result = await embedFontCss(collectMarkupFontUsage(options.source.innerHTML), options);
+  return htmlPrintDocument({ ...options, fontCss: result.css, fontWarnings: result.warnings });
 }

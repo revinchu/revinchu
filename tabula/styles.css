@@ -801,10 +801,10 @@ legend { padding: 0 4px; color: #444; }
 .font-box .font-caret { min-width: 16px; padding: 0 1px; border: 1px solid #c8c8c8; border-radius: 0 2px 2px 0; height: 22px; box-sizing: border-box; background: #fff; display: inline-flex; align-items: center; justify-content: center; }
 .font-box .font-caret:hover, .font-box:hover .font-caret { border-color: #8a8a8a; }
 .font-box .rselect.font-family { box-sizing: border-box; height: 22px; }
-.font-menu { display: flex; flex-direction: column; width: 280px; }
+.font-menu { display:flex; flex-direction:column; width:min(350px,calc(100vw - 24px)); }
 .font-menu .font-search { margin: 6px 8px; height: 26px; padding: 0 8px; }
 .font-menu .font-load { margin: 0 8px 6px; height: 26px; font-size: 12px; }
-.font-list { max-height: 380px; overflow-y: auto; display: flex; flex-direction: column; }
+.font-list { max-height:min(320px,40vh); overflow-y: auto; display: flex; flex-direction: column; }
 .font-item { flex: none; min-height: 30px; line-height: 1.45; text-align: left; border: 0; background: none; padding: 4px 12px; font-size: 14px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .font-item:hover { background: #e8f0fb; }
 .font-item.on { background: #dbe5f5; }
@@ -2920,3 +2920,22 @@ body.mobile-work-mode .chart-palette-results { max-height:38dvh; }
 .shape-text-editor-content { box-sizing:border-box; flex:none; width:100%; min-width:0; min-height:1.2em; padding:0; margin:0; border:0; outline:none; line-height:1.2; overflow-wrap:break-word; user-select:text; -webkit-user-select:text; cursor:text; caret-color:currentColor; }
 .shape-text-editor-content > div { min-height:1.2em; margin:0; padding:0; }
 .shape-text-editor-content::selection, .shape-text-editor-content *::selection { background:#b4d5fe; }
+
+/* Download-on-demand fonts: a bounded list keeps large catalogs fast on phones. */
+.font-filters { display:flex; gap:6px; padding:0 8px 4px; }
+.font-filters select { min-width:0; flex:1; height:28px; font-size:12px; }
+.font-count { padding:2px 10px 5px; color:#56655e; font-size:11px; }
+.font-preview { margin:0 8px 6px; padding:6px 8px; border:1px solid #d9e3dd; border-radius:4px; background:#f5f8f6; }
+.font-preview-name { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font-size:11px; color:#47594f; }
+.font-preview-text { height:38px; line-height:38px; font-size:23px; white-space:nowrap; overflow:hidden; }
+.font-preview-meta { display:flex; align-items:center; flex-wrap:wrap; gap:6px; min-height:16px; font-size:10px; color:#536359; }
+.font-license { margin-left:auto; color:#187449; }
+.font-more,.font-retry { border:1px solid #c6d5cb; border-radius:3px; background:#edf5ef; color:#185c39; padding:5px 8px; font-size:12px; }
+.font-more { margin:6px 8px; }
+.font-retry[hidden],.font-license[hidden] { display:none; }
+body.mobile-work-mode .font-filters { gap:4px; padding:0 var(--popup-pad) 3px; }
+body.mobile-work-mode .font-filters select { height:28px; font-size:16px; }
+body.mobile-work-mode .font-count { padding:0 var(--popup-pad) 3px; font-size:10px; }
+body.mobile-work-mode .font-preview { margin:0 var(--popup-pad) 4px; padding:3px 5px; }
+body.mobile-work-mode .font-preview-text { height:29px; line-height:29px; font-size:19px; }
+body.mobile-work-mode .font-list { max-height:min(250px,35vh); }
