@@ -501,6 +501,8 @@ node tools/mobile-layout.mjs
 `node tools/pivot-field-drag.mjs`는 네 영역 추가·영역 간 이동·재정렬·중복 값·Σ 위치·Undo·취소·자동 스크롤·작은 화면을 실제 마우스 및 모의 Pointer/CDP 터치로 확인한다. `WIXEL_BROWSER=chromium|webkit`, `WIXEL_URL`, D: 출력 경로 `WIXEL_PIVOT_DRAG_OUT`, 부분 이름 `WIXEL_PIVOT_DRAG_FILTER`를 사용한다. `tools/pivot-pane-permissions.mjs`는 피벗 허용 보호·최종본·읽기 전용·계산 필드 공유 및 오래된 편집기 적용을 검사한다. 개인 문서나 원격 쓰기 없이 합성 문서를 사용하며 실제 기기 검증과 구분한다. 범위와 남은 차이는 [57번 문서](../docs/codex/57_피벗필드이동과검수.md)를 참고한다.
 
 
+필드 목록 제거 회귀는 `WIXEL_PIVOT_DRAG_FILTER="목록으로 제거"`로 선택한다. 마우스·모의 Pointer/Touch·HTML DragEvent, 중복 집계와 체크 상태, Undo/Redo의 결과·선택 보존을 검사하며 `WIXEL_PIVOT_DRAG_BASELINE=3056fba`는 기존 app/helper/styles를 메모리에서 제공한다. 공개 합성 검사에는 정확한 URL을 `WIXEL_ALLOWED_TEST_URL`에도 지정한다. D: 출력 경로를 요구하고 검사 결과·범위는 [97번 문서](../docs/codex/97_피벗필드목록으로제거.md)에 기록한다.
+
 ## 개체 스타일과 모바일 시트 목록
 
 - `node tools/mobile-slicer-gallery.mjs`: 모바일 320/390px 두 밀도와 데스크톱에서 갤러리 이전·다음·더 보기, 실제 스타일 변경·Undo, 키보드·작은 메뉴 경계를 검사합니다. 출력은 `WIXEL_SLICER_GALLERY_OUT`으로 지정합니다.

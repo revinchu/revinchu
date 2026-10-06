@@ -2729,6 +2729,7 @@ body.pivot-field-dragging, body.pivot-field-dragging * { cursor: grabbing !impor
 .pivot-field-marker { z-index: 12001; height: 2px; background: var(--green); box-shadow: 0 0 0 1px #fff; }
 .pivot-field-marker[hidden] { display: none; }
 .pp-area.pivot-field-drop-target { border-color: var(--green); background: #f3faf6; }
+.pp-fields.pivot-field-drop-target { border-color: var(--green); outline: 2px dashed var(--green); outline-offset: -2px; background: #f3faf6; }
 .pp-field:focus-within .pp-drop, .pp-field.calc:focus-within .pp-menu { visibility: visible; }
 body.mobile-work-mode .pivot-field-ghost { font-size: 11px; padding: 4px 7px; }
 

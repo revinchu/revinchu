@@ -1,3 +1,14 @@
+// 목록에서 꺼낸 필드와 Σ 값은 제거하지 않는다. 실제 배치 슬롯 하나만 제거 계획으로 반환한다.
+export function pivotFieldRemovePatch(def, dragged) {
+  const { name, from, index, sigma } = dragged ?? {};
+  if (sigma || !['rows', 'cols', 'values', 'pages'].includes(from) || typeof name !== 'string' || !name || !Number.isInteger(index) || index < 0) return null;
+  const fields = def?.[from];
+  if (!Array.isArray(fields) || index >= fields.length) return null;
+  const placed = from === 'values' ? fields[index]?.field : fields[index];
+  if (placed !== name) return null;
+  return { [from]: fields.filter((_, at) => at !== index) };
+}
+
 // 피벗 필드 목록의 포인터 이동만 담당합니다. 모델 변경은 유효한 드롭 콜백 한 번으로 제한합니다.
 export function installPivotFieldDrag(pane, { getItem, canStart, resolveTarget, onDrop, onCancel }) {
   const doc = pane.ownerDocument, win = doc.defaultView;
@@ -54,6 +65,7 @@ export function installPivotFieldDrag(pane, { getItem, canStart, resolveTarget, 
     current.target?.element?.classList.remove('pivot-field-drop-target');
     current.target = next?.element?.isConnected ? next : null;
     const v = viewport(), ghost = current.ghost;
+    ghost.textContent = current.target?.action === 'remove' ? `${current.item.label} — ${current.target.label ?? '필드 제거'}` : current.item.label;
     ghost.style.maxWidth = Math.max(40, v.width - 16) + 'px';
     ghost.style.left = Math.max(v.left + 4, Math.min(current.last.x + 12, v.left + v.width - ghost.offsetWidth - 4)) + 'px';
     ghost.style.top = Math.max(v.top + 4, Math.min(current.last.y + 14, v.top + v.height - ghost.offsetHeight - 4)) + 'px';
@@ -62,6 +74,7 @@ export function installPivotFieldDrag(pane, { getItem, canStart, resolveTarget, 
     const { element, index, label } = current.target;
     element.classList.add('pivot-field-drop-target');
     ghost.setAttribute('aria-label', label ? `${current.item.label}: ${label}` : current.item.label);
+    if (current.target.action === 'remove') { current.marker.hidden = true; return; }
     const rect = element.getBoundingClientRect(), rows = [...element.querySelectorAll('.pp-item')];
     const at = Math.max(0, Math.min(rows.length, Number.isFinite(index) ? index : rows.length));
     const nextRow = rows[at]?.getBoundingClientRect(), previous = rows[at - 1]?.getBoundingClientRect();

@@ -32,7 +32,7 @@ import { shortcutCode, appleTouchDevice, excelDirectCommand } from './keyboard-s
 import { installPointerModifierTracking, primaryPointerModifier } from './pointer-modifiers.js';
 import { openKeyboardCheck } from './keyboard-check.js';
 import { installGridMousePan } from './mouse-work.js';
-import { installPivotFieldDrag } from './pivot-field-drag.js';
+import { installPivotFieldDrag, pivotFieldRemovePatch } from './pivot-field-drag.js';
 import { openMobileTools } from './mobile-tools-ui.js';
 import { makeObjectGroup, ungroupObjects } from './object-group.js';
 // WIXEL 메인: 상태 · 선택 · 편집 · 키보드/마우스 · 명령 (그리기는 view.js)
@@ -12521,7 +12521,11 @@ function setPivotDef(entry, def, s = entry.si ?? si) {
   const target = { ...entry, si: s };
   const plans = preparePivotChanges([{ entry: target, def }]);
   if (!plans) return false;
-  wb.transact(() => applyPivotChanges(plans), meta());
+  const historyMeta = meta();
+  if (s === si && !chartSel && pivotHere()?.def === entry.def) {
+    historyMeta.pivotFocus = { si:s, prop:entry.prop, index:entry.index, name:entry.def.name ?? '' };
+  }
+  wb.transact(() => applyPivotChanges(plans), historyMeta);
   entry.def = target.def;
   return true;
 }
@@ -12878,7 +12882,7 @@ function moveClassicPivotField(entry, dragged, area) {
 function bindClassicPivotGrid() {
   const wrap = $('gridWrap');
   const identity = (entry) => `${entry.si}:${entry.prop}:${entry.index}`;
-  const reset = () => { pivotDrag = null; document.body.classList.remove('pivot-grid-dragging'); wrap.querySelectorAll('.pv-classic-zone.over').forEach((n) => n.classList.remove('over')); };
+  const reset = () => { pivotDrag = null; document.body.classList.remove('pivot-grid-dragging'); wrap.querySelectorAll('.pv-classic-zone.over').forEach((n) => n.classList.remove('over')); document.querySelectorAll('#pivotPane .pp-fields.pivot-field-drop-target').forEach(n => n.classList.remove('pivot-field-drop-target')); };
   wrap.addEventListener('dragstart', (e) => {
     const target = e.target.closest?.('.pv-classic-field');
     if (target) {
@@ -13279,6 +13283,29 @@ function renderPivotPane(entry, options = {}) {
     if (dr.from === area && index === dr.index && (!Object.hasOwn(extra, 'valuesPos') || extra.valuesPos === def.valuesPos)) return;
     moveTo(dr.name, area, index, dr.from === 'values' ? dr.index : null, extra, dr.from);
   };
+  const removePlacedField = dr => {
+    if (!validDrag(dr)) return;
+    const patch = pivotFieldRemovePatch(def, dr);
+    if (patch) apply(patch);
+  };
+  fieldList.addEventListener('dragover', e => {
+    const dr = pivotDrag;
+    if (!dr || !validDrag(dr) || !pivotFieldRemovePatch(def, dr)) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    fieldList.classList.add('pivot-field-drop-target');
+  });
+  fieldList.addEventListener('dragleave', e => {
+    if (!fieldList.contains(e.relatedTarget)) fieldList.classList.remove('pivot-field-drop-target');
+  });
+  fieldList.addEventListener('drop', e => {
+    const dr = pivotDrag;
+    fieldList.classList.remove('pivot-field-drop-target');
+    if (!dr) return;
+    e.preventDefault(); e.stopPropagation();
+    pivotDrag = null; document.body.classList.remove('pivot-grid-dragging');
+    removePlacedField(dr);
+  });
   const areaBox = (area) => {
     const box = el('div', { class: 'pp-area', 'data-pivot-area': area, 'aria-label': `${AREA_LABEL[area]} 영역` });
     const items = area === 'values' ? areas.values.map((v, i) => ({ name: v.field, label: valueName(v), i })) : areas[area].map((n, i) => ({ name: n, label: n, i }));
@@ -13371,7 +13398,7 @@ function renderPivotPane(entry, options = {}) {
   };
   pane.replaceChildren(
     el('div', { class: 'pp-head' }, el('span', {}, '피벗 테이블 필드'), el('button', { type: 'button', title: '닫기', onclick: () => { pivotPaneOpen = false; refreshPivotPane(); } }, '✕')),
-    el('div', { class: 'muted pp-hint' }, '필드를 끌어 영역을 옮기거나 ▾ 메뉴를 사용하세요. 값 필드는 ƒx 또는 Enter로 요약·표시 형식을 설정합니다.'),
+    el('div', { class: 'muted pp-hint' }, '필드를 끌어 영역을 옮기거나 위쪽 필드 목록에 놓아 제거하세요. ▾ 메뉴로도 변경할 수 있습니다. 값 필드는 ƒx 또는 Enter로 요약·표시 형식을 설정합니다.'),
     search, fieldList,
     el('div', { class: 'pp-tools' },
       el('button', { type: 'button', class: 'btn', onclick: () => calcFieldDialog(entry) }, 'ƒx 계산 필드...'),
@@ -13392,6 +13419,9 @@ function renderPivotPane(entry, options = {}) {
     canStart: item => validDrag(item.payload),
     resolveTarget: (item, x, y) => {
       const hit = document.elementFromPoint(x, y), box = hit?.closest('.pp-area');
+      if (hit?.closest('.pp-fields') === fieldList && pivotFieldRemovePatch(def, item.payload)) {
+        return { element:fieldList, action:'remove', label:'필드 제거' };
+      }
       if (box && pane.contains(box)) {
         const rows = [...box.querySelectorAll('.pp-item')];
         let index = rows.findIndex(row => y < row.getBoundingClientRect().top + row.getBoundingClientRect().height / 2);
@@ -13406,7 +13436,8 @@ function renderPivotPane(entry, options = {}) {
     },
     onDrop: (item, target) => {
       if (!validDrag(item.payload)) return;
-      if (target.classic) moveClassicPivotField(entry, item.payload, target.area);
+      if (target.action === 'remove') removePlacedField(item.payload);
+      else if (target.classic) moveClassicPivotField(entry, item.payload, target.area);
       else dropField(item.payload, target.area, target.element, target.index);
     },
   });
@@ -20509,6 +20540,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['피벗 필드를 끌어 제거', ['행·열·값·필터 영역의 필드를 위쪽 필드 목록으로 끌어 놓으면 피벗에서 제거합니다. 같은 값 필드가 여러 개면 끌어온 항목만 제거하며 원본 데이터는 유지합니다.', '마우스·터치 이동과 실행 취소·다시 실행을 지원합니다.']],
   ['피벗 옵션 보존과 겹침 방지', ['Excel 파일의 열 자동 맞춤·다중 필터·사용자 지정 정렬 목록 설정을 보존합니다. 자동 맞춤을 끄면 정렬·업데이트에서도 열 너비를 유지합니다.', '필드 추가·필터·새로 고침으로 다른 피벗과 겹치면 적용을 중단하고 기존 결과를 보존합니다. 여러 연결 피벗도 전체 범위를 먼저 확인합니다.']],
   ['아주 좁은 열의 숫자 표시', ['숫자가 들어가지 않는 열에서 # 한 글자도 표시할 공간이 없으면 Excel처럼 빈칸으로 표시합니다. 원본 값과 숫자 서식은 유지하며 열을 넓히면 다시 표시됩니다.']],
   ['슬라이서 위치와 셀 배치', ['파일 열기·행 높이·열 너비 변경 시 Excel의 개체 위치 설정을 따르고, 확대·축소와 반복 편집에도 저장된 소수 좌표를 유지합니다.']],
@@ -20782,8 +20814,20 @@ function run(cmd, arg, { keepMenu = false } = {}) {
 function restoreMeta(m) {
   if (m.si !== si && m.si < wb.sheets.length) switchSheet(m.si);
   gv.layout();
-  selectRange(m.sel, m.selKind ?? 'cells', m.active);
-  gv.ensureVisible(m.active.r, m.active.c);
+  let range = m.sel, kind = m.selKind ?? 'cells', point = m.active;
+  const focus = m.pivotFocus;
+  const target = focus && focus.si === si && focus.si === m.si
+    ? pivotDefs().find(e => e.prop === focus.prop && e.index === focus.index && (e.def.name ?? '') === focus.name) : null;
+  const area = target?.def.area;
+  // 필터 행·값 열이 사라져도 해당 피벗의 필드 창과 선택을 유지한다.
+  if (area && [area.r1, area.c1, area.r2, area.c2].every(n => Number.isInteger(n) && n >= 0)
+    && area.r1 <= area.r2 && area.c1 <= area.c2
+    && (point.r < area.r1 || point.r > area.r2 || point.c < area.c1 || point.c > area.c2)) {
+    point = { r:area.r1, c:area.c1 };
+    range = { r1:point.r, c1:point.c, r2:point.r, c2:point.c }; kind = 'cells';
+  }
+  selectRange(range, kind, point);
+  gv.ensureVisible(active.r, active.c);
 }
 
 // ───────────────────────── 보기 ─────────────────────────
