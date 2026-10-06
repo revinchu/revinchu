@@ -858,7 +858,8 @@ function* readSheet(files, path, ctx) {
     const w = col.attrs.width !== undefined ? width2pxM(Number(col.attrs.width), mdw) : null;
     const st = col.attrs.style !== undefined ? colStyleOf(col.attrs.style) : undefined;
     for (let c = min; c <= max && c < MAX_COLS; c++) {
-      if (w !== null && w !== defColW && (col.attrs.customWidth === '1' || Math.abs(w - defColW) > 1)) sheet.colWidths[c] = w;
+      // width is authoritative even without customWidth; dropping 1px differences drifts drawing anchors.
+      if (w !== null && w !== defColW) sheet.colWidths[c] = w;
       if (col.attrs.hidden === '1' || col.attrs.hidden === 'true') sheet.hiddenCols[c] = true;
       if (st) sheet.colStyles[c] = st;
       const ol = Number(col.attrs.outlineLevel ?? 0);
@@ -2081,12 +2082,14 @@ function readDrawing(files, path, sheet, ctx) {
       const p0 = from ? point(from) : { x: Number(pos?.attrs.x ?? 0) / EMU, y: Number(pos?.attrs.y ?? 0) / EMU };
       box = { ...p0, w: Number(ext?.attrs.cx ?? 480 * EMU) / EMU, h: Number(ext?.attrs.cy ?? 288 * EMU) / EMU };
     }
-    const alt = child(anchor, 'AlternateContent');
-    const sl = alt && descendants(child(alt, 'Choice'), 'slicer')[0];
+    const alt = child(anchor, 'AlternateContent'), choice = child(alt, 'Choice');
+    const frame = child(choice, 'graphicFrame');
+    // A Choice can contain a group of slicers. Only direct frames use this shortcut.
+    const sl = frame && descendants(frame, 'slicer')[0];
     // 개체 위치 속성: twoCell(셀에 맞춰 위치와 크기 변경) · oneCell(위치만) · absolute(변경 안 함)
     const editAs = anchor.name === 'absoluteAnchor' ? 'absolute' : anchor.name === 'oneCellAnchor' ? 'oneCell' : anchor.attrs.editAs ?? 'twoCell';
     if (sl?.attrs.name) {
-      const frame = child(child(alt, 'Choice'), 'graphicFrame'), nv = descendants(frame, 'cNvPr')[0], client = child(anchor, 'clientData')?.attrs;
+      const nv = descendants(frame, 'cNvPr')[0], client = child(anchor, 'clientData')?.attrs;
       out._slicerBoxes[sl.attrs.name] = { ...box, w: Math.max(1, box.w), h: Math.max(1, box.h), z: ++z, ...(editAs !== 'oneCell' ? { placement: editAs } : {}),
         ...(nv?.attrs.descr !== undefined ? { alt: nv.attrs.descr } : {}), ...(nv?.attrs.hidden === '1' ? { hidden: true } : {}),
         ...(frame?.attrs.macro ? { macro: frame.attrs.macro.replace(/^\[0\]!/, '') } : {}),
@@ -2094,7 +2097,8 @@ function readDrawing(files, path, sheet, ctx) {
         ...(client?.fLocksWithSheet !== undefined ? { locked: !['0','false'].includes(client.fLocksWithSheet) } : {}) };
       continue;
     }
-    const content = anchor.children.find((k) => ['sp', 'cxnSp', 'pic', 'grpSp', 'graphicFrame'].includes(k.name)) ?? child(child(alt, 'Choice'), 'graphicFrame');
+    const content = anchor.children.find((k) => ['sp', 'cxnSp', 'pic', 'grpSp', 'graphicFrame'].includes(k.name))
+      ?? choice?.children.find((k) => ['sp', 'cxnSp', 'pic', 'grpSp', 'graphicFrame'].includes(k.name));
     const before = [out.charts.length, out.images.length, out.shapes.length];
     if (content) walk(content, box, null, null, child(anchor, 'clientData')?.attrs, editAs);
     const client = child(anchor, 'clientData')?.attrs;

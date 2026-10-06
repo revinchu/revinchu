@@ -690,3 +690,10 @@ row-limit-storage.mjs는 로컬 Chromium에서 CSV 확장 행 가져오기 및 �
 ### 피벗 정렬과 합계 경계 회귀
 
 `node tools/pivot-sort-boundaries.mjs`는 실제 리본·우클릭·필터·정렬 창을 조작하여 총합계·부분합·일반 데이터 경계, Undo/Redo, 슬라이서 후 정렬 유지, XLSX 저장 왕복을 검사한다. `WIXEL_URL`, `WIXEL_BROWSER=chromium|firefox|webkit`, `WIXEL_PIVOT_SORT_OUT`(D: 폴더), 선택 `WIXEL_PIVOT_SORT_FILTER`를 지정한다. 승인된 공개 주소의 합성 검사는 `WIXEL_PIVOT_SORT_PUBLIC=1`을 추가한다. API 쓰기·외부 요청 차단과 개별 스크린샷/결과 JSON을 포함한다. 기준 HEAD 및 실제 파일 비교 결과는 [피벗 정렬 검증](../docs/codex/90_피벗정렬합계보존.md)을 참조한다.
+
+### 슬라이서 위치와 셀 앵커 회귀
+
+`node tools/slicer-anchor-layout.mjs`는 합성 XLSX에서 파일 열기·셀 입력의 자동 높이/너비, 수동 크기, 붙여넣기·필터·기본 너비, 실행 취소, 배율·창 크기·스크롤·틀 고정을 검사한다. `SLICER_ANCHOR_BASELINE=HEAD`는 수정 전 app.js를 메모리에서 제공하고 실패를 별도 `.local/slicer-anchor-layout/baseline`에 보관한다.
+
+`node tools/slicer-real-layout.mjs "D:/원본 파일.xlsb"`는 명시한 실제 파일의 슬라이서와 표·셀 경계를 배율별로 비교한다. `WIXEL_URL`로 소스/번들의 로컬 서버를, `SLICER_ANCHOR_OUTPUT` 또는 `SLICER_REAL_OUTPUT`으로 D: 출력 폴더를 지정한다. 두 도구 모두 별도 브라우저에서 API·외부 요청·쓰기 요청을 차단하며 실제 파일을 수정하지 않는다. 검사 범위와 Excel COM 미검증 한계는 [94. 슬라이서 위치와 셀 앵커](../docs/codex/94_슬라이서위치와셀앵커.md)에 기록한다.
+합성 공개 검증에는 `SLICER_ANCHOR_PUBLIC=1`과 정확한 위셀 공개 주소를 함께 지정한다. 실제 업무 파일 검사 도구는 로컬 전용을 유지한다. 수정 전 회귀 기준은 `SLICER_ANCHOR_BASELINE=79a0f97`이다.

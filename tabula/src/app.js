@@ -16,6 +16,7 @@ import { chartResetFormattingPatch, applyChartTemplatePatch } from './chart-cont
 import { writeChartTemplate, readChartTemplate } from './chart-template.js';
 import { pivotContextTarget, pivotValueDef, pivotRemoveContextField } from './pivot-context.js';
 import { slicerSizePatch, slicerSourceKey, slicerDimensions, slicerDimensionPatch } from './slicer-properties.js';
+import { captureDrawingAnchors, reflowDrawingAnchors } from './drawing-anchor.js';
 import { phoneticEditor } from './phonetic-ui.js';
 import { readRangeQuerySource } from './range-query.js';
 import { createRangeQueryEditor } from './range-query-ui.js';
@@ -1377,13 +1378,15 @@ function wrappedLines(text, width, st) {
 }
 
 function autoFitRows(r1, r2, force = false) {
-  const s = sheet();
-  const cols = Math.min(wb.usedRange(si).cols, 500);
-  for (let r = r1; r <= r2; r++) {
-    if (s.rowManual[r] && !force) continue;
-    const need = neededRowHeight(si, r, cols);
-    if ((s.rowHeights[r] ?? defRowH()) !== need || (force && s.rowManual[r])) wb.setRowHeight(si, r, need, false);
-  }
+  return anchorObjects(() => {
+    const s = sheet();
+    const cols = Math.min(wb.usedRange(si).cols, 500);
+    for (let r = r1; r <= r2; r++) {
+      if (s.rowManual[r] && !force) continue;
+      const need = neededRowHeight(si, r, cols);
+      if ((s.rowHeights[r] ?? defRowH()) !== need || (force && s.rowManual[r])) wb.setRowHeight(si, r, need, false);
+    }
+  });
 }
 
 /** 행에 필요한 높이(px): 큰 글꼴 · 줄 바꿈 · 텍스트 회전(각도 · 세로 쓰기)까지 엑셀처럼 */
@@ -1423,30 +1426,37 @@ function fitRowsOnOpen() {
   list.forEach((rows, sIdx) => {
     const s = wb.sheets[sIdx];
     if (!rows || !s) return;
+    const axes = () => ({ cols: new Axis(s.defColW ?? DEFAULT_COL_WIDTH, s.colWidths, [s.hiddenCols], MAX_COLS),
+      rows: new Axis(s.defRowH ?? DEFAULT_ROW_HEIGHT, s.rowHeights, [s.hiddenRows, s.filter?.hidden, ...(s.tables ?? []).map(t => t.filter?.hidden)], MAX_ROWS) });
+    const before = axes(), anchors = captureDrawingAnchors(s, before.cols, before.rows);
     const cols = Math.min(wb.usedRange(sIdx).cols, 500);
     for (const r of rows.slice(0, 5000)) {
       if (s.rowManual[r]) continue;
       const need = neededRowHeight(sIdx, r, cols);
       if (need !== (s.defRowH ?? DEFAULT_ROW_HEIGHT)) s.rowHeights[r] = need;
     }
+    const after = axes();
+    Object.assign(s, reflowDrawingAnchors(s, anchors, after.cols, after.rows));
   });
 }
 
 /** 엑셀처럼: 너비를 바꾼 적 없는 열에 숫자가 들어가지 않으면 열을 넓힘 */
 function autoWiden(rg, { grow = false } = {}) {
-  const s = sheet();
-  const u = usedClip(rg);
-  for (let c = u.c1; c <= Math.min(u.c2, u.c1 + 200); c++) {
-    if (s.colWidths[c] !== undefined && !grow) continue;
-    let need = 0;
-    for (let r = u.r1; r <= Math.min(u.r2, u.r1 + 2000); r++) {
-      const v = valueAt(r, c);
-      const st = styleAt(r, c);
-      if (typeof v !== 'number' || st.wrap || wb.mergeAt(si, r, c)) continue;
-      need = Math.max(need, measureText(formatValue(v, st, wb.date1904).text, st) + 10);
+  return anchorObjects(() => {
+    const s = sheet();
+    const u = usedClip(rg);
+    for (let c = u.c1; c <= Math.min(u.c2, u.c1 + 200); c++) {
+      if (s.colWidths[c] !== undefined && !grow) continue;
+      let need = 0;
+      for (let r = u.r1; r <= Math.min(u.r2, u.r1 + 2000); r++) {
+        const v = valueAt(r, c);
+        const st = styleAt(r, c);
+        if (typeof v !== 'number' || st.wrap || wb.mergeAt(si, r, c)) continue;
+        need = Math.max(need, measureText(formatValue(v, st, wb.date1904).text, st) + 10);
+      }
+      if (need > (s.colWidths[c] ?? defColW()) + 1 && need < 400) wb.setColWidth(si, c, Math.ceil(need));
     }
-    if (need > (s.colWidths[c] ?? defColW()) + 1 && need < 400) wb.setColWidth(si, c, Math.ceil(need));
-  }
+  });
 }
 
 // ───────────────────────── 키보드 ─────────────────────────
@@ -3079,7 +3089,7 @@ function pasteInternal(mode = 'all', opts = {}) {
     if (protectBlocked(protectAction(command), area, command)) return false;
     if (what === 'validation' && isProtected(sheet())) { toast('보호된 시트에는 유효성 검사를 붙여넣을 수 없습니다.'); return false; }
     wb.transact(() => {
-      applyPasteSpecial(wb, si, source, target, options);
+      anchorObjects(() => applyPasteSpecial(wb, si, source, target, options));
       if (!['formats', 'comments', 'validation', 'colWidths'].includes(what)) afterDataEntry(area);
     }, meta());
     if (what === 'colWidths') gv.layout();
@@ -3095,7 +3105,7 @@ function pasteInternal(mode = 'all', opts = {}) {
   if (what === 'colWidths') {
     // 열 너비만
     const w = clip.c2 - clip.c1 + 1;
-    wb.transact(() => { for (let j = 0; j < w; j++) wb.setColWidth(si, active.c + j, wb.colWidth(clip.si, clip.c1 + j)); }, meta());
+    wb.transact(() => anchorObjects(() => { for (let j = 0; j < w; j++) wb.setColWidth(si, active.c + j, wb.colWidth(clip.si, clip.c1 + j)); }), meta());
     gv.layout();
     return;
   }
@@ -3581,7 +3591,7 @@ function applyPainter() {
   const single = selIsActiveOnly() || (() => { const m = wb.mergeAt(si, active.r, active.c); return m && m.r1 === tgt.r1 && m.c1 === tgt.c1 && m.r2 === tgt.r2 && m.c2 === tgt.c2; })();
   const th = single ? h : Math.min(tgt.r2 - tgt.r1 + 1, selKind === 'cols' ? h : 5000);
   const tw = single ? w : Math.min(tgt.c2 - tgt.c1 + 1, selKind === 'rows' ? w : 500);
-  wb.transact(() => {
+  wb.transact(() => anchorObjects(() => {
     for (let i = 0; i < th; i++) {
       for (let j = 0; j < tw; j++) {
         const st = { ...styles[i % h][j % w] };
@@ -3600,7 +3610,7 @@ function applyPainter() {
       const n = sel.r2 - sel.r1 + 1;
       for (let i = 0; i < n && i < 5000; i++) { const hgt = painter.heights[i % painter.heights.length]; if (hgt !== undefined) wb.setRowHeight(si, sel.r1 + i, hgt); }
     }
-  }, meta());
+  }), meta());
   if (selKind === 'cells' && (th !== tgt.r2 - tgt.r1 + 1 || tw !== tgt.c2 - tgt.c1 + 1)) {
     selectRange({ r1: tgt.r1, c1: tgt.c1, r2: tgt.r1 + th - 1, c2: tgt.c1 + tw - 1 }, 'cells', active);
   }
@@ -5791,11 +5801,13 @@ function toggleFilter() {
 }
 
 function widenForFilterButtons(rg) {
-  // 필터 단추가 머리글을 가리지 않도록 좁은 열은 넓힘
-  for (let c = rg.c1; c <= Math.min(rg.c2, rg.c1 + 100); c++) {
-    const need = measureText(displayText(rg.r1, c), styleAt(rg.r1, c)) + 28;
-    if (need > wb.colWidth(si, c) && need < 300) wb.setColWidth(si, c, Math.ceil(need));
-  }
+  return anchorObjects(() => {
+    // 필터 단추가 머리글을 가리지 않도록 좁은 열은 넓힘
+    for (let c = rg.c1; c <= Math.min(rg.c2, rg.c1 + 100); c++) {
+      const need = measureText(displayText(rg.r1, c), styleAt(rg.r1, c)) + 28;
+      if (need > wb.colWidth(si, c) && need < 300) wb.setColWidth(si, c, Math.ceil(need));
+    }
+  });
 }
 
 function applyFilterCriteria(c, values, key = '', { quiet = false, historyMeta = null } = {}) {
@@ -9749,59 +9761,30 @@ function setObjects(prop, fn) {
 /** 개체 위치 속성: twoCell = 셀에 맞춰 위치와 크기 변경(기본), oneCell = 위치만 변경, absolute = 변경 안 함 */
 const placementOf = (prop, o) => o.placement ?? (prop === 'slicers' ? 'oneCell' : 'twoCell');
 
-/**
- * 행/열 크기 변경 · 삽입 · 삭제 뒤에도 개체가 셀을 따라가게 (엑셀의 개체 위치 속성). transact 안에서 부름.
- * shift: 삽입/삭제일 때 { axis: 'row'|'col', index, count(음수 = 삭제) }
- */
+/** 비활성 시트의 피벗 자동 너비도 해당 시트의 개체 앵커를 따른다. transact 안에서 부름. */
+function anchorObjectsOnSheet(targetSi, fn) {
+  const s = wb.sheets[targetSi];
+  if (!OBJECT_PROPS.some(prop => (s[prop] ?? []).length)) return fn();
+  const axes = () => ({ cols: new Axis(s.defColW ?? DEFAULT_COL_WIDTH, s.colWidths, [s.hiddenCols], MAX_COLS),
+    rows: new Axis(s.defRowH ?? DEFAULT_ROW_HEIGHT, s.rowHeights, [s.hiddenRows, s.filter?.hidden, ...(s.tables ?? []).map(t => t.filter?.hidden)], MAX_ROWS) });
+  const before = axes(), anchors = captureDrawingAnchors(s, before.cols, before.rows);
+  const result = fn(), after = axes();
+  const changes = reflowDrawingAnchors(s, anchors, after.cols, after.rows);
+  for (const prop of Object.keys(changes)) wb.setSheetProp(targetSi, prop, changes[prop]);
+  return result;
+}
+
+/** 셀 크기·숨김·삽입·삭제 후 개체 재배치. shift: { axis, index, count }. transact 안에서 부름. */
 function anchorObjects(fn, shift = null, moveOnly = false) {
   const s = sheet();
-  const props = OBJECT_PROPS.filter((p) => (s[p] ?? []).length);
-  if (!props.length) return fn();
+  if (!OBJECT_PROPS.some(prop => (s[prop] ?? []).length)) return fn();
   gv.refreshAxes();
-  const cols0 = gv.cols;
-  const rows0 = documentRows();
-  const at = (ax, p) => { const i = ax.indexAt(Math.max(0, p)); return [i, Math.max(0, p - ax.pos(i))]; };
-  const anchors = new Map();
-  for (const p of props) {
-    for (const o of s[p]) {
-      const place = placementOf(p, o);
-      if (place === 'absolute') continue;
-      anchors.set(o.id, { place, c1: at(cols0, o.x), r1: at(rows0, o.y), c2: at(cols0, o.x + o.w), r2: at(rows0, o.y + o.h) });
-    }
-  }
-  const res = fn();
+  const anchors = captureDrawingAnchors(s, gv.cols, documentRows());
+  const result = fn();
   gv.refreshAxes();
-  const rows1 = documentRows();
-  const move = (ax, [i, off], kind) => {
-    let j = i;
-    let o = off;
-    if (shift && shift.axis === kind) {
-      if (shift.count > 0 && i >= shift.index) j = i + shift.count;
-      else if (shift.count < 0) {
-        const end = shift.index - shift.count;
-        if (i >= end) j = i + shift.count;
-        else if (i >= shift.index) { j = shift.index; o = 0; }
-      }
-    }
-    return ax.pos(j) + Math.min(o, ax.size(j) || o);
-  };
-  for (const p of props) {
-    const list = s[p];
-    let changed = false;
-    const next = list.map((o) => {
-      const a = anchors.get(o.id);
-      if (!a) return o;
-      const x = Math.round(move(gv.cols, a.c1, 'col'));
-      const y = Math.round(move(rows1, a.r1, 'row'));
-      const w = a.place === 'twoCell' && !moveOnly ? Math.max(1, Math.round(move(gv.cols, a.c2, 'col')) - x) : o.w;
-      const h = a.place === 'twoCell' && !moveOnly ? Math.max(LINE_SHAPES.has(o.kind) ? 0 : 1, Math.round(move(rows1, a.r2, 'row')) - y) : o.h;
-      if (x === o.x && y === o.y && w === o.w && h === o.h) return o;
-      changed = true;
-      return { ...o, x, y, w, h };
-    });
-    if (changed) wb.setSheetProp(si, p, next);
-  }
-  return res;
+  const changes = reflowDrawingAnchors(s, anchors, gv.cols, documentRows(), { shift, moveOnly });
+  for (const prop of Object.keys(changes)) wb.setSheetProp(si, prop, changes[prop]);
+  return result;
 }
 
 function updateObject(id, patch) {
@@ -12386,7 +12369,7 @@ function writePivot(targetSi, def, { autofit = true } = {}) {
   // 셀 서식은 바꿀 때 새 객체로 교체되므로 객체 자체를 기억 (같은 객체면 바뀌지 않은 것)
   grid.forEach((row, r) => row.forEach((cd, c) => { if (cd?.role) wm.setRC(top + r, left + c, t.cells.getRC(top + r, left + c)?.style ?? NO_STYLE); }));
   pivotWritten.set(wkey, wm);
-  if (autofit && (!pm.empty || pm.pageFields?.length)) {
+  if (autofit && (!pm.empty || pm.pageFields?.length)) anchorObjectsOnSheet(targetSi, () => {
     for (let c = 0; c < colsN; c++) {
       let w = 0;
       grid.forEach((row, r) => {
@@ -12394,7 +12377,7 @@ function writePivot(targetSi, def, { autofit = true } = {}) {
       });
       if (w > (wb.sheets[targetSi].colWidths[left + c] ?? wb.sheets[targetSi].defColW ?? DEFAULT_COL_WIDTH)) wb.setColWidth(targetSi, left + c, Math.min(300, Math.ceil(w)));
     }
-  }
+  });
   return true;
 }
 
@@ -17751,7 +17734,7 @@ function sizeDialog(kind) {
       }
       wb.setSheetProp(si, sizesKey, sizes);
       if (!isCol) wb.setSheetProp(si, 'rowManual', manual);
-    }, null, true), meta());
+    }), meta());
     gv.layout(); updateSelectionUI(); return true;
   });
 }
@@ -19559,7 +19542,7 @@ const MENUS = {
       label: '기본 너비...', action: () => formDialog('기본 너비', [{ name: 'w', label: '표준 열 너비(px)', type: 'number', value: defColW() }], ({ w }) => {
         const n = Number(w);
         if (!(n > 0 && n <= 1000)) { toast('1에서 1000 사이의 값을 입력하세요.'); return false; }
-        wb.setSheetProp(si, 'defColW', n === DEFAULT_COL_WIDTH ? undefined : n);
+        wb.transact(() => anchorObjects(() => wb.setSheetProp(si, 'defColW', n === DEFAULT_COL_WIDTH ? undefined : n)), meta());
         gv.layout();
         return undefined;
       }),
@@ -20454,6 +20437,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['슬라이서 위치와 셀 배치', ['파일 열기·행 높이·열 너비 변경 시 Excel의 개체 위치 설정을 따르고, 확대·축소와 반복 편집에도 저장된 소수 좌표를 유지합니다.']],
   ['차트 제목 글꼴 적용 안정성', ['제목을 끌다 취소한 뒤 홈에서 글꼴을 바꿀 때 이전 글꼴이 남던 문제를 수정했습니다. 글꼴·크기를 직접 입력한 뒤 목록 화살표를 눌러도 목록이 유지됩니다.']],
   ['글꼴 이름과 Excel 호환', ['G마켓 산스·나눔스퀘어 네오 등 굵기별 설치 글꼴을 직접 선택합니다.', '표시용 별칭과 실제 설치 글꼴명을 구분해 셀·차트·도형·조건부 서식을 Excel에 저장합니다.']],
   ['차트 텍스트 홈 서식', ['차트 제목·축 눈금·축 제목·범례·데이터 레이블을 선택한 뒤 홈에서 글꼴·크기·색·굵게·기울임을 바꿀 수 있습니다. 다시 클릭한 개별 데이터 레이블도 따로 서식을 지정하며 원본 셀 서식은 유지합니다.']],
