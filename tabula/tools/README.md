@@ -697,3 +697,7 @@ row-limit-storage.mjs는 로컬 Chromium에서 CSV 확장 행 가져오기 및 �
 
 `node tools/slicer-real-layout.mjs "D:/원본 파일.xlsb"`는 명시한 실제 파일의 슬라이서와 표·셀 경계를 배율별로 비교한다. `WIXEL_URL`로 소스/번들의 로컬 서버를, `SLICER_ANCHOR_OUTPUT` 또는 `SLICER_REAL_OUTPUT`으로 D: 출력 폴더를 지정한다. 두 도구 모두 별도 브라우저에서 API·외부 요청·쓰기 요청을 차단하며 실제 파일을 수정하지 않는다. 검사 범위와 Excel COM 미검증 한계는 [94. 슬라이서 위치와 셀 앵커](../docs/codex/94_슬라이서위치와셀앵커.md)에 기록한다.
 합성 공개 검증에는 `SLICER_ANCHOR_PUBLIC=1`과 정확한 위셀 공개 주소를 함께 지정한다. 실제 업무 파일 검사 도구는 로컬 전용을 유지한다. 수정 전 회귀 기준은 `SLICER_ANCHOR_BASELINE=79a0f97`이다.
+
+### 아주 좁은 열의 숫자 표시 회귀
+
+`node tools/narrow-column-layout.mjs`는 숫자·날짜·백분율·General 소수/지수와 텍스트·오류를 폭·배율별로 검사한다. 숫자가 들어가지 않는 폭의 `#` 개수, 한 글자도 안 들어갈 때의 빈 표시, 원본 숫자 보존과 열 확대·실행 취소를 확인한다. `WIXEL_URL`, `NARROW_COLUMN_OUTPUT`(D: 폴더), `NARROW_COLUMN_BASELINE=ff60c83`으로 서버·출력·수정 전 표시를 지정한다. 실제 원본은 `REAL_WORKBOOK`으로 지정하며 로컬 서버만 허용한다. 공개 합성 검사는 정확한 URL을 `WIXEL_ALLOWED_TEST_URL`에도 지정한다. API·외부 요청·쓰기 요청을 차단하며 결과와 제한은 [95. 아주 좁은 열의 숫자 표시](../docs/codex/95_아주좁은열의숫자표시.md)에 기록한다.

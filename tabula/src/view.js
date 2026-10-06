@@ -200,7 +200,8 @@ function fitNumber(v, maxW, style) {
       if (measureText(t, style) <= maxW) return t;
     }
   }
-  return '#'.repeat(Math.max(1, Math.floor(maxW / Math.max(1, measureText('#', style)))));
+  // 완전한 # 글자도 들어가지 않는 폭은 빈 표시로 남기며 원본 숫자는 유지한다.
+  return '#'.repeat(Math.max(0, Math.floor(maxW / Math.max(1, measureText('#', style)))));
 }
 
 const esc = (s) => String(s).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
