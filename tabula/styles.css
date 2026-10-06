@@ -781,13 +781,14 @@ pre.plain { margin: 0; font: inherit; white-space: pre-wrap; }
 .pp-fields { border: 1px solid #d0d0d0; background: #fff; max-height: 180px; min-height: 90px; overflow: auto; padding: 2px 0; }
 .pp-field { display: flex; gap: 6px; align-items: center; padding: 2px 6px; cursor: grab; }
 .pp-field:hover { background: #e8f2ec; }
-.pp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.pp-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.pp-grid > div { min-width: 0; }
 .pp-areahead { font-weight: 600; color: #444; margin-bottom: 2px; }
 .pp-area { border: 1px solid #d0d0d0; background: #fff; min-height: 70px; max-height: 140px; overflow: auto; padding: 2px; }
 .pp-area.over { outline: 2px dashed var(--green); }
 .pp-item { display: flex; align-items: center; background: #f0f4f1; border: 1px solid #cfd8d2; margin: 2px; padding: 1px 2px 1px 6px; cursor: grab; }
-.pp-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pp-menu { border: 0; background: none; cursor: pointer; padding: 0 4px; }
+.pp-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pp-menu { flex-shrink: 0; border: 0; background: none; cursor: pointer; padding: 0 4px; }
 .pp-opts { display: flex; flex-direction: column; gap: 4px; }
 .pp-opt { display: flex; gap: 6px; align-items: center; }
 .ps-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 12px; }
@@ -1462,7 +1463,7 @@ body.view-mode .titlebar, body.view-mode .ribbon-tabs, body.view-mode .ribbon, b
 .quick-access.below .tb-btn:hover { background:var(--hover); }
 body.keytips[data-keytip-sequence=""] .quick-access [data-qat-key]:not([data-qat-key=""])::after { content:attr(data-qat-key); position:absolute; top:22px; left:9px; z-index:900; font-size:10px; line-height:17px; min-width:16px; color:#fff; background:#26332c; padding:0 3px; border-radius:2px; }
 .pp-item:focus-visible { outline:2px solid var(--green); outline-offset:1px; }
-.pp-value-settings { border:0; border-radius:3px; color:var(--green); background:#eaf3e5; padding:2px 5px; margin-left:auto; font-size:11px; cursor:pointer; }
+.pp-value-settings { flex-shrink:0; border:0; border-radius:3px; color:var(--green); background:#eaf3e5; padding:2px 5px; margin-left:auto; font-size:11px; cursor:pointer; }
 .pp-value-settings:hover { background:#d9ebce; }
 .pp-hint { line-height:1.65; }
 .fc-align-preview { display:flex; min-height:94px; height:94px; border:1px solid var(--border); background:var(--surface); padding:8px; overflow:hidden; }
