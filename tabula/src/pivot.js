@@ -633,7 +633,7 @@ export function normalizeDef(def, header) {
  * 피벗 원본 → { rows (머리글 포함 값), sheet, ref: {r1,c1,r2,c2} | null, table: 표 이름 | null }
  * 표 이름이면 지금의 표 범위(누적된 데이터 포함), 아니면 고정 범위
  */
-export function pivotSourceData(wb, def) {
+export function pivotSourceData(wb, def, { preserveSnapshot = false } = {}) {
   let si;
   let ref;
   let table = null;
@@ -658,12 +658,14 @@ export function pivotSourceData(wb, def) {
   const snap = def.snapshotId && wb.pivotSnapshots?.get(def.snapshotId);
   if (snap) {
     // 같은 시트의 결과 작성과 구별하여 실제 원본 범위의 변경 여부를 확인한다.
-    const valid = wb.pivotSnapshotCurrent ? wb.pivotSnapshotCurrent(snap, def)
-      : (snap.ver ??= wb.sourceVersion?.(si) ?? 0) === (wb.sourceVersion?.(si) ?? 0);
+    // 사전 계산은 캐시의 최초 조회 메타데이터와 등록 상태를 보존한다.
+    const checking = preserveSnapshot ? { ...snap } : snap;
+    const valid = wb.pivotSnapshotCurrent ? wb.pivotSnapshotCurrent(checking, def)
+      : (checking.ver ??= wb.sourceVersion?.(si) ?? 0) === (wb.sourceVersion?.(si) ?? 0);
     if (valid) return isPivotSnapshot(snap.rows)
       ? sourceOf(cubeFromPivotSnapshot(snap.rows), si, ref, table, null, wb.date1904)
       : sourceOf(cubeFromRows(snap.rows), si, ref, table, snap.rows, wb.date1904);
-    wb.pivotSnapshots.delete(def.snapshotId); // 원본을 고침 → 이제부터 원본에서 계산 (자동 새로 고침)
+    if (!preserveSnapshot) wb.pivotSnapshots.delete(def.snapshotId); // 원본을 고침 → 이제부터 원본에서 계산 (자동 새로 고침)
   }
   // 데이터가 열 블록에 있으면 값을 복사하지 않고 블록의 형식화 배열을 그대로 씀 (천만 행도 즉시)
   const bc = blockCube(wb, si, ref, names);

@@ -17,7 +17,7 @@ export function pivotFieldSourceIndex(source, def, field) {
 /** Current records, retained cache items and explicit selection form one UI universe.
  * Missing-data visibility never edits the retained cache or the filter definition. */
 export function pivotFieldItemModel(wb, def, field, options = {}) {
-  const source = options.source ?? pivotSourceData(wb, def), index = pivotFieldSourceIndex(source, def, field);
+  const source = options.source ?? pivotSourceData(wb, def, { preserveSnapshot: !!options.preserveSnapshot }), index = pivotFieldSourceIndex(source, def, field);
   const spec0 = fieldEntry(def.groups, field)?.[1], spec = spec0 ? { ...spec0, date1904: !!wb.date1904 } : null;
   const cache = wb.pivotCacheItems?.[def.cacheItemsId], exact = cache?.fields?.find(f => fold(f.name) === fold(field));
   const fallback = !exact && spec?.base ? cache?.fields?.find(f => fold(f.name) === fold(spec.base)) : null;
@@ -47,7 +47,8 @@ export function pivotFieldItemModel(wb, def, field, options = {}) {
   // A loaded none policy keeps its saved cache until refresh; selected values are
   // retained below even if an explicit policy change removes unselected history.
   const snapshot = def.snapshotId && wb.pivotSnapshots?.get(def.snapshotId);
-  const keepHistory = def.missingItems !== 'none' || cache?.missingItemsLimit === 0 && snapshot && (!wb.pivotSnapshotCurrent || wb.pivotSnapshotCurrent(snapshot, def));
+  const checking = snapshot && options.preserveSnapshot ? { ...snapshot } : snapshot;
+  const keepHistory = def.missingItems !== 'none' || cache?.missingItemsLimit === 0 && snapshot && (!wb.pivotSnapshotCurrent || wb.pivotSnapshotCurrent(checking, def));
   if (keepHistory && retained) for (let i = 0; i < (retained.shared?.length ?? 0); i++) {
     // A derived cache field already contains group labels. Never add its base
     // serials to that field, or apply a date group to an already grouped year.

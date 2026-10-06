@@ -930,7 +930,9 @@ function pivotTableXml(u8) {
           pageOverThenDown: f2 & 0x800 ? 1 : undefined, pageWrap: pageWrap || undefined,
           showError: f2 & 0x200 ? 1 : undefined, errorCaption: errorCaption ?? undefined, showMissing: f2 & 0x400 ? undefined : 0, missingCaption: missingCaption ?? undefined,
           rowGrandTotals: f2 & 0x2000 ? undefined : 0, colGrandTotals: f2 & 0x4000 ? undefined : 0, mergeItem: f2 & 0x40000 ? 1 : undefined,
-          preserveFormatting: f2 & 0x80 ? undefined : 0, useAutoFormatting: f2 & 0x100 ? 1 : undefined, enableDrill: f2 & 0x20 ? undefined : 0,
+          // 꺼진 fAutoFormat도 명시해 XML 읽기의 기본값으로 바뀌지 않게 보존한다.
+          preserveFormatting: f2 & 0x80 ? undefined : 0, useAutoFormatting: f2 & 0x100 ? 1 : 0, enableDrill: f2 & 0x20 ? undefined : 0,
+          multipleFieldFilters: f3 & 0x200 ? 0 : 1, customListSort: f3 & 0x4000 ? 0 : undefined,
           gridDropZones: f3 & 0x10 ? undefined : 1, // fNewDropZones=0: classic in-grid drop zones
           showDrill: f1 & 0x100000 ? 0 : undefined, showHeaders: f1 & 0x80000000 ? 0 : undefined, indent: (f1 >>> 24) & 0x7f,
           rowHeaderCaption: rowHeaderCaption ?? undefined, colHeaderCaption: colHeaderCaption ?? undefined, _style: ptStyle,

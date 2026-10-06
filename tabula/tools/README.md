@@ -701,3 +701,9 @@ row-limit-storage.mjs는 로컬 Chromium에서 CSV 확장 행 가져오기 및 �
 ### 아주 좁은 열의 숫자 표시 회귀
 
 `node tools/narrow-column-layout.mjs`는 숫자·날짜·백분율·General 소수/지수와 텍스트·오류를 폭·배율별로 검사한다. 숫자가 들어가지 않는 폭의 `#` 개수, 한 글자도 안 들어갈 때의 빈 표시, 원본 숫자 보존과 열 확대·실행 취소를 확인한다. `WIXEL_URL`, `NARROW_COLUMN_OUTPUT`(D: 폴더), `NARROW_COLUMN_BASELINE=ff60c83`으로 서버·출력·수정 전 표시를 지정한다. 실제 원본은 `REAL_WORKBOOK`으로 지정하며 로컬 서버만 허용한다. 공개 합성 검사는 정확한 URL을 `WIXEL_ALLOWED_TEST_URL`에도 지정한다. API·외부 요청·쓰기 요청을 차단하며 결과와 제한은 [95. 아주 좁은 열의 숫자 표시](../docs/codex/95_아주좁은열의숫자표시.md)에 기록한다.
+
+### 피벗 옵션과 결과 겹침 회귀
+
+`node tools/pivot-options-overlap.mjs`는 native XLSX 합성 파일을 격리 브라우저에서 열어 자동 맞춤 옵션과 정렬·필터·새로 고침의 너비, 행·열·값 확장 충돌, 슬라이서 일괄 변경, 거절된 슬라이서 새로 고침의 stale 캐시 보존, Undo/Redo 및 자동 갱신 재시도를 검사한다. `WIXEL_URL`, `WIXEL_BROWSER=chromium|firefox|webkit`, `PIVOT_LAYOUT_OUTPUT`(D: 폴더), 선택 `PIVOT_LAYOUT_FILTER`를 지정한다. `PIVOT_LAYOUT_BASELINE=c95cb90`은 수정 전 app/xlsx/xlsb를 메모리에서 제공하며 예상 실패의 결과를 별도 폴더에 보관한다.
+
+사용자가 지정한 이번 XLSB는 `REAL_WORKBOOK`으로 로컬 서버에서만 검증한다. 14개 피벗의 옵션·native XLSX 왕복과 검색어 시트 정렬·Undo 후 열 너비를 확인한다. 공개 합성 검사에는 정확한 URL을 `WIXEL_ALLOWED_TEST_URL`에도 지정한다. 모든 브라우저 검사에서 API·외부 요청·쓰기 요청을 차단한다. `TEMP`·`TMP`와 Playwright 브라우저 캐시도 D:를 사용한다. 범위와 한계는 [96. 피벗 옵션과 겹침 방지](../docs/codex/96_피벗옵션과겹침방지.md)에 기록한다.

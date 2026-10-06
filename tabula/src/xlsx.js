@@ -2728,13 +2728,14 @@ function pivotDefFrom(root, cache, tables, sheetName) {
   if (root.attrs.errorCaption !== undefined || def.errorShow) def.errorCaption = root.attrs.errorCaption ?? '';
   if (root.attrs.colHeaderCaption !== undefined) def.colCaption = root.attrs.colHeaderCaption;
   if (root.attrs.missingCaption && root.attrs.showMissing !== '0') def.missingCaption = root.attrs.missingCaption;
-  if (root.attrs.showHeaders === '0') def.showHeaders = false;
-  if (root.attrs.showDrill === '0') def.showExpand = false;
-  if (root.attrs.mergeItem === '1') def.mergeLabels = true;
-  if (root.attrs.useAutoFormatting === '0') def.autofit = false;
-  if (root.attrs.preserveFormatting === '0') def.preserveFormat = false;
-  if (root.attrs.enableDrill === '0') def.enableDrill = false;
-  if (root.attrs.customListSort === '0' || root.attrs.customListSort === 'false') def.customListSort = false;
+  if (falseAttr(root.attrs.showHeaders)) def.showHeaders = false;
+  if (falseAttr(root.attrs.showDrill)) def.showExpand = false;
+  if (trueAttr(root.attrs.mergeItem)) def.mergeLabels = true;
+  if (falseAttr(root.attrs.useAutoFormatting)) def.autofit = false;
+  if (falseAttr(root.attrs.preserveFormatting)) def.preserveFormat = false;
+  if (falseAttr(root.attrs.enableDrill)) def.enableDrill = false;
+  if (falseAttr(root.attrs.customListSort)) def.customListSort = false;
+  if (trueAttr(root.attrs.multipleFieldFilters)) def.multiFilters = true;
   // 축소한 항목 · 부분합 위치 · 빈 줄 · 레이블 반복
   const collapsed = {};
   pfs.forEach((pf, f) => {
@@ -4737,7 +4738,7 @@ function pivotParts(wb, si, def, cache, name, pool) {
   const tableAttrs = [
     `name="${esc(name)}"`, `cacheId="${cacheId}"`, 'applyNumberFormats="0"', 'applyBorderFormats="0"', 'applyFontFormats="0"', 'applyPatternFormats="0"',
     'applyAlignmentFormats="0"', 'applyWidthHeightFormats="1"', `dataCaption="${esc(d.dataCaption ?? '값')}"`, ...(onRows ? ['dataOnRows="1"'] : []), 'updatedVersion="6"', 'minRefreshableVersion="3"', `useAutoFormatting="${def.autofit === false ? 0 : 1}"`,
-    ...(def.mergeLabels ? ['mergeItem="1"'] : []), ...(def.showHeaders === false ? ['showHeaders="0"'] : []), ...(def.preserveFormat === false ? ['preserveFormatting="0"'] : []), ...(def.multiFilters ? [] : []), ...(def.enableDrill === false ? ['enableDrill="0"'] : []),
+    ...(def.mergeLabels ? ['mergeItem="1"'] : []), ...(def.showHeaders === false ? ['showHeaders="0"'] : []), ...(def.preserveFormat === false ? ['preserveFormatting="0"'] : []), ...(def.enableDrill === false ? ['enableDrill="0"'] : []),
     ...(d.rowCaption !== null && d.rowCaption !== undefined ? [`rowHeaderCaption="${esc(d.rowCaption)}"`] : []),
     ...(d.grandCaption !== null && d.grandCaption !== undefined ? [`grandTotalCaption="${esc(d.grandCaption)}"`] : []),
     `showError="${d.errorShow ? 1 : 0}"`, ...(def.errorCaption !== null && def.errorCaption !== undefined ? [`errorCaption="${esc(def.errorCaption)}"`] : []), ...(d.colCaption !== null && d.colCaption !== undefined ? [`colHeaderCaption="${esc(d.colCaption)}"`] : []),
@@ -4745,7 +4746,7 @@ function pivotParts(wb, si, def, cache, name, pool) {
     ...(d.customListSort === false ? ['customListSort="0"'] : []),
     ...(d.missingCaption ? [`missingCaption="${esc(d.missingCaption)}"`] : []), ...(d.showExpand ? [] : ['showDrill="0"']),
     'itemPrintTitles="1"', 'createdVersion="6"', 'indent="0"', ...(tabular || outline ? ['compact="0"', 'compactData="0"'] : []),
-    `outline="${tabular ? 0 : 1}"`, `outlineData="${tabular ? 0 : 1}"`, ...(d.classic ? ['gridDropZones="1"'] : []), 'multipleFieldFilters="0"',
+    `outline="${tabular ? 0 : 1}"`, `outlineData="${tabular ? 0 : 1}"`, ...(d.classic ? ['gridDropZones="1"'] : []), `multipleFieldFilters="${def.multiFilters ? 1 : 0}"`,
     ...(pageF.length && d.pageOrder === 'over' ? ['pageOverThenDown="1"'] : []), ...(pageF.length && d.pageWrap ? [`pageWrap="${d.pageWrap}"`] : []),
   ];
   const tableXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<pivotTableDefinition xmlns="${NS_MAIN}" ${tableAttrs.join(' ')}>`
