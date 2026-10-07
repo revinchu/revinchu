@@ -1,7 +1,8 @@
 // WIXEL 검증 도구 (tools/README.md 참고). Playwright 가 필요한 스크립트는 `npm start` 로 서버를 먼저 띄우세요.
 import assert from 'node:assert/strict';
 import { gzipSync } from 'node:zlib';
-import { MAX_ROWS, MAX_COLS } from '../src/formula.js';
+// This fixture uses the default Excel row limit, without extendedRows.
+import { EXCEL_MAX_ROWS as MAX_ROWS, MAX_COLS } from '../src/formula.js';
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const browser = await chromium.launch();
 try {
@@ -55,13 +56,13 @@ await T('Ctrl+Shift+~ 일반', async () => { await k('Control+Shift+%'); await k
 await T('Ctrl+B 굵게', async () => { await k('Control+b'); return (await st(1, 1)).bold === true; });
 await T('Ctrl+5 취소선', async () => { await k('Control+5'); return (await st(1, 1)).strike === true; });
 await T('Ctrl+Shift+& 바깥 테두리', async () => { await k('Control+Shift+&'); const s = await st(1, 1); return !!(s.bt && s.bb && s.bl && s.br) || s; });
-await T('Ctrl+Shift+_ 테두리 제거', async () => { await k('Control+Shift+&'); await k('Control+Shift+_'); const s = await st(1, 1); return !s.bt && !s.bb || s; });
+await T('Alt H B N 테두리 제거', async () => { await k('Control+Shift+&'); for (const key of ['Alt', 'h', 'b', 'n']) await k(key); const s = await st(1, 1); return !s.bt && !s.bb || s; });
 await T('Ctrl+9 행 숨기기', async () => { await k('Control+9'); return ev(() => !!window.tabula.wb().sheets[0].hiddenRows?.[1]); });
 await T('Ctrl+Shift+9 행 숨기기 취소', async () => { await ev(() => window.tabula.selectRange({ r1: 0, c1: 0, r2: 2, c2: 0 }, 'cells', { r: 0, c: 0 })); await k('Control+9'); await k('Control+Shift+('); return ev(() => !Object.keys(window.tabula.wb().sheets[0].hiddenRows ?? {}).length); });
 await T('Ctrl+Space 활성 열만 전체 선택', async () => { await k('Control+Space'); assert.deepEqual(await sel(), { r1: 0, c1: 1, r2: MAX_ROWS - 1, c2: 1, a: { r: 1, c: 1 } }); return true; });
 await T('Shift+Space 활성 행만 전체 선택', async () => { await k('Shift+Space'); assert.deepEqual(await sel(), { r1: 1, c1: 0, r2: 1, c2: MAX_COLS - 1, a: { r: 1, c: 1 } }); return true; });
 await T('Ctrl+Shift+= 삽입', async () => { await k('Shift+Space'); await k('Control+Shift+='); return (await val(2, 1)) === 1 || await val(2, 1); });
-await T('Ctrl+- 삭제', async () => { await k('Shift+Space'); await k('Control+-'); return (await val(1, 1)) === 2 || await val(1, 1); });
+await T('Ctrl+Shift+- 삭제', async () => { await k('Shift+Space'); await k('Control+Shift+-'); return (await val(1, 1)) === 2 || await val(1, 1); });
 await T('Shift+F11 새 시트', async () => { await k('Shift+F11'); return ev(() => window.tabula.wb().sheets.length === 2); });
 await T('Ctrl+PageDown 다음 시트', async () => { await ev(() => window.tabula.run('addSheet')); await ev(() => window.tabula.switchSheet(0)); await k('Control+PageDown'); return ev(() => window.tabula.si === 1); });
 await T('Ctrl+` 수식 표시 켜기/끄기', async () => { await ev(() => { const w = window.tabula.wb(); w.transact(() => w.setInput(0, 1, 1, '=1+1')); }); const cell = page.locator('.c[data-r="1"][data-c="1"]').first(); assert.equal(await cell.innerText(), '2'); await k('Control+`'); assert.equal(await cell.innerText(), '=1+1'); await k('Control+`'); assert.equal(await cell.innerText(), '2'); return true; });

@@ -30,7 +30,7 @@ import { BANDING_PALETTES, alternatingRules, isBandingRule } from './alternating
 import { installMobileWork, mobileSheetZoom } from './mobile-work.js';
 import { installMobileKeyboard } from './mobile-keyboard.js';
 import { EXCEL_KEYTIP_COMPAT, EXCEL_LEGACY_GROUPS } from './excel-keytip-compat.js';
-import { shortcutCode, appleTouchDevice, excelDirectCommand, repeatFunctionKey } from './keyboard-shortcuts.js';
+import { shortcutCode, appleTouchDevice, excelDirectCommand, repeatFunctionKey, browserStructureCommand } from './keyboard-shortcuts.js';
 import { installPointerModifierTracking, primaryPointerModifier } from './pointer-modifiers.js';
 import { openKeyboardCheck } from './keyboard-check.js';
 import { installGridMousePan } from './mouse-work.js';
@@ -1637,6 +1637,8 @@ function onGridKey(e) {
     }
     if (!ctrl && !e.altKey && k.length === 1 && sheet().shapes?.some((x) => x.id === chartSel)) { handled(); beginShapeTextEdit(chartSel, { typed: k }); return; }
   }
+  const structureCommand = chartSel ? '' : browserStructureCommand(e);
+  if (structureCommand) { handled(); run(structureCommand); return; }
   const directCommand = excelDirectCommand(e);
   if (directCommand) { handled(); run(directCommand); return; }
   if (cellDropdownKey) {
@@ -1703,7 +1705,7 @@ function onGridKey(e) {
     if (!e.shiftKey && code === 'KeyY') { handled(); if (wb.canRedo()) run('redo'); else repeatLast(); return; }
     if (e.shiftKey) {
       const more = {
-        Digit2: 'fmtTime', Digit6: 'fmtScientific', Minus: 'borderNone', Digit9: 'unhideRows', Digit0: 'unhideCols', Digit8: 'selectRegion',
+        Digit2: 'fmtTime', Digit6: 'fmtScientific', Digit9: 'unhideRows', Digit0: 'unhideCols', Digit8: 'selectRegion',
         KeyO: 'selectComments', KeyT: 'tblTotals', KeyF: 'fontDialog', KeyP: 'fontDialog', KeyU: 'toggleFormulaBarSize', KeyE: 'flashFill',
       };
       if (more[code]) {
@@ -1724,7 +1726,7 @@ function onGridKey(e) {
     if (e.shiftKey) {
       const byCode = {
         Digit1: 'fmtNumber', Digit3: 'fmtDate', Digit4: 'fmtCurrency', Digit5: 'fmtPercent', Digit7: 'borderOutside',
-        Backquote: 'fmtGeneral', Semicolon: 'insertTime', Equal: 'insertMenuKey', KeyL: 'toggleFilter',
+        Backquote: 'fmtGeneral', Semicolon: 'insertTime', KeyL: 'toggleFilter',
       };
       if (byCode[code]) { handled(); run(byCode[code]); return; }
     }
@@ -1733,7 +1735,7 @@ function onGridKey(e) {
     const map = {
       z: 'undo', y: 'redo', b: 'bold', i: 'italic', u: 'underline', 5: 'strike', d: 'fillDown', r: 'fillRight',
       s: 'save', f: 'find', h: 'replace', g: 'goto', p: 'print', o: 'open', 2: 'bold', 3: 'italic', 4: 'underline',
-      ';': 'insertDate', '`': 'toggleFormulas', 1: 'formatCells', '-': 'deleteMenuKey', F1: 'toggleRibbon',
+      ';': 'insertDate', '`': 'toggleFormulas', 1: 'formatCells', F1: 'toggleRibbon',
       9: 'hideRows', 0: 'hideCols', t: 'createTable', l: 'createTable', q: 'quickAnalysis',
     };
     if (lower === 'a') { handled(); if (e.shiftKey) selectAll(); else smartSelectAll(); return; }
@@ -19025,7 +19027,8 @@ const SHORTCUTS = [
   ['Ctrl+;  /  Ctrl+Shift+;', '오늘 날짜 / 현재 시간 입력'],
   ['Ctrl+Shift+1/2/3/4/5/6', '숫자 / 시간 / 날짜 / 통화 / 백분율 / 지수 서식'],
   ['Ctrl+Shift+~', '일반 서식'],
-  ['Ctrl+Shift+& / Ctrl+Shift+_', '바깥쪽 테두리 / 테두리 없음'],
+  ['Ctrl+Shift+&', '바깥쪽 테두리'],
+  ['Alt → H → B → N', '테두리 없음'],
   ['Ctrl+1', '셀 서식 (표시 형식 · 사용자 지정 서식 · 맞춤 · 글꼴 · 테두리 · 채우기)'],
   ['Ctrl+Shift+F / Ctrl+Shift+P', '글꼴 서식'],
   ['Ctrl+K', '하이퍼링크 삽입'],
@@ -19047,7 +19050,8 @@ const SHORTCUTS = [
   ['Ctrl+Shift+O', '메모가 있는 셀 선택'],
   ['Ctrl+`', '수식 표시'],
   ['Ctrl+Shift+U', '수식 입력줄 펼치기/접기'],
-  ['Ctrl+Shift+= / Ctrl+-', '행·열 삽입 / 삭제'],
+  ['Ctrl+Shift++ / Ctrl+Shift+-', '선택한 행·열 삽입 / 삭제 (셀 선택: 삽입·삭제 옵션)'],
+  ['Ctrl+= / Ctrl+- (Shift 없이)', '브라우저 화면 확대 / 축소 (숫자패드 Ctrl++ / Ctrl+-)'],
   ['Ctrl+PageUp / PageDown', '이전 / 다음 시트'],
   ['Ctrl+마우스 휠', '확대/축소'],
   ['Shift+F11 / Alt+Shift+F1', '새 시트'],
@@ -20697,6 +20701,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['브라우저에서 행·열 삽입과 삭제', ['선택한 행·열은 Ctrl+Shift++로 삽입하고 Ctrl+Shift+-로 삭제합니다. 셀 범위를 선택하면 삽입·삭제 옵션을 엽니다. 숫자 키패드도 Ctrl+Shift 조합을 사용합니다.', 'Shift 없이 Ctrl+=와 Ctrl+-는 브라우저 화면 확대·축소로 사용하고, 위셀 시트 배율은 Ctrl+Alt++와 Ctrl+Alt+-를 유지합니다. 실행 취소·F4 반복과 복사한 행 삽입도 지원합니다.']],
   ['필터 메뉴 단축키와 빠른 실행', ['일반·표·피벗 행·열·보고서 필터 버튼 셀에서 Alt+↓로 필터를 열고, E로 검색창 이동 후 검색·Enter로 적용합니다. 메뉴 방향키·체크 선택·Esc 취소와 Undo/Redo를 지원합니다.', '리본 명령을 우클릭하여 빠른 실행 도구 모음에 추가하고 Alt+숫자로 실행합니다. 우클릭 제거·순서 설정과 문서 보호 설정을 유지합니다.']],
   ['슬라이서 첫 선택 속도', ['큰 파일에서 주차·캠페인 슬라이서를 처음 선택할 때의 지연을 줄였습니다. 연결된 피벗 결과와 선택 화면을 함께 갱신합니다.', '빠른 연속 선택·다중 선택·필터 지우기와 실행 취소를 지원하며, 피벗이 겹치는 선택은 기존 상태를 유지합니다.']],
   ['복사한 행 삽입', ['여러 행을 Ctrl+C로 복사한 뒤 대상 행 우클릭 → 복사한 셀 삽입으로 같은 개수의 행을 넣습니다. 마지막 빈 행과 행 높이도 보존하며, 기존 행·피벗·그림을 아래로 옮깁니다.', 'Ctrl+V는 덮어쓰기를 유지합니다. 복사한 행 삽입을 F4로 반복하고 Undo/Redo로 수식·개체·행 선택까지 복구합니다.']],
@@ -21280,7 +21285,7 @@ function bindEvents() {
   });
   // Bubble after native ribbon/field controls have handled their own dropdowns.
   document.addEventListener('keydown', e => {
-    if (e.defaultPrevented || !altArrowDownKey(e) || editing || shapeTextEdit || chartSel || isDialogOpen() || isMenuOpen() || document.querySelector('.backstage')) return;
+    if (e.defaultPrevented || !(altArrowDownKey(e) || browserStructureCommand(e)) || editing || shapeTextEdit || chartSel || isDialogOpen() || isMenuOpen() || document.querySelector('.backstage')) return;
     if (!(e.target instanceof Element) || e.target === ed || e.target === dom.view) return;
     if (e.target.matches('input,textarea,select') || e.target.closest('[contenteditable]')) return;
     if (e.target.closest('#ribbon,#quickAccess') || dom.view.contains(e.target)) onGridKey(e);

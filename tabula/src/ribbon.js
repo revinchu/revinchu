@@ -101,8 +101,8 @@ export const TABS = [
         ),
       ]),
       group('셀', [
-        large('insertMenu', 'insert', '삽입', { menu: 'insert' }),
-        large('deleteMenu', 'delete', '삭제', { menu: 'delete' }),
+        large('insertMenu', 'insert', '삽입', { menu: 'insert', title: '삽입 (Ctrl+Shift++)' }),
+        large('deleteMenu', 'delete', '삭제', { menu: 'delete', title: '삭제 (Ctrl+Shift+-)' }),
         large('formatMenu', 'format', '서식', { menu: 'format' }),
       ]),
       group('편집', [

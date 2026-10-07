@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { shortcutCode, appleTouchDevice, repeatFunctionKey } from '../src/keyboard-shortcuts.js';
+import { shortcutCode, appleTouchDevice, repeatFunctionKey, browserStructureCommand, excelDirectCommand } from '../src/keyboard-shortcuts.js';
 
 test('physical shortcuts keep their position across Korean and Apple Option input', () => {
   for (const key of ['c', 'C', 'ㅊ', 'ç', 'Unidentified']) assert.equal(shortcutCode({ key, code: 'KeyC', keyCode: 67 }), 'KeyC');
@@ -40,4 +40,60 @@ test('idle repeat recognizes physical F4 independently of IME key reporting', ()
   for (const extra of [{ isComposing:true }, { ctrlKey:true }, { metaKey:true }, { altKey:true }, { shiftKey:true }, { getModifierState:k=>k==='AltGraph' }])
     assert.equal(repeatFunctionKey({ key:'F4', code:'F4', ...extra }), false);
   for (const key of ['a', 'Process', 'Unidentified']) assert.equal(repeatFunctionKey({ key, code:'KeyA' }), false);
+});
+
+
+test('browser structure menus require Ctrl or Meta plus Shift on physical main and keypad keys', () => {
+  for (const modifier of [{ ctrlKey: true }, { metaKey: true }]) {
+    for (const [code, command] of [['Equal', 'insertMenuKey'], ['NumpadAdd', 'insertMenuKey'], ['Minus', 'deleteMenuKey'], ['NumpadSubtract', 'deleteMenuKey']]) {
+      for (const key of ['+', '=', '-', '_', 'Unidentified', 'ㅂ'])
+        assert.equal(browserStructureCommand({ ...modifier, shiftKey: true, code, key }), command);
+    }
+  }
+});
+
+test('ordinary Ctrl or Meta zoom keys are left to the browser, including unshifted keypad keys', () => {
+  for (const modifier of [{ ctrlKey: true }, { metaKey: true }]) {
+    for (const code of ['Equal', 'Minus', 'NumpadAdd', 'NumpadSubtract', undefined, 'Unidentified'])
+      for (const key of ['+', '=', '-', '_']) assert.equal(browserStructureCommand({ ...modifier, code, key }), '');
+  }
+});
+
+test('structure modifier guards reject Alt, AltGr and combinations without Ctrl or Meta and Shift', () => {
+  for (const ctrlKey of [false, true]) for (const metaKey of [false, true]) for (const shiftKey of [false, true]) {
+    const expected = (ctrlKey || metaKey) && shiftKey ? 'insertMenuKey' : '';
+    assert.equal(browserStructureCommand({ ctrlKey, metaKey, shiftKey, code: 'Equal', key: '+' }), expected);
+  }
+  for (const modifier of [{ ctrlKey: true }, { metaKey: true }]) {
+    for (const extra of [{ altKey: true }, { getModifierState: key => key === 'AltGraph' }])
+      for (const code of ['Equal', 'Minus', 'NumpadAdd', 'NumpadSubtract'])
+        assert.equal(browserStructureCommand({ ...modifier, shiftKey: true, code, ...extra }), '');
+  }
+  assert.equal(browserStructureCommand(null), '');
+});
+
+test('legacy structure keys use only explicit plus equals minus or underscore when physical code is absent', () => {
+  for (const code of [undefined, '', 'Unidentified']) for (const modifier of [{ ctrlKey: true }, { metaKey: true }]) {
+    for (const [key, command] of [['+', 'insertMenuKey'], ['=', 'insertMenuKey'], ['-', 'deleteMenuKey'], ['_', 'deleteMenuKey']])
+      assert.equal(browserStructureCommand({ ...modifier, shiftKey: true, code, key }), command);
+    for (const key of ['Add', 'Subtract', '＋', '−', 'ArrowDown', undefined])
+      assert.equal(browserStructureCommand({ ...modifier, shiftKey: true, code, key, keyCode: 187 }), '');
+  }
+  for (const code of ['KeyA', 'NumpadEqual', 'BracketRight', 'constructor', 'toString', '__proto__'])
+    assert.equal(browserStructureCommand({ ctrlKey: true, shiftKey: true, code, key: '+' }), '');
+});
+
+test('structure commands never turn composition Process 229 or dead-key text into an insert or delete', () => {
+  for (const modifier of [{ ctrlKey: true }, { metaKey: true }]) for (const code of ['Equal', 'Minus', 'NumpadAdd', 'NumpadSubtract', undefined])
+    for (const extra of [{ isComposing: true }, { keyCode: 229 }, { which: 229 }, { key: 'Process' }, { key: 'Dead' }])
+      assert.equal(browserStructureCommand({ ...modifier, shiftKey: true, code, key: '+', ...extra }), '');
+});
+
+test('explicit Ctrl Alt workbook zoom stays independent from browser structure shortcuts', () => {
+  for (const modifier of [{ ctrlKey: true }, { metaKey: true }])
+    for (const [code, command] of [['Equal', 'zoomIn'], ['NumpadAdd', 'zoomIn'], ['Minus', 'zoomOut'], ['NumpadSubtract', 'zoomOut']]) {
+      const event = Object.freeze({ ...modifier, altKey: true, shiftKey: false, code });
+      assert.equal(browserStructureCommand(event), '');
+      assert.equal(excelDirectCommand(event), command);
+    }
 });

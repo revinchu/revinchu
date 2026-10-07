@@ -12,6 +12,22 @@ export function shortcutCode(event) {
   return '';
 }
 
+// Browser zoom keeps ordinary Ctrl/Meta +/-; worksheet structure menus add
+// Shift explicitly, including the numeric keypad. IME text remains untouched.
+export function browserStructureCommand(event) {
+  if (!event || !(event.ctrlKey || event.metaKey) || !event.shiftKey || event.altKey || event.isComposing || event.keyCode === 229 || event.which === 229 || event.key === 'Process' || event.key === 'Dead' || event.getModifierState?.('AltGraph')) return '';
+  if (event.code && event.code !== 'Unidentified') {
+    switch (event.code) {
+      case 'Equal': case 'NumpadAdd': return 'insertMenuKey';
+      case 'Minus': case 'NumpadSubtract': return 'deleteMenuKey';
+      default: return '';
+    }
+  }
+  if (event.key === '+' || event.key === '=') return 'insertMenuKey';
+  if (event.key === '-' || event.key === '_') return 'deleteMenuKey';
+  return '';
+}
+
 // A physical function key can be reported as Process/229 by an idle IME.
 // Active text composition remains owned by the editor, never by repeat.
 export function repeatFunctionKey(event) {
