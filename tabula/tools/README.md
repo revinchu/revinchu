@@ -717,3 +717,9 @@ row-limit-storage.mjs는 로컬 Chromium에서 CSV 확장 행 가져오기 및 �
 합성 PNG의 oneCell/twoCell/absolute 배치와 혼합 그룹·슬라이서의 행 삽입 및 화면 좌표, 20회 삽입+피벗 새로 고침의 oneCell 크기 보존, 행 삽입→수동 피벗 서식→새로 고침→Undo/Redo의 셀·정의·캐시 상태와 autoRefresh가 원본 편집 이력에 합쳐지는 원자성을 확인한다. 자동 갱신 사례는 처음 원본 버전을 등록하는 350ms debounce가 끝난 뒤 편집하도록 준비 단계에서 500ms 대기한다. 값 필드 확장→Undo→앞 행 삽입→새로 고침에서 이전 역할 캐시가 부활해 외부 셀과 수동 서식을 지우지 않는지도 검사한다. 부분 셀 밀기는 전체 행 삽입과 다른 기능으로 이 도구의 필수 범위에 포함하지 않는다.
 
 `WIXEL_URL`, `WIXEL_BROWSER=chromium|firefox|webkit`, `WIXEL_ROW_INSERT_OUT`(D: 폴더), `WIXEL_ROW_INSERT_FILTER`(사례명 부분 문자열, `|`로 여러 조건)를 지정할 수 있다. 로컬 소스 서버에서 `WIXEL_ROW_INSERT_BASELINE=316020f`를 지정하면 기준 app/view/header-resize/workbook/ui 응답만 메모리에서 제공한다. 정확한 공개 합성 URL은 `WIXEL_ALLOWED_TEST_URL`에도 같은 값으로 지정해야 한다. 실제 사용자 파일을 열지 않으며 API·외부 요청·원격 쓰기를 차단한다. `PLAYWRIGHT_MODULE`, `PLAYWRIGHT_BROWSERS_PATH`, `TEMP`·`TMP`는 기존 런타임과 D: 캐시·임시 폴더를 사용한다. 결과 JSON은 before/after 초점·선택·이력 및 실제 입력 이벤트 trace를 포함하고 스크린샷은 출력 폴더에 저장한다. 확대와 고정은 브라우저 시뮬레이션이며 물리 장치 입력 검증과 구분한다.
+
+### 행 삽입 F4 입력 경로와 합성 성능 회귀
+
+`node tools/row-insert-performance-ui.mjs`는 19개 합성 사례에서 idle 셀 편집기·격자·리본·시트 탭 초점의 F4, 물리 `code=F4`와 Process/229 표시, 실제 조합 중 입력 보존, 반복 키·빠른 리본/F4·키팁 및 편집 경계를 검사한다. 브라우저 프로토콜의 연속 입력과 고의적 긴 작업은 물리 키보드 검증과 구분하며 키 누락 원인으로 단정하지 않는다. 기본 대량 합성 시트는 2,500행·15,000셀·10,000수식이며 동작 시간은 기계별 고정 통과 기준 없이 기록한다.
+
+`WIXEL_URL`, `WIXEL_ROW_PERF_OUT`(D: 출력), `WIXEL_ROW_PERF_FILTER`(`|`로 사례명 부분 문자열), `WIXEL_ROW_PERF_ROWS`(10~20,000행)를 지정한다. `WIXEL_ROW_PERF_BASELINE=b7ced1f`는 로컬 서버에서 app/workbook/view/header-resize/keyboard-shortcuts/ui를 메모리 제공하여 변경 전 행동을 비교한다. API·외부 요청·원격 쓰기를 차단하고 공개 합성 검사는 정확한 `WIXEL_ALLOWED_TEST_URL`이 필요하다. 이 도구는 개인 업무 파일을 열거나 업로드하지 않는다. `PLAYWRIGHT_MODULE`, `PLAYWRIGHT_BROWSERS_PATH`, `TEMP`·`TMP`는 기존 런타임과 D: 캐시·임시 폴더를 사용한다. JSON은 입력 전달·실제 처리 후 초점/편집/선택/Undo 상태, 단계별 호출 시간 및 긴 작업을 기록한다.

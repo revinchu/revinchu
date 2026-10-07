@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { shortcutCode, appleTouchDevice } from '../src/keyboard-shortcuts.js';
+import { shortcutCode, appleTouchDevice, repeatFunctionKey } from '../src/keyboard-shortcuts.js';
 
 test('physical shortcuts keep their position across Korean and Apple Option input', () => {
   for (const key of ['c', 'C', 'ㅊ', 'ç', 'Unidentified']) assert.equal(shortcutCode({ key, code: 'KeyC', keyCode: 67 }), 'KeyC');
@@ -29,4 +29,15 @@ test('iPad desktop user agent is independent of viewport and pointer settings', 
   assert.equal(appleTouchDevice({ userAgent: 'Windows', platform: 'Win32', maxTouchPoints: 10 }), false);
   assert.equal(appleTouchDevice({ userAgent: 'Android', platform: 'Linux', maxTouchPoints: 5 }), false);
   assert.equal(appleTouchDevice(null), false);
+});
+
+
+test('idle repeat recognizes physical F4 independently of IME key reporting', () => {
+  for (const key of ['F4', 'Unidentified', 'Process']) for (const keyCode of [115, 229])
+    assert.equal(repeatFunctionKey({ key, code:'F4', keyCode }), true);
+  assert.equal(repeatFunctionKey({ key:'F4' }), true);
+  assert.equal(repeatFunctionKey({ key:'Process', keyCode:229 }), false);
+  for (const extra of [{ isComposing:true }, { ctrlKey:true }, { metaKey:true }, { altKey:true }, { shiftKey:true }, { getModifierState:k=>k==='AltGraph' }])
+    assert.equal(repeatFunctionKey({ key:'F4', code:'F4', ...extra }), false);
+  for (const key of ['a', 'Process', 'Unidentified']) assert.equal(repeatFunctionKey({ key, code:'KeyA' }), false);
 });

@@ -33,6 +33,7 @@ export class CellMap {
   constructor(src = null) {
     this.cols = new Map(); // 열 → Map 호환 행 저장소
     this.n = 0;
+    this.candidates = new Map(); // 수식/링크 후보만: 일반 값과 압축 빈 셀은 구조 검사에서 건너뛴다.
     if (src) for (const [k, v] of (typeof src.entries === 'function' ? src.entries() : Object.entries(src))) this.set(k, v);
   }
 
@@ -52,7 +53,9 @@ export class CellMap {
     let m = this.cols.get(c);
     if (m === undefined) { m = new RunColumn((value) => sharedBlanks.has(value)); this.cols.set(c, m); }
     const before = m.size;
-    m.set(r, shareBlankCell(v));
+    const value = shareBlankCell(v);
+    m.set(r, value);
+    this.trackCandidate(r, c, value);
     if (m.size !== before) this.n++;
     return this;
   }
@@ -65,7 +68,36 @@ export class CellMap {
     if (!m) { m = new RunColumn((v) => sharedBlanks.has(v)); this.cols.set(c, m); }
     const before = m.size;
     m.setRun(r, count, value); this.n += m.size - before;
+    // 빈 셀 구간으로 덮어쓴 수식/링크도 제거하며 논리 행 전체를 펼치지 않는다.
+    const candidates = this.candidates.get(c);
+    if (candidates) {
+      for (const row of candidates.keys()) if (row >= r && row < r + count) candidates.delete(row);
+      if (!candidates.size) this.candidates.delete(c);
+    }
     return this;
+  }
+
+  trackCandidate(r, c, value) {
+    const keep = value?.formula || value?.link || typeof value?.raw === 'string' && value.raw.startsWith('=');
+    let col = this.candidates.get(c);
+    if (keep) {
+      if (!col) { col = new Map(); this.candidates.set(c, col); }
+      col.set(r, value);
+    } else if (col) {
+      col.delete(r);
+      if (!col.size) this.candidates.delete(c);
+    }
+  }
+
+  /** 가져온 raw 후보도 정규화된 formula 플래그로 구분한다 (텍스트 수식 제외). */
+  *formulaEntries() {
+    for (const [c, col] of this.candidates) for (const [r, cell] of col) if (cell.formula) yield [r, c, cell];
+  }
+  forEachFormulaRC(fn) {
+    for (const [c, col] of this.candidates) for (const [r, cell] of col) if (cell.formula) fn(cell, r, c);
+  }
+  forEachLinkRC(fn) {
+    for (const [c, col] of this.candidates) for (const [r, cell] of col) if (cell.link) fn(cell, r, c);
   }
 
   /** [시작 행, 열, 셀, 연속 개수]. 일반 반복자는 여전히 셀마다 한 번 반환합니다. */
@@ -80,7 +112,11 @@ export class CellMap {
   *mapValues(mapper, sharedMapper) {
     for (const [c, m] of this.cols) {
       let before = m.size;
-      for (const count of m.mapValues((value, r) => mapper(value, r, c), sharedMapper)) {
+      for (const count of m.mapValues((value, r) => {
+        const next = mapper(value, r, c);
+        this.trackCandidate(r, c, next);
+        return next;
+      }, sharedMapper)) {
         this.n += m.size - before; before = m.size;
         yield count;
       }
@@ -92,6 +128,7 @@ export class CellMap {
     const m = this.cols.get(c);
     if (m === undefined || !m.delete(r)) return false;
     this.n--;
+    this.trackCandidate(r, c, null);
     if (!m.size) this.cols.delete(c);
     return true;
   }
@@ -103,7 +140,7 @@ export class CellMap {
   has(k) { const i = k.indexOf(','); return this.hasRC(+k.slice(0, i), +k.slice(i + 1)); }
   set(k, v) { const i = k.indexOf(','); return this.setRC(+k.slice(0, i), +k.slice(i + 1), v); }
   delete(k) { const i = k.indexOf(','); return this.deleteRC(+k.slice(0, i), +k.slice(i + 1)); }
-  clear() { this.cols.clear(); this.n = 0; }
+  clear() { this.cols.clear(); this.candidates.clear(); this.n = 0; }
 
   *entries() { for (const [c, m] of this.cols) for (const [r, v] of m) yield [`${r},${c}`, v]; }
   *keys() { for (const [c, m] of this.cols) for (const r of m.keys()) yield `${r},${c}`; }

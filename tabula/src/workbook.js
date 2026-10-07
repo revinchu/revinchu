@@ -810,7 +810,7 @@ export class Workbook {
     if (!this.arrayList) {
       const list = [];
       this.sheets.forEach((sheet, si) => {
-        sheet.cells.forEachStoredRC((cell, r, c) => { if (cell.formula && cell.maybeArray) list.push([si, r, c]); });
+        sheet.cells.forEachFormulaRC((cell, r, c) => { if (cell.maybeArray) list.push([si, r, c]); });
       });
       list.sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2]);
       this.arrayList = list;
@@ -1410,7 +1410,7 @@ export class Workbook {
     if (!sheet) return;
     if (sourceChanged) this.touchSource(si);
     sheet.fileValues = false;
-    sheet.cells.forEachStoredRC((cell, r, c) => { if (cell.formula && (cell.cached !== undefined || cell.cachedArray)) this.markFormulaDirty(si, r, c, cell); });
+    sheet.cells.forEachFormulaRC((cell, r, c) => { if (cell.cached !== undefined || cell.cachedArray) this.markFormulaDirty(si, r, c, cell); });
   }
 
   entryArrayTrust(entries, side) {
@@ -1573,8 +1573,7 @@ export class Workbook {
     this.deps = this.sheets.map((sheet, si) => {
       const d = { sheets: new Set(), all: false };
       const seen = new Set();
-      for (const [,,cell] of storedCellEntries(sheet.cells)) {
-        if (!cell.formula) continue;
+      for (const [,,cell] of sheet.cells.formulaEntries()) {
         if (!cell.ast) { d.all = true; continue; }
         if (seen.has(cell.ast)) continue;
         seen.add(cell.ast);
@@ -2344,8 +2343,7 @@ export class Workbook {
     const hasSheet = (name) => this.sheetIndexByName(name) >= 0;
     this.sheets.forEach((sh, si) => {
       const fix = (target, allowBare = false) => rewriteWorkbookLink(target, (formula) => transform(formula, sh.name), hasSheet, allowBare);
-      sh.cells.forEachStoredRC((cell, r, c) => {
-        if (!cell.link) return;
+      sh.cells.forEachLinkRC((cell, r, c) => {
         const link = fix(cell.link);
         if (link === cell.link) return;
         if (si === wholeSheet) sh.cells.setRC(r, c, { ...cell, link });
@@ -2627,10 +2625,9 @@ export class Workbook {
     this.rewriteHyperlinks((formula, hostSheet) => adjustFormulaForStructure(formula, { targetSheet: target.name, hostSheet, axis, index, count }), si);
     const deps = this.sheetDeps();
     this.sheets.forEach((sheet, i) => {
-      // 다른 시트는 대상 시트를 참조하는 경우만 수식이 바뀜
+      // 다른 시트는 대상 시트를 참조하는 경우만 수식이 바뀜. 큰 범위 값 셀을 배열로 펼치지 않는다.
       if (i !== si && !deps[i]?.sheets.has(si) && !deps[i]?.all) return;
-      for (const [r, c, cell] of [...storedCellEntries(sheet.cells)]) {
-        if (!cell.formula) continue;
+      for (const [r, c, cell] of [...sheet.cells.formulaEntries()]) {
         const k = `${r},${c}`;
         const raw = adjustFormulaForStructure(cell.raw, {
           targetSheet: target.name, hostSheet: sheet.name, axis, index, count,

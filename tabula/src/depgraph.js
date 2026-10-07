@@ -106,13 +106,19 @@ export class DepGraph {
     let n = 0;
     for (let si = 0; si < this.wb.sheets.length; si++) {
       const sheet = this.wb.sheets[si];
-      // 열마다 위에서 아래로 (아래로 채운 수식이 한 묶음이 되도록)
-      for (const [c, m] of sheet.cells.cols) {
-        const rows = [];
-        for (const [r, cell] of m.storageEntries()) if (cell.formula) rows.push(r);
+      // 값 셀은 건너뛰고 기존 열 순서/행 정렬을 유지해 채움 수식의 묶음을 보존한다.
+      const columns = new Map();
+      for (const [r, c] of sheet.cells.formulaEntries()) {
+        let rows = columns.get(c);
+        if (!rows) { rows = []; columns.set(c, rows); }
+        rows.push(r);
+      }
+      for (const [c] of sheet.cells.cols) {
+        const rows = columns.get(c);
+        if (!rows) continue;
         rows.sort((a, b) => a - b);
         for (const r of rows) {
-          this.add(si, r, c, m.get(r));
+          this.add(si, r, c, sheet.cells.getRC(r, c));
           if (++n % 20000 === 0) yield n;
         }
       }

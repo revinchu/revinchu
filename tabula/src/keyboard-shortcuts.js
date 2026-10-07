@@ -12,6 +12,13 @@ export function shortcutCode(event) {
   return '';
 }
 
+// A physical function key can be reported as Process/229 by an idle IME.
+// Active text composition remains owned by the editor, never by repeat.
+export function repeatFunctionKey(event) {
+  if (!event || event.isComposing || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || event.getModifierState?.('AltGraph')) return false;
+  return event.code === 'F4' || event.key === 'F4' && event.keyCode !== 229;
+}
+
 // iPadOS can identify itself as a Mac, and a wide iPad or attached pointer can
 // select desktop layout. Clipboard behavior must not depend on layout density.
 export function appleTouchDevice(platform = globalThis.navigator) {

@@ -29,7 +29,7 @@ import { BANDING_PALETTES, alternatingRules, isBandingRule } from './alternating
 import { installMobileWork, mobileSheetZoom } from './mobile-work.js';
 import { installMobileKeyboard } from './mobile-keyboard.js';
 import { EXCEL_KEYTIP_COMPAT, EXCEL_LEGACY_GROUPS } from './excel-keytip-compat.js';
-import { shortcutCode, appleTouchDevice, excelDirectCommand } from './keyboard-shortcuts.js';
+import { shortcutCode, appleTouchDevice, excelDirectCommand, repeatFunctionKey } from './keyboard-shortcuts.js';
 import { installPointerModifierTracking, primaryPointerModifier } from './pointer-modifiers.js';
 import { openKeyboardCheck } from './keyboard-check.js';
 import { installGridMousePan } from './mouse-work.js';
@@ -20071,7 +20071,13 @@ function showContextMenu(pos, hitKind = 'cell') {
 }
 
 // ───────────────────────── 명령 ─────────────────────────
-const structural = (fn) => () => { if (!rowRangeAllowed(sel) || !rowTailAllowed()) return; fn(); gv.layout(); updateSelectionUI(); };
+const structural = (fn) => () => {
+  if (!rowRangeAllowed(sel) || !rowTailAllowed()) return;
+  fn();
+  // A completed transaction already queues the document render. Drawing here
+  // as well repeats layout and object/filter DOM work within the same event.
+  if (!renderQueued) { gv.layout(); updateSelectionUI(); }
+};
 
 const COMMANDS = {
   repeatStyle: (options) => { if (options) applyStyle(options.patchOrFn, { widen: options.widen }); },
@@ -20565,6 +20571,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['행 삽입 속도와 F4 반복', ['행·열 삽입 시 전체 원본을 다시 훑는 처리를 줄이고 화면 갱신을 한 번으로 합쳤습니다.', '편집하지 않는 셀·리본·격자에서 F4로 마지막 삽입을 반복합니다. 입력기가 키 이름을 바꾸어 전달해도 물리 F4를 인식하며, 글자 입력 중에는 편집 동작을 유지합니다.']],
   ['행 삽입과 피벗·그림 이동', ['행·열 삽입 시 피벗 범위와 필터 단추를 함께 옮겨 새로 고침 후에도 그림과 표의 위치를 유지합니다. 그림은 Excel의 셀 이동·크기 설정을 따릅니다.', '짧은 행의 가운데를 쉽게 선택하고, 선택 행을 유지하며 삽입을 반복할 수 있습니다. 리본에 초점이 있어도 F4 반복이 작동하며 피벗 겹침 안내는 8초간 표시합니다.']],
   ['피벗 필드 창의 같은 영역 폭', ['필터·열·행·값 영역을 같은 폭으로 표시하고, 긴 필드 이름은 말줄임으로 표시해 오른쪽 메뉴와 값 설정 버튼이 잘리지 않도록 했습니다.']],
   ['피벗 필드를 끌어 제거', ['행·열·값·필터 영역의 필드를 위쪽 필드 목록으로 끌어 놓으면 피벗에서 제거합니다. 같은 값 필드가 여러 개면 끌어온 항목만 제거하며 원본 데이터는 유지합니다.', '마우스·터치 이동과 실행 취소·다시 실행을 지원합니다.']],
@@ -21153,14 +21160,15 @@ function bindEvents() {
       if (handleKeytipKey(e)) { e.stopPropagation(); return; }
       if (keytipMenu?.contains(e.target)) return;
     }
-    if (e.target === ed || editing || isDialogOpen() || isMenuOpen() || document.querySelector('.backstage')) return;
-    if (e.target instanceof Element && e.target.matches('input, textarea, select, [contenteditable]')) return;
-    // 리본·시트 탭 등에 초점이 남아도 F4는 현재 선택에 마지막 작업을 반복한다.
-    // 셀 편집의 참조 전환과 팝업/입력 필드의 키 처리는 기존 경로에 맡긴다.
-    if (!e.defaultPrevented && e.key === 'F4' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey
-      && !e.isComposing && e.keyCode !== 229 && !(e.target instanceof Element && e.target.closest('[contenteditable]'))) {
+    if (editing || isDialogOpen() || isMenuOpen() || document.querySelector('.backstage')) return;
+    if (e.target !== ed && e.target instanceof Element && (e.target.matches('input, textarea, select') || e.target.closest('[contenteditable]'))) return;
+    // Idle editor, grid, and ribbon use the same repeat path. A physical F4
+    // survives Process/229 reporting, while active IME text and formula editing
+    // keep their editor handlers.
+    if (!e.defaultPrevented && repeatFunctionKey(e)) {
       e.preventDefault(); e.stopPropagation(); endKeytip(); repeatLast(); return;
     }
+    if (e.target === ed) return;
     if (handleKeytipKey(e)) e.stopPropagation();
   }, true);
   document.addEventListener('mousedown', (e) => {
