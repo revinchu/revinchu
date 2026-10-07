@@ -23,6 +23,7 @@ import { phoneticEditor } from './phonetic-ui.js';
 import { readRangeQuerySource } from './range-query.js';
 import { createRangeQueryEditor } from './range-query-ui.js';
 import { cellPickList } from './cell-pick-list.js';
+import { cellDropdownTarget, altArrowDownKey } from './cell-dropdown-target.js';
 import { normalizeVideo, VIDEO_POSTER } from './media-object.js';
 import { createDrawingPalette } from './drawing-palette.js';
 import { BANDING_PALETTES, alternatingRules, isBandingRule } from './alternating-colors.js';
@@ -1557,13 +1558,29 @@ function afterCaretMove() {
   setMode();
 }
 
+// The workbook owns the button coordinates; virtualized/frozen DOM is only an anchor.
+function cellDropdownAnchor(target) {
+  const rect = gv.clientRect({ r1: active.r, c1: active.c, r2: active.r, c2: active.c });
+  for (const button of dom.view.querySelectorAll('.fbtn')) {
+    const d = button.dataset;
+    const matches = target.kind === 'pivot'
+      ? button.classList.contains('pbtn') && Number(d.p) === target.pivotIndex && d.k === target.buttonKind && (d.f || '') === (target.field || '')
+      : !button.classList.contains('pbtn') && Number(d.c) === target.column && (d.t || '') === target.key;
+    if (!matches) continue;
+    const b = button.getBoundingClientRect();
+    if (b.width > 0 && b.height > 0 && b.right > rect.left && b.left < rect.right && b.bottom > rect.top && b.top < rect.bottom) return button;
+  }
+  return { x: rect.left, y: rect.bottom + 2 };
+}
+
 function onGridKey(e) {
   const code = shortcutCode(e);
   if (e.getModifierState?.('AltGraph')) { endKeytip(); return; }
   if (handleKeytipKey(e)) return;
-  if (e.isComposing || e.keyCode === 229) return;
+  const cellDropdownKey = altArrowDownKey(e);
+  if (e.isComposing || e.keyCode === 229 && !cellDropdownKey) return;
   const ctrl = e.ctrlKey || e.metaKey;
-  const k = e.key;
+  const k = cellDropdownKey ? 'ArrowDown' : e.key;
   const handled = () => e.preventDefault();
   if (!chartSel && !ctrl && !e.altKey && k === 'End') { handled(); endMode = !endMode; setMode(); return; }
   if (endMode && !['Shift', 'Control', 'Meta', 'Alt'].includes(k)) {
@@ -1622,16 +1639,20 @@ function onGridKey(e) {
   }
   const directCommand = excelDirectCommand(e);
   if (directCommand) { handled(); run(directCommand); return; }
-  if (e.altKey && k === 'ArrowDown' && !ctrl) {
-    const tt = tableHere();
-    if (tt?.totals && active.r === tt.r2) { handled(); openTotalsMenu(); return; }
-    const hdr = tt?.filter && tt.header && active.r === tt.r1;
-    if (hdr || (sheet().filter && active.r === sheet().filter.r1)) {
-      const btn = document.querySelector(`.fbtn[data-c="${active.c}"][data-t="${hdr ? tt.id : ''}"]`);
-      if (btn) { handled(); openFilterMenu(active.c, btn, hdr ? tt.id : ''); return; }
+  if (cellDropdownKey) {
+    handled();
+    const target = cellDropdownTarget(sheet(), active.r, active.c);
+    if (target) {
+      const anchor = cellDropdownAnchor(target);
+      if (target.kind === 'pivot') {
+        const entry = pivotDefs()[target.pivotIndex];
+        if (entry) openPivotFilterMenu(entry, target.buttonKind, target.field || null, anchor, { keyboard: true });
+      } else openFilterMenu(target.column, anchor, target.key, { keyboard: true });
+      return;
     }
-    const rule = validationAt(sheet(), active.r, active.c);
-    handled(); run('pickFromList'); return;
+    const tt = tableHere();
+    if (tt?.totals && active.r === tt.r2) { openTotalsMenu(); return; }
+    run('pickFromList'); return;
   }
   if (e.altKey && !ctrl && (k === '=' || e.code === 'Equal')) { handled(); run('autosum'); return; }
   // 그룹 / 그룹 해제 (Shift+Alt+→ / ←)
@@ -5867,7 +5888,9 @@ function widenForFilterButtons(rg) {
 
 function applyFilterCriteria(c, values, key = '', { quiet = false, historyMeta = null } = {}) {
   const f = getFilter(key);
-  if (!f) return;
+  if (!f || c < f.c1 || c > f.c2) return;
+  if (viewOnly || wb.props?.markedFinal) { toast('현재 문서에서는 필터를 변경할 수 없습니다. 편집 권한을 확인하세요.'); return; }
+  if (protectBlocked('autoFilter', f)) return;
   const criteria = { ...f.criteria };
   if (values === null) delete criteria[c]; else criteria[c] = values;
   if (!canRecomputeFilter({ ...f, criteria })) return;
@@ -5882,9 +5905,35 @@ function applyFilterCriteria(c, values, key = '', { quiet = false, historyMeta =
   setMode();
 }
 
-function openFilterMenu(c, anchorEl, key = '') {
+function ordinaryFilterContextGuard(key) {
+  const book = wb, home = si, owner = sheet(), version = wb.version;
+  return (quiet = false) => {
+    const valid = wb === book && si === home && sheet() === owner && wb.version === version && !!getFilter(key)
+      && !viewOnly && !wb.props?.markedFinal && allowed(owner, 'autoFilter');
+    if (!valid && !quiet) toast('필터 또는 편집 권한이 변경되었습니다. 다시 선택해 주세요.');
+    return valid;
+  };
+}
+function guardedFilterMenuItems(items, valid) {
+  return items.map(item => item && { ...item,
+    disabled: item.disabled || (!!(item.action || item.submenu) && !valid(true)),
+    ...(item.action ? { action: () => { if (valid()) item.action(); } } : {}),
+    ...(item.submenu ? { submenu: guardedFilterMenuItems(item.submenu, valid) } : {}),
+  });
+}
+function focusCellFilterMenu(menu, keyboard) {
+  const search = menu.querySelector('input[type=search]');
+  if (search) search.dataset.accessKey = 'e';
+  const command = menu.querySelector('.menu-item:not(:disabled),.pf-act:not(:disabled),.pf-one[tabindex="0"]');
+  if (keyboard && command) command.focus();
+  else if (keyboard) { menu.tabIndex = -1; menu.focus(); }
+  else search?.focus();
+}
+
+function openFilterMenu(c, anchorEl, key = '', { keyboard = false } = {}) {
   const f = getFilter(key);
   if (!f) return;
+  const canApply = ordinaryFilterContextGuard(key);
   const full = { ...f, r2: key ? f.r2 : expandedFilterEnd(wb, si, f) };
   // 다른 열 조건을 통과한 행의 값만 목록에 표시
   const others = Object.entries(f.criteria ?? {}).filter(([k, v]) => Number(k) !== c && Array.isArray(v)).map(([k, v]) => [Number(k), new Set(v)]);
@@ -5935,10 +5984,10 @@ function openFilterMenu(c, anchorEl, key = '') {
   }
   const numeric = items.length && items.filter((t) => t !== '').every((t) => typeof values.get(t) === 'number');
   let confirm = null;
-  const selection = filterChecklist(items, current, undefined, {onChange:ready=>{if(confirm)confirm.disabled=!ready;}});
+  const selection = filterChecklist(items, current, undefined, {onChange:ready=>{if(confirm)confirm.disabled=!ready||!canApply(true);}});
   const { search, list, addRow } = selection;
   const ok = () => {
-    if(!selection.canApply())return;
+    if(!selection.canApply() || !canApply())return;
     const chosen = selection.result();
     if (!chosen.length) { toast('항목을 하나 이상 선택하세요.'); return; }
     closeMenus();
@@ -5946,7 +5995,7 @@ function openFilterMenu(c, anchorEl, key = '') {
     applyFilterCriteria(c, items.every((item) => chosenSet.has(item)) ? null : chosen, key);
     focusGrid();
   };
-  confirm=el('button',{class:'btn primary',onclick:ok,disabled:!selection.canApply()},'확인');
+  confirm=el('button',{class:'btn primary',onclick:ok,disabled:!selection.canApply()||!canApply(true)},'확인');
   const header = displayText(f.r1, c) || `${colToName(c)}열`;
   const node = el('div', {
     class: 'filter-menu',
@@ -5956,7 +6005,7 @@ function openFilterMenu(c, anchorEl, key = '') {
   el('div', { class: 'filter-foot' },
     confirm,
     el('button', { class: 'btn', onclick: () => { closeMenus(); focusGrid(); } }, '취소')));
-  const menu = openMenu(anchorEl, [
+  const menu = openMenu(anchorEl, guardedFilterMenuItems([
     { label: '텍스트 오름차순 정렬', icon: 'sortAsc', action: () => sortData(true, c, true, full, key) },
     { label: '텍스트 내림차순 정렬', icon: 'sortDesc', action: () => sortData(false, c, true, full, key) },
     { sep: true },
@@ -5977,8 +6026,8 @@ function openFilterMenu(c, anchorEl, key = '') {
     ] : []),
     { sep: true },
     { node },
-  ], { minWidth:280 });
-  setTimeout(() => search.focus());
+  ], canApply), { minWidth:280 });
+  focusCellFilterMenu(menu, keyboard);
 }
 
 /** 사용자 지정 자동 필터 (엑셀과 같은 두 조건 + 그리고/또는, 정규식 포함) */
@@ -8805,6 +8854,26 @@ function renderQat() {
   bar.append(menu);
   bar.classList.toggle('below', opts.qatPosition === 'below');
   if (opts.qatPosition === 'below') document.getElementById('formulaRow').before(bar); else left.append(bar);
+}
+
+function openQatCommandContext(e) {
+  const target = e.target instanceof Element ? e.target.closest('[data-ribbon-command],[data-qat-cmd]') : null;
+  if (!target?.closest('#ribbon,#quickAccess') || e.target.closest('input,textarea,select,[contenteditable]')) return;
+  const cmd = target.dataset.qatCmd || target.dataset.ribbonCommand;
+  if (!qatCatalog().some(item => item.cmd === cmd)) return;
+  e.preventDefault(); e.stopPropagation();
+  const registered = qatCommands().includes(cmd);
+  const update = remove => {
+    const current = qatCommands();
+    opts.qatOrder = remove ? current.filter(id => id !== cmd) : current.includes(cmd) ? current : [...current, cmd];
+    saveOptions(); renderQat(); gv?.layout(); focusGrid();
+  };
+  openMenu({ x: e.clientX, y: e.clientY }, [
+    { label: '빠른 실행 도구 모음에 추가', disabled: registered, action: () => update(false) },
+    ...(registered ? [{ label: '빠른 실행 도구 모음에서 제거', action: () => update(true) }] : []),
+    { sep: true },
+    { label: '빠른 실행 도구 모음 사용자 지정…', action: () => optionsDialog(8) },
+  ]);
 }
 
 function openQatMenu(cmd) {
@@ -13609,13 +13678,14 @@ function pivotItemLabeler(def, field, options = {}) {
 
 // 검색을 지워 원래 체크 상태로 돌아가는 동작을 키보드와 포인터에서 공유한다.
 function pivotFilterSearchBox(search) {
+  search.dataset.accessKey = 'e';
   const clear=el('button',{type:'button',class:'pf-search-clear','aria-label':'검색 지우기',title:'검색 지우기','data-access-key':'none',onclick:()=>{search.value='';search.dispatchEvent(new Event('input'));search.focus();}},'×');
   const sync=()=>{clear.hidden=!search.value;};search.addEventListener('input',sync);sync();
   const wrap=el('div',{class:'pf-search',onmouseenter:()=>closeSubmenus()},search,clear);
   return wrap;
 }
 
-function openPivotFilterMenu(entry, kind, field, anchorEl) {
+function openPivotFilterMenu(entry, kind, field, anchorEl, { keyboard = false } = {}) {
   const canApply = pivotContextGuard(entry);
   const def0 = pivotDefV2(entry.def, { preserveSnapshot: true });
   const choices = field ? [field] : kind === 'rows' ? def0.rows ?? [] : kind === 'cols' ? def0.cols ?? [] : [];
@@ -13777,8 +13847,8 @@ function openPivotFilterMenu(entry, kind, field, anchorEl) {
   });
   const menu = openMenu(anchorEl, [{ node: box }], {minWidth:300});
   menu.classList.add('pivot-filter-popup');
-  // 첫 열기와 본문 교체에서 동기적으로 초점을 지정해 이후 키보드 이동을 덮어쓰지 않는다.
-  box.querySelector('input[type=search]')?.focus();
+  // Keyboard starts at menu commands; E moves to search without inserting a letter.
+  focusCellFilterMenu(menu, keyboard);
 }
 
 /** 정렬 (엑셀 [기타 정렬 옵션]): 수동 · 오름차순 기준 · 내림차순 기준 (필드 자체 또는 값 필드) + 요약 정보 + 기타 옵션 */
@@ -20627,6 +20697,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['필터 메뉴 단축키와 빠른 실행', ['일반·표·피벗 행·열·보고서 필터 버튼 셀에서 Alt+↓로 필터를 열고, E로 검색창 이동 후 검색·Enter로 적용합니다. 메뉴 방향키·체크 선택·Esc 취소와 Undo/Redo를 지원합니다.', '리본 명령을 우클릭하여 빠른 실행 도구 모음에 추가하고 Alt+숫자로 실행합니다. 우클릭 제거·순서 설정과 문서 보호 설정을 유지합니다.']],
   ['슬라이서 첫 선택 속도', ['큰 파일에서 주차·캠페인 슬라이서를 처음 선택할 때의 지연을 줄였습니다. 연결된 피벗 결과와 선택 화면을 함께 갱신합니다.', '빠른 연속 선택·다중 선택·필터 지우기와 실행 취소를 지원하며, 피벗이 겹치는 선택은 기존 상태를 유지합니다.']],
   ['복사한 행 삽입', ['여러 행을 Ctrl+C로 복사한 뒤 대상 행 우클릭 → 복사한 셀 삽입으로 같은 개수의 행을 넣습니다. 마지막 빈 행과 행 높이도 보존하며, 기존 행·피벗·그림을 아래로 옮깁니다.', 'Ctrl+V는 덮어쓰기를 유지합니다. 복사한 행 삽입을 F4로 반복하고 Undo/Redo로 수식·개체·행 선택까지 복구합니다.']],
   ['행 삽입 속도와 F4 반복', ['행·열 삽입 시 전체 원본을 다시 훑는 처리를 줄이고 화면 갱신을 한 번으로 합쳤습니다.', '편집하지 않는 셀·리본·격자에서 F4로 마지막 삽입을 반복합니다. 입력기가 키 이름을 바꾸어 전달해도 물리 F4를 인식하며, 글자 입력 중에는 편집 동작을 유지합니다.']],
@@ -21207,6 +21278,13 @@ function bindEvents() {
   dom.view.addEventListener('keydown', (e) => {
     if (e.target === dom.view && !e.defaultPrevented) onEditorKeyDown(e);
   });
+  // Bubble after native ribbon/field controls have handled their own dropdowns.
+  document.addEventListener('keydown', e => {
+    if (e.defaultPrevented || !altArrowDownKey(e) || editing || shapeTextEdit || chartSel || isDialogOpen() || isMenuOpen() || document.querySelector('.backstage')) return;
+    if (!(e.target instanceof Element) || e.target === ed || e.target === dom.view) return;
+    if (e.target.matches('input,textarea,select') || e.target.closest('[contenteditable]')) return;
+    if (e.target.closest('#ribbon,#quickAccess') || dom.view.contains(e.target)) onGridKey(e);
+  });
   document.addEventListener('keyup', handleKeytipUp, true);
   document.addEventListener('keydown', (e) => {
     if (shapeTextEdit?.editor.contains(e.target)) {
@@ -21328,6 +21406,7 @@ function bindEvents() {
   $('calcState').addEventListener('click', calculationStatusDialog);
   // 입력란·우클릭 메뉴를 포함한 앱 안에서는 브라우저 메뉴가 위셀 메뉴를 가리지 않는다.
   // capture에서 기본 동작만 막고 전파는 유지하므로 각 영역의 사용자 메뉴는 계속 열린다.
+  document.addEventListener('contextmenu', openQatCommandContext);
   document.addEventListener('contextmenu', (e) => e.preventDefault(), { capture: true });
   document.addEventListener('mousemove', (e) => {
     if (!(e.buttons & 1) || isMenuOpen() || isDialogOpen()) cancelCellGesture();

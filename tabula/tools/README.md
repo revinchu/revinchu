@@ -734,3 +734,16 @@ row-limit-storage.mjs는 로컬 Chromium에서 CSV 확장 행 가져오기 및 �
 `node tools/slicer-selection-performance-ui.mjs`는 격리 Chromium에서 24만 행 열 블록 원본과 1·4·6개 연결 피벗을 만들고 첫 선택과 반복 선택의 mousedown 처리 시간, 선택 DOM 갱신 관측 시간, 두 번의 animation frame 후 상태, 긴 작업과 레이아웃·개체 렌더 호출을 기록한다. 초기 피벗·슬라이서 표시가 원본 캐시를 이미 준비하므로 ‘첫 선택’은 새 문서의 첫 상호작용을 뜻한다. 12만 행의 rollup 아래 경로, 800개 행 항목의 큰 피벗 출력, 주차×캠페인 다중 필터·Ctrl 추가 선택, clear·Alt+C와 Undo/Redo, 같은 작업의 8연속 선택과 긴 작업 중 브라우저 프로토콜 8클릭, 중복 연결, 보호·연결 오류·변경 없는 선택·피벗 겹침의 원자적 거절과 개체 선택 유지도 검사한다. 변경된 클릭은 레이아웃 한 번을 요구하되 실행 시간에는 기계별 고정 통과 기준을 두지 않는다. 프로토콜 입력은 물리 장치의 입력 손실 검증으로 단정하지 않는다.
 
 `WIXEL_URL`, `WIXEL_SLICER_PERF_OUT`(D: 폴더), `WIXEL_SLICER_PERF_FILTER`(사례명 부분 문자열, 여러 조건은 `|`), `WIXEL_SLICER_PERF_ROWS`(60~500,000행, 기본 240,000)를 지정한다. `WIXEL_SLICER_PERF_BASELINE=4457259`는 로컬 서버에서 app/workbook/cellmap/pivot/cube/pivot-field-items/view를 Git 기준의 메모리 응답으로 제공하고 중복 레이아웃은 통과 조건 대신 비교 수치로 기록한다. API·외부 요청·원격 쓰기를 차단하며 공개 합성 검사에는 정확한 `WIXEL_ALLOWED_TEST_URL`을 함께 지정해야 한다. 개인 업무 파일이나 OS 클립보드는 사용하지 않는다. `PLAYWRIGHT_MODULE`, `PLAYWRIGHT_BROWSERS_PATH`, `TEMP`·`TMP`는 기존 런타임과 D: 캐시·임시 경로를 사용한다. JSON·PNG는 지정 출력 폴더에 저장한다.
+
+### 필터 버튼 셀 Alt+↓와 메뉴 키보드 회귀
+
+`node tools/filter-alt-down.mjs`는 합성 문서의 일반 필터·표 필터·피벗 행/열/페이지/Σ 버튼 셀에서 Alt 누름→아래 방향키→Alt 해제의 실제 브라우저 입력을 검사한다. 메뉴의 초기 초점과 E 검색 접근키, 방향키·Tab·Space·검색·Enter·Escape와 방향키→Enter 정렬 명령, 가상 체크리스트, 적용 후 단일 Undo/Redo, 마우스 검색 초점 보존, 배율·스크롤·틀 고정, 리본/빠른 실행 버튼 초점 전달 및 편집·조합·대화상자·다른 입력의 격리를 확인한다. 본문 셀의 기존 데이터 입력 목록과 숨긴 피벗 머리글/실제 필드가 없는 Σ의 경계, 보호·최종 표시 문서의 비활성 명령과 열린 메뉴 뒤 보호/문서 버전 변경의 거절도 포함한다.
+
+`WIXEL_URL`, `WIXEL_BROWSER=chromium|firefox|webkit`, `WIXEL_FILTER_ALT_OUT`(D: 출력), `WIXEL_FILTER_ALT_FILTER`(사례명 부분 문자열, 여러 조건은 `|`)를 지정한다. `WIXEL_FILTER_ALT_BASELINE=7cd961c`는 로컬 소스 서버의 app/ui/view/keyboard-shortcuts/app-filter-checklist를 Git 기준의 메모리 응답으로 제공한다. 공개 합성 검사에는 `WIXEL_ALLOWED_TEST_URL`을 `WIXEL_URL`과 정확히 같은 값으로 지정해야 한다. 개인 파일과 OS 클립보드를 사용하지 않고 API·외부 요청·쓰기 요청을 차단한다. 기존 `PLAYWRIGHT_MODULE`과 D:의 `PLAYWRIGHT_BROWSERS_PATH`, `TEMP`·`TMP`를 사용하며 결과 JSON과 실패·배율별 PNG를 D: 출력에 저장한다. 키 이벤트 trace는 누름/해제와 초점·선택·편집·Undo 상태를 포함한다. Process/229·조합 이벤트는 합성이며 물리 키보드나 OS 입력기 검증과 구분한다.
+
+
+### 제작자 공식 필터 글의 기능 감사
+
+`node tools/excel-filter-video-features.mjs`는 제작자 공식 글에서 확인한 선택 셀 값·채우기색·글꼴색 필터, 현재 열 필터 해제, Ctrl+Shift+L, Alt→D→F→F, 필터 머리글 Alt+↓→E→검색→Enter와 빠른 실행 도구 모음 등록·Alt 번호를 작은 합성 문서에서 검사한다. 실제 셀 우클릭·리본 우클릭·시작 화면 설정 경로, 중복 등록 방지·제거 후 번호 재배치·재열기 보존, Undo/Redo, 원본 값·서식·다른 시트 보존과 본문 Alt+↓의 기존 데이터 입력 목록도 확인한다. 원본 영상의 재생이나 전체 내용·타임스탬프를 검증했다고 단정하지 않는다. 정렬·병합·자동 합계·PDF는 공식 글의 추가 언급으로 분리하여 빠른 실행 명령 목록만 조사하며 기능 실행 검증으로 계산하지 않는다.
+
+`WIXEL_URL`로 소스 또는 최종 번들을, `WIXEL_VIDEO_FEATURE_OUT`으로 D: 출력 폴더를, `WIXEL_VIDEO_FEATURE_FILTER`로 사례명 일부를 지정한다(여러 조건은 `|`로 구분). 로컬 소스 서버의 `WIXEL_VIDEO_FEATURE_BASELINE=7cd961c`는 기준 버전의 모든 src JavaScript와 HTML·CSS를 메모리 응답으로 제공하며 수정 전 결과를 별도 폴더에 보관한다. 현재 소스의 JavaScript도 실행 시작 시 메모리에서 고정하고 실제 최종 번들은 제공된 서버 자산을 검사한다. 공개 합성 검사에는 `WIXEL_ALLOWED_TEST_URL`을 `WIXEL_URL`과 정확히 같은 값으로 지정해야 한다. 개인 파일과 OS 클립보드를 사용하지 않고 외부·API·쓰기 요청을 차단한다. 기존 `PLAYWRIGHT_MODULE`과 D:의 `PLAYWRIGHT_BROWSERS_PATH`, `TEMP`·`TMP`를 사용한다. 검사 수·소스 해시·라우팅 여부·제한과 오류를 summary.json에, 화면을 출력 폴더에 저장하며 브라우저는 종료한다.
