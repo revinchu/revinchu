@@ -52,7 +52,7 @@ import { newSmartArt, isSmartArt, smartArtParts } from './smartart.js';
 import { smartArtSvg } from './smartart-render.js';
 import { openSmartArtEditor } from './smartart-ui.js';
 import { worksheetRowLimit } from './row-limits.js';
-import { snapshotPasteSource, pasteSpecialRange, applyPasteSpecial, pasteSourceFromText } from './paste-special.js';
+import { snapshotPasteSource, pasteSpecialRange, applyPasteSpecial, pasteSourceFromText, remapPasteSource, preflightPasteSpecial } from './paste-special.js';
 import { showPasteSpecial } from './paste-special-ui.js';
 import { resizePicture, PICTURE_STYLES, pictureStylePatch, resetPictureFormatting, resetPictureSource } from './picture.js';
 import { groupSvg } from './object-group.js';
@@ -1801,7 +1801,7 @@ function onGridKey(e) {
 let lastRepeat = null; // F4 / Ctrl+Y: 마지막 작업 반복
 let endMode = false; // End → 방향키: 현재 데이터 영역 경계로 이동 후 종료
 let extendMode = false; // F8: 선택 영역 확장 모드
-const REPEATABLE = new Set(['insertRows', 'insertCols', 'deleteRows', 'deleteCols', 'mergeCenter', 'wrap', 'clearContents', 'clearFormats', 'clearAll',
+const REPEATABLE = new Set(['insertCopiedRows', 'insertRows', 'insertCols', 'deleteRows', 'deleteCols', 'mergeCenter', 'wrap', 'clearContents', 'clearFormats', 'clearAll',
   'hideRows', 'hideCols', 'indentInc', 'indentDec', 'incDecimal', 'decDecimal', 'growFont', 'shrinkFont', 'autofitSel', 'autofitRowsSel', 'addSheet', 'fillDown', 'fillRight']);
 
 function repeatLast() {
@@ -3020,6 +3020,7 @@ function mobileCellClipboardKey(e, key) {
 
 function copySelection(cut) {
   const full = selKind === 'cells' ? { ...sel } : usedClip(sel);
+  if (selKind === 'rows') { full.r2 = sel.r2; full.c1 = 0; }
   if ((full.r2 - full.r1 + 1) * (full.c2 - full.c1 + 1) > 2_000_000) { toast('복사하기에는 선택 영역이 너무 큽니다.'); return { text: '', html: '' }; }
   const data = [];
   const values = [];
@@ -3042,8 +3043,11 @@ function copySelection(cut) {
     values.push(vrow);
     text.push(trow);
   }
-  clip = { si, ...full, r2: full.r1 + rowsIncluded.length - 1, rows: rowsIncluded, data, values, cut, text: toDelimited(text, '\t', '\n') };
-  if (!cut && data.length) clip = snapshotPasteSource(wb, clip);
+  clip = { si, kind: selKind, ...full, r2: full.r1 + rowsIncluded.length - 1, rows: rowsIncluded, data, values, cut, text: toDelimited(text, '\t', '\n') };
+  if (!cut && data.length) {
+    try { clip = snapshotPasteSource(wb, clip); }
+    catch (error) { clip = null; updateSelectionUI(); toast(error.message); return { text: '', html: '' }; }
+  }
   const html = `<table>${text.map((row, i) => `<tr>${row.map((t, j) => {
     const st = data[i][j]?.style ?? {};
     const css = [st.bold && 'font-weight:bold', st.italic && 'font-style:italic', st.color && `color:${st.color}`, st.fill && `background:${st.fill}`].filter(Boolean).join(';');
@@ -3057,6 +3061,47 @@ function copySelection(cut) {
   updateSelectionUI();
   setMode();
   return payload;
+}
+
+/** 복사한 전체 행을 목적지 앞에 넣고 구조·서식·그림을 한 번에 되돌린다. */
+function insertCopiedRows() {
+  if (!copiedRowsReady()) { toast('먼저 행 번호를 선택하고 Ctrl+C로 행을 복사하세요.'); return false; }
+  const before = clip, source = clip.ready ? clip : snapshotPasteSource(wb, clip);
+  const index = sel.r1, count = source.data.length;
+  const target = { r1: index, c1: 0, r2: index, c2: MAX_COLS - 1 };
+  let area, shifted, plan;
+  const options = { insertRows: true };
+  try {
+    plan = preflightPasteSpecial(wb, si, source, target, options);
+    area = plan.area;
+    if (!rowRangeAllowed(area) || !rowTailAllowed(count)) return false;
+    shifted = remapPasteSource(wb, source, { si, axis: 'row', index, count });
+  } catch (error) { toast(error.message); return false; }
+  if (protectBlocked('insertRows', area, 'insertCopiedRows') || protectBlocked('formatRows', area, 'insertCopiedRows')) return false;
+  if (isProtected(sheet()) && anyLocked(area)) {
+    alertDialog('WIXEL', '복사한 행을 넣을 위치에 잠긴 셀이 있습니다. [검토] 탭에서 [시트 보호 해제]를 누르세요.'); return false;
+  }
+  // 새 행은 기존 피벗 앞에 생긴다. 이동 전의 붙여넣기 면적과 비교하면 정상 삽입도 잘못 막는다.
+  if (sheet().merges.some(m => m.r1 < index && index <= m.r2)) {
+    alertDialog('WIXEL', '병합된 셀의 일부에 복사한 행을 삽입할 수 없습니다. 병합 영역 위나 아래의 행을 선택하세요.'); return false;
+  }
+  if (pivotDefs(si).some(({ def }) => def.area && def.area.r1 < index && index <= def.area.r2)) {
+    alertDialog('WIXEL', '피벗 테이블의 일부는 변경할 수 없습니다. 피벗 테이블 위나 아래의 행을 선택하세요.'); return false;
+  }
+  shiftWorksheet('row', index, count, history => {
+    shifted = { ...shifted, sourceSheet: wb.sheets[shifted.si] };
+    anchorObjects(() => applyPasteSpecial(wb, si, shifted, target, options, plan));
+    afterDataEntry({ ...area, c2: source.c2 });
+    history.clipboardStructure = { before, after: shifted };
+    history.selectionAfter = { sel: { r1: area.r1, c1: 0, r2: area.r2, c2: MAX_COLS - 1 }, selKind: 'rows', active: { r: area.r1, c: 0 } };
+  });
+  clip = shifted;
+  selectRows(area.r1, area.r2);
+  setMode(); return true;
+}
+
+function copiedRowsReady() {
+  return clip?.kind === 'rows' && !clip.cut && clip.data?.length > 0;
 }
 
 function valueToRaw(v) {
@@ -3078,9 +3123,11 @@ function pasteInternal(mode = 'all', opts = {}) {
     const source = clip.ready ? clip : snapshotPasteSource(wb, clip), what = opts.what ?? (mode === 'transpose' ? 'all' : mode);
     const options = { ...opts, what, transpose: mode === 'transpose' || !!opts.transpose };
     const command = what === 'formats' ? 'pasteFormats' : what === 'colWidths' ? 'colWidth' : 'paste';
-    const target = selKind === 'cells' ? { ...sel } : { r1: active.r, c1: active.c, r2: active.r, c2: active.c };
-    let area;
-    try { area = pasteSpecialRange(source, target, options); } catch (error) { toast(error.message); return false; }
+    const target = source.kind === 'rows' && !options.transpose && !['colWidths', 'link'].includes(what)
+      ? { r1: sel.r1, c1: 0, r2: selKind === 'rows' ? sel.r2 : sel.r1, c2: MAX_COLS - 1 }
+      : selKind === 'cells' ? { ...sel } : { r1: active.r, c1: active.c, r2: active.r, c2: active.c };
+    let area, plan;
+    try { plan = preflightPasteSpecial(wb, si, source, target, options); area = plan.area; } catch (error) { toast(error.message); return false; }
     if (!rowRangeAllowed(area)) return false;
     if (contextCommandDisabled(command)) {
       // 기존 보호 판정을 유지한다. 잠금 해제 창만 열고 이번 붙여넣기는 항상 중단한다.
@@ -3089,13 +3136,18 @@ function pasteInternal(mode = 'all', opts = {}) {
       return false;
     }
     if (protectBlocked(protectAction(command), area, command)) return false;
+    if (area.wholeRows && ['all', 'formats', 'sourceTheme', 'noBorders', 'mergeCond'].includes(what) && protectBlocked('formatRows', area, command)) return false;
     if (what === 'validation' && isProtected(sheet())) { toast('보호된 시트에는 유효성 검사를 붙여넣을 수 없습니다.'); return false; }
+    const history = meta();
+    if (area.wholeRows) history.selectionAfter = { sel: { r1: area.r1, c1: 0, r2: area.r2, c2: MAX_COLS - 1 }, selKind: 'rows', active: { r: area.r1, c: 0 } };
     wb.transact(() => {
-      anchorObjects(() => applyPasteSpecial(wb, si, source, target, options));
-      if (!['formats', 'comments', 'validation', 'colWidths'].includes(what)) afterDataEntry(area);
-    }, meta());
+      anchorObjects(() => applyPasteSpecial(wb, si, source, target, options, plan));
+      if (!['formats', 'comments', 'validation', 'colWidths'].includes(what)) afterDataEntry(area.wholeRows ? { ...area, c2: source.c2 } : area);
+    }, history);
     if (what === 'colWidths') gv.layout();
-    selectRange(area, 'cells', { r: area.r1, c: area.c1 }); setMode(); return true;
+    if (area.wholeRows) selectRows(area.r1, area.r2);
+    else selectRange(area, 'cells', { r: area.r1, c: area.c1 });
+    setMode(); return true;
   }
   if (clip.cut && (mode !== 'all' || opts.what && opts.what !== 'all' || opts.transpose || opts.op || opts.skipBlanks)) { toast('선택하여 붙여넣기는 복사한 셀에 사용할 수 있습니다. 먼저 Ctrl+C로 복사하세요.'); return; }
   const command = (opts.what ?? mode) === 'formats' ? 'pasteFormats' : 'paste';
@@ -3764,7 +3816,7 @@ const PROTECT_MAP = {
   repeatStyle: 'formatCells',
   contextSortFill:'sort',contextSortFont:'sort',contextFilterValue:'autoFilter',contextFilterFill:'autoFilter',contextFilterFont:'autoFilter',contextClearColumnFilter:'autoFilter',togglePhonetic:'formatCells',editPhonetic:'formatCells',
   drawingPalette: 'objects', insertGif: 'objects', insertVideo: 'objects', iconToShapes: 'objects', shapeUnion: 'objects', shapeCombine: 'objects', shapeFragment: 'objects', shapeIntersect: 'objects', shapeSubtract: 'objects', alternatingColors: 'formatCells',
-  insertRows: 'insertRows', insertCols: 'insertColumns', deleteRows: 'deleteRows', deleteCols: 'deleteColumns', sortAsc: 'sort', sortDesc: 'sort', sortDialog: 'sort',
+  insertCopiedRows: 'insertRows', insertRows: 'insertRows', insertCols: 'insertColumns', deleteRows: 'deleteRows', deleteCols: 'deleteColumns', sortAsc: 'sort', sortDesc: 'sort', sortDialog: 'sort',
   clearFilter: 'autoFilter', reapplyFilter: 'autoFilter', advancedFilter: 'autoFilter', toggleFilter: 'autoFilter', hideRows: 'formatRows', unhideRows: 'formatRows', autofitRowsSel: 'formatRows',
   hideCols: 'formatColumns', unhideCols: 'formatColumns', colWidth: 'formatColumns', rowHeight: 'formatRows', autofitSel: 'formatColumns', refreshAll: 'pivotTables', calcField: 'pivotTables', slicerConnections: 'pivotTables',
   chartApplyTemplate: 'objects', chartColumn: 'objects', chartBar: 'objects', chartLine: 'objects', chartPie: 'objects', chartArea: 'objects', chartScatter: 'objects', shapesMenu: 'objects',
@@ -3776,6 +3828,7 @@ function protectAction(cmd) {
   if (['sortAsc', 'sortDesc', 'sortDialog'].includes(cmd) && pivotSortScope(sheet(), sel, active).kind === 'pivot') return 'pivotTables';
   if (cmd === 'insertMenuKey' || cmd === 'deleteMenuKey') {
     const insert = cmd === 'insertMenuKey';
+    if (insert && copiedRowsReady()) return 'insertRows';
     return selKind === 'rows' ? (insert ? 'insertRows' : 'deleteRows') : selKind === 'cols' ? (insert ? 'insertColumns' : 'deleteColumns') : 'cells';
   }
   if (cmd === 'shapeTextEdit') return 'objects';
@@ -9803,7 +9856,7 @@ function snapshotPivotRendering() {
 }
 
 /** 구조 변경과 피벗의 역할·수동 서식 기록을 같은 실행 취소 단위로 옮긴다. */
-function shiftWorksheet(axis, index, count) {
+function shiftWorksheet(axis, index, count, afterShift = null) {
   const targetSi = si, beforeSheet = { ...sheet(), pivotsExtra: [...(sheet().pivotsExtra ?? [])] };
   const history = meta(), before = snapshotPivotRendering();
   history.pivotStructure = { before, after: null };
@@ -9812,6 +9865,7 @@ function shiftWorksheet(axis, index, count) {
     shiftPivotCaches(pivotLayouts, pivotWritten, { axis, index, count }, targetSi, beforeSheet, wb.sheets[targetSi]);
     // 다른 시트의 원본 범위도 바뀔 수 있다. 출력 좌표는 그대로 두고 새 정의에 연결한다.
     for (let i = 0; i < before.length; i++) if (i !== targetSi) restorePivotCaches(pivotLayouts, pivotWritten, i, before[i], wb.sheets[i]);
+    afterShift?.(history);
     history.pivotStructure.after = snapshotPivotRendering();
   }, history);
 }
@@ -19649,6 +19703,7 @@ const MENUS = {
   tableStyles: (a) => tableStylesMenu(a),
   cellStyles: (a) => cellStylesMenu(a),
   insert: () => [
+    ...(copiedRowsReady() ? [{ label: '복사한 셀 삽입', icon: 'rowInsert', action: () => run('insertCopiedRows'), disabled: contextCommandDisabled('insertCopiedRows') }] : []),
     { label: '셀 삽입(I)...', icon: 'rowInsert', action: () => shiftCellsDialog(true) },
     { label: '시트 행 삽입', icon: 'rowInsert', action: () => run('insertRows') },
     { label: '시트 열 삽입', icon: 'colInsert', action: () => run('insertCols') },
@@ -20040,6 +20095,7 @@ function showContextMenu(pos, hitKind = 'cell') {
     {label:'붙여넣기 옵션(P)',accessKey:'p',icon:'paste',submenu:pasteItems},item('선택하여 붙여넣기(S)...','pasteSpecial','s',{key:'Ctrl+Alt+V',disabled:!!clip?.cut})];
   items.push(item('선택 영역을 그림으로 저장...','rangeSaveImage',null,{icon:'save'}));
   if(kind==='cell'&&!mobileWork?.active)items.push(item('스마트 조회(L)','contextSmartLookup','l',{icon:'search',disabled:!displayText(active.r,active.c).trim()}));
+  if (kind !== 'col' && copiedRowsReady()) items.push({sep:true}, item('복사한 셀 삽입', 'insertCopiedRows', null, {icon:'rowInsert'}));
   items.push({sep:true},item(kind==='cell'?'삽입(I)...':'삽입(I)',kind==='row'?'insertRows':kind==='col'?'insertCols':'insertMenuKey','i',{icon:kind==='col'?'colInsert':'rowInsert'}),
     item(kind==='cell'?'삭제(D)...':'삭제(D)',kind==='row'?'deleteRows':kind==='col'?'deleteCols':'deleteMenuKey','d',{icon:'delete'}),item('내용 지우기(N)','clearContents','n',{key:'Delete'}),{sep:true});
   if(kind==='row'||kind==='col'){
@@ -20205,6 +20261,7 @@ const COMMANDS = {
   incDecimal: () => changeDecimals(1),
   decDecimal: () => changeDecimals(-1),
 
+  insertCopiedRows: structural(() => insertCopiedRows()),
   insertRows: structural(() => {
     const n = selKind === 'cols' || selKind === 'all' ? 1 : Math.min(sel.r2 - sel.r1 + 1, 100000);
     if (!rowTailAllowed(n)) return;
@@ -20227,7 +20284,8 @@ const COMMANDS = {
     selectCell(active.r, c1);
   }),
   insertMenuKey: () => {
-    if (selKind === 'rows') run('insertRows');
+    if (copiedRowsReady()) run('insertCopiedRows');
+    else if (selKind === 'rows') run('insertRows');
     else if (selKind === 'cols') run('insertCols');
     else shiftCellsDialog(true);
   },
@@ -20571,6 +20629,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['복사한 행 삽입', ['여러 행을 Ctrl+C로 복사한 뒤 대상 행 우클릭 → 복사한 셀 삽입으로 같은 개수의 행을 넣습니다. 마지막 빈 행과 행 높이도 보존하며, 기존 행·피벗·그림을 아래로 옮깁니다.', 'Ctrl+V는 덮어쓰기를 유지합니다. 복사한 행 삽입을 F4로 반복하고 Undo/Redo로 수식·개체·행 선택까지 복구합니다.']],
   ['행 삽입 속도와 F4 반복', ['행·열 삽입 시 전체 원본을 다시 훑는 처리를 줄이고 화면 갱신을 한 번으로 합쳤습니다.', '편집하지 않는 셀·리본·격자에서 F4로 마지막 삽입을 반복합니다. 입력기가 키 이름을 바꾸어 전달해도 물리 F4를 인식하며, 글자 입력 중에는 편집 동작을 유지합니다.']],
   ['행 삽입과 피벗·그림 이동', ['행·열 삽입 시 피벗 범위와 필터 단추를 함께 옮겨 새로 고침 후에도 그림과 표의 위치를 유지합니다. 그림은 Excel의 셀 이동·크기 설정을 따릅니다.', '짧은 행의 가운데를 쉽게 선택하고, 선택 행을 유지하며 삽입을 반복할 수 있습니다. 리본에 초점이 있어도 F4 반복이 작동하며 피벗 겹침 안내는 8초간 표시합니다.']],
   ['피벗 필드 창의 같은 영역 폭', ['필터·열·행·값 영역을 같은 폭으로 표시하고, 긴 필드 이름은 말줄임으로 표시해 오른쪽 메뉴와 값 설정 버튼이 잘리지 않도록 했습니다.']],
@@ -20846,11 +20905,14 @@ function run(cmd, arg, { keepMenu = false } = {}) {
 }
 
 function restoreMeta(m, side) {
+  const copied = m.clipboardStructure;
+  if (copied && (clip === copied.before || clip === copied.after)) clip = copied[side];
   const snapshots = m.pivotStructure?.[side];
   if (snapshots) for (let i = 0; i < snapshots.length && i < wb.sheets.length; i++) restorePivotCaches(pivotLayouts, pivotWritten, i, snapshots[i], wb.sheets[i]);
   if (m.si !== si && m.si < wb.sheets.length) switchSheet(m.si);
   gv.layout();
-  let range = m.sel, kind = m.selKind ?? 'cells', point = m.active;
+  const selected = side === 'after' ? m.selectionAfter ?? m : m;
+  let range = selected.sel, kind = selected.selKind ?? 'cells', point = selected.active;
   const focus = m.pivotFocus;
   const target = focus && focus.si === si && focus.si === m.si
     ? pivotDefs().find(e => e.prop === focus.prop && e.index === focus.index && (e.def.name ?? '') === focus.name) : null;
