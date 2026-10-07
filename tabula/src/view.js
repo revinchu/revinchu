@@ -1,5 +1,5 @@
 import { chartTextFontNames } from './chart-text-format.js';
-import { mountSlicerWindow } from './slicer-window.js';
+import { mountSlicerWindow, slicerStartItem } from './slicer-window.js';
 import { tableCellDisplayStyle } from './table-format.js';
 import { primaryPointerModifier } from './pointer-modifiers.js';
 import { filterButtonVisible } from './filter-display.js';
@@ -185,7 +185,7 @@ export function fontMissing(name) {
 
 /** 열이 좁을 때: 일반 서식은 소수 자릿수를 줄이거나 지수로, 그 밖에는 ### (엑셀과 동일) */
 function fitNumber(v, maxW, style) {
-  const general = (!style.numFmt || style.numFmt === 'general') && style.decimals === undefined;
+  const general = (!style.numFmt || style.numFmt === 'general') && style.decimals == null;
   if (general) {
     const abs = Math.abs(v);
     if (abs >= 1e-4 && abs < 1e11 && !Number.isInteger(v)) {
@@ -1337,6 +1337,7 @@ export class GridView {
     // 빈 시트나 아직 렌더 창이 없는 전환에서도 이전 통합 문서 참조를 해제한다.
     const appearance = `${THEME.key}|${BASE_FONT.name}|${BASE_FONT.size}|${fontMetricsEpoch}|${this.z}|${globalThis.devicePixelRatio || 1}|${!!st.readonly}|${!!st.viewOnly}`;
     const previous = this._objectRenderState;
+    if (previous?.wb !== wb) this._slicerScrollBookEpoch = (this._slicerScrollBookEpoch ?? 0) + 1;
     if (!this._objectRenderCache || previous?.wb !== wb || previous.si !== si || previous.sheet !== sheet || previous.version !== wb.version || previous.appearance !== appearance) {
       this._objectRenderCache = new Map();
       this._slicerVirtualModels = new Map();
@@ -1345,7 +1346,7 @@ export class GridView {
     const images = sheet.images ?? [];
     const shapes = st.shapePreview ? [...(sheet.shapes ?? []).filter((o) => o.id !== st.shapePreview.id), st.shapePreview] : sheet.shapes ?? [];
     const slicers = sheet.slicers ?? [];
-    if (!sheet.charts.length && !images.length && !shapes.length && !slicers.length && !sheet.noteVisibility) { p.objects.replaceChildren(); p.objHtml = null; return; }
+    if (!sheet.charts.length && !images.length && !shapes.length && !slicers.length && !sheet.noteVisibility) { p.objects.replaceChildren(); p.objHtml = null; p.slicerScrollBookEpoch = this._slicerScrollBookEpoch; return; }
     if (!p.win) return;
     // 가시 화면보다 넓은 셀 렌더 창을 사용한다. 그 안의 작은 스크롤에서는
     // renderPane가 재실행되지 않으므로 화면만 기준으로 버리면 개체가 늦게 나타난다.
@@ -1421,6 +1422,8 @@ export class GridView {
       }
     }
     // 바뀐 개체만 다시 만듦 (슬라이서 · 차트가 많아도 클릭마다 전부 다시 그리지 않게)
+    const keepSlicerScroll = p.slicerScrollBookEpoch === this._slicerScrollBookEpoch;
+    if (!keepSlicerScroll) p.objHtml = null;
     p.objHtml ??= new Map();
     const next = new Map();
     const nodes = html.map((h) => {
@@ -1453,16 +1456,26 @@ export class GridView {
     if (cur.length !== nodes.length || nodes.some((n, i) => cur[i] !== n)) {
       // 다시 만든 슬라이서의 항목 목록 스크롤 위치 유지
       const keep = new Map();
-      for (const l of p.objects.querySelectorAll('.sl-items')) if (l.scrollTop || l.scrollLeft) keep.set(l.closest('.obj')?.dataset.id, [l.scrollTop, l.scrollLeft]);
+      // 맨 위(0)도 사용자 위치입니다. 새 통합 문서는 이전 DOM의 위치를 받지 않습니다.
+      if (keepSlicerScroll) for (const l of p.objects.querySelectorAll('.sl-items')) keep.set(l.closest('.obj')?.dataset.id, [l.scrollTop, l.scrollLeft]);
       p.objects.replaceChildren(...nodes);
       // 스크롤 복원 전에 가상 목록의 전체 높이를 먼저 확보한다.
       for(const node of nodes){const list=node.querySelector?.('.sl-items[data-virtual]'),model=this._slicerVirtualModels?.get(node.dataset.id);if(list&&model)mountSlicerWindow(list,model);}
       fitSlicerText(p.objects); p.fontMetricsEpoch = fontMetricsEpoch;
+      for (const node of nodes) {
+        const list = node.querySelector?.('.sl-items:not([data-virtual])');
+        if (!list || keep.has(node.dataset.id)) continue;
+        const buttons = list.querySelectorAll('.sl-item'), index = slicerStartItem(list.dataset.startItem, buttons.length);
+        const columns = Math.max(1, Number(list.dataset.columns) || 1), row = Math.floor(index / columns);
+        const target = buttons[row * columns];
+        if (target) list.scrollTop = target.offsetTop - buttons[0].offsetTop;
+      }
       for (const [id, [t, l]] of keep) {
         const list = [...p.objects.querySelectorAll('.obj')].find((o) => o.dataset.id === id)?.querySelector('.sl-items');
         if (list) { list.scrollTop = t; list.scrollLeft = l; }
       }
     }
+    p.slicerScrollBookEpoch = this._slicerScrollBookEpoch;
     if (p.fontMetricsEpoch !== fontMetricsEpoch) { fitSlicerText(p.objects); p.fontMetricsEpoch = fontMetricsEpoch; }
     for (const node of nodes) {
       const list=node.querySelector?.('.sl-items[data-virtual]'), model=this._slicerVirtualModels?.get(node.dataset.id);
@@ -1497,7 +1510,7 @@ export class GridView {
     if (sl.timeline) return this.timelineHtml(sl);
     const m = this.host.slicerModel?.(sl) ?? { items: [], filtered: false };
     const virtual = !m.broken && m.items.length > 500;
-    if(virtual)(this._slicerVirtualModels ??= new Map()).set(sl.id,{items:m.items,columns:Math.max(1,sl.columns??1),height:sl.buttonHeight??24,gap:Number.isFinite(sl.gap)?sl.gap:3,width:sl.buttonWidth,viewport:Math.max(1,sl.h-(sl.showHeader===false?0:26)),onRender:fitSlicerText});
+    if(virtual)(this._slicerVirtualModels ??= new Map()).set(sl.id,{items:m.items,columns:Math.max(1,sl.columns??1),height:sl.buttonHeight??24,gap:Number.isFinite(sl.gap)?sl.gap:3,width:sl.buttonWidth,viewport:Math.max(1,sl.h-(sl.showHeader===false?0:26)),startItem:sl.startItem,onRender:fitSlicerText});
     const items = m.broken
       ? `<div class="sl-broken">${esc(m.broken)}</div>`
       : virtual ? '' : m.items.map((it) => `<button type="button" class="sl-item${it.selected ? ' on' : ''}${it.hasData ? '' : ' nodata'}" data-k="${esc(it.key)}" title="${esc(it.text)}">${esc(it.text)}</button>`).join('');
@@ -1506,7 +1519,7 @@ export class GridView {
       + `<button type="button" class="sl-clear${m.filtered ? '' : ' off'}" title="필터 지우기 (Alt+C)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1.5 2h11l-4.2 5v5l-2.6 1.5V7z"/><path d="M10.5 10l4 4M14.5 10l-4 4" stroke="#d13438"/></svg></button></div>`;
     const gap = Number.isFinite(sl.gap) ? `;gap:${sl.gap}px` : '';
     const btnW = sl.buttonWidth ? `${sl.buttonWidth}px` : 'minmax(0, 1fr)';
-    return `${head}<div class="sl-items"${virtual ? ' data-virtual="true"' : ''} style="grid-template-columns:repeat(${Math.max(1, sl.columns ?? 1)}, ${btnW})${gap}">${items}</div>`;
+    return `${head}<div class="sl-items" data-start-item="${slicerStartItem(sl.startItem)}" data-columns="${Math.max(1, sl.columns ?? 1)}"${virtual ? ' data-virtual="true"' : ''} style="grid-template-columns:repeat(${Math.max(1, sl.columns ?? 1)}, ${btnW})${gap}">${items}</div>`;
   }
 
   /** 피벗 차트 필드 단추 (엑셀처럼 차트 위에서 바로 거르기) */

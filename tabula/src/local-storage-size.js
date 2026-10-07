@@ -21,6 +21,7 @@ function snapshotSize(rows) {
     if (size <= PAYLOAD_LIMIT) for (const col of rows.columns || []) {
       // num/str은 load 시 정규화된 typed array다. 원소를 JSON 객체로 복사하지 않는다.
       if (add((col.num?.byteLength || 0) * 4 + (col.str?.byteLength || 0) * 4)) break;
+      if (col.tail && add(scalarSize(col.tail.value) + 32)) break;
       for (const value of col.dict || []) if (add(scalarSize(value) + 1)) break;
       if (size > PAYLOAD_LIMIT) break;
     }

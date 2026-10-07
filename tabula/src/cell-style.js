@@ -60,7 +60,7 @@ export function importCellStyleList(input) {
     if (!validCellStyleName(name) || /^(표준|normal)$/.test(key) || item.builtinId === 0 || seen.has(key)) continue;
     const style = {};
     for (const [, , keys] of CELL_STYLE_PARTS) for (const prop of keys) if (prop !== 'queryFormat' && item.style?.[prop] !== undefined && item.style[prop] !== null) style[prop] = structuredClone(item.style[prop]);
-    out.push({ name, style, include: cellStyleIncludes(item), ...(Number.isInteger(item.builtinId) ? { builtinId: item.builtinId } : {}), ...(item.hidden ? { hidden: true } : {}) });
+    out.push({ name, style, include: cellStyleIncludes(item), ...(Number.isInteger(item.builtinId) ? { builtinId: item.builtinId } : {}), ...(typeof item.customBuiltin === 'boolean' ? { customBuiltin: item.customBuiltin } : {}), ...(item.hidden ? { hidden: true } : {}) });
     seen.add(key);
   }
   return out;

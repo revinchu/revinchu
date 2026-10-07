@@ -1,4 +1,5 @@
 import { isPivotSnapshot, cubeFromPivotSnapshot } from './pivot-cache-data.js';
+import { importedPivotSourceReference, pivotSourceReferenceCurrent, pivotSourceBindingCurrent } from './pivot-source-reference.js';
 // 피벗 테이블 계산 (DOM 없음)
 // 정의(def): { name, source, range | table, rows: [필드 이름], cols: [필드 이름], values: [{ field, agg, name, showAs, numFmt }],
 //              pages: [필드 이름], filters: { 필드 이름: [보이는 항목 글자] }, layout: 'compact' | 'outline' | 'tabular',
@@ -633,26 +634,39 @@ export function normalizeDef(def, header) {
  * 피벗 원본 → { rows (머리글 포함 값), sheet, ref: {r1,c1,r2,c2} | null, table: 표 이름 | null }
  * 표 이름이면 지금의 표 범위(누적된 데이터 포함), 아니면 고정 범위
  */
-export function pivotSourceData(wb, def, { preserveSnapshot = false } = {}) {
+export function pivotSourceData(wb, def, { preserveSnapshot = false, allowCacheMetadata = false } = {}) {
   let si;
   let ref;
   let table = null;
   let names = null;
-  if (def.table) {
+  const reference = importedPivotSourceReference(def);
+  const referenceCurrent = reference && pivotSourceReferenceCurrent(def);
+  const external = pivotSourceBindingCurrent(def) && !!reference.external;
+  if (external) {
+    si = undefined; ref = null;
+  } else if (def.table) {
     const f = findTable(wb, def.table);
-    if (!f) return null;
-    const t = f.t;
-    si = f.si;
-    ref = { r1: t.header ? t.r1 : dataTop(t), c1: t.c1, r2: dataBottom(t), c2: t.c2 };
-    table = t.name;
-    if (!t.header) names = columnNames(wb, f.si, t);
+    if (!f) {
+      if (!referenceCurrent) return null;
+      si = undefined; ref = null;
+    } else {
+      const t = f.t;
+      si = f.si;
+      ref = { r1: t.header ? t.r1 : dataTop(t), c1: t.c1, r2: dataBottom(t), c2: t.c2 };
+      table = t.name;
+      if (!t.header) names = columnNames(wb, f.si, t);
+    }
   } else {
     si = wb.sheetIndexByName(def.source);
-    if (si < 0 || !def.range) return null;
-    ref = def.range;
-    // 열 전체(A1:T1048576) 원본: 사용 범위 + 빈 행 하나까지만 읽음 (엑셀의 '(비어 있음)' 항목은 그대로)
-    const used = wb.usedRange?.(si);
-    if (used && ref.r2 > used.rows) ref = { ...ref, r2: Math.max(ref.r1 + 1, used.rows) };
+    if (si < 0 || !def.range) {
+      if (!referenceCurrent) return null;
+      si = undefined; ref = null;
+    } else {
+      ref = def.range;
+      // 열 전체(A1:T1048576) 원본: 사용 범위 + 빈 행 하나까지만 읽음 (엑셀의 '(비어 있음)' 항목은 그대로)
+      const used = wb.usedRange?.(si);
+      if (used && ref.r2 > used.rows) ref = { ...ref, r2: Math.max(ref.r1 + 1, used.rows) };
+    }
   }
   // 파일에 저장된 피벗 캐시(엑셀이 마지막으로 새로 고친 원본): 원본 시트가 그대로인 동안은 엑셀과 같은 결과가 되게 이것으로 계산
   const snap = def.snapshotId && wb.pivotSnapshots?.get(def.snapshotId);
@@ -662,10 +676,25 @@ export function pivotSourceData(wb, def, { preserveSnapshot = false } = {}) {
     const checking = preserveSnapshot ? { ...snap } : snap;
     const valid = wb.pivotSnapshotCurrent ? wb.pivotSnapshotCurrent(checking, def)
       : (checking.ver ??= wb.sourceVersion?.(si) ?? 0) === (wb.sourceVersion?.(si) ?? 0);
-    if (valid) return isPivotSnapshot(snap.rows)
-      ? sourceOf(cubeFromPivotSnapshot(snap.rows), si, ref, table, null, wb.date1904)
-      : sourceOf(cubeFromRows(snap.rows), si, ref, table, snap.rows, wb.date1904);
-    if (!preserveSnapshot) wb.pivotSnapshots.delete(def.snapshotId); // 원본을 고침 → 이제부터 원본에서 계산 (자동 새로 고침)
+    if (valid) {
+      const src = isPivotSnapshot(snap.rows)
+        ? sourceOf(cubeFromPivotSnapshot(snap.rows), si, ref, table, null, wb.date1904)
+        : sourceOf(cubeFromRows(snap.rows), si, ref, table, snap.rows, wb.date1904);
+      if (!ref) Object.assign(src, { cacheOnly: true, sourceReference: reference });
+      return src;
+    }
+    // 가져온 연결의 변경은 이 피벗에만 적용합니다. 다른 피벗이 공유하는 원본 캐시는 유지합니다.
+    if (!preserveSnapshot && !reference) wb.pivotSnapshots.delete(def.snapshotId); // 로컬 원본 편집은 기존 캐시 무효화 규칙 유지
+  }
+  if (!ref) {
+    if (allowCacheMetadata && referenceCurrent && def.saveData === false) {
+      const fields = wb.pivotCacheItems?.[reference.expectedCacheItemsId]?.fields;
+      if (fields?.length) {
+        const cube = cubeFromRows([fields.map((field, i) => field.name || `열${i + 1}`)]);
+        return Object.assign(sourceOf(cube, undefined, null, null, null, wb.date1904), { cacheOnly: true, metadataOnly: true, sourceReference: reference });
+      }
+    }
+    return null;
   }
   // 데이터가 열 블록에 있으면 값을 복사하지 않고 블록의 형식화 배열을 그대로 씀 (천만 행도 즉시)
   const bc = blockCube(wb, si, ref, names);

@@ -1,5 +1,6 @@
 import { assertOrdinarySortRange } from './pivot-sort-scope.js';
 import { shiftStoredCells, moveStoredCells } from './cell-transforms.js';
+import { cloneStoredCells } from './clone-stored-cells.js';
 import { arrayCache, arrayCacheValue, spillOffsets } from './array-cache.js';
 import { blockJsonParts } from './block-storage.js';
 import { jsonPartsBlob } from './snapshot-blob.js';
@@ -7,6 +8,7 @@ import { jsonValueParts } from './json-parts.js';
 import { serializeCells, cellJsonParts, storedCellEntries, storedCellChunks } from './cell-storage.js';
 import { pivotSnapshotJsonParts } from './pivot-snapshot-storage.js';
 import { restorePivotSnapshot } from './pivot-cache-data.js';
+import { importedPivotSourceReference, pivotSourceReferenceCurrent, pivotSourceBindingCurrent } from './pivot-source-reference.js';
 import { filterWithButtons, filterButtonsVisible } from './filter-display.js';
 import { clearedTableCellStyle, explicitTableStylePatch } from './table-format.js';
 // 통합 문서 모델: 시트 · 셀 · 재계산 · 실행 취소 · 행/열 구조 변경
@@ -39,20 +41,21 @@ const unkey = (k) => { const i = k.indexOf(','); return [+k.slice(0, i), +k.slic
 // 같은 서식 객체를 여러 셀이 공유할 때(파일 가져오기 등) 한 번만 정리. 셀 서식은 바꿀 때 항상 새 객체로 교체하므로 공유해도 안전
 const cleanMemo = new WeakMap();
 function explicitNumberStyle(style) {
-  return style?.numFmt != null || style?.decimals != null || style?.code != null;
+  return style?.numFmt != null || style?.decimals !== undefined || style?.code != null;
 }
+// decimals:null은 부모 숫자 서식을 막는 명시 General이며 다른 null은 제거합니다.
 function cleanStyle(style) {
   if (!style) return undefined;
   const hit = cleanMemo.get(style);
   if (hit !== undefined) return hit || undefined;
   let any = false;
   let holes = false;
-  for (const k in style) { any = true; const v = style[k]; if (v === undefined || v === null) { holes = true; break; } }
+  for (const k in style) { any = true; const v = style[k]; if (v === undefined || v === null && k !== 'decimals') { holes = true; break; } }
   if (!any) return undefined;
   // 빈 값이 없으면 그대로 씀 (피벗을 그릴 때 백만 칸의 서식을 복사하지 않게)
   if (!holes) return style;
   const out = {};
-  for (const [k, v] of Object.entries(style)) if (v !== undefined && v !== null) out[k] = v;
+  for (const [k, v] of Object.entries(style)) if (v !== undefined && (v !== null || k === 'decimals')) out[k] = v;
   const res = Object.keys(out).length ? out : undefined;
   cleanMemo.set(style, res ?? false);
   if (res) cleanMemo.set(res, res);
@@ -412,12 +415,22 @@ function sameArrayCache(a, b) {
 function sameCell(a, b) {
   if (!a || !b) return !a && !b;
   if (a.raw !== b.raw || (a.comment || null) !== (b.comment || null) || (a.link || null) !== (b.link || null) || !!a.fx !== !!b.fx || a.inputType !== b.inputType) return false;
-  if (!sameStyle(a.style, b.style) || !sameArrayCache(a, b)) return false;
+  if (!sameStyle(a.style, b.style)) return false;
   if ((a.image || b.image) && JSON.stringify(a.image ?? null) !== JSON.stringify(b.image ?? null)) return false;
   if ((a.phonetic || b.phonetic) && JSON.stringify(a.phonetic ?? null) !== JSON.stringify(b.phonetic ?? null)) return false;
-  const ca = savedCached(a);
-  const cb = savedCached(b);
-  return ca === cb || JSON.stringify(ca) === JSON.stringify(cb);
+  const ca = a.formula ? a.cached : undefined, cb = b.formula ? b.cached : undefined;
+  const aa = a.formula ? a.cachedArray : undefined, ab = b.formula ? b.cachedArray : undefined;
+  // Only retained caches have a stored valid/stale distinction; ordinary dirty
+  // calculation state without a retained result is not part of cellData.
+  if ((ca !== undefined || cb !== undefined || aa || ab) && !!a.dirty !== !!b.dirty) return false;
+  if (aa !== ab) {
+    if (!aa || !ab || aa.h !== ab.h || aa.w !== ab.w || aa.values.length !== ab.values.length) return false;
+    for (let i = 0; i < aa.values.length; i++) {
+      const x = aa.values[i], y = ab.values[i];
+      if (!Object.is(x, y) && !(x !== null && y !== null && typeof x === 'object' && typeof y === 'object' && JSON.stringify(x) === JSON.stringify(y))) return false;
+    }
+  }
+  return Object.is(ca, cb) || (ca !== null && cb !== null && typeof ca === 'object' && typeof cb === 'object' && JSON.stringify(ca) === JSON.stringify(cb));
 }
 
 /** 두 번째 인수로 서식을 교체할 때는 raw의 원래 해석도 보존한다 (null = 서식 지우기). */
@@ -472,10 +485,18 @@ function newSheet(name) {
 /** 저장 형태의 시트 하나 → 시트 객체 (셀은 객체 또는 Map) */
 function sheetFromData(s, date1904 = false) {
   const sheet = newSheet(s.name);
-  const entries = s.cells instanceof Map || s.cells instanceof CellMap ? s.cells : Object.entries(s.cells || {});
-  for (const [k, d] of entries) {
-    const cell = makeCell(d, k, date1904);
-    if (cell) { sheet.cells.set(k, cell); if (cell.cachedArray) sheet._hasCachedArrays = true; }
+  if (s.cells instanceof CellMap) {
+    sheet.cells = cloneStoredCells(s.cells, (data, r, c) => {
+      const cell = makeCellRC(data, r, c, date1904);
+      if (cell?.cachedArray) sheet._hasCachedArrays = true;
+      return cell;
+    }, data => makeCellRC(data, undefined, undefined, date1904));
+  } else {
+    const entries = s.cells instanceof Map ? s.cells : Object.entries(s.cells || {});
+    for (const [k, d] of entries) {
+      const cell = makeCell(d, k, date1904);
+      if (cell) { sheet.cells.set(k, cell); if (cell.cachedArray) sheet._hasCachedArrays = true; }
+    }
   }
   for (const [r,c,count,data] of s.cellRuns ?? []) {
     const cell=makeCellRC(data,r,c,date1904);
@@ -1656,7 +1677,7 @@ export class Workbook {
         if (e.t === 'all') e.after = this.serialize();
         else if (e.t === 'prop') e.after = structuredClone(this.sheets[e.si]?.[e.prop]);
         else if (e.t === 'list') e.after = { sheets: [...this.sheets], names: this.copyNames() };
-        else if (e.t === 'sheet') e.after = this.serializeSheet(e.si);
+        else if (e.t === 'sheet') e.after = this.memorySheetSnapshot(e.si);
         else if (e.t === 'names') e.after = this.copyNames();
         else if (e.t === 'cellStyles') e.after = structuredClone(this.cellStyles ?? null);
         else if (e.t === 'bookProp') e.after = structuredClone(this[e.prop] ?? null);
@@ -1740,11 +1761,20 @@ export class Workbook {
     if (!this.tx) return;
     const prior = this.tx.entries.find(e => e.t === 'sheet' && e.si === si);
     if (prior) { if (!calcNeutral) prior.calcNeutral = false; }
-    else this.tx.entries.push({ t: 'sheet', si, calcNeutral, before: this.serializeSheet(si) });
+    else this.tx.entries.push({ t: 'sheet', si, calcNeutral, before: this.memorySheetSnapshot(si) });
   }
 
   snapshotNames() {
     if (this.tx && !this.tx.entries.some((e) => e.t === 'names')) this.tx.entries.push({ t: 'names', before: this.copyNames() });
+  }
+
+  /** 실행 취소는 압축된 빈 셀 저장소를 유지하며 일반 셀의 계산 상태만 저장한다. */
+  memorySheetSnapshot(si) {
+    const sheet = this.sheets[si], out = this.sheetMeta(si);
+    out.cells = cloneStoredCells(sheet.cells, cell => cellData(cell));
+    out._sid = sheet._sid;
+    if (sheet.blocks.length) out.blocks = sheet.blocks.map(blockClone);
+    return out;
   }
 
   serializeSheet(si) {
@@ -1909,7 +1939,8 @@ export class Workbook {
     // 서식·메모·링크 변경은 수식 자체와 파일 계산값을 다시 계산하지 않습니다.
     const ca = cur ? savedCached(cur) : undefined, cb = cell ? savedCached(cell) : undefined;
     const neutralFormula = cur?.formula && cell?.formula && cur.raw === cell.raw && !cur.image && !cell.image
-      && (ca === cb || JSON.stringify(ca) === JSON.stringify(cb)) && sameArrayCache(cur, cell);
+      && (ca === cb || JSON.stringify(ca) === JSON.stringify(cb)) && sameArrayCache(cur, cell)
+      && (!(cur.cached !== undefined || cell.cached !== undefined || cur.cachedArray || cell.cachedArray) || !!cur.dirty === !!cell.dirty);
     const neutralValue = cur && cell && !cur.formula && !cell.formula && !cur.image && !cell.image && sameValue(cur.v, cell.v);
     const phoneticChanged = (cur?.phonetic || cell?.phonetic) && phoneticText(cur?.v, cur?.phonetic) !== phoneticText(cell?.v, cell?.phonetic);
     const neutralEmpty = (!cur || cur.raw === '') && (!cell || cell.raw === '') && cur?.v == null && cell?.v == null
@@ -2600,7 +2631,7 @@ export class Workbook {
             if (changedButtons) next.buttons = buttons;
           }
         }
-        if (!next.range || String(next.source ?? '').toLowerCase() !== target.name.toLowerCase()) return next;
+        if (!next.range || pivotSourceBindingCurrent(next) && importedPivotSourceReference(next).external || String(next.source ?? '').toLowerCase() !== target.name.toLowerCase()) return next;
         const rg = adjustRange(next.range, axis, index, count);
         return rg ? { ...next, range: rg } : next;
       };
@@ -2822,7 +2853,7 @@ export class Workbook {
     this.sheets[si].name = newName;
     this.record({ t: 'rename', si, before: old, after: newName });
     this.sheets.forEach((sh, i) => {
-      const ren = (d) => (d && String(d.source ?? '').toLowerCase() === old.toLowerCase() ? { ...d, source: newName } : d);
+      const ren = (d) => (d && !(pivotSourceBindingCurrent(d) && importedPivotSourceReference(d).external) && String(d.source ?? '').toLowerCase() === old.toLowerCase() ? { ...d, source: newName } : d);
       const p = ren(sh.pivot);
       const x = (sh.pivotsExtra ?? []).map(ren);
       if (p !== sh.pivot || x.some((d, j) => d !== sh.pivotsExtra[j])) { this.propSnap(i, 'pivot'); this.propSnap(i, 'pivotsExtra'); }
@@ -3080,6 +3111,7 @@ export class Workbook {
   /** 새로 고치지 않은 피벗은 원본 셀과 값이 달라도 파일의 캐시를 유지한다.
    * 원본을 편집한 뒤 아직 피벗을 조회하지 않았더라도 오래된 캐시는 저장하지 않는다. */
   pivotSnapshotSource(def) {
+    if (pivotSourceBindingCurrent(def) && importedPivotSourceReference(def).external) return null;
     const found = def.table ? findTable(this, def.table) : null;
     const si = def.table ? found?.si : this.sheetIndexByName(def.source);
     if (si === undefined || si < 0) return null;
@@ -3099,6 +3131,12 @@ export class Workbook {
   }
 
   pivotSnapshotCurrent(snap, def) {
+    const reference = importedPivotSourceReference(def);
+    if (reference) {
+      if (!pivotSourceReferenceCurrent(def)) return false;
+      // 외부 원본은 동명의 로컬 시트와 구별하며, 없던 로컬 원본이 생기면 실제 원본을 사용합니다.
+      return !!reference.external || !this.pivotSnapshotSource(def);
+    }
     const source=this.pivotSnapshotSource(def);
     if (!source) return false;
     if (snap.sourceSheet && (snap.sourceSheet!==source.sheet || snap.sourceKey!==source.key)) return false;
@@ -3135,14 +3173,18 @@ export class Workbook {
   snapshotData() {
     const out = {};
     for (const [id, snap] of this.pivotSnapshots ?? []) {
-      let stale = false;
-      if (snap.ver !== undefined) for (const sheet of this.sheets) {
+      let stale = false, staleImported = false, validImported = false;
+      for (const sheet of this.sheets) {
         for (const def of [sheet.pivot, ...(sheet.pivotsExtra ?? [])]) {
           if (def?.snapshotId !== id) continue;
-          if (!this.pivotSnapshotCurrent(snap, def)) stale = true;
+          if (importedPivotSourceReference(def)) {
+            if (this.pivotSnapshotCurrent(snap, def)) validImported = true;
+            else staleImported = true;
+          } else if (snap.ver !== undefined && !this.pivotSnapshotCurrent(snap, def)) stale = true;
         }
       }
-      if (!stale) out[id] = snap.rows;
+      // 한 피벗의 연결을 바꿔도 같은 가져온 캐시를 사용하는 다른 피벗의 저장본은 남깁니다.
+      if (!stale && (!staleImported || validImported)) out[id] = snap.rows;
     }
     return out;
   }

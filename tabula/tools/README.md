@@ -753,3 +753,45 @@ row-limit-storage.mjs는 로컬 Chromium에서 CSV 확장 행 가져오기 및 �
 `node tools/browser-structure-shortcuts.mjs`는 합성 문서에서 실제 머리글의 한 개·여러 행/열 선택 후 Ctrl+Shift+Equal/Minus 및 숫자 키패드 +/-로 삽입·삭제하고, 수식·서식·높이/너비·단일 Undo/Redo와 재선택 없는 F4 반복을 검사한다. 한 개·세 개 행/열은 Ctrl+Shift+Minus를 연속 세 번 누른 뒤 F4로 한 번 더 삭제하고, 매번 전체 행/열 선택 종류·범위·활성 셀, 정확한 삭제 수와 수식 보정, 네 개의 독립 이력 및 전체 Undo/Redo의 선택 복원을 확인한다. 선택 아래·오른쪽의 5행/5열 병합이 삭제 후 3행/3열 선택으로 들어오는 경계에서는 Undo/Redo가 병합 범위로 선택을 확장하지 않는지, 이어지는 단축키/F4가 정확히 세 줄만 삭제하는지도 확인한다. 셀 선택은 삽입/삭제 대화상자의 취소와 방향별 밀기, 복사한 전체 10행은 삽입과 F4 반복을 확인한다. Ctrl 단독 Equal/Minus·숫자 키패드 +/- 및 논리 plus/Meta minus는 앱의 defaultPrevented=false, 모델·이력·선택·격자 배율 불변을 요구한다. Playwright 키 이벤트로 실제 브라우저나 OS 배율이 변했다는 주장은 하지 않는다. 리본·빠른 실행 버튼 초점 전달, 보호 거절과 F4 재검사, 편집기·수식/검색 입력·대화상자·메뉴·IME·선택 도형의 격리도 포함한다.
 
 `WIXEL_URL`, `WIXEL_BROWSER=chromium|firefox|webkit`, `WIXEL_STRUCTURE_OUT`(D: 출력), `WIXEL_STRUCTURE_FILTER`(사례명 부분 문자열, 여러 조건은 `|`)를 지정한다. `WIXEL_STRUCTURE_BASELINE=05a6acf`는 로컬 소스 서버의 app/keyboard-shortcuts를 Git 기준 메모리 응답으로 제공해 기존 Ctrl+- 삭제와 Ctrl+Shift+- 테두리 제거 충돌을 기록한다. `WIXEL_STRUCTURE_BASELINE=8ceab535`와 `WIXEL_STRUCTURE_FILTER=consecutive-CtrlShift-delete-selection`을 함께 지정하면 첫 삭제 후 단일 셀로 바뀌어 두 번째 키가 삭제 대화상자를 여는 결함을 비교한다. 이 검사의 기준/소스/컴파일/공개 결과는 `WIXEL_STRUCTURE_OUT=.local/structure-delete-selection/<단계>`처럼 별도 D: 폴더에 저장한다. 공개 합성 검사는 `WIXEL_ALLOWED_TEST_URL`을 `WIXEL_URL`과 정확히 같은 값으로 설정해야 한다. API·외부 요청·원격 쓰기를 차단하며 개인 파일과 OS 클립보드는 사용하지 않는다. 복사는 모의 native 이벤트로 전달하고 조합 이벤트는 물리 IME 장치 검증과 구분한다. 기존 `PLAYWRIGHT_MODULE`과 D:의 `PLAYWRIGHT_BROWSERS_PATH`, `TEMP`·`TMP`를 사용한다. JSON은 실제 키 누름·해제의 전달/차단, 선택·초점·편집·Undo·격자 배율 상태를 기록하며 실패 PNG도 D: 출력에 저장한다.
+
+## 대형 XLSX 모델 보존 검사
+
+`large-xlsx-fidelity.mjs`는 로컬 XLSX/XLSM/XLSB를 읽어 전체 논리 값·수식 원문·직접 서식, 피벗 캐시 값·항목, 시트 메타데이터와 그림 배치를 범주별 해시로 기록한다. `--roundtrip`을 지정하면 새 XLSX/XLSM을 저장하고 다시 읽어 보존 여부를 비교한다. 원본과 출력 파일·결과 폴더는 아래처럼 D:에 두며, 매 실행마다 새 출력 경로를 사용한다.
+
+```powershell
+node tools/large-xlsx-fidelity.mjs D:/Codex/Temp/wixel-samples/sample.xlsx --out D:/Codex/Temp/wixel-fidelity/run-01 --roundtrip D:/Codex/Temp/wixel-fidelity/run-01/roundtrip.xlsx --async
+```
+
+기본값은 `--async`다. `--sync`는 비교용 동기 읽기, `--source SRC_DIR`는 검사할 별도 소스 디렉터리, `--max-diffs 8`은 시트별 제한된 차이 진단 수를 지정한다. `--roundtrip` 없이 실행하면 원본 digest만 기록하므로 왕복 보존 합격으로 세지 않는다. 왕복 검사의 성공 기준은 `report.json`의 `pass: true`와 종료 코드 0이다. 코드 1은 비교·보존 실패, 2는 실행 오류 또는 미완료다.
+
+원본 가져오기·저장과 재가져오기는 **각 자식 프로세스가 종료된 뒤 순차 실행**한다. 여러 실제 파일도 한 파일씩 끝내고 다음 파일을 실행하며, 대형 워크북 두 개를 동시에 가져오지 않는다. 원본 덮어쓰기와 기존 저장 대상 재사용을 거절하고, 전후 SHA-256·크기·수정시각, 소스 JS 해시 및 왕복 단계 간 검사 도구 해시를 확인한다. 결과에는 시트명·메타데이터·그림 내용이 포함될 수 있으므로 원본·결과·진단 로그는 Git과 공개 업로드에서 제외한다.
+
+생성된 drawing/table ID와 피벗 캐시 경로는 의미가 같은 참조 순서로 정규화한다. 일반 그룹의 `groupItems` 안에 있는 중첩 자식 ID와 부모·자식 참조도 포함하며, 위치·텍스트·참조 대상의 실제 변화는 계속 차이로 기록한다. 초기 도구는 `groupItems` 재귀를 빠뜨려 같은 그룹도 무작위 내부 ID 때문에 도면 해시가 달라질 수 있었다. 해당 버전의 기존 결과를 덮어쓰거나 통과로 바꾸지 않고, 새 도구로 새 출력 폴더에서 재검사한다. 외부 캐시의 `sourceReference.expectedCacheItemsId`도 이미 등록된 `snapshotId`/`cacheItemsId`의 같은 연결 순서로 정규화한다. 다른 캐시를 가리키거나 실제 원본·외부 관계·범위·binding이 달라지면 계속 차이로 기록한다. `scope.idNormalization`과 단계 간 도구 해시를 함께 확인한다.
+
+이 도구는 Node 모델과 저장 정의를 검사한다. 수식 재계산은 `check.mjs`, 피벗 계산은 `pvcmp.mjs`로 별도 확인한다. 조건부 서식은 정의 보존 범위이며 Excel의 실제 표시·이미지 픽셀·브라우저 Blob 메모리 경로를 검증하지 않는다. **물리 iPad/Safari에서 대형 파일이 열리는지는 미검증**이며 Node 통과를 기기 안정성 합격으로 표현하지 않는다.
+
+## Native Excel 표본과 모델 레이아웃 비교
+
+`--native-targets TARGETS.json`을 대형 파일 검사에 추가하면 이미 가져온 모델 하나에서 지정한 셀의 직접 서식·논리 좌표, 행·열 크기와 그림 배치를 `original/native-model-samples.json`에 저장한다. 왕복 검사는 `reimport/`에도 같은 표본을 기록한다. 이 옵션은 Excel을 실행하지 않는다. 대상 JSON은 시트 index가 0부터, 행 번호가 1부터이며 셀·열 주소는 A1/A 형식이다. `name`으로 시트를 지정할 수도 있고 index와 함께 지정하면 둘의 일치 여부를 확인한다.
+
+```json
+{"sheets":[{"index":0,"cells":["A1","C8"],"rows":[1,8],"columns":["A","C"]}]}
+```
+
+```powershell
+node tools/large-xlsx-fidelity.mjs D:/Codex/Temp/wixel-samples/sample.xlsx --out D:/Codex/Temp/wixel-fidelity/run-02 --native-targets D:/Codex/Temp/wixel-fidelity/targets.json
+powershell -NoProfile -File tools/native-layout-oracle.ps1 -InputPath D:/Codex/Temp/wixel-samples/sample.xlsx -TargetsJson D:/Codex/Temp/wixel-fidelity/targets.json -OutputPath D:/Codex/Temp/wixel-fidelity/native-01.json
+node tools/native-layout-compare.mjs --native D:/Codex/Temp/wixel-fidelity/native-01.json --model D:/Codex/Temp/wixel-fidelity/run-02/original/native-model-samples.json --out D:/Codex/Temp/wixel-fidelity/compare-01.json
+```
+
+위 명령도 하나씩 종료를 기다린다. oracle은 Windows 데스크톱 Excel과 COM이 필요하며, 새 Excel 인스턴스의 PID·시작시각·빈 통합 문서 상태를 확인한 뒤 원본을 읽기 전용으로 연다. 링크 갱신·매크로 실행·자동 계산을 억제하고 새로 고침·저장을 호출하지 않으며, 기존 Excel에는 연결하거나 설정·종료하지 않는다. 전후 원본 해시·크기·수정시각을 검사하고 소유 인스턴스만 정리한다. COM 격리 확인 실패·미지원 파일·XLM 매크로 사전검사 실패는 미완료로 기록한다.
+
+기본 표본 한도는 시트당 셀 64개·행 32개·열 64개·그림 512개다. oracle의 `-MaxCellsPerSheet`, `-MaxRowsPerSheet`, `-MaxColumnsPerSheet`, `-MaxShapesPerSheet`로 늘릴 수 있지만 모델 표본의 기본 한도도 고려해야 한다. 요청이 한도를 초과하면 제외된 표본은 미검증이므로 결과의 제한 플래그도 확인한다. 비교에서 누락·지원되지 않는 매핑 등으로 `unavailable`이 남으면 합격 처리하지 않는다. 비교 종료 코드 0은 지정한 표본의 `mismatches 0`·`unavailable 0`, 1은 차이 또는 미검증 항목, 2는 실행 오류다.
+
+비교는 Excel 포인트를 96dpi CSS 픽셀로 환산하며 기본 좌표 허용 오차는 0.51px다. 열 너비의 문자 단위는 픽셀과 직접 비교하지 않는다. oracle은 DisplayFormat도 기록하지만 모델 비교는 직접 서식과 논리 배치를 대상으로 한다. 표본 통과는 전체 Excel 시각 동등성, 조건부 서식의 최종 화면, 차트·이미지 픽셀이나 물리 iPad 화면의 합격을 뜻하지 않는다.
+
+## 가져온 피벗의 저장 화면 보존 회귀
+
+`node tools/pivot-import-presentation.mjs`는 작은 합성 XLSX를 실제 파일 선택 입력으로 열어 저장된 지난달 상대 날짜 필터 결과와 13개 값 필드의 부분합 캡션을 최초 열기에서 보존하는지 검사한다. 셀 값·직접 서식·병합·열 너비·행 높이·조건부 서식 정의와 실제 글꼴/채우기색, 행·페이지 필터의 Alt+↓와 E 검색, 다중 행 필드 접기/펼치기, 첫 변경의 잔상 제거, Undo/Redo 뒤 다른 필터 적용 및 두 번의 저장·재열기를 확인한다. 1만 행 합성 캐시는 로드된 실제 `computePivot` 함수를 계측하여 최초 열기의 호출 수 0을 요구하고, 사용자 필터·접기는 호출 수가 증가해야 통과한다.
+
+`WIXEL_URL`은 로컬 서버만 허용하며 `WIXEL_BROWSER=chromium|firefox|webkit`, `WIXEL_PIVOT_PRESENTATION_OUT`(D: 폴더), `WIXEL_PIVOT_PRESENTATION_FILTER`(사례명 부분 문자열, 여러 조건은 `|`)를 지정한다. 개인 업무 파일을 사용하지 않고 외부·API·쓰기 요청을 차단한다. 기존 `PLAYWRIGHT_MODULE`과 D:의 `PLAYWRIGHT_BROWSERS_PATH`, `TEMP`·`TMP`를 사용한다. JSON과 PNG는 지정 출력 폴더에 보관하고 브라우저는 종료한다. 합성 브라우저 검사는 Native Excel 표시 동등성이나 물리 iPad의 대형 파일 안정성을 뜻하지 않는다.

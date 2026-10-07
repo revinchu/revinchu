@@ -121,3 +121,10 @@ test('bounded workbook JSON chunks keep legacy byte sequence for plain and compa
   const a=Array.from(w.cellRunChunks(0,211,{shareStyle:true}),JSON.stringify),b=Array.from(w.cellRunChunks(0,211,{shareStyle:true,bounded:true}),JSON.stringify);
   assert.deepEqual(b,a);
 });
+
+test('changing blank styles in short bands compresses without requiring one 128-row style streak',()=>{
+  const cells=new CellMap(),map=new Map(),styles=[getSharedBlankCell({fill:'#112233'}),getSharedBlankCell({fill:'#445566'})];
+  for(let r=0;r<12000;r++){const v=styles[Math.floor(r/24)%2];cells.setRC(r,0,v);map.set(r,v);}
+  const col=cells.col(0);assert.equal(col.plain,null);assert.equal(col.points.size,0);assert.equal(col.runs.length,500);assert.equal(cells.size,12000);assert.deepEqual([...col],[...map]);
+  col.set(51,{raw:'9'});map.set(51,col.get(51));col.delete(71);map.delete(71);assert.deepEqual([...col],[...map]);
+});

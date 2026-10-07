@@ -103,7 +103,7 @@ export class DepGraph {
 
   /** 그래프 만들기 (나눠서: 수식 약 2만 개마다 멈춤 — 화면이 멈추지 않게 백그라운드로 만들 때) */
   *steps() {
-    let n = 0;
+    let n = 0, collected = 0;
     for (let si = 0; si < this.wb.sheets.length; si++) {
       const sheet = this.wb.sheets[si];
       // 값 셀은 건너뛰고 기존 열 순서/행 정렬을 유지해 채움 수식의 묶음을 보존한다.
@@ -112,11 +112,15 @@ export class DepGraph {
         let rows = columns.get(c);
         if (!rows) { rows = []; columns.set(c, rows); }
         rows.push(r);
+        // Collection is work too; keep the registered-formula count unchanged.
+        if (++collected % 20000 === 0) yield;
       }
       for (const [c] of sheet.cells.cols) {
         const rows = columns.get(c);
         if (!rows) continue;
         rows.sort((a, b) => a - b);
+        // Give the caller a budget/cancellation checkpoint before adding rows.
+        yield;
         for (const r of rows) {
           this.add(si, r, c, sheet.cells.getRC(r, c));
           if (++n % 20000 === 0) yield n;

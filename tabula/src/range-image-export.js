@@ -74,7 +74,7 @@ function wrapLines(text, width, style, measure) {
 }
 
 function fitNumber(value, width, style, measure) {
-  if ((!style.numFmt || style.numFmt === 'general') && style.decimals === undefined) {
+  if ((!style.numFmt || style.numFmt === 'general') && style.decimals == null) {
     if (Math.abs(value) >= 1e-4 && Math.abs(value) < 1e11 && !Number.isInteger(value)) for (let d = 9; d >= 0; d--) {
       const text = formatGeneral(Number(value.toFixed(d)));
       if (text !== '0' && text !== '-0' && measure(text, style) <= width) return text;

@@ -116,6 +116,36 @@ try {
   await dialog('스타일 수정').getByRole('button', { name: '취소', exact: true }).click();
   ok('표준 스타일 수정·실행 취소·삭제 금지');
   await page.evaluate(() => {
+    const w = window.tabula.wb(), include = { number: true, alignment: true, font: true, border: true, fill: true, protection: true };
+    w.transact(() => w.setCellStyles([...w.cellStyles,
+      { name: '검사 기본 5', builtinId: 5, style: { color: '#102030' }, include },
+      { name: '검사 기본 6', builtinId: 6, customBuiltin: false, style: { color: '#203040' }, include },
+    ]));
+  });
+  const builtinBeforeOpen = await state();
+  await menu(); await page.keyboard.press('Escape');
+  assert.deepEqual(await state(), builtinBeforeOpen);
+  for (const [name, flag] of [['검사 기본 5', undefined], ['검사 기본 6', false]]) {
+    const beforeCancel = await state();
+    await context(name, '수정...'); await color(dialog('스타일 수정'), '#654321');
+    await dialog('스타일 수정').getByRole('button', { name: '취소', exact: true }).click();
+    assert.deepEqual(await state(), beforeCancel);
+    await context(name, '수정...');
+    await dialog('스타일 수정').getByRole('button', { name: '확인', exact: true }).click();
+    const unchanged = (await state()).styles.find(s => s.name === name);
+    assert.equal(unchanged.customBuiltin, flag);
+    assert.equal(Object.hasOwn(unchanged, 'customBuiltin'), flag !== undefined);
+    await context(name, '수정...'); await color(dialog('스타일 수정'), '#654321');
+    await dialog('스타일 수정').getByRole('button', { name: '확인', exact: true }).click();
+    const changed = (await state()).styles.find(s => s.name === name);
+    assert.equal(changed.customBuiltin, true); assert.equal(changed.style.color.toLowerCase(), '#654321');
+    await page.evaluate(() => window.tabula.run('undo'));
+    assert.equal((await state()).styles.find(s => s.name === name).customBuiltin, flag);
+    await page.evaluate(() => window.tabula.run('redo'));
+    assert.equal((await state()).styles.find(s => s.name === name).customBuiltin, true);
+  }
+  ok('기본 스타일 메뉴·취소·변경 없는 확인은 customBuiltin 보존, 실제 수정·Undo/Redo는 정확한 표시');
+  await page.evaluate(() => {
     const t = window.tabula, w = t.wb();
     w.transact(() => { w.setCellStyles([...w.cellStyles, { name: '잠금 해제 스타일', style: { locked: false, hideFormula: false, color: '#0099aa' } }]); w.setStyle(0, 0, 0, { locked: true, hideFormula: true }); w.setSheetProp(0, 'protect', { on: true, allow: { formatCells: true, selectLocked: true, selectUnlocked: true } }); });
     t.selectCell(0, 0);
@@ -130,6 +160,84 @@ try {
   await page.locator('#cellEditor').focus(); await page.keyboard.type('변경');
   assert.equal(await page.evaluate(() => window.tabula.wb().getCell(0, 0, 0).raw), '원본');
   ok('보호된 시트의 서식 허용은 셀 잠금·수식 숨김을 바꾸거나 값 편집 권한을 넓히지 않음');
+  const openAlign = async () => {
+    await page.evaluate(() => window.tabula.run('formatCells'));
+    await dialog('셀 서식').getByRole('tab', { name: '맞춤', exact: true }).click();
+    return dialog('셀 서식').getByLabel('세로', { exact: true });
+  };
+  await page.evaluate(() => {
+    const t = window.tabula, w = t.wb(); w.load({ baseStyle: { valign: 'middle' }, sheets: [{ name: '맞춤 검사', cells: {} }] });
+    w.transact(() => { w.setInput(0, 0, 0, '12.5'); w.setStyle(0, 0, 0, { valign: 'bottom' }); w.setInput(0, 1, 0, '부모 맞춤'); }); t.selectCell(0, 0);
+  });
+  const cellBeforeCancel = await state();
+  let vertical = await openAlign(); assert.equal(await vertical.inputValue(), '');
+  await vertical.selectOption('top'); await dialog('셀 서식').getByRole('button', { name: '취소', exact: true }).click();
+  assert.deepEqual(await state(), cellBeforeCancel);
+  vertical = await openAlign(); assert.equal(await vertical.inputValue(), '');
+  await dialog('셀 서식').getByRole('button', { name: '확인', exact: true }).click();
+  assert.equal(await page.evaluate(() => window.tabula.wb().getCell(0, 0, 0).style.valign), 'bottom');
+  assert.equal(await page.evaluate(() => window.tabula.wb().styleAt(0, 0, 0).valign), 'bottom');
+  await page.evaluate(() => window.tabula.run('undo')); assert.equal(await page.evaluate(() => window.tabula.wb().styleAt(0, 0, 0).valign), 'bottom');
+  await page.evaluate(() => window.tabula.run('redo')); assert.equal(await page.evaluate(() => window.tabula.wb().styleAt(0, 0, 0).valign), 'bottom');
+  await page.evaluate(() => window.tabula.selectCell(1, 0));
+  vertical = await openAlign(); assert.equal(await vertical.inputValue(), 'middle'); await vertical.selectOption('');
+  await dialog('셀 서식').getByRole('button', { name: '확인', exact: true }).click();
+  assert.equal(await page.evaluate(() => window.tabula.wb().getCell(0, 1, 0).style.valign), 'bottom');
+  assert.equal(await page.evaluate(() => window.tabula.wb().styleAt(0, 1, 0).valign), 'bottom');
+  await page.evaluate(() => window.tabula.run('undo')); assert.equal(await page.evaluate(() => window.tabula.wb().styleAt(0, 1, 0).valign), 'middle');
+  await page.evaluate(() => window.tabula.run('redo')); assert.equal(await page.evaluate(() => window.tabula.wb().styleAt(0, 1, 0).valign), 'bottom');
+  ok('일반 셀의 아래쪽 초기 선택·확인/취소·부모 가운데 재상속 방지 및 Undo/Redo');
+
+  await page.evaluate(() => {
+    const t = window.tabula, w = t.wb(), include = { number: true, alignment: true, font: true, border: true, fill: true, protection: true };
+    w.load({ baseStyle: { valign: 'middle' }, cellStyles: [{ name: '아래쪽 기본', builtinId: 5, style: { numFmt: 'general', align: 'general', valign: 'bottom', bold: true }, include }], sheets: [{ name: '맞춤 검사', cells: {} }] });
+    w.setInput(0, 0, 0, '12.5'); t.selectCell(0, 0);
+  });
+  await menu(); await page.locator('[data-cell-style="아래쪽 기본"]').click();
+  const builtinBottomBeforeCancel = await state();
+  await context('아래쪽 기본', '수정...'); await dialog('스타일 수정').getByRole('button', { name: '서식...', exact: true }).click();
+  await dialog('셀 서식').getByRole('tab', { name: '맞춤', exact: true }).click();
+  assert.equal(await dialog('셀 서식').getByLabel('세로', { exact: true }).inputValue(), '');
+  await dialog('셀 서식').getByLabel('세로', { exact: true }).selectOption('top');
+  await dialog('셀 서식').getByRole('button', { name: '확인', exact: true }).click();
+  await dialog('스타일 수정').getByRole('button', { name: '취소', exact: true }).click();
+  assert.deepEqual(await state(), builtinBottomBeforeCancel);
+  await context('아래쪽 기본', '수정...'); await dialog('스타일 수정').getByRole('button', { name: '서식...', exact: true }).click();
+  await dialog('셀 서식').getByRole('button', { name: '확인', exact: true }).click();
+  await dialog('스타일 수정').getByRole('button', { name: '확인', exact: true }).click();
+  let bottomDef = (await state()).styles.find(s => s.name === '아래쪽 기본');
+  assert.equal(bottomDef.style.valign, 'bottom'); assert.equal(Object.hasOwn(bottomDef, 'customBuiltin'), false);
+  assert.equal(await page.evaluate(() => window.tabula.wb().styleAt(0, 0, 0).valign), 'bottom');
+  await context('아래쪽 기본', '수정...'); await dialog('스타일 수정').getByRole('button', { name: '서식...', exact: true }).click();
+  await dialog('셀 서식').getByRole('tab', { name: '맞춤', exact: true }).click(); await dialog('셀 서식').getByLabel('세로', { exact: true }).selectOption('top');
+  await dialog('셀 서식').getByRole('button', { name: '확인', exact: true }).click();
+  await dialog('스타일 수정').getByRole('button', { name: '확인', exact: true }).click();
+  assert.equal((await state()).styles.find(s => s.name === '아래쪽 기본').customBuiltin, true);
+  assert.equal(await page.evaluate(() => window.tabula.wb().styleAt(0, 0, 0).valign), 'top');
+  await page.evaluate(() => window.tabula.run('undo')); assert.equal(await page.evaluate(() => window.tabula.wb().styleAt(0, 0, 0).valign), 'bottom');
+  assert.equal(Object.hasOwn((await state()).styles.find(s => s.name === '아래쪽 기본'), 'customBuiltin'), false);
+  await page.evaluate(() => window.tabula.run('redo')); assert.equal(await page.evaluate(() => window.tabula.wb().styleAt(0, 0, 0).valign), 'top');
+  ok('이름 기본 스타일의 하위 서식 확인·상위 취소·명시 아래쪽 유지·실제 변경 표시 및 Undo/Redo');
+
+  await page.evaluate(() => { const t = window.tabula, w = t.wb(); w.load({ baseStyle: { valign: 'bottom' }, sheets: [{ name: '표준 맞춤 검사', cells: {} }] }); w.setInput(0, 0, 0, '표준'); t.selectCell(0, 0); });
+  const standardBeforeCancel = await state();
+  await context('표준', '수정...'); await dialog('스타일 수정').getByRole('button', { name: '서식...', exact: true }).click();
+  await dialog('셀 서식').getByRole('tab', { name: '맞춤', exact: true }).click();
+  assert.equal(await dialog('셀 서식').getByLabel('세로', { exact: true }).inputValue(), '');
+  await dialog('셀 서식').getByLabel('세로', { exact: true }).selectOption('top'); await dialog('셀 서식').getByRole('button', { name: '확인', exact: true }).click();
+  await dialog('스타일 수정').getByRole('button', { name: '취소', exact: true }).click(); assert.deepEqual(await state(), standardBeforeCancel);
+  for (const [target, before] of [['', 'bottom'], ['middle', 'bottom'], ['', 'middle']]) {
+    await context('표준', '수정...'); await dialog('스타일 수정').getByRole('button', { name: '서식...', exact: true }).click();
+    await dialog('셀 서식').getByRole('tab', { name: '맞춤', exact: true }).click();
+    assert.equal(await dialog('셀 서식').getByLabel('세로', { exact: true }).inputValue(), before === 'bottom' ? '' : before);
+    await dialog('셀 서식').getByLabel('세로', { exact: true }).selectOption(target);
+    await dialog('셀 서식').getByRole('button', { name: '확인', exact: true }).click(); await dialog('스타일 수정').getByRole('button', { name: '확인', exact: true }).click();
+    assert.equal(await page.evaluate(() => window.tabula.wb().baseStyle.valign), target || 'bottom');
+    assert.equal(await page.evaluate(() => window.tabula.wb().styleAt(0, 0, 0).valign), target || 'bottom');
+    await page.evaluate(() => window.tabula.run('undo')); assert.equal(await page.evaluate(() => window.tabula.wb().baseStyle.valign), before);
+    await page.evaluate(() => window.tabula.run('redo')); assert.equal(await page.evaluate(() => window.tabula.wb().baseStyle.valign), target || 'bottom');
+  }
+  ok('표준 스타일 아래쪽 확인/취소·가운데와 아래쪽 실제 변경 및 Undo/Redo');
   assert.deepEqual(errors, []); console.log(JSON.stringify({ groups, bad: 0, pageErrors: errors.length }));
 } catch (err) {
   console.error(JSON.stringify({ errors, menus: await page.locator('#menuLayer').innerText(), dialogs: await page.locator('[role=dialog]').allTextContents() }));

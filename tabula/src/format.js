@@ -771,7 +771,7 @@ export function fmtCode(style) {
     case 'time': return '[$-412]AM/PM h:mm:ss';
     case 'datetime': return 'yyyy\\-mm\\-dd h:mm';
     case 'text': return '@';
-    default: return d !== undefined ? `0${dec(d)}` : null;
+    default: return d != null ? `0${dec(d)}` : null;
   }
 }
 

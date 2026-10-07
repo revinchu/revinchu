@@ -1,4 +1,6 @@
 import { zip64Directory, zip64Entry } from './zip64-read.js';
+import { inflateChunks, inflateChunkSize } from './inflate-chunks.js';
+import { blobZipEntries } from './zip-blob-read.js';
 // ZIP 읽기/쓰기 (xlsx 용). 외부 라이브러리 없이 inflate(RFC 1951)를 직접 구현.
 // 쓰기는 무압축(stored) 방식 — 모든 스프레드시트 프로그램이 읽을 수 있음.
 
@@ -164,15 +166,103 @@ const dec = new TextDecoder();
 
 /** ZIP 바이트 → { 경로: Uint8Array } (압축은 처음 읽을 때 풂) */
 export function unzip(bytes) {
-  const files = {};
+  const files = {}, metadata = new Map();
+  zipEntryMetadata.set(files, metadata);
   for (const e of zipEntries(bytes)) {
+    metadata.set(e.name, { size: e.size, compressedSize: e.raw.length, method: e.method, crc: e.crc });
     if (e.method === 0) files[e.name] = e.raw;
     else lazyInflate(files, e);
   }
   return files;
 }
 
+/** File/Blob input keeps large sheet/cache compressed payloads lazy. Defaults
+ * preserve existing file compatibility; optional budgets are caller policy. */
+export async function unzipBlob(blob, { onProgress, preload = name => !/(?:^|\/)(?:worksheets\/[^/]+|pivotCacheRecords[^/]+)\.(?:xml|bin)$/i.test(name), maxPreloadBytes = Infinity, maxDirectoryBytes = Infinity, maxEntryBytes = Infinity } = {}) {
+  if (maxPreloadBytes !== Infinity && (!Number.isSafeInteger(maxPreloadBytes) || maxPreloadBytes < 0)) throw new RangeError('ZIP 사전 읽기 예산이 올바르지 않습니다.');
+  if (typeof preload !== 'function') throw new TypeError('ZIP 사전 읽기 조건이 올바르지 않습니다.');
+  const entries = await blobZipEntries(blob, { maxDirectoryBytes, maxEntryBytes }), files = {}, metadata = new Map();
+  zipEntryMetadata.set(files, metadata);
+  let loaded = 0, index = 0;
+  for (const entry of entries) {
+    metadata.set(entry.name, { size: entry.size, compressedSize: entry.compressedSize, method: entry.method, crc: entry.crc });
+    lazyInflate(files, entry);
+  }
+  for (const entry of entries) {
+    if (preload(entry.name, metadata.get(entry.name))) {
+      if (loaded + entry.compressedSize > maxPreloadBytes) throw new RangeError('ZIP 사전 읽기가 설정한 예산을 넘습니다.');
+      await prepareZipEntryRaw(files, entry.name); loaded += entry.compressedSize;
+    }
+    onProgress?.({ p: ++index / entries.length, name: entry.name, preloadedBytes: loaded });
+  }
+  return files;
+}
+
+/** Load only this entry's compressed Blob range, without inflating or caching
+ * the expanded value. Byte-array ZIP inputs already have their raw payload. */
+export async function prepareZipEntryRaw(files, name) {
+  const entry = pendingZipEntries.get(files)?.get(name);
+  if (!entry) {
+    const value = files[name];
+    if (!(value instanceof Uint8Array)) throw new TypeError('ZIP 항목은 바이트 배열이어야 합니다.');
+    return value;
+  }
+  if (entry.raw) return entry.raw;
+  if (entry.loading) return entry.loading;
+  if (!entry.loadRaw) throw new Error('ZIP 항목을 더 이상 읽을 수 없습니다.');
+  entry.loading = (async () => {
+    const value = await entry.loadRaw();
+    if (pendingZipEntries.get(files)?.get(name) !== entry) throw new Error('ZIP 항목 읽기가 취소되었습니다.');
+    entry.raw = value; return value;
+  })();
+  try { return await entry.loading; } finally { entry.loading = null; }
+}
+
+/** Release the entry's raw loader, compressed payload and full accessor. */
+export function deleteZipEntry(files, name) {
+  const pending = pendingZipEntries.get(files), entry = pending?.get(name);
+  if (entry) { entry.raw = null; entry.loadRaw = null; entry.loading = null; entry.preparing = null; pending.delete(name); }
+  zipEntryMetadata.get(files)?.delete(name);
+  return delete files[name];
+}
+
 const pendingZipEntries = new WeakMap();
+const zipEntryMetadata = new WeakMap();
+
+/** ZIP directory metadata without running the lazy full-value accessor. */
+export function zipEntryInfo(files, name) {
+  const info = zipEntryMetadata.get(files)?.get(name);
+  return info && Object.hasOwn(files, name) ? { ...info } : null;
+}
+
+/** Consume one entry without caching an inflated full value. Yielded chunks
+ * are independent arrays; finishing or returning early leaves the ZIP reusable.
+ * Size and CRC are verified on full consumption, before successful completion. */
+export function* zipEntryChunks(files, name, { chunkSize = 64 << 10 } = {}) {
+  chunkSize = inflateChunkSize(chunkSize);
+  const descriptor = Object.getOwnPropertyDescriptor(files, name);
+  if (!descriptor) throw new Error('ZIP 항목을 찾을 수 없습니다.');
+  const entry = descriptor.get && pendingZipEntries.get(files)?.get(name), info = zipEntryMetadata.get(files)?.get(name);
+  const raw = entry ? entry.raw : descriptor.value;
+  if (!(raw instanceof Uint8Array)) throw new TypeError('ZIP 항목은 바이트 배열이어야 합니다.');
+  const size = info?.size ?? raw.length;
+  let count = 0, crc = 0xffffffff;
+  const chunks = entry?.method === 8 ? inflateChunks(raw, { chunkSize, sizeLimit: size }) : byteSlices(raw, chunkSize);
+  for (const chunk of chunks) {
+    count += chunk.length;
+    if (count > size) throw new Error('ZIP 항목 크기가 올바르지 않습니다.');
+    crc = crcUpdate(crc, chunk, 0, chunk.length);
+    yield chunk;
+  }
+  if (count !== size) throw new Error('ZIP 항목 크기가 올바르지 않습니다.');
+  if (info && crcEnd(crc) !== info.crc) throw new Error('ZIP 항목 CRC가 올바르지 않습니다.');
+}
+function* byteSlices(bytes, chunkSize) {
+  for (let position = 0; position < bytes.length; position += chunkSize) {
+    const chunk = new Uint8Array(Math.min(chunkSize, bytes.length - position));
+    chunk.set(bytes.subarray(position, position + chunk.length)); yield chunk;
+  }
+}
 function lazyInflate(files, e) {
   let pending = pendingZipEntries.get(files);
   if (!pending) pendingZipEntries.set(files, (pending = new Map()));
@@ -180,12 +270,14 @@ function lazyInflate(files, e) {
   Object.defineProperty(files, e.name, {
     enumerable: true, configurable: true,
     get() {
-      const v = inflate(e.raw, e.size);
+      if (!e.raw) throw new Error('이 ZIP 항목은 비동기 준비 후 읽어야 합니다.');
+      const v = e.method === 0 ? e.raw : inflate(e.raw, e.size);
+      e.raw = null; e.loadRaw = null;
       pending.delete(e.name);
       Object.defineProperty(files, e.name, { value: v, enumerable: true, configurable: true, writable: true });
       return v;
     },
-    set(v) { pending.delete(e.name); Object.defineProperty(files, e.name, { value: v, enumerable: true, configurable: true, writable: true }); },
+    set(v) { e.raw = null; e.loadRaw = null; pending.delete(e.name); Object.defineProperty(files, e.name, { value: v, enumerable: true, configurable: true, writable: true }); },
   });
 }
 
@@ -196,10 +288,11 @@ export async function prepareZipEntry(files, name) {
   if (!descriptor?.get || !entry) return files[name];
   if (entry.preparing) return entry.preparing;
   entry.preparing = (async () => {
-    let value;
-    if (typeof DecompressionStream === 'function') {
+    const raw = await prepareZipEntryRaw(files, name);
+    let value = entry.method === 0 ? raw : undefined;
+    if (value === undefined && typeof DecompressionStream === 'function') {
       try {
-        const reader = new Blob([entry.raw]).stream().pipeThrough(new DecompressionStream('deflate-raw')).getReader();
+        const reader = new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate-raw')).getReader();
         // Response.arrayBuffer()의 전체 출력 복사 대신 ZIP에 기록된 크기에 바로 채웁니다.
         const bytes = new Uint8Array(entry.size);
         let position = 0;
@@ -218,10 +311,15 @@ export async function prepareZipEntry(files, name) {
         } finally { reader.releaseLock(); }
       } catch { /* 내장 압축 해제가 없는 브라우저와 같은 순수 JS 경로 */ }
     }
-    value ??= inflate(entry.raw, entry.size);
+    value ??= inflate(raw, entry.size);
     // 기다리는 동안 동기 읽기나 변환기가 이미 값을 바꿨으면 그 결과를 유지합니다.
-    if (Object.getOwnPropertyDescriptor(files, name)?.get !== descriptor.get) return files[name];
+    const current = Object.getOwnPropertyDescriptor(files, name);
+    if (current?.get !== descriptor.get) {
+      if (!current) throw new Error('ZIP 항목 읽기가 취소되었습니다.');
+      return files[name];
+    }
     Object.defineProperty(files, name, { value, enumerable: true, configurable: true, writable: true });
+    entry.raw = null; entry.loadRaw = null;
     pending.delete(name);
     return value;
   })();
@@ -258,7 +356,7 @@ function zipEntries(bytes) {
   const out = [];
   for (let n = 0; n < count; n++) {
     if (dv.getUint32(p, true) !== 0x02014b50) throw new Error('ZIP 디렉터리가 손상되었습니다');
-    const method = dv.getUint16(p + 10, true);
+    const method = dv.getUint16(p + 10, true), crc = dv.getUint32(p + 16, true);
     let compSize = dv.getUint32(p + 20, true), size = dv.getUint32(p + 24, true);
     const nameLen = dv.getUint16(p + 28, true);
     const extraLen = dv.getUint16(p + 30, true);
@@ -274,7 +372,7 @@ function zipEntries(bytes) {
     const start = local + 30 + dv.getUint16(local + 26, true) + dv.getUint16(local + 28, true);
     const raw = bytes.subarray(start, start + compSize);
     if (method !== 0 && method !== 8) throw new Error(`지원하지 않는 압축 방식(${method}): ${name}`);
-    out.push({ name, method, raw, size });
+    out.push({ name, method, raw, size, crc });
   }
   return out;
 }

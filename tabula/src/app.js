@@ -175,7 +175,8 @@ import {
 import { maxOf, minOf, wildcardRegex } from './fxcore.js';
 import { CELL_STYLE_PARTS, cellStyleKey, validCellStyleName, cellStyleIncludes, cellStylePatch, cellStyleUpdatePatch, importCellStyleList } from './cell-style.js';
 import { REPORT_CELL_STYLE_SECTIONS } from './cell-style-presets.js';
-import { capturePivotCellFormat } from './pivot-style-format.js';
+import { pivotCellButtons, pivotImportedPresentation, pivotImportedPresentationCurrent, pivotImportedOwnsCell, pivotImportedClearAreas, captureImportedPivotFormats, pivotImportedButtons } from './pivot-import-presentation.js';
+import { columnKeysInRange } from './column-keys-in-range.js';
 
 const $ = (id) => document.getElementById(id);
 const dom = {
@@ -12102,8 +12103,19 @@ function pivotLayoutFrom(grid, pm, d, top, left) {
     values: (d.values ?? []).map((v) => valueName(v)), rows: [...(d.rows ?? [])], cols: [...(d.cols ?? [])],
   };
 }
+function preservedPivotPresentation(tsi, def) {
+  const marker = workbookPivotCaches(wb).preserved.get(`${tsi}:${def.name ?? ''}`);
+  return pivotImportedPresentationCurrent(def, marker) ? marker : null;
+}
 function pivotLayoutOf(tsi, def) {
   const k = `${tsi}:${def.name ?? ''}`;
+  // 보존된 원본 화면에 현재 날짜로 계산한 역할을 연결하지 않습니다. Undo에도 동일합니다.
+  if (preservedPivotPresentation(tsi, def)) {
+    const prior = pivotLayouts.get(k);
+    if (prior) pivotWritten.delete(`${tsi}:${def.name ?? ''}:${prior.top},${prior.left}`);
+    pivotLayouts.delete(k);
+    return null;
+  }
   const cached = pivotLayouts.get(k);
   if (cached?.sheet === wb.sheets[tsi] && cached.definition === def && cached.top === (def.top ?? 0) && cached.left === (def.left ?? 0)) return cached;
   const src = pivotSource(def);
@@ -12360,8 +12372,11 @@ function pivotWriteAllowed(targetSi, def, prepared, replacing = def) {
 
 function writePivot(targetSi, def, { autofit = true, replacing = def, prepared = null, checked = false } = {}) {
   const plan = prepared ?? preparePivotWrite(targetSi, def);
-  if (!plan || !checked && !pivotWriteAllowed(targetSi, def, plan, replacing)) return false;
+  if (!plan) return false;
   const { src, res, d, grid, pm, t, top, left, colsN, bodyColsN } = plan;
+  const captureBase = { font: wb.defaultFont?.name ?? BASE_FONT.name, size: wb.defaultFont?.size ?? BASE_FONT.size, ...wb.baseStyle };
+  if (!checked && !pivotWriteAllowed(targetSi, def, plan, replacing)) return false;
+  const importedOriginal = preservedPivotPresentation(targetSi, replacing);
   // 범위 검사를 통과한 뒤에만 정의 · 셀 · 병합 · 서식 · 너비를 변경한다.
   if (!openingPivots) delete def.tieState;
   delete def.needsRender;
@@ -12385,43 +12400,9 @@ function writePivot(targetSi, def, { autofit = true, replacing = def, prepared =
       if (f) cd.style = { ...(cd.style ?? {}), ...f };
     }
   }
-  // 파일의 서식 기억 (엑셀이 셀에 저장한 서식: 표시 형식 · 맞춤 · 사용자가 바꾼 색 등)
+  // 처음에는 머리글만 준비하고, 첫 사용자 변경에서 원본 영역 안의 본문 서식도 기억합니다.
   if (def.captureFmt) {
-    const fmt = { ...(def.cellFmt ?? {}) };
-    // 역할마다 가장 많이 쓰인 서식 (첫 칸만 보면 강조한 한 행의 굵게 등이 본문 전체로 번짐)
-    const votes = new Map();
-    const voteMemo = new WeakMap();
-    const captureBase = { font: wb.defaultFont?.name ?? BASE_FONT.name, size: wb.defaultFont?.size ?? BASE_FONT.size, ...wb.baseStyle };
-    grid.forEach((row, r) => row.forEach((cd, c) => {
-      if (!cd?.role || cd.role === 'empty' || def.cellFmt?.[cd.role]) return;
-      const fc = t.cells.getRC(top + r, left + c);
-      const own = fc?.style;
-      let f = null;
-      let key;
-      if (own && Object.keys(own).length) {
-        // 같은 xf라도 줄무늬·역할별 생성 서식이 다를 수 있어 함께 비교합니다.
-        const generatedKey = JSON.stringify(cd.style ?? {});
-        let pair = voteMemo.get(own);
-        if (!pair) voteMemo.set(own, (pair = new Map()));
-        let hit = pair.get(generatedKey);
-        if (!hit) { const ff = capturePivotCellFormat(own, cd.style, captureBase); hit = { f: ff, key: JSON.stringify(ff) }; pair.set(generatedKey, hit); }
-        f = hit.f;
-        key = hit.key;
-      // 파일 셀이 "일반" 형식이면 피벗 기본 표시 형식을 쓰지 않음 (엑셀 화면과 같게)
-      } else if (fc && fc.raw !== '' && cd.style?.numFmt) f = { numFmt: 'general' };
-      else if (!fc) return;
-      key ??= JSON.stringify(f);
-      let m = votes.get(cd.role);
-      if (!m) votes.set(cd.role, (m = new Map()));
-      const e = m.get(key);
-      if (e) e.n++; else m.set(key, { n: 1, f });
-    }));
-    for (const [role, m] of votes) {
-      let best = null;
-      for (const e of m.values()) if (!best || e.n > best.n) best = e;
-      if (best?.f) fmt[role] = best.f;
-    }
-    def.cellFmt = fmt;
+    def.cellFmt = captureImportedPivotFormats(t, def, plan, captureBase, { area: importedOriginal ? replacing.area : null });
     delete def.captureFmt;
     autofit = false;
   }
@@ -12429,7 +12410,7 @@ function writePivot(targetSi, def, { autofit = true, replacing = def, prepared =
   // 업데이트 시 셀 서식 유지: 지난번에 그린 서식과 다른 칸(사용자가 바꾼 서식)은 역할별로 기억해 다시 적용
   const wkey = `${targetSi}:${def.name ?? ''}:${top},${left}`;
   const cachedLayout = pivotLayouts.get(`${targetSi}:${def.name ?? ''}`);
-  const previousLayout = cachedLayout?.sheet === t ? cachedLayout : null;
+  const previousLayout = !importedOriginal && cachedLayout?.sheet === t ? cachedLayout : null;
   const written = previousLayout ? pivotWritten.get(`${targetSi}:${def.name ?? ''}:${previousLayout.top},${previousLayout.left}`) : null;
   if (def.preserveFormat !== false && written) {
     const fmt = { ...(def.cellFmt ?? {}) };
@@ -12448,9 +12429,14 @@ function writePivot(targetSi, def, { autofit = true, replacing = def, prepared =
     if (changedFmt) def.cellFmt = fmt;
   }
   const cellFmt = def.preserveFormat === false ? {} : def.cellFmt ?? {};
-  const a = def.area;
+  const a = importedOriginal ? replacing.area : def.area;
   // 피벗 레이블 병합만 해제한다. 보고서 필터 사이 사용자 병합은 유지한다.
   const ownsMerge = (m) => {
+    if (importedOriginal) {
+      const bodyTop = (replacing.top ?? 0) + importedOriginal.bodyRow;
+      if (m.r2 >= bodyTop && m.c2 >= (replacing.left ?? 0) + importedOriginal.bodyColumnStart && m.c1 <= (replacing.left ?? 0) + importedOriginal.bodyColumnEnd) return true;
+      return importedOriginal.pageFields.some(p => { const r=(replacing.top??0)+p.r,c=(replacing.left??0)+p.c; return r>=m.r1&&r<=m.r2&&c<=m.c2&&c+1>=m.c1; });
+    }
     const roles = previousLayout?.roles, baseR = previousLayout?.top ?? top, baseC = previousLayout?.left ?? left;
     for (let r = Math.max(0, m.r1 - baseR); r <= Math.min((roles ?? grid).length - 1, m.r2 - baseR); r++) {
       const row = roles?.[r] ?? grid[r];
@@ -12462,12 +12448,15 @@ function writePivot(targetSi, def, { autofit = true, replacing = def, prepared =
   // 처음 그리는 피벗(이전 영역 없음)은 아무것도 지우지 않음 — 같은 시트의 다른 피벗 · 내용을 보존
   const nr2 = plan.area.r2;
   const nc2 = plan.area.c2;
-  if (a) {
+  if (importedOriginal) {
+    // 원본 블록 값도 같은 Undo 트랜잭션으로 정리합니다. 필터 사이 사용자 셀은 제외합니다.
+    for (const area of pivotImportedClearAreas(replacing, importedOriginal, plan)) wb.clearRange(targetSi, area.r1, area.c1, area.r2, area.c2, 'contents');
+  } else if (a) {
     // 이전 영역의 열만 훑음 (시트 전체 칸을 문자열 키로 훑지 않게)
     const gone = [];
     for (let c = a.c1; c <= a.c2; c++) {
       const col = t.cells.col(c);
-      if (col) for (const r of col.keys()) if (r >= a.r1 && r <= a.r2) gone.push(r, c);
+      if (col) for (const r of columnKeysInRange(col, a.r1, a.r2)) gone.push(r, c);
     }
     // 새 결과 영역 안의 셀은 아래에서 덮어쓰므로 지우지 않음 (실행 취소 기록이 두 번 생기지 않게)
     for (let i = 0; i < gone.length; i += 2) {
@@ -12478,7 +12467,8 @@ function writePivot(targetSi, def, { autofit = true, replacing = def, prepared =
       // 필터 재배치로 새 영역 안에 빈 칸이 생겨도 이전 필터/본문 셀은 지운다.
       // 필터 사이 열, 본문과의 빈 줄, 오른쪽의 사용자 셀은 피벗 소유가 아니다.
       const oldRole = previousLayout?.roles[r - previousLayout.top]?.[c - previousLayout.left];
-      const oldOwns = previousLayout ? !!oldRole : !(r >= top && r <= nr2 && c >= left && c <= nc2);
+      const oldOwns = importedOriginal ? pivotImportedOwnsCell(replacing, importedOriginal, r, c)
+        : previousLayout ? !!oldRole : !(r >= top && r <= nr2 && c >= left && c <= nc2);
       if (!nextOwns && oldOwns) wb.setCellData(targetSi, r, c, null);
     }
   }
@@ -12501,19 +12491,8 @@ function writePivot(targetSi, def, { autofit = true, replacing = def, prepared =
       if (!cd || (!cd.raw && !cd.style && !cd.image)) { if (t.cells.hasRC(rr, cc)) wb.setCellData(targetSi, rr, cc, null); continue; }
       const extra = cellFmt[cd.role];
       wb.setCellData(targetSi, rr, cc, { raw: cd.raw, style: extra ? mergeFmt(cd.style, extra) : cd.style, ...(cd.image ? { image: cd.image } : {}) });
-      // 필터 단추: 행 레이블 머리글, 열 레이블 머리글, 보고서 필터 값
-      if (cd.role === 'rowHead:0' && d.rows.length) btns.push({ r: rr, c: cc, kind: 'rows', ...(d.layout !== 'compact' ? { field: d.rows[0] } : {}) });
-      else if (/^rowHead:\d+$/.test(cd.role) && d.layout !== 'compact' && d.rows[+cd.role.split(':')[1]]) btns.push({ r: rr, c: cc, kind: 'rows', field: d.rows[+cd.role.split(':')[1]] });
-      else if (d.valuesOnRows && d.values.length > 1 && cd.role === `rowHead:${d.rows.length}`) btns.push({ r: rr, c: cc, kind: 'rows', sigma: true });
-      else if (cd.role === 'colHead' && cd.raw) {
-        const level = c - pm.labelCols, multi = d.values.length > 1 && !d.valuesOnRows;
-        const vp = multi ? Math.min(d.cols.length, d.valuesPos ?? d.cols.length) : -1;
-        const sigma = multi && (!d.cols.length || d.layout !== 'compact' && level === vp);
-        const field = d.layout !== 'compact' && !sigma ? d.cols[vp >= 0 && level > vp ? level - 1 : level] : null;
-        btns.push({ r: rr, c: cc, kind: 'cols', ...(field ? { field } : {}), ...(sigma ? { sigma: true } : {}) });
-      }
-      else if (cd.role === 'pageValue') btns.push({ r: rr, c: cc, kind: 'page', field: cd.field ?? d.pages[r] });
-      if (cd.toggle) btns.push({ r: rr, c: cc, kind: 'toggle', field: cd.toggle.field, item: cd.toggle.item, collapsed: cd.toggle.collapsed });
+      // 초기 머리글 준비와 같은 필터 단추 판정을 사용합니다.
+      btns.push(...pivotCellButtons(cd, rr, cc, { ...pm, top, left }, d));
     }
   });
   def.buttons = btns;
@@ -12679,6 +12658,10 @@ function setPivotDef(entry, def, s = entry.si ?? si) {
 
 /** 명시적 새로고침도 캐시를 지우기 전에 전체 결과 범위를 검사한다. */
 function refreshPivotEntries(entries, { all = false, autofit = true, historyMeta = meta() } = {}) {
+  if (entries.some(entry => !wb.pivotSnapshotSource(entry.def))) {
+    toast('피벗 테이블의 원본이 이 문서에 없어 새로 고칠 수 없습니다. 외부 파일을 가져오지 않았으며 저장된 캐시는 유지됩니다.');
+    return false;
+  }
   const plans = preparePivotChanges(entries.map(entry => ({ entry, def: entry.def })), { fresh: true });
   if (!plans) return false;
   const structureHistory = historyMeta.joinPrev && wb.undoStack.at(-1)?.meta?.pivotStructure;
@@ -12822,7 +12805,22 @@ function pivotMoveDialog() {
 /** 모든 피벗 · 슬라이서가 쓰는 필드로 요약 캐시 준비 (천만 행도 이후 클릭은 즉시) */
 function warmAll() {
   const fields = wb.sheets.flatMap((s) => (s.slicers ?? []).filter((x) => x.source?.kind === 'pivot').map((x) => x.source.field));
-  try { warmPivots(wb, allPivots().map((e) => e.def), fields); } catch (err) { console.warn('요약 캐시 준비 실패', err); }
+  try { warmPivots(wb, allPivots().filter(e => !openingPivots || !pivotImportedPresentation(wb, e.si, e.def)).map(e => e.def), fields); } catch (err) { console.warn('요약 캐시 준비 실패', err); }
+}
+
+/** 동기/비동기 열기는 같은 원본 표시 준비 경로를 사용합니다. */
+function prepareImportedPivot(targetSi, def) {
+  const initial=pivotImportedPresentation(wb,targetSi,def);
+  if(!initial)return writePivot(targetSi,def);
+  const {marker,plan}=initial;
+  const captureBase={font:wb.defaultFont?.name??BASE_FONT.name,size:wb.defaultFont?.size??BASE_FONT.size,...wb.baseStyle};
+  // 본문 서식 투표는 첫 사용자 계산까지 미룹니다. 저장된 값·병합·너비·CF는 그대로 둡니다.
+  def.cellFmt=captureImportedPivotFormats(plan.t,def,plan,captureBase,{area:def.area,headersOnly:true});
+  def.buttons=pivotImportedButtons(plan.t,def,plan);
+  workbookPivotCaches(wb).preserved.set(`${targetSi}:${def.name??''}`,marker);
+  pivotLayouts.delete(`${targetSi}:${def.name??''}`);
+  pivotWritten.delete(`${targetSi}:${def.name??''}:${def.top??0},${def.left??0}`);
+  return true;
 }
 
 function renderImportedPivots() {
@@ -12832,7 +12830,7 @@ function renderImportedPivots() {
     wb.holdDirtyWhile(() => {
       for (const e of allPivots()) {
         if (!e.def.captureFmt && !e.def.needsRender) continue;
-        try { wb.transact(() => writePivot(e.si, e.def)); } catch (err) { console.warn('피벗 다시 그리기 실패', err); }
+        try { wb.transact(() => prepareImportedPivot(e.si, e.def)); } catch (err) { console.warn('피벗 다시 그리기 실패', err); }
       }
     });
   } finally {
@@ -15462,10 +15460,10 @@ async function openFileObject(file, mode, request = beginDocumentOpen()) {
       const prog = progressOverlay(`'${file.name}' 여는 중`, request);
       let res;
       try {
-        const bytes = new Uint8Array(await file.arrayBuffer()); current();
+        const signature = new Uint8Array(await file.slice(0, 4).arrayBuffer()); current();
         // 엑셀 97-2003(.xls): OLE 복합 문서 (확장자와 달리 내용이 xlsx 인 파일도 있어 서명으로 판단)
-        const ole = bytes[0] === 0xd0 && bytes[1] === 0xcf && bytes[2] === 0x11 && bytes[3] === 0xe0;
-        res = ole ? readXls(bytes) : await readXlsxAsync(bytes, (st) => { current(); prog.set(st.p * 0.6, st.msg); });
+        const ole = signature[0] === 0xd0 && signature[1] === 0xcf && signature[2] === 0x11 && signature[3] === 0xe0;
+        res = ole ? readXls(new Uint8Array(await file.arrayBuffer())) : await readXlsxAsync(file, (st) => { current(); prog.set(st.p * 0.6, st.msg); });
         current();
         if (mode === 'open') await loadWorkbookAsync(res.data, base, res.active, prog, request);
       } finally {
@@ -15604,7 +15602,7 @@ function finishDocumentOpen(request) {
 const preparedPivotCaches = new WeakMap();
 function workbookPivotCaches(book) {
   let cache = preparedPivotCaches.get(book);
-  if (!cache) { cache = { layouts:new Map(), written:new Map() }; preparedPivotCaches.set(book, cache); }
+  if (!cache) { cache = { layouts:new Map(), written:new Map(), preserved:new Map() }; preparedPivotCaches.set(book, cache); }
   return cache;
 }
 
@@ -15671,7 +15669,7 @@ async function loadWorkbookAsync(data, name, activeSheet, prog, request = beginD
       await yieldUI(); request.assertCurrent();
       const e = list[i];
       prepareWorkbookStep(next, activeSheet, () => {
-        try { next.transact(() => writePivot(e.si, e.def)); } catch (err) { console.warn('피벗 다시 그리기 실패', err); }
+        try { next.transact(() => prepareImportedPivot(e.si, e.def)); } catch (err) { console.warn('피벗 다시 그리기 실패', err); }
       });
     }
   } finally { next.holdDirty = false; next.noUndo = false; }
@@ -17627,7 +17625,7 @@ function formatCellsDialog(startTab = 0, find = null) {
 
   // ── 맞춤 ──
   const hSel = el('select', {}, [['general', '일반'], ['left', '왼쪽 (들여쓰기)'], ['center', '가운데'], ['right', '오른쪽 (들여쓰기)'], ['centerContinuous', '선택 영역의 가운데로']].map(([v, l]) => el('option', { value: v, selected: (st.align || 'general') === v }, l)));
-  const vSel = el('select', {}, [['top', '위쪽'], ['middle', '가운데'], ['', '아래쪽']].map(([v, l]) => el('option', { value: v, selected: (st.valign ?? '') === v }, l)));
+  const vSel = el('select', {}, [['top', '위쪽'], ['middle', '가운데'], ['', '아래쪽']].map(([v, l]) => el('option', { value: v, selected: (st.valign === 'bottom' ? '' : st.valign ?? '') === v }, l)));
   const indentIn = el('input', { type: 'number', min: 0, max: 15, value: st.indent ?? 0, style: { width: '64px' } });
   const [wrapIn, wrapL] = chk('텍스트 줄 바꿈', st.wrap);
   const merged = !!wb.mergeAt(si, active.r, active.c);
@@ -17809,7 +17807,7 @@ function formatCellsDialog(startTab = 0, find = null) {
     const size = Number(sizeIn.value);
     return {
       ...fmt,
-      align: hSel.value || undefined, valign: vSel.value || undefined, indent: clamp(Number(indentIn.value) || 0, 0, 15) || undefined, wrap: wrapIn.checked || undefined,
+      align: hSel.value || undefined, valign: vSel.value || 'bottom', indent: clamp(Number(indentIn.value) || 0, 0, 15) || undefined, wrap: wrapIn.checked || undefined,
       font: fontSel.value === BASE_FONT.name ? undefined : fontSel.value,
       size: !size || size === BASE_FONT.size ? undefined : clamp(size, 1, 409),
       bold: bIn.checked || undefined, italic: iIn.checked || undefined, underline: uIn.checked || undefined, strike: sIn.checked || undefined,
@@ -19419,7 +19417,8 @@ function newCellStyleDialog(source = null, duplicate = false) {
         toast('표준 스타일을 수정했습니다.');
         return;
       }
-      const def = importCellStyleList([{ name, style: draft, include, ...(original?.builtinId !== undefined ? { builtinId: original.builtinId } : {}) }])[0];
+      const builtinModified = original?.builtinId !== undefined && (JSON.stringify(draft) !== JSON.stringify(original.style ?? {}) || JSON.stringify(include) !== JSON.stringify(cellStyleIncludes(original)));
+      const def = importCellStyleList([{ name, style: draft, include, ...(original?.builtinId !== undefined ? { builtinId: original.builtinId, ...(builtinModified ? { customBuiltin: true } : typeof original.customBuiltin === 'boolean' ? { customBuiltin: original.customBuiltin } : {}) } : {}) }])[0];
       wb.transact(() => {
         if (original) updateCellStyleUses(original, def);
         wb.setCellStyles([...(wb.cellStyles ?? []).filter((it) => cellStyleKey(it.name) !== cellStyleKey(original?.name)), def]);
@@ -20700,6 +20699,8 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['저장된 피벗 결과로 열기', ['새로 고침 옵션이 꺼진 가져온 피벗은 저장된 결과와 위치를 먼저 유지해 초기 계산을 줄입니다.']],
+  ['대용량 Excel 가져오기', ['대용량 Excel 가져오기와 행·열 삽입의 메모리 사용량을 줄였습니다. 외부 원본 피벗의 저장 캐시, 슬라이서의 시작 위치, 일반 숫자 서식과 표준 셀 스타일을 더 정확하게 보존합니다.']],
   ['행·열 연속 삭제', ['Ctrl+Shift+-로 삭제한 뒤에도 선택한 행·열 범위를 유지합니다. 다시 선택하지 않고 단축키나 F4를 누르면 같은 개수의 행·열을 즉시 삭제합니다. 실행 취소·다시 실행에서도 선택 범위를 유지합니다.']],
   ['브라우저에서 행·열 삽입과 삭제', ['선택한 행·열은 Ctrl+Shift++로 삽입하고 Ctrl+Shift+-로 삭제합니다. 셀 범위를 선택하면 삽입·삭제 옵션을 엽니다. 숫자 키패드도 Ctrl+Shift 조합을 사용합니다.', 'Shift 없이 Ctrl+=와 Ctrl+-는 브라우저 화면 확대·축소로 사용하고, 위셀 시트 배율은 Ctrl+Alt++와 Ctrl+Alt+-를 유지합니다. 실행 취소·F4 반복과 복사한 행 삽입도 지원합니다.']],
   ['필터 메뉴 단축키와 빠른 실행', ['일반·표·피벗 행·열·보고서 필터 버튼 셀에서 Alt+↓로 필터를 열고, E로 검색창 이동 후 검색·Enter로 적용합니다. 메뉴 방향키·체크 선택·Esc 취소와 Undo/Redo를 지원합니다.', '리본 명령을 우클릭하여 빠른 실행 도구 모음에 추가하고 Alt+숫자로 실행합니다. 우클릭 제거·순서 설정과 문서 보호 설정을 유지합니다.']],

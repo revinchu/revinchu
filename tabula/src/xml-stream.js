@@ -1,10 +1,14 @@
+function* byteChunks(bytes, size) { for (let at = 0; at < bytes.length; at += size) yield bytes.subarray(at, at + size); }
+
 // 한 항목만 XML 트리로 만들어 공유 문자열 전체 DOM을 메모리에 보관하지 않습니다.
 export function* scanXmlChildren(bytes, itemName, chunkSize = 1 << 20) {
   const decoder = new TextDecoder();
   let pending = '', position = 0, start = -1, depth = 0;
-  for (let offset = 0; offset < bytes.length || pending; offset += chunkSize) {
-    const end = Math.min(bytes.length, offset + chunkSize), last = end === bytes.length;
-    if (offset < bytes.length) pending += decoder.decode(bytes.subarray(offset, end), { stream: !last });
+  const chunks = bytes instanceof Uint8Array ? byteChunks(bytes, chunkSize) : bytes;
+  const iterator = chunks[Symbol.iterator]();
+  try { for (;;) {
+    const next = iterator.next(), last = next.done;
+    pending += last ? decoder.decode() : decoder.decode(next.value, { stream: true });
     let needMore = false;
     while (position < pending.length) {
       const at = pending.indexOf('<', position);
@@ -43,8 +47,7 @@ export function* scanXmlChildren(bytes, itemName, chunkSize = 1 << 20) {
     const keep = start >= 0 ? start : position;
     if (keep) { pending = pending.slice(keep); position -= keep; if (start >= 0) start -= keep; }
     if (last) {
-      if (start >= 0 || (needMore && pending.trim())) throw new Error('XML 항목이 끝까지 저장되지 않았습니다.');
+      if (depth !== 0 || start >= 0 || (needMore && pending.trim())) throw new Error('XML 항목이 끝까지 저장되지 않았습니다.');
       break;
-    }
-  }
+    }  } } finally { iterator.return?.(); }
 }

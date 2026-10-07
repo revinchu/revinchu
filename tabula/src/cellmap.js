@@ -35,7 +35,12 @@ export class CellMap {
     this.n = 0;
     this.candidates = new Map(); // 수식/링크 후보만: 일반 값과 압축 빈 셀은 구조 검사에서 건너뛴다.
     this.formulaAsts = new Map(); // 공유 AST → 참조 수. null은 해석하지 못한 수식이다.
-    if (src) for (const [k, v] of (typeof src.entries === 'function' ? src.entries() : Object.entries(src))) this.set(k, v);
+    if (src instanceof CellMap) {
+      for (const [c, column] of src.cols) {
+        if (column.blankOnly && column.size) { this.cols.set(c, column.shareData()); this.n += column.size; }
+        else for (const [r, cell, count] of column.storageEntries()) this.setRunRC(r, c, count, cell);
+      }
+    } else if (src) for (const [k, v] of (typeof src.entries === 'function' ? src.entries() : Object.entries(src))) this.set(k, v);
   }
 
   get size() { return this.n; }
@@ -48,6 +53,18 @@ export class CellMap {
   hasRC(r, c) {
     const m = this.cols.get(c);
     return m !== undefined && m.has(r);
+  }
+
+  /** 가져오기 중 최초 열 순서를 예약합니다. 값이 없어도 cols 위치는 유지됩니다. */
+  ensureColumn(c) {
+    let column = this.cols.get(c);
+    if (!column) { column = new RunColumn((value) => sharedBlanks.has(value)); this.cols.set(c, column); }
+    return column;
+  }
+  /** 가져오기 collector 전용: 기존 point와 후보 셀을 유지한 열 자료를 받아들입니다. */
+  replaceImportedColumn(c, column) {
+    const old = this.cols.get(c); this.cols.set(c, column);
+    this.n += column.size - (old?.size ?? 0);
   }
 
   setRC(r, c, v) {
@@ -82,18 +99,18 @@ export class CellMap {
     let col = this.candidates.get(c);
     const previous = col?.get(r);
     const ast = value?.formula ? value.ast || null : undefined;
-    if (previous?.ast !== ast) {
-      if (previous?.ast !== undefined) {
-        const count = this.formulaAsts.get(previous.ast) - 1;
-        if (count) this.formulaAsts.set(previous.ast, count); else this.formulaAsts.delete(previous.ast);
+    if (previous !== ast) {
+      if (previous !== undefined) {
+        const count = this.formulaAsts.get(previous) - 1;
+        if (count) this.formulaAsts.set(previous, count); else this.formulaAsts.delete(previous);
       }
       if (ast !== undefined) this.formulaAsts.set(ast, (this.formulaAsts.get(ast) ?? 0) + 1);
     }
     if (keep) {
       if (!col) { col = new Map(); this.candidates.set(c, col); }
-      // 셀과 별개로 이전 AST를 기록하여 같은 객체를 정규화해 다시 넣어도 정확히 차감한다.
-      if (previous) { previous.cell = value; previous.ast = ast; }
-      else col.set(r, { cell: value, ast });
+      // 이전 AST 자체를 보관합니다. 수식마다 별도 객체·셀 참조를 만들지 않고,
+      // 같은 셀 객체의 AST를 바꿔 다시 넣어도 이전 요약을 정확히 차감합니다.
+      col.set(r, ast);
     } else if (col) {
       col.delete(r);
       if (!col.size) this.candidates.delete(c);
@@ -102,13 +119,22 @@ export class CellMap {
 
   /** 가져온 raw 후보도 정규화된 formula 플래그로 구분한다 (텍스트 수식 제외). */
   *formulaEntries() {
-    for (const [c, col] of this.candidates) for (const [r, { cell }] of col) if (cell.formula) yield [r, c, cell];
+    for (const [c, col] of this.candidates) {
+      const stored = this.cols.get(c);
+      for (const r of col.keys()) { const cell = stored?.get(r); if (cell?.formula) yield [r, c, cell]; }
+    }
   }
   forEachFormulaRC(fn) {
-    for (const [c, col] of this.candidates) for (const [r, { cell }] of col) if (cell.formula) fn(cell, r, c);
+    for (const [c, col] of this.candidates) {
+      const stored = this.cols.get(c);
+      for (const r of col.keys()) { const cell = stored?.get(r); if (cell?.formula) fn(cell, r, c); }
+    }
   }
   forEachLinkRC(fn) {
-    for (const [c, col] of this.candidates) for (const [r, { cell }] of col) if (cell.link) fn(cell, r, c);
+    for (const [c, col] of this.candidates) {
+      const stored = this.cols.get(c);
+      for (const r of col.keys()) { const cell = stored?.get(r); if (cell?.link) fn(cell, r, c); }
+    }
   }
 
   /** 시트 간 의존성은 같은 불변 AST를 공유하는 셀마다 반복해서 검사하지 않는다. */
@@ -124,7 +150,15 @@ export class CellMap {
 
   /** 소유권을 넘겨받은 셀을 정규화하며 처리한 논리 셀 수를 내보냅니다. */
   *mapValues(mapper, sharedMapper) {
+    const normalizedBlanks = new WeakMap();
     for (const [c, m] of this.cols) {
+      const sharedKey = sharedMapper && m.sharedData && m.blankOnly ? m.dataKey : null;
+      const hit = sharedKey && normalizedBlanks.get(sharedKey);
+      if (hit) {
+        const next = hit.shareData(); this.cols.set(c, next); this.n += next.size - m.size;
+        if (!next.size) this.cols.delete(c);
+        yield m.size; continue;
+      }
       let before = m.size;
       for (const count of m.mapValues((value, r) => {
         const next = mapper(value, r, c);
@@ -134,6 +168,7 @@ export class CellMap {
         this.n += m.size - before; before = m.size;
         yield count;
       }
+      if (sharedKey) normalizedBlanks.set(sharedKey, m);
       if (!m.size) this.cols.delete(c);
     }
   }
