@@ -2580,12 +2580,38 @@ export class Workbook {
     });
     this.sheets.forEach((sh, i) => {
       const fix = (def) => {
-        if (!def || !def.range || String(def.source ?? '').toLowerCase() !== target.name.toLowerCase()) return def;
-        const rg = adjustRange(def.range, axis, index, count);
-        return rg ? { ...def, range: rg } : def;
+        if (!def) return def;
+        let next = def;
+        if (sh === target) {
+          // 피벗 출력 셀과 버튼은 같은 구조 변경을 따라야 이전 위치에 머리글이 남지 않는다.
+          const area = def.area && adjustRange(def.area, axis, index, count);
+          if (def.area && !area) return null;
+          const anchor = isRow ? 'top' : 'left';
+          const origin = def[anchor] ?? 0;
+          const pos = Number.isFinite(origin) ? movePosition(origin) : origin;
+          const buttons = def.buttons?.map((button) => {
+            const p = button[cellKey];
+            if (!Number.isFinite(p)) return button;
+            if (count < 0 && p >= index && p < index - count) return null;
+            const moved = movePosition(p);
+            return moved === p ? button : { ...button, [cellKey]: moved };
+          }).filter(Boolean);
+          const changedArea = area && ['r1', 'c1', 'r2', 'c2'].some((key) => area[key] !== def.area[key]);
+          const changedButtons = buttons && (buttons.length !== def.buttons.length || buttons.some((button, j) => button !== def.buttons[j]));
+          if (pos !== origin || changedArea || changedButtons) {
+            next = { ...def };
+            if (pos !== origin) next[anchor] = pos;
+            if (changedArea) next.area = area;
+            if (changedButtons) next.buttons = buttons;
+          }
+        }
+        if (!next.range || String(next.source ?? '').toLowerCase() !== target.name.toLowerCase()) return next;
+        const rg = adjustRange(next.range, axis, index, count);
+        return rg ? { ...next, range: rg } : next;
       };
       const p = fix(sh.pivot);
-      const x = (sh.pivotsExtra ?? []).map(fix);
+      const extras = (sh.pivotsExtra ?? []).map(fix);
+      const x = sh === target ? extras.filter(Boolean) : extras;
       if (i !== si && (p !== sh.pivot || x.some((d, j) => d !== sh.pivotsExtra[j]))) { this.propSnap(i, 'pivot'); this.propSnap(i, 'pivotsExtra'); }
       sh.pivot = p;
       sh.pivotsExtra = x;

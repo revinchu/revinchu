@@ -17,6 +17,7 @@ import { writeChartTemplate, readChartTemplate } from './chart-template.js';
 import { pivotContextTarget, pivotValueDef, pivotRemoveContextField } from './pivot-context.js';
 import { slicerSizePatch, slicerSourceKey, slicerDimensions, slicerDimensionPatch } from './slicer-properties.js';
 import { captureDrawingAnchors, reflowDrawingAnchors } from './drawing-anchor.js';
+import { capturePivotCaches, restorePivotCaches, shiftPivotCaches } from './pivot-structure-cache.js';
 import { pivotOutputArea, pivotAreaConflict } from './pivot-area.js';
 import { phoneticEditor } from './phonetic-ui.js';
 import { readRangeQuerySource } from './range-query.js';
@@ -9797,6 +9798,24 @@ function anchorObjects(fn, shift = null, moveOnly = false) {
   return result;
 }
 
+function snapshotPivotRendering() {
+  return wb.sheets.map((s, i) => capturePivotCaches(pivotLayouts, pivotWritten, i, s));
+}
+
+/** 구조 변경과 피벗의 역할·수동 서식 기록을 같은 실행 취소 단위로 옮긴다. */
+function shiftWorksheet(axis, index, count) {
+  const targetSi = si, beforeSheet = { ...sheet(), pivotsExtra: [...(sheet().pivotsExtra ?? [])] };
+  const history = meta(), before = snapshotPivotRendering();
+  history.pivotStructure = { before, after: null };
+  wb.transact(() => {
+    anchorObjects(() => wb.shiftAxis(targetSi, axis, index, count), { axis, index, count });
+    shiftPivotCaches(pivotLayouts, pivotWritten, { axis, index, count }, targetSi, beforeSheet, wb.sheets[targetSi]);
+    // 다른 시트의 원본 범위도 바뀔 수 있다. 출력 좌표는 그대로 두고 새 정의에 연결한다.
+    for (let i = 0; i < before.length; i++) if (i !== targetSi) restorePivotCaches(pivotLayouts, pivotWritten, i, before[i], wb.sheets[i]);
+    history.pivotStructure.after = snapshotPivotRendering();
+  }, history);
+}
+
 function updateObject(id, patch) {
   const f = findObject(sheet(), id);
   if (viewOnly || wb.props?.markedFinal || (f?.obj.locked !== false && protectBlocked('objects'))) return;
@@ -12206,7 +12225,7 @@ function preparePivotWrite(targetSi, def, { fresh = false } = {}) {
 }
 
 function pivotOverlapMessage(def, other) {
-  toast(`피벗 테이블 "${def.name ?? '피벗 테이블'}"의 결과가 "${other.name ?? '다른 피벗 테이블'}"과 겹칩니다. 피벗 테이블을 이동하거나 필드를 줄인 후 다시 시도하세요.`);
+  toast(`피벗 테이블 "${def.name ?? '피벗 테이블'}"의 결과가 "${other.name ?? '다른 피벗 테이블'}"과 겹칩니다. 피벗 테이블 사이에 행·열을 삽입하거나 피벗을 이동한 후 다시 시도하세요.`, { duration: 8000 });
 }
 
 function pivotWriteAllowed(targetSi, def, prepared, replacing = def) {
@@ -12525,7 +12544,11 @@ function setPivotDef(entry, def, s = entry.si ?? si) {
   if (s === si && !chartSel && pivotHere()?.def === entry.def) {
     historyMeta.pivotFocus = { si:s, prop:entry.prop, index:entry.index, name:entry.def.name ?? '' };
   }
-  wb.transact(() => applyPivotChanges(plans), historyMeta);
+  historyMeta.pivotStructure = { before: snapshotPivotRendering(), after: null };
+  wb.transact(() => {
+    applyPivotChanges(plans);
+    historyMeta.pivotStructure.after = snapshotPivotRendering();
+  }, historyMeta);
   entry.def = target.def;
   return true;
 }
@@ -12534,10 +12557,12 @@ function setPivotDef(entry, def, s = entry.si ?? si) {
 function refreshPivotEntries(entries, { all = false, autofit = true, historyMeta = meta() } = {}) {
   const plans = preparePivotChanges(entries.map(entry => ({ entry, def: entry.def })), { fresh: true });
   if (!plans) return false;
+  const structureHistory = historyMeta.joinPrev && wb.undoStack.at(-1)?.meta?.pivotStructure;
   wb.transact(() => {
     wb.clearPivotSnapshots(all ? null : entries.map(e => e.def.snapshotId).filter(Boolean));
     wb.pivotMemo = null;
     applyPivotChanges(plans, { autofit });
+    if (structureHistory) structureHistory.after = snapshotPivotRendering();
   }, historyMeta);
   return true;
 }
@@ -20110,8 +20135,8 @@ const COMMANDS = {
   slicerFontSize: (v) => { if (chartSel) { updateObject(chartSel, { fontSize: Number(v) > 0 ? clamp(Number(v), 5, 72) : undefined }); gv.renderObjectsAll(); } },
   slicerHeadSize: (v) => { if (chartSel) { updateObject(chartSel, { headSize: Number(v) > 0 ? clamp(Number(v), 5, 72) : undefined }); gv.renderObjectsAll(); } },
   slicerBold: () => { const sl = (sheet().slicers ?? []).find((x) => x.id === chartSel); if (sl) { updateObject(sl.id, { bold: !sl.bold || undefined }); gv.renderObjectsAll(); } },
-  undo: () => { const m = wb.undo(); if (m) restoreMeta(m); else toast('실행 취소할 작업이 없습니다.'); },
-  redo: () => { const m = wb.redo(); if (m) restoreMeta(m); },
+  undo: () => { const m = wb.undo(); if (m) restoreMeta(m, 'before'); else toast('실행 취소할 작업이 없습니다.'); },
+  redo: () => { const m = wb.redo(); if (m) restoreMeta(m, 'after'); },
   save: saveFile,
   saveAs,
   open: () => openBackstage('open'),
@@ -20177,22 +20202,22 @@ const COMMANDS = {
   insertRows: structural(() => {
     const n = selKind === 'cols' || selKind === 'all' ? 1 : Math.min(sel.r2 - sel.r1 + 1, 100000);
     if (!rowTailAllowed(n)) return;
-    wb.transact(() => anchorObjects(() => wb.insertRows(si, sel.r1, n), { axis: 'row', index: sel.r1, count: n }), meta());
+    shiftWorksheet('row', sel.r1, n);
   }),
   insertCols: structural(() => {
     const n = selKind === 'rows' || selKind === 'all' ? 1 : Math.min(sel.c2 - sel.c1 + 1, 5000);
-    wb.transact(() => anchorObjects(() => wb.insertCols(si, sel.c1, n), { axis: 'col', index: sel.c1, count: n }), meta());
+    shiftWorksheet('col', sel.c1, n);
   }),
   deleteRows: structural(() => {
     const r1 = sel.r1;
     const n = selKind === 'cols' ? 1 : sel.r2 - sel.r1 + 1;
-    wb.transact(() => anchorObjects(() => wb.deleteRows(si, r1, n), { axis: 'row', index: r1, count: -n }), meta());
+    shiftWorksheet('row', r1, -n);
     selectCell(r1, active.c);
   }),
   deleteCols: structural(() => {
     const c1 = sel.c1;
     const n = selKind === 'rows' ? 1 : sel.c2 - sel.c1 + 1;
-    wb.transact(() => anchorObjects(() => wb.deleteCols(si, c1, n), { axis: 'col', index: c1, count: -n }), meta());
+    shiftWorksheet('col', c1, -n);
     selectCell(active.r, c1);
   }),
   insertMenuKey: () => {
@@ -20540,6 +20565,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['행 삽입과 피벗·그림 이동', ['행·열 삽입 시 피벗 범위와 필터 단추를 함께 옮겨 새로 고침 후에도 그림과 표의 위치를 유지합니다. 그림은 Excel의 셀 이동·크기 설정을 따릅니다.', '짧은 행의 가운데를 쉽게 선택하고, 선택 행을 유지하며 삽입을 반복할 수 있습니다. 리본에 초점이 있어도 F4 반복이 작동하며 피벗 겹침 안내는 8초간 표시합니다.']],
   ['피벗 필드 창의 같은 영역 폭', ['필터·열·행·값 영역을 같은 폭으로 표시하고, 긴 필드 이름은 말줄임으로 표시해 오른쪽 메뉴와 값 설정 버튼이 잘리지 않도록 했습니다.']],
   ['피벗 필드를 끌어 제거', ['행·열·값·필터 영역의 필드를 위쪽 필드 목록으로 끌어 놓으면 피벗에서 제거합니다. 같은 값 필드가 여러 개면 끌어온 항목만 제거하며 원본 데이터는 유지합니다.', '마우스·터치 이동과 실행 취소·다시 실행을 지원합니다.']],
   ['피벗 옵션 보존과 겹침 방지', ['Excel 파일의 열 자동 맞춤·다중 필터·사용자 지정 정렬 목록 설정을 보존합니다. 자동 맞춤을 끄면 정렬·업데이트에서도 열 너비를 유지합니다.', '필드 추가·필터·새로 고침으로 다른 피벗과 겹치면 적용을 중단하고 기존 결과를 보존합니다. 여러 연결 피벗도 전체 범위를 먼저 확인합니다.']],
@@ -20812,7 +20838,9 @@ function run(cmd, arg, { keepMenu = false } = {}) {
   if (!keepMenu && !document.activeElement?.closest('.dialog,.menu') && !(cmd === 'renameSheet' && dom.sheetTabs.contains(document.activeElement))) focusGrid();
 }
 
-function restoreMeta(m) {
+function restoreMeta(m, side) {
+  const snapshots = m.pivotStructure?.[side];
+  if (snapshots) for (let i = 0; i < snapshots.length && i < wb.sheets.length; i++) restorePivotCaches(pivotLayouts, pivotWritten, i, snapshots[i], wb.sheets[i]);
   if (m.si !== si && m.si < wb.sheets.length) switchSheet(m.si);
   gv.layout();
   let range = m.sel, kind = m.selKind ?? 'cells', point = m.active;
@@ -21127,6 +21155,12 @@ function bindEvents() {
     }
     if (e.target === ed || editing || isDialogOpen() || isMenuOpen() || document.querySelector('.backstage')) return;
     if (e.target instanceof Element && e.target.matches('input, textarea, select, [contenteditable]')) return;
+    // 리본·시트 탭 등에 초점이 남아도 F4는 현재 선택에 마지막 작업을 반복한다.
+    // 셀 편집의 참조 전환과 팝업/입력 필드의 키 처리는 기존 경로에 맡긴다.
+    if (!e.defaultPrevented && e.key === 'F4' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey
+      && !e.isComposing && e.keyCode !== 229 && !(e.target instanceof Element && e.target.closest('[contenteditable]'))) {
+      e.preventDefault(); e.stopPropagation(); endKeytip(); repeatLast(); return;
+    }
     if (handleKeytipKey(e)) e.stopPropagation();
   }, true);
   document.addEventListener('mousedown', (e) => {

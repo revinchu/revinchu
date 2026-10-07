@@ -533,6 +533,7 @@ export class GridView {
     if (zone === 'rowHeader') edgeRow = headerResizeEdge(this.rows, y, {
       zoom: this.z, header: this.hh, viewport: this.viewH, origin: this.originY,
       scroll: this.sy, frozenStart: this.frozenTop, frozenEnd: this.fr,
+      tolerance: 3, maxFraction: .2,
     });
     return { zone, r, c, x, y, sheetX, sheetY, edgeCol, edgeRow, ...out };
   }

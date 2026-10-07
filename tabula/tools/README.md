@@ -709,3 +709,11 @@ row-limit-storage.mjs는 로컬 Chromium에서 CSV 확장 행 가져오기 및 �
 `node tools/pivot-options-overlap.mjs`는 native XLSX 합성 파일을 격리 브라우저에서 열어 자동 맞춤 옵션과 정렬·필터·새로 고침의 너비, 행·열·값 확장 충돌, 슬라이서 일괄 변경, 거절된 슬라이서 새로 고침의 stale 캐시 보존, Undo/Redo 및 자동 갱신 재시도를 검사한다. `WIXEL_URL`, `WIXEL_BROWSER=chromium|firefox|webkit`, `PIVOT_LAYOUT_OUTPUT`(D: 폴더), 선택 `PIVOT_LAYOUT_FILTER`를 지정한다. `PIVOT_LAYOUT_BASELINE=c95cb90`은 수정 전 app/xlsx/xlsb를 메모리에서 제공하며 예상 실패의 결과를 별도 폴더에 보관한다.
 
 사용자가 지정한 이번 XLSB는 `REAL_WORKBOOK`으로 로컬 서버에서만 검증한다. 14개 피벗의 옵션·native XLSX 왕복과 검색어 시트 정렬·Undo 후 열 너비를 확인한다. 공개 합성 검사에는 정확한 URL을 `WIXEL_ALLOWED_TEST_URL`에도 지정한다. 모든 브라우저 검사에서 API·외부 요청·쓰기 요청을 차단한다. `TEMP`·`TMP`와 Playwright 브라우저 캐시도 D:를 사용한다. 범위와 한계는 [96. 피벗 옵션과 겹침 방지](../docs/codex/96_피벗옵션과겹침방지.md)에 기록한다.
+
+### 전체 행 삽입·피벗 버튼·그림 앵커 회귀
+
+`node tools/pivot-row-insert.mjs`는 합성 문서에서 실제 삽입 탭의 시트 행 삽입 버튼과 홈 메뉴의 연속 삽입, 격자·리본 버튼·탭·상태 표시줄 버튼 초점의 F4, 선택 유지 및 Undo/Redo를 검사한다. 두 피벗 위/사이에 20회 전체 행을 삽입한 뒤 페이지·행·열 필터 버튼 개수와 셀 좌표, 소스 정의 및 확대·스크롤·틀 고정을 확인한다. 작은 행 머리글의 25/50/75% 부근 선택점은 실제 MouseEvent 정수 CSS 좌표와 가운데 60% 범위를 함께 고려하고 입력 좌표를 결과에 기록한다. 보호·마지막 행 제한의 원자적 거절, 수식 편집 F4의 참조 전환, 메뉴/입력 초점 격리 및 슬라이서 충돌 경고의 8초 표시도 포함한다.
+
+합성 PNG의 oneCell/twoCell/absolute 배치와 혼합 그룹·슬라이서의 행 삽입 및 화면 좌표, 20회 삽입+피벗 새로 고침의 oneCell 크기 보존, 행 삽입→수동 피벗 서식→새로 고침→Undo/Redo의 셀·정의·캐시 상태와 autoRefresh가 원본 편집 이력에 합쳐지는 원자성을 확인한다. 자동 갱신 사례는 처음 원본 버전을 등록하는 350ms debounce가 끝난 뒤 편집하도록 준비 단계에서 500ms 대기한다. 값 필드 확장→Undo→앞 행 삽입→새로 고침에서 이전 역할 캐시가 부활해 외부 셀과 수동 서식을 지우지 않는지도 검사한다. 부분 셀 밀기는 전체 행 삽입과 다른 기능으로 이 도구의 필수 범위에 포함하지 않는다.
+
+`WIXEL_URL`, `WIXEL_BROWSER=chromium|firefox|webkit`, `WIXEL_ROW_INSERT_OUT`(D: 폴더), `WIXEL_ROW_INSERT_FILTER`(사례명 부분 문자열, `|`로 여러 조건)를 지정할 수 있다. 로컬 소스 서버에서 `WIXEL_ROW_INSERT_BASELINE=316020f`를 지정하면 기준 app/view/header-resize/workbook/ui 응답만 메모리에서 제공한다. 정확한 공개 합성 URL은 `WIXEL_ALLOWED_TEST_URL`에도 같은 값으로 지정해야 한다. 실제 사용자 파일을 열지 않으며 API·외부 요청·원격 쓰기를 차단한다. `PLAYWRIGHT_MODULE`, `PLAYWRIGHT_BROWSERS_PATH`, `TEMP`·`TMP`는 기존 런타임과 D: 캐시·임시 폴더를 사용한다. 결과 JSON은 before/after 초점·선택·이력 및 실제 입력 이벤트 trace를 포함하고 스크린샷은 출력 폴더에 저장한다. 확대와 고정은 브라우저 시뮬레이션이며 물리 장치 입력 검증과 구분한다.

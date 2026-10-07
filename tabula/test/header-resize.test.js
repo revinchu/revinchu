@@ -105,6 +105,8 @@ test('long filtered row runs use bounded lookups without enumerating every row',
   let reads=0; const size=axis.size.bind(axis); axis.size=i=>{reads++;return size(i);};
   assert.equal(headerResizeEdge(axis,41,{header:20}),0);
   assert.equal(headerResizeEdge(axis,60,{header:20}),999999);
+  assert.equal(headerResizeEdge(axis,30,{header:20,zoom:.5,tolerance:3,maxFraction:.2}),null);
+  assert.equal(headerResizeEdge(axis,60,{header:20,zoom:.5,tolerance:3,maxFraction:.2}),999999);
   assert.ok(reads<40, `size reads: ${reads}`);
 });
 
@@ -114,12 +116,13 @@ function grid(overrides={}) {
     originX:0,originY:0,sx:0,sy:0,fc:0,fr:0,frozenLeft:0,frozenTop:0,frozenW:0,frozenH:0, ...overrides };
 }
 
-test('GridView hit testing wires screen-space column and row boundary tolerance', () => {
+test('GridView keeps the column tolerance while row headers retain a selection center', () => {
   const view=grid();
   const col=GridView.prototype.hitTest.call(view,100+114*.5+4,205);
   assert.equal(col.zone,'colHeader'); assert.equal(col.edgeCol,0);
   const row=GridView.prototype.hitTest.call(view,105,200+40*.5+4);
-  assert.equal(row.zone,'rowHeader'); assert.equal(row.edgeRow,0);
+  assert.equal(row.zone,'rowHeader'); assert.equal(row.r,1); assert.equal(row.edgeRow,null);
+  assert.equal(GridView.prototype.hitTest.call(view,105,200+40*.5+1).edgeRow,0);
 });
 
 test('outline bands and cell bodies are excluded from resize hit testing', () => {
@@ -130,4 +133,46 @@ test('outline bands and cell bodies are excluded from resize hit testing', () =>
   assert.equal(body.zone,'cell'); assert.equal(body.edgeCol,null); assert.equal(body.edgeRow,null);
   const corner=GridView.prototype.hitTest.call(view,105,205);
   assert.equal(corner.zone,'corner'); assert.equal(corner.edgeCol,null);
+});
+
+test('18~22px 행의 가운데는 낮은 배율에서도 선택하고 정확 경계는 크기를 조절한다', () => {
+  for (const height of [18, 20, 22]) for (const zoom of [.25, .55, .7, 1, 1.5, 2, 4]) {
+    const view=grid({z:zoom, rows:new Axis(height,{},[],100)}), r=3;
+    const hit=y=>GridView.prototype.hitTest.call(view,105,200+y*zoom);
+    for(const fraction of [.25,.5,.75]) {
+      const row=hit(20+(r+fraction)*height);
+      assert.equal(row.zone,'rowHeader'); assert.equal(row.r,r);
+      assert.equal(row.edgeRow,null,'height='+height+' zoom='+zoom+' fraction='+fraction);
+    }
+    const edge=20+(r+1)*height, offset=Math.min(1/zoom,height*.1);
+    for(const delta of [-offset,0,offset]) assert.equal(hit(edge+delta).edgeRow,r,'정확한 행 경계 유지');
+  }
+});
+
+test('높은 행도 3 CSS px 밖에서는 선택하고 이전 5px 영역을 크기 조절로 잡지 않는다', () => {
+  for(const zoom of [.55,1,2]) {
+    const view=grid({z:zoom,rows:new Axis(40,{},[],100)}), edge=60;
+    for(const delta of [-4,4]) assert.equal(GridView.prototype.hitTest.call(view,105,200+edge*zoom+delta).edgeRow,null);
+    for(const delta of [-2.9,0,2.9]) assert.equal(GridView.prototype.hitTest.call(view,105,200+edge*zoom+delta).edgeRow,0);
+  }
+});
+
+test('선택 중심 상한은 이전 행 대신 포인터가 가리키는 실제 행 높이를 쓴다', () => {
+  const axis=new Axis(40,{1:8},[],100), options={header:20,zoom:.5,maxFraction:.2,tolerance:3};
+  assert.equal(headerResizeEdge(axis,59,options),0);
+  assert.equal(headerResizeEdge(axis,61,options),0);
+  assert.equal(headerResizeEdge(axis,64,options),null,'짧은 다음 행의 중앙은 선택 영역');
+  assert.equal(headerResizeEdge(axis,67,options),1);
+  assert.equal(headerResizeEdge(axis,68,options),1);
+  assert.equal(headerResizeEdge(axis,71,options),1,'긴 다음 행 쪽의 가까운 경계는 유지');
+});
+
+test('숨김과 틀 고정·스크롤 뒤에도 짧은 행의 선택 중심과 경계 인덱스는 유지한다', () => {
+  const axis=new Axis(20,{6:8},[{7:true,8:true}],100);
+  const options={header:20,viewport:300,zoom:.5,frozenStart:0,frozenEnd:2,origin:0,scroll:80,tolerance:3,maxFraction:.2};
+  assert.equal(headerResizeEdge(axis,60,options),1,'틀 고정 끝 경계');
+  assert.equal(headerResizeEdge(axis,64,options),null,'스크롤 영역의 짧은 행 중앙');
+  assert.equal(headerResizeEdge(axis,68,options),6,'숨김 행 앞의 실제 경계');
+  assert.equal(headerResizeEdge(axis,78,options),null,'숨김 행 뒤 보이는 행 중앙');
+  assert.equal(headerResizeEdge(axis,88,options),9,'숨김 행은 크기 조절 대상에서 제외');
 });

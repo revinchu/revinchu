@@ -1,18 +1,25 @@
 /**
  * Find a visible row/column header boundary near a pointer. Geometry is in
  * worksheet units; tolerance stays in CSS pixels when the worksheet is zoomed.
+ * maxFraction optionally reserves a selection center in the pointed item.
  * Frozen and scrolling panes are checked separately so a clipped, offscreen
  * boundary cannot resize a row/column hidden behind the frozen pane.
  */
 export function headerResizeEdge(axis, coordinate, {
   zoom = 1, header = 0, viewport = Infinity, origin = 0, scroll = 0,
-  frozenStart = 0, frozenEnd = 0, tolerance = 5,
+  frozenStart = 0, frozenEnd = 0, tolerance = 5, maxFraction = null,
 } = {}) {
   if (!axis || !Number.isFinite(coordinate) || coordinate < header || coordinate >= viewport || !(viewport > header)) return null;
   const scale = Number.isFinite(zoom) && zoom > 0 ? zoom : 1;
-  const slop = Math.max(0, tolerance) / scale;
   const frozenSize = Math.max(0, axis.pos(frozenEnd) - origin);
   const seam = Math.min(viewport, header + frozenSize);
+  let slop = Math.max(0, tolerance) / scale;
+  if (Number.isFinite(maxFraction)) {
+    // 짧은 행은 경계 판정이 가운데 선택 영역까지 차지하지 않도록 제한한다.
+    const sheetPoint = origin + coordinate - header + (coordinate < seam ? 0 : scroll);
+    const size = axis.size(axis.indexAt(sheetPoint));
+    slop = Math.min(slop, Math.max(0, size * maxFraction));
+  }
   let found = null, distance = Infinity;
   const inspect = (start, end, sheetStart, first, last) => {
     if (!(end > start) || first > last || coordinate < start - slop || coordinate > end + slop) return;

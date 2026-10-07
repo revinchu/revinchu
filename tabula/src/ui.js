@@ -324,12 +324,12 @@ window.addEventListener('resize', () => { if (accessMode && accessScope?.isConne
 
 // ───────────── 알림 ─────────────
 let toastTimer;
-export function toast(msg) {
+export function toast(msg, { duration = 1800 } = {}) {
   const t = document.getElementById('toast');
   t.textContent = msg;
   t.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove('show'), 1800);
+  toastTimer = setTimeout(() => t.classList.remove('show'), Number.isFinite(duration) ? Math.max(0, duration) : 1800);
 }
 
 // ───────────── 메뉴 ─────────────
