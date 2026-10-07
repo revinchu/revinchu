@@ -1572,13 +1572,10 @@ export class Workbook {
     this.depCtx = { byName, tableSheet, nameSet };
     this.deps = this.sheets.map((sheet, si) => {
       const d = { sheets: new Set(), all: false };
-      const seen = new Set();
-      for (const [,,cell] of sheet.cells.formulaEntries()) {
-        if (!cell.ast) { d.all = true; continue; }
-        if (seen.has(cell.ast)) continue;
-        seen.add(cell.ast);
-        this.addDeps(d, si, cell.ast);
-      }
+      sheet.cells.forEachFormulaAST((ast) => {
+        if (!ast) d.all = true;
+        else this.addDeps(d, si, ast);
+      });
       return d;
     });
     this.affectMemo.clear();

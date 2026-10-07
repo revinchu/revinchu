@@ -2290,8 +2290,8 @@ function handleViewMouseDown(e) {
     if (slBtn.classList.contains('sl-item')) slicerPick(id, slBtn.dataset.k, primaryPointerModifier(e));
     else if (slBtn.classList.contains('sl-clear')) slicerClear(id);
     else { const sl = sheet().slicers.find((x) => x.id === id); updateObject(id, { multi: !sl.multi }); }
-    gv.renderObjectsAll();
-    updateSelectionUI();
+    // A changed filter already queues the full view once; rejected/no-op clicks still select the object.
+    if (!renderQueued) { gv.renderObjectsAll(); updateSelectionUI(); }
     return;
   }
   const objEl = t.closest('.obj');
@@ -8173,8 +8173,7 @@ function slicerPick(id, key, additive) {
   const m = slicerModel(sl);
   if (m.broken) return;
   m.apply(slicerPickValues(m, key, additive || sl.multi));
-  gv.layout();
-  setMode();
+  if (!renderQueued) { gv.layout(); setMode(); }
 }
 
 function slicerClear(id) {
@@ -8183,8 +8182,7 @@ function slicerClear(id) {
   const m = slicerModel(sl);
   if (m.broken || !m.filtered) return;
   m.apply(null);
-  gv.layout();
-  setMode();
+  if (!renderQueued) { gv.layout(); setMode(); }
 }
 
 /** 표 또는 피벗 테이블에 슬라이서 넣기 */
@@ -20629,6 +20627,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['슬라이서 첫 선택 속도', ['큰 파일에서 주차·캠페인 슬라이서를 처음 선택할 때의 지연을 줄였습니다. 연결된 피벗 결과와 선택 화면을 함께 갱신합니다.', '빠른 연속 선택·다중 선택·필터 지우기와 실행 취소를 지원하며, 피벗이 겹치는 선택은 기존 상태를 유지합니다.']],
   ['복사한 행 삽입', ['여러 행을 Ctrl+C로 복사한 뒤 대상 행 우클릭 → 복사한 셀 삽입으로 같은 개수의 행을 넣습니다. 마지막 빈 행과 행 높이도 보존하며, 기존 행·피벗·그림을 아래로 옮깁니다.', 'Ctrl+V는 덮어쓰기를 유지합니다. 복사한 행 삽입을 F4로 반복하고 Undo/Redo로 수식·개체·행 선택까지 복구합니다.']],
   ['행 삽입 속도와 F4 반복', ['행·열 삽입 시 전체 원본을 다시 훑는 처리를 줄이고 화면 갱신을 한 번으로 합쳤습니다.', '편집하지 않는 셀·리본·격자에서 F4로 마지막 삽입을 반복합니다. 입력기가 키 이름을 바꾸어 전달해도 물리 F4를 인식하며, 글자 입력 중에는 편집 동작을 유지합니다.']],
   ['행 삽입과 피벗·그림 이동', ['행·열 삽입 시 피벗 범위와 필터 단추를 함께 옮겨 새로 고침 후에도 그림과 표의 위치를 유지합니다. 그림은 Excel의 셀 이동·크기 설정을 따릅니다.', '짧은 행의 가운데를 쉽게 선택하고, 선택 행을 유지하며 삽입을 반복할 수 있습니다. 리본에 초점이 있어도 F4 반복이 작동하며 피벗 겹침 안내는 8초간 표시합니다.']],
