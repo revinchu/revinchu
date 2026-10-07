@@ -44,6 +44,8 @@ async function verifyAxis(p,axis,op,n,{start=6,repeats=1}={}){
   eq(await raw(p,3,3),'R3C3','Cells before the structure edit remain unchanged');
   eq(await raw(p,axis==='row'?35+offset:35,axis==='col'?19+offset:19),axis==='row'?'=A'+(21+offset):'=A21','Formula location and reference track the structure edit');
 }
+const lineSelection=s=>({si:s.si,sel:s.sel,kind:s.kind,active:s.active});
+async function expectLineSelection(p,selected,label){const actual=await state(p);eq(lineSelection(actual),lineSelection(selected),label);eq(actual.dialogs,0,'Whole-line deletion never opens the cell shift dialog');}
 async function history(p,before,after){eq(after.undo,before.undo+1,'One structural key is one Undo');await run(p,'undo');eq((await book(p)).sheets,before.sheets,'Undo restores exact cells, formulas, comments, styles and dimensions');await run(p,'redo');eq((await book(p)).sheets,after.sheets,'Redo restores the exact structured worksheet');}
 async function test(name,fn){
   if(only&&!only.split('|').some(v=>name.includes(v)))return;
@@ -73,9 +75,42 @@ try{
   for(const axis of ['row','col'])for(const op of ['insert','delete'])for(const n of [1,3])await test(axis+'-'+n+'-CtrlShift-'+op+'-UndoRedo-F4',async(p,info)=>{
     await fixture(p);await selectAxis(p,axis,6,n,{ui:true});info.before=await state(p);eq(info.before.kind,axis==='row'?'rows':'cols','Real header selection identifies full lines');
     const before=await book(p);info.event=await structural(p,op);await verifyAxis(p,axis,op,n);info.after=await state(p);
-    if(op==='insert'){eq(info.after.sel,info.before.sel,'Insertion preserves the selected line range');eq(info.after.kind,info.before.kind,'Insertion preserves full-line selection kind');}
-    const after=await book(p);await history(p,before,after);await selectAxis(p,axis,6,n);await key(p,'F4','F4');await verifyAxis(p,axis,op,n,{repeats:2});eq((await state(p)).undo,2,'Reselecting the target and F4 repeats the structure command once');
-    await run(p,'undo');eq((await book(p)).sheets,after.sheets,'Undo repeated structure returns to the first edit');
+    await expectLineSelection(p,info.before,'Insertion/deletion preserves the full selected line range and active cell');
+    const after=await book(p);await history(p,before,after);await expectLineSelection(p,info.before,'Undo/Redo preserves the full-line selection without reselection');
+    info.repeatEvent=await key(p,'F4','F4');eq(info.repeatEvent?.prevented,true,'F4 is handled once');await verifyAxis(p,axis,op,n,{repeats:2});eq((await state(p)).undo,2,'F4 repeats the selected line count without reselection');await expectLineSelection(p,info.before,'F4 preserves the full selected line range and active cell');
+    await run(p,'undo');eq((await book(p)).sheets,after.sheets,'Undo repeated structure returns to the first edit');await expectLineSelection(p,info.before,'Undo repeated structure preserves full-line selection');
+  });
+  for(const axis of ['row','col'])for(const n of [1,3])await test(axis+'-'+n+'-consecutive-CtrlShift-delete-selection-UndoRedo-F4',async(p,info)=>{
+    await fixture(p);await selectAxis(p,axis,6,n,{ui:true});const selected=await state(p),initial=await book(p),snapshots=[initial];info.before=selected;info.steps=[];
+    eq(selected.kind,axis==='row'?'rows':'cols','Real header selects full lines for consecutive deletion');
+    for(let i=1;i<=3;i++){
+      const event=await structural(p,'delete'),current=await state(p);info.steps.push({step:i,event,state:current});
+      // Capture the second physical shortcut before checking the first selection, so the baseline records its erroneous popup.
+      eq(current.dialogs,0,'Consecutive whole-line shortcut never opens a delete popup');
+      await verifyAxis(p,axis,'delete',n,{repeats:i});eq(current.undo,initial.undo+i,'Each consecutive key creates exactly one history item');eq(current.redo,0,'A fresh deletion clears the redo stack');
+      snapshots.push(await book(p));
+      if(i>=2){await expectLineSelection(p,selected,'Consecutive deletion retains line kind, range and active cell');eq(lineSelection(info.steps[0].state),lineSelection(selected),'The first deletion also retained the exact full-line selection');}
+    }
+    const repeatEvent=await key(p,'F4','F4'),repeated=await state(p);info.steps.push({step:4,event:repeatEvent,state:repeated});eq(repeatEvent?.prevented,true,'F4 repeats deletion without reselection');eq(repeated.undo,initial.undo+4,'Three shortcuts and F4 produce four atomic history items');
+    await verifyAxis(p,axis,'delete',n,{repeats:4});await expectLineSelection(p,selected,'F4 retains full-line selection');snapshots.push(await book(p));
+    for(let i=3;i>=0;i--){await run(p,'undo');const current=await book(p);eq(current.sheets,snapshots[i].sheets,'Undo restores exact rows/columns, dimensions, styles, comments and formula references');eq(current.undo,initial.undo+i,'Undo removes exactly one deletion history item');eq(current.redo,4-i,'Undo exposes the exact remaining redo history');await expectLineSelection(p,selected,'Undo preserves the selected full-line range and active cell');}
+    for(let i=1;i<=4;i++){await run(p,'redo');const current=await book(p);eq(current.sheets,snapshots[i].sheets,'Redo restores exact structural data and formula references');eq(current.undo,initial.undo+i,'Redo restores exactly one deletion history item');eq(current.redo,4-i,'Redo consumes exactly one history item');await expectLineSelection(p,selected,'Redo restores the full selected line range and active cell');}
+    info.final=await state(p);
+  });
+  for(const axis of ['row','col'])await test(axis+'-merged-boundary-consecutive-delete-selection-UndoRedo',async(p,info)=>{
+    await fixture(p);const initialMerge=axis==='row'?{r1:9,c1:3,r2:13,c2:4}:{r1:2,c1:9,r2:3,c2:13};
+    await p.evaluate(m=>{const w=tabula.wb();w.transact(()=>w.setSheetProp(0,'merges',[m]));w.undoStack=[];w.redoStack=[];tabula.gv().renderAll();},initialMerge);await raf(p);
+    await selectAxis(p,axis,6,3,{ui:true});const selected=await state(p),before=await book(p);info.before=selected;info.initialMerge=initialMerge;
+    eq(selected.kind,axis==='row'?'rows':'cols','Merge fixture begins with exact whole-line selection');eq(axis==='row'?selected.sel.r2-selected.sel.r1+1:selected.sel.c2-selected.sel.c1+1,3,'Exactly three lines are initially selected');
+    await structural(p,'delete');await verifyAxis(p,axis,'delete',3);await expectLineSelection(p,selected,'The first deletion keeps three whole lines beside the shifted merge');
+    const first=await book(p),shifted=axis==='row'?{r1:6,c1:3,r2:10,c2:4}:{r1:2,c1:6,r2:3,c2:10};info.first=await state(p);eq(first.sheets[0].merges,[shifted],'The five-line merge shifts into the three-line selection');
+    eq(first.undo,1,'The first merged-boundary deletion is a single history item');await run(p,'undo');eq((await book(p)).sheets,before.sheets,'Undo restores the original merge and complete worksheet');await expectLineSelection(p,selected,'Undo keeps the exact three-line selection');
+    await run(p,'redo');eq((await book(p)).sheets,first.sheets,'Redo restores the shifted merge and complete worksheet');info.afterFirstRedo=await state(p);await expectLineSelection(p,selected,'Redo must not expand the three-line history selection to the five-line merge');
+    const event=axis==='row'?await structural(p,'delete'):await key(p,'F4','F4');info.secondEvent=event;eq(event?.prevented,true,'The second physical delete or F4 is consumed');await verifyAxis(p,axis,'delete',3,{repeats:2});await expectLineSelection(p,selected,'The second deletion preserves three whole lines');
+    const second=await book(p),remaining=axis==='row'?{r1:6,c1:3,r2:7,c2:4}:{r1:2,c1:6,r2:3,c2:7};eq(second.sheets[0].merges,[remaining],'The second deletion removes exactly three lines from the intersecting merge');eq(second.undo,2,'The second deletion adds one atomic history item');
+    for(const snapshot of [first,before]){await run(p,'undo');eq((await book(p)).sheets,snapshot.sheets,'Undo restores each exact merge/data/formula state');eq((await book(p)).undo,snapshot.undo,'Undo removes one merged-boundary edit');await expectLineSelection(p,selected,'Each Undo keeps the exact whole-line selection');}
+    for(const snapshot of [first,second]){await run(p,'redo');eq((await book(p)).sheets,snapshot.sheets,'Redo restores each exact merge/data/formula state');eq((await book(p)).undo,snapshot.undo,'Redo restores one merged-boundary edit');await expectLineSelection(p,selected,'Each Redo keeps the exact whole-line selection');}
+    info.final=await state(p);
   });
   for(const axis of ['row','col'])for(const op of ['insert','delete'])await test(axis+'-CtrlShift-Numpad-'+op,async(p,info)=>{
     await fixture(p);await selectAxis(p,axis,6,2);const before=await book(p);info.event=await structural(p,op,{numpad:true});await verifyAxis(p,axis,op,2);await history(p,before,await book(p));

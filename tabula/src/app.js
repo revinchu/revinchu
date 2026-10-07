@@ -342,8 +342,9 @@ function applyRowLimit() {
   gv.ensureVisible(active.r, active.c);
   setMode();
 }
-function setSel(rg, kind = 'cells') {
-  sel = visibleRange(expandMerges(visibleRange(rg)));
+function setSel(rg, kind = 'cells', expand = true) {
+  const range = visibleRange(rg);
+  sel = visibleRange(expand ? expandMerges(range) : range);
   selKind = kind;
   if (!keepSpecial) special = null;
 }
@@ -382,14 +383,14 @@ function extendTo(r, c, { scroll = true } = {}) {
   updateSelectionUI();
 }
 
-function selectRange(rg, kind = 'cells', act = { r: rg.r1, c: rg.c1 }) {
-  if (!finishShapeTextEdit(() => selectRange(rg, kind, act))) return;
+function selectRange(rg, kind = 'cells', act = { r: rg.r1, c: rg.c1 }, { expand = true } = {}) {
+  if (!finishShapeTextEdit(() => selectRange(rg, kind, act, { expand }))) return;
   rg = visibleRange(rg);
   act = { r: clamp(act.r, rg.r1, rg.r2), c: clamp(act.c, rg.c1, rg.c2) };
   active = { ...act };
   anchor = { ...act };
   focusCell = { r: rg.r2, c: rg.c2 };
-  setSel(rg, kind);
+  setSel(rg, kind, expand);
   updateSelectionUI();
 }
 
@@ -20347,13 +20348,11 @@ const COMMANDS = {
     const r1 = sel.r1;
     const n = selKind === 'cols' ? 1 : sel.r2 - sel.r1 + 1;
     shiftWorksheet('row', r1, -n);
-    selectCell(r1, active.c);
   }),
   deleteCols: structural(() => {
     const c1 = sel.c1;
     const n = selKind === 'rows' ? 1 : sel.c2 - sel.c1 + 1;
     shiftWorksheet('col', c1, -n);
-    selectCell(active.r, c1);
   }),
   insertMenuKey: () => {
     if (copiedRowsReady()) run('insertCopiedRows');
@@ -20701,6 +20700,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['행·열 연속 삭제', ['Ctrl+Shift+-로 삭제한 뒤에도 선택한 행·열 범위를 유지합니다. 다시 선택하지 않고 단축키나 F4를 누르면 같은 개수의 행·열을 즉시 삭제합니다. 실행 취소·다시 실행에서도 선택 범위를 유지합니다.']],
   ['브라우저에서 행·열 삽입과 삭제', ['선택한 행·열은 Ctrl+Shift++로 삽입하고 Ctrl+Shift+-로 삭제합니다. 셀 범위를 선택하면 삽입·삭제 옵션을 엽니다. 숫자 키패드도 Ctrl+Shift 조합을 사용합니다.', 'Shift 없이 Ctrl+=와 Ctrl+-는 브라우저 화면 확대·축소로 사용하고, 위셀 시트 배율은 Ctrl+Alt++와 Ctrl+Alt+-를 유지합니다. 실행 취소·F4 반복과 복사한 행 삽입도 지원합니다.']],
   ['필터 메뉴 단축키와 빠른 실행', ['일반·표·피벗 행·열·보고서 필터 버튼 셀에서 Alt+↓로 필터를 열고, E로 검색창 이동 후 검색·Enter로 적용합니다. 메뉴 방향키·체크 선택·Esc 취소와 Undo/Redo를 지원합니다.', '리본 명령을 우클릭하여 빠른 실행 도구 모음에 추가하고 Alt+숫자로 실행합니다. 우클릭 제거·순서 설정과 문서 보호 설정을 유지합니다.']],
   ['슬라이서 첫 선택 속도', ['큰 파일에서 주차·캠페인 슬라이서를 처음 선택할 때의 지연을 줄였습니다. 연결된 피벗 결과와 선택 화면을 함께 갱신합니다.', '빠른 연속 선택·다중 선택·필터 지우기와 실행 취소를 지원하며, 피벗이 겹치는 선택은 기존 상태를 유지합니다.']],
@@ -20999,7 +20999,9 @@ function restoreMeta(m, side) {
     point = { r:area.r1, c:area.c1 };
     range = { r1:point.r, c1:point.c, r2:point.r, c2:point.c }; kind = 'cells';
   }
-  selectRange(range, kind, point);
+  // Whole-line history restores the recorded count even when a merge moved
+  // into that range. Ordinary cell selection keeps its merge expansion.
+  selectRange(range, kind, point, { expand: kind !== 'rows' && kind !== 'cols' && kind !== 'all' });
   gv.ensureVisible(active.r, active.c);
 }
 
