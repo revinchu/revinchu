@@ -12,6 +12,7 @@ import { noteVisible } from './review-state.js';
 import { Axis } from './axis.js';
 import { headerResizeEdge } from './header-resize.js';
 import { visibleAxisIndices } from './axis-window.js';
+import { cellTextOverflow } from './cell-text-overflow.js';
 import { GridAccessibility } from './grid-a11y.js';
 import { gridLineWidth, resolveGridBorders, gridBorderPaintOrder } from './grid-lines.js';
 import { pictureTransform } from './picture.js';
@@ -974,10 +975,11 @@ export class GridView {
     for (const r of visRows) {
       // 창 왼쪽 밖에서 넘쳐 들어오는 텍스트
       if (c1 > 0) {
-        for (let k = c1 - 1; k >= Math.max(0, c1 - 40); k--) {
+        for (let k = cols.nextVisible(c1 - 1, -1), n = 0; k >= 0 && n < 40; n++, k = cols.nextVisible(k - 1, -1)) {
+          if (!cols.size(k)) break;
           const cell = wb.getCell(si, r, k);
           if (!cell?.raw) continue;
-          if (!inMerge(r, k) && cols.size(k)) html.push(this.cellHtml(r, k, p, sheet, merges));
+          if (!inMerge(r, k)) html.push(this.cellHtml(r, k, p, sheet, merges));
           break;
         }
       }
@@ -1164,20 +1166,22 @@ export class GridView {
     edge('bl', true, x - p.ox, y - p.oy, y + h - p.oy);
     edge('br', true, x + w - p.ox, y - p.oy, y + h - p.oy);
     const cls = [];
+    let overflow = null;
     // 숫자는 자동 줄 바꿈이어도 한 줄 (엑셀: 들어가지 않으면 ###)
     const wrap = style.wrap && typeof v !== 'number';
     if (wrap) cls.push('wrap');
     else if (text && typeof v !== 'number' && !merge && (eff === 'left' || eff === 'center' || eff === 'right')) {
-      // 넘친 글자: 왼쪽 맞춤은 오른쪽 빈 칸으로, 오른쪽 맞춤은 왼쪽 빈 칸으로, 가운데는 양쪽이 모두 비었을 때 양쪽으로 (엑셀과 같음)
-      const emptyAt = (cc) => {
-        if (cc < 0) return true;
-        if (wb.getCell(si, r, cc)?.raw || merges.some((m) => r >= m.r1 && r <= m.r2 && cc >= m.c1 && cc <= m.c2)) return false;
+      // 숨긴 열은 건너뛴다. 빈 칸이 이어져도 다음 값·수식·병합 경계를 넘지 않는다.
+      const blocked = cc => {
+        const neighborCell = wb.getCell(si, r, cc);
+        if (neighborCell?.formula || (neighborCell?.raw != null && neighborCell.raw !== '') || merges.some(m => r >= m.r1 && r <= m.r2 && cc >= m.c1 && cc <= m.c2)) return true;
         // 배열 수식의 자식 셀은 raw가 없어도 값이 있다. 0·FALSE도 빈 셀이 아니다.
         const neighbor = wb.getValue(si, r, cc);
-        return neighbor == null || neighbor === '';
+        return neighbor != null && neighbor !== '';
       };
-      const ok = eff === 'left' ? emptyAt(c + 1) : eff === 'right' ? c > 0 && emptyAt(c - 1) : c > 0 && emptyAt(c - 1) && emptyAt(c + 1);
-      if (ok) cls.push('ovf');
+      // 실제 글자 폭만큼만 탐색한다. 들여쓰기와 글꼴 잉크의 작은 돌출도 남긴다.
+      overflow = cellTextOverflow(this.cols, c, eff, measureText(text, style) + 16 + (style.indent || 0) * 9, blocked);
+      if (overflow.left || overflow.right) cls.push('ovf');
     }
     if (cell?.comment) cls.push('cm');
     // 아이콘 집합: 아이콘은 왼쪽 끝에 고정하고 글자는 남은 너비 안에 (엑셀과 같음)
@@ -1247,6 +1251,10 @@ export class GridView {
       const i = cls.indexOf('ovf');
       if (i < 0) cls.push('ovf');
       spanCss = ` style="position:absolute;left:0;top:0;bottom:0;width:${w + across}px;display:flex;align-items:inherit;justify-content:center;white-space:nowrap"`;
+    }
+    if (overflow && !across && !style.rotate && cls.includes('ovf')) {
+      // 셀 상자·맞춤·배경은 그대로 두고 좌우의 글자만 경계에서 자른다.
+      css.push(`clip-path:inset(-100% -${overflow.right}px -100% -${overflow.left}px)`);
     }
     // 넘친 글자만 테두리 위에 둔다. 셀 채우기까지 z-index:1로 올리면
     // 오른쪽·아래 공유 테두리와 교차점이 흰 배경에 잘려 보인다.
