@@ -6,7 +6,7 @@ import { Workbook } from '../src/workbook.js';
 import { readXlsx, writeXlsx } from '../src/xlsx.js';
 
 const unknown = (formula, isName) => unknownFunctions(formula.replace(/^=/, ''), isName);
-const hasUnsupportedWarning = result => result.warnings.some(w => /지원하지 않는 함수/.test(w));
+const hasUnsupportedWarning = result => result.warnings.some(w => /확인이 필요한 함수 이름/.test(w));
 
 test('미지원 함수 검사는 기본 함수·문자열을 제외하고 실제 누락을 중복 없이 반환한다', () => {
   assert.deepEqual(unknown('SUM(A1:A5)+IF(TRUE,1,2)'), []);

@@ -796,6 +796,12 @@ node tools/native-layout-compare.mjs --native D:/Codex/Temp/wixel-fidelity/nativ
 
 비교는 Excel 포인트를 96dpi CSS 픽셀로 환산하며 기본 좌표 허용 오차는 0.51px다. 열 너비의 문자 단위는 픽셀과 직접 비교하지 않는다. oracle은 DisplayFormat도 기록하지만 모델 비교는 직접 서식과 논리 배치를 대상으로 한다. 표본 통과는 전체 Excel 시각 동등성, 조건부 서식의 최종 화면, 차트·이미지 픽셀이나 물리 iPad 화면의 합격을 뜻하지 않는다.
 
+## 함수 이름의 명시적 수정 검사
+
+`node tools/formula-name-repair-browser.mjs`는 아이폰 13 크기의 합성 문서로 가져오기 안내, 함수 이름 검토·취소·적용, Undo/Redo, XLSX 다운로드·재열기, 오래된 계획·시트 보호·작성 중 입력 보존을 확인합니다. `FORMULA_REPAIR_BROWSER=webkit|chromium`, `WIXEL_URL`, `FORMULA_REPAIR_OUTPUT`(D:의 출력 폴더), 기존 `PLAYWRIGHT_MODULE`·`PLAYWRIGHT_BROWSERS_PATH`를 지정합니다. 파일 교체가 끝난 실제 통합 문서 객체를 기다립니다.
+
+`--file`과 `--corrected`는 별도의 비공개 실제 파일 검사입니다. localhost에서만 허용하고 원본의 크기·수정 시각·SHA256을 전후 비교합니다. 화면은 비공개 출력 폴더에만 보관하고 콘솔은 검사 횟수만 기록합니다. 실제 파일·출력·화면은 커밋하지 않습니다. 공개 사이트 검사에는 파일 인수를 사용하지 않습니다. 브라우저는 항상 종료하며 모바일 크기의 WebKit 검사는 물리 아이폰 Safari 검증과 구분합니다.
+
 ## 가져온 피벗의 저장 화면 보존 회귀
 
 `node tools/pivot-import-presentation.mjs`는 작은 합성 XLSX를 실제 파일 선택 입력으로 열어 저장된 지난달 상대 날짜 필터 결과와 13개 값 필드의 부분합 캡션을 최초 열기에서 보존하는지 검사한다. 셀 값·직접 서식·병합·열 너비·행 높이·조건부 서식 정의와 실제 글꼴/채우기색, 행·페이지 필터의 Alt+↓와 E 검색, 다중 행 필드 접기/펼치기, 첫 변경의 잔상 제거, Undo/Redo 뒤 다른 필터 적용 및 두 번의 저장·재열기를 확인한다. 1만 행 합성 캐시는 로드된 실제 `computePivot` 함수를 계측하여 최초 열기의 호출 수 0을 요구하고, 사용자 필터·접기는 호출 수가 증가해야 통과한다.

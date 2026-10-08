@@ -119,7 +119,7 @@ test('xlsx 왕복: 동적 배열 · 이름 · 지원하지 않는 함수의 저�
   const wb2 = new Workbook(res.data);
   assert.equal(wb2.getRaw(0, 0, 5), '=NOSUCHFN(1)');
   assert.equal(wb2.getValue(0, 0, 5), 77);
-  assert.ok(res.warnings.some((w) => w.includes('저장된 계산 결과')));
+  assert.ok(res.warnings.some((w) => w.includes('확인이 필요한 함수 이름 (NOSUCHFN)') && w.includes('파일 저장값')));
 });
 
 test('조건부 서식 xlsx: 여러 범위 · 임계값 · 2010 확장 아이콘 · 표준 편차 · 표시 형식', async () => {

@@ -1,5 +1,6 @@
 import { isFileSaveSource, writeFileHandle } from './file-save.js';
 import { isLargeLocalWorkbook } from './local-storage-size.js';
+import { functionNameRepairPlan, applyFunctionNameRepairs } from './formula-name-repair.js';
 import { cachedSlicerItems, applyCachedSlicerSelection } from './slicer-cache.js';
 import { pivotFieldSourceIndex, pivotFieldItemModel, pivotItemSelection, slicerPickValues } from './pivot-field-items.js';
 import { slicerDisplayModel } from './slicer-items.js';
@@ -8899,14 +8900,51 @@ function calculationStatusDialog() {
   const result = wb.calculationIssues({ limit: 200 });
   const label = { 'source-error': '원본 오류', cached: '파일 저장값', stale: '오래된 저장값', blocked: '계산 불가', pending: '계산 대기' };
   const body = el('div', { class: 'calculation-report' },
-    el('p', {}, '원본 파일에도 있던 이름 오류와 위셀에서 재계산할 수 없는 수식을 구분합니다. 원문과 원본 오류는 그대로 보존합니다. 미지원 수식의 저장값은 직접 계산한 결과가 아니며, 입력 변경 후에는 오래된 숫자가 합계에 섞이지 않도록 오류로 표시합니다.'),
+    el('p', {}, '원본 파일의 함수 이름과 재계산 가능 여부를 확인합니다. IFERROR와 IF·IFS의 조건 처리는 그대로 계산합니다. 확인되지 않은 함수의 결과가 필요한 수식은 파일 저장값을 사용할 수 있으며, 입력 변경 후에는 오래된 저장값을 오류로 표시합니다.'),
     el('p', { role: 'status' }, result.total ? `확인할 수식 ${result.total.toLocaleString()}개${result.truncated ? ' · 처음 200개 표시' : ''}` : '미지원 수식이나 미확인 파일 저장값이 발견되지 않았습니다. 모든 계산의 정확성을 보증하는 검사는 아닙니다.'),
     result.items.length ? el('table', { class: 'backstage-list' }, el('thead', {}, el('tr', {}, ['셀', '상태', '수식 및 확인 사항'].map(t => el('th', {}, t)))),
       el('tbody', {}, result.items.map(item => el('tr', {},
         el('td', {}, el('button', { class: 'lnk', onclick: () => { dlg.close(); switchSheet(item.si); selectCell(item.r, item.c); } }, `${item.sheet}!${cellName(item.r, item.c)}`)),
         el('td', {}, label[item.status] ?? item.status),
         el('td', {}, el('code', {}, item.formula), el('p', {}, item.message), item.savedValue !== undefined ? el('small', {}, `파일에 있던 참고값: ${String(item.savedValue?.code ?? item.savedValue?.error ?? item.savedValue).slice(0, 160)} (현재 계산값 아님)`) : null))))) : null);
-  const dlg = openDialog({ title: '계산 상태 확인', body, width: 850, buttons: [{ label: '닫기', primary: true }] });
+  const dlg = openDialog({ title: '계산 상태 확인', body, width: 850, buttons: [
+    { label: '함수 이름 수정...', action: () => { dlg.close(); functionNameRepairDialog(); } },
+    { label: '닫기', primary: true },
+  ] });
+}
+
+function functionNameRepairDialog() {
+  if (editing && !commitEdit()) return;
+  const owner = wb, plan = functionNameRepairPlan(owner);
+  if (!plan.total) { alertDialog('함수 이름 수정', '알려진 함수 이름 뒤에 한글 한 글자가 붙은 수정 후보가 없습니다. 그 밖의 함수 이름은 수식에서 직접 확인하세요.'); return; }
+  const canApply = () => wb === owner && owner.version === plan.version && !viewOnly && !owner.props?.markedFinal && !plan.blocked.length;
+  const body = el('div', { class: 'calculation-report' },
+    el('p', {}, `셀 수식 ${plan.cellCount.toLocaleString()}개와 표 계산 열 수식 ${plan.templateCount.toLocaleString()}개의 함수 이름 수정 후보입니다.`),
+    el('ul', {}, plan.functions.map(fn => el('li', {}, el('code', {}, fn.from), ' → ', el('code', {}, fn.to)))),
+    el('p', {}, '아래 내용을 확인한 뒤 [수정 적용]을 누르면 자동 계산 모드에서 재계산합니다. 수동 계산 모드에서는 F9를 누르세요. IFERROR가 0으로 표시하던 결과와 이를 참조하는 합계가 바뀔 수 있습니다. 실행 취소로 되돌릴 수 있으며, 원본을 유지하려면 [다른 이름으로 저장]을 사용하세요.'),
+    el('p', {}, `대상 위치${plan.total > 20 ? ' · 처음 20개 표시' : ''}:`),
+    el('ul', {}, [...plan.cells.slice(0, 20).map(item => `${item.sheet}!${cellName(item.r, item.c)}`),
+      ...plan.tables.slice(0, Math.max(0, 20 - plan.cells.length)).map(item => `${item.sheet} · ${item.tableName} · ${colToName(item.column)}열 템플릿`)].map(text => el('li', {}, text))),
+    !canApply() ? el('p', { role: 'status' }, '읽기 전용·최종본 문서 또는 보호된 시트에서는 수정할 수 없습니다. 편집 권한을 확인한 뒤 다시 여세요.') : null);
+  openDialog({ title: '함수 이름 수정', body, width: 620, buttons: [
+    { label: '취소', primary: true },
+    { label: '수정 적용', disabled: !canApply(), action: () => {
+      if (!canApply()) { toast('문서 또는 편집 권한이 바뀌었습니다. 함수 이름 수정 목록을 다시 확인하세요.'); return false; }
+      try {
+        const result = applyFunctionNameRepairs(owner, plan, meta());
+        toast(`셀 수식 ${result.cellCount.toLocaleString()}개와 표 계산 열 수식 ${result.templateCount.toLocaleString()}개의 함수 이름을 수정했습니다.`);
+      } catch (err) { toast(err.message); return false; }
+    } },
+  ] });
+}
+
+function importWarningsDialog(warnings) {
+  const owner = wb;
+  const repairable = warnings.some(text => text.includes('확인이 필요한 함수 이름'));
+  const dlg = openDialog({ title: '가져오기', body: el('div', {}, warnings.map(text => el('p', {}, text))), buttons: [
+    ...(repairable ? [{ label: '함수 이름 확인...', action: () => { dlg.close(); if (wb === owner) functionNameRepairDialog(); } }] : []),
+    { label: '확인', primary: true },
+  ] });
 }
 
 /** 새 피벗 테이블에 기본 레이아웃 적용 (엑셀의 [기본 레이아웃 편집]) */
@@ -15487,7 +15525,7 @@ async function openFileObject(file, mode, request = beginDocumentOpen()) {
         toast(`시트 ${data.sheets.length}개를 가져왔습니다.`);
       }
       if (mode === 'open' && data.vba && !templateOpening) warnings.push('매크로가 포함된 통합 문서입니다. WIXEL 는 매크로를 실행하지 않지만 [보기 → 매크로]에서 코드를 볼 수 있고, .xlsm 으로 저장하면 매크로가 그대로 유지됩니다.');
-      if (warnings.length) alertDialog('가져오기', warnings.join('\n'));
+      if (warnings.length) importWarningsDialog(warnings);
       else if (mode === 'open') toast(`'${file.name}'을(를) 열었습니다.`);
       return true;
     }
@@ -19514,6 +19552,7 @@ const MENUS = {
   errorMenu: () => [
     { label: '오류 검사(K)...', icon: 'validation', action: () => errorCheck() },
     { label: '계산 상태 확인...', action: () => calculationStatusDialog() },
+    { label: '함수 이름 수정...', action: () => functionNameRepairDialog() },
     { label: '오류 추적(E)', icon: 'validation', action: () => traceError() },
     { label: '순환 참조(C)', disabled: true, submenu: [] },
   ],
@@ -20522,6 +20561,7 @@ const COMMANDS = {
   evaluateFormula: () => evaluateFormulaDialog(),
   errorCheck: () => errorCheck(),
   calculationStatus: () => calculationStatusDialog(),
+  formulaNameRepair: () => functionNameRepairDialog(),
   watchWindow: () => watchWindow(!watchPane),
   goalSeek: () => goalSeekDialog(),
   scenarioManager: () => scenarioManager(),
@@ -20699,6 +20739,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['함수 이름 확인과 수정', ['파일의 확인되지 않은 함수 이름을 가져오기 안내에 표시합니다. 함수 이름 뒤에 한글 한 글자가 붙은 오타는 위치와 변경 내용을 확인한 뒤 셀 수식과 표 계산 열 수식을 함께 수정하고 실행 취소할 수 있습니다.']],
   ['셀 텍스트 넘침 표시', ['숨긴 열을 건너뛰고 내용이 있는 다음 셀 경계에서 긴 글자를 자릅니다. 가운데 정렬은 좌우의 빈 공간을 각각 판단해 옆 셀 글자를 가리지 않습니다.']],
   ['저장된 피벗 결과로 열기', ['새로 고침 옵션이 꺼진 가져온 피벗은 저장된 결과와 위치를 먼저 유지해 초기 계산을 줄입니다.']],
   ['대용량 Excel 가져오기', ['대용량 Excel 가져오기와 행·열 삽입의 메모리 사용량을 줄였습니다. 외부 원본 피벗의 저장 캐시, 슬라이서의 시작 위치, 일반 숫자 서식과 표준 셀 스타일을 더 정확하게 보존합니다.']],

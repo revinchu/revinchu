@@ -1,6 +1,7 @@
 // 엑셀 '표'(ListObject): 스타일, 열 이름, 구조적 참조, 자동 확장 (DOM 없음)
 // 표 모델: { id, name, r1, c1, r2, c2, header, totals, style, banded, bandedCols, firstCol, lastCol,
-//           filter: { criteria, hidden, hiddenButtons?, sort? } | null, totalsCells?: { [절대열]: cellData|null }, totalsFns: { [열]: 'sum' | ... }, columns: [이름] }
+//           filter: { criteria, hidden, hiddenButtons?, sort? } | null, totalsCells?: { [절대열]: cellData|null }, totalsFns: { [열]: 'sum' | ... }, columns: [이름],
+//           calculatedColumnFormulas?: { [절대열]: '=수식' } (가져온 새 행용 템플릿; 현재 셀의 예외 수식과 별개) }
 // r1 은 머리글 행(header 가 true 일 때), r2 는 요약 행(totals 가 true 일 때)까지 포함.
 
 import { PRESET_STYLES, presetSwatch, tablePresetCell, MODERN_STYLES, styleElementsPreset } from './stylepresets.js';

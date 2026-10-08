@@ -1021,16 +1021,17 @@ function* readSheet(files, path, ctx) {
           const known = shape !== null ? formulaMemo.shape.get(shape) : undefined;
           // 변환이 행 번호와 무관하면(Sheet!#REF! → #REF! 등) 변환된 모양에 이 칸의 행 번호를 채움
           const filled = known?.out !== undefined ? fillShape(known.out, formula) : null;
-          if (known !== undefined && known.out === undefined) conv = { raw: `=${formula}`, unknown: known.unknown };
-          else if (filled !== null) conv = { raw: `=${filled}`, unknown: known.unknown };
+          if (known !== undefined && known.out === undefined) conv = { raw: `=${formula}`, unknown: known.unknown, unknownNames: known.unknownNames };
+          else if (filled !== null) conv = { raw: `=${filled}`, unknown: known.unknown, unknownNames: known.unknownNames };
           else {
             const f = cleanFormula(formula, { legacy, isName: ctx.isName, nameMulti: ctx.nameMulti });
-            conv = { raw: `=${f}`, unknown: unknownFunctions(f, ctx.isName).length > 0 };
+            const unknownNames = unknownFunctions(f, ctx.isName);
+            conv = { raw: `=${f}`, unknown: unknownNames.length > 0, unknownNames };
             if (shape !== null && !formulaMemo.shape.has(shape)) {
-              if (f === formula) formulaMemo.shape.set(shape, { unknown: conv.unknown });
+              if (f === formula) formulaMemo.shape.set(shape, { unknown: conv.unknown, unknownNames });
               else {
                 const out = formulaShape(f);
-                if (out !== null && fillShape(out, formula) === f) formulaMemo.shape.set(shape, { unknown: conv.unknown, out });
+                if (out !== null && fillShape(out, formula) === f) formulaMemo.shape.set(shape, { unknown: conv.unknown, unknownNames, out });
               }
             }
           }
@@ -1041,7 +1042,10 @@ function* readSheet(files, path, ctx) {
         cached = value;
         // 원본에서도 #NAME?였던 수식은 새 미지원 계산 결과로 오인하지 않는다.
         // 원문/오류는 그대로 보존하며 계산 상태 목록에서 '원본 오류'로 확인한다.
-        if (conv.unknown && !hasSavedNameError(value)) unsupported++;
+        if (conv.unknown && !hasSavedNameError(value)) {
+          unsupported++;
+          for (const name of conv.unknownNames ?? []) ctx.unsupportedNames.add(name);
+        }
       } else if (arrays.length) {
         const owner = arrays.find(a => r >= a.r1 && r <= a.r2 && cc >= a.c1 && cc <= a.c2 && (r !== a.r || cc !== a.c));
         if (owner) {
@@ -1606,13 +1610,15 @@ function readTable(root, sheet, styles, dxfs, tableDxfs) {
   const info = child(root, 'tableStyleInfo');
   const cols = kids(child(root, 'tableColumns'), 'tableColumn');
   const name = (root.attrs.displayName || root.attrs.name || 'Table').replace(/\s/g, '_');
-  const totalsFns = {}, totalsCells = {};
+  const totalsFns = {}, totalsCells = {}, calculatedColumnFormulas = {};
   cols.forEach((tc, i) => {
     const c = rg.c1 + i, f = tc.attrs.totalsRowFunction;
     if (f && f !== 'none' && f !== 'custom') totalsFns[c] = f;
     const formula = child(tc, 'totalsRowFormula');
     if (formula?.text) totalsCells[c] = { raw: `=${cleanFormula(formula.text)}` };
     else if (tc.attrs.totalsRowLabel !== undefined) totalsCells[c] = { raw: tc.attrs.totalsRowLabel, inputType: 'text' };
+    const calculated = child(tc, 'calculatedColumnFormula');
+    if (calculated?.text) calculatedColumnFormulas[c] = `=${cleanFormula(calculated.text.replace(/^=/, ''))}`;
     const st = tc.attrs.totalsRowDxfId !== undefined ? tableDxfs?.[Number(tc.attrs.totalsRowDxfId)] : null;
     if (st && Object.keys(st).length) {
       const fn = TOTAL_FUNCS.find(x => x.id === f && x.code);
@@ -1643,6 +1649,7 @@ function readTable(root, sheet, styles, dxfs, tableDxfs) {
     banded: info ? info.attrs.showRowStripes !== '0' : true, bandedCols: info?.attrs.showColumnStripes === '1',
     firstCol: info?.attrs.showFirstColumn === '1', lastCol: info?.attrs.showLastColumn === '1',
     filter, ...(!filter && child(root, 'sortState') ? { sort: readFilterSort(child(root, 'sortState'), dxfs) } : {}), totalsFns, ...(!totals && (Object.keys(totalsCells).length || !falseAttr(root.attrs.totalsRowShown)) ? { totalsCells } : {}), ...(header ? {} : { columns: cols.map((c) => c.attrs.name ?? '') }),
+    ...(Object.keys(calculatedColumnFormulas).length ? { calculatedColumnFormulas } : {}),
     _xmlId: Number(root.attrs.id), _colNames: cols.map((c) => c.attrs.name ?? ''),
   };
 }
@@ -3259,7 +3266,7 @@ function* readXlsxSteps(files, onDiagnostics, streamParts = null) {
     try { return mayReturnArray(parse(e.ref.slice(1))); } catch { return false; }
   };
   const date1904 = ['1', 'true'].includes(child(wbRoot, 'workbookPr')?.attrs.date1904);
-  const ctx = { onDiagnostics, streamParts, mdw, wbFont, xfs, dxfs, filterDxfs, tableDxfs, dxfOf, tableStyles, slicerStyles, objectStyles, strings, phonetics, fonts, theme, date1904, warnings: new Set(), isName, nameMulti, richImages: readRichImages(files, wbRels) };
+  const ctx = { onDiagnostics, streamParts, mdw, wbFont, xfs, dxfs, filterDxfs, tableDxfs, dxfOf, tableStyles, slicerStyles, objectStyles, strings, phonetics, fonts, theme, date1904, warnings: new Set(), unsupportedNames: new Set(), isName, nameMulti, richImages: readRichImages(files, wbRels) };
   // 모델 본체는 거대한 바이너리입니다. 경고를 위한 존재 검사만 하고 압축을 해제하지 않습니다.
   if (Object.keys(files).some(path => /^xl\/model\/[^/]+\.(?:data|bin)$/i.test(path)) || Object.values(wbRels).some(rel => rel.type === 'model')) warnOlapImport(ctx);
   const sheets = [];
@@ -3324,7 +3331,11 @@ function* readXlsxSteps(files, onDiagnostics, streamParts = null) {
     if (def?.importedPresentation) bindImportedPivotPresentation(def, def.importedPresentation);
   }
   pushAll(sheets, extSheets);
-  if (unsupported) warnings.push(`지원하지 않는 함수가 쓰인 수식 ${unsupported}개는 원문과 파일에 저장된 계산 결과를 보존합니다. 관련 입력이 바뀌면 오래된 값을 오류로 표시하므로 [계산 상태 확인]을 확인하세요.`);
+  if (unsupported) {
+    const names = [...ctx.unsupportedNames];
+    const listed = names.slice(0, 8).join(', ') + (names.length > 8 ? ' 등' : '');
+    warnings.push(`파일을 열었습니다. 확인이 필요한 함수 이름${listed ? ` (${listed})` : ''}이 수식 ${unsupported}개에 있습니다. 함수 이름의 오타나 사용자 정의 함수인지 확인하세요. 수식 원문과 파일 저장값은 보존하며, IFERROR와 IF·IFS의 조건 처리는 그대로 계산합니다. 이 함수의 결과가 필요한 경우에는 재계산할 수 없으므로 [계산 상태 확인]에서 확인하세요.`);
+  }
   if (files.__xlsb?.unsupported) warnings.push(`바이너리 통합 문서(.xlsb)에서 해석하지 못한 수식 ${files.__xlsb.unsupported}개는 저장된 계산 결과(값)로 가져왔습니다.`);
   for (const warning of new Set(files.__xlsb?.warnings ?? [])) warnings.push(warning);
   pushAll(warnings, [...ctx.warnings]);
@@ -5677,15 +5688,19 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
         else if (!t.totals && !Object.hasOwn(t.totalsCells ?? {}, c) && TOTAL_FUNCS.some(x => x.id === fn && x.code)) extra = ` totalsRowFunction="${fn}"`;
         else if (!t.totals && Object.hasOwn(t.totalsCells ?? {}, c)) extra = ' totalsRowLabel=""';
         if (tot?.style && Object.keys(tot.style).length) extra += ` totalsRowDxfId="${pool.objectDxf({style:tot.style})}"`;
-        // 계산된 열: 데이터 행이 모두 같은 수식이면 새 행에도 자동으로 채워지도록
+        // 같은 구조적 수식으로 열 전체를 바꾸었으면 현재 셀 수식을 우선한다.
+        // 그 외에는 원본 템플릿을 보존한다: 계산된 열의 상수/수식 예외 행도 허용된다.
+        // 템플릿을 읽거나 저장하는 것만으로 현재 데이터 행을 채우지는 않는다.
+        let calculated = typeof t.calculatedColumnFormulas?.[c] === 'string' && t.calculatedColumnFormulas[c].startsWith('=') ? t.calculatedColumnFormulas[c] : null;
         const top = dataTop(t);
         const bottom = dataBottom(t);
         const first = wb.getCell(si, top, c);
         if (first?.formula && bottom >= top && first.raw.includes('[')) {
           let same = true;
           for (let r = top + 1; r <= bottom && same; r++) same = wb.getCell(si, r, c)?.raw === first.raw;
-          if (same) inner = `<calculatedColumnFormula>${esc(exportFormula(first.raw, t.name))}</calculatedColumnFormula>${inner}`;
+          if (same) calculated = first.raw;
         }
+        if (calculated) inner = `<calculatedColumnFormula>${esc(exportFormula(calculated, t.name))}</calculatedColumnFormula>${inner}`;
         return inner ? `<tableColumn id="${i + 1}" name="${esc(n)}"${extra}>${inner}</tableColumn>` : `<tableColumn id="${i + 1}" name="${esc(n)}"${extra}/>`;
       }).join('');
       const filterRange = { r1: t.r1, c1: t.c1, r2: dataBottom(t), c2: t.c2 };

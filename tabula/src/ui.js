@@ -742,6 +742,7 @@ export function openDialog({ title, body, buttons = [], onOpen, width, modeless 
     buttons.length ? el('div', { class: 'dialog-foot' }, buttons.map((b) => el('button', {
       class: `btn${b.primary ? ' primary' : ''}`, type: 'button', 'data-access-key': b.accessKey ?? dialogButtonAccessKey(b.label), 'data-access-default': b.accessKey === undefined && !accessKeyFromLabel(b.label) ? 'true' : null, 'data-access-aliases': b.accessAliases,
       onclick: () => invoke(b),
+      disabled: b.disabled || null,
     }, b.label))) : null);
   if (width) dialog.style.width = `${width}px`;
   menuAccessOwners.set(dialog, returnFocus?.closest?.('.dialog,.menu,[data-access-scope="popup"]') ?? null);

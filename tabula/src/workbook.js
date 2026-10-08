@@ -2341,15 +2341,16 @@ export class Workbook {
   }
 
   // ─────────── 구조 변경 ───────────
-  /** 숨긴 요약 행의 수식도 셀 이동·삽입·삭제·이름 변경을 따라간다. */
+  /** 숨긴 요약 행과 계산된 열 템플릿도 셀 이동·삽입·삭제·이름 변경을 따라간다. */
   rewriteTableTotals(transform) {
     this.sheets.forEach((sheet, si) => {
       let changed = false;
       const tables = (sheet.tables ?? []).map(table => {
-        if (!table.totalsCells) return table;
-        const cells = { ...table.totalsCells };
+        if (!table.totalsCells && !table.calculatedColumnFormulas) return table;
+        const cells = table.totalsCells ? { ...table.totalsCells } : null;
+        const formulas = table.calculatedColumnFormulas ? { ...table.calculatedColumnFormulas } : null;
         let edited = false;
-        for (const [col, cell] of Object.entries(cells)) {
+        for (const [col, cell] of Object.entries(cells ?? {})) {
           const textInput = cell?.inputType === 'text' || (cell?.inputType !== 'value' && cell?.style?.numFmt === 'text');
           if (!cell || !cell.raw?.startsWith('=') || (textInput && !cell.fx)) continue;
           const raw = transform(cell.raw, sheet.name);
@@ -2358,9 +2359,16 @@ export class Workbook {
           cells[col] = { ...data, raw };
           edited = true;
         }
+        for (const [col, formula] of Object.entries(formulas ?? {})) {
+          if (typeof formula !== 'string' || !formula.startsWith('=')) continue;
+          const raw = transform(formula, sheet.name);
+          if (raw === formula) continue;
+          formulas[col] = raw;
+          edited = true;
+        }
         if (!edited) return table;
         changed = true;
-        return { ...table, totalsCells: cells };
+        return { ...table, ...(cells ? { totalsCells: cells } : {}), ...(formulas ? { calculatedColumnFormulas: formulas } : {}) };
       });
       if (changed) { this.propSnap(si, 'tables'); sheet.tables = tables; }
     });
@@ -2475,6 +2483,7 @@ export class Workbook {
         }
         nt.totalsFns = shiftKeys(t.totalsFns, index, count);
         if (t.totalsCells) nt.totalsCells = shiftKeys(t.totalsCells, index, count);
+        if (t.calculatedColumnFormulas) nt.calculatedColumnFormulas = shiftKeys(t.calculatedColumnFormulas, index, count);
         // 삭제된 열 이름은 빼고, 새 열에는 이름을 채움 (머리글이 없는 표용)
         if (t.columns) {
           const cols = [...t.columns];
@@ -2708,7 +2717,12 @@ export class Workbook {
       return { ...rest, ...ranges[0], ...(ranges.length > 1 ? { more: ranges.slice(1) } : {}) };
     }).filter(Boolean);
     target.validations = target.validations.map(adj).filter(Boolean);
-    target.tables = (target.tables ?? []).map((t) => (inBand(t) ? (adjustRange(t, axis, index, count) ? { ...t, ...adjustRange(t, axis, index, count) } : null) : t)).filter(Boolean);
+    target.tables = (target.tables ?? []).map((t) => {
+      if (!inBand(t)) return t;
+      const range = adjustRange(t, axis, index, count);
+      if (!range) return null;
+      return { ...t, ...range, ...(!isRow && t.calculatedColumnFormulas ? { calculatedColumnFormulas: shiftKeys(t.calculatedColumnFormulas, index, count) } : {}) };
+    }).filter(Boolean);
     const onTarget = (name, host) => String(name ?? host).toLowerCase() === target.name.toLowerCase();
     this.sheets.forEach((sh, i) => {
       if (!sh.charts?.length) return;
