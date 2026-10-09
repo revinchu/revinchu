@@ -9920,6 +9920,22 @@ function handleKeytipUp(e) {
   showKeytip();
 }
 
+// 셀 편집 중의 QAT 숫자도 마우스와 같은 run 경로에서 입력을 확정한다.
+// Alt+Enter와 일반 입력은 편집기에 남기고, 조합 중인 IME는 확정하지 않는다.
+function handleEditingQatKey(e) {
+  if (!editing || e.defaultPrevented || ![dom.editor, dom.formula].includes(e.target)
+    || isDialogOpen() || isMenuOpen() || document.querySelector('.backstage')) return false;
+  if (e.isComposing || e.ctrlKey || e.metaKey || e.getModifierState?.('AltGraph')) {
+    endKeytip(); return false;
+  }
+  if (e.key === 'Alt' && !e.shiftKey) return handleKeytipKey(e);
+  if (!keytip && !e.altKey) return false;
+  const code = e.code && e.code !== 'Unidentified' ? e.code : shortcutCode(e);
+  if ((!e.shiftKey && /^Digit\d$/.test(code)) || (keytip && ['Escape', 'Backspace', 'Shift', 'CapsLock'].includes(e.key))) return handleKeytipKey(e);
+  endKeytip();
+  return false;
+}
+
 // ───────────────────────── 그림 개체 (차트 · 그림 · 도형) ─────────────────────────
 const newObjId = (p) => `${p}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
@@ -20739,6 +20755,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['편집 중 빠른 실행 단축키', ['셀이나 수식 입력줄을 편집하다 Alt+1로 서식 복사를 실행하면 마우스 버튼과 동일하게 입력을 확정하고 대상 셀에 서식을 적용합니다. Alt+Enter 줄바꿈과 한글 조합 입력은 그대로 유지합니다.']],
   ['함수 이름 확인과 수정', ['파일의 확인되지 않은 함수 이름을 가져오기 안내에 표시합니다. 함수 이름 뒤에 한글 한 글자가 붙은 오타는 위치와 변경 내용을 확인한 뒤 셀 수식과 표 계산 열 수식을 함께 수정하고 실행 취소할 수 있습니다.']],
   ['셀 텍스트 넘침 표시', ['숨긴 열을 건너뛰고 내용이 있는 다음 셀 경계에서 긴 글자를 자릅니다. 가운데 정렬은 좌우의 빈 공간을 각각 판단해 옆 셀 글자를 가리지 않습니다.']],
   ['저장된 피벗 결과로 열기', ['새로 고침 옵션이 꺼진 가져온 피벗은 저장된 결과와 위치를 먼저 유지해 초기 계산을 줄입니다.']],
@@ -21343,6 +21360,7 @@ function bindEvents() {
       }
       return;
     }
+    if (handleEditingQatKey(e)) { e.stopPropagation(); return; }
     // A fresh physical key starts a new editing gesture. Delayed keyup does not.
     if (!keytip && shortcutInputGuard && !isMenuOpen() && !e.defaultPrevented && !e.repeat && !['Alt', 'Control', 'Meta', 'Shift', 'CapsLock', 'Escape'].includes(e.key)) shortcutInputGuard = false;
     if (keytip && !editing && !isDialogOpen() && !document.querySelector('.backstage')) {

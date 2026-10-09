@@ -807,3 +807,9 @@ node tools/native-layout-compare.mjs --native D:/Codex/Temp/wixel-fidelity/nativ
 `node tools/pivot-import-presentation.mjs`는 작은 합성 XLSX를 실제 파일 선택 입력으로 열어 저장된 지난달 상대 날짜 필터 결과와 13개 값 필드의 부분합 캡션을 최초 열기에서 보존하는지 검사한다. 셀 값·직접 서식·병합·열 너비·행 높이·조건부 서식 정의와 실제 글꼴/채우기색, 행·페이지 필터의 Alt+↓와 E 검색, 다중 행 필드 접기/펼치기, 첫 변경의 잔상 제거, Undo/Redo 뒤 다른 필터 적용 및 두 번의 저장·재열기를 확인한다. 1만 행 합성 캐시는 로드된 실제 `computePivot` 함수를 계측하여 최초 열기의 호출 수 0을 요구하고, 사용자 필터·접기는 호출 수가 증가해야 통과한다.
 
 `WIXEL_URL`은 로컬 서버만 허용하며 `WIXEL_BROWSER=chromium|firefox|webkit`, `WIXEL_PIVOT_PRESENTATION_OUT`(D: 폴더), `WIXEL_PIVOT_PRESENTATION_FILTER`(사례명 부분 문자열, 여러 조건은 `|`)를 지정한다. 개인 업무 파일을 사용하지 않고 외부·API·쓰기 요청을 차단한다. 기존 `PLAYWRIGHT_MODULE`과 D:의 `PLAYWRIGHT_BROWSERS_PATH`, `TEMP`·`TMP`를 사용한다. JSON과 PNG는 지정 출력 폴더에 보관하고 브라우저는 종료한다. 합성 브라우저 검사는 Native Excel 표시 동등성이나 물리 iPad의 대형 파일 안정성을 뜻하지 않는다.
+
+## 편집 중 Alt 숫자 서식 복사 회귀
+
+`node tools/qat-format-painter.mjs`는 합성 문서의 30개 사례에서 빠른 실행·리본 마우스 클릭과 Alt 숫자 입력을 비교한다. 일반 선택과 F2·새 값 입력·수식 입력줄 편집, Alt 누름 유지·순차 입력·키 반복, 현재 도구 모음 순서, 단일·연속 서식 복사와 Esc 취소를 검사한다. 대상의 전체 서식·값·수식·메모·다른 시트·단일 Undo/Redo를 확인하며 잘못된 수식·중지 유효성 제한·시트 보호, Alt+Enter 줄바꿈·일반 입력·검색창 격리·조합 중 입력 보존도 포함한다. `Process/229` 물리 숫자 코드와 `Unidentified` 숫자 fallback은 합성 KeyboardEvent 검사로, OS IME나 물리 키보드 검증과 구분한다.
+
+`BROWSER=chromium|webkit`, `WIXEL_URL`(기본 `http://127.0.0.1:5193/`), `QAT_OUT`(D: 출력 폴더), `QAT_TEST_FILTER`(사례명 부분 문자열)를 지정한다. 소스 서버에서 `QAT_BASELINE_REF=1032408`을 추가하면 해당 커밋의 `app.js`만 메모리 응답하여 수정 전 동작을 비교한다. 기존 `PLAYWRIGHT_MODULE`과 D:의 `PLAYWRIGHT_BROWSERS_PATH`, `TEMP`·`TMP`를 사용한다. 새 브라우저 컨텍스트만 사용하고 API·외부·쓰기 요청을 차단한다. 결과 JSON과 실패 화면은 출력 폴더에 보관하며 브라우저는 종료한다. 기존 WebKit의 정확한 viewport `interactive-widget` 미지원 안내만 별도 진단으로 보존하고 다른 콘솔·페이지 오류는 실패로 처리한다. 범위와 수정 전 재현은 [108. 편집 중 Alt 숫자 서식 복사](../docs/codex/108_편집중Alt숫자서식복사.md)에 기록한다.
