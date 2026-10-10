@@ -1,0 +1,17 @@
+{
+  // WIPOINT 를 Cloudflare Workers 정적 자산으로 배포 (WIXEL 3 와 같은 방식, 서버 코드 없음)
+  //   cd wipoint && node build.mjs --cloud && npx wrangler deploy --config cloudflare/wrangler.jsonc
+  // 문서는 사용자의 브라우저(IndexedDB)와 내려받은 파일에만 저장되므로 Durable Object · KV 가 필요 없습니다.
+  "$schema": "https://raw.githubusercontent.com/cloudflare/workers-sdk/main/packages/wrangler/config-schema.json",
+  "name": "wipoint",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": true,
+  "assets": {
+    "directory": "../dist-cloudflare",
+    "not_found_handling": "single-page-application"
+  },
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "invocation_logs": false }
+  }
+}

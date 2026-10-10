@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>프레젠테이션1 - WIPOINT</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='4' width='28' height='24' rx='3' fill='%23C43E1C'/%3E%3Cpath d='M10 22V10h5.5a3.8 3.8 0 0 1 0 7.6H10' fill='none' stroke='white' stroke-width='2.6' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app" data-view="normal">
+    <header class="titlebar">
+      <div class="tb-left">
+        <span class="brand">WIPOINT</span>
+        <button class="tb-btn" data-cmd="save" title="저장 (Ctrl+S)" data-icon="save"></button>
+        <button class="tb-btn" data-cmd="undo" title="실행 취소 (Ctrl+Z)" data-icon="undo"></button>
+        <button class="tb-btn" data-cmd="redo" title="다시 실행 (Ctrl+Y)" data-icon="redo"></button>
+        <button class="tb-btn" data-cmd="showFromStart" title="처음부터 (F5)" data-icon="slideshow"></button>
+        <span class="qat-top" id="qatTop"></span>
+      </div>
+      <div class="tb-center">
+        <div class="tb-title" id="docTitle" title="클릭하여 이름 바꾸기">프레젠테이션1 - WIPOINT</div>
+        <span class="save-state" id="saveState"></span>
+        <span class="collab-bar" id="collabBar" hidden></span>
+      </div>
+      <label class="tb-search">
+        <span data-icon="search"></span>
+        <input id="searchBox" type="search" placeholder="검색 (명령 이름)" autocomplete="off">
+      </label>
+      <div class="avatar" title="WIPOINT 위포인트">WP</div>
+    </header>
+
+    <nav class="ribbon-tabs" id="ribbonTabs"></nav>
+    <section class="ribbon" id="ribbon"></section>
+    <div class="qat" id="qat" role="toolbar" aria-label="빠른 실행 도구 모음"></div>
+
+    <div class="workspace">
+      <aside class="thumbs" id="thumbs" aria-label="슬라이드 미리 보기"></aside>
+      <div class="center">
+        <main class="stage" id="stage" tabindex="-1" aria-label="슬라이드 편집"></main>
+        <div class="sorter" id="sorter" hidden></div>
+        <div class="notes-wrap"><textarea id="notes" placeholder="슬라이드 노트를 입력하려면 클릭하십시오" spellcheck="false"></textarea></div>
+      </div>
+      <aside class="pane" id="pane" hidden></aside>
+    </div>
+
+    <footer class="statusbar" id="status"></footer>
+  </div>
+
+  <div id="menuLayer"></div>
+  <div id="dialogLayer"></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <div id="keytipLayer"></div>
+  <div id="printArea"></div>
+  <script type="module" src="src/app.js"></script>
+</body>
+</html>
