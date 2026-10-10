@@ -595,3 +595,13 @@ body.eyedropping .overlay { pointer-events: none; }
 .eq-pal .btn { min-width: 32px; font-family: 'Cambria Math', serif; }
 .eq-src { width: 100%; font: 13px ui-monospace, monospace; box-sizing: border-box; }
 .eq-preview { min-height: 60px; border: 1px dashed #ccc; display: flex; align-items: center; justify-content: center; font-size: 26px; font-family: 'Cambria Math', 'STIX Two Math', serif; padding: 6px; }
+/* 공동 편집 */
+.collab-bar { display: inline-flex; align-items: center; gap: 3px; margin-left: 10px; }
+.peer-av { width: 22px; height: 22px; border-radius: 50%; color: #fff; font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; border: 2px solid rgba(255,255,255,.85); }
+.collab-chip { background: rgba(255,255,255,.18); color: #fff; border: 1px solid rgba(255,255,255,.5); border-radius: 11px; font-size: 11px; padding: 2px 8px; cursor: pointer; }
+.peer-sel { position: absolute; border: 2px solid; pointer-events: none; box-sizing: border-box; margin: -2px 0 0 -2px; }
+.peer-tag { position: absolute; left: -2px; top: -18px; color: #fff; font-size: 11px; padding: 1px 5px; border-radius: 2px 2px 2px 0; white-space: nowrap; }
+.peer-dots { display: flex; flex-direction: column; gap: 2px; }
+.peer-dot { width: 8px; height: 8px; border-radius: 50%; display: block; }
+.collab-dlg { display: flex; flex-direction: column; gap: 8px; }
+.collab-people { margin: 0; padding-left: 18px; font-size: 12px; }

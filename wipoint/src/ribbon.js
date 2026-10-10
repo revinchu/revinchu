@@ -93,6 +93,7 @@ const REVIEW = { id: 'review', label: '검토', groups: [
   { label: '언어 교정', items: [L('spellCheck', 'check', '맞춤법 검사')] },
   { label: '접근성', items: [L('accessibility', 'info', '접근성 검사')] },
   { label: '정보', items: [L('wordCount', 'stats', '통계')] },
+  { label: '공동 작업', items: [L('collabStart', 'share', '공동 편집', { on: 'collabOn' })] },
   { label: '메모', items: [L('newComment', 'newComment', '새 메모'), COL(M('deleteComments', 'deleteComment', '삭제'), M('prevComment', 'prev', '이전'), M('nextComment', 'next', '다음')), L('commentsPane', 'comment', '메모 표시', { on: 'cmPane' })] },
 ] };
 
@@ -170,7 +171,7 @@ const KT = {
   transitions: { previewTransition: 'P', transitions: 'T', transitionOptionsMenu: 'E', transTiming: 'D', applyTransitionAll: 'L' },
   animations: { previewAnim: 'P', animations: 'S', animOptionsMenu: 'M', addAnimMenu: 'AA', animPane: 'C', removeAnim: 'X', animPainter: 'K', triggerMenu: 'G', animTiming: 'T' },
   slideshow: { showFromStart: 'B', showFromCurrent: 'C', customShowMenu: 'W', setupShow: 'S', hideSlide: 'H', rehearse: 'T', presenterView: 'V' },
-  review: { spellCheck: 'S', accessibility: 'A', wordCount: 'W', newComment: 'C', deleteComments: 'D', prevComment: 'V', nextComment: 'N', commentsPane: 'P' },
+  review: { spellCheck: 'S', accessibility: 'A', wordCount: 'W', newComment: 'C', deleteComments: 'D', prevComment: 'V', nextComment: 'N', commentsPane: 'P', collabStart: 'H' },
   view: { viewMaster: 'M', toggleRuler: 'R', viewNormal: 'L', viewOutline: 'O', viewSorter: 'I', viewNotesPage: 'T', viewReading: 'D', toggleGrid: 'G', toggleGuides: 'U', toggleNotes: 'N', zoomDialog: 'Q', fitZoom: 'W', selectionPane: 'P' },
   help: { shortcuts: 'K', whatsNew: 'N', about: 'A' },
   shapeFormat: { shapesMini: 'SH', changeShapeMenu: 'E', drawTextbox: 'X', shapeStyles: 'K', shapeFill: 'SF', shapeOutline: 'SO', shapeEffectsMenu: 'SE', wordart: 'Q', objSize: 'H', 'launcher:formatPaneShape': 'DS', ...ARRANGE_KT },

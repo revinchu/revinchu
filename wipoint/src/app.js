@@ -1,7 +1,8 @@
 // WIPOINT 시작점: 화면 조립 · 단축키 · 클립보드 · 끌어 놓기 · 자동 저장
 import { S, on, emit, run, register, curSlide, selObjects, selOne, goSlide, COMMANDS } from './state.js';
 import { initEditor, renderCanvas, renderOverlay, fitZoom, startEdit, endEdit, applyTextFormat, focusEditing } from './editor.js';
-import { initPanels, renderThumbs, updateThumb, markActiveThumb, renderNotes, renderStatus, renderPane, renderSorter, thumbsFocused } from './panels.js';
+import { initPanels, renderThumbs, updateThumb, markActiveThumb, renderNotes, renderStatus, renderPane, renderSorter, thumbsFocused, markPeerDots } from './panels.js';
+import { collab, startCollab, stopCollab, collabLink } from './collab.js';
 import { initRibbon, renderRibbon, TABS, setRibbonTab, initQat } from './ribbon.js';
 import { initKeytips } from './keytips.js';
 import { stopEyedrop } from './eyedrop.js';
@@ -42,6 +43,13 @@ async function start() {
       }
     }
   } catch (e) { alertDialog('공유 링크', `링크를 열지 못했습니다: ${e.message}`); }
+  // ?collab=<방>: 공동 편집 방에 들어가서 문서를 받아 옴
+  const room = new URLSearchParams(location.search).get('collab');
+  if (room && /^[\w-]{4,64}$/.test(room)) {
+    await startCollab(room, { join: true });
+    toast('공동 편집 방에 들어왔습니다 — 문서를 받는 중…');
+    return;
+  }
   const restored = await restoreAutosave();
   if (restored) toast('이전에 작업하던 프레젠테이션을 복원했습니다');
   else if (!localStorage.getItem('wipoint:seen')) setTimeout(() => openBackstage('home'), 50);
@@ -77,6 +85,7 @@ on('change', ({ scope = 'slide', keepPick } = {}) => {
   } else if (scope === 'view') { applyView(); renderStatus(); renderRibbon(); }
   else if (scope === 'none') renderStatus();
   if (scope !== 'nav' && scope !== 'view') { scheduleAutosave(); updateTitle(); }
+  if (collab.room) markPeerDots();
 });
 on('selection', () => {
   renderOverlay();
@@ -99,6 +108,18 @@ on('error', (e) => { console.error(e); toast(`오류: ${e?.message ?? e}`); });
 on('drawMode', () => { $('stage').classList.toggle('drawing', !!S.drawShape); });
 on('painter', () => { document.body.classList.toggle('painting', !!S.painter); renderRibbon(); });
 on('saved', () => updateTitle());
+// 공동 편집: 참가자 표시 (제목 표시줄 동그라미 · 축소판 점 · 개체 테두리)
+on('collabPeers', () => {
+  renderOverlay();
+  markPeerDots();
+  const bar = $('collabBar');
+  bar.hidden = !collab.room;
+  if (!collab.room) { bar.innerHTML = ''; return; }
+  bar.replaceChildren(
+    ...[...collab.peers.values()].map((p) => el('span', { class: 'peer-av', title: p.name, style: { background: p.color } }, [...p.name][0] ?? '?')),
+    el('button', { class: 'collab-chip', title: `공동 편집 중 (${collab.mode === 'server' ? '서버 연결' : '이 브라우저의 탭끼리'}) — 누르면 링크 · 끝내기`, onclick: () => run('collabStart') }, `공동 편집 ${collab.peers.size + 1}명`));
+});
+on('collabStatus', (t) => toast(t));
 on('docLoaded', () => { fitZoom(); updateTitle(); });
 on('showEnded', () => { if (S.viewOnly) toast('읽기 전용 문서입니다. 편집하려면 [파일 › 다른 이름으로 저장]으로 내려받으세요.'); });
 on('openPane', () => { renderPane(); fitZoom(); });
@@ -425,7 +446,7 @@ on('setTextSel', ({ txi, a, b }) => setOffsets(txi, { a, b }));
 
 // 서식 적용 도우미 노출 (도구 · 테스트)
 window.wipoint = {
-  S, run, COMMANDS, applyTextFormat, goSlide, renderAll,
+  S, run, emit, COMMANDS, applyTextFormat, goSlide, renderAll,
   /** 도구 · 테스트용: 바이트 배열로 파일 열기 */
   openBytes: async (name, bytes) => { const r = await loadFile(new File([new Uint8Array(bytes)], name)); setDocument(r.pres, r.name); return r.warnings; },
 };

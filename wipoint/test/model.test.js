@@ -269,3 +269,39 @@ test('개요 보기 편집: 줄 목록 ⇄ 슬라이드', async () => {
   applyOutline(p, r2);
   assert.equal(p.slides.length, 2);
 });
+
+test('공동 편집: 슬라이드 단위 patch 만들기 · 적용', async () => {
+  const { baseline, diffPres, applyPatch, fullState, applyFull } = await import('../src/collabcore.js');
+  const { newPresentation, newSlide } = await import('../src/model.js');
+  const a = newPresentation({});
+  a.slides.push(newSlide(a, 'titleContent'));
+  const b = JSON.parse(JSON.stringify(a));
+  const ba = baseline(a); const bb = baseline(b);
+  assert.equal(diffPres(ba, a), null);
+  // A: 2번 슬라이드 제목 고침 + 새 슬라이드 + 그림
+  a.slides[1].objects[0].text.paras[0].runs = [{ t: '함께 고친 제목' }];
+  const s3 = newSlide(a, 'blank'); a.slides.push(s3);
+  a.media = { m1: 'data:image/png;base64,AA' };
+  const p1 = diffPres(ba, a);
+  assert.deepEqual(Object.keys(p1.slides).sort(), [a.slides[1].id, s3.id].sort());
+  assert.ok(p1.order && p1.media.m1);
+  // B: 동시에 1번 슬라이드를 고친 상태에서 A 의 patch 받기 (B 의 변경은 남음)
+  b.slides[0].hidden = true;
+  applyPatch(b, p1, bb);
+  assert.equal(b.slides.length, 3);
+  assert.equal(b.slides[1].objects[0].text.paras[0].runs[0].t, '함께 고친 제목');
+  assert.equal(b.slides[0].hidden, true);
+  const p2 = diffPres(bb, b);
+  assert.deepEqual(Object.keys(p2.slides), [b.slides[0].id]);
+  assert.equal(p2.media, undefined);
+  // 슬라이드 지우기 · 순서 바꾸기
+  b.slides = [b.slides[2], b.slides[0]];
+  const p3 = diffPres(bb, b);
+  applyPatch(a, p3, ba);
+  assert.deepEqual(a.slides.map((s) => s.id), b.slides.map((s) => s.id));
+  // 새로 들어온 사람: 전체 상태
+  const c = newPresentation({});
+  applyFull(c, fullState(a));
+  assert.deepEqual(c.slides.map((s) => s.id), a.slides.map((s) => s.id));
+  assert.equal(c.media.m1, 'data:image/png;base64,AA');
+});

@@ -14,6 +14,7 @@ import { SHAPE_STYLES, WORDART, PICTURE_STYLES, TABLE_STYLES, tableStyleProps, D
 import { smartArt, SMART_KINDS } from './smartart.js';
 import { backgroundMask, applyMask } from './bgremove.js';
 import { parseLatex, toMathML } from './math.js';
+import { collab, startCollab, stopCollab, collabLink, myName } from './collab.js';
 import { el, openMenu, openDialog, formDialog, alertDialog, toast, closeMenus } from './ui.js';
 import { colorMenu } from './colorpick.js';
 import { startEyedrop } from './eyedrop.js';
@@ -853,6 +854,33 @@ async function insertZoom(kind) {
   emit('selection');
 }
 
+// ───────────── 공동 편집 ─────────────
+async function collabDialog() {
+  if (!collab.room) await startCollab(uid('r').replace(/[^\w-]/g, ''), { join: false });
+  const link = collabLink();
+  const name = el('input', { type: 'text', value: myName(), style: { width: '160px' } });
+  name.addEventListener('keydown', (e) => e.stopPropagation());
+  name.addEventListener('change', () => { S.userName = name.value.trim() || '사용자'; try { localStorage.setItem('wipoint:user', S.userName); } catch { /* 없음 */ } emit('selection'); });
+  const linkBox = el('input', { type: 'text', value: link, readonly: true, style: { width: '100%' } });
+  const people = el('ul', { class: 'collab-people' }, el('li', {}, `${myName()} (나)`), ...[...collab.peers.values()].map((p) => el('li', { style: { color: p.color } }, `${p.name}${p.editing ? ' · 편집 중' : ''}`)));
+  openDialog({
+    title: '공동 편집', width: 520,
+    body: el('div', { class: 'collab-dlg' },
+      el('p', {}, collab.mode === 'server'
+        ? '이 링크를 받은 사람은 같은 문서를 함께 고칠 수 있습니다. 슬라이드 단위로 바로 반영되고, 같은 슬라이드를 동시에 고치면 나중에 고친 내용이 남습니다.'
+        : '서버 없이 실행 중이라 이 브라우저의 다른 탭 · 창끼리만 함께 고칠 수 있습니다. 다른 기기와 함께 쓰려면 WIPOINT 를 서버(npm start, HOST=0.0.0.0)로 실행하세요.'),
+      el('label', { class: 'pane-check' }, '내 이름 ', name),
+      linkBox,
+      el('div', { class: 'muted' }, `참가자 ${collab.peers.size + 1}명`), people),
+    buttons: [
+      { label: '링크 복사', primary: true, action: () => { navigator.clipboard?.writeText(link).then(() => toast('링크를 복사했습니다'), () => { linkBox.select(); document.execCommand('copy'); }); return false; } },
+      { label: '새 창에서 열기', action: () => { window.open(link, '_blank'); return false; } },
+      { label: '공동 편집 끝내기', action: () => { stopCollab(); toast('공동 편집을 끝냈습니다'); } },
+      { label: '닫기' },
+    ],
+  });
+}
+
 // ───────────── 수식 (PowerPoint [삽입 › 수식], Alt+=) ─────────────
 const EQ_GALLERY = [
   ['근의 공식', 'x=\\frac{-b\\pm \\sqrt{b^2-4ac}}{2a}'],
@@ -1256,8 +1284,12 @@ const SHORTCUTS = [
   ['쇼: Ctrl+H / Ctrl+U', '포인터 숨기기 / 보이기'], ['쇼: G 또는 Ctrl+S', '모든 슬라이드 목록'], ['쇼: Home / End / Esc (−)', '첫 / 마지막 슬라이드 / 쇼 마치기'],
 ];
 
-export const APP_VERSION = '1.0';
+export const APP_VERSION = '1.2';
 const WHATS_NEW = [
+  '1.2 — 공동 편집 (링크로 초대, 슬라이드 단위 실시간 반영, 참가자 이름 · 선택 표시) · 슬라이드 마스터 보기 (마스터 · 레이아웃 개체, 제목/본문 기본 서식)',
+  '1.2 — 수식 (Alt+=, LaTeX 입력 · 기본 제공 수식, PowerPoint 수식(OMML)으로 저장 · 읽기) · 개요 보기에서 바로 편집 (Tab/Shift+Tab 수준)',
+  '1.2 — 눈금자 (들여쓰기 · 탭 정지 끌기) · 안내선 추가/이동 · 터치 편집 (두 손가락 확대, 길게 눌러 메뉴)',
+  '1.2 — 트리거 애니메이션 · 확대/축소 (요약 · 구역 · 슬라이드) · 그림 배경 제거 · SmartArt 텍스트 창 · 쇼의 잉크 주석 유지',
   'PowerPoint 와 같은 리본 · 슬라이드 미리 보기 · 슬라이드 노트 · 여러 슬라이드 보기',
   '.pptx 열기 · 저장 (마스터/레이아웃 상속, 테마 색, 표, 차트, SmartArt 그림, 그룹, 전환, 애니메이션, 메모)',
   '도형 60여 종 · 스마트 가이드 · 맞춤/배분 · 그룹 · 회전 · 빠른 스타일 · WordArt',
@@ -1801,6 +1833,8 @@ register({
   // 그림 서식
   removeBackground: () => removeBackground(),
   insertEquation: () => equationDialog(),
+  collabStart: () => collabDialog(),
+  collabStop: () => stopCollab(),
   editEquation: (id) => { const o = (id && objById(id)) || selObjects().find((x) => x.type === 'equation'); if (o) equationDialog(o); else equationDialog(); },
   insertZoom: (kind = 'slide') => insertZoom(kind),
   zoomMenu: (a) => menuAt(a ?? { x: innerWidth / 2, y: 160 }, [
@@ -2012,7 +2046,7 @@ function ribbonState() {
     bullets: p?.bullet?.type === 'char', numbering: p?.bullet?.type === 'num',
     al: p?.align === 'l' || (!p?.align && !!p), ac: p?.align === 'ctr', ar: p?.align === 'r', aj: p?.align === 'just',
     painter: !!S.painter, cmPane: S.formatPane === 'comments', animPane: S.formatPane === 'anim', selPane: S.formatPane === 'selection', hidden: !!slide()?.hidden,
-    vMaster: !!S.masterKey, masterHide: !!(S.masterKey && curSlide()?.hideMaster), vNormal: S.view === 'normal' && !S.masterKey, vOutline: S.view === 'outline', vSorter: S.view === 'sorter', notes: S.showNotes, grid: S.showGrid, guides: S.showGuides, ruler: S.showRuler,
+    collabOn: !!collab.room, vMaster: !!S.masterKey, masterHide: !!(S.masterKey && curSlide()?.hideMaster), vNormal: S.view === 'normal' && !S.masterKey, vOutline: S.view === 'outline', vSorter: S.view === 'sorter', notes: S.showNotes, grid: S.showGrid, guides: S.showGuides, ruler: S.showRuler,
     tFirstRow: !!st.firstRow, tLastRow: !!st.lastRow, tBanded: !!st.banded, tFirstCol: !!st.firstCol, tLastCol: !!st.lastCol,
     bars: { font: resolveColor(S.pres.theme, lastColor.font), hl: resolveColor(S.pres.theme, lastColor.hl), fill: resolveColor(S.pres.theme, lastColor.fill), line: resolveColor(S.pres.theme, lastColor.line), cell: resolveColor(S.pres.theme, lastColor.cell) },
     curColor: color,

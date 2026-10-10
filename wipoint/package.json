@@ -1,6 +1,6 @@
 {
   "name": "wipoint",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "PowerPoint 와 같은 브라우저 프레젠테이션 (의존성 없음)",
   "type": "module",
   "private": true,

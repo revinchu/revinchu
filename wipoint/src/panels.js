@@ -6,6 +6,7 @@ import { SHAPE_LABEL, objLabel } from './shapes.js';
 import { el, openMenu } from './ui.js';
 import { colorButton } from './colorpick.js';
 import { fitZoom, setZoom } from './editor.js';
+import { peersOn } from './collab.js';
 
 let thumbsEl;
 let notesEl;
@@ -224,6 +225,16 @@ export function updateThumb(i = S.cur) {
   const t = thumbsEl?.querySelector(`.thumb[data-i="${i}"] .tbox`);
   const s = S.pres.slides[i];
   if (t && s) t.innerHTML = thumbHtml(s, i, THUMB_W);
+}
+/** 공동 편집: 다른 사람이 보고 있는 슬라이드에 색 점 */
+export function markPeerDots() {
+  if (!thumbsEl || S.masterKey || S.view === 'outline') return;
+  for (const t of thumbsEl.querySelectorAll('.thumb')) {
+    const s = S.pres.slides[Number(t.dataset.i)];
+    t.querySelector('.peer-dots')?.remove();
+    const ps = s ? peersOn(s.id) : [];
+    if (ps.length) t.querySelector('.tnum')?.append(el('span', { class: 'peer-dots' }, ps.map((p) => el('span', { class: 'peer-dot', title: `${p.name} 님이 보고 있음`, style: { background: p.color } }))));
+  }
 }
 export function markActiveThumb() {
   if (!thumbsEl) return;

@@ -4,6 +4,7 @@ import { slideHtml, textHtml, paraDefaults } from './render.js';
 import { groupMembers, bbox, rotatedBox, newShape, newTextBox, formatRange, rangeRunProp, uid } from './model.js';
 import { domToBody, getOffsets, setOffsets, wordAt, placeCaretAtPoint, selectAllIn } from './textedit.js';
 import { isLineShape } from './shapes.js';
+import { peersOn } from './collab.js';
 import { el } from './ui.js';
 
 let stage;
@@ -149,6 +150,21 @@ function selectionFrames() {
   return objs.map((o) => ({ box: { x: o.x, y: o.y, w: o.w, h: o.h }, rot: o.rot ?? 0, objs: [o], line: o.type === 'shape' && isLineShape(o.shape) }));
 }
 
+/** 공동 편집: 다른 사람이 고른 개체 테두리 + 이름 */
+function peerFrames() {
+  const z = S.zoom;
+  const s = curSlide();
+  if (!s) return;
+  for (const p of peersOn(s.id)) {
+    for (const id of p.sel) {
+      const o = s.objects.find((x) => x.id === id);
+      if (!o) continue;
+      overlay.append(el('div', { class: 'peer-sel', style: { left: `${o.x * z}px`, top: `${o.y * z}px`, width: `${o.w * z}px`, height: `${o.h * z}px`, borderColor: p.color, transform: o.rot ? `rotate(${o.rot}deg)` : '' } },
+        el('span', { class: 'peer-tag', style: { background: p.color } }, `${p.name}${p.editing === id ? ' · 편집 중' : ''}`)));
+    }
+  }
+}
+
 export function renderOverlay() {
   if (!overlay) return;
   if (S.showRuler) renderRuler();
@@ -180,6 +196,7 @@ export function renderOverlay() {
     }
   }
   // 개체 틀 점선 (비어 있는 개체 틀은 render 에서 안내 글로)
+  peerFrames();
 }
 
 function showGuides(lines) {
