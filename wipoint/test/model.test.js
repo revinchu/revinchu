@@ -305,3 +305,46 @@ test('공동 편집: 슬라이드 단위 patch 만들기 · 적용', async () =>
   assert.deepEqual(c.slides.map((s) => s.id), a.slides.map((s) => s.id));
   assert.equal(c.media.m1, 'data:image/png;base64,AA');
 });
+
+test('SVG: 열기 (도형 · 호 · 변환 · 글 · 클래스) 와 슬라이드 → SVG', async () => {
+  const { svgToObjects, parsePath } = await import('../src/svgimport.js');
+  const { slideSvg } = await import('../src/svgexport.js');
+  const { newPresentation, newSlide, newShape } = await import('../src/model.js');
+  const arc = parsePath('M10 10 a20 20 0 0 1 40 0');
+  assert.equal(arc[0][0], 'M');
+  assert.ok(arc.slice(1).every((c) => c[0] === 'C'));
+  assert.ok(Math.abs(arc.at(-1)[5] - 50) < 1e-6 && Math.abs(arc.at(-1)[6] - 10) < 1e-6);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100" width="400" height="200">
+    <style>.b{fill:#0000ff}</style>
+    <defs><linearGradient id="g"><stop offset="0" stop-color="red"/><stop offset="1" stop-color="#00f"/></linearGradient></defs>
+    <rect x="10" y="10" width="50" height="30" class="b"/>
+    <g transform="translate(100 0)"><circle cx="20" cy="20" r="10" fill="url(#g)" stroke="black" stroke-width="2"/></g>
+    <path d="M0 90 L200 90" stroke="#333"/>
+    <text x="10" y="80" font-size="12" fill="#ff0000">안녕 SVG</text>
+  </svg>`;
+  const { objects } = svgToObjects(svg);
+  assert.equal(objects.length, 4);
+  const [rect, circle, line, text] = objects;
+  assert.deepEqual([rect.x, rect.y, rect.w, rect.h], [20, 20, 100, 60]);
+  assert.equal(rect.fill.color, '#0000ff');
+  assert.equal(circle.fill.type, 'gradient');
+  assert.equal(circle.line.width, 4);
+  assert.ok(Math.abs(circle.x - 220) < 0.01 && Math.abs(circle.w - 40) < 0.01);
+  assert.equal(line.openPath, true);
+  assert.equal(text.text.paras[0].runs[0].t, '안녕 SVG');
+  assert.equal(text.text.paras[0].runs[0].color, '#ff0000');
+  // 슬라이드 → SVG → 다시 열기
+  const p = newPresentation({});
+  const s = newSlide(p, 'blank');
+  const sh = newShape('ellipse', { x: 100, y: 100, w: 200, h: 100 });
+  sh.text.paras[0].runs = [{ t: '가나다 라마바 사아자 차카타 파하' }];
+  s.objects.push(sh);
+  const out = slideSvg(p, s);
+  assert.match(out, /^<\?xml/);
+  assert.match(out, /<tspan[^>]*>가나다/);
+  assert.doesNotMatch(out, /foreignObject/);
+  const back = svgToObjects(out).objects;
+  assert.ok(back.some((o) => o.text?.paras[0].runs[0].t.includes('가나다')));
+  const only = slideSvg(p, s, { only: new Set([sh.id]) });
+  assert.match(only, /viewBox="96 96 208 108"/);
+});

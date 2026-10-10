@@ -22,7 +22,9 @@ import { startEyedrop } from './eyedrop.js';
 import { moveParagraph, startCrop, endCrop, startEdit, endEdit, textTargets, applyTextFormat, caretRunProp, caretPara, insertTextAtCaret, fitZoom, setZoom, renderCanvas, editorLayer } from './editor.js';
 import { startShow, playStepOn } from './show.js';
 import { shapeIconSvg, styleChip, wordArtCss } from './galleries.js';
-import { save, saveAs, openWithPicker, setDocument, printSlides, exportPng, exportVideo, shareLink, pickFile } from './fileio.js';
+import { save, saveAs, openWithPicker, setDocument, printSlides, exportPng, exportVideo, shareLink, pickFile, exportImages, saveObjectsAsPicture, slideSvgText, svgToRaster } from './fileio.js';
+import { slideSvg } from './svgexport.js';
+import { svgToObjects } from './svgimport.js';
 import { buildTemplate } from './templates.js';
 import { renderPane } from './panels.js';
 import { FONTS, SIZES, setRibbonTab } from './ribbon.js';
@@ -510,10 +512,13 @@ function doGroup() {
     s.objects = rest;
   });
 }
+let lastUngroup = null;
 function doUngroup() {
   const objs = selObjects().filter((o) => o.grp);
   if (!objs.length) { toast('그룹을 선택하세요'); return; }
-  change(() => { for (const o of expandGroups(objs)) delete o.grp; });
+  const all = expandGroups(objs);
+  lastUngroup = { slide: slide().id, ids: all.map((o) => o.id) };
+  change(() => { for (const o of all) delete o.grp; });
 }
 
 // ───────────── 애니메이션 ─────────────
@@ -1836,6 +1841,123 @@ register({
 
   // 그림 서식
   removeBackground: () => removeBackground(),
+  // ───── 오른쪽 클릭 메뉴 명령 ─────
+  openFormatPane: (k = 'shape') => { S.formatPane = k; renderPane(); requestAnimationFrame(() => { if (S.fitZoom) fitZoom(); }); },
+  regroup: () => {
+    const s = slide();
+    if (!lastUngroup || lastUngroup.slide !== s.id) { toast('다시 묶을 그룹이 없습니다'); return; }
+    const objs = s.objects.filter((o) => lastUngroup.ids.includes(o.id));
+    if (objs.length < 2) return;
+    S.sel = new Set(objs.map((o) => o.id));
+    run('group');
+  },
+  pasteAsPicture: async () => {
+    const objs = S.clipboard?.objs;
+    if (!objs?.length) { toast('먼저 개체를 복사하세요'); return; }
+    const tmp = { id: 'clip', layout: 'blank', objects: objs, anims: [], hideDecor: true };
+    const svg = slideSvg({ ...S.pres, slides: [tmp] }, tmp, { only: new Set(objs.map((o) => o.id)), measure: (font, t) => { const c = document.createElement('canvas').getContext('2d'); c.font = font; return c.measureText(t).width; } });
+    const url = await svgToRaster(svg, { scale: 2 });
+    const img = new Image(); img.src = url; await img.decode();
+    const x1 = Math.min(...objs.map((o) => o.x)); const y1 = Math.min(...objs.map((o) => o.y));
+    const o = newImage(addMedia(url), { x: x1 + 18, y: y1 + 18, w: img.naturalWidth / 2, h: img.naturalHeight / 2 });
+    change(() => slide().objects.push(o));
+    S.sel = new Set([o.id]); emit('selection');
+  },
+  smartLookup: () => {
+    const t = (window.getSelection?.().toString() || selObjects().map((o) => plainText(o.text ?? { paras: [] })).join(' ')).trim();
+    if (!t) { toast('찾아볼 글을 선택하세요'); return; }
+    window.open(`https://search.naver.com/search.naver?query=${encodeURIComponent(t.slice(0, 200))}`, '_blank', 'noopener');
+  },
+  translateSel: () => {
+    const t = (window.getSelection?.().toString() || selObjects().map((o) => plainText(o.text ?? { paras: [] })).join('\n')).trim();
+    if (!t) { toast('번역할 글을 선택하세요'); return; }
+    window.open(`https://papago.naver.com/?sk=auto&tk=${/[가-힣]/.test(t) ? 'en' : 'ko'}&st=${encodeURIComponent(t.slice(0, 1000))}`, '_blank', 'noopener');
+  },
+  bulletsNone: () => applyPara(null, (q) => { q.bullet = { type: 'none' }; delete q.marL; delete q.indent; }),
+  convertToSmartArt: () => {
+    const o = S.editing ? objById(S.editing.id) : selOne();
+    if (!o?.text) { toast('글이 있는 개체를 선택하세요'); return; }
+    if (S.editing) endEdit();
+    const items = o.text.paras.map((p) => p.runs.map((r) => r.t).join('').trim()).filter(Boolean);
+    if (!items.length) { toast('목록 글이 없습니다'); return; }
+    const objs = smartArt('process', items, { x: o.x, y: o.y, w: o.w, h: o.h }, { multicolor: true });
+    change(() => { const s = slide(); const i = s.objects.indexOf(o); s.objects.splice(i, 1, ...objs); });
+    S.sel = new Set(objs.map((x) => x.id)); emit('selection');
+  },
+  changePictureFromClipboard: async () => {
+    const o = selOne();
+    if (o?.type !== 'image') return;
+    try {
+      const items = await navigator.clipboard.read();
+      for (const it of items) for (const t of it.types) if (t.startsWith('image/')) {
+        const blob = await it.getType(t);
+        const r = await readImageFile(new File([blob], 'clip', { type: t }));
+        const id = addMedia(r.url);
+        change(() => { o.media = id; delete o.crop; o.h = o.w * (r.h / r.w); });
+        return;
+      }
+      toast('클립보드에 그림이 없습니다');
+    } catch { toast('클립보드를 읽을 수 없습니다 (브라우저 권한)'); }
+  },
+  tblInsertMenu: (a) => menuAt(a, [{ label: '왼쪽에 열 삽입', action: () => run('tblColLeft') }, { label: '오른쪽에 열 삽입', action: () => run('tblColRight') }, { label: '위에 행 삽입', action: () => run('tblRowAbove') }, { label: '아래에 행 삽입', action: () => run('tblRowBelow') }]),
+  pictureStyleMenu: (a) => menuAt(a, PICTURE_STYLES.map((p, i) => ({ label: p.label ?? `스타일 ${i + 1}`, action: () => run('applyPictureStyle', i) })), { scroll: true }),
+  setDefaultShape: () => {
+    const o = selOne();
+    if (o?.type !== 'shape') { toast('도형을 선택하세요'); return; }
+    change(() => { S.pres.defaultShape = { fill: o.fill ?? null, line: o.line ?? null, shadow: !!o.shadow, textColor: o.text?.paras[0]?.runs[0]?.color ?? o.text?.defColor ?? null }; }, { scope: 'none' });
+    toast('새로 그리는 도형에 이 서식을 씁니다');
+  },
+  // 사진 앨범: 그림마다 슬라이드 하나 (제목 = 파일 이름)
+  photoAlbum: () => {
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = 'image/*'; inp.multiple = true;
+    inp.addEventListener('change', async () => {
+      const files = [...inp.files];
+      if (!files.length) return;
+      const { w, h } = S.pres.size;
+      const made = [];
+      for (const f of files) {
+        const r = await readImageFile(f);
+        if (!r) continue;
+        const ns = newSlide(S.pres, 'titleOnly');
+        const t = ns.objects.find((x) => x.ph === 'title');
+        if (t) setPlainText(t.text, f.name.replace(/\.[^.]+$/, ''));
+        const k = Math.min((w * 0.84) / r.w, (h * 0.66) / r.h);
+        ns.objects.push(newImage(addMedia(r.url), { x: (w - r.w * k) / 2, y: h * 0.27, w: r.w * k, h: r.h * k }));
+        made.push(ns);
+      }
+      change(() => { S.pres.slides.splice(S.cur + 1, 0, ...made); }, { scope: 'all' });
+      goSlide(S.cur + 1);
+      toast(`사진 ${made.length}장으로 슬라이드를 만들었습니다`);
+    });
+    inp.click();
+  },
+  changeLayout: (k) => change(() => { for (const s of pickedSlides()) changeLayout(S.pres, s, k); }, { scope: 'all' }),
+  editPoints: () => { const o = selOne(); if (o?.type !== 'shape') { toast('도형을 선택하세요'); return; } emit('editPoints', o.id); },
+  exportImage: (kind = 'png', all = false) => exportImages(kind, all).catch((e) => alertDialog('내보내기', e.message)),
+  // [그림으로 저장] (PowerPoint 와 같이 고른 개체를 PNG · JPG · SVG 로)
+  saveAsPicture: () => {
+    const objs = selObjects();
+    if (!objs.length) { toast('그림으로 저장할 개체를 선택하세요'); return; }
+    menuAt({ x: innerWidth / 2 - 90, y: 180 }, [{ title: '파일 형식' }, ...[['png', 'PNG 이식 가능 네트워크 그래픽 (*.png)'], ['jpg', 'JPEG 파일 교환 형식 (*.jpg)'], ['svg', '확장 가능한 벡터 그래픽 (*.svg)']].map(([k, l]) => ({ label: l, action: () => saveObjectsAsPicture(objs.map((o) => o.id), k).catch((e) => alertDialog('그림으로 저장', e.message)) }))]);
+  },
+  // SVG 그림 → 편집 가능한 도형 (PowerPoint [도형으로 변환])
+  convertToShapes: () => {
+    const o = selOne();
+    const url = o?.type === 'image' ? S.pres.media[o.media] : null;
+    if (!url?.startsWith('data:image/svg')) { toast('SVG 그림(아이콘)을 선택하세요'); return; }
+    const text = url.includes(';base64,') ? new TextDecoder().decode(Uint8Array.from(atob(url.split(',')[1]), (c) => c.charCodeAt(0))) : decodeURIComponent(url.split(',')[1]);
+    let r;
+    try { r = svgToObjects(text); } catch (e) { alertDialog('도형으로 변환', e.message); return; }
+    if (!r.objects.length) { toast('바꿀 도형이 없습니다'); return; }
+    const k = Math.min(o.w / r.width, o.h / r.height);
+    const g = uid('g');
+    for (const x of r.objects) { x.x = o.x + x.x * k; x.y = o.y + x.y * k; x.w *= k; x.h *= k; if (x.line) x.line.width = Math.max(0.25, x.line.width * k); if (x.text) for (const p of x.text.paras) for (const rr of p.runs) rr.size = Math.max(4, rr.size * k); if (r.objects.length > 1) x.grp = g; }
+    change(() => { Object.assign(S.pres.media, r.media); const s = slide(); const i = s.objects.indexOf(o); s.objects.splice(i, 1, ...r.objects); });
+    S.sel = new Set(r.objects.map((x) => x.id));
+    emit('selection');
+    toast(`도형 ${r.objects.length}개로 바꾸었습니다`);
+  },
   insertEquation: () => equationDialog(),
   collabStart: () => collabDialog(),
   collabStop: () => stopCollab(),

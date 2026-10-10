@@ -29,7 +29,7 @@ export function fillCss(theme, fill, media = {}) {
   return 'transparent';
 }
 
-const DASH = { solid: '', dash: '4 3', sysDash: '3 1', dot: '1 2', sysDot: '1 1', dashDot: '4 3 1 3', lgDash: '8 3', lgDashDot: '8 3 1 3', lgDashDotDot: '8 3 1 3 1 3' };
+export const DASH = { solid: '', dash: '4 3', sysDash: '3 1', dot: '1 2', sysDot: '1 1', dashDot: '4 3 1 3', lgDash: '8 3', lgDashDot: '8 3 1 3', lgDashDotDot: '8 3 1 3 1 3' };
 export const DASH_LABEL = [['solid', '실선'], ['sysDot', '둥근 점선'], ['sysDash', '사각 점선'], ['dash', '파선'], ['dashDot', '파선-점선'], ['lgDash', '긴 파선'], ['lgDashDot', '긴 파선-점선']];
 
 // ───────────── 글 ─────────────
@@ -153,7 +153,7 @@ function runHtml(theme, o, p, r, fsc, editable) {
 // ───────────── 개체 ─────────────
 const nextId = (() => { let n = 0; return () => `g${(n++).toString(36)}`; })();
 
-function svgFill(theme, fill, w, h, media, defs) {
+export function svgFill(theme, fill, w, h, media, defs) {
   if (!fill) return 'none';
   if (fill.type === 'solid') return resolveColor(theme, fill.color, 'none');
   const id = nextId();
@@ -177,7 +177,7 @@ function svgFill(theme, fill, w, h, media, defs) {
   return 'none';
 }
 
-function markers(theme, line, defs) {
+export function markers(theme, line, defs) {
   const color = resolveColor(theme, line.color, '#000');
   const out = [];
   for (const end of ['head', 'tail']) {

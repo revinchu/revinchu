@@ -4,7 +4,9 @@ import { readPptx, pptxEntries } from './pptx.js';
 import { readPdf } from './pdf.js';
 import { decodeEmbeddedFont } from './fonts.js';
 import { zipAsync } from './zip.js';
-import { validatePresentation, pruneMedia, snapshot } from './model.js';
+import { validatePresentation, pruneMedia, snapshot, newPresentation } from './model.js';
+import { svgToObjects } from './svgimport.js';
+import { slideSvg } from './svgexport.js';
 import { slideHtml, SLIDE_CSS } from './render.js';
 import { toast, alertDialog } from './ui.js';
 
@@ -31,6 +33,19 @@ export async function loadFile(file) {
     const { pres, warnings, jobs } = readPdf(bytes, { encodeImage: canvasEncode });
     await Promise.all(jobs.map(async (j) => { const u = await maskJpeg(j); if (u) pres.media[j.media] = u; }));
     return { pres, name, warnings: ['PDF 를 슬라이드로 바꾸어 열었습니다. 글은 텍스트 상자, 도형 · 선은 도형으로 편집할 수 있습니다.', ...warnings], pdf: true };
+  }
+  // SVG: 편집 가능한 도형으로 바꾼 새 프레젠테이션 (슬라이드 크기는 SVG 비율)
+  if (/\.svgz?$/i.test(file.name) || /^\s*(<\?xml[^>]*>\s*)?(<!--[\s\S]*?-->\s*)*(<!DOCTYPE[^>]*>\s*)?<svg[\s>]/i.test(new TextDecoder().decode(bytes.subarray(0, 2048)))) {
+    const text = new TextDecoder().decode(bytes);
+    const probe = svgToObjects(text);
+    const ratio = probe.width / Math.max(1, probe.height);
+    const pres = newPresentation({ firstLayout: 'blank' });
+    pres.size = ratio >= 1 ? { w: 1280, h: Math.round(1280 / ratio) } : { w: Math.round(720 * ratio), h: 720 };
+    const { objects, media } = svgToObjects(text, { size: pres.size });
+    Object.assign(pres.media, media);
+    pres.slides[0].objects = objects;
+    pres.slides[0].hideDecor = true;
+    return { pres, name: file.name.replace(/\.svgz?$/i, ''), warnings: [`SVG 를 도형 ${objects.length}개로 바꾸어 열었습니다. 도형 · 글을 바로 편집할 수 있습니다.`], pdf: true };
   }
   if (bytes[0] === 0xd0 && bytes[1] === 0xcf) throw new Error('예전 PowerPoint 97-2003 형식(.ppt)은 열 수 없습니다. PowerPoint 에서 .pptx 로 저장한 뒤 열어 주세요.');
   if (bytes[0] === 0x50 && bytes[1] === 0x4b) {
@@ -118,7 +133,7 @@ export function setDocument(pres, name, { handle = null } = {}) {
 export async function openWithPicker() {
   if (window.showOpenFilePicker) {
     try {
-      const [h] = await window.showOpenFilePicker({ id: 'wipoint-open', types: [{ description: '프레젠테이션', accept: { [PPTX_MIME]: ['.pptx', '.ppsx', '.potx'], 'application/pdf': ['.pdf'], 'application/json': ['.json'] } }] });
+      const [h] = await window.showOpenFilePicker({ id: 'wipoint-open', types: [{ description: '프레젠테이션', accept: { [PPTX_MIME]: ['.pptx', '.ppsx', '.potx'], 'application/pdf': ['.pdf'], 'image/svg+xml': ['.svg'], 'application/json': ['.json'] } }] });
       const f = await h.getFile();
       const r = await loadFile(f);
       setDocument(r.pres, r.name, { handle: /\.pptx$/i.test(f.name) ? h : null });
@@ -129,7 +144,7 @@ export async function openWithPicker() {
       if (e.name !== 'SecurityError' && e.name !== 'TypeError') throw e;
     }
   }
-  const f = await pickFile('.pptx,.ppsx,.potx,.pdf,.json,.ppt,application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation');
+  const f = await pickFile('.pptx,.ppsx,.potx,.pdf,.svg,.json,.ppt,application/pdf,image/svg+xml,application/vnd.openxmlformats-officedocument.presentationml.presentation');
   if (!f) return;
   const r = await loadFile(f);
   setDocument(r.pres, r.name);
@@ -180,7 +195,7 @@ function download(blob, name) {
 /** 저장 위치 고르기 (가능한 브라우저) → 핸들, 아니면 내려받기 */
 async function pickSave(name, kind) {
   if (!window.showSaveFilePicker) return null;
-  const types = { pptx: [{ description: 'PowerPoint 프레젠테이션', accept: { [PPTX_MIME]: ['.pptx'] } }], json: [{ description: 'WIPOINT 문서', accept: { 'application/json': ['.json'] } }], pdf: [{ description: 'PDF', accept: { 'application/pdf': ['.pdf'] } }], png: [{ description: 'PNG 그림', accept: { 'image/png': ['.png'] } }] }[kind];
+  const types = { pptx: [{ description: 'PowerPoint 프레젠테이션', accept: { [PPTX_MIME]: ['.pptx'] } }], json: [{ description: 'WIPOINT 문서', accept: { 'application/json': ['.json'] } }], pdf: [{ description: 'PDF', accept: { 'application/pdf': ['.pdf'] } }], png: [{ description: 'PNG 그림', accept: { 'image/png': ['.png'] } }], jpg: [{ description: 'JPEG 그림', accept: { 'image/jpeg': ['.jpg'] } }], svg: [{ description: 'SVG 그림', accept: { 'image/svg+xml': ['.svg'] } }] }[kind];
   try { return await window.showSaveFilePicker({ id: 'wipoint-save', suggestedName: name, types }); } catch (e) { if (e.name === 'AbortError') return false; return null; }
 }
 async function writeHandle(h, blob) {
@@ -330,6 +345,74 @@ export function slidePng(i, width = 1920) {
     img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
   });
 }
+// ───────────── SVG · JPG · 그림으로 저장 ─────────────
+let measureCtx = null;
+/** 브라우저 글자 너비 (SVG 줄 바꿈 계산용) */
+export function measureText(font, text) {
+  measureCtx ??= document.createElement('canvas').getContext('2d');
+  measureCtx.font = font;
+  return measureCtx.measureText(text).width;
+}
+/** 슬라이드 i (또는 고른 개체 only) → SVG 글 */
+export const slideSvgText = (i, only = null) => slideSvg(S.pres, S.pres.slides[i], { measure: measureText, only });
+/** SVG 글 → 그림 data URL (png · jpeg), 배경 (jpeg 는 흰색) */
+export function svgToRaster(svg, { type = 'image/png', scale = 2, quality = 0.92 } = {}) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const cv = document.createElement('canvas');
+      cv.width = Math.max(1, Math.round(img.naturalWidth * scale));
+      cv.height = Math.max(1, Math.round(img.naturalHeight * scale));
+      const g = cv.getContext('2d');
+      if (type === 'image/jpeg') { g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height); }
+      g.drawImage(img, 0, 0, cv.width, cv.height);
+      try { resolve(cv.toDataURL(type, quality)); } catch (e) { reject(e); }
+    };
+    img.onerror = () => reject(new Error('그림으로 바꾸지 못했습니다'));
+    img.src = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
+  });
+}
+/** 내보내기: kind = svg | png | jpg, all = 모든 슬라이드 */
+export async function exportImages(kind = 'png', all = false) {
+  const list = all ? S.pres.slides.map((_, i) => i) : [S.cur];
+  for (const i of list) {
+    const name = `${S.docName}${list.length > 1 ? `_${i + 1}` : ''}.${kind}`;
+    let blob;
+    if (kind === 'svg') blob = new Blob([slideSvgText(i)], { type: 'image/svg+xml' });
+    else {
+      // PNG 는 화면과 같은 HTML 렌더(글꼴 · 효과 정확), JPG 는 흰 배경
+      const url = kind === 'png' ? await slidePng(i) : await slidePng(i).then((u) => jpegFrom(u));
+      blob = await (await fetch(url)).blob();
+    }
+    if (list.length === 1) {
+      const h = await pickSave(name, kind);
+      if (h === false) return;
+      if (h) { await writeHandle(h, blob); toast('저장했습니다'); return; }
+    }
+    download(blob, name);
+  }
+}
+async function jpegFrom(pngUrl) {
+  const img = new Image();
+  img.src = pngUrl;
+  await img.decode();
+  const cv = document.createElement('canvas');
+  cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height); g.drawImage(img, 0, 0);
+  return cv.toDataURL('image/jpeg', 0.92);
+}
+/** 고른 개체를 그림 파일로 (PowerPoint [그림으로 저장]) */
+export async function saveObjectsAsPicture(ids, kind = 'png') {
+  const svg = slideSvgText(S.cur, new Set(ids));
+  const name = `${S.docName}_그림.${kind}`;
+  const blob = kind === 'svg' ? new Blob([svg], { type: 'image/svg+xml' }) : await (await fetch(await svgToRaster(svg, { type: kind === 'jpg' ? 'image/jpeg' : 'image/png' }))).blob();
+  const h = await pickSave(name, kind);
+  if (h === false) return;
+  if (h) { await writeHandle(h, blob); toast('저장했습니다'); return; }
+  download(blob, name);
+}
+
 export async function exportPng(all = false) {
   const list = all ? S.pres.slides.map((_, i) => i) : [S.cur];
   for (const i of list) {

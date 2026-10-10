@@ -4,7 +4,7 @@
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const URL = process.env.WIPOINT_URL || 'http://127.0.0.1:5179/';
 // 파일 고르기 · 인쇄 · 전체 화면 · 화면 캡처처럼 사람 손이 필요한 명령은 건너뜀
-const SKIP = new Set(['open', 'save', 'saveAs', 'print', 'printNow', 'exportPng', 'insertPicture', 'changePicture', 'pickFillImage', 'screenshot', 'paste', 'pasteFiles', 'backstage', 'newPres', 'showFromStart', 'showFromCurrent', 'presenterView', 'rehearse', 'viewReading', 'insertIcons', 'share']);
+const SKIP = new Set(['open', 'save', 'saveAs', 'print', 'printNow', 'exportPng', 'insertPicture', 'changePicture', 'pickFillImage', 'screenshot', 'paste', 'pasteFiles', 'backstage', 'newPres', 'showFromStart', 'showFromCurrent', 'presenterView', 'rehearse', 'viewReading', 'insertIcons', 'share', 'saveAsPicture', 'exportImage', 'photoAlbum', 'smartLookup', 'translateSel', 'changePictureFromClipboard']);
 const b = await chromium.launch();
 const p = await b.newPage({ viewport: { width: 1400, height: 900 } });
 const errs = [];

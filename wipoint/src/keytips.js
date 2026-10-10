@@ -145,7 +145,16 @@ function menuNav(e) {
     case 'ArrowRight': if (i >= 0 && items[i].classList.contains('has-sub')) { items[i].click(); requestAnimationFrame(() => { const n = topMenu(); n?.querySelector('.menu-item:not(:disabled)')?.focus(); if (mode) draw(); }); return true; } return false;
     case 'ArrowLeft': if (Number(m.dataset.level) >= 1) { closeSubmenus(); if (mode) draw(); return true; } return false;
     case 'Enter': case ' ': if (i >= 0) { items[i].click(); if (mode) afterAction(); return true; } return false;
-    default: return false;
+    default: {
+      // PowerPoint 오른쪽 클릭 메뉴의 괄호 글자 (잘라내기(T) …)
+      if (mode || e.key.length !== 1) return false;
+      const k = e.key.toUpperCase();
+      const hit = items.find((x) => x.dataset.acc === k);
+      if (!hit) return false;
+      hit.click();
+      if (hit.classList.contains('has-sub')) requestAnimationFrame(() => topMenu()?.querySelector('.menu-item:not(:disabled)')?.focus());
+      return true;
+    }
   }
 }
 

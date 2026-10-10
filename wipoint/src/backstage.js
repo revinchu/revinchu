@@ -114,6 +114,9 @@ const PAGES = {
     big('print', 'PDF/XPS 문서 만들기', '인쇄 → PDF로 저장', () => { closeBackstage(); run('printNow', { mode: 'slides' }); }),
     big('picture', '현재 슬라이드를 PNG 로', '', () => run('exportPng', false)),
     big('sorter', '모든 슬라이드를 PNG 로', '슬라이드마다 파일 하나', () => run('exportPng', true)),
+    big('picture', '현재 슬라이드를 JPG 로', '흰 배경 JPEG', () => run('exportImage', 'jpg', false)),
+    big('picture', '현재 슬라이드를 SVG 로', '도형 · 글이 살아 있는 벡터 그림 (일러스트레이터 · 피그마)', () => run('exportImage', 'svg', false)),
+    big('sorter', '모든 슬라이드를 SVG 로', '슬라이드마다 파일 하나', () => run('exportImage', 'svg', true)),
     big('video', '동영상 만들기', 'MP4/WebM — 전환 · 설정된 시간 포함', () => { closeBackstage(); run('exportVideo'); }),
     big('notes', '유인물 만들기', '한 페이지에 슬라이드 여러 장 + 메모 줄', () => openBackstage('print')))),
 };

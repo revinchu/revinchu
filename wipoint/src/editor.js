@@ -3,7 +3,8 @@ import { S, curSlide, selObjects, objById, change, emit, on, run } from './state
 import { slideHtml, textHtml, paraDefaults } from './render.js';
 import { groupMembers, bbox, rotatedBox, newShape, newTextBox, formatRange, rangeRunProp, uid } from './model.js';
 import { domToBody, getOffsets, setOffsets, wordAt, placeCaretAtPoint, selectAllIn } from './textedit.js';
-import { isLineShape } from './shapes.js';
+import { isLineShape, shapePath } from './shapes.js';
+import { parsePath } from './svgimport.js';
 import { peersOn } from './collab.js';
 import { el } from './ui.js';
 
@@ -191,11 +192,84 @@ function peerFrames() {
   }
 }
 
+// ───────────── 점 편집 (PowerPoint [도형 편집 › 점 편집]) ─────────────
+on('editPoints', (id) => {
+  const o = objById(id);
+  if (!o) return;
+  if (!o.path) {
+    // 기본 도형 → 자유형 (같은 모양의 점 목록)
+    const cmds = parsePath(shapePath(o.shape ?? 'rect', o.w, o.h, o.adj));
+    change(() => { o.path = [{ w: o.w, h: o.h, cmds }]; });
+  }
+  S.pointEdit = id;
+  S.sel = new Set([id]);
+  emit('selection');
+});
+function pointHandles(z) {
+  const o = objById(S.pointEdit);
+  if (!o?.path || !S.sel.has(o.id)) { S.pointEdit = null; return false; }
+  const p = o.path[0];
+  const sx = o.w / (p.w || o.w); const sy = o.h / (p.h || o.h);
+  const box = el('div', { class: 'pt-edit', style: { left: `${o.x * z}px`, top: `${o.y * z}px`, width: `${o.w * z}px`, height: `${o.h * z}px`, transform: o.rot ? `rotate(${o.rot}deg)` : '' } });
+  const lines = [];
+  p.cmds.forEach((c, ci) => {
+    const n = c.length - 1;
+    for (let k = 1; k + 1 <= n; k += 2) {
+      const ctrl = (c[0] === 'C' && k < 5) || (c[0] === 'Q' && k < 3);
+      const hx = c[k] * sx * z; const hy = c[k + 1] * sy * z;
+      const h = el('div', { class: `pt-h${ctrl ? ' ctrl' : ''}`, title: ctrl ? '곡선 조절점' : '점 (끌어서 이동)', style: { left: `${hx}px`, top: `${hy}px` } });
+      h.addEventListener('pointerdown', (e) => pointDrag(e, o, ci, k));
+      box.append(h);
+      if (ctrl) {
+        // 조절점 ↔ 붙은 점 선
+        const anchor = c[0] === 'C' ? (k === 1 ? prevEnd(p.cmds, ci) : [c[5], c[6]]) : [c[3], c[4]];
+        if (anchor) lines.push(`<line x1="${hx}" y1="${hy}" x2="${anchor[0] * sx * z}" y2="${anchor[1] * sy * z}"/>`);
+      }
+    }
+  });
+  box.insertAdjacentHTML('afterbegin', `<svg class="pt-lines" width="100%" height="100%" overflow="visible">${lines.join('')}</svg>`);
+  overlay.append(box);
+  return true;
+}
+function prevEnd(cmds, i) { for (let j = i - 1; j >= 0; j--) { const c = cmds[j]; if (c.length >= 3) return [c[c.length - 2], c[c.length - 1]]; } return null; }
+function pointDrag(e, o, ci, k) {
+  e.preventDefault(); e.stopPropagation();
+  const p = o.path[0];
+  const sx = o.w / (p.w || o.w); const sy = o.h / (p.h || o.h);
+  const p0 = toSlide(e);
+  const v0 = [p.cmds[ci][k], p.cmds[ci][k + 1]];
+  let rec = false;
+  const move = (ev) => {
+    if (!rec) { S.history.record(S.pres); rec = true; }
+    const q = toSlide(ev);
+    p.cmds[ci][k] = Math.round((v0[0] + (q.x - p0.x) / sx) * 100) / 100;
+    p.cmds[ci][k + 1] = Math.round((v0[1] + (q.y - p0.y) / sy) * 100) / 100;
+    renderCanvas();
+  };
+  const up = () => {
+    removeEventListener('pointermove', move); removeEventListener('pointerup', up);
+    if (!rec) return;
+    // 점이 상자 밖으로 나가면 상자를 다시 맞춤
+    const pts = p.cmds.flatMap((c) => { const r = []; for (let j = 1; j + 1 < c.length + 1; j += 2) if (c[j] != null) r.push([c[j], c[j + 1]]); return r; });
+    const xs = pts.map((t) => t[0]); const ys = pts.map((t) => t[1]);
+    const mx = Math.min(...xs); const my = Math.min(...ys); const Mx = Math.max(...xs); const My = Math.max(...ys);
+    if (mx < 0 || my < 0 || Mx > p.w || My > p.h) {
+      for (const c of p.cmds) for (let j = 1; j + 1 < c.length + 1; j += 2) if (c[j] != null) { c[j] -= mx; c[j + 1] -= my; }
+      o.x += mx * sx; o.y += my * sy; o.w = Math.max(1, (Mx - mx) * sx); o.h = Math.max(1, (My - my) * sy); p.w = Mx - mx || 1; p.h = My - my || 1;
+    }
+    S.dirty = true;
+    emit('change', { scope: 'slide' });
+  };
+  addEventListener('pointermove', move);
+  addEventListener('pointerup', up);
+}
+
 export function renderOverlay() {
   if (!overlay) return;
   if (S.showRuler) renderRuler();
   overlay.innerHTML = '';
   const z = S.zoom;
+  if (S.pointEdit && pointHandles(z)) return;
   const frames = S.cropping ? [] : selectionFrames();
   for (const [i, f] of frames.entries()) {
     const { x, y, w, h } = f.box;
@@ -914,6 +988,9 @@ function startDraw(e, p0) {
     let rect = small ? { x: p0.x, y: p0.y, w: kind === 'textbox' ? 300 : 96, h: kind === 'textbox' ? 40 : line ? 0 : 96 } : { x: Math.min(p0.x, p1.x), y: Math.min(p0.y, p1.y), w: Math.abs(w), h: Math.abs(h) };
     if (kind === 'textbox' && !small) rect = { ...rect, h: Math.max(rect.h, 40) };
     const o = kind === 'textbox' ? newTextBox(rect) : newShape(kind, rect);
+    // [기본 도형으로 설정] 한 서식
+    const def = S.pres.defaultShape;
+    if (def && kind !== 'textbox') { if (!line && def.fill !== undefined) o.fill = JSON.parse(JSON.stringify(def.fill)); if (def.line !== undefined) o.line = JSON.parse(JSON.stringify(def.line)); if (def.shadow) o.shadow = true; else delete o.shadow; if (def.textColor && o.text) o.text.defColor = def.textColor; }
     if (line && !small) { if (w < 0) o.flipH = true; if (h < 0) o.flipV = true; if (o.flipH && o.flipV) { delete o.flipH; delete o.flipV; } }
     change(() => { curSlide().objects.push(o); });
     S.sel = new Set([o.id]);

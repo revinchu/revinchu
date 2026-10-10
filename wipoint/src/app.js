@@ -4,6 +4,7 @@ import { initEditor, renderCanvas, renderOverlay, fitZoom, startEdit, endEdit, a
 import { initPanels, renderThumbs, updateThumb, markActiveThumb, renderNotes, renderStatus, renderPane, renderSorter, thumbsFocused, markPeerDots } from './panels.js';
 import { collab, startCollab, stopCollab, collabLink } from './collab.js';
 import { initMobile } from './mobile.js';
+import { canvasMenu, thumbMenu } from './ctxmenu.js';
 import { initRibbon, renderRibbon, TABS, setRibbonTab, initQat } from './ribbon.js';
 import { initKeytips } from './keytips.js';
 import { stopEyedrop } from './eyedrop.js';
@@ -237,63 +238,9 @@ function wireEvents() {
   addEventListener('error', (e) => emit('error', e.error ?? e.message));
   addEventListener('unhandledrejection', (e) => emit('error', e.reason));
   // 편집 화면 오른쪽 클릭
-  on('canvasMenu', ({ e, hit }) => {
-    if (hit && !S.sel.has(hit.id)) { S.sel = new Set(hit.grp ? curSlide().objects.filter((o) => o.grp === hit.grp).map((o) => o.id) : [hit.id]); emit('selection'); }
-    const o = selOne();
-    const objs = selObjects();
-    const items = objs.length ? [
-      { label: '잘라내기', icon: 'cut', key: 'Ctrl+X', action: () => run('cut') },
-      { label: '복사', icon: 'copy', key: 'Ctrl+C', action: () => run('copy') },
-      { label: '붙여넣기', icon: 'paste', key: 'Ctrl+V', action: () => run('paste') },
-      { sep: true },
-      o?.text ? { label: '텍스트 편집', icon: 'textbox', action: () => startEdit(o, { end: true }) } : null,
-      o?.type === 'chart' ? { label: '데이터 편집...', icon: 'table', action: () => run('chartData') } : null,
-      o?.type === 'image' ? { label: '그림 바꾸기...', icon: 'picture', action: () => run('changePicture') } : null,
-      o?.type === 'image' ? { label: '자르기...', icon: 'crop', action: () => run('cropPicture') } : null,
-      { label: '그룹화', icon: 'group', submenu: [{ label: '그룹', key: 'Ctrl+G', action: () => run('group') }, { label: '그룹 해제', key: 'Ctrl+Shift+G', action: () => run('ungroup') }] },
-      { label: '맨 앞으로 가져오기', icon: 'bringForward', submenu: [{ label: '맨 앞으로 가져오기', action: () => run('bringToFront') }, { label: '앞으로 가져오기', action: () => run('bringForward') }] },
-      { label: '맨 뒤로 보내기', icon: 'sendBackward', submenu: [{ label: '맨 뒤로 보내기', action: () => run('sendToBack') }, { label: '뒤로 보내기', action: () => run('sendBackward') }] },
-      { sep: true },
-      { label: '링크', icon: 'link', key: 'Ctrl+K', action: () => run('hyperlink') },
-      { label: '애니메이션 추가', icon: 'animation', action: () => run('addAnimMenu', { x: e.clientX, y: e.clientY }) },
-      { label: '대체 텍스트 편집...', icon: 'info', action: () => run('altText') },
-      { label: o?.type === 'image' ? '그림 서식...' : '도형 서식...', icon: 'effects', action: () => run('formatPane', 'shape') },
-    ] : [
-      { label: '붙여넣기', icon: 'paste', key: 'Ctrl+V', action: () => run('paste') },
-      { sep: true },
-      { label: '레이아웃', icon: 'layout', action: () => run('layoutMenu', { x: e.clientX, y: e.clientY }) },
-      { label: '슬라이드 다시 설정', icon: 'resetSlide', action: () => run('resetSlide') },
-      { label: '눈금선', checked: S.showGrid, action: () => run('toggleGrid') },
-      { label: '안내선', checked: S.showGuides, action: () => run('toggleGuides') },
-      { label: '세로 안내선 추가', action: () => run('addGuide', 'v') },
-      { label: '가로 안내선 추가', action: () => run('addGuide', 'h') },
-      { label: '눈금자', checked: !!S.showRuler, action: () => run('toggleRuler') },
-      { label: '배경 서식...', icon: 'formatBg', action: () => run('formatBg') },
-      { label: '새 슬라이드', icon: 'newSlide', key: 'Ctrl+M', action: () => run('newSlide') },
-    ];
-    openMenu({ x: e.clientX, y: e.clientY }, items.filter(Boolean));
-  });
-  on('thumbMenu', ({ e }) => {
-    const s = curSlide();
-    openMenu({ x: e.clientX, y: e.clientY }, [
-      { label: '잘라내기', icon: 'cut', action: () => { S.focusThumbs = true; run('cut'); } },
-      { label: '복사', icon: 'copy', action: () => { S.focusThumbs = true; run('copy'); S.focusThumbs = false; } },
-      { label: '붙여넣기', icon: 'paste', action: () => run('pasteInternal') },
-      { sep: true },
-      { label: '새 슬라이드', icon: 'newSlide', key: 'Ctrl+M', action: () => run('newSlide') },
-      { label: '슬라이드 복제', icon: 'duplicate', key: 'Ctrl+D', action: () => run('duplicateSlide') },
-      { label: '슬라이드 삭제', icon: 'delete', key: 'Delete', action: () => run('deleteSlide') },
-      { sep: true },
-      { label: '구역 추가', icon: 'section', action: () => run('addSection') },
-      { label: '레이아웃', icon: 'layout', action: () => run('layoutMenu', { x: e.clientX, y: e.clientY }) },
-      { label: '슬라이드 다시 설정', icon: 'resetSlide', action: () => run('resetSlide') },
-      { label: '배경 서식...', icon: 'formatBg', action: () => run('formatBg') },
-      { sep: true },
-      { label: '슬라이드 숨기기', icon: 'hideSlide', checked: !!s?.hidden, action: () => run('hideSlide') },
-      { label: '위로 이동', icon: 'moveUp', action: () => run('moveSlideUp') },
-      { label: '아래로 이동', icon: 'moveDown', action: () => run('moveSlideDown') },
-    ]);
-  });
+  // 오른쪽 클릭 메뉴 (PowerPoint 와 같은 구성 — ctxmenu.js)
+  on('canvasMenu', ({ e, hit }) => canvasMenu(e, hit));
+  on('thumbMenu', ({ e, index }) => thumbMenu(e, index));
 }
 function selectedText() { return selObjects().map((o) => (o.text ? o.text.paras.map((p) => p.runs.map((r) => r.t).join('')).join('\n') : '')).join('\n'); }
 function clipText() { return (S.clipboard?.objs ?? []).map((o) => (o.text ? o.text.paras.map((p) => p.runs.map((r) => r.t).join('')).join('\n') : '')).filter(Boolean).join('\n') || ' '; }

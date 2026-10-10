@@ -59,6 +59,7 @@ export function setMenuCloseHandler(fn) { onMenuClose = fn; }
 export const isMenuOpen = () => openMenus.length > 0;
 
 export function closeMenus() {
+  for (const n of document.querySelectorAll('#menuLayer .mini-toolbar')) n.remove();
   if (!openMenus.length) return;
   for (const m of openMenus) m.remove();
   openMenus = [];
@@ -128,6 +129,8 @@ function buildMenu(anchor, items, { minWidth, scroll, level = 0 } = {}) {
     it.desc ? el('span', { class: 'mi-text' }, el('b', {}, it.label), el('small', {}, it.desc)) : el('span', {}, it.swatch !== undefined ? it.label.replace(/^(■|A) /, '') : it.label),
     it.key ? el('span', { class: 'mi-key' }, it.key) : null,
     it.submenu ? el('span', { class: 'mi-key' }, '▸') : null);
+    const acc = /\(([A-Z0-9])\)(\.\.\.)?$/.exec(it.label ?? '');
+    if (acc) btn.dataset.acc = acc[1];
     menu.append(btn);
   }
   document.getElementById('menuLayer').append(menu);
@@ -155,7 +158,7 @@ function placeMenu(menu, anchor) {
 }
 
 document.addEventListener('mousedown', (e) => {
-  if (openMenus.length && !openMenus.some((m) => m.contains(e.target))) {
+  if (openMenus.length && !openMenus.some((m) => m.contains(e.target)) && !e.target.closest?.('.mini-toolbar')) {
     // 메뉴를 연 단추를 다시 누름 → 닫기만 (바로 이어지는 click 으로 다시 열리지 않게)
     const a = menuAnchor;
     if (a) {

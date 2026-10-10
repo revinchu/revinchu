@@ -616,3 +616,15 @@ body.mobile .statusbar { overflow-x: auto; flex-wrap: nowrap; scrollbar-width: n
 body.mobile .qat { overflow-x: auto; scrollbar-width: none; }
 body.mobile .rbtn { min-height: 40px; }
 body.mobile .dialog-body { max-height: calc(100vh - 160px); overflow: auto; overscroll-behavior: contain; }
+/* 점 편집 */
+.pt-edit { position: absolute; pointer-events: none; transform-origin: 50% 50%; outline: 1px dashed rgba(196, 62, 28, .5); }
+.pt-lines { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; }
+.pt-lines line { stroke: #4a90d9; stroke-width: 1; }
+.pt-h { position: absolute; width: 9px; height: 9px; margin: -5px 0 0 -5px; background: #000; border: 1px solid #fff; pointer-events: auto; cursor: move; }
+.pt-h.ctrl { background: #fff; border-color: #4a90d9; border-radius: 50%; }
+/* 미니 도구 모음 */
+.mini-toolbar { display: flex; flex-wrap: wrap; gap: 2px; padding: 4px; min-width: 0; max-width: 360px; }
+.mt-btn { min-width: 26px; height: 26px; border: 1px solid transparent; background: none; border-radius: 3px; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; padding: 0 4px; font-size: 13px; }
+.mt-btn:hover { background: #f0f0f0; border-color: #d0d0d0; }
+.mt-btn.wide { flex-direction: column; height: auto; padding: 3px 8px; font-size: 11px; }
+.mt-btn svg { width: 18px; height: 18px; }
