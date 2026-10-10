@@ -1,6 +1,6 @@
 // 편집 화면(가운데 슬라이드): 선택 · 이동 · 크기 · 회전 · 스마트 가이드 · 도형 그리기 · 글 편집
 import { S, curSlide, selObjects, objById, change, emit, on, run } from './state.js';
-import { slideHtml, textHtml } from './render.js';
+import { slideHtml, textHtml, paraDefaults } from './render.js';
 import { groupMembers, bbox, rotatedBox, newShape, newTextBox, formatRange, rangeRunProp, uid } from './model.js';
 import { domToBody, getOffsets, setOffsets, wordAt, placeCaretAtPoint, selectAllIn } from './textedit.js';
 import { isLineShape } from './shapes.js';
@@ -13,7 +13,7 @@ let overlay;
 let txi = null;           // 편집 중인 글 요소
 let editBase = null;      // 편집 시작 때의 글 (data 없는 부분 기본값)
 let lastOffs = null;      // 리본 입력 칸으로 초점이 옮겨가도 기억하는 글 선택 위치
-document.addEventListener('selectionchange', () => { if (txi?.isConnected) { const o = getOffsets(txi); if (o) lastOffs = o; } });
+document.addEventListener('selectionchange', () => { if (txi?.isConnected) { const o = getOffsets(txi); if (o) { const moved = lastOffs?.a.p !== o.a.p; lastOffs = o; if (moved && S.showRuler) requestAnimationFrame(renderRuler); } } });
 const offsetsNow = () => (txi ? getOffsets(txi) ?? lastOffs : null);
 
 export function initEditor(stageEl) {
@@ -21,7 +21,10 @@ export function initEditor(stageEl) {
   host = el('div', { class: 'slide-host' });
   layer = el('div', { class: 'slide-layer' });
   overlay = el('div', { class: 'overlay' });
-  host.append(layer, overlay);
+  rulerH = el('div', { class: 'ruler-h', hidden: true });
+  rulerV = el('div', { class: 'ruler-v', hidden: true });
+  guideEl = el('div', { class: 'guide-layer' });
+  host.append(layer, guideEl, overlay, rulerH, rulerV);
   stage.append(el('div', { class: 'stage-inner' }, host));
   stage.addEventListener('pointerdown', onStageDown);
   host.addEventListener('pointerdown', onPointerDown);
@@ -33,7 +36,59 @@ export function initEditor(stageEl) {
     setZoom(S.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1));
   }, { passive: false });
   new ResizeObserver(() => { if (S.fitZoom) fitZoom(); }).observe(stage);
+  initTouch();
   document.execCommand?.('defaultParagraphSeparator', false, 'div');
+}
+
+// ───────────── 터치 편집: 두 손가락 확대/축소 · 길게 눌러 메뉴 · 두 번 탭 = 두 번 클릭 ─────────────
+function initTouch() {
+  const pts = new Map();
+  let pinch = null;
+  let press = 0;
+  let lastTap = null;
+  stage.addEventListener('pointerdown', (e) => {
+    if (e.pointerType !== 'touch') return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    clearTimeout(press);
+    if (pts.size === 2) {
+      // 두 번째 손가락: 진행 중이던 끌기를 멈추고 확대/축소
+      const [a, b] = [...pts.values()];
+      pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), z: S.zoom };
+      dispatchEvent(new PointerEvent('pointerup', { pointerId: e.pointerId }));
+      return;
+    }
+    const x0 = e.clientX; const y0 = e.clientY;
+    press = setTimeout(() => {
+      if (pts.size !== 1) return;
+      const p = pts.get(e.pointerId);
+      if (!p || Math.hypot(p.x - x0, p.y - y0) > 10) return;
+      dispatchEvent(new PointerEvent('pointerup', { pointerId: e.pointerId }));
+      // 누르는 사이 화면이 다시 그려졌을 수 있으므로 그 자리의 요소에 보냄
+      (document.elementFromPoint(x0, y0) ?? host).dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: x0, clientY: y0 }));
+    }, 550);
+  }, true);
+  stage.addEventListener('pointermove', (e) => {
+    if (!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinch && pts.size >= 2) {
+      const [a, b] = [...pts.values()];
+      const d = Math.hypot(a.x - b.x, a.y - b.y);
+      if (pinch.d > 0) setZoom(pinch.z * (d / pinch.d));
+      e.stopPropagation();
+    }
+  }, true);
+  const up = (e) => {
+    if (!pts.has(e.pointerId)) return;
+    pts.delete(e.pointerId);
+    clearTimeout(press);
+    if (pts.size < 2) pinch = null;
+    if (e.type !== 'pointerup' || pts.size) return;
+    // 두 번 탭
+    const now = Date.now();
+    if (lastTap && now - lastTap.t < 320 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 24 && host.contains(e.target)) { lastTap = null; onDblClick(e); } else lastTap = { t: now, x: e.clientX, y: e.clientY };
+  };
+  stage.addEventListener('pointerup', up, true);
+  stage.addEventListener('pointercancel', up, true);
 }
 
 // ───────────── 확대/축소 ─────────────
@@ -56,6 +111,7 @@ export function setZoom(z) {
 }
 function layout() {
   const { w, h } = S.pres.size;
+  queueMicrotask(() => { renderRuler(); renderGuides(); });
   host.style.width = `${w * S.zoom}px`;
   host.style.height = `${h * S.zoom}px`;
   layer.style.transform = `scale(${S.zoom})`;
@@ -73,7 +129,7 @@ export function renderCanvas() {
   if (S.editing && txi?.isConnected) offs = getOffsets(txi);
   layer.innerHTML = slideHtml(S.pres, slide, { prompt: true, index: S.cur, editId: S.editing?.id });
   layer.classList.toggle('grid', S.showGrid);
-  layer.classList.toggle('guides', S.showGuides);
+  renderGuides();
   layout();
   if (S.editing) attachEditor(offs);
 }
@@ -95,6 +151,7 @@ function selectionFrames() {
 
 export function renderOverlay() {
   if (!overlay) return;
+  if (S.showRuler) renderRuler();
   overlay.innerHTML = '';
   const z = S.zoom;
   const frames = S.cropping ? [] : selectionFrames();
@@ -169,6 +226,12 @@ function onPointerDown(e) {
   const p = toSlide(e);
   // 도형 그리기 모드
   if (S.drawShape) { startDraw(e, p); return; }
+  // 안내선: 개체가 없는 곳에서만 잡힘 (PowerPoint 와 같음)
+  if (!e.target.closest('.sel-frame, [data-h]') && !hitObject(e)) {
+    const th = 4 / S.zoom;
+    const gi = activeGuides().findIndex((g) => Math.abs((g.dir === 'v' ? p.x : p.y) - g.pos) <= th);
+    if (gi >= 0) { guideDrag(e, gi); return; }
+  }
   const handle = e.target.dataset?.h;
   if (handle) { e.preventDefault(); startHandleDrag(e, p, handle, Number(e.target.closest('.sel-frame')?.dataset.frame ?? 0)); return; }
   // 표 칸 범위: Shift+클릭 / 칸에서 칸으로 끌기
@@ -382,6 +445,7 @@ function onDblClick(e) {
   const o = hitObject(e);
   if (!o) return;
   if (o.type === 'chart') { run('chartData'); return; }
+  if (o.type === 'equation') { run('editEquation', o.id); return; }
   if (o.type === 'image') { if (o.media) startCrop(o); return; }
   if (o.type === 'table') {
     const td = e.target.closest('[data-cell]');
@@ -459,11 +523,155 @@ function moveDom(objs) {
   }
 }
 
-/** 스마트 가이드: 슬라이드 가장자리 · 가운데, 다른 개체 가장자리 · 가운데에 붙임 */
+// ───────────── 눈금자 (PowerPoint [보기 › 눈금자]: cm, 가운데가 0, 글 편집 중 들여쓰기 · 탭 표식) ─────────────
+let rulerH;
+let rulerV;
+let guideEl;
+const CM = 96 / 2.54;
+let tabKind = 'l';
+function rulerTicks(len, z, vertical) {
+  const mid = len / 2;
+  let out = '';
+  const n = Math.ceil(mid / (CM / 4));
+  for (let k = -n; k <= n; k++) {
+    const v = mid + k * (CM / 4);
+    if (v < 0 || v > len) continue;
+    const big = k % 4 === 0;
+    const half = k % 2 === 0;
+    const at = Math.round(v * z) + 0.5;
+    const tl = big ? 0 : half ? 5 : 8;
+    out += vertical ? `<line x1="${tl + 4}" y1="${at}" x2="${big ? 6 : 12}" y2="${at}"/>` : `<line x1="${at}" y1="${tl + 4}" x2="${at}" y2="${big ? 6 : 12}"/>`;
+    if (big && k) out += vertical ? `<text x="8" y="${at + 3}" transform="rotate(-90 8 ${at})">${Math.abs(k / 4)}</text>` : `<text x="${at}" y="12">${Math.abs(k / 4)}</text>`;
+  }
+  return out;
+}
+export function renderRuler() {
+  if (!rulerH) return;
+  const on = !!S.showRuler && S.view !== 'sorter';
+  rulerH.hidden = rulerV.hidden = !on;
+  if (!on) return;
+  const z = S.zoom;
+  const { w, h } = S.pres.size;
+  // 글 편집 중이면 글 영역은 흰색 (나머지 회색), 아니면 선택한 개체 범위
+  const o = S.editing && !S.editing.cell ? objById(S.editing.id) : selObjects()[0];
+  const ins = o?.text?.insets ?? [9.6, 4.8, 9.6, 4.8];
+  const tx = o ? [o.x + (o.text ? ins[0] : 0), o.x + o.w - (o.text ? ins[2] : 0)] : [0, w];
+  const ty = o ? [o.y + (o.text ? ins[1] : 0), o.y + o.h - (o.text ? ins[3] : 0)] : [0, h];
+  rulerH.innerHTML = `<svg width="${w * z}" height="16"><rect class="rl-bg" x="0" y="0" width="${w * z}" height="16"/><rect class="rl-on" x="${tx[0] * z}" y="1" width="${Math.max(0, (tx[1] - tx[0]) * z)}" height="14"/><g class="rl-t">${rulerTicks(w, z, false)}</g></svg>`;
+  rulerV.innerHTML = `<svg width="16" height="${h * z}"><rect class="rl-bg" x="0" y="0" width="16" height="${h * z}"/><rect class="rl-on" x="1" y="${ty[0] * z}" width="14" height="${Math.max(0, (ty[1] - ty[0]) * z)}"/><g class="rl-t">${rulerTicks(h, z, true)}</g></svg>`;
+  rulerH.append(el('button', { type: 'button', class: `rl-tabkind k-${tabKind}`, title: '탭 종류 (누르면 바뀜): 왼쪽 · 가운데 · 오른쪽 · 소수점', onclick: () => { tabKind = { l: 'ctr', ctr: 'r', r: 'dec', dec: 'l' }[tabKind]; renderRuler(); } }));
+  if (!S.editing || S.editing.cell || !o?.text) return;
+  const p = caretPara() ?? o.text.paras[0];
+  if (!p) return;
+  const d = paraDefaults(o, p);
+  const left = tx[0];
+  const mk = (cls, x, title, kind) => {
+    const m = el('div', { class: `rl-m ${cls}`, title, style: { left: `${x * z}px` } });
+    m.addEventListener('pointerdown', (e) => rulerDrag(e, kind, { left, d, p }));
+    rulerH.append(m);
+  };
+  mk('first', left + d.marL + d.indent, '첫 줄 들여쓰기', 'first');
+  mk('hang', left + d.marL, '내어쓰기', 'hang');
+  mk('left', left + d.marL, '왼쪽 들여쓰기', 'left');
+  for (const [i, t] of (p.tabs ?? []).entries()) {
+    const m = el('div', { class: `rl-tab k-${t.algn ?? 'l'}`, title: '탭 (아래로 끌어 내면 지움)', style: { left: `${(left + t.pos) * z}px` } });
+    m.addEventListener('pointerdown', (e) => rulerDrag(e, 'tab', { left, d, p, i }));
+    rulerH.append(m);
+  }
+  // 빈 곳을 누르면 그 자리에 탭 추가
+  rulerH.onpointerdown = (e) => {
+    if (e.target.closest('.rl-m, .rl-tab, .rl-tabkind')) return;
+    e.preventDefault();
+    const x = e.clientX - rulerH.getBoundingClientRect().left;
+    const pos = Math.round((x / z - left) * 10) / 10;
+    if (pos <= 0 || x / z > tx[1]) return;
+    applyTextFormat(null, null, 0, (q) => { q.tabs = [...(q.tabs ?? []).filter((t) => Math.abs(t.pos - pos) > 2), { pos, algn: tabKind }].sort((a, b) => a.pos - b.pos); });
+    renderRuler();
+  };
+}
+function rulerDrag(e, kind, { left, d, p, i }) {
+  e.preventDefault(); e.stopPropagation();
+  const z = S.zoom;
+  const r0 = rulerH.getBoundingClientRect();
+  const m = e.currentTarget;
+  let val = null;
+  let out = false;
+  const tip = el('div', { class: 'rl-tip' });
+  rulerH.append(tip);
+  const onMove = (ev) => {
+    const x = Math.max(0, (ev.clientX - r0.left) / z - left);
+    const snap = ev.altKey ? x : Math.round(x / (CM / 8)) * (CM / 8);
+    val = Math.round(snap * 10) / 10;
+    out = kind === 'tab' && ev.clientY - r0.bottom > 24;
+    m.style.left = `${(left + val) * z}px`;
+    m.style.opacity = out ? '0.3' : '';
+    if (kind === 'left') rulerH.querySelector('.rl-m.first').style.left = `${(left + val + d.indent) * z}px`;
+    tip.textContent = `${(val / CM).toFixed(2)} cm`;
+    tip.style.left = `${(left + val) * z}px`;
+  };
+  const onUp = () => {
+    removeEventListener('pointermove', onMove); removeEventListener('pointerup', onUp);
+    tip.remove();
+    if (val == null) { renderRuler(); return; }
+    if (kind === 'first') applyTextFormat(null, { indent: Math.round((val - d.marL) * 10) / 10 });
+    else if (kind === 'hang') applyTextFormat(null, { marL: val, indent: Math.round((d.marL + d.indent - val) * 10) / 10 });
+    else if (kind === 'left') applyTextFormat(null, { marL: val, indent: d.indent });
+    else if (kind === 'tab') applyTextFormat(null, null, 0, (q) => { const tabs = [...(q.tabs ?? p.tabs ?? [])]; if (out) tabs.splice(i, 1); else tabs[i] = { ...tabs[i], pos: val }; q.tabs = tabs.sort((a, b) => a.pos - b.pos); if (!q.tabs.length) delete q.tabs; });
+    renderRuler();
+  };
+  addEventListener('pointermove', onMove);
+  addEventListener('pointerup', onUp);
+}
+
+// ───────────── 안내선 (끌어서 옮기고, 슬라이드 밖으로 끌어 내면 지움 · Ctrl+끌기 = 복사) ─────────────
+const defaultGuides = () => [{ dir: 'v', pos: S.pres.size.w / 2 }, { dir: 'h', pos: S.pres.size.h / 2 }];
+export const activeGuides = () => (S.showGuides ? S.pres.guides ?? defaultGuides() : []);
+export function renderGuides() {
+  if (!guideEl) return;
+  guideEl.innerHTML = '';
+  const z = S.zoom;
+  activeGuides().forEach((g, i) => {
+    const d = el('div', { class: `guide ${g.dir}`, style: g.dir === 'v' ? { left: `${g.pos * z}px` } : { top: `${g.pos * z}px` } });
+    d.addEventListener('pointerdown', (e) => guideDrag(e, i));
+    guideEl.append(d);
+  });
+}
+function guideDrag(e, i) {
+  e.preventDefault(); e.stopPropagation();
+  const { w, h } = S.pres.size;
+  let list = (S.pres.guides ?? defaultGuides()).map((g) => ({ ...g }));
+  if (e.ctrlKey) { list.push({ ...list[i] }); i = list.length - 1; }
+  const g = list[i];
+  const d = guideEl.children[Math.min(i, guideEl.children.length - 1)];
+  const tip = el('div', { class: 'guide-tip' });
+  guideEl.append(tip);
+  let gone = false;
+  const onMove = (ev) => {
+    const p = toSlide(ev);
+    const v = g.dir === 'v' ? p.x : p.y;
+    gone = v < -8 || v > (g.dir === 'v' ? w : h) + 8;
+    g.pos = Math.round(Math.max(0, Math.min(g.dir === 'v' ? w : h, v)) * 2) / 2;
+    if (d) { if (g.dir === 'v') d.style.left = `${g.pos * S.zoom}px`; else d.style.top = `${g.pos * S.zoom}px`; d.style.opacity = gone ? '0.3' : ''; }
+    const c = (g.pos - (g.dir === 'v' ? w : h) / 2) / CM;
+    tip.textContent = gone ? '지우기' : `${Math.abs(c).toFixed(2)}`;
+    Object.assign(tip.style, g.dir === 'v' ? { left: `${g.pos * S.zoom + 6}px`, top: `${p.y * S.zoom}px` } : { top: `${g.pos * S.zoom + 6}px`, left: `${p.x * S.zoom}px` });
+  };
+  const onUp = () => {
+    removeEventListener('pointermove', onMove); removeEventListener('pointerup', onUp);
+    if (gone) list = list.filter((x) => x !== g);
+    change(() => { S.pres.guides = list; }, { scope: 'none' });
+    renderGuides();
+  };
+  addEventListener('pointermove', onMove);
+  addEventListener('pointerup', onUp);
+}
+
+/** 스마트 가이드: 슬라이드 가장자리 · 가운데, 다른 개체 가장자리 · 가운데, 안내선에 붙임 */
 function snapTargets(others) {
   const { w, h } = S.pres.size;
   const xs = [[0, 0, h], [w / 2, 0, h], [w, 0, h]];
   const ys = [[0, 0, w], [h / 2, 0, w], [h, 0, w]];
+  for (const g of activeGuides()) (g.dir === 'v' ? xs : ys).push([g.pos, 0, g.dir === 'v' ? h : w]);
   for (const o of others) {
     if (o.decor) continue;
     const [x1, y1, x2, y2] = rotatedBox(o);

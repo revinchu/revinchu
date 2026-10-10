@@ -59,7 +59,7 @@ const INSERT = { id: 'insert', label: '삽입', groups: [
   { label: '링크', items: [L(null, 'zoomIn', '확대/축소', { menu: 'zoomMenu' }), L('hyperlink', 'link', '링크')] },
   { label: '미디어', items: [L('insertVideo', 'video', '비디오'), L('insertAudio', 'audio', '오디오')] },
   { label: '텍스트', items: [L('drawTextbox', 'textbox', '텍스트 상자'), L('headerFooter', 'headerFooter', '머리글/바닥글'), L(null, 'wordart', 'WordArt', { menu: 'wordArtMenu' }), COL(M('insertDate', 'dateTime', '날짜 및 시간'), M('insertSlideNumber', 'slideNumber', '슬라이드 번호'))] },
-  { label: '기호', items: [L('symbol', 'symbol', '기호')] },
+  { label: '기호', items: [L('insertEquation', 'equation', '수식'), L('symbol', 'symbol', '기호')] },
 ] };
 
 const DESIGN = { id: 'design', label: '디자인', groups: [
@@ -97,8 +97,9 @@ const REVIEW = { id: 'review', label: '검토', groups: [
 ] };
 
 const VIEW = { id: 'view', label: '보기', groups: [
-  { label: '프레젠테이션 보기', items: [L('viewNormal', 'normalView', '기본', { on: 'vNormal' }), L('viewOutline', 'outlineView', '개요 보기'), L('viewSorter', 'sorter', '여러 슬라이드', { on: 'vSorter' }), L('viewNotesPage', 'notes', '슬라이드 노트'), L('viewReading', 'readingView', '읽기용 보기')] },
-  { label: '표시', items: [COL({ t: 'check', cmd: 'toggleGrid', label: '눈금선', on: 'grid' }, { t: 'check', cmd: 'toggleGuides', label: '안내선', on: 'guides' }), L('toggleNotes', 'notes', '메모', { on: 'notes' })] },
+  { label: '프레젠테이션 보기', items: [L('viewNormal', 'normalView', '기본', { on: 'vNormal' }), L('viewOutline', 'outlineView', '개요 보기', { on: 'vOutline' }), L('viewSorter', 'sorter', '여러 슬라이드', { on: 'vSorter' }), L('viewNotesPage', 'notes', '슬라이드 노트'), L('viewReading', 'readingView', '읽기용 보기')] },
+  { label: '마스터 보기', items: [L('viewMaster', 'layout', '슬라이드 마스터', { on: 'vMaster' })] },
+  { label: '표시', items: [COL({ t: 'check', cmd: 'toggleRuler', label: '눈금자', on: 'ruler' }, { t: 'check', cmd: 'toggleGrid', label: '눈금선', on: 'grid' }, { t: 'check', cmd: 'toggleGuides', label: '안내선', on: 'guides' }), L('toggleNotes', 'notes', '메모', { on: 'notes' })] },
   { label: '확대/축소', items: [L('zoomDialog', 'zoomIn', '확대/축소'), L('fitZoom', 'fit', '창에 맞춤')] },
   { label: '창', items: [L('selectionPane', 'selectionPane', '선택 창', { on: 'selPane' })] },
 ] };
@@ -128,6 +129,11 @@ const MEDIA_TAB = { id: 'playback', label: '재생', context: 'media', groups: [
   { label: '정렬', items: [COL(M('bringForward', 'bringForward', '앞으로 가져오기', { menu: 'bringMenu' }), M('sendBackward', 'sendBackward', '뒤로 보내기', { menu: 'sendMenu' })), COL(M(null, 'align', '맞춤', { menu: 'alignMenu' }), M('altText', 'info', '대체 텍스트'))] },
   { label: '크기', items: [{ t: 'objSize' }] },
 ] };
+const MASTER_TAB = { id: 'slideMaster', label: '슬라이드 마스터', context: 'master', groups: [
+  { label: '마스터 편집', items: [L('masterRename', 'section', '이름 바꾸기'), L('masterReset', 'resetSlide', '원래대로')] },
+  { label: '배경', items: [COL({ t: 'check', cmd: 'masterHideGraphics', label: '배경 그래픽 숨기기', on: 'masterHide' }), L('formatBg', 'formatBg', '배경 서식')] },
+  { label: '닫기', items: [L('closeMaster', 'cross', '마스터 보기 닫기')] },
+] };
 const SMART_TAB = { id: 'smartDesign', label: 'SmartArt 디자인', context: 'smart', groups: [
   { label: '그래픽 만들기', items: [L('smartAddShape', 'plus', '도형 추가'), L('smartTextPane', 'textbox', '텍스트 창')] },
   { label: '레이아웃', items: [L(null, 'convertSmart', '레이아웃', { menu: 'smartLayoutMenu' })] },
@@ -152,26 +158,27 @@ const CHART_DESIGN = { id: 'chartDesign', label: '차트 디자인', context: 'c
   { label: '종류', items: [L(null, 'chartBar', '차트 종류 변경', { menu: 'chartKindMenu' })] },
 ] };
 
-export const TABS = [HOME, INSERT, DESIGN, TRANS, ANIM, SHOW, REVIEW, VIEW, HELP, SHAPE_FMT, PIC_FMT, TABLE_DESIGN, TABLE_LAYOUT, CHART_DESIGN, MEDIA_TAB, SMART_TAB];
+export const TABS = [HOME, INSERT, DESIGN, TRANS, ANIM, SHOW, REVIEW, VIEW, HELP, SHAPE_FMT, PIC_FMT, TABLE_DESIGN, TABLE_LAYOUT, CHART_DESIGN, MEDIA_TAB, SMART_TAB, MASTER_TAB];
 
 // ───────────── 키 팁 (Alt 누르기 → 글자) — PowerPoint 한국어판과 같은 글자 ─────────────
-const TAB_KT = { home: 'H', insert: 'N', design: 'G', transitions: 'K', animations: 'A', slideshow: 'S', review: 'R', view: 'W', help: 'Y2', playback: 'JN', smartDesign: 'JS', shapeFormat: 'JD', pictureFormat: 'JP', tableDesign: 'JT', tableLayout: 'JL', chartDesign: 'JC' };
+const TAB_KT = { home: 'H', insert: 'N', design: 'G', transitions: 'K', animations: 'A', slideshow: 'S', review: 'R', view: 'W', help: 'Y2', playback: 'JN', smartDesign: 'JS', slideMaster: 'M', shapeFormat: 'JD', pictureFormat: 'JP', tableDesign: 'JT', tableLayout: 'JL', chartDesign: 'JC' };
 const ARRANGE_KT = { bringForward: 'AF', sendBackward: 'AE', selectionPane: 'AP', alignMenu: 'AA', groupMenu: 'AG', rotateMenu: 'AY' };
 const KT = {
   home: { paste: 'V', cut: 'X', copy: 'C', formatPainter: 'FP', newSlide: 'I', layoutMenu: 'L', resetSlide: 'RE', sectionMenu: 'T', font: 'FF', size: 'FS', growFont: 'FG', shrinkFont: 'FK', clearFormat: 'E', bold: '1', italic: '2', underline: '3', strike: '4', textShadow: '5', charSpacingMenu: '6', changeCaseMenu: '7', highlight: 'TC', fontColor: 'FC', bullets: 'U', numbering: 'N', indentLess: 'AO', indentMore: 'AI', lineSpacingMenu: 'K', alignLeft: 'AL', alignCenter: 'AC', alignRight: 'AR', alignJustify: 'AJ', textDirMenu: 'AD', textAnchorMenu: 'AT', shapesMini: 'SH', arrangeMenu: 'G', quickStylesMenu: 'Q', shapeFill: 'SF', shapeOutline: 'SO', shapeEffectsMenu: 'SE', find: 'FD', replace: 'RP', selectMenu: 'SL', 'launcher:fontDialog': 'FN', 'launcher:paragraphDialog': 'PG', 'launcher:formatPaneShape': 'DS' },
-  insert: { newSlide: 'I', tableMenu: 'T', insertPicture: 'P', screenshot: 'SC', shapesMenu: 'SH', insertIcons: 'Y1', insertSmartArt: 'M', chartMenu: 'C', hyperlink: 'IL', zoomMenu: 'ZM', drawTextbox: 'X', headerFooter: 'H', wordArtMenu: 'W', insertDate: 'D', insertSlideNumber: 'SN', symbol: 'U', insertVideo: 'V', insertAudio: 'O' },
+  insert: { newSlide: 'I', tableMenu: 'T', insertPicture: 'P', screenshot: 'SC', shapesMenu: 'SH', insertIcons: 'Y1', insertSmartArt: 'M', chartMenu: 'C', hyperlink: 'IL', zoomMenu: 'ZM', drawTextbox: 'X', headerFooter: 'H', wordArtMenu: 'W', insertDate: 'D', insertSlideNumber: 'SN', symbol: 'U', insertEquation: 'E', insertVideo: 'V', insertAudio: 'O' },
   design: { themes: 'TH', themeColorsMenu: 'TC', themeFontsMenu: 'TF', bgStylesMenu: 'TB', slideSizeMenu: 'S', formatBg: 'G', designIdeas: 'D' },
   transitions: { previewTransition: 'P', transitions: 'T', transitionOptionsMenu: 'E', transTiming: 'D', applyTransitionAll: 'L' },
   animations: { previewAnim: 'P', animations: 'S', animOptionsMenu: 'M', addAnimMenu: 'AA', animPane: 'C', removeAnim: 'X', animPainter: 'K', triggerMenu: 'G', animTiming: 'T' },
   slideshow: { showFromStart: 'B', showFromCurrent: 'C', customShowMenu: 'W', setupShow: 'S', hideSlide: 'H', rehearse: 'T', presenterView: 'V' },
   review: { spellCheck: 'S', accessibility: 'A', wordCount: 'W', newComment: 'C', deleteComments: 'D', prevComment: 'V', nextComment: 'N', commentsPane: 'P' },
-  view: { viewNormal: 'L', viewOutline: 'O', viewSorter: 'I', viewNotesPage: 'T', viewReading: 'D', toggleGrid: 'G', toggleGuides: 'U', toggleNotes: 'N', zoomDialog: 'Q', fitZoom: 'W', selectionPane: 'P' },
+  view: { viewMaster: 'M', toggleRuler: 'R', viewNormal: 'L', viewOutline: 'O', viewSorter: 'I', viewNotesPage: 'T', viewReading: 'D', toggleGrid: 'G', toggleGuides: 'U', toggleNotes: 'N', zoomDialog: 'Q', fitZoom: 'W', selectionPane: 'P' },
   help: { shortcuts: 'K', whatsNew: 'N', about: 'A' },
   shapeFormat: { shapesMini: 'SH', changeShapeMenu: 'E', drawTextbox: 'X', shapeStyles: 'K', shapeFill: 'SF', shapeOutline: 'SO', shapeEffectsMenu: 'SE', wordart: 'Q', objSize: 'H', 'launcher:formatPaneShape': 'DS', ...ARRANGE_KT },
   pictureFormat: { removeBackground: 'E', pictureCorrectionsMenu: 'R', pictureColorMenu: 'I', changePicture: 'CP', resetPicture: 'Q', pictureStyles: 'K', shapeOutline: 'SO', shapeEffectsMenu: 'SE', altText: 'T', cropPicture: 'V', objSize: 'H', 'launcher:formatPaneShape': 'DS', ...ARRANGE_KT },
   tableDesign: { 'tblOpt:firstRow': 'A', 'tblOpt:lastRow': 'T', 'tblOpt:banded': 'R', 'tblOpt:firstCol': 'C', 'tblOpt:lastCol': 'L', tableStyles: 'S', cellFill: 'H', cellBorderMenu: 'B' },
   tableLayout: { tblSelectMenu: 'K', tblDeleteMenu: 'D', tblRowAbove: 'A', tblRowBelow: 'BE', tblColLeft: 'L', tblColRight: 'R', tblMerge: 'M', tblSplit: 'P', tblEqualRows: 'HE', tblEqualCols: 'WE', alignLeft: 'AL', alignCenter: 'AC', alignRight: 'AR', anchorTop: 'AT', anchorMiddle: 'AV', anchorBottom: 'AB' },
   chartDesign: { chartElementsMenu: 'A', chartColorsMenu: 'C', chartData: 'E', chartKindMenu: 'T' },
+  slideMaster: { masterRename: 'R', masterReset: 'E', masterHideGraphics: 'H', formatBg: 'B', closeMaster: 'C' },
   smartDesign: { smartAddShape: 'A', smartTextPane: 'X', smartLayoutMenu: 'L', smartColors: 'C', smartToShapes: 'V' },
   playback: { previewMedia: 'P', mediaOptions: 'O', bringForward: 'AF', sendBackward: 'AE', alignMenu: 'AA', altText: 'T', objSize: 'H' },
 };

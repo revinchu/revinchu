@@ -243,3 +243,29 @@ test('배경 제거: 가장자리 배경색은 투명, 가운데 피사체는 �
   assert.equal(c[2 * w + 2], 255);
   assert.equal(applyMask(data, a)[3], 0);
 });
+
+test('개요 보기 편집: 줄 목록 ⇄ 슬라이드', async () => {
+  const { outlineRows, applyOutline, newPresentation, newSlide, slideTitle } = await import('../src/model.js');
+  const p = newPresentation({});
+  const s2 = newSlide(p, 'titleContent');
+  p.slides.push(s2);
+  s2.objects[0].text.paras[0].runs = [{ t: '둘째', b: true }];
+  s2.objects[1].text.paras = [{ runs: [{ t: '가', color: '#ff0000' }] }, { lvl: 1, runs: [{ t: '나' }] }];
+  const rows = outlineRows(p);
+  assert.deepEqual(rows.map((r) => [r.kind, r.text, r.lvl]), [['title', '', undefined], ['title', '둘째', undefined], ['body', '가', 0], ['body', '나', 1]]);
+  // '나' 를 고치고, 새 슬라이드 '셋째' + 본문 추가
+  rows[3].text = '나나';
+  rows.push({ kind: 'title', text: '셋째' }, { kind: 'body', lvl: 0, text: '하나' });
+  applyOutline(p, rows);
+  assert.equal(p.slides.length, 3);
+  assert.equal(p.slides[1], s2);
+  assert.equal(s2.objects[1].text.paras[0].runs[0].color, '#ff0000');
+  assert.equal(s2.objects[1].text.paras[1].runs[0].t, '나나');
+  assert.equal(s2.objects[1].text.paras[1].lvl, 1);
+  assert.equal(slideTitle(p.slides[2]), '셋째');
+  assert.equal(outlineRows(p).at(-1).text, '하나');
+  // 둘째 슬라이드 제목 줄을 지우면 (본문은 앞 슬라이드로) 슬라이드가 빠짐
+  const r2 = outlineRows(p).filter((r) => r.text !== '둘째');
+  applyOutline(p, r2);
+  assert.equal(p.slides.length, 2);
+});

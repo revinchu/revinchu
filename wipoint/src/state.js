@@ -1,5 +1,5 @@
 // 앱 공용 상태 + 명령 등록소 + 변경 알림 (모듈끼리 서로 import 하지 않도록 이곳을 거침)
-import { History, newPresentation } from './model.js';
+import { History, newPresentation, masterSlide } from './model.js';
 
 export const S = {
   pres: newPresentation(),
@@ -26,7 +26,7 @@ export const S = {
   opts: {},
 };
 
-export const curSlide = () => S.pres.slides[S.cur] ?? S.pres.slides[0];
+export const curSlide = () => (S.masterKey ? masterSlide(S.pres, S.masterKey) : S.pres.slides[S.cur] ?? S.pres.slides[0]);
 export const selObjects = () => { const s = curSlide(); return s ? s.objects.filter((o) => S.sel.has(o.id)) : []; };
 export const selOne = () => { const l = selObjects(); return l.length === 1 ? l[0] : null; };
 export const objById = (id) => curSlide()?.objects.find((o) => o.id === id) ?? null;

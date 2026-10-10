@@ -111,6 +111,7 @@ function applyView() {
   $('stage').hidden = S.view === 'sorter';
   app.classList.toggle('no-notes', !S.showNotes || S.view === 'sorter');
   app.classList.toggle('big-notes', !!S.bigNotes);
+  renderThumbs();
   if (S.view === 'sorter') renderSorter();
   else requestAnimationFrame(() => { if (S.fitZoom) fitZoom(); renderCanvas(); });
 }
@@ -239,6 +240,9 @@ function wireEvents() {
       { label: '슬라이드 다시 설정', icon: 'resetSlide', action: () => run('resetSlide') },
       { label: '눈금선', checked: S.showGrid, action: () => run('toggleGrid') },
       { label: '안내선', checked: S.showGuides, action: () => run('toggleGuides') },
+      { label: '세로 안내선 추가', action: () => run('addGuide', 'v') },
+      { label: '가로 안내선 추가', action: () => run('addGuide', 'h') },
+      { label: '눈금자', checked: !!S.showRuler, action: () => run('toggleRuler') },
       { label: '배경 서식...', icon: 'formatBg', action: () => run('formatBg') },
       { label: '새 슬라이드', icon: 'newSlide', key: 'Ctrl+M', action: () => run('newSlide') },
     ];
@@ -295,6 +299,8 @@ function onEditCtrl(e) {
 /** 기능 키 (편집 중에도): PowerPoint 와 같은 동작 */
 function fnKey(e) {
   const k = e.key;
+  // Alt+= : 수식 삽입 (PowerPoint 와 같음)
+  if (e.altKey && !e.ctrlKey && !e.metaKey && e.code === 'Equal') { e.preventDefault(); run('insertEquation'); return true; }
   if (!/^F\d+$/.test(k) && k !== 'ContextMenu') return false;
   const ctrl = e.ctrlKey || e.metaKey;
   const shift = e.shiftKey;

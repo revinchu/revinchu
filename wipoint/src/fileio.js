@@ -107,6 +107,7 @@ export function setDocument(pres, name, { handle = null } = {}) {
   S.history.clear();
   S.sel.clear();
   S.editing = null;
+  S.masterKey = null;
   S.dirty = false;
   goSlide(0);
   emit('change', { scope: 'all' });

@@ -13,6 +13,7 @@ import { slideHtml, NUM_SCHEMES, BULLET_CHARS, DASH_LABEL } from './render.js';
 import { SHAPE_STYLES, WORDART, PICTURE_STYLES, TABLE_STYLES, tableStyleProps, DESIGN_IDEAS } from './presets.js';
 import { smartArt, SMART_KINDS } from './smartart.js';
 import { backgroundMask, applyMask } from './bgremove.js';
+import { parseLatex, toMathML } from './math.js';
 import { el, openMenu, openDialog, formDialog, alertDialog, toast, closeMenus } from './ui.js';
 import { colorMenu } from './colorpick.js';
 import { startEyedrop } from './eyedrop.js';
@@ -22,7 +23,7 @@ import { shapeIconSvg, styleChip, wordArtCss } from './galleries.js';
 import { save, saveAs, openWithPicker, setDocument, printSlides, exportPng, exportVideo, shareLink, pickFile } from './fileio.js';
 import { buildTemplate } from './templates.js';
 import { renderPane } from './panels.js';
-import { FONTS, SIZES } from './ribbon.js';
+import { FONTS, SIZES, setRibbonTab } from './ribbon.js';
 
 const lastColor = { font: '#C00000', hl: '#FFFF00', fill: '@accent1', line: '@tx1', cell: '@accent2:lm20:lo80' };
 const slide = () => curSlide();
@@ -852,6 +853,53 @@ async function insertZoom(kind) {
   emit('selection');
 }
 
+// ───────────── 수식 (PowerPoint [삽입 › 수식], Alt+=) ─────────────
+const EQ_GALLERY = [
+  ['근의 공식', 'x=\\frac{-b\\pm \\sqrt{b^2-4ac}}{2a}'],
+  ['피타고라스 정리', 'a^2+b^2=c^2'],
+  ['원의 넓이', 'A=\\pi r^2'],
+  ['이항 정리', '(x+a)^n=\\sum_{k=0}^{n} \\left( \\begin{matrix}n \\\\ k\\end{matrix} \\right) x^k a^{n-k}'],
+  ['오일러 공식', 'e^{i\\pi}+1=0'],
+  ['테일러 급수', 'e^x=1+\\frac{x}{1!}+\\frac{x^2}{2!}+\\frac{x^3}{3!}+\\cdots'],
+  ['삼각 항등식', '\\sin^2\\theta +\\cos^2\\theta =1'],
+  ['정규 분포', 'f(x)=\\frac{1}{\\sigma \\sqrt{2\\pi}} e^{-\\frac{(x-\\mu)^2}{2\\sigma^2}}'],
+  ['ROAS', '\\text{ROAS}=\\frac{\\text{매출}}{\\text{광고비}}\\times 100'],
+];
+const EQ_PALETTE = [
+  ['a/b', '\\frac{a}{b}'], ['√x', '\\sqrt{x}'], ['ⁿ√x', '\\sqrt[n]{x}'], ['xⁿ', 'x^{n}'], ['xₙ', 'x_{n}'], ['∑', '\\sum_{i=1}^{n} '], ['∫', '\\int_{a}^{b} '], ['∏', '\\prod_{i=1}^{n} '],
+  ['( )', '\\left( x \\right)'], ['[ ]', '\\left[ x \\right]'], ['행렬', '\\begin{pmatrix}a & b \\\\ c & d\\end{pmatrix}'], ['x̂', '\\hat{x}'], ['x̄', '\\bar{x}'], ['x⃗', '\\vec{x}'], ['lim', '\\lim_{x\\to 0} '], ['글', '\\text{글}'],
+  ...['alpha', 'beta', 'gamma', 'delta', 'theta', 'lambda', 'mu', 'pi', 'sigma', 'omega', 'Delta', 'Sigma', 'times', 'div', 'pm', 'le', 'ge', 'ne', 'approx', 'infty', 'partial', 'to', 'cdot', 'cdots'].map((k) => [({ alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', theta: 'θ', lambda: 'λ', mu: 'μ', pi: 'π', sigma: 'σ', omega: 'ω', Delta: 'Δ', Sigma: 'Σ', times: '×', div: '÷', pm: '±', le: '≤', ge: '≥', ne: '≠', approx: '≈', infty: '∞', partial: '∂', to: '→', cdot: '⋅', cdots: '⋯' })[k], `\\${k} `]),
+];
+function equationDialog(target = null) {
+  const ta = el('textarea', { class: 'eq-src', rows: 4, spellcheck: 'false', placeholder: 'LaTeX 로 입력 (예: \\frac{a}{b}, x^2, \\sqrt{x}, \\sum_{i=1}^{n})' }, target?.latex ?? '');
+  const pv = el('div', { class: 'eq-preview' });
+  const size = el('input', { type: 'number', min: 8, max: 120, value: target?.size ?? 28, style: { width: '64px' } });
+  const draw = () => { try { pv.innerHTML = toMathML(parseLatex(ta.value)); } catch { pv.textContent = '수식을 읽지 못했습니다'; } };
+  const insert = (t) => { const a = ta.selectionStart; const b = ta.selectionEnd; ta.value = ta.value.slice(0, a) + t + ta.value.slice(b); ta.focus(); ta.selectionStart = ta.selectionEnd = a + t.length; draw(); };
+  ta.addEventListener('input', draw);
+  ta.addEventListener('keydown', (e) => e.stopPropagation());
+  const pal = el('div', { class: 'eq-pal' }, EQ_PALETTE.map(([l, t]) => el('button', { type: 'button', class: 'btn small', title: t, onclick: () => insert(t) }, l)));
+  const gal = el('div', { class: 'eq-gal' }, EQ_GALLERY.map(([l, t]) => { const b = el('button', { type: 'button', class: 'eq-card', title: l, onclick: () => { ta.value = t; draw(); } }, el('small', {}, l)); b.insertAdjacentHTML('beforeend', toMathML(parseLatex(t))); return b; }));
+  openDialog({
+    title: target ? '수식 편집' : '수식 삽입', width: 720,
+    body: el('div', { class: 'eq-dlg' }, el('div', { class: 'muted' }, '기본 제공 수식'), gal, el('div', { class: 'muted' }, '구조 · 기호'), pal, ta, el('label', { class: 'pane-check' }, '글꼴 크기 ', size, ' pt'), pv),
+    buttons: [{ label: target ? '확인' : '삽입', primary: true, action: () => {
+      const latex = ta.value.trim();
+      if (!latex) return false;
+      const sz = Math.max(8, Math.min(120, Number(size.value) || 28));
+      if (target) { change(() => { target.latex = latex; target.size = sz; }); return true; }
+      const { w, h } = S.pres.size;
+      const o = { id: uid(), type: 'equation', x: w * 0.25, y: h * 0.4, w: w * 0.5, h: Math.max(60, sz * 4), rot: 0, latex, size: sz };
+      change(() => slide().objects.push(o));
+      S.sel = new Set([o.id]);
+      emit('selection');
+      return true;
+    } }, { label: '취소' }],
+  });
+  draw();
+  setTimeout(() => ta.focus(), 30);
+}
+
 // ───────────── 그림 배경 제거 (PowerPoint [그림 서식 › 배경 제거]) ─────────────
 async function removeBackground() {
   const o = selObjects().find((x) => x.type === 'image' && S.pres.media[x.media]);
@@ -1192,6 +1240,7 @@ function zoomDialog() {
 }
 
 const SHORTCUTS = [
+  ['Alt+=', '수식 삽입 (LaTeX 입력, PowerPoint 수식으로 저장)'],
   ['Ctrl+N / Ctrl+O / Ctrl+S', '새로 만들기 / 열기 / 저장'], ['F12', '다른 이름으로 저장'], ['Ctrl+P', '인쇄'], ['Ctrl+M', '새 슬라이드'], ['Ctrl+D', '복제 (개체 · 슬라이드)'],
   ['F5 / Shift+F5', '처음부터 / 현재 슬라이드부터 쇼'], ['Alt+F5', '발표자 보기'], ['Ctrl+Z / Ctrl+Y', '실행 취소 / 다시 실행'], ['Ctrl+C / X / V', '복사 / 잘라내기 / 붙여넣기'],
   ['Ctrl+Shift+C / V', '서식 복사 / 서식 붙여넣기'], ['Ctrl+G / Ctrl+Shift+G', '그룹 / 그룹 해제'], ['Ctrl+B / I / U', '굵게 / 기울임꼴 / 밑줄'], ['Ctrl+Shift+> / <', '글꼴 크기 크게 / 작게'],
@@ -1716,20 +1765,28 @@ register({
   wordCount: () => statsDialog(),
 
   // 보기
-  viewNormal: () => { S.view = 'normal'; refresh('view'); },
+  // 슬라이드 마스터 보기
+  viewMaster: () => { if (S.editing) endEdit(); S.masterKey = 'master'; S.view = 'normal'; S.sel = new Set(); refresh('all'); refresh('view'); setRibbonTab('slideMaster'); },
+  closeMaster: () => { if (S.editing) endEdit(); S.masterKey = null; S.sel = new Set(); refresh('all'); refresh('view'); setRibbonTab('view'); },
+  masterPick: (key) => { if (S.editing) endEdit(); S.masterKey = key; S.sel = new Set(); refresh('all'); },
+  masterRename: () => { const m = curSlide(); if (!S.masterKey || !m) return; formDialog('레이아웃 이름 바꾸기', [{ name: 'n', label: '이름', value: m.name ?? (LAYOUTS.find(([k]) => k === m.layout)?.[1] ?? '슬라이드 마스터') }], (v) => change(() => { m.name = v.n || undefined; }, { scope: 'all' })); },
+  masterReset: () => { if (!S.masterKey) return; change(() => { delete S.pres.masters[S.masterKey]; }, { scope: 'all' }); S.sel = new Set(); },
+  masterHideGraphics: () => { const m = curSlide(); if (!S.masterKey || S.masterKey === 'master') { toast('레이아웃을 고르세요 (마스터 아래 목록)'); return; } change(() => { m.hideMaster = !m.hideMaster; }, { scope: 'all' }); },
+  viewNormal: () => { S.view = 'normal'; if (S.masterKey) { S.masterKey = null; S.sel = new Set(); refresh('all'); } refresh('view'); },
   viewSorter: () => { if (S.editing) endEdit(); S.view = 'sorter'; refresh('view'); },
   viewReading: () => { if (S.editing) endEdit(); startShow({ from: S.cur, windowed: true }); },
-  viewOutline: () => {
-    const o = outline(S.pres);
-    const body = el('div', { class: 'outline-view' }, o.map((s) => el('div', { class: 'ol-slide', onclick: () => { goSlide(s.index); } },
-      el('div', { class: 'ol-title' }, el('span', { class: 'ol-num' }, String(s.index + 1)), s.title || '(제목 없음)'),
-      s.body.map((b) => el('div', { class: 'ol-line', style: { paddingLeft: `${24 + b.lvl * 20}px` } }, b.text)))));
-    openDialog({ title: '개요 보기', body, width: 600, modeless: true, buttons: [{ label: '닫기' }] });
-  },
+  viewOutline: () => { if (S.editing) endEdit(); S.view = 'outline'; refresh('view'); },
   viewNotesPage: () => { S.showNotes = true; S.bigNotes = !S.bigNotes; refresh('view'); },
   toggleNotes: () => { S.showNotes = !S.showNotes; S.bigNotes = false; refresh('view'); },
   toggleGrid: () => { S.showGrid = !S.showGrid; renderCanvas(); emit('selection'); },
   toggleGuides: () => { S.showGuides = !S.showGuides; renderCanvas(); emit('selection'); },
+  addGuide: (dir = 'v') => {
+    const { w, h } = S.pres.size;
+    const list = [...(S.pres.guides ?? [{ dir: 'v', pos: w / 2 }, { dir: 'h', pos: h / 2 }])];
+    list.push({ dir, pos: (dir === 'v' ? w : h) / 2 + 24 * list.filter((g) => g.dir === dir).length });
+    S.showGuides = true;
+    change(() => { S.pres.guides = list; }, { scope: 'all' });
+  },
   toggleRuler: () => { S.showRuler = !S.showRuler; refresh('view'); },
   zoomDialog: () => zoomDialog(),
   fitZoom: () => fitZoom(),
@@ -1743,6 +1800,8 @@ register({
 
   // 그림 서식
   removeBackground: () => removeBackground(),
+  insertEquation: () => equationDialog(),
+  editEquation: (id) => { const o = (id && objById(id)) || selObjects().find((x) => x.type === 'equation'); if (o) equationDialog(o); else equationDialog(); },
   insertZoom: (kind = 'slide') => insertZoom(kind),
   zoomMenu: (a) => menuAt(a ?? { x: innerWidth / 2, y: 160 }, [
     { label: '요약 확대/축소', desc: '고른 슬라이드의 축소판으로 목차 슬라이드를 만듭니다', action: () => run('insertZoom', 'summary') },
@@ -1940,6 +1999,7 @@ function ribbonState() {
   if (objs.some((o) => o.type === 'chart')) ctx.push('chart');
   if (objs.some((o) => o.type === 'media')) ctx.push('media');
   if (objs.some((o) => o.smart)) ctx.push('smart');
+  if (S.masterKey) ctx.unshift('master');
   const p = currentPara();
   const tbl = curTable();
   const st = tbl?.style ?? {};
@@ -1952,7 +2012,7 @@ function ribbonState() {
     bullets: p?.bullet?.type === 'char', numbering: p?.bullet?.type === 'num',
     al: p?.align === 'l' || (!p?.align && !!p), ac: p?.align === 'ctr', ar: p?.align === 'r', aj: p?.align === 'just',
     painter: !!S.painter, cmPane: S.formatPane === 'comments', animPane: S.formatPane === 'anim', selPane: S.formatPane === 'selection', hidden: !!slide()?.hidden,
-    vNormal: S.view === 'normal', vSorter: S.view === 'sorter', notes: S.showNotes, grid: S.showGrid, guides: S.showGuides, ruler: S.showRuler,
+    vMaster: !!S.masterKey, masterHide: !!(S.masterKey && curSlide()?.hideMaster), vNormal: S.view === 'normal' && !S.masterKey, vOutline: S.view === 'outline', vSorter: S.view === 'sorter', notes: S.showNotes, grid: S.showGrid, guides: S.showGuides, ruler: S.showRuler,
     tFirstRow: !!st.firstRow, tLastRow: !!st.lastRow, tBanded: !!st.banded, tFirstCol: !!st.firstCol, tLastCol: !!st.lastCol,
     bars: { font: resolveColor(S.pres.theme, lastColor.font), hl: resolveColor(S.pres.theme, lastColor.hl), fill: resolveColor(S.pres.theme, lastColor.fill), line: resolveColor(S.pres.theme, lastColor.line), cell: resolveColor(S.pres.theme, lastColor.cell) },
     curColor: color,

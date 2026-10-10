@@ -1,7 +1,7 @@
 // 슬라이드 미리 보기 창 · 메모 · 상태 표시줄 · 여러 슬라이드 보기 · 오른쪽 작업 창(서식/애니메이션/선택)
 import { S, curSlide, selObjects, change, emit, on, run, goSlide } from './state.js';
 import { slideHtml, DASH_LABEL } from './render.js';
-import { ANIM_EFFECTS, ANIM_CLASS_LABEL, TRANSITION_LABEL, plainText } from './model.js';
+import { ANIM_EFFECTS, ANIM_CLASS_LABEL, TRANSITION_LABEL, plainText, outlineRows, applyOutline, masterSlide, LAYOUTS } from './model.js';
 import { SHAPE_LABEL, objLabel } from './shapes.js';
 import { el, openMenu } from './ui.js';
 import { colorButton } from './colorpick.js';
@@ -41,8 +41,131 @@ function thumbHtml(slide, i, width) {
   return `<div class="tw" style="width:${width}px;height:${Math.round(S.pres.size.h * sc)}px"><div class="tw-in" style="transform:scale(${sc})">${slideHtml(S.pres, slide, { index: i })}</div></div>`;
 }
 
+// ───────────── 개요 보기 (PowerPoint: 왼쪽 창에서 제목 · 본문을 바로 편집) ─────────────
+let olBusy = false;
+function renderOutline() {
+  if (olBusy || thumbsEl.contains(document.activeElement) && thumbsEl.querySelector('.ol-edit')) return;
+  thumbsEl.innerHTML = '';
+  const box = el('div', { class: 'ol-edit' });
+  for (const r of outlineRows(S.pres)) box.append(olRow(r));
+  thumbsEl.append(box);
+  olNumber(box);
+  box.addEventListener('keydown', olKey);
+  box.addEventListener('input', () => { clearTimeout(olTimer); olTimer = setTimeout(olApply, 300); });
+  box.addEventListener('focusin', (e) => { const i = olSlideIndex(e.target.closest('.ol-row')); if (i >= 0 && i !== S.cur) { olBusy = true; try { goSlide(i); } finally { olBusy = false; } } });
+  box.addEventListener('focusout', () => setTimeout(() => { if (!thumbsEl.contains(document.activeElement)) { olApply(); renderOutline(); } }, 0));
+}
+let olTimer = 0;
+function olRow(r) {
+  const d = el('div', { class: `ol-row ${r.kind}`, contenteditable: 'plaintext-only', spellcheck: 'false' }, r.text);
+  d.dataset.kind = r.kind;
+  d.dataset.lvl = String(r.lvl ?? 0);
+  if (r.slide) d.dataset.slide = r.slide;
+  if (r.obj) d.dataset.obj = r.obj;
+  if (r.pi != null) d.dataset.pi = String(r.pi);
+  d.style.paddingLeft = r.kind === 'body' ? `${34 + (r.lvl ?? 0) * 18}px` : '';
+  return d;
+}
+function olNumber(box) { let n = 0; for (const d of box.children) if (d.dataset.kind === 'title') d.dataset.n = String(++n); }
+function olSlideIndex(row) { if (!row) return -1; let n = -1; for (const d of row.parentElement.children) { if (d.dataset.kind === 'title') n++; if (d === row) break; } return n; }
+function olRowsFromDom(box) {
+  return [...box.children].map((d) => ({ kind: d.dataset.kind, text: d.textContent.replace(/\n/g, ' '), lvl: Number(d.dataset.lvl) || 0, slide: d.dataset.slide || null, obj: d.dataset.obj || null, pi: d.dataset.pi != null && d.dataset.pi !== '' ? Number(d.dataset.pi) : null, el: d }));
+}
+function olApply() {
+  clearTimeout(olTimer);
+  const box = thumbsEl?.querySelector('.ol-edit');
+  if (!box) return;
+  const rows = olRowsFromDom(box);
+  const cur = JSON.stringify(outlineRows(S.pres).map((r) => [r.kind, r.text, r.lvl ?? 0]));
+  const next = JSON.stringify(rows.filter((r) => r.kind === 'title' || r.text).map((r) => [r.kind, r.text, r.kind === 'body' ? r.lvl : 0]));
+  if (cur === next && rows.filter((r) => r.kind === 'title').length === S.pres.slides.length) return;
+  olBusy = true;
+  try { change(() => applyOutline(S.pres, rows), { scope: 'all' }); } finally { olBusy = false; }
+  // 새로 생긴 슬라이드 · 개체 id 를 줄에 기록 (다음 적용 때 같은 슬라이드로)
+  for (const r of rows) { if (r.slide) r.el.dataset.slide = r.slide; if (r.obj) r.el.dataset.obj = r.obj; if (r.pi != null) r.el.dataset.pi = String(r.pi); }
+  olNumber(box);
+}
+function olCaretAtStart(d) { const s = getSelection(); if (!s.rangeCount) return false; const r = s.getRangeAt(0).cloneRange(); r.selectNodeContents(d); r.setEnd(s.getRangeAt(0).startContainer, s.getRangeAt(0).startOffset); return r.toString().length === 0; }
+function olFocus(d, atEnd = false) { d.focus(); const r = document.createRange(); r.selectNodeContents(d); r.collapse(!atEnd); const s = getSelection(); s.removeAllRanges(); s.addRange(r); }
+function olOnlyPlaceholders(row) {
+  const s = S.pres.slides.find((x) => x.id === row.dataset.slide);
+  return !s || s.objects.every((o) => o.ph && o.text);
+}
+function olSetKind(d, kind, lvl) {
+  d.dataset.kind = kind; d.dataset.lvl = String(lvl);
+  d.className = `ol-row ${kind}`;
+  d.style.paddingLeft = kind === 'body' ? `${34 + lvl * 18}px` : '';
+  if (kind === 'title') { delete d.dataset.obj; delete d.dataset.pi; } else delete d.dataset.slide;
+}
+function olKey(e) {
+  const d = e.target.closest('.ol-row');
+  if (!d) return;
+  e.stopPropagation();
+  const kind = d.dataset.kind;
+  const lvl = Number(d.dataset.lvl) || 0;
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    // 커서 뒤 글은 새 줄로 (제목 줄에서 Enter = 새 슬라이드)
+    const s = getSelection();
+    let tail = '';
+    if (s.rangeCount) { const r = s.getRangeAt(0).cloneRange(); r.setEndAfter(d.lastChild ?? d); tail = r.toString(); r.deleteContents(); }
+    const nd = olRow({ kind, lvl, text: tail });
+    d.after(nd);
+    olNumber(d.parentElement);
+    olFocus(nd);
+    olApply();
+  } else if (e.key === 'Tab' && !e.shiftKey) {
+    e.preventDefault();
+    if (kind === 'title') {
+      if (!d.previousElementSibling) return;
+      if (!olOnlyPlaceholders(d)) { emit('error', new Error('그림 · 표 같은 다른 개체가 있는 슬라이드는 앞 슬라이드와 합칠 수 없습니다')); return; }
+      olSetKind(d, 'body', 0);
+    } else olSetKind(d, 'body', Math.min(8, lvl + 1));
+    olNumber(d.parentElement); olApply();
+  } else if (e.key === 'Tab' && e.shiftKey) {
+    e.preventDefault();
+    if (kind === 'body' && lvl === 0) olSetKind(d, 'title', 0);
+    else if (kind === 'body') olSetKind(d, 'body', lvl - 1);
+    olNumber(d.parentElement); olApply();
+  } else if (e.key === 'Backspace' && olCaretAtStart(d) && d.previousElementSibling) {
+    if (kind === 'title' && !olOnlyPlaceholders(d)) return;
+    e.preventDefault();
+    const prev = d.previousElementSibling;
+    const keep = d.textContent;
+    const n = prev.textContent.length;
+    prev.textContent += keep;
+    d.remove();
+    olNumber(prev.parentElement);
+    prev.focus();
+    const t = prev.firstChild;
+    if (t) { const r = document.createRange(); r.setStart(t, n); r.collapse(true); const s = getSelection(); s.removeAllRanges(); s.addRange(r); }
+    olApply();
+  } else if (e.key === 'ArrowUp' && d.previousElementSibling && (e.altKey || olCaretAtStart(d))) { e.preventDefault(); olFocus(d.previousElementSibling, true); }
+  else if (e.key === 'ArrowDown' && d.nextElementSibling) { const s = getSelection(); const r = s.rangeCount ? s.getRangeAt(0).cloneRange() : null; if (r) { r.setEndAfter(d.lastChild ?? d); if (r.toString().length === 0 || e.altKey) { e.preventDefault(); olFocus(d.nextElementSibling); } } }
+}
+
+// ───────────── 슬라이드 마스터 보기: 마스터 + 레이아웃 목록 ─────────────
+function renderMasterList() {
+  thumbsEl.innerHTML = '';
+  const keys = ['master', ...LAYOUTS.map(([k]) => k)];
+  keys.forEach((key, i) => {
+    const m = masterSlide(S.pres, key);
+    const name = m.name ?? (key === 'master' ? '슬라이드 마스터' : LAYOUTS.find(([k]) => k === key)?.[1]);
+    const w = key === 'master' ? THUMB_W : THUMB_W - 30;
+    const t = el('div', { class: `thumb master-thumb${key === 'master' ? ' is-master' : ''}${S.masterKey === key ? ' active' : ''}`, title: name },
+      el('div', { class: 'tnum' }, el('span', {}, key === 'master' ? '1' : '')),
+      el('div', { class: 'tbox', html: thumbHtml(m, i, w) }),
+      el('div', { class: 'mname' }, name));
+    t.addEventListener('mousedown', (e) => { if (e.button === 0) run('masterPick', key); });
+    thumbsEl.append(t);
+  });
+}
+
 export function renderThumbs() {
   if (!thumbsEl) return;
+  thumbsEl.classList.toggle('outline-mode', S.view === 'outline' && !S.masterKey);
+  if (S.masterKey) { renderMasterList(); return; }
+  if (S.view === 'outline') { renderOutline(); return; }
   thumbsEl.innerHTML = '';
   S.pres.slides.forEach((s, i) => {
     if (s.section) thumbsEl.append(sectionHead(s, i));
@@ -96,12 +219,16 @@ function sectionHead(s, i) {
 
 /** 현재 슬라이드의 미리 보기만 다시 그림 */
 export function updateThumb(i = S.cur) {
+  if (S.masterKey) { renderMasterList(); return; }
+  if (S.view === 'outline') { renderOutline(); return; }
   const t = thumbsEl?.querySelector(`.thumb[data-i="${i}"] .tbox`);
   const s = S.pres.slides[i];
   if (t && s) t.innerHTML = thumbHtml(s, i, THUMB_W);
 }
 export function markActiveThumb() {
   if (!thumbsEl) return;
+  if (S.masterKey) { renderMasterList(); return; }
+  if (S.view === 'outline') { renderOutline(); return; }
   for (const t of thumbsEl.querySelectorAll('.thumb')) {
     const i = Number(t.dataset.i);
     t.classList.toggle('active', i === S.cur);

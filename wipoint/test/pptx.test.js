@@ -366,3 +366,35 @@ test('트리거 애니메이션 · 확대/축소 · 슬라이드 링크: pptx �
   assert.ok(a, '트리거 읽기');
   assert.equal(back.objects.find((o) => o.id === a.trigger).link, '#slide1');
 });
+
+test('슬라이드 마스터: 마스터 개체 · 제목 서식이 슬라이드에 적용되고 pptx 왕복', async () => {
+  const { masterSlide } = await import('../src/model.js');
+  const p = sample();
+  const m = masterSlide(p, 'master');
+  m.objects.push(newShape('ellipse', { x: 1150, y: 20, w: 100, h: 100 }));
+  m.objects.find((o) => o.ph === 'title').text.paras[0].runs[0].color = '#00AA00';
+  masterSlide(p, 'title').hideMaster = true;
+  const files = unzip(writePptx(p));
+  const layouts = Object.keys(files).filter((k) => /slideLayouts\/slideLayout\d+\.xml$/.test(k)).map((k) => textOf(files[k]));
+  assert.ok(layouts.some((x) => /prst="ellipse"/.test(x)), '마스터 도형이 레이아웃에');
+  const s2 = textOf(files['ppt/slides/slide2.xml']);
+  assert.match(s2, /<a:srgbClr val="00AA00"\/>/);
+  const back = readPptx(zip(files)).pres;
+  assert.equal(back.masters.master.objects.filter((o) => !o.ph).length, 1);
+  assert.equal(back.masters.title.hideMaster, true);
+});
+
+test('수식: LaTeX ⇄ OMML (a14:m) pptx 왕복', async () => {
+  const { parseLatex, toMathML } = await import('../src/math.js');
+  assert.match(toMathML(parseLatex('\\frac{a}{b}')), /<mfrac><mi>a<\/mi><mi>b<\/mi><\/mfrac>/);
+  const p = sample();
+  const latex = 'x=\\frac{-b\\pm \\sqrt{b^2-4ac}}{2a}';
+  p.slides[1].objects.push({ id: 'eq1', type: 'equation', x: 100, y: 300, w: 500, h: 120, rot: 0, latex, size: 32 });
+  const files = unzip(writePptx(p));
+  const xml = textOf(files['ppt/slides/slide2.xml']);
+  assert.match(xml, /<a14:m [^>]*><m:oMathPara/);
+  assert.match(xml, /<m:f><m:num>/);
+  const eq = readPptx(zip(files)).pres.slides[1].objects.find((o) => o.type === 'equation');
+  assert.equal(eq.latex, latex);
+  assert.equal(eq.size, 32);
+});

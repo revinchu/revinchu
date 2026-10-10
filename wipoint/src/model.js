@@ -159,6 +159,7 @@ function layoutBoxes(layout) {
 /** 개체 틀 기본 글꼴 크기 (pt) */
 export function defaultSize(o, lvl = 0) {
   const k = o.phKind ?? {};
+  if (o.ph === 'title' && !k.small && o.phLayout !== 'section' && MASTER_TEXT?.title?.size) return MASTER_TEXT.title.size;
   if (o.ph === 'ctrTitle') return 54;
   if (o.ph === 'title') return k.small ? 32 : (o.phLayout === 'section' ? 54 : 40);
   if (o.ph === 'subTitle') return 24;
@@ -172,12 +173,52 @@ export function defaultSize(o, lvl = 0) {
   return 18;
 }
 /** 기본 글자 색 */
+// ───────────── 슬라이드 마스터 (보기 › 슬라이드 마스터) ─────────────
+// pres.masters = { master: 마스터 슬라이드, title|titleContent|…: 레이아웃 } — 각각 슬라이드 모양 { id, layout, objects, master: key }
+// 개체 틀(ph) 이 아닌 개체는 그 레이아웃(마스터는 모든 레이아웃)을 쓰는 슬라이드 배경에 그려짐.
+// 마스터의 제목 · 본문 개체 틀 첫 글자 서식(글꼴 · 색 · 제목 크기)은 모든 슬라이드의 기본 서식이 됨.
+export function masterSlide(pres, key) {
+  pres.masters ??= {};
+  if (!pres.masters[key]) {
+    const kind = key === 'master' ? 'titleContent' : key;
+    const objects = layoutPlaceholders(kind, pres.size);
+    if (key === 'master') {
+      // PowerPoint 와 같은 안내 글: 이 글의 서식이 모든 슬라이드 제목 · 본문의 기본 서식
+      for (const o of objects) if (o.text) setPlainText(o.text, o.ph === 'title' ? '마스터 제목 스타일 편집' : '마스터 텍스트 스타일을 편집합니다');
+    }
+    pres.masters[key] = { id: `master-${key}`, layout: kind, master: key, bg: null, objects, anims: [] };
+  }
+  return pres.masters[key];
+}
+/** 슬라이드 배경에 그릴 마스터 · 레이아웃 개체 (개체 틀 제외, decor 사본) */
+export function masterDecor(pres, layout) {
+  const out = [];
+  const hide = !!pres.masters?.[layout]?.hideMaster;
+  for (const key of ['master', layout]) {
+    const m = pres.masters?.[key];
+    if (!m || (key === 'master' && hide)) continue;
+    for (const o of m.objects) if (!o.ph) out.push({ ...o, id: `mst-${key}-${o.id}`, decor: true });
+  }
+  return out;
+}
+let MASTER_TEXT = null;
+/** 마스터 개체 틀의 서식 → 기본 글자 서식 (slideHtml · writePptx 가 부름) */
+export function setMasterText(pres) {
+  const m = pres?.masters?.master;
+  if (!m) { MASTER_TEXT = null; return; }
+  const pick = (o) => { const p = o?.text?.paras[0]; const r = p?.runs[0] ?? p?.end; return r ? { font: r.font, color: r.color, size: r.size } : null; };
+  MASTER_TEXT = { title: pick(m.objects.find((o) => o.ph === 'title')), body: pick(m.objects.find((o) => o.ph === 'body')) };
+}
+const masterText = (o) => (o.ph === 'title' || o.ph === 'ctrTitle' ? MASTER_TEXT?.title : o.ph === 'body' || o.ph === 'obj' || o.ph === 'subTitle' ? MASTER_TEXT?.body : null);
+
 export function defaultColor(o) {
   if (o.text?.defColor) return o.text.defColor;
+  const mt = masterText(o);
+  if (mt?.color) return mt.color;
   if (o.ph === 'subTitle' || (o.ph === 'body' && o.phKind?.sub)) return '@tx1:lm65:lo35';
   return '@tx1';
 }
-export const defaultFont = (o) => (o.ph === 'title' || o.ph === 'ctrTitle' ? '+mj' : '+mn');
+export const defaultFont = (o) => masterText(o)?.font ?? (o.ph === 'title' || o.ph === 'ctrTitle' ? '+mj' : '+mn');
 
 export function scaleRect(size, x, y, w, h) {
   const sx = size.w / 1280;
@@ -446,6 +487,80 @@ export function outline(pres) {
     index: i, title: slideTitle(s),
     body: s.objects.filter((o) => o.ph && o.ph !== 'title' && o.ph !== 'ctrTitle' && o.text).flatMap((o) => o.text.paras.map((p) => ({ lvl: p.lvl ?? 0, text: p.runs.map((r) => r.t).join('') }))).filter((x) => x.text),
   }));
+}
+
+/** 개요 보기 편집용 줄 목록: 제목 줄 (슬라이드마다) + 본문 단락 줄 (개체 · 단락 번호 기억) */
+export function outlineRows(pres) {
+  const rows = [];
+  for (const s of pres.slides) {
+    rows.push({ kind: 'title', slide: s.id, text: slideTitle(s) });
+    for (const o of s.objects) {
+      if (!o.ph || o.ph === 'title' || o.ph === 'ctrTitle' || !o.text) continue;
+      o.text.paras.forEach((p, pi) => { const t = p.runs.map((r) => r.t).join(''); if (t) rows.push({ kind: 'body', lvl: p.lvl ?? 0, text: t, obj: o.id, pi }); });
+    }
+  }
+  return rows;
+}
+const TITLE_PH = (o) => o.ph === 'title' || o.ph === 'ctrTitle';
+/**
+ * 개요 줄 목록을 슬라이드에 적용 (PowerPoint 개요 보기):
+ *   제목 줄 = 슬라이드 (slide 가 없으면 새 슬라이드), 본문 줄 = 앞 제목 슬라이드의 본문 단락.
+ *   글 · 수준이 그대로인 단락은 원래 단락(서식 포함)을 그대로 둠. 개요에서 빠진 슬라이드는 지움.
+ */
+export function applyOutline(pres, rows) {
+  const old = new Map(pres.slides.map((s) => [s.id, s]));
+  const groups = [];
+  for (const r of rows) {
+    if (r.kind === 'title' || !groups.length) groups.push({ slide: r.kind === 'title' ? r.slide : null, title: r.kind === 'title' ? r.text : '', body: [], row: r.kind === 'title' ? r : null });
+    if (r.kind === 'body') groups[groups.length - 1].body.push(r);
+  }
+  const used = new Set();
+  const out = groups.map((g) => {
+    let s = g.slide && old.has(g.slide) && !used.has(g.slide) ? old.get(g.slide) : null;
+    if (!s) s = newSlide(pres, g.body.length ? 'titleContent' : 'titleOnly');
+    used.add(s.id);
+    if (g.row) g.row.slide = s.id;
+    const t = s.objects.find(TITLE_PH);
+    if (t?.text && slideTitle(s) !== g.title) setPlainText(t.text, g.title);
+    // 본문: 줄이 가리키는 개체로, 새 줄은 앞 줄의 개체 (없으면 첫 본문 개체 틀)
+    const bodies = s.objects.filter((o) => o.ph && !TITLE_PH(o) && o.text);
+    let cur = bodies[0]?.id ?? null;
+    const by = new Map(bodies.map((o) => [o.id, []]));
+    for (const r of g.body) {
+      if (r.obj && by.has(r.obj)) cur = r.obj;
+      if (!cur) {
+        const { w, h } = pres.size;
+        const tb = { id: uid(), type: 'shape', shape: 'rect', ph: 'body', x: w * 0.06, y: h * 0.25, w: w * 0.88, h: h * 0.65, rot: 0, fill: null, line: null, text: textBody([para()]) };
+        s.objects.push(tb);
+        by.set(tb.id, []);
+        cur = tb.id;
+      }
+      by.get(cur).push({ row: r, text: r.text, lvl: r.lvl ?? 0, pi: r.obj === cur ? r.pi : null });
+    }
+    for (const [id, list] of by) {
+      const o = s.objects.find((x) => x.id === id);
+      const before = o.text.paras;
+      // 줄에 새 위치 기록 (편집 화면이 다음 적용 때 같은 개체 · 단락으로)
+      const done = (keep) => list.forEach((it, i) => { it.row.obj = id; it.row.pi = keep ? it.pi : i; });
+      const same = list.length === before.length && list.every((it, i) => it.pi === i && before[i].runs.map((q) => q.t).join('') === it.text && (before[i].lvl ?? 0) === it.lvl);
+      if (same) { done(true); continue; }
+      const tpl = before.find((p) => p.runs.length) ?? para();
+      const paras = list.map((r) => {
+        const src = r.pi != null ? before[r.pi] : null;
+        if (src && src.runs.map((q) => q.t).join('') === r.text) return { ...src, lvl: r.lvl || undefined };
+        const base = src ?? tpl;
+        const { runs, ...props } = base;
+        return { ...props, lvl: r.lvl || undefined, runs: [{ ...(runs[0] ?? {}), t: r.text }] };
+      });
+      for (const p of paras) if (!p.lvl) delete p.lvl;
+      // 줄에 새 위치 기록 (편집 화면이 다음 적용 때 같은 개체 · 단락으로)
+      o.text.paras = paras.length ? paras : [{ ...tpl, runs: [{ ...(tpl.runs[0] ?? {}), t: '' }] }];
+      done();
+    }
+    return s;
+  });
+  pres.slides = out;
+  return out;
 }
 
 // ───────────── 애니메이션 ─────────────

@@ -4,8 +4,9 @@
 import { zip, unzip, textOf } from './zip.js';
 import { parseXml, child, kids, descendants, esc } from './xml.js';
 import { SLOT_NAMES, resolveColor, applyMods, cloneTheme, THEMES } from './themes.js';
-import { EMU_PER_PX, uid, layoutPlaceholders, defaultSize, defaultColor, defaultFont, isEmptyText, animSteps, triggerSteps, stepTimeline, textBody, para, newSlide, slideTitle } from './model.js';
-import { paraDefaults, tableCellStyle, slideBackground, themeDecor } from './render.js';
+import { EMU_PER_PX, uid, layoutPlaceholders, defaultSize, defaultColor, defaultFont, isEmptyText, animSteps, triggerSteps, stepTimeline, textBody, para, newSlide, slideTitle, setMasterText } from './model.js';
+import { parseLatex, toOMML, ommlToLatex } from './math.js';
+import { paraDefaults, tableCellStyle, slideBackground, themeDecor, slideDecor } from './render.js';
 import { KNOWN_SHAPES } from './shapes.js';
 import { decodeEmbeddedFont } from './fonts.js';
 
@@ -130,7 +131,8 @@ function pPrXml(o, p) {
   const b = d.bullet;
   if (b?.type === 'char') bu = `${b.color ? `<a:buClr>${colorXml(b.color)}</a:buClr>` : ''}${b.size ? `<a:buSzPct val="${pct(b.size)}"/>` : ''}<a:buFont typeface="${esc(b.font ?? 'Arial')}" panose="020B0604020202020204" pitchFamily="34" charset="0"/><a:buChar char="${esc(b.char ?? '•')}"/>`;
   else if (b?.type === 'num') bu = `${b.color ? `<a:buClr>${colorXml(b.color)}</a:buClr>` : ''}<a:buFont typeface="+mj-lt"/><a:buAutoNum type="${b.scheme === 'ganada' ? 'ea1JpnKorPeriod' : (b.scheme ?? 'arabicPeriod')}"${b.start && b.start !== 1 ? ` startAt="${b.start}"` : ''}/>`;
-  return `<a:pPr ${attrs}>${lnSpc}${bef}${aft}${bu}</a:pPr>`;
+  const tabs = p.tabs?.length ? `<a:tabLst>${p.tabs.map((t) => `<a:tab pos="${E(t.pos)}" algn="${{ l: 'l', ctr: 'ctr', r: 'r', dec: 'dec' }[t.algn] ?? 'l'}"/>`).join('')}</a:tabLst>` : '';
+  return `<a:pPr ${attrs}>${lnSpc}${bef}${aft}${bu}${tabs}</a:pPr>`;
 }
 
 function txBodyXml(o, body, ctx, tag = 'p:txBody') {
@@ -484,7 +486,18 @@ function mediaXml(o, id, ctx) {
   return `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="${esc(o.name ?? `${kind === 'audio' ? 'Audio' : 'Video'} ${id}`)}" descr="${esc(o.alt ?? '')}"><a:hlinkClick r:id="" action="ppaction://media"/></p:cNvPr><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr><a:${kind}File r:link="${r.link}"/><p:extLst><p:ext uri="{DAA4B4D4-6D71-4841-9C94-3DE7FCFB9230}"><p14:media xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" r:embed="${r.embed}">${trim}</p14:media></p:ext></p:extLst></p:nvPr></p:nvPicPr><p:blipFill>${blip}<a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr>${xfrmXml(o)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>`;
 }
 
+/** 수식: PowerPoint 2010+ 는 a14:m (OMML), 이전 버전 · 다른 프로그램은 LaTeX 글 상자 */
+function equationXml(o, id, ctx) {
+  const tb = { ...o, type: 'shape', shape: 'rect', fill: null, line: null, txBox: true, name: o.name ?? `수식 ${id}`, text: textBody([{ ...para(), align: 'ctr', runs: [{ t: o.latex ?? '', size: o.size ?? 28, ...(o.color ? { color: o.color } : {}) }] }], { anchor: 'ctr', wrap: false }) };
+  const fallback = shapeXml(tb, id, ctx);
+  const color = o.color && /^#/.test(o.color) ? o.color : null;
+  const math = `<a:p><a:pPr algn="ctr"/><a14:m xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main">${toOMML(parseLatex(o.latex ?? ''), { size: o.size ?? 28, color })}</a14:m><a:endParaRPr lang="en-US" sz="${Math.round((o.size ?? 28) * 100)}"/></a:p>`;
+  const choice = fallback.replace(/<a:p>[\s\S]*<\/a:p>/, math);
+  return `<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main" Requires="a14">${choice}</mc:Choice><mc:Fallback>${fallback}</mc:Fallback></mc:AlternateContent>`;
+}
+
 function objXml(o, id, ctx, phIdx, theme) {
+  if (o.type === 'equation') return equationXml(o, id, ctx);
   if (o.type === 'image') return picXml(o, id, ctx, phIdx);
   if (o.type === 'media') return mediaXml(o, id, ctx);
   if (o.type === 'table') return tableXml(o, id, ctx, theme);
@@ -524,6 +537,7 @@ export const MIME_BY_EXT = { png: 'image/png', jpeg: 'image/jpeg', jpg: 'image/j
  * opts.png: { mediaId: dataURL } — SVG 그림의 PNG 대체본 (앱이 미리 그려 넘김, PowerPoint 2016 이전 호환)
  */
 export function pptxEntries(pres, opts = {}) {
+  setMasterText(pres); // 마스터 글자 서식을 기본값으로 (글자마다 명시적으로 씀)
   const files = {};
   const ct = new Map();
   const defaults = new Map([['rels', 'application/vnd.openxmlformats-package.relationships+xml'], ['xml', 'application/xml']]);
@@ -587,7 +601,7 @@ export function pptxEntries(pres, opts = {}) {
   const layoutKey = new Map();
   const layoutOf = (slide) => {
     const kind = LAYOUT_TYPE[slide.layout] ? slide.layout : 'blank';
-    const decor = slide.bgObjects ?? (slide.hideDecor ? [] : themeDecor(pres.theme, kind, pres.size));
+    const decor = slideDecor(pres, { ...slide, layout: kind });
     const key = `${kind}|${JSON.stringify(decor)}`;
     if (layoutKey.has(key)) {
       const def = layoutKey.get(key);
@@ -750,8 +764,13 @@ export function pptxEntries(pres, opts = {}) {
   pres.slides.forEach((s, i) => { if (s.section || (i === 0 && pres.slides.some((x) => x.section))) sections.push({ name: s.section ?? '기본 구역', ids: [] }); sections[sections.length - 1]?.ids.push(256 + i); });
   const secExt = sections.length ? `<p:ext uri="{521415D9-36F7-43E2-AB2F-B90AF26B5E84}"><p14:sectionLst xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main">${sections.map((s) => `<p14:section name="${esc(s.name)}" id="{${uuidish()}}"><p14:sldIdLst>${s.ids.map((x) => `<p14:sldId id="${x}"/>`).join('')}</p14:sldIdLst></p14:section>`).join('')}</p14:sectionLst></p:ext>` : '';
   const th = pres.theme;
-  const presMeta = { theme: { name: th.name, label: th.label, accentBand: !!th.accentBand, titleBar: !!th.titleBar, dark: !!th.dark, bg: th.bg ?? null }, footer: pres.footer ?? null };
-  const secXml = `<p:extLst>${secExt}<p:ext uri="${WP_EXT_URI}"><wp:pres xmlns:wp="${WP_NS}" json="${esc(JSON.stringify(presMeta))}"/></p:ext></p:extLst>`;
+  // 마스터 개체의 그림: 파일 안 경로를 기록 (다시 읽을 때 새 media id 로 연결)
+  const masterMedia = {};
+  for (const m of Object.values(pres.masters ?? {})) for (const o of m.objects) for (const id of [o.media, o.fill?.media]) if (id && mediaPath.has(id)) masterMedia[id] = mediaPath.get(id);
+  const presMeta = { masters: pres.masters ?? undefined, masterMedia: Object.keys(masterMedia).length ? masterMedia : undefined, theme: { name: th.name, label: th.label, accentBand: !!th.accentBand, titleBar: !!th.titleBar, dark: !!th.dark, bg: th.bg ?? null }, footer: pres.footer ?? null };
+  // 안내선 (PowerPoint 2013+: p15:sldGuideLst, pos = 1/8 pt = px × 6)
+  const guideExt = pres.guides?.length ? `<p:ext uri="{EFAFB233-063F-42B5-8137-9DF3F51BA10A}"><p15:sldGuideLst xmlns:p15="http://schemas.microsoft.com/office/powerpoint/2012/main">${pres.guides.map((g, i) => `<p15:guide id="${i + 1}"${g.dir === 'h' ? ' orient="horz"' : ''} pos="${Math.round(g.pos * 6)}"/>`).join('')}</p15:sldGuideLst></p:ext>` : '';
+  const secXml = `<p:extLst>${secExt}${guideExt}<p:ext uri="${WP_EXT_URI}"><wp:pres xmlns:wp="${WP_NS}" json="${esc(JSON.stringify(presMeta))}"/></p:ext></p:extLst>`;
   const sz = pres.size;
   const sldIds = slideRids.map((rid, i) => `<p:sldId id="${256 + i}" r:id="${rid}"/>`).join('');
   const defText = `<p:defaultTextStyle><a:defPPr><a:defRPr lang="ko-KR"/></a:defPPr>${[1, 2, 3, 4, 5, 6, 7, 8, 9].map((l) => `<a:lvl${l}pPr marL="${(l - 1) * 457200}" algn="l" defTabSz="914400" rtl="0" eaLnBrk="1" latinLnBrk="0" hangingPunct="1"><a:defRPr sz="1800" kern="1200"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill><a:latin typeface="+mn-lt"/><a:ea typeface="+mn-ea"/><a:cs typeface="+mn-cs"/></a:defRPr></a:lvl${l}pPr>`).join('')}</p:defaultTextStyle>`;
@@ -917,6 +936,8 @@ function readLvl(el, ctx) {
     if (pts) out[key] = num(attr(pts, 'val')) / 100;
     else if (p) out[key] = (num(attr(p, 'val')) / 100000) * 18 * 1.2;
   }
+  const tabs = kids(child(el, 'tabLst'), 'tab').map((t) => ({ pos: PX(attr(t, 'pos') ?? 0), algn: attr(t, 'algn') ?? 'l' }));
+  if (tabs.length) out.tabs = tabs;
   if (child(el, 'buNone')) out.bullet = { type: 'none' };
   const buChar = child(el, 'buChar');
   const buAuto = child(el, 'buAutoNum');
@@ -1034,6 +1055,7 @@ function readTxBody(tx, ctx, chain, bodyBase, fontRefColor) {
       end: cleanRun({ ...endR }),
     };
     if (base.lineSpacingPt) out.lineSpacingPt = base.lineSpacingPt;
+    if (base.tabs) out.tabs = base.tabs;
     delete out.end.t;
     return out;
   });
@@ -1267,6 +1289,20 @@ export function readPptx(bytes) {
 
   function readElement(c, ctx, layout, xf, out, opts) {
     if (c.name === 'AlternateContent') {
+      // 수식 (a14:m): 대체 글 상자의 자리 · 크기에 OMML 을 LaTeX 로 읽은 수식 개체
+      const choice = child(c, 'Choice');
+      const math = choice ? descendants(choice, 'oMathPara')[0] ?? descendants(choice, 'oMath')[0] : null;
+      if (math) {
+        const tmp = [];
+        for (const x of (child(c, 'Fallback') ?? choice).children) readElement(x, ctx, layout, xf, tmp, opts);
+        const base = tmp[0];
+        if (base) {
+          const rPr = descendants(math, 'rPr').find((r) => attr(r, 'sz'));
+          const col = descendants(math, 'srgbClr')[0];
+          out.push({ id: base.id, name: base.name, type: 'equation', x: base.x, y: base.y, w: base.w, h: base.h, rot: base.rot ?? 0, latex: ommlToLatex(math), size: rPr ? num(attr(rPr, 'sz')) / 100 : 28, ...(col ? { color: `#${attr(col, 'val')}` } : {}) });
+          return;
+        }
+      }
       // 대체본(Fallback)이 있으면 그것을 — 새 기능(Choice)은 확장 네임스페이스가 필요할 수 있음
       const target = child(c, 'Fallback') ?? child(c, 'Choice');
       for (const x of target?.children ?? []) readElement(x, ctx, layout, xf, out, opts);
@@ -1734,6 +1770,11 @@ export function readPptx(bytes) {
   const core = xmlOf('docProps/core.xml');
   const props = { title: descendants(core, 'title')[0]?.text ?? '', author: descendants(core, 'creator')[0]?.text ?? '', created: descendants(core, 'created')[0]?.text ?? new Date().toISOString() };
   const pres = { version: 1, size, theme, slides, media, props, footer: presMeta?.footer ?? { slideNum: false, date: false, text: '', hideOnTitle: true } };
+  if (presMeta?.masters) {
+    const remap = new Map(Object.entries(presMeta.masterMedia ?? {}).map(([id, path]) => [id, has(path) ? loadMedia(path) : null]));
+    for (const m of Object.values(presMeta.masters)) for (const o of m.objects ?? []) { if (o.media) o.media = remap.get(o.media) ?? null; if (o.fill?.media) o.fill.media = remap.get(o.fill.media) ?? null; }
+    pres.masters = presMeta.masters;
+  }
   // 포함된 글꼴 (ppt/fonts/*.fntdata = EOT, MTX 압축일 수 있음) — 원본 그대로 보관 (다시 저장할 때 그대로 넣음), 화면에는 fileio 가 풀어서 등록
   const fonts = [];
   for (const ef of kids(child(presXml, 'embeddedFontLst'), 'embeddedFont')) {
@@ -1755,6 +1796,8 @@ export function readPptx(bytes) {
   // 사용자 지정 쇼 (슬라이드 관계 id → 슬라이드 id)
   const shows = kids(child(presXml, 'custShowLst'), 'custShow').map((c) => ({ name: attr(c, 'name') ?? '쇼', slides: kids(child(c, 'sldLst'), 'sld').map((x) => slideByRid.get(rid(x))).filter(Boolean) })).filter((c) => c.slides.length);
   if (shows.length) pres.customShows = shows;
+  const gl = descendants(child(presXml, 'extLst'), 'sldGuideLst')[0];
+  if (gl) pres.guides = kids(gl, 'guide').map((g) => ({ dir: attr(g, 'orient') === 'horz' ? 'h' : 'v', pos: num(attr(g, 'pos'), 0) / 6 }));
   if (!slides.length) pres.slides.push(newSlide(pres, 'title'));
   return { pres, warnings: [...warnings] };
 }

@@ -1,8 +1,9 @@
 // 슬라이드 → HTML 문자열 (DOM 없음): 편집 화면 · 미리 보기 · 슬라이드 쇼 · 인쇄가 함께 씀
 import { resolveColor, isDark } from './themes.js';
 import { shapePath, customPath, textRect, OPEN_SHAPES } from './shapes.js';
-import { PX_PER_PT, defaultSize, defaultColor, defaultFont, placeholderPrompt, isEmptyText } from './model.js';
+import { PX_PER_PT, defaultSize, defaultColor, defaultFont, placeholderPrompt, isEmptyText, masterDecor, setMasterText } from './model.js';
 import { chartSvg } from './chart.js';
+import { parseLatex, toMathML } from './math.js';
 
 export const escHtml = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const f = (n) => Math.round(n * 100) / 100;
@@ -96,6 +97,8 @@ export function textHtml(theme, o, body, { editable = false, prompt = false, sca
       `text-align:${{ l: 'left', ctr: 'center', r: 'right', just: 'justify', dist: 'justify' }[p.align ?? 'l'] ?? 'left'}`,
       `padding-left:${f(Math.max(0, d.marL))}px`,
       `text-indent:${f(d.indent)}px`,
+      // 탭 정지: 첫 탭 위치까지 (CSS 는 같은 간격만 지원)
+      p.tabs?.length ? `tab-size:${f(Math.max(8, p.tabs[0].pos - Math.max(0, d.marL + d.indent)))}px` : '',
       `line-height:${lh}`,
       pi > 0 || d.spcBef ? `margin-top:${f(d.spcBef * PX_PER_PT * (pi === 0 ? 0 : 1))}px` : '',
       d.spcAft ? `margin-bottom:${f(d.spcAft * PX_PER_PT)}px` : '',
@@ -321,6 +324,7 @@ export function objectHtml(theme, o, media, opts = {}) {
   else if (o.type === 'chart') inner = chartSvg(o.chart, o.w, o.h, theme, { font: theme.fonts.minor });
   else if (o.type === 'media' || o.type === 'video') inner = mediaHtml(o, media, opts);
   else if (o.type === 'zoom') inner = zoomHtml(o, opts);
+  else if (o.type === 'equation') inner = `<div class="eq" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:${f((o.size ?? 28) * PX_PER_PT)}px;color:${resolveColor(theme, o.color ?? '@tx1', '#000')};font-family:'Cambria Math','STIX Two Math','Latin Modern Math',serif">${toMathML(parseLatex(o.latex ?? ''))}</div>`;
   else inner = shapeHtml(theme, o, media, opts);
   const tr = [];
   if (o.rot) tr.push(`rotate(${f(o.rot)}deg)`);
@@ -381,7 +385,8 @@ export function slideHtml(pres, slide, opts = {}) {
   const theme = pres.theme;
   const media = pres.media ?? {};
   const bg = fillCss(theme, slideBackground(pres, slide), media);
-  const decor = slide.bgObjects ?? (slide.hideDecor ? [] : themeDecor(theme, slide.layout, pres.size));
+  if (!opts.zoomDepth) setMasterText(pres);
+  const decor = slideDecor(pres, slide);
   let html = '';
   for (const o of decor) html += objectHtml(theme, o, media, {}).replace('class="ob"', 'class="ob decor"');
   for (const o of slide.objects) {
@@ -392,6 +397,16 @@ export function slideHtml(pres, slide, opts = {}) {
   html += footerHtml(pres, slide, opts.index ?? 0, opts);
   const dark = isDark(bg.startsWith('#') || bg.startsWith('rgb') ? bg : '#ffffff');
   return `<div class="sl${dark ? ' dark' : ''}" style="position:relative;width:${pres.size.w}px;height:${pres.size.h}px;background:${bg};overflow:hidden">${html}</div>`;
+}
+
+/** 슬라이드 뒤에 그릴 장식: 가져온 배경 개체, 아니면 테마 장식 + 슬라이드 마스터 · 레이아웃 개체 */
+export function slideDecor(pres, slide) {
+  if (slide.bgObjects) return slide.bgObjects;
+  if (slide.hideDecor) return [];
+  const theme = themeDecor(pres.theme, slide.layout, pres.size);
+  if (slide.master === 'master') return theme;
+  if (slide.master) return slide.hideMaster ? theme : [...theme, ...masterDecor(pres, '')];
+  return [...theme, ...masterDecor(pres, slide.layout)];
 }
 
 /** 슬라이드 HTML 을 그리는 데 필요한 CSS (편집 화면 · 쇼 · 청중 창 · 인쇄 · PNG 내보내기가 같이 씀) */
