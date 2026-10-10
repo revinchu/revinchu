@@ -42,6 +42,36 @@ function thumbHtml(slide, i, width) {
   return `<div class="tw" style="width:${width}px;height:${Math.round(S.pres.size.h * sc)}px"><div class="tw-in" style="transform:scale(${sc})">${slideHtml(S.pres, slide, { index: i })}</div></div>`;
 }
 
+/**
+ * 슬라이드가 많으면 (VIRTUAL_AT 넘음) 보이는 근처의 미리 보기만 그림 — 수천 장 문서도 목록이 바로 뜨고 스크롤이 가벼움.
+ * 화면에서 멀어진 것은 빈 틀(같은 크기)로 되돌려 DOM 을 작게 유지.
+ */
+const VIRTUAL_AT = 40;
+const thumbIOs = new Map(); // 목록 상자 → 관찰자
+const blankThumb = (w) => `<div class="tw" style="width:${w}px;height:${Math.round((S.pres.size.h * w) / S.pres.size.w)}px"></div>`;
+function lazyThumb(box, width, root) {
+  box.innerHTML = blankThumb(width);
+  box.classList.add('lazy');
+  box.dataset.w = String(width);
+  let io = thumbIOs.get(root);
+  if (!io) {
+    io = new IntersectionObserver((ents) => {
+      for (const e of ents) {
+        const b = e.target;
+        const k = Number(b.parentElement?.dataset.i);
+        const sl = S.pres.slides[k];
+        if (!sl) continue;
+        const w = Number(b.dataset.w);
+        if (e.isIntersecting && b.classList.contains('lazy')) { b.classList.remove('lazy'); b.innerHTML = thumbHtml(sl, k, w); }
+        else if (!e.isIntersecting && !b.classList.contains('lazy')) { b.classList.add('lazy'); b.innerHTML = blankThumb(w); }
+      }
+    }, { root, rootMargin: '800px 0px' });
+    thumbIOs.set(root, io);
+  }
+  io.observe(box);
+}
+const resetLazy = (root) => thumbIOs.get(root)?.disconnect();
+
 // ───────────── 개요 보기 (PowerPoint: 왼쪽 창에서 제목 · 본문을 바로 편집) ─────────────
 let olBusy = false;
 function renderOutline() {
@@ -168,11 +198,14 @@ export function renderThumbs() {
   if (S.masterKey) { renderMasterList(); return; }
   if (S.view === 'outline') { renderOutline(); return; }
   thumbsEl.innerHTML = '';
+  resetLazy(thumbsEl);
+  const virtual = S.pres.slides.length > VIRTUAL_AT && typeof IntersectionObserver === 'function';
   S.pres.slides.forEach((s, i) => {
     if (s.section) thumbsEl.append(sectionHead(s, i));
     const t = el('div', { class: `thumb${i === S.cur ? ' active' : ''}${S.slideSel.has(s.id) ? ' picked' : ''}${s.hidden ? ' hidden-slide' : ''}`, dataset: { i: String(i) }, draggable: 'true' },
       el('div', { class: 'tnum' }, el('span', {}, String(i + 1)), (s.transition && s.transition.type !== 'none') || s.anims?.length ? el('span', { class: 'tstar', title: '전환 또는 애니메이션' }, '★') : null),
-      el('div', { class: 'tbox', html: thumbHtml(s, i, THUMB_W) }));
+      el('div', { class: 'tbox', html: virtual ? '' : thumbHtml(s, i, THUMB_W) }));
+    if (virtual) lazyThumb(t.lastChild, THUMB_W, thumbsEl);
     t.addEventListener('mousedown', (e) => {
       if (e.button !== 0) return;
       if (e.ctrlKey || e.metaKey) {
@@ -224,7 +257,7 @@ export function updateThumb(i = S.cur) {
   if (S.view === 'outline') { renderOutline(); return; }
   const t = thumbsEl?.querySelector(`.thumb[data-i="${i}"] .tbox`);
   const s = S.pres.slides[i];
-  if (t && s) t.innerHTML = thumbHtml(s, i, THUMB_W);
+  if (t && s && !t.classList.contains('lazy')) t.innerHTML = thumbHtml(s, i, THUMB_W);
 }
 /** 공동 편집: 다른 사람이 보고 있는 슬라이드에 색 점 */
 export function markPeerDots() {
@@ -266,12 +299,14 @@ export const thumbsFocused = () => document.activeElement === thumbsEl;
 export function renderSorter() {
   if (!sorterEl) return;
   sorterEl.innerHTML = '';
+  resetLazy(sorterEl);
+  const virtual = S.pres.slides.length > VIRTUAL_AT && typeof IntersectionObserver === 'function';
   const zoomW = Math.round(220 * Math.max(0.6, Math.min(2, S.sorterZoom ?? 1)));
   const grid = el('div', { class: 'sorter-grid' });
   S.pres.slides.forEach((s, i) => {
     if (s.section) grid.append(el('div', { class: 'sorter-section' }, s.section));
     const c = el('div', { class: `sorter-item${i === S.cur ? ' active' : ''}${S.slideSel.has(s.id) ? ' picked' : ''}${s.hidden ? ' hidden-slide' : ''}`, draggable: 'true', dataset: { i: String(i) } },
-      el('div', { class: 'tbox', html: thumbHtml(s, i, zoomW) }),
+      el('div', { class: 'tbox', html: virtual ? '' : thumbHtml(s, i, zoomW) }),
       el('div', { class: 'sorter-cap' }, el('span', {}, String(i + 1)), s.transition && s.transition.type !== 'none' ? el('span', { class: 'tstar', title: TRANSITION_LABEL[s.transition.type] }, '★') : null));
     c.addEventListener('mousedown', (e) => {
       if (e.ctrlKey || e.metaKey) { if (S.slideSel.has(s.id)) S.slideSel.delete(s.id); else S.slideSel.add(s.id); S.cur = i; } else goSlide(i);
@@ -283,6 +318,7 @@ export function renderSorter() {
     c.addEventListener('dragover', (e) => { e.preventDefault(); c.classList.add('drop-before'); });
     c.addEventListener('dragleave', () => c.classList.remove('drop-before'));
     c.addEventListener('drop', (e) => { e.preventDefault(); c.classList.remove('drop-before'); run('moveSlidesTo', i, Number(e.dataTransfer.getData('text/x-wipoint-slide'))); });
+    if (virtual) lazyThumb(c.firstChild, zoomW, sorterEl);
     grid.append(c);
   });
   sorterEl.append(grid);

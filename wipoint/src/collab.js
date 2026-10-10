@@ -3,6 +3,7 @@
 import { S, curSlide, on, emit } from './state.js';
 import { uid } from './model.js';
 import { baseline, diffPres, applyPatch, fullState, applyFull, peerColor } from './collabcore.js';
+import { isBlobUrl, mediaAsData } from './blobstore.js';
 
 export const collab = { room: null, me: uid('u'), mode: null, peers: new Map(), base: null, joining: false, queue: [] };
 let transport = null;
@@ -13,7 +14,19 @@ let beat = 0;
 export const myName = () => S.userName ?? (() => { try { return localStorage.getItem('wipoint:user'); } catch { return null; } })() ?? '사용자';
 export const collabLink = (room = collab.room) => `${location.origin}${location.pathname}?collab=${encodeURIComponent(room)}`;
 
-function send(msg) { transport?.send(JSON.stringify({ ...msg, from: collab.me })); }
+// 큰 미디어(blob URL)는 다른 사람 브라우저에서 못 읽으므로 data URL 로 바꿔 보냄 (50MB 넘는 것은 제외) — 순서는 지킴
+let sendQ = Promise.resolve();
+let sendBusy = 0;
+function send(msg) {
+  const raw = () => transport?.send(JSON.stringify({ ...msg, from: collab.me }));
+  const blobs = msg.media && Object.values(msg.media).some(isBlobUrl);
+  if (!blobs && !sendBusy) { raw(); return; }
+  sendBusy++;
+  sendQ = sendQ.then(async () => {
+    if (blobs) msg = { ...msg, media: await mediaAsData(msg.media, 50e6) };
+    raw();
+  }).catch(() => {}).finally(() => { sendBusy--; });
+}
 
 function sseTransport(room) {
   const es = new EventSource(`/api/collab/${room}/events?c=${collab.me}`);

@@ -12,7 +12,7 @@ import { stopEyedrop } from './eyedrop.js';
 import { GALLERIES } from './galleries.js';
 import { APP_VERSION } from './commands.js';
 import { openBackstage, closeBackstage, backstageOpen } from './backstage.js';
-import { scheduleAutosave, autosaveNow, restoreAutosave, loadViewLink, loadFile, setDocument } from './fileio.js';
+import { scheduleAutosave, autosaveNow, restoreAutosave, loadViewLink, loadFile, setDocument, pptxBlob } from './fileio.js';
 import { startShow, showActive } from './show.js';
 import { SLIDE_CSS } from './render.js';
 import { setOffsets } from './textedit.js';
@@ -403,6 +403,9 @@ window.wipoint = {
   S, run, emit, COMMANDS, applyTextFormat, goSlide, renderAll,
   /** 도구 · 테스트용: 바이트 배열로 파일 열기 */
   openBytes: async (name, bytes) => { const r = await loadFile(new File([new Uint8Array(bytes)], name)); setDocument(r.pres, r.name); return r.warnings; },
+  /** File/Blob 그대로 열기 (큰 파일 시험) · 현재 문서 → pptx Blob */
+  openBlob: async (name, blob) => { const r = await loadFile(blob instanceof File ? blob : new File([blob], name)); setDocument(r.pres, r.name); return r.warnings; },
+  pptxBlob,
 };
 
 boot();

@@ -3,12 +3,13 @@ import { S, emit, goSlide } from './state.js';
 import { readPptx, pptxEntries } from './pptx.js';
 import { readPdf } from './pdf.js';
 import { decodeEmbeddedFont } from './fonts.js';
-import { zipAsync } from './zip.js';
+import { zipAsync, openZipFile } from './zip.js';
+import { blobUrl, blobOf, isBlobUrl, inlineBlobs, mediaAsData, mediaFromStore } from './blobstore.js';
 import { validatePresentation, pruneMedia, snapshot, newPresentation } from './model.js';
 import { svgToObjects } from './svgimport.js';
 import { slideSvg } from './svgexport.js';
 import { slideHtml, SLIDE_CSS } from './render.js';
-import { toast, alertDialog } from './ui.js';
+import { toast, alertDialog, progressOverlay } from './ui.js';
 
 const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
 
@@ -24,7 +25,15 @@ export function pickFile(accept) {
 }
 
 /** 파일 바이트 → 문서 (pptx · WIPOINT JSON) */
+/** 이 크기 넘는 pptx 는 목록만 읽고 조각으로 (큰 미디어는 파일 조각 Blob — 메모리에 올리지 않음) */
+const LAZY_OPEN = 16 << 20;
+const LAZY_MEDIA = (name, size) => /^ppt\/media\//.test(name) && size > 256 << 10 && !/\.(svg|emf|wmf)$/i.test(name);
+
 export async function loadFile(file) {
+  if (file.size > LAZY_OPEN && typeof file.slice === 'function') {
+    const head = new Uint8Array(await file.slice(0, 4).arrayBuffer());
+    if (head[0] === 0x50 && head[1] === 0x4b) return loadBigPptx(file);
+  }
   const bytes = new Uint8Array(await file.arrayBuffer());
   // 아이폰 · 카카오톡 · iCloud 에서 아직 내려받지 않은 파일은 0바이트로 넘어옴
   if (!bytes.length) throw new Error(`'${file.name}' 파일이 비어 있습니다 (0바이트). 아이폰이라면 파일 앱이나 카카오톡에서 파일을 먼저 열어 내려받은 뒤(또는 [파일에 저장] 후) 다시 열어 주세요.`);
@@ -59,6 +68,21 @@ export async function loadFile(file) {
   const pres = validatePresentation(data);
   return { pres, name, warnings: [] };
 }
+
+/** 큰 pptx (수백 MB ~ 수 GB): 순서대로 조각을 읽으며 진행 막대 */
+async function loadBigPptx(file) {
+  const name = file.name.replace(/\.(pptx|potx|pptm|ppsx)$/i, '');
+  const bar = progressOverlay(`'${file.name}' 여는 중 (${fmtSize(file.size)})`);
+  try {
+    const files = await openZipFile(file, { lazy: LAZY_MEDIA, onProgress: (f) => bar.set(f * 0.9, '파일 목록 · 슬라이드 읽는 중…') });
+    bar.set(0.92, '슬라이드 만드는 중…');
+    await new Promise((r) => setTimeout(r, 0));
+    const { pres, warnings } = readPptx(files, { blobUrl });
+    bar.set(1);
+    return { pres, name, warnings };
+  } finally { bar.close(); }
+}
+export const fmtSize = (n) => (n >= 1 << 30 ? `${(n / (1 << 30)).toFixed(1)}GB` : n >= 1 << 20 ? `${Math.round(n / (1 << 20))}MB` : `${Math.max(1, Math.round(n / 1024))}KB`);
 
 /** PDF 그림 RGBA → data URL (불투명하면 JPEG, 투명이 있으면 PNG) */
 function canvasEncode(w, h, rgba, hasAlpha) {
@@ -176,12 +200,21 @@ function svgToPng(url, w = 512) {
 export async function pptxBlob() {
   pruneMedia(S.pres);
   const png = {};
-  for (const [id, url] of Object.entries(S.pres.media)) if (url.startsWith('data:image/svg')) { const p = await svgToPng(url); if (p) png[id] = p; }
-  const entries = pptxEntries(S.pres, { png });
-  const bytes = await zipAsync(entries);
-  return new Blob([bytes], { type: PPTX_MIME });
+  for (const [id, url] of Object.entries(S.pres.media)) if (url?.startsWith('data:image/svg')) { const p = await svgToPng(url); if (p) png[id] = p; }
+  const entries = pptxEntries(S.pres, { png, blob: blobOf });
+  // 큰 미디어가 있으면 진행 막대 (Blob 은 복사 없이 그대로 담김)
+  const big = Object.values(entries).some((v) => v instanceof Blob);
+  const bar = big ? progressOverlay('저장하는 중') : null;
+  try {
+    const out = await zipAsync(entries, bar ? (f) => bar.set(f, '파일 묶는 중…') : undefined);
+    return new Blob([out], { type: PPTX_MIME });
+  } finally { bar?.close(); }
 }
-export const jsonBlob = () => new Blob([JSON.stringify(S.pres)], { type: 'application/json' });
+/** WIPOINT 문서(.json): blob 미디어는 data URL 로 */
+export async function jsonBlob() {
+  const media = Object.values(S.pres.media ?? {}).some(isBlobUrl) ? await mediaAsData(S.pres.media) : S.pres.media;
+  return new Blob([JSON.stringify({ ...S.pres, media })], { type: 'application/json' });
+}
 
 function download(blob, name) {
   const a = document.createElement('a');
@@ -221,7 +254,7 @@ export async function saveAs(kind = 'pptx') {
   // 사용자 동작(클릭) 직후에 위치를 먼저 고름
   const h = await pickSave(name, kind);
   if (h === false) return;
-  const blob = kind === 'json' ? jsonBlob() : await pptxBlob();
+  const blob = kind === 'json' ? await jsonBlob() : await pptxBlob();
   if (h) {
     await writeHandle(h, blob);
     if (kind === 'pptx') { S.fileHandle = h; S.docName = h.name.replace(/\.pptx$/i, ''); }
@@ -261,7 +294,8 @@ export function scheduleAutosave() {
 }
 export async function autosaveNow() {
   try {
-    await idbSet('autosave', { name: S.docName, json: snapshot(S.pres), media: S.pres.media, fonts: S.pres.fonts ?? null, at: Date.now(), cur: S.cur });
+    const { media, blobs } = await storeMedia(S.pres.media);
+    await idbSet('autosave', { name: S.docName, json: snapshot(S.pres), media, blobs, fonts: S.pres.fonts ?? null, at: Date.now(), cur: S.cur });
     await addRecent();
     emit('autosaved');
   } catch (e) { console.warn('자동 저장 실패', e); }
@@ -270,7 +304,7 @@ export async function restoreAutosave() {
   try {
     const v = await idbGet('autosave');
     if (!v?.json) return false;
-    const pres = validatePresentation({ ...JSON.parse(v.json), media: v.media ?? {}, ...(v.fonts ? { fonts: v.fonts } : {}) });
+    const pres = validatePresentation({ ...JSON.parse(v.json), media: await loadStoredMedia(v), ...(v.fonts ? { fonts: v.fonts } : {}) });
     setDocument(pres, v.name);
     if (v.cur) goSlide(Math.min(v.cur, pres.slides.length - 1));
     return true;
@@ -281,17 +315,63 @@ export async function restoreAutosave() {
 async function addRecent() {
   const list = (await idbGet('recent')) ?? [];
   const id = S.docId ?? (S.docId = `d${Date.now().toString(36)}`);
-  const item = { id, name: S.docName, at: Date.now(), slides: S.pres.slides.length };
+  const { media, blobs } = await storeMedia(S.pres.media);
+  const item = { id, name: S.docName, at: Date.now(), slides: S.pres.slides.length, blobs: Object.values(blobs) };
   const out = [item, ...list.filter((x) => x.id !== id)].slice(0, 12);
   await idbSet('recent', out);
-  await idbSet(`doc:${id}`, { name: S.docName, json: snapshot(S.pres), media: S.pres.media, fonts: S.pres.fonts ?? null });
+  await idbSet(`doc:${id}`, { name: S.docName, json: snapshot(S.pres), media, blobs, fonts: S.pres.fonts ?? null });
   for (const x of list.slice(12)) await idbSet(`doc:${x.id}`, null);
+  await gcBlobs(out, blobs);
+}
+
+// 큰 미디어(Blob)는 IndexedDB 에 한 번만 따로 저장 ('bl:…' 키) — 자동 저장 때마다 GB 를 다시 쓰지 않음
+const storedKey = new Map(); // blob URL → 'bl:…'
+async function storeMedia(all) {
+  const media = {};
+  const blobs = {};
+  for (const [id, u] of Object.entries(all ?? {})) {
+    const b = isBlobUrl(u) ? blobOf(u) : null;
+    if (!b) { media[id] = u; continue; }
+    let key = storedKey.get(u);
+    if (!key) {
+      key = `bl:${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+      await idbSet(key, b);
+      storedKey.set(u, key);
+    }
+    blobs[id] = key;
+  }
+  return { media, blobs };
+}
+async function loadStoredMedia(v) {
+  const media = mediaFromStore(v.media ?? {});
+  for (const [id, key] of Object.entries(v.blobs ?? {})) {
+    const b = await idbGet(key);
+    if (b instanceof Blob) { const u = blobUrl(b); storedKey.set(u, key); media[id] = u; }
+  }
+  return media;
+}
+/** 자동 저장 · 최근 문서 어디에도 안 쓰는 'bl:' 지우기 */
+async function gcBlobs(recent, current) {
+  try {
+    const keep = new Set([...Object.values(current), ...recent.flatMap((x) => x.blobs ?? [])]);
+    const auto = await idbGet('autosave');
+    for (const k of Object.values(auto?.blobs ?? {})) keep.add(k);
+    const db = await idb();
+    const keys = await new Promise((res, rej) => { const r = db.transaction('kv').objectStore('kv').getAllKeys(); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+    db.close();
+    for (const k of keys) if (typeof k === 'string' && k.startsWith('bl:') && !keep.has(k)) { await idbDel(k); for (const [u, kk] of storedKey) if (kk === k) storedKey.delete(u); }
+  } catch { /* 정리 실패는 무시 */ }
+}
+async function idbDel(key) {
+  const db = await idb();
+  await new Promise((res, rej) => { const tx = db.transaction('kv', 'readwrite'); tx.objectStore('kv').delete(key); tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+  db.close();
 }
 export async function recentDocs() { return (await idbGet('recent')) ?? []; }
 export async function openRecent(id) {
   const v = await idbGet(`doc:${id}`);
   if (!v) { toast('문서를 찾을 수 없습니다'); return; }
-  setDocument(validatePresentation({ ...JSON.parse(v.json), media: v.media ?? {}, ...(v.fonts ? { fonts: v.fonts } : {}) }), v.name);
+  setDocument(validatePresentation({ ...JSON.parse(v.json), media: await loadStoredMedia(v), ...(v.fonts ? { fonts: v.fonts } : {}) }), v.name);
   S.docId = id;
 }
 
@@ -324,10 +404,10 @@ export function printSlides({ mode = 'slides', range = null, hidden = false } = 
 
 // ───────────── PNG 내보내기 ─────────────
 /** 슬라이드 → PNG data URL (SVG foreignObject → canvas) */
-export function slidePng(i, width = 1920) {
+export async function slidePng(i, width = 1920) {
   const { w, h } = S.pres.size;
   const sc = width / w;
-  const html = slideHtml(S.pres, S.pres.slides[i], { index: i });
+  const html = await inlineBlobs(slideHtml(S.pres, S.pres.slides[i], { index: i }));
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w * sc}" height="${h * sc}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" style="transform:scale(${sc});transform-origin:0 0;width:${w}px;height:${h}px"><style>${SLIDE_CSS}</style>${html.replace(/<br>/g, '<br/>').replace(/<img([^>]*?)>/g, '<img$1/>').replace(/<col(?!group)([^>]*?)>/g, '<col$1/>').replace(/<(video|audio)\b[^>]*>(<\/\1>)?/g, '')}</div></foreignObject></svg>`;
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -356,7 +436,8 @@ export function measureText(font, text) {
 /** 슬라이드 i (또는 고른 개체 only) → SVG 글 */
 export const slideSvgText = (i, only = null) => slideSvg(S.pres, S.pres.slides[i], { measure: measureText, only });
 /** SVG 글 → 그림 data URL (png · jpeg), 배경 (jpeg 는 흰색) */
-export function svgToRaster(svg, { type = 'image/png', scale = 2, quality = 0.92 } = {}) {
+export async function svgToRaster(svg, opts = {}) { return rasterize(await inlineBlobs(svg), opts); }
+function rasterize(svg, { type = 'image/png', scale = 2, quality = 0.92 } = {}) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
@@ -378,7 +459,7 @@ export async function exportImages(kind = 'png', all = false) {
   for (const i of list) {
     const name = `${S.docName}${list.length > 1 ? `_${i + 1}` : ''}.${kind}`;
     let blob;
-    if (kind === 'svg') blob = new Blob([slideSvgText(i)], { type: 'image/svg+xml' });
+    if (kind === 'svg') blob = new Blob([await inlineBlobs(slideSvgText(i))], { type: 'image/svg+xml' });
     else {
       // PNG 는 화면과 같은 HTML 렌더(글꼴 · 효과 정확), JPG 는 흰 배경
       const url = kind === 'png' ? await slidePng(i) : await slidePng(i).then((u) => jpegFrom(u));
@@ -404,7 +485,7 @@ async function jpegFrom(pngUrl) {
 }
 /** 고른 개체를 그림 파일로 (PowerPoint [그림으로 저장]) */
 export async function saveObjectsAsPicture(ids, kind = 'png') {
-  const svg = slideSvgText(S.cur, new Set(ids));
+  const svg = await inlineBlobs(slideSvgText(S.cur, new Set(ids)));
   const name = `${S.docName}_그림.${kind}`;
   const blob = kind === 'svg' ? new Blob([svg], { type: 'image/svg+xml' }) : await (await fetch(await svgToRaster(svg, { type: kind === 'jpg' ? 'image/jpeg' : 'image/png' }))).blob();
   const h = await pickSave(name, kind);
@@ -507,7 +588,7 @@ const b64url = (u8) => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000)
 const unb64url = (t) => { const s = atob(t.replace(/-/g, '+').replace(/_/g, '/')); const u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); return u; };
 
 export async function shareLink() {
-  const json = new TextEncoder().encode(JSON.stringify({ ...S.pres, props: { ...S.pres.props, name: S.docName } }));
+  const json = new TextEncoder().encode(JSON.stringify({ ...S.pres, media: await mediaAsData(S.pres.media), props: { ...S.pres.props, name: S.docName } }));
   const z = await gzip(json);
   const url = `${location.origin}${location.pathname}#view=${b64url(z)}`;
   return { url, size: url.length };

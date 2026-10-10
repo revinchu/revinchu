@@ -639,3 +639,9 @@ body.mobile .dialog-body { max-height: calc(100vh - 160px); overflow: auto; over
 .rfont { display: inline-flex; align-items: center; }
 .font-drop { width: 16px; }
 body.mobile .font-pop { width: calc(100vw - 16px); left: 8px !important; }
+/* 진행 막대 (큰 파일 열기 · 저장) */
+.busy-ov { position: fixed; inset: 0; z-index: 400; background: rgba(0,0,0,.18); display: flex; align-items: center; justify-content: center; }
+.busy-box { background: #fff; color: #222; border-radius: 8px; box-shadow: 0 8px 30px rgba(0,0,0,.25); padding: 16px 20px; width: min(360px, calc(100vw - 32px)); font-size: 13px; }
+.busy-box .progress { margin: 10px 0 6px; }
+.busy-note { color: #666; font-size: 12px; min-height: 16px; }
+.thumb .tbox.lazy { background: #fafafa; }

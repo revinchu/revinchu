@@ -524,9 +524,9 @@ function dataUrlBytes(url) {
     bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   } else bytes = new TextEncoder().encode(decodeURIComponent(m[3]));
-  const ext = { 'image/png': 'png', 'image/jpeg': 'jpeg', 'image/jpg': 'jpeg', 'image/gif': 'gif', 'image/svg+xml': 'svg', 'image/bmp': 'bmp', 'image/webp': 'webp', 'image/x-emf': 'emf', 'image/x-wmf': 'wmf', 'image/tiff': 'tiff', ...AV_EXT }[mime] ?? 'png';
-  return { bytes, ext, mime };
+  return { bytes, ext: extOfMime(mime), mime };
 }
+const extOfMime = (mime) => ({ 'image/png': 'png', 'image/jpeg': 'jpeg', 'image/jpg': 'jpeg', 'image/gif': 'gif', 'image/svg+xml': 'svg', 'image/bmp': 'bmp', 'image/webp': 'webp', 'image/x-emf': 'emf', 'image/x-wmf': 'wmf', 'image/tiff': 'tiff', ...AV_EXT }[mime] ?? 'png');
 /** 비디오 · 오디오 (mime → 확장자) */
 const AV_EXT = { 'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov', 'video/x-m4v': 'm4v', 'video/ogg': 'ogv', 'audio/mpeg': 'mp3', 'audio/mp3': 'mp3', 'audio/mp4': 'm4a', 'audio/x-m4a': 'm4a', 'audio/aac': 'aac', 'audio/wav': 'wav', 'audio/x-wav': 'wav', 'audio/wave': 'wav', 'audio/ogg': 'ogg', 'audio/webm': 'weba' };
 export const AV_MIME = { mp4: 'video/mp4', m4v: 'video/x-m4v', webm: 'video/webm', mov: 'video/quicktime', ogv: 'video/ogg', mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac', wav: 'audio/wav', ogg: 'audio/ogg', weba: 'audio/webm', wma: 'audio/x-ms-wma', wmv: 'video/x-ms-wmv', avi: 'video/x-msvideo' };
@@ -535,6 +535,7 @@ export const MIME_BY_EXT = { png: 'image/png', jpeg: 'image/jpeg', jpg: 'image/j
 /**
  * 문서 → pptx 파트 목록
  * opts.png: { mediaId: dataURL } — SVG 그림의 PNG 대체본 (앱이 미리 그려 넘김, PowerPoint 2016 이전 호환)
+ * opts.blob(url) → Blob — blob: URL 미디어 (큰 동영상 등; 파트 값이 Blob 이 되므로 zipAsync 로 묶어야 함)
  */
 export function pptxEntries(pres, opts = {}) {
   setMasterText(pres); // 마스터 글자 서식을 기본값으로 (글자마다 명시적으로 씀)
@@ -548,7 +549,9 @@ export function pptxEntries(pres, opts = {}) {
     if (mediaPath.has(id)) return mediaPath.get(id);
     let url = pres.media?.[id];
     if (!url) return null;
-    let d = dataUrlBytes(url);
+    // 큰 미디어: blob URL → Blob 그대로 (zipAsync 가 복사 없이 담음)
+    const blob = url.startsWith('blob:') ? opts.blob?.(url) : null;
+    let d = blob ? { bytes: blob, mime: blob.type || 'application/octet-stream', ext: extOfMime(blob.type) } : dataUrlBytes(url);
     if (!d) return null;
     if (d.ext === 'svg' && opts.png?.[id]) d = dataUrlBytes(opts.png[id]) ?? d;
     const path = `ppt/media/${/^(video|audio)\//.test(d.mime) ? 'media' : 'image'}${++mediaN}.${d.ext}`;
@@ -1137,8 +1140,9 @@ const DIR_FROM = { u: 'b', d: 't', l: 'r', r: 'l' };
  * pptx 바이트 → 문서
  * 반환 { pres, warnings }
  */
-export function readPptx(bytes) {
-  const files = unzip(bytes);
+export function readPptx(input, opts = {}) {
+  // input: pptx 바이트, 또는 openZipFile 결과 ({ 경로: Uint8Array|Blob } — 큰 미디어는 Blob, opts.blobUrl 로 연결)
+  const files = input instanceof Uint8Array ? unzip(input) : input;
   const has = (p) => Object.prototype.hasOwnProperty.call(files, p);
   const xmlOf = (p) => (has(p) ? parseXml(textOf(files[p])) : null);
   const relCache = new Map();
@@ -1178,6 +1182,12 @@ export function readPptx(bytes) {
     if (!mime) { warnings.add(`지원하지 않는 그림 형식(.${ext})은 빈 칸으로 표시합니다`); mediaByPath.set(path, null); return null; }
     if (ext === 'emf' || ext === 'wmf') warnings.add('EMF/WMF 그림은 브라우저에서 보이지 않을 수 있습니다');
     const b = files[path];
+    if (typeof Blob === 'function' && b instanceof Blob) {
+      const id = `m${mediaByPath.size + 1}${uid('').slice(-4)}`;
+      media[id] = opts.blobUrl ? opts.blobUrl(b, mime) : null;
+      mediaByPath.set(path, media[id] ? id : null);
+      return media[id] ? id : null;
+    }
     let bin = '';
     for (let i = 0; i < b.length; i += 0x8000) bin += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000));
     const id = `m${mediaByPath.size + 1}${uid('').slice(-4)}`;

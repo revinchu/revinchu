@@ -362,3 +362,58 @@ test('한글 웹 글꼴 목록 · 문서가 쓰는 글꼴', async () => {
   assert.ok(fontsUsed(p).includes('나눔고딕'));
   assert.match(fontStack(p.theme, '나눔고딕'), /'나눔고딕', 'Nanum Gothic'/);
 });
+
+test('큰 파일: 조각 읽기 (openZipFile) · Blob 항목 그대로 묶기 · 큰 미디어 Blob 으로 열고 저장', async () => {
+  const { zipAsync, openZipFile, textOf } = await import('../src/zip.js');
+  const { writePptx, readPptx, pptxEntries } = await import('../src/pptx.js');
+  const { newPresentation, newImage } = await import('../src/model.js');
+  const big = new Uint8Array(2e6).map((_, i) => (i * 7) % 256);
+  const z = await zipAsync({ 'a.xml': `<a>${'가'.repeat(5000)}</a>`, 'ppt/media/v.mp4': new Blob([big]) });
+  assert.ok(z instanceof Blob);
+  const f = await openZipFile(z, { lazy: (n) => n.startsWith('ppt/media/') });
+  assert.equal(textOf(f['a.xml']).length, 5007);
+  assert.ok(f['ppt/media/v.mp4'] instanceof Blob);
+  assert.deepEqual(new Uint8Array(await f['ppt/media/v.mp4'].arrayBuffer()).subarray(0, 9), big.subarray(0, 9));
+  // pptx: 그림을 Blob 으로 열고 (blobUrl) 다시 쓸 때 Blob 그대로
+  const p = newPresentation({ firstLayout: 'blank' });
+  p.media.img = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  p.slides[0].objects.push(newImage('img', { x: 10, y: 10, w: 100, h: 100 }));
+  const files = await openZipFile(new Blob([writePptx(p)]), { lazy: (n) => n.startsWith('ppt/media/') });
+  const reg = new Map();
+  const { pres } = readPptx(files, { blobUrl: (b, mime) => { const u = `blob:test/${reg.size}`; reg.set(u, b.slice(0, b.size, mime)); return u; } });
+  const id = pres.slides[0].objects.find((o) => o.type === 'image').media;
+  assert.match(pres.media[id], /^blob:test\//);
+  const ent = pptxEntries(pres, { blob: (u) => reg.get(u) });
+  const mediaPart = Object.keys(ent).find((k) => k.startsWith('ppt/media/'));
+  assert.ok(ent[mediaPart] instanceof Blob);
+  assert.match(mediaPart, /\.png$/);
+});
+
+test('ZIP64: 4GB 넘는 항목 · 위치 (가상 파일로 목록만 읽기)', async () => {
+  const { zipParts, openZipFile, textOf } = await import('../src/zip.js');
+  const huge = 0x100000000 + 12345; // 4GB 넘는 동영상 (내용은 읽지 않음)
+  const fake = { length: huge };
+  const xml = new TextEncoder().encode('<p>뒤</p>');
+  const parts = zipParts([{ name: 'ppt/media/huge.mp4', crc: 0, size: huge, method: 0, body: fake }, { name: 'ppt/slides/slide1.xml', crc: 0, size: xml.length, method: 0, body: xml }]);
+  // 가상 파일: 큰 몸통은 0 으로 채운 것처럼
+  const segs = []; let at = 0;
+  for (const q of parts) { const n = q.length; segs.push({ at, n, q }); at += n; }
+  const vfile = {
+    size: at,
+    slice(a, b) {
+      b = Math.min(b ?? at, at);
+      return { size: b - a, async arrayBuffer() {
+        const out = new Uint8Array(b - a);
+        for (const s of segs) {
+          if (s.q === fake || s.at >= b || s.at + s.n <= a) continue;
+          const from = Math.max(a, s.at); const to = Math.min(b, s.at + s.n);
+          out.set(s.q.subarray(from - s.at, to - s.at), from - a);
+        }
+        return out.buffer;
+      } };
+    },
+  };
+  const files = await openZipFile(vfile, { lazy: (n) => n.endsWith('.mp4') });
+  assert.equal(files['ppt/media/huge.mp4'].size, huge);
+  assert.equal(textOf(files['ppt/slides/slide1.xml']), '<p>뒤</p>');
+});

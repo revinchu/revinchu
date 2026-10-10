@@ -24,6 +24,7 @@ import { startEyedrop } from './eyedrop.js';
 import { moveParagraph, startCrop, endCrop, startEdit, endEdit, textTargets, applyTextFormat, caretRunProp, caretPara, insertTextAtCaret, fitZoom, setZoom, renderCanvas, editorLayer } from './editor.js';
 import { startShow, playStepOn } from './show.js';
 import { shapeIconSvg, styleChip, wordArtCss } from './galleries.js';
+import { blobUrl } from './blobstore.js';
 import { save, saveAs, openWithPicker, setDocument, printSlides, exportPng, exportVideo, shareLink, pickFile, exportImages, saveObjectsAsPicture, slideSvgText, svgToRaster } from './fileio.js';
 import { slideSvg } from './svgexport.js';
 import { svgToObjects } from './svgimport.js';
@@ -113,11 +114,16 @@ function pasteInternal() {
 const expandGroups = (objs) => { const s = slide(); const ids = new Set(); for (const o of objs) for (const m of groupMembers(s, o)) ids.add(m.id); return s.objects.filter((o) => ids.has(o.id)); };
 
 async function readImageFile(file, maxSide = 2560) {
+  // 큰 그림 파일은 전체를 data URL 로 읽지 않고 파일을 바로 그려서 줄임
+  if (file.size > 4e6 && !/svg/.test(file.type)) {
+    const tmp = URL.createObjectURL(file);
+    try { return await shrinkImage(tmp, maxSide, file.size, /png|gif/.test(file.type)); } finally { URL.revokeObjectURL(tmp); }
+  }
   const url = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error); r.readAsDataURL(file); });
   return shrinkImage(url, maxSide, file.size);
 }
 /** 아주 큰 그림은 줄여서 넣음 (문서 크기 · 메모리) */
-function shrinkImage(url, maxSide = 2560, bytes = 0) {
+function shrinkImage(url, maxSide = 2560, bytes = 0, alpha = null) {
   return new Promise((resolve) => {
     if (url.startsWith('data:image/svg')) { const img = new Image(); img.onload = () => resolve({ url, w: img.naturalWidth || 300, h: img.naturalHeight || 300 }); img.onerror = () => resolve({ url, w: 300, h: 300 }); img.src = url; return; }
     const img = new Image();
@@ -130,7 +136,7 @@ function shrinkImage(url, maxSide = 2560, bytes = 0) {
       const cv = document.createElement('canvas');
       cv.width = w; cv.height = h;
       cv.getContext('2d').drawImage(img, 0, 0, w, h);
-      const png = url.startsWith('data:image/png') || url.startsWith('data:image/gif');
+      const png = alpha ?? (url.startsWith('data:image/png') || url.startsWith('data:image/gif'));
       resolve({ url: cv.toDataURL(png ? 'image/png' : 'image/jpeg', 0.9), w, h });
     };
     img.onerror = () => resolve(null);
@@ -201,18 +207,18 @@ function videoInfo(url) {
     v.src = url;
   });
 }
-const MEDIA_LIMIT = 80 * 1024 * 1024;
+// 큰 동영상: 파일을 읽지 않고 blob URL 로 연결 (저장할 때 pptx 에 조각으로 그대로 담김)
+const MEDIA_INLINE = 8 * 1024 * 1024;
 async function insertMedia(kind) {
   const f = await pickFile(kind === 'audio' ? 'audio/*,.mp3,.m4a,.wav,.aac,.ogg' : 'video/*,.mp4,.webm,.mov,.m4v');
   if (!f) return;
-  if (f.size > MEDIA_LIMIT) { alertDialog(kind === 'audio' ? '오디오' : '비디오', `파일이 너무 큽니다 (${Math.round(f.size / 1048576)}MB). 80MB 이하로 줄여서 넣어 주세요.`); return; }
+  const ext = f.name.split('.').pop().toLowerCase();
+  const guess = { mp4: 'video/mp4', m4v: 'video/x-m4v', mov: 'video/quicktime', webm: 'video/webm', mp3: 'audio/mpeg', m4a: 'audio/mp4', wav: 'audio/wav', aac: 'audio/aac', ogg: 'audio/ogg' }[ext] ?? (kind === 'audio' ? 'audio/mpeg' : 'video/mp4');
   toast('불러오는 중...');
-  let url = await fileUrl(f);
+  let url = f.size > MEDIA_INLINE ? blobUrl(f, f.type && f.type !== 'application/octet-stream' ? f.type : guess) : await fileUrl(f);
   // 브라우저가 형식을 비워 두는 경우 (아이폰 .mov 등)
   if (/^data:;|^data:application\/octet-stream/.test(url)) {
-    const ext = f.name.split('.').pop().toLowerCase();
-    const mime = { mp4: 'video/mp4', m4v: 'video/x-m4v', mov: 'video/quicktime', webm: 'video/webm', mp3: 'audio/mpeg', m4a: 'audio/mp4', wav: 'audio/wav', aac: 'audio/aac', ogg: 'audio/ogg' }[ext] ?? (kind === 'audio' ? 'audio/mpeg' : 'video/mp4');
-    url = url.replace(/^data:[^;,]*/, `data:${mime}`);
+    url = url.replace(/^data:[^;,]*/, `data:${guess}`);
   }
   const s = slide();
   const { w: W, h: H } = S.pres.size;

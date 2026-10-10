@@ -55,6 +55,20 @@ export function toast(msg) {
 let openMenus = [];
 let onMenuClose = null;
 
+/** 오래 걸리는 일 (큰 파일 열기 · 저장): 화면 가운데 진행 막대. set(0..1, 글) · close() */
+export function progressOverlay(title) {
+  const bar = el('i');
+  const note = el('div', { class: 'busy-note' }, '');
+  const box = el('div', { class: 'busy-ov', role: 'progressbar' }, el('div', { class: 'busy-box' }, el('b', {}, title), el('div', { class: 'progress' }, bar), note));
+  let shown = false;
+  // 아주 짧은 일에는 깜빡이지 않게 0.3초 뒤에 보임
+  const t = setTimeout(() => { shown = true; document.body.append(box); }, 300);
+  return {
+    set(f, text) { bar.style.width = `${Math.round(Math.max(0, Math.min(1, f)) * 100)}%`; if (text != null) note.textContent = text; },
+    close() { clearTimeout(t); if (shown) box.remove(); },
+  };
+}
+
 export function setMenuCloseHandler(fn) { onMenuClose = fn; }
 export const isMenuOpen = () => openMenus.length > 0;
 

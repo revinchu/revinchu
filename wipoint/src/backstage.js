@@ -6,6 +6,7 @@ import { THEMES } from './themes.js';
 import { newPresentation } from './model.js';
 import { setDocument, recentDocs, openRecent } from './fileio.js';
 import { el, hydrateIcons } from './ui.js';
+import { blobOf } from './blobstore.js';
 
 const thumbCache = new Map();
 function deckThumb(key, build, w = 196) {
@@ -78,7 +79,7 @@ const PAGES = {
     const save = () => change(() => { S.pres.props = { ...p, title: title.value, author: author.value }; }, { scope: 'none' });
     title.addEventListener('change', save);
     author.addEventListener('change', save);
-    const media = Object.values(S.pres.media ?? {}).reduce((n, u) => n + u.length * 0.75, 0);
+    const media = Object.values(S.pres.media ?? {}).reduce((n, u) => n + (blobOf(u)?.size ?? (u?.length ?? 0) * 0.75), 0);
     m.append(h2('정보'), el('div', { class: 'info-grid' },
       el('div', { class: 'info-card' }, el('h3', {}, '속성'),
         el('label', {}, el('span', {}, '제목'), title), el('label', {}, el('span', {}, '만든 이'), author),
