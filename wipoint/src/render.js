@@ -3,6 +3,7 @@ import { resolveColor, isDark } from './themes.js';
 import { shapePath, customPath, textRect, OPEN_SHAPES } from './shapes.js';
 import { PX_PER_PT, defaultSize, defaultColor, defaultFont, placeholderPrompt, isEmptyText, masterDecor, setMasterText } from './model.js';
 import { chartSvg } from './chart.js';
+import { webFont } from './webfonts.js';
 import { parseLatex, toMathML } from './math.js';
 
 export const escHtml = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -11,7 +12,10 @@ const KO_FALLBACK = "'맑은 고딕', 'Malgun Gothic', 'Apple SD Gothic Neo', 'N
 
 export function fontStack(theme, font) {
   const name = font === '+mj' || font === '+mj-lt' ? theme.fonts.major : font === '+mn' || font === '+mn-lt' || !font ? theme.fonts.minor : font;
-  return `'${String(name).replace(/'/g, '')}', ${KO_FALLBACK}`;
+  const n = String(name).replace(/'/g, '');
+  // 한글 이름으로 적힌 웹 글꼴 (나눔고딕 → 'Nanum Gothic')
+  const wf = webFont(n);
+  return wf && wf.family !== n ? `'${n}', '${wf.family}', ${KO_FALLBACK}` : `'${n}', ${KO_FALLBACK}`;
 }
 
 /** 채우기 → CSS 배경 */

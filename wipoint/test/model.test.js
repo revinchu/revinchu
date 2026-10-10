@@ -348,3 +348,17 @@ test('SVG: 열기 (도형 · 호 · 변환 · 글 · 클래스) 와 슬라이드
   const only = slideSvg(p, s, { only: new Set([sh.id]) });
   assert.match(only, /viewBox="96 96 208 108"/);
 });
+
+test('한글 웹 글꼴 목록 · 문서가 쓰는 글꼴', async () => {
+  const { WEB_FONTS, webFont, fontsUsed } = await import('../src/webfonts.js');
+  const { fontStack } = await import('../src/render.js');
+  const { newPresentation } = await import('../src/model.js');
+  assert.ok(WEB_FONTS.length >= 40);
+  assert.equal(new Set(WEB_FONTS.map((f) => f.family)).size, WEB_FONTS.length);
+  assert.equal(webFont('나눔고딕').family, 'Nanum Gothic');
+  assert.match(webFont('Noto Sans KR').css, /^https:\/\/fonts\.googleapis\.com\/css2\?family=Noto\+Sans\+KR/);
+  const p = newPresentation({});
+  p.slides[0].objects[0].text.paras[0].runs = [{ t: '가', font: '나눔고딕' }];
+  assert.ok(fontsUsed(p).includes('나눔고딕'));
+  assert.match(fontStack(p.theme, '나눔고딕'), /'나눔고딕', 'Nanum Gothic'/);
+});

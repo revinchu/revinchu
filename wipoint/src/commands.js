@@ -16,6 +16,8 @@ import { backgroundMask, applyMask } from './bgremove.js';
 import { parseLatex, toMathML } from './math.js';
 import { collab, startCollab, stopCollab, collabLink, myName } from './collab.js';
 import { isMobile, setMobileMode, mobileMode } from './mobile.js';
+import { ensureFont, localFontList } from './fontlib.js';
+import { WEB_FONTS } from './webfonts.js';
 import { el, openMenu, openDialog, formDialog, alertDialog, toast, closeMenus } from './ui.js';
 import { colorMenu } from './colorpick.js';
 import { startEyedrop } from './eyedrop.js';
@@ -650,7 +652,7 @@ function findDialog(replace = false) {
 function fontDialog() {
   const fam = currentRunProp('font') ?? '+mn';
   formDialog('글꼴', [
-    { name: 'font', label: '한글/영문 글꼴', type: 'combo', value: fam === '+mj' ? `${S.pres.theme.fonts.major} (제목)` : fam === '+mn' ? `${S.pres.theme.fonts.minor} (본문)` : fam, options: FONTS.map((f) => ({ value: f === '+mj' ? `${S.pres.theme.fonts.major} (제목)` : f === '+mn' ? `${S.pres.theme.fonts.minor} (본문)` : f })) },
+    { name: 'font', label: '한글/영문 글꼴', type: 'combo', value: fam === '+mj' ? `${S.pres.theme.fonts.major} (제목)` : fam === '+mn' ? `${S.pres.theme.fonts.minor} (본문)` : fam, options: [...new Set([...FONTS, ...localFontList(), ...WEB_FONTS.map((w) => w.family)])].map((f) => ({ value: f === '+mj' ? `${S.pres.theme.fonts.major} (제목)` : f === '+mn' ? `${S.pres.theme.fonts.minor} (본문)` : f })) },
     { name: 'size', label: '크기 (pt)', type: 'number', value: String(currentRunProp('size') ?? 18) },
     { name: 'b', label: '굵게', type: 'checkbox', value: !!currentRunProp('b') },
     { name: 'i', label: '기울임꼴', type: 'checkbox', value: !!currentRunProp('i') },
@@ -1440,7 +1442,7 @@ register({
   removeSection: (i = null) => { let k = i ?? S.cur; while (k > 0 && !S.pres.slides[k].section) k--; change(() => { delete S.pres.slides[k].section; }, { scope: 'all' }); },
 
   // 글꼴 · 단락
-  fontFamily: (f) => applyRun({ font: f }),
+  fontFamily: (f) => { applyRun({ font: f }); ensureFont(f).then((got) => { if (got) renderCanvas(); }); },
   fontSize: (n) => applyRun({ size: n }),
   growFont: () => stepFont(1),
   shrinkFont: () => stepFont(-1),

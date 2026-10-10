@@ -5,6 +5,7 @@ import { initPanels, renderThumbs, updateThumb, markActiveThumb, renderNotes, re
 import { collab, startCollab, stopCollab, collabLink } from './collab.js';
 import { initMobile } from './mobile.js';
 import { canvasMenu, thumbMenu } from './ctxmenu.js';
+import { ensureDocFonts, loadAllLocalFonts, detectLocalFonts } from './fontlib.js';
 import { initRibbon, renderRibbon, TABS, setRibbonTab, initQat } from './ribbon.js';
 import { initKeytips } from './keytips.js';
 import { stopEyedrop } from './eyedrop.js';
@@ -35,6 +36,8 @@ function boot() {
   applyView();
   renderAll();
   start();
+  // 글꼴: 이 컴퓨터의 글꼴 (이미 허용했으면 전체, 아니면 흔한 글꼴 확인) + 문서가 쓰는 한글 웹 글꼴
+  setTimeout(() => { detectLocalFonts(); loadAllLocalFonts({ ask: false }); ensureDocFonts(S.pres, () => renderAll()); }, 300);
 }
 
 async function start() {
@@ -125,7 +128,7 @@ on('collabPeers', () => {
     el('button', { class: 'collab-chip', title: `공동 편집 중 (${collab.mode === 'server' ? '서버 연결' : '이 브라우저의 탭끼리'}) — 누르면 링크 · 끝내기`, onclick: () => run('collabStart') }, `공동 편집 ${collab.peers.size + 1}명`));
 });
 on('collabStatus', (t) => toast(t));
-on('docLoaded', () => { fitZoom(); updateTitle(); });
+on('docLoaded', () => { fitZoom(); updateTitle(); ensureDocFonts(S.pres, () => renderAll()); });
 on('showEnded', () => { if (S.viewOnly) toast('읽기 전용 문서입니다. 편집하려면 [파일 › 다른 이름으로 저장]으로 내려받으세요.'); });
 on('openPane', () => { renderPane(); fitZoom(); });
 on('focusCanvas', () => { if (S.editing) focusEditing(); else $('stage').focus(); });

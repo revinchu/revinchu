@@ -628,3 +628,14 @@ body.mobile .dialog-body { max-height: calc(100vh - 160px); overflow: auto; over
 .mt-btn:hover { background: #f0f0f0; border-color: #d0d0d0; }
 .mt-btn.wide { flex-direction: column; height: auto; padding: 3px 8px; font-size: 11px; }
 .mt-btn svg { width: 18px; height: 18px; }
+/* 글꼴 목록 */
+.font-pop { position: fixed; z-index: 260; width: 300px; max-height: min(520px, calc(100vh - 140px)); overflow-y: auto; background: #fff; border: 1px solid #c8c8c8; box-shadow: 0 6px 18px rgba(0,0,0,.18); padding: 2px 0 6px; }
+.font-sec { background: #f3f3f3; color: #555; font-size: 11px; font-weight: 700; padding: 4px 10px; position: sticky; top: 0; z-index: 1; }
+.font-item { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; width: 100%; border: 0; background: none; text-align: left; padding: 5px 12px; font-size: 15px; cursor: pointer; white-space: nowrap; overflow: hidden; }
+.font-item small { font-family: '맑은 고딕', sans-serif; font-size: 10px; color: #888; }
+.font-item:hover, .font-item:focus { background: #fdf0ec; outline: 0; }
+.font-all { display: block; width: calc(100% - 12px); margin: 6px; padding: 5px; border: 1px dashed #c43e1c; background: #fff7f4; color: #b7472a; cursor: pointer; font-size: 12px; }
+.font-note { padding: 4px 12px; color: #a00; font-size: 11px; }
+.rfont { display: inline-flex; align-items: center; }
+.font-drop { width: 16px; }
+body.mobile .font-pop { width: calc(100vw - 16px); left: 8px !important; }

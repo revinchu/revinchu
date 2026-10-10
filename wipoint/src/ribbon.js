@@ -2,6 +2,7 @@
 import { S, run, emit } from './state.js';
 import { el, hydrateIcons, openMenu } from './ui.js';
 import { redrawKeytips } from './keytips.js';
+import { fontSections, ensureFont, touchRecent, loadAllLocalFonts, canQueryLocalFonts } from './fontlib.js';
 
 // ───────────── 항목 만들기 ─────────────
 const L = (cmd, icon, label, o = {}) => ({ t: 'large', cmd, icon, label, ...o });
@@ -418,19 +419,61 @@ function renderItemRaw(it) {
   return btn;
 }
 
+// ───── 글꼴 목록 (PowerPoint: 테마 글꼴 · 최근 · 모든 글꼴, 글꼴 이름을 그 글꼴로) ─────
+let fontPop = null;
+function closeFontPop() { fontPop?.remove(); fontPop = null; removeEventListener('pointerdown', outsideFontPop, true); }
+function outsideFontPop(e) { if (fontPop && !fontPop.contains(e.target) && !e.target.closest('.rfont')) closeFontPop(); }
+function fontDropButton(inp) {
+  const btn = el('button', { class: 'rbtn caret-only font-drop', title: '글꼴 목록', 'data-icon': 'chevronDown', type: 'button' });
+  const open = async (filter = '') => {
+    closeFontPop();
+    const r = inp.getBoundingClientRect();
+    fontPop = el('div', { class: 'font-pop', role: 'listbox' });
+    Object.assign(fontPop.style, { left: `${r.left}px`, top: `${r.bottom + 2}px` });
+    const draw = () => {
+      fontPop.replaceChildren();
+      if (canQueryLocalFonts()) fontPop.append(el('button', { class: 'font-all', type: 'button', onclick: async () => { const l = await loadAllLocalFonts({ ask: true }); if (!l) { fontPop?.append(el('div', { class: 'font-note' }, '브라우저가 글꼴 목록을 허용하지 않았습니다')); return; } draw(); } }, '이 컴퓨터의 모든 글꼴 불러오기'));
+      for (const [title, items] of fontSections(S.pres, filter)) {
+        fontPop.append(el('div', { class: 'font-sec' }, title));
+        for (const it of items.slice(0, 400)) {
+          const row = el('button', { class: 'font-item', type: 'button', title: it.web ? `${it.label} — 고르면 인터넷에서 내려받아 씁니다` : it.label, style: { fontFamily: `'${it.face}', '맑은 고딕', sans-serif` } }, it.label, it.note ? el('small', {}, it.note) : null);
+          row.addEventListener('mousedown', (e) => e.preventDefault());
+          row.addEventListener('click', () => { closeFontPop(); touchRecent(it.name); run('fontFamily', it.name); });
+          if (it.web) row.dataset.web = it.name;
+          fontPop.append(row);
+        }
+      }
+      // 보이는 웹 글꼴은 미리 보기용으로 내려받음
+      const io = new IntersectionObserver((ents) => { for (const en of ents) if (en.isIntersecting) { ensureFont(en.target.dataset.web); io.unobserve(en.target); } }, { root: fontPop });
+      for (const n of fontPop.querySelectorAll('[data-web]')) io.observe(n);
+    };
+    draw();
+    document.body.append(fontPop);
+    addEventListener('pointerdown', outsideFontPop, true);
+    // 이 컴퓨터의 모든 글꼴: 처음 열 때 한 번 물어봄 (사용자 동작 안에서만 가능)
+    if (canQueryLocalFonts() && !open.asked) { open.asked = true; const l = await loadAllLocalFonts({ ask: true }); if (l && fontPop) draw(); }
+  };
+  btn.addEventListener('click', () => (fontPop ? closeFontPop() : open('')));
+  inp.addEventListener('input', () => open(inp.value.replace(/\s*\((제목|본문)\)$/, '')));
+  inp.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeFontPop(); if (e.key === 'ArrowDown' && fontPop) { e.preventDefault(); fontPop.querySelector('.font-item')?.focus(); } });
+  return btn;
+}
+
 function fontBox(kind) {
   const val = kind === 'font' ? state.font : state.size;
   const list = kind === 'font' ? [...new Set([...(S.pres.fonts ?? []).map((f) => f.typeface), ...FONTS])] : SIZES;
   const id = `dl-${kind}`;
   const shown = kind === 'font' ? (val === '+mj' ? `${S.pres.theme.fonts.major} (제목)` : val === '+mn' ? `${S.pres.theme.fonts.minor} (본문)` : val ?? '') : val == null ? '' : String(val);
-  const inp = el('input', { class: `rselect ${kind === 'font' ? 'font-family' : 'font-size'}`, value: shown, list: id, title: kind === 'font' ? '글꼴' : '글꼴 크기', spellcheck: 'false' });
-  const dl = el('datalist', { id }, list.map((f) => el('option', { value: kind === 'font' ? (f === '+mj' ? `${S.pres.theme.fonts.major} (제목)` : f === '+mn' ? `${S.pres.theme.fonts.minor} (본문)` : f) : String(f) })));
+  const inp = el('input', { class: `rselect ${kind === 'font' ? 'font-family' : 'font-size'}`, value: shown, list: kind === 'font' ? undefined : id, title: kind === 'font' ? '글꼴' : '글꼴 크기', spellcheck: 'false' });
+  const dl = kind === 'font' ? fontDropButton(inp) : el('datalist', { id }, list.map((f) => el('option', { value: String(f) })));
   const apply = () => {
     let v = inp.value.trim();
     if (!v) return;
     if (kind === 'font') {
       if (v.endsWith('(제목)')) v = '+mj';
       else if (v.endsWith('(본문)')) v = '+mn';
+      closeFontPop();
+      touchRecent(v);
       run('fontFamily', v);
     } else {
       const n = Number(v);
