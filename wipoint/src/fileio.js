@@ -22,6 +22,8 @@ export function pickFile(accept) {
 /** 파일 바이트 → 문서 (pptx · WIPOINT JSON) */
 export async function loadFile(file) {
   const bytes = new Uint8Array(await file.arrayBuffer());
+  // 아이폰 · 카카오톡 · iCloud 에서 아직 내려받지 않은 파일은 0바이트로 넘어옴
+  if (!bytes.length) throw new Error(`'${file.name}' 파일이 비어 있습니다 (0바이트). 아이폰이라면 파일 앱이나 카카오톡에서 파일을 먼저 열어 내려받은 뒤(또는 [파일에 저장] 후) 다시 열어 주세요.`);
   const name = file.name.replace(/\.(pptx|potx|pptm|ppsx|json|wpt)$/i, '').replace(/\.wpt$/i, '');
   if (bytes[0] === 0xd0 && bytes[1] === 0xcf) throw new Error('예전 PowerPoint 97-2003 형식(.ppt)은 열 수 없습니다. PowerPoint 에서 .pptx 로 저장한 뒤 열어 주세요.');
   if (bytes[0] === 0x50 && bytes[1] === 0x4b) {
@@ -29,7 +31,10 @@ export async function loadFile(file) {
     return { pres, name, warnings };
   }
   const text = new TextDecoder().decode(bytes);
-  const pres = validatePresentation(JSON.parse(text));
+  if (!/^\s*\{/.test(text)) throw new Error(`'${file.name}' 은(는) PowerPoint 파일(.pptx)이 아닙니다. 파일이 손상되었거나 다른 형식일 수 있습니다.`);
+  let data;
+  try { data = JSON.parse(text); } catch { throw new Error(`'${file.name}' 을(를) 읽을 수 없습니다 (내려받기가 덜 끝났거나 손상된 파일).`); }
+  const pres = validatePresentation(data);
   return { pres, name, warnings: [] };
 }
 
@@ -60,7 +65,7 @@ export async function openWithPicker() {
       if (e.name !== 'SecurityError' && e.name !== 'TypeError') throw e;
     }
   }
-  const f = await pickFile('.pptx,.ppsx,.potx,.json,.ppt');
+  const f = await pickFile('.pptx,.ppsx,.potx,.json,.ppt,application/vnd.openxmlformats-officedocument.presentationml.presentation');
   if (!f) return;
   const r = await loadFile(f);
   setDocument(r.pres, r.name);

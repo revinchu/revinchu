@@ -11,7 +11,8 @@ export const S = {
   zoom: 1,
   fitZoom: true,
   view: 'normal',         // normal | sorter | reading
-  showNotes: true,
+  // 휴대폰 세로 화면에서는 노트를 처음엔 숨김 (편집 화면을 넓게)
+  showNotes: !(typeof matchMedia === 'function' && matchMedia('(max-width: 760px)').matches),
   showRuler: false,
   showGuides: false,
   showGrid: false,

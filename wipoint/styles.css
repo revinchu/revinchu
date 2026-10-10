@@ -407,3 +407,56 @@ body.dropping .stage { outline: 3px dashed var(--accent); outline-offset: -6px; 
   .pr-slide { box-shadow: 0 0 0 1px #999; }
   #printArea[data-mode="slides"] .pr-slide { box-shadow: none; }
 }
+
+/* ───────── 휴대폰 · 좁은 화면 (PowerPoint 모바일처럼: 위 편집 화면, 아래 슬라이드 띠) ───────── */
+@media (max-width: 760px) {
+  .titlebar { display: flex; gap: 2px; padding: 0 6px; height: 40px; }
+  .tb-left { flex: none; gap: 0; }
+  .brand { display: none; }
+  .tb-center { flex: 1; min-width: 0; justify-content: center; }
+  .tb-title { max-width: 100%; font-size: 13px; }
+  .save-state, .tb-search, .avatar { display: none; }
+  .ribbon-tabs { overflow-x: auto; overflow-y: hidden; scrollbar-width: none; padding: 0 4px; height: 34px; }
+  .ribbon-tabs::-webkit-scrollbar { display: none; }
+  .ribbon-tab { flex: none; padding: 0 10px; }
+  .ribbon-tabs .spacer { display: none; }
+  .ribbon-action { flex: none; padding: 0 8px; }
+  .ribbon { min-height: 0; padding-top: 2px; -webkit-overflow-scrolling: touch; }
+  .rgroup { min-height: 0; }
+  .workspace { flex-direction: column; }
+  .center { order: 1; flex: 1; min-height: 0; }
+  .stage-inner { padding: 10px 8px; }
+  .thumbs { order: 2; width: auto; height: 96px; flex: none; display: flex; flex-direction: row; align-items: center; gap: 2px; overflow-x: auto; overflow-y: hidden; padding: 4px 6px; border-right: 0; border-top: 1px solid var(--border); }
+  .thumb { flex: none; padding: 2px; flex-direction: column; align-items: center; gap: 1px; }
+  .thumb .tnum { width: auto; flex-direction: row; padding: 0; font-size: 10px; order: 2; }
+  .thumb .tbox { zoom: .62; }
+  .section-head { flex: none; writing-mode: vertical-rl; padding: 4px 2px; font-size: 10px; }
+  .thumb.drop-before::before, .thumb.drop-after::after { display: none; }
+  .notes-wrap { height: 72px; }
+  #app.big-notes .notes-wrap { height: 35%; }
+  .pane { position: fixed; left: 0; right: 0; bottom: 0; width: auto; height: 55vh; z-index: 120; border-left: 0; border-top: 1px solid var(--border); box-shadow: 0 -6px 18px rgba(0, 0, 0, .18); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  .statusbar { gap: 0; padding: 0 4px calc(env(safe-area-inset-bottom, 0px)) 4px; height: auto; min-height: 30px; }
+  .statusbar .sb-item.muted, .statusbar .zoom-slider { display: none; }
+  .sb-btn.text { font-size: 11px; }
+  .backstage { flex-direction: column; }
+  .backstage-nav { width: auto; flex-direction: row; overflow-x: auto; padding: 0; flex: none; }
+  .backstage-nav button { flex: none; padding: 12px 14px; white-space: nowrap; }
+  .backstage-nav .back { padding: 8px 14px; }
+  .backstage-nav .spacer { display: none; }
+  .backstage-main { padding: 18px 16px; }
+  .backstage-main h2 { font-size: 22px; }
+  .tpl-cards { gap: 10px; }
+  .tpl-card { width: calc(50% - 5px); }
+  .tpl-thumb .tw { zoom: calc(100% * .78); }
+  .dialog { min-width: 0; width: calc(100vw - 24px) !important; }
+  .dialog-body label > span:first-child { width: 96px; }
+  .ideas { grid-template-columns: 1fr; }
+  .smart-dlg { flex-direction: column; }
+  .smart-kinds { width: auto; flex-direction: row; flex-wrap: wrap; }
+  .sym-grid { grid-template-columns: repeat(auto-fill, 28px); }
+  .show.presenter { flex-direction: column; }
+  .show.presenter .show-view { flex: 0 0 40%; margin: 8px; }
+  .pv-side { padding: 8px 12px 64px; }
+  .pv-tools { overflow-x: auto; gap: 6px; padding: 0 8px; }
+  .pv-tools button { flex: none; }
+}
