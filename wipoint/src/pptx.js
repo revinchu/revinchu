@@ -4,7 +4,7 @@
 import { zip, unzip, textOf } from './zip.js';
 import { parseXml, child, kids, descendants, esc } from './xml.js';
 import { SLOT_NAMES, resolveColor, applyMods, cloneTheme, THEMES } from './themes.js';
-import { EMU_PER_PX, uid, layoutPlaceholders, defaultSize, defaultColor, defaultFont, isEmptyText, animSteps, stepTimeline, textBody, para, newSlide } from './model.js';
+import { EMU_PER_PX, uid, layoutPlaceholders, defaultSize, defaultColor, defaultFont, isEmptyText, animSteps, triggerSteps, stepTimeline, textBody, para, newSlide, slideTitle } from './model.js';
 import { paraDefaults, tableCellStyle, slideBackground, themeDecor } from './render.js';
 import { KNOWN_SHAPES } from './shapes.js';
 import { decodeEmbeddedFont } from './fonts.js';
@@ -115,7 +115,7 @@ function rPrXml(r, o, p, ctx, tag = 'a:rPr', fallbackSize) {
   const fill = solidFill(r.color ?? defaultColor(o));
   const eff = r.shadow ? '<a:effectLst><a:outerShdw blurRad="38100" dist="38100" dir="2700000" algn="tl"><a:prstClr val="black"><a:alpha val="43137"/></a:prstClr></a:outerShdw></a:effectLst>' : '';
   const hl = r.hl ? `<a:highlight>${colorXml(r.hl)}</a:highlight>` : '';
-  const link = r.link && ctx ? `<a:hlinkClick r:id="${ctx.link(r.link)}"/>` : '';
+  const link = r.link && ctx ? ctx.hlink(r.link) : '';
   return `<${tag} ${attrs}>${ln}${fill}${eff}${hl}${fontXml(r.font ?? defaultFont(o))}${link}</${tag}>`;
 }
 
@@ -163,7 +163,7 @@ function phXml(o, phIdx) {
 
 function shapeXml(o, id, ctx, phIdx) {
   const name = esc(o.name ?? (o.txBox ? `TextBox ${id}` : o.ph ? `Placeholder ${id}` : `Shape ${id}`));
-  const link = o.link ? `<a:hlinkClick r:id="${ctx.link(o.link)}"/>` : '';
+  const link = o.link ? ctx.hlink(o.link) : '';
   const isLine = o.shape === 'line' || o.shape === 'straightConnector1';
   if (isLine && !o.text) {
     return `<p:cxnSp><p:nvCxnSpPr><p:cNvPr id="${id}" name="${name}">${link}</p:cNvPr><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr><p:spPr>${xfrmXml(o)}${geomXml(o)}${lineXml(o.line)}</p:spPr></p:cxnSp>`;
@@ -183,7 +183,7 @@ function picXml(o, id, ctx, phIdx) {
   const alpha = o.alpha != null ? `<a:alphaModFix amt="${pct(o.alpha)}"/>` : '';
   const gray = o.gray ? '<a:grayscl/>' : '';
   const lum = o.bright || o.contrast ? `<a:lum bright="${pct(o.bright ?? 0)}" contrast="${pct(o.contrast ?? 0)}"/>` : '';
-  const link = o.link ? `<a:hlinkClick r:id="${ctx.link(o.link)}"/>` : '';
+  const link = o.link ? ctx.hlink(o.link) : '';
   const effect = o.shadow ? '<a:effectLst><a:outerShdw blurRad="50800" dist="38100" dir="2700000" algn="tl" rotWithShape="0"><a:prstClr val="black"><a:alpha val="40000"/></a:prstClr></a:outerShdw></a:effectLst>' : '';
   return `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="${esc(o.name ?? `Picture ${id}`)}" descr="${esc(o.alt ?? '')}">${link}</p:cNvPr><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr>${o.ph ? phXml(o, phIdx) : '<p:nvPr/>'}</p:nvPicPr><p:blipFill><a:blip r:embed="${rid}">${alpha}${gray}${lum}</a:blip>${src}<a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr>${xfrmXml(o)}${geomXml({ shape: o.shape ?? 'rect', adj: o.adj })}${o.line ? lineXml(o.line) : ''}${effect}</p:spPr></p:pic>`;
 }
@@ -291,7 +291,8 @@ const PATH_PRESET = { pathRight: 64, pathLeft: 64, pathUp: 64, pathDown: 64, pat
 
 function timingXml(slide, spidOf) {
   const steps = animSteps(slide);
-  if (!steps.length) return '';
+  const trigs = [...triggerSteps(slide)].filter(([t]) => spidOf(t));
+  if (!steps.length && !trigs.length) return '';
   let n = 3;
   const nid = () => n++;
   const tgt = (spid) => { const [id, pi] = String(spid).split('#'); return pi != null ? `<p:tgtEl><p:spTgt spid="${id}"><p:txEl><p:pRg st="${pi}" end="${pi}"/></p:txEl></p:spTgt></p:tgtEl>` : `<p:tgtEl><p:spTgt spid="${id}"/></p:tgtEl>`; };
@@ -336,7 +337,7 @@ function timingXml(slide, spidOf) {
     const by = a.effect === 'growShrink' ? 150000 : 110000;
     return `<p:animScale><p:cBhvr><p:cTn id="${nid()}" dur="${dur}" fill="hold"${a.effect === 'pulse' ? ' autoRev="1"' : ''}/>${tgt(spid)}</p:cBhvr><p:by x="${by}" y="${by}"/></p:animScale>`;
   };
-  const clickPars = steps.map((step) => {
+  const seqPars = (steps, interactive) => steps.map((step, si) => {
     const outerId = nid();
     const tl = stepTimeline(step);
     // 같은 시작 시각끼리 묶음 (PowerPoint 구조: 클릭 → 시간 그룹 → 효과)
@@ -363,12 +364,20 @@ function timingXml(slide, spidOf) {
       return `<p:par><p:cTn id="${gid}" fill="hold"><p:stCondLst><p:cond delay="${g.at}"/></p:stCondLst><p:childTnLst>${effs}</p:childTnLst></p:cTn></p:par>`;
     }).join('');
     const first = step[0];
-    const cond = first.start === 'click' ? '<p:cond delay="indefinite"/>' : '<p:cond delay="indefinite"/><p:cond evt="onBegin" delay="0"><p:tn val="2"/></p:cond>';
+    const cond = interactive ? (si === 0 ? '<p:cond delay="0"/>' : '<p:cond delay="indefinite"/>') : first.start === 'click' ? '<p:cond delay="indefinite"/>' : '<p:cond delay="indefinite"/><p:cond evt="onBegin" delay="0"><p:tn val="2"/></p:cond>';
     return `<p:par><p:cTn id="${outerId}" fill="hold"><p:stCondLst>${cond}</p:stCondLst><p:childTnLst>${inner}</p:childTnLst></p:cTn></p:par>`;
   }).join('');
-  const byPara = new Set(steps.flat().filter((a) => a.para != null).map((a) => spidOf(a.obj)));
-  const blds = [...new Set(steps.flat().filter((a) => a.cls !== 'path' || byPara.has(spidOf(a.obj))).map((a) => spidOf(a.obj)).filter(Boolean))].map((spid) => `<p:bldP spid="${spid}" grpId="0"${byPara.has(spid) ? ' build="p"' : ''}/>`).join('');
-  return `<p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst><p:seq concurrent="1" nextAc="seek"><p:cTn id="2" dur="indefinite" nodeType="mainSeq"><p:childTnLst>${clickPars}</p:childTnLst></p:cTn><p:prevCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst><p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst></p:seq></p:childTnLst></p:cTn></p:par></p:tnLst>${blds ? `<p:bldLst>${blds}</p:bldLst>` : ''}</p:timing>`;
+  const clickPars = seqPars(steps, false);
+  // 트리거: 개체를 누르면 시작하는 interactiveSeq (PowerPoint [트리거 › 클릭할 때])
+  const trigSeqs = trigs.map(([t, tsteps]) => {
+    const on = `<p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="${spidOf(t)}"/></p:tgtEl></p:cond>`;
+    const id = nid();
+    return `<p:seq concurrent="1" nextAc="seek"><p:cTn id="${id}" restart="whenNotActive" fill="hold" evtFilter="cancelBubble" nodeType="interactiveSeq"><p:stCondLst>${on}</p:stCondLst><p:endSync evt="end" delay="0"><p:rtn val="all"/></p:endSync><p:childTnLst>${seqPars(tsteps, true)}</p:childTnLst></p:cTn><p:nextCondLst>${on}</p:nextCondLst></p:seq>`;
+  }).join('');
+  const allSteps = [...steps, ...trigs.flatMap(([, t]) => t)];
+  const byPara = new Set(allSteps.flat().filter((a) => a.para != null).map((a) => spidOf(a.obj)));
+  const blds = [...new Set(allSteps.flat().filter((a) => a.cls !== 'path' || byPara.has(spidOf(a.obj))).map((a) => spidOf(a.obj)).filter(Boolean))].map((spid) => `<p:bldP spid="${spid}" grpId="0"${byPara.has(spid) ? ' build="p"' : ''}/>`).join('');
+  return `<p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst>${clickPars ? `<p:seq concurrent="1" nextAc="seek"><p:cTn id="2" dur="indefinite" nodeType="mainSeq"><p:childTnLst>${clickPars}</p:childTnLst></p:cTn><p:prevCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst><p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst></p:seq>` : ''}${trigSeqs}</p:childTnLst></p:cTn></p:par></p:tnLst>${blds ? `<p:bldLst>${blds}</p:bldLst>` : ''}</p:timing>`;
 }
 
 const TRANS_XML = {
@@ -550,6 +559,12 @@ export function pptxEntries(pres, opts = {}) {
       add,
       image: (id) => { const p = putMedia(id); return p ? add(REL('image'), `../media/${p.split('/').pop()}`) : null; },
       link: (url) => add(REL('hyperlink'), url, true),
+      /** a:hlinkClick — '#slideN' 은 슬라이드 관계 + hlinksldjump (PowerPoint 의 '이 문서의 슬라이드') */
+      hlink: (url) => {
+        const m = /^#slide(\d+)$/.exec(url);
+        if (m && Number(m[1]) >= 1 && Number(m[1]) <= pres.slides.length) return `<a:hlinkClick r:id="${add(REL('slide'), `slide${m[1]}.xml`)}" action="ppaction://hlinksldjump"/>`;
+        return `<a:hlinkClick r:id="${add(REL('hyperlink'), url, true)}"/>`;
+      },
       /** 비디오/오디오 파트: a:videoFile r:link + p14:media r:embed 두 관계 */
       av: (id, kind) => { const p = putMedia(id); if (!p) return null; const t = `../media/${p.split('/').pop()}`; return { link: add(REL(kind), t), embed: add('http://schemas.microsoft.com/office/2007/relationships/media', t) }; },
       chart: (ch) => {
@@ -657,6 +672,7 @@ export function pptxEntries(pres, opts = {}) {
     rels.add(REL('slideLayout'), `../slideLayouts/slideLayout${slideLayouts[si].index}.xml`);
     const phIdx = phAssign(slide.objects);
     const spid = new Map();
+    const zooms = {};
     let id = 2;
     const parts = [];
     // 그룹: 같은 grp 의 개체를 p:grpSp 로 묶음 (처음 나온 위치에)
@@ -677,6 +693,15 @@ export function pptxEntries(pres, opts = {}) {
       done.add(o.id);
       const oid = id++;
       spid.set(o.id, oid);
+      if (o.type === 'zoom') {
+        // 확대/축소: 대상 슬라이드로 가는 링크가 걸린 사각형 (PowerPoint 이전 버전의 대체 그림과 같은 동작) + 확장에 설정
+        const ti = pres.slides.findIndex((x) => x.id === o.zoom?.slide);
+        zooms[oid] = { ...o.zoom, slide: ti };
+        const title = ti >= 0 ? slideTitle(pres.slides[ti]) || `슬라이드 ${ti + 1}` : '';
+        const t = textBody([{ ...para(), align: 'ctr', runs: [{ t: title, size: 14, color: '#404040' }] }], { anchor: 'ctr' });
+        parts.push(objXml({ ...o, type: 'shape', shape: 'rect', fill: { type: 'solid', color: '#F2F2F2' }, line: { color: '#A6A6A6', width: 1, dash: 'solid' }, text: t, link: ti >= 0 ? `#slide${ti + 1}` : undefined, name: o.name ?? `확대/축소 ${oid}` }, oid, rels, phIdx, pres.theme));
+        continue;
+      }
       parts.push(objXml(o, oid, rels, phIdx, pres.theme));
     }
     // 바닥글 (슬라이드 번호 · 날짜 · 글)
@@ -705,7 +730,7 @@ export function pptxEntries(pres, opts = {}) {
       override(cpath, 'application/vnd.openxmlformats-officedocument.presentationml.comments+xml');
       rels.add(REL('comments'), `../comments/comment${n}.xml`);
     }
-    const meta = { comments: slide.comments?.length ? slide.comments : undefined, layout: slide.layout, transition: slide.transition ?? null, anims: slide.anims ?? [], hideDecor: slide.hideDecor ?? false, section: slide.section ?? null, bgObjects: slide.bgObjects ? true : undefined, ids: Object.fromEntries([...spid].filter(([k]) => !String(k).startsWith('grp:')).map(([k, v]) => [v, k])) };
+    const meta = { comments: slide.comments?.length ? slide.comments : undefined, layout: slide.layout, transition: slide.transition ?? null, anims: slide.anims ?? [], hideDecor: slide.hideDecor ?? false, section: slide.section ?? null, zooms: Object.keys(zooms).length ? zooms : undefined, bgObjects: slide.bgObjects ? true : undefined, ids: Object.fromEntries([...spid].filter(([k]) => !String(k).startsWith('grp:')).map(([k, v]) => [v, k])) };
     const ext = `<p:extLst><p:ext uri="${WP_EXT_URI}"><wp:slide xmlns:wp="${WP_NS}" json="${esc(JSON.stringify(meta))}"/></p:ext></p:extLst>`;
     const timing = timingXml(slide, (oid) => spid.get(oid));
     files[`ppt/slides/slide${n}.xml`] = `${XML_HEAD}<p:sld xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}"${slide.hidden ? ' show="0"' : ''}><p:cSld>${bg}<p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>${parts.join('')}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>${transitionXml(slide.transition)}${timing}${ext}</p:sld>`;
@@ -1157,8 +1182,15 @@ export function readPptx(bytes) {
     media: (rid) => { const r = relsOf(part).get(rid); return r ? loadMedia(r.target) : null; },
     rel: (rid) => (rid ? relsOf(part).get(rid) ?? null : null),
     avMedia: (path) => loadMedia(path, true),
-    links: (rid) => { const r = relsOf(part).get(rid); return r?.external ? r.target : null; },
+    links: (rid) => {
+      const r = relsOf(part).get(rid);
+      if (r?.external) return r.target;
+      // 슬라이드로 가는 링크 (ppaction://hlinksldjump) → '#slideN'
+      if (r?.type?.endsWith('/slide')) { const n = slideOrder.indexOf(r.target); return n >= 0 ? `#slide${n + 1}` : null; }
+      return null;
+    },
   });
+  const slideOrder = descendants(child(presXml, 'sldIdLst'), 'sldId').map((sid) => presRels.get(rid(sid))?.target).filter((t) => t && has(t));
   const readClrMap = (el) => (el ? Object.fromEntries(Object.entries(el.attrs)) : null);
   const phKey = (sp) => { const ph = descendants(child(sp, 'nvSpPr') ?? child(sp, 'nvPicPr') ?? child(sp, 'nvGraphicFramePr'), 'ph')[0]; return ph ? { type: attr(ph, 'type') ?? 'body', idx: attr(ph, 'idx') ?? null } : null; };
   const phList = (spTree) => (spTree?.children ?? []).filter((c) => ['sp', 'pic'].includes(c.name)).map((sp) => ({ key: phKey(sp), sp })).filter((x) => x.key);
@@ -1510,6 +1542,7 @@ export function readPptx(bytes) {
 
   const slides = [];
   const slideByRid = new Map();
+  const pendingZooms = [];
   for (const sid of descendants(child(presXml, 'sldIdLst'), 'sldId')) {
     const rel = presRels.get(rid(sid));
     if (!rel || !has(rel.target)) continue;
@@ -1585,8 +1618,17 @@ export function readPptx(bytes) {
     if (meta) {
       slide.transition = meta.transition ?? null;
       const map = new Map(Object.entries(meta.ids ?? {}).map(([sp, oldId]) => [oldId, spidToObj.get(sp)]));
-      slide.anims = (meta.anims ?? []).map((a) => ({ ...a, obj: map.get(a.obj) })).filter((a) => a.obj);
+      slide.anims = (meta.anims ?? []).map((a) => ({ ...a, obj: map.get(a.obj), trigger: a.trigger ? map.get(a.trigger) : undefined })).filter((a) => a.obj);
+      for (const a of slide.anims) if (a.trigger === undefined) delete a.trigger;
       if (meta.section) slide.section = meta.section;
+      // 확대/축소 개체 (대상 슬라이드는 모두 읽은 뒤 id 로 바꿈)
+      for (const [sp, z] of Object.entries(meta.zooms ?? {})) {
+        const o = objects.find((q) => q.id === spidToObj.get(sp));
+        if (!o) continue;
+        for (const k of ['shape', 'fill', 'line', 'text', 'link', 'adj']) delete o[k];
+        Object.assign(o, { type: 'zoom', zoom: { ...z } });
+        pendingZooms.push(o);
+      }
     } else {
       slide.transition = readTransition(x);
       slide.anims = readTiming(x, spidToObj);
@@ -1599,6 +1641,8 @@ export function readPptx(bytes) {
     slides.push(slide);
     slideByRid.set(rid(sid), slide.id);
   }
+
+  for (const o of pendingZooms) o.zoom.slide = slides[o.zoom.slide]?.id ?? null;
 
   /** 메모 읽기 (이전 형식 cmLst + commentAuthors / 새 형식 modernComment + authors) */
   function readComments(slidePath) {
@@ -1644,10 +1688,17 @@ export function readPptx(bytes) {
   function readTiming(x, spidToObj) {
     const timing = child(x, 'timing');
     if (!timing) return [];
-    const main = descendants(timing, 'cTn').find((c) => attr(c, 'nodeType') === 'mainSeq');
-    if (!main) return [];
+    // 기본 순서 (mainSeq) + 트리거 순서 (interactiveSeq: 누를 개체 = stCondLst 의 onClick spTgt)
+    const seqs = descendants(timing, 'cTn').filter((c) => ['mainSeq', 'interactiveSeq'].includes(attr(c, 'nodeType')));
     const anims = [];
-    for (const eff of descendants(main, 'cTn').filter((c) => attr(c, 'presetClass'))) {
+    for (const seq of seqs) {
+    let trigger = null;
+    if (attr(seq, 'nodeType') === 'interactiveSeq') {
+      const tg = descendants(child(seq, 'stCondLst'), 'spTgt')[0];
+      trigger = spidToObj.get(attr(tg, 'spid'));
+      if (!trigger) continue;
+    }
+    for (const eff of descendants(seq, 'cTn').filter((c) => attr(c, 'presetClass'))) {
       const cls = attr(eff, 'presetClass');
       if (!['entr', 'exit', 'emph', 'path'].includes(cls)) continue;
       const spTgt = descendants(eff, 'spTgt')[0];
@@ -1664,6 +1715,7 @@ export function readPptx(bytes) {
         a.motion = (attr(mo, 'path') ?? 'M 0 0 L 0.25 0').replace(/\s*[Ee]\s*$/, '').trim();
         if (!durs.length) a.dur = 2;
       }
+      if (trigger) a.trigger = trigger;
       // 단락별 효과 (txEl pRg): 같은 개체 · 같은 효과가 이어지면 하나로 묶고 byPara
       const isPara = !!descendants(spTgt, 'pRg')[0];
       if (isPara) {
@@ -1671,8 +1723,9 @@ export function readPptx(bytes) {
         if (prev) continue;
         a.byPara = true;
       }
-      if (anims.some((b) => b.obj === obj && b.cls === cls && b.effect === effect && b.start !== 'click' && a.start !== 'click')) continue;
+      if (anims.some((b) => b.obj === obj && b.cls === cls && b.effect === effect && b.start !== 'click' && a.start !== 'click' && (b.trigger ?? null) === (a.trigger ?? null))) continue;
       anims.push(a);
+    }
     }
     return anims;
   }

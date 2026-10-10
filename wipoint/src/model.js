@@ -493,9 +493,11 @@ export function addAnim(slide, objId, cls, effect, opts = {}) {
   return a;
 }
 /** 슬라이드 쇼 단계: [[anim...]] — 클릭 한 번에 실행할 묶음 (with/after 는 앞 묶음에 붙음) */
-export function animSteps(slide) {
+export function animSteps(slide, trigger = null) {
   const steps = [];
   for (const a0 of slide.anims ?? []) {
+    // 트리거 애니메이션 (a.trigger = 누를 개체 id) 은 기본 순서에서 빠지고 그 개체를 누를 때 재생
+    if ((a0.trigger ?? null) !== trigger) continue;
     const o = slide.objects.find((x) => x.id === a0.obj);
     if (!o) continue;
     // 단락별 (PowerPoint [효과 옵션 › 단락별]): 글이 있는 단락마다 하나씩
@@ -506,6 +508,16 @@ export function animSteps(slide) {
     }
   }
   return steps;
+}
+/** 트리거 개체 id → 그 개체를 누를 때 재생할 묶음들 */
+export function triggerSteps(slide) {
+  const m = new Map();
+  for (const t of new Set((slide.anims ?? []).map((a) => a.trigger).filter(Boolean))) {
+    const steps = animSteps(slide, t);
+    // 한 번 누르면 첫 묶음부터 '다음에/함께' 로 이어진 것까지 한꺼번에 — PowerPoint 와 같음
+    if (steps.length) m.set(t, steps);
+  }
+  return m;
 }
 /** 각 애니메이션의 시작 시각(초) — 한 묶음 안에서 with 는 앞과 동시, after 는 앞이 끝난 뒤 */
 export function stepTimeline(step) {

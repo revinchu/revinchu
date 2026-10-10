@@ -162,6 +162,7 @@ export function smartArt(kind, items, rect, { multicolor = true } = {}) {
   }
   const g = uid('g');
   for (const o of out) { o.grp = g; o.smart = kind; }
+  if (out[0]) { out[0].smartItems = list; out[0].smartMulti = multicolor; }
   return out;
 }
 

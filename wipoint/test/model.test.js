@@ -219,3 +219,27 @@ test('렌더링: 글머리 번호 · 빈 개체 틀 안내 · 장식', () => {
   assert.equal(themeDecor({ ...THEMES[2] }, 'blank', { w: 1280, h: 720 }).length, 0);
   assert.ok(themeDecor({ ...THEMES[2] }, 'title', { w: 1280, h: 720 }).length > 0);
 });
+
+test('배경 제거: 가장자리 배경색은 투명, 가운데 피사체는 남김', async () => {
+  const { backgroundMask, applyMask } = await import('../src/bgremove.js');
+  const w = 40; const h = 30;
+  const data = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = (y * w + x) * 4;
+    const inside = x >= 12 && x < 28 && y >= 8 && y < 22;
+    data.set(inside ? [200, 30, 30, 255] : [250, 250, 248, 255], i);
+  }
+  // 피사체 안에 배경과 같은 색 구멍 (가장자리와 이어지지 않으므로 남아야 함)
+  data.set([250, 250, 248, 255], (15 * w + 20) * 4);
+  const a = backgroundMask(data, w, h);
+  assert.equal(a[0], 0);
+  assert.equal(a[15 * w + 15], 255);
+  assert.equal(a[15 * w + 20], 255);
+  // [제거할 영역 표시] 로 구멍도 지움
+  const b = backgroundMask(data, w, h, { remove: [[20, 15]] });
+  assert.equal(b[15 * w + 20], 0);
+  // [보관할 영역 표시] 는 배경색이어도 남김
+  const c = backgroundMask(data, w, h, { keep: [[2, 2]], brush: 1 });
+  assert.equal(c[2 * w + 2], 255);
+  assert.equal(applyMask(data, a)[3], 0);
+});

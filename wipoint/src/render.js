@@ -302,6 +302,17 @@ function tableHtml(theme, o, opts) {
   return `<table class="tbl" style="position:absolute;left:0;top:0;width:${f(o.cols.reduce((a, b) => a + b, 0))}px;border-collapse:collapse;table-layout:fixed"><colgroup>${cols}</colgroup>${rows}</table>`;
 }
 
+/** 슬라이드 확대/축소: 대상 슬라이드 축소판 (쇼에서 누르면 그 슬라이드로 확대) */
+function zoomHtml(o, opts) {
+  const pres = opts.pres;
+  const target = pres?.slides.find((x) => x.id === o.zoom?.slide);
+  const border = o.zoom?.border === false ? '' : 'box-shadow:0 0 0 1px rgba(0,0,0,.25);';
+  if (!target || (opts.zoomDepth ?? 0) > 0) return `<div class="zm" style="position:absolute;inset:0;background:#f2f2f2;${border}"></div>`;
+  const { w, h } = pres.size;
+  const idx = pres.slides.indexOf(target);
+  return `<div class="zm" data-zoom="${idx + 1}" style="position:absolute;inset:0;overflow:hidden;${border}"><div style="width:${f(w)}px;height:${f(h)}px;transform:scale(${f(o.w / w)},${f(o.h / h)});transform-origin:0 0;pointer-events:none">${slideHtml(pres, target, { index: idx, zoomDepth: 1 })}</div></div>`;
+}
+
 /** 개체 하나 → 위치 · 회전이 들어간 div */
 export function objectHtml(theme, o, media, opts = {}) {
   let inner;
@@ -309,6 +320,7 @@ export function objectHtml(theme, o, media, opts = {}) {
   else if (o.type === 'table') inner = tableHtml(theme, o, opts);
   else if (o.type === 'chart') inner = chartSvg(o.chart, o.w, o.h, theme, { font: theme.fonts.minor });
   else if (o.type === 'media' || o.type === 'video') inner = mediaHtml(o, media, opts);
+  else if (o.type === 'zoom') inner = zoomHtml(o, opts);
   else inner = shapeHtml(theme, o, media, opts);
   const tr = [];
   if (o.rot) tr.push(`rotate(${f(o.rot)}deg)`);
@@ -375,7 +387,7 @@ export function slideHtml(pres, slide, opts = {}) {
   for (const o of slide.objects) {
     if (opts.skipIds?.has(o.id) || o.hidden) continue;
     if (!opts.prompt && o.ph && (o.type === 'image' ? !o.media : isEmptyText(o.text))) continue;
-    html += objectHtml(theme, o, media, o.id === opts.editId ? { ...opts, editable: true, prompt: false } : opts);
+    html += objectHtml(theme, o, media, o.id === opts.editId ? { ...opts, editable: true, prompt: false } : o.type === 'zoom' ? { ...opts, pres } : opts);
   }
   html += footerHtml(pres, slide, opts.index ?? 0, opts);
   const dark = isDark(bg.startsWith('#') || bg.startsWith('rgb') ? bg : '#ffffff');

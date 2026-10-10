@@ -1,8 +1,9 @@
 // 슬라이드 쇼: 전환 효과 · 클릭 단계별 애니메이션 · 발표자 보기 · 펜/레이저 · 예행 연습
 import { S, change, emit } from './state.js';
+import { uid } from './model.js';
 import { slideHtml, SLIDE_CSS, escHtml } from './render.js';
-import { animSteps, stepTimeline, slideTitle, motionPoints, morphPairs } from './model.js';
-import { el, openMenu, toast } from './ui.js';
+import { animSteps, triggerSteps, stepTimeline, slideTitle, motionPoints, morphPairs } from './model.js';
+import { el, openMenu, toast, openDialog as import_openDialog } from './ui.js';
 
 let show = null; // 현재 쇼 상태
 
@@ -56,6 +57,8 @@ function onFsChange() { if (show && !document.fullscreenElement && !show.opts.wi
 export function endShow() {
   if (!show) return;
   const s = show;
+  const ink = [...(s.strokes ?? new Map())].filter(([, l]) => l.some((st) => st.pts.length > 1));
+  if (ink.length && !s.viewOnlyInk) setTimeout(() => keepInkDialog(ink), 50);
   clearTimers();
   clearInterval(s.clock);
   if (s.opts.rehearse) { recordTime(); saveRehearsal(s.times); }
@@ -84,6 +87,7 @@ function fit() {
   }
   show.ink.width = v.width;
   show.ink.height = v.height;
+  redrawInk();
   if (show.presenterEls) updatePresenter();
 }
 
@@ -97,9 +101,17 @@ function slideState(idx, stepsDone) {
   const key = (a) => (a.para != null ? `${a.obj}#${a.para}` : a.obj);
   const first = new Map();
   for (const st of steps) for (const a of st) if (!first.has(key(a))) first.set(key(a), a);
+  // 트리거 애니메이션: 처음 효과가 나타내기면 숨김, 이미 누른 트리거 (show.trigDone) 는 끝난 상태
+  const trig = triggerSteps(slide);
+  const done = [];
+  for (const [t, tsteps] of trig) {
+    for (const st of tsteps) for (const a of st) if (!first.has(key(a))) first.set(key(a), a);
+    const n = show?.order?.[show.pos] === idx ? (show.trigDone?.get(t) ?? 0) : 0;
+    done.push(...tsteps.slice(0, n));
+  }
   for (const [k, a] of first) if (a.cls === 'entr') (a.para != null ? paraHide : hide).add(k);
-  for (let k = 0; k < Math.min(stepsDone, steps.length); k++) {
-    for (const a of steps[k]) {
+  for (const st of [...steps.slice(0, Math.min(stepsDone, steps.length)), ...done]) {
+    for (const a of st) {
       const set = a.para != null ? paraHide : hide;
       if (a.cls === 'entr') set.delete(key(a));
       if (a.cls === 'exit') set.add(key(a));
@@ -115,6 +127,7 @@ function makeSlideEl(idx, stepsDone) {
   const { w, h } = S.pres.size;
   for (const k of paraHide) { const [id, pi] = k.split('#'); const p = d.querySelectorAll(`.ob[data-id="${CSS.escape(id)}"] .p`)[Number(pi)]; if (p) p.style.visibility = 'hidden'; }
   for (const [id, [fx, fy]] of moved) { const ob = d.querySelector(`.ob[data-id="${CSS.escape(id)}"]`); if (ob) ob.style.translate = `${fx * w}px ${fy * h}px`; }
+  for (const t of triggerSteps(slide).keys()) d.querySelector(`.ob[data-id="${CSS.escape(t)}"]`)?.classList.add('trig');
   Object.assign(d.style, { width: `${w}px`, height: `${h}px` });
   return d;
 }
@@ -127,8 +140,10 @@ function enterSlide(pos, { transition = true, stepsDone = 0, back = false } = {}
   const slide = S.pres.slides[idx];
   show.steps = animSteps(slide);
   show.step = Math.min(stepsDone, show.steps.length);
+  show.triggers = triggerSteps(slide);
+  show.trigDone = new Map();
   show.slideStart = Date.now();
-  clearInk();
+  clearInk(false);
   const old = show.stage.querySelector('.show-slide');
   const neu = makeSlideEl(idx, show.step);
   show.stage.append(neu);
@@ -309,12 +324,48 @@ function playStep() {
   if (show.presenterEls) updatePresenter();
 }
 
+// ───────────── 확대/축소 ─────────────
+function zoomInto(zo) {
+  const idx = S.pres.slides.findIndex((x) => x.id === zo.zoom.slide);
+  const pos = show.order.indexOf(idx);
+  if (pos < 0) return;
+  // 구역 확대/축소: 다음 구역 시작 전까지 (쇼 순서 기준)
+  let end = pos;
+  if (zo.zoom.section) while (end + 1 < show.order.length && !S.pres.slides[show.order[end + 1]].section) end++;
+  const from = show.pos;
+  show.zoomBack = zo.zoom.ret !== false ? { pos: from, end, rect: zo } : null;
+  enterSlide(pos, { transition: false });
+  zoomAnim(show.stage.querySelector('.show-slide:last-child'), zo, false);
+}
+/** 축소판 사각형 ⇄ 전체 화면 (Web Animations) */
+function zoomAnim(elm, r, out) {
+  if (!elm) return;
+  const { w, h } = S.pres.size;
+  const base = elm.style.transform;
+  const small = `${base} translate(${r.x}px, ${r.y}px) scale(${r.w / w}, ${r.h / h})`;
+  const kf = [{ transform: small, opacity: 0.6 }, { transform: base, opacity: 1 }];
+  elm.style.transformOrigin = '0 0';
+  elm.animate(out ? [...kf].reverse() : kf, { duration: 700, easing: 'ease-in-out' });
+}
+function zoomReturn() {
+  const zb = show.zoomBack;
+  show.zoomBack = null;
+  const cur = show.stage.querySelector('.show-slide:last-child');
+  const done = () => { if (!show) return; enterSlide(zb.pos, { transition: false, stepsDone: 999, back: true }); };
+  if (!cur) { done(); return; }
+  const { w, h } = S.pres.size;
+  const base = cur.style.transform;
+  cur.style.transformOrigin = '0 0';
+  cur.animate([{ transform: base, opacity: 1 }, { transform: `${base} translate(${zb.rect.x}px, ${zb.rect.y}px) scale(${zb.rect.w / w}, ${zb.rect.h / h})`, opacity: 0.4 }], { duration: 600, easing: 'ease-in-out', fill: 'forwards' }).finished.then(done, done);
+}
+
 // ───────────── 이동 ─────────────
 export function next() {
   if (!show) return;
   if (show.ended) { endShow(); return; }
   if (show.blank) { setBlank(null); return; }
   if (show.step < show.steps.length) { playStep(); return; }
+  if (show.zoomBack && show.pos >= show.zoomBack.end) { zoomReturn(); return; }
   if (show.pos + 1 < show.order.length) { enterSlide(show.pos + 1); return; }
   if (show.setup.loop) { enterSlide(0); return; }
   endScreen();
@@ -385,6 +436,23 @@ function onClick(e) {
   if (e.target.closest('video')) return;
   const au = e.target.closest('.av-audio')?.querySelector('audio');
   if (au) { if (au.paused) au.play().catch(() => {}); else au.pause(); return; }
+  // 확대/축소: 축소판에서 대상 슬라이드로 커지며 이동, 다 본 뒤 (ret) 다시 축소판 슬라이드로
+  const zEl = e.target.closest('.show-slide:last-child .ob[data-id]');
+  const zo = zEl && S.pres.slides[show.order[show.pos]].objects.find((o) => o.id === zEl.dataset.id && o.type === 'zoom');
+  if (zo) { zoomInto(zo); return; }
+  // 트리거: 누른 개체에 걸린 애니메이션 묶음을 차례로 (모두 끝나면 다시 처음부터)
+  const tob = e.target.closest('.show-slide:last-child .ob[data-id]');
+  const tsteps = tob && show.triggers?.get(tob.dataset.id);
+  if (tsteps) {
+    const t = tob.dataset.id;
+    let n = show.trigDone.get(t) ?? 0;
+    if (n >= tsteps.length) { n = 0; show.trigDone.set(t, 0); rerender(); }
+    show.trigDone.set(t, n + 1);
+    const slide = S.pres.slides[show.order[show.pos]];
+    playStepOn(show.stage.querySelector('.show-slide:last-child'), tsteps[n], slide);
+    syncAudience();
+    return;
+  }
   const link = e.target.closest('a.lnk, [data-link]');
   if (link) {
     const href = link.getAttribute('href') ?? link.dataset.link;
@@ -420,6 +488,32 @@ function slideList() {
   openMenu({ x: r.left + r.width / 2 - 150, y: r.top + 40 }, show.order.map((n, pos) => ({ label: `${n + 1}. ${slideTitle(S.pres.slides[n]) || '(제목 없음)'}`, checked: pos === show.pos, action: () => goTo(pos) })), { scroll: true, minWidth: 300 });
 }
 
+/** 쇼를 마칠 때: 잉크 주석을 슬라이드에 자유형 도형으로 남길지 묻기 (PowerPoint 와 같음) */
+function keepInkDialog(ink) {
+  if (S.viewOnly) return;
+  import_openDialog({
+    title: 'Microsoft PowerPoint',
+    body: el('p', {}, '잉크 주석을 유지하시겠습니까?'),
+    buttons: [{ label: '유지', primary: true, action: () => {
+      change(() => {
+        for (const [idx, list] of ink) {
+          const slide = S.pres.slides[idx];
+          if (!slide) continue;
+          for (const st of list) {
+            if (st.pts.length < 2) continue;
+            const xs = st.pts.map((q) => q[0]);
+            const ys = st.pts.map((q) => q[1]);
+            const x = Math.min(...xs); const y = Math.min(...ys);
+            const w = Math.max(1, Math.max(...xs) - x); const h = Math.max(1, Math.max(...ys) - y);
+            const cmds = st.pts.map(([px, py], i) => [i ? 'L' : 'M', Math.round((px - x) * 10) / 10, Math.round((py - y) * 10) / 10]);
+            slide.objects.push({ id: uid(), type: 'shape', shape: 'rect', name: '잉크', ink: true, x, y, w, h, rot: 0, fill: null, line: { color: st.color, width: Math.max(1, st.width * 1.5), dash: 'solid' }, path: [{ w, h, cmds }], openPath: true });
+          }
+        }
+      }, { scope: 'all' });
+    } }, { label: '취소' }],
+  });
+}
+
 // ───────────── 펜 · 레이저 ─────────────
 function setTool(t) {
   show.tool = t;
@@ -427,8 +521,42 @@ function setTool(t) {
   show.root.classList.toggle('laser-on', t === 'laser');
   show.laser.hidden = t !== 'laser';
 }
-function clearInk() { const c = show?.ink; if (c) c.getContext('2d').clearRect(0, 0, c.width, c.height); }
+function clearInk(forget = true) {
+  const c = show?.ink;
+  if (c) c.getContext('2d').clearRect(0, 0, c.width, c.height);
+  if (forget && show) show.strokes?.delete(show.order[show.pos]);
+}
+/** 화면 좌표 ↔ 슬라이드 좌표 */
+function toSlidePt(x, y) {
+  const r = show.view.getBoundingClientRect();
+  const { w, h } = S.pres.size;
+  const sc = show.scale || 1;
+  return [(x - r.left - (r.width - w * sc) / 2) / sc, (y - r.top - (r.height - h * sc) / 2) / sc];
+}
+/** 이 슬라이드에 남긴 잉크 다시 그리기 (슬라이드를 오갈 때) */
+function redrawInk() {
+  if (!show) return;
+  const c = show.ink;
+  const g = c.getContext('2d');
+  g.clearRect(0, 0, c.width, c.height);
+  const list = show.strokes?.get(show.order[show.pos]) ?? [];
+  const r = show.view.getBoundingClientRect();
+  const { w, h } = S.pres.size;
+  const sc = show.scale || 1;
+  const ox = (r.width - w * sc) / 2;
+  const oy = (r.height - h * sc) / 2;
+  for (const st of list) {
+    g.strokeStyle = st.color;
+    g.lineWidth = st.width * sc;
+    g.lineCap = 'round';
+    g.lineJoin = 'round';
+    g.beginPath();
+    st.pts.forEach(([x, y], i) => (i ? g.lineTo(ox + x * sc, oy + y * sc) : g.moveTo(ox + x * sc, oy + y * sc)));
+    g.stroke();
+  }
+}
 let drawing = null;
+let stroke = null;
 function onPointerMove(e) {
   if (!show) return;
   show.root.classList.remove('idle');
@@ -440,8 +568,17 @@ function onPointerMove(e) {
     if (e.buttons === 1) {
       const ctx = show.ink.getContext('2d');
       const p = [e.clientX - r.left, e.clientY - r.top];
+      // 슬라이드 좌표로도 기록 (쇼를 마칠 때 잉크를 도형으로 남길 수 있게)
+      if (!stroke) {
+        stroke = { color: show.penColor ?? '#E81123', width: 3 / (show.scale || 1), pts: [] };
+        show.strokes ??= new Map();
+        const key = show.order[show.pos];
+        if (!show.strokes.has(key)) show.strokes.set(key, []);
+        show.strokes.get(key).push(stroke);
+      }
+      stroke.pts.push(toSlidePt(e.clientX, e.clientY));
       if (drawing) {
-        ctx.strokeStyle = '#e81123';
+        ctx.strokeStyle = show.penColor ?? '#e81123';
         ctx.lineWidth = 3;
         ctx.lineCap = 'round';
         ctx.beginPath();
@@ -450,7 +587,7 @@ function onPointerMove(e) {
         ctx.stroke();
       }
       drawing = p;
-    } else drawing = null;
+    } else { drawing = null; stroke = null; }
   }
 }
 

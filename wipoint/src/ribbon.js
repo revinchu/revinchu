@@ -56,7 +56,7 @@ const INSERT = { id: 'insert', label: '삽입', groups: [
   { label: '표', items: [L(null, 'table', '표', { menu: 'tableMenu' })] },
   { label: '이미지', items: [L('insertPicture', 'picture', '그림'), L('screenshot', 'crop', '스크린샷')] },
   { label: '일러스트레이션', items: [L(null, 'shapes', '도형', { menu: 'shapesMenu' }), L('insertIcons', 'icons', '아이콘'), L('insertSmartArt', 'convertSmart', 'SmartArt'), L(null, 'chartColumn', '차트', { menu: 'chartMenu' })] },
-  { label: '링크', items: [L('hyperlink', 'link', '링크')] },
+  { label: '링크', items: [L(null, 'zoomIn', '확대/축소', { menu: 'zoomMenu' }), L('hyperlink', 'link', '링크')] },
   { label: '미디어', items: [L('insertVideo', 'video', '비디오'), L('insertAudio', 'audio', '오디오')] },
   { label: '텍스트', items: [L('drawTextbox', 'textbox', '텍스트 상자'), L('headerFooter', 'headerFooter', '머리글/바닥글'), L(null, 'wordart', 'WordArt', { menu: 'wordArtMenu' }), COL(M('insertDate', 'dateTime', '날짜 및 시간'), M('insertSlideNumber', 'slideNumber', '슬라이드 번호'))] },
   { label: '기호', items: [L('symbol', 'symbol', '기호')] },
@@ -78,7 +78,7 @@ const TRANS = { id: 'transitions', label: '전환', groups: [
 const ANIM = { id: 'animations', label: '애니메이션', groups: [
   { label: '미리 보기', items: [L('previewAnim', 'preview', '미리 보기')] },
   { label: '애니메이션', items: [G('animations', { wide: true }), L(null, 'animation', '효과 옵션', { menu: 'animOptionsMenu' })] },
-  { label: '고급 애니메이션', items: [L(null, 'newSlide', '애니메이션 추가', { menu: 'addAnimMenu' }), COL(M('animPane', 'animPane', '애니메이션 창', { on: 'animPane' }), M('removeAnim', 'cross', '애니메이션 제거'), M('animPainter', 'painter', '애니메이션 복사'))] },
+  { label: '고급 애니메이션', items: [L(null, 'newSlide', '애니메이션 추가', { menu: 'addAnimMenu' }), COL(M('animPane', 'animPane', '애니메이션 창', { on: 'animPane' }), M('removeAnim', 'cross', '애니메이션 제거'), M('animPainter', 'painter', '애니메이션 복사')), COL(M(null, 'select', '트리거', { menu: 'triggerMenu' }))] },
   { label: '타이밍', items: [{ t: 'animTiming' }] },
 ] };
 
@@ -116,7 +116,7 @@ const SHAPE_FMT = { id: 'shapeFormat', label: '도형 서식', context: 'shape',
   { label: '크기', items: [{ t: 'objSize' }], launcher: 'formatPaneShape' },
 ] };
 const PIC_FMT = { id: 'pictureFormat', label: '그림 서식', context: 'picture', groups: [
-  { label: '조정', items: [L(null, 'effects', '수정', { menu: 'pictureCorrectionsMenu' }), L(null, 'theme', '색', { menu: 'pictureColorMenu' }), COL(M('changePicture', 'picture', '그림 바꾸기'), M('resetPicture', 'resetSlide', '그림 원래대로'))] },
+  { label: '조정', items: [L('removeBackground', 'picture', '배경 제거'), L(null, 'effects', '수정', { menu: 'pictureCorrectionsMenu' }), L(null, 'theme', '색', { menu: 'pictureColorMenu' }), COL(M('changePicture', 'picture', '그림 바꾸기'), M('resetPicture', 'resetSlide', '그림 원래대로'))] },
   { label: '그림 스타일', items: [G('pictureStyles', { wide: true }), COL({ t: 'color', cmd: 'shapeOutline', icon: 'shapeOutline', label: '그림 테두리', title: '그림 테두리', menu: 'shapeOutlineMenu', bar: 'line' }, M(null, 'effects', '그림 효과', { menu: 'shapeEffectsMenu' }))], launcher: 'formatPaneShape' },
   { label: '접근성', items: [L('altText', 'info', '대체 텍스트')] },
   { label: '정렬', items: [COL(M('bringForward', 'bringForward', '앞으로 가져오기', { menu: 'bringMenu' }), M('sendBackward', 'sendBackward', '뒤로 보내기', { menu: 'sendMenu' }), M('selectionPane', 'selectionPane', '선택 창')), COL(M(null, 'align', '맞춤', { menu: 'alignMenu' }), M(null, 'group', '그룹', { menu: 'groupMenu' }), M(null, 'rotate', '회전', { menu: 'rotateMenu' }))] },
@@ -127,6 +127,12 @@ const MEDIA_TAB = { id: 'playback', label: '재생', context: 'media', groups: [
   { label: '편집', items: [L('mediaOptions', 'timer', '재생 옵션')] },
   { label: '정렬', items: [COL(M('bringForward', 'bringForward', '앞으로 가져오기', { menu: 'bringMenu' }), M('sendBackward', 'sendBackward', '뒤로 보내기', { menu: 'sendMenu' })), COL(M(null, 'align', '맞춤', { menu: 'alignMenu' }), M('altText', 'info', '대체 텍스트'))] },
   { label: '크기', items: [{ t: 'objSize' }] },
+] };
+const SMART_TAB = { id: 'smartDesign', label: 'SmartArt 디자인', context: 'smart', groups: [
+  { label: '그래픽 만들기', items: [L('smartAddShape', 'plus', '도형 추가'), L('smartTextPane', 'textbox', '텍스트 창')] },
+  { label: '레이아웃', items: [L(null, 'convertSmart', '레이아웃', { menu: 'smartLayoutMenu' })] },
+  { label: 'SmartArt 스타일', items: [L('smartColors', 'theme', '색 변경')] },
+  { label: '원래대로', items: [L('smartToShapes', 'shapes', '도형으로 변환')] },
 ] };
 const TABLE_DESIGN = { id: 'tableDesign', label: '테이블 디자인', context: 'table', groups: [
   { label: '표 스타일 옵션', items: [COL({ t: 'check', cmd: 'tblOpt', arg: 'firstRow', label: '머리글 행', on: 'tFirstRow' }, { t: 'check', cmd: 'tblOpt', arg: 'lastRow', label: '요약 행', on: 'tLastRow' }, { t: 'check', cmd: 'tblOpt', arg: 'banded', label: '줄무늬 행', on: 'tBanded' }), COL({ t: 'check', cmd: 'tblOpt', arg: 'firstCol', label: '첫째 열', on: 'tFirstCol' }, { t: 'check', cmd: 'tblOpt', arg: 'lastCol', label: '마지막 열', on: 'tLastCol' })] },
@@ -146,26 +152,27 @@ const CHART_DESIGN = { id: 'chartDesign', label: '차트 디자인', context: 'c
   { label: '종류', items: [L(null, 'chartBar', '차트 종류 변경', { menu: 'chartKindMenu' })] },
 ] };
 
-export const TABS = [HOME, INSERT, DESIGN, TRANS, ANIM, SHOW, REVIEW, VIEW, HELP, SHAPE_FMT, PIC_FMT, TABLE_DESIGN, TABLE_LAYOUT, CHART_DESIGN, MEDIA_TAB];
+export const TABS = [HOME, INSERT, DESIGN, TRANS, ANIM, SHOW, REVIEW, VIEW, HELP, SHAPE_FMT, PIC_FMT, TABLE_DESIGN, TABLE_LAYOUT, CHART_DESIGN, MEDIA_TAB, SMART_TAB];
 
 // ───────────── 키 팁 (Alt 누르기 → 글자) — PowerPoint 한국어판과 같은 글자 ─────────────
-const TAB_KT = { home: 'H', insert: 'N', design: 'G', transitions: 'K', animations: 'A', slideshow: 'S', review: 'R', view: 'W', help: 'Y2', playback: 'JN', shapeFormat: 'JD', pictureFormat: 'JP', tableDesign: 'JT', tableLayout: 'JL', chartDesign: 'JC' };
+const TAB_KT = { home: 'H', insert: 'N', design: 'G', transitions: 'K', animations: 'A', slideshow: 'S', review: 'R', view: 'W', help: 'Y2', playback: 'JN', smartDesign: 'JS', shapeFormat: 'JD', pictureFormat: 'JP', tableDesign: 'JT', tableLayout: 'JL', chartDesign: 'JC' };
 const ARRANGE_KT = { bringForward: 'AF', sendBackward: 'AE', selectionPane: 'AP', alignMenu: 'AA', groupMenu: 'AG', rotateMenu: 'AY' };
 const KT = {
   home: { paste: 'V', cut: 'X', copy: 'C', formatPainter: 'FP', newSlide: 'I', layoutMenu: 'L', resetSlide: 'RE', sectionMenu: 'T', font: 'FF', size: 'FS', growFont: 'FG', shrinkFont: 'FK', clearFormat: 'E', bold: '1', italic: '2', underline: '3', strike: '4', textShadow: '5', charSpacingMenu: '6', changeCaseMenu: '7', highlight: 'TC', fontColor: 'FC', bullets: 'U', numbering: 'N', indentLess: 'AO', indentMore: 'AI', lineSpacingMenu: 'K', alignLeft: 'AL', alignCenter: 'AC', alignRight: 'AR', alignJustify: 'AJ', textDirMenu: 'AD', textAnchorMenu: 'AT', shapesMini: 'SH', arrangeMenu: 'G', quickStylesMenu: 'Q', shapeFill: 'SF', shapeOutline: 'SO', shapeEffectsMenu: 'SE', find: 'FD', replace: 'RP', selectMenu: 'SL', 'launcher:fontDialog': 'FN', 'launcher:paragraphDialog': 'PG', 'launcher:formatPaneShape': 'DS' },
-  insert: { newSlide: 'I', tableMenu: 'T', insertPicture: 'P', screenshot: 'SC', shapesMenu: 'SH', insertIcons: 'Y1', insertSmartArt: 'M', chartMenu: 'C', hyperlink: 'IL', drawTextbox: 'X', headerFooter: 'H', wordArtMenu: 'W', insertDate: 'D', insertSlideNumber: 'SN', symbol: 'U', insertVideo: 'V', insertAudio: 'O' },
+  insert: { newSlide: 'I', tableMenu: 'T', insertPicture: 'P', screenshot: 'SC', shapesMenu: 'SH', insertIcons: 'Y1', insertSmartArt: 'M', chartMenu: 'C', hyperlink: 'IL', zoomMenu: 'ZM', drawTextbox: 'X', headerFooter: 'H', wordArtMenu: 'W', insertDate: 'D', insertSlideNumber: 'SN', symbol: 'U', insertVideo: 'V', insertAudio: 'O' },
   design: { themes: 'TH', themeColorsMenu: 'TC', themeFontsMenu: 'TF', bgStylesMenu: 'TB', slideSizeMenu: 'S', formatBg: 'G', designIdeas: 'D' },
   transitions: { previewTransition: 'P', transitions: 'T', transitionOptionsMenu: 'E', transTiming: 'D', applyTransitionAll: 'L' },
-  animations: { previewAnim: 'P', animations: 'S', animOptionsMenu: 'M', addAnimMenu: 'AA', animPane: 'C', removeAnim: 'X', animPainter: 'K', animTiming: 'T' },
+  animations: { previewAnim: 'P', animations: 'S', animOptionsMenu: 'M', addAnimMenu: 'AA', animPane: 'C', removeAnim: 'X', animPainter: 'K', triggerMenu: 'G', animTiming: 'T' },
   slideshow: { showFromStart: 'B', showFromCurrent: 'C', customShowMenu: 'W', setupShow: 'S', hideSlide: 'H', rehearse: 'T', presenterView: 'V' },
   review: { spellCheck: 'S', accessibility: 'A', wordCount: 'W', newComment: 'C', deleteComments: 'D', prevComment: 'V', nextComment: 'N', commentsPane: 'P' },
   view: { viewNormal: 'L', viewOutline: 'O', viewSorter: 'I', viewNotesPage: 'T', viewReading: 'D', toggleGrid: 'G', toggleGuides: 'U', toggleNotes: 'N', zoomDialog: 'Q', fitZoom: 'W', selectionPane: 'P' },
   help: { shortcuts: 'K', whatsNew: 'N', about: 'A' },
   shapeFormat: { shapesMini: 'SH', changeShapeMenu: 'E', drawTextbox: 'X', shapeStyles: 'K', shapeFill: 'SF', shapeOutline: 'SO', shapeEffectsMenu: 'SE', wordart: 'Q', objSize: 'H', 'launcher:formatPaneShape': 'DS', ...ARRANGE_KT },
-  pictureFormat: { pictureCorrectionsMenu: 'R', pictureColorMenu: 'I', changePicture: 'CP', resetPicture: 'Q', pictureStyles: 'K', shapeOutline: 'SO', shapeEffectsMenu: 'SE', altText: 'T', cropPicture: 'V', objSize: 'H', 'launcher:formatPaneShape': 'DS', ...ARRANGE_KT },
+  pictureFormat: { removeBackground: 'E', pictureCorrectionsMenu: 'R', pictureColorMenu: 'I', changePicture: 'CP', resetPicture: 'Q', pictureStyles: 'K', shapeOutline: 'SO', shapeEffectsMenu: 'SE', altText: 'T', cropPicture: 'V', objSize: 'H', 'launcher:formatPaneShape': 'DS', ...ARRANGE_KT },
   tableDesign: { 'tblOpt:firstRow': 'A', 'tblOpt:lastRow': 'T', 'tblOpt:banded': 'R', 'tblOpt:firstCol': 'C', 'tblOpt:lastCol': 'L', tableStyles: 'S', cellFill: 'H', cellBorderMenu: 'B' },
   tableLayout: { tblSelectMenu: 'K', tblDeleteMenu: 'D', tblRowAbove: 'A', tblRowBelow: 'BE', tblColLeft: 'L', tblColRight: 'R', tblMerge: 'M', tblSplit: 'P', tblEqualRows: 'HE', tblEqualCols: 'WE', alignLeft: 'AL', alignCenter: 'AC', alignRight: 'AR', anchorTop: 'AT', anchorMiddle: 'AV', anchorBottom: 'AB' },
   chartDesign: { chartElementsMenu: 'A', chartColorsMenu: 'C', chartData: 'E', chartKindMenu: 'T' },
+  smartDesign: { smartAddShape: 'A', smartTextPane: 'X', smartLayoutMenu: 'L', smartColors: 'C', smartToShapes: 'V' },
   playback: { previewMedia: 'P', mediaOptions: 'O', bringForward: 'AF', sendBackward: 'AE', alignMenu: 'AA', altText: 'T', objSize: 'H' },
 };
 export const itemKey = (it) => (it.cmd ? (it.arg != null ? `${it.cmd}:${it.arg}` : it.cmd) : it.menu ?? it.name ?? it.t);

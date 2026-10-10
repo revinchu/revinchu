@@ -7,11 +7,12 @@ import {
 } from './model.js';
 import { setOffsets } from './textedit.js';
 import { THEMES, cloneTheme, themeByName, resolveColor } from './themes.js';
-import { SHAPE_GALLERY, SHAPE_LABEL } from './shapes.js';
+import { SHAPE_GALLERY, SHAPE_LABEL, objLabel } from './shapes.js';
 import { CHART_KINDS, chartToTsv, tsvToChart } from './chart.js';
 import { slideHtml, NUM_SCHEMES, BULLET_CHARS, DASH_LABEL } from './render.js';
 import { SHAPE_STYLES, WORDART, PICTURE_STYLES, TABLE_STYLES, tableStyleProps, DESIGN_IDEAS } from './presets.js';
 import { smartArt, SMART_KINDS } from './smartart.js';
+import { backgroundMask, applyMask } from './bgremove.js';
 import { el, openMenu, openDialog, formDialog, alertDialog, toast, closeMenus } from './ui.js';
 import { colorMenu } from './colorpick.js';
 import { startEyedrop } from './eyedrop.js';
@@ -753,6 +754,164 @@ function smartArtDialog() {
   draw();
 }
 
+// ───────────── SmartArt 텍스트 창 · 디자인 ─────────────
+/** 선택한 SmartArt 묶음: { members, items, kind, multi, rect, at } */
+function currentSmart() {
+  const o = selObjects().find((x) => x.smart) ?? (S.editing ? objById(S.editing.id) : null);
+  if (!o?.smart || !o.grp) return null;
+  const s = slide();
+  const members = s.objects.filter((x) => x.grp === o.grp);
+  const head = members.find((x) => x.smartItems);
+  const items = head?.smartItems ?? members.filter((x) => x.text && !isEmptyText(x.text)).map((x) => plainText(x.text).replace(/\n/g, ' '));
+  const x1 = Math.min(...members.map((m) => m.x)); const y1 = Math.min(...members.map((m) => m.y));
+  const x2 = Math.max(...members.map((m) => m.x + m.w)); const y2 = Math.max(...members.map((m) => m.y + m.h));
+  return { members, items, kind: o.smart, multi: head?.smartMulti ?? true, rect: { x: x1, y: y1, w: x2 - x1, h: y2 - y1 }, at: s.objects.indexOf(members[0]), grp: o.grp };
+}
+function rebuildSmart(cur, { kind = cur.kind, items = cur.items, multi = cur.multi } = {}) {
+  const s = slide();
+  const objs = smartArt(kind, items, cur.rect, { multicolor: multi });
+  for (const o of objs) o.grp = cur.grp;
+  change(() => {
+    s.objects = s.objects.filter((o) => o.grp !== cur.grp);
+    s.objects.splice(Math.min(cur.at, s.objects.length), 0, ...objs);
+    // 애니메이션은 첫 도형으로 옮김
+    const ids = new Set(cur.members.map((m) => m.id));
+    for (const a of s.anims ?? []) if (ids.has(a.obj)) a.obj = objs[0].id;
+  });
+  S.sel = new Set(objs.map((o) => o.id));
+  emit('selection');
+}
+function smartTextPane() {
+  const cur = currentSmart();
+  if (!cur) { toast('SmartArt 그래픽을 선택하세요'); return; }
+  const ta = el('textarea', { class: 'smart-items', rows: 10 }, cur.items.join('\n'));
+  ta.addEventListener('keydown', (e) => e.stopPropagation());
+  let timer = 0;
+  let live = cur;
+  ta.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => { rebuildSmart(live, { items: ta.value.split('\n') }); live = currentSmart() ?? live; }, 350); });
+  openDialog({ title: '텍스트 입력', width: 360, modeless: true, body: el('div', {}, el('p', { class: 'muted' }, '한 줄에 항목 하나 — 입력하는 대로 그래픽이 바뀝니다'), ta), buttons: [{ label: '닫기', primary: true }] });
+}
+
+// ───────────── 확대/축소 (PowerPoint [삽입 › 확대/축소]: 요약 · 구역 · 슬라이드) ─────────────
+function zoomObject(slideId, rect, extra = {}) {
+  return { id: uid(), type: 'zoom', x: rect.x, y: rect.y, w: rect.w, h: rect.h, rot: 0, zoom: { slide: slideId, ret: true, ...extra } };
+}
+/** 축소판을 격자로 배치 (슬라이드 비율 유지) */
+function zoomGrid(n, area) {
+  const { w: W, h: H } = S.pres.size;
+  const cols = Math.ceil(Math.sqrt(n * (area.w / area.h) / (W / H)));
+  const rows = Math.ceil(n / cols);
+  const gap = 24;
+  const tw = Math.min((area.w - gap * (cols - 1)) / cols, ((area.h - gap * (rows - 1)) / rows) * (W / H));
+  const th = tw * (H / W);
+  const x0 = area.x + (area.w - (cols * tw + (cols - 1) * gap)) / 2;
+  const y0 = area.y + (area.h - (rows * th + (rows - 1) * gap)) / 2;
+  return Array.from({ length: n }, (_, i) => ({ x: x0 + (i % cols) * (tw + gap), y: y0 + Math.floor(i / cols) * (th + gap), w: tw, h: th }));
+}
+function pickSlidesDialog(title, { sections = false } = {}) {
+  return new Promise((resolve) => {
+    const list = sections
+      ? S.pres.slides.map((s, i) => [s, i]).filter(([s]) => s.section).map(([s, i]) => ({ s, i, label: `${s.section} (슬라이드 ${i + 1})` }))
+      : S.pres.slides.map((s, i) => ({ s, i, label: `${i + 1}. ${slideTitle(s) || '(제목 없음)'}` }));
+    if (!list.length) { toast(sections ? '구역이 없습니다. 먼저 [구역 추가]를 하세요' : '슬라이드가 없습니다'); resolve(null); return; }
+    const checks = list.map((it) => { const c = el('input', { type: 'checkbox' }); return [it, c]; });
+    const sc = 160 / S.pres.size.w;
+    const grid = el('div', { class: 'zoom-pick' }, checks.map(([it, c]) => el('label', { class: 'zoom-item' },
+      el('div', { class: 'tw', style: `width:160px;height:${S.pres.size.h * sc}px`, html: `<div class="tw-in" style="transform:scale(${sc})">${slideHtml(S.pres, it.s, { index: it.i })}</div>` }),
+      el('span', {}, c, ` ${it.label}`))));
+    openDialog({ title, width: 640, body: grid, buttons: [{ label: '삽입', primary: true, action: () => { const picked = checks.filter(([, c]) => c.checked).map(([it]) => it); if (!picked.length) { toast('슬라이드를 고르세요'); return false; } resolve(picked); return true; } }, { label: '취소', action: () => resolve(null) }] });
+  });
+}
+async function insertZoom(kind) {
+  if (kind === 'summary') {
+    const picked = await pickSlidesDialog('요약 확대/축소 삽입');
+    if (!picked) return;
+    const { w, h } = S.pres.size;
+    const first = Math.min(...picked.map((p) => p.i));
+    const sum = newSlide(S.pres, 'titleOnly');
+    const titleObj = sum.objects.find((o) => o.ph === 'title');
+    if (titleObj) setPlainText(titleObj.text, '요약 확대/축소');
+    const rects = zoomGrid(picked.length, { x: w * 0.06, y: h * 0.26, w: w * 0.88, h: h * 0.66 });
+    change(() => {
+      // 고른 슬라이드마다 구역 시작 (구역 확대/축소는 구역 끝까지 보여 주고 돌아옴)
+      for (const p of picked) if (!p.s.section) p.s.section = slideTitle(p.s) || `구역 ${p.i + 1}`;
+      sum.objects.push(...picked.map((p, k) => zoomObject(p.s.id, rects[k], { section: true })));
+      if (!sum.section && first > 0) sum.section = '요약';
+      S.pres.slides.splice(first, 0, sum);
+    }, { scope: 'all' });
+    goSlide(first);
+    return;
+  }
+  const picked = await pickSlidesDialog(kind === 'section' ? '구역 확대/축소 삽입' : '슬라이드 확대/축소 삽입', { sections: kind === 'section' });
+  if (!picked) return;
+  const { w, h } = S.pres.size;
+  const tw = w * 0.22;
+  const objs = picked.map((p, k) => zoomObject(p.s.id, { x: w * 0.1 + k * 30, y: h * 0.3 + k * 30, w: tw, h: tw * (h / w) }, kind === 'section' ? { section: true } : {}));
+  change(() => slide().objects.push(...objs));
+  S.sel = new Set(objs.map((o) => o.id));
+  emit('selection');
+}
+
+// ───────────── 그림 배경 제거 (PowerPoint [그림 서식 › 배경 제거]) ─────────────
+async function removeBackground() {
+  const o = selObjects().find((x) => x.type === 'image' && S.pres.media[x.media]);
+  if (!o) { toast('배경을 제거할 그림을 선택하세요'); return; }
+  const img = new Image();
+  img.src = S.pres.media[o.bgOrig ?? o.media];
+  try { await img.decode(); } catch { alertDialog('배경 제거', '이 그림 형식은 배경 제거를 지원하지 않습니다.'); return; }
+  // 큰 그림은 줄여서 계산 (긴 쪽 1600px)
+  const k = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight));
+  const w = Math.max(1, Math.round(img.naturalWidth * k)); const h = Math.max(1, Math.round(img.naturalHeight * k));
+  const src = document.createElement('canvas'); src.width = w; src.height = h;
+  const g = src.getContext('2d', { willReadFrequently: true });
+  g.drawImage(img, 0, 0, w, h);
+  const data = g.getImageData(0, 0, w, h).data;
+  const st = { tolerance: 25, remove: [], keep: [], mode: 'remove' };
+  const view = el('canvas', { class: 'bgr-canvas', width: w, height: h });
+  const vg = view.getContext('2d');
+  let out = null;
+  const draw = () => {
+    const alpha = backgroundMask(data, w, h, st);
+    out = applyMask(data, alpha);
+    // 미리 보기: 지워질 곳은 PowerPoint 처럼 자홍색으로 덮어 보임
+    const pv = new Uint8ClampedArray(data);
+    for (let p = 0; p < alpha.length; p++) {
+      const a = alpha[p] / 255;
+      pv[p * 4] = Math.round(pv[p * 4] * a + 0xb4 * (1 - a));
+      pv[p * 4 + 1] = Math.round(pv[p * 4 + 1] * a + 0x2d * (1 - a));
+      pv[p * 4 + 2] = Math.round(pv[p * 4 + 2] * a + 0xb4 * (1 - a));
+    }
+    vg.putImageData(new ImageData(pv, w, h), 0, 0);
+    for (const [x, y] of st.remove) { vg.fillStyle = '#d00'; vg.beginPath(); vg.arc(x, y, Math.max(4, w / 150), 0, 7); vg.fill(); }
+    for (const [x, y] of st.keep) { vg.fillStyle = '#0a0'; vg.beginPath(); vg.arc(x, y, Math.max(4, w / 150), 0, 7); vg.fill(); }
+  };
+  view.addEventListener('click', (e) => {
+    const r = view.getBoundingClientRect();
+    const pt = [Math.round((e.clientX - r.left) * w / r.width), Math.round((e.clientY - r.top) * h / r.height)];
+    (e.shiftKey || st.mode === 'keep' ? st.keep : st.remove).push(pt);
+    draw();
+  });
+  const modeBtn = (m, label) => el('button', { type: 'button', class: `btn small${st.mode === m ? ' on' : ''}`, 'data-mode': m, onclick: (e) => { st.mode = m; e.target.parentElement.querySelectorAll('[data-mode]').forEach((b) => b.classList.toggle('on', b.dataset.mode === m)); } }, label);
+  const tol = el('input', { type: 'range', min: 0, max: 100, value: st.tolerance });
+  tol.addEventListener('change', () => { st.tolerance = Number(tol.value); draw(); });
+  const undoMark = () => { const all = [...st.remove.map((p) => ['remove', p]), ...st.keep.map((p) => ['keep', p])]; if (!all.length) return; if (st.keep.length) st.keep.pop(); else st.remove.pop(); draw(); };
+  openDialog({
+    title: '배경 제거', width: 720,
+    body: el('div', { class: 'bgr' },
+      el('div', { class: 'pane-btns' }, modeBtn('keep', '✚ 보관할 영역 표시'), modeBtn('remove', '− 제거할 영역 표시'), el('button', { type: 'button', class: 'btn small', onclick: undoMark }, '표시 취소'),
+        el('label', { class: 'bgr-tol' }, '허용 범위 ', tol)),
+      el('p', { class: 'muted' }, '자홍색 부분이 지워집니다. 그림을 눌러 영역을 표시하세요 (Shift+클릭 = 보관).'),
+      el('div', { class: 'bgr-wrap' }, view)),
+    buttons: [{ label: '변경 내용 유지', primary: true, action: () => {
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      c.getContext('2d').putImageData(new ImageData(out, w, h), 0, 0);
+      const id = addMedia(c.toDataURL('image/png'));
+      change(() => { o.bgOrig = o.bgOrig ?? o.media; o.media = id; });
+    } }, { label: '모든 변경 내용 취소' }],
+  });
+  draw();
+}
+
 // ───────────── 아이콘 (WIXEL 과 같은 아이콘 모음) ─────────────
 let iconLib = null;
 async function loadIconLib() {
@@ -1402,6 +1561,11 @@ register({
   },
   insertIcons: () => iconsDialog(),
   insertSmartArt: () => smartArtDialog(),
+  smartTextPane: () => smartTextPane(),
+  smartAddShape: () => { const c = currentSmart(); if (!c) { toast('SmartArt 그래픽을 선택하세요'); return; } rebuildSmart(c, { items: [...c.items, '텍스트'] }); },
+  smartLayoutMenu: (a) => { const c = currentSmart(); if (!c) { toast('SmartArt 그래픽을 선택하세요'); return; } menuAt(a, SMART_KINDS.map(([k, l]) => ({ label: l, checked: k === c.kind, action: () => rebuildSmart(c, { kind: k }) }))); },
+  smartColors: () => { const c = currentSmart(); if (!c) return; rebuildSmart(c, { multi: !c.multi }); },
+  smartToShapes: () => { const c = currentSmart(); if (!c) return; change(() => { for (const m of c.members) { delete m.smart; delete m.smartItems; delete m.smartMulti; } }); toast('도형으로 변환했습니다 (그룹은 유지)'); },
   chartMenu: (a) => menuAt(a, CHART_KINDS.map(([k, l]) => ({ label: l, icon: { col: 'chartColumn', bar: 'chartBar', line: 'chartLine', area: 'chartArea', pie: 'chartPie', doughnut: 'chartDoughnut', scatter: 'chartScatter' }[k], action: () => insertChart(k) }))),
   chartData: () => chartDataDialog(),
   chartKindMenu: (a) => menuAt(a, CHART_KINDS.map(([k, l]) => ({ label: l, action: () => { const c = selOne(); if (c?.type === 'chart') change(() => { c.chart.kind = k; }); } }))),
@@ -1487,6 +1651,19 @@ register({
       ...(cur?.cls === 'path' ? [{ title: '경로' }, { label: '경로 반대로', action: () => run('animTiming', { motion: reversePath(cur.motion) }) }] : []),
     ]);
   },
+  // 트리거: 고른 개체의 애니메이션을 다른 개체를 누를 때 재생 (PowerPoint [고급 애니메이션 › 트리거])
+  triggerMenu: (a) => {
+    const s = slide();
+    const ids = new Set(expandGroups(selObjects()).map((o) => o.id));
+    const mine = (s.anims ?? []).filter((x) => x.id === S.animSel || ids.has(x.obj));
+    if (!mine.length) { toast('애니메이션이 있는 개체를 선택하세요'); return; }
+    const cur = mine[0].trigger ?? null;
+    const setT = (t) => change(() => { for (const x of mine) { if (t) x.trigger = t; else delete x.trigger; } });
+    menuAt(a ?? { x: innerWidth / 2, y: 160 }, [
+      { label: '이전 클릭 순서대로 (트리거 없음)', checked: !cur, action: () => setT(null) },
+      { label: '클릭할 때', submenu: s.objects.filter((o) => !ids.has(o.id)).map((o) => ({ label: objLabel(o, s.objects.indexOf(o)), checked: cur === o.id, action: () => setT(o.id) })) },
+    ]);
+  },
   animTiming: (props) => { const objs = expandGroups(selObjects()); const ids = new Set(objs.map((o) => o.id)); change(() => { for (const a of slide().anims ?? []) if (ids.has(a.obj) || a.id === S.animSel) Object.assign(a, props); }); },
   removeAnim: (opt = {}) => {
     const s = slide();
@@ -1565,7 +1742,15 @@ register({
   about: () => openDialog({ title: 'WIPOINT 정보', width: 460, body: el('div', {}, el('p', {}, el('b', {}, `WIPOINT (위포인트) ${APP_VERSION}`), ' — PowerPoint 와 같은 웹 프레젠테이션'), el('p', { class: 'muted' }, '의존성 없는 순수 JavaScript · 문서는 내 컴퓨터(브라우저)에만 저장됩니다. WIXEL(위셀)과 같은 방식으로 만들었습니다.'), el('p', { class: 'muted' }, `슬라이드 ${S.pres.slides.length}장 · ${Math.round(S.pres.size.w * 2.54 / 96 * 10) / 10}×${Math.round(S.pres.size.h * 2.54 / 96 * 10) / 10}cm`)), buttons: [{ label: '확인', primary: true }] }),
 
   // 그림 서식
-  resetPicture: () => change(() => { for (const o of selObjects()) if (o.type === 'image') { for (const k of ['crop', 'bright', 'contrast', 'alpha', 'gray', 'shadow', 'line', 'shape', 'adj']) delete o[k]; } }),
+  removeBackground: () => removeBackground(),
+  insertZoom: (kind = 'slide') => insertZoom(kind),
+  zoomMenu: (a) => menuAt(a ?? { x: innerWidth / 2, y: 160 }, [
+    { label: '요약 확대/축소', desc: '고른 슬라이드의 축소판으로 목차 슬라이드를 만듭니다', action: () => run('insertZoom', 'summary') },
+    { label: '구역 확대/축소', desc: '구역으로 가는 축소판 — 구역을 다 본 뒤 돌아옵니다', action: () => run('insertZoom', 'section') },
+    { label: '슬라이드 확대/축소', desc: '한 슬라이드로 가는 축소판', action: () => run('insertZoom', 'slide') },
+  ]),
+  zoomReturnToggle: () => change(() => { for (const o of selObjects()) if (o.type === 'zoom') o.zoom.ret = !o.zoom.ret; }),
+  resetPicture: () => change(() => { for (const o of selObjects()) if (o.type === 'image') { if (o.bgOrig) { o.media = o.bgOrig; delete o.bgOrig; } for (const k of ['crop', 'bright', 'contrast', 'alpha', 'gray', 'shadow', 'line', 'shape', 'adj']) delete o[k]; } }),
   applyPictureStyle: (i) => { const st = PICTURE_STYLES[i].set; const objs = selObjects().filter((o) => o.type === 'image'); if (!need(objs, '그림을 선택하세요')) return; change(() => { for (const o of objs) for (const [k, v] of Object.entries(st)) { if (v === undefined) delete o[k]; else o[k] = JSON.parse(JSON.stringify(v)); } }); },
   pictureCorrectionsMenu: (a) => menuAt(a, [[-0.4, '밝기 -40%'], [-0.2, '밝기 -20%'], [0, '밝기 표준'], [0.2, '밝기 +20%'], [0.4, '밝기 +40%']].map(([v, l]) => ({ label: l, action: () => change(() => { for (const o of selObjects()) if (o.type === 'image') o.bright = v || undefined; }) })).concat([{ sep: true }, { label: '대비 +20%', action: () => change(() => { for (const o of selObjects()) if (o.type === 'image') o.contrast = 0.2; }) }, { label: '그림 수정 옵션...', action: () => run('formatPane', 'shape') }])),
   pictureColorMenu: (a) => menuAt(a, [
@@ -1754,6 +1939,7 @@ function ribbonState() {
   if (objs.some((o) => o.type === 'table') || (S.editing && objById(S.editing.id)?.type === 'table')) ctx.push('table');
   if (objs.some((o) => o.type === 'chart')) ctx.push('chart');
   if (objs.some((o) => o.type === 'media')) ctx.push('media');
+  if (objs.some((o) => o.smart)) ctx.push('smart');
   const p = currentPara();
   const tbl = curTable();
   const st = tbl?.style ?? {};

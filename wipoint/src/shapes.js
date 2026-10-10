@@ -162,3 +162,14 @@ export function customPath(paths, w, h) {
   }
   return out.join(' ');
 }
+
+/** 선택 창 · 애니메이션 창에 보이는 개체 이름 */
+export function objLabel(o, i) {
+  if (o.name) return o.name;
+  if (o.ph) return { title: '제목', ctrTitle: '제목', subTitle: '부제목', body: '내용 개체 틀', pic: '그림 개체 틀' }[o.ph] ?? '개체 틀';
+  if (o.type === 'image') return `그림 ${i + 1}`;
+  if (o.type === 'table') return `표 ${i + 1}`;
+  if (o.type === 'chart') return `차트 ${i + 1}`;
+  if (o.txBox) { const t = o.text.paras.map((p) => p.runs.map((r) => r.t).join('')).join('\n').trim(); return t ? `TextBox: ${t.slice(0, 16)}` : `TextBox ${i + 1}`; }
+  return `${SHAPE_LABEL[o.shape] ?? '도형'} ${i + 1}`;
+}

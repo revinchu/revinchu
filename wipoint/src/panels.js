@@ -2,7 +2,7 @@
 import { S, curSlide, selObjects, change, emit, on, run, goSlide } from './state.js';
 import { slideHtml, DASH_LABEL } from './render.js';
 import { ANIM_EFFECTS, ANIM_CLASS_LABEL, TRANSITION_LABEL, plainText } from './model.js';
-import { SHAPE_LABEL } from './shapes.js';
+import { SHAPE_LABEL, objLabel } from './shapes.js';
 import { el, openMenu } from './ui.js';
 import { colorButton } from './colorpick.js';
 import { fitZoom, setZoom } from './editor.js';
@@ -367,15 +367,6 @@ function bgPane(body) {
     el('button', { class: 'btn small', onclick: () => change(() => { slide.bg = null; }) }, '배경 원래대로')));
 }
 
-function objLabel(o, i) {
-  if (o.name) return o.name;
-  if (o.ph) return { title: '제목', ctrTitle: '제목', subTitle: '부제목', body: '내용 개체 틀', pic: '그림 개체 틀' }[o.ph] ?? '개체 틀';
-  if (o.type === 'image') return `그림 ${i + 1}`;
-  if (o.type === 'table') return `표 ${i + 1}`;
-  if (o.type === 'chart') return `차트 ${i + 1}`;
-  if (o.txBox) { const t = plainText(o.text).trim(); return t ? `TextBox: ${t.slice(0, 16)}` : `TextBox ${i + 1}`; }
-  return `${SHAPE_LABEL[o.shape] ?? '도형'} ${i + 1}`;
-}
 
 function animPane(body) {
   const slide = curSlide();
@@ -384,9 +375,13 @@ function animPane(body) {
     el('button', { class: 'btn small', onclick: () => run('previewAnim') }, '▶ 모두 재생'),
     el('button', { class: 'btn small', onclick: () => run('addAnimMenu') }, '애니메이션 추가 ▾')));
   if (!anims.length) { body.append(el('p', { class: 'muted' }, '이 슬라이드에는 애니메이션이 없습니다. 개체를 고른 뒤 [애니메이션] 탭에서 효과를 고르세요.')); return; }
-  let step = 0;
   const list = el('div', { class: 'anim-list' });
-  anims.forEach((a, i) => {
+  // 기본 순서 다음에 트리거별 묶음 (PowerPoint: '트리거: 개체 이름' 머리글)
+  const groups = [null, ...new Set(anims.map((a) => a.trigger).filter(Boolean))];
+  for (const t of groups) {
+  let step = 0;
+  if (t) { const to = slide.objects.find((x) => x.id === t); list.append(el('div', { class: 'anim-trig' }, `트리거: ${to ? objLabel(to, slide.objects.indexOf(to)) : '(없음)'}`)); }
+  anims.filter((a) => (a.trigger ?? null) === t).forEach((a) => {
     const o = slide.objects.find((x) => x.id === a.obj);
     if (a.start === 'click') step++;
     const label = ANIM_EFFECTS[a.cls]?.find(([k]) => k === a.effect)?.[1] ?? a.effect;
@@ -397,6 +392,7 @@ function animPane(body) {
     r.addEventListener('click', () => { S.animSel = a.id; if (o) S.sel = new Set([o.id]); emit('selection'); renderPane(); });
     list.append(r);
   });
+  }
   body.append(list);
   const cur = anims.find((a) => a.id === S.animSel);
   if (cur) {

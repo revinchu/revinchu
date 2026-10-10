@@ -328,3 +328,41 @@ test('메모 · 사용자 지정 쇼 저장/읽기 (WIPOINT 확장 없이도)', 
   assert.deepEqual([c.x, c.y], [100, 50]);
   assert.equal(c.replies[0].author, '박과장');
 });
+
+test('트리거 애니메이션 · 확대/축소 · 슬라이드 링크: pptx 왕복', async () => {
+  const { triggerSteps, animSteps } = await import('../src/model.js');
+  const p = sample();
+  const s = p.slides[1];
+  const btn = newShape('rect', { x: 10, y: 10, w: 100, h: 40 });
+  btn.name = '단추';
+  btn.link = '#slide1';
+  const box = newShape('ellipse', { x: 200, y: 200, w: 100, h: 100 });
+  box.name = '공';
+  s.objects.push(btn, box);
+  s.anims = [];
+  addAnim(s, box.id, 'entr', 'fade', { trigger: btn.id });
+  assert.equal(animSteps(s).length, 0);
+  assert.equal(triggerSteps(s).get(btn.id).length, 1);
+  const target = p.slides[p.slides.length - 1];
+  p.slides[0].objects.push({ id: 'z1', type: 'zoom', x: 100, y: 100, w: 256, h: 144, rot: 0, zoom: { slide: target.id, ret: true } });
+  const bytes = writePptx(p);
+  const files = unzip(bytes);
+  const xml = textOf(files['ppt/slides/slide2.xml']);
+  assert.match(xml, /nodeType="interactiveSeq"/);
+  assert.match(xml, /action="ppaction:\/\/hlinksldjump"/);
+  assert.match(textOf(files['ppt/slides/_rels/slide2.xml.rels']), /relationships\/slide" Target="slide1.xml"/);
+  // 우리 확장으로 읽기
+  const r1 = readPptx(bytes).pres;
+  const z = r1.slides[0].objects.find((o) => o.type === 'zoom');
+  assert.equal(z.zoom.slide, r1.slides[r1.slides.length - 1].id);
+  const tr = r1.slides[1].anims[0];
+  assert.equal(r1.slides[1].objects.find((o) => o.id === tr.trigger)?.link, '#slide1');
+  // 확장 없이 (PowerPoint 파일처럼)
+  const stripped = new Map(Object.entries(files));
+  const sx = xml.replace(/<p:ext uri="\{6F1B2D57[^]*?<\/p:ext>/, '');
+  stripped.set('ppt/slides/slide2.xml', new TextEncoder().encode(sx));
+  const back = readPptx(zip(Object.fromEntries(stripped))).pres.slides[1];
+  const a = back.anims.find((x) => x.trigger);
+  assert.ok(a, '트리거 읽기');
+  assert.equal(back.objects.find((o) => o.id === a.trigger).link, '#slide1');
+});

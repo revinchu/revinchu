@@ -198,6 +198,8 @@ body.dropping .stage { outline: 3px dashed var(--accent); outline-offset: -6px; 
 .anim-list, .sel-list { border: 1px solid #ddd; background: #fff; margin: 6px 0; max-height: 300px; overflow-y: auto; }
 .anim-row, .sel-row { display: flex; align-items: center; gap: 6px; padding: 4px 6px; cursor: pointer; border-bottom: 1px solid #f1f1f1; }
 .anim-row:hover, .sel-row:hover { background: #f6f6f6; }
+.anim-trig { padding: 6px 6px 3px; font-size: 11px; font-weight: 600; color: #b7472a; border-bottom: 1px solid #eee; background: #fbf5f3; }
+.show .ob.trig { cursor: pointer; }
 .anim-row.on, .sel-row.on { background: var(--accent-tint); }
 .anim-step { width: 16px; color: var(--muted); text-align: right; }
 .anim-ico { color: var(--accent); } .anim-row.emph .anim-ico { color: #c9a227; } .anim-row.exit .anim-ico { color: #c00000; }
@@ -533,3 +535,11 @@ body.eyedropping .overlay { pointer-events: none; }
   .pv-tools { overflow-x: auto; gap: 6px; padding: 0 8px; }
   .pv-tools button { flex: none; }
 }
+.bgr-wrap { max-height: 60vh; overflow: auto; background: repeating-conic-gradient(#ddd 0 25%, #fff 0 50%) 0 0 / 16px 16px; text-align: center; }
+.bgr-canvas { max-width: 100%; max-height: 58vh; cursor: crosshair; }
+.bgr-tol { margin-left: auto; font-size: 12px; display: flex; align-items: center; gap: 6px; }
+.btn.small.on { background: #fde7e1; border-color: #b7472a; }
+.zoom-pick { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; max-height: 60vh; overflow: auto; }
+.zoom-item { display: flex; flex-direction: column; gap: 4px; font-size: 12px; cursor: pointer; }
+.zoom-item .tw { box-shadow: 0 0 0 1px #ccc; overflow: hidden; }
+.show .ob .zm { cursor: pointer; }
