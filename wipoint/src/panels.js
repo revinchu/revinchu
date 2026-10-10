@@ -214,7 +214,7 @@ const radio = (name, value, options, onSet) => el('div', { class: 'pane-radios' 
 }));
 
 const PX_CM = 2.54 / 96;
-const PANE_TITLE = { shape: '도형 서식', bg: '배경 서식', anim: '애니메이션 창', selection: '선택' };
+const PANE_TITLE = { comments: '메모',  shape: '도형 서식', bg: '배경 서식', anim: '애니메이션 창', selection: '선택' };
 
 export function renderPane() {
   if (!paneEl) return;
@@ -232,8 +232,40 @@ export function renderPane() {
   else if (kind === 'bg') bgPane(body);
   else if (kind === 'anim') animPane(body);
   else if (kind === 'selection') selectionPane(body);
+  else if (kind === 'comments') commentsPane(body);
   emit('hydrate', paneEl);
 }
+/** 메모 창: 슬라이드의 메모 목록, 답글, 해결, 삭제 */
+function commentsPane(body) {
+  const s = curSlide();
+  const list = s.comments ?? [];
+  const when = (iso) => { try { return new Date(iso).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }); } catch { return ''; } };
+  const top = el('div', { class: 'cm-top' },
+    el('button', { class: 'btn primary', onclick: () => run('newComment') }, '+ 새 메모'),
+    el('button', { class: 'btn', title: '이전 메모', onclick: () => run('prevComment') }, '◀'),
+    el('button', { class: 'btn', title: '다음 메모', onclick: () => run('nextComment') }, '▶'));
+  body.append(top);
+  if (!list.length) { body.append(el('p', { class: 'muted' }, '이 슬라이드에는 메모가 없습니다.')); return; }
+  for (const c of list) {
+    const reply = el('input', { type: 'text', placeholder: '답글...' });
+    reply.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key !== 'Enter' || !reply.value.trim()) return;
+      const t = reply.value.trim();
+      change(() => { c.replies = [...(c.replies ?? []), { author: localStorage.getItem('wipoint:user') ?? '사용자', text: t, at: new Date().toISOString() }]; }, { scope: 'none' });
+      renderPane();
+    });
+    body.append(el('div', { class: `cm-card${c.done ? ' done' : ''}`, onmouseenter: () => document.querySelector(`.cm-pin[data-cm="${c.id}"]`)?.classList.add('hot'), onmouseleave: () => document.querySelector(`.cm-pin[data-cm="${c.id}"]`)?.classList.remove('hot') },
+      el('div', { class: 'cm-head' }, el('b', {}, c.author ?? '사용자'), el('small', {}, when(c.at))),
+      el('div', { class: 'cm-text' }, c.text),
+      ...(c.replies ?? []).map((r) => el('div', { class: 'cm-reply' }, el('b', {}, r.author ?? ''), ' ', r.text)),
+      reply,
+      el('div', { class: 'cm-actions' },
+        el('button', { class: 'btn', onclick: () => { change(() => { c.done = !c.done || undefined; }, { scope: 'none' }); renderPane(); } }, c.done ? '다시 열기' : '스레드 해결'),
+        el('button', { class: 'btn', onclick: () => { change(() => { s.comments = list.filter((x) => x !== c); }); renderPane(); } }, '삭제'))));
+  }
+}
+
 const fitZoomSoon = () => setTimeout(() => { if (S.fitZoom) fitZoom(); }, 0);
 
 function fillControls(fill, setFill, name, { allowPicture = true } = {}) {

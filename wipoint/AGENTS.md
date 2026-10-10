@@ -8,7 +8,7 @@ WIPOINT 는 **PowerPoint 와 같은 브라우저 프레젠테이션 프로그램
 ```bash
 cd wipoint
 npm start                 # http://127.0.0.1:5179 (개발 서버, src/ 그대로)
-npm test                  # Node 내장 테스트 (현재 33개)
+npm test                  # Node 내장 테스트 (현재 38개)
 npm run build             # dist/index.html (한 파일) + dist/assets/
 npm run build:cloud       # dist-cloudflare/ (Cloudflare Workers 용)
 PLAYWRIGHT_MODULE=/경로/playwright/index.mjs node tools/smoke.mjs   # 모든 명령 실행 → "bad 0"

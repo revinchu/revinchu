@@ -1,12 +1,17 @@
 // 슬라이드 쇼: 전환 효과 · 클릭 단계별 애니메이션 · 발표자 보기 · 펜/레이저 · 예행 연습
 import { S, change, emit } from './state.js';
 import { slideHtml, SLIDE_CSS, escHtml } from './render.js';
-import { animSteps, stepTimeline, slideTitle } from './model.js';
+import { animSteps, stepTimeline, slideTitle, motionPoints, morphPairs } from './model.js';
 import { el, openMenu, toast } from './ui.js';
 
 let show = null; // 현재 쇼 상태
 
-const visibleSlides = (opts) => S.pres.slides.map((s, i) => i).filter((i) => !S.pres.slides[i].hidden || opts.includeHidden);
+/** 쇼 순서: 사용자 지정 쇼(opts.custom = 이름)면 그 슬라이드들, 아니면 숨기지 않은 슬라이드 */
+const visibleSlides = (opts) => {
+  const cs = opts.custom ? (S.pres.customShows ?? []).find((c) => c.name === opts.custom) : null;
+  if (cs) return cs.slides.map((id) => S.pres.slides.findIndex((x) => x.id === id)).filter((i) => i >= 0);
+  return S.pres.slides.map((s, i) => i).filter((i) => !S.pres.slides[i].hidden || opts.includeHidden);
+};
 
 /** opts: { from, presenter, windowed, rehearse } */
 export function startShow(opts = {}) {
@@ -14,7 +19,7 @@ export function startShow(opts = {}) {
   const order = visibleSlides(opts);
   if (!order.length) { toast('보여 줄 슬라이드가 없습니다 (모두 숨김)'); return; }
   const setup = S.pres.show ?? {};
-  let pos = order.indexOf(opts.from ?? 0);
+  let pos = opts.custom ? 0 : order.indexOf(opts.from ?? 0);
   if (pos < 0) pos = order.findIndex((i) => i > (opts.from ?? 0));
   if (pos < 0) pos = 0;
   const root = el('div', { class: `show${opts.windowed ? ' windowed' : ''}${opts.presenter ? ' presenter' : ''}`, tabIndex: -1 });
@@ -87,19 +92,29 @@ function slideState(idx, stepsDone) {
   const slide = S.pres.slides[idx];
   const steps = animSteps(slide);
   const hide = new Set();
+  const paraHide = new Set(); // 'objId#단락' (단락별 애니메이션)
+  const moved = new Map();    // 이동 경로가 끝난 개체 → 마지막 위치
+  const key = (a) => (a.para != null ? `${a.obj}#${a.para}` : a.obj);
   const first = new Map();
-  for (const st of steps) for (const a of st) if (!first.has(a.obj)) first.set(a.obj, a);
-  for (const [obj, a] of first) if (a.cls === 'entr') hide.add(obj);
+  for (const st of steps) for (const a of st) if (!first.has(key(a))) first.set(key(a), a);
+  for (const [k, a] of first) if (a.cls === 'entr') (a.para != null ? paraHide : hide).add(k);
   for (let k = 0; k < Math.min(stepsDone, steps.length); k++) {
-    for (const a of steps[k]) { if (a.cls === 'entr') hide.delete(a.obj); if (a.cls === 'exit') hide.add(a.obj); }
+    for (const a of steps[k]) {
+      const set = a.para != null ? paraHide : hide;
+      if (a.cls === 'entr') set.delete(key(a));
+      if (a.cls === 'exit') set.add(key(a));
+      if (a.cls === 'path') { const pts = motionPoints(a.motion); const last = pts[pts.length - 1]; const prev = moved.get(a.obj) ?? [0, 0]; moved.set(a.obj, [prev[0] + last[0], prev[1] + last[1]]); }
+    }
   }
-  return { slide, steps, hide };
+  return { slide, steps, hide, paraHide, moved };
 }
 
 function makeSlideEl(idx, stepsDone) {
-  const { slide, hide } = slideState(idx, stepsDone);
-  const d = el('div', { class: 'show-slide', html: slideHtml(S.pres, slide, { index: idx, hide, links: true }) });
+  const { slide, hide, paraHide, moved } = slideState(idx, stepsDone);
+  const d = el('div', { class: 'show-slide', html: slideHtml(S.pres, slide, { index: idx, hide, links: true, live: true }) });
   const { w, h } = S.pres.size;
+  for (const k of paraHide) { const [id, pi] = k.split('#'); const p = d.querySelectorAll(`.ob[data-id="${CSS.escape(id)}"] .p`)[Number(pi)]; if (p) p.style.visibility = 'hidden'; }
+  for (const [id, [fx, fy]] of moved) { const ob = d.querySelector(`.ob[data-id="${CSS.escape(id)}"]`); if (ob) ob.style.translate = `${fx * w}px ${fy * h}px`; }
   Object.assign(d.style, { width: `${w}px`, height: `${h}px` });
   return d;
 }
@@ -130,6 +145,8 @@ function enterSlide(pos, { transition = true, stepsDone = 0, back = false } = {}
 
 function afterEnter() {
   if (!show) return;
+  // 자동 재생 비디오 · 오디오
+  for (const m of show.stage.querySelectorAll('.show-slide .av[data-autoplay]')) m.play?.().catch(() => {});
   // 첫 단계가 '이전 효과와 함께/다음에' 로 시작하면 바로 재생
   if (show.step === 0 && show.steps[0] && show.steps[0][0].start !== 'click') playStep();
   scheduleAuto();
@@ -174,6 +191,32 @@ function runTransition(old, neu, tr) {
     case 'split': anims.push(neu.animate([{ clipPath: 'inset(0 50% 0 50%)' }, { clipPath: 'inset(0 0% 0 0%)' }], opt)); break;
     case 'zoom': anims.push(neu.animate([{ transform: `${base} scale(.3)`, opacity: 0, transformOrigin: '50% 50%' }, { transform: base, opacity: 1 }], opt)); break;
     case 'circle': anims.push(neu.animate([{ clipPath: 'circle(0% at 50% 50%)' }, { clipPath: 'circle(75% at 50% 50%)' }], opt)); break;
+    case 'morph': {
+      // 모핑: 짝이 되는 개체는 앞 슬라이드 자리 · 크기 · 회전에서 새 자리로, 나머지는 서서히
+      const prevSlide = S.pres.slides[show.order[show.pos - 1] ?? -1] ?? S.pres.slides[show.order[show.pos]];
+      const curSlide = S.pres.slides[show.order[show.pos]];
+      const pairs = prevSlide === curSlide ? [] : morphPairs(prevSlide, curSlide);
+      const matchedNew = new Set(pairs.map(([, b]) => b.id));
+      const matchedOld = new Set(pairs.map(([a]) => a.id));
+      const mopt = { duration: dur, easing: 'ease-in-out', fill: 'both' };
+      for (const [a, b] of pairs) {
+        const nEl = neu.querySelector(`.ob[data-id="${CSS.escape(b.id)}"]`);
+        const oEl = old.querySelector(`.ob[data-id="${CSS.escape(a.id)}"]`);
+        if (oEl) oEl.style.visibility = 'hidden';
+        if (!nEl) continue;
+        const dx = (a.x + a.w / 2) - (b.x + b.w / 2);
+        const dy = (a.y + a.h / 2) - (b.y + b.h / 2);
+        const sx = b.w ? a.w / b.w : 1;
+        const sy = b.h ? a.h / b.h : 1;
+        const dr = (a.rot ?? 0) - (b.rot ?? 0);
+        anims.push(nEl.animate([{ translate: `${dx}px ${dy}px`, scale: `${sx} ${sy}`, rotate: `${dr}deg`, opacity: a.hidden ? 0 : 1 }, { translate: '0px 0px', scale: '1 1', rotate: '0deg', opacity: 1 }], mopt));
+      }
+      for (const elx of neu.querySelectorAll('.ob:not(.decor)')) if (!matchedNew.has(elx.dataset.id)) anims.push(elx.animate([{ opacity: 0 }, { opacity: 1 }], mopt));
+      for (const elx of old.querySelectorAll('.ob:not(.decor)')) if (!matchedOld.has(elx.dataset.id)) anims.push(elx.animate([{ opacity: 1 }, { opacity: 0 }], mopt));
+      // 배경 · 장식은 겹치며 바뀜
+      anims.push(neu.animate([{ opacity: 0.999 }, { opacity: 1 }], mopt));
+      break;
+    }
     case 'flip':
       anims.push(old.animate([{ transform: `${base} perspective(2000px) rotateY(0)`, opacity: 1 }, { transform: `${base} perspective(2000px) rotateY(90deg)`, opacity: 0 }], { ...opt, duration: dur / 2 }));
       anims.push(neu.animate([{ transform: `${base} perspective(2000px) rotateY(-90deg)`, opacity: 0 }, { transform: `${base} perspective(2000px) rotateY(0)`, opacity: 1 }], { ...opt, duration: dur / 2, delay: dur / 2 }));
@@ -212,6 +255,16 @@ function keyframes(a, o) {
 
 /** 개체 하나 재생 (편집 화면 미리 보기에서도 씀) */
 export function animateObject(elm, a, o) {
+  if (a.cls === 'path') {
+    // 이동 경로: 지금 위치(앞 경로 끝)에서 경로만큼 이동하고 그 자리에 머묾
+    const { w, h } = S.pres.size;
+    const [bx, by] = (elm.style.translate || '0px 0px').split(' ').map((v) => parseFloat(v) || 0);
+    const pts = motionPoints(a.motion);
+    const kf = pts.map(([x, y]) => ({ translate: `${bx + x * w}px ${by + y * h}px` }));
+    const last = kf[kf.length - 1].translate;
+    const an = elm.animate(kf, { duration: Math.max(1, (a.dur ?? 2) * 1000), easing: 'ease-in-out', fill: 'forwards' });
+    return an.finished.then(() => { elm.style.translate = last; an.cancel(); }).catch(() => {});
+  }
   const kf = keyframes(a, o);
   const dur = Math.max(1, (a.dur ?? 0.5) * 1000);
   if (a.cls === 'entr') {
@@ -234,7 +287,8 @@ export function playStepOn(container, step, slide) {
   const done = [];
   for (const { anim, at } of tl) {
     const o = slide.objects.find((x) => x.id === anim.obj);
-    const elm = container.querySelector(`.ob[data-id="${CSS.escape(anim.obj)}"]`);
+    const ob = container.querySelector(`.ob[data-id="${CSS.escape(anim.obj)}"]`);
+    const elm = anim.para != null ? ob?.querySelectorAll('.p')[anim.para] : ob;
     if (!o || !elm) continue;
     done.push(new Promise((res) => setTimeout(() => animateObject(elm, anim, o).then(res), at * 1000)));
   }
@@ -327,6 +381,10 @@ function onClick(e) {
   if (!show || e.button !== 0) return;
   if (e.target.closest('.show-bar, .pv-side, .pv-tools')) return;
   if (show.tool === 'pen') return;
+  // 비디오는 자체 재생 단추, 오디오 아이콘은 눌러서 재생/일시 정지
+  if (e.target.closest('video')) return;
+  const au = e.target.closest('.av-audio')?.querySelector('audio');
+  if (au) { if (au.paused) au.play().catch(() => {}); else au.pause(); return; }
   const link = e.target.closest('a.lnk, [data-link]');
   if (link) {
     const href = link.getAttribute('href') ?? link.dataset.link;

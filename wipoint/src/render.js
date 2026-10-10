@@ -239,6 +239,21 @@ function imageHtml(theme, o, media, opts) {
   return `<div style="position:absolute;inset:0;overflow:hidden;${clip}${filt ? `filter:${filt};` : ''}"><img src="${escHtml(src)}" alt="${escHtml(o.alt ?? '')}" draggable="false" style="position:absolute;left:${f(-c.l * iw)}px;top:${f(-c.t * ih)}px;width:${f(iw)}px;height:${f(ih)}px;max-width:none;${o.alpha != null ? `opacity:${o.alpha};` : ''}"></div>${border}`;
 }
 
+/** 비디오 · 오디오: 편집 화면은 표지 그림(또는 검은 칸/스피커), 쇼(opts.live)에서는 실제 재생기 */
+function mediaHtml(o, media, opts) {
+  const src = media[o.media];
+  const poster = o.poster ? media[o.poster] : null;
+  const audio = o.kind === 'audio';
+  if (opts.live && src) {
+    const t = o.trim?.st ? `#t=${o.trim.st}${o.trim.end ? `,${o.trim.end}` : ''}` : '';
+    if (audio) return `<div class="av-audio" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">${poster ? `<img src="${escHtml(poster)}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain" alt="">` : '<span style="font-size:' + f(Math.min(o.w, o.h) * 0.6) + 'px;line-height:1">🔊</span>'}<audio class="av" src="${escHtml(src + t)}" ${o.loop ? 'loop' : ''} ${o.autoplay ? 'data-autoplay="1"' : ''} preload="auto" style="display:none"></audio></div>`;
+    return `<video class="av" src="${escHtml(src + t)}" ${poster ? `poster="${escHtml(poster)}"` : ''} ${o.loop ? 'loop' : ''} ${o.autoplay ? 'data-autoplay="1"' : ''} playsinline preload="metadata" controls style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000"></video>`;
+  }
+  if (poster) return `<img src="${escHtml(poster)}" alt="${escHtml(o.alt ?? '')}" draggable="false" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"><div style="position:absolute;left:8px;bottom:8px;width:28px;height:28px;border-radius:50%;background:rgba(0,0,0,.55);color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px">${audio ? '♪' : '▶'}</div>`;
+  if (audio) return `<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:${f(Math.min(o.w, o.h) * 0.6)}px;line-height:1">🔊</div>`;
+  return `<div style="position:absolute;inset:0;background:#111;display:flex;align-items:center;justify-content:center;color:#fff;font-size:${f(Math.min(o.w, o.h) * 0.25)}px">▶</div>`;
+}
+
 /** 표 스타일 색 */
 export function tableCellStyle(theme, o, ri, ci) {
   const st = o.style ?? {};
@@ -275,8 +290,11 @@ function tableHtml(theme, o, opts) {
       const b2 = { ...body, paras: body.paras.map((p) => ({ ...p, runs: p.runs.map((rr) => ({ ...rr, color: rr.color ?? defColor, b: rr.b ?? (ts.bold || undefined) })), end: { ...(p.end ?? {}), color: p.end?.color ?? defColor } })) };
       const ins = body.insets ?? [7, 3.5, 7, 3.5];
       const va = { t: 'top', ctr: 'middle', b: 'bottom' }[body.anchor ?? 't'];
-      const borders = c.borders ? Object.entries(c.borders).map(([k, v]) => `border-${{ l: 'left', r: 'right', t: 'top', b: 'bottom' }[k]}:${f(v.width ?? 1)}px solid ${resolveColor(theme, v.color, '#000')}`).join(';') : `border:1px solid ${bcol}`;
-      out += `<td${c.span ? ` colspan="${c.span}"` : ''}${c.rowSpan ? ` rowspan="${c.rowSpan}"` : ''} data-cell="${ri},${ci}" style="background:${fill};${borders};padding:${f(ins[1])}px ${f(ins[2])}px ${f(ins[3])}px ${f(ins[0])}px;vertical-align:${va};overflow:hidden"><div class="tx tcell" data-tx="${escHtml(o.id)}" data-cell="${ri},${ci}" style="white-space:pre-wrap;overflow-wrap:break-word;word-break:keep-all"><div class="txi">${textHtml(theme, pseudo, b2, { editable: opts.editable })}</div></div></td>`;
+      const SIDE = { l: 'left', r: 'right', t: 'top', b: 'bottom' };
+      const borders = c.borders ? [`border:1px solid ${bcol}`, ...Object.entries(c.borders).filter(([k]) => SIDE[k]).map(([k, v]) => `border-${SIDE[k]}:${f(v.width ?? 1)}px solid ${resolveColor(theme, v.color, '#000')}`)].join(';') : `border:1px solid ${bcol}`;
+      // 대각선 테두리 (dd: 왼쪽 위 → 오른쪽 아래, du: 왼쪽 아래 → 오른쪽 위)
+      const diag = c.borders && (c.borders.dd || c.borders.du) ? `background-image:${[c.borders.dd ? `linear-gradient(to top right, transparent calc(50% - ${f((c.borders.dd.width ?? 1) / 2)}px), ${resolveColor(theme, c.borders.dd.color, '#000')} calc(50% - ${f((c.borders.dd.width ?? 1) / 2)}px), ${resolveColor(theme, c.borders.dd.color, '#000')} calc(50% + ${f((c.borders.dd.width ?? 1) / 2)}px), transparent calc(50% + ${f((c.borders.dd.width ?? 1) / 2)}px))` : '', c.borders.du ? `linear-gradient(to bottom right, transparent calc(50% - ${f((c.borders.du.width ?? 1) / 2)}px), ${resolveColor(theme, c.borders.du.color, '#000')} calc(50% - ${f((c.borders.du.width ?? 1) / 2)}px), ${resolveColor(theme, c.borders.du.color, '#000')} calc(50% + ${f((c.borders.du.width ?? 1) / 2)}px), transparent calc(50% + ${f((c.borders.du.width ?? 1) / 2)}px))` : ''].filter(Boolean).join(',')};` : '';
+      out += `<td${c.span ? ` colspan="${c.span}"` : ''}${c.rowSpan ? ` rowspan="${c.rowSpan}"` : ''} data-cell="${ri},${ci}" style="background:${fill};${diag}${borders};padding:${f(ins[1])}px ${f(ins[2])}px ${f(ins[3])}px ${f(ins[0])}px;vertical-align:${va};overflow:hidden"><div class="tx tcell" data-tx="${escHtml(o.id)}" data-cell="${ri},${ci}" style="white-space:pre-wrap;overflow-wrap:break-word;word-break:keep-all"><div class="txi">${textHtml(theme, pseudo, b2, { editable: opts.editable })}</div></div></td>`;
     });
     return `<tr style="height:${f(r.h)}px">${out}</tr>`;
   }).join('');
@@ -290,7 +308,7 @@ export function objectHtml(theme, o, media, opts = {}) {
   if (o.type === 'image') inner = imageHtml(theme, o, media, opts);
   else if (o.type === 'table') inner = tableHtml(theme, o, opts);
   else if (o.type === 'chart') inner = chartSvg(o.chart, o.w, o.h, theme, { font: theme.fonts.minor });
-  else if (o.type === 'video') inner = `<div style="position:absolute;inset:0;background:#000;display:flex;align-items:center;justify-content:center;color:#fff;font-size:40px">▶</div>`;
+  else if (o.type === 'media' || o.type === 'video') inner = mediaHtml(o, media, opts);
   else inner = shapeHtml(theme, o, media, opts);
   const tr = [];
   if (o.rot) tr.push(`rotate(${f(o.rot)}deg)`);

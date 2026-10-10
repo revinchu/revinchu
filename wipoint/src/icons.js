@@ -183,6 +183,7 @@ export const ICONS = {
   crop: svg(`<path d="M5.5 2.5v12h12M2.5 5.5h12v12"/>`),
   replace: svg(`<path d="M3 6h9M9.5 3.5 12 6 9.5 8.5M17 14H8M10.5 11.5 8 14l2.5 2.5"/>`),
   select: svg(`<path d="M5 3l9 6.5-4 .9 2.6 5.3-1.7.8-2.5-5.3L5 14z"/>`),
+  audio: svg(`<path d="M3.5 8h3l4-3.5v11l-4-3.5h-3z"/><path d="M13 7.5a3.5 3.5 0 0 1 0 5M15 5.5a6.5 6.5 0 0 1 0 9" stroke="${BLUE}"/>`),
   video: svg(`<rect x="2.5" y="5" width="11" height="10" rx="1"/><path d="m13.5 8.5 4-2.5v8l-4-2.5z"/>`),
   growFont: svg(`<path d="M2.5 16 7 4h1l4.5 12M4.4 12h6.2"/><path d="M14 7.5l2-2.5 2 2.5" stroke="${ACCENT}"/>`),
   shrinkFont: svg(`<path d="M2.5 16 7 4h1l4.5 12M4.4 12h6.2"/><path d="M14 5l2 2.5 2-2.5" stroke="${ACCENT}"/>`),

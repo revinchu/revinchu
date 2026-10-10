@@ -312,7 +312,7 @@ export function slidePng(i, width = 1920) {
   const { w, h } = S.pres.size;
   const sc = width / w;
   const html = slideHtml(S.pres, S.pres.slides[i], { index: i });
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w * sc}" height="${h * sc}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" style="transform:scale(${sc});transform-origin:0 0;width:${w}px;height:${h}px"><style>${SLIDE_CSS}</style>${html.replace(/<br>/g, '<br/>').replace(/<img([^>]*?)>/g, '<img$1/>').replace(/<col([^>]*?)>/g, '<col$1/>')}</div></foreignObject></svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w * sc}" height="${h * sc}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" style="transform:scale(${sc});transform-origin:0 0;width:${w}px;height:${h}px"><style>${SLIDE_CSS}</style>${html.replace(/<br>/g, '<br/>').replace(/<img([^>]*?)>/g, '<img$1/>').replace(/<col(?!group)([^>]*?)>/g, '<col$1/>').replace(/<(video|audio)\b[^>]*>(<\/\1>)?/g, '')}</div></foreignObject></svg>`;
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
@@ -336,6 +336,78 @@ export async function exportPng(all = false) {
     const blob = await (await fetch(url)).blob();
     download(blob, `${S.docName}${list.length > 1 ? `_${i + 1}` : ''}.png`);
   }
+}
+
+// ───────────── 동영상으로 내보내기 (MediaRecorder · WebM/MP4) ─────────────
+/** opts: { sec: 슬라이드당 초, width, fade: 전환 초, hidden: 숨긴 슬라이드 포함 }, onProgress(0..1, 글) — 실제 시간만큼 걸림 */
+export async function exportVideo(opts = {}, onProgress = () => {}, signal = null) {
+  if (typeof MediaRecorder !== 'function' || !HTMLCanvasElement.prototype.captureStream) throw new Error('이 브라우저는 동영상 만들기를 지원하지 않습니다 (Chrome · Edge · 최신 Safari 에서 해 주세요)');
+  const width = opts.width ?? 1280;
+  const { w, h } = S.pres.size;
+  const W = Math.round(width / 2) * 2;
+  const H = Math.round((width * h) / w / 2) * 2;
+  const idx = S.pres.slides.map((s, i) => i).filter((i) => opts.hidden || !S.pres.slides[i].hidden);
+  if (!idx.length) throw new Error('내보낼 슬라이드가 없습니다');
+  // 그림 미리 만들기
+  const frames = [];
+  for (const [k, i] of idx.entries()) {
+    onProgress(k / idx.length * 0.2, `슬라이드 그림 만드는 중 (${k + 1}/${idx.length})`);
+    const url = await slidePng(i, W);
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    const t = S.pres.slides[i].transition;
+    frames.push({ img, sec: t?.advAfter != null && opts.useTimings !== false ? Math.max(0.5, t.advAfter) : opts.sec ?? 5, fade: t && t.type !== 'none' && t.type !== 'cut' ? Math.min(1.5, t.dur ?? 0.7) : opts.fade ?? 0 });
+  }
+  const cv = document.createElement('canvas');
+  cv.width = W;
+  cv.height = H;
+  const g = cv.getContext('2d');
+  const types = ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+  const mime = types.find((t) => MediaRecorder.isTypeSupported?.(t)) ?? '';
+  const stream = cv.captureStream(30);
+  const rec = new MediaRecorder(stream, { mimeType: mime || undefined, videoBitsPerSecond: width >= 1920 ? 8e6 : 5e6 });
+  const chunks = [];
+  rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+  const stopped = new Promise((res) => { rec.onstop = res; });
+  const draw = (img, a = 1) => { g.globalAlpha = a; g.drawImage(img, 0, 0, W, H); g.globalAlpha = 1; };
+  g.fillStyle = '#000';
+  g.fillRect(0, 0, W, H);
+  draw(frames[0].img);
+  rec.start(500);
+  const total = frames.reduce((n, f) => n + f.sec, 0);
+  let elapsed = 0;
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  for (let k = 0; k < frames.length; k++) {
+    if (signal?.aborted) break;
+    const f = frames[k];
+    if (k > 0 && f.fade > 0) {
+      const t0 = performance.now();
+      for (;;) {
+        const u = Math.min(1, (performance.now() - t0) / (f.fade * 1000));
+        draw(frames[k - 1].img);
+        draw(f.img, u);
+        if (u >= 1) break;
+        await new Promise((r) => requestAnimationFrame(r));
+      }
+    } else draw(f.img);
+    // 한 장을 머무는 동안에도 몇 번씩 다시 그려야 녹화기가 프레임을 받음
+    const end = performance.now() + Math.max(0, f.sec - (k > 0 ? f.fade : 0)) * 1000;
+    while (performance.now() < end) {
+      if (signal?.aborted) break;
+      draw(f.img);
+      onProgress(0.2 + 0.8 * Math.min(1, (elapsed + f.sec - (end - performance.now()) / 1000) / total), `녹화 중 ${k + 1}/${frames.length}`);
+      await wait(200);
+    }
+    elapsed += f.sec;
+  }
+  rec.stop();
+  await stopped;
+  if (signal?.aborted) return null;
+  const blob = new Blob(chunks, { type: (mime || 'video/webm').split(';')[0] });
+  const ext = blob.type.includes('mp4') ? 'mp4' : 'webm';
+  download(blob, `${S.docName}.${ext}`);
+  return { size: blob.size, ext };
 }
 
 // ───────────── 읽기 전용 공유 링크 (#view=) ─────────────

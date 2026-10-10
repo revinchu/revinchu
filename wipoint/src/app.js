@@ -101,6 +101,7 @@ on('painter', () => { document.body.classList.toggle('painting', !!S.painter); r
 on('saved', () => updateTitle());
 on('docLoaded', () => { fitZoom(); updateTitle(); });
 on('showEnded', () => { if (S.viewOnly) toast('읽기 전용 문서입니다. 편집하려면 [파일 › 다른 이름으로 저장]으로 내려받으세요.'); });
+on('openPane', () => { renderPane(); fitZoom(); });
 on('focusCanvas', () => { if (S.editing) focusEditing(); else $('stage').focus(); });
 
 function applyView() {
@@ -371,7 +372,8 @@ function onKey(e) {
   }
   if (thumbsFocused()) return;
   const objs = selObjects();
-  if (k === 'Escape') {
+  if (k === 'Escape' || (k === 'Enter' && S.cropping)) {
+    if (S.cropping) { stop(); run('cropPicture'); return; }
     if (S.eyedrop) { stopEyedrop(); return; }
     if (S.drawShape) { S.drawShape = null; emit('drawMode'); return; }
     if (S.painter) { S.painter = null; emit('painter'); return; }

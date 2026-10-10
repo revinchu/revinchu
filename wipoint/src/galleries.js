@@ -28,7 +28,7 @@ function strip(items, { cls = '' } = {}) {
   return el('div', { class: `gallery ${cls}` }, el('div', { class: 'gallery-items' }, items));
 }
 
-const TRANS_GLYPH = { none: '∅', cut: '▮', fade: '◐', push: '⇧', wipe: '▤', split: '⇔', cover: '⬒', uncover: '⬓', zoom: '⊕', circle: '◯', dissolve: '░', flip: '⇋' };
+const TRANS_GLYPH = { none: '∅', cut: '▮', fade: '◐', push: '⇧', wipe: '▤', split: '⇔', cover: '⬒', uncover: '⬓', zoom: '⊕', circle: '◯', dissolve: '░', flip: '⇋', morph: '⬢' };
 const ANIM_GLYPH = { appear: '★', fade: '✧', fly: '➶', float: '⇡', split: '⇔', wipe: '▤', zoom: '⊕', grow: '↻', wheel: '◔', bounce: '⤵' };
 
 export const GALLERIES = {
@@ -47,6 +47,7 @@ export const GALLERIES = {
     for (const [k, l] of ANIM_EFFECTS.entr) items.push(el('button', { class: `gal-item fx entr${a?.cls === 'entr' && a.effect === k ? ' on' : ''}`, title: `나타내기: ${l}`, disabled: !o, onclick: () => run('setAnim', 'entr', k) }, el('span', { class: 'fx-ic' }, ANIM_GLYPH[k] ?? '★'), el('span', { class: 'fx-l' }, l)));
     for (const [k, l] of ANIM_EFFECTS.emph) items.push(el('button', { class: `gal-item fx emph${a?.cls === 'emph' && a.effect === k ? ' on' : ''}`, title: `강조: ${l}`, disabled: !o, onclick: () => run('setAnim', 'emph', k) }, el('span', { class: 'fx-ic' }, '✷'), el('span', { class: 'fx-l' }, l)));
     for (const [k, l] of ANIM_EFFECTS.exit) items.push(el('button', { class: `gal-item fx exit${a?.cls === 'exit' && a.effect === k ? ' on' : ''}`, title: `끝내기: ${l}`, disabled: !o, onclick: () => run('setAnim', 'exit', k) }, el('span', { class: 'fx-ic' }, '✦'), el('span', { class: 'fx-l' }, l)));
+    for (const [k, l] of ANIM_EFFECTS.path) items.push(el('button', { class: `gal-item fx path${a?.cls === 'path' && a.effect === k ? ' on' : ''}`, title: `이동 경로: ${l}`, disabled: !o, onclick: () => run('setAnim', 'path', k) }, el('span', { class: 'fx-ic' }, '⤳'), el('span', { class: 'fx-l' }, l)));
     return strip(items, { cls: 'fx' });
   },
   shapesMini: () => {

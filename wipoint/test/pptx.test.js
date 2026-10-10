@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { writePptx, readPptx, pptxEntries, chartXml } from '../src/pptx.js';
-import { unzip, textOf } from '../src/zip.js';
+import { unzip, textOf, zip } from '../src/zip.js';
 import { parseXml } from '../src/xml.js';
 import { newPresentation, newSlide, newShape, newTextBox, newTable, newChart, newImage, para, run, plainText, addAnim } from '../src/model.js';
 import { smartArt } from '../src/smartart.js';
@@ -211,4 +211,120 @@ test('포함된 글꼴: EOT + MTX(LZCOMP · CTF) 풀기, 다시 저장해도 유
   assert.match(textOf(files['[Content_Types].xml']), /Extension="fntdata"/);
   assert.deepEqual([...files['ppt/fonts/font1.fntdata']], [...bin]);
   assert.equal(readPptx(writePptx(pres)).pres.fonts.length, 1);
+});
+
+test('비디오 · 오디오: p:pic + videoFile/audioFile + p14:media 로 저장하고 다시 읽기', () => {
+  const p = newPresentation();
+  const s = p.slides[0];
+  p.media.v1 = 'data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28y';
+  p.media.a1 = 'data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0U=';
+  p.media.p1 = PNG;
+  s.objects.push({ id: 'vid', type: 'media', kind: 'video', media: 'v1', poster: 'p1', x: 100, y: 100, w: 640, h: 360, rot: 0, trim: { st: 1.5, end: 10 } });
+  s.objects.push({ id: 'aud', type: 'media', kind: 'audio', media: 'a1', x: 900, y: 500, w: 64, h: 64, rot: 0 });
+  const bytes = writePptx(p);
+  const files = unzip(bytes);
+  const xml = textOf(files['ppt/slides/slide1.xml']);
+  assert.match(xml, /<a:videoFile r:link="rId\d+"\/>/);
+  assert.match(xml, /<a:audioFile r:link="rId\d+"\/>/);
+  assert.match(xml, /<p14:media [^>]*r:embed="rId\d+"><p14:trim st="1500" end="10000"\/>/);
+  assert.ok(files['ppt/media/media1.mp4'] || Object.keys(files).some((k) => /media\d+\.mp4$/.test(k)));
+  assert.match(textOf(files['[Content_Types].xml']), /Extension="mp4" ContentType="video\/mp4"/);
+  assert.match(textOf(files['ppt/slides/_rels/slide1.xml.rels']), /relationships\/video"/);
+  const back = readPptx(bytes).pres;
+  const objs = back.slides[0].objects.filter((o) => o.type === 'media');
+  assert.equal(objs.length, 2);
+  const v = objs.find((o) => o.kind === 'video');
+  assert.equal(back.media[v.media], p.media.v1);
+  assert.ok(v.poster && back.media[v.poster]);
+  assert.deepEqual(v.trim, { st: 1.5, end: 10 });
+  assert.equal(back.media[objs.find((o) => o.kind === 'audio').media], p.media.a1);
+});
+
+test('차트: 데이터 통합 문서(embeddings/*.xlsx) + 셀 참조 캐시, 다시 읽기', async () => {
+  const p = newPresentation();
+  const ch = { kind: 'col', cats: ['1월', '2월', '3월'], series: [{ name: '클릭', vals: [10, 25, 18] }, { name: '전환', vals: [1, 2, 3] }], legend: 'b' };
+  p.slides[0].objects.push(newChart({ x: 100, y: 100, w: 600, h: 400 }, ch));
+  const files = unzip(writePptx(p));
+  const cx = textOf(files['ppt/charts/chart1.xml']);
+  assert.match(cx, /<c:externalData r:id="rId1">/);
+  assert.match(cx, /<c:f>Sheet1!\$B\$2:\$B\$4<\/c:f>/);
+  assert.match(cx, /<c:f>Sheet1!\$A\$2:\$A\$4<\/c:f>/);
+  assert.match(textOf(files['ppt/charts/_rels/chart1.xml.rels']), /embeddings\/Microsoft_Excel_Worksheet1\.xlsx/);
+  const wb = unzip(files['ppt/embeddings/Microsoft_Excel_Worksheet1.xlsx']);
+  const sheet = textOf(wb['xl/worksheets/sheet1.xml']);
+  assert.match(sheet, /<c r="B1" t="inlineStr"><is><t xml:space="preserve">클릭<\/t>/);
+  assert.match(sheet, /<c r="C4"><v>3<\/v><\/c>/);
+  assert.match(sheet, /<c r="A2" t="inlineStr"><is><t xml:space="preserve">1월/);
+  const back = readPptx(writePptx(p)).pres.slides[0].objects.find((o) => o.type === 'chart');
+  assert.deepEqual(back.chart.cats, ['1월', '2월', '3월']);
+  assert.deepEqual(back.chart.series[1].vals, [1, 2, 3]);
+});
+
+test('모핑 전환 · 단락별 애니메이션 · 이동 경로 저장/읽기', () => {
+  const p = sample();
+  const s = p.slides[1];
+  const t = s.objects.find((o) => o.text && o.text.paras.length > 1) ?? s.objects[1];
+  t.text.paras = [para('첫째'), para('둘째'), para('셋째')];
+  s.anims = [];
+  addAnim(s, t.id, 'entr', 'fade', { byPara: true });
+  addAnim(s, s.objects[0].id, 'path', 'pathArc');
+  s.transition = { type: 'morph', dur: 2 };
+  const bytes = writePptx(p);
+  const xml = textOf(unzip(bytes)['ppt/slides/slide2.xml']);
+  assert.match(xml, /<p159:morph option="byObject"\/>/);
+  assert.match(xml, /<mc:Fallback><p:transition spd="slow"><p:fade\/>/);
+  assert.match(xml, /<p:pRg st="2" end="2"\/>/);
+  assert.match(xml, /build="p"/);
+  assert.match(xml, /<p:animMotion origin="layout" path="M 0 0 C [^"]+ E"/);
+  // WIPOINT 확장 없이 읽기 (PowerPoint 파일처럼)
+  const stripped = new Map(Object.entries(unzip(bytes)));
+  const sx = textOf(stripped.get('ppt/slides/slide2.xml')).replace(/<p:ext uri="\{6F1B2D57[^]*?<\/p:ext>/, '');
+  stripped.set('ppt/slides/slide2.xml', new TextEncoder().encode(sx));
+  const back = readPptx(zip(Object.fromEntries(stripped))).pres.slides[1];
+  assert.equal(back.transition.type, 'morph');
+  const para3 = back.anims.find((a) => a.byPara);
+  assert.ok(para3 && para3.effect === 'fade');
+  const path = back.anims.find((a) => a.cls === 'path');
+  assert.match(path.motion, /^M 0 0 C/);
+});
+
+test('animSteps: 단락별은 단락마다 한 단계, 모핑 짝 찾기', async () => {
+  const { animSteps, morphPairs, motionPoints } = await import('../src/model.js');
+  const p = sample();
+  const s = p.slides[1];
+  const t = s.objects[1];
+  t.text.paras = [para('a'), para(''), para('b')];
+  s.anims = [];
+  addAnim(s, t.id, 'entr', 'fade', { byPara: true });
+  const st = animSteps(s);
+  assert.equal(st.length, 2);
+  assert.deepEqual(st.map((x) => x[0].para), [0, 2]);
+  const a = { objects: [{ id: 'x', type: 'shape', shape: 'rect', name: '로고', x: 0, y: 0, w: 10, h: 10 }] };
+  const b = { objects: [{ id: 'y', type: 'shape', shape: 'ellipse', name: '로고', x: 50, y: 0, w: 20, h: 20 }] };
+  assert.equal(morphPairs(a, b).length, 1);
+  const pts = motionPoints('M 0 0 C 0 0 1 1 1 1', 4);
+  assert.deepEqual(pts[pts.length - 1], [1, 1]);
+});
+
+test('메모 · 사용자 지정 쇼 저장/읽기 (WIPOINT 확장 없이도)', () => {
+  const p = sample();
+  p.slides[0].comments = [{ id: 'c1', author: '김대리', text: '제목 확인 부탁', at: '2026-10-10T01:00:00Z', x: 100, y: 50, replies: [{ author: '박과장', text: '확인했습니다', at: '2026-10-10T02:00:00Z' }] }];
+  p.customShows = [{ name: '요약본', slides: [p.slides[1].id, p.slides[0].id] }];
+  const bytes = writePptx(p);
+  const files = unzip(bytes);
+  assert.match(textOf(files['ppt/comments/comment1.xml']), /<p:cm authorId="0" dt="2026-10-10T01:00:00" idx="1"><p:pos x="600" y="300"\/><p:text>제목 확인 부탁<\/p:text>/);
+  assert.match(textOf(files['ppt/commentAuthors.xml']), /name="김대리"/);
+  assert.match(textOf(files['ppt/presentation.xml']), /<p:custShowLst><p:custShow name="요약본" id="0"><p:sldLst><p:sld r:id="rId\d+"\/><p:sld r:id="rId\d+"\/>/);
+  const back = readPptx(bytes).pres;
+  assert.equal(back.slides[0].comments[0].replies[0].text, '확인했습니다');
+  assert.deepEqual(back.customShows[0].slides, [back.slides[1].id, back.slides[0].id]);
+  // WIPOINT 확장을 지운 PowerPoint 형식만으로
+  const m = new Map(Object.entries(files));
+  m.set('ppt/slides/slide1.xml', new TextEncoder().encode(textOf(files['ppt/slides/slide1.xml']).replace(/<p:ext uri="\{6F1B2D57[^]*?<\/p:ext>/, '')));
+  const b2 = readPptx(zip(Object.fromEntries(m))).pres;
+  const c = b2.slides[0].comments[0];
+  assert.equal(c.author, '김대리');
+  assert.equal(c.text, '제목 확인 부탁');
+  assert.deepEqual([c.x, c.y], [100, 50]);
+  assert.equal(c.replies[0].author, '박과장');
 });

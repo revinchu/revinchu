@@ -97,7 +97,7 @@ export function renderOverlay() {
   if (!overlay) return;
   overlay.innerHTML = '';
   const z = S.zoom;
-  const frames = selectionFrames();
+  const frames = S.cropping ? [] : selectionFrames();
   for (const [i, f] of frames.entries()) {
     const { x, y, w, h } = f.box;
     const fr = el('div', { class: `sel-frame${f.group ? ' group' : ''}${S.editing ? ' editing' : ''}`, style: { left: `${x * z}px`, top: `${y * z}px`, width: `${w * z}px`, height: `${h * z}px`, transform: f.rot ? `rotate(${f.rot}deg)` : '' } });
@@ -111,6 +111,16 @@ export function renderOverlay() {
       if (!f.line && frames.length === 1) fr.append(el('div', { class: 'hd-rot', dataset: { h: 'rot' }, title: '회전' }));
     }
     overlay.append(fr);
+  }
+  tableOverlay(z);
+  cropOverlay(z);
+  // 메모 표시 (말풍선)
+  if (S.showComments !== false) {
+    for (const [k, c] of (curSlide()?.comments ?? []).entries()) {
+      const pin = el('div', { class: `cm-pin${c.done ? ' done' : ''}`, title: `${c.author ?? ''}: ${c.text}`, dataset: { cm: c.id }, style: { left: `${c.x * z}px`, top: `${c.y * z}px` } }, String(k + 1));
+      pin.addEventListener('pointerdown', (e) => { e.stopPropagation(); e.preventDefault(); S.formatPane = 'comments'; emit('openPane'); });
+      overlay.append(pin);
+    }
   }
   // 개체 틀 점선 (비어 있는 개체 틀은 render 에서 안내 글로)
 }
@@ -155,11 +165,26 @@ let drag = null;
 
 function onPointerDown(e) {
   if (e.button !== 0) return;
+  if (S.cropping && !e.target.closest('.crop-win, .crop-ghost')) endCrop();
   const p = toSlide(e);
   // 도형 그리기 모드
   if (S.drawShape) { startDraw(e, p); return; }
   const handle = e.target.dataset?.h;
   if (handle) { e.preventDefault(); startHandleDrag(e, p, handle, Number(e.target.closest('.sel-frame')?.dataset.frame ?? 0)); return; }
+  // 표 칸 범위: Shift+클릭 / 칸에서 칸으로 끌기
+  const tdHit = e.target.closest?.('[data-cell]');
+  let tblObj = tdHit ? hitObject(e) : null;
+  // 표 가장자리(테두리 근처)를 누르면 표 옮기기
+  if (tblObj?.type === 'table') { const m = 6 / S.zoom; if (p.x - tblObj.x < m || tblObj.x + tblObj.w - p.x < m || p.y - tblObj.y < m || tblObj.y + tblObj.h - p.y < m) tblObj = null; }
+  if (tblObj?.type === 'table' && (S.editing?.id === tblObj.id || S.cellRange?.id === tblObj.id || S.sel.has(tblObj.id))) {
+    const [r, c] = tdHit.dataset.cell.split(',').map(Number);
+    const anchor = S.editing?.id === tblObj.id && S.editing.cell ? S.editing.cell : S.cellRange?.id === tblObj.id ? [S.cellRange.ar, S.cellRange.ac] : null;
+    if (e.shiftKey && anchor) { e.preventDefault(); setCellRange(tblObj, anchor[0], anchor[1], r, c); return; }
+    const inText = S.editing && txi && txi.contains(e.target);
+    startCellDrag(e, tblObj, r, c, !inText);
+    // 표 안을 누르면 칸 편집 · 끌면 칸 범위 (표 옮기기는 테두리를 끌어서 — PowerPoint 와 같음)
+    return;
+  } else if (S.cellRange) { S.cellRange = null; }
   // 편집 중인 글 안 클릭은 브라우저에 맡김
   if (S.editing && txi && txi.contains(e.target)) return;
   const o = hitObject(e);
@@ -190,11 +215,174 @@ function onPointerDown(e) {
   startMove(e, p, textTarget ? () => startEdit(o, { x: e.clientX, y: e.clientY }) : null);
 }
 
+// ───────────── 표: 칸 범위 · 열 너비/행 높이 끌기 ─────────────
+function setCellRange(t, ar, ac, br, bc) {
+  if (S.editing) endEdit();
+  S.sel = new Set([t.id]);
+  S.cellRange = { id: t.id, ar, ac, r1: Math.min(ar, br), c1: Math.min(ac, bc), r2: Math.max(ar, br), c2: Math.max(ac, bc) };
+  // 병합된 칸이 걸치면 넓힘
+  for (let grow = true; grow;) {
+    grow = false;
+    const g = S.cellRange;
+    t.rows.forEach((row, ri) => row.cells.forEach((cell, ci) => {
+      const r2 = ri + (cell.rowSpan ?? 1) - 1;
+      const c2 = ci + (cell.span ?? 1) - 1;
+      if (cell.hMerge || cell.vMerge) return;
+      const inter = ri <= g.r2 && r2 >= g.r1 && ci <= g.c2 && c2 >= g.c1;
+      if (inter && (ri < g.r1 || r2 > g.r2 || ci < g.c1 || c2 > g.c2)) { g.r1 = Math.min(g.r1, ri); g.r2 = Math.max(g.r2, r2); g.c1 = Math.min(g.c1, ci); g.c2 = Math.max(g.c2, c2); grow = true; }
+    }));
+  }
+  emit('selection');
+  renderOverlay();
+}
+function startCellDrag(e, t, r0, c0, editOnClick = true) {
+  let moved = false;
+  const at = { x: e.clientX, y: e.clientY };
+  const onMove = (ev) => {
+    const td = document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.(`.ob[data-id="${t.id}"] [data-cell]`);
+    if (!td) return;
+    const [r, c] = td.dataset.cell.split(',').map(Number);
+    if (!moved && r === r0 && c === c0) return;
+    moved = true;
+    window.getSelection()?.removeAllRanges();
+    setCellRange(t, r0, c0, r, c);
+  };
+  const onUp = () => {
+    removeEventListener('pointermove', onMove);
+    removeEventListener('pointerup', onUp);
+    if (!moved && editOnClick) { S.cellRange = null; S.sel = new Set([t.id]); startEdit(t, { ...at, cell: [r0, c0] }); }
+  };
+  addEventListener('pointermove', onMove);
+  addEventListener('pointerup', onUp);
+}
+function tableOverlay(z) {
+  const t = selObjects().length === 1 ? selObjects()[0] : S.editing ? objById(S.editing.id) : null;
+  if (t?.type !== 'table' || t.rot) return;
+  const g = S.cellRange?.id === t.id ? S.cellRange : null;
+  if (g) {
+    let y1 = t.y; for (let i = 0; i < g.r1; i++) y1 += t.rows[i].h;
+    let y2 = y1; for (let i = g.r1; i <= g.r2; i++) y2 += t.rows[i].h;
+    let x1 = t.x; for (let i = 0; i < g.c1; i++) x1 += t.cols[i];
+    let x2 = x1; for (let i = g.c1; i <= g.c2; i++) x2 += t.cols[i];
+    overlay.append(el('div', { class: 'cell-range', style: { left: `${x1 * z}px`, top: `${y1 * z}px`, width: `${(x2 - x1) * z}px`, height: `${(y2 - y1) * z}px` } }));
+  }
+  // 열 경계 · 행 경계 끌기 손잡이
+  let x = t.x;
+  t.cols.forEach((w, i) => {
+    x += w;
+    const hd = el('div', { class: 'col-grip', title: '열 너비 (끌기)', style: { left: `${x * z - 3}px`, top: `${t.y * z}px`, height: `${t.h * z}px` } });
+    hd.addEventListener('pointerdown', (e) => gripDrag(e, t, 'col', i));
+    overlay.append(hd);
+  });
+  let y = t.y;
+  t.rows.forEach((r, i) => {
+    y += r.h;
+    const hd = el('div', { class: 'row-grip', title: '행 높이 (끌기)', style: { top: `${y * z - 3}px`, left: `${t.x * z}px`, width: `${t.w * z}px` } });
+    hd.addEventListener('pointerdown', (e) => gripDrag(e, t, 'row', i));
+    overlay.append(hd);
+  });
+}
+function gripDrag(e, t, kind, i) {
+  e.preventDefault();
+  e.stopPropagation();
+  if (S.editing) endEdit();
+  const p0 = toSlide(e);
+  const start = kind === 'col' ? t.cols[i] : t.rows[i].h;
+  const next = kind === 'col' ? t.cols[i + 1] : null;
+  S.history.record(S.pres);
+  const onMove = (ev) => {
+    const p = toSlide(ev);
+    const d = kind === 'col' ? p.x - p0.x : p.y - p0.y;
+    if (kind === 'col') {
+      // 가운데 경계: 옆 열과 나눔 (전체 너비 유지), 마지막 경계: 표가 넓어짐 — PowerPoint 와 같음
+      const v = Math.max(12, start + d);
+      if (next != null && !ev.shiftKey) { const n2 = Math.max(12, next - (v - start)); t.cols[i] = start + next - n2; t.cols[i + 1] = n2; } else t.cols[i] = v;
+      t.w = t.cols.reduce((a, b) => a + b, 0);
+    } else {
+      t.rows[i].h = Math.max(10, start + d);
+      t.h = t.rows.reduce((a, b) => a + b.h, 0);
+    }
+    renderCanvas();
+  };
+  const onUp = () => { removeEventListener('pointermove', onMove); removeEventListener('pointerup', onUp); S.dirty = true; emit('change', { scope: 'slide' }); };
+  addEventListener('pointermove', onMove);
+  addEventListener('pointerup', onUp);
+}
+
+// ───────────── 그림 자르기 (화면에서) ─────────────
+/** 자르기 모드: 원래 그림 전체(흐리게) + 자르기 손잡이. 손잡이를 끌면 자르기, 그림을 끌면 안에서 옮기기 */
+export function startCrop(o) {
+  if (o?.type !== 'image' || !o.media) return false;
+  if (S.editing) endEdit();
+  S.cropping = o.id;
+  S.sel = new Set([o.id]);
+  emit('selection');
+  renderOverlay();
+  return true;
+}
+export function endCrop() { if (!S.cropping) return; S.cropping = null; renderOverlay(); emit('change', { scope: 'slide' }); }
+function fullRect(o) {
+  const c = o.crop ?? { l: 0, t: 0, r: 0, b: 0 };
+  const fw = o.w / Math.max(0.01, 1 - c.l - c.r);
+  const fh = o.h / Math.max(0.01, 1 - c.t - c.b);
+  return { x: o.x - c.l * fw, y: o.y - c.t * fh, w: fw, h: fh };
+}
+function cropOverlay(z) {
+  if (!S.cropping) return;
+  const o = objById(S.cropping);
+  if (!o || o.type !== 'image') { S.cropping = null; return; }
+  const F = fullRect(o);
+  const src = S.pres.media[o.media];
+  const ghost = el('div', { class: 'crop-ghost', style: { left: `${F.x * z}px`, top: `${F.y * z}px`, width: `${F.w * z}px`, height: `${F.h * z}px`, backgroundImage: `url("${src}")` } });
+  ghost.addEventListener('pointerdown', (e) => cropDrag(e, o, 'pan'));
+  const win = el('div', { class: 'crop-win', style: { left: `${o.x * z}px`, top: `${o.y * z}px`, width: `${o.w * z}px`, height: `${o.h * z}px` } });
+  win.addEventListener('pointerdown', (e) => cropDrag(e, o, 'pan'));
+  for (const hd of ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']) {
+    const h = el('div', { class: `crop-hd ch-${hd}` });
+    h.addEventListener('pointerdown', (e) => cropDrag(e, o, hd));
+    win.append(h);
+  }
+  overlay.append(ghost, win);
+}
+function cropDrag(e, o, kind) {
+  e.preventDefault();
+  e.stopPropagation();
+  const p0 = toSlide(e);
+  const F0 = fullRect(o);
+  const r0 = { x: o.x, y: o.y, w: o.w, h: o.h };
+  S.history.record(S.pres);
+  const MIN = 8;
+  const onMove = (ev) => {
+    const p = toSlide(ev);
+    const dx = p.x - p0.x;
+    const dy = p.y - p0.y;
+    let F = { ...F0 };
+    let r = { ...r0 };
+    if (kind === 'pan') {
+      F.x = Math.min(r.x, Math.max(r.x + r.w - F.w, F0.x + dx));
+      F.y = Math.min(r.y, Math.max(r.y + r.h - F.h, F0.y + dy));
+    } else {
+      if (kind.includes('w')) { const nx = Math.max(F.x, Math.min(r0.x + r0.w - MIN, r0.x + dx)); r.w = r0.x + r0.w - nx; r.x = nx; }
+      if (kind.includes('e')) r.w = Math.max(MIN, Math.min(F.x + F.w - r0.x, r0.w + dx));
+      if (kind.includes('n')) { const ny = Math.max(F.y, Math.min(r0.y + r0.h - MIN, r0.y + dy)); r.h = r0.y + r0.h - ny; r.y = ny; }
+      if (kind.includes('s')) r.h = Math.max(MIN, Math.min(F.y + F.h - r0.y, r0.h + dy));
+    }
+    Object.assign(o, r);
+    o.crop = { l: (r.x - F.x) / F.w, t: (r.y - F.y) / F.h, r: (F.x + F.w - r.x - r.w) / F.w, b: (F.y + F.h - r.y - r.h) / F.h };
+    for (const k of ['l', 't', 'r', 'b']) if (Math.abs(o.crop[k]) < 1e-4) o.crop[k] = 0;
+    renderCanvas();
+    renderOverlay();
+  };
+  const onUp = () => { removeEventListener('pointermove', onMove); removeEventListener('pointerup', onUp); S.dirty = true; emit('change', { scope: 'slide' }); };
+  addEventListener('pointermove', onMove);
+  addEventListener('pointerup', onUp);
+}
+
 function onDblClick(e) {
   const o = hitObject(e);
   if (!o) return;
   if (o.type === 'chart') { run('chartData'); return; }
-  if (o.type === 'image') { if (o.media) run('formatPane', 'shape'); return; }
+  if (o.type === 'image') { if (o.media) startCrop(o); return; }
   if (o.type === 'table') {
     const td = e.target.closest('[data-cell]');
     if (td) { const [r, c] = td.dataset.cell.split(',').map(Number); startEdit(o, { x: e.clientX, y: e.clientY, cell: [r, c] }); }

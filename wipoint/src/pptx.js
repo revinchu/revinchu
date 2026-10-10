@@ -200,11 +200,12 @@ function tableXml(o, id, ctx, theme) {
     const anchor = { t: 't', ctr: 'ctr', b: 'b' }[c.text.anchor ?? 't'];
     const bl = (tag, side) => {
       const b = c.borders?.[side];
+      if ((side === 'dd' || side === 'du') && !b) return '';
       if (b) return `<a:${tag} w="${Math.round((b.width ?? 1) * EMU_PER_PX)}">${solidFill(b.color)}</a:${tag}>`;
       return `<a:${tag} w="12700">${solidFill(ts.border)}</a:${tag}>`;
     };
     const merge = `${c.span ? ` gridSpan="${c.span}"` : ''}${c.rowSpan ? ` rowSpan="${c.rowSpan}"` : ''}${c.hMerge ? ' hMerge="1"' : ''}${c.vMerge ? ' vMerge="1"' : ''}`;
-    return `<a:tc${merge}>${txBodyXml(pseudo, body, ctx, 'a:txBody').replace(/<a:bodyPr[^>]*>(<a:[a-zA-Z]+[^>]*\/>)?<\/a:bodyPr>/, '<a:bodyPr/>')}<a:tcPr marL="${E(ins[0])}" marR="${E(ins[2])}" marT="${E(ins[1])}" marB="${E(ins[3])}" anchor="${anchor}">${bl('lnL', 'l')}${bl('lnR', 'r')}${bl('lnT', 't')}${bl('lnB', 'b')}${fill}</a:tcPr></a:tc>`;
+    return `<a:tc${merge}>${txBodyXml(pseudo, body, ctx, 'a:txBody').replace(/<a:bodyPr[^>]*>(<a:[a-zA-Z]+[^>]*\/>)?<\/a:bodyPr>/, '<a:bodyPr/>')}<a:tcPr marL="${E(ins[0])}" marR="${E(ins[2])}" marT="${E(ins[1])}" marB="${E(ins[3])}" anchor="${anchor}">${bl('lnL', 'l')}${bl('lnR', 'r')}${bl('lnT', 't')}${bl('lnB', 'b')}${bl('lnTlToBr', 'dd')}${bl('lnBlToTr', 'du')}${fill}</a:tcPr></a:tc>`;
   }).join('')}</a:tr>`).join('');
   const st = o.style ?? {};
   const ext = `<a:extLst><a:ext uri="${WP_EXT_URI}"><wp:table xmlns:wp="${WP_NS}" json="${esc(JSON.stringify({ style: st, own }))}"/></a:ext></a:extLst>`;
@@ -219,19 +220,51 @@ function chartFrameXml(o, id, ctx) {
 }
 
 /** 차트 파트 (값은 리터럴로 — 내장 통합 문서 없이도 PowerPoint 가 그림) */
-export function chartXml(ch) {
+/** 열 번호 → 문자 (0 → A) */
+const colName = (i) => { let s = ''; for (i += 1; i > 0; i = Math.floor((i - 1) / 26)) s = String.fromCharCode(65 + ((i - 1) % 26)) + s; return s; };
+/**
+ * 차트 데이터 통합 문서 (PowerPoint [데이터 편집] 용): A열 = 항목, 1행 = 계열 이름
+ * 최소 xlsx (inlineStr 글자, 스타일 1개) 를 zip 으로 만듦
+ */
+export function chartWorkbook(ch) {
+  const cell = (ref, v) => (typeof v === 'number' && Number.isFinite(v) ? `<c r="${ref}"><v>${v}</v></c>` : v == null || v === '' ? '' : `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${esc(String(v))}</t></is></c>`);
+  const rows = [`<row r="1">${ch.series.map((s, i) => cell(`${colName(i + 1)}1`, s.name)).join('')}</row>`];
+  ch.cats.forEach((c, r) => {
+    const num = ch.kind === 'scatter' && Number.isFinite(Number(c)) ? Number(c) : c;
+    rows.push(`<row r="${r + 2}">${cell(`A${r + 2}`, num)}${ch.series.map((s, i) => cell(`${colName(i + 1)}${r + 2}`, Number(s.vals[r]) || 0)).join('')}</row>`);
+  });
+  const last = `${colName(ch.series.length)}${ch.cats.length + 1}`;
+  const enc = new TextEncoder();
+  const files = {
+    '[Content_Types].xml': `${XML_HEAD}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`,
+    '_rels/.rels': `${XML_HEAD}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL('officeDocument')}" Target="xl/workbook.xml"/></Relationships>`,
+    'xl/workbook.xml': `${XML_HEAD}<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="${NS_R}"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+    'xl/_rels/workbook.xml.rels': `${XML_HEAD}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL('worksheet')}" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="${REL('styles')}" Target="styles.xml"/></Relationships>`,
+    'xl/styles.xml': `${XML_HEAD}<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><sz val="11"/><name val="맑은 고딕"/><family val="2"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs><cellStyles count="1"><cellStyle name="표준" xfId="0" builtinId="0"/></cellStyles></styleSheet>`,
+    'xl/worksheets/sheet1.xml': `${XML_HEAD}<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:${last}"/><sheetData>${rows.join('')}</sheetData></worksheet>`,
+  };
+  return zip(Object.fromEntries(Object.entries(files).map(([name, text]) => [name, enc.encode(text)])));
+}
+
+/** opts.embed: 데이터 통합 문서 관계 id (있으면 Sheet1 셀 참조 + 캐시로 씀) */
+export function chartXml(ch, opts = {}) {
   const kind = ch.kind ?? 'col';
-  const lit = (vals, num) => `<c:${num ? 'numLit' : 'strLit'}>${num ? '<c:formatCode>General</c:formatCode>' : ''}<c:ptCount val="${vals.length}"/>${vals.map((v, i) => `<c:pt idx="${i}"><c:v>${esc(num ? (Number(v) || 0) : v)}</c:v></c:pt>`).join('')}</c:${num ? 'numLit' : 'strLit'}>`;
+  const n = ch.cats.length;
+  const ref = (col, r1, r2) => `Sheet1!$${col}$${r1}${r2 != null ? `:$${col}$${r2}` : ''}`;
+  const cache = (vals, num, f) => `<c:${num ? 'numRef' : 'strRef'}><c:f>${f}</c:f><c:${num ? 'numCache' : 'strCache'}>${num ? '<c:formatCode>General</c:formatCode>' : ''}<c:ptCount val="${vals.length}"/>${vals.map((v, i) => `<c:pt idx="${i}"><c:v>${esc(num ? (Number(v) || 0) : v)}</c:v></c:pt>`).join('')}</c:${num ? 'numCache' : 'strCache'}></c:${num ? 'numRef' : 'strRef'}>`;
+  const lit0 = (vals, num) => `<c:${num ? 'numLit' : 'strLit'}>${num ? '<c:formatCode>General</c:formatCode>' : ''}<c:ptCount val="${vals.length}"/>${vals.map((v, i) => `<c:pt idx="${i}"><c:v>${esc(num ? (Number(v) || 0) : v)}</c:v></c:pt>`).join('')}</c:${num ? 'numLit' : 'strLit'}>`;
   const pie = kind === 'pie' || kind === 'doughnut';
   const sers = ch.series.map((s, i) => {
     const color = s.color ? `<c:spPr>${kind === 'line' || kind === 'scatter' ? `<a:ln w="28575" cap="rnd">${solidFill(s.color)}<a:round/></a:ln>` : solidFill(s.color)}</c:spPr>` : '';
-    const tx = `<c:tx><c:v>${esc(s.name)}</c:v></c:tx>`;
+    const col = colName(i + 1);
+    const tx = opts.embed ? `<c:tx>${cache([s.name], false, ref(col, 1))}</c:tx>` : `<c:tx><c:v>${esc(s.name)}</c:v></c:tx>`;
+    const lit = (vals, num, which) => (opts.embed ? cache(vals, num, which === 'cat' ? ref('A', 2, n + 1) : ref(col, 2, n + 1)) : lit0(vals, num));
     if (kind === 'scatter') {
       const xs = ch.cats.map((c, k) => (Number.isFinite(Number(c)) ? Number(c) : k + 1));
-      return `<c:ser><c:idx val="${i}"/><c:order val="${i}"/>${tx}${color}<c:xVal>${lit(xs, true)}</c:xVal><c:yVal>${lit(s.vals, true)}</c:yVal><c:smooth val="0"/></c:ser>`;
+      return `<c:ser><c:idx val="${i}"/><c:order val="${i}"/>${tx}${color}<c:xVal>${lit(xs, true, 'cat')}</c:xVal><c:yVal>${lit(s.vals, true)}</c:yVal><c:smooth val="0"/></c:ser>`;
     }
     const extra = kind === 'col' || kind === 'bar' ? '<c:invertIfNegative val="0"/>' : kind === 'line' ? `<c:marker><c:symbol val="${ch.markers ? 'circle' : 'none'}"/></c:marker>` : '';
-    return `<c:ser><c:idx val="${i}"/><c:order val="${i}"/>${tx}${color}${extra}<c:cat>${lit(ch.cats, false)}</c:cat><c:val>${lit(s.vals, true)}</c:val>${kind === 'line' ? '<c:smooth val="0"/>' : ''}</c:ser>`;
+    return `<c:ser><c:idx val="${i}"/><c:order val="${i}"/>${tx}${color}${extra}<c:cat>${lit(ch.cats, false, 'cat')}</c:cat><c:val>${lit(s.vals, true)}</c:val>${kind === 'line' ? '<c:smooth val="0"/>' : ''}</c:ser>`;
   }).join('');
   const dl = ch.labels ? `<c:dLbls><c:showLegendKey val="0"/><c:showVal val="${pie ? 0 : 1}"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="${pie ? 1 : 0}"/><c:showBubbleSize val="0"/></c:dLbls>` : '';
   const axIds = '<c:axId val="111111111"/><c:axId val="222222222"/>';
@@ -246,7 +279,7 @@ export function chartXml(ch) {
   const title = ch.title ? `<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="1862" b="0"/></a:pPr><a:r><a:rPr lang="ko-KR" altLang="en-US"/><a:t>${esc(ch.title)}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title><c:autoTitleDeleted val="0"/>` : '<c:autoTitleDeleted val="1"/>';
   const legend = ch.legend ? `<c:legend><c:legendPos val="${ch.legend}"/><c:overlay val="0"/></c:legend>` : '';
   const wx = `<c:extLst><c:ext uri="${WP_EXT_URI}"><wp:chart xmlns:wp="${WP_NS}" json="${esc(JSON.stringify(ch))}"/></c:ext></c:extLst>`;
-  return `${XML_HEAD}<c:chartSpace xmlns:c="${NS_C}" xmlns:a="${NS_A}" xmlns:r="${NS_R}"><c:roundedCorners val="0"/><c:chart>${title}<c:plotArea><c:layout/>${plot}${ax}</c:plotArea>${legend}<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="1197">${solidFill('@tx1:lm65:lo35')}<a:latin typeface="+mn-lt"/><a:ea typeface="+mn-ea"/></a:defRPr></a:pPr><a:endParaRPr lang="ko-KR"/></a:p></c:txPr>${wx}</c:chartSpace>`;
+  return `${XML_HEAD}<c:chartSpace xmlns:c="${NS_C}" xmlns:a="${NS_A}" xmlns:r="${NS_R}"><c:roundedCorners val="0"/><c:chart>${title}<c:plotArea><c:layout/>${plot}${ax}</c:plotArea>${legend}<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="1197">${solidFill('@tx1:lm65:lo35')}<a:latin typeface="+mn-lt"/><a:ea typeface="+mn-ea"/></a:defRPr></a:pPr><a:endParaRPr lang="ko-KR"/></a:p></c:txPr>${opts.embed ? `<c:externalData r:id="${opts.embed}"><c:autoUpdate val="0"/></c:externalData>` : ''}${wx}</c:chartSpace>`;
 }
 
 // ───────────── 애니메이션 → p:timing ─────────────
@@ -254,13 +287,14 @@ const ENTR_PRESET = { appear: 1, fly: 2, split: 16, wheel: 21, wipe: 22, zoom: 5
 const EMPH_PRESET = { pulse: 26, spin: 8, growShrink: 6, teeter: 32, flash: 35 };
 const EXIT_PRESET = { disappear: 1, fly: 2, wipe: 22, zoom: 53, fade: 10 };
 const DIR_SUB = { b: 4, t: 1, l: 8, r: 2 };
+const PATH_PRESET = { pathRight: 64, pathLeft: 64, pathUp: 64, pathDown: 64, pathArc: 37, pathCircle: 1, pathWave: 61 };
 
 function timingXml(slide, spidOf) {
   const steps = animSteps(slide);
   if (!steps.length) return '';
   let n = 3;
   const nid = () => n++;
-  const tgt = (spid) => `<p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl>`;
+  const tgt = (spid) => { const [id, pi] = String(spid).split('#'); return pi != null ? `<p:tgtEl><p:spTgt spid="${id}"><p:txEl><p:pRg st="${pi}" end="${pi}"/></p:txEl></p:spTgt></p:tgtEl>` : `<p:tgtEl><p:spTgt spid="${id}"/></p:tgtEl>`; };
   const set = (spid, val, delay = 0) => `<p:set><p:cBhvr><p:cTn id="${nid()}" dur="1" fill="hold"><p:stCondLst><p:cond delay="${delay}"/></p:stCondLst></p:cTn>${tgt(spid)}<p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="${val}"/></p:to></p:set>`;
   const effect = (spid, dur, filter, dir = 'in') => `<p:animEffect transition="${dir}" filter="${filter}"><p:cBhvr><p:cTn id="${nid()}" dur="${dur}"/>${tgt(spid)}</p:cBhvr></p:animEffect>`;
   const anim = (spid, dur, attr, from, to) => `<p:anim calcmode="lin" valueType="num"><p:cBhvr additive="base"><p:cTn id="${nid()}" dur="${dur}" fill="hold"/>${tgt(spid)}<p:attrNameLst><p:attrName>${attr}</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst><p:tav tm="0"><p:val><p:strVal val="${from}"/></p:val></p:tav><p:tav tm="100000"><p:val><p:strVal val="${to}"/></p:val></p:tav></p:tavLst></p:anim>`;
@@ -292,6 +326,10 @@ function timingXml(slide, spidOf) {
         default: return effect(spid, dur, 'fade', 'out') + hide;
       }
     }
+    if (a.cls === 'path') {
+      const path = `${String(a.motion ?? 'M 0 0 L 0.25 0').trim()} E`;
+      return `<p:animMotion origin="layout" path="${esc(path)}" pathEditMode="relative" ptsTypes=""><p:cBhvr><p:cTn id="${nid()}" dur="${dur}" fill="hold"/>${tgt(spid)}<p:attrNameLst><p:attrName>ppt_x</p:attrName><p:attrName>ppt_y</p:attrName></p:attrNameLst></p:cBhvr><p:rCtr x="0" y="0"/></p:animMotion>`;
+    }
     // 강조
     if (a.effect === 'spin' || a.effect === 'teeter') return `<p:animRot by="${a.effect === 'spin' ? 21600000 : 300000}"><p:cBhvr><p:cTn id="${nid()}" dur="${dur}" fill="hold"${a.effect === 'teeter' ? ' autoRev="1" repeatCount="2000"' : ''}/>${tgt(spid)}<p:attrNameLst><p:attrName>r</p:attrName></p:attrNameLst></p:cBhvr></p:animRot>`;
     if (a.effect === 'flash') return `<p:animEffect transition="out" filter="fade"><p:cBhvr><p:cTn id="${nid()}" dur="${dur}" autoRev="1"/>${tgt(spid)}</p:cBhvr></p:animEffect>`;
@@ -313,9 +351,10 @@ function timingXml(slide, spidOf) {
       const gid = nid();
       const effs = g.items.map((t, k) => {
         const a = t.anim;
-        const spid = spidOf(a.obj);
-        if (!spid) return '';
-        const table = a.cls === 'entr' ? ENTR_PRESET : a.cls === 'exit' ? EXIT_PRESET : EMPH_PRESET;
+        const spid0 = spidOf(a.obj);
+        if (!spid0) return '';
+        const spid = a.para != null ? `${spid0}#${a.para}` : spid0;
+        const table = a.cls === 'entr' ? ENTR_PRESET : a.cls === 'exit' ? EXIT_PRESET : a.cls === 'path' ? PATH_PRESET : EMPH_PRESET;
         const node = k === 0 && g === groups[0] && step[0] === a ? (a.start === 'after' ? 'afterEffect' : a.start === 'with' ? 'withEffect' : 'clickEffect') : a.start === 'after' ? 'afterEffect' : 'withEffect';
         const sub = a.cls === 'emph' ? 0 : a.effect === 'fly' || a.effect === 'wipe' ? DIR_SUB[a.dir ?? 'b'] ?? 4 : a.effect === 'zoom' ? 16 : a.effect === 'split' ? 37 : 0;
         const eid = nid();
@@ -327,7 +366,8 @@ function timingXml(slide, spidOf) {
     const cond = first.start === 'click' ? '<p:cond delay="indefinite"/>' : '<p:cond delay="indefinite"/><p:cond evt="onBegin" delay="0"><p:tn val="2"/></p:cond>';
     return `<p:par><p:cTn id="${outerId}" fill="hold"><p:stCondLst>${cond}</p:stCondLst><p:childTnLst>${inner}</p:childTnLst></p:cTn></p:par>`;
   }).join('');
-  const blds = [...new Set(steps.flat().map((a) => spidOf(a.obj)).filter(Boolean))].map((spid) => `<p:bldP spid="${spid}" grpId="0"/>`).join('');
+  const byPara = new Set(steps.flat().filter((a) => a.para != null).map((a) => spidOf(a.obj)));
+  const blds = [...new Set(steps.flat().filter((a) => a.cls !== 'path' || byPara.has(spidOf(a.obj))).map((a) => spidOf(a.obj)).filter(Boolean))].map((spid) => `<p:bldP spid="${spid}" grpId="0"${byPara.has(spid) ? ' build="p"' : ''}/>`).join('');
   return `<p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst><p:seq concurrent="1" nextAc="seek"><p:cTn id="2" dur="indefinite" nodeType="mainSeq"><p:childTnLst>${clickPars}</p:childTnLst></p:cTn><p:prevCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst><p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst></p:seq></p:childTnLst></p:cTn></p:par></p:tnLst>${blds ? `<p:bldLst>${blds}</p:bldLst>` : ''}</p:timing>`;
 }
 
@@ -342,6 +382,10 @@ function transitionXml(t) {
   const dur = t.dur ?? 1;
   const spd = dur <= 0.5 ? 'fast' : dur <= 0.75 ? 'med' : 'slow';
   const adv = `${t.advClick === false ? ' advClick="0"' : ''}${t.advAfter != null ? ` advTm="${Math.round(t.advAfter * 1000)}"` : ''}`;
+  if (t.type === 'morph') {
+    // PowerPoint 2019+ 모핑 (p159), 이전 버전은 페이드
+    return `<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice xmlns:p159="http://schemas.microsoft.com/office/powerpoint/2015/09/main" Requires="p159"><p:transition spd="slow"${adv} xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" p14:dur="${Math.round(dur * 1000)}"><p159:morph option="byObject"/></p:transition></mc:Choice><mc:Fallback><p:transition spd="slow"${adv}><p:fade/></p:transition></mc:Fallback></mc:AlternateContent>`;
+  }
   return `<p:transition spd="${spd}"${adv}>${(TRANS_XML[t.type] ?? TRANS_XML.fade)(t.dir)}</p:transition>`;
 }
 
@@ -420,8 +464,20 @@ function layoutXml(pres, def, ctx) {
   return `${XML_HEAD}<p:sldLayout xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}" type="${LAYOUT_TYPE[def.kind] ?? 'cust'}" preserve="1"${def.showMaster === false ? ' showMasterSp="0"' : ''}><p:cSld name="${esc(def.name)}">${bg}<p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>${parts.join('')}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sldLayout>`;
 }
 
+/** 비디오 · 오디오 (PowerPoint 2010+ 형식: p:pic + a:videoFile/audioFile + p14:media) */
+function mediaXml(o, id, ctx) {
+  const kind = o.kind === 'audio' ? 'audio' : 'video';
+  const r = ctx.av(o.media, kind);
+  if (!r) return '';
+  const poster = o.poster ? ctx.image(o.poster) : null;
+  const blip = poster ? `<a:blip r:embed="${poster}"/>` : '<a:blip/>';
+  const trim = o.trim && (o.trim.st || o.trim.end) ? `<p14:trim${o.trim.st ? ` st="${Math.round(o.trim.st * 1000)}"` : ''}${o.trim.end ? ` end="${Math.round(o.trim.end * 1000)}"` : ''}/>` : '';
+  return `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="${esc(o.name ?? `${kind === 'audio' ? 'Audio' : 'Video'} ${id}`)}" descr="${esc(o.alt ?? '')}"><a:hlinkClick r:id="" action="ppaction://media"/></p:cNvPr><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr><a:${kind}File r:link="${r.link}"/><p:extLst><p:ext uri="{DAA4B4D4-6D71-4841-9C94-3DE7FCFB9230}"><p14:media xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" r:embed="${r.embed}">${trim}</p14:media></p:ext></p:extLst></p:nvPr></p:nvPicPr><p:blipFill>${blip}<a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr>${xfrmXml(o)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>`;
+}
+
 function objXml(o, id, ctx, phIdx, theme) {
   if (o.type === 'image') return picXml(o, id, ctx, phIdx);
+  if (o.type === 'media') return mediaXml(o, id, ctx);
   if (o.type === 'table') return tableXml(o, id, ctx, theme);
   if (o.type === 'chart') return chartFrameXml(o, id, ctx);
   return shapeXml(o, id, ctx, phIdx);
@@ -446,9 +502,12 @@ function dataUrlBytes(url) {
     bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   } else bytes = new TextEncoder().encode(decodeURIComponent(m[3]));
-  const ext = { 'image/png': 'png', 'image/jpeg': 'jpeg', 'image/jpg': 'jpeg', 'image/gif': 'gif', 'image/svg+xml': 'svg', 'image/bmp': 'bmp', 'image/webp': 'webp', 'image/x-emf': 'emf', 'image/x-wmf': 'wmf', 'image/tiff': 'tiff' }[mime] ?? 'png';
+  const ext = { 'image/png': 'png', 'image/jpeg': 'jpeg', 'image/jpg': 'jpeg', 'image/gif': 'gif', 'image/svg+xml': 'svg', 'image/bmp': 'bmp', 'image/webp': 'webp', 'image/x-emf': 'emf', 'image/x-wmf': 'wmf', 'image/tiff': 'tiff', ...AV_EXT }[mime] ?? 'png';
   return { bytes, ext, mime };
 }
+/** 비디오 · 오디오 (mime → 확장자) */
+const AV_EXT = { 'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov', 'video/x-m4v': 'm4v', 'video/ogg': 'ogv', 'audio/mpeg': 'mp3', 'audio/mp3': 'mp3', 'audio/mp4': 'm4a', 'audio/x-m4a': 'm4a', 'audio/aac': 'aac', 'audio/wav': 'wav', 'audio/x-wav': 'wav', 'audio/wave': 'wav', 'audio/ogg': 'ogg', 'audio/webm': 'weba' };
+export const AV_MIME = { mp4: 'video/mp4', m4v: 'video/x-m4v', webm: 'video/webm', mov: 'video/quicktime', ogv: 'video/ogg', mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac', wav: 'audio/wav', ogg: 'audio/ogg', weba: 'audio/webm', wma: 'audio/x-ms-wma', wmv: 'video/x-ms-wmv', avi: 'video/x-msvideo' };
 export const MIME_BY_EXT = { png: 'image/png', jpeg: 'image/jpeg', jpg: 'image/jpeg', gif: 'image/gif', svg: 'image/svg+xml', bmp: 'image/bmp', webp: 'image/webp', emf: 'image/x-emf', wmf: 'image/x-wmf', tif: 'image/tiff', tiff: 'image/tiff' };
 
 /**
@@ -469,7 +528,7 @@ export function pptxEntries(pres, opts = {}) {
     let d = dataUrlBytes(url);
     if (!d) return null;
     if (d.ext === 'svg' && opts.png?.[id]) d = dataUrlBytes(opts.png[id]) ?? d;
-    const path = `ppt/media/image${++mediaN}.${d.ext}`;
+    const path = `ppt/media/${/^(video|audio)\//.test(d.mime) ? 'media' : 'image'}${++mediaN}.${d.ext}`;
     files[path] = d.bytes;
     defaults.set(d.ext, d.mime === 'image/jpg' ? 'image/jpeg' : d.mime);
     mediaPath.set(id, path);
@@ -491,9 +550,16 @@ export function pptxEntries(pres, opts = {}) {
       add,
       image: (id) => { const p = putMedia(id); return p ? add(REL('image'), `../media/${p.split('/').pop()}`) : null; },
       link: (url) => add(REL('hyperlink'), url, true),
+      /** 비디오/오디오 파트: a:videoFile r:link + p14:media r:embed 두 관계 */
+      av: (id, kind) => { const p = putMedia(id); if (!p) return null; const t = `../media/${p.split('/').pop()}`; return { link: add(REL(kind), t), embed: add('http://schemas.microsoft.com/office/2007/relationships/media', t) }; },
       chart: (ch) => {
         const path = `ppt/charts/chart${++chartN}.xml`;
-        files[path] = chartXml(ch);
+        // 데이터 통합 문서 (PowerPoint 의 [데이터 편집] 이 되도록)
+        const wb = `ppt/embeddings/Microsoft_Excel_Worksheet${chartN}.xlsx`;
+        files[wb] = chartWorkbook(ch);
+        defaults.set('xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        files[`ppt/charts/_rels/chart${chartN}.xml.rels`] = `${XML_HEAD}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL('package')}" Target="../embeddings/Microsoft_Excel_Worksheet${chartN}.xlsx"/></Relationships>`;
+        files[path] = chartXml(ch, { embed: 'rId1' });
         override(path, 'application/vnd.openxmlformats-officedocument.drawingml.chart+xml');
         return add(REL('chart'), `../charts/chart${chartN}.xml`, false, `chart${chartN}`);
       },
@@ -537,6 +603,8 @@ export function pptxEntries(pres, opts = {}) {
   const presRels = relsFor();
   const masterRid = presRels.add(REL('slideMaster'), 'slideMasters/slideMaster1.xml');
   const slideRids = pres.slides.map((_, i) => presRels.add(REL('slide'), `slides/slide${i + 1}.xml`));
+  const authors = [];
+  const authorId = (name) => { let i = authors.findIndex((a) => a.name === name); if (i < 0) { authors.push({ name, last: 0 }); i = authors.length - 1; } return i; };
   const hasNotes = pres.slides.some((s) => s.notes);
   const notesMasterRid = hasNotes ? presRels.add(REL('notesMaster'), 'notesMasters/notesMaster1.xml') : null;
   presRels.add(REL('presProps'), 'presProps.xml');
@@ -623,7 +691,21 @@ export function pptxEntries(pres, opts = {}) {
     }
     const bgFill = slide.bg ? slide.bg : null;
     const bg = bgFill ? `<p:bg><p:bgPr>${fillXml(bgFill, rels)}<a:effectLst/></p:bgPr></p:bg>` : '';
-    const meta = { layout: slide.layout, transition: slide.transition ?? null, anims: slide.anims ?? [], hideDecor: slide.hideDecor ?? false, section: slide.section ?? null, bgObjects: slide.bgObjects ? true : undefined, ids: Object.fromEntries([...spid].filter(([k]) => !String(k).startsWith('grp:')).map(([k, v]) => [v, k])) };
+    // 메모 (PowerPoint 이전 형식 p:cmLst — 모든 버전에서 열림; 답글은 ↳ 로 이어 붙임)
+    if (slide.comments?.length) {
+      let idx = 0;
+      const cms = slide.comments.flatMap((c) => [c, ...(c.replies ?? []).map((r) => ({ ...r, x: c.x, y: c.y, text: `↳ ${r.text}` }))]).map((c) => {
+        const aid = authorId(c.author ?? '사용자');
+        const ai = authors[aid];
+        ai.last = ++idx;
+        return `<p:cm authorId="${aid}" dt="${esc((c.at ?? new Date().toISOString()).replace(/Z$/, ''))}" idx="${idx}"><p:pos x="${Math.round((c.x ?? 0) * 6)}" y="${Math.round((c.y ?? 0) * 6)}"/><p:text>${esc(c.text ?? '')}</p:text></p:cm>`;
+      });
+      const cpath = `ppt/comments/comment${n}.xml`;
+      files[cpath] = `${XML_HEAD}<p:cmLst xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}">${cms.join('')}</p:cmLst>`;
+      override(cpath, 'application/vnd.openxmlformats-officedocument.presentationml.comments+xml');
+      rels.add(REL('comments'), `../comments/comment${n}.xml`);
+    }
+    const meta = { comments: slide.comments?.length ? slide.comments : undefined, layout: slide.layout, transition: slide.transition ?? null, anims: slide.anims ?? [], hideDecor: slide.hideDecor ?? false, section: slide.section ?? null, bgObjects: slide.bgObjects ? true : undefined, ids: Object.fromEntries([...spid].filter(([k]) => !String(k).startsWith('grp:')).map(([k, v]) => [v, k])) };
     const ext = `<p:extLst><p:ext uri="${WP_EXT_URI}"><wp:slide xmlns:wp="${WP_NS}" json="${esc(JSON.stringify(meta))}"/></p:ext></p:extLst>`;
     const timing = timingXml(slide, (oid) => spid.get(oid));
     files[`ppt/slides/slide${n}.xml`] = `${XML_HEAD}<p:sld xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}"${slide.hidden ? ' show="0"' : ''}><p:cSld>${bg}<p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>${parts.join('')}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>${transitionXml(slide.transition)}${timing}${ext}</p:sld>`;
@@ -648,7 +730,14 @@ export function pptxEntries(pres, opts = {}) {
   const sz = pres.size;
   const sldIds = slideRids.map((rid, i) => `<p:sldId id="${256 + i}" r:id="${rid}"/>`).join('');
   const defText = `<p:defaultTextStyle><a:defPPr><a:defRPr lang="ko-KR"/></a:defPPr>${[1, 2, 3, 4, 5, 6, 7, 8, 9].map((l) => `<a:lvl${l}pPr marL="${(l - 1) * 457200}" algn="l" defTabSz="914400" rtl="0" eaLnBrk="1" latinLnBrk="0" hangingPunct="1"><a:defRPr sz="1800" kern="1200"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill><a:latin typeface="+mn-lt"/><a:ea typeface="+mn-ea"/><a:cs typeface="+mn-cs"/></a:defRPr></a:lvl${l}pPr>`).join('')}</p:defaultTextStyle>`;
-  files['ppt/presentation.xml'] = `${XML_HEAD}<p:presentation xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}" saveSubsetFonts="1"${fontXml ? ' embedTrueTypeFonts="1"' : ''}><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="${masterRid}"/></p:sldMasterIdLst>${notesMasterRid ? `<p:notesMasterIdLst><p:notesMasterId r:id="${notesMasterRid}"/></p:notesMasterIdLst>` : ''}${sldIds ? `<p:sldIdLst>${sldIds}</p:sldIdLst>` : ''}<p:sldSz cx="${E(sz.w)}" cy="${E(sz.h)}"/><p:notesSz cx="6858000" cy="9144000"/>${fontXml}${defText}${secXml}</p:presentation>`;
+  if (authors.length) {
+    files['ppt/commentAuthors.xml'] = `${XML_HEAD}<p:cmAuthorLst xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}">${authors.map((a, i) => `<p:cmAuthor id="${i}" name="${esc(a.name)}" initials="${esc([...a.name][0] ?? '')}" lastIdx="${a.last}" clrIdx="${i % 8}"/>`).join('')}</p:cmAuthorLst>`;
+    presRels.add(REL('commentAuthors'), 'commentAuthors.xml');
+    override('ppt/commentAuthors.xml', 'application/vnd.openxmlformats-officedocument.presentationml.commentAuthors+xml');
+  }
+  // 사용자 지정 쇼
+  const custXml = (pres.customShows ?? []).length ? `<p:custShowLst>${pres.customShows.map((c, k) => `<p:custShow name="${esc(c.name)}" id="${k}"><p:sldLst>${c.slides.map((id) => pres.slides.findIndex((x) => x.id === id)).filter((i) => i >= 0).map((i) => `<p:sld r:id="${slideRids[i]}"/>`).join('')}</p:sldLst></p:custShow>`).join('')}</p:custShowLst>` : '';
+  files['ppt/presentation.xml'] = `${XML_HEAD}<p:presentation xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}" saveSubsetFonts="1"${fontXml ? ' embedTrueTypeFonts="1"' : ''}><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="${masterRid}"/></p:sldMasterIdLst>${notesMasterRid ? `<p:notesMasterIdLst><p:notesMasterId r:id="${notesMasterRid}"/></p:notesMasterIdLst>` : ''}${sldIds ? `<p:sldIdLst>${sldIds}</p:sldIdLst>` : ''}<p:sldSz cx="${E(sz.w)}" cy="${E(sz.h)}"/><p:notesSz cx="6858000" cy="9144000"/>${fontXml}${custXml}${defText}${secXml}</p:presentation>`;
   files['ppt/_rels/presentation.xml.rels'] = presRels.xml();
   override('ppt/presentation.xml', CT('presentation.main'));
   files['ppt/presProps.xml'] = `${XML_HEAD}<p:presentationPr xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}"/>`;
@@ -994,7 +1083,7 @@ const PRESET_ANIM = {
 };
 const SUB_DIR = { 4: 'b', 1: 't', 8: 'l', 2: 'r' };
 const LAYOUT_KIND = Object.fromEntries(Object.entries(LAYOUT_TYPE).map(([k, v]) => [v, k]));
-const TRANS_NAME = { fade: 'fade', push: 'push', wipe: 'wipe', split: 'split', cover: 'cover', pull: 'uncover', zoom: 'zoom', circle: 'circle', dissolve: 'dissolve', cut: 'cut', flip: 'flip', random: 'fade', blinds: 'wipe', checker: 'dissolve', comb: 'wipe', randomBar: 'wipe', strips: 'cover', wedge: 'circle', wheel: 'circle', newsflash: 'zoom', plus: 'zoom', diamond: 'zoom', vortex: 'zoom', ripple: 'zoom', honeycomb: 'dissolve', glitter: 'dissolve', shred: 'dissolve', switch: 'flip', gallery: 'push', cube: 'push', doors: 'split', box: 'push', conveyor: 'push', pan: 'push', ferris: 'push', flythrough: 'zoom', warp: 'zoom', prism: 'push', reveal: 'fade', flash: 'fade', vortex2: 'zoom', morph: 'fade', prstTrans: 'fade' };
+const TRANS_NAME = { fade: 'fade', push: 'push', wipe: 'wipe', split: 'split', cover: 'cover', pull: 'uncover', zoom: 'zoom', circle: 'circle', dissolve: 'dissolve', cut: 'cut', flip: 'flip', random: 'fade', blinds: 'wipe', checker: 'dissolve', comb: 'wipe', randomBar: 'wipe', strips: 'cover', wedge: 'circle', wheel: 'circle', newsflash: 'zoom', plus: 'zoom', diamond: 'zoom', vortex: 'zoom', ripple: 'zoom', honeycomb: 'dissolve', glitter: 'dissolve', shred: 'dissolve', switch: 'flip', gallery: 'push', cube: 'push', doors: 'split', box: 'push', conveyor: 'push', pan: 'push', ferris: 'push', flythrough: 'zoom', warp: 'zoom', prism: 'push', reveal: 'fade', flash: 'fade', vortex2: 'zoom', morph: 'morph', prstTrans: 'fade' };
 const DIR_FROM = { u: 'b', d: 't', l: 'r', r: 'l' };
 
 /**
@@ -1022,16 +1111,23 @@ export function readPptx(bytes) {
   const presXml = xmlOf(presPath);
   if (!presXml) throw new Error('PowerPoint 프레젠테이션(.pptx)이 아닙니다');
   const presRels = relsOf(presPath);
+  // 메모 작성자
+  const legacyAuthors = new Map();
+  const modernAuthors = new Map();
+  for (const r of presRels.values()) {
+    if (r.type.endsWith('/commentAuthors') && has(r.target)) for (const a of kids(xmlOf(r.target), 'cmAuthor')) legacyAuthors.set(attr(a, 'id'), attr(a, 'name') ?? '');
+    if (r.type.endsWith('/authors') && has(r.target)) for (const a of kids(xmlOf(r.target), 'author')) modernAuthors.set(attr(a, 'id'), attr(a, 'name') ?? '');
+  }
   const sz = child(presXml, 'sldSz');
   const size = { w: Math.round(PX(attr(sz, 'cx') ?? 12192000)), h: Math.round(PX(attr(sz, 'cy') ?? 6858000)) };
 
   const media = {};
   const mediaByPath = new Map();
-  const loadMedia = (path) => {
+  const loadMedia = (path, av = false) => {
     if (!path || !has(path)) return null;
     if (mediaByPath.has(path)) return mediaByPath.get(path);
     const ext = path.split('.').pop().toLowerCase();
-    const mime = MIME_BY_EXT[ext];
+    const mime = av ? AV_MIME[ext] ?? 'video/mp4' : MIME_BY_EXT[ext];
     if (!mime) { warnings.add(`지원하지 않는 그림 형식(.${ext})은 빈 칸으로 표시합니다`); mediaByPath.set(path, null); return null; }
     if (ext === 'emf' || ext === 'wmf') warnings.add('EMF/WMF 그림은 브라우저에서 보이지 않을 수 있습니다');
     const b = files[path];
@@ -1059,6 +1155,8 @@ export function readPptx(bytes) {
   const partCtx = (part, clrMap) => ({
     clrMap,
     media: (rid) => { const r = relsOf(part).get(rid); return r ? loadMedia(r.target) : null; },
+    rel: (rid) => (rid ? relsOf(part).get(rid) ?? null : null),
+    avMedia: (path) => loadMedia(path, true),
     links: (rid) => { const r = relsOf(part).get(rid); return r?.external ? r.target : null; },
   });
   const readClrMap = (el) => (el ? Object.fromEntries(Object.entries(el.attrs)) : null);
@@ -1219,6 +1317,23 @@ export function readPptx(bytes) {
       // SVG 원본이 있으면 SVG 사용 (asvg:svgBlip)
       const svg = descendants(blip, 'svgBlip')[0];
       const mid = (svg && ctx.media(attr(svg, 'embed'))) || ctx.media(attr(blip, 'embed'));
+      // 비디오 · 오디오
+      const nvPr = child(nv, 'nvPr');
+      const avEl = child(nvPr, 'videoFile') ?? child(nvPr, 'audioFile');
+      if (avEl) {
+        const p14 = descendants(nvPr, 'media')[0];
+        const rel = ctx.rel?.(attr(p14, 'embed')) ?? ctx.rel?.(attr(avEl, 'link'));
+        const avId = rel && !rel.external ? ctx.avMedia(rel.target) : null;
+        if (avId) {
+          const mo = { id: uid(), type: 'media', kind: avEl.name === 'audioFile' ? 'audio' : 'video', ...rect, media: avId, name: attr(cNvPr, 'name') };
+          if (mid) mo.poster = mid;
+          const tr = descendants(p14, 'trim')[0];
+          if (tr) mo.trim = { st: num(attr(tr, 'st'), 0) / 1000, end: num(attr(tr, 'end'), 0) / 1000 };
+          out.push(mo);
+          return;
+        }
+        if (rel?.external) warnings.add('외부 파일에 연결된 비디오/오디오는 함께 열 수 없습니다');
+      }
       const sr = child(bf, 'srcRect');
       const o = { id: uid(), type: 'image', ...rect, media: mid, name: attr(cNvPr, 'name') };
       if (sr) o.crop = { l: num(attr(sr, 'l')) / 100000, t: num(attr(sr, 't')) / 100000, r: num(attr(sr, 'r')) / 100000, b: num(attr(sr, 'b')) / 100000 };
@@ -1308,12 +1423,12 @@ export function readPptx(bytes) {
         if (bool(attr(tc, 'vMerge'))) cell.vMerge = true;
         if (!wp) {
           const borders = {};
-          for (const [tag, side] of [['lnL', 'l'], ['lnR', 'r'], ['lnT', 't'], ['lnB', 'b']]) {
+          for (const [tag, side] of [['lnL', 'l'], ['lnR', 'r'], ['lnT', 't'], ['lnB', 'b'], ['lnTlToBr', 'dd'], ['lnBlToTr', 'du']]) {
             const ln = child(tcPr, tag);
             if (!ln) continue;
             const l = readLine(ln, ctx);
             if (l) borders[side] = { color: l.color, width: l.width };
-            else if (l === null) borders[side] = { color: 'rgba(0,0,0,0)', width: 0 };
+            else if (l === null && side !== 'dd' && side !== 'du') borders[side] = { color: 'rgba(0,0,0,0)', width: 0 };
           }
           if (Object.keys(borders).length) cell.borders = borders;
           // 표 스타일에 맡긴 글자 색은 스타일 색을 쓰도록 비움
@@ -1394,6 +1509,7 @@ export function readPptx(bytes) {
   const firstOfSection = new Set();
 
   const slides = [];
+  const slideByRid = new Map();
   for (const sid of descendants(child(presXml, 'sldIdLst'), 'sldId')) {
     const rel = presRels.get(rid(sid));
     if (!rel || !has(rel.target)) continue;
@@ -1460,6 +1576,12 @@ export function readPptx(bytes) {
         for (let j = k; j < objects.length; j++) if (objects[j].name === nm || (objects[j].type === 'table' && s.el.name === 'graphicFrame') || (objects[j].type === 'chart' && s.el.name === 'graphicFrame')) { spidToObj.set(s.id, objects[j].id); k = j + 1; break; }
       }
     }
+    // 메모: WIPOINT 확장 → 이전 형식(p:cmLst) → 새 형식(p188 스레드 메모)
+    if (meta?.comments) slide.comments = meta.comments;
+    else {
+      const cmts = readComments(path);
+      if (cmts.length) slide.comments = cmts;
+    }
     if (meta) {
       slide.transition = meta.transition ?? null;
       const map = new Map(Object.entries(meta.ids ?? {}).map(([sp, oldId]) => [oldId, spidToObj.get(sp)]));
@@ -1475,6 +1597,33 @@ export function readPptx(bytes) {
     }
     for (const o of objects) delete o.name;
     slides.push(slide);
+    slideByRid.set(rid(sid), slide.id);
+  }
+
+  /** 메모 읽기 (이전 형식 cmLst + commentAuthors / 새 형식 modernComment + authors) */
+  function readComments(slidePath) {
+    const out = [];
+    for (const r of relsOf(slidePath).values()) {
+      if (!/\/comments$/.test(r.type) || !has(r.target)) continue;
+      const cx = xmlOf(r.target);
+      const modern = /2018\/10/.test(r.type);
+      if (!modern) {
+        for (const cm of kids(cx, 'cm')) {
+          const pos = child(cm, 'pos');
+          const text = child(cm, 'text')?.text ?? '';
+          const c = { id: uid('c'), author: legacyAuthors.get(attr(cm, 'authorId')) ?? '사용자', text, at: attr(cm, 'dt') ?? '', x: Math.round(num(attr(pos, 'x'), 0) / 6), y: Math.round(num(attr(pos, 'y'), 0) / 6), replies: [] };
+          if (text.startsWith('↳ ') && out.length) out[out.length - 1].replies.push({ author: c.author, text: text.slice(2), at: c.at });
+          else out.push(c);
+        }
+      } else {
+        const tx = (el) => descendants(child(el, 'txBody'), 'p').map((p) => descendants(p, 't').map((t) => t.text ?? '').join('')).join('\n');
+        for (const cm of kids(cx, 'cm')) {
+          const pos = child(cm, 'pos');
+          out.push({ id: uid('c'), author: modernAuthors.get(attr(cm, 'authorId')) ?? '사용자', text: tx(cm), at: attr(cm, 'created') ?? '', x: Math.round(PX(num(attr(pos, 'x'), 0))), y: Math.round(PX(num(attr(pos, 'y'), 0))), replies: kids(child(cm, 'replyLst'), 'reply').map((rp) => ({ author: modernAuthors.get(attr(rp, 'authorId')) ?? '', text: tx(rp), at: attr(rp, 'created') ?? '' })), ...(attr(cm, 'status') === 'resolved' ? { done: true } : {}) });
+        }
+      }
+    }
+    return out;
   }
 
   function readTransition(x) {
@@ -1500,17 +1649,28 @@ export function readPptx(bytes) {
     const anims = [];
     for (const eff of descendants(main, 'cTn').filter((c) => attr(c, 'presetClass'))) {
       const cls = attr(eff, 'presetClass');
-      if (!['entr', 'exit', 'emph'].includes(cls)) continue;
+      if (!['entr', 'exit', 'emph', 'path'].includes(cls)) continue;
       const spTgt = descendants(eff, 'spTgt')[0];
       const obj = spidToObj.get(attr(spTgt, 'spid'));
       if (!obj) continue;
       const pid = num(attr(eff, 'presetID'));
-      const effect = PRESET_ANIM[cls]?.[pid] ?? (cls === 'entr' ? 'fade' : cls === 'exit' ? 'fade' : 'pulse');
+      const effect = cls === 'path' ? 'pathRight' : PRESET_ANIM[cls]?.[pid] ?? (cls === 'entr' ? 'fade' : cls === 'exit' ? 'fade' : 'pulse');
       const node = attr(eff, 'nodeType');
       const durs = descendants(eff, 'cTn').map((c) => num(attr(c, 'dur'), 0)).filter((d) => d > 1);
       const delay = num(attr(child(child(eff, 'stCondLst'), 'cond'), 'delay'), 0);
       const a = { id: uid('a'), obj, cls, effect, start: node === 'withEffect' ? 'with' : node === 'afterEffect' ? 'after' : 'click', dur: durs.length ? Math.max(...durs) / 1000 : effect === 'appear' || effect === 'disappear' ? 0 : 0.5, delay: delay / 1000, dir: SUB_DIR[num(attr(eff, 'presetSubtype'))] ?? 'b' };
-      // 같은 문단별 효과(bldP build="p")가 여러 번 나오면 하나로
+      if (cls === 'path') {
+        const mo = descendants(eff, 'animMotion')[0];
+        a.motion = (attr(mo, 'path') ?? 'M 0 0 L 0.25 0').replace(/\s*[Ee]\s*$/, '').trim();
+        if (!durs.length) a.dur = 2;
+      }
+      // 단락별 효과 (txEl pRg): 같은 개체 · 같은 효과가 이어지면 하나로 묶고 byPara
+      const isPara = !!descendants(spTgt, 'pRg')[0];
+      if (isPara) {
+        const prev = anims.find((b) => b.obj === obj && b.cls === cls && b.effect === effect && b.byPara);
+        if (prev) continue;
+        a.byPara = true;
+      }
       if (anims.some((b) => b.obj === obj && b.cls === cls && b.effect === effect && b.start !== 'click' && a.start !== 'click')) continue;
       anims.push(a);
     }
@@ -1539,6 +1699,9 @@ export function readPptx(bytes) {
     }
   }
   if (fonts.length) pres.fonts = fonts;
+  // 사용자 지정 쇼 (슬라이드 관계 id → 슬라이드 id)
+  const shows = kids(child(presXml, 'custShowLst'), 'custShow').map((c) => ({ name: attr(c, 'name') ?? '쇼', slides: kids(child(c, 'sldLst'), 'sld').map((x) => slideByRid.get(rid(x))).filter(Boolean) })).filter((c) => c.slides.length);
+  if (shows.length) pres.customShows = shows;
   if (!slides.length) pres.slides.push(newSlide(pres, 'title'));
   return { pres, warnings: [...warnings] };
 }

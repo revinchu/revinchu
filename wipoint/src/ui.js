@@ -46,9 +46,9 @@ let toastTimer;
 export function toast(msg) {
   const t = document.getElementById('toast');
   t.textContent = msg;
-  t.classList.add('show');
+  t.classList.add('on');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove('show'), 1800);
+  toastTimer = setTimeout(() => t.classList.remove('on'), 1800);
 }
 
 // ───────────── 메뉴 ─────────────

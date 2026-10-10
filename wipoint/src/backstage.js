@@ -114,6 +114,7 @@ const PAGES = {
     big('print', 'PDF/XPS 문서 만들기', '인쇄 → PDF로 저장', () => { closeBackstage(); run('printNow', { mode: 'slides' }); }),
     big('picture', '현재 슬라이드를 PNG 로', '', () => run('exportPng', false)),
     big('sorter', '모든 슬라이드를 PNG 로', '슬라이드마다 파일 하나', () => run('exportPng', true)),
+    big('video', '동영상 만들기', 'MP4/WebM — 전환 · 설정된 시간 포함', () => { closeBackstage(); run('exportVideo'); }),
     big('notes', '유인물 만들기', '한 페이지에 슬라이드 여러 장 + 메모 줄', () => openBackstage('print')))),
 };
 function big(icon, title, desc, action) {

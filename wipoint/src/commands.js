@@ -3,7 +3,7 @@ import { S, curSlide, selObjects, selOne, objById, change, emit, register, run, 
 import {
   newSlide, nextLayout, duplicateSlide, changeLayout, resetSlideLayout, cloneObjects, newTable, newChart, newImage, newTextBox, newShape,
   applyRunProps, applyParaProps, commonRunProp, alignObjects, reorder, groupMembers, uid, LAYOUTS,
-  resizePresentation, addAnim, animSteps, ANIM_EFFECTS, findAll, replaceAll, replaceInPara, setPlainText, plainText, slideTitle, defaultSize, isEmptyText, para, outline,
+  resizePresentation, addAnim, animSteps, ANIM_EFFECTS, ANIM_CLASS_LABEL, MOTION_PATHS, motionPoints, findAll, replaceAll, replaceInPara, setPlainText, plainText, slideTitle, defaultSize, isEmptyText, para, outline,
 } from './model.js';
 import { setOffsets } from './textedit.js';
 import { THEMES, cloneTheme, themeByName, resolveColor } from './themes.js';
@@ -15,10 +15,10 @@ import { smartArt, SMART_KINDS } from './smartart.js';
 import { el, openMenu, openDialog, formDialog, alertDialog, toast, closeMenus } from './ui.js';
 import { colorMenu } from './colorpick.js';
 import { startEyedrop } from './eyedrop.js';
-import { moveParagraph, startEdit, endEdit, textTargets, applyTextFormat, caretRunProp, caretPara, insertTextAtCaret, fitZoom, setZoom, renderCanvas, editorLayer } from './editor.js';
+import { moveParagraph, startCrop, endCrop, startEdit, endEdit, textTargets, applyTextFormat, caretRunProp, caretPara, insertTextAtCaret, fitZoom, setZoom, renderCanvas, editorLayer } from './editor.js';
 import { startShow, playStepOn } from './show.js';
 import { shapeIconSvg, styleChip, wordArtCss } from './galleries.js';
-import { save, saveAs, openWithPicker, setDocument, printSlides, exportPng, shareLink, pickFile } from './fileio.js';
+import { save, saveAs, openWithPicker, setDocument, printSlides, exportPng, exportVideo, shareLink, pickFile } from './fileio.js';
 import { buildTemplate } from './templates.js';
 import { renderPane } from './panels.js';
 import { FONTS, SIZES } from './ribbon.js';
@@ -167,9 +167,179 @@ function placeImage(r, into, added = []) {
   return o;
 }
 
+// ───────────── 비디오 · 오디오 ─────────────
+const fileUrl = (f) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error); r.readAsDataURL(f); });
+/** 비디오 첫 화면(1초 지점) → 표지 그림 · 크기 */
+function videoInfo(url) {
+  return new Promise((resolve) => {
+    const v = document.createElement('video');
+    v.muted = true;
+    v.preload = 'auto';
+    v.playsInline = true;
+    let done = false;
+    const finish = (poster) => { if (done) return; done = true; resolve({ w: v.videoWidth || 1280, h: v.videoHeight || 720, dur: v.duration || 0, poster }); };
+    v.addEventListener('loadeddata', () => { v.currentTime = Math.min(1, (v.duration || 2) / 2); });
+    v.addEventListener('seeked', () => {
+      try {
+        const c = document.createElement('canvas');
+        c.width = v.videoWidth;
+        c.height = v.videoHeight;
+        c.getContext('2d').drawImage(v, 0, 0);
+        finish(c.toDataURL('image/jpeg', 0.85));
+      } catch { finish(null); }
+    });
+    v.addEventListener('error', () => finish(null));
+    setTimeout(() => finish(null), 8000);
+    v.src = url;
+  });
+}
+const MEDIA_LIMIT = 80 * 1024 * 1024;
+async function insertMedia(kind) {
+  const f = await pickFile(kind === 'audio' ? 'audio/*,.mp3,.m4a,.wav,.aac,.ogg' : 'video/*,.mp4,.webm,.mov,.m4v');
+  if (!f) return;
+  if (f.size > MEDIA_LIMIT) { alertDialog(kind === 'audio' ? '오디오' : '비디오', `파일이 너무 큽니다 (${Math.round(f.size / 1048576)}MB). 80MB 이하로 줄여서 넣어 주세요.`); return; }
+  toast('불러오는 중...');
+  let url = await fileUrl(f);
+  // 브라우저가 형식을 비워 두는 경우 (아이폰 .mov 등)
+  if (/^data:;|^data:application\/octet-stream/.test(url)) {
+    const ext = f.name.split('.').pop().toLowerCase();
+    const mime = { mp4: 'video/mp4', m4v: 'video/x-m4v', mov: 'video/quicktime', webm: 'video/webm', mp3: 'audio/mpeg', m4a: 'audio/mp4', wav: 'audio/wav', aac: 'audio/aac', ogg: 'audio/ogg' }[ext] ?? (kind === 'audio' ? 'audio/mpeg' : 'video/mp4');
+    url = url.replace(/^data:[^;,]*/, `data:${mime}`);
+  }
+  const s = slide();
+  const { w: W, h: H } = S.pres.size;
+  const id = addMedia(url);
+  let o;
+  if (kind === 'audio') {
+    o = { id: uid(), type: 'media', kind: 'audio', media: id, x: (W - 64) / 2, y: (H - 64) / 2, w: 64, h: 64, rot: 0, name: f.name };
+  } else {
+    const info = await videoInfo(url);
+    const k = Math.min(1, (W * 0.7) / info.w, (H * 0.7) / info.h);
+    const w = info.w * k;
+    const h = info.h * k;
+    o = { id: uid(), type: 'media', kind: 'video', media: id, x: (W - w) / 2, y: (H - h) / 2, w, h, rot: 0, name: f.name };
+    if (info.poster) o.poster = addMedia(info.poster);
+  }
+  change(() => { s.objects.push(o); });
+  S.sel = new Set([o.id]);
+  emit('selection');
+  toast(kind === 'audio' ? '오디오를 넣었습니다. 슬라이드 쇼에서 아이콘을 누르면 재생됩니다' : '비디오를 넣었습니다. 슬라이드 쇼에서 재생됩니다');
+}
+function mediaOptions() {
+  const o = selOne();
+  if (o?.type !== 'media') { toast('비디오나 오디오를 선택하세요'); return; }
+  formDialog(o.kind === 'audio' ? '오디오 재생' : '비디오 재생', [
+    { name: 'autoplay', label: '자동 실행 (슬라이드가 나타날 때)', type: 'checkbox', value: !!o.autoplay },
+    { name: 'loop', label: '반복 재생', type: 'checkbox', value: !!o.loop },
+    { name: 'st', label: '시작 시간 (초)', type: 'number', value: String(o.trim?.st ?? 0) },
+    { name: 'end', label: '끝 시간 (초, 0 = 끝까지)', type: 'number', value: String(o.trim?.end ?? 0) },
+  ], (v) => change(() => {
+    o.autoplay = v.autoplay || undefined;
+    o.loop = v.loop || undefined;
+    const st = Math.max(0, Number(v.st) || 0);
+    const end = Math.max(0, Number(v.end) || 0);
+    if (st || end) o.trim = { st, end }; else delete o.trim;
+  }));
+}
+
 // ───────────── 표 ─────────────
 function curTable() { const o = S.editing ? objById(S.editing.id) : selOne(); return o?.type === 'table' ? o : null; }
-function curCell() { return S.editing?.cell ?? [0, 0]; }
+function curCell() { if (S.cellRange && S.cellRange.id === curTable()?.id) return [S.cellRange.r1, S.cellRange.c1]; return S.editing?.cell ?? [0, 0]; }
+/** 표에서 고른 칸 범위 (칸 범위 → 편집 중인 칸 → 표 전체) */
+function cellRange(t) {
+  const g = S.cellRange;
+  if (g && g.id === t.id) return g;
+  if (S.editing?.id === t.id && S.editing.cell) { const [r, c] = S.editing.cell; const cell = t.rows[r].cells[c]; return { r1: r, c1: c, r2: r + (cell.rowSpan ?? 1) - 1, c2: c + (cell.span ?? 1) - 1 }; }
+  return { r1: 0, c1: 0, r2: t.rows.length - 1, c2: t.cols.length - 1, all: true };
+}
+/** 범위 안의 칸들 [r, c, cell] */
+function cellsIn(t, g) { const out = []; for (let r = g.r1; r <= g.r2; r++) for (let c = g.c1; c <= g.c2; c++) out.push([r, c, t.rows[r].cells[c]]); return out; }
+const PEN = { color: '@tx1', width: 1 };
+const NO_LINE = { color: 'rgba(0,0,0,0)', width: 0 };
+/** 표 테두리 (PowerPoint 테두리 메뉴): where = all | none | outside | inside | insideH | insideV | top | bottom | left | right | style */
+function tableBorders(where) {
+  tableOp((t) => {
+    const g = cellRange(t);
+    for (const [r, c, cell] of cellsIn(t, g)) {
+      const b = { ...(cell.borders ?? {}) };
+      const set = (side, v) => { b[side] = v; };
+      const pen = { ...PEN, ...(S.pen ?? {}) };
+      if (where === 'style') { delete cell.borders; continue; }
+      if (where === 'all') { for (const k of ['l', 'r', 't', 'b']) set(k, pen); }
+      if (where === 'none') { for (const k of ['l', 'r', 't', 'b']) set(k, NO_LINE); }
+      if (where === 'outside') { if (r === g.r1) set('t', pen); if (r === g.r2) set('b', pen); if (c === g.c1) set('l', pen); if (c === g.c2) set('r', pen); }
+      if (where === 'inside' || where === 'insideH') { if (r > g.r1) set('t', pen); if (r < g.r2) set('b', pen); }
+      if (where === 'inside' || where === 'insideV') { if (c > g.c1) set('l', pen); if (c < g.c2) set('r', pen); }
+      if (where === 'top' && r === g.r1) set('t', pen);
+      if (where === 'bottom' && r === g.r2) set('b', pen);
+      if (where === 'left' && c === g.c1) set('l', pen);
+      if (where === 'right' && c === g.c2) set('r', pen);
+      if (where === 'diagDown') b.dd = pen;
+      if (where === 'diagUp') b.du = pen;
+      cell.borders = b;
+    }
+  });
+}
+/** 칸 병합 (범위 전체, 가로 · 세로) */
+function mergeRange(t, g) {
+  const tl = t.rows[g.r1].cells[g.c1];
+  for (const [r, c, cell] of cellsIn(t, g)) {
+    if (r === g.r1 && c === g.c1) continue;
+    for (const p of cell.text.paras) if (p.runs.some((x) => x.t)) tl.text.paras.push(p);
+    cell.text.paras = [{ ...cell.text.paras[0], runs: [] }];
+    delete cell.span; delete cell.rowSpan;
+    cell.hMerge = c > g.c1 || undefined;
+    cell.vMerge = r > g.r1 || undefined;
+    if (!cell.hMerge) delete cell.hMerge;
+    if (!cell.vMerge) delete cell.vMerge;
+  }
+  if (tl.text.paras.length > 1 && !tl.text.paras[0].runs.some((x) => x.t)) tl.text.paras.shift();
+  if (g.c2 > g.c1) tl.span = g.c2 - g.c1 + 1; else delete tl.span;
+  if (g.r2 > g.r1) tl.rowSpan = g.r2 - g.r1 + 1; else delete tl.rowSpan;
+}
+/** 병합 풀기 */
+function unmergeAt(t, r, c) {
+  const cell = t.rows[r].cells[c];
+  const g = { r1: r, c1: c, r2: r + (cell.rowSpan ?? 1) - 1, c2: c + (cell.span ?? 1) - 1 };
+  for (const [, , x] of cellsIn(t, g)) { delete x.hMerge; delete x.vMerge; }
+  delete cell.span; delete cell.rowSpan;
+}
+/** 칸 나누기 (병합되지 않은 칸): 열/행을 끼워 넣고 다른 행·열은 병합으로 이어 줌 */
+function splitCell(t, r, c, nCols, nRows) {
+  const blank = (cell) => ({ text: { ...JSON.parse(JSON.stringify(cell.text)), paras: [{ ...cell.text.paras[0], runs: [] }] }, ...(cell.fill !== undefined ? { fill: cell.fill } : {}) });
+  if (nCols > 1) {
+    const w = t.cols[c] / nCols;
+    t.cols.splice(c, 1, ...Array(nCols).fill(w));
+    t.rows.forEach((row, ri) => {
+      const cell = row.cells[c];
+      const extra = Array.from({ length: nCols - 1 }, () => blank(cell));
+      if (ri === r) { row.cells.splice(c + 1, 0, ...extra); return; }
+      // 다른 행: 원래 칸이 새 열들까지 덮음
+      for (const x of extra) { x.hMerge = true; if (cell.vMerge) x.vMerge = true; }
+      row.cells.splice(c + 1, 0, ...extra);
+      if (!cell.hMerge) cell.span = (cell.span ?? 1) + nCols - 1;
+      else { for (let k = c; k >= 0; k--) { const head = row.cells[k]; if (!head.hMerge) { head.span = (head.span ?? 1) + nCols - 1; break; } } }
+    });
+  }
+  if (nRows > 1) {
+    const row = t.rows[r];
+    const h = row.h / nRows;
+    row.h = h;
+    const added = Array.from({ length: nRows - 1 }, () => ({ h, cells: row.cells.map((cell, ci) => {
+      const x = blank(cell);
+      if (ci >= c && ci < c + (nCols > 1 ? nCols : 1)) return x;
+      x.vMerge = true;
+      if (cell.hMerge) x.hMerge = true;
+      return x;
+    }) }));
+    t.rows.splice(r + 1, 0, ...added);
+    row.cells.forEach((cell, ci) => {
+      if (ci >= c && ci < c + (nCols > 1 ? nCols : 1)) return;
+      if (!cell.vMerge && !cell.hMerge) cell.rowSpan = (cell.rowSpan ?? 1) + nRows - 1;
+      else if (cell.vMerge && !cell.hMerge) { for (let k = r; k >= 0; k--) { const head = t.rows[k].cells[ci]; if (!head.vMerge) { head.rowSpan = (head.rowSpan ?? 1) + nRows - 1; break; } } }
+    });
+  }
+}
 function tableOp(fn) {
   const t = curTable();
   if (!t) { toast('표를 선택하세요'); return; }
@@ -343,6 +513,12 @@ function doUngroup() {
 }
 
 // ───────────── 애니메이션 ─────────────
+/** 이동 경로 반대로 (끝점이 원점이 되도록) */
+function reversePath(path) {
+  const pts = motionPoints(path, 8);
+  const [ex, ey] = pts[pts.length - 1];
+  return `M 0 0 ${pts.slice(0, -1).reverse().map(([x, y]) => `L ${Math.round((x - ex) * 10000) / 10000} ${Math.round((y - ey) * 10000) / 10000}`).join(' ')}`;
+}
 function setAnim(cls, effect) {
   const objs = expandGroups(selObjects());
   if (!need(objs, '애니메이션을 적용할 개체를 선택하세요')) return;
@@ -350,7 +526,7 @@ function setAnim(cls, effect) {
   change(() => {
     for (const o of objs) {
       const ex = s.anims.find((a) => a.obj === o.id);
-      if (ex) { ex.cls = cls; ex.effect = effect; if (effect === 'appear' || effect === 'disappear') ex.dur = 0; else if (!ex.dur) ex.dur = 0.5; } else addAnim(s, o.id, cls, effect, objs.indexOf(o) > 0 ? { start: 'with' } : {});
+      if (ex) { ex.cls = cls; ex.effect = effect; if (effect === 'appear' || effect === 'disappear') ex.dur = 0; else if (!ex.dur) ex.dur = cls === 'path' ? 2 : 0.5; if (cls === 'path') ex.motion = MOTION_PATHS[effect]; else delete ex.motion; } else addAnim(s, o.id, cls, effect, objs.indexOf(o) > 0 ? { start: 'with' } : {});
     }
   });
   previewAnims(objs.map((o) => o.id));
@@ -757,12 +933,99 @@ function slideSizeDialog() {
   });
 }
 
+/** 메모가 있는 다음/이전 슬라이드로 */
+function jumpComment(d) {
+  const n = S.pres.slides.length;
+  for (let k = 1; k <= n; k++) {
+    const i = (S.cur + d * k + n * 2) % n;
+    if (S.pres.slides[i].comments?.length) { goSlide(i); S.formatPane = 'comments'; renderPane(); return; }
+  }
+  toast('메모가 없습니다');
+}
 function setupShowDialog() {
   const sh = S.pres.show ?? {};
   formDialog('슬라이드 쇼 설정', [
     { name: 'loop', label: 'Esc 키를 누를 때까지 계속 실행', type: 'checkbox', value: !!sh.loop },
     { name: 'useTimings', label: '설정된 시간 사용 (자동 넘기기)', type: 'checkbox', value: sh.useTimings !== false },
   ], (v) => change(() => { S.pres.show = { ...sh, loop: v.loop, useTimings: v.useTimings }; }, { scope: 'none' }));
+}
+
+// ───────────── 사용자 지정 쇼 ─────────────
+function customShowsDialog() {
+  const list = () => S.pres.customShows ?? [];
+  const box = el('div', { class: 'cs-list' });
+  const draw = () => {
+    box.replaceChildren(...(list().length ? list().map((c) => el('div', { class: 'cs-row' },
+      el('b', {}, c.name), el('small', {}, ` 슬라이드 ${c.slides.length}장`),
+      el('span', { class: 'spacer' }),
+      el('button', { class: 'btn', onclick: () => editCustomShow(c, draw) }, '편집'),
+      el('button', { class: 'btn', onclick: () => change(() => { S.pres.customShows = list().filter((x) => x !== c); }, { scope: 'none' }) || draw() }, '제거'),
+      el('button', { class: 'btn primary', onclick: () => { closeDialogs(); startShow({ custom: c.name }); } }, '쇼 보기'))) : [el('p', { class: 'muted' }, '사용자 지정 쇼가 없습니다. [새로 만들기]로 일부 슬라이드만 골라 순서를 정해 쇼를 만드세요.')]));
+  };
+  draw();
+  openDialog({ title: '사용자 지정 쇼', width: 560, body: box, buttons: [{ label: '새로 만들기...', action: () => { editCustomShow(null, draw); return false; } }, { label: '닫기', primary: true }] });
+}
+function closeDialogs() { for (const d of document.querySelectorAll('#dialogLayer .dialog-backdrop')) d.remove(); }
+function editCustomShow(cs, done) {
+  const slides = S.pres.slides;
+  const chosen = cs ? [...cs.slides] : [];
+  const name = el('input', { type: 'text', value: cs?.name ?? `사용자 지정 쇼 ${(S.pres.customShows?.length ?? 0) + 1}` });
+  const left = el('select', { multiple: true, size: 12, class: 'cs-sel' });
+  const right = el('select', { multiple: true, size: 12, class: 'cs-sel' });
+  const label = (id) => { const i = slides.findIndex((x) => x.id === id); return `${i + 1}. ${slideTitle(slides[i]) || '(제목 없음)'}`; };
+  const draw = () => {
+    left.replaceChildren(...slides.map((s2) => el('option', { value: s2.id }, label(s2.id))));
+    right.replaceChildren(...chosen.map((id, k) => el('option', { value: String(k) }, label(id))));
+  };
+  draw();
+  const add = () => { for (const o of left.selectedOptions) chosen.push(o.value); draw(); };
+  const remove = () => { const ks = new Set([...right.selectedOptions].map((o) => Number(o.value))); for (let k = chosen.length - 1; k >= 0; k--) if (ks.has(k)) chosen.splice(k, 1); draw(); };
+  const move = (d) => { const k = right.selectedIndex; const j = k + d; if (k < 0 || j < 0 || j >= chosen.length) return; [chosen[k], chosen[j]] = [chosen[j], chosen[k]]; draw(); right.selectedIndex = j; };
+  const body = el('div', { class: 'form-grid' },
+    el('label', {}, el('span', {}, '쇼 이름'), name),
+    el('div', { class: 'cs-cols' },
+      el('div', {}, el('small', {}, '프레젠테이션 슬라이드'), left),
+      el('div', { class: 'cs-mid' }, el('button', { class: 'btn', onclick: add }, '추가 ›'), el('button', { class: 'btn', onclick: remove }, '‹ 제거'), el('button', { class: 'btn', onclick: () => move(-1) }, '▲'), el('button', { class: 'btn', onclick: () => move(1) }, '▼')),
+      el('div', {}, el('small', {}, '사용자 지정 쇼 슬라이드'), right)));
+  openDialog({ title: cs ? '사용자 지정 쇼 편집' : '사용자 지정 쇼 정의', width: 640, body, buttons: [{ label: '확인', primary: true, action: () => {
+    const nm = name.value.trim();
+    if (!nm || !chosen.length) { toast('이름과 슬라이드를 정하세요'); return false; }
+    change(() => {
+      const all = (S.pres.customShows ?? []).filter((x) => x !== cs && x.name !== nm);
+      all.push({ name: nm, slides: chosen });
+      S.pres.customShows = all;
+    }, { scope: 'none' });
+    done?.();
+    return true;
+  } }, { label: '취소' }] });
+}
+
+// ───────────── 메모 (댓글) ─────────────
+function commentsList() { return slide().comments ?? []; }
+function addComment(text, at = null) {
+  const s = slide();
+  const o = selOne();
+  const pos = at ?? (o ? { x: o.x + o.w, y: o.y } : { x: 20, y: 20 });
+  const c = { id: uid('c'), author: S.userName ?? localStorage.getItem('wipoint:user') ?? '사용자', text, at: new Date().toISOString(), x: Math.round(pos.x), y: Math.round(pos.y), replies: [] };
+  change(() => { s.comments = [...(s.comments ?? []), c]; });
+  return c;
+}
+
+// ───────────── 동영상 내보내기 ─────────────
+function exportVideoDialog() {
+  formDialog('동영상 만들기', [
+    { name: 'q', label: '화질', type: 'select', value: '1280', options: [{ value: '1920', label: '전체 HD (1080p)' }, { value: '1280', label: 'HD (720p)' }, { value: '854', label: '표준 (480p)' }] },
+    { name: 'sec', label: '슬라이드당 시간 (초)', type: 'number', value: '5' },
+    { name: 'timings', label: '설정된 시간 · 전환 사용', type: 'checkbox', value: true },
+  ], (v) => {
+    const bar = el('div', { class: 'progress' }, el('i'));
+    const msg = el('p', {}, '준비 중...');
+    const ac = new AbortController();
+    const dlg = openDialog({ title: '동영상 만드는 중', width: 420, body: el('div', {}, msg, bar, el('p', { class: 'muted' }, '슬라이드 시간만큼 실시간으로 녹화합니다. 이 탭을 닫거나 숨기지 마세요.')), buttons: [{ label: '취소', action: () => { ac.abort(); return true; } }] });
+    exportVideo({ width: Number(v.q), sec: Math.max(0.5, Number(v.sec) || 5), useTimings: v.timings }, (p, t) => { bar.firstChild.style.width = `${Math.round(p * 100)}%`; msg.textContent = t; }, ac.signal)
+      .then((r) => { dlg?.close?.(); closeDialogs(); if (r) toast(`동영상(.${r.ext}, ${Math.round(r.size / 1048576 * 10) / 10}MB)을 저장했습니다`); })
+      .catch((e) => { closeDialogs(); alertDialog('동영상 만들기', e.message); });
+  }, { okLabel: '동영상 만들기' });
 }
 
 function zoomDialog() {
@@ -799,6 +1062,11 @@ const WHATS_NEW = [
   'pptx 에 포함된 글꼴(.fntdata, MTX 압축 EOT 포함)을 읽어 그대로 표시 · 다시 저장해도 유지',
   '키 팁: Alt 또는 F10 → 모든 탭 · 명령에 글자 (예: Alt, H, F, S = 글꼴 크기), 메뉴는 화살표 · 글자로 고르기',
   '빠른 실행 도구 모음 (리본 아래): Alt+1 가로 가운데 · Alt+2 세로 가운데 · Alt+3 텍스트 상자 · Alt+4 스포이트, 리본 단추 오른쪽 클릭으로 추가',
+  '비디오 · 오디오 넣기 (재생 탭: 자동 실행 · 반복 · 시작/끝 시간), pptx 로 저장해도 PowerPoint 에서 재생',
+  '표: 칸 끌어서 범위 선택 → 세로 · 가로 병합, 셀 분할(열/행 개수), 범위 테두리 · 대각선 · 펜 색/두께, 열 너비 · 행 높이 끌기',
+  '차트 데이터 통합 문서 포함 → PowerPoint 에서 [데이터 편집] 가능',
+  '모핑 전환 · 단락별 애니메이션 · 이동 경로(선 · 호 · 원 · 물결)',
+  '메모(댓글 · 답글 · 해결), 사용자 지정 슬라이드 쇼, 그림을 화면에서 자르기(두 번 클릭), 동영상 만들기(MP4/WebM)',
   'PowerPoint 단축키 추가: Shift/Ctrl+Shift+방향키 크기, Alt+방향키 회전, Ctrl+T 글꼴, Shift+F3, F4, F6, Alt+F9, Shift+F9, Alt+F10, Ctrl+Enter, Alt+Shift+방향키 등',
 ];
 
@@ -1092,6 +1360,16 @@ register({
   // 삽입
   tableMenu: (a) => tableGrid(a),
   insertTable: (r, c) => insertTable(r, c),
+  insertVideo: () => insertMedia('video').catch((e) => alertDialog('비디오', e.message)),
+  insertAudio: () => insertMedia('audio').catch((e) => alertDialog('오디오', e.message)),
+  mediaOptions: () => mediaOptions(),
+  previewMedia: () => {
+    const o = selOne();
+    if (o?.type !== 'media') { toast('비디오나 오디오를 선택하세요'); return; }
+    const src = S.pres.media[o.media];
+    const m = el(o.kind === 'audio' ? 'audio' : 'video', { src, controls: true, autoplay: true, playsInline: true, style: { width: '100%', maxHeight: '60vh', background: '#000' } });
+    openDialog({ title: o.name ?? (o.kind === 'audio' ? '오디오' : '비디오'), width: 640, body: m, buttons: [{ label: '닫기', primary: true }], onClose: () => m.pause() });
+  },
   insertPicture: async (opt = {}) => {
     const inp = document.createElement('input');
     inp.type = 'file';
@@ -1197,8 +1475,18 @@ register({
 
   // 애니메이션
   setAnim: (cls, effect) => setAnim(cls, effect),
-  addAnimMenu: (a) => menuAt(a ?? { x: innerWidth / 2, y: 160 }, Object.entries(ANIM_EFFECTS).map(([cls, list]) => ({ label: { entr: '나타내기', emph: '강조', exit: '끝내기' }[cls], submenu: list.map(([k, l]) => ({ label: l, action: () => { const objs = expandGroups(selObjects()); if (!need(objs, '개체를 선택하세요')) return; change(() => { for (const o of objs) addAnim(slide(), o.id, cls, k); }); previewAnims(objs.map((o) => o.id)); } })) }))),
-  animOptionsMenu: (a) => menuAt(a, [['b', '아래에서'], ['t', '위에서'], ['l', '왼쪽에서'], ['r', '오른쪽에서']].map(([d, l]) => ({ label: l, action: () => run('animTiming', { dir: d }) }))),
+  addAnimMenu: (a) => menuAt(a ?? { x: innerWidth / 2, y: 160 }, Object.entries(ANIM_EFFECTS).map(([cls, list]) => ({ label: ANIM_CLASS_LABEL[cls], submenu: list.map(([k, l]) => ({ label: l, action: () => { const objs = expandGroups(selObjects()); if (!need(objs, '개체를 선택하세요')) return; change(() => { for (const o of objs) addAnim(slide(), o.id, cls, k); }); previewAnims(objs.map((o) => o.id)); } })) }))),
+  animOptionsMenu: (a) => {
+    const cur = (slide().anims ?? []).find((x) => x.id === S.animSel || S.sel.has(x.obj));
+    menuAt(a, [
+      { title: '방향' },
+      ...[['b', '아래에서'], ['t', '위에서'], ['l', '왼쪽에서'], ['r', '오른쪽에서']].map(([d, l]) => ({ label: l, checked: cur?.dir === d, action: () => run('animTiming', { dir: d }) })),
+      { title: '시퀀스' },
+      { label: '하나의 개체로', checked: !!cur && !cur.byPara, action: () => run('animTiming', { byPara: undefined }) },
+      { label: '단락별', checked: !!cur?.byPara, action: () => run('animTiming', { byPara: true }) },
+      ...(cur?.cls === 'path' ? [{ title: '경로' }, { label: '경로 반대로', action: () => run('animTiming', { motion: reversePath(cur.motion) }) }] : []),
+    ]);
+  },
   animTiming: (props) => { const objs = expandGroups(selObjects()); const ids = new Set(objs.map((o) => o.id)); change(() => { for (const a of slide().anims ?? []) if (ids.has(a.obj) || a.id === S.animSel) Object.assign(a, props); }); },
   removeAnim: (opt = {}) => {
     const s = slide();
@@ -1232,6 +1520,18 @@ register({
   presenterView: () => { if (S.editing) endEdit(); startShow({ from: S.cur, presenter: true }); },
   rehearse: () => { if (S.editing) endEdit(); startShow({ from: 0, rehearse: true, presenter: true }); },
   setupShow: () => setupShowDialog(),
+  customShows: () => customShowsDialog(),
+  customShowMenu: (a) => menuAt(a, [...(S.pres.customShows ?? []).map((c) => ({ label: c.name, action: () => startShow({ custom: c.name }) })), ...(S.pres.customShows?.length ? [{ sep: true }] : []), { label: '쇼 재구성...', action: () => customShowsDialog() }]),
+  exportVideo: () => exportVideoDialog(),
+  newComment: () => {
+    if (S.editing) endEdit();
+    const ta = el('textarea', { rows: 4, style: { width: '100%' }, placeholder: '메모를 입력하세요 (@이름 으로 언급)' });
+    openDialog({ title: '새 메모', width: 420, body: ta, onOpen: () => ta.focus(), buttons: [{ label: '게시', primary: true, action: () => { const t = ta.value.trim(); if (!t) return false; addComment(t); S.formatPane = 'comments'; renderPane(); emit('change', { scope: 'slide' }); return true; } }, { label: '취소' }] });
+  },
+  commentsPane: () => { S.formatPane = S.formatPane === 'comments' ? null : 'comments'; renderPane(); fitZoom(); emit('change', { scope: 'view' }); },
+  deleteComments: (scope = 'slide') => change(() => { if (scope === 'all') for (const s2 of S.pres.slides) delete s2.comments; else delete slide().comments; }),
+  prevComment: () => jumpComment(-1),
+  nextComment: () => jumpComment(1),
 
   // 검토
   spellCheck: () => spellDialog(),
@@ -1274,8 +1574,8 @@ register({
     ...[0.25, 0.5, 0.75].map((v) => ({ label: `투명도 ${v * 100}%`, action: () => change(() => { for (const o of selObjects()) if (o.type === 'image') o.alpha = 1 - v; }) })),
     { label: '그래픽 채우기 (아이콘 색)...', action: () => { const icons = selObjects().filter((o) => o.icon); if (!need(icons, '아이콘을 선택하세요')) return; colorMenu(a, (c) => recolorIcons(icons, resolveColor(S.pres.theme, c ?? '#000000'))); } },
   ]),
-  cropPicture: () => cropDialog(),
-  cropMenu: (a) => menuAt(a, [{ label: '자르기...', icon: 'crop', action: cropDialog }, { label: '도형에 맞춰 자르기', submenu: ['rect', 'roundRect', 'ellipse', 'triangle', 'diamond', 'hexagon', 'star5', 'heart', 'cloud'].map((k) => ({ label: SHAPE_LABEL[k] ?? k, action: () => change(() => { for (const o of selObjects()) if (o.type === 'image') { o.shape = k === 'rect' ? undefined : k; } }) })) }, { label: '가로 세로 비율', submenu: [['1:1', 1], ['4:3', 4 / 3], ['16:9', 16 / 9], ['3:4', 3 / 4]].map(([l, r]) => ({ label: l, action: () => cropAspect(r) })) }]),
+  cropPicture: () => { const o = selOne(); if (o?.type === 'image' && o.media) { if (S.cropping) endCrop(); else { startCrop(o); toast('검은 손잡이를 끌어 자르고, 그림을 끌어 위치를 맞춘 뒤 Esc 또는 바깥을 누르세요'); } } else cropDialog(); },
+  cropMenu: (a) => menuAt(a, [{ label: '자르기', icon: 'crop', action: () => run('cropPicture') }, { label: '자르기 (수치 입력)...', action: cropDialog }, { label: '자르기 원래대로', action: () => change(() => { for (const o of selObjects()) if (o.type === 'image' && o.crop) { const c = o.crop; const fw = o.w / (1 - c.l - c.r); const fh = o.h / (1 - c.t - c.b); o.x -= c.l * fw; o.y -= c.t * fh; o.w = fw; o.h = fh; delete o.crop; } }) }, { label: '도형에 맞춰 자르기', submenu: ['rect', 'roundRect', 'ellipse', 'triangle', 'diamond', 'hexagon', 'star5', 'heart', 'cloud'].map((k) => ({ label: SHAPE_LABEL[k] ?? k, action: () => change(() => { for (const o of selObjects()) if (o.type === 'image') { o.shape = k === 'rect' ? undefined : k; } }) })) }, { label: '가로 세로 비율', submenu: [['1:1', 1], ['4:3', 4 / 3], ['16:9', 16 / 9], ['3:4', 3 / 4]].map(([l, r]) => ({ label: l, action: () => cropAspect(r) })) }]),
   altText: () => {
     const o = selOne();
     if (!o) { toast('개체를 선택하세요'); return; }
@@ -1285,12 +1585,26 @@ register({
   // 표
   tblOpt: (k) => tableOp((t) => { t.style = { ...(t.style ?? {}), none: undefined, [k]: !t.style?.[k] }; }),
   applyTableStyle: (i) => tableOp((t) => { t.style = { ...(t.style ?? { firstRow: true, banded: true }), ...tableStyleProps(TABLE_STYLES[i]) }; for (const r of t.rows) for (const c of r.cells) delete c.fill; }),
-  cellFill: (c = lastColor.cell) => { lastColor.cell = c; tableOp((t) => { const [r, k] = curCell(); if (S.editing || S.cellAll === false) t.rows[r].cells[k].fill = c ? { type: 'solid', color: c } : null; else for (const row of t.rows) for (const cell of row.cells) cell.fill = c ? { type: 'solid', color: c } : null; }); },
+  cellFill: (c = lastColor.cell) => { lastColor.cell = c; const t0 = curTable(); const g = t0 ? cellRange(t0) : null; tableOp((t) => { for (const [, , cell] of cellsIn(t, g)) cell.fill = c ? { type: 'solid', color: c } : null; }); },
   cellFillMenu: (a) => colorMenu(a, (c) => run('cellFill', c), { none: '채우기 없음' }),
   cellBorderMenu: (a) => menuAt(a, [
-    { label: '모든 테두리', icon: 'borderAll', action: () => tableOp((t) => { for (const r of t.rows) for (const c of r.cells) c.borders = { l: { color: '@tx1', width: 1 }, r: { color: '@tx1', width: 1 }, t: { color: '@tx1', width: 1 }, b: { color: '@tx1', width: 1 } }; }) },
-    { label: '테두리 없음', icon: 'borderNone', action: () => tableOp((t) => { for (const r of t.rows) for (const c of r.cells) c.borders = { l: { color: 'rgba(0,0,0,0)', width: 0 }, r: { color: 'rgba(0,0,0,0)', width: 0 }, t: { color: 'rgba(0,0,0,0)', width: 0 }, b: { color: 'rgba(0,0,0,0)', width: 0 } }; }) },
-    { label: '스타일 테두리로', action: () => tableOp((t) => { for (const r of t.rows) for (const c of r.cells) delete c.borders; }) },
+    { label: '아래쪽 테두리', icon: 'borderBottom', action: () => tableBorders('bottom') },
+    { label: '위쪽 테두리', icon: 'borderTop', action: () => tableBorders('top') },
+    { label: '왼쪽 테두리', icon: 'borderLeft', action: () => tableBorders('left') },
+    { label: '오른쪽 테두리', icon: 'borderRight', action: () => tableBorders('right') },
+    { sep: true },
+    { label: '테두리 없음', icon: 'borderNone', action: () => tableBorders('none') },
+    { label: '모든 테두리', icon: 'borderAll', action: () => tableBorders('all') },
+    { label: '바깥쪽 테두리', icon: 'borderOutside', action: () => tableBorders('outside') },
+    { label: '안쪽 테두리', action: () => tableBorders('inside') },
+    { label: '안쪽 가로 테두리', action: () => tableBorders('insideH') },
+    { label: '안쪽 세로 테두리', action: () => tableBorders('insideV') },
+    { label: '하향 대각선 테두리', action: () => tableBorders('diagDown') },
+    { label: '상향 대각선 테두리', action: () => tableBorders('diagUp') },
+    { sep: true },
+    { label: '펜 색...', icon: 'shapeOutline', action: () => colorMenu(a, (c) => { S.pen = { ...(S.pen ?? {}), color: c ?? '@tx1' }; toast('펜 색을 바꿨습니다. 테두리를 고르면 적용됩니다'); }) },
+    { label: '펜 두께', submenu: [0.5, 0.75, 1, 1.5, 2.25, 3, 4.5, 6].map((w) => ({ label: `${w}pt`, checked: (S.pen?.width ?? 1) === w * 96 / 72, action: () => { S.pen = { ...(S.pen ?? {}), width: w * 96 / 72 }; } })) },
+    { label: '표 스타일 테두리로', action: () => tableBorders('style') },
   ]),
   tblSelectMenu: (a) => menuAt(a, [{ label: '표 선택', action: () => { const t = curTable(); if (t) { endEdit(); S.sel = new Set([t.id]); emit('selection'); } } }]),
   tblDeleteMenu: (a) => menuAt(a, [{ label: '열 삭제', action: () => run('tblDeleteCol') }, { label: '행 삭제', action: () => run('tblDeleteRow') }, { label: '표 삭제', action: () => { const t = curTable(); if (t) { endEdit(); S.sel = new Set([t.id]); run('deleteSelection'); } } }]),
@@ -1300,8 +1614,29 @@ register({
   tblColRight: () => tableOp((t) => { const [, c] = curCell(); const w = t.cols[c]; t.cols.splice(c + 1, 0, w); for (const r of t.rows) r.cells.splice(c + 1, 0, blankCell(r.cells[c])); }),
   tblDeleteRow: () => tableOp((t) => { if (t.rows.length < 2) return; const [r] = curCell(); t.rows.splice(r, 1); }),
   tblDeleteCol: () => tableOp((t) => { if (t.cols.length < 2) return; const [, c] = curCell(); t.cols.splice(c, 1); for (const r of t.rows) r.cells.splice(c, 1); }),
-  tblMerge: () => tableOp((t) => { const [r, c] = curCell(); const cell = t.rows[r].cells[c]; if (c + 1 >= t.cols.length) return; const span = (cell.span ?? 1) + 1; const right = t.rows[r].cells[c + span - 1]; if (!right) return; cell.span = span; right.hMerge = true; for (const p of right.text.paras) if (p.runs.length) cell.text.paras.push(p); right.text.paras = [{ ...right.text.paras[0], runs: [] }]; }),
-  tblSplit: () => tableOp((t) => { const [r, c] = curCell(); const cell = t.rows[r].cells[c]; if (!cell.span) return; for (let k = 1; k < cell.span; k++) delete t.rows[r].cells[c + k].hMerge; delete cell.span; }),
+  tblMerge: () => {
+    const t = curTable();
+    if (!t) { toast('표를 선택하세요'); return; }
+    const g = cellRange(t);
+    if (g.all || (g.r1 === g.r2 && g.c1 === g.c2)) { toast('병합할 칸들을 끌어서(또는 Shift+클릭으로) 고르세요'); return; }
+    tableOp((tt) => { mergeRange(tt, g); });
+    S.cellRange = null;
+  },
+  tblSplit: () => {
+    const t = curTable();
+    if (!t) { toast('표를 선택하세요'); return; }
+    const [r, c] = curCell();
+    const cell = t.rows[r].cells[c];
+    if (cell.span || cell.rowSpan) { tableOp((tt) => unmergeAt(tt, r, c)); return; }
+    formDialog('셀 분할', [{ name: 'c', label: '열 개수', type: 'number', value: '2' }, { name: 'r', label: '행 개수', type: 'number', value: '1' }], (v) => {
+      const nc = Math.max(1, Math.min(20, Math.round(Number(v.c) || 1)));
+      const nr = Math.max(1, Math.min(20, Math.round(Number(v.r) || 1)));
+      if (nc === 1 && nr === 1) return;
+      tableOp((tt) => splitCell(tt, r, c, nc, nr));
+      S.cellRange = null;
+    });
+  },
+  tblBorders: (where) => tableBorders(where),
   tblEqualRows: () => tableOp((t) => { const h = t.rows.reduce((s, r) => s + r.h, 0) / t.rows.length; for (const r of t.rows) r.h = h; }),
   tblEqualCols: () => tableOp((t) => { const w = t.cols.reduce((s, c) => s + c, 0) / t.cols.length; t.cols = t.cols.map(() => w); }),
 
@@ -1418,6 +1753,7 @@ function ribbonState() {
   if (objs.some((o) => o.type === 'image' && o.media)) ctx.push('picture');
   if (objs.some((o) => o.type === 'table') || (S.editing && objById(S.editing.id)?.type === 'table')) ctx.push('table');
   if (objs.some((o) => o.type === 'chart')) ctx.push('chart');
+  if (objs.some((o) => o.type === 'media')) ctx.push('media');
   const p = currentPara();
   const tbl = curTable();
   const st = tbl?.style ?? {};
@@ -1429,7 +1765,7 @@ function ribbonState() {
     b: !!currentRunProp('b'), i: !!currentRunProp('i'), u: !!currentRunProp('u'), s: !!currentRunProp('s'), shadow: !!currentRunProp('shadow'),
     bullets: p?.bullet?.type === 'char', numbering: p?.bullet?.type === 'num',
     al: p?.align === 'l' || (!p?.align && !!p), ac: p?.align === 'ctr', ar: p?.align === 'r', aj: p?.align === 'just',
-    painter: !!S.painter, animPane: S.formatPane === 'anim', selPane: S.formatPane === 'selection', hidden: !!slide()?.hidden,
+    painter: !!S.painter, cmPane: S.formatPane === 'comments', animPane: S.formatPane === 'anim', selPane: S.formatPane === 'selection', hidden: !!slide()?.hidden,
     vNormal: S.view === 'normal', vSorter: S.view === 'sorter', notes: S.showNotes, grid: S.showGrid, guides: S.showGuides, ruler: S.showRuler,
     tFirstRow: !!st.firstRow, tLastRow: !!st.lastRow, tBanded: !!st.banded, tFirstCol: !!st.firstCol, tLastCol: !!st.lastCol,
     bars: { font: resolveColor(S.pres.theme, lastColor.font), hl: resolveColor(S.pres.theme, lastColor.hl), fill: resolveColor(S.pres.theme, lastColor.fill), line: resolveColor(S.pres.theme, lastColor.line), cell: resolveColor(S.pres.theme, lastColor.cell) },

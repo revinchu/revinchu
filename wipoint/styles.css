@@ -358,7 +358,7 @@ body.dropping .stage { outline: 3px dashed var(--accent); outline-offset: -6px; 
 .print-form input[type=number] { width: 70px; }
 
 #toast { position: fixed; left: 50%; bottom: 60px; transform: translateX(-50%) translateY(20px); z-index: 300; background: #323130; color: #fff; padding: 8px 16px; border-radius: 4px; opacity: 0; pointer-events: none; transition: opacity .18s, transform .18s; font-size: 12.5px; max-width: 80vw; }
-#toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+#toast.on { opacity: 1; transform: translateX(-50%) translateY(0); }
 
 /* ───────── 슬라이드 쇼 ───────── */
 .show { position: fixed; inset: 0; z-index: 400; background: #000; outline: none; display: flex; }
@@ -426,6 +426,49 @@ body.eyedropping .overlay { pointer-events: none; }
 
 #app.ribbon-collapsed .ribbon { display: none; }
 .show.no-cursor, .show.no-cursor * { cursor: none !important; }
+
+/* 표: 칸 범위 · 열/행 경계 끌기 */
+.cell-range { position: absolute; background: rgba(47, 123, 216, .18); outline: 2px solid var(--sel); pointer-events: none; }
+.col-grip { position: absolute; width: 6px; cursor: col-resize; pointer-events: auto; }
+.row-grip { position: absolute; height: 6px; cursor: row-resize; pointer-events: auto; }
+.col-grip:hover, .row-grip:hover { background: rgba(47, 123, 216, .35); }
+
+/* 그림 자르기 */
+.crop-ghost { position: absolute; background-size: 100% 100%; opacity: .35; outline: 1px dashed #666; pointer-events: auto; cursor: move; }
+.crop-win { position: absolute; outline: 1px solid #fff; box-shadow: 0 0 0 1px #000; pointer-events: auto; cursor: move; }
+.crop-hd { position: absolute; background: #111; border: 1px solid #fff; }
+.ch-nw, .ch-ne, .ch-se, .ch-sw { width: 14px; height: 14px; }
+.ch-nw { left: -3px; top: -3px; cursor: nwse-resize; clip-path: polygon(0 0, 100% 0, 100% 35%, 35% 35%, 35% 100%, 0 100%); }
+.ch-ne { right: -3px; top: -3px; cursor: nesw-resize; clip-path: polygon(0 0, 100% 0, 100% 100%, 65% 100%, 65% 35%, 0 35%); }
+.ch-se { right: -3px; bottom: -3px; cursor: nwse-resize; clip-path: polygon(65% 0, 100% 0, 100% 100%, 0 100%, 0 65%, 65% 65%); }
+.ch-sw { left: -3px; bottom: -3px; cursor: nesw-resize; clip-path: polygon(0 0, 35% 0, 35% 65%, 100% 65%, 100% 100%, 0 100%); }
+.ch-n, .ch-s { left: calc(50% - 9px); width: 18px; height: 5px; cursor: ns-resize; }
+.ch-n { top: -3px; } .ch-s { bottom: -3px; }
+.ch-e, .ch-w { top: calc(50% - 9px); width: 5px; height: 18px; cursor: ew-resize; }
+.ch-e { right: -3px; } .ch-w { left: -3px; }
+
+/* 메모 */
+.cm-pin { position: absolute; width: 22px; height: 20px; margin: -10px 0 0 -4px; border-radius: 4px 4px 4px 0; background: #f2c744; color: #333; font: 700 11px/20px sans-serif; text-align: center; pointer-events: auto; cursor: pointer; box-shadow: 0 1px 3px rgba(0, 0, 0, .35); }
+.cm-pin.done { background: #ccc; }
+.cm-pin.hot { outline: 2px solid var(--sel); }
+.cm-top { display: flex; gap: 6px; margin-bottom: 10px; }
+.cm-card { border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; background: #fff; display: flex; flex-direction: column; gap: 6px; }
+.cm-card.done { opacity: .6; }
+.cm-head { display: flex; justify-content: space-between; }
+.cm-head small { color: var(--muted); }
+.cm-text { white-space: pre-wrap; word-break: break-word; }
+.cm-reply { padding-left: 10px; border-left: 2px solid var(--border); font-size: 12px; }
+.cm-card input { border: 1px solid var(--border); border-radius: 4px; padding: 4px 6px; font: inherit; }
+.cm-actions { display: flex; gap: 6px; }
+/* 사용자 지정 쇼 · 진행 막대 */
+.cs-row { display: flex; align-items: center; gap: 6px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.cs-row .spacer { flex: 1; }
+.cs-cols { display: grid; grid-template-columns: 1fr auto 1fr; gap: 8px; align-items: center; }
+.cs-sel { width: 100%; min-height: 220px; }
+.cs-mid { display: flex; flex-direction: column; gap: 6px; }
+.progress { height: 8px; background: #eee; border-radius: 4px; overflow: hidden; margin: 8px 0; }
+.progress i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+.gal-item.fx.path .fx-ic { color: #2b79d0; }
 
 /* ───────── 키 팁 (Alt) ───────── */
 #keytipLayer { position: fixed; inset: 0; pointer-events: none; z-index: 600; }

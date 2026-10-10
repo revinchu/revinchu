@@ -453,21 +453,57 @@ export const ANIM_EFFECTS = {
   entr: [['appear', '나타내기'], ['fade', '밝기 변화'], ['fly', '날아오기'], ['float', '떠오르기'], ['split', '내밀기'], ['wipe', '닦아내기'], ['zoom', '확대/축소'], ['grow', '확대/축소 회전'], ['wheel', '시계 방향 회전'], ['bounce', '바운드']],
   emph: [['pulse', '흔들기'], ['spin', '회전'], ['growShrink', '크게/작게'], ['teeter', '시소'], ['flash', '깜박이기']],
   exit: [['disappear', '사라지기'], ['fade', '밝기 변화'], ['fly', '날아가기'], ['zoom', '확대/축소'], ['wipe', '닦아내기']],
+  path: [['pathRight', '선: 오른쪽'], ['pathLeft', '선: 왼쪽'], ['pathUp', '선: 위로'], ['pathDown', '선: 아래로'], ['pathArc', '호'], ['pathCircle', '원'], ['pathWave', '물결']],
 };
-export const ANIM_CLASS_LABEL = { entr: '나타내기', emph: '강조', exit: '끝내기' };
+export const ANIM_CLASS_LABEL = { entr: '나타내기', emph: '강조', exit: '끝내기', path: '이동 경로' };
+/** 이동 경로 (PowerPoint 와 같이 슬라이드 너비/높이 비율 좌표, 개체 위치 기준) */
+export const MOTION_PATHS = {
+  pathRight: 'M 0 0 L 0.25 0', pathLeft: 'M 0 0 L -0.25 0', pathUp: 'M 0 0 L 0 -0.25', pathDown: 'M 0 0 L 0 0.25',
+  pathArc: 'M 0 0 C 0.04 -0.2 0.21 -0.2 0.25 0',
+  pathCircle: 'M 0 0 C 0.07 0 0.125 0.06 0.125 0.125 C 0.125 0.19 0.07 0.25 0 0.25 C -0.07 0.25 -0.125 0.19 -0.125 0.125 C -0.125 0.06 -0.07 0 0 0',
+  pathWave: 'M 0 0 C 0.03 -0.08 0.06 -0.08 0.0625 0 C 0.065 0.08 0.095 0.08 0.125 0 C 0.155 -0.08 0.185 -0.08 0.1875 0 C 0.19 0.08 0.22 0.08 0.25 0',
+};
+/** 경로 글 → 점 목록 (곡선은 잘게 나눔) — [ [x, y] ] (비율) */
+export function motionPoints(path, steps = 12) {
+  const t = String(path ?? '').replace(/[,]/g, ' ').match(/[MLCZEmlcze]|-?[\d.]+(?:e-?\d+)?/g) ?? [];
+  const pts = [];
+  let i = 0;
+  let op = 'M';
+  let cur = [0, 0];
+  const n = () => Number(t[i++]);
+  while (i < t.length) {
+    if (/[A-Za-z]/.test(t[i])) { op = t[i++].toUpperCase(); if (op === 'E' || op === 'Z') continue; }
+    if (op === 'M' || op === 'L') { cur = [n(), n()]; pts.push(cur); } else if (op === 'C') {
+      const p1 = [n(), n()]; const p2 = [n(), n()]; const p3 = [n(), n()];
+      const p0 = cur;
+      for (let k = 1; k <= steps; k++) {
+        const u = k / steps;
+        const a = (1 - u) ** 3; const b = 3 * (1 - u) ** 2 * u; const c = 3 * (1 - u) * u * u; const d = u ** 3;
+        pts.push([a * p0[0] + b * p1[0] + c * p2[0] + d * p3[0], a * p0[1] + b * p1[1] + c * p2[1] + d * p3[1]]);
+      }
+      cur = p3;
+    } else i++;
+  }
+  return pts.length ? pts : [[0, 0]];
+}
 
 export function addAnim(slide, objId, cls, effect, opts = {}) {
-  const a = { id: uid('a'), obj: objId, cls, effect, start: 'click', dur: effect === 'appear' || effect === 'disappear' ? 0 : 0.5, delay: 0, dir: 'b', ...opts };
+  const a = { id: uid('a'), obj: objId, cls, effect, start: 'click', dur: effect === 'appear' || effect === 'disappear' ? 0 : cls === 'path' ? 2 : 0.5, delay: 0, dir: 'b', ...(cls === 'path' ? { motion: MOTION_PATHS[effect] ?? MOTION_PATHS.pathRight } : {}), ...opts };
   slide.anims = [...(slide.anims ?? []), a];
   return a;
 }
 /** 슬라이드 쇼 단계: [[anim...]] — 클릭 한 번에 실행할 묶음 (with/after 는 앞 묶음에 붙음) */
 export function animSteps(slide) {
   const steps = [];
-  for (const a of slide.anims ?? []) {
-    if (!slide.objects.some((o) => o.id === a.obj)) continue;
+  for (const a0 of slide.anims ?? []) {
+    const o = slide.objects.find((x) => x.id === a0.obj);
+    if (!o) continue;
+    // 단락별 (PowerPoint [효과 옵션 › 단락별]): 글이 있는 단락마다 하나씩
+    const list = a0.byPara && o.text ? o.text.paras.map((p, i) => [p, i]).filter(([p]) => p.runs.some((r) => r.t.trim())).map(([, i], k) => ({ ...a0, para: i, start: k === 0 ? a0.start : a0.start === 'click' ? 'click' : 'after' })) : [a0];
+    for (const a of list) {
     if (a.start === 'click' || !steps.length) steps.push([a]);
     else steps[steps.length - 1].push(a);
+    }
   }
   return steps;
 }
@@ -487,8 +523,29 @@ export function stepTimeline(step) {
 
 export const TRANSITIONS = [
   ['none', '없음'], ['cut', '컷'], ['fade', '페이드'], ['push', '밀어내기'], ['wipe', '닦아내기'], ['split', '나누기'],
-  ['cover', '덮기'], ['uncover', '나타내기'], ['zoom', '확대/축소'], ['circle', '원형'], ['dissolve', '디졸브'], ['flip', '뒤집기'],
+  ['cover', '덮기'], ['uncover', '나타내기'], ['zoom', '확대/축소'], ['circle', '원형'], ['dissolve', '디졸브'], ['flip', '뒤집기'], ['morph', '모핑'],
 ];
+/** 모핑: 앞 슬라이드와 짝이 되는 개체 (이름 → 같은 종류 · 같은 글/그림 → 같은 종류 · 도형 모양 순) */
+export function morphPairs(a, b) {
+  const pairs = [];
+  const used = new Set();
+  const key = [
+    (o) => (o.name && !/^(Picture|Rectangle|TextBox|Shape|Video|Audio|Table|Chart) \d+$/.test(o.name) ? `n:${o.name}` : null),
+    (o) => `${o.type}|${o.shape ?? ''}|${o.media ?? ''}|${o.text ? plainText(o.text) : ''}|${o.ph ?? ''}`,
+    (o) => (o.ph ? `ph:${o.ph}` : null),
+    (o) => `${o.type}|${o.shape ?? ''}|${o.media ?? ''}`,
+  ];
+  for (const k of key) {
+    for (const nb of b.objects) {
+      if (pairs.some((p) => p[1] === nb)) continue;
+      const kb = k(nb);
+      if (!kb) continue;
+      const na = a.objects.find((o) => !used.has(o.id) && k(o) === kb);
+      if (na) { pairs.push([na, nb]); used.add(na.id); }
+    }
+  }
+  return pairs;
+}
 export const TRANSITION_LABEL = Object.fromEntries(TRANSITIONS);
 
 // ───────────── 실행 취소 ─────────────
