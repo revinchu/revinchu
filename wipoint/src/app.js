@@ -1,0 +1,363 @@
+// WIPOINT 시작점: 화면 조립 · 단축키 · 클립보드 · 끌어 놓기 · 자동 저장
+import { S, on, emit, run, register, curSlide, selObjects, selOne, goSlide, COMMANDS } from './state.js';
+import { initEditor, renderCanvas, renderOverlay, fitZoom, startEdit, endEdit, applyTextFormat, focusEditing } from './editor.js';
+import { initPanels, renderThumbs, updateThumb, markActiveThumb, renderNotes, renderStatus, renderPane, renderSorter, thumbsFocused } from './panels.js';
+import { initRibbon, renderRibbon, TABS, setRibbonTab } from './ribbon.js';
+import { GALLERIES } from './galleries.js';
+import { APP_VERSION } from './commands.js';
+import { openBackstage, closeBackstage, backstageOpen } from './backstage.js';
+import { scheduleAutosave, autosaveNow, restoreAutosave, loadViewLink, loadFile, setDocument } from './fileio.js';
+import { startShow, showActive } from './show.js';
+import { SLIDE_CSS } from './render.js';
+import { setOffsets } from './textedit.js';
+import { el, toast, alertDialog, openMenu, hydrateIcons, isDialogOpen, isMenuOpen, closeMenus } from './ui.js';
+
+const $ = (id) => document.getElementById(id);
+
+function boot() {
+  document.head.append(el('style', {}, SLIDE_CSS));
+  initRibbon($('ribbonTabs'), $('ribbon'), GALLERIES);
+  initEditor($('stage'));
+  initPanels({ thumbs: $('thumbs'), notes: $('notes'), status: $('status'), pane: $('pane'), sorter: $('sorter') });
+  register({ backstage: (page) => openBackstage(page ?? 'home') });
+  wireTitlebar();
+  wireEvents();
+  applyView();
+  renderAll();
+  start();
+}
+
+async function start() {
+  try {
+    if (location.hash.startsWith('#view=')) {
+      if (await loadViewLink(location.hash)) {
+        document.body.classList.add('view-only');
+        toast('읽기 전용으로 열었습니다');
+        startShow({ from: 0, windowed: true });
+        return;
+      }
+    }
+  } catch (e) { alertDialog('공유 링크', `링크를 열지 못했습니다: ${e.message}`); }
+  const restored = await restoreAutosave();
+  if (restored) toast('이전에 작업하던 프레젠테이션을 복원했습니다');
+  else if (!localStorage.getItem('wipoint:seen')) setTimeout(() => openBackstage('home'), 50);
+  try {
+    if (localStorage.getItem('wipoint:version') !== APP_VERSION) { localStorage.setItem('wipoint:version', APP_VERSION); localStorage.setItem('wipoint:seen', '1'); }
+  } catch { /* 저장소 없음 */ }
+}
+
+// ───────────── 다시 그리기 ─────────────
+let thumbTimer = 0;
+let ribbonTimer = 0;
+function renderAll() {
+  renderThumbs();
+  renderCanvas();
+  renderNotes();
+  renderStatus();
+  renderRibbon();
+  renderPane();
+  if (S.view === 'sorter') renderSorter();
+  updateTitle();
+}
+function renderRibbonSoon() { clearTimeout(ribbonTimer); ribbonTimer = setTimeout(renderRibbon, 120); }
+
+on('change', ({ scope = 'slide', keepPick } = {}) => {
+  if (scope === 'all') renderAll();
+  else if (scope === 'slide') { updateThumb(); if (!S.editing) renderCanvas(); else renderOverlay(); renderRibbonSoon(); if (S.formatPane) renderPane(); renderStatus(); if (S.view === 'sorter') renderSorter(); }
+  else if (scope === 'text') { clearTimeout(thumbTimer); thumbTimer = setTimeout(() => updateThumb(), 250); renderOverlay(); renderRibbonSoon(); }
+  else if (scope === 'nav') {
+    if (!keepPick) S.slideSel = new Set([curSlide()?.id]);
+    if (S.pres.slides.length !== document.querySelectorAll('#thumbs .thumb').length) renderThumbs(); else markActiveThumb();
+    renderCanvas(); renderNotes(); renderStatus(); renderRibbon(); renderPane();
+    if (S.view === 'sorter') renderSorter();
+  } else if (scope === 'view') { applyView(); renderStatus(); renderRibbon(); }
+  else if (scope === 'none') renderStatus();
+  if (scope !== 'nav' && scope !== 'view') { scheduleAutosave(); updateTitle(); }
+});
+on('selection', () => {
+  renderOverlay();
+  renderRibbonSoon();
+  if (S.painter && selObjects().length) {
+    if (S.painter.anim) {
+      const s = curSlide();
+      const ids = new Set(selObjects().map((o) => o.id));
+      run('removeAnim', { all: true });
+      for (const id of ids) for (const a of S.animClip ?? []) { const { id: _i, obj: _o, ...rest } = a; s.anims.push({ ...rest, id: `a${Math.random().toString(36).slice(2)}`, obj: id }); }
+      S.painter = null;
+      emit('change', { scope: 'slide' });
+    } else run('applyPainter');
+    emit('painter');
+  }
+});
+on('zoom', () => renderStatus());
+on('hydrate', (node) => hydrateIcons(node));
+on('error', (e) => { console.error(e); toast(`오류: ${e?.message ?? e}`); });
+on('drawMode', () => { $('stage').classList.toggle('drawing', !!S.drawShape); });
+on('painter', () => { document.body.classList.toggle('painting', !!S.painter); renderRibbon(); });
+on('saved', () => updateTitle());
+on('docLoaded', () => { fitZoom(); updateTitle(); });
+on('showEnded', () => { if (S.viewOnly) toast('읽기 전용 문서입니다. 편집하려면 [파일 › 다른 이름으로 저장]으로 내려받으세요.'); });
+on('focusCanvas', () => { if (S.editing) focusEditing(); else $('stage').focus(); });
+
+function applyView() {
+  const app = $('app');
+  app.dataset.view = S.view;
+  $('sorter').hidden = S.view !== 'sorter';
+  $('stage').hidden = S.view === 'sorter';
+  app.classList.toggle('no-notes', !S.showNotes || S.view === 'sorter');
+  app.classList.toggle('big-notes', !!S.bigNotes);
+  if (S.view === 'sorter') renderSorter();
+  else requestAnimationFrame(() => { if (S.fitZoom) fitZoom(); renderCanvas(); });
+}
+
+function updateTitle() {
+  const t = `${S.docName}${S.dirty ? ' •' : ''} - WIPOINT`;
+  document.title = t;
+  const d = $('docTitle');
+  if (d && !d.querySelector('input')) d.textContent = `${S.docName} - WIPOINT`;
+  const st = $('saveState');
+  if (st) st.textContent = S.fileHandle ? (S.dirty ? '저장 안 됨' : '저장됨') : '이 브라우저에 자동 보관';
+}
+
+// ───────────── 제목 표시줄 · 검색 ─────────────
+function wireTitlebar() {
+  for (const b of document.querySelectorAll('[data-cmd]')) b.addEventListener('click', () => run(b.dataset.cmd));
+  hydrateIcons(document);
+  const d = $('docTitle');
+  d.addEventListener('click', () => {
+    if (d.querySelector('input')) return;
+    const inp = el('input', { type: 'text', value: S.docName });
+    d.replaceChildren(inp);
+    inp.focus();
+    inp.select();
+    const done = () => { const v = inp.value.trim(); if (v) S.docName = v; d.textContent = ''; updateTitle(); scheduleAutosave(); };
+    inp.addEventListener('blur', done);
+    inp.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') inp.blur(); if (e.key === 'Escape') { inp.value = S.docName; inp.blur(); } });
+  });
+  // 검색 (명령 찾기): 리본의 모든 단추 이름
+  const search = $('searchBox');
+  const index = [];
+  const walk = (it, tab) => {
+    if (!it) return;
+    if (it.items) for (const x of it.items) walk(x, tab);
+    if (Array.isArray(it.rows)) for (const r of it.rows) for (const x of r) walk(x, tab);
+    if ((it.label || it.title) && (it.cmd || it.menu)) index.push({ label: it.label ?? it.title, cmd: it.cmd, menu: it.menu, tab });
+  };
+  for (const t of TABS) for (const g of t.groups) for (const it of g.items) walk(it, t);
+  search.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Escape') { search.value = ''; search.blur(); closeMenus(); return; }
+    if (e.key !== 'Enter' && e.key !== 'ArrowDown') return;
+    e.preventDefault();
+    const q = search.value.trim().replace(/\s+/g, '');
+    if (!q) return;
+    const seen = new Set();
+    const hits = index.filter((x) => x.label.replace(/\s+/g, '').includes(q) && !seen.has(x.label + x.cmd) && seen.add(x.label + x.cmd)).slice(0, 12);
+    if (!hits.length) { toast('찾는 명령이 없습니다'); return; }
+    openMenu(search, hits.map((h) => ({ label: `${h.label}  ·  ${h.tab.label}`, action: () => { search.blur(); if (h.cmd) run(h.cmd); else { setRibbonTab(h.tab.id); toast(`[${h.tab.label}] 탭에 있습니다`); } } })));
+  });
+}
+
+// ───────────── 이벤트 ─────────────
+function inTextInput(t) { return t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || (t.isContentEditable && !t.closest('.slide-layer'))); }
+
+function wireEvents() {
+  document.addEventListener('keydown', onKey);
+  on('editKey', (e) => onEditCtrl(e));
+  $('thumbs').addEventListener('focus', () => { S.focusThumbs = true; });
+  $('thumbs').addEventListener('blur', () => { S.focusThumbs = false; });
+  // 클립보드
+  document.addEventListener('copy', (e) => {
+    if (inTextInput(e.target) || S.editing || showActive()) return;
+    e.preventDefault();
+    run('copy');
+  });
+  document.addEventListener('cut', (e) => {
+    if (inTextInput(e.target) || S.editing || showActive()) return;
+    e.preventDefault();
+    run('cut');
+  });
+  document.addEventListener('paste', (e) => {
+    if (inTextInput(e.target) || S.editing || showActive() || isDialogOpen()) return;
+    e.preventDefault();
+    const files = [...(e.clipboardData?.files ?? [])].filter((f) => f.type.startsWith('image/'));
+    const text = e.clipboardData?.getData('text/plain') ?? '';
+    const internalFresh = S.clipboard && (!text.trim() || selectedText() === text || Date.now() - S.clipboard.at < 60000 && clipText() === text);
+    if (files.length && !internalFresh) { run('pasteFiles', files); return; }
+    if (S.clipboard && (internalFresh || !text)) { run('pasteInternal'); return; }
+    if (text) run('pasteText', text);
+  });
+  // 파일 끌어 놓기
+  addEventListener('dragover', (e) => { if (e.dataTransfer?.types?.includes('Files')) { e.preventDefault(); document.body.classList.add('dropping'); } });
+  addEventListener('dragleave', (e) => { if (!e.relatedTarget) document.body.classList.remove('dropping'); });
+  addEventListener('drop', async (e) => {
+    document.body.classList.remove('dropping');
+    const files = [...(e.dataTransfer?.files ?? [])];
+    if (!files.length) return;
+    e.preventDefault();
+    const deck = files.find((f) => /\.(pptx|ppsx|potx|json|ppt)$/i.test(f.name));
+    if (deck) {
+      try { const r = await loadFile(deck); setDocument(r.pres, r.name); if (r.warnings.length) alertDialog('일부 내용', r.warnings.join('\n')); else toast('프레젠테이션을 열었습니다'); } catch (err) { alertDialog('열기', err.message); }
+      return;
+    }
+    run('pasteFiles', files);
+  });
+  addEventListener('beforeunload', (e) => { if (S.dirty && !S.viewOnly) { autosaveNow(); if (S.fileHandle) { e.preventDefault(); e.returnValue = ''; } } });
+  addEventListener('error', (e) => emit('error', e.error ?? e.message));
+  addEventListener('unhandledrejection', (e) => emit('error', e.reason));
+  // 편집 화면 오른쪽 클릭
+  on('canvasMenu', ({ e, hit }) => {
+    if (hit && !S.sel.has(hit.id)) { S.sel = new Set(hit.grp ? curSlide().objects.filter((o) => o.grp === hit.grp).map((o) => o.id) : [hit.id]); emit('selection'); }
+    const o = selOne();
+    const objs = selObjects();
+    const items = objs.length ? [
+      { label: '잘라내기', icon: 'cut', key: 'Ctrl+X', action: () => run('cut') },
+      { label: '복사', icon: 'copy', key: 'Ctrl+C', action: () => run('copy') },
+      { label: '붙여넣기', icon: 'paste', key: 'Ctrl+V', action: () => run('paste') },
+      { sep: true },
+      o?.text ? { label: '텍스트 편집', icon: 'textbox', action: () => startEdit(o, { end: true }) } : null,
+      o?.type === 'chart' ? { label: '데이터 편집...', icon: 'table', action: () => run('chartData') } : null,
+      o?.type === 'image' ? { label: '그림 바꾸기...', icon: 'picture', action: () => run('changePicture') } : null,
+      o?.type === 'image' ? { label: '자르기...', icon: 'crop', action: () => run('cropPicture') } : null,
+      { label: '그룹화', icon: 'group', submenu: [{ label: '그룹', key: 'Ctrl+G', action: () => run('group') }, { label: '그룹 해제', key: 'Ctrl+Shift+G', action: () => run('ungroup') }] },
+      { label: '맨 앞으로 가져오기', icon: 'bringForward', submenu: [{ label: '맨 앞으로 가져오기', action: () => run('bringToFront') }, { label: '앞으로 가져오기', action: () => run('bringForward') }] },
+      { label: '맨 뒤로 보내기', icon: 'sendBackward', submenu: [{ label: '맨 뒤로 보내기', action: () => run('sendToBack') }, { label: '뒤로 보내기', action: () => run('sendBackward') }] },
+      { sep: true },
+      { label: '링크', icon: 'link', key: 'Ctrl+K', action: () => run('hyperlink') },
+      { label: '애니메이션 추가', icon: 'animation', action: () => run('addAnimMenu', { x: e.clientX, y: e.clientY }) },
+      { label: '대체 텍스트 편집...', icon: 'info', action: () => run('altText') },
+      { label: o?.type === 'image' ? '그림 서식...' : '도형 서식...', icon: 'effects', action: () => run('formatPane', 'shape') },
+    ] : [
+      { label: '붙여넣기', icon: 'paste', key: 'Ctrl+V', action: () => run('paste') },
+      { sep: true },
+      { label: '레이아웃', icon: 'layout', action: () => run('layoutMenu', { x: e.clientX, y: e.clientY }) },
+      { label: '슬라이드 다시 설정', icon: 'resetSlide', action: () => run('resetSlide') },
+      { label: '눈금선', checked: S.showGrid, action: () => run('toggleGrid') },
+      { label: '안내선', checked: S.showGuides, action: () => run('toggleGuides') },
+      { label: '배경 서식...', icon: 'formatBg', action: () => run('formatBg') },
+      { label: '새 슬라이드', icon: 'newSlide', key: 'Ctrl+M', action: () => run('newSlide') },
+    ];
+    openMenu({ x: e.clientX, y: e.clientY }, items.filter(Boolean));
+  });
+  on('thumbMenu', ({ e }) => {
+    const s = curSlide();
+    openMenu({ x: e.clientX, y: e.clientY }, [
+      { label: '잘라내기', icon: 'cut', action: () => { S.focusThumbs = true; run('cut'); } },
+      { label: '복사', icon: 'copy', action: () => { S.focusThumbs = true; run('copy'); S.focusThumbs = false; } },
+      { label: '붙여넣기', icon: 'paste', action: () => run('pasteInternal') },
+      { sep: true },
+      { label: '새 슬라이드', icon: 'newSlide', key: 'Ctrl+M', action: () => run('newSlide') },
+      { label: '슬라이드 복제', icon: 'duplicate', key: 'Ctrl+D', action: () => run('duplicateSlide') },
+      { label: '슬라이드 삭제', icon: 'delete', key: 'Delete', action: () => run('deleteSlide') },
+      { sep: true },
+      { label: '구역 추가', icon: 'section', action: () => run('addSection') },
+      { label: '레이아웃', icon: 'layout', action: () => run('layoutMenu', { x: e.clientX, y: e.clientY }) },
+      { label: '슬라이드 다시 설정', icon: 'resetSlide', action: () => run('resetSlide') },
+      { label: '배경 서식...', icon: 'formatBg', action: () => run('formatBg') },
+      { sep: true },
+      { label: '슬라이드 숨기기', icon: 'hideSlide', checked: !!s?.hidden, action: () => run('hideSlide') },
+      { label: '위로 이동', icon: 'moveUp', action: () => run('moveSlideUp') },
+      { label: '아래로 이동', icon: 'moveDown', action: () => run('moveSlideDown') },
+    ]);
+  });
+}
+function selectedText() { return selObjects().map((o) => (o.text ? o.text.paras.map((p) => p.runs.map((r) => r.t).join('')).join('\n') : '')).join('\n'); }
+function clipText() { return (S.clipboard?.objs ?? []).map((o) => (o.text ? o.text.paras.map((p) => p.runs.map((r) => r.t).join('')).join('\n') : '')).filter(Boolean).join('\n') || ' '; }
+
+/** 글 편집 중 Ctrl 조합 */
+function onEditCtrl(e) {
+  const k = e.key.toLowerCase();
+  const shift = e.shiftKey;
+  const map = {
+    b: () => run('bold'), i: () => run('italic'), u: () => run('underline'),
+    e: () => run('alignCenter'), l: () => run('alignLeft'), r: () => run('alignRight'), j: () => run('alignJustify'),
+    z: () => run('undo'), y: () => run('redo'), s: () => run('save'), k: () => run('hyperlink'), f: () => run('find'), h: () => run('replace'),
+    ' ': () => run('clearFormat'), ']': () => run('growFont'), '[': () => run('shrinkFont'), '>': () => run('growFont'), '<': () => run('shrinkFont'), '.': () => (shift ? run('growFont') : null), ',': () => (shift ? run('shrinkFont') : null),
+    '=': () => run(shift ? 'superscript' : 'subscript'), m: () => { endEdit(); run('newSlide'); }, p: () => run('print'),
+  };
+  if (map[k]) { e.preventDefault(); map[k](); }
+}
+
+function onKey(e) {
+  if (showActive() || backstageOpen()) return;
+  if (isDialogOpen()) return;
+  if (inTextInput(e.target)) return;
+  // 편집 중 키는 editor.js 가 처리 (초점이 리본 등으로 옮겨 갔을 때 Esc 는 편집 끝내기)
+  if (S.editing) { if (e.key === 'Escape') { e.preventDefault(); endEdit(); } return; }
+  const k = e.key;
+  const ctrl = e.ctrlKey || e.metaKey;
+  const shift = e.shiftKey;
+  const stop = () => { e.preventDefault(); e.stopPropagation(); };
+  if (k === 'F5') { stop(); run(e.altKey ? 'presenterView' : shift ? 'showFromCurrent' : 'showFromStart'); return; }
+  if (k === 'F12') { stop(); run('saveAs', 'pptx'); return; }
+  if (k === 'F1') { stop(); run('shortcuts'); return; }
+  if (k === 'F7') { stop(); run('spellCheck'); return; }
+  if (ctrl && !e.altKey) {
+    const key = k.toLowerCase();
+    const map = {
+      n: () => run('newBlank'), o: () => run('open'), s: () => run('save'), p: () => run('print'), z: () => run('undo'), y: () => run('redo'),
+      d: () => run('duplicate'), m: () => run('newSlide'), a: () => run('selectAll'), g: () => run(shift ? 'ungroup' : 'group'),
+      b: () => run('bold'), i: () => run('italic'), u: () => run('underline'), e: () => run('alignCenter'), l: () => run('alignLeft'), r: () => run('alignRight'), j: () => run('alignJustify'),
+      k: () => run('hyperlink'), f: () => run('find'), h: () => run('replace'), ' ': () => run('clearFormat'),
+      ']': () => run(shift ? 'bringToFront' : 'growFont'), '[': () => run(shift ? 'sendToBack' : 'shrinkFont'), '}': () => run('bringToFront'), '{': () => run('sendToBack'),
+      '>': () => run('growFont'), '<': () => run('shrinkFont'), '.': () => shift && run('growFont'), ',': () => shift && run('shrinkFont'),
+      c: () => (shift ? run('copyFormat') : null), v: () => (shift ? run('pasteFormat') : null),
+      '=': () => run('zoomIn'), '-': () => run('zoomOut'), '0': () => fitZoom(),
+    };
+    if (key in map) {
+      const r = (key === 'c' || key === 'v') && !shift ? null : map[key];
+      if (r) { stop(); r(); }
+    }
+    if (k.startsWith('Arrow') && selObjects().length) { stop(); const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[k]; run('nudge', d[0], d[1]); }
+    return;
+  }
+  if (thumbsFocused()) return;
+  const objs = selObjects();
+  if (k === 'Escape') {
+    if (S.drawShape) { S.drawShape = null; emit('drawMode'); return; }
+    if (S.painter) { S.painter = null; emit('painter'); return; }
+    if (isMenuOpen()) { closeMenus(); return; }
+    if (S.formatPane && !objs.length) { S.formatPane = null; renderPane(); fitZoom(); return; }
+    S.sel.clear(); emit('selection'); return;
+  }
+  if (k === 'Delete' || k === 'Backspace') { if (objs.length) { stop(); run('deleteSelection'); } return; }
+  if (k.startsWith('Arrow')) {
+    if (objs.length) { stop(); const step = 7.5; const d = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[k]; run('nudge', d[0], d[1]); }
+    else if (k === 'ArrowDown' || k === 'ArrowRight') { stop(); goSlide(S.cur + 1); } else { stop(); goSlide(S.cur - 1); }
+    return;
+  }
+  if (k === 'PageDown') { stop(); goSlide(S.cur + 1); return; }
+  if (k === 'PageUp') { stop(); goSlide(S.cur - 1); return; }
+  if (k === 'Home' && !objs.length) { stop(); goSlide(0); return; }
+  if (k === 'End' && !objs.length) { stop(); goSlide(S.pres.slides.length - 1); return; }
+  if (k === 'Tab') {
+    stop();
+    const list = curSlide().objects.filter((o) => !o.hidden);
+    if (!list.length) return;
+    const i = objs.length ? list.indexOf(objs[objs.length - 1]) : -1;
+    const n = list[(i + (shift ? -1 : 1) + list.length) % list.length];
+    S.sel = new Set([n.id]);
+    emit('selection');
+    return;
+  }
+  if ((k === 'F2' || k === 'Enter') && objs.length === 1) { stop(); run('editText'); return; }
+  // 개체를 고른 채 글자를 치면 그 개체의 글을 바꿈 (PowerPoint 와 같음)
+  const one = selOne();
+  if (one && one.type === 'shape' && !e.altKey && k.length === 1 && k !== ' ') {
+    stop();
+    startEdit(one, { all: true });
+    requestAnimationFrame(() => document.execCommand('insertText', false, k));
+  }
+}
+
+// 찾기 등에서 편집 중 글자 범위를 고를 때
+on('setTextSel', ({ txi, a, b }) => setOffsets(txi, { a, b }));
+
+// 서식 적용 도우미 노출 (도구 · 테스트)
+window.wipoint = {
+  S, run, COMMANDS, applyTextFormat, goSlide, renderAll,
+  /** 도구 · 테스트용: 바이트 배열로 파일 열기 */
+  openBytes: async (name, bytes) => { const r = await loadFile(new File([new Uint8Array(bytes)], name)); setDocument(r.pres, r.name); return r.warnings; },
+};
+
+boot();

@@ -1,0 +1,16 @@
+{
+  "name": "wipoint",
+  "version": "1.0.0",
+  "description": "PowerPoint 와 같은 브라우저 프레젠테이션 (의존성 없음)",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js",
+    "build": "node build.mjs",
+    "build:cloud": "node build.mjs --cloud"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

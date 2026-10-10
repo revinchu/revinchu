@@ -16,7 +16,8 @@ revinchu/
 ├── naver_ad_rank_checker.py     # Main rank checking program
 ├── debug_html_structure.py      # HTML structure analysis utility
 ├── .github/workflows/tabula-pages.yml  # GitHub Pages deploy for Tabula
-└── tabula/                      # Excel-style web spreadsheet (separate app, see below)
+├── tabula/                      # Excel-style web spreadsheet (separate app, see below)
+└── wipoint/                     # PowerPoint-style web presentation app (see wipoint/CLAUDE.md)
 ```
 
 ## Tech Stack
@@ -92,6 +93,10 @@ Uses **substring matching** - searching for "하늘마음" will match titles lik
 - **Proxy**: Do not set `http_proxy`/`https_proxy` unless explicitly required; the script accesses Naver directly
 - **Encoding**: Naver pages use UTF-8; CSV export uses UTF-8 with BOM for Korean Excel compatibility
 - **No tests yet**: This is a scraping tool whose correctness depends on live page structure
+
+## WIPOINT (PowerPoint-style presentation, `wipoint/`)
+
+Separate dependency-free app built like Tabula/WIXEL. Its own guide is `wipoint/CLAUDE.md` (rules in `wipoint/AGENTS.md`): `cd wipoint && npm start` (port 5179), `npm test`, `npm run build` / `npm run build:cloud`.
 
 ## Tabula (Excel-style spreadsheet, `tabula/`)
 

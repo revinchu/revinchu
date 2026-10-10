@@ -1,0 +1,298 @@
+// 파일: 열기 · 저장 (.pptx / .wpt.json) · 자동 저장(IndexedDB) · 내보내기(PDF 인쇄 · PNG) · 공유 링크
+import { S, emit, goSlide } from './state.js';
+import { readPptx, pptxEntries } from './pptx.js';
+import { zipAsync } from './zip.js';
+import { validatePresentation, pruneMedia, snapshot } from './model.js';
+import { slideHtml, SLIDE_CSS } from './render.js';
+import { toast, alertDialog } from './ui.js';
+
+const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+
+// ───────────── 열기 ─────────────
+export function pickFile(accept) {
+  return new Promise((resolve) => {
+    const inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = accept;
+    inp.addEventListener('change', () => resolve(inp.files?.[0] ?? null));
+    inp.click();
+  });
+}
+
+/** 파일 바이트 → 문서 (pptx · WIPOINT JSON) */
+export async function loadFile(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const name = file.name.replace(/\.(pptx|potx|pptm|ppsx|json|wpt)$/i, '').replace(/\.wpt$/i, '');
+  if (bytes[0] === 0xd0 && bytes[1] === 0xcf) throw new Error('예전 PowerPoint 97-2003 형식(.ppt)은 열 수 없습니다. PowerPoint 에서 .pptx 로 저장한 뒤 열어 주세요.');
+  if (bytes[0] === 0x50 && bytes[1] === 0x4b) {
+    const { pres, warnings } = readPptx(bytes);
+    return { pres, name, warnings };
+  }
+  const text = new TextDecoder().decode(bytes);
+  const pres = validatePresentation(JSON.parse(text));
+  return { pres, name, warnings: [] };
+}
+
+export function setDocument(pres, name, { handle = null } = {}) {
+  S.pres = pres;
+  S.docName = name || '프레젠테이션1';
+  S.fileHandle = handle;
+  S.history.clear();
+  S.sel.clear();
+  S.editing = null;
+  S.dirty = false;
+  goSlide(0);
+  emit('change', { scope: 'all' });
+  emit('docLoaded');
+}
+
+export async function openWithPicker() {
+  if (window.showOpenFilePicker) {
+    try {
+      const [h] = await window.showOpenFilePicker({ id: 'wipoint-open', types: [{ description: '프레젠테이션', accept: { [PPTX_MIME]: ['.pptx', '.ppsx', '.potx'], 'application/json': ['.json'] } }] });
+      const f = await h.getFile();
+      const r = await loadFile(f);
+      setDocument(r.pres, r.name, { handle: /\.pptx$/i.test(f.name) ? h : null });
+      report(r.warnings);
+      return;
+    } catch (e) {
+      if (e.name === 'AbortError') return;
+      if (e.name !== 'SecurityError' && e.name !== 'TypeError') throw e;
+    }
+  }
+  const f = await pickFile('.pptx,.ppsx,.potx,.json,.ppt');
+  if (!f) return;
+  const r = await loadFile(f);
+  setDocument(r.pres, r.name);
+  report(r.warnings);
+}
+function report(warnings) {
+  if (warnings?.length) alertDialog('일부 내용', warnings.join('\n'));
+  else toast('프레젠테이션을 열었습니다');
+}
+
+// ───────────── 저장 ─────────────
+/** SVG 그림 → PNG (PowerPoint 2016 이전 호환용 대체 그림) */
+function svgToPng(url, w = 512) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const h = Math.max(1, Math.round((w * (img.naturalHeight || 1)) / (img.naturalWidth || 1)));
+      const cv = document.createElement('canvas');
+      cv.width = w; cv.height = h;
+      cv.getContext('2d').drawImage(img, 0, 0, w, h);
+      resolve(cv.toDataURL('image/png'));
+    };
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
+}
+
+export async function pptxBlob() {
+  pruneMedia(S.pres);
+  const png = {};
+  for (const [id, url] of Object.entries(S.pres.media)) if (url.startsWith('data:image/svg')) { const p = await svgToPng(url); if (p) png[id] = p; }
+  const entries = pptxEntries(S.pres, { png });
+  const bytes = await zipAsync(entries);
+  return new Blob([bytes], { type: PPTX_MIME });
+}
+export const jsonBlob = () => new Blob([JSON.stringify(S.pres)], { type: 'application/json' });
+
+function download(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.append(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+}
+
+/** 저장 위치 고르기 (가능한 브라우저) → 핸들, 아니면 내려받기 */
+async function pickSave(name, kind) {
+  if (!window.showSaveFilePicker) return null;
+  const types = { pptx: [{ description: 'PowerPoint 프레젠테이션', accept: { [PPTX_MIME]: ['.pptx'] } }], json: [{ description: 'WIPOINT 문서', accept: { 'application/json': ['.json'] } }], pdf: [{ description: 'PDF', accept: { 'application/pdf': ['.pdf'] } }], png: [{ description: 'PNG 그림', accept: { 'image/png': ['.png'] } }] }[kind];
+  try { return await window.showSaveFilePicker({ id: 'wipoint-save', suggestedName: name, types }); } catch (e) { if (e.name === 'AbortError') return false; return null; }
+}
+async function writeHandle(h, blob) {
+  const w = await h.createWritable();
+  await w.write(blob);
+  await w.close();
+}
+
+export async function save() {
+  if (S.fileHandle) {
+    await writeHandle(S.fileHandle, await pptxBlob());
+    S.dirty = false;
+    emit('saved');
+    toast('저장했습니다');
+    return;
+  }
+  await saveAs('pptx');
+}
+
+export async function saveAs(kind = 'pptx') {
+  const ext = kind === 'json' ? 'wpt.json' : kind;
+  const name = `${S.docName}.${ext}`;
+  // 사용자 동작(클릭) 직후에 위치를 먼저 고름
+  const h = await pickSave(name, kind);
+  if (h === false) return;
+  const blob = kind === 'json' ? jsonBlob() : await pptxBlob();
+  if (h) {
+    await writeHandle(h, blob);
+    if (kind === 'pptx') { S.fileHandle = h; S.docName = h.name.replace(/\.pptx$/i, ''); }
+  } else download(blob, name);
+  S.dirty = false;
+  emit('saved');
+  toast(kind === 'json' ? 'WIPOINT 문서(.json)로 저장했습니다' : 'PowerPoint 파일(.pptx)로 저장했습니다');
+}
+
+// ───────────── 자동 저장 (IndexedDB) ─────────────
+const DB = 'wipoint';
+function idb() {
+  return new Promise((resolve, reject) => {
+    const r = indexedDB.open(DB, 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('kv');
+    r.onsuccess = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
+  });
+}
+export async function idbSet(key, value) {
+  const db = await idb();
+  await new Promise((res, rej) => { const tx = db.transaction('kv', 'readwrite'); tx.objectStore('kv').put(value, key); tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+  db.close();
+}
+export async function idbGet(key) {
+  const db = await idb();
+  const v = await new Promise((res, rej) => { const r = db.transaction('kv').objectStore('kv').get(key); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+  db.close();
+  return v;
+}
+
+let autoTimer = 0;
+export function scheduleAutosave() {
+  if (S.viewOnly) return;
+  clearTimeout(autoTimer);
+  autoTimer = setTimeout(autosaveNow, 1200);
+}
+export async function autosaveNow() {
+  try {
+    await idbSet('autosave', { name: S.docName, json: snapshot(S.pres), media: S.pres.media, at: Date.now(), cur: S.cur });
+    await addRecent();
+    emit('autosaved');
+  } catch (e) { console.warn('자동 저장 실패', e); }
+}
+export async function restoreAutosave() {
+  try {
+    const v = await idbGet('autosave');
+    if (!v?.json) return false;
+    const pres = validatePresentation({ ...JSON.parse(v.json), media: v.media ?? {} });
+    setDocument(pres, v.name);
+    if (v.cur) goSlide(Math.min(v.cur, pres.slides.length - 1));
+    return true;
+  } catch { return false; }
+}
+
+/** 최근 문서 (첫 슬라이드 미리 보기 포함, 최대 12개) */
+async function addRecent() {
+  const list = (await idbGet('recent')) ?? [];
+  const id = S.docId ?? (S.docId = `d${Date.now().toString(36)}`);
+  const item = { id, name: S.docName, at: Date.now(), slides: S.pres.slides.length };
+  const out = [item, ...list.filter((x) => x.id !== id)].slice(0, 12);
+  await idbSet('recent', out);
+  await idbSet(`doc:${id}`, { name: S.docName, json: snapshot(S.pres), media: S.pres.media });
+  for (const x of list.slice(12)) await idbSet(`doc:${x.id}`, null);
+}
+export async function recentDocs() { return (await idbGet('recent')) ?? []; }
+export async function openRecent(id) {
+  const v = await idbGet(`doc:${id}`);
+  if (!v) { toast('문서를 찾을 수 없습니다'); return; }
+  setDocument(validatePresentation({ ...JSON.parse(v.json), media: v.media ?? {} }), v.name);
+  S.docId = id;
+}
+
+// ───────────── 인쇄 · PDF ─────────────
+/** mode: slides | handout2 | handout3 | handout6 | notes ; range: [from, to] (1부터) */
+export function printSlides({ mode = 'slides', range = null, hidden = false } = {}) {
+  const area = document.getElementById('printArea');
+  const { w, h } = S.pres.size;
+  let idx = S.pres.slides.map((s, i) => i).filter((i) => hidden || !S.pres.slides[i].hidden);
+  if (range) idx = idx.filter((i) => i + 1 >= range[0] && i + 1 <= range[1]);
+  const pageW = mode === 'slides' ? w : 794;
+  const scale = mode === 'slides' ? 1 : mode === 'notes' ? 640 / w : mode === 'handout2' ? 560 / w : mode === 'handout3' ? 300 / w : 330 / w;
+  const tile = (i) => `<div class="pr-slide" style="width:${w * scale}px;height:${h * scale}px"><div style="transform:scale(${scale});transform-origin:0 0;width:${w}px;height:${h}px">${slideHtml(S.pres, S.pres.slides[i], { index: i })}</div></div>`;
+  const pages = [];
+  if (mode === 'slides') for (const i of idx) pages.push(`<div class="pr-page slides">${tile(i)}</div>`);
+  else if (mode === 'notes') for (const i of idx) pages.push(`<div class="pr-page notes">${tile(i)}<div class="pr-notes">${(S.pres.slides[i].notes ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])).replace(/\n/g, '<br>')}</div><div class="pr-no">${i + 1}</div></div>`);
+  else {
+    const per = { handout2: 2, handout3: 3, handout6: 6 }[mode];
+    for (let k = 0; k < idx.length; k += per) {
+      const chunk = idx.slice(k, k + per);
+      pages.push(`<div class="pr-page handout h${per}">${chunk.map((i) => `<div class="pr-cell">${tile(i)}${per === 3 ? '<div class="pr-lines"></div>' : ''}</div>`).join('')}</div>`);
+    }
+  }
+  const landscape = mode === 'slides';
+  area.innerHTML = `<style>${SLIDE_CSS}@page{size:${landscape ? `${w}px ${h}px` : 'A4 portrait'};margin:${landscape ? 0 : '12mm'}}</style>${pages.join('')}`;
+  area.dataset.mode = mode;
+  area.style.setProperty('--pw', `${pageW}px`);
+  setTimeout(() => { window.print(); }, 50);
+}
+
+// ───────────── PNG 내보내기 ─────────────
+/** 슬라이드 → PNG data URL (SVG foreignObject → canvas) */
+export function slidePng(i, width = 1920) {
+  const { w, h } = S.pres.size;
+  const sc = width / w;
+  const html = slideHtml(S.pres, S.pres.slides[i], { index: i });
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w * sc}" height="${h * sc}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" style="transform:scale(${sc});transform-origin:0 0;width:${w}px;height:${h}px"><style>${SLIDE_CSS}</style>${html.replace(/<br>/g, '<br/>').replace(/<img([^>]*?)>/g, '<img$1/>').replace(/<col([^>]*?)>/g, '<col$1/>')}</div></foreignObject></svg>`;
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const cv = document.createElement('canvas');
+      cv.width = Math.round(w * sc);
+      cv.height = Math.round(h * sc);
+      const ctx = cv.getContext('2d');
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, cv.width, cv.height);
+      ctx.drawImage(img, 0, 0);
+      try { resolve(cv.toDataURL('image/png')); } catch (e) { reject(e); }
+    };
+    img.onerror = () => reject(new Error('슬라이드를 그림으로 바꾸지 못했습니다'));
+    img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  });
+}
+export async function exportPng(all = false) {
+  const list = all ? S.pres.slides.map((_, i) => i) : [S.cur];
+  for (const i of list) {
+    const url = await slidePng(i);
+    const blob = await (await fetch(url)).blob();
+    download(blob, `${S.docName}${list.length > 1 ? `_${i + 1}` : ''}.png`);
+  }
+}
+
+// ───────────── 읽기 전용 공유 링크 (#view=) ─────────────
+async function gzip(bytes) {
+  const s = new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip'));
+  return new Uint8Array(await new Response(s).arrayBuffer());
+}
+async function gunzip(bytes) {
+  const s = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+  return new Uint8Array(await new Response(s).arrayBuffer());
+}
+const b64url = (u8) => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
+const unb64url = (t) => { const s = atob(t.replace(/-/g, '+').replace(/_/g, '/')); const u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); return u; };
+
+export async function shareLink() {
+  const json = new TextEncoder().encode(JSON.stringify({ ...S.pres, props: { ...S.pres.props, name: S.docName } }));
+  const z = await gzip(json);
+  const url = `${location.origin}${location.pathname}#view=${b64url(z)}`;
+  return { url, size: url.length };
+}
+export async function loadViewLink(hash) {
+  const m = /#view=([A-Za-z0-9_-]+)/.exec(hash);
+  if (!m) return false;
+  const bytes = await gunzip(unb64url(m[1]));
+  const pres = validatePresentation(JSON.parse(new TextDecoder().decode(bytes)));
+  setDocument(pres, pres.props?.name ?? '공유된 프레젠테이션');
+  S.viewOnly = true;
+  return true;
+}

@@ -1,10 +1,11 @@
 # AGENTS.md — 저장소 안내 (OpenAI Codex · 기타 코딩 에이전트용)
 
-이 저장소에는 서로 관계없는 두 프로젝트가 있습니다.
+이 저장소에는 서로 관계없는 세 프로젝트가 있습니다.
 
 | 경로 | 내용 | 상태 |
 |------|------|------|
 | `tabula/` | **WIXEL(위셀)** — 엑셀과 같은 브라우저 스프레드시트 (순수 ES 모듈, 의존성 0) | 주 개발 대상. 버전 2.0.0 |
+| `wipoint/` | **WIPOINT(위포인트)** — PowerPoint 와 같은 브라우저 프레젠테이션 (같은 방식, 의존성 0) | 1.0. 규칙은 [`wipoint/AGENTS.md`](wipoint/AGENTS.md) |
 | 루트 `*.py` | 네이버 파워링크 광고 순위 체크 CLI (Python) | 별도 소규모 도구 |
 
 **WIXEL 작업이라면 먼저 [`tabula/AGENTS.md`](tabula/AGENTS.md) 를 읽으세요.** 인수인계 문서는 `tabula/docs/codex/` 에 있습니다.
