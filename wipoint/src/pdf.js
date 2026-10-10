@@ -1039,7 +1039,7 @@ class PageReader {
   }
   addText(text, gs, tm, advance) {
     if (gs.tr === 3 || gs.tr === 7) return; // 보이지 않는 글 (OCR 층)
-    const clean = text.replace(/[\u0000-\u0008\u000b-\u001f�]/g, '');
+    const clean = text.replace(/[\u0000-\u0008\u000b-\u001f\ufffd]/g, '');
     if (!clean.trim()) return;
     const trm = mul(mul([gs.size * gs.th, 0, 0, gs.size, 0, gs.rise], tm), gs.ctm);
     const full = mul(trm, this.base);
