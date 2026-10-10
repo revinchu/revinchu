@@ -38,7 +38,33 @@ export function initEditor(stageEl) {
   }, { passive: false });
   new ResizeObserver(() => { if (S.fitZoom) fitZoom(); }).observe(stage);
   initTouch();
+  initHand();
   document.execCommand?.('defaultParagraphSeparator', false, 'div');
+}
+
+// ───────────── 손바닥 도구: [보기 › 손바닥 도구] · 스페이스바 누른 채 끌기 · 가운데 단추 끌기 = 화면 이동 ─────────────
+let spaceHeld = false;
+function initHand() {
+  const setCursor = () => stage.classList.toggle('hand-mode', !!S.handTool || spaceHeld);
+  on('handTool', setCursor);
+  addEventListener('keydown', (e) => {
+    if (e.code !== 'Space' || e.repeat || S.editing || e.target.closest?.('input, textarea, select, [contenteditable]')) return;
+    if (!stage.matches(':hover')) return;
+    spaceHeld = true; setCursor(); e.preventDefault();
+  });
+  addEventListener('keyup', (e) => { if (e.code === 'Space' && spaceHeld) { spaceHeld = false; setCursor(); } });
+  addEventListener('blur', () => { spaceHeld = false; setCursor(); });
+  stage.addEventListener('pointerdown', (e) => {
+    const pan = e.button === 1 || (e.button === 0 && (S.handTool || spaceHeld));
+    if (!pan || S.editing) return;
+    e.preventDefault(); e.stopPropagation();
+    const x0 = e.clientX; const y0 = e.clientY; const sl = stage.scrollLeft; const st = stage.scrollTop;
+    stage.classList.add('panning');
+    const move = (ev) => { stage.scrollLeft = sl - (ev.clientX - x0); stage.scrollTop = st - (ev.clientY - y0); };
+    const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); stage.classList.remove('panning'); };
+    addEventListener('pointermove', move);
+    addEventListener('pointerup', up);
+  }, true);
 }
 
 // ───────────── 터치 편집: 두 손가락 확대/축소 · 길게 눌러 메뉴 · 두 번 탭 = 두 번 클릭 ─────────────

@@ -171,6 +171,8 @@ export const ICONS = {
   outlineView: svg(`<path d="M3 4.5h14M6 8h11M6 11.5h11M3 15h14"/>`),
   ruler: svg(`<rect x="2" y="6.5" width="16" height="7" rx=".6"/><path d="M5 6.5v2.5M8 6.5v3.5M11 6.5v2.5M14 6.5v3.5"/>`),
   guides: svg(`<rect x="2.5" y="3.5" width="15" height="13" rx="1"/><path d="M10 3.5v13M2.5 10h15" stroke="${ACCENT}" stroke-dasharray="1.4 1.2"/>`),
+  hand: svg(`<path d="M7 10V4.5a1.2 1.2 0 0 1 2.4 0V9M9.4 9V3.3a1.2 1.2 0 0 1 2.4 0V9M11.8 9V4.2a1.2 1.2 0 0 1 2.4 0V10M14.2 10V6.5a1.2 1.2 0 0 1 2.4 0v5.3c0 3.3-2.2 5.7-5.4 5.7-2.2 0-3.4-1-4.6-2.7L4 11.2a1.2 1.2 0 0 1 2-1.3L7 11.3"/>`),
+  mobile: svg(`<rect x="6" y="2" width="8" height="16" rx="1.5"/><path d="M9 15.5h2"/>`),
   fit: svg(`<rect x="5" y="6" width="10" height="8" rx=".6"/><path d="M2.5 6V2.5H6M14 2.5h3.5V6M17.5 14v3.5H14M6 17.5H2.5V14"/>`),
   icons: svg(`<circle cx="7" cy="7" r="3.5"/><path d="M12 3.5h5v5h-5zM3.5 16.5l3.5-5 3.5 5z" /><path d="m13 12 1.5 1.5L17 11" stroke="${ACCENT}" stroke-width="1.5"/>`),
   headerFooter: svg(`<rect x="3" y="2.5" width="14" height="15" rx="1"/><path d="M5 5h10M5 15h10" stroke="${ACCENT}" stroke-width="1.6"/>`),

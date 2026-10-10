@@ -483,57 +483,57 @@ body.eyedropping .overlay { pointer-events: none; }
   .tb-search { flex-basis: 200px; }
 }
 /* ───────── 휴대폰 · 좁은 화면 (PowerPoint 모바일처럼: 위 편집 화면, 아래 슬라이드 띠) ───────── */
-@media (max-width: 760px) {
-  .titlebar { display: flex; gap: 2px; padding: 0 6px; height: 40px; }
-  .tb-left { flex: none; gap: 0; }
-  .brand { display: none; }
-  .tb-center { flex: 1; min-width: 0; justify-content: center; }
-  .tb-title { max-width: 100%; font-size: 13px; }
-  .save-state, .tb-search, .avatar, .qat-hint { display: none; }
-  .ribbon-tabs { overflow-x: auto; overflow-y: hidden; scrollbar-width: none; padding: 0 4px; height: 34px; }
-  .ribbon-tabs::-webkit-scrollbar { display: none; }
-  .ribbon-tab { flex: none; padding: 0 10px; }
-  .ribbon-tabs .spacer { display: none; }
-  .ribbon-action { flex: none; padding: 0 8px; }
-  .ribbon { min-height: 0; padding-top: 2px; -webkit-overflow-scrolling: touch; }
-  .rgroup { min-height: 0; }
-  .workspace { flex-direction: column; }
-  .center { order: 1; flex: 1; min-height: 0; }
-  .stage-inner { padding: 10px 8px; }
-  .thumbs { order: 2; width: auto; height: 96px; flex: none; display: flex; flex-direction: row; align-items: center; gap: 2px; overflow-x: auto; overflow-y: hidden; padding: 4px 6px; border-right: 0; border-top: 1px solid var(--border); }
-  .thumb { flex: none; padding: 2px; flex-direction: column; align-items: center; gap: 1px; }
-  .thumb .tnum { width: auto; flex-direction: row; padding: 0; font-size: 10px; order: 2; }
-  .thumb .tbox { zoom: .62; }
-  .section-head { flex: none; writing-mode: vertical-rl; padding: 4px 2px; font-size: 10px; }
-  .thumb.drop-before::before, .thumb.drop-after::after { display: none; }
-  .notes-wrap { height: 72px; }
-  #app.big-notes .notes-wrap { height: 35%; }
-  .pane { position: fixed; left: 0; right: 0; bottom: 0; width: auto; height: 55vh; z-index: 120; border-left: 0; border-top: 1px solid var(--border); box-shadow: 0 -6px 18px rgba(0, 0, 0, .18); padding-bottom: env(safe-area-inset-bottom, 0px); }
-  .statusbar { gap: 0; padding: 0 4px calc(env(safe-area-inset-bottom, 0px)) 4px; height: auto; min-height: 30px; }
-  .statusbar .sb-item.muted, .statusbar .zoom-slider { display: none; }
-  .sb-btn.text { font-size: 11px; }
-  .backstage { flex-direction: column; }
-  .backstage-nav { width: auto; flex-direction: row; overflow-x: auto; padding: 0; flex: none; }
-  .backstage-nav button { flex: none; padding: 12px 14px; white-space: nowrap; }
-  .backstage-nav .back { padding: 8px 14px; }
-  .backstage-nav .spacer { display: none; }
-  .backstage-main { padding: 18px 16px; }
-  .backstage-main h2 { font-size: 22px; }
-  .tpl-cards { gap: 10px; }
-  .tpl-card { width: calc(50% - 5px); }
-  .tpl-thumb .tw { zoom: calc(100% * .78); }
-  .dialog { min-width: 0; width: calc(100vw - 24px) !important; }
-  .dialog-body label > span:first-child { width: 96px; }
-  .ideas { grid-template-columns: 1fr; }
-  .smart-dlg { flex-direction: column; }
-  .smart-kinds { width: auto; flex-direction: row; flex-wrap: wrap; }
-  .sym-grid { grid-template-columns: repeat(auto-fill, 28px); }
-  .show.presenter { flex-direction: column; }
-  .show.presenter .show-view { flex: 0 0 40%; margin: 8px; }
-  .pv-side { padding: 8px 12px 64px; }
-  .pv-tools { overflow-x: auto; gap: 6px; padding: 0 8px; }
-  .pv-tools button { flex: none; }
-}
+/* 모바일 화면 (좁은 화면에서 자동, 또는 보기 › 모바일 보기) — body.mobile */
+body.mobile .titlebar { display: flex; gap: 2px; padding: 0 6px; height: 40px; }
+body.mobile .tb-left { flex: none; gap: 0; }
+body.mobile .brand { display: none; }
+body.mobile .tb-center { flex: 1; min-width: 0; justify-content: center; }
+body.mobile .tb-title { max-width: 100%; font-size: 13px; }
+body.mobile .save-state, body.mobile .tb-search, body.mobile .avatar, body.mobile .qat-hint { display: none; }
+body.mobile .ribbon-tabs { overflow-x: auto; overflow-y: hidden; scrollbar-width: none; padding: 0 4px; height: 34px; }
+body.mobile .ribbon-tabs::-webkit-scrollbar { display: none; }
+body.mobile .ribbon-tab { flex: none; padding: 0 10px; }
+body.mobile .ribbon-tabs .spacer { display: none; }
+body.mobile .ribbon-action { flex: none; padding: 0 8px; }
+body.mobile .ribbon { min-height: 0; padding-top: 2px; -webkit-overflow-scrolling: touch; }
+body.mobile .rgroup { min-height: 0; }
+body.mobile .workspace { flex-direction: column; }
+body.mobile .center { order: 1; flex: 1; min-height: 0; }
+body.mobile .stage-inner { padding: 10px 8px; }
+body.mobile .thumbs { order: 2; width: auto; height: 96px; flex: none; display: flex; flex-direction: row; align-items: center; gap: 2px; overflow-x: auto; overflow-y: hidden; padding: 4px 6px; border-right: 0; border-top: 1px solid var(--border); }
+body.mobile .thumb { flex: none; padding: 2px; flex-direction: column; align-items: center; gap: 1px; }
+body.mobile .thumb .tnum { width: auto; flex-direction: row; padding: 0; font-size: 10px; order: 2; }
+body.mobile .thumb .tbox { zoom: .62; }
+body.mobile .section-head { flex: none; writing-mode: vertical-rl; padding: 4px 2px; font-size: 10px; }
+body.mobile .thumb.drop-before::before, body.mobile .thumb.drop-after::after { display: none; }
+body.mobile .notes-wrap { height: 72px; }
+body.mobile #app.big-notes .notes-wrap { height: 35%; }
+body.mobile .pane { position: fixed; left: 0; right: 0; bottom: 0; width: auto; height: 55vh; z-index: 120; border-left: 0; border-top: 1px solid var(--border); box-shadow: 0 -6px 18px rgba(0, 0, 0, .18); padding-bottom: env(safe-area-inset-bottom, 0px); }
+body.mobile .statusbar { gap: 0; padding: 0 4px calc(env(safe-area-inset-bottom, 0px)) 4px; height: auto; min-height: 30px; }
+body.mobile .statusbar .sb-item.muted, body.mobile .statusbar .zoom-slider { display: none; }
+body.mobile .sb-btn.text { font-size: 11px; }
+body.mobile .backstage { flex-direction: column; }
+body.mobile .backstage-nav { width: auto; flex-direction: row; overflow-x: auto; padding: 0; flex: none; }
+body.mobile .backstage-nav button { flex: none; padding: 12px 14px; white-space: nowrap; }
+body.mobile .backstage-nav .back { padding: 8px 14px; }
+body.mobile .backstage-nav .spacer { display: none; }
+body.mobile .backstage-main { padding: 18px 16px; }
+body.mobile .backstage-main h2 { font-size: 22px; }
+body.mobile .tpl-cards { gap: 10px; }
+body.mobile .tpl-card { width: calc(50% - 5px); }
+body.mobile .tpl-thumb .tw { zoom: calc(100% * .78); }
+body.mobile .dialog { min-width: 0; width: calc(100vw - 24px) !important; }
+body.mobile .dialog-body label > span:first-child { width: 96px; }
+body.mobile .ideas { grid-template-columns: 1fr; }
+body.mobile .smart-dlg { flex-direction: column; }
+body.mobile .smart-kinds { width: auto; flex-direction: row; flex-wrap: wrap; }
+body.mobile .sym-grid { grid-template-columns: repeat(auto-fill, 28px); }
+body.mobile .show.presenter { flex-direction: column; }
+body.mobile .show.presenter .show-view { flex: 0 0 40%; margin: 8px; }
+body.mobile .pv-side { padding: 8px 12px 64px; }
+body.mobile .pv-tools { overflow-x: auto; gap: 6px; padding: 0 8px; }
+body.mobile .pv-tools button { flex: none; }
+
 .bgr-wrap { max-height: 60vh; overflow: auto; background: repeating-conic-gradient(#ddd 0 25%, #fff 0 50%) 0 0 / 16px 16px; text-align: center; }
 .bgr-canvas { max-width: 100%; max-height: 58vh; cursor: crosshair; }
 .bgr-tol { margin-left: auto; font-size: 12px; display: flex; align-items: center; gap: 6px; }
@@ -605,3 +605,14 @@ body.eyedropping .overlay { pointer-events: none; }
 .peer-dot { width: 8px; height: 8px; border-radius: 50%; display: block; }
 .collab-dlg { display: flex; flex-direction: column; gap: 8px; }
 .collab-people { margin: 0; padding-left: 18px; font-size: 12px; }
+/* 손바닥 도구 · 끌어서 스크롤 */
+.stage.hand-mode, .stage.hand-mode * { cursor: grab !important; }
+.stage.panning, .stage.panning * { cursor: grabbing !important; }
+.drag-scrolling, .drag-scrolling * { cursor: grabbing !important; user-select: none; }
+body.mobile .ribbon, body.mobile .ribbon-tabs, body.mobile .qat, body.mobile .statusbar { touch-action: pan-x; }
+body.mobile .menu { max-height: calc(100vh - 24px); overscroll-behavior: contain; touch-action: pan-y; }
+body.mobile .menu-item { padding-top: 10px; padding-bottom: 10px; font-size: 14px; }
+body.mobile .statusbar { overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; }
+body.mobile .qat { overflow-x: auto; scrollbar-width: none; }
+body.mobile .rbtn { min-height: 40px; }
+body.mobile .dialog-body { max-height: calc(100vh - 160px); overflow: auto; overscroll-behavior: contain; }

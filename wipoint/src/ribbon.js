@@ -101,7 +101,8 @@ const VIEW = { id: 'view', label: '보기', groups: [
   { label: '프레젠테이션 보기', items: [L('viewNormal', 'normalView', '기본', { on: 'vNormal' }), L('viewOutline', 'outlineView', '개요 보기', { on: 'vOutline' }), L('viewSorter', 'sorter', '여러 슬라이드', { on: 'vSorter' }), L('viewNotesPage', 'notes', '슬라이드 노트'), L('viewReading', 'readingView', '읽기용 보기')] },
   { label: '마스터 보기', items: [L('viewMaster', 'layout', '슬라이드 마스터', { on: 'vMaster' })] },
   { label: '표시', items: [COL({ t: 'check', cmd: 'toggleRuler', label: '눈금자', on: 'ruler' }, { t: 'check', cmd: 'toggleGrid', label: '눈금선', on: 'grid' }, { t: 'check', cmd: 'toggleGuides', label: '안내선', on: 'guides' }), L('toggleNotes', 'notes', '메모', { on: 'notes' })] },
-  { label: '확대/축소', items: [L('zoomDialog', 'zoomIn', '확대/축소'), L('fitZoom', 'fit', '창에 맞춤')] },
+  { label: '확대/축소', items: [L('zoomDialog', 'zoomIn', '확대/축소'), L('fitZoom', 'fit', '창에 맞춤'), L('toggleHand', 'hand', '손바닥 도구', { on: 'hand' })] },
+  { label: '화면', items: [L('toggleMobile', 'mobile', '모바일 보기', { on: 'mobile' })] },
   { label: '창', items: [L('selectionPane', 'selectionPane', '선택 창', { on: 'selPane' })] },
 ] };
 
@@ -172,7 +173,7 @@ const KT = {
   animations: { previewAnim: 'P', animations: 'S', animOptionsMenu: 'M', addAnimMenu: 'AA', animPane: 'C', removeAnim: 'X', animPainter: 'K', triggerMenu: 'G', animTiming: 'T' },
   slideshow: { showFromStart: 'B', showFromCurrent: 'C', customShowMenu: 'W', setupShow: 'S', hideSlide: 'H', rehearse: 'T', presenterView: 'V' },
   review: { spellCheck: 'S', accessibility: 'A', wordCount: 'W', newComment: 'C', deleteComments: 'D', prevComment: 'V', nextComment: 'N', commentsPane: 'P', collabStart: 'H' },
-  view: { viewMaster: 'M', toggleRuler: 'R', viewNormal: 'L', viewOutline: 'O', viewSorter: 'I', viewNotesPage: 'T', viewReading: 'D', toggleGrid: 'G', toggleGuides: 'U', toggleNotes: 'N', zoomDialog: 'Q', fitZoom: 'W', selectionPane: 'P' },
+  view: { toggleHand: 'H', toggleMobile: 'Y', viewMaster: 'M', toggleRuler: 'R', viewNormal: 'L', viewOutline: 'O', viewSorter: 'I', viewNotesPage: 'T', viewReading: 'D', toggleGrid: 'G', toggleGuides: 'U', toggleNotes: 'N', zoomDialog: 'Q', fitZoom: 'W', selectionPane: 'P' },
   help: { shortcuts: 'K', whatsNew: 'N', about: 'A' },
   shapeFormat: { shapesMini: 'SH', changeShapeMenu: 'E', drawTextbox: 'X', shapeStyles: 'K', shapeFill: 'SF', shapeOutline: 'SO', shapeEffectsMenu: 'SE', wordart: 'Q', objSize: 'H', 'launcher:formatPaneShape': 'DS', ...ARRANGE_KT },
   pictureFormat: { removeBackground: 'E', pictureCorrectionsMenu: 'R', pictureColorMenu: 'I', changePicture: 'CP', resetPicture: 'Q', pictureStyles: 'K', shapeOutline: 'SO', shapeEffectsMenu: 'SE', altText: 'T', cropPicture: 'V', objSize: 'H', 'launcher:formatPaneShape': 'DS', ...ARRANGE_KT },

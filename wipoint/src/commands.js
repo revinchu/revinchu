@@ -15,6 +15,7 @@ import { smartArt, SMART_KINDS } from './smartart.js';
 import { backgroundMask, applyMask } from './bgremove.js';
 import { parseLatex, toMathML } from './math.js';
 import { collab, startCollab, stopCollab, collabLink, myName } from './collab.js';
+import { isMobile, setMobileMode, mobileMode } from './mobile.js';
 import { el, openMenu, openDialog, formDialog, alertDialog, toast, closeMenus } from './ui.js';
 import { colorMenu } from './colorpick.js';
 import { startEyedrop } from './eyedrop.js';
@@ -1819,6 +1820,9 @@ register({
     S.showGuides = true;
     change(() => { S.pres.guides = list; }, { scope: 'all' });
   },
+  toggleMobile: () => { setMobileMode(isMobile() ? 'off' : 'on'); refresh('all'); refresh('view'); toast(isMobile() ? '모바일 보기 — 리본 · 목록은 끌어서 옮깁니다' : '데스크톱 보기'); },
+  mobileAuto: () => { setMobileMode('auto'); refresh('all'); refresh('view'); },
+  toggleHand: () => { S.handTool = !S.handTool; emit('handTool'); refresh('none'); },
   toggleRuler: () => { S.showRuler = !S.showRuler; refresh('view'); },
   zoomDialog: () => zoomDialog(),
   fitZoom: () => fitZoom(),
@@ -2046,7 +2050,7 @@ function ribbonState() {
     bullets: p?.bullet?.type === 'char', numbering: p?.bullet?.type === 'num',
     al: p?.align === 'l' || (!p?.align && !!p), ac: p?.align === 'ctr', ar: p?.align === 'r', aj: p?.align === 'just',
     painter: !!S.painter, cmPane: S.formatPane === 'comments', animPane: S.formatPane === 'anim', selPane: S.formatPane === 'selection', hidden: !!slide()?.hidden,
-    collabOn: !!collab.room, vMaster: !!S.masterKey, masterHide: !!(S.masterKey && curSlide()?.hideMaster), vNormal: S.view === 'normal' && !S.masterKey, vOutline: S.view === 'outline', vSorter: S.view === 'sorter', notes: S.showNotes, grid: S.showGrid, guides: S.showGuides, ruler: S.showRuler,
+    mobile: isMobile(), hand: !!S.handTool, collabOn: !!collab.room, vMaster: !!S.masterKey, masterHide: !!(S.masterKey && curSlide()?.hideMaster), vNormal: S.view === 'normal' && !S.masterKey, vOutline: S.view === 'outline', vSorter: S.view === 'sorter', notes: S.showNotes, grid: S.showGrid, guides: S.showGuides, ruler: S.showRuler,
     tFirstRow: !!st.firstRow, tLastRow: !!st.lastRow, tBanded: !!st.banded, tFirstCol: !!st.firstCol, tLastCol: !!st.lastCol,
     bars: { font: resolveColor(S.pres.theme, lastColor.font), hl: resolveColor(S.pres.theme, lastColor.hl), fill: resolveColor(S.pres.theme, lastColor.fill), line: resolveColor(S.pres.theme, lastColor.line), cell: resolveColor(S.pres.theme, lastColor.cell) },
     curColor: color,

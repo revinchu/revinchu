@@ -3,6 +3,7 @@ import { S, on, emit, run, register, curSlide, selObjects, selOne, goSlide, COMM
 import { initEditor, renderCanvas, renderOverlay, fitZoom, startEdit, endEdit, applyTextFormat, focusEditing } from './editor.js';
 import { initPanels, renderThumbs, updateThumb, markActiveThumb, renderNotes, renderStatus, renderPane, renderSorter, thumbsFocused, markPeerDots } from './panels.js';
 import { collab, startCollab, stopCollab, collabLink } from './collab.js';
+import { initMobile } from './mobile.js';
 import { initRibbon, renderRibbon, TABS, setRibbonTab, initQat } from './ribbon.js';
 import { initKeytips } from './keytips.js';
 import { stopEyedrop } from './eyedrop.js';
@@ -24,6 +25,9 @@ function boot() {
   initKeytips({ isBlocked: () => showActive() || !!S.eyedrop });
   initEditor($('stage'));
   initPanels({ thumbs: $('thumbs'), notes: $('notes'), status: $('status'), pane: $('pane'), sorter: $('sorter') });
+  // 모바일 화면 + 끌어서 스크롤 (리본 탭 · 리본 · 빠른 실행 · 상태 표시줄 · 슬라이드 목록 · 작업 창)
+  initMobile([[$('ribbonTabs'), 'x'], [$('ribbon'), 'x'], [$('qat'), 'x'], [$('status'), 'x', { mobileOnly: true }], [$('thumbs'), 'auto', { mobileOnly: true }], [$('pane'), 'y', { mobileOnly: true }], [$('sorter'), 'y', { mobileOnly: true }]]);
+  addEventListener('wipoint-mobile', () => { applyView(); renderAll(); });
   register({ backstage: (page) => openBackstage(page ?? 'home') });
   wireTitlebar();
   wireEvents();
