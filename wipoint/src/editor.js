@@ -584,7 +584,7 @@ function onEditKey(e) {
   }
   // 그 밖의 단축키는 app.js 의 전역 처리로 (Ctrl+B 등) — 글자 입력은 막지 않음
   e.stopPropagation();
-  if ((e.ctrlKey || e.metaKey) && !e.altKey) emit('editKey', e);
+  if (((e.ctrlKey || e.metaKey) && !e.altKey) || /^F\d+$/.test(e.key) || (e.altKey && e.shiftKey && e.key.startsWith('Arrow'))) emit('editKey', e);
 }
 
 function moveCell(dir) {
@@ -700,6 +700,24 @@ export function caretPara() {
   const offs = offsetsNow();
   const body = domToBody(txi, editBase);
   return body.paras[offs?.a.p ?? 0] ?? null;
+}
+
+/** Alt+Shift+↑/↓: 커서가 있는 단락을 위/아래로 옮김 */
+export function moveParagraph(d) {
+  if (!S.editing || !txi) return false;
+  const offs = offsetsNow();
+  const o = objById(S.editing.id);
+  const cell = S.editing.cell;
+  const body = domToBody(txi, editBase);
+  const i = offs?.a.p ?? 0;
+  const j = i + d;
+  if (j < 0 || j >= body.paras.length) return true;
+  [body.paras[i], body.paras[j]] = [body.paras[j], body.paras[i]];
+  endEdit();
+  change(() => { if (cell) o.rows[cell[0]].cells[cell[1]].text = body; else o.text = body; });
+  startEdit(o, cell ? { cell } : { end: true });
+  requestAnimationFrame(() => { if (txi) setOffsets(txi, { a: { p: j, o: offs?.a.o ?? 0 }, b: { p: j, o: offs?.a.o ?? 0 } }); });
+  return true;
 }
 
 /** 편집 중 기호 · 글 넣기 */

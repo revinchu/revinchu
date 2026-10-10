@@ -25,30 +25,34 @@ button { font: inherit; color: inherit; }
 #app { display: flex; flex-direction: column; height: 100vh; }
 
 /* ───────── 제목 표시줄 ───────── */
-.titlebar { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px; height: 38px; padding: 0 48px 0 10px; background: var(--title-bg); color: #fff; flex: none; position: relative; }
-.tb-left { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.titlebar { display: flex; align-items: center; gap: 12px; height: 38px; padding: 0 10px; background: var(--title-bg); color: #fff; flex: none; position: relative; min-width: 0; }
+.tb-left { display: flex; align-items: center; gap: 4px; flex: none; }
+.qat-top { display: inline-flex; align-items: center; gap: 2px; }
+.qat-top .qat-btn { color: #fff; }
+.qat-top .qat-btn:hover { background: rgba(255, 255, 255, .16); }
 .brand { font-weight: 800; letter-spacing: .5px; margin-right: 8px; font-size: 13px; }
 .tb-btn { display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 4px; background: transparent; color: #fff; cursor: pointer; }
 .tb-btn:hover { background: rgba(255, 255, 255, .16); }
-.tb-center { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.tb-title { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40vw; cursor: text; padding: 3px 8px; border-radius: 4px; }
+.tb-center { flex: 1 1 auto; display: flex; align-items: center; justify-content: center; gap: 8px; min-width: 0; overflow: hidden; }
+.tb-title { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; cursor: text; padding: 3px 8px; border-radius: 4px; }
 .tb-title:hover { background: rgba(255, 255, 255, .12); }
 .tb-title input { font: inherit; color: var(--text); border: 0; border-radius: 3px; padding: 1px 4px; width: 220px; }
-.save-state { font-size: 11px; opacity: .8; white-space: nowrap; }
-.tb-search { justify-self: end; display: flex; align-items: center; gap: 6px; width: min(320px, 100%); height: 26px; padding: 0 10px; border-radius: 4px; background: rgba(255, 255, 255, .85); color: var(--muted); }
+.save-state { font-size: 11px; opacity: .8; white-space: nowrap; flex: none; }
+.tb-search { flex: 0 1 300px; min-width: 120px; display: flex; align-items: center; gap: 6px; width: min(320px, 100%); height: 26px; padding: 0 10px; border-radius: 4px; background: rgba(255, 255, 255, .85); color: var(--muted); }
 .tb-search input { border: 0; background: transparent; outline: 0; font: inherit; width: 100%; color: var(--text); }
-.avatar { position: absolute; right: 10px; top: 5px; width: 28px; height: 28px; border-radius: 50%; background: #f8cbad; color: var(--accent-dark); display: grid; place-items: center; font-weight: 700; font-size: 11px; }
+.avatar { flex: none; width: 28px; height: 28px; border-radius: 50%; background: #f8cbad; color: var(--accent-dark); display: grid; place-items: center; font-weight: 700; font-size: 11px; }
 
 /* ───────── 리본 ───────── */
-.ribbon-tabs { display: flex; align-items: flex-end; gap: 2px; height: 32px; padding: 0 8px; background: var(--title-bg); color: #fff; flex: none; }
-.ribbon-tab { height: 28px; padding: 0 12px; border: 0; border-radius: 4px 4px 0 0; background: transparent; cursor: pointer; white-space: nowrap; font-size: 12.5px; color: #fff; }
+.ribbon-tabs { display: flex; align-items: flex-end; gap: 2px; height: 32px; padding: 0 8px; background: var(--title-bg); color: #fff; flex: none; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.ribbon-tabs::-webkit-scrollbar { display: none; }
+.ribbon-tab { flex: none; height: 28px; padding: 0 12px; border: 0; border-radius: 4px 4px 0 0; background: transparent; cursor: pointer; white-space: nowrap; font-size: 12.5px; color: #fff; }
 .ribbon-tab:hover { background: rgba(255, 255, 255, .14); }
 .ribbon-tab.file { font-weight: 700; }
 .ribbon-tab.active { background: var(--ribbon-bg); color: var(--accent); font-weight: 700; }
 .ribbon-tab.ctx { color: #ffe1a8; }
 .ribbon-tab.ctx.active { color: #b35c00; }
 .ribbon-tabs .spacer { flex: 1; }
-.ribbon-action { display: flex; align-items: center; gap: 5px; height: 24px; margin-bottom: 3px; padding: 0 10px; border: 1px solid rgba(255, 255, 255, .7); border-radius: 4px; background: transparent; cursor: pointer; color: #fff; }
+.ribbon-action { flex: none; white-space: nowrap; display: flex; align-items: center; gap: 5px; height: 24px; margin-bottom: 3px; padding: 0 10px; border: 1px solid rgba(255, 255, 255, .7); border-radius: 4px; background: transparent; cursor: pointer; color: #fff; }
 .ribbon-action:hover { background: rgba(255, 255, 255, .15); }
 .ribbon-action.primary { background: #fff; color: var(--accent); border-color: #fff; font-weight: 700; }
 .ribbon { display: flex; align-items: stretch; min-height: 96px; padding: 4px 6px 0; background: var(--ribbon-bg); border-bottom: 1px solid var(--border); overflow-x: auto; overflow-y: hidden; flex: none; scrollbar-width: thin; }
@@ -408,6 +412,32 @@ body.dropping .stage { outline: 3px dashed var(--accent); outline-offset: -6px; 
   #printArea[data-mode="slides"] .pr-slide { box-shadow: none; }
 }
 
+/* ───────── 빠른 실행 도구 모음 (리본 아래) ───────── */
+.qat { display: flex; align-items: center; gap: 2px; height: 28px; padding: 0 8px; background: var(--ribbon-bg); border-bottom: 1px solid var(--border); flex: none; overflow-x: auto; scrollbar-width: none; }
+.qat-btn { display: grid; place-items: center; flex: none; width: 26px; height: 24px; border: 1px solid transparent; border-radius: 3px; background: transparent; cursor: pointer; color: var(--text); padding: 0; }
+.qat-btn:hover { background: var(--hover); }
+.qat-btn svg { width: 18px; height: 18px; }
+.qat-btn.qat-more svg { width: 11px; height: 11px; }
+.qat-hint { margin-left: 10px; color: var(--muted); font-size: 11px; white-space: nowrap; }
+body.eyedropping .slide-layer, body.eyedropping .slide-layer * { cursor: crosshair !important; }
+body.eyedropping .overlay { pointer-events: none; }
+.eyedrop-tip { position: fixed; z-index: 400; pointer-events: none; display: flex; align-items: center; gap: 6px; padding: 3px 8px 3px 3px; background: #fff; border: 1px solid #999; border-radius: 4px; box-shadow: 0 2px 8px rgba(0, 0, 0, .25); font-size: 11px; }
+.eyedrop-tip i { width: 28px; height: 20px; border: 1px solid #888; display: block; }
+
+#app.ribbon-collapsed .ribbon { display: none; }
+.show.no-cursor, .show.no-cursor * { cursor: none !important; }
+
+/* ───────── 키 팁 (Alt) ───────── */
+#keytipLayer { position: fixed; inset: 0; pointer-events: none; z-index: 600; }
+.keytip { position: fixed; min-width: 16px; padding: 1px 4px; background: #3b3b3b; color: #fff; border-radius: 3px; font: 600 11px/14px 'Segoe UI', system-ui, sans-serif; text-align: center; box-shadow: 0 1px 3px rgba(0, 0, 0, .4); transform: translate(-50%, 0); white-space: nowrap; }
+.keytip.dim { opacity: .35; }
+.menu-item.kfocus, .menu-item:focus { background: #e3ecf8; outline: 0; }
+
+@media (max-width: 1100px) {
+  .save-state { display: none; }
+  .ribbon-action .ra-l { display: none; }
+  .tb-search { flex-basis: 200px; }
+}
 /* ───────── 휴대폰 · 좁은 화면 (PowerPoint 모바일처럼: 위 편집 화면, 아래 슬라이드 띠) ───────── */
 @media (max-width: 760px) {
   .titlebar { display: flex; gap: 2px; padding: 0 6px; height: 40px; }
@@ -415,7 +445,7 @@ body.dropping .stage { outline: 3px dashed var(--accent); outline-offset: -6px; 
   .brand { display: none; }
   .tb-center { flex: 1; min-width: 0; justify-content: center; }
   .tb-title { max-width: 100%; font-size: 13px; }
-  .save-state, .tb-search, .avatar { display: none; }
+  .save-state, .tb-search, .avatar, .qat-hint { display: none; }
   .ribbon-tabs { overflow-x: auto; overflow-y: hidden; scrollbar-width: none; padding: 0 4px; height: 34px; }
   .ribbon-tabs::-webkit-scrollbar { display: none; }
   .ribbon-tab { flex: none; padding: 0 10px; }

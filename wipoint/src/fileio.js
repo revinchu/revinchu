@@ -1,6 +1,8 @@
 // 파일: 열기 · 저장 (.pptx / .wpt.json) · 자동 저장(IndexedDB) · 내보내기(PDF 인쇄 · PNG) · 공유 링크
 import { S, emit, goSlide } from './state.js';
 import { readPptx, pptxEntries } from './pptx.js';
+import { readPdf } from './pdf.js';
+import { decodeEmbeddedFont } from './fonts.js';
 import { zipAsync } from './zip.js';
 import { validatePresentation, pruneMedia, snapshot } from './model.js';
 import { slideHtml, SLIDE_CSS } from './render.js';
@@ -24,7 +26,12 @@ export async function loadFile(file) {
   const bytes = new Uint8Array(await file.arrayBuffer());
   // 아이폰 · 카카오톡 · iCloud 에서 아직 내려받지 않은 파일은 0바이트로 넘어옴
   if (!bytes.length) throw new Error(`'${file.name}' 파일이 비어 있습니다 (0바이트). 아이폰이라면 파일 앱이나 카카오톡에서 파일을 먼저 열어 내려받은 뒤(또는 [파일에 저장] 후) 다시 열어 주세요.`);
-  const name = file.name.replace(/\.(pptx|potx|pptm|ppsx|json|wpt)$/i, '').replace(/\.wpt$/i, '');
+  const name = file.name.replace(/\.(pptx|potx|pptm|ppsx|json|wpt|pdf)$/i, '').replace(/\.wpt$/i, '');
+  if (bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46 || /\.pdf$/i.test(file.name)) {
+    const { pres, warnings, jobs } = readPdf(bytes, { encodeImage: canvasEncode });
+    await Promise.all(jobs.map(async (j) => { const u = await maskJpeg(j); if (u) pres.media[j.media] = u; }));
+    return { pres, name, warnings: ['PDF 를 슬라이드로 바꾸어 열었습니다. 글은 텍스트 상자, 도형 · 선은 도형으로 편집할 수 있습니다.', ...warnings], pdf: true };
+  }
   if (bytes[0] === 0xd0 && bytes[1] === 0xcf) throw new Error('예전 PowerPoint 97-2003 형식(.ppt)은 열 수 없습니다. PowerPoint 에서 .pptx 로 저장한 뒤 열어 주세요.');
   if (bytes[0] === 0x50 && bytes[1] === 0x4b) {
     const { pres, warnings } = readPptx(bytes);
@@ -38,6 +45,61 @@ export async function loadFile(file) {
   return { pres, name, warnings: [] };
 }
 
+/** PDF 그림 RGBA → data URL (불투명하면 JPEG, 투명이 있으면 PNG) */
+function canvasEncode(w, h, rgba, hasAlpha) {
+  try {
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    c.getContext('2d').putImageData(new ImageData(rgba, w, h), 0, 0);
+    return hasAlpha ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', 0.92);
+  } catch { return null; }
+}
+
+/** JPEG + 투명 가리개(SMask) → PNG */
+async function maskJpeg({ url, alpha, w, h }) {
+  try {
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    const g = c.getContext('2d');
+    g.drawImage(img, 0, 0, w, h);
+    const d = g.getImageData(0, 0, w, h);
+    for (let i = 0; i < w * h; i++) d.data[i * 4 + 3] = alpha[i];
+    g.putImageData(d, 0, 0);
+    return c.toDataURL('image/png');
+  } catch { return null; }
+}
+
+// ───────────── 포함된 글꼴 ─────────────
+const fontFaces = [];
+/** pres.fonts (pptx 에 포함된 .fntdata) → 브라우저 글꼴로 등록 (같은 이름의 컴퓨터 글꼴보다 먼저 쓰임) */
+export async function applyEmbeddedFonts(pres) {
+  if (typeof FontFace !== 'function' || !document.fonts) return 0;
+  for (const f of fontFaces.splice(0)) { try { document.fonts.delete(f); } catch { /* 무시 */ } }
+  let n = 0;
+  for (const f of pres.fonts ?? []) {
+    try {
+      const m = /base64,(.*)$/s.exec(f.data ?? '');
+      if (!m) continue;
+      const bin = atob(m[1]);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const { data } = decodeEmbeddedFont(bytes);
+      const face = new FontFace(f.typeface, data, { weight: /bold/i.test(f.style) ? '700' : '400', style: /italic/i.test(f.style) ? 'italic' : 'normal' });
+      await face.load();
+      document.fonts.add(face);
+      fontFaces.push(face);
+      n++;
+    } catch (e) { console.warn('포함된 글꼴', f.typeface, e); }
+  }
+  if (n) emit('change', { scope: 'all' });
+  return n;
+}
+
 export function setDocument(pres, name, { handle = null } = {}) {
   S.pres = pres;
   S.docName = name || '프레젠테이션1';
@@ -49,29 +111,31 @@ export function setDocument(pres, name, { handle = null } = {}) {
   goSlide(0);
   emit('change', { scope: 'all' });
   emit('docLoaded');
+  if (pres.fonts?.length || fontFaces.length) applyEmbeddedFonts(pres).then((n) => { if (n) toast(`파일에 포함된 글꼴 ${n}개를 불러왔습니다`); });
 }
 
 export async function openWithPicker() {
   if (window.showOpenFilePicker) {
     try {
-      const [h] = await window.showOpenFilePicker({ id: 'wipoint-open', types: [{ description: '프레젠테이션', accept: { [PPTX_MIME]: ['.pptx', '.ppsx', '.potx'], 'application/json': ['.json'] } }] });
+      const [h] = await window.showOpenFilePicker({ id: 'wipoint-open', types: [{ description: '프레젠테이션', accept: { [PPTX_MIME]: ['.pptx', '.ppsx', '.potx'], 'application/pdf': ['.pdf'], 'application/json': ['.json'] } }] });
       const f = await h.getFile();
       const r = await loadFile(f);
       setDocument(r.pres, r.name, { handle: /\.pptx$/i.test(f.name) ? h : null });
-      report(r.warnings);
+      report(r.warnings, r.pdf);
       return;
     } catch (e) {
       if (e.name === 'AbortError') return;
       if (e.name !== 'SecurityError' && e.name !== 'TypeError') throw e;
     }
   }
-  const f = await pickFile('.pptx,.ppsx,.potx,.json,.ppt,application/vnd.openxmlformats-officedocument.presentationml.presentation');
+  const f = await pickFile('.pptx,.ppsx,.potx,.pdf,.json,.ppt,application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation');
   if (!f) return;
   const r = await loadFile(f);
   setDocument(r.pres, r.name);
-  report(r.warnings);
+  report(r.warnings, r.pdf);
 }
-function report(warnings) {
+function report(warnings, pdf) {
+  if (pdf) { toast(warnings[0]); warnings = warnings.slice(1); }
   if (warnings?.length) alertDialog('일부 내용', warnings.join('\n'));
   else toast('프레젠테이션을 열었습니다');
 }
@@ -181,7 +245,7 @@ export function scheduleAutosave() {
 }
 export async function autosaveNow() {
   try {
-    await idbSet('autosave', { name: S.docName, json: snapshot(S.pres), media: S.pres.media, at: Date.now(), cur: S.cur });
+    await idbSet('autosave', { name: S.docName, json: snapshot(S.pres), media: S.pres.media, fonts: S.pres.fonts ?? null, at: Date.now(), cur: S.cur });
     await addRecent();
     emit('autosaved');
   } catch (e) { console.warn('자동 저장 실패', e); }
@@ -190,7 +254,7 @@ export async function restoreAutosave() {
   try {
     const v = await idbGet('autosave');
     if (!v?.json) return false;
-    const pres = validatePresentation({ ...JSON.parse(v.json), media: v.media ?? {} });
+    const pres = validatePresentation({ ...JSON.parse(v.json), media: v.media ?? {}, ...(v.fonts ? { fonts: v.fonts } : {}) });
     setDocument(pres, v.name);
     if (v.cur) goSlide(Math.min(v.cur, pres.slides.length - 1));
     return true;
@@ -204,14 +268,14 @@ async function addRecent() {
   const item = { id, name: S.docName, at: Date.now(), slides: S.pres.slides.length };
   const out = [item, ...list.filter((x) => x.id !== id)].slice(0, 12);
   await idbSet('recent', out);
-  await idbSet(`doc:${id}`, { name: S.docName, json: snapshot(S.pres), media: S.pres.media });
+  await idbSet(`doc:${id}`, { name: S.docName, json: snapshot(S.pres), media: S.pres.media, fonts: S.pres.fonts ?? null });
   for (const x of list.slice(12)) await idbSet(`doc:${x.id}`, null);
 }
 export async function recentDocs() { return (await idbGet('recent')) ?? []; }
 export async function openRecent(id) {
   const v = await idbGet(`doc:${id}`);
   if (!v) { toast('문서를 찾을 수 없습니다'); return; }
-  setDocument(validatePresentation({ ...JSON.parse(v.json), media: v.media ?? {} }), v.name);
+  setDocument(validatePresentation({ ...JSON.parse(v.json), media: v.media ?? {}, ...(v.fonts ? { fonts: v.fonts } : {}) }), v.name);
   S.docId = id;
 }
 

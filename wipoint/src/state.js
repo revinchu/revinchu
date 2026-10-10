@@ -52,9 +52,12 @@ export const refresh = (scope = 'slide') => emit('change', { scope });
 // ───────────── 명령 ─────────────
 export const COMMANDS = {};
 export function register(map) { Object.assign(COMMANDS, map); }
+/** F4 (마지막 작업 반복) 대상 */
+const REPEATABLE = new Set(['bold', 'italic', 'underline', 'strike', 'textShadow', 'fontColor', 'highlight', 'fontFamily', 'fontSize', 'growFont', 'shrinkFont', 'shapeFill', 'shapeOutline', 'applyQuickStyle', 'applyWordArt', 'alignLeft', 'alignCenter', 'alignRight', 'alignJustify', 'objAlign', 'bringToFront', 'sendToBack', 'bringForward', 'sendBackward', 'rotate', 'flipH', 'flipV', 'duplicate', 'newSlide', 'duplicateSlide', 'bullets', 'numbering', 'indentMore', 'indentLess', 'setTransition', 'setAnim', 'applyPictureStyle', 'applyTableStyle', 'cellFill', 'clearFormat', 'superscript', 'subscript', 'deleteSelection']);
 export function run(name, ...args) {
   const fn = COMMANDS[name];
   if (!fn) { console.warn('알 수 없는 명령', name); return undefined; }
+  if (REPEATABLE.has(name) && args.every((a) => a == null || typeof a !== 'object')) S.lastRepeat = { name, args };
   try {
     const r = fn(...args);
     if (r && typeof r.catch === 'function') r.catch((e) => emit('error', e));

@@ -2,7 +2,9 @@
 import { S, on, emit, run, register, curSlide, selObjects, selOne, goSlide, COMMANDS } from './state.js';
 import { initEditor, renderCanvas, renderOverlay, fitZoom, startEdit, endEdit, applyTextFormat, focusEditing } from './editor.js';
 import { initPanels, renderThumbs, updateThumb, markActiveThumb, renderNotes, renderStatus, renderPane, renderSorter, thumbsFocused } from './panels.js';
-import { initRibbon, renderRibbon, TABS, setRibbonTab } from './ribbon.js';
+import { initRibbon, renderRibbon, TABS, setRibbonTab, initQat } from './ribbon.js';
+import { initKeytips } from './keytips.js';
+import { stopEyedrop } from './eyedrop.js';
 import { GALLERIES } from './galleries.js';
 import { APP_VERSION } from './commands.js';
 import { openBackstage, closeBackstage, backstageOpen } from './backstage.js';
@@ -17,6 +19,8 @@ const $ = (id) => document.getElementById(id);
 function boot() {
   document.head.append(el('style', {}, SLIDE_CSS));
   initRibbon($('ribbonTabs'), $('ribbon'), GALLERIES);
+  initQat($('qat'), $('qatTop'));
+  initKeytips({ isBlocked: () => showActive() || !!S.eyedrop });
   initEditor($('stage'));
   initPanels({ thumbs: $('thumbs'), notes: $('notes'), status: $('status'), pane: $('pane'), sorter: $('sorter') });
   register({ backstage: (page) => openBackstage(page ?? 'home') });
@@ -195,9 +199,9 @@ function wireEvents() {
     const files = [...(e.dataTransfer?.files ?? [])];
     if (!files.length) return;
     e.preventDefault();
-    const deck = files.find((f) => /\.(pptx|ppsx|potx|json|ppt)$/i.test(f.name));
+    const deck = files.find((f) => /\.(pptx|ppsx|potx|json|ppt|pdf)$/i.test(f.name));
     if (deck) {
-      try { const r = await loadFile(deck); setDocument(r.pres, r.name); if (r.warnings.length) alertDialog('일부 내용', r.warnings.join('\n')); else toast('프레젠테이션을 열었습니다'); } catch (err) { alertDialog('열기', err.message); }
+      try { const r = await loadFile(deck); setDocument(r.pres, r.name); if (r.pdf) { toast(r.warnings[0]); if (r.warnings.length > 1) alertDialog('일부 내용', r.warnings.slice(1).join('\n')); } else if (r.warnings.length) alertDialog('일부 내용', r.warnings.join('\n')); else toast('프레젠테이션을 열었습니다'); } catch (err) { alertDialog('열기', err.message); }
       return;
     }
     run('pasteFiles', files);
@@ -264,18 +268,68 @@ function wireEvents() {
 function selectedText() { return selObjects().map((o) => (o.text ? o.text.paras.map((p) => p.runs.map((r) => r.t).join('')).join('\n') : '')).join('\n'); }
 function clipText() { return (S.clipboard?.objs ?? []).map((o) => (o.text ? o.text.paras.map((p) => p.runs.map((r) => r.t).join('')).join('\n') : '')).filter(Boolean).join('\n') || ' '; }
 
-/** 글 편집 중 Ctrl 조합 */
+/** 글 편집 중 Ctrl 조합 · 기능 키 */
 function onEditCtrl(e) {
   const k = e.key.toLowerCase();
   const shift = e.shiftKey;
+  if (fnKey(e)) return;
+  if (e.altKey && shift && e.key.startsWith('Arrow')) {
+    e.preventDefault();
+    if (e.key === 'ArrowLeft') run('indentLess'); else if (e.key === 'ArrowRight') run('indentMore'); else run('moveParagraph', e.key === 'ArrowUp' ? -1 : 1);
+    return;
+  }
+  if (k === 'enter') { e.preventDefault(); run('nextPlaceholder'); return; }
+  if (shift && (k === 'f' || k === 'p')) { e.preventDefault(); run('fontDialog'); return; }
   const map = {
+    t: () => run('fontDialog'), d: () => { endEdit(); run('duplicate'); }, n: () => run('newBlank'), o: () => run('open'), a: () => document.execCommand('selectAll'),
     b: () => run('bold'), i: () => run('italic'), u: () => run('underline'),
     e: () => run('alignCenter'), l: () => run('alignLeft'), r: () => run('alignRight'), j: () => run('alignJustify'),
     z: () => run('undo'), y: () => run('redo'), s: () => run('save'), k: () => run('hyperlink'), f: () => run('find'), h: () => run('replace'),
     ' ': () => run('clearFormat'), ']': () => run('growFont'), '[': () => run('shrinkFont'), '>': () => run('growFont'), '<': () => run('shrinkFont'), '.': () => (shift ? run('growFont') : null), ',': () => (shift ? run('shrinkFont') : null),
-    '=': () => run(shift ? 'superscript' : 'subscript'), m: () => { endEdit(); run('newSlide'); }, p: () => run('print'),
+    '=': () => run(shift ? 'superscript' : 'subscript'), '+': () => run('superscript'), m: () => { endEdit(); run('newSlide'); }, p: () => run('print'),
   };
   if (map[k]) { e.preventDefault(); map[k](); }
+}
+
+/** 기능 키 (편집 중에도): PowerPoint 와 같은 동작 */
+function fnKey(e) {
+  const k = e.key;
+  if (!/^F\d+$/.test(k) && k !== 'ContextMenu') return false;
+  const ctrl = e.ctrlKey || e.metaKey;
+  const shift = e.shiftKey;
+  const alt = e.altKey;
+  const act = {
+    F1: () => (ctrl ? run('toggleRibbon') : run('shortcuts')),
+    F2: () => (ctrl ? run('print') : !S.editing && selObjects().length === 1 ? run('editText') : null),
+    F3: () => (shift ? run('cycleCase') : null),
+    F4: () => (ctrl ? null : alt ? null : run('repeatLast')),
+    F5: () => run(alt ? 'presenterView' : shift ? 'showFromCurrent' : 'showFromStart'),
+    F6: () => cyclePanes(shift ? -1 : 1),
+    F7: () => run('spellCheck'),
+    F9: () => (alt ? run('toggleGuides') : shift ? run('toggleGrid') : null),
+    F10: () => (shift ? contextMenuKey() : alt ? run('selectionPane') : null),
+    F12: () => (ctrl ? run('open') : run('saveAs', 'pptx')),
+    ContextMenu: () => contextMenuKey(),
+  }[k];
+  if (!act) return false;
+  const r = act();
+  if (r === null) return false;
+  e.preventDefault();
+  e.stopPropagation();
+  return true;
+}
+function cyclePanes(d) {
+  const panes = [$('ribbon').querySelector('button:not(:disabled)'), $('thumbs'), $('stage'), $('notes'), $('status').querySelector('button')].filter((x) => x && x.offsetParent);
+  const cur = panes.findIndex((p) => p.contains(document.activeElement));
+  if (S.editing) endEdit();
+  panes[(cur + d + panes.length) % panes.length]?.focus();
+  return true;
+}
+function contextMenuKey() {
+  const o = selObjects()[0];
+  const r = (o && document.querySelector(`#stage .ob[data-id="${o.id}"]`))?.getBoundingClientRect() ?? $('stage').getBoundingClientRect();
+  emit('canvasMenu', { e: { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 }, hit: o ?? null });
+  return true;
 }
 
 function onKey(e) {
@@ -288,10 +342,13 @@ function onKey(e) {
   const ctrl = e.ctrlKey || e.metaKey;
   const shift = e.shiftKey;
   const stop = () => { e.preventDefault(); e.stopPropagation(); };
-  if (k === 'F5') { stop(); run(e.altKey ? 'presenterView' : shift ? 'showFromCurrent' : 'showFromStart'); return; }
-  if (k === 'F12') { stop(); run('saveAs', 'pptx'); return; }
-  if (k === 'F1') { stop(); run('shortcuts'); return; }
-  if (k === 'F7') { stop(); run('spellCheck'); return; }
+  if (fnKey(e)) return;
+  if (ctrl && e.altKey && !shift && k.toLowerCase() === 'v') { stop(); run('pasteMenu', document.querySelector('#ribbon .rbtn.large') ?? { x: 200, y: 140 }); return; }
+  if (ctrl && shift && k === 'Tab') { stop(); if (thumbsFocused()) $('stage').focus(); else $('thumbs').focus(); return; }
+  if (ctrl && shift && !e.altKey && (k.toLowerCase() === 'f' || k.toLowerCase() === 'p')) { stop(); run('fontDialog'); return; }
+  if (ctrl && !e.altKey && k === 'Enter') { stop(); run('nextPlaceholder'); return; }
+  if (ctrl && e.altKey && (k === 'ArrowLeft' || k === 'ArrowRight') && selObjects().length) { stop(); run('rotate', k === 'ArrowLeft' ? -1 : 1); return; }
+  if (ctrl && shift && k.startsWith('Arrow') && selObjects().length) { stop(); const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] }[k]; run('resizeSel', d[0], d[1]); return; }
   if (ctrl && !e.altKey) {
     const key = k.toLowerCase();
     const map = {
@@ -302,7 +359,8 @@ function onKey(e) {
       ']': () => run(shift ? 'bringToFront' : 'growFont'), '[': () => run(shift ? 'sendToBack' : 'shrinkFont'), '}': () => run('bringToFront'), '{': () => run('sendToBack'),
       '>': () => run('growFont'), '<': () => run('shrinkFont'), '.': () => shift && run('growFont'), ',': () => shift && run('shrinkFont'),
       c: () => (shift ? run('copyFormat') : null), v: () => (shift ? run('pasteFormat') : null),
-      '=': () => run('zoomIn'), '-': () => run('zoomOut'), '0': () => fitZoom(),
+      t: () => run('fontDialog'),
+      '=': () => (shift ? run('superscript') : selObjects().some((o) => o.text) ? run('subscript') : run('zoomIn')), '+': () => (selObjects().some((o) => o.text) ? run('superscript') : run('zoomIn')), '-': () => run('zoomOut'), '0': () => fitZoom(),
     };
     if (key in map) {
       const r = (key === 'c' || key === 'v') && !shift ? null : map[key];
@@ -314,6 +372,7 @@ function onKey(e) {
   if (thumbsFocused()) return;
   const objs = selObjects();
   if (k === 'Escape') {
+    if (S.eyedrop) { stopEyedrop(); return; }
     if (S.drawShape) { S.drawShape = null; emit('drawMode'); return; }
     if (S.painter) { S.painter = null; emit('painter'); return; }
     if (isMenuOpen()) { closeMenus(); return; }
@@ -321,6 +380,9 @@ function onKey(e) {
     S.sel.clear(); emit('selection'); return;
   }
   if (k === 'Delete' || k === 'Backspace') { if (objs.length) { stop(); run('deleteSelection'); } return; }
+  if (k.startsWith('Arrow') && objs.length && e.altKey && shift) { stop(); if (k === 'ArrowLeft') run('indentLess'); else if (k === 'ArrowRight') run('indentMore'); return; }
+  if (k.startsWith('Arrow') && objs.length && e.altKey && !shift) { stop(); if (k === 'ArrowLeft' || k === 'ArrowRight') run('rotate', k === 'ArrowLeft' ? -15 : 15); return; }
+  if (k.startsWith('Arrow') && objs.length && shift) { stop(); const st = 7.5; const d = { ArrowLeft: [-st, 0], ArrowRight: [st, 0], ArrowUp: [0, st], ArrowDown: [0, -st] }[k]; run('resizeSel', d[0], d[1]); return; }
   if (k.startsWith('Arrow')) {
     if (objs.length) { stop(); const step = 7.5; const d = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[k]; run('nudge', d[0], d[1]); }
     else if (k === 'ArrowDown' || k === 'ArrowRight') { stop(); goSlide(S.cur + 1); } else { stop(); goSlide(S.cur - 1); }

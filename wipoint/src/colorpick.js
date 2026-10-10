@@ -2,6 +2,7 @@
 import { S } from './state.js';
 import { resolveColor, themePaletteRows, STANDARD_COLORS, SLOT_LABEL, parseColorRef } from './themes.js';
 import { el, openMenu, closeMenus } from './ui.js';
+import { startEyedrop } from './eyedrop.js';
 
 const recent = [];
 const label = (c) => { const p = parseColorRef(c); if (!p) return c; if (p.slot) return `${SLOT_LABEL[p.slot] ?? p.slot}${p.mods.length ? ` (${p.mods.map(([k, v]) => `${k} ${Math.round(v * 100)}%`).join(', ')})` : ''}`; return p.hex; };
@@ -26,7 +27,8 @@ export function colorMenu(anchor, onPick, opts = {}) {
   const items = [{ node }];
   if (opts.none) items.push({ sep: true }, { label: opts.none, icon: 'borderNone', action: () => pick(null) });
   items.push({ label: '다른 색...', icon: 'theme', action: () => moreColors(pick) });
-  if ('EyeDropper' in window) items.push({ label: '스포이트', icon: 'pen', action: async () => { try { const r = await new window.EyeDropper().open(); pick(r.sRGBHex.toUpperCase()); } catch { /* 취소 */ } } });
+  items.push({ label: '스포이트', icon: 'eyedropper', action: () => startEyedrop(opts.target ?? 'fill', pick) });
+  if ('EyeDropper' in window) items.push({ label: '스포이트 (화면 어디서나)', icon: 'eyedropper', action: async () => { try { const r = await new window.EyeDropper().open(); pick(r.sRGBHex.toUpperCase()); } catch { /* 취소 */ } } });
   for (const x of opts.extra ?? []) items.push(x);
   return openMenu(anchor, items, { minWidth: 230 });
 }

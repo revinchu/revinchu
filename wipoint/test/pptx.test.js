@@ -184,3 +184,31 @@ test('암호 · 예전 형식 · ZIP 이 아닌 파일은 한국어 오류', () 
 test('파트 목록은 [Content_Types].xml 이 맨 앞', () => {
   assert.equal(Object.keys(pptxEntries(newPresentation()))[0], '[Content_Types].xml');
 });
+
+// embedded-font.pptx: DejaVu Serif Bold 부분 집합을 MTX 압축 EOT(.fntdata, XOR 포함)로 넣은 파일 (make-embedded-font-pptx.py)
+test('포함된 글꼴: EOT + MTX(LZCOMP · CTF) 풀기, 다시 저장해도 유지', async () => {
+  const { decodeEmbeddedFont, TRIPLETS } = await import('../src/fonts.js');
+  const { pres, warnings } = readPptx(readFileSync(join(here, 'fixtures', 'embedded-font.pptx')));
+  assert.deepEqual(warnings, []);
+  assert.equal(pres.fonts.length, 1);
+  assert.equal(pres.fonts[0].typeface, 'WP Embedded Serif');
+  assert.equal(pres.fonts[0].style, 'regular');
+  const bin = Buffer.from(pres.fonts[0].data.split(',')[1], 'base64');
+  const { data, compressed } = decodeEmbeddedFont(new Uint8Array(bin));
+  assert.equal(compressed, true);
+  assert.deepEqual([...data.subarray(0, 4)], [0, 1, 0, 0]);
+  // 표 목록에 glyf · loca 가 다시 생기고 maxp 의 글리프 수(73)만큼 loca 항목
+  const tags = [];
+  const n = (data[4] << 8) | data[5];
+  let loca = 0;
+  for (let i = 0; i < n; i++) { const o = 12 + i * 16; const tag = String.fromCharCode(...data.subarray(o, o + 4)); tags.push(tag); if (tag === 'loca') loca = (data[o + 12] << 24 | data[o + 13] << 16 | data[o + 14] << 8 | data[o + 15]); }
+  assert.ok(tags.includes('glyf') && tags.includes('loca') && tags.includes('cmap'));
+  assert.ok(loca === 74 * 2 || loca === 74 * 4);
+  assert.equal(TRIPLETS.length, 128);
+  // 다시 저장 → 같은 글꼴 데이터, embeddedFontLst
+  const files = unzip(writePptx(pres));
+  assert.match(textOf(files['ppt/presentation.xml']), /<p:embeddedFontLst><p:embeddedFont><p:font typeface="WP Embedded Serif"/);
+  assert.match(textOf(files['[Content_Types].xml']), /Extension="fntdata"/);
+  assert.deepEqual([...files['ppt/fonts/font1.fntdata']], [...bin]);
+  assert.equal(readPptx(writePptx(pres)).pres.fonts.length, 1);
+});

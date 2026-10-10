@@ -7,6 +7,7 @@ import { SLOT_NAMES, resolveColor, applyMods, cloneTheme, THEMES } from './theme
 import { EMU_PER_PX, uid, layoutPlaceholders, defaultSize, defaultColor, defaultFont, isEmptyText, animSteps, stepTimeline, textBody, para, newSlide } from './model.js';
 import { paraDefaults, tableCellStyle, slideBackground, themeDecor } from './render.js';
 import { KNOWN_SHAPES } from './shapes.js';
+import { decodeEmbeddedFont } from './fonts.js';
 
 const NS_A = 'http://schemas.openxmlformats.org/drawingml/2006/main';
 const NS_R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -542,6 +543,20 @@ export function pptxEntries(pres, opts = {}) {
   presRels.add(REL('viewProps'), 'viewProps.xml');
   presRels.add(REL('theme'), 'theme/theme1.xml');
   presRels.add(REL('tableStyles'), 'tableStyles.xml');
+  // 포함된 글꼴 (읽은 .fntdata 그대로)
+  const fontEls = new Map();
+  (pres.fonts ?? []).forEach((f, i) => {
+    const d = dataUrlBytes(f.data);
+    if (!d) return;
+    const path = `fonts/font${i + 1}.fntdata`;
+    files[`ppt/${path}`] = d.bytes;
+    defaults.set('fntdata', 'application/x-fontdata');
+    const rid2 = presRels.add(REL('font'), path);
+    if (!fontEls.has(f.typeface)) fontEls.set(f.typeface, { f, parts: [] });
+    fontEls.get(f.typeface).parts.push(`<p:${f.style} r:id="${rid2}"/>`);
+  });
+  const order = ['regular', 'bold', 'italic', 'boldItalic'];
+  const fontXml = fontEls.size ? `<p:embeddedFontLst>${[...fontEls.values()].map(({ f, parts }) => `<p:embeddedFont><p:font typeface="${esc(f.typeface)}"${f.panose ? ` panose="${esc(f.panose)}"` : ''}${f.pitchFamily ? ` pitchFamily="${esc(f.pitchFamily)}"` : ''}${f.charset ? ` charset="${esc(f.charset)}"` : ''}/>${parts.sort((a, b) => order.indexOf(a.slice(3, a.indexOf(' '))) - order.indexOf(b.slice(3, b.indexOf(' ')))).join('')}</p:embeddedFont>`).join('')}</p:embeddedFontLst>` : '';
 
   // 마스터 · 레이아웃
   const masterRels = relsFor();
@@ -633,7 +648,7 @@ export function pptxEntries(pres, opts = {}) {
   const sz = pres.size;
   const sldIds = slideRids.map((rid, i) => `<p:sldId id="${256 + i}" r:id="${rid}"/>`).join('');
   const defText = `<p:defaultTextStyle><a:defPPr><a:defRPr lang="ko-KR"/></a:defPPr>${[1, 2, 3, 4, 5, 6, 7, 8, 9].map((l) => `<a:lvl${l}pPr marL="${(l - 1) * 457200}" algn="l" defTabSz="914400" rtl="0" eaLnBrk="1" latinLnBrk="0" hangingPunct="1"><a:defRPr sz="1800" kern="1200"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill><a:latin typeface="+mn-lt"/><a:ea typeface="+mn-ea"/><a:cs typeface="+mn-cs"/></a:defRPr></a:lvl${l}pPr>`).join('')}</p:defaultTextStyle>`;
-  files['ppt/presentation.xml'] = `${XML_HEAD}<p:presentation xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}" saveSubsetFonts="1"><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="${masterRid}"/></p:sldMasterIdLst>${notesMasterRid ? `<p:notesMasterIdLst><p:notesMasterId r:id="${notesMasterRid}"/></p:notesMasterIdLst>` : ''}${sldIds ? `<p:sldIdLst>${sldIds}</p:sldIdLst>` : ''}<p:sldSz cx="${E(sz.w)}" cy="${E(sz.h)}"/><p:notesSz cx="6858000" cy="9144000"/>${defText}${secXml}</p:presentation>`;
+  files['ppt/presentation.xml'] = `${XML_HEAD}<p:presentation xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}" saveSubsetFonts="1"${fontXml ? ' embedTrueTypeFonts="1"' : ''}><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="${masterRid}"/></p:sldMasterIdLst>${notesMasterRid ? `<p:notesMasterIdLst><p:notesMasterId r:id="${notesMasterRid}"/></p:notesMasterIdLst>` : ''}${sldIds ? `<p:sldIdLst>${sldIds}</p:sldIdLst>` : ''}<p:sldSz cx="${E(sz.w)}" cy="${E(sz.h)}"/><p:notesSz cx="6858000" cy="9144000"/>${fontXml}${defText}${secXml}</p:presentation>`;
   files['ppt/_rels/presentation.xml.rels'] = presRels.xml();
   override('ppt/presentation.xml', CT('presentation.main'));
   files['ppt/presProps.xml'] = `${XML_HEAD}<p:presentationPr xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}"/>`;
@@ -1506,6 +1521,24 @@ export function readPptx(bytes) {
   const core = xmlOf('docProps/core.xml');
   const props = { title: descendants(core, 'title')[0]?.text ?? '', author: descendants(core, 'creator')[0]?.text ?? '', created: descendants(core, 'created')[0]?.text ?? new Date().toISOString() };
   const pres = { version: 1, size, theme, slides, media, props, footer: presMeta?.footer ?? { slideNum: false, date: false, text: '', hideOnTitle: true } };
+  // 포함된 글꼴 (ppt/fonts/*.fntdata = EOT, MTX 압축일 수 있음) — 원본 그대로 보관 (다시 저장할 때 그대로 넣음), 화면에는 fileio 가 풀어서 등록
+  const fonts = [];
+  for (const ef of kids(child(presXml, 'embeddedFontLst'), 'embeddedFont')) {
+    const f = child(ef, 'font');
+    const typeface = attr(f, 'typeface');
+    if (!typeface) continue;
+    for (const style of ['regular', 'bold', 'italic', 'boldItalic']) {
+      const el = child(ef, style);
+      const target = el ? presRels.get(rid(el))?.target : null;
+      if (!target || !has(target)) continue;
+      const bytes = files[target];
+      try { decodeEmbeddedFont(bytes); } catch (e) { warnings.add(`포함된 글꼴 '${typeface}' 을(를) 읽지 못했습니다 (${e.message}) — 컴퓨터에 있는 글꼴로 표시합니다`); continue; }
+      let bin = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+      fonts.push({ typeface, style, panose: attr(f, 'panose') ?? null, pitchFamily: attr(f, 'pitchFamily') ?? null, charset: attr(f, 'charset') ?? null, data: `data:application/x-fontdata;base64,${btoa(bin)}` });
+    }
+  }
+  if (fonts.length) pres.fonts = fonts;
   if (!slides.length) pres.slides.push(newSlide(pres, 'title'));
   return { pres, warnings: [...warnings] };
 }

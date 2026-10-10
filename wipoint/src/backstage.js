@@ -26,13 +26,14 @@ export function openBackstage(page = 'home') {
   const main = el('div', { class: 'backstage-main' });
   const nav = el('nav', { class: 'backstage-nav' },
     el('button', { class: 'back', title: '돌아가기 (Esc)', onclick: closeBackstage }, '←'),
-    ...[['home', '홈'], ['new', '새로 만들기'], ['open', '열기'], ['info', '정보'], ['save', '저장'], ['saveAs', '다른 이름으로 저장'], ['print', '인쇄'], ['share', '공유'], ['export', '내보내기']].map(([k, l]) => el('button', { class: k === page ? 'on' : '', onclick: () => openBackstage(k) }, l)),
+    ...[['home', '홈', 'H'], ['new', '새로 만들기', 'N'], ['open', '열기', 'O'], ['info', '정보', 'I'], ['save', '저장', 'S'], ['saveAs', '다른 이름으로 저장', 'A'], ['print', '인쇄', 'P'], ['share', '공유', 'Z'], ['export', '내보내기', 'E']].map(([k, l, kt]) => el('button', { class: k === page ? 'on' : '', 'data-kt': kt, onclick: () => openBackstage(k) }, l)),
     el('span', { class: 'spacer' }),
     el('button', { onclick: () => { closeBackstage(); run('about'); } }, '정보 (WIPOINT)'));
   root = el('div', { class: 'backstage', tabIndex: -1 }, nav, main);
   root.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.stopPropagation(); closeBackstage(); } });
   document.body.append(root);
   (PAGES[page] ?? PAGES.home)(main);
+  if (!root) return; // 페이지가 바로 닫은 경우 (저장 등)
   hydrateIcons(root);
   root.focus();
 }
@@ -66,7 +67,7 @@ const PAGES = {
   open: (m) => {
     const rec = el('div', {});
     m.append(h2('열기'), el('div', { class: 'bs-actions' },
-      el('button', { class: 'bs-big', onclick: () => { closeBackstage(); run('open'); } }, el('span', { 'data-icon': 'open' }), el('b', {}, '찾아보기'), el('small', {}, '.pptx · .ppsx · .potx · WIPOINT(.json)'))),
+      el('button', { class: 'bs-big', onclick: () => { closeBackstage(); run('open'); } }, el('span', { 'data-icon': 'open' }), el('b', {}, '찾아보기'), el('small', {}, '.pptx · .ppsx · .potx · PDF · WIPOINT(.json)'))),
     el('h3', {}, '최근 항목'), rec);
     recentList(rec);
   },

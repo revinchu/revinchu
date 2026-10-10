@@ -6,6 +6,9 @@ const ACCENT = 'var(--icon-accent)';
 const BLUE = 'var(--icon-blue)';
 
 export const ICONS = {
+  eyedropper: svg(`<path d="M13.2 3.3a2 2 0 0 1 2.8 2.8l-1.7 1.7.8.8-1.2 1.2-.8-.8-6.3 6.3H4.3v-2.5l6.3-6.3-.8-.8L11 4.5l.8.8z"/><path d="M4.3 15.7 3 17" stroke="${ACCENT}" stroke-width="1.8"/>`),
+  distributeH: svg(`<path d="M3 3v14M17 3v14"/><rect x="7.5" y="6" width="5" height="8" rx=".5"/>`),
+  distributeV: svg(`<path d="M3 3h14M3 17h14"/><rect x="6" y="7.5" width="8" height="5" rx=".5"/>`),
   paste: svg(`<rect x="4" y="3.5" width="10" height="13" rx="1"/><rect x="7" y="2" width="4" height="3" rx=".6" fill="var(--surface)"/><rect x="9" y="8" width="8" height="10" rx=".6" fill="var(--surface)" stroke="${BLUE}"/><path d="M11 11h4M11 13h4M11 15h3" stroke="${BLUE}"/>`),
   cut: svg(`<circle cx="6" cy="14.5" r="2.3"/><circle cx="14" cy="14.5" r="2.3"/><path d="M7.5 12.8 14 3M12.5 12.8 6 3"/>`),
   copy: svg(`<rect x="3.5" y="3.5" width="9" height="11" rx=".8"/><rect x="7.5" y="6.5" width="9" height="11" rx=".8" fill="var(--surface)"/>`),

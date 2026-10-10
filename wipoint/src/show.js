@@ -303,7 +303,13 @@ function onKey(e) {
   if ((e.ctrlKey || e.metaKey) && (k === 'p' || k === 'P')) { e.preventDefault(); setTool(show.tool === 'pen' ? null : 'pen'); return; }
   if ((e.ctrlKey || e.metaKey) && (k === 'l' || k === 'L')) { e.preventDefault(); setTool(show.tool === 'laser' ? null : 'laser'); return; }
   if ((e.ctrlKey || e.metaKey) && (k === 'a' || k === 'A')) { e.preventDefault(); setTool(null); return; }
+  if ((e.ctrlKey || e.metaKey) && (k === 'e' || k === 'E')) { e.preventDefault(); clearInk(); setTool(null); return; }
+  if ((e.ctrlKey || e.metaKey) && (k === 'm' || k === 'M')) { e.preventDefault(); show.ink.hidden = !show.ink.hidden; return; }
+  if ((e.ctrlKey || e.metaKey) && (k === 'h' || k === 'H')) { e.preventDefault(); show.root.classList.add('no-cursor'); return; }
+  if ((e.ctrlKey || e.metaKey) && (k === 'u' || k === 'U')) { e.preventDefault(); show.root.classList.remove('no-cursor'); return; }
+  if (((e.ctrlKey || e.metaKey) && (k === 's' || k === 'S')) || k === 'g' || k === 'G') { e.preventDefault(); slideList(); return; }
   if (k === 'e' || k === 'E') { clearInk(); return; }
+  if (k === 'h' || k === 'H') { e.preventDefault(); next(); return; }
   switch (k) {
     case 'Escape': case '-': e.preventDefault(); if (show.tool) setTool(null); else endShow(); break;
     case 'ArrowRight': case 'ArrowDown': case 'PageDown': case ' ': case 'Enter': case 'n': case 'N': e.preventDefault(); next(); break;
@@ -348,6 +354,12 @@ function showMenu(e) {
     { sep: true },
     { label: '쇼 마침', key: 'Esc', action: endShow },
   ]);
+}
+
+/** Ctrl+S / G: 모든 슬라이드 목록에서 고르기 */
+function slideList() {
+  const r = show.root.getBoundingClientRect();
+  openMenu({ x: r.left + r.width / 2 - 150, y: r.top + 40 }, show.order.map((n, pos) => ({ label: `${n + 1}. ${slideTitle(S.pres.slides[n]) || '(제목 없음)'}`, checked: pos === show.pos, action: () => goTo(pos) })), { scroll: true, minWidth: 300 });
 }
 
 // ───────────── 펜 · 레이저 ─────────────

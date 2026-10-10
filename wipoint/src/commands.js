@@ -14,7 +14,8 @@ import { SHAPE_STYLES, WORDART, PICTURE_STYLES, TABLE_STYLES, tableStyleProps, D
 import { smartArt, SMART_KINDS } from './smartart.js';
 import { el, openMenu, openDialog, formDialog, alertDialog, toast, closeMenus } from './ui.js';
 import { colorMenu } from './colorpick.js';
-import { startEdit, endEdit, textTargets, applyTextFormat, caretRunProp, caretPara, insertTextAtCaret, fitZoom, setZoom, renderCanvas, editorLayer } from './editor.js';
+import { startEyedrop } from './eyedrop.js';
+import { moveParagraph, startEdit, endEdit, textTargets, applyTextFormat, caretRunProp, caretPara, insertTextAtCaret, fitZoom, setZoom, renderCanvas, editorLayer } from './editor.js';
 import { startShow, playStepOn } from './show.js';
 import { shapeIconSvg, styleChip, wordArtCss } from './galleries.js';
 import { save, saveAs, openWithPicker, setDocument, printSlides, exportPng, shareLink, pickFile } from './fileio.js';
@@ -775,7 +776,13 @@ const SHORTCUTS = [
   ['Ctrl+L / E / R / J', '왼쪽 / 가운데 / 오른쪽 / 양쪽 맞춤'], ['Ctrl+Space', '글자 서식 지우기'], ['Tab / Shift+Tab', '목록 수준 늘림 / 줄임 (글 편집 중)'], ['Ctrl+F / Ctrl+H', '찾기 / 바꾸기'],
   ['Ctrl+K', '하이퍼링크'], ['Ctrl+A', '모두 선택'], ['방향키 · Ctrl+방향키', '개체 이동 (작게)'], ['Shift+끌기', '가로/세로로만 이동, 비율 유지'], ['Ctrl+끌기', '복사하며 이동'], ['Alt+끌기', '스마트 가이드 끄기'],
   ['Ctrl+]/[ (Shift)', '앞으로 / 뒤로 (맨 앞 / 맨 뒤)'], ['Ctrl+마우스 휠', '확대/축소'], ['F2 / Enter', '선택한 개체 글 편집'], ['Esc', '편집 끝내기 · 선택 해제'],
-  ['쇼: N / P / 숫자+Enter', '다음 / 이전 / 해당 슬라이드로'], ['쇼: B / W', '검정 / 흰 화면'], ['쇼: Ctrl+P / Ctrl+L / E', '펜 / 레이저 포인터 / 잉크 지우기'],
+  ['Alt 또는 F10', '키 팁 표시 (예: Alt, H, F, S = 글꼴 크기)'], ['Alt+1 … Alt+9', '빠른 실행 도구 모음 명령 (기본: 가로 가운데 · 세로 가운데 · 텍스트 상자 · 스포이트)'],
+  ['Shift+방향키 / Ctrl+Shift+방향키', '개체 크기 조절 (크게 / 조금씩)'], ['Alt+←/→ / Ctrl+Alt+←/→', '15도 / 1도 회전'], ['Alt+Shift+←/→', '단락 수준 올림 / 내림'], ['Alt+Shift+↑/↓', '단락을 위/아래로 이동 (글 편집 중)'],
+  ['Ctrl+T / Ctrl+Shift+F / Ctrl+Shift+P', '글꼴 대화 상자'], ['Shift+F3', '대/소문자 바꾸기 (소문자 → 대문자 → 단어 첫 글자)'], ['Ctrl+= / Ctrl+Shift+=', '아래 첨자 / 위 첨자'],
+  ['Ctrl+Enter', '다음 개체 틀 (마지막이면 새 슬라이드)'], ['F4', '마지막 작업 반복'], ['Alt+F9 / Shift+F9', '안내선 / 눈금선 표시'], ['Alt+F10', '선택 창'],
+  ['F6 / Shift+F6', '창 사이 이동 (리본 · 슬라이드 목록 · 편집 화면 · 노트 · 상태 표시줄)'], ['Shift+F10 / 메뉴 키', '바로 가기 메뉴'], ['Ctrl+F1', '리본 접기/펴기'], ['Ctrl+Alt+V', '선택하여 붙여넣기'], ['Ctrl+F12 / Ctrl+F2', '열기 / 인쇄'],
+  ['쇼: N / P / 숫자+Enter', '다음 / 이전 / 해당 슬라이드로'], ['쇼: B (.) / W (,)', '검정 / 흰 화면'], ['쇼: Ctrl+P / Ctrl+L / Ctrl+A', '펜 / 레이저 포인터 / 화살표'], ['쇼: E / Ctrl+E / Ctrl+M', '잉크 지우기 / 지우개 / 잉크 숨기기'],
+  ['쇼: Ctrl+H / Ctrl+U', '포인터 숨기기 / 보이기'], ['쇼: G 또는 Ctrl+S', '모든 슬라이드 목록'], ['쇼: Home / End / Esc (−)', '첫 / 마지막 슬라이드 / 쇼 마치기'],
 ];
 
 export const APP_VERSION = '1.0';
@@ -788,6 +795,11 @@ const WHATS_NEW = [
   '서식 파일 9종 (사업 계획서 · 마케팅 성과 보고 · 제안서 · 강의 · 회의 · 프로젝트 · 서비스 소개 · 포토 앨범)',
   'SmartArt 도식 9종 · 아이콘 3,600여 개 · 차트 7종 · 디자인 아이디어',
   'PDF(인쇄) · PNG 내보내기 · 읽기 전용 공유 링크 · 자동 저장 · 최근 문서',
+  'PDF 열기: 쪽마다 슬라이드로 — 글은 텍스트 상자, 도형 · 선 · 그림은 그대로 편집',
+  'pptx 에 포함된 글꼴(.fntdata, MTX 압축 EOT 포함)을 읽어 그대로 표시 · 다시 저장해도 유지',
+  '키 팁: Alt 또는 F10 → 모든 탭 · 명령에 글자 (예: Alt, H, F, S = 글꼴 크기), 메뉴는 화살표 · 글자로 고르기',
+  '빠른 실행 도구 모음 (리본 아래): Alt+1 가로 가운데 · Alt+2 세로 가운데 · Alt+3 텍스트 상자 · Alt+4 스포이트, 리본 단추 오른쪽 클릭으로 추가',
+  'PowerPoint 단축키 추가: Shift/Ctrl+Shift+방향키 크기, Alt+방향키 회전, Ctrl+T 글꼴, Shift+F3, F4, F6, Alt+F9, Shift+F9, Alt+F10, Ctrl+Enter, Alt+Shift+방향키 등',
 ];
 
 // ───────────── 명령 등록 ─────────────
@@ -927,7 +939,7 @@ register({
   subscript: () => applyRun({ base: currentRunProp('base') === -1 ? undefined : -1 }),
   clearFormat: () => applyRun({ b: undefined, i: undefined, u: undefined, s: undefined, color: undefined, font: undefined, size: undefined, hl: undefined, shadow: undefined, spc: undefined, base: undefined, cap: undefined, outline: undefined }),
   fontColor: (c = lastColor.font) => { lastColor.font = c; applyRun({ color: c }); },
-  fontColorMenu: (a) => colorMenu(a, (c) => run('fontColor', c), { auto: '자동' }),
+  fontColorMenu: (a) => colorMenu(a, (c) => run('fontColor', c), { auto: '자동', target: 'font' }),
   highlight: (c = lastColor.hl) => { lastColor.hl = c; applyRun({ hl: c }); },
   highlightMenu: (a) => colorMenu(a, (c) => (c ? run('highlight', c) : applyRun({ hl: undefined })), { none: '강조 표시 없음' }),
   charSpacingMenu: (a) => menuAt(a, [[-3, '매우 좁게'], [-1.5, '좁게'], [0, '표준'], [3, '넓게'], [6, '매우 넓게']].map(([v, l]) => ({ label: l, action: () => applyRun({ spc: v || undefined }) })).concat([{ sep: true }, { label: '기타 간격...', action: fontDialog }])),
@@ -966,6 +978,35 @@ register({
 
   // 그리기
   drawShape: (k) => { if (S.editing) endEdit(); S.drawShape = k; emit('drawMode'); toast(`${SHAPE_LABEL[k] ?? '도형'}: 슬라이드에서 끌어서 그리세요`); },
+  objAlign: (how) => doAlign(how),
+  // PowerPoint 단축키용
+  resizeSel: (dw, dh) => {
+    const objs = expandGroups(selObjects());
+    if (!objs.length) return;
+    change(() => { for (const o of objs) { if (o.w + dw >= 1) o.w += dw; if (o.h + dh >= 1) o.h += dh; } }, { key: 'resize-key' });
+  },
+  cycleCase: () => {
+    const modes = [(t) => t.toLowerCase(), (t) => t.toUpperCase(), (t) => t.replace(/(^|\s)([a-z])/g, (m, p, c) => p + c.toUpperCase())];
+    S.caseCycle = ((S.caseCycle ?? -1) + 1) % modes.length;
+    caseChange(modes[S.caseCycle]);
+  },
+  moveParagraph: (d) => { if (!moveParagraph(d)) toast('글 편집 중에 사용할 수 있습니다'); },
+  nextPlaceholder: () => {
+    const s = slide();
+    const cur = S.editing ? objById(S.editing.id) : selOne();
+    if (S.editing) endEdit();
+    const list = s.objects.filter((o) => o.ph && o.text && o.type === 'shape');
+    const i = cur ? list.indexOf(cur) : -1;
+    const n = list[i + 1];
+    if (n) { S.sel = new Set([n.id]); emit('selection'); startEdit(n, { end: true }); return; }
+    run('newSlide');
+    requestAnimationFrame(() => { const t = slide().objects.find((o) => o.ph && o.text); if (t) { S.sel = new Set([t.id]); emit('selection'); startEdit(t, { end: true }); } });
+  },
+  repeatLast: () => { const l = S.lastRepeat; if (!l) { toast('반복할 작업이 없습니다'); return; } run(l.name, ...l.args); },
+  toggleRibbon: () => { document.getElementById('app')?.classList.toggle('ribbon-collapsed'); requestAnimationFrame(() => fitZoom()); },
+  eyedropFill: () => { if (S.editing) endEdit(); startEyedrop('fill'); },
+  eyedropLine: () => { if (S.editing) endEdit(); startEyedrop('line'); },
+  eyedropFont: () => startEyedrop('font'),
   drawTextbox: () => { if (S.editing) endEdit(); S.drawShape = 'textbox'; emit('drawMode'); toast('텍스트 상자: 슬라이드를 클릭하거나 끌어서 만드세요'); },
   shapesMenu: (a) => shapesGrid(a, (k) => run('drawShape', k)),
   changeShapeMenu: (a) => shapesGrid(a, (k) => { const objs = selObjects().filter((o) => o.type === 'shape' || o.type === 'image'); if (!need(objs)) return; change(() => { for (const o of objs) { o.shape = k; delete o.adj; delete o.path; } }); }),
@@ -1004,7 +1045,7 @@ register({
     { label: '그라데이션', icon: 'fill', submenu: [['밝은 그라데이션', 'light'], ['어두운 그라데이션', 'dark'], ['다른 그라데이션...', 'pane']].map(([l, k]) => ({ label: l, action: () => { if (k === 'pane') { run('formatPane', 'shape'); return; } const base = selObjects()[0]?.fill?.color ?? '@accent1'; fillSelected({ type: 'gradient', angle: 90, stops: k === 'light' ? [[0, `${String(base).split(':')[0]}:lm20:lo80`], [1, base]] : [[0, base], [1, `${String(base).split(':')[0]}:lm50`]] }); } })) },
   ] }),
   shapeOutline: (c = lastColor.line) => { lastColor.line = c; lineSelected((l) => ({ ...(l ?? { width: 1.33, dash: 'solid' }), color: c })); },
-  shapeOutlineMenu: (a) => colorMenu(a, (c) => { if (c === null) lineSelected(() => null); else run('shapeOutline', c); }, { none: '윤곽선 없음', extra: [
+  shapeOutlineMenu: (a) => colorMenu(a, (c) => { if (c === null) lineSelected(() => null); else run('shapeOutline', c); }, { none: '윤곽선 없음', target: 'line', extra: [
     { label: '두께', submenu: [0.25, 0.5, 0.75, 1, 1.5, 2.25, 3, 4.5, 6].map((pt) => ({ label: `${pt}pt`, action: () => lineSelected((l) => ({ ...(l ?? { color: '@tx1', dash: 'solid' }), width: pt / 0.75 })) })) },
     { label: '대시', submenu: DASH_LABEL.map(([k, l]) => ({ label: l, action: () => lineSelected((l2) => ({ ...(l2 ?? { color: '@tx1', width: 1.33 }), dash: k })) })) },
     { label: '화살표', submenu: [['none', 'none', '화살표 없음'], ['none', 'triangle', '끝 화살표'], ['triangle', 'none', '시작 화살표'], ['triangle', 'triangle', '양쪽 화살표'], ['oval', 'triangle', '원 · 화살표']].map(([h, t, l]) => ({ label: l, action: () => lineSelected((l2) => ({ ...(l2 ?? { color: '@tx1', width: 1.33 }), head: h === 'none' ? undefined : h, tail: t === 'none' ? undefined : t })) })) },

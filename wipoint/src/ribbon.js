@@ -1,6 +1,7 @@
 // 리본 메뉴 (PowerPoint 한국어판 배치) — 명령은 state.run 으로 실행
 import { S, run, emit } from './state.js';
-import { el, hydrateIcons } from './ui.js';
+import { el, hydrateIcons, openMenu } from './ui.js';
+import { redrawKeytips } from './keytips.js';
 
 // ───────────── 항목 만들기 ─────────────
 const L = (cmd, icon, label, o = {}) => ({ t: 'large', cmd, icon, label, ...o });
@@ -138,6 +139,155 @@ const CHART_DESIGN = { id: 'chartDesign', label: '차트 디자인', context: 'c
 
 export const TABS = [HOME, INSERT, DESIGN, TRANS, ANIM, SHOW, REVIEW, VIEW, HELP, SHAPE_FMT, PIC_FMT, TABLE_DESIGN, TABLE_LAYOUT, CHART_DESIGN];
 
+// ───────────── 키 팁 (Alt 누르기 → 글자) — PowerPoint 한국어판과 같은 글자 ─────────────
+const TAB_KT = { home: 'H', insert: 'N', design: 'G', transitions: 'K', animations: 'A', slideshow: 'S', review: 'R', view: 'W', help: 'Y2', shapeFormat: 'JD', pictureFormat: 'JP', tableDesign: 'JT', tableLayout: 'JL', chartDesign: 'JC' };
+const ARRANGE_KT = { bringForward: 'AF', sendBackward: 'AE', selectionPane: 'AP', alignMenu: 'AA', groupMenu: 'AG', rotateMenu: 'AY' };
+const KT = {
+  home: { paste: 'V', cut: 'X', copy: 'C', formatPainter: 'FP', newSlide: 'I', layoutMenu: 'L', resetSlide: 'RE', sectionMenu: 'T', font: 'FF', size: 'FS', growFont: 'FG', shrinkFont: 'FK', clearFormat: 'E', bold: '1', italic: '2', underline: '3', strike: '4', textShadow: '5', charSpacingMenu: '6', changeCaseMenu: '7', highlight: 'TC', fontColor: 'FC', bullets: 'U', numbering: 'N', indentLess: 'AO', indentMore: 'AI', lineSpacingMenu: 'K', alignLeft: 'AL', alignCenter: 'AC', alignRight: 'AR', alignJustify: 'AJ', textDirMenu: 'AD', textAnchorMenu: 'AT', shapesMini: 'SH', arrangeMenu: 'G', quickStylesMenu: 'Q', shapeFill: 'SF', shapeOutline: 'SO', shapeEffectsMenu: 'SE', find: 'FD', replace: 'RP', selectMenu: 'SL', 'launcher:fontDialog': 'FN', 'launcher:paragraphDialog': 'PG', 'launcher:formatPaneShape': 'DS' },
+  insert: { newSlide: 'I', tableMenu: 'T', insertPicture: 'P', screenshot: 'SC', shapesMenu: 'SH', insertIcons: 'Y1', insertSmartArt: 'M', chartMenu: 'C', hyperlink: 'IL', drawTextbox: 'X', headerFooter: 'H', wordArtMenu: 'W', insertDate: 'D', insertSlideNumber: 'SN', symbol: 'U' },
+  design: { themes: 'TH', themeColorsMenu: 'TC', themeFontsMenu: 'TF', bgStylesMenu: 'TB', slideSizeMenu: 'S', formatBg: 'G', designIdeas: 'D' },
+  transitions: { previewTransition: 'P', transitions: 'T', transitionOptionsMenu: 'E', transTiming: 'D', applyTransitionAll: 'L' },
+  animations: { previewAnim: 'P', animations: 'S', animOptionsMenu: 'M', addAnimMenu: 'AA', animPane: 'C', removeAnim: 'X', animPainter: 'K', animTiming: 'T' },
+  slideshow: { showFromStart: 'B', showFromCurrent: 'C', setupShow: 'S', hideSlide: 'H', rehearse: 'T', presenterView: 'V' },
+  review: { spellCheck: 'S', accessibility: 'A', wordCount: 'W' },
+  view: { viewNormal: 'L', viewOutline: 'O', viewSorter: 'I', viewNotesPage: 'T', viewReading: 'D', toggleGrid: 'G', toggleGuides: 'U', toggleNotes: 'N', zoomDialog: 'Q', fitZoom: 'W', selectionPane: 'P' },
+  help: { shortcuts: 'K', whatsNew: 'N', about: 'A' },
+  shapeFormat: { shapesMini: 'SH', changeShapeMenu: 'E', drawTextbox: 'X', shapeStyles: 'K', shapeFill: 'SF', shapeOutline: 'SO', shapeEffectsMenu: 'SE', wordart: 'Q', objSize: 'H', 'launcher:formatPaneShape': 'DS', ...ARRANGE_KT },
+  pictureFormat: { pictureCorrectionsMenu: 'R', pictureColorMenu: 'I', changePicture: 'CP', resetPicture: 'Q', pictureStyles: 'K', shapeOutline: 'SO', shapeEffectsMenu: 'SE', altText: 'T', cropPicture: 'V', objSize: 'H', 'launcher:formatPaneShape': 'DS', ...ARRANGE_KT },
+  tableDesign: { 'tblOpt:firstRow': 'A', 'tblOpt:lastRow': 'T', 'tblOpt:banded': 'R', 'tblOpt:firstCol': 'C', 'tblOpt:lastCol': 'L', tableStyles: 'S', cellFill: 'H', cellBorderMenu: 'B' },
+  tableLayout: { tblSelectMenu: 'K', tblDeleteMenu: 'D', tblRowAbove: 'A', tblRowBelow: 'BE', tblColLeft: 'L', tblColRight: 'R', tblMerge: 'M', tblSplit: 'P', tblEqualRows: 'HE', tblEqualCols: 'WE', alignLeft: 'AL', alignCenter: 'AC', alignRight: 'AR', anchorTop: 'AT', anchorMiddle: 'AV', anchorBottom: 'AB' },
+  chartDesign: { chartElementsMenu: 'A', chartColorsMenu: 'C', chartData: 'E', chartKindMenu: 'T' },
+};
+export const itemKey = (it) => (it.cmd ? (it.arg != null ? `${it.cmd}:${it.arg}` : it.cmd) : it.menu ?? it.name ?? it.t);
+export function leafItems(tab) {
+  const out = [];
+  const walk = (it) => {
+    if (!it) return;
+    if (it.t === 'rows') { for (const r of it.rows) for (const x of r) walk(x); return; }
+    if (it.t === 'col') { for (const x of it.items) walk(x); return; }
+    out.push(it);
+  };
+  for (const g of tab.groups) { for (const it of g.items) walk(it); if (g.launcher) { g.launchItem ??= { t: 'launcher', cmd: g.launcher, label: `${g.label} 설정` }; out.push(g.launchItem); } }
+  return out;
+}
+/** 키 팁 정하기: 표에 있는 글자, 없으면 이름 첫 글자 영문 대응 → 남는 글자. 한 탭 안에서 앞부분이 겹치지 않게 (prefix-free) */
+function assignKeytips() {
+  for (const t of TABS) {
+    t.kt = TAB_KT[t.id];
+    const table = KT[t.id] ?? {};
+    const used = [];
+    const ok = (k) => !used.some((u) => u.startsWith(k) || k.startsWith(u));
+    const leaves = leafItems(t);
+    for (const it of leaves) {
+      const k = table[it.t === 'launcher' ? `launcher:${it.cmd}` : itemKey(it)];
+      if (k && ok(k)) { it.kt = k; used.push(k); } else it.kt = null;
+    }
+    const pool = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    for (const it of leaves) {
+      if (it.kt) continue;
+      let k = null;
+      for (const a of pool) { for (const b of pool) { if (ok(a + b)) { k = a + b; break; } } if (k) break; }
+      it.kt = k;
+      used.push(k);
+    }
+  }
+}
+assignKeytips();
+export const FILE_KT = 'F';
+
+// ───────────── 빠른 실행 도구 모음 (리본 아래, Alt+1 … Alt+9) ─────────────
+export const QAT_CHOICES = [
+  { cmd: 'objAlign', arg: 'c', icon: 'alignCenter', label: '가로 가운데 맞춤' },
+  { cmd: 'objAlign', arg: 'm', icon: 'alignMiddle', label: '세로 가운데 맞춤' },
+  { cmd: 'drawTextbox', icon: 'textbox', label: '텍스트 상자' },
+  { cmd: 'eyedropFill', icon: 'eyedropper', label: '스포이트 (도형 채우기 색)' },
+  { cmd: 'save', icon: 'save', label: '저장' },
+  { cmd: 'undo', icon: 'undo', label: '실행 취소' },
+  { cmd: 'redo', icon: 'redo', label: '다시 실행' },
+  { cmd: 'showFromStart', icon: 'slideshow', label: '처음부터 시작' },
+  { cmd: 'objAlign', arg: 'l', icon: 'alignLeft', label: '왼쪽 맞춤 (개체)' },
+  { cmd: 'objAlign', arg: 'r', icon: 'alignRight', label: '오른쪽 맞춤 (개체)' },
+  { cmd: 'objAlign', arg: 't', icon: 'alignTop', label: '위쪽 맞춤 (개체)' },
+  { cmd: 'objAlign', arg: 'b', icon: 'alignBottom', label: '아래쪽 맞춤 (개체)' },
+  { cmd: 'objAlign', arg: 'dh', icon: 'distributeH', label: '가로 간격을 동일하게' },
+  { cmd: 'objAlign', arg: 'dv', icon: 'distributeV', label: '세로 간격을 동일하게' },
+  { cmd: 'group', icon: 'group', label: '그룹' },
+  { cmd: 'ungroup', icon: 'ungroup', label: '그룹 해제' },
+  { cmd: 'bringToFront', icon: 'bringForward', label: '맨 앞으로 가져오기' },
+  { cmd: 'sendToBack', icon: 'sendBackward', label: '맨 뒤로 보내기' },
+  { cmd: 'eyedropFont', icon: 'fontColor', label: '스포이트 (글꼴 색)' },
+  { cmd: 'eyedropLine', icon: 'shapeOutline', label: '스포이트 (윤곽선 색)' },
+  { cmd: 'formatPainter', icon: 'painter', label: '서식 복사' },
+  { cmd: 'newSlide', icon: 'newSlide', label: '새 슬라이드' },
+  { cmd: 'print', icon: 'print', label: '인쇄' },
+  { cmd: 'open', icon: 'open', label: '열기' },
+];
+const QAT_DEFAULT = { below: true, items: QAT_CHOICES.slice(0, 4).map(({ cmd, arg }) => ({ cmd, arg })) };
+let qatEl = null;
+let qatTopEl = null;
+export function qatConfig() {
+  try {
+    const v = JSON.parse(localStorage.getItem('wipoint:qat') ?? 'null');
+    if (v && Array.isArray(v.items)) return v;
+  } catch { /* 저장소 없음 */ }
+  return structuredClone(QAT_DEFAULT);
+}
+function saveQat(cfg) { try { localStorage.setItem('wipoint:qat', JSON.stringify(cfg)); } catch { /* 저장소 없음 */ } renderQat(); }
+const sameQ = (a, b) => a.cmd === b.cmd && (a.arg ?? null) === (b.arg ?? null);
+export function qatItemInfo(q) {
+  return QAT_CHOICES.find((c) => sameQ(c, q)) ?? (() => { for (const t of TABS) for (const it of leafItems(t)) if (it.cmd === q.cmd && (it.arg ?? null) === (q.arg ?? null)) return { ...q, icon: it.icon, label: it.label ?? it.title, glyph: it.glyph }; return { ...q, icon: 'check', label: q.label ?? q.cmd }; })();
+}
+export function qatAdd(q) { const cfg = qatConfig(); if (!cfg.items.some((x) => sameQ(x, q))) { cfg.items.push({ cmd: q.cmd, arg: q.arg, label: q.label }); saveQat(cfg); } }
+export function qatRemove(i) { const cfg = qatConfig(); cfg.items.splice(i, 1); saveQat(cfg); }
+export function qatMove(i, d) { const cfg = qatConfig(); const j = i + d; if (j < 0 || j >= cfg.items.length) return; [cfg.items[i], cfg.items[j]] = [cfg.items[j], cfg.items[i]]; saveQat(cfg); }
+export function qatSetBelow(below) { const cfg = qatConfig(); cfg.below = below; saveQat(cfg); }
+export function qatReset() { saveQat(structuredClone(QAT_DEFAULT)); }
+/** n번째 (0부터) 빠른 실행 명령 실행 — Alt+1 은 0 */
+export function qatRun(i) { const q = qatConfig().items[i]; if (!q) return false; run(q.cmd, q.arg); return true; }
+/** 키 팁 숫자: 1–9, 그다음 09, 08 … 01 (Office 와 같음) */
+export const qatKeytip = (i) => (i < 9 ? String(i + 1) : `0${Math.max(1, 18 - i)}`);
+
+export function initQat(below, top) { qatEl = below; qatTopEl = top; renderQat(); }
+export function renderQat() {
+  if (!qatEl) return;
+  const cfg = qatConfig();
+  const host = cfg.below ? qatEl : qatTopEl;
+  qatEl.innerHTML = '';
+  qatTopEl.innerHTML = '';
+  qatEl.hidden = !cfg.below;
+  document.getElementById('app')?.classList.toggle('qat-below', !!cfg.below);
+  cfg.items.forEach((q, i) => {
+    const info = qatItemInfo(q);
+    const b = el('button', { class: 'qat-btn', title: `${info.label} (Alt+${i < 9 ? i + 1 : qatKeytip(i)})`, 'data-kt': qatKeytip(i) });
+    b.innerHTML = info.glyph ?? iconHtml(info.icon ?? 'check');
+    b.addEventListener('mousedown', (e) => e.preventDefault());
+    b.addEventListener('click', () => run(q.cmd, q.arg));
+    b.addEventListener('contextmenu', (e) => { e.preventDefault(); openMenu({ x: e.clientX, y: e.clientY }, [
+      { label: '빠른 실행 도구 모음에서 제거', icon: 'delete', action: () => qatRemove(i) },
+      { label: '왼쪽으로 이동', disabled: i === 0, action: () => qatMove(i, -1) },
+      { label: '오른쪽으로 이동', disabled: i === cfg.items.length - 1, action: () => qatMove(i, 1) },
+      { sep: true }, ...qatMenuTail(cfg),
+    ]); });
+    host.append(b);
+  });
+  const more = el('button', { class: 'qat-btn qat-more', title: '빠른 실행 도구 모음 사용자 지정', 'data-icon': 'chevronDown' });
+  more.addEventListener('mousedown', (e) => e.preventDefault());
+  more.addEventListener('click', () => openMenu(more, [
+    { title: '빠른 실행 도구 모음 사용자 지정' },
+    ...QAT_CHOICES.map((c) => ({ label: c.label, checked: cfg.items.some((x) => sameQ(x, c)), action: () => { const idx = cfg.items.findIndex((x) => sameQ(x, c)); if (idx >= 0) qatRemove(idx); else qatAdd(c); } })),
+    { sep: true }, ...qatMenuTail(cfg),
+  ], { scroll: true }));
+  host.append(more);
+  if (cfg.below) qatEl.append(el('span', { class: 'qat-hint' }, 'Alt+숫자로 실행 · 리본 단추를 오른쪽 클릭하면 추가'));
+  hydrateIcons(host);
+}
+function qatMenuTail(cfg) {
+  return [
+    { label: cfg.below ? '리본 위에 표시' : '리본 아래에 표시', action: () => qatSetBelow(!cfg.below) },
+    { label: '기본값으로 되돌리기', action: () => qatReset() },
+  ];
+}
+
 let tabsEl;
 let bodyEl;
 let active = 'home';
@@ -167,27 +317,50 @@ export function renderRibbon() {
   const visible = TABS.filter((t) => !t.context || ctx.includes(t.context));
   if (!visible.some((t) => t.id === active)) active = 'home';
   tabsEl.innerHTML = '';
-  tabsEl.append(el('button', { class: 'ribbon-tab file', onclick: () => run('backstage') }, '파일'));
+  tabsEl.append(el('button', { class: 'ribbon-tab file', 'data-kt': FILE_KT, 'data-kt-level': 'tab', onclick: () => run('backstage') }, '파일'));
   for (const t of visible) {
-    tabsEl.append(el('button', { class: `ribbon-tab${t.id === active ? ' active' : ''}${t.context ? ' ctx' : ''}`, onclick: () => { active = t.id; renderRibbon(); } }, t.label));
+    tabsEl.append(el('button', { class: `ribbon-tab${t.id === active ? ' active' : ''}${t.context ? ' ctx' : ''}`, 'data-kt': t.kt, 'data-kt-level': 'tab', 'data-tab': t.id, onclick: () => { active = t.id; renderRibbon(); } }, t.label));
   }
   tabsEl.append(el('span', { class: 'spacer' }),
-    el('button', { class: 'ribbon-action', onclick: () => run('showFromCurrent'), title: '현재 슬라이드부터 (Shift+F5)' }, el('span', { 'data-icon': 'slideshow' }), '슬라이드 쇼'),
-    el('button', { class: 'ribbon-action primary', onclick: () => run('share') }, el('span', { 'data-icon': 'share' }), '공유'));
+    el('button', { class: 'ribbon-action', 'data-kt': 'ZR', 'data-kt-level': 'tab', onclick: () => run('showFromCurrent'), title: '현재 슬라이드부터 (Shift+F5)' }, el('span', { 'data-icon': 'slideshow' }), el('span', { class: 'ra-l' }, '슬라이드 쇼')),
+    el('button', { class: 'ribbon-action primary', 'data-kt': 'ZS', 'data-kt-level': 'tab', onclick: () => run('share') }, el('span', { 'data-icon': 'share' }), el('span', { class: 'ra-l' }, '공유')));
   const tab = TABS.find((t) => t.id === active);
   bodyEl.innerHTML = '';
   for (const g of tab.groups) {
     const gEl = el('div', { class: 'rgroup' }, el('div', { class: 'rgroup-body' }, g.items.map(renderItem)), el('div', { class: 'rgroup-label' }, g.label));
-    if (g.launcher) gEl.append(el('button', { class: 'rgroup-launcher', title: `${g.label} 설정`, onclick: () => run(g.launcher) }, '⬊'));
+    if (g.launcher) gEl.append(el('button', { class: 'rgroup-launcher', title: `${g.label} 설정`, 'data-kt': g.launchItem?.kt, onclick: () => run(g.launcher) }, '⬊'));
     bodyEl.append(gEl);
   }
   hydrateIcons(tabsEl);
   hydrateIcons(bodyEl);
+  redrawKeytips();
 }
 
 function iconHtml(name) { return name ? `<span data-icon="${name}"></span>` : ''; }
 
+/** 리본 항목 그리기 + 키 팁(data-kt) · 키 팁 동작(ktAction) · 오른쪽 클릭 [빠른 실행 도구 모음에 추가] */
 function renderItem(it) {
+  const node = renderItemRaw(it);
+  if (!node || !it || it.t === 'rows' || it.t === 'col') return node;
+  if (it.kt) node.dataset.kt = it.kt;
+  node.ktAction = () => {
+    if (it.t === 'font' || it.t === 'size' || it.t === 'transTiming' || it.t === 'animTiming' || it.t === 'objSize') { const f = node.querySelector('input,select'); f?.focus(); f?.select?.(); return; }
+    if (it.t === 'gallery') { const m = node.querySelector('.gal-more') ?? node.querySelector('button:not(:disabled)'); if (m) { m.focus(); if (m.classList.contains('gal-more')) m.click(); } return; }
+    if (it.t === 'check') { run(it.cmd, it.arg); return; }
+    if (it.menu) { run(it.menu, node.querySelector('.caret-only') ?? node); return; }
+    run(it.cmd, it.arg);
+  };
+  if (it.cmd && it.t !== 'gallery') {
+    node.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      const label = it.label ?? it.title ?? it.cmd;
+      openMenu({ x: e.clientX, y: e.clientY }, [{ label: '빠른 실행 도구 모음에 추가', icon: 'plus', action: () => qatAdd({ cmd: it.cmd, arg: it.arg, label: label.replace(/\s*\(.*\)$/, '') }) }]);
+    });
+  }
+  return node;
+}
+
+function renderItemRaw(it) {
   if (!it) return null;
   if (it.t === 'rows') return el('div', { class: 'rcol' }, it.rows.map((r) => el('div', { class: 'rrow' }, r.map(renderItem))));
   if (it.t === 'col') return el('div', { class: 'rcol' }, it.items.map(renderItem));
@@ -221,7 +394,7 @@ function renderItem(it) {
 
 function fontBox(kind) {
   const val = kind === 'font' ? state.font : state.size;
-  const list = kind === 'font' ? FONTS : SIZES;
+  const list = kind === 'font' ? [...new Set([...(S.pres.fonts ?? []).map((f) => f.typeface), ...FONTS])] : SIZES;
   const id = `dl-${kind}`;
   const shown = kind === 'font' ? (val === '+mj' ? `${S.pres.theme.fonts.major} (제목)` : val === '+mn' ? `${S.pres.theme.fonts.minor} (본문)` : val ?? '') : val == null ? '' : String(val);
   const inp = el('input', { class: `rselect ${kind === 'font' ? 'font-family' : 'font-size'}`, value: shown, list: id, title: kind === 'font' ? '글꼴' : '글꼴 크기', spellcheck: 'false' });

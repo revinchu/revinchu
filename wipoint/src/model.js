@@ -493,12 +493,13 @@ export const TRANSITION_LABEL = Object.fromEntries(TRANSITIONS);
 
 // ───────────── 실행 취소 ─────────────
 /** 문서 상태(미디어 제외) 직렬화 — 미디어는 추가만 되므로 따로 둠 */
-export const snapshot = (pres) => JSON.stringify({ ...pres, media: undefined });
+/** 실행 취소 · 자동 저장용 문서 글 (그림 · 포함된 글꼴은 커서 따로 보관) */
+export const snapshot = (pres) => JSON.stringify({ ...pres, media: undefined, fonts: undefined });
 export function restore(pres, snap) {
-  const media = pres.media;
+  const { media, fonts } = pres;
   const data = JSON.parse(snap);
   for (const k of Object.keys(pres)) delete pres[k];
-  Object.assign(pres, data, { media });
+  Object.assign(pres, data, { media }, fonts ? { fonts } : {});
 }
 
 export class History {
