@@ -133,12 +133,57 @@ export const LAYOUTS = [
   ['comparison', '비교'], ['titleOnly', '제목만'], ['blank', '빈 화면'], ['contentCaption', '캡션 있는 콘텐츠'], ['pictureCaption', '캡션 있는 그림'],
 ];
 export const LAYOUT_LABEL = Object.fromEntries(LAYOUTS);
+/** 사용자 지정 레이아웃 키 (pres.customLayouts = [{ key: 'cust:…', name }], 개체는 pres.masters[key]) */
+export const isCustomLayout = (k) => typeof k === 'string' && k.startsWith('cust:');
+/** 레이아웃 목록 [키, 이름] — 기본 9종 + 사용자 지정 */
+export const layoutList = (pres) => [...LAYOUTS.map(([k, l]) => [k, pres?.masters?.[k]?.name ?? l]), ...(pres?.customLayouts ?? []).map((c) => [c.key, c.name])];
+export const layoutName = (pres, k) => layoutList(pres).find(([x]) => x === k)?.[1] ?? LAYOUT_LABEL[k] ?? '사용자 지정 레이아웃';
+/** 사용자 지정 레이아웃 추가 (PowerPoint [레이아웃 삽입]: 제목 개체 틀 하나) */
+export function addCustomLayout(pres, name = '사용자 지정 레이아웃', objects = null) {
+  const key = `cust:${uid('l')}`;
+  pres.customLayouts = [...(pres.customLayouts ?? []), { key, name }];
+  pres.masters ??= {};
+  pres.masters[key] = { id: `master-${key}`, layout: key, master: key, name, bg: null, objects: objects ?? layoutPlaceholders('titleOnly', pres.size).map((o) => ({ ...o, phLayout: key })), anims: [] };
+  return key;
+}
+export function removeCustomLayout(pres, key) {
+  pres.customLayouts = (pres.customLayouts ?? []).filter((c) => c.key !== key);
+  delete pres.masters?.[key];
+  // 그 레이아웃을 쓰던 슬라이드는 '제목 및 내용' 으로 (개체는 그대로)
+  for (const s of pres.slides) if (s.layout === key) s.layout = 'titleContent';
+}
+/** 슬라이드에 넣을 빈 개체 틀: 사용자 지정 레이아웃은 그 레이아웃 마스터의 개체 틀을 복사 (서식은 남기고 글은 비움) */
+export function slidePlaceholders(pres, layout) {
+  const m = isCustomLayout(layout) ? pres.masters?.[layout] : null;
+  if (!m) return layoutPlaceholders(isCustomLayout(layout) ? 'titleOnly' : layout, pres.size);
+  return m.objects.filter((o) => o.ph).map((o) => {
+    const c = clone(o);
+    c.id = uid();
+    c.phLayout = layout;
+    delete c.grp;
+    if (c.type === 'image') { c.media = null; return c; }
+    if (c.text) {
+      const p0 = c.text.paras[0] ?? para('');
+      const r0 = p0.runs[0];
+      const fmt = r0 ? Object.fromEntries(Object.entries(r0).filter(([k]) => k !== 't')) : p0.end;
+      c.text.paras = [{ ...p0, runs: [], ...(fmt && Object.keys(fmt).length ? { end: fmt } : {}) }];
+    }
+    return c;
+  });
+}
 
 const PH_TEXT = {
   ctrTitle: '제목을 입력하십시오', title: '제목을 입력하십시오', subTitle: '부제목을 입력하십시오',
   body: '텍스트를 입력하십시오', pic: '그림을 추가하려면 아이콘을 클릭하십시오',
 };
-export const placeholderPrompt = (o) => o.prompt ?? PH_TEXT[o.ph] ?? PH_TEXT.body;
+/** 개체 틀 삽입 종류 (PowerPoint [슬라이드 마스터 › 개체 틀 삽입]) — phFor 는 pptx 개체 틀 종류 */
+export const PH_INSERT = [
+  ['obj', '콘텐츠', null, '텍스트를 입력하십시오'], ['text', '텍스트', null, '텍스트를 입력하십시오'], ['pic', '그림', 'pic', '그림을 추가하려면 아이콘을 클릭하십시오'],
+  ['chart', '차트', 'chart', '차트를 추가하려면 아이콘을 클릭하십시오'], ['tbl', '표', 'tbl', '표를 추가하려면 아이콘을 클릭하십시오'],
+  ['dgm', 'SmartArt', 'dgm', 'SmartArt 그래픽을 추가하려면 아이콘을 클릭하십시오'], ['media', '미디어', 'media', '미디어를 추가하려면 아이콘을 클릭하십시오'],
+];
+const PH_FOR_TEXT = Object.fromEntries(PH_INSERT.filter((x) => x[2] && x[2] !== 'pic').map((x) => [x[2], x[3]]));
+export const placeholderPrompt = (o) => o.prompt ?? PH_FOR_TEXT[o.phFor] ?? PH_TEXT[o.ph] ?? PH_TEXT.body;
 
 /** 레이아웃의 개체 틀 정의: [ph, x, y, w, h, 글 기본값] */
 function layoutBoxes(layout) {
@@ -163,6 +208,7 @@ export function defaultSize(o, lvl = 0) {
   if (o.ph === 'ctrTitle') return 54;
   if (o.ph === 'title') return k.small ? 32 : (o.phLayout === 'section' ? 54 : 40);
   if (o.ph === 'subTitle') return 24;
+  if (o.phFor) return 16;
   if (o.ph === 'body' || o.ph === 'obj') {
     if (k.sub) return 24;
     if (k.head) return 24;
@@ -179,6 +225,9 @@ export function defaultSize(o, lvl = 0) {
 // 마스터의 제목 · 본문 개체 틀 첫 글자 서식(글꼴 · 색 · 제목 크기)은 모든 슬라이드의 기본 서식이 됨.
 export function masterSlide(pres, key) {
   pres.masters ??= {};
+  if (!pres.masters[key] && isCustomLayout(key)) {
+    pres.masters[key] = { id: `master-${key}`, layout: key, master: key, name: (pres.customLayouts ?? []).find((c) => c.key === key)?.name ?? '사용자 지정 레이아웃', bg: null, objects: layoutPlaceholders('titleOnly', pres.size), anims: [] };
+  }
   if (!pres.masters[key]) {
     const kind = key === 'master' ? 'titleContent' : key;
     const objects = layoutPlaceholders(kind, pres.size);
@@ -243,7 +292,11 @@ export function layoutPlaceholders(layout, size) {
 
 // ───────────── 슬라이드 · 문서 ─────────────
 export function newSlide(pres, layout = 'titleContent') {
-  return { id: uid('s'), layout, bg: null, hidden: false, transition: null, notes: '', objects: layoutPlaceholders(layout, pres.size), anims: [] };
+  const s = { id: uid('s'), layout, bg: null, hidden: false, transition: null, notes: '', objects: slidePlaceholders(pres, layout), anims: [] };
+  // 다른 프로그램에서 가져온 사용자 지정 레이아웃은 그 배경 장식을 함께
+  const cl = isCustomLayout(layout) ? (pres.customLayouts ?? []).find((c) => c.key === layout) : null;
+  if (cl?.bgObjects) s.bgObjects = clone(cl.bgObjects);
+  return s;
 }
 
 export function newPresentation({ theme = 'office', size = 'wide', firstLayout = 'title' } = {}) {
@@ -292,7 +345,7 @@ export function cloneObjects(objs, dx = 0, dy = 0) {
 
 /** 레이아웃 바꾸기: 같은 종류의 개체 틀은 내용을 옮기고 위치만 새 레이아웃으로 */
 export function changeLayout(pres, slide, layout) {
-  const fresh = layoutPlaceholders(layout, pres.size);
+  const fresh = slidePlaceholders(pres, layout);
   const old = slide.objects.filter((o) => o.ph);
   const rest = slide.objects.filter((o) => !o.ph);
   const used = new Set();
@@ -319,7 +372,7 @@ export function changeLayout(pres, slide, layout) {
 
 /** 레이아웃 다시 설정: 개체 틀 위치 · 크기를 레이아웃 기본으로 */
 export function resetSlideLayout(pres, slide) {
-  const fresh = layoutPlaceholders(slide.layout, pres.size);
+  const fresh = slidePlaceholders(pres, slide.layout);
   const byPh = new Map();
   for (const f of fresh) { const k = f.ph === 'ctrTitle' ? 'title' : f.ph; if (!byPh.has(k)) byPh.set(k, []); byPh.get(k).push(f); }
   for (const o of slide.objects) {

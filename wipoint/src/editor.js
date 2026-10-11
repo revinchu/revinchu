@@ -379,6 +379,12 @@ function onPointerDown(e) {
   }
   // 그림 개체 틀의 아이콘 → 그림 넣기
   if (o.type === 'image' && (o.ph === 'pic' || o.picSlot) && !o.media) { S.sel = new Set([o.id]); emit('selection'); run('insertPicture', { into: o.id }); return; }
+  // 차트 · 표 · SmartArt · 미디어 개체 틀 (사용자 지정 레이아웃): 비어 있으면 그 개체 넣기 (마스터 보기 제외)
+  if (o.phFor && !S.masterKey && !o.text?.paras.some((pp) => pp.runs.some((r) => r.t))) {
+    S.sel = new Set([o.id]); emit('selection');
+    run({ chart: 'insertChartDialog', tbl: 'insertTableDialog', dgm: 'insertSmartArt', media: 'insertVideo' }[o.phFor]);
+    return;
+  }
   const additive = e.shiftKey || e.ctrlKey;
   const ids = selectionFor(o, additive);
   if (additive) {

@@ -2,7 +2,7 @@
 import { S, curSlide, selObjects, selOne, objById, change, emit, register, run, goSlide, refresh } from './state.js';
 import {
   newSlide, nextLayout, duplicateSlide, changeLayout, resetSlideLayout, cloneObjects, newTable, newChart, newImage, newTextBox, newShape,
-  applyRunProps, applyParaProps, commonRunProp, alignObjects, reorder, groupMembers, uid, LAYOUTS,
+  applyRunProps, applyParaProps, commonRunProp, alignObjects, reorder, groupMembers, uid, LAYOUTS, layoutList, layoutName, isCustomLayout, addCustomLayout, removeCustomLayout, PH_INSERT, layoutPlaceholders, masterSlide,
   resizePresentation, addAnim, animSteps, ANIM_EFFECTS, ANIM_CLASS_LABEL, MOTION_PATHS, motionPoints, findAll, replaceAll, replaceInPara, setPlainText, plainText, slideTitle, defaultSize, isEmptyText, para, outline,
   replaceFonts,
 } from './model.js';
@@ -498,17 +498,65 @@ function addSlide(layout) {
 function pickedSlides() { const l = S.pres.slides.filter((s) => S.slideSel.has(s.id)); return l.length ? l : [slide()]; }
 
 function layoutPicker(anchor, onPick) {
-  const grid = el('div', { class: 'layout-grid' }, LAYOUTS.map(([k, l]) => {
+  const item = ([k, l]) => {
     const p = { ...S.pres, slides: [] };
     const s = newSlide(S.pres, k);
     for (const o of s.objects) if (o.text) o.text.paras[0].runs = [];
     const sc = 120 / S.pres.size.w;
-    const b = el('button', { class: 'layout-item', title: l, onclick: () => { closeMenus(); onPick(k); } },
+    return el('button', { class: 'layout-item', title: l, onclick: () => { closeMenus(); onPick(k); } },
       el('div', { class: 'tw', style: { width: '120px', height: `${S.pres.size.h * sc}px` }, html: `<div class="tw-in" style="transform:scale(${sc})">${slideHtml(p, s, { prompt: true })}</div>` }),
       el('span', {}, l));
-    return b;
-  }));
-  return openMenu(anchor, [{ title: 'Office 테마' }, { node: grid }], { minWidth: 420 });
+  };
+  const all = layoutList(S.pres);
+  const std = all.filter(([k]) => !isCustomLayout(k));
+  const cust = all.filter(([k]) => isCustomLayout(k));
+  // PowerPoint 와 같이 기본 레이아웃 뒤에 사용자 지정 레이아웃
+  return openMenu(anchor, [{ title: 'Office 테마' }, { node: el('div', { class: 'layout-grid' }, std.map(item)) }, ...(cust.length ? [{ title: '사용자 지정' }, { node: el('div', { class: 'layout-grid' }, cust.map(item)) }] : [])], { minWidth: 420, scroll: cust.length > 0 });
+}
+
+/** 슬라이드 마스터 보기: 레이아웃 삽입 · 삭제 · 개체 틀 삽입 · 제목/바닥글 표시 */
+function masterInsertLayout() {
+  let key;
+  change(() => { key = addCustomLayout(S.pres, '사용자 지정 레이아웃'); }, { scope: 'all' });
+  run('masterPick', key);
+  toast('사용자 지정 레이아웃을 넣었습니다 — [개체 틀 삽입]으로 자리를 만드세요');
+}
+function masterDeleteLayout() {
+  const key = S.masterKey;
+  if (!key || key === 'master') { toast('지울 레이아웃을 고르세요'); return; }
+  if (!isCustomLayout(key)) { toast('기본 레이아웃은 지울 수 없습니다 (사용자 지정 레이아웃만 지울 수 있습니다)'); return; }
+  const used = S.pres.slides.filter((s) => s.layout === key).length;
+  const go = () => { change(() => removeCustomLayout(S.pres, key), { scope: 'all' }); run('masterPick', 'master'); };
+  if (used) openDialog({ title: '레이아웃 삭제', body: el('p', {}, `슬라이드 ${used}장이 이 레이아웃을 쓰고 있습니다. 지우면 그 슬라이드는 '제목 및 내용' 레이아웃이 됩니다 (내용은 그대로).`), buttons: [{ label: '삭제', primary: true, action: go }, { label: '취소' }] });
+  else go();
+}
+/** 개체 틀 삽입: 끌어서 그리기 대신 가운데에 놓고 선택 (PowerPoint 는 끌어서 그림 — 놓은 뒤 옮기거나 크기 조정) */
+function masterInsertPh(kind) {
+  const m = curSlide();
+  if (!S.masterKey || S.masterKey === 'master') { toast('레이아웃을 고르세요 (마스터 아래 목록) — 개체 틀은 레이아웃에 넣습니다'); return; }
+  const def = PH_INSERT.find((x) => x[0] === kind) ?? PH_INSERT[0];
+  const { w: W, h: H } = S.pres.size;
+  const n = m.objects.filter((o) => o.ph).length;
+  const rect = { x: W * 0.3 + n * 16, y: H * 0.3 + n * 16, w: W * 0.4, h: H * 0.4 };
+  let o;
+  if (kind === 'pic') {
+    o = { ...layoutPlaceholders('pictureCaption', S.pres.size).find((x) => x.ph === 'pic'), ...rect, id: uid(), phLayout: S.masterKey };
+  } else {
+    o = { ...layoutPlaceholders('titleContent', S.pres.size).find((x) => x.ph === 'body'), ...rect, id: uid(), phLayout: S.masterKey };
+    if (def[2]) { o.phFor = def[2]; o.text.paras[0].bullet = null; o.text.anchor = 'ctr'; o.text.paras[0].align = 'ctr'; }
+    if (kind === 'text') o.text.paras[0].runs = [{ t: '마스터 텍스트 스타일을 편집합니다' }];
+  }
+  change(() => { m.objects.push(o); }, { scope: 'all' });
+  S.sel = new Set([o.id]);
+  emit('selection');
+}
+function masterToggle(what) {
+  const m = curSlide();
+  if (!S.masterKey || S.masterKey === 'master') { toast('레이아웃을 고르세요'); return; }
+  if (what === 'title') {
+    const t = m.objects.find((o) => o.ph === 'title' || o.ph === 'ctrTitle');
+    change(() => { if (t) m.objects = m.objects.filter((o) => o !== t); else m.objects.unshift({ ...layoutPlaceholders('titleOnly', S.pres.size)[0], id: uid(), phLayout: S.masterKey }); }, { scope: 'all' });
+  } else change(() => { m.noFooter = !m.noFooter || undefined; }, { scope: 'all' });
 }
 
 // ───────────── 메뉴 도우미 ─────────────
@@ -545,11 +593,17 @@ function tableGrid(anchor) {
   });
   return openMenu(anchor, [{ node: label }, { node: grid }, { sep: true }, { label: '표 삽입...', icon: 'table', action: () => formDialog('표 삽입', [{ name: 'c', label: '열 개수', type: 'number', value: '5' }, { name: 'r', label: '행 개수', type: 'number', value: '2' }], (v) => insertTable(Math.max(1, Math.min(75, Number(v.r))), Math.max(1, Math.min(75, Number(v.c))))) }]);
 }
+/** 새 표 · 차트 등을 넣을 빈 개체 틀: 선택한 것 → 그 종류(phFor) → 빈 본문 */
+function targetPh(kind) {
+  const empty = (o) => o.ph === 'body' && isEmptyText(o.text);
+  const objs = slide().objects;
+  return objs.find((o) => empty(o) && S.sel.has(o.id)) ?? objs.find((o) => empty(o) && o.phFor === kind) ?? objs.find((o) => empty(o) && !o.phFor);
+}
 function insertTable(rows, cols) {
   const { w: W, h: H } = S.pres.size;
   const w = Math.min(W * 0.8, cols * 160);
   const t = newTable(rows, cols, { x: (W - w) / 2, y: H * 0.28, w, h: rows * 40 });
-  const ph = slide().objects.find((o) => o.ph === 'body' && isEmptyText(o.text));
+  const ph = targetPh('tbl');
   if (ph) { t.x = ph.x; t.y = ph.y; t.cols = t.cols.map(() => ph.w / cols); t.w = ph.w; }
   change(() => { if (ph) slide().objects = slide().objects.filter((o) => o !== ph); slide().objects.push(t); });
   S.sel = new Set([t.id]);
@@ -560,7 +614,7 @@ const CHART_ICON = { col: 'chartColumn', bar: 'chartBar', line: 'chartLine', are
 const withChart = (fn) => { const o = selChart(); if (!o) { toast('차트를 선택하세요'); return; } fn(o); };
 function insertChart(kind, sub, preset) {
   const { w: W, h: H } = S.pres.size;
-  const ph = slide().objects.find((o) => o.ph === 'body' && isEmptyText(o.text));
+  const ph = targetPh('chart');
   const rect = ph ? { x: ph.x, y: ph.y, w: ph.w, h: ph.h } : { x: W * 0.15, y: H * 0.2, w: W * 0.7, h: H * 0.65 };
   const c = newChart(rect, preset ?? sampleChart(kind, sub));
   change(() => { if (ph) slide().objects = slide().objects.filter((o) => o !== ph); slide().objects.push(c); });
@@ -1645,8 +1699,11 @@ const SHORTCUTS = [
   ['쇼: Ctrl+H / Ctrl+U', '포인터 숨기기 / 보이기'], ['쇼: G 또는 Ctrl+S', '모든 슬라이드 목록'], ['쇼: Home / End / Esc (−)', '첫 / 마지막 슬라이드 / 쇼 마치기'],
 ];
 
-export const APP_VERSION = '1.5';
+export const APP_VERSION = '1.6';
 const WHATS_NEW = [
+  '1.6 — 그림 꾸밈 효과 22종 (표식, 연필 스케치, 선 그리기, 분필, 수채화, 유리, 모자이크, 광채 가장자리 …, 선택한 그림으로 미리 보기 · 강도 조절) · 그림 압축 (330/220/150/96ppi, 잘린 영역 삭제)',
+  '1.6 — 쇼 녹화: 슬라이드마다 내레이션(마이크) · 카메라 · 타이밍 · 잉크를 기록하고 재생, 녹화 지우기, 동영상 내보내기에 내레이션 포함 · 실시간 자막 (음성 인식, 언어 · 위치 · 크기, J 키)',
+  '1.6 — 사용자 지정 레이아웃: 슬라이드 마스터에서 레이아웃 삽입 · 삭제 · 이름 바꾸기, 개체 틀 삽입 (콘텐츠 · 텍스트 · 그림 · 차트 · 표 · SmartArt · 미디어), 제목 · 바닥글 표시, 새 슬라이드 갤러리, pptx 왕복 (다른 프로그램의 사용자 지정 레이아웃도 읽기)',
   '1.5 — 전환 효과 51종 (은은한 효과 · 화려한 효과 · 동적 콘텐츠: 커튼, 바람, 균열, 구기기, 페이지 말아 넘기기, 비행기, 종이접기, 벌집, 소용돌이, 큐브, 문, 갤러리, 관람차 …) · [자세히 ▾] 전체 갤러리, 편집 화면 미리 보기도 같은 엔진',
   '1.5 — 애니메이션: 나타내기 38 · 강조 20 · 끝내기 38 · 이동 경로 22종 (블라인드, 바둑판, 다이아몬드, 회전, 바람개비, 부메랑, 나선형, 채도 낮추기, 투명, 물결, 하트 · 별 · 8자 경로 …), pptx p14/p15 형식으로 저장 · 읽기',
   '1.5 — 도형 병합 (통합 · 결합 · 조각 · 교차 · 빼기) · SmartArt 47종 (8개 범주, 수준 들여쓰기, 색 변경 · 스타일, 그림 자리) · 폭포 · 깔때기 · 히스토그램/파레토 · 상자 수염 · 트리맵 · 선버스트 차트',
@@ -1968,6 +2025,7 @@ register({
   // 삽입
   tableMenu: (a) => tableGrid(a),
   insertTable: (r, c) => insertTable(r, c),
+  insertTableDialog: () => formDialog('표 삽입', [{ name: 'c', label: '열 개수', type: 'number', value: '5' }, { name: 'r', label: '행 개수', type: 'number', value: '2' }], (v) => insertTable(Math.max(1, Math.min(75, Number(v.r))), Math.max(1, Math.min(75, Number(v.c))))),
   insertVideo: () => insertMedia('video').catch((e) => alertDialog('비디오', e.message)),
   insertAudio: () => insertMedia('audio').catch((e) => alertDialog('오디오', e.message)),
   mediaOptions: () => mediaOptions(),
@@ -2243,8 +2301,14 @@ register({
   viewMaster: () => { if (S.editing) endEdit(); S.masterKey = 'master'; S.view = 'normal'; S.sel = new Set(); refresh('all'); refresh('view'); setRibbonTab('slideMaster'); },
   closeMaster: () => { if (S.editing) endEdit(); S.masterKey = null; S.sel = new Set(); refresh('all'); refresh('view'); setRibbonTab('view'); },
   masterPick: (key) => { if (S.editing) endEdit(); S.masterKey = key; S.sel = new Set(); refresh('all'); },
-  masterRename: () => { const m = curSlide(); if (!S.masterKey || !m) return; formDialog('레이아웃 이름 바꾸기', [{ name: 'n', label: '이름', value: m.name ?? (LAYOUTS.find(([k]) => k === m.layout)?.[1] ?? '슬라이드 마스터') }], (v) => change(() => { m.name = v.n || undefined; }, { scope: 'all' })); },
-  masterReset: () => { if (!S.masterKey) return; change(() => { delete S.pres.masters[S.masterKey]; }, { scope: 'all' }); S.sel = new Set(); },
+  masterRename: () => { const m = curSlide(); if (!S.masterKey || !m) return; const key = S.masterKey; formDialog('레이아웃 이름 바꾸기', [{ name: 'n', label: '레이아웃 이름', value: m.name ?? (key === 'master' ? '슬라이드 마스터' : layoutName(S.pres, key)) }], (v) => change(() => { m.name = v.n || undefined; const c = (S.pres.customLayouts ?? []).find((x) => x.key === key); if (c && v.n) c.name = v.n; }, { scope: 'all' })); },
+  masterInsertLayout: () => masterInsertLayout(),
+  masterDeleteLayout: () => masterDeleteLayout(),
+  masterInsertPhMenu: (a) => menuAt(a, PH_INSERT.map(([k, l]) => ({ label: l, action: () => masterInsertPh(k) }))),
+  masterInsertPh: (k) => masterInsertPh(k ?? 'obj'),
+  masterToggleTitle: () => masterToggle('title'),
+  masterToggleFooter: () => masterToggle('footer'),
+  masterReset: () => { if (!S.masterKey) return; const key = S.masterKey; change(() => { delete S.pres.masters[key]; if (isCustomLayout(key)) masterSlide(S.pres, key); }, { scope: 'all' }); S.sel = new Set(); },
   masterHideGraphics: () => { const m = curSlide(); if (!S.masterKey || S.masterKey === 'master') { toast('레이아웃을 고르세요 (마스터 아래 목록)'); return; } change(() => { m.hideMaster = !m.hideMaster; }, { scope: 'all' }); },
   viewNormal: () => { S.view = 'normal'; if (S.masterKey) { S.masterKey = null; S.sel = new Set(); refresh('all'); } refresh('view'); },
   viewSorter: () => { if (S.editing) endEdit(); S.view = 'sorter'; refresh('view'); },
@@ -2613,7 +2677,7 @@ function ribbonState() {
     bullets: p?.bullet?.type === 'char', numbering: p?.bullet?.type === 'num',
     al: p?.align === 'l' || (!p?.align && !!p), ac: p?.align === 'ctr', ar: p?.align === 'r', aj: p?.align === 'just',
     painter: !!S.painter, cmPane: S.formatPane === 'comments', animPane: S.formatPane === 'anim', selPane: S.formatPane === 'selection', hidden: !!slide()?.hidden,
-    mobile: isMobile(), hand: !!S.handTool, collabOn: !!collab.room, vMaster: !!S.masterKey, narration: !S.pres.show?.noNarration, useTimings: S.pres.show?.useTimings !== false, captions: captionSettings().on, masterHide: !!(S.masterKey && curSlide()?.hideMaster), vNormal: S.view === 'normal' && !S.masterKey, vOutline: S.view === 'outline', vSorter: S.view === 'sorter', notes: S.showNotes, grid: S.showGrid, guides: S.showGuides, ruler: S.showRuler,
+    mobile: isMobile(), hand: !!S.handTool, collabOn: !!collab.room, vMaster: !!S.masterKey, mTitle: !!(S.masterKey && S.masterKey !== 'master' && curSlide()?.objects.some((o) => o.ph === 'title' || o.ph === 'ctrTitle')), mFooter: !!(S.masterKey && S.masterKey !== 'master' && !curSlide()?.noFooter), narration: !S.pres.show?.noNarration, useTimings: S.pres.show?.useTimings !== false, captions: captionSettings().on, masterHide: !!(S.masterKey && curSlide()?.hideMaster), vNormal: S.view === 'normal' && !S.masterKey, vOutline: S.view === 'outline', vSorter: S.view === 'sorter', notes: S.showNotes, grid: S.showGrid, guides: S.showGuides, ruler: S.showRuler,
     tFirstRow: !!st.firstRow, tLastRow: !!st.lastRow, tBanded: !!st.banded, tFirstCol: !!st.firstCol, tLastCol: !!st.lastCol,
     bars: { font: resolveColor(S.pres.theme, lastColor.font), hl: resolveColor(S.pres.theme, lastColor.hl), fill: resolveColor(S.pres.theme, lastColor.fill), line: resolveColor(S.pres.theme, lastColor.line), cell: resolveColor(S.pres.theme, lastColor.cell) },
     curColor: color,

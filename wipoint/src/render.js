@@ -376,6 +376,8 @@ function footerHtml(pres, slide, index, opts) {
   const ft = pres.footer ?? {};
   if (!ft.slideNum && !ft.date && !ft.text) return '';
   if (ft.hideOnTitle && slide.layout === 'title') return '';
+  // 레이아웃에서 [바닥글] 을 끈 경우 (슬라이드 마스터 › 마스터 레이아웃)
+  if (pres.masters?.[slide.master ?? slide.layout]?.noFooter) return '';
   const theme = pres.theme;
   const color = resolveColor(theme, '@tx1:lm50:lo50');
   const W = pres.size.w;

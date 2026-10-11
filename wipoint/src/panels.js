@@ -1,7 +1,7 @@
 // 슬라이드 미리 보기 창 · 메모 · 상태 표시줄 · 여러 슬라이드 보기 · 오른쪽 작업 창(서식/애니메이션/선택)
 import { S, curSlide, selObjects, change, emit, on, run, goSlide } from './state.js';
 import { slideHtml, DASH_LABEL } from './render.js';
-import { ANIM_EFFECTS, ANIM_CLASS_LABEL, TRANSITION_LABEL, plainText, outlineRows, applyOutline, masterSlide, LAYOUTS } from './model.js';
+import { ANIM_EFFECTS, ANIM_CLASS_LABEL, TRANSITION_LABEL, plainText, outlineRows, applyOutline, masterSlide, layoutList, layoutName } from './model.js';
 import { SHAPE_LABEL, objLabel } from './shapes.js';
 import { el, openMenu } from './ui.js';
 import { colorButton } from './colorpick.js';
@@ -180,12 +180,13 @@ function olKey(e) {
 // ───────────── 슬라이드 마스터 보기: 마스터 + 레이아웃 목록 ─────────────
 function renderMasterList() {
   thumbsEl.innerHTML = '';
-  const keys = ['master', ...LAYOUTS.map(([k]) => k)];
+  const keys = ['master', ...layoutList(S.pres).map(([k]) => k)];
   keys.forEach((key, i) => {
     const m = masterSlide(S.pres, key);
-    const name = m.name ?? (key === 'master' ? '슬라이드 마스터' : LAYOUTS.find(([k]) => k === key)?.[1]);
+    const name = m.name ?? (key === 'master' ? '슬라이드 마스터' : layoutName(S.pres, key));
+    const used = key === 'master' ? '' : S.pres.slides.map((s, n) => (s.layout === key ? n + 1 : 0)).filter(Boolean);
     const w = key === 'master' ? THUMB_W : THUMB_W - 30;
-    const t = el('div', { class: `thumb master-thumb${key === 'master' ? ' is-master' : ''}${S.masterKey === key ? ' active' : ''}`, title: name },
+    const t = el('div', { class: `thumb master-thumb${key === 'master' ? ' is-master' : ''}${S.masterKey === key ? ' active' : ''}`, title: key === 'master' ? name : `${name}: ${used.length ? `슬라이드 ${used.join(', ')}에서 사용` : '어떤 슬라이드에서도 사용되지 않음'}` },
       el('div', { class: 'tnum' }, el('span', {}, key === 'master' ? '1' : '')),
       el('div', { class: 'tbox', html: thumbHtml(m, i, w) }),
       el('div', { class: 'mname' }, name));

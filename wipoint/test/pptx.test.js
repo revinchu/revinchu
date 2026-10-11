@@ -461,3 +461,39 @@ test('꾸밈 효과: 원본 그림과 효과가 pptx 왕복, PowerPoint a14:imgE
   const o2 = readPptx(zip(files)).pres.slides[0].objects.find((y) => y.type === 'image');
   assert.equal(o2.art.effect, 'glowEdges');
 });
+
+test('사용자 지정 레이아웃: 만들기 · 새 슬라이드 · pptx type="cust" 왕복 · 다른 프로그램 파일', async () => {
+  const { addCustomLayout, layoutList, PH_INSERT } = await import('../src/model.js');
+  const p = newPresentation();
+  const key = addCustomLayout(p, '제품 소개');
+  const m = p.masters[key];
+  m.objects.push({ ...m.objects[0], id: 'chartPh', ph: 'body', phFor: 'chart', x: 100, y: 200, w: 500, h: 300, text: { ...m.objects[0].text, paras: [para('')] } });
+  m.objects.push({ id: 'deco', type: 'shape', shape: 'rect', x: 0, y: 700, w: 1280, h: 20, rot: 0, fill: { type: 'solid', color: '#FF0000' }, line: null });
+  assert.ok(layoutList(p).some(([k, l]) => k === key && l === '제품 소개'));
+  assert.ok(PH_INSERT.length >= 7);
+  const s = newSlide(p, key);
+  assert.equal(s.objects.length, 2);
+  assert.equal(s.objects.find((o) => o.phFor === 'chart').x, 100);
+  p.slides.push(s);
+  const bytes = writePptx(p);
+  const files = unzip(bytes);
+  const lay = Object.entries(files).filter(([k]) => /slideLayouts\/slideLayout\d+\.xml$/.test(k)).map(([, v]) => textOf(v)).find((x) => x.includes('제품 소개'));
+  assert.match(lay, /type="cust"/);
+  assert.match(lay, /<p:ph type="chart" idx="41"\/>/);
+  // 우리 파일: 그대로
+  const back = readPptx(bytes).pres;
+  assert.equal(back.customLayouts[0].name, '제품 소개');
+  assert.equal(back.slides[1].layout, key);
+  assert.ok(back.masters[key].objects.some((o) => o.phFor === 'chart'));
+  // 확장 정보 없이 (PowerPoint 파일처럼): type="cust" 레이아웃이 사용자 지정 레이아웃으로
+  const f2 = { ...files };
+  for (const k of Object.keys(f2)) if (/\.xml$/.test(k)) f2[k] = new TextEncoder().encode(textOf(f2[k]).replace(/<p:ext uri="\{6F1B2D57[^]*?<\/p:ext>/g, ''));
+  const ext = readPptx(zip(f2)).pres;
+  const cl = ext.customLayouts?.find((c) => c.name === '제품 소개');
+  assert.ok(cl, '사용자 지정 레이아웃을 읽어야 함');
+  assert.equal(ext.slides[1].layout, cl.key);
+  assert.ok(ext.masters[cl.key].objects.some((o) => o.phFor === 'chart'));
+  const ns = newSlide(ext, cl.key);
+  assert.ok(ns.objects.some((o) => o.phFor === 'chart'));
+  assert.ok(ns.bgObjects?.length >= 1);
+});
