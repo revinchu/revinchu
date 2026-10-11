@@ -189,10 +189,11 @@ test('차트: 눈금 · SVG · 표 데이터 왕복', () => {
   assert.deepEqual(back.series.map((s) => s.vals), [[1000, 20], [5, 0]]);
 });
 
-test('SmartArt 9종은 한 그룹의 도형들', () => {
+test('SmartArt 레이아웃 (40여 종) 은 한 그룹의 도형들 · 하위 항목 · 스타일', () => {
+  assert.ok(SMART_KINDS.length >= 40);
   for (const [k] of SMART_KINDS) {
-    const objs = smartArt(k, ['가', '나', '다'], { x: 0, y: 0, w: 800, h: 400 });
-    assert.ok(objs.length >= 3, k);
+    const objs = smartArt(k, ['가', '\t가1', '나', '다', '\t다1'], { x: 0, y: 0, w: 800, h: 400 }, { style: 'intense', colors: 'gradient1' });
+    assert.ok(objs.length >= 2, k);
     assert.equal(new Set(objs.map((o) => o.grp)).size, 1, k);
     for (const o of objs) assert.ok(Number.isFinite(o.x + o.y + o.w + o.h), k);
   }
@@ -509,4 +510,24 @@ test('스톡 이미지: Openverse · Wikimedia 응답 정리', async () => {
   assert.equal(wm.length, 1);
   assert.equal(wm[0].creator, 'Lee');
   assert.equal(wm[0].full[0], 'https://u/thumb/2048px-Seoul.jpg');
+});
+
+test('도형 병합: 통합 · 교차 · 빼기 · 결합 · 조각 (구멍 · 맞닿은 변 · 회전)', async () => {
+  const { mergeLoops, area, inside, flatten, placeLoops, loopsToShape } = await import('../src/boolean.js');
+  const sq = (x, y, s) => [[[x, y], [x + s, y], [x + s, y + s], [x, y + s]]];
+  const A = sq(0, 0, 10); const B = sq(5, 5, 10);
+  const ar = (loops) => loops.reduce((s, l) => s + Math.abs(area(l)), 0);
+  assert.equal(ar(mergeLoops([A, B], 'union')[0]), 175);
+  assert.equal(ar(mergeLoops([A, B], 'intersect')[0]), 25);
+  assert.equal(ar(mergeLoops([A, B], 'subtract')[0]), 75);
+  assert.deepEqual(mergeLoops([A, B], 'fragment').map(ar).sort((a, b) => a - b), [25, 75, 75]);
+  const hole = mergeLoops([sq(0, 0, 10), sq(3, 3, 4)], 'subtract')[0];
+  assert.equal(inside(hole, 5, 5), false);
+  assert.equal(inside(hole, 1, 1), true);
+  assert.equal(mergeLoops([sq(0, 0, 10), sq(10, 0, 10)], 'union')[0][0].length, 4);
+  // 45° 돌린 정사각형: 꼭짓점이 중심 위로
+  const rot = placeLoops(flatten([['M', 0, 0], ['L', 10, 0], ['L', 10, 10], ['L', 0, 10], ['Z']]), { x: 0, y: 0, w: 10, h: 10, rot: 45 });
+  assert.ok(Math.abs(Math.min(...rot[0].map((p) => p[1])) - (5 - Math.SQRT2 * 5)) < 1e-9);
+  const g = loopsToShape(mergeLoops([A, B], 'union')[0]);
+  assert.deepEqual([g.x, g.y, g.w, g.h], [0, 0, 15, 15]);
 });

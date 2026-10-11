@@ -113,7 +113,7 @@ const HELP = { id: 'help', label: '도움말', groups: [
 
 // 상황별 탭
 const SHAPE_FMT = { id: 'shapeFormat', label: '도형 서식', context: 'shape', groups: [
-  { label: '도형 삽입', items: [G('shapesMini', { rows: 3 }), COL(M(null, 'shapes', '도형 편집', { menu: 'changeShapeMenu' }), M('drawTextbox', 'textbox', '텍스트 상자'))] },
+  { label: '도형 삽입', items: [G('shapesMini', { rows: 3 }), COL(M(null, 'shapes', '도형 편집', { menu: 'changeShapeMenu' }), M('drawTextbox', 'textbox', '텍스트 상자'), M(null, 'mergeShapes', '도형 병합', { menu: 'mergeShapesMenu' }))] },
   { label: '도형 스타일', items: [G('shapeStyles', { wide: true }), COL({ t: 'color', cmd: 'shapeFill', icon: 'shapeFill', label: '도형 채우기', title: '도형 채우기', menu: 'shapeFillMenu', bar: 'fill' }, { t: 'color', cmd: 'shapeOutline', icon: 'shapeOutline', label: '도형 윤곽선', title: '도형 윤곽선', menu: 'shapeOutlineMenu', bar: 'line' }, M(null, 'effects', '도형 효과', { menu: 'shapeEffectsMenu' }))], launcher: 'formatPaneShape' },
   { label: 'WordArt 스타일', items: [G('wordart', { wide: true })] },
   { label: '정렬', items: [COL(M('bringForward', 'bringForward', '앞으로 가져오기', { menu: 'bringMenu' }), M('sendBackward', 'sendBackward', '뒤로 보내기', { menu: 'sendMenu' }), M('selectionPane', 'selectionPane', '선택 창')), COL(M(null, 'align', '맞춤', { menu: 'alignMenu' }), M(null, 'group', '그룹', { menu: 'groupMenu' }), M(null, 'rotate', '회전', { menu: 'rotateMenu' }))] },
@@ -140,7 +140,7 @@ const MASTER_TAB = { id: 'slideMaster', label: '슬라이드 마스터', context
 const SMART_TAB = { id: 'smartDesign', label: 'SmartArt 디자인', context: 'smart', groups: [
   { label: '그래픽 만들기', items: [L('smartAddShape', 'plus', '도형 추가'), L('smartTextPane', 'textbox', '텍스트 창')] },
   { label: '레이아웃', items: [L(null, 'convertSmart', '레이아웃', { menu: 'smartLayoutMenu' })] },
-  { label: 'SmartArt 스타일', items: [L('smartColors', 'theme', '색 변경')] },
+  { label: 'SmartArt 스타일', items: [L(null, 'theme', '색 변경', { menu: 'smartColorsMenu' }), L(null, 'effects', '스타일', { menu: 'smartStyleMenu' })] },
   { label: '원래대로', items: [L('smartToShapes', 'shapes', '도형으로 변환')] },
 ] };
 const TABLE_DESIGN = { id: 'tableDesign', label: '테이블 디자인', context: 'table', groups: [
@@ -177,13 +177,13 @@ const KT = {
   review: { spellCheck: 'S', accessibility: 'A', wordCount: 'W', newComment: 'C', deleteComments: 'D', prevComment: 'V', nextComment: 'N', commentsPane: 'P', collabStart: 'H' },
   view: { toggleHand: 'H', toggleMobile: 'Y', viewMaster: 'M', toggleRuler: 'R', viewNormal: 'L', viewOutline: 'O', viewSorter: 'I', viewNotesPage: 'T', viewReading: 'D', toggleGrid: 'G', toggleGuides: 'U', toggleNotes: 'N', zoomDialog: 'Q', fitZoom: 'W', selectionPane: 'P' },
   help: { shortcuts: 'K', whatsNew: 'N', about: 'A' },
-  shapeFormat: { shapesMini: 'SH', changeShapeMenu: 'E', drawTextbox: 'X', shapeStyles: 'K', shapeFill: 'SF', shapeOutline: 'SO', shapeEffectsMenu: 'SE', wordart: 'Q', objSize: 'H', 'launcher:formatPaneShape': 'DS', ...ARRANGE_KT },
+  shapeFormat: { shapesMini: 'SH', changeShapeMenu: 'E', mergeShapesMenu: 'M', drawTextbox: 'X', shapeStyles: 'K', shapeFill: 'SF', shapeOutline: 'SO', shapeEffectsMenu: 'SE', wordart: 'Q', objSize: 'H', 'launcher:formatPaneShape': 'DS', ...ARRANGE_KT },
   pictureFormat: { removeBackground: 'E', pictureCorrectionsMenu: 'R', pictureColorMenu: 'I', changePicture: 'CP', resetPicture: 'Q', pictureStyles: 'K', shapeOutline: 'SO', shapeEffectsMenu: 'SE', altText: 'T', cropPicture: 'V', objSize: 'H', 'launcher:formatPaneShape': 'DS', ...ARRANGE_KT },
   tableDesign: { 'tblOpt:firstRow': 'A', 'tblOpt:lastRow': 'T', 'tblOpt:banded': 'R', 'tblOpt:firstCol': 'C', 'tblOpt:lastCol': 'L', tableStyles: 'S', cellFill: 'H', cellBorderMenu: 'B' },
   tableLayout: { tblSelectMenu: 'K', tblDeleteMenu: 'D', tblRowAbove: 'A', tblRowBelow: 'BE', tblColLeft: 'L', tblColRight: 'R', tblMerge: 'M', tblSplit: 'P', tblEqualRows: 'HE', tblEqualCols: 'WE', alignLeft: 'AL', alignCenter: 'AC', alignRight: 'AR', anchorTop: 'AT', anchorMiddle: 'AV', anchorBottom: 'AB' },
   chartDesign: { chartElementsMenu: 'A', chartQuickLayoutMenu: 'L', chartColorsMenu: 'C', chartStyleMenu: 'S', chartSwitchRowCol: 'W', chartData: 'E', chartTypeDialog: 'T', chartFormat: 'F', chartResetStyle: 'R' },
   slideMaster: { masterRename: 'R', masterReset: 'E', masterHideGraphics: 'H', formatBg: 'B', closeMaster: 'C' },
-  smartDesign: { smartAddShape: 'A', smartTextPane: 'X', smartLayoutMenu: 'L', smartColors: 'C', smartToShapes: 'V' },
+  smartDesign: { smartAddShape: 'A', smartTextPane: 'X', smartLayoutMenu: 'L', smartColorsMenu: 'C', smartStyleMenu: 'S', smartToShapes: 'V' },
   playback: { previewMedia: 'P', mediaOptions: 'O', bringForward: 'AF', sendBackward: 'AE', alignMenu: 'AA', altText: 'T', objSize: 'H' },
 };
 export const itemKey = (it) => (it.cmd ? (it.arg != null ? `${it.cmd}:${it.arg}` : it.cmd) : it.menu ?? it.name ?? it.t);

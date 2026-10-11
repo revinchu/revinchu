@@ -169,6 +169,7 @@ export function canvasMenu(e, hit) {
       ...(o?.type === 'equation' ? [{ label: '수식 편집(E)...', icon: 'equation', action: () => run('editEquation', o.id) }] : []),
       ...arrange(),
       ...(objs.length > 1 ? [{ label: '맞춤(A)', icon: 'align', submenu: [['l', '왼쪽 맞춤(L)'], ['c', '가운데 맞춤(C)'], ['r', '오른쪽 맞춤(R)'], ['t', '위쪽 맞춤(T)'], ['m', '중간 맞춤(M)'], ['b', '아래쪽 맞춤(B)'], ['h', '가로 간격을 동일하게(H)'], ['v', '세로 간격을 동일하게(V)']].map(([k, l]) => ({ label: l, action: () => run('align', k) })) }] : []),
+      ...(objs.filter((x) => x.type === 'shape').length > 1 ? [{ label: '도형 병합(G)', icon: 'mergeShapes', submenu: [['union', '통합(U)'], ['combine', '결합(C)'], ['fragment', '조각(F)'], ['intersect', '교차(I)'], ['subtract', '빼기(S)']].map(([k, l]) => ({ label: l, action: () => run('mergeShapes', k) })) }] : []),
       { sep: true },
       ...common(),
       { label: '그림으로 저장(S)...', icon: 'save', action: () => run('saveAsPicture') },

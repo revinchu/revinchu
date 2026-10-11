@@ -8,12 +8,13 @@ import {
 } from './model.js';
 import { setOffsets } from './textedit.js';
 import { THEMES, cloneTheme, themeByName, resolveColor, COLOR_SCHEMES, schemeColors, SLOT_NAMES } from './themes.js';
-import { SHAPE_GALLERY, SHAPE_LABEL, objLabel } from './shapes.js';
+import { SHAPE_GALLERY, SHAPE_LABEL, objLabel, shapePath, customPath, OPEN_SHAPES } from './shapes.js';
+import { MERGE_OPS, mergeLoops, flatten, placeLoops, loopsToShape } from './boolean.js';
 import { CHART_KINDS } from './chart.js';
 import { sampleChart, chartTypeDialog, chartDataDialog, chartElementsItems, chartLayoutGallery, chartStyleGallery, chartPaletteItems, resetChartStyle, switchChartRowCol, exportChartCsv, chartFontDialog, openChartPane, selChart } from './chartui.js';
 import { slideHtml, NUM_SCHEMES, BULLET_CHARS, DASH_LABEL } from './render.js';
 import { SHAPE_STYLES, WORDART, PICTURE_STYLES, TABLE_STYLES, tableStyleProps, DESIGN_IDEAS } from './presets.js';
-import { smartArt, SMART_KINDS } from './smartart.js';
+import { smartArt, SMART_KINDS, SMART_CATS, SMART_LABEL, SMART_COLORS, SMART_STYLES } from './smartart.js';
 import { backgroundMask, applyMask } from './bgremove.js';
 import { parseLatex, toMathML } from './math.js';
 import { collab, startCollab, stopCollab, collabLink, myName } from './collab.js';
@@ -32,7 +33,7 @@ import { STOCK_CATEGORIES, openverseUrl, parseOpenverse, wikimediaUrl, parseWiki
 import { saveMyTemplate } from './fileio.js';
 import { save, saveAs, openWithPicker, setDocument, printSlides, exportPng, exportVideo, shareLink, pickFile, exportImages, saveObjectsAsPicture, slideSvgText, svgToRaster } from './fileio.js';
 import { slideSvg } from './svgexport.js';
-import { svgToObjects } from './svgimport.js';
+import { svgToObjects, parsePath } from './svgimport.js';
 import { buildTemplate } from './templates.js';
 import { renderPane } from './panels.js';
 import { FONTS, SIZES, setRibbonTab } from './ribbon.js';
@@ -184,6 +185,39 @@ function placeImage(r, into, added = []) {
   change(() => { s.objects.push(o); });
   added.push(o);
   return o;
+}
+
+// ───────────── 도형 병합 ─────────────
+/** 닫힌 도형만 (선 · 열린 경로 제외), 고른 순서대로 — 첫 도형의 서식이 결과에 */
+const mergeable = () => selObjects().filter((o) => o.type === 'shape' && !OPEN_SHAPES.has(o.shape) && !o.openPath && o.w > 0 && o.h > 0);
+function shapeLoops(o) {
+  const d = o.path ? customPath(o.path, o.w, o.h) : shapePath(o.shape ?? 'rect', o.w, o.h, o.adj);
+  return placeLoops(flatten(parsePath(d)), o);
+}
+function mergeShapes(op) {
+  const objs = mergeable();
+  if (objs.length < 2) { toast('병합할 도형을 두 개 이상 선택하세요 (Shift+클릭)'); return; }
+  const pieces = mergeLoops(objs.map(shapeLoops), op);
+  if (!pieces.length) { toast(op === 'intersect' ? '겹치는 부분이 없습니다' : '남는 모양이 없습니다'); return; }
+  const first = objs[0];
+  const s = slide();
+  const made = [];
+  change(() => {
+    const at = Math.min(...objs.map((o) => s.objects.indexOf(o)));
+    s.objects = s.objects.filter((o) => !objs.includes(o));
+    pieces.forEach((loops, i) => {
+      const g = loopsToShape(loops);
+      const o = { ...JSON.parse(JSON.stringify(first)), id: uid(), x: g.x, y: g.y, w: g.w, h: g.h, rot: 0, path: g.path, name: `자유형: 도형 ${i + 1}` };
+      delete o.flipH; delete o.flipV; delete o.adj; delete o.grp; delete o.ph;
+      o.shape = 'rect';
+      if (i > 0 || op === 'fragment') { if (o.text) o.text = { ...o.text, paras: [{ ...(o.text.paras[0] ?? para('')), runs: [] }] }; }
+      made.push(o);
+    });
+    s.objects.splice(at, 0, ...made);
+  });
+  S.sel = new Set(made.map((o) => o.id));
+  emit('selection');
+  toast(`도형 병합 — ${MERGE_OPS.find(([k]) => k === op)[1]}${made.length > 1 ? ` (${made.length}개)` : ''}`);
 }
 
 // ───────────── 스톡 이미지 · 온라인 그림 ─────────────
@@ -857,32 +891,50 @@ function insertSymbol(ch) {
   emit('selection');
 }
 
+const SMART_SAMPLE = { hierarchy: '대표\n\t영업 본부\n\t\t1팀\n\t\t2팀\n\t개발 본부\n\t\t웹\n\t\t앱\n\t경영 지원', nameHierarchy: '김대표, CEO\n\t이본부장, 영업\n\t박본부장, 개발\n\t최실장, 지원', hHierarchy: '전략\n\t시장\n\t\t국내\n\t\t해외\n\t제품\n\t\t신규\n\t\t개선', tableHierarchy: '회사\n\t본부 A\n\t\t팀 1\n\t\t팀 2\n\t본부 B\n\t\t팀 3', vBullet: '계획\n\t목표 정하기\n\t일정 세우기\n실행\n\t업무 나누기\n점검\n\t지표 확인', hBullet: '계획\n\t목표\n\t일정\n실행\n\t업무\n점검\n\t지표', counterArrows: '수요 증가\n공급 감소', balance: '장점\n\t빠름\n\t저렴\n단점\n\t복잡', equation: '아이디어\n실행\n성과', radialCycle: '고객\n품질\n가격\n서비스\n속도', converging: '데이터\n분석\n전략\n의사 결정', titledMatrix: '전략\n강점\n약점\n기회\n위협', radialVenn: '핵심\n가치 1\n가치 2\n가치 3' };
 function smartArtDialog() {
   let kind = 'process';
-  const list = el('div', { class: 'smart-kinds' }, SMART_KINDS.map(([k, l]) => {
-    const b = el('button', { class: `smart-kind${k === kind ? ' on' : ''}`, onclick: () => { kind = k; list.querySelectorAll('.smart-kind').forEach((x) => x.classList.toggle('on', x === b)); draw(); } }, l);
-    return b;
-  }));
+  let cat = '목록형';
+  let colors = 'multi';
+  let style = 'flat';
+  let edited = false;
   const items = el('textarea', { class: 'smart-items' }, '계획\n실행\n점검\n개선');
-  const multi = el('input', { type: 'checkbox', checked: true });
+  const cats = el('div', { class: 'smart-cats' });
+  const grid = el('div', { class: 'smart-grid' });
   const preview = el('div', { class: 'smart-preview' });
-  const draw = () => {
-    const objs = smartArt(kind, items.value.split('\n'), { x: 40, y: 40, w: 1200, h: 640 }, { multicolor: multi.checked });
-    const s = { id: 'pv', layout: 'blank', objects: objs, anims: [], hideDecor: true };
-    const sc = 300 / 1280;
-    preview.innerHTML = `<div class="tw" style="width:300px;height:${720 * sc}px"><div class="tw-in" style="transform:scale(${sc})">${slideHtml({ ...S.pres, size: { w: 1280, h: 720 } }, s, {})}</div></div>`;
+  const title = el('b', {});
+  const thumb = (k) => {
+    const objs = smartArt(k, SMART_SAMPLE[k]?.split('\n') ?? ['가', '나', '다', '라'], { x: 40, y: 40, w: 1200, h: 640 }, { colors: 'multi' });
+    const sc = 84 / 1280;
+    return `<div class="tw" style="width:84px;height:${Math.round(720 * sc)}px"><div class="tw-in" style="transform:scale(${sc})">${slideHtml({ ...S.pres, size: { w: 1280, h: 720 } }, { id: 'pv', layout: 'blank', objects: objs, anims: [], hideDecor: true, bg: { type: 'solid', color: '#FFFFFF' } }, {})}</div></div>`;
   };
-  items.addEventListener('input', draw);
-  multi.addEventListener('change', draw);
-  items.addEventListener('keydown', (e) => e.stopPropagation());
+  const drawGrid = () => {
+    cats.replaceChildren(...['전체', ...SMART_CATS].map((c) => el('button', { class: `smart-cat${c === cat ? ' on' : ''}`, type: 'button', onclick: () => { cat = c; drawGrid(); } }, c)));
+    grid.replaceChildren(...SMART_KINDS.filter(([, , c]) => cat === '전체' || c === cat).map(([k, l]) => el('button', { class: `smart-card${k === kind ? ' on' : ''}`, type: 'button', title: l, onclick: () => { kind = k; if (!edited && SMART_SAMPLE[k]) items.value = SMART_SAMPLE[k]; drawGrid(); draw(); }, html: `${thumb(k)}<span>${l}</span>` })));
+  };
+  const draw = () => {
+    title.textContent = SMART_LABEL[kind];
+    const objs = smartArt(kind, items.value.split('\n'), { x: 40, y: 40, w: 1200, h: 640 }, { colors, style });
+    const sc = 300 / 1280;
+    preview.innerHTML = `<div class="tw" style="width:300px;height:${720 * sc}px"><div class="tw-in" style="transform:scale(${sc})">${slideHtml({ ...S.pres, size: { w: 1280, h: 720 } }, { id: 'pv', layout: 'blank', objects: objs, anims: [], hideDecor: true }, {})}</div></div>`;
+  };
+  const colorSel = el('select', {}, SMART_COLORS.map(([k, l]) => el('option', { value: k }, l)));
+  const styleSel = el('select', {}, SMART_STYLES.map(([k, l]) => el('option', { value: k }, l)));
+  colorSel.addEventListener('change', () => { colors = colorSel.value; draw(); });
+  styleSel.addEventListener('change', () => { style = styleSel.value; draw(); });
+  items.addEventListener('input', () => { edited = true; draw(); });
+  items.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Tab') { e.preventDefault(); const st = items.selectionStart; const ls = items.value.lastIndexOf('\n', st - 1) + 1; if (e.shiftKey) { if (items.value[ls] === '\t') { items.setRangeText('', ls, ls + 1, 'end'); } } else items.setRangeText('\t', ls, ls, 'end'); draw(); } });
+  drawGrid();
   openDialog({
-    title: 'SmartArt 그래픽 선택', width: 640,
-    body: el('div', { class: 'smart-dlg' }, list, el('div', { class: 'smart-right' }, preview, el('div', { class: 'muted' }, '한 줄에 항목 하나 (조직도는 첫 줄이 맨 위)'), items, el('label', { class: 'pane-check' }, multi, el('span', {}, '여러 색')))),
+    title: 'SmartArt 그래픽 선택', width: 900,
+    body: el('div', { class: 'smart-dlg2' }, cats, grid, el('div', { class: 'smart-right' }, title, preview,
+      el('div', { class: 'muted' }, '한 줄에 항목 하나 · Tab = 하위 수준 (Shift+Tab 올리기)'), items,
+      el('label', {}, el('span', {}, '색'), colorSel), el('label', {}, el('span', {}, '스타일'), styleSel))),
     buttons: [{ label: '확인', primary: true, action: () => {
       const { w, h } = S.pres.size;
       const ph = slide().objects.find((o) => o.ph === 'body' && isEmptyText(o.text));
       const rect = ph ? { x: ph.x, y: ph.y, w: ph.w, h: ph.h } : { x: w * 0.08, y: h * 0.25, w: w * 0.84, h: h * 0.62 };
-      const objs = smartArt(kind, items.value.split('\n'), rect, { multicolor: multi.checked });
+      const objs = smartArt(kind, items.value.split('\n'), rect, { colors, style });
       change(() => { if (ph) slide().objects = slide().objects.filter((o) => o !== ph); slide().objects.push(...objs); });
       S.sel = new Set(objs.map((o) => o.id));
       emit('selection');
@@ -902,11 +954,11 @@ function currentSmart() {
   const items = head?.smartItems ?? members.filter((x) => x.text && !isEmptyText(x.text)).map((x) => plainText(x.text).replace(/\n/g, ' '));
   const x1 = Math.min(...members.map((m) => m.x)); const y1 = Math.min(...members.map((m) => m.y));
   const x2 = Math.max(...members.map((m) => m.x + m.w)); const y2 = Math.max(...members.map((m) => m.y + m.h));
-  return { members, items, kind: o.smart, multi: head?.smartMulti ?? true, rect: { x: x1, y: y1, w: x2 - x1, h: y2 - y1 }, at: s.objects.indexOf(members[0]), grp: o.grp };
+  return { members, items, kind: o.smart, multi: head?.smartMulti ?? true, colors: head?.smartColors ?? (head?.smartMulti === false ? 'accent1' : 'multi'), style: head?.smartStyle ?? 'flat', rect: { x: x1, y: y1, w: x2 - x1, h: y2 - y1 }, at: s.objects.indexOf(members[0]), grp: o.grp };
 }
-function rebuildSmart(cur, { kind = cur.kind, items = cur.items, multi = cur.multi } = {}) {
+function rebuildSmart(cur, { kind = cur.kind, items = cur.items, colors = cur.colors, style = cur.style } = {}) {
   const s = slide();
-  const objs = smartArt(kind, items, cur.rect, { multicolor: multi });
+  const objs = smartArt(kind, items, cur.rect, { colors, style });
   for (const o of objs) o.grp = cur.grp;
   change(() => {
     s.objects = s.objects.filter((o) => o.grp !== cur.grp);
@@ -1785,6 +1837,11 @@ register({
     const m = el(o.kind === 'audio' ? 'audio' : 'video', { src, controls: true, autoplay: true, playsInline: true, style: { width: '100%', maxHeight: '60vh', background: '#000' } });
     openDialog({ title: o.name ?? (o.kind === 'audio' ? '오디오' : '비디오'), width: 640, body: m, buttons: [{ label: '닫기', primary: true }], onClose: () => m.pause() });
   },
+  mergeShapesMenu: (a) => {
+    const ok = mergeable().length >= 2;
+    menuAt(a, MERGE_OPS.map(([k, l]) => ({ label: `${l}(${{ union: 'U', combine: 'C', fragment: 'F', intersect: 'I', subtract: 'S' }[k]})`, icon: 'mergeShapes', disabled: !ok, action: () => mergeShapes(k) })));
+  },
+  mergeShapes: (op) => mergeShapes(typeof op === 'string' ? op : 'union'),
   pictureMenu: (a) => menuAt(a, [
     { label: '이 디바이스(D)...', icon: 'picture', action: () => run('insertPicture') },
     { label: '스톡 이미지(S)...', icon: 'icons', action: () => run('stockImages') },
@@ -1826,8 +1883,10 @@ register({
   insertSmartArt: () => smartArtDialog(),
   smartTextPane: () => smartTextPane(),
   smartAddShape: () => { const c = currentSmart(); if (!c) { toast('SmartArt 그래픽을 선택하세요'); return; } rebuildSmart(c, { items: [...c.items, '텍스트'] }); },
-  smartLayoutMenu: (a) => { const c = currentSmart(); if (!c) { toast('SmartArt 그래픽을 선택하세요'); return; } menuAt(a, SMART_KINDS.map(([k, l]) => ({ label: l, checked: k === c.kind, action: () => rebuildSmart(c, { kind: k }) }))); },
-  smartColors: () => { const c = currentSmart(); if (!c) return; rebuildSmart(c, { multi: !c.multi }); },
+  smartLayoutMenu: (a) => { const c = currentSmart(); if (!c) { toast('SmartArt 그래픽을 선택하세요'); return; } menuAt(a, SMART_CATS.map((cat) => ({ label: cat, submenu: SMART_KINDS.filter(([, , c2]) => c2 === cat).map(([k, l]) => ({ label: l, checked: k === c.kind, action: () => rebuildSmart(c, { kind: k }) })) }))); },
+  smartColorsMenu: (a) => { const c = currentSmart(); if (!c) { toast('SmartArt 그래픽을 선택하세요'); return; } menuAt(a, SMART_COLORS.map(([k, l]) => ({ label: l, checked: k === c.colors, action: () => rebuildSmart(c, { colors: k }) }))); },
+  smartStyleMenu: (a) => { const c = currentSmart(); if (!c) { toast('SmartArt 그래픽을 선택하세요'); return; } menuAt(a, SMART_STYLES.map(([k, l]) => ({ label: l, checked: k === c.style, action: () => rebuildSmart(c, { style: k }) }))); },
+  smartColors: () => { const c = currentSmart(); if (!c) return; rebuildSmart(c, { colors: c.colors === 'multi' ? 'accent1' : 'multi' }); },
   smartToShapes: () => { const c = currentSmart(); if (!c) return; change(() => { for (const m of c.members) { delete m.smart; delete m.smartItems; delete m.smartMulti; } }); toast('도형으로 변환했습니다 (그룹은 유지)'); },
   chartMenu: (a) => menuAt(a, [
     { label: '차트 삽입...', icon: 'chartColumn', action: () => run('insertChartDialog') },

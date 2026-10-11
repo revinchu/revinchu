@@ -724,3 +724,18 @@ body.mobile .ss-grid { grid-template-columns: 1fr; }
 .st-lic { position: absolute; left: 0; bottom: 0; background: rgba(0,0,0,.55); color: #fff; font-size: 10px; padding: 1px 4px; }
 .st-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .show.presenter > .show-bar { display: none; }
+/* SmartArt 대화상자 */
+.smart-dlg2 { display: grid; grid-template-columns: 120px 1fr 320px; gap: 10px; height: min(66vh, 560px); }
+.smart-cats { display: flex; flex-direction: column; gap: 2px; border-right: 1px solid #e3e3e3; padding-right: 6px; }
+.smart-cat { text-align: left; border: 0; background: none; padding: 6px 8px; border-radius: 3px; cursor: pointer; font: inherit; }
+.smart-cat:hover { background: #f3f3f3; }
+.smart-cat.on { background: var(--accent-tint); font-weight: 600; }
+.smart-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; overflow-y: auto; align-content: start; }
+.smart-card { display: flex; flex-direction: column; align-items: center; gap: 3px; border: 1px solid #e3e3e3; background: #fff; border-radius: 3px; padding: 4px; cursor: pointer; font-size: 10.5px; }
+.smart-card:hover { border-color: #f29436; }
+.smart-card.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.smart-card .tw { box-shadow: 0 0 0 1px #eee; overflow: hidden; }
+.smart-card span { text-align: center; line-height: 1.2; }
+.smart-dlg2 .smart-right { display: flex; flex-direction: column; gap: 6px; overflow: auto; }
+body.mobile .smart-dlg2 { grid-template-columns: 1fr; height: auto; }
+body.mobile .smart-cats { flex-direction: row; flex-wrap: wrap; border: 0; }

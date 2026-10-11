@@ -214,7 +214,9 @@ export function shapeHtml(theme, o, media, opts = {}) {
   if (needSvg) {
     const fx = fxStyle(theme, fxOf(o), o.id);
     if (fx.defs) defs.push(fx.defs);
-    html += `<svg class="geo" width="${f(w)}" height="${f(h)}" viewBox="0 0 ${f(w)} ${f(h)}" overflow="visible" style="position:absolute;left:0;top:0;${fx.filter ? `filter:${fx.filter}` : ''}">${defs.length ? `<defs>${defs.join('')}</defs>` : ''}<path d="${d}" fill="${fill}" fill-rule="evenodd" ${fill !== 'none' && o.fill?.alpha != null ? `fill-opacity="${o.fill.alpha}"` : ''} stroke="${stroke}" stroke-width="${f(sw)}" ${dash} stroke-linejoin="round" ${mk} vector-effect="non-scaling-stroke"/></svg>`;
+    // 곧은 선 (너비나 높이 0): SVG 틀이 1px 보다 작으면 브라우저가 그리지 않으므로 틀만 1px 로 (선 위치는 같음)
+    const vw = Math.max(w, 1); const vh = Math.max(h, 1);
+    html += `<svg class="geo" width="${f(vw)}" height="${f(vh)}" viewBox="0 0 ${f(vw)} ${f(vh)}" overflow="visible" style="position:absolute;left:0;top:0;${fx.filter ? `filter:${fx.filter}` : ''}">${defs.length ? `<defs>${defs.join('')}</defs>` : ''}<path d="${d}" fill="${fill}" fill-rule="evenodd" ${fill !== 'none' && o.fill?.alpha != null ? `fill-opacity="${o.fill.alpha}"` : ''} stroke="${stroke}" stroke-width="${f(sw)}" ${dash} stroke-linejoin="round" ${mk} vector-effect="non-scaling-stroke"/></svg>`;
   }
   if (o.text && (!isEmptyText(o.text) || opts.editable || (opts.prompt && o.ph))) html += textBoxHtml(theme, o, o.text, w, h, opts);
   return html;
@@ -235,6 +237,8 @@ export function textBoxHtml(theme, o, body, w, h, opts = {}) {
 function imageHtml(theme, o, media, opts) {
   const src = media[o.media] ?? o.src;
   if (!src) {
+    // SmartArt 그림 칸: 회색 칸 (편집 화면에서는 누르면 그림 넣기)
+    if (o.picSlot) return `<div class="pic-ph" style="position:absolute;inset:0;background:#E7E6E6;${o.shape === 'ellipse' ? 'border-radius:50%;' : ''}display:flex;align-items:center;justify-content:center;color:#8a8a8a;font-size:${f(Math.min(o.w, o.h) * 0.28)}px">${opts.prompt ? '<span class="pic-ph-ico">🖼</span>' : ''}</div>`;
     if (!opts.prompt) return '';
     return `<div class="pic-ph" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:8px;color:#7f7f7f;font-size:20px;text-align:center"><span class="pic-ph-ico">🖼</span><span>${escHtml(placeholderPrompt(o))}</span></div>`;
   }

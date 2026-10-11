@@ -378,7 +378,7 @@ function onPointerDown(e) {
     return;
   }
   // 그림 개체 틀의 아이콘 → 그림 넣기
-  if (o.type === 'image' && o.ph === 'pic' && !o.media) { S.sel = new Set([o.id]); emit('selection'); run('insertPicture', { into: o.id }); return; }
+  if (o.type === 'image' && (o.ph === 'pic' || o.picSlot) && !o.media) { S.sel = new Set([o.id]); emit('selection'); run('insertPicture', { into: o.id }); return; }
   const additive = e.shiftKey || e.ctrlKey;
   const ids = selectionFor(o, additive);
   if (additive) {

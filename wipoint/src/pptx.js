@@ -82,13 +82,14 @@ function xfrmXml(o, tag = 'a:xfrm') {
 
 function geomXml(o) {
   if (o.path) {
-    const paths = o.path.map((p) => `<a:path w="${Math.round(p.w)}" h="${Math.round(p.h)}"${p.fill === 'none' ? ' fill="none"' : ''}>${p.cmds.map(([op, ...v]) => {
-      const pt = (x, y) => `<a:pt x="${Math.round(x)}" y="${Math.round(y)}"/>`;
+    const K = 100; // 경로 좌표를 0.01 단위로 (w · h 도 같이 늘려 비율은 같음)
+    const paths = o.path.map((p) => `<a:path w="${Math.round(p.w * K)}" h="${Math.round(p.h * K)}"${p.fill === 'none' ? ' fill="none"' : ''}>${p.cmds.map(([op, ...v]) => {
+      const pt = (x, y) => `<a:pt x="${Math.round(x * K)}" y="${Math.round(y * K)}"/>`;
       if (op === 'M') return `<a:moveTo>${pt(v[0], v[1])}</a:moveTo>`;
       if (op === 'L') return `<a:lnTo>${pt(v[0], v[1])}</a:lnTo>`;
       if (op === 'C') return `<a:cubicBezTo>${pt(v[0], v[1])}${pt(v[2], v[3])}${pt(v[4], v[5])}</a:cubicBezTo>`;
       if (op === 'Q') return `<a:quadBezTo>${pt(v[0], v[1])}${pt(v[2], v[3])}</a:quadBezTo>`;
-      if (op === 'A') return `<a:arcTo wR="${Math.round(v[0])}" hR="${Math.round(v[1])}" stAng="${Math.round(v[2])}" swAng="${Math.round(v[3])}"/>`;
+      if (op === 'A') return `<a:arcTo wR="${Math.round(v[0] * K)}" hR="${Math.round(v[1] * K)}" stAng="${Math.round(v[2])}" swAng="${Math.round(v[3])}"/>`;
       return '<a:close/>';
     }).join('')}</a:path>`).join('');
     return `<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="l" t="t" r="r" b="b"/><a:pathLst>${paths}</a:pathLst></a:custGeom>`;
@@ -178,6 +179,8 @@ function shapeXml(o, id, ctx, phIdx) {
 }
 
 function picXml(o, id, ctx, phIdx) {
+  // SmartArt 그림 칸 (그림 없음): 회색 사각형/타원으로
+  if (!o.media && o.picSlot) return shapeXml({ ...o, type: 'shape', shape: o.shape ?? 'rect', fill: { type: 'solid', color: '#E7E6E6' }, line: null, text: null, picSlot: undefined }, id, ctx, phIdx);
   if (!o.media) return o.ph ? `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="Picture Placeholder ${id}"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>${phXml(o, phIdx)}</p:nvSpPr><p:spPr>${xfrmXml(o)}</p:spPr></p:sp>` : '';
   const rid = ctx.image(o.media);
   if (!rid) return '';
