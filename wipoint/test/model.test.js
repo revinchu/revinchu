@@ -471,3 +471,42 @@ test('차트: PowerPoint 요소 (콤보 · 보조 축 · 누적 100% · 추세�
   assert.deepEqual(g.series[0].vals, [1000, 2]);
   assert.deepEqual(g.series[1].vals, [0.5, 0]);
 });
+
+test('도형 · 그림 효과: 그림자 · 네온 · 부드러운 가장자리 · 반사 · 입체 · 3차원 회전 쓰고 읽기, 그리기', async () => {
+  const { writePptx, readPptx } = await import('../src/pptx.js');
+  const { newPresentation, newShape } = await import('../src/model.js');
+  const { objectHtml } = await import('../src/render.js');
+  const p = newPresentation({ firstLayout: 'blank' });
+  const sh = newShape('roundRect', { x: 100, y: 100, w: 200, h: 120 });
+  sh.fx = { shadow: { inner: true, dist: 4, dir: 90, blur: 6, color: '#000000', alpha: 0.5 }, glow: { size: 8, color: '#FF0000', alpha: 0.4 }, soft: 5, reflect: { size: 0.55, dist: 4, alpha: 0.5, blur: 0.5 }, bevel: { prst: 'circle', w: 6, h: 6 }, rot3d: { x: 20, y: 10, persp: true } };
+  p.slides[0].objects.push(sh);
+  const html = objectHtml(p.theme, sh, {}, {});
+  assert.match(html, /feSpecularLighting/);
+  assert.match(html, /-webkit-box-reflect/);
+  assert.match(html, /perspective\(900px\)/);
+  assert.match(html, /drop-shadow\(0 0/);
+  const { pres } = readPptx(writePptx(p));
+  const fx = pres.slides[0].objects.find((o) => o.shape === 'roundRect').fx;
+  assert.equal(fx.shadow.inner, true);
+  assert.equal(Math.round(fx.shadow.dist), 4);
+  assert.equal(fx.glow.color, '#FF0000');
+  assert.ok(Math.abs(fx.glow.alpha - 0.4) < 0.01);
+  assert.equal(fx.soft, 5);
+  assert.equal(fx.reflect.size, 0.55);
+  assert.equal(fx.bevel.prst, 'circle');
+  assert.equal(fx.rot3d.x, 20);
+  assert.equal(fx.rot3d.persp, true);
+});
+
+test('스톡 이미지: Openverse · Wikimedia 응답 정리', async () => {
+  const { parseOpenverse, parseWikimedia, creditText, openverseUrl } = await import('../src/stock.js');
+  const ov = parseOpenverse({ results: [{ id: 'abc', title: '고양이', url: 'https://x/a.jpg', thumbnail: 'https://t/a.jpg', width: 800, height: 600, creator: 'kim', license: 'by', license_version: '4.0', foreign_landing_url: 'https://p' }] });
+  assert.equal(ov[0].license, 'CC BY 4.0');
+  assert.deepEqual(ov[0].full.slice(0, 2), ['https://x/a.jpg', 'https://api.openverse.org/v1/images/abc/thumb/?full_size=true']);
+  assert.match(creditText(ov[0]), /작성자: kim/);
+  assert.match(openverseUrl('한강'), /q=%ED%95%9C%EA%B0%95/);
+  const wm = parseWikimedia({ query: { pages: { 5: { pageid: 5, index: 1, title: 'File:Seoul.jpg', imageinfo: [{ url: 'https://u/Seoul.jpg', thumburl: 'https://u/thumb/360px-Seoul.jpg', width: 4000, height: 3000, mime: 'image/jpeg', descriptionurl: 'https://d', extmetadata: { Artist: { value: '<a href="x">Lee</a>' }, LicenseShortName: { value: 'CC BY-SA 4.0' } } }] }, 6: { pageid: 6, index: 2, title: 'File:a.svg', imageinfo: [{ url: 'x', mime: 'image/svg+xml' }] } } } });
+  assert.equal(wm.length, 1);
+  assert.equal(wm[0].creator, 'Lee');
+  assert.equal(wm[0].full[0], 'https://u/thumb/2048px-Seoul.jpg');
+});

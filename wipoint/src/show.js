@@ -9,14 +9,43 @@ let show = null; // 현재 쇼 상태
 
 /** 쇼 순서: 사용자 지정 쇼(opts.custom = 이름)면 그 슬라이드들, 아니면 숨기지 않은 슬라이드 */
 const visibleSlides = (opts) => {
-  const cs = opts.custom ? (S.pres.customShows ?? []).find((c) => c.name === opts.custom) : null;
+  const setup = S.pres.show ?? {};
+  // 쇼 설정의 [슬라이드 표시]: 사용자 지정 쇼 · 범위 (리본에서 고른 사용자 지정 쇼가 먼저)
+  const name = opts.custom ?? (setup.slides === 'custom' ? setup.custom : null);
+  const cs = name ? (S.pres.customShows ?? []).find((c) => c.name === name) : null;
   if (cs) return cs.slides.map((id) => S.pres.slides.findIndex((x) => x.id === id)).filter((i) => i >= 0);
-  return S.pres.slides.map((s, i) => i).filter((i) => !S.pres.slides[i].hidden || opts.includeHidden);
+  const [a, b] = setup.slides === 'range' ? [Math.max(1, setup.from ?? 1) - 1, Math.max(1, setup.to ?? S.pres.slides.length) - 1] : [0, Infinity];
+  return S.pres.slides.map((s, i) => i).filter((i) => i >= a && i <= b && (!S.pres.slides[i].hidden || opts.includeHidden));
 };
+
+// ───────────── 여러 모니터 (Window Management API) ─────────────
+/** 화면 목록 (모니터가 2대 이상일 때만 권한을 물음) */
+export async function screenList(ask = false) {
+  if (!('getScreenDetails' in window)) return null;
+  if (!ask && !window.screen.isExtended) return null;
+  try { return await window.getScreenDetails(); } catch { return null; }
+}
+/** 쇼 설정의 모니터 → 슬라이드를 보여 줄 화면 (자동 = 지금 창이 없는 다른 화면) */
+function targetScreen(sd, monitor) {
+  if (!sd || sd.screens.length < 2) return null;
+  if (monitor === 'primary') return sd.screens.find((x) => x.isPrimary) ?? null;
+  if (Number.isInteger(monitor) && sd.screens[monitor]) return sd.screens[monitor];
+  return sd.screens.find((x) => x !== sd.currentScreen) ?? null;
+}
 
 /** opts: { from, presenter, windowed, rehearse } */
 export function startShow(opts = {}) {
   if (show) endShow();
+  const setup0 = S.pres.show ?? {};
+  if (setup0.type === 'browse') opts = { ...opts, windowed: true };
+  // 모니터가 여러 대면: 슬라이드는 고른 모니터에 전체 화면, 이 화면에는 발표자 보기 (PowerPoint 와 같음)
+  if (!opts.windowed && !opts.screens && !opts.rehearse && window.screen?.isExtended && 'getScreenDetails' in window && setup0.monitor !== 'off') {
+    screenList().then((sd) => startShow({ ...opts, screens: sd ?? 'none' })).catch(() => startShow({ ...opts, screens: 'none' }));
+    return;
+  }
+  const sd = opts.screens && opts.screens !== 'none' ? opts.screens : null;
+  const target = targetScreen(sd, setup0.monitor);
+  if (target && target !== sd.currentScreen && setup0.usePresenter !== false && !opts.presenter && !opts.noPresenter) opts = { ...opts, presenter: true, audienceOn: target };
   const order = visibleSlides(opts);
   if (!order.length) { toast('보여 줄 슬라이드가 없습니다 (모두 숨김)'); return; }
   const setup = S.pres.show ?? {};
@@ -45,7 +74,10 @@ export function startShow(opts = {}) {
   root.addEventListener('wheel', (e) => { if (Math.abs(e.deltaY) > 20) { if (e.deltaY > 0) next(); else prev(); } }, { passive: true });
   root.addEventListener('pointermove', onPointerMove);
   addEventListener('resize', fit);
-  if (!opts.windowed && !opts.presenter && root.requestFullscreen) root.requestFullscreen().catch(() => {});
+  if (!opts.windowed && !opts.presenter && root.requestFullscreen) root.requestFullscreen(target && setup0.usePresenter === false ? { screen: target } : undefined).catch(() => {});
+  if (opts.presenter && opts.audienceOn) { root.requestFullscreen?.({ screen: sd.currentScreen }).catch(() => {}); openAudience(opts.audienceOn); }
+  if (setup.penColor) show.penColor = setup.penColor;
+  if (setup.laserColor) laser.style.setProperty('--laser', setup.laserColor);
   document.addEventListener('fullscreenchange', onFsChange);
   root.focus();
   enterSlide(pos, { transition: false });
@@ -94,6 +126,7 @@ function fit() {
 /** 슬라이드 HTML (단계 stepsDone 까지 진행한 상태의 보이기/숨기기) */
 function slideState(idx, stepsDone) {
   const slide = S.pres.slides[idx];
+  if (show?.setup?.noAnim) return { slide, hide: new Set(), paraHide: new Set(), moved: new Map() };
   const steps = animSteps(slide);
   const hide = new Set();
   const paraHide = new Set(); // 'objId#단락' (단락별 애니메이션)
@@ -138,7 +171,7 @@ function enterSlide(pos, { transition = true, stepsDone = 0, back = false } = {}
   show.pos = pos;
   const idx = show.order[pos];
   const slide = S.pres.slides[idx];
-  show.steps = animSteps(slide);
+  show.steps = show.setup.noAnim ? [] : animSteps(slide);
   show.step = Math.min(stepsDone, show.steps.length);
   show.triggers = triggerSteps(slide);
   show.trigDone = new Map();
@@ -171,7 +204,7 @@ function afterEnter() {
 function scheduleAuto() {
   const slide = S.pres.slides[show.order[show.pos]];
   const t = slide.transition;
-  const useTimings = show.setup.useTimings !== false;
+  const useTimings = show.setup.useTimings !== false || kiosk();
   if (useTimings && t?.advAfter != null && !show.opts.rehearse) later(Math.max(0.1, t.advAfter) * 1000, () => next());
 }
 
@@ -367,7 +400,7 @@ export function next() {
   if (show.step < show.steps.length) { playStep(); return; }
   if (show.zoomBack && show.pos >= show.zoomBack.end) { zoomReturn(); return; }
   if (show.pos + 1 < show.order.length) { enterSlide(show.pos + 1); return; }
-  if (show.setup.loop) { enterSlide(0); return; }
+  if (show.setup.loop || kiosk()) { enterSlide(0); return; }
   endScreen();
 }
 export function prev() {
@@ -396,6 +429,7 @@ function setBlank(color) {
   show.blank = color;
   show.curtain.hidden = !color;
   show.curtain.style.background = color ?? '';
+  syncAudience();
 }
 
 function onKey(e) {
@@ -417,8 +451,8 @@ function onKey(e) {
   if (k === 'h' || k === 'H') { e.preventDefault(); next(); return; }
   switch (k) {
     case 'Escape': case '-': e.preventDefault(); if (show.tool) setTool(null); else endShow(); break;
-    case 'ArrowRight': case 'ArrowDown': case 'PageDown': case ' ': case 'Enter': case 'n': case 'N': e.preventDefault(); next(); break;
-    case 'ArrowLeft': case 'ArrowUp': case 'PageUp': case 'Backspace': case 'p': case 'P': e.preventDefault(); prev(); break;
+    case 'ArrowRight': case 'ArrowDown': case 'PageDown': case ' ': case 'Enter': case 'n': case 'N': e.preventDefault(); if (!kiosk()) next(); break;
+    case 'ArrowLeft': case 'ArrowUp': case 'PageUp': case 'Backspace': case 'p': case 'P': e.preventDefault(); if (!kiosk()) prev(); break;
     case 'Home': e.preventDefault(); goTo(0); break;
     case 'End': e.preventDefault(); goTo(show.order.length - 1); break;
     case 'b': case 'B': case '.': setBlank(show.blank === '#000' ? null : '#000'); break;
@@ -461,8 +495,10 @@ function onClick(e) {
     if (m) { const pos = show.order.indexOf(Number(m[1]) - 1); if (pos >= 0) goTo(pos); } else if (href) window.open(href, '_blank', 'noopener');
     return;
   }
-  next();
+  if (!kiosk()) next();
 }
+/** 대화형 자동 진행 (키오스크): 클릭 · 키로 넘기지 않음 (링크 · 트리거만), 설정된 시간으로 반복 */
+const kiosk = () => show?.setup?.type === 'kiosk';
 
 function showMenu(e) {
   openMenu({ x: e.clientX, y: e.clientY }, [
@@ -605,17 +641,35 @@ function buildPresenter() {
     el('button', { onclick: () => next() }, '다음 ▶'),
     el('button', { title: '글자 크게', onclick: () => { fs = Math.min(48, fs + 2); notes.style.fontSize = `${fs}px`; } }, 'A+'),
     el('button', { title: '글자 작게', onclick: () => { fs = Math.max(12, fs - 2); notes.style.fontSize = `${fs}px`; } }, 'A−'),
-    el('button', { onclick: () => { show.started = Date.now(); } }, '타이머 다시'),
-    el('button', { onclick: openAudience }, '청중 창 열기'),
+    el('button', { title: '타이머 일시 중지 / 다시 시작', onclick: (e) => { if (show.paused) { show.started += Date.now() - show.paused; show.paused = null; e.target.textContent = '⏸ 일시 중지'; } else { show.paused = Date.now(); e.target.textContent = '▶ 계속'; } } }, '⏸ 일시 중지'),
+    el('button', { onclick: () => { show.started = Date.now(); if (show.paused) show.paused = Date.now(); } }, '타이머 다시'),
+    el('button', { title: '펜 (Ctrl+P)', onclick: () => setTool(show.tool === 'pen' ? null : 'pen') }, '✎ 펜'),
+    el('button', { title: '레이저 포인터 (Ctrl+L)', onclick: () => setTool(show.tool === 'laser' ? null : 'laser') }, '● 레이저'),
+    el('button', { title: '모든 슬라이드 보기 (G)', onclick: () => slideList() }, '▦ 모든 슬라이드'),
+    el('button', { title: '검은 화면 (B)', onclick: () => toggleCurtain('#000') }, '■ 검은 화면'),
+    el('button', { title: '흰 화면 (W)', onclick: () => toggleCurtain('#fff') }, '□ 흰 화면'),
+    el('button', { title: '발표자 보기와 슬라이드 쇼 화면 바꾸기', onclick: () => swapDisplays() }, '⇄ 화면 바꾸기'),
+    el('button', { onclick: () => openAudience() }, '청중 창 열기'),
     el('button', { onclick: endShow }, '쇼 마침'));
   side.append(timer, el('div', { class: 'pv-label' }, '다음 슬라이드'), nextBox, el('div', { class: 'pv-label' }, '메모'), notes);
   show.root.append(side, tools);
   show.presenterEls = { side, nextBox, notes, timer, counter };
   show.clock = setInterval(updateTimer, 1000);
 }
+/** 발표자 보기 · 슬라이드 쇼 모니터 바꾸기 (모니터 2대 이상) */
+async function swapDisplays() {
+  const sd = await screenList(true);
+  if (!sd || sd.screens.length < 2) { toast('모니터가 한 대입니다 — [청중 창 열기]로 창을 띄워 옮기세요'); return; }
+  const cur = sd.currentScreen;
+  const other = sd.screens.find((x) => x !== cur);
+  show.audience?.close?.();
+  show.root.requestFullscreen?.({ screen: other }).catch(() => {});
+  openAudience(cur);
+}
+const toggleCurtain = (c) => setBlank(show.blank === c ? null : c);
 function updateTimer() {
   if (!show?.presenterEls) { clearInterval(show?.clock); return; }
-  const s = Math.floor((Date.now() - show.started) / 1000);
+  const s = Math.floor(((show.paused ?? Date.now()) - show.started) / 1000);
   const hh = String(Math.floor(s / 3600)).padStart(2, '0');
   const mm = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
   const ss = String(s % 60).padStart(2, '0');
@@ -636,8 +690,10 @@ function updatePresenter() {
 }
 
 /** 청중 창: 같은 출처의 새 창에 현재 슬라이드를 그대로 보여 줌 (두 번째 모니터로 옮겨 전체 화면) */
-function openAudience() {
-  const w = window.open('', 'wipoint-audience', 'popup,width=960,height=560');
+function openAudience(scr) {
+  // scr: 보여 줄 모니터 (Window Management API) — 그 화면 전체를 덮는 창 (+ 가능하면 전체 화면)
+  const geo = scr && typeof scr === 'object' && 'availLeft' in scr ? `,left=${scr.left},top=${scr.top},width=${scr.width},height=${scr.height},fullscreen` : ',width=960,height=560';
+  const w = window.open('', 'wipoint-audience', `popup${geo}`);
   if (!w) { toast('팝업이 차단되었습니다. 브라우저에서 팝업을 허용해 주세요.'); return; }
   w.document.open();
   w.document.write(`<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>WIPOINT - 청중 화면 (두 번 클릭: 전체 화면)</title><style>${SLIDE_CSS}html,body{margin:0;height:100%;background:#000;overflow:hidden}#v{position:absolute;inset:0}.show-slide{position:absolute;left:0;top:0;transform-origin:0 0}.show-end{color:#fff;font:20px sans-serif;padding:20px}</style></head><body><div id="v"></div></body></html>`);
@@ -654,6 +710,7 @@ function syncAudience() {
   const v = w.document.getElementById('v');
   if (!v) return;
   if (show.ended) { v.innerHTML = '<div class="show-end">슬라이드 쇼의 끝입니다.</div>'; return; }
+  if (show.blank) { v.innerHTML = `<div style="position:absolute;inset:0;background:${show.blank}"></div>`; return; }
   const idx = show.order[show.pos];
   const { hide } = slideState(idx, show.step);
   const { w: sw, h: sh } = S.pres.size;

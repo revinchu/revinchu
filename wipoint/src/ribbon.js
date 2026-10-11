@@ -49,13 +49,13 @@ const HOME = { id: 'home', label: '홈', groups: [
   { label: '글꼴', items: [ROWS(FONT_ROW, FONT_ROW2)], launcher: 'fontDialog' },
   { label: '단락', items: [ROWS(PARA_ROW1, PARA_ROW2)], launcher: 'paragraphDialog' },
   { label: '그리기', items: [G('shapesMini', { rows: 3 }), L(null, 'arrange', '정렬', { menu: 'arrangeMenu' }), L(null, 'quickStyles', '빠른 스타일', { menu: 'quickStylesMenu' }), COL({ t: 'color', cmd: 'shapeFill', icon: 'shapeFill', title: '도형 채우기', label: '도형 채우기', menu: 'shapeFillMenu', bar: 'fill' }, { t: 'color', cmd: 'shapeOutline', icon: 'shapeOutline', title: '도형 윤곽선', label: '도형 윤곽선', menu: 'shapeOutlineMenu', bar: 'line' }, M(null, 'effects', '도형 효과', { menu: 'shapeEffectsMenu' }))], launcher: 'formatPaneShape' },
-  { label: '편집', items: [COL(M('find', 'find', '찾기'), M('replace', 'replace', '바꾸기'), M(null, 'select', '선택', { menu: 'selectMenu' }))] },
+  { label: '편집', items: [COL(M('find', 'find', '찾기'), M('replace', 'replace', '바꾸기', { menu: 'replaceMenu' }), M(null, 'select', '선택', { menu: 'selectMenu' }))] },
 ] };
 
 const INSERT = { id: 'insert', label: '삽입', groups: [
   { label: '슬라이드', items: [L('newSlide', 'newSlide', '새 슬라이드', { menu: 'newSlideMenu' })] },
   { label: '표', items: [L(null, 'table', '표', { menu: 'tableMenu' })] },
-  { label: '이미지', items: [L('insertPicture', 'picture', '그림'), L('screenshot', 'crop', '스크린샷')] },
+  { label: '이미지', items: [L('insertPicture', 'picture', '그림', { menu: 'pictureMenu' }), L('stockImages', 'icons', '스톡 이미지'), L('screenshot', 'crop', '스크린샷')] },
   { label: '일러스트레이션', items: [L(null, 'shapes', '도형', { menu: 'shapesMenu' }), L('insertIcons', 'icons', '아이콘'), L('insertSmartArt', 'convertSmart', 'SmartArt'), L(null, 'chartColumn', '차트', { menu: 'chartMenu' })] },
   { label: '링크', items: [L(null, 'zoomIn', '확대/축소', { menu: 'zoomMenu' }), L('hyperlink', 'link', '링크')] },
   { label: '미디어', items: [L('insertVideo', 'video', '비디오'), L('insertAudio', 'audio', '오디오')] },
@@ -169,7 +169,7 @@ const TAB_KT = { home: 'H', insert: 'N', design: 'G', transitions: 'K', animatio
 const ARRANGE_KT = { bringForward: 'AF', sendBackward: 'AE', selectionPane: 'AP', alignMenu: 'AA', groupMenu: 'AG', rotateMenu: 'AY' };
 const KT = {
   home: { paste: 'V', cut: 'X', copy: 'C', formatPainter: 'FP', newSlide: 'I', layoutMenu: 'L', resetSlide: 'RE', sectionMenu: 'T', font: 'FF', size: 'FS', growFont: 'FG', shrinkFont: 'FK', clearFormat: 'E', bold: '1', italic: '2', underline: '3', strike: '4', textShadow: '5', charSpacingMenu: '6', changeCaseMenu: '7', highlight: 'TC', fontColor: 'FC', bullets: 'U', numbering: 'N', indentLess: 'AO', indentMore: 'AI', lineSpacingMenu: 'K', alignLeft: 'AL', alignCenter: 'AC', alignRight: 'AR', alignJustify: 'AJ', textDirMenu: 'AD', textAnchorMenu: 'AT', shapesMini: 'SH', arrangeMenu: 'G', quickStylesMenu: 'Q', shapeFill: 'SF', shapeOutline: 'SO', shapeEffectsMenu: 'SE', find: 'FD', replace: 'RP', selectMenu: 'SL', 'launcher:fontDialog': 'FN', 'launcher:paragraphDialog': 'PG', 'launcher:formatPaneShape': 'DS' },
-  insert: { newSlide: 'I', tableMenu: 'T', insertPicture: 'P', screenshot: 'SC', shapesMenu: 'SH', insertIcons: 'Y1', insertSmartArt: 'M', chartMenu: 'C', hyperlink: 'IL', zoomMenu: 'ZM', drawTextbox: 'X', headerFooter: 'H', wordArtMenu: 'W', insertDate: 'D', insertSlideNumber: 'SN', symbol: 'U', insertEquation: 'E', insertVideo: 'V', insertAudio: 'O' },
+  insert: { newSlide: 'I', tableMenu: 'T', insertPicture: 'P', stockImages: 'SI', screenshot: 'SC', shapesMenu: 'SH', insertIcons: 'Y1', insertSmartArt: 'M', chartMenu: 'C', hyperlink: 'IL', zoomMenu: 'ZM', drawTextbox: 'X', headerFooter: 'H', wordArtMenu: 'W', insertDate: 'D', insertSlideNumber: 'SN', symbol: 'U', insertEquation: 'E', insertVideo: 'V', insertAudio: 'O' },
   design: { themes: 'TH', themeColorsMenu: 'TC', themeFontsMenu: 'TF', bgStylesMenu: 'TB', slideSizeMenu: 'S', formatBg: 'G', designIdeas: 'D' },
   transitions: { previewTransition: 'P', transitions: 'T', transitionOptionsMenu: 'E', transTiming: 'D', applyTransitionAll: 'L' },
   animations: { previewAnim: 'P', animations: 'S', animOptionsMenu: 'M', addAnimMenu: 'AA', animPane: 'C', removeAnim: 'X', animPainter: 'K', triggerMenu: 'G', animTiming: 'T' },

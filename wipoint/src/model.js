@@ -809,3 +809,26 @@ export function rangeRunProp(body, a, b, key, dflt) {
   if (first) { const p = body.paras[a.p]; return p?.end?.[key] ?? dflt?.(p ?? { lvl: 0 }) ?? null; }
   return val;
 }
+
+/**
+ * 글꼴 바꾸기 (PowerPoint 홈 › 바꾸기 › 글꼴 바꾸기): 문서 전체 (슬라이드 · 표 · 마스터 · 테마 글꼴) 에서 from → to.
+ * from = '*' 이면 모든 글자를 to 로 (테마 제목/본문 글꼴도). 바꾼 글자 조각 수를 돌려줌.
+ */
+export function replaceFonts(pres, from, to) {
+  let n = 0;
+  const all = from === '*';
+  const hit = (f) => all || (f && f.toLowerCase() === String(from).toLowerCase());
+  const tf = pres.theme?.fonts;
+  if (tf) {
+    const fonts = { ...tf };
+    if (hit(tf.major)) { fonts.major = to; n++; }
+    if (hit(tf.minor)) { fonts.minor = to; n++; }
+    pres.theme = { ...pres.theme, fonts };
+  }
+  const run = (r) => { if (r.font && !r.font.startsWith('+') && hit(r.font)) { r.font = to; n++; } else if (all && r.font) { r.font = to; n++; } };
+  const body = (t) => { for (const p of t?.paras ?? []) { for (const r of p.runs) run(r); if (p.end) run(p.end); } };
+  const objs = (list) => { for (const o of list ?? []) { body(o.text); for (const row of o.rows ?? []) for (const c of row.cells ?? []) body(c.text); } };
+  for (const s of pres.slides ?? []) { objs(s.objects); objs(s.bgObjects); }
+  for (const m of Object.values(pres.masters ?? {})) objs(m.objects);
+  return n;
+}

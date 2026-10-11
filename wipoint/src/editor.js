@@ -1002,7 +1002,7 @@ function startDraw(e, p0) {
     const o = kind === 'textbox' ? newTextBox(rect) : newShape(kind, rect);
     // [기본 도형으로 설정] 한 서식
     const def = S.pres.defaultShape;
-    if (def && kind !== 'textbox') { if (!line && def.fill !== undefined) o.fill = JSON.parse(JSON.stringify(def.fill)); if (def.line !== undefined) o.line = JSON.parse(JSON.stringify(def.line)); if (def.shadow) o.shadow = true; else delete o.shadow; if (def.textColor && o.text) o.text.defColor = def.textColor; }
+    if (def && kind !== 'textbox') { if (!line && def.fill !== undefined) o.fill = JSON.parse(JSON.stringify(def.fill)); if (def.line !== undefined) o.line = JSON.parse(JSON.stringify(def.line)); if (def.shadow) o.shadow = true; else delete o.shadow; if (def.fx) o.fx = JSON.parse(JSON.stringify(def.fx)); if (def.textColor && o.text) o.text.defColor = def.textColor; }
     if (line && !small) { if (w < 0) o.flipH = true; if (h < 0) o.flipV = true; if (o.flipH && o.flipV) { delete o.flipH; delete o.flipV; } }
     change(() => { curSlide().objects.push(o); });
     S.sel = new Set([o.id]);

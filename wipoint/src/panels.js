@@ -8,6 +8,7 @@ import { colorButton } from './colorpick.js';
 import { fitZoom, setZoom } from './editor.js';
 import { peersOn } from './collab.js';
 import { chartPane } from './chartui.js';
+import { effectsPaneSections } from './fxui.js';
 
 let thumbsEl;
 let notesEl;
@@ -498,7 +499,11 @@ function shapePane(body) {
       check(im.gray, (v) => set((x) => { if (x.type === 'image') x.gray = v || undefined; }), '회색조'),
       el('div', { class: 'pane-btns' }, el('button', { class: 'btn small', onclick: () => run('cropPicture') }, '자르기...'), el('button', { class: 'btn small', onclick: () => run('resetPicture') }, '그림 원래대로'))));
   }
-  body.append(sec('효과', check(o.shadow, (v) => set((x) => { x.shadow = v || undefined; }), '그림자')));
+  if (o.type === 'shape' || o.type === 'image') {
+    const fxs = effectsPaneSections(o, { sec, row, num, sel, check });
+    body.append(el('h3', { class: 'pane-group', id: 'paneEffects' }, '효과'), ...fxs);
+    if (S.paneFocus === 'effects') { S.paneFocus = null; requestAnimationFrame(() => document.getElementById('paneEffects')?.scrollIntoView({ block: 'start' })); }
+  }
   // 크기 및 속성
   const one = objs.length === 1;
   body.append(sec('크기 및 위치',

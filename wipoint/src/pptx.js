@@ -9,6 +9,7 @@ import { parseLatex, toOMML, ommlToLatex } from './math.js';
 import { paraDefaults, tableCellStyle, slideBackground, themeDecor, slideDecor } from './render.js';
 import { KNOWN_SHAPES } from './shapes.js';
 import { decodeEmbeddedFont } from './fonts.js';
+import { fxOf, fxXml, fxFromXml } from './effects.js';
 
 const NS_A = 'http://schemas.openxmlformats.org/drawingml/2006/main';
 const NS_R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -170,7 +171,7 @@ function shapeXml(o, id, ctx, phIdx) {
   if (isLine && !o.text) {
     return `<p:cxnSp><p:nvCxnSpPr><p:cNvPr id="${id}" name="${name}">${link}</p:cNvPr><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr><p:spPr>${xfrmXml(o)}${geomXml(o)}${lineXml(o.line)}</p:spPr></p:cxnSp>`;
   }
-  const effect = o.shadow ? '<a:effectLst><a:outerShdw blurRad="50800" dist="38100" dir="2700000" algn="tl" rotWithShape="0"><a:prstClr val="black"><a:alpha val="40000"/></a:prstClr></a:outerShdw></a:effectLst>' : '';
+  const effect = fxXml(fxOf(o));
   const spPr = `<p:spPr>${xfrmXml(o)}${geomXml(o)}${o.ph ? (o.fill ? fillXml(o.fill, ctx) : '') : fillXml(o.fill, ctx)}${o.ph && !o.line ? '' : lineXml(o.line)}${effect}</p:spPr>`;
   const text = o.text ? txBodyXml(o, o.text, ctx) : '';
   return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${name}"${o.alt ? ` descr="${esc(o.alt)}"` : ''}>${link}</p:cNvPr><p:cNvSpPr${o.txBox ? ' txBox="1"' : ''}>${o.ph ? '<a:spLocks noGrp="1"/>' : ''}</p:cNvSpPr>${phXml(o, phIdx)}</p:nvSpPr>${spPr}${text}</p:sp>`;
@@ -186,7 +187,7 @@ function picXml(o, id, ctx, phIdx) {
   const gray = o.gray ? '<a:grayscl/>' : '';
   const lum = o.bright || o.contrast ? `<a:lum bright="${pct(o.bright ?? 0)}" contrast="${pct(o.contrast ?? 0)}"/>` : '';
   const link = o.link ? ctx.hlink(o.link) : '';
-  const effect = o.shadow ? '<a:effectLst><a:outerShdw blurRad="50800" dist="38100" dir="2700000" algn="tl" rotWithShape="0"><a:prstClr val="black"><a:alpha val="40000"/></a:prstClr></a:outerShdw></a:effectLst>' : '';
+  const effect = fxXml(fxOf(o));
   return `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="${esc(o.name ?? `Picture ${id}`)}" descr="${esc(o.alt ?? '')}">${link}</p:cNvPr><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr>${o.ph ? phXml(o, phIdx) : '<p:nvPr/>'}</p:nvPicPr><p:blipFill><a:blip r:embed="${rid}">${alpha}${gray}${lum}</a:blip>${src}<a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr>${xfrmXml(o)}${geomXml({ shape: o.shape ?? 'rect', adj: o.adj })}${o.line ? lineXml(o.line) : ''}${effect}</p:spPr></p:pic>`;
 }
 
@@ -1468,7 +1469,7 @@ export function readPptx(input, opts = {}) {
       const link = child(cNvPr, 'hlinkClick');
       if (link) { const url = ctx.links?.(attr(link, 'id')); if (url) o.link = url; }
       if (isTx) o.txBox = true;
-      if (child(child(spPr, 'effectLst'), 'outerShdw')) o.shadow = true;
+      { const fx = fxFromXml(spPr, { child, attr, readColor: (e) => readColor(e, ctx) }); if (fx) o.fx = fx; }
       if (key) {
         o.ph = { ctrTitle: 'ctrTitle', title: 'title', subTitle: 'subTitle', body: 'body', obj: 'body', pic: 'pic', dt: 'dt', ftr: 'ftr', sldNum: 'sldNum', tbl: 'body', chart: 'body', media: 'body', clipArt: 'body', dgm: 'body' }[key.type] ?? 'body';
         if (o.ph === 'pic' && (!text || isEmptyText(text))) { out.push({ id: o.id, type: 'image', ...rect, ph: 'pic', media: null }); return; }
@@ -1522,7 +1523,7 @@ export function readPptx(input, opts = {}) {
       const am = child(blip, 'alphaModFix');
       if (am) o.alpha = num(attr(am, 'amt'), 100000) / 100000;
       if (child(blip, 'grayscl')) o.gray = true;
-      if (child(child(spPr, 'effectLst'), 'outerShdw')) o.shadow = true;
+      { const fx = fxFromXml(spPr, { child, attr, readColor: (e) => readColor(e, ctx) }); if (fx) o.fx = fx; }
       const link = child(cNvPr, 'hlinkClick');
       if (link) { const url = ctx.links?.(attr(link, 'id')); if (url) o.link = url; }
       if (key) o.ph = 'pic';

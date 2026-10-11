@@ -4,9 +4,10 @@ import {
   newSlide, nextLayout, duplicateSlide, changeLayout, resetSlideLayout, cloneObjects, newTable, newChart, newImage, newTextBox, newShape,
   applyRunProps, applyParaProps, commonRunProp, alignObjects, reorder, groupMembers, uid, LAYOUTS,
   resizePresentation, addAnim, animSteps, ANIM_EFFECTS, ANIM_CLASS_LABEL, MOTION_PATHS, motionPoints, findAll, replaceAll, replaceInPara, setPlainText, plainText, slideTitle, defaultSize, isEmptyText, para, outline,
+  replaceFonts,
 } from './model.js';
 import { setOffsets } from './textedit.js';
-import { THEMES, cloneTheme, themeByName, resolveColor } from './themes.js';
+import { THEMES, cloneTheme, themeByName, resolveColor, COLOR_SCHEMES, schemeColors, SLOT_NAMES } from './themes.js';
 import { SHAPE_GALLERY, SHAPE_LABEL, objLabel } from './shapes.js';
 import { CHART_KINDS } from './chart.js';
 import { sampleChart, chartTypeDialog, chartDataDialog, chartElementsItems, chartLayoutGallery, chartStyleGallery, chartPaletteItems, resetChartStyle, switchChartRowCol, exportChartCsv, chartFontDialog, openChartPane, selChart } from './chartui.js';
@@ -18,14 +19,16 @@ import { parseLatex, toMathML } from './math.js';
 import { collab, startCollab, stopCollab, collabLink, myName } from './collab.js';
 import { isMobile, setMobileMode, mobileMode } from './mobile.js';
 import { ensureFont, localFontList } from './fontlib.js';
-import { WEB_FONTS } from './webfonts.js';
+import { WEB_FONTS, fontsUsed } from './webfonts.js';
 import { el, openMenu, openDialog, formDialog, alertDialog, toast, closeMenus } from './ui.js';
 import { colorMenu } from './colorpick.js';
 import { startEyedrop } from './eyedrop.js';
 import { moveParagraph, startCrop, endCrop, startEdit, endEdit, textTargets, applyTextFormat, caretRunProp, caretPara, insertTextAtCaret, fitZoom, setZoom, renderCanvas, editorLayer } from './editor.js';
-import { startShow, playStepOn } from './show.js';
+import { screenList, startShow, playStepOn } from './show.js';
 import { shapeIconSvg, styleChip, wordArtCss } from './galleries.js';
 import { blobUrl } from './blobstore.js';
+import { effectsMenuItems } from './fxui.js';
+import { STOCK_CATEGORIES, openverseUrl, parseOpenverse, wikimediaUrl, parseWikimedia, creditText } from './stock.js';
 import { saveMyTemplate } from './fileio.js';
 import { save, saveAs, openWithPicker, setDocument, printSlides, exportPng, exportVideo, shareLink, pickFile, exportImages, saveObjectsAsPicture, slideSvgText, svgToRaster } from './fileio.js';
 import { slideSvg } from './svgexport.js';
@@ -181,6 +184,85 @@ function placeImage(r, into, added = []) {
   change(() => { s.objects.push(o); });
   added.push(o);
   return o;
+}
+
+// ───────────── 스톡 이미지 · 온라인 그림 ─────────────
+/** 주소들을 차례로 받아 그림으로 넣기 (CORS 로 막히면 다음 주소) */
+async function insertImageUrl(urls, info, into) {
+  const list = (Array.isArray(urls) ? urls : [urls]).filter(Boolean);
+  if (!list.length) return null;
+  let blob = null;
+  for (const u of list) {
+    try { const r = await fetch(u, { mode: 'cors' }); if (r.ok) { const b = await r.blob(); if (b.type.startsWith('image/') && b.size > 200) { blob = b; break; } } } catch { /* 다음 */ }
+  }
+  if (!blob) { alertDialog('그림', '그림을 내려받지 못했습니다. 그 사이트가 다른 사이트에서 그림을 가져가는 것을 막고 있을 수 있습니다. 그림을 내 컴퓨터에 저장한 뒤 [그림 › 이 디바이스]로 넣어 주세요.'); return null; }
+  const r = await readImageFile(new File([blob], 'stock', { type: blob.type }));
+  if (!r) return null;
+  const added = [];
+  const o = placeImage(r, into ?? null, added);
+  if (info) change(() => { o.alt = creditText(info); o.name = info.title || o.name; });
+  S.sel = new Set([o.id]);
+  emit('selection');
+  return o;
+}
+function stockImagesDialog(source = 'openverse') {
+  let src = source;
+  let query = '';
+  let page = 1;
+  let items = [];
+  const picked = new Map();
+  const q = el('input', { type: 'search', placeholder: '검색 (예: 회의, 하늘, 서울, coffee)', class: 'st-q' });
+  q.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') search(q.value, true); });
+  const tabs = el('div', { class: 'st-tabs' });
+  const cats = el('div', { class: 'st-cats' }, STOCK_CATEGORIES.map(([l, kw]) => el('button', { class: 'st-cat', type: 'button', onclick: () => { q.value = l; search(kw, true); } }, l)));
+  const grid = el('div', { class: 'st-grid' });
+  const status = el('div', { class: 'muted st-status' }, '분류를 고르거나 검색하세요. 상업적으로 쓸 수 있는 CC 라이선스 그림만 보여 줍니다 (출처는 대체 텍스트에 기록).');
+  const more = el('button', { class: 'btn', type: 'button', hidden: true, onclick: () => search(query, false) }, '더 보기');
+  const caption = el('input', { type: 'checkbox', checked: true });
+  const drawTabs = () => { tabs.replaceChildren(...[['openverse', '스톡 이미지 (Openverse)'], ['wikimedia', '위키미디어 공용']].map(([k, l]) => el('button', { class: `st-tab${k === src ? ' on' : ''}`, type: 'button', onclick: () => { src = k; drawTabs(); if (query) search(query, true); } }, l))); };
+  drawTabs();
+  async function search(text, fresh) {
+    if (!text.trim()) return;
+    if (fresh) { query = text; page = 1; items = []; grid.replaceChildren(); picked.clear(); }
+    status.textContent = '찾는 중…';
+    more.hidden = true;
+    try {
+      const url = src === 'openverse' ? openverseUrl(query, page) : wikimediaUrl(query, (page - 1) * 40);
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const res = src === 'openverse' ? parseOpenverse(await r.json()) : parseWikimedia(await r.json());
+      page++;
+      items.push(...res);
+      for (const it of res) {
+        const card = el('button', { class: 'st-item', type: 'button', title: `${it.title}\n${it.creator ? `작성자: ${it.creator}\n` : ''}${it.license}` },
+          el('img', { src: it.thumb, alt: it.title, loading: 'lazy', referrerpolicy: 'no-referrer' }), el('span', { class: 'st-lic' }, it.license));
+        card.addEventListener('click', () => { if (picked.has(it.id)) { picked.delete(it.id); card.classList.remove('on'); } else { picked.set(it.id, it); card.classList.add('on'); } status.textContent = `${picked.size}개 선택`; });
+        card.addEventListener('dblclick', () => { picked.set(it.id, it); dlg.close(); insertPicked(); });
+        grid.append(card);
+      }
+      status.textContent = items.length ? `${items.length}개 · 눌러서 고르고 [삽입] (두 번 누르면 바로 삽입)` : '찾은 그림이 없습니다. 다른 낱말(영어도 좋아요)로 찾아 보세요.';
+      more.hidden = res.length < 20;
+    } catch (e) {
+      status.textContent = `검색하지 못했습니다 (${e.message}). 인터넷 연결이나 회사 방화벽을 확인하세요.`;
+    }
+  }
+  async function insertPicked() {
+    const list = [...picked.values()];
+    for (const it of list) {
+      const o = await insertImageUrl(it.full, it);
+      if (o && caption.checked && !it.free) {
+        const cap = newTextBox({ x: o.x, y: o.y + o.h + 2, w: o.w, h: 22 }, creditText(it));
+        cap.text.paras[0].runs[0] = { ...cap.text.paras[0].runs[0], size: 8, color: '@tx1:lm50:lo50' };
+        change(() => slide().objects.push(cap));
+      }
+    }
+  }
+  const dlg = openDialog({
+    title: '스톡 이미지', width: 820,
+    body: el('div', { class: 'st-wrap' }, tabs, q, cats, grid, el('div', { class: 'st-foot' }, status, more), el('label', { class: 'pane-check' }, caption, el('span', {}, '출처 캡션 넣기 (CC0 · 퍼블릭 도메인 제외)'))),
+    buttons: [{ label: '삽입', primary: true, action: () => { if (!picked.size) { toast('그림을 고르세요'); return false; } insertPicked(); return true; } }, { label: '취소' }],
+    onOpen: () => q.focus(),
+  });
 }
 
 // ───────────── 비디오 · 오디오 ─────────────
@@ -450,6 +532,71 @@ function insertChart(kind, sub, preset) {
   emit('selection');
   if (!preset) chartDataDialog(c);
   return c;
+}
+
+// ───────────── 글꼴 바꾸기 (문서 전체) ─────────────
+function replaceFontsDialog() {
+  const used = fontsUsed(S.pres);
+  const all = [...new Set([...used, ...localFontList(), ...WEB_FONTS.map((f) => f.name)])];
+  const from = el('select', {}, [el('option', { value: '*' }, '(모든 글꼴 — 문서 전체를 한 글꼴로)'), ...used.map((n) => el('option', { value: n, selected: n === used[0] }, n))]);
+  const to = el('input', { type: 'text', list: 'rfFonts', value: S.pres.theme.fonts.minor });
+  const dl = el('datalist', { id: 'rfFonts' }, all.map((n) => el('option', { value: n })));
+  const pv = el('div', { class: 'rf-pv' }, '가나다라 ABC 123');
+  const upd = () => { pv.style.fontFamily = `'${to.value}', sans-serif`; ensureFont(to.value); };
+  to.addEventListener('input', upd);
+  upd();
+  openDialog({
+    title: '글꼴 바꾸기', width: 440,
+    body: el('div', { class: 'form-grid' }, el('label', {}, el('span', {}, '바꿀 글꼴'), from), el('label', {}, el('span', {}, '새 글꼴'), to), dl, pv,
+      el('p', { class: 'muted' }, '슬라이드 · 표 · 슬라이드 마스터 · 테마(제목/본문) 글꼴을 모두 바꿉니다. 실행 취소(Ctrl+Z)로 되돌릴 수 있습니다.')),
+    buttons: [{ label: '바꾸기', primary: true, action: () => {
+      const t = to.value.trim();
+      if (!t) return false;
+      let n = 0;
+      change(() => { n = replaceFonts(S.pres, from.value, t); }, { scope: 'all' });
+      ensureFont(t);
+      toast(n ? `글꼴을 바꾸었습니다 (${n}곳)` : '바꿀 글꼴이 없습니다');
+      return true;
+    } }, { label: '닫기' }],
+  });
+}
+
+// ───────────── 테마 색 (색 구성 · 사용자 지정) ─────────────
+const customSchemes = () => { try { return JSON.parse(localStorage.getItem('wipoint:colorSchemes') ?? '[]'); } catch { return []; } };
+function setThemeColors(colors, label) {
+  change(() => { S.pres.theme = { ...S.pres.theme, colors: { ...colors }, colorName: label }; }, { scope: 'all' });
+  toast(`색 구성 '${label}'을(를) 적용했습니다`);
+}
+/** 메뉴에서 가리키는 동안 실시간 미리 보기 (PowerPoint 와 같음) */
+let previewBase = null;
+function previewColors(colors) {
+  if (colors) { previewBase ??= S.pres.theme; S.pres.theme = { ...previewBase, colors: { ...colors } }; emit('change', { scope: 'all', preview: true }); }
+  else if (previewBase) { S.pres.theme = previewBase; previewBase = null; emit('change', { scope: 'all', preview: true }); }
+}
+const SLOT_LABEL = { dk1: '텍스트/배경 - 어둡게 1', lt1: '텍스트/배경 - 밝게 1', dk2: '텍스트/배경 - 어둡게 2', lt2: '텍스트/배경 - 밝게 2', accent1: '강조 1', accent2: '강조 2', accent3: '강조 3', accent4: '강조 4', accent5: '강조 5', accent6: '강조 6', hlink: '하이퍼링크', folHlink: '열어 본 하이퍼링크' };
+function customColorsDialog() {
+  const colors = { ...S.pres.theme.colors };
+  const name = el('input', { type: 'text', value: '사용자 지정 1' });
+  const pv = el('div', { class: 'cc-preview' });
+  const drawPv = () => { pv.innerHTML = `<div style="background:${colors.lt1};color:${colors.dk1};padding:8px;border:1px solid #ccc"><b style="color:${colors.dk2}">텍스트</b> <span style="color:${colors.hlink};text-decoration:underline">하이퍼링크</span><div style="display:flex;gap:4px;margin-top:6px">${['accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'accent6'].map((k) => `<i style="flex:1;height:34px;background:${colors[k]}"></i>`).join('')}</div></div>`; };
+  const rows = SLOT_NAMES.map((k) => {
+    const inp = el('input', { type: 'color', value: String(colors[k]).slice(0, 7) });
+    inp.addEventListener('input', () => { colors[k] = inp.value.toUpperCase(); drawPv(); });
+    return el('label', { class: 'cc-row' }, el('span', {}, SLOT_LABEL[k]), inp);
+  });
+  drawPv();
+  openDialog({
+    title: '새 테마 색 만들기', width: 560,
+    body: el('div', { class: 'cc-wrap' }, el('div', { class: 'cc-list' }, rows), el('div', {}, el('b', {}, '미리 보기'), pv, el('label', { class: 'cc-row' }, el('span', {}, '이름'), name))),
+    buttons: [{ label: '저장', primary: true, action: () => {
+      const n = name.value.trim() || '사용자 지정';
+      const list = customSchemes().filter((c) => c.name !== n);
+      list.unshift({ name: n, colors });
+      try { localStorage.setItem('wipoint:colorSchemes', JSON.stringify(list.slice(0, 20))); } catch { /* 저장소 없음 */ }
+      setThemeColors(colors, n);
+      return true;
+    } }, { label: '취소' }],
+  });
 }
 
 // ───────────── 테마 ─────────────
@@ -1167,10 +1314,46 @@ function jumpComment(d) {
 }
 function setupShowDialog() {
   const sh = S.pres.show ?? {};
-  formDialog('슬라이드 쇼 설정', [
-    { name: 'loop', label: 'Esc 키를 누를 때까지 계속 실행', type: 'checkbox', value: !!sh.loop },
-    { name: 'useTimings', label: '설정된 시간 사용 (자동 넘기기)', type: 'checkbox', value: sh.useTimings !== false },
-  ], (v) => change(() => { S.pres.show = { ...sh, loop: v.loop, useTimings: v.useTimings }; }, { scope: 'none' }));
+  const n = S.pres.slides.length;
+  const radios = (name, cur, opts) => el('div', { class: 'ss-radios' }, opts.map(([v, l]) => el('label', {}, el('input', { type: 'radio', name, value: v, checked: v === cur }), el('span', {}, l))));
+  const val = (root, name) => root.querySelector(`input[name="${name}"]:checked`)?.value;
+  const type = radios('ss-type', sh.type ?? 'speaker', [['speaker', '발표자가 진행 (전체 화면)'], ['browse', '웹 형식으로 진행 (창)'], ['kiosk', '대화형 자동 진행 (전체 화면)']]);
+  const loop = el('input', { type: 'checkbox', checked: !!sh.loop });
+  const noAnim = el('input', { type: 'checkbox', checked: !!sh.noAnim });
+  let pen = sh.penColor ?? '#E81123';
+  let laser = sh.laserColor ?? '#FF0000';
+  const penIn = el('input', { type: 'color', value: pen });
+  const laserIn = el('input', { type: 'color', value: laser });
+  const slides = radios('ss-slides', sh.slides ?? 'all', [['all', '모두'], ['range', '범위'], ...((S.pres.customShows ?? []).length ? [['custom', '사용자 지정 쇼']] : [])]);
+  const from = el('input', { type: 'number', min: '1', max: String(n), value: String(sh.from ?? 1), class: 'ss-num' });
+  const to = el('input', { type: 'number', min: '1', max: String(n), value: String(sh.to ?? n), class: 'ss-num' });
+  const cs = el('select', {}, (S.pres.customShows ?? []).map((c) => el('option', { value: c.name, selected: c.name === sh.custom }, c.name)));
+  const adv = radios('ss-adv', sh.useTimings === false ? 'manual' : 'timings', [['manual', '수동'], ['timings', '설정된 시간 사용 (있는 경우)']]);
+  const monitor = el('select', {}, el('option', { value: 'auto', selected: (sh.monitor ?? 'auto') === 'auto' }, '자동'), el('option', { value: 'primary', selected: sh.monitor === 'primary' }, '주 모니터'), el('option', { value: 'off', selected: sh.monitor === 'off' }, '이 창의 모니터 (여러 모니터 사용 안 함)'));
+  const usePresenter = el('input', { type: 'checkbox', checked: sh.usePresenter !== false });
+  const detect = el('button', { class: 'btn small', type: 'button', onclick: async () => {
+    const sd = await screenList(true);
+    if (!sd) { toast('모니터 정보를 읽을 수 없습니다 (Chrome · Edge 에서 [창 관리] 권한을 허용하세요)'); return; }
+    for (const o of [...monitor.options]) if (/^\d+$/.test(o.value)) o.remove();
+    sd.screens.forEach((x, i) => monitor.append(el('option', { value: String(i), selected: sh.monitor === i }, `모니터 ${i + 1}${x.label ? ` (${x.label})` : ''} ${x.width}×${x.height}${x.isPrimary ? ' · 주' : ''}${x === sd.currentScreen ? ' · 이 창' : ''}`)));
+    toast(`모니터 ${sd.screens.length}대를 찾았습니다`);
+  } }, '모니터 찾기');
+  const body = el('div', { class: 'ss-grid' },
+    el('fieldset', {}, el('legend', {}, '보기 형식'), type),
+    el('fieldset', {}, el('legend', {}, '슬라이드 표시'), slides, el('div', { class: 'ss-row' }, '시작', from, '끝', to), (S.pres.customShows ?? []).length ? cs : null),
+    el('fieldset', {}, el('legend', {}, '보기 옵션'), el('label', {}, loop, el('span', {}, 'Esc 키를 누를 때까지 계속 실행')), el('label', {}, noAnim, el('span', {}, '애니메이션 없이 보기')), el('label', { class: 'ss-row' }, el('span', {}, '펜 색'), penIn), el('label', { class: 'ss-row' }, el('span', {}, '레이저 포인터 색'), laserIn)),
+    el('fieldset', {}, el('legend', {}, '화면 전환'), adv),
+    el('fieldset', { class: 'ss-wide' }, el('legend', {}, '여러 모니터'), el('label', { class: 'ss-row' }, el('span', {}, '슬라이드 쇼 모니터'), monitor, detect), el('label', {}, usePresenter, el('span', {}, '발표자 보기 사용 (다른 모니터에 슬라이드, 이 화면에 메모 · 다음 슬라이드 · 타이머)')),
+      el('p', { class: 'muted' }, '모니터가 2대 이상이면 슬라이드 쇼를 시작할 때 자동으로 나뉩니다 (Chrome · Edge, [창 관리] 권한). 다른 브라우저는 발표자 보기의 [청중 창 열기]로 창을 띄워 옮기세요.')));
+  openDialog({
+    title: '쇼 설정', width: 620, body,
+    buttons: [{ label: '확인', primary: true, action: () => {
+      const m = monitor.value;
+      const next = { ...sh, type: val(body, 'ss-type'), loop: loop.checked, noAnim: noAnim.checked || undefined, penColor: penIn.value.toUpperCase(), laserColor: laserIn.value.toUpperCase(), slides: val(body, 'ss-slides'), from: Number(from.value) || 1, to: Number(to.value) || n, custom: cs.value || undefined, useTimings: val(body, 'ss-adv') !== 'manual', monitor: /^\d+$/.test(m) ? Number(m) : m, usePresenter: usePresenter.checked };
+      change(() => { S.pres.show = next; }, { scope: 'none' });
+      return true;
+    } }, { label: '취소' }],
+  });
 }
 
 // ───────────── 사용자 지정 쇼 ─────────────
@@ -1272,8 +1455,14 @@ const SHORTCUTS = [
   ['쇼: Ctrl+H / Ctrl+U', '포인터 숨기기 / 보이기'], ['쇼: G 또는 Ctrl+S', '모든 슬라이드 목록'], ['쇼: Home / End / Esc (−)', '첫 / 마지막 슬라이드 / 쇼 마치기'],
 ];
 
-export const APP_VERSION = '1.2';
+export const APP_VERSION = '1.4';
 const WHATS_NEW = [
+  '1.4 — 도형 · 그림 효과 (그림자 바깥쪽/안쪽/원근감 · 반사 · 네온 · 부드러운 가장자리 · 입체 효과 12종 · 3차원 회전, 미리 설정 갤러리, pptx 저장 · 읽기)',
+  '1.4 — 색 구성 32종 (Office 색 구성 + 추가) · 가리키면 미리 보기 · 색 사용자 지정 · 홈 › 바꾸기 › 글꼴 바꾸기 (문서 전체 글꼴 한 번에)',
+  '1.4 — 쇼 설정 (발표자 진행/웹 형식/키오스크, 범위 · 사용자 지정 쇼, 애니메이션 없이, 펜 · 레이저 색) · 모니터 2대: 슬라이드는 다른 모니터, 이 화면은 발표자 보기 · 화면 바꾸기 · 검은/흰 화면',
+  '1.4 — 스포이트: 누른 채 창 밖으로 끌면 화면 어디서나 색 가져오기 · 스톡 이미지 / 온라인 그림 검색 (Openverse · 위키미디어, 출처 캡션)',
+  '1.3 — PowerPoint 급 차트 (누적 · 100%, 방사형, 거품형, 콤보 · 보조 축, 축 제목 · 눈금, 데이터 표, 추세선, 오차 막대, 스타일 8 · 빠른 레이아웃 10, 요소별 서식 창) · .potx · 개인 서식 파일',
+  '1.3 — 큰 파일: 수 GB pptx 를 조각으로 열기 (ZIP64), 동영상은 파일 그대로 연결, 슬라이드 목록 가상화 · 모바일 화면 · 손바닥 도구 · PowerPoint 오른쪽 클릭 메뉴 · SVG 열기/저장 · 한글 웹 글꼴 45종',
   '1.2 — 공동 편집 (링크로 초대, 슬라이드 단위 실시간 반영, 참가자 이름 · 선택 표시) · 슬라이드 마스터 보기 (마스터 · 레이아웃 개체, 제목/본문 기본 서식)',
   '1.2 — 수식 (Alt+=, LaTeX 입력 · 기본 제공 수식, PowerPoint 수식(OMML)으로 저장 · 읽기) · 개요 보기에서 바로 편집 (Tab/Shift+Tab 수준)',
   '1.2 — 눈금자 (들여쓰기 · 탭 정지 끌기) · 안내선 추가/이동 · 터치 편집 (두 손가락 확대, 길게 눌러 메뉴)',
@@ -1546,11 +1735,7 @@ register({
     { label: '대시', submenu: DASH_LABEL.map(([k, l]) => ({ label: l, action: () => lineSelected((l2) => ({ ...(l2 ?? { color: '@tx1', width: 1.33 }), dash: k })) })) },
     { label: '화살표', submenu: [['none', 'none', '화살표 없음'], ['none', 'triangle', '끝 화살표'], ['triangle', 'none', '시작 화살표'], ['triangle', 'triangle', '양쪽 화살표'], ['oval', 'triangle', '원 · 화살표']].map(([h, t, l]) => ({ label: l, action: () => lineSelected((l2) => ({ ...(l2 ?? { color: '@tx1', width: 1.33 }), head: h === 'none' ? undefined : h, tail: t === 'none' ? undefined : t })) })) },
   ] }),
-  shapeEffectsMenu: (a) => menuAt(a, [
-    { label: '그림자', checked: !!selObjects()[0]?.shadow, action: () => { const objs = selObjects(); if (!need(objs)) return; const v = !objs[0].shadow; change(() => { for (const o of objs) o.shadow = v || undefined; }); } },
-    { label: '효과 없음', action: () => change(() => { for (const o of selObjects()) delete o.shadow; }) },
-    { sep: true }, { label: '도형 서식...', action: () => run('formatPane', 'shape') },
-  ]),
+  shapeEffectsMenu: (a) => { const objs = selObjects(); if (!need(objs)) return; menuAt(a, effectsMenuItems(objs[0].type === 'image')); },
   formatPaneShape: () => run('formatPane', 'shape'),
   formatPane: (k) => { S.formatPane = S.formatPane === k ? null : k; renderPane(); requestAnimationFrame(() => { if (S.fitZoom) fitZoom(); }); },
   setSize: ({ w, h }) => { const objs = selObjects(); if (!need(objs)) return; change(() => { for (const o of objs) { if (w > 0) o.w = w; if (h > 0) o.h = h; } }); },
@@ -1584,6 +1769,8 @@ register({
   // 찾기
   find: () => findDialog(false),
   replace: () => findDialog(true),
+  replaceMenu: (a) => menuAt(a, [{ label: '바꾸기(R)...', icon: 'replace', key: 'Ctrl+H', action: () => run('replace') }, { label: '글꼴 바꾸기(O)...', icon: 'fontColor', action: () => run('replaceFonts') }]),
+  replaceFonts: () => replaceFontsDialog(),
 
   // 삽입
   tableMenu: (a) => tableGrid(a),
@@ -1598,6 +1785,13 @@ register({
     const m = el(o.kind === 'audio' ? 'audio' : 'video', { src, controls: true, autoplay: true, playsInline: true, style: { width: '100%', maxHeight: '60vh', background: '#000' } });
     openDialog({ title: o.name ?? (o.kind === 'audio' ? '오디오' : '비디오'), width: 640, body: m, buttons: [{ label: '닫기', primary: true }], onClose: () => m.pause() });
   },
+  pictureMenu: (a) => menuAt(a, [
+    { label: '이 디바이스(D)...', icon: 'picture', action: () => run('insertPicture') },
+    { label: '스톡 이미지(S)...', icon: 'icons', action: () => run('stockImages') },
+    { label: '온라인 그림(O)...', icon: 'icons', action: () => run('stockImages', 'wikimedia') },
+    { label: '그림 주소(URL)로 넣기(U)...', icon: 'link', action: () => formDialog('그림 주소로 넣기', [{ name: 'url', label: '그림 주소 (https://…)', value: '' }], (v) => { insertImageUrl(v.url.trim(), null); }) },
+  ]),
+  stockImages: (src) => stockImagesDialog(typeof src === 'string' ? src : 'openverse'),
   insertPicture: async (opt = {}) => {
     const inp = document.createElement('input');
     inp.type = 'file';
@@ -1672,7 +1866,19 @@ register({
 
   // 디자인
   applyTheme: (name) => applyTheme(name),
-  themeColorsMenu: (a) => menuAt(a, THEMES.map((t) => ({ label: t.label, node: el('button', { class: 'menu-item theme-colors', onclick: () => { closeMenus(); applyTheme(t.name, { colorsOnly: true }); } }, el('span', { class: 'tc-strip' }, ['dk2', 'lt2', 'accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'accent6'].map((k) => el('i', { style: { background: t.colors[k] } }))), el('span', {}, t.label)) })), { scroll: true }),
+  themeColorsMenu: (a) => {
+    const cur = S.pres.theme.colors;
+    const same = (c) => ['dk2', 'lt2', 'accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'accent6'].every((k) => String(cur[k]).toUpperCase() === String(c[k]).toUpperCase());
+    const item = (label, colors) => ({ node: el('button', { class: `menu-item theme-colors${same(colors) ? ' on' : ''}`, onmouseenter: () => previewColors(colors), onmouseleave: () => previewColors(null), onclick: () => { closeMenus(); previewColors(null); setThemeColors(colors, label); } }, el('span', { class: 'tc-strip' }, ['dk2', 'lt2', 'accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'accent6'].map((k) => el('i', { style: { background: colors[k] } }))), el('span', {}, label)) });
+    const custom = customSchemes();
+    menuAt(a, [
+      ...(custom.length ? [{ header: '사용자 지정' }, ...custom.map((c) => item(c.name, c.colors))] : []),
+      { header: 'Office' }, ...COLOR_SCHEMES.map(([n, list]) => item(n, schemeColors(list))),
+      { header: '테마 색' }, ...THEMES.map((t) => item(t.label, t.colors)),
+      { sep: true }, { label: '색 사용자 지정(C)...', icon: 'theme', action: () => customColorsDialog() },
+    ], { scroll: true });
+  },
+  customColors: () => customColorsDialog(),
   themeFontsMenu: (a) => menuAt(a, FONT_PAIRS.map(([mj, mn]) => ({ node: el('button', { class: 'menu-item font-pair', onclick: () => { closeMenus(); change(() => { S.pres.theme = { ...S.pres.theme, fonts: { major: mj, minor: mn } }; }, { scope: 'all' }); } }, el('b', { style: { fontFamily: `'${mj}'` } }, mj), el('span', { style: { fontFamily: `'${mn}'` } }, mn)) }))),
   bgStylesMenu: (a) => {
     const t = S.pres.theme;
@@ -1880,7 +2086,7 @@ register({
   setDefaultShape: () => {
     const o = selOne();
     if (o?.type !== 'shape') { toast('도형을 선택하세요'); return; }
-    change(() => { S.pres.defaultShape = { fill: o.fill ?? null, line: o.line ?? null, shadow: !!o.shadow, textColor: o.text?.paras[0]?.runs[0]?.color ?? o.text?.defColor ?? null }; }, { scope: 'none' });
+    change(() => { S.pres.defaultShape = { fill: o.fill ?? null, line: o.line ?? null, shadow: !!o.shadow, fx: o.fx ?? null, textColor: o.text?.paras[0]?.runs[0]?.color ?? o.text?.defColor ?? null }; }, { scope: 'none' });
     toast('새로 그리는 도형에 이 서식을 씁니다');
   },
   // 사진 앨범: 그림마다 슬라이드 하나 (제목 = 파일 이름)
@@ -2111,7 +2317,7 @@ function insertWordArt(i) {
 function captureStyle(o) {
   const r0 = o.text?.paras?.find((p) => p.runs.length)?.runs[0] ?? o.text?.paras?.[0]?.end ?? {};
   const { t: _t, ...run0 } = r0;
-  return { fill: o.fill, line: o.line, shadow: o.shadow, run: run0, align: o.text?.paras?.[0]?.align, defColor: o.text?.defColor, type: o.type, img: o.type === 'image' ? { bright: o.bright, contrast: o.contrast, gray: o.gray, alpha: o.alpha, line: o.line, shape: o.shape } : null };
+  return { fill: o.fill, line: o.line, shadow: o.shadow, fx: o.fx, run: run0, align: o.text?.paras?.[0]?.align, defColor: o.text?.defColor, type: o.type, img: o.type === 'image' ? { bright: o.bright, contrast: o.contrast, gray: o.gray, alpha: o.alpha, line: o.line, shape: o.shape } : null };
 }
 function applyStyle(objs, st) {
   if (!objs.length) return;
@@ -2120,6 +2326,7 @@ function applyStyle(objs, st) {
       if (o.type === 'shape') {
         if (st.type === 'shape') { o.fill = st.fill ? JSON.parse(JSON.stringify(st.fill)) : null; o.line = st.line ? JSON.parse(JSON.stringify(st.line)) : null; }
         o.shadow = st.shadow || undefined;
+        if (st.fx) o.fx = JSON.parse(JSON.stringify(st.fx)); else delete o.fx;
         if (o.text) { applyRunProps(o.text, Object.fromEntries(['b', 'i', 'u', 's', 'size', 'color', 'font', 'hl', 'shadow', 'spc', 'outline'].map((k) => [k, st.run?.[k]]))); if (st.align) applyParaProps(o.text, { align: st.align }); if (st.defColor) o.text.defColor = st.defColor; }
       } else if (o.type === 'image' && st.img) Object.assign(o, JSON.parse(JSON.stringify(st.img)));
     }

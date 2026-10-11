@@ -88,19 +88,18 @@ export function sampleAt(x, y, target = 'fill') {
 
 function onMove(e) {
   if (!tip) return;
+  // 누른 채 창 밖으로 끌면: 시스템 스포이트(화면 어디서나 — 다른 프로그램 · 바탕 화면 · 다른 모니터)
+  if (dragging && (e.clientX < 0 || e.clientY < 0 || e.clientX >= innerWidth || e.clientY >= innerHeight)) { outside(); return; }
   const c = sampleAt(e.clientX, e.clientY, S.eyedrop);
   lastHex = c;
   tip.style.left = `${e.clientX + 16}px`;
   tip.style.top = `${e.clientY + 16}px`;
   tip.hidden = !c;
-  if (c) { tip.firstChild.style.background = c; tip.lastChild.textContent = `${c}  RGB(${parseInt(c.slice(1, 3), 16)}, ${parseInt(c.slice(3, 5), 16)}, ${parseInt(c.slice(5, 7), 16)})`; }
+  if (c) { tip.firstChild.style.background = c; tip.lastChild.textContent = `${c}  RGB(${parseInt(c.slice(1, 3), 16)}, ${parseInt(c.slice(3, 5), 16)}, ${parseInt(c.slice(5, 7), 16)})${dragging ? '  · 창 밖으로 끌면 화면 어디서나' : ''}`; }
 }
-function onDown(e) {
-  const stage = document.getElementById('stage');
-  if (!stage.contains(e.target)) { stopEyedrop(); return; }
-  e.preventDefault();
-  e.stopPropagation();
-  const c = sampleAt(e.clientX, e.clientY, S.eyedrop) ?? lastHex;
+let dragging = false;
+let sysOpen = false;
+function apply(c) {
   const t = S.eyedrop;
   const cb = pickCb;
   stopEyedrop();
@@ -108,6 +107,38 @@ function onDown(e) {
   if (cb) cb(c);
   else { run(TARGETS[t][0], c); toast(`${TARGETS[t][1]}: ${c}`); }
 }
+async function outside() {
+  if (sysOpen) return;
+  dragging = false;
+  if (!('EyeDropper' in window)) { toast('창 밖의 색은 Chrome · Edge 에서 가져올 수 있습니다 (이 브라우저는 창 안에서만)'); return; }
+  sysOpen = true;
+  if (tip) tip.hidden = true;
+  try {
+    const r = await new window.EyeDropper().open();
+    apply(r.sRGBHex.toUpperCase());
+  } catch { /* 취소 (Esc) — 스포이트는 계속 */ } finally { sysOpen = false; }
+}
+function onDown(e) {
+  if (e.button !== 0) { stopEyedrop(); return; }
+  // 앱 화면 어디서나 (슬라이드 · 리본 · 미리 보기) — 놓는 곳의 색. 누른 채 창 밖으로 나가면 시스템 스포이트
+  e.preventDefault();
+  e.stopPropagation();
+  dragging = true;
+  try { e.target.setPointerCapture?.(e.pointerId); } catch { /* 없음 */ }
+  addEventListener('pointerup', onUp, true);
+}
+function onUp(e) {
+  removeEventListener('pointerup', onUp, true);
+  if (!dragging) return;
+  dragging = false;
+  e.preventDefault();
+  e.stopPropagation();
+  if (e.clientX < 0 || e.clientY < 0 || e.clientX >= innerWidth || e.clientY >= innerHeight) { outside(); return; }
+  apply(sampleAt(e.clientX, e.clientY, S.eyedrop) ?? lastHex);
+}
+function onLeave(e) { if (dragging && !e.relatedTarget) outside(); }
+// 클릭이 다른 동작(단추)을 하지 않게
+function eatClick(e) { e.preventDefault(); e.stopPropagation(); }
 function onKey(e) { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); stopEyedrop(); } }
 
 /** target: 'fill' | 'line' | 'font'; onPick 이 있으면 색만 넘겨 줌 (색 메뉴의 [스포이트]) */
@@ -122,7 +153,9 @@ export function startEyedrop(target = 'fill', onPick = null) {
   addEventListener('pointermove', onMove, true);
   addEventListener('pointerdown', onDown, true);
   addEventListener('keydown', onKey, true);
-  toast(`스포이트 (${TARGETS[target][1]}): 슬라이드에서 원하는 색을 누르세요 · Esc 취소`);
+  addEventListener('click', eatClick, true);
+  document.documentElement.addEventListener('mouseleave', onLeave);
+  toast(`스포이트 (${TARGETS[target][1]}): 원하는 색을 누르세요 — 누른 채 창 밖으로 끌면 화면 어디서나 · Esc 취소`);
 }
 export function stopEyedrop() {
   S.eyedrop = null;
@@ -132,5 +165,9 @@ export function stopEyedrop() {
   tip = null;
   removeEventListener('pointermove', onMove, true);
   removeEventListener('pointerdown', onDown, true);
+  removeEventListener('pointerup', onUp, true);
   removeEventListener('keydown', onKey, true);
+  setTimeout(() => removeEventListener('click', eatClick, true), 0);
+  document.documentElement.removeEventListener('mouseleave', onLeave);
+  dragging = false;
 }

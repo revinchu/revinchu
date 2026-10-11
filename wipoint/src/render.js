@@ -3,6 +3,7 @@ import { resolveColor, isDark } from './themes.js';
 import { shapePath, customPath, textRect, OPEN_SHAPES } from './shapes.js';
 import { PX_PER_PT, defaultSize, defaultColor, defaultFont, placeholderPrompt, isEmptyText, masterDecor, setMasterText } from './model.js';
 import { chartSvg } from './chart.js';
+import { fxOf, fxStyle } from './effects.js';
 import { webFont } from './webfonts.js';
 import { parseLatex, toMathML } from './math.js';
 
@@ -195,7 +196,6 @@ export function markers(theme, line, defs) {
   return out.join(' ');
 }
 
-const EFFECT_SHADOW = 'drop-shadow(2px 3px 4px rgba(0,0,0,.35))';
 
 export function shapeHtml(theme, o, media, opts = {}) {
   const defs = [];
@@ -212,7 +212,9 @@ export function shapeHtml(theme, o, media, opts = {}) {
   let html = '';
   const needSvg = fill !== 'none' || stroke !== 'none';
   if (needSvg) {
-    html += `<svg class="geo" width="${f(w)}" height="${f(h)}" viewBox="0 0 ${f(w)} ${f(h)}" overflow="visible" style="position:absolute;left:0;top:0;${o.shadow ? `filter:${EFFECT_SHADOW}` : ''}">${defs.length ? `<defs>${defs.join('')}</defs>` : ''}<path d="${d}" fill="${fill}" fill-rule="evenodd" ${fill !== 'none' && o.fill?.alpha != null ? `fill-opacity="${o.fill.alpha}"` : ''} stroke="${stroke}" stroke-width="${f(sw)}" ${dash} stroke-linejoin="round" ${mk} vector-effect="non-scaling-stroke"/></svg>`;
+    const fx = fxStyle(theme, fxOf(o), o.id);
+    if (fx.defs) defs.push(fx.defs);
+    html += `<svg class="geo" width="${f(w)}" height="${f(h)}" viewBox="0 0 ${f(w)} ${f(h)}" overflow="visible" style="position:absolute;left:0;top:0;${fx.filter ? `filter:${fx.filter}` : ''}">${defs.length ? `<defs>${defs.join('')}</defs>` : ''}<path d="${d}" fill="${fill}" fill-rule="evenodd" ${fill !== 'none' && o.fill?.alpha != null ? `fill-opacity="${o.fill.alpha}"` : ''} stroke="${stroke}" stroke-width="${f(sw)}" ${dash} stroke-linejoin="round" ${mk} vector-effect="non-scaling-stroke"/></svg>`;
   }
   if (o.text && (!isEmptyText(o.text) || opts.editable || (opts.prompt && o.ph))) html += textBoxHtml(theme, o, o.text, w, h, opts);
   return html;
@@ -242,8 +244,10 @@ function imageHtml(theme, o, media, opts) {
   const clip = o.shape && o.shape !== 'rect' ? `clip-path:path('${shapePath(o.shape, o.w, o.h, o.adj)}');` : '';
   const ln = o.line;
   const border = ln ? `<svg width="${f(o.w)}" height="${f(o.h)}" style="position:absolute;left:0;top:0;overflow:visible"><path d="${shapePath(o.shape ?? 'rect', o.w, o.h, o.adj)}" fill="none" stroke="${resolveColor(theme, ln.color, '#000')}" stroke-width="${f(ln.width ?? 1)}"/></svg>` : '';
-  const filt = [o.shadow ? EFFECT_SHADOW : '', o.gray ? 'grayscale(1)' : '', o.bright ? `brightness(${1 + o.bright})` : '', o.contrast ? `contrast(${1 + o.contrast})` : ''].filter(Boolean).join(' ');
-  return `<div style="position:absolute;inset:0;overflow:hidden;${clip}${filt ? `filter:${filt};` : ''}"><img src="${escHtml(src)}" alt="${escHtml(o.alt ?? '')}" draggable="false" style="position:absolute;left:${f(-c.l * iw)}px;top:${f(-c.t * ih)}px;width:${f(iw)}px;height:${f(ih)}px;max-width:none;${o.alpha != null ? `opacity:${o.alpha};` : ''}"></div>${border}`;
+  const fx = fxStyle(theme, fxOf(o), o.id);
+  // 그림 효과(그림자 · 네온)는 잘린 모양 바깥에 그려지므로 바깥 div 에, 색 보정은 그림에
+  const adj = [o.gray ? 'grayscale(1)' : '', o.bright ? `brightness(${1 + o.bright})` : '', o.contrast ? `contrast(${1 + o.contrast})` : ''].filter(Boolean).join(' ');
+  return `${fx.defs ? `<svg width="0" height="0" style="position:absolute"><defs>${fx.defs}</defs></svg>` : ''}<div style="position:absolute;inset:0;${fx.filter ? `filter:${fx.filter};` : ''}"><div style="position:absolute;inset:0;overflow:hidden;${clip}${adj ? `filter:${adj};` : ''}"><img src="${escHtml(src)}" alt="${escHtml(o.alt ?? '')}" draggable="false" style="position:absolute;left:${f(-c.l * iw)}px;top:${f(-c.t * ih)}px;width:${f(iw)}px;height:${f(ih)}px;max-width:none;${o.alpha != null ? `opacity:${o.alpha};` : ''}"></div>${border}</div>`;
 }
 
 /** 비디오 · 오디오: 편집 화면은 표지 그림(또는 검은 칸/스피커), 쇼(opts.live)에서는 실제 재생기 */
@@ -333,10 +337,12 @@ export function objectHtml(theme, o, media, opts = {}) {
   const tr = [];
   if (o.rot) tr.push(`rotate(${f(o.rot)}deg)`);
   if (o.flipH || o.flipV) tr.push(`scale(${o.flipH ? -1 : 1},${o.flipV ? -1 : 1})`);
+  const fxw = o.fx && (o.type === 'shape' || o.type === 'image') ? fxStyle(theme, o.fx, o.id) : null;
+  if (fxw) tr.push(...fxw.transform);
   const hidden = opts.hide?.has(o.id) ? 'visibility:hidden;' : '';
   const ph = o.ph && opts.prompt ? ' ph' : '';
   const link = o.link && opts.links ? ` data-link="${escHtml(o.link)}"` : '';
-  return `<div class="ob${ph}" data-id="${escHtml(o.id)}"${link} style="left:${f(o.x)}px;top:${f(o.y)}px;width:${f(o.w)}px;height:${f(o.h)}px;${tr.length ? `transform:${tr.join(' ')};` : ''}${hidden}">${inner}</div>`;
+  return `<div class="ob${ph}" data-id="${escHtml(o.id)}"${link} style="left:${f(o.x)}px;top:${f(o.y)}px;width:${f(o.w)}px;height:${f(o.h)}px;${tr.length ? `transform:${tr.join(' ')};` : ''}${fxw?.wrap ?? ''}${hidden}">${inner}</div>`;
 }
 
 // ───────────── 테마 장식 · 바닥글 ─────────────

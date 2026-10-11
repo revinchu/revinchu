@@ -97,7 +97,7 @@ test('pptx 왕복: 글 · 서식 · 표 · 차트 · 그림 · 그룹 · 메모 
   assert.deepEqual(s1.objects[1].text.paras.map((x) => [x.lvl, x.bullet?.type, x.bullet?.scheme ?? x.bullet?.char]), [[0, 'char', '•'], [1, 'char', '•'], [0, 'num', 'arabicPeriod']]);
   const sh = s1.objects[2];
   assert.equal(sh.shape, 'roundRect');
-  assert.equal(sh.shadow, true);
+  assert.equal(sh.fx?.shadow?.dist, 3); // 예전 shadow: true → 바깥쪽 그림자 효과
   assert.deepEqual([sh.text.paras[0].runs[0].color, sh.text.paras[0].runs[0].size, sh.text.paras[0].runs[0].i], ['#FF0000', 24, true]);
   assert.equal(s1.objects[3].text.paras[0].runs[0].link, 'https://example.com');
   assert.equal(s1.objects[3].link, '#slide1');

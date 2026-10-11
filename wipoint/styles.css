@@ -368,7 +368,7 @@ body.dropping .stage { outline: 3px dashed var(--accent); outline-offset: -6px; 
 .show-slide { position: absolute; left: 0; top: 0; transform-origin: 0 0; overflow: hidden; }
 .show-ink { position: absolute; inset: 0; pointer-events: none; }
 .show.pen .show-ink { pointer-events: auto; cursor: crosshair; }
-.show-laser { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; background: radial-gradient(circle, #ff4d4d 0 35%, rgba(255, 0, 0, .35) 60%, transparent 70%); pointer-events: none; }
+.show-laser { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; background: radial-gradient(circle, var(--laser, #ff4d4d) 0 35%, color-mix(in srgb, var(--laser, #ff0000) 35%, transparent) 60%, transparent 70%); pointer-events: none; }
 .show.laser-on .show-view { cursor: none; }
 .show-curtain { position: absolute; inset: 0; }
 .show-end { position: absolute; inset: 0; color: #fff; display: flex; align-items: flex-start; justify-content: center; padding-top: 30px; font-size: 18px; }
@@ -683,3 +683,44 @@ body.mobile .font-pop { width: calc(100vw - 16px); left: 8px !important; }
 .pt-colors { max-height: 220px; overflow: auto; }
 body.mobile .ct-wrap { flex-direction: column; }
 body.mobile .ct-kinds { flex-direction: row; overflow-x: auto; width: auto; border-right: 0; }
+/* 효과 갤러리 */
+.fx-gal { display: grid; gap: 4px; padding: 4px 6px; }
+.fx-item { border: 1px solid transparent; background: #fff; border-radius: 3px; padding: 2px; cursor: pointer; }
+.fx-item:hover { border-color: var(--accent, #c43e1c); background: #fdf1ed; }
+.fx-pv { position: relative; width: 58px; height: 52px; overflow: visible; pointer-events: none; }
+.fx-pv .ob { position: absolute; }
+.pane-group { font-size: 13px; margin: 14px 0 4px; padding-top: 8px; border-top: 1px solid #e3e3e3; }
+.cc-wrap { display: grid; grid-template-columns: 1fr 200px; gap: 14px; }
+.cc-list { display: flex; flex-direction: column; gap: 4px; }
+.cc-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; }
+.cc-row input[type=color] { width: 44px; height: 24px; padding: 0; border: 1px solid #ccc; }
+.cc-preview { margin: 6px 0 10px; }
+.menu-item.theme-colors.on { background: #e1ebf7; }
+body.mobile .cc-wrap { grid-template-columns: 1fr; }
+.rf-pv { font-size: 22px; padding: 10px; border: 1px solid #ddd; border-radius: 4px; text-align: center; }
+.ss-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.ss-grid fieldset { border: 1px solid #ddd; border-radius: 4px; padding: 6px 10px; display: flex; flex-direction: column; gap: 5px; font-size: 13px; }
+.ss-grid legend { font-weight: 600; padding: 0 4px; }
+.ss-grid label { display: flex; align-items: center; gap: 6px; }
+.ss-wide { grid-column: 1 / -1; }
+.ss-radios { display: flex; flex-direction: column; gap: 3px; }
+.ss-row { display: flex; align-items: center; gap: 6px; }
+.ss-num { width: 60px; }
+body.mobile .ss-grid { grid-template-columns: 1fr; }
+/* 스톡 이미지 */
+.st-wrap { display: flex; flex-direction: column; gap: 8px; }
+.st-tabs { display: flex; gap: 4px; border-bottom: 1px solid #ddd; }
+.st-tab { border: 0; background: none; padding: 6px 10px; cursor: pointer; font: inherit; border-bottom: 2px solid transparent; }
+.st-tab.on { border-bottom-color: var(--accent, #c43e1c); font-weight: 600; }
+.st-q { padding: 7px 10px; font-size: 14px; }
+.st-cats { display: flex; flex-wrap: wrap; gap: 4px; }
+.st-cat { border: 1px solid #d0d0d0; background: #fff; border-radius: 14px; padding: 3px 10px; cursor: pointer; font: inherit; font-size: 12px; }
+.st-cat:hover { background: #f3f3f3; }
+.st-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; max-height: 52vh; overflow: auto; min-height: 120px; }
+.st-item { position: relative; border: 2px solid transparent; padding: 0; background: #f2f2f2; cursor: pointer; height: 110px; overflow: hidden; border-radius: 3px; }
+.st-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.st-item.on { border-color: var(--accent, #c43e1c); }
+.st-item.on::after { content: '✓'; position: absolute; top: 4px; right: 4px; background: var(--accent, #c43e1c); color: #fff; width: 20px; height: 20px; border-radius: 50%; font-size: 12px; line-height: 20px; }
+.st-lic { position: absolute; left: 0; bottom: 0; background: rgba(0,0,0,.55); color: #fff; font-size: 10px; padding: 1px 4px; }
+.st-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.show.presenter > .show-bar { display: none; }
