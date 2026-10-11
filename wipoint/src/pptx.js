@@ -11,6 +11,7 @@ import { KNOWN_SHAPES } from './shapes.js';
 import { decodeEmbeddedFont } from './fonts.js';
 import { fxOf, fxXml, fxFromXml } from './effects.js';
 import { fallbackChart } from './chart.js';
+import { ART_BY_XML } from './arteffects.js';
 
 const NS_A = 'http://schemas.openxmlformats.org/drawingml/2006/main';
 const NS_R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -192,7 +193,10 @@ function picXml(o, id, ctx, phIdx) {
   const lum = o.bright || o.contrast ? `<a:lum bright="${pct(o.bright ?? 0)}" contrast="${pct(o.contrast ?? 0)}"/>` : '';
   const link = o.link ? ctx.hlink(o.link) : '';
   const effect = fxXml(fxOf(o));
-  return `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="${esc(o.name ?? `Picture ${id}`)}" descr="${esc(o.alt ?? '')}">${link}</p:cNvPr><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr>${o.ph ? phXml(o, phIdx) : '<p:nvPr/>'}</p:nvPicPr><p:blipFill><a:blip r:embed="${rid}">${alpha}${gray}${lum}</a:blip>${src}<a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr>${xfrmXml(o)}${geomXml({ shape: o.shape ?? 'rect', adj: o.adj })}${o.line ? lineXml(o.line) : ''}${effect}</p:spPr></p:pic>`;
+  // 꾸밈 효과: 결과 그림이 본 그림, 원본과 효과는 WIPOINT 확장에 (PowerPoint 는 결과 그림을 보여 줌)
+  const origRid = o.art && o.artOrig ? ctx.image(o.artOrig) : null;
+  const artExt = o.art ? `<a:extLst><a:ext uri="${WP_EXT_URI}"><wp:art xmlns:wp="${WP_NS}" json="${esc(JSON.stringify(o.art))}"${origRid ? ` r:embed="${origRid}"` : ''}/></a:ext></a:extLst>` : '';
+  return `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="${esc(o.name ?? `Picture ${id}`)}" descr="${esc(o.alt ?? '')}">${link}</p:cNvPr><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr>${o.ph ? phXml(o, phIdx) : '<p:nvPr/>'}</p:nvPicPr><p:blipFill><a:blip r:embed="${rid}">${alpha}${gray}${lum}${artExt}</a:blip>${src}<a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr>${xfrmXml(o)}${geomXml({ shape: o.shape ?? 'rect', adj: o.adj })}${o.line ? lineXml(o.line) : ''}${effect}</p:spPr></p:pic>`;
 }
 
 function tableXml(o, id, ctx, theme) {
@@ -939,7 +943,13 @@ export function pptxEntries(pres, opts = {}) {
       override(cpath, 'application/vnd.openxmlformats-officedocument.presentationml.comments+xml');
       rels.add(REL('comments'), `../comments/comment${n}.xml`);
     }
-    const meta = { comments: slide.comments?.length ? slide.comments : undefined, layout: slide.layout, transition: slide.transition ?? null, anims: slide.anims ?? [], hideDecor: slide.hideDecor ?? false, section: slide.section ?? null, zooms: Object.keys(zooms).length ? zooms : undefined, bgObjects: slide.bgObjects ? true : undefined, ids: Object.fromEntries([...spid].filter(([k]) => !String(k).startsWith('grp:')).map(([k, v]) => [v, k])) };
+    // 미디어 재생 옵션 · 내레이션 (PowerPoint 타이밍 대신 WIPOINT 확장에 그대로)
+    const props = {};
+    for (const o of slide.objects) {
+      const pr = Object.fromEntries(['autoplay', 'loop', 'narration', 'hideInShow', 'volume'].filter((k) => o[k] != null).map((k) => [k, o[k]]));
+      if (Object.keys(pr).length && spid.has(o.id)) props[spid.get(o.id)] = pr;
+    }
+    const meta = { props: Object.keys(props).length ? props : undefined, inkRec: slide.inkRec?.length ? slide.inkRec : undefined, comments: slide.comments?.length ? slide.comments : undefined, layout: slide.layout, transition: slide.transition ?? null, anims: slide.anims ?? [], hideDecor: slide.hideDecor ?? false, section: slide.section ?? null, zooms: Object.keys(zooms).length ? zooms : undefined, bgObjects: slide.bgObjects ? true : undefined, ids: Object.fromEntries([...spid].filter(([k]) => !String(k).startsWith('grp:')).map(([k, v]) => [v, k])) };
     const ext = `<p:extLst><p:ext uri="${WP_EXT_URI}"><wp:slide xmlns:wp="${WP_NS}" json="${esc(JSON.stringify(meta))}"/></p:ext></p:extLst>`;
     const timing = timingXml(slide, (oid) => spid.get(oid));
     files[`ppt/slides/slide${n}.xml`] = `${XML_HEAD}<p:sld xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}"${slide.hidden ? ' show="0"' : ''}><p:cSld>${bg}<p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>${parts.join('')}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>${transitionXml(slide.transition)}${timing}${ext}</p:sld>`;
@@ -1616,6 +1626,16 @@ export function readPptx(input, opts = {}) {
       const am = child(blip, 'alphaModFix');
       if (am) o.alpha = num(attr(am, 'amt'), 100000) / 100000;
       if (child(blip, 'grayscl')) o.gray = true;
+      // 꾸밈 효과: WIPOINT 확장 (원본 그림 포함) 또는 PowerPoint a14:imgEffect (원본은 HD Photo 라 효과 이름만)
+      const wpArt = descendants(blip, 'art')[0];
+      if (wpArt) {
+        try { o.art = JSON.parse(attr(wpArt, 'json')); } catch { /* 무시 */ }
+        const om = attr(wpArt, 'embed') ? ctx.media(attr(wpArt, 'embed')) : null;
+        if (om) o.artOrig = om;
+      } else {
+        const ie = descendants(blip, 'imgEffect')[0]?.children?.find((x) => ART_BY_XML[x.name]);
+        if (ie) o.art = { effect: ART_BY_XML[ie.name] };
+      }
       { const fx = fxFromXml(spPr, { child, attr, readColor: (e) => readColor(e, ctx) }); if (fx) o.fx = fx; }
       const link = child(cNvPr, 'hlinkClick');
       if (link) { const url = ctx.links?.(attr(link, 'id')); if (url) o.link = url; }
@@ -1980,6 +2000,8 @@ export function readPptx(input, opts = {}) {
       slide.anims = (meta.anims ?? []).map((a) => ({ ...a, obj: map.get(a.obj), trigger: a.trigger ? map.get(a.trigger) : undefined })).filter((a) => a.obj);
       for (const a of slide.anims) if (a.trigger === undefined) delete a.trigger;
       if (meta.section) slide.section = meta.section;
+      for (const [sp, pr] of Object.entries(meta.props ?? {})) { const o = objects.find((q) => q.id === spidToObj.get(sp)); if (o) Object.assign(o, pr); }
+      if (meta.inkRec) slide.inkRec = meta.inkRec;
       // 확대/축소 개체 (대상 슬라이드는 모두 읽은 뒤 id 로 바꿈)
       for (const [sp, z] of Object.entries(meta.zooms ?? {})) {
         const o = objects.find((q) => q.id === spidToObj.get(sp));

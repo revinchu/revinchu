@@ -4,6 +4,8 @@ import { uid } from './model.js';
 import { slideHtml, SLIDE_CSS, escHtml } from './render.js';
 import { animSteps, triggerSteps, stepTimeline, slideTitle, motionPoints, morphPairs } from './model.js';
 import { el, openMenu, toast, openDialog as import_openDialog } from './ui.js';
+import { mixDown, resample, encodeWav, inkUntil, captionText } from './recording.js';
+import { blobUrl } from './blobstore.js';
 import { blindsPoly, combPoly, checkerPoly, randomBarsFrames, randomCellsFrames, sweepFrames, diamondPoly, plusPoly, stripsPoly, frames } from './transfx.js';
 
 let show = null; // 현재 쇼 상태
@@ -37,6 +39,14 @@ function targetScreen(sd, monitor) {
 /** opts: { from, presenter, windowed, rehearse } */
 export function startShow(opts = {}) {
   if (show) endShow();
+  // 녹화: 마이크(· 카메라) 권한을 먼저 받음 — 거절되면 타이밍 · 잉크만 기록
+  if (opts.record && !opts.stream) {
+    const want = { audio: opts.record.mic !== false, video: opts.record.camera ? { width: 640, height: 480 } : false };
+    if (!want.audio && !want.video) { startShow({ ...opts, stream: 'none' }); return; }
+    navigator.mediaDevices?.getUserMedia(want).then((stream) => startShow({ ...opts, stream }), () => { toast('마이크/카메라를 사용할 수 없어 타이밍과 잉크만 기록합니다'); startShow({ ...opts, stream: 'none' }); })
+      ?? startShow({ ...opts, stream: 'none' });
+    return;
+  }
   const setup0 = S.pres.show ?? {};
   if (setup0.type === 'browse') opts = { ...opts, windowed: true };
   // 모니터가 여러 대면: 슬라이드는 고른 모니터에 전체 화면, 이 화면에는 발표자 보기 (PowerPoint 와 같음)
@@ -68,6 +78,8 @@ export function startShow(opts = {}) {
   root.append(view, bar);
   show = { root, stage, view, ink, laser, curtain, order, pos, step: 0, steps: [], opts, setup, timers: [], started: Date.now(), slideStart: Date.now(), times: {}, tool: null, typed: '', audience: null, presenterEls: null };
   if (opts.presenter) buildPresenter();
+  if (opts.record) startRecording(opts.stream === 'none' ? null : opts.stream, opts.record);
+  setupCaptions();
   document.body.append(root);
   root.addEventListener('keydown', onKey);
   root.addEventListener('click', onClick);
@@ -91,10 +103,12 @@ export function endShow() {
   if (!show) return;
   const s = show;
   const ink = [...(s.strokes ?? new Map())].filter(([, l]) => l.some((st) => st.pts.length > 1));
-  if (ink.length && !s.viewOnlyInk) setTimeout(() => keepInkDialog(ink), 50);
+  if (ink.length && !s.viewOnlyInk && !s.rec) setTimeout(() => keepInkDialog(ink), 50);
   clearTimers();
   clearInterval(s.clock);
   if (s.opts.rehearse) { recordTime(); saveRehearsal(s.times); }
+  if (s.rec) finishRecording(s.rec);
+  stopCaptions(s);
   s.root.remove();
   s.audience?.close?.();
   removeEventListener('resize', fit);
@@ -172,6 +186,7 @@ function enterSlide(pos, { transition = true, stepsDone = 0, back = false } = {}
   show.pos = pos;
   const idx = show.order[pos];
   const slide = S.pres.slides[idx];
+  if (show.rec) recSegment(idx);
   show.steps = show.setup.noAnim ? [] : animSteps(slide);
   show.step = Math.min(stepsDone, show.steps.length);
   show.triggers = triggerSteps(slide);
@@ -195,7 +210,12 @@ function enterSlide(pos, { transition = true, stepsDone = 0, back = false } = {}
 function afterEnter() {
   if (!show) return;
   // 자동 재생 비디오 · 오디오
-  for (const m of show.stage.querySelectorAll('.show-slide .av[data-autoplay]')) m.play?.().catch(() => {});
+  for (const m of show.stage.querySelectorAll('.show-slide .av[data-autoplay]')) {
+    // 녹화 중이거나 [내레이션 재생] 을 끈 경우 내레이션은 재생하지 않음
+    if (m.dataset.narration && (show.rec || show.setup.noNarration)) continue;
+    m.play?.().catch(() => {});
+  }
+  replayInk();
   // 첫 단계가 '이전 효과와 함께/다음에' 로 시작하면 바로 재생
   if (show.step === 0 && show.steps[0] && show.steps[0][0].start !== 'click') playStep();
   scheduleAuto();
@@ -708,6 +728,7 @@ function onKey(e) {
   if ((e.ctrlKey || e.metaKey) && (k === 'u' || k === 'U')) { e.preventDefault(); show.root.classList.remove('no-cursor'); return; }
   if (((e.ctrlKey || e.metaKey) && (k === 's' || k === 'S')) || k === 'g' || k === 'G') { e.preventDefault(); slideList(); return; }
   if (k === 'e' || k === 'E') { clearInk(); return; }
+  if (k === 'j' || k === 'J') { toggleCaptions(); return; }
   if (k === 'h' || k === 'H') { e.preventDefault(); next(); return; }
   switch (k) {
     case 'Escape': case '-': e.preventDefault(); if (show.tool) setTool(null); else endShow(); break;
@@ -769,6 +790,7 @@ function showMenu(e) {
     { label: '레이저 포인터', key: 'Ctrl+L', checked: show.tool === 'laser', action: () => setTool(show.tool === 'laser' ? null : 'laser') },
     { label: '펜', key: 'Ctrl+P', checked: show.tool === 'pen', action: () => setTool(show.tool === 'pen' ? null : 'pen') },
     { label: '잉크 지우기', key: 'E', action: clearInk },
+    { label: '자막 켜기/끄기', key: 'J', checked: !!show.cap?.on, action: toggleCaptions },
     { sep: true },
     { label: '화면 검정', key: 'B', action: () => setBlank('#000') },
     { label: '화면 흰색', key: 'W', action: () => setBlank('#fff') },
@@ -835,7 +857,7 @@ function redrawInk() {
   const c = show.ink;
   const g = c.getContext('2d');
   g.clearRect(0, 0, c.width, c.height);
-  const list = show.strokes?.get(show.order[show.pos]) ?? [];
+  const list = [...(show.replay?.shown ?? []), ...(show.strokes?.get(show.order[show.pos]) ?? [])];
   const r = show.view.getBoundingClientRect();
   const { w, h } = S.pres.size;
   const sc = show.scale || 1;
@@ -873,6 +895,7 @@ function onPointerMove(e) {
         show.strokes.get(key).push(stroke);
       }
       stroke.pts.push(toSlidePt(e.clientX, e.clientY));
+      if (show.rec?.cur) { stroke.ts ??= []; stroke.ts.push(Math.round(recElapsed() * 100) / 100); }
       if (drawing) {
         ctx.strokeStyle = show.penColor ?? '#e81123';
         ctx.lineWidth = 3;
@@ -956,7 +979,7 @@ function openAudience(scr) {
   const w = window.open('', 'wipoint-audience', `popup${geo}`);
   if (!w) { toast('팝업이 차단되었습니다. 브라우저에서 팝업을 허용해 주세요.'); return; }
   w.document.open();
-  w.document.write(`<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>WIPOINT - 청중 화면 (두 번 클릭: 전체 화면)</title><style>${SLIDE_CSS}html,body{margin:0;height:100%;background:#000;overflow:hidden}#v{position:absolute;inset:0}.show-slide{position:absolute;left:0;top:0;transform-origin:0 0}.show-end{color:#fff;font:20px sans-serif;padding:20px}</style></head><body><div id="v"></div></body></html>`);
+  w.document.write(`<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>WIPOINT - 청중 화면 (두 번 클릭: 전체 화면)</title><style>${SLIDE_CSS}html,body{margin:0;height:100%;background:#000;overflow:hidden}#v{position:absolute;inset:0}.show-slide{position:absolute;left:0;top:0;transform-origin:0 0}.show-end{color:#fff;font:20px sans-serif;padding:20px}#cap{position:absolute;left:5%;right:5%;text-align:center;color:#fff;background:rgba(0,0,0,.78);font:500 28px/1.35 'Malgun Gothic',sans-serif;padding:.25em .6em;border-radius:4px;z-index:5}#cap.cap-bottom{bottom:4%}#cap.cap-top{top:4%}</style></head><body><div id="v"></div><div id="cap" hidden></div></body></html>`);
   w.document.close();
   // 청중 창을 두 번 클릭하면 전체 화면 (보안 정책상 인라인 스크립트 없이 이 창에서 연결)
   w.document.addEventListener('dblclick', () => w.document.documentElement.requestFullscreen?.().catch(() => {}));
@@ -999,4 +1022,211 @@ function saveRehearsal(times) {
       }
     }, { scope: 'all' });
   }, 50);
+}
+
+// ───────────── 쇼 녹화 (PowerPoint [녹화]: 내레이션 · 카메라 · 타이밍 · 잉크) ─────────────
+/** 오디오 형식: PowerPoint 가 재생하는 MP4(AAC) 를 먼저, 안 되면 WebM 으로 받아서 WAV 로 바꿈 */
+function recMime(video) {
+  const list = video ? ['video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm'] : ['audio/mp4;codecs=mp4a.40.2', 'audio/mp4', 'audio/webm;codecs=opus', 'audio/webm'];
+  return list.find((m) => window.MediaRecorder?.isTypeSupported?.(m)) ?? '';
+}
+function startRecording(stream, o) {
+  const video = !!stream?.getVideoTracks?.().length;
+  const dot = el('span', { class: 'rec-dot' });
+  const time = el('span', { class: 'rec-time' }, '00:00');
+  const pauseBtn = el('button', { title: '녹화 일시 중지', onclick: (e) => { e.stopPropagation(); recPause(); } }, '⏸ 일시 중지');
+  const bar = el('div', { class: 'rec-bar' }, dot, el('span', {}, '녹화 중'), time, pauseBtn, el('button', { title: '녹화 중지 (쇼 마침)', onclick: (e) => { e.stopPropagation(); endShow(); } }, '■ 중지'));
+  let cam = null;
+  if (video) { cam = el('video', { class: 'rec-cam', muted: true, autoplay: true, playsInline: true }); cam.srcObject = stream; cam.muted = true; }
+  show.root.append(bar);
+  if (cam) show.view.append(cam);
+  show.rec = { stream, video, mime: stream ? recMime(video) : '', segs: new Map(), cur: null, paused: null, bar, pauseBtn, time, started: Date.now() };
+  show.rec.tick = setInterval(() => {
+    const r = show?.rec;
+    if (!r) return;
+    const t = Math.floor(recElapsed(true));
+    r.time.textContent = `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
+  }, 500);
+  return o;
+}
+/** 지금 슬라이드에서 녹화된 시간(초, 일시 중지 뺌) — total: 처음부터 */
+function recElapsed(total = false) {
+  const r = show?.rec;
+  const c = r?.cur;
+  if (!c) return 0;
+  const now = r.paused ?? Date.now();
+  if (total) return [...r.segs.values()].reduce((a, sg) => a + sg.dur, 0) + (now - c.start - c.pausedMs) / 1000;
+  return (now - c.start - c.pausedMs) / 1000;
+}
+function recPause() {
+  const r = show.rec;
+  if (!r.paused) { r.paused = Date.now(); r.cur?.mr?.state === 'recording' && r.cur.mr.pause(); r.pauseBtn.textContent = '● 다시 시작'; r.bar.classList.add('paused'); } else { if (r.cur) r.cur.pausedMs += Date.now() - r.paused; r.paused = null; r.cur?.mr?.state === 'paused' && r.cur.mr.resume(); r.pauseBtn.textContent = '⏸ 일시 중지'; r.bar.classList.remove('paused'); }
+}
+/** 슬라이드마다 따로 녹음 (PowerPoint 와 같이 슬라이드별 내레이션 · 시간) */
+function recSegment(idx) {
+  const r = show.rec;
+  recCloseSegment();
+  const c = { idx, start: Date.now(), pausedMs: 0, chunks: [], mr: null };
+  if (r.paused) { c.pausedMs = 0; r.paused = Date.now(); }
+  if (r.stream && window.MediaRecorder) {
+    try {
+      c.mr = new MediaRecorder(r.stream, r.mime ? { mimeType: r.mime } : undefined);
+      c.mr.ondataavailable = (e) => { if (e.data?.size) c.chunks.push(e.data); };
+      c.done = new Promise((res) => { c.mr.onstop = () => res(new Blob(c.chunks, { type: c.mr.mimeType || r.mime || 'audio/webm' })); });
+      c.mr.start(1000);
+      if (r.paused) c.mr.pause();
+    } catch { c.mr = null; }
+  }
+  r.cur = c;
+}
+function recCloseSegment() {
+  const r = show?.rec;
+  const c = r?.cur;
+  if (!c) return;
+  const dur = Math.max(0.1, recElapsed());
+  if (c.mr && c.mr.state !== 'inactive') c.mr.stop();
+  const ink = (show.strokes?.get(c.idx) ?? []).filter((st) => st.ts?.length);
+  // 같은 슬라이드를 다시 녹화하면 마지막 것으로 바꿈 (PowerPoint 와 같음)
+  r.segs.set(c.idx, { dur: Math.round(dur * 10) / 10, blob: c.done ?? null, ink: ink.map((st) => ({ color: st.color, width: st.width, pts: st.pts.map(([x, y]) => [Math.round(x * 10) / 10, Math.round(y * 10) / 10]), ts: st.ts })) });
+  show.strokes?.delete(c.idx);
+  r.cur = null;
+}
+/** 내레이션 → WAV (MP4 오디오면 그대로) */
+async function narrationUrl(blob) {
+  if (!blob?.size) return null;
+  if (/^audio\/mp4|^video\//.test(blob.type)) return blobUrl(blob);
+  try {
+    const ac = new (window.AudioContext || window.webkitAudioContext)();
+    const buf = await ac.decodeAudioData(await blob.arrayBuffer());
+    ac.close?.();
+    const chans = Array.from({ length: buf.numberOfChannels }, (_, i) => buf.getChannelData(i));
+    const rate = 22050;
+    const wav = encodeWav(resample(mixDown(chans), buf.sampleRate, rate), rate);
+    return blobUrl(new Blob([wav], { type: 'audio/wav' }));
+  } catch { return blobUrl(blob); }
+}
+async function finishRecording(r) {
+  clearInterval(r.tick);
+  const saved = show;
+  show = show ?? { rec: r };
+  recCloseSegment();
+  show = saved;
+  for (const t of r.stream?.getTracks?.() ?? []) t.stop();
+  const segs = [...r.segs];
+  if (!segs.length) return;
+  toast('녹화를 저장하는 중…');
+  const out = [];
+  for (const [idx, sg] of segs) out.push([idx, sg, sg.blob ? await narrationUrl(await sg.blob) : null]);
+  const { w, h } = S.pres.size;
+  change(() => {
+    for (const [idx, sg, url] of out) {
+      const slide = S.pres.slides[idx];
+      if (!slide) continue;
+      slide.transition = { ...(slide.transition ?? { type: 'none' }), advAfter: Math.max(0.1, sg.dur) };
+      if (sg.ink.length) slide.inkRec = sg.ink; else delete slide.inkRec;
+      if (!url) continue;
+      slide.objects = slide.objects.filter((o) => !o.narration);
+      const id = uid('m');
+      S.pres.media[id] = url;
+      const cam = r.video;
+      // PowerPoint 와 같이 오른쪽 아래: 카메라는 작은 동영상, 내레이션은 쇼에서 보이지 않는 소리 아이콘
+      slide.objects.push(cam
+        ? { id: uid(), type: 'media', kind: 'video', media: id, name: '녹화', narration: true, autoplay: true, x: w - 256 - 16, y: h - 192 - 16, w: 256, h: 192, rot: 0 }
+        : { id: uid(), type: 'media', kind: 'audio', media: id, name: '내레이션', narration: true, autoplay: true, hideInShow: true, x: w - 48 - 12, y: h - 48 - 12, w: 48, h: 48, rot: 0 });
+    }
+  }, { scope: 'all' });
+  const total = segs.reduce((a, [, sg]) => a + sg.dur, 0);
+  toast(`녹화를 저장했습니다: 슬라이드 ${segs.length}장, ${Math.floor(total / 60)}분 ${Math.round(total % 60)}초`);
+}
+/** 녹화된 잉크를 시간에 맞춰 다시 그림 ([설정된 시간 사용] 일 때) */
+function replayInk() {
+  if (!show) return;
+  const slide = S.pres.slides[show.order[show.pos]];
+  show.replay = null;
+  if (!slide?.inkRec?.length || show.rec || show.setup.useTimings === false) { redrawInk(); return; }
+  const t0 = Date.now();
+  const rp = { strokes: slide.inkRec, shown: [] };
+  show.replay = rp;
+  const end = Math.max(...slide.inkRec.map((st) => st.ts?.[st.ts.length - 1] ?? 0));
+  const step = () => {
+    if (!show || show.replay !== rp) return;
+    const t = (Date.now() - t0) / 1000;
+    rp.shown = inkUntil(rp.strokes, t);
+    redrawInk();
+    if (t <= end) requestAnimationFrame(step);
+  };
+  step();
+}
+
+// ───────────── 실시간 자막 (Web Speech API) ─────────────
+/** 자막 설정 (이 브라우저에 저장): { on, lang, pos, size } */
+export function captionSettings() {
+  try { return { on: false, lang: 'ko-KR', pos: 'bottom', size: 28, ...JSON.parse(localStorage.getItem('wipoint:captions') ?? '{}') }; } catch { return { on: false, lang: 'ko-KR', pos: 'bottom', size: 28 }; }
+}
+export function setCaptionSettings(v) {
+  try { localStorage.setItem('wipoint:captions', JSON.stringify({ ...captionSettings(), ...v })); } catch { /* 저장 안 됨 */ }
+}
+export const captionsSupported = () => !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+function setupCaptions() {
+  const cs = captionSettings();
+  show.cap = { on: false, text: '', final: '', rec: null, el: null, cs };
+  if (cs.on) startCaptions();
+}
+function startCaptions() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { toast('이 브라우저는 음성 인식을 지원하지 않습니다 (Chrome · Edge 에서 사용하세요)'); return; }
+  const c = show.cap;
+  c.on = true;
+  const cs = captionSettings();
+  c.cs = cs;
+  c.el?.remove();
+  c.el = el('div', { class: `show-caption cap-${cs.pos}` });
+  c.el.style.setProperty('--cap-size', `${cs.size}px`);
+  show.root.classList.toggle('cap-below', cs.pos === 'below');
+  show.root.classList.toggle('cap-above', cs.pos === 'above');
+  (cs.pos === 'below' || cs.pos === 'above' ? show.root : show.view).append(c.el);
+  const rec = new SR();
+  rec.lang = cs.lang;
+  rec.continuous = true;
+  rec.interimResults = true;
+  rec.onresult = (e) => {
+    let interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      if (e.results[i].isFinal) c.final += `${e.results[i][0].transcript} `; else interim += e.results[i][0].transcript;
+    }
+    c.final = c.final.slice(-400);
+    c.text = captionText(`${c.final}${interim}`);
+    showCaption();
+  };
+  // 잠깐 말이 끊기면 브라우저가 멈추므로 다시 시작
+  rec.onend = () => { if (show?.cap === c && c.on) { try { rec.start(); } catch { /* 이미 시작 */ } } };
+  rec.onerror = (e) => { if (e.error === 'not-allowed' || e.error === 'service-not-allowed') { c.on = false; toast('마이크 권한이 없어 자막을 켤 수 없습니다'); c.el?.remove(); } };
+  c.rec = rec;
+  try { rec.start(); } catch { /* 이미 시작 */ }
+  fit();
+}
+function showCaption() {
+  const c = show?.cap;
+  if (!c?.el) return;
+  c.el.textContent = c.text;
+  c.el.hidden = !c.text;
+  // 청중 창: 슬라이드는 그대로 두고 자막 줄만 바꿈
+  const w = show.audience;
+  const ce = w && !w.closed ? w.document.getElementById('cap') : null;
+  if (ce) { ce.textContent = c.text; ce.hidden = !c.text; ce.className = `cap-${c.cs.pos === 'top' || c.cs.pos === 'above' ? 'top' : 'bottom'}`; ce.style.fontSize = `${c.cs.size}px`; }
+}
+function stopCaptions(s = show) {
+  const c = s?.cap;
+  if (!c) return;
+  c.on = false;
+  try { c.rec?.stop(); } catch { /* 이미 멈춤 */ }
+  c.el?.remove();
+  c.el = null;
+  c.text = '';
+  const ce = s.audience && !s.audience.closed ? s.audience.document.getElementById('cap') : null;
+  if (ce) ce.hidden = true;
+  s.root.classList.remove('cap-below', 'cap-above');
+}
+function toggleCaptions() {
+  if (show.cap?.on) { stopCaptions(); setCaptionSettings({ on: false }); fit(); syncAudience(); } else { setCaptionSettings({ on: true }); startCaptions(); }
 }

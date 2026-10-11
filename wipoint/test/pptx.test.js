@@ -441,3 +441,23 @@ test('전환 모양 (transfx): 프레임마다 점 개수가 같음', async () =
   // 마지막 프레임: 실선 무늬는 모든 막대가 다 보임
   assert.doesNotMatch(fx.randomBarsFrames(4, 10).at(-1), /0% 10%, 100% 10%, 100% 10%/);
 });
+
+test('꾸밈 효과: 원본 그림과 효과가 pptx 왕복, PowerPoint a14:imgEffect 읽기', () => {
+  const p = newPresentation();
+  const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  const png2 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  p.media = { done: png, orig: png2 };
+  p.slides[0].objects.push({ id: 'pic', type: 'image', media: 'done', artOrig: 'orig', art: { effect: 'pencilSketch', amount: 70 }, x: 10, y: 10, w: 100, h: 100, rot: 0 });
+  const bytes = writePptx(p);
+  const back = readPptx(bytes).pres;
+  const o = back.slides[0].objects.find((x) => x.type === 'image');
+  assert.deepEqual(o.art, { effect: 'pencilSketch', amount: 70 });
+  assert.equal(back.media[o.artOrig], png2);
+  assert.equal(back.media[o.media], png);
+  // PowerPoint 형식 (a14:imgProps) 은 효과 이름만
+  const files = unzip(bytes);
+  const x = textOf(files['ppt/slides/slide1.xml']).replace(/<a:extLst><a:ext uri="\{6F1B2D57[^]*?<\/a:extLst>/, '<a:extLst><a:ext uri="{BEBA8EAE-BF5A-486C-A8C5-ECC9F3942E4B}"><a14:imgProps xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main"><a14:imgLayer r:embed="rIdX"><a14:imgEffect><a14:artisticGlowEdges/></a14:imgEffect></a14:imgLayer></a14:imgProps></a:ext></a:extLst>');
+  files['ppt/slides/slide1.xml'] = new TextEncoder().encode(x);
+  const o2 = readPptx(zip(files)).pres.slides[0].objects.find((y) => y.type === 'image');
+  assert.equal(o2.art.effect, 'glowEdges');
+});

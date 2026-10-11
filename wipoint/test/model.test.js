@@ -553,3 +553,55 @@ test('Office 2016 차트: 폭포 · 깔때기 · 히스토그램(파레토) · �
   }
   assert.equal(expandChart({ kind: 'histogram', variant: 'pareto', series: [{ vals: [1, 1, 2, 5, 9] }] }).kind, 'combo');
 });
+
+test('미디어 정리: 포스터 · 채우기 그림 · 원본 · 마스터 그림은 남김', () => {
+  const p = newPresentation();
+  p.media = { m1: 'a', m2: 'b', m3: 'c', m4: 'd', m5: 'e', m6: 'f' };
+  p.slides[0].objects.push({ id: 'v', type: 'media', kind: 'video', media: 'm1', poster: 'm2', x: 0, y: 0, w: 1, h: 1 });
+  p.slides[0].objects.push({ id: 'i', type: 'image', media: 'm3', artOrig: 'm4', x: 0, y: 0, w: 1, h: 1 });
+  p.slides[0].objects.push({ id: 's', type: 'shape', shape: 'rect', fill: { type: 'image', media: 'm5' }, x: 0, y: 0, w: 1, h: 1 });
+  pruneMedia(p);
+  assert.deepEqual(Object.keys(p.media).sort(), ['m1', 'm2', 'm3', 'm4', 'm5']);
+});
+
+test('꾸밈 효과 22종 · 그림 압축 계획', async () => {
+  const { ART_EFFECTS, applyArtEffect, compressPlan } = await import('../src/arteffects.js');
+  const w = 60; const h = 40;
+  const d = new Uint8ClampedArray(w * h * 4);
+  for (let i = 0; i < w * h; i++) { d[i * 4] = (i % w) * 4; d[i * 4 + 1] = ((i / w) | 0) * 6; d[i * 4 + 2] = (i % 7) * 30; d[i * 4 + 3] = 255; }
+  assert.equal(ART_EFFECTS.length, 22);
+  for (const [k] of ART_EFFECTS) {
+    const out = applyArtEffect(d, w, h, k);
+    assert.equal(out.length, d.length);
+    let diff = 0;
+    for (let i = 0; i < out.length; i++) diff += Math.abs(out[i] - d[i]);
+    assert.ok(diff > 0, `${k} 가 그림을 바꿔야 함`);
+    assert.equal(out[3], 255);
+  }
+  // 1280px 너비 슬라이드 절반(640px = 6.67in) 에 4000px 그림 → 150ppi 면 1000px
+  const pl = compressPlan({ natW: 4000, natH: 3000, crop: null, w: 640, h: 480 }, 150);
+  assert.equal(pl.tw, 1000); assert.equal(pl.th, 750); assert.ok(pl.resize && !pl.crop);
+  // 자르기 삭제: 왼쪽 25% 잘린 그림
+  const pc = compressPlan({ natW: 400, natH: 300, crop: { l: 0.25, t: 0, r: 0, b: 0 }, w: 300, h: 300 }, 0, true);
+  assert.deepEqual([pc.sx, pc.sw, pc.tw, pc.crop, pc.resize], [100, 300, 300, true, false]);
+  // 이미 작은 그림은 그대로
+  assert.ok(!compressPlan({ natW: 200, natH: 100, w: 400, h: 200 }, 96).resize);
+});
+
+test('녹화 도움 함수: WAV · 표본 수 · 잉크 재생 · 자막 줄', async () => {
+  const { encodeWav, resample, mixDown, inkUntil, captionText } = await import('../src/recording.js');
+  const wav = encodeWav(new Float32Array([0, 1, -1, 0.5]), 22050);
+  assert.equal(wav.length, 44 + 8);
+  assert.equal(new TextDecoder().decode(wav.slice(0, 4)), 'RIFF');
+  const dv = new DataView(wav.buffer);
+  assert.equal(dv.getUint32(24, true), 22050);
+  assert.equal(dv.getInt16(46, true), 32767);
+  assert.equal(dv.getInt16(48, true), -32768);
+  assert.equal(resample(new Float32Array(48000), 48000, 22050).length, 22050);
+  assert.deepEqual([...mixDown([new Float32Array([1, 0]), new Float32Array([0, 1])])], [0.5, 0.5]);
+  const ink = [{ color: '#f00', width: 3, pts: [[0, 0], [1, 1], [2, 2]], ts: [1, 1.5, 2] }, { color: '#00f', width: 3, pts: [[5, 5]], ts: [3] }];
+  assert.equal(inkUntil(ink, 0.5).length, 0);
+  assert.equal(inkUntil(ink, 1.6)[0].pts.length, 2);
+  assert.equal(inkUntil(ink, 9).length, 2);
+  assert.equal(captionText('가 '.repeat(100), 20).length <= 20, true);
+});

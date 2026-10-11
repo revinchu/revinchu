@@ -86,8 +86,9 @@ const ANIM = { id: 'animations', label: '애니메이션', groups: [
 const SHOW = { id: 'slideshow', label: '슬라이드 쇼', groups: [
   { label: '슬라이드 쇼 시작', items: [L('showFromStart', 'slideshow', '처음부터'), L('showFromCurrent', 'fromCurrent', '현재 슬라이드부터')] },
   { label: '사용자 지정', items: [L(null, 'sorter', '사용자 지정 슬라이드 쇼', { menu: 'customShowMenu' })] },
-  { label: '설정', items: [L('setupShow', 'slideshow', '슬라이드 쇼 설정'), L('hideSlide', 'hideSlide', '슬라이드 숨기기', { on: 'hidden' }), COL(M('rehearse', 'timer', '예행 연습'))] },
+  { label: '설정', items: [L('setupShow', 'slideshow', '슬라이드 쇼 설정'), L('hideSlide', 'hideSlide', '슬라이드 숨기기', { on: 'hidden' }), COL(M('rehearse', 'timer', '예행 연습'), M('recordShow', 'record', '녹화', { menu: 'recordMenu' })), COL({ t: 'check', cmd: 'toggleNarration', label: '내레이션 재생', on: 'narration' }, { t: 'check', cmd: 'toggleUseTimings', label: '타이밍 사용', on: 'useTimings' })] },
   { label: '모니터', items: [L('presenterView', 'presenter', '발표자 보기')] },
+  { label: '자막 및 캡션', items: [COL({ t: 'check', cmd: 'toggleCaptions', label: '자막 사용', on: 'captions' }, M(null, 'subtitles', '자막 설정', { menu: 'captionMenu' }))] },
 ] };
 
 const REVIEW = { id: 'review', label: '검토', groups: [
@@ -120,7 +121,7 @@ const SHAPE_FMT = { id: 'shapeFormat', label: '도형 서식', context: 'shape',
   { label: '크기', items: [{ t: 'objSize' }], launcher: 'formatPaneShape' },
 ] };
 const PIC_FMT = { id: 'pictureFormat', label: '그림 서식', context: 'picture', groups: [
-  { label: '조정', items: [L('removeBackground', 'picture', '배경 제거'), L(null, 'effects', '수정', { menu: 'pictureCorrectionsMenu' }), L(null, 'theme', '색', { menu: 'pictureColorMenu' }), COL(M('changePicture', 'picture', '그림 바꾸기'), M('resetPicture', 'resetSlide', '그림 원래대로'))] },
+  { label: '조정', items: [L('removeBackground', 'picture', '배경 제거'), L(null, 'effects', '수정', { menu: 'pictureCorrectionsMenu' }), L(null, 'theme', '색', { menu: 'pictureColorMenu' }), L(null, 'artEffects', '꾸밈 효과', { menu: 'artEffectsMenu' }), COL(M('compressPictures', 'compress', '그림 압축'), M('changePicture', 'picture', '그림 바꾸기'), M('resetPicture', 'resetSlide', '그림 원래대로'))] },
   { label: '그림 스타일', items: [G('pictureStyles', { wide: true }), COL({ t: 'color', cmd: 'shapeOutline', icon: 'shapeOutline', label: '그림 테두리', title: '그림 테두리', menu: 'shapeOutlineMenu', bar: 'line' }, M(null, 'effects', '그림 효과', { menu: 'shapeEffectsMenu' }))], launcher: 'formatPaneShape' },
   { label: '접근성', items: [L('altText', 'info', '대체 텍스트')] },
   { label: '정렬', items: [COL(M('bringForward', 'bringForward', '앞으로 가져오기', { menu: 'bringMenu' }), M('sendBackward', 'sendBackward', '뒤로 보내기', { menu: 'sendMenu' }), M('selectionPane', 'selectionPane', '선택 창')), COL(M(null, 'align', '맞춤', { menu: 'alignMenu' }), M(null, 'group', '그룹', { menu: 'groupMenu' }), M(null, 'rotate', '회전', { menu: 'rotateMenu' }))] },
@@ -173,12 +174,12 @@ const KT = {
   design: { themes: 'TH', themeColorsMenu: 'TC', themeFontsMenu: 'TF', bgStylesMenu: 'TB', slideSizeMenu: 'S', formatBg: 'G', designIdeas: 'D' },
   transitions: { previewTransition: 'P', transitions: 'T', transitionOptionsMenu: 'E', transTiming: 'D', applyTransitionAll: 'L' },
   animations: { previewAnim: 'P', animations: 'S', animOptionsMenu: 'M', addAnimMenu: 'AA', animPane: 'C', removeAnim: 'X', animPainter: 'K', triggerMenu: 'G', animTiming: 'T' },
-  slideshow: { showFromStart: 'B', showFromCurrent: 'C', customShowMenu: 'W', setupShow: 'S', hideSlide: 'H', rehearse: 'T', presenterView: 'V' },
+  slideshow: { showFromStart: 'B', showFromCurrent: 'C', customShowMenu: 'W', setupShow: 'S', hideSlide: 'H', rehearse: 'T', recordShow: 'N', recordMenu: 'N', toggleNarration: 'P', toggleUseTimings: 'U', presenterView: 'V', toggleCaptions: 'J', captionMenu: 'Q' },
   review: { spellCheck: 'S', accessibility: 'A', wordCount: 'W', newComment: 'C', deleteComments: 'D', prevComment: 'V', nextComment: 'N', commentsPane: 'P', collabStart: 'H' },
   view: { toggleHand: 'H', toggleMobile: 'Y', viewMaster: 'M', toggleRuler: 'R', viewNormal: 'L', viewOutline: 'O', viewSorter: 'I', viewNotesPage: 'T', viewReading: 'D', toggleGrid: 'G', toggleGuides: 'U', toggleNotes: 'N', zoomDialog: 'Q', fitZoom: 'W', selectionPane: 'P' },
   help: { shortcuts: 'K', whatsNew: 'N', about: 'A' },
   shapeFormat: { shapesMini: 'SH', changeShapeMenu: 'E', mergeShapesMenu: 'M', drawTextbox: 'X', shapeStyles: 'K', shapeFill: 'SF', shapeOutline: 'SO', shapeEffectsMenu: 'SE', wordart: 'Q', objSize: 'H', 'launcher:formatPaneShape': 'DS', ...ARRANGE_KT },
-  pictureFormat: { removeBackground: 'E', pictureCorrectionsMenu: 'R', pictureColorMenu: 'I', changePicture: 'CP', resetPicture: 'Q', pictureStyles: 'K', shapeOutline: 'SO', shapeEffectsMenu: 'SE', altText: 'T', cropPicture: 'V', objSize: 'H', 'launcher:formatPaneShape': 'DS', ...ARRANGE_KT },
+  pictureFormat: { removeBackground: 'E', pictureCorrectionsMenu: 'R', pictureColorMenu: 'I', artEffectsMenu: 'A', compressPictures: 'M', changePicture: 'CP', resetPicture: 'Q', pictureStyles: 'K', shapeOutline: 'SO', shapeEffectsMenu: 'SE', altText: 'T', cropPicture: 'V', objSize: 'H', 'launcher:formatPaneShape': 'DS', ...ARRANGE_KT },
   tableDesign: { 'tblOpt:firstRow': 'A', 'tblOpt:lastRow': 'T', 'tblOpt:banded': 'R', 'tblOpt:firstCol': 'C', 'tblOpt:lastCol': 'L', tableStyles: 'S', cellFill: 'H', cellBorderMenu: 'B' },
   tableLayout: { tblSelectMenu: 'K', tblDeleteMenu: 'D', tblRowAbove: 'A', tblRowBelow: 'BE', tblColLeft: 'L', tblColRight: 'R', tblMerge: 'M', tblSplit: 'P', tblEqualRows: 'HE', tblEqualCols: 'WE', alignLeft: 'AL', alignCenter: 'AC', alignRight: 'AR', anchorTop: 'AT', anchorMiddle: 'AV', anchorBottom: 'AB' },
   chartDesign: { chartElementsMenu: 'A', chartQuickLayoutMenu: 'L', chartColorsMenu: 'C', chartStyleMenu: 'S', chartSwitchRowCol: 'W', chartData: 'E', chartTypeDialog: 'T', chartFormat: 'F', chartResetStyle: 'R' },

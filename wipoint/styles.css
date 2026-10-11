@@ -744,3 +744,31 @@ body.mobile .smart-cats { flex-direction: row; flex-wrap: wrap; border: 0; }
 .fx-grid { display: grid; grid-template-columns: repeat(auto-fill, 62px); gap: 3px; padding: 4px 8px; max-width: 620px; }
 .fx-grid .gal-item.fx { width: 62px; height: 58px; }
 .gal-item.fx.path .fx-ic { color: #2e7d32; }
+/* 꾸밈 효과 갤러리 · 옵션 · 그림 압축 */
+.art-grid { display: grid; grid-template-columns: repeat(5, 78px); gap: 4px; padding: 6px 8px; }
+.art-cell { display: flex; flex-direction: column; align-items: center; gap: 2px; border: 1px solid transparent; background: #fff; padding: 2px; cursor: pointer; font-size: 10.5px; border-radius: 2px; }
+.art-cell canvas { width: 72px; height: 54px; object-fit: contain; background: #eee; }
+.art-cell span { max-width: 74px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.art-cell:hover { border-color: #f29436; }
+.art-cell.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.art-opts .row, .compress .row { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+.art-wrap { margin-top: 8px; text-align: center; background: #f3f3f3; padding: 6px; }
+.art-preview { max-width: 100%; max-height: 340px; }
+.compress .menu-title { margin-top: 8px; padding-left: 0; }
+/* 쇼 녹화 · 자막 */
+.rec-bar { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 20; display: flex; align-items: center; gap: 10px; background: rgba(32, 32, 32, .88); color: #fff; padding: 6px 12px; border-radius: 20px; font-size: 13px; }
+.rec-bar button { background: #444; color: #fff; border: 0; border-radius: 12px; padding: 4px 10px; cursor: pointer; font: inherit; }
+.rec-bar button:hover { background: #5a5a5a; }
+.rec-dot { width: 10px; height: 10px; border-radius: 50%; background: #e81123; animation: recblink 1s infinite; }
+.rec-bar.paused .rec-dot { animation: none; background: #999; }
+.rec-time { font-variant-numeric: tabular-nums; min-width: 44px; }
+@keyframes recblink { 50% { opacity: .25; } }
+.rec-cam { position: absolute; right: 16px; bottom: 16px; width: 200px; border-radius: 6px; z-index: 6; box-shadow: 0 2px 10px rgba(0, 0, 0, .5); transform: scaleX(-1); }
+.show-caption { position: absolute; left: 5%; right: 5%; z-index: 7; text-align: center; color: #fff; background: rgba(0, 0, 0, .78); font: 500 var(--cap-size, 28px)/1.35 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; padding: .25em .6em; border-radius: 4px; pointer-events: none; }
+.show-caption[hidden] { display: none; }
+.show-caption.cap-bottom { bottom: 4%; }
+.show-caption.cap-top { top: 4%; }
+.show.cap-below .show-view { margin-bottom: 16vh; }
+.show.cap-above .show-view { margin-top: 16vh; }
+.show-caption.cap-below { bottom: 2vh; left: 3%; right: 3%; height: 12vh; background: transparent; display: flex; align-items: center; justify-content: center; }
+.show-caption.cap-above { top: 2vh; left: 3%; right: 3%; height: 12vh; background: transparent; display: flex; align-items: center; justify-content: center; }

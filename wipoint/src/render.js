@@ -261,8 +261,11 @@ function mediaHtml(o, media, opts) {
   const audio = o.kind === 'audio';
   if (opts.live && src) {
     const t = o.trim?.st ? `#t=${o.trim.st}${o.trim.end ? `,${o.trim.end}` : ''}` : '';
-    if (audio) return `<div class="av-audio" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">${poster ? `<img src="${escHtml(poster)}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain" alt="">` : '<span style="font-size:' + f(Math.min(o.w, o.h) * 0.6) + 'px;line-height:1">🔊</span>'}<audio class="av" src="${escHtml(src + t)}" ${o.loop ? 'loop' : ''} ${o.autoplay ? 'data-autoplay="1"' : ''} preload="auto" style="display:none"></audio></div>`;
-    return `<video class="av" src="${escHtml(src + t)}" ${poster ? `poster="${escHtml(poster)}"` : ''} ${o.loop ? 'loop' : ''} ${o.autoplay ? 'data-autoplay="1"' : ''} playsinline preload="metadata" controls style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000"></video>`;
+    const nar = o.narration ? ' data-narration="1"' : '';
+    // 녹음한 내레이션 · [쇼 동안 숨기기] 오디오: 아이콘 없이 소리만
+    if (audio && o.hideInShow) return `<audio class="av" src="${escHtml(src + t)}" ${o.loop ? 'loop' : ''} ${o.autoplay ? 'data-autoplay="1"' : ''}${nar} preload="auto" style="display:none"></audio>`;
+    if (audio) return `<div class="av-audio" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">${poster ? `<img src="${escHtml(poster)}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain" alt="">` : '<span style="font-size:' + f(Math.min(o.w, o.h) * 0.6) + 'px;line-height:1">🔊</span>'}<audio class="av" src="${escHtml(src + t)}" ${o.loop ? 'loop' : ''} ${o.autoplay ? 'data-autoplay="1"' : ''}${nar} preload="auto" style="display:none"></audio></div>`;
+    return `<video class="av" src="${escHtml(src + t)}" ${poster ? `poster="${escHtml(poster)}"` : ''} ${o.loop ? 'loop' : ''} ${o.autoplay ? 'data-autoplay="1"' : ''}${nar} playsinline preload="metadata" ${o.narration ? '' : 'controls'} style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000"></video>`;
   }
   if (poster) return `<img src="${escHtml(poster)}" alt="${escHtml(o.alt ?? '')}" draggable="false" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"><div style="position:absolute;left:8px;bottom:8px;width:28px;height:28px;border-radius:50%;background:rgba(0,0,0,.55);color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px">${audio ? '♪' : '▶'}</div>`;
   if (audio) return `<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:${f(Math.min(o.w, o.h) * 0.6)}px;line-height:1">🔊</div>`;

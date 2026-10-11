@@ -743,15 +743,19 @@ export class History {
 }
 
 /** 쓰지 않는 미디어 정리 (저장 전) */
+const MEDIA_KEYS = new Set(['media', 'poster', 'bgOrig', 'artOrig']);
 export function usedMedia(pres) {
+  // 미디어 id 를 가리키는 모든 값 (그림 · 포스터 · 채우기 그림 · 배경 · 원본(배경 제거/꾸밈 효과) · 마스터 · 레이아웃 …)
   const used = new Set();
-  const walk = (o) => { if (o.media) used.add(o.media); };
-  for (const s of pres.slides) {
-    for (const o of s.objects) walk(o);
-    for (const o of s.bgObjects ?? []) walk(o);
-    if (s.bg?.media) used.add(s.bg.media);
-    if (s.bg?.type === 'image') used.add(s.bg.media);
-  }
+  const media = pres.media ?? {};
+  const walk = (v) => {
+    if (!v || typeof v !== 'object') return;
+    if (Array.isArray(v)) { for (const x of v) walk(x); return; }
+    for (const [k, x] of Object.entries(v)) {
+      if (typeof x === 'string') { if (MEDIA_KEYS.has(k) && Object.hasOwn(media, x)) used.add(x); } else walk(x);
+    }
+  };
+  for (const [k, v] of Object.entries(pres)) if (k !== 'media' && k !== 'fonts') walk(v);
   return used;
 }
 export function pruneMedia(pres) {

@@ -16,6 +16,7 @@ import { slideHtml, NUM_SCHEMES, BULLET_CHARS, DASH_LABEL } from './render.js';
 import { SHAPE_STYLES, WORDART, PICTURE_STYLES, TABLE_STYLES, tableStyleProps, DESIGN_IDEAS } from './presets.js';
 import { smartArt, SMART_KINDS, SMART_CATS, SMART_LABEL, SMART_COLORS, SMART_STYLES } from './smartart.js';
 import { backgroundMask, applyMask } from './bgremove.js';
+import { ART_EFFECTS, ART_LABEL, applyArtEffect, COMPRESS_PPI, compressPlan } from './arteffects.js';
 import { parseLatex, toMathML } from './math.js';
 import { collab, startCollab, stopCollab, collabLink, myName } from './collab.js';
 import { isMobile, setMobileMode, mobileMode } from './mobile.js';
@@ -25,7 +26,8 @@ import { el, openMenu, openDialog, formDialog, alertDialog, toast, closeMenus } 
 import { colorMenu } from './colorpick.js';
 import { startEyedrop } from './eyedrop.js';
 import { moveParagraph, startCrop, endCrop, startEdit, endEdit, textTargets, applyTextFormat, caretRunProp, caretPara, insertTextAtCaret, fitZoom, setZoom, renderCanvas, editorLayer } from './editor.js';
-import { screenList, startShow, playStepOn, playTransition } from './show.js';
+import { screenList, startShow, playStepOn, playTransition, captionSettings, setCaptionSettings, captionsSupported } from './show.js';
+import { CAPTION_LANGS, CAPTION_POS } from './recording.js';
 import { shapeIconSvg, styleChip, wordArtCss } from './galleries.js';
 import { blobUrl } from './blobstore.js';
 import { effectsMenuItems } from './fxui.js';
@@ -1159,6 +1161,158 @@ async function removeBackground() {
   draw();
 }
 
+// ───────────── 꾸밈 효과 · 그림 압축 (PowerPoint [그림 서식 › 꾸밈 효과 / 그림 압축]) ─────────────
+/** 그림 → 캔버스 픽셀 (긴 쪽 max px 이하로 줄임) */
+async function imagePixels(url, max = 2000) {
+  const img = new Image();
+  img.src = url;
+  await img.decode();
+  const k = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+  const w = Math.max(1, Math.round(img.naturalWidth * k)); const h = Math.max(1, Math.round(img.naturalHeight * k));
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.drawImage(img, 0, 0, w, h);
+  return { img, w, h, data: g.getImageData(0, 0, w, h).data };
+}
+/** 픽셀 → 그림 URL (투명한 곳이 있으면 PNG, 아니면 JPEG) */
+function pixelsUrl(data, w, h, quality = 0.9) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  c.getContext('2d').putImageData(new ImageData(data, w, h), 0, 0);
+  let alpha = false;
+  for (let i = 3; i < data.length; i += 4) if (data[i] < 255) { alpha = true; break; }
+  return alpha ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', quality);
+}
+const artTargets = () => selObjects().filter((o) => o.type === 'image' && o.media && S.pres.media[o.artOrig ?? o.media]);
+/** 꾸밈 효과 적용 (key null = 없음) — 원본은 o.artOrig 에 둠 */
+async function applyArt(key, amount) {
+  const list = artTargets();
+  if (!need(list, '꾸밈 효과를 적용할 그림을 선택하세요')) return;
+  const done = [];
+  for (const o of list) {
+    if (!key) { done.push([o, null]); continue; }
+    try {
+      const px = await imagePixels(S.pres.media[o.artOrig ?? o.media]);
+      const out = applyArtEffect(px.data, px.w, px.h, key, { amount });
+      done.push([o, addMedia(pixelsUrl(out, px.w, px.h))]);
+    } catch { alertDialog('꾸밈 효과', '이 그림 형식에는 꾸밈 효과를 적용할 수 없습니다.'); return; }
+  }
+  change(() => {
+    for (const [o, id] of done) {
+      if (!id) { if (o.artOrig) { o.media = o.artOrig; delete o.artOrig; } delete o.art; continue; }
+      o.artOrig ??= o.media;
+      o.media = id;
+      o.art = { effect: key, amount: amount ?? ART_EFFECTS.find((e) => e[0] === key)?.[3] };
+    }
+  });
+}
+/** 꾸밈 효과 갤러리 — 선택한 그림으로 그린 미리 보기 (PowerPoint 와 같음) */
+async function artEffectsMenu(anchor) {
+  const o = artTargets()[0];
+  if (!o) { toast('그림을 선택하세요'); return; }
+  const grid = el('div', { class: 'art-grid' });
+  const cur = o.art?.effect ?? null;
+  const cell = (key, label) => el('button', { class: `art-cell${key === cur ? ' on' : ''}`, title: label, onclick: () => { closeMenus(); applyArt(key); } }, el('canvas', { width: 72, height: 54 }), el('span', {}, label));
+  grid.append(cell(null, '없음'), ...ART_EFFECTS.map(([k, l]) => cell(k, l)));
+  menuAt(anchor, [{ node: grid }, { sep: true }, { label: '꾸밈 효과 옵션...', action: () => artOptionsDialog() }], { minWidth: 430 });
+  let px;
+  try { px = await imagePixels(S.pres.media[o.artOrig ?? o.media], 72); } catch { return; }
+  const cells = [...grid.querySelectorAll('.art-cell canvas')];
+  const keys = [null, ...ART_EFFECTS.map(([k]) => k)];
+  // 하나씩 나눠 그려서 메뉴가 바로 뜨게
+  for (let i = 0; i < cells.length; i++) {
+    await new Promise((r) => setTimeout(r, 0));
+    const data = keys[i] ? applyArtEffect(px.data, px.w, px.h, keys[i]) : px.data;
+    const cv = cells[i];
+    cv.width = px.w; cv.height = px.h;
+    cv.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(data), px.w, px.h), 0, 0);
+  }
+}
+/** 꾸밈 효과 옵션 (서식 창 › 꾸밈 효과) — 효과 · 강도 미리 보기 */
+async function artOptionsDialog() {
+  const o = artTargets()[0];
+  if (!o) { toast('그림을 선택하세요'); return; }
+  let px;
+  try { px = await imagePixels(S.pres.media[o.artOrig ?? o.media], 480); } catch { alertDialog('꾸밈 효과', '이 그림 형식은 지원하지 않습니다.'); return; }
+  const sel = el('select', {}, el('option', { value: '' }, '없음'), ...ART_EFFECTS.map(([k, l]) => el('option', { value: k, selected: o.art?.effect === k }, l)));
+  const amt = el('input', { type: 'range', min: 0, max: 100, value: o.art?.amount ?? 50 });
+  const amtLabel = el('span', { class: 'muted' });
+  const view = el('canvas', { class: 'art-preview', width: px.w, height: px.h });
+  const draw = () => {
+    amtLabel.textContent = `${amt.value}%`;
+    const data = sel.value ? applyArtEffect(px.data, px.w, px.h, sel.value, { amount: Number(amt.value) }) : px.data;
+    view.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(data), px.w, px.h), 0, 0);
+  };
+  sel.addEventListener('change', () => { const d = ART_EFFECTS.find((e) => e[0] === sel.value); if (d) amt.value = d[3]; draw(); });
+  amt.addEventListener('input', draw);
+  openDialog({
+    title: '꾸밈 효과', width: 560,
+    body: el('div', { class: 'art-opts' }, el('label', { class: 'row' }, '꾸밈 효과 ', sel), el('label', { class: 'row' }, '강도 ', amt, amtLabel), el('div', { class: 'art-wrap' }, view)),
+    buttons: [{ label: '확인', primary: true, action: () => { applyArt(sel.value || null, Number(amt.value)); } }, { label: '원래대로', action: () => { applyArt(null); } }, { label: '취소' }],
+  });
+  draw();
+}
+/** 그림 압축 대화 상자 */
+function compressDialog() {
+  const sel = selObjects().filter((o) => o.type === 'image' && o.media);
+  const only = el('input', { type: 'checkbox', checked: sel.length > 0, disabled: !sel.length });
+  const delCrop = el('input', { type: 'checkbox', checked: true });
+  const ppiSel = COMPRESS_PPI.map(([v, l]) => el('label', { class: 'row' }, el('input', { type: 'radio', name: 'ppi', value: v, checked: v === 220 }), l));
+  openDialog({
+    title: '그림 압축', width: 470,
+    body: el('div', { class: 'compress' },
+      el('div', { class: 'menu-title' }, '압축 옵션:'),
+      el('label', { class: 'row' }, only, ' 이 그림에만 적용'),
+      el('label', { class: 'row' }, delCrop, ' 잘려진 영역 삭제'),
+      el('div', { class: 'menu-title' }, '해상도:'), ...ppiSel,
+      el('p', { class: 'muted' }, '슬라이드에 보이는 크기보다 큰 그림만 줄입니다. 투명한 부분이 없는 그림은 JPEG 로 다시 저장합니다.')),
+    buttons: [{ label: '확인', primary: true, action: (dlg) => {
+      const ppi = Number((dlg ?? document).querySelector('input[name=ppi]:checked')?.value ?? 220);
+      const list = only.checked ? sel : S.pres.slides.flatMap((s) => s.objects).filter((o) => o.type === 'image' && o.media);
+      compressPictures(list, ppi, delCrop.checked);
+    } }, { label: '취소' }],
+  });
+}
+const urlBytes = (u) => (typeof u === 'string' && u.startsWith('data:') ? Math.round((u.length - u.indexOf(',') - 1) * 0.75) : 0);
+async function compressPictures(list, ppi, deleteCrop) {
+  let before = 0; let after = 0; let count = 0;
+  const jobs = [];
+  for (const o of list) {
+    const url = S.pres.media[o.media];
+    if (!url) continue;
+    let img;
+    try { img = new Image(); img.src = url; await img.decode(); } catch { continue; }
+    const plan = compressPlan({ natW: img.naturalWidth, natH: img.naturalHeight, crop: o.crop, w: o.w, h: o.h }, ppi, deleteCrop);
+    if (!plan.crop && !plan.resize) continue;
+    const enc = async (u) => {
+      const im = new Image(); im.src = u; await im.decode();
+      // 꾸밈 효과 원본은 크기가 다를 수 있음 — 같은 비율로
+      const kx = im.naturalWidth / img.naturalWidth; const ky = im.naturalHeight / img.naturalHeight;
+      const c = document.createElement('canvas'); c.width = plan.tw; c.height = plan.th;
+      const g = c.getContext('2d', { willReadFrequently: true });
+      g.imageSmoothingQuality = 'high';
+      g.drawImage(im, plan.sx * kx, plan.sy * ky, plan.sw * kx, plan.sh * ky, 0, 0, plan.tw, plan.th);
+      return pixelsUrl(g.getImageData(0, 0, plan.tw, plan.th).data, plan.tw, plan.th, 0.85);
+    };
+    const nu = await enc(url);
+    const b0 = urlBytes(url) || nu.length;
+    // 잘린 영역 삭제가 없고 크기도 커지면 그대로 둠
+    if (!plan.crop && urlBytes(nu) >= b0) continue;
+    const orig = o.artOrig ? await enc(S.pres.media[o.artOrig]).catch(() => null) : null;
+    before += b0; after += urlBytes(nu); count++;
+    jobs.push({ o, nu, orig, plan });
+  }
+  if (!jobs.length) { toast('줄일 그림이 없습니다 (이미 슬라이드 크기에 맞는 해상도입니다)'); return; }
+  change(() => {
+    for (const { o, nu, orig, plan } of jobs) {
+      o.media = addMedia(nu);
+      if (orig) o.artOrig = addMedia(orig);
+      if (plan.crop) delete o.crop;
+    }
+  }, { scope: 'all' });
+  const mb = (b) => (b >= 1048576 ? `${(b / 1048576).toFixed(1)}MB` : `${Math.max(1, Math.round(b / 1024))}KB`);
+  toast(`그림 ${count}개 압축: ${mb(before)} → ${mb(after)}`);
+}
+
 // ───────────── 아이콘 (WIXEL 과 같은 아이콘 모음) ─────────────
 let iconLib = null;
 async function loadIconLib() {
@@ -2019,6 +2173,52 @@ register({
   showFromCurrent: () => { if (S.editing) endEdit(); startShow({ from: S.cur }); },
   presenterView: () => { if (S.editing) endEdit(); startShow({ from: S.cur, presenter: true }); },
   rehearse: () => { if (S.editing) endEdit(); startShow({ from: 0, rehearse: true, presenter: true }); },
+  // 녹화 (PowerPoint [슬라이드 쇼 › 녹화]): 슬라이드별 내레이션 · 카메라 · 타이밍 · 잉크
+  recordShow: (mode) => {
+    if (S.editing) endEdit();
+    const camera = localStorage.getItem('wipoint:recCamera') === '1';
+    const mic = localStorage.getItem('wipoint:recMic') !== '0';
+    startShow({ from: mode === 'start' ? 0 : S.cur, record: { mic, camera } });
+  },
+  recordMenu: (a) => {
+    const cam = localStorage.getItem('wipoint:recCamera') === '1';
+    const mic = localStorage.getItem('wipoint:recMic') !== '0';
+    const clr = (scope, what, label) => ({ label, action: () => run('clearRecording', scope, what) });
+    menuAt(a, [
+      { label: '현재 슬라이드부터 녹화(S)...', action: () => run('recordShow', 'current') },
+      { label: '처음부터 녹화(B)...', action: () => run('recordShow', 'start') },
+      { sep: true },
+      { label: '마이크 사용 (내레이션)', checked: mic, action: () => localStorage.setItem('wipoint:recMic', mic ? '0' : '1') },
+      { label: '카메라 사용', checked: cam, action: () => localStorage.setItem('wipoint:recCamera', cam ? '0' : '1') },
+      { sep: true },
+      { label: '지우기', submenu: [clr('slide', 'timing', '현재 슬라이드의 타이밍 지우기'), clr('all', 'timing', '모든 슬라이드의 타이밍 지우기'), clr('slide', 'narration', '현재 슬라이드의 녹화 지우기'), clr('all', 'narration', '모든 슬라이드의 녹화 지우기')] },
+    ]);
+  },
+  clearRecording: (scope, what) => {
+    const list = scope === 'all' ? S.pres.slides : [slide()];
+    change(() => {
+      for (const s of list) {
+        if (what === 'timing' && s.transition) { delete s.transition.advAfter; if (s.transition.type === 'none' && Object.keys(s.transition).length <= 1) s.transition = null; }
+        if (what === 'narration') { s.objects = s.objects.filter((o) => !o.narration); delete s.inkRec; }
+      }
+    }, { scope: 'all' });
+    toast(what === 'timing' ? '타이밍을 지웠습니다' : '녹화(내레이션 · 잉크)를 지웠습니다');
+  },
+  toggleNarration: () => change(() => { S.pres.show = { ...(S.pres.show ?? {}), noNarration: S.pres.show?.noNarration ? undefined : true }; }, { scope: 'all' }),
+  toggleUseTimings: () => change(() => { S.pres.show = { ...(S.pres.show ?? {}), useTimings: S.pres.show?.useTimings === false }; }, { scope: 'all' }),
+  // 자막 (PowerPoint [슬라이드 쇼 › 자막 사용 / 자막 설정])
+  toggleCaptions: () => { if (!captionsSupported()) { alertDialog('자막', '이 브라우저는 음성 인식(Web Speech API)을 지원하지 않습니다. Chrome 또는 Edge 에서 사용하세요.'); return; } setCaptionSettings({ on: !captionSettings().on }); refresh('ribbon'); },
+  captionMenu: (a) => {
+    const cs = captionSettings();
+    const set = (v) => { setCaptionSettings(v); refresh('ribbon'); };
+    menuAt(a, [
+      { label: '음성 언어', submenu: CAPTION_LANGS.map(([k, l]) => ({ label: l, checked: cs.lang === k, action: () => set({ lang: k }) })) },
+      { label: '자막 위치', submenu: CAPTION_POS.map(([k, l]) => ({ label: l, checked: cs.pos === k, action: () => set({ pos: k }) })) },
+      { label: '글자 크기', submenu: [[20, '작게'], [28, '보통'], [40, '크게'], [56, '아주 크게']].map(([v, l]) => ({ label: l, checked: cs.size === v, action: () => set({ size: v }) })) },
+      { sep: true },
+      { label: '쇼 중에 J 키로 자막을 켜고 끌 수 있습니다', disabled: true },
+    ]);
+  },
   setupShow: () => setupShowDialog(),
   customShows: () => customShowsDialog(),
   customShowMenu: (a) => menuAt(a, [...(S.pres.customShows ?? []).map((c) => ({ label: c.name, action: () => startShow({ custom: c.name }) })), ...(S.pres.customShows?.length ? [{ sep: true }] : []), { label: '쇼 재구성...', action: () => customShowsDialog() }]),
@@ -2205,7 +2405,11 @@ register({
     { label: '슬라이드 확대/축소', desc: '한 슬라이드로 가는 축소판', action: () => run('insertZoom', 'slide') },
   ]),
   zoomReturnToggle: () => change(() => { for (const o of selObjects()) if (o.type === 'zoom') o.zoom.ret = !o.zoom.ret; }),
-  resetPicture: () => change(() => { for (const o of selObjects()) if (o.type === 'image') { if (o.bgOrig) { o.media = o.bgOrig; delete o.bgOrig; } for (const k of ['crop', 'bright', 'contrast', 'alpha', 'gray', 'shadow', 'line', 'shape', 'adj']) delete o[k]; } }),
+  resetPicture: () => change(() => { for (const o of selObjects()) if (o.type === 'image') { if (o.artOrig) { o.media = o.artOrig; delete o.artOrig; } if (o.bgOrig) { o.media = o.bgOrig; delete o.bgOrig; } for (const k of ['crop', 'bright', 'contrast', 'alpha', 'gray', 'shadow', 'line', 'shape', 'adj', 'art', 'fx']) delete o[k]; } }),
+  artEffectsMenu: (a) => artEffectsMenu(a ?? { x: innerWidth / 2, y: 160 }),
+  artOptions: () => artOptionsDialog(),
+  setArtEffect: (key, amount) => applyArt(key, amount),
+  compressPictures: () => compressDialog(),
   applyPictureStyle: (i) => { const st = PICTURE_STYLES[i].set; const objs = selObjects().filter((o) => o.type === 'image'); if (!need(objs, '그림을 선택하세요')) return; change(() => { for (const o of objs) for (const [k, v] of Object.entries(st)) { if (v === undefined) delete o[k]; else o[k] = JSON.parse(JSON.stringify(v)); } }); },
   pictureCorrectionsMenu: (a) => menuAt(a, [[-0.4, '밝기 -40%'], [-0.2, '밝기 -20%'], [0, '밝기 표준'], [0.2, '밝기 +20%'], [0.4, '밝기 +40%']].map(([v, l]) => ({ label: l, action: () => change(() => { for (const o of selObjects()) if (o.type === 'image') o.bright = v || undefined; }) })).concat([{ sep: true }, { label: '대비 +20%', action: () => change(() => { for (const o of selObjects()) if (o.type === 'image') o.contrast = 0.2; }) }, { label: '그림 수정 옵션...', action: () => run('formatPane', 'shape') }])),
   pictureColorMenu: (a) => menuAt(a, [
@@ -2409,7 +2613,7 @@ function ribbonState() {
     bullets: p?.bullet?.type === 'char', numbering: p?.bullet?.type === 'num',
     al: p?.align === 'l' || (!p?.align && !!p), ac: p?.align === 'ctr', ar: p?.align === 'r', aj: p?.align === 'just',
     painter: !!S.painter, cmPane: S.formatPane === 'comments', animPane: S.formatPane === 'anim', selPane: S.formatPane === 'selection', hidden: !!slide()?.hidden,
-    mobile: isMobile(), hand: !!S.handTool, collabOn: !!collab.room, vMaster: !!S.masterKey, masterHide: !!(S.masterKey && curSlide()?.hideMaster), vNormal: S.view === 'normal' && !S.masterKey, vOutline: S.view === 'outline', vSorter: S.view === 'sorter', notes: S.showNotes, grid: S.showGrid, guides: S.showGuides, ruler: S.showRuler,
+    mobile: isMobile(), hand: !!S.handTool, collabOn: !!collab.room, vMaster: !!S.masterKey, narration: !S.pres.show?.noNarration, useTimings: S.pres.show?.useTimings !== false, captions: captionSettings().on, masterHide: !!(S.masterKey && curSlide()?.hideMaster), vNormal: S.view === 'normal' && !S.masterKey, vOutline: S.view === 'outline', vSorter: S.view === 'sorter', notes: S.showNotes, grid: S.showGrid, guides: S.showGuides, ruler: S.showRuler,
     tFirstRow: !!st.firstRow, tLastRow: !!st.lastRow, tBanded: !!st.banded, tFirstCol: !!st.firstCol, tLastCol: !!st.lastCol,
     bars: { font: resolveColor(S.pres.theme, lastColor.font), hl: resolveColor(S.pres.theme, lastColor.hl), fill: resolveColor(S.pres.theme, lastColor.fill), line: resolveColor(S.pres.theme, lastColor.line), cell: resolveColor(S.pres.theme, lastColor.cell) },
     curColor: color,

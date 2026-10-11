@@ -9,6 +9,7 @@ import { validatePresentation, pruneMedia, snapshot, newPresentation } from './m
 import { svgToObjects } from './svgimport.js';
 import { slideSvg } from './svgexport.js';
 import { slideHtml, SLIDE_CSS } from './render.js';
+import { inkUntil } from './recording.js';
 import { toast, alertDialog, progressOverlay } from './ui.js';
 
 const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
@@ -425,10 +426,13 @@ export function printSlides({ mode = 'slides', range = null, hidden = false } = 
 
 // ───────────── PNG 내보내기 ─────────────
 /** 슬라이드 → PNG data URL (SVG foreignObject → canvas) */
-export async function slidePng(i, width = 1920) {
+export async function slidePng(i, width = 1920, opts = {}) {
   const { w, h } = S.pres.size;
   const sc = width / w;
-  const html = await inlineBlobs(slideHtml(S.pres, S.pres.slides[i], { index: i }));
+  const sl = S.pres.slides[i];
+  // 쇼에서 숨기는 개체 (녹음한 내레이션 아이콘 등) 는 그림에 넣지 않음
+  const hide = new Set(sl.objects.filter((o) => o.hideInShow || (o.narration && opts.noNarrationObj)).map((o) => o.id));
+  const html = await inlineBlobs(slideHtml(S.pres, sl, { index: i, hide }));
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w * sc}" height="${h * sc}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" style="transform:scale(${sc});transform-origin:0 0;width:${w}px;height:${h}px"><style>${SLIDE_CSS}</style>${html.replace(/<br>/g, '<br/>').replace(/<img([^>]*?)>/g, '<img$1/>').replace(/<col(?!group)([^>]*?)>/g, '<col$1/>').replace(/<(video|audio)\b[^>]*>(<\/\1>)?/g, '')}</div></foreignObject></svg>`;
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -538,20 +542,28 @@ export async function exportVideo(opts = {}, onProgress = () => {}, signal = nul
   const frames = [];
   for (const [k, i] of idx.entries()) {
     onProgress(k / idx.length * 0.2, `슬라이드 그림 만드는 중 (${k + 1}/${idx.length})`);
-    const url = await slidePng(i, W);
+    const sl = S.pres.slides[i];
+    // 녹화한 내레이션 · 카메라 · 잉크 (PowerPoint [녹화된 타이밍 및 내레이션 사용])
+    const nar = opts.useTimings !== false ? sl.objects.find((o) => o.narration && S.pres.media[o.media]) : null;
+    const url = await slidePng(i, W, { noNarrationObj: !!nar });
     const img = new Image();
     img.src = url;
     await img.decode();
-    const t = S.pres.slides[i].transition;
-    frames.push({ img, sec: t?.advAfter != null && opts.useTimings !== false ? Math.max(0.5, t.advAfter) : opts.sec ?? 5, fade: t && t.type !== 'none' && t.type !== 'cut' ? Math.min(1.5, t.dur ?? 0.7) : opts.fade ?? 0 });
+    const t = sl.transition;
+    frames.push({ img, nar, ink: opts.useTimings !== false ? sl.inkRec : null, sec: t?.advAfter != null && opts.useTimings !== false ? Math.max(0.5, t.advAfter) : opts.sec ?? 5, fade: t && t.type !== 'none' && t.type !== 'cut' ? Math.min(1.5, t.dur ?? 0.7) : opts.fade ?? 0 });
   }
   const cv = document.createElement('canvas');
   cv.width = W;
   cv.height = H;
   const g = cv.getContext('2d');
-  const types = ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+  const types = frames.some((f) => f.nar) ? ['video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm'] : ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
   const mime = types.find((t) => MediaRecorder.isTypeSupported?.(t)) ?? '';
-  const stream = cv.captureStream(30);
+  const vstream = cv.captureStream(30);
+  // 내레이션이 있으면 소리 트랙을 함께 녹화
+  const hasNar = frames.some((f) => f.nar);
+  const ac = hasNar ? new AudioContext() : null;
+  const dest = ac?.createMediaStreamDestination();
+  const stream = hasNar ? new MediaStream([...vstream.getVideoTracks(), ...dest.stream.getAudioTracks()]) : vstream;
   const rec = new MediaRecorder(stream, { mimeType: mime || undefined, videoBitsPerSecond: width >= 1920 ? 8e6 : 5e6 });
   const chunks = [];
   rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
@@ -577,18 +589,40 @@ export async function exportVideo(opts = {}, onProgress = () => {}, signal = nul
         await new Promise((r) => requestAnimationFrame(r));
       }
     } else draw(f.img);
+    // 내레이션 재생 (카메라 녹화면 그 영상도 그림 위에)
+    let media = null;
+    if (f.nar) {
+      media = document.createElement(f.nar.kind === 'video' ? 'video' : 'audio');
+      media.src = S.pres.media[f.nar.media];
+      media.muted = false;
+      try { ac.createMediaElementSource(media).connect(dest); await media.play(); } catch { media = null; }
+    }
+    const t0 = performance.now();
+    const fps = f.ink?.length || f.nar?.kind === 'video' ? 33 : 200;
     // 한 장을 머무는 동안에도 몇 번씩 다시 그려야 녹화기가 프레임을 받음
     const end = performance.now() + Math.max(0, f.sec - (k > 0 ? f.fade : 0)) * 1000;
     while (performance.now() < end) {
       if (signal?.aborted) break;
       draw(f.img);
+      if (media && f.nar.kind === 'video') g.drawImage(media, (f.nar.x / w) * W, (f.nar.y / h) * H, (f.nar.w / w) * W, (f.nar.h / h) * H);
+      if (f.ink?.length) {
+        const sc = W / w;
+        for (const st of inkUntil(f.ink, (performance.now() - t0) / 1000)) {
+          g.strokeStyle = st.color; g.lineWidth = Math.max(1, st.width * sc); g.lineCap = 'round'; g.lineJoin = 'round';
+          g.beginPath();
+          st.pts.forEach(([x, y], q) => (q ? g.lineTo(x * sc, y * sc) : g.moveTo(x * sc, y * sc)));
+          g.stroke();
+        }
+      }
       onProgress(0.2 + 0.8 * Math.min(1, (elapsed + f.sec - (end - performance.now()) / 1000) / total), `녹화 중 ${k + 1}/${frames.length}`);
-      await wait(200);
+      await wait(fps);
     }
+    media?.pause();
     elapsed += f.sec;
   }
   rec.stop();
   await stopped;
+  ac?.close?.();
   if (signal?.aborted) return null;
   const blob = new Blob(chunks, { type: (mime || 'video/webm').split(';')[0] });
   const ext = blob.type.includes('mp4') ? 'mp4' : 'webm';
