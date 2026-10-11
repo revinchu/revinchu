@@ -565,10 +565,15 @@ export function applyOutline(pres, rows) {
 
 // ───────────── 애니메이션 ─────────────
 export const ANIM_EFFECTS = {
-  entr: [['appear', '나타내기'], ['fade', '밝기 변화'], ['fly', '날아오기'], ['float', '떠오르기'], ['split', '내밀기'], ['wipe', '닦아내기'], ['zoom', '확대/축소'], ['grow', '확대/축소 회전'], ['wheel', '시계 방향 회전'], ['bounce', '바운드']],
-  emph: [['pulse', '흔들기'], ['spin', '회전'], ['growShrink', '크게/작게'], ['teeter', '시소'], ['flash', '깜박이기']],
-  exit: [['disappear', '사라지기'], ['fade', '밝기 변화'], ['fly', '날아가기'], ['zoom', '확대/축소'], ['wipe', '닦아내기']],
-  path: [['pathRight', '선: 오른쪽'], ['pathLeft', '선: 왼쪽'], ['pathUp', '선: 위로'], ['pathDown', '선: 아래로'], ['pathArc', '호'], ['pathCircle', '원'], ['pathWave', '물결']],
+  entr: [['appear', '나타내기'], ['fade', '밝기 변화'], ['fly', '날아오기'], ['float', '떠오르기'], ['split', '내밀기'], ['wipe', '닦아내기'], ['shape', '도형'], ['wheel', '시계 방향 회전'], ['randomBars', '실선 무늬'], ['grow', '확대/축소 회전'], ['zoom', '확대/축소'], ['swivel', '회전'], ['bounce', '바운드'],
+    ['blinds', '블라인드'], ['box', '상자'], ['checker', '바둑판 무늬'], ['circleIn', '원'], ['crawl', '살며시 나타나기'], ['diamond', '다이아몬드'], ['dissolveIn', '디졸브'], ['peek', '살짝 나타내기'], ['plus', '더하기'], ['strips', '계단'], ['wedge', '쐐기'],
+    ['expand', '확장'], ['compress', '압축'], ['basicZoom', '기본 확대/축소'], ['riseUp', '올라오기'], ['sinkDown', '내려앉기'], ['stretch', '늘이기'], ['centerRevolve', '가운데에서 회전'], ['pinwheel', '바람개비'], ['boomerang', '부메랑'], ['curveUp', '곡선 위로'], ['spiralIn', '나선형'], ['credits', '크레딧'], ['flip', '뒤집기'], ['dropIn', '떨어지기']],
+  emph: [['pulse', '흔들기'], ['colorPulse', '색 펄스'], ['teeter', '시소'], ['spin', '회전'], ['growShrink', '크게/작게'], ['desaturate', '채도 낮추기'], ['darken', '어둡게'], ['lighten', '밝게'], ['transparency', '투명'], ['objectColor', '개체 색'], ['complementary', '보색'], ['lineColor', '선 색'], ['fillColor', '채우기 색'],
+    ['flash', '깜박이기'], ['boldFlash', '굵게 깜박이기'], ['wave', '물결'], ['shimmer', '희미하게'], ['bold', '굵게 표시'], ['brushColor', '브러시 색'], ['underline', '밑줄']],
+  exit: [['disappear', '사라지기'], ['fade', '밝기 변화'], ['fly', '날아가기'], ['float', '가라앉기'], ['split', '내밀기'], ['wipe', '닦아내기'], ['shape', '도형'], ['wheel', '시계 방향 회전'], ['randomBars', '실선 무늬'], ['grow', '확대/축소 회전'], ['zoom', '확대/축소'], ['swivel', '회전'], ['bounce', '바운드'],
+    ['blinds', '블라인드'], ['box', '상자'], ['checker', '바둑판 무늬'], ['circleIn', '원'], ['crawl', '살며시 사라지기'], ['diamond', '다이아몬드'], ['dissolveIn', '디졸브'], ['peek', '살짝 사라지기'], ['plus', '더하기'], ['strips', '계단'], ['wedge', '쐐기'],
+    ['expand', '축소'], ['compress', '압축 풀기'], ['basicZoom', '기본 확대/축소'], ['riseUp', '가라앉기 (위로)'], ['sinkDown', '내려가기'], ['stretch', '늘이기'], ['centerRevolve', '가운데로 회전'], ['pinwheel', '바람개비'], ['boomerang', '부메랑'], ['curveUp', '곡선 아래로'], ['spiralIn', '나선형'], ['credits', '크레딧'], ['flip', '뒤집기'], ['dropIn', '떨어지기']],
+  path: [['pathRight', '선: 오른쪽'], ['pathLeft', '선: 왼쪽'], ['pathUp', '선: 위로'], ['pathDown', '선: 아래로'], ['pathDiag', '선: 오른쪽 아래'], ['pathDiagUp', '선: 오른쪽 위'], ['pathArc', '호'], ['pathArcDown', '호: 아래로'], ['pathTurn', '회전'], ['pathCircle', '원'], ['pathSquare', '사각형'], ['pathTriangle', '삼각형'], ['pathDiamond', '다이아몬드'], ['pathStar', '5각 별'], ['pathHeart', '하트'], ['pathEight', '8자형'], ['pathLoop', '루프'], ['pathSpiral', '나선'], ['pathWave', '물결'], ['pathZigzag', '지그재그'], ['pathBounce', '바운드'], ['pathSCurve', 'S자 곡선']],
 };
 export const ANIM_CLASS_LABEL = { entr: '나타내기', emph: '강조', exit: '끝내기', path: '이동 경로' };
 /** 이동 경로 (PowerPoint 와 같이 슬라이드 너비/높이 비율 좌표, 개체 위치 기준) */
@@ -577,6 +582,20 @@ export const MOTION_PATHS = {
   pathArc: 'M 0 0 C 0.04 -0.2 0.21 -0.2 0.25 0',
   pathCircle: 'M 0 0 C 0.07 0 0.125 0.06 0.125 0.125 C 0.125 0.19 0.07 0.25 0 0.25 C -0.07 0.25 -0.125 0.19 -0.125 0.125 C -0.125 0.06 -0.07 0 0 0',
   pathWave: 'M 0 0 C 0.03 -0.08 0.06 -0.08 0.0625 0 C 0.065 0.08 0.095 0.08 0.125 0 C 0.155 -0.08 0.185 -0.08 0.1875 0 C 0.19 0.08 0.22 0.08 0.25 0',
+  pathDiag: 'M 0 0 L 0.2 0.25', pathDiagUp: 'M 0 0 L 0.2 -0.25',
+  pathArcDown: 'M 0 0 C 0.04 0.2 0.21 0.2 0.25 0',
+  pathTurn: 'M 0 0 C 0.1 0 0.15 0.04 0.15 0.12 L 0.15 0.25',
+  pathSquare: 'M 0 0 L 0.15 0 L 0.15 0.25 L 0 0.25 L 0 0',
+  pathTriangle: 'M 0 0 L 0.1 0.2 L -0.1 0.2 L 0 0',
+  pathDiamond: 'M 0 0 L 0.1 0.15 L 0 0.3 L -0.1 0.15 L 0 0',
+  pathStar: 'M 0 0 L 0.035 0.1 L 0.14 0.1 L 0.055 0.16 L 0.09 0.27 L 0 0.2 L -0.09 0.27 L -0.055 0.16 L -0.14 0.1 L -0.035 0.1 L 0 0',
+  pathHeart: 'M 0 0 C 0.02 -0.08 0.13 -0.08 0.12 0.02 C 0.11 0.1 0.02 0.14 0 0.2 C -0.02 0.14 -0.11 0.1 -0.12 0.02 C -0.13 -0.08 -0.02 -0.08 0 0',
+  pathEight: 'M 0 0 C 0.08 -0.12 0.16 0 0.08 0.05 C 0 0.1 0 0.1 -0.08 0.15 C -0.16 0.2 -0.08 0.32 0 0.2 C 0.08 0.08 -0.08 0.12 0 0',
+  pathLoop: 'M 0 0 C 0.1 0 0.15 -0.12 0.08 -0.15 C 0.01 -0.18 0.03 0 0.25 0',
+  pathSpiral: 'M 0 0 C 0.1 0 0.1 0.15 0 0.15 C -0.08 0.15 -0.08 0.04 0 0.04 C 0.05 0.04 0.05 0.1 0 0.1',
+  pathZigzag: 'M 0 0 L 0.05 0.08 L 0.1 0 L 0.15 0.08 L 0.2 0 L 0.25 0.08',
+  pathBounce: 'M 0 0 C 0.02 -0.15 0.06 -0.15 0.08 0 C 0.1 -0.1 0.13 -0.1 0.15 0 C 0.17 -0.05 0.2 -0.05 0.22 0',
+  pathSCurve: 'M 0 0 C 0.15 0 0.15 0.12 0 0.12 C -0.15 0.12 -0.15 0.25 0 0.25',
 };
 /** 경로 글 → 점 목록 (곡선은 잘게 나눔) — [ [x, y] ] (비율) */
 export function motionPoints(path, steps = 12) {
@@ -648,10 +667,17 @@ export function stepTimeline(step) {
   });
 }
 
+/** [키, 이름, 묶음] — 묶음: subtle 은은한 효과 · exciting 화려한 효과 · dynamic 동적 콘텐츠 (PowerPoint 전환 갤러리 순서) */
 export const TRANSITIONS = [
-  ['none', '없음'], ['cut', '컷'], ['fade', '페이드'], ['push', '밀어내기'], ['wipe', '닦아내기'], ['split', '나누기'],
-  ['cover', '덮기'], ['uncover', '나타내기'], ['zoom', '확대/축소'], ['circle', '원형'], ['dissolve', '디졸브'], ['flip', '뒤집기'], ['morph', '모핑'],
+  ['none', '없음', 'subtle'], ['morph', '모핑', 'subtle'], ['cut', '컷', 'subtle'], ['fade', '페이드', 'subtle'], ['push', '밀어내기', 'subtle'], ['wipe', '닦아내기', 'subtle'], ['split', '나누기', 'subtle'],
+  ['reveal', '표시', 'subtle'], ['randomBars', '실선 무늬', 'subtle'], ['circle', '원형', 'subtle'], ['diamond', '다이아몬드', 'subtle'], ['plus', '더하기', 'subtle'], ['uncover', '나타내기', 'subtle'], ['cover', '덮기', 'subtle'], ['flash', '깜박이기', 'subtle'], ['strips', '계단', 'subtle'],
+  ['fall', '떨어지기', 'exciting'], ['drape', '드레이프', 'exciting'], ['curtains', '커튼', 'exciting'], ['wind', '바람', 'exciting'], ['prestige', '프레스티지', 'exciting'], ['fracture', '균열', 'exciting'], ['crush', '구기기', 'exciting'], ['peelOff', '벗기기', 'exciting'],
+  ['pageCurl', '페이지 말아 넘기기', 'exciting'], ['airplane', '비행기', 'exciting'], ['origami', '종이접기', 'exciting'], ['dissolve', '디졸브', 'exciting'], ['checker', '바둑판 무늬', 'exciting'], ['blinds', '블라인드', 'exciting'], ['clock', '시계', 'exciting'],
+  ['ripple', '물결', 'exciting'], ['honeycomb', '벌집', 'exciting'], ['glitter', '반짝이', 'exciting'], ['vortex', '소용돌이', 'exciting'], ['shred', '조각', 'exciting'], ['switch', '전환', 'exciting'], ['flip', '뒤집기', 'exciting'], ['gallery', '갤러리', 'exciting'],
+  ['cube', '큐브', 'exciting'], ['doors', '문', 'exciting'], ['box', '상자', 'exciting'], ['comb', '빗질', 'exciting'], ['zoom', '확대/축소', 'exciting'], ['random', '임의', 'exciting'],
+  ['pan', '이동', 'dynamic'], ['ferris', '관람차', 'dynamic'], ['conveyor', '컨베이어', 'dynamic'], ['rotate', '회전', 'dynamic'], ['window', '창', 'dynamic'], ['orbit', '궤도', 'dynamic'], ['flythrough', '비행', 'dynamic'],
 ];
+export const TRANSITION_GROUPS = { subtle: '은은한 효과', exciting: '화려한 효과', dynamic: '동적 콘텐츠' };
 /** 모핑: 앞 슬라이드와 짝이 되는 개체 (이름 → 같은 종류 · 같은 글/그림 → 같은 종류 · 도형 모양 순) */
 export function morphPairs(a, b) {
   const pairs = [];
@@ -673,7 +699,7 @@ export function morphPairs(a, b) {
   }
   return pairs;
 }
-export const TRANSITION_LABEL = Object.fromEntries(TRANSITIONS);
+export const TRANSITION_LABEL = Object.fromEntries(TRANSITIONS.map(([k, l]) => [k, l]));
 
 // ───────────── 실행 취소 ─────────────
 /** 문서 상태(미디어 제외) 직렬화 — 미디어는 추가만 되므로 따로 둠 */

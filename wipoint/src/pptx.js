@@ -4,7 +4,7 @@
 import { zip, unzip, textOf } from './zip.js';
 import { parseXml, child, kids, descendants, esc } from './xml.js';
 import { SLOT_NAMES, resolveColor, applyMods, cloneTheme, THEMES } from './themes.js';
-import { EMU_PER_PX, uid, layoutPlaceholders, defaultSize, defaultColor, defaultFont, isEmptyText, animSteps, triggerSteps, stepTimeline, textBody, para, newSlide, slideTitle, setMasterText } from './model.js';
+import { EMU_PER_PX, uid, layoutPlaceholders, defaultSize, defaultColor, defaultFont, isEmptyText, animSteps, triggerSteps, stepTimeline, MOTION_PATHS, textBody, para, newSlide, slideTitle, setMasterText } from './model.js';
 import { parseLatex, toOMML, ommlToLatex } from './math.js';
 import { paraDefaults, tableCellStyle, slideBackground, themeDecor, slideDecor } from './render.js';
 import { KNOWN_SHAPES } from './shapes.js';
@@ -391,9 +391,9 @@ export function chartXml(orig, opts = {}) {
 }
 
 // ───────────── 애니메이션 → p:timing ─────────────
-const ENTR_PRESET = { appear: 1, fly: 2, split: 16, wheel: 21, wipe: 22, zoom: 53, fade: 10, float: 42, grow: 31, bounce: 26 };
-const EMPH_PRESET = { pulse: 26, spin: 8, growShrink: 6, teeter: 32, flash: 35 };
-const EXIT_PRESET = { disappear: 1, fly: 2, wipe: 22, zoom: 53, fade: 10 };
+const ENTR_PRESET = { appear: 1, fly: 2, blinds: 3, box: 4, checker: 5, shape: 6, circleIn: 6, crawl: 7, diamond: 8, dissolveIn: 9, fade: 10, peek: 12, plus: 13, randomBars: 14, spiralIn: 15, split: 16, stretch: 17, strips: 18, swivel: 19, wedge: 20, wheel: 21, wipe: 22, basicZoom: 23, boomerang: 25, bounce: 26, dropIn: 26, credits: 28, grow: 31, pinwheel: 35, riseUp: 37, float: 42, centerRevolve: 43, sinkDown: 47, compress: 50, curveUp: 52, zoom: 53, expand: 55, flip: 56 };
+const EMPH_PRESET = { fillColor: 1, growShrink: 6, lineColor: 7, spin: 8, transparency: 9, boldFlash: 10, bold: 15, brushColor: 16, underline: 18, objectColor: 19, complementary: 21, darken: 24, desaturate: 25, pulse: 26, colorPulse: 27, lighten: 30, teeter: 32, wave: 34, flash: 35, shimmer: 36 };
+const EXIT_PRESET = { ...ENTR_PRESET, disappear: 1 };
 const DIR_SUB = { b: 4, t: 1, l: 8, r: 2 };
 const PATH_PRESET = { pathRight: 64, pathLeft: 64, pathUp: 64, pathDown: 64, pathArc: 37, pathCircle: 1, pathWave: 61 };
 
@@ -409,6 +409,43 @@ function timingXml(slide, spidOf) {
   const anim = (spid, dur, attr, from, to) => `<p:anim calcmode="lin" valueType="num"><p:cBhvr additive="base"><p:cTn id="${nid()}" dur="${dur}" fill="hold"/>${tgt(spid)}<p:attrNameLst><p:attrName>${attr}</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst><p:tav tm="0"><p:val><p:strVal val="${from}"/></p:val></p:tav><p:tav tm="100000"><p:val><p:strVal val="${to}"/></p:val></p:tav></p:tavLst></p:anim>`;
   const flyFrom = { b: ['ppt_y', '1+#ppt_h/2'], t: ['ppt_y', '0-#ppt_h/2'], l: ['ppt_x', '0-#ppt_w/2'], r: ['ppt_x', '1+#ppt_w/2'] };
   const WIPE = { b: 'up', t: 'down', l: 'right', r: 'left' };
+  // 모양 필터로 표현되는 나타내기/끝내기 (PowerPoint animEffect filter)
+  const FILTER_OF = (e, dir, io) => {
+    const hv = dir === 'l' || dir === 'r' ? 'vertical' : 'horizontal';
+    switch (e) {
+      case 'blinds': return `blinds(${hv})`;
+      case 'box': return `box(${io})`;
+      case 'checker': return 'checkerboard(across)';
+      case 'shape': case 'circleIn': return `circle(${io})`;
+      case 'diamond': return `diamond(${io})`;
+      case 'plus': return `plus(${io})`;
+      case 'dissolveIn': return 'dissolve';
+      case 'randomBars': return `randombar(${hv})`;
+      case 'strips': return 'strips(downRight)';
+      case 'wedge': return 'wedge';
+      case 'peek': return `slide(${{ b: 'fromBottom', t: 'fromTop', l: 'fromLeft', r: 'fromRight' }[dir] ?? 'fromBottom'})`;
+      default: return null;
+    }
+  };
+  // 크기 · 위치 · 회전으로 표현되는 효과 (out: 끝내기는 거꾸로)
+  const MOVE_OF = {
+    expand: (sp, d, out) => anim(sp, d, 'ppt_w', out ? '#ppt_w' : '0.70*#ppt_w', out ? '0.70*#ppt_w' : '#ppt_w'),
+    compress: (sp, d, out) => anim(sp, d, 'ppt_w', out ? '#ppt_w' : '1.5*#ppt_w', out ? '1.5*#ppt_w' : '#ppt_w'),
+    stretch: (sp, d, out) => anim(sp, d, 'ppt_w', out ? '#ppt_w' : '0', out ? '0' : '#ppt_w'),
+    basicZoom: (sp, d, out) => anim(sp, d, 'ppt_w', out ? '#ppt_w' : '0', out ? '0' : '#ppt_w') + anim(sp, d, 'ppt_h', out ? '#ppt_h' : '0', out ? '0' : '#ppt_h'),
+    pinwheel: (sp, d, out) => anim(sp, d, 'ppt_w', out ? '#ppt_w' : '0', out ? '0' : '#ppt_w') + anim(sp, d, 'ppt_h', out ? '#ppt_h' : '0', out ? '0' : '#ppt_h') + anim(sp, d, 'style.rotation', out ? '0' : '720', out ? '720' : '0'),
+    swivel: (sp, d, out) => anim(sp, d, 'ppt_w', out ? '#ppt_w' : '0', out ? '0' : '#ppt_w'),
+    flip: (sp, d, out) => anim(sp, d, 'ppt_h', out ? '#ppt_h' : '0', out ? '0' : '#ppt_h'),
+    riseUp: (sp, d, out) => anim(sp, d, 'ppt_y', out ? '#ppt_y' : '#ppt_y+.1', out ? '#ppt_y+.1' : '#ppt_y'),
+    sinkDown: (sp, d, out) => anim(sp, d, 'ppt_y', out ? '#ppt_y' : '#ppt_y-.1', out ? '#ppt_y-.1' : '#ppt_y'),
+    crawl: (sp, d, out) => anim(sp, d, 'ppt_y', out ? '#ppt_y' : '1+#ppt_h/2', out ? '1+#ppt_h/2' : '#ppt_y'),
+    credits: (sp, d, out) => anim(sp, d, 'ppt_y', out ? '#ppt_y' : '1+#ppt_h/2', out ? '0-#ppt_h/2' : '#ppt_y'),
+    dropIn: (sp, d, out) => anim(sp, d, 'ppt_y', out ? '#ppt_y' : '0-#ppt_h/2', out ? '1+#ppt_h/2' : '#ppt_y'),
+    curveUp: (sp, d, out) => anim(sp, d, 'ppt_x', out ? '#ppt_x' : '#ppt_x-.15', out ? '#ppt_x+.15' : '#ppt_x') + anim(sp, d, 'ppt_y', out ? '#ppt_y' : '#ppt_y+.2', out ? '#ppt_y+.2' : '#ppt_y'),
+    boomerang: (sp, d, out) => anim(sp, d, 'ppt_x', out ? '#ppt_x' : '#ppt_x+.25', out ? '#ppt_x+.25' : '#ppt_x') + anim(sp, d, 'ppt_w', out ? '#ppt_w' : '0.3*#ppt_w', out ? '0.3*#ppt_w' : '#ppt_w'),
+    spiralIn: (sp, d, out) => anim(sp, d, 'ppt_w', out ? '#ppt_w' : '0', out ? '0' : '#ppt_w') + anim(sp, d, 'ppt_h', out ? '#ppt_h' : '0', out ? '0' : '#ppt_h') + anim(sp, d, 'ppt_x', out ? '#ppt_x' : '0', out ? '1' : '#ppt_x'),
+    centerRevolve: (sp, d, out) => anim(sp, d, 'ppt_y', out ? '#ppt_y' : '#ppt_y+.15', out ? '#ppt_y+.15' : '#ppt_y') + anim(sp, d, 'ppt_w', out ? '#ppt_w' : '0.3*#ppt_w', out ? '0.3*#ppt_w' : '#ppt_w'),
+  };
   const behaviors = (a, spid) => {
     const dur = Math.max(1, Math.round((a.dur ?? 0.5) * 1000));
     const dir = a.dir ?? 'b';
@@ -422,7 +459,12 @@ function timingXml(slide, spidOf) {
         case 'zoom': return set(spid, 'visible') + anim(spid, dur, 'ppt_w', '0', '#ppt_w') + anim(spid, dur, 'ppt_h', '0', '#ppt_h') + effect(spid, dur, 'fade');
         case 'grow': return set(spid, 'visible') + anim(spid, dur, 'ppt_w', '0', '#ppt_w') + anim(spid, dur, 'ppt_h', '0', '#ppt_h') + anim(spid, dur, 'style.rotation', '90', '0') + effect(spid, dur, 'fade');
         case 'float': return set(spid, 'visible') + effect(spid, dur, 'fade') + anim(spid, dur, 'ppt_y', '#ppt_y+.1', '#ppt_y');
-        default: return set(spid, 'visible') + effect(spid, dur, 'fade');
+        default: {
+          const f = FILTER_OF(a.effect, dir, 'in');
+          if (f) return set(spid, 'visible') + effect(spid, dur, f);
+          const m = MOVE_OF[a.effect];
+          return set(spid, 'visible') + effect(spid, dur, 'fade') + (m ? m(spid, dur, false) : '');
+        }
       }
     }
     if (a.cls === 'exit') {
@@ -432,7 +474,12 @@ function timingXml(slide, spidOf) {
         case 'fly': { const [attr, to] = flyFrom[dir] ?? flyFrom.b; return anim(spid, dur, attr, `#${attr}`, to) + hide; }
         case 'wipe': return effect(spid, dur, `wipe(${WIPE[dir] ?? 'down'})`, 'out') + hide;
         case 'zoom': return anim(spid, dur, 'ppt_w', '#ppt_w', '0') + anim(spid, dur, 'ppt_h', '#ppt_h', '0') + effect(spid, dur, 'fade', 'out') + hide;
-        default: return effect(spid, dur, 'fade', 'out') + hide;
+        default: {
+          const f = FILTER_OF(a.effect, dir, 'out');
+          if (f) return effect(spid, dur, f, 'out') + hide;
+          const m = MOVE_OF[a.effect];
+          return effect(spid, dur, 'fade', 'out') + (m ? m(spid, dur, true) : '') + hide;
+        }
       }
     }
     if (a.cls === 'path') {
@@ -440,6 +487,20 @@ function timingXml(slide, spidOf) {
       return `<p:animMotion origin="layout" path="${esc(path)}" pathEditMode="relative" ptsTypes=""><p:cBhvr><p:cTn id="${nid()}" dur="${dur}" fill="hold"/>${tgt(spid)}<p:attrNameLst><p:attrName>ppt_x</p:attrName><p:attrName>ppt_y</p:attrName></p:attrNameLst></p:cBhvr><p:rCtr x="0" y="0"/></p:animMotion>`;
     }
     // 강조
+    const clr = (attrName, inner) => `<p:animClr clrSpc="${inner.startsWith('<p:by><p:hsl') ? 'hsl' : 'rgb'}" dir="cw"><p:cBhvr><p:cTn id="${nid()}" dur="${dur}" fill="hold"/>${tgt(spid)}<p:attrNameLst><p:attrName>${attrName}</p:attrName></p:attrNameLst></p:cBhvr>${inner}</p:animClr>`;
+    const setAttr = (attrName, val) => `<p:set><p:cBhvr><p:cTn id="${nid()}" dur="${dur}" fill="hold"/>${tgt(spid)}<p:attrNameLst><p:attrName>${attrName}</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="${val}"/></p:to></p:set>`;
+    switch (a.effect) {
+      case 'transparency': return setAttr('style.opacity', '0.5');
+      case 'bold': return setAttr('style.fontWeight', 'bold');
+      case 'underline': return setAttr('style.textDecorationUnderline', 'true');
+      case 'desaturate': return clr('fillcolor', '<p:by><p:hsl h="0" s="-100000" l="0"/></p:by>');
+      case 'darken': return clr('fillcolor', '<p:by><p:hsl h="0" s="0" l="-30000"/></p:by>');
+      case 'lighten': return clr('fillcolor', '<p:by><p:hsl h="0" s="0" l="30000"/></p:by>');
+      case 'complementary': return clr('fillcolor', '<p:by><p:hsl h="10800000" s="0" l="0"/></p:by>');
+      case 'objectColor': case 'fillColor': case 'brushColor': return clr('fillcolor', '<p:to><a:srgbClr val="FF0000"/></p:to>');
+      case 'lineColor': return clr('stroke.color', '<p:to><a:srgbClr val="FF0000"/></p:to>');
+      default: break;
+    }
     if (a.effect === 'spin' || a.effect === 'teeter') return `<p:animRot by="${a.effect === 'spin' ? 21600000 : 300000}"><p:cBhvr><p:cTn id="${nid()}" dur="${dur}" fill="hold"${a.effect === 'teeter' ? ' autoRev="1" repeatCount="2000"' : ''}/>${tgt(spid)}<p:attrNameLst><p:attrName>r</p:attrName></p:attrNameLst></p:cBhvr></p:animRot>`;
     if (a.effect === 'flash') return `<p:animEffect transition="out" filter="fade"><p:cBhvr><p:cTn id="${nid()}" dur="${dur}" autoRev="1"/>${tgt(spid)}</p:cBhvr></p:animEffect>`;
     const by = a.effect === 'growShrink' ? 150000 : 110000;
@@ -465,9 +526,9 @@ function timingXml(slide, spidOf) {
         const spid = a.para != null ? `${spid0}#${a.para}` : spid0;
         const table = a.cls === 'entr' ? ENTR_PRESET : a.cls === 'exit' ? EXIT_PRESET : a.cls === 'path' ? PATH_PRESET : EMPH_PRESET;
         const node = k === 0 && g === groups[0] && step[0] === a ? (a.start === 'after' ? 'afterEffect' : a.start === 'with' ? 'withEffect' : 'clickEffect') : a.start === 'after' ? 'afterEffect' : 'withEffect';
-        const sub = a.cls === 'emph' ? 0 : a.effect === 'fly' || a.effect === 'wipe' ? DIR_SUB[a.dir ?? 'b'] ?? 4 : a.effect === 'zoom' ? 16 : a.effect === 'split' ? 37 : 0;
+        const sub = a.cls === 'emph' ? 0 : ['fly', 'wipe', 'peek', 'crawl'].includes(a.effect) ? DIR_SUB[a.dir ?? 'b'] ?? 4 : a.effect === 'zoom' || a.effect === 'box' || a.effect === 'shape' || a.effect === 'circleIn' || a.effect === 'diamond' || a.effect === 'plus' ? 16 : a.effect === 'split' ? 37 : a.effect === 'blinds' || a.effect === 'randomBars' ? (a.dir === 'l' || a.dir === 'r' ? 5 : 10) : a.effect === 'wheel' ? 1 : a.effect === 'strips' ? 12 : 0;
         const eid = nid();
-        return `<p:par><p:cTn id="${eid}" presetID="${table[a.effect] ?? 10}" presetClass="${a.cls}" presetSubtype="${sub}" fill="hold" grpId="0" nodeType="${node}"><p:stCondLst><p:cond delay="${Math.round((a.delay ?? 0) * 1000)}"/></p:stCondLst><p:childTnLst>${behaviors(a, spid)}</p:childTnLst></p:cTn></p:par>`;
+        return `<p:par><p:cTn id="${eid}" presetID="${table[a.effect] ?? (a.cls === 'path' ? 0 : 10)}" presetClass="${a.cls}" presetSubtype="${sub}" fill="hold" grpId="0" nodeType="${node}"><p:stCondLst><p:cond delay="${Math.round((a.delay ?? 0) * 1000)}"/></p:stCondLst><p:childTnLst>${behaviors(a, spid)}</p:childTnLst></p:cTn></p:par>`;
       }).join('');
       return `<p:par><p:cTn id="${gid}" fill="hold"><p:stCondLst><p:cond delay="${g.at}"/></p:stCondLst><p:childTnLst>${effs}</p:childTnLst></p:cTn></p:par>`;
     }).join('');
@@ -488,22 +549,46 @@ function timingXml(slide, spidOf) {
   return `<p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst>${clickPars ? `<p:seq concurrent="1" nextAc="seek"><p:cTn id="2" dur="indefinite" nodeType="mainSeq"><p:childTnLst>${clickPars}</p:childTnLst></p:cTn><p:prevCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst><p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst></p:seq>` : ''}${trigSeqs}</p:childTnLst></p:cTn></p:par></p:tnLst>${blds ? `<p:bldLst>${blds}</p:bldLst>` : ''}</p:timing>`;
 }
 
+const PUSH_DIR = { b: 'u', t: 'd', l: 'r', r: 'l' };
+const ORIENT = (d) => (d === 'l' || d === 'r' ? 'vert' : 'horz');
+const STRIP_DIR = { b: 'ru', t: 'rd', l: 'ld', r: 'lu' };
+const LR = (d) => (d === 'l' ? 'r' : 'l');
+/** 기본 (ECMA) 전환 요소 */
 const TRANS_XML = {
   cut: () => '<p:cut/>', fade: () => '<p:fade/>', dissolve: () => '<p:dissolve/>', zoom: () => '<p:zoom/>', circle: () => '<p:circle/>',
-  push: (d) => `<p:push dir="${{ b: 'u', t: 'd', l: 'r', r: 'l' }[d] ?? 'u'}"/>`, wipe: (d) => `<p:wipe dir="${{ b: 'u', t: 'd', l: 'r', r: 'l' }[d] ?? 'r'}"/>`,
-  cover: (d) => `<p:cover dir="${{ b: 'u', t: 'd', l: 'r', r: 'l' }[d] ?? 'l'}"/>`, uncover: (d) => `<p:pull dir="${{ b: 'u', t: 'd', l: 'r', r: 'l' }[d] ?? 'l'}"/>`,
-  split: () => '<p:split orient="vert" dir="out"/>', flip: () => '<p:fade/>',
+  push: (d) => `<p:push dir="${PUSH_DIR[d] ?? 'u'}"/>`, wipe: (d) => `<p:wipe dir="${PUSH_DIR[d] ?? 'r'}"/>`,
+  cover: (d) => `<p:cover dir="${PUSH_DIR[d] ?? 'l'}"/>`, uncover: (d) => `<p:pull dir="${PUSH_DIR[d] ?? 'l'}"/>`,
+  split: (d) => `<p:split orient="${d === 'l' ? 'horz' : 'vert'}" dir="out"/>`,
+  blinds: (d) => `<p:blinds dir="${ORIENT(d)}"/>`, checker: (d) => `<p:checker dir="${ORIENT(d)}"/>`, comb: (d) => `<p:comb dir="${ORIENT(d)}"/>`, randomBars: (d) => `<p:randomBar dir="${ORIENT(d)}"/>`,
+  strips: (d) => `<p:strips dir="${STRIP_DIR[d] ?? 'ru'}"/>`, diamond: () => '<p:diamond/>', plus: () => '<p:plus/>', clock: () => '<p:wheel spokes="1"/>', random: () => '<p:random/>',
 };
+/** PowerPoint 2010 (p14) 전환 */
+const TRANS_P14 = {
+  vortex: (d) => `<p14:vortex dir="${LR(d)}"/>`, switch: (d) => `<p14:switch dir="${LR(d)}"/>`, flip: (d) => `<p14:flip dir="${LR(d)}"/>`, ripple: () => '<p14:ripple/>', honeycomb: () => '<p14:honeycomb/>',
+  cube: (d) => `<p14:prism dir="${LR(d)}"/>`, box: (d) => `<p14:prism dir="${LR(d)}" isInverted="1"/>`, rotate: (d) => `<p14:prism dir="${LR(d)}" isContent="1"/>`, orbit: (d) => `<p14:prism dir="${LR(d)}" isContent="1" isInverted="1"/>`,
+  doors: () => '<p14:doors dir="vert"/>', window: () => '<p14:window dir="vert"/>', ferris: (d) => `<p14:ferris dir="${LR(d)}"/>`, gallery: (d) => `<p14:gallery dir="${LR(d)}"/>`, conveyor: (d) => `<p14:conveyor dir="${LR(d)}"/>`,
+  pan: (d) => `<p14:pan dir="${PUSH_DIR[d] ?? 'u'}"/>`, glitter: () => '<p14:glitter dir="l" pattern="hexagon"/>', flythrough: () => '<p14:flythrough/>', flash: () => '<p14:flash/>', shred: () => '<p14:shred/>', reveal: () => '<p14:reveal/>',
+};
+/** PowerPoint 2013 (p15:prstTrans) 전환 */
+const TRANS_P15 = { fall: 'fallOver', drape: 'drape', curtains: 'curtains', wind: 'wind', prestige: 'prestige', fracture: 'fracture', crush: 'crush', peelOff: 'peelOff', pageCurl: 'pageCurlDouble', airplane: 'airplane', origami: 'origami' };
+const NS_MC = 'http://schemas.openxmlformats.org/markup-compatibility/2006';
+const NS_P14 = 'http://schemas.microsoft.com/office/powerpoint/2010/main';
+const NS_P15 = 'http://schemas.microsoft.com/office/powerpoint/2012/main';
 function transitionXml(t) {
   if (!t || t.type === 'none') return t?.advAfter != null ? `<p:transition advTm="${Math.round(t.advAfter * 1000)}"${t.advClick === false ? ' advClick="0"' : ''}/>` : '';
   const dur = t.dur ?? 1;
   const spd = dur <= 0.5 ? 'fast' : dur <= 0.75 ? 'med' : 'slow';
   const adv = `${t.advClick === false ? ' advClick="0"' : ''}${t.advAfter != null ? ` advTm="${Math.round(t.advAfter * 1000)}"` : ''}`;
-  if (t.type === 'morph') {
-    // PowerPoint 2019+ 모핑 (p159), 이전 버전은 페이드
-    return `<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice xmlns:p159="http://schemas.microsoft.com/office/powerpoint/2015/09/main" Requires="p159"><p:transition spd="slow"${adv} xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" p14:dur="${Math.round(dur * 1000)}"><p159:morph option="byObject"/></p:transition></mc:Choice><mc:Fallback><p:transition spd="slow"${adv}><p:fade/></p:transition></mc:Fallback></mc:AlternateContent>`;
-  }
-  return `<p:transition spd="${spd}"${adv}>${(TRANS_XML[t.type] ?? TRANS_XML.fade)(t.dir)}</p:transition>`;
+  const ms = Math.round(dur * 1000);
+  // 새 버전 전환은 mc:AlternateContent — 이전 버전 PowerPoint · LibreOffice 는 페이드
+  const alt = (req, ns, inner, fallback = '<p:fade/>') => `<mc:AlternateContent xmlns:mc="${NS_MC}"><mc:Choice xmlns:${req}="${ns}" Requires="${req}"><p:transition spd="${spd}"${adv} xmlns:p14="${NS_P14}" p14:dur="${ms}">${inner}</p:transition></mc:Choice><mc:Fallback><p:transition spd="${spd}"${adv}>${fallback}</p:transition></mc:Fallback></mc:AlternateContent>`;
+  if (t.type === 'morph') return alt('p159', 'http://schemas.microsoft.com/office/powerpoint/2015/09/main', '<p159:morph option="byObject"/>');
+  if (TRANS_P14[t.type]) return alt('p14', NS_P14, TRANS_P14[t.type](t.dir));
+  if (TRANS_P15[t.type]) return alt('p15', NS_P15, `<p15:prstTrans prst="${TRANS_P15[t.type]}"${t.dir === 'l' ? ' invX="1"' : ''}/>`);
+  const inner = (TRANS_XML[t.type] ?? TRANS_XML.fade)(t.dir);
+  // 빠르게/보통/느리게 와 다른 시간은 p14:dur 로 (PowerPoint 2010+ 과 같음)
+  if (![0.5, 0.75, 1].includes(dur)) return alt('p14', NS_P14, inner, inner);
+  return `<p:transition spd="${spd}"${adv}>${inner}</p:transition>`;
 }
 
 // ───────────── 테마 · 마스터 · 레이아웃 ─────────────
@@ -1234,13 +1319,14 @@ const TABLE_STYLE_ACCENT = {
   '{00A15C55-8517-42AA-B614-E9B94910E393}': 'accent4', '{7DF18680-E054-41AD-8BC1-D1AEF772440D}': 'accent5', '{93296810-A885-4BE3-A3E7-6D5BEEA58F35}': 'accent6',
 };
 const PRESET_ANIM = {
-  entr: { 1: 'appear', 2: 'fly', 10: 'fade', 16: 'split', 21: 'wheel', 22: 'wipe', 23: 'zoom', 53: 'zoom', 42: 'float', 47: 'float', 31: 'grow', 26: 'bounce', 9: 'fade', 37: 'float', 55: 'zoom' },
-  emph: { 26: 'pulse', 8: 'spin', 6: 'growShrink', 32: 'teeter', 35: 'flash' },
-  exit: { 1: 'disappear', 2: 'fly', 10: 'fade', 22: 'wipe', 53: 'zoom', 23: 'zoom', 9: 'fade' },
+  entr: { 1: 'appear', 2: 'fly', 3: 'blinds', 4: 'box', 5: 'checker', 6: 'shape', 7: 'crawl', 8: 'diamond', 9: 'dissolveIn', 10: 'fade', 12: 'peek', 13: 'plus', 14: 'randomBars', 15: 'spiralIn', 16: 'split', 17: 'stretch', 18: 'strips', 19: 'swivel', 20: 'wedge', 21: 'wheel', 22: 'wipe', 23: 'basicZoom', 25: 'boomerang', 26: 'bounce', 28: 'credits', 29: 'float', 30: 'float', 31: 'grow', 35: 'pinwheel', 37: 'riseUp', 42: 'float', 43: 'centerRevolve', 45: 'swivel', 47: 'sinkDown', 50: 'compress', 52: 'curveUp', 53: 'zoom', 55: 'expand', 56: 'flip' },
+  emph: { 1: 'fillColor', 3: 'objectColor', 6: 'growShrink', 7: 'lineColor', 8: 'spin', 9: 'transparency', 10: 'boldFlash', 15: 'bold', 16: 'brushColor', 18: 'underline', 19: 'objectColor', 21: 'complementary', 22: 'complementary', 24: 'darken', 25: 'desaturate', 26: 'pulse', 27: 'colorPulse', 30: 'lighten', 32: 'teeter', 34: 'wave', 35: 'flash', 36: 'shimmer' },
 };
+PRESET_ANIM.exit = { ...PRESET_ANIM.entr, 1: 'disappear' };
 const SUB_DIR = { 4: 'b', 1: 't', 8: 'l', 2: 'r' };
 const LAYOUT_KIND = Object.fromEntries(Object.entries(LAYOUT_TYPE).map(([k, v]) => [v, k]));
-const TRANS_NAME = { fade: 'fade', push: 'push', wipe: 'wipe', split: 'split', cover: 'cover', pull: 'uncover', zoom: 'zoom', circle: 'circle', dissolve: 'dissolve', cut: 'cut', flip: 'flip', random: 'fade', blinds: 'wipe', checker: 'dissolve', comb: 'wipe', randomBar: 'wipe', strips: 'cover', wedge: 'circle', wheel: 'circle', newsflash: 'zoom', plus: 'zoom', diamond: 'zoom', vortex: 'zoom', ripple: 'zoom', honeycomb: 'dissolve', glitter: 'dissolve', shred: 'dissolve', switch: 'flip', gallery: 'push', cube: 'push', doors: 'split', box: 'push', conveyor: 'push', pan: 'push', ferris: 'push', flythrough: 'zoom', warp: 'zoom', prism: 'push', reveal: 'fade', flash: 'fade', vortex2: 'zoom', morph: 'morph', prstTrans: 'fade' };
+const TRANS_NAME = { fade: 'fade', push: 'push', wipe: 'wipe', split: 'split', cover: 'cover', pull: 'uncover', zoom: 'zoom', circle: 'circle', dissolve: 'dissolve', cut: 'cut', flip: 'flip', random: 'random', blinds: 'blinds', checker: 'checker', comb: 'comb', randomBar: 'randomBars', strips: 'strips', wedge: 'clock', wheel: 'clock', wheelReverse: 'clock', newsflash: 'zoom', plus: 'plus', diamond: 'diamond', vortex: 'vortex', ripple: 'ripple', honeycomb: 'honeycomb', glitter: 'glitter', shred: 'shred', switch: 'switch', gallery: 'gallery', cube: 'cube', doors: 'doors', window: 'window', box: 'box', conveyor: 'conveyor', pan: 'pan', ferris: 'ferris', flythrough: 'flythrough', warp: 'zoom', prism: 'cube', reveal: 'reveal', flash: 'flash', morph: 'morph', prstTrans: 'fade' };
+const PRST_TRANS = { fallOver: 'fall', drape: 'drape', curtains: 'curtains', wind: 'wind', prestige: 'prestige', fracture: 'fracture', crush: 'crush', peelOff: 'peelOff', pageCurlDouble: 'pageCurl', pageCurlSingle: 'pageCurl', airplane: 'airplane', origami: 'origami' };
 const DIR_FROM = { u: 'b', d: 't', l: 'r', r: 'l' };
 
 /**
@@ -1947,12 +2033,19 @@ export function readPptx(input, opts = {}) {
     const t = descendants(x, 'transition')[0];
     if (!t) return null;
     const el = t.children.find((c) => c.name !== 'sndAc' && c.name !== 'extLst');
-    const name = el ? TRANS_NAME[el.name] ?? 'fade' : 'none';
+    let name = el ? TRANS_NAME[el.name] ?? 'fade' : 'none';
+    if (el?.name === 'prstTrans') name = PRST_TRANS[attr(el, 'prst')] ?? 'fade';
+    if (el?.name === 'prism') name = attr(el, 'isContent') === '1' ? (attr(el, 'isInverted') === '1' ? 'orbit' : 'rotate') : attr(el, 'isInverted') === '1' ? 'box' : 'cube';
     const spd = attr(t, 'spd');
     const dur = attr(t, 'dur') ? num(attr(t, 'dur')) / 1000 : spd === 'fast' ? 0.5 : spd === 'slow' ? 1 : 0.75;
     const dirAttr = attr(el, 'dir');
     const out = { type: name, dur };
     if (dirAttr && DIR_FROM[dirAttr]) out.dir = DIR_FROM[dirAttr];
+    // 가로/세로 효과 · 계단 방향 · 나누기 방향
+    if (dirAttr === 'vert' && ['blinds', 'checker', 'comb', 'randomBars'].includes(name)) out.dir = 'l';
+    if (name === 'strips' && dirAttr) out.dir = { ru: 'b', rd: 't', ld: 'l', lu: 'r' }[dirAttr] ?? 'b';
+    if (name === 'split' && attr(el, 'orient') === 'horz') out.dir = 'l';
+    if (el?.name === 'prstTrans' && attr(el, 'invX') === '1') out.dir = 'l';
     if (attr(t, 'advClick') === '0') out.advClick = false;
     if (attr(t, 'advTm')) out.advAfter = num(attr(t, 'advTm')) / 1000;
     return out;
@@ -1986,6 +2079,7 @@ export function readPptx(input, opts = {}) {
       if (cls === 'path') {
         const mo = descendants(eff, 'animMotion')[0];
         a.motion = (attr(mo, 'path') ?? 'M 0 0 L 0.25 0').replace(/\s*[Ee]\s*$/, '').trim();
+        a.effect = Object.keys(MOTION_PATHS).find((k) => MOTION_PATHS[k] === a.motion) ?? 'pathRight';
         if (!durs.length) a.dur = 2;
       }
       if (trigger) a.trigger = trigger;

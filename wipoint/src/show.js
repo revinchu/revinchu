@@ -4,6 +4,7 @@ import { uid } from './model.js';
 import { slideHtml, SLIDE_CSS, escHtml } from './render.js';
 import { animSteps, triggerSteps, stepTimeline, slideTitle, motionPoints, morphPairs } from './model.js';
 import { el, openMenu, toast, openDialog as import_openDialog } from './ui.js';
+import { blindsPoly, combPoly, checkerPoly, randomBarsFrames, randomCellsFrames, sweepFrames, diamondPoly, plusPoly, stripsPoly, frames } from './transfx.js';
 
 let show = null; // 현재 쇼 상태
 
@@ -210,6 +211,16 @@ function scheduleAuto() {
 
 // ───────────── 전환 효과 (Web Animations) ─────────────
 function runTransition(old, neu, tr) {
+  const cur = S.pres.slides[show.order[show.pos]];
+  const prev = S.pres.slides[show.order[show.pos - 1] ?? -1] ?? cur;
+  const r = playTransition(old, neu, tr, { host: show.stage, raise: (e) => show.stage.append(e), prev, cur });
+  show.anims = r.anims;
+  return r.done;
+}
+
+/** 전환 효과 재생 (슬라이드 쇼 · 편집 화면 미리 보기 공용) — old/neu: transform-origin 0 0 인 슬라이드 요소,
+ *  ctx = { host (조각을 넣을 부모), raise(el) (요소를 맨 위로), prev, cur (모핑용 슬라이드) } → { anims, done } */
+export function playTransition(old, neu, tr, ctx) {
   const dur = Math.max(0.05, tr.dur ?? 1) * 1000;
   const easing = 'ease-in-out';
   const opt = { duration: dur, easing, fill: 'both' };
@@ -219,7 +230,193 @@ function runTransition(old, neu, tr) {
   const off = { b: [0, h], t: [0, -h], l: [-w, 0], r: [w, 0] }[dir] ?? [0, h];
   const T = (x, y) => `${base} translate(${x}px, ${y}px)`;
   const anims = [];
+  const ghosts = [];
+  // 슬라이드 가운데(또는 지정한 점)를 기준으로 3D 변환 — 슬라이드 요소는 transform-origin 0 0 + 맞춤 배율
+  const P = `perspective(${Math.round(w * 1.6)}px)`;
+  const around = (ox, oy, t) => `${base} translate(${ox}px, ${oy}px) ${P} ${t} translate(${-ox}px, ${-oy}px)`;
+  const C = (t) => around(w / 2, h / 2, t);
+  const clipAnim = (elx, list, o = opt) => anims.push(elx.animate(list.map((clipPath) => ({ clipPath })), o));
+  /** 앞 슬라이드 조각 (복제본) — 끝나면 지움. top: 새 슬라이드 위에 */
+  const ghost = (clip, top = true) => {
+    const g = old.cloneNode(true);
+    g.classList.remove('show-slide');
+    g.classList.add('show-slide-ghost');
+    g.style.visibility = 'visible';
+    if (clip) g.style.clipPath = clip;
+    for (const m of g.querySelectorAll('video, audio')) { m.removeAttribute('autoplay'); m.pause?.(); }
+    ctx.host.insertBefore(g, neu);
+    if (top) ctx.raise(g);
+    ghosts.push(g);
+    return g;
+  };
+  const oldOnTop = () => { ctx.raise(old); };
+  const pieces = (cols, rows, fn) => {
+    old.style.visibility = 'hidden';
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      const x1 = (c / cols) * 100; const y1 = (r / rows) * 100;
+      const g = ghost(`polygon(${x1}% ${y1}%, ${x1 + 100 / cols}% ${y1}%, ${x1 + 100 / cols}% ${y1 + 100 / rows}%, ${x1}% ${y1 + 100 / rows}%)`);
+      anims.push(fn(g, c, r));
+    }
+  };
+  const rnd = (i, k = 1) => { const x = Math.sin(i * 12.9898 + k * 78.233) * 43758.5453; return x - Math.floor(x); };
+  const half = { ...opt, duration: dur / 2 };
+  const second = { ...opt, duration: dur / 2, delay: dur / 2 };
+  const vert = dir === 'l' || dir === 'r';
   switch (tr.type) {
+    case 'reveal':
+      // 앞 슬라이드가 검게 사라진 뒤 새 슬라이드가 밝아짐
+      oldOnTop();
+      anims.push(old.animate([{ opacity: 1, filter: 'brightness(1)' }, { opacity: 0, filter: 'brightness(0)' }], half));
+      anims.push(neu.animate([{ opacity: 0 }, { opacity: 1 }], second));
+      break;
+    case 'flash':
+      anims.push(neu.animate([{ opacity: 0, filter: 'brightness(4)' }, { opacity: 1, filter: 'brightness(3)', offset: 0.35 }, { opacity: 1, filter: 'brightness(1)' }], opt));
+      break;
+    case 'randomBars': clipAnim(neu, randomBarsFrames(16, 60, vert)); break;
+    case 'blinds': clipAnim(neu, frames((t) => blindsPoly(t, 6, vert), 2)); break;
+    case 'checker': clipAnim(neu, frames((t) => checkerPoly(t, 10, 6), 2)); break;
+    case 'comb': clipAnim(neu, frames((t) => combPoly(t, 10, vert), 2)); break;
+    case 'strips': clipAnim(neu, frames((t) => stripsPoly(t, { b: 'ru', t: 'rd', l: 'ld', r: 'rd' }[dir] ?? 'rd'), 2)); break;
+    case 'diamond': clipAnim(neu, frames(diamondPoly, 2)); break;
+    case 'plus': clipAnim(neu, frames(plusPoly, 2)); break;
+    case 'clock': clipAnim(neu, sweepFrames(24, 'clock', 1), { ...opt, easing: 'linear' }); break;
+    case 'dissolve': clipAnim(neu, randomCellsFrames(16, 32, 18), { ...opt, easing: 'linear' }); break;
+    case 'glitter':
+      clipAnim(neu, randomCellsFrames(16, 24, 14, 5), { ...opt, easing: 'linear' });
+      anims.push(neu.animate([{ filter: 'brightness(1.8)' }, { filter: 'brightness(1)' }], opt));
+      break;
+    case 'honeycomb':
+      oldOnTop();
+      clipAnim(old, randomCellsFrames(16, 16, 9, 3).reverse(), { ...opt, easing: 'linear' });
+      anims.push(old.animate([{ transform: base }, { transform: C('scale(1.15)') }], opt));
+      break;
+    case 'ripple':
+      anims.push(neu.animate([{ clipPath: 'circle(0% at 50% 50%)', transform: C('scale(1.08)') }, { clipPath: 'circle(40% at 50% 50%)', transform: C('scale(.97)'), offset: 0.5 }, { clipPath: 'circle(75% at 50% 50%)', transform: base }], opt));
+      break;
+    case 'vortex':
+      oldOnTop();
+      anims.push(old.animate([{ transform: base, opacity: 1, filter: 'blur(0)' }, { transform: C('rotate(-200deg) scale(.2)'), opacity: 0, filter: 'blur(4px)' }], opt));
+      anims.push(neu.animate([{ opacity: 0 }, { opacity: 1 }], second));
+      break;
+    case 'shred':
+      // 앞 슬라이드를 세로 띠로 잘라 아래로 떨어뜨림
+      pieces(12, 1, (g, c) => g.animate([{ transform: base, opacity: 1 }, { transform: `${base} translate(0px, ${h * (0.9 + rnd(c) * 0.4)}px)`, opacity: 0 }], { ...opt, easing: 'ease-in', delay: rnd(c, 2) * dur * 0.3, duration: dur * 0.7 }));
+      break;
+    case 'fracture':
+      pieces(5, 4, (g, c, r) => {
+        const i = r * 5 + c; const dx = (c - 2) * 160 + (rnd(i) - 0.5) * 200; const dy = (r - 1.5) * 160 + (rnd(i, 3) - 0.5) * 200;
+        return g.animate([{ transform: base, opacity: 1 }, { transform: around(((c + 0.5) * w) / 5, ((r + 0.5) * h) / 4, `translate3d(${dx}px, ${dy}px, ${200 + rnd(i, 5) * 400}px) rotateX(${rnd(i, 7) * 180}deg) rotateY(${rnd(i, 9) * 180}deg)`), opacity: 0 }], { ...opt, easing: 'ease-in', delay: rnd(i, 4) * dur * 0.2, duration: dur * 0.8 });
+      });
+      break;
+    case 'crush':
+      oldOnTop();
+      anims.push(old.animate([{ transform: base, filter: 'blur(0) contrast(1)', opacity: 1 }, { transform: C('scale(.35) rotate(25deg)'), filter: 'blur(1px) contrast(1.6)', opacity: 1, offset: 0.6 }, { transform: C('translate(0px, 300px) scale(.05) rotate(80deg)'), opacity: 0 }], opt));
+      break;
+    case 'peelOff':
+      oldOnTop();
+      anims.push(old.animate([{ transform: base, opacity: 1 }, { transform: around(w, h, 'rotate3d(1, -1, 0, 100deg)'), opacity: 0.2 }], { ...opt, easing: 'ease-in' }));
+      break;
+    case 'pageCurl':
+      oldOnTop();
+      anims.push(old.animate([{ transform: around(0, h / 2, 'rotateY(0deg)'), filter: 'brightness(1)' }, { transform: around(0, h / 2, 'rotateY(-95deg)'), filter: 'brightness(.6)' }], { ...opt, easing: 'ease-in' }));
+      break;
+    case 'airplane':
+      oldOnTop();
+      anims.push(old.animate([{ transform: base, opacity: 1 }, { transform: C('scale(.25) rotateX(40deg)'), opacity: 1, offset: 0.45 }, { transform: C(`translate(${w}px, ${-h}px) scale(.08) rotate(-30deg)`), opacity: 0 }], opt));
+      break;
+    case 'origami':
+      oldOnTop();
+      anims.push(old.animate([{ transform: base }, { transform: C('rotateX(70deg) scale(.6)'), offset: 0.5 }, { transform: C(`rotateX(80deg) rotateZ(45deg) translate(0px, ${-h}px) scale(.1)`), opacity: 0 }], opt));
+      break;
+    case 'curtains': {
+      old.style.visibility = 'hidden';
+      const l = ghost('inset(0 50% 0 0)');
+      const r = ghost('inset(0 0 0 50%)');
+      anims.push(l.animate([{ transform: around(0, h / 2, 'scaleX(1) skewY(0deg)') }, { transform: around(0, h / 2, 'scaleX(.05) skewY(6deg)'), opacity: 0.6 }], opt));
+      anims.push(r.animate([{ transform: around(w, h / 2, 'scaleX(1) skewY(0deg)') }, { transform: around(w, h / 2, 'scaleX(.05) skewY(-6deg)'), opacity: 0.6 }], opt));
+      break;
+    }
+    case 'drape':
+      oldOnTop();
+      anims.push(old.animate([{ transform: around(w / 2, 0, 'scaleY(1) skewX(0deg)'), opacity: 1 }, { transform: around(w / 2, 0, 'scaleY(.05) skewX(-20deg)'), opacity: 0.4 }], { ...opt, easing: 'ease-in' }));
+      break;
+    case 'wind':
+      oldOnTop();
+      anims.push(old.animate([{ transform: base, filter: 'blur(0)', opacity: 1 }, { transform: `${base} translate(${dir === 'l' ? w : -w}px, -40px) skewX(-20deg)`, filter: 'blur(6px)', opacity: 0 }], { ...opt, easing: 'ease-in' }));
+      anims.push(neu.animate([{ opacity: 0 }, { opacity: 1 }], opt));
+      break;
+    case 'prestige':
+      oldOnTop();
+      anims.push(old.animate([{ transform: around(w / 2, h, 'rotateX(0deg)'), opacity: 1 }, { transform: around(w / 2, h, 'rotateX(70deg) scale(.8)'), opacity: 0 }], half));
+      anims.push(neu.animate([{ transform: around(w / 2, h, 'rotateX(-50deg) scale(.8)'), opacity: 0 }, { transform: around(w / 2, h, 'rotateX(0deg) scale(1)'), opacity: 1 }], second));
+      break;
+    case 'fall':
+      oldOnTop();
+      anims.push(old.animate([{ transform: around(w / 2, h, 'rotateX(0deg)'), filter: 'brightness(1)' }, { transform: around(w / 2, h, 'rotateX(90deg)'), filter: 'brightness(.4)' }], { ...opt, easing: 'ease-in' }));
+      break;
+    case 'switch': {
+      const sx = dir === 'l' ? -1 : 1;
+      oldOnTop();
+      anims.push(old.animate([{ transform: C('translateX(0px) rotateY(0deg) scale(1)'), opacity: 1 }, { transform: C(`translateX(${-sx * w * 0.6}px) rotateY(${sx * 50}deg) scale(.6)`), opacity: 0.5, offset: 0.5 }, { transform: C(`translateX(0px) rotateY(0deg) translateZ(-600px)`), opacity: 0 }], opt));
+      anims.push(neu.animate([{ transform: C(`translateX(${sx * w * 0.6}px) rotateY(${-sx * 50}deg) scale(.6)`), opacity: 0.4 }, { transform: C('translateX(0px) rotateY(0deg) scale(1)'), opacity: 1 }], second));
+      break;
+    }
+    case 'gallery': case 'conveyor': {
+      const sx = dir === 'l' ? -1 : 1;
+      const deg = tr.type === 'gallery' ? 35 : 15;
+      anims.push(old.animate([{ transform: C('translateX(0px) rotateY(0deg) scale(1)') }, { transform: C(`translateX(${-sx * w * 1.05}px) rotateY(${sx * deg}deg) scale(.8)`) }], opt));
+      anims.push(neu.animate([{ transform: C(`translateX(${sx * w * 1.05}px) rotateY(${-sx * deg}deg) scale(.8)`) }, { transform: C('translateX(0px) rotateY(0deg) scale(1)') }], opt));
+      break;
+    }
+    case 'cube': case 'box': case 'rotate': {
+      const sx = dir === 'l' ? -1 : 1;
+      const depth = tr.type === 'box' ? 0.75 : 1;
+      if (tr.type === 'rotate') {
+        anims.push(old.animate([{ transform: C('rotateY(0deg)') }, { transform: C(`rotateY(${sx * 90}deg)`) }], half));
+        anims.push(neu.animate([{ transform: C(`rotateY(${-sx * 90}deg)`) }, { transform: C('rotateY(0deg)') }], second));
+        break;
+      }
+      anims.push(old.animate([{ transform: around(sx > 0 ? 0 : w, h / 2, 'translateX(0px) rotateY(0deg) scale(1)') }, { transform: around(sx > 0 ? 0 : w, h / 2, `translateX(${-sx * w}px) rotateY(${-sx * 90}deg) scale(${depth})`) }], opt));
+      anims.push(neu.animate([{ transform: around(sx > 0 ? 0 : w, h / 2, `translateX(${sx * w}px) rotateY(${sx * 90}deg) scale(${depth})`) }, { transform: around(sx > 0 ? 0 : w, h / 2, 'translateX(0px) rotateY(0deg) scale(1)') }], opt));
+      break;
+    }
+    case 'doors': case 'window': {
+      old.style.visibility = 'hidden';
+      const l = ghost('inset(0 50% 0 0)');
+      const r = ghost('inset(0 0 0 50%)');
+      const deg = tr.type === 'doors' ? 100 : 80;
+      anims.push(l.animate([{ transform: around(0, h / 2, 'rotateY(0deg)') }, { transform: around(0, h / 2, `rotateY(${tr.type === 'doors' ? deg : -deg}deg)`), opacity: 0 }], { ...opt, easing: 'ease-in' }));
+      anims.push(r.animate([{ transform: around(w, h / 2, 'rotateY(0deg)') }, { transform: around(w, h / 2, `rotateY(${tr.type === 'doors' ? -deg : deg}deg)`), opacity: 0 }], { ...opt, easing: 'ease-in' }));
+      anims.push(neu.animate([{ transform: C('scale(.85)'), opacity: 0.4 }, { transform: C('scale(1)'), opacity: 1 }], opt));
+      break;
+    }
+    case 'pan': {
+      const [ox, oy] = { b: [0, h], t: [0, -h], l: [-w, 0], r: [w, 0] }[dir] ?? [0, h];
+      anims.push(neu.animate([{ transform: C(`translate(${ox}px, ${oy}px) scale(.85)`) }, { transform: C(`translate(${ox * 0.5}px, ${oy * 0.5}px) scale(.85)`), offset: 0.5 }, { transform: C('translate(0px, 0px) scale(1)') }], opt));
+      anims.push(old.animate([{ transform: C('translate(0px, 0px) scale(1)') }, { transform: C(`translate(${-ox * 0.5}px, ${-oy * 0.5}px) scale(.85)`), offset: 0.5 }, { transform: C(`translate(${-ox}px, ${-oy}px) scale(.85)`) }], opt));
+      break;
+    }
+    case 'ferris': {
+      const sx = dir === 'l' ? -1 : 1;
+      anims.push(old.animate([{ transform: around(w / 2, h * 3, 'rotate(0deg)') }, { transform: around(w / 2, h * 3, `rotate(${-sx * 25}deg)`) }], opt));
+      anims.push(neu.animate([{ transform: around(w / 2, h * 3, `rotate(${sx * 25}deg)`) }, { transform: around(w / 2, h * 3, 'rotate(0deg)') }], opt));
+      break;
+    }
+    case 'orbit': {
+      const sx = dir === 'l' ? -1 : 1;
+      anims.push(old.animate([{ transform: C('rotateY(0deg) translateZ(0px)'), opacity: 1 }, { transform: C(`rotateY(${sx * 60}deg) translateZ(-${w}px)`), opacity: 0 }], opt));
+      anims.push(neu.animate([{ transform: C(`rotateY(${-sx * 60}deg) translateZ(-${w}px)`), opacity: 0 }, { transform: C('rotateY(0deg) translateZ(0px)'), opacity: 1 }], opt));
+      break;
+    }
+    case 'flythrough':
+      oldOnTop();
+      anims.push(old.animate([{ transform: C('scale(1)'), opacity: 1 }, { transform: C('scale(2.5)'), opacity: 0 }], { ...opt, easing: 'ease-in' }));
+      anims.push(neu.animate([{ transform: C('scale(.3)'), opacity: 0 }, { transform: C('scale(1)'), opacity: 1 }], opt));
+      break;
+    case 'random': {
+      const pool = ['fade', 'push', 'wipe', 'split', 'blinds', 'checker', 'dissolve', 'diamond', 'clock', 'cube', 'gallery', 'vortex', 'ripple', 'flythrough'];
+      return playTransition(old, neu, { ...tr, type: pool[Math.floor(Math.random() * pool.length)] }, ctx);
+    }
     case 'fade': anims.push(neu.animate([{ opacity: 0 }, { opacity: 1 }], opt)); break;
     case 'dissolve': anims.push(neu.animate([{ opacity: 0, filter: 'blur(6px)' }, { opacity: 1, filter: 'blur(0)' }], opt)); break;
     case 'push':
@@ -228,7 +425,7 @@ function runTransition(old, neu, tr) {
       break;
     case 'cover': anims.push(neu.animate([{ transform: T(off[0], off[1]) }, { transform: T(0, 0) }], opt)); break;
     case 'uncover':
-      show.stage.append(old); // 이전 슬라이드를 위로 올려서 밀어냄
+      ctx.raise(old); // 이전 슬라이드를 위로 올려서 밀어냄
       anims.push(old.animate([{ transform: base }, { transform: T(-off[0], -off[1]) }], opt));
       break;
     case 'wipe': {
@@ -236,13 +433,13 @@ function runTransition(old, neu, tr) {
       anims.push(neu.animate([{ clipPath: from }, { clipPath: 'inset(0 0 0 0)' }], opt));
       break;
     }
-    case 'split': anims.push(neu.animate([{ clipPath: 'inset(0 50% 0 50%)' }, { clipPath: 'inset(0 0% 0 0%)' }], opt)); break;
+    case 'split': anims.push(neu.animate(vert ? [{ clipPath: 'inset(50% 0 50% 0)' }, { clipPath: 'inset(0% 0 0% 0)' }] : [{ clipPath: 'inset(0 50% 0 50%)' }, { clipPath: 'inset(0 0% 0 0%)' }], opt)); break;
     case 'zoom': anims.push(neu.animate([{ transform: `${base} scale(.3)`, opacity: 0, transformOrigin: '50% 50%' }, { transform: base, opacity: 1 }], opt)); break;
     case 'circle': anims.push(neu.animate([{ clipPath: 'circle(0% at 50% 50%)' }, { clipPath: 'circle(75% at 50% 50%)' }], opt)); break;
     case 'morph': {
       // 모핑: 짝이 되는 개체는 앞 슬라이드 자리 · 크기 · 회전에서 새 자리로, 나머지는 서서히
-      const prevSlide = S.pres.slides[show.order[show.pos - 1] ?? -1] ?? S.pres.slides[show.order[show.pos]];
-      const curSlide = S.pres.slides[show.order[show.pos]];
+      const prevSlide = ctx.prev ?? ctx.cur;
+      const curSlide = ctx.cur;
       const pairs = prevSlide === curSlide ? [] : morphPairs(prevSlide, curSlide);
       const matchedNew = new Set(pairs.map(([, b]) => b.id));
       const matchedOld = new Set(pairs.map(([a]) => a.id));
@@ -271,34 +468,97 @@ function runTransition(old, neu, tr) {
       break;
     default: anims.push(neu.animate([{ opacity: 0 }, { opacity: 1 }], opt));
   }
-  show.anims = anims;
-  return Promise.all(anims.map((a) => a.finished.catch(() => {}))).then(() => { for (const a of anims) { try { a.cancel(); } catch { /* 끝남 */ } } });
+  const done = Promise.all(anims.map((a) => a.finished.catch(() => {}))).then(() => {
+    for (const a of anims) { try { a.cancel(); } catch { /* 끝남 */ } }
+    for (const g of ghosts) g.remove();
+    old.style.visibility = '';
+  });
+  return { anims, done };
 }
 
 // ───────────── 개체 애니메이션 ─────────────
-function keyframes(a, o) {
-  const { w, h } = S.pres.size;
+const clipKf = (list) => list.map((clipPath) => ({ clipPath }));
+/** 강조 효과 중 끝난 뒤에도 그대로 남는 것 (PowerPoint: 크게/작게, 투명, 어둡게 …) */
+const EMPH_HOLD = new Set(['growShrink', 'desaturate', 'darken', 'lighten', 'transparency', 'objectColor', 'complementary', 'lineColor', 'fillColor', 'brushColor', 'bold', 'underline']);
+export function keyframes(a, o, size = S.pres.size) {
+  const { w, h } = size;
   const dir = a.dir ?? 'b';
   const fly = { b: `0 ${h - o.y + 10}px`, t: `0 ${-(o.y + o.h + 10)}px`, l: `${-(o.x + o.w + 10)}px 0`, r: `${w - o.x + 10}px 0` }[dir];
   const wipeFrom = { b: 'inset(100% 0 0 0)', t: 'inset(0 0 100% 0)', l: 'inset(0 100% 0 0)', r: 'inset(0 0 0 100%)' }[dir];
+  const vert = dir === 'l' || dir === 'r';
   switch (a.effect) {
     case 'appear': case 'disappear': return null;
     case 'fade': return [{ opacity: 0 }, { opacity: 1 }];
     case 'fly': return [{ translate: fly }, { translate: '0 0' }];
+    case 'crawl': case 'credits': return [{ translate: fly, easing: 'linear' }, { translate: '0 0' }];
     case 'float': return [{ translate: '0 40px', opacity: 0 }, { translate: '0 0', opacity: 1 }];
     case 'split': return [{ clipPath: 'inset(0 50% 0 50%)' }, { clipPath: 'inset(0 0 0 0)' }];
     case 'wipe': return [{ clipPath: wipeFrom }, { clipPath: 'inset(0 0 0 0)' }];
     case 'zoom': return [{ scale: '0.3', opacity: 0 }, { scale: '1', opacity: 1 }];
+    case 'basicZoom': return [{ scale: '0' }, { scale: '1' }];
     case 'grow': return [{ scale: '0', rotate: '90deg', opacity: 0 }, { scale: '1', rotate: '0deg', opacity: 1 }];
-    case 'wheel': return [{ clipPath: 'circle(0% at 50% 50%)' }, { clipPath: 'circle(75% at 50% 50%)' }];
+    case 'shape': case 'circleIn': return [{ clipPath: 'circle(0% at 50% 50%)' }, { clipPath: 'circle(75% at 50% 50%)' }];
+    case 'box': return [{ clipPath: 'inset(50% 50% 50% 50%)' }, { clipPath: 'inset(0% 0% 0% 0%)' }];
+    case 'wheel': return clipKf(sweepFrames(16, 'clock', 1));
+    case 'wedge': return clipKf(sweepFrames(16, 'wedge'));
+    case 'diamond': return clipKf(frames(diamondPoly, 2));
+    case 'plus': return clipKf(frames(plusPoly, 2));
+    case 'strips': return clipKf(frames((t) => stripsPoly(t), 2));
+    case 'blinds': return clipKf(frames((t) => blindsPoly(t, 6, vert), 2));
+    case 'checker': return clipKf(frames((t) => checkerPoly(t, 8, 6), 2));
+    case 'randomBars': return clipKf(randomBarsFrames(12, 40, vert));
+    case 'dissolveIn': return clipKf(randomCellsFrames(12, 12, 8));
+    case 'peek': return [{ translate: `0 ${o.h}px`, clipPath: 'inset(0 0 100% 0)' }, { translate: '0 0', clipPath: 'inset(0 0 0% 0)' }];
+    case 'swivel': return [{ rotate: 'y 630deg', opacity: 0 }, { rotate: 'y 0deg', opacity: 1 }];
+    case 'flip': return [{ rotate: 'x 90deg', opacity: 0 }, { rotate: 'x 0deg', opacity: 1 }];
+    case 'expand': return [{ scale: '0.7 1', opacity: 0 }, { scale: '1 1', opacity: 1 }];
+    case 'compress': return [{ scale: '1.5 1', opacity: 0 }, { scale: '1 1', opacity: 1 }];
+    case 'stretch': return [{ scale: '0 1' }, { scale: '1 1' }];
+    case 'riseUp': return [{ translate: '0 120px', opacity: 0 }, { translate: '0 -12px', opacity: 1, offset: 0.8 }, { translate: '0 0' }];
+    case 'sinkDown': return [{ translate: '0 -120px', opacity: 0 }, { translate: '0 10px', opacity: 1, offset: 0.8 }, { translate: '0 0' }];
+    case 'centerRevolve': return [{ translate: '0 90px', scale: '0.3', opacity: 0 }, { translate: '60px 40px', scale: '0.7', opacity: 0.7 }, { translate: '0 0', scale: '1', opacity: 1 }];
+    case 'pinwheel': return [{ scale: '0', rotate: '720deg', opacity: 0 }, { scale: '1', rotate: '0deg', opacity: 1 }];
+    case 'boomerang': return [{ translate: `${Math.round(w * 0.3)}px -80px`, rotate: 'y 90deg', scale: '0.3', opacity: 0 }, { translate: '-60px 30px', rotate: 'y 30deg', scale: '0.8', opacity: 1 }, { translate: '0 0', rotate: 'y 0deg', scale: '1' }];
+    case 'curveUp': return [{ translate: '-220px 220px', scale: '0.6', opacity: 0 }, { translate: '-60px -40px', scale: '1.05', opacity: 1 }, { translate: '0 0', scale: '1' }];
+    case 'spiralIn': {
+      const out = [];
+      for (let k = 0; k <= 12; k++) {
+        const t = k / 12; const r = (1 - t) * Math.max(w, h) * 0.6; const ang = t * Math.PI * 3;
+        out.push({ translate: `${Math.round(r * Math.cos(ang))}px ${Math.round(r * Math.sin(ang))}px`, scale: String(0.1 + 0.9 * t), opacity: Math.min(1, t * 3) });
+      }
+      return out;
+    }
+    case 'dropIn': return [{ translate: `0 ${-(o.y + o.h)}px`, opacity: 0, easing: 'ease-in' }, { translate: '0 0', opacity: 1, offset: 0.65, easing: 'ease-out' }, { translate: '0 -16px', offset: 0.82, easing: 'ease-in' }, { translate: '0 0' }];
     case 'bounce': return [{ translate: `0 ${-(o.y + o.h)}px`, offset: 0 }, { translate: '0 0', offset: 0.55, easing: 'ease-in' }, { translate: '0 -30px', offset: 0.75, easing: 'ease-out' }, { translate: '0 0', offset: 0.9 }, { translate: '0 -8px', offset: 0.95 }, { translate: '0 0', offset: 1 }];
+    // 강조
     case 'pulse': return [{ scale: '1' }, { scale: '1.08' }, { scale: '1' }];
+    case 'colorPulse': return [{ filter: 'none' }, { filter: 'brightness(1.35) saturate(2.2) hue-rotate(25deg)' }, { filter: 'none' }];
     case 'spin': return [{ rotate: '0deg' }, { rotate: '360deg' }];
     case 'growShrink': return [{ scale: '1' }, { scale: '1.5' }];
     case 'teeter': return [{ rotate: '0deg' }, { rotate: '6deg' }, { rotate: '-6deg' }, { rotate: '4deg' }, { rotate: '0deg' }];
     case 'flash': return [{ opacity: 1 }, { opacity: 0 }, { opacity: 1 }];
+    case 'boldFlash': return [{ filter: 'none', scale: '1' }, { filter: 'contrast(1.6) brightness(.75)', scale: '1.03' }, { filter: 'none', scale: '1' }];
+    case 'shimmer': return [{ opacity: 1, scale: '1' }, { opacity: 0.45, scale: '0.97' }, { opacity: 1, scale: '1' }];
+    case 'wave': return [{ translate: '0 0', rotate: '0deg' }, { translate: '0 -10px', rotate: '-3deg' }, { translate: '0 8px', rotate: '3deg' }, { translate: '0 -4px', rotate: '-1deg' }, { translate: '0 0', rotate: '0deg' }];
+    case 'desaturate': return [{ filter: 'grayscale(0)' }, { filter: 'grayscale(1)' }];
+    case 'darken': return [{ filter: 'brightness(1)' }, { filter: 'brightness(.55)' }];
+    case 'lighten': return [{ filter: 'brightness(1)' }, { filter: 'brightness(1.45)' }];
+    case 'transparency': return [{ opacity: 1 }, { opacity: 0.5 }];
+    case 'objectColor': case 'fillColor': case 'brushColor': return [{ filter: 'hue-rotate(0deg)' }, { filter: 'hue-rotate(120deg)' }];
+    case 'lineColor': return [{ filter: 'hue-rotate(0deg)' }, { filter: 'hue-rotate(60deg)' }];
+    case 'complementary': return [{ filter: 'hue-rotate(0deg)' }, { filter: 'hue-rotate(180deg)' }];
+    case 'bold': return [{ fontWeight: 400 }, { fontWeight: 700 }];
+    case 'underline': return [{ textDecorationLine: 'none' }, { textDecorationLine: 'underline' }];
     default: return [{ opacity: 0 }, { opacity: 1 }];
   }
+}
+
+/** 끝내기 = 나타내기를 거꾸로 (offset 도 1 - offset, easing 은 앞 구간 것으로) */
+export function reverseKf(kf) {
+  const out = kf.map((k) => ({ ...k })).reverse();
+  for (const k of out) if (k.offset != null) k.offset = 1 - k.offset;
+  for (let i = 0; i < out.length; i++) { delete out[i].easing; const src = kf[kf.length - 2 - i]; if (src?.easing) out[i].easing = src.easing; }
+  return out;
 }
 
 /** 개체 하나 재생 (편집 화면 미리 보기에서도 씀) */
@@ -322,10 +582,10 @@ export function animateObject(elm, a, o) {
   }
   if (a.cls === 'exit') {
     if (!kf) { elm.style.visibility = 'hidden'; return Promise.resolve(); }
-    const anim = elm.animate([...kf].reverse(), { duration: dur, easing: 'ease-in', fill: 'forwards' });
+    const anim = elm.animate(reverseKf(kf), { duration: dur, easing: 'ease-in', fill: 'forwards' });
     return anim.finished.then(() => { elm.style.visibility = 'hidden'; anim.cancel(); }).catch(() => {});
   }
-  const fillMode = a.effect === 'growShrink' ? 'forwards' : 'none';
+  const fillMode = EMPH_HOLD.has(a.effect) ? 'forwards' : 'none';
   return kf ? elm.animate(kf, { duration: dur, easing: 'ease-in-out', fill: fillMode }).finished.catch(() => {}) : Promise.resolve();
 }
 

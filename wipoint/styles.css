@@ -365,7 +365,8 @@ body.dropping .stage { outline: 3px dashed var(--accent); outline-offset: -6px; 
 .show { position: fixed; inset: 0; z-index: 400; background: #000; outline: none; display: flex; }
 .show-view { position: relative; flex: 1; overflow: hidden; }
 .show-stage { position: absolute; inset: 0; }
-.show-slide { position: absolute; left: 0; top: 0; transform-origin: 0 0; overflow: hidden; }
+.show-slide, .show-slide-ghost { position: absolute; left: 0; top: 0; transform-origin: 0 0; overflow: hidden; }
+.show-slide-ghost { pointer-events: none; backface-visibility: hidden; }
 .show-ink { position: absolute; inset: 0; pointer-events: none; }
 .show.pen .show-ink { pointer-events: auto; cursor: crosshair; }
 .show-laser { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; background: radial-gradient(circle, var(--laser, #ff4d4d) 0 35%, color-mix(in srgb, var(--laser, #ff0000) 35%, transparent) 60%, transparent 70%); pointer-events: none; }
@@ -739,3 +740,7 @@ body.mobile .ss-grid { grid-template-columns: 1fr; }
 .smart-dlg2 .smart-right { display: flex; flex-direction: column; gap: 6px; overflow: auto; }
 body.mobile .smart-dlg2 { grid-template-columns: 1fr; height: auto; }
 body.mobile .smart-cats { flex-direction: row; flex-wrap: wrap; border: 0; }
+/* 전환 · 애니메이션 전체 갤러리 */
+.fx-grid { display: grid; grid-template-columns: repeat(auto-fill, 62px); gap: 3px; padding: 4px 8px; max-width: 620px; }
+.fx-grid .gal-item.fx { width: 62px; height: 58px; }
+.gal-item.fx.path .fx-ic { color: #2e7d32; }

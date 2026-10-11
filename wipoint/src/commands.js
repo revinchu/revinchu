@@ -25,7 +25,7 @@ import { el, openMenu, openDialog, formDialog, alertDialog, toast, closeMenus } 
 import { colorMenu } from './colorpick.js';
 import { startEyedrop } from './eyedrop.js';
 import { moveParagraph, startCrop, endCrop, startEdit, endEdit, textTargets, applyTextFormat, caretRunProp, caretPara, insertTextAtCaret, fitZoom, setZoom, renderCanvas, editorLayer } from './editor.js';
-import { screenList, startShow, playStepOn } from './show.js';
+import { screenList, startShow, playStepOn, playTransition } from './show.js';
 import { shapeIconSvg, styleChip, wordArtCss } from './galleries.js';
 import { blobUrl } from './blobstore.js';
 import { effectsMenuItems } from './fxui.js';
@@ -730,27 +730,11 @@ function previewTransition() {
   host.insertBefore(old, layer);
   layer.style.zIndex = '1';
   layer.style.position = 'absolute';
-  const dur = (tr.dur ?? 1) * 1000;
-  const { w, h } = S.pres.size;
-  const off = { b: [0, h], t: [0, -h], l: [-w, 0], r: [w, 0] }[tr.dir ?? 'b'] ?? [0, h];
-  const base = layer.style.transform;
-  const T = (x, y) => `translate(${x * S.zoom}px, ${y * S.zoom}px) ${base}`;
-  const opt = { duration: dur, easing: 'ease-in-out' };
-  const map = {
-    fade: () => layer.animate([{ opacity: 0 }, { opacity: 1 }], opt),
-    dissolve: () => layer.animate([{ opacity: 0, filter: 'blur(4px)' }, { opacity: 1, filter: 'blur(0)' }], opt),
-    push: () => { old.animate([{ transform: base }, { transform: T(-off[0], -off[1]) }], opt); return layer.animate([{ transform: T(off[0], off[1]) }, { transform: base }], opt); },
-    cover: () => layer.animate([{ transform: T(off[0], off[1]) }, { transform: base }], opt),
-    uncover: () => { old.style.zIndex = '2'; return old.animate([{ transform: base }, { transform: T(-off[0], -off[1]) }], { ...opt, fill: 'forwards' }); },
-    wipe: () => layer.animate([{ clipPath: { b: 'inset(100% 0 0 0)', t: 'inset(0 0 100% 0)', l: 'inset(0 100% 0 0)', r: 'inset(0 0 0 100%)' }[tr.dir ?? 'r'] ?? 'inset(0 0 0 100%)' }, { clipPath: 'inset(0 0 0 0)' }], opt),
-    split: () => layer.animate([{ clipPath: 'inset(0 50% 0 50%)' }, { clipPath: 'inset(0 0% 0 0%)' }], opt),
-    zoom: () => layer.animate([{ opacity: 0, transform: `${base} scale(.3)` }, { opacity: 1, transform: base }], opt),
-    circle: () => layer.animate([{ clipPath: 'circle(0% at 50% 50%)' }, { clipPath: 'circle(75% at 50% 50%)' }], opt),
-    flip: () => layer.animate([{ opacity: 0, transform: `${base} perspective(2000px) rotateY(-90deg)` }, { opacity: 1, transform: base }], opt),
-    cut: () => layer.animate([{ opacity: 0 }, { opacity: 0, offset: 0.99 }, { opacity: 1 }], { duration: 120 }),
-  };
-  const a = (map[tr.type] ?? map.fade)();
-  a.finished.catch(() => {}).then(() => { old.remove(); layer.style.zIndex = ''; layer.style.position = ''; });
+  // 슬라이드 쇼와 같은 전환 엔진 (playTransition) — 편집 화면 배율은 layer 의 transform 에 들어 있음
+  const prevSlide = prev ?? null;
+  const tr2 = tr.type === 'cut' ? { ...tr, type: 'fade', dur: 0.12 } : tr;
+  const { done } = playTransition(old, layer, tr2, { host, raise: (e) => { e.style.zIndex = '2'; }, prev: prevSlide ?? s, cur: s });
+  done.then(() => { old.remove(); layer.style.zIndex = ''; layer.style.position = ''; });
 }
 
 // ───────────── 대화상자 ─────────────
@@ -1507,8 +1491,11 @@ const SHORTCUTS = [
   ['쇼: Ctrl+H / Ctrl+U', '포인터 숨기기 / 보이기'], ['쇼: G 또는 Ctrl+S', '모든 슬라이드 목록'], ['쇼: Home / End / Esc (−)', '첫 / 마지막 슬라이드 / 쇼 마치기'],
 ];
 
-export const APP_VERSION = '1.4';
+export const APP_VERSION = '1.5';
 const WHATS_NEW = [
+  '1.5 — 전환 효과 51종 (은은한 효과 · 화려한 효과 · 동적 콘텐츠: 커튼, 바람, 균열, 구기기, 페이지 말아 넘기기, 비행기, 종이접기, 벌집, 소용돌이, 큐브, 문, 갤러리, 관람차 …) · [자세히 ▾] 전체 갤러리, 편집 화면 미리 보기도 같은 엔진',
+  '1.5 — 애니메이션: 나타내기 38 · 강조 20 · 끝내기 38 · 이동 경로 22종 (블라인드, 바둑판, 다이아몬드, 회전, 바람개비, 부메랑, 나선형, 채도 낮추기, 투명, 물결, 하트 · 별 · 8자 경로 …), pptx p14/p15 형식으로 저장 · 읽기',
+  '1.5 — 도형 병합 (통합 · 결합 · 조각 · 교차 · 빼기) · SmartArt 47종 (8개 범주, 수준 들여쓰기, 색 변경 · 스타일, 그림 자리) · 폭포 · 깔때기 · 히스토그램/파레토 · 상자 수염 · 트리맵 · 선버스트 차트',
   '1.4 — 도형 · 그림 효과 (그림자 바깥쪽/안쪽/원근감 · 반사 · 네온 · 부드러운 가장자리 · 입체 효과 12종 · 3차원 회전, 미리 설정 갤러리, pptx 저장 · 읽기)',
   '1.4 — 색 구성 32종 (Office 색 구성 + 추가) · 가리키면 미리 보기 · 색 사용자 지정 · 홈 › 바꾸기 › 글꼴 바꾸기 (문서 전체 글꼴 한 번에)',
   '1.4 — 쇼 설정 (발표자 진행/웹 형식/키오스크, 범위 · 사용자 지정 쇼, 애니메이션 없이, 펜 · 레이저 색) · 모니터 2대: 슬라이드는 다른 모니터, 이 화면은 발표자 보기 · 화면 바꾸기 · 검은/흰 화면',
@@ -1959,7 +1946,15 @@ register({
     }
     if (type !== 'none') previewTransition();
   },
-  transitionOptionsMenu: (a) => menuAt(a, [['b', '아래에서'], ['t', '위에서'], ['l', '왼쪽에서'], ['r', '오른쪽에서']].map(([d, l]) => ({ label: l, checked: (slide().transition?.dir ?? 'b') === d, disabled: !['push', 'wipe', 'cover', 'uncover'].includes(slide().transition?.type), action: () => { change(() => { slide().transition = { ...slide().transition, dir: d }; }); previewTransition(); } }))),
+  transitionOptionsMenu: (a) => {
+    const type = slide().transition?.type;
+    // 가로/세로만 있는 효과 (블라인드 · 빗질 · 실선 무늬 · 나누기) 와 왼쪽/오른쪽만 있는 효과 (3D 회전류)
+    const orient = ['blinds', 'comb', 'randomBars', 'split'].includes(type);
+    const lr = ['switch', 'gallery', 'conveyor', 'cube', 'box', 'rotate', 'ferris', 'orbit', 'wind'].includes(type);
+    const four = ['push', 'wipe', 'cover', 'uncover', 'strips', 'pan'].includes(type);
+    const opts = orient ? [['b', '가로'], ['l', '세로']] : lr ? [['r', '오른쪽에서'], ['l', '왼쪽에서']] : [['b', '아래에서'], ['t', '위에서'], ['l', '왼쪽에서'], ['r', '오른쪽에서']];
+    menuAt(a, opts.map(([d, l]) => ({ label: l, checked: (slide().transition?.dir ?? (lr ? 'r' : 'b')) === d, disabled: !(orient || lr || four), action: () => { change(() => { slide().transition = { ...slide().transition, dir: d }; }); previewTransition(); } })));
+  },
   transitionDuration: (v) => change(() => { const s = slide(); s.transition = { type: 'fade', ...(s.transition ?? {}), dur: Math.max(0, Number(v) || 0) }; }),
   transitionAdvance: (o) => change(() => { const s = slide(); s.transition = { type: 'none', ...(s.transition ?? {}), ...('advClick' in o ? { advClick: o.advClick ? undefined : false } : {}), ...('advAfter' in o ? { advAfter: o.advAfter ?? undefined } : {}) }; if (s.transition.advAfter == null) delete s.transition.advAfter; if (s.transition.advClick == null) delete s.transition.advClick; }),
   applyTransitionAll: () => { const t = slide().transition; change(() => { for (const s of S.pres.slides) s.transition = t ? JSON.parse(JSON.stringify(t)) : null; }, { scope: 'all' }); toast('모든 슬라이드에 적용했습니다'); },

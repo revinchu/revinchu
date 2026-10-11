@@ -2,10 +2,10 @@
 import { S, curSlide, selObjects, selOne, run } from './state.js';
 import { THEMES, cloneTheme, resolveColor } from './themes.js';
 import { slideHtml, fillCss } from './render.js';
-import { newPresentation, TRANSITIONS, ANIM_EFFECTS, plainText } from './model.js';
+import { newPresentation, TRANSITIONS, TRANSITION_GROUPS, ANIM_EFFECTS, ANIM_CLASS_LABEL, plainText } from './model.js';
 import { shapePath, SHAPE_GALLERY } from './shapes.js';
 import { SHAPE_STYLES, WORDART, PICTURE_STYLES, TABLE_STYLES } from './presets.js';
-import { el } from './ui.js';
+import { el, openMenu } from './ui.js';
 
 const themeCache = new Map();
 /** 테마 미리 보기 (제목 슬라이드) */
@@ -28,8 +28,49 @@ function strip(items, { cls = '' } = {}) {
   return el('div', { class: `gallery ${cls}` }, el('div', { class: 'gallery-items' }, items));
 }
 
-const TRANS_GLYPH = { none: '∅', cut: '▮', fade: '◐', push: '⇧', wipe: '▤', split: '⇔', cover: '⬒', uncover: '⬓', zoom: '⊕', circle: '◯', dissolve: '░', flip: '⇋', morph: '⬢' };
-const ANIM_GLYPH = { appear: '★', fade: '✧', fly: '➶', float: '⇡', split: '⇔', wipe: '▤', zoom: '⊕', grow: '↻', wheel: '◔', bounce: '⤵' };
+const TRANS_GLYPH = { none: '∅', cut: '▮', fade: '◐', push: '⇧', wipe: '▤', split: '⇔', cover: '⬒', uncover: '⬓', zoom: '⊕', circle: '◯', dissolve: '░', flip: '⇋', morph: '⬢',
+  reveal: '◑', randomBars: '▥', diamond: '◇', plus: '✚', flash: '✺', strips: '◢', fall: '⤓', drape: '⌒', curtains: '⫴', wind: '≋', prestige: '⬙', fracture: '⚡', crush: '✹', peelOff: '◤', pageCurl: '❏',
+  airplane: '✈', origami: '⬗', checker: '▦', blinds: '☰', clock: '◔', ripple: '◎', honeycomb: '⬡', glitter: '✧', vortex: '🌀', shred: '⫼', switch: '⇄', gallery: '▭', cube: '⬛', doors: '⫿', box: '◫', comb: '≡',
+  random: '?', pan: '⇕', ferris: '☸', conveyor: '⇶', rotate: '⟳', window: '⊞', orbit: '◌', flythrough: '➹' };
+const ANIM_GLYPH = { appear: '★', fade: '✧', fly: '➶', float: '⇡', split: '⇔', wipe: '▤', zoom: '⊕', grow: '↻', wheel: '◔', bounce: '⤵', shape: '◯', randomBars: '▥', swivel: '⟲', blinds: '☰', box: '◫', checker: '▦',
+  circleIn: '◎', crawl: '⇠', diamond: '◇', dissolveIn: '░', peek: '⇡', plus: '✚', strips: '◢', wedge: '◕', expand: '⇿', compress: '⇹', basicZoom: '⊙', riseUp: '⤒', sinkDown: '⤓', stretch: '↔', centerRevolve: '⟳',
+  pinwheel: '✇', boomerang: '↶', curveUp: '⤴', spiralIn: '🌀', credits: '≣', flip: '⇋', dropIn: '⬇',
+  pulse: '✷', colorPulse: '◉', teeter: '⚖', spin: '↻', growShrink: '⤢', desaturate: '◐', darken: '●', lighten: '○', transparency: '◌', objectColor: '■', complementary: '◑', lineColor: '▢', fillColor: '▣', flash: '✺', boldFlash: 'B', wave: '〰', shimmer: '✦', bold: 'B', brushColor: '🖌', underline: 'U',
+  disappear: '✕' };
+const PATH_GLYPH = { pathRight: '→', pathLeft: '←', pathUp: '↑', pathDown: '↓', pathDiag: '↘', pathDiagUp: '↗', pathArc: '⌒', pathArcDown: '⌣', pathTurn: '↴', pathCircle: '○', pathSquare: '□', pathTriangle: '△', pathDiamond: '◇', pathStar: '☆', pathHeart: '♡', pathEight: '∞', pathLoop: '➰', pathSpiral: '🌀', pathWave: '∿', pathZigzag: '⋀', pathBounce: '⌓', pathSCurve: 'S' };
+const CLS_TITLE = { entr: '나타내기', emph: '강조', exit: '끝내기', path: '이동 경로' };
+/** 리본에 바로 보이는 효과 (PowerPoint 첫 줄) — 나머지는 [자세히 ▾] */
+const QUICK_TRANS = 18;
+const QUICK_ANIM = { entr: 13, emph: 13, exit: 13, path: 9 };
+
+function transButton(k, l, cur) {
+  return el('button', { class: `gal-item fx${k === cur ? ' on' : ''}`, title: l, onclick: () => run('setTransition', k) }, el('span', { class: 'fx-ic' }, TRANS_GLYPH[k] ?? '◇'), el('span', { class: 'fx-l' }, l));
+}
+function animButton(cls, k, l, a, o) {
+  const glyph = cls === 'path' ? PATH_GLYPH[k] ?? '⤳' : cls === 'exit' && ANIM_GLYPH[k] ? ANIM_GLYPH[k] : ANIM_GLYPH[k] ?? '★';
+  return el('button', { class: `gal-item fx ${cls}${a?.cls === cls && a.effect === k ? ' on' : ''}`, title: `${CLS_TITLE[cls]}: ${l}`, disabled: !o, onclick: () => run('setAnim', cls, k) }, el('span', { class: 'fx-ic' }, glyph), el('span', { class: 'fx-l' }, l));
+}
+/** 전환 갤러리 전체 (은은한 효과 / 화려한 효과 / 동적 콘텐츠) */
+export function transitionsPopup(anchor) {
+  const cur = curSlide()?.transition?.type ?? 'none';
+  const items = [];
+  for (const [g, title] of Object.entries(TRANSITION_GROUPS)) {
+    items.push({ title });
+    items.push({ node: el('div', { class: 'fx-grid' }, TRANSITIONS.filter((t) => t[2] === g).map(([k, l]) => transButton(k, l, cur))) });
+  }
+  openMenu(anchor, items, { minWidth: 600, scroll: true });
+}
+/** 애니메이션 갤러리 전체 + 추가 효과 */
+export function animationsPopup(anchor) {
+  const o = selObjects()[0];
+  const a = o ? curSlide().anims?.find((x) => x.obj === o.id) : null;
+  const items = [{ node: el('div', { class: 'fx-grid' }, [el('button', { class: `gal-item fx${!a ? ' on' : ''}`, title: '없음', disabled: !o, onclick: () => run('removeAnim', { all: true }) }, el('span', { class: 'fx-ic' }, '∅'), el('span', { class: 'fx-l' }, '없음'))]) }];
+  for (const cls of ['entr', 'emph', 'exit', 'path']) {
+    items.push({ title: ANIM_CLASS_LABEL[cls] });
+    items.push({ node: el('div', { class: 'fx-grid' }, ANIM_EFFECTS[cls].map(([k, l]) => animButton(cls, k, l, a, o))) });
+  }
+  openMenu(anchor, items, { minWidth: 600, scroll: true });
+}
 
 export const GALLERIES = {
   themes: () => {
@@ -38,17 +79,21 @@ export const GALLERIES = {
   },
   transitions: () => {
     const cur = curSlide()?.transition?.type ?? 'none';
-    return strip(TRANSITIONS.map(([k, l]) => el('button', { class: `gal-item fx${k === cur ? ' on' : ''}`, title: l, onclick: () => run('setTransition', k) }, el('span', { class: 'fx-ic' }, TRANS_GLYPH[k] ?? '◇'), el('span', { class: 'fx-l' }, l))), { cls: 'fx' });
+    const list = TRANSITIONS.slice(0, QUICK_TRANS);
+    // 지금 효과가 첫 줄에 없으면 맨 앞에 보여 줌
+    if (!list.some(([k]) => k === cur)) { const t = TRANSITIONS.find(([k]) => k === cur); if (t) list.unshift(t); }
+    return el('div', { class: 'gallery fx' }, el('div', { class: 'gallery-items' }, list.map(([k, l]) => transButton(k, l, cur))), el('button', { class: 'gal-more', title: '자세히', onclick: (e) => transitionsPopup(e.currentTarget) }, '▾'));
   },
   animations: () => {
     const o = selObjects()[0];
     const a = o ? curSlide().anims?.find((x) => x.obj === o.id) : null;
     const items = [el('button', { class: `gal-item fx${!a ? ' on' : ''}`, title: '없음', disabled: !o, onclick: () => run('removeAnim', { all: true }) }, el('span', { class: 'fx-ic' }, '∅'), el('span', { class: 'fx-l' }, '없음'))];
-    for (const [k, l] of ANIM_EFFECTS.entr) items.push(el('button', { class: `gal-item fx entr${a?.cls === 'entr' && a.effect === k ? ' on' : ''}`, title: `나타내기: ${l}`, disabled: !o, onclick: () => run('setAnim', 'entr', k) }, el('span', { class: 'fx-ic' }, ANIM_GLYPH[k] ?? '★'), el('span', { class: 'fx-l' }, l)));
-    for (const [k, l] of ANIM_EFFECTS.emph) items.push(el('button', { class: `gal-item fx emph${a?.cls === 'emph' && a.effect === k ? ' on' : ''}`, title: `강조: ${l}`, disabled: !o, onclick: () => run('setAnim', 'emph', k) }, el('span', { class: 'fx-ic' }, '✷'), el('span', { class: 'fx-l' }, l)));
-    for (const [k, l] of ANIM_EFFECTS.exit) items.push(el('button', { class: `gal-item fx exit${a?.cls === 'exit' && a.effect === k ? ' on' : ''}`, title: `끝내기: ${l}`, disabled: !o, onclick: () => run('setAnim', 'exit', k) }, el('span', { class: 'fx-ic' }, '✦'), el('span', { class: 'fx-l' }, l)));
-    for (const [k, l] of ANIM_EFFECTS.path) items.push(el('button', { class: `gal-item fx path${a?.cls === 'path' && a.effect === k ? ' on' : ''}`, title: `이동 경로: ${l}`, disabled: !o, onclick: () => run('setAnim', 'path', k) }, el('span', { class: 'fx-ic' }, '⤳'), el('span', { class: 'fx-l' }, l)));
-    return strip(items, { cls: 'fx' });
+    for (const cls of ['entr', 'emph', 'exit', 'path']) {
+      const list = ANIM_EFFECTS[cls].slice(0, QUICK_ANIM[cls]);
+      if (a?.cls === cls && !list.some(([k]) => k === a.effect)) { const e = ANIM_EFFECTS[cls].find(([k]) => k === a.effect); if (e) list.unshift(e); }
+      for (const [k, l] of list) items.push(animButton(cls, k, l, a, o));
+    }
+    return el('div', { class: 'gallery fx' }, el('div', { class: 'gallery-items' }, items), el('button', { class: 'gal-more', title: '자세히 (모든 효과)', onclick: (e) => animationsPopup(e.currentTarget) }, '▾'));
   },
   shapesMini: () => {
     const list = SHAPE_GALLERY.flatMap(([, l]) => l).slice(0, 24);

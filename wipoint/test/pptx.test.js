@@ -398,3 +398,46 @@ test('수식: LaTeX ⇄ OMML (a14:m) pptx 왕복', async () => {
   assert.equal(eq.latex, latex);
   assert.equal(eq.size, 32);
 });
+
+test('전환 51종 · 애니메이션 효과: PowerPoint 형식(p14/p15 포함)으로 왕복', async () => {
+  const { TRANSITIONS, ANIM_EFFECTS, addAnim } = await import('../src/model.js');
+  const p = newPresentation();
+  const base = p.slides[0];
+  const types = TRANSITIONS.map(([k]) => k).filter((k) => k !== 'none');
+  p.slides = types.map((type, i) => ({ ...JSON.parse(JSON.stringify(base)), id: `s${i}`, transition: { type, dur: 1.25 } }));
+  // 첫 슬라이드에 모든 효과 (같은 개체에)
+  const s0 = p.slides[0];
+  const ob = s0.objects[0];
+  s0.anims = [];
+  for (const cls of ['entr', 'emph', 'exit']) for (const [k] of ANIM_EFFECTS[cls]) addAnim(s0, ob.id, cls, k);
+  const bytes = writePptx(p);
+  const files = new Map(Object.entries(unzip(bytes)));
+  for (const [name, data] of files) {
+    if (!/^ppt\/slides\/slide\d+\.xml$/.test(name)) continue;
+    const x = textOf(data).replace(/<p:ext uri="\{6F1B2D57[^]*?<\/p:ext>/, '');
+    parseXml(x); // 형식이 맞는지
+    files.set(name, new TextEncoder().encode(x));
+  }
+  const xml2 = textOf(files.get('ppt/slides/slide20.xml'));
+  assert.match(xml2, /Requires="p15"/);
+  const back = readPptx(zip(Object.fromEntries(files))).pres;
+  const got = back.slides.map((s) => s.transition?.type);
+  assert.deepEqual(got, types);
+  assert.equal(back.slides[3].transition.dur, 1.25);
+  // 같은 번호를 쓰는 효과(원 = 도형, 떨어지기 = 바운드)를 빼면 효과 이름이 그대로
+  const SAME = { circleIn: 'shape', dropIn: 'bounce' };
+  const want = s0.anims.map((a) => `${a.cls}:${SAME[a.effect] ?? a.effect}`);
+  const have = back.slides[0].anims.map((a) => `${a.cls}:${a.effect}`);
+  assert.deepEqual(have, want);
+});
+
+test('전환 모양 (transfx): 프레임마다 점 개수가 같음', async () => {
+  const fx = await import('../src/transfx.js');
+  const count = (c) => c.split(',').length;
+  for (const list of [fx.randomBarsFrames(12, 40), fx.randomCellsFrames(12, 16, 9), fx.sweepFrames(16, 'clock'), fx.sweepFrames(16, 'wedge'), fx.frames((t) => fx.checkerPoly(t), 4), fx.frames((t) => fx.blindsPoly(t, 6, true), 4), fx.frames(fx.diamondPoly, 3), fx.frames(fx.plusPoly, 3), fx.frames((t) => fx.combPoly(t), 3), fx.frames((t) => fx.stripsPoly(t, 'lu'), 3)]) {
+    const n = count(list[0]);
+    for (const c of list) { assert.equal(count(c), n); assert.match(c, /^polygon\(/); }
+  }
+  // 마지막 프레임: 실선 무늬는 모든 막대가 다 보임
+  assert.doesNotMatch(fx.randomBarsFrames(4, 10).at(-1), /0% 10%, 100% 10%, 100% 10%/);
+});
