@@ -10,6 +10,7 @@ import { paraDefaults, tableCellStyle, slideBackground, themeDecor, slideDecor }
 import { KNOWN_SHAPES } from './shapes.js';
 import { decodeEmbeddedFont } from './fonts.js';
 import { fxOf, fxXml, fxFromXml } from './effects.js';
+import { fallbackChart } from './chart.js';
 
 const NS_A = 'http://schemas.openxmlformats.org/drawingml/2006/main';
 const NS_R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -234,7 +235,8 @@ const chartCol = (ch, i, size = false) => (ch.kind === 'bubble' ? 1 + i * 2 + (s
  * 차트 데이터 통합 문서 (PowerPoint [데이터 편집] 용): A열 = 항목, 1행 = 계열 이름
  * 최소 xlsx (inlineStr 글자, 스타일 1개) 를 zip 으로 만듦
  */
-export function chartWorkbook(ch) {
+export function chartWorkbook(ch0) {
+  const ch = fallbackChart(ch0);
   const cell = (ref, v) => (typeof v === 'number' && Number.isFinite(v) ? `<c r="${ref}"><v>${v}</v></c>` : v == null || v === '' ? '' : `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${esc(String(v))}</t></is></c>`);
   const bub = ch.kind === 'bubble';
   const xyNum = ch.kind === 'scatter' || bub;
@@ -263,7 +265,9 @@ const ERR_XML = { fixed: 'fixedVal', percent: 'percentage', stdDev: 'stdDev', st
 const MARKER_XML = { circle: 'circle', square: 'square', diamond: 'diamond', triangle: 'triangle', x: 'x', none: 'none' };
 
 /** opts.embed: 데이터 통합 문서 관계 id (있으면 Sheet1 셀 참조 + 캐시로 씀) */
-export function chartXml(ch, opts = {}) {
+export function chartXml(orig, opts = {}) {
+  // 폭포 · 깔때기 · 트리맵 등: 다른 프로그램용 일반 차트로 쓰고, 원본은 WIPOINT 확장 JSON 에
+  const ch = fallbackChart(orig);
   const kind = ch.kind ?? 'col';
   const n = ch.cats.length;
   const ref = (col, r1, r2) => `Sheet1!$${col}$${r1}${r2 != null ? `:$${col}$${r2}` : ''}`;
@@ -317,8 +321,8 @@ export function chartXml(ch, opts = {}) {
     const mk = s.marker ?? (t === 'scatter' || (t === 'line' && (ch.variant === 'markers' || ch.markers)) || (t === 'radar' && ch.variant === 'marker') ? 'circle' : 'none');
     const markerXml = isLine ? `<c:marker><c:symbol val="${MARKER_XML[mk] ?? 'circle'}"/>${mk !== 'none' ? `<c:size val="${Math.max(2, Math.min(72, s.markerSize ?? 5))}"/>${s.color ? `<c:spPr>${solidFill(s.color)}<a:ln>${solidFill(s.color)}</a:ln></c:spPr>` : ''}` : ''}</c:marker>` : '';
     const scatterLine = t === 'scatter' && !(ch.variant === 'smooth' || ch.variant === 'line' || s.lineWidth);
-    const spPr = isLine && !(t === 'radar' && ch.variant === 'filled') ? `<c:spPr>${scatterLine ? '<a:ln w="25400" cap="rnd"><a:noFill/><a:round/></a:ln>' : lnXml(s, t)}</c:spPr>` : s.color ? `<c:spPr>${solidFill(s.color)}${ch.barOutline ? `<a:ln w="9525">${solidFill(ch.barOutline)}</a:ln>` : ''}</c:spPr>` : '';
-    const dl = s.labels != null ? dlXml(s.labels, t, stacked, t === 'col' || t === 'bar') : '';
+    const spPr = s.noFill ? '<c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr>' : isLine && !(t === 'radar' && ch.variant === 'filled') ? `<c:spPr>${scatterLine ? '<a:ln w="25400" cap="rnd"><a:noFill/><a:round/></a:ln>' : lnXml(s, t)}</c:spPr>` : s.color ? `<c:spPr>${solidFill(s.color)}${ch.barOutline ? `<a:ln w="9525">${solidFill(ch.barOutline)}</a:ln>` : ''}</c:spPr>` : '';
+    const dl = s.noFill ? (ch.labels ? '<c:dLbls><c:delete val="1"/></c:dLbls>' : '') : s.labels != null ? dlXml(s.labels, t, stacked, t === 'col' || t === 'bar') : '';
     const head = `<c:idx val="${i}"/><c:order val="${i}"/>${tx}${spPr}`;
     const smooth = `<c:smooth val="${(s.smooth ?? (ch.variant === 'smooth' || ch.smooth)) ? 1 : 0}"/>`;
     if (t === 'scatter') return `<c:ser>${head}${markerXml}${dPtXml(s, t)}${dl}${trendXml(s)}${errXml(s, t)}<c:xVal>${lit(ch.cats.map((c, k) => (Number.isFinite(Number(c)) ? Number(c) : k + 1)), true, 'cat')}</c:xVal><c:yVal>${lit(s.vals, true)}</c:yVal>${smooth}</c:ser>`;
@@ -382,7 +386,7 @@ export function chartXml(ch, opts = {}) {
   const legend = ch.legend ? `<c:legend><c:legendPos val="${['t', 'b', 'l', 'r', 'tr'].includes(ch.legend) ? ch.legend : 'b'}"/><c:overlay val="0"/></c:legend>` : '';
   const chartSp = ch.bg || ch.border ? `<c:spPr>${ch.bg ? solidFill(ch.bg) : '<a:noFill/>'}${ch.border ? `<a:ln w="9525">${solidFill(ch.border)}</a:ln>` : '<a:ln><a:noFill/></a:ln>'}</c:spPr>` : '';
   const fsz = ch.font?.size ? Math.round(ch.font.size * 100) : 1197;
-  const wx = `<c:extLst><c:ext uri="${WP_EXT_URI}"><wp:chart xmlns:wp="${WP_NS}" json="${esc(JSON.stringify(ch))}"/></c:ext></c:extLst>`;
+  const wx = `<c:extLst><c:ext uri="${WP_EXT_URI}"><wp:chart xmlns:wp="${WP_NS}" json="${esc(JSON.stringify(orig))}"/></c:ext></c:extLst>`;
   return `${XML_HEAD}<c:chartSpace xmlns:c="${NS_C}" xmlns:a="${NS_A}" xmlns:r="${NS_R}"><c:roundedCorners val="0"/><c:chart>${title}<c:plotArea><c:layout/>${plots}${ax}${dTable}${plotSp}</c:plotArea>${legend}<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart>${chartSp}<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="${fsz}">${solidFill(ch.fontColor ?? ch.font?.color ?? '@tx1:lm65:lo35')}<a:latin typeface="+mn-lt"/><a:ea typeface="+mn-ea"/></a:defRPr></a:pPr><a:endParaRPr lang="ko-KR"/></a:p></c:txPr>${opts.embed ? `<c:externalData r:id="${opts.embed}"><c:autoUpdate val="0"/></c:externalData>` : ''}${wx}</c:chartSpace>`;
 }
 

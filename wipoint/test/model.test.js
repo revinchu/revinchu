@@ -531,3 +531,25 @@ test('도형 병합: 통합 · 교차 · 빼기 · 결합 · 조각 (구멍 · �
   const g = loopsToShape(mergeLoops([A, B], 'union')[0]);
   assert.deepEqual([g.x, g.y, g.w, g.h], [0, 0, 15, 15]);
 });
+
+test('Office 2016 차트: 폭포 · 깔때기 · 히스토그램(파레토) · 상자 수염 · 트리맵 · 선버스트', async () => {
+  const { chartSvg, expandChart, histogramBins, boxStats, squarify, treeData } = await import('../src/chart.js');
+  const { chartXml } = await import('../src/pptx.js');
+  const { THEMES } = await import('../src/themes.js');
+  const wf = expandChart({ kind: 'waterfall', cats: ['시작', '+', '-', '합계'], series: [{ name: 'a', vals: [100, 50, -30, 0] }] });
+  assert.deepEqual(wf.series[0].vals, [0, 100, 120, 0]);
+  assert.deepEqual(wf.series[3].vals, [null, null, null, 120]);
+  assert.deepEqual(histogramBins([1, 2, 3, 4, 5, 6, 7, 8, 9]).counts, [3, 3, 3]);
+  assert.equal(boxStats([1, 2, 3, 4, 5, 6, 20]).out[0], 20);
+  const sq = squarify([{ name: 'a', value: 6 }, { name: 'b', value: 3 }, { name: 'c', value: 1 }], 0, 0, 100, 100);
+  assert.ok(Math.abs(sq.reduce((s, r) => s + r.w * r.h, 0) - 10000) < 1e-6);
+  assert.equal(treeData({ cats: ['과일/사과', '과일/배', '곡물'], series: [{ vals: [3, 2, 5] }] })[0].kids.length, 2);
+  for (const kind of ['waterfall', 'funnel', 'histogram', 'box', 'treemap', 'sunburst']) {
+    const ch = { kind, title: kind, legend: 'b', cats: ['과일/사과', '과일/배', '곡물', '합계'], series: [{ name: 's', vals: [3, 2, 5, 0] }, { name: 't', vals: [1, 4, 2, 3] }] };
+    assert.doesNotMatch(chartSvg(ch, 400, 300, THEMES[0]), /NaN|undefined|Infinity/, kind);
+    const x = chartXml(ch);
+    assert.match(x, /<c:plotArea>/);
+    assert.match(x, new RegExp(`&quot;kind&quot;:&quot;${kind}&quot;`));
+  }
+  assert.equal(expandChart({ kind: 'histogram', variant: 'pareto', series: [{ vals: [1, 1, 2, 5, 9] }] }).kind, 'combo');
+});

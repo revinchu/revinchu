@@ -554,7 +554,7 @@ function insertTable(rows, cols) {
   emit('selection');
 }
 
-const CHART_ICON = { col: 'chartColumn', bar: 'chartBar', line: 'chartLine', area: 'chartArea', pie: 'chartPie', doughnut: 'chartDoughnut', scatter: 'chartScatter', radar: 'chartLine', bubble: 'chartScatter', combo: 'chartColumn' };
+const CHART_ICON = { col: 'chartColumn', bar: 'chartBar', line: 'chartLine', area: 'chartArea', pie: 'chartPie', doughnut: 'chartDoughnut', scatter: 'chartScatter', radar: 'chartLine', bubble: 'chartScatter', combo: 'chartColumn', waterfall: 'chartColumn', funnel: 'chartBar', histogram: 'chartColumn', box: 'chartColumn', treemap: 'table', sunburst: 'chartDoughnut' };
 const withChart = (fn) => { const o = selChart(); if (!o) { toast('차트를 선택하세요'); return; } fn(o); };
 function insertChart(kind, sub, preset) {
   const { w: W, h: H } = S.pres.size;

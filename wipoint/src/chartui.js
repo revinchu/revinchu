@@ -13,7 +13,16 @@ const clone = (x) => JSON.parse(JSON.stringify(x));
 const setChart = (o, fn) => change(() => { const next = fn(clone(o.chart)); if (next) o.chart = next; }, { key: `chart-${o.id}` });
 
 // ───────────── 기본 데이터 (종류마다) ─────────────
+const SAMPLES = {
+  waterfall: { cats: ['시작', '1분기', '2분기', '3분기', '4분기', '합계'], series: [{ name: '손익', vals: [120, 45, -30, 60, -20, 0] }] },
+  funnel: { cats: ['방문', '상품 조회', '장바구니', '주문', '재구매'], series: [{ name: '고객 수', vals: [10000, 6200, 2400, 1100, 420] }] },
+  histogram: { cats: Array.from({ length: 24 }, (_, i) => String(i + 1)), series: [{ name: '점수', vals: [52, 58, 61, 63, 65, 66, 68, 70, 71, 72, 73, 75, 76, 77, 78, 80, 81, 83, 85, 86, 88, 91, 94, 98] }] },
+  box: { cats: ['1', '2', '3', '4', '5', '6', '7', '8'], series: [{ name: '1반', vals: [62, 70, 74, 78, 81, 85, 88, 97] }, { name: '2반', vals: [55, 64, 69, 72, 75, 79, 83, 90] }, { name: '3반', vals: [70, 73, 77, 80, 84, 86, 91, 99] }] },
+  treemap: { cats: ['디지털/스마트폰', '디지털/노트북', '디지털/태블릿', '가전/TV', '가전/냉장고', '생활/주방', '생활/욕실', '식품'], series: [{ name: '매출', vals: [420, 310, 120, 260, 180, 90, 60, 150] }] },
+  sunburst: { cats: ['디지털/스마트폰', '디지털/노트북', '가전/TV', '가전/냉장고', '생활/주방', '생활/욕실'], series: [{ name: '매출', vals: [420, 310, 260, 180, 90, 60] }] },
+};
 export function sampleChart(kind, sub) {
+  if (SAMPLES[kind]) return withSubtype({ kind, title: '차트 제목', legend: kind === 'box' || kind === 'treemap' ? 'b' : null, labels: kind !== 'box', ...JSON.parse(JSON.stringify(SAMPLES[kind])) }, kind, sub);
   const base = { kind, title: '차트 제목', legend: 'b', labels: false, cats: ['항목 1', '항목 2', '항목 3', '항목 4'], series: [{ name: '계열 1', vals: [4.3, 2.5, 3.5, 4.5] }, { name: '계열 2', vals: [2.4, 4.4, 1.8, 2.8] }, { name: '계열 3', vals: [2, 2, 3, 5] }] };
   return withSubtype(base, kind, sub);
 }
@@ -28,6 +37,7 @@ export function withSubtype(ch, kind, sub) {
   if (kind === 'line' && (sub === 'markers' || sub === 'smooth')) c.variant = sub;
   if (kind === 'scatter' && sub !== 'marker') c.variant = sub;
   if (kind === 'radar' && sub !== 'standard') c.variant = sub;
+  if (kind === 'histogram' && sub === 'pareto') c.variant = 'pareto';
   if (kind === 'pie' && sub === 'explode') c.variant = 'explode';
   if (kind === 'pie' || kind === 'doughnut') { if (kind === 'pie') c.series = c.series.slice(0, 1); if (!c.labels) c.labels = true; c.legend = c.legend ?? 'r'; }
   if (kind === 'scatter' || kind === 'bubble') { if (!c.cats.every((v) => Number.isFinite(Number(v)) && String(v).trim() !== '')) c.cats = c.cats.map((_, i) => String(i + 1)); }

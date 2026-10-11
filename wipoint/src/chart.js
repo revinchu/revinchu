@@ -13,7 +13,7 @@
 //   bg, plotBg, fontColor, barOutline, dashGrid, shadow, gap(간격 너비 %), overlap(%), hole(%), firstAngle(°), explode(%) }
 import { resolveColor } from './themes.js';
 
-export const CHART_KINDS = [['col', '세로 막대형'], ['bar', '가로 막대형'], ['line', '꺾은선형'], ['area', '영역형'], ['pie', '원형'], ['doughnut', '도넛형'], ['scatter', '분산형'], ['radar', '방사형'], ['bubble', '거품형'], ['combo', '콤보']];
+export const CHART_KINDS = [['col', '세로 막대형'], ['bar', '가로 막대형'], ['line', '꺾은선형'], ['area', '영역형'], ['pie', '원형'], ['doughnut', '도넛형'], ['scatter', '분산형'], ['radar', '방사형'], ['bubble', '거품형'], ['combo', '콤보'], ['waterfall', '폭포'], ['funnel', '깔때기형'], ['histogram', '히스토그램'], ['box', '상자 수염'], ['treemap', '트리맵'], ['sunburst', '선버스트']];
 export const CHART_LABEL = Object.fromEntries(CHART_KINDS);
 /** 종류별 하위 형식 (PowerPoint [차트 종류 변경] 의 위 줄) — [grouping/variant 키, 이름] */
 export const CHART_SUBTYPES = {
@@ -26,6 +26,7 @@ export const CHART_SUBTYPES = {
   scatter: [['marker', '분산형'], ['smooth', '곡선 및 표식이 있는 분산형'], ['line', '직선 및 표식이 있는 분산형']],
   radar: [['standard', '방사형'], ['marker', '표식이 있는 방사형'], ['filled', '채워진 방사형']],
   bubble: [['bubble', '거품형']],
+  waterfall: [['waterfall', '폭포']], funnel: [['funnel', '깔때기형']], histogram: [['histogram', '히스토그램'], ['pareto', '파레토']], box: [['box', '상자 수염']], treemap: [['treemap', '트리맵']], sunburst: [['sunburst', '선버스트']],
   combo: [['colLine', '묶은 세로 막대형 - 꺾은선형'], ['colLine2', '묶은 세로 막대형 - 보조 축의 꺾은선형'], ['areaCol', '누적 영역형 - 묶은 세로 막대형']],
 };
 
@@ -43,14 +44,16 @@ export const CHART_PALETTES = [
   ...[1, 2, 3, 4, 5, 6].map((k) => [`mono${k}`, `단색 색상표 ${k}`, k]),
 ];
 const MONO_STEPS = ['', ':s65', ':t65', ':s50', ':t50', ':s85', ':t80'];
-export function paletteColor(theme, palette, i) {
+/** 팔레트의 i 번째 색 (테마 참조 '@accent…') */
+export function paletteRef(palette, i) {
   const p = CHART_PALETTES.find((x) => x[0] === palette) ?? CHART_PALETTES[0];
-  if (typeof p[2] === 'number') return resolveColor(theme, `@accent${p[2]}${MONO_STEPS[i % MONO_STEPS.length]}`);
+  if (typeof p[2] === 'number') return `@accent${p[2]}${MONO_STEPS[i % MONO_STEPS.length]}`;
   const list = p[2];
   const base = `@accent${list[i % list.length]}`;
   const round = Math.floor(i / list.length);
-  return resolveColor(theme, round === 0 ? base : `${base}${round % 2 ? ':lm60' : ':lm60:lo40'}`);
+  return round === 0 ? base : `${base}${round % 2 ? ':lm60' : ':lm60:lo40'}`;
 }
+export const paletteColor = (theme, palette, i) => resolveColor(theme, paletteRef(palette, i));
 export function seriesColor(theme, chart, i) {
   const s = chart.series?.[i];
   if (s?.color) return resolveColor(theme, s.color);
@@ -196,7 +199,7 @@ const numVal = (v) => { const n = Number(v); return Number.isFinite(n) ? n : nul
 
 // ───────────── 그리기 ─────────────
 export function chartSvg(chart, w, h, theme, { font = '맑은 고딕' } = {}) {
-  const c = chart ?? {};
+  const c = expandChart(chart ?? {});
   const fc = c.fontColor ? resolveColor(theme, c.fontColor) : c.font?.color ? resolveColor(theme, c.font.color) : resolveColor(theme, '@tx1:lm65:lo35') ?? '#595959';
   const gridC = c.gridColor ? resolveColor(theme, c.gridColor) : resolveColor(theme, '@tx1:lm15:lo85') ?? '#D9D9D9';
   const axisC = resolveColor(theme, '@tx1:lm25:lo75') ?? '#BFBFBF';
@@ -228,7 +231,8 @@ export function chartSvg(chart, w, h, theme, { font = '맑은 고딕' } = {}) {
   const types = series.map((s, i) => seriesType(c, s, i));
   const legendItems = pie
     ? cats.map((ct, i) => ({ name: ct, color: pointColor(theme, c, series[0], 0, i, true), kind: 'rect' }))
-    : [...series.map((s, i) => ({ name: s.name, color: seriesColor(theme, c, i), kind: types[i] === 'line' || types[i] === 'scatter' || (types[i] === 'radar' && c.variant !== 'filled') ? 'line' : 'rect', marker: types[i] === 'line' ? lineMarker(c, s) : null })),
+    : SPECIAL.has(kind) ? specialLegend(c, theme)
+    : [...series.map((s, i) => ({ ghost: s.ghost, name: s.name, color: seriesColor(theme, c, i), kind: types[i] === 'line' || types[i] === 'scatter' || (types[i] === 'radar' && c.variant !== 'filled') ? 'line' : 'rect', marker: types[i] === 'line' ? lineMarker(c, s) : null })).filter((it) => !it.ghost),
       ...series.flatMap((s, i) => (s.trend?.type ? [{ name: s.trend.name || `${TREND_LABEL[s.trend.type] ?? ''} (${s.name})`, color: seriesColor(theme, c, i), kind: 'dash' }] : []))];
   const lfs = fs * 0.95;
   const legendKey = (x, y, it) => {
@@ -267,6 +271,9 @@ export function chartSvg(chart, w, h, theme, { font = '맑은 고딕' } = {}) {
   const box = { left, right, top, bottom };
   let body;
   if (pie) body = pieSvg(c, series, cats, box, theme, { fs, fc, text, shadow });
+  else if (kind === 'box') body = boxPlotSvg(c, series, box, theme, { fs, fc, text, gridC, axisC });
+  else if (kind === 'treemap') body = treemapSvg(c, box, theme, { fs, text });
+  else if (kind === 'sunburst') body = sunburstSvg(c, box, theme, { fs, text });
   else if (kind === 'radar') body = radarSvg(c, series, cats, box, theme, { fs, fc, text, gridC, axisC });
   else body = cartesianSvg(c, series, cats, types, box, theme, { fs, fc, text, gridC, axisC, shadow, legendKey, w, h });
   return wrap(w, h, font, [...parts, body], defs);
@@ -567,7 +574,7 @@ function cartesianSvg(c, series, cats, types, box, theme, ctx) {
       const sc = s.axis === 'secondary' ? sc2 : sc1;
       const lo = labelOpts(c, s, c.kind);
       plotted[si].forEach((p, ci) => {
-        if (!p) return;
+        if (!p || s.ghost) return;
         const col = pointColor(theme, c, s, si, ci, c.vary);
         const a = vpos(p.a, sc);
         const b = vpos(p.b, sc);
@@ -578,8 +585,8 @@ function cartesianSvg(c, series, cats, types, box, theme, ctx) {
         else out.push(`<rect x="${f(start)}" y="${f(Math.min(a, b))}" width="${f(bw)}" height="${f(Math.abs(b - a))}" fill="${col}"${ol} data-el="ser${si}"${shadow}/>`);
         if (s.err) errBar(out, s, p, start + bw / 2, sc, vpos, horiz, fc);
         if (lo) {
-          const t = labelText(lo, p.v, s, cats[ci], p.p, s.axis === 'secondary' ? fmt2 : fmt1);
-          const stacked = slot.length > 1 || groupingOf(c, types[si]) !== 'clustered';
+          const t = labelText(lo, s.labelVals?.[ci] ?? p.v, s, cats[ci], p.p, s.axis === 'secondary' ? fmt2 : fmt1);
+          const stacked = !c.derived && (slot.length > 1 || groupingOf(c, types[si]) !== 'clustered');
           const pos = lo.pos ?? (stacked ? 'ctr' : 'outEnd');
           const neg = p.b < p.a;
           const end = b;
@@ -820,4 +827,213 @@ export function switchRowCol(chart) {
 export function chartCsv(chart) {
   const q = (v) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
   return `﻿${chartToTsv(chart).split('\n').map((l) => l.split('\t').map(q).join(',')).join('\r\n')}`;
+}
+
+// ───────────── 폭포 · 깔때기 · 히스토그램 · 상자 수염 · 트리맵 · 선버스트 (Office 2016 차트) ─────────────
+const SPECIAL = new Set(['box', 'treemap', 'sunburst']);
+const TOTAL_RE = /^(합계|총계|소계|누계|total|subtotal|sum)$/i;
+/** 폭포의 합계 막대 위치 (series.totals 또는 이름이 합계 · 총계 · Total) */
+export const waterfallTotals = (ch) => new Set(ch.series?.[0]?.totals ?? (ch.cats ?? []).map((c, i) => (TOTAL_RE.test(String(c).trim()) ? i : -1)).filter((i) => i >= 0));
+/** 히스토그램 구간 → { cats, counts } (구간 수 = 데이터 수의 제곱근, 3~20) */
+export function histogramBins(values, { count, width } = {}) {
+  const v = values.map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+  if (!v.length) return { cats: [], counts: [] };
+  const lo = v[0];
+  const hi = v[v.length - 1];
+  let n = count ?? Math.max(3, Math.min(20, Math.ceil(Math.sqrt(v.length))));
+  let bw = width ?? (hi - lo) / n;
+  if (!(bw > 0)) { bw = 1; n = 1; } else n = Math.max(1, Math.ceil((hi - lo) / bw - 1e-9));
+  const counts = new Array(n).fill(0);
+  for (const x of v) counts[Math.min(n - 1, Math.max(0, Math.ceil((x - lo) / bw - 1e-9) - 1 + (x === lo ? 1 : 0)))]++;
+  const r = (x) => fmtNum(Math.round(x * 100) / 100);
+  const cats = counts.map((_, i) => `${i === 0 ? '[' : '('}${r(lo + bw * i)}, ${r(lo + bw * (i + 1))}]`);
+  return { cats, counts };
+}
+/** 사분위수 (엑셀 상자 수염: 포함 중앙값 방식) */
+export function boxStats(values) {
+  const v = values.map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+  if (!v.length) return null;
+  const q = (p) => { const k = (v.length - 1) * p; const a = Math.floor(k); return v[a] + (v[Math.min(v.length - 1, a + 1)] - v[a]) * (k - a); };
+  const q1 = q(0.25); const med = q(0.5); const q3 = q(0.75); const iqr = q3 - q1;
+  const lo = v.find((x) => x >= q1 - 1.5 * iqr); const hi = [...v].reverse().find((x) => x <= q3 + 1.5 * iqr);
+  return { q1, med, q3, lo, hi, mean: v.reduce((s, x) => s + x, 0) / v.length, out: v.filter((x) => x < lo || x > hi), min: v[0], max: v[v.length - 1] };
+}
+/** 화면 그리기용으로 바꾼 차트 (폭포 · 깔때기 · 히스토그램 → 누적/묶은 막대) — 원래 차트는 그대로 */
+export function expandChart(ch) {
+  const k = ch.kind;
+  if (k === 'waterfall') {
+    const vals = (ch.series?.[0]?.vals ?? []).map((v) => Number(v) || 0);
+    const totals = waterfallTotals(ch);
+    const base = []; const up = []; const down = []; const tot = []; const lbl = [];
+    let run = 0;
+    vals.forEach((v, i) => {
+      if (totals.has(i)) { base.push(0); tot.push(run); up.push(null); down.push(null); lbl.push(run); return; }
+      if (v >= 0) { base.push(run); up.push(v); down.push(null); } else { base.push(run + v); down.push(-v); up.push(null); }
+      tot.push(null); lbl.push(v); run += v;
+    });
+    const name = ch.series?.[0]?.name ?? '';
+    return { ...ch, kind: 'col', derived: 'waterfall', grouping: 'stacked', gap: ch.gap ?? 50, labels: ch.labels ?? { pos: 'inEnd' }, series: [
+      { name: '기준', ghost: true, vals: base },
+      { name: '증가', vals: up, color: ch.series?.[0]?.upColor ?? '@accent1', labelVals: lbl },
+      { name: '감소', vals: down, color: ch.series?.[0]?.downColor ?? '@accent2', labelVals: lbl },
+      { name: '합계', vals: tot, color: ch.series?.[0]?.totalColor ?? '@accent3', labelVals: lbl },
+    ], title: ch.title ?? name };
+  }
+  if (k === 'funnel') {
+    const vals = (ch.series?.[0]?.vals ?? []).map((v) => Math.max(0, Number(v) || 0));
+    const max = Math.max(1, ...vals);
+    return { ...ch, kind: 'bar', derived: 'funnel', grouping: 'stacked', gap: ch.gap ?? 10, legend: null, labels: ch.labels ?? { pos: 'ctr' }, grid: { major: false },
+      axes: { ...(ch.axes ?? {}), x: { ...(ch.axes?.x ?? {}), reverse: true }, y: { ...(ch.axes?.y ?? {}), hide: true } },
+      series: [{ name: 'offset', ghost: true, vals: vals.map((v) => (max - v) / 2) }, { ...(ch.series?.[0] ?? {}), name: ch.series?.[0]?.name ?? '', vals, color: ch.series?.[0]?.color ?? paletteRef(ch.palette, 0) }] };
+  }
+  if (k === 'histogram') {
+    const all = (ch.series ?? []).flatMap((s) => s.vals ?? []);
+    const { cats, counts } = histogramBins(all, ch.bins ?? {});
+    const out = { ...ch, kind: 'col', derived: 'histogram', cats, gap: ch.gap ?? 0, legend: ch.variant === 'pareto' ? ch.legend : null, series: [{ name: '빈도', vals: counts, color: ch.series?.[0]?.color }] };
+    if (ch.variant === 'pareto') {
+      // 파레토: 빈도 내림차순 + 누적 백분율 꺾은선 (보조 축)
+      const order = counts.map((n, i) => [n, i]).sort((a, b) => b[0] - a[0]);
+      const tot = counts.reduce((s, n) => s + n, 0) || 1;
+      let acc = 0;
+      out.kind = 'combo';
+      out.cats = order.map(([, i]) => cats[i]);
+      out.series = [{ name: '빈도', type: 'col', vals: order.map(([n]) => n) }, { name: '누적 %', type: 'line', axis: 'secondary', vals: order.map(([n]) => (acc += n) / tot) }];
+      out.axes = { ...(ch.axes ?? {}), y2: { min: 0, max: 1, fmt: '0%', ...(ch.axes?.y2 ?? {}) } };
+    }
+    return out;
+  }
+  return ch;
+}
+function specialLegend(c, theme) {
+  if (c.kind === 'box') return (c.series ?? []).map((s, i) => ({ name: s.name, color: seriesColor(theme, c, i), kind: 'rect' }));
+  return treeData(c).map((g, i) => ({ name: g.name, color: paletteColor(theme, c.palette, i), kind: 'rect' }));
+}
+/** 트리맵 · 선버스트 자료: 항목 이름 '부모/자식' (또는 '부모 > 자식') → [{ name, value, kids: [{ name, value }] }] */
+export function treeData(ch) {
+  const vals = ch.series?.[0]?.vals ?? [];
+  const groups = new Map();
+  (ch.cats ?? []).forEach((cat, i) => {
+    const parts = String(cat).split(/\s*[/>]\s*/).filter(Boolean);
+    const v = Math.max(0, Number(vals[i]) || 0);
+    const [p, ...rest] = parts.length > 1 ? parts : [String(cat)];
+    if (!groups.has(p)) groups.set(p, { name: p, value: 0, kids: [] });
+    const g = groups.get(p);
+    g.value += v;
+    if (rest.length) g.kids.push({ name: rest.join(' / '), value: v });
+  });
+  return [...groups.values()].filter((g) => g.value > 0);
+}
+/** 정사각형에 가깝게 나누기 (squarified treemap) */
+export function squarify(items, x, y, w, h) {
+  const total = items.reduce((s, it) => s + it.value, 0) || 1;
+  const area = w * h;
+  const list = items.map((it) => ({ it, a: (it.value / total) * area })).sort((a, b) => b.a - a.a);
+  const out = [];
+  let rx = x; let ry = y; let rw = w; let rh = h;
+  let row = [];
+  const worst = (r, side) => { const s = r.reduce((t, e) => t + e.a, 0); const mx = Math.max(...r.map((e) => e.a)); const mn = Math.min(...r.map((e) => e.a)); return Math.max((side * side * mx) / (s * s), (s * s) / (side * side * mn)); };
+  const lay = () => {
+    const s = row.reduce((t, e) => t + e.a, 0);
+    if (rw >= rh) { const cw = s / rh; let yy = ry; for (const e of row) { const eh = e.a / cw; out.push({ ...e.it, x: rx, y: yy, w: cw, h: eh }); yy += eh; } rx += cw; rw -= cw; }
+    else { const ch2 = s / rw; let xx = rx; for (const e of row) { const ew = e.a / ch2; out.push({ ...e.it, x: xx, y: ry, w: ew, h: ch2 }); xx += ew; } ry += ch2; rh -= ch2; }
+    row = [];
+  };
+  for (const e of list) {
+    const side = Math.min(rw, rh);
+    if (!row.length || worst([...row, e], side) <= worst(row, side)) row.push(e);
+    else { lay(); row.push(e); }
+  }
+  if (row.length) lay();
+  return out;
+}
+function treemapSvg(c, box, theme, { fs, text }) {
+  const groups = treeData(c);
+  const out = [];
+  const W = box.right - box.left; const H = box.bottom - box.top;
+  for (const [gi, g] of squarify(groups, box.left, box.top, W, H).map((r) => [groups.indexOf(groups.find((x) => x.name === r.name)), r])) {
+    const base = paletteColor(theme, c.palette, gi);
+    const kids = g.kids.length ? squarify(g.kids, g.x, g.y, g.w, g.h) : [{ ...g, name: g.name }];
+    for (const k of kids) {
+      out.push(`<rect x="${f(k.x)}" y="${f(k.y)}" width="${f(Math.max(0, k.w))}" height="${f(Math.max(0, k.h))}" fill="${base}" stroke="#fff" stroke-width="1.5" data-el="ser0"/>`);
+      if (k.w > fs * 2.5 && k.h > fs * 1.4) {
+        out.push(text(k.x + 4, k.y + fs * 1.05, k.name, { size: fs * 0.85, anchor: 'start', color: '#fff' }));
+        if (c.labels !== false && k.h > fs * 2.6) out.push(text(k.x + 4, k.y + fs * 2.15, fmtNum(k.value, c.axes?.y?.fmt), { size: fs * 0.8, anchor: 'start', color: '#fff' }));
+      }
+    }
+    if (g.kids.length && g.w > fs * 3) out.push(`<rect x="${f(g.x)}" y="${f(g.y)}" width="${f(g.w)}" height="${f(g.h)}" fill="none" stroke="#fff" stroke-width="3"/>`);
+  }
+  return out.join('');
+}
+function sunburstSvg(c, box, theme, { fs, text }) {
+  const groups = treeData(c);
+  const total = groups.reduce((s, g) => s + g.value, 0) || 1;
+  const cx = (box.left + box.right) / 2; const cy = (box.top + box.bottom) / 2;
+  const R = Math.max(10, Math.min(box.right - box.left, box.bottom - box.top) / 2 - 4);
+  const hasKids = groups.some((g) => g.kids.length);
+  const r0 = R * 0.18; const r1 = hasKids ? R * 0.58 : R; const r2 = R;
+  const arc = (ra, rb, a0, a1, color, label, el) => {
+    const P = (r, a) => `${f(cx + r * Math.cos(a))} ${f(cy + r * Math.sin(a))}`;
+    const large = a1 - a0 > Math.PI ? 1 : 0;
+    const d = a1 - a0 >= Math.PI * 2 - 1e-6
+      ? `M${P(rb, 0)} A${f(rb)} ${f(rb)} 0 1 1 ${P(rb, Math.PI)} A${f(rb)} ${f(rb)} 0 1 1 ${P(rb, 0)} M${P(ra, 0)} A${f(ra)} ${f(ra)} 0 1 0 ${P(ra, Math.PI)} A${f(ra)} ${f(ra)} 0 1 0 ${P(ra, 0)} Z`
+      : `M${P(ra, a0)} L${P(rb, a0)} A${f(rb)} ${f(rb)} 0 ${large} 1 ${P(rb, a1)} L${P(ra, a1)} A${f(ra)} ${f(ra)} 0 ${large} 0 ${P(ra, a0)} Z`;
+    const am = (a0 + a1) / 2; const rm = (ra + rb) / 2;
+    const fits = (a1 - a0) * rm > fs * 2.2 && rb - ra > fs * 1.1;
+    return `<path d="${d}" fill="${color}" stroke="#fff" stroke-width="1.5" fill-rule="evenodd" data-el="${el}"/>${fits ? text(cx + rm * Math.cos(am), cy + rm * Math.sin(am) + fs / 3, label, { size: fs * 0.8, color: '#fff' }) : ''}`;
+  };
+  const out = [];
+  let a = -Math.PI / 2;
+  groups.forEach((g, gi) => {
+    const sw = (g.value / total) * Math.PI * 2;
+    const col = paletteColor(theme, c.palette, gi);
+    out.push(arc(r0, r1, a, a + sw, col, g.name, 'ser0'));
+    let b = a;
+    for (const k of g.kids) { const ks = (k.value / total) * Math.PI * 2; out.push(arc(r1, r2, b, b + ks, resolveColor(theme, `${['@accent1', '@accent2', '@accent3', '@accent4', '@accent5', '@accent6'][gi % 6]}:lm60:lo40`) ?? col, k.name, 'ser0')); b += ks; }
+    a += sw;
+  });
+  return out.join('');
+}
+function boxPlotSvg(c, series, box, theme, { fs, text, gridC, axisC }) {
+  const stats = series.map((s) => boxStats(s.vals ?? []));
+  const all = stats.filter(Boolean).flatMap((st) => [st.min, st.max]);
+  if (!all.length) return '';
+  const sc = niceScale(Math.min(...all), Math.max(...all), 5, c.axes?.y ?? {});
+  const labels = []; for (let v = sc.lo; v <= sc.hi + sc.step / 2; v += sc.step) labels.push([v, fmtNum(Math.round(v / sc.step) * sc.step, c.axes?.y?.fmt)]);
+  const x0 = box.left + Math.max(...labels.map(([, t]) => textWidth(t, fs))) + 8; const x1 = box.right - 6;
+  const y0 = box.top + 4; const y1 = box.bottom - fs * 1.6;
+  const Y = (v) => y1 - ((v - sc.lo) / (sc.hi - sc.lo)) * (y1 - y0);
+  const out = [];
+  for (const [v, t] of labels) { out.push(`<line x1="${f(x0)}" y1="${f(Y(v))}" x2="${f(x1)}" y2="${f(Y(v))}" stroke="${gridC}"/>`); out.push(text(x0 - 6, Y(v) + fs / 3, t, { anchor: 'end' })); }
+  const n = Math.max(1, series.length); const band = (x1 - x0) / n; const bw = band * 0.45;
+  series.forEach((s, i) => {
+    const st = stats[i];
+    const cx = x0 + band * (i + 0.5);
+    out.push(text(cx, y1 + fs * 1.25, s.name));
+    if (!st) return;
+    const col = seriesColor(theme, c, i);
+    out.push(`<line x1="${f(cx)}" y1="${f(Y(st.hi))}" x2="${f(cx)}" y2="${f(Y(st.q3))}" stroke="${axisC}" stroke-width="1.2"/><line x1="${f(cx)}" y1="${f(Y(st.q1))}" x2="${f(cx)}" y2="${f(Y(st.lo))}" stroke="${axisC}" stroke-width="1.2"/>`);
+    out.push(`<line x1="${f(cx - bw / 4)}" y1="${f(Y(st.hi))}" x2="${f(cx + bw / 4)}" y2="${f(Y(st.hi))}" stroke="${axisC}" stroke-width="1.2"/><line x1="${f(cx - bw / 4)}" y1="${f(Y(st.lo))}" x2="${f(cx + bw / 4)}" y2="${f(Y(st.lo))}" stroke="${axisC}" stroke-width="1.2"/>`);
+    out.push(`<rect x="${f(cx - bw / 2)}" y="${f(Y(st.q3))}" width="${f(bw)}" height="${f(Math.max(0.5, Y(st.q1) - Y(st.q3)))}" fill="${col}" stroke="${col}" data-el="ser${i}"/>`);
+    out.push(`<line x1="${f(cx - bw / 2)}" y1="${f(Y(st.med))}" x2="${f(cx + bw / 2)}" y2="${f(Y(st.med))}" stroke="#fff" stroke-width="1.5"/>`);
+    out.push(`<path d="M${f(cx - 4)} ${f(Y(st.mean) - 4)} L${f(cx + 4)} ${f(Y(st.mean) + 4)} M${f(cx + 4)} ${f(Y(st.mean) - 4)} L${f(cx - 4)} ${f(Y(st.mean) + 4)}" stroke="#fff" stroke-width="1.5"/>`);
+    for (const o of st.out) out.push(`<circle cx="${f(cx)}" cy="${f(Y(o))}" r="${f(fs * 0.22)}" fill="none" stroke="${col}"/>`);
+    if (c.labels) for (const [v, k] of [[st.med, 'm'], [st.q1, 'q'], [st.q3, 'q']]) { void k; out.push(text(cx + bw / 2 + 4, Y(v) + fs / 3, fmtNum(v, c.axes?.y?.fmt), { size: fs * 0.8, anchor: 'start' })); }
+  });
+  out.push(`<line x1="${f(x0)}" y1="${f(y1)}" x2="${f(x1)}" y2="${f(y1)}" stroke="${axisC}"/>`);
+  return out.join('');
+}
+/** pptx 에 쓸 때: 다른 프로그램이 읽을 수 있는 일반 차트 (원본은 WIPOINT 확장에 그대로) */
+export function fallbackChart(ch) {
+  if (ch.kind === 'waterfall' || ch.kind === 'funnel' || ch.kind === 'histogram') {
+    const e = expandChart(ch);
+    return { ...e, series: e.series.map((s) => (s.ghost ? { ...s, color: undefined, noFill: true } : s)) };
+  }
+  if (ch.kind === 'treemap' || ch.kind === 'sunburst') return { ...ch, kind: ch.kind === 'sunburst' ? 'doughnut' : 'bar', series: ch.series.slice(0, 1) };
+  if (ch.kind === 'box') {
+    const stats = ch.series.map((s) => boxStats(s.vals ?? []) ?? { lo: 0, q1: 0, med: 0, q3: 0, hi: 0 });
+    return { ...ch, kind: 'col', grouping: 'stacked', cats: ch.series.map((s) => s.name), series: [
+      { name: '최소', vals: stats.map((st) => st.lo), noFill: true }, { name: '1사분위', vals: stats.map((st) => st.q1 - st.lo), noFill: true },
+      { name: '중간값 아래', vals: stats.map((st) => st.med - st.q1) }, { name: '중간값 위', vals: stats.map((st) => st.q3 - st.med) }] };
+  }
+  return ch;
 }
