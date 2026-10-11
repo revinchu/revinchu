@@ -27,7 +27,9 @@ import { colorMenu } from './colorpick.js';
 import { startEyedrop } from './eyedrop.js';
 import { moveParagraph, startCrop, endCrop, startEdit, endEdit, textTargets, applyTextFormat, caretRunProp, caretPara, insertTextAtCaret, fitZoom, setZoom, renderCanvas, editorLayer } from './editor.js';
 import { screenList, startShow, playStepOn, playTransition, captionSettings, setCaptionSettings, captionsSupported } from './show.js';
-import { CAPTION_LANGS, CAPTION_POS } from './recording.js';
+import { CAPTION_LANGS, CAPTION_POS, CAPTION_TARGETS } from './recording.js';
+import { SOUNDS, SOUND_LABEL } from './sounds.js';
+import { playSound } from './sfx.js';
 import { shapeIconSvg, styleChip, wordArtCss } from './galleries.js';
 import { blobUrl } from './blobstore.js';
 import { effectsMenuItems } from './fxui.js';
@@ -759,6 +761,29 @@ function setAnim(cls, effect) {
   });
   previewAnims(objs.map((o) => o.id));
 }
+/** 효과 옵션 (PowerPoint 애니메이션 [효과] 탭): 소리 · 텍스트 애니메이션 · 단위 사이 지연 */
+function animEffectDialog() {
+  const cur = (slide().anims ?? []).find((x) => x.id === S.animSel || S.sel.has(x.obj));
+  if (!cur) { toast('애니메이션이 있는 개체를 선택하세요'); return; }
+  const snd = el('select', {}, el('option', { value: '' }, '[소리 없음]'), ...SOUNDS.map(([k, l]) => el('option', { value: k, selected: cur.sound === k }, l)));
+  const play = el('button', { type: 'button', class: 'btn small', title: '소리 듣기', onclick: () => playSound(snd.value) }, '▶');
+  const unit = el('select', {}, ...[['', '한 번에 모두'], ['para', '단락별'], ['word', '단어별'], ['letter', '문자별']].map(([k, l]) => el('option', { value: k, selected: (cur.byPara ? 'para' : cur.textUnit ?? '') === k }, l)));
+  const delay = el('input', { type: 'number', min: 0, max: 100, step: 5, value: cur.unitDelay ?? 10, style: { width: '64px' } });
+  openDialog({
+    title: '효과 옵션', width: 420,
+    body: el('div', { class: 'fx-opts' },
+      el('div', { class: 'menu-title' }, '향상된 기능'),
+      el('label', { class: 'row' }, el('span', {}, '소리:'), snd, play),
+      el('label', { class: 'row' }, el('span', {}, '텍스트 애니메이션:'), unit),
+      el('label', { class: 'row' }, delay, el('span', {}, '% 단어/문자 사이 지연'))),
+    buttons: [{ label: '확인', primary: true, action: () => {
+      const u = unit.value;
+      run('animTiming', { sound: snd.value || undefined, byPara: u === 'para' || undefined, textUnit: u === 'word' || u === 'letter' ? u : undefined, unitDelay: u === 'word' || u === 'letter' ? Math.max(0, Math.min(100, Number(delay.value) || 10)) : undefined });
+      previewAnims([cur.obj]);
+    } }, { label: '취소' }],
+  });
+}
+
 function previewAnims(onlyIds = null) {
   const s = slide();
   let steps = animSteps(s);
@@ -2171,6 +2196,13 @@ register({
   transitionAdvance: (o) => change(() => { const s = slide(); s.transition = { type: 'none', ...(s.transition ?? {}), ...('advClick' in o ? { advClick: o.advClick ? undefined : false } : {}), ...('advAfter' in o ? { advAfter: o.advAfter ?? undefined } : {}) }; if (s.transition.advAfter == null) delete s.transition.advAfter; if (s.transition.advClick == null) delete s.transition.advClick; }),
   applyTransitionAll: () => { const t = slide().transition; change(() => { for (const s of S.pres.slides) s.transition = t ? JSON.parse(JSON.stringify(t)) : null; }, { scope: 'all' }); toast('모든 슬라이드에 적용했습니다'); },
   previewTransition: () => previewTransition(),
+  // 전환 소리 (PowerPoint [전환 › 타이밍 › 소리])
+  transitionSoundMenu: (a) => {
+    const cur = slide().transition?.sound ?? null;
+    const set = (k) => { change(() => { for (const sl of pickedSlides()) { sl.transition = { type: 'none', ...(sl.transition ?? {}), sound: k ?? undefined }; if (!k) delete sl.transition.sound; } }); if (k) playSound(k); };
+    menuAt(a, [{ label: '[소리 없음]', checked: !cur, action: () => set(null) }, ...SOUNDS.map(([k, l]) => ({ label: l, checked: cur === k, action: () => set(k) }))], { scroll: true });
+  },
+  animEffectOptions: () => animEffectDialog(),
 
   // 애니메이션
   setAnim: (cls, effect) => setAnim(cls, effect),
@@ -2183,6 +2215,10 @@ register({
       { title: '시퀀스' },
       { label: '하나의 개체로', checked: !!cur && !cur.byPara, action: () => run('animTiming', { byPara: undefined }) },
       { label: '단락별', checked: !!cur?.byPara, action: () => run('animTiming', { byPara: true }) },
+      { title: '텍스트 애니메이션' },
+      ...[[null, '한 번에 모두'], ['word', '단어별'], ['letter', '문자별']].map(([u, l]) => ({ label: l, checked: !!cur && (cur.textUnit ?? null) === u, action: () => run('animTiming', { textUnit: u ?? undefined, ...(u ? { byPara: undefined } : {}) }) })),
+      { sep: true },
+      { label: '효과 옵션 대화 상자...', action: () => animEffectDialog() },
       ...(cur?.cls === 'path' ? [{ title: '경로' }, { label: '경로 반대로', action: () => run('animTiming', { motion: reversePath(cur.motion) }) }] : []),
     ]);
   },
@@ -2271,6 +2307,7 @@ register({
     const set = (v) => { setCaptionSettings(v); refresh('ribbon'); };
     menuAt(a, [
       { label: '음성 언어', submenu: CAPTION_LANGS.map(([k, l]) => ({ label: l, checked: cs.lang === k, action: () => set({ lang: k }) })) },
+      { label: '자막 언어 (번역)', submenu: CAPTION_TARGETS.map(([k, l]) => ({ label: l, checked: (cs.target ?? '') === k, action: () => set({ target: k }) })) },
       { label: '자막 위치', submenu: CAPTION_POS.map(([k, l]) => ({ label: l, checked: cs.pos === k, action: () => set({ pos: k }) })) },
       { label: '글자 크기', submenu: [[20, '작게'], [28, '보통'], [40, '크게'], [56, '아주 크게']].map(([v, l]) => ({ label: l, checked: cs.size === v, action: () => set({ size: v }) })) },
       { sep: true },

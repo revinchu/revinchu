@@ -12,6 +12,7 @@ import { decodeEmbeddedFont } from './fonts.js';
 import { fxOf, fxXml, fxFromXml } from './effects.js';
 import { fallbackChart } from './chart.js';
 import { ART_BY_XML } from './arteffects.js';
+import { SOUNDS, SOUND_BY_FILE, soundWav } from './sounds.js';
 
 const NS_A = 'http://schemas.openxmlformats.org/drawingml/2006/main';
 const NS_R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -401,7 +402,7 @@ const EXIT_PRESET = { ...ENTR_PRESET, disappear: 1 };
 const DIR_SUB = { b: 4, t: 1, l: 8, r: 2 };
 const PATH_PRESET = { pathRight: 64, pathLeft: 64, pathUp: 64, pathDown: 64, pathArc: 37, pathCircle: 1, pathWave: 61 };
 
-function timingXml(slide, spidOf) {
+function timingXml(slide, spidOf, sound = () => null) {
   const steps = animSteps(slide);
   const trigs = [...triggerSteps(slide)].filter(([t]) => spidOf(t));
   if (!steps.length && !trigs.length) return '';
@@ -532,7 +533,12 @@ function timingXml(slide, spidOf) {
         const node = k === 0 && g === groups[0] && step[0] === a ? (a.start === 'after' ? 'afterEffect' : a.start === 'with' ? 'withEffect' : 'clickEffect') : a.start === 'after' ? 'afterEffect' : 'withEffect';
         const sub = a.cls === 'emph' ? 0 : ['fly', 'wipe', 'peek', 'crawl'].includes(a.effect) ? DIR_SUB[a.dir ?? 'b'] ?? 4 : a.effect === 'zoom' || a.effect === 'box' || a.effect === 'shape' || a.effect === 'circleIn' || a.effect === 'diamond' || a.effect === 'plus' ? 16 : a.effect === 'split' ? 37 : a.effect === 'blinds' || a.effect === 'randomBars' ? (a.dir === 'l' || a.dir === 'r' ? 5 : 10) : a.effect === 'wheel' ? 1 : a.effect === 'strips' ? 12 : 0;
         const eid = nid();
-        return `<p:par><p:cTn id="${eid}" presetID="${table[a.effect] ?? (a.cls === 'path' ? 0 : 10)}" presetClass="${a.cls}" presetSubtype="${sub}" fill="hold" grpId="0" nodeType="${node}"><p:stCondLst><p:cond delay="${Math.round((a.delay ?? 0) * 1000)}"/></p:stCondLst><p:childTnLst>${behaviors(a, spid)}</p:childTnLst></p:cTn></p:par>`;
+        // 텍스트 애니메이션: 단어별 · 문자별 (p:iterate, 지연 = 효과 시간의 %)
+        const iter = a.textUnit && a.para == null ? `<p:iterate type="${a.textUnit === 'letter' ? 'lt' : 'wd'}"><p:tmPct val="${Math.round((a.unitDelay ?? 10) * 1000)}"/></p:iterate>` : '';
+        const kids = behaviors(a, spid);
+        const snd = a.sound ? sound(a.sound) : null;
+        const sndXml = snd ? `<p:subTnLst><p:audio><p:cMediaNode vol="80000" showWhenStopped="0"><p:cTn id="${nid()}" display="0" masterRel="sameClick"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:endCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:endCondLst></p:cTn><p:tgtEl><p:sndTgt r:embed="${snd.rid}" name="${snd.name}"/></p:tgtEl></p:cMediaNode></p:audio></p:subTnLst>` : '';
+        return `<p:par><p:cTn id="${eid}" presetID="${table[a.effect] ?? (a.cls === 'path' ? 0 : 10)}" presetClass="${a.cls}" presetSubtype="${sub}" fill="hold" grpId="0" nodeType="${node}"><p:stCondLst><p:cond delay="${Math.round((a.delay ?? 0) * 1000)}"/></p:stCondLst>${iter}<p:childTnLst>${kids}</p:childTnLst>${sndXml}</p:cTn></p:par>`;
       }).join('');
       return `<p:par><p:cTn id="${gid}" fill="hold"><p:stCondLst><p:cond delay="${g.at}"/></p:stCondLst><p:childTnLst>${effs}</p:childTnLst></p:cTn></p:par>`;
     }).join('');
@@ -578,21 +584,23 @@ const TRANS_P15 = { fall: 'fallOver', drape: 'drape', curtains: 'curtains', wind
 const NS_MC = 'http://schemas.openxmlformats.org/markup-compatibility/2006';
 const NS_P14 = 'http://schemas.microsoft.com/office/powerpoint/2010/main';
 const NS_P15 = 'http://schemas.microsoft.com/office/powerpoint/2012/main';
-function transitionXml(t) {
+function transitionXml(t, sound = () => null) {
   if (!t || t.type === 'none') return t?.advAfter != null ? `<p:transition advTm="${Math.round(t.advAfter * 1000)}"${t.advClick === false ? ' advClick="0"' : ''}/>` : '';
   const dur = t.dur ?? 1;
   const spd = dur <= 0.5 ? 'fast' : dur <= 0.75 ? 'med' : 'slow';
   const adv = `${t.advClick === false ? ' advClick="0"' : ''}${t.advAfter != null ? ` advTm="${Math.round(t.advAfter * 1000)}"` : ''}`;
   const ms = Math.round(dur * 1000);
+  const snd = t.sound ? sound(t.sound) : null;
+  const sndAc = snd ? `<p:sndAc><p:stSnd><p:snd r:embed="${snd.rid}" name="${snd.name}"/></p:stSnd></p:sndAc>` : '';
   // 새 버전 전환은 mc:AlternateContent — 이전 버전 PowerPoint · LibreOffice 는 페이드
-  const alt = (req, ns, inner, fallback = '<p:fade/>') => `<mc:AlternateContent xmlns:mc="${NS_MC}"><mc:Choice xmlns:${req}="${ns}" Requires="${req}"><p:transition spd="${spd}"${adv} xmlns:p14="${NS_P14}" p14:dur="${ms}">${inner}</p:transition></mc:Choice><mc:Fallback><p:transition spd="${spd}"${adv}>${fallback}</p:transition></mc:Fallback></mc:AlternateContent>`;
+  const alt = (req, ns, inner, fallback = '<p:fade/>') => `<mc:AlternateContent xmlns:mc="${NS_MC}"><mc:Choice xmlns:${req}="${ns}" Requires="${req}"><p:transition spd="${spd}"${adv} xmlns:p14="${NS_P14}" p14:dur="${ms}">${inner}${sndAc}</p:transition></mc:Choice><mc:Fallback><p:transition spd="${spd}"${adv}>${fallback}${sndAc}</p:transition></mc:Fallback></mc:AlternateContent>`;
   if (t.type === 'morph') return alt('p159', 'http://schemas.microsoft.com/office/powerpoint/2015/09/main', '<p159:morph option="byObject"/>');
   if (TRANS_P14[t.type]) return alt('p14', NS_P14, TRANS_P14[t.type](t.dir));
   if (TRANS_P15[t.type]) return alt('p15', NS_P15, `<p15:prstTrans prst="${TRANS_P15[t.type]}"${t.dir === 'l' ? ' invX="1"' : ''}/>`);
   const inner = (TRANS_XML[t.type] ?? TRANS_XML.fade)(t.dir);
   // 빠르게/보통/느리게 와 다른 시간은 p14:dur 로 (PowerPoint 2010+ 과 같음)
   if (![0.5, 0.75, 1].includes(dur)) return alt('p14', NS_P14, inner, inner);
-  return `<p:transition spd="${spd}"${adv}>${inner}</p:transition>`;
+  return `<p:transition spd="${spd}"${adv}>${inner}${sndAc}</p:transition>`;
 }
 
 // ───────────── 테마 · 마스터 · 레이아웃 ─────────────
@@ -778,6 +786,14 @@ export function pptxEntries(pres, opts = {}) {
         if (m && Number(m[1]) >= 1 && Number(m[1]) <= pres.slides.length) return `<a:hlinkClick r:id="${add(REL('slide'), `slide${m[1]}.xml`)}" action="ppaction://hlinksldjump"/>`;
         return `<a:hlinkClick r:id="${add(REL('hyperlink'), url, true)}"/>`;
       },
+      /** 애니메이션 · 전환 소리 (합성한 WAV, 파일당 하나) → { rid, name } */
+      sound: (key) => {
+        const def = SOUNDS.find((x) => x[0] === key);
+        if (!def) return null;
+        const path = `ppt/media/${def[2]}`;
+        if (!files[path]) { files[path] = soundWav(key); defaults.set('wav', 'audio/wav'); }
+        return { rid: add(REL('audio'), `../media/${def[2]}`), name: def[2] };
+      },
       /** 비디오/오디오 파트: a:videoFile r:link + p14:media r:embed 두 관계 */
       av: (id, kind) => { const p = putMedia(id); if (!p) return null; const t = `../media/${p.split('/').pop()}`; return { link: add(REL(kind), t), embed: add('http://schemas.microsoft.com/office/2007/relationships/media', t) }; },
       chart: (ch) => {
@@ -956,8 +972,8 @@ export function pptxEntries(pres, opts = {}) {
     }
     const meta = { props: Object.keys(props).length ? props : undefined, inkRec: slide.inkRec?.length ? slide.inkRec : undefined, comments: slide.comments?.length ? slide.comments : undefined, layout: slide.layout, transition: slide.transition ?? null, anims: slide.anims ?? [], hideDecor: slide.hideDecor ?? false, section: slide.section ?? null, zooms: Object.keys(zooms).length ? zooms : undefined, bgObjects: slide.bgObjects ? true : undefined, ids: Object.fromEntries([...spid].filter(([k]) => !String(k).startsWith('grp:')).map(([k, v]) => [v, k])) };
     const ext = `<p:extLst><p:ext uri="${WP_EXT_URI}"><wp:slide xmlns:wp="${WP_NS}" json="${esc(JSON.stringify(meta))}"/></p:ext></p:extLst>`;
-    const timing = timingXml(slide, (oid) => spid.get(oid));
-    files[`ppt/slides/slide${n}.xml`] = `${XML_HEAD}<p:sld xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}"${slide.hidden ? ' show="0"' : ''}><p:cSld>${bg}<p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>${parts.join('')}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>${transitionXml(slide.transition)}${timing}${ext}</p:sld>`;
+    const timing = timingXml(slide, (oid) => spid.get(oid), (k) => rels.sound(k));
+    files[`ppt/slides/slide${n}.xml`] = `${XML_HEAD}<p:sld xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}"${slide.hidden ? ' show="0"' : ''}><p:cSld>${bg}<p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>${parts.join('')}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>${transitionXml(slide.transition, (k) => rels.sound(k))}${timing}${ext}</p:sld>`;
     if (slide.notes) {
       const nrels = `${XML_HEAD}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL('notesMaster')}" Target="../notesMasters/notesMaster1.xml"/><Relationship Id="rId2" Type="${REL('slide')}" Target="../slides/slide${n}.xml"/></Relationships>`;
       files[`ppt/notesSlides/notesSlide${n}.xml`] = notesSlideXml(slide.notes);
@@ -2089,6 +2105,8 @@ export function readPptx(input, opts = {}) {
     if (name === 'strips' && dirAttr) out.dir = { ru: 'b', rd: 't', ld: 'l', lu: 'r' }[dirAttr] ?? 'b';
     if (name === 'split' && attr(el, 'orient') === 'horz') out.dir = 'l';
     if (el?.name === 'prstTrans' && attr(el, 'invX') === '1') out.dir = 'l';
+    const snd = descendants(t, 'snd')[0];
+    if (snd && SOUND_BY_FILE[attr(snd, 'name')]) out.sound = SOUND_BY_FILE[attr(snd, 'name')];
     if (attr(t, 'advClick') === '0') out.advClick = false;
     if (attr(t, 'advTm')) out.advAfter = num(attr(t, 'advTm')) / 1000;
     return out;
@@ -2125,6 +2143,10 @@ export function readPptx(input, opts = {}) {
         a.effect = Object.keys(MOTION_PATHS).find((k) => MOTION_PATHS[k] === a.motion) ?? 'pathRight';
         if (!durs.length) a.dur = 2;
       }
+      const it = child(eff, 'iterate');
+      if (it) { a.textUnit = attr(it, 'type') === 'lt' ? 'letter' : 'word'; const pct = child(it, 'tmPct'); if (pct) a.unitDelay = num(attr(pct, 'val'), 10000) / 1000; }
+      const st = descendants(child(eff, 'subTnLst'), 'sndTgt')[0];
+      if (st && SOUND_BY_FILE[attr(st, 'name')]) a.sound = SOUND_BY_FILE[attr(st, 'name')];
       if (trigger) a.trigger = trigger;
       // 단락별 효과 (txEl pRg): 같은 개체 · 같은 효과가 이어지면 하나로 묶고 byPara
       const isPara = !!descendants(spTgt, 'pRg')[0];

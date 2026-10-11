@@ -605,3 +605,17 @@ test('녹화 도움 함수: WAV · 표본 수 · 잉크 재생 · 자막 줄', a
   assert.equal(inkUntil(ink, 9).length, 2);
   assert.equal(captionText('가 '.repeat(100), 20).length <= 20, true);
 });
+
+test('애니메이션 소리: 19종 합성 · WAV', async () => {
+  const { SOUNDS, synthSound, soundWav } = await import('../src/sounds.js');
+  assert.ok(SOUNDS.length >= 19);
+  for (const [k] of SOUNDS) {
+    const d = synthSound(k, 8000);
+    assert.ok(d.length > 100, k);
+    let peak = 0;
+    for (const v of d) peak = Math.max(peak, Math.abs(v));
+    assert.ok(peak > 0.02 && peak <= 1, `${k} 소리 크기 ${peak}`);
+  }
+  const w = soundWav('chime', 8000);
+  assert.equal(new TextDecoder().decode(w.slice(8, 12)), 'WAVE');
+});

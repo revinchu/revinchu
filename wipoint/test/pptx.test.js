@@ -497,3 +497,27 @@ test('사용자 지정 레이아웃: 만들기 · 새 슬라이드 · pptx type=
   assert.ok(ns.objects.some((o) => o.phFor === 'chart'));
   assert.ok(ns.bgObjects?.length >= 1);
 });
+
+test('텍스트 애니메이션(단어/문자) · 애니메이션/전환 소리: pptx iterate · sndTgt · sndAc 왕복', () => {
+  const p = newPresentation();
+  const s = p.slides[0];
+  const t = s.objects[0];
+  t.text.paras[0].runs = [run('안녕하세요 여러분')];
+  s.anims = [];
+  addAnim(s, t.id, 'entr', 'fly', { textUnit: 'letter', unitDelay: 20, sound: 'applause' });
+  s.transition = { type: 'fade', dur: 1, sound: 'chime' };
+  const bytes = writePptx(p);
+  const files = unzip(bytes);
+  const xml = textOf(files['ppt/slides/slide1.xml']);
+  assert.match(xml, /<p:iterate type="lt"><p:tmPct val="20000"\/><\/p:iterate>/);
+  assert.match(xml, /<p:sndTgt r:embed="rId\d+" name="applause.wav"\/>/);
+  assert.match(xml, /<p:sndAc><p:stSnd><p:snd r:embed="rId\d+" name="chime.wav"\/>/);
+  assert.ok(files['ppt/media/applause.wav'] && files['ppt/media/chime.wav']);
+  assert.match(textOf(files['[Content_Types].xml']), /Extension="wav"/);
+  // 확장 정보 없이 읽기
+  const f2 = { ...files, 'ppt/slides/slide1.xml': new TextEncoder().encode(xml.replace(/<p:ext uri="\{6F1B2D57[^]*?<\/p:ext>/, '')) };
+  const back = readPptx(zip(f2)).pres.slides[0];
+  assert.equal(back.transition.sound, 'chime');
+  const a = back.anims[0];
+  assert.deepEqual([a.textUnit, a.unitDelay, a.sound, a.effect], ['letter', 20, 'applause', 'fly']);
+});

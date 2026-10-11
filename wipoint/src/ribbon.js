@@ -73,7 +73,7 @@ const DESIGN = { id: 'design', label: '디자인', groups: [
 const TRANS = { id: 'transitions', label: '전환', groups: [
   { label: '미리 보기', items: [L('previewTransition', 'preview', '미리 보기')] },
   { label: '슬라이드 화면 전환', items: [G('transitions', { wide: true }), L(null, 'transition', '효과 옵션', { menu: 'transitionOptionsMenu' })] },
-  { label: '타이밍', items: [{ t: 'transTiming' }, L('applyTransitionAll', 'check', '모두 적용')] },
+  { label: '타이밍', items: [COL(M(null, 'audio', '소리', { menu: 'transitionSoundMenu' })), { t: 'transTiming' }, L('applyTransitionAll', 'check', '모두 적용')] },
 ] };
 
 const ANIM = { id: 'animations', label: '애니메이션', groups: [
@@ -173,7 +173,7 @@ const KT = {
   home: { paste: 'V', cut: 'X', copy: 'C', formatPainter: 'FP', newSlide: 'I', layoutMenu: 'L', resetSlide: 'RE', sectionMenu: 'T', font: 'FF', size: 'FS', growFont: 'FG', shrinkFont: 'FK', clearFormat: 'E', bold: '1', italic: '2', underline: '3', strike: '4', textShadow: '5', charSpacingMenu: '6', changeCaseMenu: '7', highlight: 'TC', fontColor: 'FC', bullets: 'U', numbering: 'N', indentLess: 'AO', indentMore: 'AI', lineSpacingMenu: 'K', alignLeft: 'AL', alignCenter: 'AC', alignRight: 'AR', alignJustify: 'AJ', textDirMenu: 'AD', textAnchorMenu: 'AT', shapesMini: 'SH', arrangeMenu: 'G', quickStylesMenu: 'Q', shapeFill: 'SF', shapeOutline: 'SO', shapeEffectsMenu: 'SE', find: 'FD', replace: 'RP', selectMenu: 'SL', 'launcher:fontDialog': 'FN', 'launcher:paragraphDialog': 'PG', 'launcher:formatPaneShape': 'DS' },
   insert: { newSlide: 'I', tableMenu: 'T', insertPicture: 'P', stockImages: 'SI', screenshot: 'SC', shapesMenu: 'SH', insertIcons: 'Y1', insertSmartArt: 'M', chartMenu: 'C', hyperlink: 'IL', zoomMenu: 'ZM', drawTextbox: 'X', headerFooter: 'H', wordArtMenu: 'W', insertDate: 'D', insertSlideNumber: 'SN', symbol: 'U', insertEquation: 'E', insertVideo: 'V', insertAudio: 'O' },
   design: { themes: 'TH', themeColorsMenu: 'TC', themeFontsMenu: 'TF', bgStylesMenu: 'TB', slideSizeMenu: 'S', formatBg: 'G', designIdeas: 'D' },
-  transitions: { previewTransition: 'P', transitions: 'T', transitionOptionsMenu: 'E', transTiming: 'D', applyTransitionAll: 'L' },
+  transitions: { previewTransition: 'P', transitions: 'T', transitionOptionsMenu: 'E', transitionSoundMenu: 'U', transTiming: 'D', applyTransitionAll: 'L' },
   animations: { previewAnim: 'P', animations: 'S', animOptionsMenu: 'M', addAnimMenu: 'AA', animPane: 'C', removeAnim: 'X', animPainter: 'K', triggerMenu: 'G', animTiming: 'T' },
   slideshow: { showFromStart: 'B', showFromCurrent: 'C', customShowMenu: 'W', setupShow: 'S', hideSlide: 'H', rehearse: 'T', recordShow: 'N', recordMenu: 'N', toggleNarration: 'P', toggleUseTimings: 'U', presenterView: 'V', toggleCaptions: 'J', captionMenu: 'Q' },
   review: { spellCheck: 'S', accessibility: 'A', wordCount: 'W', newComment: 'C', deleteComments: 'D', prevComment: 'V', nextComment: 'N', commentsPane: 'P', collabStart: 'H' },

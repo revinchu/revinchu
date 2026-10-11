@@ -772,3 +772,7 @@ body.mobile .smart-cats { flex-direction: row; flex-wrap: wrap; border: 0; }
 .show.cap-above .show-view { margin-top: 16vh; }
 .show-caption.cap-below { bottom: 2vh; left: 3%; right: 3%; height: 12vh; background: transparent; display: flex; align-items: center; justify-content: center; }
 .show-caption.cap-above { top: 2vh; left: 3%; right: 3%; height: 12vh; background: transparent; display: flex; align-items: center; justify-content: center; }
+/* 텍스트 애니메이션 단위 (단어별 · 문자별) */
+.tu { display: inline-block; white-space: pre; }
+.fx-opts .row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+.fx-opts .row > span:first-child { min-width: 110px; }

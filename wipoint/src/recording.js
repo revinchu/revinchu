@@ -64,3 +64,5 @@ export function captionText(text, max = 90) {
 export const CAPTION_LANGS = [['ko-KR', '한국어'], ['en-US', '영어 (미국)'], ['en-GB', '영어 (영국)'], ['ja-JP', '일본어'], ['zh-CN', '중국어 (간체)'], ['zh-TW', '중국어 (번체)'], ['es-ES', '스페인어'], ['fr-FR', '프랑스어'], ['de-DE', '독일어'], ['vi-VN', '베트남어']];
 /** 자막 위치 (PowerPoint [자막 설정 › 위치]) */
 export const CAPTION_POS = [['bottom', '아래쪽 (겹침)'], ['top', '위쪽 (겹침)'], ['below', '슬라이드 아래'], ['above', '슬라이드 위']];
+/** 자막 번역 대상 (Chrome 내장 Translator API, 이 기기에서 번역) — '' = 번역 안 함 */
+export const CAPTION_TARGETS = [['', '번역 안 함 (말한 언어 그대로)'], ['ko', '한국어'], ['en', '영어'], ['ja', '일본어'], ['zh', '중국어'], ['es', '스페인어'], ['fr', '프랑스어'], ['de', '독일어'], ['vi', '베트남어'], ['th', '태국어'], ['ru', '러시아어']];

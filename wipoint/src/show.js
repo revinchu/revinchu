@@ -6,6 +6,7 @@ import { animSteps, triggerSteps, stepTimeline, slideTitle, motionPoints, morphP
 import { el, openMenu, toast, openDialog as import_openDialog } from './ui.js';
 import { mixDown, resample, encodeWav, inkUntil, captionText } from './recording.js';
 import { blobUrl } from './blobstore.js';
+import { playSound } from './sfx.js';
 import { blindsPoly, combPoly, checkerPoly, randomBarsFrames, randomCellsFrames, sweepFrames, diamondPoly, plusPoly, stripsPoly, frames } from './transfx.js';
 
 let show = null; // 현재 쇼 상태
@@ -198,6 +199,7 @@ function enterSlide(pos, { transition = true, stepsDone = 0, back = false } = {}
   show.stage.append(neu);
   fit();
   const tr = slide.transition;
+  if (transition && tr?.sound && !back) playSound(tr.sound);
   if (old && transition && tr && tr.type !== 'none' && tr.type !== 'cut' && !back) {
     runTransition(old, neu, tr).then(() => { old.remove(); afterEnter(); });
   } else {
@@ -581,8 +583,51 @@ export function reverseKf(kf) {
   return out;
 }
 
+/** 글을 단어 · 문자 단위 span 으로 나눔 (PowerPoint [텍스트 애니메이션: 단어별 / 문자별]) */
+export function splitTextUnits(elm, unit) {
+  const units = [];
+  const walk = (node) => {
+    for (const c of [...node.childNodes]) {
+      if (c.nodeType === 3) {
+        const parts = unit === 'letter' ? [...c.textContent] : c.textContent.split(/(\s+)/);
+        const frag = document.createDocumentFragment();
+        for (const t of parts) {
+          if (!t) continue;
+          if (/^\s+$/.test(t)) { frag.append(t); continue; }
+          const sp = document.createElement('span');
+          sp.className = 'tu';
+          sp.textContent = t;
+          frag.append(sp);
+          units.push(sp);
+        }
+        c.replaceWith(frag);
+      } else if (c.nodeType === 1 && !c.classList.contains('tu')) walk(c);
+    }
+  };
+  for (const p of elm.matches('.p') ? [elm] : elm.querySelectorAll('.p')) walk(p);
+  return units;
+}
+function animateUnits(elm, units, a, o) {
+  const kf0 = keyframes(a, o);
+  const kf = kf0 ?? [{ opacity: 0 }, { opacity: 0, offset: 0.999 }, { opacity: 1 }];
+  const dur = Math.max(1, (a.dur ?? 0.5) * 1000);
+  const gap = dur * (a.unitDelay ?? 10) / 100;
+  const easing = a.cls === 'exit' ? 'ease-in' : a.cls === 'emph' ? 'ease-in-out' : 'ease-out';
+  const frames = a.cls === 'exit' ? reverseKf(kf) : kf;
+  const fill = a.cls === 'entr' ? 'backwards' : a.cls === 'exit' || EMPH_HOLD.has(a.effect) ? 'both' : 'none';
+  elm.style.visibility = 'visible';
+  const anims = units.map((u, i) => u.animate(frames, { duration: dur, delay: i * gap, easing, fill }));
+  const all = Promise.all(anims.map((x) => x.finished.catch(() => {})));
+  if (a.cls === 'exit') return all.then(() => { elm.style.visibility = 'hidden'; for (const x of anims) x.cancel(); });
+  return all;
+}
+
 /** 개체 하나 재생 (편집 화면 미리 보기에서도 씀) */
 export function animateObject(elm, a, o) {
+  if (a.textUnit && a.cls !== 'path' && a.para == null) {
+    const units = splitTextUnits(elm, a.textUnit);
+    if (units.length > 1) return animateUnits(elm, units, a, o);
+  }
   if (a.cls === 'path') {
     // 이동 경로: 지금 위치(앞 경로 끝)에서 경로만큼 이동하고 그 자리에 머묾
     const { w, h } = S.pres.size;
@@ -618,7 +663,7 @@ export function playStepOn(container, step, slide) {
     const ob = container.querySelector(`.ob[data-id="${CSS.escape(anim.obj)}"]`);
     const elm = anim.para != null ? ob?.querySelectorAll('.p')[anim.para] : ob;
     if (!o || !elm) continue;
-    done.push(new Promise((res) => setTimeout(() => animateObject(elm, anim, o).then(res), at * 1000)));
+    done.push(new Promise((res) => setTimeout(() => { if (anim.sound) playSound(anim.sound); animateObject(elm, anim, o).then(res); }, at * 1000)));
   }
   return Promise.all(done);
 }
@@ -1161,7 +1206,7 @@ function replayInk() {
 // ───────────── 실시간 자막 (Web Speech API) ─────────────
 /** 자막 설정 (이 브라우저에 저장): { on, lang, pos, size } */
 export function captionSettings() {
-  try { return { on: false, lang: 'ko-KR', pos: 'bottom', size: 28, ...JSON.parse(localStorage.getItem('wipoint:captions') ?? '{}') }; } catch { return { on: false, lang: 'ko-KR', pos: 'bottom', size: 28 }; }
+  try { return { on: false, lang: 'ko-KR', target: '', pos: 'bottom', size: 28, ...JSON.parse(localStorage.getItem('wipoint:captions') ?? '{}') }; } catch { return { on: false, lang: 'ko-KR', target: '', pos: 'bottom', size: 28 }; }
 }
 export function setCaptionSettings(v) {
   try { localStorage.setItem('wipoint:captions', JSON.stringify({ ...captionSettings(), ...v })); } catch { /* 저장 안 됨 */ }
@@ -1189,14 +1234,24 @@ function startCaptions() {
   rec.lang = cs.lang;
   rec.continuous = true;
   rec.interimResults = true;
+  // 번역 자막: 이 기기의 번역 모델 (Chrome Translator API) — 없으면 말한 언어 그대로
+  const src = cs.lang.slice(0, 2);
+  if (cs.target && cs.target !== src) {
+    if (!('Translator' in window)) toast('이 브라우저는 자막 번역을 지원하지 않습니다 (Chrome 138 이상) — 말한 언어로 표시합니다');
+    else window.Translator.create({ sourceLanguage: src, targetLanguage: cs.target }).then((t) => { c.tr = t; }, () => toast('번역 모델을 준비하지 못해 말한 언어로 표시합니다'));
+  }
+  let seq = 0;
   rec.onresult = (e) => {
     let interim = '';
     for (let i = e.resultIndex; i < e.results.length; i++) {
       if (e.results[i].isFinal) c.final += `${e.results[i][0].transcript} `; else interim += e.results[i][0].transcript;
     }
     c.final = c.final.slice(-400);
-    c.text = captionText(`${c.final}${interim}`);
-    showCaption();
+    const said = captionText(`${c.final}${interim}`);
+    if (!c.tr) { c.text = said; showCaption(); return; }
+    // 마지막 요청 결과만 보여 줌 (순서가 바뀌어 도착해도)
+    const my = ++seq;
+    c.tr.translate(said).then((t) => { if (my === seq && show?.cap === c) { c.text = captionText(t); showCaption(); } }, () => { c.text = said; showCaption(); });
   };
   // 잠깐 말이 끊기면 브라우저가 멈추므로 다시 시작
   rec.onend = () => { if (show?.cap === c && c.on) { try { rec.start(); } catch { /* 이미 시작 */ } } };
