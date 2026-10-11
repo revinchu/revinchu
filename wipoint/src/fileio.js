@@ -12,6 +12,7 @@ import { slideHtml, SLIDE_CSS } from './render.js';
 import { toast, alertDialog, progressOverlay } from './ui.js';
 
 const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+const POTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.template';
 
 // ───────────── 열기 ─────────────
 export function pickFile(accept) {
@@ -59,7 +60,7 @@ export async function loadFile(file) {
   if (bytes[0] === 0xd0 && bytes[1] === 0xcf) throw new Error('예전 PowerPoint 97-2003 형식(.ppt)은 열 수 없습니다. PowerPoint 에서 .pptx 로 저장한 뒤 열어 주세요.');
   if (bytes[0] === 0x50 && bytes[1] === 0x4b) {
     const { pres, warnings } = readPptx(bytes);
-    return { pres, name, warnings };
+    return { pres, name: /\.potx$/i.test(file.name) ? '프레젠테이션1' : name, warnings, template: /\.potx$/i.test(file.name) };
   }
   const text = new TextDecoder().decode(bytes);
   if (!/^\s*\{/.test(text)) throw new Error(`'${file.name}' 은(는) PowerPoint 파일(.pptx)이 아닙니다. 파일이 손상되었거나 다른 형식일 수 있습니다.`);
@@ -197,17 +198,17 @@ function svgToPng(url, w = 512) {
   });
 }
 
-export async function pptxBlob() {
+export async function pptxBlob({ template = false } = {}) {
   pruneMedia(S.pres);
   const png = {};
   for (const [id, url] of Object.entries(S.pres.media)) if (url?.startsWith('data:image/svg')) { const p = await svgToPng(url); if (p) png[id] = p; }
-  const entries = pptxEntries(S.pres, { png, blob: blobOf });
+  const entries = pptxEntries(S.pres, { png, blob: blobOf, template });
   // 큰 미디어가 있으면 진행 막대 (Blob 은 복사 없이 그대로 담김)
   const big = Object.values(entries).some((v) => v instanceof Blob);
   const bar = big ? progressOverlay('저장하는 중') : null;
   try {
     const out = await zipAsync(entries, bar ? (f) => bar.set(f, '파일 묶는 중…') : undefined);
-    return new Blob([out], { type: PPTX_MIME });
+    return new Blob([out], { type: template ? POTX_MIME : PPTX_MIME });
   } finally { bar?.close(); }
 }
 /** WIPOINT 문서(.json): blob 미디어는 data URL 로 */
@@ -228,7 +229,7 @@ function download(blob, name) {
 /** 저장 위치 고르기 (가능한 브라우저) → 핸들, 아니면 내려받기 */
 async function pickSave(name, kind) {
   if (!window.showSaveFilePicker) return null;
-  const types = { pptx: [{ description: 'PowerPoint 프레젠테이션', accept: { [PPTX_MIME]: ['.pptx'] } }], json: [{ description: 'WIPOINT 문서', accept: { 'application/json': ['.json'] } }], pdf: [{ description: 'PDF', accept: { 'application/pdf': ['.pdf'] } }], png: [{ description: 'PNG 그림', accept: { 'image/png': ['.png'] } }], jpg: [{ description: 'JPEG 그림', accept: { 'image/jpeg': ['.jpg'] } }], svg: [{ description: 'SVG 그림', accept: { 'image/svg+xml': ['.svg'] } }] }[kind];
+  const types = { pptx: [{ description: 'PowerPoint 프레젠테이션', accept: { [PPTX_MIME]: ['.pptx'] } }], potx: [{ description: 'PowerPoint 서식 파일', accept: { [POTX_MIME]: ['.potx'] } }], json: [{ description: 'WIPOINT 문서', accept: { 'application/json': ['.json'] } }], pdf: [{ description: 'PDF', accept: { 'application/pdf': ['.pdf'] } }], png: [{ description: 'PNG 그림', accept: { 'image/png': ['.png'] } }], jpg: [{ description: 'JPEG 그림', accept: { 'image/jpeg': ['.jpg'] } }], svg: [{ description: 'SVG 그림', accept: { 'image/svg+xml': ['.svg'] } }] }[kind];
   try { return await window.showSaveFilePicker({ id: 'wipoint-save', suggestedName: name, types }); } catch (e) { if (e.name === 'AbortError') return false; return null; }
 }
 async function writeHandle(h, blob) {
@@ -254,14 +255,14 @@ export async function saveAs(kind = 'pptx') {
   // 사용자 동작(클릭) 직후에 위치를 먼저 고름
   const h = await pickSave(name, kind);
   if (h === false) return;
-  const blob = kind === 'json' ? await jsonBlob() : await pptxBlob();
+  const blob = kind === 'json' ? await jsonBlob() : await pptxBlob({ template: kind === 'potx' });
   if (h) {
     await writeHandle(h, blob);
     if (kind === 'pptx') { S.fileHandle = h; S.docName = h.name.replace(/\.pptx$/i, ''); }
   } else download(blob, name);
   S.dirty = false;
   emit('saved');
-  toast(kind === 'json' ? 'WIPOINT 문서(.json)로 저장했습니다' : 'PowerPoint 파일(.pptx)로 저장했습니다');
+  toast(kind === 'json' ? 'WIPOINT 문서(.json)로 저장했습니다' : kind === 'potx' ? 'PowerPoint 서식 파일(.potx)로 저장했습니다' : 'PowerPoint 파일(.pptx)로 저장했습니다');
 }
 
 // ───────────── 자동 저장 (IndexedDB) ─────────────
@@ -353,7 +354,7 @@ async function loadStoredMedia(v) {
 /** 자동 저장 · 최근 문서 어디에도 안 쓰는 'bl:' 지우기 */
 async function gcBlobs(recent, current) {
   try {
-    const keep = new Set([...Object.values(current), ...recent.flatMap((x) => x.blobs ?? [])]);
+    const keep = new Set([...Object.values(current), ...recent.flatMap((x) => x.blobs ?? []), ...((await idbGet('tpl:list')) ?? []).flatMap((x) => x.blobs ?? [])]);
     const auto = await idbGet('autosave');
     for (const k of Object.values(auto?.blobs ?? {})) keep.add(k);
     const db = await idb();
@@ -366,6 +367,26 @@ async function idbDel(key) {
   const db = await idb();
   await new Promise((res, rej) => { const tx = db.transaction('kv', 'readwrite'); tx.objectStore('kv').delete(key); tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
   db.close();
+}
+// ───────────── 개인 서식 파일 (이 브라우저에 보관, 새로 만들기 › 개인) ─────────────
+export async function myTemplates() { return (await idbGet('tpl:list')) ?? []; }
+export async function saveMyTemplate(name) {
+  const id = `t${Date.now().toString(36)}`;
+  const { media, blobs } = await storeMedia(S.pres.media);
+  await idbSet(`tpl:${id}`, { name, json: snapshot(S.pres), media, blobs, fonts: S.pres.fonts ?? null });
+  const list = [{ id, name, at: Date.now(), slides: S.pres.slides.length, blobs: Object.values(blobs) }, ...(await myTemplates())];
+  await idbSet('tpl:list', list);
+  return id;
+}
+/** 서식 파일 → 새 문서 (원본은 그대로) */
+export async function loadMyTemplate(id) {
+  const v = await idbGet(`tpl:${id}`);
+  if (!v) return null;
+  return validatePresentation({ ...JSON.parse(v.json), media: await loadStoredMedia(v), ...(v.fonts ? { fonts: v.fonts } : {}) });
+}
+export async function deleteMyTemplate(id) {
+  await idbSet(`tpl:${id}`, null);
+  await idbSet('tpl:list', (await myTemplates()).filter((t) => t.id !== id));
 }
 export async function recentDocs() { return (await idbGet('recent')) ?? []; }
 export async function openRecent(id) {

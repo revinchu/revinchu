@@ -4,7 +4,7 @@ import { slideHtml } from './render.js';
 import { TEMPLATES, buildTemplate } from './templates.js';
 import { THEMES } from './themes.js';
 import { newPresentation } from './model.js';
-import { setDocument, recentDocs, openRecent } from './fileio.js';
+import { setDocument, recentDocs, openRecent, myTemplates, saveMyTemplate, loadMyTemplate, deleteMyTemplate } from './fileio.js';
 import { el, hydrateIcons } from './ui.js';
 import { blobOf } from './blobstore.js';
 
@@ -49,6 +49,20 @@ function themeCards() {
   return el('div', { class: 'tpl-cards' }, THEMES.map((t) => el('button', { class: 'tpl-card', onclick: () => { setDocument(newPresentation({ theme: t.name }), '프레젠테이션1'); closeBackstage(); } },
     el('div', { class: 'tpl-thumb', html: deckThumb(`theme:${t.name}`, () => { const p = newPresentation({ theme: t.name }); p.slides[0].objects[0].text.paras[0].runs = [{ t: t.label }]; return p; }) }), el('b', {}, t.label))));
 }
+async function myTemplateCards(box) {
+  const list = await myTemplates().catch(() => []);
+  box.replaceChildren();
+  if (!list.length) { box.append(el('p', { class: 'muted' }, '아직 없습니다. [다른 이름으로 저장 › 개인 서식 파일로 저장]으로 지금 문서를 서식 파일로 보관할 수 있습니다.')); return; }
+  const cards = el('div', { class: 'tpl-cards' });
+  for (const t of list) {
+    const card = el('button', { class: 'tpl-card', title: `${t.name} — 슬라이드 ${t.slides}장`, onclick: async () => { const p = await loadMyTemplate(t.id); if (!p) return; setDocument(p, '프레젠테이션1'); closeBackstage(); } },
+      el('div', { class: 'tpl-thumb' }), el('b', {}, t.name), el('small', {}, new Date(t.at).toLocaleDateString('ko-KR')));
+    card.addEventListener('contextmenu', async (e) => { e.preventDefault(); if (confirm(`개인 서식 파일 '${t.name}'을(를) 삭제할까요?`)) { await deleteMyTemplate(t.id); myTemplateCards(box); } });
+    cards.append(card);
+    loadMyTemplate(t.id).then((p) => { if (p) card.firstChild.innerHTML = deckThumb(`my:${t.id}`, () => p); }).catch(() => {});
+  }
+  box.append(cards, el('p', { class: 'muted' }, '오른쪽 클릭: 삭제'));
+}
 async function recentList(box) {
   const list = await recentDocs().catch(() => []);
   box.replaceChildren();
@@ -64,7 +78,7 @@ const PAGES = {
     m.append(h2('좋은 하루입니다'), el('h3', {}, '새로 만들기'), newCards(), el('h3', {}, '최근 항목'), rec);
     recentList(rec);
   },
-  new: (m) => m.append(h2('새로 만들기'), el('h3', {}, '서식 파일'), newCards(), el('h3', {}, '테마'), themeCards()),
+  new: (m) => { const mine = el('div', {}); m.append(h2('새로 만들기'), el('h3', {}, '서식 파일'), newCards(), el('h3', {}, '개인 서식 파일'), mine, el('h3', {}, '테마'), themeCards()); myTemplateCards(mine); },
   open: (m) => {
     const rec = el('div', {});
     m.append(h2('열기'), el('div', { class: 'bs-actions' },
@@ -94,6 +108,8 @@ const PAGES = {
   saveAs: (m) => m.append(h2('다른 이름으로 저장'), el('div', { class: 'bs-actions' },
     big('save', 'PowerPoint 프레젠테이션 (.pptx)', 'PowerPoint · Keynote · Google 프레젠테이션에서 열 수 있습니다', () => run('saveAs', 'pptx')),
     big('newDoc', 'WIPOINT 문서 (.json)', '모든 정보를 그대로 보관 (WIPOINT 전용)', () => run('saveAs', 'json')),
+    big('layout', 'PowerPoint 서식 파일 (.potx)', '이 디자인으로 새 프레젠테이션을 만들 때 사용', () => run('saveAs', 'potx')),
+    big('theme', '개인 서식 파일로 저장', '[새로 만들기 › 개인 서식 파일]에 보관 (이 브라우저)', () => run('saveMyTemplate')),
     big('print', 'PDF', '인쇄 대화상자에서 [PDF로 저장]을 고르세요', () => run('printNow', { mode: 'slides' })),
     big('picture', 'PNG 그림 (현재 슬라이드)', '1920픽셀 너비', () => run('exportPng', false)))),
   print: (m) => {

@@ -8,7 +8,8 @@ import {
 import { setOffsets } from './textedit.js';
 import { THEMES, cloneTheme, themeByName, resolveColor } from './themes.js';
 import { SHAPE_GALLERY, SHAPE_LABEL, objLabel } from './shapes.js';
-import { CHART_KINDS, chartToTsv, tsvToChart } from './chart.js';
+import { CHART_KINDS } from './chart.js';
+import { sampleChart, chartTypeDialog, chartDataDialog, chartElementsItems, chartLayoutGallery, chartStyleGallery, chartPaletteItems, resetChartStyle, switchChartRowCol, exportChartCsv, chartFontDialog, openChartPane, selChart } from './chartui.js';
 import { slideHtml, NUM_SCHEMES, BULLET_CHARS, DASH_LABEL } from './render.js';
 import { SHAPE_STYLES, WORDART, PICTURE_STYLES, TABLE_STYLES, tableStyleProps, DESIGN_IDEAS } from './presets.js';
 import { smartArt, SMART_KINDS } from './smartart.js';
@@ -25,6 +26,7 @@ import { moveParagraph, startCrop, endCrop, startEdit, endEdit, textTargets, app
 import { startShow, playStepOn } from './show.js';
 import { shapeIconSvg, styleChip, wordArtCss } from './galleries.js';
 import { blobUrl } from './blobstore.js';
+import { saveMyTemplate } from './fileio.js';
 import { save, saveAs, openWithPicker, setDocument, printSlides, exportPng, exportVideo, shareLink, pickFile, exportImages, saveObjectsAsPicture, slideSvgText, svgToRaster } from './fileio.js';
 import { slideSvg } from './svgexport.js';
 import { svgToObjects } from './svgimport.js';
@@ -436,46 +438,18 @@ function insertTable(rows, cols) {
   emit('selection');
 }
 
-function insertChart(kind) {
+const CHART_ICON = { col: 'chartColumn', bar: 'chartBar', line: 'chartLine', area: 'chartArea', pie: 'chartPie', doughnut: 'chartDoughnut', scatter: 'chartScatter', radar: 'chartLine', bubble: 'chartScatter', combo: 'chartColumn' };
+const withChart = (fn) => { const o = selChart(); if (!o) { toast('차트를 선택하세요'); return; } fn(o); };
+function insertChart(kind, sub, preset) {
   const { w: W, h: H } = S.pres.size;
   const ph = slide().objects.find((o) => o.ph === 'body' && isEmptyText(o.text));
   const rect = ph ? { x: ph.x, y: ph.y, w: ph.w, h: ph.h } : { x: W * 0.15, y: H * 0.2, w: W * 0.7, h: H * 0.65 };
-  const c = newChart(rect);
-  c.chart.kind = kind;
-  if (kind === 'pie' || kind === 'doughnut') { c.chart.series = [c.chart.series[0]]; c.chart.labels = true; c.chart.legend = 'r'; }
+  const c = newChart(rect, preset ?? sampleChart(kind, sub));
   change(() => { if (ph) slide().objects = slide().objects.filter((o) => o !== ph); slide().objects.push(c); });
   S.sel = new Set([c.id]);
   emit('selection');
-  chartDataDialog(c);
-}
-
-function chartDataDialog(o) {
-  const c = o ?? selOne();
-  if (c?.type !== 'chart') { toast('차트를 선택하세요'); return; }
-  const ch = c.chart;
-  const kind = el('select', {}, CHART_KINDS.map(([k, l]) => el('option', { value: k, selected: k === ch.kind }, l)));
-  const title = el('input', { type: 'text', value: ch.title ?? '' });
-  const legend = el('select', {}, [['b', '아래쪽'], ['r', '오른쪽'], ['', '없음']].map(([k, l]) => el('option', { value: k, selected: (ch.legend ?? '') === k }, l)));
-  const labels = el('input', { type: 'checkbox', checked: !!ch.labels });
-  const stacked = el('input', { type: 'checkbox', checked: !!ch.stacked });
-  const data = el('textarea', { class: 'chart-data', spellcheck: 'false' }, chartToTsv(ch));
-  data.addEventListener('keydown', (e) => { if (e.key === 'Tab') { e.preventDefault(); const s = data.selectionStart; data.setRangeText('\t', s, data.selectionEnd, 'end'); } });
-  openDialog({
-    title: '차트 데이터 편집', width: 560,
-    body: el('div', { class: 'form-grid' },
-      el('label', {}, el('span', {}, '차트 종류'), kind), el('label', {}, el('span', {}, '차트 제목'), title),
-      el('label', {}, el('span', {}, '범례'), legend),
-      el('div', { class: 'row-checks' }, el('label', {}, labels, el('span', {}, '데이터 레이블')), el('label', {}, stacked, el('span', {}, '누적'))),
-      el('div', { class: 'muted' }, '첫 행은 계열 이름, 첫 열은 항목입니다. 엑셀(WIXEL)에서 복사해 붙여 넣을 수 있습니다 (탭으로 구분).'),
-      data),
-    buttons: [{ label: '확인', primary: true, action: () => {
-      try {
-        const next = tsvToChart({ ...ch, kind: kind.value, title: title.value, legend: legend.value || null, labels: labels.checked, stacked: stacked.checked }, data.value);
-        change(() => { c.chart = next; });
-      } catch (e) { alertDialog('차트', e.message); return false; }
-      return true;
-    } }, { label: '취소' }],
-  });
+  if (!preset) chartDataDialog(c);
+  return c;
 }
 
 // ───────────── 테마 ─────────────
@@ -1661,31 +1635,25 @@ register({
   smartLayoutMenu: (a) => { const c = currentSmart(); if (!c) { toast('SmartArt 그래픽을 선택하세요'); return; } menuAt(a, SMART_KINDS.map(([k, l]) => ({ label: l, checked: k === c.kind, action: () => rebuildSmart(c, { kind: k }) }))); },
   smartColors: () => { const c = currentSmart(); if (!c) return; rebuildSmart(c, { multi: !c.multi }); },
   smartToShapes: () => { const c = currentSmart(); if (!c) return; change(() => { for (const m of c.members) { delete m.smart; delete m.smartItems; delete m.smartMulti; } }); toast('도형으로 변환했습니다 (그룹은 유지)'); },
-  chartMenu: (a) => menuAt(a, CHART_KINDS.map(([k, l]) => ({ label: l, icon: { col: 'chartColumn', bar: 'chartBar', line: 'chartLine', area: 'chartArea', pie: 'chartPie', doughnut: 'chartDoughnut', scatter: 'chartScatter' }[k], action: () => insertChart(k) }))),
+  chartMenu: (a) => menuAt(a, [
+    { label: '차트 삽입...', icon: 'chartColumn', action: () => run('insertChartDialog') },
+    { sep: true },
+    ...CHART_KINDS.map(([k, l]) => ({ label: l, icon: CHART_ICON[k], action: () => insertChart(k) })),
+  ]),
+  insertChartDialog: () => chartTypeDialog(null, (c) => { const o = insertChart(c.kind, null, c); chartDataDialog(o); }),
   chartData: () => chartDataDialog(),
-  chartKindMenu: (a) => menuAt(a, CHART_KINDS.map(([k, l]) => ({ label: l, action: () => { const c = selOne(); if (c?.type === 'chart') change(() => { c.chart.kind = k; }); } }))),
-  chartElementsMenu: (a) => {
-    const c = selOne();
-    if (c?.type !== 'chart') { toast('차트를 선택하세요'); return; }
-    const ch = c.chart;
-    menuAt(a, [
-      { label: '차트 제목', checked: !!ch.title, action: () => change(() => { ch.title = ch.title ? '' : '차트 제목'; }) },
-      { label: '데이터 레이블', checked: !!ch.labels, action: () => change(() => { ch.labels = !ch.labels; }) },
-      { label: '범례: 아래쪽', checked: ch.legend === 'b', action: () => change(() => { ch.legend = 'b'; }) },
-      { label: '범례: 오른쪽', checked: ch.legend === 'r', action: () => change(() => { ch.legend = 'r'; }) },
-      { label: '범례 없음', checked: !ch.legend, action: () => change(() => { ch.legend = null; }) },
-      { label: '누적', checked: !!ch.stacked, action: () => change(() => { ch.stacked = !ch.stacked; }) },
-      { label: '표식 (꺾은선)', checked: !!ch.markers, action: () => change(() => { ch.markers = !ch.markers; }) },
-    ]);
-  },
-  chartColorsMenu: (a) => {
-    const c = selOne();
-    if (c?.type !== 'chart') { toast('차트를 선택하세요'); return; }
-    menuAt(a, [
-      { label: '다양한 색 (테마)', action: () => change(() => { for (const s of c.chart.series) delete s.color; }) },
-      ...['accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'accent6'].map((acc, i) => ({ label: `단색 ${i + 1}`, swatch: resolveColor(S.pres.theme, `@${acc}`), action: () => change(() => { c.chart.series.forEach((s, k) => { s.color = resolveColor(S.pres.theme, `@${acc}:lm${[100, 75, 50, 40, 60, 80][k % 6]}`); }); }) })),
-    ]);
-  },
+  saveMyTemplate: () => formDialog('개인 서식 파일로 저장', [{ name: 'name', label: '이름', value: S.docName }], async (v) => { await saveMyTemplate(v.name.trim() || S.docName); toast('개인 서식 파일로 보관했습니다 (새로 만들기 › 개인 서식 파일)'); }),
+  chartKindMenu: () => withChart((o) => chartTypeDialog(o)),
+  chartTypeDialog: () => withChart((o) => chartTypeDialog(o)),
+  chartElementsMenu: (a) => withChart((o) => menuAt(a, chartElementsItems(o))),
+  chartQuickLayoutMenu: (a) => withChart((o) => menuAt(a, [{ node: chartLayoutGallery(o) }])),
+  chartStyleMenu: (a) => withChart((o) => menuAt(a, [{ node: chartStyleGallery(o) }])),
+  chartColorsMenu: (a) => withChart((o) => menuAt(a, chartPaletteItems(o))),
+  chartSwitchRowCol: () => withChart((o) => switchChartRowCol(o)),
+  chartResetStyle: () => withChart((o) => resetChartStyle(o)),
+  chartFontDialog: () => withChart((o) => chartFontDialog(o)),
+  chartExportCsv: () => withChart((o) => exportChartCsv(o)),
+  chartFormat: (part) => withChart((o) => openChartPane(o, typeof part === 'string' ? part : 'chart')),
   hyperlink: () => hyperlinkDialog(),
   headerFooter: () => headerFooterDialog(),
   insertDate: () => {

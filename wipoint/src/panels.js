@@ -7,6 +7,7 @@ import { el, openMenu } from './ui.js';
 import { colorButton } from './colorpick.js';
 import { fitZoom, setZoom } from './editor.js';
 import { peersOn } from './collab.js';
+import { chartPane } from './chartui.js';
 
 let thumbsEl;
 let notesEl;
@@ -388,7 +389,7 @@ const radio = (name, value, options, onSet) => el('div', { class: 'pane-radios' 
 }));
 
 const PX_CM = 2.54 / 96;
-const PANE_TITLE = { comments: '메모',  shape: '도형 서식', bg: '배경 서식', anim: '애니메이션 창', selection: '선택' };
+const PANE_TITLE = { chart: '차트 서식', comments: '메모',  shape: '도형 서식', bg: '배경 서식', anim: '애니메이션 창', selection: '선택' };
 
 export function renderPane() {
   if (!paneEl) return;
@@ -407,6 +408,7 @@ export function renderPane() {
   else if (kind === 'anim') animPane(body);
   else if (kind === 'selection') selectionPane(body);
   else if (kind === 'comments') commentsPane(body);
+  else if (kind === 'chart') chartPane(body);
   emit('hydrate', paneEl);
 }
 /** 메모 창: 슬라이드의 메모 목록, 답글, 해결, 삭제 */
@@ -608,4 +610,5 @@ function selectionPane(body) {
 }
 
 on('selection', () => { if (S.formatPane) renderPane(); });
+on('pane', () => { document.body.classList.toggle('pane-open', !!S.formatPane); renderPane(); requestAnimationFrame(() => { if (S.fitZoom) fitZoom(); }); });
 

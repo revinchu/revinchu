@@ -417,3 +417,57 @@ test('ZIP64: 4GB 넘는 항목 · 위치 (가상 파일로 목록만 읽기)', a
   assert.equal(files['ppt/media/huge.mp4'].size, huge);
   assert.equal(textOf(files['ppt/slides/slide1.xml']), '<p>뒤</p>');
 });
+
+test('차트: PowerPoint 요소 (콤보 · 보조 축 · 누적 100% · 추세선 · 축 제목 · 데이터 표) 쓰고 다시 읽기', async () => {
+  const { chartXml, readPptx, writePptx } = await import('../src/pptx.js');
+  const { chartSvg, trendFit, applyChartLayout, applyChartStyle, switchRowCol, gridToChart } = await import('../src/chart.js');
+  const { newPresentation, newChart } = await import('../src/model.js');
+  const { parseXml } = await import('../src/xml.js');
+  const ch = { kind: 'combo', title: '매출', legend: 't', cats: ['1월', '2월', '3월'], series: [{ name: '매출', vals: [10, 20, 30] }, { name: '이익률', vals: [0.1, 0.2, 0.15], type: 'line', axis: 'secondary', trend: { type: 'linear', eq: true, r2: true } }], axes: { x: { title: '월' }, y: { title: '원', min: 0, max: 40, major: 10 }, y2: { fmt: '0%' } }, dataTable: true, labels: { pos: 'outEnd' }, gap: 80 };
+  const xml = chartXml(ch);
+  assert.match(xml, /<c:barChart>.*<c:lineChart>/s);
+  assert.match(xml, /<c:axId val="444444444"\/>/);
+  assert.match(xml, /<c:trendlineType val="linear"\/>/);
+  assert.match(xml, /<c:dTable>/);
+  assert.match(xml, /<c:dLblPos val="outEnd"\/>/);
+  assert.doesNotThrow(() => parseXml(xml));
+  // 줄 꺾은선에 outEnd 는 허용 안 됨 → 쓰지 않음
+  assert.equal((xml.match(/dLblPos/g) ?? []).length, 1);
+  // WIPOINT 확장 없이 (다른 프로그램 파일처럼) 읽기
+  const p = newPresentation({ firstLayout: 'blank' });
+  p.slides[0].objects.push(newChart({ x: 0, y: 0, w: 600, h: 400 }, ch));
+  const bytes = writePptx(p);
+  const { unzip, zip, textOf } = await import('../src/zip.js');
+  const files = unzip(bytes);
+  const out = {};
+  for (const [k, v] of Object.entries(files)) out[k] = k.startsWith('ppt/charts/chart') && k.endsWith('.xml') ? textOf(v).replace(/<c:extLst>.*?<\/c:extLst>/s, '') : v;
+  const { pres } = readPptx(zip(out));
+  const back = pres.slides[0].objects.find((o) => o.type === 'chart').chart;
+  assert.equal(back.kind, 'combo');
+  assert.equal(back.series[1].type, 'line');
+  assert.equal(back.series[1].axis, 'secondary');
+  assert.equal(back.series[1].trend.type, 'linear');
+  assert.equal(back.axes.y.max, 40);
+  assert.equal(back.axes.x.title, '월');
+  assert.equal(back.axes.y2.fmt, '0%');
+  assert.equal(back.dataTable, true);
+  assert.equal(back.legend, 't');
+  assert.equal(back.gap, 80);
+  // 누적 100%
+  const pct = { kind: 'bar', grouping: 'percent', cats: ['a', 'b'], series: [{ name: 'x', vals: [1, 3] }, { name: 'y', vals: [3, 1] }] };
+  assert.match(chartXml(pct), /<c:grouping val="percentStacked"\/>/);
+  assert.match(chartSvg(pct, 400, 300, p.theme), /100%/);
+  // 추세선 식
+  assert.equal(trendFit([1, 2, 3, 4], [3, 5, 7, 9]).eq, 'y = 2x + 1');
+  // 빠른 레이아웃 · 스타일 · 행/열 전환 · 표 붙여넣기
+  const l5 = applyChartLayout(ch, 5);
+  assert.equal(l5.dataTable, true);
+  assert.equal(l5.legend, null);
+  assert.equal(applyChartStyle(ch, 6).fontColor, '#FFFFFF');
+  const sw = switchRowCol(ch);
+  assert.deepEqual(sw.cats, ['매출', '이익률']);
+  assert.equal(sw.series.length, 3);
+  const g = gridToChart({ kind: 'col', series: [] }, [['', 'A', 'B'], ['x', '1,000', '50%'], ['y', '2', '']]);
+  assert.deepEqual(g.series[0].vals, [1000, 2]);
+  assert.deepEqual(g.series[1].vals, [0.5, 0]);
+});

@@ -561,7 +561,19 @@ function cropDrag(e, o, kind) {
 function onDblClick(e) {
   const o = hitObject(e);
   if (!o) return;
-  if (o.type === 'chart') { run('chartData'); return; }
+  if (o.type === 'chart') {
+    // PowerPoint: 차트 요소를 두 번 누르면 그 요소의 서식 창 (오버레이 아래의 차트 SVG 에서 찾음)
+    // 차트 SVG 는 포인터를 받지 않으므로 요소 상자로 찾음 (가장 작은 것)
+    let p = 'chart';
+    let best = Infinity;
+    for (const x of document.querySelectorAll(`#stage [data-id="${o.id}"] [data-el]`)) {
+      const r = x.getBoundingClientRect();
+      const pad = 3;
+      if (e.clientX >= r.left - pad && e.clientX <= r.right + pad && e.clientY >= r.top - pad && e.clientY <= r.bottom + pad && r.width * r.height < best) { best = r.width * r.height; p = x.getAttribute('data-el'); }
+    }
+    run('chartFormat', p.replace(/^trend/, 'ser').replace(/-title$/, ''));
+    return;
+  }
   if (o.type === 'equation') { run('editEquation', o.id); return; }
   if (o.type === 'image') { if (o.media) startCrop(o); return; }
   if (o.type === 'table') {

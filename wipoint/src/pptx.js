@@ -224,18 +224,22 @@ function chartFrameXml(o, id, ctx) {
 /** 차트 파트 (값은 리터럴로 — 내장 통합 문서 없이도 PowerPoint 가 그림) */
 /** 열 번호 → 문자 (0 → A) */
 const colName = (i) => { let s = ''; for (i += 1; i > 0; i = Math.floor((i - 1) / 26)) s = String.fromCharCode(65 + ((i - 1) % 26)) + s; return s; };
+/** 차트 시트의 열: 계열 i 의 값 열 (거품형은 계열마다 값 · 크기 두 열) */
+const chartCol = (ch, i, size = false) => (ch.kind === 'bubble' ? 1 + i * 2 + (size ? 1 : 0) : 1 + i);
 /**
  * 차트 데이터 통합 문서 (PowerPoint [데이터 편집] 용): A열 = 항목, 1행 = 계열 이름
  * 최소 xlsx (inlineStr 글자, 스타일 1개) 를 zip 으로 만듦
  */
 export function chartWorkbook(ch) {
   const cell = (ref, v) => (typeof v === 'number' && Number.isFinite(v) ? `<c r="${ref}"><v>${v}</v></c>` : v == null || v === '' ? '' : `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${esc(String(v))}</t></is></c>`);
-  const rows = [`<row r="1">${ch.series.map((s, i) => cell(`${colName(i + 1)}1`, s.name)).join('')}</row>`];
+  const bub = ch.kind === 'bubble';
+  const xyNum = ch.kind === 'scatter' || bub;
+  const rows = [`<row r="1">${ch.series.map((s, i) => cell(`${colName(chartCol(ch, i))}1`, s.name) + (bub ? cell(`${colName(chartCol(ch, i, true))}1`, `${s.name} 크기`) : '')).join('')}</row>`];
   ch.cats.forEach((c, r) => {
-    const num = ch.kind === 'scatter' && Number.isFinite(Number(c)) ? Number(c) : c;
-    rows.push(`<row r="${r + 2}">${cell(`A${r + 2}`, num)}${ch.series.map((s, i) => cell(`${colName(i + 1)}${r + 2}`, Number(s.vals[r]) || 0)).join('')}</row>`);
+    const num = xyNum && Number.isFinite(Number(c)) ? Number(c) : c;
+    rows.push(`<row r="${r + 2}">${cell(`A${r + 2}`, num)}${ch.series.map((s, i) => cell(`${colName(chartCol(ch, i))}${r + 2}`, Number(s.vals[r]) || 0) + (bub ? cell(`${colName(chartCol(ch, i, true))}${r + 2}`, Number(s.sizes?.[r]) || 0) : '')).join('')}</row>`);
   });
-  const last = `${colName(ch.series.length)}${ch.cats.length + 1}`;
+  const last = `${colName(chartCol(ch, ch.series.length - 1, bub))}${ch.cats.length + 1}`;
   const enc = new TextEncoder();
   const files = {
     '[Content_Types].xml': `${XML_HEAD}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`,
@@ -248,40 +252,134 @@ export function chartWorkbook(ch) {
   return zip(Object.fromEntries(Object.entries(files).map(([name, text]) => [name, enc.encode(text)])));
 }
 
+// 데이터 레이블 위치: 차트 종류마다 PowerPoint 가 허용하는 값만 (다른 값이면 파일이 손상되었다고 함)
+const DLBL_POS = { barClustered: ['ctr', 'inEnd', 'inBase', 'outEnd'], barStacked: ['ctr', 'inEnd', 'inBase'], line: ['t', 'b', 'l', 'r', 'ctr'], scatter: ['t', 'b', 'l', 'r', 'ctr'], bubble: ['t', 'b', 'l', 'r', 'ctr'], pie: ['bestFit', 'ctr', 'inEnd', 'outEnd'] };
+const TREND_XML = { linear: 'linear', exp: 'exp', log: 'log', poly: 'poly', power: 'power', movingAvg: 'movingAvg' };
+const ERR_XML = { fixed: 'fixedVal', percent: 'percentage', stdDev: 'stdDev', stdErr: 'stdErr' };
+const MARKER_XML = { circle: 'circle', square: 'square', diamond: 'diamond', triangle: 'triangle', x: 'x', none: 'none' };
+
 /** opts.embed: 데이터 통합 문서 관계 id (있으면 Sheet1 셀 참조 + 캐시로 씀) */
 export function chartXml(ch, opts = {}) {
   const kind = ch.kind ?? 'col';
   const n = ch.cats.length;
   const ref = (col, r1, r2) => `Sheet1!$${col}$${r1}${r2 != null ? `:$${col}$${r2}` : ''}`;
-  const cache = (vals, num, f) => `<c:${num ? 'numRef' : 'strRef'}><c:f>${f}</c:f><c:${num ? 'numCache' : 'strCache'}>${num ? '<c:formatCode>General</c:formatCode>' : ''}<c:ptCount val="${vals.length}"/>${vals.map((v, i) => `<c:pt idx="${i}"><c:v>${esc(num ? (Number(v) || 0) : v)}</c:v></c:pt>`).join('')}</c:${num ? 'numCache' : 'strCache'}></c:${num ? 'numRef' : 'strRef'}>`;
+  const cache = (vals, num, fm) => `<c:${num ? 'numRef' : 'strRef'}><c:f>${fm}</c:f><c:${num ? 'numCache' : 'strCache'}>${num ? '<c:formatCode>General</c:formatCode>' : ''}<c:ptCount val="${vals.length}"/>${vals.map((v, i) => `<c:pt idx="${i}"><c:v>${esc(num ? (Number(v) || 0) : v)}</c:v></c:pt>`).join('')}</c:${num ? 'numCache' : 'strCache'}></c:${num ? 'numRef' : 'strRef'}>`;
   const lit0 = (vals, num) => `<c:${num ? 'numLit' : 'strLit'}>${num ? '<c:formatCode>General</c:formatCode>' : ''}<c:ptCount val="${vals.length}"/>${vals.map((v, i) => `<c:pt idx="${i}"><c:v>${esc(num ? (Number(v) || 0) : v)}</c:v></c:pt>`).join('')}</c:${num ? 'numLit' : 'strLit'}>`;
   const pie = kind === 'pie' || kind === 'doughnut';
-  const sers = ch.series.map((s, i) => {
-    const color = s.color ? `<c:spPr>${kind === 'line' || kind === 'scatter' ? `<a:ln w="28575" cap="rnd">${solidFill(s.color)}<a:round/></a:ln>` : solidFill(s.color)}</c:spPr>` : '';
-    const col = colName(i + 1);
-    const tx = opts.embed ? `<c:tx>${cache([s.name], false, ref(col, 1))}</c:tx>` : `<c:tx><c:v>${esc(s.name)}</c:v></c:tx>`;
-    const lit = (vals, num, which) => (opts.embed ? cache(vals, num, which === 'cat' ? ref('A', 2, n + 1) : ref(col, 2, n + 1)) : lit0(vals, num));
-    if (kind === 'scatter') {
-      const xs = ch.cats.map((c, k) => (Number.isFinite(Number(c)) ? Number(c) : k + 1));
-      return `<c:ser><c:idx val="${i}"/><c:order val="${i}"/>${tx}${color}<c:xVal>${lit(xs, true, 'cat')}</c:xVal><c:yVal>${lit(s.vals, true)}</c:yVal><c:smooth val="0"/></c:ser>`;
+  const xy = kind === 'scatter' || kind === 'bubble';
+  const grp = ch.grouping ?? (ch.stacked ? 'stacked' : null);
+  const typeOf = (s, i) => (kind === 'combo' ? s.type ?? (i === ch.series.length - 1 && ch.series.length > 1 ? 'line' : 'col') : kind);
+  const grouping = (t) => {
+    if (t === 'col' || t === 'bar') return grp === 'stacked' ? 'stacked' : grp === 'percent' ? 'percentStacked' : 'clustered';
+    if (kind === 'combo' && t === 'line') return 'standard';
+    return grp === 'stacked' ? 'stacked' : grp === 'percent' ? 'percentStacked' : 'standard';
+  };
+  const pt = (v) => Math.round(v * 12700);
+  const lnXml = (s, t) => {
+    const w = s.lineWidth ? pt(s.lineWidth) : 28575;
+    return `<a:ln w="${w}" cap="rnd">${s.color ? solidFill(s.color) : ''}${s.dash ? `<a:prstDash val="${{ dash: 'dash', dot: 'sysDot', dashDot: 'dashDot', longDash: 'lgDash' }[s.dash] ?? 'solid'}"/>` : ''}<a:round/></a:ln>`;
+  };
+  const dlXml = (lo, t, stacked, bar) => {
+    if (!lo) return '';
+    const o = lo === true ? {} : lo;
+    const any = o.val || o.cat || o.ser || o.pct;
+    const val = any ? !!o.val : !pie;
+    const pct = any ? !!o.pct : pie;
+    const allowed = pie ? DLBL_POS.pie : bar ? (stacked ? DLBL_POS.barStacked : DLBL_POS.barClustered) : DLBL_POS[t] ?? [];
+    const pos = o.pos && allowed.includes(o.pos) ? `<c:dLblPos val="${o.pos}"/>` : '';
+    return `<c:dLbls>${pos}<c:showLegendKey val="0"/><c:showVal val="${val ? 1 : 0}"/><c:showCatName val="${o.cat ? 1 : 0}"/><c:showSerName val="${o.ser ? 1 : 0}"/><c:showPercent val="${pct ? 1 : 0}"/><c:showBubbleSize val="0"/>${pie ? '<c:showLeaderLines val="1"/>' : ''}</c:dLbls>`;
+  };
+  const trendXml = (s) => {
+    const tr = s.trend;
+    if (!tr?.type || !TREND_XML[tr.type]) return '';
+    return `<c:trendline>${tr.name ? `<c:name>${esc(tr.name)}</c:name>` : ''}<c:spPr><a:ln w="19050" cap="rnd">${s.color ? solidFill(s.color) : ''}<a:prstDash val="sysDot"/></a:ln></c:spPr><c:trendlineType val="${TREND_XML[tr.type]}"/>${tr.type === 'poly' ? `<c:order val="${Math.max(2, Math.min(6, tr.order ?? 2))}"/>` : ''}${tr.type === 'movingAvg' ? `<c:period val="${Math.max(2, tr.period ?? 2)}"/>` : ''}${tr.forward ? `<c:forward val="${Number(tr.forward)}"/>` : ''}${tr.backward ? `<c:backward val="${Number(tr.backward)}"/>` : ''}<c:dispRSqr val="${tr.r2 ? 1 : 0}"/><c:dispEq val="${tr.eq ? 1 : 0}"/></c:trendline>`;
+  };
+  const errXml = (s, t) => (s.err && ERR_XML[s.err.type] ? `<c:errBars>${xy ? '<c:errDir val="y"/>' : ''}<c:errBarType val="both"/><c:errValType val="${ERR_XML[s.err.type]}"/><c:noEndCap val="0"/>${s.err.type !== 'stdErr' ? `<c:val val="${Number(s.err.val ?? (s.err.type === 'percent' ? 5 : 1))}"/>` : ''}</c:errBars>` : '');
+  const dPtXml = (s, t) => {
+    const out = [];
+    const idxs = new Set([...Object.keys(s.pointColors ?? {}), ...Object.keys(s.explodeAt ?? {})].map(Number));
+    for (const i of [...idxs].sort((a, b) => a - b)) {
+      const col = s.pointColors?.[i];
+      const ex = s.explodeAt?.[i];
+      out.push(`<c:dPt><c:idx val="${i}"/>${t === 'col' || t === 'bar' || t === 'bubble' ? '<c:invertIfNegative val="0"/>' : ''}${t === 'line' || t === 'scatter' ? '<c:marker><c:symbol val="circle"/></c:marker>' : ''}${t === 'pie' && ex ? `<c:explosion val="${Math.round(ex)}"/>` : ''}<c:bubble3D val="0"/>${col ? `<c:spPr>${solidFill(col)}</c:spPr>` : ''}</c:dPt>`);
     }
-    const extra = kind === 'col' || kind === 'bar' ? '<c:invertIfNegative val="0"/>' : kind === 'line' ? `<c:marker><c:symbol val="${ch.markers ? 'circle' : 'none'}"/></c:marker>` : '';
-    return `<c:ser><c:idx val="${i}"/><c:order val="${i}"/>${tx}${color}${extra}<c:cat>${lit(ch.cats, false, 'cat')}</c:cat><c:val>${lit(s.vals, true)}</c:val>${kind === 'line' ? '<c:smooth val="0"/>' : ''}</c:ser>`;
+    return out.join('');
+  };
+  const serXml = (s, i, t, stacked) => {
+    const col = colName(chartCol(ch, i));
+    const tx = opts.embed ? `<c:tx>${cache([s.name], false, ref(col, 1))}</c:tx>` : `<c:tx><c:v>${esc(s.name)}</c:v></c:tx>`;
+    const lit = (vals, num, which) => (opts.embed ? cache(vals, num, which === 'cat' ? ref('A', 2, n + 1) : ref(which === 'size' ? colName(chartCol(ch, i, true)) : col, 2, n + 1)) : lit0(vals, num));
+    const isLine = t === 'line' || t === 'scatter' || t === 'radar';
+    const mk = s.marker ?? (t === 'scatter' || (t === 'line' && (ch.variant === 'markers' || ch.markers)) || (t === 'radar' && ch.variant === 'marker') ? 'circle' : 'none');
+    const markerXml = isLine ? `<c:marker><c:symbol val="${MARKER_XML[mk] ?? 'circle'}"/>${mk !== 'none' ? `<c:size val="${Math.max(2, Math.min(72, s.markerSize ?? 5))}"/>${s.color ? `<c:spPr>${solidFill(s.color)}<a:ln>${solidFill(s.color)}</a:ln></c:spPr>` : ''}` : ''}</c:marker>` : '';
+    const scatterLine = t === 'scatter' && !(ch.variant === 'smooth' || ch.variant === 'line' || s.lineWidth);
+    const spPr = isLine && !(t === 'radar' && ch.variant === 'filled') ? `<c:spPr>${scatterLine ? '<a:ln w="25400" cap="rnd"><a:noFill/><a:round/></a:ln>' : lnXml(s, t)}</c:spPr>` : s.color ? `<c:spPr>${solidFill(s.color)}${ch.barOutline ? `<a:ln w="9525">${solidFill(ch.barOutline)}</a:ln>` : ''}</c:spPr>` : '';
+    const dl = s.labels != null ? dlXml(s.labels, t, stacked, t === 'col' || t === 'bar') : '';
+    const head = `<c:idx val="${i}"/><c:order val="${i}"/>${tx}${spPr}`;
+    const smooth = `<c:smooth val="${(s.smooth ?? (ch.variant === 'smooth' || ch.smooth)) ? 1 : 0}"/>`;
+    if (t === 'scatter') return `<c:ser>${head}${markerXml}${dPtXml(s, t)}${dl}${trendXml(s)}${errXml(s, t)}<c:xVal>${lit(ch.cats.map((c, k) => (Number.isFinite(Number(c)) ? Number(c) : k + 1)), true, 'cat')}</c:xVal><c:yVal>${lit(s.vals, true)}</c:yVal>${smooth}</c:ser>`;
+    if (t === 'bubble') return `<c:ser>${head}<c:invertIfNegative val="0"/>${dPtXml(s, t)}${dl}${trendXml(s)}${errXml(s, t)}<c:xVal>${lit(ch.cats.map((c, k) => (Number.isFinite(Number(c)) ? Number(c) : k + 1)), true, 'cat')}</c:xVal><c:yVal>${lit(s.vals, true)}</c:yVal><c:bubbleSize>${lit((s.sizes ?? s.vals.map(() => 1)).map((v) => Number(v) || 0), true, 'size')}</c:bubbleSize><c:bubble3D val="0"/></c:ser>`;
+    if (t === 'pie') return `<c:ser>${head}${ch.variant === 'explode' || ch.explode ? `<c:explosion val="${ch.variant === 'explode' ? 18 : Math.round(ch.explode)}"/>` : ''}${dPtXml(s, t)}${dl}<c:cat>${lit(ch.cats, false, 'cat')}</c:cat><c:val>${lit(s.vals, true)}</c:val></c:ser>`;
+    if (t === 'radar') return `<c:ser>${head}${markerXml}${dPtXml(s, t)}${dl}<c:cat>${lit(ch.cats, false, 'cat')}</c:cat><c:val>${lit(s.vals, true)}</c:val></c:ser>`;
+    const extra = t === 'col' || t === 'bar' ? '<c:invertIfNegative val="0"/>' : t === 'line' ? markerXml : '';
+    return `<c:ser>${head}${extra}${dPtXml(s, t)}${dl}${t !== 'area' ? trendXml(s) : ''}${errXml(s, t)}<c:cat>${lit(ch.cats, false, 'cat')}</c:cat><c:val>${lit(s.vals, true)}</c:val>${t === 'line' ? smooth : ''}</c:ser>`;
+  };
+  // 계열을 (종류, 축) 묶음으로 — 콤보는 여러 묶음
+  const groups = [];
+  ch.series.forEach((s, i) => {
+    let t = typeOf(s, i);
+    if (kind === 'doughnut') t = 'pie';
+    const axis = !pie && !xy && kind !== 'radar' && s.axis === 'secondary' ? 2 : 1;
+    const key = `${t}|${axis}`;
+    let g = groups.find((x) => x.key === key);
+    if (!g) groups.push(g = { key, t, axis, items: [] });
+    g.items.push(i);
+  });
+  const has2 = groups.some((g) => g.axis === 2);
+  const AX = { 1: '<c:axId val="111111111"/><c:axId val="222222222"/>', 2: '<c:axId val="333333333"/><c:axId val="444444444"/>' };
+  const chartDl = (t, stacked) => (ch.labels ? dlXml(ch.labels, t, stacked, t === 'col' || t === 'bar') : '');
+  const plots = groups.map((g) => {
+    const t = g.t;
+    const gp = grouping(t);
+    const stacked = gp !== 'clustered' && gp !== 'standard';
+    const sers = g.items.map((i) => serXml(ch.series[i], i, t === 'pie' ? 'pie' : t, stacked)).join('');
+    const dl = chartDl(t === 'pie' ? 'pie' : t, stacked);
+    const vary = `<c:varyColors val="${pie || ch.vary ? 1 : 0}"/>`;
+    if (t === 'col' || t === 'bar') return `<c:barChart><c:barDir val="${kind === 'bar' ? 'bar' : 'col'}"/><c:grouping val="${gp}"/>${vary}${sers}${dl}<c:gapWidth val="${Math.round(ch.gap ?? (stacked ? 150 : 219))}"/><c:overlap val="${Math.round(ch.overlap ?? (stacked ? 100 : -27))}"/>${AX[g.axis]}</c:barChart>`;
+    if (t === 'line') return `<c:lineChart><c:grouping val="${gp}"/>${vary}${sers}${dl}<c:marker val="1"/>${AX[g.axis]}</c:lineChart>`;
+    if (t === 'area') return `<c:areaChart><c:grouping val="${gp}"/>${vary}${sers}${dl}${AX[g.axis]}</c:areaChart>`;
+    if (t === 'pie' && kind === 'pie') return `<c:pieChart>${vary}${sers}${dl}<c:firstSliceAng val="${Math.round(((ch.firstAngle ?? 0) % 360 + 360) % 360)}"/></c:pieChart>`;
+    if (t === 'pie') return `<c:doughnutChart>${vary}${sers}${dl}<c:firstSliceAng val="${Math.round(((ch.firstAngle ?? 0) % 360 + 360) % 360)}"/><c:holeSize val="${Math.max(10, Math.min(90, Math.round(ch.hole ?? 50)))}"/></c:doughnutChart>`;
+    if (t === 'scatter') return `<c:scatterChart><c:scatterStyle val="${ch.variant === 'smooth' ? 'smoothMarker' : 'lineMarker'}"/>${vary}${sers}${dl}${AX[g.axis]}</c:scatterChart>`;
+    if (t === 'radar') return `<c:radarChart><c:radarStyle val="${ch.variant === 'filled' ? 'filled' : 'marker'}"/>${vary}${sers}${dl}${AX[g.axis]}</c:radarChart>`;
+    return `<c:bubbleChart>${vary}${sers}${dl}<c:bubbleScale val="100"/><c:showNegBubbles val="0"/>${AX[g.axis]}</c:bubbleChart>`;
   }).join('');
-  const dl = ch.labels ? `<c:dLbls><c:showLegendKey val="0"/><c:showVal val="${pie ? 0 : 1}"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="${pie ? 1 : 0}"/><c:showBubbleSize val="0"/></c:dLbls>` : '';
-  const axIds = '<c:axId val="111111111"/><c:axId val="222222222"/>';
-  let plot;
-  if (kind === 'col' || kind === 'bar') plot = `<c:barChart><c:barDir val="${kind}"/><c:grouping val="${ch.stacked ? 'stacked' : 'clustered'}"/><c:varyColors val="0"/>${sers}${dl}<c:gapWidth val="${ch.stacked ? 150 : 219}"/><c:overlap val="${ch.stacked ? 100 : -27}"/>${axIds}</c:barChart>`;
-  else if (kind === 'line') plot = `<c:lineChart><c:grouping val="${ch.stacked ? 'stacked' : 'standard'}"/><c:varyColors val="0"/>${sers}${dl}<c:marker val="1"/>${axIds}</c:lineChart>`;
-  else if (kind === 'area') plot = `<c:areaChart><c:grouping val="${ch.stacked ? 'stacked' : 'standard'}"/><c:varyColors val="0"/>${sers}${dl}${axIds}</c:areaChart>`;
-  else if (kind === 'pie') plot = `<c:pieChart><c:varyColors val="1"/>${sers}${dl}<c:firstSliceAng val="0"/></c:pieChart>`;
-  else if (kind === 'doughnut') plot = `<c:doughnutChart><c:varyColors val="1"/>${sers}${dl}<c:firstSliceAng val="0"/><c:holeSize val="50"/></c:doughnutChart>`;
-  else plot = `<c:scatterChart><c:scatterStyle val="lineMarker"/><c:varyColors val="0"/>${sers}${dl}${axIds}</c:scatterChart>`;
-  const ax = pie ? '' : `<c:${kind === 'scatter' ? 'valAx' : 'catAx'}><c:axId val="111111111"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="${kind === 'bar' ? 'l' : 'b'}"/><c:numFmt formatCode="General" sourceLinked="1"/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crossAx val="222222222"/><c:crosses val="autoZero"/>${kind === 'scatter' ? '<c:crossBetween val="midCat"/>' : '<c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/><c:noMultiLvlLbl val="0"/>'}</c:${kind === 'scatter' ? 'valAx' : 'catAx'}><c:valAx><c:axId val="222222222"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="${kind === 'bar' ? 'b' : 'l'}"/><c:majorGridlines><c:spPr><a:ln w="9525">${solidFill('@tx1:lm15:lo85')}</a:ln></c:spPr></c:majorGridlines><c:numFmt formatCode="General" sourceLinked="1"/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:spPr><a:ln><a:noFill/></a:ln></c:spPr><c:crossAx val="111111111"/><c:crosses val="autoZero"/><c:crossBetween val="between"/></c:valAx>`;
-  const title = ch.title ? `<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="1862" b="0"/></a:pPr><a:r><a:rPr lang="ko-KR" altLang="en-US"/><a:t>${esc(ch.title)}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title><c:autoTitleDeleted val="0"/>` : '<c:autoTitleDeleted val="1"/>';
-  const legend = ch.legend ? `<c:legend><c:legendPos val="${ch.legend}"/><c:overlay val="0"/></c:legend>` : '';
+  const axes = ch.axes ?? {};
+  const grid = ch.grid ?? { major: true };
+  const gridLn = (minor) => `<c:${minor ? 'minor' : 'major'}Gridlines><c:spPr><a:ln w="${minor ? 6350 : 9525}">${solidFill(ch.gridColor ?? (minor ? '@tx1:lm5:lo95' : '@tx1:lm15:lo85'))}${ch.dashGrid ? '<a:prstDash val="dash"/>' : ''}</a:ln></c:spPr></c:${minor ? 'minor' : 'major'}Gridlines>`;
+  const axTitle = (t, rot) => (t ? `<c:title><c:tx><c:rich><a:bodyPr${rot ? ` rot="${rot}" vert="horz"` : ''}/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="1330" b="0"/></a:pPr><a:r><a:rPr lang="ko-KR" altLang="en-US"/><a:t>${esc(t)}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title>` : '');
+  const scaling = (a) => `<c:scaling><c:orientation val="${a?.reverse ? 'maxMin' : 'minMax'}"/>${a?.max != null && a.max !== '' ? `<c:max val="${Number(a.max)}"/>` : ''}${a?.min != null && a.min !== '' ? `<c:min val="${Number(a.min)}"/>` : ''}</c:scaling>`;
+  const numFmt = (a) => `<c:numFmt formatCode="${esc(a?.fmt ?? (grp === 'percent' ? '0%' : 'General'))}" sourceLinked="${a?.fmt ? 0 : 1}"/>`;
+  const txt = ch.fontColor ? `<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr>${solidFill(ch.fontColor)}</a:defRPr></a:pPr><a:endParaRPr lang="ko-KR"/></a:p></c:txPr>` : '';
+  const horiz = kind === 'bar';
+  let ax = '';
+  if (!pie) {
+    const catTag = xy ? 'valAx' : 'catAx';
+    const catTail = xy ? `<c:crossBetween val="midCat"/>${axes.x?.major ? `<c:majorUnit val="${Number(axes.x.major)}"/>` : ''}` : '<c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/><c:noMultiLvlLbl val="0"/>';
+    const catAx = `<c:${catTag}><c:axId val="111111111"/>${scaling(axes.x)}<c:delete val="${axes.x?.hide || kind === 'radar' && false ? 1 : 0}"/><c:axPos val="${horiz ? 'l' : 'b'}"/>${grid.cat ? gridLn(false) : ''}${axTitle(axes.x?.title, horiz ? '-5400000' : '')}${xy ? numFmt(axes.x) : '<c:numFmt formatCode="General" sourceLinked="1"/>'}<c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:spPr><a:ln w="9525">${solidFill('@tx1:lm25:lo75')}</a:ln></c:spPr>${txt}<c:crossAx val="222222222"/><c:crosses val="autoZero"/>${catTail}</c:${catTag}>`;
+    const valAx = `<c:valAx><c:axId val="222222222"/>${scaling(axes.y)}<c:delete val="${axes.y?.hide ? 1 : 0}"/><c:axPos val="${horiz ? 'b' : 'l'}"/>${grid.major !== false ? gridLn(false) : ''}${grid.minor ? gridLn(true) : ''}${axTitle(axes.y?.title, horiz ? '' : '-5400000')}${numFmt(axes.y)}<c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:spPr><a:ln><a:noFill/></a:ln></c:spPr>${txt}<c:crossAx val="111111111"/><c:crosses val="autoZero"/><c:crossBetween val="${xy ? 'midCat' : 'between'}"/>${axes.y?.major ? `<c:majorUnit val="${Number(axes.y.major)}"/>` : ''}</c:valAx>`;
+    ax = catAx + valAx;
+    if (has2) ax += `<c:catAx><c:axId val="333333333"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="1"/><c:axPos val="b"/><c:numFmt formatCode="General" sourceLinked="1"/><c:majorTickMark val="out"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crossAx val="444444444"/><c:crosses val="autoZero"/><c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/><c:noMultiLvlLbl val="0"/></c:catAx><c:valAx><c:axId val="444444444"/>${scaling(axes.y2)}<c:delete val="${axes.y2?.hide ? 1 : 0}"/><c:axPos val="r"/>${axTitle(axes.y2?.title, '5400000')}${numFmt(axes.y2)}<c:majorTickMark val="out"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:spPr><a:ln><a:noFill/></a:ln></c:spPr>${txt}<c:crossAx val="333333333"/><c:crosses val="max"/><c:crossBetween val="between"/>${axes.y2?.major ? `<c:majorUnit val="${Number(axes.y2.major)}"/>` : ''}</c:valAx>`;
+  }
+  const dTable = ch.dataTable && !pie && !xy && kind !== 'radar' ? `<c:dTable><c:showHorzBorder val="1"/><c:showVertBorder val="1"/><c:showOutline val="1"/><c:showKeys val="${ch.dataTable === 'nokeys' ? 0 : 1}"/></c:dTable>` : '';
+  const plotSp = ch.plotBg ? `<c:spPr>${solidFill(ch.plotBg)}</c:spPr>` : '';
+  const tsz = ch.titleSize ? Math.round(ch.titleSize * 100) : 1862;
+  const title = ch.title ? `<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="${tsz}" b="${ch.titleBold ? 1 : 0}"/></a:pPr><a:r><a:rPr lang="ko-KR" altLang="en-US"/><a:t>${esc(ch.title)}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="${ch.titleOverlay ? 1 : 0}"/></c:title><c:autoTitleDeleted val="0"/>` : '<c:autoTitleDeleted val="1"/>';
+  const legend = ch.legend ? `<c:legend><c:legendPos val="${['t', 'b', 'l', 'r', 'tr'].includes(ch.legend) ? ch.legend : 'b'}"/><c:overlay val="0"/></c:legend>` : '';
+  const chartSp = ch.bg || ch.border ? `<c:spPr>${ch.bg ? solidFill(ch.bg) : '<a:noFill/>'}${ch.border ? `<a:ln w="9525">${solidFill(ch.border)}</a:ln>` : '<a:ln><a:noFill/></a:ln>'}</c:spPr>` : '';
+  const fsz = ch.font?.size ? Math.round(ch.font.size * 100) : 1197;
   const wx = `<c:extLst><c:ext uri="${WP_EXT_URI}"><wp:chart xmlns:wp="${WP_NS}" json="${esc(JSON.stringify(ch))}"/></c:ext></c:extLst>`;
-  return `${XML_HEAD}<c:chartSpace xmlns:c="${NS_C}" xmlns:a="${NS_A}" xmlns:r="${NS_R}"><c:roundedCorners val="0"/><c:chart>${title}<c:plotArea><c:layout/>${plot}${ax}</c:plotArea>${legend}<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="1197">${solidFill('@tx1:lm65:lo35')}<a:latin typeface="+mn-lt"/><a:ea typeface="+mn-ea"/></a:defRPr></a:pPr><a:endParaRPr lang="ko-KR"/></a:p></c:txPr>${opts.embed ? `<c:externalData r:id="${opts.embed}"><c:autoUpdate val="0"/></c:externalData>` : ''}${wx}</c:chartSpace>`;
+  return `${XML_HEAD}<c:chartSpace xmlns:c="${NS_C}" xmlns:a="${NS_A}" xmlns:r="${NS_R}"><c:roundedCorners val="0"/><c:chart>${title}<c:plotArea><c:layout/>${plots}${ax}${dTable}${plotSp}</c:plotArea>${legend}<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart>${chartSp}<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="${fsz}">${solidFill(ch.fontColor ?? ch.font?.color ?? '@tx1:lm65:lo35')}<a:latin typeface="+mn-lt"/><a:ea typeface="+mn-ea"/></a:defRPr></a:pPr><a:endParaRPr lang="ko-KR"/></a:p></c:txPr>${opts.embed ? `<c:externalData r:id="${opts.embed}"><c:autoUpdate val="0"/></c:externalData>` : ''}${wx}</c:chartSpace>`;
 }
 
 // ───────────── 애니메이션 → p:timing ─────────────
@@ -535,6 +633,7 @@ export const MIME_BY_EXT = { png: 'image/png', jpeg: 'image/jpeg', jpg: 'image/j
 /**
  * 문서 → pptx 파트 목록
  * opts.png: { mediaId: dataURL } — SVG 그림의 PNG 대체본 (앱이 미리 그려 넘김, PowerPoint 2016 이전 호환)
+ * opts.template: true → 서식 파일(.potx) 내용 형식
  * opts.blob(url) → Blob — blob: URL 미디어 (큰 동영상 등; 파트 값이 Blob 이 되므로 zipAsync 로 묶어야 함)
  */
 export function pptxEntries(pres, opts = {}) {
@@ -786,7 +885,7 @@ export function pptxEntries(pres, opts = {}) {
   const custXml = (pres.customShows ?? []).length ? `<p:custShowLst>${pres.customShows.map((c, k) => `<p:custShow name="${esc(c.name)}" id="${k}"><p:sldLst>${c.slides.map((id) => pres.slides.findIndex((x) => x.id === id)).filter((i) => i >= 0).map((i) => `<p:sld r:id="${slideRids[i]}"/>`).join('')}</p:sldLst></p:custShow>`).join('')}</p:custShowLst>` : '';
   files['ppt/presentation.xml'] = `${XML_HEAD}<p:presentation xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}" saveSubsetFonts="1"${fontXml ? ' embedTrueTypeFonts="1"' : ''}><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="${masterRid}"/></p:sldMasterIdLst>${notesMasterRid ? `<p:notesMasterIdLst><p:notesMasterId r:id="${notesMasterRid}"/></p:notesMasterIdLst>` : ''}${sldIds ? `<p:sldIdLst>${sldIds}</p:sldIdLst>` : ''}<p:sldSz cx="${E(sz.w)}" cy="${E(sz.h)}"/><p:notesSz cx="6858000" cy="9144000"/>${fontXml}${custXml}${defText}${secXml}</p:presentation>`;
   files['ppt/_rels/presentation.xml.rels'] = presRels.xml();
-  override('ppt/presentation.xml', CT('presentation.main'));
+  override('ppt/presentation.xml', CT(opts.template ? 'template.main' : 'presentation.main'));
   files['ppt/presProps.xml'] = `${XML_HEAD}<p:presentationPr xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}"/>`;
   files['ppt/viewProps.xml'] = `${XML_HEAD}<p:viewPr xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}"><p:normalViewPr><p:restoredLeft sz="15620"/><p:restoredTop sz="94660"/></p:normalViewPr><p:gridSpacing cx="72008" cy="72008"/></p:viewPr>`;
   files['ppt/tableStyles.xml'] = `${XML_HEAD}<a:tblStyleLst xmlns:a="${NS_A}" def="{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}"/>`;
@@ -1529,10 +1628,11 @@ export function readPptx(input, opts = {}) {
     const ext = descendants(x, 'chart').find((e) => attr(e, 'json'));
     if (ext) { try { return JSON.parse(attr(ext, 'json')); } catch { /* 아래로 */ } }
     const plot = descendants(x, 'plotArea')[0];
-    const typeEl = plot?.children.find((c) => /Chart$/.test(c.name));
-    if (!typeEl) return null;
-    const kindMap = { barChart: attr(child(typeEl, 'barDir'), 'val') === 'bar' ? 'bar' : 'col', bar3DChart: attr(child(typeEl, 'barDir'), 'val') === 'bar' ? 'bar' : 'col', lineChart: 'line', line3DChart: 'line', areaChart: 'area', area3DChart: 'area', pieChart: 'pie', pie3DChart: 'pie', ofPieChart: 'pie', doughnutChart: 'doughnut', scatterChart: 'scatter', radarChart: 'line', bubbleChart: 'scatter' };
-    const kind = kindMap[typeEl.name] ?? 'col';
+    const typeEls = (plot?.children ?? []).filter((c) => /Chart$/.test(c.name));
+    if (!typeEls.length) return null;
+    const barDir = (el) => (attr(child(el, 'barDir'), 'val') === 'bar' ? 'bar' : 'col');
+    const KIND = { barChart: barDir, bar3DChart: barDir, lineChart: () => 'line', line3DChart: () => 'line', stockChart: () => 'line', areaChart: () => 'area', area3DChart: () => 'area', pieChart: () => 'pie', pie3DChart: () => 'pie', ofPieChart: () => 'pie', doughnutChart: () => 'doughnut', scatterChart: () => 'scatter', radarChart: () => 'radar', bubbleChart: () => 'bubble', surfaceChart: () => 'col', surface3DChart: () => 'col' };
+    const kindOf = (el) => (KIND[el.name] ?? (() => 'col'))(el);
     const vals = (el) => {
       const cache = descendants(el, 'numCache')[0] ?? descendants(el, 'numLit')[0] ?? descendants(el, 'strCache')[0] ?? descendants(el, 'strLit')[0];
       if (!cache) return [];
@@ -1541,22 +1641,141 @@ export function readPptx(input, opts = {}) {
       for (const pt of kids(cache, 'pt')) arr[num(attr(pt, 'idx'))] = child(pt, 'v')?.text ?? '';
       return arr;
     };
-    const series = kids(typeEl, 'ser').map((s, i) => {
-      const tx = child(s, 'tx');
-      const name = tx ? (child(tx, 'v')?.text ?? vals(tx)[0] ?? `계열 ${i + 1}`) : `계열 ${i + 1}`;
-      const color = readColor(child(child(s, 'spPr'), 'solidFill'), { clrMap: null });
-      return { name, vals: vals(child(s, 'val') ?? child(s, 'yVal')).map((v) => Number(v) || 0), ...(color && color.startsWith('#') ? { color } : {}), _cats: vals(child(s, 'cat') ?? child(s, 'xVal')) };
-    });
+    const fillOf = (sp) => { const c = readColor(child(sp, 'solidFill'), { clrMap: null }); return c && c.startsWith('#') ? c : null; };
+    const lnOf = (sp) => { const ln = child(sp, 'ln'); return ln ? { color: readColor(child(ln, 'solidFill'), { clrMap: null }), w: attr(ln, 'w'), dash: attr(child(ln, 'prstDash'), 'val'), none: !!child(ln, 'noFill') } : null; };
+    const dlOf = (dl) => {
+      if (!dl || bool(attr(child(dl, 'delete'), 'val'))) return null;
+      const on = (k) => bool(attr(child(dl, k), 'val'));
+      if (!(on('showVal') || on('showPercent') || on('showCatName') || on('showSerName'))) return null;
+      const pos = attr(child(dl, 'dLblPos'), 'val');
+      return { ...(pos ? { pos } : {}), val: on('showVal'), cat: on('showCatName'), ser: on('showSerName'), pct: on('showPercent') };
+    };
+    const axById = new Map();
+    for (const a of (plot?.children ?? []).filter((c) => /Ax$/.test(c.name))) axById.set(attr(child(a, 'axId'), 'val'), a);
+    const typeIds = (el) => kids(el, 'axId').map((a) => attr(a, 'val'));
+    const valAxOf = (el) => typeIds(el).map((id) => axById.get(id)).find((a) => a?.name === 'valAx' && ['l', 'r'].includes(attr(child(a, 'axPos'), 'val')) || a?.name === 'valAx' && kindOf(el) === 'bar') ?? typeIds(el).map((id) => axById.get(id)).find((a) => a?.name === 'valAx');
+    const firstKind = kindOf(typeEls[0]);
+    const kinds = new Set(typeEls.map(kindOf));
+    const combo = typeEls.length > 1 && kinds.size > 1;
+    const primaryVal = valAxOf(typeEls[0]);
+    const series = [];
+    let grouping = null;
+    let variant;
+    for (const typeEl of typeEls) {
+      const k = kindOf(typeEl);
+      const g = attr(child(typeEl, 'grouping'), 'val');
+      const va = valAxOf(typeEl);
+      const secondary = !!(va && primaryVal && va !== primaryVal && attr(child(va, 'axPos'), 'val') === 'r');
+      if (g && (k === 'col' || k === 'bar' || !grouping)) grouping = g === 'percentStacked' ? 'percent' : g === 'stacked' ? 'stacked' : grouping ?? null;
+      if (k === 'scatter' && attr(child(typeEl, 'scatterStyle'), 'val')?.startsWith('smooth')) variant = 'smooth';
+      if (k === 'radar') { const st = attr(child(typeEl, 'radarStyle'), 'val'); if (st === 'filled') variant = 'filled'; }
+      for (const sEl of kids(typeEl, 'ser')) {
+        const i = series.length;
+        const tx = child(sEl, 'tx');
+        const name = tx ? (child(tx, 'v')?.text ?? vals(tx)[0] ?? `계열 ${i + 1}`) : `계열 ${i + 1}`;
+        const sp = child(sEl, 'spPr');
+        const ln = lnOf(sp);
+        const lineLike = k === 'line' || k === 'scatter' || (k === 'radar' && variant !== 'filled');
+        const color = lineLike ? (ln?.color?.startsWith('#') ? ln.color : null) : fillOf(sp);
+        const o = { name, vals: vals(child(sEl, 'val') ?? child(sEl, 'yVal')).map((v) => Number(v) || 0), ...(color ? { color } : {}), _cats: vals(child(sEl, 'cat') ?? child(sEl, 'xVal')) };
+        if (combo) o.type = k === 'bar' ? 'col' : k;
+        if (secondary) o.axis = 'secondary';
+        if (k === 'bubble') o.sizes = vals(child(sEl, 'bubbleSize')).map((v) => Number(v) || 0);
+        if (lineLike && ln?.w && Number(ln.w) !== 28575) o.lineWidth = Math.round((Number(ln.w) / 12700) * 4) / 4;
+        if (ln?.dash && ln.dash !== 'solid') o.dash = { dash: 'dash', sysDash: 'dash', sysDot: 'dot', dashDot: 'dashDot', lgDash: 'longDash' }[ln.dash] ?? 'dash';
+        if (k === 'scatter' && ln && !ln.none && !variant) variant = 'line';
+        const mk = attr(child(child(sEl, 'marker'), 'symbol'), 'val');
+        if (k === 'line' && mk && mk !== 'none') { o.marker = MARKER_XML[mk] ?? 'circle'; }
+        if (k === 'radar' && mk && mk !== 'none' && !variant) variant = 'marker';
+        if (bool(attr(child(sEl, 'smooth'), 'val')) && k === 'line') o.smooth = true;
+        const pc = {};
+        const ex = {};
+        for (const d of kids(sEl, 'dPt')) { const di = num(attr(child(d, 'idx'), 'val')); const c2 = fillOf(child(d, 'spPr')); if (c2) pc[di] = c2; const e = num(attr(child(d, 'explosion'), 'val'), 0); if (e) ex[di] = e; }
+        if (Object.keys(pc).length) o.pointColors = pc;
+        if (Object.keys(ex).length) o.explodeAt = ex;
+        const sdl = dlOf(child(sEl, 'dLbls'));
+        if (sdl) o.labels = sdl;
+        const tr = child(sEl, 'trendline');
+        if (tr) {
+          const tt = attr(child(tr, 'trendlineType'), 'val');
+          const t2 = Object.entries(TREND_XML).find(([, v]) => v === tt)?.[0];
+          if (t2) o.trend = { type: t2, ...(t2 === 'poly' ? { order: num(attr(child(tr, 'order'), 'val'), 2) } : {}), ...(t2 === 'movingAvg' ? { period: num(attr(child(tr, 'period'), 'val'), 2) } : {}), ...(child(tr, 'forward') ? { forward: num(attr(child(tr, 'forward'), 'val'), 0) } : {}), eq: bool(attr(child(tr, 'dispEq'), 'val')) || undefined, r2: bool(attr(child(tr, 'dispRSqr'), 'val')) || undefined, ...(child(tr, 'name') ? { name: child(tr, 'name').text } : {}) };
+        }
+        const eb = child(sEl, 'errBars');
+        if (eb) {
+          const et = attr(child(eb, 'errValType'), 'val');
+          const e2 = Object.entries(ERR_XML).find(([, v]) => v === et)?.[0];
+          if (e2) o.err = { type: e2, ...(child(eb, 'val') ? { val: Number(attr(child(eb, 'val'), 'val')) } : {}) };
+        }
+        if ((k === 'pie' || k === 'doughnut') && num(attr(child(sEl, 'explosion'), 'val'), 0)) variant = variant ?? 'explode';
+        series.push(o);
+      }
+    }
     const cats = (series.find((s) => s._cats.length)?._cats ?? []).map((v) => v ?? '');
     for (const s of series) delete s._cats;
+    let kind = combo ? 'combo' : firstKind;
+    if (combo && [...kinds].every((k) => k === 'col' || k === 'bar')) kind = firstKind;
+    if (firstKind === 'line' && !combo && series.some((s) => s.marker) && series.every((s) => s.marker === 'circle' || !s.marker)) { variant = 'markers'; for (const s of series) delete s.marker; }
     const chartEl = descendants(x, 'chart')[0];
     const titleEl = child(chartEl, 'title');
     const autoDeleted = bool(attr(child(chartEl, 'autoTitleDeleted'), 'val'));
     // 제목 글이 없으면: 계열이 하나일 때 계열 이름이 자동 제목 (PowerPoint 와 같음)
     const title = descendants(titleEl, 't').map((t) => t.text).join('') || ((titleEl || !autoDeleted) && series.length === 1 && !['pie', 'doughnut'].includes(kind) ? series[0].name : (titleEl && series.length === 1 ? series[0].name : ''));
+    const tsz = attr(descendants(titleEl, 'defRPr')[0], 'sz') ?? attr(descendants(titleEl, 'rPr')[0], 'sz');
     const legend = attr(child(descendants(x, 'legend')[0], 'legendPos'), 'val');
-    const dl = descendants(typeEl, 'dLbls')[0];
-    return { kind, title, cats: cats.length ? cats : series[0]?.vals.map((_, i) => String(i + 1)) ?? [], series, legend: legend ? (legend === 'r' ? 'r' : 'b') : null, labels: !!dl && (bool(attr(child(dl, 'showVal'), 'val')) || bool(attr(child(dl, 'showPercent'), 'val'))), stacked: /stacked/i.test(attr(child(typeEl, 'grouping'), 'val') ?? '') };
+    const dl = dlOf(kids(typeEls[0], 'dLbls')[0]);
+    const out = { kind, title, cats: cats.length ? cats : series[0]?.vals.map((_, i) => String(i + 1)) ?? [], series, legend: legend && ['t', 'b', 'l', 'r', 'tr'].includes(legend) ? legend : null, labels: dl ?? false };
+    if (grouping) out.grouping = grouping;
+    if (variant) out.variant = variant;
+    if (tsz && Number(tsz) !== 1862) out.titleSize = Number(tsz) / 100;
+    // 축
+    const axisOpts = (a) => {
+      if (!a) return undefined;
+      const o = {};
+      const sc = child(a, 'scaling');
+      if (attr(child(sc, 'orientation'), 'val') === 'maxMin') o.reverse = true;
+      if (child(sc, 'min')) o.min = Number(attr(child(sc, 'min'), 'val'));
+      if (child(sc, 'max')) o.max = Number(attr(child(sc, 'max'), 'val'));
+      if (child(a, 'majorUnit')) o.major = Number(attr(child(a, 'majorUnit'), 'val'));
+      if (bool(attr(child(a, 'delete'), 'val'))) o.hide = true;
+      const nf = child(a, 'numFmt');
+      if (nf && attr(nf, 'sourceLinked') === '0' && attr(nf, 'formatCode') && attr(nf, 'formatCode') !== 'General') o.fmt = attr(nf, 'formatCode');
+      const t = descendants(child(a, 'title'), 't').map((e) => e.text).join('');
+      if (t) o.title = t;
+      return Object.keys(o).length ? o : undefined;
+    };
+    if (!['pie', 'doughnut'].includes(kind)) {
+      const ids = typeIds(typeEls[0]).map((id) => axById.get(id)).filter(Boolean);
+      const catAx = ids.find((a) => a.name === 'catAx' || a.name === 'dateAx') ?? ids.find((a) => a !== primaryVal);
+      const y2 = [...axById.values()].find((a) => a.name === 'valAx' && a !== primaryVal && attr(child(a, 'axPos'), 'val') === 'r');
+      const axes = { x: axisOpts(catAx), y: axisOpts(primaryVal), ...(y2 && series.some((s2) => s2.axis) ? { y2: axisOpts(y2) } : {}) };
+      for (const k of Object.keys(axes)) if (!axes[k]) delete axes[k];
+      if (Object.keys(axes).length) out.axes = axes;
+      const grid = { major: !!child(primaryVal, 'majorGridlines'), ...(child(primaryVal, 'minorGridlines') ? { minor: true } : {}), ...(catAx && child(catAx, 'majorGridlines') ? { cat: true } : {}) };
+      if (!grid.major || grid.minor || grid.cat) out.grid = grid;
+    }
+    const bar = typeEls.find((e) => e.name === 'barChart' || e.name === 'bar3DChart');
+    if (bar) {
+      const gw = attr(child(bar, 'gapWidth'), 'val');
+      const ov = attr(child(bar, 'overlap'), 'val');
+      if (gw != null) out.gap = Number(gw);
+      if (ov != null) out.overlap = Number(ov);
+    }
+    const dn = typeEls.find((e) => e.name === 'doughnutChart');
+    if (dn && child(dn, 'holeSize')) out.hole = Number(attr(child(dn, 'holeSize'), 'val'));
+    const fsa = typeEls.map((e) => child(e, 'firstSliceAng')).find(Boolean);
+    if (fsa && Number(attr(fsa, 'val'))) out.firstAngle = Number(attr(fsa, 'val'));
+    if (bool(attr(child(typeEls[0], 'varyColors'), 'val')) && !['pie', 'doughnut'].includes(kind)) out.vary = true;
+    const dt = child(plot, 'dTable');
+    if (dt) out.dataTable = bool(attr(child(dt, 'showKeys'), 'val')) ? true : 'nokeys';
+    const pbg = fillOf(child(plot, 'spPr'));
+    if (pbg) out.plotBg = pbg;
+    const cs = descendants(x, 'chartSpace')[0] ?? x;
+    const cbg = fillOf(child(cs, 'spPr'));
+    if (cbg) out.bg = cbg;
+    const fsz = attr(descendants(child(cs, 'txPr'), 'defRPr')[0], 'sz');
+    if (fsz && Math.abs(Number(fsz) - 1197) > 50) out.font = { size: Number(fsz) / 100 };
+    return out;
   }
 
   /** 배경 채우기 (bgPr 또는 테마 bgRef) */

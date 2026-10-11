@@ -155,10 +155,11 @@ const TABLE_LAYOUT = { id: 'tableLayout', label: '레이아웃', context: 'table
   { label: '맞춤', items: [ROWS([B('alignLeft', 'alignLeft', '왼쪽 맞춤'), B('alignCenter', 'alignCenter', '가운데 맞춤'), B('alignRight', 'alignRight', '오른쪽 맞춤')], [B('anchorTop', 'alignTop', '위쪽 맞춤'), B('anchorMiddle', 'alignMiddle', '세로 가운데 맞춤'), B('anchorBottom', 'alignBottom', '아래쪽 맞춤')])] },
 ] };
 const CHART_DESIGN = { id: 'chartDesign', label: '차트 디자인', context: 'chart', groups: [
-  { label: '차트 레이아웃', items: [L(null, 'chartColumn', '차트 요소 추가', { menu: 'chartElementsMenu' })] },
-  { label: '차트 스타일', items: [L(null, 'theme', '색 변경', { menu: 'chartColorsMenu' })] },
-  { label: '데이터', items: [L('chartData', 'table', '데이터 편집')] },
-  { label: '종류', items: [L(null, 'chartBar', '차트 종류 변경', { menu: 'chartKindMenu' })] },
+  { label: '차트 레이아웃', items: [L(null, 'chartColumn', '차트 요소 추가', { menu: 'chartElementsMenu' }), L(null, 'layout', '빠른 레이아웃', { menu: 'chartQuickLayoutMenu' })] },
+  { label: '차트 스타일', items: [L(null, 'theme', '색 변경', { menu: 'chartColorsMenu' }), L(null, 'effects', '차트 스타일', { menu: 'chartStyleMenu' })] },
+  { label: '데이터', items: [L('chartSwitchRowCol', 'swap', '행/열 전환'), L('chartData', 'table', '데이터 편집')] },
+  { label: '종류', items: [L('chartTypeDialog', 'chartBar', '차트 종류 변경')] },
+  { label: '서식', items: [L('chartFormat', 'formatBg', '선택 영역 서식'), L('chartResetStyle', 'resetSlide', '스타일에 맞게 다시 설정')] },
 ] };
 
 export const TABS = [HOME, INSERT, DESIGN, TRANS, ANIM, SHOW, REVIEW, VIEW, HELP, SHAPE_FMT, PIC_FMT, TABLE_DESIGN, TABLE_LAYOUT, CHART_DESIGN, MEDIA_TAB, SMART_TAB, MASTER_TAB];
@@ -180,7 +181,7 @@ const KT = {
   pictureFormat: { removeBackground: 'E', pictureCorrectionsMenu: 'R', pictureColorMenu: 'I', changePicture: 'CP', resetPicture: 'Q', pictureStyles: 'K', shapeOutline: 'SO', shapeEffectsMenu: 'SE', altText: 'T', cropPicture: 'V', objSize: 'H', 'launcher:formatPaneShape': 'DS', ...ARRANGE_KT },
   tableDesign: { 'tblOpt:firstRow': 'A', 'tblOpt:lastRow': 'T', 'tblOpt:banded': 'R', 'tblOpt:firstCol': 'C', 'tblOpt:lastCol': 'L', tableStyles: 'S', cellFill: 'H', cellBorderMenu: 'B' },
   tableLayout: { tblSelectMenu: 'K', tblDeleteMenu: 'D', tblRowAbove: 'A', tblRowBelow: 'BE', tblColLeft: 'L', tblColRight: 'R', tblMerge: 'M', tblSplit: 'P', tblEqualRows: 'HE', tblEqualCols: 'WE', alignLeft: 'AL', alignCenter: 'AC', alignRight: 'AR', anchorTop: 'AT', anchorMiddle: 'AV', anchorBottom: 'AB' },
-  chartDesign: { chartElementsMenu: 'A', chartColorsMenu: 'C', chartData: 'E', chartKindMenu: 'T' },
+  chartDesign: { chartElementsMenu: 'A', chartQuickLayoutMenu: 'L', chartColorsMenu: 'C', chartStyleMenu: 'S', chartSwitchRowCol: 'W', chartData: 'E', chartTypeDialog: 'T', chartFormat: 'F', chartResetStyle: 'R' },
   slideMaster: { masterRename: 'R', masterReset: 'E', masterHideGraphics: 'H', formatBg: 'B', closeMaster: 'C' },
   smartDesign: { smartAddShape: 'A', smartTextPane: 'X', smartLayoutMenu: 'L', smartColors: 'C', smartToShapes: 'V' },
   playback: { previewMedia: 'P', mediaOptions: 'O', bringForward: 'AF', sendBackward: 'AE', alignMenu: 'AA', altText: 'T', objSize: 'H' },
