@@ -44,6 +44,16 @@ Node 24.19의 동일 프로파일 도구로 D:에 복사한 동일 XLSB를 측�
 
 초기 전체 테스트에서 PowerShell 시작 제한시간 초과 1건, 이후 전체 실행 두 번에서 각각 빌드 아이콘 복사 `UNKNOWN` 오류 1건이 있었다. 각 전체 실행은 2,639/2,640이며 전체 성공으로 계산하지 않는다. 해당 파일을 단독 재실행하면 모두 통과했다. 직렬 재실행은 중간에 종료했으며 완료 결과로 사용하지 않는다. 최종 검증은 빌드 검사를 별도 프로세스로 분리하여, 일반 검사 2,633/2,633과 `modules.test.js` 7/7을 모두 통과했다. 합계 2,640개이며 두 실행 모두 실패·취소·건너뜀 0이다. 마지막 캐시 항목 수 상한 보강 후 XLSX 공유 수식·Blob/디스크 회귀 16/16과 두 빌드를 다시 통과했다.
 
-일반·Cloudflare 빌드는 둘 다 종료 코드 0이다. 소스 서버의 하위 경로를 빌드 루트로 사용한 초기 번들 스모크는 앱 초기화 시간 초과였으며 기능 성공으로 계산하지 않는다. 번들 스모크는 빌드 디렉터리 전용 로컬 정적 서버에서 통과했다. 공개 서비스 배포는 이 작업에서 수행하지 않았다.
+일반·Cloudflare 빌드는 둘 다 종료 코드 0이다. 소스 서버의 하위 경로를 빌드 루트로 사용한 초기 번들 스모크는 앱 초기화 시간 초과였으며 기능 성공으로 계산하지 않는다. 번들 스모크는 빌드 디렉터리 전용 로컬 정적 서버에서 통과했다.
+
+## 공개 반영
+
+2026-10-12 사용자 요청에 따라 제품 커밋 `c737d2f5ee693da8438bfb4c6244e32243391625`를 [공개 WIXEL](https://wixel-3.wizx.workers.dev/)에 배포했다. 기존 공개 자산은 바로 이전 제품 커밋의 `wixel-4a3b6451c87b60d2.js`였으며, Wrangler dry-run 통과 후 기존 `wixel-3` Worker에 반영했다.
+
+- Cloudflare 버전: `0229e15e-ce4b-46dd-bfac-9a099938ef4c`
+- 공개 자산: `wixel-51ee0c185b798fbf.js`, 5,956,906바이트
+- SHA-256: `51ee0c185b798fbf4287fc7a915cdbcf73b91697d70d86c5e6d5d7729e83ba99`
+- 배포 후 HTML·JavaScript·상태 API HTTP 200, 상태 `ok: true`, CSP 유지 확인. 공개 HTML과 JavaScript 모두 검증한 로컬 빌드와 바이트 단위로 일치한다.
+- 공개 Chromium의 새 합성 문서에서 명령 399개, `bad 0`을 확인했다. 로드한 자산도 위 새 파일과 일치한다. 쓰기 요청 차단을 설정한 검사에서 쓰기 시도는 0이며 사용자 파일이나 개인 보관함을 사용하지 않았다. 검사 브라우저는 종료했다.
 
 형식 확인에 사용한 Microsoft 명세: [BrtBeginConditionalFormatting](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-xlsb/652db033-0f28-4cab-99a5-00a61a01990d), [BrtBeginSXCondFmt](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-xlsb/56df640b-7a3d-4217-be66-4485ead03caf), [PRuleHeaderData](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-xlsb/548d5e2a-6ce7-4867-b3d9-7970ca75e787), [PRFilter](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-xlsb/d7d183bd-e449-43d9-b778-ce4187ab0e45).
