@@ -52,4 +52,10 @@ MCP는 저장 본문 및 압축 해제 후 각각 8MiB, 10만 셀, 100시트까�
 
 ## 공개 배포
 
-배포 후 버전·자산 해시·공개 검증 결과를 아래 기록한다.
+- 제품 커밋 `611f323`, 브랜치 `codex/ai-mcp-integrations`, 원격 push 완료.
+- Cloudflare 버전 `d247f557-26f9-4807-a7d2-3d8850de6fe6`.
+- 공개 주소 `https://wixel-3.wizx.workers.dev/`, MCP `https://wixel-3.wizx.workers.dev/api/mcp`.
+- 자산 `wixel-fec2f0431b599554.js`, 5,979,892 bytes, SHA256 `fec2f0431b599554c95856593f290239681db01a8779a1319a978150b81cf952`.
+- 공개 HTML·JS·동의 화면 HTML/JS/CSS·version.json 6파일 모두 로컬과 바이트 동일. health의 ai/mcp true, 기존 CSP 유지 확인.
+- 공개 실제 API 41확인과 공개 Chromium 다섯 공급자 UI·변경안 적용/취소·stale 차단·키 비영속·토큰 해제·OAuth 동의 통과. AI 응답만 모의 처리하여 과금 호출을 하지 않았다. 합성 문서와 발급 권한은 검사 후 삭제했다.
+- 공개 검증 JSON 및 스크린샷은 `D:\Codex\Temp\wixel-ai-mcp\public-verification.json`, `D:\Codex\Temp\wixel-ai-mcp\public`에 보관한다. 테스트 브라우저와 전용 로컬 workerd 종료.
