@@ -9,6 +9,7 @@ import { hasSavedNameError } from './calculation-state.js';
 import { createXmlChunks } from './xml-chunks.js';
 import { pivotExportData, pivotValueStats } from './pivot-export-data.js';
 import { xlsxRowPlan } from './xlsx-row-stream.js';
+import { createXlsxSharedFormulas } from './xlsx-shared-formulas.js';
 import { xlsxBoundedRowPlan } from './xlsx-compact-rows.js';
 import { storedCellEntries } from './cell-storage.js';
 import { readAutoFilter, readFilterSort, autoFilterXml, filterSortXml } from './xlsx-filter.js';
@@ -981,7 +982,9 @@ function* readSheet(files, path, ctx) {
         const inline = c.is !== null ? parseXml(`<is>${c.is}</is>`) : null;
         value = detachedXmlText(allText(inline)); phonetic = readPhonetic(inline, value, ctx.fonts);
       }
-      else if (t === 'str') value = detachedXmlText(vText ?? '');
+      // Binary strings were decoded into independent UTF-16 strings already;
+      // only XML substrings need detaching from a potentially huge sheet text.
+      else if (t === 'str') value = binRows ? vText ?? '' : detachedXmlText(vText ?? '');
       else if (t === 'b') value = vText === '1';
       else if (t === 'e') value = { error: vText ?? '#N/A' };
       else if (vText !== null && vText !== '') value = Number(vText);
@@ -3000,13 +3003,15 @@ function linkPivotCond(sheet, def, root, cache) {
     const scope = cf.attrs.scope === 'data' ? 'data' : cf.attrs.scope === 'field' ? 'field' : 'selection';
     let vi = 0;
     let rowField = null;
+    let colField = null;
     for (const ref of descendants(cf, 'reference')) {
       const f = Number(ref.attrs.field);
       if (f === 4294967294 || f === -2) vi = Number(child(ref, 'x')?.attrs.v ?? 0);
       else if (names[f] && (def.rows ?? []).includes(names[f])) rowField = names[f];
+      else if (names[f] && (def.cols ?? []).includes(names[f])) colField = names[f];
     }
     const v = def.values?.[vi];
-    rule.pivot = { name: def.name ?? '', scope, ...(v ? { value: valueName(v) } : {}), ...(rowField ? { rowField } : {}) };
+    rule.pivot = { name: def.name ?? '', scope, ...(v ? { value: valueName(v) } : {}), ...(rowField ? { rowField } : {}), ...(colField ? { colField } : {}) };
   }
 }
 
@@ -4614,6 +4619,8 @@ function pivotCondXml(wb, si, def, header, values) {
     const rf = (pv.scope === 'field' || pv.scope === 'selection') && pv.rowField ? header.findIndex((h) => String(h).toLowerCase() === String(pv.rowField).toLowerCase()) : -1;
     // 엑셀과 같은 형식: 행 필드 참조는 항목 없이(count="0") — 그 필드의 모든 항목
     if (rf >= 0) refs.push(`<reference field="${rf}" count="0" selected="0"/>`);
+    const cf = (pv.scope === 'field' || pv.scope === 'selection') && pv.colField ? header.findIndex(h => String(h).toLowerCase() === String(pv.colField).toLowerCase()) : -1;
+    if (cf >= 0 && cf !== rf) refs.push(`<reference field="${cf}" count="0" selected="0"/>`);
     out.push(`<conditionalFormat scope="${pv.scope === 'selection' ? 'selection' : pv.scope === 'data' ? 'data' : 'field'}" priority="${i + 1}"><pivotAreas count="1"><pivotArea outline="0" collapsedLevelsAreSubtotals="1" fieldPosition="0"><references count="${refs.length}">${refs.join('')}</references></pivotArea></pivotAreas></conditionalFormat>`);
   });
   return out.length ? `<conditionalFormats count="${out.length}">${out.join('')}</conditionalFormats>` : '';
@@ -5227,7 +5234,19 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
   const expMemo = new Map(); // 같은 수식(표의 계산 열 등)은 한 번만 변환
   const shapeSame = new Map(); // 수식 모양 → 파일 형식이 앱 형식과 같은지 (채우기로 만든 수식 백만 개도 해석은 한 번)
   const astSame = new WeakMap(); // 같은 AST(같은 모양으로 채운 수식) → 파일 형식이 앱 형식과 같은지
+  const tableFormulaMemo = new WeakMap();
+  let tableFormulaCount = 0;
   const exportF = (raw, t, dyn, ast = null) => {
+    if (t && ast) {
+      const previous = tableFormulaMemo.get(ast);
+      if (previous?.raw === raw && previous.table === t && previous.dynamic === dyn) return previous.xml;
+      const xml = xesc(exportFormula(raw, t, dyn));
+      if (previous || tableFormulaCount < 4096) {
+        if (!previous) tableFormulaCount++;
+        tableFormulaMemo.set(ast, { raw, table: t, dynamic: dyn, xml });
+      }
+      return xml;
+    }
     if (ast && !t && !dyn) {
       const same = astSame.get(ast);
       if (same === true) return xesc(raw.slice(1));
@@ -5258,6 +5277,7 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
   const rowsTotal = wb.sheets.slice(0, nOwn).reduce((n, sh) => n + sh.cells.size, 0) || 1;
   function* buildSheetRows(si) {
     const sheet = wb.sheets[si];
+    const sharedFormula = createXlsxSharedFormulas(sheet.cells, EXCEL_MAX_ROWS, MAX_COLS);
     const plainStyle = !sheet.allStyle && !Object.keys(sheet.colStyles ?? {}).length && !Object.keys(sheet.rowStyles ?? {}).length;
     // 열 · 행 · 셀 서식을 합친 서식 번호: 같은 조합(서식 객체 셋)은 한 번만 합치고 찾음 (셀마다 새 객체를 만들지 않게)
     const xfMemo = new Map();
@@ -5330,7 +5350,9 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
           if (dyn) dynamicCells++;
           const fAttr = dyn ? ` t="array" ref="${sp ? rangeRef({ ...sp, r2: Math.min(sp.r2, EXCEL_MAX_ROWS - 1) }) : ref}" aca="false"` : '';
           const cm = dyn ? ' cm="1"' : '';
-          const f = `<f${fAttr}>${exportF(cell.raw, cell.raw.includes('[') ? tableAt(sheet, r, c)?.name : null, dyn, cell.ast)}</f>`;
+          const shared = sharedFormula(r, c, cell);
+          const f = shared && shared.r1 !== r ? `<f t="shared" si="${shared.si}"/>`
+            : `<f${shared ? ` t="shared" si="${shared.si}" ref="${ref}:${refOf(shared.r2, c)}"` : fAttr}>${exportF(cell.raw, cell.raw.includes('[') ? tableAt(sheet, r, c)?.name : null, dyn, cell.ast)}</f>`;
           if (v === null && cachedBlank) return `<c r="${ref}"${sAttr}${cm}>${f}<v/></c>`;
           if (typeof v === 'number') return `<c r="${ref}"${sAttr}${cm}>${f}<v>${v}</v></c>`;
           if (typeof v === 'boolean') return `<c r="${ref}"${sAttr} t="b"${cm}>${f}<v>${v ? 1 : 0}</v></c>`;
@@ -5354,9 +5376,14 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
         return `<c r="${ref}"${sAttr} t="s"><v>${sst(String(v))}</v></c>`;
       };
       if (streaming) {
-        yield `<row ${attrs.join(' ')}>`;
-        for (const cell of cells) yield cellXml(cell);
-        yield '</row>';
+        // Coalesce ordinary rows before the ZIP iterator/UTF-8 encoder. Bound
+        // wide rows so this never joins an entire sheet or an unbounded row.
+        let parts = [`<row ${attrs.join(' ')}>`], length = 0;
+        for (const cell of cells) {
+          const text = cellXml(cell); parts.push(text); length += text.length;
+          if (length >= 65536) { yield parts.join(''); parts = []; length = 0; }
+        }
+        parts.push('</row>'); yield parts.join('');
       } else yield `<row ${attrs.join(' ')}>${cells.map(cellXml).join('')}</row>`;
       rowsDone += cells.length;
       if (++rowCount % 1000 === 0) onRows?.({ p: Math.min(0.85, 0.85 * rowsDone / rowsTotal), msg: `'${sheet.name}' 시트 저장 중` });

@@ -75,6 +75,7 @@ const R = {
   PCDFGROUP: 219, PCDFGROUP_END: 220, PCDFGROUPITEMS: 221, PCDFGROUPITEMS_END: 222, PCDPNAMES: 253, PCDPNAME: 255, PCDFGRANGE: 223,
   PTDEF: 280, PTDEF14: 1062, PTFIELD14: 1061, PTFITEM: 282, PTFIELD: 285, PTFIELD_END: 286, PTLOCATION: 314, PTROWFIELDS: 309, PTCOLFIELDS: 311, PTPAGEFIELD: 289,
   PTDATAFIELD: 293, PTROWITEMS: 299, PTROWITEMS_END: 300, PTCOLITEMS: 301, PTCOLITEMS_END: 302, PTLINE: 297, PTLINE_X: 388, PTFILTER: 601, PTFILTER_END: 602, PTREFERENCE: 251, PTREFITEM: 382, AUTOSORTSCOPE: 459,
+  PTCOND: 558, PTCOND_END: 559, PTRULE: 247, PTRULE_END: 248, PTREFERENCE_END: 252,
   SLC_DEF: 1077, SLC_PIVOTS: 1085, SLC_TABULAR: 1100, SLC_ITEMS: 1102, SLICER: 1083,
 };
 
@@ -896,6 +897,7 @@ function pivotTableXml(u8) {
   let fld = null;
   let rows = []; let cols = [];
   const pages = []; const datas = []; const filters = [];
+  const conditional = []; let cf = null, cfArea = null, cfRef = null;
   let style = '';
   let flt = null;
   let depth = 0; // PTFIELD 안의 참조 (자동 정렬 기준)
@@ -976,8 +978,38 @@ function pivotTableXml(u8) {
         const t = ITEM_TYPES[type] ?? 'data';
         fld.items.push(`<item${attrs({ t: t !== 'data' ? t : undefined, h: fl & 1 ? 1 : undefined, sd: fl & 2 ? 0 : undefined, x: t === 'data' ? x : undefined })}/>`);
       } break;
-      case R.PTREFERENCE: if (fld && depth) { fld.sort = { field: rd.i32(), items: [] }; } break;
-      case R.PTREFITEM: if (fld?.sort) fld.sort.items.push(rd.i32()); break;
+      // MS-XLSB 2.4.238 / 2.5.111: worksheet priorities link these rules to
+      // their pivot value and row/column fields. They are not sort references.
+      case R.PTCOND: {
+        const scope = rd.u32(), type = rd.u32(), priority = rd.u32();
+        cf = { a: { scope: ['selection', 'data', 'field'][scope], type: ['none', 'all', 'row', 'column'][type], priority }, areas: [] };
+        conditional.push(cf); break;
+      }
+      case R.PTCOND_END: cf = null; cfArea = null; cfRef = null; break;
+      case R.PTRULE: if (cf) {
+        const field = rd.i32(), type = rd.u8v(), flags = rd.u8v(), axis = rd.u16();
+        cfArea = { a: { field: field === -1 ? undefined : field, type: ['none', 'normal', 'data', 'all', 'origin', 'button', 'topRight'][type],
+          dataOnly: flags & 1 ? 1 : 0, labelOnly: flags & 2 ? 1 : 0, grandRow: flags & 4 ? 1 : 0, grandCol: flags & 8 ? 1 : 0,
+          cacheIndex: flags & 16 ? 1 : 0, outline: flags & 32 ? 1 : 0, collapsedLevelsAreSubtotals: flags & 128 ? 1 : 0,
+          axis: ({ 1: 'axisRow', 2: 'axisCol', 4: 'axisPage', 8: 'axisValues' })[axis & 15], fieldPosition: axis & 15 ? (axis >>> 4) & 255 : undefined,
+          offset: flags & 64 ? rangeRef(rd.rfx()) : undefined }, refs: [] };
+        cf.areas.push(cfArea);
+      } break;
+      case R.PTRULE_END: cfArea = null; cfRef = null; break;
+      case R.PTREFERENCE:
+        if (cfArea) {
+          const field = rd.u32(); rd.u32(); const flags = rd.u16() | (rd.u8v() << 16);
+          const a = { field, selected: flags & 0x10000 ? 1 : 0 };
+          ['defaultSubtotal', 'sumSubtotal', 'countASubtotal', 'avgSubtotal', 'maxSubtotal', 'minSubtotal', 'productSubtotal', 'countSubtotal', 'stdDevSubtotal', 'stdDevPSubtotal', 'varSubtotal', 'varPSubtotal'].forEach((name, i) => { if (flags & (2 << i)) a[name] = 1; });
+          cfRef = { a, items: [] }; cfArea.refs.push(cfRef);
+        }
+        else if (!cf && fld && depth) fld.sort = { field: rd.i32(), items: [] };
+        break;
+      case R.PTREFERENCE_END: cfRef = null; break;
+      case R.PTREFITEM:
+        if (cfRef) cfRef.items.push(rd.u32());
+        else if (!cf && fld && depth && fld.sort) fld.sort.items.push(rd.i32());
+        break;
       case R.PTROWFIELDS: { const n = rd.i32(); rows = Array.from({ length: Math.min(n, rd.left >> 2) }, () => rd.i32()); break; }
       case R.PTCOLFIELDS: { const n = rd.i32(); cols = Array.from({ length: Math.min(n, rd.left >> 2) }, () => rd.i32()); break; }
       case R.PTPAGEFIELD: { const fl = rd.i32(); const item = rd.i32(); rd.skip(4); const hasName = rd.u8v() & 1; const name = hasName ? rd.str() : null; pages.push(`<pageField${attrs({ fld: fl, item: item === 0x001000FE || item < 0 ? undefined : item, hier: -1, name: name ?? undefined })}/>`); break; }
@@ -1017,7 +1049,8 @@ function pivotTableXml(u8) {
   const ITEM_T = ['data', 'default', 'sum', 'countA', 'avg', 'max', 'min', 'product', 'count', 'stdDev', 'stdDevP', 'var', 'varP', 'grand', 'blank'];
   const lineXml = (tag, list) => (list.length ? `<${tag} count="${list.length}">${list.map((l) => `<i${attrs({ t: l.t ? ITEM_T[l.t] ?? 'data' : undefined, r: l.r || undefined, i: l.i || undefined })}>${l.xs.map((v) => `<x v="${v}"/>`).join('')}</i>`).join('')}</${tag}>` : '');
   const display = showValuesRow === undefined ? '' : `<extLst><ext uri="{962EF5D1-5CA2-4c93-8EF4-DBF5C05439D2}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:pivotTableDefinition hideValuesRow="${showValuesRow ? 0 : 1}"/></ext></extLst>`;
-  return `<pivotTableDefinition xmlns="${NS}"${attrs({ ...head, compact: anyCompact ? undefined : 0, compactData: anyCompact ? undefined : 0, outline: anyOutline ? 1 : undefined, outlineData: anyOutline ? 1 : undefined })}>${loc}<pivotFields count="${fields.length}">${fieldsXml}</pivotFields>${fl('rowFields', rows)}${lineXml('rowItems', lines.rowItems)}${fl('colFields', cols)}${lineXml('colItems', lines.colItems)}${pages.length ? `<pageFields count="${pages.length}">${pages.join('')}</pageFields>` : ''}${datas.length ? `<dataFields count="${datas.length}">${datas.join('')}</dataFields>` : ''}${style}${filters.length ? `<filters count="${filters.length}">${filters.map((x) => `<filter${attrs(x.a)}>${x.top}</filter>`).join('')}</filters>` : ''}${display}</pivotTableDefinition>`;
+  const cfXml = conditional.length ? `<conditionalFormats count="${conditional.length}">${conditional.map(x => `<conditionalFormat${attrs(x.a)}><pivotAreas count="${x.areas.length}">${x.areas.map(area => `<pivotArea${attrs(area.a)}><references count="${area.refs.length}">${area.refs.map(ref => `<reference${attrs({ ...ref.a, count: ref.items.length })}>${ref.items.map(v => `<x v="${v}"/>`).join('')}</reference>`).join('')}</references></pivotArea>`).join('')}</pivotAreas></conditionalFormat>`).join('')}</conditionalFormats>` : '';
+  return `<pivotTableDefinition xmlns="${NS}"${attrs({ ...head, compact: anyCompact ? undefined : 0, compactData: anyCompact ? undefined : 0, outline: anyOutline ? 1 : undefined, outlineData: anyOutline ? 1 : undefined })}>${loc}<pivotFields count="${fields.length}">${fieldsXml}</pivotFields>${fl('rowFields', rows)}${lineXml('rowItems', lines.rowItems)}${fl('colFields', cols)}${lineXml('colItems', lines.colItems)}${pages.length ? `<pageFields count="${pages.length}">${pages.join('')}</pageFields>` : ''}${datas.length ? `<dataFields count="${datas.length}">${datas.join('')}</dataFields>` : ''}${cfXml}${style}${filters.length ? `<filters count="${filters.length}">${filters.map((x) => `<filter${attrs(x.a)}>${x.top}</filter>`).join('')}</filters>` : ''}${display}</pivotTableDefinition>`;
 }
 
 // ─────────────── 슬라이서 ───────────────
@@ -1189,11 +1222,11 @@ function sheetHeadXml(u8, env) {
       case R.FILTERS: if (afCol) afCol.blank = rd.i32() !== 0; break;
       case R.FILTER: if (afCol) afCol.vals.push(rd.str() ?? ''); break;
       case R.CF: {
-        rd.skip(8);
+        rd.skip(4); const pivot = rd.u32() !== 0;
         const cnt = rd.i32();
         const ranges = [];
         for (let i = 0; i < cnt && rd.left >= 16; i++) ranges.push(rd.rfx());
-        cf = { ranges, rules: [] };
+        cf = { ranges, pivot, rules: [] };
         parts.cf.push(cf);
         break;
       }
@@ -1269,7 +1302,7 @@ function sheetHeadXml(u8, env) {
     p = e;
   }
   const af = parts.af ? `<autoFilter ref="${parts.af.ref}">${parts.af.cols.map((c) => `<filterColumn colId="${c.id}"${c.fl & 1 ? ' hiddenButton="1"' : ''}${c.fl & 2 ? ' showButton="0"' : ''}>${c.vals.length || c.blank ? `<filters${c.blank ? ' blank="1"' : ''}>${c.vals.map((v) => `<filter val="${esc(v)}"/>`).join('')}</filters>` : ''}</filterColumn>`).join('')}</autoFilter>` : '';
-  const cfXml = parts.cf.map((x) => `<conditionalFormatting sqref="${x.ranges.map(rangeRef).join(' ')}">${x.rules.map((r) => `<cfRule${attrs(r.a)}>${r.inner}${r.fs.map((f) => `<formula>${esc(f)}</formula>`).join('')}</cfRule>`).join('')}</conditionalFormatting>`).join('');
+  const cfXml = parts.cf.map((x) => `<conditionalFormatting${x.pivot ? ' pivot="1"' : ''} sqref="${x.ranges.map(rangeRef).join(' ')}">${x.rules.map((r) => `<cfRule${attrs(r.a)}>${r.inner}${r.fs.map((f) => `<formula>${esc(f)}</formula>`).join('')}</cfRule>`).join('')}</conditionalFormatting>`).join('');
   const views = parts.views.length ? `<sheetViews>${parts.views.map((v) => `<sheetView${attrs(v.a)}>${v.pane}${v.selections.join('')}</sheetView>`).join('')}</sheetViews>` : '';
   const breaks = ['rowBreaks', 'colBreaks'].map(tag => parts[tag].length ? `<${tag} count="${parts[tag].length}">${parts[tag].join('')}</${tag}>` : '').join('');
   const xml = `<worksheet xmlns="${NS}" xmlns:r="${NS_R}">${parts.pr}${parts.dim}${views}${parts.fmt}${parts.cols.length ? `<cols>${parts.cols.join('')}</cols>` : ''}<sheetData/>${parts.protect ? `<sheetProtection${attrs(parts.protect)}/>` : ''}${af}${parts.merges.length ? `<mergeCells count="${parts.merges.length}">${parts.merges.join('')}</mergeCells>` : ''}${cfXml}${parts.validations.length ? `<dataValidations count="${parts.validations.length}">${parts.validations.join('')}</dataValidations>` : ''}${parts.links.length ? `<hyperlinks>${parts.links.join('')}</hyperlinks>` : ''}${parts.printOptions}${parts.margins}${parts.setup}${parts.headerFooter}${breaks}${parts.drawing}${parts.legacy}${parts.tables.length ? `<tableParts count="${parts.tables.length}">${parts.tables.join('')}</tableParts>` : ''}</worksheet>`;
