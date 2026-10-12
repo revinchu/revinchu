@@ -2941,3 +2941,5 @@ body.mobile-work-mode .font-count { padding:0 var(--popup-pad) 3px; font-size:10
 body.mobile-work-mode .font-preview { margin:0 var(--popup-pad) 4px; padding:3px 5px; }
 body.mobile-work-mode .font-preview-text { height:29px; line-height:29px; font-size:19px; }
 body.mobile-work-mode .font-list { max-height:min(250px,35vh); }
+/* AI integration dialogs */
+.ai-panel{display:grid;gap:12px}.ai-panel p{margin:0;line-height:1.6}.ai-field{display:grid;gap:6px}.ai-field input,.ai-field select,.ai-field textarea{width:100%;box-sizing:border-box}.ai-actions{display:flex;gap:8px;flex-wrap:wrap}.ai-answer{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;overflow:auto}.ai-preview{max-height:260px;overflow:auto}.ai-preview table{width:100%;border-collapse:collapse}.ai-preview th,.ai-preview td{text-align:left;padding:7px;border:1px solid var(--border,#ccc);max-width:260px;overflow-wrap:anywhere;white-space:pre-wrap}.ai-connection{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--border,#ccc)}.ai-connection span{overflow-wrap:anywhere}

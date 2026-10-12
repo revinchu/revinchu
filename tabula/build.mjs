@@ -53,6 +53,7 @@ function bundle(entry) {
 }
 
 const brandingAssets = [
+  'ai-connect.html', 'ai-connect.js', 'ai-connect.css',
   'manifest.webmanifest', 'apple-touch-icon.png', 'favicon.ico', 'favicon-32x32.png',
   'icons/wixel-192.png', 'icons/wixel-512.png', 'icons/wixel-maskable-512.png',
 ];

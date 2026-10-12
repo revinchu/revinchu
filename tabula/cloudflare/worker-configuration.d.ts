@@ -7,11 +7,12 @@ interface __BaseEnv_Env {
 	ASSETS: Fetcher;
 	VAULTS: DurableObjectNamespace<import("./worker").UserVault>;
 	PUBLISHED: DurableObjectNamespace<import("./worker").PublishedDocument>;
+	AI_STATE: DurableObjectNamespace<import("./worker").AiState>;
 }
 declare namespace Cloudflare {
 	interface GlobalProps {
 		mainModule: typeof import("./worker");
-		durableNamespaces: "UserVault" | "PublishedDocument";
+		durableNamespaces: "UserVault" | "PublishedDocument" | "AiState";
 	}
 	interface Env extends __BaseEnv_Env {}
 }

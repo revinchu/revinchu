@@ -270,6 +270,8 @@ export const TABS = [
         col(medium('outlineShow', 'plus', '세부 정보 표시'), medium('outlineHide', 'collapse', '세부 정보 숨기기')),
       ]),
       group('분석', [
+        large('aiAssistant', 'stats', 'AI 도우미', { title: 'AI 서비스에 요청하고 셀 변경안을 확인합니다' }),
+        large('aiConnections', 'web', 'MCP 연결', { title: '외부 AI 앱에 온라인 문서 연결' }),
         large('dataAnalysis', 'stats', '데이터 분석', { title: '통계 데이터 분석 도구 (상관 · 회귀 · 기술 통계 · t-검정 · 히스토그램 …)' }),
         large('anomalies', 'anomaly', '이상치 찾기', { title: '열마다 급등 · 급락 값을 찾아 조건부 서식으로 강조 (MAD · Z · IQR)' }),
         large('marketingMetrics', 'adMetrics', '광고 지표', { title: '노출 · 클릭 · 비용 · 전환 · 매출 열에서 CTR · CPC · CPM · CVR · CPA · ROAS 열을 수식으로 추가' }),

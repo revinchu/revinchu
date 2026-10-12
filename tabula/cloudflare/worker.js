@@ -3,6 +3,21 @@ import { VaultStore } from './store.js';
 import { ApiError, LIMITS, documentHeaders, errorResponse, json, parseRevision, randomId, sameHash, securityHeaders, sha256, validPublicId, validateName, validateOrigin, vaultKey } from './shared.js';
 import { boundedBytes, fetchPublicText, naverKeywords } from './proxy.js';
 import { mediaSearch, trackMediaDownload } from '../server/media-search.js';
+import { AiStateStore } from './ai-state.js';
+import { aiBody, oauthRoute, manageAi } from './ai-auth.js';
+import { mcpRoute } from './mcp.js';
+import { askProvider } from '../server/ai-provider.js';
+
+export class AiState extends DurableObject {
+  constructor(ctx, env) { super(ctx, env); this.storage = ctx.storage; this.state = new AiStateStore(ctx.storage); }
+  create(record) { return this.state.create(record); }
+  read() { return this.state.read(); }
+  consume(expected) { return this.state.consume(expected); }
+  authenticate(hash) { return this.state.authenticate(hash); }
+  rotate(hash, client, resource, next) { return this.state.rotate(hash, client, resource, next); }
+  revoke(owner, hash) { return this.state.revoke(owner, hash); }
+  alarm() { return this.storage.deleteAll(); }
+}
 
 function storeFor(object, create = false, limits = LIMITS) {
   if (object._store) return object._store;
@@ -19,6 +34,14 @@ function requireStore(object) {
 // RPC는 Response/ReadableStream을 전달하므로 32MiB 문서를 한 RPC 값으로 복제하지 않습니다.
 export class UserVault extends DurableObject {
   constructor(ctx, env) { super(ctx, env); this._storage = ctx.storage; this._store = null; }
+  async aiGrants() { return (await this._storage.get('aiGrants') ?? []).filter(g => g.expires > Date.now()); }
+  async addAiGrant(item) {
+    return this._storage.transaction(async tx => {
+      const list = (await tx.get('aiGrants') ?? []).filter(g => g.expires > Date.now());
+      if (list.length >= 20) return false; list.push(item); await tx.put('aiGrants', list); return true;
+    });
+  }
+  async removeAiGrant(id) { return this._storage.transaction(async tx => { const list = await tx.get('aiGrants') ?? []; await tx.put('aiGrants', list.filter(g => g.id !== id)); }); }
   list() { return json((storeFor(this)?.list() ?? []).map(({ chunks, ...item }) => item)); }
   usage() { return json(storeFor(this)?.usage() ?? { documents: 0, bytes: 0, publications: 0, ...LIMITS }); }
   read(name) { try { const { meta, body } = requireStore(this).read(name); return new Response(body, { headers: documentHeaders(meta) }); } catch (e) { return errorResponse(e); } }
@@ -107,11 +130,26 @@ function sourceRevision(value) {
 async function smallResponse(response) { return new Response(await response.text(), response); }
 export async function route(request, env) {
   const url = new URL(request.url), path = url.pathname, method = request.method;
-  if (!path.startsWith('/api/')) return env.ASSETS.fetch(request);
-  validateOrigin(request);
+  const discovery = path.startsWith('/.well-known/oauth-');
+  if (!path.startsWith('/api/') && !discovery) return env.ASSETS.fetch(request);
+  const integration = discovery || path === '/api/mcp' || path.startsWith('/api/oauth/');
+  if (integration) {
+    const origin = request.headers.get('Origin');
+    const allowed = [url.origin, 'https://chatgpt.com', 'https://claude.ai', 'https://www.perplexity.ai', 'https://grok.com', 'https://chat.deepseek.com'];
+    if (origin && !allowed.includes(origin)) throw new ApiError(403, '허용되지 않은 연결 출처입니다.', 'CROSS_ORIGIN');
+    if (method === 'OPTIONS') return new Response(null, { status: 204, headers: { ...(origin ? { 'Access-Control-Allow-Origin': origin } : {}), 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type, MCP-Protocol-Version, MCP-Session-Id', Vary: 'Origin' } });
+  } else validateOrigin(request);
   const ip = request.headers.get('CF-Connecting-IP') || 'local';
   await limited(env.API_RATE, ip);
-  if (path === '/api/health' && method === 'GET') return json({ ok: true, auth: false, vault: true, publish: true, versionHistory: true, backupImport: true, ...LIMITS });
+  if (integration) {
+    if (path !== '/api/mcp') await limited(env.FETCH_RATE, ip);
+    const response = path === '/api/mcp' ? await mcpRoute(request, env, limited) : await oauthRoute(request, env);
+    if (!response) throw new ApiError(404, '연결 주소를 확인하세요.');
+    const out = new Response(response.body, response), origin = request.headers.get('Origin');
+    if (origin) { out.headers.set('Access-Control-Allow-Origin', origin); out.headers.set('Vary', 'Origin'); out.headers.set('Access-Control-Expose-Headers', 'WWW-Authenticate, MCP-Session-Id'); }
+    return out;
+  }
+  if (path === '/api/health' && method === 'GET') return json({ ok: true, auth: false, vault: true, publish: true, versionHistory: true, backupImport: true, ai: true, mcp: true, ...LIMITS });
   if (path === '/api/fetch' && method === 'GET') {
     await limited(env.FETCH_RATE, ip);
     return fetchPublicText(url.searchParams.get('url') || '', url.hostname);
@@ -129,6 +167,12 @@ export async function route(request, env) {
   const owner = await sha256(vaultKey(request));
   await limited(env.VAULT_RATE, owner);
   const vault = env.VAULTS.getByName(owner);
+  if (path === '/api/ai/chat' && method === 'POST') {
+    await limited(env.FETCH_RATE, owner);
+    try { return json(await askProvider(await aiBody(request), request.headers.get('X-Wixel-AI-Key'), fetch, request.signal)); }
+    catch (e) { throw new ApiError(e.status || 502, e.message, 'AI_REQUEST_FAILED'); }
+  }
+  if (path.startsWith('/api/ai/')) { const response = await manageAi(request, env, owner, vault); if (response) return response; }
   if (path === '/api/files' && method === 'GET') return vault.list();
   if (path === '/api/usage' && method === 'GET') return vault.usage();
   if (path === '/api/backup' && method === 'GET') return vault.backup();

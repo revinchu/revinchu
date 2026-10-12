@@ -91,3 +91,7 @@ Cloudflare Rate Limiting binding은 위치별 제한이며 전 세계 합계나 
 - [Workers 보안 모델](https://developers.cloudflare.com/workers/reference/security-model/)
 - [global_fetch_strictly_public](https://developers.cloudflare.com/workers/configuration/compatibility-flags/)
 - [Rate Limiting binding 한계](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/)
+
+## AI와 MCP (2026-10-12)
+
+AI 중계와 문서별 MCP 권한·OAuth 계약은 [AI 도우미와 MCP 연결](../docs/codex/110_AI도우미와MCP연결.md)을 참조한다. health에 ai/mcp 플래그를 추가하며 기존 개인 API의 Origin·복구키·revision 검증은 유지한다.

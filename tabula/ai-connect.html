@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>위셀 · AI 연결 허용</title><link rel="stylesheet" href="ai-connect.css"></head>
+<body><main><p class="brand">WIXEL · 위셀</p><h1>AI에 문서 연결</h1><p id="client">연결 요청을 확인하고 있습니다…</p><p id="destination"></p>
+<form id="consent"><label>개인 보관함 복구키<input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="이 기기에 연결된 보관함 또는 복구키 43자" required></label><button type="button" id="load">보관함 문서 불러오기</button>
+<label>허용할 온라인 문서<select id="documents" required><option value="">문서를 불러오세요</option></select></label>
+<label class="check"><input id="write" type="checkbox"> 이 문서의 셀 편집을 허용합니다</label>
+<p>선택한 문서의 저장본과 시트 내용을 AI가 읽을 수 있습니다. 편집을 허용하면 셀 값을 변경해 저장할 수 있습니다. 연결은 30일 후 만료되며 위셀의 데이터 → MCP 연결에서 언제든 해제할 수 있습니다. 보관함 복구키는 AI 앱에 전달되지 않습니다.</p>
+<p>연결할 앱과 돌아갈 주소를 확인하세요. 이 앱은 위셀에서 신원을 검증한 앱이 아닙니다.</p>
+<div class="actions"><button type="submit" id="allow" disabled>선택한 문서 연결 허용</button><button type="button" id="deny">취소</button></div></form><p id="status" role="status"></p></main><script type="module" src="ai-connect.js"></script></body></html>

@@ -109,6 +109,8 @@ import {
 } from './pivot.js';
 import { SLICER_STYLES, SLICER_STYLE_GROUPS, slicerStyleName, slicerColors, slicerStyleElements, CUSTOM_KEYS } from './slicerstyle.js';
 import { server, createVaultKey, validVaultKey, idbGet } from './storage.js';
+import { aiAssistantDialog, aiConnectionsDialog } from './ai-ui.js';
+import { aiReadCells, aiWritable } from './ai-cells.js';
 import { saveLargeWorkbook, loadLargeWorkbook } from './big-storage.js';
 import { hubIcon, hubHeading, hubCard, hubPreview, hubDropzone, hubEmpty } from './app-start.js';
 import { NET, netClear, parseMarkup, htmlTables, htmlLists, tableRows, textOf, autoValue, parseCsv, importRangeSource, parseImportRange, resolveImportRangeUrl } from './fx-web.js';
@@ -3828,7 +3830,7 @@ function sparkEditDialog() {
 
 // ───────────────────────── 시트 보호 ─────────────────────────
 // 보호된 시트에서 명령마다 필요한 권한 (없는 명령은 선택한 셀이 모두 잠기지 않았을 때만)
-const PROTECT_FREE = new Set(['contextSmartLookup','mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mobileFit','privateImportPermission', 'saveLocations', 'publish', 'versionHistory', 'recentFiles', 'dataAnalysis', 'forecastSheet', 'scenarioManager', 'solver', 'undo', 'redo', 'save', 'saveAs', 'exportXlsx', 'open', 'backstage', 'print', 'copy', 'find', 'goto', 'prevSheet', 'nextSheet', 'selectRegion',
+const PROTECT_FREE = new Set(['aiAssistant', 'aiConnections', 'contextSmartLookup','mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mobileFit','privateImportPermission', 'saveLocations', 'publish', 'versionHistory', 'recentFiles', 'dataAnalysis', 'forecastSheet', 'scenarioManager', 'solver', 'undo', 'redo', 'save', 'saveAs', 'exportXlsx', 'open', 'backstage', 'print', 'copy', 'find', 'goto', 'prevSheet', 'nextSheet', 'selectRegion',
   'newWorkbook', 'renameSheet', 'moveCopySheet', 'redoOrRepeat', 'traceError', 'pivotFieldList', 'tracePrecedents', 'traceDependents', 'removeArrows', 'evaluateFormula', 'errorCheck', 'calculationStatus', 'watchWindow', 'gotoSpecial',
   'outlineShow', 'outlineHide', 'freezePanes', 'freezeTop', 'freezeFirstCol', 'circleInvalid', 'clearCircles', 'macros', 'prevComment', 'nextComment',
   'zoomDialog', 'autoCorrectOptions', 'sheetTabColor', 'workbookStats', 'toggleGrid', 'togglePrintGrid', 'toggleFormulaBar', 'toggleHeaders', 'toggleFormulas', 'toggleRibbon', 'zoomIn', 'zoomOut', 'zoom100',
@@ -9651,6 +9653,7 @@ function textToColumns() {
 
 // ───────────────────────── 바로 가기 키 순서 (Alt+A+E 등) ─────────────────────────
 const KEYTIPS = {
+  aii: ['aiAssistant', 'AI 도우미'], aim: ['aiConnections', 'MCP 연결'],
   h1: ['bold', '굵게'], h2: ['italic', '기울임꼴'], h3: ['underline', '밑줄'], hc: ['copy', '복사'], hx: ['cut', '잘라내기'],
   ae: ['textToColumns', '텍스트 나누기'], at: ['toggleFilter', '필터'], am: ['dedupe', '중복된 항목 제거'],
   avv: ['dataValidation', '데이터 유효성 검사'], ass: ['sortDialog', '정렬'], asa: ['sortAsc', '오름차순 정렬'], asd: ['sortDesc', '내림차순 정렬'],
@@ -20292,6 +20295,24 @@ const COMMANDS = {
   pictureLockAspect: v => patchObjects({ lockAspect: v }, ['images']),
   selectionPane: () => selectionPaneDialog(),
   navigator: () => navigatorPane(),
+  aiAssistant: () => aiAssistantDialog({
+    connect: connectStorage,
+    capture: include => {
+      const range = { ...sel };
+      if (include && (range.r2 - range.r1 + 1) * (range.c2 - range.c1 + 1) > 500) throw new Error('AI에 전송할 범위를 500셀 이내로 선택하세요.');
+      return { book: wb, version: wb.version, sheet: si, sheetName: sheet().name,
+        context: include ? { sheet: sheet().name, valuesAreCached: true, cells: aiReadCells(wb, si, range) } : null };
+    },
+    before: (snapshot, change) => String(snapshot.book.getCell(snapshot.sheet, change.r, change.c)?.raw ?? ''),
+    apply: (snapshot, changes) => {
+      if (viewOnly || wb.props?.markedFinal || wb !== snapshot.book || wb.version !== snapshot.version || si !== snapshot.sheet || editing) throw new Error('문서가 바뀌었거나 편집 중·읽기 전용입니다. 현재 상태에서 AI 요청을 다시 실행하세요.');
+      if (!changes?.length) throw new Error('적용할 셀 변경이 없습니다.');
+      aiWritable(wb, si, changes);
+      for (const c of changes) if (protectBlocked('cells', { r1: c.r, c1: c.c, r2: c.r, c2: c.c })) throw new Error('보호된 범위는 변경할 수 없습니다.');
+      wb.transact(() => { for (const c of changes) wb.setInput(si, c.r, c.c, c.input); }, meta());
+    },
+  }),
+  aiConnections: () => aiConnectionsDialog({ connect: connectStorage, copy: copyTextWithFeedback }),
   valueHighlight: () => { view.valueHighlight = !view.valueHighlight; gv.renderAll(); updateRibbon(); toast(view.valueHighlight ? '값 강조: 글자는 검정, 숫자는 파랑, 수식은 초록으로 표시합니다.' : '값 강조를 껐습니다.'); },
   focusCellToggle: () => { opts.focusCell = !opts.focusCell; saveOptions(); applyOptions(); gv.renderSelection(); updateRibbon(); },
   consolidate: () => consolidateDialog(),
@@ -20755,6 +20776,7 @@ const NO_COMMIT = new Set(['mobileWorkMode', 'mobileTools', 'mobileHandPan', 'mo
 // ───────────────────────── 제품 정보 · 새로운 기능 · 오류 보호 ─────────────────────────
 const APP_VERSION = '3.0.0';
 const WHATS_NEW = [
+  ['AI 도우미와 MCP 연결', ['데이터 탭에서 ChatGPT·Claude·Perplexity·Grok·DeepSeek API로 선택한 셀을 분석하고, 셀 변경안을 확인한 뒤 적용할 수 있습니다.', '외부 MCP 앱에 온라인 문서 하나씩 읽기·편집 권한을 부여합니다. OAuth 연결, 30일 만료 토큰, 연결 해제와 문서 버전 충돌 확인을 제공합니다.']],
   ['대용량 저장과 피벗 조건부 서식', ['반복 수식 변환과 저장 조각 처리를 줄이고, XLSB에서 가져온 피벗 조건부 서식의 값·행·열 필드 연결을 Excel 저장 후에도 유지합니다.']],
   ['편집 중 빠른 실행 단축키', ['셀이나 수식 입력줄을 편집하다 Alt+1로 서식 복사를 실행하면 마우스 버튼과 동일하게 입력을 확정하고 대상 셀에 서식을 적용합니다. Alt+Enter 줄바꿈과 한글 조합 입력은 그대로 유지합니다.']],
   ['함수 이름 확인과 수정', ['파일의 확인되지 않은 함수 이름을 가져오기 안내에 표시합니다. 함수 이름 뒤에 한글 한 글자가 붙은 오타는 위치와 변경 내용을 확인한 뒤 셀 수식과 표 계산 열 수식을 함께 수정하고 실행 취소할 수 있습니다.']],

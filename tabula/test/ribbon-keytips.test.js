@@ -13,7 +13,8 @@ const fixture = (items, launcher) => [{ id: 'home', label: '홈', groups: [{ lab
 test('실제 리본의 모든 탭·실행·메뉴·입력·런처에 고유한 대표 키가 있다', () => {
   const registry = createRibbonKeytipRegistry(tabs, legacy);
   const { controls, entries, audit } = registry;
-  assert.equal(controls.length, 364);
+  assert.equal(controls.length, 366);
+  for (const target of ['aiAssistant', 'aiConnections']) assert.ok(entries.some(e => e.target === target && e.primary), target);
   assert.equal(registry.tabs.jq, 'pictureFormat');
   for (const target of ['slicerH', 'slicerW', 'slicerSize']) assert.ok(entries.some(e => e.target === target && e.primary), target);
   assert.equal(controls.filter(c => c.tabId === 'pictureFormat').length, 28);
