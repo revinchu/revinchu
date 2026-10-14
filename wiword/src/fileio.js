@@ -119,7 +119,7 @@ export async function docBlob(kind) {
   let out = docBytes(S.doc, kind, { name: S.docName });
   if (out instanceof Promise) out = await out;
   const type = MIME[kind] ?? 'application/octet-stream';
-  return new Blob([kind === 'md' || kind === 'txt' || kind === 'html' ? `${kind === 'txt' ? '﻿' : ''}${out}` : out], { type: kind === 'md' || kind === 'txt' || kind === 'html' ? `${type};charset=utf-8` : type });
+  return new Blob([kind === 'md' || kind === 'txt' || kind === 'html' ? `${kind === 'txt' ? '\uFEFF' : ''}${out}` : out], { type: kind === 'md' || kind === 'txt' || kind === 'html' ? `${type};charset=utf-8` : type });
 }
 export async function save() {
   if (S.fileHandle && S.fileKind) {

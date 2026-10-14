@@ -28,7 +28,7 @@ export function decodeText(bytes) {
   if (bytes[0] === 0xff && bytes[1] === 0xfe) return dec(bytes.subarray(2), 'utf-16le');
   if (bytes[0] === 0xfe && bytes[1] === 0xff) return dec(bytes.subarray(2), 'utf-16be');
   const u = dec(bytes);
-  if (!u.includes('�')) return u.replace(/^﻿/, '');
+  if (!u.includes('\uFFFD')) return u.replace(/^\uFEFF/, '');
   try { return dec(bytes, 'euc-kr'); } catch { return u; }
 }
 export function detectKind(bytes, name = '') {
