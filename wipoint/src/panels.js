@@ -9,6 +9,8 @@ import { fitZoom, setZoom } from './editor.js';
 import { peersOn } from './collab.js';
 import { chartPane } from './chartui.js';
 import { effectsPaneSections } from './fxui.js';
+import { PATTERN_NAMES, patternSvgUrl } from './patterns.js';
+import { resolveColor } from './themes.js';
 
 let thumbsEl;
 let notesEl;
@@ -452,8 +454,9 @@ const fitZoomSoon = () => setTimeout(() => { if (S.fitZoom) fitZoom(); }, 0);
 
 function fillControls(fill, setFill, name, { allowPicture = true } = {}) {
   const type = !fill ? 'none' : fill.type;
-  const out = [radio(`${name}-type`, type, [['none', '채우기 없음'], ['solid', '단색 채우기'], ['gradient', '그라데이션 채우기'], ...(allowPicture ? [['image', '그림 채우기']] : [])], (t) => {
+  const out = [radio(`${name}-type`, type, [['none', '채우기 없음'], ['solid', '단색 채우기'], ['gradient', '그라데이션 채우기'], ...(allowPicture ? [['image', '그림 채우기']] : []), ['pattern', '패턴 채우기']], (t) => {
     if (t === 'none') setFill(null);
+    else if (t === 'pattern') setFill({ type: 'pattern', prst: 'pct5', fg: fill?.color ?? '@accent1', bg: '@bg1' });
     else if (t === 'solid') setFill({ type: 'solid', color: fill?.color ?? fill?.stops?.[0]?.[1] ?? '@accent1' });
     else if (t === 'gradient') setFill({ type: 'gradient', angle: 90, stops: [[0, fill?.color ?? '@accent1'], [1, '@accent1:lm60:lo40']] });
     else run('pickFillImage', setFill);
@@ -472,6 +475,14 @@ function fillControls(fill, setFill, name, { allowPicture = true } = {}) {
       fill.stops.length > 2 ? el('button', { class: 'btn small', onclick: () => setFill({ ...fill, stops: fill.stops.slice(0, -1) }) }, '중지점 제거') : null));
   }
   if (fill?.type === 'image') out.push(el('div', { class: 'pane-btns' }, el('button', { class: 'btn small', onclick: () => run('pickFillImage', setFill) }, '그림 바꾸기...'), check(fill.tile, (v) => setFill({ ...fill, tile: v || undefined }), '바둑판식으로 배열')));
+  if (fill?.type === 'pattern') {
+    // PowerPoint [패턴 채우기]: 48개 무늬 + 전경색 · 배경색
+    const t = S.pres.theme;
+    const fg = resolveColor(t, fill.fg, '#000'); const bg = resolveColor(t, fill.bg, '#fff');
+    out.push(el('div', { class: 'patt-grid' }, PATTERN_NAMES.map((k) => el('button', { class: `patt-cell${k === fill.prst ? ' on' : ''}`, type: 'button', title: k, style: { backgroundImage: `url("${patternSvgUrl(k, fg, bg, 2)}")` }, onclick: () => setFill({ ...fill, prst: k }) }))));
+    out.push(row('전경', colorButton(fill.fg, (c) => setFill({ ...fill, fg: c ?? '#000000' }))));
+    out.push(row('배경', colorButton(fill.bg, (c) => setFill({ ...fill, bg: c ?? '#FFFFFF' }))));
+  }
   return out;
 }
 

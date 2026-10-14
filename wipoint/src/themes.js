@@ -91,24 +91,46 @@ export function applyMods(hex, mods = []) {
     } else if (k === 'shade') {
       [r, g, b] = [r, g, b].map((c) => fromLinear(toLinear(c) * v));
     } else if (k === 'alpha') alpha = v;
+    else if (k === 'alphaMod') alpha *= v;
+    else if (k === 'alphaOff') alpha = Math.max(0, Math.min(1, alpha + v));
+    else if (k === 'satMod' || k === 'satOff' || k === 'hueMod' || k === 'hueOff' || k === 'comp') {
+      // PowerPoint 와 같이 HSL 에서 (hueOff 는 도)
+      let [h, s2, l] = rgbToHsl(r, g, b);
+      if (k === 'satMod') s2 *= v;
+      else if (k === 'satOff') s2 += v;
+      else if (k === 'hueMod') h = (h * v) % 1;
+      else if (k === 'hueOff') h = (((h + v / 360) % 1) + 1) % 1;
+      else h = (h + 0.5) % 1;
+      [r, g, b] = hslToRgb(h, Math.max(0, Math.min(1, s2)), l);
+    } else if (k === 'inv') [r, g, b] = [255 - r, 255 - g, 255 - b];
+    else if (k === 'gray') { const y = Math.round(0.3 * r + 0.59 * g + 0.11 * b); r = g = b = y; }
+    else if (k === 'red' || k === 'green' || k === 'blue' || k === 'redMod' || k === 'greenMod' || k === 'blueMod' || k === 'redOff' || k === 'greenOff' || k === 'blueOff') {
+      const ch = k.startsWith('red') ? 0 : k.startsWith('green') ? 1 : 2;
+      const arr = [r, g, b];
+      const lin = toLinear(arr[ch]);
+      const nv = k.endsWith('Mod') ? lin * v : k.endsWith('Off') ? lin + v : v;
+      arr[ch] = fromLinear(Math.max(0, Math.min(1, nv)));
+      [r, g, b] = arr;
+    }
   }
   return { hex: rgbToHex(r, g, b), alpha };
 }
 
-const MOD_CODES = { lm: 'lumMod', lo: 'lumOff', t: 'tint', s: 'shade', a: 'alpha' };
+const MOD_CODES = { lm: 'lumMod', lo: 'lumOff', t: 'tint', s: 'shade', a: 'alpha', sm: 'satMod', so: 'satOff', hm: 'hueMod', ho: 'hueOff', am: 'alphaMod', ao: 'alphaOff', cp: 'comp', iv: 'inv', gr: 'gray', rd: 'red', gn: 'green', bl: 'blue', rm: 'redMod', gm: 'greenMod', bm: 'blueMod', ro: 'redOff', go: 'greenOff', bo: 'blueOff' };
 const MOD_SHORT = Object.fromEntries(Object.entries(MOD_CODES).map(([a, b]) => [b, a]));
 
 /** '@accent1:lm75:lo25' → { slot, mods } */
 export function parseColorRef(c) {
   if (typeof c !== 'string') return null;
   const [base, ...rest] = c.split(':');
-  const mods = rest.map((m) => { const x = /^([a-z]+)(-?[\d.]+)$/.exec(m); return x && MOD_CODES[x[1]] ? [MOD_CODES[x[1]], Number(x[2]) / 100] : null; }).filter(Boolean);
+  // ho (hueOff) 는 도 단위 그대로, 나머지는 %
+  const mods = rest.map((m) => { const x = /^([a-z]+)(-?[\d.]+)$/.exec(m); return x && MOD_CODES[x[1]] ? [MOD_CODES[x[1]], x[1] === 'ho' ? Number(x[2]) : Number(x[2]) / 100] : null; }).filter(Boolean);
   if (base.startsWith('@')) return { slot: ALIAS[base.slice(1)] ?? base.slice(1), mods };
   return { hex: base, mods };
 }
 export function colorRef(slotOrHex, mods = []) {
   const head = slotOrHex.startsWith('#') ? slotOrHex.toUpperCase() : `@${slotOrHex}`;
-  return [head, ...mods.map(([k, v]) => `${MOD_SHORT[k]}${Math.round(v * 1000) / 10}`)].join(':');
+  return [head, ...mods.map(([k, v]) => `${MOD_SHORT[k]}${k === 'hueOff' ? Math.round(v * 100) / 100 : Math.round(v * 1000) / 10}`)].join(':');
 }
 
 /** 색 값 → CSS 색 (테마 색 해석) */

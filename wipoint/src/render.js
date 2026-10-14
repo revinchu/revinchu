@@ -11,6 +11,7 @@ import { wmfToSvg } from './wmf.js';
 import { symbolTable, symbolText } from './symfont.js';
 import { decodeTiff } from './tiff.js';
 import { pngDataUrl } from './pdf.js';
+import { patternPath, patternSvgUrl } from './patterns.js';
 
 export const escHtml = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const f = (n) => Math.round(n * 100) / 100;
@@ -48,6 +49,14 @@ export function fontStack(theme, font) {
   return wf && wf.family !== n ? `'${n}', '${wf.family}', ${KO_FALLBACK}` : `'${n}', ${KO_FALLBACK}`;
 }
 
+/** 이중 색조 (그림 다시 칠하기): 밝기 → 어두운 색 ~ 밝은 색 */
+export function duotoneFilter(theme, [c1, c2], id) {
+  const rgb = (c) => { const h = resolveColor(theme, c, '#000000'); const m = /rgba?\((\d+),(\d+),(\d+)/.exec(h); return m ? [m[1], m[2], m[3]].map(Number) : [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) || 0); };
+  const a = rgb(c1); const b = rgb(c2);
+  const tv = (k) => `${f(a[k] / 255)} ${f(b[k] / 255)}`;
+  return `<filter id="${id}" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="0.299 0.587 0.114 0 0 0.299 0.587 0.114 0 0 0.299 0.587 0.114 0 0 0 0 0 1 0"/><feComponentTransfer><feFuncR type="table" tableValues="${tv(0)}"/><feFuncG type="table" tableValues="${tv(1)}"/><feFuncB type="table" tableValues="${tv(2)}"/></feComponentTransfer></filter>`;
+}
+
 /** 방사형 그라데이션의 중심 (fillToRect: 안쪽 사각형 l t r b 비율의 가운데) */
 export function gradCenter(fill) {
   const [l, t, r, b] = fill.focus ?? [0.5, 0.5, 0.5, 0.5];
@@ -68,10 +77,17 @@ export function fillCss(theme, fill, media = {}) {
     const stops = (fill.stops ?? []).map(([p, c]) => `${resolveColor(theme, c, '#fff')} ${f(p * 100)}%`).join(', ');
     return fill.path ? `radial-gradient(${gradCenterCss(fill)}, ${stops})` : `linear-gradient(${f((fill.angle ?? 90) + 90)}deg, ${stops})`;
   }
+  if (fill.type === 'pattern') return `url('${patternSvgUrl(fill.prst, resolveColor(theme, fill.fg, '#000'), resolveColor(theme, fill.bg, '#fff'))}') repeat`;
   if (fill.type === 'image') {
     // 큰따옴표는 style="…" 속성을 끊으므로 작은따옴표
     const src = displaySrc(media[fill.media] ?? fill.src);
-    return src ? `url('${src}') center / ${fill.tile ? 'auto' : '100% 100%'} ${fill.tile ? 'repeat' : 'no-repeat'}` : 'transparent';
+    if (!src) return 'transparent';
+    if (fill.tile) {
+      const t = typeof fill.tile === 'object' ? fill.tile : {};
+      const size = t.w ? `${f(t.w * (t.sx ?? 1))}px ${f(t.h * (t.sy ?? 1))}px` : 'auto';
+      return `url('${src}') ${f(t.tx ?? 0)}px ${f(t.ty ?? 0)}px / ${size} repeat`;
+    }
+    return `url('${src}') center / 100% 100% no-repeat`;
   }
   return 'transparent';
 }
@@ -223,10 +239,19 @@ export function svgFill(theme, fill, w, h, media, defs) {
     }
     return `url(#${id})`;
   }
+  if (fill.type === 'pattern') {
+    defs.push(`<pattern id="${id}" patternUnits="userSpaceOnUse" width="8" height="8"><rect width="8" height="8" fill="${resolveColor(theme, fill.bg, '#fff')}"/><path d="${patternPath(fill.prst)}" fill="${resolveColor(theme, fill.fg, '#000')}" shape-rendering="crispEdges"/></pattern>`);
+    return `url(#${id})`;
+  }
   if (fill.type === 'image') {
     const src = displaySrc(media[fill.media] ?? fill.src);
     if (!src) return 'none';
-    defs.push(`<pattern id="${id}" patternUnits="userSpaceOnUse" width="${f(w)}" height="${f(h)}"><image href="${escHtml(src)}" width="${f(w)}" height="${f(h)}" preserveAspectRatio="none"/></pattern>`);
+    const fid = fill.duotone ? `${id}d` : null;
+    if (fid) defs.push(duotoneFilter(theme, fill.duotone, fid));
+    const t = fill.tile && typeof fill.tile === 'object' ? fill.tile : null;
+    const tw = t?.w ? t.w * (t.sx ?? 1) : w; const th = t?.h ? t.h * (t.sy ?? 1) : h;
+    const op = fill.alpha != null && fill.alpha < 1 ? ` opacity="${f(fill.alpha)}"` : '';
+    defs.push(`<pattern id="${id}" patternUnits="userSpaceOnUse" x="${f(t?.tx ?? 0)}" y="${f(t?.ty ?? 0)}" width="${f(tw)}" height="${f(th)}"><image href="${escHtml(src)}" width="${f(tw)}" height="${f(th)}" preserveAspectRatio="none"${fid ? ` filter="url(#${fid})"` : ''}${op}/></pattern>`);
     return `url(#${id})`;
   }
   return 'none';
@@ -300,8 +325,10 @@ function imageHtml(theme, o, media, opts) {
   const border = ln ? `<svg width="${f(o.w)}" height="${f(o.h)}" style="position:absolute;left:0;top:0;overflow:visible"><path d="${shapePath(o.shape ?? 'rect', o.w, o.h, o.adj)}" fill="none" stroke="${resolveColor(theme, ln.color, '#000')}" stroke-width="${f(ln.width ?? 1)}"/></svg>` : '';
   const fx = fxStyle(theme, fxOf(o), o.id);
   // 그림 효과(그림자 · 네온)는 잘린 모양 바깥에 그려지므로 바깥 div 에, 색 보정은 그림에
-  const adj = [o.gray ? 'grayscale(1)' : '', o.bright ? `brightness(${1 + o.bright})` : '', o.contrast ? `contrast(${1 + o.contrast})` : ''].filter(Boolean).join(' ');
-  return `${fx.defs ? `<svg width="0" height="0" style="position:absolute"><defs>${fx.defs}</defs></svg>` : ''}<div style="position:absolute;inset:0;${fx.filter ? `filter:${fx.filter};` : ''}"><div style="position:absolute;inset:0;overflow:hidden;${clip}${adj ? `filter:${adj};` : ''}"><img src="${escHtml(src)}" alt="${escHtml(o.alt ?? '')}" draggable="false" style="position:absolute;left:${f(-c.l * iw)}px;top:${f(-c.t * ih)}px;width:${f(iw)}px;height:${f(ih)}px;max-width:none;${o.alpha != null ? `opacity:${o.alpha};` : ''}"></div>${border}</div>`;
+  const duoId = o.duotone?.length === 2 ? `duo-${String(o.id).replace(/[^\w-]/g, '')}` : null;
+  const adj = [o.gray ? 'grayscale(1)' : '', o.bright ? `brightness(${1 + o.bright})` : '', o.contrast ? `contrast(${1 + o.contrast})` : '', duoId ? `url(#${duoId})` : ''].filter(Boolean).join(' ');
+  const defs = (fx.defs ?? '') + (duoId ? duotoneFilter(theme, o.duotone, duoId) : '');
+  return `${defs ? `<svg width="0" height="0" style="position:absolute"><defs>${defs}</defs></svg>` : ''}<div style="position:absolute;inset:0;${fx.filter ? `filter:${fx.filter};` : ''}"><div style="position:absolute;inset:0;overflow:hidden;${clip}${adj ? `filter:${adj};` : ''}"><img src="${escHtml(src)}" alt="${escHtml(o.alt ?? '')}" draggable="false" style="position:absolute;left:${f(-c.l * iw)}px;top:${f(-c.t * ih)}px;width:${f(iw)}px;height:${f(ih)}px;max-width:none;${o.alpha != null ? `opacity:${o.alpha};` : ''}"></div>${border}</div>`;
 }
 
 /** 비디오 · 오디오: 편집 화면은 표지 그림(또는 검은 칸/스피커), 쇼(opts.live)에서는 실제 재생기 */
@@ -455,10 +482,18 @@ export function slideHtml(pres, slide, opts = {}) {
   pres = presForSlide(pres, slide);
   const theme = pres.theme;
   const media = pres.media ?? {};
-  const bg = fillCss(theme, slideBackground(pres, slide), media);
+  const bgFill = slideBackground(pres, slide);
+  // 이중 색조 배경 그림 (테마 질감 등)은 CSS 로 칠할 수 없어 SVG 층으로
+  const svgBg = bgFill?.type === 'image' && bgFill.duotone;
+  const bg = svgBg ? '#ffffff' : fillCss(theme, bgFill, media);
   if (!opts.zoomDepth) setMasterText(pres);
   const decor = slideDecor(pres, slide);
   let html = '';
+  if (svgBg) {
+    const defs = [];
+    const fl = svgFill(theme, bgFill, pres.size.w, pres.size.h, media, defs);
+    html += `<svg width="${pres.size.w}" height="${pres.size.h}" style="position:absolute;left:0;top:0"><defs>${defs.join('')}</defs><rect width="100%" height="100%" fill="${fl}"/></svg>`;
+  }
   for (const o of decor) html += objectHtml(theme, o, media, {}).replace('class="ob"', 'class="ob decor"');
   for (const o of slide.objects) {
     if (opts.skipIds?.has(o.id) || o.hidden) continue;

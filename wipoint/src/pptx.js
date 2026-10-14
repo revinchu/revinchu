@@ -31,13 +31,18 @@ const pct = (v) => Math.round(v * 100000);
 
 // ───────────── 쓰기 도우미 ─────────────
 const SLOT_TO_SCHEME = { dk1: 'tx1', lt1: 'bg1', dk2: 'tx2', lt2: 'bg2' };
-const MOD_TAG = { lumMod: 'lumMod', lumOff: 'lumOff', tint: 'tint', shade: 'shade', alpha: 'alpha' };
-const MOD_CODES = { lm: 'lumMod', lo: 'lumOff', t: 'tint', s: 'shade', a: 'alpha' };
+const MOD_CODES = { lm: 'lumMod', lo: 'lumOff', t: 'tint', s: 'shade', a: 'alpha', sm: 'satMod', so: 'satOff', hm: 'hueMod', ho: 'hueOff', am: 'alphaMod', ao: 'alphaOff', cp: 'comp', iv: 'inv', gr: 'gray', rd: 'red', gn: 'green', bl: 'blue', rm: 'redMod', gm: 'greenMod', bm: 'blueMod', ro: 'redOff', go: 'greenOff', bo: 'blueOff' };
 
 function colorXml(c) {
   if (!c) return '';
   const [base, ...rest] = String(c).split(':');
-  const mods = rest.map((m) => { const x = /^([a-z]+)(-?[\d.]+)$/.exec(m); return x && MOD_CODES[x[1]] ? `<a:${MOD_TAG[MOD_CODES[x[1]]]} val="${Math.round(Number(x[2]) * 1000)}"/>` : ''; }).join('');
+  const mods = rest.map((m) => {
+    const x = /^([a-z]+)(-?[\d.]+)$/.exec(m);
+    const tag = x && MOD_CODES[x[1]];
+    if (!tag) return '';
+    if (tag === 'comp' || tag === 'inv' || tag === 'gray') return `<a:${tag}/>`;
+    return `<a:${tag} val="${Math.round(Number(x[2]) * (tag === 'hueOff' ? 60000 : 1000))}"/>`;
+  }).join('');
   if (base.startsWith('@')) {
     const slot = base.slice(1);
     const val = SLOT_TO_SCHEME[slot] ?? ({ tx1: 'tx1', bg1: 'bg1', tx2: 'tx2', bg2: 'bg2' }[slot] ?? slot);
@@ -63,9 +68,12 @@ function fillXml(fill, ctx) {
     const shade = fill.path ? `<a:path path="${fill.path === 'rect' || fill.path === 'shape' ? fill.path : 'circle'}"><a:fillToRect l="${pct(fo[0])}" t="${pct(fo[1])}" r="${pct(fo[2])}" b="${pct(fo[3])}"/></a:path>` : `<a:lin ang="${Math.round((((fill.angle ?? 90) % 360) + 360) % 360 * 60000)}" scaled="0"/>`;
     return `<a:gradFill rotWithShape="1"><a:gsLst>${gs}</a:gsLst>${shade}</a:gradFill>`;
   }
+  if (fill.type === 'pattern') return `<a:pattFill prst="${fill.prst ?? 'pct5'}"><a:fgClr>${colorXml(fill.fg ?? '#000000')}</a:fgClr><a:bgClr>${colorXml(fill.bg ?? '#FFFFFF')}</a:bgClr></a:pattFill>`;
   if (fill.type === 'image') {
     const rid = ctx.image(fill.media);
-    return rid ? `<a:blipFill dpi="0" rotWithShape="1"><a:blip r:embed="${rid}"/>${fill.tile ? '<a:tile tx="0" ty="0" sx="100000" sy="100000" flip="none" algn="tl"/>' : '<a:stretch><a:fillRect/></a:stretch>'}</a:blipFill>` : '<a:noFill/>';
+    const t = fill.tile && typeof fill.tile === 'object' ? fill.tile : {};
+    const blipKids = `${fill.alpha != null && fill.alpha < 1 ? `<a:alphaModFix amt="${pct(fill.alpha)}"/>` : ''}${fill.duotone?.length === 2 ? `<a:duotone>${colorXml(fill.duotone[0])}${colorXml(fill.duotone[1])}</a:duotone>` : ''}`;
+    return rid ? `<a:blipFill dpi="0" rotWithShape="1"><a:blip r:embed="${rid}"${blipKids ? `>${blipKids}</a:blip>` : '/>'}${fill.tile ? `<a:tile tx="${E(t.tx ?? 0)}" ty="${E(t.ty ?? 0)}" sx="${pct(t.sx ?? 1)}" sy="${pct(t.sy ?? 1)}" flip="${t.flip ?? 'none'}" algn="${t.algn ?? 'tl'}"/>` : '<a:stretch><a:fillRect/></a:stretch>'}</a:blipFill>` : '<a:noFill/>';
   }
   return '<a:noFill/>';
 }
@@ -236,7 +244,7 @@ function picXml(o, id, ctx, phIdx) {
   const c = o.crop;
   const src = c && (c.l || c.t || c.r || c.b) ? `<a:srcRect l="${pct(c.l)}" t="${pct(c.t)}" r="${pct(c.r)}" b="${pct(c.b)}"/>` : '';
   const alpha = o.alpha != null ? `<a:alphaModFix amt="${pct(o.alpha)}"/>` : '';
-  const gray = o.gray ? '<a:grayscl/>' : '';
+  const gray = `${o.gray ? '<a:grayscl/>' : ''}${o.duotone?.length === 2 ? `<a:duotone>${colorXml(o.duotone[0])}${colorXml(o.duotone[1])}</a:duotone>` : ''}`;
   const lum = o.bright || o.contrast ? `<a:lum bright="${pct(o.bright ?? 0)}" contrast="${pct(o.contrast ?? 0)}"/>` : '';
   const link = o.link ? ctx.hlink(o.link) : '';
   const effect = fxXml(fxOf(o));
@@ -679,6 +687,22 @@ function themeXml(theme, name = 'WIPOINT') {
   return `${XML_HEAD}<a:theme xmlns:a="${NS_A}" name="${esc(theme.label ?? name)}"><a:themeElements><a:clrScheme name="${esc(theme.label ?? name)}">${clr}</a:clrScheme><a:fontScheme name="${esc(theme.label ?? name)}"><a:majorFont>${font(theme.fonts.major)}</a:majorFont><a:minorFont>${font(theme.fonts.minor)}</a:minorFont></a:fontScheme><a:fmtScheme name="Office"><a:fillStyleLst>${ph('')}<a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:schemeClr val="phClr"><a:lumMod val="110000"/><a:satMod val="105000"/><a:tint val="67000"/></a:schemeClr></a:gs><a:gs pos="100000"><a:schemeClr val="phClr"><a:lumMod val="105000"/><a:satMod val="109000"/><a:tint val="81000"/></a:schemeClr></a:gs></a:gsLst><a:lin ang="5400000" scaled="0"/></a:gradFill><a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:schemeClr val="phClr"><a:satMod val="103000"/><a:lumMod val="102000"/><a:tint val="94000"/></a:schemeClr></a:gs><a:gs pos="100000"><a:schemeClr val="phClr"><a:lumMod val="99000"/><a:satMod val="120000"/><a:shade val="78000"/></a:schemeClr></a:gs></a:gsLst><a:lin ang="5400000" scaled="0"/></a:gradFill></a:fillStyleLst><a:lnStyleLst><a:ln w="12700" cap="flat" cmpd="sng" algn="ctr">${ph('')}<a:prstDash val="solid"/><a:miter lim="800000"/></a:ln><a:ln w="19050" cap="flat" cmpd="sng" algn="ctr">${ph('')}<a:prstDash val="solid"/><a:miter lim="800000"/></a:ln><a:ln w="25400" cap="flat" cmpd="sng" algn="ctr">${ph('')}<a:prstDash val="solid"/><a:miter lim="800000"/></a:ln></a:lnStyleLst><a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst><a:outerShdw blurRad="57150" dist="19050" dir="5400000" algn="ctr" rotWithShape="0"><a:srgbClr val="000000"><a:alpha val="63000"/></a:srgbClr></a:outerShdw></a:effectLst></a:effectStyle></a:effectStyleLst><a:bgFillStyleLst>${ph('')}${ph('<a:tint val="95000"/><a:satMod val="170000"/>')}<a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:schemeClr val="phClr"><a:tint val="93000"/><a:satMod val="150000"/><a:shade val="98000"/><a:lumMod val="102000"/></a:schemeClr></a:gs><a:gs pos="100000"><a:schemeClr val="phClr"><a:shade val="63000"/><a:satMod val="120000"/></a:schemeClr></a:gs></a:gsLst><a:lin ang="5400000" scaled="0"/></a:gradFill></a:bgFillStyleLst></a:fmtScheme></a:themeElements><a:objectDefaults/><a:extraClrSchemeLst/></a:theme>`;
 }
 
+/** 원래 테마 XML 의 색 구성 · 글꼴만 바꿈 */
+function patchTheme(xml, theme) {
+  const ours = themeXml(theme);
+  const cs = /<a:clrScheme\b[\s\S]*?<\/a:clrScheme>/.exec(ours)?.[0];
+  let out = cs ? xml.replace(/<a:clrScheme\b[\s\S]*?<\/a:clrScheme>/, cs) : xml;
+  const setFont = (tag, face) => {
+    out = out.replace(new RegExp(`(<a:${tag}>[\\s\\S]*?<\\/a:${tag}>)`), (blk) => blk
+      .replace(/(<a:latin\b[^>]*?typeface=")[^"]*"/, `$1${esc(face)}"`)
+      .replace(/(<a:ea\b[^>]*?typeface=")[^"]*"/, `$1${esc(face)}"`)
+      .replace(/(<a:font\s+script="Hang"\s+typeface=")[^"]*"/, `$1${esc(face)}"`));
+  };
+  if (theme.fonts?.major) setFont('majorFont', theme.fonts.major);
+  if (theme.fonts?.minor) setFont('minorFont', theme.fonts.minor);
+  return out.startsWith('<?xml') ? out : XML_HEAD + out;
+}
+
 function lvlStyles(sizes, bullets, extra = '') {
   return sizes.map((sz, i) => {
     const marL = bullets ? 228600 + i * 457200 : i * 457200;
@@ -801,6 +825,38 @@ const OLE_MIME = { bin: 'application/vnd.openxmlformats-officedocument.oleObject
 const OLE_EXT = Object.fromEntries(Object.entries(OLE_MIME).map(([k, v]) => [v, k]));
 export const MIME_BY_EXT = { png: 'image/png', jpeg: 'image/jpeg', jpg: 'image/jpeg', gif: 'image/gif', svg: 'image/svg+xml', bmp: 'image/bmp', webp: 'image/webp', emf: 'image/x-emf', wmf: 'image/x-wmf', tif: 'image/tiff', tiff: 'image/tiff' };
 
+/** 원래 XML 의 관계 id 를 새 파일의 관계로 바꿈 (못 바꾸면 null) */
+function remapRels(xml, relMap, rels, pres) {
+  const map = {};
+  for (const [old, r] of Object.entries(relMap ?? {})) {
+    let nid = null;
+    if (r.kind === 'image') nid = rels.image(r.media);
+    else if (r.kind === 'audio') nid = rels.audio(r.media);
+    else if (r.kind === 'link') nid = r.external === false ? rels.add(REL('hyperlink'), r.url) : rels.link(r.url);
+    else if (r.kind === 'slide') { const k = pres.slides.findIndex((x) => x.id === r.slide); if (k >= 0) nid = rels.add(REL('slide'), `slide${k + 1}.xml`); }
+    if (!nid) return null;
+    map[old] = nid;
+  }
+  return xml.replace(/\br:(\w+)="([^"]*)"/g, (m, k, v) => (v && map[v] ? `r:${k}="${map[v]}"` : m));
+}
+function rawPartXml(raw, rels) { return remapRels(raw.xml, raw.rels, rels, null); }
+/** 고치지 않은 개체 → 원래 XML (위치 · 크기만 지금 값으로) */
+function rawXml(o, members, rels, pres) {
+  let xml = remapRels(o.raw.xml, o.raw.rels, rels, pres);
+  if (!xml) return null;
+  const m = /<(a|p):xfrm\b[^>]*?(?:\/>|>[\s\S]*?<\/\1:xfrm>)/.exec(xml);
+  if (!m) return null;
+  if (o.raw.group) {
+    // 묶음 전체를 옮기거나 늘림: 묶음 xfrm 의 off · ext 만 비율대로, chOff · chExt 는 그대로
+    const b0 = o.raw.bbox; const b1 = bboxOf(members); const g = o.raw.g;
+    const sx = b1.w / b0.w; const sy = b1.h / b0.h;
+    const nx = b1.x + (g.x - b0.x) * sx; const ny = b1.y + (g.y - b0.y) * sy;
+    const patched = m[0].replace(/<a:off\b[^>]*\/>/, `<a:off x="${E(nx)}" y="${E(ny)}"/>`).replace(/<a:ext\b[^>]*\/>/, `<a:ext cx="${E(g.w * sx)}" cy="${E(g.h * sy)}"/>`);
+    return xml.slice(0, m.index) + patched + xml.slice(m.index + m[0].length);
+  }
+  return xml.slice(0, m.index) + xfrmXml(o, `${m[1]}:xfrm`) + xml.slice(m.index + m[0].length);
+}
+
 /**
  * 문서 → pptx 파트 목록
  * opts.png: { mediaId: dataURL } — SVG 그림의 PNG 대체본 (앱이 미리 그려 넘김, PowerPoint 2016 이전 호환)
@@ -862,6 +918,8 @@ export function pptxEntries(pres, opts = {}) {
         if (!files[path]) { files[path] = soundWav(key); defaults.set('wav', 'audio/wav'); }
         return { rid: add(REL('audio'), `../media/${def[2]}`), name: def[2] };
       },
+      /** 원래 XML 의 소리 (전환 · 애니메이션) */
+      audio: (id) => { const p = putMedia(id); return p ? add(REL('audio'), `../media/${p.split('/').pop()}`) : null; },
       /** 비디오/오디오 파트: a:videoFile r:link + p14:media r:embed 두 관계 */
       av: (id, kind) => { const p = putMedia(id); if (!p) return null; const t = `../media/${p.split('/').pop()}`; return { link: add(REL(kind), t), embed: add('http://schemas.microsoft.com/office/2007/relationships/media', t) }; },
       chart: (ch) => {
@@ -974,7 +1032,18 @@ export function pptxEntries(pres, opts = {}) {
       files[`ppt/slideLayouts/_rels/slideLayout${d.index}.xml.rels`] = rels.xml();
       override(`ppt/slideLayouts/slideLayout${d.index}.xml`, CT('slideLayout'));
     }
-    files[`ppt/theme/theme${themeN}.xml`] = themeXml(pd.theme, did ? (pres.designs.find((x) => x.id === did)?.name ?? 'WIPOINT') : 'WIPOINT');
+    // 원래 테마 (채우기 · 선 · 효과 · 배경 스타일, 글꼴 스크립트) 를 살리고 색 · 글꼴만 지금 값으로
+    const traw = !did ? pres.themeRaw : (pres.designs.find((x) => x.id === did)?.themeRaw ?? null);
+    let tx = null;
+    if (traw?.xml) {
+      const trels = relsFor();
+      const body = remapRels(traw.xml, traw.rels, trels, pres);
+      if (body) {
+        tx = patchTheme(body, pd.theme);
+        if (Object.keys(traw.rels ?? {}).length) files[`ppt/theme/_rels/theme${themeN}.xml.rels`] = trels.xml();
+      }
+    }
+    files[`ppt/theme/theme${themeN}.xml`] = tx ?? themeXml(pd.theme, did ? (pres.designs.find((x) => x.id === did)?.name ?? 'WIPOINT') : 'WIPOINT');
     override(`ppt/theme/theme${themeN}.xml`, 'application/vnd.openxmlformats-officedocument.theme+xml');
   });
   if (hasNotes) {
@@ -993,25 +1062,53 @@ export function pptxEntries(pres, opts = {}) {
     const phIdx = phAssign(slide.objects);
     const spid = new Map();
     const zooms = {};
-    let id = 2;
+    // 개체 id: 읽은 파일의 id 를 그대로 (애니메이션 · 연결선이 가리키는 id 유지), 새 개체는 비어 있는 번호
+    const used = new Set([1]);
+    const rawUse = new Map(); // 첫 개체 id → 원래 XML 로 쓸 개체들
+    for (let i = 0; i < slide.objects.length; i++) {
+      const o = slide.objects[i];
+      if (!o.raw?.sig) continue;
+      const members = o.raw.group ? slide.objects.slice(i, i + o.raw.n) : [o];
+      if (o.raw.group && (members.length !== o.raw.n || members.some((m) => m.grp !== o.grp) || slide.objects.filter((m) => m.grp === o.grp).length !== o.raw.n)) continue;
+      if (rawSig(members, o.raw.group ? bboxOf(members) : null) !== o.raw.sig) continue;
+      if (o.raw.ids.some((k) => used.has(k))) continue;
+      for (const k of o.raw.ids) used.add(k);
+      rawUse.set(o.id, members);
+    }
+    let idNext = 2;
+    const freeId = () => { while (used.has(idNext)) idNext++; used.add(idNext); return idNext; };
+    const idFor = (o) => (o.spid && !used.has(o.spid) ? (used.add(o.spid), o.spid) : freeId());
     const parts = [];
+    let rawCount = 0;
     // 그룹: 같은 grp 의 개체를 p:grpSp 로 묶음 (처음 나온 위치에)
     const done = new Set();
     for (const o of slide.objects) {
       if (done.has(o.id)) continue;
+      if (rawUse.has(o.id)) {
+        const members = rawUse.get(o.id);
+        const xml = rawXml(o, members, rels, pres);
+        if (xml) {
+          parts.push(xml);
+          rawCount++;
+          for (const m of members) { done.add(m.id); if (m.spid) spid.set(m.id, m.spid); }
+          if (o.raw.group) spid.set(`grp:${o.grp}`, o.raw.ids[0]);
+          continue;
+        }
+        for (const k of o.raw.ids) used.delete(k);
+      }
       if (o.grp) {
         const members = slide.objects.filter((x) => x.grp === o.grp);
-        const gid = id++;
+        const gid = freeId();
         let x1 = Infinity; let y1 = Infinity; let x2 = -Infinity; let y2 = -Infinity;
         for (const m of members) { x1 = Math.min(x1, m.x); y1 = Math.min(y1, m.y); x2 = Math.max(x2, m.x + m.w); y2 = Math.max(y2, m.y + m.h); }
-        const inner = members.map((m) => { done.add(m.id); const mid = id++; spid.set(m.id, mid); return objXml(m, mid, rels, phIdx, pres.theme); }).join('');
+        const inner = members.map((m) => { done.add(m.id); const mid = idFor(m); spid.set(m.id, mid); return objXml(m, mid, rels, phIdx, pres.theme); }).join('');
         const ext = `<a:off x="${E(x1)}" y="${E(y1)}"/><a:ext cx="${E(x2 - x1)}" cy="${E(y2 - y1)}"/>`;
         parts.push(`<p:grpSp><p:nvGrpSpPr><p:cNvPr id="${gid}" name="Group ${gid}"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm>${ext}<a:chOff x="${E(x1)}" y="${E(y1)}"/><a:chExt cx="${E(x2 - x1)}" cy="${E(y2 - y1)}"/></a:xfrm></p:grpSpPr>${inner}</p:grpSp>`);
         for (const m of members) spid.set(`grp:${o.grp}`, gid);
         continue;
       }
       done.add(o.id);
-      const oid = id++;
+      const oid = idFor(o);
       spid.set(o.id, oid);
       if (o.type === 'zoom') {
         // 확대/축소: 대상 슬라이드로 가는 링크가 걸린 사각형 (PowerPoint 이전 버전의 대체 그림과 같은 동작) + 확장에 설정
@@ -1029,7 +1126,7 @@ export function pptxEntries(pres, opts = {}) {
     if ((ft.slideNum || ft.date || ft.text) && !(ft.hideOnTitle && slide.layout === 'title')) {
       const W = pres.size.w;
       const H = pres.size.h;
-      const mk = (type, x, w, text, algn, fld) => `<p:sp><p:nvSpPr><p:cNvPr id="${id++}" name="${type}"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr><p:ph type="${type}" sz="quarter" idx="${{ dt: 10, ftr: 11, sldNum: 12 }[type]}"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="${E(x)}" y="${E(H - 54)}"/><a:ext cx="${E(w)}" cy="${E(32)}"/></a:xfrm></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:pPr algn="${algn}"/>${fld ? `<a:fld id="{B6F15528-21DE-4FAA-801E-634DDDAF4B2B}" type="${fld}"><a:rPr lang="ko-KR" altLang="en-US" sz="1200"><a:solidFill><a:schemeClr val="tx1"><a:lumMod val="50000"/><a:lumOff val="50000"/></a:schemeClr></a:solidFill></a:rPr><a:t>${esc(text)}</a:t></a:fld>` : `<a:r><a:rPr lang="ko-KR" altLang="en-US" sz="1200"><a:solidFill><a:schemeClr val="tx1"><a:lumMod val="50000"/><a:lumOff val="50000"/></a:schemeClr></a:solidFill></a:rPr><a:t>${esc(text)}</a:t></a:r>`}<a:endParaRPr lang="ko-KR" sz="1200"/></a:p></p:txBody></p:sp>`;
+      const mk = (type, x, w, text, algn, fld) => `<p:sp><p:nvSpPr><p:cNvPr id="${freeId()}" name="${type}"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr><p:ph type="${type}" sz="quarter" idx="${{ dt: 10, ftr: 11, sldNum: 12 }[type]}"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="${E(x)}" y="${E(H - 54)}"/><a:ext cx="${E(w)}" cy="${E(32)}"/></a:xfrm></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:pPr algn="${algn}"/>${fld ? `<a:fld id="{B6F15528-21DE-4FAA-801E-634DDDAF4B2B}" type="${fld}"><a:rPr lang="ko-KR" altLang="en-US" sz="1200"><a:solidFill><a:schemeClr val="tx1"><a:lumMod val="50000"/><a:lumOff val="50000"/></a:schemeClr></a:solidFill></a:rPr><a:t>${esc(text)}</a:t></a:fld>` : `<a:r><a:rPr lang="ko-KR" altLang="en-US" sz="1200"><a:solidFill><a:schemeClr val="tx1"><a:lumMod val="50000"/><a:lumOff val="50000"/></a:schemeClr></a:solidFill></a:rPr><a:t>${esc(text)}</a:t></a:r>`}<a:endParaRPr lang="ko-KR" sz="1200"/></a:p></p:txBody></p:sp>`;
       if (ft.date) parts.push(mk('dt', W * 0.069, W * 0.225, ft.dateText || new Date().toLocaleDateString('ko-KR'), 'l', ft.dateText ? null : 'datetime1'));
       if (ft.text) parts.push(mk('ftr', W * 0.33, W * 0.34, ft.text, 'ctr'));
       if (ft.slideNum) parts.push(mk('sldNum', W * 0.706, W * 0.225, String(n), 'r', 'slidenum'));
@@ -1058,8 +1155,14 @@ export function pptxEntries(pres, opts = {}) {
     }
     const meta = { design: slide.design ?? undefined, props: Object.keys(props).length ? props : undefined, inkRec: slide.inkRec?.length ? slide.inkRec : undefined, comments: slide.comments?.length ? slide.comments : undefined, layout: slide.layout, transition: slide.transition ?? null, anims: slide.anims ?? [], hideDecor: slide.hideDecor ?? false, section: slide.section ?? null, zooms: Object.keys(zooms).length ? zooms : undefined, bgObjects: slide.bgObjects ? true : undefined, ids: Object.fromEntries([...spid].filter(([k]) => !String(k).startsWith('grp:')).map(([k, v]) => [v, k])) };
     const ext = `<p:extLst><p:ext uri="${WP_EXT_URI}"><wp:slide xmlns:wp="${WP_NS}" json="${esc(JSON.stringify(meta))}"/></p:ext></p:extLst>`;
-    const timing = timingXml(slide, (oid) => spid.get(oid), (k) => rels.sound(k));
-    files[`ppt/slides/slide${n}.xml`] = `${XML_HEAD}<p:sld xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}"${slide.hidden ? ' show="0"' : ''}><p:cSld>${bg}<p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>${parts.join('')}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>${transitionXml(slide.transition, (k) => rels.sound(k))}${timing}${ext}</p:sld>`;
+    // 원래 애니메이션 XML: 애니메이션이 그대로이고 가리키는 개체 id 가 모두 같은 개체이면
+    const byId = new Map([...spid].filter(([k]) => !String(k).startsWith('grp:')).map(([k, v]) => [v, k]));
+    const rawTim = slide.rawTiming && slide.rawTiming.sig === stableJson(slide.anims) && slide.rawTiming.spids.every((sp) => { const oid = byId.get(sp); const o = oid && slide.objects.find((q) => q.id === oid); return o && o.spid === sp; }) ? rawPartXml(slide.rawTiming, rels) : null;
+    const rawTr = slide.rawTransition && slide.rawTransition.sig === stableJson(slide.transition) ? rawPartXml(slide.rawTransition, rels) : null;
+    const timing = rawTim ?? timingXml(slide, (oid) => spid.get(oid), (k) => rels.sound(k));
+    // 원래 XML 을 쓰면 그 파일의 네임스페이스 선언도 (a14 · p14 · mc 등)
+    const extraNs = (rawCount || rawTim || rawTr) && slide.rawNs ? Object.entries(slide.rawNs).filter(([k]) => !['xmlns:a', 'xmlns:r', 'xmlns:p'].includes(k)).map(([k, v]) => ` ${k}="${esc(v)}"`).join('') : '';
+    files[`ppt/slides/slide${n}.xml`] = `${XML_HEAD}<p:sld xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}"${extraNs}${slide.hidden ? ' show="0"' : ''}><p:cSld>${bg}<p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>${parts.join('')}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>${rawTr ?? transitionXml(slide.transition, (k) => rels.sound(k))}${timing}${ext}</p:sld>`;
     if (slide.notes) {
       const nrels = `${XML_HEAD}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL('notesMaster')}" Target="../notesMasters/notesMaster1.xml"/><Relationship Id="rId2" Type="${REL('slide')}" Target="../slides/slide${n}.xml"/></Relationships>`;
       files[`ppt/notesSlides/notesSlide${n}.xml`] = notesSlideXml(slide.notes);
@@ -1079,13 +1182,13 @@ export function pptxEntries(pres, opts = {}) {
   // 마스터 개체의 그림: 파일 안 경로를 기록 (다시 읽을 때 새 media id 로 연결)
   const masterMedia = {};
   for (const o of [...Object.values(pres.masters ?? {}).flatMap((m) => m.objects), ...(pres.designs ?? []).flatMap((d) => Object.values(d.masters ?? {}).flatMap((m) => m.objects)), ...(pres.customLayouts ?? []).flatMap((c) => c.bgObjects ?? [])]) for (const id of [o.media, o.fill?.media]) if (id && mediaPath.has(id)) masterMedia[id] = mediaPath.get(id);
-  const presMeta = { designs: pres.designs?.length ? pres.designs : undefined, customLayouts: pres.customLayouts?.length ? pres.customLayouts : undefined, masters: pres.masters ?? undefined, masterMedia: Object.keys(masterMedia).length ? masterMedia : undefined, theme: { name: th.name, label: th.label, accentBand: !!th.accentBand, titleBar: !!th.titleBar, dark: !!th.dark, bg: th.bg ?? null }, footer: pres.footer ?? null };
+  const presMeta = { designs: pres.designs?.length ? pres.designs.map(({ themeRaw, ...d }) => d) : undefined, customLayouts: pres.customLayouts?.length ? pres.customLayouts : undefined, masters: pres.masters ?? undefined, masterMedia: Object.keys(masterMedia).length ? masterMedia : undefined, theme: { name: th.name, label: th.label, accentBand: !!th.accentBand, titleBar: !!th.titleBar, dark: !!th.dark, bg: th.bg ?? null }, footer: pres.footer ?? null };
   // 안내선 (PowerPoint 2013+: p15:sldGuideLst, pos = 1/8 pt = px × 6)
   const guideExt = pres.guides?.length ? `<p:ext uri="{EFAFB233-063F-42B5-8137-9DF3F51BA10A}"><p15:sldGuideLst xmlns:p15="http://schemas.microsoft.com/office/powerpoint/2012/main">${pres.guides.map((g, i) => `<p15:guide id="${i + 1}"${g.dir === 'h' ? ' orient="horz"' : ''} pos="${Math.round(g.pos * 6)}"/>`).join('')}</p15:sldGuideLst></p:ext>` : '';
   const secXml = `<p:extLst>${secExt}${guideExt}<p:ext uri="${WP_EXT_URI}"><wp:pres xmlns:wp="${WP_NS}" json="${esc(JSON.stringify(presMeta))}"/></p:ext></p:extLst>`;
   const sz = pres.size;
   const sldIds = slideRids.map((rid, i) => `<p:sldId id="${256 + i}" r:id="${rid}"/>`).join('');
-  const defText = `<p:defaultTextStyle><a:defPPr><a:defRPr lang="ko-KR"/></a:defPPr>${[1, 2, 3, 4, 5, 6, 7, 8, 9].map((l) => `<a:lvl${l}pPr marL="${(l - 1) * 457200}" algn="l" defTabSz="914400" rtl="0" eaLnBrk="1" latinLnBrk="0" hangingPunct="1"><a:defRPr sz="1800" kern="1200"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill><a:latin typeface="+mn-lt"/><a:ea typeface="+mn-ea"/><a:cs typeface="+mn-cs"/></a:defRPr></a:lvl${l}pPr>`).join('')}</p:defaultTextStyle>`;
+  const defText = pres.defaultTextStyleRaw ?? `<p:defaultTextStyle><a:defPPr><a:defRPr lang="ko-KR"/></a:defPPr>${[1, 2, 3, 4, 5, 6, 7, 8, 9].map((l) => `<a:lvl${l}pPr marL="${(l - 1) * 457200}" algn="l" defTabSz="914400" rtl="0" eaLnBrk="1" latinLnBrk="0" hangingPunct="1"><a:defRPr sz="1800" kern="1200"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill><a:latin typeface="+mn-lt"/><a:ea typeface="+mn-ea"/><a:cs typeface="+mn-cs"/></a:defRPr></a:lvl${l}pPr>`).join('')}</p:defaultTextStyle>`;
   if (authors.length) {
     files['ppt/commentAuthors.xml'] = `${XML_HEAD}<p:cmAuthorLst xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}">${authors.map((a, i) => `<p:cmAuthor id="${i}" name="${esc(a.name)}" initials="${esc([...a.name][0] ?? '')}" lastIdx="${a.last}" clrIdx="${i % 8}"/>`).join('')}</p:cmAuthorLst>`;
     presRels.add(REL('commentAuthors'), 'commentAuthors.xml');
@@ -1098,7 +1201,7 @@ export function pptxEntries(pres, opts = {}) {
   override('ppt/presentation.xml', CT(opts.template ? 'template.main' : 'presentation.main'));
   files['ppt/presProps.xml'] = `${XML_HEAD}<p:presentationPr xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}"/>`;
   files['ppt/viewProps.xml'] = `${XML_HEAD}<p:viewPr xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}"><p:normalViewPr><p:restoredLeft sz="15620"/><p:restoredTop sz="94660"/></p:normalViewPr><p:gridSpacing cx="72008" cy="72008"/></p:viewPr>`;
-  files['ppt/tableStyles.xml'] = `${XML_HEAD}<a:tblStyleLst xmlns:a="${NS_A}" def="{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}"/>`;
+  files['ppt/tableStyles.xml'] = pres.tableStylesRaw ?? `${XML_HEAD}<a:tblStyleLst xmlns:a="${NS_A}" def="{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}"/>`;
   override('ppt/presProps.xml', CT('presProps'));
   override('ppt/viewProps.xml', CT('viewProps'));
   override('ppt/tableStyles.xml', CT('tableStyles'));
@@ -1150,9 +1253,12 @@ function readColor(el, ctx, phClr = null) {
   if (!c) return null;
   const mods = [];
   for (const m of c.children) {
-    if (['lumMod', 'lumOff', 'tint', 'shade', 'alpha'].includes(m.name)) mods.push([m.name, num(attr(m, 'val')) / 100000]);
+    if (MOD_SHORT_R[m.name] == null) continue;
+    if (['comp', 'inv', 'gray'].includes(m.name)) mods.push([m.name, 1]);
+    else if (m.name === 'hueOff') mods.push([m.name, num(attr(m, 'val')) / 60000]);
+    else mods.push([m.name, num(attr(m, 'val')) / 100000]);
   }
-  const modStr = (list) => list.map(([k, v]) => `:${{ lumMod: 'lm', lumOff: 'lo', tint: 't', shade: 's', alpha: 'a' }[k]}${Math.round(v * 1000) / 10}`).join('');
+  const modStr = (list) => list.map(([k, v]) => `:${MOD_SHORT_R[k]}${k === 'hueOff' ? Math.round(v * 100) / 100 : Math.round(v * 1000) / 10}`).join('');
   if (c.name === 'schemeClr') {
     let val = attr(c, 'val');
     if (val === 'phClr') {
@@ -1172,6 +1278,8 @@ function readColor(el, ctx, phClr = null) {
   if (nonAlpha.length) hex = applyMods(hex, nonAlpha).hex;
   return alpha && alpha[1] < 1 ? `${hex}:a${Math.round(alpha[1] * 1000) / 10}` : hex;
 }
+/** 색 변환 요소 → WIPOINT 색 글의 짧은 이름 (themes.js MOD_CODES 와 같음) */
+const MOD_SHORT_R = { lumMod: 'lm', lumOff: 'lo', tint: 't', shade: 's', alpha: 'a', satMod: 'sm', satOff: 'so', hueMod: 'hm', hueOff: 'ho', alphaMod: 'am', alphaOff: 'ao', comp: 'cp', inv: 'iv', gray: 'gr', red: 'rd', green: 'gn', blue: 'bl', redMod: 'rm', greenMod: 'gm', blueMod: 'bm', redOff: 'ro', greenOff: 'go', blueOff: 'bo' };
 const PRESET_COLORS = { black: '#000000', white: '#FFFFFF', red: '#FF0000', green: '#008000', blue: '#0000FF', yellow: '#FFFF00', gray: '#808080', grey: '#808080', orange: '#FFA500', purple: '#800080', navy: '#000080', silver: '#C0C0C0' };
 
 function readFill(spPr, ctx, phClr) {
@@ -1199,9 +1307,21 @@ function readFill(spPr, ctx, phClr) {
     if (c.name === 'blipFill') {
       const blip = child(c, 'blip');
       const media = ctx.media(attr(blip, 'embed'));
-      return media ? { type: 'image', media, ...(child(c, 'tile') ? { tile: true } : {}) } : null;
+      if (!media) return null;
+      const out = { type: 'image', media };
+      const tl = child(c, 'tile');
+      if (tl) {
+        // 바둑판식: 그림 원래 크기 × 배율, 시작 위치 · 대칭 (PowerPoint [질감 · 그림 바둑판식])
+        const d = (ctx.dims ?? (() => null))(media) ?? (typeof ctx.mediaDims === 'function' ? ctx.mediaDims(media) : null);
+        out.tile = { sx: num(attr(tl, 'sx'), 100000) / 100000, sy: num(attr(tl, 'sy'), 100000) / 100000, tx: PX(attr(tl, 'tx') ?? 0), ty: PX(attr(tl, 'ty') ?? 0), ...(attr(tl, 'algn') && attr(tl, 'algn') !== 'tl' ? { algn: attr(tl, 'algn') } : {}), ...(attr(tl, 'flip') && attr(tl, 'flip') !== 'none' ? { flip: attr(tl, 'flip') } : {}), ...(d ? { w: d.w, h: d.h } : {}) };
+      }
+      const duo = child(blip, 'duotone');
+      if (duo) { const cs = duo.children.map((k) => readColor({ children: [k] }, ctx, phClr)).filter(Boolean); if (cs.length === 2) out.duotone = cs; }
+      const am = child(blip, 'alphaModFix');
+      if (am) out.alpha = num(attr(am, 'amt'), 100000) / 100000;
+      return out;
     }
-    if (c.name === 'pattFill') return { type: 'solid', color: readColor(child(c, 'fgClr'), ctx, phClr) ?? '#000000' };
+    if (c.name === 'pattFill') return { type: 'pattern', prst: attr(c, 'prst') ?? 'pct5', fg: readColor(child(c, 'fgClr'), ctx, phClr) ?? '#000000', bg: readColor(child(c, 'bgClr'), ctx, phClr) ?? '#FFFFFF' };
     if (c.name === 'grpFill') return ctx.groupFill ?? null;
   }
   return undefined;
@@ -1460,6 +1580,63 @@ const TRANS_NAME = { fade: 'fade', push: 'push', wipe: 'wipe', split: 'split', c
 const PRST_TRANS = { fallOver: 'fall', drape: 'drape', curtains: 'curtains', wind: 'wind', prestige: 'prestige', fracture: 'fracture', crush: 'crush', peelOff: 'peelOff', pageCurlDouble: 'pageCurl', pageCurlSingle: 'pageCurl', airplane: 'airplane', origami: 'origami' };
 const DIR_FROM = { u: 'b', d: 't', l: 'r', r: 'l' };
 
+/** 그림 바이트 → 화면 크기 px (96dpi 기준, 파일의 dpi 반영) — PNG · JPEG · GIF · BMP, 모르면 null */
+export function imageSize(b) {
+  if (!b || b.length < 24) return null;
+  const be16 = (o) => (b[o] << 8) | b[o + 1];
+  const be32 = (o) => ((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]) >>> 0;
+  if (b[0] === 0x89 && b[1] === 0x50) {
+    const w = be32(16); const h = be32(20);
+    let dpi = 96;
+    for (let o = 8; o + 12 < b.length && o < 4096;) {
+      const len = be32(o); const t = String.fromCharCode(b[o + 4], b[o + 5], b[o + 6], b[o + 7]);
+      if (t === 'pHYs' && b[o + 16] === 1) { dpi = be32(o + 8) * 0.0254; break; }
+      if (t === 'IDAT') break;
+      o += 12 + len;
+    }
+    return { w: (w * 96) / (dpi || 96), h: (h * 96) / (dpi || 96) };
+  }
+  if (b[0] === 0xff && b[1] === 0xd8) {
+    let dpi = 96;
+    for (let o = 2; o + 9 < b.length;) {
+      if (b[o] !== 0xff) { o++; continue; }
+      const m = b[o + 1]; const len = be16(o + 2);
+      if (m === 0xe0 && b[o + 4] === 0x4a && b[o + 11] === 1 && be16(o + 12)) dpi = be16(o + 12);
+      if ((m >= 0xc0 && m <= 0xc3) || (m >= 0xc5 && m <= 0xc7) || (m >= 0xc9 && m <= 0xcb) || (m >= 0xcd && m <= 0xcf)) return { w: (be16(o + 7) * 96) / dpi, h: (be16(o + 5) * 96) / dpi };
+      o += 2 + len;
+    }
+    return null;
+  }
+  if (b[0] === 0x47 && b[1] === 0x49) return { w: b[6] | (b[7] << 8), h: b[8] | (b[9] << 8) };
+  if (b[0] === 0x42 && b[1] === 0x4d) { const w = b[18] | (b[19] << 8) | (b[20] << 16); const h = Math.abs((b[22] | (b[23] << 8) | (b[24] << 16) | (b[25] << 24)) >> 0); return { w, h }; }
+  return null;
+}
+
+// ───────────── 원래 XML 그대로 쓰기 (고치지 않은 개체) ─────────────
+/** 키 순서와 무관한 JSON */
+export function stableJson(v) {
+  if (Array.isArray(v)) return `[${v.map(stableJson).join(',')}]`;
+  if (v && typeof v === 'object') return `{${Object.keys(v).filter((k) => v[k] !== undefined).sort().map((k) => `${JSON.stringify(k)}:${stableJson(v[k])}`).join(',')}}`;
+  return JSON.stringify(v ?? null);
+}
+const GEOM_KEYS = new Set(['x', 'y', 'w', 'h', 'rot', 'flipH', 'flipV']);
+const SKIP_KEYS = new Set(['id', 'raw', 'grp', 'spid', 'name', 'decor']);
+function bboxOf(objs) {
+  let x1 = Infinity; let y1 = Infinity; let x2 = -Infinity; let y2 = -Infinity;
+  for (const m of objs) { x1 = Math.min(x1, m.x); y1 = Math.min(y1, m.y); x2 = Math.max(x2, m.x + m.w); y2 = Math.max(y2, m.y + m.h); }
+  return { x: x1, y: y1, w: Math.max(1e-6, x2 - x1), h: Math.max(1e-6, y2 - y1) };
+}
+/** 서명: 위치 · 크기를 뺀 모든 속성 (그룹은 묶음 안 상대 위치 포함 — 묶음 전체 이동 · 크기 조절은 그대로 씀) */
+function rawSig(objs, bb) {
+  const r = (v) => Math.round(v * 100) / 100;
+  return stableJson(objs.map((o) => {
+    const c = {};
+    for (const [k, v] of Object.entries(o)) if (!SKIP_KEYS.has(k) && !(GEOM_KEYS.has(k) && !bb)) c[k] = v;
+    if (bb) { c.x = r((o.x - bb.x) / bb.w * 1000); c.y = r((o.y - bb.y) / bb.h * 1000); c.w = r(o.w / bb.w * 1000); c.h = r(o.h / bb.h * 1000); }
+    return c;
+  }));
+}
+
 /**
  * pptx 바이트 → 문서
  * 반환 { pres, warnings }
@@ -1498,6 +1675,7 @@ export function readPptx(input, opts = {}) {
 
   const media = {};
   const mediaByPath = new Map();
+  const mediaDims = new Map();
   const loadMedia = (path, av = false) => {
     if (!path || !has(path)) return null;
     if (mediaByPath.has(path)) return mediaByPath.get(path);
@@ -1516,6 +1694,7 @@ export function readPptx(input, opts = {}) {
     const id = `m${mediaByPath.size + 1}${uid('').slice(-4)}`;
     media[id] = `data:${mime};base64,${btoa(bin)}`;
     mediaByPath.set(path, id);
+    if (!av) { const d = imageSize(b); if (d) mediaDims.set(id, d); }
     return id;
   };
 
@@ -1548,6 +1727,7 @@ export function readPptx(input, opts = {}) {
   const partCtx = (part, clrMap) => ({
     clrMap,
     media: (rid) => { const r = relsOf(part).get(rid); return r ? loadMedia(r.target) : null; },
+    dims: (id) => mediaDims.get(id) ?? null,
     rel: (rid) => (rid ? relsOf(part).get(rid) ?? null : null),
     avMedia: (path) => loadMedia(path, true),
     binMedia: (path) => loadMedia(path, 'bin'),
@@ -1769,6 +1949,7 @@ export function readPptx(input, opts = {}) {
         text: text ?? (key && key.type !== 'pic' ? readTxBody({ children: [{ name: 'bodyPr', attrs: {}, children: [] }, { name: 'p', attrs: {}, children: [] }] }, ctx, chain.filter(Boolean), bodyBase, refs.fontColor) : null),
         name: attr(cNvPr, 'name'),
       };
+      if (attr(cNvPr, 'id')) o.spid = num(attr(cNvPr, 'id'));
       if (attr(cNvPr, 'descr')) o.alt = attr(cNvPr, 'descr');
       const link = child(cNvPr, 'hlinkClick');
       if (link) { const url = ctx.links?.(attr(link, 'id')); if (url) o.link = url; }
@@ -1819,6 +2000,7 @@ export function readPptx(input, opts = {}) {
       }
       const sr = child(bf, 'srcRect');
       const o = { id: uid(), type: 'image', ...rect, media: mid, name: attr(cNvPr, 'name') };
+      if (attr(cNvPr, 'id')) o.spid = num(attr(cNvPr, 'id'));
       if (sr) o.crop = { l: num(attr(sr, 'l')) / 100000, t: num(attr(sr, 't')) / 100000, r: num(attr(sr, 'r')) / 100000, b: num(attr(sr, 'b')) / 100000 };
       if (attr(cNvPr, 'descr')) o.alt = attr(cNvPr, 'descr');
       if (attr(descendants(cNvPr, 'decorative')[0], 'val') === '1') o.decorative = true;
@@ -1829,6 +2011,10 @@ export function readPptx(input, opts = {}) {
       const am = child(blip, 'alphaModFix');
       if (am) o.alpha = num(attr(am, 'amt'), 100000) / 100000;
       if (child(blip, 'grayscl')) o.gray = true;
+      const duo = child(blip, 'duotone');
+      if (duo) { const cs = duo.children.map((k) => readColor({ children: [k] }, ctx)).filter(Boolean); if (cs.length === 2) o.duotone = cs; }
+      const lum = child(blip, 'lum');
+      if (lum) { if (attr(lum, 'bright')) o.bright = num(attr(lum, 'bright')) / 100000; if (attr(lum, 'contrast')) o.contrast = num(attr(lum, 'contrast')) / 100000; }
       // 꾸밈 효과: WIPOINT 확장 (원본 그림 포함) 또는 PowerPoint a14:imgEffect (원본은 HD Photo 라 효과 이름만)
       const wpArt = descendants(blip, 'art')[0];
       if (wpArt) {
@@ -1853,12 +2039,13 @@ export function readPptx(input, opts = {}) {
       const rect = applyXf(xf, xr);
       const gd = descendants(c, 'graphicData')[0];
       const uri = attr(gd, 'uri') ?? '';
-      if (uri.endsWith('/table')) { out.push(readTable(child(gd, 'tbl'), ctx, rect)); return; }
+      const fid = num(attr(child(child(c, 'nvGraphicFramePr'), 'cNvPr'), 'id'), 0);
+      if (uri.endsWith('/table')) { const t = readTable(child(gd, 'tbl'), ctx, rect); if (fid) t.spid = fid; out.push(t); return; }
       if (uri.endsWith('/chart')) {
         const ch = child(gd, 'chart');
         const rel = relsOf(ctx.part).get(attr(ch, 'id'));
         const chart = rel ? readChart(rel.target) : null;
-        if (chart) out.push({ id: uid(), type: 'chart', ...rect, chart });
+        if (chart) out.push({ id: uid(), type: 'chart', ...rect, chart, ...(fid ? { spid: fid } : {}) });
         return;
       }
       if (uri.endsWith('/diagram')) {
@@ -2177,6 +2364,36 @@ export function readPptx(input, opts = {}) {
   for (const sec of descendants(presXml, 'section')) for (const sid of descendants(sec, 'sldId')) if (!sectionOf.has(attr(sid, 'id'))) sectionOf.set(attr(sid, 'id'), attr(sec, 'name'));
   const firstOfSection = new Set();
 
+  /** 원래 XML 로 다시 쓸 수 있는 개체인지 + 관계(그림 · 링크 · 슬라이드) 목록 */
+  const slide0Ns = new Map();
+  const RAW_TAGS = new Set(['sp', 'cxnSp', 'pic', 'grpSp', 'graphicFrame']);
+  function rawObject(el, xml, made, part) {
+    if (!RAW_TAGS.has(el.name)) return null;
+    if (made.some((o) => o.ph || ['media', 'chart', 'equation', 'zoom'].includes(o.type) || o.ole || o.smart)) return null;
+    if (el.name === 'graphicFrame' && !/drawingml\/2006\/table"/.test(xml)) return null;
+    if (el.name !== 'grpSp' && made.length !== 1) return null;
+    if (/<(?:\w+:)?(?:contentPart|AlternateContent)\b/.test(xml)) return null;
+    const relMap = {};
+    for (const m of xml.matchAll(/\br:(\w+)="([^"]*)"/g)) {
+      const id = m[2];
+      if (!id || relMap[id]) continue;
+      const r = relsOf(part).get(id);
+      if (!r) return null;
+      if (r.type.endsWith('/image') && !r.external) { const mid = loadMedia(r.target); if (!mid) return null; relMap[id] = { kind: 'image', media: mid }; } else if (r.type.endsWith('/hyperlink')) relMap[id] = { kind: 'link', url: r.target, external: r.external };
+      else if (r.type.endsWith('/slide')) relMap[id] = { kind: 'slide', path: r.target };
+      else return null;
+    }
+    const ids = [...xml.matchAll(/<p:cNvPr\b[^>]*?\bid="(\d+)"/g)].map((m) => Number(m[1]));
+    const out = { xml, rels: relMap, ids, n: made.length };
+    if (el.name === 'grpSp') {
+      out.group = true;
+      const gx = readXfrm(child(child(el, 'grpSpPr'), 'xfrm'));
+      if (!gx) return null;
+      out.g = { x: gx.x, y: gx.y, w: gx.w, h: gx.h };
+    }
+    return out;
+  }
+
   const slides = [];
   const slideByRid = new Map();
   const pendingZooms = [];
@@ -2184,7 +2401,8 @@ export function readPptx(input, opts = {}) {
     const rel = presRels.get(rid(sid));
     if (!rel || !has(rel.target)) continue;
     const path = rel.target;
-    const x = xmlOf(path);
+    const src = textOf(files[path]);
+    const x = parseXml(src, true);
     const rels = relsOf(path);
     const lRel = [...rels.values()].find((r) => r.type.endsWith('/slideLayout'));
     const layout = lRel ? loadLayout(lRel.target) : null;
@@ -2196,7 +2414,21 @@ export function readPptx(input, opts = {}) {
     const wpEl = descendants(child(x, 'extLst'), 'slide').find((e) => attr(e, 'json'));
     if (wpEl) { try { meta = JSON.parse(attr(wpEl, 'json')); } catch { meta = null; } }
     const objects = [];
-    readShapeTree(descendants(child(x, 'cSld'), 'spTree')[0], ctx, layout, null, objects, { skipFooters: !!(meta && presMeta?.footer) });
+    {
+      // 개체마다 원래 XML 을 함께 보관 (고치지 않은 개체는 저장할 때 그대로 → PowerPoint 고유 서식 · 효과가 사라지지 않음)
+      const tree = descendants(child(x, 'cSld'), 'spTree')[0];
+      const rootNs = x.attrs ?? {};
+      const nsOk = (!rootNs['xmlns:a'] || rootNs['xmlns:a'] === NS_A) && (!rootNs['xmlns:p'] || rootNs['xmlns:p'] === NS_P) && (!rootNs['xmlns:r'] || rootNs['xmlns:r'] === NS_R);
+      for (const c of tree?.children ?? []) {
+        const before = objects.length;
+        try { readElement(c, ctx, layout, null, objects, { skipFooters: !!(meta && presMeta?.footer) }); } catch (e) { warnings.add(`일부 개체를 읽지 못했습니다 (${c.name}): ${e.message}`); continue; }
+        const made = objects.slice(before);
+        if (!nsOk || !made.length || c.s == null || c.e == null) continue;
+        const raw = rawObject(c, src.slice(c.s, c.e), made, path);
+        if (raw) made[0].raw = raw;
+      }
+      slide0Ns.set(path, Object.fromEntries(Object.entries(rootNs).filter(([k]) => k.startsWith('xmlns:') || k === 'mc:Ignorable')));
+    }
     // 배경 장식: 마스터(레이아웃이 숨기지 않으면) + 레이아웃의 개체 틀 아닌 도형
     const bgObjects = [];
     if (layout) {
@@ -2277,11 +2509,38 @@ export function readPptx(input, opts = {}) {
       slide.transition = readTransition(x);
       slide.anims = readTiming(x, spidToObj);
     }
+    {
+      // PowerPoint 의 애니메이션 · 전환 원본 (고치지 않으면 그대로 저장 → 반복 · 되감기 · 부드럽게 시작 등 세부 설정 유지)
+      const rawPart = (el) => {
+        if (!el || el.s == null || el.e == null) return null;
+        const xml = src.slice(el.s, el.e);
+        const relMap = {};
+        for (const m of xml.matchAll(/\br:(\w+)="([^"]*)"/g)) {
+          const r = m[2] ? rels.get(m[2]) : null;
+          if (!m[2] || relMap[m[2]]) continue;
+          if (!r || r.external) return null;
+          const mid = /\/(audio|media)$/.test(r.type) ? loadMedia(r.target, true) : null;
+          if (!mid) return null;
+          relMap[m[2]] = { kind: 'audio', media: mid, name: r.target.split('/').pop() };
+        }
+        return { xml, rels: relMap };
+      };
+      const tEl = x.children.find((c) => c.name === 'transition' || (c.name === 'AlternateContent' && descendants(c, 'transition').length));
+      const tim = child(x, 'timing');
+      const rt = rawPart(tEl);
+      if (rt) slide.rawTransition = rt;
+      const rtim = rawPart(tim);
+      if (rtim) {
+        rtim.spids = [...new Set([...rtim.xml.matchAll(/\bspid="(\d+)"/g)].map((m) => Number(m[1])))];
+        slide.rawTiming = rtim;
+      }
+    }
     if (!slide.section && sectionOf.has(attr(sid, 'id'))) {
       const name = sectionOf.get(attr(sid, 'id'));
       if (!firstOfSection.has(name)) { firstOfSection.add(name); slide.section = name; }
     }
     for (const o of objects) delete o.name;
+    if (slide0Ns.has(path)) slide.rawNs = slide0Ns.get(path);
     slides.push(slide);
     slideByRid.set(rid(sid), slide.id);
   }
@@ -2392,6 +2651,31 @@ export function readPptx(input, opts = {}) {
   const core = xmlOf('docProps/core.xml');
   const props = { title: descendants(core, 'title')[0]?.text ?? '', author: descendants(core, 'creator')[0]?.text ?? '', created: descendants(core, 'created')[0]?.text ?? new Date().toISOString() };
   const pres = { version: 1, size, theme, slides, media, props, footer: presMeta?.footer ?? { slideNum: false, date: false, text: '', hideOnTitle: true } };
+  // 원래 테마 · 기본 글 스타일 · 표 스타일을 보관 (다시 저장할 때 그대로)
+  {
+    const rawTheme = (ti) => {
+      if (!ti?.path || !has(ti.path)) return null;
+      const xml = textOf(files[ti.path]);
+      const relMap = {};
+      for (const m of xml.matchAll(/\br:(\w+)="([^"]*)"/g)) {
+        const r = relsOf(ti.path).get(m[2]);
+        if (!r || r.external || !r.type.endsWith('/image')) return null;
+        const mid = loadMedia(r.target);
+        if (!mid) return null;
+        relMap[m[2]] = { kind: 'image', media: mid };
+      }
+      // 네임스페이스 접두사가 표준(a:)일 때만
+      return /<a:theme\b/.test(xml) ? { xml: xml.replace(/^<\?xml[^>]*\?>\s*/, ''), rels: relMap } : null;
+    };
+    const tr = rawTheme(themeInfo);
+    if (tr) pres.themeRaw = tr;
+    for (const [mp, d] of foreignDesigns) if (d) { const t2 = rawTheme(themeInfoFor(mp)); if (t2) d.themeRaw = t2; }
+    const pSrc = textOf(files[presPath]);
+    const dts = /<p:defaultTextStyle\b[\s\S]*?<\/p:defaultTextStyle>/.exec(pSrc);
+    if (dts && /xmlns:a="http:\/\/schemas.openxmlformats.org\/drawingml\/2006\/main"/.test(pSrc)) pres.defaultTextStyleRaw = dts[0];
+    const tsRel = [...presRels.values()].find((r) => r.type.endsWith('/tableStyles'));
+    if (tsRel && has(tsRel.target)) { const t = textOf(files[tsRel.target]); if (/<a:tblStyleLst\b/.test(t)) pres.tableStylesRaw = t.startsWith('<?xml') ? t : XML_HEAD + t; }
+  }
   if (presMeta?.masters) {
     const remap = new Map(Object.entries(presMeta.masterMedia ?? {}).map(([id, path]) => [id, has(path) ? loadMedia(path) : null]));
     for (const m of Object.values(presMeta.masters)) for (const o of m.objects ?? []) { if (o.media) o.media = remap.get(o.media) ?? null; if (o.fill?.media) o.fill.media = remap.get(o.fill.media) ?? null; }
@@ -2439,5 +2723,21 @@ export function readPptx(input, opts = {}) {
   const gl = descendants(child(presXml, 'extLst'), 'sldGuideLst')[0];
   if (gl) pres.guides = kids(gl, 'guide').map((g) => ({ dir: attr(g, 'orient') === 'horz' ? 'h' : 'v', pos: num(attr(g, 'pos'), 0) / 6 }));
   if (!slides.length) pres.slides.push(newSlide(pres, 'title'));
+  // 원래 XML 의 서명 (읽은 그대로인지 저장할 때 비교)
+  for (const s of slides) {
+    for (let i = 0; i < s.objects.length; i++) {
+      const o = s.objects[i];
+      if (!o.raw) continue;
+      if (o.raw.group) {
+        const members = s.objects.slice(i, i + o.raw.n);
+        if (members.length !== o.raw.n || members.some((m) => m.grp !== o.grp)) { delete o.raw; continue; }
+        o.raw.bbox = bboxOf(members);
+        o.raw.sig = rawSig(members, o.raw.bbox);
+      } else o.raw.sig = rawSig([o], null);
+      for (const r of Object.values(o.raw.rels)) if (r.kind === 'slide') { const k = slideOrder.indexOf(r.path); r.slide = slides[k]?.id ?? null; delete r.path; if (!r.slide) { delete o.raw; break; } }
+    }
+    if (s.rawTiming) s.rawTiming.sig = stableJson(s.anims);
+    if (s.rawTransition) s.rawTransition.sig = stableJson(s.transition);
+  }
   return { pres, warnings: [...warnings] };
 }

@@ -802,3 +802,7 @@ body.mobile .smart-cats { flex-direction: row; flex-wrap: wrap; border: 0; }
 .cmp-row { display: flex; gap: 8px; align-items: baseline; padding: 4px 2px; border-bottom: 1px solid #eee; cursor: pointer; }
 .cmp-row.done { opacity: .55; }
 .cmp-ic { width: 18px; text-align: center; }
+/* 패턴 채우기 무늬 고르기 */
+.patt-grid { display: grid; grid-template-columns: repeat(8, 22px); gap: 3px; margin: 4px 0 6px; }
+.patt-cell { width: 22px; height: 22px; padding: 0; border: 1px solid #bbb; background-repeat: repeat; cursor: pointer; }
+.patt-cell.on { outline: 2px solid #c55a11; outline-offset: 1px; }

@@ -32,7 +32,8 @@ const localName = (n) => { const i = n.indexOf(':'); return i < 0 ? n : n.slice(
  * XML 문자열 → 요소 트리 { name, attrs, children, text }
  * name 은 네임스페이스 접두사를 뗀 이름, attrs 는 원래 이름 그대로
  */
-export function parseXml(str) {
+export function parseXml(str, withPos = false) {
+  // withPos: 요소마다 원문 위치 s · e (str.slice(el.s, el.e) = 그 요소의 원래 XML) 와 접두사 붙은 이름 q
   const root = { name: '#root', attrs: {}, children: [], text: '' };
   const stack = [root];
   const re = /<!\[CDATA\[([\s\S]*?)\]\]>|<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<!(?:[^>[]|\[[^\]]*\])*>|<(\/?)([^\s/>]+)((?:\s+[^\s=/>]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>|([^<]+)/g;
@@ -43,7 +44,7 @@ export function parseXml(str) {
     if (m[6] !== undefined) { top.text += unx(decodeEntities(m[6])); continue; }
     if (m[3] === undefined) continue; // 주석/선언
     if (m[2] === '/') {
-      if (stack.length > 1) stack.pop();
+      if (stack.length > 1) { const done = stack.pop(); if (withPos) done.e = re.lastIndex; }
       continue;
     }
     const attrs = {};
@@ -51,6 +52,7 @@ export function parseXml(str) {
     let a;
     while ((a = ar.exec(m[4]))) attrs[a[1]] = decodeEntities(a[2] ?? a[3]);
     const el = { name: localName(m[3]), attrs, children: [], text: '' };
+    if (withPos) { el.s = m.index; el.q = m[3]; if (m[5]) el.e = re.lastIndex; }
     top.children.push(el);
     if (!m[5]) stack.push(el);
   }
