@@ -597,10 +597,12 @@ export function readPpt(bytes) {
     const { pruns, cruns } = parseStyleText(style, text.length);
     const lv = ctx.styles ?? mainMaster?.styles ?? envStyles;
     const baseType = { 5: 1, 6: 0, 7: 1, 8: 1 }[type] ?? type;
+    // 수준 스타일: 기타(4) → 기본 종류(제목 0 · 본문 1) → 이 종류(가운데 제목 6 등, 다른 점만 담김) 순으로 겹침
     const levelStyle = (lvl) => {
-      const fromOther = envStyles?.[4]?.[lvl] ?? envStyles?.[4]?.[0];
-      const own = lv?.[type]?.[lvl] ?? lv?.[baseType]?.[lvl] ?? lv?.[baseType]?.[0] ?? lv?.[4]?.[lvl] ?? fromOther;
-      return own ?? { pf: {}, cf: {} };
+      const layers = [envStyles?.[4]?.[lvl] ?? envStyles?.[4]?.[0], lv?.[4]?.[lvl], lv?.[baseType]?.[0], lv?.[baseType]?.[lvl], type !== baseType ? lv?.[type]?.[lvl] : null].filter(Boolean);
+      const out = { pf: {}, cf: {} };
+      for (const L of layers) { Object.assign(out.pf, L.pf ?? {}); Object.assign(out.cf, L.cf ?? {}); }
+      return out;
     };
     const paras = [];
     const lines = text.split('\r');
