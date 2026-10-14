@@ -3,8 +3,9 @@
 export function createXlsxSharedFormulas(cells, rowLimit, colLimit) {
   const active = new Map(); let nextId = 0;
   // Excel does not reliably preserve structured references in shared formulas.
-  // Keep table/external references explicit even when the raw text is equal.
-  const eligible = cell => cell?.formula && cell.ast && !cell.maybeArray && !cell.parseError && !cell.raw.includes('[');
+  // Its shared-formula binary tokens also reject cross-sheet references: Excel
+  // repairs the file by deleting the entire group. Keep those formulas explicit.
+  const eligible = cell => cell?.formula && cell.ast && !cell.maybeArray && !cell.parseError && !/[!\[]/.test(cell.raw);
   return (r, c, cell) => {
     if (c >= colLimit || r >= rowLimit || !eligible(cell)) return null;
     const previous = active.get(c);

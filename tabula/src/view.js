@@ -684,7 +684,12 @@ export class GridView {
     this.viewEl.style.transform = `scale(${this.z})`;
     // 선 두께·픽셀 정렬·배경 마스크는 배율별 값이다. 보이는 셀 범위가
     // 같아도 이전 DOM을 확대 재사용하면 1px 선까지 4배로 굵어진다.
-    for (const p of this.panes) p.win = null;
+    for (const p of this.panes) {
+      p.win = null;
+      // Chromium can retain the old SVG text paint scale across sheet zooms.
+      // Recreate object DOM at the new transform; keep the generated SVG cache.
+      p.objHtml = null;
+    }
     this.layout(false);
     this.setScroll(this.cols.pos(keep.c) - this.boundaryX, this.rows.pos(keep.r) - this.boundaryY);
   }

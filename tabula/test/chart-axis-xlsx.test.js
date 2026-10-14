@@ -52,11 +52,11 @@ test('Excel에서 바꾼 표준 간격·양수/음수 각도를 다시 읽는다
   assert.deepEqual(read(files).axes.x, { title: '항목', labelInterval: 3, labelRotation: 30 });
 });
 
-test('날짜 축의 기존 제목·글꼴과 명시 회전을 읽되 날짜 단위 기능을 추가하지 않는다', () => {
+test('날짜 축의 종류·제목·글꼴과 명시 회전을 보존한다', () => {
   const files = withoutExtension(unzip(writeXlsx(book({ axisSize: 10, axes: { x: { title: '날짜', labelRotation: 0 } } }))));
   files[path] = xmlText(files[path]).replace(/c:catAx/g, 'c:dateAx');
   const chart = read(files);
-  assert.deepEqual(chart.axes.x, { title: '날짜', size: 10, labelRotation: 0 });
+  assert.deepEqual(chart.axes.x, { type: 'date', title: '날짜', size: 10, labelRotation: 0 });
   assert.equal(chart.axisSize, 10);
 });
 

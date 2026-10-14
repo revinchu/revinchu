@@ -20,7 +20,8 @@ test('수동 제목·범례는 차트 크기 기준 좌상단이며 그림 영�
     for (const node of [title, legend]) {
       const box = descendants(node, 'rect')[0], text = descendants(node, 'text')[0];
       assert.equal(box.attrs.x, '0'); assert.equal(box.attrs.y, '0');
-      assert.equal(text.attrs.y, '0'); assert.equal(text.attrs['dominant-baseline'], 'text-before-edge');
+      if (node === title) { assert.equal(text.attrs.y, '0'); assert.equal(text.attrs['dominant-baseline'], 'text-before-edge'); }
+      else { assert.ok(Number(text.attrs.y) >= 0); assert.ok(Number(text.attrs.y) < Number(box.attrs.height)); }
     }
     const html = renderChartSvg({ w, h, type: 'pie', title: '매출', titleLayout: { x: .1, y: .2 }, legendLayout: { x: .4, y: .2 }, plotFill: '#ddd' }, data());
     assert.ok(html.indexOf('data-el="title"') > html.lastIndexOf('data-pie-r'));

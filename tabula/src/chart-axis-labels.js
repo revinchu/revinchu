@@ -55,7 +55,7 @@ export function categoryAxisLayout(categories, options = {}) {
   const manual = finite(options.rotation), angles = manual ? [Math.max(-90, Math.min(90, options.rotation))] : [0, -45, -90];
   const candidates = angles.map((angle) => {
     const rad = Math.abs(angle) * Math.PI / 180, sin = Math.sin(rad), cos = Math.cos(rad);
-    const maxLines = angle === 0 ? Math.max(1, Math.min(manual ? 8 : 3, Math.floor((depth - 5) / lineHeight))) : Math.max(1, Math.min(3, Math.floor((space * sin - 4) / lineHeight)));
+    const maxLines = options.noWrap ? 1 : angle === 0 ? Math.max(1, Math.min(manual ? 8 : 3, Math.floor((depth - 5) / lineHeight))) : Math.max(1, Math.min(3, Math.floor((space * sin - 4) / lineHeight)));
     const height = maxLines * lineHeight;
     const width = angle === 0 ? Math.max(font, space - 6) : Math.max(font, (depth - 5 - height * cos) / sin);
     const labels = selected.map((item) => {

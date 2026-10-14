@@ -375,6 +375,7 @@ function tokenizeSection(src) {
         const sym = inner.slice(1, dash < 0 ? undefined : dash);
         const loc = dash < 0 ? '' : inner.slice(dash + 1).toLowerCase();
         if (loc.endsWith('412') || /^ko(-kr)?$/.test(loc)) sec.korean = true;
+        if (loc) sec.dateSeparator = loc.endsWith('412') || /^ko(-kr)?$/.test(loc) ? '-' : '/';
         if (sym) lit(sym);
       }
       continue; // [DBNum1] 등은 무시
@@ -416,7 +417,10 @@ function tokenizeSection(src) {
         let n = 0;
         while (toks[k + 1 + n]?.t === 'digit' && toks[k + 1 + n].v === '0') n++;
         toks.splice(k, n + 1, { t: 'subsec', n });
-      } else if (t.t === 'digit' || t.t === 'comma' || t.t === 'pct' || t.t === 'slash') {
+      } else if (t.t === 'slash') {
+        // 한국어 Excel의 날짜 구분자. 따옴표/역슬래시로 고정한 '/'는 lit이므로 그대로 둔다.
+        toks[k] = { t: 'lit', v: sec.dateSeparator ?? '-' };
+      } else if (t.t === 'digit' || t.t === 'comma' || t.t === 'pct') {
         toks[k] = { t: 'lit', v: t.t === 'digit' ? t.v : t.t === 'comma' ? ',' : t.t === 'pct' ? '%' : '/' };
       } else if (t.t === 'dot') toks[k] = { t: 'lit', v: '.' };
     }

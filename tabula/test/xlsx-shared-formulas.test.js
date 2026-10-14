@@ -44,6 +44,23 @@ test('gaps, changed formulas and identical ASTs with different relative origins 
   assert.deepEqual(formulas(bytes).filter(f => f.attrs.ref?.startsWith('B')).map(f => f.attrs.ref), ['B1:B3', 'B5:B6', 'B8:B10']);
   for (let r = 0; r < 10; r++) assert.equal(back.getCell(0,r,1).raw,wb.getCell(0,r,1).raw);
 });
+
+test('cross-sheet formulas stay explicit so Excel does not remove the shared group', () => {
+  for (const name of ['Data', '데이터', 'Data Set']) {
+    const wb = new Workbook({ sheets: [{ name: 'Report', cells: {} }, { name, cells: {} }] });
+    for (let r = 0; r < 5; r++) {
+      wb.setInput(1, r, 0, String(r + 1));
+      wb.setInput(0, r, 0, `='${name}'!A${r + 1}*2`);
+    }
+    const bytes = writeXlsx(wb), fs = formulas(bytes), back = new Workbook(readXlsx(bytes).data);
+    assert.equal(fs.length, 5);
+    assert.ok(fs.every(f => !f.attrs.t && f.text.includes('!')));
+    for (let r = 0; r < 5; r++) {
+      assert.equal(back.getCell(0, r, 0).raw, wb.getCell(0, r, 0).raw);
+      assert.equal(back.getValue(0, r, 0), (r + 1) * 2);
+    }
+  }
+});
 test('array and structured formulas keep their individual export path', () => {
   const wb = fixture();
   for (let r=0;r<10;r++) wb.getCell(0,r,1).maybeArray=true;

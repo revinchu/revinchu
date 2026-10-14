@@ -7,7 +7,7 @@
 //   labels, legend: 'b'|'t'|'r'|'l'|'none', grouping: 'clustered'|'stacked'|'percentStacked',
 //   axes?: { y: { title, numFmt, min, max }, y2: {…}, x: { title } } }
 import { formatGeneral, formatValue, formatCode, isDateCode } from './format.js';
-import { categoryAxisLayout, categoryAxisLabelSvg } from './chart-axis-labels.js';
+import { categoryAxisLayout, categoryAxisLabelSvg, axisTextWidth } from './chart-axis-labels.js';
 import { pivotSourceData, pivotChartData } from './pivot.js';
 import { inferPivotCategorySeries } from './chart-source.js';
 import { maxOf, minOf, pushAll } from './fxcore.js';
@@ -277,7 +277,7 @@ export function resolveChart(ch, api) {
   else if (ch.series?.length) {
     const catRef = ch.series.find((s) => s.cat)?.cat;
     const series = ch.series.map((s, i) => {
-      const valueRows = s.val ? api.values(s.val) : null;
+      const valueRows = s.val ? api.values(s.val, true) : null;
       const vals = valueRows ? flatRef(valueRows, false) : s.cache ?? [];
       const indexes = valueRows?.length > 1 ? api.rowIndexes?.(valueRows) : null;
       // 이름이 여러 칸이면 빈 칸(병합 안쪽)을 빼고 공백으로 이어 붙임 (엑셀과 같음)
@@ -388,7 +388,8 @@ export function chartModelData(wb, hostSi, ch, options = {}) {
       const row = [];
       for (let c = rg.c1; c <= (sampled ? Math.min(rg.c2, rg.c1 + 100) : rg.c2); c++) {
         const v = wb.getValue(s, r, c);
-        if (!text || text === 'category' && c !== rg.c1) { row.push(v); continue; }
+        if (!text || text === 'numeric' || text === 'category' && c !== rg.c1) { row.push(text === 'numeric' && v === '' && wb.getCell(s, r, c)?.formula ? 0 : v); continue; }
+        if (text === true && typeof v === 'number' && ch.axes?.x?.numFmt) { row.push(formatCode(v, ch.axes.x.numFmt, wb.date1904).text); continue; }
         // 새 차트의 첫 날짜 열은 항목이며, 다른 숫자 값과 분산/거품 X 값은 원래 숫자입니다.
         const st = typeof v === 'number' ? wb.styleAt(s, r, c) : null;
         if (text === 'category' && !(/date|time/.test(st?.numFmt ?? '') || st?.code && isDateCode(st.code))) { row.push(v); continue; }
@@ -417,9 +418,9 @@ export function chartModelData(wb, hostSi, ch, options = {}) {
       options.onRange?.(rows);
       return rows;
     },
-    values: (ref) => {
-      if (ref.name) { const rg = nameRange(ref); return rg ? read(sheetOf(rg.sheet), rg) : []; }
-      return read(sheetOf(ref.sheet ?? ch.sheet), ref);
+    values: (ref, numeric = false) => {
+      if (ref.name) { const rg = nameRange(ref); return rg ? read(sheetOf(rg.sheet), rg, numeric ? 'numeric' : false) : []; }
+      return read(sheetOf(ref.sheet ?? ch.sheet), ref, numeric ? 'numeric' : false);
     },
     texts: (ref) => {
       if (ref.name) { const rg = nameRange(ref); return rg ? read(sheetOf(rg.sheet), rg, true) : []; }
@@ -554,6 +555,7 @@ function readable(fg, bg) {
 }
 function plotCategoryLabels(categories, area, plot, font, cfg, width, slotCount = categories.length) {
   const options = { slotCount, length: area.w, depth: Math.max(font * 1.9, Math.min(160, plot.h * .44)), font,
+    noWrap: cfg.type === 'date',
     interval: cfg.labelInterval, rotation: cfg.labelRotation, reverse: cfg.reverse,
     startRoom: area.x - plot.x, endRoom: width - 10 - area.x - area.w, allowPadding: cfg.labelRotation === undefined };
   let plan = categoryAxisLayout(categories, options);
@@ -579,7 +581,6 @@ export function renderChartSvg(chart, data) {
   const FS = { title: pt(chartTextStyle(chart, { kind: 'title' }).size), axis: pt(Math.max(...['x', 'y', 'y2'].map(axis => chartTextStyle(chart, { kind: 'axis-' + axis }).size))), legend: pt(chartTextStyle(chart, { kind: 'legend' }).size) };
   const axisTitleSize = axis => pt(chartTextStyle(chart, { kind: 'axis-title-' + axis }).size);
   const CW = FS.axis * 0.58; // 글자 하나의 대략 너비
-  const LW = FS.legend * 0.58;
   const uid = `c${(++svgSeq).toString(36)}`;
   const defs = [];
   const pal = paletteOf(chart);
@@ -636,20 +637,22 @@ export function renderChartSvg(chart, data) {
   const pieColor = (s, i) => pointColor(s, i) ?? chart.seriesFmt?.[s?._fi ?? 0]?.color ?? pal[chartPointIndex(s, i) % pal.length];
   const special = SPECIAL[baseType] ?? ADVANCED_CHARTS[baseType] ?? MAP_CHARTS[baseType];
   const legendPos = chart.legend ?? (special?.legend === false ? 'none' : 'b');
-  const legendItems = special?.legendItems ? special.legendItems(data, chart, pal) : baseType === 'treemap' && data.catLevels?.length ? Array.from(new Set(data.catLevels.at(-1).map((g) => g.text))).map((name, i) => ({ name, color: pal[i % pal.length], line: false }))
+  const allLegendItems = special?.legendItems ? special.legendItems(data, chart, pal) : baseType === 'treemap' && data.catLevels?.length ? Array.from(new Set(data.catLevels.at(-1).map((g) => g.text))).map((name, i) => ({ name, color: pal[i % pal.length], line: false }))
     : pieLike || baseType === 'treemap' || baseType === 'pieOfPie' || baseType === 'barOfPie' ? categories.map((c, i) => ({ name: c, color: pieColor(series[0], i), line: false }))
     : baseType === 'waterfall' ? [{ name: '증가', color: chart.upColor ?? pal[0] }, { name: '감소', color: chart.downColor ?? pal[1 % pal.length] }, { name: '합계', color: chart.totalColor ?? pal[2 % pal.length] }]
       : baseType === 'pareto' ? [{ name: series[0]?.name ?? '', color: series[0]?.color }, { name: '누적 %', color: pal[1 % pal.length], line: true }]
-        : series.map((s) => ({ name: s.name, color: s.color, line: s.type === 'line' || s.type === 'radar' }));
+        : series.map((s) => ({ name: s.name, color: s.color, line: s.type === 'line' || s.type === 'radar', marker: s.marker, lineNone: s.lineNone, index: s._fi }));
+  const legendItems = allLegendItems.filter((it, i) => !chart.hiddenLegend?.includes(it.index ?? i));
   const showLegend = legendPos !== 'none' && legendItems.length > 0;
   const legendLayout = showLegend ? manualChartLayout(chart.legendLayout) : null;
   const sideLegend = showLegend && (legendPos === 'r' || legendPos === 'l');
-  const legendW = sideLegend ? Math.min(180, Math.max(60, maxOf(legendItems.map((it) => [...String(it.name)].length * LW * 1.4 + 22)))) : 0;
+  const legendW = sideLegend ? Math.min(180, Math.max(60, maxOf(legendItems.map((it) => axisTextWidth(it.name, FS.legend) + 40)))) : 0;
   const legendH = showLegend && !sideLegend ? Math.round(FS.legend * 2.2) : 0;
   const plot = {
     x: 10 + (!legendLayout && legendPos === 'l' ? legendW : 0), y: top + (!legendLayout && legendPos === 't' ? legendH : 0),
     w: W - 20 - (legendLayout ? 0 : legendW), h: H - top - 10 - (legendLayout ? 0 : legendH),
   };
+  if (legendLayout && chart.legendOverlay === false && legendPos === 'b') plot.h = Math.min(plot.h, legendLayout.y * H - plot.y - 6);
   // 데이터 표 (엑셀 [차트 요소 → 데이터 표]): 그림 영역 아래에 항목 × 계열 값 표 (범례 표지 포함)
   const DT_ROW = Math.round(FS.axis * 1.7);
   const specialTable = chart.dataTable && special ? specialDataTable(chart, series, categories) : null;
@@ -661,7 +664,7 @@ export function renderChartSvg(chart, data) {
 
   if (!series.length || series.every((s) => s.values.every((v) => v === null))) {
     if (chart.plotAreaFormat) parts.push(chartAreaSvg(chartAreaFormat(chart, 'plot'), plot, { id: uid + 'plot', kind: 'plot' }));
-    parts.push(`<text x="${W / 2}" y="${H / 2}" text-anchor="middle" font-size="12" fill="#999">표시할 숫자 데이터가 없습니다</text>`);
+    if (!Array.isArray(chart.series)) parts.push(`<text x="${W / 2}" y="${H / 2}" text-anchor="middle" font-size="12" fill="#999">표시할 숫자 데이터가 없습니다</text>`);
     return finish();
   }
 
@@ -672,46 +675,60 @@ export function renderChartSvg(chart, data) {
     const LTX = readable(chart.legendColor ?? TXT, chart.fill ?? '#ffffff');
     const light = (c) => lum(c) > 0.92;
     const key = (it, lx, ly) => (it.line
-      ? `<line x1="${lx - 2}" y1="${ly - 4}" x2="${lx + 11}" y2="${ly - 4}" stroke="${it.color}" stroke-width="2.25"/><circle cx="${lx + 4.5}" cy="${ly - 4}" r="2.5" fill="${it.color}"/>`
-      : `<rect x="${lx}" y="${ly - 8}" width="9" height="9" fill="${it.color}"${light(it.color) ? ' stroke="#bfbfbf" stroke-width="0.75"' : ''}/>`);
-    const legendText = (name, maxChars) => {
-      const full = String(name), shown = truncate(full, maxChars);
+      ? `${it.lineNone ? '' : `<line x1="${lx}" y1="${ly - 4}" x2="${lx + 22}" y2="${ly - 4}" stroke="${it.color}" stroke-width="2.25"/>`}${it.marker === 'none' || it.marker === false ? '' : `<circle cx="${lx + 11}" cy="${ly - 4}" r="2.5" fill="${it.color}"/>`}`
+      : `<rect x="${lx}" y="${ly - 7}" width="22" height="6" fill="${it.color}"${light(it.color) ? ' stroke="#bfbfbf" stroke-width="0.75"' : ''}/>`);
+    const legendText = (name, maxWidth) => {
+      const full = String(name); let shown = full;
+      if (axisTextWidth(full, FS.legend) > maxWidth) {
+        const chars = [...full];
+        while (chars.length && axisTextWidth(chars.join('') + '…', FS.legend) > maxWidth) chars.pop();
+        shown = chars.join('') + '…';
+      }
       return `${shown !== full ? `<title>${escSvg(full)}</title>` : ''}${escSvg(shown)}`;
     };
     parts.push(`<g data-el="legend"${legendLayout ? ` transform="translate(${legendLayout.x * W},${legendLayout.y * H})"` : ''}>`);
     if (legendLayout) {
       const rowH = Math.round(FS.legend * 1.6);
       const boxW = Number.isFinite(legendLayout.w) && legendLayout.w > 0 ? Math.max(24, legendLayout.w * W) : sideLegend ? legendW : Math.min(W - 20, 160 * items.length);
-      const columns = sideLegend ? 1 : Math.max(1, Math.min(items.length, Math.floor(boxW / 80)));
-      const itemW = boxW / columns;
-      const boxH = Math.max(rowH * Math.ceil(items.length / columns), Number.isFinite(legendLayout.h) && legendLayout.h > 0 ? legendLayout.h * H : 0);
+      const boxH = Number.isFinite(legendLayout.h) && legendLayout.h > 0 ? legendLayout.h * H : rowH * items.length;
       parts.push(`<rect x="0" y="0" width="${boxW}" height="${boxH}" fill="transparent"/>`);
-      items.forEach((it, i) => {
-        const x = (i % columns) * itemW, y = Math.floor(i / columns) * rowH;
-        parts.push(key(it, x + 2, y + 11), `<text x="${x + 17}" y="${y}" dominant-baseline="text-before-edge" font-size="${FS.legend}" fill="${LTX}"${chart.legendBold ? ' font-weight="700"' : ''}>${legendText(it.name, Math.max(1, Math.floor((itemW - 20) / (LW * 1.4))))}</text>`);
+      const rows = [[]]; let used = 4;
+      items.forEach((it) => {
+        const itemW = Math.min(boxW - 8, axisTextWidth(it.name, FS.legend) + 38);
+        if (used > 4 && (sideLegend || used + itemW > boxW)) { rows.push([]); used = 4; }
+        rows.at(-1).push({ it, itemW }); used += itemW;
+      });
+      rows.forEach((row, i) => {
+        const y = i * rowH + Math.max(0, (Math.min(boxH, rowH) - FS.legend) / 2);
+        if (y + FS.legend > boxH + .5) return;
+        let x = sideLegend ? 4 : Math.max(4, (boxW - row.reduce((sum, item) => sum + item.itemW, -11)) / 2);
+        for (const { it, itemW } of row) {
+          parts.push(key(it, x, y + FS.legend), `<text x="${x + 27}" y="${y + FS.legend}" font-size="${FS.legend}" fill="${LTX}"${chart.legendBold ? ' font-weight="700"' : ''}>${legendText(it.name, itemW - 28)}</text>`);
+          x += itemW;
+        }
       });
     } else if (sideLegend) {
       const lx0 = legendPos === 'r' ? W - legendW - 4 : 8;
       let ly = Math.max(top + 12, H / 2 - (items.length * Math.round(FS.legend * 1.6)) / 2);
       items.forEach((it) => {
-        parts.push(key(it, lx0, ly), `<text x="${lx0 + 15}" y="${ly}" font-size="${FS.legend}" fill="${LTX}"${chart.legendBold ? ' font-weight="700"' : ''}>${legendText(it.name, Math.floor((legendW - 20) / (LW * 1.4)))}</text>`);
+        parts.push(key(it, lx0, ly), `<text x="${lx0 + 27}" y="${ly}" font-size="${FS.legend}" fill="${LTX}"${chart.legendBold ? ' font-weight="700"' : ''}>${legendText(it.name, legendW - 28)}</text>`);
         ly += Math.round(FS.legend * 1.6);
       });
     } else {
-      const itemW = Math.min(160, Math.max(60, (W - 20) / items.length));
-      const total = itemW * items.length;
+      const itemWidths = items.map(it => Math.min(160, (W - 20) / items.length, axisTextWidth(it.name, FS.legend) + 38));
+      const total = itemWidths.reduce((a, b) => a + b, 0);
       let lx = Math.max(10, (W - total) / 2);
       const ly = legendPos === 't' ? top + 12 : H - 14;
-      items.forEach((it) => {
-        parts.push(key(it, lx, ly), `<text x="${lx + 15}" y="${ly}" font-size="${FS.legend}" fill="${LTX}"${chart.legendBold ? ' font-weight="700"' : ''}>${legendText(it.name, Math.floor((itemW - 18) / (LW * 1.4)))}</text>`);
-        lx += itemW;
+      items.forEach((it, i) => {
+        parts.push(key(it, lx, ly), `<text x="${lx + 27}" y="${ly}" font-size="${FS.legend}" fill="${LTX}"${chart.legendBold ? ' font-weight="700"' : ''}>${legendText(it.name, itemWidths[i] - 28)}</text>`);
+        lx += itemWidths[i];
       });
     }
     parts.push('</g>');
     pushAll(overlays, parts.splice(legendStart));
   }
 
-  const wantLabels = (s) => (s.labels ?? chart.labels ?? false) || s.catName || s.serName || s.pct;
+  const wantLabels = (s) => (s.labels ?? chart.labels ?? false) || s.catName || s.serName || s.pct || Object.values(s.pointLabels ?? {}).some(p => !p.hide && (p.labels || p.catName || p.serName || p.pct));
   const plotBackgroundIndex = parts.length;
   parts.push(chart.plotAreaFormat ? chartAreaSvg(chartAreaFormat(chart, 'plot'), plot, { id: uid + 'plot', kind: 'plot' }) : `<rect data-el="plot" x="${plot.x}" y="${plot.y}" width="${plot.w}" height="${plot.h}" fill="${chart.plotFill ?? 'transparent'}"/>`);
   if (special) {
@@ -831,12 +848,13 @@ export function renderChartSvg(chart, data) {
     const cfg = chart.axes?.[axis ? 'y2' : 'y'] ?? {};
     let min = Math.min(0, minOf(vals));
     let max = Math.max(0, maxOf(vals));
-    if (ss.every((s) => s.type === 'line' && !s._stacked)) {
+    if (ss.every((s) => s.type === 'line' && !s._stacked) && chart.type !== 'combo') {
       min = minOf(vals);
       max = maxOf(vals);
-      if (min > 0 && min < max * 0.5) min = 0;
+      if (min > 0 && (min < max * 0.5 || min === max)) min = 0;
     }
-    const sc = niceScale(isNum(cfg.min) ? cfg.min : min, isNum(cfg.max) ? cfg.max : max);
+    const autoMax = max > 0 && !ss.some(s => s._pct || trends.get(s)?.length) ? max * 1.05 : max;
+    const sc = niceScale(isNum(cfg.min) ? cfg.min : min, isNum(cfg.max) ? cfg.max : autoMax, 9);
     if (isNum(cfg.min)) sc.min = cfg.min;
     if (isNum(cfg.max)) sc.max = cfg.max;
     if (!(sc.max > sc.min)) Object.assign(sc, niceScale(min, max)); // 같은 값·뒤집힌 수동 범위는 0으로 나누지 않음
@@ -852,10 +870,12 @@ export function renderChartSvg(chart, data) {
   const hideY = !!chart.axes?.[primaryAxis ? 'y2' : 'y']?.hide;
   const hideX = !!chart.axes?.x?.hide;
   const valueTitleH = chart.axes?.[primaryAxis ? 'y2' : 'y']?.title ? axisTitleSize(primaryAxis ? 'y2' : 'y') * 1.5 : 0;
-  const labelW = hideY || (!horizontal && primaryAxis === 1) ? 6 : Math.min(160, maxOf(scale.ticks.map((t) => axisLabel(t, scale.code, chart.date1904).length)) * CW + 8) + (horizontal ? 0 : valueTitleH);
+  // Accounting formats reserve cell padding; that whitespace is not axis ink.
+  const tickWidth = sc => maxOf(sc.ticks.map(t => axisTextWidth(axisLabel(t, sc.code, chart.date1904).trim(), FS.axis)));
+  const labelW = hideY || (!horizontal && primaryAxis === 1) ? 6 : Math.min(160, tickWidth(scale) + 8) + (horizontal ? 0 : valueTitleH);
   const rightScale = scale2 ?? (!horizontal && primaryAxis === 1 ? scale : null);
   const secondaryTitleH = chart.axes?.y2?.title ? axisTitleSize('y2') * 1.5 : 0;
-  const label2W = rightScale && !chart.axes?.y2?.hide ? Math.min(160, maxOf(rightScale.ticks.map((t) => axisLabel(t, rightScale.code, chart.date1904).length)) * CW + 8) + secondaryTitleH : 0;
+  const label2W = rightScale && !chart.axes?.y2?.hide ? Math.min(160, tickWidth(rightScale)) + secondaryTitleH : 0;
 
   // 가로축 값 범위 (분산형)
   let xScale = null;
@@ -921,12 +941,25 @@ export function renderChartSvg(chart, data) {
       axisText('y2', `<text x="${area.x + area.w + 5}" y="${(p + 3.5).toFixed(1)}" text-anchor="start" font-size="${FS.axis}" fill="${TXT}">${escSvg(axisLabel(t, rightScale.code, chart.date1904))}</text>`);
     }
   }
+  if (!horizontal) for (const [key, sc, x] of [['y', scale, area.x], ['y2', rightScale, area.x + area.w]]) {
+    const cfg = chart.axes?.[key];
+    if (!sc || cfg?.hide || cfg?.lineNone || !cfg?.lineColor && !cfg?.majorTick) continue;
+    const color = cfg.lineColor ?? '#868686', width = cfg.lineWidth ?? 1;
+    parts.push(`<line data-axis-line="${key}" x1="${x}" x2="${x}" y1="${area.y}" y2="${area.y + area.h}" stroke="${color}" stroke-width="${width}"/>`);
+    if (cfg.majorTick) for (const tick of sc.ticks) {
+      const y = posFor(sc)(tick), sign = key === 'y' ? -1 : 1;
+      parts.push(`<line x1="${x}" x2="${x + sign * 4}" y1="${y}" y2="${y}" stroke="${color}" stroke-width="${width}"/>`);
+    }
+  }
   const axisTitle = (txt, x, y, rot, axis) => (txt ? `<text data-el="axis-title-${axis}" x="${x}" y="${y}" text-anchor="middle" font-size="11" fill="${TXT}"${rot ? ` transform="rotate(${rot} ${x} ${y})"` : ''}>${escSvg(txt)}</text>` : '');
 
   const base = vpos(Math.max(scale.min, Math.min(0, scale.max)));
   const labelsOut = [];
   const pushLabel = (x, y, v, s, anchor = 'middle', index) => {
-    labelsOut.push(`<text data-el="label"${tag(s, index)} x="${x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="${anchor}" font-size="${pt(s.labelSize ?? 9)}"${s.labelBold ? ' font-weight="700"' : ''} fill="${s.labelColor ?? '#404040'}" paint-order="stroke" stroke="#fff" stroke-width="2.5">${escSvg(chartDataLabel(chart, s, categories, index, v))}</text>`);
+    const option = s.pointLabels?.[chartPointIndex(s, index)];
+    if (option?.hide || !(option?.labels ?? s.labels ?? chart.labels ?? false) && !(option?.catName ?? s.catName) && !(option?.serName ?? s.serName) && !(option?.pct ?? s.pct)) return;
+    s = { ...s, ...option };
+    labelsOut.push(`<text data-el="label"${tag(s, index)} x="${x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="${anchor}" font-size="${pt(s.labelSize ?? 9)}"${s.labelBold ? ' font-weight="700"' : ''} fill="${s.labelColor ?? '#404040'}">${escSvg(chartDataLabel(chart, s, categories, index, v))}</text>`);
   };
 
   if (baseType === 'scatter') {
@@ -984,14 +1017,16 @@ export function renderChartSvg(chart, data) {
       const deep = threeD && chart.type === 'column' && chart.grouping === 'standard';
       const slots = [[],[]], slotOf = new Map();
       bars.forEach((s,bi) => { const key=s._stacked?s._stackGroup:`single/${bi}`, keys=slots[s.axis]; if(!keys.includes(key))keys.push(key); slotOf.set(s,keys.indexOf(key)); });
-      const groupW = isNum(chart.gap) ? band / (1 + Math.max(0, chart.gap) / 100) : band * 0.65;
       // 계열 겹치기 (-100 ~ 100%): 양수면 막대가 겹치고 음수면 간격이 생김
       const paintBars = deep ? [...bars].reverse() : bars;
       const vary = chart.varyColors && bars.length === 1;
       paintBars.forEach((s) => {
         const bi=bars.indexOf(s), k=deep?1:Math.max(1,slots[s.axis].length);
         const ov=isNum(chart.overlap)&&k>1?Math.max(-100,Math.min(100,chart.overlap))/100:0;
-        const barW=groupW/(k-(k-1)*ov),stepW=barW*(1-ov);
+        // Excel gapWidth is a percentage of one bar, not the whole cluster.
+        const cluster = k - (k - 1) * ov;
+        const barW = isNum(chart.gap) ? band / (cluster + Math.max(0, chart.gap) / 100) : band * .65 / cluster;
+        const groupW = barW * cluster, stepW = barW * (1 - ov);
         const lane=deep?bi/Math.max(1,bars.length):0, localDepth=deep?{dx:depth.dx/Math.max(1,bars.length)*.7,dy:depth.dy/Math.max(1,bars.length)*.7}:depth;
         const vp = posOf(s);
         const bf = fillOf(s);
@@ -1019,7 +1054,7 @@ export function renderChartSvg(chart, data) {
           else parts.push(`<rect x="${start.toFixed(1)}" y="${a.toFixed(1)}" width="${Math.max(1, barW - 1).toFixed(1)}" height="${len.toFixed(1)}" fill="${pf}"${stroke}${sh}${tag(s, i)}/>`);
           if (wantLabels(s)) {
             // 레이블 위치: 바깥쪽 끝(기본) · 가운데 · 안쪽 끝 · 안쪽 축
-            const lp = s._stacked && !s.labelPos ? 'center' : s.labelPos ?? 'outEnd';
+            const lp = s.pointLabels?.[chartPointIndex(s, i)]?.labelPos ?? (s._stacked && !s.labelPos ? 'center' : s.labelPos ?? 'outEnd');
             if (horizontal) {
               const hi = Math.max(from, to);
               const lo = Math.min(from, to);
@@ -1068,7 +1103,7 @@ export function renderChartSvg(chart, data) {
               const a = seg[j - 1], b = seg[j];
               parts.push(`<polygon data-3d="ribbon" points="${a[0]},${a[1]} ${b[0]},${b[1]} ${b[0] + depth.dx},${b[1] + depth.dy} ${a[0] + depth.dx},${a[1] + depth.dy}" fill="${s.color}" fill-opacity="0.85"${tag(s)}/>`);
             }
-            parts.push(`<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.lineWidth ?? 2.25}" stroke-linejoin="round" stroke-linecap="round"${dashAttr(s.dash, s.lineWidth ?? 2.25)}${shadowAttr(s)}${tag(s)}/>`);
+            parts.push(`<path d="${d}" fill="none" stroke="${s.lineNone ? 'none' : s.color}" stroke-width="${s.lineWidth ?? 2.25}" stroke-linejoin="round" stroke-linecap="round"${dashAttr(s.dash, s.lineWidth ?? 2.25)}${shadowAttr(s)}${tag(s)}/>`);
             const mkName = s.marker ?? chart.marker;
             if (mkName !== false && mkName !== 'none') {
               const mk = MARKERS[mkName] ?? MARKERS.circle;
@@ -1124,7 +1159,7 @@ export function renderChartSvg(chart, data) {
   }
   // 기준선
   if (horizontal) parts.push(`<line x1="${base}" y1="${area.y}" x2="${base}" y2="${area.y + area.h}" stroke="#bfbfbf"/>`);
-  else parts.push(`<line x1="${area.x}" y1="${base}" x2="${area.x + area.w}" y2="${base}" stroke="#bfbfbf"/>`);
+  else if (!categoryConfig.lineNone) parts.push(`<line x1="${area.x}" y1="${base}" x2="${area.x + area.w}" y2="${base}" stroke="${categoryConfig.lineColor ?? '#bfbfbf'}" stroke-width="${categoryConfig.lineWidth ?? 1}"/>`);
   pushAll(parts, labelsOut);
   if (horizontal) {
     if (!hideY) axisText(primaryAxis ? 'y2' : 'y', axisTitle(chart.axes?.[primaryAxis ? 'y2' : 'y']?.title, area.x + area.w / 2, plot.y + plot.h, 0, primaryAxis ? 'y2' : 'y'));

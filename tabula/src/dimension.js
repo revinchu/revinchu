@@ -4,7 +4,7 @@
 const DIGIT_EM = { calibri: 0.507, 'calibri light': 0.49, '맑은 고딕': 0.55, 'malgun gothic': 0.55, arial: 0.556, '굴림': 0.5, gulim: 0.5, '굴림체': 0.5, '돋움': 0.5, dotum: 0.5, '돋움체': 0.5, '바탕': 0.5, batang: 0.5, '나눔고딕': 0.6, nanumgothic: 0.6, 'nanum gothic': 0.6, 'times new roman': 0.5, cambria: 0.556, 'segoe ui': 0.55, verdana: 0.636, tahoma: 0.546, 'meiryo ui': 0.55, 'ms gothic': 0.5, simsun: 0.5 };
 export const MAX_ROW_POINTS = 409.5;
 export const MAX_COLUMN_CHARS = 255;
-export const fontDigitWidth = (font) => Math.max(4, Math.round(((font?.size || 11) * 96) / 72 * (DIGIT_EM[String(font?.name ?? '맑은 고딕').toLowerCase()] ?? 0.53)));
+export const fontDigitWidth = (font) => Math.max(4, Math.round(((font?.size || 11) * 96) / 72 * (/^(돋움|돋움체|dotum|dotumche)$/i.test(font?.name ?? '') ? 0.6 : DIGIT_EM[String(font?.name ?? '맑은 고딕').toLowerCase()] ?? 0.53)));
 
 function checked(value, max, label) {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > max) {
