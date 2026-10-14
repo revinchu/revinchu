@@ -135,7 +135,7 @@ const MEDIA_TAB = { id: 'playback', label: '재생', context: 'media', groups: [
   { label: '크기', items: [{ t: 'objSize' }] },
 ] };
 const MASTER_TAB = { id: 'slideMaster', label: '슬라이드 마스터', context: 'master', groups: [
-  { label: '마스터 편집', items: [L('masterInsertLayout', 'layoutAdd', '레이아웃 삽입'), COL(M('masterDeleteLayout', 'cross', '삭제'), M('masterRename', 'section', '이름 바꾸기'), M('masterReset', 'resetSlide', '원래대로'))] },
+  { label: '마스터 편집', items: [L('masterInsertMaster', 'layoutAdd', '슬라이드 마스터 삽입'), L('masterInsertLayout', 'layoutAdd', '레이아웃 삽입'), COL(M('masterDeleteLayout', 'cross', '삭제'), M('masterRename', 'section', '이름 바꾸기'), M('masterReset', 'resetSlide', '원래대로'))] },
   { label: '마스터 레이아웃', items: [L('masterInsertPh', 'placeholder', '개체 틀 삽입', { menu: 'masterInsertPhMenu' }), COL({ t: 'check', cmd: 'masterToggleTitle', label: '제목', on: 'mTitle' }, { t: 'check', cmd: 'masterToggleFooter', label: '바닥글', on: 'mFooter' })] },
   { label: '배경', items: [COL({ t: 'check', cmd: 'masterHideGraphics', label: '배경 그래픽 숨기기', on: 'masterHide' }), L('formatBg', 'formatBg', '배경 서식')] },
   { label: '닫기', items: [L('closeMaster', 'cross', '마스터 보기 닫기')] },
@@ -185,7 +185,7 @@ const KT = {
   tableDesign: { 'tblOpt:firstRow': 'A', 'tblOpt:lastRow': 'T', 'tblOpt:banded': 'R', 'tblOpt:firstCol': 'C', 'tblOpt:lastCol': 'L', tableStyles: 'S', cellFill: 'H', cellBorderMenu: 'B' },
   tableLayout: { tblSelectMenu: 'K', tblDeleteMenu: 'D', tblRowAbove: 'A', tblRowBelow: 'BE', tblColLeft: 'L', tblColRight: 'R', tblMerge: 'M', tblSplit: 'P', tblEqualRows: 'HE', tblEqualCols: 'WE', alignLeft: 'AL', alignCenter: 'AC', alignRight: 'AR', anchorTop: 'AT', anchorMiddle: 'AV', anchorBottom: 'AB' },
   chartDesign: { chartElementsMenu: 'A', chartQuickLayoutMenu: 'L', chartColorsMenu: 'C', chartStyleMenu: 'S', chartSwitchRowCol: 'W', chartData: 'E', chartTypeDialog: 'T', chart3d: 'D', chartFormat: 'F', chartResetStyle: 'R' },
-  slideMaster: { masterInsertLayout: 'I', masterDeleteLayout: 'D', masterRename: 'R', masterReset: 'E', masterInsertPh: 'A', masterInsertPhMenu: 'A', masterToggleTitle: 'T', masterToggleFooter: 'F', masterHideGraphics: 'H', formatBg: 'B', closeMaster: 'C' },
+  slideMaster: { masterInsertMaster: 'K', masterInsertLayout: 'I', masterDeleteLayout: 'D', masterRename: 'R', masterReset: 'E', masterInsertPh: 'A', masterInsertPhMenu: 'A', masterToggleTitle: 'T', masterToggleFooter: 'F', masterHideGraphics: 'H', formatBg: 'B', closeMaster: 'C' },
   smartDesign: { smartAddShape: 'A', smartTextPane: 'X', smartLayoutMenu: 'L', smartColorsMenu: 'C', smartStyleMenu: 'S', smartToShapes: 'V' },
   playback: { previewMedia: 'P', mediaOptions: 'O', bringForward: 'AF', sendBackward: 'AE', alignMenu: 'AA', altText: 'T', objSize: 'H' },
 };

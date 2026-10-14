@@ -75,7 +75,7 @@ export function animationsPopup(anchor) {
 export const GALLERIES = {
   themes: () => {
     const cur = S.pres.theme.name;
-    return strip(THEMES.map((t) => el('button', { class: `gal-item theme${t.name === cur ? ' on' : ''}`, title: t.label, html: themePreview(t), onclick: () => run('applyTheme', t.name) })), { cls: 'themes' });
+    return strip(THEMES.map((t) => el('button', { class: `gal-item theme${t.name === cur ? ' on' : ''}`, title: t.label, html: themePreview(t), onclick: () => run('applyTheme', t.name), oncontextmenu: (e) => { e.preventDefault(); run('themeMenu', { x: e.clientX, y: e.clientY }, t.name); } })), { cls: 'themes' });
   },
   transitions: () => {
     const cur = curSlide()?.transition?.type ?? 'none';

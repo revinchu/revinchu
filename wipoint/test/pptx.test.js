@@ -552,3 +552,57 @@ test('3차원 차트: bar3DChart · line3DChart · area3DChart · pie3DChart + v
     assert.match(chartSvg(back, 400, 300, THEMES[0]), /<path/);
   }
 });
+
+test('슬라이드 마스터 여러 개: 일부 슬라이드에 다른 테마 → 마스터 · 테마 파트 2개, 왕복', async () => {
+  const { designForTheme, presForSlide } = await import('../src/model.js');
+  const { cloneTheme, THEMES } = await import('../src/themes.js');
+  const { slideHtml } = await import('../src/render.js');
+  const p = newPresentation();
+  p.slides.push(newSlide(p, 'titleContent'), newSlide(p, 'titleContent'));
+  const other = cloneTheme(THEMES.find((t) => t.name !== p.theme.name));
+  const d = designForTheme(p, other, '두 번째 디자인');
+  p.slides[2].design = d.id;
+  assert.equal(presForSlide(p, p.slides[2]).theme, other);
+  const sh = { id: 'sh', type: 'shape', shape: 'rect', x: 0, y: 0, w: 10, h: 10, rot: 0, fill: { type: 'solid', color: '@accent1' }, line: null };
+  const html = (sl) => slideHtml(p, { ...sl, objects: [sh] });
+  assert.notEqual(html(p.slides[2]), html(p.slides[1]));
+  const bytes = writePptx(p);
+  const files = unzip(bytes);
+  assert.ok(files['ppt/slideMasters/slideMaster2.xml'] && files['ppt/theme/theme3.xml']);
+  const presXml = textOf(files['ppt/presentation.xml']);
+  assert.equal((presXml.match(/<p:sldMasterId /g) ?? []).length, 2);
+  // 모든 id 가 겹치지 않음 (마스터 + 레이아웃)
+  const ids = [...presXml.matchAll(/sldMasterId id="(\d+)"/g)].map((m) => m[1]);
+  for (const k of [1, 2]) ids.push(...[...textOf(files[`ppt/slideMasters/slideMaster${k}.xml`]).matchAll(/sldLayoutId id="(\d+)"/g)].map((m) => m[1]));
+  assert.equal(new Set(ids).size, ids.length);
+  const back = readPptx(bytes).pres;
+  assert.equal(back.slides[2].design, d.id);
+  assert.equal(back.designs[0].theme.name, other.name);
+  // 확장 정보 없이 (PowerPoint 파일처럼): 두 번째 마스터의 테마로 디자인이 생김
+  const f2 = { ...files };
+  for (const k of Object.keys(f2)) if (/\.xml$/.test(k)) f2[k] = new TextEncoder().encode(textOf(f2[k]).replace(/<p:ext uri="\{6F1B2D57[^]*?<\/p:ext>/g, ''));
+  const ext = readPptx(zip(f2)).pres;
+  assert.ok(ext.designs?.length === 1, '디자인 1개');
+  assert.ok(ext.slides[2].design && !ext.slides[1].design);
+  assert.deepEqual(ext.designs[0].theme.colors, other.colors);
+});
+
+test('PowerPoint SmartArt 데이터 모델 → 편집 가능한 SmartArt (글 계층 + 레이아웃)', () => {
+  const p = newPresentation();
+  const bytes = writePptx(p);
+  const files = unzip(bytes);
+  const NS = 'xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"';
+  const pt = (id, t, type = '') => `<dgm:pt modelId="${id}"${type ? ` type="${type}"` : ''}>${t != null ? `<dgm:t><a:bodyPr/><a:p><a:r><a:t>${t}</a:t></a:r></a:p></dgm:t>` : ''}</dgm:pt>`;
+  files['ppt/diagrams/data1.xml'] = new TextEncoder().encode(`<?xml version="1.0"?><dgm:dataModel ${NS}><dgm:ptLst>${pt('0', null, 'doc')}${pt('1', '기획')}${pt('2', '개발')}${pt('3', '세부')}${pt('9', '', 'pres')}</dgm:ptLst><dgm:cxnLst><dgm:cxn modelId="c1" srcId="0" destId="1" srcOrd="0"/><dgm:cxn modelId="c2" srcId="0" destId="2" srcOrd="1"/><dgm:cxn modelId="c3" srcId="2" destId="3" srcOrd="0"/><dgm:cxn modelId="c4" type="presOf" srcId="1" destId="9"/></dgm:cxnLst></dgm:dataModel>`);
+  files['ppt/diagrams/layout1.xml'] = new TextEncoder().encode(`<?xml version="1.0"?><dgm:layoutDef ${NS} uniqueId="urn:microsoft.com/office/officeart/2005/8/layout/process1"/>`);
+  files['ppt/diagrams/drawing1.xml'] = new TextEncoder().encode(`<?xml version="1.0"?><dsp:drawing xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><dsp:spTree><dsp:nvGrpSpPr><dsp:cNvPr id="0" name=""/><dsp:cNvGrpSpPr/></dsp:nvGrpSpPr><dsp:grpSpPr/><dsp:sp modelId="1"><dsp:nvSpPr><dsp:cNvPr id="0" name=""/><dsp:cNvSpPr/></dsp:nvSpPr><dsp:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="500000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></dsp:spPr><dsp:txBody><a:bodyPr/><a:p><a:r><a:t>기획</a:t></a:r></a:p></dsp:txBody></dsp:sp></dsp:spTree></dsp:drawing>`);
+  const slideXml = textOf(files['ppt/slides/slide1.xml']).replace('</p:spTree>', '<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="99" name="Diagram"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="0" y="0"/><a:ext cx="5000000" cy="3000000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/diagram"><dgm:relIds xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" r:dm="rIdD1" r:lo="rIdD2" r:qs="rIdD3" r:cs="rIdD4"/></a:graphicData></a:graphic></p:graphicFrame></p:spTree>').replace(/<p:ext uri="\{6F1B2D57[^]*?<\/p:ext>/, '');
+  files['ppt/slides/slide1.xml'] = new TextEncoder().encode(slideXml);
+  const rels = textOf(files['ppt/slides/_rels/slide1.xml.rels']).replace('</Relationships>', '<Relationship Id="rIdD1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramData" Target="../diagrams/data1.xml"/><Relationship Id="rIdD2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramLayout" Target="../diagrams/layout1.xml"/><Relationship Id="rIdD5" Type="http://schemas.microsoft.com/office/2007/relationships/diagramDrawing" Target="../diagrams/drawing1.xml"/></Relationships>');
+  files['ppt/slides/_rels/slide1.xml.rels'] = new TextEncoder().encode(rels);
+  const s = readPptx(zip(files)).pres.slides[0];
+  const head = s.objects.find((o) => o.smartItems);
+  assert.ok(head, 'SmartArt 로 읽어야 함');
+  assert.equal(head.smart, 'process');
+  assert.deepEqual(head.smartItems, ['기획', '개발', '\t세부']);
+});

@@ -2,7 +2,7 @@
 import { S, curSlide, selObjects, selOne, objById, change, emit, register, run, goSlide, refresh } from './state.js';
 import {
   newSlide, nextLayout, duplicateSlide, changeLayout, resetSlideLayout, cloneObjects, newTable, newChart, newImage, newTextBox, newShape,
-  applyRunProps, applyParaProps, commonRunProp, alignObjects, reorder, groupMembers, uid, LAYOUTS, layoutList, layoutName, isCustomLayout, addCustomLayout, removeCustomLayout, PH_INSERT, layoutPlaceholders, masterSlide,
+  applyRunProps, applyParaProps, commonRunProp, alignObjects, reorder, groupMembers, uid, LAYOUTS, layoutList, layoutName, isCustomLayout, addCustomLayout, removeCustomLayout, PH_INSERT, layoutPlaceholders, masterSlide, designForTheme, pruneDesigns,
   resizePresentation, addAnim, animSteps, ANIM_EFFECTS, ANIM_CLASS_LABEL, MOTION_PATHS, motionPoints, findAll, replaceAll, replaceInPara, setPlainText, plainText, slideTitle, defaultSize, isEmptyText, para, outline,
   replaceFonts,
 } from './model.js';
@@ -495,6 +495,7 @@ function addSlide(layout) {
   const s = slide();
   const ns = newSlide(S.pres, layout ?? nextLayout(s?.layout));
   if (s?.hideDecor) ns.hideDecor = true;
+  if (s?.design) ns.design = s.design;
   if (s?.bgObjects && !layout) { ns.bgObjects = JSON.parse(JSON.stringify(s.bgObjects)); ns.bg = s.bg ? JSON.parse(JSON.stringify(s.bg)) : null; }
   change(() => { S.pres.slides.splice(S.cur + 1, 0, ns); }, { scope: 'all' });
   goSlide(S.cur + 1);
@@ -527,6 +528,7 @@ function masterInsertLayout() {
 }
 function masterDeleteLayout() {
   const key = S.masterKey;
+  if (String(key).endsWith('/master')) { run('masterDeleteMaster'); return; }
   if (!key || key === 'master') { toast('지울 레이아웃을 고르세요'); return; }
   if (!isCustomLayout(key)) { toast('기본 레이아웃은 지울 수 없습니다 (사용자 지정 레이아웃만 지울 수 있습니다)'); return; }
   const used = S.pres.slides.filter((s) => s.layout === key).length;
@@ -694,10 +696,31 @@ function customColorsDialog() {
 }
 
 // ───────────── 테마 ─────────────
+/** 선택한 슬라이드에만 테마 적용 (PowerPoint: 테마 오른쪽 클릭 › 선택한 슬라이드에 적용) → 슬라이드 마스터가 하나 더 생김 */
+function applyThemeSelected(name) {
+  const t = themeByName(name);
+  if (!t) return;
+  const picked = pickedSlides();
+  change(() => {
+    if (t.name === S.pres.theme.name) { for (const sl of picked) delete sl.design; }
+    else { const d = designForTheme(S.pres, cloneTheme(t), t.label); for (const sl of picked) sl.design = d.id; }
+    pruneDesigns(S.pres);
+  }, { scope: 'all' });
+  toast(`선택한 슬라이드 ${picked.length}장에 "${t.label}" 테마를 적용했습니다`);
+}
 function applyTheme(name, { colorsOnly = false, fontsFrom = null } = {}) {
   const t = themeByName(name);
   if (!t) return;
+  // 마스터 보기에서 추가 슬라이드 마스터를 고른 경우: 그 마스터의 테마만 바꿈
+  const did = String(S.masterKey ?? '').includes('/') ? S.masterKey.split('/')[0] : null;
+  const design = did ? S.pres.designs?.find((x) => x.id === did) : null;
+  if (design) {
+    change(() => { design.theme = colorsOnly ? { ...design.theme, colors: { ...t.colors } } : cloneTheme(t); if (fontsFrom) design.theme.fonts = { ...fontsFrom }; if (!colorsOnly) design.name = t.label; }, { scope: 'all' });
+    return;
+  }
   change(() => {
+    // 모든 슬라이드에 적용: 다른 마스터(디자인)는 없앰
+    if (!colorsOnly && !fontsFrom) { for (const sl of S.pres.slides) delete sl.design; delete S.pres.designs; }
     const cur = S.pres.theme;
     if (colorsOnly) S.pres.theme = { ...cur, colors: { ...t.colors } };
     else S.pres.theme = cloneTheme(t);
@@ -1859,8 +1882,12 @@ const SHORTCUTS = [
   ['쇼: Ctrl+H / Ctrl+U', '포인터 숨기기 / 보이기'], ['쇼: G 또는 Ctrl+S', '모든 슬라이드 목록'], ['쇼: Home / End / Esc (−)', '첫 / 마지막 슬라이드 / 쇼 마치기'],
 ];
 
-export const APP_VERSION = '1.6';
+export const APP_VERSION = '1.7';
 const WHATS_NEW = [
+  '1.7 — 텍스트 애니메이션 (단어별 · 글자별, 지연 %) · 애니메이션 · 전환 소리 19종 (박수, 드럼롤, 차임, 레이저 … pptx 에 WAV 로 저장 · 읽기) · 효과 옵션 대화 상자 · 실시간 자막 번역 (Chrome 내장 번역)',
+  '1.7 — 3차원 차트: 3차원 묶은 · 누적 · 100% 세로 막대, 3차원 세로 막대, 3차원 가로 막대, 3차원 꺾은선, 3차원 영역, 3차원 원형 · 쪼개진 원형, 3차원 회전 대화 상자 (pptx bar3DChart · pie3DChart … 저장 · 읽기)',
+  '1.7 — 사진 앨범 (레이아웃 · 틀 모양 · 캡션 · 흑백, 앨범 편집) · 프레젠테이션 비교 (변경 내용 목록, 선택 적용 · 모두 적용) · 접근성 검사 (대체 텍스트, 제목, 읽기 순서, 색 대비, 표 머리글 …, 바로 고치기, 장식용 표시)',
+  '1.7 — 여러 슬라이드 마스터 (선택한 슬라이드에만 테마 적용, 마스터 삽입 · 삭제, pptx 에 마스터 여러 개 저장 · 읽기) · 다른 프로그램의 SmartArt 를 읽으면 텍스트 · 레이아웃이 다시 편집 가능',
   '1.6 — 그림 꾸밈 효과 22종 (표식, 연필 스케치, 선 그리기, 분필, 수채화, 유리, 모자이크, 광채 가장자리 …, 선택한 그림으로 미리 보기 · 강도 조절) · 그림 압축 (330/220/150/96ppi, 잘린 영역 삭제)',
   '1.6 — 쇼 녹화: 슬라이드마다 내레이션(마이크) · 카메라 · 타이밍 · 잉크를 기록하고 재생, 녹화 지우기, 동영상 내보내기에 내레이션 포함 · 실시간 자막 (음성 인식, 언어 · 위치 · 크기, J 키)',
   '1.6 — 사용자 지정 레이아웃: 슬라이드 마스터에서 레이아웃 삽입 · 삭제 · 이름 바꾸기, 개체 틀 삽입 (콘텐츠 · 텍스트 · 그림 · 차트 · 표 · SmartArt · 미디어), 제목 · 바닥글 표시, 새 슬라이드 갤러리, pptx 왕복 (다른 프로그램의 사용자 지정 레이아웃도 읽기)',
@@ -2285,6 +2312,21 @@ register({
 
   // 디자인
   applyTheme: (name) => applyTheme(name),
+  applyThemeSelected: (name) => applyThemeSelected(name),
+  themeMenu: (a, name) => menuAt(a, [{ label: '모든 슬라이드에 적용(A)', action: () => applyTheme(name) }, { label: '선택한 슬라이드에 적용(S)', action: () => applyThemeSelected(name) }]),
+  // 슬라이드 마스터 삽입 / 삭제 (마스터 보기)
+  masterInsertMaster: () => {
+    let d;
+    change(() => { S.pres.designs ??= []; d = { id: uid('d'), name: `사용자 지정 디자인 ${S.pres.designs.length + 1}`, theme: cloneTheme(THEMES[0]), masters: {}, keep: true }; S.pres.designs.push(d); }, { scope: 'all' });
+    run('masterPick', `${d.id}/master`);
+    toast('슬라이드 마스터를 넣었습니다 — 디자인 › 테마로 이 마스터의 테마를 바꿀 수 있습니다');
+  },
+  masterDeleteMaster: () => {
+    const did = String(S.masterKey ?? '').split('/')[1] ? S.masterKey.split('/')[0] : null;
+    if (!did) { toast('추가한 슬라이드 마스터를 고르세요 (첫 마스터는 지울 수 없습니다)'); return; }
+    change(() => { for (const sl of S.pres.slides) if (sl.design === did) delete sl.design; S.pres.designs = (S.pres.designs ?? []).filter((x) => x.id !== did); if (!S.pres.designs.length) delete S.pres.designs; }, { scope: 'all' });
+    run('masterPick', 'master');
+  },
   themeColorsMenu: (a) => {
     const cur = S.pres.theme.colors;
     const same = (c) => ['dk2', 'lt2', 'accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'accent6'].every((k) => String(cur[k]).toUpperCase() === String(c[k]).toUpperCase());

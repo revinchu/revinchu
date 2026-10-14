@@ -4,7 +4,7 @@
 import { zip, unzip, textOf } from './zip.js';
 import { parseXml, child, kids, descendants, esc } from './xml.js';
 import { SLOT_NAMES, resolveColor, applyMods, cloneTheme, THEMES } from './themes.js';
-import { EMU_PER_PX, uid, layoutPlaceholders, defaultSize, defaultColor, defaultFont, isEmptyText, animSteps, triggerSteps, stepTimeline, MOTION_PATHS, isCustomLayout, layoutName, textBody, para, newSlide, slideTitle, setMasterText } from './model.js';
+import { EMU_PER_PX, uid, layoutPlaceholders, defaultSize, defaultColor, defaultFont, isEmptyText, animSteps, triggerSteps, stepTimeline, MOTION_PATHS, isCustomLayout, layoutName, presForSlide, textBody, para, newSlide, slideTitle, setMasterText } from './model.js';
 import { parseLatex, toOMML, ommlToLatex } from './math.js';
 import { paraDefaults, tableCellStyle, slideBackground, themeDecor, slideDecor } from './render.js';
 import { KNOWN_SHAPES } from './shapes.js';
@@ -161,6 +161,36 @@ const PH_TYPE = { ctrTitle: 'ctrTitle', title: 'title', subTitle: 'subTitle', bo
 
 /** 장식용 개체 (PowerPoint [장식용으로 표시]: 화면 읽기 프로그램이 건너뜀) */
 const decoXml = (o) => (o.decorative ? '<a:extLst><a:ext uri="{C183D7F6-B498-43B3-948B-1728B52AA6E4}"><adec:decorative xmlns:adec="http://schemas.microsoft.com/office/drawing/2017/decorative" val="1"/></a:ext></a:extLst>' : '');
+/** PowerPoint SmartArt 레이아웃 (layoutDef uniqueId 끝) → WIPOINT SMART_KINDS */
+const DGM_LAYOUT = {
+  default: 'blocks', list1: 'list', vList2: 'vBullet', vList5: 'boxList', vList6: 'boxList', hList1: 'hBullet', hList6: 'hBullet', lProcess2: 'list', trapezoid2: 'trapezoidList', hexagonList: 'hexList', StackedList: 'stackedList',
+  process1: 'process', process2: 'vProcess', process4: 'arrowProcess', chevron1: 'chevron', hChevron3: 'chevron', vProcess5: 'vProcess', bProcess3: 'bentProcess', bProcess4: 'bentProcess', StepUpProcess: 'stepUp', hProcess9: 'arrowProcess', funnel1: 'funnel', chevron2: 'vChevron',
+  cycle1: 'cycle', cycle2: 'cycle', cycle3: 'textCycle', cycle5: 'continuousCycle', cycle6: 'blockCycle', cycle8: 'segmentedCycle', radial1: 'radialCycle', radial3: 'radialVenn', radial5: 'converging',
+  hierarchy1: 'hierarchy', orgChart1: 'hierarchy', hierarchy2: 'hHierarchy', hierarchy4: 'tableHierarchy', NameandTitleOrganizationalChart: 'nameHierarchy',
+  venn1: 'venn', venn2: 'stackedVenn', venn3: 'venn', target1: 'targetVenn', target3: 'targetVenn', arrow4: 'counterArrows', arrow1: 'counterArrows', equation1: 'equation', balance1: 'balance',
+  matrix1: 'matrix', matrix2: 'titledMatrix', matrix3: 'matrix', cycle4: 'cycleMatrix', pyramid1: 'pyramid', pyramid3: 'invPyramid', pyramid2: 'pyramidList', pyramid4: 'segPyramid',
+  pList1: 'picAccent', pList2: 'picGrid', CircularPictureCallout: 'picCircles', TitledPictureBlocks: 'picTitles',
+};
+/** SmartArt 데이터 모델 (dgm:dataModel) → 글 줄 목록 (수준 = 앞의 탭 수) */
+function dgmItems(dm) {
+  const pts = new Map();
+  for (const pt of descendants(child(dm, 'ptLst'), 'pt')) {
+    const type = attr(pt, 'type') ?? 'node';
+    pts.set(attr(pt, 'modelId'), { type, t: descendants(child(pt, 't'), 'p').map((p) => descendants(p, 't').map((x) => x.text ?? '').join('')).join(' ').trim(), kids: [] });
+  }
+  for (const c of descendants(child(dm, 'cxnLst'), 'cxn')) {
+    const type = attr(c, 'type') ?? 'parOf';
+    if (type !== 'parOf') continue;
+    const src = pts.get(attr(c, 'srcId')); const dst = pts.get(attr(c, 'destId'));
+    if (src && dst && dst.type === 'node') src.kids.push([Number(attr(c, 'srcOrd') ?? 0), dst]);
+  }
+  const doc = [...pts.values()].find((p) => p.type === 'doc');
+  const out = [];
+  const walk = (n, depth) => { for (const [, k] of n.kids.sort((a, b) => a[0] - b[0])) { out.push(`${'\t'.repeat(depth)}${k.t}`); walk(k, depth + 1); } };
+  if (doc) walk(doc, 0);
+  return out.filter((l) => l.trim());
+}
+
 function phXml(o, phIdx) {
   if (!o.ph || !phIdx) return '<p:nvPr/>';
   const info = phIdx.get(o.id);
@@ -643,14 +673,14 @@ function lvlStyles(sizes, bullets, extra = '') {
   }).join('') + extra;
 }
 
-function masterXml(pres, layoutRids) {
+function masterXml(pres, layoutRids, idBase = 2147483649) {
   const size = pres.size;
   const sx = size.w / 1280;
   const sy = size.h / 720;
   const ph = (id, name, type, x, y, w, h, idx) => `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${name}"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr><p:ph type="${type}"${idx ? ` idx="${idx}"` : ''}/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="${E(x * sx)}" y="${E(y * sy)}"/><a:ext cx="${E(w * sx)}" cy="${E(h * sy)}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr vert="horz" lIns="91440" tIns="45720" rIns="91440" bIns="45720" rtlCol="0" anchor="${type === 'title' ? 'ctr' : 't'}"><a:normAutofit/></a:bodyPr><a:lstStyle/><a:p><a:r><a:rPr lang="ko-KR" altLang="en-US"/><a:t>${type === 'title' ? '마스터 제목 스타일 편집' : '마스터 텍스트 스타일을 편집합니다'}</a:t></a:r><a:endParaRPr lang="ko-KR"/></a:p></p:txBody></p:sp>`;
   const sizes = [2800, 2400, 2000, 1800, 1800, 1800, 1800, 1800, 1800];
   const other = [1800, 1800, 1800, 1800, 1800, 1800, 1800, 1800, 1800].map((sz, i) => `<a:lvl${i + 1}pPr marL="${i * 457200}" algn="l" defTabSz="914400" rtl="0" eaLnBrk="1" latinLnBrk="0" hangingPunct="1"><a:defRPr sz="${sz}" kern="1200"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill><a:latin typeface="+mn-lt"/><a:ea typeface="+mn-ea"/><a:cs typeface="+mn-cs"/></a:defRPr></a:lvl${i + 1}pPr>`).join('');
-  const ids = layoutRids.map((rid, i) => `<p:sldLayoutId id="${2147483649 + i}" r:id="${rid}"/>`).join('');
+  const ids = layoutRids.map((rid, i) => `<p:sldLayoutId id="${idBase + i}" r:id="${rid}"/>`).join('');
   return `${XML_HEAD}<p:sldMaster xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}"><p:cSld><p:bg><p:bgRef idx="1001"><a:schemeClr val="bg1"/></p:bgRef></p:bg><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>${ph(2, 'Title Placeholder 1', 'title', 88, 38, 1104, 139)}${ph(3, 'Text Placeholder 2', 'body', 88, 192, 1104, 456, 1)}</p:spTree></p:cSld><p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/><p:sldLayoutIdLst>${ids}</p:sldLayoutIdLst><p:txStyles><p:titleStyle><a:lvl1pPr algn="l" defTabSz="914400" rtl="0" eaLnBrk="1" latinLnBrk="0" hangingPunct="1"><a:lnSpc><a:spcPct val="90000"/></a:lnSpc><a:spcBef><a:spcPct val="0"/></a:spcBef><a:buNone/><a:defRPr sz="4400" kern="1200"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill><a:latin typeface="+mj-lt"/><a:ea typeface="+mj-ea"/><a:cs typeface="+mj-cs"/></a:defRPr></a:lvl1pPr></p:titleStyle><p:bodyStyle>${lvlStyles(sizes, true)}</p:bodyStyle><p:otherStyle><a:defPPr><a:defRPr lang="ko-KR"/></a:defPPr>${other}</p:otherStyle></p:txStyles></p:sldMaster>`;
 }
 
@@ -833,11 +863,13 @@ export function pptxEntries(pres, opts = {}) {
   // 레이아웃: (종류, 배경 장식) 조합마다 하나 — 슬라이드가 쓰는 것만 + 기본 9종
   const layoutDefs = [];
   const layoutKey = new Map();
+  const designOf = (slide) => (slide.design && pres.designs?.some((d) => d.id === slide.design) ? slide.design : null);
   const layoutOf = (slide) => {
-    const custom = isCustomLayout(slide.layout) && pres.masters?.[slide.layout];
+    const design = designOf(slide);
+    const custom = !design && isCustomLayout(slide.layout) && pres.masters?.[slide.layout];
     const kind = LAYOUT_TYPE[slide.layout] || custom ? slide.layout : 'blank';
     const decor = slideDecor(pres, { ...slide, layout: kind });
-    const key = `${kind}|${JSON.stringify(decor)}`;
+    const key = `${design ?? ''}|${kind}|${JSON.stringify(decor)}`;
     if (layoutKey.has(key)) {
       const def = layoutKey.get(key);
       mergePhs(def, slide);
@@ -847,6 +879,7 @@ export function pptxEntries(pres, opts = {}) {
     const def = custom
       ? { kind, decor, name: layoutName(pres, kind), phs: custom.objects.filter((o) => o.ph).map((o) => ({ ...o })), index: layoutDefs.length + 1, showMaster: !custom.hideMaster }
       : { kind, decor, name: slide.bgObjects ? `${LAYOUT_NAME[kind] ?? '사용자 지정'} ${layoutDefs.length + 1}` : LAYOUT_NAME[kind] ?? '사용자 지정', phs: slide.bgObjects ? [] : layoutPlaceholders(kind, pres.size), index: layoutDefs.length + 1, showMaster: true };
+    def.design = design;
     mergePhs(def, slide);
     layoutDefs.push(def);
     layoutKey.set(key, def);
@@ -865,11 +898,15 @@ export function pptxEntries(pres, opts = {}) {
   }
   for (const k of Object.keys(LAYOUT_TYPE)) layoutOf({ layout: k, objects: [] });
   for (const c of pres.customLayouts ?? []) if (pres.masters?.[c.key]) layoutOf({ layout: c.key, objects: [], bgObjects: c.bgObjects });
+  // 추가 슬라이드 마스터(디자인)마다 기본 레이아웃 9종
+  for (const d of pres.designs ?? []) for (const k of Object.keys(LAYOUT_TYPE)) layoutOf({ layout: k, objects: [], design: d.id });
   const slideLayouts = pres.slides.map((s) => layoutOf(s));
 
   // 프레젠테이션
   const presRels = relsFor();
-  const masterRid = presRels.add(REL('slideMaster'), 'slideMasters/slideMaster1.xml');
+  // 마스터 묶음: [첫 마스터, …디자인] — 레이아웃이 있는 것만
+  const masterGroups = [null, ...(pres.designs ?? []).map((d) => d.id)].filter((id, k) => k === 0 || layoutDefs.some((d) => d.design === id));
+  const masterRids = masterGroups.map((_, k) => presRels.add(REL('slideMaster'), `slideMasters/slideMaster${k + 1}.xml`));
   const slideRids = pres.slides.map((_, i) => presRels.add(REL('slide'), `slides/slide${i + 1}.xml`));
   const authors = [];
   const authorId = (name) => { let i = authors.findIndex((a) => a.name === name); if (i < 0) { authors.push({ name, last: 0 }); i = authors.length - 1; } return i; };
@@ -894,22 +931,32 @@ export function pptxEntries(pres, opts = {}) {
   const order = ['regular', 'bold', 'italic', 'boldItalic'];
   const fontXml = fontEls.size ? `<p:embeddedFontLst>${[...fontEls.values()].map(({ f, parts }) => `<p:embeddedFont><p:font typeface="${esc(f.typeface)}"${f.panose ? ` panose="${esc(f.panose)}"` : ''}${f.pitchFamily ? ` pitchFamily="${esc(f.pitchFamily)}"` : ''}${f.charset ? ` charset="${esc(f.charset)}"` : ''}/>${parts.sort((a, b) => order.indexOf(a.slice(3, a.indexOf(' '))) - order.indexOf(b.slice(3, b.indexOf(' ')))).join('')}</p:embeddedFont>`).join('')}</p:embeddedFontLst>` : '';
 
-  // 마스터 · 레이아웃
-  const masterRels = relsFor();
-  const layoutRids = layoutDefs.map((d) => masterRels.add(REL('slideLayout'), `../slideLayouts/slideLayout${d.index}.xml`));
-  masterRels.add(REL('theme'), '../theme/theme1.xml');
-  files['ppt/slideMasters/slideMaster1.xml'] = masterXml(pres, layoutRids);
-  files['ppt/slideMasters/_rels/slideMaster1.xml.rels'] = masterRels.xml();
-  override('ppt/slideMasters/slideMaster1.xml', CT('slideMaster'));
-  for (const d of layoutDefs) {
-    const rels = relsFor();
-    rels.add(REL('slideMaster'), '../slideMasters/slideMaster1.xml');
-    files[`ppt/slideLayouts/slideLayout${d.index}.xml`] = layoutXml(pres, d, rels);
-    files[`ppt/slideLayouts/_rels/slideLayout${d.index}.xml.rels`] = rels.xml();
-    override(`ppt/slideLayouts/slideLayout${d.index}.xml`, CT('slideLayout'));
-  }
-  files['ppt/theme/theme1.xml'] = themeXml(pres.theme);
-  override('ppt/theme/theme1.xml', 'application/vnd.openxmlformats-officedocument.theme+xml');
+  // 마스터 · 레이아웃 · 테마 (마스터마다 하나씩)
+  let idNext = 2147483648;
+  const masterIdOf = [];
+  masterGroups.forEach((did, k) => {
+    const n = k + 1;
+    const pd = did ? presForSlide(pres, { design: did }) : pres;
+    const defs = layoutDefs.filter((d) => (d.design ?? null) === did);
+    const masterRels = relsFor();
+    const layoutRids = defs.map((d) => masterRels.add(REL('slideLayout'), `../slideLayouts/slideLayout${d.index}.xml`));
+    const themeN = n === 1 ? 1 : n + 1; // theme2 는 메모 마스터용
+    masterRels.add(REL('theme'), `../theme/theme${themeN}.xml`);
+    masterIdOf.push(idNext);
+    files[`ppt/slideMasters/slideMaster${n}.xml`] = masterXml(pd, layoutRids, idNext + 1);
+    idNext += defs.length + 1;
+    files[`ppt/slideMasters/_rels/slideMaster${n}.xml.rels`] = masterRels.xml();
+    override(`ppt/slideMasters/slideMaster${n}.xml`, CT('slideMaster'));
+    for (const d of defs) {
+      const rels = relsFor();
+      rels.add(REL('slideMaster'), `../slideMasters/slideMaster${n}.xml`);
+      files[`ppt/slideLayouts/slideLayout${d.index}.xml`] = layoutXml(pd, d, rels);
+      files[`ppt/slideLayouts/_rels/slideLayout${d.index}.xml.rels`] = rels.xml();
+      override(`ppt/slideLayouts/slideLayout${d.index}.xml`, CT('slideLayout'));
+    }
+    files[`ppt/theme/theme${themeN}.xml`] = themeXml(pd.theme, did ? (pres.designs.find((x) => x.id === did)?.name ?? 'WIPOINT') : 'WIPOINT');
+    override(`ppt/theme/theme${themeN}.xml`, 'application/vnd.openxmlformats-officedocument.theme+xml');
+  });
   if (hasNotes) {
     files['ppt/notesMasters/notesMaster1.xml'] = notesMasterXml();
     files['ppt/notesMasters/_rels/notesMaster1.xml.rels'] = `${XML_HEAD}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL('theme')}" Target="../theme/theme2.xml"/></Relationships>`;
@@ -989,7 +1036,7 @@ export function pptxEntries(pres, opts = {}) {
       const pr = Object.fromEntries(['autoplay', 'loop', 'narration', 'hideInShow', 'volume'].filter((k) => o[k] != null).map((k) => [k, o[k]]));
       if (Object.keys(pr).length && spid.has(o.id)) props[spid.get(o.id)] = pr;
     }
-    const meta = { props: Object.keys(props).length ? props : undefined, inkRec: slide.inkRec?.length ? slide.inkRec : undefined, comments: slide.comments?.length ? slide.comments : undefined, layout: slide.layout, transition: slide.transition ?? null, anims: slide.anims ?? [], hideDecor: slide.hideDecor ?? false, section: slide.section ?? null, zooms: Object.keys(zooms).length ? zooms : undefined, bgObjects: slide.bgObjects ? true : undefined, ids: Object.fromEntries([...spid].filter(([k]) => !String(k).startsWith('grp:')).map(([k, v]) => [v, k])) };
+    const meta = { design: slide.design ?? undefined, props: Object.keys(props).length ? props : undefined, inkRec: slide.inkRec?.length ? slide.inkRec : undefined, comments: slide.comments?.length ? slide.comments : undefined, layout: slide.layout, transition: slide.transition ?? null, anims: slide.anims ?? [], hideDecor: slide.hideDecor ?? false, section: slide.section ?? null, zooms: Object.keys(zooms).length ? zooms : undefined, bgObjects: slide.bgObjects ? true : undefined, ids: Object.fromEntries([...spid].filter(([k]) => !String(k).startsWith('grp:')).map(([k, v]) => [v, k])) };
     const ext = `<p:extLst><p:ext uri="${WP_EXT_URI}"><wp:slide xmlns:wp="${WP_NS}" json="${esc(JSON.stringify(meta))}"/></p:ext></p:extLst>`;
     const timing = timingXml(slide, (oid) => spid.get(oid), (k) => rels.sound(k));
     files[`ppt/slides/slide${n}.xml`] = `${XML_HEAD}<p:sld xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}"${slide.hidden ? ' show="0"' : ''}><p:cSld>${bg}<p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>${parts.join('')}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>${transitionXml(slide.transition, (k) => rels.sound(k))}${timing}${ext}</p:sld>`;
@@ -1011,8 +1058,8 @@ export function pptxEntries(pres, opts = {}) {
   const th = pres.theme;
   // 마스터 개체의 그림: 파일 안 경로를 기록 (다시 읽을 때 새 media id 로 연결)
   const masterMedia = {};
-  for (const o of [...Object.values(pres.masters ?? {}).flatMap((m) => m.objects), ...(pres.customLayouts ?? []).flatMap((c) => c.bgObjects ?? [])]) for (const id of [o.media, o.fill?.media]) if (id && mediaPath.has(id)) masterMedia[id] = mediaPath.get(id);
-  const presMeta = { customLayouts: pres.customLayouts?.length ? pres.customLayouts : undefined, masters: pres.masters ?? undefined, masterMedia: Object.keys(masterMedia).length ? masterMedia : undefined, theme: { name: th.name, label: th.label, accentBand: !!th.accentBand, titleBar: !!th.titleBar, dark: !!th.dark, bg: th.bg ?? null }, footer: pres.footer ?? null };
+  for (const o of [...Object.values(pres.masters ?? {}).flatMap((m) => m.objects), ...(pres.designs ?? []).flatMap((d) => Object.values(d.masters ?? {}).flatMap((m) => m.objects)), ...(pres.customLayouts ?? []).flatMap((c) => c.bgObjects ?? [])]) for (const id of [o.media, o.fill?.media]) if (id && mediaPath.has(id)) masterMedia[id] = mediaPath.get(id);
+  const presMeta = { designs: pres.designs?.length ? pres.designs : undefined, customLayouts: pres.customLayouts?.length ? pres.customLayouts : undefined, masters: pres.masters ?? undefined, masterMedia: Object.keys(masterMedia).length ? masterMedia : undefined, theme: { name: th.name, label: th.label, accentBand: !!th.accentBand, titleBar: !!th.titleBar, dark: !!th.dark, bg: th.bg ?? null }, footer: pres.footer ?? null };
   // 안내선 (PowerPoint 2013+: p15:sldGuideLst, pos = 1/8 pt = px × 6)
   const guideExt = pres.guides?.length ? `<p:ext uri="{EFAFB233-063F-42B5-8137-9DF3F51BA10A}"><p15:sldGuideLst xmlns:p15="http://schemas.microsoft.com/office/powerpoint/2012/main">${pres.guides.map((g, i) => `<p15:guide id="${i + 1}"${g.dir === 'h' ? ' orient="horz"' : ''} pos="${Math.round(g.pos * 6)}"/>`).join('')}</p15:sldGuideLst></p:ext>` : '';
   const secXml = `<p:extLst>${secExt}${guideExt}<p:ext uri="${WP_EXT_URI}"><wp:pres xmlns:wp="${WP_NS}" json="${esc(JSON.stringify(presMeta))}"/></p:ext></p:extLst>`;
@@ -1026,7 +1073,7 @@ export function pptxEntries(pres, opts = {}) {
   }
   // 사용자 지정 쇼
   const custXml = (pres.customShows ?? []).length ? `<p:custShowLst>${pres.customShows.map((c, k) => `<p:custShow name="${esc(c.name)}" id="${k}"><p:sldLst>${c.slides.map((id) => pres.slides.findIndex((x) => x.id === id)).filter((i) => i >= 0).map((i) => `<p:sld r:id="${slideRids[i]}"/>`).join('')}</p:sldLst></p:custShow>`).join('')}</p:custShowLst>` : '';
-  files['ppt/presentation.xml'] = `${XML_HEAD}<p:presentation xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}" saveSubsetFonts="1"${fontXml ? ' embedTrueTypeFonts="1"' : ''}><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="${masterRid}"/></p:sldMasterIdLst>${notesMasterRid ? `<p:notesMasterIdLst><p:notesMasterId r:id="${notesMasterRid}"/></p:notesMasterIdLst>` : ''}${sldIds ? `<p:sldIdLst>${sldIds}</p:sldIdLst>` : ''}<p:sldSz cx="${E(sz.w)}" cy="${E(sz.h)}"/><p:notesSz cx="6858000" cy="9144000"/>${fontXml}${custXml}${defText}${secXml}</p:presentation>`;
+  files['ppt/presentation.xml'] = `${XML_HEAD}<p:presentation xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}" saveSubsetFonts="1"${fontXml ? ' embedTrueTypeFonts="1"' : ''}><p:sldMasterIdLst>${masterRids.map((r, k) => `<p:sldMasterId id="${masterIdOf[k]}" r:id="${r}"/>`).join('')}</p:sldMasterIdLst>${notesMasterRid ? `<p:notesMasterIdLst><p:notesMasterId r:id="${notesMasterRid}"/></p:notesMasterIdLst>` : ''}${sldIds ? `<p:sldIdLst>${sldIds}</p:sldIdLst>` : ''}<p:sldSz cx="${E(sz.w)}" cy="${E(sz.h)}"/><p:notesSz cx="6858000" cy="9144000"/>${fontXml}${custXml}${defText}${secXml}</p:presentation>`;
   files['ppt/_rels/presentation.xml.rels'] = presRels.xml();
   override('ppt/presentation.xml', CT(opts.template ? 'template.main' : 'presentation.main'));
   files['ppt/presProps.xml'] = `${XML_HEAD}<p:presentationPr xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}"/>`;
@@ -1503,6 +1550,21 @@ export function readPptx(input, opts = {}) {
     return master.styles.body;
   };
 
+  /** 다른 프로그램 파일의 두 번째 이후 마스터: 테마가 첫 마스터와 다르면 디자인으로 */
+  const foreignDesigns = new Map();
+  const foreignDesign = (mpath) => {
+    if (foreignDesigns.has(mpath)) return foreignDesigns.get(mpath);
+    const tRel = [...relsOf(mpath).values()].find((r) => r.type.endsWith('/theme'));
+    const firstRel = firstMaster ? [...relsOf(firstMaster).values()].find((r) => r.type.endsWith('/theme')) : null;
+    let d = null;
+    if (tRel && has(tRel.target) && tRel.target !== firstRel?.target) {
+      const th = themeFromXml(textOf(files[tRel.target]))?.theme;
+      if (th && JSON.stringify(th.colors) + JSON.stringify(th.fonts) !== JSON.stringify(theme.colors) + JSON.stringify(theme.fonts)) d = { id: uid('d'), name: th.label ?? th.name ?? `디자인 ${foreignDesigns.size + 2}`, theme: th, masters: {} };
+    }
+    foreignDesigns.set(mpath, d);
+    return d;
+  };
+
   /** 다른 프로그램의 사용자 지정 레이아웃 → WIPOINT 사용자 지정 레이아웃 (개체 틀 + 배경 장식) */
   const foreignLayouts = [];
   const foreignByPath = new Map();
@@ -1734,6 +1796,20 @@ export function readPptx(input, opts = {}) {
           readShapeTree(tree, dctx, null, { x: rect.x, y: rect.y, w: rect.w, h: rect.h, chx: 0, chy: 0, chw: rect.w, chh: rect.h }, sub, { noGroup: true });
           const gid = uid('g');
           for (const o of sub) { o.grp = gid; out.push(o); }
+          // 데이터 모델의 글 계층 + 레이아웃 → WIPOINT SmartArt (텍스트 창으로 고칠 수 있게)
+          if (dmRel && sub.length) {
+            try {
+              const loRel = relIds ? relsOf(ctx.part).get(attr(relIds, 'lo')) : null;
+              const uniq = loRel && has(loRel.target) ? attr(xmlOf(loRel.target), 'uniqueId') ?? '' : '';
+              const kind = DGM_LAYOUT[uniq.split('/').pop()] ?? null;
+              const items = dgmItems(xmlOf(dmRel.target));
+              if (kind && items.length) {
+                for (const o of sub) o.smart = kind;
+                sub[0].smartItems = items;
+                sub[0].smartMulti = true;
+              }
+            } catch { /* 그림 그대로 */ }
+          }
         } else warnings.add('SmartArt 일부는 그림으로 저장되지 않아 표시하지 못했습니다');
         return;
       }
@@ -2031,6 +2107,10 @@ export function readPptx(input, opts = {}) {
     // 우리가 쓴 파일의 테마 장식은 테마에서 다시 만들어지므로 원본 장식만 담음
     if (meta?.bgObjects || !meta) slide.bgObjects = bgObjects;
     if (meta?.hideDecor) slide.hideDecor = true;
+    if (!meta && layout && layout.master.path !== firstMaster) {
+      const d = foreignDesign(layout.master.path);
+      if (d) slide.design = d.id;
+    }
     // 개체 id 연결 (spid → 개체): 원래 순서대로 cNvPr id 를 모음
     const spids = [];
     const collectIds = (tree) => {
@@ -2065,6 +2145,7 @@ export function readPptx(input, opts = {}) {
       slide.anims = (meta.anims ?? []).map((a) => ({ ...a, obj: map.get(a.obj), trigger: a.trigger ? map.get(a.trigger) : undefined })).filter((a) => a.obj);
       for (const a of slide.anims) if (a.trigger === undefined) delete a.trigger;
       if (meta.section) slide.section = meta.section;
+      if (meta.design) slide.design = meta.design;
       for (const [sp, pr] of Object.entries(meta.props ?? {})) { const o = objects.find((q) => q.id === spidToObj.get(sp)); if (o) Object.assign(o, pr); }
       if (meta.inkRec) slide.inkRec = meta.inkRec;
       // 확대/축소 개체 (대상 슬라이드는 모두 읽은 뒤 id 로 바꿈)
@@ -2198,6 +2279,14 @@ export function readPptx(input, opts = {}) {
     const remap = new Map(Object.entries(presMeta.masterMedia ?? {}).map(([id, path]) => [id, has(path) ? loadMedia(path) : null]));
     for (const m of Object.values(presMeta.masters)) for (const o of m.objects ?? []) { if (o.media) o.media = remap.get(o.media) ?? null; if (o.fill?.media) o.fill.media = remap.get(o.fill.media) ?? null; }
     pres.masters = presMeta.masters;
+  }
+  if (presMeta?.designs) {
+    const remap = new Map(Object.entries(presMeta.masterMedia ?? {}).map(([id, path]) => [id, has(path) ? loadMedia(path) : null]));
+    for (const d of presMeta.designs) for (const m of Object.values(d.masters ?? {})) for (const o of m.objects ?? []) { if (o.media) o.media = remap.get(o.media) ?? null; if (o.fill?.media) o.fill.media = remap.get(o.fill.media) ?? null; }
+    pres.designs = presMeta.designs;
+  } else if ([...foreignDesigns.values()].some(Boolean)) {
+    // 다른 프로그램 파일: 첫 마스터와 테마가 다른 마스터 → 추가 디자인
+    pres.designs = [...foreignDesigns.values()].filter(Boolean);
   }
   if (presMeta?.customLayouts) {
     const remap = new Map(Object.entries(presMeta.masterMedia ?? {}).map(([id, path]) => [id, has(path) ? loadMedia(path) : null]));

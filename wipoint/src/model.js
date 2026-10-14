@@ -223,7 +223,47 @@ export function defaultSize(o, lvl = 0) {
 // pres.masters = { master: 마스터 슬라이드, title|titleContent|…: 레이아웃 } — 각각 슬라이드 모양 { id, layout, objects, master: key }
 // 개체 틀(ph) 이 아닌 개체는 그 레이아웃(마스터는 모든 레이아웃)을 쓰는 슬라이드 배경에 그려짐.
 // 마스터의 제목 · 본문 개체 틀 첫 글자 서식(글꼴 · 색 · 제목 크기)은 모든 슬라이드의 기본 서식이 됨.
+/**
+ * 슬라이드 마스터 여러 개 (PowerPoint: 일부 슬라이드에만 다른 테마 적용 / 슬라이드 마스터 삽입)
+ * pres.designs = [{ id, name, theme, masters }] — slide.design = id 인 슬라이드는 그 테마 · 마스터로 그림
+ */
+export function presForSlide(pres, slide) {
+  const id = slide?.design;
+  if (!id || !pres?.designs?.length) return pres;
+  const d = pres.designs.find((x) => x.id === id);
+  if (!d) return pres;
+  d.masters ??= {};
+  return { ...pres, theme: d.theme, masters: d.masters, customLayouts: [], designs: pres.designs, mainTheme: pres.theme };
+}
+/** 테마로 디자인 찾기 / 만들기 (같은 테마 이름이면 재사용) */
+export function designForTheme(pres, theme, name) {
+  pres.designs ??= [];
+  let d = pres.designs.find((x) => x.theme?.name === theme.name && JSON.stringify(x.theme) === JSON.stringify(theme));
+  if (!d) {
+    d = { id: uid('d'), name: name ?? theme.label ?? theme.name ?? `디자인 ${pres.designs.length + 2}`, theme, masters: {} };
+    pres.designs.push(d);
+  }
+  return d;
+}
+/** 쓰지 않는 디자인 지우기 (마스터 보기에서 직접 넣은 것 = keep 은 남김) */
+export function pruneDesigns(pres) {
+  if (!pres.designs?.length) return;
+  const used = new Set(pres.slides.map((s) => s.design).filter(Boolean));
+  pres.designs = pres.designs.filter((d) => used.has(d.id) || d.keep);
+  if (!pres.designs.length) delete pres.designs;
+}
 export function masterSlide(pres, key) {
+  // 'd…/master' · 'd…/titleContent' = 추가 디자인의 마스터 · 레이아웃
+  if (typeof key === 'string' && key.includes('/')) {
+    const [did, k] = key.split('/');
+    const d = pres.designs?.find((x) => x.id === did);
+    if (d) {
+      d.masters ??= {};
+      const m = masterSlide({ ...pres, masters: d.masters, customLayouts: [] }, k);
+      m.design = did;
+      return m;
+    }
+  }
   pres.masters ??= {};
   if (!pres.masters[key] && isCustomLayout(key)) {
     pres.masters[key] = { id: `master-${key}`, layout: key, master: key, name: (pres.customLayouts ?? []).find((c) => c.key === key)?.name ?? '사용자 지정 레이아웃', bg: null, objects: layoutPlaceholders('titleOnly', pres.size), anims: [] };

@@ -180,14 +180,18 @@ function olKey(e) {
 // ───────────── 슬라이드 마스터 보기: 마스터 + 레이아웃 목록 ─────────────
 function renderMasterList() {
   thumbsEl.innerHTML = '';
-  const keys = ['master', ...layoutList(S.pres).map(([k]) => k)];
+  // 첫 마스터 + 레이아웃, 그다음 추가 디자인(슬라이드 마스터)마다 마스터 + 기본 레이아웃
+  const keys = ['master', ...layoutList(S.pres).map(([k]) => k), ...(S.pres.designs ?? []).flatMap((d) => [`${d.id}/master`, ...layoutList({}).map(([k]) => `${d.id}/${k}`)])];
   keys.forEach((key, i) => {
     const m = masterSlide(S.pres, key);
-    const name = m.name ?? (key === 'master' ? '슬라이드 마스터' : layoutName(S.pres, key));
-    const used = key === 'master' ? '' : S.pres.slides.map((s, n) => (s.layout === key ? n + 1 : 0)).filter(Boolean);
-    const w = key === 'master' ? THUMB_W : THUMB_W - 30;
-    const t = el('div', { class: `thumb master-thumb${key === 'master' ? ' is-master' : ''}${S.masterKey === key ? ' active' : ''}`, title: key === 'master' ? name : `${name}: ${used.length ? `슬라이드 ${used.join(', ')}에서 사용` : '어떤 슬라이드에서도 사용되지 않음'}` },
-      el('div', { class: 'tnum' }, el('span', {}, key === 'master' ? '1' : '')),
+    const [did, sub] = key.includes('/') ? key.split('/') : [null, key];
+    const design = did ? S.pres.designs.find((d) => d.id === did) : null;
+    const isMaster = sub === 'master';
+    const name = m.name ?? (isMaster ? (design ? `${design.name} 슬라이드 마스터` : '슬라이드 마스터') : layoutName(S.pres, sub));
+    const used = isMaster ? '' : S.pres.slides.map((s, n) => (s.layout === sub && (s.design ?? null) === did ? n + 1 : 0)).filter(Boolean);
+    const w = isMaster ? THUMB_W : THUMB_W - 30;
+    const t = el('div', { class: `thumb master-thumb${isMaster ? ' is-master' : ''}${S.masterKey === key ? ' active' : ''}`, title: isMaster ? name : `${name}: ${used.length ? `슬라이드 ${used.join(', ')}에서 사용` : '어떤 슬라이드에서도 사용되지 않음'}` },
+      el('div', { class: 'tnum' }, el('span', {}, isMaster ? String(design ? S.pres.designs.indexOf(design) + 2 : 1) : '')),
       el('div', { class: 'tbox', html: thumbHtml(m, i, w) }),
       el('div', { class: 'mname' }, name));
     t.addEventListener('mousedown', (e) => { if (e.button === 0) run('masterPick', key); });

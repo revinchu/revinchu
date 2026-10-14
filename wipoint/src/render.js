@@ -1,7 +1,7 @@
 // 슬라이드 → HTML 문자열 (DOM 없음): 편집 화면 · 미리 보기 · 슬라이드 쇼 · 인쇄가 함께 씀
 import { resolveColor, isDark } from './themes.js';
 import { shapePath, customPath, textRect, OPEN_SHAPES } from './shapes.js';
-import { PX_PER_PT, defaultSize, defaultColor, defaultFont, placeholderPrompt, isEmptyText, masterDecor, setMasterText } from './model.js';
+import { PX_PER_PT, defaultSize, defaultColor, defaultFont, placeholderPrompt, isEmptyText, masterDecor, setMasterText, presForSlide } from './model.js';
 import { chartSvg } from './chart.js';
 import { fxOf, fxStyle } from './effects.js';
 import { webFont } from './webfonts.js';
@@ -393,6 +393,7 @@ function footerHtml(pres, slide, index, opts) {
 
 /** 슬라이드 배경 채우기 */
 export function slideBackground(pres, slide) {
+  pres = presForSlide(pres, slide);
   return slide.bg ?? pres.theme.bg ?? { type: 'solid', color: '@bg1' };
 }
 
@@ -401,6 +402,7 @@ export function slideBackground(pres, slide) {
  * opts: { prompt (빈 개체 틀 안내 글), editable (data-p/r), hide: Set(숨길 개체), index, links, skipIds: Set }
  */
 export function slideHtml(pres, slide, opts = {}) {
+  pres = presForSlide(pres, slide);
   const theme = pres.theme;
   const media = pres.media ?? {};
   const bg = fillCss(theme, slideBackground(pres, slide), media);
@@ -421,6 +423,7 @@ export function slideHtml(pres, slide, opts = {}) {
 /** 슬라이드 뒤에 그릴 장식: 가져온 배경 개체, 아니면 테마 장식 + 슬라이드 마스터 · 레이아웃 개체 */
 export function slideDecor(pres, slide) {
   if (slide.bgObjects) return slide.bgObjects;
+  pres = presForSlide(pres, slide);
   if (slide.hideDecor) return [];
   const theme = themeDecor(pres.theme, slide.layout, pres.size);
   if (slide.master === 'master') return theme;
