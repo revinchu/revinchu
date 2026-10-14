@@ -1,4 +1,5 @@
 import { LINE_SHAPES } from './shapes.js';
+import { chartAnchorCurrent } from './chart-drawing-anchor.js';
 // Excel drawing coordinates are sheet pixels at 96 dpi, independent of view zoom.
 const PROPS = ['charts', 'images', 'shapes', 'slicers'];
 const MARKERS = ['c1', 'r1', 'c2', 'r2'];
@@ -22,6 +23,12 @@ export function captureDrawingAnchors(sheet, cols, rows) {
   for (const prop of PROPS) for (const object of sheet[prop] ?? []) {
     const placement = object.placement ?? (prop === 'slicers' ? 'oneCell' : 'twoCell');
     if (placement === 'absolute') continue;
+    const collapsed = chartAnchorCurrent(object);
+    if (collapsed) {
+      const a = collapsed.from, b = collapsed.to;
+      anchors.set(`${prop}:${object.id}`, { placement, collapsed: true, c1: [a.col, a.colOff / 9525], r1: [a.row, a.rowOff / 9525], c2: [b.col, b.colOff / 9525], r2: [b.row, b.rowOff / 9525] });
+      continue;
+    }
     // Collapsed cells share a visible position. Keep their original identity through
     // hide/unhide and structuredClone (Undo/Redo), only while geometry still matches.
     const saved = sameRect(object._hiddenCellAnchor?.rect, object) ? object._hiddenCellAnchor.markers : null;
@@ -33,7 +40,7 @@ export function captureDrawingAnchors(sheet, cols, rows) {
 }
 
 export function reflowDrawingAnchors(sheet, anchors, cols, rows, { shift = null, moveOnly = false } = {}) {
-  const move = (axis, [index, offset], kind) => {
+  const move = (axis, [index, offset], kind, collapsed = false) => {
     if (shift?.axis === kind) {
       if (shift.count > 0 && index >= shift.index) index += shift.count;
       else if (shift.count < 0) {
@@ -42,7 +49,7 @@ export function reflowDrawingAnchors(sheet, anchors, cols, rows, { shift = null,
         else if (index >= shift.index) { index = shift.index; offset = 0; }
       }
     }
-    return { marker: [index, offset], value: axis.pos(index) + Math.min(offset, axis.size(index) || offset) };
+    return { marker: [index, offset], value: axis.pos(index) + Math.min(offset, collapsed ? axis.size(index) : axis.size(index) || offset) };
   };
   const changes = {};
   for (const prop of PROPS) {
@@ -50,12 +57,12 @@ export function reflowDrawingAnchors(sheet, anchors, cols, rows, { shift = null,
     const next = (sheet[prop] ?? []).map(object => {
       const anchor = anchors.get(`${prop}:${object.id}`);
       if (!anchor) return object;
-      const c1 = move(cols, anchor.c1, 'col'), r1 = move(rows, anchor.r1, 'row');
-      const c2 = move(cols, anchor.c2, 'col'), r2 = move(rows, anchor.r2, 'row');
-      const resize = anchor.placement === 'twoCell' && !moveOnly;
+      const c1 = move(cols, anchor.c1, 'col', anchor.collapsed), r1 = move(rows, anchor.r1, 'row', anchor.collapsed);
+      const c2 = move(cols, anchor.c2, 'col', anchor.collapsed), r2 = move(rows, anchor.r2, 'row', anchor.collapsed);
+      const resize = anchor.placement === 'twoCell' && (!moveOnly || anchor.collapsed);
       const candidate = { x: c1.value, y: r1.value,
-        w: resize ? Math.max(1, c2.value - c1.value) : object.w,
-        h: resize ? Math.max(LINE_SHAPES.has(object.kind) ? 0 : 1, r2.value - r1.value) : object.h };
+        w: resize ? Math.max(anchor.collapsed ? 0 : 1, c2.value - c1.value) : object.w,
+        h: resize ? Math.max(anchor.collapsed || LINE_SHAPES.has(object.kind) ? 0 : 1, r2.value - r1.value) : object.h };
       // An unchanged axis must never round fractional drawing coordinates.
       const rect = {};
       for (const key of ['x', 'y', 'w', 'h']) rect[key] = near(candidate[key], object[key]) ? object[key] : candidate[key];
@@ -68,6 +75,10 @@ export function reflowDrawingAnchors(sheet, anchors, cols, rows, { shift = null,
       if (sameRect(rect, object) && sameHiddenAnchor(object._hiddenCellAnchor, hidden)) return object;
       changed = true;
       const updated = { ...object, ...rect };
+      if (anchor.collapsed) {
+        if (rect.w > 0 && rect.h > 0) delete updated.collapsedAnchor;
+        else updated.collapsedAnchor = { from: { col: c1.marker[0], colOff: c1.marker[1] * 9525, row: r1.marker[0], rowOff: r1.marker[1] * 9525 }, to: { col: c2.marker[0], colOff: c2.marker[1] * 9525, row: r2.marker[0], rowOff: r2.marker[1] * 9525 }, box: { ...rect } };
+      }
       if (hidden) updated._hiddenCellAnchor = hidden; else delete updated._hiddenCellAnchor;
       return updated;
     });

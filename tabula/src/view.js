@@ -1,4 +1,5 @@
 import { chartTextFontNames } from './chart-text-format.js';
+import { chartAnchorBox } from './chart-drawing-anchor.js';
 import { mountSlicerWindow, slicerStartItem } from './slicer-window.js';
 import { tableCellDisplayStyle } from './table-format.js';
 import { primaryPointerModifier } from './pointer-modifiers.js';
@@ -1392,7 +1393,7 @@ export class GridView {
     };
     // 엑셀처럼 그림 → 도형 → 차트 순서가 아니라 저장된 순서(z)대로 겹침
     const all = [
-      ...sheet.charts.map((o) => ['charts', st.chartPreview?.id === o.id ? st.chartPreview : o]), ...images.map((o) => ['images', o]), ...shapes.map((o) => ['shapes', o]),
+      ...sheet.charts.map((o) => ['charts', st.chartPreview?.id === o.id ? st.chartPreview : chartAnchorBox(o, this.cols, this.rows)]).filter(([, o]) => o.w > 0 && o.h > 0), ...images.map((o) => ['images', o]), ...shapes.map((o) => ['shapes', o]),
       ...slicers.map((o) => ['slicers', o]),
     ].filter(([, o]) => objectIntersectsWindow(o, windowRect)).sort((a, b) => (a[1].z ?? 0) - (b[1].z ?? 0));
     for (const [prop, o] of all) {

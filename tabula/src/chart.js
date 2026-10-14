@@ -20,6 +20,8 @@ import { chartAreaFormat, chartAreaSvg } from './chart-area-format.js';
 import { categoryTrendPoints } from './chart-trend.js';
 import { EXTRA_CHART_PALETTES, normalizeChartPaletteColor } from './chart-palette-options.js';
 import { chartTextStyle, chartTextSvg, chartTextOverrides } from './chart-text-format.js';
+import { hid } from './axis.js';
+import { chartLabelPlacer } from './chart-label-placement.js';
 
 export const CHART_TYPES = [
   { id: 'column', label: '세로 막대형' },
@@ -410,7 +412,7 @@ export function chartModelData(wb, hostSi, ch, options = {}) {
   if (!sampled && options.onRange && ch.snapshotData && ch.range && !ch.series?.length && !ch.pivot) {
     options.onRange(read(sheetOf(ch.sheet), ch.range, ch.range.c2 > ch.range.c1 && !['scatter', 'bubble'].includes(ch.type) ? 'category' : false));
   }
-  const data = resolveChart(ch, {
+  let data = resolveChart(ch, {
     rowIndexes: rows => rowIndexes.get(rows),
     range: (c) => {
       if (!c.range) return [];
@@ -442,6 +444,24 @@ export function chartModelData(wb, hostSi, ch, options = {}) {
       return pivotChartData(src, def, fieldStyle);
     },
   });
+  // Excel plotVisOnly: 화면에서는 숨긴 행/열을 제외하되 내보내기 캐시는 원본 순서로 유지한다.
+  if (sampled && ch.visibleOnly && ch.series?.length && !ch.snapshotData) {
+    const hidden = (input, index) => {
+      const ref = input?.name ? nameRange(input) : input;
+      if (!ref || ref.r1 === undefined) return false;
+      const sh = wb.sheets[sheetOf(ref.sheet ?? ch.sheet)];
+      const r = ref.r1 + (ref.r2 > ref.r1 ? index : 0), c = ref.c1 + (ref.r2 === ref.r1 ? index : 0);
+      return hid(sh.hiddenRows, r) || hid(sh.filter?.hidden, r) || (sh.tables ?? []).some(t => hid(t.filter?.hidden, r)) || hid(sh.hiddenCols, c);
+    };
+    const hiddenCats = [];
+    const first = ch.series.find(s => s.cat || s.val);
+    for (let i = 0; i < data.categories.length; i++) {
+      const index = data._ci?.[i] ?? data.series[0]?._pi?.[i] ?? i;
+      if (hidden(first?.cat ?? first?.val, index)) hiddenCats.push(index);
+    }
+    data = { ...data, series: data.series.map(s => ({ ...s, values: s.values.map((v, i) => hidden(ch.series[s._fi ?? 0]?.val, s._pi?.[i] ?? i) ? null : v) })) };
+    if (hiddenCats.length) data = filterChart(data, { hiddenCats });
+  }
   return { ...data, date1904: !!wb.date1904 };
 }
 
@@ -572,6 +592,7 @@ function plotCategoryLabels(categories, area, plot, font, cfg, width, slotCount 
 }
 let svgSeq = 0;
 export function renderChartSvg(chart, data) {
+  if (chart.w <= 0 || chart.h <= 0) return '<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0"></svg>';
   chart = { ...chart, date1904: data.date1904 ?? chart.date1904 ?? false };
   const W = Math.max(120, chart.w);
   const H = Math.max(90, chart.h);
@@ -662,7 +683,7 @@ export function renderChartSvg(chart, data) {
   plot.h -= Math.max(0, dtH - Math.round(FS.axis * 1.9));
   if (specialTable) plot.h -= specialTableH + 6;
 
-  if (!series.length || series.every((s) => s.values.every((v) => v === null))) {
+  if (!series.length || !Array.isArray(chart.series) && series.every((s) => s.values.every((v) => v === null))) {
     if (chart.plotAreaFormat) parts.push(chartAreaSvg(chartAreaFormat(chart, 'plot'), plot, { id: uid + 'plot', kind: 'plot' }));
     if (!Array.isArray(chart.series)) parts.push(`<text x="${W / 2}" y="${H / 2}" text-anchor="middle" font-size="12" fill="#999">표시할 숫자 데이터가 없습니다</text>`);
     return finish();
@@ -695,13 +716,14 @@ export function renderChartSvg(chart, data) {
       const rows = [[]]; let used = 4;
       items.forEach((it) => {
         const itemW = Math.min(boxW - 8, axisTextWidth(it.name, FS.legend) + 38);
-        if (used > 4 && (sideLegend || used + itemW > boxW)) { rows.push([]); used = 4; }
+        // 수동 상자는 legendPos보다 우선한다. 오른쪽 범례도 가로로 넓고 낮으면 한 줄에 배치한다.
+        if (used > 4 && (sideLegend && boxH > boxW || used + itemW > boxW)) { rows.push([]); used = 4; }
         rows.at(-1).push({ it, itemW }); used += itemW;
       });
       rows.forEach((row, i) => {
         const y = i * rowH + Math.max(0, (Math.min(boxH, rowH) - FS.legend) / 2);
         if (y + FS.legend > boxH + .5) return;
-        let x = sideLegend ? 4 : Math.max(4, (boxW - row.reduce((sum, item) => sum + item.itemW, -11)) / 2);
+        let x = sideLegend && boxH > boxW ? 4 : Math.max(4, (boxW - row.reduce((sum, item) => sum + item.itemW, -11)) / 2);
         for (const { it, itemW } of row) {
           parts.push(key(it, x, y + FS.legend), `<text x="${x + 27}" y="${y + FS.legend}" font-size="${FS.legend}" fill="${LTX}"${chart.legendBold ? ' font-weight="700"' : ''}>${legendText(it.name, itemW - 28)}</text>`);
           x += itemW;
@@ -910,6 +932,16 @@ export function renderChartSvg(chart, data) {
     categoryLayout = plotCategoryLabels(categories, area, plot, FS.axis, categoryConfig, W, categorySlots);
     area.h -= categoryLayout.extent - Math.round(FS.axis * 1.9) + categoryTitleH;
   }
+  const manualPlot = manualChartLayout(chart.plotLayout);
+  if (manualPlot?.target === 'inner' && manualPlot.w > 0 && manualPlot.h > 0) {
+    Object.assign(area, { x: manualPlot.x * W, y: manualPlot.y * H, w: manualPlot.w * W, h: manualPlot.h * H });
+    if (!hideX && !hasTable && baseType !== 'scatter') categoryLayout = categoryAxisLayout(categories, {
+      slotCount: categorySlots, horizontal, length: horizontal ? area.h : area.w,
+      depth: horizontal ? Math.max(FS.axis, area.x - 8) : Math.max(FS.axis * 1.9, H - area.y - area.h - 8),
+      font: FS.axis, interval: categoryConfig.labelInterval, rotation: categoryConfig.labelRotation,
+      reverse: categoryConfig.reverse, noWrap: categoryConfig.type === 'date', startRoom: area.x, endRoom: W - area.x - area.w,
+    });
+  }
   if (area.w < 20 || area.h < 20) return finish();
   if (chart.plotAreaFormat) parts[plotBackgroundIndex] = chartAreaSvg(chartAreaFormat(chart, 'plot'), area, { id: uid + 'plot', kind: 'plot' });
   if (threeD) parts.push(chartWalls3D(area, depth, chart.plotFill));
@@ -955,11 +987,15 @@ export function renderChartSvg(chart, data) {
 
   const base = vpos(Math.max(scale.min, Math.min(0, scale.max)));
   const labelsOut = [];
+  const placeLabel = chartLabelPlacer({ x: area.x, y: 3, w: area.w, h: area.y + area.h - 3 });
   const pushLabel = (x, y, v, s, anchor = 'middle', index) => {
     const option = s.pointLabels?.[chartPointIndex(s, index)];
     if (option?.hide || !(option?.labels ?? s.labels ?? chart.labels ?? false) && !(option?.catName ?? s.catName) && !(option?.serName ?? s.serName) && !(option?.pct ?? s.pct)) return;
     s = { ...s, ...option };
-    labelsOut.push(`<text data-el="label"${tag(s, index)} x="${x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="${anchor}" font-size="${pt(s.labelSize ?? 9)}"${s.labelBold ? ' font-weight="700"' : ''} fill="${s.labelColor ?? '#404040'}">${escSvg(chartDataLabel(chart, s, categories, index, v))}</text>`);
+    const text = chartDataLabel(chart, s, categories, index, v), font = pt(s.labelSize ?? 9);
+    const position = s.labelPos;
+    ({ x, y } = placeLabel(x, y, text, font, anchor, !position || ['outEnd', 'above', 'below', 'left', 'right', 'bestFit'].includes(position)));
+    labelsOut.push(`<text data-el="label"${tag(s, index)} x="${x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="${anchor}" font-size="${font}"${s.labelBold ? ' font-weight="700"' : ''} fill="${s.labelColor ?? '#404040'}">${escSvg(text)}</text>`);
   };
 
   if (baseType === 'scatter') {
@@ -992,6 +1028,7 @@ export function renderChartSvg(chart, data) {
       }
     }
     if (!hideX && !hasTable && categoryLayout) for (const label of categoryLayout.labels) {
+      if (!label.text.trim()) continue;
       const mid = (horizontal ? area.y : area.x) + band * (categoryIndex(label.index) + .5);
       axisText('x', categoryAxisLabelSvg(categoryLayout, label, mid, horizontal ? area.x : area.y + area.h, TXT));
     }

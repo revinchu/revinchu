@@ -1,4 +1,5 @@
 import { createZipStreamWriter } from './zip-stream.js';
+import { chartAnchorCurrent, chartAnchorPointXml } from './chart-drawing-anchor.js';
 import { slicerStartItem } from './slicer-window.js';
 import { bindImportedPivotPresentation, importedPivotPresentationCurrent, pivotItemOrderSignature } from './pivot-import-presentation.js';
 import { importedPivotToggleButtons } from './pivot-import-toggles.js';
@@ -2049,8 +2050,8 @@ function readDrawing(files, path, sheet, ctx) {
             const props = descendants(child(child(el, 'nvGraphicFramePr'), 'cNvPr'), 'props').find((p) => p.attrs['xmlns:tb'] === 'urn:tabula:chart');
             if (props?.attrs.json) applyChartExOptions(chart, props.attrs.json);
           }
-          const b = round(place(el));
-          out.charts.push({ id: uid('c'), ...chart, ...b, w: Math.max(120, b.w), h: Math.max(90, b.h), z: ++z });
+          const b = place(el);
+          out.charts.push({ id: uid('c'), ...chart, ...round(b), w: Math.max(0, Math.round(b.w)), h: Math.max(0, Math.round(b.h)), z: ++z });
         }
         break;
       }
@@ -2144,6 +2145,11 @@ function readDrawing(files, path, sheet, ctx) {
       ?? choice?.children.find((k) => ['sp', 'cxnSp', 'pic', 'grpSp', 'graphicFrame'].includes(k.name));
     const before = [out.charts.length, out.images.length, out.shapes.length];
     if (content) walk(content, box, null, null, child(anchor, 'clientData')?.attrs, editAs);
+    if (anchor.name === 'twoCellAnchor' && editAs === 'twoCell') for (const ch of out.charts.slice(before[0])) {
+      if (ch.w > 0 && ch.h > 0) continue;
+      const point = name => Object.fromEntries(['col', 'colOff', 'row', 'rowOff'].map(k => [k, Number(child(child(anchor, name), k)?.text ?? 0)]));
+      ch.collapsedAnchor = { from: point('from'), to: point('to'), box: { x: ch.x, y: ch.y, w: ch.w, h: ch.h } };
+    }
     const client = child(anchor, 'clientData')?.attrs;
     [out.charts, out.images, out.shapes].forEach((list, k) => {
       for (let i = before[k]; i < list.length; i++) {
@@ -2207,11 +2213,11 @@ export function readChartTemplatePackage(bytes) {
   return chart;
 }
 
-function chartLayoutXml(layout) {
+function chartLayoutXml(layout, target) {
   if (!layout || !Number.isFinite(layout.x) || !Number.isFinite(layout.y)) return '';
   const clamp = n => Math.max(0, Math.min(1, n));
   const size = ['w', 'h'].filter(k => Number.isFinite(layout[k]) && layout[k] > 0);
-  return `<c:layout><c:manualLayout><c:xMode val="edge"/><c:yMode val="edge"/>${size.map(k => `<c:${k}Mode val="factor"/>`).join('')}<c:x val="${clamp(layout.x)}"/><c:y val="${clamp(layout.y)}"/>${size.map(k => `<c:${k} val="${clamp(layout[k])}"/>`).join('')}</c:manualLayout></c:layout>`;
+  return `<c:layout><c:manualLayout>${target ? `<c:layoutTarget val="${target === 'inner' ? 'inner' : 'outer'}"/>` : ''}<c:xMode val="edge"/><c:yMode val="edge"/>${size.map(k => `<c:${k}Mode val="factor"/>`).join('')}<c:x val="${clamp(layout.x)}"/><c:y val="${clamp(layout.y)}"/>${size.map(k => `<c:${k} val="${clamp(layout[k])}"/>`).join('')}</c:manualLayout></c:layout>`;
 }
 
 function chartAreaReader(files, path, theme) {
@@ -2511,9 +2517,11 @@ function readChart(files, path, theme = {}) {
   if (tbEl) { try { Object.assign(out, JSON.parse(tbEl.attrs.json), nativeText); } catch { /* 무시 */ } }
   if (out.wxPivot) { out.pivot = out.wxPivot; delete out.wxPivot; }
   const legend = child(chartEl, 'legend');
-  const titleLayout = readChartLayout(titleEl), legendLayout = readChartLayout(legend);
+  const titleLayout = readChartLayout(titleEl), legendLayout = readChartLayout(legend), plotLayout = readChartLayout(plot);
   if (titleLayout) out.titleLayout = titleLayout;
   if (legendLayout) out.legendLayout = legendLayout;
+  if (plotLayout) out.plotLayout = { ...plotLayout, target: child(child(child(plot, 'layout'), 'manualLayout'), 'layoutTarget')?.attrs.val ?? 'outer' };
+  out.visibleOnly = !['0', 'false'].includes(child(chartEl, 'plotVisOnly')?.attrs.val);
   out.legend = legend ? (child(legend, 'legendPos')?.attrs.val ?? 'r') : 'none';
   if (legendLayout) out.legendOverlay = child(legend, 'overlay')?.attrs.val === '1';
   const hiddenLegend = kids(legend, 'legendEntry').filter(e => ['1', 'true'].includes(child(e, 'delete')?.attrs.val)).map(e => Number(child(e, 'idx')?.attrs.val)).filter(Number.isSafeInteger);
@@ -4243,7 +4251,7 @@ function chartXml(wb, si, chart, fileName = 'Book1.xlsx', imageRel) {
   const extLst = Object.keys(tb).length > 1 || chart.type === 'combo' || FALLBACK[chart.type] ? `<c:extLst><c:ext uri="{5E2A6C7B-8F4D-4B1A-9C3E-7D6F1A2B3C4D}" xmlns:tb="urn:tabula:chart"><tb:props json="${esc(JSON.stringify(tb))}"/></c:ext></c:extLst>` : '';
   const v3 = chartView3D(baseType === 'surface' && !threeD ? { type: 'surface', view3D: { rotX: 90, rotY: 0, depthPercent: 100, rAngAx: true, perspective: 0 } } : chart);
   const viewXml = threeD || baseType === 'surface' ? `<c:view3D><c:rotX val="${Math.round(v3.rotX)}"/><c:rotY val="${Math.round((v3.rotY + (baseType === 'pie' ? chart.firstAngle ?? 0 : 0)) % 360)}"/><c:depthPercent val="${Math.round(v3.depthPercent)}"/><c:rAngAx val="${v3.rAngAx ? 1 : 0}"/><c:perspective val="${Math.round(v3.perspective)}"/></c:view3D>` : '';
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="${NS_R}"><c:date1904 val="${wb.date1904 ? 1 : 0}"/><c:roundedCorners val="${chart.rounded ? 1 : 0}"/>${pivotSrc}<c:chart>${title}${pivotFmts}${viewXml}<c:plotArea><c:layout/>${groupXml}${axesXml}${chart.dataTable && !pieLike ? `<c:dTable><c:showHorzBorder val="1"/><c:showVertBorder val="1"/><c:showOutline val="1"/><c:showKeys val="1"/>${chartTextPropertiesXml({ ...chartTextFields(chart, '', true), ...chartTextFields(chart.dataTableText) })}</c:dTable>` : ''}${plotSpPr}</c:plotArea>${legend}<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart>${areaSpPr}${chartTextPropertiesXml(chartTextFields(chart, '', true))}${extLst}</c:chartSpace>`;
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="${NS_R}"><c:date1904 val="${wb.date1904 ? 1 : 0}"/><c:roundedCorners val="${chart.rounded ? 1 : 0}"/>${pivotSrc}<c:chart>${title}${pivotFmts}${viewXml}<c:plotArea>${chartLayoutXml(chart.plotLayout, chart.plotLayout?.target) || '<c:layout/>'}${groupXml}${axesXml}${chart.dataTable && !pieLike ? `<c:dTable><c:showHorzBorder val="1"/><c:showVertBorder val="1"/><c:showOutline val="1"/><c:showKeys val="1"/>${chartTextPropertiesXml({ ...chartTextFields(chart, '', true), ...chartTextFields(chart.dataTableText) })}</c:dTable>` : ''}${plotSpPr}</c:plotArea>${legend}<c:plotVisOnly val="${chart.visibleOnly === false ? 0 : 1}"/><c:dispBlanksAs val="gap"/></c:chart>${areaSpPr}${chartTextPropertiesXml(chartTextFields(chart, '', true))}${extLst}</c:chartSpace>`;
 }
 
 const DASH_XML = { dash: '<a:prstDash val="dash"/>', dot: '<a:prstDash val="sysDot"/>', dashDot: '<a:prstDash val="dashDot"/>', longDash: '<a:prstDash val="lgDash"/>', sysDash: '<a:prstDash val="sysDash"/>' };
@@ -5607,7 +5615,8 @@ function* writeXlsxSteps(wb, { activeSheet = 0, fileName = 'Book1.xlsx', kind = 
         const r = rowAxis.indexAt(Math.max(0, y));
         return `<xdr:col>${c}</xdr:col><xdr:colOff>${Math.max(0, Math.round((x - colAxis.pos(c)) * EMU))}</xdr:colOff><xdr:row>${r}</xdr:row><xdr:rowOff>${Math.max(0, Math.round((y - rowAxis.pos(r)) * EMU))}</xdr:rowOff>`;
       };
-      const anchor = (o, body) => `<xdr:twoCellAnchor editAs="${o.placement ?? 'twoCell'}"><xdr:from>${anchorAt(o.x, o.y)}</xdr:from><xdr:to>${anchorAt(o.x + o.w, o.y + o.h)}</xdr:to>${body}<xdr:clientData${o.noPrint !== undefined ? ` fPrintsWithSheet="${o.noPrint ? 0 : 1}"` : ''}${o.locked !== undefined ? ` fLocksWithSheet="${o.locked === false ? 0 : 1}"` : ''}/></xdr:twoCellAnchor>`;
+      const objectAnchorAt = (o, end) => { const a = chartAnchorCurrent(o); return a ? chartAnchorPointXml(a[end ? 'to' : 'from']) : anchorAt(o.x + (end ? o.w : 0), o.y + (end ? o.h : 0)); };
+      const anchor = (o, body) => `<xdr:twoCellAnchor editAs="${o.placement ?? 'twoCell'}"><xdr:from>${objectAnchorAt(o, false)}</xdr:from><xdr:to>${objectAnchorAt(o, true)}</xdr:to>${body}<xdr:clientData${o.noPrint !== undefined ? ` fPrintsWithSheet="${o.noPrint ? 0 : 1}"` : ''}${o.locked !== undefined ? ` fLocksWithSheet="${o.locked === false ? 0 : 1}"` : ''}/></xdr:twoCellAnchor>`;
       const xfrm = (o) => `<a:xfrm${o.rot ? ` rot="${Math.round(o.rot * 60000)}"` : ''}${o.flip ? ' flipH="1"' : ''}${o.flipV ? ' flipV="1"' : ''}><a:off x="${Math.round(o.x * EMU)}" y="${Math.round(o.y * EMU)}"/><a:ext cx="${Math.round(o.w * EMU)}" cy="${Math.round(o.h * EMU)}"/></a:xfrm>`;
       const pictureRelationships = new Map();
       const embedPictureSource = source => {
