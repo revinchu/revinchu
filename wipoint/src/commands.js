@@ -786,12 +786,40 @@ function setAnim(cls, effect) {
   });
   previewAnims(objs.map((o) => o.id));
 }
-/** 효과 옵션 (PowerPoint 애니메이션 [효과] 탭): 소리 · 텍스트 애니메이션 · 단위 사이 지연 */
+/** 효과 옵션 (PowerPoint 애니메이션 [효과] 탭): 소리 · 애니메이션 후 · 텍스트 애니메이션 · 단위 사이 지연 */
 function animEffectDialog() {
   const cur = (slide().anims ?? []).find((x) => x.id === S.animSel || S.sel.has(x.obj));
   if (!cur) { toast('애니메이션이 있는 개체를 선택하세요'); return; }
-  const snd = el('select', {}, el('option', { value: '' }, '[소리 없음]'), ...SOUNDS.map(([k, l]) => el('option', { value: k, selected: cur.sound === k }, l)));
-  const play = el('button', { type: 'button', class: 'btn small', title: '소리 듣기', onclick: () => playSound(snd.value) }, '▶');
+  // 파일 소리 (.ppt/.pptx 에서 읽었거나 [기타 소리…] 로 고른 것) = 미디어
+  let media = cur.soundMedia ?? null;
+  let mediaName = cur.soundName ?? '';
+  const mediaOpt = el('option', { value: '__media', selected: !!media, hidden: !media }, media ? mediaName || '파일 소리' : '');
+  const snd = el('select', {}, el('option', { value: '' }, '[소리 없음]'), ...SOUNDS.map(([k, l]) => el('option', { value: k, selected: !media && cur.sound === k }, l)), mediaOpt, el('option', { value: '__file' }, '기타 소리…'));
+  let last = snd.value;
+  snd.addEventListener('change', () => {
+    if (snd.value !== '__file') { last = snd.value; return; }
+    const inp = el('input', { type: 'file', accept: 'audio/*,.wav,.mp3,.m4a,.ogg' });
+    inp.onchange = async () => {
+      const f = inp.files?.[0];
+      if (!f) { snd.value = last; return; }
+      if (f.size > 20 * 1024 * 1024) { toast('소리 파일은 20MB 까지 넣을 수 있습니다'); snd.value = last; return; }
+      media = addMedia(await fileUrl(f)); mediaName = f.name;
+      mediaOpt.textContent = mediaName; mediaOpt.hidden = false; snd.value = '__media'; last = '__media';
+    };
+    inp.click();
+    snd.value = last;
+  });
+  const playIt = () => {
+    if (snd.value === '__media' && media) { const src = S.pres.media[media]; try { new Audio(src instanceof Blob ? URL.createObjectURL(src) : src).play().catch(() => {}); } catch { /* 소리 없이 */ } } else playSound(snd.value);
+  };
+  const play = el('button', { type: 'button', class: 'btn small', title: '소리 듣기', onclick: playIt }, '▶');
+  // 애니메이션 후 (PowerPoint: 흐리게 할 색 · 애니메이션 후 숨기기 · 다음 마우스 클릭 시 숨기기)
+  const DIMS = ['#7F7F7F', '#A6A6A6', '#D9D9D9', '#4472C4', '#ED7D31', '#70AD47', '#FFC000', '#5B9BD5'];
+  const afterCur = cur.after?.type === 'dim' ? `dim:${cur.after.color}` : cur.after?.type ?? '';
+  const after = el('select', {}, el('option', { value: '' }, '흐리게 하지 않음'),
+    ...[...new Set([...DIMS, ...(cur.after?.type === 'dim' ? [cur.after.color] : [])])].map((c) => el('option', { value: `dim:${c}`, selected: afterCur === `dim:${c}`, style: { background: c } }, `흐리게: ${c}`)),
+    el('option', { value: 'hide', selected: afterCur === 'hide' }, '애니메이션 후 숨기기'),
+    el('option', { value: 'hideNext', selected: afterCur === 'hideNext' }, '다음 마우스 클릭 시 숨기기'));
   const unit = el('select', {}, ...[['', '한 번에 모두'], ['para', '단락별'], ['word', '단어별'], ['letter', '문자별']].map(([k, l]) => el('option', { value: k, selected: (cur.byPara ? 'para' : cur.textUnit ?? '') === k }, l)));
   const delay = el('input', { type: 'number', min: 0, max: 100, step: 5, value: cur.unitDelay ?? 10, style: { width: '64px' } });
   openDialog({
@@ -799,11 +827,19 @@ function animEffectDialog() {
     body: el('div', { class: 'fx-opts' },
       el('div', { class: 'menu-title' }, '향상된 기능'),
       el('label', { class: 'row' }, el('span', {}, '소리:'), snd, play),
+      el('label', { class: 'row' }, el('span', {}, '애니메이션 후:'), after),
       el('label', { class: 'row' }, el('span', {}, '텍스트 애니메이션:'), unit),
       el('label', { class: 'row' }, delay, el('span', {}, '% 단어/문자 사이 지연'))),
     buttons: [{ label: '확인', primary: true, action: () => {
       const u = unit.value;
-      run('animTiming', { sound: snd.value || undefined, byPara: u === 'para' || undefined, textUnit: u === 'word' || u === 'letter' ? u : undefined, unitDelay: u === 'word' || u === 'letter' ? Math.max(0, Math.min(100, Number(delay.value) || 10)) : undefined });
+      const sv = snd.value;
+      const av = after.value;
+      run('animTiming', {
+        sound: sv && !sv.startsWith('__') ? sv : undefined,
+        soundMedia: sv === '__media' && media ? media : undefined, soundName: sv === '__media' && media ? mediaName || undefined : undefined,
+        after: av.startsWith('dim:') ? { type: 'dim', color: av.slice(4) } : av ? { type: av } : undefined,
+        byPara: u === 'para' || undefined, textUnit: u === 'word' || u === 'letter' ? u : undefined, unitDelay: u === 'word' || u === 'letter' ? Math.max(0, Math.min(100, Number(delay.value) || 10)) : undefined,
+      });
       previewAnims([cur.obj]);
     } }, { label: '취소' }],
   });
@@ -819,7 +855,7 @@ function previewAnims(onlyIds = null) {
   for (const st of steps) for (const a of st) if (!first.has(a.obj)) first.set(a.obj, a);
   for (const [obj, a] of first) if (a.cls === 'entr') { const e = layer.querySelector(`.ob[data-id="${CSS.escape(obj)}"]`); if (e) e.style.visibility = 'hidden'; }
   (async () => {
-    for (const st of steps) await playStepOn(layer, st, s);
+    { const pend = []; for (const st of steps) await playStepOn(layer, st, s, pend); }
     setTimeout(() => renderCanvas(), 400);
   })();
 }
@@ -1884,6 +1920,7 @@ const SHORTCUTS = [
 
 export const APP_VERSION = '1.9';
 const WHATS_NEW = [
+  '1.9 — 애니메이션 후 (흐리게 할 색 · 애니메이션 후 숨기기 · 다음 마우스 클릭 시 숨기기) · 기타 소리 (내 소리 파일) — 효과 옵션, 쇼, pptx 저장 · 읽기. .ppt 의 효과 소리 · 애니메이션 후 · 슬라이드 마스터 애니메이션 읽기',
   '1.9 — 무료 한글 글꼴 589종 (눈누에 소개된 상업용 무료 글꼴 565종 추가: 고딕 · 명조 · 디자인 · 손글씨 · 코딩 · 픽셀), 글꼴 이름 별칭 (배달의민족 주아 → BMJUA …)',
   '1.9 — 내 컴퓨터 글꼴 파일 불러오기 (.ttf · .otf · .woff, 다시 열어도 유지) · 저장할 때 파일에 글꼴 포함 (PowerPoint 와 같은 .fntdata, 포함 금지 글꼴은 제외)',
   '1.9 — WordArt 변형 40종 모두 그림 (부풀리기 · 원통 · 삼각형 · 갈매기형 · 물결 · 사라지기 · 계단 …) · .ppt 번호 매기기 글머리 (PowerPoint 2000+) · 한자 · 가나다 · 원 숫자 번호',

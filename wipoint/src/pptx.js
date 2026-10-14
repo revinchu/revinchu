@@ -629,8 +629,16 @@ function timingXml(slide, spidOf, sound = () => null) {
         // 텍스트 애니메이션: 단어별 · 문자별 (p:iterate, 지연 = 효과 시간의 %)
         const iter = a.textUnit && a.para == null ? `<p:iterate type="${a.textUnit === 'letter' ? 'lt' : 'wd'}"><p:tmPct val="${Math.round((a.unitDelay ?? 10) * 1000)}"/></p:iterate>` : '';
         const kids = behaviors(a, spid);
-        const snd = a.sound ? sound(a.sound) : null;
-        const sndXml = snd ? `<p:subTnLst><p:audio><p:cMediaNode vol="80000" showWhenStopped="0"><p:cTn id="${nid()}" display="0" masterRel="sameClick"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:endCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:endCondLst></p:cTn><p:tgtEl><p:sndTgt r:embed="${snd.rid}" name="${snd.name}"/></p:tgtEl></p:cMediaNode></p:audio></p:subTnLst>` : '';
+        const snd = a.soundMedia ? sound({ media: a.soundMedia, name: a.soundName }) : a.sound ? sound(a.sound) : null;
+        const durMs = Math.max(1, Math.round((a.dur ?? 0.5) * 1000));
+        // 애니메이션 후 (subTnLst, afterEffect="1"): 숨기기 · 다음 클릭 때 숨기기 · 흐리게 (글자 · 채우기 색)
+        const af = a.after;
+        const afCtn = (d0) => `<p:cTn id="${nid()}" dur="1" fill="hold"${af.type === 'hideNext' ? ' masterRel="nextClick"' : ''} afterEffect="1"><p:stCondLst><p:cond delay="${d0}"/></p:stCondLst></p:cTn>`;
+        const afXml = !af ? '' : af.type === 'dim'
+          ? ['style.color', 'fillcolor'].map((at) => `<p:animClr clrSpc="rgb" dir="cw"><p:cBhvr override="childStyle">${afCtn(durMs)}${tgt(spid)}<p:attrNameLst><p:attrName>${at}</p:attrName></p:attrNameLst></p:cBhvr><p:to><a:srgbClr val="${String(af.color ?? '#808080').replace('#', '').toUpperCase()}"/></p:to></p:animClr>`).join('')
+          : `<p:set><p:cBhvr override="childStyle">${afCtn(af.type === 'hideNext' ? 0 : durMs)}${tgt(spid)}<p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="hidden"/></p:to></p:set>`;
+        const sndXml0 = snd ? `<p:audio><p:cMediaNode vol="80000" showWhenStopped="0"><p:cTn id="${nid()}" display="0" masterRel="sameClick"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:endCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:endCondLst></p:cTn><p:tgtEl><p:sndTgt r:embed="${snd.rid}" name="${snd.name}"/></p:tgtEl></p:cMediaNode></p:audio>` : '';
+        const sndXml = sndXml0 || afXml ? `<p:subTnLst>${sndXml0}${afXml}</p:subTnLst>` : '';
         return `<p:par><p:cTn id="${eid}" presetID="${table[a.effect] ?? (a.cls === 'path' ? 0 : 10)}" presetClass="${a.cls}" presetSubtype="${sub}" fill="hold" grpId="0" nodeType="${node}"><p:stCondLst><p:cond delay="${Math.round((a.delay ?? 0) * 1000)}"/></p:stCondLst>${iter}<p:childTnLst>${kids}</p:childTnLst>${sndXml}</p:cTn></p:par>`;
       }).join('');
       return `<p:par><p:cTn id="${gid}" fill="hold"><p:stCondLst><p:cond delay="${g.at}"/></p:stCondLst><p:childTnLst>${effs}</p:childTnLst></p:cTn></p:par>`;
@@ -1198,13 +1206,13 @@ export function pptxEntries(pres, opts = {}) {
       const pr = Object.fromEntries(['autoplay', 'loop', 'narration', 'hideInShow', 'volume'].filter((k) => o[k] != null).map((k) => [k, o[k]]));
       if (Object.keys(pr).length && spid.has(o.id)) props[spid.get(o.id)] = pr;
     }
-    const meta = { design: slide.design ?? undefined, props: Object.keys(props).length ? props : undefined, inkRec: slide.inkRec?.length ? slide.inkRec : undefined, comments: slide.comments?.length ? slide.comments : undefined, layout: slide.layout, transition: slide.transition ?? null, anims: slide.anims ?? [], hideDecor: slide.hideDecor ?? false, section: slide.section ?? null, zooms: Object.keys(zooms).length ? zooms : undefined, bgObjects: slide.bgObjects ? true : undefined, ids: Object.fromEntries([...spid].filter(([k]) => !String(k).startsWith('grp:')).map(([k, v]) => [v, k])) };
+    const meta = { design: slide.design ?? undefined, props: Object.keys(props).length ? props : undefined, inkRec: slide.inkRec?.length ? slide.inkRec : undefined, comments: slide.comments?.length ? slide.comments : undefined, layout: slide.layout, transition: slide.transition ?? null, anims: (slide.anims ?? []).map((a) => (a.soundMedia ? { ...a, soundPath: putMedia(a.soundMedia) ?? undefined } : a)), hideDecor: slide.hideDecor ?? false, section: slide.section ?? null, zooms: Object.keys(zooms).length ? zooms : undefined, bgObjects: slide.bgObjects ? true : undefined, ids: Object.fromEntries([...spid].filter(([k]) => !String(k).startsWith('grp:')).map(([k, v]) => [v, k])) };
     const ext = `<p:extLst><p:ext uri="${WP_EXT_URI}"><wp:slide xmlns:wp="${WP_NS}" json="${esc(JSON.stringify(meta))}"/></p:ext></p:extLst>`;
     // 원래 애니메이션 XML: 애니메이션이 그대로이고 가리키는 개체 id 가 모두 같은 개체이면
     const byId = new Map([...spid].filter(([k]) => !String(k).startsWith('grp:')).map(([k, v]) => [v, k]));
     const rawTim = slide.rawTiming && slide.rawTiming.sig === stableJson(slide.anims) && slide.rawTiming.spids.every((sp) => { const oid = byId.get(sp); const o = oid && slide.objects.find((q) => q.id === oid); return o && o.spid === sp; }) ? rawPartXml(slide.rawTiming, rels) : null;
     const rawTr = slide.rawTransition && slide.rawTransition.sig === stableJson(slide.transition) ? rawPartXml(slide.rawTransition, rels) : null;
-    const timing = rawTim ?? timingXml(slide, (oid) => spid.get(oid), (k) => rels.sound(k));
+    const timing = rawTim ?? timingXml(slide, (oid) => spid.get(oid), (k) => (typeof k === 'object' ? ((rid) => (rid ? { rid, name: esc(k.name || 'sound.wav') } : null))(rels.audio(k.media)) : rels.sound(k)));
     // 원래 XML 을 쓰면 그 파일의 네임스페이스 선언도 (a14 · p14 · mc 등)
     const extraNs = (rawCount || rawTim || rawTr) && slide.rawNs ? Object.entries(slide.rawNs).filter(([k]) => !['xmlns:a', 'xmlns:r', 'xmlns:p'].includes(k)).map(([k, v]) => ` ${k}="${esc(v)}"`).join('') : '';
     files[`ppt/slides/slide${n}.xml`] = `${XML_HEAD}<p:sld xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}"${extraNs}${slide.hidden ? ' show="0"' : ''}><p:cSld>${bg}<p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>${parts.join('')}</p:spTree></p:cSld><p:clrMapOvr>${slide.clrMap && stableJson({ ...STD_CLRMAP, ...slide.clrMap }) !== stableJson({ ...STD_CLRMAP, ...(presForSlide(pres, slide).clrMap ?? {}) }) ? `<a:overrideClrMapping ${clrMapAttrs(slide.clrMap)}/>` : '<a:masterClrMapping/>'}</p:clrMapOvr>${rawTr ?? transitionXml(slide.transition, (k) => rels.sound(k))}${timing}${ext}</p:sld>`;
@@ -2608,6 +2616,7 @@ export function readPptx(input, opts = {}) {
       slide.transition = meta.transition ?? null;
       const map = new Map(Object.entries(meta.ids ?? {}).map(([sp, oldId]) => [oldId, spidToObj.get(sp)]));
       slide.anims = (meta.anims ?? []).map((a) => ({ ...a, obj: map.get(a.obj), trigger: a.trigger ? map.get(a.trigger) : undefined })).filter((a) => a.obj);
+      for (const a of slide.anims) if (a.soundMedia) { a.soundMedia = a.soundPath ? loadMedia(a.soundPath, true) ?? undefined : undefined; delete a.soundPath; if (!a.soundMedia) delete a.soundName; }
       for (const a of slide.anims) if (a.trigger === undefined) delete a.trigger;
       if (meta.section) slide.section = meta.section;
       if (meta.design) slide.design = meta.design;
@@ -2623,7 +2632,7 @@ export function readPptx(input, opts = {}) {
       }
     } else {
       slide.transition = readTransition(x);
-      slide.anims = readTiming(x, spidToObj);
+      slide.anims = readTiming(x, spidToObj, path);
     }
     {
       // PowerPoint 의 애니메이션 · 전환 원본 (고치지 않으면 그대로 저장 → 반복 · 되감기 · 부드럽게 시작 등 세부 설정 유지)
@@ -2715,7 +2724,7 @@ export function readPptx(input, opts = {}) {
     return out;
   }
 
-  function readTiming(x, spidToObj) {
+  function readTiming(x, spidToObj, part = null) {
     const timing = child(x, 'timing');
     if (!timing) return [];
     // 기본 순서 (mainSeq) + 트리거 순서 (interactiveSeq: 누를 개체 = stCondLst 의 onClick spTgt)
@@ -2750,6 +2759,21 @@ export function readPptx(input, opts = {}) {
       if (it) { a.textUnit = attr(it, 'type') === 'lt' ? 'letter' : 'word'; const pct = child(it, 'tmPct'); if (pct) a.unitDelay = num(attr(pct, 'val'), 10000) / 1000; }
       const st = descendants(child(eff, 'subTnLst'), 'sndTgt')[0];
       if (st && SOUND_BY_FILE[attr(st, 'name')]) a.sound = SOUND_BY_FILE[attr(st, 'name')];
+      else if (st && part) {
+        // 기본 소리가 아닌 소리 파일 → 미디어
+        const r = relsOf(part).get(attr(st, 'r:embed') ?? attr(st, 'embed'));
+        const mid = r && !r.external ? loadMedia(r.target, true) : null;
+        if (mid) { a.soundMedia = mid; a.soundName = attr(st, 'name') || r.target.split('/').pop(); }
+      }
+      // 애니메이션 후 (subTnLst 의 afterEffect="1"): 숨기기 · 다음 클릭 때 숨기기 · 흐리게
+      for (const n of child(eff, 'subTnLst')?.children ?? []) {
+        const ct = descendants(n, 'cTn').find((c) => attr(c, 'afterEffect') === '1');
+        if (!ct) continue;
+        const an = descendants(n, 'attrName')[0]?.text ?? '';
+        if (an === 'style.visibility') a.after = { type: attr(ct, 'masterRel') === 'nextClick' ? 'hideNext' : 'hide' };
+        else if (/color/i.test(an)) { const c = descendants(child(n, 'to'), 'srgbClr')[0]; a.after = { type: 'dim', color: c ? `#${attr(c, 'val')}` : '#808080' }; }
+        if (a.after) break;
+      }
       if (trigger) a.trigger = trigger;
       // 단락별 효과 (txEl pRg): 같은 개체 · 같은 효과가 이어지면 하나로 묶고 byPara
       const isPara = !!descendants(spTgt, 'pRg')[0];

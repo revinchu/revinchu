@@ -142,7 +142,7 @@ function fit() {
 /** 슬라이드 HTML (단계 stepsDone 까지 진행한 상태의 보이기/숨기기) */
 function slideState(idx, stepsDone) {
   const slide = S.pres.slides[idx];
-  if (show?.setup?.noAnim) return { slide, hide: new Set(), paraHide: new Set(), moved: new Map() };
+  if (show?.setup?.noAnim) return { slide, hide: new Set(), paraHide: new Set(), moved: new Map(), dims: new Map() };
   const steps = animSteps(slide);
   const hide = new Set();
   const paraHide = new Set(); // 'objId#단락' (단락별 애니메이션)
@@ -159,23 +159,29 @@ function slideState(idx, stepsDone) {
     done.push(...tsteps.slice(0, n));
   }
   for (const [k, a] of first) if (a.cls === 'entr') (a.para != null ? paraHide : hide).add(k);
-  for (const st of [...steps.slice(0, Math.min(stepsDone, steps.length)), ...done]) {
+  const dims = new Map(); // 끝난 뒤 흐리게 → 색
+  const doneSteps = [...steps.slice(0, Math.min(stepsDone, steps.length)), ...done];
+  doneSteps.forEach((st, si) => {
     for (const a of st) {
       const set = a.para != null ? paraHide : hide;
       if (a.cls === 'entr') set.delete(key(a));
       if (a.cls === 'exit') set.add(key(a));
+      // 애니메이션 후: 숨기기 · 다음 클릭 때 숨기기 (다음 묶음이 이미 실행됨) · 흐리게
+      if (a.after?.type === 'hide' || (a.after?.type === 'hideNext' && si < doneSteps.length - 1)) set.add(key(a));
+      if (a.after?.type === 'dim') dims.set(key(a), a.after.color ?? '#808080');
       if (a.cls === 'path') { const pts = motionPoints(a.motion); const last = pts[pts.length - 1]; const prev = moved.get(a.obj) ?? [0, 0]; moved.set(a.obj, [prev[0] + last[0], prev[1] + last[1]]); }
     }
-  }
-  return { slide, steps, hide, paraHide, moved };
+  });
+  return { slide, steps, hide, paraHide, moved, dims };
 }
 
 function makeSlideEl(idx, stepsDone) {
-  const { slide, hide, paraHide, moved } = slideState(idx, stepsDone);
+  const { slide, hide, paraHide, moved, dims } = slideState(idx, stepsDone);
   const d = el('div', { class: 'show-slide', html: slideHtml(S.pres, slide, { index: idx, hide, links: true, live: true }) });
   const { w, h } = S.pres.size;
   for (const k of paraHide) { const [id, pi] = k.split('#'); const p = d.querySelectorAll(`.ob[data-id="${CSS.escape(id)}"] .p`)[Number(pi)]; if (p) p.style.visibility = 'hidden'; }
   for (const [id, [fx, fy]] of moved) { const ob = d.querySelector(`.ob[data-id="${CSS.escape(id)}"]`); if (ob) ob.style.translate = `${fx * w}px ${fy * h}px`; }
+  for (const [k, c] of dims ?? []) { const [id, pi] = k.split('#'); const ob = d.querySelector(`.ob[data-id="${CSS.escape(id)}"]`); const t = pi != null ? ob?.querySelectorAll('.p')[Number(pi)] : ob; if (t) dimEl(t, c); }
   for (const t of triggerSteps(slide).keys()) d.querySelector(`.ob[data-id="${CSS.escape(t)}"]`)?.classList.add('trig');
   Object.assign(d.style, { width: `${w}px`, height: `${h}px` });
   return d;
@@ -192,6 +198,7 @@ function enterSlide(pos, { transition = true, stepsDone = 0, back = false } = {}
   show.step = Math.min(stepsDone, show.steps.length);
   show.triggers = triggerSteps(slide);
   show.trigDone = new Map();
+  show.hideNext = [];
   show.slideStart = Date.now();
   clearInk(false);
   const old = show.stage.querySelector('.show-slide');
@@ -654,8 +661,22 @@ export function animateObject(elm, a, o) {
   return kf ? elm.animate(kf, { duration: dur, easing: 'ease-in-out', fill: fillMode }).finished.catch(() => {}) : Promise.resolve();
 }
 
-/** 한 클릭 묶음 실행 */
-export function playStepOn(container, step, slide) {
+/** 애니메이션 후 흐리게: 글자 · 채우기를 그 색으로 */
+export function dimEl(elm, color) {
+  elm.classList.add('dimmed');
+  elm.style.setProperty('--dim', color);
+}
+/** 효과 소리: 기본 소리 (합성) 또는 파일에서 읽은 소리 (미디어) */
+function animSound(anim) {
+  if (anim.soundMedia) {
+    const src = S.pres.media?.[anim.soundMedia];
+    const url = src instanceof Blob ? blobUrl(src) : src;
+    if (url) { try { const au = new Audio(url); au.volume = 0.8; au.play().catch(() => {}); } catch { /* 소리 없이 */ } }
+  } else if (anim.sound) playSound(anim.sound);
+}
+/** 한 클릭 묶음 실행 (pending = 다음 클릭 때 숨길 요소 목록) */
+export function playStepOn(container, step, slide, pending = null) {
+  if (pending) { for (const e of pending.splice(0)) e.style.visibility = 'hidden'; }
   const tl = stepTimeline(step);
   const done = [];
   for (const { anim, at } of tl) {
@@ -663,7 +684,16 @@ export function playStepOn(container, step, slide) {
     const ob = container.querySelector(`.ob[data-id="${CSS.escape(anim.obj)}"]`);
     const elm = anim.para != null ? ob?.querySelectorAll('.p')[anim.para] : ob;
     if (!o || !elm) continue;
-    done.push(new Promise((res) => setTimeout(() => { if (anim.sound) playSound(anim.sound); animateObject(elm, anim, o).then(res); }, at * 1000)));
+    done.push(new Promise((res) => setTimeout(() => {
+      animSound(anim);
+      animateObject(elm, anim, o).then(() => {
+        const af = anim.after;
+        if (af?.type === 'hide') elm.style.visibility = 'hidden';
+        else if (af?.type === 'hideNext') pending?.push(elm);
+        else if (af?.type === 'dim') dimEl(elm, af.color ?? '#808080');
+        res();
+      });
+    }, at * 1000)));
   }
   return Promise.all(done);
 }
@@ -674,7 +704,8 @@ function playStep() {
   show.step++;
   const slide = S.pres.slides[show.order[show.pos]];
   const cur = show.stage.querySelector('.show-slide:last-child');
-  playStepOn(cur, step, slide).then(() => {
+  show.hideNext ??= [];
+  playStepOn(cur, step, slide, show.hideNext).then(() => {
     // 다음 묶음이 '이전 효과 다음에'로 이어지면 자동 재생 (animSteps 가 묶어 둠) — 여기서는 없음
     if (show?.presenterEls) updatePresenter();
   });
@@ -809,7 +840,7 @@ function onClick(e) {
     if (n >= tsteps.length) { n = 0; show.trigDone.set(t, 0); rerender(); }
     show.trigDone.set(t, n + 1);
     const slide = S.pres.slides[show.order[show.pos]];
-    playStepOn(show.stage.querySelector('.show-slide:last-child'), tsteps[n], slide);
+    playStepOn(show.stage.querySelector('.show-slide:last-child'), tsteps[n], slide, (show.hideNext ??= []));
     syncAudience();
     return;
   }

@@ -5,6 +5,9 @@ import { timeNodeAnims, legacyAnims, parseStyle9 } from '../src/ppt.js';
 import { WARP_PATHS, WARP_ENVELOPES } from '../src/render.js';
 import { fontKind, sfntInfo, makeEot, decodeEmbeddedFont, embeddable } from '../src/fonts.js';
 import { webFont, WEB_FONTS } from '../src/webfonts.js';
+import { writePptx, readPptx } from '../src/pptx.js';
+import { unzip, zip, textOf } from '../src/zip.js';
+import { newPresentation, newShape, addAnim } from '../src/model.js';
 
 // 레코드 만들기: [type, inst, 내용(Uint8Array) | 자식 레코드 배열]
 function rec(type, inst, body) {
@@ -96,4 +99,43 @@ test('무료 한글 글꼴: 목록 · 별칭 · 띄어쓰기 무시', () => {
   assert.ok(webFont('나눔스퀘어 네오'));
   assert.ok(webFont('Nanum Gothic'));
   assert.equal(webFont('Nanum Gothic').family, webFont('NanumGothic')?.family);
+});
+
+test('.ppt 애니메이션 후 · 소리: 하위 노드 (0xF145) 와 97 빌드 정보', () => {
+  // 효과 + 하위 노드: 다음 클릭 때 숨기기 (속성 13 = 1, 5 = 2) · 소리 (대상 종류 2, id 7)
+  const strVal = (t) => rec(0xf142, 0, concat([new Uint8Array([3]), ...[...t, '\0'].map((c) => new Uint8Array([c.charCodeAt(0), 0]))]));
+  const sub = (props13, rel, names, refType, refId) => rec(0xf145, 1, [rec(0xf127, 0, i32s(0, 0, 3, 0, 0, 0, 1, 0)), rec(0xf13d, 0, [rec(0xf142, 13, new Uint8Array([0, props13])), prop(5, rel)]),
+    rec(0xf131, 0, [rec(0xf12a, 0, [rec(0xf13e, 1, names.map(strVal)), rec(0xf13c, 0, [rec(0x2afb, 0, i32s(0, refType, refId, -1, -1))])])])]);
+  const eff = node(0, props({ 20: 1, 9: 10, 10: 0, 11: 1 }), begin(0), sub(1, 2, ['style.visibility'], 1, 1025), sub(0, 0, [], 2, 7), node(500, target(1025)));
+  const root = node(0, props({ 20: 9 }), node(0, node(0, props({ 20: 4 }), eff)));
+  const anims = timeNodeAnims({ kids: [{ type: 0x138b, data: root }] }, new Map([[1025, ['a']]]), [{ id: 'a' }], { soundFor: (id) => (id === 7 ? { sound: 'chime' } : null) });
+  assert.equal(anims.length, 1);
+  assert.deepEqual(anims[0].after, { type: 'hideNext' });
+  assert.equal(anims[0].sound, 'chime');
+  // 97: 1 흐리게 (dimColor RGB) · 2 다음 클릭 때 숨기기 · 3 숨기기, fSound + soundIdRef
+  const atom = (order, after, sound) => { const d = new Uint8Array(28); const dv = new DataView(d.buffer); d.set([0x11, 0x22, 0x33, 0xfe]); dv.setUint16(4, sound ? 0x10 : 0, true); dv.setUint32(8, sound, true); dv.setUint16(16, order, true); d[20] = 1; d[23] = after; return d; };
+  const l = legacyAnims([{ obj: 'a', d: atom(1, 1, 3) }, { obj: 'b', d: atom(2, 2, 0) }, { obj: 'c', d: atom(3, 3, 0) }], [{ id: 'a' }, { id: 'b' }, { id: 'c' }], { soundFor: (id) => (id === 3 ? { soundMedia: 'm1', soundName: 'ding.wav' } : null) });
+  assert.deepEqual(l.map((a) => a.after), [{ type: 'dim', color: '#112233' }, { type: 'hideNext' }, { type: 'hide' }]);
+  assert.equal(l[0].soundMedia, 'm1');
+});
+
+test('pptx 왕복: 애니메이션 후 (흐리게 · 숨기기 · 다음 클릭 때 숨기기) · 파일 소리', () => {
+  const p = newPresentation();
+  const s = p.slides[0];
+  const [a, b, c] = [0, 1, 2].map((i) => newShape('rect', { x: 10 + i * 200, y: 10, w: 100, h: 50 }));
+  s.objects.push(a, b, c);
+  p.media.snd1 = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAIlYAAESsAAACABAAZGF0YQAAAAA=';
+  addAnim(s, a.id, 'entr', 'fade', { after: { type: 'dim', color: '#A6A6A6' }, soundMedia: 'snd1', soundName: 'ding.wav' });
+  addAnim(s, b.id, 'entr', 'fly', { after: { type: 'hide' } });
+  addAnim(s, c.id, 'entr', 'appear', { after: { type: 'hideNext' }, sound: 'chime' });
+  const bytes = writePptx(p);
+  // WIPOINT 확장 없이 (PowerPoint 가 저장한 파일처럼) 읽어도 같음
+  const files = unzip(bytes);
+  files['ppt/slides/slide1.xml'] = new TextEncoder().encode(textOf(files['ppt/slides/slide1.xml']).replace(/<p:extLst>[\s\S]*?<\/p:extLst>(?=<\/p:sld>)/, ''));
+  for (const back of [readPptx(bytes).pres, readPptx(zip(files)).pres]) {
+    const an = back.slides[0].anims;
+    assert.deepEqual(an.map((x) => x.after), [{ type: 'dim', color: '#A6A6A6' }, { type: 'hide' }, { type: 'hideNext' }]);
+    assert.ok(back.media[an[0].soundMedia]?.startsWith('data:audio/wav'));
+    assert.equal(an[2].sound, 'chime');
+  }
 });

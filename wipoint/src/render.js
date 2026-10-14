@@ -692,6 +692,8 @@ export const SLIDE_CSS = `.sl{line-height:normal;text-align:left;color:#000;-web
 .sl *{box-sizing:border-box}
 .sl .ob{position:absolute;transform-origin:50% 50%}
 .sl .ob.decor{pointer-events:none}
+.sl .dimmed,.sl .dimmed *{color:var(--dim)!important}
+.sl .ob.dimmed svg [fill]:not([fill="none"]):not(text):not(tspan){fill:var(--dim)}
 .sl .tx{overflow:visible}
 .sl .txi{width:100%;outline:none;min-height:1em}
 .sl .p{margin:0}

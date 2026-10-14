@@ -845,7 +845,7 @@ export class History {
 }
 
 /** 쓰지 않는 미디어 정리 (저장 전) */
-const MEDIA_KEYS = new Set(['media', 'poster', 'bgOrig', 'artOrig', 'bin', 'bgMedia']);
+const MEDIA_KEYS = new Set(['media', 'poster', 'bgOrig', 'artOrig', 'bin', 'bgMedia', 'soundMedia']);
 export function usedMedia(pres) {
   // 미디어 id 를 가리키는 모든 값 (그림 · 포스터 · 채우기 그림 · 배경 · 원본(배경 제거/꾸밈 효과) · 마스터 · 레이아웃 …)
   const used = new Set();

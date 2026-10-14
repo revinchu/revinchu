@@ -269,6 +269,33 @@ export function readPpt(bytes) {
   const defaultProps = new Map();
   const media = {};
   const mediaOf = new Map();
+  // 소리 모음 (SoundCollectionContainer 0x07E4 → Sound 0x07E6: 이름 0 · 확장자 1 · id 2 · 자료 0x07E7) — 애니메이션 · 전환 소리
+  const soundById = new Map();
+  for (const sc of deep(docRec?.kids, 0x07e4)) {
+    for (const sn of (sc.kids ?? []).filter((k) => k.type === 0x07e6)) {
+      const str = (inst) => { const c = one(sn.kids, RT.CString, inst); let t = ''; for (let i = 0; c && i + 1 < c.data.length; i += 2) t += String.fromCharCode(u16(c.data, i)); return t.replace(/\0+$/, ''); };
+      const id = Number(str(2));
+      const blob = one(sn.kids, 0x07e7);
+      if (Number.isFinite(id)) soundById.set(id, { name: str(0), ext: str(1), data: blob?.data ?? null });
+    }
+  }
+  const soundMediaOf = new Map();
+  /** 소리 id → { sound: 기본 소리 키 } 또는 { soundMedia, soundName } */
+  const soundFor = (id) => {
+    const sn = soundById.get(id);
+    if (!sn) return null;
+    const key = BUILTIN_SOUND[sn.name.toLowerCase().replace(/[^a-z]/g, '')];
+    if (key) return { sound: key };
+    if (!sn.data?.length) return null;
+    if (!soundMediaOf.has(id)) {
+      const ext = (sn.ext || '.wav').replace(/^\./, '').toLowerCase();
+      const mime = { wav: 'audio/wav', mp3: 'audio/mpeg', mid: 'audio/midi', midi: 'audio/midi', aif: 'audio/aiff', aiff: 'audio/aiff', wma: 'audio/x-ms-wma' }[ext] ?? 'audio/wav';
+      const mid = `snd${id}${uid('').slice(-4)}`;
+      media[mid] = `data:${mime};base64,${b64(sn.data)}`;
+      soundMediaOf.set(id, mid);
+    }
+    return { soundMedia: soundMediaOf.get(id), soundName: `${sn.name}${sn.ext || '.wav'}` };
+  };
   const blipMedia = (pib) => {
     if (!pib || !blips[pib - 1]) return null;
     if (mediaOf.has(pib)) return mediaOf.get(pib);
@@ -413,7 +440,7 @@ export function readPpt(bytes) {
             if (gid) o.grp = gid;
             out.push(o);
             // 애니메이션 대상 (도형 id → 개체) · PowerPoint 97 빌드 정보 (AnimationInfoAtom)
-            if (fsp) ctx.spMap?.set(u32(fsp.data, 0), [o.id]);
+            if (fsp) { ctx.spMap?.set(u32(fsp.data, 0), [o.id]); if (o.ph) ctx.phOf?.set(u32(fsp.data, 0), o.ph); }
             const ai = deep(one(k.kids, ART.ClientData)?.kids, RT.AnimationInfoAtom)[0];
             if (ai && ctx.legacyAnims) ctx.legacyAnims.push({ obj: o.id, d: ai.data });
           }
@@ -741,9 +768,11 @@ export function readPpt(bytes) {
       // 마스터 배경 · 마스터 그림 (자리 표시자 제외)
       let slideBg = bg;
       const bgObjects = [];
+      let masterAnim = null;
       if (m) {
-        const mctx = { scheme, styles: m.styles, texts: [], rulers };
+        const mctx = { scheme, styles: m.styles, texts: [], rulers, spMap: new Map(), legacyAnims: [], phOf: new Map() };
         const mm = readShapes(m.rec, mctx);
+        masterAnim = { spMap: mctx.spMap, legacy: mctx.legacyAnims, phOf: mctx.phOf };
         if (slideBg === undefined || flags & 0x4) slideBg = mm.bg ?? slideBg;
         if (slideBg === undefined && m.base) slideBg = readShapes(m.base.rec, mctx).bg;
         if (flags & 0x1) {
@@ -763,7 +792,33 @@ export function readPpt(bytes) {
         if (tflags & 0x10 || tflags & 0x400) { transition ??= { type: 'none', dur: 0.75 }; transition.advAfter = Math.max(0, time / 1000); }
       }
       let anims = [];
-      try { anims = timeNodeAnims(rec, ctx.spMap, objects) ?? legacyAnims(ctx.legacyAnims, objects); } catch (e) { warnings.add(`일부 애니메이션을 읽지 못했습니다: ${e.message}`); }
+      const aopts = { soundFor, scheme };
+      try { anims = timeNodeAnims(rec, ctx.spMap, objects, aopts) ?? legacyAnims(ctx.legacyAnims, objects, aopts); } catch (e) { warnings.add(`일부 애니메이션을 읽지 못했습니다: ${e.message}`); }
+      // 슬라이드 마스터에 건 애니메이션: 마스터 그래픽을 따르는 슬라이드에서 먼저 재생 (PowerPoint 와 같음).
+      // 움직이는 마스터 개체는 이 슬라이드의 개체로 옮겨 (맨 뒤 층) 편집 · 쇼 · pptx 저장이 그대로 되게 함
+      if (masterAnim && (bgObjects.length || masterAnim.phOf.size)) {
+        try {
+          // 마스터 개체 → 이 슬라이드의 배경 개체, 마스터 개체 틀 (제목 · 본문) → 이 슬라이드의 같은 개체 틀 (PowerPoint 애니메이션 구성표)
+          const PH_KIND = { title: 'title', ctrTitle: 'title', body: 'body', subTitle: 'body', obj: 'body' };
+          const spMapBg = new Map([...masterAnim.spMap].map(([k, ids]) => {
+            const ph = masterAnim.phOf.get(k);
+            if (ph) return [k, objects.filter((o) => o.ph && PH_KIND[o.ph] && PH_KIND[o.ph] === PH_KIND[ph] && o.text?.paras?.some((p) => p.runs.some((r) => r.t.trim()))).map((o) => o.id)];
+            return [k, ids.map((id) => `bg-${id}`)];
+          }));
+          const animTargets = [...objects, ...bgObjects];
+          const mAnims = timeNodeAnims(m.rec, spMapBg, animTargets, aopts) ?? legacyAnims(masterAnim.legacy.map((x) => ({ ...x, obj: `bg-${x.obj}`, objs: x.objs?.map((id) => `bg-${id}`) })), bgObjects, aopts);
+          if (mAnims.length) {
+            const moving = new Set(mAnims.map((a) => a.obj).filter((id) => String(id).startsWith('bg-')));
+            const grps = new Set(bgObjects.filter((o) => moving.has(o.id) && o.grp).map((o) => o.grp));
+            const lift = bgObjects.filter((o) => moving.has(o.id) || (o.grp && grps.has(o.grp)));
+            for (const o of lift) { delete o.decor; o.fromMaster = true; }
+            const liftIds = new Set(lift.map((o) => o.id));
+            bgObjects.splice(0, bgObjects.length, ...bgObjects.filter((o) => !liftIds.has(o.id)));
+            objects.unshift(...lift);
+            anims = [...mAnims, ...anims];
+          }
+        } catch (e) { warnings.add(`마스터 애니메이션을 읽지 못했습니다: ${e.message}`); }
+      }
       const slide = { id: uid('s'), layout: 'blank', bg: slideBg ?? { type: 'solid', color: scheme[0] }, hidden, transition, notes: notesBySlide.get(entry.slideId) ?? '', objects, anims, bgObjects };
       slides.push(slide);
       void si;
@@ -910,7 +965,9 @@ function parseMasterStyles(kids) {
 
 // ───────────── 애니메이션 ─────────────
 // PowerPoint 2002+ 시간 노드 (슬라이드 ProgTags ___PPT10 → ExtTimeNodeContainer 0xF144) — pptx 의 <p:timing> 과 같은 나무.
-const TN = { Group: 0xf144, Node: 0xf127, Props: 0xf13d, Value: 0xf142, Event: 0xf125, Trigger: 0xf128, Target: 0xf13c, Ref: 0x2afb, Motion: 0xf12e };
+/** PowerPoint 기본 소리 이름 → WIPOINT 소리 키 */
+const BUILTIN_SOUND = { applause: 'applause', arrow: 'arrow', bomb: 'bomb', breeze: 'breeze', camera: 'camera', cashregister: 'cashreg', cashreg: 'cashreg', chime: 'chime', click: 'click', coin: 'coin', drumroll: 'drumroll', explosion: 'explode', explode: 'explode', hammer: 'hammer', laser: 'laser', push: 'push', suction: 'suction', typewriter: 'typewriter', type: 'typewriter', voltage: 'voltage', whoosh: 'whoosh', wind: 'wind' };
+const TN = { Sub: 0xf145, Group: 0xf144, Node: 0xf127, Props: 0xf13d, Value: 0xf142, Event: 0xf125, Trigger: 0xf128, Target: 0xf13c, Ref: 0x2afb, Motion: 0xf12e };
 const TN_CLASS = { 1: 'entr', 2: 'exit', 3: 'emph', 4: 'path' };
 /** 속성 값 (첫 바이트 = 형식: 0 바이트 · 1 int32 · 2 float · 3 UTF-16 글) */
 function tnValue(d) {
@@ -938,7 +995,7 @@ function tnBegin(g) {
 const tnKids = (g) => (g.kids ?? []).filter((k) => k.type === TN.Group);
 
 /** 슬라이드 레코드 → anims (시간 노드가 없으면 null) */
-export function timeNodeAnims(rec, spMap, objects) {
+export function timeNodeAnims(rec, spMap, objects, opts = {}) {
   let root = null;
   for (const blob of deep(rec.kids, 0x138b)) { root = records(blob.data).find((r) => r.type === TN.Group); if (root) break; }
   if (!root) return null;
@@ -958,7 +1015,9 @@ export function timeNodeAnims(rec, spMap, objects) {
     for (const [eff, p] of effects) {
       const cls = TN_CLASS[p.get(11)];
       if (!cls) continue;
-      const refs = deep(eff.kids, TN.Ref).map((r) => r.data).filter((d) => d.length >= 12 && i32(d, 4) === 1);
+      const main = (eff.kids ?? []).filter((k) => k.type !== TN.Sub);
+      const subs = (eff.kids ?? []).filter((k) => k.type === TN.Sub);
+      const refs = deep(main, TN.Ref).map((r) => r.data).filter((d) => d.length >= 12 && i32(d, 4) === 1);
       const r0 = refs[0];
       const objs = r0 ? objOf(u32(r0, 8)) : null;
       if (!objs?.length) continue;
@@ -977,6 +1036,20 @@ export function timeNodeAnims(rec, spMap, objects) {
         if (!durs.length) a.dur = 2;
       }
       if (trigger) a.trigger = trigger;
+      // 하위 노드 (AnimSubGroup 0xF145 = pptx subTnLst): 소리 (대상 종류 2) · 애니메이션 후 (속성 13)
+      for (const sg of subs) {
+        const sp = tnProps(sg);
+        const sref = deep(sg.kids, TN.Ref).map((r) => r.data).find((d) => d.length >= 12 && i32(d, 4) === 2);
+        if (sref && opts.soundFor) Object.assign(a, opts.soundFor(u32(sref, 8)) ?? {});
+        if (!sp.get(13)) continue;
+        const names = deep(sg.kids, 0xf13e).flatMap((n) => deep(n.kids, TN.Value).map((v) => tnValue(v.data)));
+        if (names.includes('style.visibility')) a.after = { type: sp.get(5) === 2 ? 'hideNext' : 'hide' };
+        else if (names.some((n) => /color/i.test(String(n)))) {
+          const cd = deep(sg.kids, 0xf135)[0]?.data;
+          const rgb = cd?.length >= 52 && i32(cd, 36) === 0 ? [i32(cd, 40), i32(cd, 44), i32(cd, 48)] : null;
+          a.after = { type: 'dim', color: rgb ? `#${rgb.map((v) => Math.max(0, Math.min(255, v)).toString(16).padStart(2, '0')).join('').toUpperCase()}` : '#808080' };
+        }
+      }
       // 단락 대상 (VisualShapeAtom 종류 2 = 글 범위): 같은 개체 · 같은 효과가 이어지면 하나로 묶고 byPara
       if (i32(r0, 0) === 2) {
         if (anims.some((b) => b.obj === a.obj && b.cls === cls && b.effect === a.effect && b.byPara && (b.trigger ?? null) === (a.trigger ?? null))) continue;
@@ -993,8 +1066,8 @@ export function timeNodeAnims(rec, spMap, objects) {
 // PowerPoint 97/2000 빌드 정보 (AnimationInfoAtom): 효과 · 방향 · 순서 · 자동 시작
 const LEGACY_EFFECT = { 0: 'appear', 1: 'fade', 2: 'blinds', 3: 'checker', 4: 'peek', 5: 'dissolveIn', 6: 'fade', 7: 'peek', 8: 'randomBars', 9: 'strips', 10: 'wipe', 11: 'box', 13: 'split', 14: 'appear', 17: 'diamond', 18: 'plus', 19: 'wedge', 26: 'wheel', 27: 'circleIn' };
 const LEGACY_DIR = ['l', 't', 'r', 'b'];
-export function legacyAnims(list, objects) {
-  const items = list.map((x) => ({ ...x, order: u16(x.d, 16), flags: u16(x.d, 4), delay: i32(x.d, 12), build: x.d[20], eff: x.d[21], dir: x.d[22] }))
+export function legacyAnims(list, objects, opts = {}) {
+  const items = list.map((x) => ({ ...x, order: u16(x.d, 16), flags: u16(x.d, 4), delay: i32(x.d, 12), build: x.d[20], eff: x.d[21], dir: x.d[22], after: x.d[23], sound: u32(x.d, 8), dim: x.d.subarray(0, 4) }))
     .filter((x) => x.order > 0 && x.order < 0x8000 && objects.some((o) => o.id === x.obj))
     .sort((a, b) => a.order - b.order);
   const anims = [];
@@ -1009,6 +1082,14 @@ export function legacyAnims(list, objects) {
     } else if (x.eff === 10 || x.eff === 4 || x.eff === 7) dir = LEGACY_DIR[x.dir] ?? 'l';
     const a = { id: uid('a'), obj: x.obj, cls: 'entr', effect, start: x.flags & 0x4 ? 'after' : 'click', dur: effect === 'appear' ? 0 : 0.5, delay: x.flags & 0x4 ? Math.max(0, x.delay) / 1000 : 0, dir };
     if (x.build >= 2) a.byPara = true;
+    // 소리 (fSound + soundIdRef) · 애니메이션 후 (1 흐리게 dimColor · 2 다음 클릭 때 숨기기 · 3 바로 숨기기)
+    if (x.flags & 0x10 && opts.soundFor) Object.assign(a, opts.soundFor(x.sound) ?? {});
+    if (x.after === 1) {
+      const [r, g, b, idx] = x.dim;
+      const c = idx === 0xfe ? `#${[r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('').toUpperCase()}` : opts.scheme?.[idx] ?? '#808080';
+      a.after = { type: 'dim', color: c };
+    } else if (x.after === 2) a.after = { type: 'hideNext' };
+    else if (x.after === 3) a.after = { type: 'hide' };
     anims.push(a);
     for (const id of x.objs?.slice(1) ?? []) anims.push({ ...a, id: uid('a'), obj: id, start: 'with', delay: 0 });
   }
