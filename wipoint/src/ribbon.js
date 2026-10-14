@@ -437,6 +437,10 @@ function fontDropButton(inp) {
     const draw = () => {
       fontPop.replaceChildren();
       if (canQueryLocalFonts()) fontPop.append(el('button', { class: 'font-all', type: 'button', onclick: async () => { const l = await loadAllLocalFonts({ ask: true }); if (!l) { fontPop?.append(el('div', { class: 'font-note' }, '브라우저가 글꼴 목록을 허용하지 않았습니다')); return; } draw(); } }, '이 컴퓨터의 모든 글꼴 불러오기'));
+      // 글꼴 파일 (.ttf · .otf · .woff · .woff2) 불러오기 · 파일에 글꼴 포함
+      fontPop.append(el('div', { class: 'font-tools' },
+        el('button', { class: 'font-all', type: 'button', onclick: () => run('importFonts', () => draw()) }, '글꼴 파일 불러오기… (.ttf · .otf · .woff)'),
+        el('label', { class: 'font-embed', title: '저장할 때 문서에 쓴 TrueType 글꼴을 pptx 에 넣습니다 (PowerPoint [파일의 글꼴 포함])' }, el('input', { type: 'checkbox', checked: !!S.pres.props?.embedFonts, onchange: () => run('embedFonts') }), ' 저장할 때 파일에 글꼴 포함')));
       for (const [title, items] of fontSections(S.pres, filter)) {
         fontPop.append(el('div', { class: 'font-sec' }, title));
         for (const it of items.slice(0, 400)) {

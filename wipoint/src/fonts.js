@@ -2,6 +2,8 @@
 // EOT 머리글 → (XOR 0x50 풀기) → MTX 압축이면 LZCOMP(적응 허프만 + LZ77) 세 덩어리 풀기 → CTF(압축 글리프)를 TrueType 로 되돌림
 // 형식 설명: W3C MTX Submission (MicroType Express) · EOT Submission. 알고리즘을 그대로 따라 새로 작성함.
 
+import { inflate } from './zip.js';
+
 // ───────────── 비트 읽기 (상위 비트부터) ─────────────
 class BitIn {
   constructor(b) { this.b = b; this.i = 0; this.buf = 0; this.left = 0; }
@@ -460,4 +462,130 @@ export function sfntFamily(b) {
     }
   } catch { /* 무시 */ }
   return '';
+}
+
+// ───────────── 글꼴 파일 (사용자가 불러온 .ttf · .otf · .woff) ─────────────
+const tag4 = (b, o) => String.fromCharCode(b[o], b[o + 1], b[o + 2], b[o + 3]);
+const be16 = (b, o) => (b[o] << 8) | b[o + 1];
+const be32 = (b, o) => ((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]) >>> 0;
+/** 글꼴 파일 종류: 'ttf' | 'otf' | 'woff' | 'woff2' | 'ttc' | null */
+export function fontKind(b) {
+  if (!b || b.length < 12) return null;
+  const t = tag4(b, 0);
+  if (t === 'wOFF') return 'woff';
+  if (t === 'wOF2') return 'woff2';
+  if (t === 'ttcf') return 'ttc';
+  if (t === 'OTTO') return 'otf';
+  if ((b[0] === 0 && b[1] === 1 && b[2] === 0 && b[3] === 0) || t === 'true') return 'ttf';
+  return null;
+}
+/** WOFF 1.0 → sfnt (표마다 zlib 압축 풀기) */
+export function woffToSfnt(b) {
+  if (tag4(b, 0) !== 'wOFF') return b;
+  const n = be16(b, 12);
+  const tables = [];
+  for (let i = 0; i < n; i++) {
+    const o = 44 + i * 20;
+    tables.push({ tag: tag4(b, o), off: be32(b, o + 4), comp: be32(b, o + 8), orig: be32(b, o + 12), sum: be32(b, o + 16) });
+  }
+  const head = 12 + n * 16;
+  let size = head;
+  for (const t of tables) size += (t.orig + 3) & ~3;
+  const out = new Uint8Array(size);
+  out.set(b.subarray(4, 8), 0); // sfnt 버전
+  out[4] = n >> 8; out[5] = n & 255;
+  let es = 0; while ((1 << (es + 1)) <= n) es++;
+  const sr = (1 << es) * 16;
+  out[6] = sr >> 8; out[7] = sr & 255; out[8] = es >> 8; out[9] = es & 255; out[10] = ((n * 16 - sr) >> 8) & 255; out[11] = (n * 16 - sr) & 255;
+  let pos = head;
+  tables.sort((a, c) => (a.tag < c.tag ? -1 : 1)).forEach((t, i) => {
+    const src = b.subarray(t.off, t.off + t.comp);
+    // zlib: 2바이트 머리 + deflate
+    const data = t.comp < t.orig ? inflate(src.subarray(2), t.orig).subarray(0, t.orig) : src;
+    out.set(data, pos);
+    const d = 12 + i * 16;
+    for (let k = 0; k < 4; k++) out[d + k] = t.tag.charCodeAt(k);
+    const put = (o, v) => { out[o] = v >>> 24; out[o + 1] = (v >>> 16) & 255; out[o + 2] = (v >>> 8) & 255; out[o + 3] = v & 255; };
+    put(d + 4, t.sum); put(d + 8, pos); put(d + 12, t.orig);
+    pos += (t.orig + 3) & ~3;
+  });
+  return out;
+}
+/** sfnt 정보: 모든 언어의 글꼴 집합 이름, 꼴 이름, 굵기, 기울임, 포함 허용 (OS/2 fsType) */
+export function sfntInfo(b) {
+  const out = { families: [], family: '', style: 'Regular', weight: 400, italic: false, fsType: 0 };
+  try {
+    const n = be16(b, 4);
+    const dir = {};
+    for (let i = 0; i < n; i++) { const o = 12 + i * 16; dir[tag4(b, o)] = be32(b, o + 8); }
+    if (dir.name != null) {
+      const t = dir.name;
+      const count = be16(b, t + 2);
+      const strOff = t + be16(b, t + 4);
+      const fam = []; let typo = []; let sub = null;
+      for (let k = 0; k < count; k++) {
+        const r = t + 6 + k * 12;
+        const pid = be16(b, r); const lang = be16(b, r + 4); const nid = be16(b, r + 6); const len = be16(b, r + 8); const off = be16(b, r + 10);
+        if (![1, 2, 16].includes(nid)) continue;
+        let s = '';
+        if (pid === 3 || pid === 0) for (let j = 0; j + 1 < len; j += 2) s += String.fromCharCode(be16(b, strOff + off + j));
+        else for (let j = 0; j < len; j++) s += String.fromCharCode(b[strOff + off + j]);
+        s = s.replace(/\0/g, '').trim();
+        if (!s) continue;
+        const score = pid === 3 && lang === 0x412 ? 3 : pid === 3 ? 2 : 1;
+        if (nid === 1) fam.push([s, score]);
+        else if (nid === 16) typo.push([s, score]);
+        else if (nid === 2 && (!sub || score > sub[1])) sub = [s, score];
+      }
+      const all = [...fam, ...typo].sort((a, c) => c[1] - a[1]).map(([s]) => s);
+      out.families = [...new Set(all)];
+      out.family = fam.sort((a, c) => c[1] - a[1])[0]?.[0] ?? out.families[0] ?? '';
+      if (sub) out.style = sub[0];
+    }
+    if (dir['OS/2'] != null) {
+      const o = dir['OS/2'];
+      out.weight = be16(b, o + 4) || 400;
+      out.fsType = be16(b, o + 8);
+      out.italic = !!(be16(b, o + 62) & 1);
+    }
+  } catch { /* 이름만이라도 */ }
+  return out;
+}
+/** 파일에 포함해도 되는지 (fsType 0x0002 = 포함 금지) */
+export const embeddable = (info) => !(info.fsType & 0x0002) || !!(info.fsType & 0x000c);
+
+/** sfnt (TrueType) → EOT (.fntdata, 압축 없음) — PowerPoint 의 포함 글꼴 형식 */
+export function makeEot(sfnt, info = sfntInfo(sfnt)) {
+  const str = (s) => { const u = new Uint8Array(s.length * 2); for (let i = 0; i < s.length; i++) { u[i * 2] = s.charCodeAt(i) & 255; u[i * 2 + 1] = s.charCodeAt(i) >> 8; } return u; };
+  const fam = str(info.family || 'Font'); const sty = str(info.style || 'Regular'); const ver = str('Version 1.0'); const full = str(`${info.family} ${info.style}`.trim());
+  const dir = {};
+  const n = be16(sfnt, 4);
+  for (let i = 0; i < n; i++) { const o = 12 + i * 16; dir[tag4(sfnt, o)] = be32(sfnt, o + 8); }
+  const os2 = dir['OS/2']; const head = dir.head;
+  const parts = [];
+  const fixed = new Uint8Array(82);
+  const dv = new DataView(fixed.buffer);
+  const names = [fam, sty, ver, full];
+  const varLen = names.reduce((s, x) => s + 4 + x.length, 0) + 2 + 2 + 2 + 2; // 이름 4개 (패딩 + 크기 + 글자) + RootString (패딩 + 크기 0) + 서명 이후 끝
+  const total = 82 + varLen + sfnt.length;
+  dv.setUint32(0, total, true); dv.setUint32(4, sfnt.length, true); dv.setUint32(8, 0x00020001, true); dv.setUint32(12, 0, true);
+  if (os2 != null) for (let i = 0; i < 10; i++) fixed[16 + i] = sfnt[os2 + 32 + i]; // PANOSE
+  fixed[26] = 1; // Charset DEFAULT
+  fixed[27] = os2 != null && be16(sfnt, os2 + 62) & 1 ? 1 : 0;
+  dv.setUint32(28, os2 != null ? be16(sfnt, os2 + 4) : 400, true);
+  dv.setUint16(32, info.fsType ?? 0, true);
+  dv.setUint16(34, 0x504c, true); // MagicNumber
+  if (os2 != null) for (let i = 0; i < 4; i++) dv.setUint32(36 + i * 4, be32(sfnt, os2 + 42 + i * 4), true); // UnicodeRange
+  if (os2 != null && be16(sfnt, os2) >= 1) for (let i = 0; i < 2; i++) dv.setUint32(52 + i * 4, be32(sfnt, os2 + 78 + i * 4), true); // CodePageRange
+  if (head != null) dv.setUint32(60, be32(sfnt, head + 8), true); // CheckSumAdjustment
+  parts.push(fixed);
+  // 첫 이름은 크기(2)+글자 (Padding1 은 고정 머리 안), 나머지는 Padding(2)+크기(2)+글자
+  names.forEach((s, i) => { const h = new Uint8Array(i ? 4 : 2); h[h.length - 2] = s.length & 255; h[h.length - 1] = s.length >> 8; parts.push(h, s); });
+  parts.push(new Uint8Array(4)); // Padding5 + RootStringSize 0
+  parts.push(sfnt);
+  const out = new Uint8Array(parts.reduce((s, p) => s + p.length, 0));
+  let p = 0; for (const x of parts) { out.set(x, p); p += x.length; }
+  // 실제 길이로 고침
+  new DataView(out.buffer).setUint32(0, out.length, true);
+  return out;
 }

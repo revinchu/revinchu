@@ -639,6 +639,8 @@ body.mobile .dialog-body { max-height: calc(100vh - 160px); overflow: auto; over
 .font-item:hover, .font-item:focus { background: #fdf0ec; outline: 0; }
 .font-all { display: block; width: calc(100% - 12px); margin: 6px; padding: 5px; border: 1px dashed #c43e1c; background: #fff7f4; color: #b7472a; cursor: pointer; font-size: 12px; }
 .font-note { padding: 4px 12px; color: #a00; font-size: 11px; }
+.font-tools { border-bottom: 1px solid #e3e3e3; padding-bottom: 4px; }
+.font-embed { display: flex; align-items: center; gap: 4px; padding: 2px 12px 4px; font-size: 12px; color: #444; cursor: pointer; }
 .rfont { display: inline-flex; align-items: center; }
 .font-drop { width: 16px; }
 body.mobile .font-pop { width: calc(100vw - 16px); left: 8px !important; }

@@ -4,6 +4,7 @@ import { readPptx, pptxEntries } from './pptx.js';
 import { readPpt } from './ppt.js';
 import { readPdf } from './pdf.js';
 import { decodeEmbeddedFont } from './fonts.js';
+import { fontsToEmbed } from './fontlib.js';
 import { zipAsync, openZipFile } from './zip.js';
 import { blobUrl, blobOf, isBlobUrl, inlineBlobs, mediaAsData, mediaFromStore } from './blobstore.js';
 import { validatePresentation, pruneMedia, snapshot, newPresentation } from './model.js';
@@ -209,7 +210,14 @@ export async function pptxBlob({ template = false } = {}) {
   pruneMedia(S.pres);
   const png = {};
   for (const [id, url] of Object.entries(S.pres.media)) if (url?.startsWith('data:image/svg')) { const p = await svgToPng(url); if (p) png[id] = p; }
-  const entries = pptxEntries(S.pres, { png, blob: blobOf, template });
+  // [파일의 글꼴 포함]: 문서가 쓰는 TrueType 글꼴(불러온 글꼴 · 이 컴퓨터의 글꼴)을 .fntdata 로
+  let src = S.pres;
+  if (S.pres.props?.embedFonts) {
+    const { fonts, skipped } = await fontsToEmbed(S.pres);
+    if (fonts.length) src = { ...S.pres, fonts: [...(S.pres.fonts ?? []), ...fonts] };
+    if (skipped.length) toast(`포함하지 못한 글꼴: ${skipped.slice(0, 3).join(' · ')}`);
+  }
+  const entries = pptxEntries(src, { png, blob: blobOf, template });
   // 큰 미디어가 있으면 진행 막대 (Blob 은 복사 없이 그대로 담김)
   const big = Object.values(entries).some((v) => v instanceof Blob);
   const bar = big ? progressOverlay('저장하는 중') : null;

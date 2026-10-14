@@ -20,7 +20,7 @@ import { ART_EFFECTS, ART_LABEL, applyArtEffect, COMPRESS_PPI, compressPlan } fr
 import { parseLatex, toMathML } from './math.js';
 import { collab, startCollab, stopCollab, collabLink, myName } from './collab.js';
 import { isMobile, setMobileMode, mobileMode } from './mobile.js';
-import { ensureFont, localFontList } from './fontlib.js';
+import { ensureFont, localFontList, importFontFiles } from './fontlib.js';
 import { WEB_FONTS, fontsUsed } from './webfonts.js';
 import { el, openMenu, openDialog, formDialog, alertDialog, toast, closeMenus } from './ui.js';
 import { colorMenu } from './colorpick.js';
@@ -2052,6 +2052,17 @@ register({
   removeSection: (i = null) => { let k = i ?? S.cur; while (k > 0 && !S.pres.slides[k].section) k--; change(() => { delete S.pres.slides[k].section; }, { scope: 'all' }); },
 
   // 글꼴 · 단락
+  importFonts: (after) => {
+    const inp = el('input', { type: 'file', accept: '.ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2', multiple: true });
+    inp.onchange = async () => {
+      const { ok, fail } = await importFontFiles([...inp.files]);
+      if (ok.length) { toast(`글꼴 ${ok.length}개를 불러왔습니다: ${ok.slice(0, 4).join(', ')}${ok.length > 4 ? ' …' : ''} (이 브라우저에 보관)`); renderCanvas(); emit('change', { scope: 'all' }); }
+      if (fail.length) alertDialog('글꼴 불러오기', fail.join('\n'));
+      if (typeof after === 'function') after();
+    };
+    inp.click();
+  },
+  embedFonts: () => { change(() => { S.pres.props ??= {}; S.pres.props.embedFonts = !S.pres.props.embedFonts || undefined; }, { scope: 'none' }); toast(S.pres.props?.embedFonts ? '저장할 때 문서에 쓴 TrueType 글꼴을 파일에 포함합니다' : '글꼴을 포함하지 않습니다'); },
   fontFamily: (f) => { applyRun({ font: f }); ensureFont(f).then((got) => { if (got) renderCanvas(); }); },
   fontSize: (n) => applyRun({ size: n }),
   growFont: () => stepFont(1),
