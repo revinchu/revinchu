@@ -619,3 +619,38 @@ test('애니메이션 소리: 19종 합성 · WAV', async () => {
   const w = soundWav('chime', 8000);
   assert.equal(new TextDecoder().decode(w.slice(8, 12)), 'WAVE');
 });
+
+test('사진 앨범 · 비교 · 접근성 검사 (review.js)', async () => {
+  const { albumSlides, compareDecks, applyChange, accessibilityIssues, contrastRatio } = await import('../src/review.js');
+  const p = newPresentation();
+  const pics = [1, 2, 3, 4, 5].map((i) => ({ media: `m${i}`, w: 800, h: 600, name: `사진${i}` }));
+  const sl = albumSlides(p, pics, { layout: '4t', frame: 'roundRect', captions: true, bw: true, title: '여행' });
+  assert.equal(sl.length, 1 + 2);
+  const imgs = sl[1].objects.filter((o) => o.type === 'image');
+  assert.equal(imgs.length, 4);
+  assert.ok(imgs.every((o) => o.gray && o.shape === 'roundRect'));
+  assert.equal(sl[1].objects.filter((o) => o.txBox).length, 4);
+  // 비교: 글 · 추가 · 삭제 · 메모
+  const a = newPresentation();
+  a.slides[0].objects[0].text.paras[0].runs = [run('원래 제목')];
+  const b = JSON.parse(JSON.stringify(a));
+  b.slides[0].objects[0].text.paras[0].runs = [run('바뀐 제목')];
+  b.slides[0].notes = '새 메모';
+  b.slides.push({ ...JSON.parse(JSON.stringify(b.slides[0])), id: 'new1' });
+  const ch = compareDecks(a, b);
+  const kinds = ch.map((c) => c.kind).sort();
+  assert.deepEqual(kinds, ['notes', 'slideAdded', 'text']);
+  for (const c of ch) applyChange(a, c, {});
+  assert.equal(compareDecks(a, b).filter((c) => c.kind !== 'slideMoved').length, 0);
+  assert.equal(a.slides.length, 2);
+  // 접근성
+  assert.ok(Math.abs(contrastRatio('#000000', '#FFFFFF') - 21) < 0.01);
+  const q = newPresentation();
+  q.slides[0].objects.push({ id: 'im', type: 'image', media: 'x', x: 0, y: 0, w: 10, h: 10 });
+  q.slides[0].objects.push({ id: 'tb', type: 'shape', shape: 'rect', x: 0, y: 0, w: 100, h: 50, fill: null, text: { paras: [{ runs: [{ t: '흐린 글', color: '#EEEEEE', size: 10 }] }] } });
+  q.slides.push(JSON.parse(JSON.stringify(q.slides[0])));
+  const rules = new Set(accessibilityIssues(q).map((x) => x.rule));
+  for (const r of ['슬라이드 제목 없음', '대체 텍스트 없음', '읽기 어려운 텍스트 대비', '작은 글꼴']) assert.ok(rules.has(r), r);
+  q.slides[0].objects.find((o) => o.id === 'im').decorative = true;
+  assert.ok(accessibilityIssues(q).filter((x) => x.rule === '대체 텍스트 없음').length === 1);
+});

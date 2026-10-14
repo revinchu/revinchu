@@ -55,7 +55,7 @@ const HOME = { id: 'home', label: '홈', groups: [
 const INSERT = { id: 'insert', label: '삽입', groups: [
   { label: '슬라이드', items: [L('newSlide', 'newSlide', '새 슬라이드', { menu: 'newSlideMenu' })] },
   { label: '표', items: [L(null, 'table', '표', { menu: 'tableMenu' })] },
-  { label: '이미지', items: [L('insertPicture', 'picture', '그림', { menu: 'pictureMenu' }), L('stockImages', 'icons', '스톡 이미지'), L('screenshot', 'crop', '스크린샷')] },
+  { label: '이미지', items: [L('insertPicture', 'picture', '그림', { menu: 'pictureMenu' }), L('stockImages', 'icons', '스톡 이미지'), L('screenshot', 'crop', '스크린샷'), L('photoAlbum', 'album', '사진 앨범', { menu: 'photoAlbumMenu' })] },
   { label: '일러스트레이션', items: [L(null, 'shapes', '도형', { menu: 'shapesMenu' }), L('insertIcons', 'icons', '아이콘'), L('insertSmartArt', 'convertSmart', 'SmartArt'), L(null, 'chartColumn', '차트', { menu: 'chartMenu' })] },
   { label: '링크', items: [L(null, 'zoomIn', '확대/축소', { menu: 'zoomMenu' }), L('hyperlink', 'link', '링크')] },
   { label: '미디어', items: [L('insertVideo', 'video', '비디오'), L('insertAudio', 'audio', '오디오')] },
@@ -94,6 +94,7 @@ const SHOW = { id: 'slideshow', label: '슬라이드 쇼', groups: [
 const REVIEW = { id: 'review', label: '검토', groups: [
   { label: '언어 교정', items: [L('spellCheck', 'check', '맞춤법 검사')] },
   { label: '접근성', items: [L('accessibility', 'info', '접근성 검사')] },
+  { label: '비교', items: [L('compare', 'compare', '비교')] },
   { label: '정보', items: [L('wordCount', 'stats', '통계')] },
   { label: '공동 작업', items: [L('collabStart', 'share', '공동 편집', { on: 'collabOn' })] },
   { label: '메모', items: [L('newComment', 'newComment', '새 메모'), COL(M('deleteComments', 'deleteComment', '삭제'), M('prevComment', 'prev', '이전'), M('nextComment', 'next', '다음')), L('commentsPane', 'comment', '메모 표시', { on: 'cmPane' })] },
@@ -171,12 +172,12 @@ const TAB_KT = { home: 'H', insert: 'N', design: 'G', transitions: 'K', animatio
 const ARRANGE_KT = { bringForward: 'AF', sendBackward: 'AE', selectionPane: 'AP', alignMenu: 'AA', groupMenu: 'AG', rotateMenu: 'AY' };
 const KT = {
   home: { paste: 'V', cut: 'X', copy: 'C', formatPainter: 'FP', newSlide: 'I', layoutMenu: 'L', resetSlide: 'RE', sectionMenu: 'T', font: 'FF', size: 'FS', growFont: 'FG', shrinkFont: 'FK', clearFormat: 'E', bold: '1', italic: '2', underline: '3', strike: '4', textShadow: '5', charSpacingMenu: '6', changeCaseMenu: '7', highlight: 'TC', fontColor: 'FC', bullets: 'U', numbering: 'N', indentLess: 'AO', indentMore: 'AI', lineSpacingMenu: 'K', alignLeft: 'AL', alignCenter: 'AC', alignRight: 'AR', alignJustify: 'AJ', textDirMenu: 'AD', textAnchorMenu: 'AT', shapesMini: 'SH', arrangeMenu: 'G', quickStylesMenu: 'Q', shapeFill: 'SF', shapeOutline: 'SO', shapeEffectsMenu: 'SE', find: 'FD', replace: 'RP', selectMenu: 'SL', 'launcher:fontDialog': 'FN', 'launcher:paragraphDialog': 'PG', 'launcher:formatPaneShape': 'DS' },
-  insert: { newSlide: 'I', tableMenu: 'T', insertPicture: 'P', stockImages: 'SI', screenshot: 'SC', shapesMenu: 'SH', insertIcons: 'Y1', insertSmartArt: 'M', chartMenu: 'C', hyperlink: 'IL', zoomMenu: 'ZM', drawTextbox: 'X', headerFooter: 'H', wordArtMenu: 'W', insertDate: 'D', insertSlideNumber: 'SN', symbol: 'U', insertEquation: 'E', insertVideo: 'V', insertAudio: 'O' },
+  insert: { newSlide: 'I', tableMenu: 'T', insertPicture: 'P', stockImages: 'SI', screenshot: 'SC', photoAlbum: 'A', photoAlbumMenu: 'A', shapesMenu: 'SH', insertIcons: 'Y1', insertSmartArt: 'M', chartMenu: 'C', hyperlink: 'IL', zoomMenu: 'ZM', drawTextbox: 'X', headerFooter: 'H', wordArtMenu: 'W', insertDate: 'D', insertSlideNumber: 'SN', symbol: 'U', insertEquation: 'E', insertVideo: 'V', insertAudio: 'O' },
   design: { themes: 'TH', themeColorsMenu: 'TC', themeFontsMenu: 'TF', bgStylesMenu: 'TB', slideSizeMenu: 'S', formatBg: 'G', designIdeas: 'D' },
   transitions: { previewTransition: 'P', transitions: 'T', transitionOptionsMenu: 'E', transitionSoundMenu: 'U', transTiming: 'D', applyTransitionAll: 'L' },
   animations: { previewAnim: 'P', animations: 'S', animOptionsMenu: 'M', addAnimMenu: 'AA', animPane: 'C', removeAnim: 'X', animPainter: 'K', triggerMenu: 'G', animTiming: 'T' },
   slideshow: { showFromStart: 'B', showFromCurrent: 'C', customShowMenu: 'W', setupShow: 'S', hideSlide: 'H', rehearse: 'T', recordShow: 'N', recordMenu: 'N', toggleNarration: 'P', toggleUseTimings: 'U', presenterView: 'V', toggleCaptions: 'J', captionMenu: 'Q' },
-  review: { spellCheck: 'S', accessibility: 'A', wordCount: 'W', newComment: 'C', deleteComments: 'D', prevComment: 'V', nextComment: 'N', commentsPane: 'P', collabStart: 'H' },
+  review: { spellCheck: 'S', accessibility: 'A', compare: 'G', wordCount: 'W', newComment: 'C', deleteComments: 'D', prevComment: 'V', nextComment: 'N', commentsPane: 'P', collabStart: 'H' },
   view: { toggleHand: 'H', toggleMobile: 'Y', viewMaster: 'M', toggleRuler: 'R', viewNormal: 'L', viewOutline: 'O', viewSorter: 'I', viewNotesPage: 'T', viewReading: 'D', toggleGrid: 'G', toggleGuides: 'U', toggleNotes: 'N', zoomDialog: 'Q', fitZoom: 'W', selectionPane: 'P' },
   help: { shortcuts: 'K', whatsNew: 'N', about: 'A' },
   shapeFormat: { shapesMini: 'SH', changeShapeMenu: 'E', mergeShapesMenu: 'M', drawTextbox: 'X', shapeStyles: 'K', shapeFill: 'SF', shapeOutline: 'SO', shapeEffectsMenu: 'SE', wordart: 'Q', objSize: 'H', 'launcher:formatPaneShape': 'DS', ...ARRANGE_KT },

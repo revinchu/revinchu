@@ -16,12 +16,13 @@ const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.
 const POTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.template';
 
 // ───────────── 열기 ─────────────
-export function pickFile(accept) {
+export function pickFile(accept, multiple = false) {
   return new Promise((resolve) => {
     const inp = document.createElement('input');
     inp.type = 'file';
     inp.accept = accept;
-    inp.addEventListener('change', () => resolve(inp.files?.[0] ?? null));
+    inp.multiple = multiple;
+    inp.addEventListener('change', () => resolve(multiple ? [...(inp.files ?? [])] : inp.files?.[0] ?? null));
     inp.click();
   });
 }

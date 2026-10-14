@@ -179,6 +179,8 @@ export const ICONS = {
   subtitles: svg(`<rect x="2" y="4" width="16" height="12" rx="1.5"/><path d="M5 12.5h4M10.5 12.5h4.5M5 9.5h7M13.5 9.5H15" stroke="${BLUE}"/>`),
   layoutAdd: svg(`<rect x="2.5" y="3.5" width="15" height="13" rx=".8"/><path d="M4.5 6h11M4.5 8.5h5v6h-5z" /><path d="M14 9.5v5M11.5 12h5" stroke="${BLUE}"/>`),
   placeholder: svg(`<rect x="3" y="3" width="14" height="14" stroke-dasharray="2 1.5"/><path d="M6 7h8M6 10h8M6 13h5" stroke="${BLUE}"/>`),
+  compare: svg(`<rect x="2.5" y="3.5" width="7" height="11" rx=".6"/><rect x="10.5" y="5.5" width="7" height="11" rx=".6" stroke="${BLUE}"/><path d="M4.5 7h3M4.5 9.5h3M12.5 9h3M12.5 11.5h3"/>`),
+  album: svg(`<rect x="2.5" y="4.5" width="12" height="10" rx=".6"/><path d="M5 2.5h12.5v10" stroke="${BLUE}"/><path d="M4 13l3.5-4 2.5 3 2-2 2 3"/>`),
   swap: svg(`<rect x="3" y="3" width="6" height="6" rx=".6"/><rect x="11" y="11" width="6" height="6" rx=".6" stroke="${BLUE}"/><path d="M12 4.5h2.5a1.5 1.5 0 0 1 1.5 1.5v2.5M14.5 7l1.5 1.5L17.5 7M8 15.5H5.5A1.5 1.5 0 0 1 4 14v-2.5M2.5 13 4 11.5 5.5 13"/>`),
   mobile: svg(`<rect x="6" y="2" width="8" height="16" rx="1.5"/><path d="M9 15.5h2"/>`),
   fit: svg(`<rect x="5" y="6" width="10" height="8" rx=".6"/><path d="M2.5 6V2.5H6M14 2.5h3.5V6M17.5 14v3.5H14M6 17.5H2.5V14"/>`),

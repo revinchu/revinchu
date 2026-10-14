@@ -29,6 +29,8 @@ import { moveParagraph, startCrop, endCrop, startEdit, endEdit, textTargets, app
 import { screenList, startShow, playStepOn, playTransition, captionSettings, setCaptionSettings, captionsSupported } from './show.js';
 import { CAPTION_LANGS, CAPTION_POS, CAPTION_TARGETS } from './recording.js';
 import { SOUNDS, SOUND_LABEL } from './sounds.js';
+import { ALBUM_LAYOUTS, ALBUM_FRAMES, albumSlides, compareDecks, applyChange, accessibilityIssues } from './review.js';
+import { readPptx } from './pptx.js';
 import { playSound } from './sfx.js';
 import { shapeIconSvg, styleChip, wordArtCss } from './galleries.js';
 import { blobUrl } from './blobstore.js';
@@ -1488,18 +1490,151 @@ function designIdeasDialog() {
   const closeAll = () => dlg.close();
 }
 
+/** 접근성 검사 (PowerPoint [검토 › 접근성 검사]): 오류 · 경고 · 팁 + 바로 고치기 */
 function accessibilityDialog() {
-  const issues = [];
-  S.pres.slides.forEach((s, i) => {
-    if (!slideTitle(s).trim()) issues.push([i, '슬라이드 제목 없음', '화면 읽기 프로그램이 슬라이드를 구분할 수 있도록 제목을 넣으세요.']);
-    for (const o of s.objects) {
-      if (o.type === 'image' && o.media && !o.alt) issues.push([i, '대체 텍스트 없음', `그림${o.name ? ` (${o.name})` : ''}에 설명을 넣으세요.`]);
-      if (o.type === 'table' && !o.style?.firstRow) issues.push([i, '표 머리글 없음', '표의 첫 행을 머리글 행으로 지정하세요.']);
-      if (o.type === 'chart' && !o.alt) issues.push([i, '차트 설명 없음', '차트에 대체 텍스트를 넣으세요.']);
+  const body = el('div', { class: 'a11y' });
+  const LVL = { error: ['오류', '⛔'], warning: ['경고', '⚠'], tip: ['팁', '💡'] };
+  const draw = () => {
+    const issues = accessibilityIssues(S.pres);
+    body.innerHTML = '';
+    if (!issues.length) { body.append(el('p', {}, '✔ 접근성 문제가 없습니다. 장애가 있는 사람도 이 프레젠테이션을 읽기 쉽습니다.')); return; }
+    const counts = Object.fromEntries(Object.keys(LVL).map((k) => [k, issues.filter((x) => x.level === k).length]));
+    body.append(el('div', { class: 'a11y-sum' }, Object.entries(counts).filter(([, n]) => n).map(([k, n]) => el('span', { class: `a11y-badge ${k}` }, `${LVL[k][1]} ${LVL[k][0]} ${n}`))));
+    for (const it of issues) {
+      const slide = S.pres.slides[it.slide];
+      const o = it.obj ? slide?.objects.find((x) => x.id === it.obj) : null;
+      const go = () => { goSlide(it.slide); if (o) { S.sel = new Set([o.id]); emit('selection'); } };
+      const fixes = [];
+      if (it.fix === 'alt' && o) {
+        const inp = el('input', { type: 'text', placeholder: '설명 (예: 2026년 분기별 매출 막대 차트)', value: o.alt ?? '' });
+        fixes.push(inp, el('button', { class: 'btn small', onclick: () => { if (!inp.value.trim()) return; change(() => { o.alt = inp.value.trim(); }); draw(); } }, '설명 넣기'),
+          el('button', { class: 'btn small', onclick: () => { change(() => { o.decorative = true; }); draw(); } }, '장식용으로 표시'));
+      }
+      if (it.fix === 'header' && o) fixes.push(el('button', { class: 'btn small', onclick: () => { change(() => { o.style = { ...(o.style ?? {}), firstRow: true }; }); draw(); } }, '머리글 행 사용'));
+      if (it.fix === 'title' && slide) {
+        const inp = el('input', { type: 'text', placeholder: '슬라이드 제목', value: slideTitle(slide) });
+        fixes.push(inp, el('button', { class: 'btn small', onclick: () => {
+          if (!inp.value.trim()) return;
+          change(() => {
+            let t = slide.objects.find((x) => x.ph === 'title' || x.ph === 'ctrTitle');
+            if (!t) { t = { ...layoutPlaceholders('titleOnly', S.pres.size)[0], id: uid() }; slide.objects.unshift(t); }
+            setPlainText(t.text, inp.value.trim());
+          }, { scope: 'all' });
+          draw();
+        } }, '제목 넣기'));
+      }
+      if (it.fix === 'order' && o) fixes.push(el('button', { class: 'btn small', onclick: () => { change(() => { slide.objects = [o, ...slide.objects.filter((x) => x !== o)]; }); draw(); } }, '제목을 맨 앞 읽기 순서로'));
+      if (it.fix === 'contrast' && o) fixes.push(el('button', { class: 'btn small', onclick: () => { go(); run('formatPane', 'shape'); } }, '서식 열기'));
+      body.append(el('div', { class: `a11y-item ${it.level}` },
+        el('div', { class: 'a11y-head', onclick: go }, el('span', {}, LVL[it.level][1]), el('b', {}, it.rule), el('span', { class: 'muted' }, ` · 슬라이드 ${it.slide + 1}${o ? ` · ${o.name ?? objLabel(o, slide.objects.indexOf(o))}` : ''}`)),
+        el('div', { class: 'muted' }, it.msg),
+        fixes.length ? el('div', { class: 'a11y-fix' }, fixes) : ''));
     }
+  };
+  draw();
+  openDialog({ title: '접근성 검사', body, width: 640, buttons: [{ label: '다시 검사', action: () => { draw(); return false; } }, { label: '닫기' }] });
+}
+
+/** 사진 앨범 (새로 만들기 / 편집): 그림 목록 · 레이아웃 · 프레임 · 캡션 · 흑백 */
+function photoAlbumDialog(edit = false) {
+  const prev = S.pres.album ?? null;
+  if (edit && !prev) { toast('이 프레젠테이션에 사진 앨범이 없습니다'); return; }
+  const st = { pics: edit ? JSON.parse(JSON.stringify(prev.pictures)) : [], opts: { layout: 'fit', frame: 'rect', captions: false, bw: false, title: '사진 앨범', ...(edit ? prev.opts : {}) } };
+  const list = el('div', { class: 'album-list' });
+  const prevBox = el('div', { class: 'album-prev' });
+  let selIdx = 0;
+  const drawList = () => {
+    list.innerHTML = '';
+    st.pics.forEach((p, i) => list.append(el('div', { class: `album-row${i === selIdx ? ' on' : ''}`, onclick: () => { selIdx = i; drawList(); } }, el('span', {}, `${i + 1}. ${p.name}`))));
+    const p = st.pics[selIdx];
+    prevBox.innerHTML = p ? `<img src="${S.pres.media[p.media]}" alt="" style="max-width:100%;max-height:160px;${st.opts.bw ? 'filter:grayscale(1)' : ''}">` : '<span class="muted">그림을 넣으세요</span>';
+  };
+  const addFiles = () => pickFile('image/*', true).then(async (files) => {
+    for (const f of [].concat(files ?? [])) {
+      const r = await readImageFile(f);
+      if (r) st.pics.push({ media: addMedia(r.url), w: r.w, h: r.h, name: f.name.replace(/\.[^.]+$/, '') });
+    }
+    drawList();
   });
-  const body = issues.length ? el('table', { class: 'kbd-table' }, issues.map(([i, t, d]) => el('tr', { class: 'clickable', onclick: () => goSlide(i) }, el('td', {}, `슬라이드 ${i + 1}`), el('td', {}, el('b', {}, t), el('div', { class: 'muted' }, d))))) : el('p', {}, '문제가 없습니다. 접근성 검사를 통과했습니다.');
-  openDialog({ title: `접근성 검사 (${issues.length}건)`, body, width: 560, buttons: [{ label: '닫기' }] });
+  const move = (d) => { const j = selIdx + d; if (j < 0 || j >= st.pics.length) return; [st.pics[selIdx], st.pics[j]] = [st.pics[j], st.pics[selIdx]]; selIdx = j; drawList(); };
+  const sel = (key, opts) => { const s0 = el('select', {}, opts.map(([k, l]) => el('option', { value: k, selected: st.opts[key] === k }, l))); s0.addEventListener('change', () => { st.opts[key] = s0.value; }); return s0; };
+  const chk = (key, label) => { const c = el('input', { type: 'checkbox', checked: !!st.opts[key] }); c.addEventListener('change', () => { st.opts[key] = c.checked; drawList(); }); return el('label', { class: 'row' }, c, el('span', {}, label)); };
+  const title = el('input', { type: 'text', value: st.opts.title });
+  openDialog({
+    title: edit ? '사진 앨범 편집' : '사진 앨범', width: 640,
+    body: el('div', { class: 'album' },
+      el('div', { class: 'album-col' },
+        el('div', { class: 'menu-title' }, '앨범 내용'),
+        el('button', { class: 'btn small', onclick: addFiles }, '파일/디스크(F)...'),
+        list,
+        el('div', { class: 'pane-btns' }, el('button', { class: 'btn small', onclick: () => move(-1) }, '↑'), el('button', { class: 'btn small', onclick: () => move(1) }, '↓'), el('button', { class: 'btn small', onclick: () => { st.pics.splice(selIdx, 1); selIdx = Math.max(0, selIdx - 1); drawList(); } }, '제거'))),
+      el('div', { class: 'album-col' },
+        el('div', { class: 'menu-title' }, '미리 보기'), prevBox,
+        el('div', { class: 'menu-title' }, '그림 옵션'), chk('captions', '모든 그림 아래에 캡션'), chk('bw', '모든 그림을 흑백으로'),
+        el('div', { class: 'menu-title' }, '앨범 레이아웃'),
+        el('label', { class: 'row' }, el('span', {}, '그림 레이아웃'), sel('layout', ALBUM_LAYOUTS.map(([k, l]) => [k, l]))),
+        el('label', { class: 'row' }, el('span', {}, '프레임 모양'), sel('frame', ALBUM_FRAMES)),
+        el('label', { class: 'row' }, el('span', {}, '앨범 제목'), title))),
+    buttons: [{ label: edit ? '업데이트' : '만들기', primary: true, action: () => {
+      if (!st.pics.length) { toast('그림을 넣으세요'); return false; }
+      st.opts.title = title.value || '사진 앨범';
+      const slides = albumSlides(S.pres, st.pics, st.opts);
+      change(() => {
+        if (edit) {
+          // 기존 앨범 슬라이드 자리를 새 것으로
+          const at = Math.max(0, S.pres.slides.findIndex((x) => x.album));
+          S.pres.slides = S.pres.slides.filter((x) => !x.album);
+          S.pres.slides.splice(Math.min(at, S.pres.slides.length), 0, ...slides);
+        } else S.pres.slides.splice(S.cur + 1, 0, ...slides);
+        S.pres.album = { pictures: st.pics, opts: st.opts };
+      }, { scope: 'all' });
+      goSlide(S.pres.slides.indexOf(slides[0]));
+      toast(`사진 ${st.pics.length}장으로 앨범 슬라이드 ${slides.length}장을 만들었습니다`);
+    } }, { label: '취소' }],
+  });
+  drawList();
+}
+
+/** 프레젠테이션 비교 (PowerPoint [검토 › 비교]): 다른 파일과 차이를 보고 골라서 적용 */
+async function compareDialog() {
+  const f = await pickFile('.pptx,.json');
+  if (!f) return;
+  let other;
+  try {
+    const bytes = new Uint8Array(await f.arrayBuffer());
+    other = /\.json$/i.test(f.name) ? JSON.parse(new TextDecoder().decode(bytes)) : readPptx(bytes).pres;
+  } catch (e) { alertDialog('비교', `파일을 읽지 못했습니다: ${e.message}`); return; }
+  const changes = compareDecks(S.pres, other);
+  if (!changes.length) { alertDialog('비교', `"${f.name}" 과(와) 다른 점이 없습니다.`); return; }
+  const done = new Set();
+  const body = el('div', { class: 'cmp' });
+  const KIND = { slideAdded: '➕', slideRemoved: '➖', slideMoved: '↕', objAdded: '＋', objRemoved: '－', text: '✎', objMoved: '⤢', format: '🎨', notes: '📝', transition: '⇄' };
+  const draw = () => {
+    body.innerHTML = '';
+    body.append(el('p', { class: 'muted' }, `"${f.name}" 과(와) 비교한 변경 ${changes.length}건 — 적용할 변경을 고르세요. 적용한 뒤에도 실행 취소(Ctrl+Z)로 되돌릴 수 있습니다.`));
+    for (const ch of changes) {
+      const cb = el('input', { type: 'checkbox', checked: !done.has(ch.id), disabled: done.has(ch.id), 'data-id': ch.id });
+      body.append(el('label', { class: `cmp-row${done.has(ch.id) ? ' done' : ''}` }, cb, el('span', { class: 'cmp-ic' }, KIND[ch.kind] ?? '•'), el('span', { onclick: () => goSlide(Math.min(ch.slide, S.pres.slides.length - 1)) }, el('b', {}, ch.label), el('span', { class: 'muted' }, ` ${ch.detail ?? ''}`)), done.has(ch.id) ? el('span', { class: 'muted' }, ' (적용됨)') : ''));
+    }
+  };
+  const apply = (ids) => {
+    // 슬라이드 삭제 · 이동은 뒤에서 (번호가 바뀌지 않게)
+    const order = { slideRemoved: 2, slideMoved: 1 };
+    const list = changes.filter((c) => ids.has(c.id) && !done.has(c.id)).sort((a, b) => (order[a.kind] ?? 0) - (order[b.kind] ?? 0));
+    if (!list.length) return;
+    change(() => { for (const c of list) { applyChange(S.pres, c, other.media ?? {}); done.add(c.id); } }, { scope: 'all' });
+    if (S.cur >= S.pres.slides.length) goSlide(S.pres.slides.length - 1);
+    draw();
+  };
+  draw();
+  openDialog({
+    title: '검토: 비교', width: 640, body,
+    buttons: [
+      { label: '선택한 변경 적용', primary: true, action: () => { apply(new Set([...body.querySelectorAll('input[data-id]:checked:not(:disabled)')].map((x) => x.dataset.id))); return false; } },
+      { label: '모두 적용', action: () => { apply(new Set(changes.map((c) => c.id))); return false; } },
+      { label: '검토 끝내기' },
+    ],
+  });
 }
 
 function statsDialog() {
@@ -2446,7 +2581,11 @@ register({
     toast('새로 그리는 도형에 이 서식을 씁니다');
   },
   // 사진 앨범: 그림마다 슬라이드 하나 (제목 = 파일 이름)
-  photoAlbum: () => {
+  photoAlbum: () => photoAlbumDialog(false),
+  editPhotoAlbum: () => photoAlbumDialog(true),
+  photoAlbumMenu: (a) => menuAt(a, [{ label: '새 사진 앨범(A)...', action: () => photoAlbumDialog(false) }, { label: '사진 앨범 편집(E)...', disabled: !S.pres.album, action: () => photoAlbumDialog(true) }]),
+  compare: () => compareDialog(),
+  photoAlbumQuick: () => {
     const inp = document.createElement('input');
     inp.type = 'file'; inp.accept = 'image/*'; inp.multiple = true;
     inp.addEventListener('change', async () => {

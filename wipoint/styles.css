@@ -777,3 +777,28 @@ body.mobile .smart-cats { flex-direction: row; flex-wrap: wrap; border: 0; }
 .fx-opts .row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
 .fx-opts .row > span:first-child { min-width: 110px; }
 .c3-prev { margin-top: 8px; text-align: center; background: #fff; border: 1px solid #e0e0e0; }
+/* 접근성 검사 · 사진 앨범 · 비교 */
+.a11y { max-height: 60vh; overflow: auto; }
+.a11y-sum { display: flex; gap: 8px; margin-bottom: 8px; }
+.a11y-badge { padding: 2px 8px; border-radius: 10px; background: #f3f3f3; font-size: 12px; }
+.a11y-badge.error { background: #fde7e9; color: #a4262c; }
+.a11y-badge.warning { background: #fff4ce; color: #8a6100; }
+.a11y-item { border-left: 3px solid #ccc; padding: 6px 8px; margin: 6px 0; background: #fafafa; }
+.a11y-item.error { border-color: #d13438; }
+.a11y-item.warning { border-color: #c19c00; }
+.a11y-item.tip { border-color: #0078d4; }
+.a11y-head { display: flex; gap: 6px; align-items: baseline; cursor: pointer; }
+.a11y-fix { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+.a11y-fix input[type=text] { flex: 1; min-width: 180px; }
+.album { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.album-col { display: flex; flex-direction: column; gap: 6px; }
+.album-col .row { display: flex; align-items: center; gap: 8px; }
+.album-col .row > span:first-child { min-width: 84px; }
+.album-list { border: 1px solid #ccc; height: 200px; overflow: auto; background: #fff; }
+.album-row { padding: 3px 6px; cursor: pointer; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.album-row.on { background: var(--accent); color: #fff; }
+.album-prev { border: 1px solid #ddd; height: 170px; display: grid; place-items: center; background: #f6f6f6; }
+.cmp { max-height: 60vh; overflow: auto; }
+.cmp-row { display: flex; gap: 8px; align-items: baseline; padding: 4px 2px; border-bottom: 1px solid #eee; cursor: pointer; }
+.cmp-row.done { opacity: .55; }
+.cmp-ic { width: 18px; text-align: center; }

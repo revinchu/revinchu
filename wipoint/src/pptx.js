@@ -159,6 +159,8 @@ function txBodyXml(o, body, ctx, tag = 'p:txBody') {
 
 const PH_TYPE = { ctrTitle: 'ctrTitle', title: 'title', subTitle: 'subTitle', body: 'body', obj: 'obj', pic: 'pic', dt: 'dt', ftr: 'ftr', sldNum: 'sldNum', tbl: 'tbl', chart: 'chart' };
 
+/** 장식용 개체 (PowerPoint [장식용으로 표시]: 화면 읽기 프로그램이 건너뜀) */
+const decoXml = (o) => (o.decorative ? '<a:extLst><a:ext uri="{C183D7F6-B498-43B3-948B-1728B52AA6E4}"><adec:decorative xmlns:adec="http://schemas.microsoft.com/office/drawing/2017/decorative" val="1"/></a:ext></a:extLst>' : '');
 function phXml(o, phIdx) {
   if (!o.ph || !phIdx) return '<p:nvPr/>';
   const info = phIdx.get(o.id);
@@ -178,7 +180,7 @@ function shapeXml(o, id, ctx, phIdx) {
   const effect = fxXml(fxOf(o));
   const spPr = `<p:spPr>${xfrmXml(o)}${geomXml(o)}${o.ph ? (o.fill ? fillXml(o.fill, ctx) : '') : fillXml(o.fill, ctx)}${o.ph && !o.line ? '' : lineXml(o.line)}${effect}</p:spPr>`;
   const text = o.text ? txBodyXml(o, o.text, ctx) : '';
-  return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${name}"${o.alt ? ` descr="${esc(o.alt)}"` : ''}>${link}</p:cNvPr><p:cNvSpPr${o.txBox ? ' txBox="1"' : ''}>${o.ph ? '<a:spLocks noGrp="1"/>' : ''}</p:cNvSpPr>${phXml(o, phIdx)}</p:nvSpPr>${spPr}${text}</p:sp>`;
+  return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${name}"${o.alt ? ` descr="${esc(o.alt)}"` : ''}>${link}${decoXml(o)}</p:cNvPr><p:cNvSpPr${o.txBox ? ' txBox="1"' : ''}>${o.ph ? '<a:spLocks noGrp="1"/>' : ''}</p:cNvSpPr>${phXml(o, phIdx)}</p:nvSpPr>${spPr}${text}</p:sp>`;
 }
 
 function picXml(o, id, ctx, phIdx) {
@@ -197,7 +199,7 @@ function picXml(o, id, ctx, phIdx) {
   // 꾸밈 효과: 결과 그림이 본 그림, 원본과 효과는 WIPOINT 확장에 (PowerPoint 는 결과 그림을 보여 줌)
   const origRid = o.art && o.artOrig ? ctx.image(o.artOrig) : null;
   const artExt = o.art ? `<a:extLst><a:ext uri="${WP_EXT_URI}"><wp:art xmlns:wp="${WP_NS}" json="${esc(JSON.stringify(o.art))}"${origRid ? ` r:embed="${origRid}"` : ''}/></a:ext></a:extLst>` : '';
-  return `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="${esc(o.name ?? `Picture ${id}`)}" descr="${esc(o.alt ?? '')}">${link}</p:cNvPr><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr>${o.ph ? phXml(o, phIdx) : '<p:nvPr/>'}</p:nvPicPr><p:blipFill><a:blip r:embed="${rid}">${alpha}${gray}${lum}${artExt}</a:blip>${src}<a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr>${xfrmXml(o)}${geomXml({ shape: o.shape ?? 'rect', adj: o.adj })}${o.line ? lineXml(o.line) : ''}${effect}</p:spPr></p:pic>`;
+  return `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="${esc(o.name ?? `Picture ${id}`)}" descr="${esc(o.alt ?? '')}">${link}${decoXml(o)}</p:cNvPr><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr>${o.ph ? phXml(o, phIdx) : '<p:nvPr/>'}</p:nvPicPr><p:blipFill><a:blip r:embed="${rid}">${alpha}${gray}${lum}${artExt}</a:blip>${src}<a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr>${xfrmXml(o)}${geomXml({ shape: o.shape ?? 'rect', adj: o.adj })}${o.line ? lineXml(o.line) : ''}${effect}</p:spPr></p:pic>`;
 }
 
 function tableXml(o, id, ctx, theme) {
@@ -1673,6 +1675,7 @@ export function readPptx(input, opts = {}) {
       const o = { id: uid(), type: 'image', ...rect, media: mid, name: attr(cNvPr, 'name') };
       if (sr) o.crop = { l: num(attr(sr, 'l')) / 100000, t: num(attr(sr, 't')) / 100000, r: num(attr(sr, 'r')) / 100000, b: num(attr(sr, 'b')) / 100000 };
       if (attr(cNvPr, 'descr')) o.alt = attr(cNvPr, 'descr');
+      if (attr(descendants(cNvPr, 'decorative')[0], 'val') === '1') o.decorative = true;
       const g = readGeom(spPr);
       if (g.shape && g.shape !== 'rect') { o.shape = g.shape; if (g.adj) o.adj = g.adj; }
       const ln = readLine(child(spPr, 'ln'), ctx);
