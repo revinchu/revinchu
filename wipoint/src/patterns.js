@@ -1,4 +1,4 @@
-// 무늬 채우기 (DrawingML a:pattFill 미리 설정 48종) — DOM 없음
+// 무늬 채우기 (DrawingML a:pattFill 미리 설정 54종) — DOM 없음
 // 8×8 비트맵 (행마다 8비트, 1 = 전경색). PowerPoint 의 무늬와 같은 모양.
 
 export const PATTERNS = {

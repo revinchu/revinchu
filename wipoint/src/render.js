@@ -191,9 +191,37 @@ function runColor(theme, o, r) {
   return resolveColor(theme, r.color ?? defaultColor(o), '#000');
 }
 
+/** 지금 그리는 슬라이드 번호 (필드 slidenum 용, slideHtml 이 정함) */
+let FIELD_SLIDE_NO = 1;
+/** 필드 (슬라이드 번호 · 날짜 · 시간) 의 화면 글자 */
+function fieldText(r) {
+  const t = r.fld?.type ?? '';
+  if (t === 'slidenum') return String(FIELD_SLIDE_NO);
+  const m = /^datetime(\d*)$/.exec(t);
+  if (!m) return r.t;
+  const d = new Date();
+  const y = d.getFullYear(); const mo = d.getMonth() + 1; const day = d.getDate();
+  const hh = d.getHours(); const mm = String(d.getMinutes()).padStart(2, '0');
+  const n = Number(m[1] || 1);
+  if (n >= 10) return n === 10 || n === 12 ? `${hh}:${mm}` : `${hh < 12 ? '오전' : '오후'} ${((hh + 11) % 12) + 1}:${mm}`;
+  if (n === 2 || n === 4) return `${y}년 ${mo}월 ${day}일`;
+  if (n === 3) return `${y}년 ${mo}월 ${day}일 ${'일월화수목금토'[d.getDay()]}요일`;
+  return `${y}-${String(mo).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+// 밑줄 종류 → CSS text-decoration-style / 굵기
+const U_STYLE = (u) => (/dbl/i.test(u) ? 'double' : /wavy/i.test(u) ? 'wavy' : /^dotted|^dot(?!Dash)/i.test(u) ? 'dotted' : /dash/i.test(u) ? 'dashed' : 'solid');
+
 function runHtml(theme, o, p, r, fsc, editable) {
   const size = (r.size ?? defaultSize(o, p.lvl ?? 0)) * fsc;
   const deco = [r.u ? 'underline' : '', r.s ? 'line-through' : ''].filter(Boolean).join(' ');
+  const uStyle = typeof r.u === 'string' ? U_STYLE(r.u) : r.s === 'dbl' && !r.u ? 'double' : '';
+  // 글자 그림자 · 네온 (glow)
+  const shadows = [];
+  if (r.glow) { const gc = resolveColor(theme, r.glow.color ?? '@accent1', '#ffc000'); const rad = f((r.glow.rad ?? 5) * PX_PER_PT); shadows.push(`0 0 ${rad}px ${gc}`, `0 0 ${f(rad / 2)}px ${gc}`); }
+  if (r.shadow === true) shadows.push('1px 1.5px 2px rgba(0,0,0,.45)');
+  else if (r.shadow) { const a = ((r.shadow.dir ?? 45) * Math.PI) / 180; const dd = (r.shadow.dist ?? 3) * PX_PER_PT; shadows.push(`${f(Math.cos(a) * dd)}px ${f(Math.sin(a) * dd)}px ${f((r.shadow.blur ?? 3) * PX_PER_PT)}px ${resolveColor(theme, r.shadow.color ?? '#000000:a43', 'rgba(0,0,0,.4)')}`); }
+  // 글자 채우기: 그라데이션 (WordArt) · 채우기 없음 (윤곽선만)
+  const textFill = r.fill?.type === 'gradient' ? `background:${fillCss(theme, r.fill)};-webkit-background-clip:text;background-clip:text;color:transparent` : r.fill?.type === 'none' ? 'color:transparent' : '';
   const font = r.font ?? defaultFont(o);
   // 기호 글꼴 글자는 화면에만 유니코드로 (편집 중에는 원래 글자 그대로)
   const sym = !editable && symbolTable(font);
@@ -204,15 +232,20 @@ function runHtml(theme, o, p, r, fsc, editable) {
     (r.b ?? (o.phKind?.head && r.b !== false)) ? 'font-weight:700' : '',
     r.i ? 'font-style:italic' : '',
     deco ? `text-decoration:${deco}` : '',
-    r.hl ? `background:${resolveColor(theme, r.hl)}` : '',
+    uStyle && uStyle !== 'solid' ? `text-decoration-style:${uStyle}` : '',
+    typeof r.u === 'string' && /heavy/i.test(r.u) ? 'text-decoration-thickness:.12em' : '',
+    r.u && r.uColor ? `text-decoration-color:${resolveColor(theme, r.uColor)}` : '',
+    r.hl && !textFill ? `background:${resolveColor(theme, r.hl)}` : '',
+    textFill,
     r.spc ? `letter-spacing:${f(r.spc * PX_PER_PT)}px` : '',
     r.base ? `vertical-align:${r.base > 0 ? 'super' : 'sub'};font-size:${f(size * PX_PER_PT * 0.65)}px` : '',
     r.cap === 'all' ? 'text-transform:uppercase' : r.cap === 'small' ? 'font-variant:small-caps' : '',
-    r.shadow ? 'text-shadow:1px 1.5px 2px rgba(0,0,0,.45)' : '',
+    shadows.length ? `text-shadow:${shadows.join(',')}` : '',
     r.outline ? `-webkit-text-stroke:${f(r.outline.width ?? 1)}px ${resolveColor(theme, r.outline.color ?? '@tx1')}` : '',
   ].filter(Boolean).join(';');
   const attr = editable ? ` data-r="${escHtml(JSON.stringify({ ...r, t: undefined }))}"` : '';
-  const txt = escHtml(sym ? symbolText(font, r.t) : r.sym && !editable ? symbolText(r.sym, r.t, true) : r.t).replace(/\v|\u000b/g, '<br>');
+  const shownT = r.fld && !editable ? fieldText(r) : r.t;
+  const txt = escHtml(sym ? symbolText(font, shownT) : r.sym && !editable ? symbolText(r.sym, shownT, true) : shownT).replace(/\v|\u000b/g, '<br>');
   if (r.link && !editable) return `<a class="lnk" href="${escHtml(r.link)}" target="_blank" rel="noopener" style="${st}">${txt}</a>`;
   return `<span style="${st}"${attr}>${txt}</span>`;
 }
@@ -315,15 +348,61 @@ export function shapeHtml(theme, o, media, opts = {}) {
 }
 
 /** 글 영역 (도형 모양 안쪽 + 여백) */
+// WordArt 변환 (prstTxWarp): 글 영역 (W × H) 안의 기준 경로 + 대략의 길이
+const ell = (a, b) => Math.PI * (3 * (a + b) - Math.sqrt((3 * a + b) * (a + 3 * b)));
+const WARP_PATHS = {
+  textArchUp: (W, H) => [`M0 ${f(H / 2)} A${f(W / 2)} ${f(H / 2)} 0 0 1 ${f(W)} ${f(H / 2)}`, ell(W / 2, H / 2) / 2],
+  textArchDown: (W, H) => [`M0 ${f(H / 2)} A${f(W / 2)} ${f(H / 2)} 0 0 0 ${f(W)} ${f(H / 2)}`, ell(W / 2, H / 2) / 2],
+  textCircle: (W, H) => [`M0 ${f(H / 2)} A${f(W / 2)} ${f(H / 2)} 0 1 1 ${f(W)} ${f(H / 2)} A${f(W / 2)} ${f(H / 2)} 0 1 1 0 ${f(H / 2)}`, ell(W / 2, H / 2)],
+  textButton: (W, H) => [`M0 ${f(H / 2)} A${f(W / 2)} ${f(H / 2)} 0 0 1 ${f(W)} ${f(H / 2)}`, ell(W / 2, H / 2) / 2],
+  textWave1: (W, H) => [`M0 ${f(H * 0.55)} C${f(W / 3)} ${f(H * 0.15)} ${f((W * 2) / 3)} ${f(H * 0.95)} ${f(W)} ${f(H * 0.55)}`, W * 1.08],
+  textWave2: (W, H) => [`M0 ${f(H * 0.55)} C${f(W / 3)} ${f(H * 0.95)} ${f((W * 2) / 3)} ${f(H * 0.15)} ${f(W)} ${f(H * 0.55)}`, W * 1.08],
+  textDoubleWave1: (W, H) => [`M0 ${f(H * 0.55)} C${f(W / 6)} ${f(H * 0.2)} ${f(W / 3)} ${f(H * 0.9)} ${f(W / 2)} ${f(H * 0.55)} S${f((W * 5) / 6)} ${f(H * 0.2)} ${f(W)} ${f(H * 0.55)}`, W * 1.12],
+  textCurveUp: (W, H) => [`M0 ${f(H * 0.85)} Q${f(W / 2)} ${f(-H * 0.1)} ${f(W)} ${f(H * 0.35)}`, W * 1.1],
+  textCurveDown: (W, H) => [`M0 ${f(H * 0.35)} Q${f(W / 2)} ${f(-H * 0.1)} ${f(W)} ${f(H * 0.85)}`, W * 1.1],
+  textSlantUp: (W, H) => [`M0 ${f(H * 0.85)} L${f(W)} ${f(H * 0.3)}`, Math.hypot(W, H * 0.55)],
+  textSlantDown: (W, H) => [`M0 ${f(H * 0.3)} L${f(W)} ${f(H * 0.85)}`, Math.hypot(W, H * 0.55)],
+  textTriangle: (W, H) => [`M0 ${f(H)} L${f(W / 2)} ${f(H * 0.2)} L${f(W)} ${f(H)}`, 2 * Math.hypot(W / 2, H * 0.8)],
+  textTriangleInverted: (W, H) => [`M0 ${f(H * 0.2)} L${f(W / 2)} ${f(H)} L${f(W)} ${f(H * 0.2)}`, 2 * Math.hypot(W / 2, H * 0.8)],
+  textChevron: (W, H) => [`M0 ${f(H * 0.7)} L${f(W / 2)} ${f(H * 0.3)} L${f(W)} ${f(H * 0.7)}`, 2 * Math.hypot(W / 2, H * 0.4)],
+  textChevronInverted: (W, H) => [`M0 ${f(H * 0.3)} L${f(W / 2)} ${f(H * 0.7)} L${f(W)} ${f(H * 0.3)}`, 2 * Math.hypot(W / 2, H * 0.4)],
+};
+/** WordArt 변환 글 (편집 중이 아닐 때): 모든 단락을 한 줄로 경로를 따라 */
+function warpHtml(theme, o, body, x, y, W, H) {
+  const mk = WARP_PATHS[body.warp?.prst];
+  if (!mk || W <= 0 || H <= 0) return '';
+  const [d, len] = mk(W, H);
+  const runs = body.paras.flatMap((p, i) => [...(i ? [{ t: ' ', size: p.runs[0]?.size }] : []), ...p.runs.map((r) => ({ ...r, _p: p }))]).filter((r) => r.t);
+  if (!runs.length) return '';
+  const id = nextId();
+  const p0 = body.paras[0] ?? {};
+  const spans = runs.map((r) => {
+    const p = r._p ?? p0;
+    const size = (r.size ?? defaultSize(o, p.lvl ?? 0)) * PX_PER_PT * (body.fontScale ?? 1);
+    const col = r.fill?.type === 'gradient' ? resolveColor(theme, r.fill.stops?.[0]?.[1] ?? r.color, '#000') : r.fill?.type === 'none' ? 'none' : runColor(theme, o, r);
+    const stroke = r.outline ? ` stroke="${resolveColor(theme, r.outline.color ?? '@tx1')}" stroke-width="${f(r.outline.width ?? 1)}"` : '';
+    return `<tspan font-size="${f(size)}" fill="${col}"${stroke}${(r.b ?? (o.phKind?.head && r.b !== false)) ? ' font-weight="700"' : ''}${r.i ? ' font-style="italic"' : ''} font-family="${escHtml(fontStack(theme, r.font ?? defaultFont(o)))}">${escHtml(r.fld ? fieldText(r) : r.t)}</tspan>`;
+  }).join('');
+  return `<svg class="warp" width="${f(W)}" height="${f(H)}" style="position:absolute;left:${f(x)}px;top:${f(y)}px;overflow:visible" aria-hidden="true"><path id="${id}" d="${d}" fill="none"/><text dominant-baseline="middle"><textPath href="#${id}" startOffset="50%" text-anchor="middle" textLength="${f(len * 0.96)}" lengthAdjust="spacingAndGlyphs">${spans}</textPath></text></svg>`;
+}
+
 export function textBoxHtml(theme, o, body, w, h, opts = {}) {
   const [l, t, r, b] = o.txBox || o.ph ? [0, 0, w, h] : textRect(o.shape ?? 'rect', w, h, o.adj);
   const ins = body.insets ?? [9.6, 4.8, 9.6, 4.8];
+  if (body.warp && !opts.editable && WARP_PATHS[body.warp.prst]) {
+    const wx = l + ins[0]; const wy = t + ins[1];
+    const wh = warpHtml(theme, o, body, wx, wy, Math.max(1, r - l - ins[0] - ins[2]), Math.max(1, b - t - ins[1] - ins[3]));
+    if (wh) return `<div class="tx" data-tx="${escHtml(o.id)}" style="position:absolute;inset:0">${wh}</div>`;
+  }
   const jc = { t: 'flex-start', ctr: 'center', b: 'flex-end' }[body.anchor ?? 't'] ?? 'flex-start';
   const vert = body.vert === 'vert' || body.vert === 'eaVert' ? 'writing-mode:vertical-rl;' : body.vert === 'vert270' ? 'writing-mode:vertical-rl;transform:rotate(180deg);' : '';
   const prompt = opts.prompt && o.ph && isEmptyText(body);
   const cls = `tx${prompt ? ' empty-ph' : ''}`;
   const st = `position:absolute;left:${f(l + ins[0])}px;top:${f(t + ins[1])}px;width:${f(Math.max(1, r - l - ins[0] - ins[2]))}px;height:${f(Math.max(1, b - t - ins[1] - ins[3]))}px;display:flex;flex-direction:column;justify-content:${jc};${body.wrap === false ? 'white-space:pre;' : 'white-space:pre-wrap;overflow-wrap:break-word;word-break:keep-all;'}${vert}`;
-  return `<div class="${cls}" data-tx="${escHtml(o.id)}" style="${st}"><div class="txi">${textHtml(theme, o, body, { editable: opts.editable, prompt })}</div></div>`;
+  // 단 나누기 (numCol) · 글 회전 (bodyPr rot)
+  const colSt = body.cols > 1 ? ` style="column-count:${body.cols};column-gap:${f(body.colSpc ?? 0)}px;column-fill:auto;height:100%"` : '';
+  const rotSt = body.rot ? `transform:rotate(${f(body.rot)}deg);` : '';
+  return `<div class="${cls}" data-tx="${escHtml(o.id)}" style="${st}${rotSt}"><div class="txi"${colSt}>${textHtml(theme, o, body, { editable: opts.editable, prompt })}</div></div>`;
 }
 
 function imageHtml(theme, o, media, opts) {
@@ -504,6 +583,7 @@ export function slideHtml(pres, slide, opts = {}) {
   const svgBg = bgFill?.type === 'image' && bgFill.duotone;
   const bg = svgBg ? '#ffffff' : fillCss(theme, bgFill, media);
   if (!opts.zoomDepth) setMasterText(pres);
+  if (!opts.zoomDepth) FIELD_SLIDE_NO = (opts.index ?? 0) + 1;
   const decor = slideDecor(pres, slide);
   let html = '';
   if (svgBg) {

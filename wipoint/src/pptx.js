@@ -127,17 +127,22 @@ function rPrXml(r, o, p, ctx, tag = 'a:rPr', fallbackSize) {
   const bold = r.b ?? (o.phKind?.head ? true : undefined);
   const attrs = [
     'lang="ko-KR"', 'altLang="en-US"', `sz="${Math.round(size * 100)}"`,
-    bold != null ? `b="${bold ? 1 : 0}"` : '', r.i ? 'i="1"' : '', r.u ? 'u="sng"' : '', r.s ? 'strike="sngStrike"' : '',
+    bold != null ? `b="${bold ? 1 : 0}"` : '', r.i ? 'i="1"' : '', r.u ? `u="${r.u === true ? 'sng' : esc(r.u)}"` : '', r.s ? `strike="${r.s === 'dbl' ? 'dblStrike' : 'sngStrike'}"` : '',
+    r.kern != null ? `kern="${Math.round(r.kern * 100)}"` : '',
     r.base ? `baseline="${r.base > 0 ? 30000 : -25000}"` : '', r.spc ? `spc="${Math.round(r.spc * 100)}"` : '',
     r.cap === 'all' ? 'cap="all"' : r.cap === 'small' ? 'cap="small"' : '', 'dirty="0"',
   ].filter(Boolean).join(' ');
   const ln = r.outline ? `<a:ln w="${Math.round((r.outline.width ?? 1) * EMU_PER_PX)}">${solidFill(r.outline.color ?? '@tx1')}</a:ln>` : '';
-  const fill = solidFill(r.color ?? defaultColor(o));
-  const eff = r.shadow ? '<a:effectLst><a:outerShdw blurRad="38100" dist="38100" dir="2700000" algn="tl"><a:prstClr val="black"><a:alpha val="43137"/></a:prstClr></a:outerShdw></a:effectLst>' : '';
+  const fill = r.fill?.type === 'none' ? '<a:noFill/>' : r.fill?.type === 'gradient' ? fillXml(r.fill) : solidFill(r.color ?? defaultColor(o));
+  const sh = r.shadow === true ? '<a:outerShdw blurRad="38100" dist="38100" dir="2700000" algn="tl"><a:prstClr val="black"><a:alpha val="43137"/></a:prstClr></a:outerShdw>'
+    : r.shadow ? `<a:outerShdw blurRad="${Math.round((r.shadow.blur ?? 3) * 12700)}" dist="${Math.round((r.shadow.dist ?? 3) * 12700)}" dir="${Math.round((r.shadow.dir ?? 45) * 60000)}" algn="tl" rotWithShape="0">${colorXml(r.shadow.color ?? '#000000:a43')}</a:outerShdw>` : '';
+  const gl = r.glow ? `<a:glow rad="${Math.round((r.glow.rad ?? 5) * 12700)}">${colorXml(r.glow.color ?? '@accent1:a40')}</a:glow>` : '';
+  const eff = gl || sh ? `<a:effectLst>${gl}${sh}</a:effectLst>` : '';
   const hl = r.hl ? `<a:highlight>${colorXml(r.hl)}</a:highlight>` : '';
+  const uf = r.u && r.uColor ? `<a:uFill>${solidFill(r.uColor)}</a:uFill>` : '';
   const link = r.link && ctx ? ctx.hlink(r.link) : '';
   const sym = r.sym ? `<a:sym typeface="${esc(r.sym)}" pitchFamily="2" charset="2"/>` : '';
-  return `<${tag} ${attrs}>${ln}${fill}${eff}${hl}${fontXml(r.font ?? defaultFont(o))}${sym}${link}</${tag}>`;
+  return `<${tag} ${attrs}>${ln}${fill}${eff}${hl}${uf}${fontXml(r.font ?? defaultFont(o))}${sym}${link}</${tag}>`;
 }
 
 function pPrXml(o, p) {
@@ -155,13 +160,25 @@ function pPrXml(o, p) {
   return `<a:pPr ${attrs}>${lnSpc}${bef}${aft}${bu}${tabs}</a:pPr>`;
 }
 
+/** 필드 id (GUID, 종류마다 고정) */
+function fldId(type) {
+  let h = 0;
+  for (const ch of String(type)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  const x = h.toString(16).toUpperCase().padStart(8, '0');
+  return `{${x}-6B2D-4C1E-9A3F-${x}5D7E}`;
+}
+
 function txBodyXml(o, body, ctx, tag = 'p:txBody') {
   const ins = body.insets ?? [9.6, 4.8, 9.6, 4.8];
   const anchor = { t: 't', ctr: 'ctr', b: 'b' }[body.anchor ?? 't'];
   const fit = body.autofit === 'resize' ? '<a:spAutoFit/>' : body.autofit === 'shrink' ? `<a:normAutofit${body.fontScale && body.fontScale < 1 ? ` fontScale="${pct(body.fontScale)}"` : ''}${body.lnSpcReduction ? ` lnSpcReduction="${pct(body.lnSpcReduction)}"` : ''}/>` : '<a:noAutofit/>';
-  const bodyPr = `<a:bodyPr vert="${body.vert ?? 'horz'}" wrap="${body.wrap === false ? 'none' : 'square'}" lIns="${E(ins[0])}" tIns="${E(ins[1])}" rIns="${E(ins[2])}" bIns="${E(ins[3])}" rtlCol="0" anchor="${anchor}" anchorCtr="0">${fit}</a:bodyPr>`;
+  const warp = body.warp ? `<a:prstTxWarp prst="${esc(body.warp.prst)}"><a:avLst>${Object.entries(body.warp.adj ?? {}).map(([k, v]) => `<a:gd name="${esc(k)}" fmla="val ${Math.round(v)}"/>`).join('')}</a:avLst></a:prstTxWarp>` : '';
+  const extra = `${body.rot ? ` rot="${Math.round(body.rot * 60000)}"` : ''}${body.cols > 1 ? ` numCol="${Math.min(16, Math.round(body.cols))}"${body.colSpc ? ` spcCol="${E(body.colSpc)}"` : ''}` : ''}${body.upright ? ' upright="1"' : ''}`;
+  const bodyPr = `<a:bodyPr${extra} vert="${body.vert ?? 'horz'}" wrap="${body.wrap === false ? 'none' : 'square'}" lIns="${E(ins[0])}" tIns="${E(ins[1])}" rIns="${E(ins[2])}" bIns="${E(ins[3])}" rtlCol="0" anchor="${anchor}" anchorCtr="${body.anchorCtr ? 1 : 0}">${warp}${fit}</a:bodyPr>`;
   const paras = body.paras.map((p) => {
     const runs = p.runs.map((r) => {
+      // 필드 (슬라이드 번호 · 날짜 …)
+      if (r.fld) return `<a:fld id="${esc(r.fld.id ?? fldId(r.fld.type))}" type="${esc(r.fld.type)}">${rPrXml(r, o, p, ctx)}<a:t>${esc(r.t || (r.fld.type === 'slidenum' ? '‹#›' : ''))}</a:t></a:fld>`;
       const parts = String(r.t).split(/\v|\u000b/);
       return parts.map((t, i) => `${i ? `<a:br>${rPrXml(r, o, p, null)}</a:br>` : ''}${t ? `<a:r>${rPrXml(r, o, p, ctx)}<a:t>${esc(t)}</a:t></a:r>` : ''}`).join('');
     }).join('');
@@ -1411,13 +1428,20 @@ function readRPr(el, ctx, phClr) {
   if (a.sz) out.size = num(a.sz) / 100;
   if (a.b !== undefined) out.b = bool(a.b);
   if (a.i !== undefined) out.i = bool(a.i);
-  if (a.u && a.u !== 'none') out.u = true;
-  if (a.strike && a.strike !== 'noStrike') out.s = true;
+  // 밑줄 종류 (sng = true, 그 밖은 이름: dbl · heavy · dotted · dash · wavy …), 취소선 이중
+  if (a.u && a.u !== 'none') out.u = a.u === 'sng' ? true : a.u;
+  if (a.strike && a.strike !== 'noStrike') out.s = a.strike === 'dblStrike' ? 'dbl' : true;
+  const uFill = child(child(el, 'uFill'), 'solidFill');
+  if (uFill) out.uColor = readColor(uFill, ctx, phClr);
+  if (a.kern !== undefined) out.kern = num(a.kern) / 100;
   if (a.baseline && num(a.baseline) !== 0) out.base = num(a.baseline) > 0 ? 1 : -1;
   if (a.spc) out.spc = num(a.spc) / 100;
   if (a.cap && a.cap !== 'none') out.cap = a.cap;
   const fillEl = child(el, 'solidFill') ?? child(el, 'gradFill');
   if (fillEl) out.color = readColor(fillEl.name === 'gradFill' ? descendants(fillEl, 'gs')[0] : fillEl, ctx, phClr);
+  // 글자 그라데이션 · 채우기 없음 (WordArt): 색은 첫 지점 색도 같이 둠 (편집 · 대체용)
+  if (fillEl?.name === 'gradFill') { const g = readFill({ children: [fillEl] }, ctx, phClr); if (g?.type === 'gradient') out.fill = g; }
+  if (child(el, 'noFill')) out.fill = { type: 'none' };
   const hl = child(el, 'highlight');
   if (hl) out.hl = readColor(hl, ctx);
   const ea = attr(child(el, 'ea'), 'typeface');
@@ -1426,7 +1450,17 @@ function readRPr(el, ctx, phClr) {
   if (font) out.font = font.startsWith('+mj') ? '+mj' : font.startsWith('+mn') ? '+mn' : font;
   const sym = attr(child(el, 'sym'), 'typeface');
   if (sym && !/^\+/.test(sym)) out.sym = sym;
-  if (child(child(el, 'effectLst'), 'outerShdw')) out.shadow = true;
+  const eff = child(el, 'effectLst');
+  const sh = child(eff, 'outerShdw');
+  if (sh) {
+    // 기본 그림자 (blur 3pt · dist 3pt · 45° · 검정 43%) 는 true, 다르면 값 그대로
+    const col = readColor(sh, ctx, phClr) ?? '#000000';
+    const v = { blur: num(attr(sh, 'blurRad')) / 12700, dist: num(attr(sh, 'dist')) / 12700, dir: num(attr(sh, 'dir')) / 60000, color: col };
+    const isDef = Math.abs(v.blur - 3) < 0.05 && Math.abs(v.dist - 3) < 0.05 && Math.abs(v.dir - 45) < 0.5 && /^#000000:a4[23]/.test(col);
+    out.shadow = isDef ? true : v;
+  }
+  const gl = child(eff, 'glow');
+  if (gl) out.glow = { rad: num(attr(gl, 'rad')) / 12700, color: readColor(gl, ctx, phClr) ?? '#FFC000' };
   const ln = child(el, 'ln');
   if (ln && !child(ln, 'noFill') && child(ln, 'solidFill')) out.outline = { color: readColor(child(ln, 'solidFill'), ctx), width: PX(attr(ln, 'w') ?? 9525) };
   const link = child(el, 'hlinkClick');
@@ -1467,6 +1501,17 @@ function readBodyPr(bp) {
   const nf = child(bp, 'normAutofit');
   if (nf) { out.autofit = 'shrink'; if (attr(nf, 'fontScale')) out.fontScale = num(attr(nf, 'fontScale')) / 100000; if (attr(nf, 'lnSpcReduction')) out.lnSpcReduction = num(attr(nf, 'lnSpcReduction')) / 100000; }
   if (child(bp, 'noAutofit')) out.autofit = 'none';
+  // 단 (numCol · spcCol), 글 회전, 똑바로 세우기, WordArt 변환 (prstTxWarp)
+  if (num(a.numCol) > 1) { out.cols = num(a.numCol); if (a.spcCol) out.colSpc = PX(a.spcCol); }
+  if (a.rot && num(a.rot)) out.rot = num(a.rot) / 60000;
+  if (bool(a.upright)) out.upright = true;
+  if (bool(a.anchorCtr)) out.anchorCtr = true;
+  const warp = child(bp, 'prstTxWarp');
+  if (warp && attr(warp, 'prst') && attr(warp, 'prst') !== 'textNoShape') {
+    const adj = {};
+    for (const gd of descendants(child(warp, 'avLst'), 'gd')) { const m = /val\s+(-?\d+)/.exec(attr(gd, 'fmla') ?? ''); if (m) adj[attr(gd, 'name')] = Number(m[1]); }
+    out.warp = { prst: attr(warp, 'prst'), ...(Object.keys(adj).length ? { adj } : {}) };
+  }
   return out;
 }
 
@@ -1491,7 +1536,9 @@ function readTxBody(tx, ctx, chain, bodyBase, fontRefColor) {
       if (c.name === 'r' || c.name === 'fld') {
         const r = { ...rp, ...readRPr(child(c, 'rPr'), ctx) };
         const t = child(c, 't')?.text ?? '';
-        if (t) runs.push(cleanRun({ t, ...r }));
+        // 필드 (슬라이드 번호 · 날짜): 종류를 두고 화면에서 현재 값으로
+        if (c.name === 'fld' && attr(c, 'type')) r.fld = { type: attr(c, 'type'), id: attr(c, 'id') };
+        if (t || r.fld) runs.push(cleanRun({ t, ...r }));
       } else if (c.name === 'br') {
         const last = runs[runs.length - 1];
         if (last) last.t += '\v'; else runs.push(cleanRun({ t: '\v', ...rp }));
@@ -1510,7 +1557,7 @@ function readTxBody(tx, ctx, chain, bodyBase, fontRefColor) {
     delete out.end.t;
     return out;
   });
-  return { paras: paras.length ? paras : [para()], anchor: bp.anchor ?? 't', insets: bp.insets ?? [9.6, 4.8, 9.6, 4.8], wrap: bp.wrap ?? true, autofit: bp.autofit ?? 'none', ...(bp.fontScale ? { fontScale: bp.fontScale } : {}), ...(bp.lnSpcReduction ? { lnSpcReduction: bp.lnSpcReduction } : {}), ...(bp.vert ? { vert: bp.vert } : {}) };
+  return { paras: paras.length ? paras : [para()], anchor: bp.anchor ?? 't', insets: bp.insets ?? [9.6, 4.8, 9.6, 4.8], wrap: bp.wrap ?? true, autofit: bp.autofit ?? 'none', ...(bp.fontScale ? { fontScale: bp.fontScale } : {}), ...(bp.lnSpcReduction ? { lnSpcReduction: bp.lnSpcReduction } : {}), ...(bp.vert ? { vert: bp.vert } : {}), ...Object.fromEntries(['cols', 'colSpc', 'rot', 'upright', 'anchorCtr', 'warp'].filter((k) => bp[k] != null).map((k) => [k, bp[k]])) };
 }
 function cleanRun(r) {
   for (const k of Object.keys(r)) if (r[k] === undefined || r[k] === null || r[k] === false) delete r[k];

@@ -10,6 +10,7 @@ import { ART_EFFECTS } from '../src/arteffects.js';
 import { SOUNDS } from '../src/sounds.js';
 import { albumSlides } from '../src/review.js';
 import { THEMES, cloneTheme } from '../src/themes.js';
+import { PRESETS } from '../src/prstgeom.js';
 
 const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 const SVG = `data:image/svg+xml;base64,${Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="red"/></svg>').toString('base64')}`;
@@ -183,6 +184,16 @@ export function compatDeck() {
   const sd = add('titleContent');
   sd.design = d.id;
   sd.objects[0].text.paras[0].runs = [run('두 번째 마스터')];
+  // 10. 글자 효과 · 필드 · 단 · WordArt 변환 · 모든 도형 (미리 설정 187종 + 조정값)
+  const sx10 = add('blank');
+  const t10 = newTextBox({ x: 40, y: 40, w: 900, h: 300 }, '');
+  t10.text.cols = 2; t10.text.colSpc = 20; t10.text.warp = { prst: 'textArchUp', adj: { adj: 10800000 } };
+  t10.text.paras = [para(''), para('')];
+  t10.text.paras[0].runs = [run('이중 밑줄', { u: 'dbl', uColor: '#FF0000' }), run(' 물결', { u: 'wavy' }), run(' 이중 취소선', { s: 'dbl' }), run(' 그라데이션', { fill: { type: 'gradient', stops: [[0, '#FF0000'], [1, '#0000FF']], angle: 0 }, color: '#FF0000' }), run(' 네온', { glow: { rad: 5, color: '@accent2:a60' } }), run(' 그림자', { shadow: { blur: 4, dist: 4, dir: 135, color: '#000000:a50' } })];
+  t10.text.paras[1].runs = [run('슬라이드 ', {}), { t: '‹#›', size: 18, fld: { type: 'slidenum' } }, run(' 날짜 '), { t: '2026-10-14', size: 18, fld: { type: 'datetime1' } }, run(' 윤곽선만', { fill: { type: 'none' }, outline: { width: 1, color: '#000000' } })];
+  sx10.objects.push(t10);
+  const sx11 = add('blank');
+  Object.keys(PRESETS).forEach((k, i) => { const o = newShape(k, { x: 10 + (i % 17) * 74, y: 10 + Math.floor(i / 17) * 64, w: 60, h: 50 }); o.text = null; if (i % 3 === 0) o.adj = Object.fromEntries(PRESETS[k][0].map(([n, fm]) => [n, Math.round(Number(fm.split(' ')[1]) * 0.8)])); sx11.objects.push(o); });
   return p;
 }
 
