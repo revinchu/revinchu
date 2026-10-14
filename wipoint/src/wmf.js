@@ -1,6 +1,7 @@
 // WMF (Windows 메타파일, 16비트) → SVG 변환 — DOM 없음
 // PowerPoint 97–2003 파일 · 예전 클립 아트 · OLE 개체 미리 보기는 WMF 가 많은데 브라우저는 그리지 못함.
 // 자주 쓰는 GDI 레코드(선 · 다각형 · 사각형 · 타원 · 호 · 글자 · 비트맵 · 잘라내기 · 창 좌표)만 SVG 로 옮김.
+import { symbolTable, symbolText } from './symfont.js';
 import { dibToBmp, arcPath } from './emf.js';
 
 const hex2 = (n) => n.toString(16).padStart(2, '0');
@@ -21,6 +22,7 @@ export function isWmf(bytes) {
 
 /** 글자 바이트 → 문자열 (한글 글꼴 charset 129 는 CP949 로) */
 function decodeText(bytes, charset) {
+  if (charset === 2) return String.fromCharCode(...bytes); // SYMBOL_CHARSET: 바이트 = 글자 번호
   const label = { 129: 'euc-kr', 128: 'shift_jis', 134: 'gbk', 136: 'big5', 161: 'windows-1253', 162: 'windows-1254', 177: 'windows-1255', 178: 'windows-1256', 186: 'windows-1257', 204: 'windows-1251', 222: 'windows-874', 238: 'windows-1250' }[charset] ?? 'windows-1252';
   try { return new TextDecoder(label).decode(bytes); } catch { return String.fromCharCode(...bytes); }
 }
@@ -132,7 +134,9 @@ export function wmfToSvg(bytes) {
     const family = `${f.face ? `'${escXml(f.face).replace(/'/g, '')}', ` : ''}'맑은 고딕', 'Malgun Gothic', sans-serif`;
     const deco = [f.underline && 'underline', f.strike && 'line-through'].filter(Boolean).join(' ');
     const rot = angle ? ` transform="rotate(${num(angle)} ${num(p0[0])} ${num(p0[1])})"` : '';
-    emit(`<text x="${xs || num(p0[0])}" y="${num(p0[1])}" font-family="${family}" font-size="${num(size)}"${f.weight >= 600 ? ' font-weight="bold"' : ''}${f.italic ? ' font-style="italic"' : ''}${deco ? ` text-decoration="${deco}"` : ''} fill="${st.textColor}" text-anchor="${anchor}"${bl}${rot} xml:space="preserve">${escXml(str)}</text>`);
+    // Symbol · Wingdings 글꼴 글자 (수식 편집기 그림의 τ 등) → 유니코드
+    const shown = symbolTable(f.face) ? symbolText(f.face, str) : str;
+    emit(`<text x="${xs || num(p0[0])}" y="${num(p0[1])}" font-family="${family}" font-size="${num(size)}"${f.weight >= 600 ? ' font-weight="bold"' : ''}${f.italic ? ' font-style="italic"' : ''}${deco ? ` text-decoration="${deco}"` : ''} fill="${st.textColor}" text-anchor="${anchor}"${bl}${rot} xml:space="preserve">${escXml(shown)}</text>`);
     if (st.align & 1) st.cur = [x + (dx ? dx.reduce((a, b) => a + b, 0) : 0), y];
   };
   const end = bytes.length;

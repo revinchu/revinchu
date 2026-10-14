@@ -2,7 +2,7 @@
 //   foreignObject 를 쓰지 않으므로 일러스트레이터 · 잉크스케이프 · 피그마에서도 열림.
 //   measure(fontCss, text) → 너비(px): 브라우저는 canvas measureText, 없으면 근사값
 import { resolveColor } from './themes.js';
-import { shapePath, customPath, textRect, OPEN_SHAPES } from './shapes.js';
+import { shapePath, shapePaths, customPath, textRect, STROKE_ONLY } from './shapes.js';
 import { PX_PER_PT, defaultSize, defaultColor, defaultFont, isEmptyText, setMasterText } from './model.js';
 import { svgFill, markers, DASH, fontStack, paraDefaults, numberLabel, slideBackground, slideDecor, tableCellStyle } from './render.js';
 import { chartSvg } from './chart.js';
@@ -145,7 +145,7 @@ function objectSvg(pres, o, ctx) {
     inner += `<text x="${f(w / 2)}" y="${f(h / 2 + size * 0.35)}" text-anchor="middle" style="font:italic ${f(size)}px 'Cambria Math', serif" fill="${resolveColor(theme, o.color ?? '@tx1', '#000')}">${esc(o.latex ?? '')}</text>`;
   } else {
     const d = o.path ? customPath(o.path, w, h) : shapePath(o.shape ?? 'rect', w, h, o.adj);
-    const open = OPEN_SHAPES.has(o.shape) || o.openPath;
+    const open = STROKE_ONLY.has(o.shape) || o.openPath;
     const local = [];
     const fill = open ? 'none' : svgFill(theme, o.fill, w, h, media, local);
     const ln = o.line;
@@ -154,10 +154,22 @@ function objectSvg(pres, o, ctx) {
     const dash = ln && DASH[ln.dash] ? ` stroke-dasharray="${DASH[ln.dash].split(' ').map((x) => f(Number(x) * sw)).join(' ')}"` : '';
     const mk = ln ? markers(theme, ln, local) : '';
     defs.push(...local);
-    if (fill !== 'none' || stroke !== 'none') inner += `<path d="${d}" fill="${fill}" fill-rule="evenodd"${fill !== 'none' && o.fill?.alpha != null ? ` fill-opacity="${o.fill.alpha}"` : ''} stroke="${stroke}" stroke-width="${f(sw)}"${dash} stroke-linejoin="round" ${mk}/>`;
+    const op = fill !== 'none' && o.fill?.alpha != null ? ` fill-opacity="${o.fill.alpha}"` : '';
+    const sa = `stroke="${stroke}" stroke-width="${f(sw)}"${dash} stroke-linejoin="round" ${mk}`;
+    const parts = o.path ? null : shapePaths(o.shape ?? 'rect', w, h, o.adj);
+    if (fill === 'none' && stroke === 'none') { /* 보이지 않음 */ } else if (!parts || parts.length === 1) inner += `<path d="${d}" fill="${parts?.[0]?.fill === 'none' ? 'none' : fill}" fill-rule="evenodd"${op} ${parts?.[0]?.stroke === false ? 'stroke="none"' : sa}/>`;
+    else {
+      const SHADE = { darken: ['#000', 0.4], darkenLess: ['#000', 0.2], lighten: ['#fff', 0.4], lightenLess: ['#fff', 0.2] };
+      for (const p of parts) {
+        if (p.fill === 'none' || fill === 'none') continue;
+        inner += `<path d="${p.d}" fill="${fill}" fill-rule="evenodd"${op} stroke="none"/>`;
+        if (SHADE[p.fill]) inner += `<path d="${p.d}" fill="${SHADE[p.fill][0]}" fill-opacity="${SHADE[p.fill][1]}" stroke="none"/>`;
+      }
+      for (const p of parts) if (p.stroke && stroke !== 'none') inner += `<path d="${p.d}" fill="none" ${sa}/>`;
+    }
   }
   if (o.text && !isEmptyText(o.text) && o.type !== 'table') {
-    const [l, t, r, b] = o.txBox || o.ph ? [0, 0, w, h] : textRect(o.shape ?? 'rect', w, h);
+    const [l, t, r, b] = o.txBox || o.ph ? [0, 0, w, h] : textRect(o.shape ?? 'rect', w, h, o.adj);
     const ins = o.text.insets ?? [9.6, 4.8, 9.6, 4.8];
     inner += textSvg(theme, o, o.text, l + ins[0], t + ins[1], Math.max(1, r - l - ins[0] - ins[2]), Math.max(1, b - t - ins[1] - ins[3]), ctx.measure);
   }

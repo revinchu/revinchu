@@ -1,13 +1,13 @@
 // .pptx 쓰기 · 읽기 (PresentationML) — DOM 없음
 // 쓰기: pptxEntries(pres) → { 경로: 문자열|바이트 } → zip / zipAsync
 // 읽기: readPptx(bytes) → pres (마스터 · 레이아웃 상속, 테마 색, 표, 차트, SmartArt 그림, 그룹, 전환, 애니메이션, 메모)
+import { placeInGroups } from './geom.js';
 import { zip, unzip, textOf } from './zip.js';
 import { parseXml, child, kids, descendants, esc } from './xml.js';
 import { SLOT_NAMES, resolveColor, applyMods, cloneTheme, THEMES } from './themes.js';
 import { EMU_PER_PX, uid, layoutPlaceholders, defaultSize, defaultColor, defaultFont, isEmptyText, animSteps, triggerSteps, stepTimeline, MOTION_PATHS, isCustomLayout, layoutName, presForSlide, textBody, para, newSlide, slideTitle, setMasterText } from './model.js';
 import { parseLatex, toOMML, ommlToLatex } from './math.js';
 import { paraDefaults, tableCellStyle, slideBackground, themeDecor, slideDecor } from './render.js';
-import { KNOWN_SHAPES } from './shapes.js';
 import { decodeEmbeddedFont } from './fonts.js';
 import { fxOf, fxXml, fxFromXml } from './effects.js';
 import { fallbackChart, is3d, VIEW3D_DEFAULT } from './chart.js';
@@ -1853,12 +1853,8 @@ export function readPptx(input, opts = {}) {
       }
     }
   };
-  const applyXf = (xf, r) => {
-    if (!xf || !r) return r;
-    const sx = xf.chw ? xf.w / xf.chw : 1;
-    const sy = xf.chh ? xf.h / xf.chh : 1;
-    return { ...r, x: xf.x + (r.x - xf.chx) * sx, y: xf.y + (r.y - xf.chy) * sy, w: r.w * sx, h: r.h * sy };
-  };
+  // 그룹 좌표 (xf = 그룹 xfrm + up = 바깥 그룹) → 슬라이드 좌표. 그룹 회전 · 대칭은 자식 위치 · 회전 · 대칭에 반영
+  const applyXf = (xf, r) => placeInGroups(xf, r);
   const styleRefs = (sp, ctx) => {
     const st = child(sp, 'style');
     if (!st) return {};
@@ -1910,7 +1906,7 @@ export function readPptx(input, opts = {}) {
     }
     if (c.name === 'grpSp') {
       const gx = readXfrm(child(child(c, 'grpSpPr'), 'xfrm'));
-      const composed = gx ? (xf ? { ...applyXf(xf, gx), chx: gx.chx, chy: gx.chy, chw: gx.chw, chh: gx.chh } : gx) : xf;
+      const composed = gx ? { ...gx, up: xf } : xf;
       const gFill = readFill(child(c, 'grpSpPr'), ctx);
       const sub = [];
       readShapeTree(c, { ...ctx, groupFill: gFill ?? ctx.groupFill }, layout, composed, sub, opts);
@@ -1935,7 +1931,6 @@ export function readPptx(input, opts = {}) {
       const refs = styleRefs(c, ctx);
       const geom = readGeom(spPr);
       if (!child(spPr, 'prstGeom') && !child(spPr, 'custGeom')) { const g2 = readGeom(child(lph, 'spPr') ?? child(mph, 'spPr')); Object.assign(geom, g2); }
-      if (!KNOWN_SHAPES.has(geom.shape) && !geom.path && !['rect', 'line', 'bentConnector3', 'curvedConnector3', 'roundRect', 'ellipse'].includes(geom.shape)) geom.shape = ['bentConnector2', 'bentConnector4', 'curvedConnector2', 'curvedConnector4'].includes(geom.shape) ? 'line' : geom.shape;
       let fill = readFill(spPr, ctx);
       if (fill === undefined && lph) fill = readFill(child(lph, 'spPr'), withMap(layout.ctx, ctx.clrMap));
       if (fill === undefined) fill = refs.fill ?? null;

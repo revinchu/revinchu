@@ -1,6 +1,6 @@
 // 슬라이드 → HTML 문자열 (DOM 없음): 편집 화면 · 미리 보기 · 슬라이드 쇼 · 인쇄가 함께 씀
 import { resolveColor, isDark } from './themes.js';
-import { shapePath, customPath, textRect, OPEN_SHAPES } from './shapes.js';
+import { shapePath, shapePaths, customPath, textRect, STROKE_ONLY } from './shapes.js';
 import { PX_PER_PT, defaultSize, defaultColor, defaultFont, placeholderPrompt, isEmptyText, masterDecor, setMasterText, presForSlide } from './model.js';
 import { chartSvg } from './chart.js';
 import { fxOf, fxStyle } from './effects.js';
@@ -277,7 +277,7 @@ export function shapeHtml(theme, o, media, opts = {}) {
   const w = Math.max(o.w, 0.01);
   const h = Math.max(o.h, 0.01);
   const d = o.path ? customPath(o.path, w, h) : shapePath(o.shape ?? 'rect', w, h, o.adj);
-  const open = OPEN_SHAPES.has(o.shape) || o.openPath;
+  const open = STROKE_ONLY.has(o.shape) || o.openPath;
   const fill = open ? 'none' : svgFill(theme, o.fill, w, h, media, defs);
   const ln = o.line;
   const stroke = ln ? resolveColor(theme, ln.color, 'none') : 'none';
@@ -291,7 +291,24 @@ export function shapeHtml(theme, o, media, opts = {}) {
     if (fx.defs) defs.push(fx.defs);
     // 곧은 선 (너비나 높이 0): SVG 틀이 1px 보다 작으면 브라우저가 그리지 않으므로 틀만 1px 로 (선 위치는 같음)
     const vw = Math.max(w, 1); const vh = Math.max(h, 1);
-    html += `<svg class="geo" width="${f(vw)}" height="${f(vh)}" viewBox="0 0 ${f(vw)} ${f(vh)}" overflow="visible" style="position:absolute;left:0;top:0;${fx.filter ? `filter:${fx.filter}` : ''}">${defs.length ? `<defs>${defs.join('')}</defs>` : ''}<path d="${d}" fill="${fill}" fill-rule="evenodd" ${fill !== 'none' && o.fill?.alpha != null ? `fill-opacity="${o.fill.alpha}"` : ''} stroke="${stroke}" stroke-width="${f(sw)}" ${dash} stroke-linejoin="round" ${mk} vector-effect="non-scaling-stroke"/></svg>`;
+    const op = fill !== 'none' && o.fill?.alpha != null ? `fill-opacity="${o.fill.alpha}"` : '';
+    const strokeAttrs = `stroke="${stroke}" stroke-width="${f(sw)}" ${dash} stroke-linejoin="round" ${mk} vector-effect="non-scaling-stroke"`;
+    let body = '';
+    const parts = o.path ? null : shapePaths(o.shape ?? 'rect', w, h, o.adj);
+    if (!parts || parts.length === 1) body = `<path d="${d}" fill="${parts?.[0]?.fill === 'none' ? 'none' : fill}" fill-rule="evenodd" ${op} ${parts?.[0]?.stroke === false ? 'stroke="none"' : strokeAttrs}/>`;
+    else {
+      // 여러 경로 도형 (원통 · 정육면체 · 말풍선 …): 채우기 경로마다 명암 (darken/lighten), 선은 선 경로에만
+      const SHADE = { darken: ['#000', 0.4], darkenLess: ['#000', 0.2], lighten: ['#fff', 0.4], lightenLess: ['#fff', 0.2] };
+      for (const p of parts) {
+        if (p.fill !== 'none' && fill !== 'none') {
+          body += `<path d="${p.d}" fill="${fill}" fill-rule="evenodd" ${op} stroke="none"/>`;
+          const sh = SHADE[p.fill];
+          if (sh) body += `<path d="${p.d}" fill="${sh[0]}" fill-opacity="${sh[1]}" stroke="none"/>`;
+        }
+      }
+      for (const p of parts) if (p.stroke && stroke !== 'none') body += `<path d="${p.d}" fill="none" ${strokeAttrs}/>`;
+    }
+    html += `<svg class="geo" width="${f(vw)}" height="${f(vh)}" viewBox="0 0 ${f(vw)} ${f(vh)}" overflow="visible" style="position:absolute;left:0;top:0;${fx.filter ? `filter:${fx.filter}` : ''}">${defs.length ? `<defs>${defs.join('')}</defs>` : ''}${body}</svg>`;
   }
   if (o.text && (!isEmptyText(o.text) || opts.editable || (opts.prompt && o.ph))) html += textBoxHtml(theme, o, o.text, w, h, opts);
   return html;
@@ -299,7 +316,7 @@ export function shapeHtml(theme, o, media, opts = {}) {
 
 /** 글 영역 (도형 모양 안쪽 + 여백) */
 export function textBoxHtml(theme, o, body, w, h, opts = {}) {
-  const [l, t, r, b] = o.txBox || o.ph ? [0, 0, w, h] : textRect(o.shape ?? 'rect', w, h);
+  const [l, t, r, b] = o.txBox || o.ph ? [0, 0, w, h] : textRect(o.shape ?? 'rect', w, h, o.adj);
   const ins = body.insets ?? [9.6, 4.8, 9.6, 4.8];
   const jc = { t: 'flex-start', ctr: 'center', b: 'flex-end' }[body.anchor ?? 't'] ?? 'flex-start';
   const vert = body.vert === 'vert' || body.vert === 'eaVert' ? 'writing-mode:vertical-rl;' : body.vert === 'vert270' ? 'writing-mode:vertical-rl;transform:rotate(180deg);' : '';

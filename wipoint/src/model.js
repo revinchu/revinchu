@@ -92,9 +92,11 @@ const BASE = (type, rect, extra = {}) => ({ id: uid(), type, x: Math.round(rect.
 /** 도형 (PowerPoint 기본 도형 스타일: 강조 1 채우기, 진한 윤곽선, 흰 글자 가운데) */
 export function newShape(kind, rect) {
   const line = kind === 'line' || kind === 'straightConnector1' || kind === 'arc';
+  // 괄호 모양은 PowerPoint 처럼 선만 (채우기 없음)
+  const noFill = line || /^(left|right)?(Bracket|Brace)|^(bracket|brace)Pair$/.test(kind);
   return BASE('shape', rect, {
     shape: kind,
-    fill: line ? null : { type: 'solid', color: '@accent1' },
+    fill: noFill ? null : { type: 'solid', color: '@accent1' },
     line: { color: line ? '@accent1' : '@accent1:s75', width: line ? 1.5 : 1.33, dash: 'solid', ...(kind === 'straightConnector1' ? { tail: 'triangle' } : {}) },
     text: line ? null : textBody([para('', { align: 'ctr' })], { anchor: 'ctr', defColor: '@lt1' }),
   });

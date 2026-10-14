@@ -6,6 +6,7 @@ import { openCfb, isCfb as cfbSig } from './cfb.js';
 import { inflate } from './zip.js';
 import { uid, para } from './model.js';
 import { THEMES, cloneTheme } from './themes.js';
+import { placeInGroups } from './geom.js';
 
 /** OLE 복합 문서인지 (.ppt 후보) */
 export const isCfb = (b) => cfbSig(b);
@@ -92,18 +93,64 @@ function fopt(rec) {
     const id = u16(d, i * 6); const val = u32(d, i * 6 + 2);
     const pid = id & 0x3fff; const complex = !!(id & 0x8000);
     const p = { val };
-    if (complex) { p.data = d.subarray(cpos, cpos + val); cpos += val; }
+    if (complex) {
+      // 배열 속성 (IMsoArray): 크기에 6바이트 머리말이 빠진 파일이 있음 (nElems × 원소 크기 = 크기)
+      let size = val;
+      const ARRAYS = [0x0145, 0x0146, 0x0151, 0x0152, 0x0153, 0x0154, 0x0155, 0x0156, 0x0157, 0x0158, 0x0197, 0x01cf, 0x0340, 0x0341];
+      if (ARRAYS.includes(pid) && cpos + 6 <= d.length) {
+        const ne = u16(d, cpos); const cb = u16(d, cpos + 4);
+        const es = cb === 0xfff0 ? 4 : cb;
+        if (ne * es === val && val) size = val + 6;
+      }
+      p.data = d.subarray(cpos, cpos + size); cpos += size;
+    }
     props.set(pid, p);
   }
   return props;
 }
 const fixed = (v) => (v | 0) / 65536;
+/** TextRulerAtom → { levels: [{ left, indent }] (마스터 단위), tabs: [{ pos, algn }] } */
+function parseRuler(d) {
+  if (!d || d.length < 4) return null;
+  const dv = new DataView(d.buffer, d.byteOffset, d.byteLength);
+  const m = dv.getUint32(0, true);
+  let p = 4;
+  const rd = () => { if (p + 2 > d.length) return 0; const v = dv.getInt16(p, true); p += 2; return v; };
+  const out = { levels: [], tabs: [] };
+  if (m & 0x2) rd(); // cLevels
+  if (m & 0x1) out.tabSize = rd();
+  if (m & 0x4) {
+    const n = rd();
+    for (let i = 0; i < n && p + 4 <= d.length; i++) { const pos = rd(); const t = rd(); out.tabs.push({ pos, algn: ['l', 'ctr', 'r', 'dec'][t] ?? 'l' }); }
+  }
+  for (let i = 0; i < 5; i++) {
+    const lv = {};
+    if (m & (0x8 << i)) lv.left = rd();
+    if (m & (0x100 << i)) lv.indent = rd();
+    out.levels.push(lv.left != null || lv.indent != null ? lv : null);
+  }
+  return out;
+}
 /** 참/거짓 묶음 속성: bit 의 값 (use 비트가 켜져 있을 때만), 없으면 dflt */
 function boolProp(props, pid, bit, dflt) {
   const p = props.get(pid);
   if (!p) return dflt;
   const use = 1 << (bit + 16);
   return p.val & use ? !!(p.val & (1 << bit)) : dflt;
+}
+
+/** 속성 겹치기 (b 가 a 를 덮음). 참/거짓 묶음 속성(pid & 0x3f = 0x3f)은 use 비트가 켜진 비트만 덮음 */
+function mergeProps(a, b) {
+  const out = new Map(a);
+  for (const [pid, p] of b) {
+    const q = out.get(pid);
+    if ((pid & 0x3f) === 0x3f && q) {
+      const use = (p.val >>> 16) & 0xffff;
+      const val = ((q.val >>> 16) | use) << 16 | ((q.val & 0xffff) & ~use) | (p.val & use);
+      out.set(pid, { val: val >>> 0 });
+    } else out.set(pid, p);
+  }
+  return out;
 }
 
 // MSOSPT 모양 번호 → DrawingML 미리 설정 모양
@@ -207,7 +254,8 @@ export function readPpt(bytes) {
     try { m = rec ? blipData(rec) : null; } catch { m = null; }
     blips.push(m);
   }
-  const defaultProps = fopt(one(dgg?.kids, ART.FOPT));
+  // 문서 기본 속성 (DGG FOPT) 은 새 도형용 기본값일 뿐 기존 도형이 물려받지 않음 → 명세 기본값 사용
+  const defaultProps = new Map();
   const media = {};
   const mediaOf = new Map();
   const blipMedia = (pib) => {
@@ -249,6 +297,18 @@ export function readPpt(bytes) {
     const rec = recAt(entry.ref);
     if (!rec?.kids) return null;
     const m = { rec, styles: rec.type === RT.MainMaster ? parseMasterStyles(rec.kids) : null, scheme: schemeOf(rec), atom: one(rec.kids, RT.SlideAtom) };
+    // 개체 틀 글 종류별 눈금자 (슬라이드 개체 틀이 눈금자를 따로 갖지 않으면 이것을 씀)
+    m.rulers = {};
+    for (const tb of deep(one(rec.kids, RT.PPDrawing)?.kids, ART.ClientTextbox)) {
+      const h = one(tb.kids, RT.TextHeaderAtom); const r = one(tb.kids, RT.TextRulerAtom);
+      if (h && r) m.rulers[u32(h.data, 0)] ??= parseRuler(r.data);
+    }
+    // 마스터 개체 틀 속성 (슬라이드 개체 틀이 채우기 · 선을 따로 정하지 않으면 이것을 따름)
+    m.phProps = {};
+    for (const sp of deep(one(rec.kids, RT.PPDrawing)?.kids, ART.SpContainer)) {
+      const ph = deep(one(sp.kids, ART.ClientData)?.kids, RT.PlaceholderAtom)[0];
+      if (ph) m.phProps[ph.data[4]] ??= mergeProps(fopt(one(sp.kids, ART.FOPT)), fopt(one(sp.kids, ART.TertiaryFOPT)));
+    }
     masters.set(entry.slideId, m);
     masters.set(entry.ref, m);
     return m;
@@ -283,11 +343,27 @@ export function readPpt(bytes) {
   if (fontName(bodyFont)) theme.fonts.minor = fontName(bodyFont);
 
   /** 색 (OfficeArtCOLORREF) → '#RRGGBB' */
-  const colorRef = (v, scheme) => {
+  const hexOf = (r, g, b) => `#${[r, g, b].map((x) => Math.max(0, Math.min(255, Math.round(x))).toString(16).padStart(2, '0')).join('').toUpperCase()}`;
+  /** 색 (OfficeArtCOLORREF) → '#RRGGBB'. rel = { fill, line } (fSysIndex 0xF0… = 이 도형의 채우기 · 선 색을 바꾼 색) */
+  const colorRef = (v, scheme, rel) => {
     const flags = v >>> 24;
     if (flags & 0x08) return (scheme ?? baseScheme)[v & 0xff] ?? '#000000';
-    if (flags & 0x10) return (v & 0xffff) === 0x00f0 ? null : '#808080'; // 시스템 색 (드묾)
-    return `#${[v & 255, (v >> 8) & 255, (v >> 16) & 255].map((x) => x.toString(16).padStart(2, '0')).join('').toUpperCase()}`;
+    if (flags & 0x10) {
+      const idx = v & 0xff;
+      const base = { 0xf0: rel?.fill, 0xf1: rel?.line ?? rel?.fill, 0xf2: rel?.line, 0xf3: '#808080', 0xf4: rel?.fill, 0xf5: rel?.back, 0xf6: rel?.line, 0xf7: rel?.fill ?? rel?.line }[idx];
+      if (!base) return idx === 0xf0 && !rel ? null : '#808080';
+      const mod = (v >> 8) & 0x0f; const k = ((v >> 16) & 0xff) / 255;
+      let [r, g, b] = [1, 3, 5].map((i) => parseInt(base.slice(i, i + 2), 16));
+      if (mod === 1) [r, g, b] = [r * k, g * k, b * k];
+      else if (mod === 2) [r, g, b] = [255 - (255 - r) * k, 255 - (255 - g) * k, 255 - (255 - b) * k];
+      else if (mod === 3) [r, g, b] = [r + k * 255, g + k * 255, b + k * 255];
+      else if (mod === 4) [r, g, b] = [r - k * 255, g - k * 255, b - k * 255];
+      else if (mod === 5) [r, g, b] = [k * 255 - r, k * 255 - g, k * 255 - b];
+      else if (mod === 6) { const y = 0.299 * r + 0.587 * g + 0.114 * b > 127 ? 255 : 0; r = g = b = y; }
+      if ((v >> 8) & 0x20) [r, g, b] = [255 - r, 255 - g, 255 - b];
+      return hexOf(r, g, b);
+    }
+    return hexOf(v & 255, (v >> 8) & 255, (v >> 16) & 255);
   };
   /** 글자 색 (ColorIndexStruct) */
   const textColor = (c, scheme) => (!c ? null : c.index === 0xfe ? c.hex : c.index < 8 ? (scheme ?? baseScheme)[c.index] : null);
@@ -311,40 +387,50 @@ export function readPpt(bytes) {
       if (k.type === ART.SpContainer) {
         const fsp = one(k.kids, ART.FSP);
         if (i === 0 && fsp && u32(fsp.data, 4) & 0x1) {
-          // 그룹 자신: 그룹 좌표계 (FSPGR) + 앵커
+          // 그룹 자신: 그룹 좌표계 (FSPGR) + 앵커 (바깥 그룹 좌표) + 회전 · 대칭 → 자식 배치에 씀 (pptx 와 같은 placeInGroups)
           const g = one(k.kids, ART.FSPGR);
-          const a = anchorOf(k, xf);
-          if (g && a) groupXf = { x: a.x, y: a.y, w: a.w, h: a.h, cx: i32(g.data, 0), cy: i32(g.data, 4), cw: (i32(g.data, 8) - i32(g.data, 0)) || 1, ch: (i32(g.data, 12) - i32(g.data, 4)) || 1 };
+          const props = mergeProps(fopt(one(k.kids, ART.FOPT)), fopt(one(k.kids, ART.TertiaryFOPT)));
+          const rot = props.get(0x0004) ? fixed(props.get(0x0004).val) : 0;
+          const a = rawAnchor(k, xf, rot);
+          const fl = u32(fsp.data, 4);
+          if (g && a) groupXf = { x: a.x, y: a.y, w: a.w, h: a.h, chx: i32(g.data, 0), chy: i32(g.data, 4), chw: (i32(g.data, 8) - i32(g.data, 0)) || 1, chh: (i32(g.data, 12) - i32(g.data, 4)) || 1, rot: ((rot % 360) + 360) % 360, ...(fl & 0x40 ? { flipH: true } : {}), ...(fl & 0x80 ? { flipV: true } : {}), up: xf };
           return;
         }
         try { const o = readShape(k, groupXf, ctx); if (o) { if (gid) o.grp = gid; out.push(o); } } catch (e) { warnings.add(`일부 도형을 읽지 못했습니다: ${e.message}`); }
       } else if (k.type === ART.SpgrContainer) walkGroup(k, groupXf, ctx, out, gid ?? (xf ? gid : uid('g')));
     });
   }
-  /** 앵커 → px 사각형 (그룹 안이면 그룹 좌표계에서 바꿈) */
-  function anchorOf(sp, xf) {
+  /** 앵커 → 사각형: 그룹 안이면 그룹 좌표 단위 (ChildAnchor), 아니면 슬라이드 px (ClientAnchor).
+   *  바이너리 형식은 45°~135° · 225°~315° 회전이면 앵커가 90° 돌려 저장되어 있어 가로 · 세로를 바꿈 */
+  function rawAnchor(sp, xf, rot = 0) {
     const ca = one(sp.kids, ART.ClientAnchor);
     const ch = one(sp.kids, ART.ChildAnchor);
+    let r = null;
     if (ch && xf) {
-      const l = i32(ch.data, 0); const t = i32(ch.data, 4); const r = i32(ch.data, 8); const b = i32(ch.data, 12);
-      const sx = xf.w / xf.cw; const sy = xf.h / xf.ch;
-      return { x: xf.x + (l - xf.cx) * sx, y: xf.y + (t - xf.cy) * sy, w: (r - l) * sx, h: (b - t) * sy };
-    }
-    if (ca) {
+      const l = i32(ch.data, 0); const t = i32(ch.data, 4); const rr = i32(ch.data, 8); const b = i32(ch.data, 12);
+      r = { x: l, y: t, w: rr - l, h: b - t };
+    } else if (ca) {
       const d = ca.data;
-      let t; let l; let r; let b;
-      if (d.length >= 16) { t = i32(d, 0); l = i32(d, 4); r = i32(d, 8); b = i32(d, 12); } else { t = i16(d, 0); l = i16(d, 2); r = i16(d, 4); b = i16(d, 6); }
-      return { x: l / 6, y: t / 6, w: (r - l) / 6, h: (b - t) / 6 };
+      let t; let l; let rr; let b;
+      if (d.length >= 16) { t = i32(d, 0); l = i32(d, 4); rr = i32(d, 8); b = i32(d, 12); } else { t = i16(d, 0); l = i16(d, 2); rr = i16(d, 4); b = i16(d, 6); }
+      r = { x: l / 6, y: t / 6, w: (rr - l) / 6, h: (b - t) / 6 };
     }
-    return null;
+    if (!r) return null;
+    const nr = ((rot % 360) + 360) % 360;
+    if ((nr >= 45 && nr < 135) || (nr >= 225 && nr < 315)) {
+      const cx = r.x + r.w / 2; const cy = r.y + r.h / 2;
+      r = { x: cx - r.h / 2, y: cy - r.w / 2, w: r.h, h: r.w };
+    }
+    return r;
   }
   function fillOf(props, ctx, isBg = false) {
-    const p = (pid) => props.get(pid) ?? defaultProps.get(pid);
-    const filled = boolProp(props, 0x01bf, 4, boolProp(defaultProps, 0x01bf, 4, true));
+    // 배경 도형은 문서 기본 속성(DGG)을 따르지 않음 (기본: 채움, 배경 색)
+    const p = (pid) => props.get(pid) ?? (isBg ? undefined : defaultProps.get(pid));
+    const filled = boolProp(props, 0x01bf, 4, isBg ? true : boolProp(defaultProps, 0x01bf, 4, true));
     if (!filled) return isBg ? undefined : null;
     const type = p(0x0180)?.val ?? 0;
-    const c1 = p(0x0181) ? colorRef(p(0x0181).val, ctx.scheme) : '#FFFFFF';
-    const c2 = p(0x0183) ? colorRef(p(0x0183).val, ctx.scheme) : '#FFFFFF';
+    const c1 = p(0x0181) ? colorRef(p(0x0181).val, ctx.scheme) ?? '#FFFFFF' : isBg ? (ctx.scheme ?? baseScheme)[0] : '#FFFFFF';
+    const c2 = p(0x0183) ? colorRef(p(0x0183).val, ctx.scheme, { fill: c1 }) ?? '#FFFFFF' : '#FFFFFF';
     const op = p(0x0182) ? fixed(p(0x0182).val) : 1;
     const withAlpha = (c) => (op < 1 && c ? `${c}:a${Math.round(op * 1000) / 10}` : c);
     if (type === 2 || type === 3) {
@@ -357,11 +443,12 @@ export function readPpt(bytes) {
       // 그라데이션: 두 색 (focus 50 이면 가운데가 두 번째 색)
       const ang = p(0x018b) ? fixed(p(0x018b).val) : 0;
       const focus = p(0x018c) ? (p(0x018c).val | 0) : 0;
-      let stops = [[0, c1], [1, c2]];
-      if (Math.abs(focus) === 100) stops = [[0, c2], [1, c1]];
-      else if (Math.abs(focus) === 50) stops = [[0, c1], [0.5, c2], [1, c1]];
+      // fillFocus = 두 번째 색(뒤 색)의 위치 % (음수면 두 색을 바꿈): 0 → 뒤 색에서 앞 색, 100 → 앞 색에서 뒤 색, 50 → 가운데가 뒤 색
+      const [a, b] = focus < 0 ? [c2, c1] : [c1, c2];
+      const fp = Math.min(1, Math.abs(focus) / 100);
+      const stops = fp <= 0.001 ? [[0, b], [1, a]] : fp >= 0.999 ? [[0, a], [1, b]] : [[0, a], [fp, b], [1, a]];
       const out = { type: 'gradient', stops, angle: ((90 - ang) % 360 + 360) % 360 };
-      if (type >= 5) out.path = true;
+      if (type === 5 || type === 6) out.path = true;
       return out;
     }
     if (type === 9) return isBg ? undefined : null;
@@ -371,7 +458,7 @@ export function readPpt(bytes) {
     const p = (pid) => props.get(pid) ?? defaultProps.get(pid);
     const on = boolProp(props, 0x01ff, 3, boolProp(defaultProps, 0x01ff, 3, true));
     if (!on) return null;
-    const color = p(0x01c0) ? colorRef(p(0x01c0).val, ctx.scheme) : '#000000';
+    const color = p(0x01c0) ? colorRef(p(0x01c0).val, ctx.scheme, { fill: props.get(0x0181) ? colorRef(props.get(0x0181).val, ctx.scheme) : null }) : '#000000';
     const w = p(0x01cb) ? p(0x01cb).val / 9525 : 0.75 * (4 / 3);
     const out = { color: color ?? '#000000', width: Math.max(0.5, w) };
     const dash = DASH[p(0x01ce)?.val ?? 0];
@@ -414,20 +501,15 @@ export function readPpt(bytes) {
     const flags = u32(fsp.data, 4);
     if (flags & 0x8 || flags & 0x400) return null; // 지움 · 배경
     const spt = fsp.inst;
-    const props = new Map([...fopt(one(sp.kids, ART.FOPT)), ...fopt(one(sp.kids, ART.TertiaryFOPT))]);
+    const props = mergeProps(fopt(one(sp.kids, ART.FOPT)), fopt(one(sp.kids, ART.TertiaryFOPT)));
     if (boolProp(props, 0x03bf, 1, false)) return null; // 숨김
-    let rect = anchorOf(sp, xf);
-    if (!rect) return null;
     const rot = props.get(0x0004) ? fixed(props.get(0x0004).val) : 0;
-    // 바이너리 형식: 45°~135° · 225°~315° 회전이면 앵커가 90° 돌려 저장됨
-    const nr = ((rot % 360) + 360) % 360;
-    if ((nr >= 45 && nr < 135) || (nr >= 225 && nr < 315)) {
-      const cx = rect.x + rect.w / 2; const cy = rect.y + rect.h / 2;
-      rect = { x: cx - rect.h / 2, y: cy - rect.w / 2, w: rect.h, h: rect.w };
-    }
-    const o = { id: uid(), x: rect.x, y: rect.y, w: Math.max(0, rect.w), h: Math.max(0, rect.h), rot: nr };
-    if (flags & 0x40) o.flipH = true;
-    if (flags & 0x80) o.flipV = true;
+    const raw = rawAnchor(sp, xf, rot);
+    if (!raw) return null;
+    const rect = placeInGroups(xf, { ...raw, rot: ((rot % 360) + 360) % 360, ...(flags & 0x40 ? { flipH: true } : {}), ...(flags & 0x80 ? { flipV: true } : {}) });
+    const o = { id: uid(), x: rect.x, y: rect.y, w: Math.max(0, rect.w), h: Math.max(0, rect.h), rot: rect.rot ?? 0 };
+    if (rect.flipH) o.flipH = true;
+    if (rect.flipV) o.flipV = true;
     const cd = one(sp.kids, ART.ClientData);
     const phAtom = deep(cd?.kids, RT.PlaceholderAtom)[0];
     const phId = phAtom ? phAtom.data[4] : 0;
@@ -460,8 +542,11 @@ export function readPpt(bytes) {
     if (spt === 0 || props.has(0x0145)) { const g = customGeom(props); if (g) { o.path = g; o.shape = 'rect'; } }
     o.fill = isLine ? null : fillOf(props, ctx);
     o.line = lineOf(props, ctx, isLine);
-    if (spt === 202 && !props.has(0x01bf)) o.fill = null; // 글 상자 기본: 채우기 없음
-    if (spt === 202 && !props.has(0x01ff)) o.line = null;
+    // 글 상자 · 개체 틀 기본: 채우기 · 선 없음 (문서 기본 속성을 쓰지 않음)
+    const ownBool = (pr, pid, bit) => (pr?.get(pid)?.val ?? 0) & (1 << (bit + 16));
+    const mp = phId ? ctx.phProps?.[{ 13: 1, 15: 3, 16: 4, 17: 1 }[phId] ?? (phId >= 14 && phId <= 26 ? 2 : phId)] : null;
+    if ((spt === 202 || phId) && !ownBool(props, 0x01bf, 4)) o.fill = mp && ownBool(mp, 0x01bf, 4) ? fillOf(mergeProps(mp, props), ctx) : null;
+    if ((spt === 202 || phId) && !ownBool(props, 0x01ff, 3)) o.line = mp && ownBool(mp, 0x01ff, 3) ? lineOf(mergeProps(mp, props), ctx, false) : null;
     if (boolProp(props, 0x023f, 1, false)) o.fx = { shadow: { dist: 3, dir: 45, blur: 2, color: '#000000', alpha: 0.4 } };
     // 개체 틀 종류
     const PH = { 1: 'title', 2: 'body', 3: 'ctrTitle', 4: 'subTitle', 13: 'title', 14: 'body', 15: 'ctrTitle', 16: 'subTitle', 17: 'title', 18: 'body', 19: 'body', 20: 'body', 21: 'body', 22: 'body', 23: 'body', 24: 'body', 25: 'body', 26: 'pic' };
@@ -488,19 +573,24 @@ export function readPpt(bytes) {
   };
 
   /** 글 상자 레코드 (TextHeader · Chars/Bytes · StyleTextProp) → 단락 */
-  function textBlock(kids, ctx) {
+  function textBlock(kids, ctx, ruler = null) {
     let type = 4; let text = null; let style = null;
+    for (const r of kids ?? []) {
+      if (r.type === RT.TextRulerAtom) ruler = parseRuler(r.data);
+    }
     for (const r of kids ?? []) {
       if (r.type === RT.TextHeaderAtom) type = u32(r.data, 0);
       else if (r.type === RT.TextCharsAtom) { let s = ''; for (let i = 0; i + 1 < r.data.length; i += 2) s += String.fromCharCode(u16(r.data, i)); text = s; } else if (r.type === RT.TextBytesAtom) { let s = ''; for (const c of r.data) s += String.fromCharCode(c); text = s; } else if (r.type === RT.StyleTextPropAtom) style = r.data;
       else if (r.type === RT.OutlineTextRefAtom) {
         // 개요 글은 SlideListWithText 에
         const t = ctx.texts?.[u32(r.data, 0)];
-        if (t) return textBlock(t, ctx);
+        if (t) return textBlock(t, ctx, ruler);
       }
     }
     if (text == null) return null;
-    return buildText(text, style, type, ctx);
+    const baseType = { 5: 1, 6: 0, 7: 1, 8: 1 }[type] ?? type;
+    ruler ??= ctx.rulers?.[type] ?? ctx.rulers?.[baseType] ?? null;
+    return buildText(text, style, type, { ...ctx, ruler });
   }
 
   function buildText(text, style, type, ctx) {
@@ -535,7 +625,11 @@ export function readPpt(bytes) {
       cLeft -= 1; pLeft -= line.length + 1; pos += line.length + 1;
       const end = makeRun('', { ...(ms.cf ?? {}), ...(cruns[ci]?.cf ?? {}) }, ctx, type);
       delete end.t;
-      const P = { runs: runs.filter((r) => r.t !== ''), align: ['l', 'ctr', 'r', 'just', 'dist', 'dist'][pf.align ?? 0] ?? 'l', lvl, bullet: null, marL: (pf.leftMargin ?? 0) / 6, indent: ((pf.indent ?? 0) - (pf.leftMargin ?? 0)) / 6, lineSpacing: 1, spcBef: 0, spcAft: 0, end };
+      // 들여쓰기: 단락 속성 (PowerPoint 2000+) 또는 눈금자 (TextRulerAtom: 글 시작 · 글머리 위치, 마스터 단위 576/inch)
+      const rl = ctx.ruler?.levels?.[lvl];
+      const left = pf.leftMargin ?? rl?.left ?? 0; const first = pf.indent ?? rl?.indent ?? 0;
+      const P = { runs: runs.filter((r) => r.t !== ''), align: ['l', 'ctr', 'r', 'just', 'dist', 'dist'][pf.align ?? 0] ?? 'l', lvl, bullet: null, marL: left / 6, indent: (first - left) / 6, lineSpacing: 1, spcBef: 0, spcAft: 0, end };
+      if (ctx.ruler?.tabs?.length) P.tabs = ctx.ruler.tabs.map((t) => ({ pos: t.pos / 6, algn: t.algn }));
       if (pf.lineSpacing != null) { if (pf.lineSpacing < 0) P.lineSpacingPt = -pf.lineSpacing / 8; else P.lineSpacing = pf.lineSpacing / 100; }
       if (pf.spaceBefore != null) P.spcBef = pf.spaceBefore < 0 ? -pf.spaceBefore / 8 : (pf.spaceBefore / 100) * (end.size ?? 18);
       if (pf.spaceAfter != null) P.spcAft = pf.spaceAfter < 0 ? -pf.spaceAfter / 8 : (pf.spaceAfter / 100) * (end.size ?? 18);
@@ -600,13 +694,14 @@ export function readPpt(bytes) {
       const m = masters.get(masterRef) ?? mainMaster;
       const mainOf = m?.base ?? m;
       const scheme = flags & 0x2 ? (m?.scheme ?? mainOf?.scheme ?? baseScheme) : (schemeOf(rec) ?? m?.scheme ?? baseScheme);
-      const ctx = { scheme, styles: m?.styles ?? mainMaster?.styles, texts: entry.texts };
+      const rulers = { ...(mainOf?.rulers ?? {}), ...(m?.rulers ?? {}) };
+      const ctx = { scheme, styles: m?.styles ?? mainMaster?.styles, texts: entry.texts, rulers, phProps: { ...(mainOf?.phProps ?? {}), ...(m?.phProps ?? {}) } };
       const { objects, bg } = readShapes(rec, ctx);
       // 마스터 배경 · 마스터 그림 (자리 표시자 제외)
       let slideBg = bg;
       const bgObjects = [];
       if (m) {
-        const mctx = { scheme, styles: m.styles, texts: [] };
+        const mctx = { scheme, styles: m.styles, texts: [], rulers };
         const mm = readShapes(m.rec, mctx);
         if (slideBg === undefined || flags & 0x4) slideBg = mm.bg ?? slideBg;
         if (slideBg === undefined && m.base) slideBg = readShapes(m.base.rec, mctx).bg;

@@ -1,6 +1,7 @@
 // EMF (Windows 확장 메타파일) → SVG 변환 (WIXEL 의 emf.js 와 같은 것 + 호 · 부채꼴 · 활꼴)
 // PowerPoint 파일의 클립 아트 · 붙여 넣은 차트 · 도식은 EMF 로 들어오는 경우가 많은데 브라우저는 EMF 를 그리지 못함.
 // 자주 쓰는 GDI 레코드(선 · 다각형 · 경로 · 글자 · 비트맵 · 잘라내기 · 좌표 변환)만 SVG 로 옮김. EMF+ 주석은 무시(GDI 대체 레코드를 그림).
+import { symbolTable, symbolText } from './symfont.js';
 
 const STOCK = {
   0: { kind: 'brush', style: 0, color: '#ffffff' },
@@ -247,7 +248,7 @@ export function emfToSvg(bytes) {
     const family = `${f.face ? `'${escXml(f.face).replace(/'/g, '')}', ` : ''}'맑은 고딕', 'Malgun Gothic', sans-serif`;
     const deco = [f.underline && 'underline', f.strike && 'line-through'].filter(Boolean).join(' ');
     const rot = angle ? ` transform="rotate(${num(angle)} ${num(p0[0])} ${num(p0[1])})"` : '';
-    emit(`<text x="${xs || num(p0[0])}" y="${num(p0[1])}" font-family="${family}" font-size="${num(size)}"${f.weight >= 600 ? ' font-weight="bold"' : ''}${f.italic ? ' font-style="italic"' : ''}${deco ? ` text-decoration="${deco}"` : ''} fill="${st.textColor}" text-anchor="${anchor}"${base}${len}${rot} xml:space="preserve">${escXml(s)}</text>`);
+    emit(`<text x="${xs || num(p0[0])}" y="${num(p0[1])}" font-family="${family}" font-size="${num(size)}"${f.weight >= 600 ? ' font-weight="bold"' : ''}${f.italic ? ' font-style="italic"' : ''}${deco ? ` text-decoration="${deco}"` : ''} fill="${st.textColor}" text-anchor="${anchor}"${base}${len}${rot} xml:space="preserve">${escXml(symbolTable(f.face) ? symbolText(f.face, s) : s)}</text>`);
   };
 
   let o = 0;

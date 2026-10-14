@@ -1,5 +1,7 @@
 // 도형 모양(OOXML prstGeom 이름) → SVG 경로 — DOM 없음
-// shapePath(kind, w, h, adj) 는 (0,0)-(w,h) 상자 안의 경로 문자열을 돌려줌
+// shapePath(kind, w, h, adj) 는 (0,0)-(w,h) 상자 안의 경로 문자열을 돌려줌.
+// ECMA-376 미리 설정 도형 187종은 geom.js (표준 정의 + 안내선 식) 로 PowerPoint 와 같은 모양을 그림.
+import { presetGeom } from './geom.js';
 
 const f = (n) => Math.round(n * 100) / 100;
 const P = (pts) => `M${pts.map(([x, y]) => `${f(x)} ${f(y)}`).join(' L')} Z`;
@@ -30,7 +32,23 @@ export const DEFAULT_ADJ = {
   round2SameRect: 16667, snip1Rect: 16667, frame: 12500, can: 25000, cube: 25000, hexagon: 25000, octagon: 29289,
 };
 
+/** 도형 경로들: [{ d, fill: 'norm'|'none'|'darken'|'darkenLess'|'lighten'|'lightenLess', stroke }] */
+export function shapePaths(kind, w, h, adj) {
+  const g = presetGeom(kind ?? 'rect', w, h, adj);
+  if (g) return g.paths;
+  return [{ d: handPath(kind, w, h, adj), fill: 'norm', stroke: true }];
+}
+
 export function shapePath(kind, w, h, adj = {}) {
+  const g = presetGeom(kind ?? 'rect', w, h, adj);
+  if (g) {
+    const filled = g.paths.filter((p) => p.fill !== 'none');
+    return (filled.length ? filled : g.paths).map((p) => p.d).join(' ');
+  }
+  return handPath(kind, w, h, adj);
+}
+
+function handPath(kind, w, h, adj = {}) {
   const a = (k = 'adj') => (adj[k] ?? DEFAULT_ADJ[kind] ?? 0) / 100000;
   const m = Math.min(w, h);
   switch (kind) {
@@ -97,10 +115,14 @@ export function shapePath(kind, w, h, adj = {}) {
 
 /** 채우기가 없는 열린 선 모양 */
 export const OPEN_SHAPES = new Set(['line', 'straightConnector1', 'arc', 'bracketPair', 'bracePair']);
+/** 채우기를 그리지 않는 선 모양 (호 · 괄호는 PowerPoint 처럼 채우기가 있으면 그림) */
+export const STROKE_ONLY = new Set(['line', 'straightConnector1']);
 export const isLineShape = (kind) => kind === 'line' || kind === 'straightConnector1';
 
 /** 글자 영역 (도형 안쪽 비율): [l, t, r, b] */
-export function textRect(kind, w, h) {
+export function textRect(kind, w, h, adj) {
+  const g = presetGeom(kind ?? 'rect', w, h, adj);
+  if (g) return g.rect;
   switch (kind) {
     case 'ellipse': case 'wedgeEllipseCallout': return [w * 0.146, h * 0.146, w * 0.854, h * 0.854];
     case 'diamond': case 'flowChartDecision': return [w / 4, h / 4, w * 0.75, h * 0.75];
