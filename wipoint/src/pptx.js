@@ -303,7 +303,7 @@ function tableXml(o, id, ctx, theme) {
 }
 
 function chartFrameXml(o, id, ctx) {
-  const rid = ctx.chart(o.chart);
+  const rid = ctx.chart(o.chart, o.chartRaw);
   return `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${id}" name="${esc(o.name ?? `Chart ${id}`)}"/><p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr><p:nvPr/></p:nvGraphicFramePr>${xfrmXml(o, 'p:xfrm')}<a:graphic><a:graphicData uri="${NS_C}"><c:chart xmlns:c="${NS_C}" r:id="${rid}"/></a:graphicData></a:graphic></p:graphicFrame>`;
 }
 
@@ -945,8 +945,30 @@ export function pptxEntries(pres, opts = {}) {
       audio: (id) => { const p = putMedia(id); return p ? add(REL('audio'), `../media/${p.split('/').pop()}`) : null; },
       /** 비디오/오디오 파트: a:videoFile r:link + p14:media r:embed 두 관계 */
       av: (id, kind) => { const p = putMedia(id); if (!p) return null; const t = `../media/${p.split('/').pop()}`; return { link: add(REL(kind), t), embed: add('http://schemas.microsoft.com/office/2007/relationships/media', t) }; },
-      chart: (ch) => {
+      chart: (ch, raw) => {
         const path = `ppt/charts/chart${++chartN}.xml`;
+        // 손대지 않은 차트: 원래 차트 XML · 스타일 · 색 · 데이터 통합 문서를 그대로
+        if (raw?.sig && raw.sig === stableJson(ch) && raw.rels.every((r) => r.external || r.xml != null || pres.media?.[r.media])) {
+          const rx = raw.rels.map((r, k) => {
+            if (r.external) return `<Relationship Id="${esc(r.id)}" Type="${esc(r.type)}" Target="${esc(r.target)}" TargetMode="External"/>`;
+            let target;
+            if (r.xml != null) {
+              const name = `${(r.name ?? 'part').replace(/\d*\.xml$/i, '')}${chartN}_${k + 1}.xml`;
+              files[`ppt/charts/${name}`] = r.xml;
+              override(`ppt/charts/${name}`, r.ct);
+              target = name;
+            } else {
+              const img = r.type.endsWith('/image');
+              const p2 = putMedia(r.media, img ? 'ppt/media' : 'ppt/embeddings', img ? null : 'Microsoft_Excel_Worksheet');
+              target = `../${p2.slice(4)}`;
+            }
+            return `<Relationship Id="${esc(r.id)}" Type="${esc(r.type)}" Target="${esc(target)}"/>`;
+          }).join('');
+          files[path] = raw.xml;
+          if (rx) files[`ppt/charts/_rels/chart${chartN}.xml.rels`] = `${XML_HEAD}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rx}</Relationships>`;
+          override(path, 'application/vnd.openxmlformats-officedocument.drawingml.chart+xml');
+          return add(REL('chart'), `../charts/chart${chartN}.xml`, false, `chart${chartN}`);
+        }
         // 데이터 통합 문서 (PowerPoint 의 [데이터 편집] 이 되도록)
         const wb = `ppt/embeddings/Microsoft_Excel_Worksheet${chartN}.xlsx`;
         files[wb] = chartWorkbook(ch);
@@ -1364,6 +1386,20 @@ function readLine(ln, ctx, phClr) {
   if (te && te !== 'none') out.tail = te === 'stealth' ? 'triangle' : te;
   if (!fillEl && !phClr) return undefined;
   return out;
+}
+
+const SHOW_KEYS = ['showLegendKey', 'showVal', 'showCatName', 'showSerName', 'showPercent', 'showBubbleSize'];
+/** c:dLbls 의 생략된 show* 요소를 val="0" 으로 채움 (개별 c:dLbl · delete 가 있는 묶음은 그대로) */
+export function explicitDLbls(xml) {
+  return xml.replace(/<c:dLbls>((?:(?!<\/c:dLbls>)[\s\S])*)<\/c:dLbls>/g, (all, inner) => {
+    if (/<c:dLbl>|<c:delete\b/.test(inner)) return all;
+    const at = inner.search(/<c:(showLegendKey|showVal|showCatName|showSerName|showPercent|showBubbleSize|separator|showLeaderLines|leaderLines|extLst)\b/);
+    const head = at < 0 ? inner : inner.slice(0, at);
+    const rest = at < 0 ? '' : inner.slice(at);
+    const own = {};
+    const tail = rest.replace(/<c:(showLegendKey|showVal|showCatName|showSerName|showPercent|showBubbleSize)\b[^>]*\/>/g, (m, k) => { own[k] = m; return ''; });
+    return `<c:dLbls>${head}${SHOW_KEYS.map((k) => own[k] ?? `<c:${k} val="0"/>`).join('')}${tail}</c:dLbls>`;
+  });
 }
 
 function readXfrm(x) {
@@ -1809,7 +1845,8 @@ export function readPptx(input, opts = {}) {
         const m = new Map();
         try {
           const vx = parseXml(textOf(files[r.target]).replace(/<br\s*>/gi, '<br/>'));
-          for (const sh of descendants(vx, 'shape')) { const im = descendants(sh, 'imagedata')[0]; const rr = attr(im, 'relid') ?? attr(im, 'id'); if (rr) m.set(attr(sh, 'id'), relsOf(r.target).get(rr)?.target); }
+          // VML 도형은 id 또는 o:spid 로 OLE 개체(spid)와 이어짐
+          for (const sh of descendants(vx, 'shape')) { const im = descendants(sh, 'imagedata')[0]; const rr = attr(im, 'relid') ?? attr(im, 'id'); if (!rr) continue; const t = relsOf(r.target).get(rr)?.target; for (const k of [attr(sh, 'id'), attr(sh, 'spid'), sh.attrs?.['o:spid']]) if (k) m.set(k, t); }
         } catch { /* 무시 */ }
         vmlCache.set(r.target, m);
       }
@@ -2100,7 +2137,7 @@ export function readPptx(input, opts = {}) {
         const ch = child(gd, 'chart');
         const rel = relsOf(ctx.part).get(attr(ch, 'id'));
         const chart = rel ? readChart(rel.target) : null;
-        if (chart) out.push({ id: uid(), type: 'chart', ...rect, chart, ...(fid ? { spid: fid } : {}) });
+        if (chart) { const chartRaw = chartRawOf(rel.target); out.push({ id: uid(), type: 'chart', ...rect, chart, ...(fid ? { spid: fid } : {}), ...(chartRaw ? { chartRaw } : {}) }); }
         return;
       }
       if (uri.endsWith('/diagram')) {
@@ -2352,6 +2389,8 @@ export function readPptx(input, opts = {}) {
       if (nf && attr(nf, 'sourceLinked') === '0' && attr(nf, 'formatCode') && attr(nf, 'formatCode') !== 'General') o.fmt = attr(nf, 'formatCode');
       const t = descendants(child(a, 'title'), 't').map((e) => e.text).join('');
       if (t) o.title = t;
+      const asz = attr(descendants(child(a, 'txPr'), 'defRPr')[0], 'sz');
+      if (asz) o.size = Number(asz) / 100;
       return Object.keys(o).length ? o : undefined;
     };
     if (!['pie', 'doughnut'].includes(kind)) {
@@ -2388,7 +2427,8 @@ export function readPptx(input, opts = {}) {
     if (cbg) out.bg = cbg;
     if (bgMedia) out.bgMedia = bgMedia;
     const fsz = attr(descendants(child(cs, 'txPr'), 'defRPr')[0], 'sz');
-    if (fsz && Math.abs(Number(fsz) - 1197) > 50) out.font = { size: Number(fsz) / 100 };
+    // 차트 글자 크기: 파일 값 그대로 (없으면 PowerPoint 기본 10pt)
+    out.font = { ...(out.font ?? {}), size: fsz ? Number(fsz) / 100 : 10, exact: true };
     return out;
   }
 
@@ -2422,6 +2462,33 @@ export function readPptx(input, opts = {}) {
   /** 원래 XML 로 다시 쓸 수 있는 개체인지 + 관계(그림 · 링크 · 슬라이드) 목록 */
   const slide0Ns = new Map();
   const RAW_TAGS = new Set(['sp', 'cxnSp', 'pic', 'grpSp', 'graphicFrame']);
+  /** 차트 파트 원본 (손대지 않으면 그대로 다시 씀): XML + 관계 (스타일 · 색 XML, 데이터 통합 문서 · 그림은 미디어로) */
+  // PowerPoint 2007 이 만든 차트는 데이터 레이블 표시 요소를 생략함 (없음 = 끔). 다른 앱이 같은 뜻으로 읽도록 명시해서 저장
+  const appXml = has('docProps/app.xml') ? textOf(files['docProps/app.xml']) : '';
+  const mso2007 = /<Application>Microsoft[^<]*<\/Application>/.test(appXml) && /<AppVersion>12\./.test(appXml);
+  const ctMap = new Map(kids(xmlOf('[Content_Types].xml'), 'Override').map((o) => [String(attr(o, 'PartName') ?? '').replace(/^\//, ''), attr(o, 'ContentType')]));
+  function chartRawOf(path) {
+    if (!has(path)) return null;
+    const rels = [];
+    for (const [id, r] of relsOf(path)) {
+      if (r.external) { rels.push({ id, type: r.type, target: r.target, external: true }); continue; }
+      if (!has(r.target)) return null;
+      const name = r.target.split('/').pop();
+      if (/\.xml$/i.test(name)) {
+        const ct = ctMap.get(r.target);
+        if (!ct || has(relsPath(r.target))) return null;
+        rels.push({ id, type: r.type, xml: textOf(files[r.target]), ct, name });
+      } else {
+        const mid = r.type.endsWith('/image') ? loadMedia(r.target) : loadMedia(r.target, 'bin');
+        if (!mid) return null;
+        rels.push({ id, type: r.type, media: mid, name });
+      }
+    }
+    let xml = textOf(files[path]);
+    if (mso2007) xml = explicitDLbls(xml);
+    return { xml, rels };
+  }
+
   function rawObject(el, xml, made, part) {
     if (!RAW_TAGS.has(el.name)) return null;
     if (made.some((o) => o.ph || ['media', 'chart', 'equation', 'zoom'].includes(o.type) || o.ole || o.smart)) return null;
@@ -2786,6 +2853,7 @@ export function readPptx(input, opts = {}) {
   for (const s of slides) {
     for (let i = 0; i < s.objects.length; i++) {
       const o = s.objects[i];
+      if (o.chartRaw) o.chartRaw.sig = stableJson(o.chart);
       if (!o.raw) continue;
       if (o.raw.group) {
         const members = s.objects.slice(i, i + o.raw.n);

@@ -203,7 +203,8 @@ export function chartSvg(chart, w, h, theme, { font = '맑은 고딕' } = {}) {
   const fc = c.fontColor ? resolveColor(theme, c.fontColor) : c.font?.color ? resolveColor(theme, c.font.color) : resolveColor(theme, '@tx1:lm65:lo35') ?? '#595959';
   const gridC = c.gridColor ? resolveColor(theme, c.gridColor) : resolveColor(theme, '@tx1:lm15:lo85') ?? '#D9D9D9';
   const axisC = resolveColor(theme, '@tx1:lm25:lo75') ?? '#BFBFBF';
-  const fs = c.font?.size ? c.font.size * (4 / 3) : Math.max(9, Math.min(16, Math.min(w, h) / 22));
+  // 파일에서 읽은 글자 크기는 그대로 (데이터 레이블 · 범례 등은 fs × 0.9 로 그리므로 나눠 둠)
+  const fs = c.font?.size ? (c.font.size * (4 / 3)) / (c.font.exact ? 0.9 : 1) : Math.max(9, Math.min(16, Math.min(w, h) / 22));
   const parts = [];
   const defs = [];
   const P = (s) => parts.push(s);
@@ -211,7 +212,9 @@ export function chartSvg(chart, w, h, theme, { font = '맑은 고딕' } = {}) {
   else if (c.border) P(`<rect x="0.5" y="0.5" width="${f(w - 1)}" height="${f(h - 1)}" fill="none" stroke="${resolveColor(theme, c.border)}"/>`);
   if (c.shadow) defs.push('<filter id="wpsh" x="-10%" y="-10%" width="130%" height="130%"><feDropShadow dx="1.5" dy="2" stdDeviation="1.5" flood-opacity="0.35"/></filter>');
   const shadow = c.shadow ? ' filter="url(#wpsh)"' : '';
-  const text = (x, y, s, { size = fs, anchor = 'middle', color = fc, bold = false, rot = 0, el = '' } = {}) => `<text x="${f(x)}" y="${f(y)}" font-size="${f(size)}" text-anchor="${anchor}" fill="${color}"${bold ? ' font-weight="bold"' : ''}${rot ? ` transform="rotate(${rot} ${f(x)} ${f(y)})"` : ''}${el ? ` data-el="${el}"` : ''}>${esc(s)}</text>`;
+  // 축별 글자 크기 (파일의 축 txPr): 축 눈금 이름에만
+  const axSize = (el) => { const k = /^axis-(x|y2|y)$/.exec(el)?.[1]; const pt = k && c.axes?.[k]?.size; return pt ? pt * (4 / 3) : null; };
+  const text = (x, y, s, { size = fs, anchor = 'middle', color = fc, bold = false, rot = 0, el = '' } = {}) => `<text x="${f(x)}" y="${f(y)}" font-size="${f(axSize(el) ?? size)}" text-anchor="${anchor}" fill="${color}"${bold ? ' font-weight="bold"' : ''}${rot ? ` transform="rotate(${rot} ${f(x)} ${f(y)})"` : ''}${el ? ` data-el="${el}"` : ''}>${esc(s)}</text>`;
 
   let top = 6;
   let bottom = h - 6;
@@ -472,6 +475,8 @@ function cartesianSvg(c, series, cats, types, box, theme, ctx) {
   const [lo2, hi2] = has2 ? range(2) : [0, 1];
   const sc2 = has2 ? niceScale(Number.isFinite(lo2) ? lo2 : 0, Number.isFinite(hi2) ? hi2 : 1, 5, ax.y2 ?? {}) : null;
   const fmt1 = ax.y?.fmt ?? (percent(1) ? '0%' : null);
+  // 데이터 레이블은 값 자체의 서식 (100% 누적이어도 원래 값, 축의 자동 % 서식은 쓰지 않음)
+  const lfmt1 = ax.y?.fmt ?? null;
   const fmt2 = ax.y2?.fmt ?? (has2 && percent(2) ? '0%' : null);
   // x 값 축 (분산형)
   const xpad = c.kind === 'bubble' ? (Math.max(...xs) - Math.min(...xs) || 1) * 0.15 : 0;
@@ -587,7 +592,7 @@ function cartesianSvg(c, series, cats, types, box, theme, ctx) {
         else out.push(`<rect x="${f(start)}" y="${f(Math.min(a, b))}" width="${f(bw)}" height="${f(Math.abs(b - a))}" fill="${col}"${ol} data-el="ser${si}"${shadow}/>`);
         if (s.err) errBar(out, s, p, start + bw / 2, sc, vpos, horiz, fc);
         if (lo) {
-          const t = labelText(lo, s.labelVals?.[ci] ?? p.v, s, cats[ci], p.p, s.axis === 'secondary' ? fmt2 : fmt1);
+          const t = labelText(lo, s.labelVals?.[ci] ?? p.v, s, cats[ci], p.p, s.axis === 'secondary' ? fmt2 : lfmt1);
           const stacked = !c.derived && (slot.length > 1 || groupingOf(c, types[si]) !== 'clustered');
           const pos = lo.pos ?? (stacked ? 'ctr' : 'outEnd');
           const neg = p.b < p.a;
@@ -619,7 +624,7 @@ function cartesianSvg(c, series, cats, types, box, theme, ctx) {
     const d = `${top.map(([x, y], i) => `${i ? 'L' : 'M'}${f(x)} ${f(y)}`).join(' ')} ${base.reverse().map(([x, y]) => `L${f(x)} ${f(y)}`).join(' ')} Z`;
     out.push(`<path d="${d}" fill="${col}" fill-opacity="${c.kind === 'combo' ? 0.6 : 0.85}" data-el="ser${si}"${shadow}/>`);
     const lo = labelOpts(c, s, c.kind);
-    if (lo) plotted[si].forEach((p, ci) => { if (p) labels.push(text(catMid(ci), (vpos(p.a, sc) + vpos(p.b, sc)) / 2 + fs / 3, labelText(lo, p.v, s, cats[ci], p.p, fmt1), { size: fs * 0.9, color: '#fff' })); });
+    if (lo) plotted[si].forEach((p, ci) => { if (p) labels.push(text(catMid(ci), (vpos(p.a, sc) + vpos(p.b, sc)) / 2 + fs / 3, labelText(lo, p.v, s, cats[ci], p.p, lfmt1), { size: fs * 0.9, color: '#fff' })); });
   });
   series.forEach((s, si) => {
     const t = types[si];
@@ -651,7 +656,7 @@ function cartesianSvg(c, series, cats, types, box, theme, ctx) {
       if (!p) return;
       const [x, y] = pts[ci];
       const pos = lo.pos ?? (t === 'bubble' ? 'ctr' : 'r');
-      const tt = labelText(lo, p.v, s, xy ? String(cats[ci]) : cats[ci], p.p, s.axis === 'secondary' ? fmt2 : fmt1);
+      const tt = labelText(lo, p.v, s, xy ? String(cats[ci]) : cats[ci], p.p, s.axis === 'secondary' ? fmt2 : lfmt1);
       if (pos === 'ctr') labels.push(text(x, y + fs / 3, tt, { size: fs * 0.9 }));
       else if (pos === 'b') labels.push(text(x, y + fs * 1.2, tt, { size: fs * 0.9 }));
       else if (pos === 'l') labels.push(text(x - 6, y + fs / 3, tt, { size: fs * 0.9, anchor: 'end' }));
