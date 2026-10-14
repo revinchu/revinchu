@@ -59,7 +59,8 @@ function fillXml(fill, ctx) {
   if (fill.type === 'solid') return solidFill(fill.color);
   if (fill.type === 'gradient') {
     const gs = (fill.stops ?? []).map(([p, c]) => `<a:gs pos="${pct(p)}">${colorXml(c)}</a:gs>`).join('');
-    const shade = fill.path ? '<a:path path="circle"><a:fillToRect l="50000" t="50000" r="50000" b="50000"/></a:path>' : `<a:lin ang="${Math.round((((fill.angle ?? 90) % 360) + 360) % 360 * 60000)}" scaled="0"/>`;
+    const fo = fill.focus ?? [0.5, 0.5, 0.5, 0.5];
+    const shade = fill.path ? `<a:path path="${fill.path === 'rect' || fill.path === 'shape' ? fill.path : 'circle'}"><a:fillToRect l="${pct(fo[0])}" t="${pct(fo[1])}" r="${pct(fo[2])}" b="${pct(fo[3])}"/></a:path>` : `<a:lin ang="${Math.round((((fill.angle ?? 90) % 360) + 360) % 360 * 60000)}" scaled="0"/>`;
     return `<a:gradFill rotWithShape="1"><a:gsLst>${gs}</a:gsLst>${shade}</a:gradFill>`;
   }
   if (fill.type === 'image') {
@@ -122,7 +123,8 @@ function rPrXml(r, o, p, ctx, tag = 'a:rPr', fallbackSize) {
   const eff = r.shadow ? '<a:effectLst><a:outerShdw blurRad="38100" dist="38100" dir="2700000" algn="tl"><a:prstClr val="black"><a:alpha val="43137"/></a:prstClr></a:outerShdw></a:effectLst>' : '';
   const hl = r.hl ? `<a:highlight>${colorXml(r.hl)}</a:highlight>` : '';
   const link = r.link && ctx ? ctx.hlink(r.link) : '';
-  return `<${tag} ${attrs}>${ln}${fill}${eff}${hl}${fontXml(r.font ?? defaultFont(o))}${link}</${tag}>`;
+  const sym = r.sym ? `<a:sym typeface="${esc(r.sym)}" pitchFamily="2" charset="2"/>` : '';
+  return `<${tag} ${attrs}>${ln}${fill}${eff}${hl}${fontXml(r.font ?? defaultFont(o))}${sym}${link}</${tag}>`;
 }
 
 function pPrXml(o, p) {
@@ -213,7 +215,19 @@ function shapeXml(o, id, ctx, phIdx) {
   return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${name}"${o.alt ? ` descr="${esc(o.alt)}"` : ''}>${link}${decoXml(o)}</p:cNvPr><p:cNvSpPr${o.txBox ? ' txBox="1"' : ''}>${o.ph ? '<a:spLocks noGrp="1"/>' : ''}</p:cNvSpPr>${phXml(o, phIdx)}</p:nvSpPr>${spPr}${text}</p:sp>`;
 }
 
+/** OLE 개체 (python-pptx · PowerPoint Fallback 과 같은 꼴: oleObj 안에 미리 보기 p:pic) */
+function oleXml(o, id, ctx, phIdx) {
+  const ole = o.ole;
+  const r = ole.link ? ctx.add(REL('oleObject'), ole.link, true) : ctx.ole(ole.bin, ole.pkg, ole.ext);
+  if (!r) return null;
+  // 안쪽 그림의 id 는 0 (PowerPoint 가 쓰는 꼴 — 슬라이드의 다른 개체 id 와 겹치지 않음)
+  const pic = picXml({ ...o, ole: undefined, ph: null, name: '', link: null, alt: null }, 0, ctx, phIdx);
+  const size = ole.imgW ? ` imgW="${Math.round(ole.imgW)}" imgH="${Math.round(ole.imgH)}"` : ` imgW="${E(o.w)}" imgH="${E(o.h)}"`;
+  return `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${id}" name="${esc(o.name ?? `Object ${id}`)}"/><p:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></p:cNvGraphicFramePr><p:nvPr/></p:nvGraphicFramePr>${xfrmXml(o, 'p:xfrm')}<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/presentationml/2006/ole"><p:oleObj name="${esc(ole.name ?? '')}"${ole.icon ? ' showAsIcon="1"' : ''} r:id="${r}"${size} progId="${esc(ole.progId ?? '')}">${ole.link ? '<p:link updateAutomatic="1"/>' : '<p:embed/>'}${pic}</p:oleObj></a:graphicData></a:graphic></p:graphicFrame>`;
+}
+
 function picXml(o, id, ctx, phIdx) {
+  if (o.ole && (o.ole.bin || o.ole.link) && o.media) { const x = oleXml(o, id, ctx, phIdx); if (x) return x; }
   // SmartArt 그림 칸 (그림 없음): 회색 사각형/타원으로
   if (!o.media && o.picSlot) return shapeXml({ ...o, type: 'shape', shape: o.shape ?? 'rect', fill: { type: 'solid', color: '#E7E6E6' }, line: null, text: null, picSlot: undefined }, id, ctx, phIdx);
   if (!o.media) return o.ph ? `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="Picture Placeholder ${id}"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>${phXml(o, phIdx)}</p:nvSpPr><p:spPr>${xfrmXml(o)}</p:spPr></p:sp>` : '';
@@ -438,7 +452,7 @@ export function chartXml(orig, opts = {}) {
   const tsz = ch.titleSize ? Math.round(ch.titleSize * 100) : 1862;
   const title = ch.title ? `<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="${tsz}" b="${ch.titleBold ? 1 : 0}"/></a:pPr><a:r><a:rPr lang="ko-KR" altLang="en-US"/><a:t>${esc(ch.title)}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="${ch.titleOverlay ? 1 : 0}"/></c:title><c:autoTitleDeleted val="0"/>` : '<c:autoTitleDeleted val="1"/>';
   const legend = ch.legend ? `<c:legend><c:legendPos val="${['t', 'b', 'l', 'r', 'tr'].includes(ch.legend) ? ch.legend : 'b'}"/><c:overlay val="0"/></c:legend>` : '';
-  const chartSp = ch.bg || ch.border ? `<c:spPr>${ch.bg ? solidFill(ch.bg) : '<a:noFill/>'}${ch.border ? `<a:ln w="9525">${solidFill(ch.border)}</a:ln>` : '<a:ln><a:noFill/></a:ln>'}</c:spPr>` : '';
+  const chartSp = opts.bgRid ? `<c:spPr><a:blipFill><a:blip r:embed="${opts.bgRid}"/><a:stretch><a:fillRect/></a:stretch></a:blipFill>${ch.border ? `<a:ln w="9525">${solidFill(ch.border)}</a:ln>` : '<a:ln><a:noFill/></a:ln>'}</c:spPr>` : ch.bg || ch.border ? `<c:spPr>${ch.bg ? solidFill(ch.bg) : '<a:noFill/>'}${ch.border ? `<a:ln w="9525">${solidFill(ch.border)}</a:ln>` : '<a:ln><a:noFill/></a:ln>'}</c:spPr>` : '';
   const fsz = ch.font?.size ? Math.round(ch.font.size * 100) : 1197;
   const wx = `<c:extLst><c:ext uri="${WP_EXT_URI}"><wp:chart xmlns:wp="${WP_NS}" json="${esc(JSON.stringify(orig))}"/></c:ext></c:extLst>`;
   return `${XML_HEAD}<c:chartSpace xmlns:c="${NS_C}" xmlns:a="${NS_A}" xmlns:r="${NS_R}"><c:roundedCorners val="0"/><c:chart>${title}${d3 ? view3dXml(ch) : ''}<c:plotArea><c:layout/>${plots}${ax}${dTable}${plotSp}</c:plotArea>${legend}<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart>${chartSp}<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="${fsz}">${solidFill(ch.fontColor ?? ch.font?.color ?? '@tx1:lm65:lo35')}<a:latin typeface="+mn-lt"/><a:ea typeface="+mn-ea"/></a:defRPr></a:pPr><a:endParaRPr lang="ko-KR"/></a:p></c:txPr>${opts.embed ? `<c:externalData r:id="${opts.embed}"><c:autoUpdate val="0"/></c:externalData>` : ''}${wx}</c:chartSpace>`;
@@ -778,10 +792,13 @@ function dataUrlBytes(url) {
   } else bytes = new TextEncoder().encode(decodeURIComponent(m[3]));
   return { bytes, ext: extOfMime(mime), mime };
 }
-const extOfMime = (mime) => ({ 'image/png': 'png', 'image/jpeg': 'jpeg', 'image/jpg': 'jpeg', 'image/gif': 'gif', 'image/svg+xml': 'svg', 'image/bmp': 'bmp', 'image/webp': 'webp', 'image/x-emf': 'emf', 'image/x-wmf': 'wmf', 'image/tiff': 'tiff', ...AV_EXT }[mime] ?? 'png');
+const extOfMime = (mime) => OLE_EXT[mime] ?? ({ 'image/png': 'png', 'image/jpeg': 'jpeg', 'image/jpg': 'jpeg', 'image/gif': 'gif', 'image/svg+xml': 'svg', 'image/bmp': 'bmp', 'image/webp': 'webp', 'image/x-emf': 'emf', 'image/x-wmf': 'wmf', 'image/tiff': 'tiff', ...AV_EXT }[mime] ?? 'png');
 /** 비디오 · 오디오 (mime → 확장자) */
 const AV_EXT = { 'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov', 'video/x-m4v': 'm4v', 'video/ogg': 'ogv', 'audio/mpeg': 'mp3', 'audio/mp3': 'mp3', 'audio/mp4': 'm4a', 'audio/x-m4a': 'm4a', 'audio/aac': 'aac', 'audio/wav': 'wav', 'audio/x-wav': 'wav', 'audio/wave': 'wav', 'audio/ogg': 'ogg', 'audio/webm': 'weba' };
 export const AV_MIME = { mp4: 'video/mp4', m4v: 'video/x-m4v', webm: 'video/webm', mov: 'video/quicktime', ogv: 'video/ogg', mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac', wav: 'audio/wav', ogg: 'audio/ogg', weba: 'audio/webm', wma: 'audio/x-ms-wma', wmv: 'video/x-ms-wmv', avi: 'video/x-msvideo' };
+/** OLE 포함 파일 (확장자 → mime) */
+const OLE_MIME = { bin: 'application/vnd.openxmlformats-officedocument.oleObject', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', xlsm: 'application/vnd.ms-excel.sheet.macroEnabled.12', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', xls: 'application/vnd.ms-excel', doc: 'application/msword', ppt: 'application/vnd.ms-powerpoint', sldx: 'application/vnd.openxmlformats-officedocument.presentationml.slide' };
+const OLE_EXT = Object.fromEntries(Object.entries(OLE_MIME).map(([k, v]) => [v, k]));
 export const MIME_BY_EXT = { png: 'image/png', jpeg: 'image/jpeg', jpg: 'image/jpeg', gif: 'image/gif', svg: 'image/svg+xml', bmp: 'image/bmp', webp: 'image/webp', emf: 'image/x-emf', wmf: 'image/x-wmf', tif: 'image/tiff', tiff: 'image/tiff' };
 
 /**
@@ -798,7 +815,7 @@ export function pptxEntries(pres, opts = {}) {
   const override = (path, type) => ct.set(`/${path}`, type);
   const mediaPath = new Map();
   let mediaN = 0;
-  const putMedia = (id) => {
+  const putMedia = (id, dir = 'ppt/media', stem = null) => {
     if (mediaPath.has(id)) return mediaPath.get(id);
     let url = pres.media?.[id];
     if (!url) return null;
@@ -807,7 +824,7 @@ export function pptxEntries(pres, opts = {}) {
     let d = blob ? { bytes: blob, mime: blob.type || 'application/octet-stream', ext: extOfMime(blob.type) } : dataUrlBytes(url);
     if (!d) return null;
     if (d.ext === 'svg' && opts.png?.[id]) d = dataUrlBytes(opts.png[id]) ?? d;
-    const path = `ppt/media/${/^(video|audio)\//.test(d.mime) ? 'media' : 'image'}${++mediaN}.${d.ext}`;
+    const path = `${dir}/${stem ?? (/^(video|audio)\//.test(d.mime) ? 'media' : 'image')}${++mediaN}.${d.ext}`;
     files[path] = d.bytes;
     defaults.set(d.ext, d.mime === 'image/jpg' ? 'image/jpeg' : d.mime);
     mediaPath.set(id, path);
@@ -829,6 +846,8 @@ export function pptxEntries(pres, opts = {}) {
       add,
       image: (id) => { const p = putMedia(id); return p ? add(REL('image'), `../media/${p.split('/').pop()}`) : null; },
       link: (url) => add(REL('hyperlink'), url, true),
+      /** OLE 포함 파일 (oleObject .bin 또는 package .xlsx 등) */
+      ole: (id, pkg, ext) => { const p = putMedia(id, 'ppt/embeddings', pkg ? 'Embedded' : 'oleObject'); return p ? add(pkg ? REL('package') : REL('oleObject'), `../embeddings/${p.split('/').pop()}`) : null; },
       /** a:hlinkClick — '#slideN' 은 슬라이드 관계 + hlinksldjump (PowerPoint 의 '이 문서의 슬라이드') */
       hlink: (url) => {
         const m = /^#slide(\d+)$/.exec(url);
@@ -851,8 +870,9 @@ export function pptxEntries(pres, opts = {}) {
         const wb = `ppt/embeddings/Microsoft_Excel_Worksheet${chartN}.xlsx`;
         files[wb] = chartWorkbook(ch);
         defaults.set('xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-        files[`ppt/charts/_rels/chart${chartN}.xml.rels`] = `${XML_HEAD}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL('package')}" Target="../embeddings/Microsoft_Excel_Worksheet${chartN}.xlsx"/></Relationships>`;
-        files[path] = chartXml(ch, { embed: 'rId1' });
+        const bgPath = ch.bgMedia ? putMedia(ch.bgMedia) : null;
+        files[`ppt/charts/_rels/chart${chartN}.xml.rels`] = `${XML_HEAD}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL('package')}" Target="../embeddings/Microsoft_Excel_Worksheet${chartN}.xlsx"/>${bgPath ? `<Relationship Id="rId2" Type="${REL('image')}" Target="../media/${bgPath.split('/').pop()}"/>` : ''}</Relationships>`;
+        files[path] = chartXml(ch, { embed: 'rId1', bgRid: bgPath ? 'rId2' : null });
         override(path, 'application/vnd.openxmlformats-officedocument.drawingml.chart+xml');
         return add(REL('chart'), `../charts/chart${chartN}.xml`, false, `chart${chartN}`);
       },
@@ -1160,10 +1180,21 @@ function readFill(spPr, ctx, phClr) {
     if (c.name === 'noFill') return null;
     if (c.name === 'solidFill') return { type: 'solid', color: readColor(c, ctx, phClr) ?? '#000000' };
     if (c.name === 'gradFill') {
+      // 색 지점이 없는 그라데이션은 스타일 채우기를 따름 (PowerPoint 와 같음)
+      if (!descendants(child(c, 'gsLst'), 'gs').length) return undefined;
       const stops = descendants(child(c, 'gsLst'), 'gs').map((g) => [num(attr(g, 'pos')) / 100000, readColor(g, ctx, phClr) ?? '#FFFFFF']).sort((a, b) => a[0] - b[0]);
       const lin = child(c, 'lin');
       const path = child(c, 'path');
-      return { type: 'gradient', stops, angle: lin ? num(attr(lin, 'ang')) / 60000 : 90, ...(path ? { path: true } : {}) };
+      const out = { type: 'gradient', stops, angle: lin ? num(attr(lin, 'ang')) / 60000 : 90 };
+      if (path) {
+        // 방사형 (circle) · 사각형 (rect) · 도형 모양 (shape), 중심 = fillToRect
+        const kind = attr(path, 'path') ?? 'circle';
+        out.path = kind === 'circle' ? true : kind;
+        const fr = child(path, 'fillToRect');
+        const fv = ['l', 't', 'r', 'b'].map((k) => num(attr(fr, k), 0) / 100000);
+        if (fr && fv.some((v) => Math.abs(v - 0.5) > 1e-6)) out.focus = fv;
+      }
+      return out;
     }
     if (c.name === 'blipFill') {
       const blip = child(c, 'blip');
@@ -1256,7 +1287,7 @@ function readRPr(el, ctx, phClr) {
   if (a.i !== undefined) out.i = bool(a.i);
   if (a.u && a.u !== 'none') out.u = true;
   if (a.strike && a.strike !== 'noStrike') out.s = true;
-  if (a.baseline) out.base = num(a.baseline) > 0 ? 1 : -1;
+  if (a.baseline && num(a.baseline) !== 0) out.base = num(a.baseline) > 0 ? 1 : -1;
   if (a.spc) out.spc = num(a.spc) / 100;
   if (a.cap && a.cap !== 'none') out.cap = a.cap;
   const fillEl = child(el, 'solidFill') ?? child(el, 'gradFill');
@@ -1267,6 +1298,8 @@ function readRPr(el, ctx, phClr) {
   const latin = attr(child(el, 'latin'), 'typeface');
   const font = [ea, latin].find((f) => f && !/^\+(mj|mn)-(cs)$/.test(f));
   if (font) out.font = font.startsWith('+mj') ? '+mj' : font.startsWith('+mn') ? '+mn' : font;
+  const sym = attr(child(el, 'sym'), 'typeface');
+  if (sym && !/^\+/.test(sym)) out.sym = sym;
   if (child(child(el, 'effectLst'), 'outerShdw')) out.shadow = true;
   const ln = child(el, 'ln');
   if (ln && !child(ln, 'noFill') && child(ln, 'solidFill')) out.outline = { color: readColor(child(ln, 'solidFill'), ctx), width: PX(attr(ln, 'w') ?? 9525) };
@@ -1408,6 +1441,7 @@ function themeFromXml(xml) {
     fillStyles: child(fmt, 'fillStyleLst')?.children ?? [],
     lineStyles: child(fmt, 'lnStyleLst')?.children ?? [],
     bgStyles: child(fmt, 'bgFillStyleLst')?.children ?? [],
+    effectStyles: child(fmt, 'effectStyleLst')?.children ?? [],
   };
 }
 
@@ -1468,9 +1502,8 @@ export function readPptx(input, opts = {}) {
     if (!path || !has(path)) return null;
     if (mediaByPath.has(path)) return mediaByPath.get(path);
     const ext = path.split('.').pop().toLowerCase();
-    const mime = av ? AV_MIME[ext] ?? 'video/mp4' : MIME_BY_EXT[ext];
+    const mime = av === 'bin' ? OLE_MIME[ext] ?? 'application/vnd.openxmlformats-officedocument.oleObject' : av ? AV_MIME[ext] ?? 'video/mp4' : MIME_BY_EXT[ext];
     if (!mime) { warnings.add(`지원하지 않는 그림 형식(.${ext})은 빈 칸으로 표시합니다`); mediaByPath.set(path, null); return null; }
-    if (ext === 'emf' || ext === 'wmf') warnings.add('EMF/WMF 그림은 브라우저에서 보이지 않을 수 있습니다');
     const b = files[path];
     if (typeof Blob === 'function' && b instanceof Blob) {
       const id = `m${mediaByPath.size + 1}${uid('').slice(-4)}`;
@@ -1492,9 +1525,22 @@ export function readPptx(input, opts = {}) {
   let themeInfo = null;
   if (firstMaster) {
     const tRel = [...relsOf(firstMaster).values()].find((r) => r.type.endsWith('/theme'));
-    if (tRel && has(tRel.target)) themeInfo = themeFromXml(textOf(files[tRel.target]));
+    if (tRel && has(tRel.target)) themeInfo = { ...themeFromXml(textOf(files[tRel.target])), path: tRel.target };
   }
   const theme = themeInfo?.theme ?? cloneTheme(THEMES[0]);
+
+  // 마스터마다 자기 테마 (채우기 · 선 · 효과 · 배경 스타일) — 테마 그림은 테마 파트의 관계로
+  const themeInfoCache = new Map();
+  const themeInfoFor = (mpath) => {
+    if (themeInfoCache.has(mpath)) return themeInfoCache.get(mpath);
+    const tRel = [...relsOf(mpath).values()].find((r) => r.type.endsWith('/theme'));
+    let ti = themeInfo;
+    if (tRel && has(tRel.target) && tRel.target !== themeInfo?.path) { try { ti = { ...themeFromXml(textOf(files[tRel.target])), path: tRel.target }; } catch { ti = themeInfo; } }
+    themeInfoCache.set(mpath, ti);
+    return ti;
+  };
+  const TI = (ctx) => ctx?.ti ?? themeInfo;
+  const tplCtx = (ctx) => ({ ...ctx, media: (r) => { const t = TI(ctx)?.path; const rel = t ? relsOf(t).get(r) : null; return rel && !rel.external ? loadMedia(rel.target) : null; } });
 
   // 마스터 · 레이아웃 캐시
   const masterCache = new Map();
@@ -1504,6 +1550,7 @@ export function readPptx(input, opts = {}) {
     media: (rid) => { const r = relsOf(part).get(rid); return r ? loadMedia(r.target) : null; },
     rel: (rid) => (rid ? relsOf(part).get(rid) ?? null : null),
     avMedia: (path) => loadMedia(path, true),
+    binMedia: (path) => loadMedia(path, 'bin'),
     links: (rid) => {
       const r = relsOf(part).get(rid);
       if (r?.external) return r.target;
@@ -1512,6 +1559,25 @@ export function readPptx(input, opts = {}) {
       return null;
     },
   });
+  /** 예전 형식 OLE 미리 보기: 슬라이드의 VML 그림 (v:shape id = spid → v:imagedata o:relid) */
+  const vmlCache = new Map();
+  const vmlImage = (part, spid) => {
+    if (!spid) return null;
+    for (const r of relsOf(part).values()) {
+      if (!r.type.endsWith('/vmlDrawing') || !has(r.target)) continue;
+      if (!vmlCache.has(r.target)) {
+        const m = new Map();
+        try {
+          const vx = parseXml(textOf(files[r.target]).replace(/<br\s*>/gi, '<br/>'));
+          for (const sh of descendants(vx, 'shape')) { const im = descendants(sh, 'imagedata')[0]; const rr = attr(im, 'relid') ?? attr(im, 'id'); if (rr) m.set(attr(sh, 'id'), relsOf(r.target).get(rr)?.target); }
+        } catch { /* 무시 */ }
+        vmlCache.set(r.target, m);
+      }
+      const t = vmlCache.get(r.target).get(spid);
+      if (t) return loadMedia(t);
+    }
+    return null;
+  };
   const slideOrder = descendants(child(presXml, 'sldIdLst'), 'sldId').map((sid) => presRels.get(rid(sid))?.target).filter((t) => t && has(t));
   const readClrMap = (el) => (el ? Object.fromEntries(Object.entries(el.attrs)) : null);
   const phKey = (sp) => { const ph = descendants(child(sp, 'nvSpPr') ?? child(sp, 'nvPicPr') ?? child(sp, 'nvGraphicFramePr'), 'ph')[0]; return ph ? { type: attr(ph, 'type') ?? 'body', idx: attr(ph, 'idx') ?? null } : null; };
@@ -1522,7 +1588,8 @@ export function readPptx(input, opts = {}) {
     const clrMap = readClrMap(child(x, 'clrMap'));
     const ctx = partCtx(path, clrMap);
     const tx = child(x, 'txStyles');
-    const m = { path, x, clrMap, ctx, phs: phList(descendants(x, 'spTree')[0]), spTree: descendants(x, 'spTree')[0], bg: child(child(x, 'cSld'), 'bg'), styles: { title: readListStyle(child(tx, 'titleStyle'), ctx), body: readListStyle(child(tx, 'bodyStyle'), ctx), other: readListStyle(child(tx, 'otherStyle'), ctx) } };
+    ctx.ti = themeInfoFor(path);
+    const m = { path, x, clrMap, ctx, ti: ctx.ti, phs: phList(descendants(x, 'spTree')[0]), spTree: descendants(x, 'spTree')[0], bg: child(child(x, 'cSld'), 'bg'), styles: { title: readListStyle(child(tx, 'titleStyle'), ctx), body: readListStyle(child(tx, 'bodyStyle'), ctx), other: readListStyle(child(tx, 'otherStyle'), ctx) } };
     masterCache.set(path, m);
     return m;
   };
@@ -1533,7 +1600,7 @@ export function readPptx(input, opts = {}) {
     const master = loadMaster(mRel?.target ?? firstMaster);
     const clrOvr = descendants(child(x, 'clrMapOvr'), 'overrideClrMapping')[0];
     const clrMap = clrOvr ? readClrMap(clrOvr) : master.clrMap;
-    const l = { path, x, master, clrMap, ctx: partCtx(path, clrMap), phs: phList(descendants(x, 'spTree')[0]), spTree: descendants(x, 'spTree')[0], bg: child(child(x, 'cSld'), 'bg'), type: attr(x, 'type'), showMasterSp: attr(x, 'showMasterSp') !== '0' };
+    const l = { path, x, master, clrMap, ctx: { ...partCtx(path, clrMap), ti: master.ti }, phs: phList(descendants(x, 'spTree')[0]), spTree: descendants(x, 'spTree')[0], bg: child(child(x, 'cSld'), 'bg'), type: attr(x, 'type'), showMasterSp: attr(x, 'showMasterSp') !== '0' };
     layoutCache.set(path, l);
     return l;
   };
@@ -1543,12 +1610,22 @@ export function readPptx(input, opts = {}) {
     if (key.idx != null) { const byIdx = list.find((p) => p.key.idx === key.idx && (norm(p.key.type) === norm(key.type) || key.type === 'body' || key.type === 'obj')); if (byIdx) return byIdx.sp; }
     return list.find((p) => p.key.type === key.type)?.sp ?? list.find((p) => norm(p.key.type) === norm(key.type))?.sp ?? (key.idx != null ? list.find((p) => p.key.idx === key.idx)?.sp : null) ?? null;
   };
-  const styleFor = (master, key) => {
-    if (!key) return master.styles.other;
-    if (key.type === 'title' || key.type === 'ctrTitle') return master.styles.title;
-    if (['dt', 'ftr', 'sldNum'].includes(key.type)) return master.styles.other;
-    return master.styles.body;
+  // 마스터 글 스타일은 쓰는 쪽(슬라이드 · 레이아웃)의 색 매핑(clrMap)으로 읽어야 함 (레이아웃의 clrMapOvr: 어두운 배경 + 밝은 글자)
+  const styleCache = new Map();
+  const styleFor = (master, key, clrMap) => {
+    const ck = `${master.path}|${JSON.stringify(clrMap ?? master.clrMap)}`;
+    if (!styleCache.has(ck)) {
+      const c2 = { ...master.ctx, clrMap: clrMap ?? master.clrMap };
+      const tx = child(master.x, 'txStyles');
+      styleCache.set(ck, { title: readListStyle(child(tx, 'titleStyle'), c2), body: readListStyle(child(tx, 'bodyStyle'), c2), other: readListStyle(child(tx, 'otherStyle'), c2) });
+    }
+    const st = styleCache.get(ck);
+    if (!key) return st.other;
+    if (key.type === 'title' || key.type === 'ctrTitle') return st.title;
+    if (['dt', 'ftr', 'sldNum'].includes(key.type)) return st.other;
+    return st.body;
   };
+  const withMap = (c, clrMap) => (clrMap ? { ...c, clrMap } : c);
 
   /** 다른 프로그램 파일의 두 번째 이후 마스터: 테마가 첫 마스터와 다르면 디자인으로 */
   const foreignDesigns = new Map();
@@ -1605,15 +1682,22 @@ export function readPptx(input, opts = {}) {
     const fo = child(st, 'fontRef');
     if (fr && num(attr(fr, 'idx')) > 0) {
       const col = readColor(fr, ctx);
-      const tpl = themeInfo?.fillStyles?.[num(attr(fr, 'idx')) - 1];
-      if (tpl?.name === 'gradFill') { const g = readFill({ children: [tpl] }, ctx, col); out.fill = g ?? { type: 'solid', color: col }; } else out.fill = col ? { type: 'solid', color: col } : undefined;
+      const tpl = TI(ctx)?.fillStyles?.[num(attr(fr, 'idx')) - 1];
+      if (tpl && tpl.name !== 'solidFill' && tpl.name !== 'noFill') { const g = readFill({ children: [tpl] }, tplCtx(ctx), col); out.fill = g ?? { type: 'solid', color: col }; } else if (tpl?.name === 'noFill') out.fill = null; else out.fill = col ? { type: 'solid', color: col } : undefined;
     } else if (fr) out.fill = null;
     if (lr && num(attr(lr, 'idx')) > 0) {
       const col = readColor(lr, ctx);
-      const tpl = themeInfo?.lineStyles?.[num(attr(lr, 'idx')) - 1];
-      out.line = { color: col ?? '#000000', width: tpl && attr(tpl, 'w') ? PX(attr(tpl, 'w')) : 1 };
+      const tpl = TI(ctx)?.lineStyles?.[num(attr(lr, 'idx')) - 1];
+      out.line = (tpl && readLine(tpl, ctx, col ?? '#000000')) ?? { color: col ?? '#000000', width: tpl && attr(tpl, 'w') ? PX(attr(tpl, 'w')) : 1 };
     } else if (lr) out.line = null;
     if (fo) out.fontColor = readColor(fo, ctx);
+    // 테마 효과 스타일 (effectRef: 그림자 · 입체 등)
+    const er = child(st, 'effectRef');
+    if (er && num(attr(er, 'idx')) > 0) {
+      const col = readColor(er, ctx);
+      const tpl = TI(ctx)?.effectStyles?.[num(attr(er, 'idx')) - 1];
+      if (tpl) { const fx = fxFromXml(tpl, { child, attr, readColor: (e) => readColor(e, ctx, col) }); if (fx) out.fx = fx; }
+    }
     return out;
   };
 
@@ -1667,7 +1751,7 @@ export function readPptx(input, opts = {}) {
       if (!child(spPr, 'prstGeom') && !child(spPr, 'custGeom')) { const g2 = readGeom(child(lph, 'spPr') ?? child(mph, 'spPr')); Object.assign(geom, g2); }
       if (!KNOWN_SHAPES.has(geom.shape) && !geom.path && !['rect', 'line', 'bentConnector3', 'curvedConnector3', 'roundRect', 'ellipse'].includes(geom.shape)) geom.shape = ['bentConnector2', 'bentConnector4', 'curvedConnector2', 'curvedConnector4'].includes(geom.shape) ? 'line' : geom.shape;
       let fill = readFill(spPr, ctx);
-      if (fill === undefined && lph) fill = readFill(child(lph, 'spPr'), layout.ctx);
+      if (fill === undefined && lph) fill = readFill(child(lph, 'spPr'), withMap(layout.ctx, ctx.clrMap));
       if (fill === undefined) fill = refs.fill ?? null;
       let line = readLine(child(spPr, 'ln'), ctx, refs.line?.color);
       if (line === undefined) line = refs.line ?? null;
@@ -1675,9 +1759,9 @@ export function readPptx(input, opts = {}) {
       const chain = [];
       let bodyBase = {};
       if (layout) {
-        chain.push(styleFor(layout.master, key));
-        if (mph) { chain.push(readListStyle(child(child(mph, 'txBody'), 'lstStyle'), layout.master.ctx)); bodyBase = { ...bodyBase, ...readBodyPr(child(child(mph, 'txBody'), 'bodyPr')) }; }
-        if (lph) { chain.push(readListStyle(child(child(lph, 'txBody'), 'lstStyle'), layout.ctx)); bodyBase = { ...bodyBase, ...readBodyPr(child(child(lph, 'txBody'), 'bodyPr')) }; }
+        chain.push(styleFor(layout.master, key, ctx.clrMap));
+        if (mph) { chain.push(readListStyle(child(child(mph, 'txBody'), 'lstStyle'), withMap(layout.master.ctx, ctx.clrMap))); bodyBase = { ...bodyBase, ...readBodyPr(child(child(mph, 'txBody'), 'bodyPr')) }; }
+        if (lph) { chain.push(readListStyle(child(child(lph, 'txBody'), 'lstStyle'), withMap(layout.ctx, ctx.clrMap))); bodyBase = { ...bodyBase, ...readBodyPr(child(child(lph, 'txBody'), 'bodyPr')) }; }
       }
       const text = readTxBody(child(c, 'txBody'), ctx, chain.filter(Boolean), bodyBase, refs.fontColor);
       const o = {
@@ -1689,7 +1773,7 @@ export function readPptx(input, opts = {}) {
       const link = child(cNvPr, 'hlinkClick');
       if (link) { const url = ctx.links?.(attr(link, 'id')); if (url) o.link = url; }
       if (isTx) o.txBox = true;
-      { const fx = fxFromXml(spPr, { child, attr, readColor: (e) => readColor(e, ctx) }); if (fx) o.fx = fx; }
+      { const fx = fxFromXml(spPr, { child, attr, readColor: (e) => readColor(e, ctx) }); if (fx) o.fx = fx; else if (refs.fx && !child(spPr, 'effectLst') && !child(spPr, 'effectDag')) o.fx = refs.fx; }
       if (key) {
         o.ph = { ctrTitle: 'ctrTitle', title: 'title', subTitle: 'subTitle', body: 'body', obj: 'body', pic: 'pic', dt: 'dt', ftr: 'ftr', sldNum: 'sldNum', tbl: 'body', chart: 'body', media: 'body', clipArt: 'body', dgm: 'body' }[key.type] ?? 'body';
         if (['chart', 'tbl', 'dgm', 'media'].includes(key.type)) o.phFor = key.type;
@@ -1813,7 +1897,24 @@ export function readPptx(input, opts = {}) {
         } else warnings.add('SmartArt 일부는 그림으로 저장되지 않아 표시하지 못했습니다');
         return;
       }
-      // OLE 개체 등: 대체 그림
+      // OLE 개체 (엑셀 표 · 문서 · 수식 편집기 …): 미리 보기 그림 + 포함된 원본 (다시 저장하면 PowerPoint 에서 두 번 눌러 편집)
+      const oles = descendants(gd, 'oleObj');
+      const ole = oles.find((e) => child(e, 'pic')) ?? oles[0];
+      if (ole) {
+        let mid = null;
+        const pic0 = child(ole, 'pic');
+        if (pic0) { const tmp = []; readElement(pic0, ctx, layout, null, tmp, opts); mid = tmp[0]?.media ?? null; }
+        if (!mid) mid = vmlImage(ctx.part, attr(ole, 'spid'));
+        const binRel = ctx.rel?.(rid(ole));
+        const o = { id: uid(), type: 'image', ...rect, media: mid, name: attr(child(child(c, 'nvGraphicFramePr'), 'cNvPr'), 'name') };
+        o.ole = { progId: attr(ole, 'progId') ?? '', name: attr(ole, 'name') ?? '', ...(attr(ole, 'showAsIcon') === '1' ? { icon: true } : {}), ...(attr(ole, 'imgW') ? { imgW: num(attr(ole, 'imgW')), imgH: num(attr(ole, 'imgH')) } : {}) };
+        if (binRel?.external) o.ole.link = binRel.target;
+        else if (binRel) { const b = ctx.binMedia?.(binRel.target); if (b) { o.ole.bin = b; o.ole.ext = binRel.target.split('.').pop().toLowerCase(); o.ole.pkg = /\/package$/.test(binRel.type); } }
+        if (!mid) warnings.add('미리 보기 그림이 없는 OLE 개체는 빈 칸으로 표시합니다');
+        out.push(o);
+        return;
+      }
+      // 그 밖의 개체: 대체 그림
       const pic = descendants(c, 'pic')[0];
       if (pic) { readElement(pic, ctx, layout, null, out, opts); const last = out[out.length - 1]; if (last) Object.assign(last, rect); return; }
       warnings.add('표시할 수 없는 개체(OLE 등)를 건너뛰었습니다');
@@ -1873,7 +1974,11 @@ export function readPptx(input, opts = {}) {
     const x = xmlOf(path);
     if (!x) return null;
     const ext = descendants(x, 'chart').find((e) => attr(e, 'json'));
-    if (ext) { try { return JSON.parse(attr(ext, 'json')); } catch { /* 아래로 */ } }
+    // 차트 영역 그림 채우기 (미디어 id 는 파일마다 새로 정해짐)
+    const bgBlip = child(child(child(descendants(x, 'chartSpace')[0] ?? x, 'spPr'), 'blipFill'), 'blip');
+    const bgRel = bgBlip ? relsOf(path).get(attr(bgBlip, 'embed')) : null;
+    const bgMedia = bgRel && !bgRel.external ? loadMedia(bgRel.target) : null;
+    if (ext) { try { const j = JSON.parse(attr(ext, 'json')); if (bgMedia) j.bgMedia = bgMedia; else delete j.bgMedia; return j; } catch { /* 아래로 */ } }
     const plot = descendants(x, 'plotArea')[0];
     const typeEls = (plot?.children ?? []).filter((c) => /Chart$/.test(c.name));
     if (!typeEls.length) return null;
@@ -1888,14 +1993,17 @@ export function readPptx(input, opts = {}) {
       for (const pt of kids(cache, 'pt')) arr[num(attr(pt, 'idx'))] = child(pt, 'v')?.text ?? '';
       return arr;
     };
-    const fillOf = (sp) => { const c = readColor(child(sp, 'solidFill'), { clrMap: null }); return c && c.startsWith('#') ? c : null; };
+    // 테마 색(@accent1:lm75 …)도 그대로 (차트 계열 색은 보통 테마 색)
+    const fillOf = (sp) => readColor(child(sp, 'solidFill'), { clrMap: null }) ?? null;
     const lnOf = (sp) => { const ln = child(sp, 'ln'); return ln ? { color: readColor(child(ln, 'solidFill'), { clrMap: null }), w: attr(ln, 'w'), dash: attr(child(ln, 'prstDash'), 'val'), none: !!child(ln, 'noFill') } : null; };
     const dlOf = (dl) => {
       if (!dl || bool(attr(child(dl, 'delete'), 'val'))) return null;
       const on = (k) => bool(attr(child(dl, k), 'val'));
       if (!(on('showVal') || on('showPercent') || on('showCatName') || on('showSerName'))) return null;
       const pos = attr(child(dl, 'dLblPos'), 'val');
-      return { ...(pos ? { pos } : {}), val: on('showVal'), cat: on('showCatName'), ser: on('showSerName'), pct: on('showPercent') };
+      const nf = child(dl, 'numFmt');
+      const fmt = nf && attr(nf, 'sourceLinked') !== '1' && attr(nf, 'formatCode') && attr(nf, 'formatCode') !== 'General' ? attr(nf, 'formatCode') : null;
+      return { ...(pos ? { pos } : {}), val: on('showVal'), cat: on('showCatName'), ser: on('showSerName'), pct: on('showPercent'), ...(fmt ? { fmt } : {}) };
     };
     const axById = new Map();
     for (const a of (plot?.children ?? []).filter((c) => /Ax$/.test(c.name))) axById.set(attr(child(a, 'axId'), 'val'), a);
@@ -1908,6 +2016,8 @@ export function readPptx(input, opts = {}) {
     const series = [];
     let grouping = null;
     let variant;
+    let unnamed = false;
+    let srcFmt = null;
     for (const typeEl of typeEls) {
       const k = kindOf(typeEl);
       const g = attr(child(typeEl, 'grouping'), 'val');
@@ -1920,10 +2030,13 @@ export function readPptx(input, opts = {}) {
         const i = series.length;
         const tx = child(sEl, 'tx');
         const name = tx ? (child(tx, 'v')?.text ?? vals(tx)[0] ?? `계열 ${i + 1}`) : `계열 ${i + 1}`;
+        if (!tx) unnamed = true;
+        const fc = descendants(child(sEl, 'val') ?? child(sEl, 'yVal'), 'formatCode')[0]?.text;
+        if (fc && fc !== 'General' && !srcFmt) srcFmt = fc;
         const sp = child(sEl, 'spPr');
         const ln = lnOf(sp);
         const lineLike = k === 'line' || k === 'scatter' || (k === 'radar' && variant !== 'filled');
-        const color = lineLike ? (ln?.color?.startsWith('#') ? ln.color : null) : fillOf(sp);
+        const color = lineLike ? (ln?.color ?? null) : fillOf(sp);
         const o = { name, vals: vals(child(sEl, 'val') ?? child(sEl, 'yVal')).map((v) => Number(v) || 0), ...(color ? { color } : {}), _cats: vals(child(sEl, 'cat') ?? child(sEl, 'xVal')) };
         if (combo) o.type = k === 'bar' ? 'col' : k;
         if (secondary) o.axis = 'secondary';
@@ -1967,7 +2080,7 @@ export function readPptx(input, opts = {}) {
     const titleEl = child(chartEl, 'title');
     const autoDeleted = bool(attr(child(chartEl, 'autoTitleDeleted'), 'val'));
     // 제목 글이 없으면: 계열이 하나일 때 계열 이름이 자동 제목 (PowerPoint 와 같음)
-    const title = descendants(titleEl, 't').map((t) => t.text).join('') || ((titleEl || !autoDeleted) && series.length === 1 && !['pie', 'doughnut'].includes(kind) ? series[0].name : (titleEl && series.length === 1 ? series[0].name : ''));
+    const title = descendants(titleEl, 't').map((t) => t.text).join('') || (unnamed ? '' : (titleEl || !autoDeleted) && series.length === 1 && !['pie', 'doughnut'].includes(kind) ? series[0].name : (titleEl && series.length === 1 ? series[0].name : ''));
     const tsz = attr(descendants(titleEl, 'defRPr')[0], 'sz') ?? attr(descendants(titleEl, 'rPr')[0], 'sz');
     const legend = attr(child(descendants(x, 'legend')[0], 'legendPos'), 'val');
     const dl = dlOf(kids(typeEls[0], 'dLbls')[0]);
@@ -2004,6 +2117,9 @@ export function readPptx(input, opts = {}) {
       const catAx = ids.find((a) => a.name === 'catAx' || a.name === 'dateAx') ?? ids.find((a) => a !== primaryVal);
       const y2 = [...axById.values()].find((a) => a.name === 'valAx' && a !== primaryVal && attr(child(a, 'axPos'), 'val') === 'r');
       const axes = { x: axisOpts(catAx), y: axisOpts(primaryVal), ...(y2 && series.some((s2) => s2.axis) ? { y2: axisOpts(y2) } : {}) };
+      // 축 서식이 '원본에 연결' 이면 값의 서식 코드 (#,##0 등) 를 축 · 레이블에 씀
+      const vnf = child(primaryVal, 'numFmt');
+      if (srcFmt && !axes.y?.fmt && (!vnf || attr(vnf, 'sourceLinked') !== '0')) axes.y = { ...(axes.y ?? {}), fmt: srcFmt };
       for (const k of Object.keys(axes)) if (!axes[k]) delete axes[k];
       if (Object.keys(axes).length) out.axes = axes;
       const grid = { major: !!child(primaryVal, 'majorGridlines'), ...(child(primaryVal, 'minorGridlines') ? { minor: true } : {}), ...(catAx && child(catAx, 'majorGridlines') ? { cat: true } : {}) };
@@ -2028,6 +2144,7 @@ export function readPptx(input, opts = {}) {
     const cs = descendants(x, 'chartSpace')[0] ?? x;
     const cbg = fillOf(child(cs, 'spPr'));
     if (cbg) out.bg = cbg;
+    if (bgMedia) out.bgMedia = bgMedia;
     const fsz = attr(descendants(child(cs, 'txPr'), 'defRPr')[0], 'sz');
     if (fsz && Math.abs(Number(fsz) - 1197) > 50) out.font = { size: Number(fsz) / 100 };
     return out;
@@ -2042,8 +2159,8 @@ export function readPptx(input, opts = {}) {
     if (ref) {
       const idx = num(attr(ref, 'idx'));
       const col = readColor(ref, ctx);
-      const tpl = idx >= 1001 ? themeInfo?.bgStyles?.[idx - 1001] : themeInfo?.fillStyles?.[idx - 1];
-      if (tpl && tpl.name !== 'solidFill') { const f = readFill({ children: [tpl] }, ctx, col); if (f) return f; }
+      const tpl = idx >= 1001 ? TI(ctx)?.bgStyles?.[idx - 1001] : TI(ctx)?.fillStyles?.[idx - 1];
+      if (tpl && tpl.name !== 'solidFill') { const f = readFill({ children: [tpl] }, tplCtx(ctx), col); if (f) return f; }
       return col ? { type: 'solid', color: col } : null;
     }
     return undefined;
@@ -2073,7 +2190,7 @@ export function readPptx(input, opts = {}) {
     const layout = lRel ? loadLayout(lRel.target) : null;
     const clrOvr = descendants(child(x, 'clrMapOvr'), 'overrideClrMapping')[0];
     const clrMap = clrOvr ? readClrMap(clrOvr) : layout?.clrMap ?? layout?.master.clrMap;
-    const ctx = { ...partCtx(path, clrMap), part: path };
+    const ctx = { ...partCtx(path, clrMap), part: path, ti: layout?.master.ti };
     // WIPOINT 확장 (우리 앱이 쓴 파일이면 전환 · 애니메이션 · 레이아웃을 그대로)
     let meta = null;
     const wpEl = descendants(child(x, 'extLst'), 'slide').find((e) => attr(e, 'json'));
@@ -2084,13 +2201,13 @@ export function readPptx(input, opts = {}) {
     const bgObjects = [];
     if (layout) {
       const showMaster = layout.showMasterSp && attr(x, 'showMasterSp') !== '0';
-      if (showMaster) readShapeTree(layout.master.spTree, { ...layout.master.ctx, part: layout.master.path }, null, null, bgObjects, { skipPh: true, isMaster: true });
-      readShapeTree(layout.spTree, { ...layout.ctx, part: layout.path }, null, null, bgObjects, { skipPh: true, isMaster: true });
+      if (showMaster) readShapeTree(layout.master.spTree, { ...layout.master.ctx, clrMap, part: layout.master.path }, null, null, bgObjects, { skipPh: true, isMaster: true });
+      readShapeTree(layout.spTree, { ...layout.ctx, clrMap, part: layout.path }, null, null, bgObjects, { skipPh: true, isMaster: true });
       for (const o of bgObjects) { o.decor = true; o.id = `bg-${o.id}`; delete o.grp; }
     }
     let bg = readBg(child(child(x, 'cSld'), 'bg'), ctx);
-    if (bg === undefined && layout) bg = readBg(layout.bg, layout.ctx);
-    if (bg === undefined && layout) bg = readBg(layout.master.bg, layout.master.ctx);
+    if (bg === undefined && layout) bg = readBg(layout.bg, withMap(layout.ctx, clrMap));
+    if (bg === undefined && layout) bg = readBg(layout.master.bg, withMap(layout.master.ctx, clrMap));
     // 메모
     let notes = '';
     const nRel = [...rels.values()].find((r) => r.type.endsWith('/notesSlide'));

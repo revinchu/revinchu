@@ -6,9 +6,38 @@ import { chartSvg } from './chart.js';
 import { fxOf, fxStyle } from './effects.js';
 import { webFont } from './webfonts.js';
 import { parseLatex, toMathML } from './math.js';
+import { emfToSvg } from './emf.js';
+import { wmfToSvg } from './wmf.js';
+import { symbolTable, symbolText } from './symfont.js';
+import { decodeTiff } from './tiff.js';
+import { pngDataUrl } from './pdf.js';
 
 export const escHtml = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const f = (n) => Math.round(n * 100) / 100;
+
+/** 브라우저가 그리지 못하는 그림 (EMF · WMF → SVG, TIFF → PNG) data URL. 원본은 그대로 두고 화면에만 (다시 저장하면 원본) */
+const metaCache = new Map();
+export function displaySrc(src) {
+  if (typeof src !== 'string' || !/^data:image\/(x-)?(emf|wmf|x-msmetafile|tiff?)[;,]/i.test(src)) return src;
+  if (metaCache.has(src)) return metaCache.get(src);
+  let out = src;
+  try {
+    const b64 = src.slice(src.indexOf(',') + 1);
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const tif = /^data:image\/tiff?/i.test(src) ? decodeTiff(bytes) : null;
+    if (tif) out = pngDataUrl(tif.w, tif.h, new Uint8Array(tif.rgba.buffer));
+    else {
+      // 그릴 것이 없는 메타파일은 빈 그림 (깨진 그림 표시 대신)
+      const svg = emfToSvg(bytes) ?? wmfToSvg(bytes) ?? (/tiff?/i.test(src.slice(5, 20)) ? null : '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>');
+      if (svg) out = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
+    }
+  } catch { /* 원본 그대로 */ }
+  if (metaCache.size > 200) metaCache.clear();
+  metaCache.set(src, out);
+  return out;
+}
 const KO_FALLBACK = "'맑은 고딕', 'Malgun Gothic', 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif";
 
 export function fontStack(theme, font) {
@@ -19,17 +48,30 @@ export function fontStack(theme, font) {
   return wf && wf.family !== n ? `'${n}', '${wf.family}', ${KO_FALLBACK}` : `'${n}', ${KO_FALLBACK}`;
 }
 
+/** 방사형 그라데이션의 중심 (fillToRect: 안쪽 사각형 l t r b 비율의 가운데) */
+export function gradCenter(fill) {
+  const [l, t, r, b] = fill.focus ?? [0.5, 0.5, 0.5, 0.5];
+  return [(l + 1 - r) / 2, (t + 1 - b) / 2];
+}
+function gradCenterCss(fill) {
+  const [cx, cy] = gradCenter(fill);
+  const at = `at ${f(cx * 100)}% ${f(cy * 100)}%`;
+  // 마지막 색 지점이 가장 먼 모서리에 닿음 (PowerPoint 방사형)
+  return `${fill.path === true ? 'circle' : 'ellipse'} farthest-corner ${at}`;
+}
+
 /** 채우기 → CSS 배경 */
 export function fillCss(theme, fill, media = {}) {
   if (!fill) return 'transparent';
   if (fill.type === 'solid') return resolveColor(theme, fill.color, 'transparent');
   if (fill.type === 'gradient') {
     const stops = (fill.stops ?? []).map(([p, c]) => `${resolveColor(theme, c, '#fff')} ${f(p * 100)}%`).join(', ');
-    return fill.path ? `radial-gradient(circle, ${stops})` : `linear-gradient(${f((fill.angle ?? 90) + 90)}deg, ${stops})`;
+    return fill.path ? `radial-gradient(${gradCenterCss(fill)}, ${stops})` : `linear-gradient(${f((fill.angle ?? 90) + 90)}deg, ${stops})`;
   }
   if (fill.type === 'image') {
-    const src = media[fill.media] ?? fill.src;
-    return src ? `url("${src}") center / ${fill.tile ? 'auto' : '100% 100%'} ${fill.tile ? 'repeat' : 'no-repeat'}` : 'transparent';
+    // 큰따옴표는 style="…" 속성을 끊으므로 작은따옴표
+    const src = displaySrc(media[fill.media] ?? fill.src);
+    return src ? `url('${src}') center / ${fill.tile ? 'auto' : '100% 100%'} ${fill.tile ? 'repeat' : 'no-repeat'}` : 'transparent';
   }
   return 'transparent';
 }
@@ -114,8 +156,10 @@ export function textHtml(theme, o, body, { editable = false, prompt = false, sca
     if (label && (p.runs.length || editable)) {
       const bc = d.bullet.color ? resolveColor(theme, d.bullet.color) : runColor(theme, o, p.runs[0] ?? end);
       const bsz = (d.bullet.size ?? 1) * baseSize;
-      const bfont = d.bullet.font ? `font-family:${fontStack(theme, d.bullet.font)};` : '';
-      inner += `<span class="bu" contenteditable="false" style="display:inline-block;min-width:${f(Math.max(0, -d.indent))}px;text-indent:0;color:${bc};font-size:${f(bsz * PX_PER_PT)}px;${bfont}">${escHtml(label)}</span>`;
+      // 기호 글꼴 (Wingdings 등) 글머리 기호는 같은 모양의 유니코드로
+      const sym = d.bullet.type === 'char' && symbolTable(d.bullet.font);
+      const bfont = d.bullet.font && !sym ? `font-family:${fontStack(theme, d.bullet.font)};` : '';
+      inner += `<span class="bu" contenteditable="false" style="display:inline-block;min-width:${f(Math.max(0, -d.indent))}px;text-indent:0;color:${bc};font-size:${f(bsz * PX_PER_PT)}px;${bfont}">${escHtml(sym ? symbolText(d.bullet.font, label) : label)}</span>`;
     }
     if (!p.runs.length) {
       inner += prompt && pi === 0 ? `<span class="ph-prompt" data-prompt="1">${escHtml(placeholderPrompt(o))}</span>` : '<br>';
@@ -135,10 +179,12 @@ function runHtml(theme, o, p, r, fsc, editable) {
   const size = (r.size ?? defaultSize(o, p.lvl ?? 0)) * fsc;
   const deco = [r.u ? 'underline' : '', r.s ? 'line-through' : ''].filter(Boolean).join(' ');
   const font = r.font ?? defaultFont(o);
+  // 기호 글꼴 글자는 화면에만 유니코드로 (편집 중에는 원래 글자 그대로)
+  const sym = !editable && symbolTable(font);
   const st = [
     `font-size:${f(size * PX_PER_PT)}px`,
     `color:${runColor(theme, o, r)}`,
-    `font-family:${fontStack(theme, font)}`,
+    `font-family:${fontStack(theme, sym ? '+mn' : font)}`,
     (r.b ?? (o.phKind?.head && r.b !== false)) ? 'font-weight:700' : '',
     r.i ? 'font-style:italic' : '',
     deco ? `text-decoration:${deco}` : '',
@@ -150,7 +196,7 @@ function runHtml(theme, o, p, r, fsc, editable) {
     r.outline ? `-webkit-text-stroke:${f(r.outline.width ?? 1)}px ${resolveColor(theme, r.outline.color ?? '@tx1')}` : '',
   ].filter(Boolean).join(';');
   const attr = editable ? ` data-r="${escHtml(JSON.stringify({ ...r, t: undefined }))}"` : '';
-  const txt = escHtml(r.t).replace(/\v|\u000b/g, '<br>');
+  const txt = escHtml(sym ? symbolText(font, r.t) : r.sym && !editable ? symbolText(r.sym, r.t, true) : r.t).replace(/\v|\u000b/g, '<br>');
   if (r.link && !editable) return `<a class="lnk" href="${escHtml(r.link)}" target="_blank" rel="noopener" style="${st}">${txt}</a>`;
   return `<span style="${st}"${attr}>${txt}</span>`;
 }
@@ -164,7 +210,11 @@ export function svgFill(theme, fill, w, h, media, defs) {
   const id = nextId();
   if (fill.type === 'gradient') {
     const stops = (fill.stops ?? []).map(([p, c]) => { const col = resolveColor(theme, c, '#fff'); return `<stop offset="${f(p * 100)}%" stop-color="${col}"/>`; }).join('');
-    if (fill.path) defs.push(`<radialGradient id="${id}">${stops}</radialGradient>`);
+    if (fill.path) {
+      const [cx, cy] = gradCenter(fill);
+      const r = Math.max(...[[0, 0], [1, 0], [0, 1], [1, 1]].map(([x, y]) => Math.hypot(x - cx, y - cy)));
+      defs.push(`<radialGradient id="${id}" cx="${f(cx)}" cy="${f(cy)}" r="${f(r)}">${stops}</radialGradient>`);
+    }
     else {
       const a = ((fill.angle ?? 90) * Math.PI) / 180;
       const x = Math.cos(a) / 2;
@@ -174,7 +224,7 @@ export function svgFill(theme, fill, w, h, media, defs) {
     return `url(#${id})`;
   }
   if (fill.type === 'image') {
-    const src = media[fill.media] ?? fill.src;
+    const src = displaySrc(media[fill.media] ?? fill.src);
     if (!src) return 'none';
     defs.push(`<pattern id="${id}" patternUnits="userSpaceOnUse" width="${f(w)}" height="${f(h)}"><image href="${escHtml(src)}" width="${f(w)}" height="${f(h)}" preserveAspectRatio="none"/></pattern>`);
     return `url(#${id})`;
@@ -235,7 +285,7 @@ export function textBoxHtml(theme, o, body, w, h, opts = {}) {
 }
 
 function imageHtml(theme, o, media, opts) {
-  const src = media[o.media] ?? o.src;
+  const src = displaySrc(media[o.media] ?? o.src);
   if (!src) {
     // SmartArt 그림 칸: 회색 칸 (편집 화면에서는 누르면 그림 넣기)
     if (o.picSlot) return `<div class="pic-ph" style="position:absolute;inset:0;background:#E7E6E6;${o.shape === 'ellipse' ? 'border-radius:50%;' : ''}display:flex;align-items:center;justify-content:center;color:#8a8a8a;font-size:${f(Math.min(o.w, o.h) * 0.28)}px">${opts.prompt ? '<span class="pic-ph-ico">🖼</span>' : ''}</div>`;
@@ -336,7 +386,7 @@ export function objectHtml(theme, o, media, opts = {}) {
   let inner;
   if (o.type === 'image') inner = imageHtml(theme, o, media, opts);
   else if (o.type === 'table') inner = tableHtml(theme, o, opts);
-  else if (o.type === 'chart') inner = chartSvg(o.chart, o.w, o.h, theme, { font: theme.fonts.minor });
+  else if (o.type === 'chart') inner = (o.chart?.bgMedia && media[o.chart.bgMedia] ? `<img src="${escHtml(displaySrc(media[o.chart.bgMedia]))}" alt="" style="position:absolute;inset:0;width:100%;height:100%" draggable="false">` : '') + chartSvg(o.chart, o.w, o.h, theme, { font: theme.fonts.minor });
   else if (o.type === 'media' || o.type === 'video') inner = mediaHtml(o, media, opts);
   else if (o.type === 'zoom') inner = zoomHtml(o, opts);
   else if (o.type === 'equation') inner = `<div class="eq" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:${f((o.size ?? 28) * PX_PER_PT)}px;color:${resolveColor(theme, o.color ?? '@tx1', '#000')};font-family:'Cambria Math','STIX Two Math','Latin Modern Math',serif">${toMathML(parseLatex(o.latex ?? ''))}</div>`;

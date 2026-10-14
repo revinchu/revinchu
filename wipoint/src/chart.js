@@ -311,7 +311,7 @@ function labelText(lo, v, s, cat, pct, fmt) {
   const out = [];
   if (lo.ser) out.push(s.name);
   if (lo.cat) out.push(cat);
-  if (lo.val) out.push(fmtNum(v, fmt));
+  if (lo.val) out.push(fmtNum(v, lo.fmt ?? fmt));
   if (lo.pct && pct != null) out.push(`${Math.round(pct * 100)}%`);
   return out.join(', ');
 }
@@ -1090,7 +1090,9 @@ function cartesian3dSvg(c, series, cats, box, theme, { fs, fc, text, gridC, axis
   const dy = -depthPx * Math.max(0.15, Math.sin((Math.min(80, Math.max(5, v3.rotX)) * Math.PI) / 180) * 2.2);
   const valLbl = (v) => fmtNum(v, grouping === 'percent' ? '0"%"' : c.axes?.y?.fmt);
   const labW = Math.max(...[sc.lo, sc.hi].map((v) => textWidth(valLbl(v), fs * 0.9))) + 8;
-  const catH = fs * 1.6;
+  // 항목 이름이 길면 기울여 쓰므로 아래 자리를 더 둠
+  const catMaxW = Math.max(0, ...cats.map((t) => textWidth(String(t), fs * 0.9)));
+  const catH = !horiz && catMaxW > ((W - labW - Math.abs(dx)) / Math.max(1, n)) * 0.95 ? Math.min(H * 0.35, catMaxW * 0.72 + fs) : fs * 1.6;
   const x0 = box.left + (horiz ? Math.min(W * 0.3, Math.max(...cats.map((t) => textWidth(String(t), fs * 0.9)), 10) + 10) : labW);
   const x1 = box.right - dx - 4;
   const y0 = box.top - dy + 4;
@@ -1107,18 +1109,19 @@ function cartesian3dSvg(c, series, cats, box, theme, { fs, fc, text, gridC, axis
     const p = vpos(v);
     if (horiz) {
       g.push(`<line x1="${f(p)}" y1="${f(y1)}" x2="${f(p + dx)}" y2="${f(y1 + dy)}" stroke="${gridC}" stroke-width="0.7"/><line x1="${f(p + dx)}" y1="${f(y0 + dy)}" x2="${f(p + dx)}" y2="${f(y1 + dy)}" stroke="${gridC}" stroke-width="0.7"/>`);
-      g.push(text(p, box.bottom - fs * 0.35, valLbl(v), { size: fs * 0.9 }));
+      if (!c.axes?.y?.hide) g.push(text(p, box.bottom - fs * 0.35, valLbl(v), { size: fs * 0.9 }));
     } else {
       g.push(`<line x1="${f(x0)}" y1="${f(p)}" x2="${f(x0 + dx)}" y2="${f(p + dy)}" stroke="${gridC}" stroke-width="0.7"/><line x1="${f(x0 + dx)}" y1="${f(p + dy)}" x2="${f(x1 + dx)}" y2="${f(p + dy)}" stroke="${gridC}" stroke-width="0.7"/>`);
-      g.push(text(x0 - 6, p + fs * 0.32, valLbl(v), { size: fs * 0.9, anchor: 'end' }));
+      if (!c.axes?.y?.hide) g.push(text(x0 - 6, p + fs * 0.32, valLbl(v), { size: fs * 0.9, anchor: 'end' }));
     }
   }
   out.push(`<g data-el="axisY">${g.join('')}</g>`);
   // 항목 이름
   const slot = (horiz ? y1 - y0 : x1 - x0) / n;
+  const tilt = !horiz && Math.max(0, ...cats.map((t) => textWidth(String(t), fs * 0.9))) > slot * 0.95;
   const cl = cats.map((t, i) => (horiz
     ? text(x0 - 6, y0 + slot * (i + 0.5) + fs * 0.32, String(t), { size: fs * 0.9, anchor: 'end' })
-    : text(x0 + slot * (i + 0.5), y1 + fs * 1.15, String(t), { size: fs * 0.9 })));
+    : tilt ? text(x0 + slot * (i + 0.5), y1 + fs * 0.8, String(t), { size: fs * 0.9, anchor: 'end', rot: -45 }) : text(x0 + slot * (i + 0.5), y1 + fs * 1.15, String(t), { size: fs * 0.9 })));
   out.push(`<g data-el="axisX">${cl.join('')}</g>`);
   const gap = (c.gap ?? 150) / 100;
   const lo2 = labelOpts(c, series[0], kind);

@@ -159,7 +159,8 @@ test('python-pptx (PowerPoint 기본 서식) 파일 읽기: 마스터 · 레이�
   // 도형 스타일 fillRef idx=3 → 테마의 세 번째 채우기(그라데이션), 색은 accent1
   assert.equal(shapes[0].fill.type, 'gradient');
   assert.ok(shapes[0].fill.stops.every(([, c]) => c.startsWith('@accent1')));
-  assert.equal(shapes[0].line.color, '@accent1');
+  // 선 스타일 lnRef idx=1 → 테마 선 스타일 1 (PowerPoint 2007 테마: phClr shade 95%)
+  assert.ok(shapes[0].line.color.startsWith('@accent1'));
   assert.equal(shapes[1].fill.color, '#C00000');
   assert.equal(s2.objects.find((o) => o.type === 'table').rows[1].cells[1].text.paras[0].runs[0].t, '42');
   const ch = s2.objects.find((o) => o.type === 'chart').chart;
