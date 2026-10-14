@@ -10,7 +10,7 @@ import { paraDefaults, tableCellStyle, slideBackground, themeDecor, slideDecor }
 import { KNOWN_SHAPES } from './shapes.js';
 import { decodeEmbeddedFont } from './fonts.js';
 import { fxOf, fxXml, fxFromXml } from './effects.js';
-import { fallbackChart } from './chart.js';
+import { fallbackChart, is3d, VIEW3D_DEFAULT } from './chart.js';
 import { ART_BY_XML } from './arteffects.js';
 import { SOUNDS, SOUND_BY_FILE, soundWav } from './sounds.js';
 
@@ -270,6 +270,11 @@ const ERR_XML = { fixed: 'fixedVal', percent: 'percentage', stdDev: 'stdDev', st
 const MARKER_XML = { circle: 'circle', square: 'square', diamond: 'diamond', triangle: 'triangle', x: 'x', none: 'none' };
 
 /** opts.embed: 데이터 통합 문서 관계 id (있으면 Sheet1 셀 참조 + 캐시로 씀) */
+/** c:view3D (+ 벽 · 바닥) — X/Y 회전 · 깊이 · 원근 */
+function view3dXml(ch) {
+  const v = { ...VIEW3D_DEFAULT, ...(ch.kind === 'pie' ? { rotX: 30, rotY: 0 } : {}), ...(ch.view3d ?? {}) };
+  return `<c:view3D><c:rotX val="${Math.round(v.rotX)}"/><c:rotY val="${Math.round(((v.rotY % 360) + 360) % 360)}"/><c:depthPercent val="${Math.max(20, Math.min(2000, Math.round(v.depth)))}"/><c:rAngAx val="${ch.kind === 'pie' ? 0 : 1}"/>${ch.kind === 'pie' ? `<c:perspective val="${Math.round(v.persp ?? 30)}"/>` : ''}</c:view3D>`;
+}
 export function chartXml(orig, opts = {}) {
   // 폭포 · 깔때기 · 트리맵 등: 다른 프로그램용 일반 차트로 쓰고, 원본은 WIPOINT 확장 JSON 에
   const ch = fallbackChart(orig);
@@ -349,6 +354,7 @@ export function chartXml(orig, opts = {}) {
     g.items.push(i);
   });
   const has2 = groups.some((g) => g.axis === 2);
+  const d3 = is3d(ch) && groups.length === 1;
   const AX = { 1: '<c:axId val="111111111"/><c:axId val="222222222"/>', 2: '<c:axId val="333333333"/><c:axId val="444444444"/>' };
   const chartDl = (t, stacked) => (ch.labels ? dlXml(ch.labels, t, stacked, t === 'col' || t === 'bar') : '');
   const plots = groups.map((g) => {
@@ -358,6 +364,15 @@ export function chartXml(orig, opts = {}) {
     const sers = g.items.map((i) => serXml(ch.series[i], i, t === 'pie' ? 'pie' : t, stacked)).join('');
     const dl = chartDl(t === 'pie' ? 'pie' : t, stacked);
     const vary = `<c:varyColors val="${pie || ch.vary ? 1 : 0}"/>`;
+    // 3차원: bar3DChart · line3DChart · area3DChart · pie3DChart (계열을 깊이로 두면 grouping standard + 계열 축)
+    if (d3) {
+      const full3 = ch.variant3d === 'full' || ((t === 'line' || t === 'area') && gp === 'standard');
+      const ax3 = full3 ? `${AX[1]}<c:axId val="555555555"/>` : AX[1];
+      if (t === 'col' || t === 'bar') return `<c:bar3DChart><c:barDir val="${kind === 'bar' ? 'bar' : 'col'}"/><c:grouping val="${full3 ? 'standard' : gp}"/>${vary}${sers}${dl}<c:gapWidth val="${Math.round(ch.gap ?? 150)}"/><c:shape val="box"/>${ax3}</c:bar3DChart>`;
+      if (t === 'line') return `<c:line3DChart><c:grouping val="${gp}"/>${vary}${sers}${dl}${AX[1]}<c:axId val="555555555"/></c:line3DChart>`;
+      if (t === 'area') return `<c:area3DChart><c:grouping val="${gp}"/>${vary}${sers}${dl}${ax3}</c:area3DChart>`;
+      if (t === 'pie' && kind === 'pie') return `<c:pie3DChart>${vary}${sers}${dl}</c:pie3DChart>`;
+    }
     if (t === 'col' || t === 'bar') return `<c:barChart><c:barDir val="${kind === 'bar' ? 'bar' : 'col'}"/><c:grouping val="${gp}"/>${vary}${sers}${dl}<c:gapWidth val="${Math.round(ch.gap ?? (stacked ? 150 : 219))}"/><c:overlap val="${Math.round(ch.overlap ?? (stacked ? 100 : -27))}"/>${AX[g.axis]}</c:barChart>`;
     if (t === 'line') return `<c:lineChart><c:grouping val="${gp}"/>${vary}${sers}${dl}<c:marker val="1"/>${AX[g.axis]}</c:lineChart>`;
     if (t === 'area') return `<c:areaChart><c:grouping val="${gp}"/>${vary}${sers}${dl}${AX[g.axis]}</c:areaChart>`;
@@ -382,6 +397,8 @@ export function chartXml(orig, opts = {}) {
     const catAx = `<c:${catTag}><c:axId val="111111111"/>${scaling(axes.x)}<c:delete val="${axes.x?.hide || kind === 'radar' && false ? 1 : 0}"/><c:axPos val="${horiz ? 'l' : 'b'}"/>${grid.cat ? gridLn(false) : ''}${axTitle(axes.x?.title, horiz ? '-5400000' : '')}${xy ? numFmt(axes.x) : '<c:numFmt formatCode="General" sourceLinked="1"/>'}<c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:spPr><a:ln w="9525">${solidFill('@tx1:lm25:lo75')}</a:ln></c:spPr>${txt}<c:crossAx val="222222222"/><c:crosses val="autoZero"/>${catTail}</c:${catTag}>`;
     const valAx = `<c:valAx><c:axId val="222222222"/>${scaling(axes.y)}<c:delete val="${axes.y?.hide ? 1 : 0}"/><c:axPos val="${horiz ? 'b' : 'l'}"/>${grid.major !== false ? gridLn(false) : ''}${grid.minor ? gridLn(true) : ''}${axTitle(axes.y?.title, horiz ? '' : '-5400000')}${numFmt(axes.y)}<c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:spPr><a:ln><a:noFill/></a:ln></c:spPr>${txt}<c:crossAx val="111111111"/><c:crosses val="autoZero"/><c:crossBetween val="${xy ? 'midCat' : 'between'}"/>${axes.y?.major ? `<c:majorUnit val="${Number(axes.y.major)}"/>` : ''}</c:valAx>`;
     ax = catAx + valAx;
+    // 3차원에서 계열 축 (깊이 방향)
+    if (d3 && (ch.variant3d === 'full' || kind === 'line' || (kind === 'area' && !grp))) ax += '<c:serAx><c:axId val="555555555"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="1"/><c:axPos val="b"/><c:majorTickMark val="out"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crossAx val="222222222"/><c:crosses val="autoZero"/></c:serAx>';
     if (has2) ax += `<c:catAx><c:axId val="333333333"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="1"/><c:axPos val="b"/><c:numFmt formatCode="General" sourceLinked="1"/><c:majorTickMark val="out"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crossAx val="444444444"/><c:crosses val="autoZero"/><c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/><c:noMultiLvlLbl val="0"/></c:catAx><c:valAx><c:axId val="444444444"/>${scaling(axes.y2)}<c:delete val="${axes.y2?.hide ? 1 : 0}"/><c:axPos val="r"/>${axTitle(axes.y2?.title, '5400000')}${numFmt(axes.y2)}<c:majorTickMark val="out"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:spPr><a:ln><a:noFill/></a:ln></c:spPr>${txt}<c:crossAx val="333333333"/><c:crosses val="max"/><c:crossBetween val="between"/>${axes.y2?.major ? `<c:majorUnit val="${Number(axes.y2.major)}"/>` : ''}</c:valAx>`;
   }
   const dTable = ch.dataTable && !pie && !xy && kind !== 'radar' ? `<c:dTable><c:showHorzBorder val="1"/><c:showVertBorder val="1"/><c:showOutline val="1"/><c:showKeys val="${ch.dataTable === 'nokeys' ? 0 : 1}"/></c:dTable>` : '';
@@ -392,7 +409,7 @@ export function chartXml(orig, opts = {}) {
   const chartSp = ch.bg || ch.border ? `<c:spPr>${ch.bg ? solidFill(ch.bg) : '<a:noFill/>'}${ch.border ? `<a:ln w="9525">${solidFill(ch.border)}</a:ln>` : '<a:ln><a:noFill/></a:ln>'}</c:spPr>` : '';
   const fsz = ch.font?.size ? Math.round(ch.font.size * 100) : 1197;
   const wx = `<c:extLst><c:ext uri="${WP_EXT_URI}"><wp:chart xmlns:wp="${WP_NS}" json="${esc(JSON.stringify(orig))}"/></c:ext></c:extLst>`;
-  return `${XML_HEAD}<c:chartSpace xmlns:c="${NS_C}" xmlns:a="${NS_A}" xmlns:r="${NS_R}"><c:roundedCorners val="0"/><c:chart>${title}<c:plotArea><c:layout/>${plots}${ax}${dTable}${plotSp}</c:plotArea>${legend}<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart>${chartSp}<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="${fsz}">${solidFill(ch.fontColor ?? ch.font?.color ?? '@tx1:lm65:lo35')}<a:latin typeface="+mn-lt"/><a:ea typeface="+mn-ea"/></a:defRPr></a:pPr><a:endParaRPr lang="ko-KR"/></a:p></c:txPr>${opts.embed ? `<c:externalData r:id="${opts.embed}"><c:autoUpdate val="0"/></c:externalData>` : ''}${wx}</c:chartSpace>`;
+  return `${XML_HEAD}<c:chartSpace xmlns:c="${NS_C}" xmlns:a="${NS_A}" xmlns:r="${NS_R}"><c:roundedCorners val="0"/><c:chart>${title}${d3 ? view3dXml(ch) : ''}<c:plotArea><c:layout/>${plots}${ax}${dTable}${plotSp}</c:plotArea>${legend}<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart>${chartSp}<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="${fsz}">${solidFill(ch.fontColor ?? ch.font?.color ?? '@tx1:lm65:lo35')}<a:latin typeface="+mn-lt"/><a:ea typeface="+mn-ea"/></a:defRPr></a:pPr><a:endParaRPr lang="ko-KR"/></a:p></c:txPr>${opts.embed ? `<c:externalData r:id="${opts.embed}"><c:autoUpdate val="0"/></c:externalData>` : ''}${wx}</c:chartSpace>`;
 }
 
 // ───────────── 애니메이션 → p:timing ─────────────
@@ -1876,6 +1893,14 @@ export function readPptx(input, opts = {}) {
     const legend = attr(child(descendants(x, 'legend')[0], 'legendPos'), 'val');
     const dl = dlOf(kids(typeEls[0], 'dLbls')[0]);
     const out = { kind, title, cats: cats.length ? cats : series[0]?.vals.map((_, i) => String(i + 1)) ?? [], series, legend: legend && ['t', 'b', 'l', 'r', 'tr'].includes(legend) ? legend : null, labels: dl ?? false };
+    // 3차원 (bar3DChart 등 + c:view3D)
+    if (typeEls.length === 1 && /3DChart$/.test(typeEls[0].name) && ['col', 'bar', 'line', 'area', 'pie'].includes(kind)) {
+      out.d3 = true;
+      const v = descendants(chartEl, 'view3D')[0];
+      const n = (k) => (child(v, k) ? num(attr(child(v, k), 'val')) : null);
+      out.view3d = Object.fromEntries([['rotX', n('rotX')], ['rotY', n('rotY')], ['depth', n('depthPercent')], ['persp', n('perspective')]].filter(([, x]) => x != null));
+      if ((kind === 'col' || kind === 'bar') && attr(child(typeEls[0], 'grouping'), 'val') === 'standard') out.variant3d = 'full';
+    }
     if (grouping) out.grouping = grouping;
     if (variant) out.variant = variant;
     if (tsz && Number(tsz) !== 1862) out.titleSize = Number(tsz) / 100;

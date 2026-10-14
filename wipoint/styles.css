@@ -776,3 +776,4 @@ body.mobile .smart-cats { flex-direction: row; flex-wrap: wrap; border: 0; }
 .tu { display: inline-block; white-space: pre; }
 .fx-opts .row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
 .fx-opts .row > span:first-child { min-width: 110px; }
+.c3-prev { margin-top: 8px; text-align: center; background: #fff; border: 1px solid #e0e0e0; }

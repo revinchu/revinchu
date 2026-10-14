@@ -521,3 +521,34 @@ test('텍스트 애니메이션(단어/문자) · 애니메이션/전환 소리:
   const a = back.anims[0];
   assert.deepEqual([a.textUnit, a.unitDelay, a.sound, a.effect], ['letter', 20, 'applause', 'fly']);
 });
+
+test('3차원 차트: bar3DChart · line3DChart · area3DChart · pie3DChart + view3D 쓰기 · 읽기', async () => {
+  const { chartSvg } = await import('../src/chart.js');
+  const { THEMES } = await import('../src/themes.js');
+  const base = { cats: ['A', 'B', 'C'], series: [{ name: 'S1', vals: [1, 2, 3] }, { name: 'S2', vals: [3, 1, 2] }] };
+  const cases = [
+    [{ ...base, kind: 'col', d3: true, view3d: { rotX: 20, rotY: 30, depth: 150 } }, 'bar3DChart'],
+    [{ ...base, kind: 'col', d3: true, variant3d: 'full' }, 'bar3DChart'],
+    [{ ...base, kind: 'bar', d3: true, grouping: 'stacked' }, 'bar3DChart'],
+    [{ ...base, kind: 'line', d3: true }, 'line3DChart'],
+    [{ ...base, kind: 'area', d3: true }, 'area3DChart'],
+    [{ ...base, kind: 'pie', d3: true, series: [base.series[0]] }, 'pie3DChart'],
+  ];
+  for (const [ch, el] of cases) {
+    const xml = chartXml(ch);
+    assert.match(xml, new RegExp(`<c:${el}>`), el);
+    assert.match(xml, /<c:view3D><c:rotX val="\d+"\/>/);
+    parseXml(xml);
+    // 다른 프로그램처럼 (확장 없이) 읽어도 3차원
+    const p = newPresentation();
+    p.slides[0].objects.push({ id: 'c1', type: 'chart', x: 10, y: 10, w: 400, h: 300, rot: 0, chart: ch });
+    const files = unzip(writePptx(p));
+    for (const k of Object.keys(files)) if (/charts\/chart\d+\.xml$/.test(k)) files[k] = new TextEncoder().encode(textOf(files[k]).replace(/<c:extLst>[^]*?<\/c:extLst>/, ''));
+    const back = readPptx(zip(files)).pres.slides[0].objects.find((o) => o.type === 'chart').chart;
+    assert.equal(back.d3, true, el);
+    assert.equal(back.kind, ch.kind);
+    if (ch.variant3d) assert.equal(back.variant3d, 'full');
+    if (ch.view3d) assert.deepEqual([back.view3d.rotX, back.view3d.rotY, back.view3d.depth], [20, 30, 150]);
+    assert.match(chartSvg(back, 400, 300, THEMES[0]), /<path/);
+  }
+});

@@ -11,7 +11,7 @@ import { THEMES, cloneTheme, themeByName, resolveColor, COLOR_SCHEMES, schemeCol
 import { SHAPE_GALLERY, SHAPE_LABEL, objLabel, shapePath, customPath, OPEN_SHAPES } from './shapes.js';
 import { MERGE_OPS, mergeLoops, flatten, placeLoops, loopsToShape } from './boolean.js';
 import { CHART_KINDS } from './chart.js';
-import { sampleChart, chartTypeDialog, chartDataDialog, chartElementsItems, chartLayoutGallery, chartStyleGallery, chartPaletteItems, resetChartStyle, switchChartRowCol, exportChartCsv, chartFontDialog, openChartPane, selChart } from './chartui.js';
+import { sampleChart, chartTypeDialog, chart3dDialog, chartDataDialog, chartElementsItems, chartLayoutGallery, chartStyleGallery, chartPaletteItems, resetChartStyle, switchChartRowCol, exportChartCsv, chartFontDialog, openChartPane, selChart } from './chartui.js';
 import { slideHtml, NUM_SCHEMES, BULLET_CHARS, DASH_LABEL } from './render.js';
 import { SHAPE_STYLES, WORDART, PICTURE_STYLES, TABLE_STYLES, tableStyleProps, DESIGN_IDEAS } from './presets.js';
 import { smartArt, SMART_KINDS, SMART_CATS, SMART_LABEL, SMART_COLORS, SMART_STYLES } from './smartart.js';
@@ -2117,6 +2117,7 @@ register({
     { sep: true },
     ...CHART_KINDS.map(([k, l]) => ({ label: l, icon: CHART_ICON[k], action: () => insertChart(k) })),
   ]),
+  chart3d: () => withChart((o) => chart3dDialog(o)),
   insertChartDialog: () => chartTypeDialog(null, (c) => { const o = insertChart(c.kind, null, c); chartDataDialog(o); }),
   chartData: () => chartDataDialog(),
   saveMyTemplate: () => formDialog('개인 서식 파일로 저장', [{ name: 'name', label: '이름', value: S.docName }], async (v) => { await saveMyTemplate(v.name.trim() || S.docName); toast('개인 서식 파일로 보관했습니다 (새로 만들기 › 개인 서식 파일)'); }),

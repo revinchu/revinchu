@@ -17,11 +17,11 @@ export const CHART_KINDS = [['col', '세로 막대형'], ['bar', '가로 막대�
 export const CHART_LABEL = Object.fromEntries(CHART_KINDS);
 /** 종류별 하위 형식 (PowerPoint [차트 종류 변경] 의 위 줄) — [grouping/variant 키, 이름] */
 export const CHART_SUBTYPES = {
-  col: [['clustered', '묶은 세로 막대형'], ['stacked', '누적 세로 막대형'], ['percent', '100% 기준 누적 세로 막대형']],
-  bar: [['clustered', '묶은 가로 막대형'], ['stacked', '누적 가로 막대형'], ['percent', '100% 기준 누적 가로 막대형']],
-  line: [['standard', '꺾은선형'], ['stacked', '누적 꺾은선형'], ['percent', '100% 기준 누적 꺾은선형'], ['markers', '표식이 있는 꺾은선형'], ['smooth', '부드러운 꺾은선형']],
-  area: [['standard', '영역형'], ['stacked', '누적 영역형'], ['percent', '100% 기준 누적 영역형']],
-  pie: [['pie', '원형'], ['explode', '쪼개진 원형']],
+  col: [['clustered', '묶은 세로 막대형'], ['stacked', '누적 세로 막대형'], ['percent', '100% 기준 누적 세로 막대형'], ['clustered3d', '3차원 묶은 세로 막대형'], ['stacked3d', '3차원 누적 세로 막대형'], ['percent3d', '3차원 100% 기준 누적 세로 막대형'], ['full3d', '3차원 세로 막대형']],
+  bar: [['clustered', '묶은 가로 막대형'], ['stacked', '누적 가로 막대형'], ['percent', '100% 기준 누적 가로 막대형'], ['clustered3d', '3차원 묶은 가로 막대형'], ['stacked3d', '3차원 누적 가로 막대형'], ['percent3d', '3차원 100% 기준 누적 가로 막대형']],
+  line: [['standard', '꺾은선형'], ['stacked', '누적 꺾은선형'], ['percent', '100% 기준 누적 꺾은선형'], ['markers', '표식이 있는 꺾은선형'], ['smooth', '부드러운 꺾은선형'], ['standard3d', '3차원 꺾은선형']],
+  area: [['standard', '영역형'], ['stacked', '누적 영역형'], ['percent', '100% 기준 누적 영역형'], ['standard3d', '3차원 영역형'], ['stacked3d', '3차원 누적 영역형'], ['percent3d', '3차원 100% 기준 누적 영역형']],
+  pie: [['pie', '원형'], ['explode', '쪼개진 원형'], ['pie3d', '3차원 원형'], ['explode3d', '3차원 쪼개진 원형']],
   doughnut: [['doughnut', '도넛형']],
   scatter: [['marker', '분산형'], ['smooth', '곡선 및 표식이 있는 분산형'], ['line', '직선 및 표식이 있는 분산형']],
   radar: [['standard', '방사형'], ['marker', '표식이 있는 방사형'], ['filled', '채워진 방사형']],
@@ -270,7 +270,9 @@ export function chartSvg(chart, w, h, theme, { font = '맑은 고딕' } = {}) {
   }
   const box = { left, right, top, bottom };
   let body;
-  if (pie) body = pieSvg(c, series, cats, box, theme, { fs, fc, text, shadow });
+  if (is3d(c) && kind === 'pie') body = pie3dSvg(c, series, cats, box, theme, { fs, fc, text });
+  else if (is3d(c)) body = cartesian3dSvg(c, series, cats, box, theme, { fs, fc, text, gridC, axisC });
+  else if (pie) body = pieSvg(c, series, cats, box, theme, { fs, fc, text, shadow });
   else if (kind === 'box') body = boxPlotSvg(c, series, box, theme, { fs, fc, text, gridC, axisC });
   else if (kind === 'treemap') body = treemapSvg(c, box, theme, { fs, text });
   else if (kind === 'sunburst') body = sunburstSvg(c, box, theme, { fs, text });
@@ -1036,4 +1038,210 @@ export function fallbackChart(ch) {
       { name: '중간값 아래', vals: stats.map((st) => st.med - st.q1) }, { name: '중간값 위', vals: stats.map((st) => st.q3 - st.med) }] };
   }
   return ch;
+}
+
+// ───────────── 3차원 차트 (PowerPoint 3-D 세로/가로 막대 · 꺾은선 · 영역 · 원형) ─────────────
+/** 3차원 회전 기본값 (PowerPoint: X 회전 15°, Y 회전 20°, 깊이 100%) — 원형은 X 30° */
+export const VIEW3D_DEFAULT = { rotX: 15, rotY: 20, depth: 100, persp: 30 };
+export const is3d = (c) => !!c?.d3 && ['col', 'bar', 'line', 'area', 'pie'].includes(c.kind);
+/** 색 밝게/어둡게 (k>0 흰색 쪽, k<0 검은색 쪽) */
+export function shadeHex(hex, k) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex ?? ''));
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  const ch = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => Math.round(k >= 0 ? v + (255 - v) * k : v * (1 + k)));
+  return `#${ch.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+}
+const poly = (pts, fill, extra = '') => `<path d="M${pts.map(([x, y]) => `${f(x)} ${f(y)}`).join(' L')} Z" fill="${fill}"${extra}/>`;
+/** 상자(직육면체) 하나: 앞면 (x, y, w, h) + 깊이 (dx, dy) — 위 · 옆면은 밝기를 달리 */
+function prism(x, y, w, h, dx, dy, color, el) {
+  const top = Math.min(y, y + h);
+  const bot = Math.max(y, y + h);
+  const a = el ? ` data-el="${el}"` : '';
+  return poly([[x + w, top], [x + w + dx, top + dy], [x + w + dx, bot + dy], [x + w, bot]], shadeHex(color, -0.28), a)
+    + poly([[x, top], [x + dx, top + dy], [x + w + dx, top + dy], [x + w, top]], shadeHex(color, 0.25), a)
+    + `<rect x="${f(x)}" y="${f(top)}" width="${f(Math.max(0, w))}" height="${f(bot - top)}" fill="${color}"${a}/>`;
+}
+
+/** 3차원 가로 · 세로 막대, 꺾은선(리본), 영역 */
+function cartesian3dSvg(c, series, cats, box, theme, { fs, fc, text, gridC, axisC }) {
+  const out = [];
+  const v3 = { ...VIEW3D_DEFAULT, ...(c.view3d ?? {}) };
+  const kind = c.kind;
+  const horiz = kind === 'bar';
+  const grouping = groupingOf(c, kind === 'col' || kind === 'bar' ? 'col' : 'line');
+  const full = c.variant3d === 'full' || ((kind === 'line' || kind === 'area') && grouping === 'standard');
+  const n = Math.max(1, cats.length);
+  const m = Math.max(1, series.length);
+  const vals = series.map((s) => cats.map((_, i) => numVal(s.vals?.[i]) ?? 0));
+  // 누적 / 100%
+  const stacked = grouping === 'stacked' || grouping === 'percent';
+  const totals = cats.map((_, i) => vals.reduce((a, v) => a + Math.abs(v[i]), 0) || 1);
+  const val = (si, i) => (grouping === 'percent' ? (vals[si][i] / totals[i]) * 100 : vals[si][i]);
+  const base = (si, i) => { let b = 0; for (let k = 0; k < si; k++) b += val(k, i); return stacked ? b : 0; };
+  let lo = Infinity; let hi = -Infinity;
+  series.forEach((_, si) => cats.forEach((__, i) => { const b = base(si, i); const t = b + val(si, i); lo = Math.min(lo, b, t); hi = Math.max(hi, b, t); }));
+  if (!Number.isFinite(lo)) { lo = 0; hi = 1; }
+  const sc = niceScale(Math.min(0, lo), Math.max(0, hi), 5, { min: c.axes?.y?.min, max: c.axes?.y?.max, major: c.axes?.y?.major });
+  // 깊이: 그림 크기 · Y 회전 · X 회전
+  const W = box.right - box.left; const H = box.bottom - box.top;
+  const depthPx = Math.min(W, H) * 0.16 * (v3.depth / 100) * (full ? Math.min(2.2, 0.8 + m * 0.35) : 1);
+  const dx = depthPx * Math.cos((Math.min(80, Math.max(0, v3.rotY)) * Math.PI) / 180);
+  const dy = -depthPx * Math.max(0.15, Math.sin((Math.min(80, Math.max(5, v3.rotX)) * Math.PI) / 180) * 2.2);
+  const valLbl = (v) => fmtNum(v, grouping === 'percent' ? '0"%"' : c.axes?.y?.fmt);
+  const labW = Math.max(...[sc.lo, sc.hi].map((v) => textWidth(valLbl(v), fs * 0.9))) + 8;
+  const catH = fs * 1.6;
+  const x0 = box.left + (horiz ? Math.min(W * 0.3, Math.max(...cats.map((t) => textWidth(String(t), fs * 0.9)), 10) + 10) : labW);
+  const x1 = box.right - dx - 4;
+  const y0 = box.top - dy + 4;
+  const y1 = box.bottom - (horiz ? catH : catH);
+  const vpos = (v) => (horiz ? x0 + ((v - sc.lo) / (sc.hi - sc.lo)) * (x1 - x0) : y1 - ((v - sc.lo) / (sc.hi - sc.lo)) * (y1 - y0));
+  // 벽 · 바닥
+  const wall = resolveColor(theme, c.plotBg ?? '@bg1') ?? '#fff';
+  out.push(poly([[x0 + dx, y0 + dy], [x1 + dx, y0 + dy], [x1 + dx, y1 + dy], [x0 + dx, y1 + dy]], wall, ` stroke="${gridC}" stroke-width="0.6" data-el="plot"`));
+  out.push(poly([[x0, y0], [x0 + dx, y0 + dy], [x0 + dx, y1 + dy], [x0, y1]], shadeHex(wall.startsWith('#') ? wall : '#ffffff', -0.04), ` stroke="${gridC}" stroke-width="0.6"`));
+  out.push(poly([[x0, y1], [x1, y1], [x1 + dx, y1 + dy], [x0 + dx, y1 + dy]], shadeHex(wall.startsWith('#') ? wall : '#ffffff', -0.08), ` stroke="${axisC}" stroke-width="0.6"`));
+  // 눈금선 (뒷벽 + 옆벽/바닥)
+  const g = [];
+  for (let v = sc.lo; v <= sc.hi + sc.step * 1e-6; v += sc.step) {
+    const p = vpos(v);
+    if (horiz) {
+      g.push(`<line x1="${f(p)}" y1="${f(y1)}" x2="${f(p + dx)}" y2="${f(y1 + dy)}" stroke="${gridC}" stroke-width="0.7"/><line x1="${f(p + dx)}" y1="${f(y0 + dy)}" x2="${f(p + dx)}" y2="${f(y1 + dy)}" stroke="${gridC}" stroke-width="0.7"/>`);
+      g.push(text(p, box.bottom - fs * 0.35, valLbl(v), { size: fs * 0.9 }));
+    } else {
+      g.push(`<line x1="${f(x0)}" y1="${f(p)}" x2="${f(x0 + dx)}" y2="${f(p + dy)}" stroke="${gridC}" stroke-width="0.7"/><line x1="${f(x0 + dx)}" y1="${f(p + dy)}" x2="${f(x1 + dx)}" y2="${f(p + dy)}" stroke="${gridC}" stroke-width="0.7"/>`);
+      g.push(text(x0 - 6, p + fs * 0.32, valLbl(v), { size: fs * 0.9, anchor: 'end' }));
+    }
+  }
+  out.push(`<g data-el="axisY">${g.join('')}</g>`);
+  // 항목 이름
+  const slot = (horiz ? y1 - y0 : x1 - x0) / n;
+  const cl = cats.map((t, i) => (horiz
+    ? text(x0 - 6, y0 + slot * (i + 0.5) + fs * 0.32, String(t), { size: fs * 0.9, anchor: 'end' })
+    : text(x0 + slot * (i + 0.5), y1 + fs * 1.15, String(t), { size: fs * 0.9 })));
+  out.push(`<g data-el="axisX">${cl.join('')}</g>`);
+  const gap = (c.gap ?? 150) / 100;
+  const lo2 = labelOpts(c, series[0], kind);
+  if (kind === 'col' || kind === 'bar') {
+    // 막대: 계열을 깊이로 (3차원 세로 막대형) 또는 나란히 (묶은) / 쌓기
+    const per = full || stacked ? 1 : m;
+    const bw = slot / (per + gap);
+    const order = full ? [...series.keys()].reverse() : [...series.keys()];
+    for (const si of order) {
+      const col = seriesColor(theme, c, si);
+      const fz = full ? (si + 0.15) / m : 0.15;
+      const ddx = full ? (dx * 0.7) / m : dx * 0.7;
+      const ddy = full ? (dy * 0.7) / m : dy * 0.7;
+      cats.forEach((_, i) => {
+        const b = base(si, i); const t = b + val(si, i);
+        const k = full || stacked ? 0 : si;
+        const pc = pointColor(theme, c, series[si], si, i, false) ?? col;
+        if (horiz) {
+          const yy = y0 + slot * i + (slot - bw * per) / 2 + bw * k + dy * fz;
+          const xa = vpos(b) + dx * fz; const xb = vpos(t) + dx * fz;
+          out.push(prism(Math.min(xa, xb), yy - ddy, Math.abs(xb - xa), bw, ddx, ddy, pc, `ser${si}`));
+        } else {
+          const xx = x0 + slot * i + (slot - bw * per) / 2 + bw * k + dx * fz;
+          const ya = vpos(b) + dy * fz; const yb = vpos(t) + dy * fz;
+          out.push(prism(xx, Math.min(ya, yb), bw, Math.abs(yb - ya), ddx, ddy, pc, `ser${si}`));
+          if (lo2) out.push(text(xx + bw / 2 + ddx / 2, Math.min(ya, yb) + ddy - 3, fmtNum(vals[si][i], c.axes?.y?.fmt), { size: fs * 0.85 }));
+        }
+      });
+    }
+  } else {
+    // 꺾은선 = 리본, 영역 = 깊이가 있는 면 (뒤 계열부터)
+    const order = [...series.keys()].reverse();
+    const xs = (i) => x0 + slot * (i + 0.5);
+    for (const si of order) {
+      const col = seriesColor(theme, c, si);
+      const fz = full ? si / m : 0;
+      const ddx = full ? (dx * 0.8) / m : dx * 0.8;
+      const ddy = full ? (dy * 0.8) / m : dy * 0.8;
+      const ox = dx * fz; const oy = dy * fz;
+      const top = cats.map((_, i) => [xs(i) + ox, vpos(base(si, i) + val(si, i)) + oy]);
+      const bot = cats.map((_, i) => [xs(i) + ox, vpos(base(si, i)) + oy]);
+      if (kind === 'area') {
+        // 윗면 (리본) → 앞면
+        for (let i = 0; i < top.length - 1; i++) out.push(poly([top[i], top[i + 1], [top[i + 1][0] + ddx, top[i + 1][1] + ddy], [top[i][0] + ddx, top[i][1] + ddy]], shadeHex(col, 0.22), ` data-el="ser${si}"`));
+        const last = top.length - 1;
+        out.push(poly([top[last], [top[last][0] + ddx, top[last][1] + ddy], [bot[last][0] + ddx, bot[last][1] + ddy], bot[last]], shadeHex(col, -0.3)));
+        out.push(poly([...top, ...bot.slice().reverse()], col, ` data-el="ser${si}"`));
+      } else {
+        const th = Math.max(3, fs * 0.35);
+        for (let i = 0; i < top.length - 1; i++) {
+          const a = top[i]; const b = top[i + 1];
+          // 리본 윗면 + 앞면 (두께)
+          out.push(poly([a, b, [b[0] + ddx, b[1] + ddy], [a[0] + ddx, a[1] + ddy]], shadeHex(col, 0.18), ` data-el="ser${si}"`));
+          out.push(poly([a, b, [b[0], b[1] + th], [a[0], a[1] + th]], shadeHex(col, -0.2), ` data-el="ser${si}"`));
+        }
+      }
+    }
+  }
+  return out.join('');
+}
+
+/** 3차원 원형: 기울인 타원 + 앞쪽 옆면 */
+function pie3dSvg(c, series, cats, box, theme, { fs, text }) {
+  const out = [];
+  const s = series[0];
+  if (!s) return '';
+  const v3 = { ...VIEW3D_DEFAULT, rotX: 30, ...(c.view3d ?? {}) };
+  const vals = (s.vals ?? []).map((v) => Math.max(0, numVal(v) ?? 0));
+  const total = vals.reduce((a, b) => a + b, 0) || 1;
+  const cx = (box.left + box.right) / 2;
+  const R = Math.max(10, Math.min((box.right - box.left) / 2 - 8, (box.bottom - box.top) / 1.4));
+  const tilt = Math.sin((Math.min(80, Math.max(10, v3.rotX)) * Math.PI) / 180);
+  const ry = R * Math.max(0.2, tilt);
+  const th = R * 0.22 * (v3.depth / 100) * Math.max(0.3, Math.cos((Math.min(80, v3.rotX) * Math.PI) / 180));
+  const cy = (box.top + box.bottom) / 2 - th / 2;
+  const explodeAll = (c.variant === 'explode' ? 15 : c.explode ?? 0) / 100;
+  const P = (a, r = R, dy = 0, ox = 0, oy = 0) => [cx + ox + r * Math.cos(a), cy + oy + dy + (r * ry / R) * Math.sin(a)];
+  const start = ((c.firstAngle ?? 0) - 90) * (Math.PI / 180);
+  const slices = [];
+  let a0 = start;
+  vals.forEach((v, i) => { const a1 = a0 + (v / total) * Math.PI * 2; slices.push({ i, v, a0, a1 }); a0 = a1; });
+  const stroke = resolveColor(theme, c.bg ?? '@bg1') ?? '#fff';
+  const arcD = (a, b, dy, ox, oy) => {
+    const steps = Math.max(2, Math.ceil(((b - a) * 24) / Math.PI));
+    const pts = [];
+    for (let k = 0; k <= steps; k++) pts.push(P(a + ((b - a) * k) / steps, R, dy, ox, oy));
+    return pts;
+  };
+  // 옆면: 화면 앞쪽(사인 > 0) 부분만, 뒤 조각부터
+  const sides = [];
+  for (const sl of slices) {
+    if (sl.v <= 0) continue;
+    const am = (sl.a0 + sl.a1) / 2;
+    const ex = ((s.explodeAt?.[sl.i] ?? 0) / 100 + explodeAll) * R;
+    const ox = Math.cos(am) * ex; const oy = Math.sin(am) * ex * (ry / R);
+    sl.ox = ox; sl.oy = oy;
+    const col = pointColor(theme, c, s, 0, sl.i, true);
+    sl.col = col;
+    // [a0, a1] 와 앞쪽 구간 [2kπ, 2kπ+π] 의 겹침
+    for (let k = -1; k <= 2; k++) {
+      const lo = Math.max(sl.a0, 2 * Math.PI * k); const hi = Math.min(sl.a1, 2 * Math.PI * k + Math.PI);
+      if (hi > lo) {
+        const topPts = arcD(lo, hi, 0, ox, oy);
+        const botPts = arcD(lo, hi, th, ox, oy).reverse();
+        sides.push({ y: Math.max(...topPts.map((p) => p[1])), svg: poly([...topPts, ...botPts], shadeHex(col, -0.3), ` stroke="${shadeHex(col, -0.35)}" stroke-width="0.5" data-el="ser0"`) });
+      }
+    }
+    // 자른 면 (조각을 쪼갰을 때 보이는 단면)
+    if (ex > 0) for (const a of [sl.a0, sl.a1]) if (Math.cos(a) * (a === sl.a0 ? -1 : 1) > -2) sides.push({ y: cy + oy, svg: poly([[cx + ox, cy + oy], P(a, R, 0, ox, oy), P(a, R, th, ox, oy), [cx + ox, cy + oy + th]], shadeHex(col, -0.4)) });
+  }
+  sides.sort((a, b) => a.y - b.y);
+  for (const sd of sides) out.push(sd.svg);
+  // 윗면
+  const lo = labelOpts(c, s, 'pie');
+  for (const sl of slices) {
+    if (sl.v <= 0) continue;
+    const pts = [[cx + sl.ox, cy + sl.oy], ...arcD(sl.a0, sl.a1, 0, sl.ox, sl.oy)];
+    out.push(poly(pts, sl.col, ` stroke="${stroke}" stroke-width="1" data-el="ser0"`));
+    if (lo) {
+      const am = (sl.a0 + sl.a1) / 2;
+      const [lx, ly] = P(am, R * 0.62, 0, sl.ox, sl.oy);
+      out.push(text(lx, ly + fs / 3, labelText(lo, sl.v, s, cats[sl.i], sl.v / total, c.axes?.y?.fmt), { size: fs * 0.9, color: '#fff' }));
+    }
+  }
+  return out.join('');
 }

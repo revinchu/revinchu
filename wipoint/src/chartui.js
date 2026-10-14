@@ -5,7 +5,7 @@ import { el, openDialog, alertDialog, toast, closeMenus } from './ui.js';
 import { colorButton } from './colorpick.js';
 import {
   CHART_KINDS, CHART_LABEL, CHART_SUBTYPES, CHART_PALETTES, CHART_LAYOUTS, CHART_STYLES, TREND_LABEL,
-  chartSvg, paletteColor, seriesType, applyChartLayout, applyChartStyle, switchRowCol, gridToChart, chartCsv,
+  chartSvg, paletteColor, seriesType, applyChartLayout, applyChartStyle, switchRowCol, gridToChart, chartCsv, VIEW3D_DEFAULT,
 } from './chart.js';
 
 export const selChart = () => { const o = selObjects()[0]; return o?.type === 'chart' ? o : null; };
@@ -32,7 +32,14 @@ export function withSubtype(ch, kind, sub) {
   delete c.stacked;
   delete c.variant;
   delete c.grouping;
+  delete c.d3;
   sub ??= CHART_SUBTYPES[kind]?.[0]?.[0];
+  // 3차원 하위 형식: '…3d' 는 같은 하위 형식 + d3, 'full3d' 는 계열을 깊이로 (3차원 세로 막대형)
+  if (sub && /3d$/.test(sub)) {
+    c.d3 = true;
+    c.view3d ??= {};
+    if (sub === 'full3d') { c.variant3d = 'full'; sub = 'clustered'; } else sub = sub.replace(/3d$/, '') || CHART_SUBTYPES[kind][0][0];
+  } else delete c.view3d;
   if (kind === 'col' || kind === 'bar' || kind === 'area' || (kind === 'line' && ['stacked', 'percent'].includes(sub))) { if (sub && sub !== 'clustered' && sub !== 'standard') c.grouping = sub; }
   if (kind === 'line' && (sub === 'markers' || sub === 'smooth')) c.variant = sub;
   if (kind === 'scatter' && sub !== 'marker') c.variant = sub;
@@ -445,4 +452,27 @@ export function chartPane(body) {
 export function chartPartAt(target) {
   const e = target?.closest?.('[data-el]');
   return e ? e.getAttribute('data-el') : null;
+}
+
+/** 3차원 회전 (PowerPoint [차트 영역 서식 › 효과 › 3차원 회전]): X/Y 회전 · 깊이 · 원근 + 미리 보기 */
+export function chart3dDialog(o) {
+  if (!o?.chart) return;
+  const c0 = o.chart;
+  const v = { ...VIEW3D_DEFAULT, ...(c0.kind === 'pie' ? { rotX: 30 } : {}), ...(c0.view3d ?? {}) };
+  const num = (val, min, max, step = 5) => el('input', { type: 'number', min, max, step, value: val, style: { width: '70px' } });
+  const on = el('input', { type: 'checkbox', checked: !!c0.d3 });
+  const rx = num(v.rotX, 0, 80); const ry = num(v.rotY, 0, 360, 10); const dp = num(v.depth, 20, 500, 10); const ps = num(v.persp ?? 30, 0, 120);
+  const view = el('div', { class: 'c3-prev' });
+  const cur = () => ({ ...clone(c0), d3: on.checked || undefined, view3d: { rotX: Number(rx.value), rotY: Number(ry.value), depth: Number(dp.value), persp: Number(ps.value) } });
+  const draw = () => { view.innerHTML = chartSvg(cur(), 360, 240, S.pres.theme); };
+  for (const i of [on, rx, ry, dp, ps]) i.addEventListener('input', draw);
+  openDialog({
+    title: '3차원 회전', width: 420,
+    body: el('div', { class: 'fx-opts' },
+      el('label', { class: 'row' }, on, el('span', {}, '3차원으로 표시')),
+      el('label', { class: 'row' }, el('span', {}, 'X 회전 (°)'), rx), el('label', { class: 'row' }, el('span', {}, 'Y 회전 (°)'), ry),
+      el('label', { class: 'row' }, el('span', {}, '깊이 (기본값의 %)'), dp), el('label', { class: 'row' }, el('span', {}, '원근감 (°)'), ps), view),
+    buttons: [{ label: '확인', primary: true, action: () => { const n = cur(); if (!n.d3) { delete n.d3; delete n.view3d; } setChart(o, () => n); } }, { label: '취소' }],
+  });
+  draw();
 }
