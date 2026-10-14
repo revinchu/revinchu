@@ -670,6 +670,13 @@ export const ANIM_EFFECTS = {
     ['expand', '축소'], ['compress', '압축 풀기'], ['basicZoom', '기본 확대/축소'], ['riseUp', '가라앉기 (위로)'], ['sinkDown', '내려가기'], ['stretch', '늘이기'], ['centerRevolve', '가운데로 회전'], ['pinwheel', '바람개비'], ['boomerang', '부메랑'], ['curveUp', '곡선 아래로'], ['spiralIn', '나선형'], ['credits', '크레딧'], ['flip', '뒤집기'], ['dropIn', '떨어지기']],
   path: [['pathRight', '선: 오른쪽'], ['pathLeft', '선: 왼쪽'], ['pathUp', '선: 위로'], ['pathDown', '선: 아래로'], ['pathDiag', '선: 오른쪽 아래'], ['pathDiagUp', '선: 오른쪽 위'], ['pathArc', '호'], ['pathArcDown', '호: 아래로'], ['pathTurn', '회전'], ['pathCircle', '원'], ['pathSquare', '사각형'], ['pathTriangle', '삼각형'], ['pathDiamond', '다이아몬드'], ['pathStar', '5각 별'], ['pathHeart', '하트'], ['pathEight', '8자형'], ['pathLoop', '루프'], ['pathSpiral', '나선'], ['pathWave', '물결'], ['pathZigzag', '지그재그'], ['pathBounce', '바운드'], ['pathSCurve', 'S자 곡선']],
 };
+/** PowerPoint presetID → 효과 이름 (pptx · ppt 공통) */
+export const PRESET_ANIM = {
+  entr: { 1: 'appear', 2: 'fly', 3: 'blinds', 4: 'box', 5: 'checker', 6: 'shape', 7: 'crawl', 8: 'diamond', 9: 'dissolveIn', 10: 'fade', 12: 'peek', 13: 'plus', 14: 'randomBars', 15: 'spiralIn', 16: 'split', 17: 'stretch', 18: 'strips', 19: 'swivel', 20: 'wedge', 21: 'wheel', 22: 'wipe', 23: 'basicZoom', 25: 'boomerang', 26: 'bounce', 28: 'credits', 29: 'float', 30: 'float', 31: 'grow', 35: 'pinwheel', 37: 'riseUp', 42: 'float', 43: 'centerRevolve', 45: 'swivel', 47: 'sinkDown', 50: 'compress', 52: 'curveUp', 53: 'zoom', 55: 'expand', 56: 'flip' },
+  emph: { 1: 'fillColor', 3: 'objectColor', 6: 'growShrink', 7: 'lineColor', 8: 'spin', 9: 'transparency', 10: 'boldFlash', 15: 'bold', 16: 'brushColor', 18: 'underline', 19: 'objectColor', 21: 'complementary', 22: 'complementary', 24: 'darken', 25: 'desaturate', 26: 'pulse', 27: 'colorPulse', 30: 'lighten', 32: 'teeter', 34: 'wave', 35: 'flash', 36: 'shimmer' },
+};
+PRESET_ANIM.exit = { ...PRESET_ANIM.entr, 1: 'disappear' };
+export const SUB_DIR = { 4: 'b', 1: 't', 8: 'l', 2: 'r' };
 export const ANIM_CLASS_LABEL = { entr: '나타내기', emph: '강조', exit: '끝내기', path: '이동 경로' };
 /** 이동 경로 (PowerPoint 와 같이 슬라이드 너비/높이 비율 좌표, 개체 위치 기준) */
 export const MOTION_PATHS = {

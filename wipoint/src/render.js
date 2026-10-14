@@ -360,7 +360,7 @@ export function shapeHtml(theme, o, media, opts = {}) {
 /** 글 영역 (도형 모양 안쪽 + 여백) */
 // WordArt 변환 (prstTxWarp): 글 영역 (W × H) 안의 기준 경로 + 대략의 길이
 const ell = (a, b) => Math.PI * (3 * (a + b) - Math.sqrt((3 * a + b) * (a + 3 * b)));
-const WARP_PATHS = {
+export const WARP_PATHS = {
   textArchUp: (W, H) => [`M0 ${f(H / 2)} A${f(W / 2)} ${f(H / 2)} 0 0 1 ${f(W)} ${f(H / 2)}`, ell(W / 2, H / 2) / 2],
   textArchDown: (W, H) => [`M0 ${f(H / 2)} A${f(W / 2)} ${f(H / 2)} 0 0 0 ${f(W)} ${f(H / 2)}`, ell(W / 2, H / 2) / 2],
   textCircle: (W, H) => [`M0 ${f(H / 2)} A${f(W / 2)} ${f(H / 2)} 0 1 1 ${f(W)} ${f(H / 2)} A${f(W / 2)} ${f(H / 2)} 0 1 1 0 ${f(H / 2)}`, ell(W / 2, H / 2)],

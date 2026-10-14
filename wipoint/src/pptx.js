@@ -5,7 +5,7 @@ import { placeInGroups, guideVars } from './geom.js';
 import { zip, unzip, textOf } from './zip.js';
 import { parseXml, child, kids, descendants, esc } from './xml.js';
 import { SLOT_NAMES, resolveColor, applyMods, cloneTheme, THEMES } from './themes.js';
-import { EMU_PER_PX, uid, layoutPlaceholders, defaultSize, defaultColor, defaultFont, isEmptyText, animSteps, triggerSteps, stepTimeline, MOTION_PATHS, isCustomLayout, layoutName, presForSlide, textBody, para, newSlide, slideTitle, setMasterText } from './model.js';
+import { EMU_PER_PX, uid, layoutPlaceholders, defaultSize, defaultColor, defaultFont, isEmptyText, animSteps, triggerSteps, stepTimeline, MOTION_PATHS, PRESET_ANIM, SUB_DIR, isCustomLayout, layoutName, presForSlide, textBody, para, newSlide, slideTitle, setMasterText } from './model.js';
 import { parseLatex, toOMML, ommlToLatex } from './math.js';
 import { paraDefaults, tableCellStyle, slideBackground, themeDecor, slideDecor } from './render.js';
 import { decodeEmbeddedFont } from './fonts.js';
@@ -1665,12 +1665,6 @@ const TABLE_STYLE_ACCENT = {
   '{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}': 'accent1', '{21E4AEA4-8DFA-4A89-87EB-49C32662AFE8}': 'accent2', '{F5AB1C69-6EDB-4FF4-983F-18BD219EF322}': 'accent3',
   '{00A15C55-8517-42AA-B614-E9B94910E393}': 'accent4', '{7DF18680-E054-41AD-8BC1-D1AEF772440D}': 'accent5', '{93296810-A885-4BE3-A3E7-6D5BEEA58F35}': 'accent6',
 };
-const PRESET_ANIM = {
-  entr: { 1: 'appear', 2: 'fly', 3: 'blinds', 4: 'box', 5: 'checker', 6: 'shape', 7: 'crawl', 8: 'diamond', 9: 'dissolveIn', 10: 'fade', 12: 'peek', 13: 'plus', 14: 'randomBars', 15: 'spiralIn', 16: 'split', 17: 'stretch', 18: 'strips', 19: 'swivel', 20: 'wedge', 21: 'wheel', 22: 'wipe', 23: 'basicZoom', 25: 'boomerang', 26: 'bounce', 28: 'credits', 29: 'float', 30: 'float', 31: 'grow', 35: 'pinwheel', 37: 'riseUp', 42: 'float', 43: 'centerRevolve', 45: 'swivel', 47: 'sinkDown', 50: 'compress', 52: 'curveUp', 53: 'zoom', 55: 'expand', 56: 'flip' },
-  emph: { 1: 'fillColor', 3: 'objectColor', 6: 'growShrink', 7: 'lineColor', 8: 'spin', 9: 'transparency', 10: 'boldFlash', 15: 'bold', 16: 'brushColor', 18: 'underline', 19: 'objectColor', 21: 'complementary', 22: 'complementary', 24: 'darken', 25: 'desaturate', 26: 'pulse', 27: 'colorPulse', 30: 'lighten', 32: 'teeter', 34: 'wave', 35: 'flash', 36: 'shimmer' },
-};
-PRESET_ANIM.exit = { ...PRESET_ANIM.entr, 1: 'disappear' };
-const SUB_DIR = { 4: 'b', 1: 't', 8: 'l', 2: 'r' };
 const LAYOUT_KIND = Object.fromEntries(Object.entries(LAYOUT_TYPE).map(([k, v]) => [v, k]));
 const TRANS_NAME = { fade: 'fade', push: 'push', wipe: 'wipe', split: 'split', cover: 'cover', pull: 'uncover', zoom: 'zoom', circle: 'circle', dissolve: 'dissolve', cut: 'cut', flip: 'flip', random: 'random', blinds: 'blinds', checker: 'checker', comb: 'comb', randomBar: 'randomBars', strips: 'strips', wedge: 'clock', wheel: 'clock', wheelReverse: 'clock', newsflash: 'zoom', plus: 'plus', diamond: 'diamond', vortex: 'vortex', ripple: 'ripple', honeycomb: 'honeycomb', glitter: 'glitter', shred: 'shred', switch: 'switch', gallery: 'gallery', cube: 'cube', doors: 'doors', window: 'window', box: 'box', conveyor: 'conveyor', pan: 'pan', ferris: 'ferris', flythrough: 'flythrough', warp: 'zoom', prism: 'cube', reveal: 'reveal', flash: 'flash', morph: 'morph', prstTrans: 'fade' };
 const PRST_TRANS = { fallOver: 'fall', drape: 'drape', curtains: 'curtains', wind: 'wind', prestige: 'prestige', fracture: 'fracture', crush: 'crush', peelOff: 'peelOff', pageCurlDouble: 'pageCurl', pageCurlSingle: 'pageCurl', airplane: 'airplane', origami: 'origami' };

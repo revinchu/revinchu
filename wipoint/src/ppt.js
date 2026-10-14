@@ -4,7 +4,7 @@
 // 저장은 언제나 .pptx (PowerPoint 2007 이후 형식).
 import { openCfb, isCfb as cfbSig } from './cfb.js';
 import { inflate } from './zip.js';
-import { uid, para } from './model.js';
+import { uid, para, PRESET_ANIM, SUB_DIR, MOTION_PATHS } from './model.js';
 import { THEMES, cloneTheme } from './themes.js';
 import { placeInGroups } from './geom.js';
 
@@ -407,8 +407,26 @@ export function readPpt(bytes) {
           if (g && a) groupXf = { x: a.x, y: a.y, w: a.w, h: a.h, chx: i32(g.data, 0), chy: i32(g.data, 4), chw: (i32(g.data, 8) - i32(g.data, 0)) || 1, chh: (i32(g.data, 12) - i32(g.data, 4)) || 1, rot: ((rot % 360) + 360) % 360, ...(fl & 0x40 ? { flipH: true } : {}), ...(fl & 0x80 ? { flipV: true } : {}), up: xf };
           return;
         }
-        try { const o = readShape(k, groupXf, ctx); if (o) { if (gid) o.grp = gid; out.push(o); } } catch (e) { warnings.add(`일부 도형을 읽지 못했습니다: ${e.message}`); }
-      } else if (k.type === ART.SpgrContainer) walkGroup(k, groupXf, ctx, out, gid ?? (xf ? gid : uid('g')));
+        try {
+          const o = readShape(k, groupXf, ctx);
+          if (o) {
+            if (gid) o.grp = gid;
+            out.push(o);
+            // 애니메이션 대상 (도형 id → 개체) · PowerPoint 97 빌드 정보 (AnimationInfoAtom)
+            if (fsp) ctx.spMap?.set(u32(fsp.data, 0), [o.id]);
+            const ai = deep(one(k.kids, ART.ClientData)?.kids, RT.AnimationInfoAtom)[0];
+            if (ai && ctx.legacyAnims) ctx.legacyAnims.push({ obj: o.id, d: ai.data });
+          }
+        } catch (e) { warnings.add(`일부 도형을 읽지 못했습니다: ${e.message}`); }
+      } else if (k.type === ART.SpgrContainer) {
+        const start = out.length;
+        const gfsp = one(k.kids[0]?.kids, ART.FSP);
+        walkGroup(k, groupXf, ctx, out, gid ?? (xf ? gid : uid('g')));
+        // 그룹 전체에 건 애니메이션 → 그룹의 모든 개체
+        if (gfsp) ctx.spMap?.set(u32(gfsp.data, 0), out.slice(start).map((o) => o.id));
+        const ai = deep(one(k.kids[0]?.kids, ART.ClientData)?.kids, RT.AnimationInfoAtom)[0];
+        if (ai && ctx.legacyAnims && out.length > start) ctx.legacyAnims.push({ obj: out[start].id, objs: out.slice(start).map((o) => o.id), d: ai.data });
+      }
     });
   }
   /** 앵커 → 사각형: 그룹 안이면 그룹 좌표 단위 (ChildAnchor), 아니면 슬라이드 px (ClientAnchor).
@@ -718,6 +736,7 @@ export function readPpt(bytes) {
       const scheme = flags & 0x2 ? (m?.scheme ?? mainOf?.scheme ?? baseScheme) : (schemeOf(rec) ?? m?.scheme ?? baseScheme);
       const rulers = { ...(mainOf?.rulers ?? {}), ...(m?.rulers ?? {}) };
       const ctx = { scheme, slideId: entry.slideId, styles: m?.styles ?? mainMaster?.styles, texts: entry.texts, rulers, phProps: { ...(mainOf?.phProps ?? {}), ...(m?.phProps ?? {}) } };
+      ctx.spMap = new Map(); ctx.legacyAnims = [];
       const { objects, bg } = readShapes(rec, ctx);
       // 마스터 배경 · 마스터 그림 (자리 표시자 제외)
       let slideBg = bg;
@@ -743,7 +762,9 @@ export function readPpt(bytes) {
         if (t && t !== 'cut' || (t === 'cut' && effDir)) transition = { type: t ?? 'fade', dur: [1, 0.75, 0.5][speed] ?? 0.75, dir: ['l', 't', 'r', 'b'][effDir] ?? 'l' };
         if (tflags & 0x10 || tflags & 0x400) { transition ??= { type: 'none', dur: 0.75 }; transition.advAfter = Math.max(0, time / 1000); }
       }
-      const slide = { id: uid('s'), layout: 'blank', bg: slideBg ?? { type: 'solid', color: scheme[0] }, hidden, transition, notes: notesBySlide.get(entry.slideId) ?? '', objects, anims: [], bgObjects };
+      let anims = [];
+      try { anims = timeNodeAnims(rec, ctx.spMap, objects) ?? legacyAnims(ctx.legacyAnims, objects); } catch (e) { warnings.add(`일부 애니메이션을 읽지 못했습니다: ${e.message}`); }
+      const slide = { id: uid('s'), layout: 'blank', bg: slideBg ?? { type: 'solid', color: scheme[0] }, hidden, transition, notes: notesBySlide.get(entry.slideId) ?? '', objects, anims, bgObjects };
       slides.push(slide);
       void si;
     } catch (e) { warnings.add(`일부 슬라이드를 읽지 못했습니다: ${e.message}`); }
@@ -805,7 +826,7 @@ function readCF(d, p) {
 }
 /** StyleTextPropAtom → 단락 · 글자 구간 */
 /** StyleTextProp9Atom (PowerPoint 2000+ 확장) → 단락 묶음마다 { auto, scheme, start } (번호 매기기) */
-function parseStyle9(d) {
+export function parseStyle9(d) {
   const out = [];
   let p = 0;
   try {
@@ -885,4 +906,111 @@ function parseMasterStyles(kids) {
     out[r.inst] = levels;
   }
   return out;
+}
+
+// ───────────── 애니메이션 ─────────────
+// PowerPoint 2002+ 시간 노드 (슬라이드 ProgTags ___PPT10 → ExtTimeNodeContainer 0xF144) — pptx 의 <p:timing> 과 같은 나무.
+const TN = { Group: 0xf144, Node: 0xf127, Props: 0xf13d, Value: 0xf142, Event: 0xf125, Trigger: 0xf128, Target: 0xf13c, Ref: 0x2afb, Motion: 0xf12e };
+const TN_CLASS = { 1: 'entr', 2: 'exit', 3: 'emph', 4: 'path' };
+/** 속성 값 (첫 바이트 = 형식: 0 바이트 · 1 int32 · 2 float · 3 UTF-16 글) */
+function tnValue(d) {
+  if (!d?.length) return null;
+  const t = d[0];
+  if (t === 0) return d[1];
+  if (t === 1) return i32(d, 1);
+  if (t === 2) return new DataView(d.buffer, d.byteOffset + 1, 4).getFloat32(0, true);
+  if (t === 3) { let s = ''; for (let p = 1; p + 1 < d.length; p += 2) { const c = u16(d, p); if (!c) break; s += String.fromCharCode(c); } return s; }
+  return null;
+}
+function tnProps(g) {
+  const m = new Map();
+  for (const v of one(g.kids, TN.Props)?.kids ?? []) if (v.type === TN.Value) m.set(v.inst, tnValue(v.data));
+  return m;
+}
+const tnNode = (g) => { const a = one(g.kids, TN.Node)?.data; return a?.length >= 32 ? { group: i32(a, 8), dur: i32(a, 24), nodeType: i32(a, 28) } : null; };
+/** 시작 조건 (instance 1) → { trigger, delay(ms), ref } */
+function tnBegin(g) {
+  const ev = (g.kids ?? []).find((k) => k.type === TN.Event && k.inst === 1);
+  const tr = one(ev?.kids, TN.Trigger)?.data;
+  const ref = deep(ev?.kids, TN.Ref)[0]?.data;
+  return { trigger: tr ? i32(tr, 4) : 0, delay: tr ? i32(tr, 12) : 0, ref: ref?.length >= 12 ? { mode: i32(ref, 0), type: i32(ref, 4), id: u32(ref, 8) } : null };
+}
+const tnKids = (g) => (g.kids ?? []).filter((k) => k.type === TN.Group);
+
+/** 슬라이드 레코드 → anims (시간 노드가 없으면 null) */
+export function timeNodeAnims(rec, spMap, objects) {
+  let root = null;
+  for (const blob of deep(rec.kids, 0x138b)) { root = records(blob.data).find((r) => r.type === TN.Group); if (root) break; }
+  if (!root) return null;
+  const anims = [];
+  const seqs = [];
+  (function find(g, d) { const p = tnProps(g); const nt = p.get(20); if (nt === 4 || nt === 5) { seqs.push([g, nt]); return; } if (d < 6) for (const k of tnKids(g)) find(k, d + 1); })(root, 0);
+  const objOf = (id) => spMap.get(id);
+  for (const [seq, nt] of seqs) {
+    let trigger = null;
+    if (nt === 5) {
+      const b = tnBegin(seq);
+      trigger = b.ref ? objOf(b.ref.id)?.[0] : null;
+      if (!trigger) continue;
+    }
+    const effects = [];
+    (function walk(g, d) { for (const k of tnKids(g)) { const p = tnProps(k); if (p.has(11) && [1, 2, 3].includes(p.get(20))) effects.push([k, p]); else if (d < 6) walk(k, d + 1); } })(seq, 0);
+    for (const [eff, p] of effects) {
+      const cls = TN_CLASS[p.get(11)];
+      if (!cls) continue;
+      const refs = deep(eff.kids, TN.Ref).map((r) => r.data).filter((d) => d.length >= 12 && i32(d, 4) === 1);
+      const r0 = refs[0];
+      const objs = r0 ? objOf(u32(r0, 8)) : null;
+      if (!objs?.length) continue;
+      const pid = p.get(9) ?? 0;
+      const effect = cls === 'path' ? 'pathRight' : PRESET_ANIM[cls]?.[pid] ?? (cls === 'emph' ? 'pulse' : 'fade');
+      const durs = [];
+      (function dur(g, d) { const n = tnNode(g); if (n && n.dur > 1) durs.push(n.dur + Math.max(0, tnBegin(g).delay)); if (d < 8) for (const k of tnKids(g)) dur(k, d + 1); })(eff, 0);
+      const node = p.get(20);
+      const delay = Math.max(0, tnBegin(eff).delay);
+      const a = { id: uid('a'), obj: objs[0], cls, effect, start: node === 2 ? 'with' : node === 3 ? 'after' : 'click', dur: durs.length ? Math.max(...durs) / 1000 : effect === 'appear' || effect === 'disappear' ? 0 : 0.5, delay: delay / 1000, dir: SUB_DIR[p.get(10)] ?? 'b' };
+      if (cls === 'path') {
+        const mo = deep(eff.kids, TN.Motion)[0];
+        const path = deep(mo?.kids, TN.Value).map((v) => tnValue(v.data)).find((v) => typeof v === 'string');
+        a.motion = (path ?? 'M 0 0 L 0.25 0').replace(/\s*[Ee]\s*$/, '').trim();
+        a.effect = Object.keys(MOTION_PATHS).find((k) => MOTION_PATHS[k] === a.motion) ?? 'pathRight';
+        if (!durs.length) a.dur = 2;
+      }
+      if (trigger) a.trigger = trigger;
+      // 단락 대상 (VisualShapeAtom 종류 2 = 글 범위): 같은 개체 · 같은 효과가 이어지면 하나로 묶고 byPara
+      if (i32(r0, 0) === 2) {
+        if (anims.some((b) => b.obj === a.obj && b.cls === cls && b.effect === a.effect && b.byPara && (b.trigger ?? null) === (a.trigger ?? null))) continue;
+        a.byPara = true;
+      }
+      anims.push(a);
+      // 그룹 대상: 나머지 개체는 함께
+      for (const id of objs.slice(1)) anims.push({ ...a, id: uid('a'), obj: id, start: 'with', delay: a.delay });
+    }
+  }
+  return anims.filter((a) => objects.some((o) => o.id === a.obj));
+}
+
+// PowerPoint 97/2000 빌드 정보 (AnimationInfoAtom): 효과 · 방향 · 순서 · 자동 시작
+const LEGACY_EFFECT = { 0: 'appear', 1: 'fade', 2: 'blinds', 3: 'checker', 4: 'peek', 5: 'dissolveIn', 6: 'fade', 7: 'peek', 8: 'randomBars', 9: 'strips', 10: 'wipe', 11: 'box', 13: 'split', 14: 'appear', 17: 'diamond', 18: 'plus', 19: 'wedge', 26: 'wheel', 27: 'circleIn' };
+const LEGACY_DIR = ['l', 't', 'r', 'b'];
+export function legacyAnims(list, objects) {
+  const items = list.map((x) => ({ ...x, order: u16(x.d, 16), flags: u16(x.d, 4), delay: i32(x.d, 12), build: x.d[20], eff: x.d[21], dir: x.d[22] }))
+    .filter((x) => x.order > 0 && x.order < 0x8000 && objects.some((o) => o.id === x.obj))
+    .sort((a, b) => a.order - b.order);
+  const anims = [];
+  for (const x of items) {
+    let effect = LEGACY_EFFECT[x.eff] ?? 'fade';
+    let dir = LEGACY_DIR[x.dir] ?? 'b';
+    if (x.eff === 12) {
+      // 날아오기 계열: 0–7 날아오기 · 8–11 살며시 · 12–17 확대/축소 · 18–22 늘이기 · 23 회전 · 24 나선
+      const v = x.dir;
+      effect = v < 8 ? 'fly' : v < 12 ? 'crawl' : v < 18 ? 'zoom' : v < 23 ? 'stretch' : v === 23 ? 'swivel' : 'spiralIn';
+      dir = v < 8 ? (LEGACY_DIR[v] ?? (v === 4 || v === 5 ? 't' : 'b')) : v < 12 ? LEGACY_DIR[v - 8] : v > 18 && v < 23 ? LEGACY_DIR[v - 19] : 'b';
+    } else if (x.eff === 10 || x.eff === 4 || x.eff === 7) dir = LEGACY_DIR[x.dir] ?? 'l';
+    const a = { id: uid('a'), obj: x.obj, cls: 'entr', effect, start: x.flags & 0x4 ? 'after' : 'click', dur: effect === 'appear' ? 0 : 0.5, delay: x.flags & 0x4 ? Math.max(0, x.delay) / 1000 : 0, dir };
+    if (x.build >= 2) a.byPara = true;
+    anims.push(a);
+    for (const id of x.objs?.slice(1) ?? []) anims.push({ ...a, id: uid('a'), obj: id, start: 'with', delay: 0 });
+  }
+  return anims;
 }
