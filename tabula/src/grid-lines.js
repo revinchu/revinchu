@@ -6,6 +6,40 @@ export function gridLineWidth(width, zoom = 1, dpr = 1, pattern = 'solid') {
   return (pattern === 'double' ? 3 : width <= 1 ? 1 : Math.max(1, Math.round(width * scale))) / scale;
 }
 
+/** 중복 제거된 실선의 끝을 만나는 수직선의 바깥쪽까지 연결한다.
+ * 화면 선은 경계의 위/왼쪽에 놓인다. 원점만 클리핑을 피하려 안쪽에 놓인다.
+ * 독립 선의 끝, 점선의 위상, 이중선의 빈 간격은 연장하지 않는다. */
+export function gridBorderJoins(edges, zoom = 1, dpr = 1) {
+  const axes = [new Map(), new Map()];
+  for (const e of edges) {
+    if (e.pattern !== 'solid') continue;
+    const lines = axes[Number(e.vertical)];
+    if (!lines.has(e.at)) lines.set(e.at, []);
+    lines.get(e.at).push(e);
+  }
+  for (const lines of axes) for (const segments of lines.values()) segments.sort((a, b) => a.start - b.start);
+  const extent = (vertical, at, position) => {
+    const segments = axes[Number(vertical)].get(at);
+    let low = at, high = at;
+    if (!segments) return [low, high];
+    // resolveGridBorders의 구간은 겹치지 않는다. 긴 병합 경계도 선형 탐색하지 않는다.
+    let a = 0, b = segments.length;
+    while (a < b) { const mid = (a + b) >>> 1; if (segments[mid].end < position) a = mid + 1; else b = mid; }
+    for (; a < segments.length && segments[a].start <= position; a++) {
+      const width = gridLineWidth(segments[a].width, zoom, dpr);
+      if (at === 0) high = Math.max(high, width);
+      else low = Math.min(low, at - width);
+    }
+    return [low, high];
+  };
+  return edges.map(e => {
+    if (e.pattern !== 'solid') return e;
+    const [paintStart] = extent(!e.vertical, e.start, e.at);
+    const [, paintEnd] = extent(!e.vertical, e.end, e.at);
+    return paintStart === e.start && paintEnd === e.end ? e : { ...e, paintStart, paintEnd };
+  });
+}
+
 // 파일의 테두리 색은 보통 #RRGGBB이며, 직접 입력한 CSS 기본 색도 처리한다.
 // DOM에 의존하는 currentColor/var() 등은 밝은 쪽으로 놓고 원래 순서를 유지한다.
 function borderBrightness(color) {

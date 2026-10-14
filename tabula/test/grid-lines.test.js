@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { gridLineWidth, resolveGridBorders, gridBorderPaintOrder } from '../src/grid-lines.js';
+import { gridLineWidth, resolveGridBorders, gridBorderPaintOrder, gridBorderJoins } from '../src/grid-lines.js';
 const edge = (overrides = {}) => ({ vertical: false, at: 30, start: 0, end: 60, width: 1, pattern: 'solid', color: '#000', ...overrides });
 
 test('thin은 배율·DPR와 무관하게 화면 1픽셀이고 굵은 선의 두께 차이는 유지', () => {
@@ -83,4 +83,48 @@ test('이중선은 DPR·배율마다 동일한 한 픽셀 두 획과 한 픽셀 
   for (const zoom of [.5, .75, .8, 1, 1.25]) for (const dpr of [1, 1.25, 1.5, 2]) {
     assert.ok(Math.abs(gridLineWidth(3, zoom, dpr, 'double') * zoom * dpr - 3) < 1e-8);
   }
+});
+
+test('외곽 모서리는 만나는 실선의 실제 두께까지 연결하고 원본은 유지', () => {
+  const top = Object.freeze(edge({ at: 20, start: 10, end: 80, width: 2 }));
+  const left = Object.freeze(edge({ vertical: true, at: 10, start: 20, end: 60, width: 3 }));
+  const input = Object.freeze([top, left]);
+  for (const zoom of [.5, .75, .8, 1, 1.25, 2]) for (const dpr of [1, 1.25, 1.5, 2]) {
+    const [h, v] = gridBorderJoins(input, zoom, dpr);
+    assert.ok(Math.abs(h.paintStart - (10 - Math.max(1, Math.round(3 * zoom * dpr)) / (zoom * dpr))) < 1e-8);
+    assert.ok(Math.abs(v.paintStart - (20 - Math.max(1, Math.round(2 * zoom * dpr)) / (zoom * dpr))) < 1e-8);
+    assert.equal(h.paintEnd, 80); assert.equal(v.paintEnd, 60);
+    assert.equal(h.start, 10); assert.equal(v.start, 20);
+  }
+  assert.equal(top.paintStart, undefined); assert.equal(left.paintStart, undefined);
+});
+
+test('독립 선·서로 닿지 않는 경계·점선·이중선은 끝점을 연장하지 않음', () => {
+  const h = edge({ start: 10 });
+  for (const other of [
+    edge({ vertical: true, at: 11, start: 0, end: 40 }),
+    edge({ vertical: true, at: 10, start: 0, end: 29 }),
+    edge({ vertical: true, at: 10, start: 31, end: 40 }),
+    edge({ vertical: true, at: 10, start: 0, end: 40, pattern: 'dotted' }),
+    edge({ vertical: true, at: 10, start: 0, end: 40, pattern: 'double', width: 3 }),
+  ]) assert.equal(gridBorderJoins([h, other])[0], h);
+  for (const pattern of ['dotted', 'dashed', 'dashDot', 'double']) {
+    const p = edge({ ...h, pattern });
+    assert.equal(gridBorderJoins([p, edge({ vertical: true, at: 10, start: 0, end: 40 })])[0], p);
+  }
+});
+
+test('긴 병합 경계의 T 접점과 굵기가 바뀌는 접점은 해당 구간 폭 사용', () => {
+  const v = edge({ vertical: true, at: 10, start: 0, end: 90, width: 2 });
+  const input = resolveGridBorders([v, { ...v, start: 40, end: 60, width: 3 }, edge({ at: 40, start: 10 }), edge({ at: 80, start: 10 })]);
+  const joined = gridBorderJoins(input);
+  assert.equal(joined.find(e => !e.vertical && e.at === 40).paintStart, 7);
+  assert.equal(joined.find(e => !e.vertical && e.at === 80).paintStart, 8);
+});
+
+test('원점은 안쪽 선까지 연결하며 음수로 뻗는 모서리를 만들지 않음', () => {
+  const top = edge({ at: 0, start: 0, width: 3 }), left = edge({ vertical: true, at: 0, start: 0, width: 2 });
+  assert.deepEqual(gridBorderJoins([top, left]), [top, left]);
+  const ending = edge({ at: 30, start: -20, end: 0 });
+  assert.equal(gridBorderJoins([left, ending])[1].paintEnd, 2);
 });

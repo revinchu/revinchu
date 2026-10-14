@@ -14,7 +14,7 @@ import { headerResizeEdge } from './header-resize.js';
 import { visibleAxisIndices } from './axis-window.js';
 import { cellTextOverflow } from './cell-text-overflow.js';
 import { GridAccessibility } from './grid-a11y.js';
-import { gridLineWidth, resolveGridBorders, gridBorderPaintOrder } from './grid-lines.js';
+import { gridLineWidth, resolveGridBorders, gridBorderPaintOrder, gridBorderJoins } from './grid-lines.js';
 import { pictureTransform } from './picture.js';
 import { pictureMarkup } from './picture-render.js';
 import { sanitizeHtml, setSafeHtml } from './safe-html.js';
@@ -1050,13 +1050,14 @@ export class GridView {
         html.push(`<div class="fbtn pbtn${on ? ' on' : ''}" data-p="${pi}" data-k="${b.kind}" data-f="${esc(b.field ?? '')}" title="${on ? '필터 적용됨' : '필터'}" style="left:${cols.pos(b.c + 1) - 18 - p.ox}px;top:${rows.pos(b.r + 1) - 18 - p.oy}px"></div>`);
       }
     });
-    const lines = gridBorderPaintOrder(resolveGridBorders(p.borderSegments)).map((e) => {
+    const lines = gridBorderPaintOrder(gridBorderJoins(resolveGridBorders(p.borderSegments), this.z, globalThis.devicePixelRatio || 1)).map((e) => {
       const width = gridLineWidth(e.width, this.z, globalThis.devicePixelRatio || 1, e.pattern);
       const path = (offset, strokeWidth) => {
         const at = (e.at === 0 ? width : pixel(e.at)) - offset;
         // 중심선 stroke는 분수 배율의 float 변환에서도 정수 장치 픽셀 폭을
         // 유지한다. rect 양끝을 따로 반올림하면 2px이 1px/3px로 달라질 수 있다.
-        const d = e.vertical ? `M${at} ${pixel(e.start)}V${pixel(e.end)}` : `M${pixel(e.start)} ${at}H${pixel(e.end)}`;
+        const start = pixel(e.paintStart ?? e.start), end = pixel(e.paintEnd ?? e.end);
+        const d = e.vertical ? `M${at} ${start}V${end}` : `M${start} ${at}H${end}`;
         const units = BORDER_DASHES[e.pattern];
         const phase = e.start + (e.vertical ? p.oy : p.ox);
         const dash = units ? ` stroke-dasharray="${units.map(n => n * strokeWidth).join(' ')}" stroke-dashoffset="${phase}"` : '';

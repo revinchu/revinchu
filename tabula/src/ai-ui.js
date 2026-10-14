@@ -1,6 +1,6 @@
 import { el, openDialog } from './ui.js';
 import { server } from './storage.js';
-import { AI_PROVIDERS } from '../server/ai-provider.js';
+import { AI_PROVIDERS } from './ai-providers.js';
 import { aiChanges } from './ai-cells.js';
 
 const keys = new Map();

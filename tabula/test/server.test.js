@@ -199,3 +199,18 @@ test('서버: 같은 문서의 동시 저장에서도 임시 파일 충돌이나
   assert.ok(value.n >= 0 && value.n < 12); assert.equal(value.text.length, 1000);
   assert.deepEqual(await readdir(data), ['shared.tabula.json']);
 });
+
+test('서버: 실제 AI UI의 브라우저 의존성을 제공하면서 서버 전용 코드는 차단한다', async (t) => {
+  const { server } = await fixture(t, { root: fileURLToPath(new URL('../', import.meta.url)) });
+  const ui = await call(server, '/src/ai-ui.js');
+  assert.equal(ui.status, 200);
+  const imports = [...ui.text.matchAll(/^import\s+\{[^}]+\}\s+from\s+'([^']+)'/gm)];
+  assert.ok(imports.length > 0);
+  for (const [, spec] of imports) {
+    const path = new URL(spec, 'http://localhost/src/ai-ui.js').pathname;
+    const response = await call(server, path);
+    assert.equal(response.status, 200, path);
+    assert.match(response.headers['content-type'], /javascript/, path);
+  }
+  assert.equal((await call(server, '/server/ai-provider.js')).status, 403);
+});
