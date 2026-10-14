@@ -226,6 +226,17 @@ export function readPpt(bytes) {
     return records(doc, o, Math.min(doc.length, o + 8 + u32(doc, o + 4)))[0] ?? null;
   };
   const docRec = recAt(docRef);
+  // 개요 글 (제목 · 본문 개체 틀) 의 PowerPoint 2000+ 단락 확장: 슬라이드 id + 글 종류 → 번호 매기기
+  const outline9 = new Map();
+  for (const blob of deep(docRec?.kids, 0x138b)) {
+    for (const c of deep(records(blob.data), 0x0fae)) {
+      let key = null;
+      for (const k of c.kids ?? []) {
+        if (k.type === 0x0faf && k.data.length >= 8) key = `${u32(k.data, 0)}:${u32(k.data, 4)}`;
+        else if (k.type === 0x0fac && key) { outline9.set(key, parseStyle9(k.data)); key = null; }
+      }
+    }
+  }
   if (!docRec?.kids) throw new Error('PowerPoint 문서 구조를 읽지 못했습니다 (손상된 파일일 수 있습니다)');
 
   // ── 문서 정보
@@ -554,7 +565,8 @@ export function readPpt(bytes) {
     if ([7, 8, 9, 10].includes(phId)) return null; // 마스터 날짜 · 번호 · 바닥글 개체 틀
     // 글
     const tb = one(sp.kids, ART.ClientTextbox);
-    const txt = tb ? textBlock(tb.kids, ctx) : null;
+    const pp9 = style9In(cd?.kids);
+    const txt = tb ? textBlock(tb.kids, pp9 ? { ...ctx, pp9 } : ctx) : null;
     const ins = [props.get(0x0081)?.val ?? 91440, props.get(0x0082)?.val ?? 45720, props.get(0x0083)?.val ?? 91440, props.get(0x0084)?.val ?? 45720].map((v) => v / 9525);
     const anchor = { 0: 't', 1: 'ctr', 2: 'b', 3: 't', 4: 'ctr', 5: 'b' }[props.get(0x0087)?.val ?? 0] ?? 't';
     if (txt) o.text = { paras: txt.paras, anchor, insets: ins, wrap: (props.get(0x0085)?.val ?? 0) !== 2, autofit: 'none' };
@@ -584,7 +596,12 @@ export function readPpt(bytes) {
       else if (r.type === RT.OutlineTextRefAtom) {
         // 개요 글은 SlideListWithText 에
         const t = ctx.texts?.[u32(r.data, 0)];
-        if (t) return textBlock(t, ctx, ruler);
+        if (t) {
+          // 개요 글의 번호 매기기 (문서의 OutlineTextProps9: 슬라이드 id + 글 종류)
+          const tt = u32(one(t, RT.TextHeaderAtom)?.data ?? new Uint8Array(4), 0);
+          const pp9 = ctx.pp9 ?? outline9.get(`${ctx.slideId}:${tt}`) ?? null;
+          return textBlock(t, pp9 ? { ...ctx, pp9 } : ctx, ruler);
+        }
       }
     }
     if (text == null) return null;
@@ -613,6 +630,9 @@ export function readPpt(bytes) {
       const lvl = Math.min(4, pr.indent ?? 0);
       const ms = levelStyle(lvl);
       const pf = { ...(ms.pf ?? {}), ...(pr.pf ?? {}) };
+      const p9 = ctx.pp9?.[pi];
+      if (p9?.scheme != null && p9.auto !== false) { pf.bulletScheme = p9.scheme; pf.bulletStart = p9.start || 1; }
+      else if (p9?.auto === false) delete pf.bulletScheme;
       const runs = [];
       let s = 0;
       while (s < line.length) {
@@ -641,7 +661,7 @@ export function readPpt(bytes) {
         if (pf.bulletHasFont && pf.bulletFont != null && fontName(pf.bulletFont)) P.bullet.font = fontName(pf.bulletFont);
         if (pf.bulletHasColor && pf.bulletColor) { const c = textColor(pf.bulletColor, ctx.scheme); if (c) P.bullet.color = c; }
         if (pf.bulletHasSize && pf.bulletSize > 0) P.bullet.size = pf.bulletSize / 100;
-        if (pf.bulletScheme != null) P.bullet = { type: 'num', scheme: ['alphaLcPeriod', 'alphaUcPeriod', 'arabicParenR', 'arabicPeriod', 'romanLcParenBoth', 'romanLcParenR', 'romanLcPeriod', 'romanUcPeriod', 'alphaLcParenBoth', 'alphaLcParenR', 'alphaUcParenBoth', 'alphaUcParenR', 'arabicParenBoth', 'arabicPlain'][pf.bulletScheme] ?? 'arabicPeriod', start: pf.bulletStart ?? 1 };
+        if (pf.bulletScheme != null) P.bullet = { type: 'num', scheme: ['alphaLcPeriod', 'alphaUcPeriod', 'arabicParenR', 'arabicPeriod', 'romanLcParenBoth', 'romanLcParenR', 'romanLcPeriod', 'romanUcPeriod', 'alphaLcParenBoth', 'alphaLcParenR', 'alphaUcParenBoth', 'alphaUcParenR', 'arabicParenBoth', 'arabicPlain', 'circleNumDbPlain', 'circleNumWdBlackPlain', 'circleNumWdWhitePlain', 'arabicDbPeriod', 'arabicDbPlain', 'ea1ChsPeriod', 'ea1ChsPlain', 'ea1ChtPeriod', 'ea1ChtPlain', 'ea1JpnChsDbPeriod', 'ea1JpnKorPlain', 'ea1JpnKorPeriod', 'arabic1Minus', 'arabic2Minus', 'hebrew2Minus', 'thaiAlphaPeriod', 'thaiAlphaParenR', 'thaiAlphaParenBoth', 'thaiNumPeriod', 'thaiNumParenR', 'thaiNumParenBoth', 'hindiAlphaPeriod', 'hindiNumPeriod', 'kanjiAlphaPeriod', 'hindiNumParenR', 'hindiAlpha1Period'][pf.bulletScheme] ?? 'arabicPeriod', start: pf.bulletStart ?? 1 };
       }
       paras.push(P);
       pi += 0;
@@ -697,7 +717,7 @@ export function readPpt(bytes) {
       const mainOf = m?.base ?? m;
       const scheme = flags & 0x2 ? (m?.scheme ?? mainOf?.scheme ?? baseScheme) : (schemeOf(rec) ?? m?.scheme ?? baseScheme);
       const rulers = { ...(mainOf?.rulers ?? {}), ...(m?.rulers ?? {}) };
-      const ctx = { scheme, styles: m?.styles ?? mainMaster?.styles, texts: entry.texts, rulers, phProps: { ...(mainOf?.phProps ?? {}), ...(m?.phProps ?? {}) } };
+      const ctx = { scheme, slideId: entry.slideId, styles: m?.styles ?? mainMaster?.styles, texts: entry.texts, rulers, phProps: { ...(mainOf?.phProps ?? {}), ...(m?.phProps ?? {}) } };
       const { objects, bg } = readShapes(rec, ctx);
       // 마스터 배경 · 마스터 그림 (자리 표시자 제외)
       let slideBg = bg;
@@ -784,6 +804,40 @@ function readCF(d, p) {
   return [cf, p];
 }
 /** StyleTextPropAtom → 단락 · 글자 구간 */
+/** StyleTextProp9Atom (PowerPoint 2000+ 확장) → 단락 묶음마다 { auto, scheme, start } (번호 매기기) */
+function parseStyle9(d) {
+  const out = [];
+  let p = 0;
+  try {
+    while (p + 12 <= d.length) {
+      const e = {};
+      const pm = u32(d, p); p += 4;
+      if (pm & 0x800000) p += 2; // bulletBlipRef
+      if (pm & 0x1000000) { e.auto = !!u16(d, p); p += 2; } // fBulletHasAutoNumber
+      if (pm & 0x2000000) { e.scheme = u16(d, p); e.start = i16(d, p + 2); p += 4; } // bulletAutoNumberScheme
+      const cm = u32(d, p); p += 4;
+      if (cm & 0x100000) p += 4; // pp10ext
+      if (cm & 0x1000000) p += 2; // newEATypeface
+      if (cm & 0x2000000) p += 2; // csTypeface
+      if (cm & 0x4000000) p += 4; // pp11ext
+      const sm = u32(d, p); p += 4;
+      if (sm & 0x1) p += 2; if (sm & 0x2) p += 2; if (sm & 0x4) p += 2; if (sm & 0x40) p += 2; if (sm & 0x20) p += 4;
+      if (sm & 0x200) { const n = u32(d, p); p += 4 + n * 4; }
+      out.push(e);
+    }
+  } catch { /* 읽은 데까지 */ }
+  return out;
+}
+/** 레코드 안의 ProgBinaryTag 자료(0x138B)들에서 StyleTextProp9Atom 찾기 */
+function style9In(kids) {
+  for (const blob of deep(kids, 0x138b)) {
+    const rs = records(blob.data);
+    const a = deep(rs, 0x0fac)[0];
+    if (a) return parseStyle9(a.data);
+  }
+  return null;
+}
+
 function parseStyleText(d, len) {
   const pruns = []; const cruns = [];
   if (!d) return { pruns: [{ count: len + 1, indent: 0, pf: {} }], cruns: [{ count: len + 1, cf: {} }] };

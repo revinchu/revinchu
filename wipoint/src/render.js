@@ -102,7 +102,17 @@ const NUM_FMT = {
   romanUcPeriod: (n) => `${roman(n)}.`, romanLcPeriod: (n) => `${roman(n).toLowerCase()}.`,
   circleNumDbPlain: (n) => (n >= 1 && n <= 20 ? String.fromCharCode(0x2460 + n - 1) : `${n}.`),
   ganada: (n) => `${'가나다라마바사아자차카타파하'[(n - 1) % 14]}.`,
+  alphaLcParenBoth: (n) => `(${alpha(n)})`, alphaUcParenBoth: (n) => `(${alpha(n).toUpperCase()})`,
+  romanLcParenBoth: (n) => `(${roman(n).toLowerCase()})`, romanLcParenR: (n) => `${roman(n).toLowerCase()})`, romanUcParenBoth: (n) => `(${roman(n)})`, romanUcParenR: (n) => `${roman(n)})`,
+  circleNumWdWhitePlain: (n) => (n >= 1 && n <= 20 ? String.fromCharCode(0x2460 + n - 1) : `${n}.`),
+  circleNumWdBlackPlain: (n) => (n >= 1 && n <= 10 ? String.fromCharCode(0x2776 + n - 1) : n <= 20 ? String.fromCharCode(0x24eb + n - 11) : `${n}.`),
+  arabicDbPeriod: (n) => `${fullWidth(n)}.`, arabicDbPlain: (n) => fullWidth(n),
+  ea1ChsPeriod: (n) => `${hanNum(n)}.`, ea1ChsPlain: (n) => hanNum(n), ea1ChtPeriod: (n) => `${hanNum(n)}.`, ea1ChtPlain: (n) => hanNum(n), ea1JpnChsDbPeriod: (n) => `${hanNum(n)}.`,
+  ea1JpnKorPeriod: (n) => `${'가나다라마바사아자차카타파하'[(n - 1) % 14]}.`, ea1JpnKorPlain: (n) => '가나다라마바사아자차카타파하'[(n - 1) % 14],
+  arabic1Minus: (n) => `${n}-`, arabic2Minus: (n) => `-${n}-`,
 };
+const fullWidth = (n) => String(n).replace(/\d/g, (d) => String.fromCharCode(0xff10 + Number(d)));
+const hanNum = (n) => { const D = '〇一二三四五六七八九'; if (n < 10) return D[n]; if (n < 20) return `十${n % 10 ? D[n % 10] : ''}`; if (n < 100) return `${D[Math.floor(n / 10)]}十${n % 10 ? D[n % 10] : ''}`; return String(n); };
 export const NUM_SCHEMES = [['arabicPeriod', '1. 2. 3.'], ['arabicParenR', '1) 2) 3)'], ['romanUcPeriod', 'I. II. III.'], ['alphaUcPeriod', 'A. B. C.'], ['alphaLcParenR', 'a) b) c)'], ['alphaLcPeriod', 'a. b. c.'], ['romanLcPeriod', 'i. ii. iii.'], ['circleNumDbPlain', '① ② ③'], ['ganada', '가. 나. 다.']];
 export const BULLET_CHARS = [['•', '채워진 둥근 글머리 기호'], ['○', '속이 빈 둥근 글머리 기호'], ['■', '채워진 사각형 글머리 기호'], ['□', '속이 빈 사각형 글머리 기호'], ['◆', '별표 글머리 기호'], ['➢', '화살표 글머리 기호'], ['✓', '체크 표시 글머리 기호'], ['–', '대시']];
 function alpha(n) { let s = ''; while (n > 0) { n--; s = String.fromCharCode(97 + (n % 26)) + s; n = Math.floor(n / 26); } return s; }
@@ -367,29 +377,93 @@ const WARP_PATHS = {
   textChevron: (W, H) => [`M0 ${f(H * 0.7)} L${f(W / 2)} ${f(H * 0.3)} L${f(W)} ${f(H * 0.7)}`, 2 * Math.hypot(W / 2, H * 0.4)],
   textChevronInverted: (W, H) => [`M0 ${f(H * 0.3)} L${f(W / 2)} ${f(H * 0.7)} L${f(W)} ${f(H * 0.3)}`, 2 * Math.hypot(W / 2, H * 0.4)],
 };
-/** WordArt 변환 글 (편집 중이 아닐 때): 모든 단락을 한 줄로 경로를 따라 */
+// 경로 변환과 같은 모양의 다른 이름 (부어 넣기 · 고리)
+for (const [k, base] of [['textArchUpPour', 'textArchUp'], ['textArchDownPour', 'textArchDown'], ['textCirclePour', 'textCircle'], ['textButtonPour', 'textButton'], ['textRingInside', 'textCircle'], ['textRingOutside', 'textCircle']]) WARP_PATHS[k] = WARP_PATHS[base];
+// 봉투 변환: 글을 세로 띠로 잘라 위 · 아래 곡선 사이로 늘림 (t = 0~1 가로 위치 → 위 · 아래 y 비율). h: 가로 띠 (s = 0~1 세로 위치 → 왼쪽 · 오른쪽 x 비율)
+const S1 = (t) => Math.sin(Math.PI * t);
+export const WARP_ENVELOPES = {
+  textPlain: [() => 0, () => 1],
+  textStop: [(t) => 0.3 * Math.max(0, 1 - Math.min(t, 1 - t) / 0.2), (t) => 1 - 0.3 * Math.max(0, 1 - Math.min(t, 1 - t) / 0.2)],
+  textInflate: [(t) => 0.22 * (1 - S1(t)), (t) => 1 - 0.22 * (1 - S1(t))],
+  textDeflate: [(t) => 0.22 * S1(t), (t) => 1 - 0.22 * S1(t)],
+  textInflateBottom: [() => 0, (t) => 0.7 + 0.3 * S1(t)],
+  textDeflateBottom: [() => 0, (t) => 1 - 0.32 * S1(t)],
+  textInflateTop: [(t) => 0.3 - 0.3 * S1(t), () => 1],
+  textDeflateTop: [(t) => 0.32 * S1(t), () => 1],
+  textDeflateInflate: [(t) => 0.18 * S1(t), (t) => 1 - 0.06 * S1(t)],
+  textDeflateInflateDeflate: [(t) => 0.2 * S1(t), (t) => 1 - 0.2 * S1(t)],
+  textCanUp: [(t) => 0.22 - 0.22 * S1(t), (t) => 1 - 0.22 * S1(t)],
+  textCanDown: [(t) => 0.22 * S1(t), (t) => 0.78 + 0.22 * S1(t)],
+  textWave4: [(t) => 0.12 + 0.12 * Math.sin(4 * Math.PI * t), (t) => 0.88 + 0.12 * Math.sin(4 * Math.PI * t)],
+  textFadeRight: [(t) => 0.3 * t, (t) => 1 - 0.3 * t],
+  textFadeLeft: [(t) => 0.3 * (1 - t), (t) => 1 - 0.3 * (1 - t)],
+  textCascadeUp: [(t) => 0.5 * (1 - t), (t) => 1 - 0.15 * (1 - t)],
+  textCascadeDown: [(t) => 0.5 * t, (t) => 1 - 0.15 * t],
+  // 위 · 아래 곡선이 같이 움직이는 변환 (삼각형 · 갈매기 · 기울기 · 곡선 · 물결)
+  textTriangle: [(t) => 0.55 * Math.abs(2 * t - 1), () => 1],
+  textTriangleInverted: [() => 0, (t) => 1 - 0.55 * Math.abs(2 * t - 1)],
+  textChevron: [(t) => 0.3 * Math.abs(2 * t - 1), (t) => 0.7 + 0.3 * Math.abs(2 * t - 1)],
+  textChevronInverted: [(t) => 0.3 * (1 - Math.abs(2 * t - 1)), (t) => 1 - 0.3 * Math.abs(2 * t - 1)],
+  textSlantUp: [(t) => 0.35 * (1 - t), (t) => 0.65 + 0.35 * (1 - t)],
+  textSlantDown: [(t) => 0.35 * t, (t) => 0.65 + 0.35 * t],
+  textCurveUp: [(t) => 0.35 * (1 - Math.sin((Math.PI * t) / 2)), (t) => 0.65 + 0.35 * (1 - Math.sin((Math.PI * t) / 2))],
+  textCurveDown: [(t) => 0.35 * (1 - Math.cos((Math.PI * t) / 2)), (t) => 0.65 + 0.35 * (1 - Math.cos((Math.PI * t) / 2))],
+  textWave1: [(t) => 0.12 + 0.12 * Math.sin(2 * Math.PI * t), (t) => 0.88 + 0.12 * Math.sin(2 * Math.PI * t)],
+  textWave2: [(t) => 0.12 - 0.12 * Math.sin(2 * Math.PI * t), (t) => 0.88 - 0.12 * Math.sin(2 * Math.PI * t)],
+  textDoubleWave1: [(t) => 0.12 - 0.12 * Math.sin(4 * Math.PI * t), (t) => 0.88 - 0.12 * Math.sin(4 * Math.PI * t)],
+  textFadeUp: [(s) => 0.25 * (1 - s), (s) => 1 - 0.25 * (1 - s), 'h'],
+  textFadeDown: [(s) => 0.25 * s, (s) => 1 - 0.25 * s, 'h'],
+};
+const warpRuns = (theme, o, body) => body.paras.map((p) => p.runs.filter((r) => r.t || r.fld).map((r) => {
+  const size = (r.size ?? defaultSize(o, p.lvl ?? 0)) * PX_PER_PT * (body.fontScale ?? 1);
+  const col = r.fill?.type === 'gradient' ? resolveColor(theme, r.fill.stops?.[0]?.[1] ?? r.color, '#000') : r.fill?.type === 'none' ? 'none' : runColor(theme, o, r);
+  const stroke = r.outline ? ` stroke="${resolveColor(theme, r.outline.color ?? '@tx1')}" stroke-width="${f(r.outline.width ?? 1)}"` : '';
+  return { size, html: `<tspan font-size="${f(size)}" fill="${col}"${stroke}${(r.b ?? (o.phKind?.head && r.b !== false)) ? ' font-weight="700"' : ''}${r.i ? ' font-style="italic"' : ''} font-family="${escHtml(fontStack(theme, r.font ?? defaultFont(o)))}">${escHtml(r.fld ? fieldText(r) : r.t)}</tspan>` };
+})).filter((l) => l.length);
+
+/** WordArt 변환 글 (편집 중이 아닐 때) */
 function warpHtml(theme, o, body, x, y, W, H) {
-  const mk = WARP_PATHS[body.warp?.prst];
-  if (!mk || W <= 0 || H <= 0) return '';
-  const [d, len] = mk(W, H);
-  const runs = body.paras.flatMap((p, i) => [...(i ? [{ t: ' ', size: p.runs[0]?.size }] : []), ...p.runs.map((r) => ({ ...r, _p: p }))]).filter((r) => r.t);
-  if (!runs.length) return '';
+  if (W <= 0 || H <= 0) return '';
+  const lines = warpRuns(theme, o, body);
+  if (!lines.length) return '';
   const id = nextId();
-  const p0 = body.paras[0] ?? {};
-  const spans = runs.map((r) => {
-    const p = r._p ?? p0;
-    const size = (r.size ?? defaultSize(o, p.lvl ?? 0)) * PX_PER_PT * (body.fontScale ?? 1);
-    const col = r.fill?.type === 'gradient' ? resolveColor(theme, r.fill.stops?.[0]?.[1] ?? r.color, '#000') : r.fill?.type === 'none' ? 'none' : runColor(theme, o, r);
-    const stroke = r.outline ? ` stroke="${resolveColor(theme, r.outline.color ?? '@tx1')}" stroke-width="${f(r.outline.width ?? 1)}"` : '';
-    return `<tspan font-size="${f(size)}" fill="${col}"${stroke}${(r.b ?? (o.phKind?.head && r.b !== false)) ? ' font-weight="700"' : ''}${r.i ? ' font-style="italic"' : ''} font-family="${escHtml(fontStack(theme, r.font ?? defaultFont(o)))}">${escHtml(r.fld ? fieldText(r) : r.t)}</tspan>`;
-  }).join('');
-  return `<svg class="warp" width="${f(W)}" height="${f(H)}" style="position:absolute;left:${f(x)}px;top:${f(y)}px;overflow:visible" aria-hidden="true"><path id="${id}" d="${d}" fill="none"/><text dominant-baseline="middle"><textPath href="#${id}" startOffset="50%" text-anchor="middle" textLength="${f(len * 0.96)}" lengthAdjust="spacingAndGlyphs">${spans}</textPath></text></svg>`;
+  const box = `class="warp" width="${f(W)}" height="${f(H)}" style="position:absolute;left:${f(x)}px;top:${f(y)}px;overflow:visible" aria-hidden="true"`;
+  const env = WARP_ENVELOPES[body.warp?.prst];
+  if (env) {
+    // 줄마다 폭 W 로 늘린 글 (기준 높이 = 줄 높이 합) → 띠마다 봉투 사이로
+    const lh = lines.map((l) => Math.max(...l.map((r) => r.size)) * 1.1);
+    const H0 = lh.reduce((a, b) => a + b, 0) || 1;
+    let yy = 0;
+    const text = lines.map((l, i) => { const y0 = yy + lh[i] * 0.8; yy += lh[i]; return `<text x="0" y="${f(y0)}" textLength="${f(W)}" lengthAdjust="spacingAndGlyphs">${l.map((r) => r.html).join('')}</text>`; }).join('');
+    const [a, b, dir] = env;
+    const N = 48;
+    let strips = '';
+    for (let i = 0; i < N; i++) {
+      const t = (i + 0.5) / N;
+      const k = `${id}c${i}`;
+      if (dir === 'h') {
+        const y0 = (i / N) * H; const y1 = ((i + 1) / N) * H;
+        const L = a(t) * W; const R = b(t) * W;
+        strips += `<clipPath id="${k}"><rect x="-1" y="${f(y0 - 0.3)}" width="${f(W + 2)}" height="${f(y1 - y0 + 0.6)}"/></clipPath><g clip-path="url(#${k})"><use href="#${id}" transform="translate(${f(L)} 0) scale(${f((R - L) / W)} ${f(H / H0)})"/></g>`;
+      } else {
+        const x0 = (i / N) * W; const x1 = ((i + 1) / N) * W;
+        const T = a(t) * H; const B = b(t) * H;
+        strips += `<clipPath id="${k}"><rect x="${f(x0 - 0.3)}" y="-1" width="${f(x1 - x0 + 0.6)}" height="${f(H + 2)}"/></clipPath><g clip-path="url(#${k})"><use href="#${id}" transform="translate(0 ${f(T)}) scale(1 ${f((B - T) / H0)})"/></g>`;
+      }
+    }
+    return `<svg ${box}><defs><g id="${id}">${text}</g></defs>${strips}</svg>`;
+  }
+  const mk = WARP_PATHS[body.warp?.prst];
+  if (!mk) return '';
+  const [d, len] = mk(W, H);
+  const spans = lines.map((l) => l.map((r) => r.html).join('')).join('<tspan> </tspan>');
+  return `<svg ${box}><path id="${id}" d="${d}" fill="none"/><text dominant-baseline="middle"><textPath href="#${id}" startOffset="50%" text-anchor="middle" textLength="${f(len * 0.96)}" lengthAdjust="spacingAndGlyphs">${spans}</textPath></text></svg>`;
 }
 
 export function textBoxHtml(theme, o, body, w, h, opts = {}) {
   const [l, t, r, b] = o.txBox || o.ph ? [0, 0, w, h] : textRect(o.shape ?? 'rect', w, h, o.adj);
   const ins = body.insets ?? [9.6, 4.8, 9.6, 4.8];
-  if (body.warp && !opts.editable && WARP_PATHS[body.warp.prst]) {
+  if (body.warp && !opts.editable && (WARP_PATHS[body.warp.prst] || WARP_ENVELOPES[body.warp.prst])) {
     const wx = l + ins[0]; const wy = t + ins[1];
     const wh = warpHtml(theme, o, body, wx, wy, Math.max(1, r - l - ins[0] - ins[2]), Math.max(1, b - t - ins[1] - ins[3]));
     if (wh) return `<div class="tx" data-tx="${escHtml(o.id)}" style="position:absolute;inset:0">${wh}</div>`;
