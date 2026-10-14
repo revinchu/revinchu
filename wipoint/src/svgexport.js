@@ -2,7 +2,7 @@
 //   foreignObject 를 쓰지 않으므로 일러스트레이터 · 잉크스케이프 · 피그마에서도 열림.
 //   measure(fontCss, text) → 너비(px): 브라우저는 canvas measureText, 없으면 근사값
 import { resolveColor } from './themes.js';
-import { shapePath, shapePaths, customPath, textRect, STROKE_ONLY } from './shapes.js';
+import { shapePath, shapePaths, customPath, customPaths, textRect, STROKE_ONLY } from './shapes.js';
 import { PX_PER_PT, defaultSize, defaultColor, defaultFont, isEmptyText, setMasterText } from './model.js';
 import { svgFill, markers, DASH, fontStack, paraDefaults, numberLabel, slideBackground, slideDecor, tableCellStyle } from './render.js';
 import { chartSvg } from './chart.js';
@@ -156,7 +156,7 @@ function objectSvg(pres, o, ctx) {
     defs.push(...local);
     const op = fill !== 'none' && o.fill?.alpha != null ? ` fill-opacity="${o.fill.alpha}"` : '';
     const sa = `stroke="${stroke}" stroke-width="${f(sw)}"${dash} stroke-linejoin="round" ${mk}`;
-    const parts = o.path ? null : shapePaths(o.shape ?? 'rect', w, h, o.adj);
+    const parts = o.path ? (o.path.length > 1 && o.path.some((p) => p.fill === 'none' || p.stroke === false) ? customPaths(o.path, w, h) : null) : shapePaths(o.shape ?? 'rect', w, h, o.adj);
     if (fill === 'none' && stroke === 'none') { /* 보이지 않음 */ } else if (!parts || parts.length === 1) inner += `<path d="${d}" fill="${parts?.[0]?.fill === 'none' ? 'none' : fill}" fill-rule="evenodd"${op} ${parts?.[0]?.stroke === false ? 'stroke="none"' : sa}/>`;
     else {
       const SHADE = { darken: ['#000', 0.4], darkenLess: ['#000', 0.2], lighten: ['#fff', 0.4], lightenLess: ['#fff', 0.2] };

@@ -2099,7 +2099,7 @@ register({
   paragraphDialog,
 
   // 그리기
-  drawShape: (k) => { if (S.editing) endEdit(); S.drawShape = k; emit('drawMode'); toast(`${SHAPE_LABEL[k] ?? '도형'}: 슬라이드에서 끌어서 그리세요`); },
+  drawShape: (k) => { if (k === 'textBox') { run('drawTextbox'); return; } if (S.editing) endEdit(); S.drawShape = k; emit('drawMode'); toast(`${SHAPE_LABEL[k] ?? '도형'}: 슬라이드에서 끌어서 그리세요`); },
   objAlign: (how) => doAlign(how),
   // PowerPoint 단축키용
   resizeSel: (dw, dh) => {

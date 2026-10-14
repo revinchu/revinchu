@@ -1,7 +1,7 @@
 // .pptx 쓰기 · 읽기 (PresentationML) — DOM 없음
 // 쓰기: pptxEntries(pres) → { 경로: 문자열|바이트 } → zip / zipAsync
 // 읽기: readPptx(bytes) → pres (마스터 · 레이아웃 상속, 테마 색, 표, 차트, SmartArt 그림, 그룹, 전환, 애니메이션, 메모)
-import { placeInGroups } from './geom.js';
+import { placeInGroups, guideVars } from './geom.js';
 import { zip, unzip, textOf } from './zip.js';
 import { parseXml, child, kids, descendants, esc } from './xml.js';
 import { SLOT_NAMES, resolveColor, applyMods, cloneTheme, THEMES } from './themes.js';
@@ -100,7 +100,7 @@ function xfrmXml(o, tag = 'a:xfrm') {
 function geomXml(o) {
   if (o.path) {
     const K = 100; // 경로 좌표를 0.01 단위로 (w · h 도 같이 늘려 비율은 같음)
-    const paths = o.path.map((p) => `<a:path w="${Math.round(p.w * K)}" h="${Math.round(p.h * K)}"${p.fill === 'none' ? ' fill="none"' : ''}>${p.cmds.map(([op, ...v]) => {
+    const paths = o.path.map((p) => `<a:path w="${Math.round(p.w * K)}" h="${Math.round(p.h * K)}"${p.fill === 'none' ? ' fill="none"' : ''}${p.stroke === false ? ' stroke="0"' : ''}>${p.cmds.map(([op, ...v]) => {
       const pt = (x, y) => `<a:pt x="${Math.round(x * K)}" y="${Math.round(y * K)}"/>`;
       if (op === 'M') return `<a:moveTo>${pt(v[0], v[1])}</a:moveTo>`;
       if (op === 'L') return `<a:lnTo>${pt(v[0], v[1])}</a:lnTo>`;
@@ -1528,18 +1528,25 @@ function readGeom(spPr) {
   }
   const cg = child(spPr, 'custGeom');
   if (cg) {
+    // 안내선 (avLst · gdLst) 은 도형 크기(EMU)로 계산해 숫자로 바꿈. 경로에 w · h 가 없으면 좌표 단위 = 도형 EMU
+    const ext = child(child(spPr, 'xfrm'), 'ext');
+    const W = num(attr(ext, 'cx')) || 914400; const H = num(attr(ext, 'cy')) || 914400;
+    const gds = (el) => kids(el, 'gd').map((g) => [attr(g, 'name'), attr(g, 'fmla') ?? 'val 0']);
+    const v = guideVars(W, H, gds(child(cg, 'avLst')), gds(child(cg, 'gdLst')));
+    const val = (x) => { const n = Number(x); return Number.isFinite(n) ? n : (v[x] ?? 0); };
     const paths = kids(child(cg, 'pathLst'), 'path').map((p) => {
       const cmds = [];
       for (const c of p.children) {
-        const pts = kids(c, 'pt').flatMap((pt) => [num(attr(pt, 'x')), num(attr(pt, 'y'))]);
+        const pts = kids(c, 'pt').flatMap((pt) => [val(attr(pt, 'x')), val(attr(pt, 'y'))]);
         if (c.name === 'moveTo') cmds.push(['M', ...pts]);
         else if (c.name === 'lnTo') cmds.push(['L', ...pts]);
         else if (c.name === 'cubicBezTo') cmds.push(['C', ...pts]);
         else if (c.name === 'quadBezTo') cmds.push(['Q', ...pts]);
-        else if (c.name === 'arcTo') cmds.push(['A', num(attr(c, 'wR')), num(attr(c, 'hR')), num(attr(c, 'stAng')), num(attr(c, 'swAng'))]);
+        else if (c.name === 'arcTo') cmds.push(['A', val(attr(c, 'wR')), val(attr(c, 'hR')), val(attr(c, 'stAng')), val(attr(c, 'swAng'))]);
         else if (c.name === 'close') cmds.push(['Z']);
       }
-      return { w: num(attr(p, 'w')), h: num(attr(p, 'h')), cmds, ...(attr(p, 'fill') === 'none' ? { fill: 'none' } : {}) };
+      const pw = num(attr(p, 'w')); const ph = num(attr(p, 'h'));
+      return { w: pw || W, h: ph || H, cmds, ...(attr(p, 'fill') === 'none' ? { fill: 'none' } : {}), ...(attr(p, 'stroke') === '0' || attr(p, 'stroke') === 'false' ? { stroke: false } : {}) };
     });
     return { shape: 'rect', path: paths };
   }

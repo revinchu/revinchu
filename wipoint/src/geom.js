@@ -160,3 +160,50 @@ export function placeInGroups(xf, r) {
   if (fV) out.flipV = true;
   return out;
 }
+
+/** 조정 핸들 위치: [{ x, y }] (도형 상자 안 px, 회전 · 대칭 전) */
+export function presetHandles(name, w, h, adj) {
+  const def = PRESETS[name];
+  if (!def?.[4]) return [];
+  const v = guideVars(w, h, def[0], def[1], adj);
+  const val = (x) => (typeof x === 'number' ? x : v[x] ?? 0);
+  return def[4].map((hd) => ({ x: val(hd.p[0]), y: val(hd.p[1]) }));
+}
+
+/** 핸들 i 를 (px, py) 로 끌었을 때의 조정값 (PowerPoint 처럼 핸들 위치가 가장 가까워지는 값을 찾음) */
+export function adjustFromPoint(name, w, h, adj, i, px, py) {
+  const def = PRESETS[name];
+  const hd = def?.[4]?.[i];
+  if (!hd) return adj ?? {};
+  const cur = { ...Object.fromEntries(def[0].map(([n, fm]) => [n, evalFormula(fm, baseVars(w, h))])), ...(adj ?? {}) };
+  const dist = (a) => {
+    const v = guideVars(w, h, def[0], def[1], a);
+    const val = (x) => (typeof x === 'number' ? x : v[x] ?? 0);
+    return Math.hypot(val(hd.p[0]) - px, val(hd.p[1]) - py);
+  };
+  const bound = (b, a) => (typeof b === 'number' ? b : guideVars(w, h, def[0], def[1], a)[b] ?? 0);
+  const refs = [['x', 'minX', 'maxX'], ['y', 'minY', 'maxY'], ['r', 'minR', 'maxR'], ['a', 'minAng', 'maxAng']].filter(([k]) => hd[k]);
+  // 조정값마다 범위 안에서 거리 최소값 탐색 (격자 → 좁혀 가기), 두 번 반복
+  for (let round = 0; round < 2; round++) {
+    for (const [k, mn, mx] of refs) {
+      const name0 = hd[k];
+      let lo0 = bound(hd[mn], cur); let hi0 = bound(hd[mx], cur);
+      if (lo0 > hi0) [lo0, hi0] = [hi0, lo0];
+      if (hi0 - lo0 > 4e9) { lo0 = (cur[name0] ?? 0) - 400000; hi0 = (cur[name0] ?? 0) + 400000; } // 사실상 무한 범위 (설명선 끝점)
+      let lo = lo0; let hi = hi0;
+      let best = cur[name0] ?? lo; let bestD = dist(cur);
+      for (let step = 0; step < 4; step++) {
+        const n = 40;
+        for (let j = 0; j <= n; j++) {
+          const t = lo + ((hi - lo) * j) / n;
+          const d = dist({ ...cur, [name0]: t });
+          if (d < bestD - 1e-9) { bestD = d; best = t; }
+        }
+        const span = (hi - lo) / n;
+        lo = Math.max(lo0, best - span); hi = Math.min(hi0, best + span);
+      }
+      cur[name0] = Math.round(best);
+    }
+  }
+  return Object.fromEntries(def[0].map(([n]) => [n, cur[n]]));
+}

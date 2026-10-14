@@ -3,7 +3,7 @@ import { S, curSlide, selObjects, selOne, run } from './state.js';
 import { THEMES, cloneTheme, resolveColor } from './themes.js';
 import { slideHtml, fillCss } from './render.js';
 import { newPresentation, TRANSITIONS, TRANSITION_GROUPS, ANIM_EFFECTS, ANIM_CLASS_LABEL, plainText } from './model.js';
-import { shapePath, SHAPE_GALLERY } from './shapes.js';
+import { shapePath, shapePaths, SHAPE_GALLERY } from './shapes.js';
 import { SHAPE_STYLES, WORDART, PICTURE_STYLES, TABLE_STYLES } from './presets.js';
 import { el, openMenu } from './ui.js';
 
@@ -160,9 +160,13 @@ export const GALLERIES = {
 };
 
 export function shapeIconSvg(kind, size = 18) {
-  const line = kind === 'line' || kind === 'straightConnector1' || kind === 'arc' || kind === 'bracketPair' || kind === 'bracePair';
-  const d = shapePath(kind, 14, kind === 'line' || kind === 'straightConnector1' ? 14 : 12);
-  return `<svg viewBox="-1 -1 16 16" width="${size}" height="${size}"><path d="${d}" fill="${line ? 'none' : '#dbe6f4'}" stroke="#4a6a94" stroke-width="1" vector-effect="non-scaling-stroke"/>${kind === 'straightConnector1' ? '<path d="M14 14l-4-1 3-3z" fill="#4a6a94"/>' : ''}</svg>`;
+  if (kind === 'textBox') return `<svg viewBox="-1 -1 16 16" width="${size}" height="${size}"><rect x="0.5" y="1.5" width="13" height="11" fill="#fff" stroke="#4a6a94"/><path d="M3 4h8M7 4v6" stroke="#4a6a94" stroke-width="1.4"/></svg>`;
+  // 괄호 · 호 · 연결선은 선만 (PowerPoint 갤러리처럼)
+  const line = /^(line|straightConnector1|arc|bracketPair|bracePair|leftBracket|rightBracket|leftBrace|rightBrace)$|Connector/.test(kind);
+  const h = kind === 'line' || kind === 'straightConnector1' || /Connector/.test(kind) ? 14 : 12;
+  const parts = shapePaths(kind, 14, h);
+  const body = parts.map((p) => `<path d="${p.d}" fill="${line || p.fill === 'none' ? 'none' : '#dbe6f4'}" stroke="${p.stroke ? '#4a6a94' : 'none'}" stroke-width="1" vector-effect="non-scaling-stroke"/>`).join('');
+  return `<svg viewBox="-1 -1 16 16" width="${size}" height="${size}">${body}${kind === 'straightConnector1' ? '<path d="M14 14l-4-1 3-3z" fill="#4a6a94"/>' : ''}</svg>`;
 }
 
 export function styleChip(st, i) {

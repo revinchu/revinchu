@@ -152,6 +152,7 @@ button { font: inherit; color: inherit; }
 .sel-frame.editing { border-style: dashed; }
 .hd { position: absolute; width: 9px; height: 9px; margin: -5px 0 0 -5px; background: #fff; border: 1px solid #555; border-radius: 50%; pointer-events: auto; }
 .hd-nw, .hd-se { cursor: nwse-resize; } .hd-ne, .hd-sw { cursor: nesw-resize; } .hd-n, .hd-s { cursor: ns-resize; } .hd-e, .hd-w { cursor: ew-resize; }
+.hd-adj { position: absolute; width: 9px; height: 9px; margin: -5px 0 0 -5px; background: #ffd400; border: 1px solid #6b5a00; border-radius: 50%; pointer-events: auto; cursor: pointer; z-index: 2; }
 .hd-rot { position: absolute; left: 50%; top: -26px; width: 16px; height: 16px; margin-left: -8px; border-radius: 50%; background: #fff; border: 1px solid #555; pointer-events: auto; cursor: grab; }
 .hd-rot::after { content: '↻'; position: absolute; inset: -2px 0 0; text-align: center; font-size: 11px; line-height: 16px; color: #333; }
 .guide { position: absolute; pointer-events: none; }
@@ -578,6 +579,7 @@ body.mobile .pv-tools button { flex: none; }
 .stage { touch-action: pan-x pan-y; }
 @media (pointer: coarse) {
   .hd { width: 20px; height: 20px; margin: -10px 0 0 -10px; }
+  .hd-adj { width: 16px; height: 16px; margin: -8px 0 0 -8px; }
   .hd-rot { width: 26px; height: 26px; margin-left: -13px; top: -40px; }
   .hd-rot::after { line-height: 26px; font-size: 15px; }
   .rl-m { width: 14px; margin-left: -7px; }

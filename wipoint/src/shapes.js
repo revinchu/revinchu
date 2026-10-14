@@ -1,7 +1,7 @@
 // 도형 모양(OOXML prstGeom 이름) → SVG 경로 — DOM 없음
 // shapePath(kind, w, h, adj) 는 (0,0)-(w,h) 상자 안의 경로 문자열을 돌려줌.
 // ECMA-376 미리 설정 도형 187종은 geom.js (표준 정의 + 안내선 식) 로 PowerPoint 와 같은 모양을 그림.
-import { presetGeom } from './geom.js';
+import { presetGeom, pathD } from './geom.js';
 
 const f = (n) => Math.round(n * 100) / 100;
 const P = (pts) => `M${pts.map(([x, y]) => `${f(x)} ${f(y)}`).join(' L')} Z`;
@@ -142,47 +142,26 @@ export function textRect(kind, w, h, adj) {
 
 /** 도형 갤러리 (PowerPoint 삽입 › 도형 분류) */
 export const SHAPE_GALLERY = [
-  ['선', [['line', '선'], ['straightConnector1', '화살표'], ['arc', '호']]],
-  ['사각형', [['rect', '직사각형'], ['roundRect', '모서리가 둥근 직사각형'], ['snip1Rect', '한쪽 모서리가 잘린 사각형'], ['round2SameRect', '위쪽 모서리가 둥근 사각형']]],
-  ['기본 도형', [['ellipse', '타원'], ['triangle', '이등변 삼각형'], ['rtTriangle', '직각 삼각형'], ['parallelogram', '평행 사변형'], ['trapezoid', '사다리꼴'], ['diamond', '다이아몬드'], ['pentagon', '정오각형'], ['hexagon', '육각형'], ['octagon', '팔각형'], ['donut', '도넛'], ['frame', '액자'], ['can', '원통형'], ['cube', '정육면체'], ['heart', '하트'], ['lightningBolt', '번개'], ['moon', '달'], ['cloud', '구름'], ['smileyFace', '웃는 얼굴'], ['teardrop', '눈물 방울'], ['pie', '원형'], ['blockArc', '막힌 원호'], ['plus', '더하기'], ['bracketPair', '양쪽 대괄호'], ['bracePair', '양쪽 중괄호']]],
-  ['블록 화살표', [['rightArrow', '오른쪽 화살표'], ['leftArrow', '왼쪽 화살표'], ['upArrow', '위쪽 화살표'], ['downArrow', '아래쪽 화살표'], ['leftRightArrow', '왼쪽/오른쪽 화살표'], ['notchedRightArrow', '톱니 모양의 오른쪽 화살표'], ['bentArrow', '굽은 화살표'], ['uturnArrow', 'U자형 화살표'], ['curvedRightArrow', '오른쪽으로 구부러진 화살표'], ['chevron', '갈매기형 수장'], ['homePlate', '오각형']]],
-  ['순서도', [['rect', '순서도: 처리'], ['flowChartDecision', '순서도: 판단'], ['flowChartTerminator', '순서도: 수행의 시작/종료'], ['flowChartDocument', '순서도: 문서'], ['flowChartInputOutput', '순서도: 데이터']]],
-  ['별 및 현수막', [['star4', '포인트가 4개인 별'], ['star5', '포인트가 5개인 별'], ['star6', '포인트가 6개인 별'], ['star8', '포인트가 8개인 별']]],
-  ['설명선', [['wedgeRectCallout', '말풍선: 사각형'], ['wedgeRoundRectCallout', '말풍선: 모서리가 둥근 사각형'], ['wedgeEllipseCallout', '말풍선: 타원형']]],
+  ['선', [['line', '선'], ['straightConnector1', '화살표'], ['bentConnector3', '연결선: 꺾임'], ['curvedConnector3', '연결선: 구부러짐'], ['arc', '호']]],
+  ['사각형', [['rect', '직사각형'], ['roundRect', '모서리가 둥근 직사각형'], ['snip1Rect', '한쪽 모서리가 잘린 사각형'], ['snip2SameRect', '양쪽 모서리가 잘린 사각형'], ['snip2DiagRect', '대각선 방향의 모서리가 잘린 사각형'], ['snipRoundRect', '한쪽 모서리는 잘리고 다른 쪽 모서리는 둥근 사각형'], ['round1Rect', '한쪽 모서리가 둥근 사각형'], ['round2SameRect', '양쪽 모서리가 둥근 사각형'], ['round2DiagRect', '대각선 방향의 모서리가 둥근 사각형']]],
+  ['기본 도형', [['textBox', '텍스트 상자'], ['ellipse', '타원'], ['triangle', '이등변 삼각형'], ['rtTriangle', '직각 삼각형'], ['parallelogram', '평행 사변형'], ['trapezoid', '사다리꼴'], ['diamond', '다이아몬드'], ['pentagon', '정오각형'], ['hexagon', '육각형'], ['heptagon', '칠각형'], ['octagon', '팔각형'], ['decagon', '십각형'], ['dodecagon', '십이각형'], ['pie', '원형'], ['chord', '현'], ['teardrop', '눈물 방울'], ['frame', '액자'], ['halfFrame', 'L 도형'], ['corner', 'L 도형 2'], ['diagStripe', '대각선 줄무늬'], ['plus', '더하기 기호'], ['plaque', '배지'], ['can', '원통형'], ['cube', '정육면체'], ['bevel', '빗면'], ['donut', '도넛'], ['noSmoking', '없음 기호'], ['blockArc', '막힌 원호'], ['foldedCorner', '모서리가 접힌 도형'], ['smileyFace', '웃는 얼굴'], ['heart', '하트'], ['lightningBolt', '번개'], ['sun', '해'], ['moon', '달'], ['cloud', '구름'], ['arc', '호'], ['bracketPair', '양쪽 대괄호'], ['bracePair', '양쪽 중괄호'], ['leftBracket', '왼쪽 대괄호'], ['rightBracket', '오른쪽 대괄호'], ['leftBrace', '왼쪽 중괄호'], ['rightBrace', '오른쪽 중괄호']]],
+  ['블록 화살표', [['rightArrow', '오른쪽 화살표'], ['leftArrow', '왼쪽 화살표'], ['upArrow', '위쪽 화살표'], ['downArrow', '아래쪽 화살표'], ['leftRightArrow', '왼쪽/오른쪽 화살표'], ['upDownArrow', '위쪽/아래쪽 화살표'], ['quadArrow', '왼쪽/오른쪽/위쪽/아래쪽 화살표'], ['leftRightUpArrow', '왼쪽/오른쪽/위쪽 화살표'], ['bentArrow', '굽은 화살표'], ['uturnArrow', 'U자형 화살표'], ['leftUpArrow', '왼쪽/위쪽 화살표'], ['bentUpArrow', '위로 굽은 화살표'], ['curvedRightArrow', '오른쪽으로 구부러진 화살표'], ['curvedLeftArrow', '왼쪽으로 구부러진 화살표'], ['curvedUpArrow', '위로 구부러진 화살표'], ['curvedDownArrow', '아래로 구부러진 화살표'], ['stripedRightArrow', '줄무늬가 있는 오른쪽 화살표'], ['notchedRightArrow', '톱니 모양의 오른쪽 화살표'], ['homePlate', '오각형'], ['chevron', '갈매기형 수장'], ['rightArrowCallout', '설명선: 오른쪽 화살표'], ['downArrowCallout', '설명선: 아래쪽 화살표'], ['leftArrowCallout', '설명선: 왼쪽 화살표'], ['upArrowCallout', '설명선: 위쪽 화살표'], ['leftRightArrowCallout', '설명선: 왼쪽/오른쪽 화살표'], ['quadArrowCallout', '설명선: 왼쪽/오른쪽/위쪽/아래쪽 화살표'], ['circularArrow', '원형 화살표']]],
+  ['수식 도형', [['mathPlus', '더하기 기호'], ['mathMinus', '빼기 기호'], ['mathMultiply', '곱하기 기호'], ['mathDivide', '나누기 기호'], ['mathEqual', '등호'], ['mathNotEqual', '부등호']]],
+  ['순서도', [['flowChartProcess', '순서도: 처리'], ['flowChartAlternateProcess', '순서도: 대체 처리'], ['flowChartDecision', '순서도: 판단'], ['flowChartInputOutput', '순서도: 데이터'], ['flowChartPredefinedProcess', '순서도: 미리 정의된 처리'], ['flowChartInternalStorage', '순서도: 내부 저장소'], ['flowChartDocument', '순서도: 문서'], ['flowChartMultidocument', '순서도: 다중 문서'], ['flowChartTerminator', '순서도: 수행의 시작/종료'], ['flowChartPreparation', '순서도: 준비'], ['flowChartManualInput', '순서도: 수동 입력'], ['flowChartManualOperation', '순서도: 수동 연산'], ['flowChartConnector', '순서도: 연결자'], ['flowChartOffpageConnector', '순서도: 페이지 외부 연결자'], ['flowChartPunchedCard', '순서도: 카드'], ['flowChartPunchedTape', '순서도: 천공 테이프'], ['flowChartSummingJunction', '순서도: 가산 접합'], ['flowChartOr', '순서도: 논리합'], ['flowChartCollate', '순서도: 대조'], ['flowChartSort', '순서도: 정렬'], ['flowChartExtract', '순서도: 추출'], ['flowChartMerge', '순서도: 병합'], ['flowChartOnlineStorage', '순서도: 저장 데이터'], ['flowChartDelay', '순서도: 지연'], ['flowChartMagneticTape', '순서도: 순차적 액세스 저장소'], ['flowChartMagneticDisk', '순서도: 자기 디스크'], ['flowChartMagneticDrum', '순서도: 직접 액세스 저장소'], ['flowChartDisplay', '순서도: 표시']]],
+  ['별 및 현수막', [['irregularSeal1', '폭발: 8pt'], ['irregularSeal2', '폭발: 14pt'], ['star4', '별: 꼭짓점 4개'], ['star5', '별: 꼭짓점 5개'], ['star6', '별: 꼭짓점 6개'], ['star7', '별: 꼭짓점 7개'], ['star8', '별: 꼭짓점 8개'], ['star10', '별: 꼭짓점 10개'], ['star12', '별: 꼭짓점 12개'], ['star16', '별: 꼭짓점 16개'], ['star24', '별: 꼭짓점 24개'], ['star32', '별: 꼭짓점 32개'], ['ribbon2', '리본: 위로 기울어짐'], ['ribbon', '리본: 아래로 기울어짐'], ['ellipseRibbon2', '리본: 위로 구부러짐'], ['ellipseRibbon', '리본: 아래로 구부러짐'], ['verticalScroll', '두루마리 모양: 세로로 말림'], ['horizontalScroll', '두루마리 모양: 가로로 말림'], ['wave', '물결'], ['doubleWave', '이중 물결']]],
+  ['설명선', [['wedgeRectCallout', '말풍선: 사각형'], ['wedgeRoundRectCallout', '말풍선: 모서리가 둥근 사각형'], ['wedgeEllipseCallout', '말풍선: 타원형'], ['cloudCallout', '생각 풍선: 구름 모양'], ['borderCallout1', '설명선: 선'], ['borderCallout2', '설명선: 굽은 선'], ['borderCallout3', '설명선: 이중 굽은 선'], ['accentCallout1', '설명선: 선(강조선)'], ['accentCallout2', '설명선: 굽은 선(강조선)'], ['accentCallout3', '설명선: 이중 굽은 선(강조선)'], ['callout1', '설명선: 선(테두리 없음)'], ['callout2', '설명선: 굽은 선(테두리 없음)'], ['callout3', '설명선: 이중 굽은 선(테두리 없음)'], ['accentBorderCallout1', '설명선: 선(테두리 및 강조선)'], ['accentBorderCallout2', '설명선: 굽은 선(테두리 및 강조선)'], ['accentBorderCallout3', '설명선: 이중 굽은 선(테두리 및 강조선)']]],
+  ['실행 단추', [['actionButtonBackPrevious', '실행 단추: 뒤로 또는 이전'], ['actionButtonForwardNext', '실행 단추: 앞으로 또는 다음'], ['actionButtonBeginning', '실행 단추: 시작'], ['actionButtonEnd', '실행 단추: 끝'], ['actionButtonHome', '실행 단추: 홈'], ['actionButtonInformation', '실행 단추: 정보'], ['actionButtonReturn', '실행 단추: 이전 슬라이드로'], ['actionButtonMovie', '실행 단추: 동영상'], ['actionButtonDocument', '실행 단추: 문서'], ['actionButtonSound', '실행 단추: 소리'], ['actionButtonHelp', '실행 단추: 도움말'], ['actionButtonBlank', '실행 단추: 사용자 지정']]],
 ];
 export const SHAPE_LABEL = Object.fromEntries(SHAPE_GALLERY.flatMap(([, list]) => list));
 export const KNOWN_SHAPES = new Set(Object.keys(SHAPE_LABEL));
 
 /** custGeom 경로 목록 → SVG 경로 (pptx 사용자 지정 도형) — paths: [{w, h, cmds: [[op, ...pts]]}] */
 export function customPath(paths, w, h) {
-  const out = [];
-  for (const p of paths ?? []) {
-    const sx = p.w ? w / p.w : 1;
-    const sy = p.h ? h / p.h : 1;
-    let cx = 0;
-    let cy = 0;
-    for (const [op, ...v] of p.cmds) {
-      if (op === 'M') { cx = v[0]; cy = v[1]; out.push(`M${f(v[0] * sx)} ${f(v[1] * sy)}`); }
-      else if (op === 'L') { cx = v[0]; cy = v[1]; out.push(`L${f(v[0] * sx)} ${f(v[1] * sy)}`); }
-      else if (op === 'C') { out.push(`C${f(v[0] * sx)} ${f(v[1] * sy)} ${f(v[2] * sx)} ${f(v[3] * sy)} ${f(v[4] * sx)} ${f(v[5] * sy)}`); cx = v[4]; cy = v[5]; }
-      else if (op === 'Q') { out.push(`Q${f(v[0] * sx)} ${f(v[1] * sy)} ${f(v[2] * sx)} ${f(v[3] * sy)}`); cx = v[2]; cy = v[3]; }
-      else if (op === 'A') {
-        // arcTo: wR hR stAng swAng (각도는 60000 분의 1도) — 현재 점에서 시작
-        const [wr, hr, st, sw] = v;
-        const a1 = (st / 60000) * Math.PI / 180;
-        const a2 = ((st + sw) / 60000) * Math.PI / 180;
-        const ox = cx - wr * Math.cos(a1);
-        const oy = cy - hr * Math.sin(a1);
-        const ex = ox + wr * Math.cos(a2);
-        const ey = oy + hr * Math.sin(a2);
-        const large = Math.abs(sw / 60000) > 180 ? 1 : 0;
-        const sweep = sw > 0 ? 1 : 0;
-        out.push(`A${f(wr * sx)} ${f(hr * sy)} 0 ${large} ${sweep} ${f(ex * sx)} ${f(ey * sy)}`);
-        cx = ex; cy = ey;
-      } else if (op === 'Z') out.push('Z');
-    }
-  }
-  return out.join(' ');
+  return (paths ?? []).map((p) => pathD({ w: p.w, h: p.h, c: p.cmds ?? [] }, {}, w, h)).join(' ');
+}
+/** 사용자 지정 도형 경로마다 (채우기 없음 · 선 없음 경로를 나눠 그리기용) */
+export function customPaths(paths, w, h) {
+  return (paths ?? []).map((p) => ({ d: pathD({ w: p.w, h: p.h, c: p.cmds ?? [] }, {}, w, h), fill: p.fill === 'none' ? 'none' : 'norm', stroke: p.stroke !== false }));
 }
 
 /** 선택 창 · 애니메이션 창에 보이는 개체 이름 */

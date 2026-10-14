@@ -1,6 +1,6 @@
 // 슬라이드 → HTML 문자열 (DOM 없음): 편집 화면 · 미리 보기 · 슬라이드 쇼 · 인쇄가 함께 씀
 import { resolveColor, isDark } from './themes.js';
-import { shapePath, shapePaths, customPath, textRect, STROKE_ONLY } from './shapes.js';
+import { shapePath, shapePaths, customPath, customPaths, textRect, STROKE_ONLY } from './shapes.js';
 import { PX_PER_PT, defaultSize, defaultColor, defaultFont, placeholderPrompt, isEmptyText, masterDecor, setMasterText, presForSlide } from './model.js';
 import { chartSvg } from './chart.js';
 import { fxOf, fxStyle } from './effects.js';
@@ -294,7 +294,7 @@ export function shapeHtml(theme, o, media, opts = {}) {
     const op = fill !== 'none' && o.fill?.alpha != null ? `fill-opacity="${o.fill.alpha}"` : '';
     const strokeAttrs = `stroke="${stroke}" stroke-width="${f(sw)}" ${dash} stroke-linejoin="round" ${mk} vector-effect="non-scaling-stroke"`;
     let body = '';
-    const parts = o.path ? null : shapePaths(o.shape ?? 'rect', w, h, o.adj);
+    const parts = o.path ? (o.path.length > 1 && o.path.some((p) => p.fill === 'none' || p.stroke === false) ? customPaths(o.path, w, h) : null) : shapePaths(o.shape ?? 'rect', w, h, o.adj);
     if (!parts || parts.length === 1) body = `<path d="${d}" fill="${parts?.[0]?.fill === 'none' ? 'none' : fill}" fill-rule="evenodd" ${op} ${parts?.[0]?.stroke === false ? 'stroke="none"' : strokeAttrs}/>`;
     else {
       // 여러 경로 도형 (원통 · 정육면체 · 말풍선 …): 채우기 경로마다 명암 (darken/lighten), 선은 선 경로에만

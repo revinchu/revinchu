@@ -4,6 +4,7 @@ import { slideHtml, textHtml, paraDefaults } from './render.js';
 import { groupMembers, bbox, rotatedBox, newShape, newTextBox, formatRange, rangeRunProp, uid } from './model.js';
 import { domToBody, getOffsets, setOffsets, wordAt, placeCaretAtPoint, selectAllIn } from './textedit.js';
 import { isLineShape, shapePath } from './shapes.js';
+import { presetHandles, adjustFromPoint } from './geom.js';
 import { parsePath } from './svgimport.js';
 import { peersOn } from './collab.js';
 import { el } from './ui.js';
@@ -282,6 +283,14 @@ export function renderOverlay() {
         fr.append(el('div', { class: `hd hd-${hd}`, dataset: { h: hd }, style: { left: `${hx * 100}%`, top: `${hy * 100}%` } }));
       }
       if (!f.line && frames.length === 1) fr.append(el('div', { class: 'hd-rot', dataset: { h: 'rot' }, title: '회전' }));
+      // 조정 핸들 (노란 점): 미리 설정 도형의 화살촉 · 모서리 반경 · 말풍선 꼬리 등
+      const o1 = frames.length === 1 && !f.group ? f.objs[0] : null;
+      if (o1 && o1.type === 'shape' && !o1.path && !S.editing && w > 0 && h > 0) {
+        presetHandles(o1.shape ?? 'rect', w, h, o1.adj).forEach((pt, k) => {
+          const hx = o1.flipH ? w - pt.x : pt.x; const hy = o1.flipV ? h - pt.y : pt.y;
+          fr.append(el('div', { class: 'hd-adj', dataset: { h: `adj:${k}` }, title: '모양 조정', style: { left: `${(hx / w) * 100}%`, top: `${(hy / h) * 100}%` } }));
+        });
+      }
     }
     overlay.append(fr);
   }
@@ -856,7 +865,17 @@ function startHandleDrag(e, p0, handle, frameIdx) {
     const p = toSlide(ev);
     rec();
     const guides = [];
-    if (handle === 'rot') {
+    if (handle.startsWith('adj:') && single) {
+      // 도형 좌표로 (회전 · 대칭 되돌림)
+      const o = single; const s0 = orig[0];
+      const cx = s0.x + s0.w / 2; const cy = s0.y + s0.h / 2;
+      const t = (-(s0.rot ?? 0) * Math.PI) / 180;
+      let lx = (p.x - cx) * Math.cos(t) - (p.y - cy) * Math.sin(t);
+      let ly = (p.x - cx) * Math.sin(t) + (p.y - cy) * Math.cos(t);
+      if (s0.flipH) lx = -lx;
+      if (s0.flipV) ly = -ly;
+      o.adj = adjustFromPoint(o.shape ?? 'rect', s0.w, s0.h, o.adj, Number(handle.slice(4)), lx + s0.w / 2, ly + s0.h / 2);
+    } else if (handle === 'rot') {
       const o = single ?? objs[0];
       const cx = orig[0].x + orig[0].w / 2;
       const cy = orig[0].y + orig[0].h / 2;
