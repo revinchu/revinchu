@@ -39,4 +39,12 @@
 - 일부 차트 앵커의 1~4px 크기 차이와 자동 플롯 여백, 글꼴 안티앨리어싱 차이는 남는다. Excel 전체 도형·글꼴 렌더러를 대체한 결과나 완전한 픽셀 일치로 설명하지 않는다.
 - 로컬 근거: `D:\Codex\Temp\wixel-labbeauty`의 원본/수정 캡처, Excel PNG/PDF, native JSON, 테스트 로그. 실제 보고서 콘텐츠는 커밋하지 않는다.
 
-공개 배포의 자산 해시·버전과 원격 검증은 배포 완료 후 아래에 기록한다.
+## 공개 배포
+
+- 제품 커밋 `c18df3a`, 원격 브랜치 `codex/report-chart-fidelity`에 push했다.
+- Cloudflare 버전 `f13e323c-ec68-433d-b29b-40d1bd74299c`, 주소 `https://wixel-3.wizx.workers.dev/`.
+- 자산 `wixel-82740c0a447757ae.js`, 5,985,473 bytes, SHA256 `82740c0a447757aefcb1177a68df318441f6897c3119f5fee5415d868b55bd77`.
+- 일반/Cloudflare 빌드, Wrangler dry-run 및 배포 성공. 공개 HTML·JS·version.json·OAuth 동의 화면 세 파일을 포함한 6파일을 로컬 배포본과 바이트 대조했다.
+- 공개 합성 차트 검사: Chromium 15조건·1,907검사 통과, 페이지 오류·원격 쓰기 0. 사용자의 실제 보고서는 공개 서비스에 업로드하지 않았다.
+- CSP, health의 ai/mcp 활성 상태, OAuth 메타데이터 및 인증 없는 MCP 요청의 401 응답을 확인했다.
+- 증거는 `deploy-public.log`, `public-verification.json`, `chart-public.log`에 남겼다. 기존에 가져온 문서는 기존 열 너비를 갖고 있으므로 새로고침 후 원본 파일을 다시 불러와 가져오기 개선을 적용한다.
