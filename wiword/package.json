@@ -1,0 +1,16 @@
+{
+  "name": "wiword",
+  "version": "1.0.0",
+  "description": "Word 와 같은 브라우저 문서 편집기 (HWP · HWPX · DOCX · PDF · 마크다운, 의존성 없음)",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js",
+    "build": "node build.mjs",
+    "build:cloud": "node build.mjs --cloud",
+    "mcp": "node mcp.js"
+  },
+  "bin": { "wiword-mcp": "./mcp.js" },
+  "engines": { "node": ">=18" }
+}

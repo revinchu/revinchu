@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>문서1 - WIWORD</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='4' width='28' height='24' rx='3' fill='%232B579A'/%3E%3Cpath d='M8 10l2.6 12L13 13l3 9 2.6-12' fill='none' stroke='white' stroke-width='2.4' stroke-linejoin='round' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app" data-view="print">
+    <header class="titlebar">
+      <div class="tb-left">
+        <span class="brand">WIWORD</span>
+        <button class="tb-btn" data-cmd="save" title="저장 (Ctrl+S)" data-icon="save"></button>
+        <button class="tb-btn" data-cmd="undo" title="실행 취소 (Ctrl+Z)" data-icon="undo"></button>
+        <button class="tb-btn" data-cmd="redo" title="다시 실행 (Ctrl+Y)" data-icon="redo"></button>
+        <span class="qat-top" id="qatTop"></span>
+      </div>
+      <div class="tb-center">
+        <div class="tb-title" id="docTitle" title="클릭하여 이름 바꾸기">문서1 - WIWORD</div>
+        <span class="save-state" id="saveState"></span>
+        <span class="collab-bar" id="collabBar" hidden></span>
+      </div>
+      <label class="tb-search">
+        <span data-icon="search"></span>
+        <input id="searchBox" type="search" placeholder="검색 (Alt+Q) — 명령 · 도움말" autocomplete="off">
+      </label>
+      <button class="tb-btn mcp-dot" id="mcpDot" title="AI 연결 (MCP)" hidden></button>
+      <div class="avatar" title="WIWORD 위워드">WW</div>
+    </header>
+
+    <nav class="ribbon-tabs" id="ribbonTabs"></nav>
+    <section class="ribbon" id="ribbon"></section>
+    <div class="qat" id="qat" role="toolbar" aria-label="빠른 실행 도구 모음"></div>
+
+    <div class="workspace">
+      <aside class="nav-pane" id="navPane" hidden aria-label="탐색"></aside>
+      <div class="center">
+        <div class="hruler" id="hruler" aria-hidden="true"></div>
+        <div class="doc-area">
+          <div class="vruler" id="vruler" aria-hidden="true"></div>
+          <main class="docview" id="docView" tabindex="-1" aria-label="문서 편집"></main>
+        </div>
+      </div>
+      <aside class="pane" id="pane" hidden></aside>
+    </div>
+
+    <footer class="statusbar" id="status"></footer>
+  </div>
+
+  <textarea id="ime" class="ime" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="문서 입력"></textarea>
+  <div id="menuLayer"></div>
+  <div id="dialogLayer"></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <div id="keytipLayer"></div>
+  <div id="printArea"></div>
+  <script type="module" src="src/app.js"></script>
+</body>
+</html>
