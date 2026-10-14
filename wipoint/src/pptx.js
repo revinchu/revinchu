@@ -31,6 +31,11 @@ const pct = (v) => Math.round(v * 100000);
 
 // ───────────── 쓰기 도우미 ─────────────
 const SLOT_TO_SCHEME = { dk1: 'tx1', lt1: 'bg1', dk2: 'tx2', lt2: 'bg2' };
+const STD_CLRMAP = { bg1: 'lt1', tx1: 'dk1', bg2: 'lt2', tx2: 'dk2', accent1: 'accent1', accent2: 'accent2', accent3: 'accent3', accent4: 'accent4', accent5: 'accent5', accent6: 'accent6', hlink: 'hlink', folHlink: 'folHlink' };
+const clrMapAttrs = (m) => Object.entries({ ...STD_CLRMAP, ...(m ?? {}) }).filter(([k]) => STD_CLRMAP[k]).map(([k, v]) => `${k}="${v}"`).join(' ');
+const isStdMap = (m) => !m || Object.entries(STD_CLRMAP).every(([k, v]) => (m[k] ?? v) === v);
+/** 마스터 색 매핑이 표준이 아니면 (예전 PowerPoint 파일: tx1 = lt1) 테마 칸 이름(dk1 · lt1)을 그대로 씀 */
+let directSlots = false;
 const MOD_CODES = { lm: 'lumMod', lo: 'lumOff', t: 'tint', s: 'shade', a: 'alpha', sm: 'satMod', so: 'satOff', hm: 'hueMod', ho: 'hueOff', am: 'alphaMod', ao: 'alphaOff', cp: 'comp', iv: 'inv', gr: 'gray', rd: 'red', gn: 'green', bl: 'blue', rm: 'redMod', gm: 'greenMod', bm: 'blueMod', ro: 'redOff', go: 'greenOff', bo: 'blueOff' };
 
 function colorXml(c) {
@@ -45,7 +50,7 @@ function colorXml(c) {
   }).join('');
   if (base.startsWith('@')) {
     const slot = base.slice(1);
-    const val = SLOT_TO_SCHEME[slot] ?? ({ tx1: 'tx1', bg1: 'bg1', tx2: 'tx2', bg2: 'bg2' }[slot] ?? slot);
+    const val = directSlots ? ({ tx1: 'dk1', bg1: 'lt1', tx2: 'dk2', bg2: 'lt2' }[slot] ?? slot) : SLOT_TO_SCHEME[slot] ?? ({ tx1: 'tx1', bg1: 'bg1', tx2: 'tx2', bg2: 'bg2' }[slot] ?? slot);
     return mods ? `<a:schemeClr val="${val}">${mods}</a:schemeClr>` : `<a:schemeClr val="${val}"/>`;
   }
   const rgba = /^rgba?\((\d+),(\d+),(\d+)(?:,([\d.]+))?\)$/.exec(base.replace(/\s/g, ''));
@@ -719,7 +724,7 @@ function masterXml(pres, layoutRids, idBase = 2147483649) {
   const sizes = [2800, 2400, 2000, 1800, 1800, 1800, 1800, 1800, 1800];
   const other = [1800, 1800, 1800, 1800, 1800, 1800, 1800, 1800, 1800].map((sz, i) => `<a:lvl${i + 1}pPr marL="${i * 457200}" algn="l" defTabSz="914400" rtl="0" eaLnBrk="1" latinLnBrk="0" hangingPunct="1"><a:defRPr sz="${sz}" kern="1200"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill><a:latin typeface="+mn-lt"/><a:ea typeface="+mn-ea"/><a:cs typeface="+mn-cs"/></a:defRPr></a:lvl${i + 1}pPr>`).join('');
   const ids = layoutRids.map((rid, i) => `<p:sldLayoutId id="${idBase + i}" r:id="${rid}"/>`).join('');
-  return `${XML_HEAD}<p:sldMaster xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}"><p:cSld><p:bg><p:bgRef idx="1001"><a:schemeClr val="bg1"/></p:bgRef></p:bg><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>${ph(2, 'Title Placeholder 1', 'title', 88, 38, 1104, 139)}${ph(3, 'Text Placeholder 2', 'body', 88, 192, 1104, 456, 1)}</p:spTree></p:cSld><p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/><p:sldLayoutIdLst>${ids}</p:sldLayoutIdLst><p:txStyles><p:titleStyle><a:lvl1pPr algn="l" defTabSz="914400" rtl="0" eaLnBrk="1" latinLnBrk="0" hangingPunct="1"><a:lnSpc><a:spcPct val="90000"/></a:lnSpc><a:spcBef><a:spcPct val="0"/></a:spcBef><a:buNone/><a:defRPr sz="4400" kern="1200"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill><a:latin typeface="+mj-lt"/><a:ea typeface="+mj-ea"/><a:cs typeface="+mj-cs"/></a:defRPr></a:lvl1pPr></p:titleStyle><p:bodyStyle>${lvlStyles(sizes, true)}</p:bodyStyle><p:otherStyle><a:defPPr><a:defRPr lang="ko-KR"/></a:defPPr>${other}</p:otherStyle></p:txStyles></p:sldMaster>`;
+  return `${XML_HEAD}<p:sldMaster xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}"><p:cSld><p:bg><p:bgRef idx="1001"><a:schemeClr val="bg1"/></p:bgRef></p:bg><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>${ph(2, 'Title Placeholder 1', 'title', 88, 38, 1104, 139)}${ph(3, 'Text Placeholder 2', 'body', 88, 192, 1104, 456, 1)}</p:spTree></p:cSld><p:clrMap ${clrMapAttrs(pres.clrMap)}/><p:sldLayoutIdLst>${ids}</p:sldLayoutIdLst><p:txStyles><p:titleStyle><a:lvl1pPr algn="l" defTabSz="914400" rtl="0" eaLnBrk="1" latinLnBrk="0" hangingPunct="1"><a:lnSpc><a:spcPct val="90000"/></a:lnSpc><a:spcBef><a:spcPct val="0"/></a:spcBef><a:buNone/><a:defRPr sz="4400" kern="1200"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill><a:latin typeface="+mj-lt"/><a:ea typeface="+mj-ea"/><a:cs typeface="+mj-cs"/></a:defRPr></a:lvl1pPr></p:titleStyle><p:bodyStyle>${lvlStyles(sizes, true)}</p:bodyStyle><p:otherStyle><a:defPPr><a:defRPr lang="ko-KR"/></a:defPPr>${other}</p:otherStyle></p:txStyles></p:sldMaster>`;
 }
 
 const LAYOUT_TYPE = { title: 'title', titleContent: 'obj', section: 'secHead', twoContent: 'twoObj', comparison: 'twoTxTwoObj', titleOnly: 'titleOnly', blank: 'blank', contentCaption: 'objTx', pictureCaption: 'picTx' };
@@ -865,6 +870,7 @@ function rawXml(o, members, rels, pres) {
  */
 export function pptxEntries(pres, opts = {}) {
   setMasterText(pres); // 마스터 글자 서식을 기본값으로 (글자마다 명시적으로 씀)
+  directSlots = !isStdMap(pres.clrMap) || (pres.designs ?? []).some((d) => !isStdMap(d.clrMap)) || pres.slides.some((s) => s.clrMap && !isStdMap(s.clrMap));
   const files = {};
   const ct = new Map();
   const defaults = new Map([['rels', 'application/vnd.openxmlformats-package.relationships+xml'], ['xml', 'application/xml']]);
@@ -1162,7 +1168,7 @@ export function pptxEntries(pres, opts = {}) {
     const timing = rawTim ?? timingXml(slide, (oid) => spid.get(oid), (k) => rels.sound(k));
     // 원래 XML 을 쓰면 그 파일의 네임스페이스 선언도 (a14 · p14 · mc 등)
     const extraNs = (rawCount || rawTim || rawTr) && slide.rawNs ? Object.entries(slide.rawNs).filter(([k]) => !['xmlns:a', 'xmlns:r', 'xmlns:p'].includes(k)).map(([k, v]) => ` ${k}="${esc(v)}"`).join('') : '';
-    files[`ppt/slides/slide${n}.xml`] = `${XML_HEAD}<p:sld xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}"${extraNs}${slide.hidden ? ' show="0"' : ''}><p:cSld>${bg}<p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>${parts.join('')}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>${rawTr ?? transitionXml(slide.transition, (k) => rels.sound(k))}${timing}${ext}</p:sld>`;
+    files[`ppt/slides/slide${n}.xml`] = `${XML_HEAD}<p:sld xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}"${extraNs}${slide.hidden ? ' show="0"' : ''}><p:cSld>${bg}<p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>${parts.join('')}</p:spTree></p:cSld><p:clrMapOvr>${slide.clrMap && stableJson({ ...STD_CLRMAP, ...slide.clrMap }) !== stableJson({ ...STD_CLRMAP, ...(presForSlide(pres, slide).clrMap ?? {}) }) ? `<a:overrideClrMapping ${clrMapAttrs(slide.clrMap)}/>` : '<a:masterClrMapping/>'}</p:clrMapOvr>${rawTr ?? transitionXml(slide.transition, (k) => rels.sound(k))}${timing}${ext}</p:sld>`;
     if (slide.notes) {
       const nrels = `${XML_HEAD}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL('notesMaster')}" Target="../notesMasters/notesMaster1.xml"/><Relationship Id="rId2" Type="${REL('slide')}" Target="../slides/slide${n}.xml"/></Relationships>`;
       files[`ppt/notesSlides/notesSlide${n}.xml`] = notesSlideXml(slide.notes);
@@ -2541,6 +2547,8 @@ export function readPptx(input, opts = {}) {
     }
     for (const o of objects) delete o.name;
     if (slide0Ns.has(path)) slide.rawNs = slide0Ns.get(path);
+    // 이 슬라이드의 실제 색 매핑 (원래 XML 의 tx1 · bg1 이 같은 색이 되도록 저장할 때 씀)
+    if (clrMap && !isStdMap(clrMap)) slide.clrMap = Object.fromEntries(Object.entries(clrMap).filter(([k]) => STD_CLRMAP[k]));
     slides.push(slide);
     slideByRid.set(rid(sid), slide.id);
   }
@@ -2651,6 +2659,8 @@ export function readPptx(input, opts = {}) {
   const core = xmlOf('docProps/core.xml');
   const props = { title: descendants(core, 'title')[0]?.text ?? '', author: descendants(core, 'creator')[0]?.text ?? '', created: descendants(core, 'created')[0]?.text ?? new Date().toISOString() };
   const pres = { version: 1, size, theme, slides, media, props, footer: presMeta?.footer ?? { slideNum: false, date: false, text: '', hideOnTitle: true } };
+  if (firstMaster) { const cm = loadMaster(firstMaster).clrMap; if (cm && !isStdMap(cm)) pres.clrMap = Object.fromEntries(Object.entries(cm).filter(([k]) => STD_CLRMAP[k])); }
+  for (const [mp, d] of foreignDesigns) if (d) { const cm = loadMaster(mp).clrMap; if (cm && !isStdMap(cm)) d.clrMap = Object.fromEntries(Object.entries(cm).filter(([k]) => STD_CLRMAP[k])); }
   // 원래 테마 · 기본 글 스타일 · 표 스타일을 보관 (다시 저장할 때 그대로)
   {
     const rawTheme = (ti) => {

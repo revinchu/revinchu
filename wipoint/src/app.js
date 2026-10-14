@@ -230,7 +230,7 @@ function wireEvents() {
     const files = [...(e.dataTransfer?.files ?? [])];
     if (!files.length) return;
     e.preventDefault();
-    const deck = files.find((f) => /\.(pptx|ppsx|potx|json|ppt|pdf)$/i.test(f.name));
+    const deck = files.find((f) => /\.(pptx|ppsx|potx|pptm|ppsm|json|ppt|pps|pot|pdf|svg)$/i.test(f.name));
     if (deck) {
       try { const r = await loadFile(deck); setDocument(r.pres, r.name); if (r.pdf) { toast(r.warnings[0]); if (r.warnings.length > 1) alertDialog('일부 내용', r.warnings.slice(1).join('\n')); } else if (r.warnings.length) alertDialog('일부 내용', r.warnings.join('\n')); else toast('프레젠테이션을 열었습니다'); } catch (err) { alertDialog('열기', err.message); }
       return;

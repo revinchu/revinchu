@@ -1,6 +1,7 @@
 // 파일: 열기 · 저장 (.pptx / .wpt.json) · 자동 저장(IndexedDB) · 내보내기(PDF 인쇄 · PNG) · 공유 링크
 import { S, emit, goSlide } from './state.js';
 import { readPptx, pptxEntries } from './pptx.js';
+import { readPpt } from './ppt.js';
 import { readPdf } from './pdf.js';
 import { decodeEmbeddedFont } from './fonts.js';
 import { zipAsync, openZipFile } from './zip.js';
@@ -59,7 +60,11 @@ export async function loadFile(file) {
     pres.slides[0].hideDecor = true;
     return { pres, name: file.name.replace(/\.svgz?$/i, ''), warnings: [`SVG 를 도형 ${objects.length}개로 바꾸어 열었습니다. 도형 · 글을 바로 편집할 수 있습니다.`], pdf: true };
   }
-  if (bytes[0] === 0xd0 && bytes[1] === 0xcf) throw new Error('예전 PowerPoint 97-2003 형식(.ppt)은 열 수 없습니다. PowerPoint 에서 .pptx 로 저장한 뒤 열어 주세요.');
+  if (bytes[0] === 0xd0 && bytes[1] === 0xcf) {
+    // PowerPoint 97-2003 (.ppt · .pps · .pot): 읽어서 편집, 저장은 .pptx
+    const { pres, warnings } = readPpt(bytes);
+    return { pres, name: file.name.replace(/\.(ppt|pps|pot)$/i, ''), warnings: ['PowerPoint 97-2003 파일(.ppt)을 열었습니다. 저장하면 .pptx 형식으로 저장됩니다.', ...warnings] };
+  }
   if (bytes[0] === 0x50 && bytes[1] === 0x4b) {
     const { pres, warnings } = readPptx(bytes);
     return { pres, name: /\.potx$/i.test(file.name) ? '프레젠테이션1' : name, warnings, template: /\.potx$/i.test(file.name) };
@@ -160,7 +165,7 @@ export function setDocument(pres, name, { handle = null } = {}) {
 export async function openWithPicker() {
   if (window.showOpenFilePicker) {
     try {
-      const [h] = await window.showOpenFilePicker({ id: 'wipoint-open', types: [{ description: '프레젠테이션', accept: { [PPTX_MIME]: ['.pptx', '.ppsx', '.potx'], 'application/pdf': ['.pdf'], 'image/svg+xml': ['.svg'], 'application/json': ['.json'] } }] });
+      const [h] = await window.showOpenFilePicker({ id: 'wipoint-open', types: [{ description: '프레젠테이션', accept: { [PPTX_MIME]: ['.pptx', '.ppsx', '.potx', '.pptm', '.ppsm'], 'application/vnd.ms-powerpoint': ['.ppt', '.pps', '.pot'], 'application/pdf': ['.pdf'], 'image/svg+xml': ['.svg'], 'application/json': ['.json'] } }] });
       const f = await h.getFile();
       const r = await loadFile(f);
       setDocument(r.pres, r.name, { handle: /\.pptx$/i.test(f.name) ? h : null });
@@ -171,7 +176,7 @@ export async function openWithPicker() {
       if (e.name !== 'SecurityError' && e.name !== 'TypeError') throw e;
     }
   }
-  const f = await pickFile('.pptx,.ppsx,.potx,.pdf,.svg,.json,.ppt,application/pdf,image/svg+xml,application/vnd.openxmlformats-officedocument.presentationml.presentation');
+  const f = await pickFile('.pptx,.ppsx,.potx,.pptm,.ppsm,.pdf,.svg,.json,.ppt,.pps,.pot,application/pdf,image/svg+xml,application/vnd.openxmlformats-officedocument.presentationml.presentation');
   if (!f) return;
   const r = await loadFile(f);
   setDocument(r.pres, r.name);

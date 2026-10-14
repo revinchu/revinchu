@@ -233,7 +233,7 @@ export function presForSlide(pres, slide) {
   const d = pres.designs.find((x) => x.id === id);
   if (!d) return pres;
   d.masters ??= {};
-  return { ...pres, theme: d.theme, masters: d.masters, customLayouts: [], designs: pres.designs, mainTheme: pres.theme };
+  return { ...pres, theme: d.theme, masters: d.masters, customLayouts: [], designs: pres.designs, mainTheme: pres.theme, clrMap: d.clrMap };
 }
 /** 테마로 디자인 찾기 / 만들기 (같은 테마 이름이면 재사용) */
 export function designForTheme(pres, theme, name) {
