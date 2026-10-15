@@ -1172,7 +1172,9 @@ function blockObject(b) {
       if (prev && ['size', 'font', 'b', 'i', 'color'].every((k) => prev[k] === props[k])) prev.t += r.text;
       else runs.push({ t: r.text, ...props });
     }
-    return { runs, align: b.align, lvl: 0, lineSpacingPt: Math.round(lsPt * 10) / 10, spcBef: 0, spcAft: 0 };
+    // 조각마다 가로 위치 (문서 편집기의 PDF 흐름 읽기에서 표 칸 나누기에 씀)
+    const pieces = l.runs.map((r) => ({ t: r.text, x0: r.x0, x1: r.x1, size: Math.round((r.sizePx / PT2PX) * 2) / 2, ...(r.font ? { font: r.font } : {}), ...(r.b ? { b: true } : {}), ...(r.i ? { i: true } : {}), ...(r.color && r.color !== '#000000' ? { color: r.color } : {}) }));
+    return { runs, align: b.align, lvl: 0, lineSpacingPt: Math.round(lsPt * 10) / 10, spcBef: 0, spcAft: 0, pieces, baseline: l.y, cy: l.y - l.size * 0.35 };
   });
   return {
     id: uid(), type: 'shape', shape: 'rect', txBox: true, fill: null, line: null,
