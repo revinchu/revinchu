@@ -3,6 +3,7 @@ import { newDoc, para, deserialize, serialize, docText, table, normalizeRuns } f
 import { readDocx, writeDocx } from './docx.js';
 import { readHwpx, writeHwpx } from './hwpx.js';
 import { readHwp } from './hwp.js';
+import { decryptOoxml } from './officecrypt.js';
 import { readHwp3, isHwp3 } from './hwp3.js';
 import { readDoc97 } from './doc97.js';
 import { readPdfDoc } from './pdfdoc.js';
@@ -44,7 +45,7 @@ export function detectKind(bytes, name = '') {
   }
   if (isCfb(bytes)) {
     const cfb = openCfb(bytes);
-    if (cfb.names.includes('EncryptionInfo')) throw new Error('암호로 보호된 문서입니다. Word 에서 암호를 풀고 저장한 뒤 열어 주세요.');
+    if (cfb.names.includes('EncryptionInfo') && cfb.names.includes('EncryptedPackage')) return 'ooxmlEnc';
     if (cfb.names.includes('FileHeader')) return 'hwp';
     if (cfb.names.includes('WordDocument')) return 'doc';
     return ext === 'hwp' ? 'hwp' : 'doc';
@@ -81,11 +82,16 @@ export function csvToDoc(text) {
 export function readBytes(bytes, name = '', opts = {}) {
   if (!bytes.length) throw new Error(`'${name}' 파일이 비어 있습니다 (0바이트). 휴대폰이라면 파일을 먼저 내려받은 뒤 다시 열어 주세요.`);
   const kind = detectKind(bytes, name);
+  if (kind === 'ooxmlEnc') {
+    const zipBytes = decryptOoxml(bytes, opts.password);
+    const r = readBytes(zipBytes, name.replace(/\.[^.]+$/, '') + '.docx', { ...opts, password: undefined });
+    return { ...r, warnings: ['암호를 풀어 열었습니다. 저장하면 암호가 없는 문서가 됩니다.', ...(r.warnings ?? [])] };
+  }
   if (kind === 'docx') return { ...readDocx(bytes), kind };
   if (kind === 'hwpx') return { ...readHwpx(bytes, opts), kind };
   if (kind === 'hwp') return { ...readHwp(bytes, opts), kind };
   if (kind === 'hwp3') return { ...readHwp3(bytes, opts), kind };
-  if (kind === 'doc') return { ...readDoc97(bytes), kind };
+  if (kind === 'doc') return { ...readDoc97(bytes, opts), kind };
   if (kind === 'pdf') return { ...readPdfDoc(bytes, opts), kind };
   if (kind === 'odt') return { doc: odtToDoc(bytes), warnings: ['OpenDocument 텍스트(.odt)는 글 · 제목 · 표만 가져옵니다.'], kind };
   const text = decodeText(bytes);

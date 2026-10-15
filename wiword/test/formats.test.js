@@ -162,7 +162,11 @@ test('암호 함수: 표준 시험값 (SHA · AES · DES · PBKDF2)', async () =
   const dk = un('133457799bbcdff1'); const dp = un('0123456789abcdef');
   assert.equal(hex(desEcbEncrypt(dp, dk)), '85e813540f0ab405');
   assert.equal(hex(desEcbDecrypt(un('85e813540f0ab405'), dk)), hex(dp));
-  // RFC 6070
+  // RFC 6070 · MD5 · RC4 · SHA-512
+  const { md5, rc4, sha512 } = await import('../src/crypto.js');
+  assert.equal(hex(md5(enc.encode('abc'))), '900150983cd24fb0d6963f7d28e17f72');
+  assert.equal(hex(rc4(enc.encode('Key'))(enc.encode('Plaintext'))), 'bbf316e8d940af0ad3');
+  assert.equal(hex(sha512(enc.encode('abc'))).slice(0, 32), 'ddaf35a193617abacc417349ae204131');
   assert.equal(hex(pbkdf2(sha1, enc.encode('password'), enc.encode('salt'), 2, 20)), 'ea6c014dc72d6f8ccd1ed92ace1d41f0d8de8957');
 });
 

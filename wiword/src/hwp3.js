@@ -526,7 +526,7 @@ export function readHwp3(bytes, opts = {}) {
   fix(blocks);
   for (const k of ['foot', 'end']) for (const v of Object.values(doc.notes[k])) fix(v);
   sec.headers = ctx.hf.headers; sec.footers = ctx.hf.footers;
-  if (ctx.cols) sec.cols = { n: ctx.cols.n, gap: ctx.cols.gap || 24, sep: ctx.cols.line };
+  if (ctx.cols) sec.cols = { n: ctx.cols.n, space: ctx.cols.gap || 24, sep: ctx.cols.line };
   doc.section = sec;
   doc.body = blocks.length ? blocks : [para('')];
   for (const w2 of ctx.warn) warnings.push(w2);
