@@ -2,7 +2,7 @@
 // 원본 PDF 의 개체를 그대로 옮겨 새 PDF 를 만듦: 병합 · 분할 · 페이지 추출/삭제/순서/회전/역순 · 모아찍기 · 양면 인쇄 맞추기 ·
 // 배경 겹치기 · 주석 한꺼번에 지우기 · 빈 페이지 찾기 · 이미지로 PDF 만들기 · 쪽 번호/워터마크 · 암호 해제 · 정리(용량 줄이기) · 문서 정보
 // 결과는 항상 새 파일 (원본은 바꾸지 않음). 암호 문서는 열기 암호로 풀어서 읽고, 결과는 암호 없이 씀.
-import { PdfDoc, Ref, Name, Stream, Lexer, Cmd } from './pdf.js';
+import { PdfDoc, Ref, Name, Stream, Lexer, Cmd, PageReader, groupText } from './pdf.js';
 import { inflate } from './zip.js';
 import { deflate } from './pdfwrite.js';
 import { openTtf, subsetTtf } from './ttfsubset.js';
@@ -115,7 +115,7 @@ class Builder {
   /** 데이터 스트림 개체 */
   stream(dict, data) { return this.put({ stream: true, dict, data: typeof data === 'string' ? enc.encode(data) : data, compress: true }); }
   /** 원본 페이지 → 새 페이지 */
-  addPage(src, p, { rotate = 0, annots = null, under = '', over = '', res = null } = {}) {
+  addPage(src, p, { rotate = 0, annots = null, under = '', over = '', res = null, content = null } = {}) {
     const { doc } = src;
     const m = this.map(doc);
     let n = p.ref ? m.get(p.ref.num) : null;
@@ -160,7 +160,7 @@ class Builder {
     // 내용
     let contents = p.node.Contents;
     const arr = Array.isArray(doc.val(contents)) ? doc.val(contents) : contents ? [contents] : [];
-    let copied = arr.map((x) => this.copy(doc, x)).filter(Boolean);
+    let copied = content ? [this.stream({}, content)] : arr.map((x) => this.copy(doc, x)).filter(Boolean);
     if (under || over) {
       const parts = [];
       if (under) parts.push(this.stream({}, `${under}\n`));
@@ -896,3 +896,145 @@ export const decryptPdf = (bytes, password = '') => selectPages(bytes, { passwor
 export const compactPdf = (bytes, opts = {}) => selectPages(bytes, { ...opts, compress: true });
 /** 문서 정보 바꾸기 { title, author, subject, keywords } (빈 글 = 지움) */
 export const setPdfInfo = (bytes, meta, opts = {}) => selectPages(bytes, { ...opts, info: { Title: meta.title, Author: meta.author, Subject: meta.subject, Keywords: meta.keywords } });
+
+// ───────────── 쪽 위 글자 고치기 (PDF 편집) ─────────────
+// 글 상자를 고치면: 그 상자를 그린 원래 '글 그리기 연산'을 내용 스트림에서 지우고(같은 거리만큼 비우는 TJ 로 바꿔 뒤의 글 위치는 그대로),
+// 새 글을 같은 자리 · 크기 · 색으로 그림. 지운 연산이 다른 상자의 글도 그렸으면 그 글은 다시 그림. 원래 글은 파일에 남지 않음.
+const PX = 96 / 72;
+function pageContentBytes(doc, p) {
+  const cs = doc.val(p.node.Contents);
+  const parts = [];
+  for (const c of Array.isArray(cs) ? cs : cs ? [p.node.Contents] : []) {
+    const st = doc.val(c);
+    if (st instanceof Stream) { try { parts.push(doc.decode(st), Uint8Array.of(10)); } catch { /* 읽을 수 없는 조각 */ } }
+  }
+  const out = new Uint8Array(parts.reduce((a, x) => a + x.length, 0)); let k = 0;
+  for (const x of parts) { out.set(x, k); k += x.length; }
+  return out;
+}
+function readTracked(src, i, encodeImage) {
+  const p = src.pages[i];
+  const data = pageContentBytes(src.doc, p);
+  const node = { ...p.node, Resources: p.res, MediaBox: p.mediaBox, CropBox: p.cropBox, Rotate: p.rotate };
+  const pr = new PageReader(src.doc, node, { scale: PX, warn: () => {}, imgCache: new Map(), encodeImage, track: true });
+  try { pr.run(data, src.doc.val(p.res), [1, 0, 0, 1, 0, 0]); } catch { /* 읽은 데까지 */ }
+  return { p, data, pr };
+}
+const svgPath = (cmds) => cmds.map(([op, ...v]) => `${op}${v.map((x) => Math.round(x * 100) / 100).join(' ')}`).join('');
+/**
+ * 쪽 하나를 편집 화면용으로 → { w, h (px), paths, images, texts, blocks }
+ * blocks[i] = { x, y, w, h, lines: [{ text, x0, y (기준선), size }], text, size (pt), color, font, b, i, align, gap } — 고칠 수 있는 글 상자
+ */
+export function editablePage(src, i, { encodeImage } = {}) {
+  const { p, pr } = readTracked(src, i, encodeImage);
+  const paths = []; const images = []; const texts = [];
+  for (const it of pr.items) {
+    if (it.kind === 'path') {
+      if (!it.fill && !it.stroke) continue;
+      paths.push({ d: svgPath(it.cmds), fill: typeof it.fill === 'string' ? it.fill : it.fill?.stops?.[0]?.[1] ?? it.fill?.color ?? null, stroke: it.stroke, lw: it.lw, alpha: it.fillAlpha ?? 1, evenOdd: !!it.evenOdd });
+    } else if (it.kind === 'image' && it.img?.url) images.push({ ...it.box, url: it.img.url, flipH: !!it.flipH, flipV: !!it.flipV, rot: it.rot || 0 });
+  }
+  const flat = pr.items.filter((t) => t.kind === 'text' && Math.abs(t.angle) < 0.5);
+  const blocks = groupText(flat).map((bk) => {
+    const lines = bk.lines.map((l) => ({ text: l.runs.map((r) => r.text).join(''), x0: l.x0, x1: l.x1, y: l.y, size: l.size }));
+    const first = bk.lines[0].runs.find((r) => r.text.trim()) ?? bk.lines[0].runs[0];
+    const size = lines[0].size;
+    const top = lines[0].y - size * 0.85; const bottom = lines[lines.length - 1].y + size * 0.3;
+    return { x: bk.x0, y: top, w: Math.max(bk.x1 - bk.x0, size), h: bottom - top, lines, text: lines.map((l) => l.text).join('\n'), size: Math.round((size / PX) * 10) / 10, color: first.color ?? '#000000', font: first.font ?? '', b: !!first.b, i: !!first.i, align: bk.align, gap: bk.lines.length > 1 ? bk.gap : size * 1.2, runs: bk.lines.flatMap((l) => l.runs) };
+  });
+  const inBlock = new Map();
+  blocks.forEach((bk, bi) => { for (const r of bk.runs) inBlock.set(r, bi); });
+  for (const t of pr.items) if (t.kind === 'text') texts.push({ text: t.text, x0: t.x0, y0: t.y0, x1: t.x1, y1: t.y1, size: t.sizePx, color: t.color, font: t.font, b: t.b, i: t.i, angle: t.angle, alpha: t.alpha, block: inBlock.get(t) ?? -1 });
+  for (const bk of blocks) delete bk.runs;
+  return { w: p.w * PX, h: p.h * PX, rotate: p.rotate, paths, images, texts, blocks };
+}
+
+/**
+ * 글 고치기 적용 → 새 PDF.
+ * edits: [{ page, block?(editablePage 의 상자 번호), text ('' 이면 지움), x?, y?(새 글 상자: 왼쪽 위 px), size?(pt), color?, bold? }]
+ * font: TrueType 글꼴 바이트(쓴 글자만 넣음) — 없으면 ASCII 는 Helvetica, 그 밖은 HYGoThic-Medium
+ */
+export async function applyTextEdits(bytes, edits, { password, font = null, fontName = null } = {}) {
+  const src = openPdf(bytes, { password });
+  const ttf = font && canEmbedFont(font, fontName) ? openTtf(font, fontName) : null;
+  const b = new Builder();
+  const emb = ttf ? b.embed(ttf) : null;
+  b.reserve(src, src.pages);
+  const byPage = new Map();
+  for (const e of edits ?? []) { if (!src.pages[e.page]) continue; if (!byPage.has(e.page)) byPage.set(e.page, []); byPage.get(e.page).push(e); }
+  const newIndex = new Map();
+  src.pages.forEach((p, i) => {
+    newIndex.set(i, i);
+    const list = byPage.get(i);
+    if (!list) { b.addPage(src, p); return; }
+    const { data, pr } = readTracked(src, i);
+    const flat = pr.items.filter((t) => t.kind === 'text' && Math.abs(t.angle) < 0.5);
+    const blocks = groupText(flat);
+    const edited = new Set(list.filter((e) => e.block != null).map((e) => e.block));
+    const blockOf = new Map();
+    blocks.forEach((bk, bi) => { for (const l of bk.lines) for (const r of l.runs) if (r.show) blockOf.set(r, bi); });
+    // 지울 연산
+    const remove = new Set();
+    for (const bi of edited) for (const l of blocks[bi]?.lines ?? []) for (const r of l.runs) if (r.show) remove.add(r.show);
+    const res = { Font: {}, ExtGState: {} };
+    const ops = [];
+    const draw = (text, xPx, yPx, sizePt, color = '#000000', bold = false) => {
+      if (!text) return 0;
+      const r = textRun(text, emb);
+      const fname = r.font === 'helv' ? 'WxH' : r.font === 'emb' ? 'WxE' : 'WxK';
+      res.Font[fname] = r.font === 'emb' ? emb.ref : b.font(r.font);
+      const X = xPx / PX; const Y = p.h - yPx / PX;
+      const fake = bold ? ` 2 Tr ${num(sizePt * 0.03)} w ${colorOps(color).replace(/rg$/, 'RG')}` : '';
+      ops.push(`q ${colorOps(color)}${fake} BT /${fname} ${num(sizePt)} Tf 1 0 0 1 ${num(X)} ${num(Y)} Tm ${r.code} Tj ET Q`);
+      return (r.width / 1000) * sizePt * PX;
+    };
+    const widthPx = (text, sizePt) => (textRun(text, emb).width / 1000) * sizePt * PX;
+    // 지운 연산이 그리던, 고치지 않은 상자의 글은 다시 그림
+    for (const rec of remove) for (const it of rec.items) {
+      const bi = blockOf.get(it);
+      if (bi != null && edited.has(bi)) continue;
+      draw(it.text, it.x0, it.y0, it.sizePx / PX, it.color, it.b);
+    }
+    // 새 글
+    for (const e of list) {
+      const text = String(e.text ?? '');
+      const bk = e.block != null ? blocks[e.block] : null;
+      if (e.block != null && !bk) continue;
+      if (!text.trim()) continue;
+      const lines = text.split('\n');
+      const first = bk?.lines[0];
+      const sizePt = e.size ?? (first ? first.size / PX : 11);
+      const color = e.color ?? bk?.lines[0].runs.find((r) => r.text.trim())?.color ?? '#000000';
+      const bold = e.bold ?? !!bk?.lines[0].runs[0]?.b;
+      const gap = bk && bk.lines.length > 1 ? bk.gap : sizePt * PX * 1.25;
+      const left = e.x ?? bk?.x0 ?? 0; const right = bk ? bk.x1 : left;
+      let y = e.y != null ? e.y + sizePt * PX * 0.85 : first.y;
+      for (const line of lines) {
+        const w = widthPx(line, sizePt);
+        const x = bk?.align === 'ctr' ? (left + right) / 2 - w / 2 : bk?.align === 'r' ? right - w : left;
+        draw(line, x, y, sizePt, color, bold);
+        y += gap;
+      }
+    }
+    // 내용 스트림: 지운 연산 자리를 같은 거리만큼 비우는 TJ 로
+    const recs = [...remove].sort((a, c) => c.start - a.start);
+    let out = data;
+    const latin = new TextDecoder('latin1');
+    let textOut = latin.decode(out);
+    for (const rec of recs) {
+      const unit = rec.size * rec.th;
+      const nAdv = unit ? (-(rec.adv ?? 0) / unit) * 1000 : 0;
+      const tj = `[${num(nAdv)}] TJ`;
+      const rep = rec.op === "'" ? `T* ${tj}` : rec.op === '"' ? `${num(rec.aw)} Tw ${num(rec.ac)} Tc T* ${tj}` : tj;
+      textOut = `${textOut.slice(0, rec.start)} ${rep} ${textOut.slice(rec.end)}`;
+    }
+    out = Uint8Array.from(textOut, (c) => c.charCodeAt(0));
+    if (!Object.keys(res.ExtGState).length) delete res.ExtGState;
+    const over = ops.length ? `q ${mtx(visualToUser(p))} cm\n${ops.join('\n')}\nQ` : '';
+    b.addPage(src, p, { content: out, over, res: ops.length ? res : null });
+  });
+  const catalog = catalogFrom(b, src, { labels: true });
+  const ol = b.outline(remapOutline(readOutline(src), newIndex));
+  if (ol) catalog.Outlines = ol;
+  return b.finish({ catalog, info: infoFrom(b, src) });
+}

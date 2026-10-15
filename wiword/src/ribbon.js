@@ -81,7 +81,7 @@ const REVIEW = { id: 'review', label: '검토', groups: [
   { label: '변경 내용', items: [L('acceptSel', 'accept', '적용', { menu: 'acceptMenu' }), L('rejectSel', 'reject', '거부', { menu: 'rejectMenu' }), COL(M('prevChange', 'prev', '이전'), M('nextChange', 'next', '다음'))] },
   { label: '비교', items: [L('compareDialog', 'compare', '비교')] },
   { label: '보호', items: [L('restrictEditing', 'protect', '편집 제한')] },
-  { label: '도구', items: [L('pdfTools', 'pdf', 'PDF 도구')] },
+  { label: '도구', items: [L('pdfTools', 'pdf', 'PDF 도구'), L('pdfEdit', 'pdf', 'PDF 편집')] },
 ] };
 
 const VIEW = { id: 'view', label: '보기', groups: [

@@ -908,11 +908,13 @@ function alphaOf(doc, sm, w, h) {
 // ───────────── 쪽 해석 ─────────────
 const MAX_OBJECTS = 1500;
 
-class PageReader {
+export class PageReader {
   constructor(doc, page, opts) {
     this.doc = doc;
     this.opts = opts;
     this.items = [];      // 칠한 순서: {kind:'path'|'image'|'text', ...}
+    this.shows = [];      // opts.track: 쪽 내용의 글 그리기 연산 { op, start, end, size, th, adv, items }
+    this.curShow = null;
     this.fonts = new Map();
     this.warn = opts.warn;
     const v = (x) => doc.val(x);
@@ -950,10 +952,12 @@ class PageReader {
     let tm = null;
     let tlm = null;
     const pt = (x, y) => apply(gs.ctm, x, y);
+    let opStart = null; // 이 연산자의 첫 피연산자 위치 (PDF 편집: 글 그리기 연산을 지울 때)
     for (;;) {
+      const p0 = lx.pos;
       const t = lx.next();
       if (t === undefined) break;
-      if (!(t instanceof Cmd)) { ops.push(t); continue; }
+      if (!(t instanceof Cmd)) { if (!ops.length) opStart = p0; ops.push(t); continue; }
       const op = t.c;
       const a = ops;
       const n = (i) => (typeof a[i] === 'number' ? a[i] : 0);
@@ -1037,7 +1041,21 @@ class PageReader {
           if (op === "'" || op === '"') { if (op === '"') { gs.tw = n(0); gs.tc = n(1); } tlm = mul([1, 0, 0, 1, 0, -gs.tl], tlm ?? [1, 0, 0, 1, 0, 0]); tm = tlm; }
           if (!tm) tm = [1, 0, 0, 1, 0, 0];
           const arg = a[a.length - 1];
+          const tm0 = tm;
+          let rec = null;
+          if (this.opts.track && depth === 0) {
+            rec = { op, start: opStart ?? p0, end: lx.pos, size: gs.size, th: gs.th, aw: n(0), ac: n(1), items: [] };
+            this.shows.push(rec);
+          }
+          this.curShow = rec;
           tm = this.showText(op === 'TJ' ? (Array.isArray(arg) ? arg : []) : [arg], gs, tm);
+          this.curShow = null;
+          if (rec) {
+            // 이 연산이 글자 위치를 옮긴 거리 (글자 공간 x) — 지울 때 같은 거리만큼 비워 둠
+            const d = tm0[0] * tm0[3] - tm0[1] * tm0[2] || 1;
+            const ex = tm[4] - tm0[4]; const ey = tm[5] - tm0[5];
+            rec.adv = (ex * tm0[3] - ey * tm0[2]) / d;
+          }
           break;
         }
         case 'Do': {
@@ -1074,6 +1092,7 @@ class PageReader {
         default:
       }
       ops.length = 0;
+      opStart = null;
     }
   }
   pattern(res, name, gs) {
@@ -1183,7 +1202,9 @@ class PageReader {
     const [x0, y0] = apply(this.base, ...apply(mul(mul([1, 0, 0, 1, 0, gs.rise], tm), gs.ctm), 0, 0));
     const [x1, y1] = apply(this.base, ...apply(mul(mul([1, 0, 0, 1, advance, gs.rise], tm), gs.ctm), 0, 0));
     const f = gs.font;
-    this.items.push({ kind: 'text', text: clean, x0, y0, x1, y1, sizePx, angle, color: hex(...gs.fill), alpha: gs.fa, font: f.family, b: f.bold, i: f.italic, stroke: gs.tr === 1 || gs.tr === 2 });
+    const item = { kind: 'text', text: clean, x0, y0, x1, y1, sizePx, angle, color: hex(...gs.fill), alpha: gs.fa, font: f.family, b: f.bold, i: f.italic, stroke: gs.tr === 1 || gs.tr === 2 };
+    if (this.curShow) { item.show = this.curShow; this.curShow.items.push(item); }
+    this.items.push(item);
   }
 }
 
@@ -1225,7 +1246,7 @@ function joinFillStroke(items) {
 }
 
 // ───────────── 글 조각 → 텍스트 상자 ─────────────
-function groupText(runs) {
+export function groupText(runs) {
   // 1) 한 줄로 이어 붙이기
   const lines = [];
   for (const r of runs) {

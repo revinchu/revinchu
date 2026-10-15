@@ -9,6 +9,7 @@ import { zip } from './zip.js';
 import { pickFile, fmtSize, askPassword, saveBytes, openFile } from './fileio.js';
 import { fontFileFor, askLocalFontsOnce } from './fontlib.js';
 import { el, openDialog, toast, progressOverlay, alertDialog } from './ui.js';
+import { pdfEditDialog } from './pdfeditui.js';
 
 const PAGES_HINT = '예: 1-3, 5, 8- (비우면 모든 페이지)';
 const pagesField = (label = '페이지') => ({ name: 'pages', label, value: '', hint: PAGES_HINT });
@@ -16,6 +17,7 @@ const PAPER = { type: 'select', options: [['A4', 'A4'], ['A3', 'A3'], ['B4', 'B4
 
 /** 도구 목록 — files: 'one' | 'many' | 'two' | 'images' */
 export const PDF_TOOLS = [
+  { id: 'textedit', cat: '편집', label: 'PDF 글자 고치기', desc: '쪽 위의 글자를 그 자리에서 고치고, 지우고, 새 글을 넣어 새 PDF 로 저장', files: 'one', fields: [] },
   { id: 'merge', cat: '페이지 정리', label: 'PDF 병합', desc: '여러 PDF 를 하나로. 파일마다 책갈피를 만들고 원래 책갈피는 그 아래로', files: 'many', fields: [{ name: 'bookmarks', label: '파일마다 책갈피', type: 'checkbox', value: true }] },
   { id: 'split', cat: '페이지 정리', label: 'PDF 분할', desc: '정한 페이지 수마다, 또는 범위마다 나눔 (여러 파일은 ZIP 하나로)', files: 'one', fields: [{ name: 'every', label: '몇 페이지마다', type: 'number', value: 1 }, { name: 'ranges', label: '또는 범위', value: '', hint: '예: 1-3, 4-10, 11- (쉼표마다 파일 하나, 비우면 위 쪽수로)' }] },
   { id: 'extract', cat: '페이지 정리', label: '페이지 추출', desc: '고른 페이지만 새 파일로 (지정한 순서대로)', files: 'one', fields: [pagesField('남길 페이지')] },
@@ -139,7 +141,8 @@ export function pdfToolsDialog(toolId = null) {
         el('li', {}, '스캔한 문서의 순서가 거꾸로이거나 몇 장이 뒤집혔을 때 → 역순 정렬 · 페이지 회전'),
         el('li', {}, '회사 레터헤드를 모든 페이지에 입힐 때 → 배경 겹치기'),
         el('li', {}, '내보내기 전에 검토 메모를 정리할 때 → 주석 한꺼번에 지우기 (링크 · 입력란은 남김)'),
-        el('li', {}, '사진 여러 장을 PDF 하나로 제출할 때 → 이미지로 PDF 만들기')));
+        el('li', {}, '사진 여러 장을 PDF 하나로 제출할 때 → 이미지로 PDF 만들기'),
+        el('li', {}, '받은 PDF 의 오타 · 날짜 · 이름만 바꿀 때 → PDF 글자 고치기')));
   };
   let files = [];
   const show = (t) => {
@@ -197,7 +200,7 @@ export function pdfToolsDialog(toolId = null) {
     } }, t.files === 'images' ? '그림 추가…' : t.files === 'two' ? (files.length ? '배경 PDF 추가…' : 'PDF 추가…') : 'PDF 추가…');
     list.addEventListener('dragover', (e) => { e.preventDefault(); e.stopPropagation(); });
     list.addEventListener('drop', (e) => { e.preventDefault(); e.stopPropagation(); addFiles([...(e.dataTransfer?.files ?? [])]); });
-    const go = el('button', { class: 'btn primary', onclick: () => execute(t, files, inputs, annotBox, blankBox) }, t.id === 'blank' ? '빈 페이지 찾기' : t.id === 'edit' ? '열기' : '실행하고 저장…');
+    const go = el('button', { class: 'btn primary', onclick: () => execute(t, files, inputs, annotBox, blankBox) }, t.id === 'blank' ? '빈 페이지 찾기' : t.id === 'edit' || t.id === 'textedit' ? '열기' : '실행하고 저장…');
     main.replaceChildren(...[el('h3', {}, t.label), el('p', { class: 'muted' }, t.desc),
       el('div', { class: 'pt-row' }, add, el('span', { class: 'muted' }, t.files === 'two' ? '첫 파일 = 문서, 둘째 파일 = 배경' : t.files === 'many' ? '위에서부터 차례대로 합칩니다' : '')),
       list, fieldEls.length ? el('div', { class: 'pt-fields' }, fieldEls) : null, annotBox, blankBox,
@@ -270,6 +273,7 @@ export function pdfToolsDialog(toolId = null) {
           const txt = new TextEncoder().encode(`${String.fromCharCode(0xfeff)}${docText(r.doc)}`);
           out = [{ bytes: txt, name: `${base}.txt`, mime: 'text/plain', desc: '텍스트' }]; break;
         }
+        case 'textedit': bar.close(); dlg.close(); await pdfEditDialog(new File([f.bytes], f.name, { type: 'application/pdf' })); return;
         case 'edit': bar.close(); dlg.close(); await openFile(new File([f.bytes], f.name, { type: 'application/pdf' })); return;
         case 'blank': {
           const pages = analyzePages(f.bytes, opt);

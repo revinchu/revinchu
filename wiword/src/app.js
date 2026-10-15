@@ -6,6 +6,7 @@ import { } from './commands.js';
 import { } from './dialogs.js';
 import { } from './features.js';
 import { } from './pdftoolsui.js';
+import { } from './pdfeditui.js';
 import { GALLERIES } from './menus.js';
 import { initRibbon, renderRibbon, initQat, TABS, setRibbonTab, leafItems } from './ribbon.js';
 import { initKeytips } from './keytips.js';

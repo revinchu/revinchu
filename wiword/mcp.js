@@ -130,9 +130,9 @@ const META_TOOLS = [
     },
   },
   {
-    name: 'pdf_tools', description: 'PDF 파일 다루기 (디스크, AI 없이 이 컴퓨터에서만). action: info · merge(inputs 여러 개) · split(every 또는 ranges → output 폴더/접두사) · extract · delete · reorder · reverse · rotate(degrees) · nup(n: 2·4·6·8·9·16) · duplex(inputs, per_sheet) · overlay(background) · remove_annotations(types) · find_blank · images_to_pdf(inputs = 그림들) · stamp(page_numbers · watermark · header · footer) · decrypt · compact · set_info. pages 는 "1-3, 5, 8-" 같은 지정 글 (1부터). 결과는 항상 새 파일(output).',
+    name: 'pdf_tools', description: 'PDF 파일 다루기 (디스크, AI 없이 이 컴퓨터에서만). action: info · merge(inputs 여러 개) · split(every 또는 ranges → output 폴더/접두사) · extract · delete · reorder · reverse · rotate(degrees) · nup(n: 2·4·6·8·9·16) · duplex(inputs, per_sheet) · overlay(background) · remove_annotations(types) · find_blank · images_to_pdf(inputs = 그림들) · stamp(page_numbers · watermark · header · footer) · decrypt · compact · set_info · list_text(쪽마다 글 상자 번호 · 글 · 자리) · edit_text(edits: [{page, block, text}] — 쪽 위 글자를 그 자리에서 고침, 새 글은 {page, x, y, text, size}). pages 는 "1-3, 5, 8-" 같은 지정 글 (1부터). 결과는 항상 새 파일(output).',
     input: {
-      action: { type: 'string', enum: ['info', 'merge', 'split', 'extract', 'delete', 'reorder', 'reverse', 'rotate', 'nup', 'duplex', 'overlay', 'remove_annotations', 'find_blank', 'images_to_pdf', 'stamp', 'decrypt', 'compact', 'set_info'] },
+      action: { type: 'string', enum: ['info', 'list_text', 'edit_text', 'merge', 'split', 'extract', 'delete', 'reorder', 'reverse', 'rotate', 'nup', 'duplex', 'overlay', 'remove_annotations', 'find_blank', 'images_to_pdf', 'stamp', 'decrypt', 'compact', 'set_info'] },
       input: { type: 'string', description: '원본 PDF 경로' }, inputs: { type: 'array', items: { type: 'string' }, description: 'merge · duplex · images_to_pdf 의 파일들 (순서대로)' },
       output: { type: 'string', description: '결과 PDF 경로 (split 은 파일 이름 앞부분)' }, password: { type: 'string' },
       pages: { type: 'string' }, degrees: { type: 'number' }, every: { type: 'number' }, ranges: { type: 'string' },
@@ -141,6 +141,7 @@ const META_TOOLS = [
       types: { type: 'array', items: { type: 'string' }, description: 'remove_annotations 의 종류 (Text Highlight FreeText Ink Stamp Link Widget …). 없으면 링크 · 입력란을 뺀 모두' },
       page_numbers: { type: 'string', description: 'stamp: 번호 모양, 예 "- {n} -" 또는 "{n} / {total}"' }, position: { type: 'string', description: 'stamp: bc br bl tc tr tl' },
       watermark: { type: 'string' }, header: { type: 'string' }, footer: { type: 'string' }, font: { type: 'string', description: 'stamp 에 넣을 TrueType 글꼴 경로 (한글 글자). 없으면 이 컴퓨터의 맑은 고딕 · 나눔고딕을 찾음' },
+      edits: { type: 'array', items: { type: 'object' }, description: 'edit_text: [{ page(1부터), block(list_text 번호), text(빈 글 = 지움) }] 또는 새 글 [{ page, x, y (px, 왼쪽 위), text, size(pt), color }]' },
       title: { type: 'string' }, author: { type: 'string' }, subject: { type: 'string' }, keywords: { type: 'string' },
     },
     required: ['action'],
@@ -152,6 +153,21 @@ const META_TOOLS = [
       const need = () => { if (!src) throw new Error('input 경로를 주세요'); };
       switch (a.action) {
         case 'info': need(); return PDFT.pdfInfo(src, opt);
+        case 'list_text': {
+          need();
+          const doc = PDFT.openPdf(src, opt);
+          const want = a.pages ? new Set(PDFT.parsePages(a.pages, doc.pages.length)) : null;
+          return doc.pages.map((_, i) => i).filter((i) => !want || want.has(i)).slice(0, 50).map((i) => ({ page: i + 1, blocks: PDFT.editablePage(doc, i).blocks.map((bk, bi) => ({ block: bi, text: bk.text, x: Math.round(bk.x), y: Math.round(bk.y), size: bk.size, color: bk.color, bold: bk.b })) }));
+        }
+        case 'edit_text': {
+          need();
+          const edits = (a.edits ?? []).map((e) => ({ ...e, page: Number(e.page) - 1 }));
+          let font = a.font ? await rd(a.font) : null;
+          if (!font && edits.some((e) => /[^\x20-\x7e\n]/.test(String(e.text ?? '')))) {
+            for (const p of ['C:/Windows/Fonts/malgun.ttf', '/System/Library/Fonts/AppleSDGothicNeo.ttc', '/Library/Fonts/NanumGothic.ttf', '/usr/share/fonts/truetype/nanum/NanumGothic.ttf', '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc']) if (existsSync(p)) { const b = await rd(p); if (PDFT.canEmbedFont(b)) { font = b; break; } }
+          }
+          return out(await PDFT.applyTextEdits(src, edits, { ...opt, font }));
+        }
         case 'merge': return out(await PDFT.mergePdfs(await Promise.all((a.inputs ?? []).map(async (p) => ({ bytes: await rd(p), name: basename(p).replace(/\.pdf$/i, ''), password: a.password })))));
         case 'duplex': return out(await PDFT.duplexMerge(await Promise.all((a.inputs ?? []).map(async (p) => ({ bytes: await rd(p), name: basename(p).replace(/\.pdf$/i, ''), password: a.password }))), { perSheet: a.per_sheet ?? 1 }));
         case 'split': {

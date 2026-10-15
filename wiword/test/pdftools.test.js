@@ -114,3 +114,24 @@ test('PDF 도구: 이미지로 PDF (PNG 투명도 · 크기)', async () => {
   assert.deepEqual([a4.pages[0].w, a4.pages[0].h], [842, 595]); // 가로 그림 → 가로 용지
   await assert.rejects(T.imagesToPdf([{ bytes: enc.encode('GIF89a'), name: 'x.gif' }]), /JPEG · PNG/);
 });
+
+test('PDF 글자 고치기: 상자 바꾸기 · 지우기 · 새 글 (원래 글은 파일에서 사라짐)', async () => {
+  const two = makePdf([{ text: 'Page1' }, { text: 'Keep' }]);
+  const v = T.editablePage(T.openPdf(two), 0);
+  assert.equal(v.blocks.length, 1);
+  assert.equal(v.blocks[0].text, 'Page1');
+  assert.equal(v.blocks[0].size, 20);
+  const out = await T.applyTextEdits(two, [{ page: 0, block: 0, text: 'Hello' }, { page: 0, x: 20, y: 10, text: 'Added', size: 9 }, { page: 1, block: 0, text: '' }]);
+  const t = texts(out);
+  assert.match(t[0], /Hello/);
+  assert.match(t[0], /Added/);
+  assert.doesNotMatch(t[0], /Page1/);
+  assert.equal(t[1], '');
+  assert.ok(!new TextDecoder('latin1').decode(out).includes('(Page1)'));
+  // 원래 글 위치 그대로 (기준선 · 왼쪽)
+  const after = T.editablePage(T.openPdf(out), 0).blocks.find((b) => b.text === 'Hello');
+  assert.ok(Math.abs(after.x - v.blocks[0].x) < 0.5 && Math.abs(after.lines[0].y - v.blocks[0].lines[0].y) < 0.5);
+  // 암호 문서도 고침
+  const enc = await T.applyTextEdits(fx('hello-aes128.pdf'), [{ page: 0, block: 0, text: 'Bye' }], { password: '1234' });
+  assert.match(texts(enc)[0], /Bye/);
+});
