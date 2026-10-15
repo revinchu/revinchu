@@ -180,3 +180,33 @@ test('한글 97 글자 코드 (상용 조합형 · 한컴 기호)', async () => 
   assert.equal(hchar(0xd931), '　'); // 조합형 기호 첫 칸 (KS X 1001 A1A1)
   assert.equal(hchar(0x8841), 'ㄱ');
 });
+
+test('PDF 쓰기 · TrueType 부분 집합', async () => {
+  const { PdfWriter } = await import('../src/pdfwrite.js');
+  const { openTtf, subsetTtf } = await import('../src/ttfsubset.js');
+  const w = new PdfWriter();
+  w.info = { title: '시험' };
+  const pg = w.addPage(794, 1123);
+  pg.rect(10, 10, 100, 20, '#ff0000');
+  pg.line(0, 50, 200, 50, 1, '#000000');
+  pg.text([...'가나다 ABC'], [10, 30, 50, 70, 80, 90, 100], 100, 16, {});
+  pg.link(10, 90, 50, 20, 'https://example.com/');
+  w.addOutline('제목', 0, 90);
+  const ttfPath = '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf';
+  if (existsSync(ttfPath)) {
+    const font = openTtf(new Uint8Array(readFileSync(ttfPath)));
+    assert.ok(font && font.gidOf(65) > 0 && font.width(font.gidOf(65)) > 0);
+    const sub = subsetTtf(font, [font.gidOf(65)]);
+    const again = openTtf(sub) ?? null;
+    assert.ok(sub.length < font.bytes.length);
+    assert.equal(again, null); // cmap 없는 부분 집합 (PDF 안에서는 CID = 글리프 번호)
+    const ref = w.embedFont(font);
+    pg.glyphs(ref, [font.gidOf(65)], ['A'], [10], 200, 16, {});
+  }
+  const bytes = await w.build();
+  const s = new TextDecoder('latin1').decode(bytes);
+  assert.ok(s.startsWith('%PDF-') && s.trimEnd().endsWith('%%EOF'));
+  assert.match(s, /\/Type \/Catalog/);
+  assert.match(s, /\/URI \(https:\/\/example\.com\/\)/);
+  assert.match(s, /\/Outlines/);
+});

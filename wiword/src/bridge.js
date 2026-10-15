@@ -2,8 +2,9 @@
 // 창: GET /api/bridge/events (SSE) 로 요청 { id, tool, args } 를 받고 POST /api/bridge/reply 로 { id, result | error } 를 돌려줌
 import { S, run, register, emit, change, setDoc, curSel, COMMAND_INFO } from './state.js';
 import { runTool, TOOLS } from './ops.js';
-import { docText, posEq } from './model.js';
+import { docText, posEq, deserialize } from './model.js';
 import { readBytes, docBytes } from './formats.js';
+import { exportPdfBytes } from './pdfexport.js';
 import { selectedText } from './commands.js';
 import { toast } from './ui.js';
 
@@ -30,6 +31,15 @@ async function handle({ tool, args = {} }) {
     return { opened: args.name, warnings: r.warnings ?? [] };
   }
   if (tool === 'new_document') { run('newDocument'); return 'OK'; }
+  if (tool === 'render_pdf') {
+    const doc = deserialize(args.doc);
+    const out = await exportPdfBytes({ doc, name: args.name });
+    return { format: 'pdf', data: b64(out) };
+  }
+  if (tool === 'export_document' && args.format === 'pdf') {
+    const out = await exportPdfBytes({});
+    return { format: 'pdf', name: S.docName, data: b64(out) };
+  }
   if (tool === 'export_document') {
     const out = docBytes(S.doc, args.format ?? 'docx', { name: S.docName });
     return { format: args.format ?? 'docx', name: S.docName, data: typeof out === 'string' ? b64(new TextEncoder().encode(out)) : b64(out) };

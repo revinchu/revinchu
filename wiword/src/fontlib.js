@@ -183,3 +183,42 @@ export function fontSections(pres, filter = '') {
   for (const cat of WEB_FONT_CATS) out.push([`무료 한글 글꼴 · ${cat}`, WEB_FONTS.filter((f) => f.cat === cat && ok(f.family, f.ko)).map((f) => ({ name: f.family, label: f.ko === f.family ? f.family : `${f.ko}`, face: f.family, web: true, note: f.src === 'google' ? 'Google' : '무료' }))]);
   return out.filter(([, l]) => l.length);
 }
+
+// ───── PDF 에 넣을 글꼴 파일 찾기 ─────
+const FAMILY_ALIAS = { '맑은 고딕': 'Malgun Gothic', 굴림: 'Gulim', 굴림체: 'GulimChe', 돋움: 'Dotum', 돋움체: 'DotumChe', 바탕: 'Batang', 바탕체: 'BatangChe', 궁서: 'Gungsuh', 궁서체: 'GungsuhChe', 나눔고딕: 'NanumGothic', 나눔명조: 'NanumMyeongjo', 나눔바른고딕: 'NanumBarunGothic', 함초롬바탕: 'HCR Batang', 함초롬돋움: 'HCR Dotum', '본고딕': 'Noto Sans CJK KR', '맑은고딕': 'Malgun Gothic' };
+const fileCache = new Map();
+let localFontData = null;
+/**
+ * 글꼴 이름 → { bytes, ps(모음 안 글꼴의 PostScript 이름), fakeBold, fakeItalic } | null
+ * 불러온 글꼴 → 이 컴퓨터의 글꼴(Local Font Access, ask=true 면 권한을 물음) 순서
+ */
+export async function fontFileFor(family, { bold = false, italic = false, ask = false } = {}) {
+  const fam = String(family).replace(/^['"]|['"]$/g, '').trim();
+  const key = `${fam}|${bold ? 1 : 0}|${italic ? 1 : 0}`.toLowerCase();
+  if (fileCache.has(key)) return fileCache.get(key);
+  const p = (async () => {
+    const names = [fam, FAMILY_ALIAS[fam]].filter(Boolean).map((n) => n.toLowerCase());
+    const rec = names.map((n) => userFonts.get(n)).find(Boolean);
+    if (rec && rec.kind === 'ttf') return { bytes: rec.bytes, ps: null, fakeBold: bold && !(rec.info.weight >= 600), fakeItalic: italic && !rec.info.italic };
+    if (!canQueryLocalFonts()) return null;
+    try {
+      if (!localFontData) {
+        if (!ask) { const st = await navigator.permissions?.query?.({ name: 'local-fonts' }).catch(() => null); if (st?.state !== 'granted') return null; }
+        localFontData = await globalThis.queryLocalFonts();
+      }
+      const cands = localFontData.filter((f) => names.includes(f.family.toLowerCase()) || names.includes(f.fullName.toLowerCase()));
+      if (!cands.length) return null;
+      const score = (f) => (/bold|black|heavy|semibold|demibold/i.test(f.style) === bold ? 2 : 0) + (/italic|oblique/i.test(f.style) === italic ? 1 : 0);
+      const fd = cands.sort((a, b) => score(b) - score(a))[0];
+      const bytes = new Uint8Array(await (await fd.blob()).arrayBuffer());
+      return { bytes, ps: fd.postscriptName, fakeBold: bold && !/bold|black|heavy/i.test(fd.style), fakeItalic: italic && !/italic|oblique/i.test(fd.style) };
+    } catch { return null; }
+  })();
+  fileCache.set(key, p);
+  return p;
+}
+/** 이 컴퓨터의 글꼴을 PDF 에 넣어도 되는지 한 번 묻기 (사용자 동작 안에서) */
+export async function askLocalFontsOnce() {
+  if (!canQueryLocalFonts() || localFontData) return !!localFontData;
+  try { localFontData = await globalThis.queryLocalFonts(); return true; } catch { return false; }
+}

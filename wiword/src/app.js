@@ -10,6 +10,7 @@ import { initRibbon, renderRibbon, initQat, TABS, setRibbonTab, leafItems } from
 import { initKeytips } from './keytips.js';
 import { initPanels, renderPanels, renderStatus } from './panels.js';
 import { scheduleAutosave, restoreAutosave, initDrop, openFile } from './fileio.js';
+import { exportPdfBytes } from './pdfexport.js';
 import { openBackstage, closeBackstage, backstageOpen } from './backstage.js';
 import { loadOpts, APP_VERSION } from './extras.js';
 import { bridgeConnect } from './bridge.js';
@@ -255,4 +256,4 @@ boot();
   try { if (localStorage.getItem('wiword:version') !== APP_VERSION) { localStorage.setItem('wiword:version', APP_VERSION); setTimeout(() => toast('WIWORD 에 오신 것을 환영합니다 — 파일 탭에서 .docx · .hwp · .hwpx · PDF · 마크다운을 열 수 있습니다'), 800); } } catch { /* 저장소 없음 */ }
   requestAnimationFrame(() => focusEditor());
 })();
-window.__wiword = { S, run, relayout, V, setDoc, change, setZoom, openFile, renderStatus, applyZoomMode, renderVisible, drawSelection, blockAt, paraPlain };
+window.__wiword = { S, run, relayout, V, setDoc, change, setZoom, openFile, exportPdfBytes, renderStatus, applyZoomMode, renderVisible, drawSelection, blockAt, paraPlain };

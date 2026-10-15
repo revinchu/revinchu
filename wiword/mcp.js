@@ -10,7 +10,7 @@ import { resolve, extname, basename } from 'node:path';
 import { createInterface } from 'node:readline';
 import { readBytes, docBytes } from './src/formats.js';
 import { TOOLS, runTool, toolSchema } from './src/ops.js';
-import { newDoc, docText } from './src/model.js';
+import { newDoc, docText, serialize } from './src/model.js';
 import { sampleDoc, TEMPLATES } from './src/sample.js';
 
 const VERSION = '1.0.0';
@@ -22,6 +22,7 @@ const docs = new Map(); // 이름 → { doc, path, kind, dirty }
 let current = null;
 const cur = () => (current ? docs.get(current) : null);
 const SAVE_KINDS = ['docx', 'hwpx', 'md', 'html', 'txt', 'wiword', 'dotx'];
+const SAVE_FORMATS = [...SAVE_KINDS, 'pdf'];
 function kindOfPath(p) { const e = extname(p).slice(1).toLowerCase(); return e === 'markdown' ? 'md' : e === 'htm' ? 'html' : e; }
 
 async function appCall(tool, args = {}) {
@@ -85,8 +86,8 @@ const META_TOOLS = [
     run: async (a) => { if (!docs.has(a.name)) throw new Error(`'${a.name}' 이(가) 열려 있지 않습니다`); current = a.name; return `현재 문서: ${a.name}`; },
   },
   {
-    name: 'save_document', description: '현재 문서를 저장합니다. path 를 주면 그 이름으로 (확장자로 형식 결정: .docx .hwpx .md .html .txt .wiword .dotx). 없으면 연 파일에 덮어씀 (docx · hwpx · md · html · txt 일 때). target=app 이면 앱의 문서를 path 로 저장.',
-    input: { path: { type: 'string' }, format: { type: 'string', enum: SAVE_KINDS }, ...TARGET },
+    name: 'save_document', description: '현재 문서를 저장합니다. path 를 주면 그 이름으로 (확장자로 형식 결정: .docx .hwpx .md .html .txt .wiword .dotx .pdf — PDF 는 WIWORD 창이 열려 있어야 함). 없으면 연 파일에 덮어씀 (docx · hwpx · md · html · txt 일 때). target=app 이면 앱의 문서를 path 로 저장.',
+    input: { path: { type: 'string' }, format: { type: 'string', enum: SAVE_FORMATS }, ...TARGET },
     run: async (a) => {
       const target = await pickTarget(a.target);
       if (target === 'app') {
@@ -101,7 +102,13 @@ const META_TOOLS = [
       const path = a.path ? resolve(a.path) : d.path;
       if (!path) throw new Error('새 문서는 path 가 필요합니다 (예: 보고서.docx)');
       const kind = a.format ?? kindOfPath(path);
-      if (!SAVE_KINDS.includes(kind)) throw new Error(`${kind} 형식으로는 저장할 수 없습니다. .docx · .hwpx · .md · .html · .txt 중에서 고르세요 (PDF 는 브라우저의 인쇄 → PDF 저장).`);
+      if (kind === 'pdf') {
+        // PDF 는 글자 배치(쪽 나누기)가 필요해 열려 있는 WIWORD 창이 그림
+        const r = await appCall('render_pdf', { doc: serialize(d.doc), name: basename(path) }).catch((e) => { throw new Error(`PDF 저장은 WIWORD 창이 열려 있어야 합니다 (wiword 폴더에서 npm start 후 브라우저로 열기). ${e.message}`); });
+        await writeFile(path, Buffer.from(r.data, 'base64'));
+        return `PDF 로 저장했습니다: ${path}`;
+      }
+      if (!SAVE_KINDS.includes(kind)) throw new Error(`${kind} 형식으로는 저장할 수 없습니다. .docx · .hwpx · .md · .html · .txt · .pdf 중에서 고르세요.`);
       const out = docBytes(d.doc, kind, { name: basename(path) });
       await writeFile(path, typeof out === 'string' ? (kind === 'txt' ? `\uFEFF${out}` : out) : Buffer.from(out));
       d.dirty = false;

@@ -4,9 +4,10 @@ import { newDoc, uid, deserialize, serialize, docText } from './model.js';
 import { MIME, OPEN_ACCEPT, readBytes, docBytes, decodeText, csvToDoc, detectKind } from './formats.js';
 import { mdToDoc } from './md.js';
 import { pageNode } from './layout.js';
+import { exportPdfBytes } from './pdfexport.js';
 import { V, relayout } from './view.js';
 import { focusEditor, pasteFrom, copyTo, deleteSelection, E, pasteBlocks } from './editor.js';
-import { importFontFiles } from './fontlib.js';
+import { importFontFiles, askLocalFontsOnce } from './fontlib.js';
 import { toast, alertDialog, progressOverlay, formDialog, el, openDialog } from './ui.js';
 
 
@@ -137,6 +138,7 @@ const SAVE_TYPES = {
   html: { description: '웹 페이지', accept: { 'text/html': ['.html'] } },
   txt: { description: '텍스트', accept: { 'text/plain': ['.txt'] } },
   wiword: { description: 'WIWORD 문서', accept: { 'application/json': ['.wiword'] } },
+  pdf: { description: 'PDF', accept: { 'application/pdf': ['.pdf'] } },
 };
 async function pickSave(name, kind) {
   if (!window.showSaveFilePicker) return null;
@@ -159,8 +161,23 @@ export async function save() {
   }
   await saveAs(S.opts.saveFormat ?? 'docx');
 }
+/** PDF 로 바로 저장 (인쇄 대화상자 없이) */
+export async function savePdf(opts = {}) {
+  const name = `${S.docName}.pdf`;
+  // 이 컴퓨터의 글꼴을 PDF 에 넣기 (처음 한 번 브라우저가 허용을 물음) — 안 되면 보는 프로그램의 한글 글꼴로
+  if (S.opts.pdfEmbedFonts !== false) await askLocalFontsOnce().catch(() => false);
+  const h = await pickSave(name, 'pdf');
+  if (h === false) return;
+  const bar = progressOverlay('PDF 만드는 중…');
+  try {
+    const bytes = await exportPdfBytes({ ask: true, embed: S.opts.pdfEmbedFonts !== false, ...opts, onProgress: (i, n) => bar.set(i / n, `${i} / ${n} 쪽`) });
+    const blob = new Blob([bytes], { type: 'application/pdf' });
+    if (h) await writeHandle(h, blob); else download(blob, name);
+    toast(`PDF 로 저장했습니다 (${fmtSize(blob.size)})`);
+  } finally { bar.close(); }
+}
 export async function saveAs(kind = 'docx') {
-  if (kind === 'pdf') { printDoc({ pdf: true }); return; }
+  if (kind === 'pdf') { await savePdf(); return; }
   const name = `${S.docName}.${kind}`;
   const h = await pickSave(name, kind);
   if (h === false) return;
@@ -298,7 +315,8 @@ register({
   save: () => save(),
   saveAs: (kind) => (kind ? saveAs(kind) : run('backstage', 'saveAs')),
   saveHwpx: () => saveAs('hwpx'),
-  exportPdf: () => printDoc({ pdf: true }),
+  exportPdf: (o) => savePdf(o ?? {}),
+  printPdf: () => printDoc({ pdf: true }),
   print: () => run('backstage', 'print'),
   printNow: (o) => printDoc(o ?? {}),
   newBlank: () => run('newDocument'),
@@ -355,7 +373,7 @@ register({
   },
   pastePlain: () => run('paste', 'text'),
 }, {
-  open: { label: '열기' }, save: { label: '저장' }, saveAs: { label: '다른 이름으로 저장', args: ['docx|hwpx|md|html|txt|pdf|wiword'] }, exportPdf: { label: 'PDF 로 내보내기' }, printNow: { label: '인쇄' },
+  open: { label: '열기' }, save: { label: '저장' }, saveAs: { label: '다른 이름으로 저장', args: ['docx|hwpx|md|html|txt|pdf|wiword'] }, exportPdf: { label: 'PDF 로 내보내기' }, printPdf: { label: '인쇄 대화상자로 PDF 만들기' }, printNow: { label: '인쇄' },
   insertPicture: { label: '그림 넣기 (파일)' }, insertPictureUrl: { label: '온라인 그림' }, insertFileContents: { label: '파일의 텍스트 넣기' }, copy: { label: '복사' }, cut: { label: '잘라내기' }, paste: { label: '붙여넣기' },
 });
 

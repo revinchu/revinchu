@@ -101,7 +101,7 @@ Separate dependency-free app built like Tabula/WIXEL. Its own guide is `wipoint/
 
 ## WIWORD (Word-style document editor, `wiword/`)
 
-Separate dependency-free app built like WIXEL/WIPOINT. Its own guide is `wiword/CLAUDE.md` (rules in `wiword/AGENTS.md`, credits in `wiword/NOTICE.md`): `cd wiword && npm start` (port 5180), `npm test`, `npm run build`. Opens .docx/.dotx/.doc/.hwp/.hwpx/.pdf/.md/.html/.rtf/.txt/.csv, saves .docx/.hwpx/.md/.html/.txt. AI integration: `wiword/mcp.js` is a stdio MCP server (`claude mcp add wiword -- node <repo>/wiword/mcp.js`) that edits files on disk or, through server.js `/api/bridge/*`, the document open in the browser. Never commit real user documents or external example files (hwp-parser samples, POI test-data); point `WIWORD_CORPUS` at them for local tests.
+Separate dependency-free app built like WIXEL/WIPOINT. Its own guide is `wiword/CLAUDE.md` (rules in `wiword/AGENTS.md`, credits in `wiword/NOTICE.md`): `cd wiword && npm start` (port 5180), `npm test`, `npm run build`. Opens .docx/.dotx/.doc/.hwp/.hwpx/.pdf/.md/.html/.rtf/.txt/.csv, saves .docx/.hwpx/.md/.html/.txt/.pdf. AI integration: `wiword/mcp.js` is a stdio MCP server (`claude mcp add wiword -- node <repo>/wiword/mcp.js`) that edits files on disk or, through server.js `/api/bridge/*`, the document open in the browser. Never commit real user documents or external example files (hwp-parser samples, POI test-data); point `WIWORD_CORPUS` at them for local tests.
 
 ## Tabula (Excel-style spreadsheet, `tabula/`)
 
