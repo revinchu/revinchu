@@ -43,7 +43,7 @@ async function maskJpeg({ url, alpha, w, h }) {
     return c.toDataURL('image/png');
   } catch { return null; }
 }
-const KIND_LABEL = { docx: 'Word 문서', hwpx: '한글 문서(.hwpx)', hwp: '한글 문서(.hwp)', hwp3: '한글 97 문서(.hwp)', doc: 'Word 97-2003 문서', pdf: 'PDF', md: '마크다운', html: '웹 페이지', txt: '텍스트', rtf: 'RTF', odt: 'OpenDocument 텍스트', csv: 'CSV', wiword: 'WIWORD 문서' };
+const KIND_LABEL = { docx: 'Word 문서', hwpx: '한글 문서(.hwpx)', hwp: '한글 문서(.hwp)', hwp3: '한글 97 문서(.hwp)', doc: 'Word 97-2003 문서', pdf: 'PDF', md: '마크다운', html: '웹 페이지', txt: '텍스트', rtf: 'RTF', odt: 'OpenDocument 텍스트', csv: 'CSV', epub: 'EPUB 전자책', wiword: 'WIWORD 문서' };
 /** 열기 암호 묻기 → 문자열 | null(취소) */
 export function askPassword(name, wrong = false) {
   return new Promise((resolve) => {
@@ -139,6 +139,7 @@ const SAVE_TYPES = {
   txt: { description: '텍스트', accept: { 'text/plain': ['.txt'] } },
   wiword: { description: 'WIWORD 문서', accept: { 'application/json': ['.wiword'] } },
   pdf: { description: 'PDF', accept: { 'application/pdf': ['.pdf'] } },
+  epub: { description: 'EPUB 전자책', accept: { 'application/epub+zip': ['.epub'] } },
 };
 async function pickSave(name, kind) {
   if (!window.showSaveFilePicker) return null;

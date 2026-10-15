@@ -13,15 +13,16 @@ import { readRtf } from './rtf.js';
 import { parseCsv } from './csv.js';
 import { zip, unzip } from './zip.js';
 import { isCfb, openCfb } from './cfb.js';
+import { writeEpub, readEpub, isEpub } from './epub.js';
 
 export const MIME = {
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   dotx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.template',
   hwpx: 'application/hwp+zip',
-  md: 'text/markdown', html: 'text/html', txt: 'text/plain', wiword: 'application/json', pdf: 'application/pdf', rtf: 'application/rtf',
+  md: 'text/markdown', html: 'text/html', txt: 'text/plain', wiword: 'application/json', pdf: 'application/pdf', rtf: 'application/rtf', epub: 'application/epub+zip',
 };
 
-export const OPEN_ACCEPT = '.docx,.docm,.dotx,.dotm,.doc,.hwp,.hwpx,.hwt,.pdf,.md,.markdown,.txt,.html,.htm,.rtf,.odt,.csv,.tsv,.wiword,.json';
+export const OPEN_ACCEPT = '.docx,.docm,.dotx,.dotm,.doc,.hwp,.hwpx,.hwt,.pdf,.md,.markdown,.txt,.html,.htm,.rtf,.odt,.epub,.csv,.tsv,.wiword,.json';
 
 // ───────────── 형식 판별 · 읽기 (DOM 없이 바이트에서 문서로 — MCP 서버도 같은 순서) ─────────────
 const dec = (b, enc = 'utf-8') => new TextDecoder(enc).decode(b);
@@ -38,6 +39,7 @@ export function detectKind(bytes, name = '') {
   if (bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46) return 'pdf';
   if (bytes[0] === 0x50 && bytes[1] === 0x4b) {
     const files = unzip(bytes);
+    if (isEpub(files)) return 'epub';
     if (files['word/document.xml'] || Object.keys(files).some((k) => /^word\/document\d*\.xml$/.test(k))) return 'docx';
     if (files['Contents/section0.xml'] || Object.keys(files).some((k) => /^Contents\/section\d+\.xml$/i.test(k))) return 'hwpx';
     if (files['content.xml'] && /opendocument\.text/.test(dec(files.mimetype ?? new Uint8Array()))) return 'odt';
@@ -93,6 +95,7 @@ export function readBytes(bytes, name = '', opts = {}) {
   if (kind === 'hwp3') return { ...readHwp3(bytes, opts), kind };
   if (kind === 'doc') return { ...readDoc97(bytes, opts), kind };
   if (kind === 'pdf') return { ...readPdfDoc(bytes, opts), kind };
+  if (kind === 'epub') return { ...readEpub(bytes), kind };
   if (kind === 'odt') return { doc: odtToDoc(bytes), warnings: ['OpenDocument 텍스트(.odt)는 글 · 제목 · 표만 가져옵니다.'], kind };
   const text = decodeText(bytes);
   if (kind === 'wiword') return { doc: deserialize(text), warnings: [], kind };
@@ -133,6 +136,7 @@ export function docBytes(doc, kind, opts = {}) {
   if (kind === 'hwpx') return zip(writeHwpx(doc, opts)); // mimetype 이 첫 항목 (무압축)
   if (kind === 'md') return docToMd(doc, { images: opts.images ?? 'inline' });
   if (kind === 'html') return blocksToHtml(doc, doc.body, { full: true, title: doc.props?.title || opts.name || '' });
+  if (kind === 'epub') return zip(writeEpub(doc, opts));
   if (kind === 'txt') return docText(doc);
   if (kind === 'wiword') return serialize(doc);
   throw new Error(`저장할 수 없는 형식: ${kind}`);

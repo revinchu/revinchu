@@ -210,3 +210,25 @@ test('PDF 쓰기 · TrueType 부분 집합', async () => {
   assert.match(s, /\/URI \(https:\/\/example\.com\/\)/);
   assert.match(s, /\/Outlines/);
 });
+
+test('EPUB 쓰기 · 읽기 (장 · 차례 · 그림 · 각주)', async () => {
+  const { writeEpub, toXhtml } = await import('../src/epub.js');
+  const { pngDataUrl } = await import('../src/pdf.js');
+  const png = pngDataUrl(4, 2, new Uint8Array(32).fill(255));
+  const d = mdToDoc(`# 1장 & 시작\n\n본문 <a> 두  칸.\n\n![그림](${png})\n\n# 2장\n\n| 가 | 나 |\n|---|---|\n| 1 | 2 |\n\n끝[^1].\n\n[^1]: 각주 글`);
+  const files = writeEpub(d, { name: '책' });
+  assert.equal(Object.keys(files)[0], 'mimetype');
+  assert.ok(files['OEBPS/ch1.xhtml'] && files['OEBPS/ch2.xhtml'] && files['OEBPS/notes.xhtml']);
+  assert.match(files['OEBPS/nav.xhtml'], /1장 &amp; 시작/);
+  assert.ok(Object.keys(files).some((k) => /^OEBPS\/images\/img1\.png$/.test(k)));
+  assert.doesNotMatch(files['OEBPS/ch1.xhtml'], /&nbsp;|<br>|<img[^>]*[^/]>/);
+  assert.equal(toXhtml('a&nbsp;b <br> &copy; & x'), 'a&#160;b <br/> &#169; &amp; x');
+  const b = docBytes(d, 'epub');
+  assert.equal(detectKind(b, 'x.zip'), 'epub');
+  const r = readBytes(b, 'x.epub');
+  assert.equal(r.kind, 'epub');
+  assert.match(docText(r.doc), /본문 <a>/);
+  assert.match(docText(r.doc), /각주 글/);
+  assert.equal(Object.keys(r.doc.media).length, 1);
+  assert.equal(r.doc.body.filter((p) => p.type === 'tbl').length, 1);
+});

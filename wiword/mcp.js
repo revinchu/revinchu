@@ -23,7 +23,7 @@ const log = (...a) => process.stderr.write(`[wiword-mcp] ${a.join(' ')}\n`);
 const docs = new Map(); // 이름 → { doc, path, kind, dirty }
 let current = null;
 const cur = () => (current ? docs.get(current) : null);
-const SAVE_KINDS = ['docx', 'hwpx', 'md', 'html', 'txt', 'wiword', 'dotx'];
+const SAVE_KINDS = ['docx', 'hwpx', 'md', 'html', 'txt', 'wiword', 'dotx', 'epub'];
 const SAVE_FORMATS = [...SAVE_KINDS, 'pdf'];
 function kindOfPath(p) { const e = extname(p).slice(1).toLowerCase(); return e === 'markdown' ? 'md' : e === 'htm' ? 'html' : e; }
 
@@ -51,7 +51,7 @@ async function pickTarget(t) {
 const TARGET = { target: { type: 'string', enum: ['file', 'app'], description: 'file = open_document 로 연 문서, app = 브라우저의 WIWORD 창 (생략하면 연 문서가 있으면 file, 없고 앱이 켜져 있으면 app)' } };
 const META_TOOLS = [
   {
-    name: 'open_document', description: '디스크의 문서를 엽니다 (.docx .doc .hwp .hwpx .pdf .md .html .rtf .odt .txt .csv). to_app=true 면 브라우저의 WIWORD 창에서 엽니다.',
+    name: 'open_document', description: '디스크의 문서를 엽니다 (.docx .doc .hwp .hwpx .pdf .epub .md .html .rtf .odt .txt .csv). to_app=true 면 브라우저의 WIWORD 창에서 엽니다.',
     input: { path: { type: 'string', description: '파일 경로' }, password: { type: 'string', description: '암호로 보호된 한글(.hwp · .hwpx) 문서의 열기 암호' }, to_app: { type: 'boolean' }, pdf_mode: { type: 'string', enum: ['flow', 'layout'], description: 'PDF: flow(문단으로 다시 잇기, 기본) | layout(원래 모양)' } }, required: ['path'],
     run: async (a) => {
       const p = resolve(a.path);
@@ -88,7 +88,7 @@ const META_TOOLS = [
     run: async (a) => { if (!docs.has(a.name)) throw new Error(`'${a.name}' 이(가) 열려 있지 않습니다`); current = a.name; return `현재 문서: ${a.name}`; },
   },
   {
-    name: 'save_document', description: '현재 문서를 저장합니다. path 를 주면 그 이름으로 (확장자로 형식 결정: .docx .hwpx .md .html .txt .wiword .dotx .pdf — PDF 는 WIWORD 창이 열려 있어야 함). 없으면 연 파일에 덮어씀 (docx · hwpx · md · html · txt 일 때). target=app 이면 앱의 문서를 path 로 저장.',
+    name: 'save_document', description: '현재 문서를 저장합니다. path 를 주면 그 이름으로 (확장자로 형식 결정: .docx .hwpx .md .html .txt .epub .wiword .dotx .pdf — PDF 는 WIWORD 창이 열려 있어야 함). 없으면 연 파일에 덮어씀 (docx · hwpx · md · html · txt 일 때). target=app 이면 앱의 문서를 path 로 저장.',
     input: { path: { type: 'string' }, format: { type: 'string', enum: SAVE_FORMATS }, ...TARGET },
     run: async (a) => {
       const target = await pickTarget(a.target);
@@ -118,7 +118,7 @@ const META_TOOLS = [
     },
   },
   {
-    name: 'convert', description: '파일 형식 바꾸기: input(.docx .doc .hwp .hwpx .pdf .md .html .rtf .odt .txt) → output(.docx .hwpx .md .html .txt). 예: 한글(hwp) → Word(docx), PDF → 마크다운.',
+    name: 'convert', description: '파일 형식 바꾸기: input(.docx .doc .hwp .hwpx .pdf .md .html .rtf .odt .txt) → output(.docx .hwpx .md .html .txt .epub). 예: 한글(hwp) → Word(docx), PDF → 마크다운.',
     input: { input: { type: 'string' }, output: { type: 'string' }, password: { type: 'string', description: '암호 문서의 열기 암호' } }, required: ['input', 'output'],
     run: async (a) => {
       const r = readBytes(new Uint8Array(await readFile(resolve(a.input))), a.input, { password: a.password });

@@ -251,6 +251,7 @@ export const ICONS = {
   endnote: svg(`<path d="M3 4.5h14M3 8h10"/><text x="14" y="9" font-size="5" fill="${ACCENT}" stroke="none" font-family="Arial">i</text><rect x="3" y="12" width="14" height="5" stroke-dasharray="1.2 1.2" opacity=".6"/>`),
   caption: svg(`<rect x="3" y="3" width="14" height="9" rx=".6"/><path d="m4.5 10.5 3.5-3.5 2.5 2.5 2-2 3 3" opacity=".6"/><path d="M5 15.5h10" stroke="${ACCENT}"/>`),
   citation: svg(`<path d="M4 9.5c0-3 1.2-5 3.5-6M10 9.5c0-3 1.2-5 3.5-6"/><path d="M4 9.5h3.5v4H4zM10 9.5h3.5v4H10z"/><path d="M4 17h12" stroke="${ACCENT}"/>`),
+  book: svg(`<path d="M3 4.5c2.5-1 5-1 7 .8 2-1.8 4.5-1.8 7-.8v11.5c-2.5-1-5-1-7 .8-2-1.8-4.5-1.8-7-.8z"/><path d="M10 5.3v12"/>`),
   bookmark: svg(`<path d="M5.5 2.5h9v15L10 13.5l-4.5 4z"/>`),
   crossRef: svg(`<path d="M3 5h9M3 9h7"/><path d="M8 14h8M13 11l3 3-3 3" stroke="${ACCENT}"/>`),
   track: svg(`<path d="M3 15.5 13 5.5l2 2-10 10H3z"/><path d="M3 4h6" stroke="${ACCENT}"/><path d="M11 17.5h6" stroke="${ACCENT}" stroke-dasharray="1.5 1"/>`),
