@@ -5,6 +5,7 @@ import { initEditor, placeTextarea, focusEditor, KEYMAP, setSel } from './editor
 import { } from './commands.js';
 import { } from './dialogs.js';
 import { } from './features.js';
+import { } from './pdftoolsui.js';
 import { GALLERIES } from './menus.js';
 import { initRibbon, renderRibbon, initQat, TABS, setRibbonTab, leafItems } from './ribbon.js';
 import { initKeytips } from './keytips.js';

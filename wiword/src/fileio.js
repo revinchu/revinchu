@@ -145,6 +145,16 @@ async function pickSave(name, kind) {
   try { return await window.showSaveFilePicker({ id: 'wiword-save', suggestedName: name, types: [SAVE_TYPES[kind]] }); } catch (e) { if (e.name === 'AbortError') return false; return null; }
 }
 async function writeHandle(h, blob) { const w = await h.createWritable(); await w.write(blob); await w.close(); }
+/** 바이트를 파일로 저장 (위치 고르기 → 안 되면 내려받기). 취소하면 false */
+export async function saveBytes(bytes, name, { description = 'PDF', mime = 'application/pdf', ext = '.pdf' } = {}) {
+  let h = null;
+  if (window.showSaveFilePicker) {
+    try { h = await window.showSaveFilePicker({ id: 'wiword-tools', suggestedName: name, types: [{ description, accept: { [mime]: [ext] } }] }); } catch (e) { if (e.name === 'AbortError') return false; h = null; }
+  }
+  const blob = new Blob([bytes], { type: mime });
+  if (h) await writeHandle(h, blob); else download(blob, name);
+  return true;
+}
 export async function docBlob(kind) {
   let out = docBytes(S.doc, kind, { name: S.docName });
   if (out instanceof Promise) out = await out;

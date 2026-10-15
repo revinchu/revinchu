@@ -955,3 +955,32 @@ body.read-mode .page { box-shadow: 0 0 0 1px #e0d8c6; }
 }
 #printArea { display: none; }
 @media print { #printArea { display: block; } }
+
+/* PDF 도구 창 */
+.pt-wrap { display: flex; gap: 14px; min-height: 460px; max-height: 70vh; }
+.pt-side { width: 190px; flex: none; overflow: auto; border-right: 1px solid #e3e3e3; padding-right: 8px; display: flex; flex-direction: column; gap: 2px; }
+.pt-cat { font-size: 11px; color: #666; margin: 10px 0 2px; font-weight: 600; }
+.pt-item { text-align: left; border: 0; background: none; padding: 5px 8px; border-radius: 4px; cursor: pointer; font: inherit; }
+.pt-item:hover { background: #f0f0f0; }
+.pt-item.on { background: #dfe9f7; color: #1f4e8c; font-weight: 600; }
+.pt-main { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.pt-main h3 { margin: 0; }
+.pt-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
+.pt-card { display: flex; flex-direction: column; gap: 4px; text-align: left; border: 1px solid #e3e3e3; border-radius: 6px; background: #fff; padding: 10px; cursor: pointer; font: inherit; }
+.pt-card:hover { border-color: #2b579a; background: #f6f9fd; }
+.pt-card span { font-size: 12px; color: #666; }
+.pt-tips { margin: 0; padding-left: 18px; font-size: 12.5px; color: #444; }
+.pt-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pt-files { border: 1px dashed #c8c8c8; border-radius: 6px; min-height: 64px; padding: 6px; display: flex; flex-direction: column; gap: 4px; }
+.pt-drop { padding: 14px; text-align: center; }
+.pt-file { display: flex; align-items: center; gap: 8px; padding: 4px 6px; background: #f7f7f7; border-radius: 4px; }
+.pt-fname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pt-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px 14px; }
+.pt-field { display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; }
+.pt-field input[type=text], .pt-field input[type=number], .pt-field select { width: 100%; box-sizing: border-box; }
+.pt-field input[type=checkbox] { align-self: flex-start; }
+.pt-annots { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 4px 10px; font-size: 12.5px; }
+.btn.small { padding: 1px 6px; min-width: 0; font-size: 11px; }
+@media (max-width: 700px) { .pt-wrap { flex-direction: column; max-height: none; } .pt-side { width: auto; border-right: 0; flex-direction: row; flex-wrap: wrap; } }
+.dialog-body label.pt-field { display: flex; flex-direction: column; align-items: stretch; gap: 3px; }
+.dialog-body label.pt-field > span:first-child { width: auto; text-align: left; }

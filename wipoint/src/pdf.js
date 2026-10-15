@@ -2,16 +2,17 @@
 // 직접 구현: 객체 찾기(xref 없이 훑기 + 개체 스트림), Flate/ASCIIHex/ASCII85/LZW/RunLength + PNG 예측자, 내용 스트림 해석,
 // 글꼴(ToUnicode CMap · WinAnsi/Differences · Type0/CID 너비), 그림(JPEG 그대로, 나머지는 RGBA → encodeImage)
 import { inflate } from './zip.js';
+import { md5, rc4, sha256, sha384, sha512, aesCbcDecrypt, aesCbcEncrypt } from './crypto.js';
 import { newPresentation, uid } from './model.js';
 
 const latin1 = new TextDecoder('latin1');
 const PT2PX = 96 / 72;
 
 // ───────────── 기본 값 ─────────────
-class Ref { constructor(num, gen) { this.num = num; this.gen = gen; } }
-class Name { constructor(n) { this.n = n; } }
-class Cmd { constructor(c) { this.c = c; } }
-class Stream { constructor(dict, start, end, bytes) { this.dict = dict; this.start = start; this.end = end; this.bytes = bytes; } }
+export class Ref { constructor(num, gen) { this.num = num; this.gen = gen; } }
+export class Name { constructor(n) { this.n = n; } }
+export class Cmd { constructor(c) { this.c = c; } }
+export class Stream { constructor(dict, start, end, bytes) { this.dict = dict; this.start = start; this.end = end; this.bytes = bytes; } }
 const isName = (v, n) => v instanceof Name && (n == null || v.n === n);
 
 const WS = new Uint8Array(256);
@@ -20,7 +21,7 @@ const DELIM = new Uint8Array(256);
 for (const c of '()<>[]{}/%') DELIM[c.charCodeAt(0)] = 1;
 
 // ───────────── 낱말 읽기 ─────────────
-class Lexer {
+export class Lexer {
   constructor(b, pos = 0, end = b.length) { this.b = b; this.pos = pos; this.end = end; }
   skipWs() {
     const b = this.b;
@@ -141,24 +142,35 @@ class Lexer {
   }
 }
 
+const PDF_PAD = Uint8Array.from([0x28, 0xbf, 0x4e, 0x5e, 0x4e, 0x75, 0x8a, 0x41, 0x64, 0x00, 0x4e, 0x56, 0xff, 0xfa, 0x01, 0x08, 0x2e, 0x2e, 0x00, 0xb6, 0xd0, 0x68, 0x3e, 0x80, 0x2f, 0x0c, 0xa9, 0xfe, 0x64, 0x53, 0x69, 0x7a]);
+const cat3 = (a, b, c, d = new Uint8Array(0), e = new Uint8Array(0)) => { const o = new Uint8Array(a.length + b.length + c.length + d.length + e.length); let k = 0; for (const x of [a, b, c, d, e]) { o.set(x, k); k += x.length; } return o; };
+
 // ───────────── 문서 ─────────────
-class PdfDoc {
+export class PdfDoc {
   constructor(bytes) {
     this.b = bytes;
     this.offsets = new Map(); // num → byte offset (마지막 정의)
     this.inStm = new Map();   // num → [stmNum, index]
     this.cache = new Map();
+    this.gens = new Map();
+    this.crypt = null;
     this.text = latin1.decode(bytes);
     this.scan();
   }
   scan() {
     const re = /(\d+)\s+(\d+)\s+obj\b/g;
     let m;
-    const stms = [];
     while ((m = re.exec(this.text))) {
       this.offsets.set(Number(m[1]), m.index + m[0].length);
+      this.gens.set(Number(m[1]), Number(m[2]));
     }
-    // 개체 스트림 (PDF 1.5+): /Type /ObjStm
+    this.scanObjStms();
+    this.scanTrailer();
+  }
+  /** 개체 스트림 (PDF 1.5+): /Type /ObjStm — 암호 문서는 풀기를 준비한 뒤 다시 훑음 */
+  scanObjStms() {
+    const stms = [];
+    this.inStm.clear();
     for (const [num, off] of this.offsets) {
       const head = this.text.slice(off, off + 400);
       if (/\/Type\s*\/ObjStm/.test(head)) stms.push(num);
@@ -177,7 +189,8 @@ class PdfDoc {
         if (!this.offsets.has(num) || (this.inStm.get(num)?.[0] ?? -1) < sn) this.inStm.set(num, [sn, i]);
       }
     }
-    // 트레일러
+  }
+  scanTrailer() {
     this.trailer = {};
     const tre = /trailer\s*<</g;
     let tm;
@@ -185,7 +198,7 @@ class PdfDoc {
     if (!this.trailer.Root) {
       for (const [num, off] of this.offsets) {
         const head = this.text.slice(off, off + 600);
-        if (/\/Type\s*\/XRef/.test(head)) { const o = this.get(new Ref(num, 0)); if (o instanceof Stream) { if (o.dict.Root) this.trailer.Root = o.dict.Root; if (o.dict.Encrypt) this.trailer.Encrypt = o.dict.Encrypt; } }
+        if (/\/Type\s*\/XRef/.test(head)) { const o = this.get(new Ref(num, 0)); if (o instanceof Stream) { for (const k of ['Root', 'Encrypt', 'ID', 'Info']) if (o.dict[k] && !this.trailer[k]) this.trailer[k] = o.dict[k]; } }
       }
     }
     if (!this.trailer.Root) {
@@ -203,8 +216,10 @@ class PdfDoc {
     let v = null;
     const off = this.offsets.get(ref.num);
     const inStm = this.inStm.get(ref.num);
-    if (inStm && (off == null || inStm)) v = this.fromObjStm(inStm[0], inStm[1]) ?? (off != null ? this.parseAt(off) : null);
-    else if (off != null) v = this.parseAt(off);
+    let plain = false;
+    if (inStm) { v = this.fromObjStm(inStm[0], inStm[1]); plain = v != null; }
+    if (v == null && off != null) v = this.parseAt(off);
+    if (this.crypt && !plain && v != null && ref.num !== this.crypt.skip) v = this.decryptValue(v, ref.num, this.gens.get(ref.num) ?? ref.gen ?? 0);
     this.cache.set(ref.num, v);
     return v;
   }
@@ -257,9 +272,125 @@ class PdfDoc {
     if (!o) return null;
     return new Lexer(parsed.data, parsed.first + o[1]).next();
   }
+  // ───── 암호 (표준 보안 처리기: RC4 40~128비트, AES-128, AES-256 R5/R6) ─────
+  /** 암호 문서면 열쇠를 만든다. 암호가 맞지 않으면 e.code = 'PASSWORD' */
+  unlock(password = '') {
+    const encRef = this.trailer.Encrypt;
+    if (!encRef) return true;
+    const enc = this.val(encRef);
+    if (!enc) { const e = new Error('암호로 보호된 PDF 인데 암호 정보를 읽을 수 없습니다 (손상된 파일).'); e.code = 'BROKEN'; throw e; }
+    const filter = this.val(enc.Filter)?.n;
+    if (filter && filter !== 'Standard') throw new Error(`지원하지 않는 PDF 보안 방식입니다 (${filter}). 인증서·DRM 으로 잠긴 문서는 열 수 없습니다.`);
+    const V = this.val(enc.V) ?? 0; const R = this.val(enc.R) ?? 2;
+    const O = this.val(enc.O) ?? new Uint8Array(32); const U = this.val(enc.U) ?? new Uint8Array(32);
+    const P = (this.val(enc.P) ?? 0) | 0; const bits = this.val(enc.Length) ?? 40;
+    const ids = this.val(this.trailer.ID); const id0 = (Array.isArray(ids) ? this.val(ids[0]) : null) ?? new Uint8Array(0);
+    const encMeta = this.val(enc.EncryptMetadata) !== false;
+    const method = (name) => {
+      if (V < 4) return 'rc4';
+      if (V >= 5) return 'aes';
+      if (!name || name === 'Identity') return 'none';
+      const cf = this.val(this.val(enc.CF)?.[name]);
+      const cfm = this.val(cf?.CFM)?.n;
+      return cfm === 'AESV2' || cfm === 'AESV3' ? 'aes' : cfm === 'None' ? 'none' : 'rc4';
+    };
+    const stm = method(this.val(enc.StmF)?.n); const str = method(this.val(enc.StrF)?.n);
+    const eq = (a, b, n) => { for (let i = 0; i < n; i++) if (a[i] !== b[i]) return false; return true; };
+    const cands = [...new Set([password, password.normalize?.('NFC') ?? password])].flatMap((pw) => [new TextEncoder().encode(pw), Uint8Array.from([...pw].map((c) => c.charCodeAt(0) & 255))]);
+    let key = null;
+    if (R >= 5) {
+      const OE = this.val(enc.OE); const UE = this.val(enc.UE);
+      const hash = (pw, salt, udata) => {
+        let K = sha256(cat3(pw, salt, udata));
+        if (R === 5) return K;
+        let E = [0];
+        for (let i = 0; i < 64 || E[E.length - 1] > i - 32; i++) {
+          const one = cat3(pw, K, udata); const k1 = new Uint8Array(one.length * 64);
+          for (let r = 0; r < 64; r++) k1.set(one, r * one.length);
+          E = aesCbcEncrypt(k1, K.subarray(0, 16), K.subarray(16, 32));
+          let sum = 0; for (let j = 0; j < 16; j++) sum += E[j];
+          K = sum % 3 === 0 ? sha256(E) : sum % 3 === 1 ? sha384(E) : sha512(E);
+        }
+        return K.subarray(0, 32);
+      };
+      const zero = new Uint8Array(16); const none = new Uint8Array(0);
+      for (const pw0 of cands) {
+        const pw = pw0.subarray(0, 127);
+        if (eq(hash(pw, U.subarray(32, 40), none), U, 32)) { key = aesCbcDecrypt(UE, hash(pw, U.subarray(40, 48), none), zero); break; }
+        if (eq(hash(pw, O.subarray(32, 40), U.subarray(0, 48)), O, 32)) { key = aesCbcDecrypt(OE, hash(pw, O.subarray(40, 48), U.subarray(0, 48)), zero); break; }
+      }
+    } else {
+      const n = R === 2 ? 5 : Math.min(16, Math.max(5, bits >> 3));
+      const padPw = (pw) => { const o = new Uint8Array(32); o.set(pw.subarray(0, 32)); o.set(PDF_PAD.subarray(0, 32 - Math.min(32, pw.length)), Math.min(32, pw.length)); return o; };
+      const keyOf = (pw) => {
+        let h = md5(cat3(padPw(pw), O.subarray(0, 32), Uint8Array.of(P & 255, (P >> 8) & 255, (P >> 16) & 255, (P >>> 24) & 255), id0, R >= 4 && !encMeta ? Uint8Array.of(255, 255, 255, 255) : new Uint8Array(0)));
+        if (R >= 3) for (let i = 0; i < 50; i++) h = md5(h.subarray(0, n));
+        return h.subarray(0, n);
+      };
+      const userOk = (k) => {
+        if (R === 2) return eq(rc4(k)(PDF_PAD), U, 32);
+        let x = md5(cat3(PDF_PAD, id0, new Uint8Array(0)));
+        for (let i = 0; i < 20; i++) x = rc4(k.map((b) => b ^ i))(x);
+        return eq(x, U, 16);
+      };
+      for (const pw of cands) {
+        let k = keyOf(pw);
+        if (userOk(k)) { key = k; break; }
+        // 소유자 암호 → 사용자 암호
+        let h = md5(padPw(pw));
+        if (R >= 3) for (let i = 0; i < 50; i++) h = md5(h);
+        const ok = h.subarray(0, n);
+        let x = O.subarray(0, 32);
+        if (R === 2) x = rc4(ok)(x);
+        else for (let i = 19; i >= 0; i--) x = rc4(ok.map((b) => b ^ i))(x);
+        k = keyOf(x);
+        if (userOk(k)) { key = k; break; }
+      }
+    }
+    if (!key) {
+      const e = new Error(password ? '암호가 맞지 않습니다.' : '암호로 보호된 PDF 입니다. 열기 암호를 입력하세요.');
+      e.code = 'PASSWORD'; e.wrong = !!password; throw e;
+    }
+    this.crypt = { key, R, stm, str, encMeta, skip: encRef instanceof Ref ? encRef.num : -1 };
+    this.cache.clear();
+    this.scanObjStms();
+    return true;
+  }
+  objKey(num, gen, aes) {
+    const c = this.crypt;
+    if (c.R >= 5) return c.key;
+    const k = md5(cat3(c.key, Uint8Array.of(num & 255, (num >> 8) & 255, (num >> 16) & 255, gen & 255, (gen >> 8) & 255), aes ? Uint8Array.of(0x73, 0x41, 0x6c, 0x54) : new Uint8Array(0)));
+    return k.subarray(0, Math.min(16, c.key.length + 5));
+  }
+  decryptBytes(data, num, gen, method) {
+    if (method === 'none' || !data.length) return data;
+    if (method === 'rc4') return rc4(this.objKey(num, gen, false))(data);
+    if (data.length < 32) return new Uint8Array(0);
+    const out = aesCbcDecrypt(data.subarray(16), this.objKey(num, gen, true), data.subarray(0, 16));
+    const pad = out[out.length - 1];
+    return pad >= 1 && pad <= 16 ? out.subarray(0, out.length - pad) : out;
+  }
+  decryptValue(v, num, gen) {
+    if (v instanceof Uint8Array) return this.decryptBytes(v, num, gen, this.crypt.str);
+    if (Array.isArray(v)) return v.map((x) => this.decryptValue(x, num, gen));
+    if (v instanceof Stream) {
+      const type = v.dict.Type?.n;
+      const d = this.decryptValue(v.dict, num, gen);
+      const st = new Stream(d, v.start, v.end, v.bytes);
+      if (type !== 'XRef' && !(type === 'Metadata' && !this.crypt.encMeta)) st.crypt = [num, gen];
+      return st;
+    }
+    if (v && typeof v === 'object' && !(v instanceof Ref) && !(v instanceof Name) && !(v instanceof Cmd)) {
+      const o = {};
+      for (const k in v) o[k] = this.decryptValue(v[k], num, gen);
+      return o;
+    }
+    return v;
+  }
   /** 스트림 풀기 (그림 압축 DCT/JPX 등은 그 앞 단계까지) */
   decode(st, { stopAtImage = false } = {}) {
     let data = st.bytes.subarray(st.start, st.end);
+    if (st.crypt) data = this.decryptBytes(data, st.crypt[0], st.crypt[1], this.crypt.stm);
     let filters = this.val(st.dict.Filter ?? st.dict.F);
     let parms = this.val(st.dict.DecodeParms ?? st.dict.DP);
     if (!filters) return data;
@@ -1244,7 +1375,7 @@ export function readPdf(bytes, opts = {}) {
     if (!head.includes('%PDF')) throw new Error('PDF 파일이 아닙니다');
   }
   const doc = new PdfDoc(bytes);
-  if (doc.trailer.Encrypt) throw new Error('암호로 보호된 PDF 는 열 수 없습니다. PDF 프로그램에서 암호를 해제한 뒤 다시 열어 주세요.');
+  if (doc.trailer.Encrypt) doc.unlock(opts.password ?? '');
   const root = doc.val(doc.trailer.Root);
   if (!root) throw new Error('PDF 구조를 읽을 수 없습니다 (손상된 파일)');
   const pages = [];

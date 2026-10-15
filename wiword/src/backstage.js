@@ -29,7 +29,7 @@ export function openBackstage(page = 'home') {
   const main = el('div', { class: 'backstage-main' });
   const nav = el('nav', { class: 'backstage-nav' },
     el('button', { class: 'back', title: '돌아가기 (Esc)', onclick: closeBackstage }, '←'),
-    ...[['home', '홈', 'H'], ['new', '새로 만들기', 'N'], ['open', '열기', 'O'], ['info', '정보', 'I'], ['save', '저장', 'S'], ['saveAs', '다른 이름으로 저장', 'A'], ['print', '인쇄', 'P'], ['share', '공유', 'Z'], ['export', '내보내기', 'E'], ['close', '닫기', 'C']].map(([k, l, kt]) => el('button', { class: k === page ? 'on' : '', 'data-kt': kt, onclick: () => openBackstage(k) }, l)),
+    ...[['home', '홈', 'H'], ['new', '새로 만들기', 'N'], ['open', '열기', 'O'], ['info', '정보', 'I'], ['save', '저장', 'S'], ['saveAs', '다른 이름으로 저장', 'A'], ['print', '인쇄', 'P'], ['share', '공유', 'Z'], ['export', '내보내기', 'E'], ['pdfTools', 'PDF 도구', 'T'], ['close', '닫기', 'C']].map(([k, l, kt]) => el('button', { class: k === page ? 'on' : '', 'data-kt': kt, onclick: () => openBackstage(k) }, l)),
     el('span', { class: 'spacer' }),
     el('button', { 'data-kt': 'T', onclick: () => { closeBackstage(); run('optionsDialog'); } }, '옵션'),
     el('button', { onclick: () => { closeBackstage(); run('about'); } }, '정보 (WIWORD)'));
@@ -120,7 +120,9 @@ const PAGES = {
     big('pdf', 'PDF/XPS 문서 만들기', '글꼴을 넣은 PDF 파일 (제목은 책갈피로)', () => { closeBackstage(); run('exportPdf'); }),
     big('hwp', '한글 문서 (.hwpx)', '', () => saveAs('hwpx')),
     big('markdown', '마크다운 (.md)', '그림은 문서 안에 포함 (data URL)', () => saveAs('md')),
-    big('webLayout', 'HTML', '', () => saveAs('html')))),
+    big('webLayout', 'HTML', '', () => saveAs('html')),
+    big('pdf', 'PDF 도구', '병합 · 분할 · 추출 · 회전 · 모아찍기 · 배경 · 쪽 번호 · 주석 지우기 · 이미지로 PDF', () => { closeBackstage(); run('pdfTools'); }))),
+  pdfTools: () => { closeBackstage(); run('pdfTools'); },
   close: () => {
     closeBackstage();
     if (S.dirty && !confirm('저장하지 않은 변경 내용이 있습니다. 닫을까요? (자동 저장된 사본은 [열기 › 최근 항목]에 남습니다)')) return;

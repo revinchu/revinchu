@@ -169,6 +169,13 @@ export function aesCbcDecrypt(data, key, iv) {
   for (let o = 0; o < n; o += 16) { crypt(K, data, o, out, o, true); for (let j = 0; j < 16; j++) out[o + j] ^= o ? data[o - 16 + j] : iv[j]; }
   return out;
 }
+/** AES-CBC 암호화 (채우기 없음: 길이는 16의 배수) */
+export function aesCbcEncrypt(data, key, iv) {
+  const K = aesKey(key); const n = data.length - (data.length % 16); const out = new Uint8Array(n);
+  const blk = new Uint8Array(16);
+  for (let o = 0; o < n; o += 16) { for (let j = 0; j < 16; j++) blk[j] = data[o + j] ^ (o ? out[o - 16 + j] : iv[j]); crypt(K, blk, 0, out, o, false); }
+  return out;
+}
 /** AES 비트 단위 CFB(CFB-1) 복호, IV 0 — 레지스터는 스트림 전체에서 이어짐 (HWP 5 암호 문서) */
 export function aesCfb1Decrypt(data, key) {
   const K = aesKey(key);
@@ -292,12 +299,12 @@ const K512 = [
   0xca273ece, 0xea26619c, 0xd186b8c7, 0x21c0c207, 0xeada7dd6, 0xcde0eb1e, 0xf57d4f7f, 0xee6ed178, 0x06f067aa, 0x72176fba, 0x0a637dc5, 0xa2c898a6, 0x113f9804, 0xbef90dae, 0x1b710b35, 0x131c471b,
   0x28db77f5, 0x23047d84, 0x32caab7b, 0x40c72493, 0x3c9ebe0a, 0x15c9bebc, 0x431d67c4, 0x9c100d4c, 0x4cc5d4be, 0xcb3e42b6, 0x597f299c, 0xfc657e2a, 0x5fcb6fab, 0x3ad6faec, 0x6c44198c, 0x4a475817,
 ];
-export function sha512(msg) {
+export function sha512(msg, iv = null, outLen = 64) {
   const len = msg.length; const total = Math.ceil((len + 17) / 128) * 128;
   const b = new Uint8Array(total); b.set(msg); b[len] = 0x80;
   const dv = new DataView(b.buffer);
   dv.setUint32(total - 4, (len * 8) >>> 0); dv.setUint32(total - 8, Math.floor(len / 2 ** 29));
-  const H = [0x6a09e667, 0xf3bcc908, 0xbb67ae85, 0x84caa73b, 0x3c6ef372, 0xfe94f82b, 0xa54ff53a, 0x5f1d36f1, 0x510e527f, 0xade682d1, 0x9b05688c, 0x2b3e6c1f, 0x1f83d9ab, 0xfb41bd6b, 0x5be0cd19, 0x137e2179];
+  const H = iv ? iv.slice() : [0x6a09e667, 0xf3bcc908, 0xbb67ae85, 0x84caa73b, 0x3c6ef372, 0xfe94f82b, 0xa54ff53a, 0x5f1d36f1, 0x510e527f, 0xade682d1, 0x9b05688c, 0x2b3e6c1f, 0x1f83d9ab, 0xfb41bd6b, 0x5be0cd19, 0x137e2179];
   const W = new Int32Array(160);
   // 64비트 더하기: (ah, al) + (bh, bl)
   for (let o = 0; o < total; o += 128) {
@@ -335,5 +342,7 @@ export function sha512(msg) {
   }
   const out = new Uint8Array(64); const ov = new DataView(out.buffer);
   for (let i = 0; i < 16; i++) ov.setInt32(i * 4, H[i]);
-  return out;
+  return outLen === 64 ? out : out.slice(0, outLen);
 }
+const SHA384_IV = [0xcbbb9d5d, 0xc1059ed8, 0x629a292a, 0x367cd507, 0x9159015a, 0x3070dd17, 0x152fecd8, 0xf70e5939, 0x67332667, 0xffc00b31, 0x8eb44a87, 0x68581511, 0xdb0c2e0d, 0x64f98fa7, 0x47b5481d, 0xbefa4fa4].map((v) => v | 0);
+export const sha384 = (msg) => sha512(msg, SHA384_IV, 48);

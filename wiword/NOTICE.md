@@ -8,6 +8,7 @@ WIWORD 의 코드는 이 저장소에서 작성했습니다. 아래 프로젝트
 | [edwardkim/rhwp](https://github.com/edwardkim/rhwp) | MIT | HWP 3.0 레코드 구조(문서 정보 · 글자/문단 모양 · 표 · 그림) 와 조합형 매핑 검증, 암호 방식(HWP 3 DES · HWP 5 AES CFB-1 · HWPX PBKDF2/AES-CBC) 참고. 예제 문서는 로컬 시험에만 사용 (저장소에 포함하지 않음) |
 | [HariFatherKR/hwp-parser](https://github.com/HariFatherKR/hwp-parser) | 저장소 표기 따름 | HWP 레코드 구조 참고, 예제 .hwp 파일은 로컬 시험에만 사용 (저장소에 포함하지 않음) |
 | [storytold/wordcraft](https://github.com/storytold/wordcraft) | 저장소 표기 따름 | Rust 워드 프로세서의 화면 구성 · 기능 목록 · 사용 흐름 연구 (코드 사용 없음) |
+| [pblsketch/openoffice (이음오피스)](https://github.com/pblsketch/openoffice) | Apache-2.0 | PDF 도구 창의 구성(할 일 먼저 고르기, 범주 · 도구 이름 · 활용 예시, 결과는 새 파일)과 도구 목록을 참고해 `src/pdftools.js` · `src/pdftoolsui.js` 를 직접 작성 (코드 사용 없음) |
 | [Apache POI test-data](https://github.com/apache/poi) | Apache-2.0 | .docx / .doc 호환성 시험 문서 모음 (로컬 시험에만 사용) |
 
 형식 문서: ECMA-376 (Office Open XML), [MS-DOC], 한글과컴퓨터 「HWP 5.0 문서 형식」 · 「OWPML(HWPX)」 공개 문서, PDF 1.7 (ISO 32000-1).

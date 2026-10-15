@@ -12,6 +12,8 @@ import { readBytes, docBytes } from './src/formats.js';
 import { TOOLS, runTool, toolSchema } from './src/ops.js';
 import { newDoc, docText, serialize } from './src/model.js';
 import { sampleDoc, TEMPLATES } from './src/sample.js';
+import * as PDFT from './src/pdftools.js';
+import { existsSync } from 'node:fs';
 
 const VERSION = '1.0.0';
 const APP_URL = (process.env.WIWORD_URL ?? 'http://127.0.0.1:5180').replace(/\/$/, '');
@@ -128,6 +130,64 @@ const META_TOOLS = [
     },
   },
   {
+    name: 'pdf_tools', description: 'PDF 파일 다루기 (디스크, AI 없이 이 컴퓨터에서만). action: info · merge(inputs 여러 개) · split(every 또는 ranges → output 폴더/접두사) · extract · delete · reorder · reverse · rotate(degrees) · nup(n: 2·4·6·8·9·16) · duplex(inputs, per_sheet) · overlay(background) · remove_annotations(types) · find_blank · images_to_pdf(inputs = 그림들) · stamp(page_numbers · watermark · header · footer) · decrypt · compact · set_info. pages 는 "1-3, 5, 8-" 같은 지정 글 (1부터). 결과는 항상 새 파일(output).',
+    input: {
+      action: { type: 'string', enum: ['info', 'merge', 'split', 'extract', 'delete', 'reorder', 'reverse', 'rotate', 'nup', 'duplex', 'overlay', 'remove_annotations', 'find_blank', 'images_to_pdf', 'stamp', 'decrypt', 'compact', 'set_info'] },
+      input: { type: 'string', description: '원본 PDF 경로' }, inputs: { type: 'array', items: { type: 'string' }, description: 'merge · duplex · images_to_pdf 의 파일들 (순서대로)' },
+      output: { type: 'string', description: '결과 PDF 경로 (split 은 파일 이름 앞부분)' }, password: { type: 'string' },
+      pages: { type: 'string' }, degrees: { type: 'number' }, every: { type: 'number' }, ranges: { type: 'string' },
+      n: { type: 'number' }, paper: { type: 'string', description: 'A4 · A3 · B4 · B5 · Letter · Legal (images_to_pdf 는 fit 도 가능)' }, per_sheet: { type: 'number' },
+      background: { type: 'string', description: 'overlay 의 배경 PDF' }, bg_page: { type: 'number' }, front: { type: 'boolean', description: 'overlay 를 내용 앞에' },
+      types: { type: 'array', items: { type: 'string' }, description: 'remove_annotations 의 종류 (Text Highlight FreeText Ink Stamp Link Widget …). 없으면 링크 · 입력란을 뺀 모두' },
+      page_numbers: { type: 'string', description: 'stamp: 번호 모양, 예 "- {n} -" 또는 "{n} / {total}"' }, position: { type: 'string', description: 'stamp: bc br bl tc tr tl' },
+      watermark: { type: 'string' }, header: { type: 'string' }, footer: { type: 'string' }, font: { type: 'string', description: 'stamp 에 넣을 TrueType 글꼴 경로 (한글 글자). 없으면 이 컴퓨터의 맑은 고딕 · 나눔고딕을 찾음' },
+      title: { type: 'string' }, author: { type: 'string' }, subject: { type: 'string' }, keywords: { type: 'string' },
+    },
+    required: ['action'],
+    run: async (a) => {
+      const rd = async (p) => new Uint8Array(await readFile(resolve(p)));
+      const opt = { password: a.password };
+      const src = a.input ? await rd(a.input) : null;
+      const out = async (bytes) => { if (!a.output) throw new Error('output 경로를 주세요'); await writeFile(resolve(a.output), Buffer.from(bytes)); return { output: resolve(a.output), bytes: bytes.length, pages: PDFT.pdfInfo(bytes).pages.length }; };
+      const need = () => { if (!src) throw new Error('input 경로를 주세요'); };
+      switch (a.action) {
+        case 'info': need(); return PDFT.pdfInfo(src, opt);
+        case 'merge': return out(await PDFT.mergePdfs(await Promise.all((a.inputs ?? []).map(async (p) => ({ bytes: await rd(p), name: basename(p).replace(/\.pdf$/i, ''), password: a.password })))));
+        case 'duplex': return out(await PDFT.duplexMerge(await Promise.all((a.inputs ?? []).map(async (p) => ({ bytes: await rd(p), name: basename(p).replace(/\.pdf$/i, ''), password: a.password }))), { perSheet: a.per_sheet ?? 1 }));
+        case 'split': {
+          need();
+          const prefix = resolve(a.output ?? a.input.replace(/\.pdf$/i, ''));
+          const parts = await PDFT.splitPdf(src, { ...opt, every: a.every ?? 1, ranges: a.ranges ?? null, base: basename(prefix) });
+          const dir = resolve(prefix, '..');
+          for (const p of parts) await writeFile(resolve(dir, p.name), Buffer.from(p.bytes));
+          return { files: parts.map((p) => resolve(dir, p.name)) };
+        }
+        case 'extract': need(); return out(await PDFT.extractPages(src, a.pages ?? '', opt));
+        case 'delete': need(); return out(await PDFT.deletePages(src, a.pages ?? '', opt));
+        case 'reorder': need(); return out(await PDFT.selectPages(src, { ...opt, pages: PDFT.parsePages(a.pages, PDFT.pdfInfo(src, opt).pages.length) }));
+        case 'reverse': need(); return out(await PDFT.reversePages(src, opt));
+        case 'rotate': need(); return out(await PDFT.rotatePages(src, a.degrees ?? 90, a.pages ?? '', opt));
+        case 'nup': need(); return out(await PDFT.nUp(src, { ...opt, n: a.n ?? 2, paper: a.paper ?? 'A4' }));
+        case 'overlay': need(); return out(await PDFT.overlayPdf(src, await rd(a.background), { ...opt, behind: !a.front, bgPage: a.bg_page ?? 1, pages: a.pages ?? '' }));
+        case 'remove_annotations': { need(); const r = await PDFT.removeAnnotations(src, { ...opt, types: a.types ?? null, pages: a.pages ?? '' }); return { ...(await out(r)), removed: r.removed }; }
+        case 'find_blank': need(); return { blank: PDFT.analyzePages(src, opt).filter((p) => p.blank).map((p) => p.index + 1), image_only: PDFT.analyzePages(src, opt).filter((p) => p.imageOnly).map((p) => p.index + 1), note: 'image_only 페이지는 그림만 있어 눈으로 확인해야 합니다 (스캔한 빈 종이일 수 있음)' };
+        case 'images_to_pdf': return out(await PDFT.imagesToPdf(await Promise.all((a.inputs ?? []).map(async (p) => ({ bytes: await rd(p), name: basename(p) }))), { paper: a.paper ?? 'A4' }));
+        case 'stamp': {
+          need();
+          let font = a.font ? await rd(a.font) : null;
+          if (!font && /[^\x20-\x7e]/.test(`${a.page_numbers ?? ''}${a.watermark ?? ''}${a.header ?? ''}${a.footer ?? ''}`)) {
+            for (const p of ['C:/Windows/Fonts/malgun.ttf', '/System/Library/Fonts/AppleSDGothicNeo.ttc', '/Library/Fonts/NanumGothic.ttf', '/usr/share/fonts/truetype/nanum/NanumGothic.ttf', '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc']) if (existsSync(p)) { const b = await rd(p); if (PDFT.canEmbedFont(b)) { font = b; break; } }
+          }
+          return out(await PDFT.stampPdf(src, { ...opt, font, file: basename(a.input), pages: a.pages ?? '', numbers: a.page_numbers ? { format: a.page_numbers, pos: a.position ?? 'bc' } : null, watermark: a.watermark ? { text: a.watermark } : null, header: a.header ? { center: a.header } : null, footer: a.footer ? { left: a.footer } : null }));
+        }
+        case 'decrypt': need(); return out(await PDFT.decryptPdf(src, a.password ?? ''));
+        case 'compact': need(); return out(await PDFT.compactPdf(src, opt));
+        case 'set_info': need(); return out(await PDFT.setPdfInfo(src, { title: a.title, author: a.author, subject: a.subject, keywords: a.keywords }, opt));
+        default: throw new Error(`알 수 없는 action: ${a.action}`);
+      }
+    },
+  },
+  {
     name: 'execute', description: '[앱] WIWORD 명령을 실행합니다 (리본 · 단축키와 같은 명령: bold, applyStyle, insertTable, pageBreak, insertToc, zoomPageWidth …). list_commands 로 목록을 보세요. args 는 명령 인자 배열.',
     input: { command: { type: 'string' }, args: { type: 'array' } }, required: ['command'],
     run: async (a) => appCall('execute', { command: a.command, args: a.args ?? [] }),
@@ -193,8 +253,11 @@ rl.on('line', (line) => {
   if (!line.trim()) return;
   let msg;
   try { msg = JSON.parse(line); } catch { send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'JSON 파싱 오류' } }); return; }
-  Promise.resolve(handle(msg)).catch((e) => { log('오류', e.stack ?? e); if (msg.id !== undefined) fail(msg.id, -32603, e.message); });
+  const p = Promise.resolve(handle(msg)).catch((e) => { log('오류', e.stack ?? e); if (msg.id !== undefined) fail(msg.id, -32603, e.message); });
+  pending.add(p); p.finally(() => pending.delete(p));
 });
-rl.on('close', () => process.exit(0));
+// 입력이 끝나도 진행 중인 요청의 답은 마저 보낸 뒤 끝냄
+const pending = new Set();
+rl.on('close', () => { Promise.allSettled([...pending]).then(() => process.exit(0)); });
 log(`시작 (앱: ${APP_URL})`);
 void sampleDoc;
