@@ -89,14 +89,3 @@ test('PNG 인코더 (DOM 없음)', () => {
   const url = pngDataUrl(2, 1, new Uint8Array([255, 0, 0, 255, 0, 0, 255, 128]));
   assert.match(url, /^data:image\/png;base64,iVBORw0KGgo/);
 });
-
-test('PDF: 암호 문서 (RC4 40비트 · AES-128 사용자 암호 · AES-256)', () => {
-  const at = (f) => new Uint8Array(readFileSync(new URL(`./fixtures/${f}`, import.meta.url)));
-  const text = (pres) => pres.slides.flatMap((s) => s.objects).flatMap((o) => o.text?.paras ?? []).flatMap((p) => p.runs).map((r) => r.t).join('');
-  assert.match(text(readPdf(at('hello-rc4.pdf')).pres), /Hello WIWORD/);
-  assert.match(text(readPdf(at('hello-aes256.pdf')).pres), /Hello WIWORD/);
-  assert.throws(() => readPdf(at('hello-aes128.pdf')), (e) => e.code === 'PASSWORD' && !e.wrong);
-  assert.throws(() => readPdf(at('hello-aes128.pdf'), { password: 'x' }), (e) => e.code === 'PASSWORD' && e.wrong);
-  assert.match(text(readPdf(at('hello-aes128.pdf'), { password: '1234' }).pres), /Hello WIWORD/);
-  assert.match(text(readPdf(at('hello-aes128.pdf'), { password: 'own' }).pres), /Hello WIWORD/);
-});

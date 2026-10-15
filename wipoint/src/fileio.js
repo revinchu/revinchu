@@ -12,7 +12,7 @@ import { svgToObjects } from './svgimport.js';
 import { slideSvg } from './svgexport.js';
 import { slideHtml, SLIDE_CSS } from './render.js';
 import { inkUntil } from './recording.js';
-import { toast, alertDialog, progressOverlay, el, openDialog } from './ui.js';
+import { toast, alertDialog, progressOverlay } from './ui.js';
 
 const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
 const POTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.template';
@@ -34,25 +34,6 @@ export function pickFile(accept, multiple = false) {
 const LAZY_OPEN = 16 << 20;
 const LAZY_MEDIA = (name, size) => /^ppt\/media\//.test(name) && size > 256 << 10 && !/\.(svg|emf|wmf)$/i.test(name);
 
-/** 열기 암호 묻기 → 문자열 | null(취소) */
-function askPassword(name, wrong = false) {
-  return new Promise((resolve) => {
-    let done = false;
-    const pw = el('input', { type: 'password', autocomplete: 'off', style: { width: '100%' } });
-    openDialog({
-      title: '암호', width: 380,
-      body: el('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
-        el('div', {}, `'${name}' 은(는) 암호로 보호되어 있습니다.`),
-        wrong ? el('div', { style: { color: '#c42b1c' } }, '암호가 맞지 않습니다. 다시 입력하세요.') : null,
-        el('label', {}, el('span', {}, '암호: '), pw)),
-      onOpen: () => setTimeout(() => pw.focus(), 30),
-      buttons: [{ label: '확인', primary: true, action: () => { done = true; resolve(pw.value); } }, { label: '취소' }],
-      onClose: () => { if (!done) resolve(null); },
-    });
-    pw.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); pw.closest('.dialog')?.querySelector('button.primary')?.click(); } });
-  });
-}
-
 export async function loadFile(file) {
   if (file.size > LAZY_OPEN && typeof file.slice === 'function') {
     const head = new Uint8Array(await file.slice(0, 4).arrayBuffer());
@@ -63,16 +44,7 @@ export async function loadFile(file) {
   if (!bytes.length) throw new Error(`'${file.name}' 파일이 비어 있습니다 (0바이트). 아이폰이라면 파일 앱이나 카카오톡에서 파일을 먼저 열어 내려받은 뒤(또는 [파일에 저장] 후) 다시 열어 주세요.`);
   const name = file.name.replace(/\.(pptx|potx|pptm|ppsx|json|wpt|pdf)$/i, '').replace(/\.wpt$/i, '');
   if (bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46 || /\.pdf$/i.test(file.name)) {
-    let res; let pw = ''; let wrong = false;
-    for (;;) {
-      try { res = readPdf(bytes, { encodeImage: canvasEncode, password: pw }); break; } catch (e) {
-        if (e.code !== 'PASSWORD') throw e;
-        pw = await askPassword(file.name, wrong || !!e.wrong);
-        if (pw == null) throw new Error('암호를 입력하지 않아 열지 않았습니다.');
-        wrong = true;
-      }
-    }
-    const { pres, warnings, jobs } = res;
+    const { pres, warnings, jobs } = readPdf(bytes, { encodeImage: canvasEncode });
     await Promise.all(jobs.map(async (j) => { const u = await maskJpeg(j); if (u) pres.media[j.media] = u; }));
     return { pres, name, warnings: ['PDF 를 슬라이드로 바꾸어 열었습니다. 글은 텍스트 상자, 도형 · 선은 도형으로 편집할 수 있습니다.', ...warnings], pdf: true };
   }
