@@ -44,7 +44,9 @@ export function openBackstage(page = 'home') {
 
 const h2 = (t) => el('h2', {}, t);
 function newCards() {
-  return el('div', { class: 'tpl-cards' }, TEMPLATES.map((t) => el('button', { class: 'tpl-card', title: t.desc, onclick: () => { setDoc(t.build(), t.id === 'blank' ? '문서1' : t.name); S.fileHandle = null; S.fileKind = null; S.docId = null; closeBackstage(); } },
+  const outlineCard = el('button', { class: 'tpl-card tpl-outline', title: '# 제목 · ## 장 · - 항목 개요로 표지 · 차례 · 번호가 있는 문서 만들기', onclick: () => { closeBackstage(); run('outlineDoc'); } },
+    el('div', { class: 'tpl-thumb tpl-outline-thumb' }, el('div', {}, '# 제목'), el('div', {}, '## 1. 개요'), el('div', {}, '## 2. 현황'), el('div', {}, '- 항목')), el('b', {}, '개요로 만들기'), el('small', {}, '마크다운 개요 → 보고서 · 기획서 · 공문서'));
+  return el('div', { class: 'tpl-cards' }, outlineCard, ...TEMPLATES.map((t) => el('button', { class: 'tpl-card', title: t.desc, onclick: () => { setDoc(t.build(), t.id === 'blank' ? '문서1' : t.name); S.fileHandle = null; S.fileKind = null; S.docId = null; closeBackstage(); } },
     el('div', { class: 'tpl-thumb', html: docThumb(t.id, t.build) }), el('b', {}, t.name), el('small', {}, t.desc))));
 }
 async function recentList(box) {

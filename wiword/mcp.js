@@ -12,6 +12,7 @@ import { readBytes, docBytes } from './src/formats.js';
 import { TOOLS, runTool, toolSchema } from './src/ops.js';
 import { newDoc, docText, serialize } from './src/model.js';
 import { sampleDoc, TEMPLATES } from './src/sample.js';
+import { buildFromOutline, OUTLINE_KINDS } from './src/outline.js';
 import * as PDFT from './src/pdftools.js';
 import { existsSync } from 'node:fs';
 
@@ -66,15 +67,16 @@ const META_TOOLS = [
   },
   {
     name: 'new_document', description: '새 문서를 만듭니다 (메모리). template: blank(기본) · report · gongmun(공문서) · letter · resume · minutes · press · essay · hwp(한글 기본) · tour. markdown 을 주면 그 내용으로.',
-    input: { name: { type: 'string' }, template: { type: 'string' }, markdown: { type: 'string' } },
+    input: { name: { type: 'string' }, template: { type: 'string' }, markdown: { type: 'string' }, outline: { type: 'string', description: `마크다운 개요('# 제목' · '## 장' · '### 절' · '- 항목')로 표지 · 차례 · 번호 매긴 문서를 만듭니다. outline_kind: ${OUTLINE_KINDS.map((k) => `${k.id}(${k.name})`).join(' · ')}` }, outline_kind: { type: 'string' }, title: { type: 'string' }, author: { type: 'string' }, date: { type: 'string' }, cover: { type: 'boolean' }, toc: { type: 'boolean' } },
     run: async (a) => {
       const t = TEMPLATES.find((x) => x.id === (a.template ?? 'blank'));
       let doc = t ? t.build() : newDoc();
-      if (a.markdown) doc = runTool(doc, 'set_markdown', { markdown: a.markdown }).doc;
+      if (a.outline) doc = buildFromOutline(a.outline, { kind: a.outline_kind ?? 'report', title: a.title, author: a.author, date: a.date, cover: a.cover, toc: a.toc });
+      else if (a.markdown) doc = runTool(doc, 'set_markdown', { markdown: a.markdown }).doc;
       const name = a.name ?? `문서${docs.size + 1}`;
       docs.set(name, { doc, path: null, kind: null, dirty: true });
       current = name;
-      return { created: name, template: t?.id ?? 'blank' };
+      return { created: name, template: a.outline ? `outline:${a.outline_kind ?? 'report'}` : t?.id ?? 'blank', blocks: doc.body.length };
     },
   },
   {
