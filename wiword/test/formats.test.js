@@ -146,3 +146,33 @@ test('표 · 문단 걷기 (walkParas) 가 표 안 문단까지', () => {
   walkParas(d.body, (p) => seen.push(p.runs.map((r) => r.text).join('')));
   assert.ok(seen.includes('안쪽'));
 });
+
+test('암호 함수: 표준 시험값 (SHA · AES · DES · PBKDF2)', async () => {
+  const { sha1, sha256, aesEcbDecrypt, aesKey, aesEncryptBlock, desEcbDecrypt, desEcbEncrypt, pbkdf2 } = await import('../src/crypto.js');
+  const hex = (b) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+  const un = (h) => Uint8Array.from(h.match(/../g), (x) => parseInt(x, 16));
+  assert.equal(hex(sha1(enc.encode('abc'))), 'a9993e364706816aba3e25717850c26c9cd0d89d');
+  assert.equal(hex(sha256(enc.encode('abc'))), 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+  // FIPS-197 부록 C.1
+  const key = un('000102030405060708090a0b0c0d0e0f'); const pt = un('00112233445566778899aabbccddeeff'); const ct = un('69c4e0d86a7b0430d8cdb78070b4c55a');
+  const out = new Uint8Array(16); aesEncryptBlock(aesKey(key), pt, 0, out, 0);
+  assert.equal(hex(out), hex(ct));
+  assert.equal(hex(aesEcbDecrypt(ct, key)), hex(pt));
+  // DES 고전 시험값
+  const dk = un('133457799bbcdff1'); const dp = un('0123456789abcdef');
+  assert.equal(hex(desEcbEncrypt(dp, dk)), '85e813540f0ab405');
+  assert.equal(hex(desEcbDecrypt(un('85e813540f0ab405'), dk)), hex(dp));
+  // RFC 6070
+  assert.equal(hex(pbkdf2(sha1, enc.encode('password'), enc.encode('salt'), 2, 20)), 'ea6c014dc72d6f8ccd1ed92ace1d41f0d8de8957');
+});
+
+test('한글 97 글자 코드 (상용 조합형 · 한컴 기호)', async () => {
+  const { hchar } = await import('../src/hwp3.js');
+  assert.equal(hchar(0x8861), '가');
+  assert.equal(hchar(0xd3bd), '힣');
+  assert.equal(hchar(0x41), 'A');
+  assert.equal(hchar(0x3590), 'Ⅰ');
+  assert.equal(hchar(0x36e7), '①');
+  assert.equal(hchar(0xd931), '　'); // 조합형 기호 첫 칸 (KS X 1001 A1A1)
+  assert.equal(hchar(0x8841), 'ㄱ');
+});

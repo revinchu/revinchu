@@ -1,7 +1,8 @@
 // 한글 문서 (.hwpx · OWPML, KS X 6101) 읽기 · 쓰기 — DOM 없음
 // 구조 참고: kordoc (MIT, chrisryugj/kordoc) 의 hwpx 생성기 · 파서, 한컴오피스 실제 저장본
 // 단위: HWPUNIT = 1/7200 인치 = px × 75, 글자 크기 height = pt × 100
-import { unzip } from './zip.js';
+import { unzip, inflate } from './zip.js';
+import { sha1, sha256, pbkdf2, aesCbcDecrypt } from './crypto.js';
 import { parseXml, child, kids, esc } from './xml.js';
 import { newDoc, newSection, para, uid, normalizeRuns, effRun, effPara, walkParas, runLen, computeNumbering, docText, paraPlain } from './model.js';
 import { mediaDataUrl, dataUrlBytes } from './docx.js';
@@ -409,11 +410,44 @@ function diffProps(full, base) {
   return out;
 }
 
-export function readHwpx(input) {
-  const files = input instanceof Uint8Array ? unzip(input) : input;
+/** 암호 HWPX (ODF 방식: SHA-256 시작 키 → PBKDF2 → AES-256-CBC → deflate, 앞 1KB SHA-256 확인) */
+function decryptHwpx(files, manifest, password, warnings) {
+  if (!password) { const e = new Error('암호로 보호된 한글 문서입니다. 열기 암호를 입력하세요.'); e.code = 'PASSWORD'; throw e; }
+  const b64 = (v) => Uint8Array.from(atob(v ?? ''), (c) => c.charCodeAt(0));
+  const attr = (x, n) => new RegExp(`${n}="([^"]*)"`).exec(x)?.[1];
+  const start = sha256(new TextEncoder().encode(password));
+  const out = { ...files };
+  const re = /<[^:>\s]*:?file-entry\b([^>]*)>([\s\S]*?)<\/[^:>\s]*:?file-entry>/g;
+  let m; let n = 0;
+  while ((m = re.exec(manifest))) {
+    const [, attrs, inner] = m;
+    if (!inner.includes('encryption-data')) continue;
+    const path = attr(attrs, 'full-path');
+    if (!path || !files[path]) continue;
+    if (!/aes256-cbc/.test(attr(inner, 'algorithm-name') ?? '')) throw new Error('지원하지 않는 HWPX 암호 방식입니다.');
+    const iter = Number(attr(inner, 'iteration-count')); const salt = b64(attr(inner, 'salt')); const iv = b64(attr(inner, 'initialisation-vector')); const sum = b64(attr(inner, 'checksum'));
+    if (!(iter > 0 && iter <= 1e6)) throw new Error('HWPX 암호 정보가 이상합니다.');
+    let plain = null;
+    for (const h of [sha1, sha256]) {
+      try {
+        const key = pbkdf2(h, start, salt, iter, 32);
+        const p = inflate(aesCbcDecrypt(files[path], key, iv));
+        const chk = sha256(p.subarray(0, Math.min(1024, p.length)));
+        if (chk.every((v, i) => v === sum[i])) { plain = p; break; }
+      } catch { /* 다음 방식 */ }
+    }
+    if (!plain) { const e = new Error('암호가 맞지 않습니다.'); e.code = 'PASSWORD'; e.wrong = true; throw e; }
+    out[path] = plain; n++;
+  }
+  warnings.push(`암호를 풀어 열었습니다 (${n}개 부분). 저장하면 암호가 없는 문서가 됩니다.`);
+  return out;
+}
+export function readHwpx(input, opts = {}) {
+  let files = input instanceof Uint8Array ? unzip(input) : input;
   const warnings = [];
+  const man = files['META-INF/manifest.xml'] ? dec.decode(files['META-INF/manifest.xml']) : '';
+  if (/encryption-data/.test(man)) files = decryptHwpx(files, man, opts.password, warnings);
   const txt = (p) => (files[p] ? dec.decode(files[p]) : null);
-  if (files['META-INF/manifest.xml'] && /encryption-data/.test(txt('META-INF/manifest.xml') ?? '')) throw new Error('암호로 보호된 한글 문서입니다. 한글에서 암호를 풀고 저장한 뒤 열어 주세요.');
   // 매니페스트 (content.hpf): 그림 · 구역 순서
   const hpfPath = Object.keys(files).find((k) => /content\.hpf$/i.test(k)) ?? 'Contents/content.hpf';
   const hpf = txt(hpfPath);

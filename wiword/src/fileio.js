@@ -42,14 +42,42 @@ async function maskJpeg({ url, alpha, w, h }) {
     return c.toDataURL('image/png');
   } catch { return null; }
 }
-const KIND_LABEL = { docx: 'Word 문서', hwpx: '한글 문서(.hwpx)', hwp: '한글 문서(.hwp)', doc: 'Word 97-2003 문서', pdf: 'PDF', md: '마크다운', html: '웹 페이지', txt: '텍스트', rtf: 'RTF', odt: 'OpenDocument 텍스트', csv: 'CSV', wiword: 'WIWORD 문서' };
-export async function loadFile(file) {
+const KIND_LABEL = { docx: 'Word 문서', hwpx: '한글 문서(.hwpx)', hwp: '한글 문서(.hwp)', hwp3: '한글 97 문서(.hwp)', doc: 'Word 97-2003 문서', pdf: 'PDF', md: '마크다운', html: '웹 페이지', txt: '텍스트', rtf: 'RTF', odt: 'OpenDocument 텍스트', csv: 'CSV', wiword: 'WIWORD 문서' };
+/** 열기 암호 묻기 → 문자열 | null(취소) */
+export function askPassword(name, wrong = false) {
+  return new Promise((resolve) => {
+    let done = false;
+    const pw = el('input', { type: 'password', autocomplete: 'off', style: { width: '100%' } });
+    openDialog({
+      title: '암호', width: 380,
+      body: el('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
+        el('div', {}, `'${name}' 은(는) 암호로 보호되어 있습니다.`),
+        wrong ? el('div', { style: { color: '#c42b1c' } }, '암호가 맞지 않습니다. 다시 입력하세요.') : null,
+        el('label', {}, el('span', {}, '암호: '), pw)),
+      onOpen: () => setTimeout(() => pw.focus(), 30),
+      buttons: [{ label: '확인', primary: true, action: () => { done = true; resolve(pw.value); } }, { label: '취소' }],
+      onClose: () => { if (!done) resolve(null); },
+    });
+    pw.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); pw.closest('.dialog')?.querySelector('.dialog-foot button.primary, button.primary')?.click(); } });
+  });
+}
+export async function loadFile(file, password) {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const bar = bytes.length > 4 << 20 ? progressOverlay(`'${file.name}' 여는 중 (${fmtSize(bytes.length)})`) : null;
   try {
     bar?.set(0.2, '읽는 중…');
     await new Promise((r) => setTimeout(r, 0));
-    const r = readBytes(bytes, file.name, { encodeImage: canvasEncode });
+    let r; let pw = password; let wrong = false;
+    for (;;) {
+      try { r = readBytes(bytes, file.name, { encodeImage: canvasEncode, password: pw }); break; } catch (e) {
+        if (e.code !== 'PASSWORD') throw e;
+        bar?.close();
+        pw = await askPassword(file.name, wrong || !!e.wrong);
+        if (pw == null) throw new Error('암호를 입력하지 않아 열지 않았습니다.');
+        wrong = true;
+        await new Promise((res) => setTimeout(res, 30)); // 대화상자가 닫히고 그려지도록
+      }
+    }
     if (r.jobs?.length) await Promise.all(r.jobs.map(async (j) => { const u = await maskJpeg(j); if (u) r.doc.media[j.media] = u; }));
     await rasterizeMetafiles(r.doc);
     return { ...r, name: file.name.replace(/\.[^.]+$/, '') };

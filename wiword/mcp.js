@@ -49,12 +49,12 @@ const TARGET = { target: { type: 'string', enum: ['file', 'app'], description: '
 const META_TOOLS = [
   {
     name: 'open_document', description: '디스크의 문서를 엽니다 (.docx .doc .hwp .hwpx .pdf .md .html .rtf .odt .txt .csv). to_app=true 면 브라우저의 WIWORD 창에서 엽니다.',
-    input: { path: { type: 'string', description: '파일 경로' }, to_app: { type: 'boolean' }, pdf_mode: { type: 'string', enum: ['flow', 'layout'], description: 'PDF: flow(문단으로 다시 잇기, 기본) | layout(원래 모양)' } }, required: ['path'],
+    input: { path: { type: 'string', description: '파일 경로' }, password: { type: 'string', description: '암호로 보호된 한글(.hwp · .hwpx) 문서의 열기 암호' }, to_app: { type: 'boolean' }, pdf_mode: { type: 'string', enum: ['flow', 'layout'], description: 'PDF: flow(문단으로 다시 잇기, 기본) | layout(원래 모양)' } }, required: ['path'],
     run: async (a) => {
       const p = resolve(a.path);
       const bytes = new Uint8Array(await readFile(p));
-      if (a.to_app) return appCall('open_document', { name: basename(p), data: Buffer.from(bytes).toString('base64') });
-      const r = readBytes(bytes, p, { mode: a.pdf_mode });
+      if (a.to_app) return appCall('open_document', { name: basename(p), data: Buffer.from(bytes).toString('base64'), password: a.password });
+      const r = readBytes(bytes, p, { mode: a.pdf_mode, password: a.password });
       const name = basename(p);
       docs.set(name, { doc: r.doc, path: p, kind: r.kind, dirty: false });
       current = name;
@@ -103,16 +103,16 @@ const META_TOOLS = [
       const kind = a.format ?? kindOfPath(path);
       if (!SAVE_KINDS.includes(kind)) throw new Error(`${kind} 형식으로는 저장할 수 없습니다. .docx · .hwpx · .md · .html · .txt 중에서 고르세요 (PDF 는 브라우저의 인쇄 → PDF 저장).`);
       const out = docBytes(d.doc, kind, { name: basename(path) });
-      await writeFile(path, typeof out === 'string' ? (kind === 'txt' ? `﻿${out}` : out) : Buffer.from(out));
+      await writeFile(path, typeof out === 'string' ? (kind === 'txt' ? `\uFEFF${out}` : out) : Buffer.from(out));
       d.dirty = false;
       return `저장했습니다: ${path} (${kind})`;
     },
   },
   {
     name: 'convert', description: '파일 형식 바꾸기: input(.docx .doc .hwp .hwpx .pdf .md .html .rtf .odt .txt) → output(.docx .hwpx .md .html .txt). 예: 한글(hwp) → Word(docx), PDF → 마크다운.',
-    input: { input: { type: 'string' }, output: { type: 'string' } }, required: ['input', 'output'],
+    input: { input: { type: 'string' }, output: { type: 'string' }, password: { type: 'string', description: '암호 문서의 열기 암호' } }, required: ['input', 'output'],
     run: async (a) => {
-      const r = readBytes(new Uint8Array(await readFile(resolve(a.input))), a.input);
+      const r = readBytes(new Uint8Array(await readFile(resolve(a.input))), a.input, { password: a.password });
       const kind = kindOfPath(a.output);
       if (!SAVE_KINDS.includes(kind)) throw new Error(`${kind} 로는 바꿀 수 없습니다`);
       const out = docBytes(r.doc, kind, { name: basename(a.output) });

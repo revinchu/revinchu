@@ -25,7 +25,7 @@ async function handle({ tool, args = {} }) {
   if (tool === 'app_status') return { name: S.docName, dirty: S.dirty, pages: S.layout?.pages.length ?? 0, chars: docText(S.doc).length, view: S.view };
   if (tool === 'open_document') {
     const bytes = unb64(args.data);
-    const r = readBytes(bytes, args.name ?? 'document.docx');
+    const r = readBytes(bytes, args.name ?? 'document.docx', { password: args.password });
     setDoc(r.doc, (args.name ?? '문서').replace(/\.[^.]+$/, ''));
     return { opened: args.name, warnings: r.warnings ?? [] };
   }

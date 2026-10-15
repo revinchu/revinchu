@@ -3,6 +3,7 @@ import { newDoc, para, deserialize, serialize, docText, table, normalizeRuns } f
 import { readDocx, writeDocx } from './docx.js';
 import { readHwpx, writeHwpx } from './hwpx.js';
 import { readHwp } from './hwp.js';
+import { readHwp3, isHwp3 } from './hwp3.js';
 import { readDoc97 } from './doc97.js';
 import { readPdfDoc } from './pdfdoc.js';
 import { mdToDoc, docToMd } from './md.js';
@@ -49,6 +50,7 @@ export function detectKind(bytes, name = '') {
     return ext === 'hwp' ? 'hwp' : 'doc';
   }
   if (bytes[0] === 0x7b && bytes[1] === 0x5c && bytes[2] === 0x72 && bytes[3] === 0x74) return 'rtf';
+  if (isHwp3(bytes)) return 'hwp3';
   if (ext === 'hwp') return 'hwp';
   const head = decodeText(bytes.subarray(0, 4096));
   if (/^\s*\{\s*"(version|wiword)"/.test(head)) return 'wiword';
@@ -80,8 +82,9 @@ export function readBytes(bytes, name = '', opts = {}) {
   if (!bytes.length) throw new Error(`'${name}' 파일이 비어 있습니다 (0바이트). 휴대폰이라면 파일을 먼저 내려받은 뒤 다시 열어 주세요.`);
   const kind = detectKind(bytes, name);
   if (kind === 'docx') return { ...readDocx(bytes), kind };
-  if (kind === 'hwpx') return { ...readHwpx(bytes), kind };
-  if (kind === 'hwp') return { ...readHwp(bytes), kind };
+  if (kind === 'hwpx') return { ...readHwpx(bytes, opts), kind };
+  if (kind === 'hwp') return { ...readHwp(bytes, opts), kind };
+  if (kind === 'hwp3') return { ...readHwp3(bytes, opts), kind };
   if (kind === 'doc') return { ...readDoc97(bytes), kind };
   if (kind === 'pdf') return { ...readPdfDoc(bytes, opts), kind };
   if (kind === 'odt') return { doc: odtToDoc(bytes), warnings: ['OpenDocument 텍스트(.odt)는 글 · 제목 · 표만 가져옵니다.'], kind };

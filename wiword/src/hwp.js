@@ -6,6 +6,7 @@ import { inflate } from './zip.js';
 import { newDoc, newSection, para, uid, normalizeRuns } from './model.js';
 import { mediaDataUrl } from './docx.js';
 import { hwpEqToLatex } from './hwpx.js';
+import { sha1, aesEcbDecrypt, aesCfb1Decrypt } from './crypto.js';
 
 const HU = 75;
 const T = { DOC_PROPS: 0x10, ID_MAPPINGS: 0x11, BIN_DATA: 0x12, FACE_NAME: 0x13, BORDER_FILL: 0x14, CHAR_SHAPE: 0x15, TAB_DEF: 0x16, NUMBERING: 0x17, BULLET: 0x18, PARA_SHAPE: 0x19, STYLE: 0x1a,
@@ -199,20 +200,53 @@ function readDocInfo(data) {
 }
 
 // ───────────── 본문 ─────────────
-function readHwpCore(cfb, warnings) {
+/** 배포용 문서: ViewText/SectionN 첫 레코드(256바이트)에서 AES 키를 꺼내 나머지를 AES-128 ECB 로 풂 (HWP 5.0 공개 문서 · rhwp/kordoc 참고) */
+function viewText(raw) {
+  const hdr = u32(raw, 0); const tag = hdr & 0x3ff; let size = hdr >>> 20; let hs = 4;
+  if (size === 0xfff) { size = u32(raw, 4); hs = 8; }
+  if (tag !== 0x1c || size < 256) throw new Error('배포용 문서의 암호 정보가 이상합니다.');
+  const pay = raw.slice(hs, hs + 256);
+  // MSVC rand() 와 같은 난수로 XOR (앞 4바이트는 씨앗)
+  let seed = u32(pay, 0);
+  const rand = () => { seed = (Math.imul(seed, 214013) + 2531011) >>> 0; return (seed >>> 16) & 0x7fff; };
+  for (let i = 0, n = 0, key = 0; i < 256; i++, n--) { if (n === 0) { key = rand() & 0xff; n = (rand() & 0xf) + 1; } if (i >= 4) pay[i] ^= key; }
+  const off = 4 + (pay[0] & 0xf);
+  return aesEcbDecrypt(raw.subarray(hs + size), pay.subarray(off, off + 16));
+}
+/** 열기 암호 → AES 키: 바이트마다 앞 바이트를 1비트 돌린 값을 끼워 SHA-1 (EncryptVersion 4) */
+function passwordKey(pw) {
+  const b = new TextEncoder().encode(pw); const buf = new Uint8Array(b.length * 2);
+  for (let i = 0; i < b.length; i++) { const prev = i ? b[i - 1] : 236; buf[2 * i] = ((prev << 1) | (prev >> 7)) & 255; buf[2 * i + 1] = b[i]; }
+  return sha1(buf).subarray(0, 16);
+}
+function readHwpCore(cfb, warnings, opts = {}) {
   const fh = cfb.stream('FileHeader');
   if (!fh || fh.length < 40) throw new Error('한글 문서(.hwp)의 FileHeader 가 없습니다.');
   const sig = new TextDecoder().decode(fh.subarray(0, 17));
-  if (!sig.startsWith('HWP Document File')) throw new Error('한글 5.0 문서가 아닙니다. (한글 97 이전 형식은 한글에서 .hwpx 로 저장한 뒤 열어 주세요)');
+  if (!sig.startsWith('HWP Document File')) throw new Error('한글 5.0 문서가 아닙니다.');
   const flags = u32(fh, 36);
-  if (flags & 2) throw new Error('암호로 보호된 한글 문서입니다. 한글에서 암호를 풀고 저장한 뒤 열어 주세요.');
-  if (flags & (1 << 2)) throw new Error('배포용 한글 문서입니다 (복사 · 편집 제한). 한글에서 일반 문서로 저장한 뒤 열어 주세요.');
-  if (flags & (1 << 4)) throw new Error('DRM 으로 보호된 한글 문서입니다.');
+  if (flags & (1 << 4)) throw new Error('DRM 으로 보호된 한글 문서입니다. 문서 보안 프로그램에서 해제한 뒤 열어 주세요.');
   const compressed = !!(flags & 1);
-  const D = readDocInfo(unpack(cfb.stream('DocInfo'), compressed));
+  const dist = !!(flags & (1 << 2));
+  let key = null;
+  if (flags & 2) {
+    const ver = u32(fh, 44);
+    if (ver !== 4) throw new Error(`이전 방식(암호 버전 ${ver})으로 잠근 한글 문서입니다. 한글에서 암호를 풀거나 최신 한글로 다시 저장한 뒤 열어 주세요.`);
+    if (!opts.password) { const e = new Error('암호로 보호된 한글 문서입니다. 열기 암호를 입력하세요.'); e.code = 'PASSWORD'; throw e; }
+    key = passwordKey(opts.password);
+  }
+  const stream = (name) => { const b = cfb.stream(name); return b && key ? aesCfb1Decrypt(b, key) : b; };
+  if (key) {
+    let ok = false;
+    try { const di = records(unpack(stream('DocInfo'), compressed)); ok = di[0]?.tag === 0x10 && di.some((r) => r.tag === 0x11); } catch { ok = false; }
+    if (!ok) { const e = new Error('암호가 맞지 않습니다.'); e.code = 'PASSWORD'; e.wrong = true; throw e; }
+    warnings.push('암호를 풀어 열었습니다. 저장하면 암호가 없는 문서가 됩니다.');
+  }
+  if (dist) warnings.push('배포용 문서를 풀어 열었습니다 (복사 · 인쇄 제한은 적용되지 않습니다).');
+  const D = readDocInfo(unpack(stream('DocInfo'), compressed));
   const doc = newDoc();
   doc.media = {}; doc.lists = {};
-  const ctx = { D, doc, compressed, cfb, warnings, binIds: new Map(), hf: null, outlineNum: 0 };
+  const ctx = { D, doc, compressed, cfb, stream, warnings, binIds: new Map(), hf: null, outlineNum: 0 };
   // 스타일
   const styleMap = {};
   D.styles.forEach((s, i) => {
@@ -227,7 +261,8 @@ function readHwpCore(cfb, warnings) {
   });
   ctx.styleMap = styleMap;
   // 구역
-  const names = cfb.names.filter((n) => /^BodyText\/Section\d+$/.test(n)).sort((a, b) => Number(/\d+$/.exec(a)[0]) - Number(/\d+$/.exec(b)[0]));
+  const dir = dist ? 'ViewText' : 'BodyText';
+  const names = cfb.names.filter((n) => new RegExp(`^${dir}/Section\\d+$`).test(n)).sort((a, b) => Number(/\d+$/.exec(a)[0]) - Number(/\d+$/.exec(b)[0]));
   if (!names.length) throw new Error('본문(BodyText)이 없습니다.');
   const body = [];
   let lastSec = null;
@@ -235,7 +270,7 @@ function readHwpCore(cfb, warnings) {
     ctx.hf = { headers: {}, footers: {} };
     ctx.sec = newSection();
     ctx.sec.headers = {}; ctx.sec.footers = {};
-    const nodes = tree(records(unpack(cfb.stream(n), compressed)));
+    const nodes = tree(records(unpack(dist ? viewText(cfb.stream(n)) : stream(n), compressed)));
     const blocks = [];
     for (const nd of nodes) if (nd.tag === T.PARA_HEADER) blocks.push(...readPara(nd, ctx));
     const sec = ctx.sec;
@@ -365,6 +400,15 @@ function firstList(node) {
   for (const c of kids) if (c.tag === T.SHAPE_COMPONENT || c.tag === T.SC_CONTAINER) { const r = firstList(c); if (r.length) return r; }
   return [];
 }
+/** 묶음(그룹) 개체 안의 모든 글상자 문단 목록 */
+function allLists(node, out = []) {
+  const kids = node.children;
+  const i = kids.findIndex((c) => c.tag === T.LIST_HEADER);
+  if (i >= 0) out.push(kids.slice(i + 1).filter((c) => c.tag === T.PARA_HEADER));
+  for (const c of kids) if (c.tag === T.SHAPE_COMPONENT || c.tag === T.SC_CONTAINER) allLists(c, out);
+  return out;
+}
+function findAll(node, tag, out = []) { for (const c of node.children) { if (c.tag === tag) out.push(c); findAll(c, tag, out); } return out; }
 function objPos(d) {
   // 개체 공통 속성: ctrlId(4) attr(4) vOff(4) hOff(4) w(4) h(4) z(4) margins(8) instId(4) …
   const attr = u32(d, 4);
@@ -390,7 +434,8 @@ function binMedia(id, ctx) {
   if (!item || item.link) return null;
   const sid = item.id || id;
   const name = `BinData/BIN${sid.toString(16).toUpperCase().padStart(4, '0')}.${item.ext}`;
-  let bytes = ctx.cfb.stream(name) ?? ctx.cfb.stream(name.toLowerCase()) ?? ctx.cfb.names.map((n) => (n.toUpperCase() === name.toUpperCase() ? ctx.cfb.stream(n) : null)).find(Boolean);
+  const real = ctx.cfb.names.find((n) => n.toUpperCase() === name.toUpperCase()) ?? name;
+  let bytes = ctx.stream(real);
   if (!bytes) return null;
   const comp = item.compress === 0 ? ctx.compressed : item.compress === 1;
   if (comp) { try { bytes = unpack(bytes, true); } catch { /* 그대로 */ } }
@@ -458,6 +503,15 @@ function readCtrl(node, ctx, rp) {
     case C.tbl: { ctx.lastCaption = []; const t = readTable(node, ctx); return { blocks: [t, ...(ctx.lastCaption ?? [])].filter(Boolean) }; }
     case C.gso: {
       const p = objPos(d);
+      if (findTag(node, T.SC_CONTAINER)) {
+        // 묶음 개체: 그림은 그대로, 글상자 글은 한 상자로 모음 (글이 사라지지 않게)
+        const runs = [];
+        for (const pic of findAll(node, T.SC_PICTURE)) { const media = binMedia(u16(pic.data, 71), ctx); if (media) runs.push({ obj: 'img', id: uid('i'), w: p.w || 100, h: p.h || 100, alt: '', media }); }
+        const paras = allLists(node).flatMap((l) => listParas(l, ctx));
+        if (paras.length) runs.push({ obj: 'shape', id: uid('s'), w: p.w || 100, h: p.h || 60, prst: 'rect', blocks: paras, float: floatOf(p) ?? { wrap: 'topBottom', relH: 'column', relV: 'paragraph', x: 0, y: 0 } });
+        if (runs.length > 1) for (const r of runs) if (r.obj === 'img') { r.float = floatOf(p) ?? { wrap: 'topBottom', relH: 'column', relV: 'paragraph', x: 0, y: 0 }; }
+        return runs.length ? { runs } : null;
+      }
       const pic = findTag(node, T.SC_PICTURE);
       if (pic) {
         const bid = u16(pic.data, 71);
@@ -465,7 +519,11 @@ function readCtrl(node, ctx, rp) {
         const run = { obj: 'img', id: uid('i'), w: p.w || 100, h: p.h || 100, alt: '', ...(media ? { media } : { src: '' }) };
         const f = floatOf(p);
         if (f) run.float = f;
-        return { runs: [run] };
+        // 그림 캡션 (개체 바로 아래 LIST_HEADER)
+        const ci = node.children.findIndex((c) => c.tag === T.LIST_HEADER);
+        const cap = ci >= 0 ? listParas(node.children.slice(ci + 1).filter((c) => c.tag === T.PARA_HEADER), ctx) : [];
+        for (const c of cap) if (c.style === 'Normal' && ctx.doc.styles.Caption) c.style = 'Caption';
+        return cap.length ? { runs: [run], blocks: cap } : { runs: [run] };
       }
       // 글상자 · 도형
       const paras = listParas(firstList(node), ctx);
@@ -523,13 +581,20 @@ function readTable(node, ctx) {
   for (const c of cells) if (c.cs === 1 && !grid[c.c]) grid[c.c] = c.w;
   for (const c of cells) if (c.cs > 1) { const known = grid.slice(c.c, c.c + c.cs).reduce((a, x) => a + x, 0); const miss = grid.slice(c.c, c.c + c.cs).filter((x) => !x).length; if (miss) for (let k = c.c; k < c.c + c.cs; k++) if (!grid[k]) grid[k] = Math.max(8, (c.w - known) / miss); }
   for (let k = 0; k < Cn; k++) if (!grid[k]) grid[k] = 48;
+  const t = gridTable(cells, Rn, Cn, grid, { look: { firstRow: false, firstCol: false, bandRows: false }, cellMar: inMar }, repeat);
+  const p = objPos(node.data);
+  if (!p.treat && p.hAlign === 1) t.tblPr.align = 'center';
+  return t;
+}
+/** 주소가 있는 셀 목록 → 표 블록. cell = { r, c, rs, cs, h, blocks, bf | (borders, shd), va, mar, header } (HWP 3 · 5 공용) */
+export function gridTable(cells, Rn, Cn, grid, tblPr, repeat = false) {
+  const inMar = tblPr.cellMar ?? { l: 0, r: 0, t: 0, b: 0 };
   const at = new Map(cells.map((c) => [`${c.r},${c.c}`, c]));
   const cover = new Map();
   for (const c of cells) for (let r = c.r + 1; r < c.r + c.rs; r++) cover.set(`${r},${c.c}`, c);
-  const t = { type: 'tbl', id: uid('t'), style: 'TableNormal', tblPr: { look: { firstRow: false, firstCol: false, bandRows: false }, cellMar: inMar }, grid, rows: [] };
-  const p = objPos(node.data);
-  if (!p.treat && p.hAlign === 1) t.tblPr.align = 'center';
-  const bordersOf = (bf) => (bf ? { top: bf.t, bottom: bf.b, left: bf.l, right: bf.r } : undefined);
+  const t = { type: 'tbl', id: uid('t'), style: 'TableNormal', tblPr, grid, rows: [] };
+  const bordersOf = (c) => c.borders ?? (c.bf ? { top: c.bf.t, bottom: c.bf.b, left: c.bf.l, right: c.bf.r } : undefined);
+  const shdOf = (c) => c.shd ?? (c.bf?.fill && c.bf.fill !== '#FFFFFF' ? c.bf.fill : undefined);
   for (let r = 0; r < Rn; r++) {
     const row = { cells: [] };
     let hgt = 0;
@@ -540,16 +605,18 @@ function readTable(node, ctx) {
         const o = { blocks: cell.blocks.length ? cell.blocks : [para('')] };
         if (cell.cs > 1) o.span = cell.cs;
         if (cell.rs > 1) o.vMerge = 'restart';
-        if (cell.bf) { o.borders = bordersOf(cell.bf); if (cell.bf.fill && cell.bf.fill !== '#FFFFFF') o.shd = cell.bf.fill; }
+        const bd = bordersOf(cell); if (bd) o.borders = bd;
+        const sh = shdOf(cell); if (sh) o.shd = sh;
         if (cell.va === 1) o.vAlign = 'center'; else if (cell.va === 2) o.vAlign = 'bottom';
         if (cell.mar && (Math.abs(cell.mar.l - inMar.l) > 0.5 || Math.abs(cell.mar.t - inMar.t) > 0.5)) o.mar = cell.mar;
         if (cell.header && repeat) row.header = true;
-        if (cell.rs === 1) hgt = Math.max(hgt, cell.h);
+        if (cell.rs === 1 && cell.h) hgt = Math.max(hgt, cell.h);
         row.cells.push(o);
         c += cell.cs;
       } else if (cov) {
         const o = { blocks: [para('')], vMerge: 'cont', ...(cov.cs > 1 ? { span: cov.cs } : {}) };
-        if (cov.bf) { o.borders = bordersOf(cov.bf); if (cov.bf.fill && cov.bf.fill !== '#FFFFFF') o.shd = cov.bf.fill; }
+        const bd = bordersOf(cov); if (bd) o.borders = bd;
+        const sh = shdOf(cov); if (sh) o.shd = sh;
         row.cells.push(o);
         c += cov.cs;
       } else { row.cells.push({ blocks: [para('')] }); c++; }
@@ -583,11 +650,10 @@ function readSummary(cfb, doc) {
   } catch { /* 무시 */ }
 }
 
-export function readHwp(bytes) {
+export function readHwp(bytes, opts = {}) {
   const warnings = [];
-  if (new TextDecoder('latin1').decode(bytes.subarray(0, 20)).startsWith('HWP Document File V')) throw new Error('한글 97 이전(HWP 3.0) 형식입니다. 한글에서 [다른 이름으로 저장 › .hwpx 또는 .hwp]로 저장한 뒤 열어 주세요.');
   const cfb = openCfb(bytes);
-  const doc = readHwpCore(cfb, warnings);
+  const doc = readHwpCore(cfb, warnings, opts);
   readSummary(cfb, doc);
   return { doc, warnings };
 }
