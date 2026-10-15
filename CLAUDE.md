@@ -97,7 +97,7 @@ Uses **substring matching** - searching for "하늘마음" will match titles lik
 
 ## WIPOINT (PowerPoint-style presentation, `wipoint/`)
 
-Separate dependency-free app built like Tabula/WIXEL. Its own guide is `wipoint/CLAUDE.md` (rules in `wipoint/AGENTS.md`): `cd wipoint && npm start` (port 5179), `npm test`, `npm run build` / `npm run build:cloud`.
+Separate dependency-free app built like Tabula/WIXEL. Its own guide is `wipoint/CLAUDE.md` (rules in `wipoint/AGENTS.md`): `cd wipoint && npm start` (port 5179), `npm test`, `npm run build` / `npm run build:cloud`. MCP: `wipoint/mcp.js` (stdio, file-based: open/new-from-markdown-outline/read/edit/save .pptx).
 
 ## WIWORD (Word-style document editor, `wiword/`)
 
@@ -108,6 +108,7 @@ Separate dependency-free app built like WIXEL/WIPOINT. Its own guide is `wiword/
 A standalone, dependency-free browser spreadsheet that mimics Microsoft Excel's UI (Korean). Unrelated to the rank checker.
 
 - Run: `cd tabula && npm start` → http://localhost:5178 ; test: `npm test` (Node built-in test runner)
+- MCP: `tabula/mcp.js` is a stdio MCP server (`claude mcp add wixel -- node <repo>/tabula/mcp.js`) working on files on disk with the same engine: open (.xlsx/.xlsm/.xlsb/.xls/.ods/.csv/.tsv/.wixel), read_range (displayed text via `formatValue(...).text`, values, or formulas), write_range (`setInput`, '=' formulas), set_format (`styleForCode`), evaluate (temporary cell far below the used range, removed afterwards), find, sort_range, sheet add/rename/delete, save (.xlsx/.xlsm/.csv/.tsv/.ods/.wixel), convert. Test: `test/mcp.test.js`.
 - Web build: `npm run build` → `tabula/dist/index.html` (single file; `build.mjs` inlines CSS and wraps each ES module, so only `import {…} from './x.js'` and `export const|let|function|class` forms are allowed — no default/`*`/dynamic imports, no import cycles). `.github/workflows/tabula-pages.yml` deploys it to GitHub Pages.
 - Pure ES modules, no build step, no npm dependencies. Keep it that way (zip/inflate/XML for .xlsx are hand-written in `src/zip.js`, `src/xml.js`).
 - DOM-free modules (unit-tested in Node): `cellmap.js`, `depgraph.js`, `outline.js`, `audit.js`, `protect.js`, `sparkline.js`, `page.js`, `cube.js`, `block.js`, `formula.js`, `fxcore.js`, `fx-*.js`, `xlfn.js`, `flashfill.js`, `workbook.js`, `format.js`, `axis.js`, `xlsx.js`, `zip.js`, `xml.js`, `chart.js`, `pivot.js`, `series.js`, `csv.js`, `validation.js`, `shapes.js`, `vba.js`, `tables.js`, `textsplit.js`, `fmtpresets.js`, `condfmt.js`, `slicerstyle.js`, `stylepresets.js`, `xlsb.js`, `xls.js`, `emf.js`, `ods.js`, `find.js`, `analysis.js`, `ets.js`, `library.js` (IndexedDB).
