@@ -6,7 +6,8 @@ import { readPdf } from './pdf.js';
 import { readBytes } from './formats.js';
 import { docText } from './model.js';
 import { zip } from './zip.js';
-import { pickFile, fmtSize, askPassword, saveBytes, openFile } from './fileio.js';
+import { pickFile, fmtSize, askPassword, saveBytes, openFile, loadFile } from './fileio.js';
+import { docBytes, MIME } from './formats.js';
 import { fontFileFor, askLocalFontsOnce } from './fontlib.js';
 import { el, openDialog, toast, progressOverlay, alertDialog } from './ui.js';
 import { pdfEditDialog } from './pdfeditui.js';
@@ -38,6 +39,9 @@ export const PDF_TOOLS = [
   { id: 'decrypt', cat: '정리하기', label: '암호 해제', desc: '열기 암호를 아는 PDF 를 암호 없는 사본으로 저장 (권한 제한도 풀림)', files: 'one', fields: [] },
   { id: 'info', cat: '정리하기', label: '문서 정보 바꾸기', desc: '제목 · 만든 이 · 주제 · 키워드', files: 'one', fields: [{ name: 'title', label: '제목', value: '' }, { name: 'author', label: '만든 이', value: '' }, { name: 'subject', label: '주제', value: '' }, { name: 'keywords', label: '키워드', value: '' }] },
   { id: 'images', cat: '변환', label: '이미지로 PDF 만들기', desc: 'JPG · PNG (그 밖의 그림은 PNG 로 바꿔서) 여러 장을 PDF 하나로. 사진의 회전 정보 반영', files: 'images', fields: [{ name: 'paper', label: '용지', type: 'select', options: [['A4', 'A4'], ['fit', '그림 크기 그대로'], ['A3', 'A3'], ['B5', 'B5'], ['Letter', 'Letter']] }, { name: 'margin', label: '여백 (mm)', type: 'number', value: 8 }] },
+  { id: 'convert', cat: '변환', label: 'Word · 한글 · 마크다운으로 바꾸기', desc: 'PDF 를 고칠 수 있는 문서 파일로 (표 · 두 단 · 제목 인식). 여러 파일을 한 번에 (ZIP)', files: 'many', fields: [
+    { name: 'to', label: '바꿀 형식', type: 'select', options: [['docx', 'Word 문서 (.docx)'], ['hwpx', '한글 문서 (.hwpx)'], ['md', '마크다운 (.md)'], ['html', '웹 페이지 (.html)'], ['epub', 'EPUB 전자책 (.epub)'], ['txt', '텍스트 (.txt)']] },
+    { name: 'mode', label: '읽는 방식', type: 'select', options: [['flow', '흐름 — 문단 · 표로 다시 이음 (고치기 좋음)'], ['layout', '모양 유지 — 쪽마다 글 상자 (보기 좋음)']] }] },
   { id: 'text', cat: '변환', label: '텍스트로 저장', desc: 'PDF 의 글을 문단으로 이어 .txt 로 저장', files: 'one', fields: [] },
   { id: 'edit', cat: '변환', label: '문서로 열어 편집', desc: 'PDF 를 문서로 바꿔 이 편집기에서 열기 (표 · 두 단 인식)', files: 'one', fields: [] },
 ];
@@ -274,6 +278,23 @@ export function pdfToolsDialog(toolId = null) {
           out = [{ bytes: txt, name: `${base}.txt`, mime: 'text/plain', desc: '텍스트' }]; break;
         }
         case 'textedit': bar.close(); dlg.close(); await pdfEditDialog(new File([f.bytes], f.name, { type: 'application/pdf' })); return;
+        case 'convert': {
+          const to = val(inputs, 'to'); const mode = val(inputs, 'mode');
+          out = [];
+          const notes = [];
+          for (const [k, x] of fl.entries()) {
+            bar.set?.(k / fl.length, `${k + 1} / ${fl.length} — ${x.name}`);
+            const r = await loadFile(new File([x.bytes], x.name, { type: 'application/pdf' }), x.password, { mode });
+            let data = docBytes(r.doc, to, { name: x.name.replace(/\.pdf$/i, '') });
+            if (data instanceof Promise) data = await data;
+            if (typeof data === 'string') data = new TextEncoder().encode(to === 'txt' ? `${String.fromCharCode(0xfeff)}${data}` : data);
+            out.push({ bytes: data, name: `${x.name.replace(/\.pdf$/i, '')}.${to}`, mime: MIME[to] ?? 'application/octet-stream', desc: '문서' });
+            const w = (r.warnings ?? []).filter((m) => /표|두 단|단 /.test(m));
+            if (w.length) notes.push(`${x.name}: ${w.join(' · ')}`);
+          }
+          if (notes.length) toast(notes.join(' / '));
+          break;
+        }
         case 'edit': bar.close(); dlg.close(); await openFile(new File([f.bytes], f.name, { type: 'application/pdf' })); return;
         case 'blank': {
           const pages = analyzePages(f.bytes, opt);

@@ -135,3 +135,16 @@ test('PDF 글자 고치기: 상자 바꾸기 · 지우기 · 새 글 (원래 글
   const enc = await T.applyTextEdits(fx('hello-aes128.pdf'), [{ page: 0, block: 0, text: 'Bye' }], { password: '1234' });
   assert.match(texts(enc)[0], /Bye/);
 });
+
+test('PDF → 문서: 옆으로 누운 쪽은 바로 세워 읽기 · docx/hwpx/md/epub 변환', async () => {
+  const { readBytes, docBytes } = await import('../src/formats.js');
+  const { docText } = await import('../src/model.js');
+  const rot = await T.rotatePages(makePdf([{ text: 'Upright text here' }]), 90);
+  const r = readBytes(rot, 'r.pdf');
+  assert.match(docText(r.doc), /Upright text here/);
+  for (const k of ['docx', 'hwpx', 'md', 'epub']) {
+    const out = docBytes(r.doc, k, { name: 'r' });
+    const back = readBytes(typeof out === 'string' ? new TextEncoder().encode(out) : out, `r.${k}`);
+    assert.match(docText(back.doc), /Upright text here/, k);
+  }
+});

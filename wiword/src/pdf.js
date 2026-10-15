@@ -1431,13 +1431,31 @@ export function readPdf(bytes, opts = {}) {
     const pr0 = new PageReader(doc, page, { scale: PT2PX, warn, imgCache, encodeImage: opts.encodeImage });
     // 다른 크기의 쪽은 슬라이드 크기에 맞춤
     const sc = Math.min(pres.size.w / (pr0.pw * PT2PX), pres.size.h / (pr0.ph * PT2PX));
-    const pr = Math.abs(sc - 1) > 0.01 ? new PageReader(doc, page, { scale: PT2PX * sc, warn, imgCache, encodeImage: opts.encodeImage }) : pr0;
+    let pr = Math.abs(sc - 1) > 0.01 ? new PageReader(doc, page, { scale: PT2PX * sc, warn, imgCache, encodeImage: opts.encodeImage }) : pr0;
     const contents = doc.val(page.Contents);
     const list = Array.isArray(contents) ? contents.map((c) => doc.val(c)) : [contents];
     const parts = [];
     for (const c of list) { if (c instanceof Stream) { try { parts.push(doc.decode(c), Uint8Array.of(10)); } catch (e) { warn(e.message); } } }
     const data = concat(parts);
     try { pr.run(data, doc.val(page.Resources), [1, 0, 0, 1, 0, 0]); } catch (e) { warn(`일부 내용을 읽지 못했습니다: ${e.message}`); }
+    // 문서로 읽을 때 (opts.upright): 글이 거의 다 옆으로 누운 쪽은 바로 세워서 다시 읽음 (돌려 놓은 쪽 · 가로로 스캔한 표)
+    if (opts.upright) {
+      const tally = new Map(); let total = 0;
+      for (const it of pr.items) if (it.kind === 'text') { const a = (((Math.round(it.angle / 90) * 90) % 360) + 360) % 360; const n = it.text.length; tally.set(a, (tally.get(a) ?? 0) + n); total += n; }
+      const best = [...tally.entries()].sort((a, b) => b[1] - a[1])[0];
+      if (best && best[0] !== 0 && best[1] > total * 0.6) {
+        const rot0 = Number(doc.val(page.Rotate)) || 0;
+        for (const corr of [best[0], 360 - best[0]]) {
+          const pg = { ...page, Rotate: (rot0 + corr) % 360 };
+          const t0 = new PageReader(doc, pg, { scale: PT2PX, warn, imgCache, encodeImage: opts.encodeImage });
+          const sc2 = Math.min(pres.size.w / (t0.pw * PT2PX), pres.size.h / (t0.ph * PT2PX));
+          const pr2 = new PageReader(doc, pg, { scale: PT2PX * sc2, warn, imgCache, encodeImage: opts.encodeImage });
+          try { pr2.run(data, doc.val(page.Resources), [1, 0, 0, 1, 0, 0]); } catch { continue; }
+          const flat = pr2.items.filter((it) => it.kind === 'text' && Math.abs(it.angle) < 0.5).reduce((a, it) => a + it.text.length, 0);
+          if (flat > total * 0.6) { pr = pr2; warn('옆으로 누운 쪽은 바로 세워서 읽었습니다'); break; }
+        }
+      }
+    }
     let items = joinFillStroke(pr.items);
     if (items.length > MAX_OBJECTS) items = mergePaths(items);
     const slide = { id: uid('s'), layout: 'blank', bg: { type: 'solid', color: '#FFFFFF' }, hidden: false, transition: null, notes: '', objects: [], anims: [], hideDecor: true };

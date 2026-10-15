@@ -62,7 +62,7 @@ export function askPassword(name, wrong = false) {
     pw.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); pw.closest('.dialog')?.querySelector('.dialog-foot button.primary, button.primary')?.click(); } });
   });
 }
-export async function loadFile(file, password) {
+export async function loadFile(file, password, extra = {}) {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const bar = bytes.length > 4 << 20 ? progressOverlay(`'${file.name}' 여는 중 (${fmtSize(bytes.length)})`) : null;
   try {
@@ -70,7 +70,7 @@ export async function loadFile(file, password) {
     await new Promise((r) => setTimeout(r, 0));
     let r; let pw = password; let wrong = false;
     for (;;) {
-      try { r = readBytes(bytes, file.name, { encodeImage: canvasEncode, password: pw }); break; } catch (e) {
+      try { r = readBytes(bytes, file.name, { encodeImage: canvasEncode, password: pw, ...extra }); break; } catch (e) {
         if (e.code !== 'PASSWORD') throw e;
         bar?.close();
         pw = await askPassword(file.name, wrong || !!e.wrong);

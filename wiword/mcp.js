@@ -119,9 +119,9 @@ const META_TOOLS = [
   },
   {
     name: 'convert', description: '파일 형식 바꾸기: input(.docx .doc .hwp .hwpx .pdf .md .html .rtf .odt .txt) → output(.docx .hwpx .md .html .txt .epub). 예: 한글(hwp) → Word(docx), PDF → 마크다운.',
-    input: { input: { type: 'string' }, output: { type: 'string' }, password: { type: 'string', description: '암호 문서의 열기 암호' } }, required: ['input', 'output'],
+    input: { input: { type: 'string' }, output: { type: 'string' }, password: { type: 'string', description: '암호 문서의 열기 암호' }, mode: { type: 'string', enum: ['flow', 'layout'], description: 'PDF 를 읽는 방식: flow(문단 · 표로 다시 이음, 기본) · layout(쪽마다 글 상자)' } }, required: ['input', 'output'],
     run: async (a) => {
-      const r = readBytes(new Uint8Array(await readFile(resolve(a.input))), a.input, { password: a.password });
+      const r = readBytes(new Uint8Array(await readFile(resolve(a.input))), a.input, { password: a.password, ...(a.mode ? { mode: a.mode } : {}) });
       const kind = kindOfPath(a.output);
       if (!SAVE_KINDS.includes(kind)) throw new Error(`${kind} 로는 바꿀 수 없습니다`);
       const out = docBytes(r.doc, kind, { name: basename(a.output) });

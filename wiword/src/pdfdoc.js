@@ -131,7 +131,7 @@ function readingOrder(items, W) {
 }
 
 export function readPdfDoc(bytes, opts = {}) {
-  const { pres, warnings, jobs } = readPdf(bytes, opts);
+  const { pres, warnings, jobs } = readPdf(bytes, { ...opts, upright: opts.mode !== 'layout' });
   const doc = newDoc();
   doc.media = pres.media;
   const W = pres.size.w; const H = pres.size.h;
