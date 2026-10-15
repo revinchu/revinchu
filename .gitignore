@@ -7,3 +7,9 @@ debug_*.html
 .venv/
 venv/
 .env
+tabula/data/
+tabula/dist/
+wipoint/dist/
+wipoint/dist-cloudflare/
+wiword/dist/
+wiword/dist-cloudflare/

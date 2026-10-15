@@ -1,0 +1,706 @@
+// 슬라이드 → HTML 문자열 (DOM 없음): 편집 화면 · 미리 보기 · 슬라이드 쇼 · 인쇄가 함께 씀
+import { resolveColor, isDark } from './themes.js';
+import { shapePath, shapePaths, customPath, customPaths, textRect, STROKE_ONLY } from './shapes.js';
+import { PX_PER_PT, defaultSize, defaultColor, defaultFont, placeholderPrompt, isEmptyText, masterDecor, setMasterText, presForSlide } from './model.js';
+import { chartSvg } from './chart.js';
+import { fxOf, fxStyle } from './effects.js';
+import { webFont } from './webfonts.js';
+import { parseLatex, toMathML } from './math.js';
+import { emfToSvg } from './emf.js';
+import { wmfToSvg } from './wmf.js';
+import { symbolTable, symbolText } from './symfont.js';
+import { decodeTiff } from './tiff.js';
+import { pngDataUrl } from './pdf.js';
+import { patternPath, patternSvgUrl } from './patterns.js';
+
+export const escHtml = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const f = (n) => Math.round(n * 100) / 100;
+
+/** 브라우저가 그리지 못하는 그림 (EMF · WMF → SVG, TIFF → PNG) data URL. 원본은 그대로 두고 화면에만 (다시 저장하면 원본) */
+const metaCache = new Map();
+export function displaySrc(src) {
+  if (typeof src !== 'string' || !/^data:image\/(x-)?(emf|wmf|x-msmetafile|tiff?)[;,]/i.test(src)) return src;
+  if (metaCache.has(src)) return metaCache.get(src);
+  let out = src;
+  try {
+    const b64 = src.slice(src.indexOf(',') + 1);
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const tif = /^data:image\/tiff?/i.test(src) ? decodeTiff(bytes) : null;
+    if (tif) out = pngDataUrl(tif.w, tif.h, new Uint8Array(tif.rgba.buffer));
+    else {
+      // 그릴 것이 없는 메타파일은 빈 그림 (깨진 그림 표시 대신)
+      const svg = emfToSvg(bytes) ?? wmfToSvg(bytes) ?? (/tiff?/i.test(src.slice(5, 20)) ? null : '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>');
+      if (svg) out = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
+    }
+  } catch { /* 원본 그대로 */ }
+  if (metaCache.size > 200) metaCache.clear();
+  metaCache.set(src, out);
+  return out;
+}
+const KO_FALLBACK = "'맑은 고딕', 'Malgun Gothic', 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif";
+
+export function fontStack(theme, font) {
+  const name = font === '+mj' || font === '+mj-lt' ? theme.fonts.major : font === '+mn' || font === '+mn-lt' || !font ? theme.fonts.minor : font;
+  const n = String(name).replace(/'/g, '');
+  // 한글 이름으로 적힌 웹 글꼴 (나눔고딕 → 'Nanum Gothic')
+  const wf = webFont(n);
+  return wf && wf.family !== n ? `'${n}', '${wf.family}', ${KO_FALLBACK}` : `'${n}', ${KO_FALLBACK}`;
+}
+
+/** 이중 색조 (그림 다시 칠하기): 밝기 → 어두운 색 ~ 밝은 색 */
+export function duotoneFilter(theme, [c1, c2], id) {
+  const rgb = (c) => { const h = resolveColor(theme, c, '#000000'); const m = /rgba?\((\d+),(\d+),(\d+)/.exec(h); return m ? [m[1], m[2], m[3]].map(Number) : [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) || 0); };
+  const a = rgb(c1); const b = rgb(c2);
+  const tv = (k) => `${f(a[k] / 255)} ${f(b[k] / 255)}`;
+  return `<filter id="${id}" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="0.299 0.587 0.114 0 0 0.299 0.587 0.114 0 0 0.299 0.587 0.114 0 0 0 0 0 1 0"/><feComponentTransfer><feFuncR type="table" tableValues="${tv(0)}"/><feFuncG type="table" tableValues="${tv(1)}"/><feFuncB type="table" tableValues="${tv(2)}"/></feComponentTransfer></filter>`;
+}
+
+/** 방사형 그라데이션의 중심 (fillToRect: 안쪽 사각형 l t r b 비율의 가운데) */
+export function gradCenter(fill) {
+  const [l, t, r, b] = fill.focus ?? [0.5, 0.5, 0.5, 0.5];
+  return [(l + 1 - r) / 2, (t + 1 - b) / 2];
+}
+function gradCenterCss(fill) {
+  const [cx, cy] = gradCenter(fill);
+  const at = `at ${f(cx * 100)}% ${f(cy * 100)}%`;
+  // 마지막 색 지점이 가장 먼 모서리에 닿음 (PowerPoint 방사형)
+  return `${fill.path === true ? 'circle' : 'ellipse'} farthest-corner ${at}`;
+}
+
+/** 채우기 → CSS 배경 */
+export function fillCss(theme, fill, media = {}) {
+  if (!fill) return 'transparent';
+  if (fill.type === 'solid') return resolveColor(theme, fill.color, 'transparent');
+  if (fill.type === 'gradient') {
+    const stops = (fill.stops ?? []).map(([p, c]) => `${resolveColor(theme, c, '#fff')} ${f(p * 100)}%`).join(', ');
+    return fill.path ? `radial-gradient(${gradCenterCss(fill)}, ${stops})` : `linear-gradient(${f((fill.angle ?? 90) + 90)}deg, ${stops})`;
+  }
+  if (fill.type === 'pattern') return `url('${patternSvgUrl(fill.prst, resolveColor(theme, fill.fg, '#000'), resolveColor(theme, fill.bg, '#fff'))}') repeat`;
+  if (fill.type === 'image') {
+    // 큰따옴표는 style="…" 속성을 끊으므로 작은따옴표
+    const src = displaySrc(media[fill.media] ?? fill.src);
+    if (!src) return 'transparent';
+    if (fill.tile) {
+      const t = typeof fill.tile === 'object' ? fill.tile : {};
+      const size = t.w ? `${f(t.w * (t.sx ?? 1))}px ${f(t.h * (t.sy ?? 1))}px` : 'auto';
+      return `url('${src}') ${f(t.tx ?? 0)}px ${f(t.ty ?? 0)}px / ${size} repeat`;
+    }
+    return `url('${src}') center / 100% 100% no-repeat`;
+  }
+  return 'transparent';
+}
+
+export const DASH = { solid: '', dash: '4 3', sysDash: '3 1', dot: '1 2', sysDot: '1 1', dashDot: '4 3 1 3', lgDash: '8 3', lgDashDot: '8 3 1 3', lgDashDotDot: '8 3 1 3 1 3' };
+export const DASH_LABEL = [['solid', '실선'], ['sysDot', '둥근 점선'], ['sysDash', '사각 점선'], ['dash', '파선'], ['dashDot', '파선-점선'], ['lgDash', '긴 파선'], ['lgDashDot', '긴 파선-점선']];
+
+// ───────────── 글 ─────────────
+const NUM_FMT = {
+  arabicPeriod: (n) => `${n}.`, arabicParenR: (n) => `${n})`, arabicParenBoth: (n) => `(${n})`, arabicPlain: (n) => `${n}`,
+  alphaLcPeriod: (n) => `${alpha(n)}.`, alphaUcPeriod: (n) => `${alpha(n).toUpperCase()}.`, alphaLcParenR: (n) => `${alpha(n)})`, alphaUcParenR: (n) => `${alpha(n).toUpperCase()})`,
+  romanUcPeriod: (n) => `${roman(n)}.`, romanLcPeriod: (n) => `${roman(n).toLowerCase()}.`,
+  circleNumDbPlain: (n) => (n >= 1 && n <= 20 ? String.fromCharCode(0x2460 + n - 1) : `${n}.`),
+  ganada: (n) => `${'가나다라마바사아자차카타파하'[(n - 1) % 14]}.`,
+  alphaLcParenBoth: (n) => `(${alpha(n)})`, alphaUcParenBoth: (n) => `(${alpha(n).toUpperCase()})`,
+  romanLcParenBoth: (n) => `(${roman(n).toLowerCase()})`, romanLcParenR: (n) => `${roman(n).toLowerCase()})`, romanUcParenBoth: (n) => `(${roman(n)})`, romanUcParenR: (n) => `${roman(n)})`,
+  circleNumWdWhitePlain: (n) => (n >= 1 && n <= 20 ? String.fromCharCode(0x2460 + n - 1) : `${n}.`),
+  circleNumWdBlackPlain: (n) => (n >= 1 && n <= 10 ? String.fromCharCode(0x2776 + n - 1) : n <= 20 ? String.fromCharCode(0x24eb + n - 11) : `${n}.`),
+  arabicDbPeriod: (n) => `${fullWidth(n)}.`, arabicDbPlain: (n) => fullWidth(n),
+  ea1ChsPeriod: (n) => `${hanNum(n)}.`, ea1ChsPlain: (n) => hanNum(n), ea1ChtPeriod: (n) => `${hanNum(n)}.`, ea1ChtPlain: (n) => hanNum(n), ea1JpnChsDbPeriod: (n) => `${hanNum(n)}.`,
+  ea1JpnKorPeriod: (n) => `${'가나다라마바사아자차카타파하'[(n - 1) % 14]}.`, ea1JpnKorPlain: (n) => '가나다라마바사아자차카타파하'[(n - 1) % 14],
+  arabic1Minus: (n) => `${n}-`, arabic2Minus: (n) => `-${n}-`,
+};
+const fullWidth = (n) => String(n).replace(/\d/g, (d) => String.fromCharCode(0xff10 + Number(d)));
+const hanNum = (n) => { const D = '〇一二三四五六七八九'; if (n < 10) return D[n]; if (n < 20) return `十${n % 10 ? D[n % 10] : ''}`; if (n < 100) return `${D[Math.floor(n / 10)]}十${n % 10 ? D[n % 10] : ''}`; return String(n); };
+export const NUM_SCHEMES = [['arabicPeriod', '1. 2. 3.'], ['arabicParenR', '1) 2) 3)'], ['romanUcPeriod', 'I. II. III.'], ['alphaUcPeriod', 'A. B. C.'], ['alphaLcParenR', 'a) b) c)'], ['alphaLcPeriod', 'a. b. c.'], ['romanLcPeriod', 'i. ii. iii.'], ['circleNumDbPlain', '① ② ③'], ['ganada', '가. 나. 다.']];
+export const BULLET_CHARS = [['•', '채워진 둥근 글머리 기호'], ['○', '속이 빈 둥근 글머리 기호'], ['■', '채워진 사각형 글머리 기호'], ['□', '속이 빈 사각형 글머리 기호'], ['◆', '별표 글머리 기호'], ['➢', '화살표 글머리 기호'], ['✓', '체크 표시 글머리 기호'], ['–', '대시']];
+function alpha(n) { let s = ''; while (n > 0) { n--; s = String.fromCharCode(97 + (n % 26)) + s; n = Math.floor(n / 26); } return s; }
+function roman(n) {
+  const t = [[1000, 'M'], [900, 'CM'], [500, 'D'], [400, 'CD'], [100, 'C'], [90, 'XC'], [50, 'L'], [40, 'XL'], [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I']];
+  let s = '';
+  for (const [v, r] of t) while (n >= v) { s += r; n -= v; }
+  return s;
+}
+export const numberLabel = (scheme, n) => (NUM_FMT[scheme] ?? NUM_FMT.arabicPeriod)(n);
+
+/** 단락의 실제 서식 (기본값 포함) */
+export function paraDefaults(o, p) {
+  const isBody = o.ph === 'body' || o.ph === 'obj';
+  const isTitle = o.ph === 'title' || o.ph === 'ctrTitle';
+  const lvl = p.lvl ?? 0;
+  const bullet = p.bullet && p.bullet.type !== 'none' ? p.bullet : null;
+  const step = 48;
+  const hang = bullet?.type === 'num' ? 36 : 24;
+  return {
+    marL: p.marL ?? (bullet ? hang + lvl * step : lvl * step),
+    indent: p.indent ?? (bullet ? -hang : 0),
+    lineSpacing: p.lineSpacing ?? (isTitle || isBody ? 0.9 : 1),
+    lineSpacingPt: p.lineSpacingPt ?? null,
+    spcBef: p.spcBef ?? (isBody ? (lvl ? 5 : 10) : 0),
+    spcAft: p.spcAft ?? 0,
+    bullet,
+  };
+}
+
+/** 글 상자 → HTML (편집기용이면 data-p/data-r 에 서식을 담음) */
+export function textHtml(theme, o, body, { editable = false, prompt = false, scale = 1 } = {}) {
+  const fsc = body.fontScale ?? 1;
+  const lsr = body.lnSpcReduction ?? 0;
+  const counters = [];
+  const parts = [];
+  body.paras.forEach((p, pi) => {
+    const d = paraDefaults(o, p);
+    const lvl = p.lvl ?? 0;
+    // 번호 매기기: 같은 수준의 연속 번호 단락
+    let label = '';
+    if (d.bullet?.type === 'num') {
+      counters.length = lvl + 1;
+      counters[lvl] = (counters[lvl] ?? (d.bullet.start ?? 1) - 1) + 1;
+      label = numberLabel(d.bullet.scheme, counters[lvl]);
+    } else {
+      counters.length = Math.min(counters.length, lvl);
+      if (d.bullet?.type === 'char') label = d.bullet.char ?? '•';
+      if (d.bullet?.type === 'pic') label = '■';
+    }
+    const end = p.end ?? {};
+    const baseSize = (end.size ?? p.runs[0]?.size ?? defaultSize(o, lvl)) * fsc;
+    const lh = d.lineSpacingPt ? `${f(d.lineSpacingPt * PX_PER_PT)}px` : f(1.2 * d.lineSpacing * (1 - lsr));
+    const pStyle = [
+      `text-align:${{ l: 'left', ctr: 'center', r: 'right', just: 'justify', dist: 'justify' }[p.align ?? 'l'] ?? 'left'}`,
+      `padding-left:${f(Math.max(0, d.marL))}px`,
+      `text-indent:${f(d.indent)}px`,
+      // 탭 정지: 첫 탭 위치까지 (CSS 는 같은 간격만 지원)
+      p.tabs?.length ? `tab-size:${f(Math.max(8, p.tabs[0].pos - Math.max(0, d.marL + d.indent)))}px` : '',
+      `line-height:${lh}`,
+      pi > 0 || d.spcBef ? `margin-top:${f(d.spcBef * PX_PER_PT * (pi === 0 ? 0 : 1))}px` : '',
+      d.spcAft ? `margin-bottom:${f(d.spcAft * PX_PER_PT)}px` : '',
+      `font-size:${f(baseSize * PX_PER_PT)}px`,
+    ].filter(Boolean).join(';');
+    const pAttr = editable ? ` data-p="${escHtml(JSON.stringify({ ...p, runs: undefined }))}"` : '';
+    let inner = '';
+    if (label && (p.runs.length || editable)) {
+      const bc = d.bullet.color ? resolveColor(theme, d.bullet.color) : runColor(theme, o, p.runs[0] ?? end);
+      const bsz = (d.bullet.size ?? 1) * baseSize;
+      // 기호 글꼴 (Wingdings 등) 글머리 기호는 같은 모양의 유니코드로
+      const sym = d.bullet.type === 'char' && symbolTable(d.bullet.font);
+      const bfont = d.bullet.font && !sym ? `font-family:${fontStack(theme, d.bullet.font)};` : '';
+      inner += `<span class="bu" contenteditable="false" style="display:inline-block;min-width:${f(Math.max(0, -d.indent))}px;text-indent:0;color:${bc};font-size:${f(bsz * PX_PER_PT)}px;${bfont}">${escHtml(sym ? symbolText(d.bullet.font, label) : label)}</span>`;
+    }
+    if (!p.runs.length) {
+      inner += prompt && pi === 0 ? `<span class="ph-prompt" data-prompt="1">${escHtml(placeholderPrompt(o))}</span>` : '<br>';
+    } else {
+      for (const r of p.runs) inner += runHtml(theme, o, p, r, fsc, editable);
+    }
+    parts.push(`<div class="p" style="${pStyle}"${pAttr}>${inner}</div>`);
+  });
+  return parts.join('');
+}
+
+function runColor(theme, o, r) {
+  return resolveColor(theme, r.color ?? defaultColor(o), '#000');
+}
+
+/** 지금 그리는 슬라이드 번호 (필드 slidenum 용, slideHtml 이 정함) */
+let FIELD_SLIDE_NO = 1;
+/** 필드 (슬라이드 번호 · 날짜 · 시간) 의 화면 글자 */
+function fieldText(r) {
+  const t = r.fld?.type ?? '';
+  if (t === 'slidenum') return String(FIELD_SLIDE_NO);
+  const m = /^datetime(\d*)$/.exec(t);
+  if (!m) return r.t;
+  const d = new Date();
+  const y = d.getFullYear(); const mo = d.getMonth() + 1; const day = d.getDate();
+  const hh = d.getHours(); const mm = String(d.getMinutes()).padStart(2, '0');
+  const n = Number(m[1] || 1);
+  if (n >= 10) return n === 10 || n === 12 ? `${hh}:${mm}` : `${hh < 12 ? '오전' : '오후'} ${((hh + 11) % 12) + 1}:${mm}`;
+  if (n === 2 || n === 4) return `${y}년 ${mo}월 ${day}일`;
+  if (n === 3) return `${y}년 ${mo}월 ${day}일 ${'일월화수목금토'[d.getDay()]}요일`;
+  return `${y}-${String(mo).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+// 밑줄 종류 → CSS text-decoration-style / 굵기
+const U_STYLE = (u) => (/dbl/i.test(u) ? 'double' : /wavy/i.test(u) ? 'wavy' : /^dotted|^dot(?!Dash)/i.test(u) ? 'dotted' : /dash/i.test(u) ? 'dashed' : 'solid');
+
+function runHtml(theme, o, p, r, fsc, editable) {
+  const size = (r.size ?? defaultSize(o, p.lvl ?? 0)) * fsc;
+  const deco = [r.u ? 'underline' : '', r.s ? 'line-through' : ''].filter(Boolean).join(' ');
+  const uStyle = typeof r.u === 'string' ? U_STYLE(r.u) : r.s === 'dbl' && !r.u ? 'double' : '';
+  // 글자 그림자 · 네온 (glow)
+  const shadows = [];
+  if (r.glow) { const gc = resolveColor(theme, r.glow.color ?? '@accent1', '#ffc000'); const rad = f((r.glow.rad ?? 5) * PX_PER_PT); shadows.push(`0 0 ${rad}px ${gc}`, `0 0 ${f(rad / 2)}px ${gc}`); }
+  if (r.shadow === true) shadows.push('1px 1.5px 2px rgba(0,0,0,.45)');
+  else if (r.shadow) { const a = ((r.shadow.dir ?? 45) * Math.PI) / 180; const dd = (r.shadow.dist ?? 3) * PX_PER_PT; shadows.push(`${f(Math.cos(a) * dd)}px ${f(Math.sin(a) * dd)}px ${f((r.shadow.blur ?? 3) * PX_PER_PT)}px ${resolveColor(theme, r.shadow.color ?? '#000000:a43', 'rgba(0,0,0,.4)')}`); }
+  // 글자 채우기: 그라데이션 (WordArt) · 채우기 없음 (윤곽선만)
+  const textFill = r.fill?.type === 'gradient' ? `background:${fillCss(theme, r.fill)};-webkit-background-clip:text;background-clip:text;color:transparent` : r.fill?.type === 'none' ? 'color:transparent' : '';
+  const font = r.font ?? defaultFont(o);
+  // 기호 글꼴 글자는 화면에만 유니코드로 (편집 중에는 원래 글자 그대로)
+  const sym = !editable && symbolTable(font);
+  const st = [
+    `font-size:${f(size * PX_PER_PT)}px`,
+    `color:${runColor(theme, o, r)}`,
+    `font-family:${fontStack(theme, sym ? '+mn' : font)}`,
+    (r.b ?? (o.phKind?.head && r.b !== false)) ? 'font-weight:700' : '',
+    r.i ? 'font-style:italic' : '',
+    deco ? `text-decoration:${deco}` : '',
+    uStyle && uStyle !== 'solid' ? `text-decoration-style:${uStyle}` : '',
+    typeof r.u === 'string' && /heavy/i.test(r.u) ? 'text-decoration-thickness:.12em' : '',
+    r.u && r.uColor ? `text-decoration-color:${resolveColor(theme, r.uColor)}` : '',
+    r.hl && !textFill ? `background:${resolveColor(theme, r.hl)}` : '',
+    textFill,
+    r.spc ? `letter-spacing:${f(r.spc * PX_PER_PT)}px` : '',
+    r.base ? `vertical-align:${r.base > 0 ? 'super' : 'sub'};font-size:${f(size * PX_PER_PT * 0.65)}px` : '',
+    r.cap === 'all' ? 'text-transform:uppercase' : r.cap === 'small' ? 'font-variant:small-caps' : '',
+    shadows.length ? `text-shadow:${shadows.join(',')}` : '',
+    r.outline ? `-webkit-text-stroke:${f(r.outline.width ?? 1)}px ${resolveColor(theme, r.outline.color ?? '@tx1')}` : '',
+  ].filter(Boolean).join(';');
+  const attr = editable ? ` data-r="${escHtml(JSON.stringify({ ...r, t: undefined }))}"` : '';
+  const shownT = r.fld && !editable ? fieldText(r) : r.t;
+  const txt = escHtml(sym ? symbolText(font, shownT) : r.sym && !editable ? symbolText(r.sym, shownT, true) : shownT).replace(/\v|\u000b/g, '<br>');
+  if (r.link && !editable) return `<a class="lnk" href="${escHtml(r.link)}" target="_blank" rel="noopener" style="${st}">${txt}</a>`;
+  return `<span style="${st}"${attr}>${txt}</span>`;
+}
+
+// ───────────── 개체 ─────────────
+const nextId = (() => { let n = 0; return () => `g${(n++).toString(36)}`; })();
+
+export function svgFill(theme, fill, w, h, media, defs) {
+  if (!fill) return 'none';
+  if (fill.type === 'solid') return resolveColor(theme, fill.color, 'none');
+  const id = nextId();
+  if (fill.type === 'gradient') {
+    const stops = (fill.stops ?? []).map(([p, c]) => { const col = resolveColor(theme, c, '#fff'); return `<stop offset="${f(p * 100)}%" stop-color="${col}"/>`; }).join('');
+    if (fill.path) {
+      const [cx, cy] = gradCenter(fill);
+      const r = Math.max(...[[0, 0], [1, 0], [0, 1], [1, 1]].map(([x, y]) => Math.hypot(x - cx, y - cy)));
+      defs.push(`<radialGradient id="${id}" cx="${f(cx)}" cy="${f(cy)}" r="${f(r)}">${stops}</radialGradient>`);
+    }
+    else {
+      const a = ((fill.angle ?? 90) * Math.PI) / 180;
+      const x = Math.cos(a) / 2;
+      const y = Math.sin(a) / 2;
+      defs.push(`<linearGradient id="${id}" x1="${f(0.5 - x)}" y1="${f(0.5 - y)}" x2="${f(0.5 + x)}" y2="${f(0.5 + y)}">${stops}</linearGradient>`);
+    }
+    return `url(#${id})`;
+  }
+  if (fill.type === 'pattern') {
+    defs.push(`<pattern id="${id}" patternUnits="userSpaceOnUse" width="8" height="8"><rect width="8" height="8" fill="${resolveColor(theme, fill.bg, '#fff')}"/><path d="${patternPath(fill.prst)}" fill="${resolveColor(theme, fill.fg, '#000')}" shape-rendering="crispEdges"/></pattern>`);
+    return `url(#${id})`;
+  }
+  if (fill.type === 'image') {
+    const src = displaySrc(media[fill.media] ?? fill.src);
+    if (!src) return 'none';
+    const fid = fill.duotone ? `${id}d` : null;
+    if (fid) defs.push(duotoneFilter(theme, fill.duotone, fid));
+    const t = fill.tile && typeof fill.tile === 'object' ? fill.tile : null;
+    const tw = t?.w ? t.w * (t.sx ?? 1) : w; const th = t?.h ? t.h * (t.sy ?? 1) : h;
+    const op = fill.alpha != null && fill.alpha < 1 ? ` opacity="${f(fill.alpha)}"` : '';
+    defs.push(`<pattern id="${id}" patternUnits="userSpaceOnUse" x="${f(t?.tx ?? 0)}" y="${f(t?.ty ?? 0)}" width="${f(tw)}" height="${f(th)}"><image href="${escHtml(src)}" width="${f(tw)}" height="${f(th)}" preserveAspectRatio="none"${fid ? ` filter="url(#${fid})"` : ''}${op}/></pattern>`);
+    return `url(#${id})`;
+  }
+  return 'none';
+}
+
+export function markers(theme, line, defs) {
+  const color = resolveColor(theme, line.color, '#000');
+  const out = [];
+  for (const end of ['head', 'tail']) {
+    const kind = line[end];
+    if (!kind || kind === 'none') continue;
+    const id = nextId();
+    const shape = kind === 'oval' ? '<circle cx="5" cy="5" r="4"/>' : kind === 'diamond' ? '<path d="M5 0 L10 5 L5 10 L0 5 Z"/>' : kind === 'arrow' ? '<path d="M0 0 L10 5 L0 10" fill="none" stroke-width="1.5" stroke="currentColor"/>' : '<path d="M0 0 L10 5 L0 10 Z"/>';
+    defs.push(`<marker id="${id}" viewBox="0 0 10 10" refX="${kind === 'triangle' ? 8 : 5}" refY="5" markerWidth="4" markerHeight="4" orient="${end === 'head' ? 'auto-start-reverse' : 'auto'}" style="color:${color}" fill="${color}">${shape}</marker>`);
+    out.push(`marker-${end === 'head' ? 'start' : 'end'}="url(#${id})"`);
+  }
+  return out.join(' ');
+}
+
+
+export function shapeHtml(theme, o, media, opts = {}) {
+  const defs = [];
+  const w = Math.max(o.w, 0.01);
+  const h = Math.max(o.h, 0.01);
+  const d = o.path ? customPath(o.path, w, h) : shapePath(o.shape ?? 'rect', w, h, o.adj);
+  const open = STROKE_ONLY.has(o.shape) || o.openPath;
+  const fill = open ? 'none' : svgFill(theme, o.fill, w, h, media, defs);
+  const ln = o.line;
+  const stroke = ln ? resolveColor(theme, ln.color, 'none') : 'none';
+  const sw = ln ? Math.max(0.5, ln.width ?? 1) : 0;
+  const dash = ln && DASH[ln.dash] ? `stroke-dasharray="${DASH[ln.dash].split(' ').map((x) => f(Number(x) * sw)).join(' ')}"` : '';
+  const mk = ln ? markers(theme, ln, defs) : '';
+  let html = '';
+  const needSvg = fill !== 'none' || stroke !== 'none';
+  if (needSvg) {
+    const fx = fxStyle(theme, fxOf(o), o.id);
+    if (fx.defs) defs.push(fx.defs);
+    // 곧은 선 (너비나 높이 0): SVG 틀이 1px 보다 작으면 브라우저가 그리지 않으므로 틀만 1px 로 (선 위치는 같음)
+    const vw = Math.max(w, 1); const vh = Math.max(h, 1);
+    const op = fill !== 'none' && o.fill?.alpha != null ? `fill-opacity="${o.fill.alpha}"` : '';
+    const strokeAttrs = `stroke="${stroke}" stroke-width="${f(sw)}" ${dash} stroke-linejoin="round" ${mk} vector-effect="non-scaling-stroke"`;
+    let body = '';
+    const parts = o.path ? (o.path.length > 1 && o.path.some((p) => p.fill === 'none' || p.stroke === false) ? customPaths(o.path, w, h) : null) : shapePaths(o.shape ?? 'rect', w, h, o.adj);
+    if (!parts || parts.length === 1) body = `<path d="${d}" fill="${parts?.[0]?.fill === 'none' ? 'none' : fill}" fill-rule="evenodd" ${op} ${parts?.[0]?.stroke === false ? 'stroke="none"' : strokeAttrs}/>`;
+    else {
+      // 여러 경로 도형 (원통 · 정육면체 · 말풍선 …): 채우기 경로마다 명암 (darken/lighten), 선은 선 경로에만
+      const SHADE = { darken: ['#000', 0.4], darkenLess: ['#000', 0.2], lighten: ['#fff', 0.4], lightenLess: ['#fff', 0.2] };
+      for (const p of parts) {
+        if (p.fill !== 'none' && fill !== 'none') {
+          body += `<path d="${p.d}" fill="${fill}" fill-rule="evenodd" ${op} stroke="none"/>`;
+          const sh = SHADE[p.fill];
+          if (sh) body += `<path d="${p.d}" fill="${sh[0]}" fill-opacity="${sh[1]}" stroke="none"/>`;
+        }
+      }
+      for (const p of parts) if (p.stroke && stroke !== 'none') body += `<path d="${p.d}" fill="none" ${strokeAttrs}/>`;
+    }
+    html += `<svg class="geo" width="${f(vw)}" height="${f(vh)}" viewBox="0 0 ${f(vw)} ${f(vh)}" overflow="visible" style="position:absolute;left:0;top:0;${fx.filter ? `filter:${fx.filter}` : ''}">${defs.length ? `<defs>${defs.join('')}</defs>` : ''}${body}</svg>`;
+  }
+  if (o.text && (!isEmptyText(o.text) || opts.editable || (opts.prompt && o.ph))) html += textBoxHtml(theme, o, o.text, w, h, opts);
+  return html;
+}
+
+/** 글 영역 (도형 모양 안쪽 + 여백) */
+// WordArt 변환 (prstTxWarp): 글 영역 (W × H) 안의 기준 경로 + 대략의 길이
+const ell = (a, b) => Math.PI * (3 * (a + b) - Math.sqrt((3 * a + b) * (a + 3 * b)));
+export const WARP_PATHS = {
+  textArchUp: (W, H) => [`M0 ${f(H / 2)} A${f(W / 2)} ${f(H / 2)} 0 0 1 ${f(W)} ${f(H / 2)}`, ell(W / 2, H / 2) / 2],
+  textArchDown: (W, H) => [`M0 ${f(H / 2)} A${f(W / 2)} ${f(H / 2)} 0 0 0 ${f(W)} ${f(H / 2)}`, ell(W / 2, H / 2) / 2],
+  textCircle: (W, H) => [`M0 ${f(H / 2)} A${f(W / 2)} ${f(H / 2)} 0 1 1 ${f(W)} ${f(H / 2)} A${f(W / 2)} ${f(H / 2)} 0 1 1 0 ${f(H / 2)}`, ell(W / 2, H / 2)],
+  textButton: (W, H) => [`M0 ${f(H / 2)} A${f(W / 2)} ${f(H / 2)} 0 0 1 ${f(W)} ${f(H / 2)}`, ell(W / 2, H / 2) / 2],
+  textWave1: (W, H) => [`M0 ${f(H * 0.55)} C${f(W / 3)} ${f(H * 0.15)} ${f((W * 2) / 3)} ${f(H * 0.95)} ${f(W)} ${f(H * 0.55)}`, W * 1.08],
+  textWave2: (W, H) => [`M0 ${f(H * 0.55)} C${f(W / 3)} ${f(H * 0.95)} ${f((W * 2) / 3)} ${f(H * 0.15)} ${f(W)} ${f(H * 0.55)}`, W * 1.08],
+  textDoubleWave1: (W, H) => [`M0 ${f(H * 0.55)} C${f(W / 6)} ${f(H * 0.2)} ${f(W / 3)} ${f(H * 0.9)} ${f(W / 2)} ${f(H * 0.55)} S${f((W * 5) / 6)} ${f(H * 0.2)} ${f(W)} ${f(H * 0.55)}`, W * 1.12],
+  textCurveUp: (W, H) => [`M0 ${f(H * 0.85)} Q${f(W / 2)} ${f(-H * 0.1)} ${f(W)} ${f(H * 0.35)}`, W * 1.1],
+  textCurveDown: (W, H) => [`M0 ${f(H * 0.35)} Q${f(W / 2)} ${f(-H * 0.1)} ${f(W)} ${f(H * 0.85)}`, W * 1.1],
+  textSlantUp: (W, H) => [`M0 ${f(H * 0.85)} L${f(W)} ${f(H * 0.3)}`, Math.hypot(W, H * 0.55)],
+  textSlantDown: (W, H) => [`M0 ${f(H * 0.3)} L${f(W)} ${f(H * 0.85)}`, Math.hypot(W, H * 0.55)],
+  textTriangle: (W, H) => [`M0 ${f(H)} L${f(W / 2)} ${f(H * 0.2)} L${f(W)} ${f(H)}`, 2 * Math.hypot(W / 2, H * 0.8)],
+  textTriangleInverted: (W, H) => [`M0 ${f(H * 0.2)} L${f(W / 2)} ${f(H)} L${f(W)} ${f(H * 0.2)}`, 2 * Math.hypot(W / 2, H * 0.8)],
+  textChevron: (W, H) => [`M0 ${f(H * 0.7)} L${f(W / 2)} ${f(H * 0.3)} L${f(W)} ${f(H * 0.7)}`, 2 * Math.hypot(W / 2, H * 0.4)],
+  textChevronInverted: (W, H) => [`M0 ${f(H * 0.3)} L${f(W / 2)} ${f(H * 0.7)} L${f(W)} ${f(H * 0.3)}`, 2 * Math.hypot(W / 2, H * 0.4)],
+};
+// 경로 변환과 같은 모양의 다른 이름 (부어 넣기 · 고리)
+for (const [k, base] of [['textArchUpPour', 'textArchUp'], ['textArchDownPour', 'textArchDown'], ['textCirclePour', 'textCircle'], ['textButtonPour', 'textButton'], ['textRingInside', 'textCircle'], ['textRingOutside', 'textCircle']]) WARP_PATHS[k] = WARP_PATHS[base];
+// 봉투 변환: 글을 세로 띠로 잘라 위 · 아래 곡선 사이로 늘림 (t = 0~1 가로 위치 → 위 · 아래 y 비율). h: 가로 띠 (s = 0~1 세로 위치 → 왼쪽 · 오른쪽 x 비율)
+const S1 = (t) => Math.sin(Math.PI * t);
+export const WARP_ENVELOPES = {
+  textPlain: [() => 0, () => 1],
+  textStop: [(t) => 0.3 * Math.max(0, 1 - Math.min(t, 1 - t) / 0.2), (t) => 1 - 0.3 * Math.max(0, 1 - Math.min(t, 1 - t) / 0.2)],
+  textInflate: [(t) => 0.22 * (1 - S1(t)), (t) => 1 - 0.22 * (1 - S1(t))],
+  textDeflate: [(t) => 0.22 * S1(t), (t) => 1 - 0.22 * S1(t)],
+  textInflateBottom: [() => 0, (t) => 0.7 + 0.3 * S1(t)],
+  textDeflateBottom: [() => 0, (t) => 1 - 0.32 * S1(t)],
+  textInflateTop: [(t) => 0.3 - 0.3 * S1(t), () => 1],
+  textDeflateTop: [(t) => 0.32 * S1(t), () => 1],
+  textDeflateInflate: [(t) => 0.18 * S1(t), (t) => 1 - 0.06 * S1(t)],
+  textDeflateInflateDeflate: [(t) => 0.2 * S1(t), (t) => 1 - 0.2 * S1(t)],
+  textCanUp: [(t) => 0.22 - 0.22 * S1(t), (t) => 1 - 0.22 * S1(t)],
+  textCanDown: [(t) => 0.22 * S1(t), (t) => 0.78 + 0.22 * S1(t)],
+  textWave4: [(t) => 0.12 + 0.12 * Math.sin(4 * Math.PI * t), (t) => 0.88 + 0.12 * Math.sin(4 * Math.PI * t)],
+  textFadeRight: [(t) => 0.3 * t, (t) => 1 - 0.3 * t],
+  textFadeLeft: [(t) => 0.3 * (1 - t), (t) => 1 - 0.3 * (1 - t)],
+  textCascadeUp: [(t) => 0.5 * (1 - t), (t) => 1 - 0.15 * (1 - t)],
+  textCascadeDown: [(t) => 0.5 * t, (t) => 1 - 0.15 * t],
+  // 위 · 아래 곡선이 같이 움직이는 변환 (삼각형 · 갈매기 · 기울기 · 곡선 · 물결)
+  textTriangle: [(t) => 0.55 * Math.abs(2 * t - 1), () => 1],
+  textTriangleInverted: [() => 0, (t) => 1 - 0.55 * Math.abs(2 * t - 1)],
+  textChevron: [(t) => 0.3 * Math.abs(2 * t - 1), (t) => 0.7 + 0.3 * Math.abs(2 * t - 1)],
+  textChevronInverted: [(t) => 0.3 * (1 - Math.abs(2 * t - 1)), (t) => 1 - 0.3 * Math.abs(2 * t - 1)],
+  textSlantUp: [(t) => 0.35 * (1 - t), (t) => 0.65 + 0.35 * (1 - t)],
+  textSlantDown: [(t) => 0.35 * t, (t) => 0.65 + 0.35 * t],
+  textCurveUp: [(t) => 0.35 * (1 - Math.sin((Math.PI * t) / 2)), (t) => 0.65 + 0.35 * (1 - Math.sin((Math.PI * t) / 2))],
+  textCurveDown: [(t) => 0.35 * (1 - Math.cos((Math.PI * t) / 2)), (t) => 0.65 + 0.35 * (1 - Math.cos((Math.PI * t) / 2))],
+  textWave1: [(t) => 0.12 + 0.12 * Math.sin(2 * Math.PI * t), (t) => 0.88 + 0.12 * Math.sin(2 * Math.PI * t)],
+  textWave2: [(t) => 0.12 - 0.12 * Math.sin(2 * Math.PI * t), (t) => 0.88 - 0.12 * Math.sin(2 * Math.PI * t)],
+  textDoubleWave1: [(t) => 0.12 - 0.12 * Math.sin(4 * Math.PI * t), (t) => 0.88 - 0.12 * Math.sin(4 * Math.PI * t)],
+  textFadeUp: [(s) => 0.25 * (1 - s), (s) => 1 - 0.25 * (1 - s), 'h'],
+  textFadeDown: [(s) => 0.25 * s, (s) => 1 - 0.25 * s, 'h'],
+};
+const warpRuns = (theme, o, body) => body.paras.map((p) => p.runs.filter((r) => r.t || r.fld).map((r) => {
+  const size = (r.size ?? defaultSize(o, p.lvl ?? 0)) * PX_PER_PT * (body.fontScale ?? 1);
+  const col = r.fill?.type === 'gradient' ? resolveColor(theme, r.fill.stops?.[0]?.[1] ?? r.color, '#000') : r.fill?.type === 'none' ? 'none' : runColor(theme, o, r);
+  const stroke = r.outline ? ` stroke="${resolveColor(theme, r.outline.color ?? '@tx1')}" stroke-width="${f(r.outline.width ?? 1)}"` : '';
+  return { size, html: `<tspan font-size="${f(size)}" fill="${col}"${stroke}${(r.b ?? (o.phKind?.head && r.b !== false)) ? ' font-weight="700"' : ''}${r.i ? ' font-style="italic"' : ''} font-family="${escHtml(fontStack(theme, r.font ?? defaultFont(o)))}">${escHtml(r.fld ? fieldText(r) : r.t)}</tspan>` };
+})).filter((l) => l.length);
+
+/** WordArt 변환 글 (편집 중이 아닐 때) */
+function warpHtml(theme, o, body, x, y, W, H) {
+  if (W <= 0 || H <= 0) return '';
+  const lines = warpRuns(theme, o, body);
+  if (!lines.length) return '';
+  const id = nextId();
+  const box = `class="warp" width="${f(W)}" height="${f(H)}" style="position:absolute;left:${f(x)}px;top:${f(y)}px;overflow:visible" aria-hidden="true"`;
+  const env = WARP_ENVELOPES[body.warp?.prst];
+  if (env) {
+    // 줄마다 폭 W 로 늘린 글 (기준 높이 = 줄 높이 합) → 띠마다 봉투 사이로
+    const lh = lines.map((l) => Math.max(...l.map((r) => r.size)) * 1.1);
+    const H0 = lh.reduce((a, b) => a + b, 0) || 1;
+    let yy = 0;
+    const text = lines.map((l, i) => { const y0 = yy + lh[i] * 0.8; yy += lh[i]; return `<text x="0" y="${f(y0)}" textLength="${f(W)}" lengthAdjust="spacingAndGlyphs">${l.map((r) => r.html).join('')}</text>`; }).join('');
+    const [a, b, dir] = env;
+    const N = 48;
+    let strips = '';
+    for (let i = 0; i < N; i++) {
+      const t = (i + 0.5) / N;
+      const k = `${id}c${i}`;
+      if (dir === 'h') {
+        const y0 = (i / N) * H; const y1 = ((i + 1) / N) * H;
+        const L = a(t) * W; const R = b(t) * W;
+        strips += `<clipPath id="${k}"><rect x="-1" y="${f(y0 - 0.3)}" width="${f(W + 2)}" height="${f(y1 - y0 + 0.6)}"/></clipPath><g clip-path="url(#${k})"><use href="#${id}" transform="translate(${f(L)} 0) scale(${f((R - L) / W)} ${f(H / H0)})"/></g>`;
+      } else {
+        const x0 = (i / N) * W; const x1 = ((i + 1) / N) * W;
+        const T = a(t) * H; const B = b(t) * H;
+        strips += `<clipPath id="${k}"><rect x="${f(x0 - 0.3)}" y="-1" width="${f(x1 - x0 + 0.6)}" height="${f(H + 2)}"/></clipPath><g clip-path="url(#${k})"><use href="#${id}" transform="translate(0 ${f(T)}) scale(1 ${f((B - T) / H0)})"/></g>`;
+      }
+    }
+    return `<svg ${box}><defs><g id="${id}">${text}</g></defs>${strips}</svg>`;
+  }
+  const mk = WARP_PATHS[body.warp?.prst];
+  if (!mk) return '';
+  const [d, len] = mk(W, H);
+  const spans = lines.map((l) => l.map((r) => r.html).join('')).join('<tspan> </tspan>');
+  return `<svg ${box}><path id="${id}" d="${d}" fill="none"/><text dominant-baseline="middle"><textPath href="#${id}" startOffset="50%" text-anchor="middle" textLength="${f(len * 0.96)}" lengthAdjust="spacingAndGlyphs">${spans}</textPath></text></svg>`;
+}
+
+export function textBoxHtml(theme, o, body, w, h, opts = {}) {
+  const [l, t, r, b] = o.txBox || o.ph ? [0, 0, w, h] : textRect(o.shape ?? 'rect', w, h, o.adj);
+  const ins = body.insets ?? [9.6, 4.8, 9.6, 4.8];
+  if (body.warp && !opts.editable && (WARP_PATHS[body.warp.prst] || WARP_ENVELOPES[body.warp.prst])) {
+    const wx = l + ins[0]; const wy = t + ins[1];
+    const wh = warpHtml(theme, o, body, wx, wy, Math.max(1, r - l - ins[0] - ins[2]), Math.max(1, b - t - ins[1] - ins[3]));
+    if (wh) return `<div class="tx" data-tx="${escHtml(o.id)}" style="position:absolute;inset:0">${wh}</div>`;
+  }
+  const jc = { t: 'flex-start', ctr: 'center', b: 'flex-end' }[body.anchor ?? 't'] ?? 'flex-start';
+  const vert = body.vert === 'vert' || body.vert === 'eaVert' ? 'writing-mode:vertical-rl;' : body.vert === 'vert270' ? 'writing-mode:vertical-rl;transform:rotate(180deg);' : '';
+  const prompt = opts.prompt && o.ph && isEmptyText(body);
+  const cls = `tx${prompt ? ' empty-ph' : ''}`;
+  const st = `position:absolute;left:${f(l + ins[0])}px;top:${f(t + ins[1])}px;width:${f(Math.max(1, r - l - ins[0] - ins[2]))}px;height:${f(Math.max(1, b - t - ins[1] - ins[3]))}px;display:flex;flex-direction:column;justify-content:${jc};${body.wrap === false ? 'white-space:pre;' : 'white-space:pre-wrap;overflow-wrap:break-word;word-break:keep-all;'}${vert}`;
+  // 단 나누기 (numCol) · 글 회전 (bodyPr rot)
+  const colSt = body.cols > 1 ? ` style="column-count:${body.cols};column-gap:${f(body.colSpc ?? 0)}px;column-fill:auto;height:100%"` : '';
+  const rotSt = body.rot ? `transform:rotate(${f(body.rot)}deg);` : '';
+  return `<div class="${cls}" data-tx="${escHtml(o.id)}" style="${st}${rotSt}"><div class="txi"${colSt}>${textHtml(theme, o, body, { editable: opts.editable, prompt })}</div></div>`;
+}
+
+function imageHtml(theme, o, media, opts) {
+  const src = displaySrc(media[o.media] ?? o.src);
+  if (!src) {
+    // SmartArt 그림 칸: 회색 칸 (편집 화면에서는 누르면 그림 넣기)
+    if (o.picSlot) return `<div class="pic-ph" style="position:absolute;inset:0;background:#E7E6E6;${o.shape === 'ellipse' ? 'border-radius:50%;' : ''}display:flex;align-items:center;justify-content:center;color:#8a8a8a;font-size:${f(Math.min(o.w, o.h) * 0.28)}px">${opts.prompt ? '<span class="pic-ph-ico">🖼</span>' : ''}</div>`;
+    if (!opts.prompt) return '';
+    return `<div class="pic-ph" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:8px;color:#7f7f7f;font-size:20px;text-align:center"><span class="pic-ph-ico">🖼</span><span>${escHtml(placeholderPrompt(o))}</span></div>`;
+  }
+  const c = o.crop ?? { l: 0, t: 0, r: 0, b: 0 };
+  const iw = o.w / Math.max(0.01, 1 - c.l - c.r);
+  const ih = o.h / Math.max(0.01, 1 - c.t - c.b);
+  const clip = o.shape && o.shape !== 'rect' ? `clip-path:path('${shapePath(o.shape, o.w, o.h, o.adj)}');` : '';
+  const ln = o.line;
+  const border = ln ? `<svg width="${f(o.w)}" height="${f(o.h)}" style="position:absolute;left:0;top:0;overflow:visible"><path d="${shapePath(o.shape ?? 'rect', o.w, o.h, o.adj)}" fill="none" stroke="${resolveColor(theme, ln.color, '#000')}" stroke-width="${f(ln.width ?? 1)}"/></svg>` : '';
+  const fx = fxStyle(theme, fxOf(o), o.id);
+  // 그림 효과(그림자 · 네온)는 잘린 모양 바깥에 그려지므로 바깥 div 에, 색 보정은 그림에
+  const duoId = o.duotone?.length === 2 ? `duo-${String(o.id).replace(/[^\w-]/g, '')}` : null;
+  const adj = [o.gray ? 'grayscale(1)' : '', o.bright ? `brightness(${1 + o.bright})` : '', o.contrast ? `contrast(${1 + o.contrast})` : '', duoId ? `url(#${duoId})` : ''].filter(Boolean).join(' ');
+  const defs = (fx.defs ?? '') + (duoId ? duotoneFilter(theme, o.duotone, duoId) : '');
+  return `${defs ? `<svg width="0" height="0" style="position:absolute"><defs>${defs}</defs></svg>` : ''}<div style="position:absolute;inset:0;${fx.filter ? `filter:${fx.filter};` : ''}"><div style="position:absolute;inset:0;overflow:hidden;${clip}${adj ? `filter:${adj};` : ''}"><img src="${escHtml(src)}" alt="${escHtml(o.alt ?? '')}" draggable="false" style="position:absolute;left:${f(-c.l * iw)}px;top:${f(-c.t * ih)}px;width:${f(iw)}px;height:${f(ih)}px;max-width:none;${o.alpha != null ? `opacity:${o.alpha};` : ''}"></div>${border}</div>`;
+}
+
+/** 비디오 · 오디오: 편집 화면은 표지 그림(또는 검은 칸/스피커), 쇼(opts.live)에서는 실제 재생기 */
+function mediaHtml(o, media, opts) {
+  const src = media[o.media];
+  const poster = o.poster ? media[o.poster] : null;
+  const audio = o.kind === 'audio';
+  if (opts.live && src) {
+    const t = o.trim?.st ? `#t=${o.trim.st}${o.trim.end ? `,${o.trim.end}` : ''}` : '';
+    const nar = o.narration ? ' data-narration="1"' : '';
+    // 녹음한 내레이션 · [쇼 동안 숨기기] 오디오: 아이콘 없이 소리만
+    if (audio && o.hideInShow) return `<audio class="av" src="${escHtml(src + t)}" ${o.loop ? 'loop' : ''} ${o.autoplay ? 'data-autoplay="1"' : ''}${nar} preload="auto" style="display:none"></audio>`;
+    if (audio) return `<div class="av-audio" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">${poster ? `<img src="${escHtml(poster)}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain" alt="">` : '<span style="font-size:' + f(Math.min(o.w, o.h) * 0.6) + 'px;line-height:1">🔊</span>'}<audio class="av" src="${escHtml(src + t)}" ${o.loop ? 'loop' : ''} ${o.autoplay ? 'data-autoplay="1"' : ''}${nar} preload="auto" style="display:none"></audio></div>`;
+    return `<video class="av" src="${escHtml(src + t)}" ${poster ? `poster="${escHtml(poster)}"` : ''} ${o.loop ? 'loop' : ''} ${o.autoplay ? 'data-autoplay="1"' : ''}${nar} playsinline preload="metadata" ${o.narration ? '' : 'controls'} style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000"></video>`;
+  }
+  if (poster) return `<img src="${escHtml(poster)}" alt="${escHtml(o.alt ?? '')}" draggable="false" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"><div style="position:absolute;left:8px;bottom:8px;width:28px;height:28px;border-radius:50%;background:rgba(0,0,0,.55);color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px">${audio ? '♪' : '▶'}</div>`;
+  if (audio) return `<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:${f(Math.min(o.w, o.h) * 0.6)}px;line-height:1">🔊</div>`;
+  return `<div style="position:absolute;inset:0;background:#111;display:flex;align-items:center;justify-content:center;color:#fff;font-size:${f(Math.min(o.w, o.h) * 0.25)}px">▶</div>`;
+}
+
+/** 표 스타일 색 */
+export function tableCellStyle(theme, o, ri, ci) {
+  const st = o.style ?? {};
+  const acc = st.accent ?? 'accent1';
+  const nRows = o.rows.length;
+  const nCols = o.cols.length;
+  const header = st.firstRow && ri === 0;
+  const total = st.lastRow && ri === nRows - 1;
+  const firstCol = st.firstCol && ci === 0;
+  const lastCol = st.lastCol && ci === nCols - 1;
+  if (st.none) return { fill: null, color: '@tx1', bold: false, border: '@tx1' };
+  if (header) return { fill: `@${acc}`, color: '@lt1', bold: true, border: '@lt1' };
+  if (total) return { fill: `@${acc}`, color: '@lt1', bold: true, border: '@lt1' };
+  const bodyIdx = ri - (st.firstRow ? 1 : 0);
+  const band = st.banded && bodyIdx % 2 === 1;
+  const light = st.light;
+  return {
+    fill: light ? (band ? `@${acc}:lm20:lo80` : null) : band ? `@${acc}:lm40:lo60` : `@${acc}:lm20:lo80`,
+    color: '@tx1', bold: firstCol || lastCol, border: light ? `@${acc}` : '@lt1',
+  };
+}
+
+function tableHtml(theme, o, opts) {
+  const rows = o.rows.map((r, ri) => {
+    let out = '';
+    r.cells.forEach((c, ci) => {
+      if (c.hMerge || c.vMerge) return;
+      const ts = tableCellStyle(theme, o, ri, ci);
+      const fill = c.fill !== undefined ? fillCss(theme, c.fill) : ts.fill ? resolveColor(theme, ts.fill) : 'transparent';
+      const bcol = resolveColor(theme, ts.border, '#fff');
+      const pseudo = { ...o, type: 'table', ph: null, text: c.text, phKind: null };
+      const body = c.text;
+      const defColor = ts.color;
+      const b2 = { ...body, paras: body.paras.map((p) => ({ ...p, runs: p.runs.map((rr) => ({ ...rr, color: rr.color ?? defColor, b: rr.b ?? (ts.bold || undefined) })), end: { ...(p.end ?? {}), color: p.end?.color ?? defColor } })) };
+      const ins = body.insets ?? [7, 3.5, 7, 3.5];
+      const va = { t: 'top', ctr: 'middle', b: 'bottom' }[body.anchor ?? 't'];
+      const SIDE = { l: 'left', r: 'right', t: 'top', b: 'bottom' };
+      const borders = c.borders ? [`border:1px solid ${bcol}`, ...Object.entries(c.borders).filter(([k]) => SIDE[k]).map(([k, v]) => `border-${SIDE[k]}:${f(v.width ?? 1)}px solid ${resolveColor(theme, v.color, '#000')}`)].join(';') : `border:1px solid ${bcol}`;
+      // 대각선 테두리 (dd: 왼쪽 위 → 오른쪽 아래, du: 왼쪽 아래 → 오른쪽 위)
+      const diag = c.borders && (c.borders.dd || c.borders.du) ? `background-image:${[c.borders.dd ? `linear-gradient(to top right, transparent calc(50% - ${f((c.borders.dd.width ?? 1) / 2)}px), ${resolveColor(theme, c.borders.dd.color, '#000')} calc(50% - ${f((c.borders.dd.width ?? 1) / 2)}px), ${resolveColor(theme, c.borders.dd.color, '#000')} calc(50% + ${f((c.borders.dd.width ?? 1) / 2)}px), transparent calc(50% + ${f((c.borders.dd.width ?? 1) / 2)}px))` : '', c.borders.du ? `linear-gradient(to bottom right, transparent calc(50% - ${f((c.borders.du.width ?? 1) / 2)}px), ${resolveColor(theme, c.borders.du.color, '#000')} calc(50% - ${f((c.borders.du.width ?? 1) / 2)}px), ${resolveColor(theme, c.borders.du.color, '#000')} calc(50% + ${f((c.borders.du.width ?? 1) / 2)}px), transparent calc(50% + ${f((c.borders.du.width ?? 1) / 2)}px))` : ''].filter(Boolean).join(',')};` : '';
+      out += `<td${c.span ? ` colspan="${c.span}"` : ''}${c.rowSpan ? ` rowspan="${c.rowSpan}"` : ''} data-cell="${ri},${ci}" style="background:${fill};${diag}${borders};padding:${f(ins[1])}px ${f(ins[2])}px ${f(ins[3])}px ${f(ins[0])}px;vertical-align:${va};overflow:hidden"><div class="tx tcell" data-tx="${escHtml(o.id)}" data-cell="${ri},${ci}" style="white-space:pre-wrap;overflow-wrap:break-word;word-break:keep-all"><div class="txi">${textHtml(theme, pseudo, b2, { editable: opts.editable })}</div></div></td>`;
+    });
+    return `<tr style="height:${f(r.h)}px">${out}</tr>`;
+  }).join('');
+  const cols = o.cols.map((w) => `<col style="width:${f(w)}px">`).join('');
+  return `<table class="tbl" style="position:absolute;left:0;top:0;width:${f(o.cols.reduce((a, b) => a + b, 0))}px;border-collapse:collapse;table-layout:fixed"><colgroup>${cols}</colgroup>${rows}</table>`;
+}
+
+/** 슬라이드 확대/축소: 대상 슬라이드 축소판 (쇼에서 누르면 그 슬라이드로 확대) */
+function zoomHtml(o, opts) {
+  const pres = opts.pres;
+  const target = pres?.slides.find((x) => x.id === o.zoom?.slide);
+  const border = o.zoom?.border === false ? '' : 'box-shadow:0 0 0 1px rgba(0,0,0,.25);';
+  if (!target || (opts.zoomDepth ?? 0) > 0) return `<div class="zm" style="position:absolute;inset:0;background:#f2f2f2;${border}"></div>`;
+  const { w, h } = pres.size;
+  const idx = pres.slides.indexOf(target);
+  return `<div class="zm" data-zoom="${idx + 1}" style="position:absolute;inset:0;overflow:hidden;${border}"><div style="width:${f(w)}px;height:${f(h)}px;transform:scale(${f(o.w / w)},${f(o.h / h)});transform-origin:0 0;pointer-events:none">${slideHtml(pres, target, { index: idx, zoomDepth: 1 })}</div></div>`;
+}
+
+/** 개체 하나 → 위치 · 회전이 들어간 div */
+export function objectHtml(theme, o, media, opts = {}) {
+  let inner;
+  if (o.type === 'image') inner = imageHtml(theme, o, media, opts);
+  else if (o.type === 'table') inner = tableHtml(theme, o, opts);
+  else if (o.type === 'chart') inner = (o.chart?.bgMedia && media[o.chart.bgMedia] ? `<img src="${escHtml(displaySrc(media[o.chart.bgMedia]))}" alt="" style="position:absolute;inset:0;width:100%;height:100%" draggable="false">` : '') + chartSvg(o.chart, o.w, o.h, theme, { font: theme.fonts.minor });
+  else if (o.type === 'media' || o.type === 'video') inner = mediaHtml(o, media, opts);
+  else if (o.type === 'zoom') inner = zoomHtml(o, opts);
+  else if (o.type === 'equation') inner = `<div class="eq" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:${f((o.size ?? 28) * PX_PER_PT)}px;color:${resolveColor(theme, o.color ?? '@tx1', '#000')};font-family:'Cambria Math','STIX Two Math','Latin Modern Math',serif">${toMathML(parseLatex(o.latex ?? ''))}</div>`;
+  else inner = shapeHtml(theme, o, media, opts);
+  const tr = [];
+  if (o.rot) tr.push(`rotate(${f(o.rot)}deg)`);
+  if (o.flipH || o.flipV) tr.push(`scale(${o.flipH ? -1 : 1},${o.flipV ? -1 : 1})`);
+  const fxw = o.fx && (o.type === 'shape' || o.type === 'image') ? fxStyle(theme, o.fx, o.id) : null;
+  if (fxw) tr.push(...fxw.transform);
+  const hidden = opts.hide?.has(o.id) ? 'visibility:hidden;' : '';
+  const ph = o.ph && opts.prompt ? ' ph' : '';
+  const link = o.link && opts.links ? ` data-link="${escHtml(o.link)}"` : '';
+  return `<div class="ob${ph}" data-id="${escHtml(o.id)}"${link} style="left:${f(o.x)}px;top:${f(o.y)}px;width:${f(o.w)}px;height:${f(o.h)}px;${tr.length ? `transform:${tr.join(' ')};` : ''}${fxw?.wrap ?? ''}${hidden}">${inner}</div>`;
+}
+
+// ───────────── 테마 장식 · 바닥글 ─────────────
+/** 테마별 배경 장식 (마스터 도형에 해당) */
+export function themeDecor(theme, layout, size) {
+  const W = size.w;
+  const H = size.h;
+  const sx = W / 1280;
+  const out = [];
+  const R = (id, x, y, w, h, color, shape = 'rect') => out.push({ id: `decor-${id}`, type: 'shape', shape, x, y, w, h, rot: 0, fill: { type: 'solid', color }, line: null, text: null, decor: true });
+  const titleSlide = layout === 'title' || layout === 'section';
+  if (layout === 'blank') return out;
+  if (theme.accentBand) {
+    if (titleSlide) { R('band', 0, H - 28, W, 28, '@accent1'); R('band2', 0, H - 34, W, 6, '@accent2'); } else R('bar', 40 * sx, 62, 10 * sx, 92, '@accent1');
+  }
+  if (theme.titleBar) {
+    if (titleSlide) { R('top', 0, 0, W, 14, '@accent1'); R('line', 160 * sx, 372, 960 * sx, 3, '@accent1'); } else R('rule', 88 * sx, 180, 1104 * sx, 3, '@accent1');
+  }
+  if (theme.dark && titleSlide) R('glow', W * 0.62, -H * 0.3, W * 0.6, H * 1.1, '@accent1:a18', 'ellipse');
+  return out;
+}
+
+function footerHtml(pres, slide, index, opts) {
+  const ft = pres.footer ?? {};
+  if (!ft.slideNum && !ft.date && !ft.text) return '';
+  if (ft.hideOnTitle && slide.layout === 'title') return '';
+  // 레이아웃에서 [바닥글] 을 끈 경우 (슬라이드 마스터 › 마스터 레이아웃)
+  if (pres.masters?.[slide.master ?? slide.layout]?.noFooter) return '';
+  const theme = pres.theme;
+  const color = resolveColor(theme, '@tx1:lm50:lo50');
+  const W = pres.size.w;
+  const H = pres.size.h;
+  const y = H - 54;
+  const st = `position:absolute;top:${y}px;height:32px;line-height:32px;font-size:16px;color:${color};font-family:${fontStack(theme, '+mn')}`;
+  let html = '';
+  if (ft.date) html += `<div class="ftr" style="${st};left:${f(W * 0.069)}px;width:${f(W * 0.225)}px">${escHtml(ft.dateText || opts.today || new Date().toLocaleDateString('ko-KR'))}</div>`;
+  if (ft.text) html += `<div class="ftr" style="${st};left:${f(W * 0.33)}px;width:${f(W * 0.34)}px;text-align:center">${escHtml(ft.text)}</div>`;
+  if (ft.slideNum) html += `<div class="ftr" style="${st};left:${f(W * 0.706)}px;width:${f(W * 0.225)}px;text-align:right">${index + 1}</div>`;
+  return html;
+}
+
+/** 슬라이드 배경 채우기 */
+export function slideBackground(pres, slide) {
+  pres = presForSlide(pres, slide);
+  return slide.bg ?? pres.theme.bg ?? { type: 'solid', color: '@bg1' };
+}
+
+/**
+ * 슬라이드 하나 → HTML
+ * opts: { prompt (빈 개체 틀 안내 글), editable (data-p/r), hide: Set(숨길 개체), index, links, skipIds: Set }
+ */
+export function slideHtml(pres, slide, opts = {}) {
+  pres = presForSlide(pres, slide);
+  const theme = pres.theme;
+  const media = pres.media ?? {};
+  const bgFill = slideBackground(pres, slide);
+  // 이중 색조 배경 그림 (테마 질감 등)은 CSS 로 칠할 수 없어 SVG 층으로
+  const svgBg = bgFill?.type === 'image' && bgFill.duotone;
+  const bg = svgBg ? '#ffffff' : fillCss(theme, bgFill, media);
+  if (!opts.zoomDepth) setMasterText(pres);
+  if (!opts.zoomDepth) FIELD_SLIDE_NO = (opts.index ?? 0) + 1;
+  const decor = slideDecor(pres, slide);
+  let html = '';
+  if (svgBg) {
+    const defs = [];
+    const fl = svgFill(theme, bgFill, pres.size.w, pres.size.h, media, defs);
+    html += `<svg width="${pres.size.w}" height="${pres.size.h}" style="position:absolute;left:0;top:0"><defs>${defs.join('')}</defs><rect width="100%" height="100%" fill="${fl}"/></svg>`;
+  }
+  for (const o of decor) html += objectHtml(theme, o, media, {}).replace('class="ob"', 'class="ob decor"');
+  for (const o of slide.objects) {
+    if (opts.skipIds?.has(o.id) || o.hidden) continue;
+    if (!opts.prompt && o.ph && (o.type === 'image' ? !o.media : isEmptyText(o.text))) continue;
+    html += objectHtml(theme, o, media, o.id === opts.editId ? { ...opts, editable: true, prompt: false } : o.type === 'zoom' ? { ...opts, pres } : opts);
+  }
+  html += footerHtml(pres, slide, opts.index ?? 0, opts);
+  const dark = isDark(bg.startsWith('#') || bg.startsWith('rgb') ? bg : '#ffffff');
+  return `<div class="sl${dark ? ' dark' : ''}" style="position:relative;width:${pres.size.w}px;height:${pres.size.h}px;background:${bg};overflow:hidden">${html}</div>`;
+}
+
+/** 슬라이드 뒤에 그릴 장식: 가져온 배경 개체, 아니면 테마 장식 + 슬라이드 마스터 · 레이아웃 개체 */
+export function slideDecor(pres, slide) {
+  if (slide.bgObjects) return slide.bgObjects;
+  pres = presForSlide(pres, slide);
+  if (slide.hideDecor) return [];
+  const theme = themeDecor(pres.theme, slide.layout, pres.size);
+  if (slide.master === 'master') return theme;
+  if (slide.master) return slide.hideMaster ? theme : [...theme, ...masterDecor(pres, '')];
+  return [...theme, ...masterDecor(pres, slide.layout)];
+}
+
+/** 슬라이드 HTML 을 그리는 데 필요한 CSS (편집 화면 · 쇼 · 청중 창 · 인쇄 · PNG 내보내기가 같이 씀) */
+export const SLIDE_CSS = `.sl{line-height:normal;text-align:left;color:#000;-webkit-font-smoothing:antialiased;font-kerning:normal;box-sizing:border-box}
+.sl *{box-sizing:border-box}
+.sl .ob{position:absolute;transform-origin:50% 50%}
+.sl .ob.decor{pointer-events:none}
+.sl .dimmed,.sl .dimmed *{color:var(--dim)!important}
+.sl .ob.dimmed svg [fill]:not([fill="none"]):not(text):not(tspan){fill:var(--dim)}
+.sl .tx{overflow:visible}
+.sl .txi{width:100%;outline:none;min-height:1em}
+.sl .p{margin:0}
+.sl .bu{user-select:none}
+.sl svg{overflow:visible}
+.sl table{border-spacing:0}
+.sl td{position:relative}
+.sl .lnk{text-decoration:underline;cursor:pointer}
+.tw{position:relative;overflow:hidden}
+.tw-in{transform-origin:0 0;position:absolute;left:0;top:0}`;

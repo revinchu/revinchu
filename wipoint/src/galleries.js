@@ -1,0 +1,203 @@
+// 리본 갤러리 (테마 · 전환 · 애니메이션 · 도형 스타일 · WordArt · 그림/표 스타일) 와 타이밍 입력 칸
+import { S, curSlide, selObjects, selOne, run } from './state.js';
+import { THEMES, cloneTheme, resolveColor } from './themes.js';
+import { slideHtml, fillCss } from './render.js';
+import { newPresentation, TRANSITIONS, TRANSITION_GROUPS, ANIM_EFFECTS, ANIM_CLASS_LABEL, plainText } from './model.js';
+import { shapePath, shapePaths, SHAPE_GALLERY } from './shapes.js';
+import { SHAPE_STYLES, WORDART, PICTURE_STYLES, TABLE_STYLES } from './presets.js';
+import { el, openMenu } from './ui.js';
+
+const themeCache = new Map();
+/** 테마 미리 보기 (제목 슬라이드) */
+export function themePreview(t, w = 96) {
+  const key = `${t.name}|${w}|${S.pres.size.w}x${S.pres.size.h}`;
+  if (themeCache.has(key)) return themeCache.get(key);
+  const p = newPresentation({ theme: t.name });
+  p.size = { ...S.pres.size };
+  p.theme = cloneTheme(t);
+  const s = p.slides[0];
+  s.objects[0].text.paras[0].runs = [{ t: '가나다 Aa' }];
+  s.objects[1].text.paras[0].runs = [];
+  const sc = w / p.size.w;
+  const html = `<div class="tw" style="width:${w}px;height:${Math.round(p.size.h * sc)}px"><div class="tw-in" style="transform:scale(${sc})">${slideHtml(p, s, {})}</div></div>`;
+  themeCache.set(key, html);
+  return html;
+}
+
+function strip(items, { cls = '' } = {}) {
+  return el('div', { class: `gallery ${cls}` }, el('div', { class: 'gallery-items' }, items));
+}
+
+const TRANS_GLYPH = { none: '∅', cut: '▮', fade: '◐', push: '⇧', wipe: '▤', split: '⇔', cover: '⬒', uncover: '⬓', zoom: '⊕', circle: '◯', dissolve: '░', flip: '⇋', morph: '⬢',
+  reveal: '◑', randomBars: '▥', diamond: '◇', plus: '✚', flash: '✺', strips: '◢', fall: '⤓', drape: '⌒', curtains: '⫴', wind: '≋', prestige: '⬙', fracture: '⚡', crush: '✹', peelOff: '◤', pageCurl: '❏',
+  airplane: '✈', origami: '⬗', checker: '▦', blinds: '☰', clock: '◔', ripple: '◎', honeycomb: '⬡', glitter: '✧', vortex: '🌀', shred: '⫼', switch: '⇄', gallery: '▭', cube: '⬛', doors: '⫿', box: '◫', comb: '≡',
+  random: '?', pan: '⇕', ferris: '☸', conveyor: '⇶', rotate: '⟳', window: '⊞', orbit: '◌', flythrough: '➹' };
+const ANIM_GLYPH = { appear: '★', fade: '✧', fly: '➶', float: '⇡', split: '⇔', wipe: '▤', zoom: '⊕', grow: '↻', wheel: '◔', bounce: '⤵', shape: '◯', randomBars: '▥', swivel: '⟲', blinds: '☰', box: '◫', checker: '▦',
+  circleIn: '◎', crawl: '⇠', diamond: '◇', dissolveIn: '░', peek: '⇡', plus: '✚', strips: '◢', wedge: '◕', expand: '⇿', compress: '⇹', basicZoom: '⊙', riseUp: '⤒', sinkDown: '⤓', stretch: '↔', centerRevolve: '⟳',
+  pinwheel: '✇', boomerang: '↶', curveUp: '⤴', spiralIn: '🌀', credits: '≣', flip: '⇋', dropIn: '⬇',
+  pulse: '✷', colorPulse: '◉', teeter: '⚖', spin: '↻', growShrink: '⤢', desaturate: '◐', darken: '●', lighten: '○', transparency: '◌', objectColor: '■', complementary: '◑', lineColor: '▢', fillColor: '▣', flash: '✺', boldFlash: 'B', wave: '〰', shimmer: '✦', bold: 'B', brushColor: '🖌', underline: 'U',
+  disappear: '✕' };
+const PATH_GLYPH = { pathRight: '→', pathLeft: '←', pathUp: '↑', pathDown: '↓', pathDiag: '↘', pathDiagUp: '↗', pathArc: '⌒', pathArcDown: '⌣', pathTurn: '↴', pathCircle: '○', pathSquare: '□', pathTriangle: '△', pathDiamond: '◇', pathStar: '☆', pathHeart: '♡', pathEight: '∞', pathLoop: '➰', pathSpiral: '🌀', pathWave: '∿', pathZigzag: '⋀', pathBounce: '⌓', pathSCurve: 'S' };
+const CLS_TITLE = { entr: '나타내기', emph: '강조', exit: '끝내기', path: '이동 경로' };
+/** 리본에 바로 보이는 효과 (PowerPoint 첫 줄) — 나머지는 [자세히 ▾] */
+const QUICK_TRANS = 18;
+const QUICK_ANIM = { entr: 13, emph: 13, exit: 13, path: 9 };
+
+function transButton(k, l, cur) {
+  return el('button', { class: `gal-item fx${k === cur ? ' on' : ''}`, title: l, onclick: () => run('setTransition', k) }, el('span', { class: 'fx-ic' }, TRANS_GLYPH[k] ?? '◇'), el('span', { class: 'fx-l' }, l));
+}
+function animButton(cls, k, l, a, o) {
+  const glyph = cls === 'path' ? PATH_GLYPH[k] ?? '⤳' : cls === 'exit' && ANIM_GLYPH[k] ? ANIM_GLYPH[k] : ANIM_GLYPH[k] ?? '★';
+  return el('button', { class: `gal-item fx ${cls}${a?.cls === cls && a.effect === k ? ' on' : ''}`, title: `${CLS_TITLE[cls]}: ${l}`, disabled: !o, onclick: () => run('setAnim', cls, k) }, el('span', { class: 'fx-ic' }, glyph), el('span', { class: 'fx-l' }, l));
+}
+/** 전환 갤러리 전체 (은은한 효과 / 화려한 효과 / 동적 콘텐츠) */
+export function transitionsPopup(anchor) {
+  const cur = curSlide()?.transition?.type ?? 'none';
+  const items = [];
+  for (const [g, title] of Object.entries(TRANSITION_GROUPS)) {
+    items.push({ title });
+    items.push({ node: el('div', { class: 'fx-grid' }, TRANSITIONS.filter((t) => t[2] === g).map(([k, l]) => transButton(k, l, cur))) });
+  }
+  openMenu(anchor, items, { minWidth: 600, scroll: true });
+}
+/** 애니메이션 갤러리 전체 + 추가 효과 */
+export function animationsPopup(anchor) {
+  const o = selObjects()[0];
+  const a = o ? curSlide().anims?.find((x) => x.obj === o.id) : null;
+  const items = [{ node: el('div', { class: 'fx-grid' }, [el('button', { class: `gal-item fx${!a ? ' on' : ''}`, title: '없음', disabled: !o, onclick: () => run('removeAnim', { all: true }) }, el('span', { class: 'fx-ic' }, '∅'), el('span', { class: 'fx-l' }, '없음'))]) }];
+  for (const cls of ['entr', 'emph', 'exit', 'path']) {
+    items.push({ title: ANIM_CLASS_LABEL[cls] });
+    items.push({ node: el('div', { class: 'fx-grid' }, ANIM_EFFECTS[cls].map(([k, l]) => animButton(cls, k, l, a, o))) });
+  }
+  openMenu(anchor, items, { minWidth: 600, scroll: true });
+}
+
+export const GALLERIES = {
+  themes: () => {
+    const cur = S.pres.theme.name;
+    return strip(THEMES.map((t) => el('button', { class: `gal-item theme${t.name === cur ? ' on' : ''}`, title: t.label, html: themePreview(t), onclick: () => run('applyTheme', t.name), oncontextmenu: (e) => { e.preventDefault(); run('themeMenu', { x: e.clientX, y: e.clientY }, t.name); } })), { cls: 'themes' });
+  },
+  transitions: () => {
+    const cur = curSlide()?.transition?.type ?? 'none';
+    const list = TRANSITIONS.slice(0, QUICK_TRANS);
+    // 지금 효과가 첫 줄에 없으면 맨 앞에 보여 줌
+    if (!list.some(([k]) => k === cur)) { const t = TRANSITIONS.find(([k]) => k === cur); if (t) list.unshift(t); }
+    return el('div', { class: 'gallery fx' }, el('div', { class: 'gallery-items' }, list.map(([k, l]) => transButton(k, l, cur))), el('button', { class: 'gal-more', title: '자세히', onclick: (e) => transitionsPopup(e.currentTarget) }, '▾'));
+  },
+  animations: () => {
+    const o = selObjects()[0];
+    const a = o ? curSlide().anims?.find((x) => x.obj === o.id) : null;
+    const items = [el('button', { class: `gal-item fx${!a ? ' on' : ''}`, title: '없음', disabled: !o, onclick: () => run('removeAnim', { all: true }) }, el('span', { class: 'fx-ic' }, '∅'), el('span', { class: 'fx-l' }, '없음'))];
+    for (const cls of ['entr', 'emph', 'exit', 'path']) {
+      const list = ANIM_EFFECTS[cls].slice(0, QUICK_ANIM[cls]);
+      if (a?.cls === cls && !list.some(([k]) => k === a.effect)) { const e = ANIM_EFFECTS[cls].find(([k]) => k === a.effect); if (e) list.unshift(e); }
+      for (const [k, l] of list) items.push(animButton(cls, k, l, a, o));
+    }
+    return el('div', { class: 'gallery fx' }, el('div', { class: 'gallery-items' }, items), el('button', { class: 'gal-more', title: '자세히 (모든 효과)', onclick: (e) => animationsPopup(e.currentTarget) }, '▾'));
+  },
+  shapesMini: () => {
+    const list = SHAPE_GALLERY.flatMap(([, l]) => l).slice(0, 24);
+    const grid = el('div', { class: 'shape-mini' }, list.map(([k, l]) => el('button', { class: 'shape-btn', title: l, html: shapeIconSvg(k), onclick: () => run('drawShape', k) })));
+    return el('div', { class: 'gallery shapes' }, grid, el('button', { class: 'gal-more', title: '모든 도형', onclick: (e) => run('shapesMenu', e.currentTarget) }, '▾'));
+  },
+  shapeStyles: () => {
+    const items = SHAPE_STYLES.slice(0, 14).map((st, i) => styleChip(st, i));
+    return el('div', { class: 'gallery styles' }, el('div', { class: 'gallery-items' }, items), el('button', { class: 'gal-more', title: '자세히', onclick: (e) => run('quickStylesMenu', e.currentTarget) }, '▾'));
+  },
+  wordart: () => strip(WORDART.map((w, i) => el('button', { class: 'gal-item wa', title: w.label, onclick: () => run('applyWordArt', i), html: `<span style="${wordArtCss(w)}">가</span>` })), { cls: 'wa' }),
+  pictureStyles: () => strip(PICTURE_STYLES.map((p, i) => el('button', { class: 'gal-item pic', title: p.label, onclick: () => run('applyPictureStyle', i), html: picStyleSvg(p) })), { cls: 'pic' }),
+  tableStyles: () => {
+    const t = selOne();
+    const cur = t?.type === 'table' ? t.style : null;
+    return strip(TABLE_STYLES.map((ts, i) => el('button', { class: `gal-item tblst${cur && ((ts.kind === 'none' && cur.none) || (!cur.none && cur.accent === ts.accent && !!cur.light === (ts.kind === 'light'))) ? ' on' : ''}`, title: ts.label, onclick: () => run('applyTableStyle', i), html: tableStyleSvg(ts) })), { cls: 'tbl' });
+  },
+  transTiming: () => {
+    const s = curSlide();
+    const t = s?.transition ?? {};
+    const dur = el('input', { type: 'number', step: '0.25', min: '0', value: String(t.dur ?? 1), class: 'rnum' });
+    dur.addEventListener('change', () => run('transitionDuration', Number(dur.value)));
+    const clk = el('input', { type: 'checkbox', checked: t.advClick !== false });
+    clk.addEventListener('change', () => run('transitionAdvance', { advClick: clk.checked }));
+    const aft = el('input', { type: 'checkbox', checked: t.advAfter != null });
+    const sec = el('input', { type: 'number', step: '0.5', min: '0', value: String(t.advAfter ?? 5), class: 'rnum' });
+    aft.addEventListener('change', () => run('transitionAdvance', { advAfter: aft.checked ? Number(sec.value) : null }));
+    sec.addEventListener('change', () => { if (aft.checked) run('transitionAdvance', { advAfter: Number(sec.value) }); });
+    for (const i of [dur, sec]) i.addEventListener('keydown', (e) => e.stopPropagation());
+    return el('div', { class: 'rcol timing' },
+      el('label', { class: 'rline' }, el('span', {}, '기간:'), dur, el('small', {}, '초')),
+      el('label', { class: 'rline' }, clk, el('span', {}, '마우스를 클릭할 때')),
+      el('label', { class: 'rline' }, aft, el('span', {}, '다음 시간 후:'), sec, el('small', {}, '초')));
+  },
+  animTiming: () => {
+    const o = selObjects()[0];
+    const a = o ? curSlide().anims?.find((x) => x.obj === o.id) : null;
+    const start = el('select', { class: 'rselect', disabled: !a }, [['click', '클릭할 때'], ['with', '이전 효과와 함께'], ['after', '이전 효과 다음에']].map(([v, l]) => el('option', { value: v, selected: a?.start === v }, l)));
+    start.addEventListener('change', () => run('animTiming', { start: start.value }));
+    const dur = el('input', { type: 'number', step: '0.25', min: '0', value: String(a?.dur ?? 0.5), class: 'rnum', disabled: !a });
+    dur.addEventListener('change', () => run('animTiming', { dur: Number(dur.value) }));
+    const delay = el('input', { type: 'number', step: '0.25', min: '0', value: String(a?.delay ?? 0), class: 'rnum', disabled: !a });
+    delay.addEventListener('change', () => run('animTiming', { delay: Number(delay.value) }));
+    for (const i of [dur, delay]) i.addEventListener('keydown', (e) => e.stopPropagation());
+    return el('div', { class: 'rcol timing' },
+      el('label', { class: 'rline' }, el('span', {}, '시작:'), start),
+      el('label', { class: 'rline' }, el('span', {}, '재생 시간:'), dur, el('small', {}, '초')),
+      el('label', { class: 'rline' }, el('span', {}, '지연:'), delay, el('small', {}, '초'),
+        el('button', { class: 'rbtn small', title: '앞으로 이동', disabled: !a, onclick: () => run('moveAnim', -1) }, '▲'),
+        el('button', { class: 'rbtn small', title: '뒤로 이동', disabled: !a, onclick: () => run('moveAnim', 1) }, '▼')));
+  },
+  objSize: () => {
+    const o = selObjects()[0];
+    const cm = (px) => String(Math.round(px * 2.54 / 96 * 100) / 100);
+    const h = el('input', { type: 'number', step: '0.1', class: 'rnum wide', value: o ? cm(o.h) : '', disabled: !o });
+    const w = el('input', { type: 'number', step: '0.1', class: 'rnum wide', value: o ? cm(o.w) : '', disabled: !o });
+    h.addEventListener('change', () => run('setSize', { h: Number(h.value) * 96 / 2.54 }));
+    w.addEventListener('change', () => run('setSize', { w: Number(w.value) * 96 / 2.54 }));
+    for (const i of [h, w]) i.addEventListener('keydown', (e) => e.stopPropagation());
+    return el('div', { class: 'rcol timing' },
+      el('label', { class: 'rline' }, el('span', { 'data-icon': 'rowInsert' }), el('span', {}, '높이:'), h, el('small', {}, 'cm')),
+      el('label', { class: 'rline' }, el('span', { 'data-icon': 'colInsert' }), el('span', {}, '너비:'), w, el('small', {}, 'cm')));
+  },
+};
+
+export function shapeIconSvg(kind, size = 18) {
+  if (kind === 'textBox') return `<svg viewBox="-1 -1 16 16" width="${size}" height="${size}"><rect x="0.5" y="1.5" width="13" height="11" fill="#fff" stroke="#4a6a94"/><path d="M3 4h8M7 4v6" stroke="#4a6a94" stroke-width="1.4"/></svg>`;
+  // 괄호 · 호 · 연결선은 선만 (PowerPoint 갤러리처럼)
+  const line = /^(line|straightConnector1|arc|bracketPair|bracePair|leftBracket|rightBracket|leftBrace|rightBrace)$|Connector/.test(kind);
+  const h = kind === 'line' || kind === 'straightConnector1' || /Connector/.test(kind) ? 14 : 12;
+  const parts = shapePaths(kind, 14, h);
+  const body = parts.map((p) => `<path d="${p.d}" fill="${line || p.fill === 'none' ? 'none' : '#dbe6f4'}" stroke="${p.stroke ? '#4a6a94' : 'none'}" stroke-width="1" vector-effect="non-scaling-stroke"/>`).join('');
+  return `<svg viewBox="-1 -1 16 16" width="${size}" height="${size}">${body}${kind === 'straightConnector1' ? '<path d="M14 14l-4-1 3-3z" fill="#4a6a94"/>' : ''}</svg>`;
+}
+
+export function styleChip(st, i) {
+  const t = S.pres.theme;
+  const bg = fillCss(t, st.fill);
+  const border = st.line ? `2px solid ${resolveColor(t, st.line.color)}` : '2px solid transparent';
+  return el('button', { class: 'gal-item style', title: st.label, style: { background: bg, border, color: resolveColor(t, st.text) }, onclick: () => run('applyQuickStyle', i) }, 'Abc');
+}
+
+export function wordArtCss(w) {
+  const t = S.pres.theme;
+  const r = w.run;
+  return [`color:${resolveColor(t, r.color ?? '@tx1')}`, r.b ? 'font-weight:700' : '', r.shadow ? 'text-shadow:1px 1.5px 2px rgba(0,0,0,.45)' : '', r.outline ? `-webkit-text-stroke:${Math.min(1.2, r.outline.width)}px ${resolveColor(t, r.outline.color)}` : ''].filter(Boolean).join(';');
+}
+
+function picStyleSvg(p) {
+  const s = p.set;
+  const path = shapePath(s.shape ?? 'rect', 44, 30);
+  const stroke = s.line ? resolveColor(S.pres.theme, s.line.color) : 'none';
+  return `<svg viewBox="-4 -4 52 38" width="52" height="38"><defs><linearGradient id="pg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#9cc3e6"/><stop offset="1" stop-color="#5b8c3a"/></linearGradient></defs>${s.shadow ? `<path d="${path}" transform="translate(2 2)" fill="rgba(0,0,0,.25)"/>` : ''}<path d="${path}" fill="url(#pg)" stroke="${stroke === '#FFFFFF' ? '#ddd' : stroke}" stroke-width="${s.line ? Math.min(4, s.line.width / 2) : 0}"/></svg>`;
+}
+
+function tableStyleSvg(ts) {
+  const t = S.pres.theme;
+  const acc = resolveColor(t, `@${ts.accent}`);
+  const rows = [];
+  for (let r = 0; r < 4; r++) {
+    const fill = ts.kind === 'none' ? '#fff' : r === 0 ? acc : ts.kind === 'light' ? (r % 2 ? resolveColor(t, `@${ts.accent}:lm20:lo80`) : '#fff') : resolveColor(t, r % 2 ? `@${ts.accent}:lm20:lo80` : `@${ts.accent}:lm40:lo60`);
+    rows.push(`<rect x="0" y="${r * 8}" width="44" height="8" fill="${fill}" stroke="${ts.kind === 'none' ? '#999' : ts.kind === 'light' ? acc : '#fff'}" stroke-width=".6"/>`);
+  }
+  return `<svg viewBox="0 0 44 32" width="46" height="34">${rows.join('')}<path d="M11 0v32M22 0v32M33 0v32" stroke="${ts.kind === 'none' ? '#999' : '#fff'}" stroke-width=".6"/></svg>`;
+}
+
+export function slideTitleText(s) { const t = s.objects.find((o) => o.ph === 'title' || o.ph === 'ctrTitle'); return t ? plainText(t.text) : ''; }
