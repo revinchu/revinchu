@@ -1,7 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Axis } from '../src/axis.js';
-import { cellTextOverflow } from '../src/cell-text-overflow.js';
+import { cellTextOverflow, isCellDateRange } from '../src/cell-text-overflow.js';
+
+test('두 날짜로만 된 보고서 기간은 셀 안에 함께 표시한다', () => {
+  for (const text of ['2023-03-08~2023-03-14', '2023-03-29 ~ 2023-04-04', '2024/2/29–2024/3/6', ' 2023.3.8 ～ 2023.3.14 ', '2023-03-08-2023-03-14']) assert.equal(isCellDateRange(text), true, text);
+});
+
+test('일반 문장·단일 날짜·유효하지 않은 날짜는 기간으로 간주하지 않는다', () => {
+  for (const text of ['보고 기간 2023-03-08~2023-03-14', '2023-03-08~2023-03-14 광고', '2023-03-08', '2023-02-29~2023-03-01', '1900-02-29~1900-03-01', '2023-04-31~2023-05-01', '2023-00-01~2023-01-01', '2023-13-01~2023-12-01', '2023-3/8~2023-3-14', '', null, 45000]) assert.equal(isCellDateRange(text), false, String(text));
+});
 
 // 네이티브 Excel의 합성 PDF에서 확인한 차단 경계: 숨긴 셀의 값은 건너뛰고
 // 다음 표시 셀의 값에서 멈춘다. 가운데 정렬은 양쪽 경계를 독립적으로 쓴다.

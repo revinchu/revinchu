@@ -218,6 +218,9 @@ input.rselect { padding: 0 4px; }
 .grid-view {
   position: absolute; left: 0; top: 0; overflow: hidden; background: var(--surface); cursor: cell;
   user-select: none; -webkit-user-select: none; touch-action: none;
+  /* 셀 글자와 측정 캔버스가 같은 배율을 사용한다. iOS 자동 글자 확대만 막고
+     브라우저 확대와 시트 배율은 그대로 지원한다. */
+  -webkit-text-size-adjust: 100%; text-size-adjust: 100%;
 }
 .grid-view.col-resize { cursor: col-resize; }
 .grid-view.row-resize { cursor: row-resize; }

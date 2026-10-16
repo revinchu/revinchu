@@ -13,7 +13,7 @@ import { noteVisible } from './review-state.js';
 import { Axis } from './axis.js';
 import { headerResizeEdge } from './header-resize.js';
 import { visibleAxisIndices } from './axis-window.js';
-import { cellTextOverflow } from './cell-text-overflow.js';
+import { cellTextOverflow, isCellDateRange } from './cell-text-overflow.js';
 import { GridAccessibility } from './grid-a11y.js';
 import { gridLineWidth, resolveGridBorders, gridBorderPaintOrder, gridBorderJoins } from './grid-lines.js';
 import { pictureTransform } from './picture.js';
@@ -1139,9 +1139,12 @@ export class GridView {
     else if (style.valign === 'middle') css.push('align-items:center;padding-top:1px;padding-bottom:1px');
     // 왼쪽 본문은 경계에서 2px, 가운데 맞춤은 상하 여백을 같게 둔다.
     // 행 높이와 가운데/오른쪽의 가로 위치는 파일의 값을 그대로 유지한다.
-    if (eff === 'left') css.push('padding-left:2px');
-    if (this._tog?.has(`${r},${c}`)) css.push(`padding-left:${3 + (style.indent ?? 0) * 9 + 14}px`);
-    else if (style.indent) css.push(`padding-${eff === 'right' ? 'right' : 'left'}:${3 + style.indent * 9}px`);
+    let padLeft = eff === 'left' ? 2 : 3, padRight = 3;
+    if (this._tog?.has(`${r},${c}`)) padLeft = 3 + (style.indent ?? 0) * 9 + 14;
+    else if (style.indent) {
+      if (eff === 'right') padRight = 3 + style.indent * 9;
+      else padLeft = 3 + style.indent * 9;
+    }
     const bg = style.fill || (merge ? '#fff' : null);
     if (bar) {
       // 그라데이션(엑셀 기본) 또는 단색, 음수 막대는 오른쪽에서 왼쪽으로
@@ -1174,10 +1177,11 @@ export class GridView {
     edge('br', true, x + w - p.ox, y - p.oy, y + h - p.oy);
     const cls = [];
     let overflow = null;
+    const dateRange = !style.rotate && !across && isCellDateRange(text);
     // 숫자는 자동 줄 바꿈이어도 한 줄 (엑셀: 들어가지 않으면 ###)
     const wrap = style.wrap && typeof v !== 'number';
     if (wrap) cls.push('wrap');
-    else if (text && typeof v !== 'number' && !merge && (eff === 'left' || eff === 'center' || eff === 'right')) {
+    else if (text && typeof v !== 'number' && !merge && !style.shrink && !dateRange && (eff === 'left' || eff === 'center' || eff === 'right')) {
       // 숨긴 열은 건너뛴다. 빈 칸이 이어져도 다음 값·수식·병합 경계를 넘지 않는다.
       const blocked = cc => {
         const neighborCell = wb.getCell(si, r, cc);
@@ -1194,18 +1198,19 @@ export class GridView {
     // 아이콘 집합: 아이콘은 왼쪽 끝에 고정하고 글자는 남은 너비 안에 (엑셀과 같음)
     const ICON_W = 18;
     if (icon) {
-      css.push(`padding-left:${(style.indent && eff !== 'right' ? 3 + style.indent * 9 : 3) + ICON_W}px`);
+      padLeft = (style.indent && eff !== 'right' ? 3 + style.indent * 9 : 3) + ICON_W;
       const i = cls.indexOf('ovf');
       if (i >= 0) cls.splice(i, 1);
     }
     const filterCell = this._filterCells?.has(`${r},${c}`);
     if (filterCell) {
-      css.push('padding-right:21px');
+      padRight = 21;
       cls.push('filter-cell');
       const i = cls.indexOf('ovf');
       if (i >= 0) cls.splice(i, 1);
     }
-    const room = Math.max(0, w - 6 - (icon ? ICON_W : 0) - (filterCell ? 18 : 0));
+    css.push(`padding-left:${padLeft}px`, `padding-right:${padRight}px`);
+    const room = Math.max(0, w - Math.max(6, padLeft + padRight));
     if (typeof v === 'number' && text && !st.showFormulas) {
       const tw = measureText(text, style);
       if (tw > room) {
@@ -1216,9 +1221,21 @@ export class GridView {
     }
     // 셀에 맞춤(축소): 글자가 칸보다 넓으면 글꼴을 줄여서 한 줄에 맞춤
     let spanCss = '';
-    if (style.shrink && text && !style.wrap && typeof v !== 'number') {
+    // 날짜 범위는 양끝 날짜를 함께 읽을 수 있게 화면에서만 맞춘다.
+    // 저장된 글꼴 크기·열 너비·셀 값은 바꾸지 않는다.
+    if ((style.shrink || dateRange) && text && !style.wrap && typeof v !== 'number') {
       const tw = measureText(text, style);
-      if (tw > room) css.push(`font-size:${(((style.size ?? BASE_FONT.size) * room) / tw).toFixed(2)}pt`);
+      if (tw > room) {
+        const available = Math.max(0, room - .5);
+        let size = Math.floor((style.size ?? BASE_FONT.size) * available / tw * 100) / 100;
+        // 작은 글꼴의 힌팅·소수 반올림 때문에 비례 계산과 실제 폭이 다를 수 있다.
+        for (let i = 0; size > 0 && i < 2; i++) {
+          const measured = measureText(text, { ...style, size });
+          if (measured <= available) break;
+          size = Math.floor(size * available / measured * 100) / 100;
+        }
+        css.push(`font-size:${size}pt`);
+      }
     }
     // 텍스트 방향: 각도(시계 반대 방향 +), 255 = 세로 쓰기
     let rotBox = null;
