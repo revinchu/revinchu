@@ -1,36 +1,45 @@
 {% extends "public/base.html" %}
 {% block title %}{{ t('concierge_title') }} · {{ brand() }}{% endblock %}
+{% set ICONS = {'hotel': 'bed-double', 'kfood': 'utensils', 'interpreter': 'languages', 'transport': 'car', 'tour': 'landmark', 'vip': 'crown'} %}
+{% set NEED = {'hotel':'hotel','kfood':'kfood','interpreter':'interpreter','transport':'airport_pickup','tour':'tour','vip':'vip'} %}
 {% block content %}
-<section class="hero hero-sm">
-  <div class="wrap">
-    <h1>{{ t('concierge_title') }}</h1>
-    <p class="lead">{{ t('concierge_sub') }}</p>
+<section class="wrap page">
+  <h1 class="page-title">{{ t('concierge_title') }}</h1>
+  <p class="lead page-lead">{{ t('concierge_sub') }}</p>
+  <nav class="jump" aria-label="{{ t('concierge_title') }}">
+    {% for ptype in grouped %}<a href="#{{ ptype }}">{{ icon(ICONS[ptype], 16) }} {{ t('pt_' ~ ptype) }}</a>{% endfor %}
+  </nav>
+</section>
+
+<section class="wrap block">
+  <div class="itinerary">
+    <h2>{{ t('itinerary_title') }}</h2>
+    <table>
+      <tbody>
+      {% for d in range(1, 6) %}
+      <tr><th scope="row">{% if lang in ['ko', 'ja'] %}{{ d }}{{ t('day') }}{% elif lang == 'zh' %}第{{ d }}天{% else %}{{ t('day') }} {{ d }}{% endif %}</th><td>{{ t('itin_d' ~ d) }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <a class="btn btn-accent" href="{{ url_for('public.consult', need=['hotel','kfood','tour','airport_pickup']) }}">{{ t('request_concierge') }} {{ icon('arrow-right', 16) }}</a>
   </div>
 </section>
-<section class="wrap section">
-  <div class="partner-grid">
-    {% for ptype, items in grouped.items() %}
-    <div class="partner-col" id="{{ ptype }}">
-      <h2>{{ t('pt_' ~ ptype) }}</h2>
+
+<section class="wrap block">
+  {% for ptype, items in grouped.items() %}
+  <div class="partner-section" id="{{ ptype }}">
+    <h2>{{ icon(ICONS[ptype], 20) }} {{ t('pt_' ~ ptype) }}</h2>
+    <div class="partner-rows">
       {% for p in items %}
-      <div class="partner-card">
-        <strong>{{ p.name }}</strong> {% if p.is_demo %}<span class="badge badge-demo">{{ t('demo_badge') }}</span>{% endif %}
+      <div class="partner-row">
+        <p class="nearby-name">{{ p.name }} {% if p.is_demo %}<span class="demo-tag">{{ t('demo_badge') }}</span>{% endif %}</p>
         <p class="small">{{ p.description }}</p>
         <span class="price-band">{{ '₩' * p.price_band }}<span class="dim">{{ '₩' * (3 - p.price_band) }}</span></span>
       </div>
-      {% else %}<p class="muted small">-</p>{% endfor %}
-      <a class="link-arrow small" href="{{ url_for('public.consult', need=[{'hotel':'hotel','kfood':'kfood','interpreter':'interpreter','transport':'airport_pickup','tour':'tour','vip':'vip'}[ptype]]) }}">{{ t('nav_consult') }} →</a>
+      {% else %}<p class="muted small">–</p>{% endfor %}
     </div>
-    {% endfor %}
+    <a class="text-link" href="{{ url_for('public.consult', need=[NEED[ptype]]) }}">{{ t('nav_consult') }} {{ icon('arrow-right', 15) }}</a>
   </div>
-</section>
-<section class="wrap section">
-  <h2 class="section-title">{{ t('itinerary_title') }}</h2>
-  <ol class="timeline">
-    {% for d in range(1, 6) %}
-    <li><span class="day">{% if lang in ['ko', 'ja'] %}{{ d }}{{ t('day') }}{% elif lang == 'zh' %}第{{ d }}天{% else %}{{ t('day') }} {{ d }}{% endif %}</span> {{ t('itin_d' ~ d) }}</li>
-    {% endfor %}
-  </ol>
-  <a class="btn btn-primary" href="{{ url_for('public.consult', need=['hotel','kfood','tour','airport_pickup']) }}">{{ t('request_concierge') }}</a>
+  {% endfor %}
 </section>
 {% endblock %}

@@ -32,11 +32,11 @@
     <div class="panel">
       <h2>니즈</h2>
       <dl class="kv">
-        <dt>희망 진료</dt><dd>{{ lead.treatment_category | i18n_ko('sp') }} — {{ lead.treatment_interest or '-' }}</dd>
+        <dt>희망 진료</dt><dd>{{ lead.treatment_category | i18n_ko('sp') }}{% if lead.treatment_interest %} — {{ lead.treatment_interest }}{% endif %}</dd>
         <dt>병원 선호</dt><dd>{% for p in lead.hospital_preferences.split(',') if p %}<span class="chip">{{ p | i18n_ko('pref') }}</span>{% else %}-{% endfor %}</dd>
         <dt>희망 병원</dt><dd>{{ lead.hospital_name or '추천 요청' }}</dd>
         <dt>예산</dt><dd>{{ lead.budget_band | i18n_ko('bud') or '-' }}</dd>
-        <dt>방문 일정</dt><dd>{{ lead.preferred_visit_date or '-' }} · {{ lead.stay_nights or '-' }}박 · {{ lead.travel_party_size or '-' }}명</dd>
+        <dt>방문 일정</dt><dd>{{ [lead.preferred_visit_date or '날짜 미정', (lead.stay_nights ~ '박') if lead.stay_nights else '', (lead.travel_party_size ~ '명') if lead.travel_party_size else ''] | select | join(' · ') }}</dd>
         <dt>컨시어지</dt><dd>{% for n in lead.concierge_needs.split(',') if n %}<span class="chip">{{ n | i18n_ko('need') }}</span>{% else %}-{% endfor %}</dd>
         <dt>숙소 선호</dt><dd>{{ lead.accommodation_pref or '-' }}</dd>
         <dt>음식 선호</dt><dd>{{ lead.food_pref or '-' }}</dd>

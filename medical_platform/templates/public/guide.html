@@ -1,15 +1,15 @@
 {% extends "public/base.html" %}
 {% block title %}{{ t('guide_title') }} · {{ brand() }}{% endblock %}
 {% block content %}
-<section class="wrap section narrow">
+<section class="wrap page narrow">
   <h1 class="page-title">{{ t('guide_title') }}</h1>
   <ol class="steps">
-    {% for i in range(1, 6) %}<li><span>{{ i }}</span>{{ t('step' ~ i) }}</li>{% endfor %}
+    {% for i in range(1, 6) %}<li><span class="step-no">{{ i }}</span><p>{{ t('step' ~ i) }}</p></li>{% endfor %}
   </ol>
-  <h2>FAQ</h2>
+  <h2 class="faq-h">FAQ</h2>
   <details open><summary>{{ t('faq_price_q') }}</summary><p>{{ t('faq_price_a') }}</p></details>
   <details><summary>{{ t('faq_ads_q') }}</summary><p>{{ t('faq_ads_a') }}</p></details>
-  <p class="small muted">{{ t('footer_disclaimer') }}</p>
+  <p class="note">{{ icon('info', 15) }} {{ t('footer_disclaimer') }}</p>
 </section>
 {% include "public/_cta.html" %}
 {% endblock %}

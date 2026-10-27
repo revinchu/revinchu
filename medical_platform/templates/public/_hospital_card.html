@@ -1,18 +1,17 @@
-<article class="h-card">
-  <div class="h-card-top">
+<article class="h-row">
+  <div class="h-row-main">
+    <p class="h-meta">{{ t('rg_' ~ h.region) }} · {{ h.district }} — {% for s in h.specialty_list %}{{ t('sp_' ~ s) }}{% if not loop.last %}, {% endif %}{% endfor %}</p>
     <h3><a href="{{ url_for('public.hospital_detail', slug=h.slug) }}">{{ h.name }}</a></h3>
-    {% if h.is_sponsored %}<span class="badge badge-ad">{{ t('sponsored') }}</span>{% endif %}
-    {% if h.is_demo %}<span class="badge badge-demo">{{ t('demo_badge') }}</span>{% endif %}
+    <p class="h-summary">{{ h.summary }}</p>
+    <ul class="marks">
+      {% for tg in h.tags %}<li><i class="mark mark-{{ tg.tag }}"></i>{{ t('tag_' ~ tg.tag) }}</li>{% endfor %}
+      {% if h.intl_coordinator %}<li>{{ icon('languages', 14) }}{{ t('intl_coordinator') }}</li>{% endif %}
+    </ul>
   </div>
-  <p class="muted small">{{ t('rg_' ~ h.region) }} · {{ h.district }} · {% for s in h.specialty_list %}{{ t('sp_' ~ s) }}{% if not loop.last %}, {% endif %}{% endfor %}</p>
-  <p class="small">{{ h.summary }}</p>
-  <div class="chips">
-    {% for tg in h.tags %}<span class="chip chip-{{ tg.tag }}">{{ t('tag_' ~ tg.tag) }}</span>{% endfor %}
-    {% if h.intl_coordinator %}<span class="chip chip-soft">{{ t('intl_coordinator') }}</span>{% endif %}
-  </div>
-  <div class="h-card-foot">
-    <span class="price-band">{{ '₩' * h.price_band }}<span class="dim">{{ '₩' * (3 - h.price_band) }}</span></span>
-    <span class="small muted">{{ h.language_list | join(' · ') | upper }}</span>
-    <a class="link-arrow" href="{{ url_for('public.hospital_detail', slug=h.slug) }}">{{ t('view_details') }} →</a>
+  <div class="h-row-side">
+    <span class="price-band" title="{{ t('filter_price') }}">{{ '₩' * h.price_band }}<span class="dim">{{ '₩' * (3 - h.price_band) }}</span></span>
+    <span class="h-langs">{{ h.language_list | join(' ') | upper }}</span>
+    {% if h.is_sponsored %}<span class="label-ad">{{ t('sponsored') }}</span>{% endif %}
+    {% if h.is_demo %}<span class="demo-tag">{{ t('demo_badge') }}</span>{% endif %}
   </div>
 </article>

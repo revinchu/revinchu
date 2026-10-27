@@ -7,6 +7,7 @@ document.querySelectorAll("[data-map]").forEach(function (el) {
     maxZoom: 18,
     attribution: "&copy; OpenStreetMap contributors",
   }).addTo(map);
+  var pin = L.divIcon({ className: "", html: '<div class="pin"></div>', iconSize: [14, 14], iconAnchor: [7, 7], popupAnchor: [0, -8] });
   var bounds = [];
   points.forEach(function (p) {
     var a = document.createElement("a");
@@ -18,7 +19,7 @@ document.querySelectorAll("[data-map]").forEach(function (el) {
     sub.className = "small";
     sub.textContent = p.district || "";
     popup.appendChild(sub);
-    L.marker([p.lat, p.lng]).addTo(map).bindPopup(popup);
+    L.marker([p.lat, p.lng], { icon: pin, title: p.name }).addTo(map).bindPopup(popup);
     bounds.push([p.lat, p.lng]);
   });
   if (bounds.length === 1) map.setView(bounds[0], 15);

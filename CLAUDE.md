@@ -28,6 +28,8 @@ Multilingual (en/ko/zh/ja/vi) hospital discovery site + lead-capture form + inte
   (명의, 유명인 방문, prices) without evidence/source fields.
 - Do not collect medical records in the consult form; hospital referrals require third-party-share consent.
 - Add UI strings to `i18n.T` for all five languages.
+- UI style: editorial / public-service look (no gradients, no rounded card grids, no emoji). Fonts, icons and Leaflet are vendored
+  under `static/vendor/` (OFL/ISC/BSD); use the `icon('name')` template helper for Lucide icons.
 
 ## Tech Stack
 

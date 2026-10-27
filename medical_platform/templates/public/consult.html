@@ -2,9 +2,9 @@
 {% block title %}{{ t('form_title') }} · {{ brand() }}{% endblock %}
 {% macro sel(name, value) %}{% if form.get(name) == value %}selected{% endif %}{% endmacro %}
 {% block content %}
-<section class="wrap section narrow">
+<section class="wrap page narrow">
   <h1 class="page-title">{{ t('form_title') }}</h1>
-  <p class="muted">{{ t('form_sub') }}</p>
+  <p class="lead page-lead">{{ t('form_sub') }}</p>
   {% if errors %}
   <div class="alert alert-error" role="alert">{% for e in errors %}<div>{{ t(e) }}</div>{% endfor %}</div>
   {% endif %}
@@ -82,7 +82,7 @@
         <label class="check"><input type="checkbox" name="concierge_needs" value="{{ n }}" {% if n in form.getlist('concierge_needs') or n in prefill.needs %}checked{% endif %}> {{ t('need_' ~ n) }}</label>
         {% endfor %}
       </div>
-      <label class="check vip-check"><input type="checkbox" name="vip_request" value="1" {% if form.get('vip_request') == '1' or 'vip' in prefill.needs %}checked{% endif %}> ★ {{ t('f_vip') }}</label>
+      <label class="check vip-check"><input type="checkbox" name="vip_request" value="1" {% if form.get('vip_request') == '1' or 'vip' in prefill.needs %}checked{% endif %}> {{ icon('crown', 16) }} {{ t('f_vip') }}</label>
       <div class="grid-2">
         <label>{{ t('f_accommodation') }}<input name="accommodation_pref" maxlength="300" value="{{ form.get('accommodation_pref', '') }}"></label>
         <label>{{ t('f_food') }}<input name="food_pref" maxlength="300" value="{{ form.get('food_pref', '') }}"></label>
@@ -103,8 +103,8 @@
       <label class="check"><input type="checkbox" name="consent_marketing" value="1" {% if form.get('consent_marketing') %}checked{% endif %}> {{ t('consent_marketing') }}</label>
     </fieldset>
 
-    <button class="btn btn-primary btn-lg btn-block">{{ t('submit') }}</button>
-    <p class="small muted">{{ t('emergency_note') }}</p>
+    <button class="btn btn-accent btn-lg">{{ t('submit') }}</button>
+    <p class="note">{{ icon('info', 15) }} {{ t('emergency_note') }}</p>
   </form>
 </section>
 {% endblock %}

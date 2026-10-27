@@ -1,7 +1,15 @@
-<section class="cta-band">
-  <div class="wrap">
-    <h2>{{ t('cta_title') }}</h2>
-    <p>{{ t('cta_sub') }}</p>
-    <a class="btn btn-light" href="{{ url_for('public.consult', **(cta_args or {})) }}">{{ t('nav_consult') }}</a>
+<section class="wrap block">
+  <div class="contact-box">
+    <div>
+      <h2>{{ t('cta_title') }}</h2>
+      <p>{{ t('cta_sub') }}</p>
+      <a class="btn btn-accent" href="{{ url_for('public.consult', **(cta_args or {})) }}">{{ t('nav_consult') }} {{ icon('arrow-right', 16) }}</a>
+    </div>
+    <div class="contact-channels">
+      <p class="footer-h">{{ t('reply_on') }}</p>
+      <ul>
+        {% for c in i18n.CONTACT_CHANNELS %}<li>{{ t('ch_' ~ c) }}</li>{% endfor %}
+      </ul>
+    </div>
   </div>
 </section>

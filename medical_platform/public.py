@@ -143,8 +143,19 @@ def root():
 @bp.route("/<lang>/")
 def home():
     hospitals = search_hospitals({}, g.lang)
+    db = get_db()
+    price_rows = db.execute(
+        """SELECT p.*, h.slug, h.name_en, h.name_ko, h.is_demo FROM price_items p
+           JOIN hospitals h ON h.id = p.hospital_id
+           WHERE h.verification_status = 'published' AND p.price_domestic_krw IS NOT NULL
+           ORDER BY p.verified_at DESC, p.id DESC LIMIT 5""").fetchall()
+    tag_counts = {r["tag"]: r["n"] for r in db.execute(
+        """SELECT t.tag, COUNT(DISTINCT t.hospital_id) AS n FROM hospital_tags t
+           JOIN hospitals h ON h.id = t.hospital_id WHERE h.verification_status = 'published' GROUP BY t.tag""")}
+    specialty_counts = {code: sum(code in h["specialty_list"] for h in hospitals) for code in i18n.SPECIALTIES}
     track("view_home")
-    return render_template("public/home.html", hospitals=hospitals, points=map_points(hospitals))
+    return render_template("public/home.html", hospitals=hospitals, points=map_points(hospitals),
+                           price_rows=price_rows, tag_counts=tag_counts, specialty_counts=specialty_counts)
 
 
 @bp.route("/<lang>/hospitals")

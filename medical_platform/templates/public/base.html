@@ -8,39 +8,63 @@
   {% for code in LANGUAGES %}
   <link rel="alternate" hreflang="{{ code }}" href="{{ url_for(request.endpoint, **dict(request.view_args or {}, lang=code)) }}">
   {% endfor %}
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/pretendard/pretendardvariable-dynamic-subset.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/leaflet.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-<body class="public">
+<body class="public lang-{{ lang }}">
+<a class="skip" href="#main">{{ t('skip_link') }}</a>
+<div class="utility">
+  <div class="wrap utility-row">
+    <span>{{ company() }} · Seoul</span>
+    <nav class="langs" aria-label="Language">
+      {% for code, label in LANGUAGES.items() %}
+      <a href="{{ url_for(request.endpoint, **dict(request.view_args or {}, lang=code)) }}{% if request.query_string %}?{{ request.query_string.decode() }}{% endif %}" hreflang="{{ code }}" {% if code == lang %}aria-current="true"{% endif %}>{{ label }}</a>
+      {% endfor %}
+    </nav>
+  </div>
+</div>
 <header class="site-header">
   <div class="wrap header-row">
-    <a class="logo" href="{{ url_for('public.home') }}">{{ brand() }}<span>by {{ company() }}</span></a>
-    <nav class="main-nav">
-      <a href="{{ url_for('public.hospitals') }}">{{ t('nav_hospitals') }}</a>
-      <a href="{{ url_for('public.concierge') }}">{{ t('nav_concierge') }}</a>
-      <a href="{{ url_for('public.guide') }}">{{ t('nav_guide') }}</a>
-      <a class="btn btn-primary" href="{{ url_for('public.consult') }}">{{ t('nav_consult') }}</a>
+    <a class="wordmark" href="{{ url_for('public.home') }}">{{ brand() | capitalize }}</a>
+    <nav class="main-nav" aria-label="Main">
+      {% set ep = request.endpoint %}
+      <a href="{{ url_for('public.hospitals') }}" {% if ep in ('public.hospitals', 'public.hospital_detail') %}aria-current="page"{% endif %}>{{ t('nav_hospitals') }}</a>
+      <a href="{{ url_for('public.concierge') }}" {% if ep == 'public.concierge' %}aria-current="page"{% endif %}>{{ t('nav_concierge') }}</a>
+      <a href="{{ url_for('public.guide') }}" {% if ep == 'public.guide' %}aria-current="page"{% endif %}>{{ t('nav_guide') }}</a>
     </nav>
-    <form class="lang-switch" method="get" action="">
-      <select aria-label="Language" onchange="location.href=this.value">
-        {% for code, label in LANGUAGES.items() %}
-        <option value="{{ url_for(request.endpoint, **dict(request.view_args or {}, lang=code)) }}{% if request.query_string %}?{{ request.query_string.decode() }}{% endif %}" {% if code == lang %}selected{% endif %}>{{ label }}</option>
-        {% endfor %}
-      </select>
-    </form>
+    <a class="btn btn-ink header-cta" href="{{ url_for('public.consult') }}">{{ t('nav_consult') }}</a>
   </div>
 </header>
-<main>{% block content %}{% endblock %}</main>
-<a class="floating-cta" href="{{ url_for('public.consult') }}">{{ t('nav_consult') }}</a>
+<main id="main">{% block content %}{% endblock %}</main>
+<a class="mobile-cta" href="{{ url_for('public.consult') }}">{{ t('nav_consult') }} {{ icon('arrow-right', 16) }}</a>
 <footer class="site-footer">
-  <div class="wrap">
-    <p><strong>{{ brand() }}</strong> · {{ t('tagline') }} · A {{ company() }} platform</p>
-    <p class="muted">{{ t('footer_disclaimer') }}</p>
-    <p class="muted">{{ t('emergency_note') }}</p>
-    <p><a href="{{ url_for('public.privacy') }}">{{ t('privacy_policy') }}</a></p>
+  <div class="wrap footer-grid">
+    <div>
+      <p class="wordmark wordmark-sm">{{ brand() | capitalize }}</p>
+      <p>{{ t('tagline') }}<br>A {{ company() }} platform.</p>
+    </div>
+    <div>
+      <p class="footer-h">{{ t('nav_hospitals') }}</p>
+      {% for s in i18n.SPECIALTIES[:5] %}<a href="{{ url_for('public.hospitals', specialty=s) }}">{{ t('sp_' ~ s) }}</a>{% endfor %}
+    </div>
+    <div>
+      <p class="footer-h">{{ t('nav_concierge') }}</p>
+      {% for pt in i18n.PARTNER_TYPES %}<a href="{{ url_for('public.concierge') }}#{{ pt }}">{{ t('pt_' ~ pt) }}</a>{% endfor %}
+    </div>
+    <div>
+      <p class="footer-h">{{ brand() | capitalize }}</p>
+      <a href="{{ url_for('public.guide') }}">{{ t('nav_guide') }}</a>
+      <a href="{{ url_for('public.consult') }}">{{ t('nav_consult') }}</a>
+      <a href="{{ url_for('public.privacy') }}">{{ t('privacy_policy') }}</a>
+    </div>
+  </div>
+  <div class="wrap footer-legal">
+    <p>{{ t('footer_disclaimer') }}</p>
+    <p>{{ t('emergency_note') }}</p>
   </div>
 </footer>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="{{ url_for('static', filename='vendor/leaflet/leaflet.js') }}"></script>
 <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>

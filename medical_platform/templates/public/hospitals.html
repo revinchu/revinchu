@@ -1,10 +1,10 @@
 {% extends "public/base.html" %}
 {% block title %}{{ t('nav_hospitals') }} · {{ brand() }}{% endblock %}
 {% block content %}
-<section class="wrap section">
+<section class="wrap page">
   <h1 class="page-title">{{ t('nav_hospitals') }}</h1>
   <form class="filters" method="get">
-    <input name="q" value="{{ args.get('q', '') }}" placeholder="{{ t('search_placeholder') }}">
+    <label class="filters-q">{{ t('what') }}<input name="q" value="{{ args.get('q', '') }}" placeholder="{{ t('search_placeholder') }}"></label>
     <label>{{ t('filter_specialty') }}
       <select name="specialty"><option value="">{{ t('filter_all') }}</option>
         {% for s in i18n.SPECIALTIES %}<option value="{{ s }}" {% if args.get('specialty') == s %}selected{% endif %}>{{ t('sp_' ~ s) }}</option>{% endfor %}
@@ -27,16 +27,16 @@
       <select name="price"><option value="">{{ t('filter_all') }}</option>
         {% for p in ['1','2','3'] %}<option value="{{ p }}" {% if args.get('price') == p %}selected{% endif %}>{{ '₩' * p|int }}</option>{% endfor %}
       </select></label>
-    <button class="btn btn-primary">{{ t('apply') }}</button>
+    <button class="btn btn-ink">{{ t('apply') }}</button>
   </form>
-  <p class="muted">{{ hospitals | length }} {{ t('results') }}</p>
-  <div class="map-split">
-    <div class="map map-tall" data-map data-points='{{ points | tojson }}'></div>
-    <div class="card-list">
+  <p class="result-count"><strong>{{ hospitals | length }}</strong> {{ t('results') }}</p>
+  <div class="map-split map-split-list">
+    <div class="rows">
       {% for h in hospitals %}{% include "public/_hospital_card.html" %}{% else %}
-      <div class="empty">{{ t('no_results') }} <a href="{{ url_for('public.consult', specialty=args.get('specialty', '')) }}">{{ t('nav_consult') }} →</a></div>
+      <div class="empty">{{ t('no_results') }} <a href="{{ url_for('public.consult', specialty=args.get('specialty', '')) }}">{{ t('nav_consult') }}</a></div>
       {% endfor %}
     </div>
+    <div class="map map-sticky" data-map data-points='{{ points | tojson }}' role="region" aria-label="{{ t('nav_hospitals') }}"></div>
   </div>
 </section>
 {% set cta_args = {'specialty': args.get('specialty', '')} %}

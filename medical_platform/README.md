@@ -86,3 +86,18 @@ medical_platform/
 
 다른 호스팅(Render·Railway·자체 서버)은 `gunicorn medical_platform.wsgi:application` 으로 실행하고,
 상담 DB 보존을 위해 `DATABASE_PATH`를 영구 디스크 경로로 지정하세요.
+
+## 디자인 원칙과 사용한 오픈소스
+
+'AI가 만든 듯한' 기본 패턴(보라·청록 그라데이션, 둥근 카드 3단, 이모지 아이콘, 중앙 정렬 히어로)을 피하고,
+정부·의료 공공 디자인 시스템(GOV.UK / NHS)의 원칙 — 라벨은 입력창 위, 밑줄 링크, 고대비 노란 포커스, 장식 없는 정보 우선 — 위에
+에디토리얼(잡지·가이드북) 톤을 얹었습니다. 홈 첫 화면에 실제 DB의 '최근 검증 가격' 표를 노출해 서비스의 핵심 가치를 바로 보여줍니다.
+
+| 구성 | 오픈소스 | 라이선스 | 위치 |
+|---|---|---|---|
+| 본문·한중일 글꼴 | [Pretendard](https://github.com/orioncactus/pretendard) | SIL OFL 1.1 | `static/vendor/pretendard/` |
+| 영문 제목 글꼴 | [Source Serif 4](https://github.com/adobe-fonts/source-serif) (Fontsource 배포본) | SIL OFL 1.1 | `static/vendor/source-serif-4/` |
+| 아이콘 | [Lucide](https://github.com/lucide-icons/lucide) | ISC | `static/vendor/lucide/icons/` (`icon()` 템플릿 함수로 인라인) |
+| 지도 | [Leaflet](https://github.com/Leaflet/Leaflet) + OpenStreetMap 타일 | BSD-2 / ODbL | `static/vendor/leaflet/` |
+
+외부 CDN 없이 모두 프로젝트 안에 포함되어 있습니다(지도 타일만 OpenStreetMap에서 로드). 각 폴더에 라이선스 파일이 있습니다.

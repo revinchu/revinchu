@@ -11,6 +11,7 @@ import os
 import secrets
 
 from flask import Flask, abort, request, session
+from markupsafe import Markup
 
 from . import db as dbmod
 from . import i18n
@@ -65,6 +66,20 @@ def create_app(test_config=None):
         brand=lambda: app.config["BRAND_NAME"],
         company=lambda: app.config["COMPANY_NAME"],
     )
+
+    icon_dir = os.path.join(BASE_DIR, "static", "vendor", "lucide", "icons")
+    icon_cache = {}
+
+    def icon(name, size=18):
+        """Lucide(ISC) SVG 아이콘을 인라인으로 삽입한다."""
+        if name not in icon_cache:
+            with open(os.path.join(icon_dir, f"{name}.svg")) as f:
+                svg = f.read().split("-->", 1)[-1].strip()
+            icon_cache[name] = svg.replace('width="24"', 'width="{s}"').replace('height="24"', 'height="{s}"').replace(
+                "<svg", '<svg aria-hidden="true" focusable="false"', 1).replace('stroke-width="2"', 'stroke-width="1.75"')
+        return Markup(icon_cache[name].replace("{s}", str(int(size))))
+
+    app.jinja_env.globals["icon"] = icon
 
     @app.template_filter("krw")
     def krw(value):
