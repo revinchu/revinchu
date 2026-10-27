@@ -1,0 +1,49 @@
+{% extends "admin/base.html" %}
+{% block title %}환자 CRM{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>환자 CRM <small class="muted">{{ leads | length }}건</small></h1>
+  {% if staff.role == 'admin' %}<a class="btn btn-ghost" href="{{ url_for('admin.leads_export', **args) }}">CSV 다운로드</a>{% endif %}
+</div>
+<div class="status-tabs">
+  <a href="{{ url_for('admin.leads', status='open') }}" class="{{ 'active' if args.get('status') == 'open' }}">진행 중</a>
+  {% for code, label in crm.LEAD_STATUSES %}<a href="{{ url_for('admin.leads', status=code) }}" class="{{ 'active' if args.get('status') == code }}">{{ label }}</a>{% endfor %}
+  <a href="{{ url_for('admin.leads') }}" class="{{ 'active' if not args.get('status') }}">전체</a>
+</div>
+<form class="filters" method="get">
+  <input type="hidden" name="status" value="{{ args.get('status', '') }}">
+  {% if can_see_pii() %}<input name="q" value="{{ args.get('q', '') }}" placeholder="이름·이메일·연락처·접수번호">{% endif %}
+  <select name="lang"><option value="">상담 언어</option>{% for c, l in LANGUAGES.items() %}<option value="{{ c }}" {% if args.get('lang') == c %}selected{% endif %}>{{ l }}</option>{% endfor %}</select>
+  <select name="treatment"><option value="">진료</option>{% for s in i18n.SPECIALTIES + ['other'] %}<option value="{{ s }}" {% if args.get('treatment') == s %}selected{% endif %}>{{ s | i18n_ko('sp') }}</option>{% endfor %}</select>
+  <select name="priority"><option value="">우선순위</option>{% for c, l in crm.PRIORITIES %}<option value="{{ c }}" {% if args.get('priority') == c %}selected{% endif %}>{{ l }}</option>{% endfor %}</select>
+  <select name="assignee"><option value="">담당자</option>{% for s in staff_list %}<option value="{{ s.id }}" {% if args.get('assignee')|int(0) == s.id %}selected{% endif %}>{{ s.name }}</option>{% endfor %}</select>
+  <label class="check"><input type="checkbox" name="mine" value="1" {% if args.get('mine') == '1' %}checked{% endif %}> 내 담당</label>
+  <button class="btn btn-primary">필터</button>
+</form>
+<div class="table-wrap">
+<table class="data">
+  <thead><tr><th>접수</th><th>우선</th><th>고객</th><th>언어/국가</th><th>진료·선호</th><th>예산·일정</th><th>컨시어지</th><th>유입</th><th>상태</th><th>담당</th><th>다음 연락</th></tr></thead>
+  <tbody>
+  {% for l in leads %}
+  {% set late = l.lead_status == 'new' and not l.first_response_at and l.created_at < sla_cut %}
+  <tr class="{{ 'row-late' if late }} {{ 'row-dup' if l.duplicate_of }}">
+    <td>{% if can_see_pii() %}<a href="{{ url_for('admin.lead_detail', lead_id=l.id) }}">{{ l.id[:8] | upper }}</a>{% else %}{{ l.id[:8] | upper }}{% endif %}<div class="small muted">{{ l.created_at | dt }}</div>
+      {% if late %}<span class="badge badge-alert">SLA 초과</span>{% endif %}{% if l.duplicate_of %}<span class="badge">중복 의심</span>{% endif %}</td>
+    <td><span class="pri pri-{{ l.priority }}">{{ l.priority | ko_label('priority') }}</span></td>
+    <td>{% if can_see_pii() %}{{ l.full_name }}<div class="small muted">{{ l.contact_channel }} · {{ l.email or l.messenger_id or l.phone }}</div>{% else %}{{ crm.mask(l.full_name, 1) }}{% endif %}</td>
+    <td>{{ l.preferred_language | upper }}<div class="small muted">{{ l.country_of_residence }}</div></td>
+    <td>{{ l.treatment_category | i18n_ko('sp') }}<div class="small muted">{{ l.hospital_name or '' }} {% for p in l.hospital_preferences.split(',') if p %}#{{ p | i18n_ko('pref') }} {% endfor %}</div></td>
+    <td>{{ l.budget_band | i18n_ko('bud') }}<div class="small muted">{{ l.preferred_visit_date }}{% if l.stay_nights %} · {{ l.stay_nights }}박{% endif %}{% if l.travel_party_size %} · {{ l.travel_party_size }}명{% endif %}</div></td>
+    <td class="small">{% if l.vip_request %}<span class="badge badge-vip">VIP</span> {% endif %}{% for n in l.concierge_needs.split(',') if n %}{{ n | i18n_ko('need') }}{% if not loop.last %}, {% endif %}{% endfor %}</td>
+    <td class="small">{{ l.utm_source or l.source_channel or '-' }}{% if l.utm_campaign %}<div class="muted">{{ l.utm_campaign }}</div>{% endif %}</td>
+    <td><span class="status status-{{ l.lead_status }}">{{ l.lead_status | ko_label('status') }}</span></td>
+    <td class="small">{{ l.staff_name or '미배정' }}</td>
+    <td class="small">{{ l.next_contact_at | dt }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="11" class="muted center">문의가 없습니다.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

@@ -1,0 +1,61 @@
+{% extends "admin/base.html" %}
+{% block title %}대시보드{% endblock %}
+{% macro bars(rows, prefix=None) %}
+  {% set mx = (rows | map(attribute='n') | max) if rows else 1 %}
+  <table class="bars">
+  {% for r in rows %}
+    <tr><td>{{ (r.k | i18n_ko(prefix)) if prefix and r.k != '(미입력)' else r.k }}</td>
+        <td class="bar-cell"><span class="bar" style="width: {{ (r.n / mx * 100) | round }}%"></span></td><td class="num">{{ r.n }}</td></tr>
+  {% else %}<tr><td class="muted">데이터 없음</td></tr>{% endfor %}
+  </table>
+{% endmacro %}
+{% block content %}
+<div class="page-head">
+  <h1>대시보드</h1>
+  <form method="get" class="inline">
+    <select name="days" onchange="this.form.submit()">
+      {% for d in [7, 30, 90, 365] %}<option value="{{ d }}" {% if d == days %}selected{% endif %}>최근 {{ d }}일</option>{% endfor %}
+    </select>
+  </form>
+</div>
+
+<div class="kpis">
+  <div class="kpi"><span>페이지 조회</span><strong>{{ visits }}</strong><small>병원 상세 {{ events.get('view_hospital', 0) }}</small></div>
+  <div class="kpi"><span>상담 신청</span><strong>{{ total }}</strong><small>조회 대비 {{ ((total / visits * 100) if visits else 0) | round(1) }}%</small></div>
+  <div class="kpi"><span>유효 문의</span><strong>{{ valid }}</strong><small>무효 {{ status_counts.get('invalid', 0) }}건 제외</small></div>
+  <div class="kpi"><span>예약 확정+</span><strong>{{ status_counts.get('booked', 0) + status_counts.get('visited', 0) + status_counts.get('followup', 0) }}</strong><small>방문 완료 {{ status_counts.get('visited', 0) + status_counts.get('followup', 0) }}</small></div>
+  <div class="kpi {{ 'kpi-alert' if overdue }}"><span>SLA 초과 미응대</span><strong>{{ overdue }}</strong><small>{{ crm.FIRST_RESPONSE_SLA_MIN }}분 초과 신규</small></div>
+  <div class="kpi"><span>평균 최초 응대</span><strong>{{ (sla.avg_min or 0) | round | int }}분</strong><small>SLA 내 {{ sla.within or 0 }}/{{ sla.responded }}</small></div>
+  <div class="kpi {{ 'kpi-warn' if due_followups }}"><span>오늘 후속 연락</span><strong>{{ due_followups }}</strong><small>예정·지연 포함</small></div>
+</div>
+
+<div class="panel">
+  <h2>전환 퍼널</h2>
+  <div class="funnel">
+    {% set top = funnel[0][1] or 1 %}
+    {% for st, n in funnel %}
+    <div class="funnel-step">
+      <div class="funnel-bar" style="width: {{ (n / top * 100) | round }}%"></div>
+      <span>{{ st | ko_label('status') }}</span><strong>{{ n }}</strong>
+      <small>{{ ((n / top * 100) if top else 0) | round(1) }}%</small>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="grid-3">
+  <div class="panel"><h2>상담 언어</h2>{{ bars(by_language) }}</div>
+  <div class="panel"><h2>거주 국가</h2>{{ bars(by_country) }}</div>
+  <div class="panel"><h2>희망 진료</h2>{{ bars(by_treatment, 'sp') }}</div>
+  <div class="panel"><h2>유입 채널 (UTM/응답)</h2>{{ bars(by_source) }}</div>
+  <div class="panel"><h2>캠페인</h2>{{ bars(by_campaign) }}</div>
+  <div class="panel"><h2>예산</h2>{{ bars(by_budget, 'bud') }}</div>
+  <div class="panel"><h2>컨시어지 니즈</h2>
+    <table class="bars">{% for k, n in needs %}<tr><td>{{ k | i18n_ko('need') }}</td><td class="num">{{ n }}</td></tr>{% else %}<tr><td class="muted">데이터 없음</td></tr>{% endfor %}</table></div>
+  <div class="panel"><h2>선호 병원 유형</h2>
+    <table class="bars">{% for k, n in prefs %}<tr><td>{{ k | i18n_ko('pref') }}</td><td class="num">{{ n }}</td></tr>{% else %}<tr><td class="muted">데이터 없음</td></tr>{% endfor %}</table></div>
+  <div class="panel"><h2>병원 상세 조회 TOP</h2>
+    <table class="bars">{% for r in top_hospitals %}<tr><td>{{ r.name_ko }}</td><td class="num">{{ r.views }}</td></tr>{% else %}<tr><td class="muted">데이터 없음</td></tr>{% endfor %}</table></div>
+</div>
+<p class="small muted">집계 지표는 개인 식별정보 없이 내부 DB에서 계산됩니다. 광고 매체에는 개인정보·건강정보를 전송하지 않습니다.</p>
+{% endblock %}

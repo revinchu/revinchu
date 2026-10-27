@@ -1,0 +1,72 @@
+{% extends "admin/base.html" %}
+{% block title %}병원 {{ '편집' if h else '등록' }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ h.name_ko if h else '병원 등록' }}</h1>
+  <a class="btn btn-ghost" href="{{ url_for('admin.hospitals') }}">← 목록</a>
+</div>
+<form method="post" class="panel">
+  <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+  <fieldset {% if staff.role != 'admin' %}disabled{% endif %}>
+  <h2>기본 식별</h2>
+  <div class="grid-3">
+    <label>공식 명칭(국문) *<input name="name_ko" required value="{{ h.name_ko if h }}"></label>
+    <label>영문명 *<input name="name_en" required value="{{ h.name_en if h }}"></label>
+    <label>URL 슬러그<input name="slug" value="{{ h.slug if h }}" placeholder="영문명으로 자동 생성"></label>
+    <label>유형<select name="hospital_type">{% for c, l in HOSPITAL_TYPES %}<option value="{{ c }}" {% if h and h.hospital_type == c %}selected{% endif %}>{{ l }}</option>{% endfor %}</select></label>
+    <label>지역<select name="region">{% for r in i18n.REGIONS %}<option value="{{ r }}" {% if h and h.region == r %}selected{% endif %}>{{ r | i18n_ko('rg') }}</option>{% endfor %}</select></label>
+    <label>세부 지역(영문)<input name="district" value="{{ h.district if h }}" placeholder="Gangnam"></label>
+    <label>주소(국문)<input name="address_ko" value="{{ h.address_ko if h }}"></label>
+    <label>주소(영문)<input name="address_en" value="{{ h.address_en if h }}"></label>
+    <div class="grid-2"><label>위도<input name="lat" value="{{ h.lat if h and h.lat is not none }}"></label><label>경도<input name="lng" value="{{ h.lng if h and h.lng is not none }}"></label></div>
+    <label>대표 전화<input name="phone" value="{{ h.phone if h }}"></label>
+    <label>공식 홈페이지<input name="website" value="{{ h.website if h }}"></label>
+  </div>
+
+  <h2>의료·외국인 지원</h2>
+  <p class="label">진료과목</p>
+  <div class="check-grid">
+    {% set specs = (h.specialties.split(',') if h else []) %}
+    {% for s in i18n.SPECIALTIES %}<label class="check"><input type="checkbox" name="specialties" value="{{ s }}" {% if s in specs %}checked{% endif %}> {{ s | i18n_ko('sp') }}</label>{% endfor %}
+  </div>
+  <div class="grid-3">
+    <label>지원 언어 (쉼표 구분 코드)<input name="languages" value="{{ h.languages if h }}" placeholder="en,zh,ja,vi,ru"></label>
+    <label>가격대<select name="price_band">{% for p in [1,2,3] %}<option value="{{ p }}" {% if h and h.price_band == p %}selected{% endif %}>{{ '₩' * p }}</option>{% endfor %}</select></label>
+    <div class="stack">
+      <label class="check"><input type="checkbox" name="foreign_patient_registered" value="1" {% if h and h.foreign_patient_registered %}checked{% endif %}> 외국인환자 유치 등록 확인</label>
+      <label class="check"><input type="checkbox" name="intl_coordinator" value="1" {% if h and h.intl_coordinator %}checked{% endif %}> 전담 코디네이터</label>
+    </div>
+  </div>
+
+  <h2>다국어 소개</h2>
+  <div class="grid-2">
+    {% for code, label in LANGUAGES.items() %}
+    <label>{{ label }}<textarea name="summary_{{ code }}" rows="2">{{ summary.get(code, '') }}</textarea></label>
+    {% endfor %}
+  </div>
+
+  <h2>특화 태그 (근거 필수)</h2>
+  <p class="small muted">한 줄에 하나: <code>태그 | 근거 | 출처 URL</code> · 태그 코드: {{ i18n.TAGS | join(', ') }}<br>
+    근거 없는 '최고·1위·명의' 표현 금지. 유명인 방문은 공개 출처와 사용 허락이 있는 경우에만.</p>
+  <textarea name="tags" rows="4" class="mono">{{ tags_text }}</textarea>
+
+  <h2>가격 정보 (Verified Price)</h2>
+  <p class="small muted">한 줄에 하나: <code>항목(영문) | 항목(국문) | 국내 환자 가격 | 외국인 적용 가격 | 포함 | 불포함 | 출처</code></p>
+  <textarea name="prices" rows="4" class="mono">{{ prices_text }}</textarea>
+
+  <h2>의료진</h2>
+  <p class="small muted">한 줄에 하나: <code>이름(국문) | 이름(영문) | 직함 | 진료과 코드 | 자격·경력 | 출처 URL</code></p>
+  <textarea name="doctors" rows="3" class="mono">{{ doctors_text }}</textarea>
+
+  <h2>품질 관리·계약</h2>
+  <div class="grid-3">
+    <label>검증 상태<select name="verification_status">{% for c, l in VERIFICATION_STATUSES %}<option value="{{ c }}" {% if h and h.verification_status == c %}selected{% endif %}>{{ l }}</option>{% endfor %}</select></label>
+    <label>최종 확인일<input type="date" name="last_verified_at" value="{{ h.last_verified_at if h and h.last_verified_at }}"></label>
+    <label>다음 확인 예정일<input type="date" name="next_review_at" value="{{ h.next_review_at if h and h.next_review_at }}"></label>
+    <label class="check"><input type="checkbox" name="is_sponsored" value="1" {% if h and h.is_sponsored %}checked{% endif %}> 유료 광고 계약 (사이트에 '광고' 표시)</label>
+    <label class="check"><input type="checkbox" name="is_demo" value="1" {% if h and h.is_demo %}checked{% endif %}> 샘플 데이터</label>
+  </div>
+  {% if staff.role == 'admin' %}<button class="btn btn-primary btn-lg">저장</button>{% endif %}
+  </fieldset>
+</form>
+{% endblock %}

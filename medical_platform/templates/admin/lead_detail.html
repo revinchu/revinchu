@@ -1,0 +1,171 @@
+{% extends "admin/base.html" %}
+{% block title %}리드 {{ lead.id[:8] | upper }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ lead.full_name }} <small class="muted">#{{ lead.id[:8] | upper }}</small>
+    <span class="status status-{{ lead.lead_status }}">{{ lead.lead_status | ko_label('status') }}</span>
+    {% if lead.vip_request %}<span class="badge badge-vip">VIP 의전 요청</span>{% endif %}
+    {% if lead.anonymized_at %}<span class="badge badge-alert">비식별화됨</span>{% endif %}
+  </h1>
+  <a class="btn btn-ghost" href="{{ url_for('admin.leads', status='open') }}">← 목록</a>
+</div>
+
+{% if duplicates | length > 1 %}
+<div class="alert alert-warn">중복 의심 문의가 있습니다:
+  {% for d in duplicates if d.id != lead.id %}<a href="{{ url_for('admin.lead_detail', lead_id=d.id) }}">#{{ d.id[:8] | upper }}</a> ({{ d.lead_status | ko_label('status') }}) {% endfor %}</div>
+{% endif %}
+
+<div class="detail-cols">
+  <div>
+    <div class="panel">
+      <h2>고객 정보</h2>
+      <dl class="kv">
+        <dt>연락 방법</dt><dd>{{ lead.contact_channel }}</dd>
+        <dt>이메일</dt><dd>{{ lead.email or '-' }}</dd>
+        <dt>메신저 ID</dt><dd>{{ lead.messenger_id or '-' }}</dd>
+        <dt>전화</dt><dd>{{ lead.phone or '-' }}</dd>
+        <dt>국적 / 거주</dt><dd>{{ lead.nationality or '-' }} / {{ lead.country_of_residence or '-' }}</dd>
+        <dt>상담 언어</dt><dd>{{ LANGUAGES.get(lead.preferred_language, lead.preferred_language) }} (사이트: {{ lead.site_language }})</dd>
+        <dt>연령대</dt><dd>{{ lead.age_band or '-' }}</dd>
+      </dl>
+    </div>
+    <div class="panel">
+      <h2>니즈</h2>
+      <dl class="kv">
+        <dt>희망 진료</dt><dd>{{ lead.treatment_category | i18n_ko('sp') }} — {{ lead.treatment_interest or '-' }}</dd>
+        <dt>병원 선호</dt><dd>{% for p in lead.hospital_preferences.split(',') if p %}<span class="chip">{{ p | i18n_ko('pref') }}</span>{% else %}-{% endfor %}</dd>
+        <dt>희망 병원</dt><dd>{{ lead.hospital_name or '추천 요청' }}</dd>
+        <dt>예산</dt><dd>{{ lead.budget_band | i18n_ko('bud') or '-' }}</dd>
+        <dt>방문 일정</dt><dd>{{ lead.preferred_visit_date or '-' }} · {{ lead.stay_nights or '-' }}박 · {{ lead.travel_party_size or '-' }}명</dd>
+        <dt>컨시어지</dt><dd>{% for n in lead.concierge_needs.split(',') if n %}<span class="chip">{{ n | i18n_ko('need') }}</span>{% else %}-{% endfor %}</dd>
+        <dt>숙소 선호</dt><dd>{{ lead.accommodation_pref or '-' }}</dd>
+        <dt>음식 선호</dt><dd>{{ lead.food_pref or '-' }}</dd>
+        <dt>여행 동선</dt><dd>{{ lead.itinerary_interests or '-' }}</dd>
+        <dt>요청사항</dt><dd class="pre">{{ lead.message or '-' }}</dd>
+      </dl>
+    </div>
+    <div class="panel">
+      <h2>유입 정보</h2>
+      <dl class="kv small">
+        <dt>응답 채널</dt><dd>{{ lead.source_channel | i18n_ko('heard') or '-' }}</dd>
+        <dt>UTM</dt><dd>{{ lead.utm_source or '-' }} / {{ lead.utm_medium or '-' }} / {{ lead.utm_campaign or '-' }} / {{ lead.utm_content or '-' }}</dd>
+        <dt>랜딩</dt><dd>{{ lead.landing_page or '-' }}</dd>
+        <dt>리퍼러</dt><dd>{{ lead.referrer or '-' }}</dd>
+        <dt>접수</dt><dd>{{ lead.created_at | dt }}</dd>
+        <dt>최초 응대</dt><dd>{{ lead.first_response_at | dt }}</dd>
+        <dt>마지막 연락</dt><dd>{{ lead.last_contact_at | dt }}</dd>
+      </dl>
+    </div>
+    <div class="panel">
+      <h2>동의 기록</h2>
+      {% if consent %}
+      <dl class="kv small">
+        <dt>개인정보(필수)</dt><dd>{{ '✓' if consent.privacy_required else '✗' }}</dd>
+        <dt>제3자(병원·제휴사) 제공</dt><dd class="{{ 'ok' if consent.third_party_share else 'warn' }}">{{ '동의' if consent.third_party_share else '미동의' }}</dd>
+        <dt>국외 이전</dt><dd>{{ '동의' if consent.overseas_transfer else '미동의' }}</dd>
+        <dt>마케팅 수신</dt><dd>{{ '동의' if consent.marketing else '미동의' }}</dd>
+        <dt>정책 버전</dt><dd>{{ consent.policy_version }} · {{ consent.created_at | dt }}</dd>
+        <dt>철회</dt><dd>{{ consent.withdrawn_at | dt }}</dd>
+      </dl>
+      {% endif %}
+      {% if not lead.anonymized_at %}
+      <details><summary>동의 갱신 기록 (상담 중 추가 동의 획득 시)</summary>
+        <form method="post" action="{{ url_for('admin.lead_action', lead_id=lead.id) }}" class="stack">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}"><input type="hidden" name="action" value="consent_update">
+          <label class="check"><input type="checkbox" name="third_party_share" value="1" {% if consent and consent.third_party_share %}checked{% endif %}> 제3자 제공</label>
+          <label class="check"><input type="checkbox" name="overseas_transfer" value="1" {% if consent and consent.overseas_transfer %}checked{% endif %}> 국외 이전</label>
+          <label class="check"><input type="checkbox" name="marketing" value="1" {% if consent and consent.marketing %}checked{% endif %}> 마케팅</label>
+          <input name="evidence" required placeholder="동의 근거 (예: 2026-10-28 이메일 회신 캡처)">
+          <button class="btn btn-ghost">동의 기록 저장</button>
+        </form>
+      </details>
+      <div class="row-actions">
+        <form method="post" action="{{ url_for('admin.lead_action', lead_id=lead.id) }}" onsubmit="return confirm('동의 철회로 처리하시겠습니까?')">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}"><input type="hidden" name="action" value="withdraw_consent">
+          <button class="btn btn-ghost btn-sm">동의 철회 처리</button></form>
+        {% if staff.role == 'admin' %}
+        <form method="post" action="{{ url_for('admin.lead_action', lead_id=lead.id) }}" onsubmit="return confirm('개인정보를 삭제(비식별화)합니다. 되돌릴 수 없습니다.')">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}"><input type="hidden" name="action" value="anonymize">
+          <button class="btn btn-danger btn-sm">개인정보 삭제 요청 처리</button></form>
+        {% endif %}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div>
+    {% if not lead.anonymized_at %}
+    <div class="panel">
+      <h2>상담 진행</h2>
+      <form method="post" action="{{ url_for('admin.lead_action', lead_id=lead.id) }}" class="grid-2">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}"><input type="hidden" name="action" value="update">
+        <label>상태<select name="lead_status">{% for c, l in crm.LEAD_STATUSES %}<option value="{{ c }}" {% if lead.lead_status == c %}selected{% endif %}>{{ l }}</option>{% endfor %}</select></label>
+        <label>무효·이탈 사유<select name="disqualify_reason"><option value="">-</option>{% for r in crm.DISQUALIFY_REASONS %}<option {% if lead.disqualify_reason == r %}selected{% endif %}>{{ r }}</option>{% endfor %}</select></label>
+        <label>담당자<select name="assigned_staff_id">{% for s in staff_list %}<option value="{{ s.id }}" {% if lead.assigned_staff_id == s.id %}selected{% endif %}>{{ s.name }} ({{ s.languages }})</option>{% endfor %}</select></label>
+        <label>우선순위<select name="priority">{% for c, l in crm.PRIORITIES %}<option value="{{ c }}" {% if lead.priority == c %}selected{% endif %}>{{ l }}</option>{% endfor %}</select></label>
+        <label>다음 연락 예정 (KST)<input type="datetime-local" name="next_contact_at" value="{{ (lead.next_contact_at | dt).replace(' ', 'T') if lead.next_contact_at }}"></label>
+        <div class="align-end"><button class="btn btn-primary">저장</button></div>
+      </form>
+    </div>
+
+    <div class="panel">
+      <h2>상담 기록</h2>
+      <form method="post" action="{{ url_for('admin.lead_action', lead_id=lead.id) }}" class="stack">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}"><input type="hidden" name="action" value="note">
+        <textarea name="body" rows="3" required placeholder="연락 결과, 고객 요청, 병원 회신 등 (진단·치료 판단 기재 금지)"></textarea>
+        <label class="check"><input type="checkbox" name="is_contact" value="1" checked> 고객과 실제 연락함 (최초 응대·마지막 연락 시각 갱신)</label>
+        <button class="btn btn-primary">기록 추가</button>
+      </form>
+    </div>
+
+    <div class="panel">
+      <h2>병원 연결</h2>
+      {% for r in referrals %}
+      <form method="post" action="{{ url_for('admin.lead_action', lead_id=lead.id) }}" class="referral">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}"><input type="hidden" name="action" value="update_referral"><input type="hidden" name="referral_id" value="{{ r.id }}">
+        <strong>{{ r.name_ko }}</strong>
+        <select name="status">{% for c, l in crm.REFERRAL_STATUSES %}<option value="{{ c }}" {% if r.status == c %}selected{% endif %}>{{ l }}</option>{% endfor %}</select>
+        <input name="quote_note" value="{{ r.quote_note }}" placeholder="견적·회신 메모">
+        <input type="datetime-local" name="appointment_at" title="예약 일시 (KST)" value="{{ (r.appointment_at | dt).replace(' ', 'T') if r.appointment_at }}">
+        <button class="btn btn-ghost btn-sm">갱신</button>
+      </form>
+      {% else %}<p class="muted small">연결된 병원이 없습니다.</p>{% endfor %}
+      <form method="post" action="{{ url_for('admin.lead_action', lead_id=lead.id) }}" class="inline">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}"><input type="hidden" name="action" value="add_referral">
+        <select name="hospital_id">{% for h in hospitals %}<option value="{{ h.id }}">{{ h.name_ko }}</option>{% endfor %}</select>
+        <button class="btn btn-ghost">병원 연결 추가</button>
+      </form>
+      <p class="small muted">병원 전달은 고객의 제3자 제공 동의가 있어야 진행됩니다.</p>
+    </div>
+
+    <div class="panel">
+      <h2>컨시어지 요청 (숙소·통역·교통·K푸드·VIP)</h2>
+      {% for o in services %}
+      <form method="post" action="{{ url_for('admin.lead_action', lead_id=lead.id) }}" class="referral">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}"><input type="hidden" name="action" value="update_service"><input type="hidden" name="order_id" value="{{ o.id }}">
+        <strong>{{ o.service_type | i18n_ko('need') }}</strong>
+        <select name="partner_id"><option value="">제휴사 미지정</option>{% for p in partners %}<option value="{{ p.id }}" {% if o.partner_id == p.id %}selected{% endif %}>[{{ p.partner_type }}] {{ p.name }}</option>{% endfor %}</select>
+        <select name="status">{% for c, l in crm.SERVICE_STATUSES %}<option value="{{ c }}" {% if o.status == c %}selected{% endif %}>{{ l }}</option>{% endfor %}</select>
+        <input name="note" value="{{ o.note }}" placeholder="메모">
+        <button class="btn btn-ghost btn-sm">갱신</button>
+      </form>
+      {% else %}<p class="muted small">요청 없음</p>{% endfor %}
+      <form method="post" action="{{ url_for('admin.lead_action', lead_id=lead.id) }}" class="inline">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}"><input type="hidden" name="action" value="add_service">
+        <select name="service_type">{% for n in i18n.CONCIERGE_NEEDS %}<option value="{{ n }}">{{ n | i18n_ko('need') }}</option>{% endfor %}</select>
+        <button class="btn btn-ghost">서비스 요청 추가</button>
+      </form>
+    </div>
+    {% endif %}
+
+    <div class="panel">
+      <h2>활동 이력</h2>
+      <ul class="timeline-admin">
+        {% for a in activities %}
+        <li class="act-{{ a.kind }}"><div class="small muted">{{ a.created_at | dt }} · {{ a.staff_name or '시스템' }} · {{ a.kind }}</div><div class="pre">{{ a.body }}</div></li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+</div>
+{% endblock %}

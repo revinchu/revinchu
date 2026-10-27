@@ -1,0 +1,93 @@
+{% extends "public/base.html" %}
+{% block title %}{{ h.name }} · {{ brand() }}{% endblock %}
+{% block content %}
+<section class="wrap section detail">
+  <p class="crumbs"><a href="{{ url_for('public.hospitals') }}">{{ t('nav_hospitals') }}</a> / {{ t('rg_' ~ h.region) }}</p>
+  <div class="detail-head">
+    <div>
+      <h1 class="page-title">{{ h.name }}
+        {% if h.is_sponsored %}<span class="badge badge-ad">{{ t('sponsored') }}</span>{% endif %}
+        {% if h.is_demo %}<span class="badge badge-demo">{{ t('demo_badge') }}</span>{% endif %}
+      </h1>
+      <p class="muted">{{ lang != 'ko' and h.name_ko or h.name_en }} · {% for s in h.specialty_list %}{{ t('sp_' ~ s) }}{% if not loop.last %}, {% endif %}{% endfor %}</p>
+      <div class="chips">
+        {% if h.foreign_patient_registered %}<span class="chip chip-soft">✓ {{ t('registered_foreign') }}</span>{% endif %}
+        {% if h.intl_coordinator %}<span class="chip chip-soft">✓ {{ t('intl_coordinator') }}</span>{% endif %}
+        {% for tg in h.tags %}<span class="chip chip-{{ tg.tag }}">{{ t('tag_' ~ tg.tag) }}</span>{% endfor %}
+      </div>
+    </div>
+    <a class="btn btn-primary btn-lg" href="{{ url_for('public.consult', hospital=h.id) }}">{{ t('ask_about_hospital') }}</a>
+  </div>
+
+  <div class="detail-grid">
+    <div>
+      <h2>{{ t('about') }}</h2>
+      <p>{{ h.summary }}</p>
+
+      <h2>{{ t('prices') }}</h2>
+      {% if prices %}
+      <div class="table-wrap"><table class="price-table">
+        <thead><tr><th>{{ t('price_item') }}</th><th>{{ t('price_domestic') }}</th><th>{{ t('price_foreign') }}</th><th>{{ t('verified_on') }}</th></tr></thead>
+        <tbody>
+        {% for p in prices %}
+          <tr>
+            <td><strong>{{ lang == 'ko' and p.item_name_ko or p.item_name_en }}</strong>
+              {% if p.includes %}<div class="small">{{ t('includes') }}: {{ p.includes }}</div>{% endif %}
+              {% if p.excludes %}<div class="small muted">{{ t('excludes') }}: {{ p.excludes }}</div>{% endif %}
+            </td>
+            <td>{{ p.price_domestic_krw | krw }}</td>
+            <td>{{ p.price_foreign_krw | krw }}
+              {% if p.price_domestic_krw and p.price_domestic_krw == p.price_foreign_krw %}<div class="ok small">✓ {{ t('price_same') }}</div>
+              {% elif p.price_domestic_krw and p.price_foreign_krw %}<div class="warn small">Δ {{ (p.price_foreign_krw - p.price_domestic_krw) | krw }}</div>{% endif %}
+            </td>
+            <td class="small">{{ p.verified_at or '-' }}<div class="muted">{{ p.source }}</div></td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table></div>
+      <p class="small muted">{{ t('price_note') }}</p>
+      {% else %}
+      <p class="empty">{{ t('no_prices') }}</p>
+      {% endif %}
+
+      <h2>{{ t('doctors') }}</h2>
+      {% for d in doctors %}
+      <div class="doctor">
+        <strong>{{ lang == 'ko' and d.name_ko or d.name_en }}</strong> · {{ d.title }} · {{ t('sp_' ~ d.specialty) }}
+        <div class="small">{{ d.credentials }}</div>
+        <div class="small muted">{{ t('verified_on') }}: {{ d.verified_at or '-' }}{% if d.source_url %} · <a href="{{ d.source_url }}" rel="nofollow noopener" target="_blank">source</a>{% endif %}</div>
+      </div>
+      {% else %}<p class="muted">-</p>{% endfor %}
+
+      <h2>{{ t('features_evidence') }}</h2>
+      <ul class="evidence">
+        {% for tg in h.tags %}
+        <li><span class="chip chip-{{ tg.tag }}">{{ t('tag_' ~ tg.tag) }}</span> {{ tg.evidence }}
+          <span class="small muted">({{ t('verified_on') }}: {{ tg.verified_at or '-' }}{% if tg.source_url %} · <a href="{{ tg.source_url }}" rel="nofollow noopener" target="_blank">source</a>{% endif %})</span></li>
+        {% else %}<li class="muted">-</li>{% endfor %}
+      </ul>
+    </div>
+
+    <aside>
+      <div class="side-card">
+        <h3>{{ t('location') }}</h3>
+        <div class="map map-small" data-map data-points='{{ points | tojson }}'></div>
+        <p class="small">{{ h.address }}</p>
+        <p class="small"><strong>{{ t('languages_supported') }}:</strong> {{ h.language_list | join(', ') | upper }}</p>
+        <p class="small muted">{{ t('verified_on') }}: {{ h.last_verified_at or '-' }}</p>
+      </div>
+      {% if partners %}
+      <div class="side-card">
+        <h3>{{ t('nearby') }}</h3>
+        {% for p in partners %}
+        <div class="partner-mini"><span class="chip">{{ t('pt_' ~ p.partner_type) }}</span> <strong>{{ p.name }}</strong><div class="small muted">{{ p.description }}</div></div>
+        {% endfor %}
+        <a class="btn btn-ghost btn-block" href="{{ url_for('public.consult', hospital=h.id, need=['hotel','kfood']) }}">{{ t('request_concierge') }}</a>
+      </div>
+      {% endif %}
+    </aside>
+  </div>
+</section>
+{% set cta_args = {'hospital': h.id} %}
+{% include "public/_cta.html" %}
+{% endblock %}

@@ -1,0 +1,30 @@
+{% extends "admin/base.html" %}
+{% block title %}병원 DB{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>병원 DB <small class="muted">{{ hospitals | length }}곳</small></h1>
+  {% if staff.role == 'admin' %}<a class="btn btn-primary" href="{{ url_for('admin.hospital_edit') }}">+ 병원 등록</a>{% endif %}
+</div>
+<p class="small muted">상태 흐름: 수집 예정 → 자료 확보 → 검증 완료 → 게시 → 갱신 필요 → 비공개. '게시' 상태만 사이트에 노출됩니다.</p>
+<div class="table-wrap">
+<table class="data">
+  <thead><tr><th>병원</th><th>유형/지역</th><th>진료</th><th>언어</th><th>검증 상태</th><th>최종 확인</th><th>다음 확인</th><th>광고</th><th>조회</th><th>연결</th><th></th></tr></thead>
+  <tbody>
+  {% for h in hospitals %}
+  <tr class="{{ 'row-late' if h.next_review_at and h.next_review_at < today }}">
+    <td><strong>{{ h.name_ko }}</strong><div class="small muted">{{ h.name_en }}</div>{% if h.is_demo %}<span class="badge badge-demo">샘플</span>{% endif %}</td>
+    <td class="small">{{ h.hospital_type | ko_label('htype') }}<br>{{ h.region | i18n_ko('rg') }} {{ h.district }}</td>
+    <td class="small">{% for s in h.specialties.split(',') if s %}{{ s | i18n_ko('sp') }}{% if not loop.last %}, {% endif %}{% endfor %}</td>
+    <td class="small">{{ h.languages | upper }}</td>
+    <td><span class="status status-v-{{ h.verification_status }}">{{ h.verification_status | ko_label('verification') }}</span></td>
+    <td class="small">{{ h.last_verified_at or '-' }}</td>
+    <td class="small">{{ h.next_review_at or '-' }}</td>
+    <td>{% if h.is_sponsored %}<span class="badge badge-ad">광고</span>{% endif %}</td>
+    <td class="num">{{ h.views }}</td><td class="num">{{ h.referral_count }}</td>
+    <td><a href="{{ url_for('admin.hospital_edit', hid=h.id) }}">{{ '편집' if staff.role == 'admin' else '보기' }}</a></td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

@@ -14,8 +14,20 @@ revinchu/
 ├── requirements.txt             # Python dependencies
 ├── keywords.txt                 # Sample keyword list (one per line)
 ├── naver_ad_rank_checker.py     # Main rank checking program
-└── debug_html_structure.py      # HTML structure analysis utility
+├── debug_html_structure.py      # HTML structure analysis utility
+└── medical_platform/            # WIZ X 해외환자 유치 웹 플랫폼 (Flask + SQLite), see its README.md
 ```
+
+## Medical Platform (`medical_platform/`)
+
+Multilingual (en/ko/zh/ja/vi) hospital discovery site + lead-capture form + internal CRM for WIZ X.
+
+- Run: `python -m medical_platform.app` · Test: `python -m pytest medical_platform/tests`
+- Public routes are prefixed with `/<lang>/`; admin at `/admin` (Korean UI). Roles: admin / coordinator / marketer (no PII).
+- Seed hospitals and partners are fictional `[Sample]` data (`is_demo=1`). Never add unverified real-hospital claims
+  (명의, 유명인 방문, prices) without evidence/source fields.
+- Do not collect medical records in the consult form; hospital referrals require third-party-share consent.
+- Add UI strings to `i18n.T` for all five languages.
 
 ## Tech Stack
 

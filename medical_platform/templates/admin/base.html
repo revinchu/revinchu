@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>{% block title %}관리자{% endblock %} · {{ brand() }} Admin</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="admin">
+{% if staff %}
+<aside class="admin-nav">
+  <div class="logo">{{ brand() }}<span>{{ company() }} Admin</span></div>
+  <a href="{{ url_for('admin.dashboard') }}" class="{{ 'active' if request.endpoint == 'admin.dashboard' }}">대시보드</a>
+  <a href="{{ url_for('admin.leads', status='open') }}" class="{{ 'active' if request.endpoint.startswith('admin.lead') }}">환자 CRM</a>
+  {% if staff.role != 'marketer' %}<a href="{{ url_for('admin.leads', mine=1, status='open') }}">내 담당 문의</a>{% endif %}
+  <a href="{{ url_for('admin.hospitals') }}" class="{{ 'active' if request.endpoint.startswith('admin.hospital') }}">병원 DB</a>
+  <a href="{{ url_for('admin.partners') }}" class="{{ 'active' if request.endpoint == 'admin.partners' }}">제휴 서비스</a>
+  {% if staff.role == 'admin' %}
+  <a href="{{ url_for('admin.staff_admin') }}" class="{{ 'active' if request.endpoint == 'admin.staff_admin' }}">직원·권한</a>
+  <a href="{{ url_for('admin.audit_logs') }}" class="{{ 'active' if request.endpoint == 'admin.audit_logs' }}">접속·감사 로그</a>
+  {% endif %}
+  <a href="{{ url_for('public.root') }}" target="_blank">사이트 보기 ↗</a>
+  <div class="who">{{ staff.name }} ({{ staff.role | ko_label('role') }})
+    <form method="post" action="{{ url_for('admin.logout') }}"><input type="hidden" name="_csrf" value="{{ csrf_token() }}"><button class="link">로그아웃</button></form>
+  </div>
+</aside>
+{% endif %}
+<main class="admin-main">
+  {% with messages = get_flashed_messages(with_categories=true) %}
+  {% for cat, msg in messages %}<div class="alert alert-{{ cat }}">{{ msg }}</div>{% endfor %}
+  {% endwith %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

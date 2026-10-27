@@ -1,0 +1,7 @@
+<section class="cta-band">
+  <div class="wrap">
+    <h2>{{ t('cta_title') }}</h2>
+    <p>{{ t('cta_sub') }}</p>
+    <a class="btn btn-light" href="{{ url_for('public.consult', **(cta_args or {})) }}">{{ t('nav_consult') }}</a>
+  </div>
+</section>

@@ -7,3 +7,7 @@ debug_*.html
 .venv/
 venv/
 .env
+
+# medical_platform
+medical_platform/instance/
+*.db

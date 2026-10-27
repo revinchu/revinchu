@@ -1,0 +1,19 @@
+{% extends "public/base.html" %}
+{% block title %}{{ t('privacy_policy') }} · {{ brand() }}{% endblock %}
+{% block content %}
+<section class="wrap section narrow prose">
+  <h1 class="page-title">{{ t('privacy_policy') }}</h1>
+  <p class="notice">DRAFT TEMPLATE — must be reviewed by legal counsel before launch. (초안 템플릿: 출시 전 법률 검토 필수)</p>
+  <h2>1. Purpose</h2>
+  <p>We collect personal information only to respond to your consultation request, match you with hospitals and travel partners you agree to, and confirm prices and schedules.</p>
+  <h2>2. Items collected</h2>
+  <p>Required: name, at least one contact method, consultation language, treatment area. Optional: nationality, country of residence, age range, budget, visit dates, travel and concierge preferences, marketing preference.</p>
+  <p>We do not collect medical records or test results through this website. If a hospital needs them, they will be collected through a secure channel managed by that hospital.</p>
+  <h2>3. Sharing with third parties</h2>
+  <p>Your request is shared with a hospital or travel partner only if you gave separate consent, and only the minimum information needed.</p>
+  <h2>4. Retention &amp; deletion</h2>
+  <p>You can withdraw consent or request deletion at any time by contacting your coordinator. Data is de-identified after the retention period.</p>
+  <h2>5. Policy version</h2>
+  <p>{{ config['PRIVACY_POLICY_VERSION'] }}</p>
+</section>
+{% endblock %}

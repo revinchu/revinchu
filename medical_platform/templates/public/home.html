@@ -1,0 +1,67 @@
+{% extends "public/base.html" %}
+{% block content %}
+<section class="hero">
+  <div class="wrap">
+    <p class="eyebrow">{{ brand() }} · A {{ company() }} PLATFORM</p>
+    <h1>{{ t('tagline') }}</h1>
+    <h2>{{ t('hero_title') }}</h2>
+    <p class="lead">{{ t('hero_sub') }}</p>
+    <form class="search-bar" action="{{ url_for('public.hospitals') }}" method="get">
+      <input name="q" placeholder="{{ t('search_placeholder') }}" aria-label="{{ t('search_placeholder') }}">
+      <select name="specialty" aria-label="{{ t('filter_specialty') }}">
+        <option value="">{{ t('filter_specialty') }}</option>
+        {% for s in i18n.SPECIALTIES %}<option value="{{ s }}">{{ t('sp_' ~ s) }}</option>{% endfor %}
+      </select>
+      <select name="region" aria-label="{{ t('filter_region') }}">
+        <option value="">{{ t('filter_region') }}</option>
+        {% for r in i18n.REGIONS %}<option value="{{ r }}">{{ t('rg_' ~ r) }}</option>{% endfor %}
+      </select>
+      <button class="btn btn-primary">{{ t('search_btn') }}</button>
+    </form>
+  </div>
+</section>
+
+<section class="wrap section">
+  <h2 class="section-title">{{ t('what_matters') }}</h2>
+  <div class="purpose-grid">
+    {% for tag in i18n.TAGS %}
+    <a class="purpose-card purpose-{{ tag }}" href="{{ url_for('public.hospitals', tag=tag) }}">
+      <strong>{{ t('tag_' ~ tag) }}</strong>
+      <span>{{ t('tag_' ~ tag ~ '_d') }}</span>
+    </a>
+    {% endfor %}
+    <a class="purpose-card purpose-concierge" href="{{ url_for('public.concierge') }}">
+      <strong>{{ t('nav_concierge') }}</strong>
+      <span>{{ t('pt_hotel') }} · {{ t('pt_kfood') }} · {{ t('pt_vip') }}</span>
+    </a>
+  </div>
+</section>
+
+<section class="wrap section">
+  <h2 class="section-title">{{ t('browse_specialty') }}</h2>
+  <div class="chips chips-lg">
+    {% for s in i18n.SPECIALTIES %}<a class="chip" href="{{ url_for('public.hospitals', specialty=s) }}">{{ t('sp_' ~ s) }}</a>{% endfor %}
+  </div>
+</section>
+
+<section class="wrap section">
+  <h2 class="section-title">{{ t('featured_hospitals') }}</h2>
+  <div class="map-split">
+    <div class="map" data-map data-points='{{ points | tojson }}'></div>
+    <div class="card-list">
+      {% for h in hospitals[:4] %}{% include "public/_hospital_card.html" %}{% endfor %}
+      <a class="btn btn-ghost" href="{{ url_for('public.hospitals') }}">{{ t('nav_hospitals') }} →</a>
+    </div>
+  </div>
+</section>
+
+<section class="pillars">
+  <div class="wrap pillar-grid">
+    {% for p in ['verified', 'price', 'human', 'trip'] %}
+    <div class="pillar"><h3>{{ t('pillar_' ~ p) }}</h3><p>{{ t('pillar_' ~ p ~ '_d') }}</p></div>
+    {% endfor %}
+  </div>
+</section>
+
+{% include "public/_cta.html" %}
+{% endblock %}

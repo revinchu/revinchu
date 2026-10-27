@@ -1,0 +1,11 @@
+{% extends "admin/base.html" %}
+{% block title %}감사 로그{% endblock %}
+{% block content %}
+<div class="page-head"><h1>접속·감사 로그 <small class="muted">최근 500건</small></h1></div>
+<div class="table-wrap"><table class="data">
+  <thead><tr><th>시각</th><th>직원</th><th>행위</th><th>대상</th><th>IP</th></tr></thead>
+  <tbody>
+  {% for r in rows %}<tr><td class="small">{{ r.created_at | dt }}</td><td>{{ r.name or '-' }}</td><td>{{ r.action }}</td><td class="small mono">{{ r.target }}</td><td class="small">{{ r.ip }}</td></tr>{% endfor %}
+  </tbody>
+</table></div>
+{% endblock %}

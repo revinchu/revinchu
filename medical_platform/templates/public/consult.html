@@ -1,0 +1,110 @@
+{% extends "public/base.html" %}
+{% block title %}{{ t('form_title') }} · {{ brand() }}{% endblock %}
+{% macro sel(name, value) %}{% if form.get(name) == value %}selected{% endif %}{% endmacro %}
+{% block content %}
+<section class="wrap section narrow">
+  <h1 class="page-title">{{ t('form_title') }}</h1>
+  <p class="muted">{{ t('form_sub') }}</p>
+  {% if errors %}
+  <div class="alert alert-error" role="alert">{% for e in errors %}<div>{{ t(e) }}</div>{% endfor %}</div>
+  {% endif %}
+
+  <form method="post" class="consult-form" novalidate>
+    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+    <div class="hp" aria-hidden="true"><label>Website <input name="website" tabindex="-1" autocomplete="off"></label></div>
+
+    <fieldset>
+      <legend>{{ t('sec_contact') }}</legend>
+      <div class="grid-2">
+        <label>{{ t('f_name') }} *<input name="full_name" required maxlength="120" value="{{ form.get('full_name', '') }}" autocomplete="name"></label>
+        <label>{{ t('f_language') }} *
+          <select name="preferred_language" required>
+            {% for code, label in LANGUAGES.items() %}<option value="{{ code }}" {% if (form.get('preferred_language') or lang) == code %}selected{% endif %}>{{ label }}</option>{% endfor %}
+          </select></label>
+        <label>{{ t('f_channel') }} *
+          <select name="contact_channel" id="contact_channel" required>
+            <option value="">{{ t('select') }}</option>
+            {% for c in i18n.CONTACT_CHANNELS %}<option value="{{ c }}" {{ sel('contact_channel', c) }}>{{ t('ch_' ~ c) }}</option>{% endfor %}
+          </select></label>
+        <label>{{ t('f_email') }}<input type="email" name="email" maxlength="200" value="{{ form.get('email', '') }}" autocomplete="email"></label>
+        <label id="messenger_row">{{ t('f_messenger_id') }}<input name="messenger_id" maxlength="120" value="{{ form.get('messenger_id', '') }}"></label>
+        <label>{{ t('f_phone') }}<input type="tel" name="phone" maxlength="40" value="{{ form.get('phone', '') }}" autocomplete="tel"></label>
+        <label>{{ t('f_nationality') }}<input name="nationality" maxlength="60" value="{{ form.get('nationality', '') }}"></label>
+        <label>{{ t('f_residence') }}<input name="country_of_residence" maxlength="60" value="{{ form.get('country_of_residence', '') }}" autocomplete="country-name"></label>
+        <label>{{ t('f_age') }}
+          <select name="age_band"><option value="">-</option>
+            {% for a in i18n.AGE_BANDS %}<option value="{{ a }}" {{ sel('age_band', a) }}>{{ a }}</option>{% endfor %}
+          </select></label>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>{{ t('sec_treatment') }}</legend>
+      <div class="grid-2">
+        <label>{{ t('f_treatment') }} *
+          <select name="treatment_category" required>
+            <option value="">{{ t('select') }}</option>
+            {% for s in i18n.SPECIALTIES + ['other'] %}<option value="{{ s }}" {% if (form.get('treatment_category') or prefill.specialty) == s %}selected{% endif %}>{{ t('sp_' ~ s) }}</option>{% endfor %}
+          </select></label>
+        <label>{{ t('f_hospital') }}
+          <select name="preferred_hospital_id">
+            <option value="">{{ t('f_no_pref') }}</option>
+            {% for h in hospitals %}<option value="{{ h.id }}" {% if (form.get('preferred_hospital_id')|int(0) or prefill.hospital) == h.id %}selected{% endif %}>{{ h.name }}</option>{% endfor %}
+          </select></label>
+      </div>
+      <label>{{ t('f_interest') }}<input name="treatment_interest" maxlength="300" value="{{ form.get('treatment_interest', '') }}"></label>
+      <p class="label">{{ t('f_pref') }}</p>
+      <div class="check-grid">
+        {% for p in i18n.HOSPITAL_PREFS %}
+        <label class="check"><input type="checkbox" name="hospital_preferences" value="{{ p }}" {% if p in form.getlist('hospital_preferences') %}checked{% endif %}> {{ t('pref_' ~ p) }}</label>
+        {% endfor %}
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>{{ t('sec_trip') }}</legend>
+      <div class="grid-2">
+        <label>{{ t('f_budget') }}
+          <select name="budget_band"><option value="">-</option>
+            {% for b in i18n.BUDGET_BANDS %}<option value="{{ b }}" {{ sel('budget_band', b) }}>{{ t('bud_' ~ b) }}</option>{% endfor %}
+          </select></label>
+        <label>{{ t('f_date') }}<input type="date" name="preferred_visit_date" value="{{ form.get('preferred_visit_date', '') }}"></label>
+        <label>{{ t('f_nights') }}<input type="number" min="0" max="365" name="stay_nights" value="{{ form.get('stay_nights', '') }}"></label>
+        <label>{{ t('f_party') }}<input type="number" min="1" max="50" name="travel_party_size" value="{{ form.get('travel_party_size', '1') }}"></label>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>{{ t('sec_concierge') }}</legend>
+      <p class="label">{{ t('f_needs') }}</p>
+      <div class="check-grid">
+        {% for n in i18n.CONCIERGE_NEEDS if n != 'vip' %}
+        <label class="check"><input type="checkbox" name="concierge_needs" value="{{ n }}" {% if n in form.getlist('concierge_needs') or n in prefill.needs %}checked{% endif %}> {{ t('need_' ~ n) }}</label>
+        {% endfor %}
+      </div>
+      <label class="check vip-check"><input type="checkbox" name="vip_request" value="1" {% if form.get('vip_request') == '1' or 'vip' in prefill.needs %}checked{% endif %}> ★ {{ t('f_vip') }}</label>
+      <div class="grid-2">
+        <label>{{ t('f_accommodation') }}<input name="accommodation_pref" maxlength="300" value="{{ form.get('accommodation_pref', '') }}"></label>
+        <label>{{ t('f_food') }}<input name="food_pref" maxlength="300" value="{{ form.get('food_pref', '') }}"></label>
+      </div>
+      <label>{{ t('f_itinerary') }}<input name="itinerary_interests" maxlength="500" value="{{ form.get('itinerary_interests', '') }}"></label>
+      <label>{{ t('f_message') }}<textarea name="message" rows="3" maxlength="2000">{{ form.get('message', '') }}</textarea></label>
+      <label>{{ t('f_heard') }}
+        <select name="source_channel"><option value="">-</option>
+          {% for o in i18n.HEARD_OPTIONS %}<option value="{{ o }}" {{ sel('source_channel', o) }}>{{ t('heard_' ~ o) }}</option>{% endfor %}
+        </select></label>
+    </fieldset>
+
+    <fieldset>
+      <legend>{{ t('sec_consent') }}</legend>
+      <label class="check"><input type="checkbox" name="consent_privacy" value="1" required {% if form.get('consent_privacy') %}checked{% endif %}> {{ t('consent_privacy') }} <a href="{{ url_for('public.privacy') }}" target="_blank">{{ t('privacy_policy') }}</a></label>
+      <label class="check"><input type="checkbox" name="consent_third" value="1" {% if form.get('consent_third') %}checked{% endif %}> {{ t('consent_third') }}</label>
+      <label class="check"><input type="checkbox" name="consent_overseas" value="1" {% if form.get('consent_overseas') %}checked{% endif %}> {{ t('consent_overseas') }}</label>
+      <label class="check"><input type="checkbox" name="consent_marketing" value="1" {% if form.get('consent_marketing') %}checked{% endif %}> {{ t('consent_marketing') }}</label>
+    </fieldset>
+
+    <button class="btn btn-primary btn-lg btn-block">{{ t('submit') }}</button>
+    <p class="small muted">{{ t('emergency_note') }}</p>
+  </form>
+</section>
+{% endblock %}

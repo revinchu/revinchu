@@ -1,0 +1,31 @@
+{% extends "admin/base.html" %}
+{% block title %}직원·권한{% endblock %}
+{% block content %}
+<div class="page-head"><h1>직원·권한</h1></div>
+<div class="panel">
+  <p class="small muted">관리자: 전체 · 코디네이터: 상담·병원 연결 (개인정보 열람) · 마케터: 집계 지표만 (개인정보 마스킹). 신규 문의는 상담 언어를 지원하는 코디네이터 중 미처리 건이 가장 적은 사람에게 자동 배정됩니다.</p>
+  <div class="table-wrap"><table class="data">
+    <thead><tr><th>아이디</th><th>이름</th><th>역할</th><th>상담 언어</th><th>진행 중</th><th>상태</th><th>비밀번호 변경</th><th></th></tr></thead>
+    <tbody>
+    {% for s in staff_rows %}
+    <tr><td>{{ s.username }}</td><td>{{ s.name }}</td><td>{{ s.role | ko_label('role') }}</td><td>{{ s.languages | upper }}</td><td class="num">{{ s.open_count }}</td>
+      <td>{{ '활성' if s.active else '비활성' }}</td>
+      <td><form method="post" class="inline"><input type="hidden" name="_csrf" value="{{ csrf_token() }}"><input type="hidden" name="action" value="password"><input type="hidden" name="id" value="{{ s.id }}"><input type="password" name="password" minlength="8" placeholder="새 비밀번호" required><button class="btn btn-ghost btn-sm">변경</button></form></td>
+      <td>{% if s.id != staff.id %}<form method="post"><input type="hidden" name="_csrf" value="{{ csrf_token() }}"><input type="hidden" name="action" value="toggle"><input type="hidden" name="id" value="{{ s.id }}"><button class="link">{{ '비활성화' if s.active else '활성화' }}</button></form>{% endif %}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</div>
+<form method="post" class="panel">
+  <h2>직원 추가</h2>
+  <input type="hidden" name="_csrf" value="{{ csrf_token() }}"><input type="hidden" name="action" value="create">
+  <div class="grid-3">
+    <label>아이디<input name="username" required></label>
+    <label>이름<input name="name"></label>
+    <label>비밀번호 (8자 이상)<input type="password" name="password" minlength="8" required></label>
+    <label>역할<select name="role">{% for c, l in ROLES %}<option value="{{ c }}">{{ l }}</option>{% endfor %}</select></label>
+    <label>상담 언어 (쉼표 구분)<input name="languages" placeholder="en,zh"></label>
+  </div>
+  <button class="btn btn-primary">추가</button>
+</form>
+{% endblock %}

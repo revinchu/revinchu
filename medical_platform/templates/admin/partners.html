@@ -1,0 +1,50 @@
+{% extends "admin/base.html" %}
+{% block title %}제휴 서비스{% endblock %}
+{% block content %}
+<div class="page-head"><h1>제휴 서비스</h1></div>
+<div class="panel">
+  <h2>진행 중인 컨시어지 요청</h2>
+  <div class="table-wrap"><table class="data">
+    <thead><tr><th>요청</th><th>고객</th><th>방문 예정</th><th>상태</th><th>요청일</th></tr></thead>
+    <tbody>
+    {% for o in open_orders %}
+    <tr><td>{{ o.service_type | i18n_ko('need') }}</td>
+      <td>{% if can_see_pii() %}<a href="{{ url_for('admin.lead_detail', lead_id=o.lead_id) }}">{{ o.full_name }}</a>{% else %}{{ crm.mask(o.full_name, 1) }}{% endif %}</td>
+      <td>{{ o.preferred_visit_date or '-' }}</td><td>{{ o.status | ko_label('service') }}</td><td class="small">{{ o.created_at | dt }}</td></tr>
+    {% else %}<tr><td colspan="5" class="muted">없음</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</div>
+<div class="panel">
+  <h2>제휴사 목록</h2>
+  <div class="table-wrap"><table class="data">
+    <thead><tr><th>유형</th><th>이름</th><th>지역</th><th>가격대</th><th>요청 수</th><th>상태</th><th></th></tr></thead>
+    <tbody>
+    {% for p in partners %}
+    <tr><td>{{ i18n.translate('pt_' ~ p.partner_type, 'ko') }}</td><td>{{ p.name }} {% if p.is_demo %}<span class="badge badge-demo">샘플</span>{% endif %}</td>
+      <td>{{ p.region | i18n_ko('rg') }}</td><td>{{ '₩' * p.price_band }}</td><td class="num">{{ p.orders }}</td>
+      <td>{{ '노출' if p.active else '중지' }}</td>
+      <td>{% if staff.role == 'admin' %}<form method="post"><input type="hidden" name="_csrf" value="{{ csrf_token() }}"><input type="hidden" name="action" value="toggle"><input type="hidden" name="id" value="{{ p.id }}"><button class="link">{{ '중지' if p.active else '노출' }}</button></form>{% endif %}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</div>
+{% if staff.role == 'admin' %}
+<form method="post" class="panel">
+  <h2>제휴사 추가</h2>
+  <input type="hidden" name="_csrf" value="{{ csrf_token() }}"><input type="hidden" name="action" value="create">
+  <div class="grid-3">
+    <label>유형<select name="partner_type">{% for pt in i18n.PARTNER_TYPES %}<option value="{{ pt }}">{{ i18n.translate('pt_' ~ pt, 'ko') }}</option>{% endfor %}</select></label>
+    <label>이름<input name="name" required></label>
+    <label>지역<select name="region">{% for r in i18n.REGIONS %}<option value="{{ r }}">{{ r | i18n_ko('rg') }}</option>{% endfor %}</select></label>
+    <label>위도<input name="lat"></label><label>경도<input name="lng"></label>
+    <label>가격대<select name="price_band"><option value="1">₩</option><option value="2" selected>₩₩</option><option value="3">₩₩₩</option></select></label>
+    <label>소개(영문)<input name="desc_en"></label><label>소개(국문)<input name="desc_ko"></label>
+    <label>지원 언어<input name="languages" placeholder="en,zh"></label>
+    <label>웹사이트<input name="website"></label>
+  </div>
+  <p class="small muted">숙박·여행 상품 판매는 관련 인허가를 갖춘 사업자와 제휴하고, 의료비와 별도 견적으로 관리하세요.</p>
+  <button class="btn btn-primary">추가</button>
+</form>
+{% endif %}
+{% endblock %}

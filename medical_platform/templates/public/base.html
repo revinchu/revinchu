@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="{{ lang }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ brand() }} · {{ t('tagline') }}{% endblock %}</title>
+  <meta name="description" content="{{ t('hero_sub') }}">
+  {% for code in LANGUAGES %}
+  <link rel="alternate" hreflang="{{ code }}" href="{{ url_for(request.endpoint, **dict(request.view_args or {}, lang=code)) }}">
+  {% endfor %}
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="public">
+<header class="site-header">
+  <div class="wrap header-row">
+    <a class="logo" href="{{ url_for('public.home') }}">{{ brand() }}<span>by {{ company() }}</span></a>
+    <nav class="main-nav">
+      <a href="{{ url_for('public.hospitals') }}">{{ t('nav_hospitals') }}</a>
+      <a href="{{ url_for('public.concierge') }}">{{ t('nav_concierge') }}</a>
+      <a href="{{ url_for('public.guide') }}">{{ t('nav_guide') }}</a>
+      <a class="btn btn-primary" href="{{ url_for('public.consult') }}">{{ t('nav_consult') }}</a>
+    </nav>
+    <form class="lang-switch" method="get" action="">
+      <select aria-label="Language" onchange="location.href=this.value">
+        {% for code, label in LANGUAGES.items() %}
+        <option value="{{ url_for(request.endpoint, **dict(request.view_args or {}, lang=code)) }}{% if request.query_string %}?{{ request.query_string.decode() }}{% endif %}" {% if code == lang %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </form>
+  </div>
+</header>
+<main>{% block content %}{% endblock %}</main>
+<a class="floating-cta" href="{{ url_for('public.consult') }}">{{ t('nav_consult') }}</a>
+<footer class="site-footer">
+  <div class="wrap">
+    <p><strong>{{ brand() }}</strong> · {{ t('tagline') }} · A {{ company() }} platform</p>
+    <p class="muted">{{ t('footer_disclaimer') }}</p>
+    <p class="muted">{{ t('emergency_note') }}</p>
+    <p><a href="{{ url_for('public.privacy') }}">{{ t('privacy_policy') }}</a></p>
+  </div>
+</footer>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
