@@ -61,3 +61,28 @@ medical_platform/
 - 외국인환자 유치업 등록·수수료·광고 규정 검토 후 상담/예약 기능 운영 범위 확정
 - 운영 DB는 PostgreSQL + 백업, HTTPS 적용
 - 지도는 Leaflet + OpenStreetMap 타일 (트래픽 증가 시 유료 타일/카카오·구글 지도로 교체)
+
+## 웹 배포 (PythonAnywhere 무료 계정 예시)
+
+결과 주소: `https://<사용자이름>.pythonanywhere.com` — 파일 저장소가 유지되므로 SQLite 상담 DB가 재시작 후에도 남습니다.
+
+1. https://www.pythonanywhere.com 에서 무료(Beginner) 계정 가입
+2. **Consoles → Bash** 에서:
+   ```bash
+   git clone -b claude/claude-md-mlbz4ceanrc28v1i-FFlyB https://github.com/revinchu/revinchu.git
+   pip install --user flask
+   ```
+   (저장소가 비공개라면 GitHub 개인 액세스 토큰으로 clone)
+3. **Web → Add a new web app → Manual configuration → Python 3.x** 선택
+4. Web 탭의 **WSGI configuration file** 내용을 아래로 교체 (`<사용자이름>`과 비밀키 변경):
+   ```python
+   import os, sys
+   sys.path.insert(0, "/home/<사용자이름>/revinchu")
+   os.environ["SECRET_KEY"] = "충분히-길고-무작위인-문자열"
+   from medical_platform.wsgi import application
+   ```
+5. **Reload** 클릭 → `https://<사용자이름>.pythonanywhere.com` 접속, `/admin` 로그인 후 **초기 비밀번호 즉시 변경**
+6. 코드 업데이트 시: Bash에서 `cd revinchu && git pull` 후 Web 탭 Reload
+
+다른 호스팅(Render·Railway·자체 서버)은 `gunicorn medical_platform.wsgi:application` 으로 실행하고,
+상담 DB 보존을 위해 `DATABASE_PATH`를 영구 디스크 경로로 지정하세요.

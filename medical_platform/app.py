@@ -18,10 +18,22 @@ from . import i18n
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
+def _persistent_secret(instance_path):
+    """SECRET_KEY 미설정 시 instance/secret_key 에 한 번 생성해 재사용한다 (재시작·다중 워커에도 세션 유지)."""
+    path = os.path.join(instance_path, "secret_key")
+    os.makedirs(instance_path, exist_ok=True)
+    if not os.path.exists(path):
+        with open(path, "w") as f:
+            f.write(secrets.token_hex(32))
+        os.chmod(path, 0o600)
+    with open(path) as f:
+        return f.read().strip()
+
+
 def create_app(test_config=None):
     app = Flask(__name__, instance_path=os.path.join(BASE_DIR, "instance"))
     app.config.from_mapping(
-        SECRET_KEY=os.environ.get("SECRET_KEY") or secrets.token_hex(32),
+        SECRET_KEY=os.environ.get("SECRET_KEY") or _persistent_secret(app.instance_path),
         DATABASE=os.environ.get("DATABASE_PATH") or os.path.join(app.instance_path, "platform.db"),
         BRAND_NAME=os.environ.get("BRAND_NAME", "MEDIPRISM"),
         COMPANY_NAME="WIZ X",
