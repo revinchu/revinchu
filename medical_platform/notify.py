@@ -2,9 +2,9 @@
 
 발송 방식 (환경 변수)
     MAIL_BACKEND      smtp | resend | console  (미설정 시 RESEND_API_KEY → resend, SMTP_HOST → smtp, 그 외 console)
-    MAIL_FROM         보내는 주소 (예: "MEDIPRISM <no-reply@mediprism.com>")
+    MAIL_FROM         보내는 주소 (예: "브랜드명 <no-reply@내도메인.com>")
     NOTIFY_EMAIL      운영 알림 수신 주소, 쉼표로 여러 개 (예: ops@example.com)
-    SITE_URL          메일 속 관리자 링크의 기준 주소 (예: https://mediprism.com)
+    SITE_URL          메일 속 관리자 링크의 기준 주소 (예: https://내도메인.com)
     SMTP_HOST / SMTP_PORT(587) / SMTP_USER / SMTP_PASSWORD / SMTP_SSL(0|1) / SMTP_STARTTLS(1|0)
     RESEND_API_KEY
 
@@ -208,7 +208,7 @@ def send_patient_ack(lead_id):
     esc = lambda v: v.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     paras = "".join(f'<p style="margin:0 0 12px">{esc(p)}</p>' for p in body.split("\n\n"))
     html = f"""<div style="font-family:-apple-system,'Apple SD Gothic Neo','Noto Sans KR','Noto Sans SC','Noto Sans JP',sans-serif;color:#1c1f1e;max-width:560px">
-<p style="font-family:Georgia,serif;font-size:20px;font-weight:600;margin:0 0 16px">{esc(brand.capitalize())}</p>
+<p style="font-family:Georgia,serif;font-size:20px;font-weight:600;margin:0 0 16px">{esc(brand)}</p>
 {paras}<p style="font-family:Menlo,monospace;font-size:22px;letter-spacing:.12em;border:2px solid #1c1f1e;display:inline-block;padding:8px 14px">{ref}</p>
 <p style="font-size:12px;color:#7a807c;margin-top:20px">{esc(i18n.translate('emergency_note', lang))}</p></div>"""
     send("patient_ack", lead["email"], subject, text, html, lead_id)

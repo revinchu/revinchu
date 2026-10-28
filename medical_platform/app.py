@@ -1,11 +1,11 @@
-"""WIZ X 해외환자 유치 플랫폼 (가칭 MEDIPRISM) - Flask 애플리케이션 팩토리.
+"""WIZ X 해외환자 유치 플랫폼 (브랜드명 미정 — BRAND_NAME 으로 설정) - Flask 애플리케이션 팩토리.
 
 실행:
     python -m medical_platform.app            # http://127.0.0.1:5000
 환경 변수:
     SECRET_KEY        세션 서명 키 (운영 시 반드시 설정)
     DATABASE_PATH     SQLite 파일 경로 (기본: medical_platform/instance/platform.db)
-    BRAND_NAME        사이트 브랜드명 (기본: MEDIPRISM)
+    BRAND_NAME        사이트 브랜드명 (기본: WIZ X Medical — 브랜드 확정 전 임시 이름)
     ADMIN_INITIAL_PASSWORD  첫 실행 시 관리자 비밀번호 (설정하면 데모 직원 계정을 만들지 않음 — 운영 배포용)
     DB_BACKEND        sqlite(기본) | d1 (Cloudflare Workers, cloudflare/worker.py 에서 설정)
 """
@@ -39,7 +39,7 @@ def create_app(test_config=None):
     app.config.from_mapping(
         SECRET_KEY=os.environ.get("SECRET_KEY") or _persistent_secret(app.instance_path),
         DATABASE=os.environ.get("DATABASE_PATH") or os.path.join(app.instance_path, "platform.db"),
-        BRAND_NAME=os.environ.get("BRAND_NAME", "MEDIPRISM"),
+        BRAND_NAME=os.environ.get("BRAND_NAME", "WIZ X Medical"),
         COMPANY_NAME="WIZ X",
         PRIVACY_POLICY_VERSION="2026-10-v1",
         SESSION_COOKIE_HTTPONLY=True,

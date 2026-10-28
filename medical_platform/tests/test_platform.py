@@ -344,7 +344,7 @@ def test_real_smtp_delivery(app, monkeypatch):
     monkeypatch.setenv("SMTP_HOST", "127.0.0.1")
     monkeypatch.setenv("SMTP_PORT", str(port))
     monkeypatch.setenv("SMTP_STARTTLS", "0")
-    monkeypatch.setenv("MAIL_FROM", "MEDIPRISM <no-reply@example.com>")
+    monkeypatch.setenv("MAIL_FROM", "WIZ X Medical <no-reply@example.com>")
     with app.app_context():
         assert notify.send("test", "ops@example.com", "제목 테스트", "본문")
     t.join(5)

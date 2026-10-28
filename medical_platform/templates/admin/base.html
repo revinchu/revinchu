@@ -11,7 +11,7 @@
 <body class="admin">
 {% if staff %}
 <aside class="admin-nav">
-  <div class="logo">{{ brand() | capitalize }}<span>{{ company() }} Admin</span></div>
+  <div class="logo">{{ brand() }}<span>{{ company() }} Admin</span></div>
   <a href="{{ url_for('admin.dashboard') }}" class="{{ 'active' if request.endpoint == 'admin.dashboard' }}">대시보드</a>
   <a href="{{ url_for('admin.leads', status='open') }}" class="{{ 'active' if request.endpoint.startswith('admin.lead') }}">환자 CRM</a>
   {% if staff.role != 'marketer' %}<a href="{{ url_for('admin.leads', mine=1, status='open') }}">내 담당 문의</a>{% endif %}

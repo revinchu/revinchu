@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "mediprism",
+  "name": "wizx-medical",  // Worker 이름 = 기본 주소 wizx-medical.<계정>.workers.dev (브랜드 확정 후 변경 가능)
   "main": "build/src/worker.py",
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["python_workers"],
@@ -9,15 +9,15 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "mediprism",
-      // `npx wrangler d1 create mediprism` 결과의 database_id 로 교체
+      "database_name": "wizx-medical",
+      // `npx wrangler d1 create wizx-medical` 결과의 database_id 로 교체
       "database_id": "REPLACE_WITH_D1_DATABASE_ID"
     }
   ],
   // 10분마다 SLA(30분) 초과 미응대 문의 알림
   "triggers": { "crons": ["*/10 * * * *"] },
   "vars": {
-    "BRAND_NAME": "MEDIPRISM",
+    "BRAND_NAME": "WIZ X Medical",  // 브랜드 확정 시 여기만 바꾸고 다시 배포
     "MAIL_BACKEND": "resend"
   },
   "observability": { "enabled": true }
