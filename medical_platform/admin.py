@@ -12,10 +12,10 @@ import re
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 
-from flask import (Blueprint, Response, abort, flash, g, redirect, render_template, request, session, url_for)
+from flask import (Blueprint, Response, abort, current_app, flash, g, redirect, render_template, request, session, url_for)
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from . import crm, i18n
+from . import crm, i18n, notify
 from .db import get_db, now_iso
 
 bp = Blueprint("admin", __name__, url_prefix="/admin")
@@ -333,7 +333,7 @@ def lead_action(lead_id):
     ts = now_iso()
 
     if action == "update":
-        changes = []
+        changes, notify_assignee = [], None
         status = f.get("lead_status")
         if status in crm.STATUS_LABELS and status != lead["lead_status"]:
             reason = f.get("disqualify_reason", "") if status in ("invalid", "lost") else ""
@@ -345,6 +345,7 @@ def lead_action(lead_id):
             db.execute("UPDATE leads SET assigned_staff_id = ? WHERE id = ?", (assignee, lead_id))
             name = db.execute("SELECT name FROM staff WHERE id = ?", (assignee,)).fetchone()
             changes.append(f"담당자 변경: {name['name'] if name else assignee}")
+            notify_assignee = assignee
         priority = f.get("priority")
         if priority in dict(crm.PRIORITIES) and priority != lead["priority"]:
             db.execute("UPDATE leads SET priority = ? WHERE id = ?", (priority, lead_id))
@@ -356,6 +357,9 @@ def lead_action(lead_id):
         if changes:
             db.execute("UPDATE leads SET updated_at = ? WHERE id = ?", (ts, lead_id))
             crm.log_activity(lead_id, "status", " / ".join(changes), sid)
+        db.commit()
+        if notify_assignee and notify_assignee != sid:
+            notify.notify_assignment(lead_id, notify_assignee)
 
     elif action == "note":
         body = f.get("body", "").strip()[:4000]
@@ -614,12 +618,24 @@ def staff_admin():
                 flash("아이디, 8자 이상 비밀번호, 역할을 확인하세요.", "error")
                 return redirect(url_for("admin.staff_admin"))
             try:
-                db.execute("INSERT INTO staff (username, password_hash, name, role, languages, created_at) VALUES (?,?,?,?,?,?)",
+                db.execute("INSERT INTO staff (username, password_hash, name, role, languages, email, created_at) VALUES (?,?,?,?,?,?,?)",
                            (f["username"], generate_password_hash(f["password"]), f.get("name") or f["username"],
-                            f["role"], f.get("languages", ""), now_iso()))
+                            f["role"], f.get("languages", ""), f.get("email", "").strip(), now_iso()))
             except Exception:
                 flash("이미 존재하는 아이디입니다.", "error")
                 return redirect(url_for("admin.staff_admin"))
+        elif f.get("action") == "email":
+            email = f.get("email", "").strip()
+            if email and not crm.EMAIL_RE.match(email):
+                flash("이메일 주소 형식을 확인하세요.", "error")
+                return redirect(url_for("admin.staff_admin"))
+            db.execute("UPDATE staff SET email = ?, notify_email = ? WHERE id = ?",
+                       (email, int(f.get("notify_email") == "1"), f.get("id", type=int)))
+        elif f.get("action") == "test_mail":
+            ok = notify.send("test", f.get("to", "").strip(), f"[{current_app.config['BRAND_NAME']}] 메일 발송 테스트",
+                             f"발송 방식: {notify.backend()}\n이 메일이 보이면 알림 설정이 정상입니다.")
+            flash("테스트 메일을 보냈습니다. 받은편지함(스팸함 포함)을 확인하세요." if ok else "발송 실패 — 아래 발송 기록의 오류를 확인하세요.",
+                  "ok" if ok else "error")
         elif f.get("action") == "password":
             if len(f.get("password", "")) < 8:
                 flash("비밀번호는 8자 이상이어야 합니다.", "error")
@@ -633,7 +649,9 @@ def staff_admin():
         f"""SELECT s.*, (SELECT COUNT(*) FROM leads l WHERE l.assigned_staff_id = s.id
                AND l.lead_status IN ({','.join('?' * len(crm.OPEN_STATUSES))})) AS open_count
             FROM staff s ORDER BY s.role, s.name""", crm.OPEN_STATUSES).fetchall()
-    return render_template("admin/staff.html", staff_rows=rows)
+    mail_logs = db.execute("SELECT * FROM email_logs ORDER BY id DESC LIMIT 50").fetchall()
+    return render_template("admin/staff.html", staff_rows=rows, mail_logs=mail_logs, mail_backend=notify.backend(),
+                           ops_recipients=notify.ops_recipients(), mail_from=notify.mail_from())
 
 
 @bp.route("/audit")

@@ -3,7 +3,7 @@ import json
 
 from flask import (Blueprint, abort, current_app, g, redirect, render_template, request, session, url_for)
 
-from . import crm, i18n
+from . import crm, i18n, notify
 from .db import get_db, now_iso
 
 bp = Blueprint("public", __name__)
@@ -282,6 +282,8 @@ def consult():
         data, consent, errors = parse_consult_form(form, g.lang)
         if not errors:
             lead_id = crm.create_lead(data, consent, session.get("attribution", {}))
+            notify.notify_new_lead(lead_id)
+            notify.send_patient_ack(lead_id)
             return redirect(url_for("public.consult_thanks", ref=lead_id[:8].upper()))
 
     prefill = {

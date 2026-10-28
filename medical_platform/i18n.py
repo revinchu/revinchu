@@ -116,6 +116,18 @@ T = {
     "what": {"en": "What are you looking for?", "ko": "어떤 진료를 찾으세요?", "zh": "您在找什么？", "ja": "何をお探しですか？", "vi": "Bạn đang tìm gì?"},
     "any": {"en": "Anywhere / any", "ko": "전체", "zh": "不限", "ja": "指定なし", "vi": "Bất kỳ"},
 
+    # --- 접수 확인 메일 ({name}, {ref}, {brand}, {min}) ---
+    "mail_ack_subject": {"en": "[{brand}] We received your request (#{ref})", "ko": "[{brand}] 상담 신청이 접수되었습니다 (#{ref})",
+                         "zh": "[{brand}] 已收到您的咨询申请 (#{ref})", "ja": "[{brand}] ご相談を受け付けました (#{ref})",
+                         "vi": "[{brand}] Chúng tôi đã nhận yêu cầu của bạn (#{ref})"},
+    "mail_ack_body": {
+        "en": "Dear {name},\n\nThank you for contacting {brand}. A coordinator who speaks your language will reply through your preferred contact method — during business hours we aim to respond within {min} minutes.\n\nPlease keep your reference number:",
+        "ko": "{name}님, 안녕하세요.\n\n{brand}에 상담을 신청해 주셔서 감사합니다. 선택하신 언어의 코디네이터가 선호하신 연락 방법으로 연락드리며, 영업시간에는 {min}분 이내 응답을 목표로 합니다.\n\n접수 번호를 보관해 주세요:",
+        "zh": "{name}，您好：\n\n感谢您联系{brand}。会说您语言的协调员将通过您选择的联系方式回复您，工作时间内我们力争在{min}分钟内回复。\n\n请保留您的参考编号：",
+        "ja": "{name} 様\n\n{brand}にご相談いただきありがとうございます。ご希望の言語のコーディネーターが、ご指定の連絡方法でご連絡します。営業時間内は{min}分以内の返信を目標としています。\n\n受付番号をお控えください：",
+        "vi": "Xin chào {name},\n\nCảm ơn bạn đã liên hệ {brand}. Điều phối viên nói ngôn ngữ của bạn sẽ trả lời qua phương thức bạn chọn — trong giờ làm việc, chúng tôi cố gắng phản hồi trong {min} phút.\n\nVui lòng lưu mã tham chiếu:",
+    },
+
     # --- 태그 ---
     "tag_value": {"en": "Best Value", "ko": "가성비 병원", "zh": "高性价比", "ja": "コスパ重視", "vi": "Giá tốt"},
     "tag_korean_favorite": {"en": "Popular with Koreans", "ko": "한국인에게 유명한 병원", "zh": "韩国人常去", "ja": "韓国人に人気", "vi": "Người Hàn ưa chuộng"},

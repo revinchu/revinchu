@@ -11,3 +11,12 @@ venv/
 # medical_platform
 medical_platform/instance/
 *.db
+
+# cloudflare
+cloudflare/build/
+cloudflare/node_modules/
+cloudflare/.venv/
+cloudflare/python_modules/
+cloudflare/.wrangler/
+cloudflare/.dev.vars
+cloudflare/.venv-workers/

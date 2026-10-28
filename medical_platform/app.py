@@ -6,11 +6,14 @@
     SECRET_KEY        세션 서명 키 (운영 시 반드시 설정)
     DATABASE_PATH     SQLite 파일 경로 (기본: medical_platform/instance/platform.db)
     BRAND_NAME        사이트 브랜드명 (기본: MEDIPRISM)
+    ADMIN_INITIAL_PASSWORD  첫 실행 시 관리자 비밀번호 (설정하면 데모 직원 계정을 만들지 않음 — 운영 배포용)
+    DB_BACKEND        sqlite(기본) | d1 (Cloudflare Workers, cloudflare/worker.py 에서 설정)
 """
 import os
 import secrets
 
 from flask import Flask, abort, request, session
+from jinja2 import DictLoader
 from markupsafe import Markup
 
 from . import db as dbmod
@@ -41,10 +44,21 @@ def create_app(test_config=None):
         PRIVACY_POLICY_VERSION="2026-10-v1",
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
+        DB_BACKEND=os.environ.get("DB_BACKEND", "sqlite"),
+        ADMIN_INITIAL_PASSWORD=os.environ.get("ADMIN_INITIAL_PASSWORD") or None,
     )
     if test_config:
         app.config.update(test_config)
-    os.makedirs(os.path.dirname(app.config["DATABASE"]) or ".", exist_ok=True)
+    if app.config["DB_BACKEND"] == "sqlite":
+        os.makedirs(os.path.dirname(app.config["DATABASE"]) or ".", exist_ok=True)
+
+    # Cloudflare Workers 빌드는 템플릿·아이콘을 _embedded.py 로 묶어 파일시스템 없이 동작한다 (cloudflare/build.py)
+    try:
+        from . import _embedded
+    except ImportError:
+        _embedded = None
+    if _embedded is not None:
+        app.jinja_loader = DictLoader(_embedded.TEMPLATES)
 
     app.teardown_appcontext(dbmod.close_db)
 
@@ -73,8 +87,12 @@ def create_app(test_config=None):
     def icon(name, size=18):
         """Lucide(ISC) SVG 아이콘을 인라인으로 삽입한다."""
         if name not in icon_cache:
-            with open(os.path.join(icon_dir, f"{name}.svg")) as f:
-                svg = f.read().split("-->", 1)[-1].strip()
+            if _embedded is not None:
+                svg = _embedded.ICONS[name]
+            else:
+                with open(os.path.join(icon_dir, f"{name}.svg")) as f:
+                    svg = f.read()
+            svg = svg.split("-->", 1)[-1].strip()
             icon_cache[name] = svg.replace('width="24"', 'width="{s}"').replace('height="24"', 'height="{s}"').replace(
                 "<svg", '<svg aria-hidden="true" focusable="false"', 1).replace('stroke-width="2"', 'stroke-width="1.75"')
         return Markup(icon_cache[name].replace("{s}", str(int(size))))

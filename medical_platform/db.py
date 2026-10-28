@@ -6,7 +6,7 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 
-from flask import current_app, g
+from flask import current_app, g, has_request_context, request
 from werkzeug.security import generate_password_hash
 
 SCHEMA = """
@@ -204,6 +204,17 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS email_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event TEXT NOT NULL,
+    recipient TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    lead_id TEXT,
+    status TEXT NOT NULL,
+    error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS page_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     event TEXT NOT NULL,
@@ -221,11 +232,118 @@ def now_iso():
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+# ---------------------------------------------------------------------------
+# Cloudflare D1 어댑터
+# Cloudflare Python Workers에서는 Flask가 비동기 fetch 핸들러 안에서 동기적으로 실행되므로
+# pyodide.ffi.run_sync 로 D1 바인딩의 Promise를 기다릴 수 있다. 아래 클래스는 이 앱이 쓰는
+# sqlite3 API(execute/executemany/executescript, fetchone/fetchall, lastrowid, Row)만 흉내 낸다.
+# D1은 문장마다 자동 커밋되므로 commit/rollback 은 아무것도 하지 않는다.
+# ---------------------------------------------------------------------------
+
+class D1Row:
+    """sqlite3.Row 처럼 이름과 위치 인덱스로 모두 접근 가능한 행."""
+    __slots__ = ("_d", "_v")
+
+    def __init__(self, mapping):
+        self._d = mapping
+        self._v = list(mapping.values())
+
+    def __getitem__(self, key):
+        return self._v[key] if isinstance(key, int) else self._d[key]
+
+    def keys(self):
+        return list(self._d.keys())
+
+    def __iter__(self):
+        return iter(self._v)
+
+    def __len__(self):
+        return len(self._v)
+
+
+class D1Cursor:
+    def __init__(self, rows, lastrowid=None):
+        self._rows = rows
+        self.lastrowid = lastrowid
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self):
+        return list(self._rows)
+
+    def __iter__(self):
+        return iter(self._rows)
+
+
+def _plain(value, null=None):
+    """JsProxy / JsDict / jsnull 결과를 순수 파이썬 값으로 바꾼다."""
+    if hasattr(value, "to_py"):
+        value = value.to_py()
+    if null is not None and value is null:
+        return None
+    if isinstance(value, dict):
+        return {k: _plain(v, null) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_plain(v, null) for v in value]
+    return value
+
+
+class D1Connection:
+    def __init__(self, binding, run_sync=None, null=None):
+        if run_sync is None:  # Workers 런타임
+            from pyodide.ffi import run_sync
+            try:
+                from pyodide.ffi import jsnull as null
+            except ImportError:
+                null = None
+        self._db, self._run, self._null = binding, run_sync, null
+
+    def _bind(self, sql, params):
+        stmt = self._db.prepare(sql)
+        if params:
+            stmt = stmt.bind(*[self._null if (p is None and self._null is not None) else p for p in params])
+        return stmt
+
+    @staticmethod
+    def _cursor(result):
+        rows = [D1Row(r) for r in (result.get("results") or [])]
+        return D1Cursor(rows, (result.get("meta") or {}).get("last_row_id"))
+
+    def execute(self, sql, params=()):
+        return self._cursor(_plain(self._run(self._bind(sql, tuple(params)).all()), self._null))
+
+    def executemany(self, sql, seq):
+        stmts = [self._bind(sql, tuple(p)) for p in seq]
+        if stmts:
+            self._run(self._db.batch(stmts))
+
+    def executescript(self, script):
+        stmts = [self._db.prepare(s.strip()) for s in script.split(";") if s.strip()]
+        if stmts:
+            self._run(self._db.batch(stmts))
+
+    def commit(self):
+        pass
+
+    def rollback(self):
+        pass
+
+    def close(self):
+        pass
+
+
 def get_db():
     if "db" not in g:
-        g.db = sqlite3.connect(current_app.config["DATABASE"])
-        g.db.row_factory = sqlite3.Row
-        g.db.execute("PRAGMA foreign_keys = ON")
+        if current_app.config.get("DB_BACKEND") == "d1":
+            # 요청 중에는 그 요청의 바인딩을, cron 등 요청 밖에서는 설정에 넣어 둔 바인딩을 쓴다
+            env = request.environ.get("workers.env") if has_request_context() else None
+            binding = getattr(env, "DB", None) if env is not None else None
+            g.db = D1Connection(binding or current_app.config["D1_BINDING"], **current_app.config.get("D1_OPTIONS", {}))
+        else:
+            g.db = sqlite3.connect(current_app.config["DATABASE"])
+            g.db.row_factory = sqlite3.Row
+            g.db.execute("PRAGMA foreign_keys = ON")
     return g.db
 
 
@@ -235,11 +353,27 @@ def close_db(_exc=None):
         db.close()
 
 
+# 기존 DB에 나중에 추가된 컬럼 (table, column, DDL)
+MIGRATIONS = [
+    ("staff", "email", "ALTER TABLE staff ADD COLUMN email TEXT NOT NULL DEFAULT ''"),
+    ("staff", "notify_email", "ALTER TABLE staff ADD COLUMN notify_email INTEGER NOT NULL DEFAULT 1"),
+    ("leads", "sla_alerted_at", "ALTER TABLE leads ADD COLUMN sla_alerted_at TEXT"),
+]
+
+
+def migrate(db):
+    for table, column, ddl in MIGRATIONS:
+        cols = {r[1] for r in db.execute(f"PRAGMA table_info({table})")}
+        if column not in cols:
+            db.execute(ddl)
+
+
 def init_db(seed=True):
     db = get_db()
     db.executescript(SCHEMA)
+    migrate(db)
     if seed and db.execute("SELECT COUNT(*) FROM staff").fetchone()[0] == 0:
-        seed_db(db)
+        seed_db(db, admin_password=current_app.config.get("ADMIN_INITIAL_PASSWORD"))
     db.commit()
 
 
@@ -394,10 +528,11 @@ DEMO_PARTNERS = [
 ]
 
 
-def seed_db(db):
+def seed_db(db, admin_password=None):
+    """admin_password 가 주어지면(운영 배포) 그 비밀번호의 관리자 1명만 만들고, 데모 직원 계정은 만들지 않는다."""
     ts = now_iso()
     today = ts[:10]
-    staff = [
+    staff = [("admin", admin_password, "관리자", "admin", "ko,en")] if admin_password else [
         ("admin", "admin1234", "관리자", "admin", "ko,en"),
         ("coord_en", "coord1234", "영어 코디네이터", "coordinator", "en"),
         ("coord_zh", "coord1234", "중국어 코디네이터", "coordinator", "zh"),

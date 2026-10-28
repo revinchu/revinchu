@@ -62,6 +62,22 @@ medical_platform/
 - 운영 DB는 PostgreSQL + 백업, HTTPS 적용
 - 지도는 Leaflet + OpenStreetMap 타일 (트래픽 증가 시 유료 타일/카카오·구글 지도로 교체)
 
+## 이메일 알림
+
+| 알림 | 받는 사람 | 시점 |
+|---|---|---|
+| 신규 문의 | `NOTIFY_EMAIL` + 배정 담당자 | 상담 신청 즉시 (연락처 미포함, 관리자 링크만) |
+| 접수 확인 | 신청자 (신청 언어로) | 상담 신청 즉시 |
+| 담당 배정 | 새 담당자 | 관리자에서 담당자 변경 시 |
+| SLA 초과 | `NOTIFY_EMAIL` + 담당자 | 30분 넘게 미응대 (cron: `python -m medical_platform.notify sla`) |
+
+설정은 `notify.py` 상단 주석 참고 (SMTP 또는 Resend). 관리자 > 직원·권한·알림 에서 직원 이메일, 테스트 발송, 발송 기록을 관리합니다.
+메일 발송 실패는 상담 접수를 막지 않고 발송 기록에 남습니다.
+
+## Cloudflare 배포
+
+`cloudflare/README.md` 참고 (Workers + D1, 무료 플랜 가능).
+
 ## 웹 배포 (PythonAnywhere 무료 계정 예시)
 
 결과 주소: `https://<사용자이름>.pythonanywhere.com` — 파일 저장소가 유지되므로 SQLite 상담 DB가 재시작 후에도 남습니다.

@@ -15,7 +15,8 @@ revinchu/
 ├── keywords.txt                 # Sample keyword list (one per line)
 ├── naver_ad_rank_checker.py     # Main rank checking program
 ├── debug_html_structure.py      # HTML structure analysis utility
-└── medical_platform/            # WIZ X 해외환자 유치 웹 플랫폼 (Flask + SQLite), see its README.md
+├── medical_platform/            # WIZ X 해외환자 유치 웹 플랫폼 (Flask + SQLite), see its README.md
+└── cloudflare/                  # Cloudflare Workers + D1 배포 (build.py, worker.py, wrangler.jsonc), see its README.md
 ```
 
 ## Medical Platform (`medical_platform/`)
@@ -28,6 +29,9 @@ Multilingual (en/ko/zh/ja/vi) hospital discovery site + lead-capture form + inte
   (명의, 유명인 방문, prices) without evidence/source fields.
 - Do not collect medical records in the consult form; hospital referrals require third-party-share consent.
 - Add UI strings to `i18n.T` for all five languages.
+- DB access goes through `db.get_db()`; it returns sqlite3 locally or a D1 adapter (`DB_BACKEND=d1`) on Cloudflare.
+  Use only execute/executemany/fetchone/fetchall/lastrowid so both work; tests run against both backends.
+- Email: `notify.py` (SMTP/Resend/console). Never put patient contact details in staff emails.
 - UI style: editorial / public-service look (no gradients, no rounded card grids, no emoji). Fonts, icons and Leaflet are vendored
   under `static/vendor/` (OFL/ISC/BSD); use the `icon('name')` template helper for Lucide icons.
 
