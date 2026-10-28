@@ -238,6 +238,73 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); outline: n
 .toast { position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + 20px); transform: translateX(-50%); background: var(--ink); color: var(--paper); padding: 8px 16px; font-size: var(--t-sm); z-index: 30; }
 footer { border-top: 1px solid var(--line); padding-block: var(--s-5); color: var(--muted); font-size: var(--t-xs); }
 footer p { margin: 0 0 4px; max-width: 90ch; }
+
+/* 실제 이미지가 있으면 도식 위를 덮는다 */
+.th .real { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: var(--surface); }
+.th .origin { position: absolute; right: 6px; top: 6px; font-family: var(--f-mono); font-size: 10px; background: var(--ink); color: var(--paper); padding: 1px 6px; z-index: 2; }
+.concept { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 6px var(--s-3); margin: 0 0 var(--s-3); font-size: var(--t-sm); }
+.concept dt { font-family: var(--f-mono); font-size: var(--t-xs); color: var(--muted); padding-top: 2px; }
+.concept dd { margin: 0; }
+.ai-box { border-top: 1px solid var(--line); padding-top: var(--s-3); margin-bottom: var(--s-4); }
+.stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0; border: 1px solid var(--ink); margin-bottom: var(--s-3); }
+.stat { padding: var(--s-3) var(--s-4); border-right: 1px solid var(--line); display: grid; gap: 2px; }
+.stat b { font-family: var(--f-display); font-variation-settings: "wdth" 110; font-size: var(--t-xl); font-variant-numeric: tabular-nums; }
+.steps { padding-left: 1.2em; display: grid; gap: 6px; font-size: var(--t-sm); max-width: 80ch; }
+.code { background: var(--surface); border: 1px solid var(--line); padding: var(--s-3); font-family: var(--f-mono); font-size: var(--t-xs); overflow-x: auto; white-space: pre; }
+code { font-family: var(--f-mono); font-size: .9em; background: var(--chip); padding: 0 4px; }
+.log ul { font-family: var(--f-mono); font-size: var(--t-xs); color: var(--muted); }
+.trend-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: var(--s-4); }
+@media (max-width: 480px) { .trend-list { grid-template-columns: minmax(0, 1fr); } }
+.trend { border-top: 3px solid var(--ink); padding-top: var(--s-3); min-width: 0; font-size: var(--t-sm); }
+.trend h3 { margin: var(--s-2) 0; font-size: var(--t-lg); line-height: 1.3; }
+.trend ul { padding-left: 1.1em; margin: 4px 0 var(--s-2); }
+.trend-meta { display: flex; flex-wrap: wrap; gap: 4px; }
+.rev-grid { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: var(--s-6); align-items: start; }
+@media (max-width: 860px) { .rev-grid { grid-template-columns: minmax(0, 1fr); } }
+.rev-input { display: grid; gap: var(--s-2); position: sticky; top: calc(env(safe-area-inset-top, 0px) + 60px); }
+@media (max-width: 860px) { .rev-input { position: static; } }
+.drop.big { min-height: 260px; display: grid; place-items: center; background: var(--surface); }
+.drop.big img { max-height: 420px; max-width: 100%; margin: 0; }
+.drop small { font-family: var(--f-mono); }
+.sim-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: var(--s-4) var(--s-3); }
+.sim { min-width: 0; display: grid; gap: 4px; align-content: start; }
+.meter { height: 4px; background: var(--chip); margin: 0; }
+.meter span { display: block; height: 100%; background: var(--accent); }
+.analysis { display: grid; gap: var(--s-5); margin-top: var(--s-5); }
+.analysis section { border-top: 3px solid var(--ink); padding-top: var(--s-3); min-width: 0; }
+.analysis h3 { margin: 0 0 var(--s-3); font-family: var(--f-display); font-variation-settings: "wdth" 110; font-weight: 750; font-size: var(--t-lg); }
+.analysis .tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.chain { list-style: none; padding: 0; margin: 0; display: grid; gap: 0; counter-reset: none; }
+.chain li { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 2px var(--s-3); padding: var(--s-2) 0; border-bottom: 1px solid var(--line); position: relative; }
+.chain li b { font-size: var(--t-sm); }
+.chain li span { font-size: var(--t-sm); }
+.chain li em { grid-column: 2; font-style: normal; color: var(--accent); font-size: var(--t-sm); }
+.chain li em::before { content: "→ "; }
+.chain.small li { grid-template-columns: minmax(0, 1fr); padding: 4px 0; }
+@media (max-width: 560px) { .chain li { grid-template-columns: minmax(0, 1fr); } .chain li em { grid-column: 1; } }
+.prompts { display: grid; gap: var(--s-2); }
+.prompt { border: 1px solid var(--line); background: var(--surface); padding: var(--s-2) var(--s-3); min-width: 0; }
+.prompt .k { display: flex; justify-content: space-between; align-items: center; gap: var(--s-2); }
+.prompt p { margin: 4px 0 0; font-family: var(--f-mono); font-size: var(--t-xs); overflow-wrap: anywhere; }
+.studio-bar { display: flex; flex-wrap: wrap; gap: var(--s-2); margin-bottom: var(--s-4); }
+.studio-bar select { width: auto; max-width: 100%; }
+.question { font-family: var(--f-display); font-variation-settings: "wdth" 100; font-weight: 700; font-size: var(--t-lg); border-left: 3px solid var(--accent); padding-left: var(--s-3); max-width: 70ch; white-space: pre-line; }
+.steps-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 0; border-top: 1px solid var(--ink); }
+.step { border-bottom: 1px solid var(--line); padding: var(--s-4) 0; display: grid; gap: var(--s-3); }
+.step-head { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; gap: var(--s-3); align-items: start; }
+.step-head h3 { margin: 0; font-size: var(--t-lg); }
+.step .num { font-family: var(--f-display); font-variation-settings: "wdth" 120; font-weight: 850; font-size: var(--t-xl); line-height: 1; color: var(--muted); }
+.step.done .num { color: var(--accent); }
+.step.running .num { animation: pulse 1s infinite alternate; }
+@media (prefers-reduced-motion: no-preference) { @keyframes pulse { to { opacity: .3; } } }
+.step-body { padding-left: 52px; min-width: 0; font-size: var(--t-sm); }
+.step-fb { padding-left: 52px; margin: 0; }
+@media (max-width: 560px) { .step-body, .step-fb { padding-left: 0; } .step-head { grid-template-columns: 32px minmax(0, 1fr); } .step-head .toolbar { grid-column: 1 / -1; } }
+.seg-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--s-3); margin-bottom: var(--s-3); }
+.seg { border: 1px solid var(--line); padding: var(--s-3); background: var(--surface); display: grid; gap: 6px; align-content: start; min-width: 0; }
+.seg.on { border-color: var(--accent); box-shadow: inset 0 3px 0 var(--accent); }
+.big-line { font-weight: 700; font-size: var(--t-md); margin: 0; }
+blockquote { margin: var(--s-2) 0; border-left: 3px solid var(--line); padding-left: var(--s-3); color: var(--muted); }
 @media (prefers-reduced-motion: no-preference) {
   .card .th { transition: transform .18s ease; }
   .card:hover .th { transform: translateY(-2px); }
@@ -251,26 +318,34 @@ footer p { margin: 0 0 4px; max-width: 90ch; }
       <svg class="reg" viewBox="0 0 34 34" aria-hidden="true"><circle cx="17" cy="17" r="9" fill="none" stroke="var(--ink)" stroke-width="1.5"/><circle cx="17" cy="17" r="4" fill="var(--accent)"/><path d="M17 0v34M0 17h34" stroke="var(--ink)" stroke-width="1.2"/></svg>
       <h1>KV <span>ATLAS</span></h1>
     </div>
-    <p class="tagline">광고 키비주얼 레퍼런스와 전 세계 이미지·포트폴리오 사이트를 한곳에서 분류하고, 걸러 보고, 무작위로 뽑아 보는 아트디렉터용 색인.</p>
+    <p class="tagline">디자이너와 마케터를 위한 광고 키비주얼 데이터베이스. 전 세계 광고를 국가·분야·업종·기법으로 걸러 보고, 이미지에서 컨셉과 프롬프트를 역으로 뽑고, 질문 하나로 캠페인 기획까지 만듭니다.</p>
   </div>
   <div class="counts" id="counts"></div>
 </header>
 <nav class="tabs" aria-label="보기">
   <div class="wrap" id="tabs">
     <a href="#kv">키비주얼 DB</a>
-    <a href="#sources">사이트 디렉터리</a>
+    <a href="#trends">트렌드</a>
+    <a href="#reverse">역분석 랩</a>
+    <a href="#studio">콘셉트 스튜디오</a>
     <a href="#search">통합 검색</a>
+    <a href="#sources">사이트 디렉터리</a>
     <a href="#lab">무작위·훈련</a>
     <a href="#board">내 보드</a>
     <a href="#specs">광고 규격</a>
+    <a href="#data">데이터</a>
   </div>
 </nav>
 <main class="wrap" id="app"></main>
 <footer class="wrap">
-  <p>키비주얼 항목은 원본 이미지를 싣지 않습니다. 썸네일은 대표 색과 기법을 도식화한 것이고, 원본은 각 항목의 검색 버튼으로 출처 사이트에서 확인하세요. 색상은 인상 기반 근사치, 연도와 제작사는 공개 자료 기준 대표 정보입니다.</p>
+  <p>AI 기능(역분석, 콘셉트 스튜디오, 트렌드 브리핑)은 claude.ai에서 열 때 보는 사람의 Claude 계정으로 실행되며, 결과는 추론이므로 실제 제작 의도와 다를 수 있습니다.</p>
+  <p>클래식 키비주얼 항목은 원본 이미지를 싣지 않습니다. 썸네일은 대표 색과 기법을 도식화한 것이고, 원본은 각 항목의 검색 버튼으로 출처 사이트에서 확인하세요. 색상은 인상 기반 근사치, 연도와 제작사는 공개 자료 기준 대표 정보입니다.</p>
   <p>내 보드는 이 브라우저에만 저장됩니다. 다른 기기로 옮길 때는 보드의 내보내기를 쓰세요.</p>
 </footer>
 <script src="data.js"></script>
 <script src="app.js"></script>
+<script src="live.js"></script>
+<script src="ai.js"></script>
+<script>window.KVA.boot();</script>
 </body>
 </html>

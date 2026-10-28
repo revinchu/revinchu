@@ -38,9 +38,12 @@ Multilingual (en/ko/zh/ja/vi) hospital discovery site + lead-capture form + inte
 
 ## KV Atlas (`kv_reference/`)
 
-Static, dependency-free reference index of ad key visuals and image/portfolio sites (open `index.html`).
+Ad key-visual database tool for designers and marketers. Static HTML/JS (`data.js` → `app.js` → `live.js` → `ai.js`, then `KVA.boot()`).
+Published as a claude.ai artifact with `sample` (Claude, images), `db`, `user`, `downloads` capabilities; see its README.md.
 
-- All data lives in `data.js`; `app.js` renders views by URL hash. Board data is browser `localStorage` only.
+- Static taxonomy and classic references live in `data.js`; shared data lives in the artifact db (`ads`, `trends`, `overlays`, `meta/status`).
+- Every capability can be absent (local file): features must degrade, never break the page.
+- A weekly scheduled task writes trends/ads into the db; keep its prompt in sync when taxonomy values change.
 - Do not embed or hotlink copyrighted campaign images; KV thumbnails are generated color/technique diagrams that link out to search.
 - Only add campaign facts (year, agency) that are well documented; leave an entry out rather than guess.
 

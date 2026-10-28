@@ -267,7 +267,38 @@ window.KV_DATA = (function () {
   ];
 
   const MOODS = ['미니멀', '대담', '유머러스', '감성', '도발', '고급', '레트로', '실험적', '진지함', '따뜻함'];
-  const INDUSTRIES = ['자동차·모빌리티', 'IT·전자', '식음료', '패션·뷰티', '스포츠', '금융', '미디어·엔터', '공공·캠페인', '문화·예술', '리테일·생활', '주류', '브랜드 아이덴티티'];
+  const INDUSTRIES = ['자동차·모빌리티', 'IT·전자', '통신', '게임', '식음료', '주류', '패션·뷰티', '화장품', '스포츠', '금융', '보험', '제약·헬스케어', '유통·이커머스', '리테일·생활', '가전', '부동산·건설', '여행·항공', '교육', '미디어·엔터', '공공·캠페인', '문화·예술', '브랜드 아이덴티티', '기타'];
+
+  // 광고 분야(목적)
+  const FIELDS = ['브랜드', '제품·서비스', '프로모션·세일', '공익·사회', '문화·공연', '기업 PR', '리크루트', '아이덴티티'];
+
+  // [ISO 코드, 이름, 권역]  XX = 글로벌·다국가
+  const COUNTRIES = [
+    ['KR', '한국', '아시아'], ['JP', '일본', '아시아'], ['CN', '중국', '아시아'], ['TW', '대만', '아시아'], ['HK', '홍콩', '아시아'], ['SG', '싱가포르', '아시아'], ['TH', '태국', '아시아'], ['VN', '베트남', '아시아'], ['ID', '인도네시아', '아시아'], ['PH', '필리핀', '아시아'], ['IN', '인도', '아시아'], ['AE', 'UAE', '중동·아프리카'], ['ZA', '남아공', '중동·아프리카'],
+    ['US', '미국', '북미'], ['CA', '캐나다', '북미'], ['MX', '멕시코', '중남미'], ['BR', '브라질', '중남미'], ['AR', '아르헨티나', '중남미'], ['CO', '콜롬비아', '중남미'],
+    ['GB', '영국', '유럽'], ['FR', '프랑스', '유럽'], ['DE', '독일', '유럽'], ['NL', '네덜란드', '유럽'], ['SE', '스웨덴', '유럽'], ['NO', '노르웨이', '유럽'], ['DK', '덴마크', '유럽'], ['CH', '스위스', '유럽'], ['IT', '이탈리아', '유럽'], ['ES', '스페인', '유럽'], ['PT', '포르투갈', '유럽'], ['PL', '폴란드', '유럽'], ['BE', '벨기에', '유럽'], ['AT', '오스트리아', '유럽'], ['RU', '러시아', '유럽'],
+    ['AU', '호주', '오세아니아'], ['NZ', '뉴질랜드', '오세아니아'],
+    ['XX', '글로벌·다국가', '글로벌'],
+  ];
+
+  // 클래식 KV의 집행·제작 국가 (다국가 집행은 XX)
+  const KV_COUNTRY = {
+    'vw-think-small': 'US', 'vw-lemon': 'US', 'avis-try-harder': 'US', 'apple-1984': 'US', 'apple-think-different': 'US', 'apple-ipod-silhouette': 'US', 'apple-shot-on-iphone': 'XX',
+    'absolut-bottle': 'US', 'economist-red': 'GB', 'nike-jdi': 'US', 'nike-dream-crazy': 'US', 'nike-londoner': 'GB', 'adidas-impossible': 'XX', 'heinz-draw-ketchup': 'CA', 'heinz-pass': 'US',
+    'mcd-follow-arches': 'CA', 'bk-moldy': 'XX', 'bk-burning-stores': 'BR', 'kitkat-break': 'GB', 'coke-share': 'AU', 'dove-real-beauty': 'XX', 'dove-sketches': 'XX', 'spotify-weird': 'XX',
+    'spotify-wrapped': 'XX', 'old-spice': 'US', 'snickers-hungry': 'US', 'always-likeagirl': 'US', 'volvo-epic-split': 'SE', 'marmite': 'GB', 'got-milk': 'US', 'milk-mustache': 'US',
+    'benetton-colors': 'IT', 'wonderbra': 'GB', 'lacoste-species': 'FR', 'mastercard-priceless': 'US', 'ikea-lamp': 'US', 'ikea-bookbook': 'SG', 'vw-force': 'US', 'dumb-ways': 'AU', 'kfc-fck': 'GB',
+    'patagonia-dont-buy': 'US', 'oatly-copy': 'SE', 'sony-balls': 'GB', 'guinness-surfer': 'GB', 'uniqlock': 'JP', 'muji-horizon': 'JP', 'bass-anatomy': 'US', 'bass-vertigo': 'US', 'glaser-iny': 'US',
+    'glaser-dylan': 'US', 'obama-hope': 'US', 'mb-der-film': 'CH', 'mb-beethoven': 'CH', 'cassandre-nord': 'FR', 'cassandre-dubonnet': 'FR', 'rodchenko-books': 'RU', 'tanaka-nihon-buyo': 'JP',
+    'scher-public-theater': 'US', 'sagmeister-aiga': 'US', 'polish-school': 'PL', 'bauhaus-exhibition': 'DE', 'baemin-type': 'KR', 'bk-whopper-detour': 'US', 'guardian-pigs': 'GB', 'airbnb-belo': 'US',
+    'mailchimp-rebrand': 'US', 'tide-ad': 'US',
+  };
+
+  // 데이터 출처
+  const ORIGINS = [['classic', '클래식 레퍼런스'], ['tvcf', 'TVCF 우수 인쇄광고'], ['trend', '트렌드 수집'], ['user', '직접 분석·등록']];
+
+  // 역프롬프트 대상 생성 도구
+  const PROMPT_TARGETS = [['midjourney', 'Midjourney'], ['flux', 'FLUX / SDXL'], ['gptimage', 'GPT Image · DALL·E'], ['imagen', 'Imagen · Gemini'], ['firefly', 'Adobe Firefly'], ['video', '영상(Sora·Veo·Kling)']];
   const MEDIA = [['print', '인쇄'], ['ooh', '옥외'], ['poster', '포스터'], ['digital', '디지털·소셜'], ['film', '영상'], ['packaging', '패키지'], ['identity', '아이덴티티']];
 
   // [id, 제목, 브랜드, 연도, 제작, 업종, 매체[], 기법[], 무드[], 색[], 포인트, 검색어]
@@ -342,7 +373,8 @@ window.KV_DATA = (function () {
   ];
 
   const KV = K.map(function (r) {
-    return { id: r[0], title: r[1], brand: r[2], year: r[3], by: r[4], ind: r[5], med: r[6], tech: r[7], mood: r[8], col: r[9], note: r[10], q: r[11] };
+    const field = r[6].indexOf('identity') >= 0 ? '아이덴티티' : r[5] === '공공·캠페인' ? '공익·사회' : r[5] === '문화·예술' || (r[6].indexOf('poster') >= 0 && r[5] === '미디어·엔터') ? '문화·공연' : '브랜드';
+    return { id: r[0], title: r[1], brand: r[2], year: r[3], by: r[4], ind: r[5], med: r[6], tech: r[7], mood: r[8], col: r[9], note: r[10], q: r[11], country: KV_COUNTRY[r[0]] || 'XX', field: field, origin: 'classic' };
   });
 
   // [분류, 이름, 가로, 세로, 단위, 메모]
@@ -378,5 +410,5 @@ window.KV_DATA = (function () {
     ['ru', 'ключевой визуал'], ['ru', 'рекламный плакат'],
   ];
 
-  return { CATEGORIES: CATEGORIES, SOURCES: SOURCES, TECHNIQUES: TECHNIQUES, MOODS: MOODS, INDUSTRIES: INDUSTRIES, MEDIA: MEDIA, KV: KV, SPECS: SPECS, TERMS: TERMS };
+  return { CATEGORIES: CATEGORIES, SOURCES: SOURCES, TECHNIQUES: TECHNIQUES, MOODS: MOODS, INDUSTRIES: INDUSTRIES, FIELDS: FIELDS, COUNTRIES: COUNTRIES, ORIGINS: ORIGINS, PROMPT_TARGETS: PROMPT_TARGETS, MEDIA: MEDIA, KV: KV, SPECS: SPECS, TERMS: TERMS };
 })();
