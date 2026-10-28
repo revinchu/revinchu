@@ -16,7 +16,8 @@ revinchu/
 ├── naver_ad_rank_checker.py     # Main rank checking program
 ├── debug_html_structure.py      # HTML structure analysis utility
 ├── medical_platform/            # WIZ X 해외환자 유치 웹 플랫폼 (Flask + SQLite), see its README.md
-└── cloudflare/                  # Cloudflare Workers + D1 배포 (build.py, worker.py, wrangler.jsonc), see its README.md
+├── cloudflare/                  # Cloudflare Workers + D1 배포 (build.py, worker.py, wrangler.jsonc), see its README.md
+└── kv_reference/                # KV 아틀라스: 광고 키비주얼·이미지 사이트 레퍼런스 색인 (정적 HTML/JS), see its README.md
 ```
 
 ## Medical Platform (`medical_platform/`)
@@ -34,6 +35,14 @@ Multilingual (en/ko/zh/ja/vi) hospital discovery site + lead-capture form + inte
 - Email: `notify.py` (SMTP/Resend/console). Never put patient contact details in staff emails.
 - UI style: editorial / public-service look (no gradients, no rounded card grids, no emoji). Fonts, icons and Leaflet are vendored
   under `static/vendor/` (OFL/ISC/BSD); use the `icon('name')` template helper for Lucide icons.
+
+## KV Atlas (`kv_reference/`)
+
+Static, dependency-free reference index of ad key visuals and image/portfolio sites (open `index.html`).
+
+- All data lives in `data.js`; `app.js` renders views by URL hash. Board data is browser `localStorage` only.
+- Do not embed or hotlink copyrighted campaign images; KV thumbnails are generated color/technique diagrams that link out to search.
+- Only add campaign facts (year, agency) that are well documented; leave an entry out rather than guess.
 
 ## Tech Stack
 
