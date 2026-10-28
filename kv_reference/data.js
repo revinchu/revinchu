@@ -295,7 +295,7 @@ window.KV_DATA = (function () {
   };
 
   // 데이터 출처
-  const ORIGINS = [['classic', '클래식 레퍼런스'], ['tvcf', 'TVCF 우수 인쇄광고'], ['trend', '트렌드 수집'], ['user', '직접 분석·등록']];
+  const ORIGINS = [['classic', '클래식 레퍼런스'], ['tvcf', 'TVCF 우수 인쇄광고'], ['trend', '트렌드 수집'], ['user', '직접 분석·등록'], ['gads', 'Google 광고 투명성'], ['meta', 'Meta 광고 라이브러리'], ['pitt', 'Pitt 광고 데이터셋'], ['museum', '뮤지엄 아카이브']];
 
   // 역프롬프트 대상 생성 도구
   const PROMPT_TARGETS = [['midjourney', 'Midjourney'], ['flux', 'FLUX / SDXL'], ['gptimage', 'GPT Image · DALL·E'], ['imagen', 'Imagen · Gemini'], ['firefly', 'Adobe Firefly'], ['video', '영상(Sora·Veo·Kling)']];

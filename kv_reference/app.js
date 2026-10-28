@@ -22,20 +22,23 @@
 
   // ---------- 레퍼런스 저장소: 클래식(정적) + 공유 DB(live.js가 채움) ----------
   const FALLBACK_PALETTES = [['#1f2a44', '#f2efe8', '#d4573b'], ['#f4f1ea', '#121212', '#2f6fb5'], ['#0f3d3e', '#e6d3a3', '#f26b38'], ['#2b2b2b', '#f5f5f5', '#e2c044'], ['#5b2a86', '#f2e9e4', '#ff7a5c'], ['#d9e3e8', '#1b263b', '#e63946']];
-  const store = { classic: [], live: [], byId: {}, liveStatus: '' };
+  const store = { classic: [], live: [], bulk: [], byId: {}, liveStatus: '' };
   function normalize(r) {
-    const col = Array.isArray(r.col) && r.col.length ? r.col : FALLBACK_PALETTES[hashStr(r.id || r.title) % FALLBACK_PALETTES.length];
+    const colReal = Array.isArray(r.col) && r.col.length > 0;
+    const col = colReal ? r.col : FALLBACK_PALETTES[hashStr(r.id || r.title) % FALLBACK_PALETTES.length];
     return {
       id: String(r.id), title: r.title || '(제목 없음)', brand: r.brand || '', year: Number(r.year) || 0, by: r.by || r.agency || '',
       ind: r.ind || r.industry || '기타', med: r.med || r.medium || ['print'], tech: (r.tech || r.techniques || []).filter((t) => TECH[t]),
       mood: r.mood || r.moods || [], col: col, note: r.note || '', q: r.q || [r.brand, r.title].filter(Boolean).join(' '),
       country: r.country || 'XX', field: r.field || '브랜드', origin: r.origin || 'user', url: r.url || r.sourceUrl || '', img: r.img || r.imageUrl || '',
-      thumb: r.thumb || '', date: r.date || '', concept: r.concept || null, prompts: r.prompts || null, features: r.features || null, live: !!r.live,
+      thumb: r.thumb || '', colReal: colReal, date: r.date || '', concept: r.concept || null, prompts: r.prompts || null, features: r.features || null, live: !!r.live,
     };
   }
-  function allItems() { return store.classic.concat(store.live); }
+  function allItems() { return store.classic.concat(store.live, store.bulk); }
   function rebuildIndex() { store.byId = {}; allItems().forEach((k) => { store.byId[k.id] = k; }); }
   function setLive(list) { store.live = list.map((r) => normalize(Object.assign({ live: true }, r))); rebuildIndex(); emit('items'); }
+  // 대량 데이터(bulk.js): 이미 정규화된 항목을 덧붙인다. 같은 id가 공유 DB에 있으면 공유 DB가 이긴다.
+  function addBulk(list) { list.forEach((k) => { store.bulk.push(k); if (!store.byId[k.id]) store.byId[k.id] = k; }); emit('items'); }
   store.classic = D.KV.map(normalize);
   rebuildIndex();
 
@@ -105,7 +108,7 @@
   const dots = (n) => '<span class="dots" title="KV 활용도 ' + n + '/3">' + '■'.repeat(n) + '<span class="off">' + '■'.repeat(3 - n) + '</span></span>';
 
   // ---------- 상태 ----------
-  const kvState = { q: '', ind: '', dec: '', country: '', region: '', field: '', origin: new Set(), med: new Set(), tech: new Set(), mood: new Set(), sort: 'recent', order: null };
+  const kvState = { q: '', ind: '', dec: '', country: '', region: '', field: '', origin: new Set(), med: new Set(), tech: new Set(), mood: new Set(), sort: 'recent', order: null, limit: 600 };
   const srcState = { q: '', cat: new Set(), region: '', cost: '', searchable: false, sort: 'kv', group: true };
   const searchState = { q: '', terms: new Set(['en|key visual']), engines: new Set(KV_ENGINES.map((s) => s.id)) };
   const labState = { locks: {}, slots: {}, trio: null };
@@ -170,14 +173,18 @@
           '<select id="kv-sort" aria-label="정렬" style="width:auto"><option value="recent">최신순</option><option value="year-asc">연도 오름차순</option><option value="brand">브랜드 가나다</option><option value="shuffle">무작위 배열</option></select>' +
           '<button class="btn ghost sm" type="button" id="kv-reset">필터 초기화</button>' +
           '<button class="btn sm" type="button" id="kv-rand">필터 안에서 하나 뽑기</button></div>' +
-        '<div class="sheet" id="kv-grid"></div></section></div>';
+        '<div class="sheet" id="kv-grid"></div><p style="margin-top:24px"><button type="button" class="btn ghost" id="kv-more" hidden>더 보기</button></p></section></div>';
     $('#kv-sort', root).value = kvState.sort;
-    const draw = () => {
+    const draw = (more) => {
+      kvState.limit = more ? kvState.limit + 600 : 600;
       const list = kvFiltered();
-      $('#kv-count', root).textContent = list.length + ' / ' + allItems().length + '개';
-      $('#kv-grid', root).innerHTML = list.length ? list.slice(0, 600).map(kvCard).join('') : '<p class="empty">조건에 맞는 레퍼런스가 없습니다. 필터를 하나 풀어 보세요.</p>';
+      $('#kv-count', root).textContent = list.length.toLocaleString() + ' / ' + allItems().length.toLocaleString() + '개' + (store.bulkNote ? ' · ' + store.bulkNote : '');
+      $('#kv-grid', root).innerHTML = list.length ? list.slice(0, kvState.limit).map(kvCard).join('') : '<p class="empty">조건에 맞는 레퍼런스가 없습니다. 필터를 하나 풀어 보세요.</p>';
+      $('#kv-more', root).hidden = list.length <= kvState.limit;
+      $('#kv-more', root).textContent = '더 보기 (' + (list.length - kvState.limit).toLocaleString() + '개 남음)';
     };
     draw();
+    $('#kv-more', root).addEventListener('click', () => draw(true));
     $('#kv-q', root).addEventListener('input', (e) => { kvState.q = e.target.value; draw(); });
     [['kv-ind', 'ind'], ['kv-dec', 'dec'], ['kv-country', 'country'], ['kv-field', 'field']].forEach(([id, key]) => $('#' + id, root).addEventListener('change', (e) => { kvState[key] = e.target.value; draw(); }));
     $('#kv-region', root).addEventListener('change', (e) => { kvState.region = e.target.value; kvState.country = ''; render(); });
@@ -556,7 +563,7 @@
 
   window.KVA = {
     D, $, $$, esc, pick, shuffle, hashStr, toast, copy, TECH, MEDIA, COUNTRY, ORIGIN, countryName, store, allItems, setLive, normalize, on, emit,
-    thumb, kvCard, openKV, closeModal, modalHooks, searchUrl, KV_ENGINES, resizeImage, VIEWS, render, updateCounts, boot,
+    addBulk, kvState, thumb, kvCard, openKV, closeModal, modalHooks, searchUrl, KV_ENGINES, resizeImage, VIEWS, render, updateCounts, boot,
     currentView: () => currentView,
   };
 })();

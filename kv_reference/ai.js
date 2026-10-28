@@ -111,7 +111,8 @@
   function hashSim(a, b) { if (!a || !b) return null; let d = 0; for (let i = 0; i < 16; i++) { let x = parseInt(a[i], 16) ^ parseInt(b[i], 16); while (x) { d += x & 1; x >>= 1; } } return 1 - d / 64; }
   const jacc = (a, b) => { const A = new Set(a || []), B = new Set(b || []); if (!A.size && !B.size) return 0; let n = 0; A.forEach((x) => { if (B.has(x)) n++; }); return n / (A.size + B.size - n); };
   function rankSimilar(feat, tags, excludeId) {
-    return K.allItems().filter((k) => k.id !== excludeId).map((k) => {
+    // 실제 색 정보(클래식·등록 이미지)가 있는 항목만 비교한다. 대량 데이터는 색 정보가 없어 제외.
+    return K.allItems().filter((k) => k.id !== excludeId && (k.colReal || k.features)).map((k) => {
       const pal = paletteSim(feat.palette, k.features ? k.features.palette : k.col);
       const hs = k.features ? hashSim(feat.dhash, k.features.dhash) : null;
       let tone = 0; if (k.features) tone = 1 - Math.min(1, (Math.abs(k.features.lum - feat.lum) + Math.abs(k.features.sat - feat.sat) + Math.abs(k.features.edge - feat.edge)) / 1.2);

@@ -168,6 +168,7 @@
       '<h3 class="cat-head">데이터 형식</h3><p class="cat-desc">JSON 가져오기는 아래 필드를 가진 객체 배열을 받습니다. 업종·분야·기법·무드는 이 사이트의 분류 목록 값을 씁니다.</p>' +
       '<pre class="code">' + esc(JSON.stringify([{ title: '광고 제목', brand: '광고주', agency: '대행사', date: '2026-10-01', country: 'KR', field: '브랜드', industry: '식음료', medium: ['print'], techniques: ['metaphor'], moods: ['유머러스'], sourceUrl: 'https://...', imageUrl: 'https://...', note: '한 줄 설명' }], null, 1)) + '</pre>';
 
+    if (K.bulk) K.bulk.panel(root);
     let parsed = [];
     const status = (t) => { $('#im-status', root).textContent = t; };
     const preview = () => {

@@ -34,6 +34,27 @@
 - **데이터**: TVCF 등 목록을 붙여 넣으면 Claude가 정리해 등록한다. JSON 가져오기와 JSON·CSV 내보내기, 수집 로그도 이 화면에 있다.
 - 기존 화면: 사이트 디렉터리, 통합 검색, 무작위·훈련(브리프를 콘셉트 스튜디오로 보내기), 내 보드, 광고 규격.
 
+## 대량 데이터 (수십만 건 규모)
+
+수집 스크립트가 JSONL을 만들고, `build_bulk.py`가 이를 출처·국가별 샤드(최대 4만 건, 약 8MB)로 나눠 `bulk/`에 쓴다. 페이지(`bulk.js`)는 `bulk/manifest.json`을 읽어 처음 8만 건을 불러오고, 나머지는 출처 칩이나 국가를 고를 때 불러온다. 아티팩트 파일 한도 안에서 약 100만 건까지 담을 수 있다. 30만 건 합성 데이터로 검색 약 0.3초, 메모리 약 180MB를 확인했다.
+
+| 수집기 | 원천 | 규모 | 필요한 것 |
+|------|------|------|------|
+| `ingest/museums.py` | MoMA·The Met CC0 메타데이터 (포스터·광고물) | 11,824건 (포함됨) | 없음 |
+| `ingest/google_ads_transparency.py` | Google 광고 투명성 센터 BigQuery 공개 데이터 (이미지 광고) | 국가당 수만~수십만 건 | Google Cloud 서비스 계정 키, 쿼리 비용(월 1TB 무료) |
+| `ingest/meta_ad_library.py` | Meta 광고 라이브러리 API | 검색어당 최대 수천 건 (EU·정치 광고 중심) | Meta 개발자 액세스 토큰 |
+| `ingest/pitt_ads.py` | Pitt Image Ads Dataset 주석 (토픽·감정·행동·이유) | 64,832건 | people.cs.pitt.edu 접속, 연구 목적 사용 |
+| `ingest/tvcf_ingest.py` | TVCF 우수 인쇄광고 목록 | 목록 페이지 단위 | tvcf.co.kr 접속 |
+
+```bash
+python kv_reference/ingest/museums.py --moma Artworks.csv --met MetObjects.csv -o museums.jsonl
+python kv_reference/ingest/google_ads_transparency.py --countries KR,JP,US --per-country 50000 --since 2026-01-01 --dry-run
+python kv_reference/ingest/build_bulk.py museums.jsonl gads.jsonl -o kv_reference/bulk
+```
+
+저장소에는 뮤지엄 샤드만 둔다. 외부 대량 샤드(`gads-*`, `meta-*`, `pitt-*`, `tvcf-*`)는 .gitignore 로 빼고 아티팩트에만 올린다.
+Google·Meta·Pitt 수집기는 인증과 접속이 없는 환경에서 작성해 실제 응답으로는 아직 검증하지 않았다.
+
 ## 데이터 갱신
 
 - 예약 작업 "KV 아틀라스 주간 트렌드 수집"이 매주 월요일 10:17(KST)에 새 세션을 띄워 웹 검색으로 사례와 트렌드를 조사하고, `ArtifactData`로 DB에 쓴다.

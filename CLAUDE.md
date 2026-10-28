@@ -43,6 +43,7 @@ Published as a claude.ai artifact with `sample` (Claude, images), `db`, `user`, 
 
 - Static taxonomy and classic references live in `data.js`; shared data lives in the artifact db (`ads`, `trends`, `overlays`, `meta/status`).
 - Every capability can be absent (local file): features must degrade, never break the page.
+- Bulk external data: `ingest/*.py` → JSONL → `ingest/build_bulk.py` → `bulk/` shards loaded lazily by `bulk.js`; only CC0 museum shards are committed.
 - A weekly scheduled task writes trends/ads into the db; keep its prompt in sync when taxonomy values change.
 - Do not embed or hotlink copyrighted campaign images; KV thumbnails are generated color/technique diagrams that link out to search.
 - Only add campaign facts (year, agency) that are well documented; leave an entry out rather than guess.
