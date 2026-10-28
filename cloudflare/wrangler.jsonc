@@ -2,6 +2,8 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "wizx-medical",  // Worker 이름 = 기본 주소 wizx-medical.<계정>.workers.dev (브랜드 확정 후 변경 가능)
   "main": "build/src/worker.py",
+  // 위젝스 Cloudflare 계정 (대시보드 주소의 계정 ID — 비밀값 아님)
+  "account_id": "04c806c310671be1dcca3be02e1847d2",
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["python_workers"],
   // /static/* 는 Worker를 거치지 않고 정적 자산으로 바로 서빙
