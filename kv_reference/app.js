@@ -95,7 +95,9 @@
     const label = kind === 'negative' || kind === 'silhouette' ? k.brand || k.title : k.title;
     const pic = k.thumb || k.img;
     const photo = pic ? '<img class="real" alt="" loading="lazy" referrerpolicy="no-referrer" src="' + esc(pic) + '" onerror="this.remove()">' : '';
-    return '<div class="th th--' + kind + '" style="' + esc(vars) + '" role="img" aria-label="' + esc(k.title + (pic ? ' 이미지' : ' 대표 색과 구성 도식')) + '">' +
+    // 이미지 주소가 없고 출처 링크만 있으면 hosted.js 가 링크 미리보기로 썸네일을 채운다
+    const previewAttr = !pic && k.url && /^https?:/.test(k.url) ? ' data-preview="' + esc(k.url) + '"' : '';
+    return '<div class="th th--' + kind + '"' + previewAttr + ' style="' + esc(vars) + '" role="img" aria-label="' + esc(k.title + (pic ? ' 이미지' : ' 대표 색과 구성 도식')) + '">' +
       objs + '<span class="yr">' + esc(k.year || '') + '</span><span class="ttl">' + esc(label) + '</span>' +
       '<span class="pal">' + k.col.map((c) => '<i style="background:' + esc(c) + '"></i>').join('') + '</span>' + photo +
       (k.origin !== 'classic' ? '<span class="origin">' + esc(ORIGIN[k.origin] || k.origin) + '</span>' : '') + '</div>';
@@ -344,6 +346,7 @@
       '<div class="launch-q"><input id="sq" type="search" placeholder="예: whisky poster, 화장품 런칭, minimal car ad" value="' + esc(searchState.q) + '" aria-label="검색어"><button class="btn" type="button" id="sq-copy">링크 전체 복사</button></div>' +
       '<p class="lbl">붙일 키워드</p><div class="toolbar">' + D.TERMS.map(([lang, term]) => { const key = lang + '|' + term; return '<button type="button" class="chip" data-term="' + esc(key) + '" aria-pressed="' + searchState.terms.has(key) + '"><span class="n">' + lang + '</span> ' + esc(term) + '</button>'; }).join('') + '</div>' +
       '<p class="lbl">검색할 곳 <span class="meta-line" id="eng-count"></span></p><div class="toolbar">' + PRESETS.map((p, i) => '<button type="button" class="btn ghost sm" data-preset="' + i + '">' + esc(p[0]) + '</button>').join('') + '<button type="button" class="btn ghost sm" data-preset="none">모두 해제</button></div>' +
+      '<section id="img-results"></section>' +
       '<div class="engines" id="engines">' + searchable.map((s) => '<div class="eng" data-eng="' + s.id + '"><input type="checkbox" id="eng-' + s.id + '" aria-label="' + esc(s.name) + '"><label class="nm" for="eng-' + s.id + '">' + esc(s.name) + ' <span class="meta-line">' + esc(s.region) + '</span></label><div class="links"></div></div>').join('') + '</div>';
     const draw = () => {
       const vars = queryVariants();
@@ -368,6 +371,7 @@
       copy(lines.join('\n'), lines.length + '개 링크');
     });
     if (!searchState.q) $('#sq', root).focus();
+    emit('search-view', { root: root, variants: queryVariants });
   }
 
   // ---------- 무작위·훈련 ----------

@@ -169,6 +169,14 @@
       '<pre class="code">' + esc(JSON.stringify([{ title: '광고 제목', brand: '광고주', agency: '대행사', date: '2026-10-01', country: 'KR', field: '브랜드', industry: '식음료', medium: ['print'], techniques: ['metaphor'], moods: ['유머러스'], sourceUrl: 'https://...', imageUrl: 'https://...', note: '한 줄 설명' }], null, 1)) + '</pre>';
 
     if (K.bulk) K.bulk.panel(root);
+    const H = window.KVA_HOSTED;
+    if (H && H.health) {
+      const sec = document.createElement('section');
+      sec.innerHTML = '<h3 class="cat-head">AI 접근 토큰</h3><p class="cat-desc">이 주소에서 AI 기능(역분석, 콘셉트 스튜디오)은 서버의 Claude API 키로 실행됩니다. 관리자에게 받은 토큰을 넣으면 이 브라우저에 저장됩니다.' + (H.health.claude ? '' : ' 지금은 서버에 API 키가 설정되지 않았습니다.') + '</p>' +
+        '<div class="toolbar"><input id="hk-token" type="password" autocomplete="off" placeholder="접근 토큰" style="max-width:280px"><button type="button" class="btn sm" id="hk-save">저장</button></div>';
+      root.appendChild(sec);
+      $('#hk-save', sec).addEventListener('click', () => { H.setToken($('#hk-token', sec).value.trim()); toast('토큰을 저장했습니다'); });
+    }
     let parsed = [];
     const status = (t) => { $('#im-status', root).textContent = t; };
     const preview = () => {

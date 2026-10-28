@@ -45,7 +45,8 @@ Published as a claude.ai artifact with `sample` (Claude, images), `db`, `user`, 
 - Every capability can be absent (local file): features must degrade, never break the page.
 - Bulk external data: `ingest/*.py` → JSONL → `ingest/build_bulk.py` → `bulk/` shards loaded lazily by `bulk.js`; only CC0 museum shards are committed.
 - A weekly scheduled task writes trends/ads into the db; keep its prompt in sync when taxonomy values change.
-- Do not embed or hotlink copyrighted campaign images; KV thumbnails are generated color/technique diagrams that link out to search.
+- Images: never download, store or re-host ad images. Thumbnails are hotlinked from the original site (record `imageUrl`, or the page's og:image found by the Worker's `/api/preview`), shown only on the self-hosted Worker version (`worker/`), since the claude.ai artifact blocks external images. Without an image, cards fall back to generated color/technique diagrams.
+- `worker/`: Cloudflare Worker serving the page + `/api/preview`, `/api/images`, `/api/claude` (claude-opus-5-5 via @anthropic-ai/sdk). Test: `cd kv_reference/worker && npm test`.
 - Only add campaign facts (year, agency) that are well documented; leave an entry out rather than guess.
 
 ## Tech Stack

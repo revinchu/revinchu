@@ -17,7 +17,7 @@
     sampling_disabled: '이 계정에서는 Claude를 쓸 수 없습니다.', rate_limited: '요청이 많습니다. 잠시 뒤 다시 시도하세요.',
     session_expired: '다시 로그인해야 합니다.', image_rejected: '이 이미지는 보낼 수 없습니다. JPG, PNG, WebP 파일로 다시 시도하세요.',
     refused: 'Claude가 이 요청에 답하지 않았습니다. 다른 이미지나 표현으로 시도하세요.', invalid_json: '응답 형식이 맞지 않았습니다. 다시 시도하세요.',
-    prompt_too_large: '보낼 내용이 너무 깁니다. 일부만 붙여 넣으세요.', images_unavailable: '이 화면에서는 이미지를 보낼 수 없습니다.', cancelled: '중단했습니다.',
+    prompt_too_large: '보낼 내용이 너무 깁니다. 일부만 붙여 넣으세요.', images_unavailable: '이 화면에서는 이미지를 보낼 수 없습니다.', cancelled: '중단했습니다.', token_required: 'AI 접근 토큰이 필요합니다. 데이터 탭에서 토큰을 입력하세요.',
   };
   const errText = (e) => (e && ERR[e.code]) || '응답을 받지 못했습니다. 다시 시도하세요.';
   const unavailableMsg = 'AI 기능은 claude.ai에서 이 페이지를 열 때 보는 사람의 Claude 계정으로 동작합니다.';

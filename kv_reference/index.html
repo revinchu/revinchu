@@ -305,6 +305,15 @@ code { font-family: var(--f-mono); font-size: .9em; background: var(--chip); pad
 .seg.on { border-color: var(--accent); box-shadow: inset 0 3px 0 var(--accent); }
 .big-line { font-weight: 700; font-size: var(--t-md); margin: 0; }
 blockquote { margin: var(--s-2) 0; border-left: 3px solid var(--line); padding-left: var(--s-3); color: var(--muted); }
+
+/* 호스팅 모드 이미지 검색 결과 */
+.img-note { border: 1px dashed var(--line); padding: var(--s-3) var(--s-4); font-size: var(--t-sm); color: var(--muted); margin-bottom: var(--s-4); }
+.img-grid { columns: 5 180px; column-gap: var(--s-3); margin-bottom: var(--s-3); }
+.img-card { display: block; break-inside: avoid; margin-bottom: var(--s-3); position: relative; border: 1px solid var(--line); background: var(--surface); }
+.img-card img { display: block; width: 100%; height: auto; }
+.img-card span { position: absolute; left: 0; bottom: 0; background: var(--ink); color: var(--paper); font-family: var(--f-mono); font-size: 10px; padding: 1px 6px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.img-card:hover { outline: 2px solid var(--accent); }
+@media (max-width: 480px) { .img-grid { columns: 2 140px; } }
 @media (prefers-reduced-motion: no-preference) {
   .card .th { transition: transform .18s ease; }
   .card:hover .th { transform: translateY(-2px); }
@@ -343,6 +352,7 @@ blockquote { margin: var(--s-2) 0; border-left: 3px solid var(--line); padding-l
   <p>내 보드는 이 브라우저에만 저장됩니다. 다른 기기로 옮길 때는 보드의 내보내기를 쓰세요.</p>
 </footer>
 <script src="data.js"></script>
+<script src="hosted.js"></script>
 <script src="app.js"></script>
 <script src="live.js"></script>
 <script src="bulk.js"></script>

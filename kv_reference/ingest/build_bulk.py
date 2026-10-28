@@ -4,7 +4,7 @@
 
 출력
 - bulk/manifest.json   샤드 목록(출처, 국가, 건수, 연도 범위)과 전체 집계
-- bulk/<출처>-<국가>-<n>.json   {"rows": [[id, title, brand, agency, year, date, country, field, industry, medium, techniques, moods, note, sourceUrl], ...]}
+- bulk/<출처>-<국가>-<n>.json   {"rows": [[id, title, brand, agency, year, date, country, field, industry, medium, techniques, moods, note, sourceUrl, imageUrl], ...]}
 샤드 하나는 최대 --shard-size 건(기본 40000, 약 8MB)이다. 아티팩트 파일 한도(파일당 16MB, 버전당 256MB) 안에서 약 100만 건까지 담을 수 있다.
 같은 id는 나중 입력이 앞 입력을 덮어쓴다.
 """
@@ -17,7 +17,7 @@ import sys
 
 from common import read_jsonl
 
-COLS = ["id", "title", "brand", "agency", "year", "date", "country", "field", "industry", "medium", "techniques", "moods", "note", "sourceUrl"]
+COLS = ["id", "title", "brand", "agency", "year", "date", "country", "field", "industry", "medium", "techniques", "moods", "note", "sourceUrl", "imageUrl"]
 
 
 def load(path):
@@ -32,7 +32,7 @@ def row(r):
     j = lambda v: "|".join(v) if isinstance(v, list) else (v or "")
     return [r.get("id", ""), r.get("title", ""), r.get("brand", ""), r.get("agency", ""), int(r.get("year") or 0), r.get("date", ""),
             r.get("country") or "XX", r.get("field", ""), r.get("industry", ""), j(r.get("medium")), j(r.get("techniques")), j(r.get("moods")),
-            r.get("note", ""), r.get("sourceUrl", "")]
+            r.get("note", ""), r.get("sourceUrl", ""), r.get("imageUrl", "")]
 
 
 def main():

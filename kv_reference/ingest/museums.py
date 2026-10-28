@@ -4,7 +4,7 @@
 
 - MoMA: https://github.com/MuseumofModernArt/collection (Artworks.csv, CC0, 이미지 미포함)
 - The Met: https://github.com/metmuseum/openaccess (MetObjects.csv, CC0 메타데이터)
-메타데이터만 쓰고 이미지는 링크하지 않는다. 각 레코드의 sourceUrl 이 뮤지엄 작품 페이지다.
+메타데이터와 이미지 주소(MoMA ImageURL)만 쓴다. 이미지 파일은 받지 않고, 페이지가 원본 주소에서 썸네일을 직접 불러온다.
 """
 
 import argparse
@@ -31,7 +31,7 @@ def moma(path):
             id="moma-" + x["ObjectID"], title=x["Title"], agency=x["Artist"], year=year_from(x["Date"]), country=country_from(x["Nationality"]),
             field="문화·공연" if re.search(r"exhibition|museum|film|theat|concert|festival", x["Title"], re.I) else "브랜드",
             industry=industry_from(x["Title"]), medium=med, note=(x["Medium"] + (" · " + x["Date"] if x["Date"] else "")),
-            sourceUrl=x["URL"] or "https://www.moma.org/collection/works/" + x["ObjectID"], origin="museum", license="MoMA CC0 metadata",
+            sourceUrl=x["URL"] or "https://www.moma.org/collection/works/" + x["ObjectID"], imageUrl=x["ImageURL"], origin="museum", license="MoMA CC0 metadata",
         )
 
 

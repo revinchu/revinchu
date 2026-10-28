@@ -34,6 +34,28 @@
 - **데이터**: TVCF 등 목록을 붙여 넣으면 Claude가 정리해 등록한다. JSON 가져오기와 JSON·CSV 내보내기, 수집 로그도 이 화면에 있다.
 - 기존 화면: 사이트 디렉터리, 통합 검색, 무작위·훈련(브리프를 콘셉트 스튜디오로 보내기), 내 보드, 광고 규격.
 
+## 썸네일 미리보기와 이미지 검색 (직접 호스팅)
+
+claude.ai 아티팩트는 보안 정책상 외부 이미지를 표시하지 않는다. 그래서 썸네일과 이미지 검색은 같은 페이지를 Cloudflare Worker(`worker/`)로 호스팅한 주소에서 켜진다. 페이지가 같은 주소의 `/api/health`를 찾으면 `hosted.js`가 호스팅 모드로 바뀐다.
+
+- **카드 썸네일:** 레퍼런스에 이미지 주소가 있으면(MoMA 5,248건 등) 원본 사이트에서 바로 불러온다. 없으면 출처 링크의 대표 이미지(og:image 등)를 `/api/preview`로 찾아 원본 주소에서 불러온다. Worker는 이미지 주소만 돌려주고 파일은 저장·중계하지 않는다.
+- **통합 검색 → 이미지로 보기:** `/api/images`가 여러 출처의 썸네일과 원본 링크를 모아 보여 준다.
+  - 키 없이 켜지는 출처: Openverse, Wikimedia Commons, Art Institute of Chicago, The Met
+  - 키를 넣으면 켜지는 출처: Brave 이미지 검색(웹 전체), Google 프로그래머블 검색, Unsplash, Pexels, Pixabay
+- **AI 기능:** `/api/claude`가 서버의 Anthropic API 키로 `claude-opus-5-5`를 호출한다. 거절된 요청은 `fallbacks: "default"`로 다른 모델이 다시 받는다. 쓰려면 페이지의 데이터 탭에서 접근 토큰(`ACCESS_TOKEN`)을 입력한다.
+- 공유 DB(트렌드, 등록한 역분석)는 아티팩트에만 있다. 호스팅 주소에서는 클래식·대량 데이터와 이미지 기능만 동작한다.
+
+```bash
+cd kv_reference/worker
+npm install
+npx wrangler login                       # 또는 CLOUDFLARE_API_TOKEN 환경 변수
+npx wrangler secret put ANTHROPIC_API_KEY  # 선택: AI 기능
+npx wrangler secret put ACCESS_TOKEN       # 선택: AI 기능을 쓸 사람에게 줄 토큰
+npx wrangler secret put BRAVE_API_KEY      # 선택: 웹 전체 이미지 검색
+npm run deploy                           # → https://kv-atlas.<계정>.workers.dev
+npm test                                 # 미리보기 추출·이미지 검색 단위 테스트
+```
+
 ## 대량 데이터 (수십만 건 규모)
 
 수집 스크립트가 JSONL을 만들고, `build_bulk.py`가 이를 출처·국가별 샤드(최대 4만 건, 약 8MB)로 나눠 `bulk/`에 쓴다. 페이지(`bulk.js`)는 `bulk/manifest.json`을 읽어 처음 8만 건을 불러오고, 나머지는 출처 칩이나 국가를 고를 때 불러온다. 아티팩트 파일 한도 안에서 약 100만 건까지 담을 수 있다. 30만 건 합성 데이터로 검색 약 0.3초, 메모리 약 180MB를 확인했다.

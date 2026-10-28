@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // 기본 주소: https://kv-atlas.<계정>.workers.dev
+  "name": "kv-atlas",
+  "main": "src/index.js",
+  // cloudflare/wrangler.jsonc 와 같은 계정 (대시보드 주소의 계정 ID, 비밀값 아님)
+  "account_id": "04c806c310671be1dcca3be02e1847d2",
+  "compatibility_date": "2026-10-01",
+  // 페이지·데이터 샤드는 정적 자산으로 바로 서빙 (/api/* 만 Worker 코드가 처리)
+  "assets": { "directory": "public", "binding": "ASSETS", "run_worker_first": ["/api/*"] },
+  "observability": { "enabled": true }
+  // 시크릿(선택): ANTHROPIC_API_KEY, ACCESS_TOKEN, BRAVE_API_KEY, GOOGLE_CSE_KEY, GOOGLE_CSE_CX, UNSPLASH_ACCESS_KEY, PEXELS_API_KEY, PIXABAY_API_KEY
+  // npx wrangler secret put <이름>
+}

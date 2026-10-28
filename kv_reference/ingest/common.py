@@ -2,7 +2,7 @@
 
 모든 수집기는 한 줄에 레코드 하나인 JSONL을 쓴다. build_bulk.py 가 이를 모아 아티팩트용 샤드로 만든다.
 레코드 필드: id, title, brand, agency, year, date, country(ISO2, 다국가 XX), field, industry,
-medium(list), techniques(list), moods(list), note, sourceUrl, origin, license
+medium(list), techniques(list), moods(list), note, sourceUrl, imageUrl(원본 사이트의 이미지 주소, 핫링크용), origin, license
 """
 
 import json
@@ -69,7 +69,7 @@ def record(**kw):
         "agency": (kw.get("agency") or "").strip()[:160], "year": int(kw.get("year") or 0), "date": (kw.get("date") or "")[:10],
         "country": kw.get("country") or "XX", "field": kw.get("field") or "브랜드", "industry": kw.get("industry") or "기타",
         "medium": kw.get("medium") or ["print"], "techniques": kw.get("techniques") or [], "moods": kw.get("moods") or [],
-        "note": (kw.get("note") or "").strip()[:300], "sourceUrl": kw.get("sourceUrl") or "", "origin": kw.get("origin") or "user",
+        "note": (kw.get("note") or "").strip()[:300], "sourceUrl": kw.get("sourceUrl") or "", "imageUrl": kw.get("imageUrl") or "", "origin": kw.get("origin") or "user",
         "license": kw.get("license") or "",
     }
     return r
