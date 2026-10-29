@@ -404,6 +404,14 @@ MIGRATIONS = [
     ("staff", "email", "ALTER TABLE staff ADD COLUMN email TEXT NOT NULL DEFAULT ''"),
     ("staff", "notify_email", "ALTER TABLE staff ADD COLUMN notify_email INTEGER NOT NULL DEFAULT 1"),
     ("leads", "sla_alerted_at", "ALTER TABLE leads ADD COLUMN sla_alerted_at TEXT"),
+    # 공개 정보(TourAPI)로 넣은 숙소·식당·쇼핑: 계약 제휴사와 source 로 구분한다
+    ("partners", "content_id", "ALTER TABLE partners ADD COLUMN content_id TEXT"),
+    ("partners", "name_i18n", "ALTER TABLE partners ADD COLUMN name_i18n TEXT NOT NULL DEFAULT '{}'"),
+    ("partners", "address", "ALTER TABLE partners ADD COLUMN address TEXT NOT NULL DEFAULT ''"),
+    ("partners", "image_url", "ALTER TABLE partners ADD COLUMN image_url TEXT NOT NULL DEFAULT ''"),
+    ("partners", "source", "ALTER TABLE partners ADD COLUMN source TEXT NOT NULL DEFAULT ''"),
+    ("partners", "source_url", "ALTER TABLE partners ADD COLUMN source_url TEXT NOT NULL DEFAULT ''"),
+    ("partners", "verified_at", "ALTER TABLE partners ADD COLUMN verified_at TEXT"),
 ]
 
 

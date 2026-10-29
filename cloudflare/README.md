@@ -70,13 +70,17 @@ data.go.kr 에서 `병원정보서비스`, `비급여진료비정보조회서비
 python cloudflare/set_data_key.py                       # '일반 인증키(Decoding)' 를 복사해 둔 상태에서 실행 (클립보드에서 읽음)
 python cloudflare/import_public_data.py attractions     # → cloudflare/.import/import_attractions.sql
 python cloudflare/import_public_data.py hospitals       # → cloudflare/.import/import_hospitals.sql
+python cloudflare/import_public_data.py partners        # → cloudflare/.import/import_partners.sql (숙소·K푸드·쇼핑)
 npx wrangler d1 execute wizx-medical --remote --file cloudflare/.import/import_attractions.sql
 npx wrangler d1 execute wizx-medical --remote --file cloudflare/.import/import_hospitals.sql
+npx wrangler d1 execute wizx-medical --remote --file cloudflare/.import/import_partners.sql
 ```
 
 - 병원: 서울·부산의 치과병원, 안과 병원, 상급종합병원(검진성 검사), 한방병원 중 비급여 가격을 공개한 곳.
   비급여 공개 제도는 미용 목적 시술(보톡스·필러·쌍꺼풀 등)을 포함하지 않아 피부과·성형외과 가격은 공공데이터로 가져올 수 없습니다.
 - 공공데이터에는 외국인 적용가가 없어 국내 공개가(최저~최고)만 표시하고, 외국인 가격은 예약 전 병원 확인으로 안내합니다.
+- 숙소·K푸드·쇼핑: 병원·관광 중심지 9곳 반경 3km의 TourAPI 공개 정보 (호텔·한식·백화점/시장/전문점, 공공누리 사진 있는 곳).
+  계약 제휴사가 아니므로 `partners.source='TourAPI'` 로 구분하고 화면에 출처를 표시합니다. 링크는 Google 지도(국문 이름+주소).
 - 다시 실행하면 같은 병원(요양기호 기준)은 갱신됩니다. 샘플 병원은 `archived`, 샘플 제휴사는 비활성으로 바뀝니다.
 
 ## 참고

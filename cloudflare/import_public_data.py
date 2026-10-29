@@ -2,6 +2,7 @@
 
     python cloudflare/import_public_data.py attractions   # → cloudflare/.import/import_attractions.sql
     python cloudflare/import_public_data.py hospitals     # → cloudflare/.import/import_hospitals.sql
+    python cloudflare/import_public_data.py partners      # → cloudflare/.import/import_partners.sql (숙소·K푸드·쇼핑)
     npx wrangler d1 execute wizx-medical --remote --file cloudflare/.import/import_attractions.sql
 
 API 키는 cloudflare/set_data_key.py 로 %USERPROFILE%\\.wizx\\data_go_kr_key 에 저장한 값을 쓴다 (저장소에 넣지 않음).
@@ -69,6 +70,12 @@ def sql_str(v):
     return "NULL" if v is None else "'" + str(v).replace("'", "''") + "'"
 
 
+def maps_url(ko_name, ko_addr, city):
+    """Google 지도 링크. 이름만 넣으면 비슷한 곳이 여러 개 뜨므로 국문 이름 + 주소로 한 곳에 바로 연결한다.
+    (visitkorea 상세 페이지는 TourAPI 콘텐츠 ID 로 주소를 만들 수 없다)"""
+    return "https://www.google.com/maps/search/?api=1&query=" + urllib.parse.quote(f"{ko_name} {ko_addr or city}".strip())
+
+
 def clean(text):
     return re.sub(r"<br\s*/?>", " ", text or "").strip()[:600]
 
@@ -94,6 +101,7 @@ def match_en(keyword, ko_title):
 
 
 def en_title(title):
+    title = re.sub(r"^\s*(.+?)\s*\(\s*\1\s*\)\s*$", r"\1", title.strip())  # 'T1 (T1)' -> 'T1'
     return re.sub(r"\s*\((?=[^()]*[가-힣]).*$", "", title).strip()
 
 
@@ -124,9 +132,7 @@ def attractions():
             names["en"] = en_title(en["title"])
             overviews["en"] = clean(detail_en.get("overview"))
             addrs["en"] = en.get("addr1", "")
-        # visitkorea 상세 페이지는 TourAPI 콘텐츠 ID 로 열 수 없어, 외국인에게 익숙한 Google 지도로 연결한다
-        city = "Seoul" if region == "seoul" else "Busan"
-        url = "https://www.google.com/maps/search/?api=1&query=" + urllib.parse.quote(f"{names.get('en', ko['title'])}, {city}")
+        url = maps_url(ko["title"], ko.get("addr1", ""), "서울" if region == "seoul" else "부산")
         rows.append((cid, region, rank, names, overviews, addrs, ko.get("mapy"), ko.get("mapx"), image, license_, url))
         print(f"  {region} #{rank} {ko['title']} [{ko['contenttypeid']}]" + (f" / {names['en']}" if en else " (영문 없음)"))
         time.sleep(0.2)
@@ -311,6 +317,87 @@ def hospitals():
     print(f"병원 {len(merged)}곳 → {path}")
 
 
+# ---------------------------------------------------------------------------
+# 숙소·K푸드·쇼핑 (한국관광공사 TourAPI) — 병원·관광 중심지 반경 3km
+# 계약 제휴사가 아니라 공개 정보이므로 partners.source='TourAPI' 로 구분하고 화면에도 출처를 밝힌다.
+# ---------------------------------------------------------------------------
+HUBS = [  # (지역, 이름, 경도, 위도)
+    ("seoul", "명동·중구", 126.9850, 37.5636), ("seoul", "강남", 127.0276, 37.4979), ("seoul", "서초", 127.0080, 37.5013),
+    ("seoul", "신촌", 126.9368, 37.5551), ("seoul", "종로·혜화", 126.9990, 37.5796), ("seoul", "잠실", 127.1000, 37.5133),
+    ("busan", "해운대", 129.1604, 35.1587), ("busan", "서면", 129.0592, 35.1578), ("busan", "남포", 129.0327, 35.0980),
+]
+# 유형: (영문 서비스 contentTypeId, 국문 contentTypeId, 허용 분류(lclsSystm2), 거점당 개수)
+PLACE_TYPES = {
+    "hotel": ("80", "32", ("AC01",), 3),                       # 호텔
+    "kfood": ("82", "39", ("FD01",), 3),                       # 한식
+    "shopping": ("79", "38", ("SH01", "SH02", "SH05", "SH06"), 3),  # 백화점·면세점·특산/전문·시장
+}
+SKIP_SHOPS = ("GS25", "CU ", "세븐일레븐", "이마트24", "편의점", "7-Eleven", "emart24")
+
+
+def ko_from_en(title):
+    m = re.search(r"\s?\((.*[가-힣].*)\)\s*$", title)  # 'HOTEL QB (호텔큐비(호텔QB))' 처럼 괄호가 겹칠 수 있다
+    return m.group(1).strip() if m else None
+
+
+def partners():
+    # 이미 '명소'로 소개한 곳(예: 자갈치시장)은 쇼핑 목록에서 뺀다
+    seen, rows = {t.replace(" ", "") for t, *_ in ATTRACTIONS}, []
+    for region, hub, x, y in HUBS:
+        for ptype, (en_ct, ko_ct, cats, quota) in PLACE_TYPES.items():
+            # 외국인 대상 영문 서비스 목록을 먼저, 모자라면 국문 서비스에서 사진 있는 곳으로 채운다
+            cands = [("en", i) for i in tour("EngService2", "locationBasedList2", mapX=x, mapY=y, radius=3000,
+                                              contentTypeId=en_ct, numOfRows=100, arrange="E")]
+            cands += [("ko", i) for i in tour("KorService2", "locationBasedList2", mapX=x, mapY=y, radius=3000,
+                                               contentTypeId=ko_ct, numOfRows=100, arrange="E")]
+            taken = 0
+            for lang, i in cands:
+                if taken >= quota:
+                    break
+                title = i.get("title", "")
+                ko_name = ko_from_en(title) if lang == "en" else title
+                key = (ko_name or title).replace(" ", "")
+                lat, lng = float(i.get("mapy") or 0), float(i.get("mapx") or 0)
+                # 영문·국문 서비스에 같은 곳이 이름만 다르게 있을 수 있어 같은 유형 80m 이내는 하나로 본다
+                near_dup = any(r["ptype"] == ptype and abs(float(r["lat"] or 0) - lat) < 0.0007 and abs(float(r["lng"] or 0) - lng) < 0.0009
+                               for r in rows)
+                if key in seen or near_dup or i.get("lclsSystm2") not in cats or not i.get("firstimage") \
+                        or i.get("cpyrhtDivCd") not in ("Type1", "Type3") or any(s in title for s in SKIP_SHOPS):
+                    continue
+                detail = (tour("EngService2" if lang == "en" else "KorService2", "detailCommon2", contentId=i["contentid"]) or [{}])[0]
+                names = {"ko": ko_name or en_title(title)}
+                if lang == "en":
+                    names["en"] = en_title(title)
+                desc = {lang: clean(detail.get("overview"))[:300]}
+                url = maps_url(names["ko"], i.get("addr1", ""), "서울" if region == "seoul" else "부산")
+                rows.append(dict(cid=f"{lang}-{i['contentid']}", ptype=ptype, region=region, names=names, desc=desc,
+                                 addr=i.get("addr1", ""), lat=i.get("mapy"), lng=i.get("mapx"),
+                                 image=i["firstimage"].replace("http://", "https://"), url=url))
+                seen.add(key)
+                taken += 1
+                print(f"  {hub} {ptype}: {names['ko']}" + (f" / {names['en']}" if 'en' in names else ""))
+                time.sleep(0.1)
+
+    lines = ["UPDATE partners SET active = 0 WHERE source = 'TourAPI';"]
+    for r in rows:
+        cid = sql_str(r["cid"])
+        cols = {
+            "partner_type": sql_str(r["ptype"]), "name": sql_str(r["names"]["ko"]), "region": sql_str(r["region"]),
+            "lat": str(float(r["lat"])) if r["lat"] else "NULL", "lng": str(float(r["lng"])) if r["lng"] else "NULL",
+            "description_i18n": sql_str(json.dumps(r["desc"], ensure_ascii=False)), "price_band": "0",
+            "name_i18n": sql_str(json.dumps(r["names"], ensure_ascii=False)), "address": sql_str(r["addr"]),
+            "image_url": sql_str(r["image"]), "source": "'TourAPI'", "source_url": sql_str(r["url"]),
+            "verified_at": sql_str(TODAY), "active": "1", "is_demo": "0",
+        }
+        lines.append("UPDATE partners SET " + ", ".join(f"{k} = {v}" for k, v in cols.items()) + f" WHERE content_id = {cid};")
+        lines.append(f"INSERT INTO partners (content_id, {', '.join(cols)}) SELECT {cid}, {', '.join(cols.values())} "
+                     f"WHERE NOT EXISTS (SELECT 1 FROM partners WHERE content_id = {cid});")
+    OUT.mkdir(exist_ok=True)
+    path = OUT / "import_partners.sql"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"{len(rows)}곳 → {path}")
+
+
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8")
     what = sys.argv[1] if len(sys.argv) > 1 else ""
@@ -318,5 +405,7 @@ if __name__ == "__main__":
         attractions()
     elif what == "hospitals":
         hospitals()
+    elif what == "partners":
+        partners()
     else:
         sys.exit(__doc__)

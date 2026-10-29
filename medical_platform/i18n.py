@@ -22,7 +22,7 @@ REGIONS = ["seoul", "busan", "jeju", "incheon", "daegu"]
 
 CONCIERGE_NEEDS = ["interpreter", "hotel", "airport_pickup", "transport", "kfood", "tour", "shopping", "vip"]
 
-PARTNER_TYPES = ["hotel", "kfood", "interpreter", "transport", "tour", "vip"]
+PARTNER_TYPES = ["hotel", "kfood", "shopping", "interpreter", "transport", "tour", "vip"]
 
 BUDGET_BANDS = ["under_1k", "1k_3k", "3k_10k", "10k_30k", "over_30k", "undecided"]
 
@@ -256,7 +256,15 @@ T = {
     "pt_kfood": {"en": "K-Food Restaurants", "ko": "K푸드 식당 추천", "zh": "韩餐推荐", "ja": "Kフードレストラン", "vi": "Nhà hàng Hàn Quốc"},
     "pt_interpreter": {"en": "Medical Interpreters", "ko": "의료 통역", "zh": "医疗翻译", "ja": "医療通訳", "vi": "Phiên dịch y tế"},
     "pt_transport": {"en": "Airport & Transport", "ko": "공항·교통", "zh": "机场与交通", "ja": "空港・交通", "vi": "Sân bay & Di chuyển"},
-    "pt_tour": {"en": "Tours & Shopping", "ko": "관광·쇼핑", "zh": "观光与购物", "ja": "観光・ショッピング", "vi": "Tham quan & Mua sắm"},
+    "pt_tour": {"en": "Guided Tours", "ko": "관광 투어", "zh": "观光游览", "ja": "観光ツアー", "vi": "Tour tham quan"},
+    "pt_shopping": {"en": "Shopping", "ko": "쇼핑", "zh": "购物", "ja": "ショッピング", "vi": "Mua sắm"},
+    "partners_source": {"en": "Stays, restaurants and shops are public listings from the Korea Tourism Organization (TourAPI), not WIZ X partners. Photos: Korea Tourism Organization.",
+                        "ko": "숙소·식당·쇼핑 정보는 한국관광공사(TourAPI) 공개 정보이며 WIZ X 제휴처가 아닙니다. 사진: 한국관광공사",
+                        "zh": "住宿、餐厅和购物信息来自韩国观光公社（TourAPI）公开资料，并非 WIZ X 合作伙伴。图片：韩国观光公社",
+                        "ja": "宿泊・飲食店・ショッピング情報は韓国観光公社（TourAPI）の公開情報で、WIZ X の提携先ではありません。写真：韓国観光公社",
+                        "vi": "Thông tin lưu trú, nhà hàng và mua sắm là dữ liệu công khai của Tổng cục Du lịch Hàn Quốc (TourAPI), không phải đối tác của WIZ X. Ảnh: KTO"},
+    "arranged_on_request": {"en": "Arranged for you when you request a consultation.", "ko": "상담 신청 시 맞춤으로 연결해 드립니다.",
+                            "zh": "申请咨询后为您安排。", "ja": "ご相談いただければ手配します。", "vi": "Chúng tôi sắp xếp khi bạn gửi yêu cầu tư vấn."},
     "pt_vip": {"en": "VIP Concierge", "ko": "VIP 의전", "zh": "VIP礼宾", "ja": "VIPコンシェルジュ", "vi": "Hỗ trợ VIP"},
     "itinerary_title": {"en": "Sample 5-day medical trip", "ko": "5일 의료여행 동선 예시", "zh": "5天医疗旅行示例", "ja": "5日間の医療旅行例", "vi": "Lịch trình mẫu 5 ngày"},
     "itin_d1": {"en": "Arrival · airport pickup · check-in near clinic · light K-food dinner",

@@ -1,7 +1,7 @@
 {% extends "public/base.html" %}
 {% block title %}{{ t('concierge_title') }} · {{ brand() }}{% endblock %}
-{% set ICONS = {'hotel': 'bed-double', 'kfood': 'utensils', 'interpreter': 'languages', 'transport': 'car', 'tour': 'landmark', 'vip': 'crown'} %}
-{% set NEED = {'hotel':'hotel','kfood':'kfood','interpreter':'interpreter','transport':'airport_pickup','tour':'tour','vip':'vip'} %}
+{% set ICONS = {'hotel': 'bed-double', 'kfood': 'utensils', 'shopping': 'shopping-bag', 'interpreter': 'languages', 'transport': 'car', 'tour': 'landmark', 'vip': 'crown'} %}
+{% set NEED = {'hotel':'hotel','kfood':'kfood','shopping':'shopping','interpreter':'interpreter','transport':'airport_pickup','tour':'tour','vip':'vip'} %}
 {% block content %}
 <section class="wrap page">
   <h1 class="page-title">{{ t('concierge_title') }}</h1>
@@ -36,17 +36,26 @@
   {% for ptype, items in grouped.items() %}
   <div class="partner-section" id="{{ ptype }}">
     <h2>{{ icon(ICONS[ptype], 20) }} {{ t('pt_' ~ ptype) }}</h2>
-    <div class="partner-rows">
+    {% if items %}
+    <ul class="spot-grid">
       {% for p in items %}
-      <div class="partner-row">
-        <p class="nearby-name">{{ p.name }} {% if p.is_demo %}<span class="demo-tag">{{ t('demo_badge') }}</span>{% endif %}</p>
-        <p class="small">{{ p.description }}</p>
-        <span class="price-band">{{ '₩' * p.price_band }}<span class="dim">{{ '₩' * (3 - p.price_band) }}</span></span>
-      </div>
-      {% else %}<p class="muted small">–</p>{% endfor %}
-    </div>
+      <li class="spot">
+        <a href="{{ p.source_url or p.website or url_for('public.consult', need=[NEED[ptype]]) }}"{% if p.source_url or p.website %} target="_blank" rel="noopener"{% endif %}>
+          <span class="spot-img">{% if p.image_url %}<img src="{{ p.image_url }}" alt="" loading="lazy" referrerpolicy="no-referrer">{% else %}{{ icon(ICONS[ptype], 28) }}{% endif %}
+            <span class="spot-region">{{ icon('map-pin', 12) }} {{ t('rg_' ~ p.region) if p.region else '' }}</span></span>
+          <span class="spot-body">
+            <span class="spot-name">{{ p.name }} {% if p.is_demo %}<span class="demo-tag">{{ t('demo_badge') }}</span>{% endif %}</span>
+            {% if p.description %}<span class="spot-desc">{{ p.description | truncate(80) }}</span>{% endif %}
+            {% if p.price_band %}<span class="price-band">{{ '₩' * p.price_band }}<span class="dim">{{ '₩' * (3 - p.price_band) }}</span></span>{% endif %}
+          </span>
+        </a>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}<p class="muted small">{{ t('arranged_on_request') }}</p>{% endif %}
     <a class="text-link" href="{{ url_for('public.consult', need=[NEED[ptype]]) }}">{{ t('nav_consult') }} {{ icon('arrow-right', 15) }}</a>
   </div>
   {% endfor %}
+  <p class="spot-source small muted">{{ icon('info', 13) }} {{ t('partners_source') }}</p>
 </section>
 {% endblock %}

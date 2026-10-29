@@ -1,5 +1,6 @@
 """해외 환자용 다국어 공개 사이트: 홈, 병원 지도·검색, 병원 상세, 컨시어지, 상담 신청."""
 import json
+import math
 
 from flask import (Blueprint, abort, current_app, g, redirect, render_template, request, session, url_for)
 
@@ -64,6 +65,21 @@ def track(event, hospital_id=None):
 def localized(json_text, lang):
     data = json.loads(json_text or "{}")
     return data.get(lang) or data.get("en") or ""
+
+
+def partner_view(row, lang):
+    """숙소·식당·쇼핑. 공개 정보(TourAPI)는 언어별 이름이 있고, 없으면 국문 이름을 쓴다."""
+    names = json.loads(row["name_i18n"] or "{}")
+    return dict(row, name=names.get(lang) or names.get("en") or row["name"],
+                description=localized(row["description_i18n"], lang))
+
+
+def distance_km(lat1, lng1, lat2, lng2):
+    if None in (lat1, lng1, lat2, lng2):
+        return 9999
+    dlat, dlng = math.radians(lat2 - lat1), math.radians(lng2 - lng1)
+    a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlng / 2) ** 2
+    return 6371 * 2 * math.asin(math.sqrt(a))
 
 
 def load_attractions(lang, region=None, limit=8):
@@ -195,10 +211,12 @@ def hospital_detail(slug):
     h = hospital_view(row, g.lang, load_tags([row["id"]]).get(row["id"]))
     doctors = db.execute("SELECT * FROM doctors WHERE hospital_id = ? ORDER BY id", (row["id"],)).fetchall()
     prices = db.execute("SELECT * FROM price_items WHERE hospital_id = ? ORDER BY id", (row["id"],)).fetchall()
-    partners = db.execute(
-        "SELECT * FROM partners WHERE active = 1 AND region = ? AND partner_type IN ('hotel', 'kfood') ORDER BY partner_type, name",
-        (row["region"],)).fetchall()
-    partners = [dict(p, description=localized(p["description_i18n"], g.lang)) for p in partners]
+    # 병원에서 가까운 숙소 2곳·K푸드 2곳
+    nearby = sorted((partner_view(p, g.lang) for p in db.execute(
+        "SELECT * FROM partners WHERE active = 1 AND region = ? AND partner_type IN ('hotel', 'kfood')",
+        (row["region"],)).fetchall()),
+        key=lambda p: distance_km(row["lat"], row["lng"], p["lat"], p["lng"]))
+    partners = [p for p in nearby if p["partner_type"] == "hotel"][:2] + [p for p in nearby if p["partner_type"] == "kfood"][:2]
     track("view_hospital", row["id"])
     return render_template("public/hospital_detail.html", h=h, doctors=doctors, prices=prices, partners=partners,
                            points=map_points([h]), spots=load_attractions(g.lang, region=row["region"], limit=3))
@@ -209,7 +227,7 @@ def concierge():
     rows = get_db().execute("SELECT * FROM partners WHERE active = 1 ORDER BY partner_type, name").fetchall()
     grouped = {pt: [] for pt in i18n.PARTNER_TYPES}
     for r in rows:
-        grouped.setdefault(r["partner_type"], []).append(dict(r, description=localized(r["description_i18n"], g.lang)))
+        grouped.setdefault(r["partner_type"], []).append(partner_view(r, g.lang))
     track("view_concierge")
     return render_template("public/concierge.html", grouped=grouped, spots=load_attractions(g.lang, limit=24))
 
