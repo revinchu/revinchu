@@ -113,14 +113,20 @@ def attractions():
             image, license_ = en.get("firstimage") or "", en.get("cpyrhtDivCd") or ""
         if license_ not in ("Type1", "Type3"):  # 공공누리 1·3유형(출처표시)만 사진 사용
             image = ""
+        if not image:  # 대표 사진이 없으면 갤러리에서 1·3유형 사진을 찾는다 (예: 남산서울타워)
+            gallery = [g for g in tour("KorService2", "detailImage2", contentId=cid, imageYN="Y", numOfRows=20)
+                       if g.get("cpyrhtDivCd") in ("Type1", "Type3") and g.get("originimgurl")]
+            if gallery:
+                image, license_ = gallery[0]["originimgurl"], gallery[0]["cpyrhtDivCd"]
         image = image.replace("http://", "https://")  # https 페이지에서 http 이미지는 차단된다
         names, overviews, addrs = {"ko": ko["title"]}, {"ko": clean(detail_ko.get("overview"))}, {"ko": ko.get("addr1", "")}
-        url = f"https://korean.visitkorea.or.kr/detail/ms_detail.do?cotid={detail_ko['cotid']}" if detail_ko.get("cotid")             else "https://korean.visitkorea.or.kr/"
         if en:
             names["en"] = en_title(en["title"])
             overviews["en"] = clean(detail_en.get("overview"))
             addrs["en"] = en.get("addr1", "")
-            url = "https://english.visitkorea.or.kr/svc/contents/contentsView.do?vcontsId=" + str(en["contentid"])
+        # visitkorea 상세 페이지는 TourAPI 콘텐츠 ID 로 열 수 없어, 외국인에게 익숙한 Google 지도로 연결한다
+        city = "Seoul" if region == "seoul" else "Busan"
+        url = "https://www.google.com/maps/search/?api=1&query=" + urllib.parse.quote(f"{names.get('en', ko['title'])}, {city}")
         rows.append((cid, region, rank, names, overviews, addrs, ko.get("mapy"), ko.get("mapx"), image, license_, url))
         print(f"  {region} #{rank} {ko['title']} [{ko['contenttypeid']}]" + (f" / {names['en']}" if en else " (영문 없음)"))
         time.sleep(0.2)
