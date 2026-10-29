@@ -145,6 +145,23 @@ CREATE TABLE IF NOT EXISTS attractions (
     active INTEGER NOT NULL DEFAULT 1
 );
 
+-- K-팝 뮤직비디오·드라마·영화 촬영지 (한국문화정보원 데이터 + 관광공사 사진, cloudflare/import_public_data.py filming)
+CREATE TABLE IF NOT EXISTS filming_spots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    place_key TEXT UNIQUE NOT NULL,
+    region TEXT NOT NULL,
+    name_i18n TEXT NOT NULL DEFAULT '{}',
+    address TEXT NOT NULL DEFAULT '',
+    lat REAL,
+    lng REAL,
+    image_url TEXT NOT NULL DEFAULT '',
+    kinds TEXT NOT NULL DEFAULT '',
+    works_json TEXT NOT NULL DEFAULT '[]',
+    source TEXT NOT NULL DEFAULT '',
+    verified_at TEXT,
+    active INTEGER NOT NULL DEFAULT 1
+);
+
 CREATE TABLE IF NOT EXISTS leads (
     id TEXT PRIMARY KEY,
     created_at TEXT NOT NULL,

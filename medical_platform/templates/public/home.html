@@ -73,7 +73,7 @@
     {% endfor %}
   </ul>
   <ul class="specialty-list specialty-more">
-    {% for s in i18n.SPECIALTIES if s not in featured_sp | map('first') | list %}
+    {% for s in i18n.SPECIALTIES if s not in featured_sp | map('first') | list and specialty_counts[s] %}
     <li><a href="{{ url_for('public.hospitals', specialty=s) }}">{{ t('sp_' ~ s) }}</a> <span>{{ specialty_counts[s] }}</span></li>
     {% endfor %}
   </ul>

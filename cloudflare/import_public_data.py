@@ -7,6 +7,7 @@
 
 API 키는 cloudflare/set_data_key.py 로 %USERPROFILE%\\.wizx\\data_go_kr_key 에 저장한 값을 쓴다 (저장소에 넣지 않음).
 """
+import hashlib
 import json
 import os
 import pathlib
@@ -416,6 +417,121 @@ def partners():
     print(f"{len(rows)}곳 → {path}")
 
 
+# ---------------------------------------------------------------------------
+# 진료과 채우기: 외국인환자 유치기관 등록 의원 + 상급종합병원 진료과
+# - 한국보건산업진흥원 「외국인환자 유치기관 현황」(.import/raw/khidi_foreign_patient_institutions.csv) 에 있고
+# - 심평원에 해당 진료과로 등록된 의원 중, 의원 이름에 전문과목이 들어간 곳(= 그 과 전문의가 운영)만 고른다.
+# - 상급종합병원은 심평원 진료과 목록으로 피부과·성형외과·정형외과·산부인과·흉부외과·방사선종양학과를 확인해 태그한다.
+# 의원은 심평원 비급여 공개 대상이 아니라 가격이 없다 (미용 시술도 공개 대상 아님) → 화면에서 견적 문의로 안내.
+# ---------------------------------------------------------------------------
+KHIDI_CSV = HERE / ".import" / "raw" / "khidi_foreign_patient_institutions.csv"
+CLINIC_GROUPS = {  # 진료과: (심평원 진료과목 코드, 의원 이름에 있어야 할 단어, 서울 수, 부산 수)
+    "dermatology": ("14", ("피부과",), 12, 6),
+    "plastic_surgery": ("08", ("성형외과",), 12, 6),
+    "ophthalmology": ("12", ("안과",), 8, 4),
+    "orthopedics": ("05", ("정형외과",), 8, 4),
+    "fertility": ("10", ("산부인과", "여성의원", "여성병원"), 8, 4),
+}
+# 상급종합병원 진료과 태그: 사이트 진료과 → 심평원 진료과목 코드
+TERTIARY_DEPTS = {"dermatology": "14", "plastic_surgery": "08", "orthopedics": "05", "fertility": "10",
+                  "cardiology": "07", "oncology": "17"}
+
+
+def _norm(name):
+    return re.sub(r"[\s()（）·.,\-]|의료법인|재단법인|학교법인|사회복지법인", "", name or "")
+
+
+def khidi_names():
+    import csv
+    with open(KHIDI_CSV, encoding="cp949", errors="replace") as f:
+        return {_norm(r["상호명"]) for r in csv.DictReader(f) if r.get("상태") == "유지" and r.get("지역") in ("서울", "부산")}
+
+
+def hira_all(region, **query):
+    rows, page = [], 1
+    while True:
+        items = call(HOSP_URL, sidoCd=SIDO[region], numOfRows=1000, pageNo=page, **query)
+        rows += items
+        if len(items) < 1000:
+            return rows
+        page += 1
+
+
+def registered(name, khidi):
+    n = _norm(name)
+    return n in khidi or any(k and (k in n or n in k) and min(len(k), len(n)) >= 4 for k in khidi)
+
+
+def select_clinics():
+    khidi = khidi_names()
+    picked = []
+    for spec, (code, words, n_seoul, n_busan) in CLINIC_GROUPS.items():
+        for region, limit in (("seoul", n_seoul), ("busan", n_busan)):
+            rows = [h for h in hira_all(region, clCd="31", dgsbjtCd=code)
+                    if any(w in h["yadmNm"] for w in words) and _norm(h["yadmNm"]) in khidi]
+            rows.sort(key=lambda h: (-int(h.get("drTotCnt") or 0), h["yadmNm"]))
+            for h in rows[:limit]:
+                picked.append((spec, region, h))
+            print(f"  {region} {spec}: 등록·전문의 의원 {len(rows)}곳 중 {min(limit, len(rows))}곳")
+    return picked
+
+
+def clinics():
+    sys.path.insert(0, str(HERE))
+    khidi = khidi_names()
+    picked = select_clinics()
+    lines = []
+    for spec, region, h in picked:
+        slug = "hira-" + hashlib.sha1(h["ykiho"].encode()).hexdigest()[:10]
+        names = name_i18n.clinic_names(h["yadmNm"], spec)
+        if "en" not in names:
+            print(f"  ! 영문 브랜드 없음 (name_i18n.CLINIC_BRANDS 에 추가): {h['yadmNm']}")
+        gu, dr, city = h.get("sgguCdNm", ""), int(h.get("drTotCnt") or 0), "Seoul" if region == "seoul" else "Busan"
+        t = name_i18n.CLINIC_TYPE[spec]
+        summary = {
+            "ko": f"{district_name(gu, 'ko')}에 있는 {t[0]}입니다. 의사 {dr}명. 한국보건산업진흥원에 등록된 외국인환자 유치기관입니다. "
+                  "의원급·미용 시술은 비급여 가격 공개 대상이 아니어서 가격은 상담으로 확인해 드립니다.",
+            "en": f"{t[1]} in {district_name(gu, 'en')}, {city}, with {dr} doctor(s), registered with KHIDI to treat international "
+                  "patients. Clinic and cosmetic prices are not part of Korea's public price disclosure — ask us for a quote.",
+            "zh": f"位于{'首尔' if region == 'seoul' else '釜山'}{district_name(gu, 'zh')}的{t[2]}，医生{dr}名，"
+                  "已在韩国保健产业振兴院登记为外国患者招揽机构。诊所及美容项目不在公开价格范围内，请咨询报价。",
+            "ja": f"{'ソウル' if region == 'seoul' else '釜山'}{district_name(gu, 'ja')}にある{t[3]}です。医師{dr}名。"
+                  "韓国保健産業振興院に外国人患者誘致機関として登録されています。クリニック・美容施術は価格公開の対象外のため、お見積りはご相談ください。",
+            "vi": f"{t[4]} tại {district_name(gu, 'vi')}, {city}, {dr} bác sĩ, đã đăng ký với KHIDI để tiếp nhận bệnh nhân quốc tế. "
+                  "Giá phòng khám và thẩm mỹ không thuộc dữ liệu công bố — hãy hỏi chúng tôi để báo giá.",
+        }
+        lat, lng = float(h.get("YPos") or 0), float(h.get("XPos") or 0)
+        vals = ", ".join([
+            sql_str(slug), sql_str(h["yadmNm"]), sql_str(names.get("en", h["yadmNm"])), "'clinic'", sql_str(region),
+            sql_str(gu), sql_str(h.get("addr", "")), sql_str(h.get("addr", "")), str(lat) if lat else "NULL",
+            str(lng) if lng else "NULL", sql_str(spec), sql_str(h.get("telno", "")), sql_str(h.get("hospUrl", "")), "0",
+            sql_str(json.dumps(summary, ensure_ascii=False)), "'published'", sql_str(TODAY), "0", sql_str(TODAY), sql_str(TODAY),
+            sql_str(json.dumps(names, ensure_ascii=False)), "1"])
+        lines.append(
+            "INSERT INTO hospitals (slug, name_ko, name_en, hospital_type, region, district, address_ko, address_en, lat, lng, "
+            "specialties, phone, website, price_band, summary_i18n, verification_status, last_verified_at, is_demo, created_at, "
+            "updated_at, name_i18n, foreign_patient_registered) VALUES (" + vals + ") ON CONFLICT(slug) DO UPDATE SET "
+            "name_ko=excluded.name_ko, name_en=excluded.name_en, name_i18n=excluded.name_i18n, district=excluded.district, "
+            "address_ko=excluded.address_ko, lat=excluded.lat, lng=excluded.lng, specialties=excluded.specialties, "
+            "phone=excluded.phone, website=excluded.website, summary_i18n=excluded.summary_i18n, "
+            "foreign_patient_registered=1, verification_status='published', updated_at=excluded.updated_at;")
+    # 상급종합병원 진료과 태그 (심평원 진료과목 목록으로 확인한 것만)
+    for spec, code in TERTIARY_DEPTS.items():
+        for region in SIDO:
+            for h in hira_all(region, clCd="01", dgsbjtCd=code):
+                slug = "hira-" + hashlib.sha1(h["ykiho"].encode()).hexdigest()[:10]
+                lines.append(f"UPDATE hospitals SET specialties = specialties || ',{spec}' WHERE slug = {sql_str(slug)} "
+                             f"AND ',' || specialties || ',' NOT LIKE '%,{spec},%';")
+    # 이미 들어간 병원 중 외국인환자 유치기관 등록 여부 표시
+    for row in re.findall(r"INSERT INTO hospitals .*?VALUES \('(hira-[0-9a-f]+)', '((?:[^']|'')*)'",
+                          (OUT / "import_hospitals.sql").read_text(encoding="utf-8")):
+        if registered(row[1].replace("''", "'"), khidi):
+            lines.append(f"UPDATE hospitals SET foreign_patient_registered = 1 WHERE slug = {sql_str(row[0])};")
+    path = OUT / "import_clinics.sql"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"의원 {len(picked)}곳 + 진료과 태그 → {path}")
+
+
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8")
     what = sys.argv[1] if len(sys.argv) > 1 else ""
@@ -425,5 +541,10 @@ if __name__ == "__main__":
         hospitals()
     elif what == "partners":
         partners()
+    elif what == "select-clinics":
+        for spec, region, h in select_clinics():
+            print(f"{spec}\t{region}\t{h['yadmNm']}\t{h.get('drTotCnt')}\t{h.get('sgguCdNm')}")
+    elif what == "clinics":
+        clinics()
     else:
         sys.exit(__doc__)

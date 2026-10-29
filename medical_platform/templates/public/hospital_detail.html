@@ -54,7 +54,8 @@
         </table></div>
         <p class="note">{{ icon('info', 15) }} {{ t('price_board_note_real') if hira else t('price_note') }}</p>
         {% else %}
-        <p class="empty">{{ t('no_prices') }}</p>
+        <p class="empty">{{ t('no_prices_public') if h.hospital_type == 'clinic' else t('no_prices') }}
+          <a href="{{ url_for('public.consult', hospital=h.id) }}">{{ t('ask_about_hospital') }}</a></p>
         {% endif %}
       </section>
 

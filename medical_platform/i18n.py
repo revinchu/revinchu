@@ -233,7 +233,7 @@ T = {
     "sp_korean_medicine": {"en": "Korean Medicine", "ko": "한방", "zh": "韩医", "ja": "韓方", "vi": "Đông y Hàn Quốc"},
     "sp_oncology": {"en": "Oncology", "ko": "암 치료", "zh": "肿瘤科", "ja": "がん治療", "vi": "Ung bướu"},
     "sp_cardiology": {"en": "Cardiology", "ko": "심장내과", "zh": "心内科", "ja": "循環器科", "vi": "Tim mạch"},
-    "sp_fertility": {"en": "Fertility", "ko": "난임", "zh": "生殖医学", "ja": "不妊治療", "vi": "Hiếm muộn"},
+    "sp_fertility": {"en": "OB/GYN & Fertility", "ko": "산부인과·난임", "zh": "妇产科·生殖医学", "ja": "産婦人科・不妊治療", "vi": "Sản phụ khoa & Hiếm muộn"},
     "sp_other": {"en": "Other / Not sure", "ko": "기타 / 잘 모름", "zh": "其他/不确定", "ja": "その他・未定", "vi": "Khác / Chưa rõ"},
 
     # --- 지역 ---
@@ -257,6 +257,11 @@ T = {
                    "vi": "Không có kết quả. Hãy để lại yêu cầu, chúng tôi sẽ tìm giúp bạn."},
     "view_details": {"en": "View details", "ko": "상세 보기", "zh": "查看详情", "ja": "詳細を見る", "vi": "Xem chi tiết"},
     "intl_coordinator": {"en": "Int'l coordinator", "ko": "외국인 전담 코디네이터", "zh": "国际协调员", "ja": "国際コーディネーター", "vi": "Điều phối viên quốc tế"},
+    "no_prices_public": {"en": "This provider is not covered by Korea's public price disclosure (clinics and cosmetic procedures are excluded). Request a quote and we'll confirm prices with the clinic in writing.",
+                         "ko": "이 의료기관은 공공 가격 공개 대상이 아닙니다(의원급·미용 시술 제외). 견적을 요청하시면 병원에 확인해 서면으로 안내해 드립니다.",
+                         "zh": "该机构不在韩国公开价格范围内（诊所及美容项目除外）。请申请报价，我们会向诊所确认并以书面形式告知。",
+                         "ja": "この医療機関は公開価格の対象外です（クリニック・美容施術は除外）。お見積りをご依頼いただければ、医療機関に確認して書面でご案内します。",
+                         "vi": "Cơ sở này không thuộc dữ liệu giá công bố (phòng khám và thẩm mỹ được loại trừ). Hãy yêu cầu báo giá, chúng tôi sẽ xác nhận với phòng khám bằng văn bản."},
     "registered_foreign": {"en": "Registered for int'l patients", "ko": "외국인환자 유치 등록", "zh": "已登记外国患者接待", "ja": "外国人患者誘致登録", "vi": "Đã đăng ký BN quốc tế"},
 
     # --- 상세 ---

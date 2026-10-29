@@ -5,11 +5,12 @@
     <p class="h-summary">{{ h.summary }}</p>
     <ul class="marks">
       {% for tg in h.tags %}<li><i class="mark mark-{{ tg.tag }}"></i>{{ t('tag_' ~ tg.tag) }}</li>{% endfor %}
+      {% if h.foreign_patient_registered %}<li>{{ icon('shield-check', 14) }}{{ t('registered_foreign') }}</li>{% endif %}
       {% if h.intl_coordinator %}<li>{{ icon('languages', 14) }}{{ t('intl_coordinator') }}</li>{% endif %}
     </ul>
   </div>
   <div class="h-row-side">
-    <span class="price-band" title="{{ t('filter_price') }}">{{ '₩' * h.price_band }}<span class="dim">{{ '₩' * (3 - h.price_band) }}</span></span>
+    {% if h.price_band %}<span class="price-band" title="{{ t('filter_price') }}">{{ '₩' * h.price_band }}<span class="dim">{{ '₩' * (3 - h.price_band) }}</span></span>{% endif %}
     <span class="h-langs">{{ h.language_list | join(' ') | upper }}</span>
     {% if h.is_sponsored %}<span class="label-ad">{{ t('sponsored') }}</span>{% endif %}
     {% if h.is_demo %}<span class="demo-tag">{{ t('demo_badge') }}</span>{% endif %}

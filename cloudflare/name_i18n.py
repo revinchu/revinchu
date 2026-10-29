@@ -153,3 +153,54 @@ def item_names(ko):
             parts.append(seg[idx] if seg else part)
         out[lang] = " · ".join(parts)
     return out
+
+
+# 외국인환자 유치기관 등록 의원: 국문 이름 → 영문 브랜드 (진료과 표기는 CLINIC_TYPE 으로 붙인다)
+CLINIC_BRANDS = {
+    # 피부과
+    "닥터스피부과의원": "Doctors", "밴스피부과의원": "Vands", "역삼밴스피부과의원": "Vands Yeoksam",
+    "임이석테마피부과의원": "Lim Yi-seok Theme", "갤러리아피부과의원": "Galleria", "더셀피부과의원": "The Cell",
+    "더힐피부과의원": "The Heal", "리프톤피부과의원": "Lifton", "플로레스피부과의원": "Flores",
+    "바노바기피부과의원": "Banobagi", "오가나셀 피부과의원 동대문점": "Organacell Dongdaemun",
+    "고운세상김양제장봉석피부과의원": "Gowoon Sesang", "더퍼스트피부과의원 부산본점": "The First Busan",
+    "뮬피부과의원": "Mul", "부산맥스웰피부과의원": "Busan Maxwell", "이현재피부과의원": "Lee Hyun-jae",
+    "그대고운피부과의원": "Geudae Goun",
+    # 성형외과
+    "디에이성형외과의원": "DA", "에이비성형외과의원": "AB", "기린성형외과의원": "Girin", "나나성형외과의원": "Nana",
+    "뷰성형외과의원": "View", "모제림성형외과의원": "Mojelim", "바노바기성형외과의원": "Banobagi", "팝성형외과의원": "Pop",
+    "리엔장성형외과의원": "Lien Jang", "신상성형외과의원": "Shinsang", "우리성형외과의원": "Woori", "원진성형외과의원": "Wonjin",
+    "하늘성형외과의원": "Haneul", "더페이스성형외과의원": "The Face", "리팅성형외과의원": "Liting", "뉴라인성형외과의원": "New Line",
+    "케이성형외과의원": "K", "디자인성형외과의원": "Design",
+    # 안과
+    "비앤빛안과의원": "B&VIIT", "하늘안과의원": "Haneul", "서울신세계안과의원": "Seoul Shinsegae",
+    "센트럴서울안과의원": "Central Seoul", "밝은눈안과의원": "Balgeunnun", "밝은성모안과의원": "Balgeun Sungmo",
+    "서울밝은세상안과의원": "Seoul Balgeun Sesang", "지에스안과의원": "GS", "수정안과의원": "Sujeong", "누네빛안과의원": "Nunebit",
+    "굿모닝백이안과의원": "Good Morning Baek-i", "굿모닝성모안과의원": "Good Morning Sungmo",
+    # 정형외과
+    "세종스포츠정형외과의원": "Sejong Sports", "서울선정형외과의원": "Seoul Sun", "더바름정형외과의원": "The Bareum",
+    "강남본정형외과의원": "Gangnam Bon", "마포공덕튼튼본정형외과의원": "Mapo Gongdeok Teunteun Bon", "반듯한정형외과의원": "Bandeutan",
+    "제애정형외과의원": "Jeae", "뉴본정형외과의원": "New Bone", "참좋은정형외과신경과의원": "Chamjoeun", "뉴젠정형외과의원": "Newgen",
+    # 산부인과·여성의원
+    "(의)성광의료재단 차여성의원": "CHA", "의)성광의료재단 마곡차여성의원": "CHA Magok", "포유문산부인과의원": "Poyumun",
+    "고은빛산부인과의원": "Goeunbit", "최상산부인과의원": "Choesang", "청담산부인과의원": "Cheongdam", "나를위한산부인과의원": "For Me",
+    "미래연여성의원": "Miraeyeon", "메디우먼여성의원": "Mediwoman", "로앤산부인과의원": "Roaen", "애플산부인과의원": "Apple",
+    "센텀이룸여성의원": "Centum Iroom",
+}
+
+# 의원 종류 → (국문, 영문, 중문, 일문, 베트남어)
+CLINIC_TYPE = {
+    "dermatology": ("피부과 의원", "Dermatology Clinic", "皮肤科诊所", "皮膚科クリニック", "Phòng khám Da liễu"),
+    "plastic_surgery": ("성형외과 의원", "Plastic Surgery Clinic", "整形外科诊所", "美容外科クリニック", "Phòng khám Phẫu thuật Thẩm mỹ"),
+    "ophthalmology": ("안과 의원", "Eye Clinic", "眼科诊所", "眼科クリニック", "Phòng khám Mắt"),
+    "orthopedics": ("정형외과 의원", "Orthopedic Clinic", "骨科诊所", "整形外科クリニック", "Phòng khám Chỉnh hình"),
+    "fertility": ("산부인과·여성 의원", "Women's Clinic (OB/GYN)", "妇产科诊所", "産婦人科クリニック", "Phòng khám Sản phụ khoa"),
+}
+
+
+def clinic_names(ko, spec):
+    """의원 국문 이름 → {ko, en, zh, ja, vi}. 영문 브랜드가 없으면 국문만."""
+    brand = CLINIC_BRANDS.get(ko)
+    if not brand:
+        return {"ko": ko}
+    _, en, zh, ja, vi = CLINIC_TYPE[spec]
+    return {"ko": ko, "en": f"{brand} {en}", "zh": f"{brand}{zh}", "ja": f"{brand}{ja}", "vi": f"{vi} {brand}"}
