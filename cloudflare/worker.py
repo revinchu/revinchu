@@ -8,6 +8,10 @@ import os
 
 from workers import WorkerEntrypoint, wsgi
 
+# 최상단에서 import 해야 배포 시 메모리 스냅샷에 포함되어 요청 CPU 시간에서 빠진다 (설정값은 호출 시점에 읽음)
+from medical_platform import notify
+from medical_platform.app import create_app
+
 CONFIG_KEYS = ("SECRET_KEY", "ADMIN_INITIAL_PASSWORD", "BRAND_NAME", "SITE_URL",
                "NOTIFY_EMAIL", "MAIL_BACKEND", "MAIL_FROM", "RESEND_API_KEY")
 
@@ -27,7 +31,6 @@ def get_app(env):
         if not os.environ.get("SECRET_KEY"):
             raise RuntimeError("SECRET_KEY 시크릿이 없습니다: npx wrangler secret put SECRET_KEY")
         os.environ["DB_BACKEND"] = "d1"
-        from medical_platform.app import create_app
         _app = create_app({"D1_BINDING": env.DB, "SESSION_COOKIE_SECURE": True})
     return _app
 
@@ -37,7 +40,6 @@ class Default(WorkerEntrypoint):
         return await wsgi.fetch(get_app(self.env), request, self.env)
 
     async def scheduled(self, controller, env, ctx):
-        from medical_platform import notify
         app = get_app(self.env)
         with app.app_context():
             notify.send_sla_alerts()

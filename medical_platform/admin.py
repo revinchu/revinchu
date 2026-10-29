@@ -16,7 +16,7 @@ from flask import (Blueprint, Response, abort, current_app, flash, g, redirect, 
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from . import crm, i18n, notify
-from .db import get_db, now_iso
+from .db import PASSWORD_HASH_METHOD, get_db, now_iso
 
 bp = Blueprint("admin", __name__, url_prefix="/admin")
 
@@ -619,7 +619,7 @@ def staff_admin():
                 return redirect(url_for("admin.staff_admin"))
             try:
                 db.execute("INSERT INTO staff (username, password_hash, name, role, languages, email, created_at) VALUES (?,?,?,?,?,?,?)",
-                           (f["username"], generate_password_hash(f["password"]), f.get("name") or f["username"],
+                           (f["username"], generate_password_hash(f["password"], method=PASSWORD_HASH_METHOD), f.get("name") or f["username"],
                             f["role"], f.get("languages", ""), f.get("email", "").strip(), now_iso()))
             except Exception:
                 flash("이미 존재하는 아이디입니다.", "error")
@@ -641,7 +641,7 @@ def staff_admin():
                 flash("비밀번호는 8자 이상이어야 합니다.", "error")
                 return redirect(url_for("admin.staff_admin"))
             db.execute("UPDATE staff SET password_hash = ? WHERE id = ?",
-                       (generate_password_hash(f["password"]), f.get("id", type=int)))
+                       (generate_password_hash(f["password"], method=PASSWORD_HASH_METHOD), f.get("id", type=int)))
         crm.audit(g.staff["id"], f"staff_{f.get('action')}", f.get("username") or f.get("id", ""))
         db.commit()
         return redirect(url_for("admin.staff_admin"))

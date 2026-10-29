@@ -2,12 +2,39 @@
 
 병원 DB와 환자(리드) DB는 별도 테이블로 분리하고, 리드-병원 관계는 referrals 로 관리한다.
 """
+import hashlib
 import json
 import sqlite3
+import sys
 from datetime import datetime, timezone
 
 from flask import current_app, g, has_request_context, request
 from werkzeug.security import generate_password_hash
+
+# Cloudflare Python Workers(Pyodide)에는 hashlib.scrypt 가 없어 werkzeug 기본값(scrypt) 대신 pbkdf2 사용
+PASSWORD_HASH_METHOD = "pbkdf2:sha256:100000"
+
+if not hasattr(hashlib, "pbkdf2_hmac") and sys.platform == "emscripten":
+    # Pyodide 는 OpenSSL 없는 hashlib 이라 pbkdf2_hmac 도 없다 → Workers 의 Web Crypto(네이티브)로 계산.
+    # 순수 Python 으로 돌리면 무료 플랜 CPU 한도를 넘는다. 결과는 표준 PBKDF2 와 같아 기존 해시와 호환된다.
+    def _pbkdf2_hmac(hash_name, password, salt, iterations, dklen=None):
+        import js
+        from pyodide.ffi import run_sync, to_js
+
+        def u8(data):
+            arr = js.Uint8Array.new(len(data))
+            arr.assign(data)
+            return arr
+
+        algo = {"sha1": "SHA-1", "sha256": "SHA-256", "sha384": "SHA-384", "sha512": "SHA-512"}[hash_name.lower()]
+        dklen = dklen or hashlib.new(hash_name).digest_size
+        key = run_sync(js.crypto.subtle.importKey("raw", u8(password), "PBKDF2", False, to_js(["deriveBits"])))
+        params = to_js({"name": "PBKDF2", "hash": algo, "salt": u8(salt), "iterations": iterations},
+                       dict_converter=js.Object.fromEntries)
+        bits = run_sync(js.crypto.subtle.deriveBits(params, key, dklen * 8))
+        return js.Uint8Array.new(bits).to_bytes()
+
+    hashlib.pbkdf2_hmac = _pbkdf2_hmac
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS staff (
@@ -542,7 +569,7 @@ def seed_db(db, admin_password=None):
     for username, pw, name, role, langs in staff:
         db.execute(
             "INSERT INTO staff (username, password_hash, name, role, languages, created_at) VALUES (?,?,?,?,?,?)",
-            (username, generate_password_hash(pw), name, role, langs, ts),
+            (username, generate_password_hash(pw, method=PASSWORD_HASH_METHOD), name, role, langs, ts),
         )
 
     for h in DEMO_HOSPITALS:

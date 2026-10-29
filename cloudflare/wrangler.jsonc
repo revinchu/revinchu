@@ -13,7 +13,7 @@
       "binding": "DB",
       "database_name": "wizx-medical",
       // `npx wrangler d1 create wizx-medical` 결과의 database_id 로 교체
-      "database_id": "REPLACE_WITH_D1_DATABASE_ID"
+      "database_id": "bd7029ff-7b27-4a5c-acff-ee1cb33a88d4"
     }
   ],
   // 10분마다 SLA(30분) 초과 미응대 문의 알림
