@@ -126,6 +126,25 @@ CREATE TABLE IF NOT EXISTS partners (
     active INTEGER NOT NULL DEFAULT 1
 );
 
+-- 외국인이 많이 찾는 관광지 (한국관광공사 TourAPI, cloudflare/import_public_data.py 로 적재)
+CREATE TABLE IF NOT EXISTS attractions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    content_id TEXT UNIQUE NOT NULL,
+    region TEXT NOT NULL,
+    rank INTEGER NOT NULL DEFAULT 99,
+    name_i18n TEXT NOT NULL DEFAULT '{}',
+    overview_i18n TEXT NOT NULL DEFAULT '{}',
+    address_i18n TEXT NOT NULL DEFAULT '{}',
+    lat REAL,
+    lng REAL,
+    image_url TEXT NOT NULL DEFAULT '',
+    image_license TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT '',
+    source_url TEXT NOT NULL DEFAULT '',
+    verified_at TEXT,
+    active INTEGER NOT NULL DEFAULT 1
+);
+
 CREATE TABLE IF NOT EXISTS leads (
     id TEXT PRIMARY KEY,
     created_at TEXT NOT NULL,

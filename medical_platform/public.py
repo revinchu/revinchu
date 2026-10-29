@@ -66,6 +66,22 @@ def localized(json_text, lang):
     return data.get(lang) or data.get("en") or ""
 
 
+def load_attractions(lang, region=None, limit=8):
+    """외국인이 많이 찾는 관광지 (TourAPI 적재분). 언어별 이름·소개가 없으면 영어로 대체."""
+    sql = "SELECT * FROM attractions WHERE active = 1"
+    params = []
+    if region:
+        sql += " AND region = ?"
+        params.append(region)
+    sql += " ORDER BY rank, id LIMIT ?"
+    params.append(limit)
+    def text(field):
+        data = json.loads(field or "{}")
+        return data.get(lang) or data.get("en") or data.get("ko") or ""
+    return [dict(r, name=text(r["name_i18n"]), overview=text(r["overview_i18n"]), address=text(r["address_i18n"]))
+            for r in get_db().execute(sql, params).fetchall()]
+
+
 def hospital_view(row, lang, tags=None):
     h = dict(row)
     h["name"] = h["name_ko"] if lang == "ko" else h["name_en"]
@@ -144,18 +160,23 @@ def root():
 def home():
     hospitals = search_hospitals({}, g.lang)
     db = get_db()
+    # 많은 병원이 공개한 항목부터, 항목별 최저가 병원 1곳씩
     price_rows = db.execute(
-        """SELECT p.*, h.slug, h.name_en, h.name_ko, h.is_demo FROM price_items p
-           JOIN hospitals h ON h.id = p.hospital_id
-           WHERE h.verification_status = 'published' AND p.price_domestic_krw IS NOT NULL
-           ORDER BY p.verified_at DESC, p.id DESC LIMIT 5""").fetchall()
+        """SELECT * FROM (
+             SELECT p.*, h.slug, h.name_en, h.name_ko, h.is_demo,
+                    ROW_NUMBER() OVER (PARTITION BY p.item_name_ko ORDER BY p.price_domestic_krw, p.id) AS rn,
+                    COUNT(*) OVER (PARTITION BY p.item_name_ko) AS hospital_count
+             FROM price_items p JOIN hospitals h ON h.id = p.hospital_id
+             WHERE h.verification_status = 'published' AND p.price_domestic_krw IS NOT NULL)
+           WHERE rn = 1 ORDER BY hospital_count DESC, verified_at DESC LIMIT 5""").fetchall()
     tag_counts = {r["tag"]: r["n"] for r in db.execute(
         """SELECT t.tag, COUNT(DISTINCT t.hospital_id) AS n FROM hospital_tags t
            JOIN hospitals h ON h.id = t.hospital_id WHERE h.verification_status = 'published' GROUP BY t.tag""")}
     specialty_counts = {code: sum(code in h["specialty_list"] for h in hospitals) for code in i18n.SPECIALTIES}
     track("view_home")
     return render_template("public/home.html", hospitals=hospitals, points=map_points(hospitals),
-                           price_rows=price_rows, tag_counts=tag_counts, specialty_counts=specialty_counts)
+                           price_rows=price_rows, tag_counts=tag_counts, specialty_counts=specialty_counts,
+                           spots=load_attractions(g.lang, limit=8))
 
 
 @bp.route("/<lang>/hospitals")
@@ -180,7 +201,7 @@ def hospital_detail(slug):
     partners = [dict(p, description=localized(p["description_i18n"], g.lang)) for p in partners]
     track("view_hospital", row["id"])
     return render_template("public/hospital_detail.html", h=h, doctors=doctors, prices=prices, partners=partners,
-                           points=map_points([h]))
+                           points=map_points([h]), spots=load_attractions(g.lang, region=row["region"], limit=3))
 
 
 @bp.route("/<lang>/concierge")
@@ -190,7 +211,7 @@ def concierge():
     for r in rows:
         grouped.setdefault(r["partner_type"], []).append(dict(r, description=localized(r["description_i18n"], g.lang)))
     track("view_concierge")
-    return render_template("public/concierge.html", grouped=grouped)
+    return render_template("public/concierge.html", grouped=grouped, spots=load_attractions(g.lang, limit=24))
 
 
 @bp.route("/<lang>/how-it-works")

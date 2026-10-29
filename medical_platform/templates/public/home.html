@@ -3,58 +3,120 @@
 <section class="hero">
   <div class="wrap hero-grid">
     <div class="hero-copy">
-      <h1>{{ t('tagline') }}</h1>
-      <p class="hero-sub">{{ t('hero_title') }}</p>
+      <p class="hero-eyebrow">{{ icon('star', 14) }} {{ t('tagline') }}</p>
+      <h1>{{ t('hero_headline') }}</h1>
       <p class="lead">{{ t('hero_sub') }}</p>
-      <form class="finder" action="{{ url_for('public.hospitals') }}" method="get">
-        <label class="finder-q">{{ t('what') }}
-          <input name="q" placeholder="{{ t('search_placeholder') }}">
-        </label>
-        <label>{{ t('filter_specialty') }}
-          <select name="specialty">
-            <option value="">{{ t('any') }}</option>
-            {% for s in i18n.SPECIALTIES %}<option value="{{ s }}">{{ t('sp_' ~ s) }}</option>{% endfor %}
-          </select>
-        </label>
-        <label>{{ t('where') }}
-          <select name="region">
-            <option value="">{{ t('any') }}</option>
-            {% for r in i18n.REGIONS %}<option value="{{ r }}">{{ t('rg_' ~ r) }}</option>{% endfor %}
-          </select>
-        </label>
-        <button class="btn btn-ink">{{ icon('search', 16) }} {{ t('search_btn') }}</button>
-      </form>
+      <div class="hero-actions">
+        <a class="btn btn-accent btn-lg" href="{{ url_for('public.consult') }}">{{ t('nav_consult') }} {{ icon('arrow-right', 18) }}</a>
+        <a class="btn btn-ghost btn-lg" href="{{ url_for('public.hospitals') }}">{{ t('nav_hospitals') }}</a>
+      </div>
+      <ul class="hero-chips">
+        <li>{{ icon('badge-check', 16) }} {{ t('chip_verified') }}</li>
+        <li>{{ icon('receipt', 16) }} {{ t('chip_price_compare') }}</li>
+        <li>{{ icon('languages', 16) }} {{ t('intl_coordinator') }}</li>
+      </ul>
     </div>
+    <div class="hero-art">
+      {% include "public/_hero_art.html" %}
+      {% if price_rows %}{% set p = price_rows[0] %}
+      <a class="float-card float-price" href="{{ url_for('public.hospital_detail', slug=p.slug) }}">
+        <span class="float-label">{{ t('price_board_title') if p.is_demo else t('price_board_real') }}</span>
+        <strong>{{ lang == 'ko' and p.item_name_ko or p.item_name_en }}</strong>
+        <span class="float-num">{% if not p.is_demo %}{{ t('ledger_from') }} {% endif %}₩{{ '{:,}'.format(p.price_foreign_krw or p.price_domestic_krw) }}</span>
+      </a>
+      {% endif %}
+      <div class="float-card float-note">
+        <span class="float-icon">{{ icon('message-circle', 18) }}</span>
+        <span>{{ t('hero_card_note') }}</span>
+      </div>
+    </div>
+  </div>
+</section>
 
+<section class="wrap finder-wrap">
+  <form class="finder" action="{{ url_for('public.hospitals') }}" method="get">
+    <label class="finder-q">{{ t('what') }}
+      <input name="q" placeholder="{{ t('search_placeholder') }}">
+    </label>
+    <label>{{ t('filter_specialty') }}
+      <select name="specialty">
+        <option value="">{{ t('any') }}</option>
+        {% for s in i18n.SPECIALTIES %}<option value="{{ s }}">{{ t('sp_' ~ s) }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>{{ t('where') }}
+      <select name="region">
+        <option value="">{{ t('any') }}</option>
+        {% for r in i18n.REGIONS %}<option value="{{ r }}">{{ t('rg_' ~ r) }}</option>{% endfor %}
+      </select>
+    </label>
+    <button class="btn btn-ink">{{ icon('search', 16) }} {{ t('search_btn') }}</button>
+  </form>
+</section>
+
+{% set featured_sp = [('dermatology', 'star'), ('plastic_surgery', 'crown'), ('dental', 'shield-check'),
+                      ('health_checkup', 'stethoscope'), ('ophthalmology', 'globe'), ('korean_medicine', 'landmark')] %}
+<section class="wrap block">
+  <div class="block-head">
+    <h2>{{ t('popular_treatments') }}</h2>
+    <a class="more" href="{{ url_for('public.hospitals') }}">{{ t('see_all') }} {{ icon('arrow-right', 16) }}</a>
+  </div>
+  <ul class="treat-grid">
+    {% for s, ic in featured_sp %}{% set n = specialty_counts[s] %}
+    <li class="treat treat-{{ loop.index }}">
+      <a href="{{ url_for('public.hospitals', specialty=s) }}">
+        <span class="treat-icon">{{ icon(ic, 26) }}</span>
+        <span class="treat-name">{{ t('sp_' ~ s) }}</span>
+        <span class="treat-count">{{ n }} {{ t('hospital_unit_one') if n == 1 and lang in ('en', 'vi') else t('hospitals_unit') }}</span>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+  <ul class="specialty-list specialty-more">
+    {% for s in i18n.SPECIALTIES if s not in featured_sp | map('first') | list %}
+    <li><a href="{{ url_for('public.hospitals', specialty=s) }}">{{ t('sp_' ~ s) }}</a> <span>{{ specialty_counts[s] }}</span></li>
+    {% endfor %}
+  </ul>
+</section>
+
+<section class="wrap block">
+  <div class="price-split">
+    <div class="price-copy">
+      <div class="block-head"><h2>{{ t('pillar_price') }}</h2></div>
+      <p class="lead">{{ t('pillar_price_d') }}</p>
+      <a class="text-link" href="{{ url_for('public.hospitals') }}">{{ t('see_all') }} {{ icon('arrow-right', 16) }}</a>
+    </div>
+    {% set demo_prices = price_rows and price_rows[0].is_demo %}
     <aside class="ledger" aria-labelledby="ledger-h">
       <div class="ledger-head">
-        <h2 id="ledger-h">{{ t('price_board_title') }}</h2>
+        <h3 id="ledger-h">{{ t('price_board_title') if demo_prices else t('price_board_real') }}</h3>
         <span class="ledger-unit">KRW</span>
       </div>
       <table>
-        <thead><tr><th scope="col">{{ t('price_item') }}</th><th scope="col" class="num">{{ t('ledger_kr') }}</th><th scope="col" class="num">{{ t('ledger_intl') }}</th></tr></thead>
+        <thead><tr><th scope="col">{{ t('price_item') }}</th><th scope="col" class="num">{{ t('ledger_from') }}</th><th scope="col" class="num">{{ t('ledger_hospitals') }}</th></tr></thead>
         <tbody>
         {% for p in price_rows %}
         <tr>
           <td><a href="{{ url_for('public.hospital_detail', slug=p.slug) }}">{{ lang == 'ko' and p.item_name_ko or p.item_name_en }}</a>
             <span class="ledger-meta">{{ lang == 'ko' and p.name_ko or p.name_en }} · {{ p.verified_at }}</span></td>
           <td class="num">{{ '{:,}'.format(p.price_domestic_krw) }}</td>
-          <td class="num {{ 'same' if p.price_domestic_krw == p.price_foreign_krw else 'diff' }}">{{ '{:,}'.format(p.price_foreign_krw) if p.price_foreign_krw else '–' }}</td>
+          <td class="num">{{ p.hospital_count }}</td>
         </tr>
         {% endfor %}
         </tbody>
       </table>
-      <p class="ledger-note">{{ t('price_board_note') }}{% if price_rows and price_rows[0].is_demo %} <span class="demo-tag">{{ t('demo_badge') }}</span>{% endif %}</p>
+      <p class="ledger-note">{{ t('price_board_note') if demo_prices else t('price_board_note_real') }}{% if demo_prices %} <span class="demo-tag">{{ t('demo_badge') }}</span>{% endif %}</p>
     </aside>
   </div>
 </section>
 
+{% if tag_counts.values() | sum %}
 <section class="wrap block">
   <div class="block-head">
     <h2>{{ t('what_matters') }}</h2>
   </div>
   <ol class="index">
-    {% for tag in i18n.TAGS %}
+    {% for tag in i18n.TAGS if tag_counts.get(tag, 0) %}
     <li>
       <a href="{{ url_for('public.hospitals', tag=tag) }}">
         <span class="index-no">{{ '%02d' % loop.index }}</span>
@@ -68,17 +130,7 @@
     {% endfor %}
   </ol>
 </section>
-
-<section class="wrap block">
-  <div class="block-head">
-    <h2>{{ t('browse_specialty') }}</h2>
-  </div>
-  <ul class="specialty-list">
-    {% for s in i18n.SPECIALTIES %}
-    <li><a href="{{ url_for('public.hospitals', specialty=s) }}">{{ t('sp_' ~ s) }}</a> <span>{{ specialty_counts[s] }}</span></li>
-    {% endfor %}
-  </ul>
-</section>
+{% endif %}
 
 <section class="wrap block">
   <div class="block-head">
@@ -88,8 +140,28 @@
   <div class="map-split">
     <div class="map" data-map data-points='{{ points | tojson }}' role="region" aria-label="{{ t('featured_hospitals') }}"></div>
     <div class="rows">
-      {% for h in hospitals[:5] %}{% include "public/_hospital_card.html" %}{% endfor %}
+      {% for h in hospitals[:4] %}{% include "public/_hospital_card.html" %}{% endfor %}
     </div>
+  </div>
+</section>
+
+{% if spots %}
+<section class="wrap block">
+  <div class="block-head">
+    <h2>{{ t('popular_spots') }}</h2>
+    <a class="more" href="{{ url_for('public.concierge') }}#spots">{{ t('nav_concierge') }} {{ icon('arrow-right', 16) }}</a>
+  </div>
+  {% include "public/_spots.html" %}
+</section>
+{% endif %}
+
+<section class="journey">
+  <div class="wrap">
+    <div class="block-head"><h2>{{ t('guide_title') }}</h2>
+      <a class="more" href="{{ url_for('public.guide') }}">{{ t('nav_guide') }} {{ icon('arrow-right', 16) }}</a></div>
+    <ol class="journey-list">
+      {% for i in range(1, 6) %}<li><span class="journey-no">{{ i }}</span><p>{{ t('step' ~ i) }}</p></li>{% endfor %}
+    </ol>
   </div>
 </section>
 

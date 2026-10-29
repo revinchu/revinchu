@@ -32,7 +32,7 @@ Multilingual (en/ko/zh/ja/vi) hospital discovery site + lead-capture form + inte
 - DB access goes through `db.get_db()`; it returns sqlite3 locally or a D1 adapter (`DB_BACKEND=d1`) on Cloudflare.
   Use only execute/executemany/fetchone/fetchall/lastrowid so both work; tests run against both backends.
 - Email: `notify.py` (SMTP/Resend/console). Never put patient contact details in staff emails.
-- UI style: editorial / public-service look (no gradients, no rounded card grids, no emoji). Fonts, icons and Leaflet are vendored
+- UI style: "Bloom" - bright, hopeful, warm (blush-rose/peach gradient accent, lilac/mint tints, soft rounded cards, pill buttons; no emoji). Tokens live in `:root` of `static/style.css`. Fonts, icons and Leaflet are vendored
   under `static/vendor/` (OFL/ISC/BSD); use the `icon('name')` template helper for Lucide icons.
 
 ## Tech Stack

@@ -1,0 +1,16 @@
+{# 외국인이 많이 찾는 관광지 카드 목록. 사용: {% set spots_compact = True %} 로 좁은 칸용 #}
+<ul class="spot-grid{{ ' spot-grid-compact' if spots_compact }}">
+  {% for s in spots %}
+  <li class="spot">
+    <a href="{{ s.source_url }}" target="_blank" rel="noopener">
+      <span class="spot-img">{% if s.image_url %}<img src="{{ s.image_url | replace('http://', 'https://') }}" alt="" loading="lazy" referrerpolicy="no-referrer">{% else %}{{ icon('landmark', 28) }}{% endif %}
+        <span class="spot-region">{{ icon('map-pin', 12) }} {{ t('rg_' ~ s.region) }}</span></span>
+      <span class="spot-body">
+        <span class="spot-name">{{ s.name }}</span>
+        {% if not spots_compact %}<span class="spot-desc">{{ s.overview | truncate(90) }}</span>{% endif %}
+      </span>
+    </a>
+  </li>
+  {% endfor %}
+</ul>
+<p class="spot-source small muted">{{ icon('info', 13) }} {{ t('spots_source') }}</p>

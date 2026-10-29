@@ -25,6 +25,13 @@
   </div>
 </section>
 
+{% if spots %}
+<section class="wrap block" id="spots">
+  <div class="block-head"><h2>{{ t('popular_spots') }}</h2></div>
+  {% include "public/_spots.html" %}
+</section>
+{% endif %}
+
 <section class="wrap block">
   {% for ptype, items in grouped.items() %}
   <div class="partner-section" id="{{ ptype }}">

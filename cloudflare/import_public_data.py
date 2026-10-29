@@ -1,0 +1,316 @@
+"""공공데이터(data.go.kr)로 실제 관광지·병원·비급여 가격을 가져와 D1 적재용 SQL을 만든다.
+
+    python cloudflare/import_public_data.py attractions   # → cloudflare/.import/import_attractions.sql
+    python cloudflare/import_public_data.py hospitals     # → cloudflare/.import/import_hospitals.sql
+    npx wrangler d1 execute wizx-medical --remote --file cloudflare/.import/import_attractions.sql
+
+API 키는 cloudflare/set_data_key.py 로 %USERPROFILE%\\.wizx\\data_go_kr_key 에 저장한 값을 쓴다 (저장소에 넣지 않음).
+"""
+import json
+import os
+import pathlib
+import re
+import sys
+import time
+import urllib.parse
+import urllib.request
+from datetime import date
+
+HERE = pathlib.Path(__file__).resolve().parent
+OUT = HERE / ".import"  # build/ 는 build.py 가 지우므로 따로 둔다
+TODAY = date.today().isoformat()
+KEY_FILE = pathlib.Path(os.path.expanduser("~")) / ".wizx" / "data_go_kr_key"
+
+# 한국관광공사 「외래관광객조사」에서 외국인 방문 비율이 높은 주요 방문지 (서울·부산).
+# (TourAPI 국문 제목, 영문 제목 앞부분, 지역, 순위) — 세부 정보·좌표·사진은 TourAPI 에서 조회한다.
+ATTRACTIONS = [
+    ("명동", "Myeong-dong", "seoul", 1), ("경복궁", "Gyeongbokgung Palace", "seoul", 2), ("남산서울타워", "N Seoul Tower", "seoul", 3),
+    ("동대문디자인플라자(DDP)", "Dongdaemun Design Plaza", "seoul", 4), ("북촌한옥마을", "Bukchon Hanok Village", "seoul", 5),
+    ("인사동", "Insa-dong", "seoul", 6), ("롯데월드 어드벤처", "Lotte World", "seoul", 7), ("남대문시장", "Namdaemun Market", "seoul", 8),
+    ("창덕궁과 후원 [유네스코 세계유산]", "Changdeokgung Palace Complex", "seoul", 9), ("청계천", "Cheonggyecheon", "seoul", 10),
+    ("해운대해수욕장", "Haeundae Beach", "busan", 1), ("광안리해수욕장", "Gwangalli Beach", "busan", 2),
+    ("부산 감천문화마을", "Busan Gamcheon Culture Village", "busan", 3), ("부산 자갈치시장", "Jagalchi Market", "busan", 4),
+    ("해동용궁사", "Haedong Yonggungsa Temple", "busan", 5), ("BIFF 광장", "BIFF Square", "busan", 6),
+    ("태종대", "Taejongdae Cliffed Coast", "busan", 7), ("흰여울문화마을", "Huinnyeoul Culture Village", "busan", 8),
+]
+REGION_CODE = {"seoul": "11", "busan": "26"}  # 법정동 시도 코드 (TourAPI lDongRegnCd)
+
+
+def api_key():
+    if os.environ.get("DATA_GO_KR_KEY"):
+        return os.environ["DATA_GO_KR_KEY"].strip()
+    if KEY_FILE.exists():
+        return KEY_FILE.read_text(encoding="ascii").strip()
+    sys.exit("API 키가 없습니다: python cloudflare/set_data_key.py")
+
+
+def call(url, **params):
+    params = {"serviceKey": api_key(), "_type": "json", **params}
+    req = urllib.request.Request(url + "?" + urllib.parse.urlencode(params), headers={"User-Agent": "wizx-import"})
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                data = json.loads(r.read().decode("utf-8"))
+            body = data.get("response", {}).get("body", {})
+            items = (body.get("items") or {})
+            items = items.get("item", []) if isinstance(items, dict) else []
+            return items if isinstance(items, list) else [items]
+        except (OSError, ValueError):
+            if attempt == 2:
+                raise
+            time.sleep(1.5)
+
+
+def tour(service, op, **params):
+    return call(f"https://apis.data.go.kr/B551011/{service}/{op}", MobileOS="ETC", MobileApp="WIZX", **params)
+
+
+def sql_str(v):
+    return "NULL" if v is None else "'" + str(v).replace("'", "''") + "'"
+
+
+def clean(text):
+    return re.sub(r"<br\s*/?>", " ", text or "").strip()[:600]
+
+
+def match_ko(title, region):
+    """같은 시도에서 제목이 정확히 일치하는 관광지(12)·문화시설(14)·쇼핑(38)."""
+    norm = lambda t: t.replace(" ", "")
+    for i in tour("KorService2", "searchKeyword2", keyword=title, numOfRows=50):
+        if str(i.get("lDongRegnCd")) == REGION_CODE[region] and norm(i["title"]) == norm(title)                 and str(i["contenttypeid"]) in ("12", "14", "38"):
+            return i
+    return None
+
+
+def match_en(keyword, ko_title):
+    """영문 제목에는 국문 이름이 괄호로 붙는다: 'Gyeongbokgung Palace (경복궁)'."""
+    items = [i for i in tour("EngService2", "searchKeyword2", keyword=keyword, numOfRows=30)
+             if str(i.get("contenttypeid")) in ("76", "78", "79")]
+    tagged = [i for i in items if f"({ko_title})" in i["title"]]
+    if tagged:
+        return tagged[0]
+    starts = sorted((i for i in items if i["title"].lower().startswith(keyword.lower())), key=lambda i: len(i["title"]))
+    return starts[0] if starts else None
+
+
+def en_title(title):
+    return re.sub(r"\s*\((?=[^()]*[가-힣]).*$", "", title).strip()
+
+
+def attractions():
+    rows = []
+    for keyword, keyword_en, region, rank in ATTRACTIONS:
+        ko = match_ko(keyword, region)
+        if not ko:
+            print(f"  ! 찾지 못함: {keyword}")
+            continue
+        cid = ko["contentid"]
+        detail_ko = (tour("KorService2", "detailCommon2", contentId=cid) or [{}])[0]
+        en = match_en(keyword_en, ko["title"])
+        detail_en = (tour("EngService2", "detailCommon2", contentId=en["contentid"]) or [{}])[0] if en else {}
+        image, license_ = ko.get("firstimage") or "", ko.get("cpyrhtDivCd") or ""
+        if not image and en:
+            image, license_ = en.get("firstimage") or "", en.get("cpyrhtDivCd") or ""
+        if license_ not in ("Type1", "Type3"):  # 공공누리 1·3유형(출처표시)만 사진 사용
+            image = ""
+        image = image.replace("http://", "https://")  # https 페이지에서 http 이미지는 차단된다
+        names, overviews, addrs = {"ko": ko["title"]}, {"ko": clean(detail_ko.get("overview"))}, {"ko": ko.get("addr1", "")}
+        url = f"https://korean.visitkorea.or.kr/detail/ms_detail.do?cotid={detail_ko['cotid']}" if detail_ko.get("cotid")             else "https://korean.visitkorea.or.kr/"
+        if en:
+            names["en"] = en_title(en["title"])
+            overviews["en"] = clean(detail_en.get("overview"))
+            addrs["en"] = en.get("addr1", "")
+            url = "https://english.visitkorea.or.kr/svc/contents/contentsView.do?vcontsId=" + str(en["contentid"])
+        rows.append((cid, region, rank, names, overviews, addrs, ko.get("mapy"), ko.get("mapx"), image, license_, url))
+        print(f"  {region} #{rank} {ko['title']} [{ko['contenttypeid']}]" + (f" / {names['en']}" if en else " (영문 없음)"))
+        time.sleep(0.2)
+
+    OUT.mkdir(exist_ok=True)
+    lines = ["UPDATE attractions SET active = 0;"]
+    for cid, region, rank, names, overviews, addrs, lat, lng, image, license_, url in rows:
+        vals = ", ".join([
+            sql_str(cid), sql_str(region), str(rank), sql_str(json.dumps(names, ensure_ascii=False)),
+            sql_str(json.dumps(overviews, ensure_ascii=False)), sql_str(json.dumps(addrs, ensure_ascii=False)),
+            str(float(lat)) if lat else "NULL", str(float(lng)) if lng else "NULL", sql_str(image), sql_str(license_),
+            sql_str("한국관광공사 TourAPI"), sql_str(url), sql_str(TODAY), "1"])
+        lines.append(
+            "INSERT INTO attractions (content_id, region, rank, name_i18n, overview_i18n, address_i18n, lat, lng, image_url, "
+            "image_license, source, source_url, verified_at, active) VALUES (" + vals + ") "
+            "ON CONFLICT(content_id) DO UPDATE SET region=excluded.region, rank=excluded.rank, name_i18n=excluded.name_i18n, "
+            "overview_i18n=excluded.overview_i18n, address_i18n=excluded.address_i18n, lat=excluded.lat, lng=excluded.lng, "
+            "image_url=excluded.image_url, image_license=excluded.image_license, source_url=excluded.source_url, "
+            "verified_at=excluded.verified_at, active=1;")
+    path = OUT / "import_attractions.sql"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"{len(rows)}곳 → {path}")
+
+
+# ---------------------------------------------------------------------------
+# 병원 + 비급여 가격 (건강보험심사평가원)
+# 비급여 공개 제도는 미용 목적 시술(보톡스·필러·쌍꺼풀 등)을 포함하지 않는다.
+# 그래서 실제 공개 가격이 있는 진료군만 가져온다: 치과·안과·대형병원 검사·한방.
+# ---------------------------------------------------------------------------
+HOSP_URL = "https://apis.data.go.kr/B551182/hospInfoServicev2/getHospBasisList"
+NPAY_URL = "https://apis.data.go.kr/B551182/nonPaymentDamtInfoService/getNonPaymentItemHospDtlList"
+SIDO = {"seoul": "110000", "busan": "210000"}
+HOSPITAL_TYPE = {"01": "tertiary", "11": "general", "21": "hospital", "41": "dental_hospital", "92": "korean_medicine_hospital"}
+TYPE_EN = {"tertiary": "Tertiary hospital", "general": "General hospital", "hospital": "Hospital",
+           "dental_hospital": "Dental hospital", "korean_medicine_hospital": "Korean medicine hospital"}
+# 진료군: 병원 조회 조건, 가져올 비급여 항목(npayKorNm 포함 문자열), 도시별 최대 병원 수, 가격대 비교 기준 항목
+GROUPS = {
+    "dental": dict(query=dict(clCd="41"), items=["치과임플란트", "보철료/크라운/", "치아교정", "치석제거/전악"], limit=10,
+                   ref="치과임플란트"),
+    "ophthalmology": dict(query=dict(clCd="21", dgsbjtCd="12"), items=["시력교정술료", "조절성 인공수정체"], limit=10,
+                          ref="라식"),
+    "health_checkup": dict(query=dict(clCd="01"), items=[], exact=True, limit=20, ref="뇌 MRI"),
+    "korean_medicine": dict(query=dict(clCd="92"), items=["약침술", "추나요법"], limit=10, ref="약침술"),
+}
+# 대형병원 검진성 검사: 항목명이 길고 비슷한 것이 많아 정확한 이름으로만 고른다 → (표시 국문, 표시 영문)
+CHECKUP_ITEMS = {
+    "자기공명영상진단료(MRI-기본검사)/뇌/일반": ("뇌 MRI", "Brain MRI"),
+    "자기공명영상진단료(MRI-기본검사)/혈관-뇌혈관/일반": ("뇌혈관 MRA", "Brain vessel MRA"),
+    "초음파검사료(진단초음파)/두경부-경부 초음파/갑상선·부갑상선": ("갑상선 초음파", "Thyroid ultrasound"),
+    "초음파검사료(진단초음파)/흉부-유방·액와부 초음파/일반": ("유방 초음파", "Breast ultrasound"),
+    "초음파검사료(진단초음파)/복부-복부 초음파/간·담낭·담도·비장·췌장-일반": ("상복부 초음파 (간·담낭·췌장 등)",
+                                                              "Upper abdominal ultrasound (liver, gallbladder, pancreas)"),
+    "초음파검사료(진단초음파)/혈관-두개외 혈관 도플러 초음파/경동맥": ("경동맥 초음파", "Carotid artery ultrasound"),
+}
+ITEM_EN = [  # 국문 항목명 조각 → 영문 (긴 것부터 치환)
+    ("올세라믹", "all-ceramic"), ("기타", "other"), ("특수(내장기, 두개천골)추나", "special (visceral, craniosacral)"),
+    ("치과임플란트(1치당)", "Dental implant (per tooth)"), ("크라운", "Crown"), ("치석제거", "Scaling"), ("전악", "full mouth"),
+    ("치아교정", "Orthodontics"), ("레이저각막상피절삭성형술(라섹)", "LASEK"), ("레이저각막절삭성형술(라식)", "LASIK"),
+    ("시력교정술료", "Vision correction"), ("조절성 인공수정체", "Premium intraocular lens (multifocal / presbyopia)"),
+    ("두부-뇌", "brain"), ("일반", "standard"), ("정밀", "detailed"), ("갑상선·부갑상선", "thyroid & parathyroid"),
+    ("두경부-경부 초음파", "neck ultrasound"), ("유방·액와", "breast & axilla"), ("유방", "breast"), ("상복부", "upper abdomen"),
+    ("복부-", "abdomen "), ("약침술", "Pharmacopuncture"), ("경혈", "acupoint"), ("추나요법", "Chuna therapy"),
+    ("단순추나", "simple"), ("복잡추나", "complex"), ("특수(탈구)추나", "special (dislocation)"),
+]
+
+
+def item_names(npay_name):
+    """'치과의 보철료/치과임플란트(1치당)/Zirconia' → ('치과임플란트(1치당) · Zirconia', 'Dental implant (per tooth) · Zirconia')."""
+    parts = [p.strip() for p in npay_name.split("/")][1:] or [npay_name]
+    if parts[0] == "조절성 인공수정체":  # 제품명이 수십 개라 하나로 묶는다
+        parts = parts[:1]
+    ko = " · ".join(parts)
+    en_parts = []
+    for part in parts:
+        for k, v in sorted(ITEM_EN, key=lambda kv: -len(kv[0])):
+            part = part.replace(k, v)
+        en_parts.append(part)
+    en = " · ".join(en_parts)
+    return ko, (ko if re.search("[가-힣]", en) else en)
+
+
+def hira_hospitals(region, group):
+    rows, page = [], 1
+    while True:
+        items = call(HOSP_URL, sidoCd=SIDO[region], numOfRows=500, pageNo=page, **group["query"])
+        rows += items
+        if len(items) < 500:
+            return sorted(rows, key=lambda h: -int(h.get("drTotCnt") or 0))
+        page += 1
+
+
+def hira_prices(ykiho, group):
+    """병원의 공개 비급여 중 원하는 항목만: 항목별 최저~최고가, 건수, 기준일."""
+    found = {}
+    for i in call(NPAY_URL, ykiho=ykiho, numOfRows=1000, pageNo=1):
+        name = i.get("npayKorNm") or ""
+        exact = CHECKUP_ITEMS.get(re.sub(r"\s*/\s*", "/", name).strip()) if group.get("exact") else None
+        if not i.get("curAmt") or not (exact or any(w in name for w in group["items"])):
+            continue
+        ko, en = exact or item_names(name)
+        f = found.setdefault(ko, {"en": en, "min": None, "max": None, "n": 0, "since": None})
+        amt = int(i["curAmt"])
+        f["min"] = amt if f["min"] is None else min(f["min"], amt)
+        f["max"] = amt if f["max"] is None else max(f["max"], amt)
+        f["n"] += 1
+        since = str(i.get("adtFrDd") or "")
+        if len(since) == 8:
+            since = f"{since[:4]}-{since[4:6]}-{since[6:]}"
+            f["since"] = max(f["since"] or since, since)
+    return found
+
+
+def hospitals():
+    import hashlib
+    picked = []  # (region, specialty, hospital row, prices)
+    for region in SIDO:
+        for spec, group in GROUPS.items():
+            n = 0
+            for h in hira_hospitals(region, group):
+                prices = hira_prices(h["ykiho"], group)
+                if prices:
+                    picked.append((region, spec, h, prices))
+                    n += 1
+                    print(f"  {region} {spec}: {h['yadmNm']} ({len(prices)}개 항목)")
+                if n >= group["limit"]:
+                    break
+                time.sleep(0.1)
+    # 같은 진료군 안에서 기준 항목 최저가로 가격대(₩/₩₩/₩₩₩) 산정
+    bands = {}
+    for spec, group in GROUPS.items():
+        ref = sorted((min(v["min"] for k, v in pr.items() if group["ref"] in k), h["ykiho"])
+                     for _, s2, h, pr in picked if s2 == spec and any(group["ref"] in k for k in pr))
+        for idx, (_, yk) in enumerate(ref):
+            bands[(spec, yk)] = 1 + (3 * idx) // max(len(ref), 1)
+
+    merged = {}
+    for region, spec, h, prices in picked:  # 한 병원이 여러 진료군에 걸치면 합친다
+        m = merged.setdefault(h["ykiho"], {"region": region, "h": h, "specs": [], "prices": {}})
+        m["specs"].append(spec)
+        m["prices"].update(prices)
+    lines = ["UPDATE hospitals SET verification_status = 'archived' WHERE is_demo = 1;",
+             "UPDATE partners SET active = 0 WHERE is_demo = 1;"]
+    for yk, m in merged.items():
+        h, slug = m["h"], "hira-" + hashlib.sha1(yk.encode()).hexdigest()[:10]
+        htype = HOSPITAL_TYPE.get(str(h.get("clCd")), "hospital")
+        since = max((p["since"] for p in m["prices"].values() if p["since"]), default=TODAY)
+        band = round(sum(bands.get((s, yk), 2) for s in m["specs"]) / len(m["specs"]))
+        dr = int(h.get("drTotCnt") or 0)
+        city = "Seoul" if m["region"] == "seoul" else "Busan"
+        summary = {
+            "ko": f"{h.get('sgguCdNm', '')}에 있는 {h.get('clCdNm', '')}입니다. 의사 {dr}명. "
+                  f"건강보험심사평가원에 공개한 비급여 진료비 {len(m['prices'])}개 항목을 확인할 수 있습니다.",
+            "en": f"{TYPE_EN[htype]} in {h.get('sgguCdNm', '')}, {city}, with {dr} doctors. "
+                  f"{len(m['prices'])} self-pay prices published with HIRA (Health Insurance Review & Assessment Service).",
+        }
+        lat, lng = float(h.get("YPos") or 0), float(h.get("XPos") or 0)
+        vals = ", ".join([
+            sql_str(slug), sql_str(h["yadmNm"]), sql_str(h["yadmNm"]), sql_str(htype), sql_str(m["region"]),
+            sql_str(h.get("sgguCdNm", "")), sql_str(h.get("addr", "")), sql_str(h.get("addr", "")),
+            str(lat) if lat else "NULL", str(lng) if lng else "NULL", sql_str(",".join(m["specs"])),
+            sql_str(h.get("telno", "")), sql_str(h.get("hospUrl", "")), str(band),
+            sql_str(json.dumps(summary, ensure_ascii=False)), "'published'", sql_str(since), "0", sql_str(TODAY), sql_str(TODAY)])
+        lines.append(
+            "INSERT INTO hospitals (slug, name_ko, name_en, hospital_type, region, district, address_ko, address_en, lat, lng, "
+            "specialties, phone, website, price_band, summary_i18n, verification_status, last_verified_at, is_demo, created_at, "
+            "updated_at) VALUES (" + vals + ") ON CONFLICT(slug) DO UPDATE SET name_ko=excluded.name_ko, "
+            "hospital_type=excluded.hospital_type, district=excluded.district, address_ko=excluded.address_ko, "
+            "address_en=excluded.address_en, lat=excluded.lat, lng=excluded.lng, specialties=excluded.specialties, "
+            "phone=excluded.phone, website=excluded.website, price_band=excluded.price_band, summary_i18n=excluded.summary_i18n, "
+            "verification_status='published', last_verified_at=excluded.last_verified_at, updated_at=excluded.updated_at;")
+        hid = f"(SELECT id FROM hospitals WHERE slug = {sql_str(slug)})"
+        lines.append(f"DELETE FROM price_items WHERE hospital_id = {hid};")
+        for ko, p in sorted(m["prices"].items()):
+            spread = f"₩{p['min']:,}–₩{p['max']:,} ({p['n']})" if p["max"] != p["min"] else ""
+            lines.append(
+                "INSERT INTO price_items (hospital_id, item_name_en, item_name_ko, price_domestic_krw, price_foreign_krw, "
+                f"includes, source, verified_at) VALUES ({hid}, {sql_str(p['en'])}, {sql_str(ko)}, {p['min']}, NULL, "
+                f"{sql_str(spread)}, {sql_str('HIRA 비급여진료비 공개')}, {sql_str(p['since'] or TODAY)});")
+    OUT.mkdir(exist_ok=True)
+    path = OUT / "import_hospitals.sql"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"병원 {len(merged)}곳 → {path}")
+
+
+if __name__ == "__main__":
+    sys.stdout.reconfigure(encoding="utf-8")
+    what = sys.argv[1] if len(sys.argv) > 1 else ""
+    if what == "attractions":
+        attractions()
+    elif what == "hospitals":
+        hospitals()
+    else:
+        sys.exit(__doc__)

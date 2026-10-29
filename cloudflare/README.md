@@ -61,6 +61,24 @@ Workers 에서는 SMTP 소켓을 쓸 수 없어 HTTP API인 **Resend**로 보냅
 Cloudflare 대시보드 → Workers & Pages → wizx-medical → Settings → Domains & Routes → Add Custom Domain.
 그다음 `SITE_URL` 시크릿을 새 주소로 바꿉니다.
 
+## 실제 데이터 (공공데이터포털)
+
+병원·비급여 가격은 건강보험심사평가원, 관광지는 한국관광공사 TourAPI 에서 가져옵니다.
+data.go.kr 에서 `병원정보서비스`, `비급여진료비정보조회서비스`, `국문 관광정보 서비스_GW`, `영문 관광정보서비스_GW` 를 활용신청한 뒤:
+
+```bash
+python cloudflare/set_data_key.py                       # '일반 인증키(Decoding)' 를 복사해 둔 상태에서 실행 (클립보드에서 읽음)
+python cloudflare/import_public_data.py attractions     # → cloudflare/.import/import_attractions.sql
+python cloudflare/import_public_data.py hospitals       # → cloudflare/.import/import_hospitals.sql
+npx wrangler d1 execute wizx-medical --remote --file cloudflare/.import/import_attractions.sql
+npx wrangler d1 execute wizx-medical --remote --file cloudflare/.import/import_hospitals.sql
+```
+
+- 병원: 서울·부산의 치과병원, 안과 병원, 상급종합병원(검진성 검사), 한방병원 중 비급여 가격을 공개한 곳.
+  비급여 공개 제도는 미용 목적 시술(보톡스·필러·쌍꺼풀 등)을 포함하지 않아 피부과·성형외과 가격은 공공데이터로 가져올 수 없습니다.
+- 공공데이터에는 외국인 적용가가 없어 국내 공개가(최저~최고)만 표시하고, 외국인 가격은 예약 전 병원 확인으로 안내합니다.
+- 다시 실행하면 같은 병원(요양기호 기준)은 갱신됩니다. 샘플 병원은 `archived`, 샘플 제휴사는 비활성으로 바뀝니다.
+
 ## 참고
 
 - D1은 문장마다 자동 커밋됩니다. 백업: `npx wrangler d1 export wizx-medical --remote --output backup.sql`
