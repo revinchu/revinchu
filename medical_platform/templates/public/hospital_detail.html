@@ -5,9 +5,9 @@
   <nav class="crumbs" aria-label="Breadcrumb"><a href="{{ url_for('public.hospitals') }}">{{ t('nav_hospitals') }}</a> / <a href="{{ url_for('public.hospitals', region=h.region) }}">{{ t('rg_' ~ h.region) }}</a></nav>
   <header class="detail-head">
     <div>
-      <p class="h-meta">{% for s in h.specialty_list %}{{ t('sp_' ~ s) }}{% if not loop.last %}, {% endif %}{% endfor %} · {{ h.district }}</p>
+      <p class="h-meta">{% for s in h.specialty_list %}{{ t('sp_' ~ s) }}{% if not loop.last %}, {% endif %}{% endfor %} · {{ h.district_name }}</p>
       <h1 class="page-title">{{ h.name }}</h1>
-      <p class="alt-name">{{ lang != 'ko' and h.name_ko or h.name_en }}</p>
+      <p class="alt-name">{{ h.alt_name }}</p>
       <div class="detail-flags">
         {% if h.is_sponsored %}<span class="label-ad">{{ t('sponsored') }}</span>{% endif %}
         {% if h.is_demo %}<span class="demo-tag">{{ t('demo_badge') }}</span>{% endif %}
@@ -34,7 +34,7 @@
           <tbody>
           {% for p in prices %}
             <tr>
-              <th scope="row">{{ lang == 'ko' and p.item_name_ko or p.item_name_en }}
+              <th scope="row">{{ item_name(p, lang) }}
                 {% if p.includes %}<span class="cell-note">{{ t('price_range') if hira else t('includes') }}: {{ p.includes }}</span>{% endif %}
                 {% if p.excludes %}<span class="cell-note muted">{{ t('excludes') }}: {{ p.excludes }}</span>{% endif %}
               </th>

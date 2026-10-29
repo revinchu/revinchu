@@ -412,6 +412,9 @@ MIGRATIONS = [
     ("partners", "source", "ALTER TABLE partners ADD COLUMN source TEXT NOT NULL DEFAULT ''"),
     ("partners", "source_url", "ALTER TABLE partners ADD COLUMN source_url TEXT NOT NULL DEFAULT ''"),
     ("partners", "verified_at", "ALTER TABLE partners ADD COLUMN verified_at TEXT"),
+    # 병원명·가격 항목명 외국어 표기 {ko, en, zh, ja, vi}
+    ("hospitals", "name_i18n", "ALTER TABLE hospitals ADD COLUMN name_i18n TEXT NOT NULL DEFAULT '{}'"),
+    ("price_items", "name_i18n", "ALTER TABLE price_items ADD COLUMN name_i18n TEXT NOT NULL DEFAULT '{}'"),
 ]
 
 

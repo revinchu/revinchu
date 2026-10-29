@@ -98,9 +98,25 @@ def load_attractions(lang, region=None, limit=8):
             for r in get_db().execute(sql, params).fetchall()]
 
 
+@bp.app_template_global("hospital_name")
+def hospital_name(row, lang):
+    key = "hospital_name_i18n" if "hospital_name_i18n" in row.keys() else "name_i18n"  # 가격판 행은 병원명이 별칭으로 온다
+    names = json.loads(row[key] or "{}") if key in row.keys() else {}
+    return names.get(lang) or (row["name_ko"] if lang == "ko" else names.get("en") or row["name_en"])
+
+
+@bp.app_template_global("item_name")
+def item_name(p, lang):
+    """가격 항목명: 언어별 표기 → 없으면 국문/영문."""
+    names = json.loads(p["name_i18n"] or "{}") if "name_i18n" in p.keys() else {}
+    return names.get(lang) or (p["item_name_ko"] if lang == "ko" else p["item_name_en"])
+
+
 def hospital_view(row, lang, tags=None):
     h = dict(row)
-    h["name"] = h["name_ko"] if lang == "ko" else h["name_en"]
+    h["name"] = hospital_name(row, lang)
+    h["district_name"] = i18n.district(h["district"], lang)
+    h["alt_name"] = row["name_ko"] if lang != "ko" else hospital_name(row, "en")  # 현지에서 보여 줄 국문명 / 영문명
     h["address"] = h["address_ko"] if lang == "ko" else h["address_en"]
     h["summary"] = localized(h["summary_i18n"], lang)
     h["specialty_list"] = [s for s in h["specialties"].split(",") if s]
@@ -179,7 +195,7 @@ def home():
     # 많은 병원이 공개한 항목부터, 항목별 최저가 병원 1곳씩
     price_rows = db.execute(
         """SELECT * FROM (
-             SELECT p.*, h.slug, h.name_en, h.name_ko, h.is_demo,
+             SELECT p.*, h.slug, h.name_en, h.name_ko, h.name_i18n AS hospital_name_i18n, h.is_demo,
                     ROW_NUMBER() OVER (PARTITION BY p.item_name_ko ORDER BY p.price_domestic_krw, p.id) AS rn,
                     COUNT(*) OVER (PARTITION BY p.item_name_ko) AS hospital_count
              FROM price_items p JOIN hospitals h ON h.id = p.hospital_id

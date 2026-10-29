@@ -21,6 +21,9 @@ HERE = pathlib.Path(__file__).resolve().parent
 OUT = HERE / ".import"  # build/ 는 build.py 가 지우므로 따로 둔다
 TODAY = date.today().isoformat()
 KEY_FILE = pathlib.Path(os.path.expanduser("~")) / ".wizx" / "data_go_kr_key"
+sys.path[:0] = [str(HERE), str(HERE.parent)]
+import name_i18n  # noqa: E402  병원·명소·항목 외국어 표기
+from medical_platform.i18n import district as district_name  # noqa: E402
 
 # 한국관광공사 「외래관광객조사」에서 외국인 방문 비율이 높은 주요 방문지 (서울·부산).
 # (TourAPI 국문 제목, 영문 제목 앞부분, 지역, 순위) — 세부 정보·좌표·사진은 TourAPI 에서 조회한다.
@@ -133,6 +136,7 @@ def attractions():
             overviews["en"] = clean(detail_en.get("overview"))
             addrs["en"] = en.get("addr1", "")
         url = maps_url(ko["title"], ko.get("addr1", ""), "서울" if region == "seoul" else "부산")
+        names = {**names, **name_i18n.names(name_i18n.SPOTS, ko["title"])}  # zh·ja·vi 와 정리된 영문 이름
         rows.append((cid, region, rank, names, overviews, addrs, ko.get("mapy"), ko.get("mapx"), image, license_, url))
         print(f"  {region} #{rank} {ko['title']} [{ko['contenttypeid']}]" + (f" / {names['en']}" if en else " (영문 없음)"))
         time.sleep(0.2)
@@ -282,23 +286,36 @@ def hospitals():
         band = round(sum(bands.get((s, yk), 2) for s in m["specs"]) / len(m["specs"]))
         dr = int(h.get("drTotCnt") or 0)
         city = "Seoul" if m["region"] == "seoul" else "Busan"
+        gu, n = h.get("sgguCdNm", ""), len(m["prices"])
+        t_zh, t_ja, t_vi = name_i18n.HOSPITAL_TYPE[htype]
         summary = {
-            "ko": f"{h.get('sgguCdNm', '')}에 있는 {h.get('clCdNm', '')}입니다. 의사 {dr}명. "
-                  f"건강보험심사평가원에 공개한 비급여 진료비 {len(m['prices'])}개 항목을 확인할 수 있습니다.",
-            "en": f"{TYPE_EN[htype]} in {h.get('sgguCdNm', '')}, {city}, with {dr} doctors. "
-                  f"{len(m['prices'])} self-pay prices published with HIRA (Health Insurance Review & Assessment Service).",
+            "ko": f"{district_name(gu, 'ko')}에 있는 {h.get('clCdNm', '')}입니다. 의사 {dr}명. "
+                  f"건강보험심사평가원에 공개한 비급여 진료비 {n}개 항목을 확인할 수 있습니다.",
+            "en": f"{TYPE_EN[htype]} in {district_name(gu, 'en')}, {city}, with {dr} doctors. "
+                  f"{n} self-pay prices published with HIRA (Health Insurance Review & Assessment Service).",
+            "zh": f"位于{'首尔' if city == 'Seoul' else '釜山'}{district_name(gu, 'zh')}的{t_zh}，医生{dr}名。"
+                  f"可查看向韩国健康保险审查评价院（HIRA）公开的{n}项自费价格。",
+            "ja": f"{'ソウル' if city == 'Seoul' else '釜山'}{district_name(gu, 'ja')}にある{t_ja}です。医師{dr}名。"
+                  f"健康保険審査評価院（HIRA）に公開された保険外診療費{n}項目を確認できます。",
+            "vi": f"{t_vi} tại {district_name(gu, 'vi')}, {city}, với {dr} bác sĩ. "
+                  f"Có {n} mức giá tự chi trả được công bố với HIRA (Cơ quan Thẩm định Bảo hiểm Y tế Hàn Quốc).",
         }
+        hnames = name_i18n.names(name_i18n.HOSPITALS, h["yadmNm"])
+        if "en" not in hnames:
+            print(f"  ! 외국어 병원명 없음 (name_i18n.HOSPITALS 에 추가): {h['yadmNm']}")
         lat, lng = float(h.get("YPos") or 0), float(h.get("XPos") or 0)
         vals = ", ".join([
-            sql_str(slug), sql_str(h["yadmNm"]), sql_str(h["yadmNm"]), sql_str(htype), sql_str(m["region"]),
+            sql_str(slug), sql_str(h["yadmNm"]), sql_str(hnames.get("en", h["yadmNm"])), sql_str(htype), sql_str(m["region"]),
             sql_str(h.get("sgguCdNm", "")), sql_str(h.get("addr", "")), sql_str(h.get("addr", "")),
             str(lat) if lat else "NULL", str(lng) if lng else "NULL", sql_str(",".join(m["specs"])),
             sql_str(h.get("telno", "")), sql_str(h.get("hospUrl", "")), str(band),
-            sql_str(json.dumps(summary, ensure_ascii=False)), "'published'", sql_str(since), "0", sql_str(TODAY), sql_str(TODAY)])
+            sql_str(json.dumps(summary, ensure_ascii=False)), "'published'", sql_str(since), "0", sql_str(TODAY), sql_str(TODAY),
+            sql_str(json.dumps(hnames, ensure_ascii=False))])
         lines.append(
             "INSERT INTO hospitals (slug, name_ko, name_en, hospital_type, region, district, address_ko, address_en, lat, lng, "
             "specialties, phone, website, price_band, summary_i18n, verification_status, last_verified_at, is_demo, created_at, "
-            "updated_at) VALUES (" + vals + ") ON CONFLICT(slug) DO UPDATE SET name_ko=excluded.name_ko, "
+            "updated_at, name_i18n) VALUES (" + vals + ") ON CONFLICT(slug) DO UPDATE SET name_ko=excluded.name_ko, "
+            "name_en=excluded.name_en, name_i18n=excluded.name_i18n, "
             "hospital_type=excluded.hospital_type, district=excluded.district, address_ko=excluded.address_ko, "
             "address_en=excluded.address_en, lat=excluded.lat, lng=excluded.lng, specialties=excluded.specialties, "
             "phone=excluded.phone, website=excluded.website, price_band=excluded.price_band, summary_i18n=excluded.summary_i18n, "
@@ -309,8 +326,9 @@ def hospitals():
             spread = f"₩{p['min']:,}–₩{p['max']:,} ({p['n']})" if p["max"] != p["min"] else ""
             lines.append(
                 "INSERT INTO price_items (hospital_id, item_name_en, item_name_ko, price_domestic_krw, price_foreign_krw, "
-                f"includes, source, verified_at) VALUES ({hid}, {sql_str(p['en'])}, {sql_str(ko)}, {p['min']}, NULL, "
-                f"{sql_str(spread)}, {sql_str('HIRA 비급여진료비 공개')}, {sql_str(p['since'] or TODAY)});")
+                f"includes, source, verified_at, name_i18n) VALUES ({hid}, {sql_str(p['en'])}, {sql_str(ko)}, {p['min']}, NULL, "
+                f"{sql_str(spread)}, {sql_str('HIRA 비급여진료비 공개')}, {sql_str(p['since'] or TODAY)}, "
+                f"{sql_str(json.dumps({'ko': ko, 'en': p['en'], **name_i18n.item_names(ko)}, ensure_ascii=False))});")
     OUT.mkdir(exist_ok=True)
     path = OUT / "import_hospitals.sql"
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")

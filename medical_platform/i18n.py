@@ -444,6 +444,37 @@ HOSPITAL_PREFS = ["value", "korean_favorite", "foreign_favorite", "top_doctor", 
 AGE_BANDS = ["18-29", "30-39", "40-49", "50-59", "60+"]
 
 
+# 서울·부산 행정구역 외국어 표기 (심평원 시군구명 → en, zh, ja, vi). 부산은 '부산사하구'처럼 앞에 '부산'이 붙어 온다.
+DISTRICTS = {
+    "종로구": ("Jongno-gu", "钟路区", "鍾路区"), "중구": ("Jung-gu", "中区", "中区"), "용산구": ("Yongsan-gu", "龙山区", "龍山区"),
+    "성동구": ("Seongdong-gu", "城东区", "城東区"), "광진구": ("Gwangjin-gu", "广津区", "広津区"),
+    "동대문구": ("Dongdaemun-gu", "东大门区", "東大門区"), "중랑구": ("Jungnang-gu", "中浪区", "中浪区"),
+    "성북구": ("Seongbuk-gu", "城北区", "城北区"), "강북구": ("Gangbuk-gu", "江北区", "江北区"), "도봉구": ("Dobong-gu", "道峰区", "道峰区"),
+    "노원구": ("Nowon-gu", "芦原区", "蘆原区"), "은평구": ("Eunpyeong-gu", "恩平区", "恩平区"),
+    "서대문구": ("Seodaemun-gu", "西大门区", "西大門区"), "마포구": ("Mapo-gu", "麻浦区", "麻浦区"),
+    "양천구": ("Yangcheon-gu", "阳川区", "陽川区"), "강서구": ("Gangseo-gu", "江西区", "江西区"), "구로구": ("Guro-gu", "九老区", "九老区"),
+    "금천구": ("Geumcheon-gu", "衿川区", "衿川区"), "영등포구": ("Yeongdeungpo-gu", "永登浦区", "永登浦区"),
+    "동작구": ("Dongjak-gu", "铜雀区", "銅雀区"), "관악구": ("Gwanak-gu", "冠岳区", "冠岳区"), "서초구": ("Seocho-gu", "瑞草区", "瑞草区"),
+    "강남구": ("Gangnam-gu", "江南区", "江南区"), "송파구": ("Songpa-gu", "松坡区", "松坡区"), "강동구": ("Gangdong-gu", "江东区", "江東区"),
+    "서구": ("Seo-gu", "西区", "西区"), "동구": ("Dong-gu", "东区", "東区"), "영도구": ("Yeongdo-gu", "影岛区", "影島区"),
+    "부산진구": ("Busanjin-gu", "釜山镇区", "釜山鎮区"), "동래구": ("Dongnae-gu", "东莱区", "東萊区"), "남구": ("Nam-gu", "南区", "南区"),
+    "북구": ("Buk-gu", "北区", "北区"), "해운대구": ("Haeundae-gu", "海云台区", "海雲台区"), "사하구": ("Saha-gu", "沙下区", "沙下区"),
+    "금정구": ("Geumjeong-gu", "金井区", "金井区"), "연제구": ("Yeonje-gu", "莲堤区", "蓮堤区"), "수영구": ("Suyeong-gu", "水营区", "水営区"),
+    "사상구": ("Sasang-gu", "沙上区", "沙上区"), "기장군": ("Gijang-gun", "机张郡", "機張郡"),
+}
+
+
+def district(name, lang):
+    """'부산사하구' / '강남구' → 언어별 표기. 모르는 이름은 그대로."""
+    key = name if name in DISTRICTS else (name[2:] if name.startswith("부산") and name[2:] in DISTRICTS else None)
+    if key is None:
+        return name
+    if lang == "ko":
+        return key
+    en, zh, ja = DISTRICTS[key]
+    return {"zh": zh, "ja": ja}.get(lang, en)
+
+
 def translate(key, lang):
     entry = T.get(key)
     if entry is None:
