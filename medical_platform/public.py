@@ -132,9 +132,11 @@ def hospital_view(row, lang, tags=None):
 def load_tags(hospital_ids):
     if not hospital_ids:
         return {}
-    rows = get_db().execute(
-        f"SELECT * FROM hospital_tags WHERE hospital_id IN ({','.join('?' * len(hospital_ids))})",
-        hospital_ids).fetchall()
+    rows = []
+    for i in range(0, len(hospital_ids), 90):  # Cloudflare D1 은 쿼리당 바인딩 파라미터 100개까지
+        chunk = hospital_ids[i:i + 90]
+        rows += get_db().execute(
+            f"SELECT * FROM hospital_tags WHERE hospital_id IN ({','.join('?' * len(chunk))})", chunk).fetchall()
     out = {}
     for r in rows:
         out.setdefault(r["hospital_id"], []).append(dict(r))
@@ -178,12 +180,15 @@ def search_hospitals(args, lang):
 
 
 def map_points(hospitals):
+    # 병원이 많으면 url_for 반복 호출만으로도 무료 플랜 CPU 한도에 걸려, 주소는 문자열로 만든다
+    base = url_for("public.hospitals")
     return [
-        {"name": h["name"], "lat": h["lat"], "lng": h["lng"],
-         "url": url_for("public.hospital_detail", slug=h["slug"]),
-         "district": h["district"]}
+        {"name": h["name"], "lat": h["lat"], "lng": h["lng"], "url": f"{base}/{h['slug']}", "district": h["district"]}
         for h in hospitals if h["lat"] is not None
     ]
+
+
+PAGE_SIZE = 20
 
 
 @bp.route("/")
@@ -218,8 +223,12 @@ def home():
 @bp.route("/<lang>/hospitals")
 def hospitals():
     results = search_hospitals(request.args, g.lang)
+    pages = max(1, -(-len(results) // PAGE_SIZE))
+    page = min(max(request.args.get("page", 1, type=int), 1), pages)
     track("search")
-    return render_template("public/hospitals.html", hospitals=results, points=map_points(results), args=request.args)
+    # 목록은 20곳씩 나눠 그리고(Workers CPU 절약), 지도에는 검색 결과 전체를 표시한다
+    return render_template("public/hospitals.html", hospitals=results[(page - 1) * PAGE_SIZE:page * PAGE_SIZE],
+                           total=len(results), page=page, pages=pages, points=map_points(results), args=request.args)
 
 
 @bp.route("/<lang>/hospitals/<slug>")
@@ -284,6 +293,52 @@ def guide():
 @bp.route("/<lang>/privacy")
 def privacy():
     return render_template("public/privacy.html")
+
+
+# ---------------------------------------------------------------------------
+# K-팝 뮤직비디오·드라마·영화 촬영지
+# ---------------------------------------------------------------------------
+FILMING_KINDS = ("mv", "drama", "movie")
+SCHEMA_WORK = {"mv": "MusicVideoObject", "drama": "TVSeries", "movie": "Movie"}
+
+
+def load_filming(lang, kind=None):
+    spots = []
+    for r in get_db().execute("SELECT * FROM filming_spots WHERE active = 1 ORDER BY region DESC, id").fetchall():
+        if kind and kind not in r["kinds"].split(","):
+            continue
+        names = json.loads(r["name_i18n"] or "{}")
+        works = []
+        for w in json.loads(r["works_json"] or "[]"):
+            if kind and w["kind"] != kind:
+                continue
+            # 장면 설명은 국문(원자료)·영문만 있다 → 중·일·베트남어는 작품명과 종류만 보여 준다
+            works.append({"kind": w["kind"], "title": w["title"].get(lang) or w["title"]["en"],
+                          "scene": w["scene"].get(lang, "") if lang in ("ko", "en") else ""})
+        spots.append(dict(r, name=names.get(lang) or names.get("en") or r["place_key"], works=works))
+    return spots
+
+
+@bp.route("/<lang>/filming-locations")
+def filming():
+    kind = request.args.get("k")
+    kind = kind if kind in FILMING_KINDS else None
+    spots = load_filming(g.lang, kind)
+    base, page = notify.site_url(), url_for("public.filming")
+    points = [{"name": s["name"], "lat": s["lat"], "lng": s["lng"], "url": f"#spot-{s['id']}",
+               "district": i18n.translate("rg_" + s["region"], g.lang)} for s in spots if s["lat"]]
+    ld = {"@context": "https://schema.org", "@type": "CollectionPage", "inLanguage": g.lang,
+          "name": i18n.translate("filming_title", g.lang), "description": i18n.translate("filming_sub", g.lang),
+          "url": base + page,
+          "mainEntity": {"@type": "ItemList", "itemListElement": [
+              {"@type": "ListItem", "position": n, "item": {
+                  "@type": "TouristAttraction", "name": s["name"], "url": f"{base}{page}#spot-{s['id']}",
+                  "address": s["address"], "image": s["image_url"] or None,
+                  "geo": {"@type": "GeoCoordinates", "latitude": s["lat"], "longitude": s["lng"]},
+                  "subjectOf": [{"@type": SCHEMA_WORK[w["kind"]], "name": w["title"]} for w in s["works"]]}}
+              for n, s in enumerate(spots, 1)]}}
+    track("view_filming")
+    return render_template("public/filming.html", spots=spots, kind=kind, points=points, ld=ld)
 
 
 # ---------------------------------------------------------------------------
@@ -370,7 +425,7 @@ def robots():
 def _sitemap_groups():
     """(엔드포인트, 인자, 해당 언어 목록, 최종 수정일) — 언어별 URL 과 hreflang 대체 링크를 만든다."""
     langs = list(i18n.LANGUAGES)
-    groups = [(ep, {}, langs, None) for ep in ("public.home", "public.hospitals", "public.magazine", "public.concierge",
+    groups = [(ep, {}, langs, None) for ep in ("public.home", "public.hospitals", "public.magazine", "public.filming", "public.concierge",
                                                "public.guide", "public.consult", "public.privacy")]
     for slug, versions in mag.ARTICLES.items():
         updated = max(a["updated"] for a in versions.values())
@@ -414,6 +469,7 @@ def llms_txt():
              "## Key pages", "",
              f"- [Find hospitals]({base}/en/hospitals): map and filters by specialty, region and language",
              f"- [Travel & concierge]({base}/en/concierge): stays, K-food, shopping and sights near hospitals",
+             f"- [K-pop, K-drama & film locations]({base}/en/filming-locations): music video, drama and movie filming spots in Seoul and Busan",
              f"- [How it works]({base}/en/how-it-works): consultation to aftercare in five steps",
              f"- [Free consultation]({base}/en/consult): coordinator replies in the visitor's language",
              f"- [Full text for LLMs]({base}/llms-full.txt)", "", "## Magazine", ""]

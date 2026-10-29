@@ -27,7 +27,8 @@
 
 {% if spots %}
 <section class="wrap block" id="spots">
-  <div class="block-head"><h2>{{ t('popular_spots') }}</h2></div>
+  <div class="block-head"><h2>{{ t('popular_spots') }}</h2>
+    <a class="more" href="{{ url_for('public.filming') }}">{{ t('nav_filming') }} {{ icon('arrow-right', 16) }}</a></div>
   {% include "public/_spots.html" %}
 </section>
 {% endif %}

@@ -60,6 +60,7 @@
       <a href="{{ url_for('public.hospitals') }}" {% if ep in ('public.hospitals', 'public.hospital_detail') %}aria-current="page"{% endif %}>{{ t('nav_hospitals') }}</a>
       <a href="{{ url_for('public.concierge') }}" {% if ep == 'public.concierge' %}aria-current="page"{% endif %}>{{ t('nav_concierge') }}</a>
       <a href="{{ url_for('public.magazine') }}" {% if ep in ('public.magazine', 'public.article') %}aria-current="page"{% endif %}>{{ t('nav_magazine') }}</a>
+      <a href="{{ url_for('public.filming') }}" {% if ep == 'public.filming' %}aria-current="page"{% endif %}>{{ t('nav_filming') }}</a>
       <a href="{{ url_for('public.guide') }}" {% if ep == 'public.guide' %}aria-current="page"{% endif %}>{{ t('nav_guide') }}</a>
     </nav>
     <a class="btn btn-ink header-cta" href="{{ url_for('public.consult') }}">{{ t('nav_consult') }}</a>
@@ -80,6 +81,7 @@
     <div>
       <p class="footer-h">{{ t('nav_concierge') }}</p>
       {% for pt in i18n.PARTNER_TYPES %}<a href="{{ url_for('public.concierge') }}#{{ pt }}">{{ t('pt_' ~ pt) }}</a>{% endfor %}
+      <a href="{{ url_for('public.filming') }}">{{ t('nav_filming') }}</a>
     </div>
     <div>
       <p class="footer-h">{{ t('nav_magazine') }}</p>

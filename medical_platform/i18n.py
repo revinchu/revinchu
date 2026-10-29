@@ -54,6 +54,26 @@ T = {
         "vi": "Trường hợp khẩn cấp, hãy liên hệ dịch vụ cấp cứu địa phương. Dịch vụ không cung cấp chẩn đoán.",
     },
 
+    # --- 촬영지 ---
+    "nav_filming": {"en": "Filming Spots", "ko": "촬영지", "zh": "拍摄地", "ja": "ロケ地", "vi": "Địa điểm quay"},
+    "filming_title": {"en": "K-pop, K-drama & film locations in Seoul and Busan", "ko": "K-팝·드라마·영화 촬영지, 서울과 부산",
+                      "zh": "首尔与釜山的K-pop、韩剧和电影拍摄地", "ja": "ソウルと釜山のK-POP・韓国ドラマ・映画ロケ地",
+                      "vi": "Địa điểm quay K-pop, phim truyền hình và điện ảnh ở Seoul và Busan"},
+    "filming_sub": {"en": "Walk where your favorite music videos, dramas and films were shot — palaces, bridges, parks and streets you can visit today.",
+                    "ko": "좋아하는 뮤직비디오·드라마·영화의 그 장면 속으로. 지금 찾아갈 수 있는 궁, 다리, 공원, 거리를 모았습니다.",
+                    "zh": "走进你喜爱的音乐录影带、韩剧和电影的场景——这些宫殿、桥梁、公园和街道如今都可以参观。",
+                    "ja": "好きなMV・ドラマ・映画のあのシーンへ。今も訪れられる宮殿、橋、公園、通りを集めました。",
+                    "vi": "Đến nơi quay MV, phim truyền hình và điện ảnh bạn yêu thích — cung điện, cây cầu, công viên và con phố bạn có thể ghé thăm."},
+    "kind_mv": {"en": "K-pop MV", "ko": "K-팝 뮤직비디오", "zh": "K-pop MV", "ja": "K-POP MV", "vi": "MV K-pop"},
+    "kind_drama": {"en": "K-drama", "ko": "드라마", "zh": "韩剧", "ja": "韓国ドラマ", "vi": "Phim truyền hình"},
+    "kind_movie": {"en": "Film", "ko": "영화", "zh": "电影", "ja": "映画", "vi": "Phim điện ảnh"},
+    "filming_of": {"en": "Filming location", "ko": "촬영지", "zh": "拍摄地", "ja": "ロケ地", "vi": "Địa điểm quay"},
+    "filming_note": {"en": "Locations from the Korea Culture Information Service's media filming location data (Nov 2022); photos: Korea Tourism Organization. Public places only — please respect residents, schools and businesses nearby.",
+                     "ko": "한국문화정보원 미디어콘텐츠 영상 촬영지 데이터(2022년 11월) 기준, 사진: 한국관광공사. 공공장소만 골랐습니다. 주변 주민·학교·상점을 배려해 주세요.",
+                     "zh": "数据来源：韩国文化信息院媒体内容拍摄地数据（2022年11月），图片：韩国观光公社。仅收录公共场所，请尊重周边居民、学校和商家。",
+                     "ja": "出典：韓国文化情報院 メディアコンテンツ撮影地データ（2022年11月）、写真：韓国観光公社。公共の場所のみ掲載しています。周辺の住民・学校・店舗へのご配慮をお願いします。",
+                     "vi": "Nguồn: dữ liệu địa điểm quay của Viện Thông tin Văn hóa Hàn Quốc (11/2022); ảnh: Tổng cục Du lịch Hàn Quốc. Chỉ gồm nơi công cộng — hãy tôn trọng cư dân, trường học và cửa hàng xung quanh."},
+
     # --- 매거진 ---
     "nav_magazine": {"en": "Magazine", "ko": "매거진", "zh": "杂志", "ja": "マガジン", "vi": "Tạp chí"},
     "mag_title": {"en": "Korea, explained", "ko": "한국을 더 깊이, 매거진", "zh": "深入了解韩国", "ja": "もっと知りたい韓国",

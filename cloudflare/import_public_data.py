@@ -8,6 +8,7 @@
 API 키는 cloudflare/set_data_key.py 로 %USERPROFILE%\\.wizx\\data_go_kr_key 에 저장한 값을 쓴다 (저장소에 넣지 않음).
 """
 import hashlib
+import http.client
 import json
 import os
 import pathlib
@@ -60,7 +61,7 @@ def call(url, **params):
             items = (body.get("items") or {})
             items = items.get("item", []) if isinstance(items, dict) else []
             return items if isinstance(items, list) else [items]
-        except (OSError, ValueError):
+        except (OSError, ValueError, http.client.HTTPException):
             if attempt == 2:
                 raise
             time.sleep(1.5)
@@ -532,6 +533,70 @@ def clinics():
     print(f"의원 {len(picked)}곳 + 진료과 태그 → {path}")
 
 
+# ---------------------------------------------------------------------------
+# K-팝 뮤직비디오·드라마·영화 촬영지: 한국문화정보원 데이터(장소·좌표·장면) + filming_i18n(번역) + TourAPI 사진
+# ---------------------------------------------------------------------------
+KCISA_CSV = HERE / ".import" / "raw" / "kcisa_filming_locations.csv"
+
+
+# 원자료 장소명과 관광공사 제목이 다른 곳: 사진 검색어
+PHOTO_KEYWORDS = {
+    "북촌 한옥마을": "북촌한옥마을", "천주교 서울대교구 주교좌명동대성당": "명동성당", "서울로7017": "서울로 7017",
+    "광화문 광장": "광화문광장", "다대포 해수욕장": "다대포해수욕장", "마로니에 공원": "마로니에공원", "남산 케이블카": "남산케이블카",
+    "문화역서울284": "문화역서울", "한국의 집": "한국의집", "청계상가": "세운상가", "문래 창작촌": "문래창작촌",
+    "올림픽공원 나홀로나무": "올림픽공원", "수영만 요트 경기장": "수영만요트경기장", "이태원세계음식거리": "이태원",
+"동작대교": "동작대교", "용마랜드": "용마랜드", "문화공감수정": "문화공감 수정",
+    "코모도호텔 부산": "코모도호텔", "가톨릭대학교 서울성모병원": "서울성모병원",
+}
+
+
+def place_photo(name, region):
+    """같은 시도에서 이름이 일치하는 TourAPI 항목의 공공누리 1·3유형 사진 (대표 → 갤러리 순)."""
+    norm = lambda t: re.sub(r"[\s()]", "", t)
+    items = [i for i in tour("KorService2", "searchKeyword2", keyword=name, numOfRows=30)
+             if str(i.get("lDongRegnCd")) == REGION_CODE[region]]
+    items.sort(key=lambda i: (norm(i["title"]) != norm(name), norm(name) not in norm(i["title"]), len(i["title"])))
+    for i in items[:3]:
+        if i.get("firstimage") and i.get("cpyrhtDivCd") in ("Type1", "Type3"):
+            return i["firstimage"]
+        gallery = [g for g in tour("KorService2", "detailImage2", contentId=i["contentid"], imageYN="Y", numOfRows=10)
+                   if g.get("cpyrhtDivCd") in ("Type1", "Type3") and g.get("originimgurl")]
+        if gallery:
+            return gallery[0]["originimgurl"]
+    return ""
+
+
+def filming():
+    import csv
+    import filming_i18n as fi
+    with open(KCISA_CSV, encoding="cp949", errors="replace") as f:
+        rows = {int(r["연번"]): r for r in csv.DictReader(f)}
+    lines = ["UPDATE filming_spots SET active = 0;"]
+    for place, region, en, zh, ja, vi, works in fi.PLACES:
+        first = rows[works[0][0]]
+        out = []
+        for no, key, scene_en in works:
+            kind, *titles = fi.WORKS[key]
+            out.append({"kind": kind, "key": key, "title": dict(zip(("ko", "en", "zh", "ja", "vi"), titles)),
+                        "scene": {"ko": rows[no]["장소설명"].strip(), "en": scene_en}})
+        image = place_photo(PHOTO_KEYWORDS.get(place, place), region).replace("http://", "https://")
+        names = {"ko": place, "en": en, "zh": zh, "ja": ja, "vi": vi}
+        kinds = ",".join(sorted({w["kind"] for w in out}))
+        cols = {"region": sql_str(region), "name_i18n": sql_str(json.dumps(names, ensure_ascii=False)),
+                "address": sql_str(first["주소"].strip()), "lat": str(float(first["위도"])), "lng": str(float(first["경도"])),
+                "image_url": sql_str(image), "kinds": sql_str(kinds), "works_json": sql_str(json.dumps(out, ensure_ascii=False)),
+                "source": "'한국문화정보원 미디어콘텐츠 영상 촬영지 데이터 (2022-11) · 사진: 한국관광공사'",
+                "verified_at": sql_str(first["최종작성일"].strip()), "active": "1"}
+        key = sql_str(place)
+        lines.append(f"INSERT INTO filming_spots (place_key, {', '.join(cols)}) VALUES ({key}, {', '.join(cols.values())}) "
+                     "ON CONFLICT(place_key) DO UPDATE SET " + ", ".join(f"{k}=excluded.{k}" for k in cols) + ";")
+        print(f"  {region} {place} [{kinds}] 작품 {len(out)}" + (" · 사진" if image else " · 사진 없음"))
+        time.sleep(0.1)
+    path = OUT / "import_filming.sql"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"촬영지 {len(fi.PLACES)}곳 → {path}")
+
+
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8")
     what = sys.argv[1] if len(sys.argv) > 1 else ""
@@ -546,5 +611,7 @@ if __name__ == "__main__":
             print(f"{spec}\t{region}\t{h['yadmNm']}\t{h.get('drTotCnt')}\t{h.get('sgguCdNm')}")
     elif what == "clinics":
         clinics()
+    elif what == "filming":
+        filming()
     else:
         sys.exit(__doc__)
