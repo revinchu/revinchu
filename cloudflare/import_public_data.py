@@ -433,6 +433,8 @@ CLINIC_GROUPS = {  # 진료과: (심평원 진료과목 코드, 의원 이름에
     "orthopedics": ("05", ("정형외과",), 8, 4),
     "fertility": ("10", ("산부인과", "여성의원", "여성병원"), 8, 4),
 }
+# 직접 추가하는 의원 (자동 선정 기준 밖이지만 외국인환자 유치기관 등록·심평원 진료과 확인됨): (이름, 진료과, 지역)
+EXTRA_CLINICS = [("라리안청담의원", "dermatology", "seoul")]
 # 상급종합병원 진료과 태그: 사이트 진료과 → 심평원 진료과목 코드
 TERTIARY_DEPTS = {"dermatology": "14", "plastic_surgery": "08", "orthopedics": "05", "fertility": "10",
                   "cardiology": "07", "oncology": "17"}
@@ -474,6 +476,16 @@ def select_clinics():
             for h in rows[:limit]:
                 picked.append((spec, region, h))
             print(f"  {region} {spec}: 등록·전문의 의원 {len(rows)}곳 중 {min(limit, len(rows))}곳")
+    have = {h["ykiho"] for _, _, h in picked}
+    for name, spec, region in EXTRA_CLINICS:
+        code = CLINIC_GROUPS[spec][0]
+        found = [h for h in call(HOSP_URL, sidoCd=SIDO[region], yadmNm=name, dgsbjtCd=code, numOfRows=20, pageNo=1)
+                 if _norm(h["yadmNm"]) == _norm(name) and _norm(h["yadmNm"]) in khidi and h["ykiho"] not in have]
+        if not found:
+            print(f"  ! 직접 추가 실패 (심평원 {spec} 진료과 또는 유치기관 등록 확인 안 됨): {name}")
+        for h in found:
+            picked.append((spec, region, h))
+            print(f"  {region} {spec}: 직접 추가 {name}")
     return picked
 
 
@@ -488,7 +500,7 @@ def clinics():
         if "en" not in names:
             print(f"  ! 영문 브랜드 없음 (name_i18n.CLINIC_BRANDS 에 추가): {h['yadmNm']}")
         gu, dr, city = h.get("sgguCdNm", ""), int(h.get("drTotCnt") or 0), "Seoul" if region == "seoul" else "Busan"
-        t = name_i18n.CLINIC_TYPE[spec]
+        t = name_i18n.CLINIC_TYPE[spec] if h["yadmNm"] not in name_i18n.CLINIC_FULL_NAMES else             ("의원", "Clinic", "诊所", "クリニック", "Phòng khám")
         summary = {
             "ko": f"{district_name(gu, 'ko')}에 있는 {t[0]}입니다. 의사 {dr}명. 한국보건산업진흥원에 등록된 외국인환자 유치기관입니다. "
                   "의원급·미용 시술은 비급여 가격 공개 대상이 아니어서 가격은 상담으로 확인해 드립니다.",

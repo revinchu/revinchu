@@ -442,12 +442,26 @@ def migrate(db):
             db.execute(ddl)
 
 
+# 스키마·마이그레이션이 바뀌면 값이 바뀐다. 같으면 앱 시작 때 테이블 점검을 건너뛴다
+# (Cloudflare 무료 플랜은 새 인스턴스의 첫 요청 CPU 가 빠듯해, 매번 수십 개 문장을 돌리면 한도를 넘는다).
+SCHEMA_VERSION = hashlib.sha1((SCHEMA + repr(MIGRATIONS)).encode()).hexdigest()[:12]
+
+
 def init_db(seed=True):
     db = get_db()
+    try:
+        row = db.execute("SELECT value FROM app_meta WHERE key = 'schema'").fetchone()
+        if row is not None and row[0] == SCHEMA_VERSION:
+            return
+    except Exception:  # app_meta 가 아직 없는 DB
+        pass
     db.executescript(SCHEMA)
     migrate(db)
     if seed and db.execute("SELECT COUNT(*) FROM staff").fetchone()[0] == 0:
         seed_db(db, admin_password=current_app.config.get("ADMIN_INITIAL_PASSWORD"))
+    db.execute("CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    db.execute("INSERT INTO app_meta (key, value) VALUES ('schema', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+               (SCHEMA_VERSION,))
     db.commit()
 
 

@@ -108,8 +108,9 @@ def create_app(test_config=None):
     app.register_blueprint(public_bp)
     app.register_blueprint(admin_bp)
 
-    with app.app_context():
-        dbmod.init_db()
+    if not app.config.get("SKIP_INIT_DB"):  # Cloudflare 는 DB 바인딩이 생긴 뒤 worker.py 에서 따로 부른다
+        with app.app_context():
+            dbmod.init_db()
 
     return app
 

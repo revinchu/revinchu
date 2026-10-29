@@ -197,8 +197,16 @@ CLINIC_TYPE = {
 }
 
 
+# 이름에 전문과목이 없는 의원(직접 추가분)은 진료과 표기 없이 전체 이름을 쓴다
+CLINIC_FULL_NAMES = {
+    "라리안청담의원": ("Larian Cheongdam Clinic", "Larian清潭诊所", "ラリアン清潭クリニック", "Phòng khám Larian Cheongdam"),
+}
+
+
 def clinic_names(ko, spec):
     """의원 국문 이름 → {ko, en, zh, ja, vi}. 영문 브랜드가 없으면 국문만."""
+    if ko in CLINIC_FULL_NAMES:
+        return {"ko": ko, **dict(zip(("en", "zh", "ja", "vi"), CLINIC_FULL_NAMES[ko]))}
     brand = CLINIC_BRANDS.get(ko)
     if not brand:
         return {"ko": ko}
