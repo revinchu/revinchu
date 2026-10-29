@@ -1,0 +1,77 @@
+{% extends "public/base.html" %}
+{% block title %}{{ a.title }} · {{ brand() }}{% endblock %}
+{% block description %}{{ a.description }}{% endblock %}
+{% block og_type %}article{% endblock %}
+{% block og_image %}{{ a.hero or 'https://tong.visitkorea.or.kr/cms/resource/98/3487598_image2_1.jpg' }}{% endblock %}
+{# 번역본이 없는 언어에서는 원문(영어/한국어)을 canonical 로 지정해 중복 색인을 막는다 #}
+{% block canonical %}{{ site_url() }}{{ url_for('public.article', slug=a.slug, lang=a.lang) }}{% endblock %}
+{% block alternates %}
+{% for code in languages %}
+  <link rel="alternate" hreflang="{{ code }}" href="{{ site_url() }}{{ url_for('public.article', slug=a.slug, lang=code) }}">
+{% endfor %}
+  <link rel="alternate" hreflang="x-default" href="{{ site_url() }}{{ url_for('public.article', slug=a.slug, lang='en' if 'en' in languages else languages[0]) }}">
+{% endblock %}
+{% block jsonld %}<script type="application/ld+json">{{ ld | tojson }}</script>
+<meta property="article:published_time" content="{{ a.published }}">
+<meta property="article:modified_time" content="{{ a.updated }}">
+<meta property="article:section" content="{{ t('mag_' ~ a.category) }}">{% endblock %}
+{% block content %}
+<article class="wrap page post" lang="{{ a.lang }}">
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="{{ url_for('public.magazine') }}">{{ t('nav_magazine') }}</a> /
+    <a href="{{ url_for('public.magazine', c=a.category) }}">{{ t('mag_' ~ a.category) }}</a></nav>
+  <header class="post-head">
+    <span class="mag-cat mag-cat-{{ a.category }}">{{ t('mag_' ~ a.category) }}</span>
+    <h1 class="post-title">{{ a.title }}</h1>
+    <p class="post-lead">{{ a.description }}</p>
+    <p class="post-meta">{{ icon('calendar', 14) }} {{ t('last_updated') }} <time datetime="{{ a.updated }}">{{ a.updated }}</time>
+      · {{ a.minutes }} {{ t('min_read') }}</p>
+  </header>
+  {% if a.fallback %}<p class="notice post-notice">{{ t('article_fallback') }}</p>{% endif %}
+  {% if a.hero %}
+  <figure class="post-hero"><img src="{{ a.hero }}" alt="{{ a.hero_alt }}" referrerpolicy="no-referrer">
+    <figcaption>{{ a.hero_alt }}{% if a.hero_credit %} <span class="credit">© {{ a.hero_credit }}</span>{% endif %}</figcaption></figure>
+  {% endif %}
+
+  <div class="post-grid">
+    <aside class="post-toc">
+      <details open>
+        <summary>{{ t('toc_title') }}</summary>
+        <ol>{% for anchor, title in a.toc %}<li><a href="#{{ anchor }}">{{ title }}</a></li>{% endfor %}</ol>
+      </details>
+    </aside>
+    <div class="post-body">
+      {% if a.answer %}
+      <section class="answer-box" id="quick-answer">
+        <p class="answer-label">{{ icon('check', 16) }} {{ t('quick_answer') }}</p>
+        <p>{{ a.answer }}</p>
+      </section>
+      {% endif %}
+      <div class="prose-body">{{ a.html | safe }}</div>
+      <p class="editorial-note">{{ icon('info', 14) }} {{ t('editorial_note') }}</p>
+      {% if a.tags %}<ul class="post-tags">{% for tg in a.tags %}<li>#{{ tg }}</li>{% endfor %}</ul>{% endif %}
+    </div>
+  </div>
+</article>
+
+<section class="wrap block">
+  <div class="contact-box">
+    <div>
+      <h2>{{ t('article_cta_title') }}</h2>
+      <p>{{ t('article_cta_sub') }}</p>
+      <a class="btn btn-accent" href="{{ url_for('public.consult') }}">{{ t('nav_consult') }} {{ icon('arrow-right', 16) }}</a>
+    </div>
+    <div class="contact-channels">
+      <p class="footer-h">{{ t('reply_on') }}</p>
+      <ul>{% for c in i18n.CONTACT_CHANNELS %}<li>{{ t('ch_' ~ c) }}</li>{% endfor %}</ul>
+    </div>
+  </div>
+</section>
+
+{% if related %}
+<section class="wrap block">
+  <div class="block-head"><h2>{{ t('related_reads') }}</h2>
+    <a class="more" href="{{ url_for('public.magazine') }}">{{ t('nav_magazine') }} {{ icon('arrow-right', 16) }}</a></div>
+  <div class="mag-grid">{% for a in related %}{% with lead = False %}{% include "public/_article_card.html" %}{% endwith %}{% endfor %}</div>
+</section>
+{% endif %}
+{% endblock %}

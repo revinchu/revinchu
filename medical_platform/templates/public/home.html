@@ -155,6 +155,16 @@
 </section>
 {% endif %}
 
+{% if articles %}
+<section class="wrap block">
+  <div class="block-head">
+    <h2>{{ t('latest_guides') }}</h2>
+    <a class="more" href="{{ url_for('public.magazine') }}">{{ t('nav_magazine') }} {{ icon('arrow-right', 16) }}</a>
+  </div>
+  <div class="mag-grid mag-grid-4">{% for a in articles %}{% with lead = False %}{% include "public/_article_card.html" %}{% endwith %}{% endfor %}</div>
+</section>
+{% endif %}
+
 <section class="journey">
   <div class="wrap">
     <div class="block-head"><h2>{{ t('guide_title') }}</h2>

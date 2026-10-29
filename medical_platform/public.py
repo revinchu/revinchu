@@ -1,10 +1,12 @@
 """해외 환자용 다국어 공개 사이트: 홈, 병원 지도·검색, 병원 상세, 컨시어지, 상담 신청."""
 import json
 import math
+import re
 
 from flask import (Blueprint, abort, current_app, g, redirect, render_template, request, session, url_for)
 
 from . import crm, i18n, notify
+from . import magazine as mag
 from .db import get_db, now_iso
 
 bp = Blueprint("public", __name__)
@@ -49,6 +51,8 @@ def inject_helpers():
         "lang": lang,
         "t": lambda key: i18n.translate(key, lang),
         "i18n": i18n,
+        "site_url": notify.site_url,
+        "magazine_categories": mag.CATEGORIES,
     }
 
 
@@ -208,7 +212,7 @@ def home():
     track("view_home")
     return render_template("public/home.html", hospitals=hospitals, points=map_points(hospitals),
                            price_rows=price_rows, tag_counts=tag_counts, specialty_counts=specialty_counts,
-                           spots=load_attractions(g.lang, limit=8))
+                           spots=load_attractions(g.lang, limit=8), articles=mag.listing(g.lang)[:4])
 
 
 @bp.route("/<lang>/hospitals")
@@ -235,7 +239,31 @@ def hospital_detail(slug):
     partners = [p for p in nearby if p["partner_type"] == "hotel"][:2] + [p for p in nearby if p["partner_type"] == "kfood"][:2]
     track("view_hospital", row["id"])
     return render_template("public/hospital_detail.html", h=h, doctors=doctors, prices=prices, partners=partners,
-                           points=map_points([h]), spots=load_attractions(g.lang, region=row["region"], limit=3))
+                           points=map_points([h]), spots=load_attractions(g.lang, region=row["region"], limit=3),
+                           ld=hospital_ld(h, prices))
+
+
+def hospital_ld(h, prices):
+    """병원 구조화 데이터: 이름·주소·좌표·진료과·공개 가격 (출처: 심평원)."""
+    base = notify.site_url()
+    url = base + url_for("public.hospital_detail", slug=h["slug"])
+    kind = "Dentist" if h["hospital_type"] == "dental_hospital" else "Hospital"
+    ld = {"@context": "https://schema.org", "@type": kind, "@id": url + "#hospital", "name": h["name"],
+          "alternateName": h["name_ko"], "url": url, "description": h["summary"],
+          "address": {"@type": "PostalAddress", "streetAddress": h["address_ko"], "addressLocality": h["district_name"],
+                      "addressRegion": i18n.translate("rg_" + h["region"], "en"), "addressCountry": "KR"},
+          "medicalSpecialty": [i18n.translate("sp_" + sp, "en") for sp in h["specialty_list"]]}
+    if h["lat"] and h["lng"]:
+        ld["geo"] = {"@type": "GeoCoordinates", "latitude": h["lat"], "longitude": h["lng"]}
+    if h.get("phone"):
+        ld["telephone"] = h["phone"]
+    if h.get("website"):
+        ld["sameAs"] = [h["website"]]
+    offers = [{"@type": "Offer", "name": item_name(p, g.lang), "price": p["price_domestic_krw"], "priceCurrency": "KRW",
+               "validFrom": p["verified_at"]} for p in prices if p["price_domestic_krw"]]
+    if offers:
+        ld["makesOffer"] = offers
+    return ld
 
 
 @bp.route("/<lang>/concierge")
@@ -256,6 +284,155 @@ def guide():
 @bp.route("/<lang>/privacy")
 def privacy():
     return render_template("public/privacy.html")
+
+
+# ---------------------------------------------------------------------------
+# 매거진 (K-의료·K-뷰티·K-팝·K-푸드·여행 정보 글)
+# ---------------------------------------------------------------------------
+@bp.route("/<lang>/magazine")
+def magazine():
+    cat = request.args.get("c")
+    cat = cat if cat in mag.CATEGORIES else None
+    items = mag.listing(g.lang, cat)
+    base = notify.site_url()
+    ld = {"@context": "https://schema.org", "@type": "CollectionPage", "inLanguage": g.lang,
+          "name": i18n.translate("mag_title", g.lang), "description": i18n.translate("mag_sub", g.lang),
+          "url": base + url_for("public.magazine"),
+          "mainEntity": {"@type": "ItemList", "itemListElement": [
+              {"@type": "ListItem", "position": n, "name": a["title"], "url": base + url_for("public.article", slug=a["slug"])}
+              for n, a in enumerate(items, 1)]}}
+    track("view_magazine")
+    return render_template("public/magazine.html", items=items, cat=cat, ld=ld)
+
+
+@bp.route("/<lang>/magazine/<slug>")
+def article(slug):
+    a = mag.get(slug, g.lang)
+    if a is None:
+        abort(404)
+    same = [x for x in mag.listing(g.lang, a["category"]) if x["slug"] != slug]
+    others = [x for x in mag.listing(g.lang) if x["slug"] != slug and x["category"] != a["category"]]
+    track("view_article")
+    return render_template("public/article.html", a=a, related=(same + others)[:3], languages=mag.languages(slug),
+                           ld=article_ld(a))
+
+
+def article_ld(a):
+    """Article + BreadcrumbList + FAQPage 구조화 데이터 (AEO: 답변 엔진이 요약·FAQ 를 바로 인용할 수 있게)."""
+    base, brand = notify.site_url(), current_app.config["BRAND_NAME"]
+    url = base + url_for("public.article", slug=a["slug"], lang=a["lang"])
+    graph = [
+        {"@type": "Article", "@id": url + "#article", "headline": a["title"], "description": a["description"],
+         "abstract": a["answer"], "image": [a["hero"]] if a["hero"] else [], "inLanguage": a["lang"],
+         "datePublished": a["published"], "dateModified": a["updated"], "keywords": ", ".join(a["tags"]),
+         "articleSection": i18n.translate("mag_" + a["category"], a["lang"]), "mainEntityOfPage": url,
+         "author": {"@type": "Organization", "name": f"{brand} Editorial", "url": base + "/"},
+         "publisher": {"@id": base + "/#org"}, "isAccessibleForFree": True,
+         "speakable": {"@type": "SpeakableSpecification", "cssSelector": [".answer-box", "h1"]},
+         "citation": [m.group(1) for m in (re.search(r"\((https?://[^)\s]+)\)", s) for s in a["sources"]) if m]},
+        {"@type": "BreadcrumbList", "itemListElement": [
+            {"@type": "ListItem", "position": 1, "name": brand, "item": base + url_for("public.home", lang=a["lang"])},
+            {"@type": "ListItem", "position": 2, "name": i18n.translate("nav_magazine", a["lang"]),
+             "item": base + url_for("public.magazine", lang=a["lang"])},
+            {"@type": "ListItem", "position": 3, "name": a["title"], "item": url}]},
+    ]
+    if a["faq"]:
+        graph.append({"@type": "FAQPage", "@id": url + "#faq", "mainEntity": [
+            {"@type": "Question", "name": f["q"], "acceptedAnswer": {"@type": "Answer", "text": f["a"]}} for f in a["faq"]]})
+    return {"@context": "https://schema.org", "@graph": graph}
+
+
+# ---------------------------------------------------------------------------
+# 검색엔진·AI 크롤러용: robots.txt, sitemap.xml, llms.txt (SEO/AEO/GEO)
+# ---------------------------------------------------------------------------
+AI_CRAWLERS = ["GPTBot", "OAI-SearchBot", "ChatGPT-User", "ClaudeBot", "Claude-User", "Claude-SearchBot", "anthropic-ai",
+               "PerplexityBot", "Perplexity-User", "Google-Extended", "Applebot-Extended", "CCBot", "meta-externalagent",
+               "Amazonbot", "DuckAssistBot", "MistralAI-User", "cohere-ai", "Bytespider"]
+SEARCH_CRAWLERS = ["Googlebot", "Bingbot", "Yeti", "Daum", "Baiduspider", "YandexBot", "Applebot", "DuckDuckBot"]
+
+
+def _text(body):
+    return current_app.response_class(body, mimetype="text/plain")
+
+
+@bp.route("/robots.txt")
+def robots():
+    base = notify.site_url()
+    # 검색엔진과 AI 답변 엔진 모두 공개 페이지를 읽을 수 있게 열어 둔다 (관리자·상담 접수 결과는 제외)
+    lines = ["# Public pages are open to search engines and AI answer engines. See /llms.txt for a summary.",
+             "User-agent: *", "Allow: /", "Disallow: /admin", "Disallow: /*/consult/thanks/", ""]
+    for bot in SEARCH_CRAWLERS + AI_CRAWLERS:
+        lines += [f"User-agent: {bot}", "Allow: /", "Disallow: /admin", ""]
+    lines += [f"Sitemap: {base}/sitemap.xml"]
+    return _text("\n".join(lines) + "\n")
+
+
+def _sitemap_groups():
+    """(엔드포인트, 인자, 해당 언어 목록, 최종 수정일) — 언어별 URL 과 hreflang 대체 링크를 만든다."""
+    langs = list(i18n.LANGUAGES)
+    groups = [(ep, {}, langs, None) for ep in ("public.home", "public.hospitals", "public.magazine", "public.concierge",
+                                               "public.guide", "public.consult", "public.privacy")]
+    for slug, versions in mag.ARTICLES.items():
+        updated = max(a["updated"] for a in versions.values())
+        groups.append(("public.article", {"slug": slug}, sorted(versions), updated))
+    rows = get_db().execute("SELECT slug, last_verified_at FROM hospitals WHERE verification_status = 'published'").fetchall()
+    for r in rows:
+        groups.append(("public.hospital_detail", {"slug": r["slug"]}, langs, r["last_verified_at"]))
+    return groups
+
+
+@bp.route("/sitemap.xml")
+def sitemap():
+    base = notify.site_url()
+    out = ['<?xml version="1.0" encoding="UTF-8"?>',
+           '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">']
+    for ep, kw, langs, updated in _sitemap_groups():
+        urls = {l: base + url_for(ep, lang=l, **kw) for l in langs}
+        alts = "".join(f'<xhtml:link rel="alternate" hreflang="{l}" href="{u}"/>' for l, u in urls.items())
+        alts += f'<xhtml:link rel="alternate" hreflang="x-default" href="{urls.get("en", next(iter(urls.values())))}"/>'
+        lastmod = f"<lastmod>{updated[:10]}</lastmod>" if updated else ""
+        for u in urls.values():
+            out.append(f"<url><loc>{u}</loc>{lastmod}{alts}</url>")
+    out.append("</urlset>")
+    return current_app.response_class("\n".join(out), mimetype="application/xml")
+
+
+@bp.route("/llms.txt")
+def llms_txt():
+    """llmstxt.org 형식: AI 가 사이트를 이해하고 인용하기 쉽게 핵심 페이지와 글을 정리한다."""
+    base, brand = notify.site_url(), current_app.config["BRAND_NAME"]
+    db = get_db()
+    n_hosp = db.execute("SELECT COUNT(*) FROM hospitals WHERE verification_status = 'published'").fetchone()[0]
+    n_price = db.execute("SELECT COUNT(*) FROM price_items p JOIN hospitals h ON h.id = p.hospital_id "
+                         "WHERE h.verification_status = 'published'").fetchone()[0]
+    lines = [f"# {brand}", "",
+             f"> Multilingual guide to medical care and travel in Korea for international visitors: {n_hosp} hospitals in "
+             f"Seoul and Busan with {n_price} self-pay prices published to HIRA (Korea's Health Insurance Review & Assessment "
+             "Service), places foreign visitors love, and in-depth guides on K-medical, K-beauty, K-pop, K-food and travel.", "",
+             "Content is available in English, Korean, Chinese (Simplified), Japanese and Vietnamese. "
+             "Prices come from official public data with a reference date; information is not medical advice.", "",
+             "## Key pages", "",
+             f"- [Find hospitals]({base}/en/hospitals): map and filters by specialty, region and language",
+             f"- [Travel & concierge]({base}/en/concierge): stays, K-food, shopping and sights near hospitals",
+             f"- [How it works]({base}/en/how-it-works): consultation to aftercare in five steps",
+             f"- [Free consultation]({base}/en/consult): coordinator replies in the visitor's language",
+             f"- [Full text for LLMs]({base}/llms-full.txt)", "", "## Magazine", ""]
+    for a in mag.listing("en"):
+        lines.append(f"- [{a['title']}]({base}/en/magazine/{a['slug']}): {a['description']}")
+    return _text("\n".join(lines) + "\n")
+
+
+@bp.route("/llms-full.txt")
+def llms_full_txt():
+    base = notify.site_url()
+    raw_files = mag._raw_files()
+    parts = [f"# {current_app.config['BRAND_NAME']} — full text of guides (English)", ""]
+    for a in mag.listing("en"):
+        raw = raw_files.get(f"{a['slug']}.{a['lang']}.md", "")
+        body = re.sub(r"^---\n.*?\n---\n", "", raw.replace("\r", ""), flags=re.S).replace("{lang}", "en")
+        parts += [f"## {a['title']}", f"URL: {base}/en/magazine/{a['slug']}", f"Updated: {a['updated']}", "",
+                  f"Quick answer: {a['answer']}", "", body.strip(), "", "---", ""]
+    return _text("\n".join(parts))
 
 
 def _int_or_none(value, lo, hi):

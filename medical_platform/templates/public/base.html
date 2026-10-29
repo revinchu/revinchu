@@ -4,10 +4,38 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}{{ brand() }} · {{ t('tagline') }}{% endblock %}</title>
-  <meta name="description" content="{{ t('hero_sub') }}">
+  <meta name="description" content="{% block description %}{{ t('hero_sub') }}{% endblock %}">
+  <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1">
+  {% set page_url = site_url() ~ url_for(request.endpoint, **dict(request.view_args or {}, lang=lang)) %}
+  <link rel="canonical" href="{% block canonical %}{{ page_url }}{% endblock %}">
+  {% block alternates %}
   {% for code in LANGUAGES %}
-  <link rel="alternate" hreflang="{{ code }}" href="{{ url_for(request.endpoint, **dict(request.view_args or {}, lang=code)) }}">
+  <link rel="alternate" hreflang="{{ code }}" href="{{ site_url() }}{{ url_for(request.endpoint, **dict(request.view_args or {}, lang=code)) }}">
   {% endfor %}
+  <link rel="alternate" hreflang="x-default" href="{{ site_url() }}{{ url_for(request.endpoint, **dict(request.view_args or {}, lang='en')) }}">
+  {% endblock %}
+  {% set og_locale = {'en': 'en_US', 'ko': 'ko_KR', 'zh': 'zh_CN', 'ja': 'ja_JP', 'vi': 'vi_VN'} %}
+  <meta property="og:site_name" content="{{ brand() }}">
+  <meta property="og:type" content="{% block og_type %}website{% endblock %}">
+  <meta property="og:title" content="{{ self.title() | trim }}">
+  <meta property="og:description" content="{{ self.description() | trim }}">
+  <meta property="og:url" content="{{ page_url }}">
+  <meta property="og:image" content="{% block og_image %}https://tong.visitkorea.or.kr/cms/resource/98/3487598_image2_1.jpg{% endblock %}">
+  <meta property="og:locale" content="{{ og_locale[lang] }}">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="alternate" type="text/plain" title="LLM summary" href="{{ site_url() }}/llms.txt">
+  <script type="application/ld+json">{{ {
+    "@context": "https://schema.org",
+    "@graph": [
+      {"@type": "Organization", "@id": site_url() ~ "/#org", "name": brand(), "url": site_url() ~ "/",
+       "description": t('hero_sub'), "areaServed": ["KR"], "knowsLanguage": ["en", "ko", "zh", "ja", "vi"]},
+      {"@type": "WebSite", "@id": site_url() ~ "/#website", "name": brand(), "url": site_url() ~ "/" ~ lang ~ "/",
+       "inLanguage": lang, "publisher": {"@id": site_url() ~ "/#org"},
+       "potentialAction": {"@type": "SearchAction",
+                           "target": site_url() ~ "/" ~ lang ~ "/hospitals?q={search_term_string}",
+                           "query-input": "required name=search_term_string"}}
+    ]} | tojson }}</script>
+  {% block jsonld %}{% endblock %}
   <link rel="stylesheet" href="{{ url_for('static', filename='vendor/pretendard/pretendardvariable-dynamic-subset.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/leaflet.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
@@ -31,6 +59,7 @@
       {% set ep = request.endpoint %}
       <a href="{{ url_for('public.hospitals') }}" {% if ep in ('public.hospitals', 'public.hospital_detail') %}aria-current="page"{% endif %}>{{ t('nav_hospitals') }}</a>
       <a href="{{ url_for('public.concierge') }}" {% if ep == 'public.concierge' %}aria-current="page"{% endif %}>{{ t('nav_concierge') }}</a>
+      <a href="{{ url_for('public.magazine') }}" {% if ep in ('public.magazine', 'public.article') %}aria-current="page"{% endif %}>{{ t('nav_magazine') }}</a>
       <a href="{{ url_for('public.guide') }}" {% if ep == 'public.guide' %}aria-current="page"{% endif %}>{{ t('nav_guide') }}</a>
     </nav>
     <a class="btn btn-ink header-cta" href="{{ url_for('public.consult') }}">{{ t('nav_consult') }}</a>
@@ -39,7 +68,7 @@
 <main id="main">{% block content %}{% endblock %}</main>
 <a class="mobile-cta" href="{{ url_for('public.consult') }}">{{ t('nav_consult') }} {{ icon('arrow-right', 16) }}</a>
 <footer class="site-footer">
-  <div class="wrap footer-grid">
+  <div class="wrap footer-grid footer-grid-5">
     <div>
       <p class="wordmark wordmark-sm">{{ brand() }}</p>
       <p>{{ t('tagline') }}<br>A {{ company() }} platform.</p>
@@ -51,6 +80,10 @@
     <div>
       <p class="footer-h">{{ t('nav_concierge') }}</p>
       {% for pt in i18n.PARTNER_TYPES %}<a href="{{ url_for('public.concierge') }}#{{ pt }}">{{ t('pt_' ~ pt) }}</a>{% endfor %}
+    </div>
+    <div>
+      <p class="footer-h">{{ t('nav_magazine') }}</p>
+      {% for c in magazine_categories %}<a href="{{ url_for('public.magazine', c=c) }}">{{ t('mag_' ~ c) }}</a>{% endfor %}
     </div>
     <div>
       <p class="footer-h">{{ brand() }}</p>

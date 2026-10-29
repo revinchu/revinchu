@@ -23,13 +23,14 @@ def main():
                  for p in sorted((PKG / "templates").rglob("*.html"))}
     icons = {p.stem: p.read_text(encoding="utf-8")
              for p in sorted((PKG / "static" / "vendor" / "lucide" / "icons").glob("*.svg"))}
+    articles = {p.name: p.read_text(encoding="utf-8") for p in sorted((PKG / "content" / "articles").glob("*.md"))}
     (src / "_embedded.py").write_text(
         '"""자동 생성 파일 (cloudflare/build.py) — 직접 수정하지 마세요."""\n'
-        f"TEMPLATES = {templates!r}\nICONS = {icons!r}\n", encoding="utf-8")
+        f"TEMPLATES = {templates!r}\nICONS = {icons!r}\nARTICLES = {articles!r}\n", encoding="utf-8")
 
     shutil.copytree(PKG / "static", OUT / "public" / "static",
                     ignore=shutil.ignore_patterns("icons"))
-    print(f"built {len(templates)} templates, {len(icons)} icons → {OUT}")
+    print(f"built {len(templates)} templates, {len(icons)} icons, {len(articles)} articles → {OUT}")
 
 
 if __name__ == "__main__":

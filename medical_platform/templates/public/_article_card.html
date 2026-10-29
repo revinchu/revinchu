@@ -1,0 +1,11 @@
+<article class="mag-card{{ ' mag-card-lead' if lead }}">
+  <a href="{{ url_for('public.article', slug=a.slug) }}">
+    <span class="mag-img">{% if a.hero %}<img src="{{ a.hero }}" alt="{{ a.hero_alt }}" loading="lazy" referrerpolicy="no-referrer">{% endif %}</span>
+    <span class="mag-body">
+      <span class="mag-cat mag-cat-{{ a.category }}">{{ t('mag_' ~ a.category) }}</span>
+      <span class="mag-title">{{ a.title }}</span>
+      <span class="mag-desc">{{ a.description }}</span>
+      <span class="mag-meta">{{ a.minutes }} {{ t('min_read') }} · {{ a.updated }}</span>
+    </span>
+  </a>
+</article>
