@@ -20,3 +20,9 @@ cloudflare/python_modules/
 cloudflare/.wrangler/
 cloudflare/.dev.vars
 cloudflare/.venv-workers/
+
+# kv_reference: 대량 외부 데이터는 아티팩트로만 배포 (뮤지엄 CC0 샤드만 저장소에 둔다)
+kv_reference/bulk/gads-*.json
+kv_reference/bulk/meta-*.json
+kv_reference/bulk/pitt-*.json
+kv_reference/bulk/tvcf-*.json

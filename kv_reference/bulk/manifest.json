@@ -1,0 +1,289 @@
+{
+ "cols": [
+  "id",
+  "title",
+  "brand",
+  "agency",
+  "year",
+  "date",
+  "country",
+  "field",
+  "industry",
+  "medium",
+  "techniques",
+  "moods",
+  "note",
+  "sourceUrl",
+  "imageUrl"
+ ],
+ "total": 11824,
+ "byOrigin": {
+  "museum": 11824
+ },
+ "shards": [
+  {
+   "file": "museum-us-0.json",
+   "origin": "museum",
+   "country": "US",
+   "count": 4413,
+   "years": [
+    1770,
+    2025
+   ],
+   "bytes": 1302768
+  },
+  {
+   "file": "museum-xx-0.json",
+   "origin": "museum",
+   "country": "XX",
+   "count": 2303,
+   "years": [
+    1700,
+    2020
+   ],
+   "bytes": 621791
+  },
+  {
+   "file": "museum-gb-0.json",
+   "origin": "museum",
+   "country": "GB",
+   "count": 1106,
+   "years": [
+    1635,
+    2014
+   ],
+   "bytes": 298820
+  },
+  {
+   "file": "museum-de-0.json",
+   "origin": "museum",
+   "country": "DE",
+   "count": 908,
+   "years": [
+    1814,
+    2007
+   ],
+   "bytes": 290328
+  },
+  {
+   "file": "museum-fr-0.json",
+   "origin": "museum",
+   "country": "FR",
+   "count": 488,
+   "years": [
+    1565,
+    2011
+   ],
+   "bytes": 146267
+  },
+  {
+   "file": "museum-nl-0.json",
+   "origin": "museum",
+   "country": "NL",
+   "count": 445,
+   "years": [
+    1613,
+    2014
+   ],
+   "bytes": 139516
+  },
+  {
+   "file": "museum-ch-0.json",
+   "origin": "museum",
+   "country": "CH",
+   "count": 370,
+   "years": [
+    1800,
+    1992
+   ],
+   "bytes": 111256
+  },
+  {
+   "file": "museum-es-0.json",
+   "origin": "museum",
+   "country": "ES",
+   "count": 326,
+   "years": [
+    1800,
+    1999
+   ],
+   "bytes": 91038
+  },
+  {
+   "file": "museum-mx-0.json",
+   "origin": "museum",
+   "country": "MX",
+   "count": 309,
+   "years": [
+    1850,
+    1975
+   ],
+   "bytes": 105319
+  },
+  {
+   "file": "museum-it-0.json",
+   "origin": "museum",
+   "country": "IT",
+   "count": 245,
+   "years": [
+    1675,
+    2001
+   ],
+   "bytes": 76571
+  },
+  {
+   "file": "museum-ru-0.json",
+   "origin": "museum",
+   "country": "RU",
+   "count": 219,
+   "years": [
+    1912,
+    2015
+   ],
+   "bytes": 81326
+  },
+  {
+   "file": "museum-jp-0.json",
+   "origin": "museum",
+   "country": "JP",
+   "count": 181,
+   "years": [
+    1900,
+    2013
+   ],
+   "bytes": 55412
+  },
+  {
+   "file": "museum-pl-0.json",
+   "origin": "museum",
+   "country": "PL",
+   "count": 177,
+   "years": [
+    1900,
+    1990
+   ],
+   "bytes": 57369
+  },
+  {
+   "file": "museum-at-0.json",
+   "origin": "museum",
+   "country": "AT",
+   "count": 94,
+   "years": [
+    1898,
+    2000
+   ],
+   "bytes": 30320
+  },
+  {
+   "file": "museum-ca-0.json",
+   "origin": "museum",
+   "country": "CA",
+   "count": 74,
+   "years": [
+    1914,
+    2012
+   ],
+   "bytes": 23599
+  },
+  {
+   "file": "museum-ar-0.json",
+   "origin": "museum",
+   "country": "AR",
+   "count": 40,
+   "years": [
+    1957,
+    1989
+   ],
+   "bytes": 13873
+  },
+  {
+   "file": "museum-be-0.json",
+   "origin": "museum",
+   "country": "BE",
+   "count": 39,
+   "years": [
+    1894,
+    2005
+   ],
+   "bytes": 13236
+  },
+  {
+   "file": "museum-br-0.json",
+   "origin": "museum",
+   "country": "BR",
+   "count": 34,
+   "years": [
+    1921,
+    1968
+   ],
+   "bytes": 10682
+  },
+  {
+   "file": "museum-dk-0.json",
+   "origin": "museum",
+   "country": "DK",
+   "count": 23,
+   "years": [
+    1931,
+    2001
+   ],
+   "bytes": 6570
+  },
+  {
+   "file": "museum-se-0.json",
+   "origin": "museum",
+   "country": "SE",
+   "count": 15,
+   "years": [
+    1900,
+    2008
+   ],
+   "bytes": 4524
+  },
+  {
+   "file": "museum-au-0.json",
+   "origin": "museum",
+   "country": "AU",
+   "count": 9,
+   "years": [
+    1895,
+    1967
+   ],
+   "bytes": 2706
+  },
+  {
+   "file": "museum-no-0.json",
+   "origin": "museum",
+   "country": "NO",
+   "count": 4,
+   "years": [
+    1989,
+    1989
+   ],
+   "bytes": 1270
+  },
+  {
+   "file": "museum-kr-0.json",
+   "origin": "museum",
+   "country": "KR",
+   "count": 1,
+   "years": [
+    1983,
+    1983
+   ],
+   "bytes": 328
+  },
+  {
+   "file": "museum-pt-0.json",
+   "origin": "museum",
+   "country": "PT",
+   "count": 1,
+   "years": [
+    1921,
+    1921
+   ],
+   "bytes": 315
+  }
+ ]
+}
