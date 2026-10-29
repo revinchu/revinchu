@@ -155,6 +155,8 @@ CREATE TABLE IF NOT EXISTS filming_spots (
     lat REAL,
     lng REAL,
     image_url TEXT NOT NULL DEFAULT '',
+    image_credit TEXT NOT NULL DEFAULT '',
+    image_credit_url TEXT NOT NULL DEFAULT '',
     kinds TEXT NOT NULL DEFAULT '',
     works_json TEXT NOT NULL DEFAULT '[]',
     source TEXT NOT NULL DEFAULT '',
@@ -432,6 +434,9 @@ MIGRATIONS = [
     # 병원명·가격 항목명 외국어 표기 {ko, en, zh, ja, vi}
     ("hospitals", "name_i18n", "ALTER TABLE hospitals ADD COLUMN name_i18n TEXT NOT NULL DEFAULT '{}'"),
     ("price_items", "name_i18n", "ALTER TABLE price_items ADD COLUMN name_i18n TEXT NOT NULL DEFAULT '{}'"),
+    # 촬영지 사진 출처 (관광공사 외 위키미디어 공용 사진은 저작자·라이선스를 함께 표기)
+    ("filming_spots", "image_credit", "ALTER TABLE filming_spots ADD COLUMN image_credit TEXT NOT NULL DEFAULT ''"),
+    ("filming_spots", "image_credit_url", "ALTER TABLE filming_spots ADD COLUMN image_credit_url TEXT NOT NULL DEFAULT ''"),
 ]
 
 

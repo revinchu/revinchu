@@ -555,10 +555,10 @@ KCISA_CSV = HERE / ".import" / "raw" / "kcisa_filming_locations.csv"
 PHOTO_KEYWORDS = {
     "북촌 한옥마을": "북촌한옥마을", "천주교 서울대교구 주교좌명동대성당": "명동성당", "서울로7017": "서울로 7017",
     "광화문 광장": "광화문광장", "다대포 해수욕장": "다대포해수욕장", "마로니에 공원": "마로니에공원", "남산 케이블카": "남산케이블카",
-    "문화역서울284": "문화역서울", "한국의 집": "한국의집", "청계상가": "세운상가", "문래 창작촌": "문래창작촌",
-    "올림픽공원 나홀로나무": "올림픽공원", "수영만 요트 경기장": "수영만요트경기장", "이태원세계음식거리": "이태원",
-"동작대교": "동작대교", "용마랜드": "용마랜드", "문화공감수정": "문화공감 수정",
-    "코모도호텔 부산": "코모도호텔", "가톨릭대학교 서울성모병원": "서울성모병원",
+    "한국의 집": "한국의집", "청계상가": "세운상가", "문래 창작촌": "문래창작촌",
+    "올림픽공원 나홀로나무": "올림픽공원", "수영만 요트 경기장": "더베이101", "이태원세계음식거리": "이태원",
+"문화공감수정": "문화공감 수정",
+    "코모도호텔 부산": "코모도 호텔 부산", "백인제 가옥": "백인제가옥",
 }
 
 
@@ -591,13 +591,18 @@ def filming():
             kind, *titles = fi.WORKS[key]
             out.append({"kind": kind, "key": key, "title": dict(zip(("ko", "en", "zh", "ja", "vi"), titles)),
                         "scene": {"ko": rows[no]["장소설명"].strip(), "en": scene_en}})
-        image = place_photo(PHOTO_KEYWORDS.get(place, place), region).replace("http://", "https://")
+        if place in fi.PHOTO_OVERRIDES:
+            image, credit, credit_url = fi.PHOTO_OVERRIDES[place]
+        else:
+            image = place_photo(PHOTO_KEYWORDS.get(place, place), region).replace("http://", "https://")
+            credit, credit_url = ("한국관광공사", "https://api.visitkorea.or.kr") if image else ("", "")
         names = {"ko": place, "en": en, "zh": zh, "ja": ja, "vi": vi}
         kinds = ",".join(sorted({w["kind"] for w in out}))
         cols = {"region": sql_str(region), "name_i18n": sql_str(json.dumps(names, ensure_ascii=False)),
                 "address": sql_str(first["주소"].strip()), "lat": str(float(first["위도"])), "lng": str(float(first["경도"])),
-                "image_url": sql_str(image), "kinds": sql_str(kinds), "works_json": sql_str(json.dumps(out, ensure_ascii=False)),
-                "source": "'한국문화정보원 미디어콘텐츠 영상 촬영지 데이터 (2022-11) · 사진: 한국관광공사'",
+                "image_url": sql_str(image), "image_credit": sql_str(credit), "image_credit_url": sql_str(credit_url),
+                "kinds": sql_str(kinds), "works_json": sql_str(json.dumps(out, ensure_ascii=False)),
+                "source": "'한국문화정보원 미디어콘텐츠 영상 촬영지 데이터 (2022-11)'",
                 "verified_at": sql_str(first["최종작성일"].strip()), "active": "1"}
         key = sql_str(place)
         lines.append(f"INSERT INTO filming_spots (place_key, {', '.join(cols)}) VALUES ({key}, {', '.join(cols.values())}) "

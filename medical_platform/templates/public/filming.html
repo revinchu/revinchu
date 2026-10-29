@@ -26,7 +26,8 @@
     {% for s in spots %}
     <li class="film-card" id="spot-{{ s.id }}">
       <div class="spot-img">{% if s.image_url %}<img src="{{ s.image_url }}" alt="{{ s.name }}" loading="lazy" referrerpolicy="no-referrer">{% else %}{{ icon('map-pin', 28) }}{% endif %}
-        <span class="spot-region">{{ icon('map-pin', 12) }} {{ t('rg_' ~ s.region) }}</span></div>
+        <span class="spot-region">{{ icon('map-pin', 12) }} {{ t('rg_' ~ s.region) }}</span>
+        {% if s.image_credit %}<a class="photo-credit" href="{{ s.image_credit_url }}" target="_blank" rel="noopener">© {{ s.image_credit }}</a>{% endif %}</div>
       <div class="film-body">
         <h2 class="spot-name">{{ s.name }}</h2>
         {% if lang != 'ko' %}<p class="film-ko">{{ s.place_key }}</p>{% endif %}

@@ -68,11 +68,11 @@ T = {
     "kind_drama": {"en": "K-drama", "ko": "드라마", "zh": "韩剧", "ja": "韓国ドラマ", "vi": "Phim truyền hình"},
     "kind_movie": {"en": "Film", "ko": "영화", "zh": "电影", "ja": "映画", "vi": "Phim điện ảnh"},
     "filming_of": {"en": "Filming location", "ko": "촬영지", "zh": "拍摄地", "ja": "ロケ地", "vi": "Địa điểm quay"},
-    "filming_note": {"en": "Locations from the Korea Culture Information Service's media filming location data (Nov 2022); photos: Korea Tourism Organization. Public places only — please respect residents, schools and businesses nearby.",
-                     "ko": "한국문화정보원 미디어콘텐츠 영상 촬영지 데이터(2022년 11월) 기준, 사진: 한국관광공사. 공공장소만 골랐습니다. 주변 주민·학교·상점을 배려해 주세요.",
-                     "zh": "数据来源：韩国文化信息院媒体内容拍摄地数据（2022年11月），图片：韩国观光公社。仅收录公共场所，请尊重周边居民、学校和商家。",
-                     "ja": "出典：韓国文化情報院 メディアコンテンツ撮影地データ（2022年11月）、写真：韓国観光公社。公共の場所のみ掲載しています。周辺の住民・学校・店舗へのご配慮をお願いします。",
-                     "vi": "Nguồn: dữ liệu địa điểm quay của Viện Thông tin Văn hóa Hàn Quốc (11/2022); ảnh: Tổng cục Du lịch Hàn Quốc. Chỉ gồm nơi công cộng — hãy tôn trọng cư dân, trường học và cửa hàng xung quanh."},
+    "filming_note": {"en": "Locations from the Korea Culture Information Service's media filming location data (Nov 2022); photos: Korea Tourism Organization and Wikimedia Commons (credited on each photo). Public places only — please respect residents, schools and businesses nearby.",
+                     "ko": "한국문화정보원 미디어콘텐츠 영상 촬영지 데이터(2022년 11월) 기준, 사진: 한국관광공사·위키미디어 공용(사진마다 출처 표기). 공공장소만 골랐습니다. 주변 주민·학교·상점을 배려해 주세요.",
+                     "zh": "数据来源：韩国文化信息院媒体内容拍摄地数据（2022年11月），图片：韩国观光公社、维基共享资源（各图标注出处）。仅收录公共场所，请尊重周边居民、学校和商家。",
+                     "ja": "出典：韓国文化情報院 メディアコンテンツ撮影地データ（2022年11月）、写真：韓国観光公社・ウィキメディア・コモンズ（各写真に出典表記）。公共の場所のみ掲載しています。周辺の住民・学校・店舗へのご配慮をお願いします。",
+                     "vi": "Nguồn: dữ liệu địa điểm quay của Viện Thông tin Văn hóa Hàn Quốc (11/2022); ảnh: Tổng cục Du lịch Hàn Quốc và Wikimedia Commons (ghi nguồn trên từng ảnh). Chỉ gồm nơi công cộng — hãy tôn trọng cư dân, trường học và cửa hàng xung quanh."},
 
     # --- 매거진 ---
     "nav_magazine": {"en": "Magazine", "ko": "매거진", "zh": "杂志", "ja": "マガジン", "vi": "Tạp chí"},

@@ -183,3 +183,18 @@ PLACES = [
     ("종묘", "seoul", "Jongmyo Shrine", "宗庙", "宗廟", "Đền Jongmyo", [
         (1213, "masquerade", "The opening scene of 'Masquerade'.")]),
 ]
+
+
+# 관광공사(TourAPI)에 공공누리 사진이 없는 곳: 위키미디어 공용의 자유 이용 사진 (url, 저작자·라이선스, 원본 페이지)
+PHOTO_OVERRIDES = {
+    "동작대교": ("https://upload.wikimedia.org/wikipedia/commons/thumb/8/8d/Dongjak_Bridge.jpg/1280px-Dongjak_Bridge.jpg",
+             "Bart0278 · Public domain", "https://commons.wikimedia.org/wiki/File:Dongjak_Bridge.jpg"),
+    "용마랜드": ("https://upload.wikimedia.org/wikipedia/commons/thumb/e/ee/Yongma_Land.jpg/1280px-Yongma_Land.jpg",
+             "Christian Bolz · CC BY-SA 4.0", "https://commons.wikimedia.org/wiki/File:Yongma_Land.jpg"),
+    "가톨릭대학교 서울성모병원": ("https://upload.wikimedia.org/wikipedia/commons/thumb/3/33/%EA%B0%80%ED%86%A8%EB%A6%AD%EB%8C%80%ED%95%99%EA%B5%90_%EC%84%9C%EC%9A%B8%EC%84%B1%EB%AA%A8%EB%B3%91%EC%9B%90.jpg/1280px-%EA%B0%80%ED%86%A8%EB%A6%AD%EB%8C%80%ED%95%99%EA%B5%90_%EC%84%9C%EC%9A%B8%EC%84%B1%EB%AA%A8%EB%B3%91%EC%9B%90.jpg",
+                       "Aspere · CC0", "https://commons.wikimedia.org/wiki/File:%EA%B0%80%ED%86%A8%EB%A6%AD%EB%8C%80%ED%95%99%EA%B5%90_%EC%84%9C%EC%9A%B8%EC%84%B1%EB%AA%A8%EB%B3%91%EC%9B%90.jpg"),
+    "문화역서울284": ("https://upload.wikimedia.org/wikipedia/commons/thumb/f/f4/Culture_Station_Seoul_284_%28_2014_08_05_%29.jpg/1280px-Culture_Station_Seoul_284_%28_2014_08_05_%29.jpg",
+                 "HaulS · CC0", "https://commons.wikimedia.org/wiki/File:Culture_Station_Seoul_284_(_2014_08_05_).jpg"),
+    # 육교 자체 사진은 없어 바로 아래 녹사평역 사진을 쓴다
+    "녹사평 육교": ("https://upload.wikimedia.org/wikipedia/commons/7/7a/Noksa02.jpg", "Noksapyeong Stn. · Marcopolis · Public domain", "https://commons.wikimedia.org/wiki/File:Noksa02.jpg"),
+}
